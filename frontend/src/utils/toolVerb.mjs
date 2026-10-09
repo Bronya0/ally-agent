@@ -40,6 +40,7 @@ const TOOL_VERBS = {
   remote_create_file: ['Remote Creating', 'Remote Created', 'Remote Create'],
   delete: ['Deleting', 'Deleted', 'Delete'],
   remote_delete_path: ['Remote Deleting', 'Remote Deleted', 'Remote Delete'],
+  remote_transfer: ['Remote Transferring', 'Remote Transferred', 'Remote Transfer'],
   // ssh_cluster 一词里 cluster 本身说明了对象，失败时也说得出是什么（“SSH cluster
   // failed”），否则只剩一个无名 Failed。列表/登记的动作词见 SSH_CLUSTER_VERBS，
   // 这里是动作没被捕获时的兜底。
@@ -130,6 +131,11 @@ const PLAN_VERBS = {
   read: ['Reading plan', 'Read plan', 'Plan read'],
 };
 
+const REMOTE_TRANSFER_VERBS = {
+  upload: ['Remote Uploading', 'Remote Uploaded', 'Remote Upload'],
+  download: ['Remote Downloading', 'Remote Downloaded', 'Remote Download'],
+};
+
 // The tools whose verb comes from the action the call took rather than from the
 // tool name alone, keyed by tool name. One table, so toolVerbLabel and
 // isActionKeyedTool cannot disagree about which tools those are.
@@ -138,6 +144,7 @@ const ACTION_VERBS = {
   service: SERVICE_VERBS,
   plan: PLAN_VERBS,
   ssh_cluster: SSH_CLUSTER_VERBS,
+  remote_transfer: REMOTE_TRANSFER_VERBS,
 };
 
 // Fallback verbs by kind, for names not in the table above (e.g. MCP tools whose

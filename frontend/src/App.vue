@@ -397,7 +397,7 @@ Public License v3. See the LICENSE file for details.
                  sibling; v-if unmounts on switch (memory); unsaved server-editor
                  drafts are lost on switch (by design). -->
             <div v-if="mcpActive" class="settings-page-container">
-              <McpPanel :show="mcpActive" :disabled-tools="config.disabledTools" @mcp-saved="onMcpSaved" @builtin-tools-changed="onBuiltinToolsChanged" />
+              <McpPanel :show="mcpActive" :disabled-tools="config.disabledTools" :available-tools="availableTools" @mcp-saved="onMcpSaved" @builtin-tools-changed="onBuiltinToolsChanged" />
             </div>
 
             <!-- Models page (extracted from Settings onto the mode rail, below
@@ -605,6 +605,7 @@ import {
 import { saveTextFile } from './utils/download.mjs';
 import { mermaidFenceSpec, normalizeMermaidSource, loadMermaid } from './utils/mermaidShared.mjs';
 import { copyText } from './utils/clipboard.mjs';
+import { registerDiscoveredTools } from './utils/builtinTools.mjs';
 import {
   CancelRun,
   CancelCompaction,
@@ -6017,6 +6018,7 @@ async function loadMcpConfig() {
 async function refreshToolList() {
   try {
     availableTools.value = await ListTools() || [];
+    registerDiscoveredTools(availableTools.value);
   } catch (_) {
     availableTools.value = [];
   }
@@ -7015,6 +7017,19 @@ function makeToolResultTitle(name, result, meta = {}) {
   const path = d.path || d.deleted || '';
   if (path && (name === 'create' || name === 'edit' || name === 'remote_edit' || name === 'remote_create_file')) {
     return d.target ? `${d.target} · ${path}` : path;
+  }
+  if (name === 'remote_transfer') {
+    const action = String(d.action || meta?.action || '').toLowerCase();
+    const target = d.target || meta?.target || '';
+    const local = d.localPath || meta?.localPath || '';
+    const remote = d.remotePath || meta?.remotePath || '';
+    if (action === 'upload') {
+      return target ? `${target} · ${local} → ${remote}` : `${local} → ${remote}`;
+    }
+    if (action === 'download') {
+      return target ? `${target} · ${remote} → ${local}` : `${remote} → ${local}`;
+    }
+    return target ? `${target} · ${local || remote}` : (local || remote);
   }
   if (name === 'web_fetch' || name === 'http_request') {
     return d.url || d.finalUrl || d.URL || d.FinalURL || '';
@@ -8286,6 +8301,19 @@ function makeToolTitle(name, args, meta = {}) {
     }
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
+  if (name === 'remote_transfer') {
+    const action = String(parsed.action || '').toLowerCase();
+    const target = parsed.target || '';
+    const local = parsed.localPath || '';
+    const remote = parsed.remotePath || '';
+    if (action === 'upload') {
+      return target ? `${target} · ${local} → ${remote}` : `${local} → ${remote}`;
+    }
+    if (action === 'download') {
+      return target ? `${target} · ${remote} → ${local}` : `${remote} → ${local}`;
+    }
+    return target ? `${target} · ${local || remote}` : (local || remote);
+  }
   if (name === 'grep') {
     const pattern = parsed.pattern || '';
     const path = parsed.path || '';
@@ -8470,6 +8498,14 @@ function formatToolChip(name, result) {
       const absent = deleteAbsentCount(parsed.data);
       return absent ? `\u00B7 ${absent} ${t('tools.delete.absent')}` : '';
     }
+    if (name === 'remote_transfer' && parsed.data) {
+      const bytes = Number(parsed.data.totalBytes || 0);
+      const files = Number(parsed.data.fileCount || 0);
+      const parts = [];
+      if (files > 0) parts.push(files + ' file' + (files !== 1 ? 's' : ''));
+      if (bytes > 0) parts.push(formatBytes(bytes));
+      return parts.length ? '\u00B7 ' + parts.join(' \u00B7 ') : '';
+    }
     if ((name === 'http_request' || name === 'web_fetch') && parsed.data) {
       return formatHTTPToolSummary(parsed.data);
     }
@@ -8583,6 +8619,14 @@ function formatToolBody(name, body) {
       const failures = Array.isArray(parsed.data.paths) ? parsed.data.paths.filter(item => item && item.ok === false) : [];
       if (!failures.length) return '';
       return failures.map(item => `${item.path || ''}: ${item.error || 'failed'}`).join('\n');
+    }
+    if (name === 'remote_transfer' && parsed.data) {
+      const d = parsed.data;
+      if (d.summary) return d.summary;
+      const count = Number(d.fileCount || 0);
+      const bytes = Number(d.totalBytes || 0);
+      const action = d.action === 'download' ? 'downloaded' : 'uploaded';
+      return `successfully ${action} ${count} file${count !== 1 ? 's' : ''} (${formatBytes(bytes)})`;
     }
     if ((name === 'http_request' || name === 'web_fetch') && parsed.data) return '';
     // grep results stay as a single non-expandable status line. The compact

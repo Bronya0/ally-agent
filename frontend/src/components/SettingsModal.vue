@@ -488,7 +488,7 @@ import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
 import { getStoredMode, THEMES } from '../utils/theme.mjs';
 import { normalizeApiKeysArray } from '../utils/modelConfigIO.mjs';
 import { HIDEABLE_MODES, PAGE_VISIBILITY_LABELS, normalizeDraftHiddenModes, normalizeHiddenModes } from '../utils/config.mjs';
-import { toggleableToolNames } from '../utils/builtinTools.mjs';
+import { isToggleableTool } from '../utils/builtinTools.mjs';
 import { Browser } from '@wailsio/runtime';
 import {
   DetectSystemProxy, TestProxy,
@@ -897,7 +897,7 @@ function cloneConfigDraft(source) {
   // 内置工具停用名单：只接受已知工具名（核心五件在开关层就锁死，这里再过滤
   // 一次作为兜底，与后端 SanitizeDisabledTools 语义一致）。
   next.disabledTools = Array.isArray(next.disabledTools)
-    ? next.disabledTools.map((name) => String(name || '').trim().toLowerCase()).filter((name) => toggleableToolNames.includes(name))
+    ? next.disabledTools.map((name) => String(name || '').trim().toLowerCase()).filter(isToggleableTool)
     : [];
   // 隐藏页面名单：只留可关闭的页面键（chat/settings 永不隐藏），与后端
   // sanitizeHiddenModes 同一组键。共用 normalizeDraftHiddenModes，免得与

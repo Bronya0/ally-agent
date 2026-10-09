@@ -84,11 +84,12 @@ func TestResolveDeletePathListTakesPathsOnly(t *testing.T) {
 	}
 }
 
-// TestCheckDeletePathListRejectsDuplicateAndNesting locks the two cross-path
-// rules on both key spaces: a path listed twice, and a path listed inside
-// another. Both make the outcome depend on the order the paths are handled in,
-// so both are refused; siblings that merely share a prefix are not nested.
-func TestCheckDeletePathListRejectsDuplicateAndNesting(t *testing.T) {
+// TestPlanDeleteExecutionDedupesAndOrdersDeepestFirst locks the two cross-path rules
+// on both key spaces: a path listed twice is executed once (every request slot shares
+// its outcome), and a path listed together with one of its ancestors runs first, so
+// both really disappear instead of the order deciding whether the child is already
+// gone by the time it is reached.
+func TestPlanDeleteExecutionDedupesAndOrdersDeepestFirst(t *testing.T) {
 	remote := func(rel string) fileMutationTarget {
 		return fileMutationTarget{remoteMutationKey("dev:/srv/app", rel), rel}
 	}
@@ -96,29 +97,73 @@ func TestCheckDeletePathListRejectsDuplicateAndNesting(t *testing.T) {
 		return fileMutationTarget{localMutationKey(abs), abs}
 	}
 
-	if err := checkDeletePathList([]fileMutationTarget{remote("a"), remote("a")}); toolErrorCode(err) != "E_DUPLICATE_PATH" {
-		t.Fatalf("a repeated remote path must be refused, got %v", err)
-	}
-	if err := checkDeletePathList([]fileMutationTarget{local(filepath.Join("ws", "a")), local(filepath.Join("ws", "a"))}); toolErrorCode(err) != "E_DUPLICATE_PATH" {
-		t.Fatalf("a repeated local path must be refused, got %v", err)
-	}
-
-	for _, targets := range [][]fileMutationTarget{
-		{remote("sub/c.txt"), remote("sub")},
-		{remote("sub"), remote("sub/c.txt")},
-		{local(filepath.Join("ws", "sub", "c.txt")), local(filepath.Join("ws", "sub"))},
-		{local(filepath.Join("ws", "sub")), local(filepath.Join("ws", "sub", "c.txt"))},
+	for _, tc := range []struct {
+		name    string
+		targets []fileMutationTarget
+		order   []int
+		slotOf  []int
+	}{
+		{
+			name:    "remote repeat",
+			targets: []fileMutationTarget{remote("a"), remote("a")},
+			order:   []int{0},
+			slotOf:  []int{0, 0},
+		},
+		{
+			name:    "local repeat",
+			targets: []fileMutationTarget{local(filepath.Join("ws", "a")), local(filepath.Join("ws", "a"))},
+			order:   []int{0},
+			slotOf:  []int{0, 0},
+		},
+		{
+			name:    "parent listed first",
+			targets: []fileMutationTarget{remote("sub"), remote("sub/c.txt")},
+			order:   []int{1, 0},
+			slotOf:  []int{0, 1},
+		},
+		{
+			name:    "child listed first",
+			targets: []fileMutationTarget{remote("sub/c.txt"), remote("sub")},
+			order:   []int{0, 1},
+			slotOf:  []int{0, 1},
+		},
 	} {
-		if err := checkDeletePathList(targets); toolErrorCode(err) != "E_PATH_OVERLAP" {
-			t.Fatalf("nesting must be refused in both orders, got %v", err)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			plan := planDeleteExecution(tc.targets)
+			if len(plan.order) != len(tc.order) {
+				t.Fatalf("execution order = %v, want %v", plan.order, tc.order)
+			}
+			for i, want := range tc.order {
+				if plan.order[i] != want {
+					t.Fatalf("execution order = %v, want %v", plan.order, tc.order)
+				}
+			}
+			for i, want := range tc.slotOf {
+				if plan.slotOf[i] != want {
+					t.Fatalf("slot map = %v, want %v", plan.slotOf, tc.slotOf)
+				}
+			}
+		})
 	}
 
-	if err := checkDeletePathList([]fileMutationTarget{remote("app"), remote("app-backup")}); err != nil {
-		t.Fatalf("a shared prefix is not nesting: %v", err)
+	// 共享前缀的兄弟目录既不算重复也不算包含：两个都要执行（顺序对无关路径无意义）。
+	siblings := planDeleteExecution([]fileMutationTarget{remote("app"), remote("app-backup")})
+	if len(siblings.order) != 2 || len(siblings.slotOf) != 2 {
+		t.Fatalf("a shared prefix is not nesting: %#v", siblings)
 	}
-	if err := checkDeletePathList([]fileMutationTarget{local(filepath.Join("ws", "app")), local(filepath.Join("ws", "app-backup"))}); err != nil {
-		t.Fatalf("a shared prefix is not nesting for local paths either: %v", err)
+
+	// 重复槽位复用同一份结果：两个槽都报成功，计数跟着槽位走。
+	repeated := []fileMutationTarget{local(filepath.Join("ws", "a.txt")), local(filepath.Join("ws", "a.txt"))}
+	result := DeletePathsResult{}
+	applyDeletePlanSlots(&result, planDeleteExecution(repeated), []string{"a.txt", "./a.txt"}, []DeleteResult{
+		{Path: "a.txt", Deleted: "a.txt", OK: true},
+		{},
+	})
+	if result.DeletedCount != 2 || result.FailedCount != 0 || result.AbsentCount != 0 || len(result.Paths) != 2 {
+		t.Fatalf("expected two ok slots for one deleted path, got %#v", result)
+	}
+	if result.Paths[0].Path != "a.txt" || result.Paths[1].Path != "./a.txt" {
+		t.Fatalf("each slot keeps its own spelling, got %#v", result.Paths)
 	}
 }
 
@@ -180,17 +225,41 @@ func TestLocalDeleteToolTakesPathsOnly(t *testing.T) {
 		t.Fatalf("expected a single absent slot, got %#v", onlyAbsent)
 	}
 
-	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{"sub", "sub/c.txt"}, Recursive: true}))
-	if res.OK || res.ErrorCode != "E_PATH_OVERLAP" {
-		t.Fatalf("a nested pair must be refused, got ok=%v code=%q err=%v", res.OK, res.ErrorCode, res.Error)
+	// 一次调用里父子同时列出：不再整批拒，深的先删，两条都真删掉。
+	nestedDir := filepath.Join(dir, "nest")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Lstat(filepath.Join(dir, "sub", "c.txt")); err != nil {
-		t.Fatalf("an overlapping list must delete nothing: %v", err)
+	if err := os.WriteFile(filepath.Join(nestedDir, "deep.txt"), []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{"nest", "nest/deep.txt"}, Recursive: true}))
+	if !res.OK {
+		t.Fatalf("a nested pair must be normalised, not refused: %v", res.Error)
+	}
+	nested := deleteResultOf(t, res)
+	if nested.DeletedCount != 2 || nested.FailedCount != 0 || len(nested.Paths) != 2 {
+		t.Fatalf("expected both nested slots deleted, got %#v", nested)
+	}
+	if _, err := os.Lstat(nestedDir); !os.IsNotExist(err) {
+		t.Fatalf("the nested list must remove the directory itself: %v", err)
 	}
 
-	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{"sub/c.txt", "sub/c.txt"}}))
-	if res.OK || res.ErrorCode != "E_DUPLICATE_PATH" {
-		t.Fatalf("a repeated path must be refused, got ok=%v code=%q err=%v", res.OK, res.ErrorCode, res.Error)
+	// 同一路径的两种写法列在一起：同一身份只删一次，两个槽都报成功。
+	dup := filepath.Join(dir, "dup.txt")
+	if err := os.WriteFile(dup, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{"dup.txt", "./dup.txt"}}))
+	if !res.OK {
+		t.Fatalf("a repeated path must be normalised, not refused: %v", res.Error)
+	}
+	dupResult := deleteResultOf(t, res)
+	if dupResult.DeletedCount != 2 || dupResult.FailedCount != 0 || len(dupResult.Paths) != 2 {
+		t.Fatalf("expected two ok slots for one repeated path, got %#v", dupResult)
+	}
+	if _, err := os.Lstat(dup); !os.IsNotExist(err) {
+		t.Fatalf("the repeated path must be deleted: %v", err)
 	}
 
 	tooMany := make([]string, toolshared.DeletePathListLimit+1)

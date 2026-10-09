@@ -109,3 +109,17 @@ test('mcp tool names are recognized by their prefix', () => {
   assert.ok(!isMcpToolName(undefined));
   assert.ok(!isMcpToolName(null));
 });
+
+test('remote_transfer verb follows the action with Remote prefix', () => {
+  assert.equal(toolVerbLabel('remote_transfer', 'remote_transfer', 'running', 'upload'), 'Remote Uploading');
+  assert.equal(toolVerbLabel('remote_transfer', 'remote_transfer', 'success', 'upload'), 'Remote Uploaded');
+  assert.equal(toolVerbLabel('remote_transfer', 'remote_transfer', 'running', 'download'), 'Remote Downloading');
+  assert.equal(toolVerbLabel('remote_transfer', 'remote_transfer', 'success', 'download'), 'Remote Downloaded');
+  assert.equal(toolVerbLabel('remote_transfer', 'remote_transfer', 'error', 'upload'), 'Remote Upload failed');
+  assert.equal(toolVerbLabel('remote_transfer', 'remote_transfer', 'error', 'download'), 'Remote Download failed');
+  assert.equal(toolVerbLabel('remote_transfer', 'remote_transfer', 'running', ''), 'Remote Transferring');
+  assert.equal(toolVerbLabel('remote_transfer', 'remote_transfer', 'success', ''), 'Remote Transferred');
+  assert.ok(isActionKeyedTool('remote_transfer'));
+  assert.equal(toolActionFromArgs('remote_transfer', { action: 'UPLOAD' }), 'upload');
+});
+

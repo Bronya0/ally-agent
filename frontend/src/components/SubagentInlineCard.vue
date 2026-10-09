@@ -202,6 +202,19 @@ function toolArgsTitle(tc) {
     if (!summary) return parsed.target || '';
     return parsed.target ? `${parsed.target} · ${summary}` : summary;
   }
+  if (name === 'remote_transfer') {
+    const action = String(parsed.action || '').toLowerCase();
+    const target = parsed.target || '';
+    const local = parsed.localPath || '';
+    const remote = parsed.remotePath || '';
+    if (action === 'upload') {
+      return target ? `${target} · ${local} → ${remote}` : `${local} → ${remote}`;
+    }
+    if (action === 'download') {
+      return target ? `${target} · ${remote} → ${local}` : `${remote} → ${local}`;
+    }
+    return target ? `${target} · ${local || remote}` : (local || remote);
+  }
   if (name === 'read' || name === 'remote_read') {
     if (parsed.target && Array.isArray(parsed.files)) {
       const paths = parsed.files.map(f => f && f.path).filter(Boolean);

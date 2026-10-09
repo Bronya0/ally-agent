@@ -176,4 +176,12 @@ func TestPluginIdentityIgnoresDirCase(t *testing.T) {
 	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
 		t.Fatal("目录没被删掉")
 	}
+	app.mu.Lock()
+	disabledPlugins := append([]string(nil), app.config.DisabledPlugins...)
+	app.mu.Unlock()
+	for _, p := range disabledPlugins {
+		if plugin.IdentityKey(p) == plugin.IdentityKey(list[0].ID) {
+			t.Fatalf("DeletePlugin did not remove plugin from DisabledPlugins: %v", disabledPlugins)
+		}
+	}
 }

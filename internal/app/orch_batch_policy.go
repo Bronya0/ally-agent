@@ -59,6 +59,7 @@ var toolBatchPhases = map[string]toolBatchPhase{
 	"remote_edit":        batchPhaseOrderedMutation,
 	"remote_create_file": batchPhaseOrderedMutation,
 	"remote_delete_path": batchPhaseOrderedMutation,
+	"remote_transfer":    batchPhaseOrderedMutation,
 	"wait":               batchPhaseDeferredSerial,
 }
 
@@ -306,12 +307,41 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 		}
 		return plan.Targets
 	}
+	if name == "remote_transfer" {
+		var transArgs struct {
+			Target     string `json:"target"`
+			Action     string `json:"action"`
+			LocalPath  string `json:"localPath"`
+			RemotePath string `json:"remotePath"`
+		}
+		if json.Unmarshal([]byte(arguments), &transArgs) != nil {
+			return nil
+		}
+		action := strings.ToLower(strings.TrimSpace(transArgs.Action))
+		switch action {
+		case "upload":
+			target := strings.TrimSpace(transArgs.Target)
+			cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(transArgs.RemotePath), "\\", "/"))
+			if cleanPath != "" && cleanPath != "." {
+				return []fileMutationTarget{{
+					key:     remoteMutationKey(target, cleanPath),
+					display: target + " · " + cleanPath,
+				}}
+			}
+		case "download":
+			if target, ok := localMutationTarget(cfg, transArgs.LocalPath); ok {
+				return []fileMutationTarget{target}
+			}
+		}
+		return nil
+	}
 	// delete tools take a `paths` list; single-file tools (create, remote_edit,
 	// remote_create_file) carry one `path`. The two shapes are read on separate
 	// branches: a gate-rejected `path` on a delete call must never mint a phantom
 	// target, while a single-path tool must never read as "touches nothing"
-	// (which would silently disable the same-path write guard; a batch delete of
-	// two overlapping paths is caught in the call itself, see checkDeletePathList).
+	// (which would silently disable the same-path write guard; a batch delete that
+	// lists two overlapping paths is normalised inside the call itself, see
+	// planDeleteExecution).
 	var args struct {
 		Target string   `json:"target"`
 		Path   string   `json:"path"`
@@ -353,7 +383,7 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 // same path twice — including two spellings of it — touches that path once, so a
 // repeated key must not reach the conflict grouping: it would read as the call
 // conflicting with itself, while a duplicated list is that call's own rule's
-// business (checkDeletePathList).
+// business (planDeleteExecution).
 func dedupeMutationTargets(targets []fileMutationTarget) []fileMutationTarget {
 	seen := make(map[string]bool, len(targets))
 	unique := make([]fileMutationTarget, 0, len(targets))
@@ -368,7 +398,7 @@ func dedupeMutationTargets(targets []fileMutationTarget) []fileMutationTarget {
 }
 
 // remoteMutationKey 是远端变更目标的唯一键：批次写冲突判定与一次远端删除调用
-// 内部的重复/包含判定共用它，所以两个判据认的是同一个身份。
+// 内部的重复/包含归一（planDeleteExecution）共用它，所以两个判据认的是同一个身份。
 func remoteMutationKey(target, relPath string) string {
 	cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(relPath), "\\", "/"))
 	return "remote:" + strings.TrimSpace(target) + ":" + cleanPath

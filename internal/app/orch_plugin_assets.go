@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -110,7 +109,7 @@ func (a *App) servePluginAsset(w http.ResponseWriter, r *http.Request, id, rel s
 		http.NotFound(w, r)
 		return
 	}
-	contentType, allowed := pluginAssetExtTypes[strings.ToLower(path.Ext(resolved))]
+	contentType, allowed := pluginAssetExtTypes[strings.ToLower(filepath.Ext(resolved))]
 	if !allowed {
 		http.Error(w, "不允许的插件资源类型", http.StatusForbidden)
 		return

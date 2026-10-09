@@ -351,12 +351,10 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok || len(changeRequired) != 1 || changeRequired[0] != "newText" {
 		t.Fatalf("edit change must require only newText: %#v", items["required"])
 	}
-	variants, ok := items["oneOf"].([]any)
-	if !ok || len(variants) != 2 {
-		t.Fatalf("edit change must require exactly one source form: %#v", items)
-	}
-	if _, exists := items["anyOf"]; exists {
-		t.Fatalf("edit change must not accept two source forms: %#v", items)
+	for _, keyword := range []string{"oneOf", "anyOf", "allOf", "not"} {
+		if _, exists := items[keyword]; exists {
+			t.Fatalf("edit change must not declare composite keyword %s: %#v", keyword, items)
+		}
 	}
 }
 
@@ -475,7 +473,7 @@ func TestDetectWriteBatchConflictsSeesSinglePathTools(t *testing.T) {
 // of one call's targets: a delete — local or remote — that names the same path
 // twice (here in two spellings of it) touches that path once, so it must not be
 // reported as a batch conflict with itself. The malformed list is the call's own
-// duplicate rule's business (checkDeletePathList); a later call in the same batch
+// duplicate rule's business (planDeleteExecution); a later call in the same batch
 // is still skipped.
 func TestDetectWriteBatchConflictsCollapsesRepeatWithinOneCall(t *testing.T) {
 	cfg := ConfigState{Workspace: t.TempDir()}
@@ -3534,7 +3532,7 @@ func TestExecuteToolRejectsChangeWithTwoSourcesOrReplaceAllBesideLineRange(t *te
 			}
 			want := "replaceAll"
 			if name == "two sources" {
-				want = "exactly one allowed shape"
+				want = "exactly one source"
 			}
 			if !strings.Contains(result.Error, want) {
 				t.Fatalf("rejection %q must mention %q", result.Error, want)

@@ -611,6 +611,19 @@ func (a *App) DeletePlugin(id string, purgeData bool) error {
 			return err
 		}
 	}
+	key := plugin.IdentityKey(dirID)
+	_ = a.updateConfigAndPersist(func(cfg *ConfigState) {
+		if len(cfg.DisabledPlugins) == 0 {
+			return
+		}
+		next := make([]string, 0, len(cfg.DisabledPlugins))
+		for _, existing := range cfg.DisabledPlugins {
+			if plugin.IdentityKey(existing) != key {
+				next = append(next, existing)
+			}
+		}
+		cfg.DisabledPlugins = next
+	})
 	return nil
 }
 

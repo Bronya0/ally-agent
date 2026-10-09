@@ -12,7 +12,7 @@ package app
 // helpers and destructive-path safety guards that those operations share.
 //
 // 多路径删除的共用规则也在这里：本地 delete 与 remote_delete_path 共用的
-// path/paths 折叠、条数上限、重复与包含判定（单条路径的落盘判定仍留在各自信任域）。
+// path/paths 折叠、条数上限、重复与包含的归一（单条路径的落盘判定仍留在各自信任域）。
 
 import (
 	"context"
@@ -25,6 +25,7 @@ import (
 	"path"
 	"path/filepath"
 	goruntime "runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -447,20 +448,18 @@ func (a *App) deletePathsWithConfig(cfg ConfigState, paths []string, recursive b
 		planned = append(planned, item)
 		targets = append(targets, fileMutationTarget{localMutationKey(item.absPath), filepath.ToSlash(requestPath)})
 	}
-	// 与前缀表（app 与 app-backup）不同，这里的包含关系真的会让结果取决于顺序，
-	// 所以整批拒掉，让模型自己决定删哪个。
-	if err := checkDeletePathList(targets); err != nil {
-		return DeletePathsResult{}, err
-	}
+	// 重复与包含不再整批拒：这次调用的目的就是让列出的路径变成不存在，所以重复只执行
+	// 一次、深的先删（父目录与它里面的路径同时列出时两条都能真删掉），结果按请求槽位摊回去。
+	plan := planDeleteExecution(targets)
 
-	result := DeletePathsResult{Paths: make([]DeleteResult, 0, len(planned))}
-	for _, item := range planned {
+	executed := make([]DeleteResult, len(planned))
+	for _, rep := range plan.order {
+		item := planned[rep]
 		item.result.OK = true
 		if item.absent {
 			// 本来就不存在：没东西可删，也没出事。单独记一笔（既不算成功也不
 			// 算失败），同批其它路径照删。
-			result.AbsentCount++
-			result.Paths = append(result.Paths, item.result)
+			executed[rep] = item.result
 			continue
 		}
 		removeErr := sandboxedRemove(spec, roots, item.absPath, recursive && item.isDir)
@@ -473,12 +472,11 @@ func (a *App) deletePathsWithConfig(cfg ConfigState, paths []string, recursive b
 			item.result.RemovedFiles = 0
 			item.result.RemovedDirs = 0
 			item.result.RemovedBytes = 0
-			result.FailedCount++
-		} else {
-			result.DeletedCount++
 		}
-		result.Paths = append(result.Paths, item.result)
+		executed[rep] = item.result
 	}
+	result := DeletePathsResult{}
+	applyDeletePlanSlots(&result, plan, paths, executed)
 	return result, nil
 }
 
@@ -1360,44 +1358,61 @@ func deletePathsFailureSummary(result DeletePathsResult) string {
 	return fmt.Sprintf("%d of %d paths could not be deleted — %s", result.FailedCount, len(result.Paths), strings.Join(parts, "; "))
 }
 
-// checkDeletePathList 判「这一串路径彼此之间」是否可执行。它建在批次写冲突判定
-// 用的同一套目标键上（本地 localMutationKey，远端 remoteMutationKey），所以
-// 「一次调用里重复同一个路径」与「同一批里写两次同一个路径」是同一套判据。
+// 一次删除调用内部的重复与包含不再整批拒，改为归一成执行计划：这次调用的目的就是
+// 让列出的路径变成不存在，重复只执行一次、深的先删，最终状态与逐条执行一致，所以
+// 没必要让模型重写这一轮（旧实现报 E_DUPLICATE_PATH / E_PATH_OVERLAP，整批一条都不删）。
 //
-// 重复与包含都拒绝，而不是悄悄合并：两种写法都会让结果取决于顺序——父目录先
-// 删掉，子路径就只剩「不存在」——模型无法从结果里看出实际发生了什么。
-func checkDeletePathList(targets []fileMutationTarget) error {
-	for i := range targets {
-		for j := i + 1; j < len(targets); j++ {
-			first, second := targets[i], targets[j]
-			if first.key == second.key {
-				return codedToolError("E_DUPLICATE_PATH", fmt.Errorf("%s appears twice in this call's paths; list each path once", second.display))
-			}
-			ancestor, descendant, nested := deletePathAncestorPair(first, second)
-			if !nested {
-				continue
-			}
-			return codedToolError("E_PATH_OVERLAP", fmt.Errorf("%s is inside %s; deleting both in one call makes the result depend on which one is deleted first — list only %s, or send the two in separate calls", descendant.display, ancestor.display, ancestor.display))
+// 计划建在批次写冲突判定用的同一套目标键上（本地 localMutationKey，远端
+// remoteMutationKey），所以「一次调用里重复同一个路径」与「同一批里写两次同一个路径」
+// 认的是同一个身份。
+
+// deleteExecutionPlan 是一次删除调用的执行计划。
+type deleteExecutionPlan struct {
+	// order 是执行顺序，元素为代表槽位下标（同一身份只出现一次）。
+	order []int
+	// slotOf 把每个请求槽位映射到它对应的代表槽位。
+	slotOf []int
+}
+
+// planDeleteExecution 去重并排出「深的先删」的执行顺序。长的键一定是短的键的后代
+// （两套键用同一分隔符与同一前缀语法），所以按键长降序即得后代先于祖先；互不包含的
+// 路径之间谁先谁后无所谓，稳定排序保持请求顺序。
+func planDeleteExecution(targets []fileMutationTarget) deleteExecutionPlan {
+	plan := deleteExecutionPlan{slotOf: make([]int, len(targets))}
+	representative := make(map[string]int, len(targets))
+	for i, target := range targets {
+		if rep, seen := representative[target.key]; seen {
+			plan.slotOf[i] = rep
+			continue
 		}
+		representative[target.key] = i
+		plan.slotOf[i] = i
+		plan.order = append(plan.order, i)
 	}
-	return nil
+	sort.SliceStable(plan.order, func(a, b int) bool {
+		return len(targets[plan.order[a]].key) > len(targets[plan.order[b]].key)
+	})
+	return plan
 }
 
-// deletePathAncestorPair 报出两者中「谁包含谁」；互不包含时为 false。
-func deletePathAncestorPair(a, b fileMutationTarget) (ancestor, descendant fileMutationTarget, nested bool) {
-	if deletePathKeyWithin(a.key, b.key) {
-		return a, b, true
+// applyDeletePlanSlots 把执行结果摊回「与请求一一对应的槽位」：同一个身份的重复槽位
+// 复用同一份结果（只把槽位自己的写法写回 Path/Deleted），计数跟着槽位走，于是结果列表
+// 永远与调用方列出的路径一一对应。executed 按请求槽位下标存放，只有代表槽位被填过。
+func applyDeletePlanSlots(result *DeletePathsResult, plan deleteExecutionPlan, requestPaths []string, executed []DeleteResult) {
+	result.Paths = make([]DeleteResult, 0, len(requestPaths))
+	for i, requestPath := range requestPaths {
+		slot := executed[plan.slotOf[i]]
+		display := filepath.ToSlash(requestPath)
+		slot.Path = display
+		slot.Deleted = display
+		switch {
+		case !slot.OK:
+			result.FailedCount++
+		case slot.Absent:
+			result.AbsentCount++
+		default:
+			result.DeletedCount++
+		}
+		result.Paths = append(result.Paths, slot)
 	}
-	if deletePathKeyWithin(b.key, a.key) {
-		return b, a, true
-	}
-	return fileMutationTarget{}, fileMutationTarget{}, false
-}
-
-// deletePathKeyWithin 判 descendant 是否落在 ancestor 之内。两个键都由
-// localMutationKey / remoteMutationKey 生成，形态已经统一（同样的分隔符、同样的
-// 大小写折叠），所以「前缀 + 分隔符」就是唯一的包含关系：工作区里的 app 与
-// app-backup 不会因为前缀相同被判成父子。
-func deletePathKeyWithin(ancestor, descendant string) bool {
-	return strings.HasPrefix(descendant, ancestor+"/")
 }

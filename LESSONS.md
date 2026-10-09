@@ -190,3 +190,7 @@
 [plugin-stamp-second-precision] 2026-10-08 低危 插件缓存戳取目录 mtime 的 RFC3339（秒级）：同一秒内连续两次覆盖升级会撞出同一个戳，入口 URL 不变、模块表命中旧实例。戳要带纳秒。@orch_plugin.go
 [root-composite] 2026-10-08 高危 schema 顶层 oneOf/anyOf/allOf：Anthropic 整个请求 400、全部工具失效，适配层须展平。@prov_adapter_anthropic.go
 [target-set-per-call] 2026-10-09 中危 一次调用的写目标是集合：同一路径重复列出（含两种写法）登记两次会被判成与自己冲突，枚举时按身份键去重。@orch_batch_policy.go
+[flat-builtin-schemas] 2026-10-09 高危 内置工具 schema 彻底避开 oneOf/anyOf/allOf/not 复合关键字：网关/多供应商兼容性极差（易 400 报 schema 不支持），互斥改在 description 说明并在执行侧校验，多 action 工具仅必填 action、冗余参数宽松忽略。@builtins.go
+[remote-root-from-caller] 2026-10-09 高危 远端圈由模型在 target 里声明，只查绝对非 /：写 /etc、读 /root/.ssh 都放行（本地圈是用户选的）。@orch_remote.go
+[win-forward-slash-relative] 2026-10-09 中危 Windows 上 /x 不是绝对路径：文件与 delete 工具会把它拼到主工作区下，目标静默错位。@pathutil.JoinPath
+[mcp-count-vs-list] 2026-10-09 中危 同一份状态两处各自过滤：汇总计数按注入工具算、列表只留已连接，数字与列表对不上。@McpStatusPopover.vue

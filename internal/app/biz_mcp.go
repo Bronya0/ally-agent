@@ -1929,6 +1929,7 @@ func (a *App) ListTools() []ToolDefinitionSummary {
 			Description: strings.TrimSpace(tool.Function.Description),
 			Source:      "built-in",
 			Enabled:     enabled[tool.Function.Name],
+			Protected:   toolshared.IsProtectedTool(tool.Function.Name),
 		})
 	}
 	if manager := a.activeMcpManager(); manager != nil {

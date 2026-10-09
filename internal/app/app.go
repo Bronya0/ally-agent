@@ -701,7 +701,8 @@ type ToolDefinitionSummary struct {
 	Server      string `json:"server,omitempty"`
 	// Enabled reflects the MCP per-tool injection blacklist; built-ins are
 	// always true. Disabled tools stay listed (inventory-visible, not injected).
-	Enabled bool `json:"enabled"`
+	Enabled   bool `json:"enabled"`
+	Protected bool `json:"protected"`
 }
 
 type ChatMessageInput struct {
@@ -2638,6 +2639,12 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		// does not waste a model round trip.
 		var repairedFields []string
 		cur := rawArgs
+		if name == "http_request" {
+			if fixed, ok := repairHTTPRequestJSONArg(cur); ok {
+				cur = fixed
+				repairedFields = append(repairedFields, "json")
+			}
+		}
 		for round := 0; ; round++ {
 			err := json.Unmarshal(cur, v)
 			if err == nil {
@@ -2914,6 +2921,12 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.remoteRunCommand(ctx, req)
+		}
+	case "remote_transfer":
+		var req RemoteTransferRequest
+		err, argWarnings = decodeJSON(&req)
+		if err == nil {
+			data, err = a.executeRemoteTransfer(ctx, req)
 		}
 	case "grep":
 		var reqGF GrepRequest
@@ -3534,6 +3547,30 @@ func repairToolArgJSON(args []byte, typeErr *json.UnmarshalTypeError) ([]byte, b
 	out, err := json.Marshal(root)
 	if err != nil {
 		return nil, false
+	}
+	return out, true
+}
+
+// repairHTTPRequestJSONArg unwraps a double-encoded string in the "json"
+// parameter of http_request so the schema validator sees the native JSON value
+// rather than rejecting a string.
+func repairHTTPRequestJSONArg(args []byte) ([]byte, bool) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(args, &root); err != nil {
+		return args, false
+	}
+	raw, ok := root["json"]
+	if !ok {
+		return args, false
+	}
+	fixed, changed := repairJSONLeaf(raw, false)
+	if !changed {
+		return args, false
+	}
+	root["json"] = fixed
+	out, err := json.Marshal(root)
+	if err != nil {
+		return args, false
 	}
 	return out, true
 }

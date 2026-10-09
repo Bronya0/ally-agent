@@ -46,13 +46,13 @@ func functionTool(name, desc string, params map[string]any) openai.Tool {  // :4
 }
 ```
 
-三个值得学的做法：
+几个值得学的做法：
 
-1. **示例写进描述**（`builtinToolExamples`，`builtins.go:474`）。参数描述说一百句，不如给一条能直接抄的样例 JSON——提升工具调用成功率最便宜的手段。
-2. **strict schema 递归规范化**（`enforceStrictSchema` → `normalizeSchemaNode`，`builtins.go:683` / `:691`）。遍历 `properties` / `items` / `anyOf` / `oneOf` / `allOf` / `not`，给每个 `type: object` 补 `additionalProperties: false` 与 `properties: {}`。少规范化一层，strict 模式就会被 provider 拒或在子对象上静默放宽。任意 JSON 参数用 `jsonValueSchema`（`anyOf` 五种类型，`builtins.go:670`）表达，且自带 `anyOf` 的节点不会被补上标量 `type`——两者取交集会把「对象/数组/字符串都行」缩成「只能是字符串」（`schemautil.declaresOwnShape`）。
-3. **schema 与 DTO 必须对齐**：`batchReadFilesSchema` 的 `minItems/maxItems`、`editChangeSchema(sourceTool)` 的 `oneOf(oldText | lineRange)`（本地与远程共用同一份声明，只有来源工具名不同）、`deletePathsSchema`（本地 `delete` 与 `remote_delete_path` 都只收 `paths`；上限 `DeletePathListLimit` 由 schema 与 handler 侧校验共同读）与执行侧解码/校验是同一套规则的两处表述。它们漂移的那天，模型就会发出「schema 允许但执行必拒」的调用。对齐不再靠人看：内置工具的入参会在分发层按 schema 校验一次（见四），漂移会当场地报 `E_BAD_ARGS`。另一个易错点是互斥判定的口径：`oneOf`/`not` 要按参数的**有效值**判，不能按 `required` 的键是否存在——`tailLines: 0`、`body: ""` 在运行时就是「没传」，按键存在判会把模型补零/补空串的写法误报成「两种形式都给了」。正例见 `editSourceOneOf` 与 `batchReadFilesSchema`（闸门用例 `TestBuiltinGateTreatsEmptyOptionalsAsAbsent`）。来源之外还有一处互斥：`replaceAll` 只能跟 `oldText` 搭配，配 `lineRange` 由 `editReplaceAllRule`（`allOf` + `not` + `const`）当场拒，执行侧 `ValidateBatchTextChanges` 用同一条规则复核——两处漂移就是「schema 允许、执行必拒」的经典来源。
-
-4. **按协议的顶层形状限制就地改写**：Anthropic Messages 的 `input_schema` 顶层不接受 `oneOf` / `anyOf` / `allOf`（400 `…does not support oneOf, allOf, or anyOf at the top level`，一次就废掉整个请求的全部工具），所以 `anthropicInputSchema` 先走 `schemautil.FlattenTopLevelComposites`：把顶层分支的 `properties` 并进 root（root 已有声明优先——分支写的是「只在该分支内成立」的收窄）、`required` 只保留每个可选分支都要的（`allOf` 则取并集），分支自带的 `not` 守卫与标量分支按「什么都没声明」处理；嵌套的复合关键字原样保留（限制只在顶层）。方向是**只放宽**：展平后的 root 接受的入参是原声明的超集，不会拒掉运行时接受的调用；声明本身与入参闸门都不动，Chat / Responses 照原样发顶层 `oneOf`。
+1. **示例写进描述**（`builtinToolExamples`，`builtins.go`）。参数描述说一百句，不如给一条能直接抄的样例 JSON——提升工具调用成功率最便宜的手段。
+2. **平坦 Schema 与网关最大兼容**：内置工具 Schema 全面使用平坦的 `type: "object"`，彻底避免顶层与嵌套的 `oneOf` / `anyOf` / `allOf` / `not` 等复合关键字，防止中转网关（OneAPI、NewAPI、Cloudflare AI Gateway）或不同模型端点 400 拒绝。参数互斥（如 `body` 与 `json`、`oldText` 与 `lineRange`、`instruction` 与 `command`）直接在参数 description 中给出清晰说明，并由执行层业务逻辑统一校验。
+3. **入参门禁放宽与按需取用**：针对多 action 工具（如 `service`、`scheduled_task`、`ssh_cluster`），顶层仅强制要求基础 action 字段（`required: ["action"]`）。调用时若携带了当前 action 不需要但在 properties 中有声明的冗余参数，后端自动忽略而不拒绝；仅当当前 action 真正需要的必选参数缺失或互斥参数冲突时，才在执行层返回针对性报错。
+4. **外部/MCP 工具的顶层复合自适应展平**：部分 MCP 工具可能仍带有顶层复合关键字，Anthropic Messages 出口前仍经 `schemautil.FlattenTopLevelComposites` 自动展平，确保 Claude 请求不报 400。
+5. **strict schema 递归规范化**（`enforceStrictSchema` → `normalizeSchemaNode`）。遍历 `properties` / `items` 等，给每个 `type: object` 补 `additionalProperties: false` 与 `properties: {}`，确保在 OpenAI strict 模式下行为确定。
 
 工具集本身在 session 首次请求时**冻结**（`buildToolsForSession`，`biz_mcp.go:1140`）：`tools` 是请求前缀的一部分，中途变化会让供应商 prompt cache 全线作废。`cloneTools` 深拷贝，保证冻结的那份不被后续 MCP 启停改到。子代理 / 计划任务这类无 session 的调用方走 `buildToolsForConfig`，永远看实时集合（它们本来也无前缀可保）。MCP 工具靠名字前缀 `mcp__<server>__<tool>`（`mcpFunctionNamePrefix`）并入同一张表。
 
@@ -120,7 +120,7 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 | 命令沙箱（OS 级；**当前未接入**） | `sandboxSpec` / `wrapSandboxedCommand` / `annotateSandboxDeniedWrite` / `kernelOwnsBoundary`（`orch_sandbox.go`）；写工具的落盘同样包在内核里（同在 `orch_sandbox.go`）；策略与 profile 在 `internal/sandbox`（纯算法，不依赖 App）。command 与 service 两条执行路径共用。接入开关是 `internal/sandbox` 的 `attached`（`ResolvedMode` / `ModeForced` / `Attached` 同源）：关着时三个平台都只走安全围栏，profile / 策略 / 诊断 / 探测原样保留；要接回来只需改这一个常量 + 把 `GetSandboxStatus` 那条设置页链路接回 |
 | 边界归属（越界写由谁拒） | `kernelOwnsBoundary`（`orch_sandbox.go`）：唯一的判据，问的是「沙箱此刻是否真在围」（`sandbox.ResolvedMode` + `sandbox.Available`），**不问平台**。内核接管时写 / 删 / cwd 三个解析器（`resolveBoundaryPath` + `resolveWritableFilePath` / `resolveDeletablePath` / `resolveCommandCwd`）只归一化、越界留给内核拒（报 `E_SANDBOX_WRITE_DENIED`）；内核不在时围栏全强度顶上（报 `E_PATH_OUTSIDE`）。`.git` 元数据、高危命令语义、delete 的工作区根 / dangerous / recursive 保护、软链接拒绝四类始终留在 Go 侧——内核看不见它们 |
 | 路径保护 | `pathutil`：`CanonicalPath` / `VCSMetadataReason`，本地写 / 删 / 命令与远端写（`remoteVCSMetadataWrite`）/ 命令（`remoteCommandVCSMetadataTarget`）共用同一份；远端只判得了字面路径那半，解析后（软链接到 `.git`）由 helper 用远端事实复判 |
-| 删除多路径 | `resolveDeletePathList` / `checkDeletePathList`（`orch_file_ops.go`）：`paths` 归一成一条候选列表，并拒重复与包含；本地与远端共用这一份。单条路径的落盘判定仍各自留在自己的信任域（本地问本机文件系统，远端只能在 SSH 另一头问）。「本来就不存在」两端一致：不是失败、不拦同批其它路径，只报 `DeleteResult.Absent`（本地 `resolveDeleteTarget`，远端 `check_delete_path` 的 `missing` 标记） |
+| 删除多路径 | `resolveDeletePathList` / `planDeleteExecution` / `applyDeletePlanSlots`（`orch_file_ops.go`）：`paths` 先归一成一条候选列表，再按「去重 + 深的先删」排出执行计划（同一路径的两种写法只执行一次；父子同时列出时深的先删，两条都真删掉），结果按请求槽位摊回去；本地与远端共用这一份。单条路径的落盘判定仍各自留在自己的信任域（本地问本机文件系统，远端只能在 SSH 另一头问）。「本来就不存在」两端一致：不是失败、不拦同批其它路径，只报 `DeleteResult.Absent`（本地 `resolveDeleteTarget`，远端 `check_delete_path` 的 `missing` 标记） |
 
 命令围栏的四道检查都是「拒绝并解释」，不是「尝试纠正」：
 
@@ -184,7 +184,7 @@ type toolResult struct {                       // infra_result.go:19
 `detectToolBatchConflicts`（`orch_batch_policy.go:120`）在执行前统一裁决：
 
 1. **独占型工具**（`ask` / `suggest`）必须独占一批，否则整批全部拒绝（`E_ASK_BATCH_CONFLICT` / `E_SUGGEST_BATCH_CONFLICT`）——`ask` 会把 run 停在等人回答上，`suggest` 成功即结束 run，两者都不能和「结果还没被模型看到」的调用同批。执行阶段（并发 / 文件变更有序 / 延后串行）由 `toolBatchPhases` 表声明，`isOrderedFileMutationTool` 与 `isDeferredSerialTool` 都从它派生，主循环与子代理循环共用同一份分类：加新延后工具只需在表里加一行。
-2. **同路径多写**（`detectWriteBatchConflicts`，`orch_batch_policy.go:79`）：按参数解析写入目标（本地走 `localMutationKey`，远端走 `remoteMutationKey` = `remote:<target>:<path>`）；两个删除工具都只收 `paths`，每个路径各出一个目标。只执行最早一个，其余 `E_WRITE_BATCH_CONFLICT`。这同一套目标键还被「一次删除调用内部的重复/包含」判定复用（`checkDeletePathList`），所以同批两次与同调用两次认的是同一个身份。
+2. **同路径多写**（`detectWriteBatchConflicts`，`orch_batch_policy.go:79`）：按参数解析写入目标（本地走 `localMutationKey`，远端走 `remoteMutationKey` = `remote:<target>:<path>`）；两个删除工具都只收 `paths`，每个路径各出一个目标。只执行最早一个，其余 `E_WRITE_BATCH_CONFLICT`。这同一套目标键还被「一次删除调用内部的重复/包含归一」复用（`planDeleteExecution`），所以同批两次与同调用两次认的是同一个身份。
 3. **计划工具一批只许一个写操作**（`planBatchWriteSource`，`orch_batch_policy.go:111`）：`steps` / `finish` 同属写（判定直接复用工具的请求分类器，不另写一份），并发池里谁后落谁生效，会造成「报了一步又被整份重设抹掉」这种两调用互相矛盾的结果；只执行最早一个，其余 `E_PLAN_BATCH_CONFLICT`；只读（不传任何源）不算写，可以和其他调用同批。
 4. **语义重复调用**：参数 JSON 解析后按 key 排序重序列化做去重键，重复判 `E_DUPLICATE_TOOL_CALL`（字段顺序、空白差异都能识别；刻意不做默认值归一，那需要逐工具知识且会掩盖真实不同意图）。
 

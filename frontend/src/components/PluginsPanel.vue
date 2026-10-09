@@ -56,7 +56,7 @@ Public License v3. See the LICENSE file for details.
           <div class="plugin-row-desc">{{ plugin.description || t('common.noDescription') }}</div>
           <div class="plugin-row-meta">
             <span v-if="plugin.author">{{ t('plugins.author', { author: plugin.author }) }}</span>
-            <span>{{ t('plugins.packageSize', { size: formatBytes(plugin.packageBytes) }) }}</span>
+            <span v-if="plugin.hasPackage">{{ t('plugins.packageSize', { size: formatBytes(plugin.packageBytes) }) }}</span>
             <span v-if="plugin.updatedAt">{{ t('plugins.updatedAt', { time: formatDateTime(plugin.updatedAt) }) }}</span>
           </div>
           <div class="plugin-row-perm">

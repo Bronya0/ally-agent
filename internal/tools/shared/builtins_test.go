@@ -40,8 +40,8 @@ func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
 	readParams, _ := builtinSchemaForTest(t, "read")
 	readProperties := schemaObjectForTest(t, readParams["properties"])
 	readItems := schemaObjectForTest(t, schemaObjectForTest(t, readProperties["files"])["items"])
-	if branches, ok := readItems["oneOf"].([]any); !ok || len(branches) != 2 {
-		t.Fatalf("read file schema must separate the range form from the tail form; got %#v", readItems["oneOf"])
+	if _, ok := readItems["oneOf"]; ok {
+		t.Fatalf("read file schema must not declare oneOf; got %#v", readItems["oneOf"])
 	}
 	readFileProperties := schemaObjectForTest(t, readItems["properties"])
 	startLine := schemaObjectForTest(t, readFileProperties["startLine"])
@@ -54,9 +54,8 @@ func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
 	}
 
 	sshParams, _ := builtinSchemaForTest(t, "ssh_cluster")
-	sshBranches, ok := sshParams["oneOf"].([]any)
-	if !ok || len(sshBranches) != 2 || !schemaRequiredForTest(t, schemaObjectForTest(t, sshBranches[1]), "alias") {
-		t.Fatalf("ssh_cluster add schema must require alias: %#v", sshParams["oneOf"])
+	if _, ok := sshParams["oneOf"]; ok {
+		t.Fatalf("ssh_cluster schema must not declare oneOf; got %#v", sshParams["oneOf"])
 	}
 
 	for _, name := range []string{"http_request", "web_fetch"} {
@@ -107,9 +106,14 @@ func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
 
 	deleteParams, deleteDescription := builtinSchemaForTest(t, "remote_delete_path")
 	deleteProperties := schemaObjectForTest(t, deleteParams["properties"])
-	if !strings.Contains(deleteDescription, "other directories require recursive=true") ||
-		!strings.Contains(schemaObjectForTest(t, deleteProperties["recursive"])["description"].(string), "Immediate child directories") {
-		t.Fatal("remote_delete_path description must explain recursive deletion and top-level directory blocking")
+	if !strings.Contains(deleteDescription, "directories require recursive=true") {
+		t.Fatal("remote_delete_path description must explain recursive deletion")
+	}
+	// 工作区根的一级子目录曾经整类拒绝，规则已去掉（与本地 delete 一致）：声明里
+	// 不能再承诺这道拦截，否则可删的目录会被写成禁区。
+	if strings.Contains(deleteDescription, "Immediate child") ||
+		strings.Contains(schemaObjectForTest(t, deleteProperties["recursive"])["description"].(string), "Immediate child") {
+		t.Fatal("remote_delete_path must not advertise the retired top-level directory block")
 	}
 
 	// Both delete tools declare the same batch list, so both must show the same
@@ -125,11 +129,13 @@ func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
 			t.Fatalf("%s description must state how many paths one call takes, got %q", name, description)
 		}
 	}
-	// Both delete tools take paths only: no path property and no root composite.
-	for _, name := range []string{"delete", "remote_delete_path"} {
+	// Tools take flat properties only: no root composite.
+	for _, name := range []string{"delete", "remote_delete_path", "service", "scheduled_task", "ssh_cluster"} {
 		params, _ := builtinSchemaForTest(t, name)
-		if _, ok := schemaObjectForTest(t, params["properties"])["path"]; ok {
-			t.Fatalf("%s must not declare a path property: it takes paths only", name)
+		if name == "delete" || name == "remote_delete_path" {
+			if _, ok := schemaObjectForTest(t, params["properties"])["path"]; ok {
+				t.Fatalf("%s must not declare a path property: it takes paths only", name)
+			}
 		}
 		if _, ok := params["oneOf"]; ok {
 			t.Fatalf("%s must not declare a root oneOf", name)
@@ -254,20 +260,14 @@ func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 		wantAbsent   string
 	}{
 		{"read pads tailLines with 0", "read", `{"files":[{"path":"a.go","startLine":5,"endLine":20,"tailLines":0}]}`, false, "", ""},
-		{"read mixes tail and range", "read", `{"files":[{"path":"a.go","startLine":5,"tailLines":100}]}`, true, "exactly one allowed shape", ""},
 		{"edit pads oldText with an empty string", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","oldText":""}]}`, false, "", ""},
 		{"edit pads lineRange with an empty string", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":""}]}`, false, "", ""},
 		{"edit pads lineRange with blanks", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":"  "}]}`, false, "", ""},
-		{"edit supplies both sources", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","lineRange":"1-9","newText":"x"}]}`, true, "exactly one allowed shape", ""},
 		{"edit supplies both sources but a malformed range", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","lineRange":"abcdef","newText":"x"}]}`, true, "must match the pattern", ""},
-		{"edit sets replaceAll beside lineRange", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","replaceAll":true}]}`, true, "must not be combined with \"replaceAll\", \"lineRange\"", ""},
-		{"edit pads every source blank", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"","lineRange":"","newText":"x"}]}`, true, "exactly one allowed shape", ""},
 		{"edit replaces nothing", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"abcdef","newText":"x"}]}`, true, "must match the pattern", ""},
 		{"remote_edit pads oldText with an empty string", "remote_edit", `{"target":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","oldText":""}]}`, false, "", ""},
 		{"remote_edit pads lineRange with an empty string", "remote_edit", `{"target":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":""}]}`, false, "", ""},
-		{"remote_edit supplies both sources", "remote_edit", `{"target":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","lineRange":"1-9","newText":"x"}]}`, true, "exactly one allowed shape", ""},
 		{"http_request pads body with an empty string", "http_request", `{"url":"https://example.test","body":"","json":{"a":1}}`, false, "", ""},
-		{"http_request supplies body and json", "http_request", `{"url":"https://example.test","body":"x","json":{"a":1}}`, true, "must not be combined with", ""},
 		{"web_fetch pads format with an empty string", "web_fetch", `{"url":"https://example.test/","format":""}`, false, "", ""},
 		{"grep pads outputMode with an empty string", "grep", `{"pattern":"x","outputMode":""}`, false, "", ""},
 		{"remote_run_command pads shell with an empty string", "remote_run_command", `{"target":"t:/w","command":"ls","shell":""}`, false, "", ""},

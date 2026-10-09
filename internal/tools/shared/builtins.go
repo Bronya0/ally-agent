@@ -225,12 +225,6 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 			"required": []string{"action"},
-			"oneOf": []any{
-				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "start"}}, "required": []string{"command"}},
-				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "stop"}}, "required": []string{"id"}},
-				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "read"}}, "required": []string{"id"}},
-				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "list"}}},
-			},
 		}),
 		functionTool("wait", "Pause the current agent run for a short, cancellable delay (1-3600 seconds) with a reason. Prefer it as the only call in that response; when it rides along with other calls, Ally runs it last, once the rest of the batch (file mutations included) has finished, and it never ends the run.", map[string]any{
 			"type": "object",
@@ -278,19 +272,11 @@ func chatToolsUncached() []openai.Tool {
 				"action":      map[string]any{"type": "string", "enum": []string{"create", "list", "delete"}, "description": "Create, list, or delete a scheduled task."},
 				"id":          map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Task id required for delete."},
 				"name":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Short task name required for create."},
-				"instruction": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Self-contained instruction executed by an LLM agent with fresh context on every run. Mutually exclusive with command."},
-				"command":     map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command executed in the task workspace on every run (same safety rules as the command tool; not for long-running services). Mutually exclusive with instruction."},
-				"schedule":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Future RFC3339 one-shot time, Go duration such as 30m/2h (at least 1m), or a standard five-field cron expression. @-descriptors such as @daily are rejected: use a duration for intervals."},
+				"instruction": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Self-contained instruction executed by an LLM agent with fresh context on every run. Mutually exclusive with command; provide either instruction or command for action=create."},
+				"command":     map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command executed in the task workspace on every run (same safety rules as the command tool; not for long-running services). Mutually exclusive with instruction; provide either instruction or command for action=create."},
+				"schedule":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Required for create: future RFC3339 one-shot time, Go duration such as 30m/2h (at least 1m), or a standard five-field cron expression. @-descriptors such as @daily are rejected: use a duration for intervals."},
 			},
 			"required": []string{"action"},
-			"oneOf": []any{
-				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "create"}}, "required": []string{"name", "schedule"}, "oneOf": []any{
-					map[string]any{"required": []string{"instruction"}},
-					map[string]any{"required": []string{"command"}},
-				}},
-				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "list"}}},
-				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "delete"}}, "required": []string{"id"}},
-			},
 		}),
 		functionTool("http_request", "Make a single HTTP/HTTPS request with method, headers, query, body or JSON.", map[string]any{
 			"type": "object",
@@ -299,8 +285,8 @@ func chatToolsUncached() []openai.Tool {
 				"url":                map[string]any{"type": "string", "minLength": 1, "pattern": `^https?://\S+$`, "description": "Absolute http:// or https:// URL."},
 				"headers":            map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Request headers. User-Agent defaults to AllyAgent unless provided."},
 				"query":              map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Query parameters merged into the URL."},
-				"body":               map[string]any{"type": "string", "description": "Raw request body. Mutually exclusive with json."},
-				"json":               jsonValueSchema("JSON value to encode as the request body. Sets Content-Type to application/json unless provided."),
+				"body":               map[string]any{"type": "string", "description": "Raw request body text. Mutually exclusive with json; provide either body or json, not both."},
+				"json":               map[string]any{"type": "object", "additionalProperties": true, "description": "JSON object to encode as the request body. Mutually exclusive with body; provide either body or json, not both. Sets Content-Type to application/json unless provided."},
 				"saveTo":             map[string]any{"type": "string", "description": "Optional workspace-relative download path for large responses; parent directories are created automatically."},
 				"timeout":            httpTimeoutSchema(),
 				"maxBytes":           map[string]any{"type": "integer", "minimum": 0, "maximum": MaxHTTPBodyBytes, "description": fmt.Sprintf("Response body cap in bytes (default %d, max %d; omit or send 0 for the default, larger requests are clamped). saveTo raises the default to the max.", DefaultHTTPMaxBody, MaxHTTPBodyBytes)},
@@ -308,13 +294,6 @@ func chatToolsUncached() []openai.Tool {
 				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS verification. Default false; only for debugging or trusted self-signed services."},
 			},
 			"required": []string{"url"},
-			// Judged on the effective value, like the runtime (req.Body != ""): an
-			// explicit empty body means "not provided", so padding the field must
-			// not read as "body and json were both sent".
-			"not": map[string]any{
-				"required":   []string{"body", "json"},
-				"properties": map[string]any{"body": map[string]any{"type": "string", "minLength": 1}},
-			},
 		}),
 		functionTool("web_fetch", "Fetch a web page and return readable text, title, and links.", map[string]any{
 			"type": "object",
@@ -361,12 +340,12 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path", "content"},
 		}),
-		functionTool("remote_delete_path", "Delete one or more files or directories in a remote SSH workspace. Refuses the workspace root, its immediate child directories (root-level folders), VCS metadata, and OS-sensitive paths; other directories require recursive=true, while root-level files remain deletable. Strictly prohibited from deleting filesystem roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs). Use remote deletion cautiously; it is destructive. Prefer this over remote_run_command deletion."+deleteBatchNote(), map[string]any{
+		functionTool("remote_delete_path", "Delete one or more files or directories in a remote SSH workspace. Refuses the workspace root, VCS metadata, and OS-sensitive paths; directories require recursive=true. Strictly prohibited from deleting filesystem roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs). Use remote deletion cautiously; it is destructive. Prefer this over remote_run_command deletion."+deleteBatchNote(), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    sshTargetSchema(),
 				"paths":     deletePathsSchema("Remote path to delete, relative to the SSH workspace root; absolute paths under that root are accepted and rebased."),
-				"recursive": map[string]any{"type": "boolean", "description": "Required for deleting directories below the workspace root; applies to every path in the call. Immediate child directories of the workspace root and system level 1/2 directories are always blocked."},
+				"recursive": map[string]any{"type": "boolean", "description": "Required for deleting directories; applies to every path in the call. System level 1/2 directories are always blocked."},
 			},
 			"required": []string{"target", "paths"},
 		}),
@@ -381,6 +360,22 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "command"},
 		}),
+		functionTool("remote_transfer", "Transfer files or directories between the local workspace and a remote SSH workspace using raw binary streaming with bounded O(1) memory.\n"+
+			"- action='upload': streams localPath (file or directory) to remotePath on the remote workspace.\n"+
+			"- action='download': streams remotePath (file or directory) from the remote workspace to localPath.\n"+
+			"- Preserves file modes, permissions, and directory structures.\n"+
+			"- Both localPath and remotePath must stay within their respective workspaces (strict workspace fences enforced).\n"+
+			"- Existing destinations require overwrite=true with user approval; version-control metadata (.git) is strictly protected.", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"target":     sshTargetSchema(),
+				"action":     map[string]any{"type": "string", "enum": []string{"upload", "download"}, "description": "Transfer direction: 'upload' (local to remote) or 'download' (remote to local)."},
+				"localPath":  map[string]any{"type": "string", "minLength": 1, "description": "Workspace-relative local file or directory path."},
+				"remotePath": map[string]any{"type": "string", "minLength": 1, "description": "Remote workspace-relative destination or source file/directory path."},
+				"overwrite":  map[string]any{"type": "boolean", "description": "Allow overwriting an existing destination file or directory (subject to user confirmation)."},
+			},
+			"required": []string{"target", "action", "localPath", "remotePath"},
+		}),
 		functionTool("ssh_cluster", "Inspect or register SSH cluster servers for the current workspace. action=list shows servers authorized for this workspace; action=add asks the user to approve registering a new node — or, when the alias is already registered, only to authorize that existing node for the workspace (stored nodes and credentials are never overwritten). Credentials (password / private key path) are configured by the user in the SSH cluster manager; this tool cannot store them. An alias that is not registered yet also needs host, username, description and reason in the same call — the schema can only require `alias`, because the already-registered path ignores the other four.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -393,10 +388,6 @@ func chatToolsUncached() []openai.Tool {
 				"reason":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explanation to the user why this server is needed. Required when registering a new alias."},
 			},
 			"required": []string{"action"},
-			"oneOf": []any{
-				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "list"}}},
-				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "add"}}, "required": []string{"alias"}},
-			},
 		}),
 		functionTool("grep", "Search UTF-8 file contents with ripgrep. Prefer this over shell grep/rg via the command tool. Returns a `<ally-grep>` tag block whose opening tag carries the explicit `mode` (`lines`/`count_matches`), the match/file totals (`hits` appears only when it differs from `matched`), `truncated`/`offset-exhausted` flags, and `next-offset` while more entries remain. `lines` mode (default) groups matches by file — one bare path row per file, then one indented `line: text` row per matching line (text preview trimmed, max 500 chars; no colon means the preview was dropped for budget) — so a separate read is only needed for surrounding context; `count_matches` returns one `path: count=N` row per file. Result size is bounded automatically; paginate with `offset` using `next-offset` (it resumes right after the last row shown) or narrow path/glob instead of asking for more entries.", map[string]any{
 			"type": "object",
@@ -511,6 +502,7 @@ var builtinToolExamples = map[string]string{
 	"remote_read":        `{"target":"my-dev:/srv/app","files":[{"path":"main.go"}]}`,
 	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
 	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./..."}`,
+	"remote_transfer":    `upload: {"target":"my-dev:/srv/app","action":"upload","localPath":"dist","remotePath":"public","overwrite":true}; download: {"target":"my-dev:/srv/app","action":"download","remotePath":"logs","localPath":"debug_logs"}`,
 	"ssh_cluster":        `list: {"action":"list"}; add: {"action":"add","alias":"dev-node","host":"192.168.1.10","username":"root","description":"Development worker node","reason":"Deploy worker service"}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue"}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","tailLines":200}]}`,
@@ -549,52 +541,19 @@ func batchReadFilesSchema() map[string]any {
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "File path to read."},
 				"startLine": map[string]any{"type": "integer", "minimum": 0, "description": "Optional 1-based first line to read; omit or send 0 to start at the beginning."},
 				"endLine":   map[string]any{"type": "integer", "minimum": 0, "description": "Optional inclusive last line; omit or send 0 for the end of the file. A value below startLine is normalized into an ascending range instead of being rejected."},
-				"tailLines": map[string]any{"type": "integer", "minimum": 0, "maximum": MaxReadRangeLines, "description": "Optional: read only the last N lines (e.g. the end of a log); omit or send 0 for a full read. Cannot be combined with startLine/endLine."},
+				"tailLines": map[string]any{"type": "integer", "minimum": 0, "maximum": MaxReadRangeLines, "description": "Optional: read only the last N lines (e.g. the end of a log); omit or send 0 for a full read. Mutually exclusive with startLine/endLine; do not use together with startLine or endLine."},
 			},
 			"required": []string{"path"},
-			// Mutual exclusion is judged on the effective value, exactly as the
-			// runtime folds tailLines<=0 into the plain startLine path: an explicit
-			// 0 means "not set" (the description says so), so padding it must not
-			// read as "both forms were requested".
-			"oneOf": []any{
-				map[string]any{"not": map[string]any{
-					"required":   []string{"tailLines"},
-					"properties": map[string]any{"tailLines": map[string]any{"type": "integer", "minimum": 1}},
-				}},
-				map[string]any{"required": []string{"tailLines"}, "properties": map[string]any{
-					"tailLines": map[string]any{"type": "integer", "minimum": 1},
-					"startLine": map[string]any{"type": "integer", "maximum": 0},
-					"endLine":   map[string]any{"type": "integer", "maximum": 0},
-				}},
-			},
 		},
 		"description": "Required array of file request objects for reading one or more files in parallel.",
 	}
 }
 
-// editLineRangePattern is the whole-line "A-B" form shared by the local edit
-// tool's changes[] and remote_edit's; tools/edit.ParseLineRange accepts the same
-// shape.
-const editLineRangePattern = `^[1-9][0-9]*-[1-9][0-9]*$`
-
 // editLineRangeOptionalPattern is what the change object's own lineRange property
 // declares: a real range, or a blank value. The runtime picks the source by
-// effective value (strings.TrimSpace(change.LineRange) != "", tools/edit/apply.go),
-// so a padded "lineRange": "" beside a real oldText means "not provided" and must
-// not be refused — the same rule editSourceOneOf already applies. The strict
-// editLineRangePattern stays on the oneOf branches, where "lineRange is the
-// source" is decided: a blank lineRange with no oldText matches no branch and is
-// still refused.
+// effective value (strings.TrimSpace(change.LineRange) != "", tools/edit/apply.go).
 const editLineRangeOptionalPattern = `^(?:\s*|[1-9][0-9]*-[1-9][0-9]*)$`
 
-// editSourceOneOf expresses "exactly one source per change" over the effective
-// value of each source instead of the presence of its key: oldText is a source
-// only at minLength 1 and lineRange only when it matches editLineRangePattern.
-// Key presence would report a model that pads an unused source with an empty
-// string as "both sources given", while the runtime treats that same empty
-// string as "not provided" (tools/edit/apply.go). Two real sources are refused
-// here rather than resolved at run time: picking one silently is what lets a
-// wrong-source edit land unnoticed.
 // sshTargetSchema is the `target` argument every remote_* tool takes: the alias
 // plus the absolute workspace path on that host. One declaration keeps the five
 // remote tools from spelling the same pattern two different ways.
@@ -618,7 +577,7 @@ func httpTimeoutSchema() map[string]any {
 // pre-validation promise, the per-path result and the absent case are one policy,
 // so the wording is written once and appended by both declarations.
 func deleteBatchNote() string {
-	return fmt.Sprintf(" One call may delete several entries: `paths` takes at most %d. Every path is validated before anything is deleted (one refused path means nothing is deleted), and the result reports each path separately. A path that does not exist is not an error: it comes back as an `absent` slot with nothing deleted, so there is no need to retry it.", DeletePathListLimit)
+	return fmt.Sprintf(" One call may delete several entries: `paths` takes at most %d. Every path is validated before anything is deleted (one refused path means nothing is deleted), and the result reports each path separately. Naming the same path twice is harmless, and listing a directory together with a path inside it is handled for you: each identity is deleted once, deepest first. A path that does not exist is not an error: it comes back as an `absent` slot with nothing deleted, so there is no need to retry it.", DeletePathListLimit)
 }
 
 // deletePathsSchema is the batch spelling both delete tools declare, built once
@@ -635,48 +594,11 @@ func deletePathsSchema(itemDescription string) map[string]any {
 	}
 }
 
-func editSourceOneOf() []any {
-	return []any{
-		map[string]any{
-			"required":   []string{"oldText"},
-			"properties": map[string]any{"oldText": map[string]any{"minLength": 1}},
-			"not": map[string]any{
-				"required":   []string{"lineRange"},
-				"properties": map[string]any{"lineRange": map[string]any{"pattern": editLineRangePattern}},
-			},
-		},
-		map[string]any{
-			"required":   []string{"lineRange"},
-			"properties": map[string]any{"lineRange": map[string]any{"pattern": editLineRangePattern}},
-			"not": map[string]any{
-				"required":   []string{"oldText"},
-				"properties": map[string]any{"oldText": map[string]any{"minLength": 1}},
-			},
-		},
-	}
-}
-
-// editReplaceAllRule refuses replaceAll beside lineRange. replaceAll only changes
-// how oldText is matched, so next to a line range it cannot affect the outcome:
-// the pair is a misreading of the field, and the executor refuses it with the
-// same rule (tools/edit/apply.go, ValidateBatchTextChanges).
-func editReplaceAllRule() map[string]any {
-	return map[string]any{
-		"not": map[string]any{
-			"required": []string{"replaceAll", "lineRange"},
-			"properties": map[string]any{
-				"replaceAll": map[string]any{"const": true},
-				"lineRange":  map[string]any{"pattern": editLineRangePattern},
-			},
-		},
-	}
-}
-
 // editChangesSchema builds the `changes` array both edit tools declare. sourceTool
 // names the read tool the model copies source text from — `read` locally,
 // `remote_read` over SSH — and is the only thing the two declarations say
-// differently: bounds, shape and mutual-exclusion rules live here once, so a
-// local and a remote edit cannot drift apart.
+// differently: bounds and shape live here once, so a local and a remote edit
+// cannot drift apart.
 func editChangesSchema(sourceTool string) map[string]any {
 	return map[string]any{
 		"type":        "array",
@@ -692,21 +614,16 @@ func editChangeSchema(sourceTool string) map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"oldText": map[string]any{
-				"type": "string",
-				// No minLength here: a blank source is the runtime's "not provided"
-				// (change.OldText != "", tools/edit/apply.go), so this property must not
-				// refuse a padded empty string — editSourceOneOf decides which source
-				// the change uses, and its branches carry the minLength 1 that makes a
-				// blank oldText useless.
-				"description": fmt.Sprintf("Small exact unique source snippet copied exactly from the `%s` result, without the displayed `N: ` prefixes; preferred over `lineRange`.", sourceTool),
+				"type":        "string",
+				"description": fmt.Sprintf("Small exact unique source snippet copied exactly from the `%s` result, without the displayed line number prefixes; preferred over `lineRange`. Mutually exclusive with lineRange; provide either oldText or lineRange.", sourceTool),
 			},
 			"replaceAll": map[string]any{
 				"type":        "boolean",
-				"description": "Optional; defaults to false. Only meaningful with `oldText`, where true replaces every non-overlapping exact occurrence in the original snapshot; it is refused beside `lineRange`.",
+				"description": "Optional; defaults to false. Only meaningful with `oldText`, where true replaces every non-overlapping exact occurrence in the original snapshot; do not use with `lineRange`.",
 			},
 			"lineRange": map[string]any{
 				"type": "string", "pattern": editLineRangeOptionalPattern,
-				"description": fmt.Sprintf("Inclusive whole-line A-B range from `%s`'s numbered output, for a large block replacement or deletion. Align the range with the exact first and last lines you mean — a closing brace inside the range must be included, one outside stays untouched. All ranges use the original `%s` version, so never adjust for earlier changes.", sourceTool, sourceTool),
+				"description": fmt.Sprintf("Inclusive whole-line A-B range from `%s`'s numbered output, for a large block replacement or deletion. Mutually exclusive with oldText; provide either oldText or lineRange. Align the range with the exact first and last lines you mean — a closing brace inside the range must be included, one outside stays untouched. All ranges use the original `%s` version, so never adjust for earlier changes.", sourceTool, sourceTool),
 			},
 			"newText": map[string]any{
 				"type":        "string",
@@ -714,23 +631,6 @@ func editChangeSchema(sourceTool string) map[string]any {
 			},
 		},
 		"required": []string{"newText"},
-		"oneOf":    editSourceOneOf(),
-		// replaceAll only modifies how oldText is matched, so beside a line range
-		// it cannot change the outcome: the pair is refused, not silently dropped.
-		"allOf": []any{editReplaceAllRule()},
-	}
-}
-
-func jsonValueSchema(description string) map[string]any {
-	return map[string]any{
-		"description": description,
-		"anyOf": []any{
-			map[string]any{"type": "object", "additionalProperties": true},
-			map[string]any{"type": "array", "items": map[string]any{}},
-			map[string]any{"type": "string"},
-			map[string]any{"type": "number"},
-			map[string]any{"type": "boolean"},
-		},
 	}
 }
 

@@ -31,6 +31,7 @@
 | 命令安全围栏 + 命令沙箱（沙箱**当前未接入**：`internal/sandbox` 的 `attached` 开关关着，三个平台都只走围栏；围栏是单一入口，边界归属在 `kernelOwnsBoundary` 一处判定；沙箱本体原样保留，改一个常量即可接回） | `orch_fence.go`（`checkCommandSafetyAtCwd` 唯一入口、受保护位置清单、两形态路径复判）+ `internal/app/orch_sandbox.go`（`sandboxSpec` / `wrapSandboxedCommand` / `annotateSandboxDeniedWrite` / `GetSandboxStatus` / `kernelOwnsBoundary` ＝边界归属的唯一判据；create·edit·delete·rename 的落盘也在这里经 mv/rm/mkdir/ln 包裹）+ `internal/sandbox/`（`attached` / `Attached` 接入开关、`ResolvedMode` 平台策略、`AllowsWrite` 可写判定与 SBPL / bwrap profile，不依赖 App）+ 设置页 `SettingsModal.vue` 的围栏机制说明（不再查本机状态）；command 与 service 两条执行路径共用 |
 | 文件基础读写与删除防护（含本地 `delete` 与 `remote_delete_path` 共用的 `path`/`paths` 折叠、条数上限、重复与包含判定；单条路径的落盘判定仍在各自信任域） | `internal/app/orch_file_ops.go` |
 | 受保护路径判定（VCS 元数据 / 路径别名归一） | `internal/tools/pathutil/pathutil.go`（`CanonicalPath` / `VCSMetadataReason`；本地写/删/命令与远端写/命令共用，远端只判得了字面那半） |
+| 安全围栏规则速查（圈的定义、本地/远端判定顺序与具体路径例子、已知缺口、改一条规则要同步的位置） | `docs/safety-fence.md` |
 | 会话/历史持久化（坏数据协议修复在 `prov_history_hygiene.go`） | `internal/app/biz_sessions.go` |
 | 系统提示词组装（核心规则 / 技能名片 / 记忆索引 / 用户档案 USER.md / AGENTS.md / 代码图谱 / 项目教训 LESSONS.md / 自定义提示词） | `internal/app/biz_prompt.go` |
 | 请求消息与上下文 Token 核算（口径：请求前缀 + provider 实测锚点；会话前缀快照的冻结与压缩后刷新收口在 `refreshSessionPromptPrefix`） | `internal/app/biz_context.go`（`sessionPrefixBreakdown` / `contextAnchor` / `finalizeSessionBreakdown` / `sessionSystemPromptParts`） |

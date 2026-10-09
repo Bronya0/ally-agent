@@ -56,6 +56,7 @@ const KIND_ENTRIES = [
   { kind: 'ask', names: ['ask'], noDuration: true },
   { kind: 'skill', names: ['skill', 'Skill'], noDuration: true },
   { kind: 'ssh_cluster', names: ['ssh_cluster'], noDuration: true },
+  { kind: 'remote_transfer', names: ['remote_transfer'], collapsed: true },
   { kind: 'scheduled', names: ['scheduled_task'], labelKey: 'tools.kind.scheduled' },
   { kind: 'subagent', names: ['subagent', 'agent_delegate'], labelKey: 'tools.kind.subagent' },
 ];

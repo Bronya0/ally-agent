@@ -34,6 +34,15 @@ func pickRemoteHelperPython(t *testing.T) string {
 	}
 	for _, name := range names {
 		if p, err := exec.LookPath(name); err == nil {
+			if runtime.GOOS == "windows" && (strings.HasSuffix(strings.ToLower(p), ".cmd") || strings.HasSuffix(strings.ToLower(p), ".bat")) {
+				continue
+			}
+			return p
+		}
+	}
+	// Fall back to any found interpreter
+	for _, name := range names {
+		if p, err := exec.LookPath(name); err == nil {
 			return p
 		}
 	}
@@ -875,10 +884,12 @@ func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "app.py"), []byte("print('x')\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755); err != nil {
-		t.Fatal(err)
+	for _, dir := range []string{filepath.Join(root, "sub", "deep"), filepath.Join(root, "topdir")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	for _, name := range []string{"sub/nested.txt", "sub/deep/nested.txt", "a.txt", "b.txt"} {
+	for _, name := range []string{"sub/nested.txt", "sub/deep/nested.txt", "topdir/inside.txt", "a.txt", "b.txt"} {
 		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), []byte("n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -933,13 +944,14 @@ func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
 	}
 	mustBeGone("app.py")
 
-	// 2) 一级目录拒绝，且同批的另一个文件不受牵连（判定先于删除）
-	resp = deleteBatch([]string{"sub/nested.txt", "sub"}, true)
-	if resp.OK || !strings.Contains(resp.Error, "top-level workspace directory") {
-		t.Fatalf("top-level directory delete should be refused, got ok=%v error=%s", resp.OK, resp.Error)
+	// 2) 工作区根的一级子目录允许删除（曾整类拒绝，现已与本地 delete 一致），
+	// 且不牵连同批之外的路径。
+	resp = deleteBatch([]string{"topdir"}, true)
+	if !resp.OK {
+		t.Fatalf("top-level directory delete should be allowed, got error=%s", resp.Error)
 	}
-	mustRemain("sub/nested.txt")
-	mustRemain("sub")
+	mustBeGone("topdir")
+	mustRemain("sub/deep/nested.txt")
 
 	// 3) 不存在的路径不是错误：报 absent 槽，同批其它路径照删
 	resp = deleteBatch([]string{"sub/nested.txt", "missing.txt"}, false)

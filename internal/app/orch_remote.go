@@ -9,16 +9,20 @@ package app
 
 import (
 	"bytes"
+	"compress/zlib"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
+	"os"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"ally-dev/internal/tools/command"
@@ -26,6 +30,7 @@ import (
 	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/read"
 	"ally-dev/internal/tools/sshclient"
+	"ally-dev/internal/tools/streamarchive"
 )
 
 const remotePythonMarker = "ALLY_REMOTE_RESULT_JSON:"
@@ -427,18 +432,11 @@ def op_write(root, payload):
         "createdDirs": created_dirs,
     }
 
-def is_workspace_root_child_directory(root, rel):
-    rel = "" if rel is None else to_os_text(rel)
-    parts = [part for part in rel.replace("\\", "/").split("/") if part and part != "."]
-    if len(parts) != 1:
-        return False
-    return os.path.isdir(os.path.join(root, parts[0]))
-
 def check_delete_path(root, rel, recursive):
     # 单条路径删除的全部判定，不执行任何东西。单路径与批量共用这一份：批量在
     # 动手之前逐条跑完，任一条不通过就整批不删。Go 侧已判过路径形态（相对性、
     # 越界、工作区根、VCS 元数据名），这里判只有远端才知道的事实：是否目录、
-    # 是否工作区一级目录、是否系统敏感目标；存在性只记录不拒绝（见下）。
+    # 是否系统敏感目标；存在性只记录不拒绝（见下）。
     #
     # 两套路径各管一头：保护判定用 resolved（符号链接指向 .git 或系统目录也
     # 要拦住），实际删除用 lexical —— 删符号链接删的是链接本身，不是它指向的
@@ -452,8 +450,6 @@ def check_delete_path(root, rel, recursive):
         raise ValueError("refusing to delete path containing VCS metadata: %s" % to_unicode(rel))
     if is_protected_delete_path(resolved):
         raise ValueError("refusing to delete OS-sensitive path: %s" % to_unicode(rel))
-    if is_workspace_root_child_directory(root, rel):
-        raise ValueError("refusing to delete top-level workspace directory: %s" % to_unicode(rel))
     if not os.path.lexists(lexical):
         # 不存在不是错误：删除的目的已经达成。标出来交给 op_delete_batch 报成
         # absent 槽（本地 delete 是同一套语义），同批其它路径照删。
@@ -1770,9 +1766,10 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 }
 
 // remoteDeletePath 删除远端一次调用里的全部路径，与本地 delete 同一套语义：
-// Go 侧先判路径形态（相对性、越界、工作区根、VCS 元数据）以及这一串路径彼此
-// 之间的重复与包含；只有远端才知道的事实（是否目录、是否工作区一级目录、是否
-// 系统敏感目标）由 helper 在动手之前逐条判完——任一条不通过，整批一条都不删。
+// Go 侧先判路径形态（相对性、越界、工作区根、VCS 元数据），并把这一串路径归一成
+// 「去重 + 深的先删」的执行计划（planDeleteExecution）；只有远端才知道的事实
+// （是否目录、是否系统敏感目标）由
+// helper 在动手之前逐条判完——任一条不通过，整批一条都不删。
 // 执行阶段仍是逐条隔离：单条失败只写自己的结果槽；本来就不存在的路径报 absent
 // 槽（既不成功也不失败），同批其它路径照删。
 func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest) (DeletePathsResult, error) {
@@ -1805,8 +1802,12 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 		clean = append(clean, cleanPath)
 		targets = append(targets, fileMutationTarget{remoteMutationKey(req.Target, cleanPath), cleanPath})
 	}
-	if err := checkDeletePathList(targets); err != nil {
-		return DeletePathsResult{}, err
+	// 重复与包含不再整批拒：只把代表项发给 helper（同一身份删一次），并按计划顺序送——
+	// 深的先删，父目录与它里面的路径同时列出时两条都能真删掉，而不是让结果取决于顺序。
+	plan := planDeleteExecution(targets)
+	execPaths := make([]string, 0, len(plan.order))
+	for _, rep := range plan.order {
+		execPaths = append(execPaths, clean[rep])
 	}
 
 	var resp struct {
@@ -1820,28 +1821,35 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 	}
 	// 一批里可能包含递归删除的大目录（构建产物、依赖目录），单路径时代的 60s
 	// 预算会误报超时；按条数放宽并封顶，一次调用不会无限期挂着。
-	timeout := time.Duration(60*len(clean)) * time.Second
+	timeout := time.Duration(60*len(execPaths)) * time.Second
 	if timeout > 5*time.Minute {
 		timeout = 5 * time.Minute
 	}
-	if err := a.invokeRemotePython(ctx, rt, remotePayload(rt, "delete_batch", map[string]any{"paths": clean, "recursive": req.Recursive}), timeout, &resp); err != nil {
+	if err := a.invokeRemotePython(ctx, rt, remotePayload(rt, "delete_batch", map[string]any{"paths": execPaths, "recursive": req.Recursive}), timeout, &resp); err != nil {
 		return DeletePathsResult{}, err
 	}
-	result := DeletePathsResult{Paths: make([]DeleteResult, 0, len(resp.Paths))}
-	for _, item := range resp.Paths {
-		deleted := DeleteResult{Deleted: item.Path, Path: item.Path, ResolvedPath: item.ResolvedPath, OK: item.OK, Absent: item.Absent, Recursive: req.Recursive}
-		switch {
-		case item.Absent:
-			// 远端本来就没有这条：既不成功也不失败，与本地 delete 同一套报法。
-			result.AbsentCount++
-		case item.OK:
-			result.DeletedCount++
-		default:
-			deleted.Error = item.Error
-			result.FailedCount++
-		}
-		result.Paths = append(result.Paths, deleted)
+	// 槽位与发出去的路径一一对应：数目不对就是 helper 契约破了，宁可报错也不要拿零值
+	// 槽位当「删失败」糊弄过去。
+	if len(resp.Paths) != len(execPaths) {
+		return DeletePathsResult{}, fmt.Errorf("remote delete helper returned %d result slots for %d paths", len(resp.Paths), len(execPaths))
 	}
+	executed := make([]DeleteResult, len(clean))
+	for i, item := range resp.Paths {
+		slot := DeleteResult{
+			Deleted:      item.Path,
+			Path:         item.Path,
+			ResolvedPath: item.ResolvedPath,
+			OK:           item.OK,
+			Absent:       item.Absent,
+			Recursive:    req.Recursive,
+		}
+		if !item.OK {
+			slot.Error = item.Error
+		}
+		executed[plan.order[i]] = slot
+	}
+	result := DeletePathsResult{}
+	applyDeletePlanSlots(&result, plan, clean, executed)
 	return result, nil
 }
 
@@ -1951,4 +1959,693 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 		"targets":        writeTargets,
 	}), time.Duration(timeout+20)*time.Second, &result)
 	return result, err
+}
+
+const remoteTransferMarker = "ALLY_REMOTE_TRANSFER_JSON:"
+
+const remoteTransferPythonScript = `
+# -*- coding: utf-8 -*-
+from __future__ import print_function
+import base64, errno, json, os, stat as stat_mod, sys, tarfile, time
+
+MARKER = "ALLY_REMOTE_TRANSFER_JSON:"
+
+def to_unicode(s):
+    if sys.version_info[0] < 3:
+        if isinstance(s, BaseException):
+            try:
+                s = str(s)
+            except Exception:
+                s = " ".join(to_unicode(arg) for arg in s.args) if getattr(s, "args", None) else s.__class__.__name__
+        if isinstance(s, str):
+            return s.decode("utf-8", "replace")
+        if isinstance(s, unicode):
+            return s
+        return unicode(s)
+    return str(s)
+
+def to_os_text(s):
+    if sys.version_info[0] < 3:
+        if isinstance(s, unicode):
+            return s.encode("utf-8")
+        if isinstance(s, str):
+            return s
+        return str(s)
+    if isinstance(s, str):
+        return s
+    if isinstance(s, bytes):
+        return s.decode("utf-8", "replace")
+    return str(s)
+
+def fail(msg):
+    line = MARKER + json.dumps({"ok": False, "error": to_unicode(msg)}, separators=(",", ":")) + "\n"
+    if sys.version_info[0] < 3 and isinstance(line, unicode):
+        line = line.encode("utf-8")
+    sys.stderr.write(line)
+    sys.stderr.flush()
+    sys.exit(1)
+
+def ok(data):
+    line = MARKER + json.dumps({"ok": True, "data": data}, separators=(",", ":")) + "\n"
+    if sys.version_info[0] < 3 and isinstance(line, unicode):
+        line = line.encode("utf-8")
+    sys.stderr.write(line)
+    sys.stderr.flush()
+    sys.exit(0)
+
+def is_subpath(child, parent):
+    try:
+        rel = os.path.relpath(child, parent)
+        return rel != ".." and not rel.startswith(".." + os.sep) and not (os.altsep and rel.startswith(".." + os.altsep))
+    except (ValueError, OSError):
+        return False
+
+def contains_vcs(p):
+    parts = p.replace("\\", "/").split("/")
+    return any(part in (".git", ".svn", ".hg") for part in parts)
+
+def safe_join_paths(root, rel):
+    rel = "" if rel is None else to_os_text(rel)
+    if "\x00" in rel:
+        raise ValueError("path contains NUL byte")
+    if rel == "" or rel == ".":
+        return root, root
+    p = rel.replace("\\", "/")
+    if p.startswith("/"):
+        raise ValueError("remote path must be relative to workspaceRoot")
+    parts = [part for part in p.split("/") if part and part != "."]
+    if any(part == ".." for part in p.split("/")):
+        raise ValueError("remote path must not contain '..'")
+    lexical = os.path.normpath(os.path.join(root, *parts)) if parts else root
+    if not is_subpath(lexical, root):
+        raise ValueError("remote path is outside workspaceRoot")
+    resolved = os.path.realpath(lexical)
+    if not is_subpath(resolved, root):
+        raise ValueError("remote path is outside workspaceRoot")
+    return lexical, resolved
+
+def get_raw_stdin():
+    if hasattr(sys.stdin, "buffer"):
+        return sys.stdin.buffer
+    if os.name == "nt":
+        import msvcrt
+        msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
+    return sys.stdin
+
+def get_raw_stdout():
+    if hasattr(sys.stdout, "buffer"):
+        return sys.stdout.buffer
+    if os.name == "nt":
+        import msvcrt
+        msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
+    return sys.stdout
+
+def do_upload(root, payload):
+    rel = payload.get("remotePath", "")
+    lexical, resolved = safe_join_paths(root, rel)
+    if lexical == root:
+        raise ValueError("refusing to upload directly to workspace root without subpath")
+    if contains_vcs(resolved) or contains_vcs(lexical):
+        raise ValueError("E_PROTECTED_PATH: refusing to write VCS metadata: " + to_unicode(rel))
+
+    overwrite = bool(payload.get("overwrite"))
+    if not overwrite and os.path.lexists(resolved):
+        raise ValueError("remote destination already exists: " + to_unicode(rel))
+
+    dest_parent = os.path.dirname(resolved)
+    if not os.path.exists(dest_parent):
+        os.makedirs(dest_parent)
+
+    raw_in = get_raw_stdin()
+    try:
+        tar = tarfile.open(mode="r|", fileobj=raw_in)
+    except Exception as exc:
+        raise ValueError("invalid tar stream: " + to_unicode(exc))
+
+    total_bytes = 0
+    file_count = 0
+    dir_count = 0
+    dir_modtimes = []
+
+    for member in tar:
+        m_name = member.name.replace("\\", "/").strip("/")
+        if not m_name or m_name == "." or ".." in m_name.split("/"):
+            continue
+        if contains_vcs(m_name):
+            continue
+
+        target_path = os.path.normpath(os.path.join(dest_parent, m_name))
+        if not is_subpath(target_path, root):
+            raise ValueError("Tar-Slip violation: entry escapes workspaceRoot: " + to_unicode(m_name))
+
+        if member.isdir():
+            if os.path.islink(target_path):
+                if overwrite:
+                    os.unlink(target_path)
+            elif os.path.exists(target_path) and not os.path.isdir(target_path):
+                if overwrite:
+                    os.unlink(target_path)
+            if not os.path.exists(target_path):
+                os.makedirs(target_path)
+            dir_modtimes.append((target_path, member.mtime))
+            dir_count += 1
+        elif member.isreg():
+            p_dir = os.path.dirname(target_path)
+            if not os.path.exists(p_dir):
+                os.makedirs(p_dir)
+            if os.path.islink(target_path):
+                if overwrite:
+                    os.unlink(target_path)
+            elif os.path.isdir(target_path) and overwrite:
+                import shutil
+                shutil.rmtree(target_path)
+            tmp_path = target_path + ".ally-tmp-%d-%d" % (os.getpid(), int(time.time() * 1000000 % 1000000))
+            f_in = tar.extractfile(member)
+            if f_in is None:
+                continue
+            try:
+                with open(tmp_path, "wb") as f_out:
+                    while True:
+                        chunk = f_in.read(65536)
+                        if not chunk:
+                            break
+                        f_out.write(chunk)
+                        total_bytes += len(chunk)
+                mode = member.mode & 0o7777
+                if mode == 0:
+                    mode = 0o644
+                else:
+                    try:
+                        cur_umask = os.umask(0)
+                        os.umask(cur_umask)
+                    except Exception:
+                        cur_umask = 0o022
+                    mode = mode & ~cur_umask
+                    if not (mode & 0o400):
+                        mode |= 0o600
+                try:
+                    os.chmod(tmp_path, mode)
+                except Exception:
+                    pass
+                if hasattr(os, "replace"):
+                    os.replace(tmp_path, target_path)
+                else:
+                    if os.name == "nt" and os.path.exists(target_path):
+                        os.remove(target_path)
+                    os.rename(tmp_path, target_path)
+                if member.mtime > 0:
+                    try:
+                        os.utime(target_path, (member.mtime, member.mtime))
+                    except Exception:
+                        pass
+                file_count += 1
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+        elif member.issym():
+            link_target = member.linkname
+            if link_target.startswith("/") or ".." in link_target.split("/"):
+                full_link = os.path.normpath(os.path.join(os.path.dirname(target_path), link_target))
+                if not is_subpath(full_link, root):
+                    continue
+            if contains_vcs(link_target):
+                continue
+            if os.path.lexists(target_path):
+                try:
+                    os.unlink(target_path)
+                except Exception:
+                    pass
+            try:
+                os.symlink(member.linkname, target_path)
+            except Exception:
+                pass
+
+    tar.close()
+    for d_path, d_mtime in reversed(dir_modtimes):
+        if d_mtime > 0 and os.path.isdir(d_path):
+            try:
+                os.utime(d_path, (d_mtime, d_mtime))
+            except Exception:
+                pass
+
+    ok({"totalBytes": total_bytes, "fileCount": file_count, "dirCount": dir_count})
+
+def do_download(root, payload):
+    rel = payload.get("remotePath", "")
+    lexical, resolved = safe_join_paths(root, rel)
+    if not os.path.lexists(resolved):
+        raise ValueError("remote path does not exist: " + to_unicode(rel))
+    if contains_vcs(resolved) or contains_vcs(lexical):
+        raise ValueError("E_PROTECTED_PATH: refusing to read VCS metadata: " + to_unicode(rel))
+
+    arc_root_name = payload.get("arcRootName") or os.path.basename(resolved)
+    raw_out = get_raw_stdout()
+    tar = tarfile.open(mode="w|", fileobj=raw_out)
+
+    total_bytes = 0
+    file_count = 0
+    dir_count = 0
+
+    if os.path.isdir(resolved):
+        for dirpath, dirnames, filenames in os.walk(resolved):
+            dirnames[:] = [d for d in dirnames if not contains_vcs(d)]
+            rel_dir = os.path.relpath(dirpath, resolved).replace("\\", "/")
+            arc_dir = arc_root_name if rel_dir == "." else arc_root_name + "/" + rel_dir
+            tar.add(dirpath, arcname=arc_dir, recursive=False)
+            dir_count += 1
+            for fname in filenames:
+                if contains_vcs(fname):
+                    continue
+                fpath = os.path.join(dirpath, fname)
+                arc_file = arc_dir + "/" + fname
+                try:
+                    tar.add(fpath, arcname=arc_file, recursive=False)
+                    st = os.lstat(fpath)
+                    total_bytes += st.st_size
+                    file_count += 1
+                except Exception:
+                    pass
+    else:
+        tar.add(resolved, arcname=arc_root_name, recursive=False)
+        st = os.lstat(resolved)
+        total_bytes += st.st_size
+        file_count = 1
+
+    tar.close()
+    raw_out.flush()
+    ok({"totalBytes": total_bytes, "fileCount": file_count, "dirCount": dir_count})
+
+try:
+    if len(sys.argv) < 2:
+        fail("missing payload argument")
+    padding = "=" * (-len(sys.argv[1]) % 4)
+    raw_b64 = (sys.argv[1] + padding).encode("ascii")
+    decoded = base64.urlsafe_b64decode(raw_b64)
+    if hasattr(decoded, "decode"):
+        decoded = decoded.decode("utf-8")
+    payload = json.loads(decoded)
+    if sys.version_info[0] < 3:
+        payload = dict((k, to_os_text(v) if isinstance(v, (str, unicode)) else v) for k, v in payload.items())
+
+    raw_root = os.path.expanduser(to_os_text(payload["workspaceRoot"]))
+    if not os.path.exists(raw_root):
+        raise ValueError("workspaceRoot does not exist: " + to_unicode(raw_root))
+    root = os.path.realpath(raw_root)
+    if not os.path.isdir(root) or root == "/":
+        raise ValueError("invalid remote workspaceRoot: " + to_unicode(root))
+
+    action = payload.get("action", "")
+    if action == "upload":
+        do_upload(root, payload)
+    elif action == "download":
+        do_download(root, payload)
+    else:
+        fail("unknown transfer action: " + to_unicode(action))
+except Exception as exc:
+    fail(to_unicode(exc))
+`
+
+type RemoteTransferRequest struct {
+	Target     string `json:"target"`
+	Action     string `json:"action"` // "upload" or "download"
+	LocalPath  string `json:"localPath"`
+	RemotePath string `json:"remotePath"`
+	Overwrite  bool   `json:"overwrite,omitempty"`
+}
+
+type RemoteTransferResult struct {
+	OK         bool   `json:"ok"`
+	Action     string `json:"action"`
+	Target     string `json:"target"`
+	LocalPath  string `json:"localPath"`
+	RemotePath string `json:"remotePath"`
+	TotalBytes int64  `json:"totalBytes"`
+	FileCount  int    `json:"fileCount"`
+	DirCount   int    `json:"dirCount,omitempty"`
+	Summary    string `json:"summary"`
+}
+
+func decodeRemoteTransferMarker(stderr []byte, out any) error {
+	markerBytes := []byte(remoteTransferMarker)
+	idx := bytes.LastIndex(stderr, markerBytes)
+	if idx < 0 {
+		msg := strings.TrimSpace(string(stderr))
+		if msg == "" {
+			return errors.New("remote transfer helper produced no response on stderr")
+		}
+		return fmt.Errorf("remote transfer failed: %s", msg)
+	}
+	rest := string(stderr[idx+len(markerBytes):])
+	line := rest
+	if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+		line = rest[:nl]
+	}
+	candidate := strings.TrimSpace(line)
+	var resp struct {
+		OK    bool            `json:"ok"`
+		Data  json.RawMessage `json:"data,omitempty"`
+		Error string          `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(candidate), &resp); err != nil {
+		return fmt.Errorf("parse remote transfer response: %w", err)
+	}
+	if !resp.OK {
+		if strings.HasPrefix(resp.Error, "E_PROTECTED_PATH:") {
+			return codedToolError("E_PROTECTED_PATH", errors.New(strings.TrimSpace(strings.TrimPrefix(resp.Error, "E_PROTECTED_PATH:"))))
+		}
+		if strings.HasPrefix(resp.Error, "Tar-Slip violation:") {
+			return codedToolError("E_PATH_OUTSIDE", errors.New(resp.Error))
+		}
+		return errors.New(resp.Error)
+	}
+	if out != nil && len(resp.Data) > 0 {
+		return json.Unmarshal(resp.Data, out)
+	}
+	return nil
+}
+
+func parseRemoteTransferError(host string, stderr []byte, err error) error {
+	msg := strings.TrimSpace(string(stderr))
+	if strings.Contains(msg, remoteTransferMarker) {
+		if markerErr := decodeRemoteTransferMarker(stderr, nil); markerErr != nil {
+			return markerErr
+		}
+	}
+	if strings.Contains(msg, "python3: command not found") || strings.Contains(msg, "python3: not found") ||
+		strings.Contains(msg, "python2: command not found") || strings.Contains(msg, "python2: not found") ||
+		strings.Contains(msg, "python: command not found") || strings.Contains(msg, "python: not found") {
+		return fmt.Errorf("remote host %s has no python interpreter; remote_transfer needs python (install python3 or python, or add to PATH)", host)
+	}
+	if msg != "" {
+		return fmt.Errorf("ssh transfer %s failed: %s", host, msg)
+	}
+	return fmt.Errorf("ssh transfer %s failed: %w", host, err)
+}
+
+func (a *App) executeRemoteTransfer(ctx context.Context, req RemoteTransferRequest) (RemoteTransferResult, error) {
+	action := strings.ToLower(strings.TrimSpace(req.Action))
+	if action != "upload" && action != "download" {
+		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", fmt.Errorf("action must be 'upload' or 'download', got %q", req.Action))
+	}
+	if strings.TrimSpace(req.Target) == "" {
+		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", errors.New("target is required"))
+	}
+	if strings.TrimSpace(req.LocalPath) == "" {
+		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", errors.New("localPath is required"))
+	}
+	if strings.TrimSpace(req.RemotePath) == "" {
+		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", errors.New("remotePath is required"))
+	}
+
+	// 1. Resolve and authorize remote target (Tab-level isolation + Approval Gate 2 + Credentials)
+	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
+	if err != nil {
+		return RemoteTransferResult{}, err
+	}
+
+	// 2. Validate remote path against workspace root
+	cleanRemotePath, err := validateRemoteWorkspacePath(req.RemotePath, rt.WorkspaceRoot, false)
+	if err != nil {
+		return RemoteTransferResult{}, err
+	}
+	if cleanRemotePath == "." {
+		return RemoteTransferResult{}, codedToolError("E_PATH_OUTSIDE", errors.New("refusing transfer directly targeting remote workspace root without subpath"))
+	}
+	// VCS metadata check for remote path
+	if err := remoteVCSMetadataWrite(cleanRemotePath); err != nil {
+		return RemoteTransferResult{}, err
+	}
+
+	// 3. Resolve local workspace and validate local path
+	sessionID := toolSessionID(ctx)
+	var workspace string
+	if sessionID != "" {
+		a.mu.Lock()
+		workspace = a.sessionWorkspaces[sessionID]
+		if workspace == "" {
+			workspace = a.config.Workspace
+		}
+		a.mu.Unlock()
+	} else {
+		a.mu.Lock()
+		workspace = a.config.Workspace
+		a.mu.Unlock()
+	}
+	if workspace == "" {
+		return RemoteTransferResult{}, errors.New("no workspace configured for local transfer")
+	}
+
+	localAbs, err := pathutil.SafeJoin(pathRuntime, []string{workspace}, req.LocalPath)
+	if err != nil {
+		return RemoteTransferResult{}, codedToolError("E_PATH_OUTSIDE", fmt.Errorf("localPath %q is outside workspace: %w", req.LocalPath, err))
+	}
+	relToWs, relErr := filepath.Rel(workspace, localAbs)
+	if relErr != nil || strings.HasPrefix(relToWs, "..") || relToWs == ".." {
+		return RemoteTransferResult{}, codedToolError("E_PATH_OUTSIDE", fmt.Errorf("localPath %q escapes workspace: %s", req.LocalPath, workspace))
+	}
+	localClean := filepath.ToSlash(relToWs)
+	if localClean == "." {
+		return RemoteTransferResult{}, codedToolError("E_PATH_OUTSIDE", errors.New("refusing transfer directly targeting local workspace root without subpath"))
+	}
+	if blocked, reason := pathutil.VCSMetadataReason(localAbs); blocked {
+		return RemoteTransferResult{}, codedToolError("E_PROTECTED_PATH", errors.New(reason))
+	}
+
+	// 4. Action-specific validation and Approval Gate 3 (Overwrite approval)
+	if action == "upload" {
+		// Check local source existence
+		if _, err := os.Lstat(localAbs); err != nil {
+			if os.IsNotExist(err) {
+				return RemoteTransferResult{}, fmt.Errorf("local source does not exist: %s", localClean)
+			}
+			return RemoteTransferResult{}, fmt.Errorf("access local source: %w", err)
+		}
+		// Sensitive file read fence check
+		if blocked, reason := blockedSensitiveRead(localAbs); blocked {
+			return RemoteTransferResult{}, codedToolError("E_PROTECTED_PATH", fmt.Errorf("upload rejected: %s", reason))
+		}
+
+		// Stat remote destination to check existence
+		stat, statErr := a.remoteStatPath(ctx, rt, cleanRemotePath)
+		if statErr != nil {
+			return RemoteTransferResult{}, fmt.Errorf("check remote destination: %w", statErr)
+		}
+		if stat.Exists && !req.Overwrite {
+			return RemoteTransferResult{}, codedToolError("E_EXISTS", fmt.Errorf("remote destination %s already exists on %s; set overwrite=true to replace it", cleanRemotePath, rt.Host))
+		}
+	} else { // download
+		// Stat remote source to ensure it exists
+		stat, statErr := a.remoteStatPath(ctx, rt, cleanRemotePath)
+		if statErr != nil {
+			return RemoteTransferResult{}, fmt.Errorf("check remote source: %w", statErr)
+		}
+		if !stat.Exists {
+			return RemoteTransferResult{}, fmt.Errorf("remote source does not exist on %s: %s", rt.Host, cleanRemotePath)
+		}
+
+		// Check local destination existence
+		if _, destErr := os.Lstat(localAbs); destErr == nil && !req.Overwrite {
+			return RemoteTransferResult{}, codedToolError("E_EXISTS", fmt.Errorf("local destination %s already exists; set overwrite=true to replace it", localClean))
+		}
+	}
+
+	// 5. Execute raw stream transfer via Python Bridge
+	result, err := a.runRemoteTransferStream(ctx, rt, action, localAbs, cleanRemotePath, req.Overwrite)
+	if err != nil {
+		return RemoteTransferResult{}, err
+	}
+
+	result.Action = action
+	result.Target = req.Target
+	result.LocalPath = localClean
+	result.RemotePath = cleanRemotePath
+	result.OK = true
+	if action == "upload" {
+		result.Summary = fmt.Sprintf("successfully uploaded %s to %s:%s (%d bytes, %d files)", localClean, rt.Host, cleanRemotePath, result.TotalBytes, result.FileCount)
+	} else {
+		result.Summary = fmt.Sprintf("successfully downloaded %s:%s to %s (%d bytes, %d files)", rt.Host, cleanRemotePath, localClean, result.TotalBytes, result.FileCount)
+	}
+	return result, nil
+}
+
+var remoteTransferCompressedScriptOnce struct {
+	sync.Once
+	encoded string
+}
+
+func getRemoteTransferCompressedScript() string {
+	remoteTransferCompressedScriptOnce.Do(func() {
+		var buf bytes.Buffer
+		zw := zlib.NewWriter(&buf)
+		_, _ = zw.Write([]byte(remoteTransferPythonScript))
+		_ = zw.Close()
+		remoteTransferCompressedScriptOnce.encoded = base64.StdEncoding.EncodeToString(buf.Bytes())
+	})
+	return remoteTransferCompressedScriptOnce.encoded
+}
+
+func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, action, localAbs, cleanRemotePath string, overwrite bool) (RemoteTransferResult, error) {
+	arcRootName := path.Base(cleanRemotePath)
+	if action == "download" {
+		arcRootName = filepath.Base(localAbs)
+	}
+	payload := map[string]any{
+		"action":        action,
+		"workspaceRoot": rt.WorkspaceRoot,
+		"remotePath":    cleanRemotePath,
+		"arcRootName":   arcRootName,
+		"overwrite":     overwrite,
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		return RemoteTransferResult{}, err
+	}
+	b64Payload := base64.RawURLEncoding.EncodeToString(rawPayload)
+	b64Script := getRemoteTransferCompressedScript()
+
+	remoteCmd := fmt.Sprintf(`sh -c 'boot="import base64, sys, zlib; code = zlib.decompress(base64.b64decode(sys.argv.pop(1))); exec(compile(code, \"<ally-transfer>\", \"exec\"))"; command -v python3 >/dev/null 2>&1 && exec python3 -u -c "$boot" "$@" ; command -v python2 >/dev/null 2>&1 && exec python2 -u -c "$boot" "$@" ; exec python -u -c "$boot" "$@"' -- %s %s`, b64Script, b64Payload)
+
+	entry, hasCredential := a.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port))
+	sshConfig := sshclient.Config{
+		Host:           rt.Host,
+		Port:           rt.Port,
+		AuthMode:       sshclient.AuthModeAgent,
+		KnownHostsPath: a.sshKnownHostsPath,
+	}
+	if hasCredential {
+		switch entry.authType {
+		case sshAuthTypeKey:
+			sshConfig.AuthMode = sshclient.AuthModeKey
+			sshConfig.KeyPath = entry.keyPath
+			sshConfig.KeyPassphrase = entry.password
+		case sshAuthTypePassword:
+			sshConfig.AuthMode = sshclient.AuthModePassword
+			sshConfig.Password = entry.password
+		}
+	}
+
+	var outcome struct {
+		TotalBytes int64 `json:"totalBytes"`
+		FileCount  int   `json:"fileCount"`
+		DirCount   int   `json:"dirCount"`
+	}
+
+	if action == "upload" {
+		stderr, runErr := refreshHostKeyAndRetry(func() ([]byte, error) {
+			pr, pw := io.Pipe()
+			packErrCh := make(chan error, 1)
+			go func() {
+				var pErr error
+				defer func() {
+					if pErr != nil {
+						_ = pw.CloseWithError(pErr)
+					} else {
+						_ = pw.Close()
+					}
+					packErrCh <- pErr
+				}()
+				_, pErr = streamarchive.PackWithFilter(localAbs, arcRootName, pw, func(current string, isDir bool) error {
+					if blocked, reason := blockedSensitiveRead(current); blocked {
+						return codedToolError("E_PROTECTED_PATH", fmt.Errorf("upload rejected: %s", reason))
+					}
+					return nil
+				})
+			}()
+
+			stderr, err := sshclient.RunStream(ctx, sshConfig, remoteCmd, pr, nil)
+			if err != nil {
+				_ = pr.CloseWithError(err)
+			} else {
+				_ = pr.Close()
+			}
+			packErr := <-packErrCh
+
+			if packErr != nil && !errors.Is(packErr, io.ErrClosedPipe) {
+				return stderr, fmt.Errorf("local archive packing error: %w", packErr)
+			}
+			if err != nil {
+				return stderr, err
+			}
+			return stderr, nil
+		})
+
+		if runErr != nil {
+			return RemoteTransferResult{}, parseRemoteTransferError(rt.Host, stderr, runErr)
+		}
+		if err := decodeRemoteTransferMarker(stderr, &outcome); err != nil {
+			return RemoteTransferResult{}, err
+		}
+	} else { // download
+		type downloadAttemptResult struct {
+			stderr []byte
+			stats  streamarchive.Stats
+		}
+		localDestDir := filepath.Dir(localAbs)
+
+		res, runErr := refreshHostKeyAndRetry(func() (downloadAttemptResult, error) {
+			pr, pw := io.Pipe()
+			type unpackResult struct {
+				stats streamarchive.Stats
+				err   error
+			}
+			unpackCh := make(chan unpackResult, 1)
+
+			go func() {
+				var uRes unpackResult
+				defer func() {
+					if uRes.err != nil {
+						_ = pr.CloseWithError(uRes.err)
+					} else {
+						_ = pr.Close()
+					}
+					unpackCh <- uRes
+				}()
+				uRes.stats, uRes.err = streamarchive.Unpack(pr, localDestDir, overwrite)
+				if uRes.err == nil {
+					_, _ = io.Copy(io.Discard, pr)
+				}
+			}()
+
+			stderr, err := sshclient.RunStream(ctx, sshConfig, remoteCmd, nil, pw)
+			if err != nil {
+				_ = pw.CloseWithError(err)
+			} else {
+				_ = pw.Close()
+			}
+			unpackRes := <-unpackCh
+
+			if unpackRes.err != nil && !errors.Is(unpackRes.err, io.ErrClosedPipe) {
+				return downloadAttemptResult{stderr: stderr, stats: unpackRes.stats}, fmt.Errorf("local archive unpacking error: %w", unpackRes.err)
+			}
+			if err != nil {
+				// If local unpack was completely successful and remote transfer marker indicates success,
+				// ignore pipe close errors caused by EOF tear-down
+				if unpackRes.err == nil && (errors.Is(err, io.ErrClosedPipe) || strings.Contains(err.Error(), "closed pipe")) {
+					if markerErr := decodeRemoteTransferMarker(stderr, nil); markerErr == nil {
+						return downloadAttemptResult{stderr: stderr, stats: unpackRes.stats}, nil
+					}
+				}
+				return downloadAttemptResult{stderr: stderr, stats: unpackRes.stats}, err
+			}
+			return downloadAttemptResult{stderr: stderr, stats: unpackRes.stats}, nil
+		})
+
+		if runErr != nil {
+			return RemoteTransferResult{}, parseRemoteTransferError(rt.Host, res.stderr, runErr)
+		}
+		if err := decodeRemoteTransferMarker(res.stderr, &outcome); err != nil || outcome.FileCount == 0 {
+			outcome.TotalBytes = res.stats.TotalBytes
+			outcome.FileCount = res.stats.FileCount
+			outcome.DirCount = res.stats.DirCount
+		}
+	}
+
+	return RemoteTransferResult{
+		TotalBytes: outcome.TotalBytes,
+		FileCount:  outcome.FileCount,
+		DirCount:   outcome.DirCount,
+	}, nil
 }

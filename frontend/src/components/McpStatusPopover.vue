@@ -22,10 +22,11 @@ Public License v3. See the LICENSE file for details.
     </template>
     <div class="mcp-popover" @click.stop>
       <div class="mcp-overview">{{ $t('app.mcp.overview', { total: total, connected: connectedCount, tools: toolCount }) }}</div>
-      <!-- 列表只展示当前实时已连接的服务器；连接中/失败/断开的不在此列出。 -->
-      <div v-if="connectedServers.length === 0" class="mcp-empty">{{ $t('app.mcp.noneConnected') }}</div>
+      <!-- 列表展示所有已启用的服务器，只排除用户主动停用的：注入视图不看连接状态
+           （断连保留工具清单），只列已连接会让失败服务端的工具数无从归属。 -->
+      <div v-if="listedServers.length === 0" class="mcp-empty">{{ $t('app.mcp.noneEnabled') }}</div>
       <div v-else class="mcp-section">
-        <div v-for="srv in connectedServers" :key="srv.name" class="mcp-list-item">
+        <div v-for="srv in listedServers" :key="srv.name" class="mcp-list-item">
           <div class="mcp-list-head">
             <span :class="['mcp-status-dot', statusClass(srv)]" aria-hidden="true"></span>
             <span class="mcp-list-name">{{ srv.name }}</span>
@@ -53,6 +54,9 @@ const visible = ref(false);
 
 const total = computed(() => props.servers.length);
 const connectedServers = computed(() => props.servers.filter((s) => s?.status === 'connected'));
+// 已启用 = 后端登记了这条服务端且未被用户关掉；connected / connecting / failed 都要
+// 列出来，失败项的 dot 与 srv.error 由模板渲染。
+const listedServers = computed(() => props.servers.filter((s) => String(s?.status || '').toLowerCase() !== 'disabled'));
 const connectedCount = computed(() => connectedServers.value.length);
 // 与欢迎表 formatMcpSummary 同口径：统计实际注入的工具数（per-tool 黑名单
 // 在 tools[].disabled），无工具明细的条目回退发现总数。

@@ -168,6 +168,90 @@ func Run(ctx context.Context, cfg Config, command string, stdin io.Reader) (Resu
 	return result, nil
 }
 
+// RunStream connects to a host, executes one remote command, and pipes stdin
+// and stdout directly without buffering the entire stream in memory. Stderr is
+// captured up to maxStderrBytes.
+func RunStream(ctx context.Context, cfg Config, command string, stdin io.Reader, stdout io.Writer) ([]byte, error) {
+	if ctx == nil {
+		return nil, errors.New("SSH context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(command) == "" {
+		return nil, errors.New("SSH command is required")
+	}
+	endpoint, err := resolveEndpoint(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	methods, closeAgent, err := authMethods(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	defer closeAgent()
+
+	knownHostsPath := cfg.KnownHostsPath
+	if knownHostsPath == "" {
+		knownHostsPath, err = DefaultKnownHostsPath()
+		if err != nil {
+			return nil, fmt.Errorf("locate SSH known_hosts: %w", err)
+		}
+	}
+	callback, err := newHostKeyCallback(endpoint.host, endpoint.port, knownHostsPath)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := dial(ctx, endpoint, methods, callback)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	stopCancel := make(chan struct{})
+	cancelWatcherDone := make(chan struct{})
+	go func() {
+		defer close(cancelWatcherDone)
+		select {
+		case <-ctx.Done():
+			_ = client.Close()
+		case <-stopCancel:
+		}
+	}()
+
+	session, err := client.NewSession()
+	if err != nil {
+		close(stopCancel)
+		<-cancelWatcherDone
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("open SSH session: %w", err)
+	}
+	defer session.Close()
+
+	stderr := &limitedWriter{limit: maxStderrBytes, onTruncate: func() { _ = client.Close() }}
+	session.Stderr = stderr
+	if stdin != nil {
+		session.Stdin = stdin
+	}
+	if stdout != nil {
+		session.Stdout = stdout
+	} else {
+		session.Stdout = io.Discard
+	}
+
+	runErr := session.Run(command)
+	close(stopCancel)
+	<-cancelWatcherDone
+	if ctx.Err() != nil {
+		return stderr.Bytes(), ctx.Err()
+	}
+	return stderr.Bytes(), runErr
+}
+
 // Test verifies the SSH connection and authentication with the remote host.
 // It establishes a connection, verifies host keys and credentials, opens
 // a test session channel to verify shell/session readiness, and returns the elapsed latency.

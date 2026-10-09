@@ -126,3 +126,21 @@ func TestPluginAssetMiddlewareHidesDisabledPlugins(t *testing.T) {
 		t.Fatalf("禁用插件的资源应 404，实际 %d", recorder.Code)
 	}
 }
+
+func TestPluginAssetMiddlewareWithDotInDirectory(t *testing.T) {
+	dotDir := filepath.Join(t.TempDir(), "john.doe", "appdata")
+	t.Setenv("USERPROFILE", dotDir)
+	t.Setenv("HOME", dotDir)
+	installTestPlugin(t)
+
+	app := &App{}
+	handler := PluginAssetMiddleware(app)(nextHandler())
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/plugins/demo-plugin/index.js", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK when directory path contains dots, got %d", recorder.Code)
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.Contains(got, "text/javascript") {
+		t.Fatalf("expected text/javascript Content-Type, got %q", got)
+	}
+}

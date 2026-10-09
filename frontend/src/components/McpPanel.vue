@@ -196,12 +196,19 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useDialog, useMessage } from 'naive-ui';
 import { SearchOutlined, AppstoreOutlined } from '@vicons/antd';
 import { saveTextFile } from '../utils/download.mjs';
-import { protectedToolNames, toggleableToolNames } from '../utils/builtinTools.mjs';
+import {
+  formatBuiltinToolLabel,
+  getToggleableToolNames,
+  isProtectedTool,
+  protectedToolNames,
+  registerDiscoveredTools,
+  toggleableToolNames,
+} from '../utils/builtinTools.mjs';
 import { t } from '../i18n.mjs';
 import { Browser, Events } from '@wailsio/runtime';
 import { unwrapWailsEvent } from '../utils/wailsEvent.mjs';
 import {
-  GetMcpConfig, GetMcpServers, SaveMcpConfig, ReconcileMcpServers,
+  GetMcpConfig, GetMcpServers, ListTools, SaveMcpConfig, ReconcileMcpServers,
 } from '../../bindings/ally-dev/internal/app/app';
 
 // Inline MCP page (App.vue mode === 'mcp'): owns the whole MCP editing
@@ -214,6 +221,8 @@ const props = defineProps({
   // config.disabledTools（后端已落盘的内置工具停用名单）：开关层只接受已知
   // 工具名，核心五件在名单层就锁死不可停用。
   disabledTools: { type: Array, default: () => [] },
+  // 可由父级直接传入的已扫描工具列表（用于即时展示）
+  availableTools: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['mcp-saved', 'builtin-tools-changed']);
 const message = useMessage();
@@ -273,6 +282,7 @@ async function loadMcpConfig() {
     mcpLastAppliedJson.value = mcpConfigText.value;
     syncJsonToForm();
     mcpServers.value = await GetMcpServers() || [];
+    await loadBuiltinTools();
   } catch (err) {
     message.error(t('app.mcp.readFailed', { error: err }));
   } finally {
@@ -540,22 +550,109 @@ function toggleMcpEnabled(srv, value) {
 // 页内双 tab：MCP 服务器 / 内置工具启停，结构与旧高级设置页一致。
 const mcpPageTab = ref('servers');
 
+// 动态扫描获取的内置工具（通过 ListTools() 发现，或父级 availableTools 注入）
+const scannedBuiltinTools = ref([]);
+
+function applyScannedTools(tools) {
+  if (!Array.isArray(tools) || !tools.length) return;
+  registerDiscoveredTools(tools);
+  const builtins = tools.filter((tool) => {
+    const src = String(tool?.source || '').trim().toLowerCase();
+    return src === 'built-in' || (!src && !tool?.server);
+  });
+  if (builtins.length) {
+    scannedBuiltinTools.value = builtins;
+  }
+}
+
+async function loadBuiltinTools() {
+  try {
+    const list = await ListTools();
+    if (Array.isArray(list) && list.length) {
+      applyScannedTools(list);
+    }
+  } catch {
+    // 保留现有扫描列表或默认底座
+  }
+}
+
+// 监听父级传入的实时工具列表（零延迟首屏呈现）
+watch(
+  () => props.availableTools,
+  (tools) => {
+    if (Array.isArray(tools) && tools.length) {
+      applyScannedTools(tools);
+    }
+  },
+  { immediate: true },
+);
+
+// 切换至内置工具 tab 时自动刷新，确保与后端状态严格同步
+watch(mcpPageTab, (tab) => {
+  if (tab === 'builtinTools') {
+    loadBuiltinTools();
+  }
+});
+
 // props.disabledTools 就是后端已落盘的状态（App.vue 保存成功后原样传回）：
 // 开关即持久化，与 MCP 配置的 auto-apply 同一交互口径。
-const builtinToolSettings = computed(() => [
-  ...protectedToolNames.map((name) => ({
-    name,
-    label: t(`settings.tool.${name}`),
-    hint: t('settings.toolsProtected'),
-    disabled: true,
-  })),
-  ...toggleableToolNames.map((name) => ({
-    name,
-    label: t(`settings.tool.${name}`),
-    hint: '',
-    disabled: false,
-  })),
-]);
+const builtinToolSettings = computed(() => {
+  if (scannedBuiltinTools.value.length > 0) {
+    const protectedList = [];
+    const toggleableList = [];
+    const seen = new Set();
+
+    for (const tool of scannedBuiltinTools.value) {
+      const name = String(tool?.name || '').trim().toLowerCase();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+
+      const isProtected = tool?.protected === true || isProtectedTool(name);
+      const item = {
+        name,
+        label: formatBuiltinToolLabel(name, t),
+        hint: isProtected ? t('settings.toolsProtected') : '',
+        disabled: isProtected,
+      };
+      if (isProtected) {
+        protectedList.push(item);
+      } else {
+        toggleableList.push(item);
+      }
+    }
+
+    // 兜底补齐核心五件套（防止后端未返回任何一个核心工具时出现缺失）
+    for (const name of protectedToolNames) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        protectedList.push({
+          name,
+          label: formatBuiltinToolLabel(name, t),
+          hint: t('settings.toolsProtected'),
+          disabled: true,
+        });
+      }
+    }
+
+    return [...protectedList, ...toggleableList];
+  }
+
+  // 后端扫描结果返回前的默认底座
+  return [
+    ...protectedToolNames.map((name) => ({
+      name,
+      label: formatBuiltinToolLabel(name, t),
+      hint: t('settings.toolsProtected'),
+      disabled: true,
+    })),
+    ...getToggleableToolNames().map((name) => ({
+      name,
+      label: formatBuiltinToolLabel(name, t),
+      hint: '',
+      disabled: false,
+    })),
+  ];
+});
 
 function builtinToolEnabled(name) {
   return !(Array.isArray(props.disabledTools) && props.disabledTools.includes(name));
@@ -563,7 +660,7 @@ function builtinToolEnabled(name) {
 
 function setBuiltinToolEnabled(name, value) {
   if (value === builtinToolEnabled(name)) return;
-  const label = t(`settings.tool.${name}`);
+  const label = formatBuiltinToolLabel(name, t);
   dialog[value ? 'info' : 'warning']({
     title: t('settings.toolsConfirmTitle'),
     content: value
@@ -636,6 +733,7 @@ function transportLabel(transport) {
 // lifetime; with v-if pages it is active only while the page is mounted.
 let mcpStatusOff = null;
 onMounted(() => {
+  loadBuiltinTools();
   mcpStatusOff = Events.On('mcp:status', (event) => {
     const data = unwrapWailsEvent(event, 'mcp:status');
     mcpServers.value = data?.servers || [];
