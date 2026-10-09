@@ -116,14 +116,14 @@ func TestManifestKeepPageAliveOverride(t *testing.T) {
 // 侧栏分组：key 是身份（同 key 即同组，插件之间不需要知道对方存在），title/icon 只是展示。
 // key 的大小写与空白必须在解析时归一，否则同一个组会因为写法不同被拆成两个一级菜单。
 func TestManifestGroupNormalized(t *testing.T) {
-	manifest, err := ParseManifest([]byte(`{"id":"abc","name":"x","version":"1.0.0","entry":"index.js","menu":[{"key":"a","title":"a"}],"permissions":{},"group":{"key":"  NSFocus ","title":" 公司 ","icon":"GlobalOutlined"}}`))
+	manifest, err := ParseManifest([]byte(`{"id":"abc","name":"x","version":"1.0.0","entry":"index.js","menu":[{"key":"a","title":"a"}],"permissions":{},"group":{"key":"  Acme ","title":" 公司 ","icon":"GlobalOutlined"}}`))
 	if err != nil {
 		t.Fatalf("ParseManifest: %v", err)
 	}
 	if manifest.Group == nil {
 		t.Fatal("group 被丢弃了")
 	}
-	if manifest.Group.Key != "nsfocus" {
+	if manifest.Group.Key != "acme" {
 		t.Fatalf("group.key 未归一：%q", manifest.Group.Key)
 	}
 	if manifest.Group.Title != "公司" {
@@ -166,8 +166,8 @@ func TestParseManifestRejectsBadManifests(t *testing.T) {
 		{"未知字段（拼错的键要报错而不是静默忽略）", `{"id":"abc","name":"x","version":"1.0.0","entry":"index.js","menu":[{"key":"a","title":"a"}],"permissions":{},"premissions":{}}`},
 		{"keepAlive 类型不对（字符串不是布尔）", `{"id":"abc","name":"x","version":"1.0.0","entry":"index.js","menu":[{"key":"a","title":"a"}],"permissions":{},"keepAlive":"true"}`},
 		{"group.key 非法（会当成菜单 key 用）", `{"id":"abc","name":"x","version":"1.0.0","entry":"index.js","menu":[{"key":"a","title":"a"}],"permissions":{},"group":{"key":"BAD KEY","title":"公司"}}`},
-		{"group.title 为空白", `{"id":"abc","name":"x","version":"1.0.0","entry":"index.js","menu":[{"key":"a","title":"a"}],"permissions":{},"group":{"key":"nsfocus","title":"  "}}`},
-		{"group.title 超过 24 字", `{"id":"abc","name":"x","version":"1.0.0","entry":"index.js","menu":[{"key":"a","title":"a"}],"permissions":{},"group":{"key":"nsfocus","title":"这是一个特别特别特别特别特别特别长的分组名字超过上限"}}`},
+		{"group.title 为空白", `{"id":"abc","name":"x","version":"1.0.0","entry":"index.js","menu":[{"key":"a","title":"a"}],"permissions":{},"group":{"key":"acme","title":"  "}}`},
+		{"group.title 超过 24 字", `{"id":"abc","name":"x","version":"1.0.0","entry":"index.js","menu":[{"key":"a","title":"a"}],"permissions":{},"group":{"key":"acme","title":"这是一个特别特别特别特别特别特别长的分组名字超过上限"}}`},
 		{"不是 JSON", `not json`},
 	}
 	for _, testCase := range cases {
