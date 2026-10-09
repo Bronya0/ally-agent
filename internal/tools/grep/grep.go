@@ -374,11 +374,11 @@ func limits(req Request) (maxDepth, maxMatches int) {
 	return maxDepth, maxMatches
 }
 
-// excludedGlobArgs is the static -g exclusion list derived from excludedDirs,
+// excludedGlobArgs is the static -g exclusion list derived from ExcludedDirs,
 // built once and shared across every rg invocation.
 var excludedGlobArgs = func() []string {
 	var args []string
-	for _, dir := range excludedDirs() {
+	for _, dir := range ExcludedDirs() {
 		args = append(args, "-g", "!"+dir+"/**", "-g", "!**/"+dir+"/**")
 	}
 	return args
@@ -455,7 +455,7 @@ func searchSkipNotices(req Request) []string {
 	if !req.IncludeIgnored {
 		skipped = append(skipped, "ignored_by_ignore_files")
 	}
-	skipped = append(skipped, "directories:"+strings.Join(excludedDirs(), ","))
+	skipped = append(skipped, "directories:"+strings.Join(ExcludedDirs(), ","))
 	return skipped
 }
 
@@ -917,13 +917,20 @@ func sanitizeLineText(s string) string {
 	return string([]rune(s)[:maxGrepLineTextChars]) + "…"
 }
 
-func excludedDirs() []string {
+// ExcludedDirs 返回「枚举文件时一律跳过」的目录名：依赖目录与构建/缓存产物。
+// 内容搜索、工作区路径索引、工作区地图共用这一份，各消费方可以再追加自己的
+// 生态补充（见 app.workspaceMapIgnoredDirs）。返回的是新建切片，调用方 append
+// 不会串改。
+//
+// 文件浏览器（app.isHeavyDir）刻意不使用这份清单：它必须让用户看到这些目录。
+func ExcludedDirs() []string {
 	return []string{
 		".git",
 		"node_modules",
 		"dist",
 		"build",
 		"target",
+		".gradle",
 		".next",
 		".nuxt",
 		".svelte-kit",
@@ -933,6 +940,12 @@ func excludedDirs() []string {
 		"venv",
 		".cache",
 		"coverage",
+		".pytest_cache",
+		".mypy_cache",
+		".ruff_cache",
+		".turbo",
+		".parcel-cache",
+		".vite",
 	}
 }
 

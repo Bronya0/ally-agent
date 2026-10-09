@@ -813,18 +813,20 @@ func workspacePathFilesWithWalkDir(ctx context.Context, root string, add func(st
 	return "walkdir", truncated, err
 }
 
+// workspacePathIndexIgnoredDirs 与内容搜索共用同一份重目录清单：路径索引和搜索
+// 关心的是同一件事（别把依赖/产物目录收进来），没有各自维护的理由。
 func workspacePathIndexIgnoredDirs() []string {
-	return []string{".git", "node_modules", "dist", "build", "target", ".next", ".nuxt", ".svelte-kit", "vendor", "__pycache__"}
+	return grep.ExcludedDirs()
 }
 
-// workspaceMapIgnoredDirs 是 Workspace Map 的 rg 排除目录列表：除重目录外
-// 追加常见依赖/缓存目录，防止依赖库吃光 320 条配额。
+// workspaceMapIgnoredDirs 是 Workspace Map 的 rg 排除目录列表：在共享重目录之外追加
+// 8 条生态特有项，防止依赖库吃光 320 条配额。其中 go/pkg/mod、packages/*/dist、
+// *.egg-info 是路径/通配写法，只有 rg 认得；另外 5 条（site-packages、bower_components、
+// .pnpm-store、jars、lib64）是普通目录名，walkdir 那侧表达得了但当前没加——所以两条路
+// 仍差这 8 条，详见 isWorkspaceMapHeavyDir。
 func workspaceMapIgnoredDirs() []string {
-	return []string{
-		".git", "node_modules", "dist", "build", "target", ".next", ".nuxt", ".svelte-kit", "vendor", "__pycache__",
-		".venv", "venv", ".cache", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".turbo", ".parcel-cache", ".vite", "coverage",
-		"site-packages", "bower_components", ".pnpm-store", "go/pkg/mod", "jars", "lib64", "packages/*/dist", "*.egg-info",
-	}
+	dirs := grep.ExcludedDirs()
+	return append(dirs, "site-packages", "bower_components", ".pnpm-store", "go/pkg/mod", "jars", "lib64", "packages/*/dist", "*.egg-info")
 }
 
 func buildWorkspaceMapContext(root string) string {
@@ -1310,17 +1312,23 @@ func isVCSDirName(name string) bool {
 	}
 }
 
+// isWorkspaceMapHeavyDir 是 rg 排除清单在 walkdir 回退路径上的对应物，直接从共享清单
+// 派生。名字里的 WorkspaceMap 是历史遗留：路径索引的 walkdir 回退也在用它。
+//
+// 它只认共享清单里的纯目录名，所以与 rg 那条路并不完全一致：workspaceMapIgnoredDirs
+// 追加的那 8 条在这里都拦不住（3 条是路径/通配写法，walkdir 表达不了；5 条只是没加）。
 func isWorkspaceMapHeavyDir(name string) bool {
-	if isHeavyDir(name) {
-		return true
-	}
-	switch strings.ToLower(name) {
-	case ".venv", "venv", ".cache", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".turbo", ".parcel-cache", ".vite", "coverage":
-		return true
-	default:
-		return false
-	}
+	return heavyDirNames[strings.ToLower(name)]
 }
+
+// heavyDirNames 由共享重目录清单派生，进程内只构建一次。
+var heavyDirNames = func() map[string]bool {
+	names := make(map[string]bool, 32)
+	for _, dir := range grep.ExcludedDirs() {
+		names[strings.ToLower(dir)] = true
+	}
+	return names
+}()
 
 func isWorkspaceMapSensitiveFile(name string, isDir bool) bool {
 	if isDir {
