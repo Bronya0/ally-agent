@@ -1099,8 +1099,6 @@ const zh = {
   'plugins.title': '插件',
   'plugins.subtitle': '{count} 个已安装',
   'plugins.loading': '正在读取插件列表…',
-  'plugins.empty': '还没有安装插件',
-  'plugins.emptyHint': '插件是一个 zip 包：导入后侧栏会多出一个页面。页面用纯 JS/TS 实现，只能通过宿主提供的 API 访问后端能力，包内需要 plugin.json 与入口文件。',
   'plugins.import': '导入插件',
   'plugins.importFromDir': '从目录安装',
   'plugins.importFromDirHint': '从本机任意位置的插件源码目录安装（校验规则与 zip 包完全一致）',
@@ -1131,6 +1129,11 @@ const zh = {
   'plugins.mountError': '插件页面加载失败',
   'plugins.loadingPage': '正在加载插件页面…',
   'plugins.denied': '被宿主拒绝 {count} 次，最近一次：{message}',
+  // 空态（PluginEmptyState.vue）：只留一行横幅说明。能力清单、示例清单与三步流程
+  // 都在开发教程（docs/plugin-system.md）里，别把那些文案再搬回这里。
+  'plugins.emptyBadge': '插件系统 v1',
+  'plugins.emptyTitle': '把 Ally 变成你自己的控制台',
+  'plugins.emptyLead': '三分钟定制自己想要的页面，比如公司OA、BUG管理页面、工时计划表等等。',
 };
 
 const enOverrides = {
@@ -1943,8 +1946,6 @@ Response language: Preserve the response language already used in the current co
   'plugins.title': 'Plugins',
   'plugins.subtitle': '{count} installed',
   'plugins.loading': 'Loading plugins…',
-  'plugins.empty': 'No plugins installed yet',
-  'plugins.emptyHint': 'A plugin is a zip package: once imported it adds a page to the mode rail. Pages are plain JS/TS and can only reach the backend through the APIs the host injects. The package needs plugin.json and an entry file.',
   'plugins.import': 'Import plugin',
   'plugins.importFromDir': 'Install from folder',
   'plugins.importFromDirHint': 'Install from a plugin source folder anywhere on this machine (same validation as the zip path)',
@@ -1975,6 +1976,9 @@ Response language: Preserve the response language already used in the current co
   'plugins.mountError': 'Plugin page failed to load',
   'plugins.loadingPage': 'Loading plugin page…',
   'plugins.denied': 'Refused by the host {count} times. Latest: {message}',
+  'plugins.emptyBadge': 'Plugin system v1',
+  'plugins.emptyTitle': 'Turn Ally into your own console',
+  'plugins.emptyLead': 'Build the page you want in three minutes: an internal OA, a bug tracker, a timesheet planner, and more.',
 };
 
 const en = { ...zh, ...enOverrides };

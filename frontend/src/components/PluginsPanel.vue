@@ -34,11 +34,8 @@ Public License v3. See the LICENSE file for details.
     </header>
 
     <div class="panel-scroll-body">
-      <div v-if="loading && !plugins.length" class="plugin-empty">{{ t('plugins.loading') }}</div>
-      <div v-else-if="!plugins.length" class="plugin-empty">
-        <div class="plugin-empty-title">{{ t('plugins.empty') }}</div>
-        <div class="plugin-empty-hint">{{ t('plugins.emptyHint') }}</div>
-      </div>
+      <div v-if="loading && !plugins.length" class="plugin-loading">{{ t('plugins.loading') }}</div>
+      <PluginEmptyState v-else-if="!plugins.length" @guide="openGuide" />
 
       <div
         v-for="plugin in plugins"
@@ -129,6 +126,7 @@ import { Browser } from '@wailsio/runtime';
 import { t, formatDateTime } from '../i18n.mjs';
 import { formatBytes } from '../utils/format.mjs';
 import { fetchPlugins, pluginAdmin } from '../utils/pluginHost.mjs';
+import PluginEmptyState from './PluginEmptyState.vue';
 import { SelectDirectory } from '../../bindings/ally-dev/internal/app/app';
 
 const props = defineProps({
@@ -341,23 +339,11 @@ watch(
   padding: 16px 24px 28px;
 }
 
-.plugin-empty {
+.plugin-loading {
   color: var(--ally-text-faint);
   font-size: var(--ally-sub-font-size);
   padding: 28px 0;
   text-align: center;
-}
-
-.plugin-empty-title {
-  color: var(--ally-text-soft);
-  font-size: var(--ally-message-font-size);
-  margin-bottom: 6px;
-}
-
-.plugin-empty-hint {
-  max-width: 560px;
-  margin: 0 auto;
-  line-height: 1.6;
 }
 
 .plugin-row {
