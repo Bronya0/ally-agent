@@ -15,9 +15,32 @@ env:
   WAILS_VERSION: latest
   RG_VERSION: 15.2.0
   ALLY_BUILD_VERSION: ${{ github.event.release.tag_name || github.ref_name }}
+  # release 事件自带正文，vite 构建时通过 define 注入为 __ALLY_RELEASE_NOTES__，不查 API
+  ALLY_RELEASE_NOTES_BODY: ${{ github.event.release.body }}
   NODE_OPTIONS: --max-old-space-size=4096
 
 jobs:
+  # 正式发布时自检一遍“这一版确实带上了更新日志”。只在 release 事件下有正文；
+  # workflow_dispatch 没有 event payload，不是问题。这里只报警不失败：正文缺失只是少了
+  # 首次启动的说明，为它挡掉整个发布（用户拿不到包）代价不成比例。
+  release-notes:
+    name: Release notes sanity
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the release body is usable as update notes
+        env:
+          NOTES_BODY: ${{ github.event.release.body }}
+          NOTES_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ -z "$(printf '%s' "$NOTES_BODY" | tr -d '[:space:]')" ]; then
+            echo "::warning title=No release notes::$NOTES_TAG 的 release 正文是空的，这一版的包首次启动不会弹更新日志。补上正文后重新发布这一版即可。"
+          elif [[ "$NOTES_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::notice title=Release notes::$NOTES_TAG 的发布说明 $(printf '%s' "$NOTES_BODY" | wc -c) 字节，会随包进入首次启动提示。"
+          else
+            echo "::notice title=Release notes::$NOTES_TAG 的发布说明 $(printf '%s' "$NOTES_BODY" | wc -c) 字节，非正式 release 标签首次启动不自动弹窗（可在设置中查看）。"
+          fi
+
   windows:
     name: Windows x64
     runs-on: windows-latest

@@ -46,6 +46,7 @@
 | 知识库模式（KB 提示词 / sources/ 只读） | `internal/app/orch_kb.go` + `ModeSider.vue` + `App.vue` |
 | 对外本地 HTTP API 服务 | `internal/app/biz_api.go` |
 | 应用自更新 | `internal/app/biz_update.go` |
+| 新版本首次启动的更新日志（vite 把 release 事件正文注入为 `__ALLY_RELEASE_NOTES__`；首启判定与“看过没”存储） | `frontend/src/utils/releaseNotes.mjs` + `components/ReleaseNotesModal.vue` + `App.vue` |
 | 插件系统（清单校验 / 安装 / 导出 / 删除 / 启停 / 插件存储 / HTTP 白名单代理） | `internal/app/orch_plugin.go`（编排，含 `pluginMu` 串行化）+ `internal/tools/plugin/`（纯算法：清单与包校验、主机白名单、包内路径解析、体积复验 `VerifyContentSizes`）；契约文档 `docs/plugin-system.md` |
 | 插件资源服务（`/plugins/<id>/<entry>`，与页面同源） | `internal/app/orch_plugin_assets.go`（中间件）+ `main.go`（`Assets.Middleware` 接线，唯一允许碰 Wails 的地方） |
 | 插件相关的原生对话框（选包 / 导出目标） | `internal/app/host_plugin_dialogs.go` |

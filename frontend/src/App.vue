@@ -371,6 +371,7 @@ Public License v3. See the LICENSE file for details.
                 :visible="settingsActive"
                 :config-draft="configDraft"
                 :check-update-result="checkUpdateResult"
+                :has-release-notes="Boolean(releaseNotes.body)"
                 :color-mode="colorMode"
                 :theme="colorTheme"
                 @set-mode="setColorMode"
@@ -379,6 +380,7 @@ Public License v3. See the LICENSE file for details.
                 @save="onSettingsSave"
                 @background-changed="onBackgroundChanged"
                 @check-update="onCheckUpdate"
+                @view-release-notes="openReleaseNotes"
                 @ssh-servers-changed="refreshSSHClusters"
               />
             </div>
@@ -536,6 +538,13 @@ Public License v3. See the LICENSE file for details.
             </div>
           </n-modal>
 
+          <ReleaseNotesModal
+            :show="releaseNotesOpen"
+            :version="releaseNotes.version"
+            :html="releaseNotesHtml"
+            @close="closeReleaseNotes"
+          />
+
           <!-- 樱花青草风特效层：全局唯一实例，body 顶层播放，切 Tab 不中断 -->
           <SakuraBreeze :open="sakuraOn" />
 
@@ -687,8 +696,10 @@ import PluginPage from './components/PluginPage.vue';
 import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
 import TokenStatsModal from './components/TokenStatsModal.vue';
+import ReleaseNotesModal from './components/ReleaseNotesModal.vue';
 import GamePanel from './games/GamePanel.vue';
 import { assignConfig, defaultConfig, normalizeHiddenModes, placeholderModel } from './utils/config.mjs';
+import { isReleaseTag, markReleaseNotesSeen, readSeenVersion, releaseNotes, shouldShowReleaseNotes } from './utils/releaseNotes.mjs';
 import { enabledPlugins, fetchPlugins, pluginIdFromMode } from './utils/pluginHost.mjs';
 import { useSakuraBreeze } from './composables/sakuraBreeze.mjs';
 import { burstDigitalWave } from './composables/digitalWave.mjs';
@@ -9086,6 +9097,12 @@ function handleGlobalKeydown(event) {
     event.stopPropagation();
     return;
   }
+  if (event.key === 'Escape' && releaseNotesOpen.value) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeReleaseNotes();
+    return;
+  }
   if (event.key === 'Escape' && (settingsActive.value || statsActive.value || gamesActive.value || skillsActive.value || mcpActive.value || modelsActive.value || sshActive.value || pluginsActive.value)) {
     // Settings / stats / games / skills / mcp / models / ssh / plugins are inline
     // pages now: ESC navigates back.
@@ -9154,9 +9171,32 @@ function handleGlobalKeydown(event) {
 // or the literal "dev" when ALLY_BUILD_VERSION is unset; neither should
 // trigger update checks, since they would always compare as "older" and
 // generate spurious update prompts / unnecessary GitHub requests.
-const RELEASE_VERSION_RE = /^v?\d+\.\d+\.\d+$/;
 function isDevBuild() {
-  return !RELEASE_VERSION_RE.test(String(buildVersion || '').trim());
+  return !isReleaseTag(buildVersion);
+}
+
+// ── 新版本首次启动的更新日志 ──
+// 正文（releaseNotes）是 vite 构建时注入的常量，不是状态；这里只管“这次要不要弹”。
+// 判定与“看过没”的存储在 utils/releaseNotes.mjs（纯函数、可单测）；标记只在弹窗关闭时
+// 落盘：启动就写的话，真出问题（崩溃、闪退）用户就再也看不到这份说明了。
+const releaseNotesOpen = ref(false);
+// 与消息正文共用同一套 markdown 管线（代码高亮、公式、链接点击处理都一致），
+// markdown-it 关着原始 HTML（html: false），发布说明里的内联标签会被转义。
+const releaseNotesHtml = computed(() => renderMarkdownWithMode(releaseNotes.body, false));
+
+function maybeShowReleaseNotes() {
+  if (!shouldShowReleaseNotes({ notes: releaseNotes, seenVersion: readSeenVersion() })) return;
+  releaseNotesOpen.value = true;
+}
+
+// 设置 → 关于 里的重看入口：用户主动要看，不再过"该不该弹"那道判定（落标记照旧走关闭）。
+function openReleaseNotes() {
+  releaseNotesOpen.value = true;
+}
+
+function closeReleaseNotes() {
+  releaseNotesOpen.value = false;
+  markReleaseNotesSeen(releaseNotes.version);
 }
 
 // checkForUpdates queries the backend for the latest release and, when a
@@ -9435,6 +9475,8 @@ onMounted(async () => {
   // Pre-load skills before init so welcome message has the count
   try { await refreshSkillState(); } catch (_) { /* ignore */ }
   await init();
+  // 更新日志放在 init 之后：先让会话与欢迎消息就位，弹窗不跟启动流程抢窗口。
+  maybeShowReleaseNotes();
   void refreshSSHClusters();
   await Promise.all([loadScheduledTasks(), loadServices()]);
   await refreshWindowMaximisedState();

@@ -5488,6 +5488,48 @@ code, pre {
   40% { transform: translateY(-3px); opacity: 1; }
 }
 
+/* ── Release notes modal（新版本首次启动的更新日志）── */
+/* 选择器带上 .n-modal：naive 的 .n-card 也声明了 width: 100%，同权重时胜负取决于样式表
+   加载顺序；卡片上同时挂着 n-modal 与本类（见 BodyWrapper 把 $attrs 落到 NCard），
+   提权重才能把尺寸钉死。 */
+.n-modal.release-notes-modal {
+  width: min(760px, calc(100vw - 48px));
+  max-width: 760px;
+}
+.release-notes-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--ally-border-subtle);
+}
+.release-notes-version {
+  font-size: var(--ally-sub-font-size);
+  color: var(--ally-text-soft);
+  font-variant-numeric: tabular-nums;
+}
+.release-notes-hint {
+  font-size: var(--ally-aux-font-size);
+  color: var(--ally-text-faint);
+}
+/* 正文自管滚动：卡片不设高，长日志在窗口内滚，别把关闭按钮顶出屏幕。 */
+.release-notes-body {
+  max-height: min(62vh, 560px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+.release-notes-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 12px;
+  margin-top: 4px;
+  border-top: 1px solid var(--ally-border-subtle);
+}
+
 /* ── Self-update modal ── */
 .update-modal {
   min-width: 420px;

@@ -472,6 +472,12 @@ Public License v3. See the LICENSE file for details.
               :loading="checkUpdateBusy"
               @click="checkForUpdates"
             >{{ checkUpdateBusy ? $t('settings.checkUpdateBusy') : $t('settings.checkUpdate') }}</n-button>
+            <n-button
+              v-if="hasReleaseNotes"
+              size="small"
+              secondary
+              @click="emit('view-release-notes')"
+            >{{ $t('app.releaseNotes.view') }}</n-button>
             <span v-if="checkUpdateMessage" class="about-update-status">{{ checkUpdateMessage }}</span>
           </div>
         </section>
@@ -540,8 +546,10 @@ const props = defineProps({
   // Active color theme id ('amber' | 'icecream' | 'ocean' | 'forest' | 'violet'),
   // owned by App.vue.
   theme: { type: String, default: 'amber' },
+  // 本构建是否带了更新日志正文：没带就不给重看入口（点开是空的）。
+  hasReleaseNotes: { type: Boolean, default: false },
 });
-const emit = defineEmits(['close', 'save', 'background-changed', 'check-update', 'set-mode', 'set-theme', 'ssh-servers-changed']);
+const emit = defineEmits(['close', 'save', 'background-changed', 'check-update', 'view-release-notes', 'set-mode', 'set-theme', 'ssh-servers-changed']);
 const checkUpdateBusy = ref(false);
 const checkUpdateMessage = ref('');
 let checkUpdateTimer = 0;

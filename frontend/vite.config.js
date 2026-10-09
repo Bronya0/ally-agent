@@ -45,6 +45,13 @@ export default defineConfig({
   ],
   define: {
     __ALLY_BUILD_VERSION__: JSON.stringify(allyBuildVersion),
+    // 新版本首次启动要展示的更新日志：正文来自 release 事件（workflow 经
+    // ALLY_RELEASE_NOTES_BODY 传下来），这里只做一次字面量注入，不读盘不联网。
+    // “这一版该不该弹”由前端 releaseNotes.mjs 判定。
+    __ALLY_RELEASE_NOTES__: JSON.stringify({
+      version: allyBuildVersion,
+      body: process.env.ALLY_RELEASE_NOTES_BODY || '',
+    }),
   },
   build: {
     chunkSizeWarningLimit: 1200,
