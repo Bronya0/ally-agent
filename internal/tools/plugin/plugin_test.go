@@ -52,7 +52,7 @@ func manifestJSON(id, entry string) string {
   "id": "` + id + `",
   "name": "Jira Bug 管理",
   "version": "1.0.0",
-  "author": "twh",
+  "author": "example",
   "entry": "` + entry + `",
   "menu": [{"key": "jira", "title": "Jira", "icon": "ApiOutlined"}],
   "permissions": {"http": ["jira.corp.com", "*.corp.com"], "workspace": "read"}

@@ -47,7 +47,7 @@ export async function mount(element, host) {
   "id": "my-helper",
   "name": "工单助手",
   "version": "1.0.0",
-  "author": "twh",
+  "author": "example",
   "description": "团队工单的查询与增删改",
   "entry": "index.js",
   "menu": [{ "key": "helper", "title": "工单", "icon": "ApiOutlined" }],
