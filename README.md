@@ -24,7 +24,7 @@ Download packages for Windows, macOS, and Linux from the [Releases page](https:/
 
 - Work with local projects through natural-language conversations, attachments, and persistent sessions
 - Read, search, create, edit, and safely delete files with workspace boundaries and optimistic concurrency checks
-- Read, edit, create, delete, and run commands on remote SSH workspaces, reusing your existing `ssh` login
+- Read, edit, create, delete, run commands, and transfer files or directories on remote SSH workspaces, reusing your existing `ssh` login
 - Review bounded visual diffs, multi-file edits, command output, and detailed tool failure reasons directly in chat
 - Use OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and compatible model services
 - Capture provider reasoning fields or configurable reasoning tags such as `reasoning_content`, `think`, and `sink`
@@ -36,6 +36,7 @@ Download packages for Windows, macOS, and Linux from the [Releases page](https:/
 - Render Mermaid diagrams inline with wheel zoom, drag panning, and double-click reset, plus KaTeX math and highlighted code blocks
 - Attach images for vision-capable models and preview model-generated images in chat
 - Delegate substantial work to parallel sub-agents with live steps, tool activity, token usage, and inline final summaries
+- Extend Ally with plugins: one zip package adds a full sidebar page, written in plain JS/TS with HTTP, storage, and workspace access declared in the manifest
 - Connect MCP servers through stdio, SSE, or Streamable HTTP using either a form editor or raw JSON
 - Extend workflows with discoverable Skills and durable cross-project memory; built-in skills include `codegraph`, `playwright-cli`, and `anydoc` (Office/PDF to Markdown)
 - Manage multiple workspaces, chat sessions, todos, and scheduled tasks that persist across restarts, with a built-in workspace explorer and file editor
@@ -56,6 +57,34 @@ Download packages for Windows, macOS, and Linux from the [Releases page](https:/
 4. Start chatting about your project.
 
 macOS: the package is not signed, so drag `Ally.app` into Applications first, then double-click `免签名启动Ally.command` from the DMG once — it clears the quarantine flag and launches Ally.
+
+## Plugin system
+
+A plugin is a single zip package that adds a full page to Ally's sidebar. Pages are plain JavaScript/TypeScript: no Go code, no bundler, and no restart. Pages get backend features through the injected `host` object (HTTP, per-plugin storage, read-only workspace access, events, and theme).
+
+Manage plugins on the **Plugins** page: import a zip (or drag it in), install from an unpacked directory, export (optionally with plugin data), enable or disable, and delete.
+
+A minimal `plugin.json`:
+
+```json
+{
+  "id": "my-helper",
+  "name": "Ticket Helper",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "menu": [{ "key": "helper", "title": "Tickets", "icon": "ApiOutlined" }],
+  "permissions": { "http": ["api.example.com"], "workspace": "read" }
+}
+```
+
+The entry module exports `mount(element, host)`, which returns a cleanup function.
+
+- The manifest accepts only the documented keys; unknown keys are rejected at import.
+- HTTP requests are denied unless the host is listed in `permissions.http`.
+- Re-importing a plugin with the same `id` upgrades it and keeps its `host.store` data.
+- Plugin code runs in the main page context and is not a sandbox: it can call backend bindings directly, and installing shows no permission prompt. Only install plugins you trust.
+
+For the full guide (the `host` API, styling rules, and common pitfalls), see [docs/plugin-system.md](docs/plugin-system.md). You can also give that link to an AI assistant and ask it to write a plugin.
 
 ## Local build
 

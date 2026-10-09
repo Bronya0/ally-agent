@@ -24,7 +24,7 @@
 
 - 通过自然语言对话、附件和持久化会话处理本地项目
 - 在工作区安全边界和版本校验保护下读取、搜索、创建、编辑及删除文件
-- 通过 SSH 操作远程主机工作区：读取、编辑、创建、删除文件与执行命令，复用本机已有的 `ssh` 登录配置
+- 通过 SSH 操作远程主机工作区：读取、编辑、创建、删除文件，执行命令，并在本地与远端之间传输文件或目录，复用本机已有的 `ssh` 登录配置
 - 在聊天中直接查看可视化 Diff、多文件修改、命令输出和完整的工具失败原因
 - 支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 及兼容模型服务
 - 支持读取服务商推理字段，也可配置 `reasoning_content`、`think`、`sink` 等推理标签
@@ -36,6 +36,7 @@
 - 聊天中内联渲染 Mermaid 图表（滚轮缩放、拖拽平移、双击复位）、KaTeX 数学公式与高亮代码块
 - 可为支持视觉能力的模型附带图片输入，模型生成的图片直接在聊天中预览
 - 可将复杂任务委派给并行子代理，实时查看步骤、工具活动、Token 用量和最终摘要
+- 插件系统：一个 zip 包即可在侧栏新增一个整页，页面用纯 JS/TS 编写，HTTP、存储与工作区访问由清单声明
 - MCP 支持 stdio、SSE 和 Streamable HTTP，可使用表单或原始 JSON 配置
 - 使用可发现的 Skills 扩展工作流程，并通过全局记忆保存跨项目知识；内置技能含 `codegraph`、`playwright-cli`、`anydoc`（Office/PDF 转 Markdown）
 - 管理多个工作区、聊天会话、Todo 和重启后继续运行的定时任务，内置文件浏览器与文件编辑器
@@ -56,6 +57,34 @@
 4. 开始与 Ally 对话。
 
 macOS：安装包未签名，请先把 `Ally.app` 拖进 Applications，再双击 DMG 里的 `免签名启动Ally.command` 一次，即可去除隔离属性并启动 Ally。
+
+## 插件系统
+
+插件就是一个 zip 包，装进来后侧栏会多出一个整页。页面用纯 JavaScript/TypeScript 编写，不用写 Go、不用打包、不用重启应用。页面通过 Ally 注入的 `host` 对象使用后端能力，包括 HTTP、插件私有存储、工作区只读访问、事件和主题。
+
+在**插件**页管理插件：导入 zip（也可以直接拖进来）、从已展开的目录安装、导出（可选是否包含插件数据）、启用或禁用、删除。
+
+一个最小的 `plugin.json`：
+
+```json
+{
+  "id": "my-helper",
+  "name": "工单助手",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "menu": [{ "key": "helper", "title": "工单", "icon": "ApiOutlined" }],
+  "permissions": { "http": ["api.example.com"], "workspace": "read" }
+}
+```
+
+入口模块导出 `mount(element, host)`，返回值是卸载函数。
+
+- 清单只认文档列出的键，写了未知键会在导入时报错。
+- 未在 `permissions.http` 中声明的主机，HTTP 请求一律拒绝。
+- 用相同 `id` 重新导入即为覆盖升级，`host.store` 中的数据会保留。
+- 插件代码运行在主页面上下文中，不是沙箱：它可以直接调用后端绑定，安装时也不会弹出权限确认。请只安装你信任的插件。
+
+完整说明（`host` API、样式规范与常见坑）见 [docs/plugin-system.md](docs/plugin-system.md)。也可以把这个链接发给 AI 助手，让它帮你写插件。
 
 ## 本地构建
 
