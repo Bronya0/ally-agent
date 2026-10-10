@@ -1117,33 +1117,37 @@ func (a *App) assembleMessages(req ChatRequest, cfg ConfigState, allSkills []Ski
 		history := a.loadSessionHistoryCopy(req.SessionID)
 		if len(history) > 0 {
 			messages = append(messages, history...)
+			turnStart := len(messages)
 			messages = appendFrontendHistoryDelta(messages, history, req.Messages)
-		} else {
-			for _, m := range req.Messages {
-				role := strings.TrimSpace(m.Role)
-				if role != openai.ChatMessageRoleUser && role != openai.ChatMessageRoleAssistant {
-					continue
-				}
-				if strings.TrimSpace(m.Content) == "" && len(m.Attachments) == 0 {
-					continue
-				}
-				if role == openai.ChatMessageRoleUser && len(m.Attachments) > 0 {
-					messages = appendUserMessageWithAttachments(messages, m.Content, m.Attachments)
-				} else {
-					messages = append(messages, openai.ChatCompletionMessage{Role: role, Content: m.Content})
-				}
+			return a.withTurnNotices(req.SessionID, cfg, history, messages, turnStart)
+		}
+		for _, m := range req.Messages {
+			role := strings.TrimSpace(m.Role)
+			if role != openai.ChatMessageRoleUser && role != openai.ChatMessageRoleAssistant {
+				continue
+			}
+			if strings.TrimSpace(m.Content) == "" && len(m.Attachments) == 0 {
+				continue
+			}
+			if role == openai.ChatMessageRoleUser && len(m.Attachments) > 0 {
+				messages = appendUserMessageWithAttachments(messages, m.Content, m.Attachments)
+			} else {
+				messages = append(messages, openai.ChatCompletionMessage{Role: role, Content: m.Content})
 			}
 		}
 		return messages
 	}
 
+	var history []openai.ChatCompletionMessage
 	if req.SessionID != "" {
-		messages = append(messages, a.loadSessionHistoryCopy(req.SessionID)...)
+		history = a.loadSessionHistoryCopy(req.SessionID)
+		messages = append(messages, history...)
 	}
+	turnStart := len(messages)
 	if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
 		messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
 	}
-	return messages
+	return a.withTurnNotices(req.SessionID, cfg, history, messages, turnStart)
 }
 
 // nonVisionImagePlaceholder is what an image becomes when the model cannot take
@@ -1282,6 +1286,10 @@ func (a *App) sessionSystemPromptParts(sessionID string, cfg ConfigState, allSki
 		a.sessionSystemPrompts = map[string][]systemPromptPart{}
 	}
 	a.sessionSystemPrompts[sessionID] = parts
+	if a.frozenTurnNotices == nil {
+		a.frozenTurnNotices = map[string]map[string]string{}
+	}
+	a.frozenTurnNotices[sessionID] = turnNoticeBaseline(cfg)
 	a.mu.Unlock()
 	return parts
 }
@@ -1300,6 +1308,7 @@ func (a *App) refreshSessionPromptPrefix(sessionID string) {
 	}
 	a.mu.Lock()
 	delete(a.sessionSystemPrompts, sessionID)
+	delete(a.frozenTurnNotices, sessionID)
 	delete(a.sessionWorkspaceMaps, sessionID)
 	delete(a.sessionToolsets, sessionID)
 	a.mu.Unlock()

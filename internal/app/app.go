@@ -253,6 +253,12 @@ type App struct {
 	// by mu.
 	sessionSystemPrompts map[string][]systemPromptPart
 
+	// frozenTurnNotices records, per session, the turn-notice states frozen into
+	// sessionSystemPrompts: what the model was told in the system prompt (kind id → state).
+	// Same lifecycle as that snapshot (refreshSessionPromptPrefix drops both).
+	// Guarded by mu.
+	frozenTurnNotices map[string]map[string]string
+
 	// sessionToolsets freezes the model-visible tool schema list per session
 	// (sessionID → tools). Tool schemas are part of the provider prompt-cache
 	// prefix, so an MCP server disconnect/reconnect or toggling servers/tools
@@ -422,6 +428,7 @@ func NewApp() *App {
 		sessionWorkspaces:    map[string]string{},
 		sessionModelConfigs:  map[string]sessionModelConfig{},
 		sessionSystemPrompts: map[string][]systemPromptPart{},
+		frozenTurnNotices:    map[string]map[string]string{},
 		sessionToolsets:      map[string][]openai.Tool{},
 		pendingAsks:          map[string]*pendingAsk{},
 		sshCredentials:       newSSHCredentialCache(),
