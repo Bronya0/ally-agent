@@ -210,6 +210,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
 import { resolveMarkdownImagePath } from '../utils/markdownPreview.mjs';
+import { cjkEmphasisPlugin } from '../utils/markdownCjkEmphasis.mjs';
 import { mermaidFenceSpec, normalizeMermaidSource, loadMermaid, escapeHtmlText } from '../utils/mermaidShared.mjs';
 import { ListFiles, ReadWorkspaceFileAt, GetWorkspaceMediaURL, SaveWorkspaceFile, DeletePath, RenamePath, OpenWorkspacePathInFileManagerAt, CreateFile, CreateDirectory, GetWorkspaceFileInfoAt, CopyFilesIntoWorkspace, ReadClipboardFiles } from '../../bindings/ally-dev/internal/app/app';
 import FileInfoModal from './FileInfoModal.vue';
@@ -1980,7 +1981,7 @@ onMounted(() => {
     resizeObserver.observe(element);
   }
   window.addEventListener('keydown', onGlobalKeydown, true);
-  mdRenderer = new MarkdownIt({ html: false, linkify: true, typographer: true });
+  mdRenderer = new MarkdownIt({ html: false, linkify: true, typographer: true }).use(cjkEmphasisPlugin);
   // Mermaid 围栏 → 占位容器（与聊天消息同构），SVG 由 renderPreviewMermaids 异步填充。
   const defaultFenceRenderer = mdRenderer.renderer.rules.fence;
   mdRenderer.renderer.rules.fence = (tokens, idx, options, env, self) => {

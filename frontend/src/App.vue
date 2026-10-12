@@ -593,6 +593,7 @@ import MarkdownIt from 'markdown-it';
 // katex 本体已作为 mermaid 的间接依赖存在于依赖树中，这里显式声明以避免
 // mermaid 升级时断链；插件本身极轻（~10KB）。
 import katexPlugin from '@traptitech/markdown-it-katex';
+import { cjkEmphasisPlugin } from './utils/markdownCjkEmphasis.mjs';
 import 'katex/dist/katex.min.css';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -1027,7 +1028,7 @@ const markdown = new MarkdownIt({
   html: false,
   linkify: true,
   breaks: true,
-}).use(katexPlugin);
+}).use(katexPlugin).use(cjkEmphasisPlugin);
 
 function renderHighlightedCodeBlock(code, highlighted, extraClass = '') {
   const rawLines = String(code || '').replace(/\r\n/g, '\n').split('\n');
