@@ -49,6 +49,7 @@ var (
 	procGetWindowRect              = user32.NewProc("GetWindowRect")
 	procGetWindowThreadProcessId   = user32.NewProc("GetWindowThreadProcessId")
 	procGetSystemMetrics           = user32.NewProc("GetSystemMetrics")
+	procPrintWindow                = user32.NewProc("PrintWindow")
 	procSetThreadDpiAwareness      = user32.NewProc("SetThreadDpiAwarenessContext")
 	procDwmGetWindowAttribute      = dwmapi.NewProc("DwmGetWindowAttribute")
 	procOpenProcess                = kernel32.NewProc("OpenProcess")
@@ -70,6 +71,10 @@ const (
 	// GetWindowRect / DWM bounds come back in physical pixels regardless of
 	// the process-wide awareness the WebView host sets.
 	dpiAwarenessPerMonitorV2 = ^uintptr(3)
+	// PW_RENDERFULLCONTENT (Windows 8.1+): have DWM render the full window
+	// content. Without it, DirectComposition-backed windows (WebView2,
+	// Chrome, Electron, UWP) come back as an empty frame.
+	pwRenderFullContent = 0x00000002
 )
 
 type winRect struct {
@@ -210,9 +215,10 @@ func windowProcessName(hwnd uintptr) string {
 	return filepath.Base(windows.UTF16ToString(buf[:size]))
 }
 
-// captureWindow grabs the window's on-screen rectangle. Without focus the
-// capture shows whatever is visibly on top (the surveyed tools do the same
-// and document it); with focus the window is restored and raised first.
+// captureWindow grabs the window's own content through PrintWindow, so a
+// window covered by others still yields its own pixels — the contract the
+// macOS (-l) and Linux (maim -i) paths already honour. focus restores a
+// minimized window and raises it first; occlusion alone does not need it.
 func captureWindow(win Window, focus bool) (image.Image, error) {
 	hwnd := uintptr(win.ID)
 	var (
@@ -242,7 +248,17 @@ func captureWindow(win Window, focus bool) (image.Image, error) {
 			captureErr = fmt.Errorf("%w: window rect unavailable", ErrCaptureFailed)
 			return
 		}
-		frame, captureErr = bitBltScreen(rect)
+		frame, captureErr = printWindowFrame(hwnd, rect)
+		if captureErr == nil {
+			return
+		}
+		// A window may refuse to render itself (protected video, some GPU
+		// surfaces). Screen pixels are an honest fallback only while the
+		// window is in front; behind another window the rectangle holds the
+		// occluder, and a silently wrong frame is worse than a coded failure.
+		if fg, _, _ := procGetForegroundWindow.Call(); fg == hwnd {
+			frame, captureErr = bitBltScreen(rect)
+		}
 	})
 	return frame, captureErr
 }
@@ -313,28 +329,32 @@ func enumDisplayRects() []Rect {
 	return rects
 }
 
-// bitBltScreen grabs one screen-space rectangle via GDI into a DIB section.
-// The screen DC spans the whole virtual screen, so secondary monitors with
-// negative coordinates work without special casing. A DIB section (rather
-// than CreateCompatibleBitmap + GetDIBits) means the pixels land directly in
-// memory we own — one copy, no size-dependent GetDIBits quirks. Alpha from
-// the screen DC is undefined and the bytes come back BGRA; both are
-// normalized here.
-func bitBltScreen(rect Rect) (image.Image, error) {
-	w, h := rect.Width, rect.Height
+// dibFrame is one top-down 32-bit DIB section selected into a fresh memory
+// DC: the shared canvas for both capture paths. A DIB section (rather than
+// CreateCompatibleBitmap + GetDIBits) means the pixels land directly in
+// memory we own — one copy, no size-dependent GetDIBits quirks.
+type dibFrame struct {
+	hdcMem uintptr
+	hbm    uintptr
+	prev   uintptr
+	bits   unsafe.Pointer
+	width  int
+	height int
+}
+
+func newDibFrame(w, h int) (dibFrame, error) {
 	if w <= 0 || h <= 0 || w > MaxRegionWidthPx || h > MaxRegionHeightPx {
-		return nil, fmt.Errorf("%w: %dx%d outside capture limits", ErrBadRegion, w, h)
+		return dibFrame{}, fmt.Errorf("%w: %dx%d outside capture limits", ErrBadRegion, w, h)
 	}
 	hdcSrc, _, _ := procGetDC.Call(0)
 	if hdcSrc == 0 {
-		return nil, fmt.Errorf("%w: GetDC(screen) failed", ErrCaptureFailed)
+		return dibFrame{}, fmt.Errorf("%w: GetDC(screen) failed", ErrCaptureFailed)
 	}
 	defer procReleaseDC.Call(0, hdcSrc)
 	hdcMem, _, _ := procCreateCompatibleDC.Call(hdcSrc)
 	if hdcMem == 0 {
-		return nil, fmt.Errorf("%w: CreateCompatibleDC failed", ErrCaptureFailed)
+		return dibFrame{}, fmt.Errorf("%w: CreateCompatibleDC failed", ErrCaptureFailed)
 	}
-	defer procDeleteDC.Call(hdcMem)
 	bmi := bitmapInfoHeader{
 		Size:     40,
 		Width:    int32(w),
@@ -347,22 +367,80 @@ func bitBltScreen(rect Rect) (image.Image, error) {
 	var bits unsafe.Pointer
 	hbm, _, _ := procCreateDIBSection.Call(hdcSrc, uintptr(unsafe.Pointer(&bmi)), 0 /* DIB_RGB_COLORS */, uintptr(unsafe.Pointer(&bits)), 0, 0)
 	if hbm == 0 || bits == nil {
-		return nil, fmt.Errorf("%w: CreateDIBSection(%d,%d) failed", ErrCaptureFailed, w, h)
+		procDeleteDC.Call(hdcMem)
+		return dibFrame{}, fmt.Errorf("%w: CreateDIBSection(%d,%d) failed", ErrCaptureFailed, w, h)
 	}
-	defer procDeleteObject.Call(hbm)
 	prev, _, _ := procSelectObject.Call(hdcMem, hbm)
-	r1, _, _ := procBitBlt.Call(hdcMem, 0, 0, uintptr(w), uintptr(h), hdcSrc, uintptr(rect.X), uintptr(rect.Y), srccopy)
-	procSelectObject.Call(hdcMem, prev)
+	return dibFrame{hdcMem: hdcMem, hbm: hbm, prev: prev, bits: bits, width: w, height: h}, nil
+}
+
+func (d dibFrame) release() {
+	procSelectObject.Call(d.hdcMem, d.prev)
+	procDeleteObject.Call(d.hbm)
+	procDeleteDC.Call(d.hdcMem)
+}
+
+// image converts the DIB pixels into an NRGBA frame. Alpha from the screen DC
+// and from PrintWindow is undefined and the bytes come back BGRA; both are
+// normalized here.
+func (d dibFrame) image() *image.NRGBA {
+	img := image.NewNRGBA(image.Rect(0, 0, d.width, d.height))
+	src := unsafe.Slice((*byte)(d.bits), 4*d.width*d.height)
+	for s, dst := 0, 0; s < len(src); s, dst = s+4, dst+4 {
+		img.Pix[dst+0] = src[s+2]
+		img.Pix[dst+1] = src[s+1]
+		img.Pix[dst+2] = src[s+0]
+		img.Pix[dst+3] = 0xFF
+	}
+	return img
+}
+
+// bitBltScreen grabs one screen-space rectangle via GDI. The screen DC spans
+// the whole virtual screen, so secondary monitors with negative coordinates
+// work without special casing.
+func bitBltScreen(rect Rect) (image.Image, error) {
+	frame, err := newDibFrame(rect.Width, rect.Height)
+	if err != nil {
+		return nil, err
+	}
+	defer frame.release()
+	hdcSrc, _, _ := procGetDC.Call(0)
+	if hdcSrc == 0 {
+		return nil, fmt.Errorf("%w: GetDC(screen) failed", ErrCaptureFailed)
+	}
+	defer procReleaseDC.Call(0, hdcSrc)
+	r1, _, _ := procBitBlt.Call(frame.hdcMem, 0, 0, uintptr(rect.Width), uintptr(rect.Height), hdcSrc, uintptr(rect.X), uintptr(rect.Y), srccopy)
 	if r1 == 0 {
 		return nil, fmt.Errorf("%w: BitBlt failed", ErrCaptureFailed)
 	}
-	img := image.NewNRGBA(image.Rect(0, 0, w, h))
-	src := unsafe.Slice((*byte)(bits), 4*w*h)
-	for s, d := 0, 0; s < len(src); s, d = s+4, d+4 {
-		img.Pix[d+0] = src[s+2]
-		img.Pix[d+1] = src[s+1]
-		img.Pix[d+2] = src[s+0]
-		img.Pix[d+3] = 0xFF
+	return frame.image(), nil
+}
+
+// printWindowFrame renders the window's own content into an offscreen DIB and
+// crops it to the visible frame. The canvas is sized to the full window rect
+// (what PrintWindow paints into); GetWindowRect includes the invisible resize
+// borders that the DWM frame bounds exclude, so the crop lands the image on
+// exactly the rectangle action=list reports. PrintWindow is synchronous — it
+// waits for the target to process WM_PRINT — so an unresponsive window stalls
+// this goroutine.
+func printWindowFrame(hwnd uintptr, rect Rect) (image.Image, error) {
+	var full winRect
+	if r1, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&full))); r1 == 0 {
+		return nil, fmt.Errorf("%w: GetWindowRect failed", ErrCaptureFailed)
+	}
+	frame, err := newDibFrame(int(full.Right-full.Left), int(full.Bottom-full.Top))
+	if err != nil {
+		return nil, err
+	}
+	defer frame.release()
+	if r1, _, _ := procPrintWindow.Call(hwnd, frame.hdcMem, pwRenderFullContent); r1 == 0 {
+		return nil, fmt.Errorf("%w: PrintWindow refused to render window %d", ErrCaptureFailed, hwnd)
+	}
+	img := frame.image()
+	crop := image.Rect(rect.X-int(full.Left), rect.Y-int(full.Top),
+		rect.X-int(full.Left)+rect.Width, rect.Y-int(full.Top)+rect.Height)
+	if crop.In(img.Bounds()) {
+		return img.SubImage(crop), nil
 	}
 	return img, nil
 }

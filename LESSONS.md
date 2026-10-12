@@ -195,3 +195,4 @@
 [win-forward-slash-relative] 2026-10-09 中危 Windows 上 /x 不是绝对路径：文件与 delete 工具会把它拼到主工作区下，目标静默错位。@pathutil.JoinPath
 [mcp-count-vs-list] 2026-10-09 中危 同一份状态两处各自过滤：汇总计数按注入工具算、列表只留已连接，数字与列表对不上。@McpStatusPopover.vue
 [card-opacity-dims-text] 2026-10-12 中危 整卡 opacity 表达状态会把卡内小字一起压淡（浅色主题错误红 4.63→3.39）：只压卡面别压内容。@TaskCenterPanel.vue
+[window-capture-own-content] 2026-10-12 中危 窗口截图须抓窗口自身内容：Windows 走屏幕 BitBlt 时被遮挡会静默返回遮挡物（模型拿到错图）。@capture_windows.go

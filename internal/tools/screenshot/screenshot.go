@@ -108,8 +108,9 @@ type Rect struct {
 // CaptureOptions selects what one capture call targets. Exactly one target
 // wins, resolved by TargetKind: WindowID/WindowTitle > Region > Display.
 type CaptureOptions struct {
-	// WindowID captures the (screen) rectangle of one window from
-	// ListWindows. 0 means unset.
+	// WindowID captures one window from ListWindows. The frame is the
+	// window's own content, so a window covering it does not leak in.
+	// 0 means unset.
 	WindowID int
 	// WindowTitle resolves through ResolveWindow when WindowID is unset.
 	WindowTitle string
@@ -118,8 +119,9 @@ type CaptureOptions struct {
 	// Display selects a monitor by index (0 = primary) for full-screen
 	// captures. Ignored for window and region targets.
 	Display int
-	// Focus brings the target window to the front before capturing; without
-	// it the capture shows whatever is visibly on top of that rectangle.
+	// Focus restores a minimized target window and raises it before
+	// capturing. Window captures do not need it for occlusion; region and
+	// display captures always show whatever is visibly on top.
 	Focus bool
 }
 
