@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  isScheduledTaskRunning,
   isServiceActive,
   scheduledStatusKey,
   scheduledStatusTone,
@@ -55,6 +56,15 @@ test('scheduled tone never reports an unfinished run as success', () => {
   assert.equal(scheduledStatusTone({ lastStatus: 'missed' }), 'warning');
   assert.equal(scheduledStatusTone({ lastStatus: 'scheduled' }), 'neutral');
   assert.equal(scheduledStatusTone({}), 'neutral');
+});
+
+test('scheduled running is one truthy flag check', () => {
+  assert.ok(isScheduledTaskRunning({ running: true }));
+  assert.ok(!isScheduledTaskRunning({ running: false }));
+  // 待触发（nextRunAt 有值但没有 running）不算在跑：徽标不该为它涨一。
+  assert.ok(!isScheduledTaskRunning({ nextRunAt: 1893456000000 }));
+  assert.ok(!isScheduledTaskRunning({}));
+  assert.ok(!isScheduledTaskRunning(null));
 });
 
 // 「此刻还活着」的集合只有一处定义：徽标计数、事件合流、排序、任务中心都问它。

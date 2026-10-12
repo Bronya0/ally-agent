@@ -116,13 +116,13 @@ Public License v3. See the LICENSE file for details.
     </button>
     <button
       type="button"
-      :class="['task-chip', 'task-chip-scheduled', { 'has-tasks': scheduledCount > 0 }]"
+      :class="['task-chip', 'task-chip-scheduled', { 'has-tasks': scheduledRunningCount > 0 }]"
       :title="`${$t('composer.taskCenter.scheduled')} · ${$t('scheduled.runningCount', { count: scheduledRunningCount })}`"
       :aria-label="$t('composer.taskCenter.scheduled')"
       @click.stop="$emit('openTaskCenter', 'scheduled')"
     >
       <span class="task-chip-letter">C</span>
-      <span class="task-chip-count">{{ scheduledCount }}</span>
+      <span class="task-chip-count">{{ scheduledRunningCount }}</span>
     </button>
     <button
       v-if="activeWorkspacePath"
@@ -380,8 +380,9 @@ const props = defineProps({
   contextUsageStyle: { type: Object, default: () => ({}) },
   workspaceInputTokens: { type: String, default: '0' },
   workspaceOutputTokens: { type: String, default: '0' },
+  // 两个 chip 上的数字只数「正在跑」的条目：已退出/已跑完的仍列在任务中心里，但不该
+  // 把常驻徽标撑大（面板内的总计另有 service.runningCount / scheduled.runningCount）。
   serviceRunningCount: { type: Number, default: 0 },
-  scheduledCount: { type: Number, default: 0 },
   scheduledRunningCount: { type: Number, default: 0 },
   extraRoots: { type: Array, default: () => [] },
   // 名字里不要出现连续大写：`allowedSSHServers` 无法用 :allowed-ssh-servers 绑定

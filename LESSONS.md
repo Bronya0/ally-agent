@@ -194,3 +194,4 @@
 [remote-root-from-caller] 2026-10-09 高危 远端圈由模型在 target 里声明，只查绝对非 /：写 /etc、读 /root/.ssh 都放行（本地圈是用户选的）。@orch_remote.go
 [win-forward-slash-relative] 2026-10-09 中危 Windows 上 /x 不是绝对路径：文件与 delete 工具会把它拼到主工作区下，目标静默错位。@pathutil.JoinPath
 [mcp-count-vs-list] 2026-10-09 中危 同一份状态两处各自过滤：汇总计数按注入工具算、列表只留已连接，数字与列表对不上。@McpStatusPopover.vue
+[card-opacity-dims-text] 2026-10-12 中危 整卡 opacity 表达状态会把卡内小字一起压淡（浅色主题错误红 4.63→3.39）：只压卡面别压内容。@TaskCenterPanel.vue

@@ -50,6 +50,12 @@ export function isServiceActive(service) {
   return ACTIVE_SERVICE_STATUSES.includes(String(service?.status || '').trim().toLowerCase());
 }
 
+// 定时任务侧的同款问法：任务没有中间态，只有「此刻在跑」和「不在跑」。徽标计数、
+// 列表排序、状态词与卡片高亮都问这一处，免得某一条改去看 lastStatus 后两边对不上。
+export function isScheduledTaskRunning(task) {
+  return !!task?.running;
+}
+
 const SCHEDULED_STATUS_KEYS = {
   scheduled: 'scheduled.status.waiting',
   completed: 'scheduled.status.completed',
@@ -64,13 +70,13 @@ const SCHEDULED_STATUS_KEYS = {
 
 // 正在跑的那些不看上次结果：状态栏显示的就是「运行中」。
 export function scheduledStatusKey(task) {
-  if (task?.running) return 'common.running';
+  if (isScheduledTaskRunning(task)) return 'common.running';
   return SCHEDULED_STATUS_KEYS[String(task?.lastStatus || '').trim().toLowerCase()] || '';
 }
 
 // 正在跑是「进行中」不是「成功」：跑完才知道成败，这里不提前报喜。
 export function scheduledStatusTone(task) {
-  if (task?.running) return 'info';
+  if (isScheduledTaskRunning(task)) return 'info';
   const status = String(task?.lastStatus || '').trim().toLowerCase();
   if (status === 'completed') return 'success';
   if (['failed', 'timed_out', 'invalid'].includes(status)) return 'danger';

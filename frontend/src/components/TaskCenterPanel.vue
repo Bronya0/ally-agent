@@ -23,7 +23,7 @@ Public License v3. See the LICENSE file for details.
 
     <div class="task-center-body">
       <n-tabs ref="tabsRef" v-model:value="activeTab" type="line" pane-wrapper-style="padding-top: 4px;">
-        <n-tab-pane name="services" :tab="$t('taskCenter.servicesTab', { count: services.length })">
+        <n-tab-pane name="services" :tab="$t('taskCenter.servicesTab', { running: serviceRunningCount, total: services.length })">
           <div class="task-overview">
             <span>{{ $t('service.runningCount', { count: serviceRunningCount }) }}</span>
             <span>{{ $t('service.bufferPolicy') }}</span>
@@ -33,7 +33,7 @@ Public License v3. See the LICENSE file for details.
               <template #extra><span class="empty-hint">{{ $t('service.emptyHint') }}</span></template>
             </n-empty>
             <div v-else class="task-list">
-              <article v-for="service in services" :key="service.id" class="task-card service-card">
+              <article v-for="service in services" :key="service.id" :class="['task-card', 'service-card', { 'is-live': isServiceActive(service) }]">
                 <div class="card-head">
                   <span class="card-kind" :title="$t('composer.taskCenter.services')">S</span>
                   <div class="head-main">
@@ -80,7 +80,7 @@ Public License v3. See the LICENSE file for details.
           </n-spin>
         </n-tab-pane>
 
-        <n-tab-pane name="scheduled" :tab="$t('taskCenter.scheduledTab', { count: tasks.length })">
+        <n-tab-pane name="scheduled" :tab="$t('taskCenter.scheduledTab', { running: scheduledRunningCount, total: tasks.length })">
           <div class="task-overview">
             <span>{{ $t('scheduled.runningCount', { count: scheduledRunningCount }) }}</span>
             <span>{{ $t('scheduled.persisted') }}</span>
@@ -90,7 +90,7 @@ Public License v3. See the LICENSE file for details.
               <template #extra><span class="empty-hint">{{ $t('scheduled.emptyHint') }}</span></template>
             </n-empty>
             <div v-else class="task-list">
-              <article v-for="task in tasks" :key="task.id" class="task-card scheduled-card">
+              <article v-for="task in tasks" :key="task.id" :class="['task-card', 'scheduled-card', { 'is-live': isScheduledTaskRunning(task) }]">
                 <div class="card-head">
                   <span class="card-kind" :title="$t('composer.taskCenter.scheduled')">C</span>
                   <div class="head-main">
@@ -165,7 +165,7 @@ import { formatDateTime, t } from '../i18n.mjs';
 import { renderAnsiToHtml } from '../utils/ansi.mjs';
 import { formatBytes } from '../utils/format.mjs';
 import { highlightShellCommand } from '../utils/shellHighlight.mjs';
-import { isServiceActive, scheduledStatusKey, scheduledStatusTone, serviceStatusKey, serviceStatusTone } from '../utils/taskStatus.mjs';
+import { isScheduledTaskRunning, isServiceActive, scheduledStatusKey, scheduledStatusTone, serviceStatusKey, serviceStatusTone } from '../utils/taskStatus.mjs';
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -196,7 +196,7 @@ const logServiceActive = ref(false);
 const logPre = ref(null);
 let logRefreshTimer = 0;
 
-const scheduledRunningCount = computed(() => props.tasks.filter((task) => task?.running).length);
+const scheduledRunningCount = computed(() => props.tasks.filter(isScheduledTaskRunning).length);
 const serviceRunningCount = computed(() => props.services.filter(isServiceActive).length);
 const loading = computed(() => props.scheduledLoading || props.servicesLoading);
 
@@ -401,7 +401,17 @@ function durationLabel(seconds) {
 .task-center-body :deep(.n-tabs) { min-height: 100%; }
 .task-overview { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 10px; color: var(--ally-text-muted); font-size: 12px; }
 .task-list { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
-.task-card { padding: 10px 12px; border: 1px solid var(--ally-border); border-radius: 8px; background: var(--ally-hover-faint); }
+.task-card { position: relative; padding: 10px 12px 10px 16px; border: 1px solid var(--ally-border); border-radius: 8px; background: var(--ally-hover-faint); }
+/* 卡片左侧的状态竖条：运行中换成语义色（服务绿 / 定时蓝），已结束只有中性灰。
+   竖条占的是恒定的左内边距，状态翻转时只换色不挪位，列表不会左右跳一下。 */
+.task-card::before { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; border-radius: 8px 0 0 8px; background: var(--ally-border-strong); content: ''; }
+.service-card.is-live::before { background: var(--ally-success); }
+.scheduled-card.is-live::before { background: var(--ally-info); }
+/* 运行中＝当下要盯的对象：底色与边框跟着竖条同色，扫一眼就能从一堆卡片里跳出来。 */
+.service-card.is-live { border-color: color-mix(in srgb, var(--ally-success) 45%, var(--ally-border)); background: color-mix(in srgb, var(--ally-success) 7%, var(--ally-hover-faint)); }
+.scheduled-card.is-live { border-color: color-mix(in srgb, var(--ally-info) 45%, var(--ally-border)); background: color-mix(in srgb, var(--ally-info) 7%, var(--ally-hover-faint)); }
+/* 已结束的不用整体压暗来表达「退到后面」：卡内 11px 小字本来就淡，再乘一层透明度就掉到
+   读不清（实测浅色主题下错误红 4.63 → 3.39，低于 4.5）。区分靠竖条配色与底色，不靠压内容。 */
 .card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
 .head-main { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; gap: 4px 8px; }
 .head-side { display: flex; align-items: center; flex-shrink: 0; gap: 4px; margin-left: auto; }
@@ -445,8 +455,12 @@ html[data-mode="light"] .command :deep(.shell-command-word) { color: var(--ally-
 html[data-mode="light"] .command :deep(.shell-string) { color: #1a7f4b; }
 html[data-mode="light"] .command :deep(.shell-param) { color: #b3425e; }
 html[data-mode="light"] .command :deep(.shell-operator) { color: #0f766e; }
-.buffer-preview { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--ally-hover-faint); }
-.buffer-preview.error, .service-error { background: rgba(239,68,68,.08); }
+/* 预览块用代码块底色，与日志弹窗是同一个 mat 层级：它跟卡面（淡色底/淡绿底）
+   差着一整个表面层级，两种卡上边界都一眼可见。 */
+.buffer-preview { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--ally-code-bg); }
+/* 出错时在同一个 mat 上叠红：直接换成半透明红会让卡片底色透上来，mat 就没了。 */
+.buffer-preview.error { background: color-mix(in srgb, var(--ally-danger) 14%, var(--ally-code-bg)); }
+.service-error { background: rgba(239,68,68,.08); }
 .buffer-title { margin-bottom: 6px; color: var(--ally-text-muted); font-size: 11px; }
 .buffer-preview pre { display: -webkit-box; margin: 0; overflow: hidden; color: var(--ally-text-body); font: 11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: pre-wrap; word-break: break-word; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
 .service-error { margin-top: 6px; padding: 6px 10px; border-radius: 8px; color: var(--ally-danger-pale); font-size: 11px; }

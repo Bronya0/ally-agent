@@ -599,8 +599,8 @@ const zh = {
   'scheduled.cron': 'Cron {cron}',
 
   'taskCenter.title': '任务中心',
-  'taskCenter.scheduledTab': '定时任务 {count}',
-  'taskCenter.servicesTab': '后台服务 {count}',
+  'taskCenter.scheduledTab': '定时任务 {running}/{total}',
+  'taskCenter.servicesTab': '后台服务 {running}/{total}',
   'taskCenter.bufferPreview': '缓冲区预览',
   'taskCenter.viewBuffer': '查看完整缓冲区',
   'taskCenter.copyBuffer': '复制缓冲区',
@@ -1556,8 +1556,8 @@ Response language: Preserve the response language already used in the current co
   'scheduled.status.interrupted': 'Interrupted (Ally exited while it ran)', 'scheduled.status.invalid': 'Invalid',
   'scheduled.noNextRun': 'No further runs', 'scheduled.once': 'Once · {at}', 'scheduled.interval': 'Every {interval}', 'scheduled.cron': 'Cron {cron}',
 
-  'taskCenter.title': 'Task center', 'taskCenter.scheduledTab': 'Scheduled {count}',
-  'taskCenter.servicesTab': 'Services {count}', 'taskCenter.bufferPreview': 'Buffer preview',
+  'taskCenter.title': 'Task center', 'taskCenter.scheduledTab': 'Scheduled {running}/{total}',
+  'taskCenter.servicesTab': 'Services {running}/{total}', 'taskCenter.bufferPreview': 'Buffer preview',
   'taskCenter.viewBuffer': 'View full buffer', 'taskCenter.copyBuffer': 'Copy buffer',
   'taskCenter.emptyBuffer': 'The buffer is empty', 'taskCenter.scheduledBufferMeta': 'All available content from the latest run',
   'taskCenter.serviceBufferMeta': '{size} total output · {retained}',

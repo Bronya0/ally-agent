@@ -299,7 +299,6 @@ Public License v3. See the LICENSE file for details.
                   :workspace-input-tokens="workspaceInputTokens"
                   :workspace-output-tokens="workspaceOutputTokens"
                   :service-running-count="serviceRunningCount"
-                  :scheduled-count="scheduledLiveCount"
                   :scheduled-running-count="scheduledTaskRunningCount"
                   :fmt-k="fmtK"
                   :extra-roots="extraRoots"
@@ -757,7 +756,7 @@ import { toolUpdateFlushDelay } from './utils/toolUpdateFlush.mjs';
 import { isMcpToolName, toolActionFromArgs } from './utils/toolVerb.mjs';
 import { toolKindOf, toolStartsCollapsed } from './utils/toolKind.mjs';
 import { MAX_ATTACHMENT_PREVIEW_BYTES, MAX_MODEL_IMAGE_BYTES, MAX_TEXT_ATTACHMENT_BYTES, MODEL_IMAGE_PASSTHROUGH_MAX_BYTES } from './utils/attachmentLimits.mjs';
-import { isServiceActive } from './utils/taskStatus.mjs';
+import { isScheduledTaskRunning, isServiceActive } from './utils/taskStatus.mjs';
 import { attachmentIcon } from './utils/attachmentIcon.mjs';
 import { useToolEvents } from './composables/useToolEvents.mjs';
 import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
@@ -2903,13 +2902,11 @@ const composerStatusLabel = computed(() => phaseLabel(
 const composerStatusDetail = computed(() => (
   compactLoadingActive.value ? compactStatusText.value : latestUserPromptSummary.value
 ));
-const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter((task) => task?.running).length);
+const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter(isScheduledTaskRunning).length);
 const serviceRunningCount = computed(() => services.value.filter(isServiceActive).length);
-// 徽标数字只算“还活着”的条目：一次性任务跑完（nextRunAt 归零）不会再触发，
-// 已退出服务只是事后可查（后端 finishedQueue 保留最近 8 条）——它们仍然
-// 列在面板里，但不应把常驻徽标撑大。
-const scheduledLiveCount = computed(() =>
-  scheduledTasks.value.filter((task) => task?.running || Number(task?.nextRunAt || 0) > 0).length);
+// 两个入口徽标都只数「此刻在跑」的条目：已退出服务只是事后可查（后端 finishedQueue
+// 保留最近 8 条），定时任务跑完或还没到点（nextRunAt 有值但没在跑）也不该把常驻
+// 徽标撑大——它们仍然列在任务中心里，数字与入口标题里的「运行中 N」必须是一回事。
 function planForSession(sessionId) {
   const entries = sessionId ? plansBySession[sessionId] : null;
   return Array.isArray(entries) ? entries : [];
@@ -7322,7 +7319,9 @@ async function loadPlan(sid) {
 
 function sortScheduledTasks(tasks) {
   return [...tasks].sort((a, b) => {
-    if (!!a?.running !== !!b?.running) return a?.running ? -1 : 1;
+    const aRunning = isScheduledTaskRunning(a);
+    const bRunning = isScheduledTaskRunning(b);
+    if (aRunning !== bRunning) return aRunning ? -1 : 1;
     const aNext = Number(a?.nextRunAt || 0);
     const bNext = Number(b?.nextRunAt || 0);
     if (!aNext && !bNext) return Number(b?.updatedAt || 0) - Number(a?.updatedAt || 0);
@@ -8733,7 +8732,7 @@ function formatScheduledTaskToolDetail(task = {}) {
   else if (task.instruction) lines.push(t('app.tools.scheduled.instruction', { instruction: task.instruction }));
   if (task.nextRunAt) lines.push(t('app.tools.scheduled.nextRun', { time: formatDateTime(Number(task.nextRunAt)) }));
   if (task.lastRunAt) lines.push(t('app.tools.scheduled.lastRun', { time: formatDateTime(Number(task.lastRunAt)) }));
-  if (task.lastStatus) lines.push(t('app.tools.scheduled.status', { status: task.running ? t('common.running') : task.lastStatus }));
+  if (task.lastStatus) lines.push(t('app.tools.scheduled.status', { status: isScheduledTaskRunning(task) ? t('common.running') : task.lastStatus }));
   if (task.runCount !== undefined) lines.push(t('app.tools.scheduled.runs', { count: task.runCount }));
   if (task.instruction && (task.maxSteps || task.timeoutSeconds)) {
     lines.push(t('app.tools.scheduled.perRun', { steps: task.maxSteps || '-', timeout: task.timeoutSeconds || '-' }));
