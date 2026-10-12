@@ -186,12 +186,12 @@ Public License v3. See the LICENSE file for details.
                         <span class="session-label">{{ sessionDisplayTitle(s) }}</span>
                       </div>
                       <span v-if="s.id === activeSessionId" class="session-current">{{ $t('app.sessions.current') }}</span>
-                      <span v-if="s.isRunning" class="session-running">●</span>
+                      <span v-if="sessionBusy(s)" class="session-running">●</span>
                       <button
                         type="button"
                         class="session-delete"
                         :title="$t('app.sessions.delete')"
-                        :disabled="s.isRunning || !!s.runId"
+                        :disabled="sessionBusy(s)"
                         @mousedown.stop.prevent
                         @click.stop="deleteSession(index)"
                       >
@@ -220,10 +220,10 @@ Public License v3. See the LICENSE file for details.
                      "文字突然往下掉一下"。高度恒定就没有这个问题；plan 面板折叠、附件、
                      重试横幅等任何让输入框在 run 中途变高变矮的改动都一并免疫，
                      不必再去滚动逻辑里打补丁。 -->
-                <div class="composer-run-status" :class="{ 'is-idle': !activeSessionRunning && !compactLoadingActive }">
+                <div class="composer-run-status" :class="{ 'is-idle': !activeSessionRunning }">
                   <!-- 三根条只在跑的时候挂载：无限动画卸载即停，比 visibility 藏着跑省。
                        一次 run 内它不参与挂载/卸载，所以阶段标签出现/消失时不会位移。 -->
-                  <RunSpinner v-if="activeSessionRunning || compactLoadingActive" />
+                  <RunSpinner v-if="activeSessionRunning" />
                   <!-- 标签为空时整块不渲染（思考阶段之外的所有阶段），既不占位也
                        不空转动画；在同一个元素里换字不重放流光，观感连续。
                        刻意不用 <Transition>：标签自带 1.8s 无限流光动画，Transition
@@ -2188,7 +2188,7 @@ const workspaceTabsWithStatus = computed(() => {
   const parts = [];
   for (const tab of tabs) {
     const session = tab.sessionId ? sessions.value.find((item) => item.id === tab.sessionId) : null;
-    parts.push(`${tab.id}:${tab.sessionId || ''}:${tab.label || ''}:${tab.path || ''}:${!!(session?.isRunning || session?.runId) ? 1 : 0}`);
+    parts.push(`${tab.id}:${tab.sessionId || ''}:${tab.label || ''}:${tab.path || ''}:${sessionBusy(session) ? 1 : 0}`);
   }
   const sig = parts.join('|');
   if (sig === workspaceTabsWithStatusSignature && workspaceTabsWithStatusCache) {
@@ -2197,7 +2197,7 @@ const workspaceTabsWithStatus = computed(() => {
   workspaceTabsWithStatusSignature = sig;
   workspaceTabsWithStatusCache = tabs.map((tab) => {
     const session = tab.sessionId ? sessions.value.find((item) => item.id === tab.sessionId) : null;
-    return { ...tab, isRunning: !!(session?.isRunning || session?.runId) };
+    return { ...tab, isRunning: sessionBusy(session) };
   });
   return workspaceTabsWithStatusCache;
 });
@@ -2658,7 +2658,7 @@ const workspacePageActive = computed(() => (
 const kbSessionRunning = computed(() => {
   const tab = kbTab();
   const session = tab ? sessions.value.find((item) => item.id === tab.sessionId) : null;
-  return !!(session?.isRunning || session?.runId);
+  return sessionBusy(session);
 });
 
 // Index-file presence in the KB root. Checked on KB entry and re-checked when
@@ -2843,7 +2843,9 @@ function onHeaderHistorySelect(key) {
 }
 
 const latestUserPromptSummary = computed(() => latestPromptSummaryForSession(activeSession.value));
-const activeSessionRunning = computed(() => !!activeSession.value?.isRunning);
+// 活动会话是否忙：一次运行或一次压缩。压缩占着同一条状态行，也让 ComposerInfoBar
+// 的模型、思考档位与生成按钮保持锁定，与一次运行完全一致（判据收口在 sessionBusy）。
+const activeSessionRunning = computed(() => sessionBusy(activeSession.value));
 const activeThinkingTokenCount = computed(() => {
   const session = activeSession.value;
   const messages = session?.messages;
@@ -4433,7 +4435,7 @@ function deleteSession(index) {
   if (!target) return;
   const actualIndex = sessions.value.findIndex((session) => session.id === target.id);
   if (actualIndex < 0) return;
-  if (target.runId || target.isRunning) {
+  if (sessionBusy(target)) {
     message.warning(t('app.sessions.runningDeleteBlocked'));
     return;
   }
@@ -4503,7 +4505,7 @@ function hasImageAttachments(msg) {
 async function handleDeleteUserMessage(sessionId, msg) {
   const session = sessions.value.find((item) => item.id === sessionId);
   if (!session || !msg) return;
-  if (session.runId || session.isRunning) {
+  if (sessionBusy(session)) {
     message.warning(t('app.sessions.runningDeleteBlocked'));
     return;
   }
@@ -6168,6 +6170,12 @@ async function sendPrompt(opts) {
   // API Key 可选：本地推理服务（如 Ollama/LM Studio 中转）无需鉴权；后端在 key
   // 为空时不会发送 Authorization 头，空 key 配置直接放行，错误由请求本身回报。
   if (!session) return;
+  // 压缩正在改写这段历史：既没有 run 可以注入，也不能另起一轮——两个写入方都会
+  // 写历史，后写的把先写的覆盖掉（压缩结果或用户刚发的那条）。
+  if (compactStateFor(session.id)) {
+    message.warning(t('app.compact.wait'));
+    return;
+  }
   // 运行中发送:进入注入路径,消息排队等当前工具批次完成后加入模型上下文。
   if (session.runId) {
     await injectMessageToRun(session, sendText, displayText, attachments);
@@ -7468,7 +7476,7 @@ function sessionIndexEntry(session) {
 function saveSessions() {
   trimRuntimeSessions();
   const session = activeSession.value;
-  if (!session || session.runId || session.isRunning || !session.id || !session.hasSnapshot) return;
+  if (!session || !session.id || !session.hasSnapshot || sessionBusy(session)) return;
   const entry = sessionIndexEntry(session);
   enqueueSessionWrite(() => SaveSessionIndex(entry)).catch(() => {});
 }
@@ -7482,7 +7490,7 @@ function buildCompletedSessionSnapshot(session) {
 }
 
 function persistCompletedSession(session) {
-  if (!session?.id || session.runId || session.isRunning) return Promise.resolve();
+  if (!session?.id || sessionBusy(session)) return Promise.resolve();
   const snapshot = buildCompletedSessionSnapshot(session);
   return enqueueSessionWrite(() => SaveSession(snapshot)).then(() => {
     session.hasSnapshot = true;
@@ -7553,13 +7561,14 @@ function trimRuntimeSessions() {
 function sessionMayHaveBackgroundRun(session) {
   if (!session) return false;
   // isRunning covers the StartChat -> run:start window; runId covers an
-  // established backend run. Both must survive runtime eviction even when
-  // their workspace Tab is not active.
-  return !!(session.isRunning || session.runId);
+  // established backend run; a compaction counts as busy too (sessionBusy).
+  // All of them must survive runtime eviction even when their workspace Tab
+  // is not active.
+  return sessionBusy(session);
 }
 
 function trimRuntimeSessionMessages(session) {
-  if (!session || session.messagesLoaded === false || session.runId || session.isRunning) return;
+  if (!session || session.messagesLoaded === false || sessionBusy(session)) return;
   const messages = Array.isArray(session.messages) ? session.messages : [];
   const recentRenderable = messages.filter(isRenderableMessage).slice(-MAX_RUNTIME_RENDERABLE_MESSAGES);
   const recentConversation = messages.filter(isModelHistoryMessage).slice(-MAX_MODEL_HISTORY_MESSAGES);
@@ -7967,6 +7976,13 @@ function handlePushCommand() {
 // progress detail for compaction.
 const compactingSessions = reactive({});
 function compactStateFor(sid) { return compactingSessions[sid] || null; }
+// 会话是否“忙”：一次运行或一次压缩都算。压缩没有自己的运行 id，所以只认
+// runId/isRunning 会让压缩中的 Tab 丢掉运行点（AppHeader 的 tab-running-dot）、
+// 让删除入口放行、让运行时的清理与写盘把它当成空闲会话。判据只此一处。
+function sessionBusy(session) {
+  if (!session) return false;
+  return !!(session.isRunning || session.runId || compactStateFor(session.id));
+}
 // 压缩完成提示的唯一判据与唯一文案：自动（run:compacted）与手动（CompactSession 返回值）
 // 两条路径共用。无论如何都提示：压缩完成本身就是用户该知道的事，即便这次没降下来，
 // 报出实情也比静默像“没执行”要好。

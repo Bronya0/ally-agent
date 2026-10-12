@@ -196,3 +196,4 @@
 [mcp-count-vs-list] 2026-10-09 中危 同一份状态两处各自过滤：汇总计数按注入工具算、列表只留已连接，数字与列表对不上。@McpStatusPopover.vue
 [card-opacity-dims-text] 2026-10-12 中危 整卡 opacity 表达状态会把卡内小字一起压淡（浅色主题错误红 4.63→3.39）：只压卡面别压内容。@TaskCenterPanel.vue
 [window-capture-own-content] 2026-10-12 中危 窗口截图须抓窗口自身内容：Windows 走屏幕 BitBlt 时被遮挡会静默返回遮挡物（模型拿到错图）。@capture_windows.go
+[session-busy-one-place] 2026-10-12 中危 会话「忙」判据须含压缩：只认运行态会让压缩中的 Tab 丢运行点、删除入口放行、消息被当空闲裁剪。@App.vue
