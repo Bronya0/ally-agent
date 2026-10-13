@@ -13,6 +13,10 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/file"
+	"github.com/expr-lang/expr/parser/lexer"
 )
 
 type Request struct {
@@ -21,283 +25,182 @@ type Request struct {
 
 type Result struct {
 	Expression string  `json:"expression"`
-	Value      float64 `json:"value"`
+	Value      float64 `json:"value,omitempty"`
 	Text       string  `json:"text"`
 }
 
-func Evaluate(req Request) (Result, error) {
-	expr := strings.TrimSpace(req.Expression)
-	if expr == "" {
-		return Result{}, errors.New("expression is required")
-	}
-	p := &mathParser{s: expr}
-	value, err := p.parseExpression()
-	if err != nil {
-		return Result{}, err
-	}
-	p.skipSpace()
-	if p.pos != len(p.s) {
-		return Result{}, fmt.Errorf("unexpected token at position %d", p.pos+1)
-	}
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return Result{}, errors.New("expression result is not finite")
-	}
-	return Result{Expression: expr, Value: value, Text: strconv.FormatFloat(value, 'g', -1, 64)}, nil
-}
+// defaultEnv exposes standard math functions and constants to the evaluation environment.
+var defaultEnv = map[string]any{
+	// Constants
+	"pi": math.Pi,
+	"PI": math.Pi,
+	"e":  math.E,
+	"E":  math.E,
 
-type mathParser struct {
-	s          string
-	pos, depth int
-}
+	// Power & roots
+	"sqrt": math.Sqrt,
+	"cbrt": math.Cbrt,
+	"pow":  math.Pow,
 
-func (p *mathParser) parseExpression() (float64, error) { return p.parseAddSub() }
-func (p *mathParser) parseAddSub() (float64, error) {
-	left, err := p.parseMulDiv()
-	if err != nil {
-		return 0, err
-	}
-	for {
-		p.skipSpace()
-		if p.match('+') {
-			right, err := p.parseMulDiv()
-			if err != nil {
-				return 0, err
-			}
-			left += right
-		} else if p.match('-') {
-			right, err := p.parseMulDiv()
-			if err != nil {
-				return 0, err
-			}
-			left -= right
-		} else {
-			return left, nil
-		}
-	}
-}
-func (p *mathParser) parseMulDiv() (float64, error) {
-	left, err := p.parsePower()
-	if err != nil {
-		return 0, err
-	}
-	for {
-		p.skipSpace()
-		if p.match('*') {
-			right, err := p.parsePower()
-			if err != nil {
-				return 0, err
-			}
-			left *= right
-		} else if p.match('/') {
-			right, err := p.parsePower()
-			if err != nil {
-				return 0, err
-			}
-			if right == 0 {
-				return 0, errors.New("division by zero")
-			}
-			left /= right
-		} else if p.match('%') {
-			right, err := p.parsePower()
-			if err != nil {
-				return 0, err
-			}
-			if right == 0 {
-				return 0, errors.New("modulo by zero")
-			}
-			left = math.Mod(left, right)
-		} else {
-			return left, nil
-		}
-	}
-}
-func (p *mathParser) parsePower() (float64, error) {
-	left, err := p.parseUnary()
-	if err != nil {
-		return 0, err
-	}
-	p.skipSpace()
-	if p.match('^') {
-		right, err := p.parsePower()
-		if err != nil {
-			return 0, err
-		}
-		left = math.Pow(left, right)
-	}
-	return left, nil
-}
-func (p *mathParser) parseUnary() (float64, error) {
-	p.skipSpace()
-	if p.match('+') {
-		return p.parseUnary()
-	}
-	if p.match('-') {
-		v, err := p.parseUnary()
-		return -v, err
-	}
-	return p.parsePrimary()
-}
-func (p *mathParser) parsePrimary() (float64, error) {
-	p.skipSpace()
-	if p.match('(') {
-		p.depth++
-		if p.depth > 200 {
-			return 0, errors.New("expression nesting too deep")
-		}
-		v, err := p.parseExpression()
-		if err != nil {
-			return 0, err
-		}
-		p.skipSpace()
-		if !p.match(')') {
-			return 0, errors.New("missing closing parenthesis")
-		}
-		p.depth--
-		return v, nil
-	}
-	if p.pos < len(p.s) && (isAlpha(p.s[p.pos]) || p.s[p.pos] == '_') {
-		ident := p.parseIdentifier()
-		p.skipSpace()
-		if p.match('(') {
-			// 函数调用与括号同源：parseArguments → parseExpression 的递归链
-			// 每层消耗多个栈帧，同样需要深度守卫，否则深嵌套是 runtime
-			// fatal error（栈溢出），executeTool 的 panic 恢复捕不到。
-			p.depth++
-			if p.depth > 200 {
-				return 0, errors.New("expression nesting too deep")
-			}
-			args, err := p.parseArguments()
-			if err != nil {
-				return 0, err
-			}
-			p.depth--
-			return applyMathFunction(ident, args)
-		}
-		switch strings.ToLower(ident) {
-		case "pi":
-			return math.Pi, nil
-		case "e":
-			return math.E, nil
-		default:
-			return 0, fmt.Errorf("unknown identifier: %s", ident)
-		}
-	}
-	return p.parseNumber()
-}
-func (p *mathParser) parseArguments() ([]float64, error) {
-	var args []float64
-	p.skipSpace()
-	if p.match(')') {
-		return args, nil
-	}
-	for {
-		v, err := p.parseExpression()
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, v)
-		p.skipSpace()
-		if p.match(')') {
-			return args, nil
-		}
-		if !p.match(',') {
-			return nil, errors.New("expected comma or closing parenthesis")
-		}
-	}
-}
-func (p *mathParser) parseIdentifier() string {
-	start := p.pos
-	for p.pos < len(p.s) && (isAlpha(p.s[p.pos]) || isDigit(p.s[p.pos]) || p.s[p.pos] == '_') {
-		p.pos++
-	}
-	return p.s[start:p.pos]
-}
-func (p *mathParser) parseNumber() (float64, error) {
-	start := p.pos
-	for p.pos < len(p.s) && (isDigit(p.s[p.pos]) || p.s[p.pos] == '.') {
-		p.pos++
-	}
-	if p.pos < len(p.s) && (p.s[p.pos] == 'e' || p.s[p.pos] == 'E') {
-		p.pos++
-		if p.pos < len(p.s) && (p.s[p.pos] == '+' || p.s[p.pos] == '-') {
-			p.pos++
-		}
-		for p.pos < len(p.s) && isDigit(p.s[p.pos]) {
-			p.pos++
-		}
-	}
-	if start == p.pos {
-		return 0, fmt.Errorf("expected number at position %d", p.pos+1)
-	}
-	return strconv.ParseFloat(p.s[start:p.pos], 64)
-}
-func (p *mathParser) skipSpace() {
-	for p.pos < len(p.s) {
-		switch p.s[p.pos] {
-		case ' ', '\t', '\r', '\n':
-			p.pos++
-		default:
-			return
-		}
-	}
-}
-func (p *mathParser) match(ch byte) bool {
-	if p.pos < len(p.s) && p.s[p.pos] == ch {
-		p.pos++
-		return true
-	}
-	return false
-}
-
-// mathUnaryFunctions is the whole vocabulary of single-argument math functions:
-// a name maps straight to its implementation. Adding one is a row here, and the
-// one-argument rule below stays in force for every entry automatically. Names
-// that share an implementation (`log` / `ln`) are simply two rows.
-var mathUnaryFunctions = map[string]func(float64) float64{
-	"sqrt":  math.Sqrt,
-	"abs":   math.Abs,
+	// Trigonometric
 	"sin":   math.Sin,
 	"cos":   math.Cos,
 	"tan":   math.Tan,
 	"asin":  math.Asin,
 	"acos":  math.Acos,
 	"atan":  math.Atan,
+	"atan2": math.Atan2,
+
+	// Exponential & logarithmic
 	"log":   math.Log,
 	"ln":    math.Log,
 	"log10": math.Log10,
+	"log2":  math.Log2,
 	"exp":   math.Exp,
-	"floor": math.Floor,
-	"ceil":  math.Ceil,
-	"round": math.Round,
 }
 
-func applyMathFunction(name string, args []float64) (float64, error) {
-	name = strings.ToLower(name)
-	if fn, ok := mathUnaryFunctions[name]; ok {
-		if len(args) != 1 {
-			return 0, fmt.Errorf("%s expects 1 argument", name)
-		}
-		return fn(args[0]), nil
+// Evaluate evaluates an expression using the expr-lang engine.
+func Evaluate(req Request) (Result, error) {
+	raw := strings.TrimSpace(req.Expression)
+	if raw == "" {
+		return Result{}, errors.New("expression is required")
 	}
-	// min/max are the only variadic functions, which is why they stay a branch:
-	// they take any number of arguments instead of exactly one.
-	switch name {
-	case "min", "max":
-		if len(args) == 0 {
-			return 0, fmt.Errorf("%s expects at least 1 argument", name)
+	if len(raw) > 4096 {
+		return Result{}, errors.New("expression exceeds maximum length (4096 chars)")
+	}
+	if err := checkNestingDepth(raw, 100); err != nil {
+		return Result{}, err
+	}
+
+	// Reject comment syntax before compiling, so that a python-style `13 // 5`
+	// can never come back as a valid answer of 13.
+	tokens, err := lexer.Lex(file.NewSource(raw))
+	if err != nil {
+		return Result{}, fmt.Errorf("invalid expression: %w", err)
+	}
+	if err := rejectComments(raw, tokens); err != nil {
+		return Result{}, err
+	}
+
+	// The expression is compiled exactly as written: expr already reads `^` as
+	// exponentiation, so a textual rewrite (e.g. `^` to `**`) would buy nothing
+	// and would corrupt every string literal and regex anchor containing `^`.
+	program, err := expr.Compile(raw, expr.Env(defaultEnv), expr.MaxNodes(200))
+	if err != nil {
+		return Result{}, fmt.Errorf("invalid expression: %w", err)
+	}
+
+	output, err := expr.Run(program, defaultEnv)
+	if err != nil {
+		return Result{}, fmt.Errorf("eval error: %w", err)
+	}
+
+	val, text, err := formatOutput(output)
+	if err != nil {
+		return Result{}, err
+	}
+
+	return Result{
+		Expression: raw,
+		Value:      val,
+		Text:       text,
+	}, nil
+}
+
+// rejectComments refuses comment syntax anywhere in the expression. expr lexes
+// `//` and `/* */` as comments and silently drops them, so a python-style
+// `13 // 5` evaluates to 13, and a comment in the middle of an expression
+// swallows whatever it covers. The lexer returns one token per piece of real
+// input and skips whitespace and comments, so any gap between two tokens that is
+// not blank is exactly such dropped input; string literals form tokens of their
+// own, so a `//` inside one is never mistaken for a comment.
+func rejectComments(raw string, tokens []lexer.Token) error {
+	// Token spans are rune offsets, so the gaps have to be measured in runes as
+	// well; slicing them as bytes lands inside multi-byte characters.
+	runes := []rune(raw)
+	prev := 0
+	for _, tok := range tokens {
+		if tok.Kind == lexer.EOF {
+			continue
 		}
-		v := args[0]
-		for _, arg := range args[1:] {
-			if name == "min" {
-				v = math.Min(v, arg)
-			} else {
-				v = math.Max(v, arg)
-			}
+		if err := reportIgnoredGap(runes, prev, tok.From); err != nil {
+			return err
 		}
-		return v, nil
+		if tok.To > prev {
+			prev = tok.To
+		}
+	}
+	return reportIgnoredGap(runes, prev, len(runes))
+}
+
+// reportIgnoredGap reports the non-blank text the lexer skipped between two
+// tokens, which is a comment by construction.
+func reportIgnoredGap(runes []rune, from, to int) error {
+	if to > len(runes) {
+		to = len(runes)
+	}
+	if from >= to {
+		return nil
+	}
+	ignored := strings.TrimSpace(string(runes[from:to]))
+	if ignored == "" {
+		return nil
+	}
+	if strings.HasPrefix(ignored, "//") {
+		return fmt.Errorf("invalid expression: `//` starts a comment, so %q would be ignored; `//` is not integer division, write 13 / 5 or floor(13 / 5)", ignored)
+	}
+	return fmt.Errorf("invalid expression: %q is a comment and would be ignored, comments are not supported", ignored)
+}
+
+func formatOutput(out any) (float64, string, error) {
+	switch v := out.(type) {
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, "", errors.New("expression result is not finite")
+		}
+		return v, strconv.FormatFloat(v, 'g', -1, 64), nil
+	case float32:
+		f := float64(v)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, "", errors.New("expression result is not finite")
+		}
+		return f, strconv.FormatFloat(f, 'g', -1, 32), nil
+	case int:
+		return float64(v), strconv.Itoa(v), nil
+	case int64:
+		return float64(v), strconv.FormatInt(v, 10), nil
+	case int32:
+		return float64(v), strconv.FormatInt(int64(v), 10), nil
+	case uint:
+		return float64(v), strconv.FormatUint(uint64(v), 10), nil
+	case uint64:
+		return float64(v), strconv.FormatUint(v, 10), nil
+	case uint32:
+		return float64(v), strconv.FormatUint(uint64(v), 10), nil
+	case bool:
+		if v {
+			return 1, "true", nil
+		}
+		return 0, "false", nil
+	case string:
+		return 0, v, nil
 	default:
-		return 0, fmt.Errorf("unknown function: %s", name)
+		text := fmt.Sprint(v)
+		return 0, text, nil
 	}
 }
-func isAlpha(ch byte) bool { return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') }
-func isDigit(ch byte) bool { return ch >= '0' && ch <= '9' }
+
+func checkNestingDepth(s string, maxDepth int) error {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '(' {
+			depth++
+			if depth > maxDepth {
+				return errors.New("expression nesting too deep")
+			}
+		} else if s[i] == ')' {
+			depth--
+		}
+	}
+	return nil
+}

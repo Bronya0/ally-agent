@@ -200,3 +200,5 @@
 [request-tools-kept] 2026-10-12 中危 收尾报告轮删掉 tools 会让前缀从首 token 分叉、整份历史全价击穿缓存；工具照发、不执行的调用只用提示重问。@orch_subagent.go
 [grep-exclusion-by-root] 2026-10-13 中危 排除依赖目录别用「有没有给 path」当判据：指父目录也算显式，嵌套 node_modules 会被整棵搜。@orch_grep.go
 [remote-delete-rules-mirrored] 2026-10-13 中危 远端删除保护规则在 Go 与内嵌 Python 各写一份：改一边要同时改另一边，两侧没有对照用例。@orch_remote.go
+[expr-comment-swallows] 2026-10-13 高危 expr 的 // 是注释会静默吞掉表达式后半段：算数工具要拦，且别做文本归一（^→** 会打进字符串）。@tools/calculate
+[expr-offsets-are-runes] 2026-10-13 中危 expr 词法位置是 rune 偏移：拿它按字节切原文，中文表情串上会错位、误判合法表达式。@tools/calculate
