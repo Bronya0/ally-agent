@@ -9,7 +9,6 @@ package app
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -143,14 +142,6 @@ func parseTurnNotice(m openai.ChatCompletionMessage) (id, payload string, ok boo
 		line = line[:i]
 	}
 	return rest[:end], line, true
-}
-
-func normalizeExtraRoots(roots []string) []string {
-	out := make([]string, 0, len(roots))
-	for _, r := range roots {
-		out = append(out, filepath.ToSlash(filepath.Clean(r)))
-	}
-	return out
 }
 
 // extraRootsTurnNotice tells the model when the session's extra roots change

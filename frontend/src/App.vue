@@ -665,6 +665,7 @@ import {
   ListAllSSHServers,
   GetWorkspaceAllowedServers,
   SetWorkspaceAllowedServers,
+  SetSessionExtraRoots,
 } from '../bindings/ally-dev/internal/app/app';
 import { Application, Browser, Events, Window } from '@wailsio/runtime';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
@@ -3629,6 +3630,14 @@ function removeFromHistory(path) {
 // ── 会话级附加工作区（extraRoots）管理 ──────────────────────────
 // extraRoots 是 session 维度的临时白名单，让安全围栏允许写入主工作区之外的目录。
 // 持久化在 session 对象里，切回历史会话时自动还原。
+// 会话级附加工作区的即时上报：运行中（含模型 ask 暂停期间）加/删必须立刻到后端，
+// 否则当轮 run 仍按旧列表判定围栏，command 会被拦到下一个 run 才放行。会话索引那条
+// 路在会话忙时会被跳过（saveSessions 对忙会话直接返回），带不了这个变更。
+function publishExtraRoots(session) {
+  if (!session?.id) return;
+  SetSessionExtraRoots(session.id, Array.isArray(session.extraRoots) ? [...session.extraRoots] : []).catch(() => {});
+}
+
 async function addExtraRoot() {
   const path = await SelectWorkspace();
   if (!path) return;
@@ -3649,6 +3658,7 @@ async function addExtraRoot() {
   }
   session.extraRoots.push(path);
   extraRoots.value = [...session.extraRoots];
+  publishExtraRoots(session);
   saveSessions();
 }
 
@@ -3659,6 +3669,7 @@ function removeExtraRoot(path) {
   const key = workspaceHistoryDedupeKey(path);
   session.extraRoots = session.extraRoots.filter((p) => workspaceHistoryDedupeKey(p) !== key);
   extraRoots.value = [...session.extraRoots];
+  publishExtraRoots(session);
   saveSessions();
 }
 

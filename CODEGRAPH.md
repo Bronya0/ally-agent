@@ -33,6 +33,7 @@
 | 受保护路径判定（VCS 元数据 / 路径别名归一） | `internal/tools/pathutil/pathutil.go`（`CanonicalPath` / `VCSMetadataReason`；本地写/删/命令与远端写/命令共用，远端只判得了字面那半） |
 | 安全围栏规则速查（圈的定义、本地/远端判定顺序与具体路径例子、已知缺口、改一条规则要同步的位置） | `docs/safety-fence.md` |
 | 会话/历史持久化（坏数据协议修复在 `prov_history_hygiene.go`） | `internal/app/biz_sessions.go` |
+| 会话附加工作区（圈的扩展面）的活记录：`StartChat` 播种 + 面板 `SetSessionExtraRoots` 即时上报 + `runChat` 每批重算 roots，使运行中增删当轮生效 | `internal/app/biz_session_roots.go` |
 | 系统提示词组装（核心规则 / 技能名片 / 记忆索引 / 用户档案 USER.md / AGENTS.md / 代码图谱 / 项目教训 LESSONS.md / 自定义提示词） | `internal/app/biz_prompt.go` |
 | 请求消息与上下文 Token 核算（口径：请求前缀 + provider 实测锚点；会话前缀快照的冻结与压缩后刷新收口在 `refreshSessionPromptPrefix`） | `internal/app/biz_context.go`（`sessionPrefixBreakdown` / `contextAnchor` / `finalizeSessionBreakdown` / `sessionSystemPromptParts`） |
 | 计划工具（`steps` / `finish` 位置状态机：报「完成到某一步」、报最后一步即收尾、状态由位置推导、标题即身份、上限收口单一写入点、结果块带状态与进度、run 收尾对账） | `biz_context.go`（`handlePlan` / `classifyPlanRequest` / `reportPlanProgress` / `applyPlanPosition` / `planCheckMarker`）+ `infra_result.go`（`renderPlanResultForModel`）+ `orch_batch_policy.go`（`planBatchWriteSource` / `toolDidPlanWork`）；前端 `planPanel.mjs` / `toolVerb.mjs` |

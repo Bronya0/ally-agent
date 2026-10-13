@@ -283,6 +283,16 @@ type App struct {
 	// chat Tab) and the footer showed that Tab's stats. Guarded by mu.
 	sessionWorkspaces map[string]string
 
+	// sessionExtraRoots holds each session's currently effective extra write
+	// roots (sessionID → roots). StartChat seeds it from the request overlay and
+	// the composer panel publishes every add/remove through SetSessionExtraRoots
+	// the moment it happens; runChat reads it per tool batch. A run's cfg is a
+	// start-of-run snapshot, so without this record a root added while the run
+	// was paused (e.g. the model waiting in ask) took effect only in the next
+	// run — the fence kept refusing writes into the directory the user had just
+	// approved. Guarded by mu.
+	sessionExtraRoots map[string][]string
+
 	// sessionModelConfigs freezes the model-facing connection fields each
 	// session's runs actually used (sessionID → fields), written by StartChat
 	// from the request overlay. Chat Tabs select models purely in frontend
@@ -432,6 +442,7 @@ func NewApp() *App {
 		// 条目，sessionContextConfig 若只回退 a.config 会把上下文统计算到
 		// 上一个 chat Tab 的工作区上。run 路径写入后它成为内存级第一优先。
 		sessionWorkspaces:    map[string]string{},
+		sessionExtraRoots:    map[string][]string{},
 		sessionModelConfigs:  map[string]sessionModelConfig{},
 		sessionSystemPrompts: map[string][]systemPromptPart{},
 		frozenTurnNotices:    map[string]map[string]string{},
@@ -1649,6 +1660,13 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 		a.mu.Unlock()
 	}
 
+	// The same for the session's extra roots: the request overlay is the
+	// authoritative list for this run, so seeding the live record here keeps it
+	// from ever lagging behind (or contradicting) the run that just started.
+	if req.SessionID != "" {
+		a.publishSessionExtraRoots(req.SessionID, cfg.ExtraRoots)
+	}
+
 	// Freeze the model-facing connection fields the same way: manual
 	// compaction (compactSession) runs outside any run and would otherwise
 	// sample the persisted default model instead of the Tab's overlay model
@@ -1828,6 +1846,7 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.sessionSystemPrompts, sessionID)
 	delete(a.sessionToolsets, sessionID)
 	delete(a.sessionWorkspaces, sessionID)
+	delete(a.sessionExtraRoots, sessionID)
 	delete(a.sessionModelConfigs, sessionID)
 	delete(a.contextAnchors, sessionID)
 	delete(a.compactFailures, sessionID)
@@ -2398,7 +2417,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		totalCalls := len(toolCalls)
 		toolSem := make(chan struct{}, 4)
 		outcomes := make([]toolOutcome, totalCalls)
-		toolConflicts := detectToolBatchConflicts(cfg, toolCalls)
+		// Tools run against the session's live extra roots: cfg is a start-of-run
+		// snapshot, so a directory the user added (or removed) while the run was
+		// paused would otherwise be judged against the old list and only take
+		// effect in the next run.
+		toolCfg := a.cfgWithLiveExtraRoots(sessionID, cfg)
+		toolConflicts := detectToolBatchConflicts(toolCfg, toolCalls)
 
 		// emitOutcome pushes a single tool's result/error to the frontend as
 		// soon as that tool finishes, instead of waiting for the whole batch.
@@ -2428,7 +2452,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			if hasValidationPlan {
 				toolCtx = context.WithValue(toolCtx, batchValidationPathsContextKey{}, plannedValidationPaths)
 			}
-			r := a.executeTool(toolCtx, cfg, sessionID, c.Function.Name, []byte(executionArgs))
+			r := a.executeTool(toolCtx, toolCfg, sessionID, c.Function.Name, []byte(executionArgs))
 			duration := time.Since(started).Milliseconds()
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)
@@ -2466,7 +2490,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// Spread validation work over the batch: directory-level checks (go
 		// vet per package, tsc/vue-tsc per project) run once per unit on the
 		// last mutation call touching it instead of once per edit call.
-		validationRoots, _ := workspaceRoots(cfg)
+		validationRoots, _ := workspaceRoots(toolCfg)
 		validationPlan := planBatchValidation(validationRoots, toolCalls, conflictSkippedCallIndexes(toolConflicts))
 		for i, call := range toolCalls {
 			if _, conflict := toolConflicts[i]; conflict || !isOrderedFileMutationTool(call.Function.Name) {

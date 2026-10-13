@@ -13,6 +13,7 @@
 | 校验 | 圈外一律拒 | 只校验「绝对路径、不是 `/`」——**不校验是不是系统目录** |
 
 - 代码：`workspaceRoots`（`orch_file_ops.go`）= 主工作区 + `ExtraRoots`；`~/.ally_agent` 由 `pathutil.InsideWriteRoot` 追加。
+- 附加目录的**当前**列表来自会话活记录（`biz_session_roots.go`：`StartChat` 播种、面板增删经 `SetSessionExtraRoots` 即时上报），run 内每个工具批次都按它重算，所以**运行中（含模型 `ask` 暂停期间）加/删当轮生效**；只靠“下次请求带新列表”会让当轮围栏一直按旧圈判（会话忙时会话索引不落盘，那条路根本带不动这个变更）。
 - `parseRemoteTarget`（`orch_remote.go`）只拒绝相对路径、`/` 本身。
 
 **沙箱现状**：`internal/sandbox` 的 `attached = false`（三个平台都只走围栏）。因此「边界归谁管」`kernelOwnsBoundary()` 恒为 false：本地两条**靠猜写入落在哪**的检查（删除命令改道、圈外已存在目标）当前满血在岗；接回沙箱时它们让位给内核，只有「删工作区根」反过来变成由围栏说。
