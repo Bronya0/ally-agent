@@ -197,3 +197,6 @@
 [card-opacity-dims-text] 2026-10-12 中危 整卡 opacity 表达状态会把卡内小字一起压淡（浅色主题错误红 4.63→3.39）：只压卡面别压内容。@TaskCenterPanel.vue
 [window-capture-own-content] 2026-10-12 中危 窗口截图须抓窗口自身内容：Windows 走屏幕 BitBlt 时被遮挡会静默返回遮挡物（模型拿到错图）。@capture_windows.go
 [session-busy-one-place] 2026-10-12 中危 会话「忙」判据须含压缩：只认运行态会让压缩中的 Tab 丢运行点、删除入口放行、消息被当空闲裁剪。@App.vue
+[request-tools-kept] 2026-10-12 中危 收尾报告轮删掉 tools 会让前缀从首 token 分叉、整份历史全价击穿缓存；工具照发、不执行的调用只用提示重问。@orch_subagent.go
+[grep-exclusion-by-root] 2026-10-13 中危 排除依赖目录别用「有没有给 path」当判据：指父目录也算显式，嵌套 node_modules 会被整棵搜。@orch_grep.go
+[remote-delete-rules-mirrored] 2026-10-13 中危 远端删除保护规则在 Go 与内嵌 Python 各写一份：改一边要同时改另一边，两侧没有对照用例。@orch_remote.go

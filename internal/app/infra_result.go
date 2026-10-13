@@ -951,6 +951,9 @@ func renderReadResultForModel(r BatchReadResult) string {
 		if f.Truncated {
 			b.WriteString(` truncated`)
 		}
+		if len(f.TruncatedLines) > 0 {
+			b.WriteString(` truncated-lines="` + attrEscape(formatTruncatedLines(f.TruncatedLines, f.TruncatedLinesOmitted)) + `"`)
+		}
 		if f.Reused {
 			b.WriteString(` reused`)
 		}
@@ -966,6 +969,21 @@ func renderReadResultForModel(r BatchReadResult) string {
 		b.WriteString("Image file(s) injected as user image input.\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// formatTruncatedLines renders the line numbers whose text the read preview cut
+// short, so the model knows the tail of those lines is not in its context (and
+// that edit will refuse a line-range replacement over one of them). The list is
+// already bounded by the read pipeline; "..." marks a bounded list.
+func formatTruncatedLines(lines []int, omitted bool) string {
+	parts := make([]string, 0, len(lines)+1)
+	for _, line := range lines {
+		parts = append(parts, strconv.Itoa(line))
+	}
+	if omitted {
+		parts = append(parts, "...")
+	}
+	return strings.Join(parts, ",")
 }
 
 // renderCommandResultForModel renders a command result as a <ally-cmd> block with

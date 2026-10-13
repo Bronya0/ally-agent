@@ -5697,7 +5697,7 @@ code, pre {
   margin-left: 4px;
 }
 
-.subagent-token-chip {
+.subagent-stat-chip {
   color: var(--ally-accent-dim);
   font-variant-numeric: tabular-nums;
   font-size: var(--ally-aux-font-size);

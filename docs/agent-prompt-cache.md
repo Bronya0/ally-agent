@@ -176,6 +176,8 @@ Moonshot 的 Messages 端点把 `cache_control` 写成**仅顶层传入时生效
   ```
   同一个主会话派发的所有子代理，共享预热好的 System + Tools 缓存前缀。
 
+* ⚠️ **收尾报告轮不得丢工具定义**：预算耗尽后“只交报告”的几轮请求曾经不带 `tools`。工具定义在提示词里排在系统段与消息之前，删掉它等于从第 0 个 token 起分叉，本轮最长的那份历史（子代理跑满预算的完整上下文）全价击穿缓存。正确做法是工具声明照发（字节不变 → 全中），收到 `tool_calls` 不执行、只追加一句提示再问，最多 `maxForcedReportTurns` 轮；追加式重试保证前缀仍单调。
+
 * ⚠️ **架构避坑：思考台账（Reasoning Stash）必须按 Run 隔离**：
   Responses / Chat 协议需要台账记录思考块以便在工具轮次中重放。由于工具调用 ID（如 `call_0`）可能重复，如果子代理的台账也共享同个 key，会导致多 Agent 间思考块相互覆盖串包。
   因此，Ally 将 **缓存路由（`responsesPromptCacheKey`）** 与 **回放作用域（`reasoningScope`）** 彻底解耦：

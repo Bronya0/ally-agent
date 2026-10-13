@@ -302,26 +302,6 @@ func TestLineIndexLineAtOffset(t *testing.T) {
 	}
 }
 
-func TestLineRangeOffsetsWithIndexMatchesLegacy(t *testing.T) {
-	content := "one\ntwo\nthree\nfour\nfive\nsix\n"
-	index := buildLineIndex(content)
-	for startLine := 1; startLine <= 6; startLine++ {
-		for endLine := startLine; endLine <= 6; endLine++ {
-			wantStart, wantEnd, wantErr := lineRangeOffsets(content, startLine, endLine)
-			gotStart, gotEnd, gotErr := lineRangeOffsetsWithIndex(index, len(content), startLine, endLine)
-			if (wantErr == nil) != (gotErr == nil) {
-				t.Fatalf("line %d-%d: error mismatch legacy=%v index=%v", startLine, endLine, wantErr, gotErr)
-			}
-			if wantErr != nil {
-				continue
-			}
-			if gotStart != wantStart || gotEnd != wantEnd {
-				t.Fatalf("line %d-%d: index [%d,%d) != legacy [%d,%d)", startLine, endLine, gotStart, gotEnd, wantStart, wantEnd)
-			}
-		}
-	}
-}
-
 // BenchmarkApplyBatchTextChangesLargeFileLineRanges measures the cost of many
 // line-range edits on a large file. Before the lineIndex cache, each
 // lineRangeOffsets call re-scanned from byte 0; with the cache it's one O(N)
@@ -444,5 +424,32 @@ func TestMatchLineNumberPrefixDoesNotStripBareColonOrTimestamp(t *testing.T) {
 	}
 	if count != 1 || len(result.Warnings) != 0 {
 		t.Fatalf("bare colon inside text must not trigger line number stripping warning, warnings: %v", result.Warnings)
+	}
+}
+
+// TestApplyBatchTextChangesRefusesLineRangeOverATruncatedLine: read 只把长行的前
+// MaxReadLineChars 个字符交给模型（尾部以 "..." 代替），按行号整行替换会把没显示过的
+// 尾部一起丢掉，而且工具还报成功。锚定编辑（oldText）做不到这一点：抄不全就匹配不上。
+func TestApplyBatchTextChangesRefusesLineRangeOverATruncatedLine(t *testing.T) {
+	long := strings.Repeat("x", toolerrors.MaxReadLineChars+50)
+	content := "header\n" + long + "\ntail\n"
+
+	if _, _, err := ApplyBatchTextChanges(content, []TextChange{{LineRange: "2-2", NewText: "short"}}); err == nil {
+		t.Fatal("a whole-line replacement over a line longer than the read preview must be refused")
+	} else if code := toolerrors.Code(err); code != "E_BAD_ARGS" {
+		t.Fatalf("error code = %q, want E_BAD_ARGS (%v)", code, err)
+	}
+
+	// A range outside the file is refused before anything is replaced.
+	if _, _, err := ApplyBatchTextChanges(content, []TextChange{{LineRange: "9-9", NewText: "x"}}); err == nil {
+		t.Fatal("a lineRange past the end of the file must be refused")
+	} else if code := toolerrors.Code(err); code != "E_RANGE_OOB" {
+		t.Fatalf("error code = %q, want E_RANGE_OOB (%v)", code, err)
+	}
+
+	// Ordinary short lines still work, including a range that spans several of them.
+	result, _, err := ApplyBatchTextChanges(content, []TextChange{{LineRange: "1-1", NewText: "head"}})
+	if err != nil || !strings.HasPrefix(result.Content, "head\n") {
+		t.Fatalf("a short line must still be replaceable by line range: %v", err)
 	}
 }

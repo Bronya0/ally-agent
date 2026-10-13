@@ -37,10 +37,9 @@ const (
 	defaultScheduledTaskSteps   = scheduler.DefaultSteps
 	maxScheduledTaskSteps       = scheduler.MaxSteps
 	defaultScheduledTaskTimeout = scheduler.DefaultTimeout
-	maxScheduledTaskTimeout     = scheduler.MaxTimeout
-	minScheduledTaskInterval    = scheduler.MinInterval
 	maxScheduledTasks           = scheduler.MaxTasks
 	scheduledTaskSummaryLimit   = scheduler.SummaryLimit
+	scheduledTaskErrorTextLimit = 8 * 1024
 )
 
 type ScheduledTaskSchedule struct {
@@ -210,8 +209,8 @@ func (a *App) executeScheduledTaskTool(cfg ConfigState, req ScheduledTaskToolReq
 	case "list":
 		tasks := manager.list()
 		limit := len(tasks)
-		if limit > 50 {
-			limit = 50
+		if limit > scheduler.ListTruncateAt {
+			limit = scheduler.ListTruncateAt
 		}
 		views := make([]ScheduledTaskToolView, 0, limit)
 		for i := 0; i < limit; i++ {
@@ -705,7 +704,7 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 	} else if errors.Is(ctx.Err(), context.Canceled) && runErr != nil {
 		status = "cancelled"
 	}
-	m.finish(task.ID, status, summary, tailString(errText, 8*1024))
+	m.finish(task.ID, status, summary, tailString(errText, scheduledTaskErrorTextLimit))
 	finished = true
 }
 
@@ -751,7 +750,7 @@ func (m *scheduledTaskManager) runCommandTask(task ScheduledTask, ctx context.Co
 	} else if status == "completed" {
 		summary = fmt.Sprintf("exit 0 in %dms", result.DurationMS)
 	}
-	m.finish(task.ID, status, summary, tailString(errText, 8*1024))
+	m.finish(task.ID, status, summary, tailString(errText, scheduledTaskErrorTextLimit))
 }
 
 func (m *scheduledTaskManager) finish(id, status, summary, errText string) {

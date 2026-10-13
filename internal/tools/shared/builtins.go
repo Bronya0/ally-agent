@@ -41,9 +41,12 @@ const (
 	// in the handler.
 	MaxPlanSteps          = 50
 	MaxPlanStepTitleChars = 200
-	// maxDelegateStepBudget bounds the subagent maxSteps parameter. Kept in
-	// sync with the app-side hard cap (scheduler.MaxSteps).
-	maxDelegateStepBudget = 1000
+	// MaxDelegateStepBudget bounds one delegated run: it is both the subagent
+	// maxSteps maximum and the scheduled-task hard cap (scheduler.MaxSteps
+	// aliases it). The literal lives here, in the leaf package every tool
+	// package may import, so the declared maximum cannot drift from what the
+	// runtimes enforce.
+	MaxDelegateStepBudget = 1000
 	// Service bounds. A graceful stop waits DefaultServiceStopGraceSeconds before
 	// force killing the process tree, and one read returns
 	// DefaultServiceReadTailBytes of recent output; both are capped here because
@@ -402,7 +405,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read one or more file contents. Supports text files and images (jpg, png, gif, webp; bmp is read as a text notice instead, not as image input). For text files, each readable file is returned as a `<ally-file path=… version=…>` block (plus `lines=A-B`/`total=N` when known) whose body carries 1-based line numbers; that version is what edit needs. A path that does not exist and a directory are dropped without a block (when nothing else remains, the whole result is `(no readable files returned)`); every other failure still returns a block carrying an `error` attribute. The `truncated`/`reused`/`image`/`error` attributes flag anything else. Omit startLine/endLine to read the whole file when needed, or specify startLine/endLine for a targeted range in larger files (or `tailLines` for the end of one, e.g. a log) to save context. Pass needed files in the files array to read in parallel.", map[string]any{
+		functionTool("read", "Read one or more file contents. Supports text files and images (jpg, png, gif, webp; bmp is read as a text notice instead, not as image input). For text files, each readable file is returned as a `<ally-file path=… version=…>` block (plus `lines=A-B`/`total=N` when known) whose body carries 1-based line numbers; that version is what edit needs. A path that does not exist and a directory are dropped without a block (when nothing else remains, the whole result is `(no readable files returned)`); every other failure still returns a block carrying an `error` attribute. The `truncated`/`truncated-lines`/`reused`/`image`/`error` attributes flag anything else; `truncated-lines` lists the lines whose text hit the preview cap (their tails are not in your context), and edit refuses a lineRange over one of them, so anchor that change on oldText. Omit startLine/endLine to read the whole file when needed, or specify startLine/endLine for a targeted range in larger files (or `tailLines` for the end of one, e.g. a log) to save context. Pass needed files in the files array to read in parallel.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -458,7 +461,7 @@ func chatToolsUncached() []openai.Tool {
 			"properties": map[string]any{
 				"task":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The task for the child agent. Be specific — include file paths and expected outcomes."},
 				"role":         map[string]any{"type": "string", "minLength": 1, "maxLength": 80, "pattern": ".*\\S.*", "description": "What the sub-agent is, as a short role name such as \"researcher\", \"code reviewer\", or \"tester\", not a sentence about the task. It is injected into the sub-agent's system prompt."},
-				"maxSteps":     map[string]any{"type": "integer", "minimum": 1, "maximum": maxDelegateStepBudget, "description": "Required tool-call-round budget, chosen by task difficulty: small lookups ~5-10, normal tasks ~15-30, large multi-file work ~40-80. The child is warned as it runs low and must output a report on the final round."},
+				"maxSteps":     map[string]any{"type": "integer", "minimum": 1, "maximum": MaxDelegateStepBudget, "description": "Required tool-call-round budget, chosen by task difficulty: small lookups ~5-10, normal tasks ~15-30, large multi-file work ~40-80. The child is warned as it runs low and must output a report on the final round."},
 				"description":  map[string]any{"type": "string", "description": "Short 3-5 word summary of what the delegated agent is working on."},
 				"cleanContext": map[string]any{"type": "boolean", "description": "If true, skip workspace environment injection. Use for tasks that do not depend on project structure (e.g. write a standalone algorithm). Default false."},
 				"model":        map[string]any{"type": "string", "description": "Optional model override. Default uses current model."},
@@ -663,18 +666,6 @@ func normalizeSchemaNode(node map[string]any) {
 	}
 	if items, ok := node["items"].(map[string]any); ok {
 		normalizeSchemaNode(items)
-	}
-	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
-		if variants, ok := node[key].([]any); ok {
-			for _, raw := range variants {
-				if child, ok := raw.(map[string]any); ok {
-					normalizeSchemaNode(child)
-				}
-			}
-		}
-	}
-	if notSchema, ok := node["not"].(map[string]any); ok {
-		normalizeSchemaNode(notSchema)
 	}
 	if additional, ok := node["additionalProperties"].(map[string]any); ok {
 		normalizeSchemaNode(additional)

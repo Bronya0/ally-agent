@@ -112,6 +112,9 @@ function parseDiffText(text) {
   const result = []
   let oldLine = 1
   let newLine = 1
+  // 取样区：真实变更量过大时后端只给统计与两侧取样（"[span: ...]"），那些行不是
+  // 逐行 diff，位置也对不上，所以既不给行号也不再推进行号。
+  let sampled = false
   for (const line of lines) {
     if (line.length === 0) continue
     if (line.startsWith('diff --git ') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) {
@@ -123,34 +126,43 @@ function parseDiffText(text) {
         oldLine = Number(match[1]) || 1
         newLine = Number(match[2]) || 1
       }
+      sampled = false
+      continue
+    }
+    if (line.startsWith('[')) {
+      // 后端注解行（例："[span: 4 removed, 2 added; ...]"、"[diff truncated: ...]"）。
+      // 它不是内容，也不代表任何行：不推进行号，否则后面每一行都会多推一格。
+      // `[span: ...]` 之后的行都是取样，交给下面的 sampled 分支处理。
+      if (line.startsWith('[span:')) sampled = true
       continue
     }
     const marker = line[0]
     const content = line.slice(1)
+    // 取样区只保留标记与内容，行号留空；其余情况按 kind 取对应侧的行号并推进它。
+    const record = (kind, code, advance) => {
+      if (sampled) {
+        result.push({ kind, lineNum: null, code })
+        return
+      }
+      result.push({ kind, lineNum: kind === 'delete' ? oldLine : newLine, code })
+      advance()
+    }
     if (marker === '+') {
-      result.push({ kind: 'add', lineNum: newLine, code: content })
-      newLine++
+      record('add', content, () => { newLine++ })
     } else if (marker === '-') {
-      result.push({ kind: 'delete', lineNum: oldLine, code: content })
-      oldLine++
+      record('delete', content, () => { oldLine++ })
     } else if (marker === ' ') {
       // 折叠行 “… N unchanged lines …” 代表 N 行未变化，但输出只占一行。
       // 行号必须跳过 N，否则后面所有行号都会连续错位（显示成 12345…）。
       const fold = content.match(/^…\s*(\d+)\s+unchanged lines?\s*…$/)
       if (fold) {
-        result.push({ kind: 'context', lineNum: newLine, code: content })
         const n = Number(fold[1]) || 0
-        oldLine += n
-        newLine += n
+        record('context', content, () => { oldLine += n; newLine += n })
       } else {
-        result.push({ kind: 'context', lineNum: newLine, code: content })
-        oldLine++
-        newLine++
+        record('context', content, () => { oldLine++; newLine++ })
       }
     } else {
-      result.push({ kind: 'context', lineNum: newLine, code: line })
-      oldLine++
-      newLine++
+      record('context', line, () => { oldLine++; newLine++ })
     }
   }
   return result
@@ -265,6 +277,8 @@ function lineClasses(line) {
 }
 
 function padGutter(num) {
+  // 取样区的行没有行号：留出等宽空白，别让整列错位，也别显示一个假数字。
+  if (num === null || num === undefined) return ' '.repeat(4)
   return String(num).padStart(4)
 }
 

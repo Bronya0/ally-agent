@@ -32,11 +32,11 @@ import (
 )
 
 var (
-	ErrAuthentication  = errors.New("SSH authentication failed")
-	ErrHostKeyChanged  = errors.New("SSH host key changed")
-	ErrPrivateKey      = errors.New("SSH private key error")
-	ErrOutputTooLarge  = errors.New("SSH command output exceeded the capture limit")
-	knownHostsFileLock sync.Mutex
+	ErrAuthentication = errors.New("SSH authentication failed")
+	ErrHostKeyChanged = errors.New("SSH host key changed")
+	ErrPrivateKey     = errors.New("SSH private key error")
+	ErrOutputTooLarge = errors.New("SSH command output exceeded the capture limit")
+	knownHostsWriteMu sync.Mutex
 
 	// dialTimeout 只覆盖 TCP 建连（含主机名解析）。
 	dialTimeout = 10 * time.Second
@@ -677,24 +677,19 @@ func resolveKnownHostsPath(knownHostsPath string) (string, error) {
 	return path, nil
 }
 
-// withKnownHostsLock 串行化对同一份 known_hosts 的读改写：进程内互斥 + 跨进程文件锁
-// (<path>.lock)。首次连接固化指纹与用户确认后的替换共用它，否则两个连接会各自
-// 读入旧内容再各自写回，后写的一方悄悄丢掉前者的记录。
-func withKnownHostsLock(path string, fn func() error) error {
-	knownHostsFileLock.Lock()
-	defer knownHostsFileLock.Unlock()
-
-	lockFile, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, maxHostKeyFileMode)
-	if err != nil {
-		return fmt.Errorf("open SSH known_hosts lock: %w", err)
-	}
-	defer lockFile.Close()
-	unlock, err := lockKnownHostsFile(lockFile)
-	if err != nil {
-		return fmt.Errorf("lock SSH known_hosts file: %w", err)
-	}
-	defer unlock()
-
+// withKnownHostsWriteLock 串行化对同一份 known_hosts 的读改写，只锁本进程。
+//
+// 首次连接固化指纹是纯追加（O_APPEND 由内核保证文件位置不打架），不需要锁；用户确认
+// 后的替换要「读整份、删旧行、整份写回」，同一进程里两个连接同时做会互相盖掉彼此的
+// 记录，所以两者都走这里。
+//
+// 跨进程的文件锁（<path>.lock）去掉了：它把 ~/.ssh 必须可写变成了连接前提，而且是在
+// 握手回调里阻塞取锁、没有超时，外部进程占着锁时连这把进程内互斥量一起卡死，整个进程
+// 的远端能力都会停住。代价是与进程外同时改同一份文件时可能丢一行记录，下次连接会重新
+// 固化。
+func withKnownHostsWriteLock(fn func() error) error {
+	knownHostsWriteMu.Lock()
+	defer knownHostsWriteMu.Unlock()
 	return fn()
 }
 
@@ -718,7 +713,7 @@ func ReplaceHostKey(knownHostsPath, address string, key ssh.PublicKey) error {
 		return err
 	}
 
-	return withKnownHostsLock(path, func() error {
+	return withKnownHostsWriteLock(func() error {
 		existing, err := os.ReadFile(path)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("read SSH known_hosts file: %w", err)
@@ -827,7 +822,8 @@ func replaceFileAtomically(tmp, dst string) error {
 }
 
 // pinHostKey 记录首次连接见到的公钥，等价于 OpenSSH 的
-// StrictHostKeyChecking=accept-new：只固化，绝不替换已有记录。
+// StrictHostKeyChecking=accept-new：只固化，绝不替换已有记录。纯追加，调用方
+// （withKnownHostsWriteLock）负责与替换记录串行。
 func pinHostKey(path, address string, key ssh.PublicKey) error {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, maxHostKeyFileMode)
 	if err != nil {
@@ -978,7 +974,7 @@ func newHostKeyCallback(host, port, knownHostsPath string) (ssh.HostKeyCallback,
 	address := net.JoinHostPort(host, port)
 
 	return func(_ string, remote net.Addr, key ssh.PublicKey) error {
-		return withKnownHostsLock(path, func() error {
+		return withKnownHostsWriteLock(func() error {
 			verify, err := knownhosts.New(path)
 			if err != nil {
 				return fmt.Errorf("read SSH known_hosts file: %w", err)

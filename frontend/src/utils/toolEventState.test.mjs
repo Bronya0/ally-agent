@@ -148,6 +148,7 @@ test('normalizeToolStatus maps the full vocabulary and falls back to default', (
   assert.equal(normalizeToolStatus('running'), 'running');
   assert.equal(normalizeToolStatus('completed'), 'success');
   assert.equal(normalizeToolStatus('failed'), 'error');
+  assert.equal(normalizeToolStatus('timed_out'), 'error');
   assert.equal(normalizeToolStatus('info'), 'running');
   assert.equal(normalizeToolStatus('bogus'), 'default');
   assert.equal(normalizeToolStatus('pending'), 'default');

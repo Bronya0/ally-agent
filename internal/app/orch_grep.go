@@ -56,6 +56,10 @@ func (a *App) grepFilesWithConfig(ctx context.Context, cfg ConfigState, req Grep
 		}
 	}
 
+	// 排除依赖/产物目录的判据是「搜索根在不在这些目录里面」，不是「有没有给 path」：
+	// 指父目录（"." / "frontend"）照旧排除，指进目录里面才放行。
+	req.PathInsideExcludedDir = grep.PointIntoExcludedDir(root, searchRoot)
+
 	rgPath, err := grep.Find()
 	if err != nil {
 		a.emitRipgrepMissingIfNeeded()

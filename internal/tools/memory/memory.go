@@ -5,16 +5,14 @@
 //
 // This file is part of ally-agent, licensed under the GNU General
 // Public License v3. See the LICENSE file for details.
-// Package memory holds pure parsing/formatting helpers for Ally's global
-// memory Markdown files (YAML frontmatter + body). Nothing here may depend
-// on App state, ConfigState, or any *App receiver — callers feed in raw
-// memory file text and receive structured results. App-owned orchestration
-// (file IO, path resolution, version checks, caching) stays in internal/app.
+// Package memory holds pure frontmatter helpers for Ally's global memory
+// Markdown files (YAML frontmatter + body). Nothing here may depend on App
+// state, ConfigState, or any *App receiver: callers feed in raw memory file
+// text and receive structured results. File listing and the index cache live
+// in runtime.go.
 package memory
 
 import (
-	"encoding/json"
-	"regexp"
 	"strings"
 
 	"ally-dev/internal/tools/shared"
@@ -45,49 +43,6 @@ func ParseMarkdown(text string) (string, string) {
 		}
 	}
 	return desc, body
-}
-
-// FormatMarkdown builds a memory Markdown file with YAML frontmatter from a
-// description and body content. CRLF in content is normalized to LF.
-func FormatMarkdown(description, content string) string {
-	description = strings.TrimSpace(description)
-	description = strings.ReplaceAll(description, "\r", " ")
-	description = strings.ReplaceAll(description, "\n", " ")
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	var b strings.Builder
-	b.WriteString("---\n")
-	b.WriteString("description: ")
-	if strings.ContainsAny(description, `":#[]{}&*!|>'%@`+"\t") {
-		quoted, _ := json.Marshal(description)
-		b.Write(quoted)
-	} else {
-		b.WriteString(description)
-	}
-	b.WriteString("\n---\n\n")
-	b.WriteString(content)
-	if !strings.HasSuffix(content, "\n") {
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-// nonSlugRuneRE collapses every run of characters outside [a-z0-9]; compiled
-// once because DefaultPath runs for every memory created without a path.
-var nonSlugRuneRE = regexp.MustCompile(`[^a-z0-9]+`)
-
-// DefaultPath derives a default .md filename from a description by lowercasing
-// and replacing non-alphanumeric runs with hyphens.
-func DefaultPath(description string) string {
-	slug := strings.ToLower(strings.TrimSpace(description))
-	slug = nonSlugRuneRE.ReplaceAllString(slug, "-")
-	slug = strings.Trim(slug, "-")
-	if slug == "" {
-		slug = "memory"
-	}
-	if len(slug) > 64 {
-		slug = strings.Trim(slug[:64], "-")
-	}
-	return slug + ".md"
 }
 
 // parseYAMLField reads a single `field: value` line from YAML frontmatter.

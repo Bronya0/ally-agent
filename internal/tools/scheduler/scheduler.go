@@ -28,15 +28,17 @@ import (
 // Bounded execution limits. These mirror the historical app-layer constants
 // so callers can reference them by name without depending on app state.
 const (
+	// MaxSteps is the hard cap for one delegated run. The literal lives in the
+	// shared package (which every tool package may import, including this one),
+	// so the subagent schema and this bound cannot drift apart.
+	MaxSteps       = toolerrors.MaxDelegateStepBudget
 	DefaultSteps   = 100
-	MaxSteps       = 1000
 	DefaultTimeout = 3600
 	MaxTimeout     = 86400
 	MinTimeout     = 60
 	MinInterval    = time.Minute
 	MaxTasks       = 100
 	SummaryLimit   = 128 * 1024
-	ErrorTextLimit = 8 * 1024
 	ListTruncateAt = 50
 )
 
@@ -122,7 +124,7 @@ func ValidateSchedule(s Schedule) error {
 	return nil
 }
 
-// ParseCron parses spec into a cron Schedule. Callers that need the next-run
+// ParseCron parses spec into a cron.Schedule for callers that need its Next().
 func ParseCron(spec string) (cron.Schedule, error) {
 	return cron.ParseStandard(spec)
 }
@@ -130,36 +132,6 @@ func ParseCron(spec string) (cron.Schedule, error) {
 // EveryDuration returns the cron.Schedule for a duration-based interval.
 func EveryDuration(d time.Duration) cron.Schedule {
 	return cron.Every(d)
-}
-
-// NextRunAt computes the next time the schedule should fire after now.
-// For "once" schedules whose time has passed, returns an error.
-func NextRunAt(s Schedule, now time.Time) (time.Time, error) {
-	switch s.Type {
-	case "once":
-		at, err := time.Parse(time.RFC3339, s.At)
-		if err != nil {
-			return time.Time{}, toolerrors.New("E_SCHEDULED_TASK_AT", fmt.Errorf("invalid RFC3339 time: %w", err))
-		}
-		if !at.After(now) {
-			return time.Time{}, errors.New("one-time schedule time has passed")
-		}
-		return at, nil
-	case "interval":
-		duration, err := time.ParseDuration(s.Every)
-		if err != nil {
-			return time.Time{}, toolerrors.New("E_SCHEDULED_TASK_INTERVAL", fmt.Errorf("invalid interval: %w", err))
-		}
-		return now.Add(duration), nil
-	case "cron":
-		schedule, err := cron.ParseStandard(s.Cron)
-		if err != nil {
-			return time.Time{}, toolerrors.New("E_SCHEDULED_TASK_CRON", fmt.Errorf("invalid cron expression: %w", err))
-		}
-		return schedule.Next(now), nil
-	default:
-		return time.Time{}, toolerrors.New("E_SCHEDULED_TASK_TYPE", errors.New("schedule.type must be once, interval, or cron"))
-	}
 }
 
 // ValidateSteps clamps steps to the default when zero and rejects values

@@ -36,32 +36,10 @@ type preparedFileEdit struct {
 	result  EditResult
 }
 
-// validateModelTextChangeNewText rejects a change that left newText out.
-//
-// The schema declares newText required, but the app does not validate arguments
-// against schemas, so absence has to be checked where the wire shape still
-// carries it: an omitted key used to decode to "" and delete the matched text
-// without a word. An explicit empty string still means "delete" — only absence
-// is refused. Both edit and remote_edit validate through
-// validateModelEditToolRequest, so this is the single enforcement point.
-func validateModelTextChangeNewText(changes []TextChange) error {
-	for i, change := range changes {
-		if change.NewText == nil {
-			return codedToolError("E_BAD_EDIT", fmt.Errorf("change %d is missing newText; send \"newText\": \"\" to delete the matched text", i+1))
-		}
-	}
-	return nil
-}
-
-// textChangeNewText reads the model-facing newText after presence validation has
-// run. The engine's own type keeps "" as "delete this text", which is exactly
-// what a nil pointer would have meant.
-func textChangeNewText(c TextChange) string {
-	if c.NewText == nil {
-		return ""
-	}
-	return *c.NewText
-}
+// toEditChanges converts the model-facing change shape into the engine's own. The
+// wire struct carries newText as a plain string, and so does the engine: an empty
+// string means "delete this text", which is why the declaration marks newText
+// required and the argument gate refuses a change that leaves it out.
 
 func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (MultiEditResult, error) {
 	plan, err := planLocalEditBatch(cfg, files, localEditPlanForExecution)
@@ -92,13 +70,7 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
 		}
 		after := encodeText(applied.Content, ending, hadBOM)
-		diff := edit.GenerateEditDiffPreview(text, applied.Content, maxToolOutput)
-		added, removed := 0, 0
-		if diff != "" {
-			added, removed = edit.CountEditDiffStats(diff)
-		} else {
-			added, removed = edit.ApproximateLineDeltaContent(text, applied.Content)
-		}
+		diff, removed, added := edit.GenerateEditDiffPreviewWithCounts(text, applied.Content, maxToolOutput)
 		classification := "edit"
 		if bytes.Equal(after, before) {
 			classification = "noop"
@@ -133,7 +105,7 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 				LastChanged:       applied.LastChangedLine,
 				Warnings:          applied.Warnings,
 				Classification:    classification,
-				ChangedLinesBlock: edit.BuildLineNumberContextBlock(applied.Content, applied.FirstChangedLine, applied.LastChangedLine, splitLines),
+				ChangedLinesBlock: edit.BuildLineNumberContextBlockBounded(applied.Content, applied.FirstChangedLine, applied.LastChangedLine),
 			},
 		})
 	}
@@ -196,116 +168,6 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 	return result, nil
 }
 
-func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, error) {
-	plan, err := normalizeEditRequest(req)
-	if err != nil {
-		return EditResult{}, err
-	}
-	roots, err := workspaceRoots(cfg)
-	if err != nil {
-		return EditResult{}, err
-	}
-	spec := fileMutationSpec(cfg, roots)
-	// Writes resolve exactly like create/delete/editor saves (symlinks rejected,
-	// real path confined to the write roots); SafeWriteFile replaces the file in
-	// place, so joining lexically here would write through a symlinked
-	// directory and land outside the workspace.
-	path, err := resolveWritableFilePath(roots, req.Path)
-	if err != nil {
-		return EditResult{}, err
-	}
-	data, _, err := readTextFile(path)
-	if err != nil {
-		return EditResult{}, err
-	}
-	beforeHash, beforeVersion := hashBytesAndVersion(data)
-	if req.Version != "" {
-		if err := validateVersion(req.Version); err != nil {
-			return EditResult{}, err
-		}
-		if !strings.EqualFold(req.Version, beforeVersion) {
-			return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("version %s does not match current file version %s. Re-read the file and retry", req.Version, beforeVersion))
-		}
-	}
-	if req.ExpectedSHA256 != "" && req.ExpectedSHA256 != beforeHash {
-		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("expectedSha256 %s does not match current file hash %s. Re-read the file and retry with fresh text", req.ExpectedSHA256, beforeHash))
-	}
-	text, ending, hadBOM := normalizeText(data)
-
-	var result *edit.Result
-	replacements := 0
-	switch plan.mode {
-	case "lines":
-		result, replacements, err = edit.ApplyLineRangeReplacement(text, plan.startLine, plan.endLine, plan.newText, splitLines)
-	case "batch_strings":
-		result, replacements, err = edit.ApplyBatchTextChanges(text, toEditChanges(plan.changes))
-	default:
-		result, replacements, err = edit.ApplyStringReplacements(text, toEditOperations(plan.ops))
-	}
-	if err != nil {
-		return EditResult{}, err
-	}
-
-	updated := result.Content
-	encoded := encodeText(updated, ending, hadBOM)
-	after := encoded
-	if text != updated {
-		if err := sandboxedWriteFile(spec, roots, path, encoded, modeOf(path)); err != nil {
-			return EditResult{}, err
-		}
-		after, _, err = readTextFile(path)
-		if err != nil {
-			return EditResult{}, err
-		}
-	}
-
-	diff := edit.GenerateEditDiffPreview(text, updated, maxToolOutput)
-	added := 0
-	removed := 0
-	if diff != "" {
-		added, removed = edit.CountEditDiffStats(diff)
-	} else {
-		added, removed = edit.ApproximateLineDeltaContent(text, updated)
-	}
-	if text == updated {
-		added, removed = 0, 0
-	}
-
-	// Classify the edit
-	classification := "edit"
-	if text == updated {
-		classification = "noop"
-	} else if len(updated) > len(text) {
-		classification = "addition"
-	} else if len(updated) < len(text) {
-		classification = "deletion"
-	}
-
-	changedBlock := edit.BuildLineNumberContextBlock(updated, result.FirstChangedLine, result.LastChangedLine, splitLines)
-	afterHash, afterVersion := hashBytesAndVersion(after)
-
-	return EditResult{
-		Path:              filepath.ToSlash(req.Path),
-		BeforeSHA256:      beforeHash,
-		AfterSHA256:       afterHash,
-		BeforeVersion:     beforeVersion,
-		Version:           afterVersion,
-		BeforeBytes:       len(data),
-		AfterBytes:        len(after),
-		Replacements:      replacements,
-		AddedLines:        added,
-		RemovedLines:      removed,
-		LineEnding:        ending,
-		Summary:           fmt.Sprintf("%s updated: %d -> %d bytes", filepath.ToSlash(req.Path), len(data), len(after)),
-		Diff:              diff,
-		FirstChanged:      result.FirstChangedLine,
-		LastChanged:       result.LastChangedLine,
-		Warnings:          result.Warnings,
-		Classification:    classification,
-		ChangedLinesBlock: changedBlock,
-	}, nil
-}
-
 func validateModelEditToolRequest(files []FileTextEdits) error {
 	if len(files) == 0 {
 		return codedToolError("E_BAD_EDIT", errors.New("edit requires top-level path, version, and changes (exactly one file per call)"))
@@ -319,9 +181,6 @@ func validateModelEditToolRequest(files []FileTextEdits) error {
 			return codedToolError("E_BAD_EDIT", fmt.Errorf("file %d requires a non-empty path", i+1))
 		}
 		if err := validateVersion(file.Version); err != nil {
-			return fmt.Errorf("file %d: %w", i+1, err)
-		}
-		if err := validateModelTextChangeNewText(file.Changes); err != nil {
 			return fmt.Errorf("file %d: %w", i+1, err)
 		}
 		if err := edit.ValidateBatchTextChanges(toEditChanges(file.Changes)); err != nil {
@@ -363,38 +222,6 @@ func validateVersion(version string) error {
 	return read.ValidateVersion(version)
 }
 
-func normalizeEditRequest(req EditRequest) (editPlan, error) {
-	plan, err := edit.NormalizeEditRequest(edit.PlanRequest{
-		Path:         req.Path,
-		OldString:    req.OldString,
-		NewString:    req.NewString,
-		ReplaceAll:   req.ReplaceAll,
-		StartLine:    req.StartLine,
-		EndLine:      req.EndLine,
-		NewText:      req.NewText,
-		Edits:        toEditOperations(req.Edits),
-		BatchChanges: toEditChanges(req.BatchChanges),
-	})
-	if err != nil {
-		return editPlan{}, err
-	}
-	ep := editPlan{mode: planModeString(plan.Mode), newText: plan.NewText, startLine: plan.StartLine, endLine: plan.EndLine}
-	ep.ops = fromEditOperations(plan.Ops)
-	ep.changes = fromEditChanges(plan.Changes)
-	return ep, nil
-}
-
-func planModeString(m edit.PlanMode) string {
-	switch m {
-	case edit.PlanModeBatchStrings:
-		return "batch_strings"
-	case edit.PlanModeLines:
-		return "lines"
-	default:
-		return "strings"
-	}
-}
-
 func toEditChanges(in []TextChange) []edit.TextChange {
 	if len(in) == 0 {
 		return nil
@@ -404,43 +231,9 @@ func toEditChanges(in []TextChange) []edit.TextChange {
 		out[i] = edit.TextChange{
 			OldText:    c.OldText,
 			LineRange:  c.LineRange,
-			NewText:    textChangeNewText(c),
+			NewText:    c.NewText,
 			ReplaceAll: c.ReplaceAll,
 		}
-	}
-	return out
-}
-
-func fromEditChanges(in []edit.TextChange) []TextChange {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]TextChange, len(in))
-	for i, c := range in {
-		newText := c.NewText
-		out[i] = TextChange{OldText: c.OldText, LineRange: c.LineRange, NewText: &newText, ReplaceAll: c.ReplaceAll}
-	}
-	return out
-}
-
-func toEditOperations(in []EditOperation) []edit.EditOperation {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]edit.EditOperation, len(in))
-	for i, o := range in {
-		out[i] = edit.EditOperation{OldString: o.OldString, NewString: o.NewString, ReplaceAll: o.ReplaceAll}
-	}
-	return out
-}
-
-func fromEditOperations(in []edit.EditOperation) []EditOperation {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]EditOperation, len(in))
-	for i, o := range in {
-		out[i] = EditOperation{OldString: o.OldString, NewString: o.NewString, ReplaceAll: o.ReplaceAll}
 	}
 	return out
 }

@@ -291,3 +291,70 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// TestDisclosingPathOperandsSeparatesReadingFromUsing: 判定问的是「这条命令会不会把
+// 这个路径的内容交出来」。两种读取写法（位置参数与输入重定向）必须得到同一结论，
+// 只使用密钥的写法（`ssh -i`、`chmod`、`ls`）不算读，拦了就是挡住正常操作。
+func TestDisclosingPathOperandsSeparatesReadingFromUsing(t *testing.T) {
+	const key = "~/.ssh/id_rsa"
+	// 读：位置参数与输入重定向都要被抓到。回归：输入重定向的目标早年根本没被提取，
+	// 于是 `cat < KEY` 放行而 `cat KEY` 被拦。
+	for _, commandLine := range []string{
+		`cat ~/.ssh/id_rsa`,
+		`cat < ~/.ssh/id_rsa`,
+		`scp ~/.ssh/id_rsa host:`,
+		`grep pattern ~/.ssh/id_rsa`,
+		`bash -c "cat ~/.ssh/id_rsa"`,
+		`echo $(cat ~/.ssh/id_rsa)`,
+	} {
+		operands := DisclosingPathOperands(commandLine)
+		if !slices.Contains(operands, key) {
+			t.Fatalf("%q must name the credential store as content, got %#v", commandLine, operands)
+		}
+	}
+
+	// 用：命令没有把文件内容交出来的模式，操作数只是名字、模式，或者要拿去用的凭证。
+	for _, commandLine := range []string{
+		`ssh -i ~/.ssh/id_rsa host`,
+		`chmod 600 ~/.ssh/id_rsa`,
+		`ls ~/.ssh`,
+	} {
+		for _, operand := range DisclosingPathOperands(commandLine) {
+			if strings.Contains(operand, ".ssh") {
+				t.Fatalf("%q only uses the key, got operand %q", commandLine, operand)
+			}
+		}
+	}
+
+	// A benign command names nothing of the sort: the fence has nothing to judge.
+	for _, commandLine := range []string{`cat README.md`, `cat < README.md`, `echo hi > out.txt`, `bash -c "echo hi"`} {
+		for _, operand := range DisclosingPathOperands(commandLine) {
+			if strings.Contains(operand, ".ssh") {
+				t.Fatalf("%q must not look like a credential read, got %q", commandLine, operand)
+			}
+		}
+	}
+}
+
+// TestRedirectionTargetsSplitReadAndWrite: 写侧那份喂给「工作区外写入」判定，因此
+// `<` 只能进读侧。混在一起会让 `cat < /etc/hosts`（读工作区外文件，允许）变成一次
+// 越界写入而被拦。
+func TestRedirectionTargetsSplitReadAndWrite(t *testing.T) {
+	commandLine := `cat < in.txt > out.txt`
+	if got := ShellRedirectionTargets(commandLine); !slices.Equal(got, []string{"out.txt"}) {
+		t.Fatalf("write targets = %#v, want [out.txt]", got)
+	}
+	if got := ShellInputRedirectionTargets(commandLine); !slices.Equal(got, []string{"in.txt"}) {
+		t.Fatalf("input targets = %#v, want [in.txt]", got)
+	}
+
+	// 内联内容（heredoc）与文件描述符复制都不是外部路径。
+	heredoc := "cat <<EOF\nbody\nEOF"
+	for _, inline := range []string{heredoc, `cat <&0`, `wc < /dev/null`} {
+		for _, operand := range ShellInputRedirectionTargets(inline) {
+			if strings.Contains(operand, "body") || strings.Contains(operand, "&") {
+				t.Fatalf("ShellInputRedirectionTargets(%q) = %#v", inline, operand)
+			}
+		}
+	}
+}

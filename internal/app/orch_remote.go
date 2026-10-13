@@ -1604,13 +1604,7 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 			return EditResult{}, err
 		}
 	}
-	diff := edit.GenerateEditDiffPreview(text, result.Content, maxToolOutput)
-	added, removed := 0, 0
-	if diff != "" {
-		added, removed = edit.CountEditDiffStats(diff)
-	} else {
-		added, removed = edit.ApproximateLineDeltaContent(text, result.Content)
-	}
+	diff, removed, added := edit.GenerateEditDiffPreviewWithCounts(text, result.Content, maxToolOutput)
 	classification := "edit"
 	if noop {
 		classification = "noop"
@@ -1637,7 +1631,7 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 		LastChanged:       result.LastChangedLine,
 		Warnings:          result.Warnings,
 		Classification:    classification,
-		ChangedLinesBlock: edit.BuildLineNumberContextBlock(result.Content, result.FirstChangedLine, result.LastChangedLine, splitLines),
+		ChangedLinesBlock: edit.BuildLineNumberContextBlockBounded(result.Content, result.FirstChangedLine, result.LastChangedLine),
 	}, nil
 }
 

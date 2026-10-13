@@ -1114,20 +1114,64 @@ func TestGrepFilesSearchResults(t *testing.T) {
 			}
 		}},
 		{name: "explicit path overrides broad exclusions", files: map[string]string{
-			"vendor/pkg/source.go": "needle\n",
+			"dist/pkg/source.go": "needle\n",
 		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
-			got, err := search(GrepRequest{Pattern: "needle", OutputMode: grep.OutputModeLines, Path: "vendor"})
+			got, err := search(GrepRequest{Pattern: "needle", OutputMode: grep.OutputModeLines, Path: "dist"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got.MatchedLines != 1 || got.Hits != 1 || got.Files != 1 {
 				t.Fatalf("explicit path must override broad-search exclusions, got %#v", got)
 			}
-			if len(got.LineHits) != 1 || got.LineHits[0].Path != "vendor/pkg/source.go" {
+			if len(got.LineHits) != 1 || got.LineHits[0].Path != "dist/pkg/source.go" {
 				t.Fatalf("unexpected explicit-path lines result %#v", got.LineHits)
 			}
 			if len(got.Skipped) != 0 {
 				t.Fatalf("explicit path search must not report broad skip policies, got %#v", got.Skipped)
+			}
+		}},
+		{name: "checked-in build output stays searchable, dependency trees do not", files: map[string]string{
+			"src/app.go":          "needle\n",
+			"build/main.go":       "needle\n",
+			"vendor/lib.go":       "needle\n",
+			"target/debug/out.rs": "needle\n",
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			got, err := search(GrepRequest{Pattern: "needle", OutputMode: grep.OutputModeLines})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// build 是可提交的手写内容，仍然搜得到；vendor（依赖树）与 target（产物）不进来。
+			if got.Files != 2 || got.MatchedLines != 2 {
+				t.Fatalf("build stays searchable, vendor and target stay excluded, got %#v", got)
+			}
+		}},
+		{name: "parent path still skips dependency directories", files: map[string]string{
+			"frontend/src/app.js":            "needle\n",
+			"frontend/node_modules/pkg/x.js": "needle\n",
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			got, err := search(GrepRequest{Pattern: "needle", OutputMode: grep.OutputModeLines, Path: "frontend"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.MatchedLines != 1 || got.Files != 1 || len(got.LineHits) != 1 || got.LineHits[0].Path != "frontend/src/app.js" {
+				t.Fatalf("a parent path must still skip dependency directories, got %#v", got)
+			}
+			if len(got.Skipped) == 0 {
+				t.Fatalf("a parent path must report the directory exclusions, got %#v", got.Skipped)
+			}
+		}},
+		{name: "path inside a dependency directory stays searchable", files: map[string]string{
+			"frontend/node_modules/pkg/x.js": "needle\n",
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			got, err := search(GrepRequest{Pattern: "needle", OutputMode: grep.OutputModeLines, Path: "frontend/node_modules/pkg"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.MatchedLines != 1 || len(got.LineHits) != 1 {
+				t.Fatalf("pointing into node_modules must keep it searchable, got %#v", got)
+			}
+			if len(got.Skipped) != 0 {
+				t.Fatalf("pointing into node_modules must not report directory exclusions, got %#v", got.Skipped)
 			}
 		}},
 		{name: "explicit path searches large files", files: map[string]string{
@@ -1749,7 +1793,7 @@ func TestExecuteToolEditValidationFollowsBatchPlan(t *testing.T) {
 	args, err := json.Marshal(FileTextEdits{
 		Path:    "config.json",
 		Version: hashVersion(original),
-		Changes: []TextChange{{OldText: "true", NewText: textPtr("")}},
+		Changes: []TextChange{{OldText: "true", NewText: ""}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1797,7 +1841,7 @@ func TestEditAutoValidationReturnsFailureWithoutUndoingWrite(t *testing.T) {
 	req := FileTextEdits{
 		Path:    "config.json",
 		Version: hashVersion(original),
-		Changes: []TextChange{{OldText: "true", NewText: textPtr("")}},
+		Changes: []TextChange{{OldText: "true", NewText: ""}},
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
@@ -3317,78 +3361,6 @@ func TestBatchReadKeepsMeaningfulReadErrors(t *testing.T) {
 	}
 }
 
-func TestEditUsesExactStringReplacementAndExpectedSHA(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("alpha\nbeta\ngamma\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	app := NewApp()
-	cfg := ConfigState{Workspace: dir}
-
-	read, err := app.readFileWithConfig(cfg, ReadFileRequest{Path: "sample.txt"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(read.Content, "2: beta") {
-		t.Fatalf("expected line-numbered read content, got %q", read.Content)
-	}
-	if read.ContentFormat != "line_numbers" {
-		t.Fatalf("expected line_numbers content format, got %q", read.ContentFormat)
-	}
-
-	result, err := app.editWithConfig(cfg, EditRequest{
-		Path:           "sample.txt",
-		ExpectedSHA256: read.SHA256,
-		OldString:      "beta\n",
-		NewString:      "beta\ninserted one\ninserted two\n",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.AddedLines != 2 || result.RemovedLines != 0 {
-		t.Fatalf("expected +2 -0 stats, got +%d -%d", result.AddedLines, result.RemovedLines)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "alpha\nbeta\ninserted one\ninserted two\ngamma\n"
-	if string(got) != want {
-		t.Fatalf("unexpected file content:\nwant %q\ngot  %q", want, string(got))
-	}
-}
-
-func TestEditAppliesMultipleReplacementsInOneCall(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("alpha\nbeta\ngamma\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	app := NewApp()
-	cfg := ConfigState{Workspace: dir}
-
-	result, err := app.editWithConfig(cfg, EditRequest{
-		Path: "sample.txt",
-		Edits: []EditOperation{
-			{OldString: "alpha", NewString: "ALPHA"},
-			{OldString: "gamma", NewString: "GAMMA"},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Replacements != 2 {
-		t.Fatalf("expected two replacements, got %d", result.Replacements)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "ALPHA\nbeta\nGAMMA\n"
-	if string(got) != want {
-		t.Fatalf("unexpected file content:\nwant %q\ngot  %q", want, string(got))
-	}
-}
-
 func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\ngamma\n")
@@ -3652,8 +3624,8 @@ func TestExecuteToolEditRollsBackEarlierFilesWhenCommitFails(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: dir}
 	files := []FileTextEdits{
-		{Path: "a.txt", Version: hashVersion(a), Changes: []TextChange{{OldText: "alpha", NewText: textPtr("ALPHA")}}},
-		{Path: "sub/b.txt", Version: hashVersion(b), Changes: []TextChange{{OldText: "beta", NewText: textPtr("BETA")}}},
+		{Path: "a.txt", Version: hashVersion(a), Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}}},
+		{Path: "sub/b.txt", Version: hashVersion(b), Changes: []TextChange{{OldText: "beta", NewText: "BETA"}}},
 	}
 	_, err := app.editFilesWithConfig(cfg, files)
 	if err == nil {
@@ -3858,185 +3830,6 @@ func TestExecuteToolEditRejectsOverlappingChangesInBatch(t *testing.T) {
 	}
 	if string(got) != string(original) {
 		t.Fatalf("overlapping edit must be all-or-nothing, got %q", string(got))
-	}
-}
-
-func TestEditLineRangeDeletesWholeLines(t *testing.T) {
-	dir := t.TempDir()
-	original := "alpha\nbeta\ngamma\ndelta\n"
-	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte(original), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	app := NewApp()
-	cfg := ConfigState{Workspace: dir}
-	newText := ""
-
-	result, err := app.editWithConfig(cfg, EditRequest{
-		Path:      "sample.txt",
-		StartLine: 2,
-		EndLine:   3,
-		NewText:   &newText,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.RemovedLines == 0 {
-		t.Fatalf("expected deletion stats, got %#v", result)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "alpha\ndelta\n" {
-		t.Fatalf("expected whole lines to be deleted without blank lines, got %q", string(got))
-	}
-}
-
-func TestEditRejectsMixedLineAndExactForms(t *testing.T) {
-	app := NewApp()
-	newText := "ALPHA"
-	_, err := app.editWithConfig(ConfigState{Workspace: t.TempDir()}, EditRequest{
-		Path:      "sample.txt",
-		OldString: "alpha",
-		NewString: "ALPHA",
-		StartLine: 1,
-		NewText:   &newText,
-	})
-	if err == nil || !strings.Contains(err.Error(), "[E_BAD_EDIT]") {
-		t.Fatalf("expected mixed edit form validation error, got %v", err)
-	}
-}
-
-func TestEditLineRangeRequiresExplicitNewText(t *testing.T) {
-	app := NewApp()
-	_, err := app.editWithConfig(ConfigState{Workspace: t.TempDir()}, EditRequest{
-		Path:      "sample.txt",
-		StartLine: 1,
-	})
-	if err == nil || !strings.Contains(err.Error(), "requires \"newText\"") {
-		t.Fatalf("expected missing newText validation error, got %v", err)
-	}
-}
-
-func TestEditMultipleReplacementsAreAllOrNothingOnFailure(t *testing.T) {
-	dir := t.TempDir()
-	original := "alpha\nbeta\ngamma\n"
-	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte(original), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	app := NewApp()
-	cfg := ConfigState{Workspace: dir}
-
-	_, err := app.editWithConfig(cfg, EditRequest{
-		Path: "sample.txt",
-		Edits: []EditOperation{
-			{OldString: "alpha", NewString: "ALPHA"},
-			{OldString: "missing", NewString: "MISSING"},
-		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "edit 2/2 failed") || !strings.Contains(err.Error(), "[E_NO_MATCH]") {
-		t.Fatalf("expected second edit no-match error, got %v", err)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != original {
-		t.Fatalf("expected failed multi-edit to leave file unchanged:\nwant %q\ngot  %q", original, string(got))
-	}
-}
-
-func TestEditLargeFileReturnsLocalizedDiff(t *testing.T) {
-	dir := t.TempDir()
-	var original strings.Builder
-	for i := 1; i <= 600; i++ {
-		original.WriteString(fmt.Sprintf("line-%04d\n", i))
-	}
-	if err := os.WriteFile(filepath.Join(dir, "large.txt"), []byte(original.String()), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	app := NewApp()
-	cfg := ConfigState{Workspace: dir}
-	read, err := app.readFileWithConfig(cfg, ReadFileRequest{Path: "large.txt", StartLine: 300, LineCount: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := app.editWithConfig(cfg, EditRequest{
-		Path:           "large.txt",
-		ExpectedSHA256: read.SHA256,
-		OldString:      "line-0300",
-		NewString:      "line-0300 updated",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(result.Diff, "[diff omitted:") {
-		t.Fatalf("expected localized diff, got omitted marker:\n%s", result.Diff)
-	}
-	if !strings.Contains(result.Diff, "@@ -297,7 +297,7 @@") ||
-		!strings.Contains(result.Diff, "-line-0300") ||
-		!strings.Contains(result.Diff, "+line-0300 updated") {
-		t.Fatalf("expected localized hunk around changed line, got:\n%s", result.Diff)
-	}
-	if strings.Contains(result.Diff, "line-0001") || strings.Contains(result.Diff, "line-0600") {
-		t.Fatalf("expected diff to omit distant context, got:\n%s", result.Diff)
-	}
-}
-
-func TestEditRejectsExpectedSHAMismatch(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("alpha\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	app := NewApp()
-	_, err := app.editWithConfig(ConfigState{Workspace: dir}, EditRequest{
-		Path:           "sample.txt",
-		ExpectedSHA256: "not-current",
-		OldString:      "alpha",
-		NewString:      "beta",
-	})
-	if err == nil || !strings.Contains(err.Error(), "[E_VERSION_MISMATCH]") {
-		t.Fatalf("expected version mismatch error, got %v", err)
-	}
-}
-
-func TestEditRejectsAmbiguousStringUnlessReplaceAll(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("foo\nfoo\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	app := NewApp()
-	cfg := ConfigState{Workspace: dir}
-
-	_, err := app.editWithConfig(cfg, EditRequest{
-		Path:      "sample.txt",
-		OldString: "foo",
-		NewString: "bar",
-	})
-	if err == nil || !strings.Contains(err.Error(), "[E_MULTI_MATCH]") {
-		t.Fatalf("expected multi-match error, got %v", err)
-	}
-
-	result, err := app.editWithConfig(cfg, EditRequest{
-		Path:       "sample.txt",
-		OldString:  "foo",
-		NewString:  "bar",
-		ReplaceAll: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Replacements != 2 {
-		t.Fatalf("expected two replacements, got %d", result.Replacements)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "bar\nbar\n" {
-		t.Fatalf("unexpected file content: %q", string(got))
 	}
 }
 
@@ -4515,8 +4308,8 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 	cfg := ConfigState{Workspace: dir}
 	version := hashVersion(original)
 	files := []FileTextEdits{
-		{Path: "sample.txt", Version: version, Changes: []TextChange{{OldText: "alpha", NewText: textPtr("ALPHA")}}},
-		{Path: "./sample.txt", Version: version, Changes: []TextChange{{OldText: "beta", NewText: textPtr("BETA")}}},
+		{Path: "sample.txt", Version: version, Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}}},
+		{Path: "./sample.txt", Version: version, Changes: []TextChange{{OldText: "beta", NewText: "BETA"}}},
 	}
 
 	plan, err := planLocalEditBatch(cfg, files, localEditPlanForExecution)
@@ -4529,7 +4322,7 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 
 	// Model-facing calls are flat and single-file. The executor and the
 	// conflict detector must still agree on the same plan boundary.
-	args, err := json.Marshal(FileTextEdits{Path: "sample.txt", Version: version, Changes: []TextChange{{OldText: "alpha", NewText: textPtr("ALPHA")}, {OldText: "beta", NewText: textPtr("BETA")}}})
+	args, err := json.Marshal(FileTextEdits{Path: "sample.txt", Version: version, Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}, {OldText: "beta", NewText: "BETA"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

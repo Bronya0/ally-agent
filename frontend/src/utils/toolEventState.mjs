@@ -97,7 +97,8 @@ export function findToolEventByData(session, data = {}) {
  * The status vocabulary: canonical state -> every raw string that means it.
  *
  * The backend and older code have sprinkled in aliases — sub-agent records use
- * `completed`/`failed`, streaming uses `info`, plan items use `done`/
+ * `completed`/`failed` (and `timed_out` when a budget-exhausted run never produced
+ * a report), streaming uses `info`, plan items use `done`/
  * `in_progress`. Declaring them as data (rather than a chain of tests) makes an
  * alias a single row, and lets every consumer that needs its own per-state
  * artifact index the canonical state instead of re-testing the aliases
@@ -105,7 +106,7 @@ export function findToolEventByData(session, data = {}) {
  */
 const STATUS_STATES = {
   success: ['success', 'done', 'completed'],
-  error: ['error', 'failed'],
+  error: ['error', 'failed', 'timed_out'],
   running: ['running', 'in_progress', 'info'],
 };
 

@@ -820,13 +820,12 @@ func workspacePathIndexIgnoredDirs() []string {
 }
 
 // workspaceMapIgnoredDirs 是 Workspace Map 的 rg 排除目录列表：在共享重目录之外追加
-// 8 条生态特有项，防止依赖库吃光 320 条配额。其中 go/pkg/mod、packages/*/dist、
-// *.egg-info 是路径/通配写法，只有 rg 认得；另外 5 条（site-packages、bower_components、
-// .pnpm-store、jars、lib64）是普通目录名，walkdir 那侧表达得了但当前没加——所以两条路
-// 仍差这 8 条，详见 isWorkspaceMapHeavyDir。
+// 5 条地图特有的生态项，防止依赖库吃光 320 条配额。其中 go/pkg/mod、packages/*/dist、
+// *.egg-info 是路径/通配写法，只有 rg 认得；另外 2 条（.pnpm-store、jars）是普通目录名，
+// walkdir 那侧表达得了但当前没加，所以两条路仍差这 5 条，详见 isWorkspaceMapHeavyDir。
 func workspaceMapIgnoredDirs() []string {
 	dirs := grep.ExcludedDirs()
-	return append(dirs, "site-packages", "bower_components", ".pnpm-store", "go/pkg/mod", "jars", "lib64", "packages/*/dist", "*.egg-info")
+	return append(dirs, ".pnpm-store", "go/pkg/mod", "jars", "packages/*/dist", "*.egg-info")
 }
 
 func buildWorkspaceMapContext(root string) string {
@@ -1316,7 +1315,7 @@ func isVCSDirName(name string) bool {
 // 派生。名字里的 WorkspaceMap 是历史遗留：路径索引的 walkdir 回退也在用它。
 //
 // 它只认共享清单里的纯目录名，所以与 rg 那条路并不完全一致：workspaceMapIgnoredDirs
-// 追加的那 8 条在这里都拦不住（3 条是路径/通配写法，walkdir 表达不了；5 条只是没加）。
+// 追加的那 5 条在这里都拦不住（3 条是路径/通配写法，walkdir 表达不了；2 条只是没加）。
 func isWorkspaceMapHeavyDir(name string) bool {
 	return heavyDirNames[strings.ToLower(name)]
 }

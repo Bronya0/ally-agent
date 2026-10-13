@@ -452,13 +452,63 @@ func TestBaseArgsBoundsRipgrepResourcesAndHonorsExplicitPath(t *testing.T) {
 	if !strings.Contains(workspaceArgs, "--threads") {
 		t.Fatalf("workspace grep must cap ripgrep threads: %s", workspaceArgs)
 	}
-	if !strings.Contains(workspaceArgs, "--max-filesize 10M") || !strings.Contains(workspaceArgs, "!vendor/**") {
+	if !strings.Contains(workspaceArgs, "--max-filesize 10M") || !strings.Contains(workspaceArgs, "!node_modules/**") {
 		t.Fatalf("workspace grep must retain broad-search bounds: %s", workspaceArgs)
 	}
+	// build 刻意不排除：它经常是随仓库提交的手写内容。依赖树与产物目录要排除：
+	// 清单里缺了这些名字，真实工程里照样会被整棵搜，地图的配额也会被吃光。
+	if strings.Contains(workspaceArgs, "!build/**") {
+		t.Fatalf("build must stay searchable (it is often checked-in content): %s", workspaceArgs)
+	}
+	for _, dir := range []string{"target", "vendor", "Pods", "Carthage", "bower_components", "site-packages", "_build", "lib64"} {
+		if !strings.Contains(workspaceArgs, "!"+dir+"/**") {
+			t.Fatalf("directory %s must be excluded: %s", dir, workspaceArgs)
+		}
+	}
 
-	explicitArgs := strings.Join(baseArgs(Request{Path: "vendor"}, 20), " ")
-	if strings.Contains(explicitArgs, "--max-filesize") || strings.Contains(explicitArgs, "!vendor/**") {
-		t.Fatalf("explicit path must bypass broad exclusions: %s", explicitArgs)
+	// 指进依赖目录里面：宽泛排除让位；大文件放宽仍按「有没有指名目标」单独判，
+	// 所以两条断言的输入是同一个请求。
+	insideArgs := strings.Join(baseArgs(Request{Path: "node_modules", PathInsideExcludedDir: true}, 20), " ")
+	if strings.Contains(insideArgs, "--max-filesize") || strings.Contains(insideArgs, "!node_modules/**") {
+		t.Fatalf("pointing into an excluded directory must bypass broad exclusions: %s", insideArgs)
+	}
+
+	// 指父目录不算指进依赖目录：排除照旧生效，否则父目录下嵌套的 node_modules
+	// 会被整棵搜一遍。
+	parentArgs := strings.Join(baseArgs(Request{Path: "frontend"}, 20), " ")
+	if !strings.Contains(parentArgs, "!node_modules/**") {
+		t.Fatalf("a parent directory must keep the broad exclusions: %s", parentArgs)
+	}
+}
+
+func TestPointIntoExcludedDir(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "proj")
+	outside := filepath.Join(t.TempDir(), "other")
+	distNamed := filepath.Join(t.TempDir(), "dist", "proj")
+
+	cases := []struct {
+		name   string
+		root   string
+		search string
+		want   bool
+	}{
+		{name: "工作区根本身", root: workspace, search: workspace},
+		{name: "普通父目录", root: workspace, search: filepath.Join(workspace, "frontend")},
+		{name: "子目录里的普通目录", root: workspace, search: filepath.Join(workspace, "src", "internal")},
+		{name: "依赖目录本身", root: workspace, search: filepath.Join(workspace, "node_modules"), want: true},
+		{name: "依赖目录之下", root: workspace, search: filepath.Join(workspace, "frontend", "node_modules", "pkg"), want: true},
+		{name: "venv 之下", root: workspace, search: filepath.Join(workspace, "svc", ".venv", "lib"), want: true},
+		{name: "组件名大小写不一致", root: workspace, search: filepath.Join(workspace, "Node_Modules"), want: true},
+		{name: "工作区自己叫 dist", root: distNamed, search: filepath.Join(distNamed, "src")},
+		{name: "工作区外只认叶子名", root: workspace, search: filepath.Join(outside, "node_modules", "pkg")},
+		{name: "工作区外的依赖目录本身", root: workspace, search: filepath.Join(outside, "node_modules"), want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PointIntoExcludedDir(tc.root, tc.search); got != tc.want {
+				t.Fatalf("PointIntoExcludedDir(%q, %q) = %v, want %v", tc.root, tc.search, got, tc.want)
+			}
+		})
 	}
 }
 

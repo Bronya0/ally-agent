@@ -321,7 +321,10 @@ func sensitivePlatformEntries() []sensitivePath {
 // allySecretFileNames are the files in Ally's own data directory that hold
 // secrets. The directory is judged file by file on purpose: memories/ and the
 // user profile sit in the same directory and are exactly what the model is
-// supposed to read.
+// supposed to read, so a directory-wide entry would have to exempt them again.
+// The price of a name list is that a wildcard (`cat ~/.ally_agent/*`) names no
+// file on it; the fence refuses the listed files, not the directory. The profile
+// file name lives in app.userProfileFileName and must never be on this list.
 var allySecretFileNames = []string{"config.json", "api.json", "mcp.json", "ssh_clusters.json"}
 
 // SensitiveReadReason reports whether p is a credential store the model must not

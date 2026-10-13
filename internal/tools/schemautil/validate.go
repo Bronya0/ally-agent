@@ -63,6 +63,9 @@ func DescribeViolations(violations []Violation) string {
 //     an explicit null, so tolerance is not lost for models that spray nulls at
 //     optional fields.
 //   - A keyword the built-in declarations never use is ignored, never rejected.
+//     The composite keywords (`oneOf`/`anyOf`/`allOf`/`not`) fall under this on
+//     purpose: declarations must stay flat because some gateways refuse to carry
+//     them, so no built-in tool declares one and there is nothing here to enforce.
 func ValidateArgs(schema map[string]any, args []byte) []Violation {
 	if schema == nil {
 		return nil
@@ -110,20 +113,6 @@ func CheckPatterns(schema map[string]any) error {
 			return err
 		}
 	}
-	if notSchema, ok := schemaMap(schema["not"]); ok {
-		if err := CheckPatterns(notSchema); err != nil {
-			return err
-		}
-	}
-	for _, keyword := range []string{"anyOf", "oneOf", "allOf"} {
-		if variants, ok := schemaSchemas(schema[keyword]); ok {
-			for _, variant := range variants {
-				if err := CheckPatterns(variant); err != nil {
-					return err
-				}
-			}
-		}
-	}
 	return nil
 }
 
@@ -150,9 +139,9 @@ func (c *checker) check(value any, schema map[string]any, path string) {
 		return
 	}
 	// The concrete checks (a missing parameter, an unknown property, a string that
-	// is too short) run before the summarizing ones (const/enum, the composite
-	// keywords). Whoever reads only the first violation — closestAttempt does —
-	// gets something to act on instead of a verdict about the whole shape.
+	// is too short) run before the summarizing ones (const/enum), so a caller that
+	// reads only the first violation gets something to act on instead of a verdict
+	// about the whole value.
 	switch typed := value.(type) {
 	case map[string]any:
 		c.checkObject(typed, schema, path)
@@ -169,139 +158,6 @@ func (c *checker) check(value any, schema map[string]any, path string) {
 	if values, ok := schemaValues(schema["enum"]); ok && !containsValue(values, value) {
 		c.add(path, "must be one of %s, got %s", renderValues(values), renderValue(value))
 	}
-	if variants, ok := schemaSchemas(schema["allOf"]); ok {
-		for _, variant := range variants {
-			c.check(value, variant, path)
-		}
-	}
-	if variants, ok := schemaSchemas(schema["anyOf"]); ok {
-		c.checkShapes(value, variants, path, false)
-	}
-	if variants, ok := schemaSchemas(schema["oneOf"]); ok {
-		c.checkShapes(value, variants, path, true)
-	}
-	if notSchema, ok := schemaMap(schema["not"]); ok && c.matches(value, notSchema) {
-		if keys, ok := schemaStrings(notSchema["required"]); ok && len(keys) > 0 {
-			c.add(path, "must not be combined with %s", renderValues(stringsToValues(keys)))
-		} else {
-			c.add(path, "this value is not allowed here")
-		}
-	}
-}
-
-func (c *checker) matches(value any, schema map[string]any) bool {
-	probe := &checker{}
-	probe.check(value, schema, "")
-	return len(probe.violations) == 0
-}
-
-// shapeProbe summarizes how a value fares against a list of alternative shapes:
-// how many of them matched, the violations of the closest one, and the required
-// keys of the matched ones (used to explain an overlap).
-type shapeProbe struct {
-	matched int
-	// anchored holds the violations of a failed branch that pins a discriminator
-	// (`const`/single-value `enum`) on a field the value carries — the branch the
-	// call was clearly aiming at. closest is the fewest-violations fallback used
-	// when no branch is anchored.
-	anchored   []Violation
-	closest    []Violation
-	matchedReq [][]string
-}
-
-func (c *checker) checkShapes(value any, variants []map[string]any, path string, exactlyOne bool) {
-	probe := shapeProbe{}
-	for _, variant := range variants {
-		sub := &checker{}
-		sub.check(value, variant, "")
-		if len(sub.violations) == 0 {
-			probe.matched++
-			if keys, ok := schemaStrings(variant["required"]); ok && len(keys) > 0 {
-				probe.matchedReq = append(probe.matchedReq, keys)
-			}
-			continue
-		}
-		if anchorsValue(variant, value) && (probe.anchored == nil || len(sub.violations) < len(probe.anchored)) {
-			probe.anchored = sub.violations
-		}
-		if probe.closest == nil || len(sub.violations) < len(probe.closest) {
-			probe.closest = sub.violations
-		}
-	}
-	if !exactlyOne {
-		if probe.matched == 0 {
-			c.add(path, "must match at least one allowed shape; closest attempt: %s", closestAttempt(probe))
-		}
-		return
-	}
-	switch {
-	case probe.matched == 1:
-		return
-	case probe.matched == 0:
-		c.add(path, "must match exactly one allowed shape; closest attempt: %s", closestAttempt(probe))
-	default:
-		c.add(path, "must match exactly one allowed shape, but %d matched%s", probe.matched, matchedKeysHint(probe))
-	}
-}
-
-// closestAttempt explains a failed oneOf/anyOf with the most relevant branch: an
-// anchored branch first (the one whose discriminator matches the value), then the
-// fewest-violations branch as a fallback. Counting violations alone pointed the
-// model at an unrelated branch — {"action":"create","name":"n"}, which is only
-// missing schedule, was answered with `action: must be "list"` because the list
-// branch happened to be one violation short, so the model would have switched to
-// the wrong action.
-func closestAttempt(probe shapeProbe) string {
-	if len(probe.anchored) > 0 {
-		return probe.anchored[0].Error()
-	}
-	if len(probe.closest) == 0 {
-		return "no allowed shape applies"
-	}
-	return probe.closest[0].Error()
-}
-
-// anchorsValue reports whether a branch is the one this value was aiming at: the
-// branch pins a discriminator (`const`, or a single-value `enum`) on a field the
-// value carries with that same value.
-func anchorsValue(variant map[string]any, value any) bool {
-	object, ok := value.(map[string]any)
-	if !ok {
-		return false
-	}
-	properties, ok := schemaMap(variant["properties"])
-	if !ok {
-		return false
-	}
-	for key, raw := range properties {
-		property, ok := schemaMap(raw)
-		if !ok {
-			continue
-		}
-		if constValue, ok := property["const"]; ok {
-			if actual, present := object[key]; present && valueEquals(constValue, actual) {
-				return true
-			}
-			continue
-		}
-		if values, ok := schemaValues(property["enum"]); ok && len(values) == 1 {
-			if actual, present := object[key]; present && valueEquals(values[0], actual) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func matchedKeysHint(probe shapeProbe) string {
-	if len(probe.matchedReq) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(probe.matchedReq))
-	for _, keys := range probe.matchedReq {
-		parts = append(parts, strings.Join(keys, "+"))
-	}
-	return " (also satisfied the shape requiring " + strings.Join(parts, " and ") + ")"
 }
 
 func (c *checker) checkObject(object map[string]any, schema map[string]any, path string) {
@@ -429,22 +285,6 @@ func sortedKeys(object map[string]any) []string {
 func schemaMap(raw any) (map[string]any, bool) {
 	object, ok := raw.(map[string]any)
 	return object, ok
-}
-
-func schemaSchemas(raw any) ([]map[string]any, bool) {
-	items, ok := raw.([]any)
-	if !ok {
-		return nil, false
-	}
-	schemas := make([]map[string]any, 0, len(items))
-	for _, item := range items {
-		schema, ok := item.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		schemas = append(schemas, schema)
-	}
-	return schemas, true
 }
 
 // schemaStrings reads a keyword whose value is a list of names (`required`).

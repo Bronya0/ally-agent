@@ -47,11 +47,9 @@ type readRangeRequest struct {
 }
 
 const (
-	maxReadRangeLines          = toolshared.MaxReadRangeLines
-	maxReadLineChars           = toolshared.MaxReadLineChars
-	changedLineMaxOutputLines  = 12
-	changedLineTextBudgetBytes = 50 * 1024
-	maxReportedTruncatedLines  = 256
+	maxReadRangeLines         = toolshared.MaxReadRangeLines
+	maxReadLineChars          = toolshared.MaxReadLineChars
+	maxReportedTruncatedLines = 256
 )
 
 type readPreviewResult struct {

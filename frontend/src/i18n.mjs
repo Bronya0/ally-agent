@@ -1092,6 +1092,7 @@ const zh = {
   'app.tools.promotedToService': '已超时，转为后台服务运行',
   'welcome.gitBash': 'Bash',
   'subagent.budget': '{current}/{limit} 步',
+  'subagent.context': '上下文 {tokens}',
   // ── 插件（详细设计见 docs/plugin-system.md） ──
   // 一级菜单（插件分组）图标上的小点：组内有页面正在显示。
   'app.mode.groupActive': '分组内有当前页面',
@@ -1941,6 +1942,7 @@ Response language: Preserve the response language already used in the current co
   'app.tools.promotedToService': 'Timed out — promoted to background service',
   'welcome.gitBash': 'Bash',
   'subagent.budget': '{current}/{limit} steps',
+  'subagent.context': 'Context {tokens}',
   'app.mode.groupActive': 'group contains the active page',
   'app.mode.plugins': 'Plugins',
   'plugins.title': 'Plugins',

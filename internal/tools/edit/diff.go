@@ -9,6 +9,7 @@ package edit
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -76,14 +77,18 @@ func ComputeChangedLineRange(original, result string) ChangedLineRange {
 }
 
 const (
-	maxReadRangeLines          = 10000
-	changedLineContextLines    = 2
 	changedLineMaxOutputLines  = 12
 	changedLineTextBudgetBytes = 50 * 1024
 
-	editDiffLCSLineProductLimit = 250000
-	editDiffContextLines        = 3
-	editDiffTruncatedLineLimit  = 80
+	// editDiffChangedLineLimit bounds how many really changed lines a window may
+	// hold and still be diffed line by line. The bound is the change size, not the
+	// span length: a 700-line span holding two small edits is cheap to diff
+	// exactly, while a span whose lines mostly differ is not. Bounding the span
+	// length instead sent the cheap case down the sampling path, where pairing old
+	// and new lines by position reported a shifted edit as dozens of fake -/+ pairs.
+	editDiffChangedLineLimit   = 1000
+	editDiffContextLines       = 3
+	editDiffTruncatedLineLimit = 80
 	// unchangedRunFoldThreshold：span 内连续相同行超过该数量时折叠为一行
 	// “… N unchanged lines …”，避免把大段未变化的行标成删除+添加。
 	unchangedRunFoldThreshold = 4
@@ -103,14 +108,24 @@ const (
 	editDiffWindowMaxBytes = 512 * 1024
 )
 
+// GenerateEditDiffPreview renders the unified-diff preview of one edit.
 func GenerateEditDiffPreview(oldContent, newContent string, maxBytes int) string {
+	diff, _, _ := GenerateEditDiffPreviewWithCounts(oldContent, newContent, maxBytes)
+	return diff
+}
+
+// GenerateEditDiffPreviewWithCounts renders that preview and reports how many lines
+// the edit removed and added. The numbers come from the same span the preview was
+// built from, and from one multiset difference: the preview folds and truncates large
+// spans, so tallying the lines it shows would count only what happened to fit.
+func GenerateEditDiffPreviewWithCounts(oldContent, newContent string, maxBytes int) (string, int, int) {
 	if oldContent == newContent {
-		return ""
+		return "", 0, 0
 	}
 	oldLines := contentLinesForDiff(oldContent)
 	newLines := contentLinesForDiff(newContent)
 	if len(oldLines) == 0 && len(newLines) == 0 {
-		return ""
+		return "", 0, 0
 	}
 
 	// 先定位变更跨度（公共前后缀相同行），只对窗口做 diff：
@@ -118,7 +133,7 @@ func GenerateEditDiffPreview(oldContent, newContent string, maxBytes int) string
 	// 保证大文件的耗时与内存都有界。
 	oldChangeStart, oldChangeEnd, newChangeStart, newChangeEnd, ok := changedLineSpans(oldLines, newLines)
 	if !ok {
-		return ""
+		return "", 0, 0
 	}
 
 	oldStart := maxInt(0, oldChangeStart-editDiffContextLines)
@@ -126,17 +141,23 @@ func GenerateEditDiffPreview(oldContent, newContent string, maxBytes int) string
 	newStart := maxInt(0, newChangeStart-editDiffContextLines)
 	newEnd := minInt(len(newLines), newChangeEnd+editDiffContextLines)
 
-	// 窗口行数乘积和窗口文本字节都受限时才用 go-diff（Myers 字符级），
-	// 否则走线性截断路径，保证大文件/超长行的耗时与内存都有界。
+	// 真实变更量（multiset 差，O(n+m)）和窗口文本字节都受限时才用 go-diff（Myers
+	// 行级），否则走采样路径，保证耗时与内存有界。变更量算一次：判据、采样行上的
+	// 统计与调用方拿到的统计共用同一个数。
+	removedLines := oldLines[oldChangeStart:oldChangeEnd]
+	addedLines := newLines[newChangeStart:newChangeEnd]
+	spanRemoved, spanAdded := changedLineCounts(removedLines, addedLines)
 	var body []string
 	windowBytes := windowTextBytes(oldLines[oldStart:oldEnd], newLines[newStart:newEnd])
-	if (oldEnd-oldStart)*(newEnd-newStart) <= editDiffLCSLineProductLimit && windowBytes <= editDiffWindowMaxBytes {
-		body = diffWindowToBody(oldLines[oldStart:oldEnd], newLines[newStart:newEnd], oldStart+1, newStart+1)
+	if spanRemoved+spanAdded <= editDiffChangedLineLimit && windowBytes <= editDiffWindowMaxBytes {
+		body = diffWindowToBody(oldLines[oldStart:oldEnd], newLines[newStart:newEnd])
 	} else {
-		body = generateTruncatedEditDiffHunkBody(oldLines, newLines, oldStart, oldChangeStart, oldChangeEnd, oldEnd, newStart, newChangeStart, newChangeEnd, newEnd)
+		body = generateTruncatedEditDiffHunkBody(
+			oldLines[oldStart:oldChangeStart], removedLines, addedLines, newLines[newChangeEnd:newEnd], spanRemoved, spanAdded,
+		)
 	}
 	diff := formatUnifiedDiffHunk(oldStart+1, oldEnd-oldStart, newStart+1, newEnd-newStart, body)
-	return truncateDiffText(diff, maxBytes)
+	return truncateDiffText(diff, maxBytes), spanRemoved, spanAdded
 }
 
 // windowTextBytes 返回两个窗口按行拼成文本后的总字节数（含行间换行）。
@@ -306,7 +327,7 @@ func tailLinesOf(text string, n int) []string {
 // DiffLinesToChars 把每一行编码成一个字符，再对编码串做 Myers diff——
 // 得到的 Equal/Delete/Insert 段都是完整行，不会把一行拆成多个字符片段
 // （直接对原文 DiffMain 是字符级 diff，true→false 会碎成 -tru/+ fals/e）。
-func diffWindowToBody(oldWindow, newWindow []string, oldStart, newStart int) []string {
+func diffWindowToBody(oldWindow, newWindow []string) []string {
 	dmp := diffmatchpatch.New()
 	oldText := strings.Join(oldWindow, "\n") + "\n"
 	newText := strings.Join(newWindow, "\n") + "\n"
@@ -314,17 +335,18 @@ func diffWindowToBody(oldWindow, newWindow []string, oldStart, newStart int) []s
 	diffs := dmp.DiffMain(chars1, chars2, false)
 	// v1.4.0 的 DiffCharsToLines 返回新切片（不是就地修改），必须接收返回值。
 	diffs = dmp.DiffCharsToLines(diffs, lineArray)
-	return diffsToBody(diffs, oldStart, newStart)
+	return diffsToBody(diffs)
 }
 
 // diffsToBody 把 go-diff 的 Diff 序列转成 unified diff body 行：
 //   - Equal 段：行数超过 unchangedRunFoldThreshold 折叠为一行
-//     “ … N unchanged lines …”，否则逐行输出 context；行号按行数前进。
+//     “ … N unchanged lines …”，否则逐行输出 context。
 //   - Delete/Insert 对：逐行配对做行内 diff（超长行裁剪），剩余单边行单独
-//     输出；行号按各自行数前进。
-func diffsToBody(diffs []diffmatchpatch.Diff, oldStart, newStart int) []string {
+//     输出。
+//
+// 行号不在本体里维护：起点由 hunk 头给出，前端按 +/- 前缀自行推进。
+func diffsToBody(diffs []diffmatchpatch.Diff) []string {
 	body := make([]string, 0, len(diffs)*2+8)
-	oldLine, newLine := oldStart, newStart
 	i := 0
 	for i < len(diffs) {
 		d := diffs[i]
@@ -346,8 +368,6 @@ func diffsToBody(diffs []diffmatchpatch.Diff, oldStart, newStart int) []string {
 					body = append(body, clipLongLine(" "+l))
 				}
 			}
-			oldLine += n
-			newLine += n
 			i++
 		case diffmatchpatch.DiffDelete:
 			dels := splitDiffTextLines(d.Text)
@@ -371,14 +391,11 @@ func diffsToBody(diffs []diffmatchpatch.Diff, oldStart, newStart int) []string {
 			for _, l := range adds[n:] {
 				body = append(body, clipLongLine("+"+l))
 			}
-			oldLine += len(dels)
-			newLine += len(adds)
 		case diffmatchpatch.DiffInsert:
 			lines := splitDiffTextLines(d.Text)
 			for _, l := range lines {
 				body = append(body, clipLongLine("+"+l))
 			}
-			newLine += len(lines)
 			i++
 		}
 	}
@@ -420,93 +437,44 @@ func formatUnifiedDiffHunk(oldStart, oldCount, newStart, newCount int, body []st
 	return strings.Join(lines, "\n")
 }
 
-func generateTruncatedEditDiffHunkBody(oldLines, newLines []string, oldStart, oldChangeStart, oldChangeEnd, oldEnd, newStart, newChangeStart, newChangeEnd, newEnd int) []string {
-	body := make([]string, 0, editDiffTruncatedLineLimit*2+editDiffContextLines*2+2)
-	// 变更区之前的头部上下文（旧行）。
-	for _, line := range oldLines[oldStart:oldChangeStart] {
+// generateTruncatedEditDiffHunkBody renders the preview for a change span whose
+// real change size passed editDiffChangedLineLimit. It does not pair old and new
+// lines by position: an insertion or deletion inside the span shifts every later
+// line, so positional pairing turns a long run of untouched lines into a wall of
+// fake -/+ pairs whose count means nothing. It states the span's true size
+// instead, and samples both sides: honest, much shorter, and independent of how
+// much of the change fits in the preview. The counts it states are the ones the
+// caller already computed for its branch decision, not a second tally of the same
+// span.
+func generateTruncatedEditDiffHunkBody(headContext, removed, added, tailContext []string, spanRemoved, spanAdded int) []string {
+	body := make([]string, 0, editDiffTruncatedLineLimit*2+len(headContext)+len(tailContext)+1)
+	for _, line := range headContext {
 		body = append(body, clipLongLine(" "+line))
 	}
 
-	removed := oldLines[oldChangeStart:oldChangeEnd]
-	added := newLines[newChangeStart:newChangeEnd]
-	// 真实删除/添加数用 multiset 差统计：span 内可能夹着大量未变化的行，
-	// 不能拿 span 长度当变化量。
-	spanRemoved, spanAdded := lineSetDeltaCounts(removed, added)
+	body = append(body, fmt.Sprintf("[span: %d removed, %d added; the lines below sample both sides, they are not a line-by-line diff]", spanRemoved, spanAdded))
+	body = append(body, sampleDiffSide("-", removed)...)
+	body = append(body, sampleDiffSide("+", added)...)
 
-	// 折叠式扫描：相同行 run 折叠为一行省略号（以 context 行输出，行号连续，
-	// 前端解析与 split 对齐都不受影响）；变化行成对输出 -/+。避免多簇分散
-	// 变更时把 span 内大段未变化的行整体标成删除+添加。
-	i, j := 0, 0
-	shownRemoved, shownAdded := 0, 0
-	runStartI := 0
-	inRun := false
-	flushRun := func() {
-		if !inRun {
-			return
-		}
-		n := i - runStartI
-		if n > unchangedRunFoldThreshold+2*editDiffContextLines {
-			for k := runStartI; k < runStartI+editDiffContextLines; k++ {
-				body = append(body, clipLongLine(" "+removed[k]))
-			}
-			body = append(body, fmt.Sprintf(" … %d unchanged lines …", n-2*editDiffContextLines))
-			for k := i - editDiffContextLines; k < i; k++ {
-				body = append(body, clipLongLine(" "+removed[k]))
-			}
-		} else {
-			for k := runStartI; k < i; k++ {
-				body = append(body, clipLongLine(" "+removed[k]))
-			}
-		}
-		inRun = false
-	}
-	for i < len(removed) && j < len(added) {
-		if removed[i] == added[j] {
-			if !inRun {
-				runStartI = i
-				inRun = true
-			}
-			i++
-			j++
-			continue
-		}
-		flushRun()
-		if shownRemoved < editDiffTruncatedLineLimit {
-			body = append(body, clipLongLine("-"+removed[i]))
-			shownRemoved++
-		}
-		if shownAdded < editDiffTruncatedLineLimit {
-			body = append(body, clipLongLine("+"+added[j]))
-			shownAdded++
-		}
-		i++
-		j++
-	}
-	flushRun()
-	// 插入/删除不对称时的剩余行。
-	for ; i < len(removed); i++ {
-		if shownRemoved < editDiffTruncatedLineLimit {
-			body = append(body, clipLongLine("-"+removed[i]))
-			shownRemoved++
-		}
-	}
-	for ; j < len(added); j++ {
-		if shownAdded < editDiffTruncatedLineLimit {
-			body = append(body, clipLongLine("+"+added[j]))
-			shownAdded++
-		}
-	}
-
-	// 有未显示的变化行时打标记（用真实统计，而非 span 长度）。
-	if shownRemoved < spanRemoved || shownAdded < spanAdded {
-		body = append(body, fmt.Sprintf(" [diff truncated: %d removed and %d added lines in span]", spanRemoved, spanAdded))
-	}
-
-	// 变更区之后的尾部上下文（新行）。
-	for _, line := range newLines[newChangeEnd:newEnd] {
+	for _, line := range tailContext {
 		body = append(body, clipLongLine(" "+line))
 	}
 	return body
+}
+
+// sampleDiffSide renders up to editDiffTruncatedLineLimit lines from one side of a
+// truncated span. It is a sample, not the whole change: the "[span: ...]" line
+// carries the real totals.
+func sampleDiffSide(prefix string, lines []string) []string {
+	shown := len(lines)
+	if shown > editDiffTruncatedLineLimit {
+		shown = editDiffTruncatedLineLimit
+	}
+	out := make([]string, 0, shown)
+	for _, line := range lines[:shown] {
+		out = append(out, clipLongLine(prefix+line))
+	}
+	return out
 }
 
 func truncateDiffText(diff string, maxBytes int) string {
@@ -561,6 +529,17 @@ func lineSetDeltaCounts(oldLines, newLines []string) (removed, added int) {
 		} else if delta < 0 {
 			added += -delta
 		}
+	}
+	return removed, added
+}
+
+// changedLineCounts is the multiset difference over one change span, plus the one
+// fallback it needs: a span that only reorders repeated lines cancels out
+// completely, and 0/0 there would claim nothing changed.
+func changedLineCounts(oldLines, newLines []string) (removed, added int) {
+	removed, added = lineSetDeltaCounts(oldLines, newLines)
+	if removed == 0 && added == 0 && !slices.Equal(oldLines, newLines) {
+		return len(oldLines), len(newLines)
 	}
 	return removed, added
 }

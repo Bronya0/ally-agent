@@ -96,7 +96,8 @@ func TestResolveReadStartLine(t *testing.T) {
 	}
 	// Mixing the forms must fail on a complaint about tailLines: the preview's own
 	// wording ("negative startLine ...") names a value the model never sent, and
-	// the schema's oneOf is advisory only, so a stray combination does reach here.
+	// the declaration leaves the two forms independent, so a stray combination
+	// does reach here.
 	for _, tc := range []struct{ startLine, endLine int }{{5, 0}, {0, 20}} {
 		_, err := resolveReadStartLine(tc.startLine, tc.endLine, 200)
 		if err == nil {

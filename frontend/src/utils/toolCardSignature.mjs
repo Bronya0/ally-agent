@@ -84,6 +84,12 @@ export function toolCardRenderSignature(msg) {
     msg.description,
     msg.summary,
     msg.steps,
+    // 子代理卡的 token 徽标：上下文取最近一轮、输入/输出是累加值，四个数都会自己变，
+    // 漏掉任一条 v-memo 会把徽标冻在旧数字上。
+    msg.contextTokens || 0,
+    msg.inputTokens || 0,
+    msg.outputTokens || 0,
+    msg.totalTokens || 0,
     len(msg.filesRead),
     len(msg.filesEdited),
     msg.editFilePath || '',

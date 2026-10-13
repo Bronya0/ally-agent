@@ -63,7 +63,7 @@ func TestToolWritesRefuseVCSMetadata(t *testing.T) {
 	res = app.executeTool(ctx, cfg, "s-1", "edit", encodedToolArgs(t, FileTextEdits{
 		Path:    ".git/config",
 		Version: hashVersion([]byte("[core]\n")),
-		Changes: []TextChange{{OldText: "[core]", NewText: textPtr("[core]\n\thooksPath = /tmp/evil")}},
+		Changes: []TextChange{{OldText: "[core]", NewText: "[core]\n\thooksPath = /tmp/evil"}},
 	}))
 	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
 		t.Fatalf("edit inside .git must be refused, got ok=%v err=%v", res.OK, res.Error)
@@ -211,7 +211,7 @@ func TestEditRefusesSymlinkedDirectoryEscape(t *testing.T) {
 	res := app.executeTool(t.Context(), cfg, "s-1", "edit", encodedToolArgs(t, FileTextEdits{
 		Path:    "link/authorized_keys",
 		Version: hashVersion([]byte("original\n")),
-		Changes: []TextChange{{OldText: "original", NewText: textPtr("owned")}},
+		Changes: []TextChange{{OldText: "original", NewText: "owned"}},
 	}))
 	if res.OK {
 		t.Fatalf("edit through a symlinked directory must be refused, got %+v", res.Data)
@@ -413,5 +413,86 @@ func TestDeleteRefusesAllyDataSubtreeThroughSymlink(t *testing.T) {
 	}
 	if _, err := os.Stat(sessionDir); err != nil {
 		t.Fatalf("the data directory must survive: %v", err)
+	}
+}
+
+// TestCommandFenceRefusesEverySpellingOfACredentialRead pins that the fence asks
+// "does this command hand back the credential path?" rather than "how does this
+// command name it". Regression: input redirection targets were never extracted,
+// so `cat < ~/.ssh/id_rsa` passed while `cat ~/.ssh/id_rsa` was refused.
+func TestCommandFenceRefusesEverySpellingOfACredentialRead(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	workspace := t.TempDir()
+	roots := []string{workspace}
+
+	for _, commandLine := range []string{
+		"cat ~/.ssh/id_rsa",
+		"cat < ~/.ssh/id_rsa",
+		"grep -f ~/.ssh/id_rsa README.md",
+	} {
+		err := checkCommandSafetyAtCwd(CommandRequest{Command: commandLine, Cwd: workspace}, roots, workspace)
+		if code := toolErrorCode(err); code != "E_PROTECTED_PATH" {
+			t.Fatalf("%q: got code %q (err %v), want E_PROTECTED_PATH", commandLine, code, err)
+		}
+	}
+
+	// 只使用密钥的写法必须放行：命令本身没有把密钥内容交出来的模式，拦了只会挡住
+	// ssh 登录、给密钥改权限这类正常操作。
+	for _, commandLine := range []string{
+		"ssh -i ~/.ssh/id_rsa host",
+		"chmod 600 ~/.ssh/id_rsa",
+		"ls ~/.ssh",
+	} {
+		if err := checkCommandSafetyAtCwd(CommandRequest{Command: commandLine, Cwd: workspace}, roots, workspace); err != nil {
+			t.Fatalf("%q only uses the key and must pass the fence: %v", commandLine, err)
+		}
+	}
+
+	// Reading a workspace file, including through an input redirection, stays
+	// allowed: the input-target extractor must not feed the outside-write check.
+	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat < README.md", Cwd: workspace}, roots, workspace); err != nil {
+		t.Fatalf("a workspace read must pass the fence: %v", err)
+	}
+}
+
+// TestCommandFenceRefusesTheDataDirectorySecrets: Ally 自己的数据目录按文件名保护，
+// 只挡凭据文件本身。记忆文件与用户档案是模型本来就要读的，必须放行。
+//
+// 这里如实钉住文件级判据的已知边界：通配符写法（`cat ~/.ally_agent/*`）没有点到清单上
+// 的任何文件名，所以围栏放行。要改成目录级拦截就得把记忆与档案单独豁免，那是另一个取舍。
+func TestCommandFenceRefusesTheDataDirectorySecrets(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	workspace := t.TempDir()
+	roots := []string{workspace}
+
+	for _, commandLine := range []string{
+		"cat ~/.ally_agent/config.json",
+		"cat ~/.ally_agent/mcp.json",
+		"grep -n . ~/.ally_agent/ssh_clusters.json",
+	} {
+		err := checkCommandSafetyAtCwd(CommandRequest{Command: commandLine, Cwd: workspace}, roots, workspace)
+		if code := toolErrorCode(err); code != "E_PROTECTED_PATH" {
+			t.Fatalf("%q: got code %q (err %v), want E_PROTECTED_PATH", commandLine, code, err)
+		}
+	}
+
+	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat ~/.ally_agent/memories/note.md", Cwd: workspace}, roots, workspace); err != nil {
+		t.Fatalf("the memory files are meant to be read: %v", err)
+	}
+
+	// 档案文件名在 app 里，凭据清单在 pathutil 里：清单一旦误收这个名字，模型读自己
+	// 那份档案就会被围栏拒掉，这里是把两边钉在一起的地方。
+	profile := "\"" + userProfilePath() + "\""
+	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat " + profile, Cwd: workspace}, roots, workspace); err != nil {
+		t.Fatalf("the user profile is meant to be read: %v", err)
+	}
+
+	// 文件级判据的已知边界：通配符指到目录本身，没点到清单上的名字。
+	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat ~/.ally_agent/*", Cwd: workspace}, roots, workspace); err != nil {
+		t.Fatalf("a wildcard names no listed file, so the file-level rule lets it through: %v", err)
 	}
 }

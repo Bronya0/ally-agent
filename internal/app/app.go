@@ -1338,44 +1338,22 @@ type EditResult struct {
 	Validation string `json:"validation,omitempty"`
 }
 
-// EditRequest is the backend edit engine request. The model-facing edit tool
-// uses batched all-or-nothing changes; legacy fields remain for Wails/backend compatibility.
-type EditRequest struct {
-	Path           string          `json:"path"`
-	ExpectedSHA256 string          `json:"expectedSha256,omitempty"`
-	Version        string          `json:"version,omitempty"`
-	OldString      string          `json:"oldString,omitempty"`
-	NewString      string          `json:"newString,omitempty"`
-	ReplaceAll     bool            `json:"replaceAll,omitempty"`
-	StartLine      int             `json:"startLine,omitempty"`
-	EndLine        int             `json:"endLine,omitempty"`
-	NewText        *string         `json:"newText,omitempty"`
-	Edits          []EditOperation `json:"edits,omitempty"`
-	BatchChanges   []TextChange    `json:"-"`
-}
-
-type EditOperation struct {
-	OldString  string `json:"oldString"`
-	NewString  string `json:"newString"`
-	ReplaceAll bool   `json:"replaceAll,omitempty"`
-}
-
 type FileTextEdits struct {
 	Path    string       `json:"path"`
 	Version string       `json:"version"`
 	Changes []TextChange `json:"changes"`
 }
 
-// TextChange is one model-facing replacement. NewText is a pointer on purpose:
-// the edit engine's own change type keeps a plain string, where "" legitimately
-// means "delete this text", so an absent key would decode to the same value and
-// silently delete content. The pointer keeps "absent" distinguishable and
-// validateModelTextChangeNewText rejects it at the wire boundary.
+// TextChange is one model-facing replacement. newText is a plain string, and the
+// declaration marks it required: an empty string legitimately means "delete this
+// text", so an omitted key would otherwise decode to the same value and delete
+// content without a word. The argument gate enforces the declaration before the
+// edit handler runs (see TestEditRejectsChangeWithoutNewText).
 type TextChange struct {
-	OldText    string  `json:"oldText,omitempty"`
-	LineRange  string  `json:"lineRange,omitempty"`
-	NewText    *string `json:"newText"`
-	ReplaceAll bool    `json:"replaceAll,omitempty"`
+	OldText    string `json:"oldText,omitempty"`
+	LineRange  string `json:"lineRange,omitempty"`
+	NewText    string `json:"newText"`
+	ReplaceAll bool   `json:"replaceAll,omitempty"`
 }
 
 type MultiEditResult struct {
@@ -1388,15 +1366,6 @@ type MultiEditResult struct {
 	Summary      string       `json:"summary"`
 	Diff         string       `json:"diff,omitempty"`
 	Validation   string       `json:"validation,omitempty"`
-}
-
-type editPlan struct {
-	mode      string
-	ops       []EditOperation
-	changes   []TextChange
-	startLine int
-	endLine   int
-	newText   string
 }
 
 type SkillDefinition struct {
@@ -1558,6 +1527,10 @@ type SubagentRun struct {
 	InputTokens  int            `json:"inputTokens,omitempty"`
 	OutputTokens int            `json:"outputTokens,omitempty"`
 	TotalTokens  int            `json:"totalTokens,omitempty"`
+	// ContextTokens is the prompt-token count of the latest model turn: how big
+	// this sub-agent's context is right now. InputTokens sums every step and so
+	// cannot answer that.
+	ContextTokens int `json:"contextTokens,omitempty"`
 }
 
 // SubToolEvent records a single tool invocation inside a sub-agent.
@@ -2676,10 +2649,9 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 		// Schema gate: validate the repaired payload so the stringified-array
 		// repair above still lands, and so every keyword the declaration uses
-		// (required, ranges, patterns, enum, oneOf/anyOf/not, unknown keys at any
-		// depth) is enforced exactly as written. Unknown keys used to be
-		// downgraded to a warning, which let a typo execute on a default the
-		// model never asked for.
+		// (required, ranges, patterns, enum, const, unknown keys at any depth) is
+		// enforced exactly as written. Unknown keys used to be downgraded to a
+		// warning, which let a typo execute on a default the model never asked for.
 		if schema, ok := toolshared.BuiltinSchema(name); ok {
 			if violations := schemautil.ValidateArgs(schema, cur); len(violations) > 0 {
 				return codedToolError("E_BAD_ARGS", fmt.Errorf("invalid arguments for %s: %s", name, schemautil.DescribeViolations(violations))), nil

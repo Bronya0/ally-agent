@@ -177,16 +177,28 @@ func firstVCSMetadataMutationTarget(commandLine string, workingDir string) *outs
 // credential store, with the reason to show (empty path means none did).
 //
 // Reads are the point here, so it cannot reuse the write-target helpers:
-// `cat ~/.ssh/id_rsa` mutates nothing and is exactly what has to be refused.
-// The judgement is lexical — the operand has to resolve to a literal path — and
-// it follows a symlink when one resolves, so a clean-looking name inside the
+// `cat ~/.ssh/id_rsa` mutates nothing and is exactly what has to be refused. The
+// judgement is lexical (the operand has to resolve to a literal path) and it
+// follows a symlink when one resolves, so a clean-looking name inside the
 // workspace cannot hide a key. Operands that only *use* a key (`ssh -i KEY`,
 // `chmod 600 KEY`, `ls`) never reach this loop: the command package leaves them
-// out, because using a key is not reading it.
+// out, because using a key is not reading it. Redirection targets do reach it,
+// including the input direction: `cat < KEY` hands the key back just as
+// `cat KEY` does.
 func firstSensitiveReadTarget(commandLine, workingDir string) (string, string) {
 	for _, operand := range command.DisclosingPathOperands(commandLine) {
 		path, ok := command.ResolveCommandLiteralPath(operand, workingDir)
 		if !ok {
+			// A glob does not resolve as a literal path, but its literal prefix
+			// still names where the command reads from: `cat ~/.ssh/*` reads the
+			// same directory as `cat ~/.ssh/id_rsa`.
+			prefix, prefixOK := command.LiteralGlobPrefix(operand, workingDir)
+			if !prefixOK {
+				continue
+			}
+			if blocked, reason := blockedSensitiveRead(prefix); blocked {
+				return filepath.ToSlash(prefix), reason
+			}
 			continue
 		}
 		if blocked, reason := blockedSensitiveRead(path); blocked {

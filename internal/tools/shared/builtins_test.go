@@ -346,16 +346,6 @@ func TestWireSchemasDeclareObjectShape(t *testing.T) {
 		} else {
 			walk(t, path+".items", object["items"])
 		}
-		for _, keyword := range []string{"oneOf", "anyOf", "allOf"} {
-			variants, ok := object[keyword].([]any)
-			if !ok {
-				continue
-			}
-			for index, child := range variants {
-				walk(t, fmt.Sprintf("%s.%s[%d]", path, keyword, index), child)
-			}
-		}
-		walk(t, path+".not", object["not"])
 		walk(t, path+".additionalProperties", object["additionalProperties"])
 	}
 

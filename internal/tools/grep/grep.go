@@ -116,6 +116,10 @@ type Request struct {
 	// distinct matching files. Pass the previous result's NextOffset here to
 	// page through large sets.
 	Offset int `json:"offset,omitempty"`
+	// PathInsideExcludedDir 由编排层填：解析后的搜索根自己就是 ExcludedDirs 里的
+	// 目录，或位于其中某个之下，也就是调用方明确要进依赖/产物目录里搜。只有这种
+	// 明确指向才让宽泛排除让位。json:"-" 保证模型传不进来。
+	PathInsideExcludedDir bool `json:"-"`
 }
 
 // LineFileMatch groups matching lines for one file. The path is emitted
@@ -325,30 +329,6 @@ func DisplayPathForRoot(root, p string) string {
 	return filepath.ToSlash(rel)
 }
 
-// GlobPatternToRegex converts a glob pattern (with * and ** and ?) into a
-// regex source string suitable for regexp.Compile. Single * matches anything
-// except /, ** matches anything including /.
-func GlobPatternToRegex(pattern string) string {
-	var b strings.Builder
-	for i := 0; i < len(pattern); i++ {
-		ch := pattern[i]
-		switch ch {
-		case '*':
-			if i+1 < len(pattern) && pattern[i+1] == '*' {
-				b.WriteString(".*")
-				i++
-			} else {
-				b.WriteString(`[^/]*`)
-			}
-		case '?':
-			b.WriteString(`[^/]`)
-		default:
-			b.WriteString(regexpQuoteMeta(string(ch)))
-		}
-	}
-	return b.String()
-}
-
 // limits returns the effective maxDepth/maxMatches for req, applying defaults
 // and clamping to upper bounds. There is no separate file cap: every sampled
 // file group consumes at least one line of the maxMatches budget, so the group
@@ -422,7 +402,10 @@ func baseArgs(req Request, maxDepth int) []string {
 	if req.IncludeIgnored {
 		args = append(args, "--no-ignore")
 	}
-	if strings.TrimSpace(req.Path) == "" {
+	// 依赖/产物目录的排除与上面的「大文件放宽」是两件事，判据也不同：这里问的是
+	// 「调用方是不是指进了这些目录里面」（指进 node_modules/lodash 放行，指父目录
+	// frontend 不放行），大文件放宽问的仍是「有没有指名目标」。
+	if !req.PathInsideExcludedDir {
 		args = append(args, excludedGlobArgs...)
 	}
 	// Windows reserved filenames (nul, con, prn, aux, com1-9, lpt1-9) cause
@@ -448,14 +431,18 @@ func grepThreads() int {
 }
 
 func searchSkipNotices(req Request) []string {
-	if strings.TrimSpace(req.Path) != "" {
-		return []string{}
+	skipped := []string{}
+	if strings.TrimSpace(req.Path) == "" {
+		// 这两条描述的是整棵工作区搜索的策略，指名目标的搜索不适用。
+		skipped = append(skipped, "files_over_10MB")
+		if !req.IncludeIgnored {
+			skipped = append(skipped, "ignored_by_ignore_files")
+		}
 	}
-	skipped := []string{"files_over_10MB"}
-	if !req.IncludeIgnored {
-		skipped = append(skipped, "ignored_by_ignore_files")
+	// 目录排除按实际有没有生效来报：指进依赖目录里面时它没生效，就不能说跳过了。
+	if !req.PathInsideExcludedDir {
+		skipped = append(skipped, "directories:"+strings.Join(ExcludedDirs(), ","))
 	}
-	skipped = append(skipped, "directories:"+strings.Join(ExcludedDirs(), ","))
 	return skipped
 }
 
@@ -917,24 +904,33 @@ func sanitizeLineText(s string) string {
 	return string([]rune(s)[:maxGrepLineTextChars]) + "…"
 }
 
-// ExcludedDirs 返回「枚举文件时一律跳过」的目录名：依赖目录与构建/缓存产物。
-// 内容搜索、工作区路径索引、工作区地图共用这一份，各消费方可以再追加自己的
-// 生态补充（见 app.workspaceMapIgnoredDirs）。返回的是新建切片，调用方 append
-// 不会串改。
+// ExcludedDirs 返回「内容搜索时一律跳过」的目录名：无歧义的环境目录、依赖树与工具缓存。
 //
-// 文件浏览器（app.isHeavyDir）刻意不使用这份清单：它必须让用户看到这些目录。
+// vendor 收：它是一整棵依赖树（Go / PHP 工程动辄上千文件），留着会让内容搜索、工作区
+// 地图与路径索引（这两处也由本清单派生）把配额让给依赖源码；真要搜进去时指名路径即可
+// 让排除让位（见 PointIntoExcludedDir）。build 刻意不收：这个名字在真实项目里经常是
+// 随仓库提交的手写内容（构建脚本、Dockerfile），一律排除等于静默漏搜。文件浏览器
+// （app.isHeavyDir）不使用这份清单：它必须让用户看到这些目录。
+//
+// 以点开头的条目对内容搜索是冗余的（rg 默认不进点目录）。
+// 返回的是新建切片，调用方 append 不会串改。
 func ExcludedDirs() []string {
 	return []string{
 		".git",
 		"node_modules",
+		"vendor",
 		"dist",
-		"build",
 		"target",
+		"bower_components",
+		"site-packages",
+		"Pods",
+		"Carthage",
+		"_build",
+		"lib64",
 		".gradle",
 		".next",
 		".nuxt",
 		".svelte-kit",
-		"vendor",
 		"__pycache__",
 		".venv",
 		"venv",
@@ -947,6 +943,47 @@ func ExcludedDirs() []string {
 		".parcel-cache",
 		".vite",
 	}
+}
+
+// excludedDirNameSet 是 ExcludedDirs 的小写集合，供逐组件比对用。清单本身仍然只有
+// ExcludedDirs 一处，这里只是它的派生索引。
+var excludedDirNameSet = func() map[string]struct{} {
+	set := make(map[string]struct{})
+	for _, dir := range ExcludedDirs() {
+		set[strings.ToLower(dir)] = struct{}{}
+	}
+	return set
+}()
+
+// PointIntoExcludedDir 判断调用方是不是把搜索根指进了依赖/产物目录里面：搜索根
+// 自己就是清单里的目录，或者位于其中某个之下。只有这种明确指向才让宽泛排除让位；
+// 指到父目录（"." 或 "frontend"）不算，那下面的 node_modules 照旧跳过。
+//
+// 工作区内按「相对工作区根的路径组件」比对，这样工作区自己叫 dist/build/vendor
+// 时也不会把排除全部关掉。工作区外没有可比的根，只认最后一级目录名。
+func PointIntoExcludedDir(workspaceRoot, searchRoot string) bool {
+	rel, err := filepath.Rel(workspaceRoot, searchRoot)
+	if err != nil {
+		return excludedDirName(filepath.Base(searchRoot))
+	}
+	rel = strings.TrimSpace(rel)
+	if rel == "" || rel == "." {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return excludedDirName(filepath.Base(searchRoot))
+	}
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if excludedDirName(part) {
+			return true
+		}
+	}
+	return false
+}
+
+func excludedDirName(name string) bool {
+	_, ok := excludedDirNameSet[strings.ToLower(name)]
+	return ok
 }
 
 // limitedBuffer is a mutex-protected byte buffer that silently truncates
@@ -982,19 +1019,4 @@ func (b *limitedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
-}
-
-// regexpQuoteMeta isolates the regexp import so the package does not need to
-// import regexp just for GlobPatternToRegex. The implementation mirrors
-// regexp.QuoteMeta.
-func regexpQuoteMeta(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch r {
-		case '\\', '.', '+', '*', '?', '(', ')', '|', '[', ']', '{', '}', '^', '$':
-			b.WriteByte('\\')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }

@@ -20,7 +20,8 @@ Public License v3. See the LICENSE file for details.
       <span v-else class="tool-name">{{ fallbackLabel }}</span>
       <span class="tool-arg" :title="msg.description">({{ msg.description }})</span>
       <span v-if="msg.maxSteps" class="tool-chip">{{ $t('subagent.budget', { current: msg.steps, limit: msg.maxSteps }) }}</span>
-      <span v-if="msg.totalTokens > 0" class="tool-chip subagent-token-chip" :title="tokenTooltip">{{ tokenChip }}</span>
+      <span v-if="msg.contextTokens > 0" class="tool-chip subagent-stat-chip" :title="tokenTooltip">{{ contextChip }}</span>
+      <span v-if="msg.totalTokens > 0" class="tool-chip subagent-stat-chip" :title="tokenTooltip">{{ tokenChip }}</span>
       <span v-if="displayDuration" class="tool-duration">{{ displayDuration }}</span>
     </div>
     <div v-if="recentTools.length" class="subagent-inline-body">
@@ -116,11 +117,24 @@ const tokenChip = computed(() => {
   return `↑${formatTokens(props.msg?.inputTokens)} ↓${formatTokens(props.msg?.outputTokens)}`;
 });
 
+// 上下文徽标：最近一轮模型调用上报的 prompt tokens，也就是这个子代理当下占多大上下文。
+// 旁边的 ↑/↓ 是每步累加值，看不出当下占用，两者在长任务里能差一个数量级。正文只放一个
+// 最基础的圆点标记（不引几何填充字符，免得字体回退出豆腐块），含义交给悬停提示；服务商
+// 没上报时后端保留上一次的值，这里为 0 就不显示这个徽标。
+const CONTEXT_GLYPH = '●';
+const contextChip = computed(() => {
+  const context = props.msg?.contextTokens || 0;
+  if (context <= 0) return '';
+  return `${CONTEXT_GLYPH} ${formatTokens(context)}`;
+});
+
+// 提示里保留带标签的写法：符号本身不自解释，悬停时给出的仍是完整含义与精确数字。
 const tokenTooltip = computed(() => {
   const input = props.msg?.inputTokens || 0;
   const output = props.msg?.outputTokens || 0;
   const total = props.msg?.totalTokens || 0;
-  return `Input: ${input} · Output: ${output} · Total: ${total}`;
+  const context = props.msg?.contextTokens || 0;
+  return `${t('subagent.context', { tokens: context })} · Input: ${input} · Output: ${output} · Total: ${total}`;
 });
 
 function compactSummary(text) {

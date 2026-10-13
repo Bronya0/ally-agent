@@ -13,29 +13,29 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"golang.org/x/text/unicode/norm"
-
 	toolerrors "ally-dev/internal/tools/shared"
 )
 
-// Unicode normalization fallback for exact-text edits.
+// Character-level fallback for exact-text edits.
 //
-// This file implements a deliberately conservative "fuzzy" matching fallback
-// used only when an exact match fails. It is modeled on pi's edit-diff
-// normalization, tightened to Ally's safety rules:
+// This is the last resort used only when an exact match fails. It normalizes the
+// character differences a copy/paste out of rendered text introduces (smart
+// quotes, Unicode dashes, special spaces) plus trailing whitespace on each line,
+// locates the source with that, and rewrites only the matched bytes:
 //
-//   - Normalization only locates the source; only the matched region is
-//     rewritten (with the model's newText). Every byte outside the matched
-//     region — including other characters on the touched lines — keeps its
-//     original bytes.
 //   - A match is accepted only when it is unique in normalized space.
 //     Normalization maps different characters onto the same one, so ambiguity
-//     is more likely, not less — the uniqueness check errs on the safe side.
-//   - Leading indentation is intentionally NOT normalized here; the existing
-//     indentation-insensitive fallback owns that dimension. This fallback
-//     covers character-level differences: full-width/smart quotes, Unicode
-//     dashes, special spaces, NFKC compatibility forms, and trailing
-//     whitespace.
+//     is more likely, not less -- the uniqueness check errs on the safe side.
+//   - Only the matched region is rewritten. Everything outside it keeps its
+//     original bytes, including the rest of the touched line and the trailing
+//     whitespace the per-line strip removed for comparison.
+//   - The map is character for character (one rune in, one rune out), so a
+//     normalized byte offset always maps back to a rune boundary in the
+//     original text. An earlier NFKC compatibility layer could not promise that,
+//     and the byte arithmetic it needed was the fragile part of this file; what
+//     it bought was full-width and ligature forms, which do not appear in code.
+//   - Leading indentation is deliberately NOT normalized here; the
+//     indentation-insensitive fallback owns that dimension.
 //   - Inputs are expected to be LF-normalized (callers normalize CRLF before
 //     calling); the pure layer does not restore line endings.
 
@@ -46,17 +46,17 @@ const (
 )
 
 // NormalizeForFuzzyMatch normalizes text for comparison:
-//   - NFKC compatibility decomposition (full-width ASCII, ligatures, etc.)
 //   - strips trailing whitespace from every line
 //   - smart/full-width quotes to ASCII quotes
 //   - Unicode dashes/hyphens to ASCII hyphen
 //   - special spaces (NBSP, various narrow spaces, ideographic space) to space
 //
-// Newlines are preserved exactly, so normalized text has the same line count
-// as the input. This is the only place that normalization happens; the result
-// is used both for locating the source block and for rebuilding that block.
+// Newlines are preserved exactly, so normalized text has the same line count as
+// the input, and every rune maps to exactly one rune. That is what lets
+// mapNormOffsetInLine translate an offset back exactly. This is the only place
+// that normalization happens; the result is used both for locating the source
+// block and for rebuilding that block.
 func NormalizeForFuzzyMatch(text string) string {
-	text = norm.NFKC.String(text)
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		lines[i] = strings.TrimRightFunc(line, unicode.IsSpace)
@@ -127,40 +127,33 @@ func fuzzyLocateInNormalized(content, normContent, oldText, newText string, chan
 		return normalizedMatch{}, false, nil
 	}
 
-	// Map the match boundaries back to original byte offsets inside their
-	// lines so that everything outside the match keeps its original bytes.
-	origStartInLine, startOK := mapNormOffsetInLine(
+	// Map the match boundaries back onto original byte offsets inside their lines so
+	// that everything outside the match keeps its original bytes.
+	startInLine, startOK := mapNormOffsetInLine(
 		content[lineStartOffset(content, startLine):lineContentEnd(content, startLine)],
-		normContent[lineStartOffset(normContent, startLine):lineContentEnd(normContent, startLine)],
 		repStart-lineStartOffset(normContent, startLine),
 	)
-	origMatchStart := lineStartOffset(content, startLine) + origStartInLine
+	origMatchStart := lineStartOffset(content, startLine) + startInLine
 
-	var origMatchEnd int
+	origMatchEnd := origBlockEnd
 	endOK := true
-	if endsWithNewline {
-		// The replacement consumes the whole end line including its newline.
-		origMatchEnd = origBlockEnd
-	} else {
-		origEndInLine, ok := mapNormOffsetInLine(
+	if !endsWithNewline {
+		var endInLine int
+		endInLine, endOK = mapNormOffsetInLine(
 			content[lineStartOffset(content, endLine):lineContentEnd(content, endLine)],
-			normContent[lineStartOffset(normContent, endLine):lineContentEnd(normContent, endLine)],
 			repEnd-lineStartOffset(normContent, endLine),
 		)
-		endOK = ok
-		origMatchEnd = lineStartOffset(content, endLine) + origEndInLine
+		origMatchEnd = lineStartOffset(content, endLine) + endInLine
 	}
 
 	if !startOK || !endOK || origMatchStart > origMatchEnd || origMatchEnd > origBlockEnd {
-		// The boundary cannot be mapped exactly back to the original bytes (a
-		// rune's NFKC expansion or composition crosses the match boundary —
-		// extremely rare). Refuse the change: rewriting the whole touched block
-		// from normalized content would silently replace untouched bytes inside
-		// the block, violating the invariant that only the matched region is
-		// modified. E_NO_MATCH makes the caller re-read and retry with a
-		// narrower match instead.
+		// A boundary that does not land on the original bytes. Normalization being
+		// character for character, the mapping is exact and this cannot happen; refusing
+		// keeps it that way instead of splicing at an offset nobody verified. The
+		// alternative, rewriting the whole touched block from normalized content, would
+		// silently replace bytes the model never mentioned.
 		return normalizedMatch{}, false, toolerrors.New("E_NO_MATCH", fmt.Errorf(
-			"change %d normalized match crosses a line boundary that cannot be mapped back to the original bytes; re-read the file and include more surrounding text", changeIndex))
+			"change %d normalized match could not be mapped back onto the original bytes; re-read the file and include more surrounding text", changeIndex))
 	}
 
 	// Splice: original bytes before the match, the new text, then the
@@ -220,46 +213,34 @@ func lineContentEnd(text string, line int) int {
 	return end
 }
 
-// mapNormOffsetInLine maps a byte offset in the normalized form of one line
-// back to a byte offset in the original line. normLine must be
-// NormalizeForFuzzyMatch(origLine). Returns ok=false when the boundary cannot
-// be mapped exactly — for example when NFKC composition crosses the boundary
-// or a rune's expansion contains the boundary — so callers can refuse the
-// change instead of corrupting bytes outside the match.
+// mapNormOffsetInLine maps a byte offset in the normalized form of one line back to
+// a byte offset in the original line, and reports whether it could be placed there.
+// The offset comes from a strings.Index over normalized text, so it lands on a rune
+// boundary.
 //
-// The mapping walks the original line rune by rune, accumulating the
-// normalized byte length of the prefix. Boundary candidates are verified
-// against normLine before acceptance:
-//   - normOff at/after the normalized line end: the match consumes the whole
-//     normalized line (whose trailing whitespace was stripped), so the whole
-//     original line content — trailing whitespace included — is inside the
-//     match region and maps to len(origLine).
-//   - mid-line normOff: normLine keeps all spaces, so the candidate prefix is
-//     compared WITHOUT the per-line trailing-whitespace strip.
+// Normalization is character for character, so the walk is exact: advance one
+// original rune at a time while accumulating the normalized byte length and stop at
+// the boundary whose normalized prefix is normOff bytes long. Reaching the end of the
+// normalized line that way is how a match running to the end of the line maps back to
+// the end of the line's content: the per-line trailing-whitespace strip cut the
+// normalized line short, so whitespace the model never mentioned keeps its bytes.
 //
-// Slicing only ever happens at rune boundaries, so invalid UTF-8 prefixes
-// (which would corrupt NFKC) never occur.
-func mapNormOffsetInLine(origLine, normLine string, normOff int) (int, bool) {
-	if normOff <= 0 {
-		return 0, true
-	}
-	if normOff >= len(normLine) {
-		// The match consumes the entire normalized line; the whole original
-		// line content (including trailing whitespace) is the match region.
-		return len(origLine), true
-	}
+// An offset past that point cannot be placed, and the caller refuses the change rather
+// than splicing at a guessed position.
+func mapNormOffsetInLine(origLine string, normOff int) (int, bool) {
 	normLen := 0
-	i := 0
-	for i < len(origLine) {
-		r, size := utf8.DecodeRuneInString(origLine[i:])
-		normLen += len(strings.Map(normalizeFuzzyRune, norm.NFKC.String(string(r))))
-		i += size
-		if normLen >= normOff {
-			prefix := strings.Map(normalizeFuzzyRune, norm.NFKC.String(origLine[:i]))
-			if prefix == normLine[:normOff] {
-				return i, true
-			}
+	for i := 0; i < len(origLine); {
+		if normLen == normOff {
+			return i, true
 		}
+		r, size := utf8.DecodeRuneInString(origLine[i:])
+		normLen += len(string(normalizeFuzzyRune(r)))
+		i += size
+	}
+	// The walk consumed the line and landed on normOff exactly: the match ran to the
+	// end of the normalized line, so it ends where the original line's bytes end.
+	if normLen == normOff {
+		return len(origLine), true
 	}
 	return 0, false
 }

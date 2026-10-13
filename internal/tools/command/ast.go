@@ -112,15 +112,18 @@ func astNestedInvocations(invocation Invocation, depth int) []Invocation {
 	return nil
 }
 
-func astShellRedirectionTargets(commandLine string) ([]string, bool) {
+// astRedirectionTargets classifies every literal redirection target the shell
+// parser can see: write targets (`>` / `>>` / `&>` / `<>`) and input targets
+// (`<`). File-descriptor duplication (`>&1`, `<&0`) and heredocs are skipped:
+// the first has no path, the second carries its content inline.
+func astRedirectionTargets(commandLine string) (writes, reads []string, ok bool) {
 	file, err := parseShellFile(commandLine)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
-	targets := []string{}
 	syntax.Walk(file, func(node syntax.Node) bool {
 		redirection, ok := node.(*syntax.Redirect)
-		if !ok || redirection.Word == nil || redirection.Hdoc != nil || !isWriteRedirection(redirection.Op) {
+		if !ok || redirection.Word == nil || redirection.Hdoc != nil {
 			return true
 		}
 		// DplOut is file-descriptor duplication (`>&1`/`>&-`), not a file
@@ -132,12 +135,18 @@ func astShellRedirectionTargets(commandLine string) ([]string, bool) {
 		if redirection.Op == syntax.DplOut && IsShellFDRedirectionTarget("&"+target) {
 			return true
 		}
-		if !IsShellFDRedirectionTarget(target) {
-			targets = append(targets, target)
+		if IsShellFDRedirectionTarget(target) {
+			return true
+		}
+		if isWriteRedirection(redirection.Op) {
+			writes = append(writes, target)
+		}
+		if redirection.Op == syntax.RdrIn {
+			reads = append(reads, target)
 		}
 		return true
 	})
-	return targets, true
+	return writes, reads, true
 }
 
 func isWriteRedirection(op syntax.RedirOperator) bool {

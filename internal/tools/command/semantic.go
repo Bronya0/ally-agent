@@ -611,6 +611,18 @@ func stripQuotedContent(value string) string {
 	return result.String()
 }
 
+// LiteralGlobPrefix resolves the longest literal prefix of an operand up to its
+// first glob metacharacter. A command can name a directory through a pattern
+// (`cat ~/.ssh/*`), which is not resolvable as a literal path, and the caller still
+// has to judge where it points.
+func LiteralGlobPrefix(operand, workingDir string) (string, bool) {
+	cut := strings.IndexAny(operand, "*?[")
+	if cut <= 0 {
+		return "", false
+	}
+	return ResolveCommandLiteralPath(operand[:cut], workingDir)
+}
+
 // MutationPathTargets returns explicit operands that an invocation may create
 // or modify. Read-only source operands are deliberately excluded.
 func MutationPathTargets(commandLine string) []string {
@@ -642,7 +654,8 @@ var credentialUseCommands = map[string]bool{
 // consumes as a credential it never prints: `ssh -i KEY host` authenticates with
 // the key while `cat KEY` hands its bytes back. The ssh family has no mode that
 // prints a private key, so such a value is a use of the key, not a read of it.
-// Positional operands stay judged — `scp ~/.ssh/id_rsa host:` sends the key.
+// Positional operands stay judged, so `scp ~/.ssh/id_rsa host:` still names the
+// key as content.
 var credentialUseFlags = map[string][]string{
 	"ssh":         {"-i"},
 	"scp":         {"-i"},
@@ -653,20 +666,24 @@ var credentialUseFlags = map[string][]string{
 
 // DisclosingPathOperands returns the literal path operands whose contents the
 // command could hand back: the positional arguments of each invocation (flags
-// dropped, and with them the values of credential-use flags) plus shell
-// redirection targets. Redirection targets always stay in — writing *into* a
-// credential store is no use of a key, and the caller judges both the same way.
+// dropped, and with them the values of credential-use flags) plus every shell
+// redirection target, in both directions. Redirection targets always stay in,
+// whatever the command is: `cat < KEY` hands the key back exactly like
+// `cat KEY`, and the command that only uses a key has no redirection to name.
 //
 // MutationPathTargets deliberately leaves read-only source operands out, so it
-// cannot answer a question about a path being named at all — `cat ~/.ssh/id_rsa`
-// mutates nothing. This one can, which is what a “can this command read this
-// credential store” check needs.
+// cannot answer a question about a path being named at all: `cat ~/.ssh/id_rsa`
+// mutates nothing. This one can, which is what a "can this command read this
+// credential store" check needs.
 func DisclosingPathOperands(commandLine string) []string {
 	operands := []string{}
 	for _, invocation := range Invocations(commandLine) {
 		operands = append(operands, disclosingOperands(invocation)...)
 	}
-	return append(operands, ShellRedirectionTargets(commandLine)...)
+	// 两侧目标来自同一次分类：写侧剩下的还会喂给「工作区外写入」判定，这里只取读用。
+	writes, reads := redirectionTargets(commandLine)
+	operands = append(operands, writes...)
+	return append(operands, reads...)
 }
 
 // disclosingOperands returns the operands of one invocation whose contents the

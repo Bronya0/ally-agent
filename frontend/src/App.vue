@@ -5437,6 +5437,7 @@ function bindRuntimeEvents() {
         inputTokens: 0,
         outputTokens: 0,
         totalTokens: 0,
+        contextTokens: 0,
       };
       if (existing) Object.assign(existing, payload);
       else session.messages.push(payload);
@@ -5449,6 +5450,9 @@ function bindRuntimeEvents() {
       msg.inputTokens = data.inputTokens || 0;
       msg.outputTokens = data.outputTokens || 0;
       msg.totalTokens = data.totalTokens || 0;
+      // 上下文取最近一轮模型上报的 prompt tokens（输入/输出是每步累加值）。后端没给
+      // 这一项时保留上一次的数，否则徽标会在收尾事件里掉回 0 自己消失。
+      msg.contextTokens = data.contextTokens || msg.contextTokens || 0;
     }
   });
   onRuntimeEvent('sub:tool:start', (data) => {
@@ -5476,6 +5480,10 @@ function bindRuntimeEvents() {
     if (msg) {
       setToolStatus(msg, data.status || 'success');
       msg.summary = data.summary || '';
+      // A run can end without a report (budget exhausted and the model kept
+      // calling tools): the terminal event carries that reason, and without it
+      // the card would show a partial summary as if it were the answer.
+      msg.error = data.error || '';
       msg.filesEdited = data.filesEdited || [];
       msg.steps = data.steps || msg.steps;
       msg.time = new Date().toLocaleTimeString();
@@ -5484,6 +5492,7 @@ function bindRuntimeEvents() {
       msg.inputTokens = data.inputTokens || 0;
       msg.outputTokens = data.outputTokens || 0;
       msg.totalTokens = data.totalTokens || 0;
+      msg.contextTokens = data.contextTokens || msg.contextTokens || 0;
     }
   });
   onRuntimeEvent('sub:error', (data) => {

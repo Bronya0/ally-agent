@@ -10,6 +10,7 @@ package pathutil
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -204,5 +205,41 @@ func TestIsWindowsVolumeRootForms(t *testing.T) {
 func TestIsSystemRootPathEmptyIsNeverRoot(t *testing.T) {
 	if IsSystemRootPath("") || IsSystemRootPath("   ") {
 		t.Fatal("an empty path is never a filesystem root")
+	}
+}
+
+// TestSensitiveReadReasonProtectsTheDataDirectorySecrets: Ally 自己的数据目录里只有
+// 凭据文件被拦，记忆文件与用户档案必须读得到，那是模型本来就要打开的。
+//
+// 目录里其余文件（会话记录、日志、插件内容）不在清单上，所以这里放行：这是文件级判据
+// 的已知边界，收紧它就得改成目录级拦截并单独豁免 memories 与 USER.md。
+func TestSensitiveReadReasonProtectsTheDataDirectorySecrets(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dataDir := filepath.Join(home, ".ally_agent")
+	rt := fakeRuntime{dir: dataDir}
+
+	for _, blocked := range []string{
+		filepath.Join(dataDir, "config.json"),
+		filepath.Join(dataDir, "api.json"),
+		filepath.Join(dataDir, "mcp.json"),
+		filepath.Join(dataDir, "ssh_clusters.json"),
+	} {
+		if ok, reason := SensitiveReadReason(rt, blocked); !ok {
+			t.Fatalf("%s must be refused as a credential store", blocked)
+		} else if strings.TrimSpace(reason) == "" {
+			t.Fatalf("%s must come with a reason to show", blocked)
+		}
+	}
+
+	for _, allowed := range []string{
+		filepath.Join(dataDir, "memories", "note.md"),
+		filepath.Join(dataDir, "USER.md"),
+		filepath.Join(dataDir, "sessions", "s-1", "history.json"),
+	} {
+		if ok, reason := SensitiveReadReason(rt, allowed); ok {
+			t.Fatalf("%s is not on the credential list, got refusal %q", allowed, reason)
+		}
 	}
 }

@@ -26,12 +26,6 @@ type RiskPattern struct {
 	Reason string
 }
 
-// MayModifyOutsidePath reports whether semantic analysis found an explicit
-// path operand that the command may mutate.
-func MayModifyOutsidePath(command string) bool {
-	return len(MutationPathTargets(command)) > 0
-}
-
 // ContainsExplicitDeleteCommand reports whether the command invokes a shell
 // deletion verb (rm, del, remove-item, etc.).
 func ContainsExplicitDeleteCommand(command string) bool {
@@ -80,18 +74,34 @@ func MatchRiskPattern(command string) *RiskPattern {
 }
 
 // ShellRedirectionTargets extracts the literal target paths of `>` / `>>` /
-// `>&` redirections in `command`. File-descriptor redirections (>&2, &-) and
-// the null device are returned as-is; callers filter them with
+// `>&` redirections in `command` (the write side only: reading a path outside the
+// workspace is allowed, writing one is not). File-descriptor redirections (>&2,
+// &-) and the null device are returned as-is; callers filter them with
 // IsShellNullDevice.
 func ShellRedirectionTargets(command string) []string {
-	if targets, ok := astShellRedirectionTargets(command); ok {
-		return targets
-	}
-	return shellRedirectionTargetsLegacy(command)
+	writes, _ := redirectionTargets(command)
+	return writes
 }
 
-func shellRedirectionTargetsLegacy(command string) []string {
-	targets := []string{}
+// ShellInputRedirectionTargets extracts the literal target paths of `<`
+// redirections. Heredocs and here-strings carry their content inline and are
+// skipped, as are file-descriptor duplications (`<&0`). It exists because a
+// credential read can be spelled `cat < KEY` just as well as `cat KEY`, and the
+// write-side extractor must not grow input targets: it feeds the outside-write
+// judgement, where reading is allowed.
+func ShellInputRedirectionTargets(command string) []string {
+	_, reads := redirectionTargets(command)
+	return reads
+}
+
+func redirectionTargets(command string) (writes, reads []string) {
+	if writes, reads, ok := astRedirectionTargets(command); ok {
+		return writes, reads
+	}
+	return legacyRedirectionTargets(command)
+}
+
+func legacyRedirectionTargets(command string) (writes, reads []string) {
 	inSingle := false
 	inDouble := false
 	escaped := false
@@ -125,6 +135,11 @@ func shellRedirectionTargetsLegacy(command string) []string {
 		case '"':
 			inDouble = true
 		case '<':
+			// `<<` is a heredoc and `<<<` a here-string: their content is inline,
+			// so there is no external path. `<&0` duplicates a descriptor, and
+			// `<>file` opens for read and write without printing anything (the
+			// `>` branch skips the `>` of `<>`, so nothing is collected there
+			// either, matching the write-side extractor's behavior).
 			if i+1 < len(command) && command[i+1] == '<' {
 				if end, _, ok := scanHeredoc(command, i); ok {
 					i = end - 1
@@ -136,6 +151,17 @@ func shellRedirectionTargetsLegacy(command string) []string {
 						continue
 					}
 				}
+				continue
+			}
+			if i+1 < len(command) && (command[i+1] == '&' || command[i+1] == '>') {
+				continue
+			}
+			target, end := parseShellRedirectionTarget(command, i+1)
+			if target != "" && !IsShellFDRedirectionTarget(target) {
+				reads = append(reads, target)
+			}
+			if end > i {
+				i = end - 1
 			}
 		case '>':
 			if i > 0 && command[i-1] == '<' {
@@ -150,14 +176,14 @@ func shellRedirectionTargetsLegacy(command string) []string {
 			}
 			target, end := parseShellRedirectionTarget(command, next)
 			if target != "" && !IsShellFDRedirectionTarget(target) {
-				targets = append(targets, target)
+				writes = append(writes, target)
 			}
 			if end > i {
 				i = end - 1
 			}
 		}
 	}
-	return targets
+	return writes, reads
 }
 
 func parseShellRedirectionTarget(command string, start int) (string, int) {

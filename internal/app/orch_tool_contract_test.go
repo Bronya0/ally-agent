@@ -19,12 +19,8 @@ import (
 	toolshared "ally-dev/internal/tools/shared"
 )
 
-// textPtr builds the pointer the model-facing TextChange uses so "newText was
-// left out" stays distinguishable from "newText is an empty string".
-func textPtr(s string) *string { return &s }
-
-// TestEditRejectsChangeWithoutNewText pins the rule the schema declares but the
-// runtime used to miss: a change that omits newText fails instead of quietly
+// TestEditRejectsChangeWithoutNewText pins the rule the declaration states: a
+// change that omits newText fails at the argument gate instead of quietly
 // replacing the matched text with nothing. An explicit empty string is still the
 // documented way to delete, and must keep working.
 func TestEditRejectsChangeWithoutNewText(t *testing.T) {
@@ -41,8 +37,7 @@ func TestEditRejectsChangeWithoutNewText(t *testing.T) {
 	missing := app.executeTool(ctx, cfg, "s-1", "edit",
 		[]byte(fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha"}]}`, hashVersion(original))))
 	// The change schema requires newText, so the argument gate refuses the call
-	// before the edit handler runs; validateModelTextChangeNewText keeps the
-	// same rule for callers that never go through tool arguments.
+	// before the edit handler runs.
 	if missing.OK || missing.ErrorCode != "E_BAD_ARGS" {
 		t.Fatalf("a change without newText must fail, got ok=%v code=%q err=%q", missing.OK, missing.ErrorCode, missing.Error)
 	}

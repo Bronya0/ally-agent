@@ -10,7 +10,6 @@ package scheduler
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestValidateScheduleRejectsAtDescriptors(t *testing.T) {
@@ -49,14 +48,6 @@ func TestValidateScheduleIntervalFloor(t *testing.T) {
 	}
 	if err := ValidateSchedule(ok); err != nil {
 		t.Fatalf("valid interval must pass: %v", err)
-	}
-	base := time.Unix(0, 0).UTC()
-	next, err := NextRunAt(ok, base)
-	if err != nil {
-		t.Fatalf("NextRunAt failed: %v", err)
-	}
-	if !next.After(base) {
-		t.Fatalf("interval must schedule a future run, got %s", next)
 	}
 }
 

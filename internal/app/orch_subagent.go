@@ -175,13 +175,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	for step < budget {
 		select {
 		case <-ctx.Done():
-			a.subRunsMu.Lock()
-			run.Status = "failed"
-			run.Error = "cancelled"
-			run.Steps = step
-			a.subRunsMu.Unlock()
-			a.emit("sub:error", map[string]any{"id": subID, "sessionId": sessionID, "error": "cancelled", "durationMs": time.Now().UnixMilli() - run.StartTime})
-			return &AgentDelegateResult{AgentID: subID, Role: req.Role, Description: desc, Status: "failed", Steps: step, Error: "cancelled"}, ctx.Err()
+			return a.cancelSubagentRun(run, sessionID, desc, model, step), ctx.Err()
 		default:
 		}
 
@@ -244,21 +238,9 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			return &AgentDelegateResult{AgentID: subID, Role: req.Role, Description: desc, Status: "failed", Steps: step, Error: err.Error(), Model: model}, err
 		}
 
-		// Accumulate token usage from the sub-agent's model response
-		if modelResp.Usage != nil {
-			a.subRunsMu.Lock()
-			run.InputTokens += modelResp.Usage.PromptTokens
-			run.OutputTokens += modelResp.Usage.CompletionTokens
-			run.TotalTokens = run.InputTokens + run.OutputTokens
-			a.subRunsMu.Unlock()
-		}
-		fallbackOutput := 0
-		if modelResp.Usage == nil || modelResp.Usage.CompletionTokens <= 0 {
-			fallbackOutput = estimateCompletionTokens(modelResp.Content, modelResp.Reasoning, modelResp.ToolCalls)
-		}
-		// A sub-agent spends the same workspace's tokens: it goes through the single
-		// accounting entry point so the footer and the dashboard agree on the total.
-		a.recordLLMUsage(model, cfg.Workspace, modelResp.Usage, fallbackOutput)
+		// One turn's usage: the run-local totals the inline card shows and the
+		// workspace counters the footer reads are both booked by that single call.
+		a.recordSubagentUsage(run, model, cfg.Workspace, modelResp)
 
 		preparedToolCalls, toolExecutionArgs := prepareToolCallsForExecution(modelResp.ToolCalls)
 		assistantMessage := openai.ChatCompletionMessage{
@@ -283,6 +265,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 				"id": subID, "sessionId": sessionID, "status": "completed", "steps": step,
 				"summary": summary, "filesRead": filesRead, "filesEdited": filesEdited, "durationMs": time.Now().UnixMilli() - run.StartTime,
 				"inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens,
+				"contextTokens": run.ContextTokens,
 			})
 			return &AgentDelegateResult{
 				AgentID: subID, Role: req.Role, Description: desc, Status: "completed",
@@ -461,13 +444,18 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		a.subRunsMu.Lock()
 		run.Steps = step
 		a.subRunsMu.Unlock()
-		a.emit("sub:step", map[string]any{"id": subID, "sessionId": sessionID, "step": step, "inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens})
+		a.emit("sub:step", map[string]any{"id": subID, "sessionId": sessionID, "step": step, "inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens, "contextTokens": run.ContextTokens})
 	}
 
-	// Budget exhausted without the sub-agent finishing on its own. Give it one
-	// final tool-free turn so the parent always receives a usable report instead
-	// of an empty timeout.
-	summary, finalErr := a.forceSubagentFinalReport(ctx, cfg, model, messages, run)
+	// Budget exhausted without the sub-agent finishing on its own. Ask for the
+	// report over the forced-report turns (see forceSubagentFinalReport) so the
+	// parent receives prose instead of a tool call nobody will run.
+	summary, finalErr := a.forceSubagentFinalReport(ctx, cfg, model, messages, tools, run)
+	if errors.Is(finalErr, context.Canceled) || errors.Is(finalErr, context.DeadlineExceeded) {
+		// Cancelled during the report turns: the loop's own cancel check handles
+		// it the same way, so a cancel looks identical wherever it landed.
+		return a.cancelSubagentRun(run, sessionID, desc, model, step), finalErr
+	}
 	status := "completed"
 	errMsg := ""
 	if finalErr != nil {
@@ -484,8 +472,9 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	a.subRunsMu.Unlock()
 	a.emit("sub:done", map[string]any{
 		"id": subID, "sessionId": sessionID, "status": status, "steps": step,
-		"summary": summary, "filesRead": filesRead, "filesEdited": filesEdited, "durationMs": time.Now().UnixMilli() - run.StartTime,
+		"summary": summary, "error": errMsg, "filesRead": filesRead, "filesEdited": filesEdited, "durationMs": time.Now().UnixMilli() - run.StartTime,
 		"inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens,
+		"contextTokens": run.ContextTokens,
 	})
 	return &AgentDelegateResult{
 		AgentID: subID, Role: req.Role, Description: desc, Status: status,
@@ -494,26 +483,101 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	}, nil
 }
 
-// forceSubagentFinalReport runs one final, tool-free model turn after the budget
-// is exhausted so the parent always receives a summary. Passing no tools makes
-// it impossible to emit tool calls, forcing a text report.
-func (a *App) forceSubagentFinalReport(ctx context.Context, cfg ConfigState, model string, messages []openai.ChatCompletionMessage, run *SubagentRun) (string, error) {
+// cancelSubagentRun is the single terminal handling for a cancelled sub-agent
+// run: the in-loop cancel check and the report turns both go through it, so a
+// cancel reports the same status, wording and event wherever it interrupted the
+// run.
+func (a *App) cancelSubagentRun(run *SubagentRun, sessionID, desc, model string, step int) *AgentDelegateResult {
+	a.subRunsMu.Lock()
+	run.Status = "failed"
+	run.Error = "cancelled"
+	run.Steps = step
+	a.subRunsMu.Unlock()
+	a.emit("sub:error", map[string]any{"id": run.ID, "sessionId": sessionID, "error": "cancelled", "durationMs": time.Now().UnixMilli() - run.StartTime})
+	return &AgentDelegateResult{
+		AgentID: run.ID, Role: run.Role, Description: desc, Status: "failed",
+		Steps: step, Error: "cancelled", Model: model,
+	}
+}
+
+// maxForcedReportTurns bounds the report turns that close out a sub-agent whose
+// step budget ran out: an answer that is yet another tool call (or no text at
+// all) is nudged and asked again, and after this many turns the run stops and
+// hands the parent whatever text it did get.
+const maxForcedReportTurns = 3
+
+// errForcedReportMissing reports that no forced-report turn produced a report: the
+// model answered every one with a tool call (which is discarded) or with no text at
+// all, so this sub-agent ends without one.
+var errForcedReportMissing = errors.New("the step budget ran out and no report was produced")
+
+// forceSubagentFinalReport asks an out-of-budget sub-agent to write its report.
+//
+// The tool list stays declared on purpose. Tools precede the system block and the
+// messages in every wire format, so asking for this turn without them would fork
+// the prompt prefix at its very first token and turn the largest request of the
+// run — the whole history — into a full-price cache miss. Declaring them costs
+// nothing, because nothing here executes a tool: a tool call in the answer is
+// discarded, and the model is nudged to answer in prose instead.
+//
+// Every attempt only appends to the history, so the prefix stays byte-identical
+// and each retry reads the cache the previous attempt wrote. Text the model did
+// produce is returned even when the attempts run out, so a partial report still
+// reaches the parent.
+func (a *App) forceSubagentFinalReport(ctx context.Context, cfg ConfigState, model string, messages []openai.ChatCompletionMessage, tools []openai.Tool, run *SubagentRun) (string, error) {
 	messages = append(messages, openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
-		Content: "[BUDGET EXHAUSTED] You have 0 tool-call rounds remaining. Do not call any tools. Immediately write your final report: what you accomplished, what still remains, which files changed, and any verification results.",
+		Content: subagentBudgetExhaustedNotice(),
 	})
-	resp, err := a.streamModelResponse(ctx, cfg, model, messages, nil, nil)
-	if err != nil {
-		return "", err
+	var lastText string
+	for attempt := 0; attempt < maxForcedReportTurns; attempt++ {
+		resp, err := a.streamModelResponse(ctx, cfg, model, messages, tools, nil)
+		if err != nil {
+			return lastText, err
+		}
+		a.recordSubagentUsage(run, model, cfg.Workspace, resp)
+		text := strings.TrimSpace(resp.Content)
+		if len(resp.ToolCalls) == 0 && text != "" {
+			return text, nil
+		}
+		if text != "" {
+			// Prose that came with a discarded call: keep it, because if the
+			// attempts run out a partial report still beats none.
+			lastText = text
+		}
+		if attempt == maxForcedReportTurns-1 {
+			break
+		}
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: subagentReportNudge(len(resp.ToolCalls) > 0),
+		})
+	}
+	return lastText, errForcedReportMissing
+}
+
+// recordSubagentUsage books one sub-agent model turn. The run-local totals the
+// inline card shows and the workspace-wide counters the footer and the dashboard
+// read both come from here, so a turn cannot land in one sink and be missed in
+// the other — a sub-agent spends the same workspace's tokens as its parent.
+func (a *App) recordSubagentUsage(run *SubagentRun, model, workspace string, resp *modelStreamResult) {
+	fallbackOutput := 0
+	if resp.Usage == nil || resp.Usage.CompletionTokens <= 0 {
+		fallbackOutput = estimateCompletionTokens(resp.Content, resp.Reasoning, resp.ToolCalls)
 	}
 	if resp.Usage != nil {
 		a.subRunsMu.Lock()
 		run.InputTokens += resp.Usage.PromptTokens
 		run.OutputTokens += resp.Usage.CompletionTokens
 		run.TotalTokens = run.InputTokens + run.OutputTokens
+		// 最近一轮的 prompt tokens 就是这个子代理当下的上下文规模（累计的输入看不出
+		// 这一点）。服务商这一轮没报就不动它，卡片继续显示上一次报过的数，而不是掉回 0。
+		if resp.Usage.PromptTokens > 0 {
+			run.ContextTokens = resp.Usage.PromptTokens
+		}
 		a.subRunsMu.Unlock()
 	}
-	return strings.TrimSpace(resp.Content), nil
+	a.recordLLMUsage(model, workspace, resp.Usage, fallbackOutput)
 }
 
 // subagentBudgetStartNotice announces the tool-call budget at task start.
@@ -527,6 +591,23 @@ func subagentBudgetLowNotice(remaining, budget int) string {
 		return ""
 	}
 	return fmt.Sprintf("[BUDGET WARNING] Only %d of %d tool-call rounds remain. Make only essential tool calls now and prepare your final report.", remaining, budget)
+}
+
+// subagentBudgetExhaustedNotice opens the forced-report sequence. It has to say
+// that the declared tools are not runnable: the model still sees them in the
+// schema, so without that line it would keep calling them.
+func subagentBudgetExhaustedNotice() string {
+	return "[BUDGET EXHAUSTED] No tool-call rounds remain; any tool call you emit is discarded. Write your final report now as plain text."
+}
+
+// subagentReportNudge is the user turn appended after a forced-report attempt
+// that produced no report: either a discarded tool call (discardedCalls) or no
+// text at all.
+func subagentReportNudge(discardedCalls bool) string {
+	if discardedCalls {
+		return "[BUDGET EXHAUSTED] Your tool call was discarded. Reply with plain text only."
+	}
+	return "[BUDGET EXHAUSTED] You wrote no text. Reply with plain text only."
 }
 
 func (a *App) finishSubagentRecord(subID string) {
