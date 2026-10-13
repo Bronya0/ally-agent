@@ -35,7 +35,34 @@ Public License v3. See the LICENSE file for details.
 
             <!-- Main area: mode rail + (chat workbench | KB guidance card) -->
             <div class="main-area" @pointerdown.capture="clearActiveExplorerTreeSelection">
-              <ModeSider :mode="mode" :kb-running="kbSessionRunning" :hidden-modes="config.hiddenModes" :plugin-items="pluginRailItems" @switch="switchMode" />
+              <ModeSider
+                :mode="mode"
+                :kb-running="kbSessionRunning"
+                :hidden-modes="config.hiddenModes"
+                :plugin-items="pluginRailItems"
+                :expanded="railExpanded"
+                :expanded-width="railWidth"
+                :recent-workspaces="recentWorkspaces"
+                :workspace-sessions="currentWorkspaceSessions"
+                :active-session-id="activeSessionId"
+                :session-title="sessionDisplayTitle"
+                :session-tooltip="railSessionTooltip"
+                :session-busy="sessionBusy"
+                :ssh-authorized-count="allowedSSHServersForActiveWorkspace.length"
+                @open-session="selectRailSession"
+                @remove-session="deleteRailSession"
+                @new-session="createNewSession"
+                @open-task-center="openTaskCenter"
+                @open-ssh-auth="sshAuthModalVisible = true"
+                @resize="setRailWidth"
+                @resize-end="saveRailWidth"
+                @switch="switchMode"
+                @toggle="toggleRail"
+                @open-workspace="onHeaderHistorySelect"
+                @add-workspace="onHeaderAddWorkspace"
+                @add-temp-workspace="onHeaderAddTempWorkspace"
+                @remove-workspace="removeFromHistory"
+              />
               <n-layout v-show="workspacePageActive" class="chat-layout" :content-style="chatLayoutContentStyle">
                 <n-tabs
                   class="workspace-content-tabs"
@@ -762,6 +789,7 @@ import { attachmentIcon } from './utils/attachmentIcon.mjs';
 import { useToolEvents } from './composables/useToolEvents.mjs';
 import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
 import { createPromptHistoryStore } from './utils/promptHistoryStore.mjs';
+import { normalizeRailWidth, RAIL_DEFAULT_WIDTH, RAIL_WIDTH_KEY } from './utils/railWidth.mjs';
 
 // SSH 授权模态框按需加载：与 GitDiffModal 同款异步分块，首屏不下载这份代码；
 // 关闭时 n-modal 默认 display-directive 为 if，行列表 DOM 也不驻留。
@@ -1833,6 +1861,8 @@ const allowedSSHServersForActiveWorkspace = computed(() => {
   return allowedSSHServersMap.value[ws] || [];
 });
 const workspaceHistory = ref(loadWorkspaceHistory());
+// 最近工作空间（新的在前，最多 50 条）：顶栏历史下拉与展开的侧边栏共用这一份。
+const recentWorkspaces = computed(() => [...workspaceHistory.value].reverse().slice(0, 50));
 const plansBySession = reactive({});
 const planRevisionsBySession = reactive({});
 // Plan UI state is per session/Tab so switching tabs never reuses another
@@ -1898,6 +1928,48 @@ function setExplorerClosedForPath(path, closed) {
   else if (explorerClosedWorkspaces[key]) delete explorerClosedWorkspaces[key];
   persistExplorerClosedWorkspaces();
 }
+
+// ── 左侧模式栏展开态 ──────────────────────────────────────
+// 布局级偏好，所以状态留在 App 而不是 ModeSider：那个宽度变量还被资源树编辑态、
+// mermaid 全屏、render_html 全屏三处按它定位，而后两个遮罩被 Teleport 到 body，
+// 只能从 <html> 继承到这个值。因此状态落成 <html> 上的类（与字体变量同一套路）。
+const RAIL_EXPANDED_KEY = 'ally_mode_rail_expanded';
+const railExpanded = ref(false);
+const railWidth = ref(RAIL_DEFAULT_WIDTH);
+
+function setRailWidth(width) {
+  railWidth.value = normalizeRailWidth(width);
+}
+
+function saveRailWidth(width) {
+  setRailWidth(width);
+  try {
+    localStorage.setItem(RAIL_WIDTH_KEY, String(railWidth.value));
+  } catch (_) { /* ignore quota errors */ }
+}
+
+function loadRailExpanded() {
+  try {
+    railExpanded.value = localStorage.getItem(RAIL_EXPANDED_KEY) === '1';
+    setRailWidth(localStorage.getItem(RAIL_WIDTH_KEY));
+  } catch (_) { /* ignore unreadable storage */ }
+}
+
+function toggleRail() {
+  railExpanded.value = !railExpanded.value;
+  try {
+    localStorage.setItem(RAIL_EXPANDED_KEY, railExpanded.value ? '1' : '0');
+  } catch (_) { /* ignore quota errors */ }
+}
+
+loadRailExpanded();
+watch(railWidth, (width) => {
+  document.documentElement.style.setProperty('--ally-mode-sider-width-expanded', `${width}px`);
+}, { immediate: true });
+// immediate：启动时也要把类落到 <html>，否则记住的展开态要等第一次点击才生效。
+watch(railExpanded, (expanded) => {
+  document.documentElement.classList.toggle('rail-expanded', expanded);
+}, { immediate: true });
 
 function explorerTabPath(tabId) {
   const tab = workspaceTabs.value.find((t) => t.id === tabId);
@@ -3800,7 +3872,7 @@ function addPromptHistory(text) {
 }
 
 const historyOptions = computed(() => {
-  const recent = [...workspaceHistory.value].reverse().slice(0, 50);
+  const recent = recentWorkspaces.value;
   return [
   {
     key: '__add__',
@@ -4419,6 +4491,19 @@ function newSession(title) {
     ResetWorkspaceTokenUsage(ws);
     workspaceTokenUsage.value = emptyWorkspaceTokenUsage();
   }
+}
+
+function railSessionTooltip(session) {
+  return `${sessionDisplayTitle(session)}\n${fmtTime(session.updatedAt || session.createdAt)} · ${t('app.sessions.messages', { count: msgCount(session) })}`;
+}
+
+// Resolve IDs against the active Tab at click time, not a stale list index.
+function selectRailSession(id) {
+  return selectSession(currentWorkspaceSessions.value.findIndex((session) => session.id === id));
+}
+
+function deleteRailSession(id) {
+  deleteSession(currentWorkspaceSessions.value.findIndex((session) => session.id === id));
 }
 
 async function selectSession(index) {

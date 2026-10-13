@@ -809,7 +809,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
 
 .messages {
   min-height: 100%;
-  padding: 18px 28px;
+  padding: 18px var(--ally-message-inline-inset, 28px);
 }
 
 .message {

@@ -52,10 +52,16 @@
 
   /* ── Layout widths ──
      Single source of truth for the left mode rail width. .mode-sider and
-     any overlay that must clear the rail (e.g. the explorer editor surface
-     .workspace-explorer.has-file) both read this variable, so changing the
-     rail width never leaves an overlay covering the rail again. */
-  --ally-mode-sider-width: 44px;
+     every overlay that must clear the rail (the explorer editor surface
+     .workspace-explorer.has-file, the mermaid fullscreen overlay, the
+     render_html fullscreen card — the last two are teleported to <body>) read
+     this variable, so changing the rail width never leaves an overlay covering
+     the rail again. Two states, one definition each: an icon-only rail, or a
+     rail that spells out every menu label. The expanded state is a class on
+     <html> (App.vue toggles it) precisely because the teleported overlays sit
+     outside the app tree and would otherwise keep the collapsed value. */
+  --ally-mode-sider-width-collapsed: 44px;
+  --ally-mode-sider-width: var(--ally-mode-sider-width-collapsed);
 
   /* ── Surface scale ──
      Three neutral steps of one hue, rising outward: content is the darkest
@@ -396,12 +402,12 @@ html[data-mode="light"] .app-header {
    the absence of the data-theme attribute, so :not() scopes it with zero
    maintained theme list. Both tiers list resting + hover-over-selected so
    hovering the active icon never falls through to the rail's hover colour. */
-html[data-mode="light"] .mode-sider .n-menu .n-menu-item-content--selected .mode-sider-icon-wrap,
-html[data-mode="light"] .mode-sider .n-menu .n-menu-item-content--selected:hover .mode-sider-icon-wrap {
+html[data-mode="light"] .mode-sider:not(.mode-sider--expanded) .n-menu .n-menu-item-content--selected .mode-sider-icon-wrap,
+html[data-mode="light"] .mode-sider:not(.mode-sider--expanded) .n-menu .n-menu-item-content--selected:hover .mode-sider-icon-wrap {
   color: var(--ally-accent-bright);
 }
-html[data-mode="light"]:not([data-theme]) .mode-sider .n-menu .n-menu-item-content--selected .mode-sider-icon-wrap,
-html[data-mode="light"]:not([data-theme]) .mode-sider .n-menu .n-menu-item-content--selected:hover .mode-sider-icon-wrap {
+html[data-mode="light"]:not([data-theme]) .mode-sider:not(.mode-sider--expanded) .n-menu .n-menu-item-content--selected .mode-sider-icon-wrap,
+html[data-mode="light"]:not([data-theme]) .mode-sider:not(.mode-sider--expanded) .n-menu .n-menu-item-content--selected:hover .mode-sider-icon-wrap {
   color: var(--ally-success);
 }
 
@@ -1582,13 +1588,35 @@ code, pre {
   min-height: 0;
 }
 
-/* Left mode rail (ES-King aside pattern): a permanently collapsed vertical
-   n-menu — icon-only items with native hover tooltip. The blank rail area is
-   window-draggable (header convention); only the menu itself is no-drag.
-   Background stays transparent so the rail matches the app surface instead
-   of a darker strip. */
+/* Left mode rail (ES-King aside pattern): a vertical n-menu that is icon-only
+   while collapsed — native icon items with native hover tooltip — and spells out
+   every label once the bottom handle expands it. The blank rail area is
+   window-draggable (header convention); only the menu and the handle are
+   no-drag. Background stays transparent so the rail matches the app surface
+   instead of a darker strip. */
+/* Expanded rail: the one width variable every rail-anchored surface reads flips
+   to its expanded value. It has to live on <html>: two of those surfaces (the
+   mermaid fullscreen overlay, the render_html fullscreen card) are teleported to
+   <body>, so they inherit from the document element, not from the app tree. */
+html.rail-expanded {
+  --ally-mode-sider-width: var(--ally-mode-sider-width-expanded, 220px);
+}
+
+/* Expanded rail adds breathing room to messages only, not the composer. */
+html.rail-expanded .chat-layout {
+  --ally-message-inline-inset: 44px;
+}
+
+@media (max-width: 1000px) {
+  html.rail-expanded .chat-layout {
+    --ally-message-inline-inset: 36px;
+  }
+}
+
 .mode-sider {
+  position: relative;
   --wails-draggable: drag;
+  --ally-rail-selected-text: var(--ally-accent-bright);
   display: flex;
   flex: 0 0 auto;
   width: var(--ally-mode-sider-width);
@@ -1600,6 +1628,302 @@ code, pre {
   background: var(--ally-surface-chrome);
   border-right: 1px solid var(--ally-border);
   overflow: hidden;
+}
+
+.mode-sider-resize-handle,
+.workspace-explorer-splitter::after {
+  width: 5px;
+}
+
+.mode-sider-resize-handle {
+  --wails-draggable: no-drag;
+  position: absolute;
+  z-index: 2;
+  inset: 0 0 0 auto;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.mode-sider-resize-handle:hover,
+.mode-sider-resize-handle:focus-visible,
+.mode-sider--resizing .mode-sider-resize-handle {
+  background: color-mix(in srgb, var(--ally-accent) 30%, transparent);
+  outline: none;
+}
+
+.mode-sider--resizing {
+  user-select: none;
+}
+
+/* Expanded rail scrolls its menu: plugin groups open inline instead of as
+   popovers, so the list can outgrow the window. The rail itself keeps
+   overflow hidden — the labels of a collapsing rail must stay clipped. */
+.mode-sider-menu {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Expanded navigation uses a quiet neutral selection; the collapsed rail
+   keeps its accent locator. Only the glyph shrinks, not the icon slot. */
+.mode-sider--expanded {
+  --ally-rail-selected-text: var(--ally-text-primary);
+}
+.mode-sider--expanded .mode-sider-menu {
+  flex: 0 1 auto;
+  padding: 6px 0 4px;
+}
+
+.mode-sider--expanded .n-menu .n-menu-item {
+  margin-top: 2px;
+}
+
+.mode-sider--expanded .n-menu .n-menu-item-content::before {
+  left: 6px;
+  right: 6px;
+  border-radius: 6px;
+}
+
+.mode-sider--expanded .mode-sider-icon-wrap .n-icon,
+.mode-sider--expanded .mode-sider-icon-wrap .n-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* Expanded history sections share the remaining space and scroll separately;
+   collapsed sections retain only their headers. */
+.mode-sider-history {
+  --wails-draggable: no-drag;
+  flex: 1 1 0;
+  min-height: 64px;
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+  padding-top: 6px;
+}
+
+.mode-sider-history--collapsed {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.mode-sider-history-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--ally-text-muted);
+}
+
+.mode-sider-history-heading {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.mode-sider-history-heading:hover {
+  background: var(--ally-state-hover);
+  color: var(--ally-text-secondary);
+}
+
+.mode-sider-history-heading:focus-visible,
+.mode-sider-history-add:focus-visible {
+  outline: 2px solid var(--ally-accent-bright);
+  outline-offset: -2px;
+}
+
+.mode-sider-history-chevron {
+  margin-left: auto;
+}
+
+.mode-sider-history-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ally-text-muted);
+  cursor: pointer;
+}
+
+.mode-sider-history-add:hover {
+  background: var(--ally-state-hover);
+  color: var(--ally-text-primary);
+}
+
+.mode-sider-session-add,
+.mode-sider-session-add:hover {
+  color: var(--ally-accent-bright);
+}
+
+.mode-sider-workspace-action {
+  --wails-draggable: no-drag;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  margin: 4px 8px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ally-text-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mode-sider-workspace-action:hover {
+  background: var(--ally-state-hover);
+  color: var(--ally-text-primary);
+}
+
+.mode-sider-workspace-count {
+  margin-left: auto;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.mode-sider-workspace-action:focus-visible {
+  outline: 2px solid var(--ally-accent-bright);
+  outline-offset: -2px;
+}
+
+.mode-sider-history-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mode-sider-history-list {
+  padding: 2px 6px 6px;
+}
+
+.mode-sider-history-empty {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--ally-text-faint);
+}
+
+.mode-sider-history-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 4px 0 31px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--ally-text-secondary);
+  cursor: pointer;
+}
+
+.mode-sider-history-item:hover,
+.mode-sider-history-item:focus-visible {
+  background: var(--ally-state-hover);
+  color: var(--ally-text-primary);
+  outline: none;
+}
+
+.mode-sider-history-item--current {
+  background: var(--ally-state-hover);
+  color: var(--ally-text-primary);
+}
+
+.mode-sider-session-busy {
+  flex: none;
+  color: var(--ally-accent-bright);
+  font-size: 9px;
+}
+
+.mode-sider-history-del:disabled {
+  cursor: not-allowed;
+  color: var(--ally-text-faint);
+}
+
+.mode-sider-history-temp {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+}
+
+.mode-sider-history-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Remove button reuses the header dropdown's .hist-del look; only revealed on
+   row hover / keyboard focus (opacity only, the hit box stays in place). */
+.mode-sider-history-del {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+}
+
+.mode-sider-history-item:hover .mode-sider-history-del,
+.mode-sider-history-item:focus-within .mode-sider-history-del {
+  opacity: 1;
+}
+
+/* Bottom expand/collapse handle. Sized and placed like an item badge (34px box
+   at left 5px) so its glyph centre lands on the icon column (22px) in BOTH
+   states — the icon must not slide when the rail widens. The rail is a
+   window-drag region, so the button has to opt out of dragging, otherwise the
+   click is swallowed by the window drag gesture.
+   margin-top: auto pins the handle to the rail bottom: when both history
+   sections are collapsed nothing else grows, and without the auto margin the
+   handle floats up under the last section header instead. */
+.mode-sider-toggle {
+  --wails-draggable: no-drag;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin: auto 0 8px 5px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ally-text-secondary);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.mode-sider-toggle:hover {
+  color: var(--ally-text-primary);
+  background: var(--ally-state-hover);
+}
+
+.mode-sider-toggle:focus-visible {
+  outline: 2px solid var(--ally-accent-bright);
+  outline-offset: -2px;
 }
 
 .mode-sider .n-menu {
@@ -1622,16 +1946,16 @@ code, pre {
    (hover/active/pressed) share one gray so the badge never changes color —
    hovering the selected item reads identical to resting. */
 .mode-sider .n-menu .n-menu-item-content--selected {
-  --n-item-text-color: var(--ally-accent-bright);
-  --n-item-text-color-active: var(--ally-accent-bright);
-  --n-item-text-color-hover: var(--ally-accent-bright);
-  --n-item-text-color-pressed: var(--ally-accent-bright);
-  --n-item-text-color-active-hover: var(--ally-accent-bright);
-  --n-item-icon-color: var(--ally-accent-bright);
-  --n-item-icon-color-active: var(--ally-accent-bright);
-  --n-item-icon-color-hover: var(--ally-accent-bright);
-  --n-item-icon-color-pressed: var(--ally-accent-bright);
-  --n-item-icon-color-active-hover: var(--ally-accent-bright);
+  --n-item-text-color: var(--ally-rail-selected-text);
+  --n-item-text-color-active: var(--ally-rail-selected-text);
+  --n-item-text-color-hover: var(--ally-rail-selected-text);
+  --n-item-text-color-pressed: var(--ally-rail-selected-text);
+  --n-item-text-color-active-hover: var(--ally-rail-selected-text);
+  --n-item-icon-color: var(--ally-rail-selected-text);
+  --n-item-icon-color-active: var(--ally-rail-selected-text);
+  --n-item-icon-color-hover: var(--ally-rail-selected-text);
+  --n-item-icon-color-pressed: var(--ally-rail-selected-text);
+  --n-item-icon-color-active-hover: var(--ally-rail-selected-text);
   --n-item-color-active: var(--ally-state-hover);
   --n-item-color-active-collapsed: var(--ally-state-hover);
   --n-item-color-hover: var(--ally-state-hover);
@@ -1643,9 +1967,11 @@ code, pre {
    (overriding Naive UI's default full-width rail strip), so the rail reads as
    a row of square icon buttons instead of a tall narrow bar. The collapsed
    selected background reads --n-item-color-active-collapsed, so that variable
-   is set above to keep the gray consistent. */
-.mode-sider .n-menu .n-menu-item-content::before,
-.mode-sider .n-menu .n-menu-item-content--selected::before {
+   is set above to keep the gray consistent. Collapsed only: once the labels are
+   visible a centered square in a 208px row looks misplaced, so the expanded
+   rail goes back to Naive's native full-width rounded strip. */
+.mode-sider:not(.mode-sider--expanded) .n-menu .n-menu-item-content::before,
+.mode-sider:not(.mode-sider--expanded) .n-menu .n-menu-item-content--selected::before {
   left: 50%;
   top: 50%;
   right: auto;
@@ -1699,7 +2025,7 @@ code, pre {
 
 .mode-sider .n-menu .n-menu-item-content--selected .mode-sider-icon-wrap,
 .mode-sider .n-menu .n-menu-item-content--selected:hover .mode-sider-icon-wrap {
-  color: var(--ally-accent-bright);
+  color: var(--ally-rail-selected-text);
 }
 
 .mode-sider-running-dot {
@@ -1923,6 +2249,7 @@ code, pre {
 }
 
 .workspace-explorer-splitter {
+  --wails-draggable: no-drag;
   flex: 0 0 1px;
   cursor: col-resize;
   background: var(--ally-border);
@@ -1934,14 +2261,13 @@ code, pre {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -4px;
-  right: -4px;
+  left: 0;
   cursor: col-resize;
 }
-/* Follows the active accent instead of a fixed light blue, which only ever
-   matched the cool theme and clashed with the warm ones. */
-.workspace-explorer-splitter:hover,
-.workspace-explorer-splitter:active { background: color-mix(in srgb, var(--ally-accent) 55%, transparent); }
+.workspace-explorer-splitter:hover::after,
+.workspace-explorer-splitter:active::after {
+  background: color-mix(in srgb, var(--ally-accent) 30%, transparent);
+}
 
 .workspace-explorer-tree-header {
   display: flex;

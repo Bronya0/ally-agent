@@ -278,7 +278,8 @@ onBeforeUnmount(() => {
 
 /* 铺满侧栏和 header 之外的区域（参考资源树编辑器 has-file 模式）：
    从 header 下方 (top: 44px)、侧边栏右侧 (left: var(--ally-mode-sider-width, 44px))
-   铺满右下全部区域，不留空白 */
+   铺满右下全部区域，不留空白。本遮罩被 Teleport 到 body，所以那个宽度变量从
+   <html> 继承（App.vue 在展开时往 <html> 上挂类），与侧栏同步切换。 */
 .html-render-modal-overlay {
   position: fixed;
   top: 44px;

@@ -205,3 +205,4 @@
 [tool-output-two-caps] 2026-10-13 中危 新增工具结果通道只接内存储存上限(128KB)、没接模型侧预算(12KB)：一次命令输出就能永久占掉三万多 token。@infra_result.go
 [remote-refusal-one-per-cause] 2026-10-13 中危 远端拒绝文案要按机制分开报：合成一句会让模型归因错规则反复重试（层级拒绝曾被报成敏感路径）。@orch_remote.go
 [live-extra-roots] 2026-10-13 中危 运行中增删会话附加工作区只靠下次请求覆盖=当轮围栏仍按旧列表；须即时上报＋run 内重算。@biz_session_roots.go
+2026-10-13 高危 async-workspace 异步文件操作返回后不校验工作区与版本，会把旧操作结果写入新工作区的树和编辑器状态。@WorkspaceExplorer.vue

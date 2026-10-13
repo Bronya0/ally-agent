@@ -221,6 +221,7 @@ import QuestionCircleOutlined from '@vicons/antd/QuestionCircleOutlined';
 import ReloadOutlined from '@vicons/antd/ReloadOutlined';
 import { RightOutlined } from '@vicons/antd';
 import { t } from '../i18n.mjs';
+import { mergeExplorerNodes, refreshExpandedExplorerNodes, explorerNodeKeys, remapExplorerPath, remapExplorerNodes } from '../utils/explorerTree.mjs';
 
 const props = defineProps({
   workspace: { type: String, default: '' },
@@ -241,6 +242,7 @@ const message = useMessage();
 
 const treeData = ref([]);
 const expandedKeys = ref([]);
+const expandedKeySet = computed(() => new Set(expandedKeys.value));
 const selectedKeys = ref([]);
 const loadingTree = ref(false);
 const loadingFile = ref(false);
@@ -969,6 +971,8 @@ async function loadRoot() {
   const workspace = String(props.workspace || '');
   const workspaceVersion = ++workspaceRequestVersion;
   loadingTreeNodes.clear();
+  directoryRequests.clear();
+  treeData.value = [];
   selectedKeys.value = [];
   expandedKeys.value = [];
   activeFile.value = null;
@@ -979,9 +983,7 @@ async function loadRoot() {
   }
   loadingTree.value = true;
   try {
-    const nextTree = await listDirectory('', workspace);
-    if (disposed || requestID !== requestSequence || workspaceVersion !== workspaceRequestVersion) return;
-    treeData.value = nextTree;
+    await refreshDirectory(null, workspace);
   } catch (err) {
     if (!disposed && requestID === requestSequence && workspaceVersion === workspaceRequestVersion) {
       message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
@@ -994,84 +996,91 @@ async function loadRoot() {
 }
 
 const loadingTreeNodes = new Set();
+const directoryRequests = new Map();
 
-// 把新拉取的子节点按 key 合并回 node.children：key 相同的条目保留原对象
-// （保住其已加载的子树内容与展开状态，避免整体换对象后"已展开子目录瞬间
-// 变空且不再触发展开事件"的错乱），仅刷新 size/modTime/symlink 等元数据；
-// 新增条目用新对象，消失条目自然丢弃。条目类型变化（文件↔目录）时放弃旧
-// 对象，让新对象按正确形状重建。
 function mergeChildNodes(node, nextNodes) {
-  const prevByKey = new Map((node.children || []).map((c) => [c.key, c]));
-  node.children = nextNodes.map((n) => {
-    const old = prevByKey.get(n.key);
-    if (!old || old.dir !== n.dir) return n;
-    prevByKey.delete(n.key);
-    const { children: _replaced, ...rest } = n;
-    return Object.assign(old, rest);
-  });
+  node.children = mergeExplorerNodes(node.children || [], nextNodes);
+}
+
+// Per-directory tokens reject out-of-order results without invalidating editor
+// requests. Workspace epochs reject results from another Tab/root.
+async function refreshDirectory(node, workspace = props.workspace) {
+  const path = node?.path || '';
+  const epoch = workspaceRequestVersion;
+  const token = {};
+  directoryRequests.set(path, token);
+  const isCurrent = () => !disposed
+    && epoch === workspaceRequestVersion
+    && workspace === props.workspace
+    && directoryRequests.get(path) === token
+    && (!node || node.path === path);
+  try {
+    const children = await listDirectory(path, workspace);
+    if (!isCurrent()) return false;
+    if (node) mergeChildNodes(node, children);
+    else treeData.value = mergeExplorerNodes(treeData.value, children);
+    return true;
+  } catch (err) {
+    if (isCurrent()) message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
+    return false;
+  } finally {
+    if (directoryRequests.get(path) === token) directoryRequests.delete(path);
+  }
+}
+
+function pruneTreeState() {
+  const { keys, directories } = explorerNodeKeys(treeData.value);
+  expandedKeys.value = expandedKeys.value.filter((key) => directories.has(key));
+  selectedKeys.value = selectedKeys.value.filter((key) => keys.has(key));
+  if (anchorPath && !keys.has(anchorPath)) anchorPath = '';
 }
 
 async function onExpandedKeysChange(keys, _options, meta) {
   const node = meta?.node;
-  // 每次展开都重新拉取目录内容：Agent/外部对工作区的改动在"折叠再展开"后
-  // 即可看到最新状态；loadingTreeNodes 只用于去重并发的重复请求。
-  // 返回结果经 mergeChildNodes 合并，不清空折叠期间保留的旧数据。
-  const shouldLoad = meta?.action === 'expand'
-    && node?.dir
-    && !loadingTreeNodes.has(node.key);
   expandedKeys.value = Array.isArray(keys) ? keys : [];
-  if (!shouldLoad) return;
-  const requestID = requestSequence;
-  const workspace = String(props.workspace || '');
-  const workspaceVersion = workspaceRequestVersion;
-  loadingTreeNodes.add(node.key);
+  if (meta?.action !== 'expand' || !node?.dir || loadingTreeNodes.has(node.key)) return;
+  const key = node.key;
+  const epoch = workspaceRequestVersion;
+  loadingTreeNodes.add(key);
   try {
-    const children = await listDirectory(node.path, workspace);
-    if (disposed || requestID !== requestSequence || workspaceVersion !== workspaceRequestVersion) return;
-    mergeChildNodes(node, children);
-  } catch (err) {
-    if (disposed || requestID !== requestSequence || workspaceVersion !== workspaceRequestVersion) return;
-    // 拉取失败保留旧内容（可能是过期数据但好过清空），仅提示错误。
-    message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
+    if (await refreshDirectory(node)) pruneTreeState();
   } finally {
-    loadingTreeNodes.delete(node.key);
+    if (epoch === workspaceRequestVersion) loadingTreeNodes.delete(key);
   }
 }
 
 async function refreshTree() {
-  if (navigationBusy) return;
+  if (navigationBusy || !props.workspace) return;
   navigationBusy = true;
+  loadingTree.value = true;
+  const workspace = props.workspace;
+  const epoch = workspaceRequestVersion;
+  const isCurrent = () => !disposed && epoch === workspaceRequestVersion && workspace === props.workspace;
   try {
-    if (await confirmPendingChange()) await loadRoot();
+    // A tree refresh does not touch the editor or discard unsaved changes.
+    if (!(await refreshDirectory(null, workspace)) || !isCurrent()) return;
+    await refreshExpandedExplorerNodes(
+      treeData.value,
+      (key) => expandedKeySet.value.has(key),
+      (node) => refreshDirectory(node, workspace),
+      isCurrent,
+    );
+    if (isCurrent()) pruneTreeState();
   } finally {
     navigationBusy = false;
+    if (isCurrent()) loadingTree.value = false;
   }
 }
 
-// 刷新指定目录的子节点：dirPath 为空时刷新根节点，否则查找该目录节点并重新加载其子节点。
-// 用于新建文件/文件夹后将新节点插入树中。
+// Mutation refreshes merge the affected directory instead of resetting roots.
 async function refreshNode(dirPath = '', workspace = props.workspace) {
-  const requestVersion = workspaceRequestVersion;
-  if (!dirPath) {
-    const nextTree = await listDirectory('', workspace);
-    if (disposed || requestVersion !== workspaceRequestVersion || workspace !== props.workspace) return;
-    treeData.value = nextTree;
-    return;
-  }
-  const node = findNodeByPath(dirPath);
-  if (!node || workspace !== props.workspace) return;
-  if (!expandedKeys.value.includes(node.key)) {
+  if (workspace !== props.workspace) return;
+  const node = dirPath ? findNodeByPath(dirPath) : null;
+  if (dirPath && !node) return;
+  if (node && !expandedKeySet.value.has(node.key)) {
     expandedKeys.value = [...expandedKeys.value, node.key];
   }
-  try {
-    const children = await listDirectory(node.path, workspace);
-    if (disposed || requestVersion !== workspaceRequestVersion || workspace !== props.workspace) return;
-    mergeChildNodes(node, children);
-  } catch (err) {
-    if (workspace === props.workspace) {
-      message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
-    }
-  }
+  if (await refreshDirectory(node, workspace)) pruneTreeState();
 }
 
 // ── 系统剪贴板文件粘贴（Ctrl/Cmd+V）──────────────────────────
@@ -1600,6 +1609,7 @@ async function renameNode(node, rawName) {
   // 在 Windows/macOS 上那是真实改动
   if (base === currentName) return true;
   const workspace = String(props.workspace || '');
+  const epoch = workspaceRequestVersion;
   let targetPath = '';
   try {
     // 新路径以后端返回值为准，前端不再自己推一遍（只有后端知道实际落盘的名称）
@@ -1609,37 +1619,34 @@ async function renameNode(node, rawName) {
     message.error(t('app.workspaceExplorer.renameFailed', { error: errorText(err) }));
     return false;
   }
+  // The rename has succeeded on disk, but its result must not mutate a newer tree.
+  if (disposed || epoch !== workspaceRequestVersion || workspace !== props.workspace) return true;
   remapRenamedPath(filePath, targetPath);
   message.success(t('app.workspaceExplorer.renamed', { name: base }));
   // 刷新失败只影响树视图（改名已经落盘），不能反过来报成改名失败
   try {
     // 条目 key 变了，必须重新拉取父目录才能拿到新节点
     await refreshNode(parent, workspace);
-    // 目录改名后它自身是个空壳（key 变了、子节点要重新加载），顺手展开一层，
-    // 否则树里会留下一个「展开了却什么都没有」的目录
-    if (node.dir) await refreshNode(targetPath, workspace);
+    // Refresh renamed directory metadata while preserving its cached descendants.
+    if (node.dir && expandedKeySet.value.has(targetPath)) await refreshNode(targetPath, workspace);
   } catch (err) {
     message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
   }
   return true;
 }
 
-// 改名后把树与编辑器里指向旧路径的状态搬到新路径：打开中的文件、选中集合、
-// 范围选择锚点都跟着走（目录改名时其后代路径按前缀一并搬）。展开集合是例外：
-// 改名后是重新拉取的新节点，旧 key 留着只会渲染出「展开了但子节点没加载」的
-// 空壳，因此按前缀丢弃，由 refreshNode 重新建立。
+// Move cached nodes and their UI identities together before refreshing the
+// parent, so renamed expanded branches keep their loaded descendants.
 function remapRenamedPath(oldPath, newPath) {
-  const remap = (p) => {
-    if (p === oldPath) return newPath;
-    return p.startsWith(`${oldPath}/`) ? newPath + p.slice(oldPath.length) : p;
-  };
+  const remap = (p) => remapExplorerPath(p, oldPath, newPath);
+  remapExplorerNodes(treeData.value, oldPath, newPath);
   if (activeFile.value?.path) {
     const next = remap(activeFile.value.path);
     if (next !== activeFile.value.path) activeFile.value = { ...activeFile.value, path: next };
   }
   selectedKeys.value = selectedKeys.value.map(remap);
   if (anchorPath) anchorPath = remap(anchorPath);
-  expandedKeys.value = expandedKeys.value.filter((k) => !(k === oldPath || k.startsWith(`${oldPath}/`)));
+  expandedKeys.value = expandedKeys.value.map(remap);
 }
 
 async function openWorkspaceFolder(node = null) {
@@ -1673,7 +1680,8 @@ async function confirmDeleteNode(node) {
         const workspace = String(props.workspace || '');
         await DeletePath({ workspace, paths: [filePath], recursive: node.dir });
         message.success(t('app.workspaceExplorer.deleted'));
-        if (activeFile.value?.path === filePath) clearEditor();
+        if (workspace !== props.workspace || disposed) return;
+        if (activeFile.value?.path === filePath || activeFile.value?.path.startsWith(`${filePath}/`)) clearEditor();
         await refreshTree();
       } catch (err) {
         message.error(t('app.workspaceExplorer.deleteFailed', { error: errorText(err) }));
