@@ -30,6 +30,7 @@ import {
   sshClusterNodeRow,
   sshServerRows,
   tailLines,
+  transferDetailRows,
 } from './toolPreview.mjs';
 
 test('collapsed create preview uses the latest generated lines', () => {
@@ -533,4 +534,41 @@ test('countLinesCapped agrees with the full split up to its cap', () => {
       );
     }
   }
+});
+
+test('transfer details are structured fields with adaptive size units', () => {
+  const rows = transferDetailRows({
+    ok: true,
+    action: 'upload',
+    target: 'my-dev:/srv/app',
+    localPath: 'dist',
+    remotePath: 'public',
+    totalBytes: 3486712,
+    fileCount: 42,
+    dirCount: 3,
+  });
+
+  assert.deepEqual(rows, [
+    { key: 'direction', action: 'upload' },
+    { key: 'local', text: 'dist' },
+    { key: 'remote', text: 'my-dev:/srv/app · public' },
+    { key: 'files', text: '42' },
+    { key: 'dirs', text: '3' },
+    { key: 'size', text: '3.3 MB' },
+  ]);
+});
+
+test('transfer details drop empty fields and an unknown direction', () => {
+  assert.deepEqual(transferDetailRows({ action: 'move', localPath: 'x' }), [{ key: 'local', text: 'x' }]);
+  assert.deepEqual(transferDetailRows({}), []);
+  assert.deepEqual(transferDetailRows(null), []);
+});
+
+test('transfer details keep the byte unit for a small payload', () => {
+  assert.deepEqual(transferDetailRows({ action: 'download', remotePath: 'logs', totalBytes: 512, fileCount: 1 }), [
+    { key: 'direction', action: 'download' },
+    { key: 'remote', text: 'logs' },
+    { key: 'files', text: '1' },
+    { key: 'size', text: '512 B' },
+  ]);
 });

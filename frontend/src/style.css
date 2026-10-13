@@ -697,9 +697,8 @@ html[data-mode="light"] .tool-command .shell-command-word {
   overflow-x: auto;
 }
 
-html[data-mode="light"] .tool-body {
-  color: var(--ally-text-high);
-}
+/* 工具结果的通用正体不再单独提亮：明暗两模式同取灰档（见 .tool-body），与文件
+   正文的次亮档区分开。 */
 
 /* Composer input refinements on light mode: the shadow is shared by every
    palette; the border / placeholder literals were tuned for amber's cool canvas,
@@ -4830,12 +4829,17 @@ code, pre {
   margin-left: 4px;
 }
 
+/* 这条通道专门承载「机器生成的结果」（命令回显之外的清单、键值摘要、状态行）：
+   文件正文走 CodeView、报错走错误块、diff 走 DiffView，都不经过它。所以默认就是
+   灰档，而不是按 kind 逐个点名压灰：点名会让新加的 kind 静默退回最亮档（远端传输
+   卡、展开后的 list 都这样露过白），而被点名的那几条多半根本不生效（command 走
+   终端视图，grep 与 calculate 的正体本来就不渲染）。 */
 .tool-body {
   margin: 0;
   padding: 2px 8px 4px 0;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--ally-text-body);
+  color: var(--ally-text-muted);
   background: transparent;
   font-family: var(--ally-ui-font);
   font-size: var(--ally-code-font-size);
@@ -4905,16 +4909,8 @@ code, pre {
 }
 
 .rich-tool-card.command .tool-body {
-  color: var(--ally-text-muted);
   max-height: calc(1.5em * 4 + 6px);
   overflow-y: hidden;
-}
-
-.rich-tool-card.grep .tool-body,
-.rich-tool-card.calculate .tool-body,
-.rich-tool-card.scheduled .tool-body,
-.rich-tool-card.service .tool-body {
-  color: var(--ally-text-muted);
 }
 
 .tool-body.body-preview {
@@ -4930,6 +4926,31 @@ code, pre {
 .rich-tool-card .tool-body.scroll-enabled,
 .rich-tool-card.command .tool-body.scroll-enabled {
   overflow-y: auto;
+}
+
+/* ── Tool result field grid（结果本身就是一组字段的工具，如远端传输） ── */
+
+.tool-field-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 10px;
+  padding: 2px 8px 4px 6px;
+  font-size: var(--ally-sub-font-size);
+  line-height: 1.6;
+}
+
+.tool-field-label {
+  color: var(--ally-text-faint);
+  white-space: nowrap;
+}
+
+/* 值与删除卡的行路径同档（soft）：字段值是记录主体，不是装饰。路径可能很长，
+   行内省略、完整值挂在 title 上。 */
+.tool-field-value {
+  color: var(--ally-text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── Read group (aggregated parallel reads) ── */

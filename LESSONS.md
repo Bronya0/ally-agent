@@ -202,3 +202,5 @@
 [remote-delete-rules-mirrored] 2026-10-13 中危 远端删除保护规则在 Go 与内嵌 Python 各写一份：改一边要同时改另一边，两侧没有对照用例。@orch_remote.go
 [expr-comment-swallows] 2026-10-13 高危 expr 的 // 是注释会静默吞掉表达式后半段：算数工具要拦，且别做文本归一（^→** 会打进字符串）。@tools/calculate
 [expr-offsets-are-runes] 2026-10-13 中危 expr 词法位置是 rune 偏移：拿它按字节切原文，中文表情串上会错位、误判合法表达式。@tools/calculate
+[tool-output-two-caps] 2026-10-13 中危 新增工具结果通道只接内存储存上限(128KB)、没接模型侧预算(12KB)：一次命令输出就能永久占掉三万多 token。@infra_result.go
+[remote-refusal-one-per-cause] 2026-10-13 中危 远端拒绝文案要按机制分开报：合成一句会让模型归因错规则反复重试（层级拒绝曾被报成敏感路径）。@orch_remote.go

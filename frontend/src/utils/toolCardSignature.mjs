@@ -64,6 +64,9 @@ export function toolCardRenderSignature(msg) {
     len(msg.askQuestions),
     len(msg.editEntries),
     len(msg.deleteEntries),
+    // 远端传输的字段行同理：结果到达才有（方向 / 体积 / 文件数），漏掉这条 v-memo
+    // 会把卡片冻在只有标题的空态上。
+    len(msg.transferFields),
     // 工具结果渲染成卡片网格（CardGrid）时，条目数是渲染内容本身：结果到达后条目
     // 从无到有，漏掉这条备忘录就把卡片冻在空态上。
     len(msg.cardGrid?.items),

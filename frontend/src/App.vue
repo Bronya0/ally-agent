@@ -8534,14 +8534,8 @@ function formatToolChip(name, result) {
       const absent = deleteAbsentCount(parsed.data);
       return absent ? `\u00B7 ${absent} ${t('tools.delete.absent')}` : '';
     }
-    if (name === 'remote_transfer' && parsed.data) {
-      const bytes = Number(parsed.data.totalBytes || 0);
-      const files = Number(parsed.data.fileCount || 0);
-      const parts = [];
-      if (files > 0) parts.push(files + ' file' + (files !== 1 ? 's' : ''));
-      if (bytes > 0) parts.push(formatBytes(bytes));
-      return parts.length ? '\u00B7 ' + parts.join(' \u00B7 ') : '';
-    }
+    // remote_transfer 不给 chip：文件数与体积已经在卡片正体的字段网格里（见
+    // tools.transfer.*）与标题的路径一起说清了，chip 再说一遍就是同一件事出现两次。
     if ((name === 'http_request' || name === 'web_fetch') && parsed.data) {
       return formatHTTPToolSummary(parsed.data);
     }

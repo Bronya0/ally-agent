@@ -23,7 +23,7 @@ import {
   toolEventId,
 } from '../utils/toolEventState.mjs';
 import { formatReadRangeChip } from '../utils/toolFormat.mjs';
-import { deletePathRows, scheduledTaskRow, scheduledTaskRows, serviceListRows, serviceRow, sshClusterNodeRow, sshServerRows } from '../utils/toolPreview.mjs';
+import { deletePathRows, scheduledTaskRow, scheduledTaskRows, serviceListRows, serviceRow, sshClusterNodeRow, sshServerRows, transferDetailRows } from '../utils/toolPreview.mjs';
 import { formatBytes } from '../utils/format.mjs';
 import { scheduledStatusKey, scheduledStatusTone, serviceStatusKey, serviceStatusTone } from '../utils/taskStatus.mjs';
 import { isActionKeyedTool } from '../utils/toolVerb.mjs';
@@ -183,6 +183,30 @@ export function useToolEvents(ctx) {
     const rows = deletePathRows(resultData);
     if (!rows.length) return;
     existing.deleteEntries = rows;
+    existing.body = '';
+  }
+
+  // 传输结果的字段标签与方向值都是界面文案，在这里过 i18n（行本身是纯函数给的）。
+  const TRANSFER_FIELD_LABEL_KEYS = {
+    direction: 'tools.transfer.direction',
+    local: 'tools.transfer.localPath',
+    remote: 'tools.transfer.remotePath',
+    files: 'tools.transfer.fileCount',
+    dirs: 'tools.transfer.dirCount',
+    size: 'tools.transfer.size',
+  };
+
+  // 远端传输的结果是一组字段（方向、两端路径、文件与目录数、体积），铺成散文一句
+  // 会把结构压平，而且后端那句里的体积是裸字节数。字段铺开后正文就不该再留：
+  // 同一件事说两遍，比一句散文更吵。
+  function applyTransferDetail(existing, data, resultData) {
+    const rows = transferDetailRows(resultData);
+    if (!rows.length) return;
+    existing.transferFields = rows.map((row) => ({
+      key: row.key,
+      label: t(TRANSFER_FIELD_LABEL_KEYS[row.key]),
+      value: row.action ? t(row.action === 'upload' ? 'tools.transfer.upload' : 'tools.transfer.download') : row.text,
+    }));
     existing.body = '';
   }
 
@@ -387,6 +411,7 @@ export function useToolEvents(ctx) {
     'remote_read': [applyReadBatchEntries],
     'delete': [applyDeleteEntries],
     'remote_delete_path': [applyDeleteEntries],
+    'remote_transfer': [applyTransferDetail],
     'service': [applyServiceResult],
     'scheduled_task': [applyScheduledTaskResult],
     'ssh_cluster': [applySSHClusterResult],

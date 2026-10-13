@@ -161,16 +161,18 @@ def safe_join_paths(root, rel):
         return root, root
     p = rel.replace("\\", "/")
     if p.startswith("/"):
-        raise ValueError("remote path must be relative to workspaceRoot")
+        raise ValueError("remote path must be relative to workspaceRoot (got '%s')" % to_unicode(rel))
     parts = [part for part in p.split("/") if part and part != "."]
     if any(part == ".." for part in p.split("/")):
-        raise ValueError("remote path must not contain '..'")
+        raise ValueError("remote path must not contain '..' (got '%s')" % to_unicode(rel))
     lexical = os.path.normpath(os.path.join(root, *parts)) if parts else root
     if not is_subpath(lexical, root):
-        raise ValueError("remote path is outside workspaceRoot")
+        # 与下一条分开报：这条是词法拼接之后就落到根外（根给错了，或路径拼错），
+        # 下一条是词法在根内、解析符号链接后才发现逃了出去，两者的下一步不同。
+        raise ValueError("remote path is outside workspaceRoot after normalization: '%s' (workspaceRoot '%s')" % (to_unicode(rel), to_unicode(root)))
     resolved = os.path.realpath(lexical)
     if not is_subpath(resolved, root):
-        raise ValueError("remote path is outside workspaceRoot")
+        raise ValueError("remote path escapes workspaceRoot via symlink: '%s' (resolved to '%s', workspaceRoot '%s')" % (to_unicode(rel), to_unicode(resolved), to_unicode(root)))
     return lexical, resolved
 
 def safe_join(root, rel):
@@ -184,13 +186,16 @@ def is_protected_delete_path(path):
     # 与本地 isDangerousDeletePath 统一保持两套规则：
     # 机制 1：系统全盘视角下，禁止删除根目录、第 1 级和第 2 级骨干目录；
     # 机制 2：跨平台敏感文件与深层系统目录黑名单拦截。
+    # 返回 (是否保护, 拒绝原因)：原因必须落到真正触发的那条机制上。合成一句会让
+    # 模型错误归因（浅根下的第 2 级目录曾被报成「系统敏感路径」，模型以为判定名单
+    # 有问题，换个路径反复重试，而真正拦它的是层级规则）。
     p = to_os_text(path).replace(os.sep, "/")
     norm = p.lower()
     if len(norm) >= 2 and norm[1] == ":":
         norm = norm[2:]
     norm = norm.rstrip("/")
     if not norm or norm == "/":
-        return True
+        return True, "refusing to delete the filesystem root"
 
     # 镜像本地 isDangerousDeletePath 的临时目录豁免：测试与构建工作区
     # 常位于 OS 临时目录下（Linux/macOS 为 /tmp 或 /var/tmp，macOS 为 /var/folders/...）。
@@ -204,8 +209,8 @@ def is_protected_delete_path(path):
                 t_posix = t_posix.rstrip("/")
                 if t_posix and (norm == t_posix or norm.startswith(t_posix + "/")):
                     if norm == t_posix:
-                        return True
-                    return False
+                        return True, "refusing to delete the temporary directory root %s" % t_posix
+                    return False, ""
         except Exception:
             pass
 
@@ -227,16 +232,16 @@ def is_protected_delete_path(path):
             pass
 
     if depth == 1:
-        return True
+        return True, "refusing to delete top-level filesystem directory"
     if depth == 2 and is_dir:
-        return True
+        return True, "refusing to delete second-level filesystem directory"
 
     # 机制二：敏感文件与深层目录黑名单
     for target in DELETE_SENSITIVE_TARGETS:
         if norm == target or norm.startswith(target + "/"):
-            return True
+            return True, "refusing to delete protected system target (matched %s)" % target
 
-    return False
+    return False, ""
 
 def iso_mtime(st):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime))
@@ -245,15 +250,15 @@ def read_raw_file(root, rel, max_bytes):
     path = safe_join(root, rel)
     st = os.stat(path)
     if stat_mod.S_ISDIR(st.st_mode):
-        raise ValueError("path is a directory")
+        raise ValueError("path is a directory, not a file: '%s'" % to_unicode(rel))
     if st.st_size > max_bytes:
-        raise ValueError("file is too large: %d bytes" % st.st_size)
+        raise ValueError("file is too large: '%s' is %d bytes (limit %d); read a line range instead of the whole file" % (to_unicode(rel), st.st_size, max_bytes))
     with open(path, "rb") as f:
         # stat 与 read 之间文件可能被追加，按实际读取字节数兜底判定，
         # 防止增长中的文件绕过尺寸预算。
         data = f.read(max_bytes + 1)
     if len(data) > max_bytes:
-        raise ValueError("file is too large: %d bytes" % len(data))
+        raise ValueError("file is too large: '%s' grew past the limit while it was being read (%d bytes, limit %d); read a line range instead" % (to_unicode(rel), len(data), max_bytes))
     b64 = base64.b64encode(data)
     if hasattr(b64, "decode"):
         b64 = b64.decode("ascii")
@@ -328,7 +333,7 @@ def op_write(root, payload):
         try:
             existing_st = os.stat(path)
             if stat_mod.S_ISDIR(existing_st.st_mode):
-                raise ValueError("path is a directory")
+                raise ValueError("cannot replace a directory with a file: '%s'" % to_unicode(payload.get("path", "")))
             original_mode = existing_st.st_mode & 0o7777
         except (OSError, IOError) as exc:
             if getattr(exc, "errno", None) != errno.ENOENT:
@@ -363,7 +368,7 @@ def op_write(root, payload):
             # POSIX 对已存在目标抛 EEXIST、对目录抛 EISDIR；Windows 对目录抛 EACCES。
             try:
                 if os.path.isdir(path):
-                    raise ValueError("path is a directory")
+                    raise ValueError("target path is a directory, not a file: " + to_os_text(payload.get("path", "")))
             except (OSError, IOError):
                 pass
             raise ValueError("file already exists: " + to_os_text(payload.get("path", "")))
@@ -445,11 +450,14 @@ def check_delete_path(root, rel, recursive):
     # 错误文案带上路径：批量里不点名的话，模型不知道是哪一条被拒。
     lexical, resolved = safe_join_paths(root, rel)
     if lexical == root:
-        raise ValueError("refusing to delete remote workspace root")
+        raise ValueError("E_DELETE_BLOCKED: refusing to delete remote workspace root")
     if contains_vcs(resolved):
-        raise ValueError("refusing to delete path containing VCS metadata: %s" % to_unicode(rel))
-    if is_protected_delete_path(resolved):
-        raise ValueError("refusing to delete OS-sensitive path: %s" % to_unicode(rel))
+        raise ValueError("E_DELETE_BLOCKED: refusing to delete path containing VCS metadata (requested '%s', resolved to '%s')" % (to_unicode(rel), to_unicode(resolved)))
+    protected, reason = is_protected_delete_path(resolved)
+    if protected:
+        # 一条拒绝要说清三件事：撞的是哪条规则、调用方请求的是哪个路径、它实际解析到
+        # 了哪里。合成一句话报出去会让模型只能看到笼统的「敏感路径」。
+        raise ValueError("E_DELETE_BLOCKED: %s (requested '%s', resolved to '%s'). This deletion was blocked by the safety fence; run it manually on the server if it is genuinely intended." % (reason, to_unicode(rel), to_unicode(resolved)))
     if not os.path.lexists(lexical):
         # 不存在不是错误：删除的目的已经达成。标出来交给 op_delete_batch 报成
         # absent 槽（本地 delete 是同一套语义），同批其它路径照删。
@@ -539,7 +547,7 @@ def op_run(root, payload):
     cwd = safe_join(root, payload.get("cwd", ""))
     check_write_targets(root, cwd, payload.get("targets") or [])
     if not os.path.isdir(cwd):
-        raise ValueError("cwd is not a directory")
+        raise ValueError("cwd is not a directory on the remote host: %s (cwd is resolved inside the target workspace path)" % to_unicode(cwd))
     timeout = int(payload.get("timeoutSeconds") or 120)
     if timeout < 1:
         timeout = 1
@@ -735,13 +743,15 @@ OPS = {
 try:
     payload = decode_payload()
     raw_root = os.path.expanduser(to_os_text(payload["workspaceRoot"]))
+    # 三种拒绝各说各的，并点明这个值的来源：它来自调用方传进来的 target 路径，
+    # 不是服务器状态。不点明来源与下一步，模型会以为远端异常而在同一路径上反复重试。
     if not os.path.exists(raw_root):
-        raise ValueError("workspaceRoot does not exist: %s" % raw_root)
+        raise ValueError("workspaceRoot does not exist on this host: %s (this path comes from the target argument, not from the server; use a directory that exists on the remote host, or ask the user which one to use)" % raw_root)
     root = os.path.realpath(raw_root)
     if not os.path.isdir(root):
-        raise ValueError("workspaceRoot is not a directory: %s" % root)
+        raise ValueError("workspaceRoot is not a directory on this host: %s (the target path must be a directory; this resolved to a file or a special file)" % root)
     if root == "/":
-        raise ValueError("workspaceRoot must not be filesystem root")
+        raise ValueError("workspaceRoot must not be the filesystem root: give the target an absolute non-root directory such as /srv/app")
     op = payload.get("op")
     handler = OPS.get(op)
     if handler is not None:
@@ -753,7 +763,8 @@ try:
         ok({"checked": True})
     elif op == "_check_protected":
         # 测试专用内部 op：直接暴露删除保护判定，便于本地单测。
-        ok({"protected": is_protected_delete_path(to_os_text(payload["path"]))})
+        protected, reason = is_protected_delete_path(to_os_text(payload["path"]))
+        ok({"protected": protected, "reason": reason})
     else:
         raise ValueError("unknown op: %s" % op)
 except Exception as exc:
@@ -1052,9 +1063,10 @@ func remoteHelperError(resp remotePythonResponse) error {
 	if resp.Error == "" {
 		resp.Error = "remote helper failed"
 	}
-	// 两个前缀都要转成结构化错误码：模型侧靠错误码认「这是边界拒绝」，纯文本
-	// 会被当成命令自己报的错而重试。
-	for _, code := range []string{"E_PATH_OUTSIDE", "E_PROTECTED_PATH"} {
+	// 每个前缀都要转成结构化错误码：模型侧靠错误码认「这是边界拒绝」，纯文本
+	// 会被当成操作自己报的错而重试。清单按远端 helper 实际会带的码收（本地同类
+	// 拒绝用的是同一批码），helper 里新增一处带码的拒绝就在这里补一行。
+	for _, code := range []string{"E_PATH_OUTSIDE", "E_PROTECTED_PATH", "E_DELETE_BLOCKED"} {
 		if strings.HasPrefix(resp.Error, code+":") {
 			msg := strings.TrimSpace(strings.TrimPrefix(resp.Error, code+":"))
 			return codedToolError(code, errors.New(msg))
@@ -2026,16 +2038,18 @@ def safe_join_paths(root, rel):
         return root, root
     p = rel.replace("\\", "/")
     if p.startswith("/"):
-        raise ValueError("remote path must be relative to workspaceRoot")
+        raise ValueError("remote path must be relative to workspaceRoot (got '%s')" % to_unicode(rel))
     parts = [part for part in p.split("/") if part and part != "."]
     if any(part == ".." for part in p.split("/")):
-        raise ValueError("remote path must not contain '..'")
+        raise ValueError("remote path must not contain '..' (got '%s')" % to_unicode(rel))
     lexical = os.path.normpath(os.path.join(root, *parts)) if parts else root
     if not is_subpath(lexical, root):
-        raise ValueError("remote path is outside workspaceRoot")
+        # 与下一条分开报：这条是词法拼接之后就落到根外（根给错了，或路径拼错），
+        # 下一条是词法在根内、解析符号链接后才发现逃了出去，两者的下一步不同。
+        raise ValueError("remote path is outside workspaceRoot after normalization: '%s' (workspaceRoot '%s')" % (to_unicode(rel), to_unicode(root)))
     resolved = os.path.realpath(lexical)
     if not is_subpath(resolved, root):
-        raise ValueError("remote path is outside workspaceRoot")
+        raise ValueError("remote path escapes workspaceRoot via symlink: '%s' (resolved to '%s', workspaceRoot '%s')" % (to_unicode(rel), to_unicode(resolved), to_unicode(root)))
     return lexical, resolved
 
 def get_raw_stdin():
@@ -2245,11 +2259,15 @@ try:
         payload = dict((k, to_os_text(v) if isinstance(v, (str, unicode)) else v) for k, v in payload.items())
 
     raw_root = os.path.expanduser(to_os_text(payload["workspaceRoot"]))
+    # 与主 helper 同一套区分：不存在 / 存在但不是目录 / 是文件系统根，三种原因的
+    # 下一步完全不同，不能合并成一句「invalid workspaceRoot」。
     if not os.path.exists(raw_root):
-        raise ValueError("workspaceRoot does not exist: " + to_unicode(raw_root))
+        raise ValueError("workspaceRoot does not exist on this host: " + to_unicode(raw_root) + " (this path comes from the target argument, not from the server)")
     root = os.path.realpath(raw_root)
-    if not os.path.isdir(root) or root == "/":
-        raise ValueError("invalid remote workspaceRoot: " + to_unicode(root))
+    if not os.path.isdir(root):
+        raise ValueError("workspaceRoot is not a directory on this host: " + to_unicode(root) + " (the target path must be a directory)")
+    if root == "/":
+        raise ValueError("workspaceRoot must not be the filesystem root: give the target an absolute non-root directory such as /srv/app")
 
     action = payload.get("action", "")
     if action == "upload":

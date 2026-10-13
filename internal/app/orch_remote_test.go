@@ -177,10 +177,11 @@ func TestValidateRemoteWorkspacePathRebase(t *testing.T) {
 	}
 }
 
-// TestRemoteHelperProtectedDeleteClassification 锁定删除保护的分类契约：
+// TestRemoteHelperProtectedDeleteClassification 锁定删除保护的分类与理由契约：
 // 系统树（/etc、/usr 等）整体拒绝；主目录类父根（/root、/home）只拦目录
 // 本身，其子树内的普通工作区文件必须放行（/root 曾被误放进树清单，导致
-// root 用户远程工作区所有删除被拒）。
+// root 用户远程工作区所有删除被拒）。每条拒绝还要报出真正触发的那条机制：
+// 一句笼统的「系统敏感路径」会让模型归因错规则、换个路径反复重试。
 func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
@@ -188,21 +189,27 @@ func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
 		name      string
 		path      string
 		protected bool
+		// reasons 是可接受的原因片段：模型侧看到的文案必须点名真正触发的那条规则。
+		// 同一条路径在不同平台上可能撞上不同机制（depth 2 的名单目标在文件不存在的
+		// 平台上会先撞层级规则），两者都在契约之内，所以按「命中其中之一」断言。
+		reasons []string
 	}{
-		{"filesystem root", "/", true},
-		{"root home itself", "/root", true},
-		{"etc tree dir", "/etc", true},
-		{"etc file", "/etc/passwd", true},
-		{"usr subtree", "/usr/bin/ls", true},
-		{"usr share tree", "/usr/share/doc/foo", true},
-		{"usr local lib tree", "/usr/local/lib/node_modules/pkg/index.js", true},
-		{"etc direct file", "/etc/hosts", true},
-		{"var local libs", "/var/local/libs", true},
-		{"workspace file under /root", "/root/ally-remote-test/app.py", false},
-		{"project file under /root", "/root/projects/tooltest/file.txt", false},
-		{"project file under /home", "/home/alice/project/file.txt", false},
-		{"deep config file in etc", "/etc/nginx/conf.d/test.conf", false},
-		{"tempdir child path", filepath.Join(os.TempDir(), "project", "file.txt"), false},
+		{"filesystem root", "/", true, []string{"filesystem root"}},
+		{"root home itself", "/root", true, []string{"top-level filesystem directory"}},
+		{"etc tree dir", "/etc", true, []string{"top-level filesystem directory"}},
+		{"etc file", "/etc/passwd", true, []string{"protected system target", "second-level filesystem directory"}},
+		{"etc direct file", "/etc/hosts", true, []string{"protected system target", "second-level filesystem directory"}},
+		{"usr subtree", "/usr/bin/ls", true, []string{"protected system target"}},
+		{"usr share tree", "/usr/share/doc/foo", true, []string{"protected system target"}},
+		{"usr local lib tree", "/usr/local/lib/node_modules/pkg/index.js", true, []string{"protected system target"}},
+		{"var local libs", "/var/local/libs", true, []string{"protected system target"}},
+		{"second-level directory", "/var/log", true, []string{"second-level filesystem directory"}},
+		{"temporary root itself", os.TempDir(), true, []string{"temporary directory root"}},
+		{"workspace file under /root", "/root/ally-remote-test/app.py", false, nil},
+		{"project file under /root", "/root/projects/tooltest/file.txt", false, nil},
+		{"project file under /home", "/home/alice/project/file.txt", false, nil},
+		{"deep config file in etc", "/etc/nginx/conf.d/test.conf", false, nil},
+		{"tempdir child path", filepath.Join(os.TempDir(), "project", "file.txt"), false, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -222,7 +229,8 @@ func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
 				t.Fatalf("helper failed: %s", resp.Error)
 			}
 			var data struct {
-				Protected bool `json:"protected"`
+				Protected bool   `json:"protected"`
+				Reason    string `json:"reason"`
 			}
 			if err := json.Unmarshal(resp.Data, &data); err != nil {
 				t.Fatalf("decode data: %v", err)
@@ -230,7 +238,78 @@ func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
 			if data.Protected != tc.protected {
 				t.Fatalf("path %s: expected protected=%v, got %v", tc.path, tc.protected, data.Protected)
 			}
+			if !tc.protected {
+				if data.Reason != "" {
+					t.Fatalf("path %s: an allowed path must carry no reason, got %q", tc.path, data.Reason)
+				}
+				return
+			}
+			if len(tc.reasons) == 0 {
+				t.Fatalf("path %s: a protected case must declare the rule it expects", tc.path)
+			}
+			matched := false
+			for _, want := range tc.reasons {
+				if strings.Contains(data.Reason, want) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				t.Fatalf("path %s: expected one of %q, got reason %q", tc.path, tc.reasons, data.Reason)
+			}
 		})
+	}
+}
+
+// TestRemoteHelperDeleteRefusalNamesRuleAndPath 锁定模型看到的删除拒绝文案形状：
+// 一句拒绝要说清是哪条规则、调用方请求的是哪个路径、它解析到了哪里，并带上与本地
+// 同一枚 E_DELETE_BLOCKED 码，不能退回一句笼统的「系统敏感路径」。
+func TestRemoteHelperDeleteRefusalNamesRuleAndPath(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "proj", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script, err := buildRemoteScript(map[string]any{
+		"op":            "delete_batch",
+		"workspaceRoot": root,
+		"paths":         []string{"proj/.git"},
+		"recursive":     true,
+	})
+	if err != nil {
+		t.Fatalf("buildRemoteScript: %v", err)
+	}
+	resp, err := runRemoteHelperScript(t, py, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK {
+		t.Fatal("deleting VCS metadata must be refused before anything is removed")
+	}
+	for _, want := range []string{"E_DELETE_BLOCKED:", "VCS metadata", "proj/.git"} {
+		if !strings.Contains(resp.Error, want) {
+			t.Fatalf("refusal %q must mention %q", resp.Error, want)
+		}
+	}
+}
+
+// TestRemoteScriptsShareTheSamePathRefusals 锁定两份内嵌 helper（主脚本与传输脚本）
+// 的路径拒绝措辞一致：它们各存一份 safe_join_paths，措辞漂移会让同一原因在两条
+// 通道上给出不同解释（LESSONS：这对孪生副本一直没有对照用例）。
+func TestRemoteScriptsShareTheSamePathRefusals(t *testing.T) {
+	shared := []string{
+		"remote path must be relative to workspaceRoot",
+		"remote path must not contain '..'",
+		"remote path is outside workspaceRoot after normalization",
+		"remote path escapes workspaceRoot via symlink",
+	}
+	for _, phrase := range shared {
+		if !strings.Contains(remotePythonScript, phrase) {
+			t.Errorf("remote helper lost the shared refusal %q", phrase)
+		}
+		if !strings.Contains(remoteTransferPythonScript, phrase) {
+			t.Errorf("remote transfer helper drifted from the shared refusal %q", phrase)
+		}
 	}
 }
 

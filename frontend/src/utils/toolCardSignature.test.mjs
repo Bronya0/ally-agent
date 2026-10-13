@@ -59,6 +59,18 @@ test('delete rows are reflected in the signature', () => {
   );
 });
 
+test('transfer fields are reflected in the signature', () => {
+  // 字段行与删除行同源：都是 tool:result 到达后才写上去的，不进签名的话 v-memo
+  // 会继续复用旧的 vnode，卡片永远停在只有标题的状态。
+  const running = { role: 'tool_call', kind: 'remote_transfer', status: 'running', title: 'my-dev:/srv/app · dist → public' };
+  const done = { ...running, status: 'success', transferFields: [{ key: 'direction', label: '方向', value: '上传' }] };
+  assert.notEqual(
+    toolCardRenderSignature(running),
+    toolCardRenderSignature(done),
+    'transfer fields must change the memo signature or the card freezes on its title',
+  );
+});
+
 test('signature changes when the action behind the verb arrives or changes', () => {
   // scheduled_task / service / plan render a verb keyed by the call's action, and
   // the action is captured from arguments that may land after the card is drawn.

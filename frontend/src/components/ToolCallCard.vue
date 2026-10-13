@@ -46,6 +46,15 @@ Public License v3. See the LICENSE file for details.
       </div>
     </div>
 
+    <!-- 远端传输的详情：按字段铺开（方向 / 两端路径 / 文件与目录数 / 体积），行随结果
+         而来，与删除卡的逐行同一套路数，不用展开就能看到全部字段。 -->
+    <div v-if="transferFields.length" class="tool-field-grid">
+      <div v-for="field in transferFields" :key="field.key" class="tool-field-row">
+        <span class="tool-field-label">{{ field.label }}</span>
+        <span class="tool-field-value" :title="field.value">{{ field.value }}</span>
+      </div>
+    </div>
+
     <CardGrid
       v-if="cardGrid"
       :items="cardGrid.items"
@@ -227,6 +236,12 @@ const cardGrid = computed(() => {
   const grid = props.msg?.cardGrid;
   return grid && Array.isArray(grid.items) ? grid : null;
 });
+
+// 结果本身就是一组字段的工具（目前只有远端传输）：字段行由结果适配器写好（标签已过
+// i18n），这里只决定要不要铺开。
+const transferFields = computed(() => (
+  props.msg?.kind === 'remote_transfer' && Array.isArray(props.msg.transferFields) ? props.msg.transferFields : []
+));
 
 const DiffView = defineAsyncComponent(() => import('./DiffView.vue'));
 const CodeView = defineAsyncComponent(() => import('./CodeView.vue'));

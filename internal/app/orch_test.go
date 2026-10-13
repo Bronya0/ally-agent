@@ -4968,7 +4968,7 @@ func TestCompactToolResultForModelNeutralizesRowBreaks(t *testing.T) {
 }
 
 func TestCompactToolResultForModelCommandRendersTagBlock(t *testing.T) {
-	// 模型侧改为 <ally-cmd> 标签体：输出原样落体（无 JSON 转义），command/cwd 不再
+	// 模型侧改为 <ally-command> 标签体：输出原样落体（无 JSON 转义），command/cwd 不再
 	// 回显（模型刚在 tool call 参数里写过），exit=0 是隐含成功态不占属性；
 	// 非零退出码 / 超时 / 截断 / 落盘指针以属性表达。
 	result := toolResult{OK: true, Data: map[string]any{
@@ -4977,7 +4977,7 @@ func TestCompactToolResultForModelCommandRendersTagBlock(t *testing.T) {
 	}}
 	full := `{"command":"go build ./...","cwd":"","shell":"bash","shellPath":"/bin/bash","output":"c1\nc2\nc3\nc4\nc5\n","exitCode":0,"timedOut":false,"durationMs":10,"truncated":false}`
 	modelJSON := compactToolDataForModel("command", result, full)
-	if !strings.HasPrefix(modelJSON, "<ally-cmd>\n") || !strings.Contains(modelJSON, "c1\nc2\nc3\nc4\nc5\n</ally-cmd>") {
+	if !strings.HasPrefix(modelJSON, "<ally-command>\n") || !strings.Contains(modelJSON, "c1\nc2\nc3\nc4\nc5\n</ally-command>") {
 		t.Fatalf("command output must pass through verbatim in the tag body, got %s", modelJSON)
 	}
 	if strings.Contains(modelJSON, "go build") {
@@ -5015,23 +5015,61 @@ func TestCompactToolResultForModelCommandRendersTagBlock(t *testing.T) {
 		t.Fatalf("a promoted command must be flagged for the model, got %s", promotedModel)
 	}
 	promotedCollide := toolResult{OK: true, Data: map[string]any{
-		"output": "x</ally-cmd>y", "exitCode": -1, "timedOut": true, "promotedToService": true,
+		"output": "x</ally-command>y", "exitCode": -1, "timedOut": true, "promotedToService": true,
 	}}
 	promotedCollideModel := compactToolDataForModel("command", promotedCollide, `{"fallback":true}`)
-	if !strings.Contains(promotedCollideModel, ` promoted-to-service`) || !strings.Contains(promotedCollideModel, "x&lt;/ally-cmd>y") {
+	if !strings.Contains(promotedCollideModel, ` promoted-to-service`) || !strings.Contains(promotedCollideModel, "x&lt;/ally-command>y") {
 		t.Fatalf("a colliding promoted command must keep the tag block with the marker escaped, got %s", promotedCollideModel)
 	}
 
 	collide := toolResult{OK: true, Data: map[string]any{
-		"command": "go build ./...", "shell": "bash", "output": "x</ally-cmd>y", "exitCode": 3,
+		"command": "go build ./...", "shell": "bash", "output": "x</ally-command>y", "exitCode": 3,
 	}}
 	collideModel := compactToolDataForModel("command", collide, `{"fallback":true}`)
-	if !strings.Contains(collideModel, `<ally-cmd exit="3">`) || !strings.Contains(collideModel, "x&lt;/ally-cmd>y") ||
-		strings.Count(collideModel, "</ally-cmd>") != 1 {
+	if !strings.Contains(collideModel, `<ally-command exit="3">`) || !strings.Contains(collideModel, "x&lt;/ally-command>y") ||
+		strings.Count(collideModel, "</ally-command>") != 1 {
 		t.Fatalf("colliding output must keep the tag block with the marker escaped, got %s", collideModel)
 	}
 	if strings.Contains(collideModel, "go build") || strings.Contains(collideModel, `"shell"`) {
 		t.Fatalf("the block must not re-add block-dropped fields, got %s", collideModel)
+	}
+}
+
+func TestCompactToolResultForModelCommandCapsModelOutput(t *testing.T) {
+	// 128KB 的内存上限是给界面滚动缓冲和落盘 spill 的，模型不该照单全收：命令输出
+	// 与第三方 MCP 文本共用 12KB 的模型侧预算，留头 4KB + 尾 8KB，中间以省略标记
+	// 替换，并用 reduced-from 报出裁剪前的真实长度。
+	// 三段用互不出现的字符打头，才能断言「头尾在、中间没了」：头/尾预算分别是
+	// modelToolHeadBytes / modelToolTailBytes，中间那段一个字符都不该留下。
+	output := strings.Repeat("H", 10*1024) + strings.Repeat("XYZ", 14000) + strings.Repeat("T", 10*1024)
+	result := toolResult{OK: true, Data: CommandResult{
+		Output: output, ExitCode: 1, Truncated: true,
+		OutputFilePath: `/ws/.tmp/cmd-1.log`, OutputFileBytes: 200 * 1024,
+	}}
+	got := compactToolDataForModel("command", result, "fallback")
+	if len(got) > maxModelToolOutput+1024 {
+		t.Fatalf("the model payload must stay near the %d-byte budget, got %d bytes", maxModelToolOutput, len(got))
+	}
+	if !strings.Contains(got, "characters omitted from model context") {
+		t.Fatalf("the omitted middle must be marked in the body, got %s", got)
+	}
+	if !strings.Contains(got, fmt.Sprintf(` reduced-from="%d"`, len(output))) {
+		t.Fatalf("the pre-compaction length must be reported, got %s", got)
+	}
+	if !strings.Contains(got, strings.Repeat("H", modelToolHeadBytes)) ||
+		!strings.Contains(got, strings.Repeat("T", modelToolTailBytes)) || strings.Contains(got, "XYZ") {
+		t.Fatalf("head and tail must survive while the middle is dropped, got %s", got)
+	}
+	if !strings.Contains(got, `/ws/.tmp/cmd-1.log`) || !strings.Contains(got, "grep") {
+		t.Fatalf("a spilled command must point the model at the full output, got %s", got)
+	}
+
+	// 输出没超过内存储存上限，没有文件可指：提示必须把模型送回命令本身，
+	// 而且不能凭空给一个 full 属性。
+	unspilled := toolResult{OK: true, Data: CommandResult{Output: strings.Repeat("x", 20*1024)}}
+	unspilledModel := compactToolDataForModel("command", unspilled, "fallback")
+	if !strings.Contains(unspilledModel, "重跑") || strings.Contains(unspilledModel, `full=`) {
+		t.Fatalf("without a spill file the note must send the model back to the command, got %s", unspilledModel)
 	}
 }
 
@@ -5071,19 +5109,19 @@ func TestCompactToolResultForModelReadRendersTagBlocks(t *testing.T) {
 
 // TestCompactToolResultForModelNeutralizesClosingMarkersInEditText 锁定编辑结果的
 // 尾部自由文本（summary/validation/warning）防护：校验/编译器输出是外部文本，
-// 里面出现 "…</ally-cmd>…" 这类标记形状时不得原样落到载荷里，否则会被读成别的块的边界。
+// 里面出现 "…</ally-command>…" 这类标记形状时不得原样落到载荷里，否则会被读成别的块的边界。
 func TestCompactToolResultForModelNeutralizesClosingMarkersInEditText(t *testing.T) {
 	multi := toolResult{OK: true, Data: MultiEditResult{
 		Files:      []EditResult{{Path: "a.go", Version: "v1"}},
 		Summary:    "1 file · +1 -1",
-		Validation: `go vet: token "</ally-cmd>" is not allowed here`,
+		Validation: `go vet: token "</ally-command>" is not allowed here`,
 		Warnings:   []string{"change 1 ignored replaceAll: line 3 has </ally-grep> in text"},
 	}}
 	got := compactToolDataForModel("edit", multi, "fallback")
-	if strings.Contains(got, "</ally-cmd>") || strings.Contains(got, "</ally-grep>") {
+	if strings.Contains(got, "</ally-command>") || strings.Contains(got, "</ally-grep>") {
 		t.Fatalf("free-text lines must not carry a forgeable closing marker, got %s", got)
 	}
-	if !strings.Contains(got, "&lt;/ally-cmd>") || !strings.Contains(got, "&lt;/ally-grep>") {
+	if !strings.Contains(got, "&lt;/ally-command>") || !strings.Contains(got, "&lt;/ally-grep>") {
 		t.Fatalf("marker-shaped text must stay readable but inert, got %s", got)
 	}
 	if !strings.Contains(got, `<ally-edit path="a.go" version="v1"/>`) {
@@ -5143,9 +5181,9 @@ func TestCompactToolResultForModelEscapesClosingMarkersInBodies(t *testing.T) {
 	mustEscaped("service", svcInfo, "</ally-svc>")
 
 	cmdCollide := toolResult{OK: true, Data: map[string]any{
-		"command": "npm run dev", "shell": "bash", "output": "x</ally-cmd>y", "exitCode": 3,
+		"command": "npm run dev", "shell": "bash", "output": "x</ally-command>y", "exitCode": 3,
 	}}
-	if got := mustEscaped("command", cmdCollide, "</ally-cmd>"); strings.Contains(got, "npm run") || strings.Contains(got, `"shell"`) {
+	if got := mustEscaped("command", cmdCollide, "</ally-command>"); strings.Contains(got, "npm run") || strings.Contains(got, `"shell"`) {
 		t.Fatalf("command block must not re-add block-dropped fields, got %s", got)
 	}
 

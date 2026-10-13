@@ -40,16 +40,22 @@ const (
 	// prov_model.go with the rest of the endpoint and reasoning dialect
 	// configuration. The model itself has no default: it always comes from the
 	// models[] entries.
-	maxReadFileBytes        = 32 * 1024 * 1024
-	maxToolOutput           = 128 * 1024
-	maxFinishedSubagents    = 50
-	maxSubagentToolCalls    = 100
+	maxReadFileBytes     = 32 * 1024 * 1024
+	maxToolOutput        = 128 * 1024
+	maxFinishedSubagents = 50
+	maxSubagentToolCalls = 100
+	// maxModelToolOutput 是「原始工具输出」进模型上下文的预算，消费者是第三方 MCP
+	// 文本与命令输出：超限时留头 modelToolHeadBytes、尾 modelToolTailBytes，中间以省略
+	// 标记替换。它和 maxToolOutput(128KB) 是两条线：后者管内存储存（界面滚动缓冲与
+	// 落盘 spill），前者只管模型看到的正文。
 	maxModelToolOutput      = 12 * 1024
 	maxModelWebOutput       = 96 * 1024
 	maxCodeGraphPromptBytes = 8 * 1024
-	modelToolHeadBytes      = 4 * 1024
-	modelToolTailBytes      = 8 * 1024
-	maxModelGrepMatches     = 200
+	// modelToolHeadBytes / modelToolTailBytes 是 maxModelToolOutput 被突破时保留的
+	// 头尾：开头有命令回显与构建起点，结尾有退出前真正的报错。
+	modelToolHeadBytes  = 4 * 1024
+	modelToolTailBytes  = 8 * 1024
+	maxModelGrepMatches = 200
 	// maxModelGrepFileGroups bounds the file groups a lines-mode grep payload
 	// may carry (a single tool page can span far more groups than lines). The
 	// count_matches page has no counterpart cap here: its row count is already

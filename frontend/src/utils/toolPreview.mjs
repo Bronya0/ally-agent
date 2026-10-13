@@ -161,6 +161,33 @@ export function deleteAbsentCount(source) {
   return Number.isFinite(absent) && absent > 0 ? absent : 0;
 }
 
+// transferDetailRows 读出一次远端传输的结果字段：方向、两端路径、文件与目录数、体积。
+// 卡片据此按字段铺开，而不是照拄后端那句散文：那句话里的体积是裸字节数
+// （"successfully uploaded dist to host:public (3486712 bytes, 42 files)"），
+// 自适应单位在这里就地算好（与全 UI 同一个 formatBytes）。空值不占行：0 个文件、
+// 0 字节的行只会让这段记录看起来像缺了东西。
+export function transferDetailRows(source) {
+  if (!source || typeof source !== 'object') return [];
+  const rows = [];
+  const action = String(source.action || '').trim().toLowerCase();
+  if (action === 'upload' || action === 'download') rows.push({ key: 'direction', action });
+  const local = String(source.localPath || '').trim();
+  if (local) rows.push({ key: 'local', text: local });
+  const remote = String(source.remotePath || '').trim();
+  if (remote) {
+    // 远端那半截是相对路径，单看没有意义：把 target 一起写出来。
+    const target = String(source.target || '').trim();
+    rows.push({ key: 'remote', text: target ? `${target} · ${remote}` : remote });
+  }
+  const files = Number(source.fileCount || 0);
+  if (files > 0) rows.push({ key: 'files', text: String(files) });
+  const dirs = Number(source.dirCount || 0);
+  if (dirs > 0) rows.push({ key: 'dirs', text: String(dirs) });
+  const bytes = Number(source.totalBytes || 0);
+  if (bytes > 0) rows.push({ key: 'size', text: formatBytes(bytes) });
+  return rows;
+}
+
 // sshEndpointOf 是节点在 UI 上的端点写法（与 SSH 面板的 endpointOf 一致）：
 // username@host:port，缺端口按 22；连主机都没有时返回空串而不是 ":22"。
 function sshEndpointOf(node) {

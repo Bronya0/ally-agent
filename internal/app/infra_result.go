@@ -986,8 +986,8 @@ func formatTruncatedLines(lines []int, omitted bool) string {
 	return strings.Join(parts, ",")
 }
 
-// renderCommandResultForModel renders a command result as a <ally-cmd> block with
-// the merged stdout/stderr verbatim in the body. The command text and cwd are
+// renderCommandResultForModel renders a command result as a <ally-command> block with
+// the merged stdout/stderr in the body. The command text and cwd are
 // deliberately not echoed — the model just sent them in the tool call one
 // message earlier, and re-quoting them only doubles long commands in history.
 // A zero exit code is the implicit success path (attribute omitted); non-zero
@@ -997,17 +997,31 @@ func formatTruncatedLines(lines []int, omitted bool) string {
 // A sandbox-denied write carries its model-facing note (DeniedWriteHint) here,
 // appended after the output: the note is deliberately kept out of Output so the
 // command card's body preview does not fill up with it.
+//
+// The body is bounded twice. maxToolOutput caps the in-memory buffer, which is
+// what the card and the spilled file read; maxModelToolOutput caps what reaches
+// model context, the same head+tail budget third-party MCP text gets. A 128KB
+// build log would otherwise sit in the conversation for the rest of the session
+// and be re-sent on every request. reduced-from reports the real length, so the
+// model knows how much of it it is not seeing.
 func renderCommandResultForModel(r CommandResult) string {
 	body := "(no output)"
+	reducedFrom := 0
 	if r.Output != "" {
-		body = strings.TrimRight(r.Output, "\n")
+		output := strings.TrimRight(r.Output, "\n")
+		compacted, reduced := compactTextForModel(output, compactTextSpec{limit: maxModelToolOutput, head: modelToolHeadBytes, tail: modelToolTailBytes})
+		if reduced {
+			reducedFrom = len(output)
+		}
+		body = compacted
 	}
+	// 拒写说明跟在裁剪之后追加：它是模型必须看到的那一条，不能落进被省略的中间段。
 	if r.DeniedWriteHint != "" {
 		body += "\n\n" + strings.TrimRight(r.DeniedWriteHint, "\n")
 	}
-	body = escapeClosingMarker(body, "</ally-cmd")
+	body = escapeClosingMarker(body, "</ally-command")
 	var b strings.Builder
-	b.WriteString("<ally-cmd")
+	b.WriteString("<ally-command")
 	if r.ExitCode != 0 {
 		fmt.Fprintf(&b, ` exit="%d"`, r.ExitCode)
 	}
@@ -1020,13 +1034,34 @@ func renderCommandResultForModel(r CommandResult) string {
 	if r.Truncated {
 		b.WriteString(` truncated`)
 	}
+	// 模型侧被裁过时给出裁剪前的真实长度（与 service read 同一套口径）：
+	// 只写 reduced-from，不另起一个布尔标记，"truncated" 在本块里专指内存缓冲溢出。
+	if reducedFrom > 0 {
+		fmt.Fprintf(&b, ` reduced-from="%d"`, reducedFrom)
+	}
 	if r.OutputFilePath != "" {
 		b.WriteString(` full="` + attrEscape(r.OutputFilePath) + `"`)
 	}
 	b.WriteString(">\n")
 	b.WriteString(body)
-	b.WriteString("\n</ally-cmd>")
+	if reducedFrom > 0 {
+		b.WriteString("\n" + commandModelReducedNote(r.OutputFilePath))
+	}
+	b.WriteString("\n</ally-command>")
 	return b.String()
+}
+
+// commandModelReducedNote explains a command output whose middle was dropped on
+// the model side. The full text survives in the spill file only when the
+// in-memory buffer overflowed too (output past maxToolOutput); a smaller command
+// produced more than model context wanted but wrote nothing to disk, and the
+// fallback there is the command itself — unlike a third-party tool, a command can
+// be re-run with its output narrowed.
+func commandModelReducedNote(outputFilePath string) string {
+	if outputFilePath != "" {
+		return "[中间段已从模型上下文省略；完整输出在 " + outputFilePath + "（见 full 属性），需要中间段就用 read 分段读或 grep 检索该文件，不要整读]"
+	}
+	return "[中间段已从模型上下文省略；需要它请重跑这条命令并把输出收窄（tail/head/grep、--quiet、只跑相关用例），或重定向到工作区文件后再 read/grep]"
 }
 
 // renderScreenshotResultForModel renders a capture as a single self-closing
@@ -1285,7 +1320,7 @@ func renderMcpResultForModel(result toolResult, fullJSON string) string {
 
 // escapeClosingMarker neutralizes a literal closing-marker shape inside a tag
 // body: external text (file contents, command output, web pages, service
-// logs) may carry "</ally-cmd" etc., and only this renderer's own closing tag
+// logs) may carry "</ally-command" etc., and only this renderer's own closing tag
 // may announce the block end. Escaping the "<" of the marker shape keeps the
 // text readable while making the boundary unforgeable — one rule for every
 // renderer, no fallback paths.
@@ -1299,7 +1334,7 @@ func escapeClosingMarker(body, marker string) string {
 // neutralizeClosingMarkers makes closing-marker-shaped text inert in the free
 // text lines of a payload that has no enclosing block (edit summaries,
 // validation output, warnings). Those lines carry outside text — compiler and
-// linter output can contain anything — and a literal "</ally-cmd" there would read
+// linter output can contain anything — and a literal "</ally-command" there would read
 // as another block's boundary. Only the marker shape is escaped, so ordinary
 // "<" text stays readable.
 func neutralizeClosingMarkers(v string) string {
