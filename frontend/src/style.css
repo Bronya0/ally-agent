@@ -3693,9 +3693,8 @@ html.rail-expanded .chat-layout {
   line-height: 1.8;
   color: var(--ally-text-soft);
   padding: 4px;
-}
-
-.context-breakdown div {
+  /* 整块单行（含子级）：写在容器上而不写成 `.context-breakdown div`，
+     否则任何嵌进来的组件根节点（n-alert 之类也是 div）都会被顺带套上。 */
   white-space: nowrap;
 }
 

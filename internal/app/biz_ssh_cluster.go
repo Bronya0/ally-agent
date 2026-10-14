@@ -220,7 +220,7 @@ func (a *App) loadSSHClusters() error {
 		}
 		for _, alias := range aliases {
 			clean := strings.ToLower(strings.TrimSpace(alias))
-			if clean != "" {
+			if _, exists := a.sshClusters[clean]; exists {
 				a.sshWorkspaceAllowed[cleanWS][clean] = true
 			}
 		}
@@ -416,6 +416,15 @@ func (a *App) deleteSSHServerLocked(alias string) error {
 		a.sshCredentials.purgeHost(nodeSSHHost(previous))
 	}
 	delete(a.sshClusters, alias)
+	// 删除节点必须同时撤销所有工作区的授权，避免计数残留以及同名节点继承旧授权。
+	a.sshWorkspaceAllowedMu.Lock()
+	for ws, allowed := range a.sshWorkspaceAllowed {
+		delete(allowed, alias)
+		if len(allowed) == 0 {
+			delete(a.sshWorkspaceAllowed, ws)
+		}
+	}
+	a.sshWorkspaceAllowedMu.Unlock()
 	return a.saveSSHClustersLocked()
 }
 
@@ -434,6 +443,9 @@ func (a *App) AuthorizeServerForWorkspace(workspace, alias string) {
 func (a *App) authorizeServerForWorkspaceLocked(normWS, alias string) {
 	a.sshClustersMu.Lock()
 	defer a.sshClustersMu.Unlock()
+	if _, exists := a.sshClusters[alias]; !exists {
+		return
+	}
 
 	a.sshWorkspaceAllowedMu.Lock()
 	if a.sshWorkspaceAllowed == nil {
@@ -473,7 +485,7 @@ func (a *App) setWorkspaceAllowedServersLocked(normWS string, aliases []string) 
 	m := make(map[string]bool, len(aliases))
 	for _, alias := range aliases {
 		clean := strings.ToLower(strings.TrimSpace(alias))
-		if clean != "" {
+		if _, exists := a.sshClusters[clean]; exists {
 			m[clean] = true
 		}
 	}
@@ -486,6 +498,8 @@ func (a *App) setWorkspaceAllowedServersLocked(normWS string, aliases []string) 
 // GetWorkspaceAllowedServers returns the list of server aliases allowed for a workspace.
 func (a *App) GetWorkspaceAllowedServers(workspace string) []string {
 	normWS := normalizeWorkspaceKey(workspace)
+	a.sshClustersMu.RLock()
+	defer a.sshClustersMu.RUnlock()
 	a.sshWorkspaceAllowedMu.RLock()
 	defer a.sshWorkspaceAllowedMu.RUnlock()
 	if a.sshWorkspaceAllowed == nil {
@@ -497,7 +511,7 @@ func (a *App) GetWorkspaceAllowedServers(workspace string) []string {
 	}
 	res := make([]string, 0, len(m))
 	for alias, allowed := range m {
-		if allowed {
+		if _, exists := a.sshClusters[alias]; allowed && exists {
 			res = append(res, alias)
 		}
 	}
@@ -508,6 +522,11 @@ func (a *App) GetWorkspaceAllowedServers(workspace string) []string {
 func (a *App) IsServerAuthorizedForWorkspace(workspace, alias string) bool {
 	normWS := normalizeWorkspaceKey(workspace)
 	alias = strings.ToLower(strings.TrimSpace(alias))
+	a.sshClustersMu.RLock()
+	defer a.sshClustersMu.RUnlock()
+	if _, exists := a.sshClusters[alias]; !exists {
+		return false
+	}
 	a.sshWorkspaceAllowedMu.RLock()
 	defer a.sshWorkspaceAllowedMu.RUnlock()
 	if a.sshWorkspaceAllowed == nil {

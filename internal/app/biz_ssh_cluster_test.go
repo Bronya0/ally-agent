@@ -122,6 +122,96 @@ func TestSSHClusterPersistenceAndScoping(t *testing.T) {
 	}
 }
 
+func TestSSHClusterDeleteRevokesWorkspaceGrants(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	a := NewApp()
+	a.configPath = filepath.Join(dir, "config.json")
+	for _, alias := range []string{"keep", "remove"} {
+		if err := a.SaveSSHServer(SSHServerNode{Alias: alias, Host: "127.0.0.1", Username: "test", Description: "test"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workspaces := []string{filepath.Join(dir, "ws1"), filepath.Join(dir, "ws2")}
+	for _, ws := range workspaces {
+		if err := a.SetWorkspaceAllowedServers(ws, []string{"keep", "remove"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.DeleteSSHServer(" REMOVE "); err != nil {
+		t.Fatal(err)
+	}
+	// Recreating the same alias must not resurrect its previous grants.
+	if err := a.SaveSSHServer(SSHServerNode{Alias: "remove", Host: "127.0.0.2", Username: "test", Description: "replacement"}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewApp()
+	reloaded.configPath = a.configPath
+	if err := reloaded.loadSSHClusters(); err != nil {
+		t.Fatal(err)
+	}
+	for _, instance := range []*App{a, reloaded} {
+		for _, ws := range workspaces {
+			allowed := instance.GetWorkspaceAllowedServers(ws)
+			if len(allowed) != 1 || allowed[0] != "keep" {
+				t.Fatalf("allowed servers = %v, want [keep]", allowed)
+			}
+			if instance.IsServerAuthorizedForWorkspace(ws, "remove") {
+				t.Fatal("replacement node inherited a deleted node's grant")
+			}
+			if got := instance.ListAuthorizedSSHServers(ws); len(got) != 1 || got[0].Alias != "keep" {
+				t.Fatalf("authorized summaries = %+v, want only keep", got)
+			}
+		}
+	}
+}
+
+func TestSSHClusterIgnoresMissingWorkspaceGrants(t *testing.T) {
+	for _, source := range []string{"legacy file", "set", "authorize", "stale memory"} {
+		t.Run(source, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("HOME", dir)
+			t.Setenv("USERPROFILE", dir)
+			a := NewApp()
+			a.configPath = filepath.Join(dir, "config.json")
+			const ws = "workspace"
+			if err := a.SaveSSHServer(SSHServerNode{Alias: "keep", Host: "127.0.0.1", Username: "test", Description: "test"}); err != nil {
+				t.Fatal(err)
+			}
+			switch source {
+			case "legacy file":
+				data := `{"servers":[{"alias":"keep","host":"127.0.0.1","description":"test"}],"workspaceAllowed":{"workspace":[" KEEP ","missing"]}}`
+				if err := os.WriteFile(a.sshClustersFilePath(), []byte(data), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := a.loadSSHClusters(); err != nil {
+					t.Fatal(err)
+				}
+			case "set":
+				if err := a.SetWorkspaceAllowedServers(ws, []string{" KEEP ", "missing"}); err != nil {
+					t.Fatal(err)
+				}
+			case "authorize":
+				a.AuthorizeServerForWorkspace(ws, " KEEP ")
+				a.AuthorizeServerForWorkspace(ws, "missing")
+			case "stale memory":
+				a.sshWorkspaceAllowed[ws] = map[string]bool{"keep": true, "missing": true}
+			}
+			allowed := a.GetWorkspaceAllowedServers(ws)
+			if len(allowed) != 1 || allowed[0] != "keep" {
+				t.Fatalf("allowed servers = %v, want [keep]", allowed)
+			}
+			if a.IsServerAuthorizedForWorkspace(ws, "missing") {
+				t.Fatal("missing node should not be authorized")
+			}
+			if source != "stale memory" && a.sshWorkspaceAllowed[ws]["missing"] {
+				t.Fatal("write path retained a missing node's grant")
+			}
+		})
+	}
+}
+
 // TestSSHSessionApprovalLifecycle tests session-level connection approval.
 func TestSSHSessionApprovalLifecycle(t *testing.T) {
 	app := NewApp()

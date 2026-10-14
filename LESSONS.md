@@ -206,3 +206,4 @@
 [remote-refusal-one-per-cause] 2026-10-13 中危 远端拒绝文案要按机制分开报：合成一句会让模型归因错规则反复重试（层级拒绝曾被报成敏感路径）。@orch_remote.go
 [live-extra-roots] 2026-10-13 中危 运行中增删会话附加工作区只靠下次请求覆盖=当轮围栏仍按旧列表；须即时上报＋run 内重算。@biz_session_roots.go
 2026-10-13 高危 async-workspace 异步文件操作返回后不校验工作区与版本，会把旧操作结果写入新工作区的树和编辑器状态。@WorkspaceExplorer.vue
+2026-10-13 高危 ssh-orphan-grants 删除 SSH 节点未同步撤销各工作区授权，会让计数残留且同名新节点继承旧权限。@biz_ssh_cluster.go

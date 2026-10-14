@@ -389,11 +389,11 @@ Public License v3. See the LICENSE file for details.
             <n-button secondary :loading="proxyTesting" :disabled="draft.proxyMode === 'off'" @click="testProxy">{{ $t('settings.proxyTest') }}</n-button>
           </div>
           <div v-if="proxyStatus" class="proxy-status-card">
-            <div><span>{{ $t('settings.proxySource') }}</span><strong>{{ proxyStatus.source || '-' }}</strong></div>
-            <div><span>HTTP</span><strong>{{ proxyStatus.httpProxy || '-' }}</strong></div>
-            <div><span>HTTPS</span><strong>{{ proxyStatus.httpsProxy || '-' }}</strong></div>
-            <div><span>NO_PROXY</span><strong>{{ proxyStatus.noProxy || '-' }}</strong></div>
-            <div v-if="proxyStatus.pacUrl"><span>PAC</span><strong>{{ proxyStatus.pacUrl }}</strong></div>
+            <div class="proxy-status-row"><span>{{ $t('settings.proxySource') }}</span><strong>{{ proxyStatus.source || '-' }}</strong></div>
+            <div class="proxy-status-row"><span>HTTP</span><strong>{{ proxyStatus.httpProxy || '-' }}</strong></div>
+            <div class="proxy-status-row"><span>HTTPS</span><strong>{{ proxyStatus.httpsProxy || '-' }}</strong></div>
+            <div class="proxy-status-row"><span>NO_PROXY</span><strong>{{ proxyStatus.noProxy || '-' }}</strong></div>
+            <div v-if="proxyStatus.pacUrl" class="proxy-status-row"><span>PAC</span><strong>{{ proxyStatus.pacUrl }}</strong></div>
             <n-alert v-if="proxyStatus.error || proxyStatus.pacUnsupported" type="warning" :show-icon="false">
               {{ proxyStatus.error || $t('settings.proxyPacUnsupported') }}
             </n-alert>
@@ -1256,9 +1256,11 @@ watch(() => props.visible, (visible) => {
 .proxy-warning { margin-bottom: 12px; }
 .proxy-actions { display: flex; gap: 8px; margin-bottom: 12px; }
 .proxy-status-card { display: grid; gap: 8px; padding: 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(255,255,255,.025); }
-.proxy-status-card > div { display: grid; grid-template-columns: 90px minmax(0,1fr); gap: 10px; font-size: 12px; }
-.proxy-status-card span { color: var(--ally-text-faint); }
-.proxy-status-card strong { overflow-wrap: anywhere; color: var(--ally-text-body); font-family: var(--ally-mono-font); font-weight: 500; }
+/* 只圈状态行本身：卡片里还嵌着 n-alert，它的根节点也是 div，
+   用 `> div` 会把提示框一并拉进这个两列网格，正文被挤成竖排。 */
+.proxy-status-row { display: grid; grid-template-columns: 90px minmax(0,1fr); gap: 10px; font-size: 12px; }
+.proxy-status-row span { color: var(--ally-text-faint); }
+.proxy-status-row strong { overflow-wrap: anywhere; color: var(--ally-text-body); font-family: var(--ally-mono-font); font-weight: 500; }
 
 .config-section-header {
   display: flex;
