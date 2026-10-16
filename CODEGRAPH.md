@@ -44,6 +44,7 @@
 | 计划任务 / 后台服务 / 命令超时收编（LLM 任务在创建时记下模型身份，运行时按身份展开） | `orch_scheduler.go` / `orch_services.go`（promoteTimedOutCommand）+ `TaskCenterPanel.vue` |
 | 远程 SSH 工具与审批闸门（首次连接 / 危险命令 / 覆盖 / 集群登记；主机指纹不一致直接换记录重连；写入与命令同过 `.git` 元数据围栏） | `orch_remote.go` / `orch_ssh_cluster.go`（按解析端点缓存并区分认证模式）+ `internal/tools/sshclient/`（纯 Go 传输、密钥认证、known_hosts 固化与不一致时替换） |
 | SSH 集群清单与工作区授权（`ssh_clusters.json` 落盘、别名/端点两种写法、默认拒绝） | `internal/app/biz_ssh_cluster.go` + `orch_ssh_cluster.go` + `SSHClusterPanel.vue` + `ComposerInfoBar.vue` |
+| 远端 Python helper（普通工具 JSON / 文件传输 tar 两种模式；共享路径、VCS、文本转换和结果封装） | `internal/app/remote_helper.py`（由 `orch_remote.go` 通过 `go:embed` 嵌入） |
 | 知识库模式（KB 提示词 / sources/ 只读） | `internal/app/orch_kb.go` + `ModeSider.vue` + `App.vue` |
 | 对外本地 HTTP API 服务 | `internal/app/biz_api.go` |
 | 应用自更新 | `internal/app/biz_update.go` |

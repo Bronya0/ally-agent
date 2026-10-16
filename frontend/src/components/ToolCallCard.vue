@@ -50,7 +50,7 @@ Public License v3. See the LICENSE file for details.
          而来，与删除卡的逐行同一套路数，不用展开就能看到全部字段。 -->
     <div v-if="transferFields.length" class="tool-field-grid">
       <div v-for="field in transferFields" :key="field.key" class="tool-field-row">
-        <span class="tool-field-label">{{ field.label }}</span>
+        <span class="tool-field-label">{{ field.label }}:</span>
         <span class="tool-field-value" :title="field.value">{{ field.value }}</span>
       </div>
     </div>

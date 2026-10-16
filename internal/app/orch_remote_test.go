@@ -51,10 +51,11 @@ func pickRemoteHelperPython(t *testing.T) string {
 }
 
 // TestRemoteScriptTransportInvariants 锁定 payload 传输与删除拦截的关键不变量：
-// payload 走 stdin 占位符（不用 argv）、删除判定收敛到 Go 侧（Python 无正则）。
+// 普通模式 payload 走 stdin 占位符，传输模式才读 argv；删除判定 Python 无正则。
 func TestRemoteScriptTransportInvariants(t *testing.T) {
-	if strings.Contains(remotePythonScript, "sys.argv") {
-		t.Error("remote python script must not use sys.argv; payload is injected via __PAYLOAD_B64__ placeholder")
+	if !strings.Contains(remotePythonScript, "TRANSFER_MODE = False") ||
+		!strings.Contains(strings.ReplaceAll(remotePythonScript, "\r\n", "\n"), "encoded = PAYLOAD_B64\n    if TRANSFER_MODE:") {
+		t.Error("ordinary helper mode must use the injected payload; only transfer mode may read argv")
 	}
 	if !strings.Contains(remotePythonScript, "__PAYLOAD_B64__") {
 		t.Error("remote python script lost __PAYLOAD_B64__ placeholder")
@@ -371,6 +372,46 @@ func TestRemoteHelperStatOp(t *testing.T) {
 	}
 }
 
+// Stat must distinguish absence from permission, link-loop and storage failures.
+func TestRemoteHelperStatErrors(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	for _, tc := range []struct {
+		errno   string
+		missing bool
+	}{
+		{"ENOENT", true}, {"ENOTDIR", true},
+		{"EACCES", false}, {"EIO", false}, {"ELOOP", false},
+	} {
+		t.Run(tc.errno, func(t *testing.T) {
+			script, err := buildRemoteScript(map[string]any{"op": "stat", "workspaceRoot": root, "path": "probe"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Simulate OS failures deterministically, including under administrator/root.
+			hook := "import os, errno\n_original_stat = os.stat\ndef _probe_stat(path, *args, **kwargs):\n    if path.endswith('probe'):\n        raise OSError(errno." + tc.errno + ", 'simulated " + tc.errno + "')\n    return _original_stat(path, *args, **kwargs)\nos.stat = _probe_stat\n"
+			script = strings.Replace(script, "from __future__ import print_function", "from __future__ import print_function\n"+hook, 1)
+			resp, err := runRemoteHelperScript(t, py, script)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.OK != tc.missing {
+				t.Fatalf("%s: ok=%v error=%q", tc.errno, resp.OK, resp.Error)
+			}
+			if tc.missing {
+				var data struct {
+					Exists bool `json:"exists"`
+				}
+				if err := json.Unmarshal(resp.Data, &data); err != nil || data.Exists {
+					t.Fatalf("expected missing result, data=%s err=%v", resp.Data, err)
+				}
+			} else if !strings.Contains(resp.Error, "simulated "+tc.errno) {
+				t.Fatalf("lost OS error: %q", resp.Error)
+			}
+		})
+	}
+}
+
 // TestRemoteHelperWriteDefaultPerm0644 锁定新建文件权限契约：mkstemp 的
 // 0600 会让远程新建文件对其他账号不可读；现在必须对齐本地
 // SafeWriteFile 的 0644 默认值，覆盖时保留原文件权限位。
@@ -563,6 +604,9 @@ func TestRemoteHelperReadBatchOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildRemoteScript: %v", err)
 	}
+	// Deferred files must not be opened in this round (nor encoded and discarded).
+	hook := "_original_open = open\ndef open(path, *args, **kwargs):\n    if path.endswith('b.txt'):\n        raise IOError('deferred file must not be opened')\n    return _original_open(path, *args, **kwargs)\n"
+	script = strings.Replace(script, "from __future__ import print_function", "from __future__ import print_function\n"+hook, 1)
 	resp, err := runRemoteHelperScript(t, py, script)
 	if err != nil {
 		t.Fatal(err)

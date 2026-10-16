@@ -8,6 +8,7 @@
 package app
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -277,6 +278,9 @@ func TestRemoteTransferSecurityFences(t *testing.T) {
 }
 
 func TestRemoteTransferExecuteValidation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	ws := t.TempDir()
 	a := NewApp()
 	a.config.Workspace = ws
@@ -508,5 +512,184 @@ func TestRemoteTransferUploadSensitiveDirectoryBlocked(t *testing.T) {
 	})
 	if toolErrorCode(err) != "E_PROTECTED_PATH" {
 		t.Fatalf("expected E_PROTECTED_PATH when uploading sensitive directory .ssh, got %v", err)
+	}
+}
+
+func TestRemoteTransferUploadArchiveFences(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	for _, name := range []string{"sibling.txt", "/dest/evil.txt", "dest/../evil.txt", "dest/.git/config"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			var buf bytes.Buffer
+			tw := tar.NewWriter(&buf)
+			_ = tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Size: 4, Mode: 0o644})
+			_, _ = tw.Write([]byte("evil"))
+			_ = tw.Close()
+			stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "upload", "workspaceRoot": root, "remotePath": "dest", "overwrite": true}, &buf, nil)
+			if err == nil {
+				t.Fatalf("accepted malicious archive %q: %s", name, stderr)
+			}
+			if err := decodeRemoteTransferMarker(stderr, nil); err == nil {
+				t.Fatal("reported success for malicious archive")
+			}
+		})
+	}
+}
+
+func TestRemoteTransferUploadExistingSymlinkParent(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root, outside := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "dest"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "dest", "link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_ = tw.WriteHeader(&tar.Header{Name: "dest/link/evil.txt", Typeflag: tar.TypeReg, Size: 4, Mode: 0o644})
+	_, _ = tw.Write([]byte("evil"))
+	_ = tw.Close()
+	stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "upload", "workspaceRoot": root, "remotePath": "dest", "overwrite": true}, &buf, nil)
+	if err == nil {
+		t.Fatalf("accepted symlink escape: %s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "evil.txt")); !os.IsNotExist(err) {
+		t.Fatal("wrote outside workspace")
+	}
+}
+
+func TestRemoteTransferDownloadHardlinks(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	pkg := filepath.Join(root, "pkg")
+	if err := os.Mkdir(pkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "a.txt"), []byte("shared content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(pkg, "a.txt"), filepath.Join(pkg, "b.txt")); err != nil {
+		t.Skipf("hardlinks unavailable: %v", err)
+	}
+	var buf bytes.Buffer
+	stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "download", "workspaceRoot": root, "remotePath": "pkg", "arcRootName": "pkg"}, nil, &buf)
+	if err != nil {
+		t.Fatalf("download: %v %s", err, stderr)
+	}
+	dest := t.TempDir()
+	stats, err := streamarchive.UnpackTarget(&buf, filepath.Join(dest, "pkg"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reported streamarchive.Stats
+	if err := decodeRemoteTransferMarker(stderr, &reported); err != nil {
+		t.Fatal(err)
+	}
+	if stats != reported || stats.FileCount != 2 {
+		t.Fatalf("stats mismatch: %+v %+v", stats, reported)
+	}
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if data, err := os.ReadFile(filepath.Join(dest, "pkg", name)); err != nil || string(data) != "shared content" {
+			t.Fatalf("hardlinked file missing: %s %q %v", name, data, err)
+		}
+	}
+}
+
+func TestRemoteTransferDownloadReadErrorIsFailure(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pkg", "unreadable.txt"), []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{"action": "download", "workspaceRoot": root, "remotePath": "pkg"})
+	// Deterministically simulate a file becoming unreadable between walk and add,
+	// including when the test process is an administrator/root.
+	prelude := "import tarfile\noriginal_add = tarfile.TarFile.add\ndef failing_add(self, name, *args, **kwargs):\n    if name.endswith('unreadable.txt'): raise IOError('simulated read failure')\n    return original_add(self, name, *args, **kwargs)\ntarfile.TarFile.add = failing_add\n"
+	// The helper contains a future import, so execute it as a separate compilation.
+	cmd := exec.Command(py, "-u", "-", base64.RawURLEncoding.EncodeToString(payload))
+	cmd.Stdin = strings.NewReader(prelude + "exec(compile(" + stringMustJSON(remoteTransferPythonScript) + ", '<ally-transfer>', 'exec'))")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	cmd.Stdout = io.Discard
+	if err := cmd.Run(); err == nil {
+		t.Fatalf("read error silently reported success: %s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "simulated read failure") {
+		t.Fatalf("missing failure reason: %s", stderr.String())
+	}
+}
+
+func stringMustJSON(s string) string {
+	encoded, _ := json.Marshal(s)
+	return string(encoded)
+}
+
+func TestDecodeRemoteTransferMarkerRejectsInvalidStatistics(t *testing.T) {
+	for _, response := range []string{
+		`{"ok":true}`,
+		`{"ok":true,"data":null}`,
+		`{"ok":true,"data":{}}`,
+		`{"ok":true,"data":{"totalBytes":-1,"fileCount":1,"dirCount":0}}`,
+		`{"ok":true,"data":{"totalBytes":1,"fileCount":1}}`,
+	} {
+		if err := decodeRemoteTransferMarker([]byte(remoteTransferMarker+response), nil); err == nil {
+			t.Fatalf("accepted invalid success response: %s", response)
+		}
+	}
+}
+
+func TestRemoteTransferUploadTruncatedReplacementPreservesDestination(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	for _, directory := range []bool{false, true} {
+		root := t.TempDir()
+		target := filepath.Join(root, "target")
+		original := target
+		if directory {
+			if err := os.Mkdir(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			original = filepath.Join(target, "original.txt")
+		}
+		if err := os.WriteFile(original, []byte("original"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		_ = tw.WriteHeader(&tar.Header{Name: "target", Typeflag: tar.TypeReg, Size: 4096, Mode: 0o644})
+		_, _ = tw.Write([]byte("partial"))
+		stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "upload", "workspaceRoot": root, "remotePath": "target", "overwrite": true}, &buf, nil)
+		if err == nil {
+			t.Fatalf("accepted truncated stream: %s", stderr)
+		}
+		if data, err := os.ReadFile(original); err != nil || string(data) != "original" {
+			t.Fatalf("destroyed original: %q %v", data, err)
+		}
+		matches, _ := filepath.Glob(filepath.Join(root, ".ally-tmp-*"))
+		if len(matches) != 0 {
+			t.Fatalf("temporary files leaked: %v", matches)
+		}
+	}
+}
+
+func TestRemoteTransferUploadDuplicateEntryDoesNotClobber(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, content := range []string{"original", "modified"} {
+		_ = tw.WriteHeader(&tar.Header{Name: "target", Typeflag: tar.TypeReg, Size: int64(len(content)), Mode: 0o600})
+		_, _ = tw.Write([]byte(content))
+	}
+	_ = tw.Close()
+	stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "upload", "workspaceRoot": root, "remotePath": "target", "overwrite": false}, &buf, nil)
+	if err == nil {
+		t.Fatalf("accepted duplicate entry with overwrite disabled: %s", stderr)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "target")); err != nil || string(data) != "original" {
+		t.Fatalf("clobbered original: %q %v", data, err)
 	}
 }
