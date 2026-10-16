@@ -69,6 +69,7 @@ func builtinToolNames(t *testing.T) map[string]bool {
 // tool-looking name the system prompts advertise must exist in the builtin
 // registry (or be an explicitly allowlisted non-tool token).
 func TestSystemPromptToolReferencesExist(t *testing.T) {
+	redirectAppStateDir(t)
 	registry := builtinToolNames(t)
 	kbRoot := t.TempDir()
 	prompts := map[string]string{
@@ -166,5 +167,28 @@ func TestMemoryIndexStaysWithinBudget(t *testing.T) {
 	index := got[strings.Index(got, "## Memory index"):]
 	if len(index) > memoryIndexMaxBytes+200 {
 		t.Fatalf("index block = %d bytes, want around the %d-byte budget", len(index), memoryIndexMaxBytes)
+	}
+}
+
+// Efficiency rules must hold for both agents without losing completion checks.
+func TestPromptExecutionEfficiency(t *testing.T) {
+	redirectAppStateDir(t)
+	main := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
+	for label, prompt := range map[string]string{"main": main, "child": subagentSystemPrompt("")} {
+		for _, rule := range []string{"side effects conflict", "Inspect every result", "Reuse reliable context", "preserve failure/exit status", "JSON encoding is not shell escaping", "repeat or broaden verification only"} {
+			if !strings.Contains(prompt, rule) {
+				t.Errorf("%s missing %q", label, rule)
+			}
+		}
+		for _, obsolete := range []string{"batching is never slower", "there is no per-response cap", "Default to ending every reply"} {
+			if strings.Contains(prompt, obsolete) {
+				t.Errorf("%s retains %q", label, obsolete)
+			}
+		}
+	}
+	for _, rule := range []string{"Existing authorization remains valid", "mid-task user messages", "do not restart exploration", "omit only when no useful follow-up exists", "final reply must stand alone"} {
+		if !strings.Contains(main, rule) {
+			t.Errorf("main missing %q", rule)
+		}
 	}
 }

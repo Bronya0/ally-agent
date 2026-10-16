@@ -273,7 +273,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"questions"},
 		}),
-		functionTool("scheduled_task", "Create, list, or delete persistent scheduled tasks that survive Ally restarts. Recurring schedules resume from startup without catching up missed fires. The backend also accepts future RFC3339 one-shot times; past-due one-shots are reported as missed and never run late. For agent-created tasks, create only when the user explicitly requests recurring automation. Task content must be exactly one of instruction (an LLM agent runs with fresh context each fire, on the model that was active when the task was created) or command (a shell command runs in the task workspace through command safety checks, max 600s per run).", map[string]any{
+		functionTool("scheduled_task", "Create, list, or delete persistent scheduled tasks that survive Ally restarts. Recurring schedules resume from startup without catching up missed fires. The backend also accepts future RFC3339 one-shot times; past-due one-shots are reported as missed and never run late. For agent-created tasks, create only when the user explicitly requests scheduled or recurring automation. Task content must be exactly one of instruction (an LLM agent runs with fresh context each fire, on the model that was active when the task was created) or command (a shell command runs in the task workspace through command safety checks, max 600s per run).", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":      map[string]any{"type": "string", "enum": []string{"create", "list", "delete"}, "description": "Create, list, or delete a scheduled task."},
@@ -480,7 +480,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"skill"},
 		}),
-		functionTool("suggest", "Suggest 1-4 follow-up actions the user is most likely to take next. Order them by relevance, most recommended first. Start every item with its ordinal (\"1. …\", \"2. …\"), counted from 1 in array order — the chips display the text exactly as written, so the number is what tells the user the intended order. Each item is sent as-is as the user's next message, so phrase it as an instruction the user would send rather than a note to yourself. This must be the only tool call in that model response: Ally rejects the whole batch (E_SUGGEST_BATCH_CONFLICT) when anything else rides along.", map[string]any{
+		functionTool("suggest", "By default, suggest 1-4 relevant next actions at the end of a reply; omit only when no useful follow-up exists. Order them by relevance, most recommended first. Start every item with its ordinal (\"1. …\", \"2. …\"), counted from 1 in array order — the chips display the text exactly as written, so the number is what tells the user the intended order. Each item is sent as-is as the user's next message, so phrase it as an instruction the user would send rather than a note to yourself. This must be the only tool call in that model response: Ally rejects the whole batch (E_SUGGEST_BATCH_CONFLICT) when anything else rides along.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"items": map[string]any{

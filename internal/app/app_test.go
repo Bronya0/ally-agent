@@ -1340,6 +1340,7 @@ func TestLoadAgentsMdLoadsSubdirsWhenRootMissing(t *testing.T) {
 // 怎么恢复、安全红线、别为安心重复读文件、edit 的行为准则。分组只是为了报错时能
 // 说清缺的是哪一类，断言与原来五个用例逐条一致（多条缺失一次全报，不再只报第一条）。
 func TestSystemPromptCarriesTheStandingRules(t *testing.T) {
+	redirectAppStateDir(t)
 	prompt := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
 	groups := []struct {
 		name string
