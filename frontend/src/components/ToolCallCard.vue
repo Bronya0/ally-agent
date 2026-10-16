@@ -133,7 +133,6 @@ Public License v3. See the LICENSE file for details.
     </div>
     <div v-if="msg.status === 'error'" class="tool-error-block" role="alert">
       <div v-if="msg.errorCode" class="tool-error-detail">
-        <span>{{ errorDescription(msg) }}</span>
         <code>{{ msg.errorCode }}</code>
       </div>
       <pre v-if="errorReasonText(msg)" class="tool-error-reason">{{ errorReasonText(msg) }}</pre>
@@ -217,15 +216,11 @@ function treePrefix(index) {
   return index === deleteRows.value.length - 1 ? '└─' : '├─';
 }
 
-// 逐行失败原因：错误码有本地化句子就用它（与卡片告警行、错误块标签同一句，见 i18n
-// 的 tools.error.<CODE>），没译文才退回结果里的原始文本。原始串可能多行、且带错误
-// 码前缀与整段可写根提示（远端删除不给错误码，最容易撞上），所以行内只留第一行，
-// 完整文本照旧挂在 title 上，行本身再由 .read-group-chip-error 截断。
+// 逐行失败原因是错误正体同一份文案的截取：原始串可能多行（远端删除最容易撞上），
+// 行内只留第一行，完整文本照旧挂在 title 上，行本身再由 .read-group-chip-error
+// 截断。这里同样不套本地化标签，免得逐行原因与错误块把同一件事说成两句不同的话。
 function deleteRowError(row) {
-  const label = errorCodeLabel(row?.errorCode);
-  if (label) return label;
-  const raw = String(row?.error || '').trim();
-  return raw.split(/[\r\n]/, 1)[0].trim();
+  return formatToolErrorBody(row?.error).split('\n', 1)[0].trim();
 }
 
 // 一批同类记录的工具结果（ssh_cluster 服务器清单 / service 进程清单 / scheduled_task
@@ -443,27 +438,10 @@ function computeToolBodyText(msg, body) {
   return normalizedLines(body).slice(0, BODY_PREVIEW_LINES).join('\n');
 }
 
-// errorCodeLabel 是错误码的本地化标签：没有译文时返回空串，退回什么由调用方自己
-// 决定（错误块退到「工具执行出错」，删除卡的逐行原因退到结果里的原始文本）。
-function errorCodeLabel(code) {
-  const value = String(code || '').trim();
-  if (!value) return '';
-  const key = `tools.error.${value}`;
-  const translated = t(key);
-  return translated !== key ? translated : '';
-}
-
-function errorDescription(msg) {
-  const label = errorCodeLabel(msg?.errorCode);
-  if (label) return label;
-  if (!msg?.errorCode) return errorReasonText(msg) || String(msg.body || '');
-  return t('tools.error.unknown');
-}
-
-// 已有本地化错误描述时不重复展示原始（多为英文的）错误文本；
-// 完整错误仍通过工具结果返回给模型。
+// 错误正体就是后端交给模型的那份原文（同一个 error 字段），前端不再另造一句本地化
+// 摘要：多一层标签就等于两套文案。展示层只剥信封，收口在 formatToolErrorBody：去掉
+// 开头的 [CODE] 前缀（码已由 chip 单独显示）与标题里已有的「被拦截的命令」回声。
 function errorReasonText(msg) {
-  if (errorCodeLabel(msg?.errorCode)) return '';
   return formatToolErrorBody(msg?.body);
 }
 

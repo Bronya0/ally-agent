@@ -207,3 +207,4 @@
 [live-extra-roots] 2026-10-13 中危 运行中增删会话附加工作区只靠下次请求覆盖=当轮围栏仍按旧列表；须即时上报＋run 内重算。@biz_session_roots.go
 2026-10-13 高危 async-workspace 异步文件操作返回后不校验工作区与版本，会把旧操作结果写入新工作区的树和编辑器状态。@WorkspaceExplorer.vue
 2026-10-13 高危 ssh-orphan-grants 删除 SSH 节点未同步撤销各工作区授权，会让计数残留且同名新节点继承旧权限。@biz_ssh_cluster.go
+2026-10-15 中危 error-text-one-source 错误文案只能单源：前端按错误码另造本地化摘要，用户看到的一句会与模型收到的原文分家。@ToolCallCard.vue

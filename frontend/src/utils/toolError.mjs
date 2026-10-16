@@ -8,12 +8,15 @@
  * Public License v3. See the LICENSE file for details.
  */
 /**
- * Format tool error text for UI display.
- * Backend safety errors intentionally append the blocked command for the model,
- * but the command card title already shows it, so strip that trailing echo.
+ * Format tool error text for UI display. The body is the very text the model
+ * receives, so nothing is reworded here: only two envelope shells are peeled
+ * off — the leading "[CODE] " marker (the card shows the code in its own chip)
+ * and the trailing blocked-command echo (the command card title shows it).
  */
+const CODE_PREFIX = /^\[E_[A-Z0-9_]+\][ \t]*/;
+
 export function formatToolErrorBody(body) {
-  const text = String(body || '').replace(/\r\n/g, '\n');
+  const text = String(body || '').replace(/\r\n/g, '\n').replace(CODE_PREFIX, '');
   if (!text) return '';
 
   const lines = text.split('\n');

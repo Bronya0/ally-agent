@@ -46,6 +46,17 @@ test('keeps body without blocked-command echo', () => {
   );
 });
 
+test('strips the leading [CODE] marker the model envelope carries', () => {
+  assert.equal(
+    formatToolErrorBody('[E_PATH_OUTSIDE] 安全围栏已拦截：命令可能修改工作区外的受保护目标。'),
+    '安全围栏已拦截：命令可能修改工作区外的受保护目标。',
+  );
+});
+
+test('leaves a bracketed first line that is not an error code alone', () => {
+  assert.equal(formatToolErrorBody('[note] plain text'), '[note] plain text');
+});
+
 test('normalizes CRLF and trims trailing whitespace', () => {
   const body = '命令被拦截。\r\n被拦截的命令: echo hi\r\n';
   assert.equal(formatToolErrorBody(body), '命令被拦截。');
