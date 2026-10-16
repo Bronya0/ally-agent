@@ -247,6 +247,7 @@ const selectedKeys = ref([]);
 const loadingTree = ref(false);
 const loadingFile = ref(false);
 const saving = ref(false);
+const deleting = ref(false);
 const fileError = ref('');
 const activeFile = ref(null);
 const draftContent = ref('');
@@ -1668,7 +1669,9 @@ async function confirmDeleteNode(node) {
     message.error(t('app.workspaceExplorer.deleteOutsideWorkspace'));
     return;
   }
-  dialog.warning({
+  if (deleting.value) return;
+  const instance = dialog.create({
+    type: 'warning',
     title: t('app.workspaceExplorer.deleteConfirmTitle'),
     content: node.dir
       ? t('app.workspaceExplorer.deleteDirConfirm', { name: node.label })
@@ -1676,15 +1679,22 @@ async function confirmDeleteNode(node) {
     positiveText: t('common.delete'),
     negativeText: t('common.cancel'),
     onPositiveClick: async () => {
+      if (deleting.value) return false;
+      deleting.value = true;
       try {
         const workspace = String(props.workspace || '');
         await DeletePath({ workspace, paths: [filePath], recursive: node.dir });
         message.success(t('app.workspaceExplorer.deleted'));
-        if (workspace !== props.workspace || disposed) return;
+        instance.destroy();
+        if (workspace !== props.workspace || disposed) return false;
         if (activeFile.value?.path === filePath || activeFile.value?.path.startsWith(`${filePath}/`)) clearEditor();
         await refreshTree();
+        return true;
       } catch (err) {
         message.error(t('app.workspaceExplorer.deleteFailed', { error: errorText(err) }));
+        return false;
+      } finally {
+        deleting.value = false;
       }
     },
   });

@@ -32,32 +32,75 @@ export function shouldRecordContextDriftNotice(notices, key, messageCount) {
   return !(last.key === key && last.messageCount === messageCount);
 }
 
-// insertAt 的计量基准 = 合并后列表里的"非提示行"条数。合并后的列表正好是
-// 非提示行 + 提示行，所以减掉已有提示条数就是基准；这条算式收在这里，调用点不必
-// 各自重推一遍——那个前提（提示确实活在列表里、且条数与 noticeCount 一致）也就从
-// 注释里的约定变成了代码里的一次调用。
-export function contextDriftInsertAt(mergedRows, noticeCount) {
-  const total = Array.isArray(mergedRows) ? mergedRows.length : 0;
-  const notices = Number(noticeCount);
-  return Math.max(total - (Number.isFinite(notices) ? Math.max(0, notices) : 0), 0);
+// 归档行的约定（role === 'archive'、count = 被裁掉的条数）由 toolPreview.displaySourceMessages
+// 建立，这里只解读一次：可见来源段的起点、条数，以及"窗口下标 → 绝对下标"的换算。
+function sourceWindowShape(sourceRows) {
+  const rows = Array.isArray(sourceRows) ? sourceRows : [];
+  const hasArchive = rows.length > 0 && rows[0] && rows[0].role === 'archive';
+  const start = hasArchive ? Number(rows[0].count || 0) : 0;
+  const offset = hasArchive ? 1 : 0;
+  return { start, offset, count: start + rows.length - offset };
 }
 
-// 把提示插回它发生时所在的位置：insertAt 计的是当时的"非提示行"行数（即 rows 的
-// 下标），而 rows 只会在尾部增长（历史被归档裁剪时从头部去掉），所以那个下标之后
-// 仍落在同一批行上。越界时（例如列表刚被裁短）贴到末尾，不改行内容。
-export function insertContextDriftNotices(rows, notices) {
+// 提示该落在哪一步之后：记录当时"可见来源消息"的条数。
+//
+// 为什么不存行号：显示列表是"末尾 N 行"的滑动窗口（displaySourceMessages），超过上限
+// 后每加一条就从头部掉一条，行号整体前移。把行号存下来，窗口一滑它就不再指向同一批
+// 内容——一旦对话超过上限，新提示算出的行号恒等于窗口末尾，于是永远贴在底部。来源
+// 位置只在尾部增长，才是能跨窗口滑动保持不变的量。
+export function contextDriftAnchor(sourceRows) {
+  return sourceWindowShape(sourceRows).count;
+}
+
+// 可见来源窗口的起点，加上"窗口下标 → 绝对下标"的换算。调用方建显示行时用它给每一行
+// 记下来源位置，作为 insertContextDriftNotices 的 rowSourceIndex（归档行落在起点之前
+// 那一格，它代表的就是被裁掉的那一段）。
+export function sourceWindowMapper(sourceRows) {
+  const shape = sourceWindowShape(sourceRows);
+  return {
+    start: shape.start,
+    indexOf: (windowIndex) => shape.start + windowIndex - shape.offset,
+  };
+}
+
+// 把提示插回它发生的位置：紧挨着锚点所指的那一步之后。
+//
+// rows               显示行（不含提示）
+// notices            提示，每条带 anchor（见 contextDriftAnchor）
+// rowSourceIndex     与 rows 一一对应，第 k 项是产出该行的最后一个来源消息的绝对下标
+// firstVisibleIndex  当前可见段的第一个来源消息下标（无归档行时为 0）
+//
+// 锚点已经滚出可见段（anchor < firstVisibleIndex）的提示直接丢掉：它要标注的那一步不在
+// 渲染窗口里了，硬贴进来只会指向错误的位置。行按来源位置单调排布，于是一趟扫描就能把
+// 每条提示放到它该在的那一行前面。
+export function insertContextDriftNotices(rows, notices, rowSourceIndex, firstVisibleIndex) {
   const list = Array.isArray(rows) ? rows : [];
-  if (!Array.isArray(notices) || notices.length === 0) return list;
-  const out = [...list];
-  let inserted = 0;
-  for (const notice of notices) {
-    if (!notice) continue;
-    const raw = Number(notice.insertAt);
-    // 前面已插入的提示会把后面的位置顶下去一位（insertAt 递增，所以加 inserted 就
-    // 是它现在的下标）。
-    const at = Number.isFinite(raw) ? Math.min(Math.max(raw, 0) + inserted, out.length) : out.length;
-    out.splice(at, 0, notice);
-    inserted++;
+  const all = Array.isArray(notices) ? notices.filter(Boolean) : [];
+  if (all.length === 0) return list;
+  const indexes = Array.isArray(rowSourceIndex) ? rowSourceIndex : [];
+  const visibleFrom = Number.isFinite(firstVisibleIndex) ? firstVisibleIndex : 0;
+  const live = all.filter((notice) => {
+    const anchor = Number(notice.anchor);
+    return Number.isFinite(anchor) && anchor >= visibleFrom;
+  });
+  if (live.length === 0) return list;
+
+  const out = [];
+  let next = 0;
+  for (let k = 0; k < list.length; k++) {
+    const at = Number(indexes[k]);
+    // 来源位置缺失时不做判定：提示宁可靠后，也不要乱插。
+    if (Number.isFinite(at)) {
+      while (next < live.length && Number(live[next].anchor) <= at) {
+        out.push(live[next]);
+        next++;
+      }
+    }
+    out.push(list[k]);
+  }
+  while (next < live.length) {
+    out.push(live[next]);
+    next++;
   }
   return out;
 }

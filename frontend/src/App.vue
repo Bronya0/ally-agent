@@ -746,10 +746,11 @@ import { orderPlanPanelEntries, planDoneCount, planFocusScrollDelta, normalizePl
 import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
 import { compactBytes, formatAttachmentSize } from './utils/attachmentSize.mjs';
 import {
-  contextDriftInsertAt,
+  contextDriftAnchor,
   contextDriftNoticeKey,
   insertContextDriftNotices,
   shouldRecordContextDriftNotice,
+  sourceWindowMapper,
 } from './utils/contextDriftNotice.mjs';
 import { fmtCompact, fmtDuration, formatBytes } from './utils/format.mjs';
 import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
@@ -3010,10 +3011,9 @@ function recordContextDriftNotice(data) {
     kind: 'context-drift',
     key,
     messageCount,
-    // 记下当时的行数：提示要停在它发生的位置，而不是永远贴在流末尾。基准是"非提示
-    // 行"的条数（displayMessagesForSession 返回的已是合并过的列表，所以要减掉已有
-    // 提示——这条换算收在 contextDriftInsertAt 里）。
-    insertAt: session ? contextDriftInsertAt(displayMessagesForSession(session), existing.length) : 0,
+    // 锚点 = 记录当时可见来源消息的条数，提示落在它之后。存行号做不到：显示列表是
+    // 从头部滑动的末尾窗口，窗口一滑行号就不再指向同一批内容（见 utils/contextDriftNotice.mjs）。
+    anchor: session ? contextDriftAnchor(displaySourceMessages(session)) : 0,
     text: t('app.prefixDrift.notice', { detail: prefixDriftDetail(data) }),
   };
   contextDriftNoticesBySession.value = {
@@ -3088,7 +3088,13 @@ function displayMessagesForSession(session) {
     return cached.messages;
   }
   const src = displaySourceMessages(session);
+  // 每一行记下它最后一个来源消息的位置：漂移提示靠这个定位，行号会随窗口滑动失效。
+  const sourceWindow = sourceWindowMapper(src);
+  // 提示是折叠边界，不能把它前后的调用合并成同一行。
+  const noticeAnchors = new Set(notices.map((notice) => Number(notice.anchor)));
   const out = [];
+  // 与 out 一一对应：产出该行的最后一个来源消息的绝对下标。
+  const outSourceIndex = [];
   let i = 0;
   while (i < src.length) {
     const m = src[i];
@@ -3097,6 +3103,7 @@ function displayMessagesForSession(session) {
     if (m.role === 'tool_call' && (m.kind === 'read' || m.kind === 'grep' || m.kind === 'list')) {
       let j = i + 1;
       while (j < src.length) {
+        if (noticeAnchors.has(sourceWindow.indexOf(j))) break;
         const n = src[j];
         if (n.role !== 'tool_call' || (n.kind !== 'read' && n.kind !== 'grep' && n.kind !== 'list')) break;
         j++;
@@ -3170,13 +3177,16 @@ function displayMessagesForSession(session) {
       // 子调用失败不改组状态：失败详情看展开后的子条目，折叠行不整组转红
       group.status = allDone ? 'success' : 'running';
       out.push(group);
+      // 折起来的组占它最后一张卡的位置（提示要落在组的边界上）。
+      outSourceIndex.push(sourceWindow.indexOf(j - 1));
     } else {
       out.push(m);
+      outSourceIndex.push(sourceWindow.indexOf(i));
       i++;
     }
   }
   // 漂移提示插回它发生的位置（此刻才插：位置依赖 out 的最终形状）。
-  const merged = insertContextDriftNotices(out, notices);
+  const merged = insertContextDriftNotices(out, notices, outSourceIndex, sourceWindow.start);
   displayMessagesCacheBySession.set(sessionId, { signature: sig, noticeSignature: noticeSig, messages: merged });
   return merged;
 }
@@ -5376,6 +5386,8 @@ function bindRuntimeEvents() {
     const session = sessions.value.find(s => s.id === sid) || null;
     if (summary && session) {
       streamBuffers.delete(compactStreamRunId(sid));
+      // 原历史的位置已失效，不能把旧锚点带到摘要后的新历史里。
+      dropContextDriftNotices(sid);
       session.messages = [{ role: 'assistant', content: summary }];
       scheduleSaveSessions();
     }
@@ -8090,6 +8102,7 @@ async function handleCompactCommand() {
       // Replace the transcript with the summary the backend just wrote to the
       // history. The bubble that streamed during compaction was a live preview of
       // exactly this text, so the swap is seamless.
+      dropContextDriftNotices(session.id);
       session.messages = [
         {
           role: 'assistant',
