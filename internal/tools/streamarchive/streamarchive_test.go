@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -121,24 +122,21 @@ func TestStreamArchiveTarSlipProtection(t *testing.T) {
 }
 
 func TestStreamArchiveVCSRejection(t *testing.T) {
-	tempDir := t.TempDir()
-	destDir := filepath.Join(tempDir, "dest")
-
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	vcsHeader := &tar.Header{
-		Name:     "sub/.git/hooks/pre-commit",
-		Mode:     0o755,
-		Size:     4,
-		Typeflag: tar.TypeReg,
+	names := []string{"sub/.git/hooks/pre-commit"}
+	if runtime.GOOS == "windows" {
+		names = append(names, "sub/.Git/hooks/pre-commit", "sub/.SVN/entries", "sub/.HG/config")
 	}
-	_ = tw.WriteHeader(vcsHeader)
-	_, _ = tw.Write([]byte("evil"))
-	_ = tw.Close()
-
-	_, err := Unpack(&buf, destDir, false)
-	if err == nil {
-		t.Fatalf("expected VCS path unpack to be rejected, but Unpack succeeded")
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			tw := tar.NewWriter(&buf)
+			_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: 4, Typeflag: tar.TypeReg})
+			_, _ = tw.Write([]byte("evil"))
+			_ = tw.Close()
+			if _, err := Unpack(&buf, t.TempDir(), false); err == nil {
+				t.Fatal("expected VCS path unpack to be rejected")
+			}
+		})
 	}
 }
 
@@ -311,5 +309,113 @@ func TestStreamArchivePackWithFilter(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected PackWithFilter to fail when filter returns error, but succeeded")
+	}
+}
+
+func TestStreamArchiveEmptyDirectory(t *testing.T) {
+	src := t.TempDir()
+	var buf bytes.Buffer
+	packed, err := Pack(src, "empty", &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	unpacked, err := UnpackTarget(&buf, filepath.Join(dest, "empty"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packed.DirCount != 1 || unpacked.DirCount != 1 {
+		t.Fatalf("missing root directory: %+v %+v", packed, unpacked)
+	}
+	if info, err := os.Stat(filepath.Join(dest, "empty")); err != nil || !info.IsDir() {
+		t.Fatalf("empty directory lost: %v", err)
+	}
+}
+
+func TestStreamArchiveTargetRejectsSibling(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{Name: "sibling.txt", Typeflag: tar.TypeReg, Size: 4, Mode: 0o644}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = tw.Write([]byte("evil"))
+	_ = tw.Close()
+	dest := t.TempDir()
+	if _, err := UnpackTarget(&buf, filepath.Join(dest, "requested"), true); err == nil {
+		t.Fatal("accepted sibling outside requested destination")
+	}
+	if _, err := os.Stat(filepath.Join(dest, "sibling.txt")); !os.IsNotExist(err) {
+		t.Fatal("sibling was written")
+	}
+}
+
+func TestStreamArchiveExistingSymlinkParent(t *testing.T) {
+	dest := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dest, "link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_ = tw.WriteHeader(&tar.Header{Name: "link/evil.txt", Typeflag: tar.TypeReg, Size: 4, Mode: 0o644})
+	_, _ = tw.Write([]byte("evil"))
+	_ = tw.Close()
+	if _, err := Unpack(&buf, dest, true); err == nil {
+		t.Fatal("accepted symlink parent escape")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "evil.txt")); !os.IsNotExist(err) {
+		t.Fatal("wrote outside destination")
+	}
+}
+
+func TestStreamArchiveTruncatedReplacementPreservesDestination(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		dest := t.TempDir()
+		target := filepath.Join(dest, "target")
+		original := target
+		if directory {
+			if err := os.Mkdir(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			original = filepath.Join(target, "original.txt")
+		}
+		if err := os.WriteFile(original, []byte("original"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		_ = tw.WriteHeader(&tar.Header{Name: "target", Typeflag: tar.TypeReg, Size: 4096, Mode: 0o644})
+		_, _ = tw.Write([]byte("partial"))
+		if _, err := UnpackTarget(&buf, target, true); err == nil {
+			t.Fatal("accepted truncated archive")
+		}
+		if data, err := os.ReadFile(original); err != nil || string(data) != "original" {
+			t.Fatalf("destroyed original: %q %v", data, err)
+		}
+		matches, _ := filepath.Glob(filepath.Join(dest, "*.ally-tmp-*"))
+		if len(matches) != 0 {
+			t.Fatalf("temporary files leaked: %v", matches)
+		}
+	}
+}
+
+func TestStreamArchivePrivateModePreserved(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permissions")
+	}
+	src := filepath.Join(t.TempDir(), "private")
+	if err := os.WriteFile(src, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := Pack(src, "private", &buf); err != nil {
+		t.Fatal(err)
+	}
+	hdr, err := tar.NewReader(&buf).Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdr.Mode != 0o600 {
+		t.Fatalf("private permissions broadened to %o", hdr.Mode)
 	}
 }

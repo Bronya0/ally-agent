@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -28,6 +29,10 @@ type Stats struct {
 // isVCSPath checks if any component in the posix relative path is VCS metadata.
 func isVCSPath(relPosix string) bool {
 	for _, part := range strings.Split(relPosix, "/") {
+		if runtime.GOOS == "windows" {
+			// Windows resolves VCS directory names case-insensitively.
+			part = strings.ToLower(part)
+		}
 		if part == ".git" || part == ".svn" || part == ".hg" {
 			return true
 		}
@@ -87,15 +92,7 @@ func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter)
 			return stats, fmt.Errorf("create tar header: %w", err)
 		}
 		header.Name = arcRootName
-		if fi.Mode().IsRegular() {
-			if header.Mode&0o111 != 0 {
-				header.Mode = (header.Mode &^ 0o022) | 0o755
-			} else {
-				header.Mode = (header.Mode &^ 0o022) | 0o644
-			}
-		} else if fi.IsDir() {
-			header.Mode = (header.Mode &^ 0o022) | 0o755
-		}
+		header.Mode = header.Mode & 0o777 &^ 0o022
 		if err := tw.WriteHeader(header); err != nil {
 			return stats, fmt.Errorf("write tar header: %w", err)
 		}
@@ -126,9 +123,6 @@ func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter)
 		if err != nil {
 			return err
 		}
-		if rel == "." {
-			return nil
-		}
 		relPosix := filepath.ToSlash(rel)
 		if isVCSPath(relPosix) {
 			if info.IsDir() {
@@ -142,7 +136,10 @@ func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter)
 			}
 		}
 
-		arcName := arcRootName + "/" + relPosix
+		arcName := arcRootName
+		if rel != "." {
+			arcName += "/" + relPosix
+		}
 		linkTarget := ""
 		if info.Mode()&os.ModeSymlink != 0 {
 			link, err := os.Readlink(current)
@@ -157,15 +154,7 @@ func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter)
 			return fmt.Errorf("create tar header for %s: %w", relPosix, err)
 		}
 		header.Name = arcName
-		if info.Mode().IsRegular() {
-			if header.Mode&0o111 != 0 {
-				header.Mode = (header.Mode &^ 0o022) | 0o755
-			} else {
-				header.Mode = (header.Mode &^ 0o022) | 0o644
-			}
-		} else if info.IsDir() {
-			header.Mode = (header.Mode &^ 0o022) | 0o755
-		}
+		header.Mode = header.Mode & 0o777 &^ 0o022
 
 		if err := tw.WriteHeader(header); err != nil {
 			return fmt.Errorf("write tar header for %s: %w", relPosix, err)
@@ -197,11 +186,30 @@ func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter)
 // Unpack extracts a streaming tar archive from r into destDir.
 // It enforces strict Tar-Slip prevention, VCS metadata rejection, and atomic file replacement.
 func Unpack(r io.Reader, destDir string, overwrite bool) (Stats, error) {
+	return unpack(r, destDir, overwrite, "")
+}
+
+// UnpackTarget confines every entry to the requested file or directory, so a
+// remote archive cannot modify siblings of the destination.
+func UnpackTarget(r io.Reader, target string, overwrite bool) (Stats, error) {
+	return unpack(r, filepath.Dir(target), overwrite, filepath.Base(target))
+}
+
+func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (Stats, error) {
 	var stats Stats
 	destClean := filepath.Clean(destDir)
 	if err := os.MkdirAll(destClean, 0o755); err != nil {
 		return stats, fmt.Errorf("create destination directory: %w", err)
 	}
+
+	// All filesystem operations are relative to a directory handle. Unlike a
+	// lexical prefix check, os.Root also rejects escapes via existing symlinks
+	// and concurrent symlink replacements.
+	root, err := os.OpenRoot(destClean)
+	if err != nil {
+		return stats, fmt.Errorf("open destination root: %w", err)
+	}
+	defer root.Close()
 
 	tr := tar.NewReader(r)
 	buf := make([]byte, 64*1024)
@@ -226,29 +234,49 @@ func Unpack(r io.Reader, destDir string, overwrite bool) (Stats, error) {
 		if name == "." || name == "/" || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "../") || name == ".." || filepath.VolumeName(name) != "" || filepath.IsAbs(name) {
 			return stats, fmt.Errorf("Tar-Slip violation: illegal relative path %s", header.Name)
 		}
+		if expectedRoot != "" && name != expectedRoot && !strings.HasPrefix(name, expectedRoot+"/") {
+			return stats, fmt.Errorf("Tar-Slip violation: entry outside transfer destination: %s", header.Name)
+		}
 		if isVCSPath(name) {
 			return stats, fmt.Errorf("refusing to unpack version-control metadata: %s", name)
 		}
 
 		targetPath := filepath.Join(destClean, filepath.FromSlash(name))
 		rel, err := filepath.Rel(destClean, targetPath)
-		if err != nil || strings.HasPrefix(rel, "..") || rel == ".." {
+		if err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
 			return stats, fmt.Errorf("Tar-Slip violation: target escapes destination %s -> %s", header.Name, targetPath)
 		}
 
+		// Never traverse a symlink supplied by the archive or already present in
+		// the destination, even when it points to another location inside root.
+		for parent := filepath.Dir(name); parent != "."; parent = filepath.Dir(parent) {
+			info, err := root.Lstat(parent)
+			if err != nil && !os.IsNotExist(err) {
+				return stats, err
+			}
+			if err == nil && info.Mode()&os.ModeSymlink != 0 {
+				return stats, fmt.Errorf("Tar-Slip violation: symlink parent: %s", parent)
+			}
+		}
+		// Root methods take relative paths, including paths kept for timestamps.
+		targetPath = name
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if existing, err := os.Lstat(targetPath); err == nil {
+			if existing, err := root.Lstat(targetPath); err == nil {
 				if !existing.IsDir() {
 					if !overwrite {
 						return stats, fmt.Errorf("path already exists as a file: %s", rel)
 					}
-					if err := os.Remove(targetPath); err != nil {
+					if err := root.Remove(targetPath); err != nil {
 						return stats, fmt.Errorf("remove existing file for directory %s: %w", targetPath, err)
 					}
 				}
 			}
-			if err := os.MkdirAll(targetPath, 0o755); err != nil {
+			mode := header.FileInfo().Mode().Perm() &^ 0o022
+			if mode == 0 {
+				mode = 0o755
+			}
+			if err := root.MkdirAll(targetPath, mode); err != nil {
 				return stats, fmt.Errorf("create directory %s: %w", targetPath, err)
 			}
 			dirTimes = append(dirTimes, dirModTime{path: targetPath, mtime: header.ModTime})
@@ -256,23 +284,14 @@ func Unpack(r io.Reader, destDir string, overwrite bool) (Stats, error) {
 
 		case tar.TypeReg, tar.TypeRegA:
 			parent := filepath.Dir(targetPath)
-			if err := os.MkdirAll(parent, 0o755); err != nil {
+			if err := root.MkdirAll(parent, 0o755); err != nil {
 				return stats, fmt.Errorf("create parent directory for %s: %w", targetPath, err)
 			}
 
 			// Existence check
-			if existing, err := os.Lstat(targetPath); err == nil {
+			if _, err := root.Lstat(targetPath); err == nil {
 				if !overwrite {
 					return stats, fmt.Errorf("file already exists: %s", rel)
-				}
-				if existing.Mode()&os.ModeSymlink != 0 {
-					if err := os.Remove(targetPath); err != nil {
-						return stats, fmt.Errorf("remove existing symlink for file %s: %w", targetPath, err)
-					}
-				} else if existing.IsDir() {
-					if err := os.RemoveAll(targetPath); err != nil {
-						return stats, fmt.Errorf("remove existing directory for file %s: %w", targetPath, err)
-					}
 				}
 			}
 
@@ -282,7 +301,7 @@ func Unpack(r io.Reader, destDir string, overwrite bool) (Stats, error) {
 			if mode == 0 {
 				mode = 0o644
 			}
-			tmpFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+			tmpFile, err := root.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 			if err != nil {
 				return stats, fmt.Errorf("create temp file for %s: %w", targetPath, err)
 			}
@@ -290,22 +309,36 @@ func Unpack(r io.Reader, destDir string, overwrite bool) (Stats, error) {
 			n, copyErr := io.CopyBuffer(tmpFile, tr, buf)
 			closeErr := tmpFile.Close()
 			if copyErr != nil {
-				_ = os.Remove(tmpPath)
+				_ = root.Remove(tmpPath)
 				return stats, fmt.Errorf("write file %s: %w", targetPath, copyErr)
 			}
 			if closeErr != nil {
-				_ = os.Remove(tmpPath)
+				_ = root.Remove(tmpPath)
 				return stats, fmt.Errorf("close temp file %s: %w", targetPath, closeErr)
 			}
 
-			// Atomically replace target
-			if err := os.Rename(tmpPath, targetPath); err != nil {
-				_ = os.Remove(tmpPath)
-				return stats, fmt.Errorf("atomic rename to %s: %w", targetPath, err)
+			// Link publishes without clobbering a concurrently created destination.
+			if !overwrite {
+				if err := root.Link(tmpPath, targetPath); err != nil {
+					_ = root.Remove(tmpPath)
+					return stats, fmt.Errorf("publish file %s: %w", targetPath, err)
+				}
+				_ = root.Remove(tmpPath)
+			} else {
+				if existing, err := root.Lstat(targetPath); err == nil && existing.IsDir() {
+					if err := root.RemoveAll(targetPath); err != nil {
+						_ = root.Remove(tmpPath)
+						return stats, err
+					}
+				}
+				if err := root.Rename(tmpPath, targetPath); err != nil {
+					_ = root.Remove(tmpPath)
+					return stats, fmt.Errorf("atomic rename to %s: %w", targetPath, err)
+				}
 			}
 
 			if header.ModTime.Unix() > 0 {
-				_ = os.Chtimes(targetPath, header.ModTime, header.ModTime)
+				_ = root.Chtimes(targetPath, header.ModTime, header.ModTime)
 			}
 			stats.TotalBytes += n
 			stats.FileCount++
@@ -320,21 +353,21 @@ func Unpack(r io.Reader, destDir string, overwrite bool) (Stats, error) {
 				return stats, fmt.Errorf("refusing symlink pointing to VCS metadata: %s -> %s", header.Name, header.Linkname)
 			}
 			parent := filepath.Dir(targetPath)
-			if err := os.MkdirAll(parent, 0o755); err != nil {
+			if err := root.MkdirAll(parent, 0o755); err != nil {
 				return stats, err
 			}
-			if _, err := os.Lstat(targetPath); err == nil {
+			if _, err := root.Lstat(targetPath); err == nil {
 				if !overwrite {
 					return stats, fmt.Errorf("file already exists: %s", rel)
 				}
-				_ = os.Remove(targetPath)
+				_ = root.Remove(targetPath)
 			}
-			if err := os.Symlink(header.Linkname, targetPath); err != nil {
+			if err := root.Symlink(header.Linkname, targetPath); err != nil {
 				return stats, fmt.Errorf("create symlink %s: %w", targetPath, err)
 			}
 
 		default:
-			// Skip unsupported flags safely
+			return stats, fmt.Errorf("unsupported tar entry type %d: %s", header.Typeflag, header.Name)
 		}
 	}
 
@@ -342,7 +375,7 @@ func Unpack(r io.Reader, destDir string, overwrite bool) (Stats, error) {
 	for i := len(dirTimes) - 1; i >= 0; i-- {
 		dt := dirTimes[i]
 		if dt.mtime.Unix() > 0 {
-			_ = os.Chtimes(dt.path, dt.mtime, dt.mtime)
+			_ = root.Chtimes(dt.path, dt.mtime, dt.mtime)
 		}
 	}
 
