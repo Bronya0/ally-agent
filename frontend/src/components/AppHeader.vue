@@ -277,27 +277,14 @@ function historyMenuProps() {
   background: rgba(74, 222, 128, 0.18) !important;
 }
 
-/* 历史工作空间按钮：暗色用琥珀种子色与其他 header 图标区分（参考底部会话按钮
-   #e0a070）；亮色下种子色会被白玻璃洗淡（纯 #e0a458 对近似白底只有 ~2.2:1，而
-   旁边图标用的 --ally-text-muted 是 ~5.4:1，看上去“发灰、看不清”），因此亮色换用
-   与左侧栏活跃菜单图标同一支的绿色 --ally-success：同一个 token、同一个含义
-   （“当前所在位置”），不再两处各自挑色。 */
+/* History, active tabs and the mode rail share the active theme's accent. */
 .history-action-button {
-  color: var(--ally-accent) !important;
+  color: var(--ally-accent-text) !important;
 }
 
 .history-action-button:hover,
 .history-action-button:focus-visible {
   color: var(--ally-accent-strong) !important;
-}
-
-html[data-mode="light"] .history-action-button {
-  color: var(--ally-success) !important;
-}
-
-html[data-mode="light"] .history-action-button:hover,
-html[data-mode="light"] .history-action-button:focus-visible {
-  color: var(--ally-success-deep) !important;
 }
 
 .brand {
@@ -390,17 +377,9 @@ body.platform-darwin .brand-wordmark {
   --wails-draggable: drag;
 }
 
-/* 亮色两档，特异性决胜：所有主题一律用各自的 --ally-accent-bright（浅色块已朝
-    ink 混合，可读性同绿档，且与左侧栏选中图标同支 token（style.css），“当前位置”
-    仍是单一颜色）；默认（琥珀）例外地沿用绿色——琥珀 accent-dim 在白玻璃 header
-    上读不出“当前在哪个 tab”，绿是按琥珀冷调画布调的。琥珀 = 无 data-theme
-    属性，:not() 圈定，主题列表零维护。两档同带 !important，指示线自身的
-    ::after 规则不动。 */
+/* Light mode uses the theme's ink-strength accent for the tab locator. */
 html[data-mode="light"] .workspace-tabs {
   --n-bar-color: var(--ally-accent-bright) !important;
-}
-html[data-mode="light"]:not([data-theme]) .workspace-tabs {
-  --n-bar-color: var(--ally-success) !important;
 }
 
 .workspace-tabs :deep(.n-tabs-nav),

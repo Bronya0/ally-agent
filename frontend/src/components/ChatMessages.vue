@@ -939,7 +939,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
 .user-rail {
   flex: none;
   width: 12px;
-  color: var(--ally-accent);
+  color: var(--ally-accent-text);
   font-family: var(--ally-ui-font);
   font-size: 15px;
   font-weight: 600;
@@ -1072,8 +1072,8 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
 }
 
 .suggest-chip:hover {
-  border-color: var(--ally-accent);
-  color: var(--ally-accent);
+  border-color: var(--ally-accent-text);
+  color: var(--ally-accent-text);
 }
 
 /* 统计行的可见性跟着本轮收尾消息走（行的样式表在 MessageRoundStats.vue）：

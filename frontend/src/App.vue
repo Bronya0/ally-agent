@@ -614,6 +614,7 @@ import {
   getStoredMode, setMode as persistMode,
   getStoredTheme, setTheme as persistTheme,
 } from './utils/theme.mjs';
+import { readNaiveThemeOverrides } from './utils/naiveTheme.mjs';
 import MarkdownIt from 'markdown-it';
 // @traptitech/markdown-it-katex 把 $...$ / $$...$$ 交给 katex 渲染。
 // katex 本体已作为 mermaid 的间接依赖存在于依赖树中，这里显式声明以避免
@@ -866,8 +867,7 @@ let fileMentionRequestId = 0;
 // Both are pure front-end preferences (localStorage, see utils/theme.mjs);
 // main.js already applied them to <html data-theme> / <html data-mode> before
 // mount. `colorMode` is the reactive source for every Naive UI decision below;
-// `colorTheme` only needs to round-trip to the settings page, because the theme
-// axis lives entirely in CSS (style.css reads data-theme).
+// CSS owns the palette; both axes also refresh Naive UI's resolved colors.
 const colorMode = ref(getStoredMode());
 const isLightMode = computed(() => colorMode.value === 'light');
 const naiveTheme = computed(() => (isLightMode.value ? null : darkTheme));
@@ -902,92 +902,12 @@ watch(colorMode, () => {
   }
 });
 
-const darkThemeOverrides = {
-  common: {
-    bodyColor: '#1a1a1a',
-    baseColor: '#1a1a1a',
-    cardColor: '#1a1a1a',
-    modalColor: '#1a1a1a',
-    popoverColor: '#1a1a1a',
-    tableColor: '#1a1a1a',
-    primaryColor: '#d4d4d4',
-    primaryColorHover: '#ffffff',
-    primaryColorPressed: '#b8b8b8',
-    primaryColorSuppl: '#ffffff',
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    dividerColor: 'rgba(255, 255, 255, 0.08)',
-    textColorBase: '#f5f5f5',
-    textColor1: '#f5f5f5',
-    textColor2: '#d4d4d4',
-    textColor3: '#8a8a8a',
-    borderRadius: '10px',
-    fontFamily: 'Inter',
-  },
-  Layout: {
-    color: '#1a1a1a',
-    siderColor: '#1a1a1a',
-    headerColor: '#1a1a1a',
-  },
-  Card: {
-    color: '#1a1a1a',
-    colorEmbedded: '#1a1a1a',
-  },
-  Input: {
-    color: '#1a1a1a',
-    colorFocus: '#1a1a1a',
-    border: '1px solid rgba(255,255,255,0.12)',
-    borderFocus: '1px solid rgba(255,255,255,0.32)',
-  },
-  // Keep Naive's base primary color neutral for components such as tags.
-  // Accent-bearing buttons and selection controls are mapped to --ally-accent
-  // in style.css; CSS vars must not be passed through Naive's JS color derivation.
-};
-
-// Light mode: clean acrylic glass (DeepSeek-style modal language). Overlay
-// surfaces are translucent kimicode surface-0 (#fafbfc) so the blur added in
-// style.css reads as frosted glass over the soft gradient canvas; the neutral
-// text/border ramp follows kimicode's light theme (apps/vis/web/src/theme.css).
-const lightThemeOverrides = {
-  common: {
-    bodyColor: '#eef1f6',
-    baseColor: '#fafbfc',
-    cardColor: 'rgba(250, 251, 252, 0.90)',
-    modalColor: 'rgba(250, 251, 252, 0.94)',
-    popoverColor: 'rgba(250, 251, 252, 0.96)',
-    tableColor: 'rgba(250, 251, 252, 0.90)',
-    primaryColor: '#0f1219',
-    primaryColorHover: '#0b0d12',
-    primaryColorPressed: '#0b0d12',
-    primaryColorSuppl: '#0b0d12',
-    borderColor: '#dde1ea',
-    dividerColor: '#dde1ea',
-    textColorBase: '#0f1219',
-    textColor1: '#0f1219',
-    textColor2: '#252a37',
-    textColor3: '#616878',
-    borderRadius: '10px',
-    fontFamily: 'Inter',
-  },
-  Layout: {
-    color: 'transparent',
-    siderColor: 'rgba(250, 251, 252, 0.65)',
-    headerColor: 'rgba(250, 251, 252, 0.65)',
-  },
-  Card: {
-    color: 'rgba(250, 251, 252, 0.90)',
-    colorEmbedded: 'rgba(250, 251, 252, 0.65)',
-  },
-  Input: {
-    color: 'rgba(250, 251, 252, 0.78)',
-    colorFocus: 'rgba(250, 251, 252, 0.92)',
-    textColor: '#0f1219',
-    placeholderColor: '#7a8191',
-    border: '1px solid #bfc6d4',
-    borderFocus: '1px solid #616878',
-  },
-};
-
-const naiveThemeOverrides = computed(() => (isLightMode.value ? lightThemeOverrides : darkThemeOverrides));
+// Both axes must invalidate Naive's theme: menus/selects live outside the
+// app subtree, and their JS color math needs resolved literals from CSS.
+const naiveThemeOverrides = computed(() => {
+  colorTheme.value;
+  return readNaiveThemeOverrides(colorMode.value);
+});
 
 const { message, dialog } = createDiscreteApi(['message', 'dialog'], {
   configProviderProps: computed(() => ({
@@ -3886,7 +3806,7 @@ const historyOptions = computed(() => {
           size: 'small',
           type: 'default',
           block: true,
-          style: { color: 'var(--ally-accent)', textAlign: 'left', justifyContent: 'flex-start', border: 'none', background: 'transparent' },
+          style: { color: 'var(--ally-accent-text)', textAlign: 'left', justifyContent: 'flex-start', border: 'none', background: 'transparent' },
         },
         {
           default: () => [
@@ -3912,7 +3832,7 @@ const historyOptions = computed(() => {
           type: 'default',
           block: true,
           title: t('header.tempWorkspaceHint'),
-          style: { color: 'var(--ally-accent)', textAlign: 'left', justifyContent: 'flex-start', border: 'none', background: 'transparent' },
+          style: { color: 'var(--ally-accent-text)', textAlign: 'left', justifyContent: 'flex-start', border: 'none', background: 'transparent' },
         },
         {
           default: () => [

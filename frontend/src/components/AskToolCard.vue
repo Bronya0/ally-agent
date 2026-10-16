@@ -289,7 +289,7 @@ function selectionKey(selection) {
   width: 15px;
   height: 15px;
   margin: 2px 0 0;
-  accent-color: var(--ally-accent);
+  accent-color: var(--ally-accent-fill);
 }
 
 .ask-option-copy {
@@ -314,7 +314,7 @@ function selectionKey(selection) {
 }
 
 .ask-option-description {
-  color: #7f7f7f;
+  color: var(--ally-text-muted);
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -345,7 +345,7 @@ function selectionKey(selection) {
   border-radius: 4px;
   outline: none;
   color: var(--ally-text-high);
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--ally-pre-bg);
   font: inherit;
   line-height: 1.45;
 }
@@ -395,7 +395,7 @@ function selectionKey(selection) {
 }
 
 .ask-answer-check {
-  color: #6fa47d;
+  color: var(--ally-success-text);
 }
 
 .ask-closed-state {

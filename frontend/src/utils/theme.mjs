@@ -15,12 +15,9 @@
 //   mode  → <html data-mode="light"> (attribute absent for the default "dark")
 //
 // style.css owns the palettes; this file only owns the ids and the storage.
-// Every theme ships one block per mode in style.css —
-// `:root[data-theme="x"]:not([data-mode="light"])` for dark and
-// `:root[data-theme="x"][data-mode="light"]` for light — so the two axes are
-// resolved by selector, never by source order (a previous build resolved them by
-// source order and silently lost six markdown palettes). Adding a theme = one
-// entry below + those two blocks.
+// Theme seeds and light ink accents live in style.css. Neutral surfaces/text
+// are shared by mode; only accent details change by theme. Naive UI reads the
+// same CSS literals through naiveTheme.mjs when either preference changes.
 
 const THEME_STORAGE_KEY = 'ally_accent_theme';
 const MODE_STORAGE_KEY = 'ally_color_mode';

@@ -88,6 +88,11 @@ const hiddenCount = computed(() => Math.max(0, normalized.value.length - cards.v
   padding: 2px 8px 4px 0;
 }
 
+/* Light badges need a pale wash, rather than dark text on a dense tint. */
+html[data-mode="light"] .card-grid {
+  --card-badge-tint: 8%;
+}
+
 .card-grid-row {
   display: grid;
   /* min(190px, 100%) 是防止窄容器下轨道撑出横向滚动条的标准写法 */
@@ -166,24 +171,24 @@ const hiddenCount = computed(() => Math.max(0, normalized.value.length - cards.v
   padding: 0 6px;
   border-radius: 999px;
   color: var(--ally-info-soft);
-  background: color-mix(in srgb, var(--ally-info) 16%, transparent);
+  background: color-mix(in srgb, var(--ally-info) var(--card-badge-tint, 16%), transparent);
   font-size: var(--ally-aux-font-size);
   line-height: 1.65;
 }
 
 .card-grid-item.tone-danger .card-grid-badge {
   color: var(--ally-danger-pale);
-  background: color-mix(in srgb, var(--ally-danger) 20%, transparent);
+  background: color-mix(in srgb, var(--ally-danger) var(--card-badge-tint, 20%), transparent);
 }
 
 .card-grid-item.tone-warning .card-grid-badge {
   color: var(--ally-warning-text);
-  background: color-mix(in srgb, var(--ally-warning) 20%, transparent);
+  background: color-mix(in srgb, var(--ally-warning) var(--card-badge-tint, 20%), transparent);
 }
 
 .card-grid-item.tone-success .card-grid-badge {
   color: var(--ally-success-pale);
-  background: color-mix(in srgb, var(--ally-success) 20%, transparent);
+  background: color-mix(in srgb, var(--ally-success) var(--card-badge-tint, 20%), transparent);
 }
 
 .card-grid-item.tone-neutral .card-grid-badge {

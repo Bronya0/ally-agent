@@ -1035,7 +1035,7 @@ watch(
 }
 
 .mcp-tools-toggle:hover {
-  color: var(--ally-accent);
+  color: var(--ally-accent-text);
 }
 
 .mcp-tools-panel {

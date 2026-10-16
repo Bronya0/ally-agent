@@ -57,6 +57,7 @@
 | 前端唯一主组件与全局状态 | `frontend/src/App.vue` |
 | 技能 / MCP / 模型 / SSH 集群管理内联页 | `SkillsPanel.vue` / `McpPanel.vue` / `ModelsPanel.vue` / `SSHClusterPanel.vue` |
 | 文件树 / 编辑器 UI | `WorkspaceExplorer.vue` + `biz_workspace_editor.go` |
+| 外观主题与明暗配色（中性底色/正文 + 主题强调色；Naive 控件与 CSS 同源） | `frontend/src/style.css`（唯一色板）+ `utils/theme.mjs`（偏好持久化）+ `utils/naiveTheme.mjs`（读取 CSS 实色供 Naive 计算） |
 | 工具卡动词与展示属性 | `frontend/src/utils/toolVerb.mjs`（TOOL_VERBS / ACTION_VERBS 表、`isMcpToolName` 的 mcp__ 前缀判定）+ `frontend/src/utils/toolKind.mjs`（名字→kind、kind→展示属性（类型标签/耗时角标/默认折叠/正体固定高度）的唯一一张表，加工具只改这里） |
 | 工具结果的卡片网格（彩色卡、一行多个自动换行、单条铺满一行、空态/标题行/条数上限；ssh_cluster 服务器清单、service 进程清单、scheduled_task 任务清单，以及 create / start / 授权这类单条结果都用它展示） | `frontend/src/components/CardGrid.vue` + `ToolCallCard.vue`（只负责渲染 msg.cardGrid）+ `composables/useToolEvents.mjs`（`setCardGrid` 与行→条目映射，结果按形状分支） + `utils/toolPreview.mjs`（`sshServerRows` / `sshClusterNodeRow` / `serviceListRows` / `serviceRow` / `scheduledTaskRows` / `scheduledTaskRow`）+ `utils/taskStatus.mjs`（状态文案 key 与色调，任务中心共用） |
 | 思考回放（reasoning_content / reasoning / reasoning_text / signature / encrypted_content） | `internal/app/prov_reasoning.go` + 三适配器（`prov_adapter_*.go`） |

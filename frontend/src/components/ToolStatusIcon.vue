@@ -139,7 +139,7 @@ const icon = computed(() => STATE_ICON[state.value] || STATE_ICON.default);
 
 /* Status colors — matches the previous .tool-status-icon.* palette in style.css */
 .tool-svg-icon.is-success {
-  color: #22c55e;
+  color: var(--ally-tool-success);
 }
 
 .tool-svg-icon.is-error {
