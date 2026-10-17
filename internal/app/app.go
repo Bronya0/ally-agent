@@ -414,8 +414,9 @@ type App struct {
 
 	// reasoningStash holds per-session provider reasoning replay payloads
 	// (Anthropic thinking signatures, Responses encrypted reasoning items).
-	// In-memory only; see prov_reasoning.go.
-	reasoningStash *reasoningStash
+	// Responses can restore native items from protected model history.
+	reasoningStash    *reasoningStash
+	modelHistoryCodec *modelHistoryCodec
 
 	// readCaches holds one read-dedup cache per session id (sessionReadCache in
 	// orch_read.go). Memory-only: a restarted process starts empty, and
@@ -481,6 +482,7 @@ func NewApp() *App {
 		keyCooldowns:         map[string]time.Time{},
 		stats:                newStatsRecorder(),
 		reasoningStash:       newReasoningStash(),
+		modelHistoryCodec:    newModelHistoryCodec(),
 	}
 	// Expose the active App to package-level helpers that predate Runtime
 	// injection (listMemories, memoryIndexCache usage in prompt_builder).
@@ -2048,6 +2050,9 @@ func (a *App) stripSessionReasoning(sessionID string) {
 }
 
 func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg ConfigState) {
+	ctx = withModelRunUsage(ctx)
+	ctx, finishPerf := beginPerfRun(ctx, runID)
+	defer finishPerf()
 	sessionID := req.SessionID
 	cfg.responsesPromptCacheKey = openAIResponsesPromptCacheKey(sessionID)
 	// Knowledge-base runs mark their sources/ subtree read-only for every
@@ -2060,12 +2065,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	success := false
 	var messages []openai.ChatCompletionMessage
 	startTime := time.Now()
-	// runCacheHit/Miss accumulate prompt-cache hit/miss tokens across every
-	// LLM request in this Run (a tool loop may issue many). The aggregate
-	// rate Σhit/Σ(hit+miss) is what the frontend shows on the final assistant
-	// message — a per-Run cache efficiency number, not a per-turn one.
-	var runCacheHit, runCacheMiss int
-	var runInputTokens, runOutputTokens int
 	// End-of-run plan check: planUnreportedWork is set by a batch that did work
 	// (a file mutation or a command) while the plan did not move, and cleared by
 	// any batch that moved the plan. planChecked keeps the check to one extra
@@ -2087,10 +2086,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		payload["runId"] = runID
 		payload["sessionId"] = sessionID
 		payload["durationMs"] = time.Since(startTime).Milliseconds()
-		payload["cacheHit"] = runCacheHit
-		payload["cacheMiss"] = runCacheMiss
-		payload["inputTokens"] = runInputTokens
-		payload["outputTokens"] = runOutputTokens
+		publishRunModelUsage(ctx, payload)
 		a.mu.Lock()
 		if a.sessionRunOutcomes == nil {
 			a.sessionRunOutcomes = map[string]sessionRunOutcome{}
@@ -2213,7 +2209,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		}
 
 		requestMessages := messages
+		requestTrigger := "agent_step"
+		if planChecked {
+			requestTrigger = "plan_check_followup"
+		}
 		if planCheckRequest != nil {
+			requestTrigger = "plan_check"
 			// Tail-appended on a copy: the host question is for this one request
 			// only, so the persisted history never carries it.
 			requestMessages = append(append(make([]openai.ChatCompletionMessage, 0, len(messages)+1), messages...), *planCheckRequest)
@@ -2244,7 +2245,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// 计入基线会让下一轮（历史照常增长、催报已消失）在重叠段上撞出一次假漂移。
 			// 指纹的职责是盯住"持久化的那段被谁改了"，一次性消息按定义不在其列。
 			a.noteRequestPrefix(sessionID, contextLockLaneChat, cfg, messages, tools)
-			modelResp, err = a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
+			modelResp, err = a.streamModelResponse(perfReason(ctx, requestTrigger), cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
 				if event.ContentDelta != "" {
 					emittedEvents = true
 					streamDeltas.addContent(event.ContentDelta)
@@ -2300,6 +2301,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			if isProvider400Error(err) && !sanitizedThisStep {
 				sanitizedThisStep = true
 				if isAnthropicSignatureRejectionError(err) {
+					requestTrigger = "signature_recovery"
 					a.reasoningStash.clearSession(sessionID)
 					messages = stripReasoningContent(messages)
 					requestMessages = messages
@@ -2310,6 +2312,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				// sanitizeRequestMessages），丢了它整轮就没有任何规则可依。
 				repaired := sanitizeRequestMessages(messages)
 				if len(repaired) < len(messages) {
+					requestTrigger = "history_recovery"
 					messages = repaired
 					requestMessages = messages
 					a.emit("run:retry", map[string]any{"runId": runID, "sessionId": sessionID, "attempt": 1, "maxAttempts": 1, "reason": "context sanitized after provider 400"})
@@ -2324,6 +2327,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// 失败)把两条原因一起报出来，用户才知道只能删历史自救。
 			if !overflowCompacted && !emittedEvents && classifyLLMError(err) == llmErrorKindContextTooLong {
 				overflowCompacted = true
+				requestTrigger = "overflow_recovery"
 				newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonOverflow, req, messages, usedTokens)
 				if compactErr != nil {
 					emitRunEnd("run:error", "error", map[string]any{"error": fmt.Sprintf("%v；上下文超出模型窗口且压缩失败(%v)，请删除部分历史或改用窗口更大的模型后重试", err, compactErr)})
@@ -2339,8 +2343,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// 造成重复输出)或空响应(errEmptyModelResponse,内层重试逻辑不覆盖)。
 			// pre-stream 失败已在 streamModelResponse 内部按同一预算退避重试过,
 			// 这里直接失败,避免同一请求被两层循环重复重试。
-			if turnAttempt >= maxTurnRetries || !shouldRetryLLMError(err) ||
-				!(emittedEvents || errors.Is(err, errEmptyModelResponse)) {
+			if turnAttempt >= maxTurnRetries || !retryModelTurn(err, emittedEvents) {
 				failure := map[string]any{"error": err.Error()}
 				// 上游模型服务的报错带来源标记，界面据此提示"这是服务方返回的错误"，
 				// 与 Ally 自身的报错区分开(见 upstreamError)。
@@ -2351,6 +2354,8 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				return
 			}
 			wait := llmRetryDelayForError(turnAttempt+1, err)
+			notePerfRetry(ctx, err, wait)
+			requestTrigger = "turn_retry"
 			a.emit("run:retry", map[string]any{
 				"runId": runID, "sessionId": sessionID, "attempt": turnAttempt + 1,
 				"maxAttempts": maxTurnRetries, "error": err.Error(), "waitMs": wait,
@@ -2384,16 +2389,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// One entry point for both accounting sinks: the footer running total and the
 		// token dashboard consume this same event (see recordLLMUsage).
 		a.recordLLMUsage(cfg.Model, cfg.Workspace, modelResp.Usage, fallbackOutput)
-		if modelResp.Usage != nil {
-			runCacheHit += modelResp.Usage.CacheHitTokens
-			runCacheMiss += modelResp.Usage.CacheMissTokens
-			runInputTokens += modelResp.Usage.PromptTokens
-			runOutputTokens += modelResp.Usage.CompletionTokens
-		}
-		// 与底部累计（recordWorkspaceTokenUsage）同策略：provider 未回报
-		// CompletionTokens 时用估算补上，否则 footer 有数而本轮 ↑↓ 与
-		// token/s 静默消失。输入侧估算（数千 token 跳变）维持不补。
-		runOutputTokens += fallbackOutput
 		if stopErr := modelResponseStopError(cfg, modelResp); stopErr != nil {
 			if content != "" || reasoning != "" {
 				messages = append(messages, openai.ChatCompletionMessage{
@@ -2648,6 +2643,8 @@ func (a *App) withFileOpsLock(fn func()) {
 }
 
 func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name string, args []byte) (result toolResult) {
+	finishPerfTool := startPerfTool(ctx, name, args)
+	defer finishPerfTool()
 	// Tool execution digests model-controlled JSON and is the single choke
 	// point for the main loop, sub-agents, and scheduled tasks. A panic in
 	// any handler would otherwise crash the whole desktop app — and in the

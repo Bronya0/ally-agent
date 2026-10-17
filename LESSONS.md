@@ -209,3 +209,6 @@
 2026-10-13 高危 ssh-orphan-grants 删除 SSH 节点未同步撤销各工作区授权，会让计数残留且同名新节点继承旧权限。@biz_ssh_cluster.go
 2026-10-15 中危 window-anchor-not-index 给滚动窗口里的行定位别存绝对行号：列表从头部裁，触顶后行号恒等于末尾，提示永远贴底。@contextDriftNotice.mjs
 2026-10-15 中危 error-text-one-source 错误文案只能单源：前端按错误码另造本地化摘要，用户看到的一句会与模型收到的原文分家。@ToolCallCard.vue
+[responses-terminal-not-eof] 2026-10-17 高危 Responses 见 completed/incomplete 即终止，别等 EOF 丢结果重发。@prov_adapter_responses.go
+[native-output-not-chat-text] 2026-10-17 高危 Responses output 勿投影回正文：丢 reasoning/phase/交错序。@prov_responses_history.go
+[delegate-retry-not-squared] 2026-10-17 高危 子代理外层勿重试适配器已耗尽的首输出前错误，否则叠成平方预算；只接管流中断或空回答。@orch_subagent.go

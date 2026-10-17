@@ -13,9 +13,11 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-type systemProtector struct{}
+type systemProtector struct{ cache secureAEADCache }
 
-func NewSystemProtector() Protector { return systemProtector{} }
+var processSystemProtector systemProtector
+
+func NewSystemProtector() Protector { return &processSystemProtector }
 
 // macOS: Keychain; Linux: Secret Service. No file-based master-key fallback.
 func secureAEAD(create bool) (cipher.AEAD, error) {
@@ -41,8 +43,8 @@ func secureAEAD(create bool) (cipher.AEAD, error) {
 	}
 	return cipher.NewGCM(block)
 }
-func (systemProtector) Seal(data []byte) ([]byte, error) {
-	aead, err := secureAEAD(true)
+func (p *systemProtector) Seal(data []byte) ([]byte, error) {
+	aead, err := p.cache.get(true, secureAEAD)
 	if err != nil {
 		return nil, err
 	}
@@ -52,8 +54,8 @@ func (systemProtector) Seal(data []byte) ([]byte, error) {
 	}
 	return aead.Seal(nonce, nonce, data, []byte("Ally ChatGPT vault v1")), nil
 }
-func (systemProtector) Open(data []byte) ([]byte, error) {
-	aead, err := secureAEAD(false)
+func (p *systemProtector) Open(data []byte) ([]byte, error) {
+	aead, err := p.cache.get(false, secureAEAD)
 	if err != nil {
 		return nil, err
 	}

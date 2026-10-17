@@ -884,8 +884,8 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	}
 	// In-memory history keeps image MultiContent so subsequent runs in this
 	// process still see the images (stable prefix, prompt cache survives).
-	// Only the disk copy is flattened: images are not persisted and restart
-	// recovery replays text-only history.
+	// The legacy disk profile remains text-only. A bounded, OS-protected
+	// provider payload can preserve full Responses context in the same file.
 	// SSH passwords stay in the history verbatim (no redaction): the live history
 	// is what the next request is built from, so masking a stored password here
 	// would make the model re-send the mask for the next host instead of the real
@@ -913,7 +913,7 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	}
 	disk := sanitizeHistoryMessagesForDisk(inMemory)
 	paths := a.historyDiskPaths(sessionID)
-	if err := writeCompressedHistory(paths[0], disk); err != nil {
+	if err := writeCompressedHistoryPayload(paths[0], a.modelHistoryForStorage(sessionID, disk, inMemory)); err != nil {
 		log.Printf("saveHistory: failed to write %s: %v", paths[0], err)
 		return
 	}
@@ -958,6 +958,10 @@ func (a *App) restoreSavedHistoryBreakdown(sessionID string) {
 }
 
 func writeCompressedHistory(diskPath string, messages []openai.ChatCompletionMessage) error {
+	return writeCompressedHistoryPayload(diskPath, messages)
+}
+
+func writeCompressedHistoryPayload(diskPath string, payload any) error {
 	tmp, err := os.CreateTemp(filepath.Dir(diskPath), ".history-*.tmp")
 	if err != nil {
 		return err
@@ -974,7 +978,7 @@ func writeCompressedHistory(diskPath string, messages []openai.ChatCompletionMes
 		return err
 	}
 	zw := gzip.NewWriter(tmp)
-	encodeErr := json.NewEncoder(zw).Encode(messages)
+	encodeErr := json.NewEncoder(zw).Encode(payload)
 	closeGzipErr := zw.Close()
 	closeFileErr := tmp.Close()
 	if encodeErr != nil {
@@ -1045,7 +1049,7 @@ func (a *App) sessionHistorySnapshot(sessionID string) ([]openai.ChatCompletionM
 		revision := state.revision
 		a.mu.Unlock()
 
-		history := a.readHistoryFromDisk(sessionID)
+		history, restoreReplay := a.readHistoryFromDisk(sessionID)
 		a.mu.Lock()
 		current := a.historyCacheStates[sessionID] == state
 		if current && state.revision == revision {
@@ -1054,6 +1058,9 @@ func (a *App) sessionHistorySnapshot(sessionID string) ([]openai.ChatCompletionM
 			}
 			a.invalidateSessionReadCacheLocked(sessionID)
 			a.histories[sessionID] = history
+			if restoreReplay != nil {
+				restoreReplay()
+			}
 		}
 		state.loading = nil
 		close(ready)
@@ -1087,13 +1094,14 @@ func (a *App) savedHistoryBreakdown(sessionID string) ContextBreakdown {
 	return result
 }
 
-func (a *App) readHistoryFromDisk(sessionID string) []openai.ChatCompletionMessage {
+func (a *App) readHistoryFromDisk(sessionID string) ([]openai.ChatCompletionMessage, func()) {
 	if a.historiesDir == "" {
-		return nil
+		return nil, nil
 	}
 	paths := a.historyDiskPaths(sessionID)
 	var messages []openai.ChatCompletionMessage
 	loaded := false
+	var restoreReplay func()
 	for index, diskPath := range paths {
 		file, err := os.Open(diskPath)
 		if err != nil {
@@ -1117,13 +1125,14 @@ func (a *App) readHistoryFromDisk(sessionID string) []openai.ChatCompletionMessa
 		if readErr != nil || json.Unmarshal(data, &messages) != nil {
 			continue
 		}
+		messages, restoreReplay = a.modelHistoryFromStorage(sessionID, data, messages)
 		loaded = true
 		break
 	}
 	if !loaded {
-		return nil
+		return nil, nil
 	}
-	return sanitizeHistoryMessages(messages)
+	return sanitizeHistoryMessages(messages), restoreReplay
 }
 
 // TruncateSessionHistoryRequest identifies which user turn to keep as the last

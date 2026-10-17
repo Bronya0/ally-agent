@@ -336,4 +336,4 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 ### ChatGPT OAuth 模型
 
-模型管理中的 `chatgpt_oauth` 条目可参与现有模型索引选择和 Agent 调用，使用 Ally 桌面端已经授权的账号。普通配置只包含账号注册引用，不包含 OAuth Token；本地 API 不提供登录、刷新或读取 Token 的端点，原有本地服务鉴权保持不变。OAuth 失败不会使用条目里的 API Key 或其他模型支付请求。账号登录、退出和刷新模型目录均在桌面设置完成，见 [ChatGPT 登录](chatgpt-oauth.md)。
+模型管理中的 `chatgpt_oauth` 条目可参与现有模型索引选择和 Agent 调用，使用 Ally 桌面端已经授权的账号。普通配置只包含账号注册引用，不包含 OAuth Token；本地 API 不提供登录、刷新或读取 Token 的端点，原有本地服务鉴权保持不变。OAuth 失败不会使用条目里的 API Key 或其他模型支付请求。账号登录、退出和刷新模型目录均在桌面设置完成，见 [ChatGPT Auth 对接实现](chatgpt-auth.md)。

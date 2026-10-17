@@ -30,6 +30,8 @@ const (
 	// pairing, and the call arguments needed to re-run — stays intact so the
 	// restored history remains a valid protocol sequence.
 	historyProfileDisk
+	// Protected storage keeps tool evidence and reasoning, but omits image payloads.
+	historyProfileProtected
 )
 
 // toolResultPlaceholder replaces tool output that is no longer in the model's
@@ -83,9 +85,18 @@ func sanitizeHistoryMessagesForDisk(messages []openai.ChatCompletionMessage) []o
 }
 
 func sanitizeHistoryMessagesFor(messages []openai.ChatCompletionMessage, profile historyProfile) []openai.ChatCompletionMessage {
-	flattenImages := profile == historyProfileDisk
+	cleaned, _ := sanitizeHistoryMessagesWithOrigins(messages, profile)
+	return cleaned
+}
+
+// origins[i] is the source message position of cleaned[i], even when repair
+// drops empty assistants or removes calls. Replay persistence needs provenance,
+// since identical assistant text cannot safely identify a turn after filtering.
+func sanitizeHistoryMessagesWithOrigins(messages []openai.ChatCompletionMessage, profile historyProfile) ([]openai.ChatCompletionMessage, []int) {
+	flattenImages := profile != historyProfileMemory
 	filtered := make([]openai.ChatCompletionMessage, 0, len(messages))
-	for _, original := range messages {
+	var origins []int
+	for sourceIndex, original := range messages {
 		// Synthesized image-injection messages from the read tool survive in
 		// the in-memory history (the session should keep seeing them until the
 		// process exits) but are never persisted: their NUL-prefixed marker is
@@ -144,8 +155,13 @@ func sanitizeHistoryMessagesFor(messages []openai.ChatCompletionMessage, profile
 			m.ToolCalls = kept
 		}
 		filtered = append(filtered, m)
+		origins = append(origins, sourceIndex)
 	}
-	return repairDanglingToolCalls(filtered)
+	cleaned, retained := repairDanglingToolCallsWithOrigins(filtered)
+	for i, filteredIndex := range retained {
+		retained[i] = origins[filteredIndex]
+	}
+	return cleaned, retained
 }
 
 // repairDanglingToolCalls enforces the tool-call pairing invariant: every
@@ -164,7 +180,13 @@ func sanitizeHistoryMessagesFor(messages []openai.ChatCompletionMessage, profile
 // entry was gone, so the call that was never answered stayed in the history — a
 // permanent 400 that this function was supposed to repair.
 func repairDanglingToolCalls(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	cleaned, _ := repairDanglingToolCallsWithOrigins(messages)
+	return cleaned
+}
+
+func repairDanglingToolCallsWithOrigins(messages []openai.ChatCompletionMessage) ([]openai.ChatCompletionMessage, []int) {
 	out := make([]openai.ChatCompletionMessage, 0, len(messages))
+	var origins []int
 	// pending maps toolCallID -> the declared calls still awaiting a result, in
 	// declaration order. Entries are consumed as results arrive.
 	pending := make(map[string][]pendingToolCall)
@@ -197,7 +219,7 @@ func repairDanglingToolCalls(messages []openai.ChatCompletionMessage) []openai.C
 		}
 		pending = make(map[string][]pendingToolCall)
 	}
-	for _, m := range messages {
+	for sourceIndex, m := range messages {
 		switch m.Role {
 		case openai.ChatMessageRoleAssistant:
 			closeTurn()
@@ -224,18 +246,21 @@ func repairDanglingToolCalls(messages []openai.ChatCompletionMessage) []openai.C
 			closeTurn()
 			out = append(out, m)
 		}
+		origins = append(origins, sourceIndex)
 	}
 	closeTurn()
 	// An assistant message whose tool_calls all dangled and whose text is
 	// empty carries no information; drop it entirely.
 	final := make([]openai.ChatCompletionMessage, 0, len(out))
-	for _, m := range out {
+	var retained []int
+	for i, m := range out {
 		if m.Role == openai.ChatMessageRoleAssistant && len(m.ToolCalls) == 0 && strings.TrimSpace(m.Content) == "" {
 			continue
 		}
 		final = append(final, m)
+		retained = append(retained, origins[i])
 	}
-	return final
+	return final, retained
 }
 
 // pendingToolCall locates one declared tool_call: the assistant message holding

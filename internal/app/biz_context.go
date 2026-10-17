@@ -202,6 +202,9 @@ func (a *App) recordWorkspaceTokenUsage(workspace string, usage *modelUsage, fal
 
 	key := workspaceUsageKey(workspace)
 	a.mu.Lock()
+	if a.workspaceTokenUsage == nil {
+		a.workspaceTokenUsage = make(map[string]WorkspaceTokenUsage)
+	}
 
 	total := a.workspaceTokenUsage[key]
 	total.InputTokens += input

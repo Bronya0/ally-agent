@@ -34,8 +34,11 @@ import (
 type modelUsage struct {
 	PromptTokens     int
 	CompletionTokens int
-	CacheHitTokens   int
-	CacheMissTokens  int
+	// ReasoningTokens is a subset of CompletionTokens, never added to totals.
+	ReasoningTokens int
+	TotalTokens     int
+	CacheHitTokens  int
+	CacheMissTokens int
 	// CacheWriteTokens is what the provider reports as written to its prompt cache
 	// — Anthropic cache_creation_input_tokens, OpenAI Responses
 	// cache_write_tokens. It is an observation, not a third bucket: on the native
@@ -47,6 +50,12 @@ type modelUsage struct {
 }
 
 var errEmptyModelResponse = errors.New("empty model response")
+
+// Adapter/key-pool retries own pre-output failures. Only interrupted output
+// and nominally successful empty responses need a retry of the whole turn.
+func retryModelTurn(err error, emitted bool) bool {
+	return shouldRetryLLMError(err) && (emitted || errors.Is(err, errEmptyModelResponse))
+}
 
 // errChatStreamNoFinishReason 表示流结束了却没收到任何显式终止标记
 // (finish_reason 或 `[DONE]`)。半截流必须按失败处理:已产出的内容由上层
@@ -531,8 +540,9 @@ func effectiveLLMRetries(cfg ConfigState) int {
 }
 
 type modelStreamResult struct {
-	Content   string
-	Reasoning string
+	responsesOutput []json.RawMessage // provider-layer only; never sent to UI/tools
+	Content         string
+	Reasoning       string
 	// ReasoningPresent reports that the provider explicitly produced a
 	// reasoning payload this response — including an explicitly EMPTY one
 	// (DeepSeek V4 emits reasoning_content:"" on obvious tool calls). Empty
@@ -618,6 +628,33 @@ func (a *App) streamModelTextWithUsage(ctx context.Context, cfg ConfigState, mod
 }
 
 func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
+	if total, ok := ctx.Value(modelRunUsageKey{}).(*modelRunUsage); ok {
+		total.mu.Lock()
+		total.calls++
+		total.mu.Unlock()
+	}
+	result, err := a.streamModelResponseInner(ctx, cfg, model, messages, tools, onEvent)
+	// Empty successful responses are retried by callers before their normal
+	// accounting path. Preserve any provider-reported spend for that attempt.
+	if err == nil && result != nil && result.Usage != nil && emptyModelResponseError(result) != nil {
+		a.recordLLMUsage(model, cfg.Workspace, result.Usage, 0)
+	}
+	// Chat and Responses report each physical attempt themselves. Retain
+	// successful usage for the other protocol without changing its adapter.
+	if cfg.AuthType != authChatGPTOAuth && normalizeAPIFormat(cfg.APIFormat) == apiFormatAnthropicMessages {
+		var usage *modelUsage
+		if result != nil {
+			usage = result.Usage
+		}
+		noteRunModelUsage(ctx, usage, result)
+	}
+	return result, err
+}
+
+func (a *App) streamModelResponseInner(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
+	ctx, finishPerf := beginPerfRun(ctx, "")
+	defer finishPerf()
+	ctx = perfModelContext(ctx)
 	cfg.APIFormat = normalizeAPIFormat(cfg.APIFormat)
 	if strings.TrimSpace(model) == "" {
 		model = cfg.Model
@@ -646,6 +683,7 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 	// 配置类前置校验的报错(缺模型/缺 key)在更前面返回，不会被误标成上游问题。
 	// 单 key 快速路径:完全保持原有的适配器内重试行为。
 	if len(keys) == 1 {
+		cfg.APIKey = keys[0]
 		result, err := a.streamModelResponseWithKey(ctx, cfg, model, messages, tools, onEvent)
 		if err != nil {
 			err = markUpstreamError(wrapProviderRequestError(err))

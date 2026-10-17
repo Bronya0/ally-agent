@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"time"
 
@@ -50,34 +51,56 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 	body := buildOpenAIResponsesRequest(cfg, model, messages, tools, replay)
 
 	maxRetries := effectiveLLMRetries(cfg)
-	result, emitted, err := a.openAIResponsesStreamAttempt(ctx, cfg, body, onEvent)
+	result, emitted, err := a.openAIResponsesStreamAttempt(ctx, cfg, body, messages, onEvent)
 	// 只重试"尚未产出任何输出"的失败:建流失败,或消费阶段在产出内容前
 	// 失败(流内 error/response.failed 事件等)。此时重试无重复输出风险;
 	// 已产出内容的中断交给上层 runChat 做整轮重试。
 	for attempt := 1; err != nil && !emitted && ctx.Err() == nil && attempt <= maxRetries && shouldRetryLLMError(err); attempt++ {
 		wait := llmRetryDelayForError(attempt, err)
+		notePerfRetry(ctx, err, wait)
 		emitLLMRetryEvent(onEvent, attempt, maxRetries, err, wait)
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		result, emitted, err = a.openAIResponsesStreamAttempt(ctx, cfg, body, onEvent)
+		result, emitted, err = a.openAIResponsesStreamAttempt(ctx, cfg, body, messages, onEvent)
 	}
 	if err != nil {
 		return nil, err
 	}
+	a.captureResponsesOutput(cfg, model, messages, result)
 	return result, nil
 }
 
 // openAIResponsesStreamAttempt 执行一次完整的 Responses 建流与消费。第二个
 // 返回值报告本次尝试是否已产出输出(文本/推理/工具调用/图片任一非空),
 // 调用方据此判定适配器内重试是否安全(无输出则重试不会造成重复)。
-func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams, onEvent func(modelStreamEvent)) (*modelStreamResult, bool, error) {
+func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams, messages []legacyopenai.ChatCompletionMessage, onEvent func(modelStreamEvent)) (result *modelStreamResult, emitted bool, err error) {
+	diagnostic := beginPerfAttempt(ctx, cfg, string(body.Model))
+	defer func() { diagnostic.finish(err) }()
+	if diagnostic != nil {
+		ctx = context.WithValue(ctx, perfAttemptKey{}, diagnostic)
+	}
 	stream, err := newOpenAIResponsesSSEStream(ctx, cfg, body)
 	if err != nil {
+		noteRunModelUsage(ctx, nil, nil)
 		return nil, false, err
 	}
+	defer func() {
+		noteRunModelUsage(ctx, stream.observedUsage, result)
+		if err != nil && stream.observedUsage != nil {
+			a.recordLLMUsage(string(body.Model), cfg.Workspace, stream.observedUsage, 0)
+		}
+	}()
+	stream.callIDs = toolcall.NewCallIDFoundry()
+	for _, m := range messages {
+		for _, call := range m.ToolCalls {
+			stream.callIDs.Seed(call.ID)
+		}
+		stream.callIDs.Seed(m.ToolCallID)
+	}
+	stream.diagnostic = diagnostic
 	return a.consumeOpenAIResponsesStream(cfg, body, stream, onEvent)
 }
 
@@ -103,6 +126,7 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 	finalOutputText := ""
 	var streamErr error
 	gotTerminalEvent := false
+	var outputCapture responsesOutputCapture
 	// stopReason is the Responses equivalent of a finish_reason: it is derived
 	// from the terminal event so the run reports truncation / filtering the same
 	// way the Chat and Anthropic adapters do (see modelResponseStopError).
@@ -130,12 +154,14 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 
 	for stream.Next() {
 		event, rawEvent, err := stream.Event()
+		stream.diagnostic.event(event.Type, rawEvent)
 		if err != nil {
 			if cfg.AuthType != authChatGPTOAuth && isIncompleteStreamJSON(err) && len(toolCalls) == 0 && (assistant.Len() > 0 || reasoning.Len() > 0) {
 				break
 			}
 			return nil, hasOutput(), wrapLLMStreamEventDecode(fmt.Errorf("decode responses stream event: %w", err))
 		}
+		outputCapture.observe(event.Type, rawEvent)
 		switch event.Type {
 		case "response.output_text.delta":
 			ev := event.AsResponseOutputTextDelta()
@@ -229,7 +255,7 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 		case "response.completed":
 			gotTerminalEvent = true
 			stopReason = "stop"
-			ev := event.AsResponseCompleted()
+			ev := struct{ Response oaresp.Response }{responsesTerminal(rawEvent)}
 			usage = modelUsageFromResponses(ev.Response.Usage)
 			// The openai-go Responses union decoder currently drops the nested
 			// response object when decoding a stream event. Read usage from the
@@ -268,7 +294,8 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 			// key classifiers match on, instead of degrading to ": message".
 			streamErr = errors.New("OpenAI Responses stream error: " + responsesErrorText(ev.Code, ev.Message, ev.Param))
 		case "response.failed":
-			ev := event.AsResponseFailed()
+			usage = modelUsageFromResponsesEvent(rawEvent)
+			ev := struct{ Response oaresp.Response }{responsesTerminal(rawEvent)}
 			code := string(ev.Response.Error.Code)
 			message := ev.Response.Error.Message
 			if strings.TrimSpace(code) == "" && strings.TrimSpace(message) == "" {
@@ -283,7 +310,7 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 			streamErr = errors.New("OpenAI Responses response.failed: " + responsesErrorText(code, message, ""))
 		case "response.incomplete":
 			gotTerminalEvent = true
-			ev := event.AsResponseIncomplete()
+			ev := struct{ Response oaresp.Response }{responsesTerminal(rawEvent)}
 			usage = modelUsageFromResponses(ev.Response.Usage)
 			if rawUsage := modelUsageFromResponsesEvent(rawEvent); rawUsage != nil {
 				usage = rawUsage
@@ -342,25 +369,92 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 		if cfg.AuthType == authChatGPTOAuth && (event.Type == "error" || event.Type == "response.failed") {
 			streamErr = fmt.Errorf("%w (request ID %s)", chatGPTStreamError(rawEvent, stream.authorization), stream.requestID)
 		}
-		if streamErr != nil {
+		stream.observedUsage = usage
+		if streamErr != nil || gotTerminalEvent {
 			break
 		}
-	}
-	if err := stream.Err(); err != nil {
-		return nil, hasOutput(), err
 	}
 	if streamErr != nil {
 		return nil, hasOutput(), streamErr
 	}
 	if !gotTerminalEvent {
+		if err := stream.Err(); err != nil {
+			return nil, hasOutput(), err
+		}
+	}
+	if !gotTerminalEvent {
 		return nil, hasOutput(), errors.New("stream ended without terminal event")
 	}
-	// Record this response's reasoning items as one turn of the session
-	// ledger, keyed by the turn's tool-call ids: every later request replays
-	// them before that turn's own function_call outputs. Done here (not in
-	// streamOpenAIResponses) so adapter-internal retries rewrite it per
-	// attempt. A response without reasoning items records no turn; earlier
-	// turns keep theirs.
+	// The terminal output is authoritative and can fill in missing item.done
+	// events from compatible gateways. Reconcile by item id, never by index
+	// alone, before the result is executed or stored for replay.
+	nativeOutput, nativeIndexes := outputCapture.indexedOutput()
+	if len(nativeOutput) > 0 {
+		reasoningItems = nil
+		var finalText strings.Builder
+		for i, raw := range nativeOutput {
+			var item oaresp.ResponseOutputItemUnion
+			if json.Unmarshal(raw, &item) != nil {
+				continue
+			}
+			switch item.Type {
+			case "function_call":
+				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, nativeIndexes[i], item.ID)
+				updateToolCallFromResponsesItem(&toolCalls[idx], item)
+				captureResponsesToolItemID(toolItemIDs, toolCalls[idx], item)
+			case "reasoning":
+				if captured, ok := captureResponsesReasoningItem(item.AsReasoning()); ok {
+					reasoningItems = append(reasoningItems, captured)
+				}
+			case "message":
+				var message struct {
+					Content []struct{ Type, Text, Refusal string }
+				}
+				if json.Unmarshal(raw, &message) == nil {
+					for _, part := range message.Content {
+						if part.Type == "output_text" {
+							finalText.WriteString(part.Text)
+						}
+						if part.Type == "refusal" {
+							finalText.WriteString(part.Refusal)
+						}
+					}
+				}
+			}
+		}
+		if text := finalText.String(); text != "" && strings.HasPrefix(text, assistant.String()) {
+			missing := text[assistant.Len():]
+			if missing != "" {
+				assistant.WriteString(missing)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: missing})
+			}
+		}
+	}
+	// Claim ids regardless of replay scope, terminal status or native output.
+	// Do this before recording either replay ledger, so both use execution ids.
+	if stream.callIDs == nil {
+		stream.callIDs = toolcall.NewCallIDFoundry()
+	}
+	toolCalls = normalizeToolCalls(toolCalls)
+	claimedItems := make(map[string]string)
+	for i := range toolCalls {
+		oldKey := toolcall.ForResponsesCall(toolcall.Effective(toolCalls[i].ID, toolCalls[i].Function.Name))
+		toolCalls[i].ID, _ = stream.callIDs.Claim(toolCalls[i].ID)
+		newKey := toolcall.ForResponsesCall(toolCalls[i].ID)
+		if id := toolItemIDs[oldKey]; id != "" {
+			claimedItems[newKey] = id
+		}
+	}
+	// Item identity disambiguates multiple calls with the same provider call_id.
+	for itemID, index := range toolIndexByItemID {
+		if index >= 0 && index < len(toolCalls) && toolcall.IsSafeResponsesItemID(itemID) {
+			claimedItems[toolcall.ForResponsesCall(toolCalls[index].ID)] = itemID
+		}
+	}
+	toolItemIDs = claimedItems
+	if len(toolCalls) > 0 {
+		toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
+	}
 	if len(reasoningItems) > 0 && len(toolCalls) > 0 {
 		a.reasoningStash.appendTurn(reasoningReplayKey(cfg, string(body.Model)), reasoningTurn{
 			callIDs:        toolCallIDsOf(toolCalls),
@@ -373,10 +467,11 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 		content = finalOutputText
 	}
 	return &modelStreamResult{
+		responsesOutput:  nativeOutput,
 		Content:          content,
 		Reasoning:        reasoning.String(),
 		ReasoningPresent: len(reasoningItems) > 0,
-		ToolCalls:        normalizeToolCalls(toolCalls),
+		ToolCalls:        toolCalls,
 		Images:           images,
 		Usage:            usage,
 		StopReason:       stopReason,
@@ -550,6 +645,9 @@ func supportsOpenAIResponsesImageGeneration(cfg ConfigState) bool {
 }
 
 type openAIResponsesSSEStream struct {
+	callIDs       *toolcall.CallIDFoundry
+	observedUsage *modelUsage
+	diagnostic    *perfAttempt
 	authorization string // only used to redact error events; never exposed
 	requestID     string
 	decoder       ssestream.Decoder
@@ -635,6 +733,10 @@ func newOpenAIResponsesSSEStreamWithClient(ctx context.Context, cfg ConfigState,
 	if err != nil {
 		return nil, err
 	}
+	diagnostic, _ := ctx.Value(perfAttemptKey{}).(*perfAttempt)
+	if diagnostic != nil {
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), diagnostic.trace()))
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	if apiKey := strings.TrimSpace(cfg.APIKey); apiKey != "" {
@@ -661,6 +763,12 @@ func newOpenAIResponsesSSEStreamWithClient(ctx context.Context, cfg ConfigState,
 	}
 	if err != nil {
 		return nil, err
+	}
+	if diagnostic != nil {
+		diagnostic.run.mu.Lock()
+		diagnostic.row["request_id"] = resp.Header.Get("x-request-id")
+		diagnostic.row["http_status"] = resp.StatusCode
+		diagnostic.run.mu.Unlock()
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
@@ -808,6 +916,7 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, re
 	systemParts := []string{}
 	input := oaresp.ResponseInputParam{}
 	hasSeenTurn := false
+	assistantOrdinal := 0
 	for _, m := range messages {
 		role := strings.TrimSpace(m.Role)
 		switch role {
@@ -826,6 +935,14 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, re
 			}
 		case legacyopenai.ChatMessageRoleUser, legacyopenai.ChatMessageRoleAssistant:
 			hasSeenTurn = true
+			if role == legacyopenai.ChatMessageRoleAssistant {
+				native := replay.nativeResponses(assistantOrdinal, m)
+				assistantOrdinal++
+				if len(native) > 0 {
+					input = append(input, nativeResponsesInput(native)...)
+					continue
+				}
+			}
 			if role == legacyopenai.ChatMessageRoleAssistant && len(m.ToolCalls) > 0 {
 				if text := messageText(m); text != "" {
 					input = append(input, oaresp.ResponseInputItemParamOfMessage(text, oaresp.EasyInputMessageRoleAssistant))
@@ -1027,13 +1144,18 @@ func updateToolCallFromResponsesItem(call *legacyopenai.ToolCall, item oaresp.Re
 // of being read from cache_write_tokens, which would under-count the miss side
 // and inflate the hit rate.
 func modelUsageFromResponses(usage oaresp.ResponseUsage) *modelUsage {
-	return modelUsageFromResponseTokenCounts(
+	result := modelUsageFromResponseTokenCounts(
 		usage.InputTokens,
 		usage.OutputTokens,
 		usage.InputTokensDetails.CachedTokens,
 		0,
 		usage.InputTokensDetails.CacheWriteTokens,
 	)
+	if result != nil {
+		result.ReasoningTokens = int(usage.OutputTokensDetails.ReasoningTokens)
+		result.TotalTokens = int(usage.TotalTokens)
+	}
+	return result
 }
 
 func modelUsageFromResponseTokenCounts(input, output, hit, miss, write int64) *modelUsage {
@@ -1076,6 +1198,10 @@ type responsesUsageTokenDetails struct {
 }
 
 type responsesUsageWire struct {
+	TotalTokens         int64 `json:"total_tokens"`
+	OutputTokensDetails *struct {
+		ReasoningTokens int64 `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
 	InputTokens           int64                       `json:"input_tokens"`
 	PromptTokens          int64                       `json:"prompt_tokens"`
 	OutputTokens          int64                       `json:"output_tokens"`
@@ -1168,6 +1294,12 @@ func modelUsageFromResponsesEvent(raw []byte) *modelUsage {
 		}
 	}
 	result := modelUsageFromResponseTokenCounts(input, output, hit, miss, write)
+	if result != nil {
+		result.TotalTokens = int(usage.TotalTokens)
+		if usage.OutputTokensDetails != nil {
+			result.ReasoningTokens = int(usage.OutputTokensDetails.ReasoningTokens)
+		}
+	}
 	cacheReported := (usage.InputTokensDetails != nil && usage.InputTokensDetails.CachedTokens != nil) ||
 		(usage.PromptTokensDetails != nil && usage.PromptTokensDetails.CachedTokens != nil) ||
 		usage.CachedInputTokens != nil || usage.CacheReadInputTokens != nil ||

@@ -17,7 +17,7 @@
 | 工具批次策略（文件变更串行、`wait` 延后排到批次末尾、写冲突检测） | `internal/app/orch_batch_policy.go` |
 | memory 工具（记忆列表/搜索） | `internal/app/orch_memory.go` + `internal/tools/memory/` |
 | git 状态查看（2 秒状态缓存 + 独立子仓库发现缓存；文件/命令/run 收尾失效，`git:changed` 合并刷新；等待/重试/多仓库共用 5 秒截止时间） | `internal/app/orch_git.go` + `internal/tools/git/` |
-| ChatGPT 官方 OAuth（动态注册 / PKCE / OIDC / 多账号 / 加密凭据 / 跨进程刷新锁 / 撤销） | `internal/chatgpt/`；桥接 `internal/app/biz_chatgpt.go` + `host_chatgpt.go`；订阅 Responses 兼容层 `prov_chatgpt.go`；设置与模型页共用 `ChatGPTAccounts.vue`；使用说明 `docs/chatgpt-oauth.md` |
+| ChatGPT 官方 OAuth（动态注册 / PKCE / OIDC / 多账号 / 加密凭据 / 跨进程刷新锁 / 撤销） | `internal/chatgpt/`；桥接 `internal/app/biz_chatgpt.go` + `host_chatgpt.go`；订阅 Responses 兼容层 `prov_chatgpt.go`；设置与模型页共用 `ChatGPTAccounts.vue`；实现说明 `docs/chatgpt-auth.md` |
 | 模型列表拉取 | `internal/app/biz_modellist.go`（FetchModelList） |
 | AGENTS.md / CODEGRAPH.md 注入、背景图 | `internal/app/biz_project_context.go`（loadAgentsMd / loadCodeGraph） |
 | 临时工作区（创建/清理） | `internal/app/biz_temp_workspace.go` |
@@ -62,7 +62,8 @@
 | 外观主题与明暗配色（中性底色/正文 + 主题强调色；Naive 控件与 CSS 同源） | `frontend/src/style.css`（唯一色板）+ `utils/theme.mjs`（偏好持久化）+ `utils/naiveTheme.mjs`（读取 CSS 实色供 Naive 计算） |
 | 工具卡动词与展示属性 | `frontend/src/utils/toolVerb.mjs`（TOOL_VERBS / ACTION_VERBS 表、`isMcpToolName` 的 mcp__ 前缀判定）+ `frontend/src/utils/toolKind.mjs`（名字→kind、kind→展示属性（类型标签/耗时角标/默认折叠/正体固定高度）的唯一一张表，加工具只改这里） |
 | 工具结果的卡片网格（彩色卡、一行多个自动换行、单条铺满一行、空态/标题行/条数上限；ssh_cluster 服务器清单、service 进程清单、scheduled_task 任务清单，以及 create / start / 授权这类单条结果都用它展示） | `frontend/src/components/CardGrid.vue` + `ToolCallCard.vue`（只负责渲染 msg.cardGrid）+ `composables/useToolEvents.mjs`（`setCardGrid` 与行→条目映射，结果按形状分支） + `utils/toolPreview.mjs`（`sshServerRows` / `sshClusterNodeRow` / `serviceListRows` / `serviceRow` / `scheduledTaskRows` / `scheduledTaskRow`）+ `utils/taskStatus.mjs`（状态文案 key 与色调，任务中心共用） |
-| 思考回放（reasoning_content / reasoning / reasoning_text / signature / encrypted_content） | `internal/app/prov_reasoning.go` + 三适配器（`prov_adapter_*.go`） |
+| 思考回放（reasoning_content / reasoning / reasoning_text / signature / encrypted_content） | `internal/app/prov_reasoning.go` + 三适配器（`prov_adapter_*.go`）；Responses 原生 output 顺序、phase 与普通回答回放在 `prov_responses_history.go`；受 OS 保护的完整模型历史（不含图片负载）随现有历史文件原子保存，见 `prov_history_storage.go` |
+| Run 模型调用用量汇总 / 可选性能诊断 | `prov_run_usage.go`（主 Run、压缩、同步子代理与已知失败 Usage 同源汇总）；`prov_perf.go`（默认关闭，`ALLY_PERF_DIAGNOSTICS` 指定 JSONL 路径，记录 Responses 时序、重试和工具元数据，不记内容/凭据） |
 | 提示词缓存（断点位置 / 命中与写入口径；保留时长不发送，用供应商默认） | `prov_model.go`（三适配器断点与 usage）+ `biz_stats.go`（落库与汇总）；身份：会话/子代理 lane 用 `responsesPromptCacheKey`，回放台账用 `reasoningScope` |
 | 请求前缀冻结（发前比对上一轮的头部与历史段指纹，各一个哈希，只记录不拦请求；基线随读缓存一起失效） | `internal/app/biz_context_lock.go`（`noteRequestPrefix`，主对话泳道在 `app.go` 调用）+ 前端内联提示 `frontend/src/utils/contextDriftNotice.mjs` |
 | 模型输入能力（视觉）降级 / 图片占位 | `internal/app/biz_context.go`（`buildMessages` 单一收口） + 目录字段 `visionCapable`（`frontend/src/data/modelCatalog.json`，由 `scripts/generate-model-catalog.mjs` 生成） |

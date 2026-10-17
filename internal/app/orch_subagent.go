@@ -112,6 +112,9 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		model = req.Model
 	}
 	subID := newID()
+	ctx = withModelRunUsage(ctx)
+	ctx, finishPerf := beginPerfRun(ctx, subID)
+	defer finishPerf()
 	cfg = subagentCacheConfig(cfg, sessionID, subID)
 	desc := req.Description
 	if desc == "" {
@@ -190,27 +193,36 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		// (for Anthropic) pre-first-event errors; this outer wrapper also
 		// retries mid-stream and stop errors so a flaky provider doesn't
 		// abort the whole sub-agent task.
-		// 多 key 时内层 streamModelResponse 已用 maxMultiKeyAttempts 预算统一
-		// 承担重试与故障切换,这里归零避免两层预算重叠(外层再套一层只会
-		// 放大尝试次数;冷却会使后续轮次立即 break)。
+		// Match the main loop: pre-output failures already exhausted the
+		// adapter/key-pool budget, including OAuth. Retry only interrupted
+		// output or a successful but empty response here.
 		maxRetries := effectiveLLMRetries(cfg)
-		if len(resolveKeyPool(cfg)) > 1 {
-			maxRetries = 0
-		}
 		var modelResp *modelStreamResult
 		var err error
 		for attempt := 0; ; attempt++ {
-			modelResp, err = a.streamModelResponse(ctx, cfg, model, messages, tools, nil)
+			emitted := false
+			reason := "subagent_step"
+			if attempt > 0 {
+				reason = "turn_retry"
+			}
+			modelResp, err = a.streamModelResponse(perfReason(ctx, reason), cfg, model, messages, tools, func(event modelStreamEvent) {
+				if event.ContentDelta != "" || event.ReasoningDelta != "" || len(event.ToolCalls) > 0 || event.Image != nil {
+					emitted = true
+				}
+			})
 			if err == nil {
 				if stopErr := modelResponseStopError(cfg, modelResp); stopErr != nil {
 					err = stopErr
+					break // provider-declared terminal state, not a broken stream
 				}
+				err = emptyModelResponseError(modelResp)
 			}
 			if err == nil {
 				break
 			}
-			if attempt < maxRetries && shouldRetryLLMError(err) {
+			if attempt < maxRetries && retryModelTurn(err, emitted) {
 				wait := llmRetryDelayForError(attempt+1, err)
+				notePerfRetry(ctx, err, wait)
 				select {
 				case <-time.After(wait):
 				case <-ctx.Done():
@@ -531,7 +543,7 @@ func (a *App) forceSubagentFinalReport(ctx context.Context, cfg ConfigState, mod
 	})
 	var lastText string
 	for attempt := 0; attempt < maxForcedReportTurns; attempt++ {
-		resp, err := a.streamModelResponse(ctx, cfg, model, messages, tools, nil)
+		resp, err := a.streamModelResponse(perfReason(ctx, "subagent_final_report"), cfg, model, messages, tools, nil)
 		if err != nil {
 			return lastText, err
 		}

@@ -10,8 +10,10 @@ package app
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -44,11 +46,11 @@ import (
 //
 // The reasoning TEXT travels on the internal history messages
 // (ChatCompletionMessage.ReasoningContent) so it persists with the session.
-// Signature / encrypted-content payloads are provider-protocol artifacts that
-// only make sense for the model that produced them (they cannot survive a
-// provider switch or a restart), so they live here in a per-session,
-// per-model stash keyed by the prompt-cache session key, never in the
-// persisted history. The stash is a per-TURN ledger: every tool-loop turn's
+// Signature / encrypted-content payloads are provider-protocol artifacts scoped
+// to their endpoint/model/account. Responses keeps complete ordered output in
+// this stash and can restore it with protected model history (prov_history_storage).
+// Chat/Anthropic retain their existing process-local signature ledger.
+// The stash is a per-TURN ledger: every tool-loop turn's
 // payload is kept and replayed on its own assistant message in every later
 // request, because a payload that decorates only the trailing turn is dropped
 // from that (now older) message in the next request — the prefix bytes change
@@ -109,11 +111,11 @@ func (t reasoningTurn) empty() bool {
 // append-only; appending replaces an existing turn of the same identity so a
 // retried capture cannot stack duplicates. The ledger has no per-session turn
 // cap on purpose: trimming it would shift the request prefix and kill the
-// provider prompt cache. Its only bounds are the process lifetime (it is
-// memory-only, never persisted) and compaction — when the compact threshold
-// rewrites the history, the stash is cleared with it (see compactHistory).
+// provider prompt cache. Compaction clears the ledger with the old history.
+// Responses native items can also be restored from protected model history.
 type sessionReasoningPayload struct {
-	turns []reasoningTurn
+	turns           []reasoningTurn
+	responsesNative map[string][]json.RawMessage
 }
 
 // turnForAny returns the turn whose call ids intersect callIDs, or nil. The
@@ -268,10 +270,25 @@ func reasoningReplayKey(cfg ConfigState, model string) string {
 		normalizeAPIFormat(cfg.APIFormat),
 		strings.ToLower(strings.TrimSpace(model)),
 	}
+	// A compatible endpoint's opaque state must never reach a different
+	// provider serving the same model slug. Hash the endpoint (no credentials
+	// or user-supplied URL text in persisted replay scope names).
+	endpoint := sha256.Sum256([]byte(strings.TrimRight(baseURLForAPIFormat(cfg), "/")))
+	parts = append(parts, fmt.Sprintf("%x", endpoint[:16]))
 	// Signed/encrypted reasoning stays with its OAuth registration. Keep API-key
 	// scope keys unchanged, including their existing session cleanup behavior.
 	if cfg.AuthType == authChatGPTOAuth {
 		parts = append(parts, authChatGPTOAuth, strings.ReplaceAll(cfg.OAuthAccountID, "\x1f", "_"))
+	} else {
+		key := strings.TrimSpace(cfg.APIKey)
+		if key == "" {
+			if keys := resolveKeyPool(cfg); len(keys) > 0 {
+				key = keys[0]
+			}
+		}
+		headers, _ := json.Marshal(normalizeCustomHeaders(cfg.CustomHeaders))
+		identity := sha256.Sum256([]byte(key + "\x00" + string(headers)))
+		parts = append(parts, fmt.Sprintf("%x", identity[:16]))
 	}
 	return strings.Join(parts, "\x1f")
 }
@@ -310,6 +327,7 @@ func (s *reasoningStash) appendTurn(key string, turn reasoningTurn) {
 	next := &sessionReasoningPayload{}
 	if entry.payload != nil {
 		next.turns = append(next.turns, entry.payload.turns...)
+		next.responsesNative = entry.payload.responsesNative
 	}
 	replaced := false
 	for i := range next.turns {

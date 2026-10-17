@@ -10,13 +10,16 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"ally-dev/internal/tools/schemautil"
@@ -27,7 +30,6 @@ import (
 func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	clientCfg := legacyopenai.DefaultConfig(cfg.APIKey)
 	clientCfg.BaseURL = baseURLForAPIFormat(cfg)
-	clientCfg.HTTPClient = modelHTTPClient(cfg, true, 0)
 	// Request rewrite: the Chat adapter always installs the rewriting transport,
 	// because two of its normalizations apply to every request — `content` must
 	// be a present key on tool-call/tool messages (see
@@ -74,6 +76,9 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		Model:         model,
 		Messages:      messages,
 		StreamOptions: &legacyopenai.StreamOptions{IncludeUsage: true},
+	}
+	if chatStreamOptionsUnsupported(cfg, model, false) {
+		streamReq.StreamOptions = nil
 	}
 	// Route the token limit to the field the target provider accepts. Both
 	// fields are `omitempty`, so only the selected one is serialized — never
@@ -153,7 +158,14 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 // openAIChatStreamAttempt 执行一次完整的 OpenAI Chat 建流与消费。第二个
 // 返回值报告本次尝试是否已产出输出(assistant/reasoning/toolCalls 任一非空),
 // 调用方据此判定适配器内重试是否安全(无输出则重试不会造成重复)。
-func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, client *legacyopenai.Client, streamReq legacyopenai.ChatCompletionRequest, streamDone *sseDoneWatcher, onEvent func(modelStreamEvent)) (*modelStreamResult, bool, error) {
+func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, client *legacyopenai.Client, streamReq legacyopenai.ChatCompletionRequest, streamDone *sseDoneWatcher, onEvent func(modelStreamEvent)) (result *modelStreamResult, emitted bool, err error) {
+	var usage *modelUsage
+	defer func() {
+		noteRunModelUsage(ctx, usage, result)
+		if err != nil && usage != nil {
+			a.recordLLMUsage(streamReq.Model, cfg.Workspace, usage, 0)
+		}
+	}()
 	// The terminator watcher is owned by the caller and therefore survives this
 	// attempt's retries. A `[DONE]` that a failed attempt read off the wire must
 	// not be inherited by the next one: the retry's connection can be cut
@@ -162,6 +174,7 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 	streamDone.reset()
 	stream, err := client.CreateChatCompletionStream(ctx, streamReq)
 	if err != nil && isStreamOptionsRejectedError(err) {
+		chatStreamOptionsUnsupported(cfg, streamReq.Model, true)
 		streamReq.StreamOptions = nil
 		log.Printf("[llm] gateway rejected stream_options; retrying without it: %v", err)
 		stream, err = client.CreateChatCompletionStream(ctx, streamReq)
@@ -203,7 +216,6 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 	toolEventGate := newModelToolCallEventGate(func(event modelStreamEvent) {
 		emitModelStreamEvent(onEvent, event)
 	})
-	var usage *modelUsage
 	gotFinishReason := false
 	stopReason := ""
 	hasOutput := func() bool {
@@ -223,6 +235,14 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 			break
 		}
 		if err != nil {
+			// A finish_reason closes the choice, but the usage-only chunk may
+			// follow it. Keep reading for usage; a later transport failure must
+			// not regenerate a completed choice. Explicit API errors and user
+			// cancellation still fail normally.
+			var networkError net.Error
+			if gotFinishReason && ctx.Err() == nil && (errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, errStreamIdleTimeout) || errors.As(err, &networkError)) {
+				break
+			}
 			// 流内错误事件(如中转的 529 overloaded):错误信息只有文案、
 			// 不带状态码。是否重试由调用方按"是否已产出输出"统一判定。
 			return nil, hasOutput(), err
@@ -243,6 +263,9 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 			}
 		}
 		if len(resp.Choices) == 0 {
+			if gotFinishReason && resp.Usage != nil {
+				break // final usage-only chunk; do not wait for the connection tail
+			}
 			continue
 		}
 		delta := resp.Choices[0].Delta
@@ -375,6 +398,41 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 	}, hasOutput(), nil
 }
 
+// Remember an explicit capability rejection briefly, across tool rounds. This
+// prevents paying one known-invalid 400 per request on compatible gateways.
+// The bounded process-local cache contains only hashes and expiry timestamps.
+var chatStreamOptionsCache = struct {
+	sync.Mutex
+	entries map[[32]byte]time.Time
+}{entries: make(map[[32]byte]time.Time)}
+
+func chatStreamOptionsUnsupported(cfg ConfigState, model string, rejected bool) bool {
+	headers, _ := json.Marshal(normalizeCustomHeaders(cfg.CustomHeaders))
+	key := sha256.Sum256([]byte(baseURLForAPIFormat(cfg) + "\x00" + model + "\x00" + cfg.APIKey + "\x00" + string(headers)))
+	now := time.Now()
+	chatStreamOptionsCache.Lock()
+	defer chatStreamOptionsCache.Unlock()
+	if until := chatStreamOptionsCache.entries[key]; until.After(now) {
+		return true
+	}
+	delete(chatStreamOptionsCache.entries, key)
+	if !rejected {
+		return false
+	}
+	if len(chatStreamOptionsCache.entries) >= 64 {
+		var oldest [32]byte
+		var oldestAt time.Time
+		for k, v := range chatStreamOptionsCache.entries {
+			if oldestAt.IsZero() || v.Before(oldestAt) {
+				oldest, oldestAt = k, v
+			}
+		}
+		delete(chatStreamOptionsCache.entries, oldest)
+	}
+	chatStreamOptionsCache.entries[key] = now.Add(10 * time.Minute)
+	return true
+}
+
 // isStreamOptionsRejectedError 判定建流失败是否因为网关不支持 stream_options
 // 参数。这类网关在 400 报错文本里转述被拒绝的参数名；判定收紧为：400 语义
 // + 文本提及该字段名。纯文本命中而没有任何 400 语义时不再降级，避免把无关
@@ -477,10 +535,15 @@ func modelUsageFromLegacy(usage *legacyopenai.Usage, raw []byte) *modelUsage {
 	if miss == 0 && hit > 0 && usage.PromptTokens > hit {
 		miss = usage.PromptTokens - hit
 	}
-	return &modelUsage{
+	result := &modelUsage{
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
 		CacheHitTokens:   hit,
 		CacheMissTokens:  miss,
 	}
+	if usage.CompletionTokensDetails != nil {
+		result.ReasoningTokens = usage.CompletionTokensDetails.ReasoningTokens
+	}
+	return result
 }
