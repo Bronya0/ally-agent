@@ -200,6 +200,7 @@ import {
   formatBuiltinToolLabel,
   getToggleableToolNames,
   isProtectedTool,
+  orderBuiltinToolSettings,
   protectedToolNames,
   registerDiscoveredTools,
   toggleableToolNames,
@@ -596,6 +597,8 @@ watch(mcpPageTab, (tab) => {
 
 // props.disabledTools 就是后端已落盘的状态（App.vue 保存成功后原样传回）：
 // 开关即持久化，与 MCP 配置的 auto-apply 同一交互口径。
+// 排面按"常用在前"：已启用的（含锁死的核心工具）排在前面，已停用的沉到后面，
+// 组内保持后端声明顺序；每张卡显式带上 enabled，排序规则见 orderBuiltinToolSettings。
 const builtinToolSettings = computed(() => {
   if (scannedBuiltinTools.value.length > 0) {
     const protectedList = [];
@@ -613,6 +616,7 @@ const builtinToolSettings = computed(() => {
         label: formatBuiltinToolLabel(name, t),
         hint: isProtected ? t('settings.toolsProtected') : '',
         disabled: isProtected,
+        enabled: isProtected ? true : builtinToolEnabled(name),
       };
       if (isProtected) {
         protectedList.push(item);
@@ -630,28 +634,31 @@ const builtinToolSettings = computed(() => {
           label: formatBuiltinToolLabel(name, t),
           hint: t('settings.toolsProtected'),
           disabled: true,
+          enabled: true,
         });
       }
     }
 
-    return [...protectedList, ...toggleableList];
+    return orderBuiltinToolSettings([...protectedList, ...toggleableList]);
   }
 
   // 后端扫描结果返回前的默认底座
-  return [
+  return orderBuiltinToolSettings([
     ...protectedToolNames.map((name) => ({
       name,
       label: formatBuiltinToolLabel(name, t),
       hint: t('settings.toolsProtected'),
       disabled: true,
+      enabled: true,
     })),
     ...getToggleableToolNames().map((name) => ({
       name,
       label: formatBuiltinToolLabel(name, t),
       hint: '',
       disabled: false,
+      enabled: builtinToolEnabled(name),
     })),
-  ];
+  ]);
 });
 
 function builtinToolEnabled(name) {

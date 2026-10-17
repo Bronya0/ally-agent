@@ -15,6 +15,7 @@ import {
   getToggleableToolNames,
   isProtectedTool,
   isToggleableTool,
+  orderBuiltinToolSettings,
   protectedToolNames,
   registerDiscoveredTools,
   resetDiscoveredTools,
@@ -58,6 +59,23 @@ test('registerDiscoveredTools dynamically discovers new tools', () => {
   // Supports objects with .name
   registerDiscoveredTools([{ name: 'object_scanned_tool', source: 'built-in' }]);
   assert.equal(isToggleableTool('object_scanned_tool'), true);
+});
+
+test('orderBuiltinToolSettings puts enabled tools first and keeps order inside each group', () => {
+  const items = [
+    { name: 'read', enabled: true },
+    { name: 'screenshot', enabled: false },
+    { name: 'list_files', enabled: true },
+    { name: 'remote_read' },
+    { name: 'grep', enabled: true },
+  ];
+  assert.deepEqual(
+    orderBuiltinToolSettings(items).map((item) => item.name),
+    ['read', 'list_files', 'grep', 'screenshot', 'remote_read'],
+    'enabled first, declaration order kept inside each group, missing flag counts as disabled',
+  );
+  assert.deepEqual(orderBuiltinToolSettings([]), []);
+  assert.deepEqual(orderBuiltinToolSettings(null), []);
 });
 
 test('formatBuiltinToolLabel formats with and without translate function', () => {
