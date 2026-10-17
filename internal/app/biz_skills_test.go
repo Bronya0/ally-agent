@@ -346,6 +346,7 @@ func TestSaveSkillRequiresDescription(t *testing.T) {
 
 func TestSaveSkillProjectTargetNeedsWorkspace(t *testing.T) {
 	app := newApiTestApp(t)
+	app.config.Workspace = "" // This case deliberately overrides the helper's sandbox workspace.
 	if _, err := app.SaveSkill(SkillDraft{Target: "project", Name: "proj-skill", Description: "d"}); err == nil {
 		t.Fatal("expected project target without a workspace to fail")
 	}

@@ -551,6 +551,7 @@ func planDeletePath(spec sandbox.Spec, roots []string, requestPath string, recur
 }
 
 func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req CommandRequest) (CommandResult, error) {
+	defer a.invalidateGitStatus(cfg.Workspace)
 	if strings.TrimSpace(req.Command) == "" {
 		return CommandResult{}, codedToolError("E_BAD_COMMAND", errors.New("command is required"))
 	}

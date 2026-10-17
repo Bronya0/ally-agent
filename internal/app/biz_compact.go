@@ -179,8 +179,8 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, errors.New("model is required")
 	}
-	if len(resolveKeyPool(cfg)) == 0 {
-		return nil, errors.New("API key is required")
+	if !hasModelCredential(cfg) {
+		return nil, missingModelCredentialError(cfg)
 	}
 	// A live chat run may rewrite history concurrently (auto-compaction,
 	// sanitize repair, new turns); compacting on top of it would interleave
@@ -196,7 +196,7 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	// sessions compact independently.
 	if _, running := a.compactingSessions[sessionID]; running {
 		a.mu.Unlock()
-		return nil, errors.New("session is already compacting")
+		return nil, errSessionCompacting
 	}
 	// The summary LLM call runs on a cancellable child of the app context so
 	// CancelCompaction (ESC) can abort it mid-flight.

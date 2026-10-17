@@ -129,6 +129,7 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 	}
 	a.events = fan
 	_ = a.ensureInitialized()
+	a.restoreApiService()
 	// Warm the one-time POSIX login-shell PATH probe without delaying the UI.
 	// command/service wait on the same sync.Once if needed.
 	go warmCommandEnvironment()
@@ -204,6 +205,12 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 // completed requests are not lost when the window closes inside the periodic
 // flush interval.
 func (a *App) ServiceShutdown() error {
+	a.mu.Lock()
+	oauth := a.chatGPT
+	a.mu.Unlock()
+	if oauth != nil {
+		oauth.Close()
+	}
 	// Persist the main window geometry before the process tears down; the
 	// tracker only replays its in-memory snapshot, so a window already
 	// destroyed by the default WindowClosing listener is fine.

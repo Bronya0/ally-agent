@@ -319,6 +319,8 @@ Public License v3. See the LICENSE file for details.
                   :git-status="gitStatus"
                     :context-breakdown="contextBreakdown"
                     :footer-stats-loading="footerStatsLoading"
+                    :git-stats-loading="gitStatsLoading"
+                    :workspace-usage-loading="usageStatsLoading"
                   :context-percent="contextPercent"
                   :context-used="contextUsed"
                   :context-max="contextMax"
@@ -1635,9 +1637,10 @@ async function rememberLastUsedModel(source) {
   const model = String(source?.model || '').trim();
   if (!model) return;
   const current = config.lastUsedModel;
-  if (current && String(current.providerName || '').trim() === providerName && String(current.model || '').trim() === model) return;
-  config.lastUsedModel = { providerName, model };
-  configDraft.lastUsedModel = { providerName, model };
+  const identity = { providerName, model, ...(source?.authType === 'chatgpt_oauth' ? { oauthAccountId: source.oauthAccountId } : {}) };
+  if (current && modelConfigIdentity(current) === modelConfigIdentity(identity)) return;
+  config.lastUsedModel = identity;
+  configDraft.lastUsedModel = { ...identity };
   try {
     await queueConfigSave({ ...config });
   } catch (_) {}
@@ -3201,10 +3204,17 @@ const workspaceTokenUsage = ref({ inputTokens: 0, outputTokens: 0 });
 const gitStatus = ref({ isRepo: false });
 const gitDiffVisible = ref(false);
 const selectedGitRepo = ref('');
+// Context, Git and usage settle independently.
 const footerStatsLoading = ref(true);
+const gitStatsLoading = ref(true);
+const usageStatsLoading = ref(true);
+let usageRequestVersion = 0;
 let footerStatsRequestVersion = 0;
 let contextRequestVersion = 0;
 let gitStatusRequestVersion = 0;
+let gitRefreshTimer = null;
+let gitRefreshInFlight = false;
+let gitRefreshPending = false;
 let configSaveQueue = Promise.resolve();
 let workspaceSwitchVersion = 0;
 
@@ -3219,7 +3229,11 @@ function emptyWorkspaceTokenUsage() {
 function clearFooterStats() {
   footerStatsRequestVersion += 1;
   contextRequestVersion += 1;
+  gitStatusRequestVersion += 1;
+  usageRequestVersion += 1;
   footerStatsLoading.value = true;
+  gitStatsLoading.value = true;
+  usageStatsLoading.value = true;
   gitStatus.value = emptyGitStatus();
   workspaceTokenUsage.value = emptyWorkspaceTokenUsage();
   contextTokens.value = 0;
@@ -3251,6 +3265,10 @@ function captureFooterSnapshot(tabId, workspace) {
   if (!tabId) return;
   footerStatsCache.set(tabId, {
     workspace: String(workspace || ''),
+    sessionId: activeSessionId.value,
+    contextLoading: footerStatsLoading.value,
+    gitLoading: gitStatsLoading.value,
+    usageLoading: usageStatsLoading.value,
     gitStatus: gitStatus.value,
     workspaceTokenUsage: { ...workspaceTokenUsage.value },
     contextTokens: contextTokens.value,
@@ -3263,7 +3281,10 @@ function captureFooterSnapshot(tabId, workspace) {
 
 function applyFooterSnapshot(tabId, workspace) {
   const snap = footerStatsCache.get(tabId);
-  if (!snap || String(snap.workspace || '') !== String(workspace || '')) return false;
+  if (!snap || snap.sessionId !== activeSessionId.value || String(snap.workspace || '') !== String(workspace || '')) return false;
+  footerStatsLoading.value = snap.contextLoading;
+  gitStatsLoading.value = snap.gitLoading;
+  usageStatsLoading.value = snap.usageLoading;
   gitStatus.value = snap.gitStatus;
   workspaceTokenUsage.value = { ...snap.workspaceTokenUsage };
   contextTokens.value = snap.contextTokens;
@@ -3276,11 +3297,11 @@ function applyFooterSnapshot(tabId, workspace) {
 // kicks off refreshFooterStats afterwards to refresh the numbers in the
 // background.
 function prepareFooterStatsForTarget(tabId, workspace) {
-  if (applyFooterSnapshot(tabId, workspace)) {
-    footerStatsLoading.value = false;
-  } else {
-    clearFooterStats();
-  }
+  footerStatsRequestVersion += 1;
+  contextRequestVersion += 1;
+  gitStatusRequestVersion += 1;
+  usageRequestVersion += 1;
+  if (!applyFooterSnapshot(tabId, workspace)) clearFooterStats();
 }
 
 function queueConfigSave(snapshot) {
@@ -3311,85 +3332,99 @@ function queueConfigSave(snapshot) {
 async function refreshFooterStats({
   tabId = activeWorkspaceId.value,
   sessionId = activeSessionId.value,
-  workspace = config.workspace || '',
+  workspace = activeRunWorkspace.value,
 } = {}) {
   const requestedWorkspace = String(workspace || '');
   const requestedSessionId = String(sessionId || '');
   const requestVersion = ++footerStatsRequestVersion;
-  const requestedContextVersion = ++contextRequestVersion;
-
+  const contextVersion = ++contextRequestVersion;
+  const gitVersion = ++gitStatusRequestVersion;
+  const usageVersion = ++usageRequestVersion;
+  const current = () => requestVersion === footerStatsRequestVersion
+    && isCurrentFooterTarget(tabId, requestedSessionId, requestedWorkspace);
   if (!requestedWorkspace || !requestedSessionId) {
-    if (
-      requestVersion === footerStatsRequestVersion
-      && requestedContextVersion === contextRequestVersion
-      && isCurrentFooterTarget(tabId, requestedSessionId, requestedWorkspace)
-    ) {
+    if (current()) {
       footerStatsLoading.value = false;
+      gitStatsLoading.value = false;
+      usageStatsLoading.value = false;
     }
     return;
   }
-
-  // Only the breakdown is fetched: it already carries `total`, so a separate
-  // token-total call would just recompute the same payload on the backend and
-  // double the IPC cost on every footer refresh.
-  const [gitResult, usageResult, breakdownResult] = await Promise.allSettled([
-    // Ask for the Tab's own workspace: chat tabs have already persisted it via
-    // queueConfigSave, while KB/temp tabs deliberately never claim the
-    // persisted chat workspace.
-    GetGitStatus(requestedWorkspace),
-    GetWorkspaceTokenUsage(requestedWorkspace),
-    // workspaceHint：告知后端本次统计所属 Tab 的确切工作区。KB/temp 会话
-    // 在首次 run 完成前既无会话索引条目也无内存 run 记录，后端会回退到
-    // config.workspace（上一个 chat Tab），统计就会串 Tab。
-    GetContextBreakdown(requestedSessionId, requestedWorkspace),
+  // Publish each result immediately: a slow git scan must not hold context,
+  // usage, focus or the explorer behind a shared loading barrier.
+  await Promise.allSettled([
+    GetGitStatus(requestedWorkspace).then((status) => {
+      if (current() && gitVersion === gitStatusRequestVersion) gitStatus.value = status || emptyGitStatus();
+    }).catch(() => {
+      if (current() && gitVersion === gitStatusRequestVersion) gitStatus.value = emptyGitStatus();
+    }).finally(() => {
+      if (current() && gitVersion === gitStatusRequestVersion) {
+        gitStatsLoading.value = false;
+        captureFooterSnapshot(tabId, requestedWorkspace);
+      }
+    }),
+    GetWorkspaceTokenUsage(requestedWorkspace).then((usage) => {
+      if (current() && usageVersion === usageRequestVersion) workspaceTokenUsage.value = usage || emptyWorkspaceTokenUsage();
+    }).catch(() => {}).finally(() => {
+      if (current() && usageVersion === usageRequestVersion) {
+        usageStatsLoading.value = false;
+        captureFooterSnapshot(tabId, requestedWorkspace);
+      }
+    }),
+    GetContextBreakdown(requestedSessionId, requestedWorkspace).then((breakdown) => {
+      if (!current() || contextVersion !== contextRequestVersion) return;
+      contextTokens.value = Number(breakdown?.total) || 0;
+      contextBreakdown.value = breakdown || null;
+    }).catch(() => {}).finally(() => {
+      if (!current() || contextVersion !== contextRequestVersion) return;
+      footerStatsLoading.value = false;
+      captureFooterSnapshot(tabId, requestedWorkspace);
+      // Events arriving during cold initialization require a trailing refresh.
+      const pendingSid = refreshContextPendingSid;
+      refreshContextPendingSid = null;
+      if (pendingSid === requestedSessionId) refreshContextTokens(pendingSid);
+    }),
   ]);
-
-  if (
-    requestVersion !== footerStatsRequestVersion
-    || requestedContextVersion !== contextRequestVersion
-    || !isCurrentFooterTarget(tabId, requestedSessionId, requestedWorkspace)
-  ) return;
-
-  gitStatus.value = gitResult.status === 'fulfilled' ? (gitResult.value || emptyGitStatus()) : emptyGitStatus();
-  workspaceTokenUsage.value = usageResult.status === 'fulfilled'
-    ? (usageResult.value || emptyWorkspaceTokenUsage())
-    : emptyWorkspaceTokenUsage();
-
-  const breakdown = breakdownResult.status === 'fulfilled' ? (breakdownResult.value || null) : null;
-  const contextValue = Number(breakdown?.total) || 0;
-  contextTokens.value = contextValue;
-  contextBreakdown.value = breakdown;
-
-  const session = sessions.value.find((item) => item.id === requestedSessionId);
-  if (session) {
-  }
-  footerStatsLoading.value = false;
-  captureFooterSnapshot(tabId, requestedWorkspace);
 }
 
-async function refreshGitStatus() {
+// Coalesce file mutations, command completion and terminal events.
+function refreshGitStatus() {
+  if (gitRefreshTimer) clearTimeout(gitRefreshTimer);
+  gitRefreshTimer = setTimeout(() => {
+    gitRefreshTimer = null;
+    if (gitRefreshInFlight) { gitRefreshPending = true; return; }
+    void doRefreshGitStatus();
+  }, 120);
+}
+
+async function doRefreshGitStatus() {
   const tabId = activeWorkspaceId.value;
   const sessionId = activeSessionId.value;
   const workspace = activeRunWorkspace.value;
-  if (!workspace || footerStatsLoading.value) return;
+  if (!workspace) return;
   const requestVersion = ++gitStatusRequestVersion;
+  gitRefreshInFlight = true;
   try {
     const status = await GetGitStatus(workspace);
     if (
       requestVersion !== gitStatusRequestVersion
       || !isCurrentFooterTarget(tabId, sessionId, workspace)
-      || footerStatsLoading.value
     ) return;
     gitStatus.value = status || emptyGitStatus();
+    gitStatsLoading.value = false;
     captureFooterSnapshot(tabId, workspace);
   } catch (_) {
     if (
       requestVersion === gitStatusRequestVersion
       && isCurrentFooterTarget(tabId, sessionId, workspace)
-      && !footerStatsLoading.value
     ) {
       gitStatus.value = emptyGitStatus();
+      gitStatsLoading.value = false;
+      captureFooterSnapshot(tabId, workspace);
     }
+  } finally {
+    gitRefreshInFlight = false;
+    if (gitRefreshPending) { gitRefreshPending = false; refreshGitStatus(); }
   }
 }
 
@@ -3473,36 +3508,35 @@ function refreshContextTokens(sid) {
 function doRefreshContextTokens(sid) {
   if (!sid || sid !== activeSessionId.value || footerStatsLoading.value) return;
   refreshContextInFlight = true;
+  const tabId = activeWorkspaceId.value;
+  const workspace = activeRunWorkspace.value;
   const requestVersion = ++contextRequestVersion;
   // The breakdown already carries `total`, so a separate token-total call
   // would duplicate the backend computation on every tool:result burst.
   // workspaceHint pins the count to the active Tab's own workspace so a
   // KB/temp session (no session-index entry before its first run) is not
   // counted against the persisted chat workspace of the previous Tab.
-  GetContextBreakdown(sid, activeRunWorkspace.value).then((breakdown) => {
-    refreshContextInFlight = false;
-    // If another refresh was requested while this one was in flight, trigger
-    // it now so the footer reflects the latest tool results.
-    const pendingSid = refreshContextPendingSid;
-    refreshContextPendingSid = null;
-    if (pendingSid && pendingSid === activeSessionId.value && !footerStatsLoading.value) {
-      refreshContextTokens(pendingSid);
-    }
+  GetContextBreakdown(sid, workspace).then((breakdown) => {
     if (
       requestVersion !== contextRequestVersion
-      || sid !== activeSessionId.value
+      || !isCurrentFooterTarget(tabId, sid, workspace)
       || footerStatsLoading.value
     ) return;
 
     const value = Number(breakdown?.total) || 0;
     contextTokens.value = value;
     contextBreakdown.value = breakdown || null;
-    captureFooterSnapshot(activeWorkspaceId.value, activeRunWorkspace.value);
-  }).catch(() => { refreshContextInFlight = false; });
+    captureFooterSnapshot(tabId, workspace);
+  }).catch(() => {}).finally(() => {
+    refreshContextInFlight = false;
+    const pendingSid = refreshContextPendingSid;
+    refreshContextPendingSid = null;
+    if (pendingSid === activeSessionId.value && !footerStatsLoading.value) refreshContextTokens(pendingSid);
+  });
 }
 
 watch(activeSessionId, (sid) => {
-  if (sid && config.workspace && !footerStatsLoading.value) refreshContextTokens(sid);
+  if (sid && activeRunWorkspace.value && !footerStatsLoading.value) refreshContextTokens(sid);
 });
 
 watch(activeSessionId, () => {
@@ -4098,6 +4132,8 @@ async function applySessionWorkspace(session) {
   if (!workspace) {
     clearFooterStats();
     footerStatsLoading.value = false;
+    gitStatsLoading.value = false;
+    usageStatsLoading.value = false;
     return true;
   }
 
@@ -4110,16 +4146,15 @@ async function applySessionWorkspace(session) {
     addToHistory(workspace);
   }
   loadPromptHistory(workspace);
+  void refreshFooterStats({
+    tabId: activeWorkspaceId.value,
+    sessionId: session.id,
+    workspace,
+  });
   try {
     if (!tabOwns) await queueConfigSave({ ...config });
-    await refreshFooterStats({
-      tabId: activeWorkspaceId.value,
-      sessionId: session.id,
-      workspace,
-    });
   } catch (err) {
     if (isCurrentFooterTarget(activeWorkspaceId.value, session.id, workspace)) {
-      footerStatsLoading.value = false;
       message.error(t('app.config.saveFailed', { error: err }));
     }
   }
@@ -4252,6 +4287,7 @@ async function closeWorkspaceTab(id) {
   if (tab?.sessionId) delete planPanelCollapsedBySession[tab.sessionId];
   planPanelListRefsByTab.delete(id);
   workspaceTabs.value.splice(idx, 1);
+  footerStatsCache.delete(id);
   conversationMessagesRefs.delete(id);
   // 临时工作空间：目录与会话随 Tab 销毁。后台 run 仍需目录时挂起清理，
   // 待 run 终止事件后由 settlePendingTempCleanups 执行。
@@ -4332,6 +4368,7 @@ async function switchWorkspaceTab(id) {
     config.workspace = tab.path;
     configDraft.workspace = tab.path;
   }
+  if (linkedSession) activeSessionId.value = linkedSession.id;
   prepareFooterStatsForTarget(id, tab.path);
   // 切换 Tab 时恢复该 Tab 关联 session 的 extraRoots
   if (linkedSession && Array.isArray(linkedSession.extraRoots)) {
@@ -4345,45 +4382,30 @@ async function switchWorkspaceTab(id) {
   // here — the active Tab's model reaches the backend only via the chat
   // request overlay.
   ensureTabModel(tab);
-  try {
-    if (!tabOwns) await queueConfigSave({ ...config });
-  } catch (err) {
-    if (workspaceSwitchVersion === switchVersion) {
-      footerStatsLoading.value = false;
-      message.error(t('app.config.saveFailed', { error: err }));
-    }
-    return;
-  }
-  if (workspaceSwitchVersion !== switchVersion || activeWorkspaceId.value !== id) return;
-
-  // Switch to linked session
-  if (linkedSession) {
-    activeSessionId.value = linkedSession.id;
-    await loadSessionMessages(linkedSession);
-    if (workspaceSwitchVersion !== switchVersion || activeWorkspaceId.value !== id) return;
-    unloadInactiveSessionMessages();
-    loadPlan(linkedSession.id);
-    // Do NOT restore to bottom on tab switch - each ChatMessages instance
-    // stays mounted (display-directive="show") so the browser naturally
-    // preserves its scroll position when hidden/shown.
-    // restoreMessagesToBottom is only for new session loads (activateSelectedSession).
-  }
-  await refreshFooterStats({
-    tabId: id,
-    sessionId: linkedSession?.id || activeSessionId.value,
-    workspace: tab.path,
-  });
-  // 切换 Tab 时如果目录树已打开且工作区变化，更新捕获的工作区；
-  // 组件内 watch(workspace) 会自动触发 loadRoot 重建
-  // 默认开启：切换到从未访问过的 Tab 时同步其工作区，目录树首挂即有正确根目录
+  void refreshFooterStats({ tabId: id, sessionId: linkedSession?.id || activeSessionId.value, workspace: tab.path });
   if (workspaceExplorerByTab.get(id) !== false && explorerWorkspaceByTab.get(id) !== tab.path) {
     explorerWorkspaceByTab.set(id, tab.path);
   }
-  // 切换 Tab 后自动聚焦新 Tab 的输入框，避免手动点击才能输入
   nextTick(() => {
+    if (activeWorkspaceId.value !== id) return;
     focusPromptInput();
     scrollPlanPanelToFocus(id);
   });
+  // Persistence and UI history are independent of explicit-target statistics.
+  // Preserve save ordering while allowing both jobs to start immediately.
+  const save = tabOwns ? Promise.resolve() : queueConfigSave({ ...config });
+  const load = linkedSession ? loadSessionMessages(linkedSession) : Promise.resolve();
+  await Promise.allSettled([
+    save.catch((err) => {
+      if (workspaceSwitchVersion === switchVersion) message.error(t('app.config.saveFailed', { error: err }));
+    }),
+    load,
+  ]);
+  if (workspaceSwitchVersion !== switchVersion || activeWorkspaceId.value !== id) return;
+  if (linkedSession) {
+    unloadInactiveSessionMessages();
+    loadPlan(linkedSession.id);
+  }
 }
 
 function syncConfigToActiveTab() {
@@ -4577,7 +4599,7 @@ async function handleDeleteUserMessage(sessionId, msg) {
         }
 
         // 4. 重算上下文 token 统计并刷新页脚
-        await refreshFooterStats({
+        void refreshFooterStats({
           sessionId,
           workspace: session.workspace || config.workspace || '',
         });
@@ -4632,17 +4654,19 @@ async function init() {
       // 空工作区没有可拉的统计：直接结束页脚加载态（与 refreshFooterStats
       // 收到空 workspace 时的早退分支等价）。
       footerStatsLoading.value = false;
+      gitStatsLoading.value = false;
+      usageStatsLoading.value = false;
     }
   }
 
-  await loadSavedSessions();
   if (ws) {
-    await refreshFooterStats({
+    void refreshFooterStats({
       tabId: bootTab.id,
       sessionId: bootTab.sessionId,
       workspace: ws,
     });
   }
+  await loadSavedSessions();
   loadMcpConfig();
   loadBackgroundImage();
 }
@@ -4993,15 +5017,26 @@ function bindRuntimeEvents() {
     }
   });
 
+  onRuntimeEvent('git:changed', (data) => {
+    const changed = workspaceHistoryDedupeKey(data?.workspace || '');
+    const active = workspaceHistoryDedupeKey(activeRunWorkspace.value);
+    if (!changed || !active) return;
+    if (changed === active || changed.startsWith(`${active}/`) || active.startsWith(`${changed}/`)) {
+      refreshGitStatus();
+    }
+  });
+
   onRuntimeEvent('tokens:update', (data) => {
     if (
-      footerStatsLoading.value
-      || String(data.workspace || '') !== activeRunWorkspace.value
+      String(data.workspace || '') !== activeRunWorkspace.value
     ) return;
+    usageRequestVersion += 1;
+    usageStatsLoading.value = false;
     workspaceTokenUsage.value = {
       inputTokens: data.inputTokens || 0,
       outputTokens: data.outputTokens || 0,
     };
+    captureFooterSnapshot(activeWorkspaceId.value, activeRunWorkspace.value);
   });
 
   onRuntimeEvent('mcp:status', (data) => {
@@ -6193,7 +6228,7 @@ async function sendPrompt(opts) {
     clearFooterStats();
     try {
       await queueConfigSave({ ...config });
-      await refreshFooterStats({
+      void refreshFooterStats({
         tabId: activeWorkspaceId.value,
         sessionId: activeSessionId.value,
         workspace,
@@ -8214,7 +8249,7 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
           markCustomSessionTitle(session);
         }
         scrollMessagesToBottom();
-        if (chatConfig.value.apiKey || (Array.isArray(chatConfig.value.apiKeys) && chatConfig.value.apiKeys.length)) {
+        if (chatConfig.value.authType === 'chatgpt_oauth' || chatConfig.value.apiKey || (Array.isArray(chatConfig.value.apiKeys) && chatConfig.value.apiKeys.length)) {
           markSessionRunning(session);
           await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: modelContent }], config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } }).catch(() => {
             markTransientTurn(session);
@@ -9544,6 +9579,12 @@ onUnmounted(() => {
   window.removeEventListener('resize', refreshWindowMaximisedState);
   window.removeEventListener('focus', refreshWindowMaximisedState);
   cleanupRuntimeEvents();
+  if (gitRefreshTimer) clearTimeout(gitRefreshTimer);
+  if (refreshContextTimer) clearTimeout(refreshContextTimer);
+  footerStatsRequestVersion += 1;
+  contextRequestVersion += 1;
+  gitStatusRequestVersion += 1;
+  usageRequestVersion += 1;
   if (streamFlushRaf) window.cancelAnimationFrame(streamFlushRaf);
   streamFlushRaf = 0;
   streamFlushScheduled = false;

@@ -16,7 +16,8 @@
 | 文件变更后校验 / 批次内校验规划 | `internal/app/orch_validation.go`（validateChangedFiles / planBatchValidation） |
 | 工具批次策略（文件变更串行、`wait` 延后排到批次末尾、写冲突检测） | `internal/app/orch_batch_policy.go` |
 | memory 工具（记忆列表/搜索） | `internal/app/orch_memory.go` + `internal/tools/memory/` |
-| git 状态查看 | `internal/app/orch_git.go` + `internal/tools/git/` |
+| git 状态查看（2 秒状态缓存 + 独立子仓库发现缓存；文件/命令/run 收尾失效，`git:changed` 合并刷新；等待/重试/多仓库共用 5 秒截止时间） | `internal/app/orch_git.go` + `internal/tools/git/` |
+| ChatGPT 官方 OAuth（动态注册 / PKCE / OIDC / 多账号 / 加密凭据 / 跨进程刷新锁 / 撤销） | `internal/chatgpt/`；桥接 `internal/app/biz_chatgpt.go` + `host_chatgpt.go`；订阅 Responses 兼容层 `prov_chatgpt.go`；设置与模型页共用 `ChatGPTAccounts.vue`；使用说明 `docs/chatgpt-oauth.md` |
 | 模型列表拉取 | `internal/app/biz_modellist.go`（FetchModelList） |
 | AGENTS.md / CODEGRAPH.md 注入、背景图 | `internal/app/biz_project_context.go`（loadAgentsMd / loadCodeGraph） |
 | 临时工作区（创建/清理） | `internal/app/biz_temp_workspace.go` |
@@ -32,10 +33,11 @@
 | 文件基础读写与删除防护（含本地 `delete` 与 `remote_delete_path` 共用的 `path`/`paths` 折叠、条数上限、重复与包含判定；单条路径的落盘判定仍在各自信任域） | `internal/app/orch_file_ops.go` |
 | 受保护路径判定（VCS 元数据 / 路径别名归一） | `internal/tools/pathutil/pathutil.go`（`CanonicalPath` / `VCSMetadataReason`；本地写/删/命令与远端写/命令共用，远端只判得了字面那半） |
 | 安全围栏规则速查（圈的定义、本地/远端判定顺序与具体路径例子、已知缺口、改一条规则要同步的位置） | `docs/safety-fence.md` |
-| 会话/历史持久化（坏数据协议修复在 `prov_history_hygiene.go`） | `internal/app/biz_sessions.go` |
+| 会话/历史持久化（坏数据协议修复在 `prov_history_hygiene.go`；`sessionHistorySnapshot` 合并冷加载，锁外解压，按会话 ticket/revision 发布；`savedHistoryBreakdown` 按版本复用统计） | `internal/app/biz_sessions.go` |
 | 会话附加工作区（圈的扩展面）的活记录：`StartChat` 播种 + 面板 `SetSessionExtraRoots` 即时上报 + `runChat` 每批重算 roots，使运行中增删当轮生效 | `internal/app/biz_session_roots.go` |
 | 系统提示词组装（核心规则 / 技能名片 / 记忆索引 / 用户档案 USER.md / AGENTS.md / 代码图谱 / 项目教训 LESSONS.md / 自定义提示词） | `internal/app/biz_prompt.go` |
-| 请求消息与上下文 Token 核算（口径：请求前缀 + provider 实测锚点；会话前缀快照的冻结与压缩后刷新收口在 `refreshSessionPromptPrefix`） | `internal/app/biz_context.go`（`sessionPrefixBreakdown` / `contextAnchor` / `finalizeSessionBreakdown` / `sessionSystemPromptParts`） |
+| 请求消息与上下文 Token 核算（口径：请求前缀 + provider 实测锚点；会话前缀快照的冻结与压缩后刷新收口在 `refreshSessionPromptPrefix`） | `internal/app/biz_context.go`（`sessionPrefixBreakdown` / `frozenPrefixTokenStats`（冻结字节的 Token 明细缓存，压缩/释放清理）/ `contextAnchor` / `finalizeSessionBreakdown` / `sessionSystemPromptParts`） |
+| 输入栏页脚统计（Git/用量/上下文分别发布，初始化与聚焦/文件树解耦；快照按 Tab + session + workspace 校验） | `frontend/src/App.vue`（`refreshFooterStats` / `prepareFooterStatsForTarget`）+ `ComposerInfoBar.vue` |
 | 计划工具（`steps` / `finish` 位置状态机：报「完成到某一步」、报最后一步即收尾、状态由位置推导、标题即身份、上限收口单一写入点、结果块带状态与进度、run 收尾对账） | `biz_context.go`（`handlePlan` / `classifyPlanRequest` / `reportPlanProgress` / `applyPlanPosition` / `planCheckMarker`）+ `infra_result.go`（`renderPlanResultForModel`）+ `orch_batch_policy.go`（`planBatchWriteSource` / `toolDidPlanWork`）；前端 `planPanel.mjs` / `toolVerb.mjs` |
 | 配置合并 / key 池管理 / 最近使用模型身份展开（`expandLastUsedModel`；配置只存 models[] + lastUsedModel，13 个模型字段是请求级派生值） | `internal/app/biz_config.go` |
 | 技能发现与加载 | `internal/app/biz_skills.go` |
@@ -46,7 +48,7 @@
 | SSH 集群清单与工作区授权（`ssh_clusters.json` 落盘、别名/端点两种写法、默认拒绝） | `internal/app/biz_ssh_cluster.go` + `orch_ssh_cluster.go` + `SSHClusterPanel.vue` + `ComposerInfoBar.vue` |
 | 远端 Python helper（普通工具 JSON / 文件传输 tar 两种模式；共享路径、VCS、文本转换和结果封装） | `internal/app/remote_helper.py`（由 `orch_remote.go` 通过 `go:embed` 嵌入） |
 | 知识库模式（KB 提示词 / sources/ 只读） | `internal/app/orch_kb.go` + `ModeSider.vue` + `App.vue` |
-| 对外本地 HTTP API 服务 | `internal/app/biz_api.go` |
+| 对外本地 HTTP API 服务（启用状态持久化 / 单次 AI / 会话与问答 / 按请求选模型；插件复用同一套接口） | `internal/app/biz_api.go`；契约 `docs/api.md`；宿主启动恢复在 `host_desktop.go` |
 | 应用自更新 | `internal/app/biz_update.go` |
 | 新版本首次启动的更新日志（vite 把 release 事件正文注入为 `__ALLY_RELEASE_NOTES__`；首启判定与“看过没”存储） | `frontend/src/utils/releaseNotes.mjs` + `components/ReleaseNotesModal.vue` + `App.vue` |
 | 插件系统（清单校验 / 安装 / 导出 / 删除 / 启停 / 插件存储 / HTTP 白名单代理） | `internal/app/orch_plugin.go`（编排，含 `pluginMu` 串行化）+ `internal/tools/plugin/`（纯算法：清单与包校验、主机白名单、包内路径解析、体积复验 `VerifyContentSizes`）；契约文档 `docs/plugin-system.md` |

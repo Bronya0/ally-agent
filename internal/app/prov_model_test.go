@@ -317,6 +317,16 @@ func TestModelUsageFromResponsesEventSupportsCompatibleCacheFields(t *testing.T)
 			want: modelUsage{PromptTokens: 900, CompletionTokens: 7, CacheHitTokens: 600, CacheMissTokens: 300},
 		},
 		{
+			name: "explicit zero cache hit",
+			raw:  `{"response":{"usage":{"input_tokens":1000,"input_tokens_details":{"cached_tokens":0},"output_tokens":8}}}`,
+			want: modelUsage{PromptTokens: 1000, CompletionTokens: 8, CacheMissTokens: 1000},
+		},
+		{
+			name: "missing cache telemetry is unknown",
+			raw:  `{"response":{"usage":{"input_tokens":1000,"output_tokens":8}}}`,
+			want: modelUsage{PromptTokens: 1000, CompletionTokens: 8},
+		},
+		{
 			name: "top level cache counters",
 			raw:  `{"response":{"usage":{"input_tokens":700,"prompt_cache_hit_tokens":500,"prompt_cache_miss_tokens":200,"output_tokens":6}}}`,
 			want: modelUsage{PromptTokens: 700, CompletionTokens: 6, CacheHitTokens: 500, CacheMissTokens: 200},

@@ -61,8 +61,8 @@ func (a *App) GameAIAction(model ModelConfig, system, user string) (GameAIAction
 	if cfg.Model == "" {
 		return GameAIActionResult{}, errors.New("model is required")
 	}
-	if len(resolveKeyPool(cfg)) == 0 {
-		return GameAIActionResult{}, errors.New("API key is required")
+	if !hasModelCredential(cfg) {
+		return GameAIActionResult{}, missingModelCredentialError(cfg)
 	}
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = defaultMaxTokensForAPIFormat(cfg.APIFormat)

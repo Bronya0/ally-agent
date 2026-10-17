@@ -1,6 +1,8 @@
 # Ally 本地 HTTP API 文档（v1）
 
-Ally 提供一组本地 HTTP API，供其它工具（脚本、IDE 插件、自动化平台等）驱动 Ally 的会话、模型、MCP 与 Skill 能力。服务由 **设置 → API** 页手动开启，默认端口 `47821`，仅监听回环地址 `127.0.0.1`，不对局域网暴露。
+Ally 提供一组本地 HTTP API，供 Ally 插件、脚本、IDE 与自动化平台调用 AI、会话、模型、MCP 与 Skill 等能力。这是插件调用业务能力的统一契约，不另提供 AI / 会话函数 SDK；插件接线方式见 [插件开发指南 §4.5](plugin-system.md#45-调用-ally-的-ai会话等-http-api)。
+
+服务首次默认关闭，由 **设置 → API** 页开启；端口、Token 与开关保存到 `~/.ally_agent/api.json`，重启 Ally 自动恢复已启用的服务。默认端口 `47821`，仅监听 `127.0.0.1`。端口冲突等启动失败会记录日志，设置页显示实际未运行状态；正常退出不会清除启用偏好。
 
 ## 基础信息
 
@@ -19,8 +21,9 @@ HTTP 状态码语义：
 | 400 | 参数缺失/非法，或模型配置不完整（如未配置模型、API Key） |
 | 401 | 鉴权失败（token 缺失或错误） |
 | 404 | 资源不存在（会话/skill/服务不存在） |
-| 409 | 冲突（会话已有活跃 run、运行中注入空消息等） |
+| 409 | 冲突（会话运行 / 压缩中，或注入队列满；运行中发送附件 / 切模型也返回 409） |
 | 500 | 服务端内部错误 |
+| 502 / 504 | 单次 AI 调用失败 / 超过 120 秒 |
 
 ## 认证
 
@@ -118,6 +121,8 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 | 字段 | 说明 |
 |------|------|
 | `running` | 是否有活跃 run（AI 正在执行） |
+| `runId` / `compacting` | 当前 run ID（无运行时空字符串）/ 是否正在压缩 |
+| `lastRunStatus` / `lastRunError` | 本进程记录的最近运行状态与错误；重启后尚无记录时为空 |
 | `queuedMessages` | 排队等待注入的用户消息数 |
 | `model` / `modelProvider` | 下一回合将使用的模型（本地 HTTP API 会话用的是"最近使用模型"，即 `POST /api/v1/models/activate` 设的那一条） |
 | `id` / `title` / `workspace` / `createdAt` / `updatedAt` / `messageCount` / `contextTokens` | 会话元信息 |
@@ -130,17 +135,32 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 | 字段 | 说明 |
 |------|------|
-| `status` | `running`（还在执行）或 `done` |
-| `result` | 最近一条完成的 assistant 消息全文；会话还没产出过回答时为空字符串 |
+| `status` | `running` / `compacting` / `done` / `error` / `cancelled`；结束状态在本进程记录，重启后无记录回落 `done`（仅表示当前空闲） |
+| `runId` / `error` | 当前或最近一次 run ID / 最近运行错误（无记录时为空） |
+| `result` | 后端历史中最近一条有正文、且不带工具调用的 assistant 消息；没有回答时为空。运行中可能是上一轮或当前已保存的中间结果；只有结合 `status` 才能判断是否完成 |
 | `updatedAt` | 快照更新时间（毫秒） |
 
 ### `GET /api/v1/sessions/{id}/messages` — 获取完整消息快照
 
-返回会话全部 UI 消息（与界面渲染一致，含工具卡等展示字段；`role` 为 `user`/`assistant`/`tool` 等，字段为动态 map）。适合需要全量上下文的集成场景；只要最终回答用 `/result` 即可。
+返回 `data.{id,title,workspace,createdAt,updatedAt,contextTokens,messages}`。有后端模型历史时优先返回该历史，避免 API 执行后仍读到旧 UI 快照。`messages[]` 包含 `role`、`content`、`done`；assistant 工具调用为 `toolCalls: [{id,name,arguments}]`（arguments 是 JSON 字符串），tool 结果带 `toolCallId`。不含系统提示词或供应商思考签名。重启后工具输出使用落盘占位内容，图片不恢复；没有模型历史时回落 UI 快照（可能带界面展示字段）。这不是实时 token 流，只返回已保存的检查点；只要回答用 `/result`。
 
 ### `GET /api/v1/sessions/{id}/todos` — 查询会话计划
 
 响应 `data.todos`：`[{ "title": "步骤一", "status": "in_progress" }]`，`status` 取值 `pending` / `in_progress` / `done`。
+
+计划为当前进程内状态，重启后未恢复运行时可能为空；会话不存在返回 404。
+
+### `GET /api/v1/sessions/{id}/questions` — 查询待回答的问题
+
+响应 `data.questions` 为 `[{askId, request: {questions: [{id, question, options: [{id,label,description,recommended}]}]}}]`。没有等待中的问题时返回空数组。Agent 使用 ask 工具等待用户时，插件应展示这些问题并提交答案；单纯追加消息不会解除等待。
+
+### `POST /api/v1/sessions/{id}/answers` — 回答问题
+
+```json
+{"askId":"...","answers":[{"questionId":"q1","selectedOptionIds":["o1"],"customText":"补充说明"}]}
+```
+
+每个问题都必须有一项答案；可选选项 ID、自由文本或两者。响应 `data.submitted=true`。不存在或不属于该会话的问题返回 404，答案非法 / 重复提交返回 400。
 
 ### `POST /api/v1/sessions/{id}/messages` — 给会话发送消息
 
@@ -149,7 +169,8 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `message` | string | 是* | 消息文本；运行中的会话只接受纯文本 |
-| `attachments` | array | 否 | 附件透传给模型（与界面附件同构），仅空闲会话生效 |
+| `attachments` | array | 否 | 仅空闲时接收；每项 `{name,type?,size?,kind?,dataUrl?,text?,filePath?}`，kind 为 image/text/file，图片使用 data URL |
+| `modelIndex` | int | 否 | 本回合使用 `GET /models` 的指定条目；缺省用最近使用模型，不更改全局模型选择；运行中携带此字段返回 409 |
 
 *带 `attachments` 时 `message` 可为空；否则必填。
 
@@ -158,11 +179,13 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 - 会话空闲 → 直接开始新回合（首次发送与继续是同一条持久化历史路径），返回 `{"runId":"...","queued":false}`
 - 会话运行中 → 排队追加到当前 run，下一步边界注入模型上下文，返回 `{"runId":"...","queued":true}`
 
+新回合的工作区与附加根目录取自该会话，不随用户当前打开的工作区变化。运行中带附件会返回 409，避免静默丢失；压缩中不能启动新回合。会话必须先创建，不存在返回 404。
+
 错误：400 配置不完整（未配置模型/API Key/工作区）或消息为空；409 运行中排队失败（队列满）。
 
 ### `POST /api/v1/sessions/{id}/cancel` — 终止会话当前运行
 
-等同界面按 ESC。无请求参数。响应 `data.wasRunning` 表示取消时是否确有运行中的 run（空闲时调用是幂等 no-op）。
+等同界面按 ESC，支持取消运行或手动压缩。无请求参数。响应 `data.wasRunning` 表示是否发出取消，取消压缩另带 `compacting=true`。取消是异步的，继续轮询至空闲；空闲时幂等 no-op，不存在返回 404。
 
 ### `POST /api/v1/sessions/{id}/compact` — 压缩会话历史
 
@@ -172,13 +195,23 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 |------|------|------|------|
 | `instruction` | string | 否 | 压缩时给 LLM 的总结要求 |
 
-**同步接口**：会等待 LLM 完成历史总结才返回（可能数十秒），响应 `data` 为压缩结果详情。400 表示会话不存在或压缩条件不满足。
+**同步接口**：等待 LLM 完成历史总结才返回，断开 HTTP 连接会取消。使用会话本进程冻结的模型配置，没有记录时用最近使用模型；原样保留思考档位。不存在返回 404，运行 / 压缩中返回 409，条件不满足返回 400。可能超过插件 HTTP 代理的 120 秒上限，调用方应处理超时。
 
 ### `DELETE /api/v1/sessions/{id}` — 删除会话
 
-删除持久化历史与快照。会话运行中返回 409；对不存在的会话重复调用幂等成功。
+删除持久化历史与快照。会话运行或压缩中返回 409；对不存在的会话重复调用幂等成功。
 
 ---
+
+## 单次 AI 调用
+
+### `POST /api/v1/ai/complete` — 生成文本
+
+请求 `{ "prompt": "待处理文本", "system": "可选系统指令", "modelIndex": 0 }`。`prompt` 必填且不能全为空白，prompt / system 各限 64 KiB；modelIndex 可选，缺省使用最近使用模型，下标非法返回 400。
+
+复用 Ally 已配置模型的三协议适配、密钥池、代理、自定义请求头和思考档位；不创建会话、不注入工作区提示词、不运行工具、不改全局模型选择。同步等待完成，最长 120 秒，客户端断连或 Ally 退出会取消该请求，互不影响其它调用或游戏面板。
+
+响应 `data`：`{ "reply": "生成文本", "promptTokens": 12, "completionTokens": 3, "totalTokens": 15 }`。用量来自供应商回报，未回报时为 0。配置不完整返回 400，模型请求失败返回 502，超时返回 504。该接口不是 OpenAI 兼容转发端点；需要 Agent / 多轮历史时使用会话接口。
 
 ## 模型
 
@@ -259,7 +292,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 ### `POST /api/v1/skills/{name}/enable`、`POST /api/v1/skills/{name}/disable` — 启停 skill
 
-无请求参数。内置 skill 永远启用，disable 内置 skill 无实际效果。响应 `data`：`{ "name": "...", "enabled": true/false }`。
+无请求参数。可启停项目、用户及内置 skill，影响后续技能注入；已冻结的会话前缀不会在中途改写。响应 `data`：`{ "name": "...", "enabled": true/false }`。
 
 ---
 
@@ -300,3 +333,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 ### `DELETE /api/v1/tasks/{id}` — 删除计划任务
 
 无请求参数。响应 `data`：`{ "deleted": true }`。
+
+### ChatGPT OAuth 模型
+
+模型管理中的 `chatgpt_oauth` 条目可参与现有模型索引选择和 Agent 调用，使用 Ally 桌面端已经授权的账号。普通配置只包含账号注册引用，不包含 OAuth Token；本地 API 不提供登录、刷新或读取 Token 的端点，原有本地服务鉴权保持不变。OAuth 失败不会使用条目里的 API Key 或其他模型支付请求。账号登录、退出和刷新模型目录均在桌面设置完成，见 [ChatGPT 登录](chatgpt-oauth.md)。

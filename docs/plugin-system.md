@@ -1,8 +1,9 @@
 # Ally 插件开发指南（v1）
 
-> 插件 = 一个 zip 包。装进来后侧栏多一个整页，页面用纯 JS/TS 写，只能通过宿主注入的 `host` 对象触达后端能力（HTTP / 存储 / 工作区只读 / 事件 / 主题），不用写 Go、不用打包、不用重启应用。
+> 插件 = 一个 zip 包。装进来后侧栏多一个整页，页面用纯 JS/TS 写，通过宿主注入的 `host` 使用 HTTP / 存储 / 工作区只读 / 事件 / 主题；AI、会话、模型等能力统一调用 [Ally HTTP API](api.md)，不用另写一套函数 SDK。
 >
 > **要让 AI 帮你写插件，就把这份文档的链接丢给它**：https://github.com/Bronya0/ally-agent/blob/main/docs/plugin-system.md
+> 涉及 AI、会话、模型、MCP、Skill、任务或服务时，同时阅读 [api.md](api.md)。接口参数和响应只在该文档维护，本文 §4.5 说明插件如何连接。
 > 最容易错的是三处：清单字段、权限白名单、样式作用域——照训练数据里「浏览器扩展 / 油猴脚本」的经验瞎写，十有八九踩在这三处。
 >
 > 本文档只讲**怎么写一个插件**。插件系统自身的实现（加载器、资源中间件、权限判定代码在哪）不在这里维护，要看就去看代码。
@@ -188,7 +189,7 @@ new URL('./style.css', import.meta.url); // 同源相对路径，直接用
 两个要知道的点：
 
 - **模块 URL 上带缓存戳，而且它落在目录段**：`/plugins/<id>/@<插件目录更新时间>/index.js`。这样插件内部 `import './util.js'` 解析出来的子模块会自动继承同一个戳，整棵树才真的换新（放查询串的话子模块继承不到，重新导入后仍跑旧代码）。
-- **别 import 生成的 bindings**：`frontend/bindings/...` 在生产包里不存在。后端能力只能从 `host` 拿——这也是插件不随后端重构而碎掉的原因。
+- **别 import 生成的 bindings**：`frontend/bindings/...` 在生产包里不存在。使用 `host` 提供的页面能力；AI 与会话等业务经 `host.http.request` 调用 [HTTP API](api.md)。
 
 ### 3.2 `keepAlive` 与 `shown` / `hidden`
 
@@ -292,15 +293,57 @@ interface HttpResult {
 | 不给 | 理由 |
 |---|---|
 | `GetConfig` / `SaveConfig` | 配置里含用户的模型密钥池 |
-| 会话与模型（`StartChat` / `SaveSession` / `SwitchModel` …） | 属于用户主流程，v1 不给 |
+| 会话与模型的函数 SDK（`host.ai` / `host.sessions` 等） | 统一使用 [HTTP API](api.md)，见 §4.5 |
 | SSH 全套 | 服务器凭据与授权闸门，最高敏感面 |
 | 宿主生命周期（`ApplyUpdate` / `SetWindow` / `QuitForUpdate` …） | 内部接线 |
-| 改全局配置（`SaveSkill` / `SaveMcpConfig` / `SaveApiSettings` …） | 同上 |
-| 定时任务与服务（`ListScheduledTasks` / `StopService` …） | 避免插件在用户背后起后台任务 |
+| 全局配置函数 SDK（`GetConfig` / `SaveApiSettings` …） | API 服务开关、端口与 token 由用户在设置页管理；MCP / Skill 的公开操作见 [HTTP API](api.md) |
+| 定时任务与服务的函数 SDK | 已公开的查询 / 删除 / 停止操作统一走 [HTTP API](api.md) |
 | 打开外部链接（`host.open.url`） | v1 没有这个 API，见 §8 第 1 条 |
 | 写工作区 | `host.files` 只读（`workspace: "write"` 装不上） |
 | 弹确认框 / 弹窗 | 只有 `host.ui.notify` |
 | 多页面 | 一个插件一个页面，页面内部的二级导航自己实现 |
+
+### 4.5 调用 Ally 的 AI、会话等 HTTP API
+
+1. 用户在「设置 → API」启用服务，并把 Base URL 和 Bearer Token 填入插件自己的连接设置。首次默认关闭；开启后会持久化，重启 Ally 自动恢复监听。端口被占用时服务实际状态仍显示关闭。
+2. 清单声明 `"permissions": { "http": ["127.0.0.1"] }`（还要访问第三方服务时一起列出）。匹配的是主机名，不带协议、端口或路径。
+3. 插件用 `host.http.request` 代理请求本地服务，避免 WebView 跨域 / CORS 问题。无需添加 `host.ai`、`host.sessions` 等桥接函数，也不要在浏览器中直接 `fetch` 回环 API。
+4. 连接信息放 `host.store`；Token 不写进源码、清单或默认包数据。包含数据的导出会带出凭据。
+
+以下代码假定插件连接设置已经存为 `{ allyApi: { baseUrl, token }, ... }`：
+
+```js
+const settings = await host.store.get();
+const { baseUrl, token } = settings?.allyApi || {};
+if (!baseUrl || !token) throw new Error('请先配置 Ally API 地址和 Token');
+
+const response = await host.http.request({
+  method: 'POST',
+  url: `${baseUrl.replace(/\/$/, '')}/api/v1/ai/complete`,
+  headers: { Authorization: `Bearer ${token}` },
+  json: { prompt: '把下面这句话翻译成英文：早上好' },
+  timeout: 120,
+  maxBytes: 1024 * 1024,
+});
+if (response.truncated) throw new Error('API 响应超出读取上限');
+const payload = response.json ?? JSON.parse(response.body || '{}');
+if (response.status < 200 || response.status >= 300 || !payload.ok) {
+  throw new Error(payload.error || `Ally API HTTP ${response.status}`);
+}
+host.ui.notify(payload.data.reply, 'success');
+```
+
+按需求选择接口，完整字段与错误约定见 [api.md](api.md)：
+
+| 需求 | 使用方式 |
+|---|---|
+| 翻译、摘要、生成文本等单次 AI 调用 | `POST /api/v1/ai/complete`：无会话、无工具执行；复用 Ally 的模型配置与密钥池 |
+| 让 Agent 在工作区执行任务、多轮对话 | 创建会话 → 发送消息 → 轮询状态 / 结果；创建时显式传 `workspace: host.app.workspace` |
+| 只为当前请求选模型 | 先取模型列表，再传 `modelIndex`；不会改用户的最近使用模型 |
+| Agent 等待用户回答 | 读取会话 `/questions`，通过 `/answers` 提交，再继续轮询 |
+| 模型、MCP、Skill、工具、子代理、任务与服务 | 使用 `api.md` 对应资源接口 |
+
+`host.http` 返回的 `status` 是 HTTP 状态码，`json` 才是 API 信封；收到 HTTP 400 / 401 等也要主动检查 `ok`。Bearer Token 授予的是整套本地 API 权限，并不按插件细分。`host.events` 仍只有 theme / shown / hidden；会话进度通过 HTTP 轮询获取，隐藏时暂停轮询并在卸载时清理。
 
 ---
 

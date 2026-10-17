@@ -59,7 +59,7 @@ Public License v3. See the LICENSE file for details.
           <div class="saved-model-list">
             <div v-for="item in tab.models" :key="item.index" class="saved-model-item">
               <div class="saved-model-main">
-                <div class="saved-model-name">{{ normalizedProviderName(item.model.providerName) }} · {{ item.model.model || t('settings.modelNone') }}</div>
+                <div class="saved-model-name">{{ normalizedProviderName(item.model.providerName) }} · {{ item.model.displayName || item.model.model || t('settings.modelNone') }}</div>
                 <div class="saved-model-meta">{{ apiFormatLabel(item.model.apiFormat) }} · {{ item.model.model || 'Model' }}</div>
                 <div class="saved-model-url">{{ item.model.baseUrl || t('settings.baseUrlNone') }}</div>
                 <div class="saved-model-url">max {{ item.model.maxTokens || '-' }} · context {{ item.model.contextWindow || '-' }}</div>
@@ -85,8 +85,12 @@ Public License v3. See the LICENSE file for details.
       @update:show="(v) => { if (!v) cancelModelDraft(); }"
     >
       <n-form :model="modelDraft" label-placement="top">
+        <n-form-item :label="t('chatgpt.authType')">
+          <n-select v-model:value="modelDraft.authType" :options="authOptions" @update:value="changeAuthType" />
+        </n-form-item>
+        <ChatGPTAccounts v-if="isOAuth" :key="modelEditorIndex" :account-id="modelDraft.oauthAccountId" @account="selectOAuthAccount" @models="oauthModels = $event" />
         <n-grid :cols="2" :x-gap="12">
-          <n-form-item-gi :label="t('settings.providerPreset')" :span="2">
+          <n-form-item-gi v-if="!isOAuth" :label="t('settings.providerPreset')" :span="2">
             <n-select
               v-model:value="selectedCatalogProviderId"
               :options="catalogProviderOptions"
@@ -107,9 +111,9 @@ Public License v3. See the LICENSE file for details.
             />
           </n-form-item-gi>
           <n-form-item-gi :label="t('settings.providerName')">
-            <n-input v-model:value="modelDraft.providerName" placeholder="OpenAI Compatible" />
+            <n-input v-model:value="modelDraft.providerName" :disabled="isOAuth" placeholder="OpenAI Compatible" />
           </n-form-item-gi>
-          <n-form-item-gi :label="t('settings.apiFormat')">
+          <n-form-item-gi v-if="!isOAuth" :label="t('settings.apiFormat')">
             <n-select v-model:value="modelDraft.apiFormat" :options="apiFormatOptions" />
           </n-form-item-gi>
           <n-form-item-gi v-if="!selectedCatalogProvider" label="Model">
@@ -118,12 +122,12 @@ Public License v3. See the LICENSE file for details.
               class="model-input-select"
               :options="remoteModelOptions"
               filterable
-              tag
+              :tag="!isOAuth"
               :placeholder="modelPlaceholder(modelDraft.apiFormat)"
               :loading="modelListLoading"
               @update:value="onModelDraftSelected"
             >
-              <template #action>
+              <template v-if="!isOAuth" #action>
                 <n-button
                   size="tiny"
                   block
@@ -137,10 +141,10 @@ Public License v3. See the LICENSE file for details.
               </template>
             </n-select>
           </n-form-item-gi>
-          <n-form-item-gi :label="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages' ? t('settings.baseUrlNoV1') : 'Base URL'">
+          <n-form-item-gi v-if="!isOAuth" :label="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages' ? t('settings.baseUrlNoV1') : 'Base URL'">
             <n-input v-model:value="modelDraft.baseUrl" :placeholder="apiFormatDefaultBaseUrl(modelDraft.apiFormat)" autocomplete="off" />
           </n-form-item-gi>
-          <n-form-item-gi :label="t('settings.apiKeys')" :span="2">
+          <n-form-item-gi v-if="!isOAuth" :label="t('settings.apiKeys')" :span="2">
             <div class="api-key-list">
               <div v-for="(key, ki) in modelDraft.apiKeys" :key="ki" class="api-key-row">
                 <span class="api-key-index">{{ ki + 1 }}</span>
@@ -168,7 +172,7 @@ Public License v3. See the LICENSE file for details.
               <div class="api-key-hint">{{ t('settings.apiKeysHint') }}</div>
             </div>
           </n-form-item-gi>
-          <n-form-item-gi label="Max Tokens" :span="1">
+          <n-form-item-gi v-if="!isOAuth" label="Max Tokens" :span="1">
             <n-select
               :value="modelDraft.maxTokens"
               :options="maxTokensOptions"
@@ -211,14 +215,14 @@ Public License v3. See the LICENSE file for details.
           </n-form-item-gi>
         </n-grid>
         <!-- Advanced: per-model custom HTTP headers (collapsed by default). -->
-        <div class="model-advanced-toggle">
+        <div v-if="!isOAuth" class="model-advanced-toggle">
           <button type="button" class="model-advanced-button" @click="modelAdvancedOpen = !modelAdvancedOpen">
             <span class="model-advanced-arrow" :class="{ open: modelAdvancedOpen }">›</span>
             <span>{{ t('settings.modelAdvanced') }}</span>
             <span v-if="customHeaderRowCount" class="model-advanced-count">{{ customHeaderRowCount }}</span>
           </button>
         </div>
-        <div v-if="modelAdvancedOpen" class="model-advanced-body">
+        <div v-if="modelAdvancedOpen && !isOAuth" class="model-advanced-body">
           <n-form-item :label="t('settings.customHeaders')" :show-feedback="false">
             <div class="api-key-list custom-header-list">
               <div v-for="(row, hi) in customHeaderRows" :key="row.id" class="api-key-row custom-header-row">
@@ -275,10 +279,11 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
+import ChatGPTAccounts from './ChatGPTAccounts.vue';
 import { computed, reactive, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
 import { reasoningEffortLabel, t } from '../i18n.mjs';
-import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiFormat, normalizeApiKeysArray, normalizeCustomHeaders, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
+import { CHATGPT_PROVIDER_NAME, CHATGPT_CONTEXT_WINDOW, buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiFormat, normalizeApiKeysArray, normalizeCustomHeaders, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
 import { normalizeDraftHiddenModes, placeholderModel } from '../utils/config.mjs';
 import { saveTextFile } from '../utils/download.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
@@ -343,17 +348,19 @@ function defaultModelDraft(source = {}) {
     : [];
   const normalizedKeys = normalizeModelApiKeys(rawKeys);
   return {
-    providerName: fallback.providerName,
+    authType: 'api_key',
+    oauthAccountId: '',
     baseUrl: fallback.baseUrl,
     apiKey: '',
     model: '',
     ...source,
+    providerName: source.authType === 'chatgpt_oauth' ? CHATGPT_PROVIDER_NAME : (source.providerName || fallback.providerName),
     apiFormat: normalizeApiFormat(source.apiFormat || fallback.apiFormat),
     // Keep at least one (possibly empty) row so the form always shows a key
     // input; empty strings are stripped again on save/test.
     apiKeys: normalizedKeys.length ? normalizedKeys : [''],
     maxTokens: Number.isFinite(Number(source.maxTokens)) && Number(source.maxTokens) > 0 ? Number(source.maxTokens) : fallback.maxTokens,
-    contextWindow: Number.isFinite(Number(source.contextWindow)) && Number(source.contextWindow) > 0 ? Number(source.contextWindow) : fallback.contextWindow,
+    contextWindow: Number.isFinite(Number(source.contextWindow)) && Number(source.contextWindow) > 0 ? Number(source.contextWindow) : (source.authType === 'chatgpt_oauth' ? CHATGPT_CONTEXT_WINDOW : fallback.contextWindow),
     reasoningTag: String(source.reasoningTag || fallback.reasoningTag).trim() || 'reasoning_content',
     // "auto" and the legacy "max_tokens" both send max_tokens, so collapse the
     // explicit legacy value onto "auto" — otherwise the two-option select would
@@ -521,7 +528,7 @@ const modelSearch = ref('');
 
 function modelMatchesSearch(model, needle) {
   if (!needle) return true;
-  return [model.providerName, model.model, model.baseUrl]
+  return [model.providerName, model.displayName, model.model, model.baseUrl]
     .some((field) => String(field || '').toLowerCase().includes(needle));
 }
 
@@ -585,7 +592,31 @@ async function ensureModelCatalog() {
 
 const remoteModels = ref([]);
 const modelListLoading = ref(false);
-const remoteModelOptions = computed(() => remoteModels.value.map((name) => ({ label: name, value: name })));
+const oauthModels = ref([]);
+const isOAuth = computed(() => modelDraft.authType === 'chatgpt_oauth');
+const authOptions = computed(() => [
+  { label: t('chatgpt.apiKeyAuth'), value: 'api_key' },
+  { label: t('chatgpt.oauthAuth'), value: 'chatgpt_oauth' },
+]);
+const remoteModelOptions = computed(() => isOAuth.value
+  ? oauthModels.value.map((m) => ({ label: m.display_name, value: m.slug }))
+  : remoteModels.value.map((name) => ({ label: name, value: name })));
+function changeAuthType(type) {
+  selectedCatalogProviderId.value = CUSTOM_PROVIDER_ID;
+  modelDraft.model = ''; oauthModels.value = []; remoteModels.value = [];
+  modelDraft.apiKeys = ['']; modelDraft.apiKey = ''; resetCustomHeaderRows(null);
+  if (type === 'chatgpt_oauth') { modelDraft.providerName = CHATGPT_PROVIDER_NAME; modelDraft.contextWindow = CHATGPT_CONTEXT_WINDOW; modelDraft.reasoningEffort = 'auto'; modelDraft.apiFormat = 'openai_responses'; modelDraft.baseUrl = 'https://api.openai.com/v1'; }
+  else { modelDraft.oauthAccountId = ''; }
+}
+function selectOAuthAccount(id) {
+  if (modelDraft.oauthAccountId && modelDraft.oauthAccountId !== id) modelDraft.model = '';
+  modelDraft.providerName = CHATGPT_PROVIDER_NAME;
+  modelDraft.oauthAccountId = id;
+}
+function oauthFields() {
+  return { authType: modelDraft.authType || 'api_key', oauthAccountId: isOAuth.value ? modelDraft.oauthAccountId : '',
+    displayName: isOAuth.value ? (oauthModels.value.find((m) => m.slug === modelDraft.model)?.display_name || modelDraft.displayName || '') : '' };
+}
 
 function onModelDraftSelected(value) {
   modelDraft.model = typeof value === 'string' ? value : (value == null ? modelDraft.model : String(value));
@@ -655,6 +686,8 @@ async function startAddModelDraft() {
     const normalizedKeys = normalizeModelApiKeys(rawKeys);
     resetCustomHeaderRows(templateModel.customHeaders);
     assignModelDraft({
+      authType: templateModel.authType || 'api_key',
+      oauthAccountId: templateModel.oauthAccountId || '',
       providerName: provider,
       apiFormat: normalizeApiFormat(templateModel.apiFormat),
       baseUrl: templateModel.baseUrl || '',
@@ -714,6 +747,7 @@ async function testModelConnection() {
   testingModel.value = true;
   try {
     await TestModelConnection({
+      ...oauthFields(),
       providerName: normalizedProviderName(modelDraft.providerName),
       apiFormat: normalizeApiFormat(modelDraft.apiFormat),
       baseUrl: (modelDraft.baseUrl || '').trim(),
@@ -721,7 +755,7 @@ async function testModelConnection() {
       apiKeys,
       model,
       maxTokens: modelDraft.maxTokens || 131072,
-      contextWindow: modelDraft.contextWindow || 1000000,
+      contextWindow: modelDraft.contextWindow || (isOAuth.value ? CHATGPT_CONTEXT_WINDOW : 1000000),
       reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
       tokenParam: modelDraft.tokenParam || 'auto',
       reasoningEffort: normalizeReasoningEffort(modelDraft.reasoningEffort),
@@ -746,7 +780,11 @@ function commitModelDraft() {
   const providerName = normalizedProviderName(modelDraft.providerName);
   const apiFormat = normalizeApiFormat(modelDraft.apiFormat);
   const customHeaders = collectCustomHeaders();
+  if (isOAuth.value && (!modelDraft.oauthAccountId || !oauthModels.value.some((m) => m.slug === model))) {
+    message.warning(t('chatgpt.selectModel')); return;
+  }
   const nextModel = {
+    ...oauthFields(),
     providerName,
     apiFormat,
     baseUrl: (modelDraft.baseUrl || '').trim(),
@@ -754,7 +792,7 @@ function commitModelDraft() {
     apiKeys,
     model,
     maxTokens: modelDraft.maxTokens || 131072,
-    contextWindow: modelDraft.contextWindow || 1000000,
+    contextWindow: modelDraft.contextWindow || (isOAuth.value ? CHATGPT_CONTEXT_WINDOW : 1000000),
     reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
     tokenParam: modelDraft.tokenParam || 'auto',
     reasoningEffort: normalizeReasoningEffort(modelDraft.reasoningEffort),

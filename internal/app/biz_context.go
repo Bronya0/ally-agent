@@ -524,6 +524,12 @@ func (a *App) peekSessionWorkspaceMap(sessionID string, cfg ConfigState) string 
 // breakdown only covers the conversation. Both therefore agree on what the
 // request carries before the first provider measurement arrives.
 func (a *App) sessionPrefixBreakdown(sessionID string, cfg ConfigState, allSkills []SkillDefinition) (int, []ContextBreakdownPart) {
+	if cached, ok := a.frozenPrefixTokenStats(sessionID); ok {
+		return cached.system, append([]ContextBreakdownPart(nil), cached.parts...)
+	}
+	if allSkills == nil {
+		allSkills = a.listCachedSkillsForConfig(cfg)
+	}
 	parts := []ContextBreakdownPart{}
 	total := 0
 	appendPart := func(label, content string) {
@@ -551,54 +557,101 @@ func (a *App) sessionPrefixBreakdown(sessionID string, cfg ConfigState, allSkill
 	return total, parts
 }
 
+// Estimates of immutable request snapshots; identity checks prevent stale
+// work from being published after compaction or session release.
+type frozenPrefixStats struct {
+	prompt       []systemPromptPart
+	workspaceMap string
+	toolset      []openai.Tool
+	system       int
+	parts        []ContextBreakdownPart
+	tools        int
+}
+
+func sameSliceSource[T any](a, b []T) bool {
+	return len(a) == len(b) && (len(a) == 0 || &a[0] == &b[0])
+}
+
+func (a *App) frozenPrefixTokenStats(sessionID string) (frozenPrefixStats, bool) {
+	a.mu.Lock()
+	prompt, hasPrompt := a.sessionSystemPrompts[sessionID]
+	workspaceMap, hasMap := a.sessionWorkspaceMaps[sessionID]
+	toolset, hasTools := a.sessionToolsets[sessionID]
+	cached, hit := a.frozenPrefixStats[sessionID]
+	a.mu.Unlock()
+	if !hasPrompt || !hasMap || !hasTools {
+		return frozenPrefixStats{}, false
+	}
+	if hit && sameSliceSource(cached.prompt, prompt) && cached.workspaceMap == workspaceMap && sameSliceSource(cached.toolset, toolset) {
+		return cached, true
+	}
+	next := frozenPrefixStats{prompt: prompt, workspaceMap: workspaceMap, toolset: toolset}
+	for _, part := range prompt {
+		tokens := estimateTokensFromText(part.content)
+		if tokens > 0 {
+			next.system += tokens
+			next.parts = append(next.parts, ContextBreakdownPart{Label: part.label, Tokens: tokens})
+		}
+	}
+	if tokens := estimateTokensFromText(workspaceMap); tokens > 0 {
+		next.system += tokens
+		next.parts = append(next.parts, ContextBreakdownPart{Label: workspaceMapPartLabel, Tokens: tokens})
+	}
+	next.tools = estimateToolSchemaTokens(toolset)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	currentPrompt, p := a.sessionSystemPrompts[sessionID]
+	currentMap, m := a.sessionWorkspaceMaps[sessionID]
+	currentTools, t := a.sessionToolsets[sessionID]
+	if !p || !m || !t || !sameSliceSource(prompt, currentPrompt) || workspaceMap != currentMap || !sameSliceSource(toolset, currentTools) {
+		return frozenPrefixStats{}, false
+	}
+	if a.frozenPrefixStats == nil {
+		a.frozenPrefixStats = map[string]frozenPrefixStats{}
+	}
+	a.frozenPrefixStats[sessionID] = next
+	return next, true
+}
+
+func (a *App) sessionToolSchemaTokens(sessionID string, cfg ConfigState) int {
+	if cached, ok := a.frozenPrefixTokenStats(sessionID); ok {
+		return cached.tools
+	}
+	return estimateToolSchemaTokens(a.sessionToolsetForBreakdown(sessionID, cfg))
+}
+
 // getContextBreakdown computes token estimates from the real session state.
 // If liveBreakdown is available, it returns a merged view (live messages + current system/tools).
 // workspaceHint (optional, from the UI) overrides the session-based workspace
 // resolution; see GetContextBreakdown.
 func (a *App) getContextBreakdown(sessionID string, workspaceHint string) ContextBreakdown {
-	cfg := a.sessionContextConfig(sessionID, workspaceHint)
-
-	// Request prefix and tool schemas: counted from the same bytes the next
-	// request carries — the session-frozen system prompt, the session's
-	// workspace map and the session-frozen tool set.
-	// sessionPrefixBreakdown is shared with the run loop, so the footer and the
-	// auto-compaction trigger agree on the prefix figure.
 	result := ContextBreakdown{}
-	result.SystemPrompt, result.SystemPromptParts = a.sessionPrefixBreakdown(sessionID, cfg, a.listCachedSkills())
-	result.ToolSchemas = estimateToolSchemaTokens(a.sessionToolsetForBreakdown(sessionID, cfg))
+	if cached, ok := a.frozenPrefixTokenStats(sessionID); ok {
+		// Frozen requests do not need config/index/skill resolution on footer reads.
+		result.SystemPrompt = cached.system
+		result.SystemPromptParts = append([]ContextBreakdownPart(nil), cached.parts...)
+		result.ToolSchemas = cached.tools
+	} else {
+		cfg := a.sessionContextConfig(sessionID, workspaceHint)
+		result.SystemPrompt, result.SystemPromptParts = a.sessionPrefixBreakdown(sessionID, cfg, nil)
+		result.ToolSchemas = a.sessionToolSchemaTokens(sessionID, cfg)
+	}
 
 	// Check if live breakdown is available (covers tool calls + tool results not in a.histories)
 	a.mu.Lock()
 	live, hasLive := a.liveBreakdown[sessionID]
 	a.mu.Unlock()
-	if hasLive {
-		// Use live message counts but keep current system/tool schemas (they may change).
-		result.UserMessages = live.UserMessages
-		result.AssistantMsgs = live.AssistantMsgs
-		result.ToolResults = live.ToolResults
-		result.Reasoning = live.Reasoning
-		// The provider measurement comes from the live run: it owns the message
-		// list the anchor was resolved against, so the footer must report the
-		// same total the run loop uses instead of re-deriving a text estimate.
-		result.MeasuredTokens = live.MeasuredTokens
-		result.MeasuredMessages = live.MeasuredMessages
-		result.TrailingTokens = live.TrailingTokens
-		finalizeContextBreakdownTotal(&result)
-		return result
+	if !hasLive {
+		live = a.savedHistoryBreakdown(sessionID)
 	}
-
-	// Fall back to history-based counting (missing tool calls + tool results).
-	// loadSessionHistoryCopy triggers lazy disk load when the session is not yet
-	// cached in this process (e.g. after switching sessions from localStorage),
-	// so context stats are accurate on session restore without waiting for StartChat.
-	hist := a.loadSessionHistoryCopy(sessionID)
-	for _, m := range hist {
-		addBreakdownMessage(&result, m)
-	}
-	// No live run: resolve the session's measurement against the stored
-	// conversation, so a footer poll between runs still reports the
-	// provider-measured size.
-	a.finalizeSessionBreakdown(sessionID, &result, hist)
+	result.UserMessages = live.UserMessages
+	result.AssistantMsgs = live.AssistantMsgs
+	result.ToolResults = live.ToolResults
+	result.Reasoning = live.Reasoning
+	result.MeasuredTokens = live.MeasuredTokens
+	result.MeasuredMessages = live.MeasuredMessages
+	result.TrailingTokens = live.TrailingTokens
+	finalizeContextBreakdownTotal(&result)
 	return result
 }
 
@@ -788,6 +841,7 @@ func (a *App) recordContextAnchor(sessionID string, messages []openai.ChatComple
 	if a.contextAnchors == nil {
 		a.contextAnchors = map[string]contextAnchor{}
 	}
+	a.historyCacheStateLocked(sessionID).revision++
 	a.contextAnchors[sessionID] = contextAnchor{covered: conversationMessageCount(messages), tokens: tokens}
 	a.mu.Unlock()
 }
@@ -810,6 +864,14 @@ func (a *App) clearContextAnchor(sessionID string) {
 	}
 	a.mu.Lock()
 	delete(a.contextAnchors, sessionID)
+	a.historyCacheStateLocked(sessionID).revision++
+	if live, ok := a.liveBreakdown[sessionID]; ok {
+		live.MeasuredTokens = 0
+		live.MeasuredMessages = 0
+		live.TrailingTokens = 0
+		finalizeContextBreakdownTotal(&live)
+		a.liveBreakdown[sessionID] = live
+	}
 	a.mu.Unlock()
 }
 
@@ -1307,6 +1369,7 @@ func (a *App) refreshSessionPromptPrefix(sessionID string) {
 		return
 	}
 	a.mu.Lock()
+	delete(a.frozenPrefixStats, sessionID)
 	delete(a.sessionSystemPrompts, sessionID)
 	delete(a.frozenTurnNotices, sessionID)
 	delete(a.sessionWorkspaceMaps, sessionID)
@@ -1331,17 +1394,9 @@ func (a *App) systemPromptPartsForBreakdown(sessionID string, cfg ConfigState, s
 }
 
 func (a *App) loadSessionHistoryCopy(sessionID string) []openai.ChatCompletionMessage {
-	if sessionID == "" {
-		return nil
-	}
-	a.mu.Lock()
-	h := a.histories[sessionID]
-	if h == nil {
-		h = a.loadHistoryLocked(sessionID)
-	}
-	hCopy := cloneChatMessages(sanitizeHistoryMessages(h))
-	a.mu.Unlock()
-	return hCopy
+	// Preserve the request-side repair contract, outside the App mutex.
+	messages, _, _ := a.sessionHistorySnapshot(sessionID)
+	return sanitizeHistoryMessages(messages)
 }
 
 func appendFrontendHistoryDelta(messages []openai.ChatCompletionMessage, backend []openai.ChatCompletionMessage, frontend []ChatMessageInput) []openai.ChatCompletionMessage {

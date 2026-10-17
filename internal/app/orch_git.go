@@ -52,8 +52,20 @@ func (a *App) getGitStatus(workspacePath string) GitStatus {
 		return GitStatus{IsRepo: false}
 	}
 
+	workspace = workspaceMapCacheKey(workspace)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	for {
+		if ctx.Err() != nil {
+			return GitStatus{IsRepo: false}
+		}
 		a.gitStatusCacheMu.Lock()
+		if a.gitStatusInFlight == nil {
+			a.gitStatusInFlight = map[string]chan struct{}{}
+		}
+		if a.gitStatusEpoch == nil {
+			a.gitStatusEpoch = map[string]uint64{}
+		}
 		if entry, ok := a.gitStatusCache[workspace]; ok && time.Since(entry.generatedAt) < gitStatusCacheTTL {
 			a.gitStatusCacheMu.Unlock()
 			return entry.status
@@ -63,21 +75,32 @@ func (a *App) getGitStatus(workspacePath string) GitStatus {
 		// GetGitStatus calls within milliseconds.
 		if ch, ok := a.gitStatusInFlight[workspace]; ok {
 			a.gitStatusCacheMu.Unlock()
-			<-ch
+			select {
+			case <-ch:
+			case <-ctx.Done():
+				return GitStatus{IsRepo: false}
+			}
 			continue
 		}
 		ch := make(chan struct{})
+		epoch := a.gitStatusEpoch[workspace]
 		a.gitStatusInFlight[workspace] = ch
 		a.gitStatusCacheMu.Unlock()
 
-		status := computeGitStatus(workspace)
-		a.cacheGitStatus(workspace, status)
+		status := computeGitStatusWithContext(ctx, workspace, a.discoverGitRepos)
 
 		a.gitStatusCacheMu.Lock()
+		current := a.gitStatusEpoch[workspace] == epoch
+		if current && ctx.Err() == nil {
+			a.cacheGitStatusLocked(workspace, status)
+		}
 		delete(a.gitStatusInFlight, workspace)
+		delete(a.gitStatusEpoch, workspace)
 		close(ch)
 		a.gitStatusCacheMu.Unlock()
-		return status
+		if current {
+			return status
+		}
 	}
 }
 
@@ -85,15 +108,61 @@ func (a *App) getGitStatus(workspacePath string) GitStatus {
 // repository itself, it safely probes first-level subdirectories for .git markers
 // and aggregates their statuses with strict limits (max 16 sub-repos, concurrency 2).
 func computeGitStatus(workspace string) GitStatus {
+	return computeGitStatusWithDiscovery(workspace, discoverSubRepos)
+}
+
+func computeGitStatusWithDiscovery(workspace string, discover func(context.Context, string) []gitRepoCandidate) GitStatus {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	return computeGitStatusWithContext(ctx, workspace, discover)
+}
+
+func computeGitStatusWithContext(ctx context.Context, workspace string, discover func(context.Context, string) []gitRepoCandidate) GitStatus {
+	// The caller's deadline covers waits, invalidation retries and worker batches.
 	out, _, err := runGitLimited(ctx, workspace, 256*1024, "status", "--porcelain=v2", "--branch", "-z")
 	if err == nil {
 		return parseGitStatusV2(out)
 	}
+	// Permission errors, timeouts and broken repositories are not evidence that
+	// the workspace is a container of repositories.
+	if ctx.Err() != nil || !strings.Contains(strings.ToLower(out), "not a git repository") {
+		return GitStatus{IsRepo: false}
+	}
+	return computeMultiRepoGitStatusWithContext(ctx, discover(ctx, workspace))
+}
 
-	// Not a git repo at workspace root. Check if first-level subdirectories are git repos.
-	return computeMultiRepoGitStatus(workspace)
+type gitRepoCandidate struct{ name, path string }
+type gitRepoDiscoveryEntry struct {
+	candidates  []gitRepoCandidate
+	generatedAt time.Time
+	modTime     time.Time
+}
+
+func (a *App) discoverGitRepos(ctx context.Context, workspace string) []gitRepoCandidate {
+	info, err := os.Stat(workspace)
+	if err != nil {
+		return nil
+	}
+	a.gitStatusCacheMu.Lock()
+	cached, ok := a.gitRepoDiscovery[workspace]
+	a.gitStatusCacheMu.Unlock()
+	if ok && time.Since(cached.generatedAt) < 30*time.Second && cached.modTime.Equal(info.ModTime()) {
+		return cached.candidates
+	}
+	candidates := discoverSubRepos(ctx, workspace)
+	if ctx.Err() != nil {
+		return candidates
+	}
+	a.gitStatusCacheMu.Lock()
+	if a.gitRepoDiscovery == nil {
+		a.gitRepoDiscovery = map[string]gitRepoDiscoveryEntry{}
+	}
+	if len(a.gitRepoDiscovery) >= 32 {
+		clear(a.gitRepoDiscovery)
+	}
+	a.gitRepoDiscovery[workspace] = gitRepoDiscoveryEntry{candidates: candidates, generatedAt: time.Now(), modTime: info.ModTime()}
+	a.gitStatusCacheMu.Unlock()
+	return candidates
 }
 
 const (
@@ -105,25 +174,24 @@ const (
 // computeMultiRepoGitStatus checks immediate subdirectories of workspace for .git entries.
 // It avoids spawning git processes if no .git directories exist, caps inspected repos at 16,
 // and bounds concurrency to 2 workers with timeouts to avoid system strain.
-func computeMultiRepoGitStatus(workspace string) GitStatus {
+func discoverSubRepos(ctx context.Context, workspace string) []gitRepoCandidate {
 	// Guard against root directory inspection
 	cleanWS := filepath.Clean(workspace)
 	if cleanWS == "" || cleanWS == filepath.VolumeName(cleanWS)+string(filepath.Separator) || cleanWS == "/" {
-		return GitStatus{IsRepo: false}
+		return nil
 	}
 
 	entries, err := os.ReadDir(cleanWS)
 	if err != nil {
-		return GitStatus{IsRepo: false}
+		return nil
 	}
 
-	type subCandidate struct {
-		name string
-		path string
-	}
-	var candidates []subCandidate
+	var candidates []gitRepoCandidate
 
 	for _, entry := range entries {
+		if ctx.Err() != nil {
+			break
+		}
 		if !entry.IsDir() {
 			continue
 		}
@@ -138,17 +206,26 @@ func computeMultiRepoGitStatus(workspace string) GitStatus {
 		// worktree/gitfile pointer (regular file). Both stat outcomes here are
 		// "exists", so the candidate is accepted.
 		if _, statErr := os.Stat(gitPath); statErr == nil {
-			candidates = append(candidates, subCandidate{name: name, path: subPath})
+			candidates = append(candidates, gitRepoCandidate{name: name, path: subPath})
 			if len(candidates) >= maxSubRepos {
 				break
 			}
 		}
 	}
 
+	return candidates
+}
+
+func computeMultiRepoGitStatus(workspace string) GitStatus {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return computeMultiRepoGitStatusWithContext(ctx, discoverSubRepos(ctx, workspace))
+}
+
+func computeMultiRepoGitStatusWithContext(ctx context.Context, candidates []gitRepoCandidate) GitStatus {
 	if len(candidates) == 0 {
 		return GitStatus{IsRepo: false}
 	}
-
 	type repoResult struct {
 		index  int
 		status GitStatus
@@ -168,7 +245,11 @@ func computeMultiRepoGitStatus(workspace string) GitStatus {
 		go func() {
 			for idx := range taskCh {
 				c := candidates[idx]
-				subCtx, subCancel := context.WithTimeout(context.Background(), subRepoTimeout)
+				if ctx.Err() != nil {
+					resCh <- repoResult{index: idx, err: ctx.Err()}
+					continue
+				}
+				subCtx, subCancel := context.WithTimeout(ctx, subRepoTimeout)
 				out, _, runErr := runGitLimited(subCtx, c.path, 256*1024, "status", "--porcelain=v2", "--branch", "-z")
 				subCancel()
 				if runErr != nil {
@@ -305,10 +386,55 @@ func applyGitStatusV2XY(st *GitStatus, token string) {
 	}
 }
 
-func (a *App) cacheGitStatus(workspace string, status GitStatus) {
-	a.gitStatusCacheMu.Lock()
+// Caller holds gitStatusCacheMu. Keep idle workspace caches bounded.
+func (a *App) cacheGitStatusLocked(workspace string, status GitStatus) {
+	if a.gitStatusCache == nil {
+		a.gitStatusCache = map[string]gitStatusCacheEntry{}
+	}
+	if _, exists := a.gitStatusCache[workspace]; !exists && len(a.gitStatusCache) >= 32 {
+		var oldest string
+		for key, entry := range a.gitStatusCache {
+			if oldest == "" || entry.generatedAt.Before(a.gitStatusCache[oldest].generatedAt) {
+				oldest = key
+			}
+		}
+		delete(a.gitStatusCache, oldest)
+	}
+
 	a.gitStatusCache[workspace] = gitStatusCacheEntry{status: status, generatedAt: time.Now()}
+}
+
+// Invalidate related parent/child workspace views, including computations
+// already in flight. Their old result must not repopulate the cache.
+func (a *App) invalidateGitStatus(workspace string) {
+	if strings.TrimSpace(workspace) == "" {
+		return
+	}
+	root, err := filepath.Abs(workspace)
+	if err != nil {
+		return
+	}
+	root = workspaceMapCacheKey(root)
+	related := func(key string) bool {
+		sep := string(filepath.Separator)
+		return key == root || strings.HasPrefix(key, root+sep) || strings.HasPrefix(root, key+sep)
+	}
+	a.gitStatusCacheMu.Lock()
+	for key := range a.gitStatusCache {
+		if related(key) {
+			delete(a.gitStatusCache, key)
+		}
+	}
+	if a.gitStatusEpoch == nil {
+		a.gitStatusEpoch = map[string]uint64{}
+	}
+	for key := range a.gitStatusInFlight {
+		if related(key) {
+			a.gitStatusEpoch[key]++
+		}
+	}
 	a.gitStatusCacheMu.Unlock()
+	a.emit("git:changed", map[string]any{"workspace": root})
 }
 
 // GetGitDiff renders the diff of the repository containing the given workspace
@@ -507,6 +633,8 @@ func runGitLimited(ctx context.Context, root string, limit int, args ...string) 
 		limit = 1
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
+	// Status error classification must be stable across desktop locales.
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	cmd.Dir = root
 	hideCommandWindow(cmd)
 	buf := git.NewLimitedBuffer(limit)

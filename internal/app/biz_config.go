@@ -200,6 +200,11 @@ func (a *App) getConfig() (ConfigState, error) {
 // 隐藏页面名单清洗（只留可关闭的页面键，知识库与设置永不隐藏）+ 禁用插件名单清洗
 // （只留合法 id）。落盘路径共用这一份，免得新加的写入方漏掉其中一条。
 func persistableConfig(cfg ConfigState) ConfigState {
+	// Copy before sanitizing: do not mutate a caller's model slice.
+	cfg.Models = append([]ModelConfig(nil), cfg.Models...)
+	for i := range cfg.Models {
+		syncModelAPIKeyFields(&cfg.Models[i])
+	}
 	convergeLastUsedModel(&cfg)
 	// 派生模型字段不落盘（见 ConfigState 的注释）：读回来时再按身份展开。
 	stripModelFields(&cfg)
@@ -284,6 +289,11 @@ func sanitizeHiddenModes(modes []string) []string {
 // ── Skills: system prompt metadata injection ──
 
 func mergeConfig(base, overlay ConfigState) ConfigState {
+	// Explicit API-key snapshots must clear a previously active OAuth identity.
+	if overlay.AuthType != "" || overlay.Model != "" {
+		base.AuthType = overlay.AuthType
+		base.OAuthAccountID = overlay.OAuthAccountID
+	}
 	if overlay.ProviderName != "" {
 		base.ProviderName = overlay.ProviderName
 	}
@@ -493,6 +503,7 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if goruntime.GOOS == "windows" {
 		base.GitBashPath = resolveGitBashPath(base.GitBashPath)
 	}
+	normalizeModelAuth(&base)
 	return base
 }
 
@@ -523,6 +534,10 @@ func normalizeAPIKeys(keys []string) []string {
 // 第一个条目(最高优先级);池为空但旧 APIKey 存在时用旧值构造池;两者
 // 皆空时清空。
 func syncAPIKeyFields(cfg *ConfigState) {
+	if cfg.AuthType == authChatGPTOAuth {
+		normalizeModelAuth(cfg)
+		return
+	}
 	if len(cfg.APIKeys) > 0 {
 		cfg.APIKeys = normalizeAPIKeys(cfg.APIKeys)
 		cfg.APIKey = cfg.APIKeys[0]
@@ -614,6 +629,18 @@ func customHeaderNames(headers map[string]string) []string {
 
 // syncModelAPIKeyFields 是 syncAPIKeyFields 的 ModelConfig 版本。
 func syncModelAPIKeyFields(m *ModelConfig) {
+	if m.AuthType == authChatGPTOAuth {
+		m.ProviderName = chatGPTProviderName
+		if m.ContextWindow <= 0 {
+			m.ContextWindow = chatGPTContextWindow
+		}
+		m.APIKey = ""
+		m.APIKeys = nil
+		m.CustomHeaders = nil
+		m.BaseURL = "https://api.openai.com/v1"
+		m.APIFormat = apiFormatOpenAIResponses
+		return
+	}
 	if len(m.APIKeys) > 0 {
 		m.APIKeys = normalizeAPIKeys(m.APIKeys)
 		m.APIKey = m.APIKeys[0]
@@ -760,8 +787,8 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 	if cfg.Model == "" {
 		return errors.New("model is required")
 	}
-	if len(resolveKeyPool(cfg)) == 0 {
-		return errors.New("API key is required")
+	if !hasModelCredential(cfg) {
+		return missingModelCredentialError(cfg)
 	}
 	ctx := context.Background()
 	if a.ctx != nil {
@@ -791,15 +818,16 @@ func (a *App) effectiveConfig(overlay ConfigState) ConfigState {
 
 // ── 最近使用模型（models[] 里的一条）─────────────────────────
 
-// ModelIdentity 是 Models 里一条模型的身份：只记 providerName + model id，
+// ModelIdentity 记录 providerName + model id；OAuth 模型另按账号区分，
 // 不复制连接字段与密钥（否则又是第二份会漂移的模型配置）。
 type ModelIdentity struct {
-	ProviderName string `json:"providerName,omitempty"`
-	Model        string `json:"model"`
+	ProviderName   string `json:"providerName,omitempty"`
+	Model          string `json:"model"`
+	OAuthAccountID string `json:"oauthAccountId,omitempty"`
 }
 
 func identityOfModel(m ModelConfig) ModelIdentity {
-	return ModelIdentity{ProviderName: strings.TrimSpace(m.ProviderName), Model: strings.TrimSpace(m.Model)}
+	return ModelIdentity{ProviderName: strings.TrimSpace(m.ProviderName), Model: strings.TrimSpace(m.Model), OAuthAccountID: m.OAuthAccountID}
 }
 
 // migrateLegacyModelFields 把旧版 config.json 的顶层模型字段收敛成新形状：先按身份
@@ -865,6 +893,13 @@ func modelIndexByIdentity(models []ModelConfig, id ModelIdentity) int {
 	provider := strings.TrimSpace(id.ProviderName)
 	fallback := -1
 	for i := range models {
+		if id.OAuthAccountID != "" && models[i].OAuthAccountID != id.OAuthAccountID {
+			continue
+		}
+		// Older OAuth entries encoded the account in their provider label.
+		if id.OAuthAccountID == "" && strings.HasPrefix(provider, "ChatGPT · ") && models[i].OAuthAccountID != strings.TrimPrefix(provider, "ChatGPT · ") {
+			continue
+		}
 		if !strings.EqualFold(strings.TrimSpace(models[i].Model), model) {
 			continue
 		}
@@ -892,6 +927,9 @@ func normalizeModelIdentity(models []ModelConfig, id ModelIdentity) *ModelIdenti
 // applyModelEntry 把一条模型配置展开到请求级模型字段上。SwitchModel 与
 // expandLastUsedModel 共用这一处，避免两处各列一份字段表而漂移。
 func applyModelEntry(cfg *ConfigState, m ModelConfig) {
+	syncModelAPIKeyFields(&m)
+	cfg.AuthType = m.AuthType
+	cfg.OAuthAccountID = m.OAuthAccountID
 	cfg.ProviderName = strings.TrimSpace(m.ProviderName)
 	cfg.APIFormat = normalizeAPIFormat(m.APIFormat)
 	cfg.BaseURL = strings.TrimSpace(m.BaseURL)
@@ -943,6 +981,8 @@ func expandLastUsedModel(cfg ConfigState) ConfigState {
 // stripModelFields 清空请求级模型字段：保证它们既不进 config.json，也不留在
 // a.config 里（单一来源是 models[] + lastUsedModel）。
 func stripModelFields(cfg *ConfigState) {
+	cfg.AuthType = ""
+	cfg.OAuthAccountID = ""
 	cfg.ProviderName = ""
 	cfg.APIFormat = ""
 	cfg.BaseURL = ""
@@ -965,8 +1005,8 @@ func stripModelFields(cfg *ConfigState) {
 // 于是 HTTP API 会话与计划任务回落直接报 "model is required"（界面自己因为还有 Tab
 // 快照、下次切模型/发送又会重写身份，看不出问题）。
 func convergeLastUsedModel(cfg *ConfigState) {
-	if cfg.LastUsedModel != nil && modelIndexByIdentity(cfg.Models, *cfg.LastUsedModel) < 0 {
-		cfg.LastUsedModel = nil
+	if cfg.LastUsedModel != nil {
+		cfg.LastUsedModel = normalizeModelIdentity(cfg.Models, *cfg.LastUsedModel)
 	}
 }
 

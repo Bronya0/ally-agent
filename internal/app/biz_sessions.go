@@ -248,6 +248,19 @@ func (a *App) LoadSession(sessionID string) (SessionSnapshot, error) {
 	return snapshot, nil
 }
 
+// syncSessionIndexFromHistory refreshes metadata for runs without a UI writer.
+func (a *App) syncSessionIndexFromHistory(sessionID string) error {
+	snapshot, err := a.LoadSession(sessionID)
+	if err != nil {
+		return err
+	}
+	history := a.loadSessionHistoryCopy(sessionID)
+	snapshot.Messages = legacySessionSnapshot(sessionID, history).Messages
+	snapshot.ContextTokens = estimateTokensFromMessages(history)
+	snapshot.UpdatedAt = time.Now().UnixMilli()
+	return a.SaveSessionIndex(sessionIndexEntryFromSnapshot(snapshot))
+}
+
 // SaveSession writes one complete UI snapshot and updates the local index.
 // The frontend calls this only after a completed turn or an explicit session
 // metadata change; streaming state is never persisted here.
@@ -890,6 +903,7 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	breakdown := computeLiveBreakdown(inMemory)
 	a.finalizeSessionBreakdown(sessionID, &breakdown, inMemory)
 	a.mu.Lock()
+	a.historyCacheStateLocked(sessionID).revision++
 	a.histories[sessionID] = cloneChatMessages(inMemory)
 	a.liveBreakdown[sessionID] = breakdown
 	a.mu.Unlock()
@@ -925,24 +939,22 @@ func (a *App) restoreSavedHistoryBreakdown(sessionID string) {
 	if sessionID == "" {
 		return
 	}
+	history, state, revision := a.sessionHistorySnapshot(sessionID)
+	breakdown := computeLiveBreakdown(history)
+	a.finalizeSessionBreakdown(sessionID, &breakdown, history)
 	a.mu.Lock()
-	history := cloneChatMessages(a.histories[sessionID])
-	if history == nil {
-		history = cloneChatMessages(a.loadHistoryLocked(sessionID))
-	}
-	// Read the anchor under the lock already held instead of calling
-	// contextAnchorFor: a.mu is not reentrant, so a method call here would
-	// deadlock the process.
-	anchor := a.contextAnchors[sessionID]
-	if len(history) == 0 {
-		delete(a.liveBreakdown, sessionID)
-		a.mu.Unlock()
+	defer a.mu.Unlock()
+	if state == nil || a.historyCacheStates[sessionID] != state || state.revision != revision {
 		return
 	}
-	breakdown := computeLiveBreakdown(history)
-	applyContextAnchor(&breakdown, history, anchor)
+	if len(history) == 0 {
+		delete(a.liveBreakdown, sessionID)
+		return
+	}
+	if a.liveBreakdown == nil {
+		a.liveBreakdown = map[string]ContextBreakdown{}
+	}
 	a.liveBreakdown[sessionID] = breakdown
-	a.mu.Unlock()
 }
 
 func writeCompressedHistory(diskPath string, messages []openai.ChatCompletionMessage) error {
@@ -981,7 +993,101 @@ func writeCompressedHistory(diskPath string, messages []openai.ChatCompletionMes
 	return nil
 }
 
-func (a *App) loadHistoryLocked(sessionID string) []openai.ChatCompletionMessage {
+// A per-session load ticket and revision. Release drops the ticket, so an
+// older disk load cannot resurrect a released/deleted session.
+type historyCacheState struct {
+	revision          uint64
+	loading           chan struct{}
+	breakdown         *ContextBreakdown
+	breakdownRevision uint64
+}
+
+// Caller holds a.mu.
+func (a *App) historyCacheStateLocked(sessionID string) *historyCacheState {
+	if a.historyCacheStates == nil {
+		a.historyCacheStates = map[string]*historyCacheState{}
+	}
+	state := a.historyCacheStates[sessionID]
+	if state == nil {
+		state = &historyCacheState{}
+		a.historyCacheStates[sessionID] = state
+	}
+	return state
+}
+
+func (a *App) sessionHistorySnapshot(sessionID string) ([]openai.ChatCompletionMessage, *historyCacheState, uint64) {
+	if sessionID == "" {
+		return nil, nil, 0
+	}
+	for {
+		a.mu.Lock()
+		state := a.historyCacheStateLocked(sessionID)
+		if history, ok := a.histories[sessionID]; ok {
+			snapshot := cloneChatMessages(history)
+			revision := state.revision
+			a.mu.Unlock()
+			return snapshot, state, revision
+		}
+		if state.loading != nil {
+			ready := state.loading
+			a.mu.Unlock()
+			<-ready
+			a.mu.Lock()
+			current := a.historyCacheStates[sessionID] == state
+			a.mu.Unlock()
+			if !current {
+				return nil, nil, 0
+			}
+			continue
+		}
+		ready := make(chan struct{})
+		state.loading = ready
+		revision := state.revision
+		a.mu.Unlock()
+
+		history := a.readHistoryFromDisk(sessionID)
+		a.mu.Lock()
+		current := a.historyCacheStates[sessionID] == state
+		if current && state.revision == revision {
+			if a.histories == nil {
+				a.histories = map[string][]openai.ChatCompletionMessage{}
+			}
+			a.invalidateSessionReadCacheLocked(sessionID)
+			a.histories[sessionID] = history
+		}
+		state.loading = nil
+		close(ready)
+		a.mu.Unlock()
+		if !current {
+			return nil, nil, 0
+		}
+	}
+}
+
+// Saved-history estimates are separate from the live run cache: a footer
+// preview must not replace a running agent's authoritative message snapshot.
+func (a *App) savedHistoryBreakdown(sessionID string) ContextBreakdown {
+	a.mu.Lock()
+	state := a.historyCacheStates[sessionID]
+	if state != nil && state.breakdown != nil && state.breakdownRevision == state.revision {
+		result := *state.breakdown
+		a.mu.Unlock()
+		return result
+	}
+	a.mu.Unlock()
+	history, state, revision := a.sessionHistorySnapshot(sessionID)
+	result := computeLiveBreakdown(history)
+	a.finalizeSessionBreakdown(sessionID, &result, history)
+	a.mu.Lock()
+	if state != nil && a.historyCacheStates[sessionID] == state && state.revision == revision {
+		state.breakdown = &result
+		state.breakdownRevision = revision
+	}
+	a.mu.Unlock()
+	return result
+}
+
+func (a *App) readHistoryFromDisk(sessionID string) []openai.ChatCompletionMessage {
 	if a.historiesDir == "" {
 		return nil
 	}
@@ -1017,15 +1123,7 @@ func (a *App) loadHistoryLocked(sessionID string) []openai.ChatCompletionMessage
 	if !loaded {
 		return nil
 	}
-	messages = sanitizeHistoryMessages(messages)
-	// The disk profile replaced every tool result with a placeholder, so the
-	// model no longer carries the payloads this session's read cache remembers:
-	// dropping them keeps a later read from being answered with "you already
-	// have it" for content the model cannot see. (a.mu is held here, hence the
-	// locked variant.)
-	a.invalidateSessionReadCacheLocked(sessionID)
-	a.histories[sessionID] = cloneChatMessages(messages)
-	return messages
+	return sanitizeHistoryMessages(messages)
 }
 
 // TruncateSessionHistoryRequest identifies which user turn to keep as the last
@@ -1060,17 +1158,8 @@ func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, er
 		return 0, codedToolError("E_SESSION_COMPACTING", errors.New("session is compacting; retry the deletion after the compaction finishes"))
 	}
 
-	// Load the complete history, preferring the in-memory run source and
-	// falling back to disk. loadHistoryLocked already holds a.mu internally;
-	// we snapshot the messages here so no lock is held while we inspect them.
-	a.mu.Lock()
-	var messages []openai.ChatCompletionMessage
-	if cached, ok := a.histories[sessionID]; ok && len(cached) > 0 {
-		messages = cloneChatMessages(cached)
-	} else {
-		messages = a.loadHistoryLocked(sessionID)
-	}
-	a.mu.Unlock()
+	// Load and decompress without holding the App mutex.
+	messages := a.loadSessionHistoryCopy(sessionID)
 	if len(messages) == 0 {
 		return 0, errors.New("session has no saved history")
 	}

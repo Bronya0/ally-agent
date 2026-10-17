@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // newApiTestApp 构造一个隔离的 App：HOME/USERPROFILE 指向临时目录，
@@ -30,16 +32,15 @@ func newApiTestApp(t *testing.T) *App {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	app := &App{
-		initialized:  true,
-		configPath:   filepath.Join(home, "config.json"),
-		historiesDir: filepath.Join(home, "histories"),
-		sessionsDir:  filepath.Join(home, "sessions"),
-		config:       defaultConfigState(),
-		runs:         map[string]context.CancelFunc{},
-		runSessions:  map[string]string{},
-		runInputs:    map[string]chan string{},
-	}
+	previousApp := aGlobalApp
+	app := NewApp()
+	t.Cleanup(func() { aGlobalApp = previousApp })
+	app.initialized = true
+	app.configPath = filepath.Join(home, "config.json")
+	app.historiesDir = filepath.Join(home, "histories")
+	app.sessionsDir = filepath.Join(home, "sessions")
+	app.config = defaultConfigState()
+	app.config.Workspace = t.TempDir()
 	if err := os.MkdirAll(app.sessionsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -234,11 +235,10 @@ func TestApiSendMessageQueuesIntoRunningSession(t *testing.T) {
 		t.Fatalf("expected wasRunning=true: %s", rec.Body.String())
 	}
 
-	// 空闲会话的 cancel 是幂等 no-op。
+	// 不存在的会话明确返回 404。
 	rec, payload = apiRequest(t, handler, "POST", "/api/v1/sessions/other-session/cancel", token, "")
-	data = apiRequireOK(t, rec, payload)
-	if data["wasRunning"] != false {
-		t.Fatalf("expected wasRunning=false: %s", rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404: %s", rec.Body.String())
 	}
 }
 
@@ -610,6 +610,28 @@ func TestApiSettingsPersistenceAndListenerLifecycle(t *testing.T) {
 	if !state.Enabled {
 		t.Fatalf("expected enabled after start: %+v", state)
 	}
+	if !loadApiSettings().Enabled {
+		t.Fatal("enabled choice must persist")
+	}
+	// Simulate process shutdown without changing the persisted preference.
+	stopApiListener()
+	app.restoreApiService()
+	state, _ = app.GetApiServiceState()
+	if !state.Enabled || state.Token != "tok-lifecycle" || state.Port != port {
+		t.Fatalf("startup did not restore listener: %+v", state)
+	}
+	// A failed port change must preserve the previous listener and settings.
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	if _, err := app.SaveApiSettings(ApiSettingsRequest{Port: occupied.Addr().(*net.TCPAddr).Port, Token: "new-token"}); err == nil {
+		t.Fatal("expected occupied-port error")
+	}
+	if saved := loadApiSettings(); saved.Port != port || saved.Token != "tok-lifecycle" || !saved.Enabled {
+		t.Fatalf("failed update replaced settings: %+v", saved)
+	}
 
 	req, _ := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", port), nil)
 	req.Header.Set("Authorization", "Bearer tok-lifecycle")
@@ -640,8 +662,227 @@ func TestApiSettingsPersistenceAndListenerLifecycle(t *testing.T) {
 	if state.Enabled {
 		t.Fatal("expected disabled after stop")
 	}
+	if loadApiSettings().Enabled {
+		t.Fatal("disabled choice must persist")
+	}
+	app.restoreApiService()
 	_, err = (&http.Client{Timeout: 2 * time.Second}).Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", port))
 	if err == nil {
 		t.Fatal("listener still accepting after stop")
+	}
+}
+
+func TestApiValidationAndMissingSessions(t *testing.T) {
+	handler, _, token := newApiTestHandler(t)
+	for _, tc := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{"POST", "/models/activate", `{}`, 400},
+		{"POST", "/models", `{"index":-1,"model":{"model":"x"}}`, 400},
+		{"POST", "/sessions", `{} {}`, 400},
+		{"POST", "/ai/complete", `{}`, 400},
+		{"POST", "/ai/complete", `{"prompt":"hi","modelIndex":99}`, 400},
+		{"POST", "/sessions/missing/messages", `{"message":"hi"}`, 404},
+		{"POST", "/sessions/missing/compact", `{}`, 404},
+		{"GET", "/sessions/missing/todos", ``, 404},
+		{"GET", "/sessions/missing/questions", ``, 404},
+	} {
+		rec, _ := apiRequest(t, handler, tc.method, "/api/v1"+tc.path, token, tc.body)
+		if rec.Code != tc.status {
+			t.Fatalf("%s %s: got %d, want %d: %s", tc.method, tc.path, rec.Code, tc.status, rec.Body.String())
+		}
+	}
+}
+
+func TestApiBusySessionAndQuestions(t *testing.T) {
+	handler, app, token := newApiTestHandler(t)
+	rec, payload := apiRequest(t, handler, "POST", "/api/v1/sessions", token, `{}`)
+	sid := apiRequireOK(t, rec, payload)["id"].(string)
+	registerApiRun(t, app, "run", sid)
+	for _, body := range []string{`{"message":"hi","attachments":[{"name":"a"}]}`, `{"message":"hi","modelIndex":0}`} {
+		rec, _ := apiRequest(t, handler, "POST", "/api/v1/sessions/"+sid+"/messages", token, body)
+		if rec.Code != 409 {
+			t.Fatalf("expected 409: %s", rec.Body.String())
+		}
+	}
+	app.pendingAsks["ask"] = &pendingAsk{sessionID: sid, answers: make(chan AskResult, 1), request: AskRequest{
+		Questions: []AskQuestion{{ID: "q1", Question: "Proceed?", Options: []AskOption{{ID: "yes", Label: "Yes"}}}},
+	}}
+	rec, payload = apiRequest(t, handler, "GET", "/api/v1/sessions/"+sid+"/questions", token, "")
+	if data := apiRequireOK(t, rec, payload); len(data["questions"].([]any)) != 1 {
+		t.Fatal(rec.Body.String())
+	}
+	rec, payload = apiRequest(t, handler, "POST", "/api/v1/sessions/"+sid+"/answers", token,
+		`{"askId":"ask","answers":[{"questionId":"q1","selectedOptionIds":["yes"]}]}`)
+	apiRequireOK(t, rec, payload)
+	if len(app.pendingAsks["ask"].answers) != 1 {
+		t.Fatal("answer not delivered")
+	}
+	app.finishRun("run")
+	app.compactingSessions[sid] = struct{}{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	app.compactingCancels[sid] = cancel
+	for _, method := range []string{"DELETE", "POST"} {
+		path := "/api/v1/sessions/" + sid
+		if method == "POST" {
+			path += "/compact"
+		}
+		// compactSession validates the model before the busy guard.
+		app.config.Model, app.config.APIKey = "test", "test-key"
+		rec, _ := apiRequest(t, handler, method, path, token, "")
+		if rec.Code != 409 {
+			t.Fatalf("compacting session: %s", rec.Body.String())
+		}
+	}
+	rec, payload = apiRequest(t, handler, "POST", "/api/v1/sessions/"+sid+"/cancel", token, "")
+	apiRequireOK(t, rec, payload)
+	if ctx.Err() == nil {
+		t.Fatal("compaction was not cancelled")
+	}
+	// A rejected start must not alter the compaction's frozen model or roots.
+	app.sessionWorkspaces[sid] = "frozen"
+	_, err := app.StartChat(ChatRequest{SessionID: sid, Message: "hi"})
+	if err != errSessionCompacting || app.sessionWorkspaces[sid] != "frozen" {
+		t.Fatalf("compacting context changed: err=%v workspace=%q", err, app.sessionWorkspaces[sid])
+	}
+}
+
+func TestApiReadsBackendHistoryInsteadOfStaleSnapshot(t *testing.T) {
+	handler, app, token := newApiTestHandler(t)
+	const sid = "stale-ui"
+	if err := app.SaveSession(SessionSnapshot{ID: sid, Workspace: app.config.Workspace,
+		Messages: []map[string]any{{"role": "assistant", "content": "old answer"}}}); err != nil {
+		t.Fatal(err)
+	}
+	app.saveHistory(sid, []openai.ChatCompletionMessage{
+		{Role: "user", Content: "new question"}, {Role: "assistant", Content: "new answer"},
+	})
+	rec, payload := apiRequest(t, handler, "GET", "/api/v1/sessions/"+sid+"/result", token, "")
+	if data := apiRequireOK(t, rec, payload); data["result"] != "new answer" {
+		t.Fatalf("stale result: %s", rec.Body.String())
+	}
+	rec, payload = apiRequest(t, handler, "GET", "/api/v1/sessions/"+sid+"/messages", token, "")
+	if data := apiRequireOK(t, rec, payload); len(data["messages"].([]any)) != 2 {
+		t.Fatalf("stale messages: %s", rec.Body.String())
+	}
+}
+
+func TestApiAIAndSessionRoundTrips(t *testing.T) {
+	handler, app, token := newApiTestHandler(t)
+	requests := make(chan map[string]any, 10)
+	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode model request: %v", err)
+			w.WriteHeader(400)
+			return
+		}
+		body["auth"] = r.Header.Get("Authorization")
+		body["custom"] = r.Header.Get("X-Model")
+		requests <- body
+		if body["model"] == "broken" {
+			w.WriteHeader(400)
+			fmt.Fprint(w, `{"error":{"message":"invalid test model","type":"invalid_request_error"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"test reply\"},\"finish_reason\":null}]}\n\n")
+		fmt.Fprint(w, "data: {\"id\":\"reply\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3,\"total_tokens\":15}}\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(modelServer.Close)
+	app.config.Models = []ModelConfig{
+		{ProviderName: "test", Model: "default", APIFormat: "openai_chat", BaseURL: modelServer.URL + "/v1", APIKey: "default-key", CustomHeaders: map[string]string{"X-Model": "default"}},
+		{ProviderName: "test", Model: "selected", APIFormat: "openai_chat", BaseURL: modelServer.URL + "/v1", APIKey: "selected-key", ReasoningEffort: "off"},
+		{ProviderName: "test", Model: "broken", APIFormat: "openai_chat", BaseURL: modelServer.URL + "/v1", APIKey: "broken-key"},
+	}
+	identity := identityOfModel(app.config.Models[0])
+	app.config.LastUsedModel = &identity
+	rec, payload := apiRequest(t, handler, "POST", "/api/v1/ai/complete", token, `{"modelIndex":1,"system":"test system","prompt":"hello"}`)
+	data := apiRequireOK(t, rec, payload)
+	if data["reply"] != "test reply" || data["totalTokens"] != float64(15) {
+		t.Fatalf("unexpected AI response: %s", rec.Body.String())
+	}
+	request := <-requests
+	if request["model"] != "selected" || request["auth"] != "Bearer selected-key" || request["custom"] != "" || request["tools"] != nil {
+		t.Fatalf("model isolation failed: %v", request)
+	}
+	if app.config.LastUsedModel.Model != "default" {
+		t.Fatal("per-request selection changed global model")
+	}
+	workspace := t.TempDir()
+	create, _ := json.Marshal(map[string]any{"title": "API session", "workspace": workspace})
+	rec, payload = apiRequest(t, handler, "POST", "/api/v1/sessions", token, string(create))
+	sid := apiRequireOK(t, rec, payload)["id"].(string)
+	for _, tc := range []struct {
+		index  int
+		status string
+	}{{1, "done"}, {2, "error"}} {
+		rec, payload = apiRequest(t, handler, "POST", "/api/v1/sessions/"+sid+"/messages", token,
+			fmt.Sprintf(`{"message":"hello","modelIndex":%d}`, tc.index))
+		runID := apiRequireOK(t, rec, payload)["runId"]
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			rec, payload = apiRequest(t, handler, "GET", "/api/v1/sessions/"+sid+"/result", token, "")
+			data = apiRequireOK(t, rec, payload)
+			if data["status"] != "running" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("API session did not finish")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if data["status"] != tc.status || data["runId"] != runID {
+			t.Fatalf("unexpected outcome: %s", rec.Body.String())
+		}
+		if tc.status == "done" && data["result"] != "test reply" {
+			t.Fatalf("missing result: %s", rec.Body.String())
+		}
+		if tc.status == "error" && data["error"] == "" {
+			t.Fatalf("model failure was hidden: %s", rec.Body.String())
+		}
+		<-requests
+	}
+	app.mu.Lock()
+	gotWorkspace := app.sessionWorkspaces[sid]
+	app.mu.Unlock()
+	if gotWorkspace != workspace || app.config.Workspace == workspace {
+		t.Fatalf("session workspace routing failed: %q", gotWorkspace)
+	}
+	entries, err := app.ListSessions()
+	if err != nil || len(entries) != 1 || entries[0].MessageCount == 0 || entries[0].FirstPrompt != "hello" {
+		t.Fatalf("API runs did not update the session list: %+v, %v", entries, err)
+	}
+}
+
+func TestApiPluginHTTPProxy(t *testing.T) {
+	handler, app, token := newApiTestHandler(t)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	source := t.TempDir()
+	manifest := `{"id":"http-client","name":"API client","version":"1.0.0","entry":"index.js","menu":[{"key":"api","title":"API"}],"permissions":{"http":["127.0.0.1"]}}`
+	for name, content := range map[string]string{"plugin.json": manifest, "index.js": "export function mount() {}"} {
+		if err := os.WriteFile(filepath.Join(source, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := app.ImportPluginFromDir(source); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		token  string
+		status int
+	}{{token, 200}, {"wrong", 401}} {
+		result, err := app.PluginHTTPRequest(PluginHTTPRequest{
+			PluginID: "http-client", URL: server.URL + "/api/v1/health", Headers: map[string]string{"Authorization": "Bearer " + tc.token},
+		})
+		if err != nil || result.Status != tc.status {
+			t.Fatalf("plugin HTTP API request: status=%d error=%v", result.Status, err)
+		}
+		if payload, ok := result.JSON.(map[string]any); !ok || payload["ok"] != (tc.status == 200) {
+			t.Fatalf("missing API envelope: %+v", result)
+		}
 	}
 }

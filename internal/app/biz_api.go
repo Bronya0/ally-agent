@@ -10,13 +10,12 @@ package app
 // biz_api.go 实现对外本地 HTTP API 服务（v1）：让其它工具以固定 token 鉴权、
 // 调用 Ally 的会话 / 模型 / MCP / skill 能力。整个模块自包含在本文件：
 // 设置持久化（~/.ally_agent/api.json）、listener 生命周期、鉴权中间件、
-// 路由与全部 handler，均不改动既有 App 字段或生命周期代码。
+// 路由与全部 handler；宿主启动时恢复已启用的服务。
 //
 // 设计边界：
 //   - 仅绑定 127.0.0.1，不暴露局域网；所有 /api/v1/* 请求都要求
 //     Authorization: Bearer <token>（常量时间比较）。
-//   - 服务状态是运行时的：每次启动默认不监听，需在设置页手动开启
-//     （端口与 token 持久化，enabled 不持久化）。
+//   - 端口、token 与启用状态持久化；首次安装默认关闭。
 //   - handler 只做薄封装：复用既有绑定方法（StartChat / CancelRun /
 //     SaveMcpConfig / SwitchModel ...），不重复实现任何业务规则。
 //   - App 关闭时 a.ctx 取消，watcher 协程自动停掉 listener；进程退出本身
@@ -46,11 +45,11 @@ import (
 // apiDefaultPort 是高位冷门默认端口：仅绑定回环地址 + token 鉴权双重边界。
 const apiDefaultPort = 47821
 
-// apiSettings 是 api.json 的持久化内容。enabled 故意不持久化：服务每次
-// 启动默认关闭，用户在设置页手动开启。
+// apiSettings 是 api.json 的持久化内容；旧文件缺 enabled 时默认关闭。
 type apiSettings struct {
-	Port  int    `json:"port"`
-	Token string `json:"token"`
+	Enabled bool   `json:"enabled"`
+	Port    int    `json:"port"`
+	Token   string `json:"token"`
 }
 
 // ApiServiceState 是设置页与 API 使用方看到的服务状态。
@@ -71,12 +70,14 @@ type ApiSettingsRequest struct {
 // apiServer 持有当前 listener。一个进程只有一个 App 实例，包级单例避免
 // 改动 App 结构体；handler 在 Start 时捕获具体 *App。
 type apiServer struct {
+	opMu     sync.Mutex // 串行化设置与 listener 生命周期，避免并发启停泄漏端口。
 	mu       sync.Mutex
 	server   *http.Server
 	listener net.Listener
 	token    string
 	port     int
 	running  bool
+	done     chan struct{}
 }
 
 var apiSvc = &apiServer{}
@@ -99,6 +100,7 @@ func loadApiSettings() apiSettings {
 			settings.Port = saved.Port
 		}
 		settings.Token = strings.TrimSpace(saved.Token)
+		settings.Enabled = saved.Enabled
 	}
 	return settings
 }
@@ -112,7 +114,7 @@ func saveApiSettings(settings apiSettings) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	return writeAtomicBytes(path, data, 0o600)
 }
 
 // normalizeApiPort 把端口收敛到合法区间；0/非法值回落默认端口。
@@ -146,6 +148,10 @@ func (a *App) GetApiServiceState() (ApiServiceState, error) {
 	}
 	apiSvc.mu.Lock()
 	state.Enabled = apiSvc.running
+	if apiSvc.running {
+		state.Port = apiSvc.port
+		state.Token = apiSvc.token
+	}
 	apiSvc.mu.Unlock()
 	state.Addr = fmt.Sprintf("127.0.0.1:%d", state.Port)
 	state.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", state.Port)
@@ -155,7 +161,10 @@ func (a *App) GetApiServiceState() (ApiServiceState, error) {
 // SaveApiSettings 持久化端口与 token；token 留空自动生成并落盘。服务若在
 // 运行中则用新设置重启 listener，返回重启后的状态。
 func (a *App) SaveApiSettings(req ApiSettingsRequest) (ApiServiceState, error) {
+	apiSvc.opMu.Lock()
+	defer apiSvc.opMu.Unlock()
 	settings := loadApiSettings()
+	previous := settings
 	settings.Port = normalizeApiPort(req.Port)
 	settings.Token = strings.TrimSpace(req.Token)
 	if settings.Token == "" {
@@ -168,32 +177,63 @@ func (a *App) SaveApiSettings(req ApiSettingsRequest) (ApiServiceState, error) {
 	wasRunning := apiSvc.running
 	apiSvc.mu.Unlock()
 	if wasRunning {
-		if err := a.startApiListener(); err != nil {
+		if err := a.startApiListenerLocked(settings); err != nil {
+			if restoreErr := saveApiSettings(previous); restoreErr != nil {
+				return ApiServiceState{}, errors.Join(err, restoreErr)
+			}
 			return ApiServiceState{}, err
 		}
 	}
 	return a.GetApiServiceState()
 }
 
-// SetApiServiceEnabled 开启或停止监听。开启语义是“按当前设置确保运行”：
-// 已在运行则先停再启（让改端口/重新生成 token 立即生效）。
+// SetApiServiceEnabled 开启或停止监听，并保存下次启动时的选择。
 func (a *App) SetApiServiceEnabled(enabled bool) (ApiServiceState, error) {
+	apiSvc.opMu.Lock()
+	defer apiSvc.opMu.Unlock()
+	settings := loadApiSettings()
+	settings.Enabled = enabled
 	if !enabled {
-		stopApiListener()
+		if err := saveApiSettings(settings); err != nil {
+			return ApiServiceState{}, err
+		}
+		stopApiListenerLocked()
 		return a.GetApiServiceState()
 	}
-	if err := a.startApiListener(); err != nil {
+	if err := a.startApiListenerLocked(settings); err != nil {
+		return ApiServiceState{}, err
+	}
+	// startApiListenerLocked 可能生成 token，必须保存那一份。
+	settings.Token = a.apiToken()
+	if err := saveApiSettings(settings); err != nil {
+		stopApiListenerLocked()
 		return ApiServiceState{}, err
 	}
 	return a.GetApiServiceState()
 }
 
-// startApiListener 确保 API 服务按当前设置运行（幂等：先停旧实例）。
-func (a *App) startApiListener() error {
+// restoreApiService 由宿主生命周期调用；监听失败只记日志，不阻断桌面启动。
+func (a *App) restoreApiService() {
+	apiSvc.opMu.Lock()
+	defer apiSvc.opMu.Unlock()
+	settings := loadApiSettings()
+	if settings.Enabled {
+		if err := a.startApiListenerLocked(settings); err != nil {
+			log.Printf("[api] restore: %v", err)
+		}
+	}
+}
+
+func (a *App) apiToken() string {
+	apiSvc.mu.Lock()
+	defer apiSvc.mu.Unlock()
+	return apiSvc.token
+}
+
+func (a *App) startApiListenerLocked(settings apiSettings) error {
 	if err := a.ensureInitialized(); err != nil {
 		return err
 	}
-	settings := loadApiSettings()
 	if strings.TrimSpace(settings.Token) == "" {
 		settings.Token = generateApiToken()
 		if err := saveApiSettings(settings); err != nil {
@@ -202,7 +242,13 @@ func (a *App) startApiListener() error {
 	}
 	port := normalizeApiPort(settings.Port)
 
-	stopApiListener()
+	apiSvc.mu.Lock()
+	if apiSvc.running && apiSvc.port == port {
+		apiSvc.token = settings.Token
+		apiSvc.mu.Unlock()
+		return nil
+	}
+	apiSvc.mu.Unlock()
 
 	handler := a.apiAuthMiddleware(a.apiMux())
 	server := &http.Server{
@@ -220,6 +266,9 @@ func (a *App) startApiListener() error {
 	if err != nil {
 		return fmt.Errorf("api listen %s: %w", addr, err)
 	}
+	// 先取得新端口；失败时旧 listener 与 token 继续可用。
+	stopApiListenerLocked()
+	done := make(chan struct{})
 
 	apiSvc.mu.Lock()
 	apiSvc.server = server
@@ -227,20 +276,41 @@ func (a *App) startApiListener() error {
 	apiSvc.token = settings.Token
 	apiSvc.port = port
 	apiSvc.running = true
+	apiSvc.done = done
 	apiSvc.mu.Unlock()
 
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("[api] serve: %v", err)
+			apiSvc.opMu.Lock()
+			apiSvc.mu.Lock()
+			current := apiSvc.server == server
+			apiSvc.mu.Unlock()
+			if current {
+				stopApiListenerLocked()
+			}
+			apiSvc.opMu.Unlock()
 		}
 	}()
 
 	// a.ctx 在应用关闭时取消，watcher 自动停掉 listener；正常退出时进程
 	// 结束本身也会释放端口。
 	if a.ctx != nil {
+		parent := a.ctx
 		go func() {
-			<-a.ctx.Done()
-			stopApiListener()
+			select {
+			case <-done:
+				return
+			case <-parent.Done():
+			}
+			apiSvc.opMu.Lock()
+			defer apiSvc.opMu.Unlock()
+			apiSvc.mu.Lock()
+			current := apiSvc.server == server
+			apiSvc.mu.Unlock()
+			if current {
+				stopApiListenerLocked()
+			}
 		}()
 	}
 	return nil
@@ -248,6 +318,12 @@ func (a *App) startApiListener() error {
 
 // stopApiListener 停止当前 listener（幂等）。带短超时优雅关闭。
 func stopApiListener() {
+	apiSvc.opMu.Lock()
+	defer apiSvc.opMu.Unlock()
+	stopApiListenerLocked()
+}
+
+func stopApiListenerLocked() {
 	apiSvc.mu.Lock()
 	server := apiSvc.server
 	apiSvc.server = nil
@@ -255,13 +331,19 @@ func stopApiListener() {
 	apiSvc.token = ""
 	apiSvc.port = 0
 	apiSvc.running = false
+	if apiSvc.done != nil {
+		close(apiSvc.done)
+		apiSvc.done = nil
+	}
 	apiSvc.mu.Unlock()
 	if server == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = server.Shutdown(ctx)
+	if err := server.Shutdown(ctx); err != nil {
+		_ = server.Close()
+	}
 }
 
 // ── 鉴权 ──
@@ -293,6 +375,7 @@ func (a *App) apiAuthMiddleware(next http.Handler) http.Handler {
 func (a *App) apiMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", a.apiHandleHealth)
+	mux.HandleFunc("POST /api/v1/ai/complete", a.apiHandleAIComplete)
 
 	mux.HandleFunc("GET /api/v1/sessions", a.apiHandleListSessions)
 	mux.HandleFunc("POST /api/v1/sessions", a.apiHandleCreateSession)
@@ -300,6 +383,8 @@ func (a *App) apiMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/sessions/{id}/result", a.apiHandleSessionResult)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/messages", a.apiHandleSessionMessages)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/todos", a.apiHandleSessionPlan)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/questions", a.apiHandleSessionQuestions)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/answers", a.apiHandleSessionAnswers)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/messages", a.apiHandleSendMessage)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/cancel", a.apiHandleCancelSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/compact", a.apiHandleCompactSession)
@@ -352,6 +437,9 @@ func apiDecodeBody(r *http.Request, target any) error {
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("invalid JSON body: %w", err)
 	}
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return errors.New("invalid JSON body: expected exactly one JSON value")
+	}
 	return nil
 }
 
@@ -370,24 +458,156 @@ func (a *App) apiHandleHealth(w http.ResponseWriter, r *http.Request) {
 	apiWriteOK(w, map[string]any{"service": "ally-api", "status": "ok"})
 }
 
+// apiModelConfig resolves only configured models; credentials never cross the API.
+func (a *App) apiModelConfig(index *int) (ConfigState, error) {
+	cfg, err := a.getConfig()
+	if err != nil {
+		return ConfigState{}, err
+	}
+	if index == nil {
+		return expandLastUsedModel(cfg), nil
+	}
+	if *index < 0 || *index >= len(cfg.Models) {
+		return ConfigState{}, fmt.Errorf("model index out of range: %d", *index)
+	}
+	stripModelFields(&cfg)
+	applyModelEntry(&cfg, cfg.Models[*index])
+	return cfg, nil
+}
+
+// apiHandleAIComplete is a tool-free, stateless call through the existing model
+// adapters. Its cancellation is scoped to this HTTP request, not the games UI.
+func (a *App) apiHandleAIComplete(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ModelIndex *int   `json:"modelIndex"`
+		System     string `json:"system"`
+		Prompt     string `json:"prompt"`
+	}
+	if err := apiDecodeBody(r, &body); err != nil {
+		apiWriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(body.Prompt) == "" {
+		apiWriteError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+	if len(body.Prompt) > 64*1024 || len(body.System) > 64*1024 {
+		apiWriteError(w, http.StatusBadRequest, "prompt or system exceeds 64 KiB")
+		return
+	}
+	cfg, err := a.apiModelConfig(body.ModelIndex)
+	if err != nil {
+		apiWriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(cfg.Model) == "" || !hasModelCredential(cfg) {
+		apiWriteError(w, http.StatusBadRequest, "model and API key are required")
+		return
+	}
+	if cfg.MaxTokens <= 0 {
+		cfg.MaxTokens = defaultMaxTokensForAPIFormat(cfg.APIFormat)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+	if a.ctx != nil {
+		stop := context.AfterFunc(a.ctx, cancel)
+		defer stop()
+	}
+	messages := make([]openai.ChatCompletionMessage, 0, 2)
+	if body.System != "" {
+		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: body.System})
+	}
+	messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: body.Prompt})
+	reply, usage, err := a.completeModelTextWithUsage(ctx, cfg, cfg.Model, messages, cfg.MaxTokens)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			status = http.StatusGatewayTimeout
+		}
+		apiWriteError(w, status, err.Error())
+		return
+	}
+	result := map[string]any{"reply": reply, "promptTokens": 0, "completionTokens": 0, "totalTokens": 0}
+	if usage != nil {
+		result["promptTokens"] = usage.PromptTokens
+		result["completionTokens"] = usage.CompletionTokens
+		result["totalTokens"] = usage.PromptTokens + usage.CompletionTokens
+	}
+	apiWriteOK(w, result)
+}
+
 // ── 会话 ──
+
+// apiLoadSession keeps metadata from the UI snapshot while reading conversation
+// data from backend history. API-only runs do not write UI snapshots.
+func (a *App) apiLoadSession(w http.ResponseWriter, sessionID string) (SessionSnapshot, bool) {
+	snapshot, err := a.LoadSession(sessionID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		}
+		apiWriteError(w, status, err.Error())
+		return SessionSnapshot{}, false
+	}
+	history := a.loadSessionHistoryCopy(sessionID)
+	if len(history) > 0 {
+		snapshot.Messages = make([]map[string]any, 0, len(history))
+		for _, message := range history {
+			if message.Role == openai.ChatMessageRoleSystem {
+				continue
+			}
+			content := message.Content
+			if content == "" && len(message.MultiContent) > 0 {
+				content = textFromMultiContent(message.MultiContent)
+			}
+			item := map[string]any{"role": message.Role, "content": content, "done": true}
+			if message.ToolCallID != "" {
+				item["toolCallId"] = message.ToolCallID
+			}
+			if len(message.ToolCalls) > 0 {
+				calls := make([]map[string]any, 0, len(message.ToolCalls))
+				for _, call := range message.ToolCalls {
+					calls = append(calls, map[string]any{"id": call.ID, "name": call.Function.Name, "arguments": call.Function.Arguments})
+				}
+				item["toolCalls"] = calls
+			}
+			snapshot.Messages = append(snapshot.Messages, item)
+		}
+		snapshot.ContextTokens = estimateTokensFromMessages(history)
+		for _, path := range a.historyDiskPaths(sessionID) {
+			if info, err := os.Stat(path); err == nil && info.ModTime().UnixMilli() > snapshot.UpdatedAt {
+				snapshot.UpdatedAt = info.ModTime().UnixMilli()
+			}
+		}
+	}
+	return snapshot, true
+}
+
+func (a *App) apiSessionOutcome(sessionID string) (sessionRunOutcome, bool) {
+	_, _, _, outcome, compacting := a.apiSessionState(sessionID)
+	return outcome, compacting
+}
 
 // apiSessionRuntime 反查会话的活跃 run（与 StartChat 的 runSessions 注册对
 // 应）。返回 runID、是否运行中、排队中的注入消息数。
 func (a *App) apiSessionRuntime(sessionID string) (string, bool, int) {
+	runID, running, queued, _, _ := a.apiSessionState(sessionID)
+	return runID, running, queued
+}
+
+// Read status and outcome under the same lock: a polling client must not see
+// an idle run paired with another run's newly registered outcome.
+func (a *App) apiSessionState(sessionID string) (string, bool, int, sessionRunOutcome, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for runID, activeSessionID := range a.runSessions {
-		if activeSessionID != sessionID {
-			continue
-		}
-		queued := 0
-		if ch := a.runInputs[runID]; ch != nil {
-			queued = len(ch)
-		}
-		return runID, true, queued
+	runID := a.activeRunForSession(sessionID)
+	queued := 0
+	if ch := a.runInputs[runID]; ch != nil {
+		queued = len(ch)
 	}
-	return "", false, 0
+	_, compacting := a.compactingSessions[sessionID]
+	return runID, runID != "", queued, a.sessionRunOutcomes[sessionID], compacting
 }
 
 func (a *App) apiHandleListSessions(w http.ResponseWriter, r *http.Request) {
@@ -474,19 +694,17 @@ func workspaceBaseLabel(workspace string) string {
 
 func (a *App) apiHandleSessionStatus(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
-	snapshot, err := a.LoadSession(sessionID)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			apiWriteError(w, http.StatusNotFound, "session not found")
-			return
-		}
-		apiWriteError(w, http.StatusInternalServerError, err.Error())
+	runID, running, queued, outcome, compacting := a.apiSessionState(sessionID)
+	snapshot, ok := a.apiLoadSession(w, sessionID)
+	if !ok {
 		return
 	}
-	_, running, queued := a.apiSessionRuntime(sessionID)
 	// API 会话不带 Tab 模型 overlay，下一回合用的就是配置里展开出来的
 	// "最近使用模型"（见 ConfigState.LastUsedModel）。
 	cfg := a.effectiveConfigSafe()
+	if running {
+		cfg = a.sessionModelConfigFor(sessionID).apply(cfg)
+	}
 	apiWriteOK(w, map[string]any{
 		"id":             snapshot.ID,
 		"title":          snapshot.Title,
@@ -496,6 +714,10 @@ func (a *App) apiHandleSessionStatus(w http.ResponseWriter, r *http.Request) {
 		"messageCount":   len(snapshot.Messages),
 		"contextTokens":  snapshot.ContextTokens,
 		"running":        running,
+		"runId":          runID,
+		"compacting":     compacting,
+		"lastRunStatus":  outcome.Status,
+		"lastRunError":   outcome.Error,
 		"queuedMessages": queued,
 		"model":          cfg.Model,
 		"modelProvider":  cfg.ProviderName,
@@ -507,15 +729,24 @@ func (a *App) apiHandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Message     string            `json:"message"`
 		Attachments []AttachmentInput `json:"attachments"`
+		ModelIndex  *int              `json:"modelIndex"`
 	}
 	if err := apiDecodeBody(r, &body); err != nil {
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	message := strings.TrimSpace(body.Message)
+	snapshot, ok := a.apiLoadSession(w, sessionID)
+	if !ok {
+		return
+	}
 	// 与界面一致的自动判断：运行中 → InjectRunMessage 排队追加（纯文本）；
 	// 空闲 → StartChat 新回合（首次发送与继续都是同一条持久化历史路径）。
 	if runID, running, _ := a.apiSessionRuntime(sessionID); running {
+		if len(body.Attachments) > 0 || body.ModelIndex != nil {
+			apiWriteError(w, http.StatusConflict, "running sessions only accept text; attachments and modelIndex require an idle session")
+			return
+		}
 		if message == "" {
 			apiWriteError(w, http.StatusBadRequest, "message is required")
 			return
@@ -531,13 +762,21 @@ func (a *App) apiHandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		apiWriteError(w, http.StatusBadRequest, "message is required")
 		return
 	}
-	runID, err := a.StartChat(ChatRequest{
-		SessionID:   sessionID,
-		Message:     message,
-		Attachments: body.Attachments,
-	})
+	cfg, err := a.apiModelConfig(body.ModelIndex)
 	if err != nil {
-		if errors.Is(err, errSessionBusy) {
+		apiWriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	cfg.Workspace = snapshot.Workspace
+	cfg.ExtraRoots = cloneStringSlice(snapshot.ExtraRoots)
+	runID, err := a.startChatWithConfig(ChatRequest{
+		SessionID:        sessionID,
+		Message:          message,
+		Attachments:      body.Attachments,
+		syncSessionIndex: true,
+	}, cfg)
+	if err != nil {
+		if errors.Is(err, errSessionBusy) || errors.Is(err, errSessionCompacting) {
 			apiWriteError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -549,6 +788,15 @@ func (a *App) apiHandleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) apiHandleCancelSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
+	if _, ok := a.apiLoadSession(w, sessionID); !ok {
+		return
+	}
+	_, compacting := a.apiSessionOutcome(sessionID)
+	if compacting {
+		a.CancelCompaction(sessionID)
+		apiWriteOK(w, map[string]any{"wasRunning": true, "compacting": true})
+		return
+	}
 	runID, running, _ := a.apiSessionRuntime(sessionID)
 	if !running {
 		apiWriteOK(w, map[string]any{"wasRunning": false})
@@ -561,24 +809,40 @@ func (a *App) apiHandleCancelSession(w http.ResponseWriter, r *http.Request) {
 	apiWriteOK(w, map[string]any{"wasRunning": true, "runId": runID})
 }
 
-// apiHandleSessionResult 返回会话最近一条完成的 assistant 消息。会话仍在
-// 运行时 status=running，result 是上一回合的结果（可能为空）。
+// apiHandleSessionResult reads the backend checkpoint, never a stale UI snapshot.
 func (a *App) apiHandleSessionResult(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
-	snapshot, err := a.LoadSession(sessionID)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			apiWriteError(w, http.StatusNotFound, "session not found")
-			return
-		}
-		apiWriteError(w, http.StatusInternalServerError, err.Error())
+	// Observe idle before loading history: finishRun removes the live run only
+	// after its final history/index writes, so done cannot carry an older read.
+	runID, running, _, outcome, compacting := a.apiSessionState(sessionID)
+	snapshot, ok := a.apiLoadSession(w, sessionID)
+	if !ok {
 		return
 	}
-	_, running, _ := a.apiSessionRuntime(sessionID)
+	if outcome.UpdatedAt > snapshot.UpdatedAt {
+		snapshot.UpdatedAt = outcome.UpdatedAt
+	}
+	status := outcome.Status
+	if status == "" {
+		status = "done"
+	}
+	if running {
+		status = "running"
+	} else if compacting {
+		status = "compacting"
+	} else {
+		runID = outcome.RunID
+	}
 	result := ""
 	for i := len(snapshot.Messages) - 1; i >= 0; i-- {
 		message := snapshot.Messages[i]
 		if strings.TrimSpace(stringValue(message["role"])) != openai.ChatMessageRoleAssistant {
+			continue
+		}
+		if calls, _ := message["toolCalls"].([]map[string]any); len(calls) > 0 {
+			continue
+		}
+		if done, exists := message["done"].(bool); exists && !done {
 			continue
 		}
 		if content := strings.TrimSpace(stringValue(message["content"])); content != "" {
@@ -588,7 +852,9 @@ func (a *App) apiHandleSessionResult(w http.ResponseWriter, r *http.Request) {
 	}
 	apiWriteOK(w, map[string]any{
 		"sessionId": snapshot.ID,
-		"status":    map[bool]string{true: "running", false: "done"}[running],
+		"status":    status,
+		"runId":     runID,
+		"error":     outcome.Error,
 		"result":    result,
 		"updatedAt": snapshot.UpdatedAt,
 	})
@@ -612,7 +878,7 @@ func apiModelSummary(index int, model ModelConfig) map[string]any {
 		// 自定义头可能携带网关凭据：只回传键名，永不回传值。
 		"customHeaderNames": customHeaderNames(model.CustomHeaders),
 		"hasApiKey":         model.APIKey != "" || len(model.APIKeys) > 0,
-		"apiKeyCount":       len(model.APIKeys),
+		"apiKeyCount":       len(resolveKeyPool(ConfigState{APIKey: model.APIKey, APIKeys: model.APIKeys})),
 	}
 }
 
@@ -674,8 +940,8 @@ func (a *App) apiHandleSaveModel(w http.ResponseWriter, r *http.Request) {
 	if body.Index != nil {
 		index = *body.Index
 	}
-	if index >= 0 {
-		if index >= len(models) {
+	if body.Index != nil {
+		if index < 0 || index >= len(models) {
 			a.mu.Unlock()
 			apiWriteError(w, http.StatusBadRequest, fmt.Sprintf("model index out of range: %d", index))
 			return
@@ -705,17 +971,21 @@ func (a *App) apiHandleSaveModel(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) apiHandleActivateModel(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Index int `json:"index"`
+		Index *int `json:"index"`
 	}
 	if err := apiDecodeBody(r, &body); err != nil {
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := a.SwitchModel(body.Index); err != nil {
+	if body.Index == nil {
+		apiWriteError(w, http.StatusBadRequest, "index is required")
+		return
+	}
+	if err := a.SwitchModel(*body.Index); err != nil {
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	apiWriteOK(w, map[string]any{"activated": body.Index})
+	apiWriteOK(w, map[string]any{"activated": *body.Index})
 }
 
 // ── MCP ──
@@ -852,13 +1122,8 @@ func (a *App) apiHandleGetSkill(w http.ResponseWriter, r *http.Request) {
 // apiHandleSessionMessages 返回会话完整 UI 快照（含工具卡等展示字段），
 // 供外部工具取全量上下文。
 func (a *App) apiHandleSessionMessages(w http.ResponseWriter, r *http.Request) {
-	snapshot, err := a.LoadSession(r.PathValue("id"))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			apiWriteError(w, http.StatusNotFound, "session not found")
-			return
-		}
-		apiWriteError(w, http.StatusInternalServerError, err.Error())
+	snapshot, ok := a.apiLoadSession(w, r.PathValue("id"))
+	if !ok {
 		return
 	}
 	apiWriteOK(w, map[string]any{
@@ -873,12 +1138,60 @@ func (a *App) apiHandleSessionMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiHandleSessionPlan(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.apiLoadSession(w, r.PathValue("id")); !ok {
+		return
+	}
 	apiWriteOK(w, map[string]any{"todos": a.GetPlan(r.PathValue("id"))})
+}
+
+func (a *App) apiHandleSessionQuestions(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	if _, ok := a.apiLoadSession(w, sessionID); !ok {
+		return
+	}
+	questions := make([]map[string]any, 0)
+	a.askMu.Lock()
+	for id, pending := range a.pendingAsks {
+		if pending != nil && pending.sessionID == sessionID {
+			questions = append(questions, map[string]any{"askId": id, "request": pending.request})
+		}
+	}
+	a.askMu.Unlock()
+	apiWriteOK(w, map[string]any{"questions": questions})
+}
+
+func (a *App) apiHandleSessionAnswers(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	if _, ok := a.apiLoadSession(w, sessionID); !ok {
+		return
+	}
+	var body AskSubmitRequest
+	if err := apiDecodeBody(r, &body); err != nil {
+		apiWriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	a.askMu.Lock()
+	pending := a.pendingAsks[strings.TrimSpace(body.AskID)]
+	belongs := pending != nil && pending.sessionID == sessionID
+	a.askMu.Unlock()
+	if !belongs {
+		apiWriteError(w, http.StatusNotFound, "pending question not found in this session")
+		return
+	}
+	body.SessionID = sessionID
+	if err := a.SubmitAskResponse(body); err != nil {
+		apiWriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	apiWriteOK(w, map[string]any{"submitted": true})
 }
 
 // apiHandleCompactSession 压缩会话历史（同步调用：等 LLM 总结完成才返回；
 // 客户端断开连接即取消总结调用）。
 func (a *App) apiHandleCompactSession(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.apiLoadSession(w, r.PathValue("id")); !ok {
+		return
+	}
 	var body struct {
 		Instruction string `json:"instruction"`
 	}
@@ -890,7 +1203,11 @@ func (a *App) apiHandleCompactSession(w http.ResponseWriter, r *http.Request) {
 	// 持久化配置（GUI 侧走 App.CompactSession 并带上当前 Tab 的模型）。
 	result, err := a.compactSession(r.Context(), r.PathValue("id"), body.Instruction, ConfigState{})
 	if err != nil {
-		apiWriteError(w, http.StatusBadRequest, err.Error())
+		status := http.StatusBadRequest
+		if errors.Is(err, errSessionRunning) || errors.Is(err, errSessionCompacting) {
+			status = http.StatusConflict
+		}
+		apiWriteError(w, status, err.Error())
 		return
 	}
 	apiWriteOK(w, result)
@@ -898,7 +1215,7 @@ func (a *App) apiHandleCompactSession(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) apiHandleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	if err := a.DeleteSession(r.PathValue("id")); err != nil {
-		if errors.Is(err, errSessionRunning) {
+		if errors.Is(err, errSessionRunning) || errors.Is(err, errSessionCompacting) {
 			apiWriteError(w, http.StatusConflict, err.Error())
 			return
 		}

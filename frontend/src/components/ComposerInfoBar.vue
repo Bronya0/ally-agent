@@ -135,7 +135,8 @@ Public License v3. See the LICENSE file for details.
       <span class="task-chip-letter">SSH</span>
       <span class="task-chip-count">{{ allowedSshServers.length }}</span>
     </button>
-    <template v-if="gitStatus.isRepo">
+    <span v-if="gitStatsLoading" class="info-git" aria-hidden="true">...</span>
+    <template v-else-if="gitStatus.isRepo">
       <span class="info-sep">·</span>
       <n-popover
         v-if="gitStatus.isMultiRepo && gitStatus.repos && gitStatus.repos.length > 0"
@@ -233,11 +234,11 @@ Public License v3. See the LICENSE file for details.
         </div>
         <div class="context-breakdown-row context-breakdown-total">
           <span>{{ $t('composer.context.input') }}</span>
-          <span>{{ workspaceInputTokens }}</span>
+          <span>{{ workspaceUsageLoading ? '...' : workspaceInputTokens }}</span>
         </div>
         <div class="context-breakdown-row">
           <span>{{ $t('composer.context.output') }}</span>
-          <span>{{ workspaceOutputTokens }}</span>
+          <span>{{ workspaceUsageLoading ? '...' : workspaceOutputTokens }}</span>
         </div>
         <div class="context-breakdown-footer">
           <button
@@ -368,6 +369,8 @@ const props = defineProps({
   gitStatus: { type: Object, default: () => ({ isRepo: false }) },
   contextBreakdown: { type: Object, default: null },
   footerStatsLoading: { type: Boolean, default: false },
+  gitStatsLoading: { type: Boolean, default: false },
+  workspaceUsageLoading: { type: Boolean, default: false },
   // Lazy getter for the session's messages array — only invoked when the user
   // actually triggers an export. Passing the full array as a prop forced Vue
   // to diff the entire array on every streaming delta / history mutation,

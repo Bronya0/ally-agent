@@ -12,6 +12,6 @@
 // must render the exact same string, otherwise the two places "disagree" about
 // which model is active. Missing provider/model degrade to '-'.
 export function formatModelLabel(snapshot) {
-  return `${snapshot?.providerName || '-'} · ${snapshot?.model || '-'}`;
+  return `${snapshot?.providerName || '-'} · ${snapshot?.displayName || snapshot?.model || '-'}`;
 }
 

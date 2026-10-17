@@ -134,7 +134,7 @@ const modelMenuOptions = computed(() => {
   const query = modelSearch.value.trim().toLocaleLowerCase();
   const matches = (item) => {
     if (!query) return true;
-    const name = String(item.model?.model || '').toLocaleLowerCase();
+    const name = [item.model?.displayName, item.model?.model].filter(Boolean).join(' ').toLocaleLowerCase();
     const provider = providerLabel(item.model).toLocaleLowerCase();
     return name.includes(query) || provider.includes(query);
   };
@@ -157,7 +157,7 @@ const modelMenuOptions = computed(() => {
         hasActiveModel: group.hasActiveModel,
         children: group.models.map((item) => ({
           key: `model:${item.index}`,
-          label: item.model.model || '-',
+          label: item.model.displayName || item.model.model || '-',
           active: isActiveModel(item.model),
         })),
       });

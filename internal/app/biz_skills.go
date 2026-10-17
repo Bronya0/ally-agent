@@ -60,6 +60,10 @@ func (a *App) ListSkills() ([]SkillDefinition, error) {
 	if err != nil {
 		return nil, err
 	}
+	return a.listSkillsForConfig(cfg)
+}
+
+func (a *App) listSkillsForConfig(cfg ConfigState) ([]SkillDefinition, error) {
 	// If the configured workspace no longer exists, still scan user-level
 	// skills so the app remains usable and the user can add a new workspace.
 	root, _ := workspaceRoot(cfg)
@@ -192,6 +196,14 @@ func (a *App) GetActiveSkills() []string {
 // listCachedSkills returns enabled available skills (calls ListSkills, no lock needed by caller).
 func (a *App) listCachedSkills() []SkillDefinition {
 	skills, err := a.ListSkills()
+	if err != nil {
+		return nil
+	}
+	return a.enabledSkillsFrom(skills)
+}
+
+func (a *App) listCachedSkillsForConfig(cfg ConfigState) []SkillDefinition {
+	skills, err := a.listSkillsForConfig(cfg)
 	if err != nil {
 		return nil
 	}

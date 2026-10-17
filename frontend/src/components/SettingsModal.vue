@@ -942,12 +942,15 @@ const apiTokenDraft = ref('');
 
 const apiEndpoints = [
   { method: 'GET', path: '/api/v1/health', key: 'settings.apiEpHealth' },
+  { method: 'POST', path: '/api/v1/ai/complete', key: 'settings.apiEpAIComplete' },
   { method: 'GET', path: '/api/v1/sessions', key: 'settings.apiEpSessionsList' },
   { method: 'POST', path: '/api/v1/sessions', key: 'settings.apiEpSessionsCreate' },
   { method: 'GET', path: '/api/v1/sessions/{id}', key: 'settings.apiEpSessionStatus' },
   { method: 'GET', path: '/api/v1/sessions/{id}/result', key: 'settings.apiEpSessionResult' },
   { method: 'GET', path: '/api/v1/sessions/{id}/messages', key: 'settings.apiEpSessionMessages' },
   { method: 'GET', path: '/api/v1/sessions/{id}/todos', key: 'settings.apiEpSessionTodos' },
+  { method: 'GET', path: '/api/v1/sessions/{id}/questions', key: 'settings.apiEpSessionQuestions' },
+  { method: 'POST', path: '/api/v1/sessions/{id}/answers', key: 'settings.apiEpSessionAnswers' },
   { method: 'POST', path: '/api/v1/sessions/{id}/messages', key: 'settings.apiEpSessionSend' },
   { method: 'POST', path: '/api/v1/sessions/{id}/cancel', key: 'settings.apiEpSessionCancel' },
   { method: 'POST', path: '/api/v1/sessions/{id}/compact', key: 'settings.apiEpSessionCompact' },

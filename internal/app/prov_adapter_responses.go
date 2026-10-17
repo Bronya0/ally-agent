@@ -78,6 +78,10 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 	if err != nil {
 		return nil, false, err
 	}
+	return a.consumeOpenAIResponsesStream(cfg, body, stream, onEvent)
+}
+
+func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.ResponseNewParams, stream *openAIResponsesSSEStream, onEvent func(modelStreamEvent)) (*modelStreamResult, bool, error) {
 	defer stream.Close()
 
 	var assistant strings.Builder
@@ -127,7 +131,7 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 	for stream.Next() {
 		event, rawEvent, err := stream.Event()
 		if err != nil {
-			if isIncompleteStreamJSON(err) && len(toolCalls) == 0 && (assistant.Len() > 0 || reasoning.Len() > 0) {
+			if cfg.AuthType != authChatGPTOAuth && isIncompleteStreamJSON(err) && len(toolCalls) == 0 && (assistant.Len() > 0 || reasoning.Len() > 0) {
 				break
 			}
 			return nil, hasOutput(), wrapLLMStreamEventDecode(fmt.Errorf("decode responses stream event: %w", err))
@@ -335,6 +339,9 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 				}
 			}
 		}
+		if cfg.AuthType == authChatGPTOAuth && (event.Type == "error" || event.Type == "response.failed") {
+			streamErr = fmt.Errorf("%w (request ID %s)", chatGPTStreamError(rawEvent, stream.authorization), stream.requestID)
+		}
 		if streamErr != nil {
 			break
 		}
@@ -539,11 +546,13 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 }
 
 func supportsOpenAIResponsesImageGeneration(cfg ConfigState) bool {
-	return isOfficialOpenAIEndpoint(cfg)
+	return cfg.AuthType != authChatGPTOAuth && isOfficialOpenAIEndpoint(cfg)
 }
 
 type openAIResponsesSSEStream struct {
-	decoder ssestream.Decoder
+	authorization string // only used to redact error events; never exposed
+	requestID     string
+	decoder       ssestream.Decoder
 }
 
 // openAIResponsesMinOutputTokens is the documented floor for max_output_tokens:
@@ -586,6 +595,12 @@ func ensureResponsesReasoningSummaries(body map[string]any) bool {
 }
 
 func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams) (*openAIResponsesSSEStream, error) {
+	return newOpenAIResponsesSSEStreamWithClient(ctx, cfg, body, proxyHTTPClient(cfg, true, 0))
+}
+
+// Explicit client also permits isolated mock HTTP tests of the OAuth wire path.
+func newOpenAIResponsesSSEStreamWithClient(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams, client *http.Client) (*openAIResponsesSSEStream, error) {
+	normalizeModelAuth(&cfg)
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -595,6 +610,11 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		return nil, err
 	}
 	requestBody["stream"] = true
+	if cfg.AuthType == authChatGPTOAuth {
+		if err := chatGPTResponsesRequest(requestBody); err != nil {
+			return nil, err
+		}
+	}
 	// Replayed reasoning items must carry their required summary key; the SDK
 	// drops it when it is empty (see ensureResponsesReasoningSummaries).
 	ensureResponsesReasoningSummaries(requestBody)
@@ -627,9 +647,18 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 	// 自定义头在适配器内置头之后应用，可覆盖 Authorization / User-Agent。
 	applyCustomHeaders(req, cfg)
 
-	client := proxyHTTPClient(cfg, true, 0)
+	clientCopy := *client
+	client = &clientCopy
 	client.Transport = &retryAfterCaptureTransport{base: client.Transport}
-	resp, err := client.Do(req)
+	var resp *http.Response
+	if cfg.AuthType == authChatGPTOAuth {
+		if cfg.chatGPTManager == nil {
+			return nil, errors.New("ChatGPT account manager unavailable")
+		}
+		resp, err = cfg.chatGPTManager.Do(client, cfg.OAuthAccountID, req)
+	} else {
+		resp, err = client.Do(req)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -646,7 +675,10 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		} else {
 			msg = resp.Status + ": " + msg
 		}
-		failure := fmt.Errorf("responses request failed: %s", msg)
+		var failure error = fmt.Errorf("responses request failed: %s", msg)
+		if cfg.AuthType == authChatGPTOAuth {
+			failure = chatGPTResponseError(resp, raw)
+		}
 		// The provider's own advice rides along as retryAfterError; the message is
 		// unchanged, so classification (retryable / not) is unaffected.
 		if d := retryAfterCap.get(); d > 0 {
@@ -660,7 +692,11 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		resp.Body.Close()
 		return nil, errors.New("responses stream was empty")
 	}
-	return &openAIResponsesSSEStream{decoder: decoder}, nil
+	authorization := ""
+	if cfg.AuthType == authChatGPTOAuth && resp.Request != nil {
+		authorization = resp.Request.Header.Get("Authorization")
+	}
+	return &openAIResponsesSSEStream{decoder: decoder, authorization: authorization, requestID: resp.Header.Get("x-request-id")}, nil
 }
 
 func responseInputItemParamOfFunctionCallOutput(callID, output string) oaresp.ResponseInputItemUnionParam {
@@ -1035,8 +1071,8 @@ func modelUsageFromResponseTokenCounts(input, output, hit, miss, write int64) *m
 }
 
 type responsesUsageTokenDetails struct {
-	CachedTokens     int64 `json:"cached_tokens"`
-	CacheWriteTokens int64 `json:"cache_write_tokens"`
+	CachedTokens     *int64 `json:"cached_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
 }
 
 type responsesUsageWire struct {
@@ -1046,12 +1082,12 @@ type responsesUsageWire struct {
 	CompletionTokens      int64                       `json:"completion_tokens"`
 	InputTokensDetails    *responsesUsageTokenDetails `json:"input_tokens_details"`
 	PromptTokensDetails   *responsesUsageTokenDetails `json:"prompt_tokens_details"`
-	CachedInputTokens     int64                       `json:"cached_input_tokens"`
-	CacheReadInputTokens  int64                       `json:"cache_read_input_tokens"`
+	CachedInputTokens     *int64                      `json:"cached_input_tokens"`
+	CacheReadInputTokens  *int64                      `json:"cache_read_input_tokens"`
 	CacheWriteInputTokens int64                       `json:"cache_write_input_tokens"`
-	PromptCacheHitTokens  int64                       `json:"prompt_cache_hit_tokens"`
-	PromptCacheMissTokens int64                       `json:"prompt_cache_miss_tokens"`
-	CachedTokens          int64                       `json:"cached_tokens"`
+	PromptCacheHitTokens  *int64                      `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens *int64                      `json:"prompt_cache_miss_tokens"`
+	CachedTokens          *int64                      `json:"cached_tokens"`
 }
 
 // modelUsageFromResponsesEvent parses usage from a Responses JSON payload:
@@ -1088,20 +1124,20 @@ func modelUsageFromResponsesEvent(raw []byte) *modelUsage {
 	}
 	hit := int64(0)
 	if usage.InputTokensDetails != nil {
-		hit = usage.InputTokensDetails.CachedTokens
+		hit = responsesUsageCount(usage.InputTokensDetails.CachedTokens)
 	}
 	if hit <= 0 && usage.PromptTokensDetails != nil {
-		hit = usage.PromptTokensDetails.CachedTokens
+		hit = responsesUsageCount(usage.PromptTokensDetails.CachedTokens)
 	}
 	if hit <= 0 {
-		for _, candidate := range []int64{
+		for _, candidate := range []*int64{
 			usage.CachedInputTokens,
 			usage.CacheReadInputTokens,
 			usage.PromptCacheHitTokens,
 			usage.CachedTokens,
 		} {
-			if candidate > 0 {
-				hit = candidate
+			if value := responsesUsageCount(candidate); value > 0 {
+				hit = value
 				break
 			}
 		}
@@ -1119,7 +1155,7 @@ func modelUsageFromResponsesEvent(raw []byte) *modelUsage {
 	if write <= 0 {
 		write = usage.CacheWriteInputTokens
 	}
-	miss := usage.PromptCacheMissTokens
+	miss := responsesUsageCount(usage.PromptCacheMissTokens)
 	if input <= 0 && miss <= 0 {
 		if usage.InputTokensDetails != nil {
 			miss = usage.InputTokensDetails.CacheWriteTokens
@@ -1131,5 +1167,22 @@ func modelUsageFromResponsesEvent(raw []byte) *modelUsage {
 			miss = usage.CacheWriteInputTokens
 		}
 	}
-	return modelUsageFromResponseTokenCounts(input, output, hit, miss, write)
+	result := modelUsageFromResponseTokenCounts(input, output, hit, miss, write)
+	cacheReported := (usage.InputTokensDetails != nil && usage.InputTokensDetails.CachedTokens != nil) ||
+		(usage.PromptTokensDetails != nil && usage.PromptTokensDetails.CachedTokens != nil) ||
+		usage.CachedInputTokens != nil || usage.CacheReadInputTokens != nil ||
+		usage.PromptCacheHitTokens != nil || usage.PromptCacheMissTokens != nil || usage.CachedTokens != nil
+	if result != nil && !cacheReported {
+		// Missing telemetry is unknown, not a measured zero hit rate. Keep the
+		// input/output totals but omit cache counters from the round statistics.
+		result.CacheHitTokens, result.CacheMissTokens = 0, 0
+	}
+	return result
+}
+
+func responsesUsageCount(value *int64) int64 {
+	if value != nil {
+		return *value
+	}
+	return 0
 }

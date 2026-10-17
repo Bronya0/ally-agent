@@ -140,7 +140,7 @@ export function assignConfig(target, source) {
   // lastUsedModel 是 {providerName, model} 身份：缺 model id 视为"没有"（null）。
   const lastUsed = next.lastUsedModel;
   next.lastUsedModel = lastUsed && String(lastUsed.model || '').trim()
-    ? { providerName: String(lastUsed.providerName || '').trim(), model: String(lastUsed.model).trim() }
+    ? { providerName: String(lastUsed.providerName || '').trim(), model: String(lastUsed.model).trim(), ...(lastUsed.oauthAccountId ? { oauthAccountId: String(lastUsed.oauthAccountId).trim() } : {}) }
     : null;
   next.models = cloneModelConfigs(next.models);
   // Backend stores autoUpdate as *bool (nil = default on). Normalize null /

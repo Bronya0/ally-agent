@@ -263,11 +263,17 @@ func reasoningReplayKey(cfg ConfigState, model string) string {
 	if strings.TrimSpace(model) == "" {
 		model = cfg.Model
 	}
-	return strings.Join([]string{
+	parts := []string{
 		reasoningStashScope(reasoningReplayScope(cfg)),
 		normalizeAPIFormat(cfg.APIFormat),
 		strings.ToLower(strings.TrimSpace(model)),
-	}, "\x1f")
+	}
+	// Signed/encrypted reasoning stays with its OAuth registration. Keep API-key
+	// scope keys unchanged, including their existing session cleanup behavior.
+	if cfg.AuthType == authChatGPTOAuth {
+		parts = append(parts, authChatGPTOAuth, strings.ReplaceAll(cfg.OAuthAccountID, "\x1f", "_"))
+	}
+	return strings.Join(parts, "\x1f")
 }
 
 func (s *reasoningStash) get(key string) *sessionReasoningPayload {

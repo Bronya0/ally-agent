@@ -25,6 +25,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"ally-dev/internal/chatgpt"
 	"ally-dev/internal/tools/grep"
 	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/schemautil"
@@ -180,8 +181,9 @@ type skillListCacheEntry struct {
 
 // App is the Wails-bound application module.
 type App struct {
-	ctx    context.Context
-	events eventSink
+	chatGPT *chatgpt.Manager // guarded by mu; initialized lazily, no credential IO at startup
+	ctx     context.Context
+	events  eventSink
 
 	// wails is the desktop host adapter injected by SetApp/SetWindow; nil in
 	// tests and headless embeddings. Concrete Wails v3 types live only in
@@ -305,6 +307,9 @@ type App struct {
 	// default. Resolution mirrors sessionContextConfig: in-memory record first,
 	// a.config fallback for sessions that predate the record. Guarded by mu.
 	sessionModelConfigs map[string]sessionModelConfig
+	// Last outcome per session, exposed by HTTP polling until the next run.
+	// Guarded by mu; released with the rest of the session's runtime state.
+	sessionRunOutcomes map[string]sessionRunOutcome
 
 	askMu       sync.Mutex
 	pendingAsks map[string]*pendingAsk
@@ -356,6 +361,8 @@ type App struct {
 	gitStatusCacheMu  sync.Mutex
 	gitStatusCache    map[string]gitStatusCacheEntry
 	gitStatusInFlight map[string]chan struct{}
+	gitStatusEpoch    map[string]uint64
+	gitRepoDiscovery  map[string]gitRepoDiscoveryEntry
 
 	skillCacheMu sync.Mutex
 	skillCache   map[string]skillListCacheEntry
@@ -370,7 +377,9 @@ type App struct {
 
 	// liveBreakdown caches the full token-count breakdown for active sessions.
 	// Updated by runChat each agent step. Maps sessionID → ContextBreakdown.
-	liveBreakdown map[string]ContextBreakdown
+	liveBreakdown      map[string]ContextBreakdown
+	frozenPrefixStats  map[string]frozenPrefixStats
+	historyCacheStates map[string]*historyCacheState
 
 	// contextAnchors holds each session's provider-reported context size: the
 	// prompt+completion tokens of its most recent request plus the conversation
@@ -426,6 +435,7 @@ type App struct {
 
 func NewApp() *App {
 	a := &App{
+		chatGPT:            chatgpt.New(filepath.Join(appDataDir(), "chatgpt"), chatgpt.NewSystemProtector()),
 		runs:               map[string]context.CancelFunc{},
 		runSessions:        map[string]string{},
 		runInputs:          map[string]chan string{},
@@ -444,6 +454,7 @@ func NewApp() *App {
 		sessionWorkspaces:    map[string]string{},
 		sessionExtraRoots:    map[string][]string{},
 		sessionModelConfigs:  map[string]sessionModelConfig{},
+		sessionRunOutcomes:   map[string]sessionRunOutcome{},
 		sessionSystemPrompts: map[string][]systemPromptPart{},
 		frozenTurnNotices:    map[string]map[string]string{},
 		sessionToolsets:      map[string][]openai.Tool{},
@@ -456,10 +467,14 @@ func NewApp() *App {
 		subSem:               make(chan struct{}, 4),
 		gitStatusCache:       map[string]gitStatusCacheEntry{},
 		gitStatusInFlight:    map[string]chan struct{}{},
+		gitStatusEpoch:       map[string]uint64{},
+		gitRepoDiscovery:     map[string]gitRepoDiscoveryEntry{},
 		skillCache:           map[string]skillListCacheEntry{},
 		workspaceCaches:      newWorkspaceCacheHolder(),
 		httpLastHost:         map[string]time.Time{},
 		liveBreakdown:        map[string]ContextBreakdown{},
+		frozenPrefixStats:    map[string]frozenPrefixStats{},
+		historyCacheStates:   map[string]*historyCacheState{},
 		contextAnchors:       map[string]contextAnchor{},
 		workspaceTokenUsage:  map[string]WorkspaceTokenUsage{},
 		services:             map[string]*managedService{},
@@ -483,10 +498,13 @@ func minInt(a, b int) int {
 
 // ConfigState stores provider, workspace and runtime settings.
 type ModelConfig struct {
-	ProviderName string `json:"providerName"`
-	APIFormat    string `json:"apiFormat"`
-	BaseURL      string `json:"baseUrl"`
-	APIKey       string `json:"apiKey"`
+	AuthType       string `json:"authType,omitempty"`
+	OAuthAccountID string `json:"oauthAccountId,omitempty"`
+	DisplayName    string `json:"displayName,omitempty"`
+	ProviderName   string `json:"providerName"`
+	APIFormat      string `json:"apiFormat"`
+	BaseURL        string `json:"baseUrl"`
+	APIKey         string `json:"apiKey"`
 	// APIKeys is the ordered API key pool for this model. The first key has
 	// the highest priority: it is used while it works; when it fails, the
 	// next key takes over. APIKey stays in sync with the first entry for
@@ -527,6 +545,9 @@ type ModelConfig struct {
 }
 
 type ConfigState struct {
+	chatGPTManager *chatgpt.Manager // request-only backend dependency, excluded from JSON
+	AuthType       string           `json:"authType,omitempty"`
+	OAuthAccountID string           `json:"oauthAccountId,omitempty"`
 	// 下面这组模型字段是**请求级派生值**：config.json 只存 models[] + lastUsedModel，
 	// 它们由 effectiveConfig 按身份展开填充（expandLastUsedModel），落盘前由
 	// stripModelFields 清空。保留 JSON 标签是因为请求 overlay（前端 Tab 快照）
@@ -754,6 +775,8 @@ type ChatRequest struct {
 	Messages    []ChatMessageInput `json:"messages"`
 	Attachments []AttachmentInput  `json:"attachments,omitempty"`
 	Config      ConfigState        `json:"config"`
+	// HTTP callers have no frontend to persist the session list metadata.
+	syncSessionIndex bool
 }
 
 type ListFilesRequest struct {
@@ -1628,6 +1651,12 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 		return "", err
 	}
 	cfg := a.effectiveConfig(req.Config)
+	return a.startChatWithConfig(req, cfg)
+}
+
+// startChatWithConfig accepts a fully resolved config, including an API request's
+// model selection. Re-merging it would inherit empty fields from another model.
+func (a *App) startChatWithConfig(req ChatRequest, cfg ConfigState) (string, error) {
 	cfg.APIFormat = normalizeAPIFormat(cfg.APIFormat)
 	if strings.TrimSpace(cfg.Model) == "" {
 		return "", errors.New("model is required")
@@ -1635,8 +1664,8 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 	if strings.TrimSpace(cfg.BaseURL) == "" {
 		cfg.BaseURL = defaultBaseURLForAPIFormat(cfg.APIFormat)
 	}
-	if len(resolveKeyPool(cfg)) == 0 {
-		return "", errors.New("API key is required")
+	if !hasModelCredential(cfg) {
+		return "", missingModelCredentialError(cfg)
 	}
 	if strings.TrimSpace(cfg.Workspace) == "" {
 		return "", errors.New("workspace is required")
@@ -1647,45 +1676,6 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 		return "", errors.New("系统根目录不能用作工作区：整个磁盘都会变成 Agent 的可写范围，请选择一个具体的项目目录")
 	}
 
-	// Record the workspace this session's runs actually use. Written before
-	// the run goroutine starts so the footer breakdown (polled during the
-	// run, before any session-index entry exists for KB/temp sessions) and
-	// compaction see the right workspace from the very first request.
-	if req.SessionID != "" && strings.TrimSpace(cfg.Workspace) != "" {
-		a.mu.Lock()
-		if a.sessionWorkspaces == nil {
-			a.sessionWorkspaces = map[string]string{}
-		}
-		a.sessionWorkspaces[req.SessionID] = strings.TrimSpace(cfg.Workspace)
-		a.mu.Unlock()
-	}
-
-	// The same for the session's extra roots: the request overlay is the
-	// authoritative list for this run, so seeding the live record here keeps it
-	// from ever lagging behind (or contradicting) the run that just started.
-	if req.SessionID != "" {
-		a.publishSessionExtraRoots(req.SessionID, cfg.ExtraRoots)
-	}
-
-	// Freeze the model-facing connection fields the same way: manual
-	// compaction (compactSession) runs outside any run and would otherwise
-	// sample the persisted default model instead of the Tab's overlay model
-	// (custom headers, base URL, key pool).
-	if req.SessionID != "" {
-		a.mu.Lock()
-		if a.sessionModelConfigs == nil {
-			a.sessionModelConfigs = map[string]sessionModelConfig{}
-		}
-		prev, hasPrev := a.sessionModelConfigs[req.SessionID]
-		modelChanged := hasPrev && isCrossModelSwitch(prev, cfg)
-		a.sessionModelConfigs[req.SessionID] = sessionModelConfigFrom(cfg)
-		a.mu.Unlock()
-
-		if modelChanged {
-			a.stripSessionReasoning(req.SessionID)
-		}
-	}
-
 	runID := newID()
 	ctx, cancel := context.WithCancel(context.Background())
 	a.mu.Lock()
@@ -1694,18 +1684,44 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 	// 注入路径，不会触发本守卫；这是对其它事件下游（如网络端 sink）的
 	// 纵深防御，与 releaseSession 的活跃 run 检查保持对称。
 	if req.SessionID != "" && a.activeRunForSession(req.SessionID) != "" {
-		// 同一会话同时只允许一个活跃 run：并发 run 会交叉执行 saveHistory，
-		// 破坏模型上下文的消息顺序。前端在运行中的追问已走 InjectRunMessage
-		// 注入路径，不会触发本守卫；这是对其它事件下游（如网络端 sink）的
-		// 纵深防御，与 releaseSession 的活跃 run 检查保持对称。
 		a.mu.Unlock()
 		cancel()
 		return "", errSessionBusy
 	}
+	if _, compacting := a.compactingSessions[req.SessionID]; compacting {
+		a.mu.Unlock()
+		cancel()
+		return "", errSessionCompacting
+	}
+	// Reserve the run before publishing its workspace/model so a rejected
+	// concurrent request cannot overwrite the active run's frozen context.
+	modelChanged := false
+	if req.SessionID != "" {
+		if a.sessionWorkspaces == nil {
+			a.sessionWorkspaces = map[string]string{}
+		}
+		if a.sessionModelConfigs == nil {
+			a.sessionModelConfigs = map[string]sessionModelConfig{}
+		}
+		prev, hasPrev := a.sessionModelConfigs[req.SessionID]
+		modelChanged = hasPrev && isCrossModelSwitch(prev, cfg)
+		a.sessionWorkspaces[req.SessionID] = strings.TrimSpace(cfg.Workspace)
+		a.sessionModelConfigs[req.SessionID] = sessionModelConfigFrom(cfg)
+	}
+	if a.sessionRunOutcomes == nil {
+		a.sessionRunOutcomes = map[string]sessionRunOutcome{}
+	}
+	a.sessionRunOutcomes[req.SessionID] = sessionRunOutcome{RunID: runID, Status: "running"}
 	a.runs[runID] = cancel
 	a.runSessions[runID] = req.SessionID
 	a.runInputs[runID] = make(chan string, runInputBufferSize)
 	a.mu.Unlock()
+	if req.SessionID != "" {
+		a.publishSessionExtraRoots(req.SessionID, cfg.ExtraRoots)
+		if modelChanged {
+			a.stripSessionReasoning(req.SessionID)
+		}
+	}
 
 	go a.runChat(ctx, runID, req, cfg)
 	return runID, nil
@@ -1715,9 +1731,17 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 // the text stays part of the contract (saved histories/tests reference it),
 // but classification now goes through the sentinel, not substring matching.
 var (
-	errSessionBusy    = errors.New("session already has an active run")
-	errSessionRunning = errors.New("session is still running")
+	errSessionBusy       = errors.New("session already has an active run")
+	errSessionRunning    = errors.New("session is still running")
+	errSessionCompacting = errors.New("session is compacting")
 )
+
+type sessionRunOutcome struct {
+	RunID     string
+	Status    string
+	Error     string
+	UpdatedAt int64
+}
 
 // activeRunForSession returns the runID of the active run for a session under
 // the assumption that a.mu is already held by the caller. This is the single
@@ -1836,9 +1860,11 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	// a freshly-created session reusing the same id.
 	if _, compacting := a.compactingSessions[sessionID]; compacting {
 		a.mu.Unlock()
-		return errors.New("session is compacting")
+		return errSessionCompacting
 	}
 	delete(a.histories, sessionID)
+	delete(a.historyCacheStates, sessionID)
+	delete(a.frozenPrefixStats, sessionID)
 	delete(a.plans, sessionID)
 	delete(a.planRevisions, sessionID)
 	delete(a.liveBreakdown, sessionID)
@@ -1848,6 +1874,7 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.sessionWorkspaces, sessionID)
 	delete(a.sessionExtraRoots, sessionID)
 	delete(a.sessionModelConfigs, sessionID)
+	delete(a.sessionRunOutcomes, sessionID)
 	delete(a.contextAnchors, sessionID)
 	delete(a.compactFailures, sessionID)
 	delete(a.readCaches, sessionID)
@@ -1888,38 +1915,42 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 // session-level LLM calls outside a run (manual compaction) must replay these
 // fields instead of re-deriving them from the persisted config.
 type sessionModelConfig struct {
-	providerName  string
-	apiFormat     string
-	baseURL       string
-	apiKey        string
-	apiKeys       []string
-	model         string
-	maxTokens     int
-	contextWindow int
-	userAgent     string
-	customHeaders map[string]string
-	tokenParam    string
-	reasoningTag  string
-	visionCapable *bool
+	authType       string
+	oauthAccountID string
+	providerName   string
+	apiFormat      string
+	baseURL        string
+	apiKey         string
+	apiKeys        []string
+	model          string
+	maxTokens      int
+	contextWindow  int
+	userAgent      string
+	customHeaders  map[string]string
+	tokenParam     string
+	reasoningTag   string
+	visionCapable  *bool
 }
 
 // sessionModelConfigFrom snapshots the model-facing fields of cfg. Values are
 // already normalized by StartChat (effectiveConfig + normalizeAPIFormat).
 func sessionModelConfigFrom(cfg ConfigState) sessionModelConfig {
 	return sessionModelConfig{
-		providerName:  cfg.ProviderName,
-		apiFormat:     cfg.APIFormat,
-		baseURL:       cfg.BaseURL,
-		apiKey:        cfg.APIKey,
-		apiKeys:       cloneStringSlice(cfg.APIKeys),
-		model:         cfg.Model,
-		maxTokens:     cfg.MaxTokens,
-		contextWindow: cfg.ContextWindow,
-		userAgent:     cfg.UserAgent,
-		customHeaders: normalizeCustomHeaders(cfg.CustomHeaders),
-		tokenParam:    cfg.TokenParam,
-		reasoningTag:  cfg.ReasoningTag,
-		visionCapable: cfg.VisionCapable,
+		authType:       cfg.AuthType,
+		oauthAccountID: cfg.OAuthAccountID,
+		providerName:   cfg.ProviderName,
+		apiFormat:      cfg.APIFormat,
+		baseURL:        cfg.BaseURL,
+		apiKey:         cfg.APIKey,
+		apiKeys:        cloneStringSlice(cfg.APIKeys),
+		model:          cfg.Model,
+		maxTokens:      cfg.MaxTokens,
+		contextWindow:  cfg.ContextWindow,
+		userAgent:      cfg.UserAgent,
+		customHeaders:  normalizeCustomHeaders(cfg.CustomHeaders),
+		tokenParam:     cfg.TokenParam,
+		reasoningTag:   cfg.ReasoningTag,
+		visionCapable:  cfg.VisionCapable,
 	}
 }
 
@@ -1932,6 +1963,8 @@ func (m sessionModelConfig) apply(base ConfigState) ConfigState {
 		return base
 	}
 	out := base
+	out.AuthType = m.authType
+	out.OAuthAccountID = m.oauthAccountID
 	out.ProviderName = m.providerName
 	out.APIFormat = m.apiFormat
 	out.BaseURL = m.baseURL
@@ -1995,6 +2028,7 @@ func (a *App) stripSessionReasoning(sessionID string) {
 	var cloned []openai.ChatCompletionMessage
 	if ok && len(hist) > 0 {
 		a.histories[sessionID] = stripReasoningContent(hist)
+		a.historyCacheStateLocked(sessionID).revision++
 		cloned = cloneChatMessages(a.histories[sessionID])
 	}
 	delete(a.contextAnchors, sessionID)
@@ -2046,6 +2080,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	// reaches the model (see requestMessages below).
 	var planCheckRequest *openai.ChatCompletionMessage
 	emitRunEnd := func(event string, kind string, payload map[string]any) {
+		a.invalidateGitStatus(cfg.Workspace)
 		if payload == nil {
 			payload = map[string]any{}
 		}
@@ -2056,6 +2091,14 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		payload["cacheMiss"] = runCacheMiss
 		payload["inputTokens"] = runInputTokens
 		payload["outputTokens"] = runOutputTokens
+		a.mu.Lock()
+		if a.sessionRunOutcomes == nil {
+			a.sessionRunOutcomes = map[string]sessionRunOutcome{}
+		}
+		a.sessionRunOutcomes[sessionID] = sessionRunOutcome{
+			RunID: runID, Status: kind, Error: stringValue(payload["error"]), UpdatedAt: time.Now().UnixMilli(),
+		}
+		a.mu.Unlock()
 		a.emit(event, payload)
 		// 任务结束的系统提示音（done/error/cancelled），经桌面通知服务
 		// 播放。服务不可用（headless/测试/平台后端失败）时是静默 no-op。
@@ -2067,6 +2110,11 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			a.saveHistory(req.SessionID, messages)
 		}
 		a.restoreSavedHistoryBreakdown(sessionID)
+		if req.syncSessionIndex {
+			if err := a.syncSessionIndexFromHistory(sessionID); err != nil {
+				a.logAppError("session index sync failed", "sessionId", sessionID, "error", err.Error())
+			}
+		}
 		a.finishRun(runID)
 	}()
 	// Panic 兜底：runChat 在独立 goroutine 里运行，逃逸的 panic 会直接击穿
@@ -2083,7 +2131,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	a.emit("run:start", map[string]any{"runId": runID, "sessionId": sessionID})
 
 	messages = a.buildMessages(req, cfg, a.listCachedSkills())
+	// This run sends the same immutable tool list on every step. Count it once
+	// from that exact list, including across in-run history compaction.
 	tools := a.buildToolsForSession(sessionID, cfg)
+	toolSchemaTokens := estimateToolSchemaTokens(tools)
 	breakdownAcc := newLiveBreakdownAccumulator(messages)
 	// Read de-duplication is scoped to the session, not to this run: a file range
 	// the conversation already carries is omitted instead of re-sent, until a
@@ -2095,8 +2146,8 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			breakdownAcc.reset(msgs)
 		}
 		b := breakdownAcc.update(msgs)
-		b.ToolSchemas = estimateToolSchemaTokens(tools)
-		b.SystemPrompt, _ = a.sessionPrefixBreakdown(sessionID, cfg, a.listCachedSkills())
+		b.ToolSchemas = toolSchemaTokens
+		b.SystemPrompt, _ = a.sessionPrefixBreakdown(sessionID, cfg, nil)
 		a.finalizeSessionBreakdown(sessionID, &b, msgs)
 		a.mu.Lock()
 		a.liveBreakdown[sessionID] = b
@@ -2762,6 +2813,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			if err == nil {
 				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, []string{req.Path}))
 				a.invalidateWorkspaceMapCache(cfg)
+				a.invalidateGitStatus(cfg.Workspace)
 			}
 		}
 	case "create":
@@ -2775,6 +2827,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			if err == nil {
 				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, []string{req.Path}))
 				a.invalidateWorkspaceMapCache(cfg)
+				a.invalidateGitStatus(cfg.Workspace)
 			}
 		}
 	case "delete":
@@ -2791,6 +2844,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			a.withFileOpsLock(func() { data, err = a.deletePathsWithConfig(cfg, deletePaths, req.Recursive) })
 			if err == nil {
 				a.invalidateWorkspaceMapCache(cfg)
+				a.invalidateGitStatus(cfg.Workspace)
 			}
 		}
 	case "command":
@@ -3356,6 +3410,7 @@ func (a *App) CreateFile(req CreateFileRequest) (EditResult, error) {
 	result, err := a.createFileWithConfig(cfg, req)
 	if err == nil {
 		a.invalidateWorkspaceMapCache(cfg)
+		a.invalidateGitStatus(cfg.Workspace)
 	}
 	return result, err
 }
@@ -3370,6 +3425,7 @@ func (a *App) CreateDirectory(req CreateDirectoryRequest) error {
 	err = a.createDirectoryWithConfig(cfg, req)
 	if err == nil {
 		a.invalidateWorkspaceMapCache(cfg)
+		a.invalidateGitStatus(cfg.Workspace)
 	}
 	return err
 }
@@ -3391,6 +3447,7 @@ func (a *App) RenamePath(req RenamePathRequest) (string, error) {
 		return "", err
 	}
 	a.invalidateWorkspaceMapCache(cfg)
+	a.invalidateGitStatus(cfg.Workspace)
 	return renamed, nil
 }
 
@@ -3417,6 +3474,7 @@ func (a *App) DeletePath(req DeletePathRequest) error {
 		return errors.New(summary)
 	}
 	a.invalidateWorkspaceMapCache(cfg)
+	a.invalidateGitStatus(cfg.Workspace)
 	return nil
 }
 
@@ -3435,6 +3493,7 @@ func (a *App) CopyFilesIntoWorkspace(req CopyFilesIntoWorkspaceRequest) (CopyFil
 	result, err := a.copyFilesIntoWorkspaceWithConfig(cfg, req)
 	if err == nil {
 		a.invalidateWorkspaceMapCache(cfg)
+		a.invalidateGitStatus(cfg.Workspace)
 	}
 	return result, err
 }

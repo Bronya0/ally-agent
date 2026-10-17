@@ -27,6 +27,7 @@ import (
 	oa "github.com/openai/openai-go/v3"
 	legacyopenai "github.com/sashabaranov/go-openai"
 
+	"ally-dev/internal/chatgpt"
 	"ally-dev/internal/tools/toolcall"
 )
 
@@ -322,6 +323,15 @@ var llmContextTooLongPattern = regexp.MustCompile(strings.Join([]string{
 // 新文案就漏一个、直接中断整个会话;分类错误的代价只是多等几次有上限的退避。
 // 分类本身已收敛到 classifyLLMError 的单一枚举。
 func shouldRetryLLMError(err error) bool {
+	if isPermanentChatGPTError(err) {
+		return false
+	}
+	if chatgpt.IsPermanent(err) {
+		return false
+	}
+	if err != nil && strings.Contains(err.Error(), "subscription_sharing_usage_limit_exceeded") {
+		return false
+	}
 	if err == nil {
 		return false
 	}
@@ -617,6 +627,16 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 	}
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = defaultMaxTokensForAPIFormat(cfg.APIFormat)
+	}
+	if cfg.AuthType == authChatGPTOAuth {
+		normalizeModelAuth(&cfg)
+		cfg.chatGPTManager = a.chatGPTManager()
+		result, err := a.streamOpenAIResponses(ctx, cfg, model, messages, tools, onEvent)
+		if err != nil {
+			cfg.chatGPTManager.RecordError(cfg.OAuthAccountID, err)
+			err = markUpstreamError(err)
+		}
+		return result, err
 	}
 	keys := resolveKeyPool(cfg)
 	if len(keys) == 0 {

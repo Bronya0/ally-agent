@@ -365,7 +365,7 @@ func (m *scheduledTaskManager) create(cfg ConfigState, req ScheduledTaskToolRequ
 	// LLM 委托型任务记下创建时正在使用的模型：任务存盘后跨重启存活，而配置里的
 	// "最近使用模型"会被用户切走，所以模型必须跟任务一起定下来（命令型任务不记）。
 	if task.Instruction != "" && strings.TrimSpace(cfg.Model) != "" {
-		identity := ModelIdentity{ProviderName: strings.TrimSpace(cfg.ProviderName), Model: strings.TrimSpace(cfg.Model)}
+		identity := ModelIdentity{ProviderName: strings.TrimSpace(cfg.ProviderName), Model: strings.TrimSpace(cfg.Model), OAuthAccountID: cfg.OAuthAccountID}
 		task.Model = &identity
 	}
 	if task.Workspace == "" {
@@ -817,9 +817,9 @@ func normalizeScheduledTask(task *ScheduledTask, now time.Time) error {
 	task.Instruction = strings.TrimSpace(task.Instruction)
 	task.Command = strings.TrimSpace(task.Command)
 	task.Workspace = strings.TrimSpace(task.Workspace)
-	// 模型身份只保留两个字段的去空格版本；空 model id 视为没记。
+	// 模型身份字段去空格；空 model id 视为没记。
 	if task.Model != nil {
-		identity := ModelIdentity{ProviderName: strings.TrimSpace(task.Model.ProviderName), Model: strings.TrimSpace(task.Model.Model)}
+		identity := ModelIdentity{ProviderName: strings.TrimSpace(task.Model.ProviderName), Model: strings.TrimSpace(task.Model.Model), OAuthAccountID: strings.TrimSpace(task.Model.OAuthAccountID)}
 		if identity.Model == "" {
 			task.Model = nil
 		} else {

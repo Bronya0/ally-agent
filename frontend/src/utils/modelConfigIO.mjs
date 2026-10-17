@@ -8,8 +8,13 @@
  * Public License v3. See the LICENSE file for details.
  */
 export const MODEL_CONFIG_EXPORT_VERSION = 1;
+export const CHATGPT_PROVIDER_NAME = 'ChatGPT Official';
+export const CHATGPT_CONTEXT_WINDOW = 512000;
 
 const MODEL_FIELDS = [
+  'authType',
+  'oauthAccountId',
+  'displayName',
   'providerName',
   'apiFormat',
   'baseUrl',
@@ -150,7 +155,10 @@ export function normalizeReasoningEffort(value) {
 export const reasoningEffortLevels = ['auto', 'off', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 export function modelConfigIdentity(model) {
-  return `${normalizeProviderName(model?.providerName).toLocaleLowerCase('en-US')}\u0000${normalizeModelId(model?.model).toLocaleLowerCase('en-US')}`;
+  const account = String(model?.oauthAccountId || '').trim();
+  const provider = account ? CHATGPT_PROVIDER_NAME : normalizeProviderName(model?.providerName);
+  const identity = `${provider.toLocaleLowerCase('en-US')}\u0000${normalizeModelId(model?.model).toLocaleLowerCase('en-US')}`;
+  return account ? `${identity}\u0000${account}` : identity;
 }
 
 function copyModelFields(model) {
@@ -192,12 +200,15 @@ export function modelSnapshotFrom(source) {
       : (source?.apiKey ? [source.apiKey] : [])
   );
   return {
-    providerName: source?.providerName || 'OpenAI Compatible',
+    authType: source?.authType || 'api_key',
+    oauthAccountId: source?.oauthAccountId || '',
+    displayName: source?.displayName || '',
+    providerName: source?.authType === 'chatgpt_oauth' ? CHATGPT_PROVIDER_NAME : (source?.providerName || 'OpenAI Compatible'),
     apiFormat: source?.apiFormat || 'openai_chat',
     baseUrl: source?.baseUrl || '',
     model: source?.model || '',
     maxTokens: source?.maxTokens || 131072,
-    contextWindow: source?.contextWindow || 1000000,
+    contextWindow: source?.contextWindow || (source?.authType === 'chatgpt_oauth' ? CHATGPT_CONTEXT_WINDOW : 1000000),
     tokenParam: source?.tokenParam || 'auto',
     reasoningTag: String(source?.reasoningTag || '').trim() || 'reasoning_content',
     // 视觉能力随快照下发（目录给的三态值）：undefined = 未知，Go 侧按未知处理并
@@ -229,20 +240,22 @@ function normalizeImportedModel(model) {
 
   const apiKeys = normalizeApiKeys(model.apiKeys, model.apiKey);
   const normalized = {
-    providerName: normalizeProviderName(model.providerName),
+    ...(model.authType ? { authType: model.authType, oauthAccountId: model.oauthAccountId || '', displayName: model.displayName || '' } : {}),
+    providerName: model.authType === 'chatgpt_oauth' ? CHATGPT_PROVIDER_NAME : normalizeProviderName(model.providerName),
     apiFormat: String(model.apiFormat || 'openai_chat').trim() || 'openai_chat',
     baseUrl: String(model.baseUrl || '').trim(),
     apiKey: apiKeys[0] || '',
     apiKeys,
     model: modelId,
     maxTokens: Number.isFinite(Number(model.maxTokens)) && Number(model.maxTokens) > 0 ? Math.trunc(Number(model.maxTokens)) : 131072,
-    contextWindow: Number.isFinite(Number(model.contextWindow)) && Number(model.contextWindow) > 0 ? Math.trunc(Number(model.contextWindow)) : 1000000,
+    contextWindow: Number.isFinite(Number(model.contextWindow)) && Number(model.contextWindow) > 0 ? Math.trunc(Number(model.contextWindow)) : (model.authType === 'chatgpt_oauth' ? CHATGPT_CONTEXT_WINDOW : 1000000),
     reasoningTag: String(model.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
     tokenParam: normalizeTokenParam(model.tokenParam),
     reasoningEffort: normalizeReasoningEffort(model.reasoningEffort),
     customHeaders: normalizeCustomHeaders(model.customHeaders) || undefined,
   };
 
+  if (normalized.authType === 'chatgpt_oauth') { normalized.apiKey = ''; normalized.apiKeys = []; normalized.customHeaders = undefined; normalized.apiFormat = 'openai_responses'; normalized.baseUrl = 'https://api.openai.com/v1'; }
   return normalized;
 }
 
