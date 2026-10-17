@@ -58,7 +58,8 @@ type ProxyTestResult struct {
 }
 
 type resolvedProxy struct {
-	status ProxyStatus
+	status        ProxyStatus
+	windowsBypass string // Native Windows patterns have different semantics from NO_PROXY.
 }
 
 func normalizeProxyMode(value string) string {
@@ -137,32 +138,53 @@ func resolveProxy(cfg ConfigState) resolvedProxy {
 		if !status.Enabled && status.PACURL == "" && !status.PACUnsupported {
 			status = detectEnvironmentProxy()
 		}
-		status.Mode = mode
-		if !status.Enabled {
-			if status.PACURL != "" || status.PACUnsupported {
-				status.Error = "PAC/WPAD proxy detected but automatic PAC evaluation is not supported yet"
-			} else if status.Error == "" {
-				status.Error = "no fixed system proxy was detected"
-			}
-		}
+		return resolveDetectedSystemProxy(status, cfg.ProxyNoProxy)
 	}
 	return resolvedProxy{status: status}
 }
 
+func resolveDetectedSystemProxy(status ProxyStatus, extraNoProxy string) resolvedProxy {
+	resolved := resolvedProxy{status: status}
+	resolved.status.Mode = proxyModeSystem
+	if status.Source == "windows" {
+		// Do not feed Windows rules into httpproxy: <local> and arbitrary
+		// wildcards are unsupported, and a plain host there also matches its
+		// subdomains. Keep native rules separate from the user's NO_PROXY list.
+		resolved.windowsBypass = status.NoProxy
+		resolved.status.NoProxy = extraNoProxy
+	} else {
+		resolved.status.NoProxy = strings.Join([]string{status.NoProxy, extraNoProxy}, ",")
+	}
+	if !status.Enabled {
+		if status.PACURL != "" || status.PACUnsupported {
+			resolved.status.Error = "PAC/WPAD proxy detected but automatic PAC evaluation is not supported yet"
+		} else if status.Error == "" {
+			resolved.status.Error = "no fixed system proxy was detected"
+		}
+	}
+	return resolved
+}
+
 func proxyForConfig(cfg ConfigState, req *http.Request) (*url.URL, error) {
-	resolved := resolveProxy(cfg)
+	return proxyForResolved(resolveProxy(cfg), req.URL)
+}
+
+func proxyForResolved(resolved resolvedProxy, target *url.URL) (*url.URL, error) {
 	if resolved.status.Mode == proxyModeOff {
 		return nil, nil
 	}
 	if resolved.status.Error != "" || !resolved.status.Enabled {
 		return nil, errors.New(resolved.status.Error)
 	}
+	if matchesWindowsProxyBypass(target.Hostname(), resolved.windowsBypass) {
+		return nil, nil
+	}
 	proxyCfg := &httpproxy.Config{
 		HTTPProxy:  resolved.status.HTTPProxy,
 		HTTPSProxy: resolved.status.HTTPSProxy,
 		NoProxy:    mergeNoProxy(resolved.status.NoProxy),
 	}
-	return proxyCfg.ProxyFunc()(req.URL)
+	return proxyCfg.ProxyFunc()(target)
 }
 
 func proxyHTTPClient(cfg ConfigState, allowPrivate bool, timeout time.Duration) *http.Client {
@@ -522,7 +544,9 @@ func proxyEnvironment(cfg ConfigState, base []string) []string {
 	if strings.HasPrefix(strings.ToLower(resolved.status.HTTPProxy), "socks") {
 		env = append(env, "ALL_PROXY="+resolved.status.HTTPProxy, "all_proxy="+resolved.status.HTTPProxy)
 	}
-	noProxy := mergeNoProxy(resolved.status.NoProxy)
+	// Export portable IPv4 wildcard rules as CIDRs for child processes.
+	// Arbitrary Windows globs and <local> have no universal NO_PROXY equivalent.
+	noProxy := mergeNoProxy(strings.Join([]string{resolved.windowsBypass, resolved.status.NoProxy}, ","))
 	env = append(env, "NO_PROXY="+noProxy, "no_proxy="+noProxy)
 	return env
 }
@@ -584,7 +608,7 @@ func mergeNoProxy(value string) string {
 	for _, part := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ';' }) {
 		part = strings.TrimSpace(part)
 		if part != "" && part != "<local>" {
-			parts = append(parts, part)
+			parts = append(parts, proxyIPv4WildcardCIDR(part))
 		}
 	}
 	return strings.Join(parts, ",")

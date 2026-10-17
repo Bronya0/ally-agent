@@ -822,6 +822,10 @@ async function testProxy() {
       // 不传 targetUrl：后端按"最近使用模型"的 baseUrl 探，比前端传一份可能陈旧的
       // 地址更准（前端 config 里已经没有模型字段）。
     });
+    if (!result.ok) {
+      message.error(t('settings.proxyTestFailed', { error: result.error || `HTTP ${result.statusCode || 0}` }));
+      return;
+    }
     message.success(t('settings.proxyTestSuccess', { status: result.statusCode, duration: result.durationMs, proxy: result.proxy || t('settings.proxyDirect') }));
   } catch (err) {
     message.error(t('settings.proxyTestFailed', { error: String(err) }));
