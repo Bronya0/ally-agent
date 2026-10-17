@@ -1914,6 +1914,16 @@ function setExplorerRef(tabId, el) {
   else explorerRefsByTab.delete(tabId);
 }
 
+function refreshExplorersForWorkspace(workspace) {
+  if (!String(workspace || '').trim()) return;
+  // 同一工作区可出现在多个 Tab；只刷新匹配的已挂载实例，关闭的树下次打开会重新加载。
+  for (const [tabId, explorer] of explorerRefsByTab) {
+    if (sameWorkspacePath(explorerWorkspaceFor(tabId), workspace)) {
+      void explorer.refreshTree?.();
+    }
+  }
+}
+
 function clearActiveExplorerTreeSelection(event) {
   if (event?.target?.closest?.('.workspace-explorer')) return;
   explorerRefsByTab.get(activeWorkspaceId.value)?.clearTreeSelection?.();
@@ -5281,6 +5291,8 @@ function bindRuntimeEvents() {
     session.runId = '';
     session.isRunning = false;
     clearRunPhase(session);
+    // 成功、报错和取消之前都可能已写入文件；使用 run 所属工作区，覆盖后台 Tab 与 KB。
+    refreshExplorersForWorkspace(session.workspace);
     if (variant === 'error') {
       // 仅当前可见会话插入错误/取消提示消息；插入发生在 setAssistant* 之前，
       // 与原实现一致（插入的消息带 runId，roundDuration/cacheRate 落在它上面）。

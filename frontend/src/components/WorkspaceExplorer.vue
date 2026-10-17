@@ -2071,5 +2071,5 @@ onBeforeUnmount(() => {
   treeData.value = [];
 });
 
-defineExpose({ requestClose, loadRoot, clearTreeSelection });
+defineExpose({ requestClose, loadRoot, refreshTree, clearTreeSelection });
 </script>
