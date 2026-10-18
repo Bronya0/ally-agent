@@ -519,7 +519,7 @@ Public License v3. See the LICENSE file for details.
 
           <n-modal v-model:show="updateModalVisible" preset="card" :title="$t('app.update.title')" class="update-modal" :mask-closable="false" :close-on-esc="false" :show-close="!isUpdateBusy">
             <div class="update-modal-body">
-              <template v-if="updateState === 'downloading' || updateState === 'extracting'">
+              <template v-if="updateInProgress">
                 <div class="update-status-text">{{ updateState === 'downloading' ? $t('app.update.downloading') : $t('app.update.extracting') }}</div>
                 <div class="update-version">{{ $t('app.update.version', { version: latestReleaseVersion }) }}</div>
                 <div class="update-progress-bar">
@@ -529,18 +529,10 @@ Public License v3. See the LICENSE file for details.
                   <span>{{ updateProgress.percent }}%</span>
                   <span v-if="updateState === 'downloading' && updateProgress.bytesTotal > 0">{{ formatBytes(updateProgress.bytesDownloaded) }} / {{ formatBytes(updateProgress.bytesTotal) }}</span>
                 </div>
-                <div class="update-actions">
-                  <n-button size="small" tertiary @click="cancelUpdate">{{ $t('app.update.cancel') }}</n-button>
-                </div>
               </template>
               <template v-else-if="updateState === 'ready'">
                 <div class="update-status-text">{{ $t('app.update.ready', { version: latestReleaseVersion }) }}</div>
                 <div class="update-ready-hint">{{ $t('app.update.readyHint') }}</div>
-                <div class="update-actions">
-                  <n-button size="small" tertiary @click="skipCurrentVersion">{{ $t('app.update.skip') }}</n-button>
-                  <n-button size="small" secondary @click="closeUpdateModal">{{ $t('app.update.later') }}</n-button>
-                  <n-button size="small" type="primary" @click="applyAndRestart">{{ $t('app.update.restartNow') }}</n-button>
-                </div>
               </template>
               <template v-else-if="updateState === 'applying'">
                 <div class="update-status-text">{{ $t('app.update.applying') }}</div>
@@ -554,14 +546,30 @@ Public License v3. See the LICENSE file for details.
               <template v-else-if="updateState === 'error'">
                 <div class="update-status-text error">{{ $t('app.update.failed') }}</div>
                 <div class="update-error-detail">{{ updateError }}</div>
-                <div class="update-actions">
-                  <n-button size="small" secondary @click="closeUpdateModal">{{ $t('common.close') }}</n-button>
-                  <n-button size="small" type="primary" @click="startUpdate">{{ $t('app.update.retry') }}</n-button>
-                </div>
               </template>
-              <div v-if="updateState === 'downloading' || updateState === 'extracting' || updateState === 'ready' || updateState === 'error'" class="update-github-row">
-                <span class="update-github-label">{{ $t('app.update.githubLabel') }}</span>
-                <button class="update-github-link" @click="openUpdateReleasesPage">{{ ALLY_RELEASES_URL }}</button>
+              <div v-if="updateActionsVisible" class="update-actions">
+                <div class="update-actions-lead">
+                  <n-button size="small" tertiary @click="openUpdateReleasesPage">
+                    <template #icon><ExportOutlined /></template>
+                    {{ $t('app.update.releasesButton') }}
+                  </n-button>
+                  <n-button size="small" tertiary @click="openRepositoryPage">
+                    <template #icon><GithubOutlined /></template>
+                    {{ $t('app.update.starButton') }}
+                  </n-button>
+                </div>
+                <div class="update-actions-state">
+                  <n-button v-if="updateInProgress" size="small" tertiary @click="cancelUpdate">{{ $t('app.update.cancel') }}</n-button>
+                  <template v-else-if="updateState === 'ready'">
+                    <n-button size="small" tertiary @click="skipCurrentVersion">{{ $t('app.update.skip') }}</n-button>
+                    <n-button size="small" secondary @click="closeUpdateModal">{{ $t('app.update.later') }}</n-button>
+                    <n-button size="small" type="primary" @click="applyAndRestart">{{ $t('app.update.restartNow') }}</n-button>
+                  </template>
+                  <template v-else-if="updateState === 'error'">
+                    <n-button size="small" secondary @click="closeUpdateModal">{{ $t('common.close') }}</n-button>
+                    <n-button size="small" type="primary" @click="startUpdate">{{ $t('app.update.retry') }}</n-button>
+                  </template>
+                </div>
               </div>
             </div>
           </n-modal>
@@ -702,6 +710,8 @@ import CloseOutlined from '@vicons/antd/CloseOutlined';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import ReloadOutlined from '@vicons/antd/ReloadOutlined';
 import FolderOpenOutlined from '@vicons/antd/FolderOpenOutlined';
+import ExportOutlined from '@vicons/antd/ExportOutlined';
+import GithubOutlined from '@vicons/antd/GithubOutlined';
 import AllyWordmark from './components/AllyWordmark.vue';
 import ComposerInfoBar from './components/ComposerInfoBar.vue';
 import RunSpinner from './components/RunSpinner.vue';
@@ -2033,6 +2043,12 @@ const checkUpdateResult = ref({ state: 'idle' });
 const isUpdateBusy = computed(() => {
   return updateState.value === 'downloading' || updateState.value === 'extracting' || updateState.value === 'applying' || updateState.value === 'restarting';
 });
+
+// Which update states own the action row, and which pair is still in flight
+// (that pair shares the cancel button). Kept beside isUpdateBusy so the state
+// lists cannot drift apart from each other or from the template.
+const updateInProgress = computed(() => updateState.value === 'downloading' || updateState.value === 'extracting');
+const updateActionsVisible = computed(() => updateInProgress.value || updateState.value === 'ready' || updateState.value === 'error');
 
 const ALLY_REPOSITORY_URL = 'https://github.com/Bronya0/ally-agent';
 const ALLY_RELEASES_URL = 'https://github.com/Bronya0/ally-agent/releases';

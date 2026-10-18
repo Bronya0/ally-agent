@@ -5247,11 +5247,25 @@ html.rail-expanded .chat-layout {
   line-height: 1.55;
   color: var(--ally-text-muted);
 }
+/* The action row is split into two groups so a tight row wraps a whole group
+   instead of dropping a single button onto its own line; the secondary entries
+   stay on the left, the state's own buttons on the right. */
 .update-actions {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
   margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ally-border-subtle);
+}
+.update-actions-lead,
+.update-actions-state {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .update-error-detail {
   font-size: var(--ally-sub-font-size);
@@ -5265,32 +5279,6 @@ html.rail-expanded .chat-layout {
   overflow-y: auto;
   word-break: break-word;
   white-space: pre-wrap;
-}
-.update-github-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--ally-text-muted);
-  margin-top: 2px;
-}
-.update-github-label {
-  flex-shrink: 0;
-}
-.update-github-link {
-  background: none;
-  border: none;
-  padding: 0;
-  font-size: 12px;
-  color: var(--ally-success-deep);
-  cursor: pointer;
-  text-decoration: underline;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.update-github-link:hover {
-  color: var(--ally-success);
 }
 .update-spinner {
   width: 28px;
