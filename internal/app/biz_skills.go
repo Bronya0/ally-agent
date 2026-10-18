@@ -322,8 +322,8 @@ func (a *App) handleSkillToolCall(skillName, skillArgs string) (map[string]any, 
 			if err != nil {
 				return nil, fmt.Errorf("failed to read skill: %w", err)
 			}
-			if len(content) > maxSkillContentBytes {
-				return nil, fmt.Errorf("skill %q is too large: %d bytes (max %d); use read on %q with targeted line ranges, or move reference material into supporting files", sk.Name, len(content), maxSkillContentBytes, sk.Path)
+			if len(content) > maxSkillFileBytes {
+				return nil, fmt.Errorf("skill %q is too large: %d bytes (max %d); use read on %q with targeted line ranges, or move reference material into supporting files", sk.Name, len(content), maxSkillFileBytes, sk.Path)
 			}
 
 			loadedContent := content
@@ -344,9 +344,12 @@ func (a *App) handleSkillToolCall(skillName, skillArgs string) (map[string]any, 
 }
 
 const (
-	maxSkillContentBytes = 64 * 1024
-	skillTreeEntryLimit  = 80
-	skillTreeByteLimit   = 8 * 1024
+	// maxSkillFileBytes 是单个技能文件的字节上限，加载与写入共用同一口径：面板存得下的
+	// 技能，skill 工具就必须加载得动（历史上 64KB 加载上限配 256KB 保存上限，面板保存
+	// 成功的技能反而加载被拒）。正文仍然整篇要么全给、要么报错，不做半截加载。
+	maxSkillFileBytes   = 256 * 1024
+	skillTreeEntryLimit = 80
+	skillTreeByteLimit  = 8 * 1024
 )
 
 // buildSkillDirTree lists up to two levels within one shared entry/byte budget.
@@ -600,8 +603,7 @@ const (
 	// (<workspace>/.agents/skills), so only that project sees it.
 	skillTargetProject = "project"
 
-	skillNameMaxRunes  = 64
-	skillDraftMaxBytes = 256 * 1024
+	skillNameMaxRunes = 64
 )
 
 // SkillDraft is the create-skill payload from the Skills panel: Target picks the
@@ -635,8 +637,8 @@ func (a *App) SaveSkill(draft SkillDraft) (string, error) {
 	}
 	whenToUse := collapseToOneLine(draft.WhenToUse)
 	content := strings.TrimSpace(draft.Content)
-	if len(content) > skillDraftMaxBytes {
-		return "", fmt.Errorf("skill content is too large: %d bytes (max %d)", len(content), skillDraftMaxBytes)
+	if len(content) > maxSkillFileBytes {
+		return "", fmt.Errorf("skill content is too large: %d bytes (max %d)", len(content), maxSkillFileBytes)
 	}
 
 	root, err := a.skillWriteRoot(draft.Target)

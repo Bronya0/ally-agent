@@ -108,7 +108,7 @@ func TestSkillInstructionsAreWholeOrReturnTargetedReadGuidance(t *testing.T) {
 	for _, name := range []string{"normal", "large"} {
 		content := "---\nname: " + name + "\ndescription: test skill\n---\n" + strings.Repeat("instructions\n", 2000) + "END_INSTRUCTIONS"
 		if name == "large" {
-			content += strings.Repeat("reference\n", maxSkillContentBytes/5)
+			content += strings.Repeat("reference\n", maxSkillFileBytes/5)
 		}
 		writeSkillTestFile(t, a.config.Workspace, ".agents/skills/"+name+"/SKILL.md", content)
 	}
