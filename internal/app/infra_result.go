@@ -1456,14 +1456,6 @@ func decodeToolData(data any, target any) bool {
 	return json.Unmarshal(raw, target) == nil
 }
 
-func marshalToolResultOrFallback(result toolResult, fallback string) string {
-	raw, err := json.Marshal(result)
-	if err != nil {
-		return fallback
-	}
-	return string(raw)
-}
-
 func compactTextForModel(output string, spec compactTextSpec) (string, bool) {
 	limit := spec.limit
 	if limit <= 0 || len(output) <= limit {

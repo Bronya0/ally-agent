@@ -344,16 +344,16 @@ func TestRedirectionTargetsSplitReadAndWrite(t *testing.T) {
 	if got := ShellRedirectionTargets(commandLine); !slices.Equal(got, []string{"out.txt"}) {
 		t.Fatalf("write targets = %#v, want [out.txt]", got)
 	}
-	if got := ShellInputRedirectionTargets(commandLine); !slices.Equal(got, []string{"in.txt"}) {
-		t.Fatalf("input targets = %#v, want [in.txt]", got)
+	if operands := DisclosingPathOperands(commandLine); !slices.Contains(operands, "in.txt") {
+		t.Fatalf("the input target must be disclosed, got %#v", operands)
 	}
 
 	// 内联内容（heredoc）与文件描述符复制都不是外部路径。
 	heredoc := "cat <<EOF\nbody\nEOF"
 	for _, inline := range []string{heredoc, `cat <&0`, `wc < /dev/null`} {
-		for _, operand := range ShellInputRedirectionTargets(inline) {
+		for _, operand := range DisclosingPathOperands(inline) {
 			if strings.Contains(operand, "body") || strings.Contains(operand, "&") {
-				t.Fatalf("ShellInputRedirectionTargets(%q) = %#v", inline, operand)
+				t.Fatalf("DisclosingPathOperands(%q) = %#v", inline, operand)
 			}
 		}
 	}

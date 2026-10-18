@@ -298,67 +298,9 @@ import MenuOutlined from '@vicons/antd/MenuOutlined';
 import FolderOpenTwotone from '@vicons/antd/FolderOpenTwotone';
 import CodeOutlined from '@vicons/antd/CodeOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
-import { formatDateTime, reasoningEffortLabel, t } from '../i18n.mjs';
+import { reasoningEffortLabel, t } from '../i18n.mjs';
 import { formatModelLabel } from '../utils/modelLabel.mjs';
 import { modelConfigIdentity, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
-import { saveTextFile } from '../utils/download.mjs';
-
-function formatMessageContent(msg) {
-  if (!msg) return '';
-  if (msg.welcome) return msg.content || '';
-  if (msg.content) return msg.content;
-  return '';
-}
-
-function formatMessageAsMD(msg) {
-  const roleLabel = msg.role === 'user' ? 'User' : 'Assistant';
-  const content = formatMessageContent(msg);
-  if (!content) return '';
-  return `> **${roleLabel}:**
-
-${content}
-`;
-}
-
-function exportLastResponse() {
-  const msgs = props.getSessionMessages();
-  if (!msgs || !msgs.length) return;
-  // Find the last assistant message with content
-  let lastAssistant = null;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i];
-    if (m.role === 'assistant' && m.content && !m.welcome) {
-      lastAssistant = m;
-      break;
-    }
-  }
-  if (!lastAssistant) return;
-  const md = formatMessageAsMD(lastAssistant);
-  downloadMD(md, `ally-response.md`);
-}
-
-function exportFullSession() {
-  const msgs = props.getSessionMessages();
-  if (!msgs || !msgs.length) return;
-  const parts = [];
-  parts.push(`# ${props.sessionTitle || t('app.export.sessionTitle')}\n`);
-  parts.push(`> ${t('app.export.time', { time: formatDateTime(new Date()) })}`);
-  parts.push('');
-  for (const msg of msgs) {
-    if (msg.welcome) continue;
-    if (msg.role === 'tool_call') continue;
-    const md = formatMessageAsMD(msg);
-    if (md) parts.push(md);
-  }
-  downloadMD(parts.join('\n---\n\n'), `ally-session.md`);
-}
-
-function downloadMD(content, filename) {
-  // Native save dialog via the Wails binding: WKWebView (macOS) ignores
-  // <a download>, so the old blob-download approach silently did nothing
-  // there. Falls back to blob download when the binding is unavailable.
-  saveTextFile({ filename, content, filterName: 'Markdown (*.md)', filterPattern: '*.md' });
-}
 
 const props = defineProps({
   config: { type: Object, required: true },
@@ -371,12 +313,6 @@ const props = defineProps({
   footerStatsLoading: { type: Boolean, default: false },
   gitStatsLoading: { type: Boolean, default: false },
   workspaceUsageLoading: { type: Boolean, default: false },
-  // Lazy getter for the session's messages array — only invoked when the user
-  // actually triggers an export. Passing the full array as a prop forced Vue
-  // to diff the entire array on every streaming delta / history mutation,
-  // even though ComposerInfoBar's template never reads sessionMessages.
-  getSessionMessages: { type: Function, default: () => [] },
-  sessionTitle: { type: String, default: '' },
   contextPercent: { type: String, default: '0.0%' },
   contextUsed: { type: String, default: '0' },
   contextMax: { type: String, default: '0' },

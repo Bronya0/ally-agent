@@ -83,8 +83,6 @@ function toggleExpanded() {
   localExpanded.value = !localExpanded.value;
 }
 
-const isRunning = computed(() => props.msg.status === 'running');
-
 function parseCountTemplate(tpl, count) {
   const s = String(tpl || '');
   const placeholder = '{count}';

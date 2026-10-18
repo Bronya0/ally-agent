@@ -8,6 +8,7 @@
 package app
 
 import (
+	"context"
 	"reflect"
 	"testing"
 )
@@ -63,7 +64,8 @@ func TestParseGitStatusV2(t *testing.T) {
 func TestComputeMultiRepoGitStatusEmptyOrNonRepo(t *testing.T) {
 	tempDir := t.TempDir()
 	// Test on an empty folder with no repos
-	st := computeMultiRepoGitStatus(tempDir)
+	ctx := context.Background()
+	st := computeMultiRepoGitStatusWithContext(ctx, discoverSubRepos(ctx, tempDir))
 	if st.IsRepo {
 		t.Fatalf("expected IsRepo=false for empty dir, got %#v", st)
 	}

@@ -316,13 +316,6 @@ func (a *App) startApiListenerLocked(settings apiSettings) error {
 	return nil
 }
 
-// stopApiListener 停止当前 listener（幂等）。带短超时优雅关闭。
-func stopApiListener() {
-	apiSvc.opMu.Lock()
-	defer apiSvc.opMu.Unlock()
-	stopApiListenerLocked()
-}
-
 func stopApiListenerLocked() {
 	apiSvc.mu.Lock()
 	server := apiSvc.server

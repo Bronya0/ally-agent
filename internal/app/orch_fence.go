@@ -59,24 +59,6 @@ func evalExistingPrefixOrSelf(p string) string {
 	return p
 }
 
-// checkCommandSafety resolves a request cwd before inspecting relative mutation
-// targets. It remains a compatibility wrapper for tests and callers that do not
-// already have the resolved cwd.
-func checkCommandSafety(req CommandRequest, roots []string) error {
-	workingDir := ""
-	if len(roots) > 0 {
-		workingDir = roots[0]
-	}
-	if strings.TrimSpace(req.Cwd) != "" {
-		resolved, err := resolveCommandCwd(roots, req.Cwd)
-		if err != nil {
-			return err
-		}
-		workingDir = resolved
-	}
-	return checkCommandSafetyAtCwd(req, roots, workingDir)
-}
-
 // checkCommandSafetyAtCwd is THE command safety fence: every check the fence owns
 // runs from here, in one place, and exactly one part of it depends on who owns
 // the filesystem boundary — asked once, below, through the single judgement

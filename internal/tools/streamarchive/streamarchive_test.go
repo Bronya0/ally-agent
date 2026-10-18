@@ -37,7 +37,7 @@ func TestStreamArchivePackAndUnpack(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/main"), 0o644)
 
 	var buf bytes.Buffer
-	statsPack, err := Pack(srcDir, "mybundle", &buf)
+	statsPack, err := PackWithFilter(srcDir, "mybundle", &buf, nil)
 	if err != nil {
 		t.Fatalf("Pack failed: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestStreamArchivePackAndUnpack(t *testing.T) {
 		t.Fatalf("expected 2 files packed, got %d", statsPack.FileCount)
 	}
 
-	statsUnpack, err := Unpack(&buf, destDir, false)
+	statsUnpack, err := UnpackTarget(&buf, filepath.Join(destDir, "mybundle"), false)
 	if err != nil {
 		t.Fatalf("Unpack failed: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestStreamArchiveSingleFile(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	statsPack, err := Pack(srcFile, "custom_name.txt", &buf)
+	statsPack, err := PackWithFilter(srcFile, "custom_name.txt", &buf, nil)
 	if err != nil {
 		t.Fatalf("Pack single file failed: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestStreamArchiveSingleFile(t *testing.T) {
 	}
 
 	destDir := filepath.Join(tempDir, "dest_single")
-	statsUnpack, err := Unpack(&buf, destDir, false)
+	statsUnpack, err := UnpackTarget(&buf, filepath.Join(destDir, "custom_name.txt"), false)
 	if err != nil {
 		t.Fatalf("Unpack single file failed: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestStreamArchiveTarSlipProtection(t *testing.T) {
 	_, _ = tw.Write([]byte("evil"))
 	_ = tw.Close()
 
-	_, err := Unpack(&buf, destDir, false)
+	_, err := UnpackTarget(&buf, filepath.Join(destDir, "requested"), false)
 	if err == nil {
 		t.Fatalf("expected Tar-Slip attack to be rejected, but Unpack succeeded")
 	}
@@ -133,7 +133,7 @@ func TestStreamArchiveVCSRejection(t *testing.T) {
 			_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: 4, Typeflag: tar.TypeReg})
 			_, _ = tw.Write([]byte("evil"))
 			_ = tw.Close()
-			if _, err := Unpack(&buf, t.TempDir(), false); err == nil {
+			if _, err := UnpackTarget(&buf, filepath.Join(t.TempDir(), "sub"), false); err == nil {
 				t.Fatal("expected VCS path unpack to be rejected")
 			}
 		})
@@ -159,19 +159,19 @@ func TestStreamArchiveOverwrite(t *testing.T) {
 
 	// Initial unpack
 	tarBytes := buf.Bytes()
-	_, err := Unpack(bytes.NewReader(tarBytes), destDir, false)
+	_, err := UnpackTarget(bytes.NewReader(tarBytes), filepath.Join(destDir, "target.txt"), false)
 	if err != nil {
 		t.Fatalf("initial unpack failed: %v", err)
 	}
 
 	// 2. Unpack without overwrite should fail
-	_, err = Unpack(bytes.NewReader(tarBytes), destDir, false)
+	_, err = UnpackTarget(bytes.NewReader(tarBytes), filepath.Join(destDir, "target.txt"), false)
 	if err == nil {
 		t.Fatalf("expected unpack without overwrite to fail, but succeeded")
 	}
 
 	// 3. Unpack with overwrite should succeed
-	_, err = Unpack(bytes.NewReader(tarBytes), destDir, true)
+	_, err = UnpackTarget(bytes.NewReader(tarBytes), filepath.Join(destDir, "target.txt"), true)
 	if err != nil {
 		t.Fatalf("unpack with overwrite failed: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestStreamArchiveOverwrite(t *testing.T) {
 	_, _ = dirTw.Write([]byte("child"))
 	_ = dirTw.Close()
 
-	_, err = Unpack(bytes.NewReader(dirBuf.Bytes()), destDir, true)
+	_, err = UnpackTarget(bytes.NewReader(dirBuf.Bytes()), filepath.Join(destDir, "target.txt"), true)
 	if err != nil {
 		t.Fatalf("overwrite file with directory failed: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestStreamArchiveOverwrite(t *testing.T) {
 	}
 
 	// 5. Overwrite directory with file
-	_, err = Unpack(bytes.NewReader(tarBytes), destDir, true)
+	_, err = UnpackTarget(bytes.NewReader(tarBytes), filepath.Join(destDir, "target.txt"), true)
 	if err != nil {
 		t.Fatalf("overwrite directory with file failed: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestStreamArchiveModeNormalization(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if _, err := Pack(srcFile, "file.txt", &buf); err != nil {
+	if _, err := PackWithFilter(srcFile, "file.txt", &buf, nil); err != nil {
 		t.Fatalf("Pack failed: %v", err)
 	}
 
@@ -259,7 +259,7 @@ func TestStreamArchiveTarSlipAbsoluteAndVolume(t *testing.T) {
 		_, _ = tw.Write([]byte("evil"))
 		_ = tw.Close()
 
-		_, err := Unpack(&buf, destDir, false)
+		_, err := UnpackTarget(&buf, filepath.Join(destDir, "requested"), false)
 		if err == nil {
 			t.Fatalf("expected name %q to be rejected as Tar-Slip violation, but succeeded", badName)
 		}
@@ -280,7 +280,7 @@ func TestStreamArchiveSymlinkEscapeRejection(t *testing.T) {
 		})
 		_ = tw.Close()
 
-		_, err := Unpack(&buf, destDir, false)
+		_, err := UnpackTarget(&buf, filepath.Join(destDir, "link_entry"), false)
 		if err == nil {
 			t.Fatalf("expected symlink pointing to %q to be rejected, but succeeded", badTarget)
 		}
@@ -315,7 +315,7 @@ func TestStreamArchivePackWithFilter(t *testing.T) {
 func TestStreamArchiveEmptyDirectory(t *testing.T) {
 	src := t.TempDir()
 	var buf bytes.Buffer
-	packed, err := Pack(src, "empty", &buf)
+	packed, err := PackWithFilter(src, "empty", &buf, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +360,7 @@ func TestStreamArchiveExistingSymlinkParent(t *testing.T) {
 	_ = tw.WriteHeader(&tar.Header{Name: "link/evil.txt", Typeflag: tar.TypeReg, Size: 4, Mode: 0o644})
 	_, _ = tw.Write([]byte("evil"))
 	_ = tw.Close()
-	if _, err := Unpack(&buf, dest, true); err == nil {
+	if _, err := UnpackTarget(&buf, filepath.Join(dest, "link"), true); err == nil {
 		t.Fatal("accepted symlink parent escape")
 	}
 	if _, err := os.Stat(filepath.Join(outside, "evil.txt")); !os.IsNotExist(err) {
@@ -408,7 +408,7 @@ func TestStreamArchivePrivateModePreserved(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if _, err := Pack(src, "private", &buf); err != nil {
+	if _, err := PackWithFilter(src, "private", &buf, nil); err != nil {
 		t.Fatal(err)
 	}
 	hdr, err := tar.NewReader(&buf).Next()

@@ -2609,6 +2609,22 @@ type commandSafetyCase struct {
 	wantText []string
 }
 
+// fenceCommandForTest 走生产调用点的同一段路：runCommandWithConfig 与 orch_services
+// 都是先把请求里的 cwd 解析出来，再进围栏唯一入口 checkCommandSafetyAtCwd（围栏不再
+// 自己解析 cwd，那层兼容包装已删除）。测试照做，用例表与断言一字不改。
+func fenceCommandForTest(t *testing.T, req CommandRequest, roots []string) error {
+	t.Helper()
+	workingDir := roots[0]
+	if strings.TrimSpace(req.Cwd) != "" {
+		resolved, err := resolveCommandCwd(roots, req.Cwd)
+		if err != nil {
+			return err
+		}
+		workingDir = resolved
+	}
+	return checkCommandSafetyAtCwd(req, roots, workingDir)
+}
+
 // TestCommandSafetyFence 是命令围栏的全表：放行的一类（读区外、命令里的关键词只是
 // 数据、heredoc 正文、动态目标），拦截的一类（显式删除、高危语义、改动区外已存在的
 // 目标、工作区软链穿透、相对路径按 cwd 解析后越界）。
@@ -2708,7 +2724,7 @@ func TestCommandSafetyFence(t *testing.T) {
 			if tc.build != nil {
 				command = tc.build(t, workspace, outside)
 			}
-			err := checkCommandSafety(CommandRequest{Command: command, Cwd: tc.cwd}, []string{workspace})
+			err := fenceCommandForTest(t, CommandRequest{Command: command, Cwd: tc.cwd}, []string{workspace})
 			if tc.wantCode == "" {
 				if err != nil {
 					t.Fatalf("command %q should be allowed: %v", command, err)
@@ -2742,7 +2758,7 @@ func TestCommandSafetyResolvesTargetsAgainstCwdAndSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code := toolErrorCode(checkCommandSafety(CommandRequest{
+	if code := toolErrorCode(fenceCommandForTest(t, CommandRequest{
 		Command: fmt.Sprintf(`touch %q`, filepath.ToSlash(relative)),
 		Cwd:     "build",
 	}, []string{workspace})); code != "E_PATH_OUTSIDE" {
@@ -2757,7 +2773,7 @@ func TestCommandSafetyResolvesTargetsAgainstCwdAndSymlinks(t *testing.T) {
 	}
 	writeOutsideFile(t, outside, "existing.txt")
 	for _, command := range []string{`touch link/existing.txt`, `printf created > link/new.txt`} {
-		if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: command}, []string{workspace})); code != "E_PATH_OUTSIDE" {
+		if code := toolErrorCode(fenceCommandForTest(t, CommandRequest{Command: command}, []string{workspace})); code != "E_PATH_OUTSIDE" {
 			t.Fatalf("workspace symlink mutation must be blocked for %q, got %q", command, code)
 		}
 	}
@@ -3019,17 +3035,26 @@ func TestSessionReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 	}
 }
 
+// seedSessionReadCacheForTest writes one entry the way production does: putLocked
+// requires the caller to hold c.mu, and the read path reaches it from
+// dedupeResult while holding the lock.
+func seedSessionReadCacheForTest(cache *sessionReadCache, key, hash string) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	cache.putLocked(key, hash)
+}
+
 func TestSessionReadCacheEvictsEntriesUnderPressure(t *testing.T) {
 	cache := newSessionReadCache()
 	// Fill past the entry budget; every insertion is a distinct key.
 	for i := 0; i < sessionReadCacheMaxEntries+8; i++ {
-		cache.put(fmt.Sprintf("key-%d", i), "hash-val")
+		seedSessionReadCacheForTest(cache, fmt.Sprintf("key-%d", i), "hash-val")
 	}
 	if got := len(cache.entries); got > sessionReadCacheMaxEntries {
 		t.Fatalf("cache entries = %d, want <= %d", got, sessionReadCacheMaxEntries)
 	}
 	// Re-storing an existing key must not grow the cache.
-	cache.put("key-0", "hash-val-updated")
+	seedSessionReadCacheForTest(cache, "key-0", "hash-val-updated")
 	if got := len(cache.entries); got > sessionReadCacheMaxEntries {
 		t.Fatalf("cache entries after re-store = %d, want <= %d", got, sessionReadCacheMaxEntries)
 	}

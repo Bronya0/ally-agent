@@ -136,13 +136,18 @@ func TestValidateArgsIgnoresANilSchema(t *testing.T) {
 	}
 }
 
-func TestCheckPatternsRejectsABrokenExpression(t *testing.T) {
-	good := objectSchema(map[string]any{"version": map[string]any{"type": "string", "pattern": "^[0-9a-z]{6}$"}})
-	if err := CheckPatterns(good); err != nil {
-		t.Fatalf("a valid pattern must compile: %v", err)
+// TestValidateArgsEnforcesAPattern: a declared pattern must be enforced by the
+// production validator, and a pattern that does not compile must be reported
+// rather than let a typo silently retire the constraint.
+func TestValidateArgsEnforcesAPattern(t *testing.T) {
+	schema := objectSchema(map[string]any{"version": map[string]any{"type": "string", "pattern": "^[0-9a-z]{6}$"}})
+	if violations := validateJSON(t, schema, `{"version":"abc123"}`); len(violations) != 0 {
+		t.Fatalf("a value matching the pattern must pass: %v", violations)
 	}
-	broken := objectSchema(map[string]any{"version": map[string]any{"type": "string", "pattern": "([0-9"}})
-	if err := CheckPatterns(broken); err == nil {
+	if violations := validateJSON(t, schema, `{"version":"nope"}`); len(violations) == 0 {
+		t.Fatal("a value that breaks the pattern must be reported")
+	}
+	if _, err := compiledPattern(`([0-9`); err == nil {
 		t.Fatal("a pattern that does not compile must be reported, not silently skipped")
 	}
 }

@@ -228,19 +228,6 @@ export function computeEditStats(oldText, newText, isIncomplete = false) {
 }
 
 /**
- * Format edit stats for display.
- *
- * @param {{ added: number, removed: number }} stats
- * @returns {string}
- */
-export function formatEditStats(stats) {
-  const parts = [];
-  if (stats.added > 0) parts.push(`+${stats.added}`);
-  if (stats.removed > 0) parts.push(`-${stats.removed}`);
-  return parts.join(' ');
-}
-
-/**
  * Build a flat array of display lines for a clustered diff.
  * Each line is { kind, lineNum, code, isSeparator?, separatorText? }
  *

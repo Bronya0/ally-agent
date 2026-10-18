@@ -254,7 +254,7 @@ import { t } from '../i18n.mjs';
 import { buildSSHClusterExport, parseSSHClusterImport } from '../utils/sshClusterIO.mjs';
 import { saveTextFile } from '../utils/download.mjs';
 
-const props = defineProps({
+defineProps({
   show: { type: Boolean, default: false },
 });
 

@@ -228,21 +228,12 @@ func safeWriteNewFile(path string, data []byte, perm os.FileMode) error {
 	return read.SafeWriteNewFile(path, data, perm)
 }
 
-func modeOf(path string) os.FileMode {
-	return read.ModeOf(path)
-}
-
-func hashBytes(data []byte) string {
-	return read.HashBytes(data)
-}
-
 func hashVersion(data []byte) string {
 	return read.HashVersion(data)
 }
 
 // hashBytesAndVersion hashes data once and returns both the hex digest and the
-// version token. Replaces the previous hashBytes + hashVersion pair on the read
-// hot path, where a 10 MB file was being SHA-256'd twice per call.
+// version token, so a large file is SHA-256'd once per call instead of twice.
 func hashBytesAndVersion(data []byte) (string, string) {
 	return read.HashBytesAndVersion(data)
 }

@@ -926,14 +926,6 @@ function syncDraftFromProps() {
   Object.assign(draft, next);
 }
 
-function onClose() {
-  emit('close');
-}
-
-function onSave() {
-  emit('save', { ...draft });
-}
-
 // ── API 服务页 ──
 // 端口与 token 是独立于 ConfigState 的持久化设置（~/.ally_agent/api.json），
 // 服务开关是运行时状态：每次启动默认关闭，需手动开启。

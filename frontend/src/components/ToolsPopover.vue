@@ -30,7 +30,6 @@ Public License v3. See the LICENSE file for details.
 
 <script setup>
 import { computed, ref } from 'vue';
-import { t } from '../i18n.mjs';
 
 const props = defineProps({
   tools: { type: Array, default: () => [] },

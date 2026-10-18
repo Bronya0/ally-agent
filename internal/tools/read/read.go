@@ -349,21 +349,6 @@ func IsValidVersion(value string) bool {
 	return true
 }
 
-// IsSHA256Hex reports whether value is a 64-character lowercase/uppercase hex
-// string.
-func IsSHA256Hex(value string) bool {
-	if len(value) != 64 {
-		return false
-	}
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
-			return false
-		}
-	}
-	return true
-}
-
 // EvalExistingPrefix resolves the longest existing prefix of target through
 // symlinks and returns the fully resolved path. Useful when target may not
 // exist yet but its parent chain contains symlinks.
@@ -481,14 +466,4 @@ func writeTempSibling(path string, data []byte, perm os.FileMode, mkdirs bool) (
 	}
 	cleanup = false
 	return tmpName, nil
-}
-
-// ModeOf returns the permission bits of path, or 0o644 if it cannot be
-// stat'd. Used by edits that want to preserve the existing file mode.
-func ModeOf(path string) os.FileMode {
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0o644
-	}
-	return info.Mode().Perm()
 }

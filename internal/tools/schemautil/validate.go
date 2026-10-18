@@ -81,41 +81,6 @@ func ValidateArgs(schema map[string]any, args []byte) []Violation {
 	return checker.violations
 }
 
-// CheckPatterns compiles every `pattern` in a schema tree. A pattern that does
-// not compile is skipped at validation time (see patternMatches), so without
-// this check a typo would silently retire that constraint; hand-written tool
-// declarations assert it in their tests instead.
-func CheckPatterns(schema map[string]any) error {
-	if schema == nil {
-		return nil
-	}
-	if pattern, ok := schema["pattern"].(string); ok {
-		if _, err := compiledPattern(pattern); err != nil {
-			return err
-		}
-	}
-	if properties, ok := schemaMap(schema["properties"]); ok {
-		for _, key := range sortedKeys(properties) {
-			if child, ok := schemaMap(properties[key]); ok {
-				if err := CheckPatterns(child); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	if itemSchema, ok := schemaMap(schema["items"]); ok {
-		if err := CheckPatterns(itemSchema); err != nil {
-			return err
-		}
-	}
-	if additional, ok := schemaMap(schema["additionalProperties"]); ok {
-		if err := CheckPatterns(additional); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 type checker struct {
 	violations []Violation
 }
@@ -489,7 +454,8 @@ func compiledPattern(pattern string) (*regexp.Regexp, error) {
 // patternMatches is an unanchored search, matching JSON Schema semantics and the
 // Go regexp dialect the built-in declarations are written in. A pattern that
 // does not compile cannot be enforced, so it passes instead of blocking the
-// call; CheckPatterns exists to keep that from happening unnoticed.
+// call; the declaration tests compile every pattern so a typo cannot silently
+// retire the constraint.
 func patternMatches(pattern, value string) bool {
 	compiled, err := compiledPattern(pattern)
 	if err != nil {

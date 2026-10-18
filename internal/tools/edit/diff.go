@@ -108,12 +108,6 @@ const (
 	editDiffWindowMaxBytes = 512 * 1024
 )
 
-// GenerateEditDiffPreview renders the unified-diff preview of one edit.
-func GenerateEditDiffPreview(oldContent, newContent string, maxBytes int) string {
-	diff, _, _ := GenerateEditDiffPreviewWithCounts(oldContent, newContent, maxBytes)
-	return diff
-}
-
 // GenerateEditDiffPreviewWithCounts renders that preview and reports how many lines
 // the edit removed and added. The numbers come from the same span the preview was
 // built from, and from one multiset difference: the preview folds and truncates large

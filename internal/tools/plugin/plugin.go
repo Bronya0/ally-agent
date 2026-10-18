@@ -49,19 +49,6 @@ func DataPath(root, id string) string {
 // ModeKey 是一级菜单 key 与「当前页面」标识的唯一拼法（前端不允许自己拼）。
 func ModeKey(id string) string { return ModePrefix + id }
 
-// ModeID 从菜单 key 反解插件 id；不是插件页时返回空串。
-func ModeID(mode string) string {
-	mode = strings.TrimSpace(mode)
-	if !strings.HasPrefix(mode, ModePrefix) {
-		return ""
-	}
-	id := strings.TrimPrefix(mode, ModePrefix)
-	if !ValidID(id) {
-		return ""
-	}
-	return id
-}
-
 // 包体积上限：插件只承载前端资源，比自更新包的限额更严。
 const (
 	MaxPackageEntries   = 512

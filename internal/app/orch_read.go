@@ -167,9 +167,10 @@ func hashText(parts ...string) string {
 // putLocked records one key -> content hash entry, evicting arbitrary entries
 // while the cache is at its entry budget (the cache is a best-effort token
 // saver, so which entry is dropped does not matter). The caller must already
-// hold c.mu: sessionReadCache.mu is a plain Mutex and NOT reentrant, so putLocked
-// must never be called through the locking put from inside a locked region —
-// that self-deadlocks.
+// hold c.mu: sessionReadCache.mu is a plain Mutex and NOT reentrant, so a locked
+// region must never reach back into a self-locking entry point — that would
+// self-deadlock. The read path stores through this function from dedupeResult
+// while holding c.mu.
 func (c *sessionReadCache) putLocked(key string, contentHash string) {
 	for len(c.entries) >= sessionReadCacheMaxEntries {
 		for k := range c.entries {
@@ -178,13 +179,6 @@ func (c *sessionReadCache) putLocked(key string, contentHash string) {
 		}
 	}
 	c.entries[key] = contentHash
-}
-
-// put is the locking entry point for callers outside the read path.
-func (c *sessionReadCache) put(key string, contentHash string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.putLocked(key, contentHash)
 }
 
 func (c *sessionReadCache) invalidate() {

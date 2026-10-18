@@ -406,7 +406,7 @@ func TestResponsesOutputCaptureOrdersCompletionEventsAndHandlesReusedIndex(t *te
 	} {
 		capture.observe("response.output_item.done", []byte(raw))
 	}
-	output := capture.output()
+	output, _ := capture.indexedOutput()
 	want := []string{"rs_1", "msg_1", "fc_1", "fc_2"}
 	if len(output) != len(want) {
 		t.Fatal("reused index merged separate items")

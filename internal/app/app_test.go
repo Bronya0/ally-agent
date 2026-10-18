@@ -495,7 +495,7 @@ func TestSessionReadCacheDropsWhenHistoryIsRewritten(t *testing.T) {
 	})
 
 	// 被删掉的那一轮，可能正是模型手里读内容的唯一副本。
-	cache.put("k", "hash")
+	seedSessionReadCacheForTest(cache, "k", "hash")
 	if _, err := app.TruncateSessionHistory(TruncateSessionHistoryRequest{
 		SessionID:        sessionID,
 		UserMessageIndex: 1,
@@ -508,7 +508,7 @@ func TestSessionReadCacheDropsWhenHistoryIsRewritten(t *testing.T) {
 	}
 
 	// 历史从磁盘重载：磁盘配置把工具结果换成了占位符，模型已看不到原文。
-	cache.put("k", "hash")
+	seedSessionReadCacheForTest(cache, "k", "hash")
 	app.mu.Lock()
 	delete(app.histories, sessionID)
 	app.mu.Unlock()
@@ -520,7 +520,7 @@ func TestSessionReadCacheDropsWhenHistoryIsRewritten(t *testing.T) {
 	}
 
 	// 会话释放：缓存条目随会话状态一起消失。
-	cache.put("k", "hash")
+	seedSessionReadCacheForTest(cache, "k", "hash")
 	if err := app.releaseSession(sessionID, false); err != nil {
 		t.Fatalf("releaseSession: %v", err)
 	}
@@ -540,7 +540,7 @@ func TestSessionReadCacheDropsWhenHistoryRepairDropsToolResults(t *testing.T) {
 	app.initialized = true
 	sessionID := "read-cache-repair"
 	cache := app.sessionReadCacheFor(sessionID)
-	cache.put("k", "hash")
+	seedSessionReadCacheForTest(cache, "k", "hash")
 
 	// 没有声明调用的孤儿工具结果：修复器会把它丢掉，它携带的内容也随之离开
 	// 模型的历史。

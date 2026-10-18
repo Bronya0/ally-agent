@@ -44,13 +44,6 @@ func isVCSPath(relPosix string) bool {
 // An error halts packing immediately with that error.
 type PathFilter func(absPath string, isDir bool) error
 
-// Pack streams a local file or directory into a tar archive written to w.
-// If arcRootName is specified, the top-level entity will be named arcRootName in the archive.
-// VCS metadata directories (.git, .svn, .hg) are skipped automatically.
-func Pack(srcPath, arcRootName string, w io.Writer) (Stats, error) {
-	return PackWithFilter(srcPath, arcRootName, w, nil)
-}
-
 // PackWithFilter streams a local file or directory with an optional per-entry path filter.
 func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter) (Stats, error) {
 	var stats Stats
@@ -181,12 +174,6 @@ func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter)
 		return stats, err
 	}
 	return stats, tw.Close()
-}
-
-// Unpack extracts a streaming tar archive from r into destDir.
-// It enforces strict Tar-Slip prevention, VCS metadata rejection, and atomic file replacement.
-func Unpack(r io.Reader, destDir string, overwrite bool) (Stats, error) {
-	return unpack(r, destDir, overwrite, "")
 }
 
 // UnpackTarget confines every entry to the requested file or directory, so a

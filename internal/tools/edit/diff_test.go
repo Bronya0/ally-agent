@@ -26,7 +26,7 @@ func TestGenerateEditDiffPreviewFoldsUnchangedRuns(t *testing.T) {
 	newLines[1] = "line 002: const value = 999;"     // 第 2 行改一行
 	newLines[789] = "line 790: const value = 12345;" // 第 790 行改一行
 
-	diff := GenerateEditDiffPreview(strings.Join(oldLines, "\n"), strings.Join(newLines, "\n"), 1<<20)
+	diff, _, _ := GenerateEditDiffPreviewWithCounts(strings.Join(oldLines, "\n"), strings.Join(newLines, "\n"), 1<<20)
 	if diff == "" {
 		t.Fatal("expected non-empty diff")
 	}
@@ -63,7 +63,7 @@ func TestGenerateEditDiffPreviewFoldsUnchangedRuns(t *testing.T) {
 func TestGenerateEditDiffPreviewKeepsShortUnchangedRuns(t *testing.T) {
 	oldText := "a\nb\nc\nd\ne"
 	newText := "a\nb\nX\nd\ne"
-	diff := GenerateEditDiffPreview(oldText, newText, 1<<20)
+	diff, _, _ := GenerateEditDiffPreviewWithCounts(oldText, newText, 1<<20)
 	if diff == "" {
 		t.Fatal("expected non-empty diff")
 	}
@@ -83,7 +83,7 @@ func TestGenerateEditDiffPreviewInlineLongLine(t *testing.T) {
 	oldLine := aaa + "OLD" + bbb
 	newLine := aaa + "NEW" + bbb
 
-	diff := GenerateEditDiffPreview(oldLine, newLine, 1<<20)
+	diff, _, _ := GenerateEditDiffPreviewWithCounts(oldLine, newLine, 1<<20)
 	if diff == "" {
 		t.Fatal("expected non-empty diff")
 	}
@@ -106,7 +106,7 @@ func TestGenerateEditDiffPreviewInlineLongLineUTF8(t *testing.T) {
 	oldLine := strings.Repeat("数据", 3000) + "旧值" + strings.Repeat("填充", 3000)
 	newLine := strings.Repeat("数据", 3000) + "新值" + strings.Repeat("填充", 3000)
 
-	diff := GenerateEditDiffPreview(oldLine, newLine, 1<<20)
+	diff, _, _ := GenerateEditDiffPreviewWithCounts(oldLine, newLine, 1<<20)
 	if diff == "" {
 		t.Fatal("expected non-empty diff")
 	}

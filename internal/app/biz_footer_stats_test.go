@@ -78,7 +78,7 @@ func TestFooterSavedHistoryCacheTracksRewriteAndAnchor(t *testing.T) {
 	app := footerStatsTestApp(t)
 	const sid = "footer-history-cache"
 	old := []openai.ChatCompletionMessage{{Role: "user", Content: "old history"}}
-	if err := writeCompressedHistory(app.historyDiskPaths(sid)[0], old); err != nil {
+	if err := writeCompressedHistoryPayload(app.historyDiskPaths(sid)[0], old); err != nil {
 		t.Fatal(err)
 	}
 	first := app.getContextBreakdown(sid, app.config.Workspace)

@@ -104,19 +104,6 @@ func (a *App) getGitStatus(workspacePath string) GitStatus {
 	}
 }
 
-// computeGitStatus runs git status on the workspace. If the workspace is not a git
-// repository itself, it safely probes first-level subdirectories for .git markers
-// and aggregates their statuses with strict limits (max 16 sub-repos, concurrency 2).
-func computeGitStatus(workspace string) GitStatus {
-	return computeGitStatusWithDiscovery(workspace, discoverSubRepos)
-}
-
-func computeGitStatusWithDiscovery(workspace string, discover func(context.Context, string) []gitRepoCandidate) GitStatus {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return computeGitStatusWithContext(ctx, workspace, discover)
-}
-
 func computeGitStatusWithContext(ctx context.Context, workspace string, discover func(context.Context, string) []gitRepoCandidate) GitStatus {
 	// The caller's deadline covers waits, invalidation retries and worker batches.
 	out, _, err := runGitLimited(ctx, workspace, 256*1024, "status", "--porcelain=v2", "--branch", "-z")
@@ -171,9 +158,9 @@ const (
 	subRepoTimeout = 3 * time.Second
 )
 
-// computeMultiRepoGitStatus checks immediate subdirectories of workspace for .git entries.
-// It avoids spawning git processes if no .git directories exist, caps inspected repos at 16,
-// and bounds concurrency to 2 workers with timeouts to avoid system strain.
+// discoverSubRepos lists the immediate subdirectories of workspace that hold a
+// .git entry (a real directory or a worktree/gitfile pointer), capped at
+// maxSubRepos. It never spawns a git process.
 func discoverSubRepos(ctx context.Context, workspace string) []gitRepoCandidate {
 	// Guard against root directory inspection
 	cleanWS := filepath.Clean(workspace)
@@ -214,12 +201,6 @@ func discoverSubRepos(ctx context.Context, workspace string) []gitRepoCandidate 
 	}
 
 	return candidates
-}
-
-func computeMultiRepoGitStatus(workspace string) GitStatus {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return computeMultiRepoGitStatusWithContext(ctx, discoverSubRepos(ctx, workspace))
 }
 
 func computeMultiRepoGitStatusWithContext(ctx context.Context, candidates []gitRepoCandidate) GitStatus {

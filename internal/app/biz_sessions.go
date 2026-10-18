@@ -957,10 +957,6 @@ func (a *App) restoreSavedHistoryBreakdown(sessionID string) {
 	a.liveBreakdown[sessionID] = breakdown
 }
 
-func writeCompressedHistory(diskPath string, messages []openai.ChatCompletionMessage) error {
-	return writeCompressedHistoryPayload(diskPath, messages)
-}
-
 func writeCompressedHistoryPayload(diskPath string, payload any) error {
 	tmp, err := os.CreateTemp(filepath.Dir(diskPath), ".history-*.tmp")
 	if err != nil {

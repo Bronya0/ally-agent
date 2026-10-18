@@ -253,10 +253,11 @@ func TestParseLineRangeRejectsAmbiguousWriteTargets(t *testing.T) {
 	}
 }
 
-func TestLineIndexMatchesByteOffsetForLine(t *testing.T) {
+func TestLineIndexSpansEveryLine(t *testing.T) {
 	// Mix of trailing-newline and no-trailing-newline contents, plus a few
-	// edge sizes (0, 1, many lines). For every (content, line) pair the
-	// index-backed lookup must equal the legacy O(N) byteOffsetForLine.
+	// edge sizes (0, 1, many lines). lineRangeOffsetsWithIndex is the
+	// production consumer of the index: for every single-line range it must
+	// return exactly that line's byte span.
 	cases := []string{
 		"",
 		"one",
@@ -267,45 +268,26 @@ func TestLineIndexMatchesByteOffsetForLine(t *testing.T) {
 	}
 	for _, content := range cases {
 		index := buildLineIndex(content)
-		total := visibleLineCount(content)
-		for line := 1; line <= total; line++ {
-			want := byteOffsetForLine(content, line)
-			got := index.offsetForLine(line)
-			if got != want {
-				t.Fatalf("content len=%d line=%d: index gave %d, byteOffsetForLine gave %d", len(content), line, got, want)
+		lines := contentLinesForDiff(content)
+		if index.total() != len(lines) {
+			t.Fatalf("content len=%d: index total %d != line count %d", len(content), index.total(), len(lines))
+		}
+		for i, want := range lines {
+			start, end, err := lineRangeOffsetsWithIndex(index, len(content), i+1, i+1)
+			if err != nil {
+				t.Fatalf("content len=%d line %d: %v", len(content), i+1, err)
 			}
-		}
-		if index.total() != total {
-			t.Fatalf("index total %d != visibleLineCount %d", index.total(), total)
-		}
-	}
-}
-
-func TestLineIndexLineAtOffset(t *testing.T) {
-	content := "a\nbb\nccc\ndddd\n"
-	index := buildLineIndex(content)
-	// starts = [0, 2, 5, 9]; line 1 = bytes [0,1], line 2 = bytes [2,3,4], etc.
-	cases := []struct {
-		offset int
-		line   int
-	}{
-		{0, 1}, {1, 1}, // "a\n"
-		{2, 2}, {3, 2}, {4, 2}, // "bb\n"
-		{5, 3}, {6, 3}, {7, 3}, {8, 3}, // "ccc\n"
-		{9, 4}, {10, 4}, {11, 4}, {12, 4}, {13, 4}, // "dddd\n"
-	}
-	for _, c := range cases {
-		got := index.lineAtOffset(c.offset)
-		if got != c.line {
-			t.Fatalf("lineAtOffset(%d) = %d, want %d", c.offset, got, c.line)
+			if got := strings.TrimSuffix(content[start:end], "\n"); got != want {
+				t.Fatalf("content len=%d line %d: span = %q, want %q", len(content), i+1, got, want)
+			}
 		}
 	}
 }
 
 // BenchmarkApplyBatchTextChangesLargeFileLineRanges measures the cost of many
-// line-range edits on a large file. Before the lineIndex cache, each
-// lineRangeOffsets call re-scanned from byte 0; with the cache it's one O(N)
-// scan plus O(1) per lookup.
+// line-range edits on a large file. Before the lineIndex cache, each line-range
+// lookup re-scanned from byte 0; with the cache it's one O(N) scan plus O(1)
+// per lookup.
 func BenchmarkApplyBatchTextChangesLargeFileLineRanges(b *testing.B) {
 	const lineCount = 10000
 	lines := make([]string, lineCount)

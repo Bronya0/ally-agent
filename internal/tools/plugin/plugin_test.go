@@ -219,11 +219,10 @@ func TestNormalizeHelpers(t *testing.T) {
 	if hosts := NormalizeHostPatterns([]string{" A.com ", "a.com", ""}); strings.Join(hosts, ",") != "a.com" {
 		t.Fatalf("NormalizeHostPatterns = %v", hosts)
 	}
-	if ModeID(ModeKey("jira-helper")) != "jira-helper" {
-		t.Fatal("ModeKey/ModeID 必须互逆")
-	}
-	if ModeID("kb") != "" || ModeID("plugin:BAD") != "" {
-		t.Fatal("非插件页 key 必须返回空串")
+	// ModeKey 是菜单 key 与插件 id 之间的唯一拼法，前端不许自己拼；钉住前缀，
+	// 免得它漂移后一级菜单与插件页对不上号。
+	if got := ModeKey("jira-helper"); got != "plugin:jira-helper" {
+		t.Fatalf("ModeKey = %q, want %q", got, "plugin:jira-helper")
 	}
 }
 

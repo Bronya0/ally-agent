@@ -137,8 +137,8 @@ func TestHistoryLoadRepairsTruncatedToolCallArguments(t *testing.T) {
 		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_1", Content: `{"ok":false,"error":"tool arguments JSON was truncated"}`},
 	}
 	paths := app.historyDiskPaths(sessionID)
-	if err := writeCompressedHistory(paths[0], poisoned); err != nil {
-		t.Fatalf("writeCompressedHistory() error = %v", err)
+	if err := writeCompressedHistoryPayload(paths[0], poisoned); err != nil {
+		t.Fatalf("writeCompressedHistoryPayload() error = %v", err)
 	}
 
 	loaded := app.loadSessionHistoryCopy(sessionID)
@@ -180,8 +180,8 @@ func TestHistoryLoadCollapsesRepeatedToolCallNames(t *testing.T) {
 		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_dup", Content: "unknown tool: " + repeated},
 	}
 	paths := app.historyDiskPaths(sessionID)
-	if err := writeCompressedHistory(paths[0], poisoned); err != nil {
-		t.Fatalf("writeCompressedHistory() error = %v", err)
+	if err := writeCompressedHistoryPayload(paths[0], poisoned); err != nil {
+		t.Fatalf("writeCompressedHistoryPayload() error = %v", err)
 	}
 
 	loaded := app.loadSessionHistoryCopy(sessionID)
@@ -222,8 +222,8 @@ func TestHistoryLoadDropsUnknownToolCallNames(t *testing.T) {
 		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_concat", Content: "unknown tool: readlist_files"},
 	}
 	paths := app.historyDiskPaths(sessionID)
-	if err := writeCompressedHistory(paths[0], poisoned); err != nil {
-		t.Fatalf("writeCompressedHistory() error = %v", err)
+	if err := writeCompressedHistoryPayload(paths[0], poisoned); err != nil {
+		t.Fatalf("writeCompressedHistoryPayload() error = %v", err)
 	}
 
 	loaded := app.loadSessionHistoryCopy(sessionID)
@@ -268,8 +268,8 @@ func TestHistoryLoadDropsTruncatedArgsMarker(t *testing.T) {
 		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_trunc", Content: "MCP call failed: query参数必须提供"},
 	}
 	paths := app.historyDiskPaths(sessionID)
-	if err := writeCompressedHistory(paths[0], poisoned); err != nil {
-		t.Fatalf("writeCompressedHistory() error = %v", err)
+	if err := writeCompressedHistoryPayload(paths[0], poisoned); err != nil {
+		t.Fatalf("writeCompressedHistoryPayload() error = %v", err)
 	}
 
 	loaded := app.loadSessionHistoryCopy(sessionID)
@@ -316,8 +316,8 @@ func TestHistoryLoadRepairsDanglingToolCalls(t *testing.T) {
 		// call_2 never received a result: the process died mid-batch.
 	}
 	paths := app.historyDiskPaths(sessionID)
-	if err := writeCompressedHistory(paths[0], poisoned); err != nil {
-		t.Fatalf("writeCompressedHistory() error = %v", err)
+	if err := writeCompressedHistoryPayload(paths[0], poisoned); err != nil {
+		t.Fatalf("writeCompressedHistoryPayload() error = %v", err)
 	}
 
 	loaded := app.loadSessionHistoryCopy(sessionID)

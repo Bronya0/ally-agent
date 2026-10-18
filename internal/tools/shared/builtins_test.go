@@ -9,6 +9,7 @@ package shared
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -169,10 +170,44 @@ func TestEveryBuiltinSchemaIsEnforceable(t *testing.T) {
 		if params["type"] != "object" || params["additionalProperties"] != false {
 			t.Fatalf("%s must be a strict object so unknown keys are rejected, got type=%#v additionalProperties=%#v", name, params["type"], params["additionalProperties"])
 		}
-		if err := schemautil.CheckPatterns(params); err != nil {
+		if err := patternsCompile(params); err != nil {
 			t.Fatalf("%s has a pattern that does not compile: %v", name, err)
 		}
 	}
+}
+
+// patternsCompile reports the first `pattern` in a schema tree that does not
+// compile. A pattern that does not compile is skipped at validation time, so
+// without this check a typo would silently retire that constraint.
+func patternsCompile(schema map[string]any) error {
+	if schema == nil {
+		return nil
+	}
+	if pattern, ok := schema["pattern"].(string); ok {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return err
+		}
+	}
+	if properties, ok := schema["properties"].(map[string]any); ok {
+		for _, raw := range properties {
+			if child, ok := raw.(map[string]any); ok {
+				if err := patternsCompile(child); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if items, ok := schema["items"].(map[string]any); ok {
+		if err := patternsCompile(items); err != nil {
+			return err
+		}
+	}
+	if additional, ok := schema["additionalProperties"].(map[string]any); ok {
+		if err := patternsCompile(additional); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // TestServiceSchemaExposesTheStopAndReadTuning pins the two parameters the

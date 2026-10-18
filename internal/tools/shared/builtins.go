@@ -686,19 +686,6 @@ func IsProtectedTool(name string) bool {
 	return protectedToolNames[NormalizeName(name)]
 }
 
-// BuiltinToolNames returns the built-in tool names in declaration order —
-// the UI's toggle list reads this instead of hand-copying the names.
-func BuiltinToolNames() []string {
-	tools := chatToolsUncached()
-	names := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		if tool.Function != nil {
-			names = append(names, tool.Function.Name)
-		}
-	}
-	return names
-}
-
 // IsBuiltinTool reports whether name is a built-in tool's canonical name.
 // Legacy aliases (e.g. document_read) normalize like their canonical name,
 // which is what BuiltinSchema keys on, so a disabled-tools entry never needs

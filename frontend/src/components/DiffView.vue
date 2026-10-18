@@ -104,7 +104,7 @@ const DEFAULT_MAX_LINES = 20
 // If pre-computed diffLines are provided (from buildClusteredDisplay), use them.
 // Otherwise parse diffText if provided (unified diff from backend).
 // Otherwise compute from oldText/newText.
-import { computeDiffLines, buildClusters, buildClusteredDisplay } from '../utils/diff.js'
+import { computeDiffLines, buildClusteredDisplay } from '../utils/diff.js'
 
 function parseDiffText(text) {
   if (!text) return []

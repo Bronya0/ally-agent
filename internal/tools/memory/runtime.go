@@ -53,8 +53,8 @@ type ListResult struct {
 }
 
 // indexCache memoizes ListResult across the process so the system prompt
-// builder does not rescan the memories directory on every turn. Invalidation
-// is explicit: Write invalidates the cache after a successful write.
+// builder does not rescan the memories directory on every turn. Invalidation is
+// explicit: callers drop the cache through Invalidate.
 type indexCache struct {
 	sync.Mutex
 	result    ListResult
@@ -94,6 +94,9 @@ func (c *indexCache) Store(result ListResult, rt Runtime) {
 	c.Unlock()
 }
 
+// Invalidate drops the cached listing so the next Lookup rescans the memories
+// directory. Anything that changes the memories directory must call it; tests
+// use it to start each case from a cold cache.
 func (c *indexCache) Invalidate() {
 	c.Lock()
 	c.populated = false

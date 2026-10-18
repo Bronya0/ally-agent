@@ -710,26 +710,11 @@ func visibleLineCount(content string) int {
 	return count
 }
 
-func byteOffsetForLine(content string, line int) int {
-	if line <= 1 {
-		return 0
-	}
-	offset := 0
-	for current := 1; current < line; current++ {
-		rel := strings.IndexByte(content[offset:], '\n')
-		if rel < 0 {
-			return len(content)
-		}
-		offset += rel + 1
-	}
-	return offset
-}
-
 // lineIndex caches the byte offset of every line start in a snapshot. Building
-// it is one O(N) scan over the content; afterwards offsetForLine and
-// lineAtOffset are O(1). ApplyBatchTextChanges uses it so that N line-range
-// edits on a large file cost O(N + edits) instead of O(N * edits), where the
-// previous per-call byteOffsetForLine re-scanned from byte 0 every time.
+// it is one O(N) scan over the content; afterwards offsetForLine is O(1).
+// ApplyBatchTextChanges uses it so that N line-range edits on a large file
+// cost O(N + edits) instead of O(N * edits), where the previous per-line scan
+// repeated the whole walk from byte 0 every time.
 type lineIndex struct {
 	// starts[i] is the byte offset of the start of line i+1. starts[0] is
 	// always 0 (line 1 starts at byte 0). The slice has length visibleLineCount.
@@ -774,28 +759,6 @@ func (li *lineIndex) total() int {
 		return 0
 	}
 	return len(li.starts)
-}
-
-// lineAtOffset returns the 1-based line number containing the given byte
-// offset. Uses binary search over line starts — O(log N).
-func (li *lineIndex) lineAtOffset(offset int) int {
-	if li == nil || len(li.starts) == 0 {
-		return 1
-	}
-	if offset <= 0 {
-		return 1
-	}
-	// Find the last line start <= offset. sort.Search returns the first index
-	// where starts[i] > offset, so the line number is that index (1-based
-	// line = index + 1 only when starts[index] <= offset; here we want the
-	// preceding index).
-	idx := sort.Search(len(li.starts), func(i int) bool {
-		return li.starts[i] > offset
-	})
-	if idx == 0 {
-		return 1
-	}
-	return idx
 }
 
 // lineRangeReplacement adds only the separator needed before an untouched

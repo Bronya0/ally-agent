@@ -109,7 +109,7 @@ func TestRemoteTransferUploadFileAndDirectory(t *testing.T) {
 	}
 
 	var packBuf bytes.Buffer
-	if _, err := streamarchive.Pack(testFile, "target.txt", &packBuf); err != nil {
+	if _, err := streamarchive.PackWithFilter(testFile, "target.txt", &packBuf, nil); err != nil {
 		t.Fatalf("Pack failed: %v", err)
 	}
 
@@ -152,7 +152,7 @@ func TestRemoteTransferUploadFileAndDirectory(t *testing.T) {
 	}
 
 	packBuf.Reset()
-	if _, err := streamarchive.Pack(srcDir, "remotedir", &packBuf); err != nil {
+	if _, err := streamarchive.PackWithFilter(srcDir, "remotedir", &packBuf, nil); err != nil {
 		t.Fatalf("Pack dir failed: %v", err)
 	}
 
@@ -220,7 +220,7 @@ func TestRemoteTransferDownloadFileAndDirectory(t *testing.T) {
 	}
 
 	// 3. Unpack on local side
-	stats, err := streamarchive.Unpack(&downloadStream, localRoot, false)
+	stats, err := streamarchive.UnpackTarget(&downloadStream, filepath.Join(localRoot, "localpkg"), false)
 	if err != nil {
 		t.Fatalf("local unpack failed: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestRemoteTransferUploadOverwriteDefense(t *testing.T) {
 	// Packing a dummy file
 	testLocal := filepath.Join(t.TempDir(), "new.txt")
 	_ = os.WriteFile(testLocal, []byte("new content"), 0o644)
-	_, _ = streamarchive.Pack(testLocal, "exists.txt", &packBuf)
+	_, _ = streamarchive.PackWithFilter(testLocal, "exists.txt", &packBuf, nil)
 
 	// Attempt upload with overwrite=false should fail
 	stderr, err := runPythonTransferBridge(t, py, map[string]any{
@@ -278,7 +278,7 @@ func TestRemoteTransferSecurityFences(t *testing.T) {
 	var packBuf bytes.Buffer
 	testLocal := filepath.Join(t.TempDir(), "new.txt")
 	_ = os.WriteFile(testLocal, []byte("data"), 0o644)
-	_, _ = streamarchive.Pack(testLocal, "hook", &packBuf)
+	_, _ = streamarchive.PackWithFilter(testLocal, "hook", &packBuf, nil)
 
 	stderr, err := runPythonTransferBridge(t, py, map[string]any{
 		"action":        "upload",
@@ -295,7 +295,7 @@ func TestRemoteTransferSecurityFences(t *testing.T) {
 
 	// 2. Refuse uploading directly to workspace root
 	packBuf.Reset()
-	_, _ = streamarchive.Pack(testLocal, "new.txt", &packBuf)
+	_, _ = streamarchive.PackWithFilter(testLocal, "new.txt", &packBuf, nil)
 	stderr, err = runPythonTransferBridge(t, py, map[string]any{
 		"action":        "upload",
 		"workspaceRoot": remoteRoot,

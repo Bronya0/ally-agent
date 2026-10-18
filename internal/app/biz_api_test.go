@@ -47,7 +47,7 @@ func newApiTestApp(t *testing.T) *App {
 	if err := os.MkdirAll(app.historiesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { stopApiListener() })
+	t.Cleanup(func() { stopApiListenerLocked() })
 	return app
 }
 
@@ -614,7 +614,7 @@ func TestApiSettingsPersistenceAndListenerLifecycle(t *testing.T) {
 		t.Fatal("enabled choice must persist")
 	}
 	// Simulate process shutdown without changing the persisted preference.
-	stopApiListener()
+	stopApiListenerLocked()
 	app.restoreApiService()
 	state, _ = app.GetApiServiceState()
 	if !state.Enabled || state.Token != "tok-lifecycle" || state.Port != port {

@@ -83,17 +83,6 @@ func ShellRedirectionTargets(command string) []string {
 	return writes
 }
 
-// ShellInputRedirectionTargets extracts the literal target paths of `<`
-// redirections. Heredocs and here-strings carry their content inline and are
-// skipped, as are file-descriptor duplications (`<&0`). It exists because a
-// credential read can be spelled `cat < KEY` just as well as `cat KEY`, and the
-// write-side extractor must not grow input targets: it feeds the outside-write
-// judgement, where reading is allowed.
-func ShellInputRedirectionTargets(command string) []string {
-	_, reads := redirectionTargets(command)
-	return reads
-}
-
 func redirectionTargets(command string) (writes, reads []string) {
 	if writes, reads, ok := astRedirectionTargets(command); ok {
 		return writes, reads

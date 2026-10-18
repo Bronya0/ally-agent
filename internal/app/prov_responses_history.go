@@ -207,11 +207,6 @@ func (c *responsesOutputCapture) indexedOutput() ([]json.RawMessage, []int64) {
 	return output, indexes
 }
 
-func (c *responsesOutputCapture) output() []json.RawMessage {
-	output, _ := c.indexedOutput()
-	return output
-}
-
 // Decode the nested response directly. Some SDK stream-union versions lose
 // fields of the nested object; final output, failed codes and incomplete reasons
 // must be as authoritative as usage, which is already decoded from raw JSON.

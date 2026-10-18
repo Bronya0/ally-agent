@@ -177,7 +177,7 @@ func TestTildeWriteTargetsStayInsideTheFence(t *testing.T) {
 	// 围栏对 `~` 的解析是纯词法逻辑，直接测 fence 本体（macOS 强制沙箱时围栏
 	// 让位给内核，全链路的越界写行为由 TestCommandFenceStandsDownUnderConfinement
 	// 覆盖）。
-	if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: "echo evil >> ~/.zshrc"}, []string{ws})); code != "E_PATH_OUTSIDE" {
+	if code := toolErrorCode(checkCommandSafetyAtCwd(CommandRequest{Command: "echo evil >> ~/.zshrc"}, []string{ws}, ws)); code != "E_PATH_OUTSIDE" {
 		t.Fatalf("appending to ~/.zshrc must be refused by the fence, got code=%s", code)
 	}
 	if got, err := os.ReadFile(rc); err != nil || !strings.Contains(string(got), "export PATH") || strings.Contains(string(got), "evil") {

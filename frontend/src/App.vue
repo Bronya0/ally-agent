@@ -311,7 +311,6 @@ Public License v3. See the LICENSE file for details.
                     <button class="pending-attachment-remove" @click="removeAttachment(att.id)" :title="$t('app.attachment.remove')"><CloseOutlined /></button>
                   </div>
                 </div>
-                <input ref="attachmentInputRef" type="file" multiple class="hidden-file-input" @change="handleAttachmentSelected" />
                 <ComposerInfoBar
                   :running="activeSessionRunning"
                   :config="chatConfig"
@@ -349,8 +348,6 @@ Public License v3. See the LICENSE file for details.
                   @compact-context="handleCompactCommand"
                   @compact-lessons="handleLessonsCommand"
                   @update-codegraph="handleCodegraphCommand"
-                  :get-session-messages="() => activeMessages"
-                  :session-title="activeSession?.title || ''"
                 />
               </div>
             </n-layout>
@@ -644,7 +641,6 @@ import markdownLang from 'highlight.js/lib/languages/markdown';
 import 'highlight.js/styles/base16/darcula.css';
 import { stripAnsi } from './utils/ansi.mjs';
 import { highlightShellCommand, isShellLanguage, looksLikeShellCommand } from './utils/shellHighlight.mjs';
-import { formatReadRangeChip } from './utils/toolFormat.mjs';
 import {
   clearSessionSnapshotStore,
   loadSessionSnapshots,
@@ -712,17 +708,12 @@ import ReloadOutlined from '@vicons/antd/ReloadOutlined';
 import FolderOpenOutlined from '@vicons/antd/FolderOpenOutlined';
 import ExportOutlined from '@vicons/antd/ExportOutlined';
 import GithubOutlined from '@vicons/antd/GithubOutlined';
-import AllyWordmark from './components/AllyWordmark.vue';
 import ComposerInfoBar from './components/ComposerInfoBar.vue';
 import RunSpinner from './components/RunSpinner.vue';
-import MessageAttachments from './components/MessageAttachments.vue';
-import ReadGroupCard from './components/ReadGroupCard.vue';
 import RenderBoundary from './components/RenderBoundary.vue';
 import SakuraBreeze from './components/SakuraBreeze.vue';
 import DigitalWave from './components/DigitalWave.vue';
-import SubagentInlineCard from './components/SubagentInlineCard.vue';
 import WelcomeMessage from './components/WelcomeMessage.vue';
-import ToolCallCard from './components/ToolCallCard.vue';
 import AppHeader from './components/AppHeader.vue';
 import ModeSider from './components/ModeSider.vue';
 import CommandMenu from './components/CommandMenu.vue';
@@ -747,7 +738,7 @@ import { burstDigitalWave } from './composables/digitalWave.mjs';
 
 // 樱花青草风特效的全局开关；唯一特效层实例见模板根部
 const { sakuraOn } = useSakuraBreeze();
-import { modelConfigIdentity, modelSnapshotFrom, normalizeApiKeysArray, normalizeReasoningEffort, reasoningEffortLevels } from './utils/modelConfigIO.mjs';
+import { modelConfigIdentity, modelSnapshotFrom, reasoningEffortLevels } from './utils/modelConfigIO.mjs';
 import { getSpecificModelUsage } from './utils/modelUsage.mjs';
 import { formatModelLabel } from './utils/modelLabel.mjs';
 import { buildVersion } from './utils/buildVersion.js';
@@ -2015,7 +2006,6 @@ function deletePendingAttachments(sessionId) {
 }
 
 const activePendingAttachments = computed(() => pendingAttachmentsOf(activeSessionId.value));
-const attachmentInputRef = ref(null);
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 
 const MAX_STORED_ATTACHMENT_TEXT_CHARS = 20000;
@@ -2545,7 +2535,6 @@ function pluginForMode(value) {
 }
 
 const activePlugin = computed(() => pluginForMode(mode.value));
-const pluginPageActive = computed(() => !!activePlugin.value);
 const openedPlugins = computed(() => enabledPluginList.value.filter((plugin) => openedPluginIds.has(plugin.id)));
 // mountedPlugins 决定“这一刻该挂哪几个插件页”：keepAlive 的页面切走时留在列表里被
 // v-show 藏起来，插件自己的状态因此保住；声明 keepAlive:false 的页面一离开就从列表里
@@ -5680,16 +5669,6 @@ function restoreMessagesToBottom(sessionId = activeSessionId.value) {
 // 首帧可能未贴底，组件内会再补一次（仍尊重自动跟随状态）。
 function scrollMessagesToBottomIfStale(sessionId = activeSessionId.value) {
   nextTick(() => conversationMessagesForSession(sessionId)?.scrollToBottomIfStale());
-}
-
-function openAttachmentPicker() {
-  attachmentInputRef.value?.click();
-}
-
-async function handleAttachmentSelected(event) {
-  const files = Array.from(event.target.files || []);
-  event.target.value = '';
-  await addPendingAttachmentFiles(files);
 }
 
 async function handlePromptPaste(event) {

@@ -71,20 +71,27 @@ func TestSanitizeDisabledTools(t *testing.T) {
 	}
 }
 
-func TestBuiltinToolNamesCoverEveryDeclaration(t *testing.T) {
-	names := BuiltinToolNames()
-	if len(names) == 0 {
-		t.Fatal("no builtin tool names")
+func TestBuiltinDeclarationsCoverEveryName(t *testing.T) {
+	tools := Builtins()
+	if len(tools) == 0 {
+		t.Fatal("no builtin tools")
 	}
 	seen := map[string]bool{}
-	for _, name := range names {
+	for _, tool := range tools {
+		if tool.Function == nil {
+			continue
+		}
+		name := tool.Function.Name
 		if seen[name] {
 			t.Fatalf("duplicate tool name %q", name)
 		}
 		seen[name] = true
 		if !IsBuiltinTool(name) {
-			t.Fatalf("BuiltinToolNames entry %q is not recognized by IsBuiltinTool", name)
+			t.Fatalf("declared tool %q is not recognized by IsBuiltinTool", name)
 		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("no builtin tool names")
 	}
 	// Legacy aliases (document_read and friends) normalize onto their
 	// canonical name's schema; the alias spelling itself is not a canonical
