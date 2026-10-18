@@ -153,6 +153,9 @@ type Result struct {
 	Files        int             `json:"files"`
 	Truncated    bool            `json:"truncated"`
 	NextOffset   int             `json:"nextOffset,omitempty"`
+	// Offset is the page's starting position, needed if the model view trims a
+	// final page (whose NextOffset is zero) and must offer a continuation.
+	Offset int `json:"offset,omitempty"`
 	// OffsetExhausted reports that Request.Offset skipped past the end of the
 	// match stream: matches is empty even though Hits > 0. Reset offset to 0
 	// to page from the beginning.
@@ -277,6 +280,7 @@ func Search(ctx context.Context, rgPath, root, searchRoot string, req Request) (
 		Files:           stats.FilesWithMatches,
 		Truncated:       truncated,
 		NextOffset:      nextOffset,
+		Offset:          max(0, req.Offset),
 		OffsetExhausted: offsetExhausted,
 		Skipped:         searchSkipNotices(req),
 		Warnings:        warnings,

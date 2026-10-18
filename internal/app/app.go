@@ -42,6 +42,7 @@ const (
 	// configuration. The model itself has no default: it always comes from the
 	// models[] entries.
 	maxReadFileBytes     = 32 * 1024 * 1024
+	maxReadPreviewBytes  = 16 * 1024
 	maxToolOutput        = 128 * 1024
 	maxFinishedSubagents = 50
 	maxSubagentToolCalls = 100
@@ -57,13 +58,9 @@ const (
 	modelToolHeadBytes  = 4 * 1024
 	modelToolTailBytes  = 8 * 1024
 	maxModelGrepMatches = 200
-	// maxModelGrepFileGroups bounds the file groups a lines-mode grep payload
-	// may carry (a single tool page can span far more groups than lines). The
-	// count_matches page has no counterpart cap here: its row count is already
-	// bounded by the grep tool's own pagination width, and trimming those rows a
-	// second time would make the payload's next-offset resume past the files it
-	// dropped.
-	maxModelGrepFileGroups = 20
+	// Paths have their own rendered-byte budget, including repeated flat rows.
+	// One oversized path is retained intact to guarantee pagination progress.
+	maxModelGrepPathBytes = 16 * 1024
 	// maxModelGrepTextBytes bounds the combined size of per-line text
 	// previews in grep lines mode (on top of the per-line 500-char cap from
 	// the grep tool), so worst-case minified hits cannot flood model context.

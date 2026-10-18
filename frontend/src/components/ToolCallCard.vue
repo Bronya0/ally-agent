@@ -23,7 +23,7 @@ Public License v3. See the LICENSE file for details.
       </span>
       <span v-else-if="msg.kind === 'plan' && msg.title" class="tool-arg plan-next-step" :title="msg.title">({{ msg.title }})</span>
       <span v-else-if="msg.title" class="tool-arg" :title="msg.title">({{ msg.title }})</span>
-      <span v-if="msg.kind === 'edit' && (msg.editAdded || msg.editRemoved)" class="tool-chip edit-change-chip">
+      <span v-if="msg.kind === 'edit' && msg.status === 'success' && (msg.editAdded || msg.editRemoved)" class="tool-chip edit-change-chip">
         <span class="tool-chip-dot">&middot;</span>
         <span v-if="msg.editAdded" class="edit-chip-added">+{{ msg.editAdded }}</span>
         <span v-if="msg.editRemoved" class="edit-chip-removed">-{{ msg.editRemoved }}</span>
@@ -62,41 +62,36 @@ Public License v3. See the LICENSE file for details.
       :empty-text="cardGrid.emptyText"
     />
 
-    <div v-if="msg.kind === 'edit' && msg.status !== 'error' && msg.editEntries?.length" :class="{ 'tool-body-swap': !isBodyLive }" class="edit-file-groups">
-      <div v-for="(entry, ei) in msg.editEntries" :key="entry.path || ei" class="edit-file-group">
+    <div v-if="completedEditEntries.length" class="tool-body-swap edit-file-groups">
+      <div v-for="(entry, ei) in completedEditEntries" :key="entry.path || ei" class="edit-file-group">
         <div v-if="msg.editEntries.length > 1" class="edit-file-header">
           <span class="edit-file-name">{{ entry.path || $t('tools.file', { index: ei + 1 }) }}</span>
           <span v-if="entry.added" class="edit-chip-added">+{{ entry.added }}</span>
           <span v-if="entry.removed" class="edit-chip-removed">-{{ entry.removed }}</span>
         </div>
         <div class="edit-file-content" :class="{ 'no-header': msg.editEntries.length <= 1 }">
-          <DiffView v-if="entry.diff" layout="split" :diff-text="entry.diff" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :added-count="entry.added || 0" :removed-count="entry.removed || 0" @toggle="handleToggle(msg)" />
-          <DiffView v-for="(change, ci) in entry.changes" v-else layout="split" :key="ci" :old-text="change.oldText || ''" :new-text="change.newText || ''" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :is-incomplete="msg.status === 'running'" @toggle="handleToggle(msg)" />
+          <DiffView layout="split" :diff-text="entry.diff" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :added-count="entry.added || 0" :removed-count="entry.removed || 0" @toggle="handleToggle(msg)" />
         </div>
       </div>
     </div>
     <DiffView
-      v-else-if="msg.kind === 'edit' && hasEditPreview(msg)"
-      :class="{ 'tool-body-swap': !isBodyLive }"
+      v-else-if="msg.kind === 'edit' && msg.status === 'success' && msg.editDiff"
+      class="tool-body-swap"
       layout="split"
-      :diff-text="editDiffText(msg)"
-      :old-text="msg.editOldString"
-      :new-text="msg.editNewString"
+      :diff-text="msg.editDiff"
       :file-path="msg.editFilePath"
       :show-header="false"
       :collapsed="!msg.expanded"
       :added-count="msg.editAdded || 0"
       :removed-count="msg.editRemoved || 0"
-      :is-incomplete="msg.status === 'running' && !editDiffText(msg)"
       @toggle="handleToggle(msg)"
     />
-    <pre v-else-if="msg.kind === 'edit' && msg.editChangedLinesBlock" class="edit-changed-lines-block edit-changed-lines-preview">{{ msg.editChangedLinesBlock }}</pre>
+    <pre v-else-if="msg.kind === 'edit' && msg.status === 'success' && msg.editChangedLinesBlock" class="edit-changed-lines-block" :class="{ 'edit-changed-lines-preview': !msg.expanded }">{{ msg.editChangedLinesBlock }}</pre>
     <div v-if="msg.editWarnings && msg.editWarnings.length" class="edit-warning-list">
       <div v-for="(warning, wi) in msg.editWarnings" :key="wi" class="edit-warning">{{ warning }}</div>
     </div>
-    <pre v-if="msg.expanded && msg.editChangedLinesBlock" class="edit-changed-lines-block">{{ msg.editChangedLinesBlock }}</pre>
     <CodeView
-      v-else-if="msg.kind === 'create' && msg.status !== 'error'"
+      v-if="msg.kind === 'create' && msg.status !== 'error'"
       :class="{ 'tool-body-swap': !isBodyLive }"
       :code="msg.codeContent || ''"
       :file-path="msg.editFilePath || ''"
@@ -236,6 +231,12 @@ const cardGrid = computed(() => {
 // i18n），这里只决定要不要铺开。
 const transferFields = computed(() => (
   props.msg?.kind === 'remote_transfer' && Array.isArray(props.msg.transferFields) ? props.msg.transferFields : []
+));
+
+// Pending arguments are not an applied edit. Show only completed backend diffs.
+const completedEditEntries = computed(() => (
+  props.msg?.kind === 'edit' && props.msg.status === 'success' && Array.isArray(props.msg.editEntries)
+    ? props.msg.editEntries.filter((entry) => entry?.diff) : []
 ));
 
 const DiffView = defineAsyncComponent(() => import('./DiffView.vue'));
@@ -445,17 +446,6 @@ function errorReasonText(msg) {
   return formatToolErrorBody(msg?.body);
 }
 
-function hasEditPreview(msg) {
-  if (msg.status === 'error') return false;
-  return Boolean(editDiffText(msg) || msg.editOldString || msg.editNewString);
-}
-
-function editDiffText(msg) {
-  if (msg.editDiff) return msg.editDiff;
-  if (msg.status === 'success' && msg.body) return msg.body;
-  return '';
-}
-
 // Service read results and command output show their newest lines by default.
 // Clicking the output enables manual scrolling through the full body.
 function isServiceReadResult(msg) {
@@ -521,7 +511,8 @@ function hasExpandableBody(msg) {
   // 命令卡的可展开阈值必须与 CodeView 的裁剪阈值同源，否则 5–6 行输出会被裁成
   // 4 行预览却判定为「无可展开内容」，截断后再也看不到全文。
   if (msg.kind === 'command') return bodyOverflow.value || lineCount(msg, msg.body) > COMMAND_PREVIEW_LINES;
-  if (msg.kind === 'edit') return true;
+  if (msg.kind === 'edit') return msg.status === 'success'
+    && Boolean(completedEditEntries.value.length || msg.editDiff || msg.editChangedLinesBlock);
   if (msg.kind === 'create') return bodyOverflow.value || lineCount(msg, msg.codeContent) > BODY_PREVIEW_LINES;
   // calculate: body 只重复 title(expression) + chip(= result)，无需详情卡
   if (msg.kind === 'calculate') return false;

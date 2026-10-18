@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"ally-dev/internal/sandbox"
 	"ally-dev/internal/tools/pathutil"
@@ -743,7 +744,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		Cwd:             filepath.ToSlash(cwd),
 		Shell:           shell.name,
 		ShellPath:       shell.path,
-		Output:          decodeConsoleOutput(buf.String()),
+		Output:          commandOutputPreview(buf, outputFilePath),
 		ExitCode:        0,
 		TimedOut:        timedOut,
 		Cancelled:       errors.Is(runCtx.Err(), context.Canceled),
@@ -752,9 +753,6 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		Sandboxed:       spec.Enforce(),
 		OutputFilePath:  outputFilePath,
 		OutputFileBytes: outputFileSize,
-	}
-	if outputFilePath != "" {
-		result.Output += commandTruncationNotice(outputFilePath, outputFileSize)
 	}
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -771,22 +769,25 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	return result, nil
 }
 
-// finalizeCommandSpill closes a command's lazily created spill file (created on
-// first overflow) and reports it for the model-facing result: the path and byte
-// size of the retained full-output file, or empty values when the output never
-// exceeded the in-memory cap. Callers must invoke it only once the command path
+// finalizeCommandSpill retains full output whenever the model would lose its
+// middle: reuse the overflow spill, or save the still-complete memory buffer.
+// Callers must invoke it only once the command path
 // stopped writing through the teeWriter — process exited, ESC-killed, or the
 // command was promoted to a service (promotion re-routes writes away from the
 // spill, so its content is final). Without this the promoted path would leak the
 // handle and leave the model thinking the capped buffer is all the output.
 func finalizeCommandSpill(tw *teeWriter, buf *limitedBuffer) (string, int64) {
+	retain := buf.truncated || utf8.RuneCountInString(decodeConsoleOutput(buf.String())) > maxModelToolOutput
+	if retain && tw.spill == nil && !buf.truncated {
+		tw.startSpill([]byte(buf.String()))
+	}
 	f := tw.spill
 	if f == nil {
 		return "", 0
 	}
 	name := f.Name()
 	_ = f.Close()
-	if !buf.truncated {
+	if !retain {
 		_ = os.Remove(name)
 		return "", 0
 	}
@@ -801,12 +802,35 @@ func finalizeCommandSpill(tw *teeWriter, buf *limitedBuffer) (string, int64) {
 	return name, info.Size()
 }
 
-// commandTruncationNotice is the trailing hint appended to a command result
-// whose full output was spilled to disk, telling the model the buffered text is
-// not everything the command produced. Shared by the normal exit path and the
-// promoted-to-service path so both report the same thing.
-func commandTruncationNotice(outputFilePath string, outputFileSize int64) string {
-	return fmt.Sprintf("\n\n[输出已截断：仅保留前 %d KB。完整输出已保存到 %s（共 %s），可用 read 工具读取该文件查看全部内容；大文件建议分段或按需检索，避免整读]", maxToolOutput/1024, outputFilePath, formatMapFileSize(outputFileSize))
+// commandOutputPreview replaces the end of an overflowing prefix with the true
+// final output. Read only a bounded tail from the finalized UTF-8 spill; the
+// existing model compactor will then keep the command's actual final errors.
+func commandOutputPreview(buf *limitedBuffer, outputFilePath string) string {
+	output := decodeConsoleOutput(buf.String())
+	if !buf.truncated || outputFilePath == "" {
+		return output
+	}
+	f, err := os.Open(outputFilePath)
+	if err != nil {
+		return output
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return output
+	}
+	offset := info.Size() - int64(modelToolTailBytes+utf8.UTFMax)
+	if offset < 0 {
+		offset = 0
+	}
+	tail := make([]byte, modelToolTailBytes+utf8.UTFMax)
+	n, err := f.ReadAt(tail, offset)
+	if err != nil && err != io.EOF {
+		return output
+	}
+	text := tailString(string(tail[:n]), modelToolTailBytes)
+	const marker = "\n\n[... output omitted; full log saved ...]\n\n"
+	return utf8Prefix(output, maxToolOutput-len(text)-len(marker)) + marker + text
 }
 
 // teeWriter mirrors command output to the capped buffer and, once the buffer

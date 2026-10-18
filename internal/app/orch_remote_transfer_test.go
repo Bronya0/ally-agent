@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -26,14 +27,20 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+// pythonFStringPrefix matches an f-string literal prefix (f"…"/f'…', including
+// the r/f/b combinations) at a token boundary. Python 2.7 cannot parse any of
+// them, but a bare substring search for `f"` also hits hex escapes such as
+// b"\xbf" and identifiers that merely end in f — all valid Python 2 code.
+var pythonFStringPrefix = regexp.MustCompile(`(?m)(?:^|[^0-9A-Za-z_])[rbuRBU]{0,2}[fF][rbuRBU]{0,2}["']`)
+
 // TestRemoteTransferScriptSyntaxAndSafetyInvariants validates Python 2.7 / 3.x compatibility
 // and ensures required markers and security checks are present.
 func TestRemoteTransferScriptSyntaxAndSafetyInvariants(t *testing.T) {
 	if strings.Contains(remoteTransferPythonScript, "pathlib") {
 		t.Error("remoteTransferPythonScript must not use pathlib (unsupported in Python 2.7)")
 	}
-	if strings.Contains(remoteTransferPythonScript, `f"`) || strings.Contains(remoteTransferPythonScript, `f'`) {
-		t.Error("remoteTransferPythonScript must not use f-strings (unsupported in Python 2.7)")
+	if found := pythonFStringPrefix.FindString(remoteTransferPythonScript); found != "" {
+		t.Errorf("remoteTransferPythonScript must not use f-strings (unsupported in Python 2.7): %q", found)
 	}
 	if !strings.Contains(remoteTransferPythonScript, remoteTransferMarker) {
 		t.Errorf("remoteTransferPythonScript missing marker %s", remoteTransferMarker)
@@ -43,6 +50,31 @@ func TestRemoteTransferScriptSyntaxAndSafetyInvariants(t *testing.T) {
 	}
 	if !strings.Contains(remoteTransferPythonScript, "E_PROTECTED_PATH:") {
 		t.Error("remoteTransferPythonScript missing VCS protected path defense")
+	}
+}
+
+// TestPythonFStringGuardSeparatesPrefixesFromHexEscapes pins the guard's
+// judgement: it must flag every f-string form Python 2.7 rejects while leaving
+// hex escapes and identifiers that merely end in f alone.
+func TestPythonFStringGuardSeparatesPrefixesFromHexEscapes(t *testing.T) {
+	for _, tc := range []struct {
+		code string
+		want bool
+	}{
+		{`if tail[:1] and b"\x80" <= tail[:1] <= b"\xbf":`, false},
+		{`if data == b"\x1f":`, false},
+		{`name = prefix`, false},
+		{`label = f"{value}"`, true},
+		{`label = f'{value}'`, true},
+		{`label = F"{value}"`, true},
+		{`label = rf"{value}\d"`, true},
+		{`label = fr'{value}'`, true},
+		{`print(f"plain")`, true},
+		{"value = f\"\"\"block\"\"\"", true},
+	} {
+		if got := pythonFStringPrefix.MatchString(tc.code); got != tc.want {
+			t.Fatalf("f-string guard misjudged %q: got %v want %v", tc.code, got, tc.want)
+		}
 	}
 }
 

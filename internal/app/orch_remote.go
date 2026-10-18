@@ -824,7 +824,7 @@ func buildRemoteReadResultItem(rawFile remoteRawFile, f BatchReadFileRequest) (B
 	preview, previewErr := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
 		StartLine: previewStart,
 		EndLine:   f.EndLine,
-	}, maxToolOutput)
+	}, maxReadPreviewBytes)
 	if previewErr != nil {
 		return BatchReadResultItem{}, previewErr
 	}

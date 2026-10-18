@@ -239,38 +239,31 @@ export function useToolEvents(ctx) {
 
   function applyEditDiff(existing, data, resultData) {
     try {
-      const resultParsed = JSON.parse(data.result);
-      const editData = resultParsed.data || resultParsed;
+      const editData = resultData || {};
       const editedFiles = Array.isArray(editData.files) ? editData.files : [];
       if (editedFiles.length) {
-        existing.editEntries = editedFiles.map((file, index) => ({
-          ...(existing.editEntries?.[index] || {}), path: file.path || existing.editEntries?.[index]?.path || '',
-          changes: file.diff ? [] : (existing.editEntries?.[index]?.changes || []), diff: file.diff || '',
+        existing.editEntries = editedFiles.map((file) => ({
+          path: file.path || '', diff: file.diff || '',
           added: file.addedLines || 0, removed: file.removedLines || 0,
         }));
+      } else {
+        existing.editEntries = [];
       }
-      const combinedDiff = editedFiles.map((file) => file?.diff || '').filter(Boolean).join('\n');
-      if (editedFiles.length) {
-        existing.editDiff = '';
-        existing.editOldString = '';
-        existing.editNewString = '';
-        existing.body = '';
-      } else if (editData.diff || combinedDiff) {
-        existing.editDiff = editData.diff || combinedDiff;
-      }
-      if (editData.addedLines !== undefined || editData.removedLines !== undefined) {
-        existing.editAdded = editData.addedLines || 0;
-        existing.editRemoved = editData.removedLines || 0;
-        const parts = [];
-        if (existing.editAdded > 0) parts.push('+' + existing.editAdded);
-        if (existing.editRemoved > 0) parts.push('-' + existing.editRemoved);
-        existing.editStats = parts.join(' ');
-      }
+      existing.editDiff = editedFiles.length ? '' : (editData.diff || '');
+      existing.editOldString = '';
+      existing.editNewString = '';
+      existing.body = '';
+      existing.editAdded = editData.addedLines || 0;
+      existing.editRemoved = editData.removedLines || 0;
+      const parts = [];
+      if (existing.editAdded > 0) parts.push('+' + existing.editAdded);
+      if (existing.editRemoved > 0) parts.push('-' + existing.editRemoved);
+      existing.editStats = parts.join(' ');
       if (editData.path) existing.editFilePath = editData.path;
       else if (editedFiles.length === 1) existing.editFilePath = editedFiles[0]?.path || '';
       else if (editedFiles.length > 1) existing.editFilePath = `${editedFiles.length} files`;
-      if (editData.warnings) existing.editWarnings = editData.warnings;
-      if (editData.changedLinesBlock) existing.editChangedLinesBlock = editData.changedLinesBlock;
+      existing.editWarnings = editData.warnings || [];
+      existing.editChangedLinesBlock = editData.changedLinesBlock || '';
     } catch (e) {
       console.error('[tool:result] failed to parse edit diff', data?.name, data?.toolCallId, e);
     }

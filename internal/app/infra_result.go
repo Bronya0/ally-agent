@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	toolerrors "ally-dev/internal/tools/shared"
 )
@@ -201,7 +202,27 @@ func toolResultSummary(name string, result *toolResult) string {
 // notices and validation notes) are then re-injected so they survive
 // even when a tool's compact payload drops the top-level envelope fields.
 func compactToolResultForModel(name string, result toolResult, fullJSON string) string {
-	if !result.OK || result.Data == nil {
+	if !result.OK {
+		if len(fullJSON) <= maxModelToolOutput {
+			return fullJSON
+		}
+		body := result.Error
+		if result.Details != nil {
+			if details, err := json.Marshal(result.Details); err == nil {
+				body += "\ndetails: " + string(details)
+			}
+		}
+		if len(result.Warnings) > 0 {
+			body += "\nwarnings: " + strings.Join(result.Warnings, " | ")
+		}
+		body, reduced := compactTextForModel(body, compactTextSpec{limit: maxModelToolOutput, head: modelToolHeadBytes, tail: modelToolTailBytes})
+		open := `<ally-error code="` + attrEscape(result.ErrorCode) + `"`
+		if reduced {
+			open += ` truncated`
+		}
+		return open + ">\n" + escapeClosingMarker(body, "</ally-error") + "\n</ally-error>"
+	}
+	if result.Data == nil {
 		return fullJSON
 	}
 	compact := compactToolDataForModel(name, result, fullJSON)
@@ -279,7 +300,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			return fullJSON
 		}
 		return renderMultiEditResultForModel(r)
-	case "replace_exact", "replace_lines", "create":
+	case "replace_exact", "replace_lines", "create", "remote_create_file":
 		var r EditResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
@@ -374,6 +395,15 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			return fullJSON
 		}
 		return renderSubagentResultForModel(r)
+	case "skill":
+		var r struct {
+			Loaded  bool   `json:"loaded"`
+			Content string `json:"content"`
+		}
+		if decodeToolData(result.Data, &r) && r.Loaded && r.Content != "" {
+			return r.Content
+		}
+		return fullJSON
 	default:
 		return fullJSON
 	}
@@ -445,6 +475,9 @@ func scheduledTaskScheduleSpec(s ScheduledTaskSchedule) string {
 // status, run count, and optional running/max-steps/timeout flags.
 func renderScheduledTaskRow(t ScheduledTaskToolView) string {
 	row := fmt.Sprintf("  %s: name=%s schedule=%s status=%s runs=%d", t.ID, strconv.Quote(t.Name), strconv.Quote(scheduledTaskScheduleSpec(t.Schedule)), strconv.Quote(t.LastStatus), t.RunCount)
+	if t.NextRunAt > 0 {
+		row += " next=" + time.UnixMilli(t.NextRunAt).UTC().Format(time.RFC3339)
+	}
 	if t.Running {
 		row += " running"
 	}
@@ -481,6 +514,9 @@ func renderScheduledTaskResultForModel(r ScheduledTaskToolResult) string {
 		}
 		if t.TimeoutSeconds > 0 {
 			fmt.Fprintf(&b, ` timeout="%ds"`, t.TimeoutSeconds)
+		}
+		if t.NextRunAt > 0 {
+			b.WriteString(` next="` + time.UnixMilli(t.NextRunAt).UTC().Format(time.RFC3339) + `"`)
 		}
 		body, kind := t.Instruction, "instruction"
 		if body == "" {
@@ -686,9 +722,9 @@ func renderSubagentResultForModel(r AgentDelegateResult) string {
 // one indented "line: text" row per matching line (the colon is present only
 // when the text preview survived the byte budget) — while count mode keeps
 // one "path: count=N" row per file. Exact totals, the explicit mode, and the
-// paging metadata ride on the opening tag. The caps are identical to the
-// previous JSON envelope — file groups, total lines, and the global
-// text-preview byte budget — with reduction notes as trailing lines. A path
+// paging metadata ride on the opening tag. Lines, rendered path bytes and
+// text previews have separate budgets; file groups have no count cap. One
+// oversized path stays intact so continuation always makes progress. A path
 // with leading whitespace would blur the indent-based row grammar, so in that
 // case the whole block falls back to flat "path:line: text" rows; any row,
 // path, count, or note that would forge the closing marker is escaped.
@@ -701,6 +737,15 @@ func renderGrepResultForModel(r GrepResult) string {
 	lineHits := r.LineHits
 	fileCounts := r.FileCounts
 	nextOffset := r.NextOffset
+	truncated := r.Truncated
+	// Flat rows repeat paths; count those repetitions against the path budget.
+	flatRows := false
+	for _, fh := range lineHits {
+		if strings.HasPrefix(fh.Path, " ") || strings.HasPrefix(fh.Path, "\t") {
+			flatRows = true
+			break
+		}
+	}
 	var notes []string
 	switch mode {
 	case "lines":
@@ -708,38 +753,59 @@ func renderGrepResultForModel(r GrepResult) string {
 		for _, fh := range lineHits {
 			sampledLines += len(fh.Lines)
 		}
-		if len(lineHits) > maxModelGrepFileGroups {
-			lineHits = lineHits[:maxModelGrepFileGroups]
-			notes = append(notes, "[some file groups omitted]")
-		}
-		totalLines := 0
+		capped := make([]GrepFileMatch, 0, len(lineHits))
+		keptLines, pathBytes := 0, 0
+		pathLimited := false
 		for _, fh := range lineHits {
-			totalLines += len(fh.Lines)
-		}
-		if totalLines > maxModelGrepMatches {
-			capped := make([]GrepFileMatch, 0, len(lineHits))
-			remaining := maxModelGrepMatches
-			keptLines := 0
-			for _, fh := range lineHits {
-				if remaining <= 0 {
-					break
-				}
-				lines := fh.Lines
-				if len(lines) > remaining {
-					lines = lines[:remaining]
-				}
-				remaining -= len(lines)
-				keptLines += len(lines)
-				// Trim the previews with the kept line numbers; legacy
-				// results without texts keep none.
-				texts := fh.Texts
-				if len(texts) > len(lines) {
-					texts = texts[:len(lines)]
-				}
-				capped = append(capped, GrepFileMatch{Path: fh.Path, Lines: lines, Texts: texts})
+			keep := min(len(fh.Lines), maxModelGrepMatches-keptLines)
+			if keep <= 0 {
+				break
 			}
-			lineHits = capped
-			notes = append(notes, fmt.Sprintf("[%d of %d matching lines shown]", keptLines, totalLines))
+			pathCost := len(escapeClosingMarker(neutralizeRowBreaks(fh.Path), "</ally-grep")) + 1
+			if flatRows {
+				keep = min(keep, max(0, (maxModelGrepPathBytes-pathBytes)/pathCost))
+			} else if pathBytes+pathCost > maxModelGrepPathBytes {
+				keep = 0
+			}
+			if keep == 0 && keptLines == 0 {
+				// Never shorten a usable path or return a page that cannot advance.
+				keep = min(len(fh.Lines), maxModelGrepMatches)
+				if flatRows {
+					keep = 1
+				}
+				notes = append(notes, "[one oversized path retained intact to allow progress]")
+			}
+			if keep == 0 {
+				pathLimited = true
+				break
+			}
+			texts := fh.Texts
+			if len(texts) > keep {
+				texts = texts[:keep]
+			}
+			capped = append(capped, GrepFileMatch{Path: fh.Path, Lines: fh.Lines[:keep], Texts: texts})
+			keptLines += keep
+			if flatRows {
+				pathCost *= keep
+			}
+			pathBytes += pathCost
+			if keep < len(fh.Lines) {
+				pathLimited = flatRows && keptLines < maxModelGrepMatches
+				break
+			}
+		}
+		lineHits = capped
+		if keptLines < sampledLines {
+			truncated = true
+			notes = append(notes, fmt.Sprintf("[%d of %d matching lines shown]", keptLines, sampledLines))
+			if pathLimited {
+				notes = append(notes, "[path byte budget reached; use next-offset to continue]")
+			}
+			pageOffset := r.Offset
+			if r.NextOffset >= sampledLines && r.NextOffset > 0 {
+				pageOffset = r.NextOffset - sampledLines
+			}
+			nextOffset = pageOffset + keptLines
 		}
 		// Text previews carry a global byte budget on top of the line count:
 		// once exceeded, later entries keep their line numbers but drop the
@@ -748,16 +814,6 @@ func renderGrepResultForModel(r GrepResult) string {
 		lineHits, textsReduced = capGrepLineTexts(lineHits, maxModelGrepTextBytes)
 		if textsReduced {
 			notes = append(notes, "[some text previews dropped for budget; use read for full lines]")
-		}
-		// nextOffset resumes after the tool-sampled page; when compaction
-		// dropped lines (file-group or line cap), resume after the lines the
-		// model actually saw so paging never skips unseen lines.
-		modelLines := 0
-		for _, fh := range lineHits {
-			modelLines += len(fh.Lines)
-		}
-		if dropped := sampledLines - modelLines; dropped > 0 && nextOffset > dropped {
-			nextOffset -= dropped
 		}
 	case "count_matches":
 		// Deliberately no cap and no reduction note: the page already carries at
@@ -780,7 +836,7 @@ func renderGrepResultForModel(r GrepResult) string {
 		fmt.Fprintf(&b, ` hits="%d"`, r.Hits)
 	}
 	fmt.Fprintf(&b, ` files="%d"`, r.Files)
-	if r.Truncated {
+	if truncated {
 		b.WriteString(` truncated`)
 	}
 	if nextOffset > 0 {
@@ -790,15 +846,6 @@ func renderGrepResultForModel(r GrepResult) string {
 		b.WriteString(` offset-exhausted`)
 	}
 	b.WriteString(">\n")
-	// Leading-whitespace paths would break the indent grammar (a match row is
-	// recognized by its two-space indent); render the whole block flat instead.
-	flatRows := false
-	for _, fh := range lineHits {
-		if strings.HasPrefix(fh.Path, " ") || strings.HasPrefix(fh.Path, "\t") {
-			flatRows = true
-			break
-		}
-	}
 	for _, fh := range lineHits {
 		path := neutralizeRowBreaks(fh.Path)
 		if !flatRows {
@@ -867,10 +914,34 @@ func renderHTTPResultForModel(r HTTPRequestToolResult) string {
 	if r.ContentType != "" {
 		b.WriteString(` content-type="` + attrEscape(r.ContentType) + `"`)
 	}
+	if r.SavedPath != "" {
+		b.WriteString(` saved="` + attrEscape(r.SavedPath) + `"`)
+	}
+	if r.BytesRead > 0 {
+		fmt.Fprintf(&b, ` bytes="%d"`, r.BytesRead)
+	}
+	if r.BodyEncoding != "" && r.BodyEncoding != "text" {
+		b.WriteString(` encoding="` + attrEscape(r.BodyEncoding) + `"`)
+	}
 	if r.Truncated || reduced {
 		b.WriteString(` truncated`)
 	}
 	b.WriteString(">\n")
+	// Keep headers that determine the next action, with a shared byte budget.
+	remaining := 4 * 1024
+	for _, name := range []string{"Location", "Retry-After", "Link", "ETag", "Last-Modified", "WWW-Authenticate"} {
+		for key, value := range r.Headers {
+			if remaining <= 0 || !strings.EqualFold(key, name) || value == "" {
+				continue
+			}
+			if len(value) > remaining {
+				value = utf8Prefix(value, remaining) + " [truncated]"
+			}
+			remaining -= len(value)
+			b.WriteString("header " + name + ": " + escapeClosingMarker(neutralizeRowBreaks(value), "</ally-http") + "\n")
+			break
+		}
+	}
 	b.WriteString(escapeClosingMarker(body, "</ally-http"))
 	b.WriteString("\n</ally-http>")
 	return b.String()
@@ -1044,24 +1115,21 @@ func renderCommandResultForModel(r CommandResult) string {
 	}
 	b.WriteString(">\n")
 	b.WriteString(body)
-	if reducedFrom > 0 {
-		b.WriteString("\n" + commandModelReducedNote(r.OutputFilePath))
+	if reducedFrom > 0 || r.OutputFilePath != "" {
+		b.WriteString("\n" + escapeClosingMarker(commandModelReducedNote(r.OutputFilePath), "</ally-command"))
 	}
 	b.WriteString("\n</ally-command>")
 	return b.String()
 }
 
 // commandModelReducedNote explains a command output whose middle was dropped on
-// the model side. The full text survives in the spill file only when the
-// in-memory buffer overflowed too (output past maxToolOutput); a smaller command
-// produced more than model context wanted but wrote nothing to disk, and the
-// fallback there is the command itself — unlike a third-party tool, a command can
-// be re-run with its output narrowed.
+// the model side. Local commands retain the full output before this reduction;
+// remote commands or a failed spill may have no retrievable copy.
 func commandModelReducedNote(outputFilePath string) string {
 	if outputFilePath != "" {
 		return "[中间段已从模型上下文省略；完整输出在 " + outputFilePath + "（见 full 属性），需要中间段就用 read 分段读或 grep 检索该文件，不要整读]"
 	}
-	return "[中间段已从模型上下文省略；需要它请重跑这条命令并把输出收窄（tail/head/grep、--quiet、只跑相关用例），或重定向到工作区文件后再 read/grep]"
+	return "[中间段已从模型上下文省略，未提供完整日志文件；不要仅为查看输出重复执行有副作用的命令]"
 }
 
 // renderScreenshotResultForModel renders a capture as a single self-closing

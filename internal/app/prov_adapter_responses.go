@@ -574,14 +574,11 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 		Input:           oaresp.ResponseNewParamsInputUnion{OfInputItemList: inputItems},
 		MaxOutputTokens: oa.Int(int64(clampResponsesMaxOutputTokens(cfg.MaxTokens))),
 	}
-	// Prompt caching runs in the provider's implicit mode: it places the
-	// breakpoint at the end of the latest eligible message — the newest user or
-	// tool-response message — which is exactly the growing prefix of a tool loop,
-	// so no explicit breakpoint marker is needed anywhere in the input. Explicit
-	// mode is the opposite of what an agent loop wants (it *disables* the implicit
-	// breakpoint, and a request without its own marker then uses no caching at
-	// all), which is why pi only selects it to turn caching off. No retention
-	// field is sent anywhere: the provider default stays in place.
+	// Keep the existing implicit-cache wire shape and provider-default retention.
+	// The tested ChatGPT subscription model rejects both prompt_cache_options
+	// and content-block prompt_cache_breakpoint, despite the public API model
+	// documentation. Keep the frozen prefix in instructions; model names alone
+	// are not evidence that this route accepts explicit-cache controls.
 	// Store, ParallelToolCalls and Include are OpenAI-official request fields
 	// that compatible gateways may reject with 400 ("unsupported field"), so all
 	// three are gated by the same official-endpoint check, in this one place.
@@ -735,6 +732,7 @@ func newOpenAIResponsesSSEStreamWithClient(ctx context.Context, cfg ConfigState,
 	}
 	diagnostic, _ := ctx.Value(perfAttemptKey{}).(*perfAttempt)
 	if diagnostic != nil {
+		diagnostic.request(cfg, requestBody)
 		req = req.WithContext(httptrace.WithClientTrace(req.Context(), diagnostic.trace()))
 	}
 	req.Header.Set("Content-Type", "application/json")

@@ -5064,12 +5064,11 @@ func TestCompactToolResultForModelCommandCapsModelOutput(t *testing.T) {
 		t.Fatalf("a spilled command must point the model at the full output, got %s", got)
 	}
 
-	// 输出没超过内存储存上限，没有文件可指：提示必须把模型送回命令本身，
-	// 而且不能凭空给一个 full 属性。
+	// 远程输出或落盘失败时没有文件可指，不能为了补看日志就建议重跑命令。
 	unspilled := toolResult{OK: true, Data: CommandResult{Output: strings.Repeat("x", 20*1024)}}
 	unspilledModel := compactToolDataForModel("command", unspilled, "fallback")
-	if !strings.Contains(unspilledModel, "重跑") || strings.Contains(unspilledModel, `full=`) {
-		t.Fatalf("without a spill file the note must send the model back to the command, got %s", unspilledModel)
+	if !strings.Contains(unspilledModel, "未提供完整日志文件") || strings.Contains(unspilledModel, "请重跑") || strings.Contains(unspilledModel, `full=`) {
+		t.Fatalf("without a spill file the note must report the missing log without inventing a path or recommending a rerun, got %s", unspilledModel)
 	}
 }
 

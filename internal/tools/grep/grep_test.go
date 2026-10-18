@@ -395,8 +395,8 @@ func TestSearchOffsetPagesThroughLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.NextOffset != 10 {
-		t.Fatalf("expected NextOffset 10 on page 2, got %d", second.NextOffset)
+	if second.NextOffset != 10 || second.Offset != first.NextOffset {
+		t.Fatalf("expected page 2 to retain start offset 5 and next offset 10, got %#v", second)
 	}
 	if len(second.LineHits) != 1 || len(second.LineHits[0].Lines) != 5 {
 		t.Fatalf("expected 5 line numbers on page 2, got %#v", second.LineHits)

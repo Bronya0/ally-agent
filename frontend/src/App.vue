@@ -741,7 +741,6 @@ import { modelConfigIdentity, modelSnapshotFrom, normalizeApiKeysArray, normaliz
 import { getSpecificModelUsage } from './utils/modelUsage.mjs';
 import { formatModelLabel } from './utils/modelLabel.mjs';
 import { buildVersion } from './utils/buildVersion.js';
-import { computeEditStats, formatEditStats } from './utils/diff.js';
 import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
 import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTerminal } from './utils/sessionState.mjs';
 import { orderPlanPanelEntries, planDoneCount, planFocusScrollDelta, normalizePlanEntries } from './utils/planPanel.mjs';
@@ -7197,6 +7196,9 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
   if (!session) return;
   const eventId = id || `${name}-${Date.now()}-${Math.random()}`;
   const existing = findToolEventById(session, eventId);
+  // A late buffered progress event must not replace a completed result.
+  if (toolKindOf(name) === 'edit' && normalizeToolStatus(status) === 'running'
+      && ['success', 'error'].includes(normalizeToolStatus(existing?.status))) return;
 
   // Rich display data
   let editOldString = '';
@@ -7221,50 +7223,11 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
   const uiStartedAt = existing?.uiStartedAt
     || (normalizeToolStatus(status) === 'running' && String(raw || '').trim() ? Date.now() : 0);
   const parsed = parseToolArgsForMeta(raw, meta);
-  if (name === 'edit' || name === 'remote_edit') {
-	const files = (name === 'edit' || name === 'remote_edit') && Array.isArray(parsed.files) ? parsed.files : [parsed];
-	editFilePath = files.length === 1 ? (files[0]?.path || '') : `${files.length} files`;
-	const changes = files.flatMap((file) => Array.isArray(file?.changes) ? file.changes : []);
-	editEntries = files.map((file, index) => ({
-	  path: file?.path || '', changes: Array.isArray(file?.changes) ? file.changes : [],
-	  diff: existing?.editEntries?.[index]?.diff || '', added: existing?.editEntries?.[index]?.added || 0,
-	  removed: existing?.editEntries?.[index]?.removed || 0,
-	}));
-    if (changes.length > 0) {
-      editOldString = changes.map((change) => String(change?.oldText || '')).join('\n');
-      editNewString = changes.map((change) => String(change?.newText || '')).join('\n');
-	  chip = files.length > 1 ? `${files.length} files` : '';
-    } else if (parsed.startLine && Object.prototype.hasOwnProperty.call(parsed, 'newText')) {
-      editNewString = parsed.newText || '';
-      const end = parsed.endLine || parsed.startLine;
-      chip = `lines ${parsed.startLine}-${end}`;
-    } else {
-      if (!editOldString && parsed.oldString) editOldString = parsed.oldString;
-      if (!editNewString && parsed.newString) editNewString = parsed.newString;
-    }
-    if (editOldString || editNewString) {
-      const stats = computeEditStats(editOldString, editNewString, normalizeToolStatus(status) === 'running');
-      editStats = formatEditStats(stats);
-      editAdded = stats.added;
-      editRemoved = stats.removed;
-    }
-    if (editEntries.length > 0) {
-      editOldString = '';
-      editNewString = '';
-    }
-  } else if (name === 'replace_exact') {
-    editOldString = parsed.oldString || '';
-    editNewString = parsed.newString || '';
-    editFilePath = parsed.path || '';
-    if (editOldString || editNewString) {
-      const stats = computeEditStats(editOldString, editNewString, normalizeToolStatus(status) === 'running');
-      editStats = formatEditStats(stats);
-      editAdded = stats.added;
-      editRemoved = stats.removed;
-    }
-  } else if (name === 'replace_lines') {
-    codeContent = parsed.newText || '';
-    editFilePath = parsed.path || '';
+  if (['edit', 'remote_edit', 'replace_exact', 'replace_lines'].includes(name)) {
+    // Arguments identify the pending edit; only the backend result supplies a diff.
+    const files = Array.isArray(parsed.files) ? parsed.files : [parsed];
+    editFilePath = files.length === 1 ? (files[0]?.path || '') : `${files.length} files`;
+    chip = files.length > 1 ? `${files.length} files` : '';
   } else if (name === 'create' || name === 'remote_create_file') {
     codeContent = parsed.content || '';
     editFilePath = parsed.path || '';

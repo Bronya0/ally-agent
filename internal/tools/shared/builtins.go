@@ -145,7 +145,7 @@ func chatToolsUncached() []openai.Tool {
 		// model calls the tool — unique windowTitle match, mutually exclusive
 		// targets, negative region coordinates, downscaling, the privacy
 		// guard — are all still here.
-		functionTool("screenshot", "Capture a still image of the screen or one window as visual input, or list the visible windows (action=list) so a later capture can target one by id. Default action captures the primary display; display picks another monitor; region is a rectangle in virtual-screen pixels (may be negative on secondary monitors). Prefer windowId from action=list: a windowTitle substring must match exactly one window, and zero or several matches fail with the candidate list (E_WINDOW_NOT_FOUND / E_WINDOW_AMBIGUOUS). A window capture returns that window's own content, so other windows covering it do not leak in; region and display captures show whatever is on top. focus=true restores a minimized window and raises it first. windowId, windowTitle and region are mutually exclusive. Images are downscaled to fit model input limits. Capture only when the user asks to see the screen or a UI element — the screen may contain private data. Errors are coded (E_*).", map[string]any{
+		functionTool("screenshot", "Capture a screen/window image, or list visible windows with action=list. Default capture uses the primary display; region uses virtual-screen coordinates (negative values allowed). Prefer windowId from list; windowTitle must match exactly one window, otherwise the error includes candidates. windowId, windowTitle and region are mutually exclusive. Window capture excludes covering windows; display/region capture shows what is visible. focus=true restores and raises a window. Images are downscaled. Capture only when the user asks to see the screen or a UI element.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":      map[string]any{"type": "string", "enum": []string{"capture", "list"}, "description": "capture (default) or list (return visible windows instead)."},
@@ -167,18 +167,7 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("edit", "Validate and apply exact replacements to one workspace file per call.\n"+
-			"- Edit one file per call: `path`, `version`, and `changes` sit at the top level. When editing multiple files, emit parallel edit calls in the same turn.\n"+
-			"- Read the file first: `version` is the required current 6-character token from `read`.\n"+
-			"- Prefer `oldText` to `lineRange`: give a small unique `oldText` per change, or `replaceAll` to hit all exact occurrences; use `lineRange` only for a large block replacement or deletion.\n"+
-			"- All changes in one call match against the same original snapshot in reverse line order.\n"+
-			"- Discipline (each rule prevents a specific failed call):\n"+
-			"- One source per change: `oldText` or `lineRange`, never both, and `replaceAll` only goes with `oldText`.\n"+
-			"- Copy `oldText` verbatim from the latest `read`, without the displayed `N: ` prefixes, and keep it unique; add surrounding lines when it repeats, or set `replaceAll`. A snippet written from memory fails with E_NO_MATCH, a repeated one with E_MULTI_MATCH.\n"+
-			"- Merge nearby edits: changes whose source regions overlap fail the whole call (E_OVERLAPPING_CHANGES). For several edits in one region send ONE change — a single large `oldText`/`lineRange` whose `newText` is the final content — not several small anchors.\n"+
-			"- To insert next to a line, do not anchor `oldText` on that line in one change and edit that line in another: send one `lineRange` covering the line and repeat that line inside `newText`.\n"+
-			"- Never shift line numbers for earlier edits in the same call: every `lineRange` refers to the original snapshot.\n"+
-			"- E_VERSION_MISMATCH or E_NO_MATCH means the snapshot is stale: re-read the file, then rebuild the change from the fresh text.", map[string]any{
+		functionTool("edit", "Edit one workspace file per call; send parallel calls for multiple files. Read first and use its current version, or reuse the version from a successful edit. Each change uses oldText or lineRange, never both. Prefer small, unique oldText copied verbatim from read without line-number prefixes; replaceAll applies only to oldText. Use lineRange for large block replacements/deletions. All changes refer to the same original snapshot: never shift line numbers for earlier changes. Overlapping changes fail together; merge edits in the same region into one change whose newText is the final content. For insertions next to an edited line, include both in one change. If the snapshot changed or an anchor no longer matches, re-read and rebuild the change.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the single file to edit in this call."},
@@ -188,12 +177,12 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path", "version", "changes"},
 		}),
-		functionTool("create", "Create a UTF-8 text file in the workspace. Parent directories are created automatically. An existing file is never replaced unless `overwrite` is true; without it an existing file fails with E_EXISTS, and an existing directory or symlink is rejected outright. A file that cannot be read as text is refused even with `overwrite` (E_TEXT_OVERWRITE).", map[string]any{
+		functionTool("create", "Create a UTF-8 file and missing parent directories. Existing files require overwrite=true; directories, symlinks and existing non-text files are refused.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the file to create; parent directories are created automatically."},
 				"content":   map[string]any{"type": "string", "description": "Full UTF-8 text of the new file (may be empty). It is written as-is, so add a trailing newline yourself when you want one."},
-				"overwrite": map[string]any{"type": "boolean", "description": "Set true to replace an existing file; otherwise an existing file is rejected with E_EXISTS. A file that cannot be read as text is refused even with overwrite=true (E_TEXT_OVERWRITE)."},
+				"overwrite": map[string]any{"type": "boolean", "description": "Allow replacing an existing text file; default false."},
 			},
 			"required": []string{"path", "content"},
 		}),
@@ -205,7 +194,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"paths"},
 		}),
-		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows the shell is Git Bash when available, otherwise PowerShell; on macOS/Linux, bash. Commands may inspect outside paths, redirect to null devices, and create new outside paths; modifying/deleting existing outside paths, explicit deletion commands, and unsafe cwd symlinks are refused. Unmanaged shell deletion commands (e.g. rm, find -delete, rsync --delete) are refused; use the delete tool for workspace files. Recognized managed deletion contexts (e.g. git rm, docker rm, kubectl delete) follow their own rules. On E_PATH_OUTSIDE, read the returned reason and switch target rather than retrying unchanged. When output exceeds the capture limit it is truncated and the result's `full` attribute points to the full output (readable via read), so never re-run a side-effecting command just to see more output; pipe through tail/head yourself when you only need part of a large output. When a command does not exit within its timeout it is NOT killed: it is promoted to a background service and keeps running (ports stay bound); the result carries the `timed-out` and `promoted-to-service` flags and its output names the new service id — continue with the service tool (read/stop) instead of re-running the command.", map[string]any{
+		functionTool("command", "Run a shell command with cwd inside the workspace. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. Read-only outside inspection and new outside paths are allowed; modifying existing outside paths is refused. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. Output is a bounded preview; use the full log path with read/grep when provided, rather than rerunning side effects. A timeout promotes the still-running process to a background service: use service read/stop with its returned id, never start a duplicate.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run."},
@@ -214,7 +203,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("service", "Run, inspect, and stop long-running local processes (dev servers, workers) without blocking the agent loop. action=start launches a process and returns its id; list shows tracked services including the most recent finished ones (status exited/stopped, with the exit code when non-zero and the error — read their final output to diagnose why a service died); read returns the tail of a service's output — the body that reaches you is capped at the last 8 KiB and `reduced-from` names the longer tail that was cut, while `tailBytes` sets how much of the rolling buffer that tail is drawn from — and works on finished services too (byte accounting rides on the opening tag: `returned`/`buffer`/`total`, plus `from-byte`); stop first tries graceful termination for a grace window (default 3s; `graceSeconds` raises it for services that must flush state on exit), then force kills the whole process tree; a force-kill writes its reason to the result's `error` attribute. Use list/read sparingly (no polling loops); prefer a single read after a concrete condition (e.g. wait + read). Error codes: E_BAD_COMMAND, E_SERVICE_LIMIT, E_BAD_BACKGROUND_ACTION, E_BAD_SERVICE_ID, E_SERVICE_NOT_FOUND.", map[string]any{
+		functionTool("service", "Manage long-running local processes without blocking: start returns an id; list includes running and recent finished services; read returns recent output, including from finished services; stop tries graceful termination before killing the process tree. Model output keeps at most the last 8 KiB; reduced-from reports clipping. Use graceSeconds for processes that must flush state. Avoid polling loops; read after a concrete condition or wait.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":  map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "Start a new background process, stop one by id, list all tracked services (running plus the most recent finished ones), or read a bounded tail of one service's output (works on finished services for post-mortem diagnosis)."},
@@ -241,7 +230,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"seconds", "reason"},
 		}),
-		functionTool("ask", "Ask the user decision questions. Each question needs concise options with a label and a non-empty description; recommended is optional. Do not invent ids: every question and option is identified automatically. This must be the only tool call in that model response: Ally rejects the whole batch (E_ASK_BATCH_CONFLICT) when anything else rides along.", map[string]any{
+		functionTool("ask", "Ask user decisions together in one card. Each question needs concise options with labels and non-empty descriptions; recommended is optional. Omit ids to have them assigned automatically. This must be the only tool call in the response.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"questions": map[string]any{
@@ -306,7 +295,7 @@ func chatToolsUncached() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"url":                map[string]any{"type": "string", "minLength": 1, "pattern": `^https?://\S+$`, "description": "Absolute http:// or https:// URL."},
-				"format":             map[string]any{"type": "string", "enum": []string{"readable", "raw", ""}, "description": "Output mode. readable (default): Readability-extracted main-content text. raw: bounded page source without extraction, not byte-exact; use when readable fails (E_WEB_FETCH_EXTRACT) or source markup matters. An empty string means the default, exactly as the runtime reads it."},
+				"format":             map[string]any{"type": "string", "enum": []string{"readable", "raw", ""}, "description": "Output mode. readable (default): Readability-extracted main-content text. raw: bounded page source without extraction, not byte-exact; use when readable extraction fails or source markup matters. An empty string means the default, exactly as the runtime reads it."},
 				"headers":            map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Request headers (e.g. Authorization, Cookie, Accept-Language). User-Agent defaults to AllyAgent unless provided."},
 				"timeout":            httpTimeoutSchema(),
 				"maxBytes":           map[string]any{"type": "integer", "minimum": 0, "maximum": MaxHTTPBodyBytes, "description": fmt.Sprintf("Download cap in bytes (default %d, max %d; omit or send 0 for the default, larger requests are clamped).", DefaultWebFetchBody, MaxHTTPBodyBytes)},
@@ -315,7 +304,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"url"},
 		}),
-		functionTool("remote_read", "Read one or more text files on a remote SSH workspace (same contract as read: line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). Omit startLine/endLine to read the whole file when needed, or specify startLine/endLine (or `tailLines` for the end of one) for targeted ranges in larger files. Pass needed files in the files array to read in parallel.", map[string]any{
+		functionTool("remote_read", "Read one or more text files on a remote SSH workspace (same contract as read: bounded line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). Prefer targeted startLine/endLine ranges or tailLines for logs; follow the startLine continuation hint when truncated. Pass needed files in the files array to read in parallel.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target": sshTargetSchema(),
@@ -323,11 +312,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "files"},
 		}),
-		functionTool("remote_edit", "Validate and apply exact replacements to ONE file per call in a remote SSH workspace (same flat contract as edit; to change several files, send parallel remote_edit calls in one response).\n"+
-			"- `target` selects the SSH target plus an absolute, non-root workspace path, e.g. my-dev:/srv/app; `/` is rejected, and `path` is relative to that root.\n"+
-			"- Requires the current 6-character `version` from `remote_read`; `E_VERSION_MISMATCH` means re-read before editing.\n"+
-			"- `changes` must be a JSON array (`[...]`), not a quoted JSON string (a quoted string is auto-repaired, but do not rely on it).\n"+
-			"- Sources, changes and calling discipline are identical to `edit`: both tools declare the same `changes` schema, and only `remote_read` supplies the version and the displayed line numbers.", map[string]any{
+		functionTool("remote_edit", "Edit one file on a remote SSH workspace, using the same changes contract as edit. Send parallel calls for multiple files. target selects an SSH host and absolute non-root workspace (e.g. dev:/srv/app); path is relative to it. Use the current version from remote_read or a successful remote_edit. changes must be a JSON array, not a quoted string. Re-read if the snapshot changed.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  sshTargetSchema(),
@@ -337,7 +322,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path", "version", "changes"},
 		}),
-		functionTool("remote_create_file", "Create a UTF-8 text file in a remote SSH workspace; single-shot write. A path that is already a directory is rejected. An existing file needs `overwrite`, and that overwrite asks the user to approve it first; without `overwrite` the write fails with a plain \"file already exists\" message that carries no E_EXISTS code.", map[string]any{
+		functionTool("remote_create_file", "Create a UTF-8 file and missing parents on a remote SSH workspace. Directories are refused. Existing files require overwrite=true and user approval.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    sshTargetSchema(),
@@ -356,7 +341,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "paths"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace. Unmanaged shell deletion commands (e.g. rm, find -delete, rsync --delete) are refused; use remote_delete_path to delete workspace files. Recognized managed deletion contexts (e.g. git rm, docker rm, kubectl delete) follow their own rules. Unlike the local command tool, a remote timeout kills the process group instead of promoting it to a background service, output is capped at 128 KiB with no full-output file, and a literal write target outside the workspace fails with E_PATH_OUTSIDE.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace. Use remote_delete_path for unmanaged deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Modifying existing paths outside the workspace is refused. A timeout kills the process group. Output keeps its real head and tail within 128 KiB, without a full-output file; narrow output when possible.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  sshTargetSchema(),
@@ -396,7 +381,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("grep", "Search UTF-8 file contents with ripgrep. Prefer this over shell grep/rg via the command tool. Returns a `<ally-grep>` tag block whose opening tag carries the explicit `mode` (`lines`/`count_matches`), the match/file totals (`hits` appears only when it differs from `matched`), `truncated`/`offset-exhausted` flags, and `next-offset` while more entries remain. `lines` mode (default) groups matches by file — one bare path row per file, then one indented `line: text` row per matching line (text preview trimmed, max 500 chars; no colon means the preview was dropped for budget) — so a separate read is only needed for surrounding context; `count_matches` returns one `path: count=N` row per file. Result size is bounded automatically; paginate with `offset` using `next-offset` (it resumes right after the last row shown) or narrow path/glob instead of asking for more entries.", map[string]any{
+		functionTool("grep", "Search UTF-8 file contents with ripgrep; prefer this over shell grep/rg. Default lines mode returns matches grouped by file with line numbers and capped text previews (up to 500 characters each); read only when surrounding context is needed. count_matches returns per-file counts. Results include exact totals and a next-offset when more entries remain. Paginate with that offset or narrow path/glob; result size is bounded automatically.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Search regex pattern."},
@@ -409,7 +394,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read one or more file contents. Supports text files and images (jpg, png, gif, webp; bmp is read as a text notice instead, not as image input). For text files, each readable file is returned as a `<ally-file path=… version=…>` block (plus `lines=A-B`/`total=N` when known) whose body carries 1-based line numbers; that version is what edit needs. A path that does not exist and a directory are dropped without a block (when nothing else remains, the whole result is `(no readable files returned)`); every other failure still returns a block carrying an `error` attribute. The `truncated`/`truncated-lines`/`reused`/`image`/`error` attributes flag anything else; `truncated-lines` lists the lines whose text hit the preview cap (their tails are not in your context), and edit refuses a lineRange over one of them, so anchor that change on oldText. Omit startLine/endLine to read the whole file when needed, or specify startLine/endLine for a targeted range in larger files (or `tailLines` for the end of one, e.g. a log) to save context. Pass needed files in the files array to read in parallel.", map[string]any{
+		functionTool("read", "Read one or more file contents. Supports text files and images (jpg, png, gif, webp; bmp is read as a text notice instead, not as image input). Text files return bounded `<ally-file path=… version=…>` previews with 1-based line numbers; edit needs that version. Prefer targeted startLine/endLine ranges or tailLines for logs; follow the startLine continuation hint when truncated. Missing paths and directories are omitted; other failures carry an error attribute. reused means unchanged content is already in context. truncated-lines identifies lines with missing tails: edit refuses lineRange over those lines, so use oldText instead. Pass needed files in the files array to read in parallel.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -480,7 +465,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"skill"},
 		}),
-		functionTool("suggest", "By default, suggest 1-4 relevant next actions at the end of a reply; omit only when no useful follow-up exists. Order them by relevance, most recommended first. Start every item with its ordinal (\"1. …\", \"2. …\"), counted from 1 in array order — the chips display the text exactly as written, so the number is what tells the user the intended order. Each item is sent as-is as the user's next message, so phrase it as an instruction the user would send rather than a note to yourself. This must be the only tool call in that model response: Ally rejects the whole batch (E_SUGGEST_BATCH_CONFLICT) when anything else rides along.", map[string]any{
+		functionTool("suggest", "By default, end replies with 1-4 useful next actions; omit when none are useful. Order by relevance and prefix each item with its ordinal (1., 2., ...). Items become user messages verbatim, so write self-contained instructions the user could send. This must be the only tool call in the response and ends the run; finish your reply first.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"items": map[string]any{

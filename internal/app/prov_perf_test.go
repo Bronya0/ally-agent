@@ -127,7 +127,7 @@ func TestPerfResponsesMockRequest(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("x-request-id", "mock-request-id")
-		io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"private-answer\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"input_tokens_details\":{\"cached_tokens\":80},\"output_tokens_details\":{\"reasoning_tokens\":15},\"total_tokens\":120}}}\n\n")
+		io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"private-answer\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"reasoning\":{\"context\":\"all_turns\"},\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"input_tokens_details\":{\"cached_tokens\":80,\"cache_write_tokens\":20},\"output_tokens_details\":{\"reasoning_tokens\":15},\"total_tokens\":120}}}\n\n")
 	}))
 	defer server.Close()
 	cfg := ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: server.URL, Model: "gpt-5", APIKey: "private-key", ReasoningEffort: "max", ProxyMode: "off"}
@@ -153,5 +153,64 @@ func TestPerfResponsesMockRequest(t *testing.T) {
 	}
 	if row["request_id"] != "mock-request-id" || row["effort_wire"] != "max" || row["first_sse_at"] == nil || row["first_response_byte_at"] == nil || row["connection_reused"] == nil {
 		t.Fatalf("missing request telemetry: %v", row)
+	}
+	if row["wire_prefix"] != "first_request" || row["cache_write_tokens"] != float64(20) || row["cache_usage_reported"] != true || row["reasoning_context_effective"] != "all_turns" {
+		t.Fatalf("missing cache telemetry: %v", row)
+	}
+}
+
+func TestPerfFinalResponsesPrefix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "perf.jsonl")
+	t.Setenv("ALLY_PERF_DIAGNOSTICS", path)
+	ctx, finish := beginPerfRun(context.Background(), "mock-prefix")
+	cfg := ConfigState{AuthType: authChatGPTOAuth, OAuthAccountID: "private-account", APIFormat: apiFormatOpenAIResponses, responsesPromptCacheKey: "private-route"}
+	// Observe the post-OAuth wire. Replaying the old reasoning differently is
+	// invisible to the orchestration fingerprint, which sees only chat messages.
+	body := map[string]any{
+		"model": "gpt-6.1-sol", "instructions": "private-instructions",
+		"input":            []any{map[string]any{"role": "user", "content": "private-question"}},
+		"prompt_cache_key": "private-route",
+		"tools":            []any{map[string]any{"type": "function", "name": "read"}},
+	}
+	if err := chatGPTResponsesRequest(body); err != nil {
+		t.Fatal(err)
+	}
+	observe := func(config ConfigState, want string) {
+		t.Helper()
+		d := beginPerfAttempt(perfModelContext(ctx), config, "gpt-6.1-sol")
+		d.request(config, body)
+		if d.row["wire_prefix"] != want {
+			t.Fatalf("prefix = %v, want %s", d.row["wire_prefix"], want)
+		}
+		d.finish(nil)
+	}
+	observe(cfg, "first_request")
+	reasoning := map[string]any{"type": "reasoning", "encrypted_content": "private-encrypted"}
+	body["input"] = append(body["input"].([]any), reasoning, map[string]any{"type": "function_call_output", "output": "private-result"})
+	observe(cfg, "unchanged_prefix")
+	// Only hashes live in the baseline, so an in-place mutation is detected.
+	reasoning["encrypted_content"] = "private-rewritten"
+	observe(cfg, "tail_changed")
+	body["input"] = body["input"].([]any)[:1]
+	observe(cfg, "removed_changed")
+	body["tools"].([]any)[0].(map[string]any)["description"] = "private-schema-change"
+	observe(cfg, "head_changed")
+	other := cfg
+	other.reasoningScope = "private-subagent"
+	observe(other, "first_request")
+	// Unknown server strings must not be copied into the content-free log.
+	d := beginPerfAttempt(ctx, cfg, "gpt-6.1-sol")
+	d.event("response.completed", []byte(`{"response":{"reasoning":{"context":"private-server-string"},"usage":{"input_tokens":100,"output_tokens":1}}}`))
+	d.finish(nil)
+	finish()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "private-") {
+		t.Fatal("cache diagnostics leaked content or identity")
+	}
+	if !strings.Contains(string(raw), `"wire_encrypted_reasoning_items":1`) || !strings.Contains(string(raw), `"cache_usage_reported":false`) {
+		t.Fatal("missing reasoning or unknown-cache telemetry")
 	}
 }

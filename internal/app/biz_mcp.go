@@ -1343,10 +1343,39 @@ func mcpToolResultText(result *mcp.CallToolResult) string {
 	}
 	if result.StructuredContent != nil {
 		if raw, err := json.Marshal(result.StructuredContent); err == nil {
-			parts = append(parts, "structured output: "+string(raw))
+			canonical := canonicalMcpJSON(raw)
+			duplicate := false
+			for _, part := range parts {
+				if canonical != "" && canonicalMcpJSON([]byte(part)) == canonical {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				parts = append(parts, "structured output: "+string(raw))
+			}
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// Compare complete JSON values, preserving large integers. Prose, trailing
+// text and complementary results must never be mistaken for duplicate data.
+func canonicalMcpJSON(raw []byte) string {
+	if !json.Valid(raw) {
+		return ""
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return ""
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(canonical)
 }
 
 func (m *McpManager) reconnectServer(ctx context.Context, serverName string, failedClient *client.Client) error {

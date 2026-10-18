@@ -60,16 +60,10 @@ flowchart LR
 #### ① 隐式缓存（Implicit）vs 显式模式（Explicit）的深坑
 OpenAI Responses API 默认采用**隐式自动缓存（Implicit Mode）**：服务端会自动检测输入序列中的消息边界并缓存最长前缀。
 * ❌ **错误做法**：盲目设置 `prompt_cache_options: { mode: "explicit" }` 并在消息开头注入自定义锚点（如 `<boundary/>`）。**一旦显式指定了 `mode: "explicit"`，OpenAI 会彻底关闭全局隐式缓存**；由于后续对话消息没有显式设置 breakpoint，整段多轮对话的上下文将几乎无法命中缓存！
-* ✅ **正确做法**：始终保持在默认的隐式模式，依靠消息列表的自然单调增长，让服务端自动完成断点累积。pi 仅在明确要求“关闭缓存”（`cacheRetention === "none"`）时才发送 `{ mode: "explicit" }`。
+* ✅ **Ally 当前做法**：沿用默认隐式模式，依靠消息列表的自然单调增长复用历史；冻结系统提示词保留在顶层 `instructions`，不发送 `prompt_cache_options` 或 `prompt_cache_breakpoint`。2026-10-18 的订阅路由 `gpt-6-luna` 实测拒绝这两个字段，显式断点实验已撤回。普通 API 支持显式标记与隐式模式并存，但不得仅凭模型版本号推定订阅路由兼容。实验结果见 [订阅缓存排查](chatgpt-cache-diagnostics.md)。
 
-#### ② 模型代际分水岭（GPT-5.6 前后）
-* **GPT-5.6 之前的官方模型**：
-  长保留时长通过顶层参数 `prompt_cache_retention: "24h"` 表达。
-* **GPT-5.6 及之后的模型**：
-  OpenAI 开始对 prompt-cache 写入计费，废弃了原参数，改用：
-  `prompt_cache_options: { ttl: "30m" }`。
-* **端点门禁**：
-  上述字段严格通过 `isOfficialOpenAIEndpoint` 门禁隔离，第三方兼容中转网关（DeepSeek、OneAPI 等）可能对未知顶层参数返回 400 报错，严禁外发。
+#### ② Ally 不指定保留时长
+Ally 的 Chat 与 Responses 请求均不发送 `prompt_cache_retention` 或 `prompt_cache_options`，也没有按模型代际选择 TTL 的逻辑。缓存保留策略由服务端决定；官方端点门禁只约束已有的路由参数，不表示会补发长保留参数。
 
 #### ③ 路由粘性（Affinity）
 * 会话稳定散列统一算作 `prompt_cache_key: "ally:<sha256(sessionID)[:16]>"`（受 64 字符长度约束，pi 实现了相同的截断），驱动集群固定路由。
@@ -83,7 +77,7 @@ OpenAI Responses API 默认采用**隐式自动缓存（Implicit Mode）**：服
 Chat Completions 是开源模型与中转代理最常用的格式，协议层面的脏细节最多。
 
 #### ① 请求粘性与长保留
-* **官方端点**：通过 HTTP Transport 拦截改写，注入 `prompt_cache_key: "ally:<hash>"`、`store: false`；开启长保留档时补充 `prompt_cache_retention: "24h"`。
+* **官方端点**：通过 HTTP Transport 拦截改写，注入 `prompt_cache_key: "ally:<hash>"`、`store: false`；不指定 TTL，也不补发长保留参数。
 * **声明了该字段的兼容端点**（当前是 Kimi 的 Chat）：只注入 `prompt_cache_key`，不带 `store`（厂商表见 §1.1 ③）；其余兼容端点不发任何路由键。
 * **OpenRouter 聚合网关**：通过专用 Header `x-session-id: "ally:<hash>"` 实现路由粘性，将多轮对话固定在下游同一个提供商实例上。
 * **DeepSeek 官方端点**：服务端全自动按 64 Token 粒度匹配最长公共前缀，文档把 `prompt_cache_key` 答作「不支持」，因此不发。
@@ -137,8 +131,8 @@ Moonshot 的 Messages 端点把 `cache_control` 写成**仅顶层传入时生效
 
 | 协议 / 服务商 | 路由粘性参数 | 短档 (默认) | 长档 (Long Retention) | 断点位置策略 |
 | :--- | :--- | :--- | :--- | :--- |
-| **OpenAI Responses** | `prompt_cache_key: "ally:..."` | 保持隐式（无多余参数） | `< gpt-5.6`: `prompt_cache_retention: "24h"`<br>`>= gpt-5.6`: `prompt_cache_options: { ttl: "30m" }` | 默认隐式模式（严禁开 explicit 禁用隐式缓存） |
-| **OpenAI Chat (官方)** | `prompt_cache_key: "ally:..."` + `store: false` | 官方自动 1024 tok 缓存 | `prompt_cache_retention: "24h"` | 纯前缀逐字节单调匹配 |
+| **OpenAI Responses** | `prompt_cache_key: "ally:..."` | 默认隐式缓存 | Ally 不指定 TTL，使用服务端默认保留策略 | 沿用隐式缓存；不发送显式缓存控制字段，系统提示词保留在 instructions |
+| **OpenAI Chat (官方)** | `prompt_cache_key: "ally:..."` + `store: false` | 默认隐式缓存 | Ally 不指定 TTL，使用服务端默认保留策略 | 纯前缀逐字节单调匹配 |
 | **Kimi（Chat / Responses）、智谱 · MiniMax（Responses）** | `prompt_cache_key: "ally:..."`（各家自己的文档声明，不带 `store`） | 各家自管 | 未提供 | 纯前缀逐字节单调匹配 |
 | **OpenAI Chat (OpenRouter)** | Header `x-session-id: "ally:..."` | 下游网关决定 | 下游网关决定 | 纯前缀逐字节单调匹配 |
 | **DeepSeek (Chat 兼容)** | 无需私有 key（自动前缀匹配） | 64 tok 起自动前缀复用 | 不支持私有字段（防 400） | 依赖历史 `reasoning_content` 确定性回填 |

@@ -35,6 +35,7 @@ type perfRun struct {
 	lastTool                                time.Time
 	activeTools                             int
 	seenTools                               map[[32]byte]bool
+	wirePrefixes                            map[[32]byte]contextFingerprint
 }
 
 func beginPerfRun(ctx context.Context, id string) (context.Context, func()) {
@@ -124,6 +125,93 @@ func beginPerfAttempt(ctx context.Context, cfg ConfigState, model string) *perfA
 	return &perfAttempt{run: p, row: row, start: time.Now()}
 }
 
+// Compare the final Responses payload, after SDK serialization and OAuth
+// rewriting. The orchestration fingerprint cannot see changes at this boundary.
+// Baselines are bounded, run-local and lane-specific; neither content nor hashes
+// are written to the diagnostic file. An unchanged client prefix is evidence
+// about the client only, not a guarantee about the service's rendered context.
+func (d *perfAttempt) request(cfg ConfigState, body map[string]any) {
+	if d == nil {
+		return
+	}
+	input, ok := body["input"].([]any)
+	if !ok {
+		return
+	}
+	head := make(map[string]any, len(body))
+	for key, value := range body {
+		if key != "input" && key != "stream" && key != "max_output_tokens" {
+			head[key] = value
+		}
+	}
+	rawHead, err := json.Marshal(head)
+	if err != nil {
+		return
+	}
+	headHash := fmt.Sprintf("%x", sha256.Sum256(rawHead))
+	model, _ := body["model"].(string)
+	lane := sha256.Sum256([]byte(reasoningReplayKey(cfg, model)))
+	p := d.run
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.wirePrefixes == nil {
+		p.wirePrefixes = make(map[[32]byte]contextFingerprint)
+	}
+	base, seen := p.wirePrefixes[lane]
+	if !seen && len(p.wirePrefixes) >= maxReasoningStashEntries {
+		d.row["wire_prefix"] = "lane_limit"
+		return
+	}
+	tail := sha256.New()
+	overlap := min(base.count, len(input))
+	overlapHash := fmt.Sprintf("%x", tail.Sum(nil))
+	reasoning, encrypted, breakpoints := 0, 0, 0
+	for i, item := range input {
+		raw, err := json.Marshal(item)
+		if err != nil {
+			return
+		}
+		writeFramedHash(tail, raw)
+		if i+1 == overlap {
+			overlapHash = fmt.Sprintf("%x", tail.Sum(nil))
+		}
+		if item, ok := item.(map[string]any); ok {
+			if item["type"] == "reasoning" {
+				reasoning++
+				if value, _ := item["encrypted_content"].(string); value != "" {
+					encrypted++
+				}
+			}
+			if content, ok := item["content"].([]any); ok {
+				for _, raw := range content {
+					if block, ok := raw.(map[string]any); ok && block["prompt_cache_breakpoint"] != nil {
+						breakpoints++
+					}
+				}
+			}
+		}
+	}
+	state := "first_request"
+	if seen {
+		state = "unchanged_prefix"
+		if verdict := compareContextFingerprint(base, headHash, overlapHash, len(input)); verdict.kind != "" {
+			state = verdict.kind + "_changed"
+		}
+	}
+	p.wirePrefixes[lane] = contextFingerprint{head: headHash, tail: fmt.Sprintf("%x", tail.Sum(nil)), count: len(input)}
+	d.row["wire_prefix"] = state
+	d.row["wire_input_items"] = len(input)
+	d.row["wire_reasoning_items"] = reasoning
+	d.row["wire_encrypted_reasoning_items"] = encrypted
+	d.row["wire_cache_key_present"] = body["prompt_cache_key"] != nil
+	d.row["wire_explicit_breakpoints"] = breakpoints
+	if options, ok := body["prompt_cache_options"].(map[string]any); ok {
+		if mode := options["mode"]; mode == "implicit" || mode == "explicit" {
+			d.row["wire_cache_mode"] = mode
+		}
+	}
+}
+
 func (d *perfAttempt) event(kind string, raw []byte) {
 	if d == nil {
 		return
@@ -157,6 +245,17 @@ func (d *perfAttempt) event(kind string, raw []byte) {
 		d.terminal = now
 		d.row["terminal_event"] = kind
 		d.usage = modelUsageFromResponsesEvent(raw)
+		var response struct {
+			Response struct {
+				Reasoning struct{ Context string } `json:"reasoning"`
+			} `json:"response"`
+		}
+		if json.Unmarshal(raw, &response) == nil {
+			switch mode := response.Response.Reasoning.Context; mode {
+			case "auto", "all_turns", "current_turn":
+				d.row["reasoning_context_effective"] = mode
+			}
+		}
 	}
 }
 
@@ -190,6 +289,8 @@ func (d *perfAttempt) finish(err error) {
 	d.row["usage_reported"] = d.usage != nil
 	if u := d.usage; u != nil {
 		d.row["input_tokens"], d.row["cached_tokens"], d.row["output_tokens"], d.row["reasoning_tokens"], d.row["total_tokens"] = u.PromptTokens, u.CacheHitTokens, u.CompletionTokens, u.ReasoningTokens, u.TotalTokens
+		d.row["cache_write_tokens"] = u.CacheWriteTokens
+		d.row["cache_usage_reported"] = u.CacheHitTokens+u.CacheMissTokens > 0
 		p.input += u.PromptTokens
 		p.cached += u.CacheHitTokens
 		p.output += u.CompletionTokens

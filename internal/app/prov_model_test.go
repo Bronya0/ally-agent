@@ -245,9 +245,8 @@ func TestOpenAIResponsesPromptCacheFields(t *testing.T) {
 			if got, has := request["prompt_cache_options"]; has {
 				t.Fatalf("prompt_cache_options must never be sent, got %#v", got)
 			}
-			// The input carries the conversation only: an explicit breakpoint marker
-			// would disable the implicit breakpoint and push the whole history
-			// outside the cached prefix.
+			// Without leading system instructions there is no static developer
+			// prefix to mark; the conversation still uses implicit caching.
 			items, _ := request["input"].([]any)
 			for _, rawItem := range items {
 				item, _ := rawItem.(map[string]any)

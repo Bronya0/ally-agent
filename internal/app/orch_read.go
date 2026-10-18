@@ -680,7 +680,7 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 		LineCount:     req.LineCount,
 		ContextBefore: req.ContextBefore,
 		ContextAfter:  req.ContextAfter,
-	}, maxToolOutput)
+	}, maxReadPreviewBytes)
 	if err != nil {
 		return ReadFileResult{}, err
 	}

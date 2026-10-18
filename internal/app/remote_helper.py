@@ -510,6 +510,15 @@ def check_write_targets(root, cwd, targets):
         if os.path.lexists(p):
             raise ValueError("E_PATH_OUTSIDE: remote command write target is outside workspaceRoot: %s" % p)
 
+def append_command_output(out, chunk, limit):
+    # Keep the real beginning and end within the existing capture budget.
+    out.extend(chunk)
+    if len(out) <= limit:
+        return False
+    head = limit // 3
+    del out[head:len(out) - (limit - head)]
+    return True
+
 def op_run(root, payload):
     import select, signal, subprocess
     command = to_os_text(payload.get("command") or "")
@@ -620,10 +629,7 @@ def op_run(root, payload):
                 if not line:
                     eof = True
                 else:
-                    remain = max_output - len(out)
-                    if remain > 0:
-                        out.extend(line[:remain])
-                    if len(line) > remain:
+                    if append_command_output(out, line, max_output):
                         truncated = True
             else:
                 rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
@@ -635,10 +641,7 @@ def op_run(root, payload):
                     if not chunk:
                         eof = True
                     else:
-                        remain = max_output - len(out)
-                        if remain > 0:
-                            out.extend(chunk[:remain])
-                        if len(chunk) > remain:
+                        if append_command_output(out, chunk, max_output):
                             truncated = True
         if proc.poll() is not None:
             # 进程已退出；排空管道内剩余缓冲数据（最多等 0.5s，避免后台
@@ -656,10 +659,7 @@ def op_run(root, payload):
                     if not chunk:
                         eof = True
                         break
-                    remain = max_output - len(out)
-                    if remain > 0:
-                        out.extend(chunk[:remain])
-                    if len(chunk) > remain:
+                    if append_command_output(out, chunk, max_output):
                         truncated = True
             break
     try:
@@ -687,7 +687,22 @@ def op_run(root, payload):
     if timed_out:
         exit_code = -1
     duration = int((time.time() - start) * 1000)
-    output = bytes(out).decode("utf-8", "replace")
+    if truncated:
+        # Drop only a split UTF-8 sequence at each cut, preserving real U+FFFD.
+        import codecs
+        head = max_output // 3
+        head_text = codecs.getincrementaldecoder("utf-8")("replace").decode(bytes(out[:head]), final=False)
+        tail = bytes(out[head:])
+        for _ in range(3):
+            if tail[:1] and b"\x80" <= tail[:1] <= b"\xbf":
+                tail = tail[1:]
+            else:
+                break
+        output = (head_text +
+                  "\n\n[... remote output omitted ...]\n\n" +
+                  tail.decode("utf-8", "replace"))
+    else:
+        output = bytes(out).decode("utf-8", "replace")
     return {
         "command": command,
         "cwd": to_os_text(cwd),

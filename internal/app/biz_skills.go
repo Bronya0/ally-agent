@@ -322,8 +322,8 @@ func (a *App) handleSkillToolCall(skillName, skillArgs string) (map[string]any, 
 			if err != nil {
 				return nil, fmt.Errorf("failed to read skill: %w", err)
 			}
-			if len(content) > maxReadFileBytes {
-				return nil, fmt.Errorf("skill file is too large: %d bytes (max %d)", len(content), maxReadFileBytes)
+			if len(content) > maxSkillContentBytes {
+				return nil, fmt.Errorf("skill %q is too large: %d bytes (max %d); use read on %q with targeted line ranges, or move reference material into supporting files", sk.Name, len(content), maxSkillContentBytes, sk.Path)
 			}
 
 			loadedContent := content
@@ -343,51 +343,57 @@ func (a *App) handleSkillToolCall(skillName, skillArgs string) (map[string]any, 
 	return nil, fmt.Errorf("skill %q is disabled or not found in the current skill listing", skillName)
 }
 
-// buildSkillDirTree returns a compact listing of the skill directory (excluding
-// the already-loaded SKILL.md and hidden files) up to two levels deep, so the
-// model can see which additional files it may read under the skill's dir.
-// Returns an empty string when the dir is empty, missing, or contains no
-// publishable entries.
+const (
+	maxSkillContentBytes = 64 * 1024
+	skillTreeEntryLimit  = 80
+	skillTreeByteLimit   = 8 * 1024
+)
+
+// buildSkillDirTree lists up to two levels within one shared entry/byte budget.
+// The loaded SKILL.md and hidden files are excluded; empty directories return "".
 func buildSkillDirTree(dir, loadedPath string) string {
 	if dir == "" {
 		return ""
 	}
 	loadedName := filepath.Base(loadedPath)
-	lines := skillDirTreeLines(dir, loadedName, "", 0)
+	var lines []string
+	remaining := skillTreeByteLimit
+	truncated := false
+	var walk func(string, string, int) bool
+	walk = func(current, indent string, depth int) bool {
+		entries, err := os.ReadDir(current)
+		if err != nil {
+			return true
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") || (depth == 0 && strings.EqualFold(name, loadedName)) {
+				continue
+			}
+			line := indent + "- " + name
+			if entry.IsDir() {
+				line += "/"
+			}
+			if len(lines) >= skillTreeEntryLimit || len(line)+1 > remaining {
+				truncated = true
+				return false
+			}
+			lines = append(lines, line)
+			remaining -= len(line) + 1
+			if entry.IsDir() && depth < 1 && !walk(filepath.Join(current, name), indent+"  ", depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	walk(dir, "", 0)
+	if truncated {
+		lines = append(lines, "[Directory listing truncated; use list_files on a subdirectory for more.]")
+	}
 	if len(lines) == 0 {
 		return ""
 	}
 	return "<!-- skill dir tree (up to two levels, use read to read any of these) -->\n" + strings.Join(lines, "\n")
-}
-
-// skillDirTreeLines appends a flat, indented listing of dir and, for directories,
-// one level of children — i.e. up to two levels total. Hidden files (names
-// starting with ".") are skipped at every level; the root SKILL.md whose body was
-// already injected is skipped only at the top level.
-func skillDirTreeLines(dir, rootLoadedName, indent string, depth int) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var lines []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
-		if depth == 0 && strings.EqualFold(name, rootLoadedName) {
-			continue
-		}
-		if entry.IsDir() {
-			lines = append(lines, indent+"- "+name+"/")
-			if depth < 1 {
-				lines = append(lines, skillDirTreeLines(filepath.Join(dir, name), rootLoadedName, indent+"  ", depth+1)...)
-			}
-		} else {
-			lines = append(lines, indent+"- "+name)
-		}
-	}
-	return lines
 }
 
 // renderSkillLoadedBlock builds <skill-loaded name="..." source="..." dir="..." args="...">
@@ -404,7 +410,7 @@ func renderSkillLoadedBlock(skillName, source, dir, args, content string) string
 		b.WriteString(fmt.Sprintf(" args=\"%s\"", xmlEscape(args)))
 	}
 	b.WriteString(">\n")
-	b.WriteString(content)
+	b.WriteString(escapeClosingMarker(content, "</skill-loaded"))
 	if !strings.HasSuffix(content, "\n") {
 		b.WriteString("\n")
 	}
