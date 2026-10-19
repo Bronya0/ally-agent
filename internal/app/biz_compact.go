@@ -369,49 +369,47 @@ func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, in
 
 	// Summarize all existing history cleanly into a single summary.
 	messagesToSummarize := history
-	// Build compaction prompt. Structured sections maximize information density
-	// and give the model concrete anchors to recover from after compaction.
-	compactPrompt := `The conversation context is getting long and is being compacted. Provide a high-density, structured handoff summary so work can continue seamlessly after clearing history.
+	// Build a continuation-focused handoff: preserve effective requirements and
+	// actionable state without carrying forward the investigation transcript.
+	compactPrompt := `The conversation context is getting long and is being compacted. Write a concise, structured handoff that lets the next assistant continue the work from its current state after the conversation history is replaced.
 
-CRITICAL LANGUAGE RULE:
-Always write the summary in the primary language used by the user in the conversation (e.g. Chinese if the user spoke Chinese, English if the user spoke English, etc.). The section headings below may be translated into the user's language or kept as equivalent clear headings.
+LANGUAGE AND OUTPUT:
+- Write in the user's primary language, including the headings. Use the seven sections below, in order, with short factual bullets. If a section has no relevant information, say "None" in the user's language; do not invent content to fill it.
+- Output only the Markdown summary. Do not call tools, answer the user's task, or continue the work.
 
-REQUIREMENTS DRIFT RULES:
-- If the messages above already contain a previous compaction summary (it appears as the first message: a structured Markdown summary), carry its "User Intent & Requirements" and "Constraints & Preferences" sections forward UNCHANGED. Only modify an entry when the user explicitly changed or refined it in the newer messages; then write the current effective version and note the change briefly (e.g. "changed by user: ...").
-- Never shorten, merge, or drop existing requirements or constraints for the sake of brevity, and never resurrect a requirement the user has already superseded.
-- State requirements as the CURRENT EFFECTIVE version: your synthesized understanding after all clarifications and corrections. Do not quote the user verbatim - users often phrase things loosely; the refined understanding is the requirement.
-- When statements conflict, the user's latest instruction wins.
+CONTINUITY AND REQUIREMENTS:
+- Use any previous compaction summary as the baseline and update it with the newer messages, even if it used different headings. Preserve every still-effective goal, requirement, and user constraint across repeated compactions; do not silently weaken or drop them for brevity.
+- Express the current effective requirements after all clarifications. The user's latest explicit correction supersedes an older conflicting instruction; a follow-up question or status request does not by itself cancel unfinished work. Do not revive superseded requirements or recount the history of their changes unless it affects the next action.
+- Keep exact wording where it affects scope, prohibitions, acceptance criteria, or permission. Distinguish user requirements from assistant proposals, confirmed facts from hypotheses, and planned actions from executed or verified actions.
 
-Use the following structure with Markdown headings:
+## Goal / 目标
+The active objective, expected deliverable, and explicit acceptance criteria. Include other unfinished user requests that remain in scope; make clear which task is currently active.
 
-## User Intent & Requirements / 用户需求与目标
-The user's core intent, ongoing tasks, and explicit requirements, stated as the current effective version (see the drift rules above).
+## User Constraints / 用户约束
+Still-effective scope limits, prohibited actions or files, required approaches or tools, workflow and output preferences, and authorization boundaries. Preserve pending approvals and unanswered questions; do not turn a proposal or silence into user consent.
 
-## Constraints & Preferences / 约束与偏好
-One-off directives that are easy to lose and costly to forget: files or areas the user said NOT to touch, mandated approaches or tools, output style, workflow preferences. These must survive every compaction unchanged unless the user changed them.
+## Key Decisions / 关键决策
+Decisions already made and the brief reason each matters for continuation. Include confirmed findings or root causes only when they determine the approach. Label tentative choices as tentative. Mention rejected approaches only when needed to prevent repeating a consequential mistake.
 
-## Findings & Analysis / 探索与分析结果
-Key findings, root causes, architectural patterns, or logic flow discovered during investigation.
+## Completed Work / 已完成事项
+Concrete results that still matter: implemented changes, produced artifacts, and validation actually performed with its outcome. Attach necessary file paths or identifiers to the relevant item. Clearly distinguish implemented, tested, committed, and deployed states; never claim an unrun check passed.
 
-## What Has Been Done / 已完成工作
-Bullet list of concrete actions taken: files edited, created, or deleted (with notes on changes), commands executed and their outcomes, verified items.
+## Current State / 当前进度
+Where work stopped: the active step, partial or unverified changes, unresolved questions, blockers, and any running operation or result still awaited. Preserve exact task, session, or process identifiers only when needed to resume. If the objective is complete, say so rather than inventing more work.
 
-## Key Files & Locations / 关键文件与位置
-Bullet list of key file paths referenced or touched, explicitly describing each file's specific role, responsibility, and what was modified:
-- [path]: 具体用途与职责（该文件在项目中负责什么），以及本次对话中涉及的改动内容与关键位置
+## Next Steps / 待办
+Prioritized remaining actions. When interrupted mid-task, make the first item the concrete next action, with the necessary path, command, identifier, or decision to resolve. Include required verification and pending user input. Do not use vague instructions such as "continue as planned".
+If a plan tool was used, its latest available result is appended automatically after this summary. Do not copy the full checklist here: retain the immediate next action and essential details, corrections, or remaining work the snapshot does not capture. If no plan is available, this section must carry the actionable remaining plan itself. Do not treat a stale plan entry as overriding newer user instructions or observed results.
 
+## Critical Errors / 关键错误
+Only failures that still block progress or are important to avoid repeating. For each, preserve the trigger, the essential error text or code, the confirmed cause (or explicitly unknown), attempted remedies and their outcomes, and whether it remains unresolved. Omit incidental failures that were resolved and no longer affect continuation.
 
-## Next Steps / 下一步工作
-Mandatory and never abbreviated: the exact prioritized actions to take immediately, including tool actions that were planned but not yet executed. Name the exact file paths, commands, and identifiers each step touches. Vague filler ("continue", "keep going", "as planned") is not acceptable.
-
-Rules:
-- The "## Next Steps" section is the only copy of the plan that survives this rewrite: when work was interrupted mid-task, state the exact next tool action.
-- The agent's current plan is appended verbatim after your summary automatically, so do not restate it; summarize everything else faithfully.
-- Strictly write in the user's language.
-- Do not call any tools. Output plain text Markdown directly.
-- Keep file paths, command strings, function names, and identifiers exact.
-- Factual and concise. Do not invent details; state "unknown" if not certain.
-- This summary replaces prior conversation and must stand alone completely.`
+INFORMATION BUDGET:
+- Keep only information needed to continue correctly. Remove repeated explanations, chronological narration, raw tool output, large code excerpts, exhaustive command logs, and standalone file inventories. Put necessary paths, symbols, commands, and findings in the relevant section once.
+- Compress background and completed work before sacrificing effective requirements, user constraints, the current stopping point, or actionable next steps. Prefer a short summary, but do not impose an arbitrary length limit that loses critical state.
+- Keep paths, commands, function names, error codes, and identifiers exact when included. Do not include secret values or credentials.
+- Do not infer success, root causes, permissions, or missing details. Mark consequential uncertainty explicitly.
+- The summary and any automatically appended plan snapshot replace prior conversation; they must provide enough context to resume without restarting completed exploration.`
 
 	if instruction != "" {
 		compactPrompt += "\n\nAdditional instruction: " + instruction
