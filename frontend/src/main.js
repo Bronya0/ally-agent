@@ -12,7 +12,11 @@ import { createApp } from 'vue';
 import App from './App.vue';
 import { locale, t } from './i18n.mjs';
 import { initTheme } from './utils/theme.mjs';
+import { isolateImeKeydown } from './utils/imeKeyboard.mjs';
 import './style.css';
+
+// 必须先于组件挂载，确保比各组件和 Naive UI 的键盘监听器先执行。
+window.addEventListener('keydown', isolateImeKeydown, true);
 
 document.documentElement.lang = locale;
 initTheme();

@@ -300,7 +300,6 @@ Public License v3. See the LICENSE file for details.
                   placeholder=""
                   @update:value="promptInputBindingFor(tab).onUpdateValue"
                   @keydown="handlePromptKeydown"
-                  @input="handlePromptInput"
                   @blur="handlePromptBlur"
                 />
                 <div v-if="activePendingAttachments.length" class="pending-attachments">
@@ -836,10 +835,6 @@ function setPromptInputRef(tabId, el) {
     promptInputRefs[tabId] = el;
   } else {
     delete promptInputRefs[tabId];
-    // 输入框卸载（关闭 Tab）会丢失进行中的输入法组合事件，不重置会让 promptComposing
-    // 残留为 true，导致之后按 Enter 一直只换行不发送。
-    promptComposing.value = false;
-    promptCompositionEndedAt = 0;
   }
 }
 
@@ -862,8 +857,6 @@ function promptInputBindingFor(tab) {
   }
   return binding;
 }
-const promptComposing = ref(false);
-let promptCompositionEndedAt = 0;
 let fileMentionTimer = 0;
 let fileMentionRequestId = 0;
 
@@ -6541,9 +6534,10 @@ const filteredBuiltin = computed(() => filteredCommands.value.filter(cmd => cmd.
 const filteredSkills = computed(() => filteredCommands.value.filter(cmd => cmd.special === 'skill'));
 
 function handlePromptInput(event) {
-  // compositionend 可能因切窗/输入法取消而缺席。和 Naive 的 handleInput 一样，
-  // 用明确的非组合原生输入恢复本地镜像，避免之后 Enter 永久走换行。
-  if (event?.isComposing === false) promptComposing.value = false;
+  // 原生 input 在 DOM 更新后捕获；Naive 的 @input 是字符串回调，不能拿来读 isComposing。
+  // 按事件目标镜像草稿，不拿未确认的字或后台 Tab 的输入触发活动菜单。
+  mirrorPromptDraftFromDom(event.target);
+  if (event.isComposing || event.target !== getPromptTextarea()) return;
   const value = promptText.value;
   // Close the menu as soon as a space follows the slash token: the command
   // word is finished and the user is typing arguments ("/xxx content…").
@@ -6571,11 +6565,8 @@ function promptSessionIdForInput(target) {
   return '';
 }
 
-// 把 textarea 当前文本镜像进对应草稿桶。输入法组合期间 naive 的 handleInput 会提前 return、
-// 不发 update:value（Input.mjs:436），store 因此落后于 DOM；而任何一次重渲染都会用受控值
-// 强行回写 textarea（Vue 自己的 v-model 有 composing 守卫，naive 的 Input 只用 syncSource
-// 守住了隐藏的 autosize mirror），组合中的字就被撤掉。组合事件是这一段里唯一拿得到实时文本
-// 的入口；镜像进去的值与随后补发的 update:value 相同，幂等。
+// 把 textarea 当前文本镜像进对应草稿桶，避免受控值回写撤掉尚未确认的组合文本。
+// 原生 input 与 compositionend 都按事件目标定位，后台 Tab 不会写进活动 Tab 的草稿。
 function mirrorPromptDraftFromDom(target) {
   if (!target || typeof target.value !== 'string') return;
   const sessionId = promptSessionIdForInput(target);
@@ -6656,7 +6647,7 @@ function detectFileMention(text, caret) {
 }
 
 function updateFileMentionFromCaret(force = false) {
-  if (promptComposing.value || commandMenuVisible.value || sessionsVisible.value) return;
+  if (commandMenuVisible.value || sessionsVisible.value) return;
   const textarea = getPromptTextarea();
   if (!textarea) {
     closeFileMentionMenu();
@@ -6742,29 +6733,13 @@ function handlePromptCursorActivity() {
 }
 
 function handlePromptKeyup(event) {
-  // 平台差异兜底：个别环境组合期间不发 compositionupdate，keyup 是补镜像的入口（幂等）。
-  if (promptComposing.value || event?.isComposing) mirrorPromptDraftFromDom(event?.target);
+  if (event.isComposing) return;
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return;
   handlePromptCursorActivity();
 }
 
-function handlePromptCompositionStart() {
-  promptComposing.value = true;
-}
-
-function handlePromptCompositionEnd(event) {
-  promptComposing.value = false;
-  promptCompositionEndedAt = performance.now();
-  // 组合结束到 naive 补发 update:value 之间还有一个同步空档，先落一次，免得同一帧内的
-  // 重渲染把刚上屏的字又抹回去。
-  mirrorPromptDraftFromDom(event?.target);
-}
-
 function handlePromptBlur(event) {
   mirrorPromptDraftFromDom(event?.target);
-  // 组合状态属于当前焦点，不能残留到另一 Tab 的输入框。
-  promptComposing.value = false;
-  promptCompositionEndedAt = 0;
 }
 
 // Stable references for the prompt textarea: inline object literals in the
@@ -6772,11 +6747,10 @@ function handlePromptBlur(event) {
 // inputProps/autosize as changed and re-render once per tab per render.
 const PROMPT_INPUT_PROPS = {
   onPaste: handlePromptPaste,
-  onCompositionstart: handlePromptCompositionStart,
-  // naive 只在自己的 textarea 上覆写 onInput/onChange，组合事件原样透传给我们，
-  // 所以实时镜像只能挂在这里（见 mirrorPromptDraftFromDom）。
-  onCompositionupdate: (event) => mirrorPromptDraftFromDom(event?.target),
-  onCompositionend: handlePromptCompositionEnd,
+  // Naive 覆盖 textarea 的 onInput，保留 onInputCapture。
+  // compositionend 最终落一次草稿，并在组词结束后更新补全菜单。
+  onInputCapture: handlePromptInput,
+  onCompositionend: handlePromptInput,
   onClick: handlePromptCursorActivity,
   onKeyup: handlePromptKeyup,
   'data-ally-prompt-input': 'true',
@@ -6784,27 +6758,14 @@ const PROMPT_INPUT_PROPS = {
 const PROMPT_AUTOSIZE = { minRows: 2, maxRows: 10 };
 
 function handlePromptKeydown(event) {
-  // macOS WebKit may emit Enter just after compositionend and report isComposing=false.
-  // keyCode 229 and the short post-composition guard cover those event-order variants.
-  if (event.key === 'Enter') {
-    // 即使漏了 compositionend 且没有后续 input，也以原生 Enter 状态修复镜像。
-    // 保留 keyCode 229 例外：WebKit 的输入法确认键可能报告 isComposing=false。
-    if (event.isComposing === false && event.keyCode !== 229) promptComposing.value = false;
-    if (promptComposing.value || event.isComposing) {
-      // 输入法组合中：Enter 由输入法消费为确认键，不拦截也不产生换行。
-      return;
-    }
-    if (event.keyCode === 229) {
-      // 组合已结束但 keyCode 仍残留 229 的幽灵 Enter：吞掉，防止多出一个换行。
+  // 组词按键在 main.js 安装的捕获边界处统一隔离；这里不保存输入法状态。
+  // 换行在菜单路由之前决定，候选菜单不能把 Shift+Enter 改成提交。
+  if (event.key === 'Enter' && event.shiftKey) return;
+  if (sessionsVisible.value && currentWorkspaceSessions.value.length === 0) {
+    sessionsVisible.value = false;
+    // 选空菜单的 Enter 只关闭菜单，不能顺势发送草稿。
+    if (event.key === 'Enter') {
       event.preventDefault();
-      return;
-    }
-    if (performance.now() - promptCompositionEndedAt < 100) {
-      // 输入法确认后紧跟的幽灵 Enter（isComposing=false）：吞掉并 preventDefault，
-      // 既不误发送也不产生换行；时间戳清零实现只吞一次，紧接着的第二次 Enter
-      // 恢复正常发送。
-      event.preventDefault();
-      promptCompositionEndedAt = 0;
       return;
     }
   }
@@ -6903,7 +6864,6 @@ function handlePromptKeydown(event) {
   }
   if (sessionsVisible.value) {
     const total = currentWorkspaceSessions.value.length;
-    if (total === 0) return;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       sessionsSelectedIndex.value = (sessionsSelectedIndex.value + 1) % total;

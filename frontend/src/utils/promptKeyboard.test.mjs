@@ -3,8 +3,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { isolateImeKeydown } from './imeKeyboard.mjs';
 
-// 执行实际输入框处理器，复现漏 compositionend 时的事件序列。
 const source = readFileSync(new URL('../App.vue', import.meta.url), 'utf8');
 function section(start, end) {
   const from = source.indexOf(start);
@@ -13,135 +13,195 @@ function section(start, end) {
   return source.slice(from, to);
 }
 
+function key(key = 'Enter', overrides = {}) {
+  return Object.assign(new Event('keydown', { cancelable: true }), {
+    key, isComposing: false, shiftKey: false, ...overrides,
+  });
+}
+
 function fixture() {
   const ref = (value) => ({ value });
   const noop = () => {};
-  let now = 1000;
-  let sent = 0;
-  const composing = ref(false);
+  const targets = { a: { value: '' }, b: { value: '' } };
+  const tabs = ref([{ id: 'a', sessionId: 'sa' }, { id: 'b', sessionId: 'sb' }]);
+  const drafts = { sa: '你好', sb: '另一个 Tab' };
+  let active = 'a';
+  const actions = [];
   const bindings = {
-    promptComposing: composing, performance: { now: () => now },
-    promptText: ref('你好'), activeSession: ref(null),
-    commandMenuVisible: ref(false), sessionsVisible: ref(false),
+    promptText: { get value() { return drafts[tabs.value.find((tab) => tab.id === active).sessionId] || ''; } },
+    workspaceTabs: tabs, sessionPromptTexts: drafts,
+    promptInputRefs: Object.fromEntries(Object.entries(targets).map(([id, target]) => [id, {
+      $el: { contains: (el) => el === target },
+    }])),
+    activeSession: ref(null), commandMenuVisible: ref(false), sessionsVisible: ref(false),
     fileMentionVisible: ref(false), commandHistoryIndex: ref(-1), commandHistory: ref([]),
-    isSlashCommandDraft: () => false, nextTick: (fn) => fn(),
-    updateFileMentionFromCaret: noop, mirrorPromptDraftFromDom: noop,
+    filteredCommands: ref([{ label: '/test' }]), selectedCommandIndex: ref(0),
+    currentWorkspaceSessions: ref([]), sessionsSelectedIndex: ref(0),
+    fileMentionEntries: ref([]), fileMentionLoading: ref(false), fileMentionSelectedIndex: ref(0),
+    isSlashCommandDraft: (text) => /^\/\S*$/.test(text), nextTick: (fn) => fn(),
+    getPromptTextarea: () => targets[active],
+    updateFileMentionFromCaret: () => actions.push('mention'), closeFileMentionMenu: noop,
     handlePromptPaste: noop, handlePromptCursorActivity: noop,
-    sendPrompt: () => { sent++; },
+    sendPrompt: () => actions.push('send'), applyCommand: () => actions.push('command'),
+    applyFileMention: () => actions.push('file'), selectSession: () => actions.push('session'),
   };
+  // 执行真实处理器、DOM 归属和草稿搬运，不在测试里复制组词状态机。
   const api = new Function(...Object.keys(bindings), `
-    let promptCompositionEndedAt = 0;
-    ${section('function handlePromptInput(', '// 草稿归属按 DOM 反查')}
+    ${section('function handlePromptInput(', '// Tab→会话链接')}
+    ${section('function repointTabSession(', 'function getPromptTextarea(')}
     ${section('function handlePromptKeyup(', 'function applyCommand(')}
-    return { input: handlePromptInput, keydown: handlePromptKeydown, props: PROMPT_INPUT_PROPS,
-      blur: ${section('<n-input', '/>').match(/@blur="(\w+)"/)?.[1] || 'undefined'} };
+    return { input: PROMPT_INPUT_PROPS.onInputCapture, props: PROMPT_INPUT_PROPS,
+      blur: handlePromptBlur, repointTabSession };
   `)(...Object.values(bindings));
-  return { ...api, composing, sent: () => sent, advance: (ms) => { now += ms; } };
-}
-
-function enter(overrides = {}) {
+  const target = new EventTarget();
+  target.addEventListener('keydown', isolateImeKeydown, true);
+  // 从真实 App 源码取键盘处理器，与实际捕获边界一起运行。
+  const handler = new Function(...Object.keys(bindings), `
+    ${section('function handlePromptKeydown(', 'function applyCommand(')}
+    return handlePromptKeydown;
+  `)(...Object.values(bindings));
+  target.addEventListener('keydown', handler);
   return {
-    key: 'Enter', keyCode: 13, isComposing: false, shiftKey: false,
-    defaultPrevented: false,
-    preventDefault() { this.defaultPrevented = true; },
-    ...overrides,
+    ...api, ...bindings, tabs, drafts, targets, actions,
+    activate: (id) => { active = id; },
+    keydown: (event) => target.dispatchEvent(event),
   };
 }
 
 test('普通 Enter 发送，Shift+Enter 保留换行', () => {
   const f = fixture();
-  const newline = enter({ shiftKey: true });
+  const newline = key('Enter', { shiftKey: true });
   f.keydown(newline);
   assert.equal(newline.defaultPrevented, false);
-  assert.equal(f.sent(), 0);
-  const send = enter();
+  assert.deepEqual(f.actions, []);
+  const send = key();
   f.keydown(send);
   assert.equal(send.defaultPrevented, true);
-  assert.equal(f.sent(), 1);
+  assert.deepEqual(f.actions, ['send']);
 });
 
-test('输入法组词中的 Enter 留给输入法确认', () => {
+for (const name of ['Enter', 'ArrowUp', 'ArrowDown', 'Tab', 'Escape', '/']) {
+  test(`组词期间 ${name} 不提交、切菜单或改变历史`, () => {
+    const f = fixture();
+    f.commandMenuVisible.value = true;
+    const event = key(name, { isComposing: true });
+    f.keydown(event);
+    assert.equal(event.defaultPrevented, false);
+    assert.equal(f.commandMenuVisible.value, true);
+    assert.deepEqual(f.actions, []);
+  });
+}
+
+test('未收到 compositionend/blur，下一次非组合 Enter 仍立即发送', () => {
   const f = fixture();
-  f.props.onCompositionstart();
-  const confirm = enter({ isComposing: true, keyCode: 229 });
+  f.targets.a.value = '尚未结束的组词';
+  f.input({ target: f.targets.a, isComposing: true });
+  assert.equal(f.drafts.sa, '尚未结束的组词');
+  const send = key();
+  f.keydown(send);
+  assert.equal(send.defaultPrevented, true);
+  assert.deepEqual(f.actions, ['send']);
+});
+
+test('组合结束后立即按 Enter 不会被计时窗口吞掉', () => {
+  const f = fixture();
+  f.targets.a.value = '已确认';
+  f.props.onCompositionend({ target: f.targets.a });
+  assert.equal(f.drafts.sa, '已确认');
+  f.actions.length = 0;
+  f.keydown(key());
+  assert.deepEqual(f.actions, ['send']);
+});
+
+test('组合结束后 WebKit 的 229 确认键不发送，下一次普通 Enter 正常发送', () => {
+  const f = fixture();
+  f.targets.a.value = '已确认';
+  f.props.onCompositionend({ target: f.targets.a });
+  f.actions.length = 0;
+  const confirm = key('Enter', { keyCode: 229 });
   f.keydown(confirm);
   assert.equal(confirm.defaultPrevented, false);
-  assert.equal(f.sent(), 0);
+  assert.deepEqual(f.actions, []);
+  f.keydown(key());
+  assert.deepEqual(f.actions, ['send']);
 });
 
-test('漏 compositionend 后，非组合输入事件恢复状态，Enter 正常发送', () => {
+test('A Tab 组合中切到 B，A 的草稿与组词按键不会污染 B', () => {
   const f = fixture();
-  f.props.onCompositionstart();
-  f.input({ isComposing: false });
-  assert.equal(f.composing.value, false);
-  const send = enter();
+  f.activate('b');
+  f.targets.a.value = 'A 的组合文本';
+  f.input({ target: f.targets.a, isComposing: true });
+  assert.equal(f.drafts.sa, 'A 的组合文本');
+  assert.equal(f.drafts.sb, '另一个 Tab');
+  f.keydown(key());
+  assert.deepEqual(f.actions, ['send']);
+});
+
+test('槽位重指后，组合文本按 DOM 归属写到新会话', () => {
+  const f = fixture();
+  f.repointTabSession(f.tabs.value[0], 'replacement', { carryDraft: true });
+  f.targets.a.value = '重指期间继续输入';
+  f.input({ target: f.targets.a, isComposing: true });
+  assert.equal(f.drafts.replacement, '重指期间继续输入');
+  assert.equal(f.drafts.sa, undefined);
+  assert.equal(f.drafts.sb, '另一个 Tab');
+});
+
+test('组合中的斜杠文本只镜像草稿，不触发命令或文件补全', () => {
+  const f = fixture();
+  f.targets.a.value = '/待确认';
+  f.input({ target: f.targets.a, isComposing: true });
+  assert.equal(f.drafts.sa, '/待确认');
+  assert.equal(f.commandMenuVisible.value, false);
+  assert.deepEqual(f.actions, []);
+});
+
+for (const menu of ['command', 'sessions', 'file']) {
+  test(`${menu} 菜单打开时 Shift+Enter 仍只换行`, () => {
+    const f = fixture();
+    if (menu === 'command') f.commandMenuVisible.value = true;
+    if (menu === 'sessions') {
+      f.sessionsVisible.value = true;
+      f.currentWorkspaceSessions.value = [{}];
+    }
+    if (menu === 'file') {
+      f.fileMentionVisible.value = true;
+      f.fileMentionEntries.value = [{}];
+    }
+    const newline = key('Enter', { shiftKey: true });
+    f.keydown(newline);
+    assert.equal(newline.defaultPrevented, false);
+    assert.deepEqual(f.actions, []);
+  });
+}
+
+test('会话菜单为空时 Enter 只关闭菜单，下一次 Enter 才发送', () => {
+  const f = fixture();
+  f.sessionsVisible.value = true;
+  const send = key();
   f.keydown(send);
   assert.equal(send.defaultPrevented, true);
-  assert.equal(f.sent(), 1);
+  assert.equal(f.sessionsVisible.value, false);
+  assert.deepEqual(f.actions, []);
+  f.keydown(key());
+  assert.deepEqual(f.actions, ['send']);
 });
 
-test('漏 compositionend 且没有后续输入时，原生 Enter 状态仍可恢复发送', () => {
-  const f = fixture();
-  f.props.onCompositionstart();
-  const send = enter();
-  f.keydown(send);
-  assert.equal(send.defaultPrevented, true);
-  assert.equal(f.sent(), 1);
-});
-
-test('输入框失焦清理组合状态，切到另一 Tab 不会只换行', () => {
-  const f = fixture();
-  f.props.onCompositionstart();
-  f.blur?.({ target: { value: '你好' } });
-  assert.equal(f.composing.value, false);
-  const send = enter();
-  f.keydown(send);
-  assert.equal(send.defaultPrevented, true);
-  assert.equal(f.sent(), 1);
-});
-
-test('普通组合输入不提前清除组词状态', () => {
-  const f = fixture();
-  f.props.onCompositionstart();
-  f.input({ isComposing: true });
-  assert.equal(f.composing.value, true);
-});
-
-test('输入法 keyCode 229 仍保留组词保护，即使 isComposing 为 false', () => {
-  const f = fixture();
-  f.props.onCompositionstart();
-  f.keydown(enter({ keyCode: 229 }));
-  assert.equal(f.composing.value, true);
-  assert.equal(f.sent(), 0);
-});
-
-test('缺少原生 isComposing 信息时不推断组词已结束', () => {
-  const f = fixture();
-  f.props.onCompositionstart();
-  f.input({});
-  f.keydown(enter({ isComposing: undefined }));
-  assert.equal(f.composing.value, true);
-  assert.equal(f.sent(), 0);
-});
-
-test('组合结束后的幽灵 Enter 只吞一次，第二次 Enter 发送', () => {
-  const f = fixture();
-  f.props.onCompositionstart();
-  f.props.onCompositionend();
-  const ghost = enter();
-  f.keydown(ghost);
-  assert.equal(ghost.defaultPrevented, true);
-  assert.equal(f.sent(), 0);
-  f.keydown(enter());
-  assert.equal(f.sent(), 1);
-});
-
-test('组合结束后 keyCode 229 的 Enter 不发送也不换行', () => {
-  const f = fixture();
-  f.props.onCompositionend();
-  f.advance(200);
-  const ghost = enter({ keyCode: 229 });
-  f.keydown(ghost);
-  assert.equal(ghost.defaultPrevented, true);
-  assert.equal(f.sent(), 0);
-});
+for (const menu of ['command', 'sessions', 'file']) {
+  test(`${menu} 菜单有候选时普通 Enter 正常选中`, () => {
+    const f = fixture();
+    if (menu === 'command') f.commandMenuVisible.value = true;
+    if (menu === 'sessions') {
+      f.sessionsVisible.value = true;
+      f.currentWorkspaceSessions.value = [{}];
+    }
+    if (menu === 'file') {
+      f.fileMentionVisible.value = true;
+      f.fileMentionEntries.value = [{}];
+    }
+    const event = key();
+    f.keydown(event);
+    assert.equal(event.defaultPrevented, true);
+    assert.deepEqual(f.actions, [menu === 'sessions' ? 'session' : menu]);
+  });
+}
