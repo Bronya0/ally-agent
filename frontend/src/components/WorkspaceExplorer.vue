@@ -1681,11 +1681,29 @@ async function confirmDeleteNode(node) {
     onPositiveClick: async () => {
       if (deleting.value) return false;
       deleting.value = true;
+      const idleDialogState = {
+        loading: instance.loading,
+        negativeButtonProps: instance.negativeButtonProps,
+        closable: instance.closable,
+        maskClosable: instance.maskClosable,
+        closeOnEsc: instance.closeOnEsc,
+      };
+      let dialogDestroyed = false;
+      // Async dialog callbacks do not enable loading automatically.
+      // Keep the confirmation visible while the delete request is in flight.
+      Object.assign(instance, {
+        loading: true,
+        negativeButtonProps: { ...idleDialogState.negativeButtonProps, disabled: true },
+        closable: false,
+        maskClosable: false,
+        closeOnEsc: false,
+      });
       try {
         const workspace = String(props.workspace || '');
         await DeletePath({ workspace, paths: [filePath], recursive: node.dir });
         message.success(t('app.workspaceExplorer.deleted'));
         instance.destroy();
+        dialogDestroyed = true;
         if (workspace !== props.workspace || disposed) return false;
         if (activeFile.value?.path === filePath || activeFile.value?.path.startsWith(`${filePath}/`)) clearEditor();
         await refreshTree();
@@ -1695,6 +1713,7 @@ async function confirmDeleteNode(node) {
         return false;
       } finally {
         deleting.value = false;
+        if (!dialogDestroyed) Object.assign(instance, idleDialogState);
       }
     },
   });
