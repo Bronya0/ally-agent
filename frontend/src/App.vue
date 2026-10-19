@@ -301,6 +301,7 @@ Public License v3. See the LICENSE file for details.
                   @update:value="promptInputBindingFor(tab).onUpdateValue"
                   @keydown="handlePromptKeydown"
                   @input="handlePromptInput"
+                  @blur="handlePromptBlur"
                 />
                 <div v-if="activePendingAttachments.length" class="pending-attachments">
                   <div v-for="att in activePendingAttachments" :key="att.id" class="pending-attachment">
@@ -6539,7 +6540,10 @@ const filteredCommands = computed(() => {
 const filteredBuiltin = computed(() => filteredCommands.value.filter(cmd => cmd.special !== 'skill'));
 const filteredSkills = computed(() => filteredCommands.value.filter(cmd => cmd.special === 'skill'));
 
-function handlePromptInput() {
+function handlePromptInput(event) {
+  // compositionend 可能因切窗/输入法取消而缺席。和 Naive 的 handleInput 一样，
+  // 用明确的非组合原生输入恢复本地镜像，避免之后 Enter 永久走换行。
+  if (event?.isComposing === false) promptComposing.value = false;
   const value = promptText.value;
   // Close the menu as soon as a space follows the slash token: the command
   // word is finished and the user is typing arguments ("/xxx content…").
@@ -6756,6 +6760,13 @@ function handlePromptCompositionEnd(event) {
   mirrorPromptDraftFromDom(event?.target);
 }
 
+function handlePromptBlur(event) {
+  mirrorPromptDraftFromDom(event?.target);
+  // 组合状态属于当前焦点，不能残留到另一 Tab 的输入框。
+  promptComposing.value = false;
+  promptCompositionEndedAt = 0;
+}
+
 // Stable references for the prompt textarea: inline object literals in the
 // template hand n-input a new object on every App render, which makes it treat
 // inputProps/autosize as changed and re-render once per tab per render.
@@ -6776,6 +6787,9 @@ function handlePromptKeydown(event) {
   // macOS WebKit may emit Enter just after compositionend and report isComposing=false.
   // keyCode 229 and the short post-composition guard cover those event-order variants.
   if (event.key === 'Enter') {
+    // 即使漏了 compositionend 且没有后续 input，也以原生 Enter 状态修复镜像。
+    // 保留 keyCode 229 例外：WebKit 的输入法确认键可能报告 isComposing=false。
+    if (event.isComposing === false && event.keyCode !== 229) promptComposing.value = false;
     if (promptComposing.value || event.isComposing) {
       // 输入法组合中：Enter 由输入法消费为确认键，不拦截也不产生换行。
       return;

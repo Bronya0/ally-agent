@@ -209,6 +209,8 @@
 2026-10-13 高危 ssh-orphan-grants 删除 SSH 节点未同步撤销各工作区授权，会让计数残留且同名新节点继承旧权限。@biz_ssh_cluster.go
 2026-10-15 中危 window-anchor-not-index 给滚动窗口里的行定位别存绝对行号：列表从头部裁，触顶后行号恒等于末尾，提示永远贴底。@contextDriftNotice.mjs
 2026-10-15 中危 error-text-one-source 错误文案只能单源：前端按错误码另造本地化摘要，用户看到的一句会与模型收到的原文分家。@ToolCallCard.vue
+2026-10-16 中危 plugin-html-nest 插件模板函数返回裸字符串，嵌套渲染会被整段转义成可见标签；要返回带 toString 的标记对象。@plugins/ally-todo/lib/dom.js
+2026-10-16 中危 plugin-shadow-import 插件入口里与 import 同名的函数会顶掉它，调用自己形成无限递归、mount 直接失败。@plugins/ally-todo/index.js
 [responses-terminal-not-eof] 2026-10-17 高危 Responses 见 completed/incomplete 即终止，别等 EOF 丢结果重发。@prov_adapter_responses.go
 [native-output-not-chat-text] 2026-10-17 高危 Responses output 勿投影回正文：丢 reasoning/phase/交错序。@prov_responses_history.go
 [delegate-retry-not-squared] 2026-10-17 高危 子代理外层勿重试适配器已耗尽的首输出前错误，否则叠成平方预算；只接管流中断或空回答。@orch_subagent.go
