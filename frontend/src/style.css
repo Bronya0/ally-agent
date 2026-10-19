@@ -4982,6 +4982,11 @@ html.rail-expanded .chat-layout {
   color: var(--ally-text-muted);
 }
 
+/* 命令折叠预览压平空白；展开态与文件代码视图保留原始缩进。 */
+.code-view.collapsed .code-row.no-gutter .code-text {
+  white-space: pre-line;
+}
+
 .code-text {
   padding-left: 4px;
   white-space: pre-wrap;
