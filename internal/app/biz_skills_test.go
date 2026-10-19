@@ -50,39 +50,44 @@ func TestParseSkillFileSkipsCommonDocumentNames(t *testing.T) {
 	}
 }
 
-func TestParseSkillFileKeepsReadmeWithFrontmatter(t *testing.T) {
+func TestParseSkillFileRejectsStandaloneMarkdownWithFrontmatter(t *testing.T) {
 	root := t.TempDir()
 	readmePath := filepath.Join(root, "readme.md")
 	content := "---\nname: my-readme-skill\ndescription: a skill despite the filename\n---\n# body\n"
 	writeSkillTestFile(t, root, "readme.md", content)
 
 	meta := parseSkillFile(readmePath)
-	if meta.Name != "my-readme-skill" {
-		t.Fatalf("expected frontmatter-declared skill, got name=%q", meta.Name)
-	}
-	if meta.Description != "a skill despite the filename" {
-		t.Fatalf("expected description from frontmatter, got %q", meta.Description)
+	if meta.Name != "" {
+		t.Fatalf("standalone Markdown must not become a skill even with frontmatter, got name=%q", meta.Name)
 	}
 }
 
-func TestParseSkillFileFallbackForPlainMarkdown(t *testing.T) {
+func TestParseSkillFileRejectsStandaloneMarkdown(t *testing.T) {
 	root := t.TempDir()
-	// A non-document Markdown file without frontmatter still becomes a skill.
-	path := filepath.Join(root, "formatter.md")
-	writeSkillTestFile(t, root, "formatter.md", "# formatter\nformats code\n")
-
-	meta := parseSkillFile(path)
-	if meta.Name != "formatter" {
-		t.Fatalf("expected fallback name formatter, got %q", meta.Name)
+	for _, name := range []string{"LESSONS.md", "lessons.MD", "AGENTS.md", "USER.md", "CODEGRAPH.md", "formatter.md", "my-notes.md"} {
+		writeSkillTestFile(t, root, name, "# Plain Markdown\nnot a skill declaration\n")
+		if meta := parseSkillFile(filepath.Join(root, name)); meta.Name != "" {
+			t.Fatalf("standalone %s must be skipped, got %q", name, meta.Name)
+		}
+	}
+	// Ordinary document metadata is not a skill declaration either.
+	writeSkillTestFile(t, root, "notes.md", "---\ntitle: Notes\ndescription: ordinary documentation\n---\nbody\n")
+	if meta := parseSkillFile(filepath.Join(root, "notes.md")); meta.Name != "" {
+		t.Fatalf("frontmatter without a name must not register a skill, got %q", meta.Name)
 	}
 }
 
-func TestScanSkillDirIgnoresReadme(t *testing.T) {
+func TestScanSkillDirIgnoresUnrelatedMarkdown(t *testing.T) {
 	root := t.TempDir()
 	writeSkillTestFile(t, root, "readme.md", "# Skills\ndocs\n")
-	writeSkillTestFile(t, root, "formatter.md", "# formatter\nformats code\n")
+	writeSkillTestFile(t, root, "LESSONS.md", "# Lessons\nproject lessons\n")
+	writeSkillTestFile(t, root, "other-notes.md", "# Unrelated notes\n")
+	writeSkillTestFile(t, root, "formatter.md", "---\nname: formatter\ndescription: formats code\n---\n# formatter\n")
+	// A SKILL.md directly in the scan root is not a skill directory either.
+	writeSkillTestFile(t, root, "SKILL.md", "---\nname: root-skill\ndescription: invalid layout\n---\n")
 	// Directory skill with SKILL.md + frontmatter
 	writeSkillTestFile(t, root, "greeter/SKILL.md", "---\nname: greeter\ndescription: says hi\n---\n")
+	writeSkillTestFile(t, root, "plain-dir/SKILL.md", "# Directory skill\n")
 
 	var skills []SkillDefinition
 	seen := map[string]bool{}
@@ -92,11 +97,11 @@ func TestScanSkillDirIgnoresReadme(t *testing.T) {
 	for _, s := range skills {
 		names[s.Name] = true
 	}
-	if names["readme"] {
-		t.Fatalf("readme should not be scanned as a skill, got %v", names)
+	if len(skills) != 2 {
+		t.Fatalf("only directory skills should be scanned, got %v", names)
 	}
-	if !names["formatter"] {
-		t.Fatalf("formatter should be scanned as a skill, got %v", names)
+	if !names["plain-dir"] {
+		t.Fatalf("directory skill without frontmatter should be scanned, got %v", names)
 	}
 	if !names["greeter"] {
 		t.Fatalf("greeter directory skill should be scanned, got %v", names)

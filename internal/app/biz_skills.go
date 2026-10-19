@@ -451,39 +451,8 @@ func scanSkillDir(dir string, source string, skills *[]SkillDefinition, seen map
 					*skills = append(*skills, meta)
 				}
 			}
-		} else if strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
-			skillPath := filepath.Join(dir, entry.Name())
-			meta := parseSkillFile(skillPath)
-			if key := strings.ToLower(meta.Name); meta.Name != "" && !seen[key] {
-				seen[key] = true
-				meta.Source = source
-				meta.Dir = dir
-				*skills = append(*skills, meta)
-			}
 		}
 	}
-}
-
-// commonDocumentNames lists lowercase file stems (without extension) that are
-// treated as documentation rather than skills when a Markdown file has no
-// usable YAML frontmatter. Files with explicit frontmatter declaring a name
-// are still treated as skills even if their stem matches this list.
-var commonDocumentNames = map[string]bool{
-	"readme":              true,
-	"license":             true,
-	"licence":             true,
-	"copying":             true,
-	"notice":              true,
-	"changelog":           true,
-	"changes":             true,
-	"history":             true,
-	"contributing":        true,
-	"authors":             true,
-	"contributors":        true,
-	"code_of_conduct":     true,
-	"security":            true,
-	"third_party":         true,
-	"third_party_notices": true,
 }
 
 func parseSkillFile(path string) SkillDefinition {
@@ -499,6 +468,9 @@ func parseSkillFile(path string) SkillDefinition {
 // so built-in (embedded) skills reuse the same parsing path.
 func parseSkillContent(path, text string) SkillDefinition {
 	meta := SkillDefinition{Path: path}
+	if !strings.EqualFold(filepath.Base(path), "SKILL.md") {
+		return meta
+	}
 	if front, ok := splitSkillFrontmatter(text); ok {
 		for _, line := range strings.Split(front, "\n") {
 			line = strings.TrimSpace(line)
@@ -526,23 +498,8 @@ func parseSkillContent(path, text string) SkillDefinition {
 			return meta
 		}
 	}
-	// Fallback: use filename (without .md extension)
-	base := filepath.Base(path)
-	stem := strings.TrimSuffix(base, filepath.Ext(base))
-	if commonDocumentNames[strings.ToLower(stem)] {
-		// Documentation files (readme, license, ...) without usable
-		// frontmatter are not skills.
-		return SkillDefinition{Path: path}
-	}
-	meta.Name = stem
-	if strings.EqualFold(base, "SKILL.md") {
-		// Directory skill (skill-dir/SKILL.md): the parent directory name is
-		// the skill name per the documented convention. The previous check
-		// (`parent dir == meta.Name`) only caught the nested SKILL/SKILL.md
-		// layout, so plain directory skills fell back to the stem "SKILL"
-		// and every such skill collided on one dedup key.
-		meta.Name = filepath.Base(filepath.Dir(path))
-	}
+	// The directory's explicit SKILL.md entry point may use its parent name.
+	meta.Name = filepath.Base(filepath.Dir(path))
 	meta.Description = fmt.Sprintf("Skill loaded from %s", path)
 	return meta
 }
