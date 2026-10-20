@@ -22,6 +22,13 @@ Public License v3. See the LICENSE file for details.
     </template>
 
     <div class="task-center-body">
+      <div class="task-scope">
+        <n-radio-group :value="viewScope" size="small" @update:value="$emit('update:scope', $event)">
+          <n-radio-button value="workspace" :disabled="!workspace">{{ $t('taskCenter.currentWorkspace') }}</n-radio-button>
+          <n-radio-button value="all">{{ $t('taskCenter.allWorkspaces') }}</n-radio-button>
+        </n-radio-group>
+        <span v-if="viewScope === 'workspace'" class="mono-muted ellipsis" :title="workspace">{{ workspace }}</span>
+      </div>
       <n-tabs ref="tabsRef" v-model:value="activeTab" type="line" pane-wrapper-style="padding-top: 4px;">
         <n-tab-pane name="services" :tab="$t('taskCenter.servicesTab', { running: serviceRunningCount, total: services.length })">
           <div class="task-overview">
@@ -58,7 +65,9 @@ Public License v3. See the LICENSE file for details.
                   </div>
                 </div>
                 <!-- 身份行：一眼看出在跑什么命令。 -->
+                <div v-if="serviceDescription(service, $t)" class="service-description"><span>{{ $t('service.description') }} · </span>{{ serviceDescription(service, $t) }}</div>
                 <div v-if="service.command" class="command" :title="service.command" v-html="highlightedCommand(service.command)"></div>
+                <div v-if="viewScope === 'all'" class="mono-muted ellipsis" :title="service.workspace">{{ $t('taskCenter.workspace') }} · {{ service.workspace || $t('taskCenter.noWorkspace') }}</div>
                 <!-- 事实行：只留当下有意义的那几项——还活着的看启动时间，已结束的看退出码。 -->
                 <div class="meta-line">
                   <span v-if="isServiceActive(service)" class="meta-item"><i>{{ $t('service.startedAt') }}</i>{{ formatUnixSeconds(service.startedAt) }}</span>
@@ -122,6 +131,7 @@ Public License v3. See the LICENSE file for details.
                 <!-- 内容行：“跑什么”——command（高亮命令）或 instruction（LLM 委托描述）。 -->
                 <div v-if="task.command" class="command" :title="task.command" v-html="highlightedCommand(task.command)"></div>
                 <div v-else-if="task.instruction" class="instruction">{{ task.instruction }}</div>
+                <div v-if="viewScope === 'all'" class="mono-muted ellipsis" :title="task.workspace">{{ $t('taskCenter.workspace') }} · {{ task.workspace || $t('taskCenter.noWorkspace') }}</div>
                 <!-- 事实行：历史计数，异常项（连续失败）才上色。 -->
                 <div class="meta-line">
                   <span class="meta-item"><i>{{ $t('scheduled.lastRun') }}</i>{{ formatTime(task.lastRunAt) }}</span>
@@ -129,7 +139,6 @@ Public License v3. See the LICENSE file for details.
                   <span v-if="task.consecutiveFailures" class="meta-item attention"><i>{{ $t('scheduled.failures') }}</i>{{ task.consecutiveFailures }}</span>
                   <span v-if="!task.command" class="meta-item"><i>{{ $t('scheduled.limit') }}</i>{{ $t('common.steps', { count: task.maxSteps }) }} · {{ durationLabel(task.timeoutSeconds) }}</span>
                 </div>
-                <div class="mono-muted ellipsis" :title="task.workspace">{{ task.workspace }}</div>
                 <div v-if="task.lastSummary || task.lastError" class="buffer-preview" :class="{ error: task.lastError && !task.lastSummary }">
                   <div class="buffer-title">{{ task.lastSummary ? $t('scheduled.latestOutput') : $t('scheduled.latestError') }}</div>
                   <pre v-html="previewHtml(task.lastSummary || task.lastError)"></pre>
@@ -164,6 +173,8 @@ import { GetServiceOutput } from '../../bindings/ally-dev/internal/app/app';
 import { formatDateTime, t } from '../i18n.mjs';
 import { renderAnsiToHtml } from '../utils/ansi.mjs';
 import { formatBytes } from '../utils/format.mjs';
+import { serviceDescription } from '../utils/servicePresentation.mjs';
+import { effectiveTaskScope } from '../utils/taskWorkspace.mjs';
 import { highlightShellCommand } from '../utils/shellHighlight.mjs';
 import { isScheduledTaskRunning, isServiceActive, scheduledStatusKey, scheduledStatusTone, serviceStatusKey, serviceStatusTone } from '../utils/taskStatus.mjs';
 
@@ -177,9 +188,11 @@ const props = defineProps({
   stoppingIds: { type: Array, default: () => [] },
   // 工具栏入口 chip 决定打开哪个 Tab（S=services / C=scheduled）。
   defaultTab: { type: String, default: 'services' },
+  scope: { type: String, default: 'all' },
+  workspace: { type: String, default: '' },
 });
 
-defineEmits(['close', 'refresh', 'deleteTask', 'stopService']);
+defineEmits(['close', 'refresh', 'deleteTask', 'stopService', 'update:scope']);
 
 // Background services come first: they are the live, interactive part of the
 // task center (stop / tail a running dev server), while scheduled tasks are
@@ -206,6 +219,7 @@ function invalidateLogRequest() {
 const scheduledRunningCount = computed(() => props.tasks.filter(isScheduledTaskRunning).length);
 const serviceRunningCount = computed(() => props.services.filter(isServiceActive).length);
 const loading = computed(() => props.scheduledLoading || props.servicesLoading);
+const viewScope = computed(() => effectiveTaskScope(props.scope, props.workspace));
 
 // Service output carries SGR color escapes. Converting the whole buffer to
 // styled HTML on every refresh would be wasteful, so the util drops the head of
@@ -222,6 +236,12 @@ const logRenderNote = computed(() => (logRender.value.droppedChars > 0
 function syncTabs() {
   nextTick(() => tabsRef.value?.syncBarPosition?.());
 }
+
+// Changing ownership context invalidates any in-flight log response too.
+watch([() => props.scope, () => props.workspace], () => {
+  logVisible.value = false;
+  syncTabs();
+}, { flush: 'sync' });
 
 // 每次打开面板时定位到入口 chip 对应的 Tab；面板内的手动切换在下次打开前一直有效。
 watch(() => props.show, (visible) => {
@@ -414,6 +434,10 @@ function durationLabel(seconds) {
 </script>
 
 <style scoped>
+.service-description { margin-top: 6px; color: var(--ally-text-body); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.service-description > span { color: var(--ally-text-faint); }
+.task-scope { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
+.task-scope > .ellipsis { min-width: 0; flex: 1; }
 .task-center-body { height: min(72vh, 760px); min-height: 360px; overflow: auto; padding-right: 4px; }
 .task-center-body :deep(.n-tabs) { min-height: 100%; }
 .task-overview { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 10px; color: var(--ally-text-muted); font-size: 12px; }

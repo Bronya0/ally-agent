@@ -24,6 +24,7 @@ import {
 } from '../utils/toolEventState.mjs';
 import { formatReadRangeChip } from '../utils/toolFormat.mjs';
 import { deletePathRows, scheduledTaskRow, scheduledTaskRows, serviceListRows, serviceRow, sshClusterNodeRow, sshServerRows, transferDetailRows } from '../utils/toolPreview.mjs';
+import { serviceDescription, serviceCapacityCaption } from '../utils/servicePresentation.mjs';
 import { formatBytes } from '../utils/format.mjs';
 import { scheduledStatusKey, scheduledStatusTone, serviceStatusKey, serviceStatusTone } from '../utils/taskStatus.mjs';
 import { isActionKeyedTool } from '../utils/toolVerb.mjs';
@@ -328,7 +329,7 @@ export function useToolEvents(ctx) {
       key: service.id || service.name,
       title: service.name || service.id,
       subtitle: service.command,
-      description: details.join(' · '),
+      description: [serviceDescription(service, t), details.join(' · ')].filter(Boolean).join(' · '),
       badge: statusLabel(serviceStatusKey(service.status), service.status),
       tone: serviceStatusTone(service),
     };
@@ -357,9 +358,7 @@ export function useToolEvents(ctx) {
     const services = serviceListRows(resultData);
     if (services) {
       const counts = resultData && typeof resultData === 'object' ? resultData : {};
-      const caption = typeof counts.activeCount === 'number' && typeof counts.maxActive === 'number'
-        ? t('app.tools.services.active', { active: counts.activeCount, max: counts.maxActive })
-        : '';
+      const caption = serviceCapacityCaption(counts, t);
       setCardGrid(existing, services.map((service) => serviceCardItem(service)), { caption, emptyText: t('app.tools.services.none') });
       return;
     }

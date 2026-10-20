@@ -422,7 +422,7 @@ func renderCalculateResultForModel(r CalculateResult) string {
 // must action=read a specific id to inspect output.
 func renderServiceListResultForModel(r ServiceListToolResult) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `<ally-svcs active="%d" max="%d">`+"\n", r.ActiveCount, r.MaxActive)
+	fmt.Fprintf(&b, `<ally-svcs workspace-active="%d" global-active="%d" global-max="%d">`+"\n", r.ActiveCount, r.GlobalActiveCount, r.MaxActive)
 	for _, s := range r.Services {
 		row := "  " + s.ID
 		if s.Name != "" {
@@ -443,6 +443,15 @@ func renderServiceListResultForModel(r ServiceListToolResult) string {
 		}
 		if s.Command != "" {
 			row += " cmd=" + strconv.Quote(s.Command)
+		}
+		if s.Description != "" {
+			row += " description=" + strconv.Quote(s.Description)
+		}
+		if s.Promoted {
+			row += " promoted=true"
+			if s.TimeoutSeconds > 0 {
+				row += fmt.Sprintf(" timeout-seconds=%d", s.TimeoutSeconds)
+			}
 		}
 		if s.Error != "" {
 			row += " error=" + strconv.Quote(s.Error)
@@ -1332,6 +1341,15 @@ func renderServiceInfoResultForModel(r ServiceInfo) string {
 	b.WriteString(`<ally-svc id="` + attrEscape(r.ID) + `"`)
 	if r.Name != "" {
 		b.WriteString(` name="` + attrEscape(r.Name) + `"`)
+	}
+	if r.Description != "" {
+		b.WriteString(` description="` + attrEscape(r.Description) + `"`)
+	}
+	if r.Promoted {
+		b.WriteString(` promoted="true"`)
+		if r.TimeoutSeconds > 0 {
+			fmt.Fprintf(&b, ` timeout-seconds="%d"`, r.TimeoutSeconds)
+		}
 	}
 	if r.Status != "" {
 		b.WriteString(` status="` + attrEscape(r.Status) + `"`)

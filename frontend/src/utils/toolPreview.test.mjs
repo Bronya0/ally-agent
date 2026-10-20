@@ -401,8 +401,8 @@ test('sshClusterNodeRow reads a single add / authorize result', () => {
 
 test('serviceListRows reads one row per tracked service', () => {
   assert.deepEqual(
-    serviceListRows({ activeCount: 1, maxActive: 5, services: [{ id: 'svc_1', name: 'frontend', command: 'npm run dev', cwd: 'frontend', pid: 99, status: 'running' }] }),
-    [{ id: 'svc_1', name: 'frontend', command: 'npm run dev', cwd: 'frontend', pid: 99, status: 'running', exitCode: 0, outputBytes: 0, startedAt: 0, error: '' }],
+    serviceListRows({ activeCount: 1, maxActive: 5, services: [{ id: 'svc_1', name: 'frontend', description: 'Browser preview with hot reload', promoted: false, timeoutSeconds: 0, command: 'npm run dev', cwd: 'frontend', pid: 99, status: 'running' }] }),
+    [{ id: 'svc_1', name: 'frontend', description: 'Browser preview with hot reload', promoted: false, timeoutSeconds: 0, command: 'npm run dev', cwd: 'frontend', pid: 99, status: 'running', exitCode: 0, outputBytes: 0, startedAt: 0, error: '' }],
   );
   // 列表之外的形状（start / stop 的单条结果、read 的输出结果）都没有 services 数组。
   assert.equal(serviceListRows({ id: 'svc_1', status: 'running', pid: 99 }), null);
@@ -416,7 +416,7 @@ test('serviceListRows reads one row per tracked service', () => {
 test('serviceRow reads a single start / stop result and rejects the read output', () => {
   assert.deepEqual(
     serviceRow({ id: 'svc_1', command: 'npm run dev', cwd: 'frontend', pid: 99, status: 'running', startedAt: 1700000000 }),
-    { id: 'svc_1', name: '', command: 'npm run dev', cwd: 'frontend', pid: 99, status: 'running', exitCode: 0, outputBytes: 0, startedAt: 1700000000, error: '' },
+    { id: 'svc_1', name: '', description: '', promoted: false, timeoutSeconds: 0, command: 'npm run dev', cwd: 'frontend', pid: 99, status: 'running', exitCode: 0, outputBytes: 0, startedAt: 1700000000, error: '' },
   );
   // read 的结果形状是 ServiceOutputResult（id/output/bytes/truncated）。
   assert.equal(serviceRow({ id: 'svc_1', output: '', bytes: 0, truncated: false }), null);

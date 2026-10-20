@@ -45,8 +45,8 @@ Public License v3. See the LICENSE file for details.
           <span v-if="row.type === 'dir'" class="git-diff-disclosure">{{ treeExpanded[row.path] === false ? '▸' : '▾' }}</span>
           <span v-else :class="['git-diff-status', row.file.status]">{{ statusLabel(row.file.status) }}</span>
           <span class="git-diff-tree-name" :title="row.path">{{ row.name }}</span>
-          <span v-if="row.added > 0" class="diff-stat-added">+{{ row.added }}</span>
-          <span v-if="row.deleted > 0" class="diff-stat-removed">-{{ row.deleted }}</span>
+          <span v-if="row.type === 'file' && row.added > 0" class="diff-stat-added">+{{ row.added }}</span>
+          <span v-if="row.type === 'file' && row.deleted > 0" class="diff-stat-removed">-{{ row.deleted }}</span>
         </button>
       </div>
 
@@ -206,23 +206,19 @@ function statusLabel(status) {
 }
 
 function buildTreeRows(files, expanded) {
-  const root = { type: 'dir', name: '', path: '', depth: -1, added: 0, deleted: 0, children: new Map() };
+  const root = { type: 'dir', name: '', path: '', depth: -1, children: new Map() };
   const sorted = [...files].sort((a, b) => String(a.path || '').localeCompare(String(b.path || '')));
   for (const file of sorted) {
     const parts = String(file.path || '').split(/[\\/]/).filter(Boolean);
     if (!parts.length) continue;
     let node = root;
-    node.added += file.added || 0;
-    node.deleted += file.deleted || 0;
     for (let i = 0; i < parts.length - 1; i++) {
       const name = parts[i];
       const dirPath = parts.slice(0, i + 1).join('/');
       if (!node.children.has(name)) {
-        node.children.set(name, { type: 'dir', name, path: dirPath, depth: i, added: 0, deleted: 0, children: new Map() });
+        node.children.set(name, { type: 'dir', name, path: dirPath, depth: i, children: new Map() });
       }
       node = node.children.get(name);
-      node.added += file.added || 0;
-      node.deleted += file.deleted || 0;
     }
     const name = parts[parts.length - 1];
     node.children.set(`file:${file.path}`, {

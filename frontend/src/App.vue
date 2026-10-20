@@ -52,7 +52,7 @@ Public License v3. See the LICENSE file for details.
                 @open-session="selectRailSession"
                 @remove-session="deleteRailSession"
                 @new-session="createNewSession"
-                @open-task-center="openTaskCenter"
+                @open-task-center="(tab) => openTaskCenter(tab, 'all')"
                 @open-ssh-auth="sshAuthModalVisible = true"
                 @resize="setRailWidth"
                 @resize-end="saveRailWidth"
@@ -336,7 +336,7 @@ Public License v3. See the LICENSE file for details.
                   :explorer-visible="explorerVisibleFor(activeWorkspaceId)"
                   @add-extra-root="addExtraRoot"
                   @remove-extra-root="removeExtraRoot"
-                  @open-task-center="openTaskCenter"
+                  @open-task-center="(tab) => openTaskCenter(tab, 'workspace')"
                   @open-ssh-auth="sshAuthModalVisible = true"
                   @switch-model="switchToModel"
                   @open-config="switchMode('models')"
@@ -493,8 +493,10 @@ Public License v3. See the LICENSE file for details.
           <TaskCenterPanel
             :show="taskCenterVisible"
             :default-tab="taskCenterTab"
-            :tasks="scheduledTasks"
-            :services="services"
+            v-model:scope="taskCenterScope"
+            :workspace="activeRunWorkspace"
+            :tasks="taskCenterTasks"
+            :services="taskCenterServices"
             :scheduled-loading="scheduledTasksLoading"
             :services-loading="servicesLoading"
             :deleting-ids="scheduledTaskDeletingIds"
@@ -728,6 +730,9 @@ import PluginsPanel from './components/PluginsPanel.vue';
 import PluginPage from './components/PluginPage.vue';
 import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
+import { workspaceHistoryDedupeKey, sameWorkspacePath } from './utils/workspacePath.mjs';
+import { effectiveTaskScope, tasksForView } from './utils/taskWorkspace.mjs';
+import { serviceDescription, serviceCapacityCaption } from './utils/servicePresentation.mjs';
 import TokenStatsModal from './components/TokenStatsModal.vue';
 import ReleaseNotesModal from './components/ReleaseNotesModal.vue';
 import GamePanel from './games/GamePanel.vue';
@@ -1812,6 +1817,7 @@ const taskCenterVisible = ref(false);
 const sshAuthModalVisible = ref(false);
 // 工具栏两个入口 chip 各自直达对应 Tab（S=后台服务 / C=定时任务）。
 const taskCenterTab = ref('services');
+const taskCenterScope = ref('all');
 // Workspace explorer 状态按 Tab 独立保存：切换 Tab 时不会重置或取消任何
 // 每个 Tab 看到自己工作区的目录树。已经打开过的 Tab
 // 会保留一个常驻组件实例（v-show 切换），编辑草稿不因切 Tab 丢失。
@@ -2717,6 +2723,9 @@ const activeTabIsKb = computed(() => isKbTab(activeWorkspaceTab.value));
 // request overlay, the footer stats and the git badge all read it from here, so
 // a KB/temp Tab is never confused with the persisted chat workspace.
 const activeRunWorkspace = computed(() => runWorkspaceForTab(activeWorkspaceTab.value));
+watch(activeRunWorkspace, (workspace) => {
+  taskCenterScope.value = effectiveTaskScope(taskCenterScope.value, workspace);
+}, { flush: 'sync' });
 
 // Canned KB actions on the toolbar above the composer: drop the prompt into
 // the KB composer and send it through the normal sendPrompt path (streaming,
@@ -2919,8 +2928,12 @@ const composerStatusLabel = computed(() => phaseLabel(
 const composerStatusDetail = computed(() => (
   compactLoadingActive.value ? compactStatusText.value : latestUserPromptSummary.value
 ));
-const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter(isScheduledTaskRunning).length);
-const serviceRunningCount = computed(() => services.value.filter(isServiceActive).length);
+const currentWorkspaceTasks = computed(() => tasksForView(scheduledTasks.value, activeRunWorkspace.value));
+const currentWorkspaceServices = computed(() => tasksForView(services.value, activeRunWorkspace.value));
+const taskCenterTasks = computed(() => tasksForView(scheduledTasks.value, activeRunWorkspace.value, taskCenterScope.value));
+const taskCenterServices = computed(() => tasksForView(services.value, activeRunWorkspace.value, taskCenterScope.value));
+const scheduledTaskRunningCount = computed(() => currentWorkspaceTasks.value.filter(isScheduledTaskRunning).length);
+const serviceRunningCount = computed(() => currentWorkspaceServices.value.filter(isServiceActive).length);
 // 两个入口徽标都只数「此刻在跑」的条目：已退出服务只是事后可查（后端 finishedQueue
 // 保留最近 8 条），定时任务跑完或还没到点（nextRunAt 有值但没在跑）也不该把常驻
 // 徽标撑大——它们仍然列在任务中心里，数字与入口标题里的「运行中 N」必须是一回事。
@@ -3620,22 +3633,6 @@ function loadWorkspaceHistory() {
   } catch (_) {
     return [];
   }
-}
-
-function workspaceHistoryDedupeKey(path) {
-  const original = String(path || '').trim();
-  let value = original.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
-  if (value.length > 1 && !/^[a-z]:\/$/i.test(value)) value = value.replace(/\/+$/, '');
-  const isWindowsPath = /^[a-z]:\//i.test(value) || /^(?:\\\\|\/\/)/.test(original);
-  return isWindowsPath ? value.toLowerCase() : value;
-}
-
-// 两个工作区路径是不是同一个。规则与 Go 侧 pathutil.SamePath 对齐（归一化 + Windows
-// 下忽略大小写），是前端判定“这个路径就是那个工作区”的唯一入口：“是不是 KB 根”、
-// “这个临时 Tab 属于哪个目录”、“会话属于哪个工作区”都走它。以前这三处直接拿
-// workspaceHistoryDedupeKey（历史去重用的键）比，名字上看不出与后端的对应关系。
-function sameWorkspacePath(a, b) {
-  return workspaceHistoryDedupeKey(a) === workspaceHistoryDedupeKey(b);
 }
 
 function dedupeWorkspaceHistory(paths, limit = 50) {
@@ -7425,8 +7422,9 @@ async function refreshTaskCenter() {
   await Promise.all([loadScheduledTasks(), loadServices()]);
 }
 
-async function openTaskCenter(tab = 'services') {
+async function openTaskCenter(tab = 'services', scope = 'all') {
   taskCenterTab.value = tab === 'scheduled' ? 'scheduled' : 'services';
+  taskCenterScope.value = effectiveTaskScope(scope, activeRunWorkspace.value);
   taskCenterVisible.value = true;
   await refreshTaskCenter();
 }
@@ -8778,6 +8776,8 @@ function formatServiceInfo(service) {
   const lines = [];
   const name = String(service?.name || '').trim();
   if (name) lines.push(t('app.tools.service.name', { name }));
+  const description = serviceDescription(service, t);
+  if (description) lines.push(`${t('service.description')}: ${description}`);
   if (service?.id) lines.push(`id: ${service.id}`);
   if (service?.status) lines.push(t('app.tools.service.status', { status: service.status }));
   if (service?.pid) lines.push(`pid: ${service.pid}`);
@@ -8840,9 +8840,8 @@ function formatServiceListResult(data) {
   const services = Array.isArray(data?.services) ? data.services : [];
   if (services.length === 0) return t('app.tools.services.none');
   const header = [];
-  if (typeof data?.activeCount === 'number' && typeof data?.maxActive === 'number') {
-    header.push(t('app.tools.services.active', { active: data.activeCount, max: data.maxActive }));
-  }
+  const capacity = serviceCapacityCaption(data, t);
+  if (capacity) header.push(capacity);
   header.push(t('app.tools.services.count', { count: services.length }));
   const lines = [header.join(' · '), ''];
   for (const svc of services) {

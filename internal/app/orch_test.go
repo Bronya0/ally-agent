@@ -660,15 +660,16 @@ func TestBackgroundProcessRejectsUnknownAction(t *testing.T) {
 }
 
 func TestBackgroundProcessListReturnsMetadataOnly(t *testing.T) {
+	root := redirectAppStateDir(t)
 	app := NewApp()
 	app.servicesMu.Lock()
 	app.services["svc_list_1"] = &managedService{
-		info:   ServiceInfo{ID: "svc_list_1", Command: "npm run dev", Status: "running", PID: 4321, StartedAt: 1700000000},
+		info:   ServiceInfo{Workspace: root, ID: "svc_list_1", Command: "npm run dev", Status: "running", PID: 4321, StartedAt: 1700000000},
 		output: newRollingBuffer(serviceOutputLimit),
 	}
 	app.servicesMu.Unlock()
 
-	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "service", []byte(`{"action":"list"}`))
+	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "session-1", "service", []byte(`{"action":"list"}`))
 	if !result.OK {
 		t.Fatalf("expected list to succeed, got %#v", result)
 	}
@@ -690,18 +691,19 @@ func TestBackgroundProcessListReturnsMetadataOnly(t *testing.T) {
 }
 
 func TestBackgroundProcessReadReturnsBoundedOutput(t *testing.T) {
+	root := redirectAppStateDir(t)
 	app := NewApp()
 	buf := newRollingBuffer(serviceOutputLimit)
 	_, _ = buf.Write([]byte("ready line\n"))
 	app.servicesMu.Lock()
 	app.services["svc_read_1"] = &managedService{
-		info:   ServiceInfo{ID: "svc_read_1", Command: "vite", Status: "running"},
+		info:   ServiceInfo{Workspace: root, ID: "svc_read_1", Command: "vite", Status: "running"},
 		output: buf,
 	}
 	app.servicesMu.Unlock()
 
 	args := []byte(`{"action":"read","id":"svc_read_1","tailBytes":4}`)
-	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "service", args)
+	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "session-1", "service", args)
 	if !result.OK {
 		t.Fatalf("expected read to succeed, got %#v", result)
 	}
@@ -717,7 +719,7 @@ func TestBackgroundProcessReadReturnsBoundedOutput(t *testing.T) {
 	}
 
 	// read on unknown id must return E_SERVICE_NOT_FOUND
-	bad := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "service", []byte(`{"action":"read","id":"svc_missing"}`))
+	bad := app.executeTool(context.Background(), ConfigState{Workspace: root}, "session-1", "service", []byte(`{"action":"read","id":"svc_missing"}`))
 	if bad.OK || bad.ErrorCode != "E_SERVICE_NOT_FOUND" {
 		t.Fatalf("expected E_SERVICE_NOT_FOUND, got %#v", bad)
 	}
@@ -1444,8 +1446,8 @@ func TestCompactToolResultForModelRendersStructuredToolsAsTags(t *testing.T) {
 		{
 			name: "service-list",
 			tool: "service",
-			data: ServiceListToolResult{ActiveCount: 1, MaxActive: maxActiveServices, Services: []ServiceSummary{{ID: "svc_1", Name: "frontend", Status: "running", PID: 99, Command: "npm run dev"}}},
-			want: fmt.Sprintf("<ally-svcs active=\"1\" max=\"%d\">\n", maxActiveServices) +
+			data: ServiceListToolResult{ActiveCount: 1, GlobalActiveCount: 1, MaxActive: maxActiveServices, Services: []ServiceSummary{{ID: "svc_1", Name: "frontend", Status: "running", PID: 99, Command: "npm run dev"}}},
+			want: fmt.Sprintf("<ally-svcs workspace-active=\"1\" global-active=\"1\" global-max=\"%d\">\n", maxActiveServices) +
 				`  svc_1 (frontend) running pid=99 cmd="npm run dev"` + "\n" +
 				"</ally-svcs>",
 		},
@@ -4702,6 +4704,7 @@ func TestServiceHistoryCleanup(t *testing.T) {
 // cannot dominate the model context. The model must call read to inspect
 // output.
 func TestServiceListForToolOmitsOutputTail(t *testing.T) {
+	root := redirectAppStateDir(t)
 	app := NewApp()
 	buffer := newRollingBuffer(serviceOutputLimit)
 	_, _ = buffer.Write([]byte("sensitive startup log\n"))
@@ -4709,13 +4712,16 @@ func TestServiceListForToolOmitsOutputTail(t *testing.T) {
 	app.services["svc_a"] = &managedService{
 		info: ServiceInfo{
 			ID: "svc_a", Name: "frontend", Command: "npm run dev",
-			Cwd: "/tmp", PID: 111, Status: "running", StartedAt: time.Now().Unix(),
+			Workspace: root, Cwd: root, PID: 111, Status: "running", StartedAt: time.Now().Unix(),
 		},
 		output: buffer,
 	}
 	app.servicesMu.Unlock()
 
-	result := app.listServicesForTool(false)
+	result, listErr := app.listServicesForTool(ConfigState{Workspace: root}, false)
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
 	if result.MaxActive != maxActiveServices {
 		t.Fatalf("expected maxActive=%d, got %d", maxActiveServices, result.MaxActive)
 	}

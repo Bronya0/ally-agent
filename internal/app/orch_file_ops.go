@@ -705,6 +705,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 			// 一起移交给服务注册表，避免杀掉重跑撞 EADDRINUSE。
 			info, promoteErr := a.promoteTimedOutCommand(promoteCommandParams{
 				cmd:        cmd,
+				workspace:  roots[0],
 				command:    req.Command,
 				cwd:        cwd,
 				startedAt:  started,

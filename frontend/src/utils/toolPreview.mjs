@@ -252,6 +252,9 @@ function serviceRowOf(item) {
   return {
     id,
     name,
+    description: String(item.description || '').trim(),
+    promoted: item.promoted === true,
+    timeoutSeconds: Number(item.timeoutSeconds || 0) || 0,
     command: String(item.command || '').trim(),
     cwd: String(item.cwd || '').trim(),
     pid: Number(item.pid || 0) || 0,

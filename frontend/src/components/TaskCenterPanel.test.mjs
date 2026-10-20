@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { effectiveTaskScope } from '../utils/taskWorkspace.mjs';
 
 // Execute the component's actual setup with a deferred desktop bridge. No
 // WebView is needed to exercise response ordering and polling ownership.
@@ -16,11 +17,12 @@ function harness() {
   let unmount;
   let sequence = 0;
   const document = { hidden: false };
+  const props = reactive({ tasks: [], services: [], scope: 'workspace', workspace: 'F:/a' });
   const dependencies = {
-    computed, nextTick, ref,
+    computed, nextTick, ref, effectiveTaskScope,
     watch: (...args) => { const stop = watch(...args); stops.push(stop); return stop; },
     onUnmounted: (callback) => { unmount = callback; },
-    defineProps: () => ({ tasks: [], services: [] }),
+    defineProps: () => props,
     defineEmits: () => {},
     GetServiceOutput: (id) => new Promise((resolve, reject) => requests.push({ id, resolve, reject })),
     isServiceActive: (service) => service.status === 'running',
@@ -35,9 +37,34 @@ function harness() {
   };
   const state = new Function(...Object.keys(dependencies), `${setup}
     return { openServiceLog, openScheduledLog, refreshServiceLog, logVisible,
-      logContent, logMeta, logLoading, logServiceActive };`)(...Object.values(dependencies));
-  return { ...state, requests, timers, document, dispose() { unmount(); stops.forEach((stop) => stop()); } };
+      logContent, logMeta, logLoading, logServiceActive, viewScope };`)(...Object.values(dependencies));
+  return { ...state, props, requests, timers, document, dispose() { unmount(); stops.forEach((stop) => stop()); } };
 }
+
+test('empty workspace cannot leave the disabled workspace filter selected', () => {
+  const h = harness();
+  try {
+    h.props.scope = 'workspace';
+    h.props.workspace = '';
+    assert.equal(h.viewScope.value, 'all');
+  } finally { h.dispose(); }
+});
+
+test('changing workspace or scope closes logs and rejects stale output', async () => {
+  for (const change of [(props) => { props.workspace = 'F:/b'; }, (props) => { props.scope = 'all'; }]) {
+    const h = harness();
+    try {
+      const pending = h.openServiceLog({ id: 'a', status: 'running' });
+      h.logContent.value = 'previous content';
+      change(h.props);
+      assert.equal(h.logVisible.value, false);
+      assert.equal(h.timers.size, 0);
+      h.requests[0].resolve({ output: 'obsolete response' });
+      await pending;
+      assert.equal(h.logContent.value, 'previous content');
+    } finally { h.dispose(); }
+  }
+});
 
 test('late service output cannot overwrite a subsequently opened scheduled log', async () => {
   const h = harness();
