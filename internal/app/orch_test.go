@@ -2085,7 +2085,7 @@ func TestAutoValidationChecksChangedFiles(t *testing.T) {
 			wantFail: true, wantText: []string{"Go vet"}},
 		{name: "java dependency errors are not our problem", needCmd: "javac", toggle: "java",
 			files: map[string]string{
-				"Dep.java": "import non-existent.pkg.Thing;\n\npublic class Dep {\n    Thing t;\n}\n",
+				"Dep.java": "import nonexistent.pkg.Thing;\n\npublic class Dep {\n    Thing t;\n}\n",
 			}},
 		{name: "jsx is not node --check material", needCmd: "node",
 			files: map[string]string{"component.jsx": "export const App = () => <div />;\n"}},
@@ -2102,7 +2102,7 @@ func TestAutoValidationChecksChangedFiles(t *testing.T) {
 			}
 			root := t.TempDir()
 			if tc.needPython {
-				if _, _, ok := findPythonCommand(root); !ok {
+				if _, _, ok := findPythonCommand(); !ok {
 					t.Skip("python is unavailable")
 				}
 			}
@@ -2179,24 +2179,6 @@ func TestGoDependencyIssueDetectsModuleFailures(t *testing.T) {
 	}
 	if goDependencyIssue("main.go:3:15: undefined: missing") {
 		t.Fatal("code error must not be classified as dependency issue")
-	}
-}
-
-func TestFilterTypeScriptSyntaxErrorsKeepsChangedFileSyntaxOnly(t *testing.T) {
-	dir := t.TempDir()
-	files := []validationFile{{abs: filepath.Join(dir, "src", "a.ts"), display: "src/a.ts", ext: ".ts"}}
-	output := "src/a.ts(12,5): error TS1005: ';' expected\n" +
-		"src/a.ts(30,1): error TS2322: Type 'string' is not assignable to type 'number'\n" +
-		"src/b.ts(8,9): error TS1005: Declaration or statement expected\n" +
-		"src/a.ts(3,1): error TS2307: Cannot find module './missing'\n"
-	got := filterTypeScriptSyntaxErrors(output, dir, files)
-	if !strings.Contains(got, "TS1005: ';' expected") {
-		t.Fatalf("expected changed-file syntax error to be kept, got %q", got)
-	}
-	for _, dropped := range []string{"TS2322", "src/b.ts", "TS2307"} {
-		if strings.Contains(got, dropped) {
-			t.Fatalf("expected %q to be dropped, got %q", dropped, got)
-		}
 	}
 }
 

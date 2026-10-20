@@ -2496,6 +2496,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 		}
 
+		validationBudget := &batchValidationBudget{remaining: autoValidationTimeout}
 		executeCall := func(idx int, c openai.ToolCall, plannedValidationPaths []string, hasValidationPlan bool) {
 			started := time.Now()
 			executionArgs := c.Function.Arguments
@@ -2507,10 +2508,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				toolCallIndex: idx, toolCallID: c.ID, toolName: c.Function.Name, toolArgs: c.Function.Arguments,
 			})
 			toolCtx = context.WithValue(toolCtx, sessionReadCacheContextKey{}, readCache)
+			var r toolResult
 			if hasValidationPlan {
-				toolCtx = context.WithValue(toolCtx, batchValidationPathsContextKey{}, plannedValidationPaths)
+				r = a.executeValidationPlannedTool(toolCtx, toolCfg, sessionID, c, []byte(executionArgs), plannedValidationPaths, toolCalls[:idx], func(i int) bool { return outcomes[i].result.OK }, validationBudget)
+			} else {
+				r = a.executeTool(toolCtx, toolCfg, sessionID, c.Function.Name, []byte(executionArgs))
 			}
-			r := a.executeTool(toolCtx, toolCfg, sessionID, c.Function.Name, []byte(executionArgs))
 			duration := time.Since(started).Milliseconds()
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)

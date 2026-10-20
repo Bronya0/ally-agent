@@ -14,6 +14,53 @@ import (
 	"testing"
 )
 
+func TestSSHClusterServerOrderSurvivesDeleteAndReload(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	a := NewApp()
+	a.configPath = filepath.Join(dir, "config.json")
+	ws := filepath.Join(dir, "workspace")
+	aliases := []string{"zeta", "Beta", "alpha", "node-2", "node-10"}
+	for _, alias := range aliases {
+		if err := a.SaveSSHServer(SSHServerNode{Alias: alias, Host: "127.0.0.1", Username: "test", Description: "test"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.SetWorkspaceAllowedServers(ws, aliases); err != nil {
+		t.Fatal(err)
+	}
+	check := func(instance *App, want string) {
+		t.Helper()
+		for i := 0; i < 20; i++ {
+			var all, authorized []string
+			for _, node := range instance.ListAllSSHServers() {
+				all = append(all, node.Alias)
+			}
+			for _, node := range instance.ListAuthorizedSSHServers(ws) {
+				authorized = append(authorized, node.Alias)
+			}
+			if got := strings.Join(all, ","); got != want {
+				t.Fatalf("server order = %q, want %q", got, want)
+			}
+			if got := strings.Join(authorized, ","); got != want {
+				t.Fatalf("authorized server order = %q, want %q", got, want)
+			}
+		}
+	}
+	check(a, "alpha,Beta,node-10,node-2,zeta")
+	if err := a.DeleteSSHServer("node-10"); err != nil {
+		t.Fatal(err)
+	}
+	check(a, "alpha,Beta,node-2,zeta")
+	reloaded := NewApp()
+	reloaded.configPath = a.configPath
+	if err := reloaded.loadSSHClusters(); err != nil {
+		t.Fatal(err)
+	}
+	check(reloaded, "alpha,Beta,node-2,zeta")
+}
+
 // TestSSHClusterPersistenceAndScoping verifies that:
 // 1. Cluster nodes are persisted to and reloaded from disk in a sandbox.
 // 2. Sensitive fields (Password, KeyPath) are scrubbed from model-facing summaries.

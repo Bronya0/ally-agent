@@ -2883,18 +2883,19 @@ html.rail-expanded .chat-layout {
 .git-diff-tree {
   min-height: 0;
   overflow: auto;
-  padding: 8px 0;
+  padding: 4px 0;
   border-right: 1px solid var(--ally-border);
 }
 
 .git-diff-tree-row {
   display: grid;
-  grid-template-columns: 14px 24px minmax(0, 1fr) auto auto;
+  grid-template-columns: 12px minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   width: 100%;
-  min-height: 26px;
-  padding: 3px 8px 3px calc(8px + var(--git-depth) * 14px);
+  min-height: 24px;
+  padding: 2px 8px 2px calc(8px + var(--git-depth) * 12px);
+  line-height: 18px;
   border: 0;
   color: var(--ally-text-body);
   background: transparent;
@@ -2913,7 +2914,6 @@ html.rail-expanded .chat-layout {
 }
 
 .git-diff-disclosure,
-.git-diff-dir-icon,
 .git-diff-status {
   color: var(--ally-text-faint);
   font-size: 11px;

@@ -42,9 +42,8 @@ Public License v3. See the LICENSE file for details.
           :style="{ '--git-depth': row.depth }"
           @click="row.type === 'dir' ? toggleDir(row.path) : selectFile(row.file)"
         >
-          <span class="git-diff-disclosure">{{ row.type === 'dir' ? (treeExpanded[row.path] === false ? '▸' : '▾') : '' }}</span>
-          <span v-if="row.type === 'file'" :class="['git-diff-status', row.file.status]">{{ statusLabel(row.file.status) }}</span>
-          <span v-else class="git-diff-dir-icon">{{ $t('common.directory') }}</span>
+          <span v-if="row.type === 'dir'" class="git-diff-disclosure">{{ treeExpanded[row.path] === false ? '▸' : '▾' }}</span>
+          <span v-else :class="['git-diff-status', row.file.status]">{{ statusLabel(row.file.status) }}</span>
           <span class="git-diff-tree-name" :title="row.path">{{ row.name }}</span>
           <span v-if="row.added > 0" class="diff-stat-added">+{{ row.added }}</span>
           <span v-if="row.deleted > 0" class="diff-stat-removed">-{{ row.deleted }}</span>

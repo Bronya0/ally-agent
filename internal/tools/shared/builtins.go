@@ -131,7 +131,7 @@ func BuiltinSchema(name string) (map[string]any, bool) {
 
 func chatToolsUncached() []openai.Tool {
 	return []openai.Tool{
-		functionTool("list_files", "List files and directories within a workspace path. Directories end with '/'. Hidden entries (dotfiles, gitignored paths, VCS internals) are never listed. Depth and entry count are bounded automatically; when the result is truncated, narrow the path instead of asking for more entries.", map[string]any{
+		functionTool("list_files", "Inspect directory structure; use read directly for known files and grep to locate code by content. Lists up to 3 levels deep and 200 entries, with directories ending in '/'. Dotfiles, gitignored paths, VCS internals and heavy dependency/build directories are omitted. At most 50 direct files per directory are shown; '+N more files' marks omitted siblings. Narrow the path for depth/global truncation; narrowing to the same directory cannot reveal omitted siblings. An absent entry does not prove a path does not exist.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{"type": "string", "description": "Workspace-relative directory path, or explicit absolute path for read-only listing. Empty means workspace root."},
@@ -383,20 +383,20 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("grep", "Search UTF-8 file contents with ripgrep; prefer this over shell grep/rg. Default lines mode returns matches grouped by file with line numbers and capped text previews (up to 500 characters each); read only when surrounding context is needed. count_matches returns per-file counts. Results include exact totals and a next-offset when more entries remain. Paginate with that offset or narrow path/glob; result size is bounded automatically.", map[string]any{
+		functionTool("grep", "Locate code by content when its location is unknown; prefer this over shell grep/rg. Once the target code file is known, use read to understand its relevant functions or logic before editing; do not repeatedly grep that file to piece together its contents. Single-file searches suit specific match queries, log filtering or counting. Searches UTF-8 content; default lines mode groups matching lines by file with line numbers and text previews capped at 500 characters each. Totals are exact within the searched scope. Use the returned next-offset to paginate available entries, or narrow path/glob. Hidden files are skipped during directory traversal; dependency/build directories are excluded unless path points inside them. An empty path also skips files over 10 MB.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Search regex pattern."},
-				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches", ""}, "description": "Output shape: lines (default, line numbers plus capped text previews) or count_matches. An empty string means the default, exactly as the runtime reads it."},
-				"path":           map[string]any{"type": "string", "description": "Subdirectory or explicit absolute path. Empty means workspace root."},
+				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Rust regex pattern; look-around and backreferences are unsupported. Escape regex metacharacters when matching literal text."},
+				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches", ""}, "description": "lines (default, also for an empty string) returns matching lines with capped text previews. count_matches returns occurrence counts for only the top 100 files by count, 20 files per page; pagination cannot retrieve files beyond that top 100."},
+				"path":           map[string]any{"type": "string", "description": "File or directory, relative to the workspace root or absolute. Empty means workspace root. For reading known code, use read instead."},
 				"glob":           map[string]any{"type": "string", "description": "Optional glob filter, e.g. *.go or frontend/**/*.vue."},
-				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false."},
+				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false. Does not enable hidden-directory traversal or remove dependency/build directory exclusions."},
 				"caseSensitive":  map[string]any{"type": "boolean", "description": "Match case exactly. Default false (case-insensitive)."},
 				"offset":         map[string]any{"type": "integer", "minimum": 0, "description": "Skip first N matching lines/files for pagination."},
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read one or more file contents. Supports text files and images (jpg, png, gif, webp; bmp is read as a text notice instead, not as image input). Text files return bounded `<ally-file path=… version=…>` previews with 1-based line numbers; edit needs that version. Prefer targeted startLine/endLine ranges or tailLines for logs; follow the startLine continuation hint when truncated. Missing paths and directories are omitted; other failures carry an error attribute. reused means unchanged content is already in context. truncated-lines identifies lines with missing tails: edit refuses lineRange over those lines, so use oldText instead. Pass needed files in the files array to read in parallel.", map[string]any{
+		functionTool("read", "Read known files directly to understand code or prepare edits. For small files, omit line ranges; for large files, read ranges covering complete relevant functions or logic rather than piecing them together through repeated grep calls or tiny reads. Batch independent files in one files array. Supports text and images (jpg, png, gif, webp; bmp returns a text notice). Text returns bounded `<ally-file path=… version=…>` previews with 1-based line numbers; edit needs that version. Use tailLines for log tails. Follow the startLine continuation hint only when more content is needed. Missing paths and directories are omitted; other failures carry an error attribute. reused means unchanged content is already in context. truncated-lines marks lines with missing tails: edit refuses lineRange over those lines, so use oldText instead.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -534,8 +534,8 @@ func batchReadFilesSchema() map[string]any {
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "File path to read."},
 				"startLine": map[string]any{"type": "integer", "minimum": 0, "description": "Optional 1-based first line to read; omit or send 0 to start at the beginning."},
-				"endLine":   map[string]any{"type": "integer", "minimum": 0, "description": "Optional inclusive last line; omit or send 0 for the end of the file. A value below startLine is normalized into an ascending range instead of being rejected."},
-				"tailLines": map[string]any{"type": "integer", "minimum": 0, "maximum": MaxReadRangeLines, "description": "Optional: read only the last N lines (e.g. the end of a log); omit or send 0 for a full read. Mutually exclusive with startLine/endLine; do not use together with startLine or endLine."},
+				"endLine":   map[string]any{"type": "integer", "minimum": 0, "description": "Optional inclusive last line; omit or send 0 to request through the end of the file, subject to output limits. A value below startLine is normalized into an ascending range instead of being rejected."},
+				"tailLines": map[string]any{"type": "integer", "minimum": 0, "maximum": MaxReadRangeLines, "description": "Optional: read only the last N lines (e.g. the end of a log); omit or send 0 to disable tail reading and use the normal line range. Do not combine a positive value with nonzero startLine or endLine. All reads remain subject to output limits."},
 			},
 			"required": []string{"path"},
 		},

@@ -361,6 +361,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			}
 		}
 
+		validationBudget := &batchValidationBudget{remaining: autoValidationTimeout}
 		executeSubCall := func(idx int, c openai.ToolCall, plannedValidationPaths []string, hasValidationPlan bool) {
 			started := time.Now()
 			executionArgs := c.Function.Arguments
@@ -368,10 +369,12 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 				executionArgs = toolExecutionArgs[idx]
 			}
 			callCtx := ctx
+			var r toolResult
 			if hasValidationPlan {
-				callCtx = context.WithValue(callCtx, batchValidationPathsContextKey{}, plannedValidationPaths)
+				r = a.executeValidationPlannedTool(callCtx, cfg, sessionID, c, []byte(executionArgs), plannedValidationPaths, assistantMessage.ToolCalls[:idx], func(i int) bool { return subOutcomes[i].result.OK }, validationBudget)
+			} else {
+				r = a.executeTool(callCtx, cfg, sessionID, c.Function.Name, []byte(executionArgs))
 			}
-			r := a.executeTool(callCtx, cfg, sessionID, c.Function.Name, []byte(executionArgs))
 			duration := time.Since(started).Milliseconds()
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)
