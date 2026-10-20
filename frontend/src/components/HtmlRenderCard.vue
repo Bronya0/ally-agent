@@ -43,26 +43,10 @@ Public License v3. See the LICENSE file for details.
     <div v-else-if="msg.status === 'running'" class="html-render-writing">
       <pre><code>{{ tailPreview }}</code></pre>
     </div>
-    <div v-else class="html-render-frame-wrapper">
-      <iframe
-        ref="frameRef"
-        class="html-render-frame"
-        sandbox="allow-scripts"
-        :srcdoc="renderedDocument"
-        :style="{ height: frameHeight + 'px' }"
-        :title="msg.title || $t('tools.kind.renderHtml')"
-      ></iframe>
-    </div>
-
-    <!-- 全屏模态弹窗 -->
-    <Teleport to="body">
-      <div
-        v-if="isFullscreen"
-        class="html-render-modal-overlay"
-        @click.self="closeFullscreen"
-      >
-        <div class="html-render-modal-window">
-          <div class="html-render-modal-header">
+    <!-- Never reparent the iframe: DOM moves/Teleport can reload its document. -->
+    <div v-else class="html-render-slot" :style="isFullscreen ? { height: `${frameHeight + 6}px` } : undefined">
+      <div class="html-render-frame-wrapper" :class="{ 'is-fullscreen': isFullscreen }" :role="isFullscreen ? 'dialog' : undefined" :aria-label="isFullscreen ? msg.title || $t('tools.kind.renderHtml') : undefined">
+          <div v-show="isFullscreen" class="html-render-modal-header">
             <div class="html-render-modal-title">
               <span class="html-render-modal-verb">{{ $t('tools.kind.renderHtml') }}</span>
               <span v-if="msg.title" class="html-render-modal-subtitle">{{ msg.title }}</span>
@@ -91,24 +75,28 @@ Public License v3. See the LICENSE file for details.
               </button>
             </div>
           </div>
-          <div class="html-render-modal-body">
-            <iframe
-              class="html-render-modal-frame"
-              sandbox="allow-scripts"
-              :srcdoc="renderedDocument"
-              :title="msg.title || $t('tools.kind.renderHtml')"
-            ></iframe>
-          </div>
-        </div>
+        <div v-if="renderedResult.error" class="html-render-error" role="alert">{{ renderedResult.error }}</div>
+        <pre v-if="renderedResult.error" class="html-render-error">{{ msg.htmlContent }}</pre>
+        <iframe
+          v-show="!renderedResult.error"
+          ref="frameRef"
+          class="html-render-frame"
+          sandbox="allow-scripts"
+          :srcdoc="renderedDocument"
+          :style="{ height: isFullscreen ? '100%' : `${frameHeight}px` }"
+          :title="msg.title || $t('tools.kind.renderHtml')"
+        ></iframe>
       </div>
-    </Teleport>
+    </div>
+    <div v-if="exportError" class="html-render-error" role="alert">{{ exportError }}</div>
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, toValue, watch } from 'vue';
+import { PRESENTATION_ACTIVE, usePresentationActive } from '../composables/presentation.mjs';
 import { toolVerbLabel } from '../utils/toolVerb.mjs';
-import { buildHtmlRenderDocument, buildStandaloneHtmlDocument, normalizeHtmlFrameHeight } from '../utils/htmlRender.mjs';
+import { buildHtmlRenderDocument, buildStandaloneHtmlDocument, loadHtmlRenderLibrary, normalizeHtmlFrameHeight } from '../utils/htmlRender.mjs';
 import { tailLines } from '../utils/toolPreview.mjs';
 import ToolStatusIcon from './ToolStatusIcon.vue';
 
@@ -116,8 +104,13 @@ const props = defineProps({
   msg: { type: Object, required: true },
 });
 
+const presentationActive = usePresentationActive();
+const workspaceActive = inject(PRESENTATION_ACTIVE, true);
 const frameRef = ref(null);
+let fullscreenTrigger = null;
 const frameHeight = ref(200);
+const exportError = ref('');
+const exporting = ref(false);
 const isFullscreen = ref(false);
 const frameToken = `ally-html-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
@@ -136,25 +129,59 @@ const tailPreview = computed(() => {
   return tailLines(text, TAIL_PREVIEW_LINES).join('\n');
 });
 
-const renderedDocument = computed(() => {
-  return buildHtmlRenderDocument(props.msg.htmlContent, frameToken);
+const renderedResult = computed(() => {
+  try {
+    return { document: buildHtmlRenderDocument(props.msg.htmlContent, frameToken), error: '' };
+  } catch (error) {
+    return { document: '', error: String(error?.message || error) };
+  }
 });
+const renderedDocument = computed(() => renderedResult.value.document);
 
 function handleFrameMessage(event) {
   if (event.source !== frameRef.value?.contentWindow) return;
-  if (event.data?.type !== 'ally-html-height') return;
+  if (event.data?.token !== frameToken) return;
+  if (event.data.type === 'ally-html-escape') {
+    if (isFullscreen.value) closeFullscreen();
+    return;
+  }
+  if (event.data.type !== 'ally-html-height' || isFullscreen.value) return;
   const height = normalizeHtmlFrameHeight(event.data.height);
   if (!height || height === frameHeight.value) return;
   frameHeight.value = height;
 }
 
 function openFullscreen() {
+  window.dispatchEvent(new Event('ally-html-close-fullscreen'));
+  fullscreenTrigger = document.activeElement;
   isFullscreen.value = true;
+  nextTick(() => {
+    if (isFullscreen.value) frameRef.value?.parentElement?.querySelector('.html-render-modal-close-btn:last-child')?.focus();
+  });
 }
 
 function closeFullscreen() {
   isFullscreen.value = false;
+  if (presentationActive.value) fullscreenTrigger?.focus?.({ preventScroll: true });
+  fullscreenTrigger = null;
 }
+
+function handleEscape(event) {
+  if (!isFullscreen.value || event.key !== 'Escape') return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  closeFullscreen();
+}
+watch(() => toValue(workspaceActive), (active) => { if (!active) closeFullscreen(); });
+watch(isFullscreen, (open, _previous, onCleanup) => {
+  if (!open) return;
+  window.addEventListener('keydown', handleEscape, true);
+  window.addEventListener('ally-html-close-fullscreen', closeFullscreen);
+  onCleanup(() => {
+    window.removeEventListener('keydown', handleEscape, true);
+    window.removeEventListener('ally-html-close-fullscreen', closeFullscreen);
+  });
+}, { flush: 'sync' });
 
 // 导出自包含 HTML：echarts 与基础样式全部内联（与 iframe 同一外壳），
 // 断网双击打开图表照常渲染。文件名取卡片 title，剥掉非法字符。
@@ -164,20 +191,31 @@ function exportBaseName() {
   return safe || 'ally-render';
 }
 
-function downloadHtml() {
-  if (!props.msg.htmlContent) return;
-  const blob = new Blob([buildStandaloneHtmlDocument(props.msg.htmlContent)], { type: 'text/html;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `${exportBaseName()}.html`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+async function downloadHtml() {
+  if (!props.msg.htmlContent || exporting.value) return;
+  exporting.value = true;
+  exportError.value = '';
+  try {
+    const source = await loadHtmlRenderLibrary();
+    const blob = new Blob([buildStandaloneHtmlDocument(props.msg.htmlContent, source)], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${exportBaseName()}.html`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    exportError.value = String(error?.message || error);
+  } finally {
+    exporting.value = false;
+  }
 }
 
-onMounted(() => window.addEventListener('message', handleFrameMessage));
+onMounted(() => {
+  window.addEventListener('message', handleFrameMessage);
+});
 onBeforeUnmount(() => {
   window.removeEventListener('message', handleFrameMessage);
 });
@@ -217,7 +255,7 @@ onBeforeUnmount(() => {
   background: transparent;
   color: var(--ally-text-muted, #8b949e);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: none;
 }
 
 .html-render-action-btn:hover {
@@ -276,34 +314,25 @@ onBeforeUnmount(() => {
   background: transparent;
 }
 
-/* 铺满侧栏和 header 之外的区域（参考资源树编辑器 has-file 模式）：
-   从 header 下方 (top: 44px)、侧边栏右侧 (left: var(--ally-mode-sider-width, 44px))
-   铺满右下全部区域，不留空白。本遮罩被 Teleport 到 body，所以那个宽度变量从
-   <html> 继承（App.vue 在展开时往 <html> 上挂类），与侧栏同步切换。 */
-.html-render-modal-overlay {
+.html-render-frame-wrapper.is-fullscreen {
   position: fixed;
   top: 44px;
   left: var(--ally-mode-sider-width, 44px);
   right: 0;
   bottom: 0;
   z-index: 60;
-  background: var(--ally-surface-content, #1a1a1a);
+  width: auto;
+  margin: 0;
   display: flex;
   flex-direction: column;
-  box-sizing: border-box;
-}
-
-.html-render-modal-window {
-  width: 100%;
-  height: 100%;
-  max-width: none;
-  display: flex;
-  flex-direction: column;
-  background: var(--ally-surface-content, #1a1a1a);
   border: none;
   border-radius: 0;
-  box-shadow: none;
-  overflow: hidden;
+  background: var(--ally-surface-content);
+}
+.html-render-frame-wrapper.is-fullscreen .html-render-frame {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
 }
 
 .html-render-modal-header {
@@ -355,7 +384,7 @@ onBeforeUnmount(() => {
   background: transparent;
   color: var(--ally-text-muted, #8b949e);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: none;
 }
 
 .html-render-modal-close-btn:hover {
@@ -363,18 +392,4 @@ onBeforeUnmount(() => {
   color: var(--ally-text, #e5e5f0);
 }
 
-.html-render-modal-body {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  background: transparent;
-}
-
-.html-render-modal-frame {
-  width: 100%;
-  height: 100%;
-  border: none;
-  display: block;
-  background: transparent;
-}
 </style>

@@ -18,6 +18,7 @@ Public License v3. See the LICENSE file for details.
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { usePresentationActive } from '../composables/presentation.mjs';
 import {
   STREAM_MAX_LAG_MS,
   advanceShown,
@@ -46,6 +47,7 @@ const REDUCED_MOTION =
 const committedBlocks = shallowRef([]);
 const tailHtml = ref('');
 
+const presentationActive = usePresentationActive();
 const content = computed(() => String(props.msg?.content ?? ''));
 const streaming = computed(() => props.msg?.streaming === true);
 
@@ -62,7 +64,7 @@ function flush(force) {
 }
 
 function scheduleFrame() {
-  if (rafId) return;
+  if (rafId || !presentationActive.value) return;
   rafId = requestAnimationFrame(onFrame);
 }
 
@@ -75,6 +77,7 @@ function cancelFrame() {
 // 到达即显示：挂载、流式结束、内容被截断（重试丢弃）时对齐，不做回退动画。
 function snapToReceived() {
   cancelFrame();
+  if (!presentationActive.value) return;
   shown = content.value.length;
   lagSince = 0;
   flush(true);
@@ -82,6 +85,7 @@ function snapToReceived() {
 
 function onFrame(timestamp) {
   rafId = 0;
+  if (!presentationActive.value) return;
   const target = content.value.length;
   if (!streaming.value || REDUCED_MOTION) {
     snapToReceived();
@@ -108,7 +112,13 @@ onMounted(() => {
   if (streaming.value && !REDUCED_MOTION) scheduleFrame();
 });
 
+watch(presentationActive, (active) => {
+  if (active) snapToReceived();
+  else cancelFrame();
+});
+
 watch(content, (value) => {
+  if (!presentationActive.value) return;
   if (value.length < shown) {
     snapToReceived(); // 内容被截断：直接对齐，不回退动画
     return;

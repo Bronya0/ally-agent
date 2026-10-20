@@ -40,7 +40,8 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed } from 'vue';
+import { useDisplayClock, usePresentationActive } from '../composables/presentation.mjs';
 import { t } from '../i18n.mjs';
 import { deletePathSummary, formatHttpToolTitle } from '../utils/toolPreview.mjs';
 import { toolActionFromArgs, toolVerbLabel } from '../utils/toolVerb.mjs';
@@ -62,35 +63,8 @@ const rolePending = computed(() =>
   !props.msg?.subagentRole && props.msg?.status === 'running' && !props.msg?.subagentId
 );
 
-const now = ref(Date.now());
-let durationTimer = null;
-
-function stopDurationTimer() {
-  if (durationTimer === null) return;
-  window.clearInterval(durationTimer);
-  durationTimer = null;
-}
-
-function syncDurationTimer() {
-  if (props.msg?.status !== 'running' || !Number(props.msg?.startTime)) {
-    stopDurationTimer();
-    return;
-  }
-  now.value = Date.now();
-  if (durationTimer === null) {
-    durationTimer = window.setInterval(() => {
-      now.value = Date.now();
-    }, 1000);
-  }
-}
-
-watch(
-  () => [props.msg?.status, props.msg?.startTime],
-  syncDurationTimer,
-  { immediate: true },
-);
-
-onBeforeUnmount(stopDurationTimer);
+const presentationActive = usePresentationActive();
+const now = useDisplayClock(() => presentationActive.value && props.msg?.status === 'running' && !!Number(props.msg?.startTime));
 
 const displayDuration = computed(() => {
   if (props.msg?.status !== 'running') return props.msg?.durationText || '';

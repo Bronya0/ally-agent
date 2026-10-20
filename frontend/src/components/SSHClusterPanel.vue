@@ -680,7 +680,7 @@ async function importServers(event) {
   border-left: 3px solid transparent;
   font-size: 12px;
   color: var(--ally-text-body);
-  transition: background 0.15s, border-color 0.15s;
+  transition: none;
   /* 集群页几百行时离屏行跳过渲染（铁律：先限长、再跳过）。行高固定可估：
      padding 9*2 + 12px 单行文本 ≈ 38px；行仍在 DOM，查找/Tab/勾选态不受影响。 */
   content-visibility: auto;

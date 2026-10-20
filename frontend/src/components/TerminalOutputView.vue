@@ -27,6 +27,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
+import { usePresentationActive } from '../composables/presentation.mjs';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { codePreviewWindow, tailLines } from '../utils/toolPreview.mjs'
 
@@ -34,7 +35,7 @@ import { codePreviewWindow, tailLines } from '../utils/toolPreview.mjs'
 // 若按逻辑行数判，单行超长内容（minified JSON、单行日志）永远是 1 行 → 判成
 // 无需展开 → 标题不可点，同时内容被裁掉，彻底看不到。裁剪与否只能实测那个
 // 真正在裁剪的盒子。
-const emit = defineEmits({ overflow: Boolean });
+const emit = defineEmits({ overflow: (value) => typeof value === 'boolean' });
 
 const props = defineProps({
   text: { type: String, default: '' },
@@ -42,10 +43,12 @@ const props = defineProps({
   maxLines: { type: Number, default: 0 },
 })
 
+const presentationActive = usePresentationActive();
 const bodyRef = ref(null);
 let observer = null;
 
 function reportOverflow() {
+  if (!presentationActive.value) return;
   // 展开态不裁剪（上限已撤掉、不再溢出），没必要量；折叠态只有几行，量一次很便宜。
   // 这条测量每拍都会被内容变化触发，展开态下读 scrollHeight 等于每拍把整棵正文子树重排。
   if (!props.collapsed) return;
@@ -53,6 +56,8 @@ function reportOverflow() {
   if (!el) return;
   emit('overflow', el.scrollHeight - el.clientHeight > 2);
 }
+
+watch(presentationActive, (active) => { if (active) nextTick(reportOverflow); });
 
 onMounted(() => {
   if (typeof ResizeObserver !== 'undefined' && bodyRef.value) {

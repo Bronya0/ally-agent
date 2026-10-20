@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { THEMES } from './theme.mjs';
-import { readNaiveThemeOverrides } from './naiveTheme.mjs';
+import { readNaiveThemeOverrides, readWorkbenchThemeOverrides } from './naiveTheme.mjs';
 
 const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
 
@@ -51,8 +51,15 @@ for (const theme of THEMES) {
   for (const mode of ['light', 'dark']) {
     test(`${mode} ${theme.id}: Naive uses the CSS palette and readable primary states`, () => {
       const styles = palette(theme.id, mode);
+      const workbench = readWorkbenchThemeOverrides(mode, styles);
+      assert.equal(workbench.headerTabs.tabGapSmallBar, '0');
+      assert.equal(workbench.headerTabs.tabPaddingSmallBar, '0');
+      rgb(workbench.headerTabs.barColor);
+      assert.equal(workbench.composerInput.color, styles.getPropertyValue('--ally-composer-glass'));
+      assert.equal(workbench.composerInput.colorFocus, styles.getPropertyValue('--ally-composer-glass-focus'));
       const overrides = readNaiveThemeOverrides(mode, styles);
       const { common } = overrides;
+      const { Button, Checkbox, Radio, Switch } = overrides;
       assert.equal(styles.getPropertyValue('--ally-accent'), theme.swatch);
       assert.equal(common.primaryColor, styles.getPropertyValue('--ally-accent-ui'));
       assert.equal(common.bodyColor, styles.getPropertyValue('--ally-surface-content'));
@@ -62,6 +69,18 @@ for (const theme of THEMES) {
       for (const color of ['textColor1', 'textColor2', 'textColor3']) {
         readable(common[color], common.bodyColor, `${theme.id} ${mode} ${color}`);
       }
+      // These public overrides replace the previous global !important rules.
+      // Secondary buttons also run JS color math on colorPrimary, so mixtures
+      // must have been resolved to real colors before reaching Naive.
+      for (const state of ['colorPrimary', 'colorHoverPrimary', 'colorPressedPrimary', 'colorFocusPrimary']) {
+        readable(Button.textColorPrimary, Button[state], `${theme.id} ${mode} Button ${state}`);
+      }
+      for (const component of [Button, Checkbox, Radio, Switch]) {
+        for (const value of Object.values(component)) assert.doesNotMatch(value, /var\(|color-mix\(/);
+      }
+      assert.equal(Checkbox.colorChecked, Button.colorPrimary);
+      assert.equal(Radio.dotColorActive, Button.colorPrimary);
+      assert.equal(Switch.railColorActive, Button.colorPrimary);
       if (mode === 'light') {
         for (const token of ['text-faint', 'text-ghost', 'accent-ui', 'success-text', 'danger-pale', 'warning-text', 'info-soft']) {
           readable(styles.getPropertyValue(`--ally-${token}`), common.bodyColor, `${theme.id} ${token}`);

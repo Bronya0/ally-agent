@@ -165,7 +165,7 @@ Public License v3. See the LICENSE file for details.
                   <template #icon><CloseOutlined /></template>
                 </n-button>
               </div>
-              <n-button size="small" dashed class="api-key-add theme-accent-outline-button" @click="addModelApiKey">
+              <n-button size="small" dashed type="primary" class="api-key-add" @click="addModelApiKey">
                 <template #icon><PlusOutlined /></template>
                 {{ t('settings.apiKeyAdd') }}
               </n-button>
@@ -249,7 +249,7 @@ Public License v3. See the LICENSE file for details.
                   <template #icon><CloseOutlined /></template>
                 </n-button>
               </div>
-              <n-button size="small" dashed class="api-key-add theme-accent-outline-button" @click="addCustomHeaderRow">
+              <n-button size="small" dashed type="primary" class="api-key-add" @click="addCustomHeaderRow">
                 <template #icon><PlusOutlined /></template>
                 {{ t('settings.customHeaderAdd') }}
               </n-button>
@@ -973,24 +973,8 @@ watch(
   color: var(--ally-text-muted);
 }
 
-.config-section-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
 
-.config-section-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--ally-text-primary);
-}
 
-.config-section-subtitle {
-  font-size: 12px;
-  color: var(--ally-text-muted);
-  margin-top: 2px;
-}
 
 .model-import-input {
   display: none;
@@ -1015,7 +999,7 @@ watch(
   justify-content: space-between;
   padding: 8px 10px;
   border-radius: 6px;
-  transition: background 0.12s;
+  transition: none;
   gap: 10px;
   border: 1px solid transparent;
 }

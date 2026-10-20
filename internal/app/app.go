@@ -988,13 +988,14 @@ type StopServiceRequest struct {
 }
 
 type BackgroundProcessRequest struct {
-	Action       string `json:"action"`
-	Name         string `json:"name,omitempty"`
-	Command      string `json:"command,omitempty"`
-	Cwd          string `json:"cwd,omitempty"`
-	ID           string `json:"id,omitempty"`
-	TailBytes    int    `json:"tailBytes,omitempty"`
-	GraceSeconds int    `json:"graceSeconds,omitempty"`
+	IncludeFinished bool   `json:"includeFinished,omitempty"`
+	Action          string `json:"action"`
+	Name            string `json:"name,omitempty"`
+	Command         string `json:"command,omitempty"`
+	Cwd             string `json:"cwd,omitempty"`
+	ID              string `json:"id,omitempty"`
+	TailBytes       int    `json:"tailBytes,omitempty"`
+	GraceSeconds    int    `json:"graceSeconds,omitempty"`
 }
 
 // ServiceReadRequest is the model-facing read payload for the service tool.
@@ -2876,7 +2877,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			case "stop":
 				data, err = a.stopService(StopServiceRequest{ID: req.ID, GraceSeconds: req.GraceSeconds})
 			case "list":
-				data = a.listServicesForTool()
+				data = a.listServicesForTool(req.IncludeFinished)
 			case "read":
 				data, err = a.readServiceOutput(ServiceReadRequest{
 					ID:        req.ID,

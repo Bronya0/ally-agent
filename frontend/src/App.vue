@@ -10,11 +10,11 @@ Public License v3. See the LICENSE file for details.
 <template>
   <n-config-provider :theme="naiveTheme" :theme-overrides="naiveThemeOverrides" :locale="naiveLocale" :date-locale="naiveDateLocale" inline-theme-disabled>
     <n-dialog-provider>
-      <n-notification-provider>
         <n-message-provider>
           <n-layout class="app-shell" content-style="display: flex; flex-direction: column;">
             <AppHeader
               :workspace-tabs="chatTabsWithStatus"
+              :tabs-theme-overrides="workbenchThemeOverrides.headerTabs"
               :active-workspace-id="activeWorkspaceId"
               :update-available="updateAvailable"
               :update-auto-supported="updateAutoSupported"
@@ -94,6 +94,7 @@ Public License v3. See the LICENSE file for details.
                     <ChatMessages
                       :ref="(instance) => setConversationMessagesRef(tab.id, instance)"
                       :messages="displayMessagesForTab(tab)"
+                      :active="workspacePageActive && tab.id === activeWorkspaceId"
                       :in-flight-run-id="inFlightRunIdFor(tab)"
                       :render-fn="renderMarkdown"
                       :fmt-k="fmtK"
@@ -258,7 +259,7 @@ Public License v3. See the LICENSE file for details.
                        永不触发），leave 后留一个 opacity:0 的隐形标签滞留 1.8 秒。
                        淡入改由标签自身的 animation 承担（与流光合并成一条声明，
                        见 style.css），消失就是 v-if 同步移除，不可能滞留。 -->
-                  <span v-if="composerStatusLabel" class="composer-run-label">{{ composerStatusLabel }}</span>
+                  <span v-if="composerStatusLabel" class="composer-run-label">{{ composerStatusLabel }}<span class="composer-run-glow" aria-hidden="true">{{ composerStatusLabel }}</span></span>
                   <span
                     v-if="composerStatusDetail"
                     class="composer-run-prompt"
@@ -292,6 +293,7 @@ Public License v3. See the LICENSE file for details.
                   :key="tab.id"
                   :ref="promptInputBindingFor(tab).setRef"
                   class="prompt-input"
+                  :theme-overrides="workbenchThemeOverrides.composerInput"
                   :value="tab.sessionId ? (sessionPromptTexts[tab.sessionId] || '') : ''"
                   type="textarea"
                   :input-props="PROMPT_INPUT_PROPS"
@@ -520,7 +522,7 @@ Public License v3. See the LICENSE file for details.
                 <div class="update-status-text">{{ updateState === 'downloading' ? $t('app.update.downloading') : $t('app.update.extracting') }}</div>
                 <div class="update-version">{{ $t('app.update.version', { version: latestReleaseVersion }) }}</div>
                 <div class="update-progress-bar">
-                  <div class="update-progress-fill" :style="{ width: `${updateProgress.percent}%` }"></div>
+                  <div class="update-progress-fill" :style="{ transform: `scaleX(${Math.max(0, Math.min(100, updateProgress.percent || 0)) / 100})` }"></div>
                 </div>
                 <div class="update-progress-meta">
                   <span>{{ updateProgress.percent }}%</span>
@@ -609,7 +611,6 @@ Public License v3. See the LICENSE file for details.
             </div>
           </Teleport>
         </n-message-provider>
-      </n-notification-provider>
     </n-dialog-provider>
   </n-config-provider>
 </template>
@@ -621,7 +622,7 @@ import {
   getStoredMode, setMode as persistMode,
   getStoredTheme, setTheme as persistTheme,
 } from './utils/theme.mjs';
-import { readNaiveThemeOverrides } from './utils/naiveTheme.mjs';
+import { readNaiveThemeOverrides, readWorkbenchThemeOverrides } from './utils/naiveTheme.mjs';
 import MarkdownIt from 'markdown-it';
 // @traptitech/markdown-it-katex 把 $...$ / $$...$$ 交给 katex 渲染。
 // katex 本体已作为 mermaid 的间接依赖存在于依赖树中，这里显式声明以避免
@@ -791,6 +792,7 @@ import { MAX_ATTACHMENT_PREVIEW_BYTES, MAX_MODEL_IMAGE_BYTES, MAX_TEXT_ATTACHMEN
 import { isScheduledTaskRunning, isServiceActive } from './utils/taskStatus.mjs';
 import { attachmentIcon } from './utils/attachmentIcon.mjs';
 import { useToolEvents } from './composables/useToolEvents.mjs';
+import { useDisplayClock } from './composables/presentation.mjs';
 import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
 import { createPromptHistoryStore } from './utils/promptHistoryStore.mjs';
 import { normalizeRailWidth, RAIL_DEFAULT_WIDTH, RAIL_WIDTH_KEY } from './utils/railWidth.mjs';
@@ -816,16 +818,20 @@ function reportFrontendError(message, stack) {
     /* swallow: logging must not break the UI */
   }
 }
+function handleWindowError(e) {
+  const stack = (e.error && (e.error.stack || e.error.message)) || '';
+  reportFrontendError(e.message || 'window error', stack);
+}
+
+function handleUnhandledRejection(e) {
+  const reason = e.reason;
+  const detail = reason && (reason.stack || reason.message) ? reason.stack || reason.message : String(reason);
+  reportFrontendError('unhandledrejection: ' + detail, '');
+}
+
 if (typeof window !== 'undefined') {
-  window.addEventListener('error', (e) => {
-    const stack = (e.error && (e.error.stack || e.error.message)) || '';
-    reportFrontendError(e.message || 'window error', stack);
-  });
-  window.addEventListener('unhandledrejection', (e) => {
-    const reason = e.reason;
-    const detail = reason && (reason.stack || reason.message) ? reason.stack || reason.message : String(reason);
-    reportFrontendError('unhandledrejection: ' + detail, '');
-  });
+  window.addEventListener('error', handleWindowError);
+  window.addEventListener('unhandledrejection', handleUnhandledRejection);
 }
 
 const conversationMessagesRefs = new Map();
@@ -905,8 +911,12 @@ const naiveThemeOverrides = computed(() => {
   colorTheme.value;
   return readNaiveThemeOverrides(colorMode.value);
 });
+const workbenchThemeOverrides = computed(() => {
+  colorTheme.value;
+  return readWorkbenchThemeOverrides(colorMode.value);
+});
 
-const { message, dialog } = createDiscreteApi(['message', 'dialog'], {
+const { message, dialog, unmount: unmountDiscreteApi } = createDiscreteApi(['message', 'dialog'], {
   configProviderProps: computed(() => ({
     theme: naiveTheme.value,
     themeOverrides: naiveThemeOverrides.value,
@@ -8018,40 +8028,22 @@ function closeCompactLoading(sid) {
   const target = sid || activeSessionId.value;
   if (target) delete compactingSessions[target];
 }
+// Presentation time is derived only for the visible compaction. Background
+// compactions keep their absolute start time and do not write elapsed strings.
+const compactElapsedNow = useDisplayClock(() => workspacePageActive.value && !!activeCompactState.value);
 const compactStatusText = computed(() => {
   const state = activeCompactState.value;
   if (!state) return t('app.compact.compacting');
-  return [state.text, state.elapsedText].filter(Boolean).join(' · ');
+  const startedAt = Number(state.startedAt || 0);
+  const elapsed = startedAt ? t('app.compact.elapsed', {
+    seconds: Math.max(1, Math.floor((compactElapsedNow.value - startedAt) / 1000)),
+  }) : '';
+  return [state.text, elapsed].filter(Boolean).join(' · ');
 });
-// Elapsed timer so a long compaction visibly ticks instead of looking hung.
-const compactElapsedNow = ref(Date.now());
-let compactElapsedTimer = null;
-function ensureCompactElapsedTimer() {
-  if (compactElapsedTimer) return;
-  compactElapsedTimer = setInterval(() => {
-    compactElapsedNow.value = Date.now();
-    for (const [sid, state] of Object.entries(compactingSessions)) {
-      const startedAt = Number(state?.startedAt || 0);
-      if (!startedAt) continue;
-      const sec = Math.max(1, Math.floor((compactElapsedNow.value - startedAt) / 1000));
-      const elapsedText = t('app.compact.elapsed', { seconds: sec });
-      if (state.elapsedText !== elapsedText) state.elapsedText = elapsedText;
-    }
-  }, 1000);
-}
 function startCompactTracking(sid, text) {
   if (!sid) return;
-  compactingSessions[sid] = { text, startedAt: Date.now(), elapsedText: '' };
-  ensureCompactElapsedTimer();
+  compactingSessions[sid] = { text, startedAt: Date.now() };
 }
-watch(compactingSessions, (snapshot) => {
-  if (Object.keys(snapshot || {}).length > 0) ensureCompactElapsedTimer();
-  if (compactElapsedTimer && Object.keys(snapshot || {}).length === 0) {
-    clearInterval(compactElapsedTimer);
-    compactElapsedTimer = null;
-  }
-});
-onUnmounted(() => { if (compactElapsedTimer) clearInterval(compactElapsedTimer); });
 
 async function handleCompactCommand() {
   const session = activeSession.value;
@@ -9111,6 +9103,9 @@ function handleOverlayOutsidePointerDown(event) {
 }
 
 function handleGlobalKeydown(event) {
+  // The HTML viewer owns Escape while fullscreen, including while a run is
+  // active. Let its listener close the viewer before considering cancellation.
+  if (event.key === 'Escape' && document.querySelector('.html-render-frame-wrapper.is-fullscreen')) return;
   // 资源树打开时：编辑器（预览面板）打开中则由 WorkspaceExplorer 内部
   // 处理 ESC（关闭编辑器）；编辑器未打开时 ESC 继续冒泡中断运行等全局逻辑。
   // 不再用 ESC 关闭资源树本身——避免中断对话后资源树被误关。
@@ -9481,6 +9476,7 @@ function playStartupBrandWave() {
 onMounted(async () => {
   applyPlatformClass();
   document.addEventListener('visibilitychange', handleVisibilityChange);
+  handleVisibilityChange();
   // Do not snapshot on window close. Only wait for writes already queued by a
   // successfully completed turn.
   window.addEventListener('keydown', handleGlobalKeydown, true);
@@ -9513,6 +9509,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange);
+  window.removeEventListener('error', handleWindowError);
+  window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+  unmountDiscreteApi();
   removeStartupWaveListener();
   window.removeEventListener('keydown', handleGlobalKeydown, true);
   document.removeEventListener('pointerdown', handleMermaidOutsidePointerDown, true);

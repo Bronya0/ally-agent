@@ -453,13 +453,15 @@ type ServiceSummary struct {
 	Error           string `json:"error,omitempty"`
 }
 
-func (a *App) listServicesForTool() ServiceListToolResult {
+func (a *App) listServicesForTool(includeFinished bool) ServiceListToolResult {
 	listed := a.listServices()
 	summaries := make([]ServiceSummary, 0, len(listed.Services))
 	activeCount := 0
 	for _, info := range listed.Services {
 		if info.Status == "starting" || info.Status == "running" {
 			activeCount++
+		} else if !includeFinished {
+			continue
 		}
 		summaries = append(summaries, ServiceSummary{
 			ID:              info.ID,

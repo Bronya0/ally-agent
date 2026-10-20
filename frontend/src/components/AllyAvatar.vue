@@ -340,7 +340,7 @@ onBeforeUnmount(() => {
   fill: var(--ally-eye-shell-fill, #0b0e13);
   stroke: var(--ally-eye-shell-stroke, #343a45);
   stroke-width: 2;
-  transition: fill 0.2s ease, stroke 0.2s ease;
+  transition: none;
 }
 
 .ally-eye-vortex {

@@ -436,7 +436,7 @@ function cardLabel(card) { return card === 16 ? '小王' : card === 17 ? '大王
 .game-usage { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--game-section-title-color) 7%, transparent); color: var(--game-hint-color); font-size: 11.5px; line-height: 1.4; font-variant-numeric: tabular-nums; }
 
 .game-pick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-.game-pick-item { padding: 8px 4px; border-radius: 9px; border: 1px solid var(--game-panel-card-border); background: transparent; color: var(--game-section-title-color); font-family: inherit; font-size: 13px; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease; }
+.game-pick-item { padding: 8px 4px; border-radius: 9px; border: 1px solid var(--game-panel-card-border); background: transparent; color: var(--game-section-title-color); font-family: inherit; font-size: 13px; cursor: pointer; transition: none; }
 .game-pick-item:hover:not(:disabled) { background: color-mix(in srgb, var(--game-section-title-color) 12%, transparent); }
 .game-pick-item.active { color: var(--game-title-color); font-weight: 600; border-color: color-mix(in srgb, #18a058 60%, transparent); background: color-mix(in srgb, #18a058 14%, transparent); }
 .game-pick-item:disabled { opacity: 0.55; cursor: not-allowed; }
@@ -539,7 +539,7 @@ function cardLabel(card) { return card === 16 ? '小王' : card === 17 ? '大王
   cursor: pointer;
   user-select: none;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+  transition: transform 0.12s ease;
 }
 .playing-card::before { content: attr(data-label); position: absolute; top: 4px; left: 5px; font-size: 10px; font-weight: 700; opacity: 0.55; }
 .playing-card:hover { transform: translateY(-7px); }

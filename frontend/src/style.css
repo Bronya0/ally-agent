@@ -564,7 +564,6 @@ html[data-mode="light"] .kb-empty-card {
    here only duplicated the declaration. */
 html[data-mode="light"] .n-modal,
 html[data-mode="light"] .n-drawer,
-html[data-mode="light"] .n-popover,
 html[data-mode="light"] .n-popover-shared:not(.n-tooltip) {
   backdrop-filter: var(--ally-glass-blur);
   -webkit-backdrop-filter: var(--ally-glass-blur);
@@ -1228,7 +1227,7 @@ html.rail-expanded .chat-layout {
   background: transparent;
   color: var(--ally-text-secondary);
   cursor: pointer;
-  transition: color 0.15s ease, background-color 0.15s ease;
+  transition: none;
 }
 
 .mode-sider-toggle:hover {
@@ -1331,7 +1330,7 @@ html.rail-expanded .chat-layout {
    keeps the accent instead of flashing white. */
 .mode-sider-icon-wrap {
   color: var(--ally-text-secondary);
-  transition: color 0.15s ease;
+  transition: none;
 }
 
 .mode-sider .n-menu .n-menu-item-content:hover .mode-sider-icon-wrap {
@@ -1689,7 +1688,7 @@ html.rail-expanded .chat-layout {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: color 0.15s ease, opacity 0.15s ease;
+  transition: opacity 0.15s ease;
 }
 /* One neutral grey ramp, two lightness steps: directories a touch brighter
    than files. The old pairing (amber directories, cool-blue files) put two
@@ -1889,7 +1888,7 @@ html.rail-expanded .chat-layout {
 /* nodeWrapperPadding 主题覆盖为 0 后行高即节点高；这里同步兜底，
    确保 hover/聚焦高亮区域相邻行之间零间距 */
 .workspace-explorer-tree-view .n-tree-node-wrapper { padding: 0; }
-.workspace-explorer-tree-view .n-tree-node { margin: 0 !important; transition: background-color 0.15s ease; }
+.workspace-explorer-tree-view .n-tree-node { margin: 0 !important; transition: none; }
 .workspace-explorer-tree-view .n-tree-node-content { min-height: 20px; font-size: 12px; display: flex; align-items: center; }
 .workspace-explorer-tree-view .n-tree-node-content__text { line-height: 20px; }
 .workspace-explorer-tree-view .n-tree-node-switcher { width: 14px; margin-right: 0; display: flex; align-items: center; justify-content: center; height: 20px; flex-shrink: 0; }
@@ -1990,7 +1989,7 @@ html.rail-expanded .chat-layout {
   color: var(--ally-text-muted);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s, color 0.15s;
+  transition: opacity 0.15s;
 }
 
 .code-block-wrapper .code-line-count {
@@ -2043,17 +2042,14 @@ html.rail-expanded .chat-layout {
 }
 
 .composer .prompt-input {
-  --n-color: var(--ally-composer-glass) !important;
-  --n-color-focus: var(--ally-composer-glass-focus) !important;
-  --n-color-hover: var(--ally-composer-glass-hover) !important;
-  --n-border-hover: 1px solid var(--ally-border-input) !important;
-  --n-border-focus: 1px solid var(--ally-border-input) !important;
-  --n-box-shadow-focus: 0 0 0 2px color-mix(in srgb, var(--ally-border-input) 25%, transparent) !important;
-  background: var(--ally-composer-glass) !important;
-  border-radius: 8px;
   /* 半径来自 --ally-composer-blur（深色 8px / 浅色 24px，定义只在 :root 两处）。 */
   backdrop-filter: var(--ally-composer-blur);
   -webkit-backdrop-filter: var(--ally-composer-blur);
+}
+
+/* Input has no public colorHover theme field; this surface state stays CSS. */
+.composer .prompt-input:hover:not(:focus-within) {
+  background-color: var(--ally-composer-glass-hover);
 }
 
 .composer .prompt-input .n-input,
@@ -2297,14 +2293,9 @@ html.rail-expanded .chat-layout {
   to   { transform: rotate(360deg); }
 }
 
-/* 状态行左侧唯一的标签：只有思考阶段有文字（Thinking 12.4k tokens），其余阶段
-   （等模型首字 / 正文输出 / 工具执行）一律空字符串、整块不渲染。有文字时共用这
-   一道流光，换阶段就是同一元素内换字，动画不重启、观感连续。原先的三点动画已移除
-   ——它在所有阶段长得一模一样，与并排会闪的计数也没有共同视觉基准；阶段判定见
-   utils/runPhase.mjs。
-   文字填充色交给渐变（-webkit-text-fill-color: transparent），降级见
-   prefers-reduced-motion 块。 */
+/* Only the highlight layer's opacity animates; the text never repaints per frame. */
 .composer-run-label {
+  position: relative;
   flex: 0 0 auto;
   font-size: 13px;
   line-height: 18px;
@@ -2312,24 +2303,24 @@ html.rail-expanded .chat-layout {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   color: var(--ally-text-faint);
-  background: linear-gradient(90deg, var(--ally-text-faint) 25%, var(--ally-text-high) 50%, var(--ally-text-faint) 75%);
-  background-size: 200% 100%;
+  animation: composer-label-in 0.18s ease-out;
+}
+.composer-run-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--ally-text-high), transparent);
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  /* 淡入与流光合并成一条 animation 声明：淡入是 0.18s 的一次性动画，流光是
-     1.8s 的无限循环。这行元素因此绝不能交给 <Transition>（见 App.vue 状态行
-     注释）——自动检测会把 1.8s 当过渡时长，leave 后隐形滞留。 */
-  animation: composer-label-in 0.18s ease-out, composer-shimmer 1.8s linear infinite;
+  animation: composer-glow 1.8s ease-in-out infinite;
 }
-
 @keyframes composer-label-in {
   from { opacity: 0; }
 }
-
-@keyframes composer-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: 0% 0; }
+@keyframes composer-glow {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 1; }
 }
 
 /* 常驻小点动画的提层提示：只在“在跑”期间挂类、跑完即撤，不会静态摊在长列表
@@ -2367,7 +2358,7 @@ html.rail-expanded .chat-layout {
    neighbours do. */
 .composer-info .info-model {
   color: var(--ally-text-secondary);
-  transition: color 0.15s ease;
+  transition: none;
 }
 
 .composer-info .info-model:hover {
@@ -2668,7 +2659,7 @@ html.rail-expanded .chat-layout {
   border-radius: var(--ally-radius, 6px);
   cursor: pointer;
   font-size: var(--ally-sub-font-size);
-  transition: background 0.15s ease;
+  transition: none;
 }
 
 .multi-repo-item:hover {
@@ -3046,7 +3037,7 @@ html.rail-expanded .chat-layout {
   line-height: 1.6;
   padding: 2px 10px;
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  transition: none;
 }
 
 .context-compact-btn:hover:not(:disabled) {
@@ -3179,7 +3170,7 @@ html.rail-expanded .chat-layout {
   line-height: 1;
   color: var(--ally-text-soft);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  transition: none;
 }
 .hist-del svg {
   width: 14px;
@@ -3809,7 +3800,7 @@ html.rail-expanded .chat-layout {
   background: transparent;
   color: var(--ally-text-muted, #8b949e);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: none;
 }
 
 .mermaid-fullscreen-close-btn:hover {
@@ -4214,13 +4205,9 @@ html.rail-expanded .chat-layout {
   .tool-body-swap {
     animation: none;
   }
-  /* 流光停用时要退回纯色：只停动画的话，渐变还停在 background-position:0
-     那一帧上，一行字会一半亮一半暗。animation: none 连同淡入一起停掉，
-     减弱动效下标签直接出现/消失。 */
+  /* 减弱动效下标签直接出现/消失，高光层另行隐藏。 */
   .composer-run-label {
-    background: none;
     animation: none;
-    -webkit-text-fill-color: currentColor;
   }
 }
 
@@ -4659,7 +4646,7 @@ html.rail-expanded .chat-layout {
   cursor: pointer;
   user-select: none;
   border-radius: 4px;
-  transition: background 0.12s ease;
+  transition: none;
 }
 
 .read-grep-toggle:hover {
@@ -5013,19 +5000,17 @@ html.rail-expanded .chat-layout {
 
 .plan-panel-enter-active,
 .plan-panel-leave-active {
-  transition: max-height 0.18s ease, opacity 0.18s ease, transform 0.18s ease;
+  transition: opacity 0.18s ease, transform 0.18s ease;
 }
 
 .plan-panel-enter-from,
 .plan-panel-leave-to {
-  max-height: 0;
   opacity: 0;
   transform: translateY(4px);
 }
 
 .plan-panel-enter-to,
 .plan-panel-leave-from {
-  max-height: 160px;
   opacity: 1;
   transform: translateY(0);
 }
@@ -5226,10 +5211,12 @@ html.rail-expanded .chat-layout {
   overflow: hidden;
 }
 .update-progress-fill {
+  width: 100%;
   height: 100%;
   background: linear-gradient(90deg, var(--ally-success-deep), var(--ally-success));
   border-radius: 4px;
-  transition: width 0.25s ease;
+  transform-origin: left;
+  transition: transform 0.25s ease;
 }
 .update-progress-meta {
   display: flex;
@@ -5396,84 +5383,19 @@ html.rail-expanded .chat-layout {
   animation-play-state: paused !important;
 }
 
-/* Naive's primary controls use inline theme colors, so map the interactive
-   states to the active app palette here instead of passing CSS vars through
-   Naive's JavaScript color calculations in themeOverrides. */
-.n-button.n-button--primary-type:not(.n-button--dashed):not(.n-button--ghost):not(.n-button--secondary):not(.provider-doc-button) {
-  --n-color: var(--ally-accent-fill) !important;
-  --n-color-hover: var(--ally-accent-fill-hover) !important;
-  --n-color-pressed: var(--ally-accent-fill-pressed) !important;
-  --n-color-focus: var(--ally-accent-fill-hover) !important;
-  --n-color-disabled: color-mix(in srgb, var(--ally-accent) 26%, var(--ally-surface-raised)) !important;
-  --n-ripple-color: var(--ally-accent-bright) !important;
-  --n-text-color: var(--ally-accent-ink) !important;
-  --n-text-color-hover: var(--ally-accent-ink) !important;
-  --n-text-color-pressed: var(--ally-accent-ink) !important;
-  --n-text-color-focus: var(--ally-accent-ink) !important;
-  --n-text-color-disabled: var(--ally-text-muted) !important;
-  --n-border: 1px solid var(--ally-accent-fill) !important;
-  --n-border-hover: 1px solid var(--ally-accent-fill-hover) !important;
-  --n-border-pressed: 1px solid var(--ally-accent-fill-pressed) !important;
-  --n-border-focus: 1px solid var(--ally-accent-fill-hover) !important;
-  --n-border-disabled: 1px solid color-mix(in srgb, var(--ally-accent) 26%, var(--ally-surface-raised)) !important;
-}
 
-.n-button.n-button--primary-type.n-button--dashed,
-.theme-accent-outline-button {
-  --n-text-color: var(--ally-accent-bright) !important;
-  --n-text-color-hover: var(--ally-accent-strong) !important;
-  --n-text-color-pressed: var(--ally-accent) !important;
-  --n-text-color-focus: var(--ally-accent-strong) !important;
-  --n-text-color-disabled: var(--ally-text-muted) !important;
-  --n-border: 1px dashed var(--ally-accent-dim) !important;
-  --n-border-hover: 1px dashed var(--ally-accent) !important;
-  --n-border-pressed: 1px dashed var(--ally-accent-strong) !important;
-  --n-border-focus: 1px dashed var(--ally-accent) !important;
-  --n-border-disabled: 1px dashed var(--ally-border-strong) !important;
+/* A fullscreen HTML card retains its iframe in place. Release only this
+   card's paint containment so the fixed surface can cover the workbench. */
+.rich-tool-card.render_html:has(.html-render-frame-wrapper.is-fullscreen) {
+  content-visibility: visible;
+  contain: none;
+  animation: none;
 }
-
-.n-button.n-button--primary-type.n-button--ghost {
-  --n-text-color: var(--ally-accent-bright) !important;
-  --n-text-color-hover: var(--ally-accent-strong) !important;
-  --n-text-color-pressed: var(--ally-accent) !important;
-  --n-text-color-focus: var(--ally-accent-strong) !important;
-  --n-text-color-disabled: var(--ally-text-muted) !important;
+.messages-scroll-shell.presentation-paused *,
+.messages-scroll-shell.presentation-paused *::before,
+.messages-scroll-shell.presentation-paused *::after {
+  animation-play-state: paused !important;
 }
-
-.provider-doc-button {
-  --n-text-color: var(--ally-accent-bright) !important;
-  --n-text-color-hover: var(--ally-accent-strong) !important;
-  --n-text-color-pressed: var(--ally-accent) !important;
-  --n-text-color-focus: var(--ally-accent-strong) !important;
+@media (prefers-reduced-motion: reduce) {
+  .composer-run-glow { animation: none; opacity: 0; }
 }
-
-.theme-accent-outline-button {
-  --n-border: 1px dashed var(--ally-accent-dim) !important;
-  --n-border-hover: 1px dashed var(--ally-accent) !important;
-  --n-border-pressed: 1px dashed var(--ally-accent-strong) !important;
-  --n-border-focus: 1px dashed var(--ally-accent) !important;
-}
-
-.n-checkbox {
-  --n-color-checked: var(--ally-accent-fill) !important;
-  --n-color-disabled-checked: color-mix(in srgb, var(--ally-accent) 38%, var(--ally-surface-raised)) !important;
-  --n-border-checked: 1px solid var(--ally-accent-fill) !important;
-  --n-border-focus: 1px solid var(--ally-accent-strong) !important;
-  --n-border-disabled-checked: 1px solid color-mix(in srgb, var(--ally-accent) 38%, var(--ally-surface-raised)) !important;
-  --n-box-shadow-focus: 0 0 0 2px color-mix(in srgb, var(--ally-accent) 28%, transparent) !important;
-  --n-check-mark-color: var(--ally-accent-ink) !important;
-  --n-check-mark-color-disabled-checked: var(--ally-accent-ink) !important;
-}
-
-.n-radio {
-  --n-dot-color-active: var(--ally-accent-fill) !important;
-  --n-box-shadow-active: 0 0 0 1px var(--ally-accent-fill) inset !important;
-  --n-box-shadow-hover: 0 0 0 1px var(--ally-accent-fill) inset !important;
-  --n-box-shadow-focus: 0 0 0 1px var(--ally-accent-strong) inset, 0 0 0 3px color-mix(in srgb, var(--ally-accent) 24%, transparent) !important;
-}
-
-.n-switch {
-  --n-rail-color-active: var(--ally-accent-fill) !important;
-  --n-loading-color: var(--ally-accent-strong) !important;
-}
-

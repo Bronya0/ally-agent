@@ -7,7 +7,7 @@
  * This file is part of ally-agent, licensed under the GNU General
  * Public License v3. See the LICENSE file for details.
  */
-import echartsRaw from 'echarts/dist/echarts.min.js?raw';
+import echartsAssetUrl from 'echarts/dist/echarts.min.js?url';
 
 export function normalizeHtmlFrameHeight(height) {
   const value = Number(height || 0);
@@ -15,9 +15,8 @@ export function normalizeHtmlFrameHeight(height) {
   return Math.max(120, Math.min(Math.ceil(value), 600));
 }
 
-// iframe 与独立下载文件共用的文档外壳：基础样式 + 内联 echarts（含暗色
-// 主题默认与 resize 联动）。下载文件必须内联 echarts —— 沙箱 CSP 禁外链，
-// 导出后脱离 Ally 环境，只有内联脚本才能让图表继续渲染。
+// Frames share a build-addressed local ECharts asset; standalone downloads
+// inline it so they remain fully functional outside Ally and offline.
 const DOCUMENT_HEAD_STYLES = `
   * { box-sizing: border-box; }
   html, body { margin: 0; background: transparent; }
@@ -43,17 +42,25 @@ const ECHARTS_BOOTSTRAP = `
 (() => {
   if (typeof window.echarts !== 'undefined') {
     const origInit = window.echarts.init;
-    const charts = [];
+    const charts = new Set();
     window.echarts.init = function(dom, theme, opts) {
       const chosenTheme = theme || 'dark';
       const inst = origInit.call(this, dom, chosenTheme, opts);
-      charts.push(inst);
+      if (!charts.has(inst)) {
+        charts.add(inst);
+        const dispose = inst.dispose;
+        inst.dispose = function(...args) {
+          charts.delete(inst);
+          return dispose.apply(this, args);
+        };
+      }
       return inst;
     };
     window.addEventListener('resize', () => {
       charts.forEach((c) => {
         try {
           if (c && !c.isDisposed()) c.resize();
+          else charts.delete(c);
         } catch (_) {}
       });
     });
@@ -67,18 +74,56 @@ function buildBody(html) {
   return `${String(html || '')}`;
 }
 
-export function buildHtmlRenderDocument(html, frameToken) {
+export function resolveHtmlRenderAssetUrl(baseUrl, asset = echartsAssetUrl) {
+  const base = new URL(baseUrl);
+  const url = new URL(String(asset), base);
+  // macOS Wails uses its registered wails:// scheme, whose URL.origin is
+  // "null". Compare protocol/host rather than treating null as an origin.
+  if (!['http:', 'https:', 'wails:'].includes(url.protocol) || url.protocol !== base.protocol || url.host !== base.host) {
+    throw new Error('HTML renderer requires a same-origin ECharts asset');
+  }
+  return url.href;
+}
+
+let exportSourceUrl = '';
+let exportSourcePromise;
+
+// Reuse the very same asset as the iframe; fetch source text only on export.
+// Cache one successful load, and allow retry after a transient failure.
+export function loadHtmlRenderLibrary(baseUrl = globalThis.location?.href || 'http://wails.localhost/', fetchAsset = globalThis.fetch) {
+  const url = resolveHtmlRenderAssetUrl(baseUrl);
+  if (url === exportSourceUrl && exportSourcePromise) return exportSourcePromise;
+  exportSourceUrl = url;
+  const request = Promise.resolve().then(() => fetchAsset(url)).then(async (response) => {
+    if (!response.ok) throw new Error(`ECharts asset load failed: ${response.status}`);
+    const source = await response.text();
+    if (!source.trim()) throw new Error('ECharts asset is empty');
+    return source;
+  }).catch((error) => {
+    if (exportSourcePromise === request) {
+      exportSourcePromise = undefined;
+      exportSourceUrl = '';
+    }
+    throw error;
+  });
+  exportSourcePromise = request;
+  return request;
+}
+
+export function buildHtmlRenderDocument(html, frameToken, baseUrl = globalThis.location?.href || 'http://wails.localhost/') {
+  // A classic script works in an opaque sandbox origin without granting
+  // allow-same-origin. CSP permits only this exact local asset, not a CDN.
+  const scriptUrl = resolveHtmlRenderAssetUrl(baseUrl).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+  const frameCsp = CSP_META.replace("script-src 'unsafe-inline';", `script-src 'unsafe-inline' ${scriptUrl};`);
   const token = JSON.stringify(String(frameToken || ''));
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-${CSP_META}
+${frameCsp}
 <style>${DOCUMENT_HEAD_STYLES}</style>
-<script>
-${echartsRaw}
-</script>
+<script src="${scriptUrl}"></script>
 <script>${ECHARTS_BOOTSTRAP}</script>
 </head>
 <body>
@@ -86,7 +131,11 @@ ${buildBody(html)}
 <script>
 (() => {
   const token = ${token};
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') parent.postMessage({ type: 'ally-html-escape', token }, '*');
+  });
   let lastHeight = 0;
+  let heightFrame = 0;
   const reportHeight = () => {
     const bodyRectHeight = document.body ? document.body.getBoundingClientRect().height : 0;
     const height = Math.max(
@@ -98,10 +147,17 @@ ${buildBody(html)}
     lastHeight = height;
     parent.postMessage({ type: 'ally-html-height', token, height }, '*');
   };
-  new ResizeObserver(reportHeight).observe(document.body);
-  new MutationObserver(reportHeight).observe(document.body, { childList: true, subtree: true, attributes: true });
-  window.addEventListener('load', reportHeight);
-  requestAnimationFrame(reportHeight);
+  const scheduleHeight = () => {
+    if (heightFrame) return;
+    heightFrame = requestAnimationFrame(() => {
+      heightFrame = 0;
+      reportHeight();
+    });
+  };
+  new ResizeObserver(scheduleHeight).observe(document.body);
+  new MutationObserver(scheduleHeight).observe(document.body, { childList: true, subtree: true, attributes: true });
+  window.addEventListener('load', scheduleHeight);
+  scheduleHeight();
 })();
 <\/script>
 </body>
@@ -110,7 +166,8 @@ ${buildBody(html)}
 
 // 下载用的自包含文档：与 iframe 同源的外壳（样式 + 内联 echarts + 暗色默认），
 // 去掉 iframe 专用的向父窗口上报高度脚本——独立文件里没有 parent 通道。
-export function buildStandaloneHtmlDocument(html) {
+export function buildStandaloneHtmlDocument(html, echartsSource) {
+  if (typeof echartsSource !== 'string' || !echartsSource.trim()) throw new Error('ECharts source is required for offline export');
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -120,7 +177,7 @@ ${CSP_META}
 <title>Ally Render</title>
 <style>${DOCUMENT_HEAD_STYLES}</style>
 <script>
-${echartsRaw}
+${echartsSource}
 </script>
 <script>${ECHARTS_BOOTSTRAP}</script>
 </head>

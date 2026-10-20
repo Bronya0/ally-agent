@@ -8,7 +8,7 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <div class="messages-scroll-shell">
+  <div class="messages-scroll-shell" :class="{ 'presentation-paused': !presentationActive }">
     <n-scrollbar ref="scrollbarRef" class="messages-scroll" @scroll="handleScroll">
       <div ref="messagesRootRef" class="messages">
         <template v-for="(msg, index) in messages" :key="msgKey(msg)" v-memo="messageRenderMemo(msg, index)">
@@ -133,8 +133,9 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, toRaw, watch } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, toRaw, watch } from 'vue';
 import { t } from '../i18n.mjs';
+import { PRESENTATION_ACTIVE, useDocumentVisible } from '../composables/presentation.mjs';
 import { copyText } from '../utils/clipboard.mjs';
 import { toolCardRenderSignature } from '../utils/toolCardSignature.mjs';
 
@@ -145,7 +146,6 @@ import AskToolCard from './AskToolCard.vue';
 import ReadGroupCard from './ReadGroupCard.vue';
 import ReadGrepGroupCard from './ReadGrepGroupCard.vue';
 import SubagentInlineCard from './SubagentInlineCard.vue';
-import HtmlRenderCard from './HtmlRenderCard.vue';
 import StreamingMarkdownBody from './StreamingMarkdownBody.vue';
 import RenderBoundary from './RenderBoundary.vue';
 import MessageRoundStats from './MessageRoundStats.vue';
@@ -155,7 +155,12 @@ import ArrowDownOutlined from '@vicons/antd/ArrowDownOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import { useMessage } from 'naive-ui';
 
+// The renderer embeds ECharts for sandboxed/offline HTML. Keep that payload
+// out of the initial chat bundle until an HTML result actually appears.
+const HtmlRenderCard = defineAsyncComponent(() => import('./HtmlRenderCard.vue'));
+
 const props = defineProps({
+  active: { type: Boolean, default: true },
   messages: { type: Array, required: true },
   renderFn: { type: Function, required: true },
   fmtK: { type: Function, required: true },
@@ -166,6 +171,12 @@ const props = defineProps({
   // roundStatsOwner。
   inFlightRunId: { type: String, default: '' },
 });
+
+const pageVisible = useDocumentVisible();
+const presentationActive = computed(() => props.active && pageVisible.value);
+// Keep Tab identity separate from OS visibility: minimising should pause the
+// presentation, but must not close a fullscreen HTML viewer on restoration.
+provide(PRESENTATION_ACTIVE, computed(() => props.active));
 
 const expandedUserMessages = reactive(new WeakSet());
 const userMessageStatsCache = new WeakMap();
@@ -457,9 +468,10 @@ const userIntentWindow = 250;   // 手势后 250ms 内的 scroll 事件按用户
 // leave callbacks targeting a disposed scrollbar.
 const pendingRafs = new Set();
 function scheduleRaf(fn) {
+  if (!presentationActive.value) return 0;
   const id = requestAnimationFrame(() => {
     pendingRafs.delete(id);
-    fn();
+    if (presentationActive.value) fn();
   });
   pendingRafs.add(id);
   return id;
@@ -484,6 +496,7 @@ let railDragging = false;
 // 底。写哨兵值是幂等的（浏览器会夹到真实底部），只写滚动位置、不改任何尺寸，因
 // 此也不会自激。
 function pinToBottomNow() {
+  if (!presentationActive.value) return;
   const viewport = getScrollViewport();
   if (!viewport) return;
   scrollViewportToBottom(viewport);
@@ -498,7 +511,7 @@ function ensureViewportResizeObserver() {
   if (!viewport || viewportResizeObserver) return;
   viewportResizeObserver = new ResizeObserver(() => {
     // 卡头模式同样不介入：视口被挤压时把视口拉到底会把卡头推出视口之上。
-    if (!autoFollow.value || followMode !== 'bottom') return;
+    if (!presentationActive.value || !autoFollow.value || followMode !== 'bottom') return;
     pinToBottomNow();
   });
   viewportResizeObserver.observe(viewport);
@@ -511,7 +524,7 @@ function ensureContentResizeObserver() {
   const root = messagesRootRef.value;
   if (!root || contentResizeObserver) return;
   contentResizeObserver = new ResizeObserver(() => {
-    if (!autoFollow.value || followMode !== 'bottom') return;
+    if (!presentationActive.value || !autoFollow.value || followMode !== 'bottom') return;
     pinToBottomNow();
   });
   contentResizeObserver.observe(root);
@@ -567,6 +580,17 @@ function onRailDragEnd() {
   window.removeEventListener('pointercancel', onRailDragEnd, true);
   markUserIntent();
 }
+
+watch(presentationActive, (active) => {
+  if (!active) {
+    if (scrollRaf) cancelAnimationFrame(scrollRaf);
+    scrollRaf = 0;
+    for (const id of pendingRafs) cancelAnimationFrame(id);
+    pendingRafs.clear();
+    return;
+  }
+  nextTick(() => { if (presentationActive.value && autoFollow.value) scrollToBottom(); });
+});
 
 onMounted(() => {
   ensureViewportResizeObserver();
@@ -647,6 +671,7 @@ function handleScroll() {
 }
 
 function scrollToBottom(options = {}) {
+  if (!presentationActive.value) return;
   const force = options?.force === true;
   const alignToLastToolCard = options?.alignToLastToolCard === true;
   if (!force && !autoFollow.value) {
@@ -970,7 +995,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   background: transparent;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+  transition: opacity 0.12s ease;
   --wails-draggable: no-drag;
   z-index: 2;
 }
@@ -1067,7 +1092,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   font-size: var(--ally-aux-font-size, 12px);
   line-height: 1.4;
   cursor: pointer;
-  transition: border-color 120ms ease, color 120ms ease;
+  transition: none;
   user-select: none;
 }
 

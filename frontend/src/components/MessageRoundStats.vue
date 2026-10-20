@@ -120,8 +120,7 @@ const tokenSpeed = computed(() => {
 }
 
 /* 内容盒：默认隐藏但保留占位（visibility 不参与布局收缩，无跳动）。
-   visibility 一起进 transition：显示时立即可见、淡入；隐藏时等 opacity
-   落到 0 才真正 hidden，浮出与淡出双向都有过渡，不突兀。
+   只对 opacity 做淡入；隐藏时立即关闭 visibility，避免看不见的按钮接收焦点。
    隐藏时盒内按钮不可命中（visibility:hidden 的元素不接指针事件），所以外框
    那条命中区不会变成误点区。显形由 ChatMessages 的 .turn-stats 规则驱动。 */
 .stats-inner {
@@ -130,7 +129,7 @@ const tokenSpeed = computed(() => {
   gap: 6px;
   visibility: hidden;
   opacity: 0;
-  transition: opacity 0.2s ease, visibility 0.2s;
+  transition: opacity 0.2s ease;
 }
 
 .duration-text {
@@ -161,7 +160,7 @@ const tokenSpeed = computed(() => {
   background: transparent;
   color: var(--ally-text-faint);
   cursor: pointer;
-  transition: color 0.12s, background 0.12s;
+  transition: none;
   --wails-draggable: no-drag;
 }
 

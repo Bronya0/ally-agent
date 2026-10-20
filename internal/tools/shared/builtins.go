@@ -203,14 +203,15 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("service", "Manage long-running local processes without blocking: start returns an id; list includes running and recent finished services; read returns recent output, including from finished services; stop tries graceful termination before killing the process tree. Model output keeps at most the last 8 KiB; reduced-from reports clipping. Use graceSeconds for processes that must flush state. Avoid polling loops; read after a concrete condition or wait.", map[string]any{
+		functionTool("service", "Manage long-running local processes without blocking: start returns an id; list defaults to starting/running services; includeFinished=true also lists recent finished services; read returns recent output, including from finished services; stop tries graceful termination before killing the process tree. Model output keeps at most the last 8 KiB; reduced-from reports clipping. Use graceSeconds for processes that must flush state. Avoid polling loops; read after a concrete condition or wait.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":  map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "Start a new background process, stop one by id, list all tracked services (running plus the most recent finished ones), or read a bounded tail of one service's output (works on finished services for post-mortem diagnosis)."},
-				"name":    map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
-				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
-				"cwd":     map[string]any{"type": "string", "description": "Workspace-relative working directory. Empty means workspace root. Used only with action=start."},
-				"id":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start. Required with action=stop and action=read."},
+				"includeFinished": map[string]any{"type": "boolean", "description": "For action=list: include finished services (default false). Output remains readable by id."},
+				"action":          map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "Start a new background process, stop one by id, list starting/running services (includeFinished=true adds recent finished ones), or read a bounded tail of one service's output (works on finished services for post-mortem diagnosis)."},
+				"name":            map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
+				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
+				"cwd":             map[string]any{"type": "string", "description": "Workspace-relative working directory. Empty means workspace root. Used only with action=start."},
+				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start. Required with action=stop and action=read."},
 				"graceSeconds": map[string]any{
 					"type": "integer", "minimum": 0, "maximum": MaxServiceStopGraceSeconds,
 					"description": fmt.Sprintf("Seconds to wait for a graceful stop before the process tree is force killed (default %d, max %d; omit or send 0 for the default). Used only with action=stop; raise it for services that must flush state on exit.", DefaultServiceStopGraceSeconds, MaxServiceStopGraceSeconds),
@@ -265,12 +266,13 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("scheduled_task", "Create, list, or delete persistent scheduled tasks that survive Ally restarts. Recurring schedules resume from startup without catching up missed fires. The backend also accepts future RFC3339 one-shot times; past-due one-shots are reported as missed and never run late. For agent-created tasks, create only when the user explicitly requests scheduled or recurring automation. Task content must be exactly one of instruction (an LLM agent runs with fresh context each fire, on the model that was active when the task was created) or command (a shell command runs in the task workspace through command safety checks, max 600s per run).", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":      map[string]any{"type": "string", "enum": []string{"create", "list", "delete"}, "description": "Create, list, or delete a scheduled task."},
-				"id":          map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Task id required for delete."},
-				"name":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Short task name required for create."},
-				"instruction": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Self-contained instruction executed by an LLM agent with fresh context on every run. Mutually exclusive with command; provide either instruction or command for action=create."},
-				"command":     map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command executed in the task workspace on every run (same safety rules as the command tool; not for long-running services). Mutually exclusive with instruction; provide either instruction or command for action=create."},
-				"schedule":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Required for create: future RFC3339 one-shot time, Go duration such as 30m/2h (at least 1m), or a standard five-field cron expression. @-descriptors such as @daily are rejected: use a duration for intervals."},
+				"includeFinished": map[string]any{"type": "boolean", "description": "For action=list: include completed, missed, or invalid tasks with no next run (default false). Running tasks and tasks with a next run are always listed."},
+				"action":          map[string]any{"type": "string", "enum": []string{"create", "list", "delete"}, "description": "Create, list active tasks, or delete a scheduled task. Use includeFinished=true to list all retained tasks."},
+				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Task id required for delete."},
+				"name":            map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Short task name required for create."},
+				"instruction":     map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Self-contained instruction executed by an LLM agent with fresh context on every run. Mutually exclusive with command; provide either instruction or command for action=create."},
+				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command executed in the task workspace on every run (same safety rules as the command tool; not for long-running services). Mutually exclusive with instruction; provide either instruction or command for action=create."},
+				"schedule":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Required for create: future RFC3339 one-shot time, Go duration such as 30m/2h (at least 1m), or a standard five-field cron expression. @-descriptors such as @daily are rejected: use a duration for intervals."},
 			},
 			"required": []string{"action"},
 		}),

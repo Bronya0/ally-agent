@@ -147,13 +147,11 @@ onBeforeUnmount(() => {
   overflow: hidden;
   contain: layout paint style;
   opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.38s ease, visibility 0.38s ease;
+  transition: opacity 0.38s ease;
 }
 
 .sb-layer.is-visible {
   opacity: 1;
-  visibility: visible;
 }
 
 /* 窗口隐藏或淡出期间暂停花瓣动画 */

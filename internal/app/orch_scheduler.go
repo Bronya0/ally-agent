@@ -79,12 +79,13 @@ type ScheduledTask struct {
 }
 
 type ScheduledTaskToolRequest struct {
-	Action      string `json:"action"`
-	ID          string `json:"id,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Instruction string `json:"instruction,omitempty"`
-	Command     string `json:"command,omitempty"`
-	Schedule    string `json:"schedule,omitempty"`
+	IncludeFinished bool   `json:"includeFinished,omitempty"`
+	Action          string `json:"action"`
+	ID              string `json:"id,omitempty"`
+	Name            string `json:"name,omitempty"`
+	Instruction     string `json:"instruction,omitempty"`
+	Command         string `json:"command,omitempty"`
+	Schedule        string `json:"schedule,omitempty"`
 }
 
 type ScheduledTaskToolView struct {
@@ -208,6 +209,15 @@ func (a *App) executeScheduledTaskTool(cfg ConfigState, req ScheduledTaskToolReq
 		return ScheduledTaskToolResult{Task: &view}, nil
 	case "list":
 		tasks := manager.list()
+		if !req.IncludeFinished {
+			active := make([]ScheduledTask, 0, len(tasks))
+			for _, task := range tasks {
+				if task.Running || task.NextRunAt > 0 {
+					active = append(active, task)
+				}
+			}
+			tasks = active
+		}
 		limit := len(tasks)
 		if limit > scheduler.ListTruncateAt {
 			limit = scheduler.ListTruncateAt

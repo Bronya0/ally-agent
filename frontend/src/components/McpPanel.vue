@@ -803,18 +803,7 @@ watch(
   padding: 16px 24px 28px;
 }
 
-/* 页头标题+副标题：与 Skills/Models 面板同构，副标题紧贴标题下方。 */
-.panel-header-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
 
-.config-inline-subtitle {
-  font-size: 12px;
-  color: var(--ally-text-muted);
-}
 
 /* 页头操作按钮组：与 Skills/Models 面板同构（导入→导出→刷新→添加）。 */
 .panel-header-actions {

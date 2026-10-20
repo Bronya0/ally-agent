@@ -8,28 +8,28 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <div :class="['rich-tool-card', msg.kind, msg.status, { expanded: msg.expanded }]" @click.stop>
+  <div :class="['rich-tool-card', displayedMsg.kind, displayedMsg.status, { expanded: displayedMsg.expanded }]" @click.stop>
     <div
-      :class="['tool-line', { clickable: hasExpandableBody(msg) }]"
-      @click.stop="hasExpandableBody(msg) && handleToggle(msg)"
+      :class="['tool-line', { clickable: hasExpandableBody(displayedMsg) }]"
+      @click.stop="hasExpandableBody(displayedMsg) && handleToggle(displayedMsg)"
     >
       <ToolStatusIcon :status="statusMark" />
-      <span class="tool-verb">{{ toolVerb(msg) }}</span>
-      <span class="tool-name">{{ toolDisplayName(msg) }}</span>
-      <span v-if="msg.title && msg.kind === 'command'" class="tool-command" :title="msg.title">
+      <span class="tool-verb">{{ toolVerb(displayedMsg) }}</span>
+      <span class="tool-name">{{ toolDisplayName(displayedMsg) }}</span>
+      <span v-if="displayedMsg.title && displayedMsg.kind === 'command'" class="tool-command" :title="displayedMsg.title">
         <span class="tool-command-paren">(</span>
-        <code v-html="highlightCommand(msg)"></code>
+        <code v-html="highlightCommand(displayedMsg)"></code>
         <span class="tool-command-paren">)</span>
       </span>
-      <span v-else-if="msg.kind === 'plan' && msg.title" class="tool-arg plan-next-step" :title="msg.title">({{ msg.title }})</span>
-      <span v-else-if="msg.title" class="tool-arg" :title="msg.title">({{ msg.title }})</span>
-      <span v-if="msg.kind === 'edit' && msg.status === 'success' && (msg.editAdded || msg.editRemoved)" class="tool-chip edit-change-chip">
+      <span v-else-if="displayedMsg.kind === 'plan' && displayedMsg.title" class="tool-arg plan-next-step" :title="displayedMsg.title">({{ displayedMsg.title }})</span>
+      <span v-else-if="displayedMsg.title" class="tool-arg" :title="displayedMsg.title">({{ displayedMsg.title }})</span>
+      <span v-if="displayedMsg.kind === 'edit' && displayedMsg.status === 'success' && (displayedMsg.editAdded || displayedMsg.editRemoved)" class="tool-chip edit-change-chip">
         <span class="tool-chip-dot">&middot;</span>
-        <span v-if="msg.editAdded" class="edit-chip-added">+{{ msg.editAdded }}</span>
-        <span v-if="msg.editRemoved" class="edit-chip-removed">-{{ msg.editRemoved }}</span>
+        <span v-if="displayedMsg.editAdded" class="edit-chip-added">+{{ displayedMsg.editAdded }}</span>
+        <span v-if="displayedMsg.editRemoved" class="edit-chip-removed">-{{ displayedMsg.editRemoved }}</span>
       </span>
-      <span v-else-if="msg.kind === 'wait' && waitCountdown" class="tool-chip wait-countdown">{{ waitCountdown }}</span>
-      <span v-else-if="msg.chip" class="tool-chip">{{ msg.chip }}</span>
+      <span v-else-if="displayedMsg.kind === 'wait' && waitCountdown" class="tool-chip wait-countdown">{{ waitCountdown }}</span>
+      <span v-else-if="displayedMsg.chip" class="tool-chip">{{ displayedMsg.chip }}</span>
       <span v-if="displayDuration" class="tool-duration">{{ displayDuration }}</span>
     </div>
 
@@ -64,86 +64,87 @@ Public License v3. See the LICENSE file for details.
 
     <div v-if="completedEditEntries.length" class="tool-body-swap edit-file-groups">
       <div v-for="(entry, ei) in completedEditEntries" :key="entry.path || ei" class="edit-file-group">
-        <div v-if="msg.editEntries.length > 1" class="edit-file-header">
+        <div v-if="displayedMsg.editEntries.length > 1" class="edit-file-header">
           <span class="edit-file-name">{{ entry.path || $t('tools.file', { index: ei + 1 }) }}</span>
           <span v-if="entry.added" class="edit-chip-added">+{{ entry.added }}</span>
           <span v-if="entry.removed" class="edit-chip-removed">-{{ entry.removed }}</span>
         </div>
-        <div class="edit-file-content" :class="{ 'no-header': msg.editEntries.length <= 1 }">
-          <DiffView layout="split" :diff-text="entry.diff" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :added-count="entry.added || 0" :removed-count="entry.removed || 0" @toggle="handleToggle(msg)" />
+        <div class="edit-file-content" :class="{ 'no-header': displayedMsg.editEntries.length <= 1 }">
+          <DiffView layout="split" :diff-text="entry.diff" :file-path="entry.path" :show-header="false" :collapsed="!displayedMsg.expanded" :added-count="entry.added || 0" :removed-count="entry.removed || 0" @toggle="handleToggle(displayedMsg)" />
         </div>
       </div>
     </div>
     <DiffView
-      v-else-if="msg.kind === 'edit' && msg.status === 'success' && msg.editDiff"
+      v-else-if="displayedMsg.kind === 'edit' && displayedMsg.status === 'success' && displayedMsg.editDiff"
       class="tool-body-swap"
       layout="split"
-      :diff-text="msg.editDiff"
-      :file-path="msg.editFilePath"
+      :diff-text="displayedMsg.editDiff"
+      :file-path="displayedMsg.editFilePath"
       :show-header="false"
-      :collapsed="!msg.expanded"
-      :added-count="msg.editAdded || 0"
-      :removed-count="msg.editRemoved || 0"
-      @toggle="handleToggle(msg)"
+      :collapsed="!displayedMsg.expanded"
+      :added-count="displayedMsg.editAdded || 0"
+      :removed-count="displayedMsg.editRemoved || 0"
+      @toggle="handleToggle(displayedMsg)"
     />
-    <pre v-else-if="msg.kind === 'edit' && msg.status === 'success' && msg.editChangedLinesBlock" class="edit-changed-lines-block" :class="{ 'edit-changed-lines-preview': !msg.expanded }">{{ msg.editChangedLinesBlock }}</pre>
-    <div v-if="msg.editWarnings && msg.editWarnings.length" class="edit-warning-list">
-      <div v-for="(warning, wi) in msg.editWarnings" :key="wi" class="edit-warning">{{ warning }}</div>
+    <pre v-else-if="displayedMsg.kind === 'edit' && displayedMsg.status === 'success' && displayedMsg.editChangedLinesBlock" class="edit-changed-lines-block" :class="{ 'edit-changed-lines-preview': !displayedMsg.expanded }">{{ displayedMsg.editChangedLinesBlock }}</pre>
+    <div v-if="displayedMsg.editWarnings && displayedMsg.editWarnings.length" class="edit-warning-list">
+      <div v-for="(warning, wi) in displayedMsg.editWarnings" :key="wi" class="edit-warning">{{ warning }}</div>
     </div>
     <CodeView
-      v-if="msg.kind === 'create' && msg.status !== 'error'"
+      v-if="displayedMsg.kind === 'create' && displayedMsg.status !== 'error'"
       :class="{ 'tool-body-swap': !isBodyLive }"
-      :code="msg.codeContent || ''"
-      :file-path="msg.editFilePath || ''"
-      :collapsed="isCreatePreview(msg)"
+      :code="displayedMsg.codeContent || ''"
+      :file-path="displayedMsg.editFilePath || ''"
+      :collapsed="isCreatePreview(displayedMsg)"
       :max-lines="BODY_PREVIEW_LINES"
       preview-mode="tail"
       :live="isBodyLive"
-      @overflow="setBodyOverflow(msg, $event)"
+      @overflow="setBodyOverflow(displayedMsg, $event)"
     />
     <TerminalOutputView
-      v-else-if="msg.kind === 'command' && msg.status !== 'error'"
+      v-else-if="displayedMsg.kind === 'command' && displayedMsg.status !== 'error'"
       :class="{ 'tool-body-swap': !isBodyLive }"
-      :text="msg.body || ''"
-      :collapsed="!msg.expanded"
+      :text="displayedMsg.body || ''"
+      :collapsed="!displayedMsg.expanded"
       :max-lines="COMMAND_PREVIEW_LINES"
-      @overflow="setBodyOverflow(msg, $event)"
+      @overflow="setBodyOverflow(displayedMsg, $event)"
     />
     <!-- 截图：正体就是截到的图（点击在原尺寸与预览高度间切换）。
          dataUrl 是运行时字段（sanitizeStoredMessage 落盘时剥离），列表动作
          没有图，回落到通用 body 渲染窗口列表。 -->
     <div
-      v-else-if="msg.kind === 'screenshot' && msg.screenshotDataUrl && msg.status !== 'error'"
+      v-else-if="displayedMsg.kind === 'screenshot' && displayedMsg.screenshotDataUrl && displayedMsg.status !== 'error'"
       :class="['screenshot-preview', { expanded: screenshotExpanded }]"
       @click.stop="screenshotExpanded = !screenshotExpanded"
     >
-      <img :src="msg.screenshotDataUrl" alt="screenshot" loading="lazy" />
+      <img :src="displayedMsg.screenshotDataUrl" alt="screenshot" loading="lazy" />
     </div>
-    <pre v-else-if="msg.body && !cardGrid && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedBodyKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg), 'tool-body-swap': !isBodyLive }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
-    <div v-if="isValidationWarning(msg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
-      <div class="edit-warning validation-warning" :title="msg.validation">
+    <pre v-else-if="displayedMsg.body && !cardGrid && displayedMsg.status !== 'error' && displayedMsg.kind !== 'edit' && displayedMsg.kind !== 'read' && displayedMsg.kind !== 'remote_read' && displayedMsg.kind !== 'calculate' && displayedMsg.kind !== 'grep' && displayedMsg.kind !== 'plan' && (displayedMsg.kind !== 'list' || displayedMsg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedBodyKind(displayedMsg.kind), 'body-preview': isBodyPreview(displayedMsg), 'tail-default': isServiceReadResult(displayedMsg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(displayedMsg), 'tool-body-swap': !isBodyLive }]" @click.stop="handleBodyClick(displayedMsg)">{{ toolBodyText(displayedMsg) }}</pre>
+    <div v-if="isValidationWarning(displayedMsg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
+      <div class="edit-warning validation-warning" :title="displayedMsg.validation">
         <span class="validation-warning-label">{{ $t('tools.validationWarning') }}</span>
-        {{ msg.validation }}
+        {{ displayedMsg.validation }}
       </div>
     </div>
-    <div v-if="msg.status === 'error'" class="tool-error-block" role="alert">
-      <div v-if="msg.errorCode" class="tool-error-detail">
-        <code>{{ msg.errorCode }}</code>
+    <div v-if="displayedMsg.status === 'error'" class="tool-error-block" role="alert">
+      <div v-if="displayedMsg.errorCode" class="tool-error-detail">
+        <code>{{ displayedMsg.errorCode }}</code>
       </div>
-      <pre v-if="errorReasonText(msg)" class="tool-error-reason">{{ errorReasonText(msg) }}</pre>
+      <pre v-if="errorReasonText(displayedMsg)" class="tool-error-reason">{{ errorReasonText(displayedMsg) }}</pre>
     </div>
 
     <!-- 沙箱拦下的写入：工具结果是“命令执行成功”，绿色 √ 会把“没写成”说成“成了”，
          所以这行必须固定显示。位置固定在正体之后：输出照实呈现（内核那句拒绝、原样的
          退出码都在正体里），告警收尾，不与正文抢头一行。 -->
-    <div v-if="msg.sandboxDenied" class="tool-sandbox-denied" role="alert">
+    <div v-if="displayedMsg.sandboxDenied" class="tool-sandbox-denied" role="alert">
       {{ $t('app.tools.sandboxDenied') }}
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, defineAsyncComponent, nextTick, onUnmounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, nextTick, ref, shallowRef, watch } from 'vue';
+import { useDisplayClock, usePresentationActive } from '../composables/presentation.mjs';
 import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
 import powershell from 'highlight.js/lib/languages/powershell';
@@ -186,19 +187,28 @@ const props = defineProps({
   msg: { type: Object, required: true },
 });
 
+const presentationActive = usePresentationActive();
+// Copy fields only when pausing, retaining immutable string payloads by
+// reference. Active cards read the live message without allocating snapshots.
+const pausedMsg = shallowRef({ ...props.msg });
+watch(presentationActive, (active) => {
+  if (!active) pausedMsg.value = { ...props.msg };
+}, { flush: 'sync' });
+const displayedMsg = computed(() => presentationActive.value ? props.msg : pausedMsg.value);
+
 const emit = defineEmits(['toggle']);
 
 // 被沙箱拦下的写入按拒绝显示状态标记：工具调用在后端口径里是成功的（内核拒绝是命令
 // 结果、不是工具错误），但这次写没有发生。正体照旧渲染命令输出——拒绝原因与可写根
 // 都在里面，标记只负责让用户一眼看到“这次写没成”。
-const statusMark = computed(() => (props.msg?.sandboxDenied ? 'error' : props.msg?.status));
+const statusMark = computed(() => (displayedMsg.value?.sandboxDenied ? 'error' : displayedMsg.value?.status));
 
 // 一次删多条时逐行列出每一条（成/败），行样式复用读卡的折叠行：一条路径一行，
 // 失败行沿用同款红字标记 + 错误文案。行数据来自结果适配器（见 useToolEvents），
 // 所以行的判定与标题摘要同源（utils/toolPreview 的 deletePathRows）。
 const deleteRows = computed(() => {
-  if (props.msg?.kind !== 'delete' || !Array.isArray(props.msg.deleteEntries)) return [];
-  return props.msg.deleteEntries;
+  if (displayedMsg.value?.kind !== 'delete' || !Array.isArray(displayedMsg.value.deleteEntries)) return [];
+  return displayedMsg.value.deleteEntries;
 });
 
 // 单条且成功时标题已经写了那条路径，再铺一行是重复；多路径（标题只剩 "N paths"）、
@@ -223,32 +233,31 @@ function deleteRowError(row) {
 // 的 setCardGrid）：条目、标题行、空态文案一起走，卡片正体因此可以整块清空。没有这个
 // 字段的是旧卡片或其它工具，继续走原来的 body。
 const cardGrid = computed(() => {
-  const grid = props.msg?.cardGrid;
+  const grid = displayedMsg.value?.cardGrid;
   return grid && Array.isArray(grid.items) ? grid : null;
 });
 
 // 结果本身就是一组字段的工具（目前只有远端传输）：字段行由结果适配器写好（标签已过
 // i18n），这里只决定要不要铺开。
 const transferFields = computed(() => (
-  props.msg?.kind === 'remote_transfer' && Array.isArray(props.msg.transferFields) ? props.msg.transferFields : []
+  displayedMsg.value?.kind === 'remote_transfer' && Array.isArray(displayedMsg.value.transferFields) ? displayedMsg.value.transferFields : []
 ));
 
 // Pending arguments are not an applied edit. Show only completed backend diffs.
 const completedEditEntries = computed(() => (
-  props.msg?.kind === 'edit' && props.msg.status === 'success' && Array.isArray(props.msg.editEntries)
-    ? props.msg.editEntries.filter((entry) => entry?.diff) : []
+  displayedMsg.value?.kind === 'edit' && displayedMsg.value.status === 'success' && Array.isArray(displayedMsg.value.editEntries)
+    ? displayedMsg.value.editEntries.filter((entry) => entry?.diff) : []
 ));
 
 const DiffView = defineAsyncComponent(() => import('./DiffView.vue'));
 const CodeView = defineAsyncComponent(() => import('./CodeView.vue'));
 const TerminalOutputView = defineAsyncComponent(() => import('./TerminalOutputView.vue'));
-const nowMs = ref(Date.now());
-let waitTimer = null;
+const nowMs = useDisplayClock(() => presentationActive.value && displayedMsg.value.kind === 'wait' && displayedMsg.value.status === 'running', 250);
 
 const waitCountdown = computed(() => {
-  if (props.msg.kind !== 'wait' || props.msg.status !== 'running') return '';
-  const seconds = Number(props.msg.waitSeconds || 0);
-  const startedAt = Number(props.msg.waitStartedAt || 0);
+  if (displayedMsg.value.kind !== 'wait' || displayedMsg.value.status !== 'running') return '';
+  const seconds = Number(displayedMsg.value.waitSeconds || 0);
+  const startedAt = Number(displayedMsg.value.waitStartedAt || 0);
   if (!seconds || !startedAt) return '';
   const remaining = Math.max(0, Math.ceil((startedAt + seconds * 1000 - nowMs.value) / 1000));
   return t('tools.wait.remaining', { seconds: remaining });
@@ -260,31 +269,13 @@ const waitCountdown = computed(() => {
 // 耗时在 HtmlRenderCard 内展示。
 // 名单与“默认折叠 / 正体固定高度”同源，数据在 utils/toolKind.mjs 那一张表里：本卡片
 // 不再自己列 kind（曾经四处各列一份，于是远端读卡比本地读卡多一条耗时角标）。
-const displayDuration = computed(() => (toolShowsDuration(props.msg.name) ? props.msg.durationText || '' : ''));
+const displayDuration = computed(() => (toolShowsDuration(displayedMsg.value.name) ? displayedMsg.value.durationText || '' : ''));
 
 // 流式期间卡片正体显示的是累积的原始参数（live），tool:result 到达后换成结果
 // 视图（final）。切换时只加一个状态类触发一次性淡入——不重建元素，因此不会
 // 打断内部状态（滚动位置、复制、选中），也不会给将来给这些视图加局部状态埋雷。
-const isBodyLive = computed(() => props.msg?.status === 'running');
+const isBodyLive = computed(() => displayedMsg.value?.status === 'running');
 
-watch(
-  () => props.msg.kind === 'wait' && props.msg.status === 'running',
-  (active) => {
-    if (waitTimer) {
-      clearInterval(waitTimer);
-      waitTimer = null;
-    }
-    if (active) {
-      nowMs.value = Date.now();
-      waitTimer = setInterval(() => { nowMs.value = Date.now(); }, 250);
-    }
-  },
-  { immediate: true },
-);
-
-onUnmounted(() => {
-  if (waitTimer) clearInterval(waitTimer);
-});
 
 function toolDisplayName(msg) {
   if (msg.kind === 'mcp') {
@@ -476,7 +467,7 @@ function enableBodyScroll() {
 }
 
 watch(
-  () => props.msg?.eventId,
+  () => displayedMsg.value?.eventId,
   () => {
     bodyScrollEnabled.value = false;
   },
@@ -484,15 +475,15 @@ watch(
 );
 
 watch(
-  () => [props.msg?.body, props.msg?.expanded, props.msg?.kind, props.msg?.status],
+  () => [presentationActive.value, displayedMsg.value?.body, displayedMsg.value?.expanded, displayedMsg.value?.kind, displayedMsg.value?.status],
   () => {
-    if (bodyScrollEnabled.value || !isScrollableBody(props.msg)) return;
+    if (!presentationActive.value || bodyScrollEnabled.value || !isScrollableBody(displayedMsg.value)) return;
     nextTick(() => {
       const pre = bodyPreRef.value;
-      if (!pre) return;
+      if (!presentationActive.value || !pre) return;
       pre.scrollTop = pre.scrollHeight;
       requestAnimationFrame(() => {
-        if (bodyPreRef.value) bodyPreRef.value.scrollTop = bodyPreRef.value.scrollHeight;
+        if (presentationActive.value && bodyPreRef.value) bodyPreRef.value.scrollTop = bodyPreRef.value.scrollHeight;
       });
     });
   },

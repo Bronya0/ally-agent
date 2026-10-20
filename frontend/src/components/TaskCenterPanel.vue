@@ -195,6 +195,13 @@ const logServiceId = ref('');
 const logServiceActive = ref(false);
 const logPre = ref(null);
 let logRefreshTimer = 0;
+let logRequestVersion = 0;
+const pendingLogRequests = new Map();
+
+function invalidateLogRequest() {
+  logRequestVersion += 1;
+  logLoading.value = false;
+}
 
 const scheduledRunningCount = computed(() => props.tasks.filter(isScheduledTaskRunning).length);
 const serviceRunningCount = computed(() => props.services.filter(isServiceActive).length);
@@ -244,6 +251,7 @@ function highlightedCommand(command) {
 }
 
 function openScheduledLog(task) {
+  invalidateLogRequest();
   logServiceId.value = '';
   logServiceActive.value = false;
   logTitle.value = task.name || task.id;
@@ -257,9 +265,11 @@ function openScheduledLog(task) {
 }
 
 async function openServiceLog(service) {
+  invalidateLogRequest();
   logServiceId.value = service.id;
   logServiceActive.value = isServiceActive(service);
   logTitle.value = service.name || service.id;
+  logMeta.value = '';
   logContent.value = service.outputTail || '';
   logVisible.value = true;
   // Scroll to bottom as soon as the modal opens so the user sees the latest
@@ -270,23 +280,16 @@ async function openServiceLog(service) {
   await refreshServiceLog();
 }
 
-watch(logVisible, (visible) => {
+watch([logVisible, logServiceId, logServiceActive], ([visible, serviceId, active]) => {
   if (logRefreshTimer) window.clearInterval(logRefreshTimer);
   logRefreshTimer = 0;
-  if (visible && logServiceId.value && logServiceActive.value) {
-    logRefreshTimer = window.setInterval(() => void refreshServiceLog(), 1500);
+  if (!visible) invalidateLogRequest();
+  if (visible && serviceId && active) {
+    logRefreshTimer = window.setInterval(() => {
+      if (!document.hidden) void refreshServiceLog();
+    }, 1500);
   }
-});
-
-// Stop the polling loop if the service stops while the log viewer is still
-// open — previously the 1.5s GetServiceOutput calls kept firing until the
-// user closed the modal, even though the data had gone static.
-watch(logServiceActive, (active) => {
-  if (!active && logRefreshTimer) {
-    window.clearInterval(logRefreshTimer);
-    logRefreshTimer = 0;
-  }
-});
+}, { flush: 'sync' });
 
 // Sync logServiceActive with the services prop so the watch above fires when
 // the service backing the open log modal stops running. Without this,
@@ -302,14 +305,26 @@ watch(() => props.services, () => {
 }, { deep: false });
 
 onUnmounted(() => {
+  invalidateLogRequest();
   if (logRefreshTimer) window.clearInterval(logRefreshTimer);
 });
 
 async function refreshServiceLog() {
-  if (!logServiceId.value) return;
+  if (!logVisible.value || !logServiceId.value || logLoading.value) return;
+  const version = logRequestVersion;
+  const serviceId = logServiceId.value;
   logLoading.value = true;
+  let request;
   try {
-    const result = await GetServiceOutput(logServiceId.value);
+    const previous = pendingLogRequests.get(serviceId);
+    if (previous) {
+      await previous.catch(() => {});
+      if (version !== logRequestVersion) return;
+    }
+    request = GetServiceOutput(serviceId);
+    pendingLogRequests.set(serviceId, request);
+    const result = await request;
+    if (version !== logRequestVersion) return;
     logContent.value = result?.output || '';
     logMeta.value = t('taskCenter.serviceBufferMeta', {
       size: formatBytes(result?.bytes),
@@ -317,9 +332,11 @@ async function refreshServiceLog() {
     });
     scrollLogToBottom();
   } catch (err) {
+    if (version !== logRequestVersion) return;
     logMeta.value = t('service.outputLoadFailed', { error: err });
   } finally {
-    logLoading.value = false;
+    if (request && pendingLogRequests.get(serviceId) === request) pendingLogRequests.delete(serviceId);
+    if (version === logRequestVersion) logLoading.value = false;
   }
 }
 

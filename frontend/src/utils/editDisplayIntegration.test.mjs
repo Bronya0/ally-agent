@@ -30,10 +30,10 @@ const render = evaluate(compile(template, { mode: 'function' }).code, {
 });
 function renderNodes(msg) {
   const completedEditEntries = evaluate(`${section(cardSource, 'const completedEditEntries = computed(', 'const DiffView =')}; return completedEditEntries;`, {
-    props: { msg }, computed: Vue.computed,
+    displayedMsg: Vue.shallowRef(msg), computed: Vue.computed,
   });
   const root = render({
-    msg, completedEditEntries: completedEditEntries.value,
+    displayedMsg: msg, completedEditEntries: completedEditEntries.value,
     statusMark: msg.status, displayDuration: '', deleteRowsShown: false,
     transferFields: [], cardGrid: null, isBodyLive: msg.status === 'running',
     toolVerb: () => '', toolDisplayName: () => '', hasExpandableBody: () => false,

@@ -57,6 +57,8 @@
 | 插件页加载与 `host` 构造（按权限现构造、未声明的能力不存在） | `frontend/src/utils/pluginHost.mjs`；路径守门 `pluginPath.mjs`；主题 token 快照 `pluginTheme.mjs` |
 | 插件管理页（导入/导出/启停/删除 + 权限摘要与拒绝记录）与插件页容器 | `PluginsPanel.vue` / `PluginPage.vue`（挂载点、shown/hidden 事件、keepAlive 由 `App.vue` 的 `mountedPlugins` 表达） |
 | 前端唯一主组件与全局状态 | `frontend/src/App.vue` |
+| 展示活动状态、共享计时与隐藏 Tab 暂停（不影响后台 run；等待/子代理/压缩共用单一定时器） | `frontend/src/composables/presentation.mjs` + `utils/displayClock.mjs`；`ChatMessages.vue` 提供 Tab 活动状态，`StreamingMarkdownBody.vue` / `ToolCallCard.vue` 暂停展示并在恢复时追平 |
+| HTML 工具结果（单 iframe 原地全屏、共享本地 ECharts 资产、离线导出内联图表库） | `frontend/src/components/HtmlRenderCard.vue` + `utils/htmlRender.mjs`；资源地址兼容 Windows HTTP 与 macOS `wails://`，保留 opaque sandbox |
 | 技能 / MCP / 模型 / SSH 集群管理内联页 | `SkillsPanel.vue` / `McpPanel.vue` / `ModelsPanel.vue` / `SSHClusterPanel.vue` |
 | 文件树 / 编辑器 UI | `WorkspaceExplorer.vue` + `biz_workspace_editor.go` |
 | 外观主题与明暗配色（中性底色/正文 + 主题强调色；Naive 控件与 CSS 同源） | `frontend/src/style.css`（唯一色板）+ `utils/theme.mjs`（偏好持久化）+ `utils/naiveTheme.mjs`（读取 CSS 实色供 Naive 计算） |

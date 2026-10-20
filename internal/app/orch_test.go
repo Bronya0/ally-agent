@@ -4733,7 +4733,7 @@ func TestServiceListForToolOmitsOutputTail(t *testing.T) {
 	}
 	app.servicesMu.Unlock()
 
-	result := app.listServicesForTool()
+	result := app.listServicesForTool(false)
 	if result.MaxActive != maxActiveServices {
 		t.Fatalf("expected maxActive=%d, got %d", maxActiveServices, result.MaxActive)
 	}

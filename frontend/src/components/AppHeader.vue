@@ -26,6 +26,7 @@ Public License v3. See the LICENSE file for details.
           type="bar"
           size="small"
           :value="activeWorkspaceId"
+          :theme-overrides="tabsThemeOverrides"
           @update:value="onWorkspaceTabUpdate"
         >
           <n-tab
@@ -99,6 +100,7 @@ import SwitcherOutlined from '@vicons/antd/SwitcherOutlined';
 
 const props = defineProps({
   workspaceTabs: { type: Array, required: true },
+  tabsThemeOverrides: { type: Object, default: () => ({}) },
   activeWorkspaceId: { type: String, required: true },
   updateAvailable: { type: Boolean, default: false },
   updateAutoSupported: { type: Boolean, default: false },
@@ -369,17 +371,7 @@ body.platform-darwin .brand-wordmark {
   width: 100%;
   min-width: 0;
   height: 100%;
-  --n-tab-gap: 0 !important;
-  --n-tab-padding: 0 !important;
-  /* 暗色：与用户消息左侧竖线同一档色（accent-dim）——同族更协调，且不像全亮
-     accent 那样在 header 顶部抢视线。 */
-  --n-bar-color: var(--ally-accent-dim) !important;
   --wails-draggable: drag;
-}
-
-/* Light mode uses the theme's ink-strength accent for the tab locator. */
-html[data-mode="light"] .workspace-tabs {
-  --n-bar-color: var(--ally-accent-bright) !important;
 }
 
 .workspace-tabs :deep(.n-tabs-nav),
@@ -463,7 +455,7 @@ html[data-mode="light"] .workspace-tabs {
   color: var(--header-muted);
   cursor: pointer;
   font-size: 14px;
-  transition: background 0.12s, color 0.12s;
+  transition: none;
   padding: 0;
   line-height: 1;
   --wails-draggable: no-drag;
@@ -504,7 +496,7 @@ body.platform-darwin .window-close-icon {
   line-height: 1;
   white-space: nowrap;
   user-select: none;
-  transition: background 0.12s, color 0.12s;
+  transition: none;
   flex-shrink: 0;
   min-width: 112px;
   max-width: 180px;
@@ -577,7 +569,7 @@ body.platform-darwin .window-close-icon {
   background: transparent;
   color: var(--ally-text-soft);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition: none;
   margin-left: auto;
   flex-shrink: 0;
 }

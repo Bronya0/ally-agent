@@ -1136,9 +1136,6 @@ watch(() => props.visible, (visible) => {
   min-height: 0;
 }
 
-.sandbox-status-alert {
-  margin-bottom: 14px;
-}
 
 /* 安全围栏机制说明：只读列表，一行一条。 */
 .sandbox-fence-title {
@@ -1177,7 +1174,7 @@ watch(() => props.visible, (visible) => {
   color: var(--ally-text-muted);
   cursor: pointer;
   text-align: left;
-  transition: background 0.12s, color 0.12s;
+  transition: none;
   line-height: 1.3;
   --wails-draggable: no-drag;
 }
@@ -1206,12 +1203,6 @@ watch(() => props.visible, (visible) => {
   padding: 0;
 }
 
-.settings-page-actions {
-  display: flex;
-  justify-content: flex-start;
-  margin-top: 16px;
-  gap: 8px;
-}
 
 .license-notice {
   padding: 18px;
@@ -1320,7 +1311,7 @@ watch(() => props.visible, (visible) => {
   font-size: var(--ally-sub-font-size);
   line-height: 1.4;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: none;
   --wails-draggable: no-drag;
 }
 
@@ -1359,7 +1350,7 @@ watch(() => props.visible, (visible) => {
   font-size: var(--ally-sub-font-size);
   line-height: 1.4;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: none;
   --wails-draggable: no-drag;
 }
 
@@ -1387,8 +1378,7 @@ watch(() => props.visible, (visible) => {
   line-height: 1.5;
 }
 
-/* 与 MCP 服务列表同一套行卡样式：每项一张圆角卡，名称 + 徽标 + 右侧开关，
-   第二行放说明。settings-opt-badge 对应 .mcp-badge，容器对应 .mcp-form-mode。 */
+/* 与 MCP 服务列表同一套行卡样式：每项一张圆角卡，名称 + 右侧开关，第二行放说明。 */
 .settings-opt-list {
   display: flex;
   flex-direction: column;
@@ -1418,16 +1408,6 @@ watch(() => props.visible, (visible) => {
   color: var(--ally-text-primary);
 }
 
-.settings-opt-badge {
-  font-family: ui-monospace, monospace;
-  font-size: 11px;
-  line-height: 1;
-  padding: 3px 6px;
-  border-radius: 4px;
-  background: var(--ally-state-hover);
-  color: var(--ally-text-muted);
-  flex: none;
-}
 
 .settings-opt-side {
   margin-left: auto;
