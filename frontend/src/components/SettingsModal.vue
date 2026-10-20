@@ -314,6 +314,19 @@ Public License v3. See the LICENSE file for details.
             </div>
           </div>
           <div class="settings-field-hint">{{ $t('settings.fontSizeGridHint') }}</div>
+          <n-form-item :label="$t('settings.toolConcurrency')">
+            <div class="settings-field-stack">
+              <n-input-number
+                v-model:value="draft.toolConcurrency"
+                :min="TOOL_CONCURRENCY_MIN"
+                :max="TOOL_CONCURRENCY_MAX"
+                :step="1"
+                :precision="0"
+                style="width: 140px"
+              />
+              <span class="settings-field-hint">{{ $t('settings.toolConcurrencyHint') }}</span>
+            </div>
+          </n-form-item>
         </section>
 
         <!-- Advanced: auto code validation. The built-in tool toggles that
@@ -493,7 +506,7 @@ import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
 import { getStoredMode, THEMES } from '../utils/theme.mjs';
 import { normalizeApiKeysArray } from '../utils/modelConfigIO.mjs';
-import { HIDEABLE_MODES, PAGE_VISIBILITY_LABELS, normalizeDraftHiddenModes, normalizeHiddenModes } from '../utils/config.mjs';
+import { TOOL_CONCURRENCY_MIN, TOOL_CONCURRENCY_MAX, HIDEABLE_MODES, PAGE_VISIBILITY_LABELS, normalizeDraftHiddenModes, normalizeHiddenModes } from '../utils/config.mjs';
 import { isToggleableTool } from '../utils/builtinTools.mjs';
 import { Browser } from '@wailsio/runtime';
 import {
@@ -863,6 +876,7 @@ watch([
   () => draft.allowPrivateNetwork,
   () => draft.gitBashPath,
   () => draft.llmRetries,
+  () => draft.toolConcurrency,
   () => draft.compactThreshold,
   () => draft.compactTimeoutSeconds,
   () => draft.autoUpdate,

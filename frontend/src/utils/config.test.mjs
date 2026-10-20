@@ -127,3 +127,16 @@ test('压缩阈值的默认值与范围与后端一致', () => {
   assert.equal(COMPACT_THRESHOLD_MIN, Math.min(...bounds));
   assert.equal(COMPACT_THRESHOLD_MAX, Math.max(...bounds));
 });
+
+test('tool concurrency defaults, bounds and backend constants agree', () => {
+  assert.equal(defaultConfig().toolConcurrency, 4);
+  for (const [input, expected] of [[undefined, 4], [null, 4], [0, 4], [-1, 1], [1, 1], [8, 8], [16, 16], [99, 16], [Infinity, 4], [2.7, 3]]) {
+    const draft = defaultConfig();
+    assignConfig(draft, { toolConcurrency: input });
+    assert.equal(draft.toolConcurrency, expected);
+  }
+  const backend = readFileSync(new URL('../../../internal/app/biz_config.go', import.meta.url), 'utf8');
+  for (const [name, value] of [['defaultToolConcurrency', 4], ['minToolConcurrency', 1], ['maxToolConcurrency', 16]]) {
+    assert.match(backend, new RegExp(String.raw`${name}\s*=\s*${value}\b`));
+  }
+});

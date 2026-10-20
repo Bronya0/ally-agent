@@ -6,6 +6,8 @@
 // This file is part of ally-agent, licensed under the GNU General
 // Public License v3. See the LICENSE file for details.
 
+//go:build !server
+
 package main
 
 import (
@@ -117,6 +119,10 @@ func main() {
 	app.SetWindow(mainWindow)
 
 	if err := wailsApp.Run(); err != nil {
+		if errorLogger != nil {
+			errorLogger.Error("Ally startup failed", "error", err.Error())
+		}
 		println("Error:", err.Error())
+		wailsApp.Dialog.Error().SetTitle("Ally 启动失败").SetMessage(err.Error()).Show()
 	}
 }

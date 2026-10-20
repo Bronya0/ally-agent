@@ -43,8 +43,10 @@ import (
 //
 // 安全：监听非回环地址时未设置 token 会拒绝启动（fail closed）。
 type networkEventSink struct {
-	addr  string
-	token string
+	instance string
+	done     <-chan struct{} // host shutdown closes active SSE requests
+	addr     string
+	token    string
 
 	mu        sync.Mutex
 	subs      map[*eventSubscriber]struct{}
@@ -69,10 +71,11 @@ const (
 
 // networkEvent 是网络端的事件信封：名字 + JSON payload + 单调序号 + 时间。
 type networkEvent struct {
-	Name    string          `json:"name"`
-	Payload json.RawMessage `json:"payload"`
-	Seq     uint64          `json:"seq"`
-	TS      time.Time       `json:"ts"`
+	Instance string          `json:"instance,omitempty"`
+	Name     string          `json:"name"`
+	Payload  json.RawMessage `json:"payload"`
+	Seq      uint64          `json:"seq"`
+	TS       time.Time       `json:"ts"`
 }
 
 // eventRing 是最近事件环形缓冲：新连接先补发历史，轮询客户端按 seq 增量拉取。
@@ -114,7 +117,7 @@ func (r *eventRing) since(seq uint64) ([]networkEvent, uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if seq >= r.next {
-		return nil, r.next
+		return []networkEvent{}, r.next
 	}
 	from := seq
 	if from < r.base {
@@ -127,14 +130,49 @@ func (r *eventRing) since(seq uint64) ([]networkEvent, uint64) {
 	return out, r.next
 }
 
+// replayWindow lets clients distinguish retained replay from a silent gap.
+func (r *eventRing) replayWindow() (uint64, uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.base, r.next
+}
+
+func (s *networkEventSink) replayRequest(r *http.Request) (uint64, bool) {
+	since := parseSeq(r.URL.Query().Get("since"))
+	instance := r.URL.Query().Get("instance")
+	if last := r.Header.Get("Last-Event-ID"); last != "" && r.URL.Query().Get("since") == "" {
+		parts := strings.SplitN(last, ":", 2)
+		if len(parts) == 2 {
+			instance = parts[0]
+			since = parseSeq(parts[1]) + 1
+		}
+	}
+	base, next := s.ring.replayWindow()
+	reset := (instance != "" && instance != s.instance) || since < base || since > next
+	if instance != "" && instance != s.instance || since > next {
+		since = base
+	}
+	return since, reset
+}
+
+func (s *networkEventSink) writeReset(w io.Writer) error {
+	raw, _ := json.Marshal(map[string]any{"instance": s.instance, "resyncRequired": true, "reason": "event history unavailable; reload session snapshots"})
+	_, err := fmt.Fprintf(w, `event: stream:reset
+data: %s
+
+`, raw)
+	return err
+}
+
 // eventSubscriber 是传输无关的订阅者：SSE/未来 WS handler 各自持有一个，
 // 通过 channel 接收实时事件；channel 满时新事件被丢弃（不阻塞核心 Emit）。
 type eventSubscriber struct {
-	ch chan networkEvent
+	ch       chan networkEvent
+	overflow chan struct{}
 }
 
 func (s *networkEventSink) subscribe() *eventSubscriber {
-	sub := &eventSubscriber{ch: make(chan networkEvent, subscriberQueueSize)}
+	sub := &eventSubscriber{ch: make(chan networkEvent, subscriberQueueSize), overflow: make(chan struct{}, 1)}
 	s.mu.Lock()
 	s.subs[sub] = struct{}{}
 	s.mu.Unlock()
@@ -172,14 +210,18 @@ func (s *networkEventSink) Emit(name string, payload any) {
 			raw = append([]byte(nil), raw...)
 		}
 	}
-	e := networkEvent{Name: name, Payload: raw, TS: time.Now()}
+	e := networkEvent{Instance: s.instance, Name: name, Payload: raw, TS: time.Now()}
 	s.mu.Lock()
 	e = s.ring.add(e) // add 返回带全局 Seq 的事件，扇出的副本必须与 ring 一致
 	for sub := range s.subs {
 		select {
 		case sub.ch <- e:
 		default:
-			// 订阅者消费不过来就丢弃该事件（fire-and-forget 语义）。
+			// Notify the consumer explicitly: the missing event may be the final one.
+			select {
+			case sub.overflow <- struct{}{}:
+			default:
+			}
 		}
 	}
 	s.mu.Unlock()
@@ -198,10 +240,11 @@ func newNetworkEventSink(addr, token string, history int) (*networkEventSink, er
 		return nil, errors.New("ALLY_NETWORK_TOKEN is required when listening on a non-loopback address")
 	}
 	return &networkEventSink{
-		addr:  addr,
-		token: token,
-		subs:  map[*eventSubscriber]struct{}{},
-		ring:  newEventRing(history),
+		instance: newID(),
+		addr:     addr,
+		token:    token,
+		subs:     map[*eventSubscriber]struct{}{},
+		ring:     newEventRing(history),
 	}, nil
 }
 
@@ -282,6 +325,10 @@ func (s *networkEventSink) handleSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// SSE owns per-write deadlines; the HTTP server's whole-response deadline
+	// would otherwise terminate healthy long-lived streams.
+	controller := http.NewResponseController(w)
+	_ = controller.SetWriteDeadline(time.Now().Add(15 * time.Second))
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -313,16 +360,25 @@ func (s *networkEventSink) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// 实时事件 seq=0 不会被误判为重复而丢弃。
 	sub := s.subscribe()
 	defer s.unsubscribe(sub)
-	skipBefore := uint64(0)
-	if events, next := s.ring.since(parseSeq(r.URL.Query().Get("since"))); len(events) > 0 {
-		skipBefore = next
+	since, reset := s.replayRequest(r)
+	if reset {
+		if s.writeReset(w) != nil {
+			return
+		}
+		flusher.Flush()
+	}
+	events, next := s.ring.since(since)
+	skipBefore := next
+	if len(events) > 0 {
 		for _, e := range events {
+			_ = controller.SetWriteDeadline(time.Now().Add(15 * time.Second))
 			if writeSSE(w, e) != nil {
 				return
 			}
 		}
 		flusher.Flush()
 	}
+	expected := skipBefore
 	ticker := time.NewTicker(SSEKeepaliveInterval)
 	defer ticker.Stop()
 	for {
@@ -331,16 +387,31 @@ func (s *networkEventSink) handleSSE(w http.ResponseWriter, r *http.Request) {
 			if e.Seq < skipBefore {
 				continue // 回放与订阅重叠区间的事件已补发过，跳过。
 			}
+			if e.Seq != expected {
+				_ = s.writeReset(w)
+				flusher.Flush()
+				return
+			}
+			expected = e.Seq + 1
+			_ = controller.SetWriteDeadline(time.Now().Add(15 * time.Second))
 			if writeSSE(w, e) != nil {
 				return
 			}
 			flusher.Flush()
 		case <-ticker.C:
 			// SSE 注释行心跳，防止代理/客户端超时断开。
+			_ = controller.SetWriteDeadline(time.Now().Add(15 * time.Second))
 			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()
+		case <-sub.overflow:
+			_ = controller.SetWriteDeadline(time.Now().Add(15 * time.Second))
+			_ = s.writeReset(w)
+			flusher.Flush()
+			return
+		case <-s.done:
+			return
 		case <-r.Context().Done():
 			return
 		}
@@ -352,9 +423,9 @@ func (s *networkEventSink) handlePoll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	since := parseSeq(r.URL.Query().Get("since"))
+	since, reset := s.replayRequest(r)
 	events, next := s.ring.since(since)
-	writeJSON(w, map[string]any{"events": events, "next": next})
+	writeJSON(w, map[string]any{"events": events, "next": next, "instance": s.instance, "resyncRequired": reset})
 }
 
 func (s *networkEventSink) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -374,7 +445,7 @@ func writeSSE(w io.Writer, e networkEvent) error {
 	if name == "" {
 		name = "message"
 	}
-	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data)
+	_, err = fmt.Fprintf(w, "id: %s:%d\nevent: %s\ndata: %s\n\n", e.Instance, e.Seq, name, data)
 	return err
 }
 

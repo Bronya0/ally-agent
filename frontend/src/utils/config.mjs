@@ -59,6 +59,10 @@ export function normalizeDraftHiddenModes(draft) {
   return draft;
 }
 
+export const TOOL_CONCURRENCY_DEFAULT = 4;
+export const TOOL_CONCURRENCY_MIN = 1;
+export const TOOL_CONCURRENCY_MAX = 16;
+
 // defaultConfig 只描述持久化配置里**非模型**的部分：模型一律是 models[] 里的预设，
 // 界面在用的那个只存一个身份（lastUsedModel），其余模型字段由后端按身份展开
 // （见 internal/app ConfigState 与 expandLastUsedModel）。界面上"一条模型都没
@@ -85,6 +89,7 @@ export function defaultConfig() {
     // 模型种子，也是后端给 HTTP API 会话与计划任务展开模型的依据。
     lastUsedModel: null,
     llmRetries: 6,
+    toolConcurrency: TOOL_CONCURRENCY_DEFAULT,
     // Post-write auto validation is opt-in: each language stays off until the
     // user enables it in Settings. Backend stores *bool (nil = disabled).
     autoValidationPython: false,
@@ -143,6 +148,10 @@ export function assignConfig(target, source) {
     ? { providerName: String(lastUsed.providerName || '').trim(), model: String(lastUsed.model).trim(), ...(lastUsed.oauthAccountId ? { oauthAccountId: String(lastUsed.oauthAccountId).trim() } : {}) }
     : null;
   next.models = cloneModelConfigs(next.models);
+  const concurrency = Number(next.toolConcurrency);
+  next.toolConcurrency = Number.isFinite(concurrency) && concurrency !== 0
+    ? Math.min(TOOL_CONCURRENCY_MAX, Math.max(TOOL_CONCURRENCY_MIN, Math.round(concurrency)))
+    : TOOL_CONCURRENCY_DEFAULT;
   // Backend stores autoUpdate as *bool (nil = default on). Normalize null /
   // undefined back to true so the frontend always sees a real boolean.
   next.autoUpdate = next.autoUpdate === false ? false : true;

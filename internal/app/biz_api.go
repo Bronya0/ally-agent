@@ -342,10 +342,16 @@ func stopApiListenerLocked() {
 // ── 鉴权 ──
 
 func (a *App) apiAuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return apiAuthWithToken(next, func() string {
 		apiSvc.mu.Lock()
-		token := apiSvc.token
-		apiSvc.mu.Unlock()
+		defer apiSvc.mu.Unlock()
+		return apiSvc.token
+	})
+}
+
+func apiAuthWithToken(next http.Handler, getToken func() string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := getToken()
 		if token == "" {
 			apiWriteError(w, http.StatusServiceUnavailable, "api token is not initialized")
 			return
@@ -648,7 +654,7 @@ func (a *App) apiHandleCreateSession(w http.ResponseWriter, r *http.Request) {
 			apiWriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		body.Workspace = strings.TrimSpace(cfg.Workspace)
+		body.Workspace = strings.TrimSpace(a.runtimeConfig(cfg).Workspace)
 	}
 	if strings.TrimSpace(body.Title) == "" {
 		body.Title = workspaceBaseLabel(body.Workspace)
@@ -769,6 +775,10 @@ func (a *App) apiHandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		syncSessionIndex: true,
 	}, cfg)
 	if err != nil {
+		if errors.Is(err, errAppStopping) {
+			apiWriteError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		if errors.Is(err, errSessionBusy) || errors.Is(err, errSessionCompacting) {
 			apiWriteError(w, http.StatusConflict, err.Error())
 			return
@@ -1243,6 +1253,7 @@ func (a *App) apiHandleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 		apiWriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	cfg = a.runtimeConfig(cfg)
 	apiWriteOK(w, map[string]any{
 		"workspace":  cfg.Workspace,
 		"extraRoots": cfg.ExtraRoots,

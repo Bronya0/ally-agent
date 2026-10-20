@@ -2101,12 +2101,23 @@ func normalizeMcpConfigJSON(raw string) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// MCP HTTP tools do not require a selected project. Stdio servers use the
+// a dedicated temporary directory until a default workspace has been selected.
+func (a *App) mcpWorkspaceRoot(cfg ConfigState) (string, error) {
+	cfg = a.runtimeConfig(cfg)
+	if strings.TrimSpace(cfg.Workspace) == "" {
+		a.runtime.mcpCwdOnce.Do(func() { a.runtime.mcpCwd, a.runtime.mcpCwdErr = os.MkdirTemp("", "ally-mcp-") })
+		return a.runtime.mcpCwd, a.runtime.mcpCwdErr
+	}
+	return workspaceRoot(cfg)
+}
+
 func (a *App) RestartMcpServers() error {
 	cfg, err := a.getConfig()
 	if err != nil {
 		return err
 	}
-	root, err := workspaceRoot(cfg)
+	root, err := a.mcpWorkspaceRoot(cfg)
 	if err != nil {
 		return err
 	}

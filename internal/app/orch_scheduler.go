@@ -129,6 +129,7 @@ type scheduledTaskManager struct {
 	cancels   map[string]context.CancelFunc
 	runSem    chan struct{}
 	stopped   bool
+	workers   sync.WaitGroup
 }
 
 func (a *App) startScheduledTaskManager() error {
@@ -159,13 +160,20 @@ func (a *App) startScheduledTaskManager() error {
 }
 
 func (a *App) stopScheduledTaskManager() {
+	if err := a.shutdownScheduledTasks(5 * time.Second); err != nil {
+		a.logAppError("scheduler shutdown failed", "error", err.Error())
+	}
+}
+
+func (a *App) shutdownScheduledTasks(timeout time.Duration) error {
 	a.scheduledMu.Lock()
 	manager := a.scheduled
 	a.scheduled = nil
 	a.scheduledMu.Unlock()
 	if manager != nil {
-		manager.stop()
+		return manager.stopAndWait(timeout)
 	}
+	return nil
 }
 
 func (a *App) scheduledTaskManager() (*scheduledTaskManager, error) {
@@ -319,19 +327,11 @@ func scheduledTaskWorkspaceUsable(workspace string) bool {
 	return err == nil && info.IsDir()
 }
 
-func (m *scheduledTaskManager) stop() {
+func (m *scheduledTaskManager) stop() { _ = m.stopAndWait(5 * time.Second) }
+
+func (m *scheduledTaskManager) stopAndWait(timeout time.Duration) error {
 	m.mu.Lock()
-	if m.stopped {
-		m.mu.Unlock()
-		return
-	}
 	m.stopped = true
-	// Persist a clean final state (running flags reset) so the next launch
-	// does not restore tasks stuck in "running".
-	for _, task := range m.tasks {
-		task.Running = false
-	}
-	_ = m.persistLocked()
 	for _, timer := range m.timers {
 		timer.Stop()
 	}
@@ -339,10 +339,19 @@ func (m *scheduledTaskManager) stop() {
 		cancel()
 	}
 	m.mu.Unlock()
-	ctx := m.cron.Stop()
+	stopped := m.cron.Stop()
+	done := make(chan struct{})
+	go func() { <-stopped.Done(); m.workers.Wait(); close(done) }()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
-	case <-ctx.Done():
-	case <-time.After(5 * time.Second):
+	case <-done:
+		m.mu.Lock()
+		err := m.persistLocked()
+		m.mu.Unlock()
+		return err
+	case <-timer.C:
+		return errors.New("scheduler shutdown timed out")
 	}
 }
 
@@ -582,9 +591,10 @@ func (m *scheduledTaskManager) trigger(id string) {
 	}
 	_ = m.persistLocked()
 	copyTask := cloneScheduledTask(task)
+	m.workers.Add(1)
 	m.mu.Unlock()
 	m.emit("scheduled:run_start", map[string]any{"task": copyTask})
-	go m.run(copyTask)
+	go func() { defer m.workers.Done(); m.run(copyTask) }()
 }
 
 func (m *scheduledTaskManager) safeTrigger(id string) {
@@ -632,6 +642,11 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 	m.mu.Lock()
 	if m.tasks[task.ID] == nil {
 		m.mu.Unlock()
+		return
+	}
+	if m.stopped {
+		m.mu.Unlock()
+		m.finish(task.ID, "cancelled", "", "application is shutting down")
 		return
 	}
 	m.cancels[task.ID] = cancel

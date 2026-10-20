@@ -343,12 +343,10 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 		}
 		return filteredBatchReadResult(results), nil
 	}
-	// Parallel path: cap concurrency to 4 (matches the non-file tool batch
-	// limit in runChat). 20 files / 4 concurrent ≈ 5 rounds; well below the
-	// 30s tool timeout budget even on slow disks. Result slot is written by
-	// exactly one goroutine per index, so no mutex is needed.
+	// Match the configured tool batch concurrency. Each result slot is written
+	// by exactly one goroutine, so no mutex is needed.
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 4)
+	sem := make(chan struct{}, clampToolConcurrency(cfg.ToolConcurrency))
 	for i, p := range pending {
 		wg.Add(1)
 		sem <- struct{}{}

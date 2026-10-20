@@ -20,12 +20,10 @@ import (
 	goruntime "runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
-	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"ally-dev/internal/tools/pathutil"
 )
@@ -117,7 +115,6 @@ func (s wailsEventSink) Emit(name string, payload any) {
 // application.NewService). It installs the desktop event sink and delegates
 // long-lived Agent services to their host-neutral modules.
 func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
-	a.ctx = ctx
 	fan := newFanoutEventSink()
 	if a.wails != nil {
 		fan.Add(wailsEventSink{app: a.wails.app})
@@ -128,75 +125,13 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 		fan.Add(netSink)
 	}
 	a.events = fan
-	_ = a.ensureInitialized()
-	a.restoreApiService()
-	// Warm the one-time POSIX login-shell PATH probe without delaying the UI.
-	// command/service wait on the same sync.Once if needed.
-	go warmCommandEnvironment()
-	_ = a.loadServiceHistory()
-	_ = a.startScheduledTaskManager()
-	// Sweep stale temp-workspace leftovers from crashed sessions (async, never
-	// blocks startup) and remove this process's temp workspaces on exit.
-	go a.cleanupStaleTempWorkspaces()
-	go func() {
-		<-ctx.Done()
-		a.cleanupTempWorkspacesOnExit()
-	}()
-	// Load persisted token stats in the background and start the async flusher.
-	// Neither startup disk IO nor persistence can block normal chat handling.
-	if a.stats != nil {
-		a.stats.start(ctx)
+
+	if err := a.startRuntime(ctx); err != nil {
+		return err
 	}
-	// Windows backups can be removed immediately. macOS keeps the previous
-	// bundle until this process has remained alive past the startup grace period.
 	scheduleUpdateBackupCleanup(ctx)
-	go func() {
-		<-ctx.Done()
-		a.stopScheduledTaskManager()
-		a.stopAllServices()
-	}()
-	go func() {
-		timer := time.NewTimer(2 * time.Second)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			a.emitRipgrepMissingIfNeeded()
-			a.emitGitBashMissingIfNeeded()
-		}
-	}()
-	// Initialize MCP manager.
-	cfg, err := a.getConfig()
-	if err == nil {
-		root, _ := workspaceRoot(cfg)
-		if root != "" {
-			manager := NewMcpManager(root, func() {
-				a.emitMcpStatus()
-			})
-			manager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
-			manager.SetWarningHandler(func(message string) {
-				a.emit("config:warning", map[string]any{"field": "mcp", "message": message})
-			})
-			// 指针发布持 a.mu，读点统一走 activeMcpManager：启动期前端绑定
-			// 与聊天可能已经开始并发读这个字段。
-			a.mu.Lock()
-			a.mcpManager = manager
-			a.mu.Unlock()
-			go func() {
-				if err := manager.StartAll(ctx); err != nil {
-					// MCP start errors are non-fatal.
-				}
-				a.emitMcpStatus()
-			}()
-			go func() {
-				<-ctx.Done()
-				if current := a.activeMcpManager(); current != nil {
-					current.Shutdown()
-				}
-			}()
-		}
-	}
+	a.restoreApiService()
+
 	return nil
 }
 
@@ -205,20 +140,8 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 // completed requests are not lost when the window closes inside the periodic
 // flush interval.
 func (a *App) ServiceShutdown() error {
-	a.mu.Lock()
-	oauth := a.chatGPT
-	a.mu.Unlock()
-	if oauth != nil {
-		oauth.Close()
-	}
-	// Persist the main window geometry before the process tears down; the
-	// tracker only replays its in-memory snapshot, so a window already
-	// destroyed by the default WindowClosing listener is fine.
 	a.saveWindowState()
-	if a.stats != nil {
-		_ = a.stats.stop(statsShutdownTimeout)
-	}
-	return nil
+	return a.stopRuntime(20 * time.Second)
 }
 
 // quitApp asks the Wails application to quit. No-op when the desktop host is
@@ -561,49 +484,10 @@ func openPathInFileManager(path string) error {
 // needs: sending a completion toast with sound. The concrete implementation
 // is injected through SetNotifier from the host wiring (main.go); tests and
 // headless embeddings leave it nil and get silent no-ops.
+type completionNotification struct{ ID, Title, Body, Sound string }
+
 type completionNotifier interface {
-	SendNotification(options notifications.NotificationOptions) error
-}
-
-// SafeNotificationsService wraps the Wails notifications service so platform
-// startup failures (macOS unbundled binary without a bundle identifier, Linux
-// without a session bus) degrade to silent no-ops instead of aborting the
-// whole application startup — Wails aborts App.Run when any service Startup
-// returns an error, which would make the completion sound a startup
-// hard-dependency on every platform that cannot honour it.
-type SafeNotificationsService struct {
-	inner     *notifications.NotificationService
-	available atomic.Bool
-}
-
-// NewSafeNotificationsService creates the wrapped notifications service.
-func NewSafeNotificationsService() *SafeNotificationsService {
-	return &SafeNotificationsService{inner: notifications.New()}
-}
-
-// ServiceStartup implements application.ServiceStartup. Failures only disable
-// notifications; the application must keep starting.
-func (s *SafeNotificationsService) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
-	if err := s.inner.ServiceStartup(ctx, options); err != nil {
-		println("Ally notifications disabled:", err.Error())
-		return nil
-	}
-	s.available.Store(true)
-	return nil
-}
-
-// ServiceShutdown implements application.ServiceShutdown.
-func (s *SafeNotificationsService) ServiceShutdown() error {
-	return s.inner.ServiceShutdown()
-}
-
-// SendNotification implements completionNotifier and no-ops when the platform
-// backend failed to start.
-func (s *SafeNotificationsService) SendNotification(options notifications.NotificationOptions) error {
-	if !s.available.Load() {
-		return nil
-	}
-	return s.inner.SendNotification(options)
+	SendNotification(options completionNotification) error
 }
 
 // mainWindowMinimised reports whether the main window is currently
@@ -678,7 +562,7 @@ func (a *App) notifyCompletion(kind, workspace string) {
 		body += " · " + name
 	}
 
-	opts := notifications.NotificationOptions{
+	opts := completionNotification{
 		ID:    "ally-run-" + kind,
 		Title: "Ally",
 		Body:  body,
@@ -688,7 +572,7 @@ func (a *App) notifyCompletion(kind, workspace string) {
 		if kind != "done" {
 			sound = "Reminder"
 		}
-		opts.Sound = &notifications.NotificationSound{Name: sound}
+		opts.Sound = sound
 	}
 	go func() {
 		_ = n.SendNotification(opts)

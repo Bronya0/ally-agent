@@ -33,6 +33,26 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+const (
+	defaultToolConcurrency = 4
+	minToolConcurrency     = 1
+	maxToolConcurrency     = 16
+)
+
+// Zero is an absent legacy value; all execution paths enforce these bounds.
+func clampToolConcurrency(value int) int {
+	if value == 0 {
+		return defaultToolConcurrency
+	}
+	if value < minToolConcurrency {
+		return minToolConcurrency
+	}
+	if value > maxToolConcurrency {
+		return maxToolConcurrency
+	}
+	return value
+}
+
 // ── Config state ─────────────────────────────────────────────
 
 // Workspace 的默认值刻意留空：空 = 用户从未选择过工作区。首次启动时前端
@@ -44,6 +64,7 @@ func defaultConfigState() ConfigState {
 	// （见 ConfigState 的注释），一条模型都没有时就是空的。前端"未配置模型"
 	// 的占位显示由 utils/config.mjs 的 placeholderModel 提供，不进配置。
 	cfg := ConfigState{
+		ToolConcurrency:       defaultToolConcurrency,
 		AllowPrivateNetwork:   boolPtr(true),
 		ProxyMode:             proxyModeOff,
 		BackgroundOpacity:     defaultBackgroundOpacity,
@@ -105,6 +126,7 @@ func readConfigFile(path string) (ConfigState, error) {
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		return ConfigState{}, err
 	}
+	loaded.ToolConcurrency = clampToolConcurrency(loaded.ToolConcurrency)
 	return loaded, nil
 }
 
@@ -131,6 +153,9 @@ func handleUnreadableConfig(path string, cause error) {
 }
 
 func appDataDir() string {
+	if dir := strings.TrimSpace(os.Getenv("ALLY_DATA_DIR")); dir != "" {
+		return dir
+	}
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		return filepath.Join(home, ".ally_agent")
 	}
@@ -200,6 +225,7 @@ func (a *App) getConfig() (ConfigState, error) {
 // 隐藏页面名单清洗（只留可关闭的页面键，知识库与设置永不隐藏）+ 禁用插件名单清洗
 // （只留合法 id）。落盘路径共用这一份，免得新加的写入方漏掉其中一条。
 func persistableConfig(cfg ConfigState) ConfigState {
+	cfg.ToolConcurrency = clampToolConcurrency(cfg.ToolConcurrency)
 	// Copy before sanitizing: do not mutate a caller's model slice.
 	cfg.Models = append([]ModelConfig(nil), cfg.Models...)
 	for i := range cfg.Models {
@@ -692,6 +718,9 @@ func (a *App) SaveConfig(req ConfigState) error {
 	allowPrivateBefore := a.config.allowPrivateNetworkEnabled()
 	a.config = mergeConfig(a.config, req)
 	a.config.CustomPrompt = req.CustomPrompt
+	if req.ToolConcurrency != 0 {
+		a.config.ToolConcurrency = clampToolConcurrency(req.ToolConcurrency)
+	}
 	// GitHubToken 由保存路径显式写入（含清空）：mergeConfig 不再携带该字段，
 	// 空 overlay 的 effectiveConfig 读取路径不会把它抹掉。
 	a.config.GitHubToken = strings.TrimSpace(req.GitHubToken)
@@ -809,11 +838,19 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 
 // ── Effective config ─────────────────────────────────────────
 
+// runtimeConfig applies host defaults to a copy, never to persistable state.
+func (a *App) runtimeConfig(cfg ConfigState) ConfigState {
+	if a.runtime.workspace != "" {
+		cfg.Workspace = a.runtime.workspace
+	}
+	return cfg
+}
+
 func (a *App) effectiveConfig(overlay ConfigState) ConfigState {
 	a.mu.Lock()
 	base := a.config
 	a.mu.Unlock()
-	return mergeConfig(expandLastUsedModel(base), overlay)
+	return mergeConfig(expandLastUsedModel(a.runtimeConfig(base)), overlay)
 }
 
 // ── 最近使用模型（models[] 里的一条）─────────────────────────

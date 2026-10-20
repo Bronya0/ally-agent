@@ -53,15 +53,13 @@ FROM ${RUNTIME_IMAGE}
 # Copy the binary
 COPY --from=builder /app/server /server
 
-# Copy frontend assets
-COPY --from=builder /app/frontend/dist /frontend/dist
-
 # Expose the default port
 EXPOSE 8080
 
 # Bind to all interfaces (required for Docker)
 # Can be overridden at runtime with -e WAILS_SERVER_HOST=...
 ENV WAILS_SERVER_HOST=0.0.0.0
+ENV WAILS_SERVER_PORT=8080
 
 # Run the server
 ENTRYPOINT ["/server"]

@@ -186,6 +186,10 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	// sanitize repair, new turns); compacting on top of it would interleave
 	// saveHistory calls and race the run's own message list.
 	a.mu.Lock()
+	if a.stopping {
+		a.mu.Unlock()
+		return nil, errAppStopping
+	}
 	if a.activeRunForSession(sessionID) != "" {
 		a.mu.Unlock()
 		return nil, errSessionRunning

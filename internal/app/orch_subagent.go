@@ -321,7 +321,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			duration  int64
 		}
 		totalCalls := len(assistantMessage.ToolCalls)
-		subToolSem := make(chan struct{}, 4)
+		subToolSem := make(chan struct{}, clampToolConcurrency(cfg.ToolConcurrency))
 		subOutcomes := make([]subToolOutcome, totalCalls)
 
 		// emitSubOutcome updates the sub-run tool-call status and emits the

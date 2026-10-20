@@ -178,6 +178,9 @@ type skillListCacheEntry struct {
 
 // App is the Wails-bound application module.
 type App struct {
+	runtime  runtimeLifecycle
+	stopping bool // guarded by mu; rejects work during graceful shutdown
+
 	chatGPT *chatgpt.Manager // guarded by mu; initialized lazily, no credential IO at startup
 	ctx     context.Context
 	events  eventSink
@@ -619,8 +622,9 @@ type ConfigState struct {
 	// sanitizer drops them. The frontend filters the sider menu and bounces
 	// an open page that gets hidden back to a visible one; no other
 	// behavior keys off this list.
-	HiddenModes []string `json:"hiddenModes,omitempty"`
-	LLMRetries  int      `json:"llmRetries,omitempty"`
+	HiddenModes     []string `json:"hiddenModes,omitempty"`
+	LLMRetries      int      `json:"llmRetries,omitempty"`
+	ToolConcurrency int      `json:"toolConcurrency"`
 	// AutoValidation* are nil for legacy configs (treated as disabled).
 	// Post-write checks only run for languages the user explicitly enabled
 	// in Settings.
@@ -1677,8 +1681,17 @@ func (a *App) startChatWithConfig(req ChatRequest, cfg ConfigState) (string, err
 	}
 
 	runID := newID()
-	ctx, cancel := context.WithCancel(context.Background())
 	a.mu.Lock()
+	parent := a.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	if a.stopping || parent.Err() != nil {
+		a.mu.Unlock()
+		cancel()
+		return "", errAppStopping
+	}
 	// 同一会话同时只允许一个活跃 run：并发 run 会交叉执行 saveHistory，
 	// 破坏模型上下文的消息顺序。前端在运行中的追问已走 InjectRunMessage
 	// 注入路径，不会触发本守卫；这是对其它事件下游（如网络端 sink）的
@@ -1731,6 +1744,7 @@ func (a *App) startChatWithConfig(req ChatRequest, cfg ConfigState) (string, err
 // the text stays part of the contract (saved histories/tests reference it),
 // but classification now goes through the sentinel, not substring matching.
 var (
+	errAppStopping       = errors.New("application is shutting down")
 	errSessionBusy       = errors.New("session already has an active run")
 	errSessionRunning    = errors.New("session is still running")
 	errSessionCompacting = errors.New("session is compacting")
@@ -2459,7 +2473,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// current again by definition, which is what clears the flag below.
 		batchPlanRevision := a.planRevisionFor(sessionID)
 		totalCalls := len(toolCalls)
-		toolSem := make(chan struct{}, 4)
+		toolSem := make(chan struct{}, clampToolConcurrency(cfg.ToolConcurrency))
 		outcomes := make([]toolOutcome, totalCalls)
 		// Tools run against the session's live extra roots: cfg is a start-of-run
 		// snapshot, so a directory the user added (or removed) while the run was

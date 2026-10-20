@@ -48,6 +48,7 @@
 | SSH 集群清单与工作区授权（`ssh_clusters.json` 落盘、别名/端点两种写法、默认拒绝） | `internal/app/biz_ssh_cluster.go` + `orch_ssh_cluster.go` + `SSHClusterPanel.vue` + `ComposerInfoBar.vue` |
 | 远端 Python helper（普通工具 JSON / 文件传输 tar 两种模式；共享路径、VCS、文本转换和结果封装） | `internal/app/remote_helper.py`（由 `orch_remote.go` 通过 `go:embed` 嵌入） |
 | 知识库模式（KB 提示词 / sources/ 只读） | `internal/app/orch_kb.go` + `ModeSider.vue` + `App.vue` |
+| 无头服务（Wails server 标签、参数/JSON 配置、统一 API + SSE/轮询、共享启动关闭/数据目录锁） | `main_server.go` + `host_server.go` + `biz_server_options.go` + `biz_lifecycle.go`；使用说明 `docs/headless.md` |
 | 对外本地 HTTP API 服务（启用状态持久化 / 单次 AI / 会话与问答 / 按请求选模型；插件复用同一套接口） | `internal/app/biz_api.go`；契约 `docs/api.md`；宿主启动恢复在 `host_desktop.go` |
 | 应用自更新 | `internal/app/biz_update.go` |
 | 新版本首次启动的更新日志（vite 把 release 事件正文注入为 `__ALLY_RELEASE_NOTES__`；首启判定与“看过没”存储） | `frontend/src/utils/releaseNotes.mjs` + `components/ReleaseNotesModal.vue` + `App.vue` |
