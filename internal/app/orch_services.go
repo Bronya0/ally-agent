@@ -73,7 +73,7 @@ const (
 	// Finished-service retention. A service that exited or was stopped stays
 	// readable (list + read) so the model can diagnose why it died — the
 	// crash reason is almost always in the last few KiB of output. Memory is
-	// bounded: each record keeps its existing rolling buffer (512 KiB cap)
+	// bounded: each record keeps its existing rolling buffer (128 KiB cap)
 	// and only the most recent maxFinishedServices records survive.
 	maxFinishedServices = 10
 )
@@ -686,11 +686,15 @@ func (s *managedService) updateOutputInfoLocked() {
 	if s.output == nil {
 		return
 	}
-	output, total, truncated := s.output.Snapshot()
-	s.info.OutputTail = tailString(output, serviceOutputPreview)
+	output, total, truncated := s.output.TailSnapshot(serviceOutputPreview)
+	s.info.OutputTail = output
 	s.info.OutputBytes = total
 	s.info.OutputTruncated = truncated
-	s.markSandboxDeniedLocked(output)
+	// Only sandbox diagnostics need the full retained output. Ordinary list
+	// snapshots copy the preview alone; an 8 KiB tail must not pin 128 KiB.
+	if s.info.Sandboxed && !s.info.SandboxDenied && sandbox.Available() {
+		s.markSandboxDeniedLocked(s.output.String())
+	}
 }
 
 // markSandboxDeniedLocked records a kernel write refusal the service's output
@@ -787,7 +791,7 @@ type promoteCommandParams struct {
 
 // promoteTimedOutCommand adopts a still-running timed-out command into the
 // service registry: the original process keeps running, output is re-routed
-// into a rolling buffer (512 KiB recent tail), and the frontend sees it as a
+// into a rolling buffer (128 KiB recent tail), and the frontend sees it as a
 // normal service (service:update → task center). The caller stops touching
 // cmd/buf afterwards — ownership transfers here. cmd.Cancel is cleared so the
 // caller's deferred runCtx cancel cannot kill the adopted process.

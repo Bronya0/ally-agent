@@ -21,7 +21,7 @@ import (
 
 // Output limits used by the app layer while managing a service.
 const (
-	OutputLimit   = 512 * 1024
+	OutputLimit   = 128 * 1024
 	OutputPreview = 8 * 1024
 	MaxActive     = 32
 )
@@ -73,8 +73,19 @@ func (b *RollingBuffer) String() string {
 // Snapshot returns the current buffered output, the total bytes ever written,
 // and whether the buffer was truncated.
 func (b *RollingBuffer) Snapshot() (string, int64, bool) {
+	return b.TailSnapshot(0)
+}
+
+// TailSnapshot copies only the requested recent bytes, rather than slicing a
+// full snapshot whose backing string would stay live with a small preview.
+// A non-positive limit returns the entire retained buffer. Total and truncated
+// describe the rolling buffer, not the smaller preview window.
+func (b *RollingBuffer) TailSnapshot(limit int) (string, int64, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if limit > 0 && len(b.buf) > limit {
+		return AlignRuneStart(string(b.buf[len(b.buf)-limit:])), b.total, b.truncated
+	}
 	return string(b.buf), b.total, b.truncated
 }
 

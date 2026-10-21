@@ -8,9 +8,67 @@
 package service
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
+
+func TestRollingBufferRetainsLatest128KiB(t *testing.T) {
+	buffer := NewRollingBuffer(OutputLimit)
+	first := strings.Repeat("a", 128*1024)
+	_, _ = buffer.Write([]byte(first))
+	_, _ = buffer.Write([]byte("latest"))
+	output, total, truncated := buffer.Snapshot()
+	if want := first[len("latest"):] + "latest"; output != want {
+		t.Fatalf("buffer must retain exactly the latest 128 KiB, got %d bytes", len(output))
+	}
+	if total != int64(len(first)+len("latest")) || !truncated {
+		t.Fatalf("lifetime output count must survive clipping: total=%d truncated=%v", total, truncated)
+	}
+}
+
+func TestRollingBufferTailSnapshot(t *testing.T) {
+	for _, text := range []string{
+		strings.Repeat("a", OutputLimit) + "latest",
+		"abc中文中文",
+		string([]byte{0xD6, 0xD0, 0xCE, 0xC4, 0xD6, 0xD0}),
+		"short",
+		"",
+	} {
+		buffer := NewRollingBuffer(OutputLimit)
+		_, _ = buffer.Write([]byte(text))
+		full, total, truncated := buffer.Snapshot()
+		for _, limit := range []int{-1, 0, 4, 10, OutputPreview} {
+			got, gotTotal, gotTruncated := buffer.TailSnapshot(limit)
+			if got != TailString(full, limit) || gotTotal != total || gotTruncated != truncated {
+				t.Fatalf("tail limit %d: got %q (%d, %v), want %q (%d, %v)", limit, got, gotTotal, gotTruncated, TailString(full, limit), total, truncated)
+			}
+		}
+		preview, _, _ := buffer.TailSnapshot(4)
+		_, _ = buffer.Write([]byte(strings.Repeat("z", OutputLimit)))
+		if preview != TailString(full, 4) {
+			t.Fatal("a snapshot must not alias the mutable rolling buffer")
+		}
+	}
+}
+
+var rollingSnapshotSink string
+
+func BenchmarkRollingBufferSnapshot(b *testing.B) {
+	buffer := NewRollingBuffer(OutputLimit)
+	_, _ = buffer.Write([]byte(strings.Repeat("x", OutputLimit)))
+	for _, check := range []struct {
+		name  string
+		limit int
+	}{{"full", 0}, {"preview", OutputPreview}} {
+		b.Run(check.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				rollingSnapshotSink, _, _ = buffer.TailSnapshot(check.limit)
+			}
+		})
+	}
+}
 
 // TestPromotedServiceName 锁定晋升服务命名行为：取命令前两个 token，
 // 大小写归一，空白折叠；过短命令不越界。

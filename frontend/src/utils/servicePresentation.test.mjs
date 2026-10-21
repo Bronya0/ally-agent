@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { serviceCapacityCaption, serviceDescription } from './servicePresentation.mjs';
 import { serviceListRows, serviceRow } from './toolPreview.mjs';
@@ -10,6 +11,22 @@ const translate = (key, params) => ({
   'app.tools.services.capacity': () => `${params.active} in workspace; ${params.global}/${params.max} globally`,
   'app.tools.services.active': () => `${params.active}/${params.max} active`,
 }[key]());
+
+test('service buffer captions match backend output and finished-record limits', () => {
+  const read = (relative) => readFileSync(new URL(relative, import.meta.url), 'utf8');
+  const source = read('../../../internal/tools/service/service.go');
+  const outputKiB = Number(source.match(/OutputLimit\s*=\s*(\d+)\s*\*\s*1024/)[1]);
+  const finished = Number(read('../../../internal/app/orch_services.go').match(/maxFinishedServices\s*=\s*(\d+)/)[1]);
+  const translations = read('../i18n.mjs');
+  for (const key of ['taskCenter.latestRetained', 'service.bufferPolicy']) {
+    const captions = [...translations.matchAll(new RegExp(`'${key.replaceAll('.', '\\.')}': '([^']*)'`, 'g'))];
+    assert.equal(captions.length, 2, `${key} must have Chinese and English captions`);
+    for (const [, caption] of captions) {
+      assert.ok(caption.includes(`${outputKiB} KiB`), `${key} must match the backend buffer limit`);
+      if (key === 'service.bufferPolicy') assert.match(caption, new RegExp(`\\b${finished}\\b`));
+    }
+  }
+});
 
 test('promoted service cards localize structured metadata from start and list results', () => {
   const info = { id: 'svc', promoted: true, timeoutSeconds: 12 };

@@ -33,8 +33,8 @@ const SIMPLE_PATTERN = new RegExp(`${ESC}[()#][0-9A-Za-z]`, 'g');
 const ANSI_DETECT_PATTERN = new RegExp(`${ESC}(?:\\[[0-9;?]*[ -/]*[@-~]|\\])`);
 
 /**
- * Large buffers can reach 512 KiB. Converting all of it to styled HTML on every
- * refresh (1.5s while a service runs) is wasted work — only the tail is ever on
+ * Service buffers retain 128 KiB; other command output can be larger.
+ * Converting oversized output on every refresh is wasted work — only the tail is on
  * screen. Anything beyond this is dropped from the *rendered* markup; the copy
  * button still yields the full text.
  */
