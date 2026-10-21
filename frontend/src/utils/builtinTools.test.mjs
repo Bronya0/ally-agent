@@ -61,18 +61,34 @@ test('registerDiscoveredTools dynamically discovers new tools', () => {
   assert.equal(isToggleableTool('object_scanned_tool'), true);
 });
 
-test('orderBuiltinToolSettings puts enabled tools first and keeps order inside each group', () => {
-  const items = [
-    { name: 'read', enabled: true },
+test('builtin cards pin core tools and sort all others by name regardless of enabled state', () => {
+  const items = Object.freeze([
     { name: 'screenshot', enabled: false },
+    { name: 'command', enabled: true },
     { name: 'list_files', enabled: true },
+    { name: 'delete', enabled: true },
+    { name: 'read', enabled: true },
     { name: 'remote_read' },
+    { name: 'create', enabled: true },
+    { name: 'ask', enabled: false },
+    { name: 'edit', enabled: true },
     { name: 'grep', enabled: true },
-  ];
+  ]);
+  const expected = [...protectedToolNames, 'ask', 'grep', 'list_files', 'remote_read', 'screenshot'];
   assert.deepEqual(
     orderBuiltinToolSettings(items).map((item) => item.name),
-    ['read', 'list_files', 'grep', 'screenshot', 'remote_read'],
-    'enabled first, declaration order kept inside each group, missing flag counts as disabled',
+    expected,
+    'disabled tools remain in alphabetical order and the input array is not sorted in place',
+  );
+  assert.deepEqual(
+    orderBuiltinToolSettings(items.map((item) => ({ ...item, enabled: !item.enabled }))).map((item) => item.name),
+    expected,
+    'toggling tools must not move their cards',
+  );
+  assert.deepEqual(
+    orderBuiltinToolSettings([...items].reverse()).map((item) => item.name),
+    expected,
+    'backend discovery order must not affect the layout',
   );
   assert.deepEqual(orderBuiltinToolSettings([]), []);
   assert.deepEqual(orderBuiltinToolSettings(null), []);

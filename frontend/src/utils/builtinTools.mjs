@@ -66,18 +66,19 @@ export function resetDiscoveredTools() {
   toggleableToolNames.push(...defaultToggleableToolNames);
 }
 
-// 常用/次要分组排序：已启用的排前面、已停用的沉到后面（口径是"用户开着的就是
-// 常用工具"），组内保持传入顺序——调用方先给核心工具再给可开关工具，因此锁死的
-// 核心五件仍居首。判据只看 item.enabled，不另存一份"常用"名单：开关一变，分组
-// 立即跟着变，两处名单不会漂移。缺 enabled 的项按停用处理，调用方必须显式标注。
+// 核心五件按 protectedToolNames 的固定顺序置顶，其余按工具名升序。
+// 启停状态、扫描顺序和界面语言均不影响卡片位置。
 export function orderBuiltinToolSettings(items) {
   if (!Array.isArray(items)) return [];
-  const enabled = [];
-  const disabled = [];
-  for (const item of items) {
-    (item?.enabled ? enabled : disabled).push(item);
-  }
-  return [...enabled, ...disabled];
+  const coreRank = (name) => {
+    const index = protectedToolNames.indexOf(name);
+    return index < 0 ? protectedToolNames.length : index;
+  };
+  return [...items].sort((a, b) => {
+    const aName = String(a?.name || '').trim().toLowerCase();
+    const bName = String(b?.name || '').trim().toLowerCase();
+    return coreRank(aName) - coreRank(bName) || (aName < bName ? -1 : aName > bName ? 1 : 0);
+  });
 }
 
 export function formatBuiltinToolLabel(name, translate) {
