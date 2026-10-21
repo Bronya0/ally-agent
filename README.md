@@ -38,7 +38,7 @@ Download packages for Windows, macOS, and Linux from the [Releases page](https:/
 - Delegate substantial work to parallel sub-agents with live steps, tool activity, token usage, and inline final summaries
 - Extend Ally with plugins: one zip package adds a full sidebar page, written in plain JS/TS with HTTP, storage, and workspace access declared in the manifest
 - Connect MCP servers through stdio, SSE, or Streamable HTTP using either a form editor or raw JSON
-- Extend workflows with discoverable Skills and durable cross-project memory; built-in skills include `codegraph`, `playwright-cli`, and `anydoc` (Office/PDF to Markdown)
+- Extend workflows with discoverable Skills and durable cross-project memory; built-in skills include `ally-agent` (Ally usage manual), `codegraph`, `playwright-cli`, and `anydoc` (Office/PDF to Markdown)
 - Manage multiple workspaces, chat sessions, todos, and scheduled tasks that persist across restarts, with a built-in workspace explorer and file editor
 - Run short shell commands and tracked background processes with a task-center log viewer; Windows automatically discovers Git Bash and falls back to PowerShell when necessary
 - Fetch web pages and call HTTP APIs with bounded response sizes, timeouts, redirect limits, and per-host rate limits

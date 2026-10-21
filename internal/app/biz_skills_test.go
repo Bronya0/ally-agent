@@ -575,6 +575,41 @@ func TestBuiltinSkillEntriesContainsCodeGraph(t *testing.T) {
 	}
 }
 
+// 使用手册也是普通的内置技能：目录名即身份，内容里的边界口径是本轮修正过的
+// 地方，文档被改回旧说法时这里跟着红。
+func TestBuiltinSkillEntriesContainsAllyAgent(t *testing.T) {
+	entries := builtinSkillEntries()
+	var manual *SkillDefinition
+	for i := range entries {
+		if entries[i].Name == "ally-agent" {
+			manual = &entries[i]
+			break
+		}
+	}
+	if manual == nil {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name)
+		}
+		t.Fatalf("expected ally-agent in built-in skills, got %v", names)
+	}
+	if manual.Source != "builtin" {
+		t.Fatalf("expected Source=builtin, got %q", manual.Source)
+	}
+	if manual.embeddedContent == "" {
+		t.Fatal("expected embeddedContent to be populated for built-in skill")
+	}
+	if !strings.Contains(manual.embeddedContent, "E_PATH_OUTSIDE") {
+		t.Fatal("expected the usage manual to name the fence refusal code")
+	}
+	if !strings.HasPrefix(manual.Path, "builtin://") {
+		t.Fatalf("expected Path to start with builtin://, got %q", manual.Path)
+	}
+	if manual.WhenToUse == "" {
+		t.Fatal("expected WhenToUse to be populated from frontmatter")
+	}
+}
+
 func TestScanSkillDirIncludesClaudeSkillsPath(t *testing.T) {
 	root := t.TempDir()
 	// Simulate a project-level .claude/skills/<name>/SKILL.md
