@@ -8,6 +8,7 @@
  * Public License v3. See the LICENSE file for details.
  */
 import { formatBytes } from './format.mjs';
+import { isStageBlockedTool } from './toolEventState.mjs';
 
 export function normalizedLines(text) {
   const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
@@ -396,7 +397,7 @@ export function codePreviewWindow(code, options = {}) {
 
 
 export function isRenderableMessage(msg) {
-  if (msg?.role === 'tool_call' && msg?.kind === 'run') return false;
+  if (msg?.role === 'tool_call' && (msg.kind === 'run' || isStageBlockedTool(msg))) return false;
   if (msg?.role !== 'assistant') return true;
   return !assistantRowRenderState(msg).empty;
 }

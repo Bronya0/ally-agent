@@ -9,11 +9,11 @@ package app
 
 // Section 11: Tool batch policy (was batch_policy.go); Section 10: Edit batch plan
 // (was file_edit_plan.go)
-// App-owned tool-batch conflict detection: same-path mutation barriers, the
-// ask/suggest exclusive-barrier rule, the deferred tail phase (`wait`), and
+// App-owned tool-batch conflict detection: stage-local mutation barriers, the
+// ask/suggest exclusive-barrier rule, and
 // semantic dedup of equivalent tool calls.
 //
-// 同一批文件还要定序：planLocalEditBatch 把一个 edit 调用摊成多少次写入、每个写入
+// planLocalEditBatch 把一个 edit 调用摊成多少次写入、每个写入
 // 落在哪条路径（localMutationTarget）——冲突检测与真正落盘用的是同一份计划。
 
 import (
@@ -25,68 +25,24 @@ import (
 	"sort"
 	"strings"
 
+	toolshared "ally-dev/internal/tools/shared"
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// toolBatchPhase says when a tool runs inside one model response's batch. A tool
-// whose meaning depends on the rest of the batch is declared here instead of
-// racing it in the concurrent pool.
-type toolBatchPhase int
-
-const (
-	// batchPhaseParallel (the default for anything missing from the table) runs
-	// in the concurrent pool with its peers.
-	batchPhaseParallel toolBatchPhase = iota
-	// batchPhaseOrderedMutation: file writes — serial in tool-call order, with
-	// the directory-level validation pass afterwards.
-	batchPhaseOrderedMutation
-	// batchPhaseDeferredSerial: runs after both phases above, serial in tool-call
-	// order. `wait` is the only member today: a pause is a sequencing detail,
-	// not a reason to discard the rest of the batch (that is what the exclusive
-	// barriers in detectToolBatchConflicts do), and its result still reaches the
-	// model because a pause never ends the run.
-	batchPhaseDeferredSerial
-)
-
-// toolBatchPhases is the single declaration of the tools that do NOT run in the
-// default parallel phase. Adding a deferred or ordered tool is one line here:
-// both agent loops (runChat and executeSubagent) classify every call through
-// toolBatchPhaseFor, so no call site needs to know the new name.
-var toolBatchPhases = map[string]toolBatchPhase{
-	"edit":               batchPhaseOrderedMutation,
-	"create":             batchPhaseOrderedMutation,
-	"delete":             batchPhaseOrderedMutation,
-	"remote_edit":        batchPhaseOrderedMutation,
-	"remote_create_file": batchPhaseOrderedMutation,
-	"remote_delete_path": batchPhaseOrderedMutation,
-	"remote_transfer":    batchPhaseOrderedMutation,
-	"wait":               batchPhaseDeferredSerial,
-}
-
-// toolBatchPhaseFor classifies a tool name. The name is normalized here instead
-// of at each call site: the caller passes what the model or a relay produced
-// (`Edit`), while executeTool normalizes at its own boundary, so a raw variant
-// used to be classified as a non-mutating tool and silently lost both write
-// ordering and the ask/suggest barrier.
-func toolBatchPhaseFor(name string) toolBatchPhase {
-	if phase, ok := toolBatchPhases[normalizeToolName(name)]; ok {
-		return phase
+// isFileMutationTool classifies side effects for conflict detection and plan
+// accounting only. Execution order is determined exclusively by stage.
+func isFileMutationTool(name string) bool {
+	switch normalizeToolName(name) {
+	case "edit", "create", "delete", "remote_edit", "remote_create_file", "remote_delete_path", "remote_transfer":
+		return true
 	}
-	return batchPhaseParallel
-}
-
-func isOrderedFileMutationTool(name string) bool {
-	return toolBatchPhaseFor(name) == batchPhaseOrderedMutation
-}
-
-func isDeferredSerialTool(name string) bool {
-	return toolBatchPhaseFor(name) == batchPhaseDeferredSerial
+	return false
 }
 
 // planWorkTools are the tools whose successful call means the run did work a
 // plan could have moved past. Reads (read, grep, list_files, web_fetch, …) leave
 // the plan where it is and must not make the end-of-run plan check fire, and the
-// file-mutation tools are read from the phase table above instead of being
+// file-mutation tools are read from the mutation classifier above instead of being
 // repeated here, so a new mutation tool cannot be forgotten in one of two lists.
 var planWorkTools = map[string]bool{
 	"command":            true,
@@ -97,7 +53,7 @@ var planWorkTools = map[string]bool{
 // should reflect. It is the single predicate behind the end-of-run plan check.
 func toolDidPlanWork(name string) bool {
 	normalized := normalizeToolName(name)
-	return isOrderedFileMutationTool(normalized) || planWorkTools[normalized]
+	return isFileMutationTool(normalized) || planWorkTools[normalized]
 }
 
 func detectWriteBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]error {
@@ -107,11 +63,13 @@ func detectWriteBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int
 	}
 	groups := map[string][]targetRef{}
 	for i, call := range calls {
-		if !isOrderedFileMutationTool(call.Function.Name) {
+		if !isFileMutationTool(call.Function.Name) {
 			continue
 		}
 		for _, target := range fileMutationTargets(cfg, call.Function.Name, call.Function.Arguments) {
-			groups[target.key] = append(groups[target.key], targetRef{index: i, display: target.display})
+			stage, _ := toolCallStage(call)
+			key := fmt.Sprintf("%d\x00%s", stage, target.key)
+			groups[key] = append(groups[key], targetRef{index: i, display: target.display})
 		}
 	}
 	conflicts := map[int]error{}
@@ -122,7 +80,7 @@ func detectWriteBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int
 		// sees which call won and re-sends the skipped change in a later
 		// response once it knows the path's new state.
 		for _, ref := range refs[1:] {
-			conflicts[ref.index] = codedToolError("E_WRITE_BATCH_CONFLICT", fmt.Errorf("another file mutation for %s appears earlier in this tool batch; only the first one executes. This call was skipped — wait for that mutation's result, then re-read the file (or reuse its returned version) and re-send this change in a later response if it is still needed", refs[0].display))
+			conflicts[ref.index] = codedToolError("E_WRITE_BATCH_CONFLICT", fmt.Errorf("another file mutation for %s appears earlier in the same stage; only the first one executes. This call was skipped — wait for that mutation's result, then re-read the file (or reuse its returned version) and re-send this change in a later response if it is still needed", refs[0].display))
 		}
 	}
 	return conflicts
@@ -148,8 +106,7 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 	}
 	// ask and suggest own their batch: ask parks the run on a human answer and
 	// suggest ends the run outright, so neither may share a response with calls
-	// whose results the model has not seen yet. `wait` is deliberately absent — it
-	// is deferred instead of rejected (see isDeferredSerialTool).
+	// whose results the model has not seen yet. `wait` is an ordinary staged call and does not own its batch.
 	exclusiveBarriers := []struct {
 		name string
 		code string
@@ -174,7 +131,7 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 		}
 		return conflicts
 	}
-	// The plan tool takes one writer per batch. Two writes in one response —
+	// The plan tool takes one writer per stage. Two writes in one stage —
 	// most plausibly a report plus the steps rewrite it provoked — run in the same
 	// concurrent pool, so which one lands last is a coin flip: a steps that lands
 	// after a finish rewinds the position that report had just moved, the loser's
@@ -183,16 +140,18 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 	// same-path write rule above. Read-only plan calls are not writers: several
 	// reads are harmless, and identical ones are already collapsed by the dedup
 	// below.
-	firstPlanWrite := -1
+	firstPlanWrites := map[int64]int{}
 	for i, call := range calls {
 		if normalizeToolName(call.Function.Name) != planToolName || !planBatchWriteSource(call.Function.Arguments) {
 			continue
 		}
-		if firstPlanWrite < 0 {
-			firstPlanWrite = i
+		stage, _ := toolCallStage(call)
+		firstPlanWrite, found := firstPlanWrites[stage]
+		if !found {
+			firstPlanWrites[stage] = i
 			continue
 		}
-		conflicts[i] = codedToolError("E_PLAN_BATCH_CONFLICT", fmt.Errorf("a batch accepts one plan write, and another plan write (toolCallIndex %d) comes earlier in this one; this call was skipped, and that earlier call may itself have been refused — read its result before sending this update in a later response", firstPlanWrite))
+		conflicts[i] = codedToolError("E_PLAN_BATCH_CONFLICT", fmt.Errorf("a stage accepts one plan write, and another plan write (toolCallIndex %d) comes earlier in this stage; this call was skipped, and that earlier call may itself have been refused — read its result before sending this update in a later response", firstPlanWrite))
 	}
 	// Deduplicate calls with semantically identical arguments within the same batch.
 	// Models occasionally emit two or more tool calls that mean the same thing but
@@ -215,7 +174,18 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 		if _, conflict := conflicts[i]; conflict {
 			continue
 		}
-		key := normalizeToolName(call.Function.Name) + "\x00" + normalizeToolArgsForDedup(call.Function.Arguments)
+		args := call.Function.Arguments
+		if stage, err := toolCallStage(call); err == nil && toolshared.IsBuiltinTool(normalizeToolName(call.Function.Name)) {
+			// Omitted stage and explicit 0 are the same scheduling intent.
+			// This canonical copy is only a key; execution keeps the original JSON.
+			var object map[string]json.RawMessage
+			if json.Unmarshal([]byte(args), &object) == nil && object != nil {
+				object["stage"] = json.RawMessage(fmt.Sprint(stage))
+				canonical, _ := json.Marshal(object)
+				args = string(canonical)
+			}
+		}
+		key := normalizeToolName(call.Function.Name) + "\x00" + normalizeToolArgsForDedup(args)
 		first, ok := seen[key]
 		if !ok {
 			seen[key] = i
@@ -224,17 +194,6 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 		conflicts[i] = codedToolError("E_DUPLICATE_TOOL_CALL", fmt.Errorf("this tool call is a semantic duplicate of toolCallIndex %d in the same batch (same function and equivalent arguments after JSON normalization) and was skipped; reuse that result instead of re-running the identical call", first))
 	}
 	return conflicts
-}
-
-// conflictSkippedCallIndexes returns the tool-call indexes that the batch
-// conflict policy rejects before execution; planning passes must not let
-// those calls own validation units they will never run.
-func conflictSkippedCallIndexes(conflicts map[int]error) map[int]bool {
-	skip := make(map[int]bool, len(conflicts))
-	for idx := range conflicts {
-		skip[idx] = true
-	}
-	return skip
 }
 
 // normalizeToolArgsForDedup returns a canonical form of a tool-call arguments
@@ -289,7 +248,7 @@ func sortedJSON(v any) any {
 type fileMutationTarget struct{ key, display string }
 
 // fileMutationTargets resolves the paths one mutation call would touch. name is
-// normalized first for the same reason as isOrderedFileMutationTool: every branch
+// normalized first for the same reason as isFileMutationTool: every branch
 // below compares against the canonical lowercase tool names. The result is a set:
 // one path, one target (see dedupeMutationTargets).
 func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutationTarget {

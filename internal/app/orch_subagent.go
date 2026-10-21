@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	goruntime "runtime"
@@ -311,7 +310,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			a.emit("sub:tool:start", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": cid, "name": name, "args": args})
 		}
 
-		// Parallel execution: non-file tools run concurrently, file mutations run afterward in order
+		// Shared stage scheduler; model-facing outcomes remain in call order.
 		type subToolOutcome struct {
 			callID    string
 			name      string
@@ -321,13 +320,12 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			duration  int64
 		}
 		totalCalls := len(assistantMessage.ToolCalls)
-		subToolSem := make(chan struct{}, clampToolConcurrency(cfg.ToolConcurrency))
 		subOutcomes := make([]subToolOutcome, totalCalls)
 
 		// emitSubOutcome updates the sub-run tool-call status and emits the
 		// result/error event for a single outcome. Called immediately after each
 		// tool finishes (from within the worker goroutine for parallel calls, or
-		// serially for ordered file mutations) so the UI reflects completion as
+		// after stage-local write validation) so the UI reflects completion as
 		// soon as each tool finishes, instead of waiting for the slowest tool in
 		// the batch. run.ToolCalls is guarded by subRunsMu and a.emit is
 		// concurrency-safe, so this is safe to call from multiple goroutines.
@@ -350,6 +348,10 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 				a.subRunsMu.Lock()
 				for ti := range run.ToolCalls {
 					if run.ToolCalls[ti].ToolCallID == o.callID {
+						if o.result.ErrorCode == "E_STAGE_BLOCKED" {
+							run.ToolCalls = append(run.ToolCalls[:ti], run.ToolCalls[ti+1:]...)
+							break
+						}
 						run.ToolCalls[ti].Status = "error"
 						run.ToolCalls[ti].Summary = truncateRunes(o.result.Error, 2048)
 						run.ToolCalls[ti].DurationMS = o.duration
@@ -361,79 +363,23 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			}
 		}
 
-		validationBudget := &batchValidationBudget{remaining: autoValidationTimeout}
-		executeSubCall := func(idx int, c openai.ToolCall, plannedValidationPaths []string, hasValidationPlan bool) {
-			started := time.Now()
+		executeSubCall := func(callCtx context.Context, idx int, c openai.ToolCall) toolResult {
 			executionArgs := c.Function.Arguments
 			if idx < len(toolExecutionArgs) && toolExecutionArgs[idx] != "" {
 				executionArgs = toolExecutionArgs[idx]
 			}
-			callCtx := ctx
-			var r toolResult
-			if hasValidationPlan {
-				r = a.executeValidationPlannedTool(callCtx, cfg, sessionID, c, []byte(executionArgs), plannedValidationPaths, assistantMessage.ToolCalls[:idx], func(i int) bool { return subOutcomes[i].result.OK }, validationBudget)
-			} else {
-				r = a.executeTool(callCtx, cfg, sessionID, c.Function.Name, []byte(executionArgs))
-			}
-			duration := time.Since(started).Milliseconds()
+			return a.executeTool(callCtx, cfg, sessionID, c.Function.Name, []byte(executionArgs))
+		}
+		publishSubCall := func(idx int, c openai.ToolCall, r toolResult, duration int64) {
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)
 			subOutcomes[idx] = subToolOutcome{
-				callID: toolIDs[idx], name: c.Function.Name,
-				args: c.Function.Arguments, result: r,
-				modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration,
+				callID: toolIDs[idx], name: c.Function.Name, args: c.Function.Arguments,
+				result: r, modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration,
 			}
 			emitSubOutcome(idx)
 		}
-		setSubConflictOutcome := func(idx int, c openai.ToolCall, conflictErr error) {
-			r := toolErrorResult(conflictErr)
-			rj, _ := json.Marshal(r)
-			fullJSON := string(rj)
-			subOutcomes[idx] = subToolOutcome{
-				callID: toolIDs[idx], name: c.Function.Name,
-				args: c.Function.Arguments, result: r,
-				modelJSON: fullJSON,
-			}
-			emitSubOutcome(idx)
-		}
-
-		var subWg sync.WaitGroup
-		for i, call := range assistantMessage.ToolCalls {
-			if conflictErr, conflict := toolConflicts[i]; conflict {
-				setSubConflictOutcome(i, call, conflictErr)
-				continue
-			}
-			if isOrderedFileMutationTool(call.Function.Name) || isDeferredSerialTool(call.Function.Name) {
-				continue
-			}
-			subWg.Add(1)
-			go func(idx int, c openai.ToolCall) {
-				defer subWg.Done()
-				subToolSem <- struct{}{}
-				defer func() { <-subToolSem }()
-				executeSubCall(idx, c, nil, false)
-			}(i, call)
-		}
-		subWg.Wait()
-		validationRoots, _ := workspaceRoots(cfg)
-		validationPlan := planBatchValidation(validationRoots, assistantMessage.ToolCalls, conflictSkippedCallIndexes(toolConflicts))
-		for i, call := range assistantMessage.ToolCalls {
-			if _, conflict := toolConflicts[i]; conflict || !isOrderedFileMutationTool(call.Function.Name) {
-				continue
-			}
-			planned, hasPlan := validationPlan[i]
-			executeSubCall(i, call, planned, hasPlan)
-		}
-
-		// Deferred tail, same contract as the main loop: a tool declared
-		// batchPhaseDeferredSerial runs once the rest of the sub-agent's batch is
-		// done, so it cannot race the calls it was asked to follow.
-		for i, call := range assistantMessage.ToolCalls {
-			if _, conflict := toolConflicts[i]; conflict || !isDeferredSerialTool(call.Function.Name) {
-				continue
-			}
-			executeSubCall(i, call, nil, false)
-		}
+		a.executeStagedToolBatch(ctx, cfg, assistantMessage.ToolCalls, toolConflicts, executeSubCall, publishSubCall)
 
 		// Process outcomes in order. File tracking and the model-facing tool
 		// messages must stay ordered (filesRead/filesEdited are order-sensitive

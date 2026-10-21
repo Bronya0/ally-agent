@@ -41,6 +41,11 @@ export function commitToolEventMessage(session, eventId, existing, payload) {
   return target;
 }
 
+// A stage barrier produces a protocol result, not a visible tool failure.
+export function isStageBlockedTool(data) {
+  return data?.errorCode === 'E_STAGE_BLOCKED';
+}
+
 /**
  * Build the stable event id for a tool-call event payload.
  *

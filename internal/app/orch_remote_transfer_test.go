@@ -455,8 +455,8 @@ func TestDecodeRemoteTransferMarkerTrailingStderr(t *testing.T) {
 }
 
 func TestRemoteTransferBatchPolicyOrderingAndConflict(t *testing.T) {
-	if !isOrderedFileMutationTool("remote_transfer") {
-		t.Fatal("remote_transfer must be an ordered file mutation tool")
+	if !isFileMutationTool("remote_transfer") {
+		t.Fatal("remote_transfer must participate in file mutation conflict checks")
 	}
 	if !toolDidPlanWork("remote_transfer") {
 		t.Fatal("remote_transfer must count as work that moves the plan forward")

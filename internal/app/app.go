@@ -2462,8 +2462,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		})
 		a.recordContextAnchor(sessionID, messages, modelResp.Usage)
 
-		// Execute non-file tools in parallel. Built-in file mutations run
-		// afterward in tool-call order so writes are deterministic.
+		// Stage scheduling is shared with sub-agents; results stay in call order.
 		type toolOutcome struct {
 			index     int
 			callID    string
@@ -2478,7 +2477,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// current again by definition, which is what clears the flag below.
 		batchPlanRevision := a.planRevisionFor(sessionID)
 		totalCalls := len(toolCalls)
-		toolSem := make(chan struct{}, clampToolConcurrency(cfg.ToolConcurrency))
 		outcomes := make([]toolOutcome, totalCalls)
 		// Tools run against the session's live extra roots: cfg is a start-of-run
 		// snapshot, so a directory the user added (or removed) while the run was
@@ -2501,80 +2499,26 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 		}
 
-		validationBudget := &batchValidationBudget{remaining: autoValidationTimeout}
-		executeCall := func(idx int, c openai.ToolCall, plannedValidationPaths []string, hasValidationPlan bool) {
-			started := time.Now()
+		executeCall := func(callCtx context.Context, idx int, c openai.ToolCall) toolResult {
 			executionArgs := c.Function.Arguments
 			if idx < len(toolExecutionArgs) && toolExecutionArgs[idx] != "" {
 				executionArgs = toolExecutionArgs[idx]
 			}
-			toolCtx := context.WithValue(ctx, toolExecutionMetaContextKey{}, toolExecutionMeta{
+			toolCtx := context.WithValue(callCtx, toolExecutionMetaContextKey{}, toolExecutionMeta{
 				runID: runID, sessionID: sessionID, toolBatchID: toolBatchID,
 				toolCallIndex: idx, toolCallID: c.ID, toolName: c.Function.Name, toolArgs: c.Function.Arguments,
 			})
 			toolCtx = context.WithValue(toolCtx, sessionReadCacheContextKey{}, readCache)
-			var r toolResult
-			if hasValidationPlan {
-				r = a.executeValidationPlannedTool(toolCtx, toolCfg, sessionID, c, []byte(executionArgs), plannedValidationPaths, toolCalls[:idx], func(i int) bool { return outcomes[i].result.OK }, validationBudget)
-			} else {
-				r = a.executeTool(toolCtx, toolCfg, sessionID, c.Function.Name, []byte(executionArgs))
-			}
-			duration := time.Since(started).Milliseconds()
+			return a.executeTool(toolCtx, toolCfg, sessionID, c.Function.Name, []byte(executionArgs))
+		}
+		publishCall := func(idx int, c openai.ToolCall, r toolResult, duration int64) {
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)
 			o := toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration}
 			outcomes[idx] = o
 			emitOutcome(o)
 		}
-		setConflictOutcome := func(idx int, c openai.ToolCall, conflictErr error) {
-			r := toolErrorResult(conflictErr)
-			rj, _ := json.Marshal(r)
-			fullJSON := string(rj)
-			o := toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: fullJSON}
-			outcomes[idx] = o
-			emitOutcome(o)
-		}
-
-		var wg sync.WaitGroup
-		for i, call := range toolCalls {
-			if conflictErr, conflict := toolConflicts[i]; conflict {
-				setConflictOutcome(i, call, conflictErr)
-				continue
-			}
-			if isOrderedFileMutationTool(call.Function.Name) || isDeferredSerialTool(call.Function.Name) {
-				continue
-			}
-			wg.Add(1)
-			go func(idx int, c openai.ToolCall) {
-				defer wg.Done()
-				toolSem <- struct{}{}        // acquire
-				defer func() { <-toolSem }() // release
-				executeCall(idx, c, nil, false)
-			}(i, call)
-		}
-		wg.Wait()
-		// Spread validation work over the batch: directory-level checks (go
-		// vet per package, tsc/vue-tsc per project) run once per unit on the
-		// last mutation call touching it instead of once per edit call.
-		validationRoots, _ := workspaceRoots(toolCfg)
-		validationPlan := planBatchValidation(validationRoots, toolCalls, conflictSkippedCallIndexes(toolConflicts))
-		for i, call := range toolCalls {
-			if _, conflict := toolConflicts[i]; conflict || !isOrderedFileMutationTool(call.Function.Name) {
-				continue
-			}
-			planned, hasPlan := validationPlan[i]
-			executeCall(i, call, planned, hasPlan)
-		}
-
-		// Deferred tail: `wait` runs after every other call in the batch, in call
-		// order. It never ends the run, so the model still sees the whole batch —
-		// the pause included — in its next step.
-		for i, call := range toolCalls {
-			if _, conflict := toolConflicts[i]; conflict || !isDeferredSerialTool(call.Function.Name) {
-				continue
-			}
-			executeCall(i, call, nil, false)
-		}
+		a.executeStagedToolBatch(ctx, toolCfg, toolCalls, toolConflicts, executeCall, publishCall)
 
 		// Did this batch do work the plan does not reflect? A batch that moved the
 		// plan answers that itself; only work done without a plan write leaves
@@ -2668,7 +2612,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	// Tool execution digests model-controlled JSON and is the single choke
 	// point for the main loop, sub-agents, and scheduled tasks. A panic in
 	// any handler would otherwise crash the whole desktop app — and in the
-	// ordered file-mutation phase it would unwind runChat and poison the
+	// tool worker it would otherwise crash the process and leave the
 	// deferred checkpoint save with dangling tool_calls. Convert panics into
 	// a normal tool error so the agent loop keeps running.
 	defer func() {

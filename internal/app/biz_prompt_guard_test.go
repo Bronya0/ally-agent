@@ -45,7 +45,7 @@ var promptNonToolTokens = map[string]bool{
 	// plan request fields and statuses named in guidance
 	"changes": true, "done": true, "files": true, "finish": true,
 	"in_progress": true, "next": true, "offset": true, "path": true,
-	"pending": true, "steps": true, "validation": true, "version": true,
+	"pending": true, "steps": true, "stage": true, "validation": true, "version": true,
 	// frontmatter fields and IO nouns named in guidance
 	"aliases": true, "date": true, "description": true, "output": true,
 	"role": true, "source": true, "tags": true, "task": true, "title": true,
@@ -175,7 +175,7 @@ func TestPromptExecutionEfficiency(t *testing.T) {
 	redirectAppStateDir(t)
 	main := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
 	for label, prompt := range map[string]string{"main": main, "child": subagentSystemPrompt("")} {
-		for _, rule := range []string{"side effects conflict", "Inspect every result", "Reuse reliable context", "preserve failure/exit status", "JSON encoding is not shell escaping", "repeat or broaden verification only"} {
+		for _, rule := range []string{"same stage only for independent operations", "Inspect every result", "Reuse reliable context", "preserve failure/exit status", "JSON encoding is not shell escaping", "repeat or broaden verification only", "stages run in ascending order", "blocks every later stage", "stage does not substitute result values"} {
 			if !strings.Contains(prompt, rule) {
 				t.Errorf("%s missing %q", label, rule)
 			}

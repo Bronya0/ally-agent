@@ -134,26 +134,30 @@ if len(toolCalls) == 0 { ... saveHistory; run:done; return }               // �
 - ② 结束前再抽一次注入队列（`app.go:2038`）：若用户刚追问过就 `continue` 再跑一步，避免带着未读的用户消息结束。
 - ③ `app.go:2054`：追加的 assistant 消息带 `ToolCalls`，这是下一轮请求里「模型看到自己调过什么」的依据。
 
-## 8. 工具执行：并发但不乱序（`app.go:2064-2178`）
+## 8. 工具执行：共享阶段调度
 
-```go
-toolSem := make(chan struct{}, 4)                          // 并发上限 4
-toolConflicts := detectToolBatchConflicts(cfg, toolCalls)  // 同路径多次写：只执行最早一个
-// 第一遍：非文件变更工具并发执行，每个完成即刻 emit tool:result / tool:error
-// 第二遍：文件变更工具按调用顺序串行执行
-// 第三遍：延后型工具（wait）串行执行，排在整批最后
-// 最后：按 tool-call 顺序把结果 append 成 role=tool 消息
+主循环与子代理都调用 `executeStagedToolBatch`（`orch_tool_stages.go`）：
+
+```text
+准备工具调用与原始参数
+  → detectToolBatchConflicts 检测独占、同阶段写冲突及重复调用
+  → 校验 stage 并分组（内置工具默认 0，MCP 固定 0）
+  → 按 stage 升序执行
+      同阶段有界并发，完成即发结果（本地成功写入等待合并校验）
+      当前阶段全部收尾，再校验本阶段成功写入
+      实际失败阻断后续阶段；重复调用通知不单独触发屏障
+  → 按原 tool-call 顺序追加完整的 role=tool 结果
+  → 下一模型轮次
 ```
 
-刻意的取舍：
-
-- **文件写必须串行且有序**：`isOrderedFileMutationTool`（`orch_batch_policy.go:24`，覆盖 `edit` / `create` / `delete` / `remote_edit` / `remote_create_file` / `remote_delete_path`）是唯一判定点；同批次对同一路径的第二个写请求判 `E_WRITE_BATCH_CONFLICT` 跳过，让模型等结果后重发。
-- **`wait` 延后执行，不是独占**：`toolBatchPhases` 表（`orch_batch_policy.go`）是唯一判定点，`isOrderedFileMutationTool` / `isDeferredSerialTool` 都从它派生（主循环与子代理循环共用）；与别的调用同批时它们照常执行，`wait` 排到批次末尾（含文件变更之后）串行跑完。它不结束 run，所以模型下一步仍能看到整批结果。对比：`ask` 停住等人回答、`suggest` 成功即结束 run，这两个仍是整批拒绝的独占型工具。
-- **结果回填顺序与执行顺序解耦**：emit 完成即发（前端用 `runId:toolBatchId:toolCallIndex` 定位卡片），但塞回 `messages` 严格按调用顺序，保持上下文确定。
-- **截断参数不执行**（`orch_edit.go:308` + `app.go:2316`）：流中断产生的半截 JSON 被替换为显式截断标记（`toolcall.RepairTruncatedArguments`），provider 不会因非法 JSON 回 400，执行器返回 `E_TRUNCATED_ARGS` 让模型重发。
-- **本批读到的图片再注入一条 user 消息**（`app.go:2176`），把 base64 图塞进多模态上下文。
-- **单个成功的 `suggest` 调用直接结束 run**（`app.go:2185`）：追问气泡渲染在最后一条消息下方，再跑一步只会让内容落到气泡之后。
-- `executeTool`（`app.go:2225`）是所有工具的唯一入口（主循环 / 子代理 / 计划任务共用），入口处 `recover()` 把 handler panic 转成工具错误，保证循环不被击穿。
+- `stage` 是模型显式指定的顺序，没有按工具类型划分的隐式阶段；`wait` 也必须使用较大 stage 才能等待前面的操作。
+- 同阶段失败不会取消兄弟调用，连同并发上限下排队的调用一起收尾；用户取消才阻止尚未启动的工作。成功操作不回滚。
+- 后续阶段不执行；调用若有自己的冲突则保留具体错误，否则返回简短的 `E_STAGE_BLOCKED`。后者仅供模型配对，UI 移除占位卡片。主代理与子代理采用相同规则。
+- 文件路径冲突仅在同阶段检测；跨阶段允许再次操作，但读写版本、授权及文件锁照常生效。自动校验按阶段合并，并在每个阶段重置 12 秒预算。
+- 非法 JSON / stage 在执行前拒绝整批，并在错误中标出调用索引和工具名；不会先执行其他调用再猜测错误调用原本属于哪个阶段。
+- `executeTool` 仍是工具执行的唯一入口，负责参数修复与 schema 校验、权限检查、handler panic 恢复。实际传入参数保留 stage。
+- UI 事件随完成发送，模型历史仍按原调用顺序回填；读取图片产生的多模态 user 消息继续保留。
+- 单个成功的 `suggest` 结束 run；ask/suggest 继续独占整个响应。
 
 ## 9. 停止条件全清单
 

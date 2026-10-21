@@ -23,6 +23,8 @@ const (
 	// clamp in app.go reads this same constant: the schema must never promise a
 	// wider range than the tool accepts.
 	MaxWaitSeconds = 3600
+	// MaxToolStage bounds model-supplied stage numbers; gaps are allowed.
+	MaxToolStage = 2147483647
 	// MaxReadRangeLines bounds the read tool's per-file line range.
 	MaxReadRangeLines = 10000
 	MaxReadLineChars  = 2000
@@ -225,7 +227,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("wait", "Pause the current agent run for a short, cancellable delay (1-3600 seconds) with a reason. Prefer it as the only call in that response; when it rides along with other calls, Ally runs it last, once the rest of the batch (file mutations included) has finished, and it never ends the run.", map[string]any{
+		functionTool("wait", "Pause the current agent run for a short, cancellable delay (1-3600 seconds) with a reason. To wait after other operations, assign a later stage; wait has no implicit ordering and never ends the run. A delay does not verify readiness: check the expected condition afterward.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": MaxWaitSeconds, "description": "Delay in whole seconds, from 1 to 3600."},
@@ -509,6 +511,16 @@ var builtinToolExamples = map[string]string{
 }
 
 func functionTool(name, description string, parameters map[string]any) openai.Tool {
+	properties, ok := parameters["properties"].(map[string]any)
+	if !ok {
+		properties = map[string]any{}
+		parameters["properties"] = properties
+	}
+	properties["stage"] = map[string]any{
+		"type": "integer", "minimum": 0, "maximum": MaxToolStage,
+		"description": "Execution stage (default 0): equal stages run concurrently; stages ascend; failure blocks later stages.",
+	}
+
 	if example := builtinToolExamples[name]; example != "" {
 		description = strings.TrimSpace(description) + " Canonical JSON example(s): " + example
 	}

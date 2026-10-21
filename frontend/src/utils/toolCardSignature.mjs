@@ -50,6 +50,7 @@ export function toolCardRenderSignature(msg) {
     msg.title,
     contentShape(msg.body),
     msg.error,
+    msg.errorCode,
     // 沙箱拒绝同时决定状态标记与那行醒目报错：漏掉它 v-memo 会把卡片冻在绿色 √ 上。
     msg.sandboxDenied,
     msg.expanded,

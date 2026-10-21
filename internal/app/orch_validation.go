@@ -160,18 +160,13 @@ func validationEnabled(flag *bool) bool {
 type batchValidationPathsContextKey struct{}
 type batchValidationBudgetContextKey struct{}
 
-// File mutations run serially. Only time spent validating consumes this shared
-// budget; time spent writing files between checks must not exhaust it.
+// Stage validation runs serially after concurrent writes finish. Only checks
+// consume this shared budget; writes must not exhaust it.
 type batchValidationBudget struct{ remaining time.Duration }
 
-// validateChangedFilesForCall validates one tool call's changed files under
-// the tool batch's validation plan. Directory-level checks (go vet per
-// package, typed syntax parsing per project) would otherwise run once per
-// edit call, so the plan defers a unit to the last batch call touching it and
-// hands that call the expanded path set; a call whose paths were all absorbed
-// by a later call validates nothing. Without a plan in ctx (sub-agent steps
-// before wiring, direct calls) it behaves exactly like validateChangedFiles
-// on the given paths.
+// validateChangedFilesForCall honors deferred stage validation and its shared
+// time budget. An empty planned path set suppresses inline checks while peers
+// are still writing. Direct tool calls validate their own paths as usual.
 func (a *App) validateChangedFilesForCall(ctx context.Context, cfg ConfigState, paths []string) string {
 	if planned, ok := ctx.Value(batchValidationPathsContextKey{}).([]string); ok {
 		paths = planned
@@ -188,47 +183,8 @@ func (a *App) validateChangedFilesForCall(ctx context.Context, cfg ConfigState, 
 	return a.validateChangedFiles(ctx, cfg, paths)
 }
 
-// Only successful earlier writes contribute to a deferred validation unit.
-// If its owner fails, still validate those writes and include the report in
-// the failed tool result. The batch budget applies to checks, never writes.
-func (a *App) executeValidationPlannedTool(ctx context.Context, cfg ConfigState, sessionID string, call openai.ToolCall, args []byte, planned []string, previous []openai.ToolCall, succeeded func(int) bool, budget *batchValidationBudget) toolResult {
-	allowed := make(map[string]bool, len(planned))
-	for _, path := range planned {
-		allowed[path] = true
-	}
-	var earlier []string
-	for i, prior := range previous {
-		if !succeeded(i) {
-			continue
-		}
-		for _, path := range localMutationPathsForValidation(prior) {
-			if allowed[path] {
-				earlier = append(earlier, path)
-			}
-		}
-	}
-	paths := append([]string{}, earlier...)
-	// Path extraction must use the same normalized arguments as execution.
-	call.Function.Arguments = string(args)
-	for _, path := range localMutationPathsForValidation(call) {
-		if allowed[path] {
-			paths = append(paths, path)
-		}
-	}
-	ctx = context.WithValue(ctx, batchValidationBudgetContextKey{}, budget)
-	ctx = context.WithValue(ctx, batchValidationPathsContextKey{}, paths)
-	result := a.executeTool(ctx, cfg, sessionID, call.Function.Name, args)
-	if !result.OK && len(earlier) > 0 {
-		fallback := context.WithValue(ctx, batchValidationPathsContextKey{}, earlier)
-		if report := a.validateChangedFilesForCall(fallback, cfg, earlier); report != "" {
-			result.Error += "\n此前成功写入的文件：" + report
-		}
-	}
-	return result
-}
-
 // planBatchValidation spreads the local edit/create calls of one tool batch
-// over validation units so each unit is checked exactly once per batch: the
+// over validation units so each unit is checked exactly once per stage: the
 // last call in tool-call index order that touches a unit validates it with
 // every path sharing that unit, keeping the per-validator output filters
 // complete. Units are a Go package directory, a tsconfig project, or a single

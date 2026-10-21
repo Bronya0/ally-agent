@@ -782,6 +782,7 @@ import {
   normalizeToolStatus,
   setToolStatus,
   toolEventId,
+  isStageBlockedTool,
 } from './utils/toolEventState.mjs';
 import {
   RUN_PHASE,
@@ -5551,6 +5552,11 @@ function bindRuntimeEvents() {
   onRuntimeEvent('sub:tool:error', (data) => {
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
+      if (isStageBlockedTool(data)) {
+        msg.toolCalls = msg.toolCalls.filter(tc => tc.toolCallId !== data.toolCallId);
+        scheduleSaveSessions();
+        return;
+      }
       const tc = msg.toolCalls.find(t => t.toolCallId === data.toolCallId);
       if (tc) { setToolStatus(tc, 'error'); tc.summary = data.error || ''; tc.durationMs = Number(data.durationMs || 0); tc.durationText = formatDurationShort(tc.durationMs); }
     }

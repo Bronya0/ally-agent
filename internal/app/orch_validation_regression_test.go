@@ -173,32 +173,28 @@ func TestValidationJavaIgnoresInjectedLocale(t *testing.T) {
 	}
 }
 
-func TestValidationFailedBatchOwnerChecksSuccessfulWrites(t *testing.T) {
+func TestStageValidationChecksSuccessfulWritesWhenPeerFails(t *testing.T) {
 	root := validationSandbox(t)
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skip("Go unavailable")
-	}
-	writeToolTestFile(t, root, "go.mod", "module example.invalid/check\ngo 1.23\n")
+	writeToolTestFile(t, root, "go.mod", "module example.com/check\n\ngo 1.22\n")
 	writeToolTestFile(t, root, "second.go", "package check\n")
 	calls := []openai.ToolCall{
-		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"first.go","content":"package check\nfunc broken( {\n"}`}},
+		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"first.go","content":"package check\nfunc Broken( {\n"}`}},
 		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"second.go","content":"package check\n"}`}},
 	}
 	a := NewApp()
 	enabled := true
 	cfg := ConfigState{Workspace: root, AutoValidationGo: &enabled}
-	budget := &batchValidationBudget{remaining: autoValidationTimeout}
-	plan := planBatchValidation([]string{root}, calls, nil)
-	first := a.executeValidationPlannedTool(context.Background(), cfg, "", calls[0], []byte(calls[0].Function.Arguments), plan[0], nil, nil, budget)
-	if !first.OK {
-		t.Fatal(first.Error)
+	results := make([]toolResult, len(calls))
+	a.executeStagedToolBatch(context.Background(), cfg, calls, nil,
+		func(ctx context.Context, _ int, call openai.ToolCall) toolResult {
+			return a.executeTool(ctx, cfg, "", call.Function.Name, []byte(call.Function.Arguments))
+		}, func(i int, _ openai.ToolCall, r toolResult, _ int64) { results[i] = r })
+	if !results[0].OK || results[1].OK {
+		t.Fatalf("expected successful first write and rejected overwrite: %+v", results)
 	}
-	if budget.remaining != autoValidationTimeout {
-		t.Fatalf("deferred check consumed budget during write: %s", budget.remaining)
-	}
-	last := a.executeValidationPlannedTool(context.Background(), cfg, "", calls[1], []byte(calls[1].Function.Arguments), plan[1], calls[:1], func(int) bool { return first.OK }, budget)
-	if last.OK || !strings.Contains(last.Error, "自动校验失败") || !strings.Contains(last.Error, "first.go") {
-		t.Fatalf("lost validation: %+v", last)
+	edit, ok := results[0].Data.(EditResult)
+	if !ok || !strings.Contains(edit.Validation, "自动校验失败") || !strings.Contains(edit.Validation, "first.go") {
+		t.Fatalf("successful write lost its validation when its peer failed: %+v", results[0])
 	}
 }
 
@@ -237,7 +233,8 @@ func TestValidationBudgetDoesNotCancelWrites(t *testing.T) {
 	enabled := true
 	cfg := ConfigState{Workspace: root, AutoValidationJSON: &enabled}
 	call := openai.ToolCall{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"bad.json","content":"{"}`}}
-	r := a.executeValidationPlannedTool(context.Background(), cfg, "", call, []byte(call.Function.Arguments), []string{"bad.json"}, nil, nil, &batchValidationBudget{})
+	ctx := context.WithValue(context.Background(), batchValidationBudgetContextKey{}, &batchValidationBudget{})
+	r := a.executeTool(ctx, cfg, "", call.Function.Name, []byte(call.Function.Arguments))
 	if !r.OK {
 		t.Fatalf("write canceled by check deadline: %+v", r)
 	}

@@ -21,6 +21,7 @@ import {
   setToolStatus,
   findToolEventByData,
   toolEventId,
+  isStageBlockedTool,
 } from '../utils/toolEventState.mjs';
 import { formatReadRangeChip } from '../utils/toolFormat.mjs';
 import { deletePathRows, scheduledTaskRow, scheduledTaskRows, serviceListRows, serviceRow, sshClusterNodeRow, sshServerRows, transferDetailRows } from '../utils/toolPreview.mjs';
@@ -527,6 +528,15 @@ export function useToolEvents(ctx) {
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
     // suggest: 静默忽略错误，不渲染任何 card
     if (isHiddenTool(data.name)) return;
+    // Later stages never ran. Remove their streaming placeholders instead of
+    // presenting protocol-only skip results as failures to the user.
+    if (isStageBlockedTool(data)) {
+      const existing = findToolEventByData(session, data);
+      const index = existing ? session.messages.indexOf(existing) : -1;
+      if (index >= 0) session.messages.splice(index, 1);
+      scheduleSaveSessions();
+      return;
+    }
     const eventId = toolEventId(data);
     let existing = findToolEventByData(session, data);
     if (!existing) existing = appendToolEventFallback(session, data, 'error');

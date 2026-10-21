@@ -179,16 +179,26 @@ type toolResult struct {                       // infra_result.go:19
 
 `toolResultSummary`（`infra_result.go:49`）是给人看的短摘要（如 `3 files · +12 -4`、`exit 0 (120ms)`），子代理卡片用它展示进度（`orch_subagent.go:350`）。
 
-## 七、批次策略：一批工具调用怎么调度（`orch_batch_policy.go`）
+## 七、批次策略：按 stage 调度
 
-`detectToolBatchConflicts`（`orch_batch_policy.go:120`）在执行前统一裁决：
+主循环与子代理共用 `orch_tool_stages.go` 的 `executeStagedToolBatch`。内置工具 schema 在 `functionTool` 统一声明可选非负整数 `stage`，省略为 0；调度器读取它，但不从执行参数中剥离。MCP 不增加这个字段，调用归入 stage 0。
 
-1. **独占型工具**（`ask` / `suggest`）必须独占一批，否则整批全部拒绝（`E_ASK_BATCH_CONFLICT` / `E_SUGGEST_BATCH_CONFLICT`）——`ask` 会把 run 停在等人回答上，`suggest` 成功即结束 run，两者都不能和「结果还没被模型看到」的调用同批。执行阶段（并发 / 文件变更有序 / 延后串行）由 `toolBatchPhases` 表声明，`isOrderedFileMutationTool` 与 `isDeferredSerialTool` 都从它派生，主循环与子代理循环共用同一份分类：加新延后工具只需在表里加一行。
-2. **同路径多写**（`detectWriteBatchConflicts`，`orch_batch_policy.go:79`）：按参数解析写入目标（本地走 `localMutationKey`，远端走 `remoteMutationKey` = `remote:<target>:<path>`）；两个删除工具都只收 `paths`，每个路径各出一个目标。只执行最早一个，其余 `E_WRITE_BATCH_CONFLICT`。这同一套目标键还被「一次删除调用内部的重复/包含归一」复用（`planDeleteExecution`），所以同批两次与同调用两次认的是同一个身份。
-3. **计划工具一批只许一个写操作**（`planBatchWriteSource`，`orch_batch_policy.go:111`）：`steps` / `finish` 同属写（判定直接复用工具的请求分类器，不另写一份），并发池里谁后落谁生效，会造成「报了一步又被整份重设抹掉」这种两调用互相矛盾的结果；只执行最早一个，其余 `E_PLAN_BATCH_CONFLICT`；只读（不传任何源）不算写，可以和其他调用同批。
-4. **语义重复调用**：参数 JSON 解析后按 key 排序重序列化做去重键，重复判 `E_DUPLICATE_TOOL_CALL`（字段顺序、空白差异都能识别；刻意不做默认值归一，那需要逐工具知识且会掩盖真实不同意图）。
+- 同 stage 在配置的并发上限内执行；阶段按数字升序推进，数字允许不连续，与调用在响应中的排列顺序无关。
+- 当前阶段全部收尾后才能进入下一阶段。工具错误、命令非零退出、超时、取消、沙箱拒写或提升为后台服务都会阻断后续阶段；`E_DUPLICATE_TOOL_CALL` 通知本身不阻断，原始调用的成败仍然有效。
+- 后续调用不执行，返回 `E_STAGE_BLOCKED`；若已有自己的冲突码，则保留原始原因。UI 隐藏纯跳过结果并移除占位卡片，模型仍收到配对结果。已完成的写入、安装和服务不回滚。
+- `wait` 是普通阶段调用，没有隐式排尾。例如修改放 stage 0，独立安装放 stage 1，启动服务放 stage 2，wait 放 stage 3，检查放 stage 4。
+- stage 不做结果插值。依赖前一步返回的 version 等参数时，仍需分轮调用。
 
-配合主循环那边（见 `agent-core-loop.md` 第 8 节）：非文件变更工具并发 4 个、文件变更按调用顺序串行、`wait` 排到批次末尾串行、同批目录级验证只跑一次。
+`orch_batch_policy.go` 的 `detectToolBatchConflicts` 保留执行前校验：
+
+1. **独占工具**：`ask` / `suggest` 必须独占整个响应，否则所有调用均返回相应的独占冲突码，不产生副作用。
+2. **同阶段同路径多写**：本地和远端按规范化目标检测，只允许最早的调用执行，其他返回 `E_WRITE_BATCH_CONFLICT`。不同阶段不互相冲突，但仍需满足版本、路径与授权契约。
+3. **同阶段计划写入**：`steps` / `finish` 每阶段最多一个写操作，其余返回 `E_PLAN_BATCH_CONFLICT`；只读计划调用不算写入。
+4. **重复调用**：JSON 参数规范化后去重；内置工具省略 stage 与显式 0 等价。重复调用保留 `E_DUPLICATE_TOOL_CALL` 通知，但不因此阻断后续阶段。
+
+非法 JSON 或非法 stage 在执行前拒绝整批，错误结果明确指出违规的调用索引与工具名；这避免在无法确定调度顺序时先产生副作用。每次调用都保留模型侧结果。
+
+文件写入完成后，`planBatchValidation` 仅合并本阶段成功写入的校验单元，再串行校验；每个阶段独立享有 12 秒校验预算，写入不消耗校验预算。跨阶段再次修改同一单元需要重新校验，不能拿前一阶段结果证明新内容正确。
 
 ## 八、可复用的设计原则
 

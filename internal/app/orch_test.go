@@ -258,8 +258,8 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("edit schema properties missing: %#v", params)
 	}
-	if len(properties) != 3 || properties["path"] == nil || properties["version"] == nil || properties["changes"] == nil {
-		t.Fatalf("edit should expose exactly the flat path/version/changes fields: %#v", properties)
+	if len(properties) != 4 || properties["path"] == nil || properties["version"] == nil || properties["changes"] == nil || properties["stage"] == nil {
+		t.Fatalf("edit should expose flat path/version/changes plus scheduling stage: %#v", properties)
 	}
 	for _, legacy := range []string{"files", "oldString", "newString", "replaceAll", "edits", "startLine", "endLine", "newText"} {
 		if _, exists := properties[legacy]; exists {
@@ -500,39 +500,14 @@ func TestDetectWriteBatchConflictsCollapsesRepeatWithinOneCall(t *testing.T) {
 	}
 }
 
-// 表里的名字必须是真实注册的内置工具：拼错一个字母就会静默退回并发池
-// （等于没生效），而这类错不会在别处报出来。
-func TestToolBatchPhasesOnlyNamesRegisteredTools(t *testing.T) {
-	registry := builtinToolNames(t)
-	for name := range toolBatchPhases {
-		if !registry[name] {
-			t.Fatalf("toolBatchPhases declares %q, which is not a registered builtin tool", name)
-		}
-	}
-}
-
-// wait 不再是 barrier：混批时它只是被推迟到批次末尾（runChat / executeSubagent
-// 的 deferred tail），因此同批任何调用都不该因它被拒。
-func TestDetectToolBatchConflictsDefersWaitInsteadOfRejectingTheBatch(t *testing.T) {
+// wait is an ordinary staged tool, not an exclusive barrier.
+func TestDetectToolBatchConflictsAllowsStagedWait(t *testing.T) {
 	calls := []openai.ToolCall{
-		{Function: openai.FunctionCall{Name: "wait", Arguments: `{"seconds":1,"reason":"service restart"}`}},
-		{Function: openai.FunctionCall{Name: "http_request", Arguments: `{"url":"http://localhost:8080/health"}`}},
+		{Function: openai.FunctionCall{Name: "wait", Arguments: `{"seconds":1,"stage":1}`}},
+		{Function: openai.FunctionCall{Name: "http_request", Arguments: `{"url":"http://localhost:8080/health","stage":2}`}},
 	}
 	if conflicts := detectToolBatchConflicts(ConfigState{}, calls); len(conflicts) != 0 {
-		t.Fatalf("a batch carrying wait must not be rejected, got %#v", conflicts)
-	}
-	// 判定本身按归一化后的工具名：中转把 wait 写成 Wait 时同样要排到末尾，
-	// 否则它会落回并发池，与它等待的那批调用抢跑。
-	if !isDeferredSerialTool("wait") || !isDeferredSerialTool("Wait") {
-		t.Fatal("wait must be classified as the deferred tail tool (name normalization included)")
-	}
-	if !isOrderedFileMutationTool("Edit") || isOrderedFileMutationTool("wait") {
-		t.Fatal("the phase table must classify ordered mutations and deferred tools independently")
-	}
-	for _, name := range []string{"ask", "suggest", "http_request", "read", "command"} {
-		if toolBatchPhaseFor(name) != batchPhaseParallel {
-			t.Fatalf("%s must stay in the default parallel phase", name)
-		}
+		t.Fatalf("staged wait must be allowed: %v", conflicts)
 	}
 }
 

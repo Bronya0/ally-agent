@@ -270,11 +270,9 @@ func (r *batchOrderRecorder) Emit(name string, payload any) {
 	}
 }
 
-// TestRunChatDefersWaitToTheEndOfItsBatch：`wait` 与别的调用同批时不再整批被拒，
-// 而是排在它们之后执行（isDeferredSerialTool），并且不结束 run——模型下一步仍能
-// 看到整批结果（含那次暂停）。同批放一个文件变更当参照物：它按定义跑在并发阶段
-// 之后，若 wait 还在并发池里，wait 的结果会先于它到达。
-func TestRunChatDefersWaitToTheEndOfItsBatch(t *testing.T) {
+// TestRunChatStagesWait verifies that wait follows an explicit stage barrier.
+func TestRunChatStagesWait(t *testing.T) {
+	redirectAppStateDir(t)
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -282,7 +280,7 @@ func TestRunChatDefersWaitToTheEndOfItsBatch(t *testing.T) {
 		if requests.Add(1) == 1 {
 			fmt.Fprint(w, sseChatChunk("Let me make the note and let things settle."))
 			fmt.Fprint(w, sseChatToolCallChunk("call_create_1", "create", `{"path":"notes.md","content":"# notes\n"}`))
-			fmt.Fprint(w, sseChatToolCallChunk("call_wait_1", "wait", `{"seconds":1,"reason":"let the watcher settle"}`))
+			fmt.Fprint(w, sseChatToolCallChunk("call_wait_1", "wait", `{"seconds":1,"reason":"let the watcher settle","stage":1}`))
 			fmt.Fprint(w, sseChatFinishChunk("tool_calls"))
 			fmt.Fprint(w, sseDone)
 			return
@@ -325,7 +323,7 @@ func TestRunChatDefersWaitToTheEndOfItsBatch(t *testing.T) {
 		t.Fatalf("run ended with %q, want run:done", recorder.end)
 	}
 	if got := requests.Load(); got != 2 {
-		t.Fatalf("model requests = %d, want 2 (a deferred wait must not end the run)", got)
+		t.Fatalf("model requests = %d, want 2 (a staged wait must not end the run)", got)
 	}
 	createAt, waitAt := -1, -1
 	for i, entry := range recorder.tools {
@@ -343,7 +341,7 @@ func TestRunChatDefersWaitToTheEndOfItsBatch(t *testing.T) {
 		t.Fatalf("both calls must run, got %v", recorder.tools)
 	}
 	if waitAt < createAt {
-		t.Fatalf("the deferred wait must run after the rest of its batch, got %v", recorder.tools)
+		t.Fatalf("stage 1 wait must run after stage 0 create, got %v", recorder.tools)
 	}
 }
 
@@ -1348,7 +1346,7 @@ func TestSystemPromptCarriesTheStandingRules(t *testing.T) {
 	}{
 		{"wait guidance", []string{
 			"Use `wait` only",
-			"Ally runs it last",
+			"wait has no implicit ordering",
 			"verify the condition after it completes",
 		}},
 		{"command outside-path recovery", []string{
@@ -1379,7 +1377,7 @@ func TestSystemPromptCarriesTheStandingRules(t *testing.T) {
 			"do not re-read a file merely for reassurance",
 			"Batch edits by risk and size",
 			"one failed `oldText` match or stale `version` rejects the entire call",
-			"Never send multiple file-mutation tool calls for the same path",
+			"Never send multiple file-mutation tool calls for the same path in one stage",
 			"Do not use patch, unified diff, or git apply",
 		}},
 	}

@@ -10,11 +10,46 @@ package shared
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
 	"ally-dev/internal/tools/schemautil"
 )
+
+func TestBuiltinStageSchemaIsOptionalAndDoesNotChangeMCP(t *testing.T) {
+	for _, tool := range Builtins() {
+		schema, _ := tool.Function.Parameters.(map[string]any)
+		properties := schemaObjectForTest(t, schema["properties"])
+		stage := schemaObjectForTest(t, properties["stage"])
+		if stage["type"] != "integer" || stage["minimum"] != 0 || stage["maximum"] != MaxToolStage {
+			t.Errorf("%s: invalid optional stage schema: %#v", tool.Function.Name, stage)
+		}
+		if required, _ := schema["required"].([]string); slices.Contains(required, "stage") {
+			t.Errorf("%s: stage must not be required", tool.Function.Name)
+		}
+	}
+	// RawFunction also wraps MCP tools: their argument contract stays untouched.
+	schema := map[string]any{"type": "object", "properties": map[string]any{}}
+	RawFunction("mcp__example__tool", "example", schema)
+	if _, exists := schema["properties"].(map[string]any)["stage"]; exists {
+		t.Fatal("raw/MCP schema was changed")
+	}
+}
+
+func TestWaitDescriptionUsesExplicitStages(t *testing.T) {
+	for _, tool := range Builtins() {
+		if tool.Function.Name != "wait" {
+			continue
+		}
+		text := tool.Function.Description
+		if !strings.Contains(text, "assign a later stage") || strings.Contains(text, "runs it last") {
+			t.Fatalf("wait advertises stale scheduling: %s", text)
+		}
+		return
+	}
+	t.Fatal("wait tool missing")
+}
 
 func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
 	askParams, _ := builtinSchemaForTest(t, "ask")
