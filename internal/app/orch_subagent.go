@@ -693,6 +693,7 @@ func subagentSystemPrompt(role string) string {
 
 	return roleLine + "You are an Ally sub-agent. Complete the delegated task using available tools, then return a concise summary.\n\n" +
 		"# Tool Use\n\n" +
+		sharedRemoteAccessRules() +
 		"Prefer dedicated tools over shell commands: `grep` for search, `read` for file content, `edit`/`create`/`delete` for file changes, `list_files` for directory listings.\n\n" +
 		sharedBatchStrategy() +
 		"**Editing discipline**:\n" +

@@ -59,6 +59,12 @@ func sharedEditRules() string {
 		"3. On `E_NO_MATCH` or `E_VERSION_MISMATCH`, first re-read the affected file/range and rebuild from exact fresh text; never retry guessed text.\n"
 }
 
+// sharedRemoteAccessRules keeps remote access on the authorized SSH tool path
+// for both the main agent and sub-agents.
+func sharedRemoteAccessRules() string {
+	return "- Remote SSH access MUST use the built-in tools: `ssh_cluster` to discover or request authorization for hosts, and `remote_*` for remote commands, file operations, and transfers. Never use local `command`, `service`, shell wrappers, scripts, or alternative clients/libraries to connect via SSH (including ssh/scp/sftp/rsync over SSH), or nest SSH connections inside remote commands. If the required host is unavailable or unauthorized, use `ssh_cluster` to request access; if the tools cannot complete the operation, report the limitation instead of bypassing this boundary.\n"
+}
+
 // sharedBatchStrategy returns the batch/parallel tool-call strategy shared by the main and sub-agent system prompts.
 func sharedBatchStrategy() string {
 	return "**Batch independent work**:\n" +
@@ -143,6 +149,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"- For explanation, review, comparison, or discussion, inspect and respond; do not implement without an implementation request.\n" +
 		"- Before the first tool call, briefly state the next action. During long work, update roughly every 60 seconds with findings, blockers, or the next check; avoid per-call narration. Use `plan` for substantial multi-step work.\n- Treat mid-task user messages as steering the active task unless they explicitly cancel or replace it. When information is missing, ask only for necessary decisions and continue work that does not depend on the answer.\n- Before requesting final approval for an external action, complete already-authorized preparation and verification so the result is reviewable.\n\n" +
 		"# Tool Use\n\n" +
+		sharedRemoteAccessRules() +
 		"- Prefer dedicated, structured, workspace-safe tools (`grep`, `read`, `list_files`, `web_fetch`/`http_request`, `remote_*`, `delete`) over shell commands. Use `command` only when no dedicated tool fits or a build/test/inspection needs the shell, and `service` for long-lived dev servers or services. A `command` that outlives its timeout is automatically promoted to a background service (not killed): the result carries the `timed-out` and `promoted-to-service` flags and its output names the new service id — switch to the `service` tool to read output or stop it, and never re-run the command (its port is still bound).\n" +
 		"- Use `ask` when progress genuinely requires one or more user decisions. Provide 2–6 reasonable options per question, optionally mark recommended options, and do not add an 'Other' option because the UI always appends a custom-answer choice. `ask` must be the only tool call in that model response.\n" +
 		"- By default, end replies with `suggest` offering 1-4 relevant next actions; omit only when no useful follow-up exists. It must be the only tool call in its response and ends the turn, so finish your reply first.\n" +
