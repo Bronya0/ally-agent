@@ -8420,6 +8420,9 @@ function formatToolChip(name, result) {
   }
   try {
     const parsed = JSON.parse(text);
+    if ((name === 'command' || name === 'remote_run_command' || name === 'Bash') && typeof parsed.data?.exitCode === 'number') {
+      return 'exit ' + parsed.data.exitCode;
+    }
     // read / remote_read: list each file as separate line
     if ((name === 'read' || name === 'remote_read') && parsed.data) {
       if (!parsed.data.files || !Array.isArray(parsed.data.files)) return '';
@@ -8556,17 +8559,16 @@ function formatToolBody(name, body) {
     const parsed = JSON.parse(text);
     if (name === 'wait' && parsed.data) return '';
     if (name === 'ask' && parsed.data) return '';
-    // command result: show output + exit code (command shown in card title)
+    // Command output only; exit code and duration are shown in the tool line.
     if ((name === 'command' || name === 'remote_run_command' || name === 'Bash') && parsed.data) {
       const d = parsed.data;
       let out = '';
       if (d.output) out += stripAnsi(d.output);
-      if (d.output && !d.output.endsWith('\n')) out += '\n';
-      const code = typeof d.exitCode === 'number' ? d.exitCode : 0;
-      out += 'exit code: ' + code + ' [' + formatDuration(d.durationMs) + ']';
-      if (d.timedOut) out += '  ' + (d.promotedToService ? t('app.tools.promotedToService') : t('app.tools.timedOut'));
-      if (d.cancelled) out += '  ' + t('app.tools.cancelled');
-      if (d.truncated) out += '  [' + t('common.truncated') + ']';
+      const notices = [];
+      if (d.timedOut) notices.push(d.promotedToService ? t('app.tools.promotedToService') : t('app.tools.timedOut'));
+      if (d.cancelled) notices.push(t('app.tools.cancelled'));
+      if (d.truncated) notices.push('[' + t('common.truncated') + ']');
+      if (notices.length) out += (out && !out.endsWith('\n') ? '\n' : '') + notices.join('  ');
       return out;
     }
     // read_file result: show content with line numbers

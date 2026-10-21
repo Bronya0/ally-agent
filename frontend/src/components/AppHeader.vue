@@ -52,7 +52,7 @@ Public License v3. See the LICENSE file for details.
           @select="onHistorySelect"
         >
           <n-button class="header-icon-button tabs-action-button history-action-button" size="small" quaternary :title="$t('header.workspaceHistory')" :aria-label="$t('header.workspaceHistory')">
-            <HistoryOutlined class="header-icon" />
+            <FolderOpenTwotone class="header-icon" />
           </n-button>
         </n-dropdown>
       </div>
@@ -90,7 +90,7 @@ import { onBeforeUnmount, ref } from 'vue';
 import { NDropdown } from 'naive-ui';
 import AllyWordmark from './AllyWordmark.vue';
 import { burstDigitalWave } from '../composables/digitalWave.mjs';
-import HistoryOutlined from '@vicons/antd/HistoryOutlined';
+import FolderOpenTwotone from '@vicons/antd/FolderOpenTwotone';
 import DownloadOutlined from '@vicons/antd/DownloadOutlined';
 import GithubOutlined from '@vicons/antd/GithubOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';

@@ -4554,9 +4554,9 @@ html.rail-expanded .chat-layout {
 /* ── Tool result field grid（结果本身就是一组字段的工具，如远端传输） ── */
 
 .tool-field-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 8px;
   min-width: 0;
   padding: 4px 8px 6px 6px;
   font-size: var(--ally-sub-font-size);
@@ -4565,8 +4565,8 @@ html.rail-expanded .chat-layout {
 
 .tool-field-row {
   display: grid;
-  grid-template-columns: 7em minmax(0, 1fr);
-  column-gap: 10px;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: baseline;
 }
 
