@@ -2741,7 +2741,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var req ScreenshotRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			data, err = a.screenshotWithConfig(cfg, req)
+			data, err = a.screenshotWithConfig(ctx, cfg, req)
 		}
 	case "list_files":
 		var req ListFilesRequest

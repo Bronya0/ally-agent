@@ -7,4 +7,9 @@ import (
 	"os"
 )
 
-func main() { os.Exit(backend.RunHeadless(os.Args[1:])) }
+func main() {
+	if runScreenshotCaptureHelper() {
+		return
+	}
+	os.Exit(backend.RunHeadless(os.Args[1:]))
+}

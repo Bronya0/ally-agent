@@ -1146,14 +1146,18 @@ func commandModelReducedNote(outputFilePath string) string {
 // arrives in the user message injected right after the tool results, so the
 // attribute only tells the model where to look for it.
 func renderScreenshotResultForModel(r ScreenshotResult) string {
+	width, height := r.SourceWidth, r.SourceHeight
+	if width <= 0 || height <= 0 {
+		width, height = r.Width, r.Height
+	}
 	var b strings.Builder
 	b.WriteString(`<ally-screenshot source="` + attrEscape(r.Source) + `"`)
 	switch r.Source {
 	case "window":
 		fmt.Fprintf(&b, ` id="%d" title="%s"`, r.WindowID, attrEscape(r.Title))
-		fmt.Fprintf(&b, ` rect="%d,%d %dx%d"`, r.X, r.Y, r.Width, r.Height)
+		fmt.Fprintf(&b, ` rect="%d,%d %dx%d"`, r.X, r.Y, width, height)
 	case "region":
-		fmt.Fprintf(&b, ` rect="%d,%d %dx%d"`, r.X, r.Y, r.Width, r.Height)
+		fmt.Fprintf(&b, ` rect="%d,%d %dx%d"`, r.X, r.Y, width, height)
 	default:
 		fmt.Fprintf(&b, ` display="%d"`, r.Display)
 	}

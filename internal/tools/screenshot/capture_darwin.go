@@ -11,6 +11,7 @@ package screenshot
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -31,7 +32,7 @@ import (
 
 // listWindows enumerates on-screen, normal-layer windows front to back via
 // the JXA bridge. The first row is the frontmost window.
-func listWindows() ([]Window, error) {
+func listWindows(ctx context.Context) ([]Window, error) {
 	script := `ObjC.import('CoreGraphics');
 const list = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID);
 const wins = ObjC.deepUnwrap(list) || [];
@@ -44,7 +45,7 @@ for (const w of wins) {
     width: Math.round(b.Width || 0), height: Math.round(b.Height || 0) });
 }
 JSON.stringify(out);`
-	out, err := exec.Command("osascript", "-l", "JavaScript", "-e", script).Output()
+	out, err := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", script).Output()
 	if err != nil {
 		return nil, fmt.Errorf("%w: window enumeration failed: %v", ErrCaptureUnsupported, err)
 	}
@@ -59,40 +60,40 @@ JSON.stringify(out);`
 	return windows, nil
 }
 
-func captureWindow(win Window, focus bool) (image.Image, error) {
+func captureWindow(ctx context.Context, win *Window, focus bool) (image.Image, error) {
 	// -l captures the window's own content (composited), so occlusion does
 	// not corrupt the frame and focusing is unnecessary; a minimized window
 	// is not on screen and therefore not enumerable anyway.
 	if focus {
-		if err := activateWindow(win); err != nil {
+		if err := activateWindow(ctx, *win); err != nil {
 			return nil, err
 		}
 	}
-	return screencapture([]string{"-l", strconv.Itoa(win.ID)})
+	return screencapture(ctx, []string{"-l", strconv.Itoa(win.ID)})
 }
 
-func captureRegion(region Rect) (image.Image, error) {
-	return screencapture([]string{"-R", fmt.Sprintf("%d,%d,%d,%d", region.X, region.Y, region.Width, region.Height)})
+func captureRegion(ctx context.Context, region Rect) (image.Image, error) {
+	return screencapture(ctx, []string{"-R", fmt.Sprintf("%d,%d,%d,%d", region.X, region.Y, region.Width, region.Height)})
 }
 
-func captureDisplay(display int) (image.Image, error) {
+func captureDisplay(ctx context.Context, display int) (image.Image, error) {
 	// screencapture -D is 1-based; the tool surface is 0-based.
 	if display < 0 {
 		return nil, fmt.Errorf("%w: display %d", ErrDisplayNotFound, display)
 	}
-	return screencapture([]string{"-D", strconv.Itoa(display + 1)})
+	return screencapture(ctx, []string{"-D", strconv.Itoa(display + 1)})
 }
 
 // screencapture runs the system tool into a private temp dir and decodes the
 // PNG it produces. Args are a fixed argv array — no shell, no interpolation.
-func screencapture(args []string) (image.Image, error) {
+func screencapture(ctx context.Context, args []string) (image.Image, error) {
 	dir, err := os.MkdirTemp("", "ally-screenshot-")
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCaptureFailed, err)
 	}
 	defer os.RemoveAll(dir)
 	path := dir + "/capture.png"
-	cmd := exec.Command("screencapture", append([]string{"-x", "-t", "png"}, append(args, path)...)...)
+	cmd := exec.CommandContext(ctx, "screencapture", append([]string{"-x", "-t", "png"}, append(args, path)...)...)
 	if out, cmdErr := cmd.CombinedOutput(); cmdErr != nil {
 		return nil, fmt.Errorf("%w: screencapture: %v: %s", ErrCaptureFailed, cmdErr, tailBytes(out))
 	}
@@ -111,12 +112,12 @@ func screencapture(args []string) (image.Image, error) {
 // effort: without Accessibility permission the raise silently fails, and a
 // refusal here must not fail a capture that would still succeed (window
 // captures via -l do not need focus anyway).
-func activateWindow(win Window) error {
+func activateWindow(ctx context.Context, win Window) error {
 	if win.Process == "" {
 		return nil
 	}
 	script := fmt.Sprintf(`tell application "System Events" to set frontmost of (first application process whose name is %q) to true`,
 		strings.ReplaceAll(win.Process, `"`, ``))
-	_ = exec.Command("osascript", "-e", script).Run()
+	_ = exec.CommandContext(ctx, "osascript", "-e", script).Run()
 	return nil
 }

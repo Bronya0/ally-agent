@@ -27,6 +27,9 @@ var assets embed.FS
 var appIconPNG []byte
 
 func main() {
+	if runScreenshotCaptureHelper() {
+		return
+	}
 	if handled, err := backend.RunUpdateRelaunchHelper(os.Args[1:]); handled {
 		if err != nil {
 			println("Update relaunch helper error:", err.Error())

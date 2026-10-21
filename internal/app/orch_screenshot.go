@@ -15,6 +15,7 @@ package app
 // frontend.
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -72,6 +73,8 @@ type ScreenshotResult struct {
 	Y             int    `json:"y,omitempty"`
 	Width         int    `json:"width"`
 	Height        int    `json:"height"`
+	SourceWidth   int    `json:"sourceWidth,omitempty"`
+	SourceHeight  int    `json:"sourceHeight,omitempty"`
 	Mime          string `json:"mime"`
 	Bytes         int    `json:"bytes"`
 	Scaled        bool   `json:"scaled,omitempty"`
@@ -84,21 +87,21 @@ type ScreenshotResult struct {
 // enumeration is machine-scoped, not workspace-scoped. An unrecognized action
 // is a usage error, not a silent capture — the schema enum narrows the model,
 // and anything that slips past it must fail loudly.
-func (a *App) screenshotWithConfig(cfg ConfigState, req ScreenshotRequest) (any, error) {
+func (a *App) screenshotWithConfig(ctx context.Context, cfg ConfigState, req ScreenshotRequest) (any, error) {
 	action := strings.ToLower(strings.TrimSpace(req.Action))
 	switch action {
 	case "", screenshotActionCapture:
-		return a.captureForScreenshot(req)
+		return a.captureForScreenshot(ctx, req)
 	case screenshotActionList:
-		return a.listWindowsForScreenshot(req)
+		return a.listWindowsForScreenshot(ctx, req)
 	default:
 		return ScreenshotResult{}, codedToolError("E_BAD_ARGS",
 			fmt.Errorf("unknown action %q (want %q or %q)", req.Action, screenshotActionCapture, screenshotActionList))
 	}
 }
 
-func (a *App) listWindowsForScreenshot(req ScreenshotRequest) (ListWindowsResult, error) {
-	windows, total, err := screenshot.ListWindows(screenshot.ListOptions{Title: req.Title, Limit: req.Limit})
+func (a *App) listWindowsForScreenshot(ctx context.Context, req ScreenshotRequest) (ListWindowsResult, error) {
+	windows, total, err := screenshot.ListWindowsContext(ctx, screenshot.ListOptions{Title: req.Title, Limit: req.Limit})
 	if err != nil {
 		return ListWindowsResult{}, screenshotToolError(err)
 	}
@@ -107,7 +110,7 @@ func (a *App) listWindowsForScreenshot(req ScreenshotRequest) (ListWindowsResult
 
 // captureForScreenshot validates the request, resolves window targets
 // against a fresh enumeration, and captures.
-func (a *App) captureForScreenshot(req ScreenshotRequest) (ScreenshotResult, error) {
+func (a *App) captureForScreenshot(ctx context.Context, req ScreenshotRequest) (ScreenshotResult, error) {
 	// Usage-level target conflicts are refused here with the boundary error
 	// code; the pure layer re-checks (Target) as a backstop. The schema
 	// documents each capture field as exclusive, so every pair is enforced.
@@ -127,11 +130,19 @@ func (a *App) captureForScreenshot(req ScreenshotRequest) (ScreenshotResult, err
 		Display:     req.Display,
 		Region:      req.Region,
 	}
-	image, source, err := screenshot.Capture(opts)
+	image, source, err := screenshot.CaptureContext(ctx, opts)
 	if err != nil {
 		return ScreenshotResult{}, screenshotToolError(err)
 	}
+	return screenshotResult(image, source), nil
+}
+
+func screenshotResult(image screenshot.ModelImage, source screenshot.CaptureSource) ScreenshotResult {
 	result := ScreenshotResult{
+		Width:         image.Image.Bounds().Dx(),
+		Height:        image.Image.Bounds().Dy(),
+		SourceWidth:   source.OriginalWidth,
+		SourceHeight:  source.OriginalHeight,
 		Mime:          image.Mime,
 		Bytes:         len(image.Data),
 		Scaled:        image.Scaled,
@@ -144,20 +155,14 @@ func (a *App) captureForScreenshot(req ScreenshotRequest) (ScreenshotResult, err
 		result.WindowID = source.Window.ID
 		result.Title = source.Window.Title
 		result.X, result.Y = source.Window.X, source.Window.Y
-		result.Width, result.Height = source.Window.Width, source.Window.Height
 	case screenshot.TargetRegion:
 		result.Source = "region"
 		result.X, result.Y = source.Region.X, source.Region.Y
-		result.Width, result.Height = source.Region.Width, source.Region.Height
 	default:
 		result.Source = "display"
-		result.Display = req.Display
-		// Width/Height come from the encoded frame: the authoritative size
-		// the model actually receives (post-downscale).
-		result.Width = image.Image.Bounds().Dx()
-		result.Height = image.Image.Bounds().Dy()
+		result.Display = source.Display
 	}
-	return result, nil
+	return result
 }
 
 // screenshotToolError maps package sentinels to stable tool error codes.
@@ -165,6 +170,10 @@ func screenshotToolError(err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, context.Canceled):
+		return codedToolError("E_CANCELLED", err)
+	case errors.Is(err, context.DeadlineExceeded):
+		return codedToolError("E_CAPTURE_TIMEOUT", err)
 	case errors.Is(err, screenshot.ErrWindowNotFound):
 		return codedToolError("E_WINDOW_NOT_FOUND", err)
 	case errors.Is(err, screenshot.ErrAmbiguousWindow):

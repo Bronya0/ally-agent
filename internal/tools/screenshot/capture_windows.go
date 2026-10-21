@@ -10,12 +10,13 @@
 package screenshot
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image"
 	"path/filepath"
+	"runtime"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -91,62 +92,76 @@ func winRectToRect(r winRect) Rect {
 // the API is absent the body still runs; coordinates then follow whatever
 // process awareness is in effect.
 func setThreadDpiAware(fn func()) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	if err := procSetThreadDpiAwareness.Find(); err == nil {
 		prev, _, _ := procSetThreadDpiAwareness.Call(dpiAwarenessPerMonitorV2)
-		defer procSetThreadDpiAwareness.Call(prev)
+		if prev != 0 {
+			defer procSetThreadDpiAwareness.Call(prev)
+		}
 	}
 	fn()
 }
 
 // listWindows enumerates visible, uncloaked, titled top-level windows in
 // z-order (front to back). The focused flag is exact (GetForegroundWindow).
-func listWindows() ([]Window, error) {
+type windowEnumeration struct {
+	ctx        context.Context
+	windows    []Window
+	foreground uintptr
+}
+
+// Windows callbacks are process-lifetime allocations. Keep exactly one per
+// callback signature; each synchronous enumeration carries its own state.
+var enumWindowsCallback = syscall.NewCallback(collectWindow)
+
+func collectWindow(hwnd uintptr, state *windowEnumeration) uintptr {
+	if state == nil || state.ctx.Err() != nil {
+		return 0
+	}
+	if r1, _, _ := procIsWindowVisible.Call(hwnd); r1 == 0 {
+		return 1
+	}
+	if cloaked, ok := dwmAttributeUint32(hwnd, dwmwaCloaked); ok && cloaked != 0 {
+		return 1
+	}
+	title := windowTitle(hwnd)
+	if title == "" {
+		return 1
+	}
+	rect, ok := windowBounds(hwnd)
+	if !ok || rect.Width <= 0 || rect.Height <= 0 {
+		return 1
+	}
+	state.windows = append(state.windows, Window{
+		ID: int(hwnd), Title: SanitizeTitle(title), Process: windowProcessName(hwnd),
+		X: rect.X, Y: rect.Y, Width: rect.Width, Height: rect.Height,
+		Focused: hwnd == state.foreground,
+	})
+	return 1
+}
+
+func listWindows(ctx context.Context) ([]Window, error) {
 	var (
-		windows []Window
 		enumErr error
 	)
+	state := &windowEnumeration{ctx: ctx}
 	setThreadDpiAware(func() {
-		var foreground uintptr
 		if hwnd, _, _ := procGetForegroundWindow.Call(); hwnd != 0 {
-			foreground = hwnd
+			state.foreground = hwnd
 		}
-		cb := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
-			if r1, _, _ := procIsWindowVisible.Call(hwnd); r1 == 0 {
-				return 1
-			}
-			// UWP apps keep phantom "visible" windows behind their shell
-			// host; the cloak attribute is the documented way to skip them.
-			if cloaked, ok := dwmAttributeUint32(hwnd, dwmwaCloaked); ok && cloaked != 0 {
-				return 1
-			}
-			title := windowTitle(hwnd)
-			if title == "" {
-				return 1
-			}
-			rect, ok := windowBounds(hwnd)
-			if !ok || rect.Width <= 0 || rect.Height <= 0 {
-				return 1
-			}
-			windows = append(windows, Window{
-				ID:      int(hwnd),
-				Title:   SanitizeTitle(title),
-				Process: windowProcessName(hwnd),
-				X:       rect.X,
-				Y:       rect.Y,
-				Width:   rect.Width,
-				Height:  rect.Height,
-				Focused: hwnd == foreground,
-			})
-			return 1
-		})
-		if r1, _, callErr := procEnumWindows.Call(cb, 0); r1 == 0 {
+		if r1, _, callErr := procEnumWindows.Call(enumWindowsCallback, uintptr(unsafe.Pointer(state))); r1 == 0 {
 			enumErr = fmt.Errorf("%w: EnumWindows failed: %v", ErrCaptureFailed, callErr)
 		}
 	})
+	runtime.KeepAlive(state)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if enumErr != nil {
 		return nil, enumErr
 	}
-	return windows, nil
+	return state.windows, nil
 }
 
 func windowTitle(hwnd uintptr) string {
@@ -219,7 +234,7 @@ func windowProcessName(hwnd uintptr) string {
 // window covered by others still yields its own pixels — the contract the
 // macOS (-l) and Linux (maim -i) paths already honour. focus restores a
 // minimized window and raises it first; occlusion alone does not need it.
-func captureWindow(win Window, focus bool) (image.Image, error) {
+func captureWindow(ctx context.Context, win *Window, focus bool) (image.Image, error) {
 	hwnd := uintptr(win.ID)
 	var (
 		frame      image.Image
@@ -241,13 +256,18 @@ func captureWindow(win Window, focus bool) (image.Image, error) {
 				procShowWindow.Call(hwnd, swRestore)
 			}
 			procSetForegroundWindow.Call(hwnd)
-			time.Sleep(focusSettleDelay)
+			if err := waitForFocus(ctx); err != nil {
+				captureErr = err
+				return
+			}
 		}
 		rect, ok := windowBounds(hwnd)
 		if !ok || rect.Width <= 0 || rect.Height <= 0 {
 			captureErr = fmt.Errorf("%w: window rect unavailable", ErrCaptureFailed)
 			return
 		}
+		// Restoring/focusing may move or resize the window after enumeration.
+		win.X, win.Y, win.Width, win.Height = rect.X, rect.Y, rect.Width, rect.Height
 		frame, captureErr = printWindowFrame(hwnd, rect)
 		if captureErr == nil {
 			return
@@ -263,7 +283,7 @@ func captureWindow(win Window, focus bool) (image.Image, error) {
 	return frame, captureErr
 }
 
-func captureRegion(region Rect) (image.Image, error) {
+func captureRegion(ctx context.Context, region Rect) (image.Image, error) {
 	var (
 		frame      image.Image
 		captureErr error
@@ -278,7 +298,7 @@ func captureRegion(region Rect) (image.Image, error) {
 	return frame, captureErr
 }
 
-func captureDisplay(display int) (image.Image, error) {
+func captureDisplay(ctx context.Context, display int) (image.Image, error) {
 	var (
 		frame      image.Image
 		captureErr error
@@ -312,21 +332,21 @@ func virtualScreenContains(r Rect) bool {
 	return r.X >= vs.X && r.Y >= vs.Y && r.X+r.Width <= vs.X+vs.Width && r.Y+r.Height <= vs.Y+vs.Height
 }
 
+type monitorEnumeration struct{ rects []Rect }
+
+var enumMonitorsCallback = syscall.NewCallback(func(_, _ uintptr, r *winRect, state *monitorEnumeration) uintptr {
+	if r == nil || state == nil {
+		return 0
+	}
+	state.rects = append(state.rects, winRectToRect(*r))
+	return 1
+})
+
 func enumDisplayRects() []Rect {
-	var rects []Rect
-	// MonitorEnumProc takes (HMONITOR, HDC, LPRECT, LPARAM); syscall.NewCallback
-	// accepts pointer-sized Go pointer parameters, so the rect arrives typed —
-	// no uintptr->pointer conversion. Arity must match exactly or the callback
-	// is never invoked.
-	cb := syscall.NewCallback(func(_, _ uintptr, r *winRect, _ uintptr) uintptr {
-		if r == nil {
-			return 0
-		}
-		rects = append(rects, winRectToRect(*r))
-		return 1
-	})
-	procEnumDisplayMonitors.Call(0, 0, cb, 0)
-	return rects
+	state := &monitorEnumeration{}
+	procEnumDisplayMonitors.Call(0, 0, enumMonitorsCallback, uintptr(unsafe.Pointer(state)))
+	runtime.KeepAlive(state)
+	return state.rects
 }
 
 // dibFrame is one top-down 32-bit DIB section selected into a fresh memory
@@ -421,8 +441,8 @@ func bitBltScreen(rect Rect) (image.Image, error) {
 // (what PrintWindow paints into); GetWindowRect includes the invisible resize
 // borders that the DWM frame bounds exclude, so the crop lands the image on
 // exactly the rectangle action=list reports. PrintWindow is synchronous — it
-// waits for the target to process WM_PRINT — so an unresponsive window stalls
-// this goroutine.
+// waits for the target to process WM_PRINT. This runs only in the killable
+// window-capture helper, never in the main Ally process.
 func printWindowFrame(hwnd uintptr, rect Rect) (image.Image, error) {
 	var full winRect
 	if r1, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&full))); r1 == 0 {

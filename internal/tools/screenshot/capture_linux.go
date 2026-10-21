@@ -11,6 +11,7 @@ package screenshot
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -19,7 +20,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Linux capture shells out to the desktop stack the user already has, in a
@@ -63,19 +63,19 @@ func onWayland() bool {
 	return strings.EqualFold(os.Getenv("XDG_SESSION_TYPE"), "wayland")
 }
 
-func listWindows() ([]Window, error) {
+func listWindows(ctx context.Context) ([]Window, error) {
 	if onWayland() {
 		return nil, fmt.Errorf("%w: per-window enumeration needs X11 (xdotool); on Wayland capture the full screen instead", ErrCaptureUnsupported)
 	}
 	if _, err := exec.LookPath("xdotool"); err != nil {
 		return nil, fmt.Errorf("%w: xdotool is required for window enumeration (install xdotool)", ErrCaptureUnsupported)
 	}
-	out, err := exec.Command("xdotool", "search", "--onlyvisible", "--name", "").Output()
+	out, err := exec.CommandContext(ctx, "xdotool", "search", "--onlyvisible", "--name", "").Output()
 	if err != nil {
 		return nil, fmt.Errorf("%w: xdotool search failed: %v", ErrCaptureFailed, err)
 	}
 	focused := 0
-	if active, err := exec.Command("xdotool", "getactivewindow").Output(); err == nil {
+	if active, err := exec.CommandContext(ctx, "xdotool", "getactivewindow").Output(); err == nil {
 		focused, _ = strconv.Atoi(strings.TrimSpace(string(active)))
 	}
 	var windows []Window
@@ -84,13 +84,16 @@ func listWindows() ([]Window, error) {
 		if convErr != nil || id == 0 {
 			continue
 		}
-		title, _ := exec.Command("xdotool", "getwindowname", strconv.Itoa(id)).Output()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		title, _ := exec.CommandContext(ctx, "xdotool", "getwindowname", strconv.Itoa(id)).Output()
 		titleStr := SanitizeTitle(strings.TrimSpace(string(title)))
 		if titleStr == "" {
 			continue
 		}
 		w := Window{ID: id, Title: titleStr, Focused: id == focused}
-		if geo, err := exec.Command("xdotool", "getwindowgeometry", "--shell", strconv.Itoa(id)).Output(); err == nil {
+		if geo, err := exec.CommandContext(ctx, "xdotool", "getwindowgeometry", "--shell", strconv.Itoa(id)).Output(); err == nil {
 			parseXdotoolGeometry(string(geo), &w)
 		}
 		if w.Width > 0 && w.Height > 0 {
@@ -123,7 +126,7 @@ func parseXdotoolGeometry(out string, w *Window) {
 	}
 }
 
-func captureWindow(win Window, focus bool) (image.Image, error) {
+func captureWindow(ctx context.Context, win *Window, focus bool) (image.Image, error) {
 	if onWayland() {
 		return nil, fmt.Errorf("%w: per-window capture needs X11 (maim); on Wayland capture the full screen or a region instead", ErrCaptureUnsupported)
 	}
@@ -132,30 +135,35 @@ func captureWindow(win Window, focus bool) (image.Image, error) {
 		return nil, fmt.Errorf("%w: maim is required for window capture (install maim)", ErrCaptureUnsupported)
 	}
 	if focus {
-		if err := runQuiet("xdotool", "windowactivate", "--sync", strconv.Itoa(win.ID)); err == nil {
-			time.Sleep(focusSettleDelay)
+		if err := runQuiet(ctx, "xdotool", "windowactivate", "--sync", strconv.Itoa(win.ID)); err == nil {
+			if err := waitForFocus(ctx); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return decodeCaptureFile(runCaptureFile(func(path string) *exec.Cmd {
-		return exec.Command(maim, "-i", strconv.Itoa(win.ID), path)
+		return exec.CommandContext(ctx, maim, "-i", strconv.Itoa(win.ID), path)
 	}))
 }
 
-func captureRegion(region Rect) (image.Image, error) {
+func captureRegion(ctx context.Context, region Rect) (image.Image, error) {
 	if onWayland() {
 		if _, err := exec.LookPath("grim"); err != nil {
 			return nil, fmt.Errorf("%w: region capture on Wayland needs grim (install grim)", ErrCaptureUnsupported)
 		}
 		return decodeCaptureFile(runCaptureFile(func(path string) *exec.Cmd {
-			return exec.Command("grim", "-g", fmt.Sprintf("%d,%d %dx%d", region.X, region.Y, region.Width, region.Height), path)
+			return exec.CommandContext(ctx, "grim", "-g", fmt.Sprintf("%d,%d %dx%d", region.X, region.Y, region.Width, region.Height), path)
 		}))
 	}
 	for _, backend := range linuxRegionBackends {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if _, err := exec.LookPath(backend.binary); err != nil {
 			continue
 		}
 		img, err := decodeCaptureFile(runCaptureFile(func(path string) *exec.Cmd {
-			return exec.Command(backend.binary, backend.args(region, path)...)
+			return exec.CommandContext(ctx, backend.binary, backend.args(region, path)...)
 		}))
 		if err == nil {
 			return img, nil
@@ -169,18 +177,21 @@ func captureRegion(region Rect) (image.Image, error) {
 	return nil, fmt.Errorf("%w: no working region capture tool (install maim, scrot or grim)", ErrCaptureUnsupported)
 }
 
-func captureDisplay(display int) (image.Image, error) {
+func captureDisplay(ctx context.Context, display int) (image.Image, error) {
 	if display != 0 {
 		// X11 tools capture the whole virtual screen; per-monitor framing on
 		// Linux needs randr plumbing that v1 deliberately skips.
 		return nil, fmt.Errorf("%w: Linux capture covers the whole desktop; per-display selection is not supported yet", ErrDisplayNotFound)
 	}
 	for _, backend := range linuxFullscreenBackends {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if _, err := exec.LookPath(backend.binary); err != nil {
 			continue
 		}
 		img, err := decodeCaptureFile(runCaptureFile(func(path string) *exec.Cmd {
-			return exec.Command(backend.binary, backend.args(path)...)
+			return exec.CommandContext(ctx, backend.binary, backend.args(path)...)
 		}))
 		if err == nil {
 			return img, nil
@@ -224,6 +235,6 @@ func decodeCaptureFile(data []byte, err error) (image.Image, error) {
 	return img, nil
 }
 
-func runQuiet(name string, args ...string) error {
-	return exec.Command(name, args...).Run()
+func runQuiet(ctx context.Context, name string, args ...string) error {
+	return exec.CommandContext(ctx, name, args...).Run()
 }

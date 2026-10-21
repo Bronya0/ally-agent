@@ -9,20 +9,23 @@
 
 package screenshot
 
-import "image"
+import (
+	"context"
+	"image"
+)
 
-func listWindows() ([]Window, error) {
+func listWindows(ctx context.Context) ([]Window, error) {
 	return nil, ErrCaptureUnsupported
 }
 
-func captureWindow(win Window, focus bool) (image.Image, error) {
+func captureWindow(ctx context.Context, win *Window, focus bool) (image.Image, error) {
 	return nil, ErrCaptureUnsupported
 }
 
-func captureRegion(region Rect) (image.Image, error) {
+func captureRegion(ctx context.Context, region Rect) (image.Image, error) {
 	return nil, ErrCaptureUnsupported
 }
 
-func captureDisplay(display int) (image.Image, error) {
+func captureDisplay(ctx context.Context, display int) (image.Image, error) {
 	return nil, ErrCaptureUnsupported
 }

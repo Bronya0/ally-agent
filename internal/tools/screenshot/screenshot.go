@@ -17,6 +17,7 @@ package screenshot
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -52,6 +53,7 @@ const (
 	// focusSettleDelay gives the compositor a beat after raising a window
 	// before the pixels on screen actually belong to it.
 	focusSettleDelay = 150 * time.Millisecond
+	captureTimeout   = 10 * time.Second
 )
 
 // tailBytes keeps the tail of a failed command's output for error context.
@@ -151,6 +153,9 @@ type CaptureSource struct {
 	Window  *Window
 	Region  *Rect
 	Display int
+	// Original dimensions are independent of the model image's scaled size.
+	OriginalWidth  int
+	OriginalHeight int
 }
 
 // Capture resolves the target, grabs the frame on the current platform,
@@ -158,6 +163,32 @@ type CaptureSource struct {
 // resolved against a fresh enumeration so a stale id fails loudly instead
 // of capturing a recycled handle.
 func Capture(opts CaptureOptions) (ModelImage, CaptureSource, error) {
+	return CaptureContext(context.Background(), opts)
+}
+
+// CaptureContext bounds one capture and propagates run cancellation. Windows
+// window capture runs in a killable helper because PrintWindow cannot abort.
+func CaptureContext(ctx context.Context, opts CaptureOptions) (ModelImage, CaptureSource, error) {
+	ctx, cancel := context.WithTimeout(ctx, captureTimeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return ModelImage{}, CaptureSource{}, err
+	}
+	kind, _, _, _, err := opts.Target()
+	if err != nil {
+		return ModelImage{}, CaptureSource{}, err
+	}
+	if kind == TargetWindow {
+		return captureWindowTarget(ctx, opts)
+	}
+	img, source, err := captureDirect(ctx, opts)
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	return img, source, err
+}
+
+func captureDirect(ctx context.Context, opts CaptureOptions) (ModelImage, CaptureSource, error) {
 	kind, id, title, region, err := opts.Target()
 	if err != nil {
 		return ModelImage{}, CaptureSource{}, err
@@ -166,7 +197,7 @@ func Capture(opts CaptureOptions) (ModelImage, CaptureSource, error) {
 	source := CaptureSource{Kind: kind, Region: region, Display: opts.Display}
 	switch kind {
 	case TargetWindow:
-		windows, listErr := listWindows()
+		windows, listErr := listWindows(ctx)
 		if listErr != nil {
 			return ModelImage{}, CaptureSource{}, listErr
 		}
@@ -175,15 +206,19 @@ func Capture(opts CaptureOptions) (ModelImage, CaptureSource, error) {
 			return ModelImage{}, CaptureSource{}, resolveErr
 		}
 		source.Window = &win
-		frame, err = captureWindow(win, opts.Focus)
+		frame, err = captureWindow(ctx, &win, opts.Focus)
 	case TargetRegion:
-		frame, err = captureRegion(*region)
+		frame, err = captureRegion(ctx, *region)
 	default:
-		frame, err = captureDisplay(opts.Display)
+		frame, err = captureDisplay(ctx, opts.Display)
 	}
 	if err != nil {
 		return ModelImage{}, source, err
 	}
+	if err := ctx.Err(); err != nil {
+		return ModelImage{}, source, err
+	}
+	source.OriginalWidth, source.OriginalHeight = frame.Bounds().Dx(), frame.Bounds().Dy()
 	scaled, didScale := ScaleForModel(frame)
 	cap, err := EncodeForModel(scaled)
 	if err != nil {
@@ -197,12 +232,35 @@ func Capture(opts CaptureOptions) (ModelImage, CaptureSource, error) {
 // and applies the shared filter and cap. It returns the surviving rows plus
 // the unfiltered total so callers can flag truncation.
 func ListWindows(opts ListOptions) ([]Window, int, error) {
-	windows, err := listWindows()
+	return ListWindowsContext(context.Background(), opts)
+}
+
+func ListWindowsContext(ctx context.Context, opts ListOptions) ([]Window, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, captureTimeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	windows, err := listWindows(ctx)
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		return nil, 0, err
 	}
 	kept, total := FilterWindows(windows, opts)
 	return kept, total, nil
+}
+
+func waitForFocus(ctx context.Context) error {
+	timer := time.NewTimer(focusSettleDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // Target returns the effective target kind and the window-id/title pair that
