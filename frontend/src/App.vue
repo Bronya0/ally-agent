@@ -21,6 +21,9 @@ Public License v3. See the LICENSE file for details.
               :latest-version="latestReleaseVersion"
               :is-maximised="isMaximised"
               :history-options="historyOptions"
+              :explorer-visible="explorerVisibleFor(activeWorkspaceId)"
+              :explorer-available="workspacePageActive"
+              @toggle-explorer="toggleWorkspaceExplorer"
               @switch-workspace="onHeaderSwitchWorkspace"
               @close-workspace="closeWorkspaceTab"
               @add-workspace="onHeaderAddWorkspace"
@@ -333,7 +336,6 @@ Public License v3. See the LICENSE file for details.
                   :fmt-k="fmtK"
                   :extra-roots="extraRoots"
                   :allowed-ssh-servers="allowedSSHServersForActiveWorkspace"
-                  :explorer-visible="explorerVisibleFor(activeWorkspaceId)"
                   @add-extra-root="addExtraRoot"
                   @remove-extra-root="removeExtraRoot"
                   @open-task-center="(tab) => openTaskCenter(tab, 'workspace')"
@@ -344,7 +346,6 @@ Public License v3. See the LICENSE file for details.
                   @open-workspace="openWorkspaceInFileManager"
                   @open-terminal="openWorkspaceInTerminal"
                   @change-reasoning-effort="changeReasoningEffort"
-                  @toggle-explorer="toggleWorkspaceExplorer"
                   @new-session="createNewSession"
                   @show-sessions="showSessionList"
                   @compact-context="handleCompactCommand"
@@ -3870,7 +3871,6 @@ const historyOptions = computed(() => {
         {
           default: () => [
             h('span', { class: 'add-label', style: { justifyContent: 'flex-start', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' } }, [
-              h('span', '+'),
               h(PlusOutlined, { class: 'add-icon', style: { fontSize: '12px' } }),
               t('header.addWorkspace'),
             ]),

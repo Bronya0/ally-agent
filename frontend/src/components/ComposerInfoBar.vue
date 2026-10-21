@@ -274,18 +274,6 @@ Public License v3. See the LICENSE file for details.
       />
     </span>
     <span v-else class="info-context info-context-loading" aria-hidden="true">...</span>
-    <!-- 文件树开关停靠信息栏最右（界面右下角），紧邻右侧树面板。图标用
-         FolderOpenTwotone（张开文件夹，次色为 currentColor + 15% 透明，随主题色
-         变化）。历史注记：曾因与“在文件管理器里打开工作区”（左下工作区名字
-         按钮的职责）混淆而改用层级树 ApartmentOutlined，现按用户指定换回
-         FolderOpen 系，若再收混淆反馈可回退。 -->
-    <button
-      type="button"
-      :class="['composer-icon-btn', 'composer-explorer-btn', { active: explorerVisible }]"
-      :title="$t('app.workspaceExplorer.open')"
-      :aria-label="$t('app.workspaceExplorer.open')"
-      @click.stop="$emit('toggleExplorer')"
-    ><FolderOpenTwotone /></button>
   </div>
 </template>
 
@@ -295,7 +283,6 @@ import ContextUsageInline from './ContextUsageInline.vue';
 import ModelMenu from './ModelMenu.vue';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import MenuOutlined from '@vicons/antd/MenuOutlined';
-import FolderOpenTwotone from '@vicons/antd/FolderOpenTwotone';
 import CodeOutlined from '@vicons/antd/CodeOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import { reasoningEffortLabel, t } from '../i18n.mjs';
@@ -327,11 +314,10 @@ const props = defineProps({
   // 名字里不要出现连续大写：`allowedSSHServers` 无法用 :allowed-ssh-servers 绑定
   // （Vue 只做 kebab→camel，得到 allowedSshServers，值会掉进 attrs，这里永远保持默认空数组）。
   allowedSshServers: { type: Array, default: () => [] },
-  explorerVisible: { type: Boolean, default: false },
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'toggleExplorer', 'addExtraRoot', 'removeExtraRoot', 'openTerminal', 'compactContext', 'compactLessons', 'updateCodegraph', 'openSshAuth']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot', 'openTerminal', 'compactContext', 'compactLessons', 'updateCodegraph', 'openSshAuth']);
 
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => formatModelLabel(props.config));

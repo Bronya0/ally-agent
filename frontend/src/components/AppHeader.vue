@@ -44,6 +44,9 @@ Public License v3. See the LICENSE file for details.
         </n-tabs>
       </div>
       <div class="header-tabs-actions">
+        <!-- 工作区菜单：加号图标对应菜单首项「添加工作区」，同一菜单下面还跟
+             临时工作区与最近工作区列表，所以提示文案跟图标对齐到添加动作，
+             不再叫「历史工作区」（加号配历史会自相矛盾）。 -->
         <n-dropdown
           trigger="click"
           scrollable
@@ -51,10 +54,24 @@ Public License v3. See the LICENSE file for details.
           :menu-props="historyMenuProps"
           @select="onHistorySelect"
         >
-          <n-button class="header-icon-button tabs-action-button history-action-button" size="small" quaternary :title="$t('header.workspaceHistory')" :aria-label="$t('header.workspaceHistory')">
-            <FolderOpenTwotone class="header-icon" />
+          <n-button class="header-icon-button tabs-action-button history-action-button" size="small" quaternary :title="$t('header.addWorkspace')" :aria-label="$t('header.addWorkspace')">
+            <PlusCircleOutlined class="header-icon" />
           </n-button>
         </n-dropdown>
+        <!-- 工作区文件浏览器开关：原先停在输入栏最右（界面右下角），按用户要求挪进
+             顶栏、紧邻历史工作区。只有「工作区页」（Agent / 有 Tab 的知识库）才有树
+             可开，其余整页页面按禁用处理而不是一起隐藏：位置稳定，也说明这里有开关。 -->
+        <n-button
+          :class="['header-icon-button', 'tabs-action-button', 'explorer-action-button', { active: explorerVisible }]"
+          size="small"
+          quaternary
+          :disabled="!explorerAvailable"
+          :title="$t('app.workspaceExplorer.open')"
+          :aria-label="$t('app.workspaceExplorer.open')"
+          @click="$emit('toggleExplorer')"
+        >
+          <FolderOpenTwotone class="header-icon" />
+        </n-button>
       </div>
     </div>
     <div class="header-actions">
@@ -90,6 +107,7 @@ import { onBeforeUnmount, ref } from 'vue';
 import { NDropdown } from 'naive-ui';
 import AllyWordmark from './AllyWordmark.vue';
 import { burstDigitalWave } from '../composables/digitalWave.mjs';
+import PlusCircleOutlined from '@vicons/antd/PlusCircleOutlined';
 import FolderOpenTwotone from '@vicons/antd/FolderOpenTwotone';
 import DownloadOutlined from '@vicons/antd/DownloadOutlined';
 import GithubOutlined from '@vicons/antd/GithubOutlined';
@@ -107,6 +125,10 @@ const props = defineProps({
   latestVersion: { type: String, default: '' },
   isMaximised: { type: Boolean, default: false },
   historyOptions: { type: Array, default: () => [] },
+  // 当前 Tab 的资源树是否展开（按钮选中态）。
+  explorerVisible: { type: Boolean, default: false },
+  // 当前页面有没有资源树可开（仅工作区页有）；不适用时按钮禁用。
+  explorerAvailable: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
@@ -114,6 +136,7 @@ const emit = defineEmits([
   'closeWorkspace',
   'addWorkspace',
   'addTempWorkspace',
+  'toggleExplorer',
   'historySelect',
   'openRepository',
   'startUpdate',
@@ -216,6 +239,14 @@ function historyMenuProps() {
   box-shadow: none !important;
 }
 
+/* Naive 的 quaternary 按钮在 :focus 上铺一层底色（--n-color-focus），而鼠标点击
+   不匹配 :focus-visible，所以上面的 :hover/:focus-visible 规则盖不住它：点完把
+   鼠标移开，底还一直留到失焦。Tabs 区这两个图标按钮按下/悬停的反馈由 hover
+   与 :active 承担，不需要驻留底色；键盘聚焦（:focus-visible）仍保留可见反馈。 */
+.tabs-action-button:focus:not(:focus-visible):not(:hover) {
+  background: transparent !important;
+}
+
 .header-actions {
   display: inline-flex;
   align-items: center;
@@ -279,14 +310,26 @@ function historyMenuProps() {
   background: rgba(74, 222, 128, 0.18) !important;
 }
 
-/* History, active tabs and the mode rail share the active theme's accent. */
+/* History, active tabs and the mode rail share the active theme's accent.
+   Idle uses --ally-accent-bright rather than --ally-accent-text: this glyph is
+   hollow line art while the twotone folder beside it fills a whole silhouette,
+   so at the same paint the thin strokes read a shade dimmer. One step up on the
+   accent ramp evens out the optical weight (light mode maps both to the same
+   ink, where the contrast is already high). */
 .history-action-button {
-  color: var(--ally-accent-text) !important;
+  color: var(--ally-accent-bright) !important;
 }
 
 .history-action-button:hover,
 .history-action-button:focus-visible {
   color: var(--ally-accent-strong) !important;
+}
+
+/* 资源树开关：展开时只点亮为强调色，不铺选中背景。
+   顶栏给“选中”的信号是颜色（tab 用底部线），再叠一块面会让按钮看起来像
+   多了一个 tab、也压过旁边同样处于强调色的图标。 */
+.explorer-action-button.active {
+  color: var(--ally-accent-text) !important;
 }
 
 .brand {
