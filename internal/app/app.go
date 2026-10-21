@@ -2810,6 +2810,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			data, err = a.runCommandWithConfig(ctx, cfg, req)
 			if err == nil {
+				argWarnings = append(argWarnings, localCommandToolWarnings(req.Command)...)
 				a.invalidateWorkspaceMapCache(cfg)
 			}
 		}

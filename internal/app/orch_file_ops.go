@@ -32,6 +32,7 @@ import (
 	"unicode/utf8"
 
 	"ally-dev/internal/sandbox"
+	"ally-dev/internal/tools/command"
 	"ally-dev/internal/tools/pathutil"
 	toolshared "ally-dev/internal/tools/shared"
 )
@@ -549,6 +550,18 @@ func planDeletePath(spec sandbox.Spec, roots []string, requestPath string, recur
 		return plannedDeletePath{}, err
 	}
 	return plannedDeletePath{absPath: path, isDir: info.IsDir(), result: result}, nil
+}
+
+// Only executable positions count: quoted text and options such as git
+// log --grep must not trigger a search-tool reminder.
+func localCommandToolWarnings(commandLine string) []string {
+	for _, invocation := range command.Invocations(commandLine) {
+		switch invocation.Name {
+		case "grep", "egrep", "fgrep", "rg", "ripgrep":
+			return []string{"Prefer the dedicated grep tool for local content searches instead of running grep/rg through command. It provides structured results, output limits, and pagination."}
+		}
+	}
+	return nil
 }
 
 func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req CommandRequest) (CommandResult, error) {
