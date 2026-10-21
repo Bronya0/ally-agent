@@ -10,8 +10,8 @@ Public License v3. See the LICENSE file for details.
 
 <template>
   <!-- Inline skills page: rendered inside the main-area container (App.vue
-       mode === 'skills' via v-show). Always mounted so the list survives mode
-       switches; every entry refreshes in place. Extracted from the old
+       mode === 'skills' via v-if). Switching away unmounts the panel; the list
+       reloads on entry. Extracted from the old
        Settings → Skills page so skills live on the mode rail below the
        knowledge base, fully decoupled from the Settings panel. -->
   <div class="config-inline-panel">
@@ -37,29 +37,29 @@ Public License v3. See the LICENSE file for details.
             {{ t('app.skills.marketplace') }}
           </n-button>
         </n-dropdown>
-        <n-button size="small" type="primary" @click="openSkillEditor">{{ t('app.skills.add') }}</n-button>
+        <n-button size="small" type="primary" @click="openSkillEditor">{{ t('common.add') }}</n-button>
       </div>
     </header>
 
-    <div class="panel-scroll-body">
-      <div v-if="sourceTabs.length" class="skill-source-tabs-row">
-        <!-- Source tabs double as the list filter. :key rebuilds the tabs when
-             a refresh adds/removes a source so the active-line bar recalculates
-             (n-tabs caches its pixel offset otherwise). -->
-        <n-tabs
-          :key="sourceTabSetKey"
-          :value="activeSourceTab"
-          type="line"
-          size="small"
-          class="skill-source-tabs"
-          @update:value="(value) => (activeSourceTab = value)"
-        >
-          <n-tab v-for="tab in sourceTabs" :key="tab.source" :name="tab.source">
-            {{ skillSourceLabel(tab.source) }} {{ tab.count }}
-          </n-tab>
-        </n-tabs>
-      </div>
+    <div v-if="sourceTabs.length" class="skill-source-tabs-row panel-tab-nav">
+      <!-- Source tabs double as the list filter. :key rebuilds the tabs when
+           a refresh adds/removes a source so the active-line bar recalculates
+           (n-tabs caches its pixel offset otherwise). -->
+      <n-tabs
+        :key="sourceTabSetKey"
+        :value="activeSourceTab"
+        type="line"
+        size="small"
+        class="skill-source-tabs"
+        @update:value="(value) => (activeSourceTab = value)"
+      >
+        <n-tab v-for="tab in sourceTabs" :key="tab.source" :name="tab.source">
+          {{ skillSourceLabel(tab.source) }} {{ tab.count }}
+        </n-tab>
+      </n-tabs>
+    </div>
 
+    <div class="panel-scroll-body">
       <div class="skill-settings-list">
         <div v-if="skillsLoading && !availableSkills.length" class="saved-model-empty">{{ t('settings.skillsLoading') }}</div>
         <div v-else-if="!availableSkills.length" class="saved-model-empty">{{ t('settings.skillsEmpty') }}</div>
@@ -511,11 +511,7 @@ watch(
   color: var(--ally-text-muted);
 }
 
-/* 来源 tabs：兼作列表过滤，行内嵌在滚动区顶部。 */
-.skill-source-tabs-row {
-  margin-bottom: 6px;
-}
-
+/* 来源 tabs：兼作列表过滤，固定在列表滚动区上方。 */
 .skill-source-tabs :deep(.n-tabs-tab) {
   padding: 6px 10px;
   font-size: var(--ally-sub-font-size);

@@ -71,6 +71,7 @@ Public License v3. See the LICENSE file for details.
           <template #trigger>
             <n-button
               :class="['header-icon-button', 'tabs-action-button', 'explorer-action-button', { active: explorerVisible }]"
+              :theme-overrides="{ opacityDisabled: '1' }"
               size="small"
               quaternary
               :disabled="!explorerAvailable"

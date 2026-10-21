@@ -10,8 +10,8 @@ Public License v3. See the LICENSE file for details.
 
 <template>
   <!-- Inline MCP page: rendered inside the main-area container (App.vue
-       mode === 'mcp' via v-show). Always mounted so the server list, live
-       statuses, and the editor draft survive mode switches. Extracted from
+       mode === 'mcp' via v-if). Switching away unmounts the panel and editor;
+       server state reloads on entry. Extracted from
        the old Settings → MCP page so MCP lives on the mode rail below the
        knowledge base, fully decoupled from the Settings panel. -->
   <div class="config-inline-panel">
@@ -40,14 +40,16 @@ Public License v3. See the LICENSE file for details.
       </div>
     </header>
 
-    <div class="panel-scroll-body">
+    <div class="panel-tab-nav">
       <!-- 与旧高级设置页同一套双 tab 结构：MCP 服务器 / 内置工具启停。
            内置工具（自高级设置迁入）与 MCP 工具注入同页管理。 -->
       <n-tabs v-model:value="mcpPageTab" type="line" size="small" class="mcp-page-tabs">
         <n-tab name="servers">{{ $t('settings.mcpServersTab') }}</n-tab>
         <n-tab name="builtinTools">{{ $t('settings.toolsTitle') }}</n-tab>
       </n-tabs>
+    </div>
 
+    <div class="panel-scroll-body">
       <template v-if="mcpPageTab === 'servers'">
         <div class="config-section-subtitle">{{ t('settings.mcpSubtitle') }}</div>
 
@@ -597,8 +599,8 @@ watch(mcpPageTab, (tab) => {
 
 // props.disabledTools 就是后端已落盘的状态（App.vue 保存成功后原样传回）：
 // 开关即持久化，与 MCP 配置的 auto-apply 同一交互口径。
-// 排面按"常用在前"：已启用的（含锁死的核心工具）排在前面，已停用的沉到后面，
-// 组内保持后端声明顺序；每张卡显式带上 enabled，排序规则见 orderBuiltinToolSettings。
+// 核心工具置顶，其余按工具名排序；切换启停不改变卡片位置。
+// 扫描列表与初始化底座共用 orderBuiltinToolSettings。
 const builtinToolSettings = computed(() => {
   if (scannedBuiltinTools.value.length > 0) {
     const protectedList = [];
@@ -851,10 +853,6 @@ watch(
 
 /* 页内双 tab（MCP 服务器 / 内置工具启停）：与旧高级设置页同一套呼吸感，
    小号 n-tabs 默认贴字，撑开点击区。 */
-.mcp-page-tabs {
-  margin-bottom: 10px;
-}
-
 .mcp-page-tabs :deep(.n-tabs-tab) {
   padding: 6px 10px;
   font-size: 15px;

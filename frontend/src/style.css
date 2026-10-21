@@ -878,6 +878,30 @@ code, pre {
   min-width: 0;
 }
 
+/* 管理页的页签留在固定区，仅面板正文滚动。 */
+.panel-tab-nav {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 16px 24px 0;
+}
+
+.panel-content-tabs.n-tabs {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.panel-content-tabs > .n-tabs-nav {
+  flex-shrink: 0;
+}
+
+.panel-content-tabs > .n-tab-pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .workspace-content-tabs > .n-tabs-nav {
   display: none;
 }

@@ -10,8 +10,8 @@ Public License v3. See the LICENSE file for details.
 
 <template>
   <!-- Inline models page: rendered inside the main-area container (App.vue
-       mode === 'models' via v-show). Always mounted so the provider tabs,
-       editor draft, and lazy catalog survive mode switches. Extracted from
+       mode === 'models' via v-if). Switching away unmounts the provider tabs
+       and editor; saved configuration lives in App.vue. Extracted from
        the old Settings → Models page; every mutation saves immediately
        through the `save` emit (App.vue onSettingsSave). -->
   <div class="config-inline-panel">
@@ -32,7 +32,7 @@ Public License v3. See the LICENSE file for details.
         </n-input>
         <n-button size="small" secondary @click="openModelImport">{{ t('settings.modelImport') }}</n-button>
         <n-button size="small" secondary :disabled="!draft.models?.length" @click="exportModelConfigs">{{ t('settings.modelExport') }}</n-button>
-        <n-button size="small" type="primary" @click="startAddModelDraft">{{ t('settings.modelAdd') }}</n-button>
+        <n-button size="small" type="primary" @click="startAddModelDraft">{{ t('common.add') }}</n-button>
       </div>
     </header>
 
@@ -51,9 +51,8 @@ Public License v3. See the LICENSE file for details.
         :key="providerTabSetKey"
         v-model:value="activeProviderTab"
         type="line"
-        animated
         :default-value="providerTabs[0]?.name"
-        class="provider-tabs"
+        class="provider-tabs panel-content-tabs"
       >
         <n-tab-pane v-for="tab in providerTabs" :key="tab.name" :name="tab.name" :tab="tab.label">
           <div class="saved-model-list">
@@ -953,9 +952,11 @@ watch(
 }
 
 .panel-scroll-body {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 16px 24px 28px;
 }
 

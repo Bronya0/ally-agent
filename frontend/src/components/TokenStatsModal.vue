@@ -9,8 +9,8 @@ Public License v3. See the LICENSE file for details.
 -->
 <template>
   <!-- Inline stats page: rendered inside the main-area container
-       (App.vue mode === 'stats' via v-show) instead of a modal dialog.
-       Always mounted so the loaded stats survive mode switches. -->
+       (App.vue mode === 'stats' via v-if) instead of a modal dialog.
+       Switching away unmounts the page; statistics reload on entry. -->
   <div class="stats-inline-panel">
     <header class="stats-inline-header">
       <span class="stats-inline-title">{{ $t('stats.title') }}</span>

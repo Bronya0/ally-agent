@@ -34,7 +34,7 @@ Public License v3. See the LICENSE file for details.
           {{ t('common.refresh') }}
         </n-button>
         <n-button size="small" type="primary" @click="openAddDialog">
-          {{ t('sshCluster.panel.add') }}
+          {{ t('common.add') }}
         </n-button>
       </div>
     </header>
@@ -56,7 +56,7 @@ Public License v3. See the LICENSE file for details.
       <div v-else-if="servers.length === 0" class="ssh-cluster-empty">
         <p>{{ $t('sshCluster.panel.empty') }}</p>
         <n-button type="primary" dashed size="small" @click="openAddDialog">
-          {{ $t('sshCluster.panel.add') }}
+          {{ $t('common.add') }}
         </n-button>
       </div>
 
@@ -69,8 +69,7 @@ Public License v3. See the LICENSE file for details.
         :key="groupTabSetKey"
         v-model:value="activeGroupTab"
         type="line"
-        animated
-        class="ssh-group-tabs"
+        class="ssh-group-tabs panel-content-tabs"
       >
         <n-tab-pane v-for="group in groupTabs" :key="group.name" :name="group.name" :tab="group.name">
           <div class="ssh-card-list">
@@ -667,9 +666,11 @@ async function importServers(event) {
 }
 
 .panel-scroll-body {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   padding: 16px 24px 28px;
 }
 

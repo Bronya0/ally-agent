@@ -28,7 +28,7 @@ Public License v3. See the LICENSE file for details.
         </n-button>
         <n-button size="small" type="primary" :loading="busy === 'import'" @click="importPackage">
           <template #icon><InboxOutlined /></template>
-          {{ t('plugins.import') }}
+          {{ t('common.add') }}
         </n-button>
       </div>
     </header>
@@ -276,7 +276,7 @@ async function confirmDelete() {
 }
 
 onMounted(refresh);
-// 面板常驻（v-show 保状态）：进入页面时刷新一次，避免停在上次导入前的旧列表。
+// 父级 v-if 切走即卸载；show 变化时也支持刷新，确保列表与后端一致。
 watch(
   () => props.show,
   (value) => {

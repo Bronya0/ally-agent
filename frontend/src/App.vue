@@ -429,9 +429,8 @@ Public License v3. See the LICENSE file for details.
               <McpPanel :show="mcpActive" :disabled-tools="config.disabledTools" :available-tools="availableTools" @mcp-saved="onMcpSaved" @builtin-tools-changed="onBuiltinToolsChanged" />
             </div>
 
-            <!-- Models page (extracted from Settings onto the mode rail, below
-                 MCP): inline sibling; v-if unmounts on switch (memory); the draft
-                 lives in App.vue's configDraft and survives. -->
+            <!-- Models: v-if unmounts the panel and its unsubmitted editor on
+                 switch; saved configuration remains in App.vue. -->
             <div v-if="modelsActive" class="settings-page-container">
               <ModelsPanel :show="modelsActive" :config-draft="configDraft" @save="onSettingsSave" />
             </div>
@@ -481,9 +480,8 @@ Public License v3. See the LICENSE file for details.
               <TokenStatsModal :show="statsActive" @close="closeStats" />
             </div>
 
-            <!-- Games page (协作休息区): v-show keeps the component mounted so
-                 an active room/connection survives switching to other modes
-                 (unmounting would stop the server and close the room). -->
+            <!-- Games: preserve GamePanel's local match/model state with v-show.
+                 Its inner v-if="show" releases the page DOM and child components. -->
             <div v-show="gamesActive" class="settings-page-container">
               <GamePanel :show="gamesActive" :models="config.models || []" :default-model="gameModelDefault" @close="closeGames" />
             </div>
