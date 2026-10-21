@@ -27,6 +27,7 @@
 | 在终端打开工作区路径 | `internal/app/host_terminal*.go` |
 | 内置工具 schema 定义与按名查找 | `internal/tools/shared/builtins.go`（`Builtins` / `BuiltinSchema`） |
 | 某工具的执行逻辑 | `internal/app/orch_<name>.go`（编排）+ `internal/tools/<name>/`（纯算法） |
+| 截屏 / 窗口枚举（10 秒上限、运行取消；Windows 窗口捕获在可终止子进程中执行；原始区域尺寸与模型图片尺寸分开） | `internal/app/orch_screenshot.go` + `internal/tools/screenshot/`；助手子进程入口 `main_screenshot.go`（桌面 / server 启动前分流） |
 | edit 读写契约 / 原子写 / 冲突合并 | `orch_batch_policy.go`（`planLocalEditBatch`）→ `orch_edit.go` → `tools/edit`、`tools/read` |
 | 命令安全拦截与路径校验（含密钥/凭据禁读：`pathutil.SensitiveReadReason`，三平台清单，command / read / grep 三条入口共用） | `orch_fence.go` + `orch_read.go` + `orch_grep.go` + `internal/tools/command`（`DisclosingPathOperands`：只是用密钥不算读）+ `internal/tools/pathutil` |
 | 命令安全围栏 + 命令沙箱（沙箱**当前未接入**：`internal/sandbox` 的 `attached` 开关关着，三个平台都只走围栏；围栏是单一入口，边界归属在 `kernelOwnsBoundary` 一处判定；沙箱本体原样保留，改一个常量即可接回） | `orch_fence.go`（`checkCommandSafetyAtCwd` 唯一入口、受保护位置清单、两形态路径复判）+ `internal/app/orch_sandbox.go`（`sandboxSpec` / `wrapSandboxedCommand` / `annotateSandboxDeniedWrite` / `GetSandboxStatus` / `kernelOwnsBoundary` ＝边界归属的唯一判据；create·edit·delete·rename 的落盘也在这里经 mv/rm/mkdir/ln 包裹）+ `internal/sandbox/`（`attached` / `Attached` 接入开关、`ResolvedMode` 平台策略、`AllowsWrite` 可写判定与 SBPL / bwrap profile，不依赖 App）+ 设置页 `SettingsModal.vue` 的围栏机制说明（不再查本机状态）；command 与 service 两条执行路径共用 |
@@ -51,7 +52,8 @@
 | 无头服务（Wails server 标签、参数/JSON 配置、统一 API + SSE/轮询、共享启动关闭/数据目录锁） | `main_server.go` + `host_server.go` + `biz_server_options.go` + `biz_lifecycle.go`；使用说明 `docs/headless.md` |
 | 对外本地 HTTP API 服务（启用状态持久化 / 单次 AI / 会话与问答 / 按请求选模型；插件复用同一套接口） | `internal/app/biz_api.go`；契约 `docs/api.md`；宿主启动恢复在 `host_desktop.go` |
 | 应用自更新 | `internal/app/biz_update.go` |
-| 新版本首次启动的更新日志（vite 把 release 事件正文注入为 `__ALLY_RELEASE_NOTES__`；首启判定与“看过没”存储） | `frontend/src/utils/releaseNotes.mjs` + `components/ReleaseNotesModal.vue` + `App.vue` |
+| 内置更新日志（首启弹窗 + 设置 → 版本亮点；vite 把 release 事件正文注入为 `__ALLY_RELEASE_NOTES__`，本地未注入时显示空态） | `frontend/src/utils/releaseNotes.mjs` + `components/ReleaseNotesModal.vue` + `components/SettingsModal.vue` + `App.vue` |
+| 菜单页生命周期 / 缓存（设置、技能、MCP、模型、SSH、插件管理、统计切走卸载；Agent/KB 工作台保留；游戏保留对局状态、隐藏时卸载内层 DOM；插件默认缓存、`keepAlive:false` 切走卸载；资源管理器离开工作区页卸载、仅切 Tab 则隐藏保留） | `frontend/src/App.vue`（`workspacePageActive` / `mountedPlugins` / 页面模板）+ `games/GamePanel.vue` + `components/WorkspaceExplorer.vue` |
 | 插件系统（清单校验 / 安装 / 导出 / 删除 / 启停 / 插件存储 / HTTP 白名单代理） | `internal/app/orch_plugin.go`（编排，含 `pluginMu` 串行化）+ `internal/tools/plugin/`（纯算法：清单与包校验、主机白名单、包内路径解析、体积复验 `VerifyContentSizes`）；契约文档 `docs/plugin-system.md` |
 | 插件资源服务（`/plugins/<id>/<entry>`，与页面同源） | `internal/app/orch_plugin_assets.go`（中间件）+ `main.go`（`Assets.Middleware` 接线，唯一允许碰 Wails 的地方） |
 | 插件相关的原生对话框（选包 / 导出目标） | `internal/app/host_plugin_dialogs.go` |

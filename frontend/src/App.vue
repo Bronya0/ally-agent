@@ -399,6 +399,8 @@ Public License v3. See the LICENSE file for details.
                 :config-draft="configDraft"
                 :check-update-result="checkUpdateResult"
                 :has-release-notes="Boolean(releaseNotes.body)"
+                :release-notes-version="releaseNotes.version || buildVersion"
+                :release-notes-html="releaseNotesHtml"
                 :color-mode="colorMode"
                 :theme="colorTheme"
                 @set-mode="setColorMode"
@@ -407,7 +409,6 @@ Public License v3. See the LICENSE file for details.
                 @save="onSettingsSave"
                 @background-changed="onBackgroundChanged"
                 @check-update="onCheckUpdate"
-                @view-release-notes="openReleaseNotes"
                 @ssh-servers-changed="refreshSSHClusters"
               />
             </div>
@@ -9251,11 +9252,6 @@ const releaseNotesHtml = computed(() => renderMarkdownWithMode(releaseNotes.body
 
 function maybeShowReleaseNotes() {
   if (!shouldShowReleaseNotes({ notes: releaseNotes, seenVersion: readSeenVersion() })) return;
-  releaseNotesOpen.value = true;
-}
-
-// 设置 → 关于 里的重看入口：用户主动要看，不再过"该不该弹"那道判定（落标记照旧走关闭）。
-function openReleaseNotes() {
   releaseNotesOpen.value = true;
 }
 

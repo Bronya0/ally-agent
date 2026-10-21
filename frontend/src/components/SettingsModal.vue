@@ -31,6 +31,9 @@ Public License v3. See the LICENSE file for details.
         <button :class="['settings-nav-item', { active: page === 'api' }]" @click="page = 'api'">
           <span class="settings-nav-title">API</span>
         </button>
+        <button :class="['settings-nav-item', { active: page === 'release-notes' }]" @click="page = 'release-notes'">
+          <span class="settings-nav-title">{{ $t('settings.releaseHighlights') }}</span>
+        </button>
         <button :class="['settings-nav-item', { active: page === 'about' }]" @click="page = 'about'">
           <span class="settings-nav-title">{{ $t('settings.about') }}</span>
         </button>
@@ -475,6 +478,17 @@ Public License v3. See the LICENSE file for details.
           </div>
         </section>
 
+        <section v-else-if="page === 'release-notes'" class="settings-page">
+          <div class="config-section-header">
+            <div>
+              <div class="config-section-title">{{ $t('settings.releaseHighlights') }}</div>
+              <div class="config-section-subtitle">{{ $t('app.releaseNotes.version', { version: releaseNotesVersion }) }}</div>
+            </div>
+          </div>
+          <div v-if="hasReleaseNotes" class="settings-release-notes message-body markdown-body" v-html="releaseNotesHtml"></div>
+          <n-empty v-else :description="$t('settings.releaseNotesEmpty')" class="settings-release-notes-empty" />
+        </section>
+
         <!-- About -->
         <section v-else-if="page === 'about'" class="settings-page">
           <div class="config-section-header">
@@ -502,7 +516,7 @@ Public License v3. See the LICENSE file for details.
               v-if="hasReleaseNotes"
               size="small"
               secondary
-              @click="emit('view-release-notes')"
+              @click="page = 'release-notes'"
             >{{ $t('app.releaseNotes.view') }}</n-button>
             <span v-if="checkUpdateMessage" class="about-update-status">{{ checkUpdateMessage }}</span>
           </div>
@@ -573,10 +587,13 @@ const props = defineProps({
   // Active color theme id ('amber' | 'icecream' | 'ocean' | 'forest' | 'violet'),
   // owned by App.vue.
   theme: { type: String, default: 'amber' },
-  // 本构建是否带了更新日志正文：没带就不给重看入口（点开是空的）。
+  // 本构建是否带了更新日志正文：没带时版本亮点页展示空态。
   hasReleaseNotes: { type: Boolean, default: false },
+  releaseNotesVersion: { type: String, default: '' },
+  // Rendered by the same Markdown pipeline as the startup release-notes modal.
+  releaseNotesHtml: { type: String, default: '' },
 });
-const emit = defineEmits(['close', 'save', 'background-changed', 'check-update', 'view-release-notes', 'set-mode', 'set-theme', 'ssh-servers-changed']);
+const emit = defineEmits(['close', 'save', 'background-changed', 'check-update', 'set-mode', 'set-theme', 'ssh-servers-changed']);
 const checkUpdateBusy = ref(false);
 const checkUpdateMessage = ref('');
 let checkUpdateTimer = 0;
@@ -1158,6 +1175,15 @@ watch(() => props.visible, (visible) => {
 
 .settings-page {
   padding: 0;
+}
+
+.settings-release-notes {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-release-notes-empty {
+  padding: 48px 0;
 }
 
 
