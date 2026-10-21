@@ -78,18 +78,19 @@ Public License v3. See the LICENSE file for details.
               :key="s.alias"
               class="ally-row-card ssh-node-card"
             >
-              <!-- 第一行只放地址：扫读列表时先确认连的是哪台机器；名称、徽标、操作在下一行。 -->
-              <div class="ssh-card-endpoint" :title="endpointOf(s)">{{ endpointOf(s) }}</div>
               <div class="ally-row-main">
-                <span class="ally-row-name" :title="s.alias">{{ s.alias }}</span>
-                <span v-if="s.status === 'pending_approval'" class="ally-row-badge ssh-badge-pending">
-                  {{ t('sshCluster.table.pending') }}
-                </span>
+                <span class="ally-row-name ssh-card-host" :title="endpointOf(s)">{{ s.host }}</span>
                 <span
                   class="ally-row-badge"
                   :class="s.riskLevel === 'high' ? 'ssh-badge-high' : 'ssh-badge-low'"
                 >
                   {{ s.riskLevel === 'high' ? t('sshCluster.table.riskHigh') : t('sshCluster.table.riskLow') }}
+                </span>
+                <span class="ally-row-badge" :title="`${t('sshCluster.modal.username')}: ${s.username}`">{{ s.username }}</span>
+                <span class="ally-row-badge" :title="`${t('sshCluster.modal.port')}: ${s.port || 22}`">{{ s.port || 22 }}</span>
+                <span class="ally-row-badge ssh-card-nickname" :title="`${t('sshCluster.modal.alias')}: ${s.alias}`">{{ s.alias }}</span>
+                <span v-if="s.status === 'pending_approval'" class="ally-row-badge ssh-badge-pending">
+                  {{ t('sshCluster.table.pending') }}
                 </span>
                 <div class="ally-row-side">
                   <n-button size="tiny" secondary :loading="testingAlias === s.alias" @click="handleTest(s)">
@@ -687,7 +688,7 @@ async function importServers(event) {
 }
 
 /* 卡片列表：一行一条，外形与首行结构统一由全局 .ally-row-card / .ally-row-* 提供
-   （见 style.css）；这里只补 SSH 特有的地址/描述两行。风险等级只由徽标表达，
+   （见 style.css）；这里只补 SSH 特有的地址/昵称与描述。风险等级只由徽标表达，
    不给高风险卡片额外加左侧色条。 */
 .ssh-card-list {
   display: flex;
@@ -696,10 +697,14 @@ async function importServers(event) {
 }
 
 .ssh-node-card {
-  /* 节点多时离屏卡片跳过渲染（铁律：先限长、再跳过）。三行固定结构高度可估：
-     padding 8×2 + 首行 22 + 地址 16 + 描述 14 + 两道 gap 12 ≈ 88px。 */
+  /* 两行卡片：padding 8×2 + 首行 22 + 描述 14 + gap 6 + 边框 2 = 60px。 */
   content-visibility: auto;
-  contain-intrinsic-size: auto 88px;
+  contain-intrinsic-size: auto 60px;
+}
+
+.ssh-card-nickname {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 /* 徽标色相按风险/待授权区分：带上卡片前缀提一级权重，稳定压过 .ally-row-badge
@@ -719,9 +724,9 @@ async function importServers(event) {
   color: #eab308;
 }
 
-.ssh-card-endpoint {
+.ssh-card-host {
   font-family: var(--ally-mono-font, ui-monospace, monospace);
-  /* 独占第一行后它就是卡片的抬头：等宽 + 提一级字号与颜色，别压成小字注释。 */
+  /* 地址保持卡片抬头的等宽字号，空间不足时省略，完整地址由 title 提供。 */
   font-size: 13px;
   font-weight: 600;
   color: var(--ally-text-primary);

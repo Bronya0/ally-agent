@@ -95,7 +95,7 @@ func (a *App) executeSSHClusterTool(ctx context.Context, sessionID, workspace st
 				Questions: []AskQuestion{
 					{
 						ID: "approve_cluster_add",
-						Question: fmt.Sprintf("模型申请将新服务器节点登记到集群：\n- 别名: %s\n- 用途描述: %s\n- 主机: %s@%s:%d\n- 申请理由: %s\n\n是否批准登记并加入当前工作区白名单？",
+						Question: fmt.Sprintf("模型申请将新服务器节点登记到集群：\n- 昵称: %s\n- 用途描述: %s\n- 主机: %s@%s:%d\n- 申请理由: %s\n\n是否批准登记并加入当前工作区白名单？",
 							alias, description, username, host, port, reason),
 						Options: []AskOption{
 							{
