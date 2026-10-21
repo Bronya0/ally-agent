@@ -13,6 +13,7 @@ const setup = source.match(/<script setup>([\s\S]*?)<\/script>/)[1]
 function harness() {
   const requests = [];
   const timers = new Map();
+  const frames = [];
   const stops = [];
   let unmount;
   let sequence = 0;
@@ -28,7 +29,7 @@ function harness() {
     isServiceActive: (service) => service.status === 'running',
     t: (key) => key,
     formatBytes: String,
-    requestAnimationFrame: (callback) => callback(),
+    requestAnimationFrame: (callback) => frames.push(callback),
     window: {
       setInterval: (callback) => { const id = ++sequence; timers.set(id, callback); return id; },
       clearInterval: (id) => timers.delete(id),
@@ -37,8 +38,11 @@ function harness() {
   };
   const state = new Function(...Object.keys(dependencies), `${setup}
     return { openServiceLog, openScheduledLog, refreshServiceLog, logVisible,
-      logContent, logMeta, logLoading, logServiceActive, viewScope };`)(...Object.values(dependencies));
-  return { ...state, props, requests, timers, document, dispose() { unmount(); stops.forEach((stop) => stop()); } };
+      logContent, logMeta, logLoading, logServiceActive, viewScope, logPre,
+      logFollowing, onLogScroll, resumeLogFollowing };`)(...Object.values(dependencies));
+  return { ...state, props, requests, timers, frames, document,
+    flushFrames() { frames.splice(0).forEach((callback) => callback()); },
+    dispose() { unmount(); stops.forEach((stop) => stop()); } };
 }
 
 test('empty workspace cannot leave the disabled workspace filter selected', () => {
@@ -163,4 +167,75 @@ test('unmount stops polling and discards in-flight results', async () => {
   h.requests[0].resolve({ output: 'late output' });
   await pending;
   assert.equal(h.logContent.value, 'tail');
+});
+
+test('reading history pauses polling and manual refresh preserves the scroll position', async () => {
+  const h = harness();
+  try {
+    const pending = h.openServiceLog({ id: 'a', status: 'running' });
+    h.logPre.value = { scrollTop: 0, clientHeight: 200, scrollHeight: 1000 };
+    h.requests[0].resolve({ output: 'initial output' });
+    await pending;
+    await nextTick();
+    h.flushFrames();
+    assert.equal(h.logPre.value.scrollTop, 1000, 'opening follows the latest output');
+
+    h.logPre.value.scrollTop = 120;
+    h.onLogScroll();
+    assert.equal(h.logFollowing.value, false);
+    [...h.timers.values()][0]();
+    assert.equal(h.requests.length, 1, 'polling must pause while reading history');
+
+    const refresh = h.refreshServiceLog();
+    h.requests[1].resolve({ output: 'more output' });
+    await refresh;
+    h.flushFrames();
+    assert.equal(h.logContent.value, 'more output');
+    assert.equal(h.logPre.value.scrollTop, 120);
+
+    h.resumeLogFollowing();
+    h.requests[2].resolve({ output: 'latest output' });
+    await nextTick();
+    await nextTick();
+    h.flushFrames();
+    assert.equal(h.logFollowing.value, true);
+    assert.equal(h.logPre.value.scrollTop, 1000);
+  } finally { h.dispose(); }
+});
+
+test('scrolling up during an automatic request discards its response and queued bottom scrolls', async () => {
+  const h = harness();
+  try {
+    const pending = h.openServiceLog({ id: 'a', status: 'running' });
+    h.logPre.value = { scrollTop: 800, clientHeight: 200, scrollHeight: 1000 };
+    h.requests[0].resolve({ output: 'readable history' });
+    await pending;
+    const refresh = h.refreshServiceLog({ automatic: true });
+    h.logPre.value.scrollTop = 120;
+    h.onLogScroll();
+    h.flushFrames();
+    assert.equal(h.logPre.value.scrollTop, 120, 'a queued frame must respect scrolling up');
+    h.requests[1].resolve({ output: 'new rolling buffer' });
+    await refresh;
+    assert.equal(h.logContent.value, 'readable history');
+    assert.equal(h.logPre.value.scrollTop, 120);
+
+    h.logPre.value.scrollTop = 800;
+    h.onLogScroll();
+    assert.equal(h.logFollowing.value, true, 'returning to the bottom resumes following');
+  } finally { h.dispose(); }
+});
+
+test('queued scrolls cannot jump a newly opened log before its own render', async () => {
+  const h = harness();
+  try {
+    const pending = h.openServiceLog({ id: 'a', status: 'running' });
+    await nextTick();
+    h.openScheduledLog({ id: 'scheduled', lastSummary: 'summary' });
+    h.logPre.value = { scrollTop: 120, clientHeight: 200, scrollHeight: 1000 };
+    h.flushFrames();
+    assert.equal(h.logPre.value.scrollTop, 120, 'the previous log frame is stale');
+    h.requests[0].resolve({ output: 'stale service output' });
+    await pending;
+  } finally { h.dispose(); }
 });

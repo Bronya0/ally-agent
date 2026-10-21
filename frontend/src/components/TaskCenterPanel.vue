@@ -23,34 +23,32 @@ Public License v3. See the LICENSE file for details.
 
     <div class="task-center-body">
       <div class="task-scope">
-        <n-radio-group :value="viewScope" size="small" @update:value="$emit('update:scope', $event)">
-          <n-radio-button value="workspace" :disabled="!workspace">{{ $t('taskCenter.currentWorkspace') }}</n-radio-button>
-          <n-radio-button value="all">{{ $t('taskCenter.allWorkspaces') }}</n-radio-button>
-        </n-radio-group>
+        <n-tabs class="task-scope-switch" :value="viewScope" type="segment" size="small" @update:value="$emit('update:scope', $event)">
+          <n-tab name="workspace" :disabled="!workspace">{{ $t('taskCenter.currentWorkspace') }}</n-tab>
+          <n-tab name="all">{{ $t('taskCenter.allWorkspaces') }}</n-tab>
+        </n-tabs>
         <span v-if="viewScope === 'workspace'" class="mono-muted ellipsis" :title="workspace">{{ workspace }}</span>
       </div>
-      <n-tabs ref="tabsRef" v-model:value="activeTab" type="line" pane-wrapper-style="padding-top: 4px;">
+      <n-tabs ref="tabsRef" v-model:value="activeTab" class="task-content-tabs" type="line" pane-wrapper-style="padding-top: 4px;">
         <n-tab-pane name="services" :tab="$t('taskCenter.servicesTab', { running: serviceRunningCount, total: services.length })">
           <div class="task-overview">
             <span>{{ $t('service.runningCount', { count: serviceRunningCount }) }}</span>
-            <span>{{ $t('service.bufferPolicy') }}</span>
           </div>
           <n-spin :show="servicesLoading">
             <n-empty v-if="!services.length" :description="$t('service.empty')">
               <template #extra><span class="empty-hint">{{ $t('service.emptyHint') }}</span></template>
             </n-empty>
             <div v-else class="task-list">
-              <article v-for="service in services" :key="service.id" :class="['task-card', 'service-card', { 'is-live': isServiceActive(service) }]">
+              <article v-for="service in services" :key="service.id" class="task-card service-card">
                 <div class="card-head">
-                  <span class="card-kind" :title="$t('composer.taskCenter.services')">S</span>
                   <div class="head-main">
                     <span class="card-title">{{ service.name || service.id }}</span>
-                    <span class="mono-muted">{{ service.id }}<template v-if="service.pid"> · PID {{ service.pid }}</template></span>
+                    <div class="card-state">
+                      <span class="task-status" :class="`tone-${serviceStatusTone(service)}`">{{ serviceStatusLabel(service) }}</span>
+                      <span v-if="service.promoted" class="task-kind">{{ $t('service.promotedBadge') }}</span>
+                    </div>
                   </div>
                   <div class="head-side">
-                    <n-tag v-if="service.promoted" size="small" round :bordered="false" class="promoted-badge">{{ $t('service.promotedBadge') }}</n-tag>
-                    <n-tag size="small" round :type="serviceStatusType(service)">{{ serviceStatusLabel(service) }}</n-tag>
-                    <n-button size="tiny" quaternary @click="openServiceLog(service)">{{ $t('taskCenter.viewBuffer') }}</n-button>
                     <n-popconfirm
                       v-if="isServiceActive(service)"
                       :positive-text="$t('service.stop')"
@@ -58,30 +56,41 @@ Public License v3. See the LICENSE file for details.
                       @positive-click="$emit('stopService', service.id)"
                     >
                       <template #trigger>
-                        <n-button size="tiny" type="error" quaternary :loading="stoppingIds.includes(service.id)">{{ $t('service.stop') }}</n-button>
+                        <n-button size="small" type="error" quaternary :loading="stoppingIds.includes(service.id)">{{ $t('service.stop') }}</n-button>
                       </template>
                       {{ $t('service.stopConfirm') }}
                     </n-popconfirm>
                   </div>
                 </div>
-                <!-- 身份行：一眼看出在跑什么命令。 -->
-                <div v-if="serviceDescription(service, $t)" class="service-description"><span>{{ $t('service.description') }} · </span>{{ serviceDescription(service, $t) }}</div>
-                <div v-if="service.command" class="command" :title="service.command" v-html="highlightedCommand(service.command)"></div>
+                <div v-if="serviceDescription(service, $t)" class="service-description">{{ serviceDescription(service, $t) }}</div>
                 <div v-if="viewScope === 'all'" class="mono-muted ellipsis" :title="service.workspace">{{ $t('taskCenter.workspace') }} · {{ service.workspace || $t('taskCenter.noWorkspace') }}</div>
-                <!-- 事实行：只留当下有意义的那几项——还活着的看启动时间，已结束的看退出码。 -->
-                <div class="meta-line">
-                  <span v-if="isServiceActive(service)" class="meta-item"><i>{{ $t('service.startedAt') }}</i>{{ formatUnixSeconds(service.startedAt) }}</span>
-                  <template v-else>
-                    <span class="meta-item"><i>{{ $t('service.exitCode') }}</i>{{ service.exitCode ?? 0 }}</span>
-                    <span class="meta-item"><i>{{ $t('service.stoppedAt') }}</i>{{ formatUnixSeconds(service.stoppedAt) }}</span>
-                  </template>
-                  <span class="meta-item"><i>{{ $t('service.bufferSize') }}</i>{{ formatBytes(service.outputBytes) }}</span>
-                  <span v-if="service.outputTruncated" class="meta-item attention"><i>{{ $t('service.retention') }}</i>{{ $t('taskCenter.latestRetained') }}</span>
-                </div>
-                <div class="mono-muted ellipsis" :title="service.cwd">{{ service.cwd }}</div>
-                <div v-if="service.outputTail" class="buffer-preview">
-                  <div class="buffer-title">{{ $t('taskCenter.bufferPreview') }}</div>
-                  <pre v-html="previewHtml(service.outputTail)"></pre>
+                <details class="service-details">
+                  <summary>{{ $t('service.details') }}</summary>
+                  <dl class="service-facts">
+                    <div><dt>ID</dt><dd>{{ service.id }}</dd></div>
+                    <div v-if="service.pid"><dt>PID</dt><dd>{{ service.pid }}</dd></div>
+                    <div><dt>{{ $t('taskCenter.workspace') }}</dt><dd>{{ service.workspace || $t('taskCenter.noWorkspace') }}</dd></div>
+                    <div v-if="service.cwd"><dt>{{ $t('service.cwd') }}</dt><dd>{{ service.cwd }}</dd></div>
+                  </dl>
+                  <div v-if="service.command" class="command service-command" v-html="highlightedCommand(service.command)"></div>
+                  <div class="meta-line">
+                    <span v-if="isServiceActive(service)" class="meta-item"><i>{{ $t('service.startedAt') }}</i>{{ formatUnixSeconds(service.startedAt) }}</span>
+                    <template v-else>
+                      <span class="meta-item"><i>{{ $t('service.exitCode') }}</i>{{ service.exitCode ?? 0 }}</span>
+                      <span class="meta-item"><i>{{ $t('service.stoppedAt') }}</i>{{ formatUnixSeconds(service.stoppedAt) }}</span>
+                    </template>
+                    <span class="meta-item"><i>{{ $t('service.bufferSize') }}</i>{{ formatBytes(service.outputBytes) }}</span>
+                    <span v-if="service.outputTruncated" class="meta-item attention"><i>{{ $t('service.retention') }}</i>{{ $t('taskCenter.latestRetained') }}</span>
+                  </div>
+                  <div class="service-buffer-policy">{{ $t('service.bufferPolicy') }}</div>
+                </details>
+                <div class="buffer-preview">
+                  <div class="buffer-title service-buffer-title">
+                    <span>{{ $t('taskCenter.bufferPreview') }}</span>
+                    <n-button size="small" quaternary @click="openServiceLog(service)">{{ $t('taskCenter.viewFullLog') }}</n-button>
+                  </div>
+                  <pre v-if="service.outputTail" v-html="previewHtml(service.outputTail)"></pre>
+                  <span v-else class="empty-hint">{{ $t('taskCenter.emptyBuffer') }}</span>
                 </div>
                 <div v-if="service.error" class="service-error">{{ service.error }}</div>
               </article>
@@ -99,29 +108,30 @@ Public License v3. See the LICENSE file for details.
               <template #extra><span class="empty-hint">{{ $t('scheduled.emptyHint') }}</span></template>
             </n-empty>
             <div v-else class="task-list">
-              <article v-for="task in tasks" :key="task.id" :class="['task-card', 'scheduled-card', { 'is-live': isScheduledTaskRunning(task) }]">
+              <article v-for="task in tasks" :key="task.id" class="task-card scheduled-card">
                 <div class="card-head">
-                  <span class="card-kind" :title="$t('composer.taskCenter.scheduled')">C</span>
                   <div class="head-main">
                     <span class="card-title">{{ task.name || task.id }}</span>
-                    <span class="mono-muted">{{ task.id }}</span>
+                    <div class="card-state">
+                      <span class="task-status" :class="`tone-${scheduledStatusTone(task)}`">{{ scheduledStatusLabel(task) }}</span>
+                      <span class="task-kind">{{ task.command ? $t('scheduled.kind.command') : $t('scheduled.kind.agent') }}</span>
+                    </div>
                   </div>
                   <div class="head-side">
-                    <n-tag size="small" round :type="scheduledStatusType(task)">{{ scheduledStatusLabel(task) }}</n-tag>
-                    <n-tag size="small" round :bordered="false">{{ task.command ? $t('scheduled.kind.command') : $t('scheduled.kind.agent') }}</n-tag>
-                    <n-button v-if="task.lastSummary || task.lastError" size="tiny" quaternary @click="openScheduledLog(task)">{{ $t('taskCenter.viewBuffer') }}</n-button>
+                    <n-button v-if="task.lastSummary || task.lastError" size="small" quaternary @click="openScheduledLog(task)">{{ $t('taskCenter.viewFullLog') }}</n-button>
                     <n-popconfirm
                       :positive-text="$t('common.delete')"
                       :negative-text="$t('common.cancel')"
                       @positive-click="$emit('deleteTask', task.id)"
                     >
                       <template #trigger>
-                        <n-button size="tiny" type="error" quaternary :loading="deletingIds.includes(task.id)">{{ $t('scheduled.deleteTask') }}</n-button>
+                        <n-button size="small" type="error" quaternary :loading="deletingIds.includes(task.id)">{{ $t('scheduled.deleteTask') }}</n-button>
                       </template>
                       {{ $t('scheduled.deleteConfirm') }}
                     </n-popconfirm>
                   </div>
                 </div>
+                <div class="mono-muted task-id">{{ task.id }}</div>
                 <!-- 调度行：“什么时候跑”——下次运行才是行动重点，单独提出来。 -->
                 <div class="schedule-line">
                   <span class="schedule-text">{{ scheduleLabel(task.schedule) }}</span>
@@ -151,18 +161,19 @@ Public License v3. See the LICENSE file for details.
     </div>
   </n-modal>
 
-  <n-modal v-model:show="logVisible" preset="card" :title="logTitle" :style="{ width: 'min(960px, 92vw)' }">
+  <n-modal v-model:show="logVisible" preset="card" :title="logTitle" :style="{ width: 'min(960px, 92vw)' }" @after-enter="scrollLogToBottom">
     <div class="log-toolbar">
       <span>{{ logMeta }}</span>
       <span v-if="logRenderNote" class="log-note">{{ logRenderNote }}</span>
+      <span v-if="logServiceId && !logFollowing" class="log-follow-state">{{ $t('taskCenter.logPaused') }}</span>
       <n-space>
-        <n-button v-if="logServiceId" size="small" quaternary :loading="logLoading" @click="refreshServiceLog">{{ $t('common.refresh') }}</n-button>
+        <n-button v-if="logServiceId && !logFollowing" size="small" secondary @click="resumeLogFollowing">{{ $t('taskCenter.backToLatest') }}</n-button>
+        <n-button v-if="logServiceId" size="small" quaternary :loading="logLoading" @click="refreshServiceLog()">{{ $t('common.refresh') }}</n-button>
         <n-button size="small" quaternary :disabled="!logContent" @click="copyLog">{{ $t('taskCenter.copyBuffer') }}</n-button>
       </n-space>
     </div>
-    <n-spin :show="logLoading">
-      <pre v-if="logContent" ref="logPre" class="full-log" v-html="logRenderHtml"></pre>
-      <pre v-else class="full-log">{{ $t('taskCenter.emptyBuffer') }}</pre>
+    <n-spin :show="logLoading && !logContent">
+      <pre ref="logPre" class="full-log" @scroll.passive="onLogScroll"><span v-if="logContent" v-html="logRenderHtml"></span><template v-else>{{ $t('taskCenter.emptyBuffer') }}</template></pre>
     </n-spin>
   </n-modal>
 </template>
@@ -207,6 +218,7 @@ const logContent = ref('');
 const logServiceId = ref('');
 const logServiceActive = ref(false);
 const logPre = ref(null);
+const logFollowing = ref(true);
 let logRefreshTimer = 0;
 let logRequestVersion = 0;
 const pendingLogRequests = new Map();
@@ -272,6 +284,7 @@ function highlightedCommand(command) {
 
 function openScheduledLog(task) {
   invalidateLogRequest();
+  logFollowing.value = true;
   logServiceId.value = '';
   logServiceActive.value = false;
   logTitle.value = task.name || task.id;
@@ -286,6 +299,7 @@ function openScheduledLog(task) {
 
 async function openServiceLog(service) {
   invalidateLogRequest();
+  logFollowing.value = true;
   logServiceId.value = service.id;
   logServiceActive.value = isServiceActive(service);
   logTitle.value = service.name || service.id;
@@ -306,7 +320,7 @@ watch([logVisible, logServiceId, logServiceActive], ([visible, serviceId, active
   if (!visible) invalidateLogRequest();
   if (visible && serviceId && active) {
     logRefreshTimer = window.setInterval(() => {
-      if (!document.hidden) void refreshServiceLog();
+      if (!document.hidden) void refreshServiceLog({ automatic: true });
     }, 1500);
   }
 }, { flush: 'sync' });
@@ -329,8 +343,9 @@ onUnmounted(() => {
   if (logRefreshTimer) window.clearInterval(logRefreshTimer);
 });
 
-async function refreshServiceLog() {
+async function refreshServiceLog({ automatic = false } = {}) {
   if (!logVisible.value || !logServiceId.value || logLoading.value) return;
+  if (automatic && !logFollowing.value) return;
   const version = logRequestVersion;
   const serviceId = logServiceId.value;
   logLoading.value = true;
@@ -345,12 +360,21 @@ async function refreshServiceLog() {
     pendingLogRequests.set(serviceId, request);
     const result = await request;
     if (version !== logRequestVersion) return;
+    if (automatic && !logFollowing.value) return;
+    const scrollTop = logPre.value?.scrollTop || 0;
     logContent.value = result?.output || '';
     logMeta.value = t('taskCenter.serviceBufferMeta', {
       size: formatBytes(result?.bytes),
       retained: result?.truncated ? t('taskCenter.latestRetained') : t('taskCenter.completeRetained'),
     });
-    scrollLogToBottom();
+    if (logFollowing.value) {
+      scrollLogToBottom();
+    } else {
+      await nextTick();
+      if (version === logRequestVersion && logPre.value && !logFollowing.value) {
+        logPre.value.scrollTop = scrollTop;
+      }
+    }
   } catch (err) {
     if (version !== logRequestVersion) return;
     logMeta.value = t('service.outputLoadFailed', { error: err });
@@ -366,45 +390,36 @@ async function copyLog() {
 }
 
 function scrollLogToBottom() {
-  // The log modal may still be mounting (n-modal transition) or the <pre>
-  // may still be laying out a large buffer (up to 512 KiB) when nextTick
-  // fires. Use requestAnimationFrame after nextTick so the browser has
-  // flushed layout, and retry once more on the next frame to catch slow
-  // renders. This matches how dev-tools consoles auto-stick to bottom.
+  const version = logRequestVersion;
   nextTick(() => {
     requestAnimationFrame(() => {
-      const pre = logPre.value;
-      if (!pre) return;
-      pre.scrollTop = pre.scrollHeight;
-      // Retry once more on the next frame for large buffers that finish
-      // laying out after the first paint.
-      requestAnimationFrame(() => {
-        if (logPre.value) logPre.value.scrollTop = logPre.value.scrollHeight;
-      });
+      if (version !== logRequestVersion || !logVisible.value || !logFollowing.value) return;
+      if (logPre.value) logPre.value.scrollTop = logPre.value.scrollHeight;
     });
   });
 }
 
-// 状态词表与工具卡共用（utils/taskStatus.mjs）：文案 key 与语义色调只有一份判定，
-// 这里只把语义色调换成 n-tag 的预设（naive-ui 的词汇属于本组件）。
-const TAG_TYPES = { success: 'success', info: 'info', warning: 'warning', danger: 'error', neutral: 'default' };
+function onLogScroll() {
+  const pre = logPre.value;
+  if (!pre) return;
+  logFollowing.value = pre.scrollHeight - pre.clientHeight - pre.scrollTop <= 24;
+}
 
+function resumeLogFollowing() {
+  logFollowing.value = true;
+  scrollLogToBottom();
+  void refreshServiceLog();
+}
+
+// 状态词表与工具卡共用，状态显示与操作按钮保持独立。
 function scheduledStatusLabel(task) {
   const key = scheduledStatusKey(task);
   return (key ? t(key) : '') || task?.lastStatus || t('scheduled.status.waiting');
 }
 
-function scheduledStatusType(task) {
-  return TAG_TYPES[scheduledStatusTone(task)];
-}
-
 function serviceStatusLabel(service) {
   const key = serviceStatusKey(service?.status);
   return (key ? t(key) : '') || service?.status || '-';
-}
-
-function serviceStatusType(service) {
-  return TAG_TYPES[serviceStatusTone(service)];
 }
 
 function scheduleLabel(schedule = {}) {
@@ -435,34 +450,36 @@ function durationLabel(seconds) {
 
 <style scoped>
 .service-description { margin-top: 6px; color: var(--ally-text-body); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-.service-description > span { color: var(--ally-text-faint); }
 .task-scope { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
 .task-scope > .ellipsis { min-width: 0; flex: 1; }
+.task-scope-switch { width: 250px; max-width: 100%; flex: none; }
 .task-center-body { height: min(72vh, 760px); min-height: 360px; overflow: auto; padding-right: 4px; }
-.task-center-body :deep(.n-tabs) { min-height: 100%; }
+.task-center-body :deep(.task-content-tabs) { min-height: 100%; }
 .task-overview { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 10px; color: var(--ally-text-muted); font-size: 12px; }
 .task-list { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
-.task-card { position: relative; padding: 10px 12px 10px 16px; border: 1px solid var(--ally-border); border-radius: 8px; background: var(--ally-hover-faint); }
-/* 卡片左侧的状态竖条：运行中换成语义色（服务绿 / 定时蓝），已结束只有中性灰。
-   竖条占的是恒定的左内边距，状态翻转时只换色不挪位，列表不会左右跳一下。 */
-.task-card::before { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; border-radius: 8px 0 0 8px; background: var(--ally-border-strong); content: ''; }
-.service-card.is-live::before { background: var(--ally-success); }
-.scheduled-card.is-live::before { background: var(--ally-info); }
-/* 运行中＝当下要盯的对象：底色与边框跟着竖条同色，扫一眼就能从一堆卡片里跳出来。 */
-.service-card.is-live { border-color: color-mix(in srgb, var(--ally-success) 45%, var(--ally-border)); background: color-mix(in srgb, var(--ally-success) 7%, var(--ally-hover-faint)); }
-.scheduled-card.is-live { border-color: color-mix(in srgb, var(--ally-info) 45%, var(--ally-border)); background: color-mix(in srgb, var(--ally-info) 7%, var(--ally-hover-faint)); }
-/* 已结束的不用整体压暗来表达「退到后面」：卡内 11px 小字本来就淡，再乘一层透明度就掉到
-   读不清（实测浅色主题下错误红 4.63 → 3.39，低于 4.5）。区分靠竖条配色与底色，不靠压内容。 */
-.card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
-.head-main { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; gap: 4px 8px; }
-.head-side { display: flex; align-items: center; flex-shrink: 0; gap: 4px; margin-left: auto; }
-/* S / C 字母徽标：与工具栏入口 chip 同源配色（info=服务 / warning=定时）。
-   这两支是跨主题恒定的语义色，不会和主题 accent 撞成同一色相。 */
-.card-kind { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 18px; height: 18px; border-radius: 5px; font-size: 11px; font-weight: 700; line-height: 1; }
-.service-card .card-kind { color: var(--ally-info); background: color-mix(in srgb, var(--ally-info) 16%, transparent); }
-.scheduled-card .card-kind { color: var(--ally-warning-text); background: color-mix(in srgb, var(--ally-warning) 16%, transparent); }
-/* 超时收编服务的徽标：与状态标签并列，用 warning 色系区分来源。 */
-.head-side :deep(.promoted-badge) { background: rgba(234,179,8,.12); color: var(--ally-warning-pale, #d97706); }
+.task-card { padding: 12px; border: 1px solid var(--ally-border); border-radius: 8px; background: var(--ally-surface-content); }
+/* 状态留在标题区，右侧只放统一尺寸的操作按钮。 */
+.card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 24px; }
+.head-main { display: flex; flex: 1; align-items: center; flex-wrap: wrap; min-width: 0; gap: 6px 12px; }
+.head-side { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.card-state { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.task-kind { color: var(--ally-text-muted); font-size: 12px; }
+.task-id { margin-top: 4px; overflow-wrap: anywhere; }
+.task-status { display: inline-flex; align-items: center; gap: 5px; color: var(--ally-text-muted); font-size: 12px; }
+.task-status::before { width: 5px; height: 5px; border-radius: 50%; background: currentColor; content: ''; }
+.task-status.tone-success { color: var(--ally-success); }
+.task-status.tone-info { color: var(--ally-info); }
+.task-status.tone-warning { color: var(--ally-warning-text); }
+.task-status.tone-danger { color: var(--ally-danger-pale); }
+.service-details { margin-top: 8px; color: var(--ally-text-muted); font-size: 12px; }
+.service-details > summary { width: fit-content; cursor: pointer; }
+.service-details > summary:hover { color: var(--ally-text-primary); }
+.service-details > summary:focus-visible { outline: 2px solid var(--ally-accent); outline-offset: 3px; }
+.service-facts { display: grid; gap: 5px; margin: 10px 0 0; }
+.service-facts > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; }
+.service-facts dt { color: var(--ally-text-muted); }
+.service-facts dd { margin: 0; color: var(--ally-text-body); font-family: var(--ally-mono-font); overflow-wrap: anywhere; }
+.service-buffer-policy { margin-top: 6px; font-size: 11px; }
 .card-title { color: var(--ally-text-primary); font-size: 13px; font-weight: 650; }
 .mono-muted { color: var(--ally-text-faint); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -485,6 +502,7 @@ function durationLabel(seconds) {
 
 .instruction, .command { display: -webkit-box; margin-top: 6px; overflow: hidden; color: var(--ally-text-body); font-size: 12px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .command { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.service-command { display: block; overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* v-html 注入的 shell 分词 token 不带 scoped 属性，必须 :deep 才能命中。
    配色与工具卡 .tool-command 的暗一档四色同源。 */
 .command :deep(.shell-command-word) { color: var(--ally-accent-dim); }
@@ -503,6 +521,7 @@ html[data-mode="light"] .command :deep(.shell-operator) { color: #0f766e; }
 .buffer-preview.error { background: color-mix(in srgb, var(--ally-danger) 14%, var(--ally-code-bg)); }
 .service-error { background: rgba(239,68,68,.08); }
 .buffer-title { margin-bottom: 6px; color: var(--ally-text-muted); font-size: 11px; }
+.service-buffer-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .buffer-preview pre { display: -webkit-box; margin: 0; overflow: hidden; color: var(--ally-text-body); font: 11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: pre-wrap; word-break: break-word; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
 .service-error { margin-top: 6px; padding: 6px 10px; border-radius: 8px; color: var(--ally-danger-pale); font-size: 11px; }
 .empty-hint { color: var(--ally-text-faint); font-size: 12px; }
