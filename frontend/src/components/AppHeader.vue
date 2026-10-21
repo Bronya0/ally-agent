@@ -55,38 +55,51 @@ Public License v3. See the LICENSE file for details.
           :menu-props="historyMenuProps"
           @select="onHistorySelect"
         >
-          <n-button class="header-icon-button tabs-action-button history-action-button" size="small" quaternary :title="$t('header.addWorkspace')" :aria-label="$t('header.addWorkspace')">
-            <PlusOutlined class="header-icon" />
-          </n-button>
+          <n-tooltip placement="bottom">
+            <template #trigger>
+              <n-button class="header-icon-button tabs-action-button history-action-button" size="small" quaternary :aria-label="$t('header.addWorkspace')">
+                <PlusOutlined class="header-icon" />
+              </n-button>
+            </template>
+            {{ $t('header.addWorkspace') }}
+          </n-tooltip>
         </n-dropdown>
         <!-- 工作区文件浏览器开关：原先停在输入栏最右（界面右下角），按用户要求挪进
              顶栏、紧邻历史工作区。只有「工作区页」（Agent / 有 Tab 的知识库）才有树
              可开，其余整页页面按禁用处理而不是一起隐藏：位置稳定，也说明这里有开关。 -->
-        <n-button
-          :class="['header-icon-button', 'tabs-action-button', 'explorer-action-button', { active: explorerVisible }]"
-          size="small"
-          quaternary
-          :disabled="!explorerAvailable"
-          :title="$t('app.workspaceExplorer.open')"
-          :aria-label="$t('app.workspaceExplorer.open')"
-          @click="$emit('toggleExplorer')"
-        >
-          <FolderOpenTwotone class="header-icon" />
-        </n-button>
+        <n-tooltip placement="bottom">
+          <template #trigger>
+            <n-button
+              :class="['header-icon-button', 'tabs-action-button', 'explorer-action-button', { active: explorerVisible }]"
+              size="small"
+              quaternary
+              :disabled="!explorerAvailable"
+              :aria-label="$t('app.workspaceExplorer.open')"
+              @click="$emit('toggleExplorer')"
+            >
+              <FolderOpenTwotone class="header-icon" />
+            </n-button>
+          </template>
+          {{ $t('app.workspaceExplorer.open') }}
+        </n-tooltip>
       </div>
     </div>
     <div class="header-actions">
-      <n-button
-        :class="['header-icon-button', 'repository-button', { 'update-available': updateAvailable }]"
-        size="small"
-        quaternary
-        :title="updateAvailable ? (updateAutoSupported ? $t('header.updateAuto', { version: latestVersion }) : $t('header.update', { version: latestVersion })) : $t('header.github')"
-        :aria-label="updateAvailable ? $t('header.updateAria') : $t('header.githubAria')"
-        @click="onRepositoryClick"
-      >
-        <DownloadOutlined v-if="updateAvailable" class="header-icon" />
-        <GithubOutlined v-else class="header-icon github-icon" />
-      </n-button>
+      <n-tooltip placement="bottom">
+        <template #trigger>
+          <n-button
+            :class="['header-icon-button', 'repository-button', { 'update-available': updateAvailable }]"
+            size="small"
+            quaternary
+            :aria-label="updateAvailable ? $t('header.updateAria') : $t('header.githubAria')"
+            @click="onRepositoryClick"
+          >
+            <DownloadOutlined v-if="updateAvailable" class="header-icon" />
+            <GithubOutlined v-else class="header-icon github-icon" />
+          </n-button>
+        </template>
+        {{ updateAvailable ? (updateAutoSupported ? $t('header.updateAuto', { version: latestVersion }) : $t('header.update', { version: latestVersion })) : $t('header.github') }}
+      </n-tooltip>
     </div>
     <div v-if="!isMacOS" class="window-controls">
       <button class="window-control-btn" @click="$emit('minimise')" :title="$t('header.minimize')" :aria-label="$t('header.minimize')">

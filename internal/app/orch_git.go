@@ -46,6 +46,10 @@ func (a *App) GetGitStatus(workspace string) GitStatus {
 	return a.getGitStatus(workspacePath)
 }
 
+// gitStatusWaitBudget bounds one status request's waits, retries and worker
+// batches. It is a variable only so the deadline test need not sleep for 5s.
+var gitStatusWaitBudget = 5 * time.Second
+
 func (a *App) getGitStatus(workspacePath string) GitStatus {
 	workspace, err := workspaceRoot(ConfigState{Workspace: workspacePath})
 	if err != nil {
@@ -53,7 +57,7 @@ func (a *App) getGitStatus(workspacePath string) GitStatus {
 	}
 
 	workspace = workspaceMapCacheKey(workspace)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), gitStatusWaitBudget)
 	defer cancel()
 	for {
 		if ctx.Err() != nil {

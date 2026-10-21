@@ -351,6 +351,10 @@ func TestFileMutationCancellationStopsOwnedTree(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("cancelled mutation failed to stop")
 	}
+	// TerminateProcess is asynchronous on Windows: poll until the child is gone.
+	for deadline := time.Now().Add(5 * time.Second); isProcessAlive(childPID) && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if isProcessAlive(childPID) {
 		t.Fatal("mutation child survived cancellation")
 	}

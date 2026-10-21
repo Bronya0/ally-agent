@@ -64,61 +64,63 @@ Public License v3. See the LICENSE file for details.
         {{ $t('common.searchEmpty') }}
       </div>
 
-      <div v-else class="ssh-table-wrap">
-        <div class="ssh-table-head">
-          <span>{{ t('sshCluster.table.colAlias') }}</span>
-          <span>{{ t('sshCluster.table.colEndpoint') }}</span>
-          <span>{{ t('sshCluster.table.colAuth') }}</span>
-          <span>{{ t('sshCluster.table.colDescription') }}</span>
-          <span>{{ t('sshCluster.table.colRisk') }}</span>
-          <span class="ssh-cell-actions">{{ t('sshCluster.table.colActions') }}</span>
-        </div>
-        <div
-          v-for="s in filteredServers"
-          :key="s.alias"
-          class="ssh-table-row"
-          :class="{ 'risk-high': s.riskLevel === 'high' }"
-        >
-          <span class="ssh-cell-alias">
-            <span class="ssh-alias-text" :title="s.alias">{{ s.alias }}</span>
-            <span v-if="s.status === 'pending_approval'" class="ssh-status-badge pending">
-              {{ $t('sshCluster.table.pending') }}
-            </span>
-          </span>
-          <span class="ssh-cell-endpoint" :title="endpointOf(s)">{{ endpointOf(s) }}</span>
-          <span class="ssh-cell-auth">{{ authTypeLabel(s.authType) }}</span>
-          <span class="ssh-cell-desc" :title="s.description">{{ s.description || '-' }}</span>
-          <span class="ssh-cell-risk">
-            <span v-if="s.riskLevel === 'high'" class="ssh-risk-badge high">
-              {{ t('sshCluster.table.riskHigh') }}
-            </span>
-            <span v-else class="ssh-risk-badge low">{{ t('sshCluster.table.riskLow') }}</span>
-          </span>
-          <span class="ssh-cell-actions">
-            <n-button size="tiny" secondary :loading="testingAlias === s.alias" @click="handleTest(s)">
-              {{ t('sshCluster.table.test') }}
-            </n-button>
-            <n-button size="tiny" secondary @click="openCloneDialog(s)">
-              {{ t('sshCluster.table.clone') }}
-            </n-button>
-            <n-button size="tiny" secondary @click="openEditDialog(s)">
-              {{ t('common.edit') }}
-            </n-button>
-            <n-popconfirm
-              :positive-text="t('common.delete')"
-              :negative-text="t('common.cancel')"
-              @positive-click="handleDelete(s.alias)"
+      <n-tabs
+        v-else
+        :key="groupTabSetKey"
+        v-model:value="activeGroupTab"
+        type="line"
+        animated
+        class="ssh-group-tabs"
+      >
+        <n-tab-pane v-for="group in groupTabs" :key="group.name" :name="group.name" :tab="group.name">
+          <div class="ssh-card-list">
+            <div
+              v-for="s in group.servers"
+              :key="s.alias"
+              class="ally-row-card ssh-node-card"
             >
-              <template #trigger>
-                <n-button size="tiny" quaternary type="error">
-                  {{ t('common.delete') }}
-                </n-button>
-              </template>
-              {{ t('sshCluster.modal.deleteConfirm') }}
-            </n-popconfirm>
-          </span>
-        </div>
-      </div>
+              <!-- 第一行只放地址：扫读列表时先确认连的是哪台机器；名称、徽标、操作在下一行。 -->
+              <div class="ssh-card-endpoint" :title="endpointOf(s)">{{ endpointOf(s) }}</div>
+              <div class="ally-row-main">
+                <span class="ally-row-name" :title="s.alias">{{ s.alias }}</span>
+                <span v-if="s.status === 'pending_approval'" class="ally-row-badge ssh-badge-pending">
+                  {{ t('sshCluster.table.pending') }}
+                </span>
+                <span
+                  class="ally-row-badge"
+                  :class="s.riskLevel === 'high' ? 'ssh-badge-high' : 'ssh-badge-low'"
+                >
+                  {{ s.riskLevel === 'high' ? t('sshCluster.table.riskHigh') : t('sshCluster.table.riskLow') }}
+                </span>
+                <div class="ally-row-side">
+                  <n-button size="tiny" secondary :loading="testingAlias === s.alias" @click="handleTest(s)">
+                    {{ t('sshCluster.table.test') }}
+                  </n-button>
+                  <n-button size="tiny" secondary @click="openCloneDialog(s)">
+                    {{ t('sshCluster.table.clone') }}
+                  </n-button>
+                  <n-button size="tiny" secondary @click="openEditDialog(s)">
+                    {{ t('common.edit') }}
+                  </n-button>
+                  <n-popconfirm
+                    :positive-text="t('common.delete')"
+                    :negative-text="t('common.cancel')"
+                    @positive-click="handleDelete(s.alias)"
+                  >
+                    <template #trigger>
+                      <n-button size="tiny" quaternary type="error">
+                        {{ t('common.delete') }}
+                      </n-button>
+                    </template>
+                    {{ t('sshCluster.modal.deleteConfirm') }}
+                  </n-popconfirm>
+                </div>
+              </div>
+              <div class="ssh-card-desc" :title="s.description">{{ s.description || '-' }}</div>
+            </div>
+          </div>
+        </n-tab-pane>
+      </n-tabs>
     </div>
 
     <!-- Add / Edit Dialog -->
@@ -145,6 +147,17 @@ Public License v3. See the LICENSE file for details.
           </span>
         </div>
 
+        <div class="ssh-form-item">
+          <label class="ssh-form-label">{{ $t('sshCluster.modal.group') }}</label>
+          <n-select
+            v-model:value="form.group"
+            :options="groupOptions"
+            filterable
+            tag
+            :placeholder="$t('sshCluster.modal.groupPlaceholder')"
+          />
+        </div>
+
         <div class="ssh-form-row">
           <div class="ssh-form-item flex-2">
             <label class="ssh-form-label">{{ $t('sshCluster.modal.host') }} *</label>
@@ -164,27 +177,26 @@ Public License v3. See the LICENSE file for details.
           </div>
         </div>
 
-        <div class="ssh-form-item">
-          <label class="ssh-form-label">{{ $t('sshCluster.modal.username') }} *</label>
-          <n-input
-            v-model:value="form.username"
-            placeholder="root"
-          />
+        <div class="ssh-form-row">
+          <div class="ssh-form-item flex-1">
+            <label class="ssh-form-label">{{ $t('sshCluster.modal.username') }} *</label>
+            <n-input
+              v-model:value="form.username"
+              placeholder="root"
+            />
+          </div>
+          <div class="ssh-form-item flex-1">
+            <label class="ssh-form-label">{{ $t('sshCluster.modal.authType') }}</label>
+            <n-select
+              v-model:value="form.authType"
+              :options="authTypeOptions()"
+            />
+          </div>
         </div>
 
-        <div class="ssh-form-item">
-          <label class="ssh-form-label">{{ $t('sshCluster.modal.authType') }}</label>
-          <n-radio-group v-model:value="form.authType" name="authType">
-            <n-space>
-              <n-radio value="agent">{{ $t('sshCluster.modal.authTypeAgent') }}</n-radio>
-              <n-radio value="key">{{ $t('sshCluster.modal.authTypeKey') }}</n-radio>
-              <n-radio value="password">{{ $t('sshCluster.modal.authTypePassword') }}</n-radio>
-            </n-space>
-          </n-radio-group>
-          <span v-if="form.authType === 'agent'" class="ssh-form-hint">
-            {{ $t('sshCluster.modal.authTypeAgentHint') }}
-          </span>
-        </div>
+        <span v-if="form.authType === 'agent'" class="ssh-form-hint hint-under-row">
+          {{ $t('sshCluster.modal.authTypeAgentHint') }}
+        </span>
 
         <div v-if="form.authType === 'key'" class="ssh-form-item">
           <label class="ssh-form-label">{{ $t('sshCluster.modal.keyPath') }}</label>
@@ -209,7 +221,7 @@ Public License v3. See the LICENSE file for details.
             v-model:value="form.password"
             type="password"
             show-password-on="click"
-            placeholder="Password"
+            :placeholder="$t('sshCluster.modal.password')"
           />
           <span class="ssh-form-hint">{{ $t('sshCluster.modal.plaintextNote') }}</span>
         </div>
@@ -246,13 +258,21 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
 import SearchOutlined from '@vicons/antd/SearchOutlined';
 import { ListAllSSHServers, SaveSSHServer, DeleteSSHServer, TestSSHServer, SelectPrivateKeyFile } from '../../bindings/ally-dev/internal/app/app';
 import { t } from '../i18n.mjs';
 import { buildSSHClusterExport, parseSSHClusterImport } from '../utils/sshClusterIO.mjs';
 import { saveTextFile } from '../utils/download.mjs';
+import {
+  SSH_UNGROUPED_GROUP,
+  groupSSHServers,
+  normalizeSSHGroup,
+  resolveActiveGroup,
+  sshGroupOptions,
+  sshServerMatchesQuery,
+} from '../utils/sshClusterGroups.mjs';
 
 defineProps({
   show: { type: Boolean, default: false },
@@ -271,15 +291,18 @@ const importing = ref(false);
 const filteredServers = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
   if (!q) return servers.value;
-  return servers.value.filter((s) => {
-    return (
-      (s.alias && s.alias.toLowerCase().includes(q)) ||
-      (s.host && s.host.toLowerCase().includes(q)) ||
-      (s.username && s.username.toLowerCase().includes(q)) ||
-      (s.description && s.description.toLowerCase().includes(q))
-    );
-  });
+  return servers.value.filter((s) => sshServerMatchesQuery(s, searchQuery.value));
 });
+
+const activeGroupTab = ref('');
+const groupTabs = computed(() => groupSSHServers(filteredServers.value));
+// 页签集合变化（搜索过滤、增删分组）时对齐到仍可见的页签；同时作为 n-tabs 的 key，
+// 让下划线按新布局重算（与模型页 providerTabSetKey 同一做法）。
+const groupTabSetKey = computed(() => groupTabs.value.map((group) => group.name).join('\u0000'));
+const groupOptions = computed(() => sshGroupOptions(servers.value));
+watch(groupTabSetKey, () => {
+  activeGroupTab.value = resolveActiveGroup(groupTabs.value, activeGroupTab.value);
+}, { immediate: true });
 
 const editorVisible = ref(false);
 // 弹窗形态：add / edit / clone。clone 与 add 同形（别名可编辑，保存时才新增节点），
@@ -296,10 +319,13 @@ const editorTitle = computed(() => {
 const form = reactive({
   id: '',
   alias: '',
+  // 分组是纯归类：历史节点没有该字段，空值一律归入未分组。
+  group: SSH_UNGROUPED_GROUP,
   host: '',
   port: 22,
   username: 'root',
-  authType: 'agent',
+  // 默认为密码认证：fillForm 的同一个回落值，新增节点即选中“密码”。
+  authType: 'password',
   keyPath: '',
   password: '',
   description: '',
@@ -338,10 +364,13 @@ defineExpose({
 function fillForm(s) {
   form.id = s.id || '';
   form.alias = s.alias || '';
+  form.group = normalizeSSHGroup(s.group);
   form.host = s.host || '';
   form.port = s.port || 22;
   form.username = s.username !== undefined && s.username !== '' ? s.username : 'root';
-  form.authType = s.authType || 'agent';
+  // 新增节点走 fillForm({})，这里就是默认的认证方式；编辑/复制时用节点自带的值。
+  // 已存节点在加载时已被后端 normalizeSSHAuthType 归一化，authType 恒有值，此回落不会误伤历史节点。
+  form.authType = s.authType || 'password';
   form.keyPath = s.keyPath || '';
   form.password = s.password || '';
   form.description = s.description || '';
@@ -378,15 +407,15 @@ function openCloneDialog(s) {
 
 async function saveForm() {
   if (!form.alias.trim()) {
-    message.warning(t('sshCluster.modal.alias') + ' required');
+    message.warning(t('sshCluster.modal.aliasRequired'));
     return;
   }
   if (!form.host.trim()) {
-    message.warning(t('sshCluster.modal.host') + ' required');
+    message.warning(t('sshCluster.modal.hostRequired'));
     return;
   }
   if (!form.username.trim()) {
-    message.warning(t('sshCluster.modal.username') + ' required');
+    message.warning(t('sshCluster.modal.usernameRequired'));
     return;
   }
   if (!form.description.trim()) {
@@ -416,6 +445,7 @@ async function saveForm() {
     await SaveSSHServer({
       id: form.id,
       alias: form.alias.trim(),
+      group: normalizeSSHGroup(form.group),
       host: form.host.trim(),
       port: form.port || 22,
       username: form.username.trim(),
@@ -432,6 +462,8 @@ async function saveForm() {
     message.success(t('sshCluster.saved'));
     editorVisible.value = false;
     await loadServers();
+    // 保存的节点落在哪个分组，就停在哪个页签，不让用户在其它分组里找不到它。
+    activeGroupTab.value = normalizeSSHGroup(form.group);
     emit('servers-changed');
   } catch (err) {
     message.error(err?.message || 'Save failed');
@@ -480,6 +512,15 @@ async function choosePrivateKeyFile() {
 
 function endpointOf(server) {
   return `${server.username}@${server.host}:${server.port || 22}`;
+}
+
+// 认证方式下拉的选项：标签走 t() 现取，切换语言时随重渲染更新。
+function authTypeOptions() {
+  return [
+    { label: t('sshCluster.modal.authTypeAgent'), value: 'agent' },
+    { label: t('sshCluster.modal.authTypeKey'), value: 'key' },
+    { label: t('sshCluster.modal.authTypePassword'), value: 'password' },
+  ];
 }
 
 function authTypeLabel(authType) {
@@ -644,136 +685,56 @@ async function importServers(event) {
   font-size: 13px;
 }
 
-/* 表格行布局：表头与数据行共用同一套 grid 列宽。列宽带下限、整表有 min-width，
-   窄窗口下由 .panel-scroll-body 横向滚动，不让别名/地址被挤成竖排。 */
-.ssh-table-wrap {
-  /* 列宽下限和 920 + 5×gap 12 + 左右 padding 24 = 1004：写小于它，最窄窗口下
-     表格仍会溢出横向滚动容器。 */
-  min-width: 1004px;
+/* 卡片列表：一行一条，外形与首行结构统一由全局 .ally-row-card / .ally-row-* 提供
+   （见 style.css）；这里只补 SSH 特有的地址/描述两行。风险等级只由徽标表达，
+   不给高风险卡片额外加左侧色条。 */
+.ssh-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.ssh-table-head,
-.ssh-table-row {
-  display: grid;
-  grid-template-columns:
-    minmax(140px, 1.1fr)
-    minmax(180px, 1.3fr)
-    104px
-    minmax(200px, 1.8fr)
-    56px
-    240px;
-  gap: 12px;
-  align-items: center;
-  padding: 9px 12px;
-}
-
-.ssh-table-head {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  color: var(--ally-text-muted);
-  border-bottom: 1px solid var(--ally-border);
-}
-
-.ssh-table-row {
-  border-bottom: 1px solid var(--ally-border-subtle);
-  border-left: 3px solid transparent;
-  font-size: 12px;
-  color: var(--ally-text-body);
-  transition: none;
-  /* 集群页几百行时离屏行跳过渲染（铁律：先限长、再跳过）。行高固定可估：
-     padding 9*2 + 12px 单行文本 ≈ 38px；行仍在 DOM，查找/Tab/勾选态不受影响。 */
+.ssh-node-card {
+  /* 节点多时离屏卡片跳过渲染（铁律：先限长、再跳过）。三行固定结构高度可估：
+     padding 8×2 + 首行 22 + 地址 16 + 描述 14 + 两道 gap 12 ≈ 88px。 */
   content-visibility: auto;
-  contain-intrinsic-size: auto 38px;
+  contain-intrinsic-size: auto 88px;
 }
 
-.ssh-table-row:hover {
-  background: var(--ally-hover-faint);
-}
-
-.ssh-table-row.risk-high {
-  border-left-color: #ef4444;
-}
-
-.ssh-table-row:last-child {
-  border-bottom: 0;
-}
-
-.ssh-cell-alias {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.ssh-alias-text {
-  font-weight: 600;
-  color: var(--ally-text-high);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ssh-cell-endpoint {
-  font-family: var(--ally-mono-font, ui-monospace, monospace);
-  color: var(--ally-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ssh-cell-auth,
-.ssh-cell-desc {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ssh-cell-auth {
-  color: var(--ally-text-faint);
-}
-
-.ssh-cell-desc {
-  color: var(--ally-text-soft);
-}
-
-.ssh-cell-risk {
-  display: flex;
-  align-items: center;
-}
-
-.ssh-cell-actions {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
-}
-
-.ssh-risk-badge {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.ssh-risk-badge.high {
+/* 徽标色相按风险/待授权区分：带上卡片前缀提一级权重，稳定压过 .ally-row-badge
+   的灰底（两处都是单类选择器时胜负只看样式表顺序）。 */
+.ssh-node-card .ssh-badge-high {
   background: rgba(239, 68, 68, 0.15);
   color: #ef4444;
 }
 
-.ssh-risk-badge.low {
+.ssh-node-card .ssh-badge-low {
   background: rgba(16, 185, 129, 0.15);
   color: #10b981;
 }
 
-.ssh-status-badge.pending {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-weight: 500;
+.ssh-node-card .ssh-badge-pending {
   background: rgba(234, 179, 8, 0.15);
   color: #eab308;
+}
+
+.ssh-card-endpoint {
+  font-family: var(--ally-mono-font, ui-monospace, monospace);
+  /* 独占第一行后它就是卡片的抬头：等宽 + 提一级字号与颜色，别压成小字注释。 */
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ally-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ssh-card-desc {
+  font-size: 11px;
+  color: var(--ally-text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ssh-editor-form {
@@ -812,6 +773,11 @@ async function importServers(event) {
   color: var(--ally-text-muted);
   line-height: 1.4;
   margin-top: 2px;
+}
+
+/* 紧跟在一排字段下方的说明：抵掉表单列间距，让它贴着上面那排。 */
+.hint-under-row {
+  margin-top: -6px;
 }
 
 .ssh-editor-actions {

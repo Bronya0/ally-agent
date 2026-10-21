@@ -163,6 +163,9 @@ func TestFooterGitCancelledBatchSkipsRemainingRepos(t *testing.T) {
 }
 
 func TestFooterGitWaitHasDeadline(t *testing.T) {
+	prev := gitStatusWaitBudget
+	gitStatusWaitBudget = 200 * time.Millisecond
+	t.Cleanup(func() { gitStatusWaitBudget = prev })
 	app := footerStatsTestApp(t)
 	root := workspaceMapCacheKey(app.config.Workspace)
 	// An existing computation never completes; a later caller still has its own deadline.
@@ -171,7 +174,7 @@ func TestFooterGitWaitHasDeadline(t *testing.T) {
 	if got := app.GetGitStatus(root); got.IsRepo {
 		t.Fatal("timed-out waiter returned a repository")
 	}
-	if elapsed := time.Since(started); elapsed < 4*time.Second || elapsed > 7*time.Second {
-		t.Fatalf("waiter did not respect the 5-second budget: %s", elapsed)
+	if elapsed := time.Since(started); elapsed < 150*time.Millisecond || elapsed > 2*time.Second {
+		t.Fatalf("waiter did not respect its budget: %s", elapsed)
 	}
 }

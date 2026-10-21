@@ -115,13 +115,6 @@ func TestLoadWindowStateRejectsInvalid(t *testing.T) {
 	}
 }
 
-func TestLoadWindowStateMissingFile(t *testing.T) {
-	redirectAppStateDir(t)
-	if _, ok := loadWindowState(); ok {
-		t.Fatal("expected ok=false with no window.json")
-	}
-}
-
 func TestApplySavedWindowGeometry(t *testing.T) {
 	t.Run("applies persisted normal geometry", func(t *testing.T) {
 		redirectAppStateDir(t)

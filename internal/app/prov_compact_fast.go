@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: GPL-3.0-only
+package app
+
+import (
+	"encoding/json"
+	"strings"
+
+	openai "github.com/sashabaranov/go-openai"
+)
+
+// Retain exact reasoning payloads for the untouched tail only. Clearing the
+// entire ledger would lose recent signed/encrypted reasoning; leaving it intact
+// would silently replay the old thoughts the user just asked us to compact.
+// Snapshots are replaced copy-on-write, matching appendTurn/appendResponses.
+func (s *reasoningStash) retainFastCompactTail(sessionID string, history, compacted []openai.ChatCompletionMessage, cutoff int) bool {
+	if s == nil || cutoff <= 0 {
+		return false
+	}
+	callIDs := map[string]bool{}
+	nativeKeys := map[string]bool{}
+	type nativeRewrite struct{ key, excerpt string }
+	rewrites := map[string]nativeRewrite{}
+	ordinal := 0
+	for i, m := range history {
+		if m.Role != openai.ChatMessageRoleAssistant {
+			continue
+		}
+		if i >= cutoff {
+			for _, call := range m.ToolCalls {
+				callIDs[call.ID] = true
+			}
+			nativeKeys[responsesMessageKey(ordinal, m)] = true
+		} else {
+			excerpt := ""
+			if m.ReasoningContent != compacted[i].ReasoningContent {
+				if start := strings.LastIndex(compacted[i].Content, fastCompactReasoningMarker); start >= 0 {
+					excerpt = compacted[i].Content[start:]
+				}
+			}
+			rewrites[responsesMessageKey(ordinal, m)] = nativeRewrite{responsesMessageKey(ordinal, compacted[i]), excerpt}
+		}
+		ordinal++
+	}
+	prefix := reasoningStashScope(openAIResponsesPromptCacheKey(sessionID)) + "\x1f"
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	for key, entry := range s.entries {
+		if !strings.HasPrefix(key, prefix) || entry.payload == nil {
+			continue
+		}
+		next := &sessionReasoningPayload{responsesNative: map[string][]json.RawMessage{}}
+		for _, turn := range entry.payload.turns {
+			keep := len(turn.callIDs) > 0
+			for _, id := range turn.callIDs {
+				keep = keep && callIDs[id]
+			}
+			if keep {
+				next.turns = append(next.turns, turn)
+			} else {
+				changed = true
+			}
+		}
+		for messageKey, output := range entry.payload.responsesNative {
+			if nativeKeys[messageKey] {
+				next.responsesNative[messageKey] = output
+			} else if rewrite, ok := rewrites[messageKey]; ok {
+				// Preserve native answer ordering/phase and function-call identity.
+				// Only opaque reasoning is removed; an ordinary text excerpt is
+				// prepended without rewriting any original output item.
+				clean, removed := compactNativeResponses(output, rewrite.excerpt)
+				if len(clean) > 0 {
+					next.responsesNative[rewrite.key] = clean
+				}
+				changed = changed || removed || rewrite.key != messageKey
+			} else {
+				changed = true
+			}
+		}
+		entry.payload = next
+	}
+	return changed
+}
+
+func compactNativeResponses(output []json.RawMessage, excerpt string) ([]json.RawMessage, bool) {
+	var clean []json.RawMessage
+	removed := false
+	if excerpt != "" {
+		text, _ := json.Marshal(map[string]any{"type": "message", "role": "assistant", "content": excerpt})
+		clean = append(clean, text)
+	}
+	for _, raw := range output {
+		var item struct{ Type string }
+		if json.Unmarshal(raw, &item) != nil {
+			// Unusable replay must fall back to the visible history.
+			return nil, true
+		}
+		if item.Type == "reasoning" {
+			removed = true
+			continue
+		}
+		clean = append(clean, raw)
+	}
+	return clean, removed || excerpt != ""
+}

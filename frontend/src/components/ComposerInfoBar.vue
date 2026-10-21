@@ -9,20 +9,28 @@ Public License v3. See the LICENSE file for details.
 -->
 <template>
   <div class="composer-info">
-    <button
-      type="button"
-      class="composer-icon-btn composer-new-session-btn"
-      :title="$t('app.sessions.newSession')"
-      :aria-label="$t('app.sessions.newSession')"
-      @click.stop="$emit('newSession')"
-    ><PlusOutlined /></button>
-    <button
-      type="button"
-      class="composer-icon-btn composer-sessions-btn"
-      :title="$t('commands.sessions')"
-      :aria-label="$t('commands.sessions')"
-      @click.stop="$emit('showSessions')"
-    ><MenuOutlined /></button>
+    <n-tooltip placement="top">
+      <template #trigger>
+        <button
+          type="button"
+          class="composer-icon-btn composer-new-session-btn"
+          :aria-label="$t('app.sessions.newSession')"
+          @click.stop="$emit('newSession')"
+        ><PlusOutlined /></button>
+      </template>
+      {{ $t('app.sessions.newSession') }}
+    </n-tooltip>
+    <n-tooltip placement="top">
+      <template #trigger>
+        <button
+          type="button"
+          class="composer-icon-btn composer-sessions-btn"
+          :aria-label="$t('commands.sessions')"
+          @click.stop="$emit('showSessions')"
+        ><MenuOutlined /></button>
+      </template>
+      {{ $t('commands.sessions') }}
+    </n-tooltip>
     <ModelMenu
       :models="props.config.models || []"
       :active-identity="modelConfigIdentity(props.config)"
@@ -31,7 +39,12 @@ Public License v3. See the LICENSE file for details.
       @select="(index) => emit('switchModel', index)"
       @manage="emit('openConfig')"
     >
-      <span class="info-model" style="cursor:pointer" :title="running ? $t('composer.lockedWhileRunning') : ''">{{ currentModelLabel }}</span>
+      <n-tooltip :disabled="!running" placement="top">
+        <template #trigger>
+          <span class="info-model" style="cursor:pointer">{{ currentModelLabel }}</span>
+        </template>
+        {{ $t('composer.lockedWhileRunning') }}
+      </n-tooltip>
     </ModelMenu>
     <n-dropdown
       trigger="click"
@@ -40,15 +53,25 @@ Public License v3. See the LICENSE file for details.
       :options="reasoningEffortOptions"
       @select="onReasoningEffortSelect"
     >
-      <span ref="effortTriggerRef" class="info-effort" :title="running ? $t('composer.lockedWhileRunning') : $t('composer.effort.title')">
-        <span class="info-effort-label">{{ currentEffortLabel }}</span>
-        <span class="info-effort-caret">▾</span>
-      </span>
+      <n-tooltip placement="top">
+        <template #trigger>
+          <span ref="effortTriggerRef" class="info-effort">
+            <span class="info-effort-label">{{ currentEffortLabel }}</span>
+            <span class="info-effort-caret">▾</span>
+          </span>
+        </template>
+        {{ running ? $t('composer.lockedWhileRunning') : $t('composer.effort.title') }}
+      </n-tooltip>
     </n-dropdown>
     <span class="info-workspace">
-      <button class="info-workspace-btn" type="button" :title="activeWorkspacePath || $t('composer.workspace.open')" @click.stop="$emit('openWorkspace')">
-        {{ activeWorkspaceName || $t('composer.workspace.none') }}
-      </button>
+      <n-tooltip :style="{ maxWidth: '360px', wordBreak: 'break-all' }" placement="top">
+        <template #trigger>
+          <button class="info-workspace-btn" type="button" @click.stop="$emit('openWorkspace')">
+            {{ activeWorkspaceName || $t('composer.workspace.none') }}
+          </button>
+        </template>
+        {{ activeWorkspacePath || $t('composer.workspace.open') }}
+      </n-tooltip>
       <n-popover
         v-if="activeWorkspacePath"
         trigger="click"
@@ -58,17 +81,21 @@ Public License v3. See the LICENSE file for details.
         class="extra-roots-popover"
       >
         <template #trigger>
-          <button
-            type="button"
-            class="composer-icon-btn extra-roots-btn"
-            :class="{ 'has-roots': extraRoots.length > 0 }"
-            :title="$t('extraRoots.button.title')"
-            :aria-label="$t('extraRoots.button.title')"
-            @click.stop
-          >
-            <AppstoreAddOutlined class="extra-roots-icon" />
-            <span v-if="extraRoots.length > 0" class="extra-roots-count">{{ extraRoots.length }}</span>
-          </button>
+          <n-tooltip placement="top">
+            <template #trigger>
+              <button
+                type="button"
+                class="composer-icon-btn extra-roots-btn"
+                :class="{ 'has-roots': extraRoots.length > 0 }"
+                :aria-label="$t('extraRoots.button.title')"
+                @click.stop
+              >
+                <AppstoreAddOutlined class="extra-roots-icon" />
+                <span v-if="extraRoots.length > 0" class="extra-roots-count">{{ extraRoots.length }}</span>
+              </button>
+            </template>
+            {{ $t('extraRoots.button.title') }}
+          </n-tooltip>
         </template>
         <div class="extra-roots-panel">
           <div class="extra-roots-header">
@@ -96,45 +123,60 @@ Public License v3. See the LICENSE file for details.
           >{{ $t('extraRoots.panel.add') }}</button>
         </div>
       </n-popover>
-      <button
-        type="button"
-        class="composer-icon-btn workspace-terminal-btn"
-        :title="$t('composer.workspace.terminal')"
-        :aria-label="$t('composer.workspace.terminal')"
-        @click.stop="$emit('openTerminal')"
-      ><CodeOutlined /></button>
+      <n-tooltip placement="top">
+        <template #trigger>
+          <button
+            type="button"
+            class="composer-icon-btn workspace-terminal-btn"
+            :aria-label="$t('composer.workspace.terminal')"
+            @click.stop="$emit('openTerminal')"
+          ><CodeOutlined /></button>
+        </template>
+        {{ $t('composer.workspace.terminal') }}
+      </n-tooltip>
     </span>
-    <button
-      type="button"
-      :class="['task-chip', 'task-chip-service', { 'has-tasks': serviceRunningCount > 0 }]"
-      :title="`${$t('composer.taskCenter.services')} · ${$t('service.runningCount', { count: serviceRunningCount })}`"
-      :aria-label="$t('composer.taskCenter.services')"
-      @click.stop="$emit('openTaskCenter', 'services')"
-    >
-      <span class="task-chip-letter">S</span>
-      <span class="task-chip-count">{{ serviceRunningCount }}</span>
-    </button>
-    <button
-      type="button"
-      :class="['task-chip', 'task-chip-scheduled', { 'has-tasks': scheduledRunningCount > 0 }]"
-      :title="`${$t('composer.taskCenter.scheduled')} · ${$t('scheduled.runningCount', { count: scheduledRunningCount })}`"
-      :aria-label="$t('composer.taskCenter.scheduled')"
-      @click.stop="$emit('openTaskCenter', 'scheduled')"
-    >
-      <span class="task-chip-letter">C</span>
-      <span class="task-chip-count">{{ scheduledRunningCount }}</span>
-    </button>
-    <button
-      v-if="activeWorkspacePath"
-      type="button"
-      :class="['task-chip', 'task-chip-ssh', { 'has-tasks': allowedSshServers.length > 0 }]"
-      :title="$t('sshCluster.button.title')"
-      :aria-label="$t('sshCluster.button.title')"
-      @click.stop="$emit('openSshAuth')"
-    >
-      <span class="task-chip-letter">SSH</span>
-      <span class="task-chip-count">{{ allowedSshServers.length }}</span>
-    </button>
+    <n-tooltip placement="top">
+      <template #trigger>
+        <button
+          type="button"
+          :class="['task-chip', 'task-chip-service', { 'has-tasks': serviceRunningCount > 0 }]"
+          :aria-label="$t('composer.taskCenter.services')"
+          @click.stop="$emit('openTaskCenter', 'services')"
+        >
+          <span class="task-chip-letter">S</span>
+          <span class="task-chip-count">{{ serviceRunningCount }}</span>
+        </button>
+      </template>
+      {{ $t('composer.taskCenter.services') }} · {{ $t('service.runningCount', { count: serviceRunningCount }) }}
+    </n-tooltip>
+    <n-tooltip placement="top">
+      <template #trigger>
+        <button
+          type="button"
+          :class="['task-chip', 'task-chip-scheduled', { 'has-tasks': scheduledRunningCount > 0 }]"
+          :aria-label="$t('composer.taskCenter.scheduled')"
+          @click.stop="$emit('openTaskCenter', 'scheduled')"
+        >
+          <span class="task-chip-letter">C</span>
+          <span class="task-chip-count">{{ scheduledRunningCount }}</span>
+        </button>
+      </template>
+      {{ $t('composer.taskCenter.scheduled') }} · {{ $t('scheduled.runningCount', { count: scheduledRunningCount }) }}
+    </n-tooltip>
+    <n-tooltip v-if="activeWorkspacePath" placement="top">
+      <template #trigger>
+        <button
+          type="button"
+          :class="['task-chip', 'task-chip-ssh', { 'has-tasks': allowedSshServers.length > 0 }]"
+          :aria-label="$t('sshCluster.button.title')"
+          @click.stop="$emit('openSshAuth')"
+        >
+          <span class="task-chip-letter">SSH</span>
+          <span class="task-chip-count">{{ allowedSshServers.length }}</span>
+        </button>
+      </template>
+      {{ $t('sshCluster.button.title') }}
+    </n-tooltip>
     <span v-if="gitStatsLoading" class="info-git" aria-hidden="true">...</span>
     <template v-else-if="gitStatus.isRepo">
       <span class="info-sep">·</span>
@@ -179,14 +221,19 @@ Public License v3. See the LICENSE file for details.
           </ul>
         </div>
       </n-popover>
-      <span v-else class="info-git" :title="$t('composer.git.open')" @click.stop="$emit('openGitDiff')">
-        <span class="info-git-branch">{{ gitStatus.branch }}</span>
-        <span v-if="gitStatus.ahead > 0" class="git-stat ahead" :title="$t('composer.git.ahead')">↑{{ gitStatus.ahead }}</span>
-        <span v-if="gitStatus.behind > 0" class="git-stat behind" :title="$t('composer.git.behind')">↓{{ gitStatus.behind }}</span>
-        <span v-if="gitStatus.added > 0" class="git-stat added" :title="$t('composer.git.added')">+{{ gitStatus.added }}</span>
-        <span v-if="gitStatus.modified > 0" class="git-stat modified" :title="$t('composer.git.modified')">~{{ gitStatus.modified }}</span>
-        <span v-if="gitStatus.deleted > 0" class="git-stat deleted" :title="$t('composer.git.deleted')">-{{ gitStatus.deleted }}</span>
-      </span>
+      <n-tooltip v-else placement="top">
+        <template #trigger>
+          <span class="info-git" @click.stop="$emit('openGitDiff')">
+            <span class="info-git-branch">{{ gitStatus.branch }}</span>
+            <span v-if="gitStatus.ahead > 0" class="git-stat ahead" :title="$t('composer.git.ahead')">↑{{ gitStatus.ahead }}</span>
+            <span v-if="gitStatus.behind > 0" class="git-stat behind" :title="$t('composer.git.behind')">↓{{ gitStatus.behind }}</span>
+            <span v-if="gitStatus.added > 0" class="git-stat added" :title="$t('composer.git.added')">+{{ gitStatus.added }}</span>
+            <span v-if="gitStatus.modified > 0" class="git-stat modified" :title="$t('composer.git.modified')">~{{ gitStatus.modified }}</span>
+            <span v-if="gitStatus.deleted > 0" class="git-stat deleted" :title="$t('composer.git.deleted')">-{{ gitStatus.deleted }}</span>
+          </span>
+        </template>
+        {{ $t('composer.git.open') }}
+      </n-tooltip>
     </template>
     <n-popover v-if="!footerStatsLoading && contextBreakdown" :show="contextPopoverVisible" trigger="manual" placement="top" :show-arrow="false" @clickoutside="contextPopoverVisible = false">
       <template #trigger>
@@ -248,6 +295,13 @@ Public License v3. See the LICENSE file for details.
             :title="running ? $t('app.compact.wait') : $t('composer.context.compact')"
             @click.stop="onCompactClick"
           >{{ $t('composer.context.compact') }}</button>
+          <button
+            type="button"
+            class="context-compact-btn context-compact-btn-primary"
+            :disabled="running"
+            :title="running ? $t('app.compact.wait') : $t('commands.compactFast')"
+            @click.stop="onFastCompactClick"
+          >{{ $t('composer.context.compactFast') }}</button>
           <button
             type="button"
             class="context-compact-btn"
@@ -318,7 +372,7 @@ const props = defineProps({
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot', 'openTerminal', 'compactContext', 'compactLessons', 'updateCodegraph', 'openSshAuth']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot', 'openTerminal', 'compactContext', 'compactContextFast', 'compactLessons', 'updateCodegraph', 'openSshAuth']);
 
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => formatModelLabel(props.config));
@@ -367,6 +421,11 @@ function onReasoningEffortSelect(key) {
 function onCompactClick() {
   contextPopoverVisible.value = false;
   emit('compactContext');
+}
+
+function onFastCompactClick() {
+  contextPopoverVisible.value = false;
+  emit('compactContextFast');
 }
 
 function onLessonClick() {

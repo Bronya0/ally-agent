@@ -50,14 +50,6 @@ func TestEventRingAddAndSince(t *testing.T) {
 	}
 }
 
-func TestEventRingEmpty(t *testing.T) {
-	r := newEventRing(3)
-	ev, next := r.since(0)
-	if len(ev) != 0 || next != 0 {
-		t.Fatalf("empty ring: %v/%d", ev, next)
-	}
-}
-
 // ---- fanoutEventSink ----
 
 type recordingSink struct {

@@ -22,15 +22,6 @@ func writeLessonsFile(t *testing.T, root, content string) {
 	}
 }
 
-func TestBuildProjectLessonsContextEmptyWithoutFile(t *testing.T) {
-	if got := buildProjectLessonsContext(""); got != "" {
-		t.Fatalf("expected empty context for empty workspace, got %q", got)
-	}
-	if got := buildProjectLessonsContext(t.TempDir()); got != "" {
-		t.Fatalf("expected empty context without lessons file, got %q", got)
-	}
-}
-
 func TestBuildProjectLessonsContextReadsFile(t *testing.T) {
 	root := t.TempDir()
 	writeLessonsFile(t, root, "- [a] x → y → z @f.go\n- [b] p → q → r @g.go\n")

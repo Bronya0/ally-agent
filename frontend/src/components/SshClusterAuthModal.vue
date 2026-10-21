@@ -56,43 +56,53 @@ Public License v3. See the LICENSE file for details.
       </div>
       <!-- 表体限高独立滚动：头部（说明+搜索+表头）保持可见，列表区自己滚，
            不能让整个模态框跟着内容长高/整体滚动。 -->
-      <div v-else class="ssh-auth-scroll">
-        <div class="ssh-auth-table">
-        <div class="ssh-auth-head">
-          <span class="ssh-auth-col-check">{{ $t('sshCluster.panel.title') }}</span>
-          <span>{{ $t('sshCluster.table.colAlias') }}</span>
-          <span>{{ $t('sshCluster.table.colEndpoint') }}</span>
-          <span>{{ $t('sshCluster.table.colDescription') }}</span>
-          <span class="ssh-auth-col-risk">{{ $t('sshCluster.table.colRisk') }}</span>
-        </div>
-        <div
-          v-for="s in sortedServers"
-          :key="s.alias"
-          class="ssh-auth-row"
-          :class="{ 'risk-high': s.riskLevel === 'high', disabled: !allowedSshServersReady }"
-          @click="toggleServer(s.alias)"
-        >
-          <span class="ssh-auth-col-check">
-            <n-checkbox
-              :checked="isServerAllowed(s.alias)"
-              :disabled="!allowedSshServersReady"
-              @click.stop
-              @update:checked="() => toggleServer(s.alias)"
-            />
-          </span>
-          <span class="ssh-auth-cell-alias" :title="s.alias">
-            {{ s.alias }}
-          </span>
-          <span class="ssh-auth-cell-endpoint" :title="endpointOf(s)">{{ endpointOf(s) }}</span>
-          <span class="ssh-auth-cell-desc" :title="s.description">{{ s.description || '-' }}</span>
-          <span class="ssh-auth-col-risk">
-            <span :class="['ssh-auth-risk-badge', s.riskLevel === 'high' ? 'high' : 'low']">
-              {{ s.riskLevel === 'high' ? $t('sshCluster.table.riskHigh') : $t('sshCluster.table.riskLow') }}
-            </span>
-          </span>
-        </div>
-        </div>
-      </div>
+      <n-tabs
+        v-else
+        :key="groupTabSetKey"
+        v-model:value="activeGroupTab"
+        type="line"
+        animated
+      >
+        <n-tab-pane v-for="group in groupTabs" :key="group.name" :name="group.name" :tab="group.name">
+          <div class="ssh-auth-scroll">
+            <div class="ssh-auth-table">
+              <div class="ssh-auth-head">
+                <span class="ssh-auth-col-check">{{ $t('sshCluster.panel.title') }}</span>
+                <span>{{ $t('sshCluster.table.colAlias') }}</span>
+                <span>{{ $t('sshCluster.table.colEndpoint') }}</span>
+                <span>{{ $t('sshCluster.table.colDescription') }}</span>
+                <span class="ssh-auth-col-risk">{{ $t('sshCluster.table.colRisk') }}</span>
+              </div>
+              <div
+                v-for="s in group.servers"
+                :key="s.alias"
+                class="ssh-auth-row"
+                :class="{ 'risk-high': s.riskLevel === 'high', disabled: !allowedSshServersReady }"
+                @click="toggleServer(s.alias)"
+              >
+                <span class="ssh-auth-col-check">
+                  <n-checkbox
+                    :checked="isServerAllowed(s.alias)"
+                    :disabled="!allowedSshServersReady"
+                    @click.stop
+                    @update:checked="() => toggleServer(s.alias)"
+                  />
+                </span>
+                <span class="ssh-auth-cell-alias" :title="s.alias">
+                  {{ s.alias }}
+                </span>
+                <span class="ssh-auth-cell-endpoint" :title="endpointOf(s)">{{ endpointOf(s) }}</span>
+                <span class="ssh-auth-cell-desc" :title="s.description">{{ s.description || '-' }}</span>
+                <span class="ssh-auth-col-risk">
+                  <span :class="['ssh-auth-risk-badge', s.riskLevel === 'high' ? 'high' : 'low']">
+                    {{ s.riskLevel === 'high' ? $t('sshCluster.table.riskHigh') : $t('sshCluster.table.riskLow') }}
+                  </span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </n-tab-pane>
+      </n-tabs>
     </div>
   </n-modal>
 </template>
@@ -100,6 +110,7 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, ref, watch } from 'vue';
 import SearchOutlined from '@vicons/antd/SearchOutlined';
+import { groupSSHServers, resolveActiveGroup, sshServerMatchesQuery } from '../utils/sshClusterGroups.mjs';
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -184,15 +195,16 @@ const filteredServers = computed(() => {
     list = list.filter((s) => draftAllowed.value.has(normAlias(s.alias)));
   }
   if (!q) return list;
-  return list.filter((s) => {
-    return (
-      (s.alias && s.alias.toLowerCase().includes(q)) ||
-      (s.host && s.host.toLowerCase().includes(q)) ||
-      (s.username && s.username.toLowerCase().includes(q)) ||
-      (s.description && s.description.toLowerCase().includes(q))
-    );
-  });
+  return list.filter((s) => sshServerMatchesQuery(s, searchQuery.value));
 });
+
+// 分组页签：与集群页同一套分组口径；组内顺序沿用上面的授权置顶排序。
+const activeGroupTab = ref('');
+const groupTabs = computed(() => groupSSHServers(sortedServers.value));
+const groupTabSetKey = computed(() => groupTabs.value.map((group) => group.name).join('\u0000'));
+watch(groupTabSetKey, () => {
+  activeGroupTab.value = resolveActiveGroup(groupTabs.value, activeGroupTab.value);
+}, { immediate: true });
 
 function isServerAllowed(alias) {
   return draftAllowed.value.has(normAlias(alias));
@@ -376,7 +388,8 @@ function endpointOf(server) {
 
 .ssh-auth-cell-endpoint {
   font-family: var(--ally-mono-font, ui-monospace, monospace);
-  color: var(--ally-text-muted);
+  /* 同集群页：地址用行正文色，不再压到 muted。 */
+  color: var(--ally-text-body);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -68,7 +68,7 @@ Public License v3. See the LICENSE file for details.
         <div class="mcp-form-mode">
           <div v-if="!mcpFormServers.length" class="saved-model-empty">{{ t('settings.mcpEmpty') }}</div>
           <div v-else-if="!filteredMcpServers.length" class="saved-model-empty">{{ t('common.searchEmpty') }}</div>
-          <div v-for="entry in filteredMcpServers" :key="entry.srv._key" class="mcp-server-row">
+          <div v-for="entry in filteredMcpServers" :key="entry.srv._key" class="mcp-server-row ally-row-card">
             <div class="mcp-row-main">
               <span :class="['mcp-dot', mcpStatusFor(entry.srv).status]"></span>
               <span class="mcp-name" :title="entry.srv.name?.trim() || $t('settings.mcpUnnamedServer')">{{ entry.srv.name?.trim() || $t('settings.mcpUnnamedServer') }}</span>
@@ -114,7 +114,7 @@ Public License v3. See the LICENSE file for details.
              后端只在**新会话**注入 schema 时过滤。布局一行多卡（auto-fill）。 -->
         <div class="config-section-subtitle">{{ $t('settings.toolsSubtitle') }}</div>
         <div class="builtin-tool-grid">
-          <div v-for="tool in builtinToolSettings" :key="tool.name" class="mcp-server-row builtin-tool-card">
+          <div v-for="tool in builtinToolSettings" :key="tool.name" class="mcp-server-row ally-row-card builtin-tool-card">
             <div class="mcp-row-main">
               <span class="mcp-name" :title="tool.label">{{ tool.label }}</span>
               <div class="mcp-row-side">
@@ -899,15 +899,8 @@ watch(
   margin-bottom: 12px;
 }
 
-.mcp-server-row {
-  border: 1px solid var(--ally-border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  background: var(--ally-hover-faint);
-}
+/* 卡片外形（边框/圆角/内边距/底色）已统一到全局 .ally-row-card（见 style.css），
+   两类卡片都带那个类；这里只保留 MCP 特有的行内元素样式。 */
 
 .mcp-row-main {
   display: flex;

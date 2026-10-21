@@ -128,6 +128,18 @@ test('压缩阈值的默认值与范围与后端一致', () => {
   assert.equal(COMPACT_THRESHOLD_MAX, Math.max(...bounds));
 });
 
+test('自动压缩方式默认全文总结，保留最近内容可往返且与后端枚举一致', () => {
+  const source = readFileSync(new URL('../../../internal/app/biz_compact.go', import.meta.url), 'utf8');
+  assert.equal(defaultConfig().autoCompactMethod, 'summary');
+  for (const [input, expected] of [[undefined, 'summary'], ['', 'summary'], ['summary', 'summary'], ['recent', 'recent'], [' RECENT ', 'recent'], ['unknown', 'summary']]) {
+    const draft = defaultConfig();
+    assignConfig(draft, { autoCompactMethod: input });
+    assert.equal(draft.autoCompactMethod, expected);
+  }
+  assert.equal(/autoCompactMethodSummary\s*=\s*"([^"]+)"/.exec(source)[1], 'summary');
+  assert.equal(/autoCompactMethodRecent\s*=\s*"([^"]+)"/.exec(source)[1], 'recent');
+});
+
 test('tool concurrency defaults, bounds and backend constants agree', () => {
   assert.equal(defaultConfig().toolConcurrency, 4);
   for (const [input, expected] of [[undefined, 4], [null, 4], [0, 4], [-1, 1], [1, 1], [8, 8], [16, 16], [99, 16], [Infinity, 4], [2.7, 3]]) {

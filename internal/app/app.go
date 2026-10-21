@@ -668,6 +668,9 @@ type ConfigState struct {
 	// configs migrate transparently; the effective value is exposed via
 	// effectiveCompactThreshold().
 	CompactThreshold float64 `json:"compactThreshold,omitempty"`
+	// AutoCompactMethod selects threshold compaction: summary (default) or recent.
+	// Provider context overflow still uses a full LLM summary for recovery.
+	AutoCompactMethod string `json:"autoCompactMethod,omitempty"`
 	// CompactTimeoutSeconds bounds the compaction LLM call (summary request).
 	// Zero means "use default" so legacy configs migrate transparently; the
 	// effective value is exposed via clampCompactTimeoutSeconds().
@@ -2200,12 +2203,8 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		usedTokens := bd.Total
 		compactThreshold := compactThresholdLimit(cfg)
 		if usedTokens > compactThreshold {
-			// Single compaction tier: the LLM summary. It is a complete rewrite of
-			// the history (see compactRunHistory). The former "micro-compaction"
-			// tier is gone: it rewrote the middle of the history in place on every
-			// threshold crossing, which invalidated the provider prompt cache from
-			// the rewrite point onward while reclaiming only a few stale tool
-			// results.
+			// compactRunHistory selects the configured threshold strategy. A
+			// local compaction with nothing left to trim is a quiet skip.
 			if newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonThreshold, req, messages, usedTokens); compactErr == nil {
 				messages = newMessages
 				bd = syncBreakdown(messages, true)

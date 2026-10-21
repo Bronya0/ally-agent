@@ -1339,6 +1339,73 @@ html.rail-expanded .chat-layout {
   text-align: center;
 }
 
+/* 设置类页面里的“单条实体卡”：MCP 服务器行、模型卡、SSH 节点卡共用这一套外形
+   （细边框 + 8px 圆角 + 8/10 内边距 + 极淡底色 + 首行“名称/徽标/右侧操作”）。
+   这是唯一来源：MCP 的 .mcp-server-row 也消费它，改外形只改这里，别再各写一份。 */
+.ally-row-card {
+  border: 1px solid var(--ally-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--ally-hover-faint);
+  min-width: 0;
+}
+
+/* 首行：名称 + 徽标在左，.ally-row-side 靠 margin-left:auto 推到行尾。
+   名称是唯一会被用户内容撑长的格：必须能省略（全名走 title），min-width:0 才允许
+   它在 flex 行里被压窄，否则会折行把卡片撑高或顶出边框。 */
+.ally-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ally-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--ally-text-primary);
+}
+
+.ally-row-badge {
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--ally-state-hover);
+  color: var(--ally-text-muted);
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ally-row-side {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+/* 窄窗口：操作区换行后独占一行右对齐，不把名称挤没。 */
+@media (max-width: 640px) {
+  .ally-row-main {
+    flex-wrap: wrap;
+  }
+
+  .ally-row-side {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
 /* Settings page: inline container on the right of the mode sider, replacing
    the old modal dialog. */
 .settings-page-container {
@@ -2980,7 +3047,8 @@ html.rail-expanded .chat-layout {
   margin-top: 4px;
   padding-top: 4px;
   border-top: 1px solid var(--ally-border);
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, auto);
   justify-content: center;
   gap: 6px;
 }

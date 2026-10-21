@@ -26,6 +26,7 @@ import (
 type SSHServerNode struct {
 	ID          string `json:"id"`
 	Alias       string `json:"alias"`               // Unique identifier, e.g. "dev-node-1"
+	Group       string `json:"group"`               // 分组（纯归类，仅供 UI 折叠/筛选）；空值归入 sshUngroupedGroup
 	Host        string `json:"host"`                // IP or domain, e.g. "192.168.1.101"
 	Port        int    `json:"port"`                // Port, default 22
 	Username    string `json:"username"`            // User, e.g. "root"
@@ -45,6 +46,19 @@ const (
 	sshAuthTypeKey      = "key"
 	sshAuthTypePassword = "password"
 )
+
+// sshUngroupedGroup 是未指定分组的节点（含改版前的历史节点）所归入的组。
+// 前端 utils/sshClusterGroups.mjs 用同一字面量作默认值，改动须两边同步（有测试钉住）。
+const sshUngroupedGroup = "未分组"
+
+// normalizeSSHGroup 去掉首尾空白；空值一律落到未分组，历史节点加载时同样补齐。
+func normalizeSSHGroup(group string) string {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return sshUngroupedGroup
+	}
+	return group
+}
 
 // normalizeSSHAuthType keeps the credential interpretation tied to the node's
 // declared mode. Legacy nodes without authType infer it from their credentials.
@@ -70,6 +84,7 @@ func normalizeSSHAuthType(node SSHServerNode) string {
 // normalizeSSHServerNode makes stored secrets match the declared auth mode.
 // In particular, agent nodes must not retain credentials hidden from the UI.
 func normalizeSSHServerNode(node SSHServerNode) SSHServerNode {
+	node.Group = normalizeSSHGroup(node.Group)
 	node.AuthType = normalizeSSHAuthType(node)
 	switch node.AuthType {
 	case sshAuthTypeAgent:

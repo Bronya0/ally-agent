@@ -63,12 +63,21 @@ test('export is a faithful snapshot of stored nodes', () => {
 });
 
 test('round trip keeps the node identity fields', () => {
-  const exported = buildSSHClusterExport([node()]);
+  const exported = buildSSHClusterExport([node({ group: '生产' })]);
   const [reimported] = parseSSHClusterImport(JSON.stringify(exported));
   assert.equal(reimported.alias, 'prod-web');
+  assert.equal(reimported.group, '生产');
   assert.equal(reimported.host, '10.0.0.7');
   assert.equal(reimported.port, 2222);
   assert.equal(reimported.username, 'deploy');
   assert.equal(reimported.riskLevel, 'high');
   assert.equal(reimported.password, 'pw');
+});
+
+test('legacy files without a group import into the ungrouped bucket', () => {
+  // 旧版导出没有 group 字段：不能因此拒整份文件，而是落到未分组。
+  const [parsed] = parseSSHClusterImport(JSON.stringify([node()]));
+  assert.equal(parsed.group, '未分组');
+  const exported = buildSSHClusterExport([{ ...node(), group: undefined }]);
+  assert.equal(exported.servers[0].group, '未分组');
 });

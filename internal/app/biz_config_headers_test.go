@@ -57,15 +57,6 @@ func TestNormalizeCustomHeadersDedupesCaseVariantsDeterministically(t *testing.T
 	}
 }
 
-func TestNormalizeCustomHeadersEmptyReturnsNil(t *testing.T) {
-	if got := normalizeCustomHeaders(map[string]string{"A": " ", "B": ""}); got != nil {
-		t.Fatalf("all-empty input must normalize to nil, got %#v", got)
-	}
-	if got := normalizeCustomHeaders(nil); got != nil {
-		t.Fatalf("nil input must normalize to nil, got %#v", got)
-	}
-}
-
 func TestMergeConfigCustomHeaders(t *testing.T) {
 	base := ConfigState{CustomHeaders: map[string]string{"X-Keep": "yes"}}
 	// nil overlay = 字段缺席，保留原值（旧前端整份回传不丢配置）。

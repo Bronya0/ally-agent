@@ -69,6 +69,7 @@ func defaultConfigState() ConfigState {
 		ProxyMode:             proxyModeOff,
 		BackgroundOpacity:     defaultBackgroundOpacity,
 		CompactThreshold:      defaultCompactThreshold,
+		AutoCompactMethod:     autoCompactMethodSummary,
 		CompactTimeoutSeconds: defaultCompactTimeoutSeconds,
 		MessageFontSize:       defaultMessageFontSize,
 		CodeFontSize:          defaultCodeFontSize,
@@ -471,6 +472,10 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.BackgroundOpacity != 0 {
 		base.BackgroundOpacity = clampBackgroundOpacity(overlay.BackgroundOpacity)
 	}
+	if strings.TrimSpace(overlay.AutoCompactMethod) != "" {
+		base.AutoCompactMethod = overlay.AutoCompactMethod
+	}
+	base.AutoCompactMethod = normalizeAutoCompactMethod(base.AutoCompactMethod)
 	// CompactThreshold: same pattern — zero overlay means "field absent",
 	// so base (which defaulted to defaultCompactThreshold) is preserved.
 	// Non-zero values are clamped to [0.2, 0.95] so a misconfigured value

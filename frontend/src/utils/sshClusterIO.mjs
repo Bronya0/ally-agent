@@ -16,6 +16,8 @@
 // 校验口径与后端 SaveSSHServer 一致（alias / host / username / description 必填）。
 // 这里整份校验、整份拒绝，避免导入到一半才逐条失败、留下半套配置。
 
+import { normalizeSSHGroup } from './sshClusterGroups.mjs';
+
 export const SSH_CLUSTER_SCHEMA_VERSION = 1;
 
 const AUTH_TYPES = new Set(['agent', 'key', 'password']);
@@ -67,6 +69,8 @@ function normalizeNode(raw, strict) {
         : { keyPath: '', password: rawPassword };
   return {
     alias,
+    // 历史文件没有 group：归入未分组，导入与导出都带上同一个值（不要求必填，缺省即未分组）。
+    group: normalizeSSHGroup(node.group),
     host,
     port: normalizePort(node.port),
     username,

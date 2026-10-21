@@ -17,6 +17,18 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+const (
+	autoCompactMethodSummary = "summary"
+	autoCompactMethodRecent  = "recent"
+)
+
+func normalizeAutoCompactMethod(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), autoCompactMethodRecent) {
+		return autoCompactMethodRecent
+	}
+	return autoCompactMethodSummary
+}
+
 // defaultCompactThreshold is the auto-compaction trigger as a fraction of
 // the context window (0.6 = 60%). Treated as "use default" when the
 // stored value is zero, so legacy config.json without the field migrates
@@ -115,12 +127,7 @@ func (a *App) clearCompactFailures(sessionID string) {
 	a.mu.Unlock()
 }
 
-// CompactSession compacts the conversation history for a session. Manual
-// compaction follows the SAME single strategy as the automatic trigger and the
-// overflow recovery (see compactSession): one LLM summary that rewrites the
-// history. All compaction entries — manual, threshold, overflow — must keep
-// this one strategy; per-entry special-case paths are forbidden (they drift
-// apart and break compaction).
+// CompactSession uses the same full-history LLM summary as automatic compaction.
 // overlay carries the caller's model selection (the GUI passes the active Tab's
 // model, exactly the ConfigState StartChat receives); it may be empty for
 // callers without Tab context, such as the local HTTP API.
@@ -169,18 +176,37 @@ func (a *App) compactSessionConfig(sessionID string, overlay ConfigState) (Confi
 }
 
 func (a *App) compactSession(parent context.Context, sessionID, instruction string, overlay ConfigState) (map[string]any, error) {
+	return a.compactSessionWithMode(parent, sessionID, instruction, overlay, false)
+}
+
+// FastCompactSession is the manual local-only entry and never escalates to an
+// LLM summary. The threshold path reuses this strategy when configured; either
+// rewrite invalidates the provider's cached prefix from the first changed item.
+func (a *App) FastCompactSession(sessionID string) (map[string]any, error) {
+	parent := a.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	return a.compactSessionWithMode(parent, sessionID, "", ConfigState{}, true)
+}
+
+func (a *App) compactSessionWithMode(parent context.Context, sessionID, instruction string, overlay ConfigState, fast bool) (map[string]any, error) {
 	if err := a.ensureInitialized(); err != nil {
 		return nil, err
 	}
-	cfg, err := a.compactSessionConfig(sessionID, overlay)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(cfg.Model) == "" {
-		return nil, errors.New("model is required")
-	}
-	if !hasModelCredential(cfg) {
-		return nil, missingModelCredentialError(cfg)
+	var cfg ConfigState
+	if !fast {
+		var err error
+		cfg, err = a.compactSessionConfig(sessionID, overlay)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(cfg.Model) == "" {
+			return nil, errors.New("model is required")
+		}
+		if !hasModelCredential(cfg) {
+			return nil, missingModelCredentialError(cfg)
+		}
 	}
 	// A live chat run may rewrite history concurrently (auto-compaction,
 	// sanitize repair, new turns); compacting on top of it would interleave
@@ -241,10 +267,9 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 		tokensBefore = estimateTokensFromMessages(history)
 	}
 
-	// 唯一压缩路径：手动、阈值、溢出三条入口都走同一档 LLM 总结压缩。曾经的
-	// “微压缩”档（把较旧回合的工具结果原地清成占位符）已删除：它在历史中段
-	// 原地改写，命中前缀之后的 provider 缓存全部作废，换回的却只有几条老工具
-	// 结果。tokensBefore/tokensAfter 仍按同一口径报给前端。
+	if fast {
+		return a.fastCompactHistory(ctx, sessionID, history, tokensBefore)
+	}
 	return a.compactHistory(ctx, cfg, sessionID, instruction, history, tokensBefore)
 }
 
@@ -278,22 +303,40 @@ const maxConsecutiveCompactFailures = 3
 // failure that opened the breaker was already reported to the UI once.
 var errAutoCompactCircuitOpen = errors.New("auto compaction paused after repeated failures")
 
+var errHistoryUnchanged = errors.New("no older content to compact")
+
 // isCompactSkip classifies the threshold tier's non-events: a history too short
 // to summarize is a healthy no-op, and an open breaker is the deliberate stop
 // above. Both must stay out of the UI error path.
 func isCompactSkip(err error) bool {
-	return errors.Is(err, errHistoryTooShortToCompact) || errors.Is(err, errAutoCompactCircuitOpen)
+	return errors.Is(err, errHistoryTooShortToCompact) || errors.Is(err, errAutoCompactCircuitOpen) || errors.Is(err, errHistoryUnchanged)
 }
 
-// compactRunHistory summarizes history and rebuilds the request message list
-// from the compacted result: system context, then the compacted history, then
-// the current user turn. The compaction call itself carries the trailing user
-// message (that is what it summarizes), so re-appending it here is what keeps it
-// in the request — carrying it inside the summarized history would duplicate it.
+// compactRunHistory selects the threshold strategy and rebuilds the request.
+// A full summary replaces the current user turn, so only that strategy needs
+// to reappend it. Local compaction keeps the entire request's message sequence.
 //
 // reason labels the compact:start / run:compacted event pair so the UI can tell
 // a threshold compaction from the context-overflow recovery.
 func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID, reason string, req ChatRequest, history []openai.ChatCompletionMessage, tokensBefore int) ([]openai.ChatCompletionMessage, map[string]any, error) {
+	// Local compaction preserves the current user turn and all later tool steps.
+	// Do not reappend req.Message here: unlike a full summary, it is still in h.
+	// Overflow always falls through to the LLM recovery path below.
+	if reason == compactReasonThreshold && normalizeAutoCompactMethod(cfg.AutoCompactMethod) == autoCompactMethodRecent {
+		result, err := a.fastCompactHistory(ctx, sessionID, sanitizeHistoryMessages(history), tokensBefore)
+		if err != nil {
+			return nil, nil, err
+		}
+		if changed, _ := result["changed"].(bool); !changed {
+			return nil, nil, errHistoryUnchanged
+		}
+		a.clearCompactFailures(sessionID)
+		messages := cloneChatMessages(history[:leadingSystemCount(history)])
+		messages = append(messages, a.loadSessionHistoryCopy(sessionID)...)
+		result["sessionId"] = sessionID
+		result["reason"] = reason
+		return messages, result, nil
+	}
 	// 熔断只拦阈值档（对齐 zcode 的 MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES）：
 	// 阈值判断在每个 step 重跑，失败一次不拦就会逐步重付一次长上下文总结请求；
 	// 溢出档仍要试，它是请求被拒后的最后一根救命绳。

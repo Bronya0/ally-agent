@@ -338,6 +338,37 @@ func TestLoadSSHClustersInfersLegacyKeyMode(t *testing.T) {
 	}
 }
 
+func TestSSHServerGroupDefaultsToUngrouped(t *testing.T) {
+	tempDir := t.TempDir()
+	app := NewApp()
+	app.configPath = filepath.Join(tempDir, "config.json")
+	// 历史文件没有 group 字段：加载后必须落到「未分组」，而不是空串。
+	legacy := `{"servers":[{"id":"old-id","alias":"old-node","host":"127.0.0.1","username":"user","description":"test"}]}`
+	if err := os.WriteFile(app.sshClustersFilePath(), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy cluster file: %v", err)
+	}
+	if err := app.loadSSHClusters(); err != nil {
+		t.Fatalf("load legacy clusters: %v", err)
+	}
+	if node, ok := app.GetSSHServer("old-node"); !ok || node.Group != sshUngroupedGroup {
+		t.Fatalf("legacy node group = %q, ok=%v; want %q", node.Group, ok, sshUngroupedGroup)
+	}
+
+	// 空白分组保存时也归入未分组，非空分组原样保留（首尾空白裁掉）。
+	if err := app.SaveSSHServer(SSHServerNode{Alias: "blank-group", Host: "10.0.0.1", Username: "root", Description: "x", Group: "  "}); err != nil {
+		t.Fatalf("save blank group: %v", err)
+	}
+	if node, _ := app.GetSSHServer("blank-group"); node.Group != sshUngroupedGroup {
+		t.Fatalf("blank group saved as %q; want %q", node.Group, sshUngroupedGroup)
+	}
+	if err := app.SaveSSHServer(SSHServerNode{Alias: "prod-web", Host: "10.0.0.2", Username: "root", Description: "x", Group: " 生产 "}); err != nil {
+		t.Fatalf("save named group: %v", err)
+	}
+	if node, _ := app.GetSSHServer("prod-web"); node.Group != "生产" {
+		t.Fatalf("named group saved as %q; want 生产", node.Group)
+	}
+}
+
 func TestTestSSHServerValidationAndLookup(t *testing.T) {
 	tempDir := t.TempDir()
 	app := NewApp()

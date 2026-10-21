@@ -1,24 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { watch } from 'vue';
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
-// Watch the whole draft so new fields and nested edits participate automatically.
-// Send only changed fields: a panel's old snapshot must not undo other writers.
-// The returned flush also saves a final edit when the panel is unmounted.
-export function watchConfigChanges(draft, save, { snapshot = clone } = {}) {
-  let previous = snapshot(draft);
-  const flush = () => {
-    const next = snapshot(draft);
-    const patch = {};
-    for (const key of Object.keys(next)) {
-      if (JSON.stringify(next[key]) !== JSON.stringify(previous[key])) patch[key] = next[key];
-    }
-    previous = next;
-    if (Object.keys(patch).length) save(patch);
-  };
-  watch(draft, flush, { deep: true });
-  return flush;
+// Settings are saved once when leaving the page (or when the window loses
+// focus), not per keystroke: diff the draft against the entry snapshot and
+// send only changed fields, so a panel's old snapshot never undoes other writers.
+export function diffSettingsPatch(previous, draft, { snapshot = clone } = {}) {
+  const next = snapshot(draft);
+  const patch = {};
+  for (const key of Object.keys(next)) {
+    if (JSON.stringify(next[key]) !== JSON.stringify(previous[key])) patch[key] = next[key];
+  }
+  return patch;
 }
 
 export function isValidProxyURL(value) {

@@ -8,7 +8,7 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <!-- Settings are saved on change; the panel is unmounted on mode switch. -->
+  <!-- Settings are saved on leave; the panel is unmounted on mode switch. -->
   <div class="config-inline-panel">
     <header class="config-inline-header">
       <span class="config-inline-title">{{ $t('settings.title') }}</span>
@@ -126,6 +126,7 @@ Public License v3. See the LICENSE file for details.
           <n-form-item :label="$t('settings.userAgent')">
             <div class="settings-field-stack">
               <n-select
+                class="user-agent-select"
                 :value="draft.userAgent || ''"
                 :options="userAgentOptions"
                 filterable
@@ -147,6 +148,19 @@ Public License v3. See the LICENSE file for details.
                 style="width: 140px"
               />
               <span class="settings-field-hint">{{ $t('settings.llmRetriesHint') }}</span>
+            </div>
+          </n-form-item>
+          <n-form-item :label="$t('settings.autoCompactMethod')">
+            <div class="settings-field-stack">
+              <n-select
+                v-model:value="draft.autoCompactMethod"
+                :options="[
+                  { label: $t('settings.autoCompactSummary'), value: 'summary' },
+                  { label: $t('settings.autoCompactRecent'), value: 'recent' },
+                ]"
+                style="width: 260px"
+              />
+              <span class="settings-field-hint">{{ $t('settings.autoCompactMethodHint') }}</span>
             </div>
           </n-form-item>
           <n-form-item :label="$t('settings.compactThreshold')">
@@ -500,13 +514,13 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, h, onBeforeUnmount, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, h, onBeforeUnmount, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
 import { getStoredMode, THEMES } from '../utils/theme.mjs';
 import { normalizeApiKeysArray } from '../utils/modelConfigIO.mjs';
 import { TOOL_CONCURRENCY_MIN, TOOL_CONCURRENCY_MAX, HIDEABLE_MODES, PAGE_VISIBILITY_LABELS, normalizeDraftHiddenModes, normalizeHiddenModes } from '../utils/config.mjs';
-import { watchConfigChanges, settingsSnapshot, isValidProxyURL } from '../utils/configAutosave.mjs';
+import { diffSettingsPatch, settingsSnapshot, isValidProxyURL } from '../utils/configAutosave.mjs';
 import { isToggleableTool } from '../utils/builtinTools.mjs';
 import { Browser } from '@wailsio/runtime';
 import {
@@ -650,7 +664,7 @@ const validationSettingKeys = [
   'autoValidationJson',
 ];
 
-// Isolate editor state; autosave submits only the fields that change.
+// Isolate editor state; leaving the page saves only the fields that change.
 const draft = reactive(cloneConfigDraft(props.configDraft));
 
 // Color mode is a pure front-end preference (localStorage, see utils/theme.mjs),
@@ -711,7 +725,7 @@ const validationSettings = computed(() => [
 
 // 页面显隐：键集合直接取自 HIDEABLE_MODES（与 ModeSider、后端 hideableModes 同一组，
 // chat/settings 永不隐藏），label 走同一份 i18n 键——不在这里重抄一份键，免得加页面时
-// 菜单有、开关没有。开关直接改 draft.hiddenModes，经下方通用 watcher 即改即存
+// 菜单有、开关没有。开关直接改 draft.hiddenModes，离场保存后 App.vue 落盘
 // （App.vue 收到 save 后落盘并实时隐藏菜单）。
 const pageVisibilitySettings = computed(() => HIDEABLE_MODES.map((key) => ({
   key,
@@ -777,7 +791,7 @@ async function selectBackground() {
 }
 
 // Knowledge-base root: pick a directory into the draft; the value persists
-// through the same autosave flow as the other settings.
+// through the same leave-save flow as the other settings.
 const kbRootSelecting = ref(false);
 
 async function selectKBRoot() {
@@ -846,11 +860,20 @@ async function testProxy() {
   }
 }
 
-// One watcher covers every editable field, including nested arrays/objects.
-const flushSettingsChanges = watchConfigChanges(draft, (patch) => {
+// Save once on leave, not per keystroke: snapshot on entry, diff on exit
+// (unmount = leaving the page) or window blur. Only changed fields are sent
+// so a stale snapshot never undoes other config writers. Silent: this runs
+// the full onSettingsSave path, a toast per visit would be pure noise.
+let settingsEntrySnapshot = settingsSnapshot(draft);
+function saveSettingsOnLeave() {
+  const patch = diffSettingsPatch(settingsEntrySnapshot, draft, { snapshot: settingsSnapshot });
+  if (!Object.keys(patch).length) return;
+  settingsEntrySnapshot = settingsSnapshot(draft);
   emit('save', patch, true);
-}, { snapshot: settingsSnapshot });
-onBeforeUnmount(flushSettingsChanges);
+}
+onBeforeUnmount(saveSettingsOnLeave);
+onMounted(() => window.addEventListener('blur', saveSettingsOnLeave));
+onUnmounted(() => window.removeEventListener('blur', saveSettingsOnLeave));
 
 const proxyDraftInvalid = computed(() => draft.proxyMode === 'manual' && !isValidProxyURL(draft.proxyUrl));
 
@@ -1362,6 +1385,11 @@ watch(() => props.visible, (visible) => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* 自定义 User-Agent 下拉框的单独宽度上限：预设值是较长的客户端标识串，不让它随窗口拉成横条。 */
+.user-agent-select {
+  max-width: 360px;
 }
 
 .font-size-grid {

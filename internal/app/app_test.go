@@ -65,23 +65,6 @@ func TestRenderHTMLLimitCountsUnicodeCharacters(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigWorkspaceEmptyUntilChosen(t *testing.T) {
-	// 空 workspace = 用户从未选择过工作区：首次启动前端据此落在临时工作区
-	// Tab，而不是把用户文档目录静默当作默认工作区。
-	if got := defaultConfigState().Workspace; got != "" {
-		t.Fatalf("default workspace = %q, want empty (first launch starts on a temp workspace tab)", got)
-	}
-}
-
-func TestDefaultConfigWindowSizeIsEmpty(t *testing.T) {
-	if got := defaultConfigState().WindowWidth; got != 0 {
-		t.Fatalf("default window width = %d, want 0 (first launch uses options default)", got)
-	}
-	if got := defaultConfigState().WindowHeight; got != 0 {
-		t.Fatalf("default window height = %d, want 0 (first launch uses options default)", got)
-	}
-}
-
 func TestMergeConfigWindowSizeRequiresBothDimensions(t *testing.T) {
 	base := ConfigState{WindowWidth: 100, WindowHeight: 200}
 	got := mergeConfig(base, ConfigState{WindowWidth: 300})

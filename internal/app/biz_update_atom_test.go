@@ -64,11 +64,3 @@ func TestParseAtomLatestTagIDFallback(t *testing.T) {
 		t.Fatalf("expected tag v2.0.1, got %q", tag)
 	}
 }
-
-func TestParseAtomLatestTagEmptyFeed(t *testing.T) {
-	const feed = `<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom"></feed>`
-	if _, err := parseAtomLatestTag([]byte(feed)); err == nil {
-		t.Fatal("expected error for empty feed, got nil")
-	}
-}

@@ -119,6 +119,7 @@ export function defaultConfig() {
     // [COMPACT_THRESHOLD_MIN, COMPACT_THRESHOLD_MAX] range; zero (legacy config
     // without the field) is replaced with the default in mergeConfig.
     compactThreshold: COMPACT_THRESHOLD_DEFAULT,
+    autoCompactMethod: 'summary',
     // Manual/auto compaction LLM call timeout in seconds. Backend clamps
     // to [30, 3600]; zero (legacy config) falls back to the default.
     compactTimeoutSeconds: 180,
@@ -164,6 +165,7 @@ export function assignConfig(target, source) {
   next.autoValidationVue = next.autoValidationVue === true;
   next.autoValidationJava = next.autoValidationJava === true;
   next.autoValidationJson = next.autoValidationJson === true;
+  next.autoCompactMethod = String(next.autoCompactMethod || '').trim().toLowerCase() === 'recent' ? 'recent' : 'summary';
   // compactThreshold: legacy configs without the field (or explicit 0) fall
   // back to the default so the slider shows the effective value, not 0.
   next.compactThreshold = Number(next.compactThreshold) > 0

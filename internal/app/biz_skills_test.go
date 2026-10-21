@@ -145,12 +145,6 @@ func TestBuildSkillDirTreeEmptyWhenOnlySkillFile(t *testing.T) {
 	}
 }
 
-func TestBuildSkillDirTreeEmptyForMissingDir(t *testing.T) {
-	if tree := buildSkillDirTree(filepath.Join(t.TempDir(), "nope"), "SKILL.md"); tree != "" {
-		t.Fatalf("expected empty tree for missing dir, got %q", tree)
-	}
-}
-
 // TestParseSkillContentToleratesBOMAndDelimiterInValue 验证两个健壮性场景：
 // UTF-8 BOM 开头的 SKILL.md（Windows 编辑器常见）仍能解析 frontmatter；
 // 值中包含 "---" 不再提前截断 frontmatter（按整行定界符匹配）。

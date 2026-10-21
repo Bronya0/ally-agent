@@ -57,17 +57,21 @@ Public License v3. See the LICENSE file for details.
       >
         <n-tab-pane v-for="tab in providerTabs" :key="tab.name" :name="tab.name" :tab="tab.label">
           <div class="saved-model-list">
-            <div v-for="item in tab.models" :key="item.index" class="saved-model-item">
-              <div class="saved-model-main">
-                <div class="saved-model-name">{{ normalizedProviderName(item.model.providerName) }} · {{ item.model.displayName || item.model.model || t('settings.modelNone') }}</div>
-                <div class="saved-model-meta">{{ apiFormatLabel(item.model.apiFormat) }} · {{ item.model.model || 'Model' }}</div>
-                <div class="saved-model-url">{{ item.model.baseUrl || t('settings.baseUrlNone') }}</div>
-                <div class="saved-model-url">max {{ item.model.maxTokens || '-' }} · context {{ item.model.contextWindow || '-' }}</div>
+            <div v-for="item in tab.models" :key="item.index" class="ally-row-card">
+              <div class="ally-row-main">
+                <span class="ally-row-name" :title="modelTitle(item.model)">{{ modelTitle(item.model) }}</span>
+                <span class="ally-row-badge">{{ apiFormatLabel(item.model.apiFormat) }}</span>
+                <span v-if="modelIdFact(item.model)" class="ally-row-badge">{{ modelIdFact(item.model) }}</span>
+                <div class="ally-row-side">
+                  <n-button size="tiny" quaternary @click="editModelDraft(item.index)">{{ t('common.edit') }}</n-button>
+                  <n-button size="tiny" type="error" quaternary @click="removeModelDraft(item.index)">{{ t('common.delete') }}</n-button>
+                </div>
               </div>
-              <n-space :size="4">
-                <n-button size="tiny" quaternary @click="editModelDraft(item.index)">{{ t('common.edit') }}</n-button>
-                <n-button size="tiny" type="error" quaternary @click="removeModelDraft(item.index)">{{ t('common.delete') }}</n-button>
-              </n-space>
+              <div class="saved-model-facts">
+                <span class="saved-model-fact">max {{ item.model.maxTokens || '-' }}</span>
+                <span class="saved-model-fact">context {{ item.model.contextWindow || '-' }}</span>
+              </div>
+              <div class="saved-model-url" :title="item.model.baseUrl || ''">{{ item.model.baseUrl || t('settings.baseUrlNone') }}</div>
             </div>
           </div>
         </n-tab-pane>
@@ -494,6 +498,21 @@ function onContextWindowSelected(value) {
 
 function onReasoningTagSelected(value) {
   modelDraft.reasoningTag = String(value ?? '').trim() || 'reasoning_content';
+}
+
+// 卡片标题：分组（提供商）已经由上方页签展示，这里不再重复；
+// 缺显示名时回落到模型 id。
+function modelTitle(model) {
+  return String(model?.displayName || model?.model || '').trim() || t('settings.modelNone');
+}
+
+// 卡片标题已经展示了模型名（displayName 缺省时回落到 model），这里只在两者不同时
+// 补上真实模型 id，避免同一串名字在卡片里出现两次。
+function modelIdFact(model) {
+  const id = String(model?.model || '').trim();
+  const display = String(model?.displayName || '').trim();
+  if (!id || !display || display.toLowerCase() === id.toLowerCase()) return '';
+  return id;
 }
 
 function apiFormatLabel(value) {
@@ -990,54 +1009,32 @@ watch(
 .saved-model-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
 }
 
-.saved-model-item {
+/* 卡片外形与首行（名称 + 徽标 + 右侧操作）由全局 .ally-row-card / .ally-row-*
+   提供，见 style.css；这里只补模型特有的两行：上限/上下文、url。 */
+.saved-model-facts {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 10px;
-  border-radius: 6px;
-  transition: none;
-  gap: 10px;
-  border: 1px solid transparent;
-}
-
-.saved-model-item:hover {
-  background: var(--ally-hover-faint);
-}
-
-.saved-model-item.active {
-  border-color: var(--ally-border-strong);
-  background: var(--ally-state-hover);
-}
-
-.saved-model-main {
-  flex: 1;
-  min-width: 0;
-}
-
-.saved-model-name {
-  font-size: var(--ally-sub-font-size);
-  font-weight: 500;
-  color: var(--ally-text-primary);
-}
-
-.saved-model-meta {
-  font-size: 12px;
+  gap: 0 10px;
+  font-size: 11px;
+  line-height: 1.3;
   color: var(--ally-text-muted);
-  margin-top: 1px;
+}
+
+.saved-model-fact {
+  white-space: nowrap;
 }
 
 .saved-model-url {
   font-size: 11px;
+  line-height: 1.3;
   color: var(--ally-text-faint);
-  margin-top: 1px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 420px;
 }
 
 .api-key-list {

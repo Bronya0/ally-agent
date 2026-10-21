@@ -6,6 +6,7 @@ import test from 'node:test';
 import * as drift from './contextDriftNotice.mjs';
 import { assistantRowRenderState, displaySourceMessages, isRenderableMessage } from './toolPreview.mjs';
 import { toolCardRenderSignature } from './toolCardSignature.mjs';
+import { applyFastCompaction } from './fastCompaction.mjs';
 
 // 执行 App 的真实列表合并与事件处理代码，只替换 Vue ref 和桌面桥。
 // 避免在测试里复制折叠算法，否则调用点漏接边界时纯函数测试仍会全绿。
@@ -79,6 +80,7 @@ function compactEvent(f, data) {
     compactingSessions: {}, activeSessionId: ref('other'), streamBuffers: new Map(),
     compactStreamRunId: (id) => id, dropContextDriftNotices: f.dropContextDriftNotices,
     scheduleSaveSessions: noop,
+    applyFastCompaction, t: (key) => key,
   });
 }
 
@@ -104,6 +106,21 @@ test('未替换历史的压缩事件保留原提示', () => {
   compactEvent(f, { sessionId: 's', summary: '' });
   assert.equal(f.contextDriftNoticesBySession.value.s, before);
   assert.deepEqual(rowLabels(f.display()), ['A', 'notice']);
+});
+
+test('自动保留最近内容只更新对应工具卡，保留正文及已有提示锚点', () => {
+  const user = { role: 'user', content: 'requirements' };
+  const answer = { role: 'assistant', content: 'answer' };
+  const f = fixture([user, { ...tool('old'), toolCallId: 'old', body: 'old body' }, answer, { ...tool('recent'), toolCallId: 'recent', body: 'recent body' }]);
+  f.record();
+  const notices = f.contextDriftNoticesBySession.value.s;
+  compactEvent(f, { sessionId: 's', tier: 'fast', changed: true, keepRecent: 4, toolSummaries: { old: 'excerpt' }, reasoningCount: 1 });
+  assert.equal(f.session.messages[0], user);
+  assert.equal(f.session.messages[1].body, 'excerpt');
+  assert.equal(f.session.messages[2], answer);
+  assert.equal(f.session.messages[3].body, 'recent body');
+  assert.equal(f.session.messages[4].system, true);
+  assert.equal(f.contextDriftNoticesBySession.value.s, notices);
 });
 
 test('手动压缩也会清理被摘要替换的历史锚点', async () => {

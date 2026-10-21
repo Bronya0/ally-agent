@@ -119,7 +119,11 @@ func sanitizeHistoryMessagesWithOrigins(messages []openai.ChatCompletionMessage,
 			// old thoughts only cost bytes and input tokens.
 			m.ReasoningContent = ""
 			if m.Role == openai.ChatMessageRoleTool {
-				m.Content = toolResultPlaceholder
+				// Explicit fast compaction already reduced this result to a bounded
+				// excerpt. Keep that handoff even if protected storage is unavailable.
+				if !strings.HasPrefix(m.Content, fastCompactToolMarker) {
+					m.Content = toolResultPlaceholder
+				}
 			}
 		}
 		if strings.TrimSpace(m.Content) == "" && len(m.MultiContent) == 0 && len(m.ToolCalls) == 0 && m.Role != openai.ChatMessageRoleTool {

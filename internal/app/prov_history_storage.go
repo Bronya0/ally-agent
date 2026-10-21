@@ -90,7 +90,17 @@ func (a *App) modelHistoryForStorage(sessionID string, disk, history []openai.Ch
 		}
 	}
 	a.reasoningStash.mu.Unlock()
-	if len(scopes) == 0 {
+	// A locally compacted session also needs its retained tail after restart,
+	// including on Chat/Anthropic where no native Responses items exist. Reuse
+	// the same bounded, protected payload; never introduce a plaintext fallback.
+	fastCompacted := false
+	for _, m := range history {
+		if strings.HasPrefix(m.Content, fastCompactToolMarker) || strings.Contains(m.Content, fastCompactReasoningMarker) {
+			fastCompacted = true
+			break
+		}
+	}
+	if len(scopes) == 0 && !fastCompacted {
 		return disk
 	}
 	state := protectedModelState{Version: 1, Session: sessionID, DiskHash: modelHistoryHash(disk), History: history, Responses: scopes}

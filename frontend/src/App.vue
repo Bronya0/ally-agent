@@ -347,6 +347,7 @@ Public License v3. See the LICENSE file for details.
                   @new-session="createNewSession"
                   @show-sessions="showSessionList"
                   @compact-context="handleCompactCommand"
+                  @compact-context-fast="handleFastCompactCommand"
                   @compact-lessons="handleLessonsCommand"
                   @update-codegraph="handleCodegraphCommand"
                 />
@@ -667,6 +668,7 @@ import {
   StartChat,
   InjectRunMessage,
   CompactSession,
+  FastCompactSession,
   ListSkills,
   ListTools,
   ListSessions,
@@ -753,6 +755,7 @@ import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTer
 import { orderPlanPanelEntries, planDoneCount, planFocusScrollDelta, normalizePlanEntries } from './utils/planPanel.mjs';
 import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
 import { compactBytes, formatAttachmentSize } from './utils/attachmentSize.mjs';
+import { applyFastCompaction } from './utils/fastCompaction.mjs';
 import {
   contextDriftAnchor,
   contextDriftNoticeKey,
@@ -2064,6 +2067,7 @@ const builtinCommands = [
   { key: 'lesson', label: '/lesson', description: t('commands.lesson'), text: '', special: 'lesson' },
   { key: 'review', label: '/review', description: '', text: '', special: 'review' },
   { key: 'compact', label: '/compact', description: t('commands.compact'), text: '', special: 'compact' },
+  { key: 'compact-fast', label: '/compact-fast', description: t('commands.compactFast'), text: '', special: 'compact-fast' },
   { key: 'push', label: '/push', description: t('commands.push'), text: '', special: 'push' },
 ];
 
@@ -5438,6 +5442,14 @@ function bindRuntimeEvents() {
     // next request is built from a history that no longer contains it.
     const summary = String(data?.summary || '');
     const session = sessions.value.find(s => s.id === sid) || null;
+    if (data?.tier === 'fast' && data.changed && session) {
+      applyFastCompaction(session, data, t('app.compact.fastChip'));
+      session.messages.push({ role: 'assistant', system: true, content: t('app.compact.fastDone', {
+        keep: data.keepRecent, tools: Object.keys(data.toolSummaries || {}).length,
+        reasoning: data.reasoningCount,
+      }) });
+      scheduleSaveSessions();
+    }
     if (summary && session) {
       streamBuffers.delete(compactStreamRunId(sid));
       // 原历史的位置已失效，不能把旧锚点带到摘要后的新历史里。
@@ -6214,7 +6226,7 @@ async function sendPrompt(opts) {
       // Send as normal message
     } else if (slashContent) {
       // Check if it's a builtin command first
-      const builtinPrefixes = ['new','plan','skills','clear','switch','sessions','reload','init','note','remember','compact','push','review'];
+      const builtinPrefixes = ['new','plan','skills','clear','switch','sessions','reload','init','note','remember','compact','compact-fast','push','review'];
       const cmdName = slashContent.split(/\s+/)[0];
       const isBuiltin = builtinPrefixes.includes(cmdName);
       // Also check if any active skill name matches (disabled skills stay out
@@ -6958,6 +6970,7 @@ const builtinCommandHandlers = {
   lesson: () => { handleLessonCommand(); },
   review: () => { handleReviewCommand(); },
   compact: () => handleCompactCommand(),
+  'compact-fast': () => handleFastCompactCommand(),
   push: () => { handlePushCommand(); },
 };
 
@@ -7628,7 +7641,7 @@ function sanitizeStoredMessage(msg) {
   delete next.reasoningBody;
   // Read tool results hold file contents that go stale quickly and bloat the
   // snapshot; the model can re-read on demand after restore.
-  if (next.role === 'tool_call' && (next.name === 'read' || next.name === 'remote_read' || next.name === 'batch_read')) {
+  if (next.role === 'tool_call' && !next.fastCompacted && (next.name === 'read' || next.name === 'remote_read' || next.name === 'batch_read')) {
     next.body = '';
     next.codeContent = '';
   } else {
@@ -8092,6 +8105,35 @@ async function handleCompactCommand() {
   } catch (err) {
     delete compactingSessions[session.id];
     pushMessage('assistant', t('app.compact.failed', { error: err?.message || err }), { error: true });
+  }
+}
+
+async function handleFastCompactCommand() {
+  const session = activeSession.value;
+  if (!session) return;
+  if (sessionBusy(session)) { message.warning(t('app.compact.wait')); return; }
+  startCompactTracking(session.id, t('app.compact.fastCompacting'));
+  try {
+    const result = await FastCompactSession(session.id);
+    if (result?.changed) {
+      applyFastCompaction(session, result, t('app.compact.fastChip'));
+      session.messages.push({ role: 'assistant', system: true, content: t('app.compact.fastDone', {
+        keep: result.keepRecent, tools: Object.keys(result.toolSummaries || {}).length,
+        reasoning: result.reasoningCount,
+      }) });
+      persistCompletedSession(session);
+    }
+    refreshContextTokens(session.id);
+    message.info(result?.changed
+      ? compactToastText(result.tokensBefore, result.tokensAfter)
+      : t('app.compact.fastNoop', { keep: result?.keepRecent || 4 }));
+  } catch (err) {
+    // Use the captured session: switching Tabs during the bridge call must not
+    // send a background session's failure into the newly active conversation.
+    session.messages.push({ role: 'assistant', error: true, content: t('app.compact.failed', { error: err?.message || err }) });
+    persistCompletedSession(session);
+  } finally {
+    delete compactingSessions[session.id];
   }
 }
 

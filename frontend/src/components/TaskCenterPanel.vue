@@ -13,7 +13,7 @@ Public License v3. See the LICENSE file for details.
     preset="card"
     :title="$t('taskCenter.title')"
     :style="{ width: 'min(920px, calc(100vw - 48px))' }"
-    :mask-closable="false"
+    :mask-closable="true"
     @update:show="(value) => !value && $emit('close')"
     @after-enter="syncTabs"
   >
