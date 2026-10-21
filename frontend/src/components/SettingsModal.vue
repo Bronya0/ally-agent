@@ -1432,6 +1432,10 @@ watch(() => props.visible, (visible) => {
   margin-bottom: 6px;
 }
 
+.font-size-grid + .settings-field-hint {
+  margin-bottom: 24px;
+}
+
 .font-size-field {
   display: flex;
   align-items: center;
