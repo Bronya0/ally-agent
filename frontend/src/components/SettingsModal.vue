@@ -1018,26 +1018,31 @@ async function toggleApiService(enabled) {
 }
 
 // 失焦自动保存端口/token：token 传空值时后端自动生成新 token；服务运行中
-// 会用新设置重启监听。成功时静默（同步回填规范化后的值），失败才提示。
-async function saveApiConfig() {
+// 会用新设置重启监听；仅有变更时保存并提示成功。
+async function saveApiConfig(notify = true) {
   const port = Number(apiPortDraft.value);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) {
     apiPortDraft.value = apiState.value?.port ?? null;
     message.warning(t('settings.apiPortInvalid'));
-    return;
+    return false;
   }
+  const token = String(apiTokenDraft.value || '').trim();
+  if (port === apiState.value?.port && token === apiState.value?.token) return true;
   apiBusy.value = true;
   try {
-    syncApiDrafts(await SaveApiSettings({ port, token: String(apiTokenDraft.value || '').trim() }));
+    syncApiDrafts(await SaveApiSettings({ port, token }));
+    if (notify) message.success(t('app.config.saved'));
+    return true;
   } catch (err) {
     message.error(t('settings.apiToggleFailed', { error: err }));
+    return false;
   } finally {
     apiBusy.value = false;
   }
 }
 
 async function regenerateApiToken() {
-  await saveApiConfig();
+  if (!await saveApiConfig(false)) return;
   apiBusy.value = true;
   try {
     syncApiDrafts(await SaveApiSettings({ port: Number(apiPortDraft.value) || 0, token: '' }));
