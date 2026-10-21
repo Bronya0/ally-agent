@@ -979,9 +979,10 @@ type CommandRequest struct {
 }
 
 type StartServiceRequest struct {
-	Name    string `json:"name,omitempty"`
-	Command string `json:"command"`
-	Cwd     string `json:"cwd,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description"`
+	Command     string `json:"command"`
+	Cwd         string `json:"cwd,omitempty"`
 }
 
 type StopServiceRequest struct {
@@ -995,6 +996,7 @@ type BackgroundProcessRequest struct {
 	IncludeFinished bool   `json:"includeFinished,omitempty"`
 	Action          string `json:"action"`
 	Name            string `json:"name,omitempty"`
+	Description     string `json:"description,omitempty"`
 	Command         string `json:"command,omitempty"`
 	Cwd             string `json:"cwd,omitempty"`
 	ID              string `json:"id,omitempty"`
@@ -1091,7 +1093,9 @@ type sessionReadCacheContextKey struct{}
 
 type ServiceInfo struct {
 	ID              string `json:"id"`
+	Workspace       string `json:"workspace"`
 	Name            string `json:"name,omitempty"`
+	Description     string `json:"description,omitempty"`
 	Command         string `json:"command"`
 	Cwd             string `json:"cwd"`
 	PID             int    `json:"pid"`
@@ -1105,7 +1109,8 @@ type ServiceInfo struct {
 	Error           string `json:"error,omitempty"`
 	// Promoted 标记该服务由超时命令收编而来（而非 service start 启动），
 	// 任务中心据此显示“超时转后台”徽标。
-	Promoted bool `json:"promoted,omitempty"`
+	Promoted       bool `json:"promoted,omitempty"`
+	TimeoutSeconds int  `json:"timeoutSeconds,omitempty"`
 	// Sandboxed 标记该服务的进程跑在操作系统级沙箱里（同 CommandResult）。
 	Sandboxed bool `json:"sandboxed,omitempty"`
 	// SandboxDenied 标记该服务的输出里出现过内核拒写（同 CommandResult）：
@@ -2496,6 +2501,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 		}
 
+		validationBudget := &batchValidationBudget{remaining: autoValidationTimeout}
 		executeCall := func(idx int, c openai.ToolCall, plannedValidationPaths []string, hasValidationPlan bool) {
 			started := time.Now()
 			executionArgs := c.Function.Arguments
@@ -2507,10 +2513,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				toolCallIndex: idx, toolCallID: c.ID, toolName: c.Function.Name, toolArgs: c.Function.Arguments,
 			})
 			toolCtx = context.WithValue(toolCtx, sessionReadCacheContextKey{}, readCache)
+			var r toolResult
 			if hasValidationPlan {
-				toolCtx = context.WithValue(toolCtx, batchValidationPathsContextKey{}, plannedValidationPaths)
+				r = a.executeValidationPlannedTool(toolCtx, toolCfg, sessionID, c, []byte(executionArgs), plannedValidationPaths, toolCalls[:idx], func(i int) bool { return outcomes[i].result.OK }, validationBudget)
+			} else {
+				r = a.executeTool(toolCtx, toolCfg, sessionID, c.Function.Name, []byte(executionArgs))
 			}
-			r := a.executeTool(toolCtx, toolCfg, sessionID, c.Function.Name, []byte(executionArgs))
 			duration := time.Since(started).Milliseconds()
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)
@@ -2884,19 +2892,24 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 					break
 				}
 				data, err = a.startServiceWithConfig(ctx, cfg, StartServiceRequest{
-					Name:    req.Name,
-					Command: req.Command,
-					Cwd:     req.Cwd,
+					Name:        req.Name,
+					Description: req.Description,
+					Command:     req.Command,
+					Cwd:         req.Cwd,
 				})
 			case "stop":
-				data, err = a.stopService(StopServiceRequest{ID: req.ID, GraceSeconds: req.GraceSeconds})
+				if err = a.checkServiceWorkspace(cfg, req.ID); err == nil {
+					data, err = a.stopService(StopServiceRequest{ID: req.ID, GraceSeconds: req.GraceSeconds})
+				}
 			case "list":
-				data = a.listServicesForTool(req.IncludeFinished)
+				data, err = a.listServicesForTool(cfg, req.IncludeFinished)
 			case "read":
-				data, err = a.readServiceOutput(ServiceReadRequest{
-					ID:        req.ID,
-					TailBytes: req.TailBytes,
-				})
+				if err = a.checkServiceWorkspace(cfg, req.ID); err == nil {
+					data, err = a.readServiceOutput(ServiceReadRequest{
+						ID:        req.ID,
+						TailBytes: req.TailBytes,
+					})
+				}
 			default:
 				err = codedToolError("E_BAD_BACKGROUND_ACTION", errors.New("action must be start, stop, list, or read"))
 			}

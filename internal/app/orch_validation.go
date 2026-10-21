@@ -15,8 +15,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -129,7 +129,7 @@ func (a *App) validateChangedFiles(ctx context.Context, cfg ConfigState, paths [
 	}
 
 	if len(jsonFiles) > 0 {
-		reports = append(reports, validateJSONFiles(jsonFiles))
+		reports = append(reports, validateJSONFiles(checkCtx, jsonFiles))
 	}
 	if len(pythonFiles) > 0 {
 		reports = append(reports, validatePythonFiles(checkCtx, root, pythonFiles))
@@ -158,10 +158,15 @@ func validationEnabled(flag *bool) bool {
 // batchValidationPathsContextKey carries the display paths one tool call must
 // validate, as planned by planBatchValidation for its tool batch.
 type batchValidationPathsContextKey struct{}
+type batchValidationBudgetContextKey struct{}
+
+// File mutations run serially. Only time spent validating consumes this shared
+// budget; time spent writing files between checks must not exhaust it.
+type batchValidationBudget struct{ remaining time.Duration }
 
 // validateChangedFilesForCall validates one tool call's changed files under
 // the tool batch's validation plan. Directory-level checks (go vet per
-// package, tsc/vue-tsc per tsconfig project) would otherwise run once per
+// package, typed syntax parsing per project) would otherwise run once per
 // edit call, so the plan defers a unit to the last batch call touching it and
 // hands that call the expanded path set; a call whose paths were all absorbed
 // by a later call validates nothing. Without a plan in ctx (sub-agent steps
@@ -171,7 +176,55 @@ func (a *App) validateChangedFilesForCall(ctx context.Context, cfg ConfigState, 
 	if planned, ok := ctx.Value(batchValidationPathsContextKey{}).([]string); ok {
 		paths = planned
 	}
+	if budget, ok := ctx.Value(batchValidationBudgetContextKey{}).(*batchValidationBudget); ok && budget != nil && len(paths) > 0 {
+		started := time.Now()
+		checkCtx, cancel := context.WithTimeout(ctx, budget.remaining)
+		defer func() {
+			cancel()
+			budget.remaining -= time.Since(started)
+		}()
+		ctx = checkCtx
+	}
 	return a.validateChangedFiles(ctx, cfg, paths)
+}
+
+// Only successful earlier writes contribute to a deferred validation unit.
+// If its owner fails, still validate those writes and include the report in
+// the failed tool result. The batch budget applies to checks, never writes.
+func (a *App) executeValidationPlannedTool(ctx context.Context, cfg ConfigState, sessionID string, call openai.ToolCall, args []byte, planned []string, previous []openai.ToolCall, succeeded func(int) bool, budget *batchValidationBudget) toolResult {
+	allowed := make(map[string]bool, len(planned))
+	for _, path := range planned {
+		allowed[path] = true
+	}
+	var earlier []string
+	for i, prior := range previous {
+		if !succeeded(i) {
+			continue
+		}
+		for _, path := range localMutationPathsForValidation(prior) {
+			if allowed[path] {
+				earlier = append(earlier, path)
+			}
+		}
+	}
+	paths := append([]string{}, earlier...)
+	// Path extraction must use the same normalized arguments as execution.
+	call.Function.Arguments = string(args)
+	for _, path := range localMutationPathsForValidation(call) {
+		if allowed[path] {
+			paths = append(paths, path)
+		}
+	}
+	ctx = context.WithValue(ctx, batchValidationBudgetContextKey{}, budget)
+	ctx = context.WithValue(ctx, batchValidationPathsContextKey{}, paths)
+	result := a.executeTool(ctx, cfg, sessionID, call.Function.Name, args)
+	if !result.OK && len(earlier) > 0 {
+		fallback := context.WithValue(ctx, batchValidationPathsContextKey{}, earlier)
+		if report := a.validateChangedFilesForCall(fallback, cfg, earlier); report != "" {
+			result.Error += "\n此前成功写入的文件：" + report
+		}
+	}
+	return result
 }
 
 // planBatchValidation spreads the local edit/create calls of one tool batch
@@ -278,7 +331,7 @@ func collectValidationFiles(roots []string, paths []string) []validationFile {
 		}
 		abs = filepath.Clean(abs)
 		key := strings.ToLower(abs)
-		if _, ok := seen[key]; ok || isGeneratedValidationPath(abs) {
+		if _, ok := seen[key]; ok || isGeneratedValidationFile(roots, abs) {
 			continue
 		}
 		info, err := os.Stat(abs)
@@ -306,9 +359,24 @@ func isGeneratedValidationPath(path string) bool {
 	return false
 }
 
-func validateJSONFiles(files []validationFile) validationReport {
+func isGeneratedValidationFile(roots []string, abs string) bool {
+	for _, root := range roots {
+		if insideRoot(root, abs) {
+			rel, err := filepath.Rel(root, abs)
+			if err == nil && !isGeneratedValidationPath(rel) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validateJSONFiles(ctx context.Context, files []validationFile) validationReport {
 	checked := 0
 	for _, file := range files {
+		if report, handled := validationSkipReport("JSON", ctx.Err()); handled {
+			return report
+		}
 		// tsconfig/jsconfig files are JSONC (comments allowed); a plain
 		// JSON parse would always mis-report them.
 		if isJSONCFileName(file.abs) {
@@ -320,11 +388,29 @@ func validateJSONFiles(files []validationFile) validationReport {
 			return validationReport{label: "JSON", detail: file.display + ": " + err.Error()}
 		}
 		data = bytesTrimUTF8BOM(data)
-		var value any
-		if err := json.Unmarshal(data, &value); err != nil {
+		if !json.Valid(data) {
+			var value any
+			err := json.Unmarshal(data, &value)
+			detail := err.Error()
+			var syntax *json.SyntaxError
+			if errors.As(err, &syntax) {
+				line, column := 1, 1
+				offset := int(syntax.Offset)
+				if offset > 0 && syntax.Error() != "unexpected end of JSON input" {
+					offset--
+				}
+				for _, ch := range string(data[:offset]) {
+					if ch == '\n' {
+						line, column = line+1, 1
+					} else {
+						column++
+					}
+				}
+				detail = fmt.Sprintf("%d:%d: %s", line, column, detail)
+			}
 			return validationReport{
 				label:  "JSON",
-				detail: file.display + ": JSON 语法错误: " + compactValidationOutput(err.Error()),
+				detail: file.display + ":" + detail,
 			}
 		}
 	}
@@ -342,7 +428,7 @@ func isJSONCFileName(path string) bool {
 }
 
 func validatePythonFiles(ctx context.Context, root string, files []validationFile) validationReport {
-	program, prefix, ok := findPythonCommand(root)
+	program, prefix, ok := findPythonCommand()
 	if !ok {
 		return validationReport{label: "Python", skipped: true, detail: "未找到 python/python3/py"}
 	}
@@ -357,12 +443,23 @@ func validatePythonFiles(ctx context.Context, root string, files []validationFil
 		paths = append(paths, file.abs)
 	}
 	args := append([]string{}, prefix...)
-	args = append(args, "-c", "import os,py_compile,sys\nout=sys.argv[1]\nfor i,p in enumerate(sys.argv[2:]): py_compile.compile(p, cfile=os.path.join(out,str(i)+'.pyc'), doraise=True)", tempDir)
+	args = append(args, "-I", "-S", "-B", "-c", `import sys
+required = tuple(map(int, sys.argv[1].split('.')))
+if sys.version_info[:2] < required:
+ print('Python %d.%d 低于项目要求 %s，已跳过' % (*sys.version_info[:2], sys.argv[1]))
+ sys.exit(2)
+for p in sys.argv[2:]:
+ with open(p,'rb') as f: compile(f.read(),p,'exec')
+`, pythonValidationMinimum(root, files))
 	args = append(args, paths...)
-	output, err := runValidationCommand(ctx, filepath.Dir(files[0].abs), program, args...)
+	output, err := runValidationCommand(ctx, tempDir, program, args...)
 	if err != nil {
 		if report, handled := validationSkipReport("Python 语法", err); handled {
 			return report
+		}
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 2 {
+			return validationReport{label: "Python 语法", skipped: true, detail: compactValidationOutput(output)}
 		}
 		return validationReport{label: "Python 语法", detail: compactValidationOutput(outputOrError(output, err))}
 	}
@@ -374,45 +471,35 @@ func validateJavaScriptFiles(ctx context.Context, files []validationFile) valida
 	if err != nil {
 		return validationReport{label: "JavaScript 语法", skipped: true, detail: "未找到 node"}
 	}
-	checked := 0
+	// Compile in one trusted Node process. Neither parser executes the source;
+	// ambiguous .js files may use CJS or ESM syntax without guessing from text.
+	args := []string{"--no-warnings", "--experimental-vm-modules", "-e", `
+const fs = require('node:fs'), vm = require('node:vm'), path = require('node:path');
+for (const file of process.argv.slice(1)) {
+  const source = fs.readFileSync(file, 'utf8').replace(/^#![^\r\n]*/, '');
+  const ext = path.extname(file).toLowerCase();
+  try {
+    if (ext === '.mjs') new vm.SourceTextModule(source, { identifier: file });
+    else {
+      try { vm.compileFunction(source, ['exports', 'require', 'module', '__filename', '__dirname'], { filename: file }); }
+      catch (error) {
+        if (ext === '.cjs') throw error;
+        new vm.SourceTextModule(source, { identifier: file });
+      }
+    }
+  } catch (error) { console.error(file + ': ' + error.stack); process.exit(1); }
+}`}
 	for _, file := range files {
-		output, runErr := runValidationCommand(ctx, filepath.Dir(file.abs), program, "--check", file.abs)
-		if runErr != nil {
-			// node --check parses plain CommonJS/ESM only. Module-format
-			// and JSX diagnostics say nothing about the edit, so treat
-			// them as "cannot verify" instead of failures.
-			if isJSFormatOnlyError(output) {
-				continue
-			}
-			if report, handled := validationSkipReport("JavaScript 语法", runErr); handled {
-				return report
-			}
-			return validationReport{label: "JavaScript 语法", detail: file.display + ": " + compactValidationOutput(outputOrError(output, runErr))}
+		args = append(args, file.abs)
+	}
+	output, runErr := runValidationCommand(ctx, filepath.Dir(files[0].abs), program, args...)
+	if runErr != nil {
+		if report, handled := validationSkipReport("JavaScript 语法", runErr); handled {
+			return report
 		}
-		checked++
+		return validationReport{label: "JavaScript 语法", detail: compactValidationOutput(outputOrError(output, runErr))}
 	}
-	if checked == 0 {
-		return validationReport{label: "JavaScript 语法", skipped: true, detail: "模块格式无法静态判断，已跳过"}
-	}
-	return validationReport{label: fmt.Sprintf("JavaScript 语法 %d 个文件", checked), passed: true}
-}
-
-// isJSFormatOnlyError reports whether the node --check output only indicates
-// module-format/JSX limitations of the checker rather than real syntax errors.
-func isJSFormatOnlyError(output string) bool {
-	lower := strings.ToLower(output)
-	for _, pattern := range []string{
-		"outside a module",          // ESM parsed as CJS
-		"unexpected token 'export'", // export in CJS
-		"token '<'",                 // JSX in a plain .js file
-		"await is only valid",       // top-level await in CJS
-		"top-level await",
-	} {
-		if strings.Contains(lower, pattern) {
-			return true
-		}
-	}
-	return false
+	return validationReport{label: fmt.Sprintf("JavaScript 语法 %d 个文件", len(files)), passed: true}
 }
 
 func validateGoFiles(ctx context.Context, root string, files []validationFile) validationReport {
@@ -444,15 +531,16 @@ func validateGoFiles(ctx context.Context, root string, files []validationFile) v
 		packageList = append(packageList, pkg)
 	}
 	sort.Strings(packageList)
-	for _, pkg := range packageList {
-		output, runErr := runValidationCommand(ctx, root, goProgram, "vet", pkg)
+	{
+		args := append([]string{"vet", "-p=2"}, packageList...)
+		output, runErr := runValidationCommand(ctx, root, goProgram, args...)
 		if runErr != nil {
 			// Missing modules / go.sum entries are dependency problems,
 			// not code the agent broke.
 			if goDependencyIssue(output) {
 				return validationReport{label: "Go vet", skipped: true, detail: "依赖解析失败，已跳过"}
 			}
-			if report, handled := validationSkipReport("Go vet "+pkg, runErr); handled {
+			if report, handled := validationSkipReport("Go vet", runErr); handled {
 				return report
 			}
 			// vet reports whole-package findings; only surface errors that
@@ -460,9 +548,15 @@ func validateGoFiles(ctx context.Context, root string, files []validationFile) v
 			// elsewhere are not blamed on the change.
 			filtered := filterGoVetOutput(output, relPaths)
 			if filtered == "" {
-				continue
+				filtered = compactValidationOutput(outputOrError(output, runErr))
+				// Compiler/type errors use a vet: prefix and may be caused by
+				// an edited API. Ordinary findings in untouched files are not
+				// attributable to this edit, so retain them as skipped detail.
+				if strings.Contains(output, ".go:") && !strings.Contains(output, "vet: ") && !strings.Contains(output, "vet.exe: ") {
+					return validationReport{label: "Go vet", skipped: true, detail: "未改动文件中的诊断，未归因于本次改动：\n" + filtered}
+				}
 			}
-			return validationReport{label: "Go vet " + pkg, detail: filtered}
+			return validationReport{label: "Go vet", detail: filtered}
 		}
 	}
 	return validationReport{label: fmt.Sprintf("Go vet %d 个包", len(packageList)), passed: true}
@@ -521,103 +615,116 @@ func filterGoVetOutput(output string, relPaths map[string]struct{}) string {
 	return compactValidationOutput(strings.Join(kept, "\n"))
 }
 
-type typeScriptProject struct {
-	config string
-	vue    bool
-}
-
 func validateTypeScriptFiles(ctx context.Context, root string, tsFiles, vueFiles []validationFile) []validationReport {
-	projects := make(map[string]*typeScriptProject)
-	all := append(append([]validationFile{}, tsFiles...), vueFiles...)
-	for _, file := range all {
-		config := nearestFile(filepath.Dir(file.abs), root, "tsconfig.json")
-		if config == "" {
-			continue
-		}
-		project := projects[config]
-		if project == nil {
-			project = &typeScriptProject{config: config}
-			projects[config] = project
-		}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		return []validationReport{{label: "Vue/TypeScript 语法", skipped: true, detail: "未找到 node"}}
+	}
+	// Parse only changed sources: no project graph, tsconfig plugins, type
+	// checking or incremental output. One process per installed parser pair.
+	type parserGroup struct {
+		ts, vue string
+		files   []validationFile
+	}
+	groups := map[string]*parserGroup{}
+	var reports []validationReport
+	for _, file := range append(append([]validationFile{}, tsFiles...), vueFiles...) {
+		dir := filepath.Dir(file.abs)
+		ts := findNodeValidationModule(dir, root, "typescript/lib/typescript.js")
+		vue := ""
 		if file.ext == ".vue" {
-			project.vue = true
+			vue = findNodeValidationModule(dir, root, "@vue/compiler-sfc/dist/compiler-sfc.cjs.js")
 		}
-	}
-	if len(projects) == 0 {
-		if len(vueFiles) > 0 {
-			return []validationReport{{label: "Vue/TypeScript", skipped: true, detail: "未找到 tsconfig.json"}}
-		}
-		return []validationReport{{label: "TypeScript", skipped: true, detail: "未找到 tsconfig.json"}}
-	}
-	reports := make([]validationReport, 0, len(projects))
-	configs := make([]string, 0, len(projects))
-	for config := range projects {
-		configs = append(configs, config)
-	}
-	sort.Strings(configs)
-	for _, config := range configs {
-		project := projects[config]
-		name := "TypeScript 语法"
-		program, prefix, ok := findNodeProjectTool(filepath.Dir(config), root, "tsc")
-		if project.vue {
-			name = "Vue 语法"
-			program, prefix, ok = findNodeProjectTool(filepath.Dir(config), root, "vue-tsc")
-		}
-		if !ok {
-			reports = append(reports, validationReport{label: name, skipped: true, detail: "未找到校验工具"})
+		if (file.ext != ".vue" && ts == "") || (file.ext == ".vue" && vue == "") {
+			reports = append(reports, validationReport{label: file.display, skipped: true, detail: "未找到语法解析器"})
 			continue
 		}
-		args := append([]string{}, prefix...)
-		args = append(args, "--noEmit", "--pretty", "false", "--project", config)
-		output, runErr := runValidationCommand(ctx, filepath.Dir(config), program, args...)
+		key := ts + "\x00" + vue
+		if groups[key] == nil {
+			groups[key] = &parserGroup{ts: ts, vue: vue}
+		}
+		groups[key].files = append(groups[key].files, file)
+	}
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		group := groups[key]
+		args := []string{"--no-warnings", "--experimental-vm-modules", "-e", nodeTypedSyntaxScript, group.ts, group.vue}
+		for _, file := range group.files {
+			args = append(args, file.abs)
+		}
+		output, runErr := runValidationCommand(ctx, root, node, args...)
+		label := fmt.Sprintf("Vue/TypeScript 语法 %d 个文件", len(group.files))
 		if runErr != nil {
-			if report, handled := validationSkipReport(name, runErr); handled {
+			if report, handled := validationSkipReport(label, runErr); handled {
 				reports = append(reports, report)
-				continue
+			} else {
+				reports = append(reports, validationReport{label: label, detail: compactValidationOutput(outputOrError(output, runErr))})
 			}
-			// A whole-project type check fails on pre-existing type errors,
-			// missing node_modules, etc. Only syntax-level errors (TS1xxx)
-			// in files touched by this edit are worth reporting.
-			filtered := filterTypeScriptSyntaxErrors(output, filepath.Dir(config), all)
-			if filtered == "" {
-				reports = append(reports, validationReport{label: name, skipped: true, detail: "改动文件无语法错误（其余错误已忽略）"})
-				continue
-			}
-			reports = append(reports, validationReport{label: name, detail: filtered})
+		} else if strings.TrimSpace(output) != "" {
+			// The parser explicitly reports unsupported external scripts or a
+			// missing TS parser; never label partially checked files as passed.
+			reports = append(reports, validationReport{label: label, skipped: true, detail: compactValidationOutput(output)})
 		} else {
-			reports = append(reports, validationReport{label: name, passed: true})
+			reports = append(reports, validationReport{label: label, passed: true})
 		}
 	}
 	return reports
 }
 
-var typeScriptDiagnosticPattern = regexp.MustCompile(`^(.+?)\(\d+,\d+\): error TS1\d{3}:`)
+const nodeTypedSyntaxScript = `
+const fs = require('node:fs'), vm = require('node:vm');
+const [tsPath, vuePath, ...files] = process.argv.slice(1);
+const ts = tsPath ? require(tsPath) : null, vue = vuePath ? require(vuePath) : null;
+let failed = false;
+function failure(message) { failed = true; console.error(message); }
+function script(source, file, lang) {
+  if (ts) {
+    const kind = lang === 'tsx' ? ts.ScriptKind.TSX : lang === 'jsx' ? ts.ScriptKind.JSX : lang === 'ts' ? ts.ScriptKind.TS : ts.ScriptKind.JS;
+    const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, false, kind);
+    for (const d of parsed.parseDiagnostics) {
+      const p = parsed.getLineAndCharacterOfPosition(d.start || 0);
+      failure(file + ':' + (p.line+1) + ':' + (p.character+1) + ': ' + ts.flattenDiagnosticMessageText(d.messageText, '\n'));
+    }
+  } else if (lang === 'ts' || lang === 'tsx' || lang === 'jsx') console.log(file + ': 缺少 TypeScript 语法解析器，已跳过脚本');
+  else new vm.SourceTextModule(source, { identifier: file });
+}
+for (const file of files) {
+  try {
+    const source = fs.readFileSync(file, 'utf8');
+    if (!file.toLowerCase().endsWith('.vue')) { script(source, file, file.toLowerCase().endsWith('.tsx') ? 'tsx' : 'ts'); continue; }
+    const parsed = vue.parse(source, { filename: file });
+    for (const error of parsed.errors) failure(file + ': ' + (error.message || error));
+    const d = parsed.descriptor;
+    for (const block of [d.script, d.scriptSetup]) if (block) {
+      if (block.src) console.log(file + ': 外部脚本未检查');
+      else script(block.content, file, block.lang || 'js');
+    }
+    if (d.template) {
+      if (d.template.src || (d.template.lang && d.template.lang !== 'html')) console.log(file + ': 外部或预处理模板未检查');
+      else {
+        const template = vue.compileTemplate({ source: d.template.content, filename: file, id: 'ally-syntax', compilerOptions: { expressionPlugins: ['typescript'] } });
+        for (const error of template.errors) failure(file + ': ' + (error.message || error));
+      }
+    }
+  } catch (error) { failure(file + ': ' + error.stack); }
+}
+if (failed) process.exit(1);
+`
 
-// filterTypeScriptSyntaxErrors keeps only syntax-level diagnostics (error codes
-// TS1000–TS1999) that point at one of the changed files. Semantic type errors
-// (TS2xxx) and errors in untouched files are dropped: they are usually
-// pre-existing or dependency-related and would be blamed on the edit.
-func filterTypeScriptSyntaxErrors(output, configDir string, files []validationFile) string {
-	changed := make(map[string]struct{}, len(files))
-	for _, file := range files {
-		changed[strings.ToLower(filepath.Clean(file.abs))] = struct{}{}
+func findNodeValidationModule(dir, root, module string) string {
+	for current := filepath.Clean(dir); ; current = filepath.Dir(current) {
+		candidate := filepath.Join(current, "node_modules", filepath.FromSlash(module))
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+		if current == filepath.Clean(root) || filepath.Dir(current) == current {
+			return ""
+		}
 	}
-	var kept []string
-	for _, line := range strings.Split(output, "\n") {
-		m := typeScriptDiagnosticPattern.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil {
-			continue
-		}
-		path := filepath.Clean(m[1])
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(configDir, path)
-		}
-		if _, ok := changed[strings.ToLower(path)]; !ok {
-			continue
-		}
-		kept = append(kept, strings.TrimSpace(line))
-	}
-	return compactValidationOutput(strings.Join(kept, "\n"))
 }
 
 func validateJavaFiles(ctx context.Context, files []validationFile) validationReport {
@@ -630,7 +737,7 @@ func validateJavaFiles(ctx context.Context, files []validationFile) validationRe
 		return validationReport{label: "Java 语法", skipped: true, detail: "无法创建临时输出目录"}
 	}
 	defer func() { _ = removeTempTree(tempDir) }()
-	args := []string{"-proc:none", "-encoding", "UTF-8", "-d", tempDir}
+	args := []string{"-J-Duser.language=en", "-J-Duser.country=US", "-proc:none", "-encoding", "UTF-8", "-d", tempDir}
 	for _, file := range files {
 		args = append(args, file.abs)
 	}
@@ -686,20 +793,77 @@ func filterJavaSyntaxErrors(output string) string {
 	return compactValidationOutput(strings.Join(kept, "\n"))
 }
 
-func findPythonCommand(root string) (string, []string, bool) {
-	// Prefer a project-local virtualenv: the system interpreter may be older
-	// than the project's language level and would mis-report valid syntax.
-	for _, dir := range []string{".venv", "venv"} {
-		for _, candidate := range []string{
-			filepath.Join(root, dir, "Scripts", "python.exe"),
-			filepath.Join(root, dir, "bin", "python"),
-			filepath.Join(root, dir, "bin", "python3"),
-		} {
-			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-				return candidate, nil, true
+// Read literal language-version declarations only; never execute project config.
+// Ignore upper bounds/exclusions since they do not establish a minimum version.
+func pythonValidationMinimum(root string, files []validationFile) string {
+	major, minor := 3, 0
+	consider := func(value string) {
+		parts := strings.Split(strings.TrimSpace(value), ".")
+		if len(parts) < 2 {
+			return
+		}
+		m, err := strconv.Atoi(parts[0])
+		n, minorErr := strconv.Atoi(parts[1])
+		if err == nil && minorErr == nil && (m > major || (m == major && n > minor)) {
+			major, minor = m, n
+		}
+	}
+	seen := map[string]bool{}
+	for _, file := range files {
+		for _, name := range []string{".python-version", "pyproject.toml"} {
+			path := nearestFile(filepath.Dir(file.abs), root, name)
+			if path == "" || seen[path] {
+				continue
+			}
+			seen[path] = true
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			if name == ".python-version" {
+				fields := strings.Fields(string(data))
+				if len(fields) > 0 {
+					consider(fields[0])
+				}
+				continue
+			}
+			inProject := false
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "[") {
+					section, _, _ := strings.Cut(line, "#")
+					inProject = strings.TrimSpace(section) == "[project]"
+					continue
+				}
+				key, value, ok := strings.Cut(line, "=")
+				if !inProject || !ok || strings.Trim(strings.TrimSpace(key), "\"'") != "requires-python" {
+					continue
+				}
+				value = strings.TrimSpace(value)
+				if len(value) < 2 || (value[0] != '\'' && value[0] != '"') {
+					continue
+				}
+				value, _, ok = strings.Cut(value[1:], value[:1])
+				if !ok {
+					continue
+				}
+				for _, spec := range strings.Split(value, ",") {
+					spec = strings.TrimSpace(spec)
+					for _, op := range []string{">=", "==", "~=", ">"} {
+						if strings.HasPrefix(spec, op) {
+							consider(strings.TrimSpace(strings.TrimPrefix(spec, op)))
+							break
+						}
+					}
+				}
 			}
 		}
 	}
+	return fmt.Sprintf("%d.%d", major, minor)
+}
+
+func findPythonCommand() (string, []string, bool) {
+	// Never automatically execute an interpreter supplied by the repository.
 	for _, name := range []string{"python", "python3"} {
 		if path, err := exec.LookPath(name); err == nil {
 			return path, nil, true
@@ -707,38 +871,6 @@ func findPythonCommand(root string) (string, []string, bool) {
 	}
 	if path, err := exec.LookPath("py"); err == nil {
 		return path, []string{"-3"}, true
-	}
-	return "", nil, false
-}
-
-func findNodeProjectTool(dir, root, name string) (string, []string, bool) {
-	node, nodeErr := exec.LookPath("node")
-	if nodeErr == nil {
-		for current := filepath.Clean(dir); ; current = filepath.Dir(current) {
-			candidates := []string{}
-			switch name {
-			case "tsc":
-				candidates = []string{
-					filepath.Join(current, "node_modules", "typescript", "bin", "tsc"),
-					filepath.Join(current, "node_modules", "typescript", "bin", "tsc.js"),
-				}
-			case "vue-tsc":
-				candidates = []string{
-					filepath.Join(current, "node_modules", "vue-tsc", "bin", "vue-tsc.js"),
-				}
-			}
-			for _, candidate := range candidates {
-				if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-					return node, []string{candidate}, true
-				}
-			}
-			if current == root || filepath.Dir(current) == current {
-				break
-			}
-		}
-	}
-	if program, err := exec.LookPath(name); err == nil && !strings.HasSuffix(strings.ToLower(program), ".cmd") && !strings.HasSuffix(strings.ToLower(program), ".bat") {
-		return program, nil, true
 	}
 	return "", nil, false
 }
@@ -759,6 +891,8 @@ func runValidationCommand(ctx context.Context, dir, program string, args ...stri
 	buf := &limitedBuffer{limit: autoValidationOutputBytes}
 	cmd := exec.CommandContext(ctx, program, args...)
 	cmd.Dir = dir
+	cmd.Env = validationCommandEnv()
+	cmd.WaitDelay = 250 * time.Millisecond
 	hideCommandWindow(cmd)
 	cmd.Stdout = buf
 	cmd.Stderr = buf
@@ -767,6 +901,24 @@ func runValidationCommand(ctx context.Context, dir, program string, args ...stri
 		return buf.String(), ctxErr
 	}
 	return buf.String(), err
+}
+
+// Validation must not inherit interpreter preloads, compiler wrappers or
+// network/toolchain auto-download settings from the interactive shell.
+func validationCommandEnv() []string {
+	blocked := map[string]bool{
+		"NODE_OPTIONS": true, "PYTHONPATH": true, "PYTHONHOME": true,
+		"JAVA_TOOL_OPTIONS": true, "JDK_JAVA_OPTIONS": true, "JDK_JAVAC_OPTIONS": true, "_JAVA_OPTIONS": true,
+		"GOFLAGS": true, "GOTOOLCHAIN": true, "GOPROXY": true, "GOSUMDB": true, "GOENV": true,
+	}
+	env := make([]string, 0, len(os.Environ())+4)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !blocked[strings.ToUpper(key)] {
+			env = append(env, entry)
+		}
+	}
+	return append(env, "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off", "GOENV=off")
 }
 
 func outputOrError(output string, err error) string {

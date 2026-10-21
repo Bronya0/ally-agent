@@ -60,6 +60,7 @@ const (
 	MaxServiceStopGraceSeconds     = 30
 	DefaultServiceReadTailBytes    = 8 * 1024
 	MaxServiceReadTailBytes        = 32 * 1024
+	MaxServiceDescriptionChars     = 500
 	// HTTP response-size bounds. internal/app's maxHTTPBodyBytes /
 	// defaultHTTPMaxBody / defaultWebFetchBody and web_fetch's character bounds
 	// read these same constants, so a declared range can never drift from what
@@ -131,7 +132,7 @@ func BuiltinSchema(name string) (map[string]any, bool) {
 
 func chatToolsUncached() []openai.Tool {
 	return []openai.Tool{
-		functionTool("list_files", "List files and directories within a workspace path. Directories end with '/'. Hidden entries (dotfiles, gitignored paths, VCS internals) are never listed. Depth and entry count are bounded automatically; when the result is truncated, narrow the path instead of asking for more entries.", map[string]any{
+		functionTool("list_files", "Inspect directory structure; use read directly for known files and grep to locate code by content. Lists up to 3 levels deep and 200 entries, with directories ending in '/'. Dotfiles, gitignored paths, VCS internals and heavy dependency/build directories are omitted. At most 50 direct files per directory are shown; '+N more files' marks omitted siblings. Narrow the path for depth/global truncation; narrowing to the same directory cannot reveal omitted siblings. An absent entry does not prove a path does not exist.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{"type": "string", "description": "Workspace-relative directory path, or explicit absolute path for read-only listing. Empty means workspace root."},
@@ -203,12 +204,13 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("service", "Manage long-running local processes without blocking: start returns an id; list defaults to starting/running services; includeFinished=true also lists recent finished services; read returns recent output, including from finished services; stop tries graceful termination before killing the process tree. Model output keeps at most the last 8 KiB; reduced-from reports clipping. Use graceSeconds for processes that must flush state. Avoid polling loops; read after a concrete condition or wait.", map[string]any{
+		functionTool("service", "Manage long-running local processes in the current workspace without blocking. Sessions and sub-agents in the same workspace share services; list/read/stop cannot access other workspaces. The active service limit is global across workspaces. List reports activeCount for this workspace and globalActiveCount/maxActive for global capacity. A workspace is required for model service operations. start requires a description explaining the service purpose and returns an id; list defaults to starting/running services; includeFinished=true also lists recent finished services; read returns recent output, including from finished services; stop tries graceful termination before killing the process tree. Model output keeps at most the last 8 KiB; reduced-from reports clipping. Use graceSeconds for processes that must flush state. Avoid polling loops; read after a concrete condition or wait.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"includeFinished": map[string]any{"type": "boolean", "description": "For action=list: include finished services (default false). Output remains readable by id."},
 				"action":          map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "Start a new background process, stop one by id, list starting/running services (includeFinished=true adds recent finished ones), or read a bounded tail of one service's output (works on finished services for post-mortem diagnosis)."},
 				"name":            map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
+				"description":     map[string]any{"type": "string", "minLength": 1, "maxLength": MaxServiceDescriptionChars, "pattern": ".*\\S.*", "description": "Required with action=start: explain what the service does and why it is needed. Shown to the user in service cards and the task center."},
 				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
 				"cwd":             map[string]any{"type": "string", "description": "Workspace-relative working directory. Empty means workspace root. Used only with action=start."},
 				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start. Required with action=stop and action=read."},
@@ -383,20 +385,20 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("grep", "Search UTF-8 file contents with ripgrep; prefer this over shell grep/rg. Default lines mode returns matches grouped by file with line numbers and capped text previews (up to 500 characters each); read only when surrounding context is needed. count_matches returns per-file counts. Results include exact totals and a next-offset when more entries remain. Paginate with that offset or narrow path/glob; result size is bounded automatically.", map[string]any{
+		functionTool("grep", "Locate code by content when its location is unknown; prefer this over shell grep/rg. Once the target code file is known, use read to understand its relevant functions or logic before editing; do not repeatedly grep that file to piece together its contents. Single-file searches suit specific match queries, log filtering or counting. Searches UTF-8 content; default lines mode groups matching lines by file with line numbers and text previews capped at 500 characters each. Totals are exact within the searched scope. Use the returned next-offset to paginate available entries, or narrow path/glob. Hidden files are skipped during directory traversal; dependency/build directories are excluded unless path points inside them. An empty path also skips files over 10 MB.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Search regex pattern."},
-				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches", ""}, "description": "Output shape: lines (default, line numbers plus capped text previews) or count_matches. An empty string means the default, exactly as the runtime reads it."},
-				"path":           map[string]any{"type": "string", "description": "Subdirectory or explicit absolute path. Empty means workspace root."},
+				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Rust regex pattern; look-around and backreferences are unsupported. Escape regex metacharacters when matching literal text."},
+				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches", ""}, "description": "lines (default, also for an empty string) returns matching lines with capped text previews. count_matches returns occurrence counts for only the top 100 files by count, 20 files per page; pagination cannot retrieve files beyond that top 100."},
+				"path":           map[string]any{"type": "string", "description": "File or directory, relative to the workspace root or absolute. Empty means workspace root. For reading known code, use read instead."},
 				"glob":           map[string]any{"type": "string", "description": "Optional glob filter, e.g. *.go or frontend/**/*.vue."},
-				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false."},
+				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false. Does not enable hidden-directory traversal or remove dependency/build directory exclusions."},
 				"caseSensitive":  map[string]any{"type": "boolean", "description": "Match case exactly. Default false (case-insensitive)."},
 				"offset":         map[string]any{"type": "integer", "minimum": 0, "description": "Skip first N matching lines/files for pagination."},
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read one or more file contents. Supports text files and images (jpg, png, gif, webp; bmp is read as a text notice instead, not as image input). Text files return bounded `<ally-file path=… version=…>` previews with 1-based line numbers; edit needs that version. Prefer targeted startLine/endLine ranges or tailLines for logs; follow the startLine continuation hint when truncated. Missing paths and directories are omitted; other failures carry an error attribute. reused means unchanged content is already in context. truncated-lines identifies lines with missing tails: edit refuses lineRange over those lines, so use oldText instead. Pass needed files in the files array to read in parallel.", map[string]any{
+		functionTool("read", "Read known files directly to understand code or prepare edits. For small files, omit line ranges; for large files, read ranges covering complete relevant functions or logic rather than piecing them together through repeated grep calls or tiny reads. Batch independent files in one files array. Supports text and images (jpg, png, gif, webp; bmp returns a text notice). Text returns bounded `<ally-file path=… version=…>` previews with 1-based line numbers; edit needs that version. Use tailLines for log tails. Follow the startLine continuation hint only when more content is needed. Missing paths and directories are omitted; other failures carry an error attribute. reused means unchanged content is already in context. truncated-lines marks lines with missing tails: edit refuses lineRange over those lines, so use oldText instead.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -491,7 +493,7 @@ func chatToolsUncached() []openai.Tool {
 var builtinToolExamples = map[string]string{
 	"edit":               `{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}; lineRange: {"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}`,
 	"command":            `{"command":"go test ./...","cwd":".","timeout":120}`,
-	"service":            `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_...","graceSeconds":10}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
+	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_...","graceSeconds":10}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
 	"ask":                `{"questions":[{"question":"Which database should we use?","options":[{"label":"SQLite","description":"Simple local storage.","recommended":true},{"label":"PostgreSQL","description":"Production database."}]}]}`,
 	"remote_read":        `{"target":"my-dev:/srv/app","files":[{"path":"main.go"}]}`,
 	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
@@ -534,8 +536,8 @@ func batchReadFilesSchema() map[string]any {
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "File path to read."},
 				"startLine": map[string]any{"type": "integer", "minimum": 0, "description": "Optional 1-based first line to read; omit or send 0 to start at the beginning."},
-				"endLine":   map[string]any{"type": "integer", "minimum": 0, "description": "Optional inclusive last line; omit or send 0 for the end of the file. A value below startLine is normalized into an ascending range instead of being rejected."},
-				"tailLines": map[string]any{"type": "integer", "minimum": 0, "maximum": MaxReadRangeLines, "description": "Optional: read only the last N lines (e.g. the end of a log); omit or send 0 for a full read. Mutually exclusive with startLine/endLine; do not use together with startLine or endLine."},
+				"endLine":   map[string]any{"type": "integer", "minimum": 0, "description": "Optional inclusive last line; omit or send 0 to request through the end of the file, subject to output limits. A value below startLine is normalized into an ascending range instead of being rejected."},
+				"tailLines": map[string]any{"type": "integer", "minimum": 0, "maximum": MaxReadRangeLines, "description": "Optional: read only the last N lines (e.g. the end of a log); omit or send 0 to disable tail reading and use the normal line range. Do not combine a positive value with nonzero startLine or endLine. All reads remain subject to output limits."},
 			},
 			"required": []string{"path"},
 		},

@@ -9,12 +9,15 @@ func TestServiceListFinishedVisibility(t *testing.T) {
 	a := NewApp()
 	for _, status := range []string{"starting", "running", "stopped", "exited"} {
 		a.services[status] = &managedService{
-			info:   ServiceInfo{ID: status, Status: status},
+			info:   ServiceInfo{ID: status, Workspace: dir, Status: status},
 			output: newRollingBuffer(serviceOutputLimit),
 		}
 	}
 	for _, include := range []bool{false, true} {
-		result := a.listServicesForTool(include)
+		result, err := a.listServicesForTool(ConfigState{Workspace: dir}, include)
+		if err != nil {
+			t.Fatal(err)
+		}
 		want := 2
 		if include {
 			want = 4

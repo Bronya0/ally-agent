@@ -185,6 +185,38 @@ func TestExecuteToolGatesEveryBuiltinTool(t *testing.T) {
 	}
 }
 
+func TestServiceStartRequiresDescription(t *testing.T) {
+	root := redirectAppStateDir(t)
+	app := NewApp()
+	cfg := ConfigState{Workspace: root}
+	for _, description := range []any{nil, "", " \n\t ", strings.Repeat("中", toolshared.MaxServiceDescriptionChars+1)} {
+		args := map[string]any{"action": "start", "command": "echo should-not-start"}
+		if description != nil {
+			args["description"] = description
+		}
+		raw, _ := json.Marshal(args)
+		result := app.executeTool(context.Background(), cfg, "s", "service", raw)
+		if result.OK || result.ErrorCode != "E_BAD_ARGS" || !strings.Contains(result.Error, "description") {
+			t.Fatalf("invalid description %v reached process startup: %+v", description, result)
+		}
+	}
+	// Direct callers also enforce the contract; valid Unicode at the maximum
+	// length reaches the next (empty command) check rather than being rejected.
+	for _, description := range []string{"", " \t ", strings.Repeat("中", toolshared.MaxServiceDescriptionChars+1)} {
+		_, err := app.startServiceWithConfig(context.Background(), cfg, StartServiceRequest{Description: description, Command: "echo should-not-start"})
+		if toolErrorCode(err) != "E_BAD_ARGS" {
+			t.Fatalf("direct start bypassed description validation: %v", err)
+		}
+	}
+	_, err := app.startServiceWithConfig(context.Background(), cfg, StartServiceRequest{Description: strings.Repeat("中", toolshared.MaxServiceDescriptionChars)})
+	if toolErrorCode(err) != "E_BAD_COMMAND" {
+		t.Fatalf("valid Unicode description rejected: %v", err)
+	}
+	if len(app.ListServices().Services) != 0 {
+		t.Fatal("invalid requests created a service")
+	}
+}
+
 // TestServiceTuningStaysInsideTheDeclaredBounds: graceSeconds and tailBytes are
 // the two knobs the runtime always honoured but the schema never declared. They
 // must accept a value in range (reaching the service lookup) and refuse one

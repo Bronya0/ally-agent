@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -237,10 +238,7 @@ func (a *App) saveSSHClustersLocked() error {
 	if path == "" {
 		return nil
 	}
-	servers := make([]SSHServerNode, 0, len(a.sshClusters))
-	for _, s := range a.sshClusters {
-		servers = append(servers, s)
-	}
+	servers := a.sortedSSHServersLocked()
 
 	a.sshWorkspaceAllowedMu.RLock()
 	wsAllowed := make(map[string][]string, len(a.sshWorkspaceAllowed))
@@ -256,6 +254,7 @@ func (a *App) saveSSHClustersLocked() error {
 			}
 		}
 		if len(list) > 0 {
+			sort.Strings(list)
 			wsAllowed[cleanWS] = list
 		}
 	}
@@ -281,15 +280,24 @@ func (a *App) saveSSHClustersLocked() error {
 	return os.Rename(tmpFile, path)
 }
 
-// ListAllSSHServers returns all configured servers (for UI settings).
-func (a *App) ListAllSSHServers() []SSHServerNode {
-	a.sshClustersMu.RLock()
-	defer a.sshClustersMu.RUnlock()
+// sortedSSHServersLocked snapshots nodes in case-insensitive alias order, shared
+// by persistence and UI lists. Caller holds sshClustersMu for reading or writing.
+func (a *App) sortedSSHServersLocked() []SSHServerNode {
 	servers := make([]SSHServerNode, 0, len(a.sshClusters))
 	for _, s := range a.sshClusters {
 		servers = append(servers, s)
 	}
+	sort.Slice(servers, func(i, j int) bool {
+		return strings.ToLower(servers[i].Alias) < strings.ToLower(servers[j].Alias)
+	})
 	return servers
+}
+
+// ListAllSSHServers returns all configured servers in alias order (for UI settings).
+func (a *App) ListAllSSHServers() []SSHServerNode {
+	a.sshClustersMu.RLock()
+	defer a.sshClustersMu.RUnlock()
+	return a.sortedSSHServersLocked()
 }
 
 // ListAuthorizedSSHServers returns clean summaries of servers authorized for
@@ -324,6 +332,9 @@ func (a *App) ListAuthorizedSSHServers(workspace string) []SSHServerSummary {
 			Status:      s.Status,
 		})
 	}
+	sort.Slice(res, func(i, j int) bool {
+		return strings.ToLower(res[i].Alias) < strings.ToLower(res[j].Alias)
+	})
 	return res
 }
 

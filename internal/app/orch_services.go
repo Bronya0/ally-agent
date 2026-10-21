@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"ally-dev/internal/sandbox"
 	"ally-dev/internal/tools/service"
@@ -121,7 +122,51 @@ func (a *App) GetServiceOutput(id string) (ServiceOutputResult, error) {
 	return ServiceOutputResult{ID: id, Output: output, Bytes: total, Truncated: truncated}, nil
 }
 
+// Management bridges remain global. Model operations always use the run's
+// primary workspace, including when cwd is inside an additional workspace.
+// Do not stat the path: a service remains manageable after its directory moves.
+func serviceWorkspace(cfg ConfigState) (string, error) {
+	if strings.TrimSpace(cfg.Workspace) == "" {
+		return "", codedToolError("E_WORKSPACE_REQUIRED", errors.New("workspace is required to manage services"))
+	}
+	return filepath.Abs(strings.TrimSpace(cfg.Workspace))
+}
+
+func serviceBelongsToWorkspace(owner, workspace string) bool {
+	return strings.TrimSpace(owner) != "" && strings.TrimSpace(workspace) != "" && samePath(owner, workspace)
+}
+
+func (a *App) checkServiceWorkspace(cfg ConfigState, id string) error {
+	workspace, err := serviceWorkspace(cfg)
+	if err != nil {
+		return err
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return codedToolError("E_BAD_SERVICE_ID", errors.New("id is required"))
+	}
+	a.servicesMu.Lock()
+	svc := a.services[id]
+	a.servicesMu.Unlock()
+	if svc != nil {
+		svc.mu.Lock()
+		owned := serviceBelongsToWorkspace(svc.info.Workspace, workspace)
+		svc.mu.Unlock()
+		if owned {
+			return nil
+		}
+	}
+	return codedToolError("E_SERVICE_NOT_FOUND", fmt.Errorf("service not found in the current workspace: %w", errServiceNotFound))
+}
+
 func (a *App) startServiceWithConfig(parent context.Context, cfg ConfigState, req StartServiceRequest) (ServiceInfo, error) {
+	req.Description = strings.TrimSpace(req.Description)
+	if req.Description == "" {
+		return ServiceInfo{}, codedToolError("E_BAD_ARGS", errors.New("description is required for service start; explain the service's purpose"))
+	}
+	if utf8.RuneCountInString(req.Description) > toolshared.MaxServiceDescriptionChars {
+		return ServiceInfo{}, codedToolError("E_BAD_ARGS", fmt.Errorf("description must be at most %d characters", toolshared.MaxServiceDescriptionChars))
+	}
 	if strings.TrimSpace(req.Command) == "" {
 		return ServiceInfo{}, codedToolError("E_BAD_COMMAND", errors.New("command is required"))
 	}
@@ -192,14 +237,16 @@ func (a *App) startServiceWithConfig(parent context.Context, cfg ConfigState, re
 
 	service := &managedService{
 		info: ServiceInfo{
-			ID:        id,
-			Name:      strings.TrimSpace(req.Name),
-			Command:   req.Command,
-			Cwd:       filepath.ToSlash(cwd),
-			PID:       cmd.Process.Pid,
-			Status:    "running",
-			StartedAt: time.Now().Unix(),
-			Sandboxed: spec.Enforce(),
+			ID:          id,
+			Workspace:   filepath.ToSlash(root),
+			Name:        strings.TrimSpace(req.Name),
+			Description: req.Description,
+			Command:     req.Command,
+			Cwd:         filepath.ToSlash(cwd),
+			PID:         cmd.Process.Pid,
+			Status:      "running",
+			StartedAt:   time.Now().Unix(),
+			Sandboxed:   spec.Enforce(),
 		},
 		cmd:        cmd,
 		output:     buf,
@@ -430,9 +477,10 @@ func (a *App) listServices() ServiceListResult {
 // the model must call service with action=read on a specific id to inspect
 // output.
 type ServiceListToolResult struct {
-	ActiveCount int              `json:"activeCount"`
-	MaxActive   int              `json:"maxActive"`
-	Services    []ServiceSummary `json:"services"`
+	ActiveCount       int              `json:"activeCount"` // Current workspace.
+	GlobalActiveCount int              `json:"globalActiveCount"`
+	MaxActive         int              `json:"maxActive"` // Global process limit.
+	Services          []ServiceSummary `json:"services"`
 }
 
 // ServiceSummary is the per-service metadata returned by the list action. It
@@ -440,7 +488,11 @@ type ServiceListToolResult struct {
 // decide whether a read is worthwhile.
 type ServiceSummary struct {
 	ID              string `json:"id"`
+	Workspace       string `json:"workspace"`
 	Name            string `json:"name,omitempty"`
+	Description     string `json:"description,omitempty"`
+	Promoted        bool   `json:"promoted,omitempty"`
+	TimeoutSeconds  int    `json:"timeoutSeconds,omitempty"`
 	Command         string `json:"command"`
 	Cwd             string `json:"cwd,omitempty"`
 	PID             int    `json:"pid,omitempty"`
@@ -453,19 +505,34 @@ type ServiceSummary struct {
 	Error           string `json:"error,omitempty"`
 }
 
-func (a *App) listServicesForTool(includeFinished bool) ServiceListToolResult {
+func (a *App) listServicesForTool(cfg ConfigState, includeFinished bool) (ServiceListToolResult, error) {
+	workspace, err := serviceWorkspace(cfg)
+	if err != nil {
+		return ServiceListToolResult{}, err
+	}
 	listed := a.listServices()
 	summaries := make([]ServiceSummary, 0, len(listed.Services))
-	activeCount := 0
+	activeCount, globalActiveCount := 0, 0
 	for _, info := range listed.Services {
-		if info.Status == "starting" || info.Status == "running" {
+		active := info.Status == "starting" || info.Status == "running"
+		if active {
+			globalActiveCount++
+		}
+		if !serviceBelongsToWorkspace(info.Workspace, workspace) {
+			continue
+		}
+		if active {
 			activeCount++
 		} else if !includeFinished {
 			continue
 		}
 		summaries = append(summaries, ServiceSummary{
 			ID:              info.ID,
+			Workspace:       info.Workspace,
 			Name:            info.Name,
+			Description:     info.Description,
+			Promoted:        info.Promoted,
+			TimeoutSeconds:  info.TimeoutSeconds,
 			Command:         info.Command,
 			Cwd:             info.Cwd,
 			PID:             info.PID,
@@ -479,10 +546,11 @@ func (a *App) listServicesForTool(includeFinished bool) ServiceListToolResult {
 		})
 	}
 	return ServiceListToolResult{
-		ActiveCount: activeCount,
-		MaxActive:   maxActiveServices,
-		Services:    summaries,
-	}
+		ActiveCount:       activeCount,
+		GlobalActiveCount: globalActiveCount,
+		MaxActive:         maxActiveServices,
+		Services:          summaries,
+	}, nil
 }
 
 // ServiceReadResult is the model-facing read payload. Output is bounded by
@@ -697,6 +765,7 @@ var errProcessAlreadyExited = errors.New("command process already exited")
 // restarting it (a restarted dev server would collide on its port).
 type promoteCommandParams struct {
 	cmd       *exec.Cmd
+	workspace string
 	command   string
 	cwd       string
 	startedAt time.Time
@@ -760,15 +829,17 @@ func (a *App) promoteTimedOutCommand(p promoteCommandParams) (ServiceInfo, error
 	rolling := newRollingBuffer(serviceOutputLimit)
 	svc := &managedService{
 		info: ServiceInfo{
-			ID:        id,
-			Name:      service.PromotedServiceName(p.command),
-			Command:   p.command,
-			Cwd:       filepath.ToSlash(p.cwd),
-			PID:       p.cmd.Process.Pid,
-			Status:    "running",
-			StartedAt: p.startedAt.Unix(),
-			Promoted:  true,
-			Sandboxed: p.sandboxed,
+			ID:             id,
+			Workspace:      filepath.ToSlash(p.workspace),
+			Name:           service.PromotedServiceName(p.command),
+			TimeoutSeconds: p.timeout,
+			Command:        p.command,
+			Cwd:            filepath.ToSlash(p.cwd),
+			PID:            p.cmd.Process.Pid,
+			Status:         "running",
+			StartedAt:      p.startedAt.Unix(),
+			Promoted:       true,
+			Sandboxed:      p.sandboxed,
 		},
 		cmd:        p.cmd,
 		output:     rolling,
