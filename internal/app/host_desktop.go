@@ -72,8 +72,8 @@ func (a *App) SetWindow(window *application.WebviewWindow) {
 	a.wails.window = window
 	a.installWebviewZoomResync(window)
 	a.installWindowStateTracking(window)
-	if goruntime.GOOS == "darwin" && window != nil {
-		// Native red-button closes must drain the same frontend write queue
+	if window != nil {
+		// Native closes must drain the same frontend write queue
 		// as the custom close button. During application shutdown let Wails
 		// destroy the window normally; its context has already been cancelled.
 		var closeRequest windowCloseGuard

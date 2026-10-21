@@ -738,6 +738,7 @@ import ReleaseNotesModal from './components/ReleaseNotesModal.vue';
 import GamePanel from './games/GamePanel.vue';
 import { assignConfig, defaultConfig, normalizeHiddenModes, placeholderModel } from './utils/config.mjs';
 import { detectPlatform } from './utils/platform.mjs';
+import { createWindowCloseHandler } from './utils/windowClose.mjs';
 import { isReleaseTag, markReleaseNotesSeen, readSeenVersion, releaseNotes, shouldShowReleaseNotes } from './utils/releaseNotes.mjs';
 import { enabledPlugins, fetchPlugins, pluginIdFromMode } from './utils/pluginHost.mjs';
 import { useSakuraBreeze } from './composables/sakuraBreeze.mjs';
@@ -6086,11 +6087,15 @@ async function toggleMaximiseWindow() {
   } catch (_) {}
 }
 
+const requestWindowClose = createWindowCloseHandler({
+  flush: () => {
+    settingsModalRef.value?.saveSettingsOnLeave();
+    return Promise.all([flushSessionWrites(), configSaveQueue]);
+  },
+  quit: () => Application.Quit(),
+});
 async function closeWindow() {
-  try {
-    await flushSessionWrites();
-    await Application.Quit();
-  } catch (_) {}
+  try { await requestWindowClose(); } catch (err) { console.error('[close] Failed to quit', err); }
 }
 
 // Composer dropdown: switch the ACTIVE Tab's model. 模型的连接字段只存在 Tab 快照里，

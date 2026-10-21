@@ -690,6 +690,7 @@ const draft = reactive(cloneConfigDraft(props.configDraft));
 const page = ref('general');
 
 defineExpose({
+  saveSettingsOnLeave,
   setPage: (p) => {
     page.value = p;
   },
@@ -879,14 +880,14 @@ async function testProxy() {
 
 // Save once on leave, not per keystroke: snapshot on entry, diff on exit
 // (unmount = leaving the page) or window blur. Only changed fields are sent
-// so a stale snapshot never undoes other config writers. Silent: this runs
-// the full onSettingsSave path, a toast per visit would be pure noise.
+// so a stale snapshot never undoes other config writers. The parent reports
+// successful persistence globally, even after this panel has unmounted.
 let settingsEntrySnapshot = settingsSnapshot(draft);
 function saveSettingsOnLeave() {
   const patch = diffSettingsPatch(settingsEntrySnapshot, draft, { snapshot: settingsSnapshot });
   if (!Object.keys(patch).length) return;
   settingsEntrySnapshot = settingsSnapshot(draft);
-  emit('save', patch, true);
+  emit('save', patch);
 }
 onBeforeUnmount(saveSettingsOnLeave);
 onMounted(() => window.addEventListener('blur', saveSettingsOnLeave));
