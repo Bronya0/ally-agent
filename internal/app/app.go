@@ -392,9 +392,10 @@ type App struct {
 	// Maps normalized workspace path → WorkspaceTokenUsage.
 	workspaceTokenUsage map[string]WorkspaceTokenUsage
 
-	servicesMu    sync.Mutex
-	services      map[string]*managedService
-	finishedQueue []string // finished services, oldest first, capped at maxFinishedServices
+	servicesStartMu sync.Mutex // serializes service publication with shutdown snapshots
+	servicesMu      sync.Mutex
+	services        map[string]*managedService
+	finishedQueue   []string // finished services, oldest first, capped at maxFinishedServices
 
 	keyStateMu   sync.Mutex
 	keyCooldowns map[string]time.Time // endpoint\x00key → cooldown until
@@ -987,8 +988,7 @@ type StartServiceRequest struct {
 
 type StopServiceRequest struct {
 	ID string `json:"id"`
-	// GraceSeconds bounds the graceful-termination wait before the process
-	// tree is force killed. <=0 uses the default; values above the cap clamp.
+	// Deprecated: accepted for compatibility, ignored. Stop immediately kills the owned tree.
 	GraceSeconds int `json:"graceSeconds,omitempty"`
 }
 
@@ -1944,7 +1944,6 @@ type sessionModelConfig struct {
 	model          string
 	maxTokens      int
 	contextWindow  int
-	userAgent      string
 	customHeaders  map[string]string
 	tokenParam     string
 	reasoningTag   string
@@ -1965,7 +1964,6 @@ func sessionModelConfigFrom(cfg ConfigState) sessionModelConfig {
 		model:          cfg.Model,
 		maxTokens:      cfg.MaxTokens,
 		contextWindow:  cfg.ContextWindow,
-		userAgent:      cfg.UserAgent,
 		customHeaders:  normalizeCustomHeaders(cfg.CustomHeaders),
 		tokenParam:     cfg.TokenParam,
 		reasoningTag:   cfg.ReasoningTag,
@@ -1992,7 +1990,6 @@ func (m sessionModelConfig) apply(base ConfigState) ConfigState {
 	out.Model = m.model
 	out.MaxTokens = m.maxTokens
 	out.ContextWindow = m.contextWindow
-	out.UserAgent = m.userAgent
 	out.CustomHeaders = m.customHeaders
 	out.TokenParam = m.tokenParam
 	out.ReasoningTag = m.reasoningTag

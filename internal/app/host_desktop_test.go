@@ -8,11 +8,59 @@
 package app
 
 import (
+	"context"
 	"os"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
+
+func TestWindowCloseFallsBackWhenFrontendDoesNotRespond(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var guard windowCloseGuard
+		requests, quits := 0, 0
+		requestClose := func() { requests++ }
+		quit := func() { quits++ }
+		guard.request(t.Context(), windowCloseFlushWait, requestClose, quit)
+		if requests != 1 || quits != 0 {
+			t.Fatalf("close did not give frontend time to flush: requests=%d quits=%d", requests, quits)
+		}
+		time.Sleep(windowCloseFlushWait - time.Second)
+		guard.request(t.Context(), windowCloseFlushWait, requestClose, quit)
+		synctest.Wait()
+		if requests != 1 || quits != 0 {
+			t.Fatalf("repeated close duplicated request or quit early: requests=%d quits=%d", requests, quits)
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if quits != 1 {
+			t.Fatalf("unresponsive frontend prevented fallback: quits=%d", quits)
+		}
+		guard.request(t.Context(), windowCloseFlushWait, requestClose, quit)
+		time.Sleep(windowCloseFlushWait)
+		synctest.Wait()
+		if quits != 1 {
+			t.Fatalf("fallback repeated: quits=%d", quits)
+		}
+	})
+}
+
+func TestWindowCloseFallbackSkipsNormalShutdown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		var guard windowCloseGuard
+		quits := 0
+		guard.request(ctx, windowCloseFlushWait, cancel, func() { quits++ })
+		time.Sleep(windowCloseFlushWait)
+		synctest.Wait()
+		if quits != 0 {
+			t.Fatalf("fallback interfered with normal shutdown: quits=%d", quits)
+		}
+	})
+}
 
 // redirectAppStateDir 把 appDataDir() 指向临时目录，测试绝不触碰真实
 // ~/.ally_agent。

@@ -96,7 +96,7 @@ func TestMergeConfigCustomHeaders(t *testing.T) {
 // TestModelRequestCarriesCustomHeaders 验证自定义头经完整适配器链路注入：
 // httptest 服务器收到 OpenAI Chat 流式请求时必须看到配置头，且能覆盖
 // Authorization（网关自定义鉴权场景）。go-openai 客户端走 modelHTTPClient
-// 的 customHeadersTransport，与生产路径一致。
+// 的 modelHeadersTransport，与生产路径一致。
 func TestModelRequestCarriesCustomHeaders(t *testing.T) {
 	var mu sync.Mutex
 	var sawAuth, sawRelay, sawVersion bool
@@ -141,7 +141,7 @@ func TestModelRequestCarriesCustomHeaders(t *testing.T) {
 }
 
 // TestResponsesSSEStreamCarriesCustomHeaders 覆盖不走 SDK 客户端的
-// Responses SSE 路径（newOpenAIResponsesSSEStream + applyCustomHeaders）。
+// Responses SSE 路径（newOpenAIResponsesSSEStream + applyModelHeaders）。
 func TestResponsesSSEStreamCarriesCustomHeaders(t *testing.T) {
 	var mu sync.Mutex
 	var sawHeader bool
@@ -168,7 +168,7 @@ func TestResponsesSSEStreamCarriesCustomHeaders(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	applyCustomHeaders(req, cfg)
+	applyModelHeaders(req, cfg)
 	resp, err := proxyHTTPClient(cfg, true, 0).Do(req)
 	if err != nil {
 		t.Fatalf("probe request failed: %v", err)

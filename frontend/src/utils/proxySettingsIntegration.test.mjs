@@ -5,7 +5,7 @@ import test from 'node:test';
 
 const source = readFileSync(new URL('../components/SettingsModal.vue', import.meta.url), 'utf8');
 const start = source.indexOf('async function testProxy()');
-const end = source.indexOf('// Network page:', start);
+const end = source.indexOf('// One watcher covers', start);
 assert.ok(start >= 0 && end > start, 'proxy test handler must exist');
 
 function createHandler(TestProxy) {

@@ -811,7 +811,7 @@ function commitModelDraft() {
   }
   alignActiveProviderTab(providerName);
   modelEditorVisible.value = false;
-  emit('save', { ...draft }, true);
+  emit('save', { models: JSON.parse(JSON.stringify(draft.models)) }, true);
 }
 
 function removeModelDraft(index) {
@@ -823,7 +823,7 @@ function removeModelDraft(index) {
   else if (modelEditorIndex.value > index) modelEditorIndex.value -= 1;
   const activeStillExists = providerTabs.value.some((tab) => tab.name === activeProviderTab.value);
   alignActiveProviderTab(activeStillExists ? activeProviderTab.value : removedProvider);
-  emit('save', { ...draft }, true);
+  emit('save', { models: JSON.parse(JSON.stringify(draft.models)) }, true);
 }
 
 function openModelImport() {
@@ -842,7 +842,7 @@ async function importModelConfigs(event) {
     const result = mergeModelConfigs(draft.models, imported);
     draft.models = result.models;
     alignActiveProviderTab(activeProviderTab.value || defaultProviderPreference());
-    emit('save', { ...draft }, true);
+    emit('save', { models: JSON.parse(JSON.stringify(draft.models)) }, true);
     message.success(t('settings.modelImportSuccess', { added: result.added, updated: result.updated }));
   } catch (err) {
     const code = String(err?.code || 'UNKNOWN');

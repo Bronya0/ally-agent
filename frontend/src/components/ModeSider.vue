@@ -146,16 +146,6 @@ Public License v3. See the LICENSE file for details.
       </div>
     </section>
     <button
-      v-if="expanded"
-      type="button"
-      class="mode-sider-workspace-action"
-      @click="emit('openSshAuth')"
-    >
-      <n-icon :component="SafetyCertificateOutlined" :size="15" />
-      <span>{{ t('app.mode.sshAuth') }}</span>
-      <span class="mode-sider-workspace-count">{{ sshAuthorizedCount }}</span>
-    </button>
-    <button
       type="button"
       class="mode-sider-toggle"
       :title="toggleLabel"
@@ -215,7 +205,6 @@ import CloseOutlined from '@vicons/antd/CloseOutlined';
 import RightOutlined from '@vicons/antd/RightOutlined';
 import DownOutlined from '@vicons/antd/DownOutlined';
 import HistoryOutlined from '@vicons/antd/HistoryOutlined';
-import SafetyCertificateOutlined from '@vicons/antd/SafetyCertificateOutlined';
 import { loadRailSectionCollapsed, saveRailSectionCollapsed } from '../utils/railSections.mjs';
 import { t } from '../i18n.mjs';
 import { normalizeRailWidth, RAIL_DEFAULT_WIDTH, RAIL_MIN_WIDTH, RAIL_MAX_WIDTH } from '../utils/railWidth.mjs';
@@ -256,13 +245,12 @@ const props = defineProps({
   // 最近工作区列表：从 App 传入，复用 header 里的历史列表逻辑
   recentWorkspaces: { type: Array, default: () => [] },
   workspaceSessions: { type: Array, default: () => [] },
-  sshAuthorizedCount: { type: Number, default: 0 },
   activeSessionId: { type: String, default: '' },
   sessionTitle: { type: Function, default: (session) => session.title || '' },
   sessionTooltip: { type: Function, default: (session) => session.title || '' },
   sessionBusy: { type: Function, default: () => false },
 });
-const emit = defineEmits(['switch', 'toggle', 'openWorkspace', 'addWorkspace', 'addTempWorkspace', 'removeWorkspace', 'openSession', 'removeSession', 'newSession', 'openTaskCenter', 'openSshAuth', 'resize', 'resizeEnd']);
+const emit = defineEmits(['switch', 'toggle', 'openWorkspace', 'addWorkspace', 'addTempWorkspace', 'removeWorkspace', 'openSession', 'removeSession', 'newSession', 'openTaskCenter', 'resize', 'resizeEnd']);
 
 // 展开态是紧凑列表：行高从 Naive 默认 42px 压到 36px；收起态保持默认，图标格不变。
 const EXPANDED_MENU_THEME = { itemHeight: '36px' };

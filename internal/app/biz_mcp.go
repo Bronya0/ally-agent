@@ -893,10 +893,9 @@ func (m *McpManager) watchStdioProcess(serverName string, cmd *exec.Cmd, job uin
 	}
 	pid := proc.Pid
 	go func() {
-		if err := registerProcessJob(pid, job); err != nil {
-			// 注册失败（例如进程已被别的 job 接管）：同样要关掉 handle。
-			discardProcessJob(job)
-		}
+		// registerProcessJob consumes the handle on both success and failure.
+		// Closing it again could close an unrelated, recycled Windows handle.
+		_ = registerProcessJob(pid, job)
 		state, err := proc.Wait()
 		unregisterProcessJob(pid)
 		// 先翻状态再回收残留进程组：状态要尽快诚实，那 1s 的宽限期不该拖住

@@ -13,6 +13,7 @@ package app
 // sandboxed* 包装）都在这里，因为两侧共用同一份边界归属判据。
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -398,17 +399,28 @@ func mutationProgram(name string) string {
 func runFileMutation(spec sandbox.Spec, roots []string, argv []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), fileMutationTimeout)
 	defer cancel()
+	return runFileMutationWithContext(ctx, spec, roots, argv)
+}
+
+func runFileMutationWithContext(ctx context.Context, spec sandbox.Spec, roots []string, argv []string) error {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	// 独立进程组：超时杀树要能到达 sandbox-exec 之下的 mv/rm，否则孤儿进程可能
 	// 在工具调用已经报错之后继续改盘。
-	sandbox.PrepareCommand(cmd)
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
 		}
 		return stopProcessTree(cmd.Process.Pid)
 	}
-	out, err := cmd.CombinedOutput()
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	err := startTrackedCommand(cmd)
+	if err == nil {
+		err = cmd.Wait()
+		unregisterProcessJob(cmd.Process.Pid)
+	}
+	out := output.Bytes()
 	if err == nil {
 		return nil
 	}

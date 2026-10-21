@@ -14,6 +14,7 @@ import (
 	"embed"
 	"log/slog"
 	"os"
+	"runtime"
 
 	backend "ally-dev/internal/app"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -91,6 +92,10 @@ func main() {
 				app.ShowMainWindow()
 			},
 		},
+		Mac: application.MacOptions{
+			// Match the existing single-window close/quit behaviour.
+			ApplicationShouldTerminateAfterLastWindowClosed: true,
+		},
 	})
 
 	mainWindow := wailsApp.Window.NewWithOptions(func() application.WebviewWindowOptions {
@@ -101,13 +106,22 @@ func main() {
 			Height:           backend.DefaultWindowHeight,
 			MinWidth:         backend.MinWindowWidth,
 			MinHeight:        backend.MinWindowHeight,
-			Frameless:        true,
+			Frameless:        runtime.GOOS != "darwin",
 			BackgroundColour: application.NewRGBA(12, 12, 12, 255),
 			Windows: application.WindowsWindow{
 				Theme: application.Dark,
 			},
 			KeyBindings: devToolsKeyBindings(),
 			URL:         "/",
+		}
+		if runtime.GOOS == "darwin" {
+			// Keep native traffic lights while extending the HTML header under
+			// the transparent titlebar. The compact toolbar fits our 44px row.
+			titleBar := application.MacTitleBarHiddenInset
+			titleBar.ToolbarStyle = application.MacToolbarStyleUnifiedCompact
+			opts.Mac.TitleBar = titleBar
+			// Leave InvisibleTitleBarHeight at zero: an OS-wide drag strip would
+			// swallow clicks on the workspace tabs and buttons in the same row.
 		}
 		// 恢复上次退出时持久化的窗口几何（~/.ally_agent/window.json）；
 		// 无持久化状态时保持上面的默认参数。

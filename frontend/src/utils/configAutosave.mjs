@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: GPL-3.0-only
+import { watch } from 'vue';
+
+const clone = (value) => JSON.parse(JSON.stringify(value));
+
+// Watch the whole draft so new fields and nested edits participate automatically.
+// Send only changed fields: a panel's old snapshot must not undo other writers.
+// The returned flush also saves a final edit when the panel is unmounted.
+export function watchConfigChanges(draft, save, { snapshot = clone } = {}) {
+  let previous = snapshot(draft);
+  const flush = () => {
+    const next = snapshot(draft);
+    const patch = {};
+    for (const key of Object.keys(next)) {
+      if (JSON.stringify(next[key]) !== JSON.stringify(previous[key])) patch[key] = next[key];
+    }
+    previous = next;
+    if (Object.keys(patch).length) save(patch);
+  };
+  watch(draft, flush, { deep: true });
+  return flush;
+}
+
+export function isValidProxyURL(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  try {
+    const url = new URL(text.includes('://') ? text : `http://${text}`);
+    return ['http:', 'https:', 'socks5:', 'socks5h:'].includes(url.protocol) && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function settingsSnapshot(draft) {
+  const next = clone(draft);
+  // The image picker persists this field through its own backend method.
+  delete next.backgroundImage;
+  // An unfinished manual address stays in the editor. Other settings can still
+  // save; once valid, the complete pending proxy configuration is submitted.
+  if (next.proxyMode === 'manual' && !isValidProxyURL(next.proxyUrl)) {
+    delete next.proxyMode;
+    delete next.proxyUrl;
+    delete next.proxyNoProxy;
+  }
+  return next;
+}

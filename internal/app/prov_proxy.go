@@ -192,24 +192,11 @@ func proxyHTTPClient(cfg ConfigState, allowPrivate bool, timeout time.Duration) 
 }
 
 // modelHTTPClient returns the HTTP client used for model API requests: the
-// shared proxy-aware transport wrapped with two header injectors. The custom
-// headers wrapper runs below the User-Agent wrapper, so a configured custom
-// User-Agent wins over cfg.UserAgent, and both run after the SDK set its own
-// headers (custom entries may therefore override Authorization). Used by LLM
-// SDK clients (go-openai / anthropic-sdk-go) that do not expose per-request
-// header configuration. When neither a custom UA nor custom headers are
-// configured the underlying SDK defaults are preserved untouched.
+// shared proxy-aware transport with model headers applied after SDK defaults.
+// Model-specific headers take precedence over the global User-Agent.
 func modelHTTPClient(cfg ConfigState, allowPrivate bool, timeout time.Duration) *http.Client {
 	base := proxyHTTPClient(cfg, allowPrivate, timeout)
-	ua := strings.TrimSpace(cfg.UserAgent)
-	headers := normalizeCustomHeaders(cfg.CustomHeaders)
-	var rt http.RoundTripper = base.Transport
-	if headers != nil {
-		rt = &customHeadersTransport{base: rt, headers: headers}
-	}
-	if ua != "" {
-		rt = &userAgentTransport{base: rt, ua: ua}
-	}
+	var rt http.RoundTripper = &modelHeadersTransport{base: base.Transport, headers: modelRequestHeaders(cfg)}
 	rt = &streamIdleTimeoutTransport{base: rt, timeout: defaultStreamIdleTimeout}
 	rt = &retryAfterCaptureTransport{base: rt}
 	base.Transport = rt
@@ -361,45 +348,32 @@ func (r *idleTimeoutReader) Close() error {
 	return r.rc.Close()
 }
 
-// applyCustomHeaders sets the configured custom headers on an outbound
-// request after the caller set its built-in headers; custom values win over
-// Authorization / User-Agent. Used by request builders that do not go through
-// modelHTTPClient (the Responses SSE stream, model-list fetching).
-func applyCustomHeaders(req *http.Request, cfg ConfigState) {
-	for key, value := range normalizeCustomHeaders(cfg.CustomHeaders) {
+// modelRequestHeaders is shared by SDK transports and direct request builders
+// (Responses and model listing). Explicit per-model headers win over defaults.
+func modelRequestHeaders(cfg ConfigState) map[string]string {
+	headers := normalizeCustomHeaders(cfg.CustomHeaders)
+	if headers == nil {
+		headers = make(map[string]string, 1)
+	}
+	if _, ok := headers["User-Agent"]; !ok {
+		headers["User-Agent"] = effectiveUserAgent(cfg)
+	}
+	return headers
+}
+
+func applyModelHeaders(req *http.Request, cfg ConfigState) {
+	for key, value := range modelRequestHeaders(cfg) {
 		req.Header.Set(key, value)
 	}
 }
 
-// userAgentTransport wraps an http.RoundTripper and sets the User-Agent header
-// on every request that does not already carry one.
-type userAgentTransport struct {
-	base http.RoundTripper
-	ua   string
-}
-
-func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if _, ok := req.Header["User-Agent"]; ok {
-		return t.base.RoundTrip(req)
-	}
-	// Clone the request so the caller's headers are not mutated. Body is
-	// shared by reference, which is safe because the base Transport consumes
-	// it exactly once, same as a direct call.
-	clone := req.Clone(req.Context())
-	clone.Header.Set("User-Agent", t.ua)
-	return t.base.RoundTrip(clone)
-}
-
-// customHeadersTransport wraps an http.RoundTripper and overwrites the
-// configured custom headers on every outbound request, after the SDK client
-// set its own headers. Transport-managed header names (Host, ...) were
-// already dropped by normalizeCustomHeaders at construction time.
-type customHeadersTransport struct {
+// Apply after the SDK has set its headers, without mutating its request.
+type modelHeadersTransport struct {
 	base    http.RoundTripper
 	headers map[string]string
 }
 
-func (t *customHeadersTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *modelHeadersTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
 	for key, value := range t.headers {
 		clone.Header.Set(key, value)

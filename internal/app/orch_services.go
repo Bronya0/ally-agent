@@ -67,13 +67,8 @@ const (
 	defaultServiceReadTailBytes = toolshared.DefaultServiceReadTailBytes
 	maxServiceReadTailBytes     = toolshared.MaxServiceReadTailBytes
 
-	// Unified three-platform stop semantics: best-effort graceful
-	// termination, a bounded grace wait, then a force kill of the whole
-	// process tree with a short confirm wait. Same source of truth as the
-	// schema's graceSeconds bounds.
-	defaultServiceStopGraceSeconds = toolshared.DefaultServiceStopGraceSeconds
-	maxServiceStopGraceSeconds     = toolshared.MaxServiceStopGraceSeconds
-	serviceForceKillConfirmWait    = 2 * time.Second
+	// Maximum time to confirm forced process-tree termination.
+	serviceForceKillConfirmWait = 2 * time.Second
 
 	// Finished-service retention. A service that exited or was stopped stays
 	// readable (list + read) so the model can diagnose why it died — the
@@ -84,16 +79,19 @@ const (
 )
 
 type managedService struct {
+	stopMu sync.Mutex
 	mu     sync.Mutex
 	info   ServiceInfo
 	cmd    *exec.Cmd
 	output *rollingBuffer
 	// cancel 只对 service start 启动的命令有意义（取消其 exec ctx）。
 	// 超时收编的服务没有自己的 ctx（进程归 command 路径的 cmd 所有，
-	// 且其 cmd.Cancel 已被置空以防误杀），停止一律走按 PID 的进程树
+	// 且其 cmd.Cancel 已被置空以防误杀），停止一律走绑定身份的进程树
 	// 终止，因此 cancel 为 nil。
-	cancel   context.CancelFunc
-	waitDone chan struct{}
+	cancel    context.CancelFunc
+	waitDone  chan struct{}
+	stopTree  func() error
+	stopError string // transient stop diagnostic; protected by mu
 	// writeRoots 是该服务的可写根（启动时算出的工作区 + 附加工作区），只在拒写
 	// 提示里报给模型：命令卡与服务卡说的是同一句「可写范围是哪些」。
 	writeRoots []string
@@ -160,6 +158,15 @@ func (a *App) checkServiceWorkspace(cfg ConfigState, id string) error {
 }
 
 func (a *App) startServiceWithConfig(parent context.Context, cfg ConfigState, req StartServiceRequest) (ServiceInfo, error) {
+	a.servicesStartMu.Lock()
+	defer a.servicesStartMu.Unlock()
+	a.mu.Lock()
+	stopping := a.stopping
+	a.mu.Unlock()
+	if stopping {
+		return ServiceInfo{}, errors.New("application is shutting down")
+	}
+
 	req.Description = strings.TrimSpace(req.Description)
 	if req.Description == "" {
 		return ServiceInfo{}, codedToolError("E_BAD_ARGS", errors.New("description is required for service start; explain the service's purpose"))
@@ -214,7 +221,6 @@ func (a *App) startServiceWithConfig(parent context.Context, cfg ConfigState, re
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = commandEnvironment(cfg)
-	job := prepareServiceCommand(cmd)
 
 	buf := newRollingBuffer(serviceOutputLimit)
 	stdout, err := cmd.StdoutPipe()
@@ -227,13 +233,17 @@ func (a *App) startServiceWithConfig(parent context.Context, cfg ConfigState, re
 		cancel()
 		return ServiceInfo{}, err
 	}
-	if err := cmd.Start(); err != nil {
-		discardProcessJob(job)
+	if err := startTrackedCommand(cmd); err != nil {
 		cancel()
 		return ServiceInfo{}, err
 	}
-	// Job Object 注册失败时忽略，停止服务时回退到 taskkill /T。
-	_ = registerProcessJob(cmd.Process.Pid, job)
+	stopTree, err := serviceProcessStop(cmd.Process.Pid)
+	if err != nil {
+		cancel()
+		unregisterProcessJob(cmd.Process.Pid)
+		_ = cmd.Wait()
+		return ServiceInfo{}, err
+	}
 
 	service := &managedService{
 		info: ServiceInfo{
@@ -249,6 +259,7 @@ func (a *App) startServiceWithConfig(parent context.Context, cfg ConfigState, re
 			Sandboxed:   spec.Enforce(),
 		},
 		cmd:        cmd,
+		stopTree:   stopTree,
 		output:     buf,
 		cancel:     cancel,
 		waitDone:   make(chan struct{}),
@@ -266,11 +277,13 @@ func (a *App) startServiceWithConfig(parent context.Context, cfg ConfigState, re
 	go copyServiceOutput(&copyWG, buf, stderr)
 	go func() {
 		waitErr := cmd.Wait()
-		copyWG.Wait()
-		// 进程退出后关闭 job handle（KILL_ON_JOB_CLOSE 兜底清理残留）。
+		// Close the job before draining pipes: descendants may hold them open.
 		unregisterProcessJob(cmd.Process.Pid)
+		copyWG.Wait()
+		// 所有管道已收尾。
 		service.mu.Lock()
 		service.updateOutputInfoLocked()
+		service.clearStopErrorLocked()
 		if service.info.Status != "stopped" {
 			service.info.StoppedAt = time.Now().Unix()
 			service.info.Status = "exited"
@@ -376,75 +389,46 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 		return ServiceInfo{}, codedToolError("E_SERVICE_NOT_FOUND", errServiceNotFound)
 	}
 
+	service.stopMu.Lock()
+	defer service.stopMu.Unlock()
 	service.mu.Lock()
-	pid := service.info.PID
 	alreadyDone := service.info.Status == "stopped" || service.info.Status == "exited"
 	service.mu.Unlock()
 	if !alreadyDone {
-		graceSeconds := req.GraceSeconds
-		if graceSeconds <= 0 {
-			graceSeconds = defaultServiceStopGraceSeconds
+		var stopErr error
+		if service.stopTree == nil {
+			stopErr = errors.New("service has no owned process tree")
+		} else {
+			stopErr = service.stopTree()
 		}
-		if graceSeconds > maxServiceStopGraceSeconds {
-			graceSeconds = maxServiceStopGraceSeconds
-		}
-		// 统一停止语义：先尽力优雅终止（POSIX=进程组 SIGTERM，Windows=对
-		// 有窗口进程投递 WM_CLOSE），挂 waitDone 等待；超时强杀进程树。
-		// 优雅阶段信号投递失败不致命（进程可能已自行退出），照常等待。
-		_ = gracefulStopProcessTree(pid)
-		forced := false
-		var forceErr error
-		exited := false
-		select {
-		case <-service.waitDone:
-			exited = true
-		case <-time.After(time.Duration(graceSeconds) * time.Second):
-			forced = true
-			if err := stopProcessTree(pid); err != nil {
-				forceErr = err
-				if service.cancel != nil {
-					service.cancel()
-				}
-			}
-			select {
-			case <-service.waitDone:
-				exited = true
-			case <-time.After(serviceForceKillConfirmWait):
-			}
-		}
-		// 进程组已空时 kill 会返回 ESRCH，而 waitDone 仍可能被孙进程占着的管道卡
-		// 住没关；用进程存活判定兜底，别把已经死掉的进程钉成 running
-		// （那会一直占着 maxActiveServices 名额，用户只能反复重试 stop）。
-		if !exited && !isProcessAlive(pid) {
-			exited = true
-		}
+		// stopTree owns termination confirmation. Output copying/finalization
+		// has a separate lifetime and must not turn a confirmed kill into failure.
+
 		service.mu.Lock()
-		if forceErr != nil && !exited {
-			// 强杀失败且进程树在确认窗口内仍活着：不能标 stopped
-			// ——alreadyDone 会让下一次 stop 直接短路，用户看到“已停止”而进程
-			// 仍活着占着端口，只能重启清理。保留活跃状态让停止可以重试；若进程
-			// 随后自行退出，cmd.Wait 监控会把状态改成 exited。
-			service.info.Status = "running"
-			service.info.Error = fmt.Sprintf("force stop failed after %ds graceful wait: %v; the process tree is still alive, retry the stop", graceSeconds, forceErr)
+		if stopErr != nil && (service.info.Status == "exited" || service.info.Status == "stopped") {
+			// The waiter completed cleanup while the stop call was in flight.
+			stopErr = nil
+		}
+		if stopErr != nil {
+			service.stopError = "force stop could not be confirmed: " + stopErr.Error()
+			service.info.Error = service.stopError
 		} else {
 			service.info.Status = "stopped"
 			service.info.StoppedAt = time.Now().Unix()
-			switch {
-			case forceErr != nil:
-				service.info.Error = fmt.Sprintf("force stop failed after %ds graceful wait, but the process exited anyway: %v", graceSeconds, forceErr)
-			case forced:
-				service.info.Error = fmt.Sprintf("graceful stop timed out after %ds; process tree force killed", graceSeconds)
-			}
+			service.clearStopErrorLocked()
 		}
 		service.updateOutputInfoLocked()
 		service.mu.Unlock()
+		if stopErr != nil {
+			info := service.snapshot()
+			a.emitServiceUpdate(info)
+			return info, codedToolError("E_SERVICE_STOP_FAILED", stopErr)
+		}
 		if service.cancel != nil {
 			service.cancel()
 		}
 	}
 	info := service.snapshot()
-	// Stopped services stay readable like exited ones: the model may need to
-	// inspect the final output after an explicit stop.
 	a.retainFinishedService(id)
 	a.emitServiceUpdate(info)
 	return info, nil
@@ -642,11 +626,17 @@ func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, erro
 	}, nil
 }
 
-// stopAllServices 并发停止所有服务：每个服务最坏需要 grace+confirm 约 5s，
+// stopAllServices 并发停止所有服务：各服务强杀后等待退出确认，
 // 串行会在应用退出时把这个时长乘以服务数。只停活跃服务；已结束记录留在内存里
 // 随进程退出一起消亡（它们无进程可停）。
 func (a *App) stopAllServices() {
-	active := make([]string, 0, len(a.services))
+	_ = a.stopAllServicesWithError()
+}
+
+func (a *App) stopAllServicesWithError() error {
+	a.servicesStartMu.Lock()
+	defer a.servicesStartMu.Unlock()
+	active := make([]string, 0)
 	a.servicesMu.Lock()
 	for id, service := range a.services {
 		service.mu.Lock()
@@ -658,14 +648,29 @@ func (a *App) stopAllServices() {
 	}
 	a.servicesMu.Unlock()
 	var wg sync.WaitGroup
+	var errMu sync.Mutex
+	var stopErr error
 	for _, id := range active {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			_, _ = a.stopService(StopServiceRequest{ID: id})
+			if _, err := a.stopService(StopServiceRequest{ID: id}); err != nil {
+				errMu.Lock()
+				stopErr = errors.Join(stopErr, fmt.Errorf("stop service %s: %w", id, err))
+				errMu.Unlock()
+			}
 		}(id)
 	}
 	wg.Wait()
+	return stopErr
+}
+
+// Clear only the stop attempt's diagnostic, preserving real execution errors.
+func (s *managedService) clearStopErrorLocked() {
+	if s.stopError != "" && s.info.Error == s.stopError {
+		s.info.Error = ""
+	}
+	s.stopError = ""
 }
 
 func (s *managedService) snapshot() ServiceInfo {
@@ -787,6 +792,15 @@ type promoteCommandParams struct {
 // cmd/buf afterwards — ownership transfers here. cmd.Cancel is cleared so the
 // caller's deferred runCtx cancel cannot kill the adopted process.
 func (a *App) promoteTimedOutCommand(p promoteCommandParams) (ServiceInfo, error) {
+	a.servicesStartMu.Lock()
+	defer a.servicesStartMu.Unlock()
+	a.mu.Lock()
+	stopping := a.stopping
+	a.mu.Unlock()
+	if stopping {
+		return ServiceInfo{}, errors.New("application is shutting down")
+	}
+
 	if p.cmd == nil || p.cmd.Process == nil {
 		return ServiceInfo{}, errProcessAlreadyExited
 	}
@@ -820,9 +834,13 @@ func (a *App) promoteTimedOutCommand(p promoteCommandParams) (ServiceInfo, error
 	// 关键：收编即所有权移交。command 路径的 runCtx 在其 return 后会被
 	// defer cancel() 取消，而 cmd 仍挂在 exec.CommandContext(runCtx) 上——
 	// 置空 Cancel 让 os/exec 的 watchCtx 把进程放生（这是标准库文档支持的
-	// 用法）。停止服务走 stopService 的按 PID 进程树终止，不依赖 cmd.Cancel。
+	// 用法）。停止服务走 stopService 的绑定身份的进程树终止，不依赖 cmd.Cancel。
 	// 本写入 happens-before 调用方 return（进而 happens-before cancel()），
 	// 与 watchCtx 的读取无竞态。
+	stopTree, err := serviceProcessStop(p.cmd.Process.Pid)
+	if err != nil {
+		return ServiceInfo{}, err
+	}
 	p.cmd.Cancel = nil
 
 	id := "svc_" + newID()
@@ -842,6 +860,7 @@ func (a *App) promoteTimedOutCommand(p promoteCommandParams) (ServiceInfo, error
 			Sandboxed:      p.sandboxed,
 		},
 		cmd:        p.cmd,
+		stopTree:   stopTree,
 		output:     rolling,
 		waitDone:   make(chan struct{}),
 		writeRoots: p.writeRoots,
@@ -877,6 +896,7 @@ func (a *App) watchPromotedCommandExit(svc *managedService, waitDone <-chan erro
 		waitErr := <-waitDone
 		svc.mu.Lock()
 		svc.updateOutputInfoLocked()
+		svc.clearStopErrorLocked()
 		if svc.info.Status != "stopped" {
 			svc.info.StoppedAt = time.Now().Unix()
 			svc.info.Status = "exited"

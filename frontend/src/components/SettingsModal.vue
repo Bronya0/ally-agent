@@ -8,10 +8,7 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <!-- Inline settings panel: shown directly inside the main-area container
-       (App.vue mode === 'settings' via v-show) instead of a modal dialog.
-       Always mounted so in-page state survives mode switches. Only the model
-       editor sub-modal below stays a dialog. -->
+  <!-- Settings are saved on change; the panel is unmounted on mode switch. -->
   <div class="config-inline-panel">
     <header class="config-inline-header">
       <span class="config-inline-title">{{ $t('settings.title') }}</span>
@@ -388,7 +385,9 @@ Public License v3. See the LICENSE file for details.
               >{{ item.label }}</button>
             </div>
           </n-form-item>
-          <n-form-item v-if="draft.proxyMode === 'manual'" :label="$t('settings.proxyUrl')">
+          <n-form-item v-if="draft.proxyMode === 'manual'" :label="$t('settings.proxyUrl')"
+            :validation-status="proxyDraftInvalid ? 'error' : undefined"
+            :feedback="proxyDraftInvalid ? $t('settings.proxyUrlInvalid') : undefined">
             <n-input v-model:value="draft.proxyUrl" clearable placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:7891" />
           </n-form-item>
           <n-form-item v-if="draft.proxyMode !== 'off'" :label="$t('settings.proxyNoProxy')">
@@ -501,12 +500,13 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, h, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, h, onBeforeUnmount, onUnmounted, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
 import { getStoredMode, THEMES } from '../utils/theme.mjs';
 import { normalizeApiKeysArray } from '../utils/modelConfigIO.mjs';
 import { TOOL_CONCURRENCY_MIN, TOOL_CONCURRENCY_MAX, HIDEABLE_MODES, PAGE_VISIBILITY_LABELS, normalizeDraftHiddenModes, normalizeHiddenModes } from '../utils/config.mjs';
+import { watchConfigChanges, settingsSnapshot, isValidProxyURL } from '../utils/configAutosave.mjs';
 import { isToggleableTool } from '../utils/builtinTools.mjs';
 import { Browser } from '@wailsio/runtime';
 import {
@@ -650,7 +650,7 @@ const validationSettingKeys = [
   'autoValidationJson',
 ];
 
-// Deep-clone the config draft so changes don't mutate parent reactively until save
+// Isolate editor state; autosave submits only the fields that change.
 const draft = reactive(cloneConfigDraft(props.configDraft));
 
 // Color mode is a pure front-end preference (localStorage, see utils/theme.mjs),
@@ -767,7 +767,7 @@ async function selectBackground() {
     const filename = await SelectBackgroundImage();
     if (filename) {
       draft.backgroundImage = filename;
-      emit('background-changed');
+      emit('background-changed', filename);
     }
   } catch (err) {
     message.error(t('settings.backgroundSelectFailed', { error: err }));
@@ -777,8 +777,7 @@ async function selectBackground() {
 }
 
 // Knowledge-base root: pick a directory into the draft; the value persists
-// through the modal's normal save flow. Clearing just empties the draft
-// field — the effective save happens on 保存.
+// through the same autosave flow as the other settings.
 const kbRootSelecting = ref(false);
 
 async function selectKBRoot() {
@@ -805,7 +804,7 @@ async function clearBackground() {
     await ClearBackgroundImage();
     draft.backgroundImage = '';
     draft.backgroundOpacity = 0.15;
-    emit('background-changed');
+    emit('background-changed', '');
     message.success(t('settings.backgroundCleared'));
   } catch (err) {
     message.error(t('settings.backgroundClearFailed', { error: err }));
@@ -847,53 +846,13 @@ async function testProxy() {
   }
 }
 
-// Network page: persist proxy settings immediately when the user changes any
-// of proxyMode / proxyUrl / proxyNoProxy. Previously these fields were only
-// saved when the user clicked "Test Proxy" or navigated to General and hit
-// Save — so flipping proxyMode to "off" and closing the modal would silently
-// drop the change, and the next launch would fall back to the saved value
-// (often "system"). Silent save (third arg true) matches the Models page.
-//
-// Guard with props.visible so the initial syncDraftFromProps() call (which
-// bulk-assigns all proxy fields at once when the modal opens) doesn't leak
-// through as a spurious save. Real user edits happen only while the modal
-// is visible.
-watch([
-  () => draft.proxyMode,
-  () => draft.proxyUrl,
-  () => draft.proxyNoProxy,
-], () => {
-  if (!props.visible) return;
-  emit('save', { ...draft }, true);
-});
+// One watcher covers every editable field, including nested arrays/objects.
+const flushSettingsChanges = watchConfigChanges(draft, (patch) => {
+  emit('save', patch, true);
+}, { snapshot: settingsSnapshot });
+onBeforeUnmount(flushSettingsChanges);
 
-// 通用 / 高级两页的字段即改即存（与上方 proxy watcher 同一模式，silent save
-// 第三参 true）。这两页不再有统一保存按钮：网络页的文本域较多，仍走显式保存。
-// kbRoot 虽由目录选择/清除按钮写入，但同样只是改 draft，统一经本 watcher 落盘；
-// 主题（selectColorMode → set-mode）走各自的 set-mode 事件通道，不在此列。
-watch([
-  () => draft.customPrompt,
-  () => draft.allowPrivateNetwork,
-  () => draft.gitBashPath,
-  () => draft.llmRetries,
-  () => draft.toolConcurrency,
-  () => draft.compactThreshold,
-  () => draft.compactTimeoutSeconds,
-  () => draft.autoUpdate,
-  () => draft.backgroundOpacity,
-  () => draft.messageFontSize,
-  () => draft.codeFontSize,
-  () => draft.toolFontSize,
-  () => draft.subFontSize,
-  () => draft.auxFontSize,
-  () => draft.kbRoot,
-  ...validationSettingKeys.map((key) => () => draft[key]),
-  () => draft.disabledTools,
-  () => draft.hiddenModes,
-], () => {
-  if (!props.visible) return;
-  emit('save', { ...draft }, true);
-});
+const proxyDraftInvalid = computed(() => draft.proxyMode === 'manual' && !isValidProxyURL(draft.proxyUrl));
 
 const isWindows = computed(() => {
   return document.body.classList.contains('platform-windows') ||
@@ -930,14 +889,6 @@ function cloneConfigDraft(source) {
   // ModelsPanel 的草稿拷贝漂移。
   normalizeDraftHiddenModes(next);
   return next;
-}
-
-function syncDraftFromProps() {
-  const next = cloneConfigDraft(props.configDraft);
-  for (const key of Object.keys(draft)) {
-    delete draft[key];
-  }
-  Object.assign(draft, next);
 }
 
 // ── API 服务页 ──
@@ -1073,39 +1024,8 @@ function openApiDocs() {
   Browser.OpenURL('https://github.com/Bronya0/ally-agent/blob/main/docs/api.md');
 }
 
-// v-if unmounts the panel on mode switch (memory): unsaved draft edits do
-// NOT survive a mode switch (configDraft itself lives in App.vue and does).
-// The draft is synced once per mount (draftSynced), afterwards unsaved edits
-// persist until the user hits 保存.
-let draftSynced = false;
-
-// The settings pages never edit the workspace — it is a pass-through of the
-// active tab's path. The draft is synced only once (to preserve unsaved
-// edits), so without this mirror a stale workspace would ride along on every
-// silent save (proxy watch), flow
-// back into App.vue's onSettingsSave and hijack the current workspace tab
-// via syncConfigToActiveTab.
-watch(() => props.configDraft.workspace, (value) => {
-  if (draft.workspace !== value) draft.workspace = value;
-});
-
-// 内置工具停用名单已迁至 MCP 页（McpPanel → App.vue 即时保存），是设置弹窗
-// 之外的外部变更路径：与 workspace 同一口径镜像进 draft，防止草稿在下次
-// 保存（含代理字段的静默保存）时把用户在 MCP 页做的开关静默回退。名单在
-// 弹窗内已无可编辑入口，镜像不会冲掉进行中的编辑。
-watch(() => props.configDraft.disabledTools, (value) => {
-  const next = Array.isArray(value) ? [...value] : [];
-  if (JSON.stringify(draft.disabledTools) !== JSON.stringify(next)) {
-    draft.disabledTools = next;
-  }
-});
-
 watch(() => props.visible, (visible) => {
   if (!visible) return;
-  if (!draftSynced) {
-    syncDraftFromProps();
-    draftSynced = true;
-  }
   loadApiState();
   if (draft.proxyMode === 'system') detectProxy();
   refreshAutostart();

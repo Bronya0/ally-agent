@@ -51,12 +51,10 @@ Public License v3. See the LICENSE file for details.
                 :session-title="sessionDisplayTitle"
                 :session-tooltip="railSessionTooltip"
                 :session-busy="sessionBusy"
-                :ssh-authorized-count="allowedSSHServersForActiveWorkspace.length"
                 @open-session="selectRailSession"
                 @remove-session="deleteRailSession"
                 @new-session="createNewSession"
                 @open-task-center="(tab) => openTaskCenter(tab, 'all')"
-                @open-ssh-auth="sshAuthModalVisible = true"
                 @resize="setRailWidth"
                 @resize-end="saveRailWidth"
                 @switch="switchMode"
@@ -738,6 +736,7 @@ import TokenStatsModal from './components/TokenStatsModal.vue';
 import ReleaseNotesModal from './components/ReleaseNotesModal.vue';
 import GamePanel from './games/GamePanel.vue';
 import { assignConfig, defaultConfig, normalizeHiddenModes, placeholderModel } from './utils/config.mjs';
+import { detectPlatform } from './utils/platform.mjs';
 import { isReleaseTag, markReleaseNotesSeen, readSeenVersion, releaseNotes, shouldShowReleaseNotes } from './utils/releaseNotes.mjs';
 import { enabledPlugins, fetchPlugins, pluginIdFromMode } from './utils/pluginHost.mjs';
 import { useSakuraBreeze } from './composables/sakuraBreeze.mjs';
@@ -5022,6 +5021,8 @@ function bindRuntimeEvents() {
   if (runtimeEventsBound) return;
   runtimeEventsBound = true;
 
+  onRuntimeEvent('window:close-requested', closeWindow);
+
   onRuntimeEvent('run:start', (data) => {
     clearRetryBanner(data);
     const sid = data?.sessionId || '';
@@ -6401,22 +6402,15 @@ async function onBuiltinToolsChanged(nextDisabled) {
 }
 
 async function onSettingsSave(draftData, silent = false) {
-  // The settings pages never edit the workspace — it belongs to the active
-  // workspace Tab and only changes through tab switching / the workspace
-  // picker. The settings draft is a snapshot synced once (to preserve unsaved
-  // edits while the panel stays mounted), so force the live value in here as
-  // the single choke point: a stale draft workspace can otherwise flow through
-  // assignConfig + syncConfigToActiveTab and hijack the current Tab.
-  const liveWorkspace = String(config.workspace || '');
-  if (String(draftData?.workspace ?? '') !== liveWorkspace) {
-    draftData = { ...draftData, workspace: liveWorkspace };
-  }
-  // 最近使用模型身份由界面（切模型/发送）单向写回，设置草稿可能滞后：它是后端
-  // 给 HTTP API 会话与计划任务展开模型的依据，不能被一次设置保存回退（与
-  // workspace 同一处理口径）。
-  if (JSON.stringify(draftData?.lastUsedModel ?? null) !== JSON.stringify(config.lastUsedModel ?? null)) {
-    draftData = { ...draftData, lastUsedModel: config.lastUsedModel };
-  }
+  // Panels submit changes, not their mount-time config snapshot. Merge into
+  // live state so edits cannot restore stale model/tool/network preferences.
+  // Workspace and the last-used model identity are owned by the workbench.
+  draftData = {
+    ...config,
+    ...draftData,
+    workspace: config.workspace,
+    lastUsedModel: config.lastUsedModel,
+  };
   const previousKbRoot = String(config.kbRoot || '');
   // draft 里已无顶层模型字段（模型只有 models[] 预设），仅需把预设的编辑
   // （API key、Base URL 等）同步到正在使用该模型的 Tab 快照上。
@@ -6488,7 +6482,9 @@ async function loadBackgroundImage() {
   }
 }
 
-function onBackgroundChanged() {
+function onBackgroundChanged(filename) {
+  config.backgroundImage = String(filename || '');
+  configDraft.backgroundImage = config.backgroundImage;
   loadBackgroundImage();
 }
 
@@ -9430,15 +9426,8 @@ async function skipCurrentVersion() {
 }
 
 function applyPlatformClass() {
-  // Wails v3's frontend runtime has no Environment() call; derive the platform
-  // from the WebView user agent, which reflects the host OS.
-  const ua = navigator.userAgent || '';
-  let platform = '';
-  if (/macintosh|mac os x/i.test(ua)) platform = 'darwin';
-  else if (/windows/i.test(ua)) platform = 'windows';
-  else if (/linux|crOS|android/i.test(ua)) platform = 'linux';
-  if (!platform) return;
-  document.body.classList.add(`platform-${platform}`);
+  const platform = detectPlatform();
+  if (platform) document.body.classList.add(`platform-${platform}`);
 }
 
 function handleVisibilityChange() {

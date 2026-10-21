@@ -53,7 +53,8 @@ const (
 	// package may import, so the declared maximum cannot drift from what the
 	// runtimes enforce.
 	MaxDelegateStepBudget = 1000
-	// Service bounds. A graceful stop waits DefaultServiceStopGraceSeconds before
+	// Legacy grace bounds are retained only for request compatibility. Stops now
+	// immediately kill the owned tree. Previously a graceful stop waited before
 	// force killing the process tree, and one read returns
 	// DefaultServiceReadTailBytes of recent output; both are capped here because
 	// the service schema declares the same numbers, and the runtime clamps in
@@ -206,7 +207,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("service", "Manage long-running local processes in the current workspace without blocking. Sessions and sub-agents in the same workspace share services; list/read/stop cannot access other workspaces. The active service limit is global across workspaces. List reports activeCount for this workspace and globalActiveCount/maxActive for global capacity. A workspace is required for model service operations. start requires a description explaining the service purpose and returns an id; list defaults to starting/running services; includeFinished=true also lists recent finished services; read returns recent output, including from finished services; stop tries graceful termination before killing the process tree. Model output keeps at most the last 8 KiB; reduced-from reports clipping. Use graceSeconds for processes that must flush state. Avoid polling loops; read after a concrete condition or wait.", map[string]any{
+		functionTool("service", "Manage long-running local processes in the current workspace without blocking. Sessions and sub-agents in the same workspace share services; list/read/stop cannot access other workspaces. The active service limit is global across workspaces. List reports activeCount for this workspace and globalActiveCount/maxActive for global capacity. A workspace is required for model service operations. start requires a description explaining the service purpose and returns an id; list defaults to starting/running services; includeFinished=true also lists recent finished services; read returns recent output, including from finished services; stop immediately force-kills the owned process tree and confirms exit. Model output keeps at most the last 8 KiB; reduced-from reports clipping. Avoid polling loops; read after a concrete condition or wait.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"includeFinished": map[string]any{"type": "boolean", "description": "For action=list: include finished services (default false). Output remains readable by id."},
@@ -218,7 +219,7 @@ func chatToolsUncached() []openai.Tool {
 				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start. Required with action=stop and action=read."},
 				"graceSeconds": map[string]any{
 					"type": "integer", "minimum": 0, "maximum": MaxServiceStopGraceSeconds,
-					"description": fmt.Sprintf("Seconds to wait for a graceful stop before the process tree is force killed (default %d, max %d; omit or send 0 for the default). Used only with action=stop; raise it for services that must flush state on exit.", DefaultServiceStopGraceSeconds, MaxServiceStopGraceSeconds),
+					"description": fmt.Sprintf("Deprecated compatibility field (legacy default %d, maximum %d); ignored. Stop always immediately force-kills the owned process tree.", DefaultServiceStopGraceSeconds, MaxServiceStopGraceSeconds),
 				},
 				"tailBytes": map[string]any{
 					"type": "integer", "minimum": 0, "maximum": MaxServiceReadTailBytes,
@@ -495,7 +496,7 @@ func chatToolsUncached() []openai.Tool {
 var builtinToolExamples = map[string]string{
 	"edit":               `{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}; lineRange: {"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}`,
 	"command":            `{"command":"go test ./...","cwd":".","timeout":120}`,
-	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_...","graceSeconds":10}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
+	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
 	"ask":                `{"questions":[{"question":"Which database should we use?","options":[{"label":"SQLite","description":"Simple local storage.","recommended":true},{"label":"PostgreSQL","description":"Production database."}]}]}`,
 	"remote_read":        `{"target":"my-dev:/srv/app","files":[{"path":"main.go"}]}`,
 	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,

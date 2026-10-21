@@ -740,12 +740,11 @@ func newOpenAIResponsesSSEStreamWithClient(ctx context.Context, cfg ConfigState,
 	if apiKey := strings.TrimSpace(cfg.APIKey); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	req.Header.Set("User-Agent", effectiveUserAgent(cfg))
 	for key, value := range sessionAffinityHeaders(cfg) {
 		req.Header.Set(key, value)
 	}
 	// 自定义头在适配器内置头之后应用，可覆盖 Authorization / User-Agent。
-	applyCustomHeaders(req, cfg)
+	applyModelHeaders(req, cfg)
 
 	clientCopy := *client
 	client = &clientCopy

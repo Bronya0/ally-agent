@@ -66,7 +66,7 @@ Public License v3. See the LICENSE file for details.
             :aria-label="$t('extraRoots.button.title')"
             @click.stop
           >
-            <PlusOutlined class="extra-roots-icon" />
+            <AppstoreAddOutlined class="extra-roots-icon" />
             <span v-if="extraRoots.length > 0" class="extra-roots-count">{{ extraRoots.length }}</span>
           </button>
         </template>
@@ -282,6 +282,7 @@ import { computed, ref } from 'vue';
 import ContextUsageInline from './ContextUsageInline.vue';
 import ModelMenu from './ModelMenu.vue';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
+import AppstoreAddOutlined from '@vicons/antd/AppstoreAddOutlined';
 import MenuOutlined from '@vicons/antd/MenuOutlined';
 import CodeOutlined from '@vicons/antd/CodeOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';

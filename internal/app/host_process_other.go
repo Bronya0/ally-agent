@@ -12,6 +12,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"syscall"
 	"time"
@@ -45,7 +46,7 @@ const mcpProcessGroupKillGrace = time.Second
 // SIGTERM 再 SIGKILL。npx / sh 包裹脚本的 node 后代就靠这一步，否则根进程
 // 一死它们就变成常驻孤儿。
 func reapProcessGroupLeftovers(pid int) {
-	if pid <= 0 {
+	if pid <= 1 || pid == os.Getpid() || pid == syscall.Getpgrp() {
 		return
 	}
 	_ = gracefulStopProcessTree(pid)
@@ -57,7 +58,7 @@ func reapProcessGroupLeftovers(pid int) {
 // Setpgid 建组，组内含 bash 及其后代）。进程已退出时返回 ESRCH，调用方忽略，
 // 等待 waitDone 即可。
 func gracefulStopProcessTree(pid int) error {
-	if pid <= 0 {
+	if pid <= 1 || pid == os.Getpid() || pid == syscall.Getpgrp() {
 		return fmt.Errorf("invalid pid: %d", pid)
 	}
 	return syscall.Kill(-pid, syscall.SIGTERM)
@@ -66,8 +67,20 @@ func gracefulStopProcessTree(pid int) error {
 // stopProcessTree 强杀整棵进程组。只对直接子进程的 cancel() 兜底不够：
 // bash 死后孙进程会脱管残留，组级 SIGKILL 才能清干净。
 func stopProcessTree(pid int) error {
-	if pid <= 0 {
+	if pid <= 1 || pid == os.Getpid() || pid == syscall.Getpgrp() {
 		return fmt.Errorf("invalid pid: %d", pid)
 	}
 	return syscall.Kill(-pid, syscall.SIGKILL)
+}
+
+func startTrackedCommand(cmd *exec.Cmd) error {
+	prepareServiceCommand(cmd)
+	return cmd.Start()
+}
+
+func serviceProcessStop(pid int) (func() error, error) {
+	if pid <= 1 || pid == os.Getpid() || pid == syscall.Getpgrp() {
+		return nil, fmt.Errorf("invalid process group: %d", pid)
+	}
+	return func() error { return stopProcessTree(pid) }, nil
 }

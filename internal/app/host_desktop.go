@@ -37,6 +37,7 @@ const (
 	MinWindowWidth         = 860
 	MinWindowHeight        = 600
 	WindowsWindowClassName = "AllyMainWindow"
+	windowCloseFlushWait   = 5 * time.Second
 )
 
 // wailsAppHandle is the minimal Wails v3 host binding injected into App by
@@ -71,6 +72,39 @@ func (a *App) SetWindow(window *application.WebviewWindow) {
 	a.wails.window = window
 	a.installWebviewZoomResync(window)
 	a.installWindowStateTracking(window)
+	if goruntime.GOOS == "darwin" && window != nil {
+		// Native red-button closes must drain the same frontend write queue
+		// as the custom close button. During application shutdown let Wails
+		// destroy the window normally; its context has already been cancelled.
+		var closeRequest windowCloseGuard
+		window.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
+			if a.ctx == nil || a.ctx.Err() != nil {
+				return
+			}
+			event.Cancel()
+			closeRequest.request(a.ctx, windowCloseFlushWait, func() {
+				a.emit("window:close-requested", nil)
+			}, a.quitApp)
+		})
+	}
+}
+
+// A missing or stalled frontend must not make native close requests permanent
+// no-ops. Repeated clicks share the original deadline. The fallback uses normal
+// application shutdown so backend checkpoints and service cleanup still run.
+type windowCloseGuard struct {
+	once sync.Once
+}
+
+func (g *windowCloseGuard) request(ctx context.Context, timeout time.Duration, requestClose, quit func()) {
+	g.once.Do(func() {
+		time.AfterFunc(timeout, func() {
+			if ctx.Err() == nil {
+				quit()
+			}
+		})
+		requestClose()
+	})
 }
 
 // installWebviewZoomResync guards against WebView2 restoring a stale zoom

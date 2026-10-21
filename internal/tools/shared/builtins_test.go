@@ -246,13 +246,18 @@ func patternsCompile(schema map[string]any) error {
 }
 
 // TestServiceSchemaExposesTheStopAndReadTuning pins the two parameters the
-// runtime always accepted but the schema never declared, so a model could not
-// ask a database-style service for a longer graceful stop.
+// runtime accepts for compatibility, and ensures the model is told stops force-kill.
 func TestServiceSchemaExposesTheStopAndReadTuning(t *testing.T) {
-	params, _ := builtinSchemaForTest(t, "service")
+	params, description := builtinSchemaForTest(t, "service")
+	if !strings.Contains(description, "immediately force-kills") {
+		t.Fatal("service stop description promises stale behavior")
+	}
 	properties := schemaObjectForTest(t, params["properties"])
 
 	grace := schemaObjectForTest(t, properties["graceSeconds"])
+	if !strings.Contains(grace["description"].(string), "ignored") {
+		t.Fatal("legacy grace parameter must be documented as ignored")
+	}
 	if grace["maximum"] != MaxServiceStopGraceSeconds || grace["minimum"] != 0 {
 		t.Fatalf("service graceSeconds bounds = %#v, want 0..%d so an omitted or 0 value means the default", grace, MaxServiceStopGraceSeconds)
 	}

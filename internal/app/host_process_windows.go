@@ -12,10 +12,14 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // Job Object 用于终止整棵进程树。taskkill /T 依赖 Win32 父子链枚举子进程，
@@ -26,8 +30,121 @@ import (
 
 var (
 	processJobsMu sync.Mutex
-	processJobs   = map[int]syscall.Handle{} // 根进程 pid -> job object handle
+	processJobs   = map[int]*processJob{} // 根进程 pid -> job object handle
 )
+
+// A stop closure holds this identity, never a PID that may be reused. Closing
+// and terminating share the same lock so a recycled handle cannot be touched.
+type processJob struct {
+	mu     sync.Mutex
+	handle syscall.Handle
+}
+
+func (j *processJob) stop() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.handle == 0 {
+		return nil // last handle was closed: kill-on-close applied
+	}
+	r, _, err := procTerminateJobObject.Call(uintptr(j.handle), 1)
+	if r == 0 {
+		return fmt.Errorf("TerminateJobObject failed: %v", err)
+	}
+	deadline := time.Now().Add(serviceForceKillConfirmWait)
+	for {
+		var info struct {
+			Times                                                            [4]int64
+			PageFaults, TotalProcesses, ActiveProcesses, TerminatedProcesses uint32
+		}
+		err := windows.QueryInformationJobObject(windows.Handle(j.handle), windows.JobObjectBasicAccountingInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil)
+		if err != nil {
+			return fmt.Errorf("confirm job exit: %w", err)
+		}
+		if info.ActiveProcesses == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("process job still has %d active processes", info.ActiveProcesses)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func serviceProcessStop(pid int) (func() error, error) {
+	processJobsMu.Lock()
+	j := processJobs[pid]
+	processJobsMu.Unlock()
+	if j == nil {
+		return nil, fmt.Errorf("no owned process job for pid %d", pid)
+	}
+	return j.stop, nil
+}
+
+// Start suspended so even the fastest shell cannot spawn untracked children.
+// Ownership failure is fatal: never silently degrade to PID-based taskkill.
+func startTrackedCommand(cmd *exec.Cmd) error {
+	job := prepareServiceCommand(cmd)
+	if job == 0 {
+		return fmt.Errorf("cannot create process job")
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+	// Context cancellation must not race ahead of job assignment. Publish the
+	// exact job identity before allowing os/exec's cancellation goroutine through.
+	ready := make(chan struct{})
+	release := sync.OnceFunc(func() { close(ready) })
+	defer release()
+	var stopOwned func() error
+	if cmd.Cancel != nil {
+		cmd.Cancel = func() error {
+			<-ready
+			if stopOwned != nil {
+				return stopOwned()
+			}
+			return cmd.Process.Kill()
+		}
+	}
+	if err := cmd.Start(); err != nil {
+		discardProcessJob(job)
+		return err
+	}
+	if err := registerProcessJob(cmd.Process.Pid, job); err != nil {
+		release()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	stopOwned, _ = serviceProcessStop(cmd.Process.Pid)
+	if err := resumeTrackedProcess(cmd.Process.Pid); err != nil {
+		release()
+		unregisterProcessJob(cmd.Process.Pid)
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	return nil
+}
+
+func resumeTrackedProcess(pid int) error {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(snapshot)
+	entry := windows.ThreadEntry32{Size: uint32(unsafe.Sizeof(windows.ThreadEntry32{}))}
+	for err = windows.Thread32First(snapshot, &entry); err == nil; err = windows.Thread32Next(snapshot, &entry) {
+		if entry.OwnerProcessID != uint32(pid) {
+			continue
+		}
+		thread, err := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, entry.ThreadID)
+		if err != nil {
+			return err
+		}
+		_, err = windows.ResumeThread(thread)
+		windows.CloseHandle(thread)
+		return err
+	}
+	return fmt.Errorf("cannot find suspended thread for pid %d: %w", pid, err)
+}
 
 var (
 	kernel32                     = syscall.NewLazyDLL("kernel32.dll")
@@ -47,8 +164,6 @@ const (
 	// AssignProcessToJobObject 所需的进程访问权限。
 	processSetQuota  = 0x0100
 	processTerminate = 0x0001
-	// isProcessAlive 探测用的最小查询权限。
-	processQueryLimitedInformation = 0x0400
 )
 
 func hideCommandWindow(cmd *exec.Cmd) {
@@ -109,7 +224,7 @@ func newJobObject() (syscall.Handle, error) {
 }
 
 // registerProcessJob 把已启动的根进程放入 job 并登记。失败（例如进程已被
-// 其他 job 接管）时关闭 handle 并返回错误，调用方可忽略以回退 taskkill。
+// 其他 job 接管）时关闭 handle 并返回错误；调用方不得再次关闭同一 handle。
 func registerProcessJob(pid int, job uintptr) error {
 	if job == 0 {
 		return nil
@@ -129,7 +244,7 @@ func registerProcessJob(pid int, job uintptr) error {
 		return fmt.Errorf("AssignProcessToJobObject(%d) failed: %v", pid, err)
 	}
 	processJobsMu.Lock()
-	processJobs[pid] = syscall.Handle(job)
+	processJobs[pid] = &processJob{handle: syscall.Handle(job)}
 	processJobsMu.Unlock()
 	return nil
 }
@@ -140,7 +255,10 @@ func unregisterProcessJob(pid int) {
 	processJobsMu.Lock()
 	if job, ok := processJobs[pid]; ok {
 		delete(processJobs, pid)
-		procCloseHandle.Call(uintptr(job))
+		job.mu.Lock()
+		procCloseHandle.Call(uintptr(job.handle))
+		job.handle = 0
+		job.mu.Unlock()
 	}
 	processJobsMu.Unlock()
 }
@@ -157,58 +275,30 @@ func discardProcessJob(job uintptr) {
 // 终止 job 内仍存活的进程，不存在 Unix 那种需要单独补刀的进程组。
 func reapProcessGroupLeftovers(pid int) {}
 
-// gracefulStopProcessTree 尽力触发目标树的优雅退出：taskkill 不带 /F 只对
-// 有窗口的进程投递 WM_CLOSE；无窗口控制台进程（dev server 常态）会立即失败
-// 返回，属预期行为——宽限等待随后照常进行，超时由 stopProcessTree 强杀。
-// 不用 GenerateConsoleCtrlEvent：它要求调用方 AttachConsole 到子进程的
-// 控制台且 msys 层信号转发不可靠，误配时可能波及 Ally 自身。
-func gracefulStopProcessTree(pid int) error {
-	if pid <= 0 {
-		return fmt.Errorf("invalid pid: %d", pid)
-	}
-	cmd := exec.Command("taskkill.exe", "/PID", fmt.Sprintf("%d", pid), "/T")
-	hideCommandWindow(cmd)
-	_, _ = cmd.CombinedOutput()
-	return nil
-}
-
-// stopProcessTree 强杀整棵进程树：优先 Job Object（内核级归属，父链断裂也
-// 能杀光），失败回退 taskkill /T /F。
 // isProcessAlive 探测进程是否仍在运行，供 MCP job 守护轮询使用。不触碰
 // transport 持有的 exec.Cmd 字段，避免与其 Wait 竞争。
 func isProcessAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	h, _, _ := procOpenProcess.Call(processQueryLimitedInformation, 0, uintptr(pid))
-	if h == 0 {
-		return false
+	// OpenProcess alone also succeeds for terminated processes while another
+	// handle is open. Wait on the kernel object to distinguish that state.
+	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		return err == windows.ERROR_ACCESS_DENIED
 	}
-	procCloseHandle.Call(h)
-	return true
+	defer windows.CloseHandle(h)
+	state, err := windows.WaitForSingleObject(h, 0)
+	return err != nil || state != windows.WAIT_OBJECT_0
 }
 
 func stopProcessTree(pid int) error {
-	if pid <= 0 {
-		return fmt.Errorf("invalid pid: %d", pid)
+	if pid <= 0 || pid == os.Getpid() {
+		return fmt.Errorf("invalid target pid: %d", pid)
 	}
-	processJobsMu.Lock()
-	job, ok := processJobs[pid]
-	processJobsMu.Unlock()
-	if ok {
-		r, _, err := procTerminateJobObject.Call(uintptr(job), 1)
-		if r != 0 {
-			return nil
-		}
-		// 终止失败时回退到 taskkill（job handle 随后由 unregister 关闭）。
-		return fmt.Errorf("TerminateJobObject(%d) failed: %v", pid, err)
-	}
-	// 无 job（创建失败或进程已退出）时回退旧行为。
-	cmd := exec.Command("taskkill.exe", "/PID", fmt.Sprintf("%d", pid), "/T", "/F")
-	hideCommandWindow(cmd)
-	out, err := cmd.CombinedOutput()
+	stop, err := serviceProcessStop(pid)
 	if err != nil {
-		return fmt.Errorf("taskkill failed: %w: %s", err, string(out))
+		return err // never chase a stale PID outside an owned job
 	}
-	return nil
+	return stop()
 }

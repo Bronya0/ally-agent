@@ -8,8 +8,9 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <!-- Unified header: brand + tabs + actions + meta -->
-  <n-layout-header bordered class="app-header">
+  <!-- macOS uses AppKit traffic lights over a reserved area of this row. -->
+  <n-layout-header bordered class="app-header" :class="{ 'app-header--mac': isMacOS }">
+    <div v-if="isMacOS" class="mac-window-controls-space" aria-hidden="true"></div>
     <div class="brand">
       <!-- 起波瞬间垫在字标底下的光晕（只动 opacity，纯合成） -->
       <span class="brand-glow" :class="{ 'brand-glow--struck': brandStruck }" aria-hidden="true"></span>
@@ -55,7 +56,7 @@ Public License v3. See the LICENSE file for details.
           @select="onHistorySelect"
         >
           <n-button class="header-icon-button tabs-action-button history-action-button" size="small" quaternary :title="$t('header.addWorkspace')" :aria-label="$t('header.addWorkspace')">
-            <PlusCircleOutlined class="header-icon" />
+            <PlusOutlined class="header-icon" />
           </n-button>
         </n-dropdown>
         <!-- 工作区文件浏览器开关：原先停在输入栏最右（界面右下角），按用户要求挪进
@@ -87,13 +88,21 @@ Public License v3. See the LICENSE file for details.
         <GithubOutlined v-else class="header-icon github-icon" />
       </n-button>
     </div>
-    <div class="window-controls">
+    <div v-if="!isMacOS" class="window-controls">
       <button class="window-control-btn" @click="$emit('minimise')" :title="$t('header.minimize')" :aria-label="$t('header.minimize')">
         <MinusOutlined class="window-icon" />
       </button>
       <button class="window-control-btn" @click="toggleMaximise" :title="isMaximised ? $t('header.restore') : $t('header.maximize')" :aria-label="isMaximised ? $t('header.restore') : $t('header.maximize')">
-        <SwitcherOutlined v-if="isMaximised" class="window-icon" />
-        <BorderOutlined v-else class="window-icon" />
+        <!-- 手画的窗口图标：@vicons/antd 里没有系统那套字形——SwitcherOutlined 带一条
+             莫名其妙的横条，BorderOutlined 的线宽又比它细。两个状态共用同一线宽，
+             切换时字形不会突然变粗变细。 -->
+        <svg v-if="isMaximised" class="window-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1">
+          <path d="M6.6 1.9H14v7.4" />
+          <rect x="2" y="4.9" width="9.2" height="9.2" />
+        </svg>
+        <svg v-else class="window-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1">
+          <rect x="2.2" y="2.2" width="11.6" height="11.6" />
+        </svg>
       </button>
       <button class="window-control-btn close" @click="$emit('closeWindow')" :title="$t('header.close')" :aria-label="$t('header.close')">
         <CloseOutlined class="window-icon window-close-icon" />
@@ -107,14 +116,15 @@ import { onBeforeUnmount, ref } from 'vue';
 import { NDropdown } from 'naive-ui';
 import AllyWordmark from './AllyWordmark.vue';
 import { burstDigitalWave } from '../composables/digitalWave.mjs';
-import PlusCircleOutlined from '@vicons/antd/PlusCircleOutlined';
+import { detectPlatform } from '../utils/platform.mjs';
+import PlusOutlined from '@vicons/antd/PlusOutlined';
 import FolderOpenTwotone from '@vicons/antd/FolderOpenTwotone';
 import DownloadOutlined from '@vicons/antd/DownloadOutlined';
 import GithubOutlined from '@vicons/antd/GithubOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import MinusOutlined from '@vicons/antd/MinusOutlined';
-import BorderOutlined from '@vicons/antd/BorderOutlined';
-import SwitcherOutlined from '@vicons/antd/SwitcherOutlined';
+
+const isMacOS = detectPlatform() === 'darwin';
 
 const props = defineProps({
   workspaceTabs: { type: Array, required: true },
@@ -385,10 +395,6 @@ function historyMenuProps() {
   transition-duration: 80ms;
 }
 
-body.platform-darwin .brand-wordmark {
-  font-size: 24px;
-}
-
 /* ── Tabs area (flex-fill in header) ── */
 
 .header-tabs-area {
@@ -510,11 +516,6 @@ body.platform-darwin .brand-wordmark {
   flex: none;
 }
 
-body.platform-darwin .window-close-icon {
-  width: 18px;
-  height: 18px;
-}
-
 .window-control-btn:hover {
   background: var(--header-hover-bg);
   color: var(--header-strong);
@@ -523,6 +524,24 @@ body.platform-darwin .window-close-icon {
 .window-control-btn.close:hover {
   background: #e81123;
   color: #fff;
+}
+
+/* macOS: native traffic lights → wordmark → tabs → workspace actions.
+   AppKit owns the controls, hover symbols, inactive state and fullscreen.
+   Keep a stable 88px leading inset even in fullscreen so tabs do not jump
+   when macOS reveals its titlebar. The shared row stays 44px tall. */
+.app-header--mac {
+  padding: 0 12px 0 0;
+}
+
+.mac-window-controls-space {
+  flex: 0 0 80px;
+  height: 100%;
+  --wails-draggable: drag;
+}
+
+.app-header--mac .brand {
+  padding-right: 4px;
 }
 
 .workspace-tabs :deep(.workspace-tab) {

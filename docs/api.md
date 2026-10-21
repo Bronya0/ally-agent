@@ -327,7 +327,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 ### `POST /api/v1/services/{id}/stop` — 停止后台服务
 
-请求体（可选）：`{ "graceSeconds": 3 }`——优雅终止等待时间，缺省 3 秒、上限 30 秒，超时后强制杀死整个进程树。不存在返回 404。
+请求体可省略。立即强制停止该服务所属的整个进程树，并等待退出确认；失败返回错误，不会假报已停止。旧参数 `graceSeconds` 仅为兼容保留，已忽略。不存在返回 404。
 
 ### `GET /api/v1/tasks` — 查询计划任务
 

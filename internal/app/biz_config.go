@@ -716,6 +716,9 @@ func (a *App) SaveConfig(req ConfigState) error {
 	// 不会自己换掉它：必须重建连接，「关掉开关」才算真的生效。这里先记下旧的
 	// 生效值，等字段落地后再比（拿请求字段比会误判，见下）。
 	allowPrivateBefore := a.config.allowPrivateNetworkEnabled()
+	// The image picker owns this field. A queued settings snapshot must not
+	// restore a replaced/cleared image or inject an arbitrary filename.
+	req.BackgroundImage = ""
 	a.config = mergeConfig(a.config, req)
 	a.config.CustomPrompt = req.CustomPrompt
 	if req.ToolConcurrency != 0 {
@@ -754,13 +757,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 			a.config.LastUsedModel = identity
 		}
 	}
-	// Background opacity is editable from the frontend slider; persist it
-	// directly. The image filename is managed by SaveBackgroundImage — only
-	// adopt it from the SaveConfig overlay when the frontend echoes the
-	// already-stored value (no path mutation through this code path).
-	if strings.TrimSpace(req.BackgroundImage) != "" {
-		a.config.BackgroundImage = strings.TrimSpace(req.BackgroundImage)
-	}
+	// Background opacity is editable from the frontend slider.
 	a.config.BackgroundOpacity = clampBackgroundOpacity(req.BackgroundOpacity)
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)

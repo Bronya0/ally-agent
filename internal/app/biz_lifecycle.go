@@ -147,6 +147,10 @@ func (a *App) stopRuntime(timeout time.Duration) error {
 	deadline, stopDeadline := context.WithTimeout(context.Background(), timeout)
 	defer stopDeadline()
 	end, _ := deadline.Deadline()
+	// Kill managed services immediately, in parallel with run checkpointing.
+	// Do not skip their cleanup when checkpointing consumes the shutdown budget.
+	servicesDone := make(chan error, 1)
+	go func() { servicesDone <- a.stopAllServicesWithError() }()
 	shutdownErr := a.shutdownScheduledTasks(time.Until(end))
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
@@ -165,8 +169,9 @@ waitRuns:
 		case <-tick.C:
 		}
 	}
+	var servicesErr error
 	resourceErr := waitRuntimeShutdown(deadline, func() error {
-		a.stopAllServices()
+		servicesErr = <-servicesDone
 		if manager := a.activeMcpManager(); manager != nil {
 			manager.Shutdown()
 		}
@@ -184,7 +189,7 @@ waitRuns:
 	}
 	err := waitRuntimeShutdown(deadline, func() error {
 		var cleanupErr error
-		if shutdownErr == nil {
+		if shutdownErr == nil && servicesErr == nil {
 			a.cleanupTempWorkspacesOnExit()
 			if a.runtime.mcpCwd != "" {
 				cleanupErr = os.RemoveAll(a.runtime.mcpCwd)
@@ -202,10 +207,12 @@ waitRuns:
 		return cleanupErr
 	})
 	if errors.Is(err, context.DeadlineExceeded) {
-		return errors.Join(shutdownErr, err)
+		return errors.Join(shutdownErr, servicesErr, err)
 	}
-	err = errors.Join(shutdownErr, err)
-	if shutdownErr == nil && a.runtime.lock != nil {
+	err = errors.Join(shutdownErr, servicesErr, err)
+	// A live service can still write workspace data: preserve its directories
+	// and the data lock, but always close OAuth and flush statistics above.
+	if shutdownErr == nil && servicesErr == nil && a.runtime.lock != nil {
 		err = errors.Join(err, a.runtime.lock.Unlock())
 		a.runtime.lock = nil
 	}

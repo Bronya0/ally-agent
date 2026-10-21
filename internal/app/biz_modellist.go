@@ -57,7 +57,7 @@ func (a *App) FetchModelList(baseUrl, apiKey string, customHeaders map[string]st
 	if key := strings.TrimSpace(apiKey); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
-	applyCustomHeaders(req, cfg)
+	applyModelHeaders(req, cfg)
 
 	resp, err := proxyHTTPClient(cfg, true, 15*time.Second).Do(req)
 	if err != nil {
