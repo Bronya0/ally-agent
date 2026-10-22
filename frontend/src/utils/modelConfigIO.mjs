@@ -7,6 +7,8 @@
  * This file is part of ally-agent, licensed under the GNU General
  * Public License v3. See the LICENSE file for details.
  */
+import { isConfigObject, parseConfigJSON } from './configJSON.mjs';
+
 export const MODEL_CONFIG_EXPORT_VERSION = 1;
 export const CHATGPT_PROVIDER_NAME = 'ChatGPT Official';
 export const CHATGPT_CONTEXT_WINDOW = 512000;
@@ -182,6 +184,7 @@ function normalizeApiKeys(keys, fallbackKey) {
       out.push(v);
     }
   }
+  if (!out.length && typeof fallbackKey === 'string' && fallbackKey.trim()) out.push(fallbackKey.trim());
   return out;
 }
 
@@ -234,21 +237,40 @@ function normalizeImportedModel(model) {
   if (!model || typeof model !== 'object' || Array.isArray(model)) {
     throw importError('MODEL_INVALID');
   }
+  for (const key of ['authType', 'oauthAccountId', 'displayName', 'providerName', 'apiFormat', 'baseUrl', 'apiKey', 'model', 'reasoningTag', 'tokenParam', 'reasoningEffort']) {
+    if (model[key] != null && typeof model[key] !== 'string') throw importError('MODEL_INVALID');
+  }
+  if (model.apiKeys != null && (!Array.isArray(model.apiKeys) || model.apiKeys.some((key) => typeof key !== 'string'))) throw importError('MODEL_INVALID');
+  if (model.customHeaders != null && (!isConfigObject(model.customHeaders) || Object.values(model.customHeaders).some((value) => typeof value !== 'string'))) throw importError('MODEL_INVALID');
+  if (model.visionCapable != null && typeof model.visionCapable !== 'boolean') throw importError('MODEL_INVALID');
+  for (const field of ['maxTokens', 'contextWindow']) {
+    if (model[field] == null || model[field] === '') continue;
+    const value = Number(model[field]);
+    // Legacy files use zero for "use the default". Preserve that convention,
+    // while rejecting invalid types, negative limits and lossy huge numbers.
+    if (!['number', 'string'].includes(typeof model[field]) || !Number.isSafeInteger(Math.trunc(value)) || value < 0 || (value > 0 && value < 1)) throw importError('MODEL_INVALID');
+  }
+  const authType = String(model.authType || '').trim().toLowerCase();
+  if (authType && !['api_key', 'chatgpt_oauth'].includes(authType)) throw importError('MODEL_INVALID');
+  if (authType === 'chatgpt_oauth' && !String(model.oauthAccountId || '').trim()) throw importError('MODEL_INVALID');
 
   const modelId = normalizeModelId(model.model);
   if (!modelId) throw importError('MODEL_ID_REQUIRED');
 
   const apiKeys = normalizeApiKeys(model.apiKeys, model.apiKey);
   const normalized = {
-    ...(model.authType ? { authType: model.authType, oauthAccountId: model.oauthAccountId || '', displayName: model.displayName || '' } : {}),
-    providerName: model.authType === 'chatgpt_oauth' ? CHATGPT_PROVIDER_NAME : normalizeProviderName(model.providerName),
-    apiFormat: String(model.apiFormat || 'openai_chat').trim() || 'openai_chat',
+    ...(authType ? { authType } : {}),
+    ...(model.oauthAccountId != null ? { oauthAccountId: model.oauthAccountId } : {}),
+    ...(model.displayName != null ? { displayName: model.displayName } : {}),
+    ...(typeof model.visionCapable === 'boolean' ? { visionCapable: model.visionCapable } : {}),
+    providerName: authType === 'chatgpt_oauth' ? CHATGPT_PROVIDER_NAME : normalizeProviderName(model.providerName),
+    apiFormat: normalizeApiFormat(model.apiFormat),
     baseUrl: String(model.baseUrl || '').trim(),
     apiKey: apiKeys[0] || '',
     apiKeys,
     model: modelId,
     maxTokens: Number.isFinite(Number(model.maxTokens)) && Number(model.maxTokens) > 0 ? Math.trunc(Number(model.maxTokens)) : 131072,
-    contextWindow: Number.isFinite(Number(model.contextWindow)) && Number(model.contextWindow) > 0 ? Math.trunc(Number(model.contextWindow)) : (model.authType === 'chatgpt_oauth' ? CHATGPT_CONTEXT_WINDOW : 1000000),
+    contextWindow: Number.isFinite(Number(model.contextWindow)) && Number(model.contextWindow) > 0 ? Math.trunc(Number(model.contextWindow)) : (authType === 'chatgpt_oauth' ? CHATGPT_CONTEXT_WINDOW : 1000000),
     reasoningTag: String(model.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
     tokenParam: normalizeTokenParam(model.tokenParam),
     reasoningEffort: normalizeReasoningEffort(model.reasoningEffort),
@@ -269,20 +291,21 @@ export function buildModelConfigExport(models) {
 export function parseModelConfigImport(text) {
   let parsed;
   try {
-    parsed = JSON.parse(String(text || ''));
+    parsed = parseConfigJSON(text);
   } catch {
     throw importError('JSON_INVALID');
   }
 
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+  if (!parsed || typeof parsed !== 'object') {
     throw importError('ROOT_INVALID');
   }
-  if (parsed.formatVersion !== MODEL_CONFIG_EXPORT_VERSION) {
+  if (!Array.isArray(parsed) && Object.hasOwn(parsed, 'formatVersion') && parsed.formatVersion !== MODEL_CONFIG_EXPORT_VERSION) {
     throw importError('VERSION_UNSUPPORTED');
   }
-  if (!Array.isArray(parsed.models)) throw importError('MODELS_REQUIRED');
+  const models = Array.isArray(parsed) ? parsed : parsed.models;
+  if (!Array.isArray(models)) throw importError('MODELS_REQUIRED');
 
-  return parsed.models.map(normalizeImportedModel);
+  return models.map(normalizeImportedModel);
 }
 
 export function mergeModelConfigs(existingModels, importedModels) {

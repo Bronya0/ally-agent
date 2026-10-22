@@ -45,6 +45,7 @@
 | 启动加载（工作区先就绪；技能/会话/插件等空闲加载，上下文延后、更新延迟 10 秒；维护任务延迟清理并修复会话索引，锁外扫描、按版本提交并通知前端；`ListSessionIndex` 仅读索引，`ListSessions` 保留显式恢复） | `internal/app/biz_lifecycle.go` + `biz_sessions.go` + `frontend/src/App.vue` + `utils/startupTasks.mjs` |
 | 新建技能（元数据 + SKILL.md 正文写入 `.agents/skills`：用户级 `~/` 或项目级 `<工作区>`；重名/非法名拒绝，写完清列表缓存） | `internal/app/biz_skills.go`（`SaveSkill`） |
 | MCP 客户端生命周期 | `internal/app/biz_mcp.go`（stdio 环境走白名单 `mcpStdioEnv`，不吃 os.Environ；http/sse 与 http 工具共用 `allowPrivateNetwork` 开关） |
+| MCP / 模型配置导入导出（BOM 兼容、已知字段类型校验；MCP 原文保留扩展字段、仅回写已改字段，参数/环境值无损往返；模型兼容版本包/无版本包/数组并保留视觉三态） | `frontend/src/utils/mcpConfigIO.mjs` + `modelConfigIO.mjs` + `configJSON.mjs`；`McpPanel.vue` / `ModelsPanel.vue`；后端 `biz_mcp.go`（`normalizeMcpConfigJSON`） |
 | 计划任务 / 后台服务 / 命令超时收编（LLM 任务记模型身份；服务启动/收编记主工作区，模型 list/read/stop 按归属隔离，同工作区跨会话共享） | `orch_scheduler.go` / `orch_services.go`（promoteTimedOutCommand）+ `TaskCenterPanel.vue`；侧栏默认全部、Tab 底部默认当前，可切范围；`utils/taskWorkspace.mjs` + `utils/workspacePath.mjs` 共用归属筛选与路径比较 |
 | 远程 SSH 工具与审批闸门（首次连接 / 危险命令 / 覆盖 / 集群登记；主机指纹不一致直接换记录重连；写入与命令同过 `.git` 元数据围栏） | `orch_remote.go` / `orch_ssh_cluster.go`（按解析端点缓存并区分认证模式）+ `internal/tools/sshclient/`（纯 Go 传输、密钥认证、known_hosts 固化与不一致时替换） |
 | SSH 集群清单与工作区授权（`ssh_clusters.json` 落盘、别名/端点两种写法、默认拒绝；分组是纯归类，空白/历史节点统一归「未分组」，集群页与授权弹窗共用一套分组与搜索口径） | `internal/app/biz_ssh_cluster.go` + `orch_ssh_cluster.go` + `SSHClusterPanel.vue` + `SshClusterAuthModal.vue` + `utils/sshClusterGroups.mjs` + `ComposerInfoBar.vue` |

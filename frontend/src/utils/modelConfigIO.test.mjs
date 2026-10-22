@@ -41,6 +41,54 @@ test('model config export includes plaintext credentials and can be parsed', () 
   assert.equal(imported[0].apiKey, 'plain-secret');
 });
 
+test('all supported model fields survive export/import with tri-state vision', () => {
+  for (const vision of [true, false, undefined]) {
+    const input = model('Relay', 'model-a', { displayName: 'Friendly', apiKeys: ['key-a', 'key-b'],
+      tokenParam: 'max_completion_tokens', reasoningEffort: 'off', customHeaders: { 'X-Relay': 'value' },
+      ...(vision === undefined ? {} : { visionCapable: vision }) });
+    const payload = buildModelConfigExport([input]);
+    const imported = parseModelConfigImport('\ufeff' + JSON.stringify(payload));
+    assert.equal(imported[0].visionCapable, vision);
+    assert.equal(Object.hasOwn(imported[0], 'visionCapable'), vision !== undefined);
+    assert.equal(imported[0].displayName, 'Friendly');
+    assert.deepEqual(imported[0].apiKeys, ['key-a', 'key-b']);
+    assert.deepEqual(buildModelConfigExport(imported), payload);
+    const merged = mergeModelConfigs([model('Relay', 'model-a')], imported);
+    assert.equal(merged.models[0].visionCapable, vision);
+  }
+});
+
+test('legacy model arrays and unversioned models objects are accepted with BOM', () => {
+  const input = [model('Provider', 'model-a')];
+  const expected = parseModelConfigImport(JSON.stringify({ formatVersion: 1, models: input }));
+  for (const payload of [input, { models: input }]) {
+    assert.deepEqual(parseModelConfigImport('\ufeff' + JSON.stringify(payload)), expected);
+  }
+  for (const formatVersion of [null, '1', 0, 2]) {
+    assert.throws(() => parseModelConfigImport(JSON.stringify({ formatVersion, models: input })), (err) => err.code === 'VERSION_UNSUPPORTED');
+  }
+});
+
+test('invalid model field types are rejected before coercion', () => {
+  for (const override of [{ model: {} }, { providerName: [] }, { apiKeys: [null] }, { customHeaders: [] },
+    { customHeaders: { X: 42 } }, { visionCapable: 'false' }, { maxTokens: {} }, { contextWindow: false },
+    { maxTokens: -1 }, { maxTokens: 0.5 }, { authType: 'unknown' }, { authType: 'chatgpt_oauth' }]) {
+    assert.throws(() => parseModelConfigImport(JSON.stringify({ models: [model('Provider', 'model-a', override)] })),
+      (err) => err.code === 'MODEL_INVALID', JSON.stringify(override));
+  }
+});
+
+test('a blank imported key pool falls back to the legacy key', () => {
+  const [got] = parseModelConfigImport(JSON.stringify([model('Provider', 'model-a', { apiKeys: [' ', ''], apiKey: 'fallback' })]));
+  assert.deepEqual(got.apiKeys, ['fallback']);
+});
+
+test('legacy zero token limits still select defaults', () => {
+  const [got] = parseModelConfigImport(JSON.stringify([model('Provider', 'model-a', { maxTokens: 0, contextWindow: 0 })]));
+  assert.equal(got.maxTokens, 131072);
+  assert.equal(got.contextWindow, 1000000);
+});
+
 test('incremental import replaces matching provider and model identities', () => {
   const existing = [
     model('OpenAI', 'gpt-5', { apiKey: 'old' }),

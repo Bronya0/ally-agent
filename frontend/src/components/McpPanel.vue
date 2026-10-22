@@ -198,6 +198,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useDialog, useMessage } from 'naive-ui';
 import { SearchOutlined, AppstoreOutlined } from '@vicons/antd';
 import { saveTextFile } from '../utils/download.mjs';
+import { parseMcpConfig, mcpConfigToForm, mcpFormToConfig } from '../utils/mcpConfigIO.mjs';
 import {
   formatBuiltinToolLabel,
   getToggleableToolNames,
@@ -251,6 +252,7 @@ const mcpFormModalStyle = {
 
 // MCP state
 const mcpConfigText = ref('');
+const mcpOriginalConfig = ref({ mcpServers: {} });
 const mcpLastAppliedJson = ref('');
 const mcpServers = ref([]);
 const mcpLoading = ref(false);
@@ -264,26 +266,12 @@ function nextMcpServerKey() {
   return `mcp-srv-${mcpServerKeyCounter}`;
 }
 
-const mcpConfigParseResult = computed(() => {
-  const raw = mcpConfigText.value || '';
-  if (!raw.trim()) return { valid: false, text: t('settings.jsonEmpty') };
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && parsed.mcpServers) {
-      return { valid: true, text: t('settings.jsonValid') };
-    }
-    return { valid: false, text: t('settings.jsonNeedsServers') };
-  } catch (e) {
-    return { valid: false, text: t('settings.jsonError', { error: e.message }) };
-  }
-});
-
 async function loadMcpConfig() {
   mcpLoading.value = true;
   try {
-    mcpConfigText.value = await GetMcpConfig();
+    await mcpApplyChain;
+    syncJsonToForm(await GetMcpConfig());
     mcpLastAppliedJson.value = mcpConfigText.value;
-    syncJsonToForm();
     mcpServers.value = await GetMcpServers() || [];
     await loadBuiltinTools();
   } catch (err) {
@@ -293,24 +281,22 @@ async function loadMcpConfig() {
   }
 }
 
-async function saveMcpConfigText() {
+async function saveMcpConfigText(raw = mcpConfigText.value) {
   mcpLoading.value = true;
   try {
-    const parsed = mcpConfigParseResult.value;
-    if (!parsed.valid) {
-      message.warning(parsed.text);
-      return;
-    }
-    await SaveMcpConfig(mcpConfigText.value);
+    parseMcpConfig(raw);
+    await SaveMcpConfig(raw);
     // Incremental reconcile: only added/removed/changed servers reconnect;
     // untouched servers keep their live connections.
     await ReconcileMcpServers();
-    mcpLastAppliedJson.value = mcpConfigText.value;
+    mcpLastAppliedJson.value = raw;
     mcpServers.value = await GetMcpServers() || [];
     message.success(t('app.mcp.saved'));
     emit('mcp-saved');
+    return true;
   } catch (err) {
     message.error(t('app.mcp.saveFailed', { error: err }));
+    return false;
   } finally {
     mcpLoading.value = false;
   }
@@ -322,96 +308,39 @@ async function saveMcpConfigText() {
 // equals what is already applied) skips the reconnect.
 let mcpApplyChain = Promise.resolve();
 
+function reportMcpConfigError(err) {
+  if (err?.code === 'FILE_TOO_LARGE') message.error(t('settings.modelImportError.FILE_TOO_LARGE'));
+  else if (err?.code === 'SERVERS_REQUIRED') message.error(t('settings.mcpImportNeedsServers'));
+  else if (err?.code === 'JSON_INVALID') message.error(t('settings.modelImportError.JSON_INVALID'));
+  else if (err?.code === 'MCP_ARGS_INVALID') message.error(t('settings.mcpArgsInvalid'));
+  else if (err?.code === 'MCP_NAME_INVALID') message.error(t('settings.mcpNameInvalid'));
+  else message.error(t('settings.mcpConfigInvalid', { field: String(err?.message || '') }));
+}
+
 function autoApplyMcpConfig() {
-  syncFormToJson();
-  if (mcpConfigText.value === mcpLastAppliedJson.value) return;
-  mcpApplyChain = mcpApplyChain.then(() => saveMcpConfigText()).catch(() => {});
+  let raw;
+  try { syncFormToJson(); raw = mcpConfigText.value; }
+  catch (err) { reportMcpConfigError(err); return Promise.resolve(false); }
+  // Capture each change before queueing it; a later form edit must not replace
+  // an earlier save's payload. Check no-ops against the last completed save.
+  mcpApplyChain = mcpApplyChain.catch(() => {}).then(() => (
+    raw === mcpLastAppliedJson.value ? true : saveMcpConfigText(raw)
+  ));
+  return mcpApplyChain;
 }
 
-// 只接受普通对象：外部/手写的 mcp.json 里出现 null、数组、字符串时不能让表单
-// 构建半道抛错——外层 catch 会保住旧表单，导入看着成功、实际什么都没变，
-// 随后 auto-apply 还会反过来用旧行盖掉用户刚导入的整份配置。
-function mcpPlainObject(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-}
-
-function syncJsonToForm() {
-  try {
-    const parsed = mcpPlainObject(JSON.parse(mcpConfigText.value || '{}'));
-    const servers = mcpPlainObject(parsed.mcpServers);
-    mcpFormServers.value = Object.entries(servers).map(([name, rawCfg]) => {
-      const cfg = mcpPlainObject(rawCfg);
-      return {
-        _key: nextMcpServerKey(),
-        name,
-        command: typeof cfg.command === 'string' ? cfg.command : '',
-        // 模态框参数输入框是单行空格分隔格式；历史多行写法（每行一个参数）
-        // 在这里一并归一化为空格分隔，保存时再按空白切分。
-        args: Array.isArray(cfg.args) ? cfg.args.join(' ') : '',
-        env: Object.entries(mcpPlainObject(cfg.env)).map(([k, v]) => `${k}=${v}`).join('\n'),
-        transport: normalizeMcpTransport(cfg),
-        url: typeof cfg.url === 'string' ? cfg.url : '',
-        headers: Object.entries(mcpPlainObject(cfg.headers)).map(([k, v]) => `${k}: ${v}`).join('\n'),
-        enabled: cfg.enabled !== false,
-        disabledTools: Array.isArray(cfg.disabledTools) ? cfg.disabledTools.map((name) => String(name).trim()).filter(Boolean) : [],
-        // 原样留着这一条服务端的完整 JSON：表单只掌管它认识的那几个字段，其余
-        // （用户手写的 cwd / 超时、从 Claude/Cursor 导入的专有键）回写时原样带回。
-        _raw: cfg,
-      };
-    });
-    // 加载/刷新时排一次：开启在前、关闭沉底；之后开关切换不再重排，
-    // 组内顺序保持配置文件里的原顺序（sort 稳定）。
-    mcpFormServers.value.sort((a, b) => Number(a.enabled === false) - Number(b.enabled === false));
-  } catch {
-    // keep existing form data on parse error
-  }
+function syncJsonToForm(text = mcpConfigText.value, options = { allowEmpty: true }) {
+  const doc = parseMcpConfig(text, options);
+  const rows = mcpConfigToForm(doc, nextMcpServerKey);
+  // Build/validate everything before replacing any live form state.
+  mcpOriginalConfig.value = doc;
+  mcpFormServers.value = rows;
+  mcpConfigText.value = JSON.stringify(doc, null, 2);
 }
 
 function syncFormToJson() {
-  const servers = {};
-  for (const srv of mcpFormServers.value) {
-    if (!srv.name?.trim()) continue;
-    // 表单掌管的字段每次往返都整体重写（先删后按当前输入写），其余键
-    // （cwd / 超时 / 外部客户端专有字段）原样保留。整份重建会静默吃掉未知
-    // 字段：导入一份 Claude/Cursor 的 mcp.json，保存一次就少一半。
-    const cfg = { ...(srv._raw || {}) };
-    for (const key of MCP_FORM_OWNED_KEYS) delete cfg[key];
-    if (srv.transport !== 'stdio') {
-      cfg.transport = srv.transport === 'sse' ? 'sse' : 'streamable-http';
-      if (srv.url?.trim()) cfg.url = srv.url.trim();
-      const headers = {};
-      (srv.headers || '').split('\n').forEach(line => {
-        const idx = line.indexOf(':');
-        if (idx > 0) headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-      });
-      if (Object.keys(headers).length) cfg.headers = headers;
-    } else {
-      if (srv.command?.trim()) cfg.command = srv.command.trim();
-      const args = String(srv.args || '').split(/\s+/).map((a) => a.trim()).filter(Boolean);
-      if (args.length) cfg.args = args;
-      const env = {};
-      (srv.env || '').split('\n').forEach(line => {
-        const idx = line.indexOf('=');
-        if (idx > 0) env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-      });
-      if (Object.keys(env).length) cfg.env = env;
-    }
-    cfg.enabled = srv.enabled !== false;
-    // 注入黑名单必须随表单往返保留，否则任何一次 auto-apply 都会把
-    // syncFormToJson 重建的 JSON 里丢掉这个字段（勾选静默清零）。
-    const disabledTools = (srv.disabledTools || []).map((name) => String(name).trim()).filter(Boolean);
-    if (disabledTools.length) cfg.disabledTools = disabledTools;
-    servers[srv.name.trim()] = cfg;
-  }
-  mcpConfigText.value = JSON.stringify({ mcpServers: servers }, null, 2);
-}
-
-function normalizeMcpTransport(cfg = {}) {
-  const value = String(cfg.transport || '').trim().toLowerCase();
-  if (value === 'sse') return 'sse';
-  if (['streamable-http', 'http', 'rest'].includes(value)) return 'streamable-http';
-  if (!value && cfg.url && !cfg.command) return 'streamable-http';
-  return 'stdio';
+  const doc = mcpFormToConfig(mcpFormServers.value, mcpOriginalConfig.value);
+  mcpConfigText.value = JSON.stringify(doc, null, 2);
 }
 
 // MCP server editor modal: adding and editing both happen in a sub-modal
@@ -428,20 +357,15 @@ function blankMcpServerForm() {
     _raw: null,
     name: '',
     command: '',
-    args: '',
-    env: '',
+    args: '[]',
+    env: '{}',
     transport: 'stdio',
     url: '',
-    headers: '',
+    headers: '{}',
     enabled: true,
     disabledTools: [],
   };
 }
-
-// 表单掌管的 server 字段：每次往返整体重写，其余键一律原样保留（见
-// syncFormToJson）。由表单形状派生，加字段时不用记得改两处；name 也在内——
-// 服务名以 JSON 外层键为准，条目内若自带 name 不该落盘成自相矛盾的一行。
-const MCP_FORM_OWNED_KEYS = Object.keys(blankMcpServerForm()).filter((key) => !key.startsWith('_'));
 
 // 工具勾选面板的展开状态按行 key 记录；默认收起，勾选计数在行侧常显。
 const mcpExpandedToolPanels = ref(new Set());
@@ -486,6 +410,12 @@ function commitMcpEditor() {
     return;
   }
   const entry = JSON.parse(JSON.stringify(mcpEditorDraft));
+  entry.name = entry.name.trim();
+  const candidate = [...mcpFormServers.value];
+  if (mcpEditorIndex.value >= 0) candidate.splice(mcpEditorIndex.value, 1, entry);
+  else candidate.push(entry);
+  try { mcpFormToConfig(candidate, mcpOriginalConfig.value); }
+  catch (err) { reportMcpConfigError(err); return; }
   if (mcpEditorIndex.value >= 0) {
     mcpFormServers.value.splice(mcpEditorIndex.value, 1, entry);
   } else {
@@ -507,36 +437,26 @@ async function importMcpConfig(event) {
   if (!file) return;
   try {
     if (file.size > 2 * 1024 * 1024) throw Object.assign(new Error('FILE_TOO_LARGE'), { code: 'FILE_TOO_LARGE' });
-    const parsed = JSON.parse(await file.text());
-    if (!parsed || typeof parsed !== 'object' || typeof parsed.mcpServers !== 'object' || parsed.mcpServers === null || Array.isArray(parsed.mcpServers)) {
-      throw Object.assign(new Error('SERVERS_REQUIRED'), { code: 'SERVERS_REQUIRED' });
-    }
-    mcpConfigText.value = JSON.stringify(parsed, null, 2);
-    syncJsonToForm();
-    // Reconcile compares parsed configs, so a formatting-only diff (different
-    // key order) keeps live connections and only real changes reconnect.
-    autoApplyMcpConfig();
+    const doc = parseMcpConfig(await file.text());
+    syncJsonToForm(JSON.stringify(doc), { allowEmpty: false });
+    await autoApplyMcpConfig();
   } catch (err) {
-    const code = String(err?.code || '');
-    if (code === 'FILE_TOO_LARGE') message.error(t('settings.modelImportError.FILE_TOO_LARGE'));
-    else if (code === 'SERVERS_REQUIRED') message.error(t('settings.mcpImportNeedsServers'));
-    else message.error(t('settings.modelImportError.JSON_INVALID'));
+    reportMcpConfigError(err);
   } finally {
     if (input) input.value = '';
   }
 }
 
-function exportMcpConfig() {
-  syncFormToJson();
-  const content = `${JSON.stringify(JSON.parse(mcpConfigText.value || '{}'), null, 2)}\n`;
-  saveTextFile({
-    filename: `ally-mcp-${new Date().toISOString().slice(0, 10)}.json`,
-    content,
-    filterName: 'JSON (*.json)',
-    filterPattern: '*.json',
-  }).then((result) => {
+async function exportMcpConfig() {
+  try {
+    syncFormToJson();
+    const result = await saveTextFile({
+      filename: `ally-mcp-${new Date().toISOString().slice(0, 10)}.json`,
+      content: `${mcpConfigText.value}\n`,
+      filterName: 'JSON (*.json)', filterPattern: '*.json',
+    });
     if (result.saved) message.success(t('settings.mcpExportSuccess', { count: mcpFormServers.value.length }));
-  });
+  } catch (err) { reportMcpConfigError(err); }
 }
 
 function removeMcpServer(index) {

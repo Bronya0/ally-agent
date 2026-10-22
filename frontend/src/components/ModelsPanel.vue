@@ -357,6 +357,8 @@ function defaultModelDraft(source = {}) {
     apiKey: '',
     model: '',
     ...source,
+    displayName: source.displayName || '',
+    visionCapable: typeof source.visionCapable === 'boolean' ? source.visionCapable : undefined,
     providerName: source.authType === 'chatgpt_oauth' ? CHATGPT_PROVIDER_NAME : (source.providerName || fallback.providerName),
     apiFormat: normalizeApiFormat(source.apiFormat || fallback.apiFormat),
     // Keep at least one (possibly empty) row so the form always shows a key
@@ -633,7 +635,7 @@ function selectOAuthAccount(id) {
 }
 function oauthFields() {
   return { authType: modelDraft.authType || 'api_key', oauthAccountId: isOAuth.value ? modelDraft.oauthAccountId : '',
-    displayName: isOAuth.value ? (oauthModels.value.find((m) => m.slug === modelDraft.model)?.display_name || modelDraft.displayName || '') : '' };
+    displayName: isOAuth.value ? (oauthModels.value.find((m) => m.slug === modelDraft.model)?.display_name || modelDraft.displayName || '') : (modelDraft.displayName || '') };
 }
 
 function onModelDraftSelected(value) {
@@ -777,6 +779,7 @@ async function testModelConnection() {
       reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
       tokenParam: modelDraft.tokenParam || 'auto',
       reasoningEffort: normalizeReasoningEffort(modelDraft.reasoningEffort),
+      ...(typeof modelDraft.visionCapable === 'boolean' ? { visionCapable: modelDraft.visionCapable } : {}),
       customHeaders: collectCustomHeaders(),
     });
     message.success(t('settings.connectionSuccess'));
@@ -814,6 +817,7 @@ function commitModelDraft() {
     reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
     tokenParam: modelDraft.tokenParam || 'auto',
     reasoningEffort: normalizeReasoningEffort(modelDraft.reasoningEffort),
+    ...(typeof modelDraft.visionCapable === 'boolean' ? { visionCapable: modelDraft.visionCapable } : {}),
     ...(customHeaders ? { customHeaders } : {}),
   };
   if (modelEditorIndex.value >= 0) {
@@ -870,17 +874,18 @@ async function importModelConfigs(event) {
   }
 }
 
-function exportModelConfigs() {
-  const payload = buildModelConfigExport(draft.models);
-  const content = `${JSON.stringify(payload, null, 2)}\n`;
-  saveTextFile({
-    filename: `ally-models-${new Date().toISOString().slice(0, 10)}.json`,
-    content,
-    filterName: 'JSON (*.json)',
-    filterPattern: '*.json',
-  }).then((result) => {
+async function exportModelConfigs() {
+  try {
+    const payload = buildModelConfigExport(draft.models);
+    const content = `${JSON.stringify(payload, null, 2)}\n`;
+    const result = await saveTextFile({
+      filename: `ally-models-${new Date().toISOString().slice(0, 10)}.json`,
+      content,
+      filterName: 'JSON (*.json)',
+      filterPattern: '*.json',
+    });
     if (result.saved) message.success(t('settings.modelExportSuccess', { count: payload.models.length }));
-  });
+  } catch { message.error(t('settings.modelExportFailed')); }
 }
 
 function cloneConfigDraft(source) {

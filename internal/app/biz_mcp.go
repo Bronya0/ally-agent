@@ -235,7 +235,11 @@ func (m *McpManager) LoadConfigs() (map[string]McpServerConfig, error) {
 			continue
 		}
 		var cfg McpServersConfig
-		if err := json.Unmarshal(data, &cfg); err != nil {
+		data, err = normalizeMcpConfigJSON(string(data))
+		if err == nil {
+			err = json.Unmarshal(data, &cfg)
+		}
+		if err != nil {
 			// 手改 mcp.json 写坏时不能无声吞掉，否则所有服务器"消失"而
 			// 用户只看到一片空白。走 config:warning 提示。
 			m.warnf("mcp.json parse failed; all MCP servers are unloaded: %v", err)
@@ -2050,13 +2054,16 @@ const defaultMcpConfigJSON = "{\"mcpServers\":{}}"
 // server 的已知字段类型必须合法（写错了当场报错，而不是等到启动才发现全部加载
 // 失败），其余键一律原样保留。键序由 map 序列化保证（升序）。
 func normalizeMcpConfigJSON(raw string) ([]byte, error) {
-	raw = strings.TrimSpace(raw)
+	raw = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "\ufeff"))
 	if raw == "" {
 		raw = defaultMcpConfigJSON
 	}
 	doc := map[string]json.RawMessage{}
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
 		return nil, fmt.Errorf("invalid MCP JSON: %w", err)
+	}
+	if doc == nil {
+		return nil, errors.New("invalid MCP JSON: root must be an object")
 	}
 	servers := map[string]json.RawMessage{}
 	if rawServers, ok := doc["mcpServers"]; ok {
@@ -2071,6 +2078,9 @@ func normalizeMcpConfigJSON(raw string) ([]byte, error) {
 		servers = map[string]json.RawMessage{}
 	}
 	for name, rawServer := range servers {
+		if strings.TrimSpace(name) == "" {
+			return nil, errors.New("invalid MCP server: name must not be blank")
+		}
 		// server 值是 null（而不是对象）也是写错：它会变成一个既无 command
 		// 也无 url 的"服务端"，启动时只报一句难以定位的错。
 		if trimmed := strings.TrimSpace(string(rawServer)); trimmed == "null" {
@@ -2079,6 +2089,37 @@ func normalizeMcpConfigJSON(raw string) ([]byte, error) {
 		var cfg McpServerConfig
 		if err := json.Unmarshal(rawServer, &cfg); err != nil {
 			return nil, fmt.Errorf("invalid MCP server %q: %w", name, err)
+		}
+		// encoding/json accepts null for strings/bools and null elements in
+		// string lists/maps. Reject those explicitly instead of changing data.
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(rawServer, &fields); err != nil {
+			return nil, fmt.Errorf("invalid MCP server %q: %w", name, err)
+		}
+		for _, key := range []string{"command", "args", "env", "cwd", "transport", "url", "headers", "startupTimeoutSec", "toolTimeoutSec", "enabled", "disabledTools"} {
+			value, ok := fields[key]
+			if !ok {
+				continue
+			}
+			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return nil, fmt.Errorf("invalid MCP server %q: %s must not be null", name, key)
+			}
+			var values []json.RawMessage
+			switch key {
+			case "args", "disabledTools":
+				_ = json.Unmarshal(value, &values)
+			case "env", "headers":
+				var entries map[string]json.RawMessage
+				_ = json.Unmarshal(value, &entries)
+				for _, entry := range entries {
+					values = append(values, entry)
+				}
+			}
+			for _, entry := range values {
+				if bytes.Equal(bytes.TrimSpace(entry), []byte("null")) {
+					return nil, fmt.Errorf("invalid MCP server %q: %s contains null", name, key)
+				}
+			}
 		}
 	}
 	rawServers, err := json.Marshal(servers)
