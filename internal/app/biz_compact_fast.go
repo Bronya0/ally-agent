@@ -10,8 +10,16 @@ import (
 
 const defaultFastCompactKeepRecentRounds = 4
 const fastCompactExcerptRunes = 384
+const fastCompactAssistantTokenBudget = 8192
 const fastCompactToolMarker = "[Fast-compacted tool result; partial excerpt, not the full output. Do not repeat mutations.]\n"
 const fastCompactReasoningMarker = "[Earlier reasoning excerpt; incomplete]\n"
+const fastCompactAssistantMarker = "[Earlier assistant reply; partial excerpt]\n"
+
+type fastCompactAssistantEdit struct {
+	Before  string `json:"before"`
+	After   string `json:"after"`
+	FromEnd int    `json:"fromEnd"`
+}
 
 // fastCompactCutoff retains complete assistant/tool batches, even when one batch
 // has parallel calls. Counting individual results could split a signed turn.
@@ -28,7 +36,30 @@ func fastCompactCutoff(history []openai.ChatCompletionMessage, keep int) int {
 			}
 		}
 	}
+	// A conversation without enough tool batches still accumulates long answers.
+	// Fall back to its latest complete, non-tool assistant replies.
+	seen = 0
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == openai.ChatMessageRoleAssistant && len(history[i].ToolCalls) == 0 && strings.TrimSpace(history[i].Content) != "" {
+			seen++
+			if seen == keep {
+				return i
+			}
+		}
+	}
 	return 0
+}
+
+// Earlier fast compactions stored reasoning excerpts inside ordinary text;
+// those suffixes were never shown as answer text in the UI.
+func fastCompactAnswerText(content string) string {
+	if before, _, found := strings.Cut(content, "\n\n"+fastCompactReasoningMarker); found {
+		return before
+	}
+	if strings.HasPrefix(content, fastCompactReasoningMarker) {
+		return ""
+	}
+	return content
 }
 
 // An excerpt is deterministic and labelled as incomplete; it is not an LLM
@@ -77,15 +108,56 @@ func (a *App) fastCompactHistory(ctx context.Context, sessionID string, history 
 				reasoningCount++
 			}
 		}
+		if m.Role == openai.ChatMessageRoleAssistant && m.Content != "" && !strings.HasPrefix(m.Content, fastCompactAssistantMarker) {
+			short := fastCompactAssistantMarker + fastCompactExcerpt(m.Content)
+			if estimateTokensFromText(short) < estimateTokensFromText(m.Content) {
+				m.Content = short
+			}
+		}
+	}
+	// Per-message excerpts alone still grow with conversation length. Keep the
+	// newest old answer text within one budget; empty bodies are removed by the
+	// ordinary history sanitizer, while tool calls keep their identity/order.
+	remaining := fastCompactAssistantTokenBudget
+	for i := cutoff - 1; i >= 0; i-- {
+		m := &out[i]
+		if m.Role != openai.ChatMessageRoleAssistant {
+			continue
+		}
+		cost := estimateTokensFromText(m.Content)
+		if cost > remaining {
+			m.Content = ""
+			m.ReasoningContent = ""
+		} else {
+			remaining -= cost
+		}
+	}
+	assistantCount := 0
+	assistantEdits := []fastCompactAssistantEdit{}
+	occurrences := map[string]int{}
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role != openai.ChatMessageRoleAssistant {
+			continue
+		}
+		before := fastCompactAnswerText(history[i].Content)
+		if before != "" {
+			occurrences[before]++
+		}
+		if i < cutoff && history[i].Content != out[i].Content {
+			assistantCount++
+			if before != "" {
+				assistantEdits = append(assistantEdits, fastCompactAssistantEdit{Before: before, After: out[i].Content, FromEnd: occurrences[before]})
+			}
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	replayChanged := a.reasoningStash.retainFastCompactTail(sessionID, history, out, cutoff)
-	changed := len(tools) > 0 || reasoningCount > 0 || replayChanged
+	changed := len(tools) > 0 || reasoningCount > 0 || assistantCount > 0 || replayChanged
 	if changed {
-		// Message count is unchanged, so the measurement anchor cannot detect
-		// this rewrite itself. Read-cache hits must also stop hiding old files.
+		// Rewrites must invalidate measurement anchors even when the message
+		// count stays unchanged. Read-cache hits must stop hiding old files too.
 		a.clearContextAnchor(sessionID)
 		a.invalidateSessionReadCache(sessionID)
 		a.saveHistory(sessionID, out)
@@ -98,6 +170,7 @@ func (a *App) fastCompactHistory(ctx context.Context, sessionID string, history 
 		"tier": "fast", "changed": changed,
 		"keepRecent":    defaultFastCompactKeepRecentRounds,
 		"toolSummaries": tools, "reasoningCount": reasoningCount,
+		"assistantEdits": assistantEdits, "assistantCount": assistantCount,
 		"tokensBefore": tokensBefore, "tokensAfter": tokensAfter,
 	}, nil
 }

@@ -57,6 +57,16 @@ Public License v3. See the LICENSE file for details.
           <MessageOutlined />
         </button>
       </n-dropdown>
+      <button
+        type="button"
+        class="export-icon-btn"
+        :title="$t('chat.memory.hint')"
+        :aria-label="$t('chat.memory.title')"
+        :disabled="memoryDisabled || isPlaceholder"
+        @click.stop="$emit('remember')"
+      >
+        <BookOutlined />
+      </button>
     </span>
   </div>
 </template>
@@ -66,6 +76,7 @@ import { computed } from 'vue';
 import ExportOutlined from '@vicons/antd/ExportOutlined';
 import MessageOutlined from '@vicons/antd/MessageOutlined';
 import CopyOutlined from '@vicons/antd/CopyOutlined';
+import BookOutlined from '@vicons/antd/BookOutlined';
 
 // 本轮统计行（时长 / cache / tokens / 导出按钮）。数据由 run:done 一次性下发，
 // 落在本轮最后一条 assistant 消息上（App.vue 的 assistantMessageForRun），
@@ -77,8 +88,9 @@ const props = defineProps({
   isLastAnswer: { type: Boolean, default: false },
   exportOptions: { type: Array, default: () => [] },
   quickMessageOptions: { type: Array, default: () => [] },
+  memoryDisabled: { type: Boolean, default: false },
 });
-defineEmits(['export', 'quickMessage', 'copySummary']);
+defineEmits(['export', 'quickMessage', 'copySummary', 'remember']);
 
 // 流式期间这条行是占位：只占高度、内容不可见（内容是一个不换行空格），
 // run:done 把时长填进来之后同一位置变可见。可见与否由鼠标悬停控制，见
@@ -164,9 +176,14 @@ const tokenSpeed = computed(() => {
   --wails-draggable: no-drag;
 }
 
-.export-icon-btn:hover {
+.export-icon-btn:hover:not(:disabled) {
   color: var(--ally-text-high);
   background: var(--ally-hover-strong);
+}
+
+.export-icon-btn:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 
 .export-icon-btn svg {

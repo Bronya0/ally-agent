@@ -110,9 +110,11 @@ Public License v3. See the LICENSE file for details.
           :is-last-answer="roundStatsOwner(msg, index) === lastAnswerMessage"
           :export-options="exportOptions"
           :quick-message-options="quickMessageOptions"
+          :memory-disabled="memoryDisabled"
           @export="(key) => $emit('export', key, roundStatsOwner(msg, index))"
           @quick-message="(key) => $emit('quickMessage', key)"
           @copy-summary="copyFinalSummary"
+          @remember="$emit('remember')"
         />
         </template>
         <div v-if="messages.length === 0" class="empty-chat">
@@ -170,6 +172,7 @@ const props = defineProps({
   // 当前正在跑的那一轮 id（会话空闲时为空串）。统计占位行按它留位，见
   // roundStatsOwner。
   inFlightRunId: { type: String, default: '' },
+  memoryDisabled: { type: Boolean, default: false },
 });
 
 const pageVisible = useDocumentVisible();
@@ -258,6 +261,7 @@ function roundStatsMemo(msg, index) {
     owner.runOutputTokens ?? '',
     owner.roundDurationMs ?? '',
     owner === lastAnswerMessage.value,
+    props.memoryDisabled,
   ].join('|');
 }
 
@@ -289,6 +293,9 @@ function messageRenderMemo(msg, index) {
     // 渲染条件依赖它，翻转时必须触发父级重渲染；之后不再变化，流式正文
     // 增量依旧只由 StreamingMarkdownBody 子组件渲染。
     msg?.hasBody === true,
+    // Fast compaction can shorten an already completed answer again when its
+    // older-text budget fills up. Only those non-streaming rows read content.
+    msg?.fastCompacted === true ? msg.content : '',
     // 统计行：内容取自本轮统计归属消息（未必是本条），签名带上它那些字段。
     roundStatsMemo(msg, index),
     msg?.streaming,
@@ -375,6 +382,7 @@ defineEmits([
   'toggleTool',
   'export',
   'quickMessage',
+  'remember',
   'submitAsk',
   'deleteUserMessage',
 ]);

@@ -29,6 +29,44 @@ test('fast compaction replaces only matching tool cards and releases specialized
 });
 
 const source = readFileSync(new URL('../App.vue', import.meta.url), 'utf8');
+test('old answer edits preserve identical recent replies and remove empty body flags', () => {
+  const old = { role: 'assistant', content: 'same answer', hasBody: true, runId: 'old' };
+  const recent = { role: 'assistant', content: 'same answer', hasBody: true, runId: 'recent' };
+  const notice = { role: 'assistant', system: true, content: 'same answer' };
+  const user = { role: 'user', content: 'same answer' };
+  const session = { messages: [old, user, notice, recent] };
+  applyFastCompaction(session, { assistantEdits: [{ before: 'same answer', after: '', fromEnd: 2 }] }, 'compacted');
+  assert.equal(session.messages[0].content, '');
+  assert.equal(session.messages[0].hasBody, false);
+  assert.equal(session.messages[0].fastCompacted, true);
+  assert.equal(session.messages[0].runId, 'old');
+  assert.equal(session.messages[1], user);
+  assert.equal(session.messages[2], notice);
+  assert.equal(session.messages[3], recent);
+});
+
+test('subsequent compaction can discard an earlier excerpt without changing message positions', () => {
+  const session = { messages: [{ role: 'assistant', content: 'original', hasBody: true, roundDurationText: '1s' }] };
+  applyFastCompaction(session, { assistantEdits: [{ before: 'original', after: 'partial excerpt', fromEnd: 1 }] }, 'compacted');
+  assert.equal(session.messages[0].content, 'partial excerpt');
+  assert.equal(session.messages[0].hasBody, true);
+  applyFastCompaction(session, { assistantEdits: [{ before: 'partial excerpt', after: '', fromEnd: 1 }] }, 'compacted');
+  assert.equal(session.messages.length, 1);
+  assert.equal(session.messages[0].content, '');
+  assert.equal(session.messages[0].hasBody, false);
+  assert.equal(session.messages[0].roundDurationText, '1s');
+});
+
+test('legacy backend reasoning suffixes match both original UI replies and synchronized excerpts', () => {
+  const suffix = '\n\n[Earlier reasoning excerpt; incomplete]\npartial reasoning';
+  for (const content of ['answer', 'answer' + suffix]) {
+    const session = { messages: [{ role: 'assistant', content, hasBody: true }] };
+    applyFastCompaction(session, { assistantEdits: [{ before: 'answer', after: '', fromEnd: 1 }] }, 'compacted');
+    assert.equal(session.messages[0].content, '');
+    assert.equal(session.messages[0].hasBody, false);
+  }
+});
+
 test('persisted fast read excerpts survive the ordinary read-output cleanup', () => {
   const from = source.indexOf('function sanitizeStoredMessage(msg)');
   const to = source.indexOf('function sessionFromIndexEntry', from);

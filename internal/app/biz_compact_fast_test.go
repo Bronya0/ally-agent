@@ -110,6 +110,117 @@ func TestFastCompactDoesNotGrowSmallHistory(t *testing.T) {
 	}
 }
 
+func TestFastCompactBoundsOldAnswersWithoutToolCalls(t *testing.T) {
+	a := newApiTestApp(t)
+	a.modelHistoryCodec = nil
+	var history []openai.ChatCompletionMessage
+	for i := 0; i < 80; i++ {
+		history = append(history,
+			openai.ChatCompletionMessage{Role: "user", Content: fmt.Sprintf("requirement-%d", i)},
+			openai.ChatCompletionMessage{Role: "assistant", Content: fmt.Sprintf("answer-%d ", i) + strings.Repeat("已确认结论", 2000)},
+		)
+	}
+	a.saveHistory("answers", history)
+	result, err := a.FastCompactSession("answers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := a.loadSessionHistoryCopy("answers")
+	var users, answers []openai.ChatCompletionMessage
+	for _, m := range after {
+		if m.Role == "user" {
+			users = append(users, m)
+		} else if m.Role == "assistant" {
+			answers = append(answers, m)
+		}
+	}
+	if len(users) != 80 || len(answers) >= 80 || len(answers) <= 4 {
+		t.Fatal("expected all requirements, a bounded excerpt window, and four full recent answers")
+	}
+	for i, m := range users {
+		if m.Content != fmt.Sprintf("requirement-%d", i) {
+			t.Fatal("user requirements changed")
+		}
+	}
+	oldTokens := 0
+	for _, m := range answers[:len(answers)-4] {
+		oldTokens += estimateTokensFromText(m.Content)
+		if !strings.HasPrefix(m.Content, fastCompactAssistantMarker) || !utf8.ValidString(m.Content) {
+			t.Fatal("old answers must be labelled UTF-8 excerpts")
+		}
+	}
+	if oldTokens > fastCompactAssistantTokenBudget || !reflect.DeepEqual(after[len(after)-8:], history[len(history)-8:]) {
+		t.Fatal("old answer budget exceeded or recent conversation changed")
+	}
+	if result["assistantCount"] != 76 || len(result["assistantEdits"].([]fastCompactAssistantEdit)) != 76 {
+		t.Fatal("answer edits did not cover all old answers")
+	}
+	second, err := a.FastCompactSession("answers")
+	if err != nil || second["changed"] != false || !reflect.DeepEqual(after, a.loadSessionHistoryCopy("answers")) {
+		t.Fatalf("repeated answer compaction must be a no-op: %v %v", second, err)
+	}
+}
+
+func TestFastCompactAnswerEditsDistinguishRepeatedRecentText(t *testing.T) {
+	a := newApiTestApp(t)
+	a.modelHistoryCodec = nil
+	text := strings.Repeat("same answer ", 1000)
+	var history []openai.ChatCompletionMessage
+	for i := 0; i < 6; i++ {
+		history = append(history, openai.ChatCompletionMessage{Role: "user", Content: "question"}, openai.ChatCompletionMessage{Role: "assistant", Content: text})
+	}
+	a.saveHistory("repeated", history)
+	result, err := a.FastCompactSession("repeated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edits := result["assistantEdits"].([]fastCompactAssistantEdit)
+	if len(edits) != 2 || edits[0].FromEnd != 5 || edits[1].FromEnd != 6 || edits[0].Before != text {
+		t.Fatal("repeated text edits must identify old occurrences, not recent ones")
+	}
+}
+
+func TestFastCompactNativeAnswersRewriteAndReindexRetainedTail(t *testing.T) {
+	a := newApiTestApp(t)
+	a.modelHistoryCodec = nil
+	var history []openai.ChatCompletionMessage
+	for i := 0; i < 80; i++ {
+		history = append(history, openai.ChatCompletionMessage{Role: "assistant", Content: fmt.Sprintf("answer-%d ", i) + strings.Repeat("结论", 2000)})
+	}
+	a.saveHistory("native-answers", history)
+	cfg := ConfigState{Model: "m", APIFormat: apiFormatOpenAIResponses, responsesPromptCacheKey: openAIResponsesPromptCacheKey("native-answers")}
+	key := reasoningReplayKey(cfg, "m")
+	for _, i := range []int{0, 75, 79} {
+		message, _ := json.Marshal(map[string]any{"type": "message", "id": fmt.Sprintf("msg_%d", i), "role": "assistant", "phase": "final_answer", "content": []map[string]any{{"type": "output_text", "text": history[i].Content}}})
+		a.reasoningStash.appendResponses(key, responsesMessageKey(i, history[i]), []json.RawMessage{message})
+	}
+	if _, err := a.FastCompactSession("native-answers"); err != nil {
+		t.Fatal(err)
+	}
+	after := a.loadSessionHistoryCopy("native-answers")
+	payload := a.reasoningStash.get(key)
+	if len(payload.responsesNative) != 2 || len(after) >= len(history) {
+		t.Fatal("omitted answers retained native output or history was not bounded")
+	}
+	for _, offset := range []int{4, 0} {
+		i := len(after) - 1 - offset
+		output := payload.nativeResponses(i, after[i])
+		if len(output) != 1 || !responsesOutputReplayable(output) {
+			t.Fatal("retained native output was not reindexed after old answers were removed")
+		}
+		var message struct {
+			Phase   string
+			Content []struct{ Text string }
+		}
+		if err := json.Unmarshal(output[0], &message); err != nil || message.Phase != "final_answer" || len(message.Content) != 1 || message.Content[0].Text != after[i].Content {
+			t.Fatal("native output bypassed answer truncation or lost its phase")
+		}
+	}
+	if result, err := a.FastCompactSession("native-answers"); err != nil || result["changed"] != false {
+		t.Fatal("native answer rewrite must be idempotent")
+	}
+}
+
 func TestFastCompactGuardsAndCancellation(t *testing.T) {
 	a := newApiTestApp(t)
 	a.runSessions["run"] = "running"
@@ -205,7 +316,7 @@ func TestFastCompactNativeResponsesPreservesPhaseAndCalls(t *testing.T) {
 		json.RawMessage(`{"type":"message","id":"msg_old","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"original answer","annotations":[]}]}`),
 		json.RawMessage(`{"type":"function_call","id":"fc_old","call_id":"call-old","name":"read","arguments":"{}"}`),
 	}
-	clean, changed := compactNativeResponses(output, "bounded reasoning excerpt")
+	clean, changed := compactNativeResponses(output, "bounded reasoning excerpt", nil)
 	if !changed || len(clean) != 3 || string(clean[1]) != string(output[1]) || string(clean[2]) != string(output[2]) {
 		t.Fatal("native compaction changed tool identity or retained reasoning")
 	}
@@ -224,7 +335,7 @@ func TestFastCompactNativeResponsesPreservesPhaseAndCalls(t *testing.T) {
 	if string(output[0]) != `{"type":"reasoning","id":"rs_old","encrypted_content":"old-secret"}` {
 		t.Fatal("copy-on-write snapshot was mutated")
 	}
-	_, repeated := compactNativeResponses(clean, "")
+	_, repeated := compactNativeResponses(clean, "", nil)
 	if repeated {
 		t.Fatal("already compacted native history must be idempotent")
 	}

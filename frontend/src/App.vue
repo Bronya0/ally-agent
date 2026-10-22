@@ -97,6 +97,7 @@ Public License v3. See the LICENSE file for details.
                       :messages="displayMessagesForTab(tab)"
                       :active="workspacePageActive && tab.id === activeWorkspaceId"
                       :in-flight-run-id="inFlightRunIdFor(tab)"
+                      :memory-disabled="sessionBusy(sessionForWorkspaceTab(tab))"
                       :render-fn="renderMarkdown"
                       :fmt-k="fmtK"
                       :tools="availableTools"
@@ -106,6 +107,7 @@ Public License v3. See the LICENSE file for details.
                       @toggle-tool="toggleToolExpand"
                       @export="(key, msg) => handleExportOption(tab.sessionId, key, msg)"
                       @quick-message="(key) => sendQuickMessage(tab.sessionId, key)"
+                      @remember="handleProjectMemory(tab.sessionId)"
                       @submit-ask="(msg, answers) => submitAskResponse(tab.sessionId, msg, answers)"
                       @send-suggest="(label) => sendSuggest(tab.sessionId, label)"
                       @delete-user-message="(msg) => handleDeleteUserMessage(tab.sessionId, msg)"
@@ -348,7 +350,7 @@ Public License v3. See the LICENSE file for details.
                   @show-sessions="showSessionList"
                   @compact-context="handleCompactCommand"
                   @compact-context-fast="handleFastCompactCommand"
-                  @compact-lessons="handleLessonsCommand"
+                  @compact-lessons="handleLessonCommand"
                   @update-codegraph="handleCodegraphCommand"
                 />
               </div>
@@ -2132,6 +2134,18 @@ const REMEMBER_PROMPT = `Save durable knowledge from this conversation.
 4. Use read first if an existing memory from the global memory index may already cover this project (paths are absolute under ~/.ally_agent/memories).
 5. Save or update the knowledge with create (new) or edit (existing, using the version from read). Use an explicit stable path such as ~/.ally_agent/memories/project-knowledge/<workspace-or-project-name>.md.
 6. Do not edit AGENTS.md for this command. Do not save speculation, one-off task status, transient bug-fix notes, or generic advice.`;
+
+// The round-stats memory action deliberately writes project AGENTS.md; /note
+// keeps its existing global-memory scope. Use the normal foreground run so
+// reads, version-checked edits, cancellation and results stay visible.
+const PROJECT_MEMORY_PROMPT = `Preserve the valuable long-term conclusions from this conversation in AGENTS.md at the current workspace root, so future conversations can continue without repeating this work.
+
+1. Review all available conversation context, including compaction summaries and relevant tool results. Extract confirmed project facts, architecture and design decisions with their reasons, verified findings, important dependencies and recurring pitfalls, and reusable artifacts with their project-relative paths and purpose. Include decisions about rejected approaches only when their reasons will prevent repeated work. Do not invent details that are no longer available; verify relevant files when needed.
+2. Read the workspace-root AGENTS.md first. Preserve its existing instructions and unrelated sections. Merge matching knowledge into existing entries; use a concise Project Memory / 项目记忆 section for conclusions that do not fit elsewhere. If the file is absent, create it. Only write this workspace's AGENTS.md, never a user-level file or a separate memory file.
+3. Date each new or materially updated memory with the local date supplied below, in YYYY-MM-DD format. Keep original dates on unchanged entries. Merge duplicates and replace superseded conclusions instead of appending a new diary entry on every click.
+4. Capture the conclusion, its important conditions or rationale, and concrete file paths or evidence when relevant. Link to existing reports, scripts and other artifacts instead of copying their full contents. Keep the result concise enough to be useful in every future conversation while preserving distinct valuable conclusions.
+5. Do not save speculation, credentials, raw conversation logs, temporary progress, generic advice or routine test output. Do not promote uncertain findings into project rules. Do not change application code, commit or push as part of this action.
+6. Use create for a missing file, or edit with the version returned by read for an existing file. If no new durable knowledge qualifies, explain that and leave the file unchanged. After a successful write, briefly state what was added or updated and link to AGENTS.md. Do not claim it was saved unless the write succeeded.`;
 
 const LESSON_PROMPT = `Review this conversation for reusable pitfalls: hidden framework behavior, project-specific conventions, or environment traps that would likely trip again in another file or task.
 
@@ -5483,7 +5497,7 @@ function bindRuntimeEvents() {
       applyFastCompaction(session, data, t('app.compact.fastChip'));
       session.messages.push({ role: 'assistant', system: true, content: t('app.compact.fastDone', {
         keep: data.keepRecent, tools: Object.keys(data.toolSummaries || {}).length,
-        reasoning: data.reasoningCount,
+        reasoning: data.reasoningCount, assistant: data.assistantCount || 0,
       }) });
       scheduleSaveSessions();
     }
@@ -6179,34 +6193,45 @@ function formatReadChip(lines) {
   return lineCount > 0 ? '· ' + lineCount + ' line' + (lineCount !== 1 ? 's' : '') : '';
 }
 
+// 消息上的动作（suggest 磁贴 / 快捷消息）都带着「这条消息属于哪个会话」：动作必须
+// 落在那一个会话上，而下面的命令处理器读的都是 activeSession。切目标必须走
+// switchWorkspaceTab —— 它同步写好 activeWorkspaceId 与 activeSessionId，并等该
+// 会话的历史加载完；只写 activeWorkspaceId 会留下「Tab 换了、会话没换」的错位。
+async function focusSessionTab(sessionId) {
+  const tab = workspaceTabs.value.find(t => t.sessionId === sessionId);
+  if (!tab) return false;
+  if (activeWorkspaceId.value !== tab.id || activeSessionId.value !== sessionId) {
+    await switchWorkspaceTab(tab.id);
+  }
+  return activeWorkspaceId.value === tab.id && activeSessionId.value === sessionId;
+}
+
 // suggest chip 点击：直接发送 label 作为新消息
 async function sendSuggest(sessionId, label) {
-  const tab = workspaceTabs.value.find(t => t.sessionId === sessionId);
-  if (tab && activeWorkspaceId.value !== tab.id) {
-    activeWorkspaceId.value = tab.id;
-  }
+  if (!(await focusSessionTab(sessionId))) return;
   promptText.value = label;
   await nextTick();
   await sendPrompt();
 }
 
+// 快捷消息里这三项与对应斜杠命令是同一条实现：都走 builtinCommandHandlers，
+// 聊天记录里只留一句短标签，长提示词只进模型历史。早先这三个 key 走的是
+// sendPrompt，把整段英文提示词当成用户消息显示了出来。
+const QUICK_MESSAGE_COMMANDS = { push: 'push', review: 'review', lesson: 'lesson' };
+
 async function sendQuickMessage(sessionId, key) {
-  if (key === 'push') {
-    const tab = workspaceTabs.value.find(t => t.sessionId === sessionId);
-    if (tab && activeWorkspaceId.value !== tab.id) {
-      activeWorkspaceId.value = tab.id;
-    }
-    await handlePushCommand();
+  const command = QUICK_MESSAGE_COMMANDS[key];
+  if (!command) {
+    await sendSuggest(sessionId, key === 'continue'
+      ? t('chat.quickMessage.continueMessage')
+      : t('chat.plainSpeak.message'));
     return;
   }
-  const message = key === 'continue'
-    ? t('chat.quickMessage.continueMessage')
-    : key === 'review'
-      ? REVIEW_PROMPT
-      : key === 'lesson'
-        ? LESSON_PROMPT
-        : t('chat.plainSpeak.message');
-  await sendSuggest(sessionId, message);
+  // 命令要开新的一轮，目标会话必须已经在活动位上；切不过去（Tab 已关）就什么都不做，
+  // 绝不能把动作落到另一个会话上。
+  if (!(await focusSessionTab(sessionId))) return;
+  const handler = builtinCommandHandlers[command];
+  if (handler) await handler();
 }
 
 async function sendPrompt(opts) {
@@ -7929,9 +7954,30 @@ async function switchToSession(index) {
 
 
 
+// 内置命令（/init /note /lesson /review /push、/<技能名> 激活）起一轮 run 的统一
+// 入口。它们原先各自拼 config，工作区只取 config.workspace；临时 Tab 与知识库 Tab
+// 的路径并不写进 config.workspace，命令会静默打到上一个聊天工作区上。口径与
+// sendPrompt 一致：目标工作区由当前 Tab 解析。
+function commandRunConfig(session) {
+  const activeTab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
+  const workspace = runWorkspaceForTab(activeTab);
+  if (workspace) session.workspace = workspace;
+  return { ...chatConfig.value, extraRoots: session.extraRoots || [], workspace: workspace || config.workspace };
+}
+
+// 命令要开新的一轮：压缩正在改写这段历史、或本轮还在跑时都不能开 —— 这正是
+// sendPrompt 里那两条判据（运行中只能注入，压缩中两者都不行）。快捷消息与斜杠
+// 命令共用这条路径，判据就写在这里，别在调用点各判一次。
+function commandRunBlocked(session) {
+  if (!sessionBusy(session)) return false;
+  message.warning(t('app.compact.wait'));
+  return true;
+}
+
 function handleInitCommand() {
   const session = activeSession.value;
   if (!session) return;
+  if (commandRunBlocked(session)) return;
   // Send the init exploration prompt to the LLM
   session.messages.push({ role: 'user', content: INIT_PROMPT, done: true });
   if (isDefaultSessionTitle(session)) {
@@ -7947,7 +7993,7 @@ function handleInitCommand() {
 
   const text = INIT_PROMPT;
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: text, messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: text, messages: history, config: commandRunConfig(session) })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -7956,9 +8002,42 @@ function handleInitCommand() {
     });
 }
 
+async function handleProjectMemory(sessionId) {
+  if (!(await focusSessionTab(sessionId))) return;
+  const session = activeSession.value;
+  if (!session || session.id !== sessionId || commandRunBlocked(session)) return;
+  const runConfig = commandRunConfig(session);
+  if (!runConfig.workspace) {
+    message.warning(t('app.workspace.required'));
+    return;
+  }
+  const now = new Date();
+  const date = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+  const history = session.messages
+    .filter(isModelHistoryMessage)
+    .map((msg) => ({ role: msg.role, content: msg.content }));
+  history.push({ role: 'user', content: `${PROJECT_MEMORY_PROMPT}\n\nLocal date for this memory update: ${date}.` });
+  session.messages.push({ role: 'user', content: t('app.projectMemory.visibleText'), done: true });
+  markSessionRunning(session);
+  scrollMessagesToBottom({}, session.id);
+  saveSessions();
+
+  try {
+    await StartChat({ sessionId: session.id, message: '', messages: history, config: runConfig });
+  } catch (err) {
+    markTransientTurn(session);
+    session.runId = '';
+    session.isRunning = false;
+    session.messages.push({ role: 'assistant', content: t('app.projectMemory.failed', { error: err }), error: true, transientTurn: true });
+    scrollMessagesToBottom({}, session.id);
+    saveSessions();
+  }
+}
+
 function handleRememberCommand() {
   const session = activeSession.value;
   if (!session) return;
+  if (commandRunBlocked(session)) return;
   const history = session.messages
     .filter(isModelHistoryMessage)
     .map((msg) => ({ role: msg.role, content: msg.content }));
@@ -7973,7 +8052,7 @@ function handleRememberCommand() {
   saveSessions();
 
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: '', messages: history, config: commandRunConfig(session) })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -7985,6 +8064,7 @@ function handleRememberCommand() {
 function handleLessonCommand() {
   const session = activeSession.value;
   if (!session) return;
+  if (commandRunBlocked(session)) return;
   const history = session.messages
     .filter(isModelHistoryMessage)
     .map((msg) => ({ role: msg.role, content: msg.content }));
@@ -7999,7 +8079,7 @@ function handleLessonCommand() {
   saveSessions();
 
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: '', messages: history, config: commandRunConfig(session) })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -8011,6 +8091,7 @@ function handleLessonCommand() {
 function handleReviewCommand() {
   const session = activeSession.value;
   if (!session) return;
+  if (commandRunBlocked(session)) return;
   const history = session.messages
     .filter(isModelHistoryMessage)
     .map((msg) => ({ role: msg.role, content: msg.content }));
@@ -8025,7 +8106,7 @@ function handleReviewCommand() {
   saveSessions();
 
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: '', messages: history, config: commandRunConfig(session) })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -8037,6 +8118,7 @@ function handleReviewCommand() {
 function handlePushCommand() {
   const session = activeSession.value;
   if (!session) return;
+  if (commandRunBlocked(session)) return;
   const history = session.messages
     .filter(isModelHistoryMessage)
     .map((msg) => ({ role: msg.role, content: msg.content }));
@@ -8051,7 +8133,7 @@ function handlePushCommand() {
   saveSessions();
 
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: '', messages: history, config: commandRunConfig(session) })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -8173,7 +8255,7 @@ async function handleFastCompactCommand() {
       applyFastCompaction(session, result, t('app.compact.fastChip'));
       session.messages.push({ role: 'assistant', system: true, content: t('app.compact.fastDone', {
         keep: result.keepRecent, tools: Object.keys(result.toolSummaries || {}).length,
-        reasoning: result.reasoningCount,
+        reasoning: result.reasoningCount, assistant: result.assistantCount || 0,
       }) });
       persistCompletedSession(session);
     }
@@ -8193,13 +8275,8 @@ async function handleFastCompactCommand() {
 
 // 上下文气泡的两个维护按钮（压缩教训 / 更新图谱）：都是普通前台 prompt，
 // agent 自己用 read/edit 执行（版本校验、原子写、过程可见、随 run 可取消），
-// 不走任何后台直连 LLM 通道。
-function handleLessonsCommand() {
-  const session = activeSession.value;
-  if (!session) return;
-  sendSuggest(session.id, LESSON_PROMPT);
-}
-
+// 不走任何后台直连 LLM 通道。「压缩教训」直接复用 /lesson 那套实现（与快捷消息
+// 的「记录教训」是同一个动作），聊天记录里同样只留一句短标签。
 function handleCodegraphCommand() {
   const session = activeSession.value;
   if (!session) return;
@@ -8281,7 +8358,7 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
         scrollMessagesToBottom();
         if (chatConfig.value.authType === 'chatgpt_oauth' || chatConfig.value.apiKey || (Array.isArray(chatConfig.value.apiKeys) && chatConfig.value.apiKeys.length)) {
           markSessionRunning(session);
-          await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: modelContent }], config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } }).catch(() => {
+          await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: modelContent }], config: commandRunConfig(session) }).catch(() => {
             markTransientTurn(session);
             session.isRunning = false;
           });

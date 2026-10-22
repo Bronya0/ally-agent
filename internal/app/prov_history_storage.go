@@ -95,7 +95,7 @@ func (a *App) modelHistoryForStorage(sessionID string, disk, history []openai.Ch
 	// the same bounded, protected payload; never introduce a plaintext fallback.
 	fastCompacted := false
 	for _, m := range history {
-		if strings.HasPrefix(m.Content, fastCompactToolMarker) || strings.Contains(m.Content, fastCompactReasoningMarker) {
+		if strings.HasPrefix(m.Content, fastCompactToolMarker) || strings.HasPrefix(m.Content, fastCompactAssistantMarker) || strings.Contains(m.Content, fastCompactReasoningMarker) {
 			fastCompacted = true
 			break
 		}

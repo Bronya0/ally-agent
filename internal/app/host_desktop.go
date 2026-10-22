@@ -61,6 +61,15 @@ func (a *App) SetApp(app *application.App) {
 		a.wails = &wailsAppHandle{}
 	}
 	a.wails.app = app
+	if app != nil {
+		// Hide before service cleanup on all desktop quit paths. Native/custom
+		// closes still wait for frontend writes (or their timeout) before Quit.
+		app.OnShutdown(func() {
+			if a.wails.window != nil && a.wails.window.IsVisible() {
+				a.wails.window.Hide()
+			}
+		})
+	}
 }
 
 // SetWindow injects the main window handle. Used for initial window sizing
