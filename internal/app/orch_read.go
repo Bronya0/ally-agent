@@ -394,15 +394,17 @@ func (a *App) batchReadOneWithConfig(cfg ConfigState, path string, req ReadFileR
 	if readErr != nil {
 		return BatchReadResultItem{Req: req, Path: path, Error: readErr.Error(), ErrorCode: batchReadErrorCode(readErr)}
 	}
-	content := result.Content
-	contentFormat := result.ContentFormat
+	return batchReadResultItem(req, result)
+}
+
+func batchReadResultItem(req ReadFileRequest, result ReadFileResult) BatchReadResultItem {
 	return BatchReadResultItem{
 		Req:                   req,
 		Path:                  result.Path,
-		Content:               content,
+		Content:               result.Content,
 		Text:                  result.Text,
 		Kind:                  result.Kind,
-		ContentFormat:         contentFormat,
+		ContentFormat:         result.ContentFormat,
 		Type:                  result.Type,
 		Editable:              result.Editable,
 		StartLine:             result.StartLine,
@@ -619,15 +621,24 @@ func collectReadImages(name string, result *toolResult) []readImageCandidate {
 	}
 }
 
-func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFileResult, error) {
-	path, err := resolveReadPath(cfg, req.Path)
+// resolveReadFilePath is shared by explicit reads and edit recovery snapshots.
+func resolveReadFilePath(cfg ConfigState, requested string) (string, error) {
+	path, err := resolveReadPath(cfg, requested)
 	if err != nil {
-		return ReadFileResult{}, err
+		return "", err
 	}
 	// 密钥/凭据位置不读：与命令围栏、grep 共用同一份判定（pathutil）——模型能把
 	// 密钥喂给下一个请求，而出网是开着的。
 	if blocked, reason := blockedSensitiveRead(path); blocked {
-		return ReadFileResult{}, codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：这是密钥/凭据位置（%s），不读。\n检测到的目标：%s\n处理方式：确需该凭据请你自己手动查看；让 Ally 干活时用专门的工具（例如 ssh_cluster）。", reason, filepath.ToSlash(path)))
+		return "", codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：这是密钥/凭据位置（%s），不读。\n检测到的目标：%s\n处理方式：确需该凭据请你自己手动查看；让 Ally 干活时用专门的工具（例如 ssh_cluster）。", reason, filepath.ToSlash(path)))
+	}
+	return path, nil
+}
+
+func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFileResult, error) {
+	path, err := resolveReadFilePath(cfg, req.Path)
+	if err != nil {
+		return ReadFileResult{}, err
 	}
 	// Detect images by content before the text read (which rejects binary).
 	// Only probe when the extension plausibly matches an image so non-image
@@ -665,6 +676,12 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 	if err != nil {
 		return ReadFileResult{}, err
 	}
+	return buildTextReadResult(displayPathForConfig(cfg, path), data, info.Size(), req)
+}
+
+// buildTextReadResult formats an already decoded text snapshot. Its version and
+// preview always describe the same bytes, including when edit supplies them.
+func buildTextReadResult(path string, data []byte, size int64, req ReadFileRequest) (ReadFileResult, error) {
 	text, ending, _ := normalizeText(data)
 	preview, err := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
 		StartLine:     req.StartLine,
@@ -680,7 +697,7 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 	// hashing the same data twice (10 MB file ≈ 20-30 ms per SHA-256 pass).
 	sha256Hex, version := hashBytesAndVersion(data)
 	return ReadFileResult{
-		Path:                  displayPathForConfig(cfg, path),
+		Path:                  path,
 		Content:               preview.Content,
 		RawContent:            preview.RawContent,
 		Kind:                  "text",
@@ -692,7 +709,7 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 		TotalLines:            preview.TotalLines,
 		SHA256:                sha256Hex,
 		Version:               version,
-		Size:                  info.Size(),
+		Size:                  size,
 		LineEnding:            ending,
 		Truncated:             preview.Truncated,
 		TruncatedLines:        preview.TruncatedLines,

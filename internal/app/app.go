@@ -327,11 +327,11 @@ type App struct {
 	sshKnownHostsPath string
 
 	sshClustersMu         sync.RWMutex
-	sshClusters           map[string]SSHServerNode
+	sshClusters           map[string]SSHServerNode // keyed by stable node ID; alias is only a lookup/display name
 	sshSessionApprovalsMu sync.Mutex
 	sshSessionApprovals   map[string]map[string]bool
 	sshWorkspaceAllowedMu sync.RWMutex
-	sshWorkspaceAllowed   map[string]map[string]bool
+	sshWorkspaceAllowed   map[string]map[string]bool // workspace -> node ID -> allowed
 
 	// remoteReadBatchFn overrides the multi-file read_batch ssh session for
 	// tests; nil means the real remoteReadRawBatch implementation runs. See

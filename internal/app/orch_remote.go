@@ -183,7 +183,7 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 	// In interactive sessions, enforce Tab isolation and Connection Approval (Approval Gate 2)
 	if sessionID != "" {
 		// 1. Tab-level authorization (prevent lateral movement / diffusion)
-		if isRegistered && !a.IsServerAuthorizedForWorkspace(workspace, serverKey) {
+		if isRegistered && !a.IsServerAuthorizedForWorkspace(workspace, serverNode.ID) {
 			return remoteTarget{}, codedToolError("E_SERVER_UNAUTHORIZED",
 				fmt.Errorf("server %q is not authorized for current workspace tab; please authorize it in the tab footer or request access via ssh_cluster", serverKey))
 		}

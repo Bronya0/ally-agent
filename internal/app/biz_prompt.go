@@ -56,7 +56,7 @@ func sharedEditRules() string {
 		"2. Batch edits by risk and size: one `edit` call per file with all independent changes; send edits to different files in the same response. Keep very large replacements in their own round to avoid output truncation.\n" +
 		"   - Never send multiple file-mutation tool calls for the same path in one stage. Each file edit is atomic: one failed `oldText` match or stale `version` rejects the entire call.\n" +
 		"   - Do not use patch, unified diff, or git apply.\n" +
-		"3. On `E_NO_MATCH` or `E_VERSION_MISMATCH`, first re-read the affected file/range and rebuild from exact fresh text; never retry guessed text.\n"
+		"3. On source, version, or line-range errors (including `E_NO_MATCH` and `E_VERSION_MISMATCH`), rebuild from exact current text; never retry guessed text. A failed edit may attach a complete read-format snapshot with its current `version`: use it directly. If no snapshot is attached, or the needed source is missing/truncated, re-read the affected file/range first.\n"
 }
 
 // sharedRemoteAccessRules keeps remote access on the authorized SSH tool path

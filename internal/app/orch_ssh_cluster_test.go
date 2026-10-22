@@ -38,6 +38,8 @@ func waitForAskID(t *testing.T, app *App) string {
 //   - Approval successfully registers and authorizes the server.
 func TestSSHClusterToolListAndAddApproval(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
 	ws := filepath.Join(tempDir, "test-workspace")
@@ -166,6 +168,8 @@ func TestSSHClusterToolListAndAddApproval(t *testing.T) {
 // 3. A direct, unregistered SSH target still prompts on first connection.
 func TestRemoteTargetTabAuthorizationAndConnectionApproval(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
 	ws := filepath.Join(tempDir, "test-ws")
@@ -291,6 +295,8 @@ func TestDestructiveCommandDetection(t *testing.T) {
 // 凭据抹掉。
 func TestSSHClusterAddExistingAliasOnlyAuthorizes(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
 	ws := filepath.Join(tempDir, "ws")
@@ -361,6 +367,8 @@ func TestSSHClusterAddExistingAliasOnlyAuthorizes(t *testing.T) {
 // 路径而不是猜一个。
 func TestSSHClusterEndpointLookup(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
 
@@ -391,6 +399,8 @@ func TestSSHClusterEndpointLookup(t *testing.T) {
 // 失败提示还会把原因归到“密码不对”）。
 func TestRemoteTargetEndpointSpellingUsesRegisteredNode(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
 	ws := filepath.Join(tempDir, "ws")
@@ -427,6 +437,8 @@ func TestRemoteTargetEndpointSpellingUsesRegisteredNode(t *testing.T) {
 // 删节点/清密码后旧密码还会继续用到 12h TTL 到期。
 func TestSSHClustersPurgeCredentialOnNodeChange(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
 

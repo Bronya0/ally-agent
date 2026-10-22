@@ -138,7 +138,6 @@ func (a *App) executeSSHClusterTool(ctx context.Context, sessionID, workspace st
 
 		// User approved (or non-interactive test run). Save node.
 		node := SSHServerNode{
-			ID:          newID(),
 			Alias:       alias,
 			Host:        host,
 			Port:        port,
@@ -184,7 +183,7 @@ func (a *App) authorizeExistingSSHServer(ctx context.Context, sessionID, workspa
 	if workspace == "" {
 		return nil, codedToolError("E_BAD_SSH_CLUSTER", errors.New("no workspace for the current session; authorize the server from the chat footer instead"))
 	}
-	if a.IsServerAuthorizedForWorkspace(workspace, node.Alias) {
+	if a.IsServerAuthorizedForWorkspace(workspace, node.ID) {
 		return map[string]any{
 			"ok":                true,
 			"alias":             node.Alias,
@@ -245,7 +244,7 @@ func (a *App) authorizeExistingSSHServer(ctx context.Context, sessionID, workspa
 		return nil, codedToolError("E_APPROVAL_REJECTED", fmt.Errorf("user rejected authorizing server %q for the current workspace", node.Alias))
 	}
 
-	a.AuthorizeServerForWorkspace(workspace, node.Alias)
+	a.AuthorizeServerForWorkspace(workspace, node.ID)
 	return map[string]any{
 		"ok":                true,
 		"alias":             node.Alias,

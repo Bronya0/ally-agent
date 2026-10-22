@@ -477,7 +477,7 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 			}
 			start, end, rangeErr := lineRangeOffsetsWithIndex(index, len(content), startLine, endLine)
 			if rangeErr != nil {
-				return nil, 0, toolerrors.New("E_RANGE_OOB", fmt.Errorf("change %d lineRange %q: %w; re-read and use numbered lines from the current version", i+1, change.LineRange, rangeErr))
+				return nil, 0, toolerrors.New("E_RANGE_OOB", fmt.Errorf("change %d lineRange %q: %w; use numbered lines from the attached current snapshot, or re-read if none is attached", i+1, change.LineRange, rangeErr))
 			}
 			if lengthErr := rejectPreviewTruncatedRange(content[start:end], startLine); lengthErr != nil {
 				return nil, 0, toolerrors.New("E_BAD_ARGS", fmt.Errorf("change %d lineRange %q: %w", i+1, change.LineRange, lengthErr))
@@ -583,12 +583,12 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 					return nil, 0, fuzzyErr
 				}
 				if !found {
-					return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the current file; re-read and copy exact source text without the displayed N: line prefixes", i+1))
+					return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the current file; copy exact source text from the attached current snapshot, or re-read if none is attached; omit displayed N: line prefixes", i+1))
 				}
 				located = append(located, locatedChange{index: i, start: match.start, end: match.end, newText: match.newText})
 				warnings = append(warnings, fmt.Sprintf("change %d matched uniquely after Unicode normalization (quotes/dashes/spaces); the touched block was rewritten in normalized form", i+1))
 			} else {
-				return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the current file; re-read and copy exact source text without the displayed N: line prefixes", i+1))
+				return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the current file; copy exact source text from the attached current snapshot, or re-read if none is attached; omit displayed N: line prefixes", i+1))
 			}
 		case 1:
 			match := indentMatches[0]

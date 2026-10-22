@@ -20,12 +20,13 @@ import (
 	"time"
 
 	"ally-dev/internal/tools/sshclient"
+	"github.com/google/uuid"
 )
 
 // SSHServerNode represents a persisted SSH server node in the cluster inventory.
 type SSHServerNode struct {
-	ID          string `json:"id"`
-	Alias       string `json:"alias"`               // Unique identifier, e.g. "dev-node-1"
+	ID          string `json:"id"`                  // Stable local identity, independent of alias and endpoint
+	Alias       string `json:"alias"`               // Editable, case-insensitively unique nickname
 	Group       string `json:"group"`               // 分组（纯归类，仅供 UI 折叠/筛选）；空值归入 sshUngroupedGroup
 	Host        string `json:"host"`                // IP or domain, e.g. "192.168.1.101"
 	Port        int    `json:"port"`                // Port, default 22
@@ -109,6 +110,7 @@ type SSHServerSummary struct {
 }
 
 type sshClusterStore struct {
+	Version          int                 `json:"version"` // v2: workspaceAllowed contains IDs, v1/absent: aliases
 	Servers          []SSHServerNode     `json:"servers"`
 	WorkspaceAllowed map[string][]string `json:"workspaceAllowed,omitempty"`
 }
@@ -175,7 +177,7 @@ func (a *App) findSSHServerByEndpoint(host, port string) (SSHServerNode, bool) {
 		if queryUser != "" && queryUser != strings.ToLower(strings.TrimSpace(node.Username)) {
 			continue
 		}
-		if found && !strings.EqualFold(match.Alias, node.Alias) {
+		if found && match.ID != node.ID {
 			return SSHServerNode{}, false
 		}
 		match = node
@@ -211,38 +213,73 @@ func (a *App) loadSSHClusters() error {
 
 	a.sshClustersMu.Lock()
 	defer a.sshClustersMu.Unlock()
-	if a.sshClusters == nil {
-		a.sshClusters = make(map[string]SSHServerNode, len(store.Servers))
+	servers := make(map[string]SSHServerNode, len(store.Servers))
+	aliases := make(map[string]string, len(store.Servers))
+	idCounts := make(map[string]int, len(store.Servers))
+	for _, s := range store.Servers {
+		idCounts[strings.TrimSpace(s.ID)]++
 	}
+	migrated := store.Version < 2
 	for _, s := range store.Servers {
 		s = normalizeSSHServerNode(s)
 		alias := strings.ToLower(strings.TrimSpace(s.Alias))
-		if alias != "" {
-			a.sshClusters[alias] = s
+		if alias == "" {
+			continue
 		}
+		s.ID = strings.TrimSpace(s.ID)
+		if s.ID == "" || idCounts[s.ID] > 1 {
+			// Repair ambiguous IDs rather than letting one node overwrite another.
+			// v2 grants to duplicate IDs are discarded below; legacy alias grants
+			// can still be migrated unambiguously.
+			for {
+				s.ID = "ssh_" + uuid.NewString()
+				if _, exists := servers[s.ID]; idCounts[s.ID] == 0 && !exists {
+					break
+				}
+			}
+			migrated = true
+		}
+		if previousID := aliases[alias]; previousID != "" {
+			delete(servers, previousID)
+		}
+		servers[s.ID] = s
+		aliases[alias] = s.ID
 	}
 
 	a.sshWorkspaceAllowedMu.Lock()
-	if a.sshWorkspaceAllowed == nil {
-		a.sshWorkspaceAllowed = make(map[string]map[string]bool)
-	}
-	for ws, aliases := range store.WorkspaceAllowed {
+	allowed := make(map[string]map[string]bool, len(store.WorkspaceAllowed))
+	for ws, refs := range store.WorkspaceAllowed {
 		cleanWS := normalizeWorkspaceKey(ws)
 		if cleanWS == "" {
 			continue
 		}
-		if a.sshWorkspaceAllowed[cleanWS] == nil {
-			a.sshWorkspaceAllowed[cleanWS] = make(map[string]bool, len(aliases))
+		if allowed[cleanWS] == nil {
+			allowed[cleanWS] = make(map[string]bool, len(refs))
 		}
-		for _, alias := range aliases {
-			clean := strings.ToLower(strings.TrimSpace(alias))
-			if _, exists := a.sshClusters[clean]; exists {
-				a.sshWorkspaceAllowed[cleanWS][clean] = true
+		for _, ref := range refs {
+			id := strings.TrimSpace(ref)
+			if store.Version < 2 {
+				id = aliases[strings.ToLower(id)]
+			}
+			if _, exists := servers[id]; exists {
+				allowed[cleanWS][id] = true
 			}
 		}
 	}
+	previousServers, previousAllowed := a.sshClusters, a.sshWorkspaceAllowed
+	a.sshClusters, a.sshWorkspaceAllowed = servers, allowed
 	a.sshWorkspaceAllowedMu.Unlock()
 
+	// Persist generated IDs before exposing them, so restarting cannot change
+	// identity or lose a migrated selection even when no user edit follows.
+	if migrated {
+		if err := a.saveSSHClustersLocked(); err != nil {
+			a.sshWorkspaceAllowedMu.Lock()
+			a.sshClusters, a.sshWorkspaceAllowed = previousServers, previousAllowed
+			a.sshWorkspaceAllowedMu.Unlock()
+			return fmt.Errorf("migrate ssh clusters: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -263,9 +300,9 @@ func (a *App) saveSSHClustersLocked() error {
 			continue
 		}
 		var list []string
-		for alias, allowed := range m {
-			if allowed {
-				list = append(list, alias)
+		for id, allowed := range m {
+			if _, exists := a.sshClusters[id]; allowed && exists {
+				list = append(list, id)
 			}
 		}
 		if len(list) > 0 {
@@ -276,6 +313,7 @@ func (a *App) saveSSHClustersLocked() error {
 	a.sshWorkspaceAllowedMu.RUnlock()
 
 	store := sshClusterStore{
+		Version:          2,
 		Servers:          servers,
 		WorkspaceAllowed: wsAllowed,
 	}
@@ -323,12 +361,12 @@ func (a *App) ListAuthorizedSSHServers(workspace string) []SSHServerSummary {
 
 	normWS := normalizeWorkspaceKey(workspace)
 	a.sshWorkspaceAllowedMu.RLock()
+	defer a.sshWorkspaceAllowedMu.RUnlock()
 	allowedMap := a.sshWorkspaceAllowed[normWS]
-	a.sshWorkspaceAllowedMu.RUnlock()
 
 	res := make([]SSHServerSummary, 0, len(a.sshClusters))
-	for alias, s := range a.sshClusters {
-		if allowedMap != nil && !allowedMap[alias] {
+	for id, s := range a.sshClusters {
+		if allowedMap != nil && !allowedMap[id] {
 			continue
 		}
 		// If no explicit whitelist is configured yet, or server is whitelisted:
@@ -357,8 +395,29 @@ func (a *App) ListAuthorizedSSHServers(workspace string) []SSHServerSummary {
 func (a *App) GetSSHServer(alias string) (SSHServerNode, bool) {
 	a.sshClustersMu.RLock()
 	defer a.sshClustersMu.RUnlock()
-	node, ok := a.sshClusters[strings.ToLower(strings.TrimSpace(alias))]
-	return node, ok
+	return a.sshServerByAliasLocked(alias)
+}
+
+// Model-facing aliases stay case-insensitive; persisted identity is always ID.
+// Caller holds sshClustersMu.
+func (a *App) sshServerByAliasLocked(alias string) (SSHServerNode, bool) {
+	alias = strings.TrimSpace(alias)
+	for _, node := range a.sshClusters {
+		if strings.EqualFold(strings.TrimSpace(node.Alias), alias) {
+			return node, true
+		}
+	}
+	return SSHServerNode{}, false
+}
+
+// UI calls use IDs. Accept aliases for older callers and model tools, but
+// canonicalize them at the boundary; never store aliases as grants again.
+func (a *App) sshServerByRefLocked(ref string) (SSHServerNode, bool) {
+	ref = strings.TrimSpace(ref)
+	if node, ok := a.sshClusters[ref]; ok {
+		return node, true
+	}
+	return a.sshServerByAliasLocked(ref)
 }
 
 // SaveSSHServer creates or updates a server node in the cluster.
@@ -377,19 +436,11 @@ func (a *App) SaveSSHServer(node SSHServerNode) error {
 		return errors.New("server description is required")
 	}
 	node.Description = strings.TrimSpace(node.Description)
+	node.Alias = strings.TrimSpace(node.Alias)
 	node = normalizeSSHServerNode(node)
 	if node.Port <= 0 {
 		node.Port = 22
 	}
-	if node.ID == "" {
-		node.ID = newID()
-	}
-	now := time.Now().UnixMilli()
-	if node.CreatedAtMS == 0 {
-		node.CreatedAtMS = now
-	}
-	node.UpdatedAtMS = now
-
 	if err := a.storeSSHServerLocked(alias, node); err != nil {
 		return err
 	}
@@ -404,14 +455,51 @@ func (a *App) storeSSHServerLocked(alias string, node SSHServerNode) error {
 	if a.sshClusters == nil {
 		a.sshClusters = make(map[string]SSHServerNode)
 	}
-	// 节点是凭据的唯一来源：更新前后两套端点都要丢掉缓存槽，否则用户刚清掉的
-	// 密码/口令会继续用到 TTL 到期（见 orch_ssh_cluster.go 的 purgeHost）。
-	if previous, ok := a.sshClusters[alias]; ok {
+	node.ID = strings.TrimSpace(node.ID)
+	previous, updating := a.sshClusters[node.ID]
+	if node.ID != "" && !updating {
+		return errors.New("server no longer exists; reload the server list")
+	}
+	if sameAlias, exists := a.sshServerByAliasLocked(alias); exists {
+		if node.ID != "" && node.ID != sameAlias.ID {
+			return fmt.Errorf("server alias %q is already in use", node.Alias)
+		}
+		// Legacy callers and imports upsert by alias without changing identity.
+		previous, updating = sameAlias, true
+		node.ID = sameAlias.ID
+	}
+	if node.ID == "" {
+		for {
+			node.ID = "ssh_" + uuid.NewString()
+			if _, exists := a.sshClusters[node.ID]; !exists {
+				break
+			}
+		}
+	}
+	if updating {
+		node.CreatedAtMS = previous.CreatedAtMS
+		node.CreatedBy = previous.CreatedBy
+	}
+	now := time.Now().UnixMilli()
+	if node.CreatedAtMS == 0 {
+		node.CreatedAtMS = now
+	}
+	node.UpdatedAtMS = now
+	a.sshClusters[node.ID] = node
+	if err := a.saveSSHClustersLocked(); err != nil {
+		if updating {
+			a.sshClusters[node.ID] = previous
+		} else {
+			delete(a.sshClusters, node.ID)
+		}
+		return err
+	}
+	// Invalidate both endpoints, including when the nickname was changed.
+	if updating {
 		a.sshCredentials.purgeHost(nodeSSHHost(previous))
 	}
-	a.sshClusters[alias] = node
 	a.sshCredentials.purgeHost(nodeSSHHost(node))
-	return a.saveSSHClustersLocked()
+	return nil
 }
 
 // emitSSHClustersChanged 通知 UI 集群清单/工作区授权变了（模型也能改这份清单），
@@ -421,10 +509,9 @@ func (a *App) emitSSHClustersChanged() {
 	a.emit("ssh:clusters-changed", map[string]any{})
 }
 
-// DeleteSSHServer removes a server node by alias.
-func (a *App) DeleteSSHServer(alias string) error {
-	alias = strings.ToLower(strings.TrimSpace(alias))
-	if err := a.deleteSSHServerLocked(alias); err != nil {
+// DeleteSSHServer removes a server node by ID (legacy aliases also accepted).
+func (a *App) DeleteSSHServer(ref string) error {
+	if err := a.deleteSSHServerLocked(ref); err != nil {
 		return err
 	}
 	a.emitSSHClustersChanged()
@@ -432,32 +519,31 @@ func (a *App) DeleteSSHServer(alias string) error {
 }
 
 // deleteSSHServerLocked 删节点并失效它的凭据槽位。调用方不得持有锁。
-func (a *App) deleteSSHServerLocked(alias string) error {
+func (a *App) deleteSSHServerLocked(ref string) error {
 	a.sshClustersMu.Lock()
 	defer a.sshClustersMu.Unlock()
-	if a.sshClusters == nil {
+	previous, ok := a.sshServerByRefLocked(ref)
+	if !ok {
 		return nil
 	}
-	if previous, ok := a.sshClusters[alias]; ok {
-		a.sshCredentials.purgeHost(nodeSSHHost(previous))
-	}
-	delete(a.sshClusters, alias)
+	delete(a.sshClusters, previous.ID)
 	// 删除节点必须同时撤销所有工作区的授权，避免计数残留以及同名节点继承旧授权。
 	a.sshWorkspaceAllowedMu.Lock()
 	for ws, allowed := range a.sshWorkspaceAllowed {
-		delete(allowed, alias)
+		delete(allowed, previous.ID)
 		if len(allowed) == 0 {
 			delete(a.sshWorkspaceAllowed, ws)
 		}
 	}
 	a.sshWorkspaceAllowedMu.Unlock()
+	a.sshCredentials.purgeHost(nodeSSHHost(previous))
 	return a.saveSSHClustersLocked()
 }
 
-// AuthorizeServerForWorkspace grants a workspace access to a server alias.
+// AuthorizeServerForWorkspace grants access by ID (legacy aliases accepted).
 func (a *App) AuthorizeServerForWorkspace(workspace, alias string) {
 	normWS := normalizeWorkspaceKey(workspace)
-	alias = strings.ToLower(strings.TrimSpace(alias))
+	alias = strings.TrimSpace(alias)
 	if normWS == "" || alias == "" {
 		return
 	}
@@ -469,7 +555,8 @@ func (a *App) AuthorizeServerForWorkspace(workspace, alias string) {
 func (a *App) authorizeServerForWorkspaceLocked(normWS, alias string) {
 	a.sshClustersMu.Lock()
 	defer a.sshClustersMu.Unlock()
-	if _, exists := a.sshClusters[alias]; !exists {
+	node, exists := a.sshServerByRefLocked(alias)
+	if !exists {
 		return
 	}
 
@@ -480,13 +567,14 @@ func (a *App) authorizeServerForWorkspaceLocked(normWS, alias string) {
 	if a.sshWorkspaceAllowed[normWS] == nil {
 		a.sshWorkspaceAllowed[normWS] = make(map[string]bool)
 	}
-	a.sshWorkspaceAllowed[normWS][alias] = true
+	a.sshWorkspaceAllowed[normWS][node.ID] = true
 	a.sshWorkspaceAllowedMu.Unlock()
 
 	_ = a.saveSSHClustersLocked()
 }
 
-// SetWorkspaceAllowedServers updates the full list of allowed server aliases for a workspace.
+// SetWorkspaceAllowedServers replaces a workspace's grants with canonical IDs.
+// Legacy aliases are accepted and resolved once at this boundary.
 func (a *App) SetWorkspaceAllowedServers(workspace string, aliases []string) error {
 	normWS := normalizeWorkspaceKey(workspace)
 	if normWS == "" {
@@ -504,16 +592,15 @@ func (a *App) setWorkspaceAllowedServersLocked(normWS string, aliases []string) 
 	a.sshClustersMu.Lock()
 	defer a.sshClustersMu.Unlock()
 
+	m := make(map[string]bool, len(aliases))
+	for _, ref := range aliases {
+		if node, exists := a.sshServerByRefLocked(ref); exists {
+			m[node.ID] = true
+		}
+	}
 	a.sshWorkspaceAllowedMu.Lock()
 	if a.sshWorkspaceAllowed == nil {
 		a.sshWorkspaceAllowed = make(map[string]map[string]bool)
-	}
-	m := make(map[string]bool, len(aliases))
-	for _, alias := range aliases {
-		clean := strings.ToLower(strings.TrimSpace(alias))
-		if _, exists := a.sshClusters[clean]; exists {
-			m[clean] = true
-		}
 	}
 	a.sshWorkspaceAllowed[normWS] = m
 	a.sshWorkspaceAllowedMu.Unlock()
@@ -521,7 +608,7 @@ func (a *App) setWorkspaceAllowedServersLocked(normWS string, aliases []string) 
 	return a.saveSSHClustersLocked()
 }
 
-// GetWorkspaceAllowedServers returns the list of server aliases allowed for a workspace.
+// GetWorkspaceAllowedServers returns stable server IDs allowed for a workspace.
 func (a *App) GetWorkspaceAllowedServers(workspace string) []string {
 	normWS := normalizeWorkspaceKey(workspace)
 	a.sshClustersMu.RLock()
@@ -536,21 +623,23 @@ func (a *App) GetWorkspaceAllowedServers(workspace string) []string {
 		return nil
 	}
 	res := make([]string, 0, len(m))
-	for alias, allowed := range m {
-		if _, exists := a.sshClusters[alias]; allowed && exists {
-			res = append(res, alias)
+	for id, allowed := range m {
+		if _, exists := a.sshClusters[id]; allowed && exists {
+			res = append(res, id)
 		}
 	}
+	sort.Strings(res)
 	return res
 }
 
-// IsServerAuthorizedForWorkspace checks if a server alias is allowed in the workspace.
+// IsServerAuthorizedForWorkspace checks a node's ID (legacy aliases accepted).
 func (a *App) IsServerAuthorizedForWorkspace(workspace, alias string) bool {
 	normWS := normalizeWorkspaceKey(workspace)
-	alias = strings.ToLower(strings.TrimSpace(alias))
+	alias = strings.TrimSpace(alias)
 	a.sshClustersMu.RLock()
 	defer a.sshClustersMu.RUnlock()
-	if _, exists := a.sshClusters[alias]; !exists {
+	node, exists := a.sshServerByRefLocked(alias)
+	if !exists {
 		return false
 	}
 	a.sshWorkspaceAllowedMu.RLock()
@@ -562,7 +651,7 @@ func (a *App) IsServerAuthorizedForWorkspace(workspace, alias string) bool {
 	if m == nil {
 		return false
 	}
-	return m[alias]
+	return m[node.ID]
 }
 
 // IsServerConnectionApproved checks if connection to alias was approved in this session.

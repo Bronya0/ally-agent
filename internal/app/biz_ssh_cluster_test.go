@@ -67,6 +67,8 @@ func TestSSHClusterServerOrderSurvivesDeleteAndReload(t *testing.T) {
 // 3. Tab/Workspace scoping enforces Default Deny (unauthorized servers are omitted).
 func TestSSHClusterPersistenceAndScoping(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
 
@@ -200,9 +202,10 @@ func TestSSHClusterDeleteRevokesWorkspaceGrants(t *testing.T) {
 	}
 	for _, instance := range []*App{a, reloaded} {
 		for _, ws := range workspaces {
+			keep, _ := instance.GetSSHServer("keep")
 			allowed := instance.GetWorkspaceAllowedServers(ws)
-			if len(allowed) != 1 || allowed[0] != "keep" {
-				t.Fatalf("allowed servers = %v, want [keep]", allowed)
+			if len(allowed) != 1 || allowed[0] != keep.ID {
+				t.Fatalf("allowed IDs = %v, want [%s]", allowed, keep.ID)
 			}
 			if instance.IsServerAuthorizedForWorkspace(ws, "remove") {
 				t.Fatal("replacement node inherited a deleted node's grant")
@@ -243,11 +246,13 @@ func TestSSHClusterIgnoresMissingWorkspaceGrants(t *testing.T) {
 				a.AuthorizeServerForWorkspace(ws, " KEEP ")
 				a.AuthorizeServerForWorkspace(ws, "missing")
 			case "stale memory":
-				a.sshWorkspaceAllowed[ws] = map[string]bool{"keep": true, "missing": true}
+				keep, _ := a.GetSSHServer("keep")
+				a.sshWorkspaceAllowed[ws] = map[string]bool{keep.ID: true, "missing": true}
 			}
+			keep, _ := a.GetSSHServer("keep")
 			allowed := a.GetWorkspaceAllowedServers(ws)
-			if len(allowed) != 1 || allowed[0] != "keep" {
-				t.Fatalf("allowed servers = %v, want [keep]", allowed)
+			if len(allowed) != 1 || allowed[0] != keep.ID {
+				t.Fatalf("allowed IDs = %v, want [%s]", allowed, keep.ID)
 			}
 			if a.IsServerAuthorizedForWorkspace(ws, "missing") {
 				t.Fatal("missing node should not be authorized")
@@ -261,6 +266,9 @@ func TestSSHClusterIgnoresMissingWorkspaceGrants(t *testing.T) {
 
 // TestSSHSessionApprovalLifecycle tests session-level connection approval.
 func TestSSHSessionApprovalLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 	app := NewApp()
 	sessionID := "sess-123"
 	alias := "dev-box"
@@ -301,6 +309,8 @@ func TestNormalizeSSHAuthType(t *testing.T) {
 	}
 
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
 	if err := app.SaveSSHServer(SSHServerNode{Alias: "legacy", Host: "127.0.0.1", Username: "user", Password: "pw", Description: "test"}); err != nil {
@@ -319,6 +329,8 @@ func TestNormalizeSSHAuthType(t *testing.T) {
 
 func TestLoadSSHClustersInfersLegacyKeyMode(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
 	legacy := `{"servers":[{"id":"legacy-id","alias":"legacy-key","host":"127.0.0.1","username":"user","keyPath":"id_ed25519","password":"key-passphrase","description":"test"},{"id":"agent-id","alias":"stale-agent","host":"127.0.0.2","username":"user","authType":"agent","keyPath":"stale-key","password":"stale-secret","description":"test"}]}`
@@ -340,6 +352,8 @@ func TestLoadSSHClustersInfersLegacyKeyMode(t *testing.T) {
 
 func TestSSHServerGroupDefaultsToUngrouped(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
 	// 历史文件没有 group 字段：加载后必须落到「未分组」，而不是空串。
@@ -371,6 +385,8 @@ func TestSSHServerGroupDefaultsToUngrouped(t *testing.T) {
 
 func TestTestSSHServerValidationAndLookup(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir)
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
 

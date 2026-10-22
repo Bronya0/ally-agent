@@ -75,7 +75,7 @@ Public License v3. See the LICENSE file for details.
           <div class="ssh-card-list">
             <div
               v-for="s in group.servers"
-              :key="s.alias"
+              :key="s.id"
               class="ally-row-card ssh-node-card"
             >
               <div class="ally-row-main">
@@ -105,7 +105,7 @@ Public License v3. See the LICENSE file for details.
                   <n-popconfirm
                     :positive-text="t('common.delete')"
                     :negative-text="t('common.cancel')"
-                    @positive-click="handleDelete(s.alias)"
+                    @positive-click="handleDelete(s.id)"
                   >
                     <template #trigger>
                       <n-button size="tiny" quaternary type="error">
@@ -140,7 +140,6 @@ Public License v3. See the LICENSE file for details.
           <n-input
             v-model:value="form.alias"
             :placeholder="$t('sshCluster.modal.aliasPlaceholder')"
-            :disabled="editorMode === 'edit'"
           />
           <span v-if="editorMode === 'clone'" class="ssh-form-hint">
             {{ $t('sshCluster.modal.cloneHint', { alias: cloneSourceAlias }) }}
@@ -410,6 +409,11 @@ async function saveForm() {
     message.warning(t('sshCluster.modal.aliasRequired'));
     return;
   }
+  if (servers.value.some((s) => s.id !== form.id
+    && s.alias.trim().toLowerCase() === form.alias.trim().toLowerCase())) {
+    message.warning(t('sshCluster.modal.aliasInUse'));
+    return;
+  }
   if (!form.host.trim()) {
     message.warning(t('sshCluster.modal.hostRequired'));
     return;
@@ -472,9 +476,9 @@ async function saveForm() {
   }
 }
 
-async function handleDelete(alias) {
+async function handleDelete(id) {
   try {
-    await DeleteSSHServer(alias);
+    await DeleteSSHServer(id);
     message.success(t('sshCluster.deleted'));
     await loadServers();
     emit('servers-changed');

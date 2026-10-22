@@ -9,6 +9,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -26,6 +27,9 @@ type toolResult struct {
 	// Warnings carries non-fatal notices (e.g. ignored unknown tool
 	// arguments) on successful results; error results never set it.
 	Warnings []string `json:"warnings,omitempty"`
+	// Recovery source is private to the model's tool message. Never serialize
+	// it into UI/API results or concatenate it into the displayed error.
+	modelRead *BatchReadResult
 }
 
 // codedToolError wraps err with a stable tool error code. It delegates to the
@@ -43,7 +47,12 @@ func toolErrorResult(err error) toolResult {
 	if err == nil {
 		return toolResult{OK: true}
 	}
-	return toolResult{OK: false, Error: err.Error(), ErrorCode: toolErrorCode(err), Details: toolerrors.Details(err)}
+	result := toolResult{OK: false, Error: err.Error(), ErrorCode: toolErrorCode(err), Details: toolerrors.Details(err)}
+	var recovery *editRecoveryError
+	if errors.As(err, &recovery) {
+		result.modelRead = &recovery.read
+	}
+	return result
 }
 
 // toolResultSummary returns a short human-readable summary for a tool result.
@@ -203,6 +212,18 @@ func toolResultSummary(name string, result *toolResult) string {
 // even when a tool's compact payload drops the top-level envelope fields.
 func compactToolResultForModel(name string, result toolResult, fullJSON string) string {
 	if !result.OK {
+		if result.modelRead != nil {
+			// Render the ordinary error first so its existing diagnostics/budget
+			// survive. Keep the complete, separately bounded read block outside
+			// error compaction; neither history nor the original prefix changes.
+			read := result.modelRead
+			result.modelRead = nil
+			// Appending a read block makes this a text result rather than JSON.
+			// The standard error prefix also preserves provider error detection.
+			return "error: edit failed\n" + compactToolResultForModel(name, result, fullJSON) +
+				"\nCurrent source for the failed file is attached below in read format. Use this snapshot and its version to rebuild the edit; no extra read is needed for this file.\n" +
+				renderReadResultForModel(*read)
+		}
 		if len(fullJSON) <= maxModelToolOutput {
 			return fullJSON
 		}

@@ -36,6 +36,46 @@ type preparedFileEdit struct {
 	result  EditResult
 }
 
+const maxEditRecoveryBytes = 8 * 1024
+
+// editRecoveryError keeps the read payload out of Error(), JSON and UI events.
+// Only the model renderer consumes it, in the original failed tool result.
+type editRecoveryError struct {
+	err  error
+	read BatchReadResult
+}
+
+func (e *editRecoveryError) Error() string { return e.err.Error() }
+func (e *editRecoveryError) Unwrap() error { return e.err }
+
+// withEditRecovery is called only after edit has read a text snapshot and passed
+// the write fence. Reuse read's guards and formatting, without another disk read
+// or the session read cache (recovery must actually show the source).
+func withEditRecovery(cfg ConfigState, path string, data []byte, size int64, err error) error {
+	switch toolErrorCode(err) {
+	case "E_VERSION_MISMATCH", "E_NO_MATCH", "E_MULTI_MATCH", "E_RANGE_OOB", "E_BAD_ARGS":
+		// E_BAD_ARGS from ApplyBatchTextChanges is its truncated-line guard.
+	default:
+		return err
+	}
+	if size > maxEditRecoveryBytes || len(data) > maxEditRecoveryBytes {
+		return err
+	}
+	readPath, guardErr := resolveReadFilePath(cfg, path)
+	if guardErr != nil || documentExtensionInRead(readPath) {
+		return err
+	}
+	snapshot, readErr := buildTextReadResult(displayPathForConfig(cfg, readPath), data, size, ReadFileRequest{})
+	if readErr != nil || snapshot.Truncated || len(snapshot.TruncatedLines) > 0 {
+		return err
+	}
+	recovery := BatchReadResult{Files: []BatchReadResultItem{batchReadResultItem(ReadFileRequest{}, snapshot)}}
+	if len(renderReadResultForModel(recovery)) > maxEditRecoveryBytes {
+		return err
+	}
+	return &editRecoveryError{err: err, read: recovery}
+}
+
 // toEditChanges converts the model-facing change shape into the engine's own. The
 // wire struct carries newText as a plain string, and so does the engine: an empty
 // string means "delete this text", which is why the declaration marks newText
@@ -55,6 +95,9 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 	for i, filePlan := range plan.Files {
 		file := filePlan.Edit
 		resolved := filePlan.ResolvedPath
+		if _, err := resolveReadFilePath(cfg, resolved); err != nil {
+			return MultiEditResult{}, err
+		}
 		before, info, err := readTextFile(resolved)
 
 		if err != nil {
@@ -62,12 +105,14 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		}
 		beforeHash, beforeVersion := hashBytesAndVersion(before)
 		if !strings.EqualFold(file.Version, beforeVersion) {
-			return MultiEditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("file %s expected version %s, current %s; re-read all affected files before retrying", file.Path, file.Version, beforeVersion))
+			err := codedToolError("E_VERSION_MISMATCH", fmt.Errorf("file %s expected version %s, current %s; use the current source and version before retrying (read again if no snapshot is attached)", file.Path, file.Version, beforeVersion))
+			return MultiEditResult{}, withEditRecovery(cfg, resolved, before, info.Size(), err)
 		}
 		text, ending, hadBOM := normalizeText(before)
 		applied, replacements, err := edit.ApplyBatchTextChanges(text, toEditChanges(file.Changes))
 		if err != nil {
-			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
+			err = fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
+			return MultiEditResult{}, withEditRecovery(cfg, resolved, before, info.Size(), err)
 		}
 		after := encodeText(applied.Content, ending, hadBOM)
 		diff, removed, added := edit.GenerateEditDiffPreviewWithCounts(text, applied.Content, maxToolOutput)
@@ -127,14 +172,18 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		if bytes.Equal(item.before, item.after) {
 			continue
 		}
-		current, _, err := readTextFile(item.path)
+		current, info, err := readTextFile(item.path)
 		if err != nil || !strings.EqualFold(hashVersion(current), item.result.BeforeVersion) {
 			rollbackErr := rollback()
-			msg := fmt.Sprintf("file changed before commit: %s", item.display)
+			msg := fmt.Sprintf("file changed before commit: %s; use the current source and version before retrying (read again if no snapshot is attached)", item.display)
 			if rollbackErr != nil {
 				msg += "; rollback errors: " + rollbackErr.Error()
 			}
-			return MultiEditResult{}, codedToolError("E_VERSION_MISMATCH", errors.New(msg))
+			commitErr := codedToolError("E_VERSION_MISMATCH", errors.New(msg))
+			if err == nil {
+				commitErr = withEditRecovery(cfg, item.path, current, info.Size(), commitErr)
+			}
+			return MultiEditResult{}, commitErr
 		}
 		if err := sandboxedWriteFile(spec, roots, item.path, item.after, item.perm); err != nil {
 			rollbackErr := rollback()

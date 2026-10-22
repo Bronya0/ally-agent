@@ -75,17 +75,17 @@ Public License v3. See the LICENSE file for details.
               </div>
               <div
                 v-for="s in group.servers"
-                :key="s.alias"
+                :key="s.id"
                 class="ssh-auth-row"
                 :class="{ 'risk-high': s.riskLevel === 'high', disabled: !allowedSshServersReady }"
-                @click="toggleServer(s.alias)"
+                @click="toggleServer(s.id)"
               >
                 <span class="ssh-auth-col-check">
                   <n-checkbox
-                    :checked="isServerAllowed(s.alias)"
+                    :checked="isServerAllowed(s.id)"
                     :disabled="!allowedSshServersReady"
                     @click.stop
-                    @update:checked="() => toggleServer(s.alias)"
+                    @update:checked="() => toggleServer(s.id)"
                   />
                 </span>
                 <span class="ssh-auth-cell-alias" :title="s.alias">
@@ -137,8 +137,9 @@ const draftReady = ref(false);
 // 首次打开时的排序快照：仅打开那一刻的授权状态参与排序。
 const openOrderSnapshot = ref(null);
 
-function normAlias(alias) {
-  return String(alias || '').toLowerCase().trim();
+// 后端已将历史昵称授权迁为 ID；ID 不跟随改名，也不能转小写。
+function normServerID(id) {
+  return String(id || '').trim();
 }
 
 watch(
@@ -146,7 +147,7 @@ watch(
   (visible) => {
     if (visible) {
       draftAllowed.value = new Set(
-        (Array.isArray(props.allowedSshServers) ? props.allowedSshServers : []).map(normAlias),
+        (Array.isArray(props.allowedSshServers) ? props.allowedSshServers : []).map(normServerID),
       );
       draftReady.value = props.allowedSshServersReady;
       // 打开瞬间的授权快照只用来排一次序（已授权的置顶，组内保持原顺序）。
@@ -164,7 +165,7 @@ watch(
   (ready) => {
     if (props.show && ready && !draftReady.value) {
       draftAllowed.value = new Set(
-        (Array.isArray(props.allowedSshServers) ? props.allowedSshServers : []).map(normAlias),
+        (Array.isArray(props.allowedSshServers) ? props.allowedSshServers : []).map(normServerID),
       );
       openOrderSnapshot.value = new Set(draftAllowed.value);
       draftReady.value = true;
@@ -179,7 +180,7 @@ const sortedServers = computed(() => {
     .map((s, i) => ({
       s,
       i,
-      atOpen: snapshot.has(normAlias(s.alias)),
+      atOpen: snapshot.has(normServerID(s.id)),
     }))
     .sort((a, b) => {
       if (a.atOpen !== b.atOpen) return a.atOpen ? -1 : 1;
@@ -192,7 +193,7 @@ const filteredServers = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
   let list = props.sshServers;
   if (onlyAllowed.value) {
-    list = list.filter((s) => draftAllowed.value.has(normAlias(s.alias)));
+    list = list.filter((s) => draftAllowed.value.has(normServerID(s.id)));
   }
   if (!q) return list;
   return list.filter((s) => sshServerMatchesQuery(s, searchQuery.value));
@@ -206,13 +207,13 @@ watch(groupTabSetKey, () => {
   activeGroupTab.value = resolveActiveGroup(groupTabs.value, activeGroupTab.value);
 }, { immediate: true });
 
-function isServerAllowed(alias) {
-  return draftAllowed.value.has(normAlias(alias));
+function isServerAllowed(id) {
+  return draftAllowed.value.has(normServerID(id));
 }
 
-function toggleServer(alias) {
+function toggleServer(id) {
   if (!draftReady.value) return;
-  const key = normAlias(alias);
+  const key = normServerID(id);
   const next = new Set(draftAllowed.value);
   if (next.has(key)) {
     next.delete(key);

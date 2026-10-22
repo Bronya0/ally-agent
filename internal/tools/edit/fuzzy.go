@@ -153,7 +153,7 @@ func fuzzyLocateInNormalized(content, normContent, oldText, newText string, chan
 		// alternative, rewriting the whole touched block from normalized content, would
 		// silently replace bytes the model never mentioned.
 		return normalizedMatch{}, false, toolerrors.New("E_NO_MATCH", fmt.Errorf(
-			"change %d normalized match could not be mapped back onto the original bytes; re-read the file and include more surrounding text", changeIndex))
+			"change %d normalized match could not be mapped back onto the original bytes; use the attached current snapshot, or re-read if none is attached, and include more surrounding text", changeIndex))
 	}
 
 	// Splice: original bytes before the match, the new text, then the
