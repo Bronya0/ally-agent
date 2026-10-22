@@ -225,14 +225,15 @@ type App struct {
 	// summary request on every remaining step of the run; the tier stops once the
 	// count reaches maxConsecutiveCompactFailures (overflow recovery is never
 	// blocked by it). Any successful compaction clears the entry.
-	compactFailures map[string]int
-	historiesDir    string
-	sessionsDir     string
-	histories       map[string][]openai.ChatCompletionMessage
-	sessionMu       sync.Mutex
-	initialized     bool
-	disabledSkills  []string
-	mcpManager      *McpManager
+	compactFailures      map[string]int
+	historiesDir         string
+	sessionsDir          string
+	histories            map[string][]openai.ChatCompletionMessage
+	sessionMu            sync.Mutex
+	sessionIndexRevision uint64 // guarded by sessionMu; rejects stale background repairs
+	initialized          bool
+	disabledSkills       []string
+	mcpManager           *McpManager
 	// mcpRestartMu 串行化 MCP 全量重启（RestartMcpServers）：网络配置变更可能
 	// 从后台连发两次，无互斥时第二次会把第一次还在 StartAll 里的新 manager
 	// Shutdown 掉——commit 核对虽能自愈，整轮拨号却白跑。重启耗时可达分钟级，
@@ -364,8 +365,10 @@ type App struct {
 	gitStatusEpoch    map[string]uint64
 	gitRepoDiscovery  map[string]gitRepoDiscoveryEntry
 
-	skillCacheMu sync.Mutex
-	skillCache   map[string]skillListCacheEntry
+	skillCacheMu    sync.Mutex
+	skillCache      map[string]skillListCacheEntry
+	skillScans      map[string]chan struct{} // guarded by skillCacheMu
+	skillCacheEpoch uint64
 
 	// workspaceCaches owns all workspace-map / path-index memoization state
 	// (TTL, version, in-flight rebuilds). The concrete type lives in
@@ -472,6 +475,7 @@ func NewApp() *App {
 		gitStatusEpoch:       map[string]uint64{},
 		gitRepoDiscovery:     map[string]gitRepoDiscoveryEntry{},
 		skillCache:           map[string]skillListCacheEntry{},
+		skillScans:           map[string]chan struct{}{},
 		workspaceCaches:      newWorkspaceCacheHolder(),
 		httpLastHost:         map[string]time.Time{},
 		liveBreakdown:        map[string]ContextBreakdown{},
@@ -1651,8 +1655,6 @@ func (a *App) ensureInitialized() error {
 	}
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
-	// command 截断落盘文件位于工作区 .tmp，启动时清理过期文件（含旧 .ally/tmp 遗留）
-	cleanupCommandSpillFiles(a.config.Workspace)
 	_ = a.loadSSHClusters()
 	a.initialized = true
 	return nil

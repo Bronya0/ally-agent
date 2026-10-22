@@ -9,9 +9,11 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -19,6 +21,89 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 )
+
+func TestStartupSessionIndexDoesNotScanOrphanedSnapshots(t *testing.T) {
+	app := newApiTestApp(t)
+	snapshot := SessionSnapshot{ID: "orphan", Title: "Recovered", Messages: []map[string]any{{"role": "user", "content": "recover me"}}}
+	if err := writeCompressedJSONAtomic(app.sessionSnapshotPath(snapshot.ID), mustJSON(snapshot)); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := app.ListSessionIndex()
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("startup must read only the index: %+v, %v", entries, err)
+	}
+	if _, err := os.Stat(app.sessionIndexPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("fast listing unexpectedly wrote an index")
+	}
+	if _, err := app.repairSessionIndex(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = app.ListSessionIndex()
+	if err != nil || len(entries) != 1 || entries[0].FirstPrompt != "recover me" {
+		t.Fatalf("repair did not publish recovered metadata: %+v, %v", entries, err)
+	}
+}
+
+func TestSessionIndexRepairRejectsConcurrentEditsAndDeletes(t *testing.T) {
+	for _, action := range []string{"rename", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			app := newApiTestApp(t)
+			snapshot := SessionSnapshot{ID: "session", Title: "Original", Workspace: app.config.Workspace,
+				Messages: []map[string]any{{"role": "user", "content": "hello"}}}
+			if err := app.SaveSession(snapshot); err != nil {
+				t.Fatal(err)
+			}
+			// Simulate legacy metadata so reconciliation has something to change.
+			if err := app.SaveSessionIndex(SessionIndexEntry{ID: snapshot.ID, Title: "Original", HasSnapshot: true}); err != nil {
+				t.Fatal(err)
+			}
+			entries, err := app.ListSessionIndex()
+			if err != nil {
+				t.Fatal(err)
+			}
+			revision := app.sessionIndexRevision
+			repaired, changed, err := app.reconcileSessionEntries(context.Background(), entries)
+			if err != nil || !changed {
+				t.Fatalf("expected metadata repair: %v, changed=%v", err, changed)
+			}
+			if action == "delete" {
+				err = app.DeleteSession(snapshot.ID)
+			} else {
+				entries[0].Title = "Renamed"
+				err = app.SaveSessionIndex(entries[0])
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if committed, err := app.commitSessionIndexRepair(revision, repaired, changed); err != nil || committed {
+				t.Fatalf("stale repair must be rejected: committed=%v, err=%v", committed, err)
+			}
+			entries, err = app.repairSessionIndex(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if action == "delete" {
+				if len(entries) != 0 {
+					t.Fatalf("deleted session resurrected: %+v", entries)
+				}
+			} else if len(entries) != 1 || entries[0].Title != "Renamed" {
+				t.Fatalf("rename overwritten: %+v", entries)
+			}
+		})
+	}
+}
+
+func TestSessionRepairCancellationDoesNotWriteIndex(t *testing.T) {
+	app := newApiTestApp(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := app.repairSessionIndex(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(app.sessionsDir, "index.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("cancelled repair wrote an index")
+	}
+}
 
 func TestSessionFilesUseIndexAndOnDemandSnapshot(t *testing.T) {
 	app := NewApp()

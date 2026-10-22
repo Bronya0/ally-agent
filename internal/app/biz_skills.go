@@ -7,14 +7,16 @@
 // Public License v3. See the LICENSE file for details.
 package app
 
-// 技能这一个功能的全部内容：内置 / 用户级 / 项目级（含 .claude 兼容）技能的发现与加载、
+// 技能这一个功能的全部内容：内置 / 用户级 / 项目级（含 .claude / .codex 兼容）技能的发现与加载、
 // frontmatter 解析、目录树与“已加载技能”块的渲染，以及新建技能的落盘（SaveSkill）。
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -32,27 +34,29 @@ const skillListCacheTTL = 30 * time.Second
 
 // agentsSkillsSubdir is the Ally-native skill directory ("<root>/.agents/skills").
 // It is listed first in every scan list — so a name conflict resolves in its
-// favour — and it is the only root SaveSkill writes to; .claude/skills stays
-// read-only compatibility. Defining it once keeps "what is scanned" and "what is
-// written" from drifting apart.
+// favour — and it is the only root SaveSkill writes to; .claude/skills and
+// .codex/skills stay read-only compatibility. Defining it once keeps
+// "what is scanned" and "what is written" from drifting apart.
 var agentsSkillsSubdir = filepath.Join(".agents", "skills")
 
 var skillScanDirs = []string{
 	agentsSkillsSubdir,
-	// Agent Skills open standard / Claude Code convention. Scanned last so
-	// the Ally-native .agents/skills path wins on name conflicts.
+	// Compatibility paths follow the Ally-native path so existing skills
+	// retain precedence on name conflicts.
 	filepath.Join(".claude", "skills"),
+	filepath.Join(".codex", "skills"),
 }
 
 // userSkillScanDirs lists user-level skill roots (under the home directory).
 // Ally-native path scanned first so it wins on name conflicts; the Claude
-// Code / Agent Skills convention is scanned as a fallback.
+// Code and Codex conventions are scanned as fallbacks.
 var userSkillScanDirs = []struct {
 	path   string
 	source string
 }{
 	{agentsSkillsSubdir, "user"},
 	{filepath.Join(".claude", "skills"), "user"},
+	{filepath.Join(".codex", "skills"), "user"},
 }
 
 func (a *App) ListSkills() ([]SkillDefinition, error) {
@@ -67,28 +71,65 @@ func (a *App) listSkillsForConfig(cfg ConfigState) ([]SkillDefinition, error) {
 	// If the configured workspace no longer exists, still scan user-level
 	// skills so the app remains usable and the user can add a new workspace.
 	root, _ := workspaceRoot(cfg)
+	return a.cachedSkillsForRoot(root, scanAvailableSkills), nil
+}
+
+// Concurrent callers share a cold scan. An invalidation during the scan makes
+// its result obsolete, so neither the scanner nor its waiters publish it.
+func (a *App) cachedSkillsForRoot(root string, scan func(string) []SkillDefinition) []SkillDefinition {
 	cacheKey := skillListCacheKey(root)
-	a.skillCacheMu.Lock()
-	if cached, ok := a.skillCache[cacheKey]; ok && time.Since(cached.generatedAt) < skillListCacheTTL {
-		skills := cloneSkillDefinitions(cached.skills)
+	for {
+		a.skillCacheMu.Lock()
+		if cached, ok := a.skillCache[cacheKey]; ok && time.Since(cached.generatedAt) < skillListCacheTTL {
+			skills := cloneSkillDefinitions(cached.skills)
+			a.skillCacheMu.Unlock()
+			return skills
+		}
+		if done := a.skillScans[cacheKey]; done != nil {
+			a.skillCacheMu.Unlock()
+			<-done
+			continue
+		}
+		if a.skillScans == nil {
+			a.skillScans = map[string]chan struct{}{}
+		}
+		done := make(chan struct{})
+		a.skillScans[cacheKey] = done
+		epoch := a.skillCacheEpoch
 		a.skillCacheMu.Unlock()
-		return skills, nil
-	}
-	a.skillCacheMu.Unlock()
-
-	skills := []SkillDefinition{}
-	seen := map[string]bool{}
-
-	// User skills (~/.agents/skills/, ~/.claude/skills/)
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		for _, d := range userSkillScanDirs {
-			scanSkillDir(filepath.Join(homeDir, d.path), d.source, &skills, seen)
+		skills := scan(root)
+		a.skillCacheMu.Lock()
+		if epoch == a.skillCacheEpoch {
+			if a.skillCache == nil || len(a.skillCache) >= 32 {
+				a.skillCache = map[string]skillListCacheEntry{}
+			}
+			a.skillCache[cacheKey] = skillListCacheEntry{skills: cloneSkillDefinitions(skills), generatedAt: time.Now()}
+		}
+		delete(a.skillScans, cacheKey)
+		close(done)
+		current := epoch == a.skillCacheEpoch
+		a.skillCacheMu.Unlock()
+		if current {
+			return cloneSkillDefinitions(skills)
 		}
 	}
-	// Project skills (<workspace>/.agents/skills/)
+}
+
+func scanAvailableSkills(root string) []SkillDefinition {
+	skills := []SkillDefinition{}
+	seen := map[string]bool{}
+	seenDirs := map[string]bool{}
+
+	// User skills (~/.agents/skills/, ~/.claude/skills/, ~/.codex/skills/)
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		for _, d := range userSkillScanDirs {
+			scanSkillDir(filepath.Join(homeDir, d.path), d.source, &skills, seen, seenDirs)
+		}
+	}
+	// Project skills (the same relative roots under <workspace>)
 	if root != "" {
 		for _, sub := range skillScanDirs {
-			scanSkillDir(filepath.Join(root, sub), "project", &skills, seen)
+			scanSkillDir(filepath.Join(root, sub), "project", &skills, seen, seenDirs)
 		}
 	}
 	// Built-in skills (embedded). Added last so user/project skills with the
@@ -103,19 +144,7 @@ func (a *App) listSkillsForConfig(cfg ConfigState) ([]SkillDefinition, error) {
 		skills = append(skills, b)
 	}
 
-	a.skillCacheMu.Lock()
-	if a.skillCache == nil {
-		a.skillCache = map[string]skillListCacheEntry{}
-	}
-	if len(a.skillCache) >= 32 {
-		a.skillCache = map[string]skillListCacheEntry{}
-	}
-	a.skillCache[cacheKey] = skillListCacheEntry{
-		skills:      cloneSkillDefinitions(skills),
-		generatedAt: time.Now(),
-	}
-	a.skillCacheMu.Unlock()
-	return skills, nil
+	return skills
 }
 
 func skillListCacheKey(root string) string {
@@ -180,17 +209,27 @@ func (a *App) ActivateSkill(name string) (string, error) {
 	return "", fmt.Errorf("skill not found: %s", name)
 }
 
-func (a *App) GetActiveSkills() []string {
-	skills, _ := a.ListSkills()
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	result := make([]string, 0, len(skills))
-	for _, sk := range skills {
-		if !skillNameInList(a.disabledSkills, sk.Name) {
-			result = append(result, sk.Name)
-		}
+type SkillState struct {
+	Skills []SkillDefinition `json:"skills"`
+	Active []string          `json:"active"`
+}
+
+// GetSkillState returns the list and its enabled names from one scan/snapshot.
+func (a *App) GetSkillState() (SkillState, error) {
+	skills, err := a.ListSkills()
+	if err != nil {
+		return SkillState{}, err
 	}
-	return result
+	active := make([]string, 0, len(skills))
+	for _, sk := range a.enabledSkillsFrom(skills) {
+		active = append(active, sk.Name)
+	}
+	return SkillState{Skills: skills, Active: active}, nil
+}
+
+func (a *App) GetActiveSkills() []string {
+	state, _ := a.GetSkillState()
+	return state.Active
 }
 
 // listCachedSkills returns enabled available skills (calls ListSkills, no lock needed by caller).
@@ -430,37 +469,76 @@ func xmlEscape(s string) string {
 	return s
 }
 
-func scanSkillDir(dir string, source string, skills *[]SkillDefinition, seen map[string]bool) {
+func scanSkillDir(dir string, source string, skills *[]SkillDefinition, seen, seenDirs map[string]bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, entry := range entries {
-		if entry.IsDir() {
-			skillPath := filepath.Join(dir, entry.Name(), "SKILL.md")
-			if _, err := os.Stat(skillPath); err == nil {
-				meta := parseSkillFile(skillPath)
-				// Dedup keys are lowercased so a case-variant duplicate
-				// ("Foo" vs "foo") cannot slip past and then shadow the
-				// EqualFold lookups consumers rely on. Builtins dedup with
-				// the same rule.
-				if key := strings.ToLower(meta.Name); meta.Name != "" && !seen[key] {
-					seen[key] = true
-					meta.Source = source
-					meta.Dir = filepath.Join(dir, entry.Name())
-					*skills = append(*skills, meta)
-				}
-			}
+		dirKey := strings.ToLower(entry.Name())
+		// Directory identity wins before opening lower-priority copies, even
+		// when their frontmatter declares a different skill name.
+		if !entry.IsDir() || seenDirs[dirKey] {
+			continue
+		}
+		meta := parseSkillFile(filepath.Join(dir, entry.Name(), "SKILL.md"))
+		if meta.Name == "" {
+			continue // Missing/unreadable entries must not hide a valid fallback.
+		}
+		seenDirs[dirKey] = true
+		// Different directories may still declare the same name.
+		if key := strings.ToLower(meta.Name); !seen[key] {
+			seen[key] = true
+			meta.Source = source
+			meta.Dir = filepath.Join(dir, entry.Name())
+			*skills = append(*skills, meta)
 		}
 	}
 }
 
 func parseSkillFile(path string) SkillDefinition {
-	data, err := os.ReadFile(path)
+	if !strings.EqualFold(filepath.Base(path), "SKILL.md") {
+		return SkillDefinition{Path: path}
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		return SkillDefinition{}
 	}
-	return parseSkillContent(path, string(data))
+	defer f.Close()
+	text, err := readSkillMetadata(f)
+	if err != nil {
+		return SkillDefinition{}
+	}
+	return parseSkillContent(path, text)
+}
+
+// Listing needs only frontmatter. Limit malformed/oversized headers to 64 KiB;
+// they fall back to the directory name. Full bodies are read only on loading.
+func readSkillMetadata(r io.Reader) (string, error) {
+	const maxMetadataBytes = 64 * 1024
+	reader := bufio.NewReader(io.LimitReader(r, maxMetadataBytes+1))
+	var header strings.Builder
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return "", err
+		}
+		if header.Len()+len(line) > maxMetadataBytes {
+			return "", nil
+		}
+		if header.Len() == 0 {
+			if strings.TrimSpace(strings.TrimPrefix(line, "\ufeff")) != "---" {
+				return "", nil
+			}
+		} else if strings.TrimSpace(line) == "---" {
+			header.WriteString(line)
+			return header.String(), nil
+		}
+		header.WriteString(line)
+		if err == io.EOF {
+			return "", nil
+		}
+	}
 }
 
 // parseSkillContent parses a skill's frontmatter and body from an in-memory
@@ -691,6 +769,7 @@ func skillDisplayDir(sk SkillDefinition) string {
 func (a *App) clearSkillListCache() {
 	a.skillCacheMu.Lock()
 	a.skillCache = map[string]skillListCacheEntry{}
+	a.skillCacheEpoch++
 	a.skillCacheMu.Unlock()
 }
 

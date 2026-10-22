@@ -10,6 +10,7 @@ package app
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,9 +76,23 @@ type SessionSnapshot struct {
 	Messages      []map[string]any `json:"messages"`
 }
 
-// ListSessions returns only the local session index. It never loads all UI
-// message snapshots into the frontend.
+// ListSessionIndex is the startup fast path: no directory scans or snapshot
+// decompression. Runtime maintenance repairs orphaned/legacy records later.
+func (a *App) ListSessionIndex() ([]SessionIndexEntry, error) {
+	if err := a.ensureInitialized(); err != nil {
+		return nil, err
+	}
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	return a.readSessionIndexLocked()
+}
+
+// ListSessions retains the explicit recovery path for API/manual callers.
 func (a *App) ListSessions() ([]SessionIndexEntry, error) {
+	return a.repairSessionIndex(context.Background())
+}
+
+func (a *App) repairSessionIndex(ctx context.Context) ([]SessionIndexEntry, error) {
 	if err := a.ensureInitialized(); err != nil {
 		return nil, err
 	}
@@ -85,13 +100,56 @@ func (a *App) ListSessions() ([]SessionIndexEntry, error) {
 		return []SessionIndexEntry{}, nil
 	}
 
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		a.sessionMu.Lock()
+		entries, err := a.readSessionIndexLocked()
+		revision := a.sessionIndexRevision
+		a.sessionMu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		entries, changed, err := a.reconcileSessionEntries(ctx, entries)
+		if err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		committed, err := a.commitSessionIndexRepair(revision, entries, changed)
+		if err != nil || committed {
+			if err == nil && changed {
+				a.emit("sessions:index-repaired", nil)
+			}
+			return entries, err
+		}
+		// A user edited/deleted a session during the disk scan. Re-read the latest
+		// index rather than overwriting it with stale repair results.
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func (a *App) commitSessionIndexRepair(revision uint64, entries []SessionIndexEntry, changed bool) (bool, error) {
 	a.sessionMu.Lock()
 	defer a.sessionMu.Unlock()
-
-	entries, err := a.readSessionIndexLocked()
-	if err != nil {
-		return nil, err
+	if revision != a.sessionIndexRevision {
+		return false, nil
 	}
+	if changed {
+		return true, a.writeSessionIndexLocked(entries)
+	}
+	return true, nil
+}
+
+// All expensive discovery/decompression runs without sessionMu. The commit
+// checks its input revision before publishing, including concurrent deletions.
+func (a *App) reconcileSessionEntries(ctx context.Context, entries []SessionIndexEntry) ([]SessionIndexEntry, bool, error) {
 	changed := false
 	known := make(map[string]struct{}, len(entries))
 	entryIndexes := make(map[string]int, len(entries))
@@ -101,6 +159,9 @@ func (a *App) ListSessions() ([]SessionIndexEntry, error) {
 	}
 
 	for _, sessionID := range a.diskSnapshotSessionIDs() {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		if index, exists := entryIndexes[sessionID]; exists {
 			if !entries[index].HasSnapshot {
 				entries[index].HasSnapshot = true
@@ -116,6 +177,9 @@ func (a *App) ListSessions() ([]SessionIndexEntry, error) {
 	}
 
 	for _, sessionID := range a.diskHistorySessionIDs() {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		if _, exists := known[sessionID]; exists {
 			continue
 		}
@@ -131,6 +195,9 @@ func (a *App) ListSessions() ([]SessionIndexEntry, error) {
 	// Backfill metadata created before firstPrompt was added. This runs only
 	// while the field is missing and persists the result for later fast opens.
 	for index := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		entry := &entries[index]
 		if entry.FirstPrompt != "" {
 			continue
@@ -159,7 +226,7 @@ func (a *App) ListSessions() ([]SessionIndexEntry, error) {
 			}
 			continue
 		}
-		history := a.loadSessionHistoryCopy(entry.ID)
+		history, _ := a.readHistoryFromDisk(entry.ID)
 		firstPrompt := firstPromptFromHistory(history)
 		if firstPrompt == "" {
 			continue
@@ -171,13 +238,7 @@ func (a *App) ListSessions() ([]SessionIndexEntry, error) {
 		changed = true
 	}
 
-	entries = normalizeSessionIndexEntries(entries)
-	if changed {
-		if err := a.writeSessionIndexLocked(entries); err != nil {
-			return nil, err
-		}
-	}
-	return entries, nil
+	return normalizeSessionIndexEntries(entries), changed, nil
 }
 
 // LoadSession loads exactly one session snapshot from disk. Legacy model
@@ -330,6 +391,7 @@ func (a *App) deleteSessionSnapshot(sessionID string) error {
 
 	a.sessionMu.Lock()
 	defer a.sessionMu.Unlock()
+	a.sessionIndexRevision++
 	if path := a.sessionSnapshotPath(sessionID); path != "" {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -400,7 +462,11 @@ func (a *App) writeSessionIndexLocked(entries []SessionIndexEntry) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomicBytes(path, data, 0o600)
+	if err := writeAtomicBytes(path, data, 0o600); err != nil {
+		return err
+	}
+	a.sessionIndexRevision++
+	return nil
 }
 
 func normalizeSessionIndexEntries(entries []SessionIndexEntry) []SessionIndexEntry {
@@ -686,7 +752,7 @@ func (a *App) diskHistorySessionIDs() []string {
 
 func (a *App) legacySessionIndexEntry(sessionID string) SessionIndexEntry {
 	entry := SessionIndexEntry{ID: sessionID, Title: "Session"}
-	history := a.loadSessionHistoryCopy(sessionID)
+	history, _ := a.readHistoryFromDisk(sessionID)
 	if len(history) > 0 {
 		count := 0
 		firstPrompt := ""

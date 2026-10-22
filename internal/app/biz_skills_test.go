@@ -11,8 +11,94 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
+
+func TestGetSkillStateReturnsOneListingAndItsEnabledNames(t *testing.T) {
+	app := newApiTestApp(t)
+	writeSkillTestFile(t, app.config.Workspace, ".agents/skills/custom/SKILL.md", "---\nname: custom\n---\nbody")
+	app.disabledSkills = []string{"CUSTOM"}
+	state, err := app.GetSkillState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	findSkill(t, state.Skills, "custom")
+	for _, name := range state.Active {
+		if strings.EqualFold(name, "custom") {
+			t.Fatal("disabled skill is active")
+		}
+		findSkill(t, state.Skills, name)
+	}
+	if len(state.Active) != len(state.Skills)-1 {
+		t.Fatalf("inconsistent listing/active state: %+v", state)
+	}
+}
+
+func TestSkillColdScanIsShared(t *testing.T) {
+	app := newApiTestApp(t)
+	var scans atomic.Int32
+	entered, release := make(chan struct{}), make(chan struct{})
+	scan := func(string) []SkillDefinition {
+		if scans.Add(1) == 1 {
+			close(entered)
+		}
+		<-release
+		return []SkillDefinition{{Name: "shared"}}
+	}
+	const callers = 16
+	results := make(chan []SkillDefinition, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- app.cachedSkillsForRoot(app.config.Workspace, scan)
+		}()
+	}
+	<-entered
+	close(release)
+	wg.Wait()
+	if scans.Load() != 1 {
+		t.Fatalf("cold scan ran %d times", scans.Load())
+	}
+	first := <-results
+	first[0].Name = "mutated"
+	for i := 1; i < callers; i++ {
+		if result := <-results; result[0].Name != "shared" {
+			t.Fatal("callers share a mutable result")
+		}
+	}
+	if result := app.cachedSkillsForRoot(app.config.Workspace, scan); result[0].Name != "shared" {
+		t.Fatal("caller mutated the cache")
+	}
+}
+
+func TestSkillInvalidationDuringColdScanRejectsOldResult(t *testing.T) {
+	app := newApiTestApp(t)
+	var scans atomic.Int32
+	entered, release := make(chan struct{}), make(chan struct{})
+	result := make(chan []SkillDefinition, 1)
+	scan := func(string) []SkillDefinition {
+		if scans.Add(1) == 1 {
+			close(entered)
+			<-release
+			return []SkillDefinition{{Name: "obsolete"}}
+		}
+		return []SkillDefinition{{Name: "current"}}
+	}
+	go func() { result <- app.cachedSkillsForRoot(app.config.Workspace, scan) }()
+	<-entered
+	app.clearSkillListCache()
+	close(release)
+	if got := <-result; len(got) != 1 || got[0].Name != "current" {
+		t.Fatalf("stale scan survived invalidation: %+v", got)
+	}
+	if scans.Load() != 2 {
+		t.Fatalf("expected one replacement scan, got %d", scans.Load())
+	}
+}
 
 func writeSkillTestFile(t *testing.T, dir, name, content string) {
 	t.Helper()
@@ -91,7 +177,7 @@ func TestScanSkillDirIgnoresUnrelatedMarkdown(t *testing.T) {
 
 	var skills []SkillDefinition
 	seen := map[string]bool{}
-	scanSkillDir(root, "user", &skills, seen)
+	scanSkillDir(root, "user", &skills, seen, map[string]bool{})
 
 	names := map[string]bool{}
 	for _, s := range skills {
@@ -173,12 +259,76 @@ func TestScanSkillDirDedupsCaseInsensitively(t *testing.T) {
 
 	skills := []SkillDefinition{}
 	seen := map[string]bool{}
-	scanSkillDir(root, "project", &skills, seen)
+	scanSkillDir(root, "project", &skills, seen, map[string]bool{})
 	if len(skills) != 1 {
 		t.Fatalf("case-differing duplicate names must dedup to one skill, got %d: %+v", len(skills), skills)
 	}
 	if skills[0].Description != "first" {
 		t.Fatalf("first scanned skill must win, got description %q", skills[0].Description)
+	}
+}
+
+func TestScanSkillDirSkipsDuplicateDirectoriesBeforeParsing(t *testing.T) {
+	root := t.TempDir()
+	first, second := filepath.Join(root, "first"), filepath.Join(root, "second")
+	writeSkillTestFile(t, first, "Shared/SKILL.md", "---\nname: first-name\n---\nbody")
+	writeSkillTestFile(t, second, "shared/SKILL.md", "---\nname: different-name\n---\nbody")
+	// An earlier directory without a readable SKILL.md must allow fallback.
+	if err := os.MkdirAll(filepath.Join(first, "fallback"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSkillTestFile(t, second, "fallback/SKILL.md", "# fallback")
+	var skills []SkillDefinition
+	seen, seenDirs := map[string]bool{}, map[string]bool{}
+	scanSkillDir(first, "user", &skills, seen, seenDirs)
+	scanSkillDir(second, "project", &skills, seen, seenDirs)
+	if len(skills) != 2 {
+		t.Fatalf("expected original skill and valid fallback, got %+v", skills)
+	}
+	if skill := findSkill(t, skills, "first-name"); skill.Source != "user" {
+		t.Fatalf("earlier directory must win, got %+v", skill)
+	}
+	findSkill(t, skills, "fallback")
+	for _, skill := range skills {
+		if skill.Name == "different-name" {
+			t.Fatal("duplicate directory must be skipped regardless of its declared name")
+		}
+	}
+}
+
+func TestReadSkillMetadataStopsBeforeLargeBody(t *testing.T) {
+	for _, header := range []string{
+		"---\nname: header-skill\ndescription: contains --- inline\n---\n",
+		"\ufeff---\r\nname: header-skill\r\n---\r\n",
+		"# no frontmatter\n",
+	} {
+		r := strings.NewReader(header + strings.Repeat("body\n", 100000))
+		initial := r.Len()
+		text, err := readSkillMetadata(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if consumed := initial - r.Len(); consumed > 4096 {
+			t.Fatalf("listing read beyond the first buffer: %d bytes", consumed)
+		}
+		want := parseSkillContent("directory/SKILL.md", header)
+		if got := parseSkillContent("directory/SKILL.md", text); got != want {
+			t.Fatalf("streamed metadata differs: got %+v, want %+v", got, want)
+		}
+	}
+}
+
+func TestReadSkillMetadataBoundsMalformedHeaders(t *testing.T) {
+	for _, prefix := range []string{"---\nname: incomplete\n", "# no frontmatter"} {
+		r := strings.NewReader(prefix + strings.Repeat("x", 1000000))
+		initial := r.Len()
+		text, err := readSkillMetadata(r)
+		if err != nil || text != "" {
+			t.Fatalf("expected directory-name fallback, got %q, %v", text, err)
+		}
+		if consumed := initial - r.Len(); consumed > 64*1024+1 {
+			t.Fatalf("malformed metadata read exceeded budget: %d", consumed)
+		}
 	}
 }
 
@@ -200,7 +350,7 @@ func TestScanSkillDirKeepsMultipleDirectorySkillsWithoutFrontmatter(t *testing.T
 	writeSkillTestFile(t, root, filepath.Join("beta-skill", "SKILL.md"), "# beta\n")
 
 	skills := []SkillDefinition{}
-	scanSkillDir(root, "project", &skills, map[string]bool{})
+	scanSkillDir(root, "project", &skills, map[string]bool{}, map[string]bool{})
 	names := map[string]bool{}
 	for _, skill := range skills {
 		names[skill.Name] = true
@@ -604,6 +754,44 @@ func TestBuiltinSkillEntriesContainsAllyAgent(t *testing.T) {
 	}
 }
 
+func TestListSkillsIncludesCodexSkills(t *testing.T) {
+	for _, scope := range []string{"user", "project"} {
+		t.Run(scope, func(t *testing.T) {
+			app := newApiTestApp(t)
+			root := app.config.Workspace
+			if scope == "user" {
+				var err error
+				root, err = os.UserHomeDir()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeSkillTestFile(t, root, ".codex/skills/codex-only/SKILL.md", "---\nname: codex-only\ndescription: from codex\n---\nbody\n")
+			// Compatibility roots must not shadow skills from existing roots.
+			for _, dir := range []string{".agents", ".claude", ".codex"} {
+				writeSkillTestFile(t, root, dir+"/skills/shared/SKILL.md", "---\nname: shared\ndescription: "+dir+"\n---\nbody\n")
+			}
+			for _, dir := range []string{".claude", ".codex"} {
+				writeSkillTestFile(t, root, dir+"/skills/compat-shared/SKILL.md", "---\nname: compat-shared\ndescription: "+dir+"\n---\nbody\n")
+			}
+			skills, err := app.ListSkills()
+			if err != nil {
+				t.Fatal(err)
+			}
+			codex := findSkill(t, skills, "codex-only")
+			if codex.Source != scope || codex.Path != filepath.Join(root, ".codex", "skills", "codex-only", "SKILL.md") {
+				t.Fatalf("unexpected Codex skill: %+v", codex)
+			}
+			if shared := findSkill(t, skills, "shared"); shared.Description != ".agents" {
+				t.Fatalf("expected .agents to retain precedence, got %+v", shared)
+			}
+			if shared := findSkill(t, skills, "compat-shared"); shared.Description != ".claude" {
+				t.Fatalf("expected .claude to retain precedence, got %+v", shared)
+			}
+		})
+	}
+}
+
 func TestScanSkillDirIncludesClaudeSkillsPath(t *testing.T) {
 	root := t.TempDir()
 	// Simulate a project-level .claude/skills/<name>/SKILL.md
@@ -616,7 +804,7 @@ func TestScanSkillDirIncludesClaudeSkillsPath(t *testing.T) {
 	var skills []SkillDefinition
 	seen := map[string]bool{}
 	// Mirror the production scan order: scanSkillDir over .claude/skills.
-	scanSkillDir(filepath.Join(root, ".claude", "skills"), "project", &skills, seen)
+	scanSkillDir(filepath.Join(root, ".claude", "skills"), "project", &skills, seen, map[string]bool{})
 
 	found := false
 	for _, s := range skills {
@@ -653,9 +841,10 @@ func TestAllyNativeSkillWinsOverClaudeSkillOnNameConflict(t *testing.T) {
 
 	var skills []SkillDefinition
 	seen := map[string]bool{}
-	// Production order: .agents/skills first, then .claude/skills
+	seenDirs := map[string]bool{}
+	// Production order: .agents/skills first, then compatibility roots.
 	for _, sub := range skillScanDirs {
-		scanSkillDir(filepath.Join(root, sub), "project", &skills, seen)
+		scanSkillDir(filepath.Join(root, sub), "project", &skills, seen, seenDirs)
 	}
 
 	var shared *SkillDefinition

@@ -14,8 +14,9 @@ function deferred() {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function fixture() {
+function fixture({ startupReady = Promise.resolve() } = {}) {
   const git = deferred(), usage = deferred(), context = deferred();
+  const contextCalls = [];
   const bindings = {
     ref, activeWorkspaceId: ref('tab'), activeSessionId: ref('session'),
     workspaceTabs: ref([{ id: 'tab', path: '/project' }]),
@@ -23,7 +24,8 @@ function fixture() {
     runWorkspaceForTab: (tab) => tab?.path || '',
     GetGitStatus: () => git.promise,
     GetWorkspaceTokenUsage: () => usage.promise,
-    GetContextBreakdown: () => context.promise,
+    GetContextBreakdown: (...args) => { contextCalls.push(args); return context.promise; },
+    startupContextReadyPromise: startupReady, startupDisposed: false,
     refreshContextPendingSid: null, refreshContextTokens: () => {},
   };
   const api = new Function(...Object.keys(bindings), `${source.slice(start, end)}
@@ -31,9 +33,43 @@ function fixture() {
       applyFooterSnapshot, contextTokens, contextBreakdown, gitStatus,
       workspaceTokenUsage, footerStatsLoading, gitStatsLoading, usageStatsLoading };
   `)(...Object.values(bindings));
-  return { ...api, ...bindings, git, usage, context };
+  return { ...api, ...bindings, git, usage, context, contextCalls };
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+test('cold startup defers context computation while other statistics publish', async () => {
+  const ready = deferred();
+  const f = fixture({ startupReady: ready.promise });
+  const pending = f.refreshFooterStats();
+  f.git.resolve({ isRepo: true, branch: 'main' });
+  f.usage.resolve({ inputTokens: 45 });
+  await tick();
+  assert.equal(f.gitStatus.value.branch, 'main');
+  assert.equal(f.workspaceTokenUsage.value.inputTokens, 45);
+  assert.equal(f.contextCalls.length, 0);
+  assert.equal(f.footerStatsLoading.value, true);
+  ready.resolve();
+  await tick();
+  assert.deepEqual(f.contextCalls, [['session', '/project']]);
+  f.context.resolve({ total: 123 });
+  await pending;
+  assert.equal(f.contextTokens.value, 123);
+  assert.equal(f.footerStatsLoading.value, false);
+});
+
+test('a startup context request is skipped if its Tab target changed before release', async () => {
+  const ready = deferred();
+  const f = fixture({ startupReady: ready.promise });
+  const pending = f.refreshFooterStats();
+  f.activeSessionId.value = 'next';
+  f.prepareFooterStatsForTarget('tab', '/project');
+  f.git.resolve({ isRepo: true, branch: 'stale' });
+  f.usage.resolve({ inputTokens: 99 });
+  ready.resolve();
+  await pending;
+  assert.equal(f.contextCalls.length, 0);
+  assert.equal(f.contextTokens.value, 0);
+});
 
 test('context and usage display while Git is still pending', async () => {
   const f = fixture();

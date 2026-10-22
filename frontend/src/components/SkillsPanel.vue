@@ -146,7 +146,7 @@ import { Browser } from '@wailsio/runtime';
 import { t } from '../i18n.mjs';
 import { isSkillActive } from '../utils/skills.mjs';
 import {
-  ListSkills, ActivateSkill, DeactivateSkill, GetActiveSkills, OpenPathInFileManager, SaveSkill,
+  GetSkillState, ActivateSkill, DeactivateSkill, OpenPathInFileManager, SaveSkill,
 } from '../../bindings/ally-dev/internal/app/app';
 
 // Inline skills page (App.vue mode === 'skills'): owns its whole state — the
@@ -263,7 +263,7 @@ async function handleOpenSkillPath(sk) {
 async function refreshSkillState() {
   skillsLoading.value = true;
   try {
-    const [skills, active] = await Promise.all([ListSkills(), GetActiveSkills()]);
+    const { skills, active } = await GetSkillState();
     availableSkills.value = skills || [];
     activeSkillNames.value = active || [];
   } catch (err) {

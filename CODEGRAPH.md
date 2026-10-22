@@ -41,7 +41,8 @@
 | 输入栏页脚统计（Git/用量/上下文分别发布，初始化与聚焦/文件树解耦；快照按 Tab + session + workspace 校验） | `frontend/src/App.vue`（`refreshFooterStats` / `prepareFooterStatsForTarget`）+ `ComposerInfoBar.vue` |
 | 计划工具（`steps` / `finish` 位置状态机：报「完成到某一步」、报最后一步即收尾、状态由位置推导、标题即身份、上限收口单一写入点、结果块带状态与进度、run 收尾对账） | `biz_context.go`（`handlePlan` / `classifyPlanRequest` / `reportPlanProgress` / `applyPlanPosition` / `planCheckMarker`）+ `infra_result.go`（`renderPlanResultForModel`）+ `orch_batch_policy.go`（`planBatchWriteSource` / `toolDidPlanWork`）；前端 `planPanel.mjs` / `toolVerb.mjs` |
 | 配置合并 / key 池管理 / 最近使用模型身份展开（`expandLastUsedModel`；配置只存 models[] + lastUsedModel，13 个模型字段是请求级派生值） | `internal/app/biz_config.go` |
-| 技能发现与加载 | `internal/app/biz_skills.go` |
+| 技能发现与加载（用户/项目 `.agents`、`.claude`、`.codex/skills`；同目录提前去重、限量读取头部、冷扫描合并与失效版本校验） | `internal/app/biz_skills.go` |
+| 启动加载（工作区先就绪；技能/会话/插件等空闲加载，上下文延后、更新延迟 10 秒；维护任务延迟清理并修复会话索引，锁外扫描、按版本提交并通知前端；`ListSessionIndex` 仅读索引，`ListSessions` 保留显式恢复） | `internal/app/biz_lifecycle.go` + `biz_sessions.go` + `frontend/src/App.vue` + `utils/startupTasks.mjs` |
 | 新建技能（元数据 + SKILL.md 正文写入 `.agents/skills`：用户级 `~/` 或项目级 `<工作区>`；重名/非法名拒绝，写完清列表缓存） | `internal/app/biz_skills.go`（`SaveSkill`） |
 | MCP 客户端生命周期 | `internal/app/biz_mcp.go`（stdio 环境走白名单 `mcpStdioEnv`，不吃 os.Environ；http/sse 与 http 工具共用 `allowPrivateNetwork` 开关） |
 | 计划任务 / 后台服务 / 命令超时收编（LLM 任务记模型身份；服务启动/收编记主工作区，模型 list/read/stop 按归属隔离，同工作区跨会话共享） | `orch_scheduler.go` / `orch_services.go`（promoteTimedOutCommand）+ `TaskCenterPanel.vue`；侧栏默认全部、Tab 底部默认当前，可切范围；`utils/taskWorkspace.mjs` + `utils/workspacePath.mjs` 共用归属筛选与路径比较 |

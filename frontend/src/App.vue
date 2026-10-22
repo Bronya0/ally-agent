@@ -642,6 +642,7 @@ import cssLang from 'highlight.js/lib/languages/css';
 import markdownLang from 'highlight.js/lib/languages/markdown';
 import 'highlight.js/styles/base16/darcula.css';
 import { stripAnsi } from './utils/ansi.mjs';
+import { createStartupTasks } from './utils/startupTasks.mjs';
 import { highlightShellCommand, isShellLanguage, looksLikeShellCommand } from './utils/shellHighlight.mjs';
 import {
   clearSessionSnapshotStore,
@@ -668,9 +669,10 @@ import {
   InjectRunMessage,
   CompactSession,
   FastCompactSession,
-  ListSkills,
+  GetSkillState,
   ListTools,
   ListSessions,
+  ListSessionIndex,
   LoadSession,
   SaveSession,
   SaveSessionIndex,
@@ -678,7 +680,6 @@ import {
   OpenWorkspaceTerminalAt,
   OpenWorkspacePathInFileManagerAt,
   ActivateSkill,
-  GetActiveSkills,
   GetPlan,
   GetMcpServers,
   ListScheduledTasks,
@@ -1982,6 +1983,14 @@ let runtimeEventsBound = false;
 // The Atom feed used for the check is not rate-limited, so a shorter interval
 // is safe.
 let updateCheckTimer = 0;
+const startupTasks = createStartupTasks();
+let startupDisposed = false;
+let startupContextReady = false;
+let resolveStartupContextReady;
+const startupContextReadyPromise = new Promise((resolve) => { resolveStartupContextReady = resolve; });
+let sessionIndexRepairPending = false;
+let startupSessionsLoaded = false;
+let sessionIndexRequestVersion = 0;
 const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 // tool:update events carry the full accumulated arguments on every emit.
 // During large payload streams (e.g. create with thousands of lines)
@@ -3407,7 +3416,10 @@ async function refreshFooterStats({
         captureFooterSnapshot(tabId, requestedWorkspace);
       }
     }),
-    GetContextBreakdown(requestedSessionId, requestedWorkspace).then((breakdown) => {
+    startupContextReadyPromise.then(() => {
+      if (startupDisposed || !current() || contextVersion !== contextRequestVersion) return null;
+      return GetContextBreakdown(requestedSessionId, requestedWorkspace);
+    }).then((breakdown) => {
       if (!current() || contextVersion !== contextRequestVersion) return;
       contextTokens.value = Number(breakdown?.total) || 0;
       contextBreakdown.value = breakdown || null;
@@ -3525,6 +3537,10 @@ let refreshContextPendingSid = null;
 
 function refreshContextTokens(sid) {
   if (!sid || sid !== activeSessionId.value) return;
+  if (!startupContextReady) {
+    refreshContextPendingSid = sid;
+    return;
+  }
   // Debounce: collapse calls within 120ms into one request. Tool batches
   // (4 tools → 4 tool:result events) arrive in quick succession; without
   // this each event triggers a separate GetContextBreakdown IPC call.
@@ -4031,6 +4047,7 @@ const WELCOME_ROW_LABELS = {
   workspace: ['工作区', 'Workspace'],
   commands: ['指令', 'Commands'],
   mcp: ['MCP'],
+  skills: ['技能', 'Skills'],
 };
 function isWelcomeRowKind(row, kind) {
   if (!row) return false;
@@ -4083,6 +4100,18 @@ function updateWelcomeMcpRows() {
       }
       // 只更新 rows：欢迎表格由 WelcomeMessage 组件按 rows 实时渲染，
       // msg.content（首次构建时的 Markdown 快照）保持不变——本函数只读。
+      msg.welcome.rows = rows;
+    }
+  }
+}
+
+function updateWelcomeSkillRows() {
+  const count = availableSkills.value.filter((skill) => isSkillActive(skill.name, activeSkillNames.value)).length;
+  for (const session of sessions.value) {
+    for (const msg of session.messages || []) {
+      if (!Array.isArray(msg?.welcome?.rows)) continue;
+      const rows = msg.welcome.rows.filter((row) => !isWelcomeRowKind(row, 'skills'));
+      if (count > 0) rows.push({ kind: 'skills', label: t('common.skills'), value: t('welcome.skillsAvailable', { count }) });
       msg.welcome.rows = rows;
     }
   }
@@ -4685,7 +4714,6 @@ async function init() {
       workspace: ws,
     });
   }
-  await loadSavedSessions();
   loadMcpConfig();
   loadBackgroundImage();
 }
@@ -5026,6 +5054,15 @@ function bindRuntimeEvents() {
   runtimeEventsBound = true;
 
   onRuntimeEvent('window:close-requested', closeWindow);
+  onRuntimeEvent('sessions:index-repaired', () => {
+    // An event can arrive while the first index read is still in flight.
+    // Replay it after initial loading so that an older result cannot win.
+    sessionIndexRepairPending = true;
+    if (startupSessionsLoaded) {
+      sessionIndexRepairPending = false;
+      void refreshSessionIndex();
+    }
+  });
 
   onRuntimeEvent('run:start', (data) => {
     clearRetryBanner(data);
@@ -7727,12 +7764,20 @@ function applySessionIndexEntry(session, entry) {
 }
 
 async function refreshSessionIndex() {
+  const requestVersion = ++sessionIndexRequestVersion;
+  await flushSessionWrites();
+  if (startupDisposed || requestVersion !== sessionIndexRequestVersion) return false;
+  const writesAtRead = sessionWriteTail;
   let entries;
   try {
-    entries = await ListSessions();
+    entries = await ListSessionIndex();
   } catch (err) {
     return false;
   }
+  if (startupDisposed || requestVersion !== sessionIndexRequestVersion) return false;
+  // Local rename/delete/save can finish while the bridge read is in flight.
+  // Wait for those writes before retrying, rather than restoring stale rows.
+  if (writesAtRead !== sessionWriteTail) return refreshSessionIndex();
   const currentByID = new Map(sessions.value.map((session) => [session.id, session]));
   const entryIDs = new Set();
   const ordered = [];
@@ -7843,6 +7888,11 @@ async function migrateLegacySessionStorage() {
 async function loadSavedSessions() {
   await migrateLegacySessionStorage();
   await refreshSessionIndex();
+  startupSessionsLoaded = true;
+  if (sessionIndexRepairPending) {
+    sessionIndexRepairPending = false;
+    await refreshSessionIndex();
+  }
   saveSessions();
 }
 
@@ -8186,10 +8236,7 @@ async function loadAndShowSkills() {
 async function refreshSkillState() {
   skillsLoading.value = true;
   try {
-    const [skills, active] = await Promise.all([
-      ListSkills(),
-      GetActiveSkills(),
-    ]);
+    const { skills, active } = await GetSkillState();
     availableSkills.value = skills || [];
     activeSkillNames.value = active || [];
     const activeSet = new Set((activeSkillNames.value || []).map((name) => normalizeSkillName(name)));
@@ -8198,6 +8245,7 @@ async function refreshSkillState() {
       .map((skill) => skill.name);
     config.disabledSkills = disabled;
     configDraft.disabledSkills = [...disabled];
+    updateWelcomeSkillRows();
   } catch (err) {
     message.error(t('app.skills.stateFailed', { error: err }));
   } finally {
@@ -9525,26 +9573,37 @@ onMounted(async () => {
   window.addEventListener('resize', refreshWindowMaximisedState);
   window.addEventListener('focus', refreshWindowMaximisedState);
   bindRuntimeEvents();
-  void refreshPlugins();
-  void checkForUpdates();
-  // Schedule a periodic re-check so long-running sessions (tray mode) still
-  // discover new releases without requiring a restart. The first interval
-  // fires 2h after the startup check; manual checks from Settings → About
-  // do not reset this timer.
-  updateCheckTimer = window.setInterval(() => { void checkForUpdates(); }, UPDATE_CHECK_INTERVAL_MS);
-  // Pre-load skills before init so welcome message has the count
-  try { await refreshSkillState(); } catch (_) { /* ignore */ }
   await init();
+  if (startupDisposed) return;
+  await nextTick();
+  // Let the workspace render before issuing secondary startup requests.
+  startupTasks.schedule(refreshSkillState);
+  startupTasks.schedule(loadSavedSessions);
+  startupTasks.schedule(refreshPlugins);
+  startupTasks.schedule(refreshSSHClusters);
+  startupTasks.schedule(loadScheduledTasks);
+  startupTasks.schedule(loadServices);
+  startupTasks.schedule(() => {
+    startupContextReady = true;
+    resolveStartupContextReady();
+    if (!footerStatsLoading.value) refreshContextTokens(activeSessionId.value);
+  }, { delay: 500 });
+  startupTasks.schedule(() => {
+    void checkForUpdates();
+    updateCheckTimer = window.setInterval(() => { void checkForUpdates(); }, UPDATE_CHECK_INTERVAL_MS);
+  }, { delay: 10000 });
   // 更新日志放在 init 之后：先让会话与欢迎消息就位，弹窗不跟启动流程抢窗口。
   maybeShowReleaseNotes();
-  void refreshSSHClusters();
-  await Promise.all([loadScheduledTasks(), loadServices()]);
-  await refreshWindowMaximisedState();
-  // 界面已经进场（配置/会话/技能/任务都就绪）后再起波
+  void refreshWindowMaximisedState();
+  // Workspace is ready; secondary disk/network work does not hold the wave.
   playStartupBrandWave();
 });
 
 onUnmounted(() => {
+  startupDisposed = true;
+  sessionIndexRequestVersion += 1;
+  startupTasks.dispose();
+  resolveStartupContextReady();
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   window.removeEventListener('error', handleWindowError);
   window.removeEventListener('unhandledrejection', handleUnhandledRejection);

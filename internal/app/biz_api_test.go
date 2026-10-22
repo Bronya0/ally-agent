@@ -32,6 +32,12 @@ func newApiTestApp(t *testing.T) *App {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("ALLY_DATA_DIR", filepath.Join(home, ".ally_agent"))
+	// Runtime maintenance enumerates the OS temp root, so isolate it too.
+	tempRoot := t.TempDir()
+	for _, key := range []string{"TMP", "TEMP", "TMPDIR"} {
+		t.Setenv(key, tempRoot)
+	}
 	previousApp := aGlobalApp
 	app := NewApp()
 	t.Cleanup(func() { aGlobalApp = previousApp })

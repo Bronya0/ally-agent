@@ -66,14 +66,26 @@ func (a *App) startRuntime(ctx context.Context) error {
 	// Warm the one-time POSIX login-shell PATH probe without delaying the UI.
 	// command/service wait on the same sync.Once if needed.
 	go warmCommandEnvironment()
-	_ = a.loadServiceHistory()
 	if err := a.startScheduledTaskManager(); err != nil {
 		a.logAppError("scheduled tasks load failed", "error", err.Error())
 	}
-	// Sweep stale temp-workspace leftovers from crashed sessions (async, never
-	// blocks startup) and remove this process's temp workspaces on exit.
+	// Keep filesystem maintenance off the startup path and outside a.mu.
+	// One tracked worker prevents cleanup/index repair from flooding disk at boot.
+	a.mu.Lock()
+	workspace := a.config.Workspace
+	a.mu.Unlock()
 	a.runtime.background.Add(1)
-	go func() { defer a.runtime.background.Done(); a.cleanupStaleTempWorkspaces() }()
+	go func() {
+		defer a.runtime.background.Done()
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		a.runStartupMaintenance(ctx, workspace)
+	}()
 
 	// Load persisted token stats in the background and start the async flusher.
 	// Neither startup disk IO nor persistence can block normal chat handling.
@@ -120,6 +132,27 @@ func (a *App) startRuntime(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (a *App) runStartupMaintenance(ctx context.Context, workspace string) {
+	if ctx.Err() != nil {
+		return
+	}
+	cleanupCommandSpillFiles(workspace)
+	if ctx.Err() != nil {
+		return
+	}
+	_ = a.loadServiceHistory()
+	if ctx.Err() != nil {
+		return
+	}
+	a.cleanupStaleTempWorkspaces()
+	if ctx.Err() != nil {
+		return
+	}
+	if _, err := a.repairSessionIndex(ctx); err != nil && ctx.Err() == nil {
+		a.logAppError("session index repair failed", "error", err.Error())
+	}
 }
 
 // stopRuntime closes admission before cancelling runs, and waits for runChat's
