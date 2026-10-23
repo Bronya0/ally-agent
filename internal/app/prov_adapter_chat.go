@@ -174,6 +174,7 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 	streamDone.reset()
 	stream, err := client.CreateChatCompletionStream(ctx, streamReq)
 	if err != nil && isStreamOptionsRejectedError(err) {
+		noteRunModelUsage(ctx, nil, nil)
 		chatStreamOptionsUnsupported(cfg, streamReq.Model, true)
 		streamReq.StreamOptions = nil
 		log.Printf("[llm] gateway rejected stream_options; retrying without it: %v", err)
@@ -532,7 +533,7 @@ func modelUsageFromLegacy(usage *legacyopenai.Usage, raw []byte) *modelUsage {
 			}
 		}
 	}
-	if miss == 0 && hit > 0 && usage.PromptTokens > hit {
+	if miss == 0 && usage.PromptTokens > hit {
 		miss = usage.PromptTokens - hit
 	}
 	result := &modelUsage{

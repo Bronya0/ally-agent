@@ -193,7 +193,8 @@ watch(
 const isEmpty = computed(() => {
   const s = stats.value;
   if (!s) return true;
-  return !(s.summaryToday?.totalTokens || s.summary7Days?.totalTokens || s.summaryMonth?.totalTokens);
+  return !(s.summaryToday?.totalTokens || s.summary7Days?.totalTokens || s.summaryMonth?.totalTokens
+    || s.daily?.some((day) => day.inputTokens > 0 || day.outputTokens > 0));
 });
 const summaryRanges = computed(() => {
   const s = stats.value;
@@ -219,7 +220,7 @@ const HEAT_COLORS = [
 ];
 
 const heatmapCells = computed(() => {
-  const days = stats.value?.daily || [];
+  const days = stats.value?.monthDaily || stats.value?.daily || [];
   const byDate = new Map(days.map((d) => [d.date, d]));
   const now = new Date();
   const year = now.getFullYear();

@@ -35,6 +35,7 @@ func noteRunModelUsage(ctx context.Context, usage *modelUsage, result *modelStre
 	}
 	total.mu.Lock()
 	defer total.mu.Unlock()
+	total.calls++
 	total.output += fallback
 	if usage == nil {
 		total.unknown++

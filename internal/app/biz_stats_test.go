@@ -295,6 +295,27 @@ func TestStatsWindowsMonthStartCoverage(t *testing.T) {
 	}
 }
 
+func TestStatsHeatmapKeepsFirstDayOf31DayMonth(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.Local)
+	_, monthStart, _, dailyStart, _ := statsWindows(now)
+	records := []statsRecord{{Ts: monthStart.Add(time.Hour).UnixMilli(), InputTokens: 100, Requests: 1}}
+	bars := buildStatsDaily(records, dailyStart, statsDailyRangeDays)
+	heatmap := buildStatsDaily(records, monthStart, now.Day())
+	if bars[0].Date != "2026-08-02" || len(heatmap) != 31 || heatmap[0].Date != "2026-08-01" || heatmap[0].InputTokens != 100 {
+		t.Fatalf("heatmap lost month start: bars=%+v heatmap=%+v", bars[0], heatmap)
+	}
+}
+
+func TestStatsLegacyUncachedInputCountsTowardsHitRate(t *testing.T) {
+	summary := summarizeStatsRecords([]statsRecord{
+		{InputTokens: 100, CacheHitTokens: 80, CacheMissTokens: 20},
+		{InputTokens: 100},
+	})
+	if summary.CacheHitRate != 0.4 || summary.CacheMissTokens != 120 {
+		t.Fatalf("legacy uncached input was omitted: %+v", summary)
+	}
+}
+
 // TestStatsWindowsMondayStart verifies the week window starts on Monday,
 // matching the heatmap's Monday-first layout.
 func TestStatsWindowsMondayStart(t *testing.T) {

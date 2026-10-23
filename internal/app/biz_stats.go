@@ -601,7 +601,8 @@ type TokenStatsResult struct {
 	SummaryToday   TokenStatsSummary    `json:"summaryToday"`
 	Summary7Days   TokenStatsSummary    `json:"summary7Days"`
 	SummaryMonth   TokenStatsSummary    `json:"summaryMonth"`
-	Daily          []TokenDailyStat     `json:"daily"` // fixed 30 days, oldest first
+	Daily          []TokenDailyStat     `json:"daily"`      // fixed 30 days, oldest first
+	MonthDaily     []TokenDailyStat     `json:"monthDaily"` // current month through today
 	WorkspaceWeek  []TokenDimensionStat `json:"workspaceWeek"`
 	WorkspaceMonth []TokenDimensionStat `json:"workspaceMonth"`
 	ModelWeek      []TokenDimensionStat `json:"modelWeek"`
@@ -653,6 +654,7 @@ func (a *App) GetTokenStats() TokenStatsResult {
 	result.Summary7Days = summarizeStatsRecords(statsRecordsInRange(all, midnight.AddDate(0, 0, -6).UnixMilli(), nowMs))
 	result.SummaryMonth = summarizeStatsRecords(statsRecordsInRange(all, monthStartMs, nowMs))
 	result.Daily = buildStatsDaily(statsRecordsInRange(all, dailyStart.UnixMilli(), nowMs), dailyStart, statsDailyRangeDays)
+	result.MonthDaily = buildStatsDaily(statsRecordsInRange(all, monthStartMs, nowMs), monthStart, now.Day())
 	result.WorkspaceWeek = buildStatsDimension(statsRecordsInRange(all, weekStartMs, nowMs), workspaceKey, workspaceDisplayName)
 	result.WorkspaceMonth = buildStatsDimension(statsRecordsInRange(all, monthStartMs, nowMs), workspaceKey, workspaceDisplayName)
 	result.ModelWeek = buildStatsDimension(statsRecordsInRange(all, weekStartMs, nowMs), modelKey, nil)
@@ -716,7 +718,11 @@ func summarizeStatsRecords(records []statsRecord) TokenStatsSummary {
 		s.OutputTokens += r.OutputTokens
 		s.CacheHitTokens += r.CacheHitTokens
 		s.CacheWriteTokens += r.CacheWriteTokens
-		s.CacheMissTokens += r.CacheMissTokens
+		miss := r.CacheMissTokens
+		if miss == 0 && r.InputTokens > r.CacheHitTokens {
+			miss = r.InputTokens - r.CacheHitTokens
+		}
+		s.CacheMissTokens += miss
 		s.Requests += r.Requests
 	}
 	if s.Requests > 0 {

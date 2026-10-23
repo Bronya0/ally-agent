@@ -209,12 +209,20 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		}
 		streamErr := stream.Err()
 		stream.Close()
+		usage = usageState.modelUsage()
 		if streamErr == nil && strings.TrimSpace(stopReason) != "" {
 			break
 		}
 		if streamErr == nil {
 			streamErr = errors.New("stream ended without terminal event")
 		}
+		partial := &modelStreamResult{Content: assistant.String(), Reasoning: reasoning.String(), ToolCalls: toolCalls}
+		noteRunModelUsage(ctx, usage, partial)
+		fallbackOutput := 0
+		if usage == nil || usage.CompletionTokens <= 0 {
+			fallbackOutput = estimateCompletionTokens(partial.Content, partial.Reasoning, partial.ToolCalls)
+		}
+		a.recordLLMUsage(model, cfg.Workspace, usage, fallbackOutput)
 		// 适配器只重试"尚未产出任何输出"的失败(与 streamOpenAIChat /
 		// streamOpenAIResponses 的重试守卫一致):无输出则重试不会造成
 		// 重复;已经产生内容的中断交给上层 runChat 做整轮重试,避免把
@@ -249,14 +257,16 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 			anthropic: thinkingBlocks,
 		})
 	}
-	return &modelStreamResult{
+	result := &modelStreamResult{
 		Content:          assistant.String(),
 		Reasoning:        reasoning.String(),
 		ReasoningPresent: len(thinkingBlocks) > 0,
 		ToolCalls:        normalizeToolCalls(toolCalls),
 		Usage:            usage,
 		StopReason:       stopReason,
-	}, nil
+	}
+	noteRunModelUsage(ctx, usage, result)
+	return result, nil
 }
 
 // ── Anthropic extended thinking: one row per endpoint family ────────────────

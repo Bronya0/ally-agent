@@ -628,25 +628,11 @@ func (a *App) streamModelTextWithUsage(ctx context.Context, cfg ConfigState, mod
 }
 
 func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
-	if total, ok := ctx.Value(modelRunUsageKey{}).(*modelRunUsage); ok {
-		total.mu.Lock()
-		total.calls++
-		total.mu.Unlock()
-	}
 	result, err := a.streamModelResponseInner(ctx, cfg, model, messages, tools, onEvent)
 	// Empty successful responses are retried by callers before their normal
 	// accounting path. Preserve any provider-reported spend for that attempt.
 	if err == nil && result != nil && result.Usage != nil && emptyModelResponseError(result) != nil {
 		a.recordLLMUsage(model, cfg.Workspace, result.Usage, 0)
-	}
-	// Chat and Responses report each physical attempt themselves. Retain
-	// successful usage for the other protocol without changing its adapter.
-	if cfg.AuthType != authChatGPTOAuth && normalizeAPIFormat(cfg.APIFormat) == apiFormatAnthropicMessages {
-		var usage *modelUsage
-		if result != nil {
-			usage = result.Usage
-		}
-		noteRunModelUsage(ctx, usage, result)
 	}
 	return result, err
 }

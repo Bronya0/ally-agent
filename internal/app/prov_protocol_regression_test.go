@@ -8,6 +8,7 @@ import (
 	"crypto/cipher"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -349,8 +350,70 @@ func TestRunUsageIncludesNestedAndFailedTerminalRequests(t *testing.T) {
 	noteRunModelUsage(child, &modelUsage{PromptTokens: 50, CompletionTokens: 10, ReasoningTokens: 7}, nil)
 	payload := map[string]any{}
 	publishRunModelUsage(ctx, payload)
-	if payload["inputTokens"] != 150 || payload["outputTokens"] != 30 || payload["reasoningTokens"] != 22 || payload["modelRequests"] != 1 {
+	if payload["inputTokens"] != 150 || payload["outputTokens"] != 30 || payload["reasoningTokens"] != 22 || payload["modelRequests"] != 2 {
 		t.Fatalf("run usage lost or double counted: %v", payload)
+	}
+}
+
+func TestChatCacheMissIncludesCompletelyUncachedRequests(t *testing.T) {
+	var records []statsRecord
+	for _, hit := range []int{80, 0} {
+		usage := modelUsageFromLegacy(&openai.Usage{
+			PromptTokens: 100, PromptTokensDetails: &openai.PromptTokensDetails{CachedTokens: hit},
+		}, nil)
+		records = append(records, statsRecord{InputTokens: usage.PromptTokens, CacheHitTokens: usage.CacheHitTokens, CacheMissTokens: usage.CacheMissTokens})
+	}
+	summary := summarizeStatsRecords(records)
+	if summary.CacheHitTokens != 80 || summary.CacheMissTokens != 120 || summary.CacheHitRate != 0.4 {
+		t.Fatalf("mixed cached/uncached requests inflated hit rate: %+v", summary)
+	}
+}
+
+func TestAnthropicFailedAttemptsKeepUsage(t *testing.T) {
+	for _, retry := range []bool{false, true} {
+		t.Run(fmt.Sprint("retry=", retry), func(t *testing.T) {
+			a := newApiTestApp(t)
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempt := requests.Add(1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":100,\"output_tokens\":1}}}\n\n")
+				if attempt == 1 {
+					// EOF without a terminal event must retain the observed usage.
+					return
+				}
+				io.WriteString(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n")
+				io.WriteString(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":20}}\n\n")
+				io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			}))
+			defer server.Close()
+			cfg := protocolConfig(server.URL, apiFormatAnthropicMessages)
+			cfg.Workspace = a.config.Workspace
+			cfg.noAdapterRetry = !retry
+			ctx := withModelRunUsage(t.Context())
+			result, err := a.streamModelResponse(ctx, cfg, cfg.Model, []openai.ChatCompletionMessage{{Role: "user", Content: "test"}}, nil, nil)
+			if retry {
+				if err != nil {
+					t.Fatal(err)
+				}
+				a.recordLLMUsage(cfg.Model, cfg.Workspace, result.Usage, 0)
+			} else if err == nil {
+				t.Fatal("truncated response was accepted")
+			}
+			wantCalls, wantInput, wantOutput := 1, 100, 1
+			if retry {
+				wantCalls, wantInput, wantOutput = 2, 200, 21
+			}
+			payload := map[string]any{}
+			publishRunModelUsage(ctx, payload)
+			if payload["modelRequests"] != wantCalls || payload["inputTokens"] != wantInput || payload["outputTokens"] != wantOutput {
+				t.Fatalf("run usage = %v", payload)
+			}
+			stats := a.GetTokenStats().SummaryToday
+			if stats.InputTokens != wantInput || stats.OutputTokens != wantOutput || stats.Requests != wantCalls {
+				t.Fatalf("dashboard usage = %+v", stats)
+			}
+		})
 	}
 }
 
