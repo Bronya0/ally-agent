@@ -170,25 +170,53 @@ func proxyForConfig(cfg ConfigState, req *http.Request) (*url.URL, error) {
 }
 
 func proxyForResolved(resolved resolvedProxy, target *url.URL) (*url.URL, error) {
-	if resolved.status.Mode == proxyModeOff {
-		return nil, nil
-	}
-	if resolved.status.Error != "" || !resolved.status.Enabled {
-		return nil, errors.New(resolved.status.Error)
-	}
-	if matchesWindowsProxyBypass(target.Hostname(), resolved.windowsBypass) {
-		return nil, nil
-	}
+	return proxyMatcher(resolved)(target)
+}
+
+func proxyMatcher(resolved resolvedProxy) func(*url.URL) (*url.URL, error) {
 	proxyCfg := &httpproxy.Config{
 		HTTPProxy:  resolved.status.HTTPProxy,
 		HTTPSProxy: resolved.status.HTTPSProxy,
 		NoProxy:    mergeNoProxy(resolved.status.NoProxy),
 	}
-	return proxyCfg.ProxyFunc()(target)
+	match := proxyCfg.ProxyFunc()
+	return func(target *url.URL) (*url.URL, error) {
+		if resolved.status.Mode == proxyModeOff {
+			return nil, nil
+		}
+		if resolved.status.Error != "" || !resolved.status.Enabled {
+			return nil, errors.New(resolved.status.Error)
+		}
+		if matchesWindowsProxyBypass(target.Hostname(), resolved.windowsBypass) {
+			return nil, nil
+		}
+		return match(target)
+	}
 }
 
 func proxyHTTPClient(cfg ConfigState, allowPrivate bool, timeout time.Duration) *http.Client {
-	return &http.Client{Transport: proxyHTTPTransport(cfg, allowPrivate), Timeout: timeout}
+	var transport http.RoundTripper = proxyHTTPTransport(cfg, allowPrivate)
+	if normalizeProxyMode(cfg.ProxyMode) == proxyModeSystem {
+		// MCP and other long-lived clients must pick up refreshed system settings
+		// too. Each request selects one immutable routing/guard snapshot.
+		networkConfig := ConfigState{ProxyMode: proxyModeSystem, ProxyNoProxy: cfg.ProxyNoProxy}
+		transport = &refreshingProxyTransport{current: func() *http.Transport {
+			return proxyHTTPTransport(networkConfig, allowPrivate)
+		}}
+	}
+	return &http.Client{Transport: transport, Timeout: timeout}
+}
+
+type refreshingProxyTransport struct {
+	current func() *http.Transport
+}
+
+func (t *refreshingProxyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.current().RoundTrip(req)
+}
+
+func (t *refreshingProxyTransport) CloseIdleConnections() {
+	t.current().CloseIdleConnections()
 }
 
 // modelHTTPClient returns the HTTP client used for model API requests: the
@@ -381,21 +409,22 @@ func (t *modelHeadersTransport) RoundTrip(req *http.Request) (*http.Response, er
 	return t.base.RoundTrip(clone)
 }
 
-// proxyTransportCache memoizes *http.Transport instances by (cfg, allowPrivate)
-// so consecutive LLM requests reuse the same HTTP/2 connection pool instead
-// of paying a fresh TLS handshake (100-500ms) on every request. The key is
-// derived only from the proxy-related config fields, so changes to unrelated
-// ConfigState fields (model, etc.) do not invalidate the cache.
-//
-// The cache has small, bounded cardinality: at most 3 modes × 2 allowPrivate
-// = 6 entries per process, so it never grows unboundedly across a session.
-// Callers must not mutate the returned Transport; it is shared. If the user
-// changes proxy settings, a new Transport is constructed for the new key and
-// the old one becomes idle and eventually GC'd once its connections close.
+// Cache both the proxy snapshot and its transport. Routing and dial exemptions
+// must use the same snapshot when the system proxy changes.
+const maxProxyTransports = 8
+const systemProxyRefreshInterval = 5 * time.Second
+
+type proxyTransportEntry struct {
+	transport *http.Transport
+	checked   time.Time
+	used      time.Time
+	resolved  resolvedProxy
+}
+
 var proxyTransportCache = struct {
 	sync.Mutex
-	entries map[proxyTransportKey]*http.Transport
-}{entries: map[proxyTransportKey]*http.Transport{}}
+	entries map[proxyTransportKey]proxyTransportEntry
+}{entries: map[proxyTransportKey]proxyTransportEntry{}}
 
 type proxyTransportKey struct {
 	mode         string
@@ -405,21 +434,38 @@ type proxyTransportKey struct {
 }
 
 func proxyHTTPTransport(cfg ConfigState, allowPrivate bool) *http.Transport {
-	key := proxyTransportKey{
-		mode:         normalizeProxyMode(cfg.ProxyMode),
-		proxyURL:     strings.TrimSpace(cfg.ProxyURL),
-		proxyNoProxy: strings.TrimSpace(cfg.ProxyNoProxy),
-		allowPrivate: allowPrivate,
-	}
+	key := proxyTransportKey{normalizeProxyMode(cfg.ProxyMode), strings.TrimSpace(cfg.ProxyURL), strings.TrimSpace(cfg.ProxyNoProxy), allowPrivate}
 	proxyTransportCache.Lock()
-	if t, ok := proxyTransportCache.entries[key]; ok {
-		proxyTransportCache.Unlock()
-		return t
+	defer proxyTransportCache.Unlock()
+	now := time.Now()
+	entry, exists := proxyTransportCache.entries[key]
+	if exists && (key.mode != proxyModeSystem || now.Sub(entry.checked) < systemProxyRefreshInterval) {
+		entry.used = now
+		proxyTransportCache.entries[key] = entry
+		return entry.transport
 	}
-	t := newProxyHTTPTransport(cfg, allowPrivate)
-	proxyTransportCache.entries[key] = t
-	proxyTransportCache.Unlock()
-	return t
+	resolved := resolveProxy(cfg)
+	if exists && entry.resolved == resolved {
+		entry.checked, entry.used = now, now
+		proxyTransportCache.entries[key] = entry
+		return entry.transport
+	}
+	if exists {
+		entry.transport.CloseIdleConnections()
+	} else if len(proxyTransportCache.entries) >= maxProxyTransports {
+		var oldest proxyTransportKey
+		var oldestTime time.Time
+		for k, e := range proxyTransportCache.entries {
+			if oldestTime.IsZero() || e.used.Before(oldestTime) {
+				oldest, oldestTime = k, e.used
+			}
+		}
+		proxyTransportCache.entries[oldest].transport.CloseIdleConnections()
+		delete(proxyTransportCache.entries, oldest)
+	}
+	transport := newResolvedProxyHTTPTransport(resolved, allowPrivate)
+	proxyTransportCache.entries[key] = proxyTransportEntry{transport, now, now, resolved}
+	return transport
 }
 
 // invalidateProxyTransportCache closes and drops every cached *http.Transport.
@@ -431,38 +477,47 @@ func proxyHTTPTransport(cfg ConfigState, allowPrivate bool) *http.Transport {
 func invalidateProxyTransportCache() {
 	proxyTransportCache.Lock()
 	old := proxyTransportCache.entries
-	proxyTransportCache.entries = map[proxyTransportKey]*http.Transport{}
+	proxyTransportCache.entries = map[proxyTransportKey]proxyTransportEntry{}
 	proxyTransportCache.Unlock()
 	for _, t := range old {
-		t.CloseIdleConnections()
+		t.transport.CloseIdleConnections()
 	}
 }
 
 func newProxyHTTPTransport(cfg ConfigState, allowPrivate bool) *http.Transport {
+	return newResolvedProxyHTTPTransport(resolveProxy(cfg), allowPrivate)
+}
+
+func newResolvedProxyHTTPTransport(resolved resolvedProxy, allowPrivate bool) *http.Transport {
 	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	match := proxyMatcher(resolved)
 	transport := &http.Transport{
-		Proxy:                 func(req *http.Request) (*url.URL, error) { return proxyForConfig(cfg, req) },
+		Proxy:                 func(req *http.Request) (*url.URL, error) { return match(req.URL) },
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   10,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: time.Second,
+		ResponseHeaderTimeout: defaultStreamIdleTimeout,
 	}
 	// Apply the private-network guard on every dial path, including the
 	// NO_PROXY direct-connection path when a proxy is configured. Without
 	// this, hosts matched by NO_PROXY were dialed directly with a bare
 	// Dialer, bypassing the allowPrivateNetwork=false restriction (SSRF).
 	// The user-configured proxy server itself is always reachable.
-	transport.DialContext = guardedDialContext(dialer, allowPrivate, proxyHosts(cfg))
+	transport.DialContext = guardedDialContext(dialer, allowPrivate, resolvedProxyHosts(resolved))
 	return transport
 }
 
 // proxyHosts returns the lowercase hostnames of the configured proxy servers
 // so the dial guard can always allow connections to them.
 func proxyHosts(cfg ConfigState) map[string]struct{} {
+	return resolvedProxyHosts(resolveProxy(cfg))
+}
+
+func resolvedProxyHosts(resolved resolvedProxy) map[string]struct{} {
 	hosts := map[string]struct{}{}
-	resolved := resolveProxy(cfg)
 	if !resolved.status.Enabled || resolved.status.Error != "" {
 		return hosts
 	}
@@ -476,11 +531,17 @@ func proxyHosts(cfg ConfigState) map[string]struct{} {
 
 func guardedDialContext(dialer *net.Dialer, allowPrivate bool, allowHosts map[string]struct{}) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		// Include DNS and every address attempt in the same dial budget.
+		if dialer.Timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, dialer.Timeout)
+			defer cancel()
+		}
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := allowHosts[strings.ToLower(host)]; ok {
+		if _, ok := allowHosts[strings.ToLower(host)]; ok || allowPrivate {
 			return dialer.DialContext(ctx, network, address)
 		}
 		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
@@ -488,16 +549,26 @@ func guardedDialContext(dialer *net.Dialer, allowPrivate bool, allowHosts map[st
 			return nil, err
 		}
 		var lastErr error
-		for _, ipAddr := range ips {
+		for i, ipAddr := range ips {
 			if !allowPrivate && isPrivateHTTPAddress(ipAddr.IP) {
 				lastErr = fmt.Errorf("refusing private or local network address %s for host %s", ipAddr.IP, host)
 				continue
 			}
-			if conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ipAddr.IP.String(), port)); dialErr == nil {
+			attemptCtx := ctx
+			cancel := func() {}
+			if deadline, ok := ctx.Deadline(); ok {
+				attemptCtx, cancel = context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(ips)-i))
+			}
+			conn, dialErr := dialer.DialContext(attemptCtx, network, net.JoinHostPort(ipAddr.String(), port))
+			cancel()
+			if dialErr == nil {
 				return conn, nil
 			} else {
 				lastErr = dialErr
 			}
+		}
+		if lastErr == nil {
+			lastErr = fmt.Errorf("resolve %s: no addresses", host)
 		}
 		return nil, lastErr
 	}

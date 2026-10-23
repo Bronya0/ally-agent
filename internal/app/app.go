@@ -136,16 +136,11 @@ func effectiveUserAgent(cfg ConfigState) string {
 	return defaultHTTPUA
 }
 
-// clampBackgroundOpacity normalizes the chat background opacity to [0, 1].
-// A zero value (the JSON default when the field is absent) is replaced with
-// the frontend default so legacy config without the field still shows a
-// faint background once an image is uploaded.
+// clampBackgroundOpacity bounds an explicit value. Missing disk fields receive
+// their defaults before decoding, so zero remains a valid stored value.
 func clampBackgroundOpacity(v float64) float64 {
-	if v <= 0 {
-		// Distinguish "field absent" (use default) from "user dragged to 0"
-		// would require a pointer; the slider's min is 0.05 in the UI, so a
-		// raw 0 here is treated as "not set" → default.
-		return defaultBackgroundOpacity
+	if v < 0 {
+		return 0
 	}
 	if v > 1 {
 		return 1
@@ -195,9 +190,10 @@ type App struct {
 	notifier               completionNotifier
 	lastCompletionNotifyAt time.Time
 
-	mu         sync.Mutex
-	config     ConfigState
-	configPath string
+	configWriteMu sync.Mutex // serializes config transactions; acquire before mu
+	mu            sync.Mutex
+	config        ConfigState
+	configPath    string
 	// pluginMu 串行化插件的安装/删除/启停。安装不是原子操作（挪旧版本到 .old → 新内容
 	// rename 上位），两条导入并发跑时第二次会先 RemoveAll 掉第一次刚挪过去的备份、随后
 	// rename 失败滚进回滚分支——只有串行能把这一串变成原子的。持锁期间只调不会再拿
@@ -660,7 +656,7 @@ type ConfigState struct {
 	// BackgroundOpacity controls how strongly the custom background image
 	// shows through the chat area. 0 = invisible, 1 = fully opaque. Clamped
 	// to [0, 1] on save; the frontend default is 0.15 (faint silhouette).
-	BackgroundOpacity float64 `json:"backgroundOpacity,omitempty"`
+	BackgroundOpacity float64 `json:"backgroundOpacity"`
 	// WindowWidth / WindowHeight remember the user's manual window size.
 	// Zero means "no saved size yet": the window starts at a golden-ratio
 	// share of the primary screen (61.8% x 61.8%) and the size is saved
@@ -1619,33 +1615,7 @@ func (a *App) ensureInitialized() error {
 	if loadPath, err := resolveConfigLoadPath(a.configPath); err == nil {
 		var loaded ConfigState
 		if loaded, err = readConfigFile(loadPath); err == nil {
-			a.config = mergeConfig(a.config, loaded)
-			// mergeConfig 不携带该字段（它是请求级 overlay 的合并口，请求侧不得改写
-			// SSRF 开关），所以磁盘值由加载路径显式采纳；nil 表示旧配置没有这个键，
-			// 保留 defaultConfigState 的默认值。
-			if loaded.AllowPrivateNetwork != nil {
-				a.config.AllowPrivateNetwork = loaded.AllowPrivateNetwork
-			}
-			// 同一个理由：以下两个持久化字段也不在 mergeConfig 里（overlay 不得改写
-			// token，而"最近使用模型"由 SaveConfig / saveConfig 各自的显式分支写入），
-			// 加载路径不采纳就是"重启即丢"：内存里为空，GetConfig 把空值回给前端，
-			// 下一次保存再把空值写回磁盘——用户的 token 被永久抹掉，模型身份丢失
-			// 则退化成按使用频率挑一条（选了模型重启后没选中它）。
-			a.config.GitHubToken = strings.TrimSpace(loaded.GitHubToken)
-			if loaded.LastUsedModel != nil {
-				if identity := normalizeModelIdentity(a.config.Models, *loaded.LastUsedModel); identity != nil {
-					a.config.LastUsedModel = identity
-				}
-			}
-			// 旧版 config.json 把"当前模型"直接存在顶层字段里（/api/v1/models/activate
-			// 与 2026-09 之前设置页的"使用"按钮写过它）：按身份迁到 LastUsedModel，
-			// models[] 里找不到那条时就地物化成一条 preset（含密钥）。迁移必须发生在
-			// stripModelFields 之前——它清掉的是磁盘上唯一的一份。迁移后第一次保存
-			// 就以新形状落盘。
-			if a.config.LastUsedModel == nil {
-				migrateLegacyModelFields(&a.config, loaded)
-			}
-			stripModelFields(&a.config)
+			a.config = loadedConfig(loaded)
 		} else {
 			// 内容坏掉的配置不能留在原地：这次用了默认值，之后任意一次保存都会把
 			// 默认值写回同一个文件，用户的原设置就永久消失了。改名保留 + 记一行
@@ -3478,16 +3448,14 @@ func (a *App) SwitchModel(index int) error {
 	if err := a.ensureInitialized(); err != nil {
 		return err
 	}
-	a.mu.Lock()
-	if index < 0 || index >= len(a.config.Models) {
-		a.mu.Unlock()
-		return fmt.Errorf("model index out of range: %d", index)
-	}
-	identity := identityOfModel(a.config.Models[index])
-	a.config.LastUsedModel = &identity
-	cfg := a.config
-	a.mu.Unlock()
-	return a.saveConfig(cfg)
+	return a.commitConfig(func(cfg *ConfigState) error {
+		if index < 0 || index >= len(cfg.Models) {
+			return fmt.Errorf("model index out of range: %d", index)
+		}
+		identity := identityOfModel(cfg.Models[index])
+		cfg.LastUsedModel = &identity
+		return nil
+	})
 }
 
 // collectValidJSONFields returns a set of valid JSON field names from the

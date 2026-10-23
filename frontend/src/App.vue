@@ -3276,6 +3276,7 @@ let gitRefreshTimer = null;
 let gitRefreshInFlight = false;
 let gitRefreshPending = false;
 let configSaveQueue = Promise.resolve();
+let configSaveVersion = 0;
 let workspaceSwitchVersion = 0;
 
 function emptyGitStatus() {
@@ -3365,7 +3366,9 @@ function prepareFooterStatsForTarget(tabId, workspace) {
 }
 
 function queueConfigSave(snapshot) {
-  const payload = { ...snapshot };
+  const version = ++configSaveVersion;
+  // Vue proxies cannot be structuredClone'd; JSON is also the bridge wire format.
+  const payload = JSON.parse(JSON.stringify(snapshot));
   const save = configSaveQueue
     .catch(() => {})
     .then(async () => {
@@ -3384,6 +3387,25 @@ function queueConfigSave(snapshot) {
         delete payload.disabledPlugins;
       }
       return SaveConfig(payload);
+    })
+    .catch(async (err) => {
+      // Only the latest failed save may restore live state. An older failure or
+      // delayed reload must not overwrite a newer queued edit.
+      if (version === configSaveVersion) {
+        try {
+          const committed = await GetConfig();
+          if (version === configSaveVersion) {
+            assignConfig(config, committed);
+            assignConfig(configDraft, committed);
+            resyncTabModelsFromPresets();
+            adoptPristineTabModels();
+            applyFontSizes(config);
+          }
+        } catch (reloadError) {
+          console.error('[config] 保存失败后重新读取配置失败', reloadError);
+        }
+      }
+      throw err;
     });
   configSaveQueue = save.catch(() => {});
   return save;

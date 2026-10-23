@@ -123,7 +123,7 @@ func readConfigFile(path string) (ConfigState, error) {
 	if err != nil {
 		return ConfigState{}, err
 	}
-	var loaded ConfigState
+	loaded := defaultConfigState()
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		return ConfigState{}, err
 	}
@@ -213,12 +213,7 @@ func memoriesDir() string {
 // ── Skills ───────────────────────────────────────────────
 
 func (a *App) getConfig() (ConfigState, error) {
-	if err := a.ensureInitialized(); err != nil {
-		return ConfigState{}, err
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.config, nil
+	return a.GetConfig()
 }
 
 // persistableConfig 施加落盘前的四条不变式：悬空身份收敛（展开不出东西的身份等于
@@ -226,22 +221,20 @@ func (a *App) getConfig() (ConfigState, error) {
 // 隐藏页面名单清洗（只留可关闭的页面键，知识库与设置永不隐藏）+ 禁用插件名单清洗
 // （只留合法 id）。落盘路径共用这一份，免得新加的写入方漏掉其中一条。
 func persistableConfig(cfg ConfigState) ConfigState {
-	cfg.ToolConcurrency = clampToolConcurrency(cfg.ToolConcurrency)
-	// Copy before sanitizing: do not mutate a caller's model slice.
-	cfg.Models = append([]ModelConfig(nil), cfg.Models...)
-	for i := range cfg.Models {
-		syncModelAPIKeyFields(&cfg.Models[i])
-	}
+	cfg = normalizeStoredConfig(cloneConfig(cfg))
 	convergeLastUsedModel(&cfg)
 	// 派生模型字段不落盘（见 ConfigState 的注释）：读回来时再按身份展开。
 	stripModelFields(&cfg)
+	cfg.ExtraRoots = nil
+	cfg.chatGPTManager = nil
+	cfg.DisabledTools = toolshared.SanitizeDisabledTools(cfg.DisabledTools)
 	cfg.HiddenModes = sanitizeHiddenModes(cfg.HiddenModes)
 	cfg.DisabledPlugins = plugin.NormalizeIDList(cfg.DisabledPlugins)
 	return cfg
 }
 
 // persistConfigFile 把一份配置写进磁盘：目录兜底 + 缩进序列化 + 原子写（临时文件 +
-// rename）。这是“配置落盘”的唯一一处：saveConfig 与那几个只改单个字段的写入方
+// rename）。这是“配置落盘”的唯一一处：commitConfig 与只改单个字段的写入方
 // （禁用技能、背景图、跳过更新）都经由它，所以不会再出现第二种磁盘形状。
 func persistConfigFile(path string, cfg ConfigState) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -254,33 +247,36 @@ func persistConfigFile(path string, cfg ConfigState) error {
 	return writeAtomicBytes(path, data, 0o600)
 }
 
-// updateConfigAndPersist 在锁内把 a.config 交给 mutate 改一个字段，再按同一组不变式落盘。
-// 这是“改一处配置并保存”的唯一路径——以前这些写入方各自 marshal + 写盘，既绕过了
-// saveConfig 的不变式（加了新不变式也只会有一处执行），又各自重复了一遍写盘细节。
-func (a *App) updateConfigAndPersist(mutate func(*ConfigState)) error {
+// commitConfig is the only runtime writer of persisted configuration. Mutators
+// receive an owned copy and must not change App state or perform external work.
+// Disk writes are serialized without holding the general App lock. A failed
+// write leaves both the published config and its derived mirrors unchanged.
+func (a *App) commitConfig(mutate func(*ConfigState) error) error {
+	a.configWriteMu.Lock()
+	defer a.configWriteMu.Unlock()
 	a.mu.Lock()
-	mutate(&a.config)
-	cfg := persistableConfig(a.config)
-	a.config = cfg
+	cfg := cloneConfig(a.config)
 	path := a.configPath
 	a.mu.Unlock()
-	return persistConfigFile(path, cfg)
+	if err := mutate(&cfg); err != nil {
+		return err
+	}
+	cfg = persistableConfig(cfg)
+	if err := validateStoredConfig(cfg); err != nil {
+		return err
+	}
+	if err := persistConfigFile(path, cfg); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.config = cloneConfig(cfg)
+	a.disabledSkills = cloneStringSlice(cfg.DisabledSkills)
+	a.mu.Unlock()
+	return nil
 }
 
-// saveConfig persists the whole config. The write goes through the atomic
-// helper (temp sibling + rename): a plain os.WriteFile truncates in place, so a
-// crash mid-write leaves half a JSON document, and the next start silently
-// falls back to defaults and then overwrites the user's real settings.
-func (a *App) saveConfig(cfg ConfigState) error {
-	a.mu.Lock()
-	cfg.DisabledSkills = normalizeSkillNameList(cfg.DisabledSkills)
-	cfg.DisabledTools = toolshared.SanitizeDisabledTools(cfg.DisabledTools)
-	cfg = persistableConfig(cfg)
-	a.config = cfg
-	a.disabledSkills = cloneStringSlice(cfg.DisabledSkills)
-	path := a.configPath
-	a.mu.Unlock()
-	return persistConfigFile(path, cfg)
+func (a *App) updateConfigAndPersist(mutate func(*ConfigState)) error {
+	return a.commitConfig(func(cfg *ConfigState) error { mutate(cfg); return nil })
 }
 
 // hideableModes 是允许隐藏的页面键（有序切片）：Agent（chat）与设置（settings）
@@ -316,6 +312,8 @@ func sanitizeHiddenModes(modes []string) []string {
 // ── Skills: system prompt metadata injection ──
 
 func mergeConfig(base, overlay ConfigState) ConfigState {
+	base = cloneConfig(base)
+	overlay = cloneConfig(overlay)
 	// Explicit API-key snapshots must clear a previously active OAuth identity.
 	if overlay.AuthType != "" || overlay.Model != "" {
 		base.AuthType = overlay.AuthType
@@ -526,10 +524,7 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 		base.ReasoningEffort = normalizeReasoningEffort(base.ReasoningEffort)
 	}
 	for i := range base.Models {
-		base.Models[i].ReasoningTag = normalizeReasoningTag(base.Models[i].ReasoningTag)
-		base.Models[i].ReasoningEffort = normalizeReasoningEffort(base.Models[i].ReasoningEffort)
-		base.Models[i].CustomHeaders = normalizeCustomHeaders(base.Models[i].CustomHeaders)
-		syncModelAPIKeyFields(&base.Models[i])
+		base.Models[i] = normalizeModelEntry(base.Models[i])
 	}
 	if goruntime.GOOS == "windows" {
 		base.GitBashPath = resolveGitBashPath(base.GitBashPath)
@@ -703,80 +698,24 @@ func (a *App) GetConfig() (ConfigState, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.config, nil
+	return cloneConfig(a.config), nil
 }
 
 func (a *App) SaveConfig(req ConfigState) error {
 	if err := a.ensureInitialized(); err != nil {
 		return err
 	}
-	if normalizeProxyMode(req.ProxyMode) == proxyModeManual && normalizeProxyURL(req.ProxyURL, "http") == "" {
-		return errors.New("manual proxy URL must be a valid http://, https://, or socks5:// URL")
-	}
-	a.mu.Lock()
-	proxyChanged := normalizeProxyMode(a.config.ProxyMode) != normalizeProxyMode(req.ProxyMode) ||
-		strings.TrimSpace(a.config.ProxyURL) != strings.TrimSpace(req.ProxyURL) ||
-		strings.TrimSpace(a.config.ProxyNoProxy) != strings.TrimSpace(req.ProxyNoProxy)
-	// MCP 的 http/sse 传输把私网许可烘进 transport，改开关后已经连上的服务端
-	// 不会自己换掉它：必须重建连接，「关掉开关」才算真的生效。这里先记下旧的
-	// 生效值，等字段落地后再比（拿请求字段比会误判，见下）。
-	allowPrivateBefore := a.config.allowPrivateNetworkEnabled()
-	// The image picker owns this field. A queued settings snapshot must not
-	// restore a replaced/cleared image or inject an arbitrary filename.
-	req.BackgroundImage = ""
-	a.config = mergeConfig(a.config, req)
-	a.config.CustomPrompt = req.CustomPrompt
-	if req.ToolConcurrency != 0 {
-		a.config.ToolConcurrency = clampToolConcurrency(req.ToolConcurrency)
-	}
-	// GitHubToken 由保存路径显式写入（含清空）：mergeConfig 不再携带该字段，
-	// 空 overlay 的 effectiveConfig 读取路径不会把它抹掉。
-	a.config.GitHubToken = strings.TrimSpace(req.GitHubToken)
-	// KBRoot 直接采用请求值（含清空），前端 draft 由 GetConfig 加载、整份回传。
-	a.config.KBRoot = strings.TrimSpace(req.KBRoot)
-	// nil 表示请求没有携带该字段（旧前端）：保留已加载的值，避免一次保存就把用户
-	// 关掉的 SSRF 开关静默打开。该字段不放进 mergeConfig，请求级 overlay 不得改写。
-	if req.AllowPrivateNetwork != nil {
-		a.config.AllowPrivateNetwork = req.AllowPrivateNetwork
-	}
-	// 比的是「生效值」，不是请求里那个字段：请求没带它时上面保留旧值，拿请求值
-	// 比会把「没变」判成「变了」，白重建一次全部 MCP 连接。
-	allowPrivateChanged := a.config.allowPrivateNetworkEnabled() != allowPrivateBefore
-	a.config.GitBashPath = req.GitBashPath
-	a.config.ProxyMode = normalizeProxyMode(req.ProxyMode)
-	a.config.ProxyURL = strings.TrimSpace(req.ProxyURL)
-	a.config.ProxyNoProxy = strings.TrimSpace(req.ProxyNoProxy)
-	a.config.UserAgent = strings.TrimSpace(req.UserAgent)
-	if goruntime.GOOS == "windows" {
-		a.config.GitBashPath = resolveGitBashPath(req.GitBashPath)
-	}
-	// 最近使用模型身份：nil 表示请求没携带该字段（旧前端 / API 调用），保留现值；
-	// 非 nil 时按 models[] 收敛（provider 写法归一），解析不到（预设已删）就不采纳
-	// ——残留的悬空身份由随后的 convergeLastUsedModel 一并清掉，两个写入方共用同一段
-	// 收敛（界面在模型页删掉/改名那条模型后整份保存，磁盘上不能留一个展开落空的身份）。
-	// 注意 JSON 的 `null` 也落在"没携带"这一支（前端整份保存永远显式带 null）：身份只由
-	// "指向 models[] 里真实存在的那一条"定义，悬空身份统一由 convergeLastUsedModel 清掉，
-	// 不需要（也没法）用 null 主动清除。
-	if req.LastUsedModel != nil {
-		if identity := normalizeModelIdentity(a.config.Models, *req.LastUsedModel); identity != nil {
-			a.config.LastUsedModel = identity
-		}
-	}
-	// Background opacity is editable from the frontend slider.
-	a.config.BackgroundOpacity = clampBackgroundOpacity(req.BackgroundOpacity)
-	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
-	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
-	a.config.DisabledTools = toolshared.SanitizeDisabledTools(a.config.DisabledTools)
-	// 落盘不变式（收敛悬空身份 + 清派生模型字段）与写盘都收在同一处，不再在这里
-	// 各写一遍：见 persistableConfig / persistConfigFile。
-	a.config = persistableConfig(a.config)
-	cfg := a.config
-	path := a.configPath
-	a.mu.Unlock()
-
-	// 设置页保存是最常被用户触碰的写入点，同样走原子替换（截断写中途崩溃会留下
-	// 半截 JSON，下次启动只能整份回落默认值，见 ensureInitialized）。
-	if err := persistConfigFile(path, cfg); err != nil {
+	req = cloneConfig(req)
+	var cfg ConfigState
+	var proxyChanged, allowPrivateChanged bool
+	if err := a.commitConfig(func(next *ConfigState) error {
+		before := *next
+		*next = settingsConfig(*next, req)
+		proxyChanged = normalizeProxyMode(before.ProxyMode) != next.ProxyMode || strings.TrimSpace(before.ProxyURL) != next.ProxyURL || strings.TrimSpace(before.ProxyNoProxy) != next.ProxyNoProxy
+		allowPrivateChanged = before.allowPrivateNetworkEnabled() != next.allowPrivateNetworkEnabled()
+		cfg = cloneConfig(*next)
+		return nil
+	}); err != nil {
 		return err
 	}
 	if proxyChanged && a.ctx != nil {
@@ -850,7 +789,7 @@ func (a *App) runtimeConfig(cfg ConfigState) ConfigState {
 
 func (a *App) effectiveConfig(overlay ConfigState) ConfigState {
 	a.mu.Lock()
-	base := a.config
+	base := cloneConfig(a.config)
 	a.mu.Unlock()
 	return mergeConfig(expandLastUsedModel(a.runtimeConfig(base)), overlay)
 }
@@ -1039,7 +978,8 @@ func stripModelFields(cfg *ConfigState) {
 
 // convergeLastUsedModel 清掉在 models[] 里解析不到的悬空身份：这种身份展开永远落空
 // （等价于"没有最近使用模型"），留着还会让界面把"最近使用"指着一条不存在的模型。
-// config 有**两个**写入方——局部保存的 saveConfig 与设置页整份保存的 SaveConfig——
+// 所有写入方经 commitConfig 收敛；设置保存与局部更新共享这条不变式。
+//
 // 同一不变式的收敛必须收口在这里给两边共用：只在一边清理，另一边就会把悬空身份落盘，
 // 于是 HTTP API 会话与计划任务回落直接报 "model is required"（界面自己因为还有 Tab
 // 快照、下次切模型/发送又会重写身份，看不出问题）。

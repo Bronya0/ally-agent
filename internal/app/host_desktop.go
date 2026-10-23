@@ -262,9 +262,7 @@ func (a *App) SelectWorkspace() (string, error) {
 	if pathutil.IsSystemRootPath(selected) {
 		return "", errors.New("系统根目录不能用作工作区：整个磁盘都会变成 Agent 的可写范围，请选择一个具体的项目目录")
 	}
-	cfg := a.config
-	cfg.Workspace = selected
-	if err := a.SaveConfig(cfg); err != nil {
+	if err := a.updateConfigAndPersist(func(cfg *ConfigState) { cfg.Workspace = selected }); err != nil {
 		return "", err
 	}
 	return selected, nil
@@ -432,7 +430,7 @@ func (a *App) OpenWorkspaceInFileManager() error {
 		return err
 	}
 	a.mu.Lock()
-	cfg := a.config
+	cfg := cloneConfig(a.config)
 	a.mu.Unlock()
 	root, err := workspaceRoot(cfg)
 	if err != nil {

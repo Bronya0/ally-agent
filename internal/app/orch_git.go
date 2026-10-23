@@ -429,7 +429,7 @@ func (a *App) invalidateGitStatus(workspace string) {
 // chat workspace.
 func (a *App) GetGitDiff(workspace string, repoPath string) GitDiffResult {
 	a.mu.Lock()
-	cfg := a.config
+	cfg := cloneConfig(a.config)
 	a.mu.Unlock()
 	if trimmed := strings.TrimSpace(workspace); trimmed != "" {
 		cfg.Workspace = trimmed

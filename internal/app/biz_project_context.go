@@ -247,12 +247,12 @@ func (a *App) GetBackgroundImageURL() (string, error) {
 		// File missing after a manual delete: silently clear so the UI falls
 		// back to no background rather than showing a broken image.
 		if errors.Is(err, os.ErrNotExist) {
-			a.mu.Lock()
-			if a.config.BackgroundImage == name {
-				a.config.BackgroundImage = ""
-			}
-			a.mu.Unlock()
-			return "", nil
+			err := a.updateConfigAndPersist(func(cfg *ConfigState) {
+				if cfg.BackgroundImage == name {
+					cfg.BackgroundImage = ""
+				}
+			})
+			return "", err
 		}
 		return "", err
 	}

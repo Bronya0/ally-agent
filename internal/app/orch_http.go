@@ -307,6 +307,10 @@ func (a *App) doHTTPRequest(parent context.Context, cfg ConfigState, req HTTPReq
 		},
 	}
 
+	if boolDefault(req.InsecureSkipVerify, false) {
+		defer client.CloseIdleConnections()
+	}
+
 	if err := a.waitHTTPRateLimit(ctx, target); err != nil {
 		return httpFetchResult{}, err
 	}

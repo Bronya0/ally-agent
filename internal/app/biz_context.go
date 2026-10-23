@@ -425,7 +425,7 @@ const sessionWorkspaceOverridesTTL = 2 * time.Second
 func (a *App) sessionContextConfig(sessionID string, workspaceHint string) ConfigState {
 	sessionID = strings.TrimSpace(sessionID)
 	a.mu.Lock()
-	cfg := a.config
+	cfg := cloneConfig(a.config)
 	if sessionID != "" && a.sessionWorkspaces != nil {
 		if ws, ok := a.sessionWorkspaces[sessionID]; ok && strings.TrimSpace(ws) != "" {
 			cfg.Workspace = ws

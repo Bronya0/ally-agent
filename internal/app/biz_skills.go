@@ -276,10 +276,9 @@ func (a *App) setDisabledSkillsMutation(mutator func([]string) []string) error {
 	if err := a.ensureInitialized(); err != nil {
 		return err
 	}
-	a.mu.Lock()
-	current := cloneStringSlice(a.disabledSkills)
-	a.mu.Unlock()
-	return a.setDisabledSkills(mutator(current))
+	return a.updateConfigAndPersist(func(cfg *ConfigState) {
+		cfg.DisabledSkills = normalizeSkillNameList(mutator(cfg.DisabledSkills))
+	})
 }
 
 func (a *App) setDisabledSkills(names []string) error {
@@ -289,7 +288,6 @@ func (a *App) setDisabledSkills(names []string) error {
 	next := normalizeSkillNameList(names)
 	return a.updateConfigAndPersist(func(cfg *ConfigState) {
 		cfg.DisabledSkills = cloneStringSlice(next)
-		a.disabledSkills = cloneStringSlice(next)
 	})
 }
 

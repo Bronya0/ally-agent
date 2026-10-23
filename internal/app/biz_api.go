@@ -932,43 +932,38 @@ func (a *App) apiHandleSaveModel(w http.ResponseWriter, r *http.Request) {
 	body.Model.APIFormat = normalizeAPIFormat(body.Model.APIFormat)
 	body.Model.CustomHeaders = normalizeCustomHeaders(body.Model.CustomHeaders)
 
-	a.mu.Lock()
-	cfg := a.config
-	models := make([]ModelConfig, len(cfg.Models))
-	copy(models, cfg.Models)
-	for i := range models {
-		models[i].APIKeys = cloneStringSlice(models[i].APIKeys)
-	}
 	index := -1
-	if body.Index != nil {
-		index = *body.Index
-	}
-	if body.Index != nil {
-		if index < 0 || index >= len(models) {
-			a.mu.Unlock()
-			apiWriteError(w, http.StatusBadRequest, fmt.Sprintf("model index out of range: %d", index))
-			return
+	invalidIndex := false
+	err := a.commitConfig(func(cfg *ConfigState) error {
+		models := cfg.Models
+		if body.Index != nil {
+			index = *body.Index
+			if index < 0 || index >= len(models) {
+				invalidIndex = true
+				return fmt.Errorf("model index out of range: %d", index)
+			}
+			inUse := cfg.LastUsedModel != nil && modelIndexByIdentity(models, *cfg.LastUsedModel) == index
+			models[index] = body.Model
+			if inUse {
+				identity := identityOfModel(body.Model)
+				cfg.LastUsedModel = &identity
+			}
+		} else {
+			index = len(models)
+			models = append(models, body.Model)
 		}
-		// 改的若是"最近使用"那一条，身份要跟着新条目走：整体替换会改掉 model id，
-		// 不跟着改它就变成悬空身份（随后被 convergeLastUsedModel 清掉），HTTP API
-		// 会话与计划任务下次直接跑不了模型，而界面因为还有 Tab 快照看不出问题。
-		inUse := cfg.LastUsedModel != nil && modelIndexByIdentity(models, *cfg.LastUsedModel) == index
-		models[index] = body.Model
-		if inUse {
-			identity := identityOfModel(body.Model)
-			cfg.LastUsedModel = &identity
+		cfg.Models = models
+		return nil
+	})
+	if err != nil {
+		status := http.StatusInternalServerError
+		if invalidIndex {
+			status = http.StatusBadRequest
 		}
-	} else {
-		index = len(models)
-		models = append(models, body.Model)
-	}
-	cfg.Models = models
-	a.mu.Unlock()
-
-	if err := a.saveConfig(cfg); err != nil {
-		apiWriteError(w, http.StatusInternalServerError, err.Error())
+		apiWriteError(w, status, err.Error())
 		return
 	}
+
 	apiWriteOK(w, map[string]any{"index": index})
 }
 

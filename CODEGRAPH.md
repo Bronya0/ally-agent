@@ -42,7 +42,7 @@
 | 请求消息与上下文 Token 核算（口径：请求前缀 + provider 实测锚点；会话前缀快照的冻结与压缩后刷新收口在 `refreshSessionPromptPrefix`） | `internal/app/biz_context.go`（`sessionPrefixBreakdown` / `frozenPrefixTokenStats`（冻结字节的 Token 明细缓存，压缩/释放清理）/ `contextAnchor` / `finalizeSessionBreakdown` / `sessionSystemPromptParts`） |
 | 输入栏页脚统计（Git/用量/上下文分别发布，初始化与聚焦/文件树解耦；快照按 Tab + session + workspace 校验） | `frontend/src/App.vue`（`refreshFooterStats` / `prepareFooterStatsForTarget`）+ `ComposerInfoBar.vue` |
 | 计划工具（`steps` / `finish` 位置状态机：报「完成到某一步」、报最后一步即收尾、状态由位置推导、标题即身份、上限收口单一写入点、结果块带状态与进度、run 收尾对账） | `biz_context.go`（`handlePlan` / `classifyPlanRequest` / `reportPlanProgress` / `applyPlanPosition` / `planCheckMarker`）+ `infra_result.go`（`renderPlanResultForModel`）+ `orch_batch_policy.go`（`planBatchWriteSource` / `toolDidPlanWork`）；前端 `planPanel.mjs` / `toolVerb.mjs` |
-| 配置合并 / key 池管理 / 最近使用模型身份展开（`expandLastUsedModel`；配置只存 models[] + lastUsedModel，13 个模型字段是请求级派生值） | `internal/app/biz_config.go` |
+| 配置合并 / key 池管理 / 最近使用模型身份展开（`expandLastUsedModel`；配置只存 models[] + lastUsedModel，13 个模型字段是请求级派生值） | `internal/app/biz_config.go`（事务入口、请求覆盖）+ `biz_config_state.go`（深拷贝、加载/设置语义与持久配置规范化；所有运行期写入经 `commitConfig` 串行落盘成功后发布） |
 | 技能发现与加载（用户/项目 `.agents`、`.claude`、`.codex/skills`；同目录提前去重、限量读取头部、冷扫描合并与失效版本校验） | `internal/app/biz_skills.go` |
 | 启动加载（工作区先就绪；技能/会话/插件等空闲加载，上下文延后、更新延迟 10 秒；维护任务延迟清理并修复会话索引，锁外扫描、按版本提交并通知前端；`ListSessionIndex` 仅读索引，`ListSessions` 保留显式恢复） | `internal/app/biz_lifecycle.go` + `biz_sessions.go` + `frontend/src/App.vue` + `utils/startupTasks.mjs` |
 | 新建技能（元数据 + SKILL.md 正文写入 `.agents/skills`：用户级 `~/` 或项目级 `<工作区>`；重名/非法名拒绝，写完清列表缓存） | `internal/app/biz_skills.go`（`SaveSkill`） |

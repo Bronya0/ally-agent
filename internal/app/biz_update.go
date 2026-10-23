@@ -1322,23 +1322,17 @@ func (a *App) SkipUpdate(version string) SkipUpdateResult {
 	if err := validateUpdateTag(version); err != nil {
 		return SkipUpdateResult{Error: err.Error()}
 	}
-	a.mu.Lock()
-	already := false
-	for _, skipped := range a.config.SkippedUpdates {
-		if skipped == version {
-			already = true
-			break
+	if err := a.updateConfigAndPersist(func(cfg *ConfigState) {
+		for _, skipped := range cfg.SkippedUpdates {
+			if skipped == version {
+				return
+			}
 		}
+		cfg.SkippedUpdates = append(cfg.SkippedUpdates, version)
+	}); err != nil {
+		return SkipUpdateResult{Error: fmt.Sprintf("persist skip list: %v", err)}
 	}
-	a.mu.Unlock()
 
-	if !already {
-		if err := a.updateConfigAndPersist(func(cfg *ConfigState) {
-			cfg.SkippedUpdates = append(cfg.SkippedUpdates, version)
-		}); err != nil {
-			return SkipUpdateResult{Error: fmt.Sprintf("persist skip list: %v", err)}
-		}
-	}
 	// Remove staged files for the skipped version so disk space is released.
 	_ = removeAllWithinBase(updateBaseDir(), updateVersionDir(version))
 	return SkipUpdateResult{OK: true, Version: version}

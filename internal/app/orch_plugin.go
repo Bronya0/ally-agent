@@ -612,7 +612,7 @@ func (a *App) DeletePlugin(id string, purgeData bool) error {
 		}
 	}
 	key := plugin.IdentityKey(dirID)
-	_ = a.updateConfigAndPersist(func(cfg *ConfigState) {
+	return a.updateConfigAndPersist(func(cfg *ConfigState) {
 		if len(cfg.DisabledPlugins) == 0 {
 			return
 		}
@@ -624,7 +624,6 @@ func (a *App) DeletePlugin(id string, purgeData bool) error {
 		}
 		cfg.DisabledPlugins = next
 	})
-	return nil
 }
 
 // ── 启停 ──
