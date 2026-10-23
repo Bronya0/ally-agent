@@ -224,6 +224,16 @@
   --game-panel-card-border: rgba(255, 255, 255, 0.09);
   --game-status-bg: rgba(255, 255, 255, 0.05);
 
+  /* Eye paint tokens live on :root so both inline and body-level shared SVG
+     gradients inherit the same palette and update when data-theme changes.
+     Use the pastel seed in both modes to keep the iris luminous. */
+  --ally-eye-iris-inner: color-mix(in srgb, var(--ally-accent) 60%, #ffffff);
+  --ally-eye-iris-color: color-mix(in srgb, var(--ally-accent) 90%, #05070a);
+  --ally-eye-iris-outer: color-mix(in srgb, var(--ally-accent) 38%, #05070a);
+  --ally-eye-iris-edge: color-mix(in srgb, var(--ally-accent) 10%, #05070a);
+  --ally-eye-iris-rim: color-mix(in srgb, var(--ally-accent) 72%, #ffffff);
+  --ally-eye-highlight: color-mix(in srgb, var(--ally-accent) 22%, #ffffff);
+
   /* ── Ally avatar eye shell tokens (dark default) ── */
   --ally-eye-shell-fill: #0b0e13;
   --ally-eye-shell-stroke: #343a45;
