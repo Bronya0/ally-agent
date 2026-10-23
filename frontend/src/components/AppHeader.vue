@@ -542,8 +542,20 @@ function historyMenuProps() {
 
 /* macOS: native traffic lights → wordmark → tabs → workspace actions.
    AppKit owns the controls, hover symbols, inactive state and fullscreen.
-   Keep a stable 88px leading inset even in fullscreen so tabs do not jump
-   when macOS reveals its titlebar. The shared row stays 44px tall. */
+   Keep a stable leading inset even in fullscreen so tabs do not jump
+   when macOS reveals its titlebar. The shared row stays 44px tall.
+
+   Both sides of the wordmark get 16px of air, and both numbers come from
+   measured geometry instead of taste:
+   - Left: under MacTitleBarHiddenInset + MacToolbarStyleUnifiedCompact AppKit
+     places the cluster at x = 12 / 35 / 58 (14px wide, 23px apart), so the
+     buttons end at 72px. An 80px reserve plus the header's 8px flex gap puts
+     the wordmark ink at 88px — 16px of air. Re-measure if the Wails title bar
+     style ever changes.
+   - Right: brand padding-right 0 + the same 8px gap + the first tab's 8px
+     padding-left = 16px.
+   The first tab's padding-left is 8px on macOS only (12px elsewhere), so its
+   active underline starts 4px further left than the other tabs'. */
 .app-header--mac {
   padding: 0 12px 0 0;
 }
@@ -555,7 +567,13 @@ function historyMenuProps() {
 }
 
 .app-header--mac .brand {
-  padding-right: 4px;
+  padding-right: 0;
+}
+
+/* Only the first tab: every tab after it carries a leading .n-tabs-tab-pad,
+   which makes its .workspace-tab the second child of the wrapper. */
+.app-header--mac .workspace-tabs :deep(.n-tabs-tab-wrapper > .workspace-tab:first-child) {
+  padding-left: 8px !important;
 }
 
 .workspace-tabs :deep(.workspace-tab) {
