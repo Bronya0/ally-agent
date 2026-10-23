@@ -17,7 +17,27 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"ally-dev/internal/tools/sshclient"
 )
+
+// remoteSSHConfig is the shared credential-to-transport boundary for tools and connection tests.
+func (a *App) remoteSSHConfig(rt remoteTarget, entry sshCredentialEntry) sshclient.Config {
+	cfg := sshclient.Config{
+		Host: rt.Host, Port: rt.Port, KnownHostsPath: a.sshKnownHostsPath,
+		AuthMode: sshclient.AuthModeAgent,
+	}
+	switch entry.authType {
+	case sshAuthTypeKey:
+		cfg.AuthMode = sshclient.AuthModeKey
+		cfg.KeyPath = entry.keyPath
+		cfg.KeyPassphrase = entry.password
+	case sshAuthTypePassword:
+		cfg.AuthMode = sshclient.AuthModePassword
+		cfg.Password = entry.password
+	}
+	return cfg
+}
 
 // SSHClusterRequest is the argument shape for the ssh_cluster tool.
 type SSHClusterRequest struct {
@@ -286,7 +306,7 @@ func newSSHCredentialCache() *sshCredentialCache {
 }
 
 // sshCredentialKey reduces a **resolved** ssh endpoint to the cache slot it
-// uses: lowercase user@host plus the effective port (empty means 22). Callers
+// uses: case-sensitive user, lowercase host and effective port (empty means 22). Callers
 // pass the resolved host/port, never the raw target string — the raw target may
 // name a cluster alias, and keying on it would put the credential in a slot
 // nothing else can find. host:2222 and host:22 are different machines
@@ -297,7 +317,11 @@ func sshCredentialKey(host, port string) string {
 	if port == "" {
 		port = "22"
 	}
-	return strings.ToLower(strings.TrimSpace(host)) + ":" + port
+	user, hostname := splitSSHUserHost(host)
+	if user != "" {
+		hostname = user + "@" + hostname
+	}
+	return hostname + ":" + port
 }
 
 // purgeHost drops every slot of a resolved endpoint host (any port). Node edits
@@ -307,7 +331,7 @@ func (c *sshCredentialCache) purgeHost(host string) {
 	if c == nil {
 		return
 	}
-	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimSuffix(sshCredentialKey(host, ""), ":22")
 	if host == "" {
 		return
 	}

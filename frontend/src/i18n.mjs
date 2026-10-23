@@ -290,6 +290,9 @@ const zh = {
   'app.ask.cancelled': '提问已取消',
   'app.ask.submitFailed': '提交回答失败：{error}',
   'app.tool.notInstalled': '{tool} 未安装',
+  'app.mcp.waiting': '正在等待 MCP（最多 {seconds} 秒）',
+  'app.mcp.waitingConfig': '正在加载 MCP 配置',
+  'app.mcp.waitTimeout': '等待 MCP 超时：{servers}。继续聊天，未就绪工具将在新会话或压缩后可用。',
   'app.mcp.noServices': '0 个服务',
   'app.mcp.marketplace': '市场',
   'app.mcp.disconnected': '{count} 个服务，未连接',
@@ -454,6 +457,7 @@ const zh = {
   'composer.models.search': '搜索模型 / Provider',
   'composer.models.noMatch': '没有匹配的模型',
   'composer.models.manage': '管理模型',
+  'composer.models.recent': '最近使用',
   'composer.effort.title': '思考强度（需模型支持，不支持的模型请保持“自动”）',
   'composer.lockedWhileRunning': '运行中锁定：本轮结束后切换才生效',
   'composer.workspace.open': '在资源管理器中打开工作区',
@@ -1195,6 +1199,9 @@ const zh = {
 };
 
 const enOverrides = {
+  'app.mcp.waiting': 'Waiting for MCP (up to {seconds}s)',
+  'app.mcp.waitingConfig': 'Loading MCP configuration',
+  'app.mcp.waitTimeout': 'MCP wait timed out: {servers}. Continuing chat; pending tools will be available in a new session or after compaction.',
   'common.add': 'Add', 'common.cancel': 'Cancel', 'common.close': 'Close', 'common.content': 'Content', 'common.create': 'Create',
   'common.confirm': 'Confirm',
   'common.delete': 'Delete', 'common.directory': 'dir', 'common.binary': 'binary', 'common.edit': 'Edit',
@@ -1504,7 +1511,7 @@ Response language: Preserve the response language already used in the current co
   'ask.status.answered': 'Answered', 'ask.status.cancelled': 'Cancelled', 'ask.status.failed': 'Failed',
   'ask.status.asking': 'Asking',
 
-  'composer.models.empty': 'No saved models', 'composer.models.search': 'Search models / providers', 'composer.models.noMatch': 'No matching models', 'composer.models.manage': 'Manage models',
+  'composer.models.empty': 'No saved models', 'composer.models.search': 'Search models / providers', 'composer.models.noMatch': 'No matching models', 'composer.models.manage': 'Manage models', 'composer.models.recent': 'Recently used',
   'composer.effort.title': 'Thinking strength (requires model support; keep Auto if unsupported)',
   'composer.lockedWhileRunning': 'Locked while a run is active; switching applies from the next message',
   'composer.workspace.open': 'Open workspace in file manager', 'composer.workspace.terminal': 'Open workspace in terminal', 'composer.workspace.none': 'No workspace selected',

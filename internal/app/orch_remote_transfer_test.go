@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -703,6 +704,50 @@ func TestRemoteTransferUploadTruncatedReplacementPreservesDestination(t *testing
 		matches, _ := filepath.Glob(filepath.Join(root, ".ally-tmp-*"))
 		if len(matches) != 0 {
 			t.Fatalf("temporary files leaked: %v", matches)
+		}
+	}
+}
+
+func TestRemoteTransferUploadReadOnlyDirectory(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, header := range []*tar.Header{
+		{Name: "target", Typeflag: tar.TypeDir, Mode: 0o555},
+		{Name: "target/child", Typeflag: tar.TypeDir, Mode: 0o500},
+		{Name: "target/child/file.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 7},
+	} {
+		if err := tw.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if header.Typeflag == tar.TypeReg {
+			_, _ = tw.Write([]byte("content"))
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Restore directory permissions before TempDir cleanup on Unix.
+	t.Cleanup(func() {
+		_ = os.Chmod(filepath.Join(root, "target"), 0o700)
+		_ = os.Chmod(filepath.Join(root, "target", "child"), 0o700)
+	})
+	stderr, err := runPythonTransferBridge(t, py, map[string]any{
+		"action": "upload", "workspaceRoot": root, "remotePath": "target",
+	}, &buf, nil)
+	if err != nil {
+		t.Fatalf("read-only directory upload failed: %v: %s", err, stderr)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "target", "child", "file.txt")); err != nil || string(data) != "content" {
+		t.Fatalf("uploaded file = %q, %v", data, err)
+	}
+	if runtime.GOOS != "windows" {
+		for name, mode := range map[string]os.FileMode{"target": 0o555, "target/child": 0o500} {
+			st, err := os.Stat(filepath.Join(root, name))
+			if err != nil || st.Mode().Perm() != mode {
+				t.Fatalf("directory %s permissions: %v, %v", name, st, err)
+			}
 		}
 	}
 }

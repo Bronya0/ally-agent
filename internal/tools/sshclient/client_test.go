@@ -342,6 +342,24 @@ func TestRunContextDeadlineInterruptsSessionOpen(t *testing.T) {
 	}
 }
 
+func TestConnectionTestContextDeadlineInterruptsSessionOpen(t *testing.T) {
+	server := startStalledChannelServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := Test(ctx, Config{
+		Host: "testuser@" + server.host, Port: server.port,
+		AuthMode: AuthModePassword, Password: "test-password",
+		KnownHostsPath: filepath.Join(t.TempDir(), "known_hosts"),
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Test() error = %v, want context deadline", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("connection test ignored cancellation for %s", elapsed)
+	}
+}
+
 func TestLimitedWriterReportsTruncation(t *testing.T) {
 	truncateCalls := 0
 	writer := &limitedWriter{limit: 4, onTruncate: func() { truncateCalls++ }}

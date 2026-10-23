@@ -134,13 +134,13 @@ func nodeSSHHost(node SSHServerNode) string {
 	return host
 }
 
-// splitSSHUserHost 把 user@host / host 拆成小写的用户名与主机名。
+// splitSSHUserHost 保留用户名大小写，仅归一化主机名。
 func splitSSHUserHost(value string) (string, string) {
-	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimSpace(value)
 	if at := strings.LastIndex(value, "@"); at >= 0 {
-		return value[:at], value[at+1:]
+		return value[:at], strings.ToLower(value[at+1:])
 	}
-	return "", value
+	return "", strings.ToLower(value)
 }
 
 // findSSHServerByEndpoint 用真实端点（user@host[:port]）反查已登记节点：
@@ -174,7 +174,7 @@ func (a *App) findSSHServerByEndpoint(host, port string) (SSHServerNode, bool) {
 		if nodePort != queryPort {
 			continue
 		}
-		if queryUser != "" && queryUser != strings.ToLower(strings.TrimSpace(node.Username)) {
+		if queryUser != "" && queryUser != strings.TrimSpace(node.Username) {
 			continue
 		}
 		if found && match.ID != node.ID {
@@ -654,43 +654,6 @@ func (a *App) IsServerAuthorizedForWorkspace(workspace, alias string) bool {
 	return m[node.ID]
 }
 
-// IsServerConnectionApproved checks if connection to alias was approved in this session.
-func (a *App) IsServerConnectionApproved(sessionID, alias string) bool {
-	sessionID = strings.TrimSpace(sessionID)
-	alias = strings.ToLower(strings.TrimSpace(alias))
-	if sessionID == "" || alias == "" {
-		return false
-	}
-	a.sshSessionApprovalsMu.Lock()
-	defer a.sshSessionApprovalsMu.Unlock()
-	if a.sshSessionApprovals == nil {
-		return false
-	}
-	m := a.sshSessionApprovals[sessionID]
-	if m == nil {
-		return false
-	}
-	return m[alias]
-}
-
-// ApproveServerConnection marks a server connection as approved for the given session.
-func (a *App) ApproveServerConnection(sessionID, alias string) {
-	sessionID = strings.TrimSpace(sessionID)
-	alias = strings.ToLower(strings.TrimSpace(alias))
-	if sessionID == "" || alias == "" {
-		return
-	}
-	a.sshSessionApprovalsMu.Lock()
-	defer a.sshSessionApprovalsMu.Unlock()
-	if a.sshSessionApprovals == nil {
-		a.sshSessionApprovals = make(map[string]map[string]bool)
-	}
-	if a.sshSessionApprovals[sessionID] == nil {
-		a.sshSessionApprovals[sessionID] = make(map[string]bool)
-	}
-	a.sshSessionApprovals[sessionID][alias] = true
-}
-
 // SSHTestResult carries the outcome of an SSH connectivity test.
 type SSHTestResult struct {
 	OK         bool   `json:"ok"`
@@ -732,24 +695,9 @@ func (a *App) TestSSHServer(node SSHServerNode) SSHTestResult {
 		portStr = strconv.Itoa(node.Port)
 	}
 
-	sshConfig := sshclient.Config{
-		Host:           host,
-		Port:           portStr,
-		AuthMode:       sshclient.AuthModeAgent,
-		KnownHostsPath: a.sshKnownHostsPath,
-	}
-
-	switch node.AuthType {
-	case sshAuthTypeKey:
-		sshConfig.AuthMode = sshclient.AuthModeKey
-		sshConfig.KeyPath = strings.TrimSpace(node.KeyPath)
-		sshConfig.KeyPassphrase = node.Password
-	case sshAuthTypePassword:
-		sshConfig.AuthMode = sshclient.AuthModePassword
-		sshConfig.Password = node.Password
-	case sshAuthTypeAgent:
-		sshConfig.AuthMode = sshclient.AuthModeAgent
-	}
+	sshConfig := a.remoteSSHConfig(remoteTarget{Host: host, Port: portStr}, sshCredentialEntry{
+		authType: node.AuthType, password: node.Password, keyPath: strings.TrimSpace(node.KeyPath),
+	})
 
 	ctx := context.Background()
 	if a.ctx != nil {

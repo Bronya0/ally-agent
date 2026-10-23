@@ -28,6 +28,8 @@ import (
 
 	"ally-dev/internal/builtin_skills"
 	"ally-dev/internal/tools/shared"
+
+	"go.yaml.in/yaml/v4"
 )
 
 const skillListCacheTTL = 30 * time.Second
@@ -120,16 +122,16 @@ func scanAvailableSkills(root string) []SkillDefinition {
 	seen := map[string]bool{}
 	seenDirs := map[string]bool{}
 
-	// User skills (~/.agents/skills/, ~/.claude/skills/, ~/.codex/skills/)
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		for _, d := range userSkillScanDirs {
-			scanSkillDir(filepath.Join(homeDir, d.path), d.source, &skills, seen, seenDirs)
-		}
-	}
 	// Project skills (the same relative roots under <workspace>)
 	if root != "" {
 		for _, sub := range skillScanDirs {
 			scanSkillDir(filepath.Join(root, sub), "project", &skills, seen, seenDirs)
+		}
+	}
+	// User skills (~/.agents/skills/, ~/.claude/skills/, ~/.codex/skills/)
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		for _, d := range userSkillScanDirs {
+			scanSkillDir(filepath.Join(homeDir, d.path), d.source, &skills, seen, seenDirs)
 		}
 	}
 	// Built-in skills (embedded). Added last so user/project skills with the
@@ -167,11 +169,22 @@ func cloneSkillDefinitions(skills []SkillDefinition) []SkillDefinition {
 // for built-in skills and falling back to disk reads for user/project skills.
 func readSkillContent(sk SkillDefinition) (string, error) {
 	if sk.embeddedContent != "" {
+		if len(sk.embeddedContent) > maxSkillFileBytes {
+			return "", fmt.Errorf("builtin skill %q is too large (max %d bytes)", sk.Name, maxSkillFileBytes)
+		}
 		return sk.embeddedContent, nil
 	}
-	data, err := os.ReadFile(sk.Path)
+	f, err := os.Open(sk.Path)
 	if err != nil {
 		return "", err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxSkillFileBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) > maxSkillFileBytes {
+		return "", fmt.Errorf("skill %q is too large (max %d bytes); use read on %q with targeted line ranges, or move reference material into supporting files", sk.Name, maxSkillFileBytes, sk.Path)
 	}
 	return string(data), nil
 }
@@ -232,15 +245,7 @@ func (a *App) GetActiveSkills() []string {
 	return state.Active
 }
 
-// listCachedSkills returns enabled available skills (calls ListSkills, no lock needed by caller).
-func (a *App) listCachedSkills() []SkillDefinition {
-	skills, err := a.ListSkills()
-	if err != nil {
-		return nil
-	}
-	return a.enabledSkillsFrom(skills)
-}
-
+// listCachedSkillsForConfig resolves enabled skills for the request workspace.
 func (a *App) listCachedSkillsForConfig(cfg ConfigState) []SkillDefinition {
 	skills, err := a.listSkillsForConfig(cfg)
 	if err != nil {
@@ -344,11 +349,11 @@ func skillNameInList(list []string, name string) bool {
 }
 
 // handleSkillToolCall is called when the AI invokes the "skill" tool.
-func (a *App) handleSkillToolCall(skillName, skillArgs string) (map[string]any, error) {
+func (a *App) handleSkillToolCall(cfg ConfigState, skillName, skillArgs string) (map[string]any, error) {
 	if strings.TrimSpace(skillName) == "" {
 		return nil, errors.New("skill is required")
 	}
-	skills, err := a.ListSkills()
+	skills, err := a.listSkillsForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list skills: %w", err)
 	}
@@ -358,9 +363,6 @@ func (a *App) handleSkillToolCall(skillName, skillArgs string) (map[string]any, 
 			content, err := readSkillContent(sk)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read skill: %w", err)
-			}
-			if len(content) > maxSkillFileBytes {
-				return nil, fmt.Errorf("skill %q is too large: %d bytes (max %d); use read on %q with targeted line ranges, or move reference material into supporting files", sk.Name, len(content), maxSkillFileBytes, sk.Path)
 			}
 
 			loadedContent := content
@@ -384,9 +386,10 @@ const (
 	// maxSkillFileBytes 是单个技能文件的字节上限，加载与写入共用同一口径：面板存得下的
 	// 技能，skill 工具就必须加载得动（历史上 64KB 加载上限配 256KB 保存上限，面板保存
 	// 成功的技能反而加载被拒）。正文仍然整篇要么全给、要么报错，不做半截加载。
-	maxSkillFileBytes   = 256 * 1024
-	skillTreeEntryLimit = 80
-	skillTreeByteLimit  = 8 * 1024
+	maxSkillFileBytes      = 256 * 1024
+	skillMetadataByteLimit = 64 * 1024
+	skillTreeEntryLimit    = 80
+	skillTreeByteLimit     = 8 * 1024
 )
 
 // buildSkillDirTree lists up to two levels within one shared entry/byte budget.
@@ -513,7 +516,7 @@ func parseSkillFile(path string) SkillDefinition {
 // Listing needs only frontmatter. Limit malformed/oversized headers to 64 KiB;
 // they fall back to the directory name. Full bodies are read only on loading.
 func readSkillMetadata(r io.Reader) (string, error) {
-	const maxMetadataBytes = 64 * 1024
+	const maxMetadataBytes = skillMetadataByteLimit
 	reader := bufio.NewReader(io.LimitReader(r, maxMetadataBytes+1))
 	var header strings.Builder
 	for {
@@ -548,30 +551,51 @@ func parseSkillContent(path, text string) SkillDefinition {
 		return meta
 	}
 	if front, ok := splitSkillFrontmatter(text); ok {
-		for _, line := range strings.Split(front, "\n") {
-			line = strings.TrimSpace(line)
-			if v := parseYAMLField(line, "name"); v != "" {
-				meta.Name = v
-			}
-			if v := parseYAMLField(line, "description"); v != "" {
-				meta.Description = v
-			}
-			if v := parseYAMLField(line, "type"); v != "" {
-				meta.Type = v
-			}
-			// whenToUse (Ally-native) and when_to_use (Agent Skills open
-			// standard / Claude Code) are both accepted. Ally-native
-			// spelling wins when both are present: whenToUse is checked
-			// unconditionally and overwrites any earlier when_to_use.
-			if v := parseYAMLField(line, "when_to_use"); v != "" && meta.WhenToUse == "" {
-				meta.WhenToUse = v
-			}
-			if v := parseYAMLField(line, "whenToUse"); v != "" {
-				meta.WhenToUse = v
-			}
+		var fields struct {
+			Name            string `yaml:"name"`
+			Description     string `yaml:"description"`
+			Type            string `yaml:"type"`
+			WhenToUse       string `yaml:"whenToUse"`
+			WhenToUseCompat string `yaml:"when_to_use"`
 		}
-		if meta.Name != "" {
-			return meta
+		parseErr := yaml.Unmarshal([]byte(front), &fields)
+		if parseErr != nil {
+			// Older skills allowed bare single-line text such as "uses: files".
+			// Quote only known top-level scalars; preserve nested YAML and blocks.
+			lines := strings.Split(front, "\n")
+			for i, line := range lines {
+				if line == "" || line[0] == ' ' || line[0] == '\t' {
+					continue
+				}
+				key, value, found := strings.Cut(line, ":")
+				if !found {
+					continue
+				}
+				switch strings.TrimSpace(key) {
+				case "name", "description", "type", "whenToUse", "when_to_use":
+					value = strings.TrimSpace(value)
+					if value == "" || strings.ContainsAny(value[:1], "\"'|>") {
+						continue
+					}
+					var scalar string
+					if err := yaml.Unmarshal([]byte(value), &scalar); err != nil {
+						lines[i] = key + ": " + skillJSONString(value)
+					}
+				}
+			}
+			parseErr = yaml.Unmarshal([]byte(strings.Join(lines, "\n")), &fields)
+		}
+		if parseErr == nil {
+			meta.Name = strings.TrimSpace(fields.Name)
+			meta.Description = fields.Description
+			meta.Type = fields.Type
+			meta.WhenToUse = fields.WhenToUse
+			if meta.WhenToUse == "" {
+				meta.WhenToUse = fields.WhenToUseCompat
+			}
+			if meta.Name != "" {
+				return meta
+			}
 		}
 	}
 	// The directory's explicit SKILL.md entry point may use its parent name.
@@ -670,8 +694,16 @@ func (a *App) SaveSkill(draft SkillDraft) (string, error) {
 	}
 	whenToUse := collapseToOneLine(draft.WhenToUse)
 	content := strings.TrimSpace(draft.Content)
-	if len(content) > maxSkillFileBytes {
-		return "", fmt.Errorf("skill content is too large: %d bytes (max %d)", len(content), maxSkillFileBytes)
+	fileContent := []byte(renderSkillFile(name, description, whenToUse, content))
+	// Validate the exact bytes the loader will read, including metadata.
+	if len(fileContent) > maxSkillFileBytes {
+		return "", fmt.Errorf("skill file is too large: %d bytes (max %d)", len(fileContent), maxSkillFileBytes)
+	}
+	if len(fileContent) > skillMetadataByteLimit {
+		// Metadata must also fit the bounded discovery reader.
+		if header, _ := readSkillMetadata(bytes.NewReader(fileContent)); header == "" {
+			return "", errors.New("skill metadata is too large (max 64 KiB)")
+		}
 	}
 
 	root, err := a.skillWriteRoot(draft.Target)
@@ -700,7 +732,7 @@ func (a *App) SaveSkill(draft SkillDraft) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", fmt.Errorf("failed to create skill directory: %w", err)
 	}
-	if err := writeAtomicBytes(path, []byte(renderSkillFile(name, description, whenToUse, content)), 0o644); err != nil {
+	if err := writeAtomicBytes(path, fileContent, 0o644); err != nil {
 		return "", fmt.Errorf("failed to write skill: %w", err)
 	}
 	a.clearSkillListCache()
@@ -816,15 +848,17 @@ func renderSkillFile(name, description, whenToUse, body string) string {
 	return b.String()
 }
 
-// skillFrontmatterValue renders one metadata value. Values are read back by
-// shared.ParseFrontmatterField, which JSON-decodes a value starting with a double
-// quote and otherwise only trims surrounding quotes — so a value holding a quote
-// has to be emitted as a JSON string to round-trip byte for byte.
+// skillFrontmatterValue keeps plain strings readable and quotes values whose
+// YAML interpretation would change their contents or type.
 func skillFrontmatterValue(value string) string {
 	if value == "" {
 		return `""`
 	}
-	if strings.ContainsAny(value, `"'`) {
+	var decoded any
+	if err := yaml.Unmarshal([]byte(value), &decoded); err != nil {
+		return skillJSONString(value)
+	}
+	if text, ok := decoded.(string); !ok || text != value {
 		return skillJSONString(value)
 	}
 	return value

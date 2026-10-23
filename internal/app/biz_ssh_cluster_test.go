@@ -264,30 +264,6 @@ func TestSSHClusterIgnoresMissingWorkspaceGrants(t *testing.T) {
 	}
 }
 
-// TestSSHSessionApprovalLifecycle tests session-level connection approval.
-func TestSSHSessionApprovalLifecycle(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir)
-	app := NewApp()
-	sessionID := "sess-123"
-	alias := "dev-box"
-
-	if app.IsServerConnectionApproved(sessionID, alias) {
-		t.Fatal("connection should not be approved initially")
-	}
-
-	app.ApproveServerConnection(sessionID, alias)
-	if !app.IsServerConnectionApproved(sessionID, alias) {
-		t.Fatal("connection should be approved after approval")
-	}
-
-	// Different session must not inherit approval
-	if app.IsServerConnectionApproved("sess-other", alias) {
-		t.Fatal("approval must be scoped to sessionID")
-	}
-}
-
 func TestNormalizeSSHAuthType(t *testing.T) {
 	cases := []struct {
 		name string

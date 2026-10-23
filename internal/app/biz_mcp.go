@@ -81,6 +81,14 @@ type mcpConnToken struct {
 	mu      sync.Mutex
 	lost    bool
 	lostWhy string
+	// Set before the transport starts; owned by this connection, never a tool call.
+	cancel context.CancelFunc
+}
+
+func (t *mcpConnToken) stop() {
+	if t != nil && t.cancel != nil {
+		t.cancel()
+	}
 }
 
 func (t *mcpConnToken) markLost(cause string) {
@@ -140,6 +148,11 @@ type McpClientHandle struct {
 // 清单变化只影响新会话。
 type McpManager struct {
 	mu             sync.RWMutex
+	configMu       sync.Mutex // serializes load + reconcile, not network dialing
+	lifetimeCtx    context.Context
+	cancelLifetime context.CancelFunc
+	changed        chan struct{} // broadcast under mu; waiters always recheck state
+	initialLoading bool
 	reconnectLocks sync.Map // serverName -> *sync.Mutex，per-server 重连互斥
 	clients        map[string]*McpClientHandle
 	toolLookup     map[string]mcpToolRef
@@ -208,12 +221,17 @@ type mcpToolRef struct {
 }
 
 func NewMcpManager(workDir string, listener func()) *McpManager {
+	lifetimeCtx, cancel := context.WithCancel(context.Background())
 	m := &McpManager{
-		clients:      make(map[string]*McpClientHandle),
-		toolLookup:   make(map[string]mcpToolRef),
-		refreshSlots: make(map[string]*mcpToolRefreshSlot),
-		workDir:      workDir,
-		listener:     listener,
+		lifetimeCtx:    lifetimeCtx,
+		cancelLifetime: cancel,
+		changed:        make(chan struct{}),
+		initialLoading: true,
+		clients:        make(map[string]*McpClientHandle),
+		toolLookup:     make(map[string]mcpToolRef),
+		refreshSlots:   make(map[string]*mcpToolRefreshSlot),
+		workDir:        workDir,
+		listener:       listener,
 	}
 	m.toolRefresher = m.refreshServerTools
 	return m
@@ -224,6 +242,13 @@ func mcpUserConfigPath() string {
 }
 
 func (m *McpManager) LoadConfigs() (map[string]McpServerConfig, error) {
+	m.configMu.Lock()
+	defer m.configMu.Unlock()
+	return m.loadConfigs()
+}
+
+// The caller holds configMu. Only a complete, valid load replaces the snapshot.
+func (m *McpManager) loadConfigs() (map[string]McpServerConfig, error) {
 	merged := make(map[string]McpServerConfig)
 	paths := m.configPaths
 	if len(paths) == 0 {
@@ -232,7 +257,12 @@ func (m *McpManager) LoadConfigs() (map[string]McpServerConfig, error) {
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			continue
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			err = fmt.Errorf("read MCP config %q: %w", path, err)
+			m.warnf("MCP config reload failed; existing servers retained: %v", err)
+			return nil, err
 		}
 		var cfg McpServersConfig
 		data, err = normalizeMcpConfigJSON(string(data))
@@ -242,8 +272,8 @@ func (m *McpManager) LoadConfigs() (map[string]McpServerConfig, error) {
 		if err != nil {
 			// 手改 mcp.json 写坏时不能无声吞掉，否则所有服务器"消失"而
 			// 用户只看到一片空白。走 config:warning 提示。
-			m.warnf("mcp.json parse failed; all MCP servers are unloaded: %v", err)
-			continue
+			m.warnf("MCP config reload failed; existing servers retained: %v", err)
+			return nil, fmt.Errorf("parse MCP config %q: %w", path, err)
 		}
 		// Disabled servers stay in the result so StartAll registers a
 		// "disabled" handle and the status list shows configured-but-off
@@ -295,11 +325,21 @@ func (m *McpManager) registerDisabledServer(name string, cfg McpServerConfig) {
 }
 
 func (m *McpManager) StartAll(ctx context.Context) error {
-	configs, err := m.LoadConfigs()
+	defer func() {
+		m.mu.Lock()
+		m.initialLoading = false
+		m.mu.Unlock()
+		m.notifyChange()
+	}()
+	m.configMu.Lock()
+	configs, err := m.loadConfigs()
 	if err != nil {
+		m.configMu.Unlock()
 		return err
 	}
+	m.notifyChange()
 	if len(configs) == 0 {
+		m.configMu.Unlock()
 		return nil
 	}
 
@@ -316,6 +356,7 @@ func (m *McpManager) StartAll(ctx context.Context) error {
 			m.connectOne(ctx, name, cfg)
 		}()
 	}
+	m.configMu.Unlock()
 	wg.Wait()
 	return nil
 }
@@ -375,7 +416,9 @@ func disabledToolSet(values []string) map[string]bool {
 // keep their live connections and tool registrations. Returns how many
 // servers changed connection state.
 func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
-	configs, err := m.LoadConfigs()
+	m.configMu.Lock()
+	defer m.configMu.Unlock()
+	configs, err := m.loadConfigs()
 	if err != nil {
 		return 0, err
 	}
@@ -387,6 +430,7 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 	for name, handle := range m.clients {
 		cfg, ok := configs[name]
 		if !ok || !mcpServerConfigEqual(handle.Config, cfg) {
+			handle.token.stop()
 			stale = append(stale, name)
 			if handle.Client != nil {
 				closing = append(closing, handle.Client)
@@ -491,6 +535,7 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 	var existingCfg McpServerConfig
 	var existingToolDefs []McpDiscoveredTool
 	var existingClient *client.Client
+	var existingToken *mcpConnToken
 	if ok {
 		status = existing.Status
 		// Config/ToolDefs 必须在锁内拷出、出锁后再比对：ReconcileConfigs 会
@@ -502,6 +547,7 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 		existingCfg = existing.Config
 		existingToolDefs = existing.ToolDefs
 		existingClient = existing.Client
+		existingToken = existing.token
 	}
 	m.mu.RUnlock()
 	if ok && (status == "connected" || status == "connecting") && mcpServerConfigEqual(existingCfg, cfg) {
@@ -523,6 +569,7 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 	m.mu.Unlock()
 	m.notifyChange()
 	if staleClient != nil {
+		existingToken.stop()
 		_ = staleClient.Close()
 	}
 
@@ -548,6 +595,7 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 	current, live := m.clients[name]
 	if !live || current != handle || m.closed {
 		m.mu.Unlock()
+		established.token.stop()
 		_ = established.client.Close()
 		return
 	}
@@ -613,6 +661,7 @@ func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg M
 	defer cancel()
 
 	if _, err := mcpClient.Initialize(initCtx, initReq); err != nil {
+		token.stop()
 		mcpClient.Close()
 		return mcpEstablished{}, fmt.Errorf("init failed: %w", err)
 	}
@@ -623,6 +672,7 @@ func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg M
 	defer toolsCancel()
 	discovered, err := listMcpTools(toolsCtx, name, mcpClient)
 	if err != nil {
+		token.stop()
 		mcpClient.Close()
 		return mcpEstablished{}, fmt.Errorf("list tools failed (timed out or refused after %s): %w", mcpStartupTimeout(cfg), err)
 	}
@@ -668,6 +718,16 @@ func listMcpTools(ctx context.Context, serverName string, mcpClient *client.Clie
 const maxMcpListToolsPages = 100
 
 func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServerConfig, token *mcpConnToken) (*client.Client, error) {
+	// Transport lifetime belongs to the manager. Startup/handshake budgets and
+	// tool-call cancellation must never terminate a successfully established stream.
+	connCtx, cancelConnection := context.WithCancel(m.lifetimeCtx)
+	token.cancel = cancelConnection
+	started := false
+	defer func() {
+		if !started {
+			cancelConnection()
+		}
+	}()
 	transportName := mcpTransportName(cfg)
 	var mcpClient *client.Client
 	var err error
@@ -693,7 +753,7 @@ func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServe
 		// set the working directory, hide the console window, join the process
 		// into a KILL_ON_JOB_CLOSE Job Object, and watch it for exit (same
 		// orphan protection as the service tool).
-		mcpClient, err = client.NewStdioMCPClientWithOptions(cfg.Command, env, cfg.Args,
+		stdioTransport := transport.NewStdioWithOptions(cfg.Command, env, cfg.Args,
 			transport.WithCommandFunc(func(ctx context.Context, command string, cmdEnv []string, args []string) (*exec.Cmd, error) {
 				cmd := exec.CommandContext(ctx, command, args...)
 				cmd.Env = cmdEnv
@@ -704,11 +764,7 @@ func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServe
 				return cmd, nil
 			}),
 		)
-		if err != nil {
-			discardProcessJob(stdioJob)
-			return nil, fmt.Errorf("stdio spawn failed: %w", err)
-		}
-		drainMcpStderr(mcpClient)
+		mcpClient = client.NewClient(stdioTransport)
 	case "sse":
 		if strings.TrimSpace(cfg.URL) == "" {
 			return nil, errors.New("sse MCP server requires url")
@@ -743,12 +799,24 @@ func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServe
 	default:
 		return nil, fmt.Errorf("unsupported MCP transport %q", cfg.Transport)
 	}
-	if err := mcpClient.Start(ctx); err != nil {
+	// Start uses the long-lived context, with a temporary cancellation bridge
+	// from the caller's startup deadline. Detach it after Start succeeds.
+	startupCtx, stopStartup := context.WithTimeout(ctx, mcpStartupTimeout(cfg))
+	stopBridge := context.AfterFunc(startupCtx, cancelConnection)
+	startErr := mcpClient.Start(connCtx)
+	stopBridge()
+	if startupErr := startupCtx.Err(); startupErr != nil {
+		startErr = startupErr
+	}
+	stopStartup()
+	if startErr != nil {
+		cancelConnection()
 		discardProcessJob(stdioJob)
 		_ = mcpClient.Close()
-		return nil, fmt.Errorf("%s start failed: %w", transportName, err)
+		return nil, fmt.Errorf("%s start failed: %w", transportName, startErr)
 	}
 	if stdioCmd != nil {
+		drainMcpStderr(mcpClient)
 		m.watchStdioProcess(name, stdioCmd, stdioJob, token)
 	}
 	// 服务端运行期增删工具只会通过这条通知告知（插件加载、权限变化）。回调
@@ -762,6 +830,7 @@ func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServe
 	mcpClient.OnConnectionLost(func(err error) {
 		m.handleConnectionLost(name, token, "MCP connection lost: "+err.Error())
 	})
+	started = true
 	return mcpClient, nil
 }
 
@@ -934,6 +1003,7 @@ func (m *McpManager) handleConnectionLost(serverName string, token *mcpConnToken
 	// 先记进 token：连接可能还没被登记到 handle 上（握手刚成功、进程就死），
 	// 登记那一步要靠它把结果落成 failed。
 	token.markLost(cause)
+	token.stop()
 
 	m.mu.Lock()
 	handle, ok := m.clients[serverName]
@@ -1399,6 +1469,7 @@ func (m *McpManager) reconnectServer(ctx context.Context, serverName string, fai
 	}
 	cfg := handle.Config
 	oldClient := handle.Client
+	oldToken := handle.token
 	handle.Status = "connecting"
 	handle.Error = "reconnecting after invalid session"
 	handle.Client = nil
@@ -1406,6 +1477,7 @@ func (m *McpManager) reconnectServer(ctx context.Context, serverName string, fai
 	m.notifyChange()
 
 	if oldClient != nil {
+		oldToken.stop()
 		_ = oldClient.Close()
 	}
 
@@ -1417,6 +1489,7 @@ func (m *McpManager) reconnectServer(ctx context.Context, serverName string, fai
 	if !ok || current != handle {
 		m.mu.Unlock()
 		if established.client != nil {
+			established.token.stop()
 			_ = established.client.Close()
 		}
 		return fmt.Errorf("MCP server %s was replaced during reconnect", serverName)
@@ -1539,6 +1612,7 @@ func (m *McpManager) DescribeFunctionTool(functionName string) (mcpToolRef, bool
 }
 
 func (m *McpManager) Shutdown() {
+	m.cancelLifetime()
 	m.mu.Lock()
 	closing := make([]*client.Client, 0, len(m.clients))
 	for _, handle := range m.clients {
@@ -1550,6 +1624,7 @@ func (m *McpManager) Shutdown() {
 	m.toolLookup = make(map[string]mcpToolRef)
 	m.closed = true
 	m.mu.Unlock()
+	m.notifyChange()
 	// Close 必须在锁外、且并行：stdio 的 Close 含 2s 优雅 + 3s+3s 强杀等待，
 	// 持锁逐个关会把整个 manager（状态推送、工具清单）卡住数秒到数十秒（与
 	// ReconcileConfigs / reconnectServer 的锁外 Close 对齐；退出时 N 个服务端
@@ -1677,8 +1752,8 @@ func (a *App) mcpUnknownArgWarnings(functionName string, args map[string]any) []
 // server-side additions default on).
 func (m *McpManager) IsToolDisabled(serverName, toolName string) bool {
 	m.mu.RLock()
+	defer m.mu.RUnlock()
 	handle, ok := m.clients[serverName]
-	m.mu.RUnlock()
 	if !ok {
 		return false
 	}
@@ -1795,10 +1870,113 @@ func mcpTransportName(cfg McpServerConfig) string {
 }
 
 func (m *McpManager) notifyChange() {
+	m.mu.Lock()
+	if m.changed != nil {
+		close(m.changed)
+	}
+	m.changed = make(chan struct{})
+	m.mu.Unlock()
 	if m.listener == nil {
 		return
 	}
 	m.listener()
+}
+
+// waitForDiscovery observes the initial load as well as queued config dials.
+// Capture the broadcast channel and pending state under the same lock so a
+// connection completing between the check and select cannot strand a waiter.
+func (m *McpManager) waitForDiscovery(ctx context.Context, progress func([]string)) error {
+	last := ""
+	reported := false
+	for {
+		m.mu.RLock()
+		changed := m.changed
+		loading, closed := m.initialLoading, m.closed
+		pending := make([]string, 0)
+		for name, cfg := range m.configSnapshot {
+			if cfg.Enabled != nil && !*cfg.Enabled {
+				continue
+			}
+			if handle := m.clients[name]; handle == nil || handle.Status == "connecting" {
+				pending = append(pending, name)
+			}
+		}
+		// Also covers direct dials and reconnects not originating in LoadConfigs.
+		for name, handle := range m.clients {
+			if _, configured := m.configSnapshot[name]; !configured && handle.Status == "connecting" {
+				pending = append(pending, name)
+			}
+		}
+		m.mu.RUnlock()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if closed {
+			return errors.New("MCP manager stopped while waiting for tool discovery")
+		}
+		if !loading && len(pending) == 0 {
+			return nil
+		}
+		sort.Strings(pending)
+		key := strings.Join(pending, "\x00")
+		if progress != nil && (!reported || key != last) {
+			progress(pending)
+			last, reported = key, true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+const mcpDiscoveryWaitTimeout = 30 * time.Second
+
+// Only a new/unfrozen chat waits. Existing session schemas remain stable; footer
+// estimates and stateless tool enumeration never wait or freeze anything.
+func (a *App) waitForSessionMcp(ctx context.Context, runID, sessionID string) error {
+	a.mu.Lock()
+	_, frozen := a.sessionToolsets[sessionID]
+	a.mu.Unlock()
+	manager := a.activeMcpManager()
+	if frozen || manager == nil {
+		return ctx.Err()
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, mcpDiscoveryWaitTimeout)
+	defer cancel()
+	var pending []string
+	waiting := false
+	emit := func(state string) {
+		a.emit("run:mcp-wait", map[string]any{
+			"runId": runID, "sessionId": sessionID, "state": state,
+			"servers": pending, "timeoutSeconds": int(mcpDiscoveryWaitTimeout / time.Second),
+		})
+	}
+	err := manager.waitForDiscovery(waitCtx, func(names []string) {
+		pending = names
+		waiting = true
+		emit("waiting")
+	})
+	if waiting {
+		switch {
+		case ctx.Err() != nil:
+			emit("cancelled")
+		case errors.Is(err, context.DeadlineExceeded):
+			emit("timeout")
+		default:
+			emit("ready")
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	// A bounded wait may finish with only a subset of tools. Tell the user before
+	// freezing that subset; discovery itself continues for future sessions.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	return err
 }
 
 // ── MCP tool exposure and frontend bindings ──────────────────

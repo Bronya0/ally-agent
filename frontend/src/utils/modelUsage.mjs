@@ -22,6 +22,18 @@
 
 const STORAGE_KEY = 'ally_model_usage';
 const MODEL_STORAGE_KEY = 'ally_specific_model_usage';
+const RECENT_STORAGE_KEY = 'ally_recent_models';
+
+// Ordered newest first; keep only three distinct identities.
+export function getRecentModelUsage() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(RECENT_STORAGE_KEY) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return [...new Set(parsed.filter((id) => typeof id === 'string' && id.length > 0 && id.length <= 4096))].slice(0, 3);
+  } catch {
+    return [];
+  }
+}
 
 function readUsage(storageKey = STORAGE_KEY) {
   try {
@@ -33,6 +45,18 @@ function readUsage(storageKey = STORAGE_KEY) {
   } catch {
     return {};
   }
+}
+
+// Sending a restored model also updates recency, without counting another menu pick.
+export function recordRecentModelUsage(modelIdentity, validModelIdentities) {
+  const mid = String(modelIdentity || '').trim();
+  if (!mid || mid.length > 4096) return;
+  const valid = Array.isArray(validModelIdentities) ? new Set(validModelIdentities) : null;
+  if (valid && !valid.has(mid)) return;
+  const recent = [mid, ...getRecentModelUsage().filter((id) => id !== mid && (!valid || valid.has(id)))];
+  try {
+    localStorage.setItem(RECENT_STORAGE_KEY, JSON.stringify(recent.slice(0, 3)));
+  } catch {}
 }
 
 // getModelUsage returns the persisted `{ key: count }` map for provider groups.
@@ -65,6 +89,7 @@ export function recordModelUsage(key, validKeys, modelIdentity, validModelIdenti
 
   const mid = String(modelIdentity || '').trim();
   if (mid) {
+    recordRecentModelUsage(mid, validModelIdentities);
     const modelUsageMap = readUsage(MODEL_STORAGE_KEY);
     modelUsageMap[mid] = (Number(modelUsageMap[mid]) || 0) + 1;
     if (Array.isArray(validModelIdentities) && validModelIdentities.length) {

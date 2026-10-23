@@ -144,7 +144,7 @@ func TestSessionPrefixBreakdownCoversRequestPrefix(t *testing.T) {
 	app.config = ConfigState{Workspace: root}
 	const sessionID = "prefix-session"
 
-	prefix, _ := app.sessionPrefixBreakdown(sessionID, app.config, app.listCachedSkills())
+	prefix, _ := app.sessionPrefixBreakdown(sessionID, app.config, app.listCachedSkillsForConfig(app.config))
 	if prefix <= 0 {
 		t.Fatalf("expected a non-zero request prefix, got %d", prefix)
 	}
@@ -153,7 +153,7 @@ func TestSessionPrefixBreakdownCoversRequestPrefix(t *testing.T) {
 	app.plans[sessionID] = []PlanStep{{Title: "finish the fix", Status: "in_progress"}}
 	app.mu.Unlock()
 
-	withPlan, parts := app.sessionPrefixBreakdown(sessionID, app.config, app.listCachedSkills())
+	withPlan, parts := app.sessionPrefixBreakdown(sessionID, app.config, app.listCachedSkillsForConfig(app.config))
 	if withPlan != prefix {
 		t.Fatalf("request prefix must stay stable regardless of the plan to protect cache: %d -> %d", prefix, withPlan)
 	}
@@ -182,7 +182,7 @@ func TestRunBreakdownIncludesRequestPrefix(t *testing.T) {
 
 	// The run loop's per-step sequence, minus the network round trip.
 	breakdown := computeLiveBreakdown(messages)
-	prefix, _ := app.sessionPrefixBreakdown(sessionID, app.config, app.listCachedSkills())
+	prefix, _ := app.sessionPrefixBreakdown(sessionID, app.config, app.listCachedSkillsForConfig(app.config))
 	if prefix <= 0 {
 		t.Fatal("expected a non-zero request prefix")
 	}

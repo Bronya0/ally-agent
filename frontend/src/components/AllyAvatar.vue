@@ -28,9 +28,9 @@ Public License v3. See the LICENSE file for details.
           <stop offset="1" stop-color="var(--ally-accent)" stop-opacity="0"/>
         </radialGradient>
         <linearGradient :id="vortexId" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0" stop-color="var(--ally-eye-highlight)"/>
-          <stop offset="0.5" stop-color="var(--ally-accent)"/>
-          <stop offset="1" stop-color="var(--ally-eye-highlight)"/>
+          <stop offset="0" stop-color="var(--ally-eye-pupil-line)"/>
+          <stop offset="0.5" stop-color="var(--ally-eye-pupil-ring)"/>
+          <stop offset="1" stop-color="var(--ally-eye-pupil-line)"/>
         </linearGradient>
       </defs>
       <defs>
@@ -46,7 +46,7 @@ Public License v3. See the LICENSE file for details.
       <path d="M40 69c22-21 62-22 84 0" fill="none" stroke="var(--ally-eye-highlight)" stroke-width="2" opacity="0.34" stroke-linecap="round"/>
 
       <g class="ally-eye-pupil">
-        <path d="M82 34 Q 71 82 82 130 Q 93 82 82 34 Z" fill="#05070a"/>
+        <path d="M82 34 Q 71 82 82 130 Q 93 82 82 34 Z" fill="var(--ally-eye-pupil-fill)"/>
         <g :clip-path="`url(#${pupilClipId})`">
           <!-- Vortex: a vertical swirl made of two opposing S-curves plus
                concentric lens-shaped rings, rotating to read as a whirlpool. -->
@@ -55,11 +55,11 @@ Public License v3. See the LICENSE file for details.
                   fill="none" :stroke="`url(#${vortexId}) var(--ally-accent)`" stroke-width="1.6" stroke-linecap="round" opacity="0.9"/>
             <path d="M82 54 Q 76 66 82 78 Q 88 90 82 102 Q 76 114 82 126"
                   fill="none" :stroke="`url(#${vortexId}) var(--ally-accent)`" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
-            <ellipse cx="82" cy="82" rx="3.5" ry="24" fill="none" stroke="var(--ally-eye-highlight)" stroke-width="0.9" opacity="0.55"/>
+            <ellipse cx="82" cy="82" rx="3.5" ry="24" fill="none" stroke="var(--ally-eye-pupil-line)" stroke-width="0.9" opacity="0.55"/>
           </g>
           <g class="ally-eye-vortex ally-eye-vortex-slow">
-            <ellipse cx="82" cy="82" rx="6.5" ry="36" fill="none" stroke="var(--ally-accent)" stroke-width="1.2" opacity="0.42"/>
-            <ellipse cx="82" cy="82" rx="2" ry="14" fill="none" stroke="#f8fafc" stroke-width="0.8" opacity="0.5"/>
+            <ellipse cx="82" cy="82" rx="6.5" ry="36" fill="none" stroke="var(--ally-eye-pupil-ring)" stroke-width="1.2" opacity="0.42"/>
+            <ellipse cx="82" cy="82" rx="2" ry="14" fill="none" stroke="var(--ally-eye-pupil-detail)" stroke-width="0.8" opacity="0.5"/>
           </g>
           <!-- Lightning bolt running down the slit. -->
           <path class="ally-eye-lightning" d="M85 50 L 78 76 L 83 76 L 75 114 L 91 70 L 84 70 Z" fill="var(--ally-eye-highlight)"/>
@@ -122,9 +122,9 @@ const DEFS_MARKUP =
   '<stop offset="1" stop-color="var(--ally-accent)" stop-opacity="0"/>' +
   '</radialGradient>' +
   '<linearGradient id="ally-vortex-grad" x1="0%" y1="0%" x2="0%" y2="100%">' +
-  '<stop offset="0" stop-color="var(--ally-eye-highlight)"/>' +
-  '<stop offset="0.5" stop-color="var(--ally-accent)"/>' +
-  '<stop offset="1" stop-color="var(--ally-eye-highlight)"/>' +
+  '<stop offset="0" stop-color="var(--ally-eye-pupil-line)"/>' +
+  '<stop offset="0.5" stop-color="var(--ally-eye-pupil-ring)"/>' +
+  '<stop offset="1" stop-color="var(--ally-eye-pupil-line)"/>' +
   '</linearGradient>' +
   '</defs>';
 

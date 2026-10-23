@@ -115,8 +115,11 @@ func TestLoadConfigsKeepsDisabledServersAndWarnsOnBrokenJSON(t *testing.T) {
 	writeTestFile(t, home, ".ally_agent/mcp.json", `{ broken json`)
 	var warnings []string
 	manager.SetWarningHandler(func(message string) { warnings = append(warnings, message) })
-	if _, err := manager.LoadConfigs(); err != nil {
-		t.Fatal(err)
+	if _, err := manager.LoadConfigs(); err == nil {
+		t.Fatal("broken config must fail without replacing the last valid snapshot")
+	}
+	if len(manager.configSnapshot) != 2 {
+		t.Fatal("invalid load replaced valid snapshot")
 	}
 	if len(warnings) == 0 {
 		t.Fatal("broken mcp.json must produce a warning")

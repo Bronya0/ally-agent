@@ -324,8 +324,6 @@ type App struct {
 
 	sshClustersMu         sync.RWMutex
 	sshClusters           map[string]SSHServerNode // keyed by stable node ID; alias is only a lookup/display name
-	sshSessionApprovalsMu sync.Mutex
-	sshSessionApprovals   map[string]map[string]bool
 	sshWorkspaceAllowedMu sync.RWMutex
 	sshWorkspaceAllowed   map[string]map[string]bool // workspace -> node ID -> allowed
 
@@ -462,7 +460,6 @@ func NewApp() *App {
 		pendingAsks:          map[string]*pendingAsk{},
 		sshCredentials:       newSSHCredentialCache(),
 		sshClusters:          map[string]SSHServerNode{},
-		sshSessionApprovals:  map[string]map[string]bool{},
 		sshWorkspaceAllowed:  map[string]map[string]bool{},
 		subRuns:              map[string]*SubagentRun{},
 		subSem:               make(chan struct{}, 4),
@@ -2115,7 +2112,15 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 
 	a.emit("run:start", map[string]any{"runId": runID, "sessionId": sessionID})
 
-	messages = a.buildMessages(req, cfg, a.listCachedSkills())
+	messages = a.buildMessages(req, cfg, a.listCachedSkillsForConfig(cfg))
+	if err := a.waitForSessionMcp(ctx, runID, sessionID); err != nil {
+		kind := "error"
+		if ctx.Err() != nil {
+			kind = "cancelled"
+		}
+		emitRunEnd("run:error", kind, map[string]any{"error": err.Error()})
+		return
+	}
 	// This run sends the same immutable tool list on every step. Count it once
 	// from that exact list, including across in-run history compaction.
 	tools := a.buildToolsForSession(sessionID, cfg)
@@ -3011,7 +3016,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 		err, argWarnings = decodeJSON(&skReq)
 		if err == nil {
-			data, err = a.handleSkillToolCall(skReq.Skill, skReq.Args)
+			data, err = a.handleSkillToolCall(cfg, skReq.Skill, skReq.Args)
 		}
 	default:
 		// Route MCP tool calls by their sanitized OpenAI function name.

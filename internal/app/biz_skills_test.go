@@ -894,3 +894,73 @@ func TestParseSkillContentAllySpellingPrecedence(t *testing.T) {
 		}
 	})
 }
+
+func TestSkillRequestWorkspaceAndProjectPrecedence(t *testing.T) {
+	a := newApiTestApp(t)
+	other := t.TempDir()
+	writeSkillTestFile(t, userSkillsDir(t), "shared/SKILL.md", "---\nname: shared\n---\nUSER")
+	writeSkillTestFile(t, a.config.Workspace, ".agents/skills/shared/SKILL.md", "---\nname: shared\n---\nGLOBAL")
+	writeSkillTestFile(t, other, ".agents/skills/shared/SKILL.md", "---\nname: shared\n---\nREQUEST")
+	cfg := a.config
+	cfg.Workspace = other
+	sk := findSkill(t, a.listCachedSkillsForConfig(cfg), "shared")
+	if sk.Source != "project" || sk.Dir != filepath.Join(other, agentsSkillsSubdir, "shared") {
+		t.Fatalf("wrong scope: %+v", sk)
+	}
+	result := a.executeTool(t.Context(), cfg, "", "skill", []byte(`{"skill":"shared"}`))
+	if !result.OK {
+		t.Fatalf("load failed: %+v", result)
+	}
+	loaded, ok := result.Data.(map[string]any)
+	if !ok || !strings.Contains(loaded["content"].(string), "REQUEST") || strings.Contains(loaded["content"].(string), "GLOBAL") {
+		t.Fatalf("wrong workspace: %+v", result)
+	}
+}
+
+func TestSkillYAMLMetadataUsesOnlyTopLevelFields(t *testing.T) {
+	for _, style := range []string{">", "|"} {
+		meta := parseSkillContent("sample/SKILL.md", "---\nname: actual\ndescription: "+style+"\n  first line\n  second line\nmetadata:\n  name: nested\n  description: wrong\n---\nbody")
+		if meta.Name != "actual" || !strings.Contains(meta.Description, "first line") || !strings.Contains(meta.Description, "second line") {
+			t.Fatalf("wrong YAML metadata: %+v", meta)
+		}
+	}
+}
+
+func TestSaveSkillValidatesSerializedSizeBeforeWriting(t *testing.T) {
+	a := newApiTestApp(t)
+	for _, draft := range []SkillDraft{
+		{Name: "body-limit", Description: "description", Content: strings.Repeat("x", maxSkillFileBytes)},
+		{Name: "header-limit", Description: strings.Repeat("x", 65*1024), Content: "body"},
+	} {
+		if _, err := a.SaveSkill(draft); err == nil {
+			t.Fatalf("expected size rejection for %s", draft.Name)
+		}
+		if _, err := os.Stat(filepath.Join(userSkillsDir(t), draft.Name)); !os.IsNotExist(err) {
+			t.Fatalf("rejected skill left files: %v", err)
+		}
+	}
+}
+
+func TestSkillWrittenYAMLScalarRoundTrip(t *testing.T) {
+	for _, value := range []string{"uses: colon", "text # comment", ">", "true", "null", "[one, two]", "*alias", "plain", "中文"} {
+		meta := parseSkillContent("sample/SKILL.md", renderSkillFile("sample", value, value, "body"))
+		if meta.Name != "sample" || meta.Description != value || meta.WhenToUse != value {
+			t.Fatalf("%q did not round trip: %+v", value, meta)
+		}
+	}
+}
+
+func TestSkillBareColonMetadataCompatibility(t *testing.T) {
+	for _, description := range []string{"用途: 处理文件", "Use when: editing files", "Use when: editing #1"} {
+		text := "---\nname: actual-name\ndescription: " + description + "\nwhen_to_use: task: files\nmetadata:\n  name: nested-name\n---\nbody"
+		meta := parseSkillContent("different-folder/SKILL.md", text)
+		if meta.Name != "actual-name" || meta.Description != description || meta.WhenToUse != "task: files" {
+			t.Fatalf("bare metadata did not survive: %+v", meta)
+		}
+	}
+	text := "---\nname: actual-name\ndescription: |\n  first line\n  second line\nwhenToUse: task: files\n---\nbody"
+	meta := parseSkillContent("different-folder/SKILL.md", text)
+	if meta.Name != "actual-name" || meta.Description != "first line\nsecond line\n" || meta.WhenToUse != "task: files" {
+		t.Fatalf("compatibility repair changed YAML block text: %+v", meta)
+	}
+}

@@ -329,7 +329,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path", "version", "changes"},
 		}),
-		functionTool("remote_create_file", "Create a UTF-8 file and missing parents on a remote SSH workspace. Directories are refused. Existing files require overwrite=true and user approval.", map[string]any{
+		functionTool("remote_create_file", "Create a UTF-8 file and missing parents on a remote SSH workspace. Directories are refused. Existing files require overwrite=true.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    sshTargetSchema(),
@@ -364,14 +364,14 @@ func chatToolsUncached() []openai.Tool {
 			"- action='download': streams remotePath (file or directory) from the remote workspace to localPath.\n"+
 			"- Preserves file modes, permissions, and directory structures.\n"+
 			"- Both localPath and remotePath must stay within their respective workspaces (strict workspace fences enforced).\n"+
-			"- Existing destinations require overwrite=true with user approval; version-control metadata (.git) is strictly protected.", map[string]any{
+			"- Existing destinations require overwrite=true; version-control metadata (.git) is strictly protected.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":     sshTargetSchema(),
 				"action":     map[string]any{"type": "string", "enum": []string{"upload", "download"}, "description": "Transfer direction: 'upload' (local to remote) or 'download' (remote to local)."},
 				"localPath":  map[string]any{"type": "string", "minLength": 1, "description": "Workspace-relative local file or directory path."},
 				"remotePath": map[string]any{"type": "string", "minLength": 1, "description": "Remote workspace-relative destination or source file/directory path."},
-				"overwrite":  map[string]any{"type": "boolean", "description": "Allow overwriting an existing destination file or directory (subject to user confirmation)."},
+				"overwrite":  map[string]any{"type": "boolean", "description": "Allow overwriting an existing destination file or directory without an additional confirmation prompt."},
 			},
 			"required": []string{"target", "action", "localPath", "remotePath"},
 		}),

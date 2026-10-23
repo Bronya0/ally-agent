@@ -122,3 +122,29 @@ test('the token detail never rides along into another phase', () => {
   assert.equal(phaseLabel(RUN_PHASE.reasoning, 0), 'Thinking');
   assert.equal(phaseLabel(RUN_PHASE.reasoning, undefined), 'Thinking');
 });
+
+
+test('MCP wait reports server names and clears on completion, timeout, or cancel', () => {
+  for (const end of ['ready', 'timeout', 'cancelled']) {
+    const state = drive([['run:start', {}], ['run:mcp-wait', { state: 'waiting', servers: ['slow', 'other'], timeoutSeconds: 30 }]]);
+    assert.equal(state.phase, RUN_PHASE.mcp);
+    assert.deepEqual(state.waitingServers, ['slow', 'other']);
+    assert.equal(state.mcpTimeoutSeconds, 30);
+    applyRunPhaseEvent(state, 'run:mcp-wait', { state: 'waiting', servers: ['slow'], timeoutSeconds: 30 });
+    assert.deepEqual(state.waitingServers, ['slow']);
+    applyRunPhaseEvent(state, 'run:mcp-wait', { state: end });
+    assert.equal(state.phase, RUN_PHASE.prompt);
+    assert.deepEqual(state.waitingServers, []);
+  }
+});
+
+test('MCP wait state stays in its own session and resets on next run', () => {
+  const first = createRunPhaseState();
+  const second = createRunPhaseState();
+  applyRunPhaseEvent(first, 'run:mcp-wait', { state: 'waiting', servers: ['first'] });
+  assert.equal(second.phase, RUN_PHASE.prompt);
+  assert.deepEqual(second.waitingServers, []);
+  applyRunPhaseEvent(first, 'run:start');
+  assert.equal(first.phase, RUN_PHASE.prompt);
+  assert.deepEqual(first.waitingServers, []);
+});

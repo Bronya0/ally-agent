@@ -236,6 +236,10 @@
 
   /* ── Ally avatar eye shell tokens (dark default) ── */
   --ally-eye-shell-fill: #0b0e13;
+  --ally-eye-pupil-fill: #05070a;
+  --ally-eye-pupil-line: var(--ally-eye-highlight);
+  --ally-eye-pupil-ring: var(--ally-accent);
+  --ally-eye-pupil-detail: #f8fafc;
   --ally-eye-shell-stroke: #343a45;
   --ally-eye-shadow-opacity: 0.25;
 }
@@ -374,7 +378,16 @@
   --game-status-bg: rgba(15, 23, 42, 0.05);
 
   /* ── Ally avatar eye shell tokens (light mode) ── */
+  --ally-eye-iris-inner: color-mix(in srgb, var(--ally-accent) 40%, #ffffff);
+  --ally-eye-iris-color: color-mix(in srgb, var(--ally-accent) 78%, #ffffff);
+  --ally-eye-iris-outer: color-mix(in srgb, var(--ally-accent) 80%, #626873);
+  --ally-eye-iris-edge: color-mix(in srgb, var(--ally-accent) 64%, #454b56);
+  --ally-eye-iris-rim: color-mix(in srgb, var(--ally-accent) 72%, #ffffff);
   --ally-eye-shell-fill: #f5ede2;
+  --ally-eye-pupil-fill: #ffffff;
+  --ally-eye-pupil-line: color-mix(in srgb, var(--ally-accent) 75%, #454b56);
+  --ally-eye-pupil-ring: color-mix(in srgb, var(--ally-accent) 70%, #454b56);
+  --ally-eye-pupil-detail: var(--ally-eye-pupil-line);
   --ally-eye-shell-stroke: #d8c3a5;
   --ally-eye-shadow-opacity: 0.12;
 }
@@ -3104,9 +3117,36 @@ html.rail-expanded .chat-layout {
 
 /* ── Model menu popover ── */
 
+/* 子菜单挂在菜单本体下，外层必须允许溢出；滚动裁剪由内部 scrollbar 负责。
+   清除滚动内容默认的上下 padding，避免搜索行先上移 4px 才吸顶。 */
+.model-menu.n-dropdown-menu > .n-scrollbar > .n-scrollbar-container > .n-dropdown-menu__content {
+  padding: 0;
+}
+
 .model-menu .model-menu-search {
-  padding: 4px 8px 6px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 4px 6px 8px;
+  background-color: var(--n-color);
+  border-radius: var(--n-border-radius) var(--n-border-radius) 0 0;
   cursor: default;
+}
+
+/* 输入框只留一条浅底，边框交给外层；无边框形态没有 state-border，
+   聚焦描边只能自己补，否则光标在哪一格看不出来。 */
+.model-menu .model-menu-search .n-input {
+  border-radius: 7px;
+  background-color: var(--ally-state-hover);
+}
+
+.model-menu .model-menu-search .n-input.n-input--focus {
+  box-shadow: inset 0 0 0 1px var(--ally-border-input);
+}
+
+.model-menu .model-menu-search .n-input__prefix {
+  color: var(--ally-text-muted);
+  font-size: 13px;
 }
 
 .model-menu .model-menu-group {
@@ -3115,6 +3155,12 @@ html.rail-expanded .chat-layout {
   gap: 8px;
   min-width: 0;
   width: 100%;
+}
+
+.model-menu .model-menu-section-title {
+  padding: 4px 10px;
+  color: var(--ally-text-faint);
+  font-size: 11px;
 }
 
 .model-menu .model-menu-group.active .model-menu-group-name {
@@ -3133,14 +3179,10 @@ html.rail-expanded .chat-layout {
 }
 
 .model-menu .model-menu-group-count {
-  min-width: 20px;
-  padding: 0 5px;
-  border-radius: 8px;
-  background: var(--ally-state-hover);
-  color: var(--ally-text-faint);
+  flex: none;
+  color: var(--ally-text-ghost);
   font-size: 10px;
-  line-height: 16px;
-  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .model-menu .model-menu-item {
@@ -3162,9 +3204,13 @@ html.rail-expanded .chat-layout {
   flex: 1;
   overflow: hidden;
   color: var(--ally-text-body);
-  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 当前模型整行铺一层浅底：列表拉直、变长以后只靠文字变色不好找。 */
+.model-menu .n-dropdown-option.model-menu-row-active .n-dropdown-option-body::before {
+  background-color: var(--ally-state-hover);
 }
 
 .model-menu .model-menu-item-mark {
@@ -3173,9 +3219,31 @@ html.rail-expanded .chat-layout {
   font-size: 12px;
 }
 
+.model-menu .model-menu-item-provider {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ally-text-faint);
+  font-size: 11px;
+}
+
+.model-menu .model-menu-item-recent .model-menu-item-name {
+  font-size: 12px;
+}
+
 .model-menu .model-menu-empty {
   color: var(--ally-text-faint);
   font-size: var(--ally-aux-font-size);
+}
+
+/* 管理入口钉在列表底部：列表拉直以后可能很长，不钉住就要滚到底才点得到。 */
+.model-menu .model-menu-manage-row {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background-color: var(--n-color);
+  border-top: 1px solid var(--ally-border);
 }
 
 .model-menu .model-menu-manage {

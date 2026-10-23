@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // pickRemoteHelperPython 选择镜像测试解释器。可用 ALLY_TEST_PYTHON 指定版本，
@@ -642,6 +643,57 @@ func TestRemoteHelperReadBatchOp(t *testing.T) {
 	}
 	if len(data.Remaining) != 1 || data.Remaining[0] != "b.txt" {
 		t.Fatalf("remaining = %v, want [b.txt]", data.Remaining)
+	}
+}
+
+func TestRemoteHelperReadBatchErrorDoesNotConsumeBudget(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "large.txt"), []byte("large content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script, err := buildRemoteScript(map[string]any{
+		"op": "read_batch", "workspaceRoot": root,
+		"paths": []string{"missing.txt", "large.txt"}, "maxBytes": 1024, "totalBytes": 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runRemoteHelperScript(t, py, script)
+	if err != nil || !resp.OK {
+		t.Fatalf("read batch: %v, %s", err, resp.Error)
+	}
+	var data struct {
+		Files     []struct{ OK bool } `json:"files"`
+		Remaining []string            `json:"remaining"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Files) != 2 || !data.Files[1].OK || len(data.Remaining) != 0 {
+		t.Fatalf("first readable file should use this round even after an error: %s", resp.Data)
+	}
+}
+
+func TestRemoteHelperReadRefusesFIFO(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("FIFO is a POSIX file type")
+	}
+	py := pickRemoteHelperPython(t)
+	script, err := buildRemoteScript(map[string]any{
+		"op": "read", "workspaceRoot": t.TempDir(), "path": "pipe",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	script = strings.Replace(script, "root = os.path.realpath(raw_root)", "root = os.path.realpath(raw_root)\n    os.mkfifo(os.path.join(root, 'pipe'))", 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, py, "-")
+	cmd.Stdin = strings.NewReader(script)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "not a regular file") {
+		t.Fatalf("FIFO read should fail immediately: %v: %s", err, out)
 	}
 }
 

@@ -34,6 +34,7 @@ Public License v3. See the LICENSE file for details.
     <ModelMenu
       :models="props.config.models || []"
       :active-identity="modelConfigIdentity(props.config)"
+      :last-used-identity="modelConfigIdentity(props.config.lastUsedModel)"
       :disabled="running"
       placement="top-start"
       @select="(index) => emit('switchModel', index)"

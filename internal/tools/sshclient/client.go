@@ -124,21 +124,11 @@ func Run(ctx context.Context, cfg Config, command string, stdin io.Reader) (Resu
 	}
 	defer client.Close()
 
-	stopCancel := make(chan struct{})
-	cancelWatcherDone := make(chan struct{})
-	go func() {
-		defer close(cancelWatcherDone)
-		select {
-		case <-ctx.Done():
-			_ = client.Close()
-		case <-stopCancel:
-		}
-	}()
+	stopCancel := context.AfterFunc(ctx, func() { _ = client.Close() })
+	defer stopCancel()
 
 	session, err := client.NewSession()
 	if err != nil {
-		close(stopCancel)
-		<-cancelWatcherDone
 		if ctx.Err() != nil {
 			return Result{}, ctx.Err()
 		}
@@ -153,8 +143,6 @@ func Run(ctx context.Context, cfg Config, command string, stdin io.Reader) (Resu
 	session.Stdin = stdin
 
 	runErr := session.Run(command)
-	close(stopCancel)
-	<-cancelWatcherDone
 	result := Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 	if ctx.Err() != nil {
 		return result, ctx.Err()
@@ -210,21 +198,11 @@ func RunStream(ctx context.Context, cfg Config, command string, stdin io.Reader,
 	}
 	defer client.Close()
 
-	stopCancel := make(chan struct{})
-	cancelWatcherDone := make(chan struct{})
-	go func() {
-		defer close(cancelWatcherDone)
-		select {
-		case <-ctx.Done():
-			_ = client.Close()
-		case <-stopCancel:
-		}
-	}()
+	stopCancel := context.AfterFunc(ctx, func() { _ = client.Close() })
+	defer stopCancel()
 
 	session, err := client.NewSession()
 	if err != nil {
-		close(stopCancel)
-		<-cancelWatcherDone
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -244,8 +222,6 @@ func RunStream(ctx context.Context, cfg Config, command string, stdin io.Reader,
 	}
 
 	runErr := session.Run(command)
-	close(stopCancel)
-	<-cancelWatcherDone
 	if ctx.Err() != nil {
 		return stderr.Bytes(), ctx.Err()
 	}
@@ -292,7 +268,12 @@ func Test(ctx context.Context, cfg Config) (time.Duration, error) {
 	}
 	defer client.Close()
 
+	stopCancel := context.AfterFunc(ctx, func() { _ = client.Close() })
+	defer stopCancel()
 	session, err := client.NewSession()
+	if ctx.Err() != nil {
+		return time.Since(start), ctx.Err()
+	}
 	if err != nil {
 		return time.Since(start), fmt.Errorf("open SSH session: %w", err)
 	}

@@ -108,41 +108,9 @@ func parseRemoteTarget(raw string) (remoteTarget, error) {
 	return remoteTarget{Raw: raw, Host: host, WorkspaceRoot: root}, nil
 }
 
-// remoteDestructiveCommands 是本地命令风险表没有建模、但会不可逆改写内容的命令
-// （按名字比对，来自 shell 解析结果而不是子串，见 isDestructiveRemoteCommand）。
-var remoteDestructiveCommands = map[string]bool{
-	"truncate": true,
-	"shred":    true,
-}
-
-// isDestructiveRemoteCommand 判断命令行里是否存在破坏性调用，供审批闸门使用。
-// 判据复用本地 command 工具的同一套 shell 解析与风险表（单一真实源）：
-//   - 风险表：mkfs*/shutdown/reboot/poweroff/chmod 000/dd 写块设备/cp 自无限设备；
-//   - 删除类：复用托管删除上下文识别（git rm、docker rm 等不算裸删除）；
-//   - 另外补 truncate / shred 这两个风险表未建模的一次性破坏命令。
-//
-// 刻意不用子串匹配：`git add .`（含 "dd "）、`echo confirm this`（含 "rm "）这类
-// 误报会把审批弹窗训练成无脑点过，真正的危险操作反而被忽略。`>` 重定向也不在这里
-// 拦：远端 helper 已按 workspaceRoot 校验字面写入目标，越界直接 E_PATH_OUTSIDE，
-// 比一次确认更硬（与本地 command 的契约一致）。
-func isDestructiveRemoteCommand(cmd string) bool {
-	if command.MatchRiskPattern(cmd) != nil {
-		return true
-	}
-	if command.ContainsExplicitDeleteCommand(cmd) && !command.IsAllowedDeleteContext(cmd) {
-		return true
-	}
-	for _, invocation := range command.Invocations(cmd) {
-		if remoteDestructiveCommands[invocation.Name] {
-			return true
-		}
-	}
-	return false
-}
-
 // resolveAndAuthorizeRemoteTarget parses raw and resolves any cluster alias.
 // In interactive agent sessions (sessionID != ""), it enforces Tab-level isolation
-// (preventing diffusion attacks) and Approval Gate 2 (connection approval).
+// without per-operation confirmation prompts.
 func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (remoteTarget, error) {
 	rt, err := parseRemoteTarget(raw)
 	if err != nil {
@@ -161,7 +129,7 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 		}
 	}
 
-	// 会话上下文同时决定工作区隔离与审批闸门；没有会话（后台任务、子代理）时两者都不适用。
+	// 会话上下文决定工作区隔离；原始端点直接连接，不做逐次审批。
 	sessionID := toolSessionID(ctx)
 	var workspace string
 	if sessionID != "" {
@@ -180,7 +148,7 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 		}
 	}
 
-	// In interactive sessions, enforce Tab isolation and Connection Approval (Approval Gate 2)
+	// In interactive sessions, enforce workspace authorization for registered nodes.
 	if sessionID != "" {
 		// 1. Tab-level authorization (prevent lateral movement / diffusion)
 		if isRegistered && !a.IsServerAuthorizedForWorkspace(workspace, serverNode.ID) {
@@ -188,71 +156,9 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 				fmt.Errorf("server %q is not authorized for current workspace tab; please authorize it in the tab footer or request access via ssh_cluster", serverKey))
 		}
 
-		// 2. Raw SSH targets require first-connect approval. Registered servers
-		// (whatever the spelling) are already trusted through the workspace
-		// authorization list.
-		if !isRegistered && !a.IsServerConnectionApproved(sessionID, serverKey) {
-			askReq := AskRequest{
-				Questions: []AskQuestion{
-					{
-						ID: "approve_remote_connect",
-						Question: fmt.Sprintf("模型正申请建立到服务器 [%s] (%s) 的 SSH 连接，目标工作区路径为 %s。\n\n是否允许连接？",
-							serverKey, rt.Host, rt.WorkspaceRoot),
-						Options: []AskOption{
-							{
-								ID:          "allow_session",
-								Label:       "允许连接（仅在本次会话内有效）",
-								Description: "临时放行本次会话对该服务器的 SSH 操作",
-								Recommended: true,
-							},
-							{
-								ID:          "allow_always",
-								Label:       "允许并在当前工作区保持信任",
-								Description: "在本工作区内持续信任该服务器，后续无需重复确认",
-							},
-							{
-								ID:          "reject",
-								Label:       "拒绝连接",
-								Description: "中断连接并阻止模型访问该服务器",
-							},
-						},
-					},
-				},
-			}
-
-			askResult, askErr := a.executeAsk(ctx, sessionID, askReq)
-			if askErr != nil {
-				return remoteTarget{}, codedToolError("E_CONNECTION_CANCELLED", fmt.Errorf("connection approval was cancelled: %w", askErr))
-			}
-
-			approved := false
-			allowAlways := false
-			for _, ans := range askResult.Answers {
-				if ans.QuestionID == "approve_remote_connect" {
-					for _, sel := range ans.Selections {
-						if sel.OptionID == "allow_session" || sel.OptionID == "allow_always" {
-							approved = true
-							if sel.OptionID == "allow_always" {
-								allowAlways = true
-							}
-							break
-						}
-					}
-				}
-			}
-
-			if !approved {
-				return remoteTarget{}, codedToolError("E_CONNECTION_REJECTED", fmt.Errorf("user rejected SSH connection to server %q", serverKey))
-			}
-
-			a.ApproveServerConnection(sessionID, serverKey)
-			if allowAlways && workspace != "" {
-				a.AuthorizeServerForWorkspace(workspace, serverKey)
-			}
-		}
 	}
 
-	// 凭据在四道闸门都放行之后才入槽：被拒绝的调用不应该留下可用的密码。
+	// 工作区授权通过后才缓存节点凭据。
 	// 槽位由解析后的端点决定，invokeRemotePython 按同一端点读取凭据。
 	if isRegistered && (serverNode.Password != "" || serverNode.KeyPath != "") {
 		a.sshCredentials.store(sshCredentialKey(rt.Host, rt.Port), normalizeSSHAuthType(serverNode), serverNode.Password, serverNode.KeyPath)
@@ -464,24 +370,8 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 	if err != nil {
 		return err
 	}
-	entry, hasCredential := a.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port))
-	sshConfig := sshclient.Config{
-		Host:           rt.Host,
-		Port:           rt.Port,
-		AuthMode:       sshclient.AuthModeAgent,
-		KnownHostsPath: a.sshKnownHostsPath,
-	}
-	if hasCredential {
-		switch entry.authType {
-		case sshAuthTypeKey:
-			sshConfig.AuthMode = sshclient.AuthModeKey
-			sshConfig.KeyPath = entry.keyPath
-			sshConfig.KeyPassphrase = entry.password
-		case sshAuthTypePassword:
-			sshConfig.AuthMode = sshclient.AuthModePassword
-			sshConfig.Password = entry.password
-		}
-	}
+	entry, _ := a.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port))
+	sshConfig := a.remoteSSHConfig(rt, entry)
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
@@ -980,8 +870,7 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	}
 	// Existence comes from the helper's stat op, not from the pre-read:
 	// read_raw_file refuses files above maxReadFileBytes and directories outright,
-	// so inferring "does not exist" from a failed read skipped the overwrite
-	// approval for large files and reported an overwritten file as created.
+	// so a failed read must not report an overwritten file as created.
 	stat, statErr := a.remoteStatPath(ctx, rt, cleanPath)
 	if statErr != nil {
 		return EditResult{}, statErr
@@ -992,68 +881,16 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	before := []byte{}
 	beforeHash := ""
 	beforeVersion := ""
-	// The approval prompt must not report "0 bytes" for a file that was too large
-	// to read: stat carries the real size from the start.
-	beforeSize := stat.Size
-	// Best-effort content read: it now only feeds the diff and the version token,
-	// so a file too large to read still gets the approval gate and an honest
-	// `created` flag.
+	// Best-effort read supplies the diff and version; stat determines existence.
 	if stat.Exists {
 		if _, existing, readErr := a.remoteReadRaw(ctx, req.Target, cleanPath); readErr == nil {
 			before = existing.Data
-			beforeSize = int64(len(existing.Data))
 			beforeHash, beforeVersion = hashBytesAndVersion(existing.Data)
 		}
 	}
 	content, ending, hadBOM := normalizeText([]byte(req.Content))
 	encoded := encodeText(content, ending, hadBOM)
 
-	// Approval Gate 3: 只在本次确实是覆盖写时确认（overwrite=false 时 helper 会
-	// 直接以 "file already exists" 拒绝，问了也白问）。
-	if stat.Exists && req.Overwrite {
-		if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok && meta.sessionID != "" {
-			askReq := AskRequest{
-				Questions: []AskQuestion{
-					{
-						ID: "approve_remote_overwrite",
-						Question: fmt.Sprintf("⚠️ 高危覆盖警告：模型正尝试覆盖远端已有文件 [%s] %s。\n原文件大小: %d 字节，新写入大小: %d 字节。\n\n是否确认允许覆盖？",
-							rt.Host, cleanPath, beforeSize, len(encoded)),
-						Options: []AskOption{
-							{
-								ID:          "approve",
-								Label:       "确认允许覆盖写入",
-								Description: "使用模型生成的新内容完全替换远端已有文件",
-							},
-							{
-								ID:          "reject",
-								Label:       "拒绝覆盖（保留原文件）",
-								Description: "中断写入操作，远端原文件保持不变",
-								Recommended: true,
-							},
-						},
-					},
-				},
-			}
-			askResult, askErr := a.executeAsk(ctx, meta.sessionID, askReq)
-			if askErr != nil {
-				return EditResult{}, codedToolError("E_OVERWRITE_CANCELLED", fmt.Errorf("overwrite approval was cancelled: %w", askErr))
-			}
-			approved := false
-			for _, ans := range askResult.Answers {
-				if ans.QuestionID == "approve_remote_overwrite" {
-					for _, sel := range ans.Selections {
-						if sel.OptionID == "approve" {
-							approved = true
-							break
-						}
-					}
-				}
-			}
-			if !approved {
-				return EditResult{}, codedToolError("E_OVERWRITE_REJECTED", fmt.Errorf("user rejected overwriting remote file %s", cleanPath))
-			}
-		}
-	}
 	createdDirs, err := a.remoteWriteRaw(ctx, rt, cleanPath, encoded, req.Overwrite, true)
 	if err != nil {
 		return EditResult{}, err
@@ -1172,7 +1009,7 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 	if err != nil {
 		return CommandResult{}, err
 	}
-	// cwd 在审批之前就定下来：越界或非法的 cwd 不该先弹一次审批再报错；算出来的
+	// cwd 先校验并归一；算出来的
 	// 远端绝对路径同时是下面版本控制元数据判定的解析基准。
 	cwd, err := validateRemoteWorkspacePath(req.Cwd, rt.WorkspaceRoot, true)
 	if err != nil {
@@ -1185,51 +1022,6 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 		return CommandResult{}, codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：远端命令的写入目标是版本控制元数据内的路径。\n原因：创建或覆盖 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码。\n检测到的目标：%s\n处理方式：版本控制状态请手动在服务器上变更。\n被拦截的命令：%s", risk, req.Command))
 	}
 
-	// Approval Gate 3: Destructive command approval
-	if isDestructiveRemoteCommand(req.Command) {
-		if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok && meta.sessionID != "" {
-			askReq := AskRequest{
-				Questions: []AskQuestion{
-					{
-						ID: "approve_remote_command",
-						Question: fmt.Sprintf("⚠️ 高危命令警告：模型正尝试在服务器 [%s] 执行包含覆盖或破坏性的命令：\n\n```sh\n%s\n```\n\n是否确认允许执行？",
-							rt.Host, req.Command),
-						Options: []AskOption{
-							{
-								ID:          "approve",
-								Label:       "确认允许执行",
-								Description: "继续在远端服务器上执行该命令",
-							},
-							{
-								ID:          "reject",
-								Label:       "拒绝执行",
-								Description: "中断执行以保护远端环境",
-								Recommended: true,
-							},
-						},
-					},
-				},
-			}
-			askResult, askErr := a.executeAsk(ctx, meta.sessionID, askReq)
-			if askErr != nil {
-				return CommandResult{}, codedToolError("E_COMMAND_CANCELLED", fmt.Errorf("command execution approval was cancelled: %w", askErr))
-			}
-			approved := false
-			for _, ans := range askResult.Answers {
-				if ans.QuestionID == "approve_remote_command" {
-					for _, sel := range ans.Selections {
-						if sel.OptionID == "approve" {
-							approved = true
-							break
-						}
-					}
-				}
-			}
-			if !approved {
-				return CommandResult{}, codedToolError("E_COMMAND_REJECTED", fmt.Errorf("user rejected executing destructive command on %s", rt.Host))
-			}
-		}
-	}
 	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = defaultShellLimit
@@ -1259,7 +1051,7 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 		"command":        req.Command,
 		"cwd":            cwd,
 		"timeoutSeconds": timeout,
-		"shell":          req.Shell,
+		"shell":          shell,
 		"maxOutput":      maxToolOutput,
 		"targets":        writeTargets,
 	}), time.Duration(timeout+20)*time.Second, &result)
@@ -1375,7 +1167,7 @@ func (a *App) executeRemoteTransfer(ctx context.Context, req RemoteTransferReque
 		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", errors.New("remotePath is required"))
 	}
 
-	// 1. Resolve and authorize remote target (Tab-level isolation + Approval Gate 2 + Credentials)
+	// 1. Resolve target, workspace authorization and credentials
 	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
 	if err != nil {
 		return RemoteTransferResult{}, err
@@ -1429,7 +1221,7 @@ func (a *App) executeRemoteTransfer(ctx context.Context, req RemoteTransferReque
 		return RemoteTransferResult{}, codedToolError("E_PROTECTED_PATH", errors.New(reason))
 	}
 
-	// 4. Action-specific validation and Approval Gate 3 (Overwrite approval)
+	// 4. Action-specific validation
 	if action == "upload" {
 		// Check local source existence
 		if _, err := os.Lstat(localAbs); err != nil {
@@ -1523,24 +1315,8 @@ func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, acti
 
 	remoteCmd := fmt.Sprintf(`sh -c 'boot="import base64, sys, zlib; code = zlib.decompress(base64.b64decode(sys.argv.pop(1))); exec(compile(code, \"<ally-transfer>\", \"exec\"))"; command -v python3 >/dev/null 2>&1 && exec python3 -u -c "$boot" "$@" ; command -v python2 >/dev/null 2>&1 && exec python2 -u -c "$boot" "$@" ; exec python -u -c "$boot" "$@"' -- %s %s`, b64Script, b64Payload)
 
-	entry, hasCredential := a.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port))
-	sshConfig := sshclient.Config{
-		Host:           rt.Host,
-		Port:           rt.Port,
-		AuthMode:       sshclient.AuthModeAgent,
-		KnownHostsPath: a.sshKnownHostsPath,
-	}
-	if hasCredential {
-		switch entry.authType {
-		case sshAuthTypeKey:
-			sshConfig.AuthMode = sshclient.AuthModeKey
-			sshConfig.KeyPath = entry.keyPath
-			sshConfig.KeyPassphrase = entry.password
-		case sshAuthTypePassword:
-			sshConfig.AuthMode = sshclient.AuthModePassword
-			sshConfig.Password = entry.password
-		}
-	}
+	entry, _ := a.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port))
+	sshConfig := a.remoteSSHConfig(rt, entry)
 
 	var outcome struct {
 		TotalBytes int64 `json:"totalBytes"`

@@ -241,7 +241,7 @@ Public License v3. See the LICENSE file for details.
                   <span class="composer-retry-text">{{ $t('app.run.retryBanner', { attempt: retryBanner.attempt, max: retryBanner.maxAttempts, error: retryBanner.error }) }}</span>
                   <span v-if="retryBanner.totalKeys > 1" class="composer-retry-key">{{ $t('app.run.retryKey', { key: retryBanner.keyIndex + 1, total: retryBanner.totalKeys }) }}</span>
                 </div>
-                <!-- 状态行：左侧三根条常驻表示“在跑”，右下只有一个标签，且只有思考阶段
+                <!-- 状态行：左侧三根条常驻表示“在跑”，右下只有一个标签，MCP 等待和思考阶段
                      才带文字（Thinking 12.4k tokens）——“Prompt Processing”与“Decoding”
                      各自要占掉一轮里的大段时间，却不多说三根条以外的信息，已不再显示。
                      三根条（components/RunSpinner.vue）与流光同一灰调，两者共存但不抢
@@ -255,14 +255,14 @@ Public License v3. See the LICENSE file for details.
                   <!-- 三根条只在跑的时候挂载：无限动画卸载即停，比 visibility 藏着跑省。
                        一次 run 内它不参与挂载/卸载，所以阶段标签出现/消失时不会位移。 -->
                   <RunSpinner v-if="activeSessionRunning" />
-                  <!-- 标签为空时整块不渲染（思考阶段之外的所有阶段），既不占位也
+                  <!-- 标签为空时整块不渲染（MCP 等待与思考之外的阶段），既不占位也
                        不空转动画；在同一个元素里换字不重放流光，观感连续。
                        刻意不用 <Transition>：标签自带 1.8s 无限流光动画，Transition
                        的自动检测会把动画时长当过渡时长（animationend 对无限动画
                        永不触发），leave 后留一个 opacity:0 的隐形标签滞留 1.8 秒。
                        淡入改由标签自身的 animation 承担（与流光合并成一条声明，
                        见 style.css），消失就是 v-if 同步移除，不可能滞留。 -->
-                  <span v-if="composerStatusLabel" class="composer-run-label">{{ composerStatusLabel }}<span class="composer-run-glow" aria-hidden="true">{{ composerStatusLabel }}</span></span>
+                  <span v-if="composerStatusLabel" class="composer-run-label" :role="activeRunPhase === RUN_PHASE.mcp ? 'status' : undefined">{{ composerStatusLabel }}<span class="composer-run-glow" aria-hidden="true">{{ composerStatusLabel }}</span></span>
                   <span
                     v-if="composerStatusDetail"
                     class="composer-run-prompt"
@@ -751,7 +751,7 @@ import { burstDigitalWave } from './composables/digitalWave.mjs';
 // 樱花青草风特效的全局开关；唯一特效层实例见模板根部
 const { sakuraOn } = useSakuraBreeze();
 import { modelConfigIdentity, modelSnapshotFrom, reasoningEffortLevels } from './utils/modelConfigIO.mjs';
-import { getSpecificModelUsage } from './utils/modelUsage.mjs';
+import { getSpecificModelUsage, recordRecentModelUsage } from './utils/modelUsage.mjs';
 import { formatModelLabel } from './utils/modelLabel.mjs';
 import { buildVersion } from './utils/buildVersion.js';
 import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
@@ -1653,6 +1653,7 @@ async function rememberLastUsedModel(source) {
   const providerName = String(source?.providerName || '').trim();
   const model = String(source?.model || '').trim();
   if (!model) return;
+  recordRecentModelUsage(modelConfigIdentity(source), (config.models || []).map(modelConfigIdentity));
   const current = config.lastUsedModel;
   const identity = { providerName, model, ...(source?.authType === 'chatgpt_oauth' ? { oauthAccountId: source.oauthAccountId } : {}) };
   if (current && modelConfigIdentity(current) === modelConfigIdentity(identity)) return;
@@ -2919,7 +2920,7 @@ const activeThinkingTokenCount = computed(() => {
   }
   return 0;
 });
-// 状态行（输入框上方那一行）的阶段：每个阶段只显示一个英文词，整行最多一个动效
+// 状态行（输入框上方那一行）：MCP 等待显示本地化状态，思考显示英文标签，整行最多一个动效
 // 元素。状态按会话 id 存放、不落盘（瞬时状态而非历史），与压缩状态同一处置方式，
 // 所以后台 Tab 的一轮不会跑到别的 Tab 的状态行上。判定规则见 utils/runPhase.mjs。
 const runPhases = reactive({});
@@ -2938,25 +2939,32 @@ function clearRunPhase(session) {
 }
 // 会推动阶段的事件。tool:result / tool:error 在这里也注册一份：卡片子系统
 // （useToolEvents）另有自己的处理，同一事件允许多个监听，两边互不依赖。
-const RUN_PHASE_EVENTS = ['run:start', 'run:stream', 'run:delta', 'run:reasoning', 'tool:start', 'tool:update', 'tool:result', 'tool:error'];
+const RUN_PHASE_EVENTS = ['run:start', 'run:mcp-wait', 'run:stream', 'run:delta', 'run:reasoning', 'tool:start', 'tool:update', 'tool:result', 'tool:error'];
 const activeRunPhase = computed(() => {
   const state = runPhaseStateFor(activeSessionId.value);
   return state ? state.phase : RUN_PHASE.prompt;
 });
-// 状态行左侧唯一的标签：只有思考阶段有文字（带上估算 token 数），其余阶段是空字符串、
+// 状态行左侧唯一的标签：MCP 等待显示本地化进度，思考阶段显示估算 token 数，其余阶段是空字符串、
 // 标签整块不渲染。压缩没有自己的 run，但它的流式增量同样喂进阶段机（见 compact:delta），
 // 所以压缩与一次普通对话的观感完全一致：思考时显示 Thinking N tokens，摘要正文一开始
 // 流式标签就消失；没有思考的模型压缩时就该什么都不显示。压缩进度本身走右侧
 // （composerStatusDetail）。
-const composerStatusLabel = computed(() => phaseLabel(
-  activeRunPhase.value,
-  activeThinkingTokenCount.value,
-));
-// 右侧右对齐的那一段：运行时是用户提问摘要，压缩时是本地化的进度明细。
-// （compactStatusText 在下方定义：computed 的函数体到渲染时才求值。）
-const composerStatusDetail = computed(() => (
-  compactLoadingActive.value ? compactStatusText.value : latestUserPromptSummary.value
-));
+const composerStatusLabel = computed(() => {
+  if (activeRunPhase.value === RUN_PHASE.mcp) {
+    const state = runPhaseStateFor(activeSessionId.value);
+    return t('app.mcp.waiting', { seconds: state?.mcpTimeoutSeconds || 30 });
+  }
+  return phaseLabel(activeRunPhase.value, activeThinkingTokenCount.value);
+});
+// During discovery, name the servers being awaited; normal prompt summary
+// returns as soon as the wait ends. State remains scoped to the active session.
+const composerStatusDetail = computed(() => {
+  if (activeRunPhase.value === RUN_PHASE.mcp) {
+    const names = runPhaseStateFor(activeSessionId.value)?.waitingServers || [];
+    return names.length ? names.join(', ') : t('app.mcp.waitingConfig');
+  }
+  return compactLoadingActive.value ? compactStatusText.value : latestUserPromptSummary.value;
+});
 const currentWorkspaceTasks = computed(() => tasksForView(scheduledTasks.value, activeRunWorkspace.value));
 const currentWorkspaceServices = computed(() => tasksForView(services.value, activeRunWorkspace.value));
 const taskCenterTasks = computed(() => tasksForView(scheduledTasks.value, activeRunWorkspace.value, taskCenterScope.value));
@@ -5341,6 +5349,11 @@ function bindRuntimeEvents() {
   });
   // 状态行的阶段（见 utils/runPhase.mjs）：喂给它同一批运行事件。
   for (const name of RUN_PHASE_EVENTS) onRuntimeEvent(name, (data) => trackRunPhase(name, data));
+  onRuntimeEvent('run:mcp-wait', (data) => {
+    if (data.state === 'timeout') {
+      message.warning(t('app.mcp.waitTimeout', { servers: (data.servers || []).join(', ') || t('app.mcp.waitingConfig') }));
+    }
+  });
   // 上游模型服务的报错统一加上来源标识，用户才能分清该找服务方还是找 Ally。
   // ownText 是调用方自己的文案(某些场景只展示错误原文)，来源判定只此一处。
   function describeEventError(data, ownText) {

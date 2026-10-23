@@ -368,7 +368,7 @@ func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID,
 	a.mu.Lock()
 	compacted := sanitizeHistoryMessages(a.histories[sessionID])
 	a.mu.Unlock()
-	messages := a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkills())
+	messages := a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkillsForConfig(cfg))
 	messages = append(messages, compacted...)
 	if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
 		messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)

@@ -212,6 +212,8 @@ def read_raw_file(root, rel, max_bytes, remaining_bytes=None):
     st = os.stat(path)
     if stat_mod.S_ISDIR(st.st_mode):
         raise ValueError("path is a directory, not a file: '%s'" % to_unicode(rel))
+    if not stat_mod.S_ISREG(st.st_mode):
+        raise ValueError("path is not a regular file: '%s'" % to_unicode(rel))
     if st.st_size > max_bytes:
         raise ValueError("file is too large: '%s' is %d bytes (limit %d); read a line range instead of the whole file" % (to_unicode(rel), st.st_size, max_bytes))
     # Batch deferral happens after path/type/size checks. Do not read and base64
@@ -272,7 +274,7 @@ def op_read_batch(root, payload):
     for rel in payload.get("paths") or []:
         item = {"path": rel, "ok": False}
         try:
-            data = read_raw_file(root, rel, max_bytes, total_bytes - used if files else None)
+            data = read_raw_file(root, rel, max_bytes, total_bytes - used if used else None)
         except Exception as exc:
             item["error"] = to_unicode(exc)
             files.append(item)
@@ -757,7 +759,7 @@ def do_upload(root, payload):
     total_bytes = 0
     file_count = 0
     dir_count = 0
-    dir_modtimes = []
+    dir_metadata = []
 
     for member in tar:
         # tarfile otherwise retains every header even in streaming mode (Python 2/3).
@@ -785,9 +787,13 @@ def do_upload(root, payload):
         if member.isdir():
             if os.path.lexists(target_path) and (os.path.islink(target_path) or not os.path.isdir(target_path)):
                 os.unlink(target_path)
+            created_mode = None
             if not os.path.exists(target_path):
-                os.makedirs(target_path, (member.mode & 0o777 & ~0o022) or 0o755)
-            dir_modtimes.append((target_path, member.mtime))
+                created_mode = (member.mode & 0o777 & ~0o022) or 0o755
+                # Keep the owner able to populate read-only directories; restore
+                # their archive permissions after all children have been written.
+                os.makedirs(target_path, created_mode | 0o700)
+            dir_metadata.append((target_path, member.mtime, created_mode))
             dir_count += 1
         elif member.isreg():
             p_dir = os.path.dirname(target_path)
@@ -845,12 +851,15 @@ def do_upload(root, payload):
             raise ValueError("unsupported tar entry type: " + to_unicode(m_name))
 
     tar.close()
-    for d_path, d_mtime in reversed(dir_modtimes):
-        if d_mtime > 0 and os.path.isdir(d_path):
-            try:
-                os.utime(d_path, (d_mtime, d_mtime))
-            except Exception:
-                pass
+    for d_path, d_mtime, d_mode in reversed(dir_metadata):
+        if os.path.isdir(d_path):
+            if d_mtime > 0:
+                try:
+                    os.utime(d_path, (d_mtime, d_mtime))
+                except Exception:
+                    pass
+            if d_mode is not None:
+                os.chmod(d_path, d_mode)
 
     ok({"totalBytes": total_bytes, "fileCount": file_count, "dirCount": dir_count})
 

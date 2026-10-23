@@ -165,8 +165,8 @@ func TestSSHClusterToolListAndAddApproval(t *testing.T) {
 // TestRemoteTargetTabAuthorizationAndConnectionApproval tests:
 // 1. Calling remote target with unauthorized server alias fails with E_SERVER_UNAUTHORIZED.
 // 2. A workspace-authorized server alias connects without another session prompt.
-// 3. A direct, unregistered SSH target still prompts on first connection.
-func TestRemoteTargetTabAuthorizationAndConnectionApproval(t *testing.T) {
+// 3. A direct, unregistered SSH target connects without a prompt.
+func TestRemoteTargetWorkspaceAuthorization(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Setenv("HOME", tempDir)
 	t.Setenv("USERPROFILE", tempDir)
@@ -212,80 +212,15 @@ func TestRemoteTargetTabAuthorizationAndConnectionApproval(t *testing.T) {
 	if rt.Host != "ubuntu@192.168.1.88" || rt.WorkspaceRoot != "/var/www" {
 		t.Fatalf("unexpected resolved target: %+v", rt)
 	}
-	if app.IsServerConnectionApproved(sessionID, "my-srv") {
-		t.Fatal("workspace authorization should not create session-level approval state")
+	rt, err = app.resolveAndAuthorizeRemoteTarget(ctx, "192.168.1.99:/var/www")
+	if err != nil {
+		t.Fatalf("direct endpoint should not request approval: %v", err)
 	}
-
-	// A direct, unregistered host has no workspace alias authorization and keeps
-	// the first-connect approval prompt.
-	type resolveResult struct {
-		rt  remoteTarget
-		err error
+	if rt.Host != "192.168.1.99" || rt.WorkspaceRoot != "/var/www" {
+		t.Fatalf("unexpected direct target: %+v", rt)
 	}
-	doneDirect := make(chan resolveResult, 1)
-	go func() {
-		rt, err := app.resolveAndAuthorizeRemoteTarget(ctx, "192.168.1.99:/var/www")
-		doneDirect <- resolveResult{rt, err}
-	}()
-
-	askID := waitForAskID(t, app)
-	if err := app.SubmitAskResponse(AskSubmitRequest{
-		AskID:     askID,
-		SessionID: sessionID,
-		Answers: []AskSubmittedAnswer{
-			{QuestionID: "approve_remote_connect", SelectedOptionIDs: []string{"allow_session"}},
-		},
-	}); err != nil {
-		t.Fatalf("SubmitAskResponse approve connection failed: %v", err)
-	}
-
-	res := <-doneDirect
-	if res.err != nil {
-		t.Fatalf("expected direct-target approval success, got: %v", res.err)
-	}
-	if res.rt.Host != "192.168.1.99" || res.rt.WorkspaceRoot != "/var/www" {
-		t.Fatalf("unexpected direct target: %+v", res.rt)
-	}
-}
-
-// TestDestructiveCommandDetection 锁定审批闸门的判据来自 shell 解析 + 共享风险表，
-// 而不是子串匹配：旧实现里 `git add .`（含子串 "dd "）、`echo confirm this`（含
-// 子串 "rm "）与任何 `>` 重定向都会被误判成高危，真正危险的调子反而被弹窗洪水淹没。
-// 越界的 `>` 重定向不在闸门里拦：远端 helper 已按 workspaceRoot 做字面写入目标校验。
-func TestDestructiveCommandDetection(t *testing.T) {
-	destructive := []string{
-		"rm -rf /var/log/*",
-		"rm file.txt",
-		"sudo rm -rf /srv/app",
-		"sh -c 'rm -rf /srv/app'",
-		"dd if=/dev/zero of=/dev/sda",
-		"mkfs.ext4 /dev/sdb",
-		"truncate -s 0 file.log",
-		"shred -u /srv/app/secret.txt",
-		"shutdown -h now",
-	}
-	for _, cmd := range destructive {
-		if !isDestructiveRemoteCommand(cmd) {
-			t.Errorf("expected isDestructiveRemoteCommand(%q) = true", cmd)
-		}
-	}
-
-	safe := []string{
-		"ls -la",
-		"cat /etc/os-release",
-		"go test ./...",
-		"echo hello",
-		"grep pattern file.txt",
-		"git add .",
-		"git add -A",
-		"echo confirm this",
-		"npm run build > build.log 2>&1",
-		"git rm --cached old.txt",
-	}
-	for _, cmd := range safe {
-		if isDestructiveRemoteCommand(cmd) {
-			t.Errorf("expected isDestructiveRemoteCommand(%q) = false", cmd)
-		}
+	if pendingAskCount(app) != 0 {
+		t.Fatal("remote target resolution created an approval prompt")
 	}
 }
 
@@ -381,6 +316,9 @@ func TestSSHClusterEndpointLookup(t *testing.T) {
 
 	if node, ok := app.findSSHServerByEndpoint("deploy@10.0.0.7", "2222"); !ok || node.Alias != "prod-web" {
 		t.Fatalf("user@host:port must resolve to its node, got ok=%v node=%+v", ok, node)
+	}
+	if _, ok := app.findSSHServerByEndpoint("Deploy@10.0.0.7", "2222"); ok {
+		t.Fatal("usernames with different case must not resolve to the same account")
 	}
 	if node, ok := app.findSSHServerByEndpoint("10.0.0.7", "2222"); ok {
 		t.Fatalf("two nodes share host:port, the bare spelling must stay ambiguous: %+v", node)
@@ -514,15 +452,14 @@ func TestSSHCredentialCacheStoreLookup(t *testing.T) {
 	}
 }
 
-// TestSSHCredentialKey locks the resolved-endpoint key contract: lowercase
-// user@host plus the effective port (empty means 22), so one machine keeps one
-// slot while host:2222 and host:22 stay apart.
+// TestSSHCredentialKey keeps usernames case-sensitive, folds host case and
+// includes the effective port (empty means 22).
 func TestSSHCredentialKey(t *testing.T) {
 	cases := []struct {
 		host, port, want string
 	}{
 		{"root@47.1.2.3", "", "root@47.1.2.3:22"},
-		{"Deploy@Example.COM", "2222", "deploy@example.com:2222"},
+		{"Deploy@Example.COM", "2222", "Deploy@example.com:2222"},
 		{" user@host ", " 2222 ", "user@host:2222"},
 	}
 	for _, tc := range cases {
@@ -541,6 +478,7 @@ func TestSSHCredentialPurgeHost(t *testing.T) {
 	cache.store(sshCredentialKey("root@h1", ""), sshAuthTypePassword, "pw", "")
 	cache.store(sshCredentialKey("root@h1", "2222"), sshAuthTypePassword, "pw2222", "")
 	cache.store(sshCredentialKey("root@h10", ""), sshAuthTypePassword, "neighbour", "")
+	cache.store(sshCredentialKey("Root@h1", ""), sshAuthTypePassword, "other-user", "")
 
 	cache.purgeHost("root@h1")
 	if _, ok := cache.lookup(sshCredentialKey("root@h1", "")); ok {
@@ -551,6 +489,9 @@ func TestSSHCredentialPurgeHost(t *testing.T) {
 	}
 	if _, ok := cache.lookup(sshCredentialKey("root@h10", "")); !ok {
 		t.Error("a host whose name merely starts with the purged name must survive")
+	}
+	if entry, ok := cache.lookup(sshCredentialKey("Root@H1", "")); !ok || entry.password != "other-user" {
+		t.Error("purging one username must not purge another account with different case")
 	}
 }
 
