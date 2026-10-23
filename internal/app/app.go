@@ -2206,7 +2206,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		compactThreshold := compactThresholdLimit(cfg)
 		if usedTokens > compactThreshold {
 			// compactRunHistory selects the configured threshold strategy. A
-			// local compaction with nothing left to trim is a quiet skip.
+			// local compaction with no space savings falls back to a full summary.
 			if newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonThreshold, req, messages, usedTokens); compactErr == nil {
 				messages = newMessages
 				bd = syncBreakdown(messages, true)

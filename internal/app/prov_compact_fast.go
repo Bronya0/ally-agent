@@ -115,6 +115,17 @@ func compactNativeResponses(output []json.RawMessage, excerpt string, replacemen
 			removed = true
 			continue
 		}
+		if item.Type == "function_call" {
+			var call map[string]json.RawMessage
+			if json.Unmarshal(raw, &call) != nil {
+				return nil, true
+			}
+			if string(call["arguments"]) != `"{}"` {
+				call["arguments"] = json.RawMessage(`"{}"`)
+				raw, _ = json.Marshal(call)
+				removed = true
+			}
+		}
 		if item.Type == "message" && replacement != nil {
 			removed = true
 			if replaced || *replacement == "" {

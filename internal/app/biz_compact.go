@@ -303,13 +303,11 @@ const maxConsecutiveCompactFailures = 3
 // failure that opened the breaker was already reported to the UI once.
 var errAutoCompactCircuitOpen = errors.New("auto compaction paused after repeated failures")
 
-var errHistoryUnchanged = errors.New("no older content to compact")
-
 // isCompactSkip classifies the threshold tier's non-events: a history too short
 // to summarize is a healthy no-op, and an open breaker is the deliberate stop
 // above. Both must stay out of the UI error path.
 func isCompactSkip(err error) bool {
-	return errors.Is(err, errHistoryTooShortToCompact) || errors.Is(err, errAutoCompactCircuitOpen) || errors.Is(err, errHistoryUnchanged)
+	return errors.Is(err, errHistoryTooShortToCompact) || errors.Is(err, errAutoCompactCircuitOpen)
 }
 
 // compactRunHistory selects the threshold strategy and rebuilds the request.
@@ -319,23 +317,30 @@ func isCompactSkip(err error) bool {
 // reason labels the compact:start / run:compacted event pair so the UI can tell
 // a threshold compaction from the context-overflow recovery.
 func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID, reason string, req ChatRequest, history []openai.ChatCompletionMessage, tokensBefore int) ([]openai.ChatCompletionMessage, map[string]any, error) {
+	fastFallback := false
 	// Local compaction preserves the current user turn and all later tool steps.
 	// Do not reappend req.Message here: unlike a full summary, it is still in h.
 	// Overflow always falls through to the LLM recovery path below.
 	if reason == compactReasonThreshold && normalizeAutoCompactMethod(cfg.AutoCompactMethod) == autoCompactMethodRecent {
-		result, err := a.fastCompactHistory(ctx, sessionID, sanitizeHistoryMessages(history), tokensBefore)
+		h := sanitizeHistoryMessages(history)
+		result, err := a.fastCompactHistory(ctx, sessionID, h, tokensBefore)
 		if err != nil {
 			return nil, nil, err
 		}
-		if changed, _ := result["changed"].(bool); !changed {
-			return nil, nil, errHistoryUnchanged
+		compacted := a.loadSessionHistoryCopy(sessionID)
+		// 自动快压没有释放空间时必须继续全文总结，不能每个 step 都原地跳过。
+		// 用同口径的消息估算比较，避免 provider 实测值与压后本地估算的差异误判收益。
+		if changed, _ := result["changed"].(bool); changed && computeLiveBreakdown(compacted).Total < computeLiveBreakdown(h).Total {
+			a.clearCompactFailures(sessionID)
+			messages := cloneChatMessages(history[:leadingSystemCount(history)])
+			messages = append(messages, compacted...)
+			result["sessionId"] = sessionID
+			result["reason"] = reason
+			return messages, result, nil
 		}
-		a.clearCompactFailures(sessionID)
-		messages := cloneChatMessages(history[:leadingSystemCount(history)])
-		messages = append(messages, a.loadSessionHistoryCopy(sessionID)...)
-		result["sessionId"] = sessionID
-		result["reason"] = reason
-		return messages, result, nil
+		// 保留原始 history 给总结，快压的摘录/空参数不应丢掉可用于总结的细节。
+		// 失败计数也不能在此清零：回退必须遵守下方总结调用的连续失败熔断。
+		fastFallback = true
 	}
 	// 熔断只拦阈值档（对齐 zcode 的 MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES）：
 	// 阈值判断在每个 step 重跑，失败一次不拦就会逐步重付一次长上下文总结请求；
@@ -344,7 +349,8 @@ func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID,
 		return nil, nil, errAutoCompactCircuitOpen
 	}
 	h := sanitizeHistoryMessages(history)
-	if len(h) <= 2 {
+	// 快压回退也覆盖只有一两条超长消息的上下文，不能按条数跳过。
+	if len(h) == 0 || (len(h) <= 2 && !fastFallback) {
 		return nil, nil, errHistoryTooShortToCompact
 	}
 	a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": tokensBefore, "reason": reason})

@@ -77,6 +77,7 @@ func (a *App) fastCompactHistory(ctx context.Context, sessionID string, history 
 	out := cloneChatMessages(history)
 	tools := map[string]string{}
 	reasoningCount := 0
+	toolArgumentsCount := 0
 	// Keep the latest structured plan even if it lies before the retained tail.
 	latestPlanID := ""
 	for _, m := range history {
@@ -88,6 +89,14 @@ func (a *App) fastCompactHistory(ctx context.Context, sessionID string, history 
 	}
 	for i := 0; i < cutoff; i++ {
 		m := &out[i]
+		// Keep call/result pairing, but discard old input bodies (including code).
+		// An empty JSON object remains valid on every tool-call wire protocol.
+		for j := range m.ToolCalls {
+			if m.ToolCalls[j].Function.Arguments != "{}" {
+				m.ToolCalls[j].Function.Arguments = "{}"
+				toolArgumentsCount++
+			}
+		}
 		if m.Role == openai.ChatMessageRoleTool && m.ToolCallID != latestPlanID && m.Content != toolResultPlaceholder && !strings.HasPrefix(m.Content, fastCompactToolMarker) {
 			short := fastCompactToolMarker + fastCompactExcerpt(m.Content)
 			// Never grow an already small result, including UTF-8-heavy output.
@@ -154,7 +163,7 @@ func (a *App) fastCompactHistory(ctx context.Context, sessionID string, history 
 		return nil, err
 	}
 	replayChanged := a.reasoningStash.retainFastCompactTail(sessionID, history, out, cutoff)
-	changed := len(tools) > 0 || reasoningCount > 0 || assistantCount > 0 || replayChanged
+	changed := len(tools) > 0 || reasoningCount > 0 || assistantCount > 0 || toolArgumentsCount > 0 || replayChanged
 	if changed {
 		// Rewrites must invalidate measurement anchors even when the message
 		// count stays unchanged. Read-cache hits must stop hiding old files too.
@@ -170,7 +179,8 @@ func (a *App) fastCompactHistory(ctx context.Context, sessionID string, history 
 		"tier": "fast", "changed": changed,
 		"keepRecent":    defaultFastCompactKeepRecentRounds,
 		"toolSummaries": tools, "reasoningCount": reasoningCount,
-		"assistantEdits": assistantEdits, "assistantCount": assistantCount,
+		"toolArgumentsCount": toolArgumentsCount,
+		"assistantEdits":     assistantEdits, "assistantCount": assistantCount,
 		"tokensBefore": tokensBefore, "tokensAfter": tokensAfter,
 	}, nil
 }
