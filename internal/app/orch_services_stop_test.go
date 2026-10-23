@@ -3,12 +3,44 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestStoppedServicesRespectFinishedRetentionBeforeOutputDrain(t *testing.T) {
+	a := newApiTestApp(t)
+	var oldest *managedService
+	for i := 0; i < maxFinishedServices+3; i++ {
+		id := fmt.Sprintf("stopped-%d", i)
+		svc := &managedService{
+			info:     ServiceInfo{ID: id, Status: "running"},
+			output:   newRollingBuffer(serviceOutputLimit),
+			stopTree: func() error { return nil },
+		}
+		if oldest == nil {
+			oldest = svc
+		}
+		a.services[id] = svc
+		if _, err := a.StopService(StopServiceRequest{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(a.services) != maxFinishedServices || len(a.finishedQueue) != maxFinishedServices {
+		t.Fatalf("stopped records escaped retention: registry=%d queue=%d", len(a.services), len(a.finishedQueue))
+	}
+	if _, err := a.GetServiceOutput(oldest.info.ID); !errors.Is(err, errServiceNotFound) {
+		t.Fatalf("evicted service output still retained: %v", err)
+	}
+	// A delayed output-drain callback must not requeue an already evicted record.
+	a.finalizeService(oldest.info.ID, oldest)
+	if len(a.finishedQueue) != maxFinishedServices || a.finishedQueue[0] != "stopped-3" {
+		t.Fatalf("late finalization evicted a newer record: %v", a.finishedQueue)
+	}
+}
 
 func TestRuntimeServiceStopFailureStillFlushesStats(t *testing.T) {
 	a := newApiTestApp(t)

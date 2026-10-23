@@ -145,6 +145,7 @@ import { SearchOutlined, AppstoreOutlined } from '@vicons/antd';
 import { Browser } from '@wailsio/runtime';
 import { t } from '../i18n.mjs';
 import { isSkillActive } from '../utils/skills.mjs';
+import { joinWorkspacePath } from '../utils/workspacePath.mjs';
 import {
   GetSkillState, ActivateSkill, DeactivateSkill, OpenPathInFileManager, SaveSkill,
 } from '../../bindings/ally-dev/internal/app/app';
@@ -319,16 +320,8 @@ const skillFormModalStyle = {
 const skillTargetHint = computed(() => {
   if (skillDraft.target !== 'project') return t('app.skills.target.userHint');
   if (!props.projectRoot) return t('app.skills.target.projectUnavailable');
-  return t('app.skills.target.projectHint', { path: joinDisplayPath(props.projectRoot, '.agents/skills') });
+  return t('app.skills.target.projectHint', { path: joinWorkspacePath(props.projectRoot, '.agents/skills') });
 });
-
-// 展示用拼接：Windows 根目录带反斜杠，用根目录自己的分隔符，别把路径显示成
-// "C:\proj/.agents/skills"。
-function joinDisplayPath(root, sub) {
-  const text = String(root || '');
-  const sep = text.includes('\\') ? '\\' : '/';
-  return `${text.replace(/[\\/]+$/, '')}${sep}${sub}`;
-}
 
 function openSkillEditor() {
   skillDraft.target = 'user';

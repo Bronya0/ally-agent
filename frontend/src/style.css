@@ -3562,9 +3562,9 @@ html.rail-expanded .chat-layout {
 }
 
 .markdown-body ol {
-  /* outside 序号向左悬挂；为三位数及其间距留足空间，避免伸出消息的
-     content-visibility 绘制边界后被裁掉。em 随正文字号一起缩放。 */
-  padding-left: 3em;
+  /* 单位数与 ul 同缩进；多位序号只按当前列表所需字宽扩展。
+     让原生 marker 留在列表盒内，根治 content-visibility 的绘制裁切。 */
+  padding-left: max(1.45em, calc(var(--md-list-marker-digits, 1) * 1ch + 0.75em));
 }
 
 .markdown-body li {
@@ -3575,9 +3575,10 @@ html.rail-expanded .chat-layout {
   color: var(--md-marker-ul);
 }
 
-.markdown-body ol li::marker {
+.markdown-body ol > li::marker {
   color: var(--md-marker-ol);
   font-weight: 650;
+  font-variant-numeric: tabular-nums;
 }
 
 .markdown-body blockquote {
@@ -4019,6 +4020,10 @@ html.rail-expanded .chat-layout {
 }
 
 .workspace-history-menu .add-icon {
+  display: block;
+  flex: none;
+  width: 12px;
+  height: 12px;
   font-size: 12px;
 }
 

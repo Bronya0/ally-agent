@@ -211,11 +211,13 @@ import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
 import { resolveMarkdownImagePath } from '../utils/markdownPreview.mjs';
 import { cjkEmphasisPlugin } from '../utils/markdownCjkEmphasis.mjs';
+import { orderedListMarkerPlugin } from '../utils/markdownLists.mjs';
 import { mermaidFenceSpec, normalizeMermaidSource, loadMermaid, escapeHtmlText } from '../utils/mermaidShared.mjs';
 import { ListFiles, ReadWorkspaceFileAt, GetWorkspaceMediaURL, SaveWorkspaceFile, DeletePath, RenamePath, OpenWorkspacePathInFileManagerAt, CreateFile, CreateDirectory, GetWorkspaceFileInfoAt, CopyFilesIntoWorkspace, ReadClipboardFiles } from '../../bindings/ally-dev/internal/app/app';
 import FileInfoModal from './FileInfoModal.vue';
 import { buildFileInfoSections } from '../utils/fileInfo.mjs';
 import { copyText } from '../utils/clipboard.mjs';
+import { joinWorkspacePath } from '../utils/workspacePath.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import QuestionCircleOutlined from '@vicons/antd/QuestionCircleOutlined';
 import ReloadOutlined from '@vicons/antd/ReloadOutlined';
@@ -1405,9 +1407,9 @@ function copyNodePath(node, full) {
 function copyNodePaths(relatives, full) {
   const list = (Array.isArray(relatives) ? relatives : []).map((p) => String(p || '')).filter(Boolean);
   if (!list.length) return;
-  const root = String(props.workspace || '').replace(/[\\/]+$/, '');
+  const root = String(props.workspace || '');
   const text = full && root
-    ? list.map((p) => joinFullPath(root, p)).join('\n')
+    ? list.map((p) => joinWorkspacePath(root, p)).join('\n')
     : list.join('\n');
   copyTextToClipboard(text, () => message.success(t('app.copy.done')));
 }
@@ -1453,20 +1455,6 @@ const helpRows = computed(() => [
   { key: 'support-markdown', keys: t('app.workspaceExplorer.helpSupportMarkdownKey'), desc: t('app.workspaceExplorer.helpSupportMarkdown') },
   { key: 'support-text', keys: t('app.workspaceExplorer.helpSupportTextKey'), desc: t('app.workspaceExplorer.helpSupportText') },
 ]);
-
-// 工作区根为 Windows 盘符（D:\ 或 D:/）或 UNC（\\server\share）时视为 Windows 风格
-function isWindowsStyleRoot(root) {
-  return /^[A-Za-z]:[\\/]/.test(root) || root.startsWith('\\\\');
-}
-
-function joinFullPath(root, relative) {
-  if (isWindowsStyleRoot(root)) {
-    // Windows：根与相对路径统一转为原生 \（后端相对路径固定 / 分隔，转换安全）
-    return root.replace(/\//g, '\\') + '\\' + relative.replace(/\//g, '\\');
-  }
-  // macOS/Linux：仅用 / 拼接；根中的字面 \（Linux 合法文件名字符）不被动
-  return root + '/' + relative;
-}
 
 // 统一走 utils/clipboard.mjs（优先 navigator.clipboard，失败回退 execCommand）
 function copyTextToClipboard(text, onDone) {
@@ -2018,7 +2006,7 @@ onMounted(() => {
     resizeObserver.observe(element);
   }
   window.addEventListener('keydown', onGlobalKeydown, true);
-  mdRenderer = new MarkdownIt({ html: false, linkify: true, typographer: true }).use(cjkEmphasisPlugin);
+  mdRenderer = new MarkdownIt({ html: false, linkify: true, typographer: true }).use(cjkEmphasisPlugin).use(orderedListMarkerPlugin);
   // Mermaid 围栏 → 占位容器（与聊天消息同构），SVG 由 renderPreviewMermaids 异步填充。
   const defaultFenceRenderer = mdRenderer.renderer.rules.fence;
   mdRenderer.renderer.rules.fence = (tokens, idx, options, env, self) => {

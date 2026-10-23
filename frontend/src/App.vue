@@ -632,6 +632,7 @@ import MarkdownIt from 'markdown-it';
 // mermaid 升级时断链；插件本身极轻（~10KB）。
 import katexPlugin from '@traptitech/markdown-it-katex';
 import { cjkEmphasisPlugin } from './utils/markdownCjkEmphasis.mjs';
+import { orderedListMarkerPlugin } from './utils/markdownLists.mjs';
 import 'katex/dist/katex.min.css';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -733,7 +734,7 @@ import PluginsPanel from './components/PluginsPanel.vue';
 import PluginPage from './components/PluginPage.vue';
 import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
-import { workspaceHistoryDedupeKey, sameWorkspacePath } from './utils/workspacePath.mjs';
+import { workspaceHistoryDedupeKey, sameWorkspacePath, joinWorkspacePath } from './utils/workspacePath.mjs';
 import { effectiveTaskScope, tasksForView } from './utils/taskWorkspace.mjs';
 import { serviceDescription, serviceCapacityCaption } from './utils/servicePresentation.mjs';
 import TokenStatsModal from './components/TokenStatsModal.vue';
@@ -995,7 +996,7 @@ const markdown = new MarkdownIt({
   html: false,
   linkify: true,
   breaks: true,
-}).use(katexPlugin).use(cjkEmphasisPlugin);
+}).use(katexPlugin).use(cjkEmphasisPlugin).use(orderedListMarkerPlugin);
 
 function renderHighlightedCodeBlock(code, highlighted, extraClass = '') {
   const rawLines = String(code || '').replace(/\r\n/g, '\n').split('\n');
@@ -5709,11 +5710,11 @@ function bindRuntimeEvents() {
   });
 }
 
-function pushMessage(role, content, extra = {}) {
-  const session = activeSession.value;
+// 异步回调必须传入发起操作的会话，不能在回调到达时再取当前 Tab。
+function pushMessage(role, content, extra = {}, session = activeSession.value) {
   if (!session) return;
   session.messages.push({ role, content, ...extra });
-  scrollMessagesToBottom();
+  scrollMessagesToBottom({}, session.id);
 }
 
 function setConversationMessagesRef(tabId, instance) {
@@ -5849,7 +5850,7 @@ async function fileToAttachment(file) {
   if (rawPath) {
     base.filePath = rawPath;
   } else if (activeRunWorkspace.value) {
-    base.filePath = `${activeRunWorkspace.value.replace(/[\\/]+$/, '')}/${file.name}`;
+    base.filePath = joinWorkspacePath(activeRunWorkspace.value, file.name);
   } else {
     base.filePath = file.name;
   }
@@ -6373,13 +6374,16 @@ async function sendPrompt(opts) {
     });
     markSessionRunning(session);
     const activeModel = modelByTab[activeWorkspaceId.value];
+    // 保存偏好期间允许切 Tab；本次请求必须使用发送时捕获的模型与工作区。
+    const runConfig = { ...chatConfig.value, extraRoots: session.extraRoots || [], workspace: sessionWorkspace || config.workspace };
     if (activeModel) await rememberLastUsedModel(activeModel);
-    await StartChat({ sessionId: session.id, message: sendText, messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [], workspace: sessionWorkspace || config.workspace } });
+    await StartChat({ sessionId: session.id, message: sendText, messages: history, config: runConfig });
   } catch (err) {
     markTransientTurn(session);
     session.runId = '';
     session.isRunning = false;
-    pushMessage('assistant', t('app.run.startFailed', { error: err }), { error: true, transientTurn: true });
+    pushMessage('assistant', t('app.run.startFailed', { error: err }), { error: true, transientTurn: true }, session);
+    persistCompletedSession(session);
   }
 }
 
@@ -7999,7 +8003,8 @@ function handleInitCommand() {
       markTransientTurn(session);
       session.runId = '';
       session.isRunning = false;
-      pushMessage('assistant', t('app.init.failed', { error: err }), { error: true, transientTurn: true });
+      pushMessage('assistant', t('app.init.failed', { error: err }), { error: true, transientTurn: true }, session);
+      persistCompletedSession(session);
     });
 }
 
@@ -8058,7 +8063,8 @@ function handleRememberCommand() {
       markTransientTurn(session);
       session.runId = '';
       session.isRunning = false;
-      pushMessage('assistant', t('app.note.failed', { error: err }), { error: true, transientTurn: true });
+      pushMessage('assistant', t('app.note.failed', { error: err }), { error: true, transientTurn: true }, session);
+      persistCompletedSession(session);
     });
 }
 
@@ -8085,7 +8091,8 @@ function handleLessonCommand() {
       markTransientTurn(session);
       session.runId = '';
       session.isRunning = false;
-      pushMessage('assistant', t('app.lesson.failed', { error: err }), { error: true, transientTurn: true });
+      pushMessage('assistant', t('app.lesson.failed', { error: err }), { error: true, transientTurn: true }, session);
+      persistCompletedSession(session);
     });
 }
 
@@ -8112,7 +8119,8 @@ function handleReviewCommand() {
       markTransientTurn(session);
       session.runId = '';
       session.isRunning = false;
-      pushMessage('assistant', t('app.review.failed', { error: err }), { error: true, transientTurn: true });
+      pushMessage('assistant', t('app.review.failed', { error: err }), { error: true, transientTurn: true }, session);
+      persistCompletedSession(session);
     });
 }
 
@@ -8139,7 +8147,8 @@ function handlePushCommand() {
       markTransientTurn(session);
       session.runId = '';
       session.isRunning = false;
-      pushMessage('assistant', t('app.push.failed', { error: err }), { error: true, transientTurn: true });
+      pushMessage('assistant', t('app.push.failed', { error: err }), { error: true, transientTurn: true }, session);
+      persistCompletedSession(session);
     });
 }
 
@@ -8241,7 +8250,8 @@ async function handleCompactCommand() {
     message.info(compactToastText(result?.tokensBefore, result?.tokensAfter));
   } catch (err) {
     delete compactingSessions[session.id];
-    pushMessage('assistant', t('app.compact.failed', { error: err?.message || err }), { error: true });
+    pushMessage('assistant', t('app.compact.failed', { error: err?.message || err }), { error: true }, session);
+    persistCompletedSession(session);
   }
 }
 

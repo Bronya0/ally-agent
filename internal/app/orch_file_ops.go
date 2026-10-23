@@ -343,8 +343,20 @@ func copyDroppedSource(src, targetAbs, primaryRoot string) (string, error) {
 	}
 	// Copying a directory into itself (or into its own subtree) would walk a
 	// tree that grows while it is being read; reject like desktop managers do.
-	if info.IsDir() && insideRoot(srcAbs, targetAbs) {
-		return "", codedToolError("E_BAD_PATH", fmt.Errorf("cannot copy a directory into itself: %s", src))
+	if info.IsDir() {
+		// 源目录的父级可能是符号链接（含 macOS /var 别名）；两侧按真实路径
+		// 比较，否则漏判“复制进自身”，WalkDir 会不断遍历刚创建的副本。
+		sourceResolved, err := filepath.EvalSymlinks(srcAbs)
+		if err != nil {
+			return "", err
+		}
+		targetResolved, err := filepath.EvalSymlinks(targetAbs)
+		if err != nil {
+			return "", err
+		}
+		if insideRoot(sourceResolved, targetResolved) {
+			return "", codedToolError("E_BAD_PATH", fmt.Errorf("cannot copy a directory into itself: %s", src))
+		}
 	}
 	destAbs := nonConflictingDestPath(targetAbs, filepath.Base(srcAbs))
 	if info.IsDir() {

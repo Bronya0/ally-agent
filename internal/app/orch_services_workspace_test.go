@@ -85,10 +85,15 @@ func TestServiceStartAndCommandPromotionKeepWorkspaceOwner(t *testing.T) {
 		t.Fatal(started.Error)
 	}
 	info := started.Data.(ServiceInfo)
+	// cwd 经执行路径规范化；macOS 的 /var 与 /private/var 是同一个目录。
+	expectedCwd, err := filepath.EvalSymlinks(extra)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if info.Description != "校验服务归属" {
 		t.Fatalf("description lost during start: %+v", info)
 	}
-	if !samePath(info.Workspace, root) || !samePath(info.Cwd, extra) {
+	if !samePath(info.Workspace, root) || !samePath(info.Cwd, expectedCwd) {
 		t.Fatalf("cwd replaced workspace ownership: %+v", info)
 	}
 	a.servicesMu.Lock()
@@ -129,7 +134,7 @@ func TestServiceStartAndCommandPromotionKeepWorkspaceOwner(t *testing.T) {
 			if !strings.Contains(structured, `promoted="true" timeout-seconds="1"`) || !strings.Contains(renderServiceListResultForModel(list), "promoted=true timeout-seconds=1") {
 				t.Fatal("model results lost structured promotion metadata")
 			}
-			if !samePath(svc.Workspace, root) || !samePath(svc.Cwd, extra) {
+			if !samePath(svc.Workspace, root) || !samePath(svc.Cwd, expectedCwd) {
 				t.Fatalf("promoted process lost workspace: %+v", svc)
 			}
 			if _, err := a.StopService(StopServiceRequest{ID: svc.ID, GraceSeconds: 1}); err != nil {

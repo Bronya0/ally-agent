@@ -336,6 +336,10 @@ func copyServiceOutput(wg *sync.WaitGroup, dst io.Writer, src io.Reader) {
 func (a *App) retainFinishedService(id string) []string {
 	a.servicesMu.Lock()
 	defer a.servicesMu.Unlock()
+	// 输出收尾可能晚于停止后的淘汰，不能把已移除记录重新排队并挤掉新记录。
+	if a.services[id] == nil {
+		return nil
+	}
 	for _, existing := range a.finishedQueue {
 		if existing == id {
 			return nil
@@ -429,8 +433,8 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 		}
 	}
 	info := service.snapshot()
-	a.retainFinishedService(id)
-	a.emitServiceUpdate(info)
+	// 与自然退出共用淘汰入口；忽略 retain 返回值会使队列有界而注册表持续泄漏。
+	a.finalizeService(id, service)
 	return info, nil
 }
 
