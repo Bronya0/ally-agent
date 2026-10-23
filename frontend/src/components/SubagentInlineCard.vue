@@ -8,74 +8,62 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <div :class="['rich-tool-card', 'subagent-inline', msg.status]">
-    <div class="tool-line">
-      <ToolStatusIcon :status="msg.status" />
-      <span v-if="msg.subagentRole" class="tool-name">{{ msg.subagentRole }}</span>
-      <span v-else-if="rolePending" class="tool-name subagent-name-pending" aria-hidden="true">
-        <span class="subagent-name-dot"></span>
-        <span class="subagent-name-dot"></span>
-        <span class="subagent-name-dot"></span>
-      </span>
-      <span v-else class="tool-name">{{ fallbackLabel }}</span>
-      <span class="tool-arg" :title="msg.description">({{ msg.description }})</span>
-      <span v-if="msg.maxSteps" class="tool-chip">{{ $t('subagent.budget', { current: msg.steps, limit: msg.maxSteps }) }}</span>
-      <span v-if="msg.contextTokens > 0" class="tool-chip subagent-stat-chip" :title="tokenTooltip">{{ contextChip }}</span>
-      <span v-if="msg.totalTokens > 0" class="tool-chip subagent-stat-chip" :title="tokenTooltip">{{ tokenChip }}</span>
-      <span v-if="displayDuration" class="tool-duration">{{ displayDuration }}</span>
+  <div class="ally-row-card subagent-inline">
+    <div class="ally-row-main subagent-heading">
+      <span :class="['subagent-status-dot', `is-${state}`]" aria-hidden="true"></span>
+      <span class="subagent-role">{{ msg.subagentRole || $t('tools.kind.subagent') }}</span>
+      <span class="subagent-status-label" :title="msg.error || ''">{{ $t(`subagent.status.${state}`) }}</span>
+      <time v-if="displayDuration" class="subagent-time">{{ displayDuration }}</time>
     </div>
-    <div v-if="recentTools.length" class="subagent-inline-body">
-      <div v-for="(tc, ti) in recentTools" :key="tc.toolCallId || ti" :class="['subagent-inline-entry', tc.status]">
-        <span class="subagent-inline-tree">{{ ti === recentTools.length - 1 ? '└─' : '├─' }}</span>
-        <ToolStatusIcon :status="tc.status" />
-        <span class="subagent-inline-name">{{ subToolVerb(tc) }}</span>
-        <span v-if="toolArgsTitle(tc)" class="subagent-inline-args" :title="toolArgsTitle(tc)">({{ toolArgsTitle(tc) }})</span>
-        <span v-if="tc.summary" class="subagent-inline-summary">{{ compactSummary(tc.summary) }}</span>
-        <span v-if="tc.durationText" class="subagent-inline-duration">{{ tc.durationText }}</span>
+    <p class="subagent-description" :title="msg.description || ''">{{ msg.description }}</p>
+    <!-- Keep the control above the report, in the same place in both states. -->
+    <div class="subagent-controls">
+      <div class="subagent-stats" :title="tokenTooltip">
+        <span v-if="stepLimit > 0" :title="$t('subagent.stepBudget')">{{ $t('subagent.budget', { current: steps, limit: stepLimit }) }}</span>
+        <span v-if="msg.contextTokens > 0">{{ contextChip }}</span>
+        <span v-if="msg.totalTokens > 0">{{ tokenChip }}</span>
       </div>
+      <button type="button" class="subagent-toggle" :disabled="!hasReport"
+        :aria-label="expanded ? $t('common.collapse') : $t('common.expand')"
+        :title="expanded ? $t('common.collapse') : $t('common.expand')"
+        :aria-expanded="expanded" :aria-controls="detailsId" @click="toggleReport">
+        {{ $t('subagent.report') }}
+        <RightOutlined :class="['subagent-chevron', { 'is-expanded': expanded }]" />
+      </button>
     </div>
-    <div v-if="msg.summary && msg.status !== 'running'" class="subagent-inline-result">{{ compactSubagentSummary(msg.summary) }}</div>
-    <div v-if="msg.error" class="subagent-inline-error">{{ msg.error }}</div>
+    <div v-if="expanded && hasReport" :id="detailsId" class="subagent-report">
+      <p v-if="msg.summary" class="subagent-result">{{ msg.summary }}</p>
+      <p v-if="msg.error" class="subagent-error">{{ msg.error }}</p>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, ref, useId } from 'vue';
+import RightOutlined from '@vicons/antd/RightOutlined';
+import { normalizeToolStatus } from '../utils/toolEventState.mjs';
 import { useDisplayClock, usePresentationActive } from '../composables/presentation.mjs';
 import { t } from '../i18n.mjs';
-import { deletePathSummary, formatHttpToolTitle } from '../utils/toolPreview.mjs';
-import { toolActionFromArgs, toolVerbLabel } from '../utils/toolVerb.mjs';
 import { fmtDuration } from '../utils/format.mjs';
-import { toolKindOf } from '../utils/toolKind.mjs';
-import ToolStatusIcon from './ToolStatusIcon.vue';
 
-const props = defineProps({
-  msg: { type: Object, required: true },
-});
-
-// The card label is the sub-agent's dynamic role (e.g. "code reviewer").
-// While the tool-call arguments are still streaming (before sub:spawn), the
-// role hasn't been parsed yet — show a muted dot placeholder instead of the
-// generic kind label, so the name doesn't flash 子代理 → role when the args
-// finish. Legacy/restored cards without a role fall back to the generic label.
-const fallbackLabel = computed(() => t('tools.kind.subagent'));
-const rolePending = computed(() =>
-  !props.msg?.subagentRole && props.msg?.status === 'running' && !props.msg?.subagentId
-);
-
+const props = defineProps({ msg: { type: Object, required: true } });
+const emit = defineEmits(['toggleReport']);
+const expanded = ref(false);
+function toggleReport() {
+  emit('toggleReport');
+  expanded.value = !expanded.value;
+}
+const detailsId = useId();
+const state = computed(() => props.msg?.error ? 'error' : normalizeToolStatus(props.msg?.status));
+const hasReport = computed(() => !!props.msg?.error || (state.value !== 'running' && !!props.msg?.summary));
+const steps = computed(() => Math.max(0, Number(props.msg?.steps) || 0));
+const stepLimit = computed(() => Math.max(0, Number(props.msg?.maxSteps) || 0));
 const presentationActive = usePresentationActive();
-const now = useDisplayClock(() => presentationActive.value && props.msg?.status === 'running' && !!Number(props.msg?.startTime));
-
+const now = useDisplayClock(() => presentationActive.value && state.value === 'running' && !!Number(props.msg?.startTime));
 const displayDuration = computed(() => {
-  if (props.msg?.status !== 'running') return props.msg?.durationText || '';
+  if (state.value !== 'running') return props.msg?.durationText || '';
   const startTime = Number(props.msg?.startTime || 0);
-  if (!startTime) return '';
-  return fmtDuration(Math.max(0, now.value - startTime));
-});
-
-const recentTools = computed(() => {
-  const tools = Array.isArray(props.msg?.toolCalls) ? props.msg.toolCalls : [];
-  return tools.slice(Math.max(0, tools.length - 8));
+  return startTime ? fmtDuration(Math.max(0, now.value - startTime)) : '';
 });
 
 function formatTokens(n) {
@@ -91,15 +79,11 @@ const tokenChip = computed(() => {
   return `↑${formatTokens(props.msg?.inputTokens)} ↓${formatTokens(props.msg?.outputTokens)}`;
 });
 
-// 上下文徽标：最近一轮模型调用上报的 prompt tokens，也就是这个子代理当下占多大上下文。
-// 旁边的 ↑/↓ 是每步累加值，看不出当下占用，两者在长任务里能差一个数量级。正文只放一个
-// 最基础的圆点标记（不引几何填充字符，免得字体回退出豆腐块），含义交给悬停提示；服务商
-// 没上报时后端保留上一次的值，这里为 0 就不显示这个徽标。
-const CONTEXT_GLYPH = '●';
+// Context is the latest prompt size; input/output totals accumulate across steps.
 const contextChip = computed(() => {
   const context = props.msg?.contextTokens || 0;
   if (context <= 0) return '';
-  return `${CONTEXT_GLYPH} ${formatTokens(context)}`;
+  return t('subagent.context', { tokens: formatTokens(context) });
 });
 
 // 提示里保留带标签的写法：符号本身不自解释，悬停时给出的仍是完整含义与精确数字。
@@ -110,184 +94,145 @@ const tokenTooltip = computed(() => {
   const context = props.msg?.contextTokens || 0;
   return `${t('subagent.context', { tokens: context })} · Input: ${input} · Output: ${output} · Total: ${total}`;
 });
-
-function compactSummary(text) {
-  const s = String(text || '').replace(/\s+/g, ' ').trim();
-  if (s.length <= 120) return s;
-  return s.slice(0, 117) + '...';
-}
-
-function compactSubagentSummary(summary) {
-  const text = String(summary || '').replace(/\s+/g, ' ').trim();
-  if (text.length <= 180) return text;
-  return text.slice(0, 177) + '...';
-}
-
-function parseToolArgs(raw) {
-  const text = String(raw || '');
-  if (!text.trim()) return {};
-  try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch (_) {
-    return {};
-  }
-}
-
-// Parsed args for a sub-agent tool call, cached on the toolCall object itself:
-// sub-agent progress events repeat the same args payload (~1/s), so without the
-// cache every row would re-run JSON.parse on each render (and once more per
-// template call site).
-function cachedToolArgs(tc) {
-  const argsText = String(tc?.args || '');
-  // Re-parse only when args actually changed (new tool call, or streaming
-  // completion of a long arg payload like command).
-  if (tc && tc._argsCacheKey !== argsText) {
-    tc._argsCacheKey = argsText;
-    tc._argsCacheParsed = parseToolArgs(argsText);
-  }
-  return (tc && tc._argsCacheParsed) || {};
-}
-
-function toolArgsTitle(tc) {
-  const name = tc.name || '';
-  const parsed = cachedToolArgs(tc);
-
-  if (name === 'command' || name === 'remote_run_command') {
-    const cmd = parsed.command || parsed.cmd || '';
-    if (name === 'remote_run_command' && parsed.target) return `${parsed.target} · ${cmd}`;
-    return cmd;
-  }
-  if (name === 'service') {
-    if (parsed.action === 'stop') return `stop · ${parsed.id || ''}`;
-    const parts = ['start'];
-    if (parsed.name) parts.push(parsed.name);
-    if (parsed.command) parts.push(parsed.command);
-    return parts.join(' · ');
-  }
-  if (name === 'wait') {
-    return parsed.reason || (parsed.seconds ? `${parsed.seconds}s` : '');
-  }
-  if (name === 'ask') {
-    const questions = Array.isArray(parsed.questions) ? parsed.questions : [];
-    if (questions.length === 1) return questions[0]?.question || '';
-    return questions.length ? t('app.ask.questions', { count: questions.length }) : '';
-  }
-  if (name === 'remote_edit' && Array.isArray(parsed.files)) {
-    const paths = parsed.files.map(file => file?.path).filter(Boolean);
-    const summary = paths.length === 1 ? paths[0] : `${paths.length} files`;
-    return parsed.target ? `${parsed.target} · ${summary}` : summary;
-  }
-  if (name === 'edit' || name === 'remote_edit') {
-    if (Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;
-    return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
-  }
-  if (name === 'create' || name === 'remote_create_file') {
-    return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
-  }
-  if (name === 'delete' || name === 'remote_delete_path') {
-    const summary = deletePathSummary(parsed);
-    if (!summary) return parsed.target || '';
-    return parsed.target ? `${parsed.target} · ${summary}` : summary;
-  }
-  if (name === 'remote_transfer') {
-    const action = String(parsed.action || '').toLowerCase();
-    const target = parsed.target || '';
-    const local = parsed.localPath || '';
-    const remote = parsed.remotePath || '';
-    if (action === 'upload') {
-      return target ? `${target} · ${local} → ${remote}` : `${local} → ${remote}`;
-    }
-    if (action === 'download') {
-      return target ? `${target} · ${remote} → ${local}` : `${remote} → ${local}`;
-    }
-    return target ? `${target} · ${local || remote}` : (local || remote);
-  }
-  if (name === 'read' || name === 'remote_read') {
-    if (parsed.target && Array.isArray(parsed.files)) {
-      const paths = parsed.files.map(f => f && f.path).filter(Boolean);
-      return `${parsed.target} · ${paths.join(', ')}`;
-    }
-    if (parsed.target) return `${parsed.target} · ${parsed.path || ''}`;
-    if (parsed.path) return parsed.path;
-    const paths = Array.isArray(parsed.paths) ? parsed.paths : [];
-    if (paths.length > 0) return paths.join(', ');
-    const files = Array.isArray(parsed.files) ? parsed.files.map(f => f && f.path).filter(Boolean) : [];
-    if (files.length > 0) return files.join(', ');
-  }
-  // grep shows its real search target (pattern, path); the literal "Grep"
-  // label itself comes from the shared verb table via subToolVerb.
-  if (name === 'grep') {
-    const pattern = parsed.pattern || '';
-    const path = parsed.path || '';
-    if (pattern && path) return `${pattern}, ${path}`;
-    return pattern || path;
-  }
-  if (name === 'list_files') {
-    return parsed.path || parsed.pattern || '';
-  }
-  if (name === 'http_request' || name === 'web_fetch') {
-    return formatHttpToolTitle(parsed);
-  }
-  if (name === 'calculate') {
-    return parsed.expression || '';
-  }
-  if (name === 'scheduled_task') {
-    if (parsed.action === 'create') return `create · ${parsed.name || ''}`;
-    if (parsed.action === 'delete') return `delete · ${parsed.id || ''}`;
-    return parsed.action || 'list';
-  }
-  if (name === 'render_html') {
-    return parsed.title || '';
-  }
-  if (name === 'skill' || name === 'Skill') {
-    return parsed.skill || '';
-  }
-  if (name === 'plan') {
-    const steps = Array.isArray(parsed.steps) ? parsed.steps : [];
-    return steps.length ? `${steps.length} items` : '';
-  }
-  return '';
-}
-
-// Inner sub-agent rows mirror the main tool card: the row's status icon conveys
-// state and the tense verb names the action ("Read" / "Edited" / "Ran" / ...),
-// via the shared verb table. MCP tools (name `mcp__server__tool`) fall back to
-// the mcp kind.
-function subToolVerb(tc) {
-  const name = tc?.name || '';
-  // kind 走主卡那张表（utils/toolKind.mjs）：MCP 前缀的判定只在 toolVerb.mjs 一处。
-  const kind = toolKindOf(name);
-  // The action a call took lives in its own arguments, so the row reads it
-  // through the same helper the main card uses — one rule for every card, since
-  // the action can only come from the args. Reuse the parse cached by
-  // toolArgsTitle rather than re-parsing on every render.
-  return toolVerbLabel(name, kind, tc?.status, toolActionFromArgs(name, cachedToolArgs(tc)));
-}
 </script>
 
 <style scoped>
-.subagent-name-pending {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
+/* Match MCP entity cards; the collapsed layout reserves the same three rows
+   for running and completed tasks, regardless of report availability. */
+.subagent-inline {
+  min-width: 0;
 }
-
-/* 提层提示（will-change）不写在这里：本项目常驻使用 thinking-bounce 的小点现在
-   只剩子代理卡片一处，由 style.css 的 `.subagent-name-dot` 负责（AGENTS.md §4.7）。 */
-.subagent-name-dot {
-  width: 3px;
-  height: 3px;
+.subagent-heading {
+  gap: 7px;
+  min-height: 22px;
+}
+.subagent-status-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
   border-radius: 50%;
   background: var(--ally-text-faint);
-  animation: thinking-bounce 1.3s ease-in-out infinite;
 }
-
-.subagent-name-dot:nth-child(2) {
-  animation-delay: 0.2s;
+.subagent-status-dot.is-running {
+  background: var(--ally-accent-text);
 }
-
-.subagent-name-dot:nth-child(3) {
-  animation-delay: 0.4s;
+.subagent-status-dot.is-success {
+  background: var(--ally-success-pale);
+}
+.subagent-status-dot.is-error {
+  background: var(--ally-danger-pale);
+}
+.subagent-role {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ally-text-primary);
+  font-size: var(--ally-sub-font-size);
+  font-weight: 500;
+}
+.subagent-status-label {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--ally-text-faint);
+  font-size: var(--ally-aux-font-size);
+}
+.subagent-time {
+  flex-shrink: 0;
+  color: var(--ally-text-ghost);
+  font-size: var(--ally-aux-font-size);
+  font-variant-numeric: tabular-nums;
+}
+.subagent-description {
+  margin: 0;
+  height: 3.2em;
+  color: var(--ally-text-soft);
+  font-size: var(--ally-aux-font-size);
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.subagent-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+}
+.subagent-stats {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--ally-text-ghost);
+  font-size: var(--ally-aux-font-size);
+  font-variant-numeric: tabular-nums;
+}
+.subagent-stats span {
+  flex-shrink: 0;
+}
+.subagent-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 3px;
+  background: transparent;
+  color: var(--ally-text-faint);
+  font: inherit;
+  font-size: var(--ally-aux-font-size);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.subagent-toggle:enabled:hover {
+  background: var(--ally-hover-faint);
+  color: var(--ally-accent-text);
+}
+.subagent-toggle:disabled {
+  opacity: .35;
+  cursor: default;
+}
+.subagent-toggle:focus-visible {
+  outline: 2px solid var(--ally-accent-text);
+  outline-offset: 2px;
+}
+.subagent-chevron {
+  width: 10px;
+  height: 10px;
+  transition: transform 160ms ease-out;
+}
+.subagent-chevron.is-expanded {
+  transform: rotate(90deg);
+}
+.subagent-report {
+  padding-top: 8px;
+  border-top: 1px solid var(--ally-border-subtle);
+  min-width: 0;
+}
+.subagent-result, .subagent-error {
+  margin: 0;
+  color: var(--ally-text-secondary);
+  font-size: var(--ally-aux-font-size);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.subagent-error {
+  color: var(--ally-danger);
+}
+.subagent-result + .subagent-error {
+  margin-top: 6px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .subagent-chevron {
+    transition: none;
+  }
 }
 </style>

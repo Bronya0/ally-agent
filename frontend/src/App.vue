@@ -5570,6 +5570,7 @@ function bindRuntimeEvents() {
         description: data.description || '',
         profile: data.profile || 'coder',
         subagentRole: data.role || '',
+        maxSteps: data.maxSteps || existing?.maxSteps || 0,
         steps: 0,
         summary: '',
         filesEdited: [],

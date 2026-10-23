@@ -55,6 +55,8 @@ export function toolCardRenderSignature(msg) {
     msg.sandboxDenied,
     msg.expanded,
     msg.eventId,
+    msg.runId,
+    msg.toolBatchId,
     msg.toolCallId,
     msg.mcpServer,
     msg.mcpTool,
@@ -88,6 +90,7 @@ export function toolCardRenderSignature(msg) {
     msg.description,
     msg.summary,
     msg.steps,
+    msg.maxSteps,
     // 子代理卡的 token 徽标：上下文取最近一轮、输入/输出是累加值，四个数都会自己变，
     // 漏掉任一条 v-memo 会把徽标冻在旧数字上。
     msg.contextTokens || 0,

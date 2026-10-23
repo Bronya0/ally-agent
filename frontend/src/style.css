@@ -630,13 +630,11 @@ html[data-mode="light"] .tool-arg,
 html[data-mode="light"] .tool-chip,
 html[data-mode="light"] .tool-field-label,
 html[data-mode="light"] .read-group-chip,
-html[data-mode="light"] .read-group-cached,
-html[data-mode="light"] .subagent-inline-summary {
+html[data-mode="light"] .read-group-cached {
   color: var(--ally-text-muted);
 }
 html[data-mode="light"] .tool-line time,
-html[data-mode="light"] .tool-duration,
-html[data-mode="light"] .subagent-inline-duration {
+html[data-mode="light"] .tool-duration {
   color: var(--ally-text-faint);
 }
 html[data-mode="light"] .tool-error-detail code {
@@ -648,11 +646,6 @@ html[data-mode="light"] .tool-name {
   color: var(--ally-text-primary);
 }
 html[data-mode="light"] .tool-verb {
-  color: var(--ally-accent-strong);
-}
-/* 子代理内嵌行动词与卡片 role name 在浅底上都跟随 accent-strong */
-html[data-mode="light"] .subagent-inline-name,
-html[data-mode="light"] .rich-tool-card.subagent-inline .tool-name {
   color: var(--ally-accent-strong);
 }
 /* 命令词锚点在浅底上保持可读强度（accent-dim 的浅色推导太灰）。 */
@@ -2369,16 +2362,6 @@ html.rail-expanded .chat-layout {
 @keyframes composer-glow {
   0%, 100% { opacity: 0.15; }
   50% { opacity: 1; }
-}
-
-/* 常驻小点动画的提层提示：只在“在跑”期间挂类、跑完即撤，不会静态摊在长列表
-   每一项上（AGENTS.md §4.7）。当前唯一消费方是子代理卡片的 thinking-bounce
-   三点（定义见 SubagentInlineCard.vue）。
-   工具卡的运行圆点不列在这里，但同样有提示：它那个类也只在卡片“正在运行”时
-   存在、跑完即撤，提示写在 ToolStatusIcon.vue 自己的 .running-dot-core 上——
-   同一原则的另一处落点，不是漏写。 */
-.subagent-name-dot {
-  will-change: transform, opacity;
 }
 
 /* 标签只在有内容时挂载（v-if），所以工具执行阶段与压缩空档整块消失；淡入由
@@ -5334,89 +5317,6 @@ html.rail-expanded .chat-layout {
 }
 @keyframes update-spin {
   to { transform: rotate(360deg); }
-}
-
-/* ── Sub-agent inline progress in main chat ── */
-
-/* 子代理卡标题的 role name 走琥珀（与动词/普通卡片的视觉主色一致）：
-   .tool-name 默认的 --md-strong 是偏黄的暖灰，读起来像"黄色"而非主题橙。
-   浅色模式跟随 .tool-verb 用 accent-strong。 */
-.rich-tool-card.subagent-inline .tool-name {
-  color: var(--ally-accent-text);
-}
-
-.subagent-inline-body {
-  padding: 2px 8px 4px 0;
-}
-
-.subagent-inline-entry {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  font-size: var(--ally-sub-font-size);
-  line-height: 1.6;
-}
-
-.subagent-inline-tree {
-  color: var(--ally-text-ghost);
-  flex-shrink: 0;
-}
-
-/* 子代理内嵌行的这个 span 实际渲染的是动词（subToolVerb → "Read/Grep/…"，
-   class 名 name 是历史遗留），颜色必须与普通工具卡的 .tool-verb 同源：
-   之前用 --md-strong 会比卡片行的琥珀动词暗一截，读起来像两种工具 */
-.subagent-inline-name {
-  color: var(--ally-accent-text);
-  flex-shrink: 0;
-}
-
-.subagent-inline-args {
-  color: var(--ally-text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 280px;
-  flex-shrink: 1;
-  min-width: 0;
-}
-
-.subagent-inline-summary {
-  color: var(--ally-text-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.subagent-inline-duration {
-  color: var(--ally-text-ghost);
-  font-size: var(--ally-aux-font-size);
-  flex-shrink: 0;
-  margin-left: 4px;
-}
-
-.subagent-stat-chip {
-  color: var(--ally-accent-dim);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--ally-aux-font-size);
-}
-
-.subagent-inline-result {
-  padding: 2px 8px 4px 6px;
-  color: var(--ally-text-muted);
-  font-size: var(--ally-aux-font-size);
-  line-height: 1.5;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.subagent-inline-error {
-  padding: 2px 8px 4px 6px;
-  color: var(--ally-danger);
-  font-size: 12px;
-  line-height: 1.5;
 }
 
 /* ── Git Status (inline in info bar) ── */

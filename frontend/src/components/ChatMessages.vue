@@ -11,8 +11,18 @@ Public License v3. See the LICENSE file for details.
   <div class="messages-scroll-shell" :class="{ 'presentation-paused': !presentationActive }">
     <n-scrollbar ref="scrollbarRef" class="messages-scroll" @scroll="handleScroll">
       <div ref="messagesRootRef" class="messages">
-        <template v-for="(msg, index) in messages" :key="msgKey(msg)" v-memo="messageRenderMemo(msg, index)">
-        <button v-if="msg.role === 'archive'" class="message-archive-toggle" @click.stop="$emit('toggleArchive', msg.sessionId)">
+        <template v-for="{ msg, index, agents } in messageRows" :key="msgKey(agents ? agents[0] : msg)" v-memo="messageRenderMemo(msg, index, agents)">
+        <div v-if="agents" class="rich-tool-card subagent-batch">
+          <span class="subagent-batch-status" role="img" :aria-label="$t(`subagent.status.${subagentBatchStatus(agents)}`)">
+            <ToolStatusIcon :status="presentationActive || subagentBatchStatus(agents) !== 'running' ? subagentBatchStatus(agents) : 'pending'" />
+          </span>
+          <div :class="['subagent-grid', { 'is-single': agents.length === 1 }]">
+            <RenderBoundary v-for="agent in agents" :key="msgKey(agent)" :label="$t('chat.subagent')">
+              <SubagentInlineCard :msg="agent" @toggle-report="onSubagentReportToggle" />
+            </RenderBoundary>
+          </div>
+        </div>
+        <button v-else-if="msg.role === 'archive'" class="message-archive-toggle" @click.stop="$emit('toggleArchive', msg.sessionId)">
           <span>{{ msg.expanded ? $t('chat.archive.collapse') : $t('chat.archive.expand') }}</span>
           <span>{{ $t('chat.archive.summary', { count: msg.count }) }}</span>
         </button>
@@ -91,8 +101,6 @@ Public License v3. See the LICENSE file for details.
             @toggle="$emit('toggleTool', msg)"
           />
         </RenderBoundary>
-        <!-- Sub-agent -->
-        <RenderBoundary v-else-if="msg.kind === 'subagent'" :label="$t('chat.subagent')"><SubagentInlineCard :msg="msg" /></RenderBoundary>
         <!-- HTML Render -->
         <RenderBoundary v-else-if="msg.kind === 'render_html'" :label="$t('tools.kind.renderHtml')">
           <HtmlRenderCard :msg="msg" />
@@ -140,6 +148,7 @@ import { t } from '../i18n.mjs';
 import { PRESENTATION_ACTIVE, useDocumentVisible } from '../composables/presentation.mjs';
 import { copyText } from '../utils/clipboard.mjs';
 import { toolCardRenderSignature } from '../utils/toolCardSignature.mjs';
+import { subagentRows, subagentBatchStatus } from '../utils/subagentRows.mjs';
 
 import MessageAttachments from './MessageAttachments.vue';
 import WelcomeMessage from './WelcomeMessage.vue';
@@ -148,6 +157,7 @@ import AskToolCard from './AskToolCard.vue';
 import ReadGroupCard from './ReadGroupCard.vue';
 import ReadGrepGroupCard from './ReadGrepGroupCard.vue';
 import SubagentInlineCard from './SubagentInlineCard.vue';
+import ToolStatusIcon from './ToolStatusIcon.vue';
 import StreamingMarkdownBody from './StreamingMarkdownBody.vue';
 import RenderBoundary from './RenderBoundary.vue';
 import MessageRoundStats from './MessageRoundStats.vue';
@@ -265,6 +275,8 @@ function roundStatsMemo(msg, index) {
   ].join('|');
 }
 
+const messageRows = computed(() => subagentRows(props.messages, (msg, index) => !!roundStatsOwner(msg, index)));
+
 // Keep historical message subtrees out of the patch path while the active
 // assistant message streams. v-memo 必须挂在 v-for 的 <template> 上：只有这
 // 种写法 Vue 才会生成逐条目缓存（renderList 按 :key 校验后复用）。若把
@@ -277,10 +289,13 @@ function roundStatsMemo(msg, index) {
 // 一旦读取内容就会让整个列表的渲染 effect 订阅流式增量。活跃消息的正文
 // 由 StreamingMarkdownBody 子组件独立渲染；已完成消息的内容不再变化，
 // 流式结束时 streaming 标志翻转即触发最后一帧补丁。
-function messageRenderMemo(msg, index) {
+function messageRenderMemo(msg, index, agents) {
   const attachments = Array.isArray(msg?.attachments) ? msg.attachments : [];
   const lastAttachment = attachments.length ? attachments[attachments.length - 1] : null;
   return [
+    agents,
+    agents ? subagentBatchStatus(agents) : '',
+    agents ? presentationActive.value : false,
     msg?.role,
     msg?.id,
     msg?.kind,
@@ -457,7 +472,7 @@ function scrollViewportToBottom(viewport) {
   if (viewport) viewport.scrollTop = BOTTOM_SENTINEL;
 }
 // ── 跟随状态（autoFollow）只有这三条改写路径，别处一律动不了它 ──
-//   ① 用户手势向上离开底部 → 关闭，且是粘性的：一次手势就关掉，之后一直关着；
+//   ① 用户手势向上离开底部或主动展开报告阅读 → 关闭，且是粘性的：一次手势就关掉，之后一直关着；
 //   ② 用户自己滚回底部 / 点「回到底部」/ 新一轮开始 → 恢复；
 //   ③ 会话切换的 restoreToBottom → 恢复。
 // 「离底 ≤96px」只服务 ② 的恢复判定，绝不用于重新打开 ① 刚关掉的跟随：
@@ -551,6 +566,14 @@ function leaveBottom() {
   autoFollow.value = false;
   followMode = 'bottom';
   showJumpToBottom.value = true;
+}
+
+// Opening a report is an explicit reading action: content resize must not
+// scroll its controls away. The normal bottom/new-run actions resume following.
+function onSubagentReportToggle() {
+  restoreRequestId += 1;
+  userIntentUntil = 0;
+  leaveBottom();
 }
 
 const UP_KEYS = new Set(['PageUp', 'ArrowUp', 'Home']);
@@ -682,6 +705,8 @@ function scrollToBottom(options = {}) {
   if (!presentationActive.value) return;
   const force = options?.force === true;
   const alignToLastToolCard = options?.alignToLastToolCard === true;
+  // User interaction invalidates queued scrolling, including forced requests.
+  const requestId = restoreRequestId;
   if (!force && !autoFollow.value) {
     showJumpToBottom.value = true;
     return;
@@ -692,7 +717,9 @@ function scrollToBottom(options = {}) {
   }
   scrollRaf = requestAnimationFrame(() => {
     scrollRaf = 0;
+    if (requestId !== restoreRequestId) return;
     scheduleRaf(() => {
+      if (requestId !== restoreRequestId) return;
       if (!force && !autoFollow.value) {
         showJumpToBottom.value = true;
         return;
@@ -828,6 +855,31 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
 </script>
 
 <style scoped>
+/* Group only adjacent cards; other messages and round statistics retain their
+   normal flow, native search, selection and scroll anchors. */
+.rich-tool-card.subagent-batch {
+  position: relative;
+  margin-top: 6px;
+  margin-bottom: 10px;
+  contain-intrinsic-size: auto 120px;
+}
+.subagent-batch-status {
+  position: absolute;
+  left: 0;
+  top: 12px;
+  display: flex;
+}
+.subagent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+}
+.subagent-grid.is-single {
+  grid-template-columns: minmax(0, 420px);
+}
+
 .messages-scroll-shell {
   position: relative;
   display: flex;

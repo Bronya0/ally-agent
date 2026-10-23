@@ -141,7 +141,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	// release it: without this, dead scopes accumulate inside the bounded stash
 	// (maxReasoningStashEntries) and its LRU evicts a live session instead.
 	defer a.reasoningStash.clearScope(subagentReasoningScope(subID))
-	spawnPayload := map[string]any{"id": subID, "sessionId": sessionID, "description": desc, "profile": "coder", "role": req.Role, "startTime": run.StartTime}
+	spawnPayload := map[string]any{"id": subID, "sessionId": sessionID, "description": desc, "profile": "coder", "role": req.Role, "startTime": run.StartTime, "maxSteps": budget}
 	if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok {
 		spawnPayload["runId"] = meta.runID
 		spawnPayload["toolBatchId"] = meta.toolBatchID
