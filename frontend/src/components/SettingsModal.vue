@@ -82,6 +82,29 @@ Public License v3. See the LICENSE file for details.
               <span class="settings-field-hint">{{ $t('settings.appearanceHint') }}</span>
             </div>
           </n-form-item>
+          <n-form-item :label="$t('settings.avatar')">
+            <div class="settings-field-stack">
+              <div class="appearance-mode-row avatar-style-options">
+                <button
+                  v-for="item in avatarOptions"
+                  :key="item.id"
+                  type="button"
+                  :class="['appearance-mode-btn', 'avatar-style-option', { active: avatarStyle === item.id }]"
+                  :aria-pressed="avatarStyle === item.id"
+                  @click="setAvatarStyle(item.id)"
+                >
+                  <img v-if="item.id === 'whale'" :src="whaleAvatar" width="48" height="48" alt="" draggable="false" />
+                  <svg v-else width="48" height="48" viewBox="0 0 48 48" aria-hidden="true">
+                    <path d="M3 24Q24 1 45 24Q24 47 3 24Z" fill="var(--ally-eye-shell-fill)" stroke="var(--ally-eye-shell-stroke)" />
+                    <circle cx="24" cy="24" r="14" fill="var(--ally-eye-iris-color)" stroke="var(--ally-eye-iris-rim)" />
+                    <ellipse cx="24" cy="24" rx="3" ry="14" fill="var(--ally-eye-pupil-fill)" />
+                  </svg>
+                  {{ $t(item.labelKey) }}
+                </button>
+              </div>
+              <span class="settings-field-hint">{{ $t('settings.avatarHint') }}</span>
+            </div>
+          </n-form-item>
           <n-form-item :label="$t('settings.customPrompt')">
             <n-input
               v-model:value="draft.customPrompt"
@@ -506,6 +529,12 @@ Public License v3. See the LICENSE file for details.
             <n-button secondary @click="openSourceRepository">{{ $t('settings.sourceLicense') }}</n-button>
             <n-button secondary @click="openIssueTracker">{{ $t('settings.feedback') }}</n-button>
           </div>
+          <div class="license-notice avatar-artwork-notice">
+            <div class="license-notice-title">{{ $t('settings.avatarArtwork') }}</div>
+            <p>{{ $t('settings.avatarArtworkAttribution') }}</p>
+            <p>{{ $t('settings.avatarArtworkLicense') }}</p>
+            <n-button secondary @click="openWhaleArtwork">{{ $t('settings.avatarArtworkSource') }}</n-button>
+          </div>
           <div class="about-update-check">
             <n-button
               size="small"
@@ -532,6 +561,8 @@ import { computed, h, onBeforeUnmount, onMounted, onUnmounted, reactive, ref, wa
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
 import { getStoredMode, THEMES } from '../utils/theme.mjs';
+import { AVATAR_STYLES, useAvatarAppearance } from '../composables/avatarAppearance.mjs';
+import whaleAvatar from '../assets/avatars/whale/delighted-512.png';
 import { normalizeApiKeysArray } from '../utils/modelConfigIO.mjs';
 import { TOOL_CONCURRENCY_MIN, TOOL_CONCURRENCY_MAX, HIDEABLE_MODES, PAGE_VISIBILITY_LABELS, normalizeDraftHiddenModes, normalizeHiddenModes } from '../utils/config.mjs';
 import { diffSettingsPatch, settingsSnapshot, isValidProxyURL } from '../utils/configAutosave.mjs';
@@ -559,6 +590,13 @@ const { message } = createDiscreteApi(['message'], {
 function selectColorMode(mode) {
   colorModeState.value = mode;
   emit('set-mode', mode);
+}
+
+const avatarOptions = AVATAR_STYLES;
+const { avatarStyle, setAvatarStyle } = useAvatarAppearance();
+
+function openWhaleArtwork() {
+  Browser.OpenURL('https://github.com/Small-tailqwq/dsh-deep-whale/tree/main/maid-atelier');
 }
 
 function openSourceRepository() {
@@ -1207,6 +1245,27 @@ watch(() => props.visible, (visible) => {
   color: var(--ally-text-primary);
   font-size: 15px;
   font-weight: 650;
+}
+
+.avatar-artwork-notice {
+  margin-top: 16px;
+}
+
+.avatar-style-options {
+  width: fit-content;
+  flex-wrap: wrap;
+}
+
+.avatar-style-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.avatar-style-option img,
+.avatar-style-option svg {
+  flex-shrink: 0;
+  object-fit: contain;
 }
 
 .license-copyleft {

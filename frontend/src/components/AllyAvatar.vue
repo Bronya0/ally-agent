@@ -8,9 +8,10 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <div ref="root" class="ally-avatar" role="img" :aria-label="$t('avatar.aria')"
-       :title="$t('avatar.sakuraToggle')" @click="toggleSakura">
-    <svg class="ally-eye" viewBox="0 0 164 164" aria-hidden="true">
+  <div ref="root" class="ally-avatar" role="img" :aria-label="$t(avatarStyle === 'whale' ? 'avatar.whaleAria' : 'avatar.aria')"
+       :title="$t(avatarStyle === 'whale' ? 'avatar.whaleSakuraToggle' : 'avatar.sakuraToggle')" @click="toggleSakura">
+    <img v-if="avatarStyle === 'whale'" class="ally-whale" :src="whaleAvatar" alt="" width="164" height="164" draggable="false" />
+    <svg v-else class="ally-eye" viewBox="0 0 164 164" aria-hidden="true">
       <!-- 欢迎页多 Tab 共享同一组渐变（inlineDefs=false）；启动页内联独立渐变
            （inlineDefs=true），避免两个 SVG 同时引用同一 paint server 触发
            WebKit 渲染缓存串扰（启动动画期间欢迎页瞳孔出现淡黄色块）。
@@ -87,6 +88,10 @@ import { ref, onMounted, onBeforeUnmount, useId } from 'vue';
 import { isZh } from '../i18n.mjs';
 import { EYE_STYLES } from '../data/eyeLines.mjs';
 import { useSakuraBreeze } from '../composables/sakuraBreeze.mjs';
+import { useAvatarAppearance } from '../composables/avatarAppearance.mjs';
+import whaleAvatar from '../assets/avatars/whale/delighted-512.png';
+
+const { avatarStyle } = useAvatarAppearance();
 
 const props = defineProps({
   // 启动页单实例用内联渐变（唯一 ID，自带资源），与欢迎页共享渐变互不干扰；
@@ -327,6 +332,15 @@ onBeforeUnmount(() => {
   display: block;
   width: 100%;
   height: 100%;
+  user-select: none;
+  pointer-events: none;
+}
+
+.ally-whale {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   user-select: none;
   pointer-events: none;
 }
