@@ -3125,6 +3125,10 @@ function toggleArchiveMessages(sessionId) {
 // 仍然不读正文：正文由子组件按增量渲染，父级渲染 effect 一旦订阅它，每个流式增量
 // 都要重算整张列表。
 const displayMessagesCacheBySession = new Map();
+// Only the tail's card fields change during normal tool streaming. Keep the
+// archived visibility scan in its own computed scope; it still invalidates on
+// deletion, compaction or an old row becoming renderable.
+const archivedDisplaySignatures = new WeakMap();
 function buildDisplayMessagesSignature(session, expanded) {
   const msgs = session?.messages;
   if (!msgs) return '';
@@ -3133,14 +3137,30 @@ function buildDisplayMessagesSignature(session, expanded) {
   // 算不算一条消息”决定归档行上的条数，所以那里只需要一个布尔；给它跑完整的卡片
   // 签名（每张卡 40+ 个字段、含随流式增长的正文指纹）等于每次 App 重渲染都把整段
   // 历史重算一遍，而流式期间这是每 120ms 一次。
-  // visibleFrom 取展开态的上限：宁可多算几条，不能把会渲染的行划到廉价判据里。
-  const visibleFrom = Math.max(0, msgs.length - MAX_EXPANDED_RENDER_MESSAGES - 1);
-  for (let i = 0; i < msgs.length; i++) {
+  // Count renderable rows, not raw slots: thinking-only shells do not consume
+  // the display window, including when the archive is expanded.
+  let visibleFrom = msgs.length;
+  let visibleRows = 0;
+  while (visibleFrom > 0 && visibleRows < MAX_EXPANDED_RENDER_MESSAGES + 1) {
+    if (isRenderableMessage(msgs[--visibleFrom])) visibleRows++;
+  }
+  let archived = archivedDisplaySignatures.get(msgs);
+  if (!archived || archived.end !== visibleFrom) {
+    archived = {
+      end: visibleFrom,
+      signature: computed(() => {
+        const states = [];
+        for (let i = 0; i < visibleFrom; i++) states.push(isRenderableMessage(msgs[i]) ? '1' : '0');
+        return states.join('');
+      }),
+    };
+    // Key by array so unloading/replacing a session's messages cannot retain
+    // the discarded array through this cache.
+    archivedDisplaySignatures.set(msgs, archived);
+  }
+  parts.push(archived.signature.value);
+  for (let i = visibleFrom; i < msgs.length; i++) {
     const m = msgs[i];
-    if (i < visibleFrom) {
-      parts.push(isRenderableMessage(m) ? '1' : '0');
-      continue;
-    }
     if (m?.role === 'tool_call') {
       parts.push(toolCardRenderSignature(m));
     } else {
@@ -3155,7 +3175,7 @@ function displayMessagesForSession(session) {
   const notices = contextDriftNoticesFor(sessionId);
   const noticeSig = notices.map((notice) => notice.id).join(',');
   const cached = displayMessagesCacheBySession.get(sessionId);
-  if (cached?.signature === sig && cached?.noticeSignature === noticeSig) {
+  if (cached?.source === session.messages && cached?.signature === sig && cached?.noticeSignature === noticeSig) {
     return cached.messages;
   }
   const src = displaySourceMessages(session);
@@ -3258,7 +3278,7 @@ function displayMessagesForSession(session) {
   }
   // 漂移提示插回它发生的位置（此刻才插：位置依赖 out 的最终形状）。
   const merged = insertContextDriftNotices(out, notices, outSourceIndex, sourceWindow.start);
-  displayMessagesCacheBySession.set(sessionId, { signature: sig, noticeSignature: noticeSig, messages: merged });
+  displayMessagesCacheBySession.set(sessionId, { source: session.messages, signature: sig, noticeSignature: noticeSig, messages: merged });
   return merged;
 }
 

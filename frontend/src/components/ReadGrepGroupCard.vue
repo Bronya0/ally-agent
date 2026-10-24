@@ -29,7 +29,7 @@ Public License v3. See the LICENSE file for details.
     <div v-if="isExpanded" class="read-grep-body">
       <div
         v-for="(entry, index) in allEntries"
-        :key="`${entry.verb}-${entry.title || index}`"
+        :key="`${entry.verb}-${entry.seq ?? index}`"
         :class="['read-group-entry', entry.extraClass, entry.status || msg.status]"
       >
         <span class="read-group-tree">{{ treePrefix(index, allEntries.length) }}</span>

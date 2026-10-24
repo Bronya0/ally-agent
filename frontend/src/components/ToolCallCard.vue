@@ -149,6 +149,7 @@ import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
 import powershell from 'highlight.js/lib/languages/powershell';
 import { highlightShellCommand } from '../utils/shellHighlight.mjs';
+import { commandHighlightCache as highlightCache } from '../utils/highlightCache.mjs';
 import { formatToolErrorBody } from '../utils/toolError.mjs';
 import { toolVerbLabel, hasNamedVerb } from '../utils/toolVerb.mjs';
 import { isFixedBodyKind, kindLabelKey, toolShowsDuration } from '../utils/toolKind.mjs';
@@ -303,21 +304,13 @@ function toolVerb(msg) {
   return toolVerbLabel(msg.name, msg.kind, msg.status, msg.toolAction);
 }
 
-// Bounded LRU cache for highlighted command HTML. highlight.js is expensive
-// (full tokenize) and ToolCallCard re-renders on every tool:update flush; without
-// caching, a 200ms flush cycle on a long command would re-tokenize it ~5x/s.
-// 128 entries / ~256KB cap covers typical session volume.
-const HIGHLIGHT_CACHE_MAX = 128;
-const highlightCache = new Map();
+// Shared LRU with entry and character budgets (including highlighted HTML).
 function highlightCommand(msg) {
   const command = String(msg?.title || '');
   const language = commandHighlightLanguage(msg, command);
   const cacheKey = `${language}::${command}`;
   const cached = highlightCache.get(cacheKey);
   if (cached !== undefined) {
-    // Move-to-end for LRU semantics.
-    highlightCache.delete(cacheKey);
-    highlightCache.set(cacheKey, cached);
     return cached;
   }
   let result;
@@ -330,10 +323,6 @@ function highlightCommand(msg) {
     }
   }
   highlightCache.set(cacheKey, result);
-  if (highlightCache.size > HIGHLIGHT_CACHE_MAX) {
-    const oldest = highlightCache.keys().next().value;
-    if (oldest !== undefined) highlightCache.delete(oldest);
-  }
   return result;
 }
 

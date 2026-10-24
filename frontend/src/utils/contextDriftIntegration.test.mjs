@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { computed, reactive, ref, toRaw } from 'vue';
 import * as drift from './contextDriftNotice.mjs';
 import { assistantRowRenderState, displaySourceMessages, isRenderableMessage } from './toolPreview.mjs';
 import { toolCardRenderSignature } from './toolCardSignature.mjs';
@@ -20,31 +21,77 @@ function section(start, end) {
 function evaluate(code, bindings) {
   return new Function(...Object.keys(bindings), code)(...Object.values(bindings));
 }
-const ref = (value) => ({ value });
 const noop = () => {};
 const tool = (name) => ({ role: 'tool_call', kind: 'read', name: 'read', title: name, status: 'success' });
 const rowLabels = (rows) => rows.map((row) => row.role === 'notice'
   ? 'notice' : row.kind === 'read-grep-group'
     ? row.readEntries.map((entry) => entry.title).join(',') : row.role);
 
-function fixture(messages) {
-  const session = { id: 's', messages };
+function fixture(messages, renderable = isRenderableMessage) {
+  const session = reactive({ id: 's', messages });
   const sessions = ref([session]);
   const bindings = {
-    ...drift, ref, sessions, assistantRowRenderState, isRenderableMessage,
+    ...drift, computed, ref, sessions, assistantRowRenderState, isRenderableMessage: renderable,
     toolCardRenderSignature, buildDisplaySourceMessages: displaySourceMessages,
     expandedArchiveSessions: ref(new Set()), t: (key) => key, prefixDriftDetail: () => '',
   };
   const api = evaluate(`${section('const MAX_RENDER_MESSAGES =', 'const contextTokens =')}
-    return { displayMessagesForSession, recordContextDriftNotice, dropContextDriftNotices,
+    return { displayMessagesForSession, buildDisplayMessagesSignature, recordContextDriftNotice, dropContextDriftNotices,
       contextDriftNoticesBySession };`, bindings);
   return {
     ...api, session, sessions,
     expandedArchiveSessions: bindings.expandedArchiveSessions,
     display: () => api.displayMessagesForSession(session),
+    signature: () => api.buildDisplayMessagesSignature(session, bindings.expandedArchiveSessions.value),
     record: () => api.recordContextDriftNotice({ sessionId: session.id, kind: 'head' }),
   };
 }
+
+test('工具增量不重扫归档；旧行可见性、数组替换和删除仍使缓存失效', () => {
+  let visits = 0;
+  const f = fixture(Array.from({ length: 1000 }, (_, i) => ({ ...tool(String(i)), eventId: `e${i}` })), (msg) => {
+    if (msg.title === '0') visits++;
+    return isRenderableMessage(msg);
+  });
+  const initial = f.signature();
+  assert.ok(visits > 0);
+  visits = 0;
+  f.session.messages.at(-1).body = 'new output';
+  assert.notEqual(f.signature(), initial);
+  assert.equal(visits, 0);
+  const beforeHide = f.signature();
+  f.session.messages[0].errorCode = 'E_STAGE_BLOCKED';
+  assert.notEqual(f.signature(), beforeHide);
+  assert.equal(f.display()[0].count, 819);
+  f.session.messages = f.session.messages.slice(1);
+  assert.equal(f.display()[0].count, 819);
+  f.session.messages.splice(0, 1);
+  assert.equal(f.display()[0].count, 818);
+});
+
+test('展开归档夹有空壳消息时，可见的旧工具卡更新仍使列表失效', () => {
+  const f = fixture(Array.from({ length: 500 }, (_, i) => [
+    { ...tool(String(i)), eventId: `e${i}` },
+    { role: 'assistant', content: '', hasBody: false },
+  ]).flat());
+  f.expandedArchiveSessions.value = new Set(['s']);
+  const before = f.display();
+  assert.equal(before[1].readEntries[0].title, '140');
+  f.session.messages[280].title = 'changed';
+  const after = f.display();
+  assert.notEqual(after, before);
+  assert.equal(after[1].readEntries[0].title, 'changed');
+});
+
+test('同形消息数组替换后，展示列表使用新对象', () => {
+  const f = fixture([{ role: 'assistant', content: 'answer', hasBody: true }]);
+  const before = f.display();
+  f.session.messages = f.session.messages.map((msg) => ({ ...msg }));
+  const after = f.display();
+  assert.notEqual(after, before);
+  assert.equal(after[0], f.session.messages[0]);
+  assert.notEqual(after[0], before[0]);
+});
 
 test('追加连续工具调用后，提示两侧各自折叠且提示位置保持不变', () => {
   const f = fixture([{ role: 'user' }, tool('A')]);
@@ -91,7 +138,7 @@ test('自动压缩清理当前会话旧锚点，压缩后的新提示不会被�
   f.contextDriftNoticesBySession.value.other = other;
   compactEvent(f, { sessionId: 's', summary: 'summary' });
   assert.equal(f.contextDriftNoticesBySession.value.s, undefined);
-  assert.equal(f.contextDriftNoticesBySession.value.other, other);
+  assert.equal(toRaw(f.contextDriftNoticesBySession.value.other), other);
   f.session.messages.push({ role: 'user' });
   f.record();
   f.session.messages.push(tool('new'));
@@ -115,9 +162,9 @@ test('自动保留最近内容只更新对应工具卡，保留正文及已有�
   f.record();
   const notices = f.contextDriftNoticesBySession.value.s;
   compactEvent(f, { sessionId: 's', tier: 'fast', changed: true, keepRecent: 4, toolSummaries: { old: 'excerpt' }, reasoningCount: 1 });
-  assert.equal(f.session.messages[0], user);
+  assert.equal(toRaw(f.session.messages[0]), user);
   assert.equal(f.session.messages[1].body, 'excerpt');
-  assert.equal(f.session.messages[2], answer);
+  assert.equal(toRaw(f.session.messages[2]), answer);
   assert.equal(f.session.messages[3].body, 'recent body');
   assert.equal(f.session.messages[4].system, true);
   assert.equal(f.contextDriftNoticesBySession.value.s, notices);

@@ -44,6 +44,49 @@ test('streaming updates keep one tool card and update its arguments', () => {
   assert.equal(findToolEventMessage(session, eventId), session.messages[0]);
 });
 
+test('parallel tool updates validate cached slots without scanning history', () => {
+  let reads = 0;
+  const messages = new Proxy(Array.from({ length: 5000 }, (_, i) => ({
+    role: 'tool_call', eventId: `e${i}`, body: '',
+  })), {
+    get(target, key, receiver) {
+      if (typeof key === 'string' && /^\d+$/.test(key)) reads++;
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  const session = { messages };
+  for (let i = 4980; i < 5000; i++) findToolEventMessage(session, `e${i}`);
+  reads = 0;
+  for (let tick = 0; tick < 10; tick++) {
+    for (let i = 4980; i < 5000; i++) {
+      const existing = findToolEventMessage(session, `e${i}`);
+      commitToolEventMessage(session, `e${i}`, existing, { body: String(tick) });
+    }
+  }
+  assert.ok(reads <= 500, `warm updates read ${reads} array slots`);
+  assert.equal(messages[4999].body, '9');
+  assert.equal(Object.hasOwn(session, '_lastToolMsg'), false);
+});
+
+test('tool positions recover after splice, same-length replacement and compaction', () => {
+  const first = { role: 'tool_call', eventId: 'a' };
+  const second = { role: 'tool_call', eventId: 'b' };
+  const session = { messages: [first, second] };
+  assert.equal(findToolEventMessage(session, 'b'), second);
+  session.messages.splice(0, 1);
+  assert.equal(findToolEventMessage(session, 'b'), second);
+  const replacement = { ...second, body: 'replacement' };
+  session.messages[0] = replacement;
+  assert.equal(findToolEventMessage(session, 'b'), replacement);
+  commitToolEventMessage(session, 'b', second, { body: 'updated' });
+  assert.equal(replacement.body, 'updated');
+  assert.equal(second.body, undefined);
+  session.messages = [{ ...replacement, body: 'compacted' }];
+  assert.equal(findToolEventMessage(session, 'b'), session.messages[0]);
+  session.messages.splice(0, 1);
+  assert.equal(findToolEventMessage(session, 'b'), null);
+});
+
 test('toolEventId is deterministic from run/step/index coordinates', () => {
   const base = { runId: 'r1', toolBatchId: 'b2', toolCallIndex: 3, name: 'edit' };
   assert.equal(toolEventId(base), 'r1:tool:b2:3');

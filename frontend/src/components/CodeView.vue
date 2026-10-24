@@ -32,6 +32,7 @@ import xml from 'highlight.js/lib/languages/xml'
 import cssLang from 'highlight.js/lib/languages/css'
 import markdownLang from 'highlight.js/lib/languages/markdown'
 import { codePreviewWindow } from '../utils/toolPreview.mjs'
+import { codeHighlightCache as codeHlCache } from '../utils/highlightCache.mjs'
 
 hljs.registerLanguage('javascript', javascript)
 hljs.registerLanguage('js', javascript)
@@ -164,14 +165,10 @@ const previewStartLine = computed(() => preview.value.startLine || 1)
 // hljs.highlight on the entire file body; for multi-KB files this is a 5-20ms
 // hit per re-render. Cache key is (lang, code, maxLines): lang + code identify
 // the tokenization output, maxLines handles the collapsed slice.
-const CODE_HL_CACHE_MAX = 32;
-const codeHlCache = new Map();
 function highlightCached(lang, code, maxLines) {
   const key = `${lang || 'plain'}|${maxLines}|${code}`;
   const hit = codeHlCache.get(key);
   if (hit !== undefined) {
-    codeHlCache.delete(key);
-    codeHlCache.set(key, hit);
     return hit;
   }
   let lines;
@@ -187,10 +184,6 @@ function highlightCached(lang, code, maxLines) {
   }
   if (maxLines > 0) lines = lines.slice(0, maxLines);
   codeHlCache.set(key, lines);
-  if (codeHlCache.size > CODE_HL_CACHE_MAX) {
-    const oldest = codeHlCache.keys().next().value;
-    if (oldest !== undefined) codeHlCache.delete(oldest);
-  }
   return lines;
 }
 

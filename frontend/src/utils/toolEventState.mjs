@@ -7,25 +7,47 @@
  * This file is part of ally-agent, licensed under the GNU General
  * Public License v3. See the LICENSE file for details.
  */
+// Cache positions, never message objects: compaction/replacement must release
+// old cards. Validate the array slot on every hit so splice, deletion and
+// same-length replacement cannot route a late event to a discarded card.
+// Bound each array's cache; WeakMap releases it when the array is replaced.
+const toolPositions = new WeakMap();
+const TOOL_POSITION_CACHE_LIMIT = 512;
+
+function rememberToolPosition(messages, eventId, index) {
+  let positions = toolPositions.get(messages);
+  if (!positions) {
+    positions = new Map();
+    toolPositions.set(messages, positions);
+  }
+  positions.delete(eventId);
+  positions.set(eventId, index);
+  if (positions.size > TOOL_POSITION_CACHE_LIMIT) {
+    positions.delete(positions.keys().next().value);
+  }
+}
+
 export function findToolEventMessage(session, eventId) {
   if (!session || !eventId || !Array.isArray(session.messages)) return null;
-  const cached = session._lastToolEventId === eventId ? session._lastToolMsg : null;
-  if (cached && cached.eventId === eventId && session.messages.includes(cached)) return cached;
-
-  const found = session.messages.find(
+  const messages = session.messages;
+  const positions = toolPositions.get(messages);
+  const index = positions?.get(eventId);
+  const cached = index === undefined ? null : messages[index];
+  if (cached?.role === 'tool_call' && cached.eventId === eventId) return cached;
+  positions?.delete(eventId);
+  const foundIndex = messages.findIndex(
     (item) => item?.role === 'tool_call' && item.eventId === eventId,
-  ) || null;
-  session._lastToolEventId = eventId;
-  session._lastToolMsg = found;
-  return found;
+  );
+  if (foundIndex < 0) return null;
+  rememberToolPosition(messages, eventId, foundIndex);
+  return messages[foundIndex];
 }
 
 export function commitToolEventMessage(session, eventId, existing, payload) {
   if (!session || !eventId || !Array.isArray(session.messages)) return null;
-  let target = existing;
-  if (!target || target.eventId !== eventId || !session.messages.includes(target)) {
-    target = findToolEventMessage(session, eventId);
-  }
+  // Resolve through the validated position cache, including when a caller
+  // holds an object from before compaction or an array replacement.
+  let target = findToolEventMessage(session, eventId);
 
   if (target) {
     for (const key of Object.keys(payload)) {
@@ -34,10 +56,9 @@ export function commitToolEventMessage(session, eventId, existing, payload) {
   } else {
     target = payload;
     session.messages.push(target);
+    rememberToolPosition(session.messages, eventId, session.messages.length - 1);
   }
 
-  session._lastToolEventId = eventId;
-  session._lastToolMsg = target;
   return target;
 }
 

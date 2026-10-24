@@ -197,6 +197,16 @@ const userMessageStatsCache = new WeakMap();
 // 每次重建，状态放组件级 Map 才能在计数增长时保持展开。
 const readGrepGroupExpanded = reactive(new Map());
 provide('readGrepGroupExpanded', readGrepGroupExpanded);
+// The display window slides during long runs; discard state for groups that
+// left it instead of retaining every group ever expanded in this mounted Tab.
+watch(() => props.messages, (messages) => {
+  const keys = new Set(messages
+    .filter((msg) => msg.kind === 'read-grep-group')
+    .map((msg) => String(msg.eventId || '')));
+  for (const key of readGrepGroupExpanded.keys()) {
+    if (!keys.has(key)) readGrepGroupExpanded.delete(key);
+  }
+});
 const USER_MESSAGE_COLLAPSE_CHAR_LIMIT = 800;
 const USER_MESSAGE_COLLAPSE_LINE_LIMIT = 10;
 const USER_MESSAGE_PREVIEW_CHAR_LIMIT = 400;

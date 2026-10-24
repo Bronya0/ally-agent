@@ -226,12 +226,12 @@
 
   /* Eye paint tokens live on :root so both inline and body-level shared SVG
      gradients inherit the same palette and update when data-theme changes.
-     Use the pastel seed in both modes to keep the iris luminous. */
-  --ally-eye-iris-inner: color-mix(in srgb, var(--ally-accent) 60%, #ffffff);
-  --ally-eye-iris-color: color-mix(in srgb, var(--ally-accent) 90%, #05070a);
-  --ally-eye-iris-outer: color-mix(in srgb, var(--ally-accent) 38%, #05070a);
-  --ally-eye-iris-edge: color-mix(in srgb, var(--ally-accent) 10%, #05070a);
-  --ally-eye-iris-rim: color-mix(in srgb, var(--ally-accent) 72%, #ffffff);
+     Lift the accent with white rather than muddying the iris with black. */
+  --ally-eye-iris-inner: color-mix(in srgb, var(--ally-accent) 48%, #ffffff);
+  --ally-eye-iris-color: color-mix(in srgb, var(--ally-accent) 85%, #ffffff);
+  --ally-eye-iris-outer: color-mix(in srgb, var(--ally-accent) 58%, #252a34);
+  --ally-eye-iris-edge: color-mix(in srgb, var(--ally-accent) 20%, #151922);
+  --ally-eye-iris-rim: color-mix(in srgb, var(--ally-accent) 65%, #ffffff);
   --ally-eye-highlight: color-mix(in srgb, var(--ally-accent) 22%, #ffffff);
 
   /* ── Ally avatar eye shell tokens (dark default) ── */
@@ -378,15 +378,15 @@
   --game-status-bg: rgba(15, 23, 42, 0.05);
 
   /* ── Ally avatar eye shell tokens (light mode) ── */
-  --ally-eye-iris-inner: color-mix(in srgb, var(--ally-accent) 40%, #ffffff);
-  --ally-eye-iris-color: color-mix(in srgb, var(--ally-accent) 78%, #ffffff);
-  --ally-eye-iris-outer: color-mix(in srgb, var(--ally-accent) 80%, #626873);
-  --ally-eye-iris-edge: color-mix(in srgb, var(--ally-accent) 64%, #454b56);
-  --ally-eye-iris-rim: color-mix(in srgb, var(--ally-accent) 72%, #ffffff);
+  --ally-eye-iris-inner: color-mix(in srgb, var(--ally-accent) 58%, #ffffff);
+  --ally-eye-iris-color: color-mix(in srgb, var(--ally-accent) 94%, #ffffff);
+  --ally-eye-iris-outer: color-mix(in srgb, var(--ally-accent) 74%, #626873);
+  --ally-eye-iris-edge: color-mix(in srgb, var(--ally-accent) 56%, #454b56);
+  --ally-eye-iris-rim: color-mix(in srgb, var(--ally-accent) 65%, #454b56);
   --ally-eye-shell-fill: #f5ede2;
   --ally-eye-pupil-fill: #ffffff;
-  --ally-eye-pupil-line: color-mix(in srgb, var(--ally-accent) 75%, #454b56);
-  --ally-eye-pupil-ring: color-mix(in srgb, var(--ally-accent) 70%, #454b56);
+  --ally-eye-pupil-line: color-mix(in srgb, var(--ally-accent) 62%, #454b56);
+  --ally-eye-pupil-ring: color-mix(in srgb, var(--ally-accent) 60%, #454b56);
   --ally-eye-pupil-detail: var(--ally-eye-pupil-line);
   --ally-eye-shell-stroke: #d8c3a5;
   --ally-eye-shadow-opacity: 0.12;

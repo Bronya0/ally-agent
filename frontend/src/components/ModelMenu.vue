@@ -53,7 +53,7 @@ const props = defineProps({
 });
 const emit = defineEmits(['select', 'manage']);
 
-// Live filter query for the model dropdown's search box; cleared on close.
+// Live filter query; reset on the next open to preserve filtering during leave.
 const modelSearch = ref('');
 const modelUsage = ref(getModelUsage());
 const recentModelUsage = ref(getRecentModelUsage());
@@ -269,9 +269,10 @@ function renderModelMenuLabel(option) {
 }
 
 function onShow(show) {
-  // Reset the filter when the dropdown closes so the next open starts fresh.
-  if (!show) modelSearch.value = '';
-  else {
+  // Keep the filtered list intact while the dropdown's leave transition runs.
+  // Reset on open so each visit still starts with the full list.
+  if (show) {
+    modelSearch.value = '';
     modelUsage.value = getModelUsage();
     recentModelUsage.value = getRecentModelUsage();
     const valid = props.models.map(modelConfigIdentity);
