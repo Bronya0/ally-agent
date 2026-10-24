@@ -8,11 +8,43 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
+
+// validationGoCache 是所有校验用例共享的临时 Go 构建缓存目录。每次自动校验都
+// 用一份全新 GOCACHE 时，`go vet` 要冷编译一遍标准库（实测 1s 级，而热缓存只有
+// 0.2s 级）。共享目录仍然是本进程新建的临时目录，绝不落到用户真实的
+// ~/.cache/go-build，隔离性不变。
+var validationGoCache struct {
+	once    sync.Once
+	root    string
+	goCache string
+	goMod   string
+}
+
+func validationGoCachePaths() (goCache, goMod string) {
+	validationGoCache.once.Do(func() {
+		dir, err := os.MkdirTemp("", "ally-validation-gocache-")
+		if err != nil {
+			return
+		}
+		validationGoCache.root = dir
+		validationGoCache.goCache = filepath.Join(dir, "cache")
+		validationGoCache.goMod = filepath.Join(dir, "modules")
+	})
+	return validationGoCache.goCache, validationGoCache.goMod
+}
+
+// cleanupValidationGoCache removes the shared throwaway cache; TestMain calls it.
+func cleanupValidationGoCache() {
+	if validationGoCache.root != "" {
+		_ = os.RemoveAll(validationGoCache.root)
+	}
+}
 
 func validationSandbox(t *testing.T) string {
 	t.Helper()
@@ -20,8 +52,13 @@ func validationSandbox(t *testing.T) string {
 	for _, key := range []string{"HOME", "USERPROFILE", "TEMP", "TMP", "TMPDIR"} {
 		t.Setenv(key, dir)
 	}
-	t.Setenv("GOCACHE", filepath.Join(dir, "cache"))
-	t.Setenv("GOMODCACHE", filepath.Join(dir, "modules"))
+	goCache, goMod := validationGoCachePaths()
+	if goCache == "" {
+		// 共享目录建不出来时退回用例私有缓存：宁可慢，也不能碰用户缓存。
+		goCache, goMod = filepath.Join(dir, "cache"), filepath.Join(dir, "modules")
+	}
+	t.Setenv("GOCACHE", goCache)
+	t.Setenv("GOMODCACHE", goMod)
 	t.Setenv("GOWORK", "off")
 	root := filepath.Join(dir, "workspace")
 	if err := os.Mkdir(root, 0o700); err != nil {

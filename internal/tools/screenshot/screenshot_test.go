@@ -15,6 +15,25 @@ import (
 	"testing"
 )
 
+func TestValidWindowID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   int
+		want bool
+	}{
+		{"zero means no window", 0, false},
+		{"positive handle", 131076, true},
+		{"negative handle", -1, true},
+		{"signed HWND observed from WebView2", -989130788, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ValidWindowID(tc.id); got != tc.want {
+				t.Fatalf("ValidWindowID(%d) = %v, want %v", tc.id, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCaptureOptionsTargetResolution(t *testing.T) {
 	region := &Rect{X: 1, Y: 2, Width: 30, Height: 40}
 
@@ -40,6 +59,17 @@ func TestCaptureOptionsTargetResolution(t *testing.T) {
 		_, _, _, _, err := CaptureOptions{WindowID: 1, WindowTitle: "x"}.Target()
 		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 			t.Fatalf("expected mutual-exclusion error, got %v", err)
+		}
+	})
+
+	t.Run("a negative handle is still a window target", func(t *testing.T) {
+		kind, id, _, _, err := CaptureOptions{WindowID: -989130788, Region: region, Display: 1}.Target()
+		if err != nil || kind != TargetWindow || id != -989130788 {
+			t.Fatalf("signed handle must select the window: kind=%v id=%d err=%v", kind, id, err)
+		}
+		_, _, _, _, err = CaptureOptions{WindowID: -989130788, WindowTitle: "x"}.Target()
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("signed handle must still conflict with a title, got %v", err)
 		}
 	})
 
@@ -85,6 +115,14 @@ func TestResolveWindow(t *testing.T) {
 	t.Run("by id", func(t *testing.T) {
 		w, err := ResolveWindow(windows, 2, "")
 		if err != nil || w.ID != 2 {
+			t.Fatalf("got %+v err=%v", w, err)
+		}
+	})
+
+	t.Run("by signed id", func(t *testing.T) {
+		signed := []Window{{ID: -989130788, Title: "Ally", Process: "Ally.exe"}}
+		w, err := ResolveWindow(signed, -989130788, "")
+		if err != nil || w.ID != -989130788 {
 			t.Fatalf("got %+v err=%v", w, err)
 		}
 	})

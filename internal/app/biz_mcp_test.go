@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -313,6 +314,7 @@ func TestConnectOneDoesNotClobberLiveConnection(t *testing.T) {
 // 下次保存。配置不同必须走整体换记录路径：旧 client 被 Close、ToolDefs 继承、
 // 新配置的连接提交成功。
 func TestConnectOneReplacesStaleConfigConnection(t *testing.T) {
+	t.Parallel()
 	python := mcpTestPython(t)
 	script := filepath.Join(t.TempDir(), "server.py")
 	if err := os.WriteFile(script, []byte(mcpStdioTestServerScript), 0o700); err != nil {
@@ -659,6 +661,7 @@ func TestReconcileConfigsAppliesDisabledToolsInPlace(t *testing.T) {
 // 拨号最长可到分钟级，不能把面板的"保存"拖住）：调用立即返回，状态随后经
 // notifyChange 异步推进到 connected。
 func TestReconcileConnectsChangedServersInBackground(t *testing.T) {
+	t.Parallel()
 	python := mcpTestPython(t)
 	script := filepath.Join(t.TempDir(), "server.py")
 	if err := os.WriteFile(script, []byte(mcpStdioTestServerScript), 0o700); err != nil {
@@ -1095,6 +1098,7 @@ func waitForMcpHandleStatus(t *testing.T, manager *McpManager, name, want string
 }
 
 func TestMcpStdioServerUsesWorkspaceDirAndHealsAfterCrash(t *testing.T) {
+	t.Parallel()
 	python := mcpTestPython(t)
 	script := filepath.Join(t.TempDir(), "server.py")
 	if err := os.WriteFile(script, []byte(mcpStdioTestServerScript), 0o700); err != nil {
@@ -1411,6 +1415,7 @@ func TestCommitConnectionRecordsLossDuringHandshake(t *testing.T) {
 // 保存/勾选不再"顺手补试"连失败的服务端：配置没变就一律不动连接（连接是无状态
 // 的，下一次调用自己会连上），只有勾选变化要原地生效。
 func TestReconcileLeavesFailedServerAlone(t *testing.T) {
+	t.Parallel()
 	const missingBinary = "ally-mcp-test-definitely-missing-binary"
 	configFile := filepath.Join(t.TempDir(), "mcp.json")
 	write := func(body string) {
@@ -1470,48 +1475,50 @@ func TestReconcileLeavesFailedServerAlone(t *testing.T) {
 }
 
 func TestToolRefreshCoalescesBurstAndKeepsPending(t *testing.T) {
-	manager := NewMcpManager("", nil)
-	var calls atomic.Int64
-	refreshing := make(chan struct{}, 4)
-	release := make(chan struct{}, 4)
-	manager.toolRefresher = func(string, *mcpConnToken) {
-		calls.Add(1)
-		refreshing <- struct{}{}
-		<-release
-	}
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewMcpManager("", nil)
+		var calls atomic.Int64
+		refreshing := make(chan struct{}, 4)
+		release := make(chan struct{}, 4)
+		manager.toolRefresher = func(string, *mcpConnToken) {
+			calls.Add(1)
+			refreshing <- struct{}{}
+			<-release
+		}
 
-	// 一次突发里的三条通知合成一轮。
-	for i := 0; i < 3; i++ {
+		// 一次突发里的三条通知合成一轮。
+		for i := 0; i < 3; i++ {
+			manager.markToolsListDirty("srv", &mcpConnToken{})
+		}
+		<-refreshing
+		// 刷新进行中又来的通知不能丢：跑完必须再补一轮。
 		manager.markToolsListDirty("srv", &mcpConnToken{})
-	}
-	<-refreshing
-	// 刷新进行中又来的通知不能丢：跑完必须再补一轮。
-	manager.markToolsListDirty("srv", &mcpConnToken{})
-	release <- struct{}{}
-	<-refreshing
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("突发三条 + 期间一条应合成两轮，got %d", got)
-	}
-	release <- struct{}{}
+		release <- struct{}{}
+		<-refreshing
+		if got := calls.Load(); got != 2 {
+			t.Fatalf("突发三条 + 期间一条应合成两轮，got %d", got)
+		}
+		release <- struct{}{}
 
-	// 收尾：没有新通知时 running 必须回落，否则这个槽永久卡住（后续通知再也
-	// 不会触发刷新）。
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		manager.refreshMu.Lock()
-		running := manager.refreshSlots["srv"].running
-		manager.refreshMu.Unlock()
-		if !running {
-			break
+		// 收尾：没有新通知时 running 必须回落，否则这个槽永久卡住（后续通知再也
+		// 不会触发刷新）。
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			manager.refreshMu.Lock()
+			running := manager.refreshSlots["srv"].running
+			manager.refreshMu.Unlock()
+			if !running {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("刷新循环未收尾：running 一直是 true")
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("刷新循环未收尾：running 一直是 true")
+		if got := calls.Load(); got != 2 {
+			t.Fatalf("收尾后不该再触发刷新，got %d", got)
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("收尾后不该再触发刷新，got %d", got)
-	}
+	})
 }
 
 func TestMcpToolResultTextRendersAllSupportedContentTypes(t *testing.T) {

@@ -222,9 +222,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			if attempt < maxRetries && retryModelTurn(err, emitted) {
 				wait := llmRetryDelayForError(attempt+1, err)
 				notePerfRetry(ctx, err, wait)
-				select {
-				case <-time.After(wait):
-				case <-ctx.Done():
+				if waitErr := a.waitLLMRetry(ctx, wait); waitErr != nil {
 					a.subRunsMu.Lock()
 					run.Status = "failed"
 					run.Error = "cancelled"

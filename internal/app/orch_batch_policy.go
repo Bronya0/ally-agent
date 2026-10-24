@@ -419,7 +419,7 @@ func planLocalEditBatch(cfg ConfigState, files []FileTextEdits, mode localEditPl
 		// Independent model calls share an atomic stage, not a call budget.
 		for _, file := range files {
 			if err := validateModelEditToolRequest([]FileTextEdits{file}); err != nil {
-				return localEditBatchPlan{}, err
+				return localEditBatchPlan{}, withEditFileError(file.Path, err)
 			}
 		}
 	}
@@ -443,7 +443,7 @@ func planLocalEditBatch(cfg ConfigState, files []FileTextEdits, mode localEditPl
 		if mode == localEditPlanForExecution {
 			writePath, resolveErr := resolveWritableFilePath(roots, file.Path)
 			if resolveErr != nil {
-				return localEditBatchPlan{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, resolveErr)
+				return localEditBatchPlan{}, withEditFileError(file.Path, fmt.Errorf("file %d (%s): %w", i+1, file.Path, resolveErr))
 			}
 			resolved = writePath
 		} else {
@@ -459,7 +459,7 @@ func planLocalEditBatch(cfg ConfigState, files []FileTextEdits, mode localEditPl
 		if existingIndex, exists := byTarget[target.key]; exists {
 			existing := &plan.Files[existingIndex]
 			if mode == localEditPlanForExecution && !strings.EqualFold(existing.Edit.Version, file.Version) {
-				return localEditBatchPlan{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("duplicate edit entries for %s use different versions (%s and %s); re-read the file and submit one version", file.Path, existing.Edit.Version, file.Version))
+				return localEditBatchPlan{}, withEditFileError(file.Path, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("duplicate edit entries for %s use different versions (%s and %s); re-read the file and submit one version", file.Path, existing.Edit.Version, file.Version)))
 			}
 			existing.Edit.Changes = append(existing.Edit.Changes, file.Changes...)
 			continue
@@ -480,7 +480,7 @@ func planLocalEditBatch(cfg ConfigState, files []FileTextEdits, mode localEditPl
 	if mode == localEditPlanForExecution {
 		for _, file := range plan.Files {
 			if err := validateModelEditToolRequest([]FileTextEdits{file.Edit}); err != nil {
-				return localEditBatchPlan{}, err
+				return localEditBatchPlan{}, withEditFileError(file.Edit.Path, err)
 			}
 		}
 	}

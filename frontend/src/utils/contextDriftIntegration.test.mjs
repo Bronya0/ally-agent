@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { computed, reactive, ref, toRaw } from 'vue';
 import * as drift from './contextDriftNotice.mjs';
-import { assistantRowRenderState, displaySourceMessages, isRenderableMessage } from './toolPreview.mjs';
+import { assistantRowRenderState, displaySourceMessages, hasVisibleAssistantText, isRenderableMessage, normalizeAssistantBodyVisibility } from './toolPreview.mjs';
 import { toolCardRenderSignature } from './toolCardSignature.mjs';
 import { applyFastCompaction } from './fastCompaction.mjs';
 
@@ -46,6 +46,50 @@ function fixture(messages, renderable = isRenderableMessage) {
     record: () => api.recordContextDriftNotice({ sessionId: session.id, kind: 'head' }),
   };
 }
+
+test('零宽字符增量不产生消息间距，首个可见正文才使列表失效', () => {
+  const f = fixture([]);
+  f.session.runId = 'run';
+  const streamBuffers = new Map();
+  const flush = evaluate(`${section('function flushStreamBuffer(runId)', 'function endReasoningStatus(msg)')}
+    return flushStreamBuffer;`, {
+    streamBuffers, sessionByRunId: () => f.session, sessionByCompactStreamRunId: () => null,
+    endReasoningStatus: noop, activeSessionId: ref('s'), scrollMessagesToBottom: noop,
+    hasVisibleAssistantText,
+  });
+  const send = (content) => {
+    streamBuffers.set('run', { content, reasoningLen: 0 });
+    flush('run');
+  };
+  send('\u200b');
+  assert.equal(f.session.messages[0].hasBody, false);
+  assert.equal(f.display().length, 0);
+  const signature = f.signature();
+  send(' \n\u2060');
+  assert.equal(f.signature(), signature);
+  assert.equal(f.display().length, 0);
+  send('正文');
+  assert.equal(f.session.messages[0].hasBody, true);
+  assert.notEqual(f.signature(), signature);
+  const visibleSignature = f.signature();
+  send('继续');
+  assert.equal(f.signature(), visibleSignature, '正文增量不重建列表');
+  assert.equal(f.display().length, 1);
+});
+
+test('恢复旧快照后零宽字符空行不再隔开读取和搜索组', async () => {
+  const f = fixture([]);
+  const snapshot = { messages: [tool('A'), { role: 'assistant', content: '\u200b', hasBody: true }, tool('B')] };
+  const load = evaluate(`${section('async function loadSessionMessages(session)', 'function ensureWorkspaceTabSession(tab)')}
+    return loadSessionMessages;`, {
+    LoadSession: async () => snapshot,
+    displayMessagesCacheBySession: new Map(), normalizeAssistantBodyVisibility,
+    message: { error: (err) => assert.fail(err) }, t: (key) => key,
+  });
+  await load(f.session);
+  assert.deepEqual(rowLabels(f.display()), ['A,B']);
+  assert.equal(f.session.messages[1].hasBody, false);
+});
 
 test('工具增量不重扫归档；旧行可见性、数组替换和删除仍使缓存失效', () => {
   let visits = 0;

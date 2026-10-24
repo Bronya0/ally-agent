@@ -84,6 +84,7 @@ func TestRemoteScriptTransportInvariants(t *testing.T) {
 // TestBuildRemoteScriptInjectsProtectionAndPayload 验证 buildRemoteScript 把删除
 // 清单与 payload 占位符全部替换，且产物能用真实解释器跑通。
 func TestBuildRemoteScriptInjectsProtectionAndPayload(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	script, err := buildRemoteScript(map[string]any{
@@ -185,6 +186,7 @@ func TestValidateRemoteWorkspacePathRebase(t *testing.T) {
 // root 用户远程工作区所有删除被拒）。每条拒绝还要报出真正触发的那条机制：
 // 一句笼统的「系统敏感路径」会让模型归因错规则、换个路径反复重试。
 func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	cases := []struct {
@@ -267,6 +269,7 @@ func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
 // 一句拒绝要说清是哪条规则、调用方请求的是哪个路径、它解析到了哪里，并带上与本地
 // 同一枚 E_DELETE_BLOCKED 码，不能退回一句笼统的「系统敏感路径」。
 func TestRemoteHelperDeleteRefusalNamesRuleAndPath(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "proj", ".git"), 0o755); err != nil {
@@ -319,6 +322,7 @@ func TestRemoteScriptsShareTheSamePathRefusals(t *testing.T) {
 // 直接报错，因此存在性不能从失败的读取里推断，而覆盖审批与 created 报告都
 // 依赖这里的元数据。
 func TestRemoteHelperStatOp(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "small.txt"), []byte("hello"), 0o644); err != nil {
@@ -375,6 +379,7 @@ func TestRemoteHelperStatOp(t *testing.T) {
 
 // Stat must distinguish absence from permission, link-loop and storage failures.
 func TestRemoteHelperStatErrors(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	for _, tc := range []struct {
@@ -417,6 +422,7 @@ func TestRemoteHelperStatErrors(t *testing.T) {
 // 0600 会让远程新建文件对其他账号不可读；现在必须对齐本地
 // SafeWriteFile 的 0644 默认值，覆盖时保留原文件权限位。
 func TestRemoteHelperWriteDefaultPerm0644(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("permission bits are not enforced on Windows; the helper mirror test cannot verify fchmod locally (real remotes are POSIX)")
 	}
@@ -517,6 +523,7 @@ func TestRemoteVCSMetadataGuards(t *testing.T) {
 // .git」的写入——把 .git 链成工作区里的另一个名字（gh），字面路径完全干净；命令的
 // 写目标同属这一层，Go 侧看不见。
 func TestRemoteHelperRefusesVCSMetadataWrites(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".git", "hooks"), 0o755); err != nil {
@@ -581,6 +588,7 @@ func TestRemoteHelperRefusesVCSMetadataWrites(t *testing.T) {
 // TestRemoteHelperReadBatchOp 锁定 read_batch 契约：逐文件错误隔离、结
 // 果槽顺序与请求一致、预算耗尽时剩余路径进 remaining 交给下一轮会话。
 func TestRemoteHelperReadBatchOp(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("aaa"), 0o644); err != nil {
@@ -647,6 +655,7 @@ func TestRemoteHelperReadBatchOp(t *testing.T) {
 }
 
 func TestRemoteHelperReadBatchErrorDoesNotConsumeBudget(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "large.txt"), []byte("large content"), 0o600); err != nil {
@@ -676,6 +685,7 @@ func TestRemoteHelperReadBatchErrorDoesNotConsumeBudget(t *testing.T) {
 }
 
 func TestRemoteHelperReadRefusesFIFO(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("FIFO is a POSIX file type")
 	}
@@ -728,6 +738,7 @@ func TestRemoteScriptNonAsciiTextBoundary(t *testing.T) {
 // TestRemoteHelperNonAsciiTextRoundTrip 用真实 helper 脚本跑非 ASCII 路径：
 // 非 ASCII 目录名 / 文件名 / 文件内容必须原样往返（只碰 t.TempDir()）。
 func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	run := func(payload map[string]any) remotePythonResponse {
@@ -827,6 +838,7 @@ func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
 // 因 AttributeError 把整个 write 打挂，且 POSIX 上权限仍须是契约里的 0644
 // （Windows 只校验降级分支不报错，权限位不被强制）。
 func TestRemoteHelperWriteFchmodFallback(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	script, err := buildRemoteScript(map[string]any{
@@ -874,6 +886,7 @@ func TestRemoteHelperWriteFchmodFallback(t *testing.T) {
 //  2. 命令与 cwd 含非 ASCII 时必须原样执行并按 UTF-8 回传（POSIX 用默认 shell；
 //     Windows 的 cmd.exe 会按控制台代码页转中文，故显式给 bash，没有则跳过）。
 func TestRemoteHelperRunCommandShells(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	type runData struct {
@@ -1054,6 +1067,7 @@ type remoteDeleteSlotForTest struct {
 // （不是错误）。批量语义单独锁一条：列表里只要有一条不允许，整批一条都不删 ——
 // 全部判定先于任何删除。
 func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "app.py"), []byte("print('x')\n"), 0o600); err != nil {
@@ -1182,6 +1196,7 @@ func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
 // 之后，后一条因前一条已把它的父目录删掉而失败，只写自己的结果槽，前面的照删、
 // 不相关的路径不受牵连。
 func TestRemoteHelperDeleteBatchKeepsSymlinkTarget(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755); err != nil {

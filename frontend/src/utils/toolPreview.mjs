@@ -402,6 +402,19 @@ export function isRenderableMessage(msg) {
   return !assistantRowRenderState(msg).empty;
 }
 
+// Whitespace and standalone formatting characters (for example U+200B) do not
+// draw text, but Markdown still gives them a paragraph with a full line box.
+// Do not strip them from real text: ZWJ and variation selectors belong to emoji.
+export function hasVisibleAssistantText(text) {
+  return /[^\s\p{Default_Ignorable_Code_Point}]/u.test(String(text ?? ''));
+}
+
+export function normalizeAssistantBodyVisibility(msg) {
+  return msg?.role === 'assistant'
+    ? { ...msg, hasBody: hasVisibleAssistantText(msg.content) }
+    : msg;
+}
+
 // 决定 assistant 行是否有可显示内容的字段收口于此：key 驱动显示列表缓存失效，
 // empty 决定消息是否进入正文列表、归档额度与落盘保留。思考计数只在 composer 显示，
 // 因而不属于消息行状态。
@@ -420,7 +433,7 @@ export function assistantRowRenderState(msg) {
   // 正文不进 key，写入正文的地方会同步置 hasBody，避免父级订阅每个流式增量。
   const empty = !error && !system && !welcome && !hasBody
     && !attachments && !suggestions && !roundStats
-    && String(msg.content || '').trim() === '';
+    && !hasVisibleAssistantText(msg.content);
   return { key, empty };
 }
 

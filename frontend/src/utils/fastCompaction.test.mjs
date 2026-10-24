@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { applyFastCompaction } from './fastCompaction.mjs';
 import { toolCardRenderSignature } from './toolCardSignature.mjs';
+import { normalizeAssistantBodyVisibility } from './toolPreview.mjs';
 
 test('fast compaction replaces only matching tool cards and releases specialized payloads', () => {
   const user = { role: 'user', content: 'requirements' };
@@ -70,11 +71,12 @@ test('legacy backend reasoning suffixes match both original UI replies and synch
 test('persisted fast read excerpts survive the ordinary read-output cleanup', () => {
   const from = source.indexOf('function sanitizeStoredMessage(msg)');
   const to = source.indexOf('function sessionFromIndexEntry', from);
-  const sanitize = new Function('t', 'MAX_STORED_MESSAGE_CHARS', 'MAX_STORED_TOOL_BODY_CHARS', 'MAX_STORED_ATTACHMENT_TEXT_CHARS',
-    `${source.slice(from, to)}; return sanitizeStoredMessage;`)((key) => key, 10000, 10000, 10000);
+  const sanitize = new Function('t', 'MAX_STORED_MESSAGE_CHARS', 'MAX_STORED_TOOL_BODY_CHARS', 'MAX_STORED_ATTACHMENT_TEXT_CHARS', 'normalizeAssistantBodyVisibility',
+    `${source.slice(from, to)}; return sanitizeStoredMessage;`)((key) => key, 10000, 10000, 10000, normalizeAssistantBodyVisibility);
   const normal = { role: 'tool_call', name: 'read', body: 'old file contents' };
   assert.equal(sanitize(normal).body, '');
   assert.equal(sanitize({ ...normal, kind: 'generic', fastCompacted: true, body: 'bounded excerpt' }).body, 'bounded excerpt');
+  assert.equal(sanitize({ role: 'assistant', content: '\u200b', hasBody: true }).hasBody, false);
 });
 
 test('fast bridge completion stays with its originating session after a Tab switch', async () => {

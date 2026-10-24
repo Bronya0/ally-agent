@@ -372,6 +372,10 @@ type App struct {
 	httpRateMu   sync.Mutex
 	httpLastHost map[string]time.Time
 
+	// Optional scheduler for deterministic retry tests. Set before starting runs;
+	// nil uses the production timer and preserves Retry-After/backoff policy.
+	retryWait func(context.Context, time.Duration) error
+
 	// liveBreakdown caches the full token-count breakdown for active sessions.
 	// Updated by runChat each agent step. Maps sessionID → ContextBreakdown.
 	liveBreakdown      map[string]ContextBreakdown
@@ -434,8 +438,16 @@ type App struct {
 }
 
 func NewApp() *App {
+	a := newAppState(appDataDir())
+	// Only the desktop host publishes the legacy singleton. Isolated consumers
+	// can construct state without changing another App's package-level helpers.
+	aGlobalApp = a
+	return a
+}
+
+func newAppState(dataDir string) *App {
 	a := &App{
-		chatGPT:            chatgpt.New(filepath.Join(appDataDir(), "chatgpt"), chatgpt.NewSystemProtector()),
+		chatGPT:            chatgpt.New(filepath.Join(dataDir, "chatgpt"), chatgpt.NewSystemProtector()),
 		runs:               map[string]context.CancelFunc{},
 		runSessions:        map[string]string{},
 		runInputs:          map[string]chan string{},
@@ -484,10 +496,6 @@ func NewApp() *App {
 		reasoningStash:       newReasoningStash(),
 		modelHistoryCodec:    newModelHistoryCodec(),
 	}
-	// Expose the active App to package-level helpers that predate Runtime
-	// injection (listMemories, memoryIndexCache usage in prompt_builder).
-	// Only one App instance exists per process; there is no teardown.
-	aGlobalApp = a
 	return a
 }
 
@@ -2370,9 +2378,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				"maxAttempts": maxTurnRetries, "error": err.Error(), "waitMs": wait,
 				"reason": "stream_interrupted", "discardCurrentResponse": true,
 			})
-			select {
-			case <-time.After(wait):
-			case <-ctx.Done():
+			if waitErr := a.waitLLMRetry(ctx, wait); waitErr != nil {
 				messages = append(messages, cancelledTurnMarker())
 				emitRunEnd("run:error", "cancelled", map[string]any{"error": "已取消"})
 				return

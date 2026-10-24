@@ -127,7 +127,7 @@ func decodeCaptureHelperResult(data []byte) (ModelImage, CaptureSource, error) {
 	if err != nil || (format != "png" && format != "jpeg") || config.Width <= 0 || config.Height <= 0 || max(config.Width, config.Height) > MaxModelImageEdgePx || result.Mime != "image/"+format {
 		return ModelImage{}, result.Source, fmt.Errorf("%w: invalid screenshot helper image", ErrCaptureFailed)
 	}
-	if result.Source.Kind != TargetWindow || result.Source.Window == nil || result.Source.Window.ID <= 0 || result.Source.OriginalWidth <= 0 || result.Source.OriginalHeight <= 0 {
+	if result.Source.Kind != TargetWindow || result.Source.Window == nil || !ValidWindowID(result.Source.Window.ID) || result.Source.OriginalWidth <= 0 || result.Source.OriginalHeight <= 0 {
 		return ModelImage{}, result.Source, fmt.Errorf("%w: invalid screenshot helper source", ErrCaptureFailed)
 	}
 	frame, _, err := image.Decode(bytes.NewReader(result.Data))

@@ -1398,7 +1398,7 @@ func TestChatAdapterTurnsThinkingOffOnCompatibleEndpoint(t *testing.T) {
 				{Role: legacyopenai.ChatMessageRoleAssistant, Content: "plain answer"},
 				{Role: legacyopenai.ChatMessageRoleUser, Content: "hi again"},
 			}
-			if _, err := NewApp().streamModelResponse(context.Background(), cfg, tc.model, messages, nil, nil); err != nil {
+			if _, err := newModelTestApp().streamModelResponse(context.Background(), cfg, tc.model, messages, nil, nil); err != nil {
 				t.Fatalf("streamModelResponse() error = %v", err)
 			}
 
@@ -2324,7 +2324,7 @@ func TestAnthropicRequestCarriesTheVendorEffortField(t *testing.T) {
 				ReasoningEffort: tc.level,
 			}
 			messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
-			if _, err := NewApp().streamModelResponse(context.Background(), cfg, tc.model, messages, nil, nil); err != nil {
+			if _, err := newModelTestApp().streamModelResponse(context.Background(), cfg, tc.model, messages, nil, nil); err != nil {
 				t.Fatalf("streamModelResponse() error = %v", err)
 			}
 
@@ -2385,7 +2385,7 @@ func TestResponsesArgumentsDoneWithoutFieldKeepsAccumulated(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newModelTestApp()
 	result, err := a.streamModelResponse(context.Background(), responsesStreamTestCfg(server.URL), "test-model",
 		[]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "1+1"}}, nil, nil)
 	if err != nil {
@@ -2413,7 +2413,7 @@ func TestResponsesArgumentsDoneFullValueStillWins(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newModelTestApp()
 	result, err := a.streamModelResponse(context.Background(), responsesStreamTestCfg(server.URL), "test-model",
 		[]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "2+2"}}, nil, nil)
 	if err != nil {
@@ -2440,7 +2440,7 @@ func TestResponsesUntypedErrorEventSurfacesAsError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newModelTestApp()
 	_, err := a.streamModelResponse(context.Background(), responsesStreamTestCfg(server.URL), "test-model",
 		[]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
 	if err == nil {
@@ -2470,7 +2470,7 @@ func TestResponsesFailedWithoutErrorObjectUsesIncompleteReason(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newModelTestApp()
 	_, err := a.streamModelResponse(context.Background(), responsesStreamTestCfg(server.URL), "test-model",
 		[]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
 	if err == nil {
@@ -2495,7 +2495,7 @@ func TestResponsesUnknownTypedEventStaysIgnored(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newModelTestApp()
 	result, err := a.streamModelResponse(context.Background(), responsesStreamTestCfg(server.URL), "test-model",
 		[]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
 	if err != nil {
@@ -2819,7 +2819,7 @@ func TestChatAdapterSendsEffortPerVendor(t *testing.T) {
 	}
 	messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
 	for _, c := range cases {
-		if _, err := NewApp().streamModelResponse(context.Background(), cfg, c.model, messages, nil, nil); err != nil {
+		if _, err := newModelTestApp().streamModelResponse(context.Background(), cfg, c.model, messages, nil, nil); err != nil {
 			t.Fatalf("streamModelResponse(%s) error = %v", c.model, err)
 		}
 	}
@@ -2932,7 +2932,7 @@ func TestChatAdapterRequiresStreamTerminator(t *testing.T) {
 				noAdapterRetry: true,
 			}
 			messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
-			result, err := NewApp().streamModelResponse(context.Background(), cfg, "gpt-4o", messages, nil, nil)
+			result, err := newModelTestApp().streamModelResponse(context.Background(), cfg, "gpt-4o", messages, nil, nil)
 			if tc.wantError {
 				if err == nil {
 					t.Fatalf("a stream without any terminator must fail, got %#v", result)
@@ -3034,7 +3034,7 @@ func TestResponsesSummaryPartsSeparateAndTruncationIsReported(t *testing.T) {
 	defer server.Close()
 
 	cfg := responsesStreamTestCfg(server.URL)
-	result, err := NewApp().streamModelResponse(context.Background(), cfg, "gpt-5.5",
+	result, err := newModelTestApp().streamModelResponse(context.Background(), cfg, "gpt-5.5",
 		[]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
 	if err != nil {
 		t.Fatalf("truncation is a terminal state, not a stream error: %v", err)
@@ -3181,7 +3181,7 @@ func TestChatAdapterTerminatorDoesNotLeakAcrossRetries(t *testing.T) {
 		LLMRetries: 1,
 	}
 	messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
-	result, err := NewApp().streamModelResponse(context.Background(), cfg, "gpt-4o", messages, nil, nil)
+	result, err := newModelTestApp().streamModelResponse(context.Background(), cfg, "gpt-4o", messages, nil, nil)
 	if err == nil {
 		t.Fatalf("a truncated retry must fail, got %#v", result)
 	}

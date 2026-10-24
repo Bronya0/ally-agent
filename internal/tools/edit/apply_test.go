@@ -246,10 +246,32 @@ func TestApplyBatchTextChangesRejectsBothSourcesAndReplaceAllBesideLineRange(t *
 }
 
 func TestParseLineRangeRejectsAmbiguousWriteTargets(t *testing.T) {
-	for _, value := range []string{"2", "3-2", "0-1", "x-y", "1-2-3"} {
+	for _, value := range []string{"", "0", "-2", "2-", "3-2", "0-1", "x-y", "1-2-3", "2.5"} {
 		if _, _, err := ParseLineRange(value); err == nil {
 			t.Fatalf("ParseLineRange(%q) unexpectedly succeeded", value)
 		}
+	}
+}
+
+func TestSingleLineRangeMatchesExplicitRange(t *testing.T) {
+	for _, value := range []string{"2", "12", " 12 "} {
+		start, end, err := ParseLineRange(value)
+		if err != nil || start < 1 || start != end {
+			t.Fatalf("single line %q: %d-%d, %v", value, start, end, err)
+		}
+	}
+	for _, content := range []string{"one\ntwo\nthree\n", "one\ntwo"} {
+		for _, replacement := range []string{"TWO", "", "TWO\ninserted"} {
+			got, count, err := ApplyBatchTextChanges(content, []TextChange{{LineRange: "2", NewText: replacement}})
+			want, wantCount, wantErr := ApplyBatchTextChanges(content, []TextChange{{LineRange: "2-2", NewText: replacement}})
+			if err != nil || wantErr != nil || got.Content != want.Content || count != wantCount {
+				t.Fatalf("single-line edit differs: got=%+v/%d/%v want=%+v/%d/%v", got, count, err, want, wantCount, wantErr)
+			}
+		}
+	}
+	_, _, err := ApplyBatchTextChanges("one\ntwo\n", []TextChange{{LineRange: "3", NewText: "THREE"}})
+	if toolerrors.Code(err) != "E_RANGE_OOB" {
+		t.Fatalf("single line past EOF must fail: %v", err)
 	}
 }
 

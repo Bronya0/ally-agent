@@ -60,7 +60,8 @@ func TestOwnedProcessHelper(t *testing.T) {
 }
 
 func TestOwnedProcessTreeStopsChildrenAndCannotTouchAnotherJob(t *testing.T) {
-	root := validationSandbox(t)
+	t.Parallel()
+	root := t.TempDir()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -192,9 +193,10 @@ func TestServiceForcedStopFailureRemainsRetryable(t *testing.T) {
 }
 
 func TestServiceTreeShutdownAndNaturalParentExit(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"explicit", "shutdown", "parent-exit"} {
 		t.Run(mode, func(t *testing.T) {
-			root := validationSandbox(t)
+			root := t.TempDir()
 			exe, err := os.Executable()
 			if err != nil {
 				t.Fatal(err)
@@ -205,7 +207,7 @@ func TestServiceTreeShutdownAndNaturalParentExit(t *testing.T) {
 				stage = "root-exit"
 			}
 			command := "ALLY_PROCESS_TEST_STAGE=" + stage + " ALLY_PROCESS_TEST_DIR=" + quote(root) + " " + quote(exe) + " -test.run=^TestOwnedProcessHelper$"
-			a := NewApp()
+			a := newIsolatedTestApp(t)
 			t.Cleanup(a.stopAllServices)
 			info, err := a.startServiceWithConfig(context.Background(), ConfigState{Workspace: root}, StartServiceRequest{Description: "process cleanup probe", Command: command})
 			if err != nil {
@@ -260,7 +262,8 @@ func TestServiceTreeShutdownAndNaturalParentExit(t *testing.T) {
 }
 
 func TestTrackedCommandCancellationDuringStartup(t *testing.T) {
-	root := validationSandbox(t)
+	t.Parallel()
+	root := t.TempDir()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

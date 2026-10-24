@@ -81,7 +81,7 @@ func listWindows(ctx context.Context) ([]Window, error) {
 	var windows []Window
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		id, convErr := strconv.Atoi(strings.TrimSpace(line))
-		if convErr != nil || id == 0 {
+		if convErr != nil || !ValidWindowID(id) {
 			continue
 		}
 		if err := ctx.Err(); err != nil {

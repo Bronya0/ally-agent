@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"ally-dev/internal/tools/schemautil"
 	"ally-dev/internal/tools/toolcall"
@@ -231,10 +230,8 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 			ctx.Err() == nil && attempt < maxRetries && shouldRetryLLMError(streamErr) {
 			wait := llmRetryDelayForError(attempt+1, streamErr)
 			emitLLMRetryEvent(onEvent, attempt+1, maxRetries, streamErr, wait)
-			select {
-			case <-time.After(wait):
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			if waitErr := a.waitLLMRetry(ctx, wait); waitErr != nil {
+				return nil, waitErr
 			}
 			continue
 		}

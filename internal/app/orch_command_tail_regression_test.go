@@ -3,7 +3,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,16 +79,29 @@ func TestCommandPromotionFailureRetainsOutput(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(a.config.Workspace, "captured-output.txt"), []byte(output+"\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			command := "cat captured-output.txt; sleep 30"
+			command := "cat captured-output.txt; touch command-ready; sleep 30"
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			args, err := json.Marshal(CommandRequest{Command: command, Timeout: 1})
-			if err != nil {
-				t.Fatal(err)
-			}
-			result := a.executeTool(ctx, a.config, "promotion-test", "command", args)
-			data, ok := result.Data.(CommandResult)
-			if !result.OK || !ok || !data.TimedOut || data.Cancelled || data.PromotedToService || data.ExitCode != -1 {
+			timeout := make(chan time.Time, 1)
+			ready := filepath.Join(a.config.Workspace, "command-ready")
+			go func() {
+				ticker := time.NewTicker(time.Millisecond)
+				defer ticker.Stop()
+				for {
+					if _, err := os.Stat(ready); err == nil {
+						timeout <- time.Now()
+						return
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+					}
+				}
+			}()
+			data, err := a.runCommandWithTimer(ctx, a.config, CommandRequest{Command: command, Timeout: 1}, timeout)
+			result := toolResult{OK: err == nil, Data: data}
+			if !result.OK || !data.TimedOut || data.Cancelled || data.PromotedToService || data.ExitCode != -1 {
 				t.Fatalf("expected a failed timeout with structured output: %#v", result)
 			}
 			model := compactToolResultForModel("command", result, "")

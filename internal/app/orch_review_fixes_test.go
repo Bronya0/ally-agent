@@ -15,9 +15,10 @@ import (
 )
 
 func TestLocalEditStageHasIndependentCallBudgets(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ files, changes int }{{21, 1}, {5, 45}} {
 		t.Run(fmt.Sprintf("%dx%d", tc.files, tc.changes), func(t *testing.T) {
-			a := newApiTestApp(t)
+			a := newIsolatedToolTestApp(t)
 			var before, after strings.Builder
 			var changes []TextChange
 			for i := 0; i < tc.changes; i++ {
@@ -52,9 +53,10 @@ func TestLocalEditStageHasIndependentCallBudgets(t *testing.T) {
 }
 
 func TestLocalEditStageRecoveryBelongsToFailedCall(t *testing.T) {
+	t.Parallel()
 	for _, failedIndex := range []int{0, 1, 2} {
 		t.Run(fmt.Sprint(failedIndex), func(t *testing.T) {
-			a := newApiTestApp(t)
+			a := newIsolatedToolTestApp(t)
 			var calls []openai.ToolCall
 			for i := 0; i < 3; i++ {
 				p := fmt.Sprintf("file-%d.txt", i)
@@ -73,6 +75,13 @@ func TestLocalEditStageRecoveryBelongsToFailedCall(t *testing.T) {
 				calls = append(calls, stagedCall("edit", string(raw)))
 			}
 			for i, result := range a.executeLocalEditToolBatch(t.Context(), a.config, calls) {
+				wantCode := "E_EDIT_BATCH_ABORTED"
+				if i == failedIndex {
+					wantCode = "E_VERSION_MISMATCH"
+				}
+				if result.ErrorCode != wantCode {
+					t.Fatalf("call %d received another file's error: want %s, got %+v", i, wantCode, result)
+				}
 				if result.OK || (result.modelRead != nil) != (i == failedIndex) {
 					t.Fatalf("snapshot attached to wrong call %d (failed %d): %+v", i, failedIndex, result)
 				}
@@ -88,10 +97,92 @@ func TestLocalEditStageRecoveryBelongsToFailedCall(t *testing.T) {
 	}
 }
 
+func TestLocalEditBatchDistinctFailuresDoNotShareDiagnostics(t *testing.T) {
+	t.Parallel()
+	for first := 0; first < 3; first++ {
+		t.Run(fmt.Sprint(first), func(t *testing.T) {
+			a := newIsolatedToolTestApp(t)
+			files := []FileTextEdits{
+				{Path: "multi.txt", Version: hashVersion([]byte("old\nold\n")), Changes: []TextChange{{OldText: "old", NewText: "new"}}},
+				{Path: "range.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{LineRange: "9", NewText: "new"}}},
+				{Path: "stale.txt", Version: hashVersion([]byte("stale")), Changes: []TextChange{{OldText: "old", NewText: "new"}}},
+			}
+			originals := []string{"old\nold\n", "old\n", "old\n"}
+			codes := []string{"E_MULTI_MATCH", "E_RANGE_OOB", "E_VERSION_MISMATCH"}
+			for i, file := range files {
+				if err := os.WriteFile(filepath.Join(a.config.Workspace, file.Path), []byte(originals[i]), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var calls []openai.ToolCall
+			for i := 0; i < len(files); i++ {
+				raw, _ := json.Marshal(files[(first+i)%len(files)])
+				calls = append(calls, stagedCall("edit", string(raw)))
+			}
+			results := a.executeLocalEditToolBatch(t.Context(), a.config, calls)
+			if results[0].OK || results[0].ErrorCode != codes[first] || results[0].modelRead == nil {
+				t.Fatalf("first failed call lost its diagnosis: %+v", results[0])
+			}
+			for i, result := range results[1:] {
+				if result.OK || result.ErrorCode != "E_EDIT_BATCH_ABORTED" || result.modelRead != nil || result.Details != nil || strings.Contains(result.Error, files[first].Path) {
+					t.Fatalf("unprocessed call %d received another file's diagnosis: %+v", i+1, result)
+				}
+			}
+			for i, file := range files {
+				data, err := os.ReadFile(filepath.Join(a.config.Workspace, file.Path))
+				if err != nil || string(data) != originals[i] {
+					t.Fatalf("failed batch wrote %s: %q, %v", file.Path, data, err)
+				}
+			}
+		})
+	}
+}
+
+func TestLocalEditBatchErrorOwnershipWithoutRecovery(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"large-stale", "missing", "protected"} {
+		t.Run(kind, func(t *testing.T) {
+			a := newIsolatedToolTestApp(t)
+			peer := FileTextEdits{Path: "peer.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{OldText: "old", NewText: "new"}}}
+			if err := os.WriteFile(filepath.Join(a.config.Workspace, peer.Path), []byte("old\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			bad := FileTextEdits{Path: "bad.txt", Version: hashVersion([]byte("stale")), Changes: peer.Changes}
+			wantCode := ""
+			if kind == "large-stale" {
+				wantCode = "E_VERSION_MISMATCH"
+				if err := os.WriteFile(filepath.Join(a.config.Workspace, bad.Path), []byte(strings.Repeat("old\n", maxEditRecoveryBytes)), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if kind == "protected" {
+				bad.Path = ".git/config"
+				wantCode = "E_PROTECTED_PATH"
+			}
+			var calls []openai.ToolCall
+			for _, file := range []FileTextEdits{peer, bad} {
+				raw, _ := json.Marshal(file)
+				calls = append(calls, stagedCall("edit", string(raw)))
+			}
+			results := a.executeLocalEditToolBatch(t.Context(), a.config, calls)
+			if results[0].OK || results[0].ErrorCode != "E_EDIT_BATCH_ABORTED" || results[0].modelRead != nil || results[0].Details != nil {
+				t.Fatalf("healthy peer received file error: %+v", results[0])
+			}
+			if results[1].OK || results[1].ErrorCode != wantCode || results[1].modelRead != nil || results[1].Error == "" {
+				t.Fatalf("failed call lost snapshot-free error: %+v", results[1])
+			}
+			data, err := os.ReadFile(filepath.Join(a.config.Workspace, peer.Path))
+			if err != nil || string(data) != "old\n" {
+				t.Fatalf("aborted peer was modified: %q, %v", data, err)
+			}
+		})
+	}
+}
+
 func TestMcpSessionWaitContinuesWhenManagerStops(t *testing.T) {
+	t.Parallel()
 	for _, cancelled := range []bool{false, true} {
 		t.Run(fmt.Sprint(cancelled), func(t *testing.T) {
-			a := newApiTestApp(t)
+			a := newIsolatedToolTestApp(t)
 			m := NewMcpManager(a.config.Workspace, nil)
 			defer m.Shutdown()
 			a.mcpManager = m
@@ -123,6 +214,7 @@ func TestMcpSessionWaitContinuesWhenManagerStops(t *testing.T) {
 }
 
 func TestLocalCommandLogReservesActualByteCap(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// Eight active 64 MiB sinks fit the 512 MiB quota, even before they write.
 	for i := 0; i < 8; i++ {

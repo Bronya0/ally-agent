@@ -11,6 +11,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   assistantRowRenderState,
+  hasVisibleAssistantText,
+  normalizeAssistantBodyVisibility,
   codePreviewWindow,
   countLinesCapped,
   deleteAbsentCount,
@@ -141,6 +143,26 @@ test('expanded archives remain bounded instead of rendering the whole session', 
 test('assistant rows without visible content never enter the message list', () => {
   assert.equal(isRenderableMessage(ghost()), false, 'completed empty assistant row');
   assert.equal(isRenderableMessage({ ...ghost(), streaming: true, done: false, reasoningActive: true }), false, 'thinking-only streaming row');
+});
+
+test('invisible assistant text does not create a paragraph row, including restored snapshots', () => {
+  for (const content of ['', ' \n\t', '\u200b', '\u200c\u200d\u2060\ufeff', '\u00ad\u200e\ufe0f']) {
+    assert.equal(hasVisibleAssistantText(content), false);
+    const stored = { ...ghost(), content, hasBody: true };
+    const restored = normalizeAssistantBodyVisibility(stored);
+    assert.equal(restored.hasBody, false);
+    assert.equal(isRenderableMessage(restored), false);
+    assert.equal(isRenderableMessage({ ...ghost(), content }), false, 'legacy snapshot without a flag');
+    assert.equal(stored.hasBody, true, 'normalization must not mutate the source');
+    assert.equal(isRenderableMessage({ ...restored, attachments: [{ id: 'image' }] }), true);
+    assert.equal(isRenderableMessage({ ...restored, roundDurationText: '3s' }), true);
+  }
+  for (const content of ['正文', '👩‍💻', '❤️', '\u200btext', 'e\u0301']) {
+    const restored = normalizeAssistantBodyVisibility({ ...ghost(), content });
+    assert.equal(restored.hasBody, true);
+    assert.equal(restored.content, content, 'preserve formatting within visible text');
+    assert.equal(isRenderableMessage(restored), true);
+  }
 });
 
 test('every row that renders something stays renderable', () => {

@@ -99,6 +99,7 @@ func runPythonTransferBridge(t *testing.T, py string, payload map[string]any, st
 }
 
 func TestRemoteTransferUploadFileAndDirectory(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	localRoot := t.TempDir()
 	remoteRoot := t.TempDir()
@@ -181,6 +182,7 @@ func TestRemoteTransferUploadFileAndDirectory(t *testing.T) {
 }
 
 func TestRemoteTransferDownloadFileAndDirectory(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	remoteRoot := t.TempDir()
 	localRoot := t.TempDir()
@@ -236,6 +238,7 @@ func TestRemoteTransferDownloadFileAndDirectory(t *testing.T) {
 }
 
 func TestRemoteTransferUploadOverwriteDefense(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	remoteRoot := t.TempDir()
 	destFile := filepath.Join(remoteRoot, "exists.txt")
@@ -272,6 +275,7 @@ func TestRemoteTransferUploadOverwriteDefense(t *testing.T) {
 }
 
 func TestRemoteTransferSecurityFences(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	remoteRoot := t.TempDir()
 
@@ -549,6 +553,7 @@ func TestRemoteTransferUploadSensitiveDirectoryBlocked(t *testing.T) {
 }
 
 func TestRemoteTransferUploadArchiveFences(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	for _, name := range []string{"sibling.txt", "/dest/evil.txt", "dest/../evil.txt", "dest/.git/config"} {
 		t.Run(name, func(t *testing.T) {
@@ -570,6 +575,7 @@ func TestRemoteTransferUploadArchiveFences(t *testing.T) {
 }
 
 func TestRemoteTransferUploadExistingSymlinkParent(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root, outside := t.TempDir(), t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "dest"), 0o755); err != nil {
@@ -593,6 +599,7 @@ func TestRemoteTransferUploadExistingSymlinkParent(t *testing.T) {
 }
 
 func TestRemoteTransferDownloadHardlinks(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	pkg := filepath.Join(root, "pkg")
@@ -630,6 +637,7 @@ func TestRemoteTransferDownloadHardlinks(t *testing.T) {
 }
 
 func TestRemoteTransferDownloadReadErrorIsFailure(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "pkg"), 0o755); err != nil {
@@ -676,6 +684,7 @@ func TestDecodeRemoteTransferMarkerRejectsInvalidStatistics(t *testing.T) {
 }
 
 func TestRemoteTransferUploadTruncatedReplacementPreservesDestination(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	for _, directory := range []bool{false, true} {
 		root := t.TempDir()
@@ -709,6 +718,7 @@ func TestRemoteTransferUploadTruncatedReplacementPreservesDestination(t *testing
 }
 
 func TestRemoteTransferUploadReadOnlyDirectory(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	var buf bytes.Buffer
@@ -753,6 +763,7 @@ func TestRemoteTransferUploadReadOnlyDirectory(t *testing.T) {
 }
 
 func TestRemoteTransferUploadDuplicateEntryDoesNotClobber(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	var buf bytes.Buffer

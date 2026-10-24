@@ -577,6 +577,12 @@ func localCommandToolWarnings(commandLine string) []string {
 }
 
 func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req CommandRequest) (CommandResult, error) {
+	return a.runCommandWithTimer(parent, cfg, req, nil)
+}
+
+// A supplied deadline channel lets process integration tests signal timeout
+// after observing child readiness. Normal callers use the request's real timer.
+func (a *App) runCommandWithTimer(parent context.Context, cfg ConfigState, req CommandRequest, timeoutC <-chan time.Time) (CommandResult, error) {
 	defer a.invalidateGitStatus(cfg.Workspace)
 	if strings.TrimSpace(req.Command) == "" {
 		return CommandResult{}, codedToolError("E_BAD_COMMAND", errors.New("command is required"))
@@ -617,8 +623,11 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	// 原进程才能无缝接管。取消（ESC/关闭运行）仍然走 parent ctx 杀树。
 	runCtx, cancel := context.WithCancel(parent)
 	defer cancel()
-	timer := time.NewTimer(time.Duration(timeout) * time.Second)
-	defer timer.Stop()
+	if timeoutC == nil {
+		timer := time.NewTimer(time.Duration(timeout) * time.Second)
+		defer timer.Stop()
+		timeoutC = timer.C
+	}
 
 	shell := commandShell(req.Command, cfg.GitBashPath)
 	// 沙箱在 shell 外面包一层：命令自己怎么拼都绕不过去，[argv] 的其余参数
@@ -720,7 +729,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	if err == nil {
 		select {
 		case err = <-waitDone:
-		case <-timer.C:
+		case <-timeoutC:
 			// 超时收编：进程还活着（waitDone 未关），把原进程连同输出管道
 			// 一起移交给服务注册表，避免杀掉重跑撞 EADDRINUSE。
 			info, promoteErr := a.promoteTimedOutCommand(promoteCommandParams{

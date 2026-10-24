@@ -89,6 +89,14 @@ type Window struct {
 	Focused bool   `json:"focused,omitempty"`
 }
 
+// ValidWindowID reports whether id names a capture target. An id is the
+// platform's own handle: Windows HWNDs are signed pointers, so a handle whose
+// high bit is set arrives as a negative int and is still a valid target. Zero
+// is the only value that means "no window". Target selection, list resolution
+// and helper-response validation all consult this one predicate, so no stricter
+// copy can reject a handle the enumeration just produced.
+func ValidWindowID(id int) bool { return id != 0 }
+
 // ListOptions filters a platform window enumeration.
 type ListOptions struct {
 	// Title is a case-insensitive substring filter; empty lists everything.
@@ -268,7 +276,7 @@ func waitForFocus(ctx context.Context) error {
 // target beats both. Conflicting window sources (id + title) are a usage
 // error, as is a Region with impossible dimensions.
 func (o CaptureOptions) Target() (TargetKind, int, string, *Rect, error) {
-	if o.WindowID != 0 && strings.TrimSpace(o.WindowTitle) != "" {
+	if ValidWindowID(o.WindowID) && strings.TrimSpace(o.WindowTitle) != "" {
 		return 0, 0, "", nil, errors.New("windowId and windowTitle are mutually exclusive; pass one")
 	}
 	if o.Region != nil {
@@ -276,7 +284,7 @@ func (o CaptureOptions) Target() (TargetKind, int, string, *Rect, error) {
 			return 0, 0, "", nil, err
 		}
 	}
-	if o.WindowID != 0 || strings.TrimSpace(o.WindowTitle) != "" {
+	if ValidWindowID(o.WindowID) || strings.TrimSpace(o.WindowTitle) != "" {
 		return TargetWindow, o.WindowID, o.WindowTitle, nil, nil
 	}
 	if o.Region != nil {
@@ -341,7 +349,7 @@ func clipTitle(w Window) Window {
 // the list instead of guessing (the surveyed MCP tools silently took the
 // first match; that silent pick is the bug this refuses to copy).
 func ResolveWindow(windows []Window, id int, title string) (Window, error) {
-	if id != 0 {
+	if ValidWindowID(id) {
 		for _, w := range windows {
 			if w.ID == id {
 				return w, nil

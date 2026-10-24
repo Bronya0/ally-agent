@@ -32,9 +32,10 @@ func (c *editCheckContext) Err() error {
 }
 
 func TestEditCancellationWhileQueuedNeverWrites(t *testing.T) {
+	t.Parallel()
 	for _, batch := range []bool{false, true} {
 		t.Run(fmt.Sprintf("batch=%v", batch), func(t *testing.T) {
-			a := newApiTestApp(t)
+			a := newIsolatedToolTestApp(t)
 			count := 1
 			if batch {
 				count = 2
@@ -98,6 +99,7 @@ func TestEditCancellationWhileQueuedNeverWrites(t *testing.T) {
 }
 
 func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		original []byte
@@ -107,7 +109,7 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 		{"UTF8 NUL", []byte("old\n"), TextChange{OldText: "old", NewText: "a\x00b"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := newApiTestApp(t)
+			a := newIsolatedToolTestApp(t)
 			path := filepath.Join(a.config.Workspace, "source.txt")
 			if err := os.WriteFile(path, tc.original, 0600); err != nil {
 				t.Fatal(err)
@@ -134,8 +136,12 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 				t.Fatal(err)
 			}
 			batch := a.executeLocalEditToolBatch(context.Background(), a.config, []openai.ToolCall{stagedCall("edit", string(peerRaw)), stagedCall("edit", string(raw))})
-			for _, result := range batch {
-				if result.OK || result.ErrorCode != "E_EDIT_ENCODING" {
+			for i, result := range batch {
+				want := "E_EDIT_BATCH_ABORTED"
+				if i == 1 {
+					want = "E_EDIT_ENCODING"
+				}
+				if result.OK || result.ErrorCode != want {
 					t.Fatalf("invalid encoding did not abort peers: %#v", result)
 				}
 			}
@@ -157,6 +163,7 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 }
 
 func TestRemoteCommandLogQuotaIncludesActiveReservations(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name              string
 		completed, active int
@@ -169,7 +176,7 @@ func TestRemoteCommandLogQuotaIncludesActiveReservations(t *testing.T) {
 		{"active reservations alone exhaust quota", 1, 8, 1, false, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := newApiTestApp(t)
+			a := newIsolatedToolTestApp(t)
 			py := pickRemoteHelperPython(t)
 			dir := filepath.Join(a.config.Workspace, ".tmp")
 			if err := os.Mkdir(dir, 0700); err != nil {

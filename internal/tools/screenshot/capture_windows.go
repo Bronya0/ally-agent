@@ -134,6 +134,9 @@ func collectWindow(hwnd uintptr, state *windowEnumeration) uintptr {
 		return 1
 	}
 	state.windows = append(state.windows, Window{
+		// Keep the signed value: an HWND is a pointer, and hosts such as
+		// WebView2 produce handles with the high bit set (negative as int).
+		// ValidWindowID is the single rule for what counts as a real id.
 		ID: int(hwnd), Title: SanitizeTitle(title), Process: windowProcessName(hwnd),
 		X: rect.X, Y: rect.Y, Width: rect.Width, Height: rect.Height,
 		Focused: hwnd == state.foreground,
@@ -235,6 +238,8 @@ func windowProcessName(hwnd uintptr) string {
 // macOS (-l) and Linux (maim -i) paths already honour. focus restores a
 // minimized window and raises it first; occlusion alone does not need it.
 func captureWindow(ctx context.Context, win *Window, focus bool) (image.Image, error) {
+	// int -> uintptr preserves the bit pattern, so a negative id restores the
+	// exact signed pointer the enumeration recorded.
 	hwnd := uintptr(win.ID)
 	var (
 		frame      image.Image

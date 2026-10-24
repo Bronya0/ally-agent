@@ -134,10 +134,8 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		}
 		wait := llmRetryDelayForError(attempt, err)
 		emitLLMRetryEvent(onEvent, attempt, maxRetries, err, wait)
-		select {
-		case <-time.After(wait):
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		if waitErr := a.waitLLMRetry(ctx, wait); waitErr != nil {
+			return nil, waitErr
 		}
 		retryAfterCap.reset()
 		result, emitted, err = a.openAIChatStreamAttempt(ctx, cfg, client, streamReq, streamDone, onEvent)

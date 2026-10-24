@@ -120,6 +120,7 @@ func TestCommandLogGuidanceUsesMetadataWithoutPollutingCard(t *testing.T) {
 }
 
 func TestRemoteCommandPreservesLiteralReplacementCharacters(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	emitter := filepath.Join(root, "emit.py")

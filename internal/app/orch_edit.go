@@ -39,6 +39,20 @@ type preparedFileEdit struct {
 
 const maxEditRecoveryBytes = 8 * 1024
 
+// editFileError identifies the owner of a failed atomic edit without parsing
+// human-readable diagnostics or relying on an optional recovery snapshot.
+type editFileError struct {
+	path string
+	err  error
+}
+
+func (e *editFileError) Error() string { return e.err.Error() }
+func (e *editFileError) Unwrap() error { return e.err }
+
+func withEditFileError(path string, err error) error {
+	return &editFileError{path: path, err: err}
+}
+
 // editRecoveryError keeps the read payload out of Error(), JSON and UI events.
 // Only the model renderer consumes it, in the original failed tool result.
 type editRecoveryError struct {
@@ -124,30 +138,30 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 		file := filePlan.Edit
 		resolved := filePlan.ResolvedPath
 		if _, err := resolveReadFilePath(cfg, resolved); err != nil {
-			return MultiEditResult{}, err
+			return MultiEditResult{}, withEditFileError(file.Path, err)
 		}
 		rawBefore, info, err := read.ReadRawTextFile(resolved)
 		if err != nil {
-			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
+			return MultiEditResult{}, withEditFileError(file.Path, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err))
 		}
 		before, err := read.DecodeTextBytes(rawBefore)
 		if err != nil {
-			return MultiEditResult{}, err
+			return MultiEditResult{}, withEditFileError(file.Path, err)
 		}
 		beforeHash, beforeVersion := hashBytesAndVersion(before)
 		if !strings.EqualFold(file.Version, beforeVersion) {
 			err := codedToolError("E_VERSION_MISMATCH", fmt.Errorf("file %s expected version %s, current %s; use the current source and version before retrying (read again if no snapshot is attached)", file.Path, file.Version, beforeVersion))
-			return MultiEditResult{}, withEditRecovery(cfg, resolved, before, info.Size(), err)
+			return MultiEditResult{}, withEditFileError(file.Path, withEditRecovery(cfg, resolved, before, info.Size(), err))
 		}
 		text, ending, hadBOM := normalizeText(before)
 		applied, replacements, err := edit.ApplyBatchTextChanges(text, toEditChanges(file.Changes))
 		if err != nil {
 			err = fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
-			return MultiEditResult{}, withEditRecovery(cfg, resolved, before, info.Size(), err)
+			return MultiEditResult{}, withEditFileError(file.Path, withEditRecovery(cfg, resolved, before, info.Size(), err))
 		}
 		after, err := read.EncodeLike(rawBefore, applied.Content)
 		if err != nil {
-			return MultiEditResult{}, err
+			return MultiEditResult{}, withEditFileError(file.Path, err)
 		}
 		diff, removed, added := edit.GenerateEditDiffPreviewWithCounts(text, applied.Content, maxToolOutput)
 		classification := "edit"
@@ -227,7 +241,7 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 					commitErr = withEditRecovery(cfg, item.path, decoded, info.Size(), commitErr)
 				}
 			}
-			return MultiEditResult{}, commitErr
+			return MultiEditResult{}, withEditFileError(item.path, commitErr)
 		}
 		if err := sandboxedWriteFile(spec, roots, item.path, item.after, item.perm); err != nil {
 			rollbackErr := rollback()
@@ -235,7 +249,7 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 			if rollbackErr != nil {
 				msg += "; rollback errors: " + rollbackErr.Error()
 			}
-			return MultiEditResult{}, codedToolError("E_EDIT_COMMIT", errors.New(msg))
+			return MultiEditResult{}, withEditFileError(item.path, codedToolError("E_EDIT_COMMIT", errors.New(msg)))
 		}
 		committed = append(committed, i)
 	}
@@ -298,19 +312,20 @@ func (a *App) executeLocalEditToolBatch(ctx context.Context, cfg ConfigState, ca
 	}
 	edited, err := a.editFilesWithContext(ctx, cfg, files)
 	if err != nil {
-		fail(err)
-		var recovery *editRecoveryError
-		if errors.As(err, &recovery) && len(recovery.read.Files) == 1 {
-			failed, ok := localMutationTarget(cfg, recovery.read.Files[0].Path)
-			attached := false
+		var fileErr *editFileError
+		if errors.As(err, &fileErr) {
+			fail(codedToolError("E_EDIT_BATCH_ABORTED", errors.New("edit batch aborted because another edit failed; inspect the failing call before retrying the batch")))
+			failed, ok := localMutationTarget(cfg, fileErr.path)
 			for i, file := range files {
 				target, valid := localMutationTarget(cfg, file.Path)
-				if ok && valid && target.key == failed.key && !attached {
-					attached = true
-					continue
+				if ok && valid && target.key == failed.key {
+					results[i] = toolErrorResult(err)
+					break
 				}
-				results[i].modelRead = nil
 			}
+		} else {
+			// Cancellation and workspace-wide failures apply to every call.
+			fail(err)
 		}
 		return results
 	}

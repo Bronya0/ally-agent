@@ -49,7 +49,7 @@ func TestStreamModelResponseMultiKeyFailover(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newModelTestApp()
 	cfg := ConfigState{
 		APIFormat: apiFormatOpenAIChat,
 		BaseURL:   server.URL,
@@ -106,7 +106,7 @@ func TestStreamModelResponseMultiKeySkipsCoolingKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newModelTestApp()
 	cfg := ConfigState{
 		APIFormat: apiFormatOpenAIChat,
 		BaseURL:   server.URL,
@@ -145,7 +145,7 @@ func TestStreamModelResponseAllCoolingProbesAndSucceeds(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newModelTestApp()
 	cfg := ConfigState{
 		APIFormat: apiFormatOpenAIChat,
 		BaseURL:   server.URL,
@@ -183,7 +183,7 @@ func TestStreamModelResponseAllCoolingProbeReturnsRealError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newModelTestApp()
 	cfg := ConfigState{
 		APIFormat: apiFormatOpenAIChat,
 		BaseURL:   server.URL,
@@ -229,7 +229,7 @@ func TestStreamModelResponseNoSwitchAfterEmit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newModelTestApp()
 	cfg := ConfigState{
 		APIFormat: apiFormatOpenAIChat,
 		BaseURL:   server.URL,
@@ -271,7 +271,7 @@ func TestStreamModelResponseSingleKeyNoFailover(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newModelTestApp()
 	cfg := ConfigState{
 		APIFormat:  apiFormatOpenAIChat,
 		BaseURL:    server.URL,
@@ -317,7 +317,7 @@ func TestStreamOpenAIChatPreservesMaxReasoningEffort(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newModelTestApp()
 	cfg := ConfigState{
 		APIFormat:       apiFormatOpenAIChat,
 		BaseURL:         server.URL,

@@ -10,6 +10,7 @@ package app
 import (
 	"context"
 	"os"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -20,29 +21,31 @@ import (
 func TestWindowCloseFallsBackWhenFrontendDoesNotRespond(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var guard windowCloseGuard
-		requests, quits := 0, 0
-		requestClose := func() { requests++ }
-		quit := func() { quits++ }
+		// guard.request 的兜底计时器在另一个 goroutine 里跑：计数器用原子量，
+		// 否则 -race 会在计时器与断言之间报数据竞争。
+		var requests, quits atomic.Int32
+		requestClose := func() { requests.Add(1) }
+		quit := func() { quits.Add(1) }
 		guard.request(t.Context(), windowCloseFlushWait, requestClose, quit)
-		if requests != 1 || quits != 0 {
-			t.Fatalf("close did not give frontend time to flush: requests=%d quits=%d", requests, quits)
+		if requests.Load() != 1 || quits.Load() != 0 {
+			t.Fatalf("close did not give frontend time to flush: requests=%d quits=%d", requests.Load(), quits.Load())
 		}
 		time.Sleep(windowCloseFlushWait - time.Second)
 		guard.request(t.Context(), windowCloseFlushWait, requestClose, quit)
 		synctest.Wait()
-		if requests != 1 || quits != 0 {
-			t.Fatalf("repeated close duplicated request or quit early: requests=%d quits=%d", requests, quits)
+		if requests.Load() != 1 || quits.Load() != 0 {
+			t.Fatalf("repeated close duplicated request or quit early: requests=%d quits=%d", requests.Load(), quits.Load())
 		}
 		time.Sleep(time.Second)
 		synctest.Wait()
-		if quits != 1 {
-			t.Fatalf("unresponsive frontend prevented fallback: quits=%d", quits)
+		if quits.Load() != 1 {
+			t.Fatalf("unresponsive frontend prevented fallback: quits=%d", quits.Load())
 		}
 		guard.request(t.Context(), windowCloseFlushWait, requestClose, quit)
 		time.Sleep(windowCloseFlushWait)
 		synctest.Wait()
-		if quits != 1 {
-			t.Fatalf("fallback repeated: quits=%d", quits)
+		if quits.Load() != 1 {
+			t.Fatalf("fallback repeated: quits=%d", quits.Load())
 		}
 	})
 }
@@ -52,12 +55,12 @@ func TestWindowCloseFallbackSkipsNormalShutdown(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		var guard windowCloseGuard
-		quits := 0
-		guard.request(ctx, windowCloseFlushWait, cancel, func() { quits++ })
+		var quits atomic.Int32
+		guard.request(ctx, windowCloseFlushWait, cancel, func() { quits.Add(1) })
 		time.Sleep(windowCloseFlushWait)
 		synctest.Wait()
-		if quits != 0 {
-			t.Fatalf("fallback interfered with normal shutdown: quits=%d", quits)
+		if quits.Load() != 0 {
+			t.Fatalf("fallback interfered with normal shutdown: quits=%d", quits.Load())
 		}
 	})
 }

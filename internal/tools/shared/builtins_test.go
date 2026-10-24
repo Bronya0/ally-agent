@@ -335,6 +335,8 @@ func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 		wantAbsent   string
 	}{
 		{"read pads tailLines with 0", "read", `{"files":[{"path":"a.go","startLine":5,"endLine":20,"tailLines":0}]}`, false, "", ""},
+		{"edit accepts a single line", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"12","newText":"x"}]}`, false, "", ""},
+		{"remote_edit accepts a single line", "remote_edit", `{"target":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"lineRange":"12","newText":"x"}]}`, false, "", ""},
 		{"edit pads oldText with an empty string", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","oldText":""}]}`, false, "", ""},
 		{"edit pads lineRange with an empty string", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":""}]}`, false, "", ""},
 		{"edit pads lineRange with blanks", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":"  "}]}`, false, "", ""},

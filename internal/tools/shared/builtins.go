@@ -153,7 +153,7 @@ func chatToolsUncached() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"action":      map[string]any{"type": "string", "enum": []string{"capture", "list"}, "description": "capture (default) or list (return visible windows instead)."},
-				"windowId":    map[string]any{"type": "integer", "minimum": 1, "description": "Window id from action=list."},
+				"windowId":    map[string]any{"type": "integer", "description": "Window id from action=list; pass the exact value (ids are platform handles and may be negative)."},
 				"windowTitle": map[string]any{"type": "string", "minLength": 1, "description": "Case-insensitive substring of one window title or process name; must match exactly one window."},
 				"focus":       map[string]any{"type": "boolean", "description": "Restore and raise the target window before capturing (default false)."},
 				"display":     map[string]any{"type": "integer", "minimum": 0, "description": "Monitor index (0 = primary). Capture only."},
@@ -563,9 +563,9 @@ func batchReadFilesSchema() map[string]any {
 }
 
 // editLineRangeOptionalPattern is what the change object's own lineRange property
-// declares: a real range, or a blank value. The runtime picks the source by
+// declares: a single line, a range, or a blank value. The runtime picks the source by
 // effective value (strings.TrimSpace(change.LineRange) != "", tools/edit/apply.go).
-const editLineRangeOptionalPattern = `^(?:\s*|[1-9][0-9]*-[1-9][0-9]*)$`
+const editLineRangeOptionalPattern = `^(?:\s*|[1-9][0-9]*(?:-[1-9][0-9]*)?)$`
 
 // sshTargetSchema is the `target` argument every remote_* tool takes: the alias
 // plus the absolute workspace path on that host. One declaration keeps the five
@@ -636,7 +636,7 @@ func editChangeSchema(sourceTool string) map[string]any {
 			},
 			"lineRange": map[string]any{
 				"type": "string", "pattern": editLineRangeOptionalPattern,
-				"description": fmt.Sprintf("Inclusive whole-line A-B range from `%s`'s numbered output, for a large block replacement or deletion. Mutually exclusive with oldText; provide either oldText or lineRange. Align the range with the exact first and last lines you mean — a closing brace inside the range must be included, one outside stays untouched. All ranges use the original `%s` version, so never adjust for earlier changes.", sourceTool, sourceTool),
+				"description": fmt.Sprintf("Inclusive whole-line A-B range from `%s`'s numbered output, or a single line A (e.g. \"12\" means \"12-12\"). Use for whole-line replacements or deletions. Mutually exclusive with oldText; provide either oldText or lineRange. Align the range with the exact first and last lines you mean — a closing brace inside the range must be included, one outside stays untouched. All ranges use the original `%s` version, so never adjust for earlier changes.", sourceTool, sourceTool),
 			},
 			"newText": map[string]any{
 				"type":        "string",

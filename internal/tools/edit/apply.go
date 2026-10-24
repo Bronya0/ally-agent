@@ -416,14 +416,16 @@ func ReindentReplacementForMatch(content, oldText, newText string, match indenta
 	return result, true
 }
 
-// ParseLineRange parses an inclusive 1-based A-B range. Reversed and
-// shorthand forms are rejected rather than guessed because this is a write
-// target, not a display request.
+// ParseLineRange parses an inclusive 1-based A-B range, or a single line A.
+// Reversed and open-ended ranges are rejected rather than guessed.
 func ParseLineRange(value string) (int, int, error) {
 	value = strings.TrimSpace(value)
 	parts := strings.Split(value, "-")
+	if len(parts) == 1 {
+		parts = append(parts, parts[0])
+	}
 	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("invalid lineRange %q; use inclusive A-B form such as \"12-24\"", value)
+		return 0, 0, fmt.Errorf("invalid lineRange %q; use a single line such as \"12\" or inclusive A-B form such as \"12-24\"", value)
 	}
 	start, err := strconv.Atoi(strings.TrimSpace(parts[0]))
 	if err != nil || start < 1 {

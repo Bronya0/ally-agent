@@ -21,7 +21,9 @@ import (
 // through the production executeTool boundary.
 func kbTestSetup(t *testing.T) (*App, ConfigState, context.Context, string) {
 	t.Helper()
-	app := NewApp()
+	// newIsolatedToolTestApp keeps every fixture inside t.TempDir and leaves the
+	// package-level singleton alone, so callers may run in parallel.
+	app := newIsolatedToolTestApp(t)
 	dir := t.TempDir()
 	sources := filepath.Join(dir, "sources")
 	if err := os.MkdirAll(sources, 0o755); err != nil {
@@ -70,6 +72,7 @@ func jsonQuote(s string) string {
 }
 
 func TestKBDenyBlocksCreateEditDeleteViaExecuteTool(t *testing.T) {
+	t.Parallel()
 	app, cfg, ctx, dir := kbTestSetup(t)
 
 	// create under sources/ is denied (relative and absolute forms).
@@ -122,6 +125,7 @@ func TestKBDenyBlocksCreateEditDeleteViaExecuteTool(t *testing.T) {
 }
 
 func TestKBDenyBlocksCommandWriteTargets(t *testing.T) {
+	t.Parallel()
 	app, cfg, ctx, dir := kbTestSetup(t)
 
 	res := app.executeTool(ctx, cfg, "s-1", "command", []byte(`{"command":"echo hi > sources/out.txt"}`))
@@ -151,6 +155,7 @@ func TestKBDenyBlocksCommandWriteTargets(t *testing.T) {
 // source operand has to be treated as a mutation target. Inspecting destinations
 // only let an ordinary `mv` carry the read-only originals out of sources/.
 func TestKBDenyBlocksMoveSourceOutOfSources(t *testing.T) {
+	t.Parallel()
 	app, cfg, ctx, dir := kbTestSetup(t)
 
 	res := app.executeTool(ctx, cfg, "s-1", "command", []byte(`{"command":"mv sources/note.md ."}`))

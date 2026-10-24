@@ -321,7 +321,7 @@ func TestMcpSSEConnectionOutlivesStartupBudgetAndCaller(t *testing.T) {
 	defer m.Shutdown()
 	m.SetNetworkConfigProvider(func() ConfigState { return ConfigState{AllowPrivateNetwork: boolPtr(true), ProxyMode: "off"} })
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
-	established, err := m.initializeMcpClient(ctx, "echo", McpServerConfig{Transport: "sse", URL: endpoint.URL + "/sse", StartupTimeoutSec: 0.2})
+	established, err := m.initializeMcpClient(ctx, "echo", McpServerConfig{Transport: "sse", URL: endpoint.URL + "/sse", StartupTimeoutSec: 0.05})
 	cancel()
 	if err != nil {
 		t.Fatal(err)
@@ -329,8 +329,10 @@ func TestMcpSSEConnectionOutlivesStartupBudgetAndCaller(t *testing.T) {
 	defer established.client.Close()
 	defer established.token.stop()
 	// Exceed the now-detached startup budget; neither that timer nor canceling
-	// the establishing caller may tear down the live SSE stream.
-	time.Sleep(250 * time.Millisecond)
+	// the establishing caller may tear down the live SSE stream. The wait only has
+	// to clear the budget, so keep it just above it instead of burning a quarter
+	// second per run.
+	time.Sleep(80 * time.Millisecond)
 	callCtx, stop := context.WithTimeout(t.Context(), time.Second)
 	defer stop()
 	response, err := established.client.CallTool(callCtx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "echo"}})

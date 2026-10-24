@@ -76,10 +76,11 @@ func TestRootGitignoreMatcherSupportsRecursiveNegatedAndAnchoredRules(t *testing
 }
 
 func TestWorkspaceMapCacheInvalidation(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTestFile(t, root, "go.mod", "module example\n")
 
-	app := NewApp()
+	app := newIsolatedToolTestApp(t)
 	cfg := ConfigState{Workspace: root}
 	first := app.workspaceMapContext(cfg)
 	mustContain(t, first, "go.mod")
@@ -94,10 +95,11 @@ func TestWorkspaceMapCacheInvalidation(t *testing.T) {
 }
 
 func TestSessionWorkspaceMapFrozenPerSession(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTestFile(t, root, "go.mod", "module example\n")
 
-	app := NewApp()
+	app := newIsolatedToolTestApp(t)
 	cfg := ConfigState{Workspace: root}
 	first := app.sessionWorkspaceMap("s-freeze", cfg)
 	mustContain(t, first, "go.mod")

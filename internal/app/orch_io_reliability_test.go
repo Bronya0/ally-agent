@@ -18,9 +18,10 @@ import (
 )
 
 func TestLocalEditStageCommitsTogether(t *testing.T) {
+	t.Parallel()
 	for _, stale := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stale=%v", stale), func(t *testing.T) {
-			a := newApiTestApp(t)
+			a := newIsolatedToolTestApp(t)
 			cfg := a.config
 			cfg.ToolConcurrency = 1
 			var calls []openai.ToolCall
@@ -59,7 +60,8 @@ func TestLocalEditStageCommitsTogether(t *testing.T) {
 }
 
 func TestEditPreservesUTF16AndReturnedVersion(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedToolTestApp(t)
 	p := filepath.Join(a.config.Workspace, "utf16.txt")
 	before := []byte{0xff, 0xfe, 'a', 0, '\r', 0, '\n', 0}
 	if err := os.WriteFile(p, before, 0600); err != nil {
@@ -90,7 +92,8 @@ func TestEditPreservesUTF16AndReturnedVersion(t *testing.T) {
 }
 
 func TestEditRollbackPreservesRawUTF16(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedToolTestApp(t)
 	root := a.config.Workspace
 	before := []byte{0xff, 0xfe, 'a', 0, '\n', 0}
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), before, 0600); err != nil {
@@ -119,6 +122,18 @@ func TestEditRollbackPreservesRawUTF16(t *testing.T) {
 	if toolErrorCode(err) != "E_EDIT_COMMIT" {
 		t.Fatalf("expected commit refusal: %v", err)
 	}
+	var calls []openai.ToolCall
+	for _, file := range []FileTextEdits{
+		{Path: "a.txt", Version: hashVersion([]byte("a\n")), Changes: []TextChange{{OldText: "a", NewText: "A"}}},
+		{Path: "sub/b.txt", Version: hashVersion([]byte("b\n")), Changes: []TextChange{{OldText: "b", NewText: "B"}}},
+	} {
+		raw, _ := json.Marshal(file)
+		calls = append(calls, stagedCall("edit", string(raw)))
+	}
+	results := a.executeLocalEditToolBatch(t.Context(), a.config, calls)
+	if results[0].ErrorCode != "E_EDIT_BATCH_ABORTED" || results[1].ErrorCode != "E_EDIT_COMMIT" {
+		t.Fatalf("commit error was not assigned to its file: %+v", results)
+	}
 	after, err := os.ReadFile(filepath.Join(root, "a.txt"))
 	if err != nil || !bytes.Equal(after, before) {
 		t.Fatalf("rollback converted UTF16: %x %v", after, err)
@@ -126,7 +141,8 @@ func TestEditRollbackPreservesRawUTF16(t *testing.T) {
 }
 
 func TestTinyReadReceiptSavesContext(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedToolTestApp(t)
 	if err := os.WriteFile(filepath.Join(a.config.Workspace, "tiny.txt"), []byte("ok\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +162,8 @@ func TestTinyReadReceiptSavesContext(t *testing.T) {
 }
 
 func TestReadBatchKeepsExplicitSourceRangesWhole(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedToolTestApp(t)
 	req := BatchReadRequest{}
 	for i := 0; i < 20; i++ {
 		p := fmt.Sprintf("file-%d.txt", i)
@@ -167,7 +184,8 @@ func TestReadBatchKeepsExplicitSourceRangesWhole(t *testing.T) {
 }
 
 func TestLargeLogTailLocalAndRemoteShareReadOnlyContract(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedToolTestApp(t)
 	py := pickRemoteHelperPython(t)
 	p := filepath.Join(a.config.Workspace, "big.log")
 	if err := os.WriteFile(p, []byte(strings.Repeat("log line\n", 4*1024*1024)+"FINAL_ERROR\n"), 0600); err != nil {
@@ -203,7 +221,8 @@ func TestLargeLogTailLocalAndRemoteShareReadOnlyContract(t *testing.T) {
 }
 
 func TestMissingReadBlocksDependentStageAndCancellationIsBounded(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedToolTestApp(t)
 	r, err := a.batchReadFilesWithConfig(a.config, BatchReadRequest{Files: []BatchReadFileRequest{{Path: "missing.txt"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -223,6 +242,7 @@ func TestMissingReadBlocksDependentStageAndCancellationIsBounded(t *testing.T) {
 }
 
 func TestCommandLogFailureKeepsTailAndReportsPartial(t *testing.T) {
+	t.Parallel()
 	buf := &limitedBuffer{limit: 8, tail: newRollingBuffer(128)}
 	tw := &teeWriter{primary: buf, spillDir: t.TempDir()}
 	buf.onTruncate = tw.startSpill
@@ -244,7 +264,8 @@ func TestCommandLogFailureKeepsTailAndReportsPartial(t *testing.T) {
 }
 
 func TestRemoteWriteChecksRawSnapshotBeforeCommit(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedToolTestApp(t)
 	py := pickRemoteHelperPython(t)
 	p := filepath.Join(a.config.Workspace, "sample.txt")
 	before := []byte{0xff, 0xfe, 'a', 0, '\r', 0, '\n', 0}
@@ -283,7 +304,8 @@ func TestRemoteWriteChecksRawSnapshotBeforeCommit(t *testing.T) {
 }
 
 func TestRemoteReadRejectsNonAdvancingBatch(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedToolTestApp(t)
 	attempts := 0
 	a.remoteReadBatchFn = func(_ context.Context, _ remoteTarget, paths []string) ([]remoteReadBatchItem, []string, error) {
 		attempts++
@@ -301,7 +323,8 @@ func TestRemoteReadRejectsNonAdvancingBatch(t *testing.T) {
 }
 
 func TestRemoteCommandSavesRecoverableLog(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedToolTestApp(t)
 	py := pickRemoteHelperPython(t)
 	command := "printf 'BEGIN\\n%0140000d\\nFINAL_ERROR\\n' 0"
 	if runtime.GOOS == "windows" {

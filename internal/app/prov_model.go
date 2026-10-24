@@ -419,6 +419,27 @@ func llmRetryDelay(attempt int) time.Duration {
 	return d
 }
 
+func (a *App) waitLLMRetry(ctx context.Context, delay time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if a.retryWait != nil {
+		return a.retryWait(ctx, delay)
+	}
+	return waitRetryTimer(ctx, delay)
+}
+
+func waitRetryTimer(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return ctx.Err()
+	}
+}
+
 // maxRetryAfterWait 是服务端 Retry-After 建议等待时间的上限兜底:个别网关会
 // 返回几分钟甚至更大的值,无上限照单全收会把用户困在不可取消的长等待里。
 // 超过上限时按上限等待后重试,由服务端再次裁决。
@@ -780,10 +801,8 @@ func (a *App) streamModelResponseInner(ctx context.Context, cfg ConfigState, mod
 			// 打向同一故障端点。全部冷却后的等待由上面的冷却分支承担,
 			// 不再叠加退避。
 			wait = llmRetryDelayForError(retries, err)
-			select {
-			case <-time.After(wait):
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			if waitErr := a.waitLLMRetry(ctx, wait); waitErr != nil {
+				return nil, waitErr
 			}
 		}
 		emitLLMRetryEventForKey(onEvent, retries, llmRetries, err, wait, idx, len(keys))

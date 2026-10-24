@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"strings"
-	"time"
 
 	"ally-dev/internal/tools/schemautil"
 	"ally-dev/internal/tools/toolcall"
@@ -59,10 +58,8 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 		wait := llmRetryDelayForError(attempt, err)
 		notePerfRetry(ctx, err, wait)
 		emitLLMRetryEvent(onEvent, attempt, maxRetries, err, wait)
-		select {
-		case <-time.After(wait):
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		if waitErr := a.waitLLMRetry(ctx, wait); waitErr != nil {
+			return nil, waitErr
 		}
 		result, emitted, err = a.openAIResponsesStreamAttempt(ctx, cfg, body, messages, onEvent)
 	}

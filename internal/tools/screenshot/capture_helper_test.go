@@ -126,6 +126,44 @@ func TestCaptureCommandResultAndFailure(t *testing.T) {
 	}
 }
 
+// A Windows HWND is a signed pointer: hosts such as WebView2 report handles
+// with the high bit set, which arrive here as negative ints. The helper
+// response must accept them, otherwise a window the list just returned can
+// never be captured.
+func TestCaptureHelperAcceptsSignedWindowHandle(t *testing.T) {
+	img, err := EncodeForModel(image.NewRGBA(image.Rect(0, 0, 4, 3)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const signedID = -989130788
+	data, err := json.Marshal(captureHelperResult{
+		Mime: img.Mime, Data: img.Data,
+		Source: CaptureSource{Kind: TargetWindow, Window: &Window{ID: signedID}, OriginalWidth: 4, OriginalHeight: 3},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, source, err := decodeCaptureHelperResult(data)
+	if err != nil || source.Window == nil || source.Window.ID != signedID {
+		t.Fatalf("signed window handle rejected: source=%+v err=%v", source, err)
+	}
+	if _, _, err := decodeCaptureHelperResult(mustJSON(t, captureHelperResult{
+		Mime: img.Mime, Data: img.Data,
+		Source: CaptureSource{Kind: TargetWindow, Window: &Window{ID: 0}, OriginalWidth: 4, OriginalHeight: 3},
+	})); !errors.Is(err, ErrCaptureFailed) {
+		t.Fatalf("zero id must stay invalid, got %v", err)
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func TestCaptureHelperPipeAndImageLimits(t *testing.T) {
 	output := &captureOutputBuffer{limit: 17}
 	_, _ = io.Copy(output, strings.NewReader(strings.Repeat("x", 65536)))

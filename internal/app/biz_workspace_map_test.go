@@ -18,6 +18,7 @@ import (
 // TestWorkspaceMapFoldingAndSize 验证：目录直接子项超过预算后折叠为
 // "+N more files"，文件显示大小，目录节点保留。
 func TestWorkspaceMapFoldingAndSize(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	sub := filepath.Join(root, "sub")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
@@ -44,6 +45,7 @@ func TestWorkspaceMapFoldingAndSize(t *testing.T) {
 // TestWorkspaceMapRootPlaceholderIndent 验证根目录直接子项超预算时，
 // 折叠占位以 0 级缩进显示（不缩进、不跑到错误层级）。
 func TestWorkspaceMapRootPlaceholderIndent(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for i := 0; i < 60; i++ {
 		name := "file" + string(rune('a'+i/26)) + string(rune('a'+i%26))
@@ -61,6 +63,7 @@ func TestWorkspaceMapRootPlaceholderIndent(t *testing.T) {
 // .env.example/.sample/.template 模板保留（与原 isWorkspaceMapSensitiveFile
 // 语义一致，rg 路径和 walkdir 回退都应满足）。
 func TestWorkspaceMapExcludesSensitiveEnv(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for _, name := range []string{".env", ".env.local", ".env.production", ".env.example", ".env.sample", ".env.template"} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte("SECRET=1"), 0o644); err != nil {
@@ -87,6 +90,7 @@ func TestWorkspaceMapExcludesSensitiveEnv(t *testing.T) {
 // node_modules（硬编码兜底）与 .gitignore 命中路径被整棵跳过，正常源码保留；
 // includeIgnored=true（文件浏览器语义）时全部可见。
 func TestListFilesSkipsIgnoredByDefault(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("dist/\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -102,7 +106,7 @@ func TestListFilesSkipsIgnoredByDefault(t *testing.T) {
 		}
 	}
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 
 	defaults, err := app.listFilesWithConfig(cfg, ListFilesRequest{})
@@ -144,6 +148,7 @@ func TestListFilesSkipsIgnoredByDefault(t *testing.T) {
 // includeHidden+includeIgnored 也永远剪掉 .git（对模型纯噪声且挤占条目
 // 限额），而 UI 文件浏览器（ModelFacing=false）仍能看到 .git。
 func TestListFilesModelFacingAlwaysPrunesVCSDirs(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for _, dir := range []string{".git/hooks", ".git/objects", "src"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
@@ -156,7 +161,7 @@ func TestListFilesModelFacingAlwaysPrunesVCSDirs(t *testing.T) {
 		}
 	}
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 
 	modelView, err := app.listFilesWithConfig(cfg, ListFilesRequest{IncludeHidden: true, IncludeIgnored: true, ModelFacing: true})
@@ -189,6 +194,7 @@ func TestListFilesModelFacingAlwaysPrunesVCSDirs(t *testing.T) {
 
 // TestWorkspaceMapZeroByteFileShowsSize 验证 0 字节文件也显示大小（"0 B"）。
 func TestWorkspaceMapZeroByteFileShowsSize(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "empty.txt"), nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -202,6 +208,7 @@ func TestWorkspaceMapZeroByteFileShowsSize(t *testing.T) {
 // TestWorkspaceMapDeepDirsPruned 验证超过 maxDepth 的目录节点不插入
 // （深层目录链不会吃光全局配额），但 maxDepth 内的目录节点保留。
 func TestWorkspaceMapDeepDirsPruned(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	deep := filepath.Join(root, "a", "b", "c", "d", "e") // depth 5 > maxDepth 3
 	if err := os.MkdirAll(deep, 0o755); err != nil {
@@ -228,6 +235,7 @@ func TestWorkspaceMapDeepDirsPruned(t *testing.T) {
 // TestWorkspaceMapGlobalLimitStillHolds 验证全局 320 硬停仍然生效：
 // 多个大目录叠加后条目超限，map 标记 truncated=true（折叠递增不得绕过硬停）。
 func TestWorkspaceMapGlobalLimitStillHolds(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for d := 0; d < 7; d++ {
 		dir := filepath.Join(root, "dir"+string(rune('0'+d)))
@@ -249,6 +257,7 @@ func TestWorkspaceMapGlobalLimitStillHolds(t *testing.T) {
 
 // TestFormatMapFileSize 验证大小格式：B/KB/MB 边界。
 func TestFormatMapFileSize(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   int64
 		want string
@@ -268,6 +277,7 @@ func TestFormatMapFileSize(t *testing.T) {
 // TestListFilesLimitClampsToMax 验证 limit 超上限时按封顶（1000）处理，
 // 而不是重置回默认值 200：请求 5000 条时应拿到目录里的全部 300 个条目。
 func TestListFilesLimitClampsToMax(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for i := 0; i < 300; i++ {
 		name := filepath.Join(root, "f"+strings.Repeat("x", i/100)+"_"+strings.Repeat("y", i%100)+".txt")
@@ -275,7 +285,7 @@ func TestListFilesLimitClampsToMax(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 	result, err := app.listFilesWithConfig(cfg, ListFilesRequest{Limit: 5000})
 	if err != nil {
@@ -292,6 +302,7 @@ func TestListFilesLimitClampsToMax(t *testing.T) {
 // TestListFilesMarksSymlinks 验证符号链接条目带 Symlink 标记且不展开为
 // 目录（WalkDir 不跟随链接）。Windows 上创建符号链接需要特权，跳过。
 func TestListFilesMarksSymlinks(t *testing.T) {
+	t.Parallel()
 	if goruntime.GOOS == "windows" {
 		t.Skip("creating symlinks on Windows requires elevated privileges")
 	}
@@ -308,7 +319,7 @@ func TestListFilesMarksSymlinks(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, "real", "a.txt"), filepath.Join(root, "link-file")); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 	result, err := app.listFilesWithConfig(cfg, ListFilesRequest{MaxDepth: 1})
 	if err != nil {

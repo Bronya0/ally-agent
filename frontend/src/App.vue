@@ -771,6 +771,8 @@ import { fmtCompact, fmtDuration, formatBytes } from './utils/format.mjs';
 import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
 import {
   assistantRowRenderState,
+  hasVisibleAssistantText,
+  normalizeAssistantBodyVisibility,
   countLinesCapped,
   deleteAbsentCount,
   deleteFailedCount,
@@ -4288,7 +4290,7 @@ async function loadSessionMessages(session) {
       session.createdAt = snapshot.createdAt || session.createdAt || Date.now();
       session.updatedAt = snapshot.updatedAt || session.updatedAt || session.createdAt;
       displayMessagesCacheBySession.delete(session.id);
-      session.messages = messages.map((item) => ({
+      session.messages = messages.map((item) => normalizeAssistantBodyVisibility({
         ...item,
         streaming: false,
         done: item.role === 'assistant' ? true : !!item.done,
@@ -4944,7 +4946,9 @@ function flushStreamBuffer(runId) {
     last.content += buffer.content;
     // 一次性标志：正文已开始输出。统计占位行据此渲染（不直接读 content，
     // 避免父级渲染 effect 订阅流式增量）；纯思考/工具阶段的空消息不占位。
-    last.hasBody = true;
+    // Keep this a monotonic visibility signal so the message list never has
+    // to subscribe to the whole streaming body. Invisible deltas draw no row.
+    last.hasBody = last.hasBody === true || hasVisibleAssistantText(buffer.content);
   }
   // Thinking updates only change the composer status, not the chat scroll position.
   if (session.id === activeSessionId.value && hadContent) {
@@ -7754,7 +7758,7 @@ function sanitizeStoredMessages(messages) {
 }
 
 function sanitizeStoredMessage(msg) {
-  const next = { ...msg };
+  const next = { ...normalizeAssistantBodyVisibility(msg) };
   next.content = truncateStoredText(next.content, MAX_STORED_MESSAGE_CHARS, t('app.cache.contentTrimmed'));
   // Thinking counts and phase state are transient composer status, not history.
   delete next.reasoningChars;

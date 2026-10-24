@@ -29,10 +29,13 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	cleanupValidationGoCache()
+	os.Exit(code)
 }
 
 func TestScreenshotScaledMetadataMatchesImage(t *testing.T) {
+	t.Parallel()
 	frame, scaled := screenshot.ScaleForModel(image.NewRGBA(image.Rect(0, 0, 2560, 1440)))
 	img, err := screenshot.EncodeForModel(frame)
 	if err != nil {
@@ -102,6 +105,7 @@ func TestScreenshotRejectsConflictingTargets(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: t.TempDir()}
 	for _, args := range []string{
+		`{"windowId":-989130788,"windowTitle":"x"}`,
 		`{"windowId":1,"windowTitle":"x"}`,
 		`{"windowId":1,"region":{"x":0,"y":0,"width":10,"height":10}}`,
 		`{"windowTitle":"x","region":{"x":0,"y":0,"width":10,"height":10}}`,
@@ -129,8 +133,9 @@ func TestScreenshotRejectsBadRegion(t *testing.T) {
 }
 
 func TestScreenshotUnknownWindowTitleFailsWithCode(t *testing.T) {
+	t.Parallel()
 	needGraphicsSession(t)
-	app := NewApp()
+	app := newIsolatedToolTestApp(t)
 	cfg := ConfigState{Workspace: t.TempDir()}
 	res := app.executeTool(context.Background(), cfg, "s-1", "screenshot",
 		[]byte(`{"windowTitle":"ally-agent-definitely-not-a-window-9x7y3z"}`))
@@ -160,8 +165,11 @@ func TestScreenshotListActionReturnsBoundedRows(t *testing.T) {
 }
 
 func TestScreenshotCapturesPrimaryDisplay(t *testing.T) {
+	t.Parallel()
 	needGraphicsSession(t)
-	app := NewApp()
+	// newIsolatedToolTestApp never publishes aGlobalApp: parallel tests must not
+	// race the package-level pointer that NewApp rewrites.
+	app := newIsolatedToolTestApp(t)
 	cfg := ConfigState{Workspace: t.TempDir()}
 	res := app.executeTool(context.Background(), cfg, "s-1", "screenshot", []byte(`{}`))
 	if !res.OK {

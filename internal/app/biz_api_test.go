@@ -39,7 +39,7 @@ func newApiTestApp(t *testing.T) *App {
 		t.Setenv(key, tempRoot)
 	}
 	previousApp := aGlobalApp
-	app := NewApp()
+	app := newModelTestApp()
 	t.Cleanup(func() { aGlobalApp = previousApp })
 	app.initialized = true
 	app.configPath = filepath.Join(home, "config.json")
@@ -881,6 +881,10 @@ func TestApiPluginHTTPProxy(t *testing.T) {
 		token  string
 		status int
 	}{{token, 200}, {"wrong", 401}} {
+		// This test checks proxy authentication, not the per-host rate limiter.
+		app.httpRateMu.Lock()
+		clear(app.httpLastHost)
+		app.httpRateMu.Unlock()
 		result, err := app.PluginHTTPRequest(PluginHTTPRequest{
 			PluginID: "http-client", URL: server.URL + "/api/v1/health", Headers: map[string]string{"Authorization": "Bearer " + tc.token},
 		})

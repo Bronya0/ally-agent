@@ -940,10 +940,11 @@ func TestLiveBreakdownAccumulatorMatchesFullRecalculation(t *testing.T) {
 
 // TestGrepFilesReportsErrors：搜索前的三类入参错误，各自有独立的错误码。
 func TestGrepFilesReportsErrors(t *testing.T) {
+	t.Parallel()
 	requireRipgrep(t)
 	root := t.TempDir()
 	writeToolTestFile(t, root, "sample.txt", "needle\n")
-	app := NewApp()
+	app := newIsolatedToolTestApp(t)
 
 	cases := []struct {
 		name     string
@@ -973,6 +974,7 @@ func TestGrepFilesReportsErrors(t *testing.T) {
 
 // TestGrepFilesSearchResults：命中统计、采样截断、包含/排除策略、显式路径覆盖。
 func TestGrepFilesSearchResults(t *testing.T) {
+	t.Parallel()
 	large := strings.Repeat("x", 11*1024*1024) + "\nneedle\n"
 	cases := []struct {
 		name  string
@@ -1219,7 +1221,7 @@ func TestGrepFilesSearchResults(t *testing.T) {
 				}
 				writeToolTestFile(t, root, "hot.txt", b.String())
 			}
-			app := NewApp()
+			app := newIsolatedTestApp(t)
 			tc.check(t, func(req GrepRequest) (*GrepResult, error) {
 				return app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, req)
 			})
@@ -1629,6 +1631,7 @@ func TestCompactListFilesResultForModelUsesPathList(t *testing.T) {
 }
 
 func TestListFilesDirBudgetCollapsesModelListingsOnly(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	// One directory with more direct files than the budget, plus a sibling
 	// directory that must stay fully visible.
@@ -1640,7 +1643,7 @@ func TestListFilesDirBudgetCollapsesModelListingsOnly(t *testing.T) {
 
 	// Model-facing: data contributes exactly the budget's worth of real
 	// files plus one placeholder covering the remaining 20; src is complete.
-	result, err := NewApp().listFilesWithConfig(ConfigState{Workspace: root}, ListFilesRequest{ModelFacing: true, MaxDepth: 3, Limit: 1000})
+	result, err := newIsolatedToolTestApp(t).listFilesWithConfig(ConfigState{Workspace: root}, ListFilesRequest{ModelFacing: true, MaxDepth: 3, Limit: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2047,6 +2050,7 @@ func (c autoValidationCase) configState(root string, enabled *bool) ConfigState 
 }
 
 func TestAutoValidationChecksChangedFiles(t *testing.T) {
+	t.Parallel()
 	cases := []autoValidationCase{
 		{name: "python syntax", needPython: true, toggle: "python",
 			files:    map[string]string{"broken.py": "def broken(:\n    pass\n"},
@@ -2091,7 +2095,7 @@ func TestAutoValidationChecksChangedFiles(t *testing.T) {
 			for name := range tc.files {
 				changed = append(changed, name)
 			}
-			got := NewApp().validateChangedFiles(context.Background(), tc.configState(root, &enabled), changed)
+			got := newIsolatedTestApp(t).validateChangedFiles(context.Background(), tc.configState(root, &enabled), changed)
 			if tc.wantFail {
 				if !strings.Contains(got, "自动校验失败") {
 					t.Fatalf("expected a validation failure, got %q", got)
@@ -2496,9 +2500,10 @@ func TestRenamePathRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
 }
 
 func TestRunCommandInvalidatesWorkspaceMapCache(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeToolTestFile(t, root, "go.mod", "module example\n")
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 
 	first := app.workspaceMapContext(cfg)
@@ -2526,12 +2531,13 @@ func TestRunCommandInvalidatesWorkspaceMapCache(t *testing.T) {
 // TestRunCommandNoKeywordBlocking 锁定“无关键词拦截”：旧白名单里的命令
 // 不再被 E_LONG_RUNNING_COMMAND 拒绝，而是正常执行并快速返回。
 func TestRunCommandNoKeywordBlocking(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	for _, cmd := range []string{
-		"npm run dev-setup --if-present", // 子串“npm run dev”曾误拦截
-		"echo flask run",                 // 曾命中“flask run”
-		"echo nodemon",                   // 裸名曾命中
+		"echo npm run dev-setup --if-present", // 子串“npm run dev”曾误拦截；不依赖本机 npm 启动
+		"echo flask run",                      // 曾命中“flask run”
+		"echo nodemon",                        // 裸名曾命中
 	} {
 		args, err := json.Marshal(CommandRequest{Command: cmd, Timeout: 10})
 		if err != nil {
@@ -2588,6 +2594,7 @@ func fenceCommandForTest(t *testing.T, req CommandRequest, roots []string) error
 // 数据、heredoc 正文、动态目标），拦截的一类（显式删除、高危语义、改动区外已存在的
 // 目标、工作区软链穿透、相对路径按 cwd 解析后越界）。
 func TestCommandSafetyFence(t *testing.T) {
+	t.Parallel()
 	cases := []commandSafetyCase{
 		{name: "cmd /c option is not a drive path", onlyOS: "windows", command: `cmd.exe /c ver`},
 		{name: "read-only outside inspection", onlyOS: "windows", command: `(ls -la /d/coding/python/ | grep xx)`},
@@ -2829,6 +2836,7 @@ func TestFindWindowsBashRejectsUnrelatedBashExecutable(t *testing.T) {
 }
 
 func TestRunCommandWithGitBashResolvesWindowsToolchainAndShellExpansion(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows Git Bash behavior is Windows-specific")
 	}
@@ -2837,7 +2845,7 @@ func TestRunCommandWithGitBashResolvesWindowsToolchainAndShellExpansion(t *testi
 		t.Skip("Git Bash is not installed")
 	}
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	result, err := app.runCommandWithConfig(context.Background(), ConfigState{Workspace: t.TempDir()}, CommandRequest{
 		Command: `go version; value=$(printf 'ok'); printf 'value=%s\nbash=%s\n' "$value" "$BASH_VERSION"`,
 	})
@@ -3451,7 +3459,7 @@ func TestExecuteToolAppliesOriginalSnapshotLineRangesWithoutOffsetDrift(t *testi
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"lineRange":"2-2","newText":"TWO\ninserted"},{"lineRange":"5-5","newText":"FIVE"}]}`, hashVersion(original))
+	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"lineRange":"2","newText":"TWO\ninserted"},{"lineRange":"5-5","newText":"FIVE"}]}`, hashVersion(original))
 	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
 	if !result.OK {
 		t.Fatalf("line-range edit failed: %#v", result)
@@ -4032,6 +4040,7 @@ func TestLinuxDeleteSafetyAllowsWorkspaceFilesUnderRootHome(t *testing.T) {
 }
 
 func TestGetGitDiffUsesRepositoryRootForSubdirectoryWorkspace(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
@@ -4055,7 +4064,7 @@ func TestGetGitDiffUsesRepositoryRootForSubdirectoryWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.config = ConfigState{Workspace: subdir}
 
@@ -4084,6 +4093,7 @@ func TestGetGitDiffUsesRepositoryRootForSubdirectoryWorkspace(t *testing.T) {
 // displays. KB and temp tabs never write config.workspace, so an explicit
 // workspace is the only way for them to report their own repository.
 func TestGitQueriesFollowExplicitWorkspace(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
@@ -4102,7 +4112,7 @@ func TestGitQueriesFollowExplicitWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	// The persisted chat workspace is not a repository: only the explicit
 	// workspace argument may surface the repo's status and diff.

@@ -75,6 +75,7 @@ func TestMcpEquivalentJSONIsNotRepeated(t *testing.T) {
 }
 
 func TestSkillDirectoryPreviewHasSharedEntryAndByteBounds(t *testing.T) {
+	t.Parallel()
 	for _, longNames := range []bool{false, true} {
 		t.Run(fmt.Sprint(longNames), func(t *testing.T) {
 			root := t.TempDir()
@@ -162,6 +163,7 @@ func TestTaskNextRunVisibleAndSubagentReportsUnrestricted(t *testing.T) {
 }
 
 func TestRemoteCommandPreviewKeepsActualHeadAndTail(t *testing.T) {
+	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	emitter := filepath.Join(root, "emit.py")

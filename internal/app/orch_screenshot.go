@@ -114,8 +114,8 @@ func (a *App) captureForScreenshot(ctx context.Context, req ScreenshotRequest) (
 	// Usage-level target conflicts are refused here with the boundary error
 	// code; the pure layer re-checks (Target) as a backstop. The schema
 	// documents each capture field as exclusive, so every pair is enforced.
-	windowTarget := req.WindowID != 0 || strings.TrimSpace(req.WindowTitle) != ""
-	if req.WindowID != 0 && strings.TrimSpace(req.WindowTitle) != "" {
+	windowTarget := screenshot.ValidWindowID(req.WindowID) || strings.TrimSpace(req.WindowTitle) != ""
+	if screenshot.ValidWindowID(req.WindowID) && strings.TrimSpace(req.WindowTitle) != "" {
 		return ScreenshotResult{}, codedToolError("E_BAD_ARGS",
 			errors.New("windowId and windowTitle are mutually exclusive; pass one"))
 	}

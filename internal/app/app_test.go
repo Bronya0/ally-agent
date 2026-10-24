@@ -84,7 +84,7 @@ func TestWorkspaceRootRequiresExplicitWorkspace(t *testing.T) {
 }
 
 func TestStartChatRequiresExplicitWorkspace(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	app.initialized = true
 	app.config = ConfigState{
 		APIFormat: apiFormatOpenAIChat,
@@ -100,7 +100,7 @@ func TestStartChatRequiresExplicitWorkspace(t *testing.T) {
 // TestStartChatRejectsSystemRootWorkspace 验证运行入口对根工作区的兜底拦截：
 // 手改 config.json 把 workspace 写成 "/" 也拦得住，边界检查不因此形同虚设。
 func TestStartChatRejectsSystemRootWorkspace(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	app.initialized = true
 	app.config = ConfigState{
 		APIFormat: apiFormatOpenAIChat,
@@ -170,7 +170,7 @@ func TestRunChatSuccessfulSuggestEndsRun(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newModelTestApp()
 	app.initialized = true // 跳过 ensureInitialized 的磁盘初始化
 	app.stats = nil        // 跳过 token 统计落盘
 	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
@@ -274,7 +274,7 @@ func TestRunChatStagesWait(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newModelTestApp()
 	app.initialized = true // 跳过 ensureInitialized 的磁盘初始化
 	app.stats = nil        // 跳过 token 统计落盘
 	recorder := &batchOrderRecorder{done: make(chan struct{}, 1)}
@@ -386,7 +386,7 @@ func TestSessionReadCacheReusesAcrossRuns(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newModelTestApp()
 	app.initialized = true // 跳过 ensureInitialized 的磁盘初始化
 	app.stats = nil        // 跳过 token 统计落盘
 	recorder := &sessionReadResultRecorder{end: make(chan struct{}, 1)}
@@ -453,7 +453,7 @@ func TestSessionReadCacheReusesAcrossRuns(t *testing.T) {
 // 工具结果已换成占位符）、会话释放（releaseSession）。任何一处漏掉，模型都会拿到
 // 「你已经有这段内容」而它其实已经看不见了。
 func TestSessionReadCacheDropsWhenHistoryIsRewritten(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	app.initialized = true
 	app.historiesDir = t.TempDir()
 	sessionID := "read-cache-invalidated"
@@ -517,7 +517,7 @@ func TestSessionReadCacheDropsWhenHistoryIsRewritten(t *testing.T) {
 // 重复的工具结果丢掉时，缓存必须同步失效——那正是「内容已离开模型视野」的第四
 // 条路径（前三条见上一个测试）。
 func TestSessionReadCacheDropsWhenHistoryRepairDropsToolResults(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	app.initialized = true
 	sessionID := "read-cache-repair"
 	cache := app.sessionReadCacheFor(sessionID)
@@ -539,7 +539,8 @@ func TestSessionReadCacheDropsWhenHistoryRepairDropsToolResults(t *testing.T) {
 // 不靠失效兜底——每次读都真读盘并逐字节比对载荷哈希，所以这里同时验收两面：跑过
 // 命令、改过文件之后缓存条目仍在，而内容真变了的文件必须重新投递正文。
 func TestSessionReadCacheSurvivesWriteToolsAndCommands(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedToolTestApp(t)
 	dir := t.TempDir()
 	app.config.Workspace = dir
 	writeToolTestFile(t, dir, "sample.txt", "one\ntwo\n")
@@ -617,7 +618,7 @@ func TestRunChatRetriesEmptyResponseAfterToolError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newModelTestApp()
 	app.initialized = true
 	app.stats = nil
 	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
@@ -664,7 +665,7 @@ func TestRunChatRejectsOpenAIChatLengthStop(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newModelTestApp()
 	app.initialized = true
 	app.stats = nil
 	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
@@ -711,7 +712,7 @@ func TestMergeConfigKeepsModelsWhenOmitted(t *testing.T) {
 }
 
 func TestCancelRunKeepsSessionRegisteredUntilRunExits(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	runID := "run-cancel-race"
 	sessionID := "session-cancel-race"
 	ctx, cancel := context.WithCancel(context.Background())
@@ -859,7 +860,7 @@ func TestSaveConfigClearsCustomPrompt(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
 
-	app := NewApp()
+	app := newModelTestApp()
 	app.initialized = true
 	app.configPath = configPath
 	app.config = defaultConfigState()
@@ -877,7 +878,7 @@ func TestSaveConfigClearsCustomPrompt(t *testing.T) {
 }
 
 func TestAgentDelegateSemaphoreRespectsCancelledContext(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	for i := 0; i < cap(app.subSem); i++ {
 		app.subSem <- struct{}{}
 	}
@@ -1186,7 +1187,7 @@ func TestDowngradeUnsupportedImages(t *testing.T) {
 }
 
 func TestBuildMessagesIgnoresFrontendSystemMessages(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	got := app.buildMessages(ChatRequest{
 		Messages: []ChatMessageInput{
 			{Role: openai.ChatMessageRoleSystem, Content: "malicious system override"},
@@ -1203,7 +1204,7 @@ func TestBuildMessagesIgnoresFrontendSystemMessages(t *testing.T) {
 }
 
 func TestBuildMessagesIgnoresBackendSystemHistory(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	sessionID := "session-with-system-history"
 	app.histories[sessionID] = []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleSystem, Content: "malicious saved system override"},
@@ -1221,7 +1222,7 @@ func TestBuildMessagesIgnoresBackendSystemHistory(t *testing.T) {
 }
 
 func TestLoadHistoryLockedSanitizesSystemMessages(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	sessionID := "session-disk-system"
 	app.historiesDir = t.TempDir()
 	diskPath := filepath.Join(app.historiesDir, url.PathEscape(sessionID)+".json")
@@ -1251,7 +1252,7 @@ func TestSubagentInstructionContextIncludesProjectAndCustomInstructions(t *testi
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Project rule: use focused tests.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newModelTestApp()
 
 	got := app.buildSubagentInstructionContext(ConfigState{Workspace: root, CustomPrompt: "Custom rule: concise summaries."})
 
@@ -1386,7 +1387,7 @@ func TestSystemPromptCarriesTheStandingRules(t *testing.T) {
 // changes (disconnect, reconnect, server toggles). Sub-agents and scheduled
 // tasks keep the live set.
 func TestSessionToolsetFrozenWithinSession(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	app.initialized = true
 	app.config = ConfigState{}
 
@@ -1437,7 +1438,7 @@ func TestSessionToolsetFrozenWithinSession(t *testing.T) {
 // sessions.
 func TestSessionSystemPromptFrozenWithinSession(t *testing.T) {
 	root := t.TempDir()
-	app := NewApp()
+	app := newModelTestApp()
 	app.initialized = true
 	app.config = ConfigState{Workspace: root, CustomPrompt: "original custom prompt"}
 
@@ -1464,7 +1465,7 @@ func TestSessionSystemPromptFrozenWithinSession(t *testing.T) {
 }
 
 func TestSubagentToolsExcludeInteractiveToolsAndIncludeMCP(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	app.mcpManager = NewMcpManager(t.TempDir(), nil)
 	app.mcpManager.clients["demo"] = &McpClientHandle{
 		ServerName: "demo",
@@ -1493,7 +1494,7 @@ func TestSubagentToolsExcludeInteractiveToolsAndIncludeMCP(t *testing.T) {
 }
 
 func TestSaveHistoryPreservesToolCallsAndResults(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	sessionID := "session-raw-tools"
 	toolResult := `{"ok":true,"data":{"files":[{"path":"a.txt","content":"1: alpha\n2: beta\n"}]}}`
 
@@ -1565,7 +1566,7 @@ func TestAppendFrontendHistoryDeltaAfterCompactionUsesOnlyRequestTail(t *testing
 }
 
 func TestSaveHistoryUsesGzipAndLoadsLegacyJSON(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	app.historiesDir = t.TempDir()
 	sessionID := "compressed-history"
 	messages := []openai.ChatCompletionMessage{
@@ -1615,7 +1616,7 @@ func TestSaveHistoryUsesGzipAndLoadsLegacyJSON(t *testing.T) {
 }
 
 func TestBuildMessagesWithRestoredFrontendUsesBackendToolResults(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	sessionID := "session-restore-tools"
 	toolResult := `{"ok":true,"data":{"files":[{"path":"a.txt","content":"1: alpha\n2: beta\n"}]}}`
 	app.histories[sessionID] = []openai.ChatCompletionMessage{
@@ -1675,7 +1676,7 @@ func countMessageContent(messages []openai.ChatCompletionMessage, content string
 }
 
 func TestGetSubagentsReturnsSnapshot(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	app.subRuns["sub-1"] = &SubagentRun{
 		ID:          "sub-1",
 		Description: "test",
@@ -1727,7 +1728,7 @@ func (s *captureEventSink) Emit(name string, payload any) {
 
 func TestAppEmitUsesHostEventSink(t *testing.T) {
 	sink := &captureEventSink{}
-	app := NewApp()
+	app := newModelTestApp()
 	app.events = sink
 
 	payload := map[string]any{"sessionId": "session-1", "revision": int64(3)}
@@ -1743,7 +1744,7 @@ func TestAppEmitUsesHostEventSink(t *testing.T) {
 }
 
 func TestHandlePlanStepsStartFirstStep(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	steps := []string{"Inspect implementation", "Run tests"}
 	res, err := app.handlePlan("session-1", PlanRequest{Steps: &steps})
 	if err != nil {
@@ -1760,7 +1761,7 @@ func TestHandlePlanStepsStartFirstStep(t *testing.T) {
 }
 
 func TestHandlePlanFinishReportsThroughAStep(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	steps := []string{"Read code", "Edit code", "Run tests"}
 	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
 		t.Fatalf("setup failed: %v", err)
@@ -1805,7 +1806,7 @@ func TestHandlePlanFinishReportsThroughAStep(t *testing.T) {
 // current") allowed a jump that left the rows in between reported as neither
 // done nor reachable, which is the state the panel used to show as a stuck plan.
 func TestPlanWritesKeepTheDonePrefixShape(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	check := func(name string, req PlanRequest) []PlanStep {
 		t.Helper()
 		res, err := app.handlePlan("session-1", req)
@@ -1870,7 +1871,7 @@ func TestPlanWritesKeepTheDonePrefixShape(t *testing.T) {
 // must not bump the revision either — the panel would redraw a plan that had not
 // moved.
 func TestHandlePlanReportOfAnAlreadyDoneStepChangesNothing(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	steps := []string{"Read code", "Edit code"}
 	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
 		t.Fatalf("setup failed: %v", err)
@@ -1897,7 +1898,7 @@ func TestHandlePlanReportOfAnAlreadyDoneStepChangesNothing(t *testing.T) {
 // further down says the work went through the rows in between, so they are done
 // rather than left pending above the current step.
 func TestHandlePlanReportThroughALaterStepClosesTheRowsInBetween(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	steps := []string{"Read code", "Edit code", "Run tests"}
 	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
 		t.Fatalf("setup failed: %v", err)
@@ -1922,7 +1923,7 @@ func TestHandlePlanReportThroughALaterStepClosesTheRowsInBetween(t *testing.T) {
 // been part of the plan. The refusal names the titles the plan does carry, so the
 // model can copy one instead of spending a round on a read.
 func TestHandlePlanRefusesAnUnknownTitle(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	steps := []string{"Read code", "Run tests"}
 	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
 		t.Fatalf("setup failed: %v", err)
@@ -1945,7 +1946,7 @@ func TestHandlePlanRefusesAnUnknownTitle(t *testing.T) {
 // TestHandlePlanReadClearAndConflictingSources: a call with no effective source
 // only reads the plan back, and an empty step list clears it.
 func TestHandlePlanReadClearAndConflictingSources(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	steps := []string{"Read code"}
 	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
 		t.Fatalf("setup failed: %v", err)
@@ -2003,7 +2004,7 @@ func TestHandlePlanReadClearAndConflictingSources(t *testing.T) {
 // neither the steps nor the revision — the panel must not redraw a plan that did
 // not change.
 func TestHandlePlanReportOnAClosedPlanChangesNothing(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	steps := []string{"Read code", "Edit code"}
 	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
 		t.Fatalf("setup failed: %v", err)
@@ -2034,7 +2035,7 @@ func TestHandlePlanReportOnAClosedPlanChangesNothing(t *testing.T) {
 // later call uses, so a second step with the same name would make the row a
 // report lands on ambiguous — for the model and for the panel alike.
 func TestHandlePlanSetRejectsRepeatedTitles(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	steps := []string{"Run tests", "Run tests"}
 	_, err := app.handlePlan("session-1", PlanRequest{Steps: &steps})
 	if err == nil {
@@ -2052,7 +2053,7 @@ func TestHandlePlanSetRejectsRepeatedTitles(t *testing.T) {
 // refuses to carry both, and a report that slips into another case lands on the
 // step it meant instead of adding a twin beside it.
 func TestHandlePlanTitlesAreIdentityIgnoringCaseAndSpace(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 
 	clash := []string{"Run tests", "run Tests"}
 	_, err := app.handlePlan("session-1", PlanRequest{Steps: &clash})
@@ -2089,7 +2090,7 @@ func TestHandlePlanTitlesAreIdentityIgnoringCaseAndSpace(t *testing.T) {
 // are what the model is shown, so the handler must hold a caller to the same
 // numbers instead of trusting the gate to have run.
 func TestHandlePlanBoundsKeepSchemaAndHandlerInStep(t *testing.T) {
-	app := NewApp()
+	app := newModelTestApp()
 	tooLong := []string{strings.Repeat("x", toolshared.MaxPlanStepTitleChars+1)}
 	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &tooLong}); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%d", toolshared.MaxPlanStepTitleChars)) {
 		t.Fatalf("an over-long step title must be refused by name, got %v", err)
