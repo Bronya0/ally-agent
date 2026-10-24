@@ -1021,7 +1021,7 @@ html.rail-expanded .chat-layout {
 /* Expanded navigation uses a quiet neutral selection; the collapsed rail
    keeps its accent locator. Only the glyph shrinks, not the icon slot. */
 .mode-sider--expanded {
-  --ally-rail-selected-text: var(--ally-text-primary);
+  --ally-rail-selected-text: var(--ally-accent-ui);
 }
 .mode-sider--expanded .mode-sider-menu {
   flex: 0 1 auto;
