@@ -216,3 +216,4 @@
 [delegate-retry-not-squared] 2026-10-17 高危 子代理外层勿重试适配器已耗尽的首输出前错误，否则叠成平方预算；只接管流中断或空回答。@orch_subagent.go
 [window-id-sign] 2026-10-24 中危 窗口 id 判据别写 >0：HWND 是符号指针，负句柄合法，列表能列出却被捕获层拒。@screenshot/ValidWindowID
 [edit-batch-receipt] 2026-10-25 中危 同轮并行 edit 只要一个失败，整批回执都填成那一个错误（别人的），模型会去改本来没问题的文件。@orch_edit.go
+[parallel-test-isolation] 2026-10-25 中危 并行用例禁用 NewApp()（写 aGlobalApp 单例）与 t.Setenv（直接 panic）：改用 newIsolatedToolTestApp。@internal/app
