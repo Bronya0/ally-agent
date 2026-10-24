@@ -58,6 +58,7 @@ func TestChatGPTConfigSessionAndKeyIsolation(t *testing.T) {
 }
 
 func TestChatGPTNeverFallsBackToPaidKeys(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	called := false
 	s := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
@@ -157,6 +158,7 @@ func (rt oauthMockTransport) RoundTrip(r *http.Request) (*http.Response, error) 
 // Exercise the actual OAuth credential provider and existing SSE decoder over
 // two complete request/response turns, including a function result replay.
 func TestChatGPTAuthenticatedSSEToolLoopAndErrors(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

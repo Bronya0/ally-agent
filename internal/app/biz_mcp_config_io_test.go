@@ -9,6 +9,7 @@ import (
 )
 
 func TestMcpConfigBOMAndExactValuesSurviveSaveLoad(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	raw := "\ufeff" + `{"extraRoot":{"keep":true},"mcpServers":{"demo":{"command":"node","args":["C:\\Program Files\\server.js","hello world",""],"env":{"PAD":" x ","LINES":"a\nb"},"vendor":{"value":1}}}}`
 	if err := app.SaveMcpConfig(raw); err != nil {
@@ -46,6 +47,7 @@ func TestMcpConfigBOMAndExactValuesSurviveSaveLoad(t *testing.T) {
 }
 
 func TestMcpInvalidConfigNeverReplacesSavedFile(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	const original = `{"mcpServers":{"keep":{"command":"node","args":["a b",""]}},"extra":true}`
 	if err := app.SaveMcpConfig(original); err != nil {

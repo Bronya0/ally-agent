@@ -130,6 +130,7 @@ func TestHeadlessAPIConcurrentRunsShutdownAndPersistence(t *testing.T) {
 }
 
 func TestHeadlessEventsShutdownAndReplay(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -183,6 +184,7 @@ func TestHeadlessEventsShutdownAndReplay(t *testing.T) {
 }
 
 func TestHeadlessWorkspaceOverrideDoesNotPersist(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	stored := a.config.Workspace
 	override := t.TempDir()
@@ -218,6 +220,7 @@ func TestHeadlessWorkspaceOverrideDoesNotPersist(t *testing.T) {
 }
 
 func TestHeadlessAuthenticatedShutdown(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -255,7 +255,7 @@ func (r *batchOrderRecorder) Emit(name string, payload any) {
 
 // TestRunChatStagesWait verifies that wait follows an explicit stage barrier.
 func TestRunChatStagesWait(t *testing.T) {
-	redirectAppStateDir(t)
+	t.Parallel()
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -274,9 +274,8 @@ func TestRunChatStagesWait(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := newModelTestApp()
-	app.initialized = true // 跳过 ensureInitialized 的磁盘初始化
-	app.stats = nil        // 跳过 token 统计落盘
+	app := newIsolatedChatTestApp(t)
+	app.stats = nil // 跳过 token 统计落盘
 	recorder := &batchOrderRecorder{done: make(chan struct{}, 1)}
 	app.events = recorder
 
@@ -1323,7 +1322,8 @@ func TestLoadAgentsMdLoadsSubdirsWhenRootMissing(t *testing.T) {
 // 说清缺的是哪一类，断言与原来五个用例逐条一致（多条缺失一次全报，不再只报第一条）。
 func TestSystemPromptCarriesTheStandingRules(t *testing.T) {
 	redirectAppStateDir(t)
-	prompt := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
+	app := NewApp()
+	prompt := joinSystemPromptParts(app.buildSystemPromptParts(nil, "", nil, "", "", ""))
 	groups := []struct {
 		name string
 		want []string

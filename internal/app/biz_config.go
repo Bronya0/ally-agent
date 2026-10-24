@@ -166,15 +166,23 @@ func appDataDir() string {
 	return ".ally_agent"
 }
 
-// AppDataDir returns the absolute path to ~/.ally_agent/. Implements
-// pathutil.Runtime so the path-safety helpers can reach the global config
-// directory through a host-neutral interface without importing app.
-func (a *App) AppDataDir() string { return appDataDir() }
+// AppDataDir returns the absolute path to the data directory this App owns. It
+// implements pathutil.Runtime so the path-safety helpers can reach the config
+// directory through a host-neutral interface without importing app. A zero-value
+// App (tests, early bootstrap) falls back to the process-wide directory.
+func (a *App) AppDataDir() string {
+	if a != nil && strings.TrimSpace(a.dataDir) != "" {
+		return a.dataDir
+	}
+	return appDataDir()
+}
 
-// appPathRuntime is a package-level pathutil.Runtime backed by appDataDir().
-// It lets the package-level path helper wrappers below delegate to pathutil
-// without each call site passing *App explicitly, and without depending on
-// aGlobalApp (which is nil before NewApp).
+// appPathRuntime is a package-level pathutil.Runtime backed by appDataDir(), the
+// process-wide data directory. This is deliberate: the path helpers it serves are
+// the safety fence (inside-ally-dir, sensitive-read), and the fence must protect
+// the directory the running host actually owns, not whatever directory a single
+// App instance was constructed with. App-scoped paths (config, sessions, stats,
+// memories, mcp.json) go through (*App).AppDataDir instead.
 type appPathRuntime struct{}
 
 func (appPathRuntime) AppDataDir() string { return appDataDir() }
@@ -186,7 +194,7 @@ var pathRuntime pathutil.Runtime = appPathRuntime{}
 // Implements memory.Runtime so the memory tool can reach the memories
 // directory through the host-neutral interface without importing app.
 func (a *App) MemoriesDir() string {
-	return filepath.Join(appDataDir(), "memories")
+	return filepath.Join(a.AppDataDir(), "memories")
 }
 
 // userProfileFileName is the machine-global profile file (how to address the
@@ -199,15 +207,16 @@ const userProfileFileName = "USER.md"
 // one constant keeps the reader and the prompt text from drifting apart.
 const userProfileDisplayPath = "~/.ally_agent/" + userProfileFileName
 
-// userProfilePath resolves the profile file under the app data directory.
-func userProfilePath() string {
-	return filepath.Join(appDataDir(), userProfileFileName)
+// userProfilePath resolves the profile file under this App's data directory.
+func (a *App) userProfilePath() string {
+	return filepath.Join(a.AppDataDir(), userProfileFileName)
 }
 
-// memoriesDir is a package-level convenience kept for the few call sites
-// that still use it instead of (*App).MemoriesDir().
-func memoriesDir() string {
-	return aGlobalApp.MemoriesDir()
+// memoriesDir is the app-scoped memories directory. It replaced the
+// package-level helper that reached aGlobalApp, so prompt assembly and the
+// memory tool now share one explicit owner.
+func (a *App) memoriesDir() string {
+	return a.MemoriesDir()
 }
 
 // ── Skills ───────────────────────────────────────────────

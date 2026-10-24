@@ -25,6 +25,31 @@ func newIsolatedTestApp(t *testing.T) *App {
 	return newAppState(t.TempDir())
 }
 
+// newIsolatedChatTestApp builds a fully isolated App for chat/session tests: the
+// data directory, config, sessions and histories all live under t.TempDir and the
+// retry wait never sleeps on a real timer. It touches no process environment and
+// no package-level singleton, so callers may use t.Parallel.
+func newIsolatedChatTestApp(t *testing.T) *App {
+	t.Helper()
+	root := t.TempDir()
+	a := newAppState(filepath.Join(root, ".ally_agent"))
+	a.initialized = true
+	a.retryWait = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	a.configPath = filepath.Join(root, "config.json")
+	a.historiesDir = filepath.Join(root, "histories")
+	a.sessionsDir = filepath.Join(root, "sessions")
+	a.config = defaultConfigState()
+	a.config.Workspace = filepath.Join(root, "workspace")
+	for _, path := range []string{a.AppDataDir(), a.historiesDir, a.sessionsDir, a.config.Workspace} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return a
+}
+
+// newIsolatedToolTestApp is the tool-only variant: no retry clock, no model
+// config, just a private workspace and data directory.
 func newIsolatedToolTestApp(t *testing.T) *App {
 	t.Helper()
 	dir := t.TempDir()

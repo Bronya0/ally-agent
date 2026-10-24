@@ -17,6 +17,7 @@ import (
 )
 
 func TestGetSkillStateReturnsOneListingAndItsEnabledNames(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	writeSkillTestFile(t, app.config.Workspace, ".agents/skills/custom/SKILL.md", "---\nname: custom\n---\nbody")
 	app.disabledSkills = []string{"CUSTOM"}
@@ -37,6 +38,7 @@ func TestGetSkillStateReturnsOneListingAndItsEnabledNames(t *testing.T) {
 }
 
 func TestSkillColdScanIsShared(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	var scans atomic.Int32
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -76,6 +78,7 @@ func TestSkillColdScanIsShared(t *testing.T) {
 }
 
 func TestSkillInvalidationDuringColdScanRejectsOldResult(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	var scans atomic.Int32
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -383,6 +386,7 @@ func findSkill(t *testing.T, skills []SkillDefinition, name string) SkillDefinit
 }
 
 func TestSaveSkillWritesUserSkillAndListsIt(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	// 先把列表缓存填上：保存后必须让下一次 ListSkills 立刻看到新技能，
 	// 否则面板刷新/斜杠命令要等 30s TTL。
@@ -436,6 +440,7 @@ func TestSaveSkillWritesUserSkillAndListsIt(t *testing.T) {
 }
 
 func TestSaveSkillRejectsDuplicateNamesAcrossScopes(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	workspace := t.TempDir()
 	app.config.Workspace = workspace
@@ -457,6 +462,7 @@ func TestSaveSkillRejectsDuplicateNamesAcrossScopes(t *testing.T) {
 }
 
 func TestSaveSkillRejectsUnsafeNames(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	workspace := t.TempDir()
 	app.config.Workspace = workspace
@@ -487,6 +493,7 @@ func TestSaveSkillRejectsUnsafeNames(t *testing.T) {
 }
 
 func TestSaveSkillRequiresDescription(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	if _, err := app.SaveSkill(SkillDraft{Name: "no-desc"}); err == nil {
 		t.Fatal("expected missing description to be rejected")
@@ -494,6 +501,7 @@ func TestSaveSkillRequiresDescription(t *testing.T) {
 }
 
 func TestSaveSkillProjectTargetNeedsWorkspace(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	app.config.Workspace = "" // This case deliberately overrides the helper's sandbox workspace.
 	if _, err := app.SaveSkill(SkillDraft{Target: "project", Name: "proj-skill", Description: "d"}); err == nil {
@@ -505,6 +513,7 @@ func TestSaveSkillProjectTargetNeedsWorkspace(t *testing.T) {
 }
 
 func TestSaveSkillWritesProjectSkillUnderWorkspace(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	workspace := t.TempDir()
 	app.config.Workspace = workspace
@@ -526,6 +535,7 @@ func TestSaveSkillWritesProjectSkillUnderWorkspace(t *testing.T) {
 // 元数据里的引号必须能原样读回：frontmatter 解析器只对以双引号开头的值做
 // JSON 解码，直接拼裸引号会让 description 被静默截断。
 func TestSaveSkillRoundTripsQuotedMetadata(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	description := `他说: "跑测试" 就行 & 别忘记 #1`
 	whenToUse := `when the user says "ship it"`
@@ -544,6 +554,7 @@ func TestSaveSkillRoundTripsQuotedMetadata(t *testing.T) {
 // 换行会把 line-based 的 frontmatter 解析截断（甚至注入分隔符），因此元数据
 // 一律压成一行。
 func TestSaveSkillFlattensMultilineMetadata(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	if _, err := app.SaveSkill(SkillDraft{
 		Name:        "multiline",
@@ -563,6 +574,7 @@ func TestSaveSkillFlattensMultilineMetadata(t *testing.T) {
 // 内置技能没有磁盘目录（Dir 是嵌入树里的相对路径），冲突提示必须指到
 // builtin:// 上，否则用户会照着 "skills/codegraph" 去工作区里找。
 func TestSaveSkillBuiltinConflictNamesTheVirtualPath(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 
 	builtin := builtinSkillEntries()[0]
@@ -755,6 +767,7 @@ func TestBuiltinSkillEntriesContainsAllyAgent(t *testing.T) {
 }
 
 func TestListSkillsIncludesCodexSkills(t *testing.T) {
+	t.Parallel()
 	for _, scope := range []string{"user", "project"} {
 		t.Run(scope, func(t *testing.T) {
 			app := newApiTestApp(t)
@@ -896,6 +909,7 @@ func TestParseSkillContentAllySpellingPrecedence(t *testing.T) {
 }
 
 func TestSkillRequestWorkspaceAndProjectPrecedence(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	other := t.TempDir()
 	writeSkillTestFile(t, userSkillsDir(t), "shared/SKILL.md", "---\nname: shared\n---\nUSER")
@@ -927,6 +941,7 @@ func TestSkillYAMLMetadataUsesOnlyTopLevelFields(t *testing.T) {
 }
 
 func TestSaveSkillValidatesSerializedSizeBeforeWriting(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	for _, draft := range []SkillDraft{
 		{Name: "body-limit", Description: "description", Content: strings.Repeat("x", maxSkillFileBytes)},

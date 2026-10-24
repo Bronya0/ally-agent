@@ -70,11 +70,12 @@ func builtinToolNames(t *testing.T) map[string]bool {
 // registry (or be an explicitly allowlisted non-tool token).
 func TestSystemPromptToolReferencesExist(t *testing.T) {
 	redirectAppStateDir(t)
+	app := NewApp()
 	registry := builtinToolNames(t)
 	kbRoot := t.TempDir()
 	prompts := map[string]string{
-		"main":      joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", "")),
-		"main-kb":   joinSystemPromptParts(buildSystemPromptParts(nil, kbRoot, nil, "", "", kbRoot)),
+		"main":      joinSystemPromptParts(app.buildSystemPromptParts(nil, "", nil, "", "", "")),
+		"main-kb":   joinSystemPromptParts(app.buildSystemPromptParts(nil, kbRoot, nil, "", "", kbRoot)),
 		"sub-agent": subagentSystemPrompt(""),
 	}
 	unknown := map[string]bool{}
@@ -155,9 +156,9 @@ func TestMemoryIndexStaysWithinBudget(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	NewApp() // buildMemoryIndexContext resolves the memories dir through the app
+	app := NewApp() // the memory index resolves through this app's data directory
 
-	got := buildMemoryIndexContext()
+	got := app.buildMemoryIndexContext()
 	if !strings.Contains(got, "mem-00.md") {
 		t.Fatal("the head of the index must survive the byte budget")
 	}
@@ -173,7 +174,8 @@ func TestMemoryIndexStaysWithinBudget(t *testing.T) {
 // Efficiency rules must hold for both agents without losing completion checks.
 func TestPromptExecutionEfficiency(t *testing.T) {
 	redirectAppStateDir(t)
-	main := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
+	app := NewApp()
+	main := joinSystemPromptParts(app.buildSystemPromptParts(nil, "", nil, "", "", ""))
 	for label, prompt := range map[string]string{"main": main, "child": subagentSystemPrompt("")} {
 		for _, rule := range []string{"same stage only for independent operations", "Inspect every result", "Reuse reliable context", "preserve failure/exit status", "JSON encoding is not shell escaping", "repeat or broaden verification only", "stages run in ascending order", "blocks every later stage", "stage does not substitute result values"} {
 			if !strings.Contains(prompt, rule) {

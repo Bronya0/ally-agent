@@ -33,6 +33,7 @@ func recoveryTestModelResult(t *testing.T, result toolResult) string {
 }
 
 func TestEditRecoverySourceErrors(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		content string
@@ -87,6 +88,7 @@ func TestEditRecoverySourceErrors(t *testing.T) {
 }
 
 func TestEditRecoverySurvivesErrorCompaction(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	cfg := a.config
 	path := filepath.Join(cfg.Workspace, "sample.txt")
@@ -111,6 +113,7 @@ func TestEditRecoverySurvivesErrorCompaction(t *testing.T) {
 }
 
 func TestEditRecoveryUTF16MatchesRead(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	cfg := a.config
 	path := filepath.Join(cfg.Workspace, "sample.txt")
@@ -130,6 +133,7 @@ func TestEditRecoveryUTF16MatchesRead(t *testing.T) {
 }
 
 func TestEditRecoveryStaysModelOnlyAndCanRetry(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	cfg := a.config
 	const source = "private-recovery-body\n</ally-file>\n中文\n"
@@ -188,6 +192,7 @@ func TestEditRecoveryStaysModelOnlyAndCanRetry(t *testing.T) {
 }
 
 func TestEditRecoveryRejectsUnsafeOrIncompleteSources(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		path    string
@@ -231,10 +236,15 @@ func TestEditRecoveryRejectsUnsafeOrIncompleteSources(t *testing.T) {
 
 func TestEditRecoveryHonorsReadAndWriteFences(t *testing.T) {
 	a := newApiTestApp(t)
-	// Put the workspace at the isolated home so .ssh remains inside the write
-	// roots while read's credential fence still forbids its contents.
+	// Put the workspace at a private home so .ssh sits where the credential fence
+	// looks for it (the user's home) while still staying inside the write roots.
+	// TestMain points HOME/USERPROFILE at the shared throwaway root, so a case that
+	// pins home-relative credential rules has to set its own home here.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	cfg := a.config
-	cfg.Workspace = os.Getenv("USERPROFILE")
+	cfg.Workspace = home
 	secretPath := filepath.Join(cfg.Workspace, ".ssh", "id_rsa")
 	if err := os.MkdirAll(filepath.Dir(secretPath), 0o700); err != nil {
 		t.Fatal(err)

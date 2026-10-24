@@ -105,6 +105,7 @@ func TestSkillDirectoryPreviewHasSharedEntryAndByteBounds(t *testing.T) {
 }
 
 func TestSkillInstructionsAreWholeOrReturnTargetedReadGuidance(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	for _, name := range []string{"normal", "large"} {
 		content := "---\nname: " + name + "\ndescription: test skill\n---\n" + strings.Repeat("instructions\n", 2000) + "END_INSTRUCTIONS"

@@ -24,35 +24,13 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// newApiTestApp 构造一个隔离的 App：HOME/USERPROFILE 指向临时目录，
-// initialized 置 true 跳过真实用户目录的 ensureInitialized，会话/历史/配置
-// 全部落进临时目录。
+// newApiTestApp 构造一个隔离的 App：数据目录、配置、会话、历史全部落在
+// t.TempDir，initialized 置 true 跳过真实用户目录的 ensureInitialized。它不
+// 改动任何环境变量（进程级隔离由 TestMain 兜底），因此可以 t.Parallel；只有
+// 确实依赖包级 apiSvc 的用例才必须串行。
 func newApiTestApp(t *testing.T) *App {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("ALLY_DATA_DIR", filepath.Join(home, ".ally_agent"))
-	// Runtime maintenance enumerates the OS temp root, so isolate it too.
-	tempRoot := t.TempDir()
-	for _, key := range []string{"TMP", "TEMP", "TMPDIR"} {
-		t.Setenv(key, tempRoot)
-	}
-	previousApp := aGlobalApp
-	app := newModelTestApp()
-	t.Cleanup(func() { aGlobalApp = previousApp })
-	app.initialized = true
-	app.configPath = filepath.Join(home, "config.json")
-	app.historiesDir = filepath.Join(home, "histories")
-	app.sessionsDir = filepath.Join(home, "sessions")
-	app.config = defaultConfigState()
-	app.config.Workspace = t.TempDir()
-	if err := os.MkdirAll(app.sessionsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(app.historiesDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	app := newIsolatedChatTestApp(t)
 	t.Cleanup(func() { stopApiListenerLocked() })
 	return app
 }
@@ -422,8 +400,8 @@ func TestApiMcpEndpoints(t *testing.T) {
 // {"mcpServers":{}}, so PUTting back a partial object (or an empty body) used to
 // overwrite mcp.json and disconnect every live server with no backup.
 func TestApiMcpConfigRejectsEmptyPayload(t *testing.T) {
-	handler, _, token := newApiTestHandler(t)
-	path := mcpUserConfigPath()
+	handler, app, token := newApiTestHandler(t)
+	path := app.mcpUserConfigPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}

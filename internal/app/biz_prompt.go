@@ -136,7 +136,11 @@ func knowledgeBasePromptPart(workspaceRoot string) string {
 		"- Never modify originals under `sources/`; keep provenance by pointing the entry's `source` frontmatter at them.\n\n"
 }
 
-func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, extraRoots []string, customPrompt, gitBashPath, kbRoot string) []systemPromptPart {
+// buildSystemPromptParts assembles the prompt for one request. It is app-scoped
+// because two of its blocks (the memory index and the user profile) live in this
+// App's data directory; an app-less version had to reach a process-wide
+// singleton, which made parallel tests (and any second App) unsafe.
+func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, extraRoots []string, customPrompt, gitBashPath, kbRoot string) []systemPromptPart {
 	var parts []systemPromptPart
 	var b strings.Builder
 	// 核心系统提示词用 <system-prompt> 包裹并声明为最高优先级；优先级总声明
@@ -224,13 +228,13 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		parts = append(parts, systemPromptPart{label: "技能元数据", content: skills.String()})
 	}
 
-	if memoryIndex := buildMemoryIndexContext(); memoryIndex != "" {
+	if memoryIndex := a.buildMemoryIndexContext(); memoryIndex != "" {
 		parts = append(parts, systemPromptPart{label: "全局记忆索引", content: memoryIndex})
 	}
 
 	// The machine-global user profile is always relevant, so it is injected in
 	// full (bounded) instead of waiting for the model to fetch it from the index.
-	if profile := buildUserProfilePromptPart(userProfilePath()); profile != "" {
+	if profile := buildUserProfilePromptPart(a.userProfilePath()); profile != "" {
 		parts = append(parts, systemPromptPart{label: "用户档案 User Profile", content: profile})
 	}
 
@@ -474,12 +478,12 @@ func buildSkillListingMeta(skills []SkillDefinition) string {
 	return b.String()
 }
 
-func buildMemoryIndexContext() string {
-	entries, hit := memoryIndexCache.Lookup(aGlobalApp.memoriesRuntime())
+func (a *App) buildMemoryIndexContext() string {
+	entries, hit := memoryIndexCache.Lookup(a.memoriesRuntime())
 	if !hit {
-		listed, err := listMemories()
+		listed, err := a.listMemories()
 		if err == nil {
-			memoryIndexCache.Store(listed, aGlobalApp.memoriesRuntime())
+			memoryIndexCache.Store(listed, a.memoriesRuntime())
 		}
 		entries = listed
 	}

@@ -12,6 +12,7 @@ import (
 )
 
 func TestStoppedServicesRespectFinishedRetentionBeforeOutputDrain(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	var oldest *managedService
 	for i := 0; i < maxFinishedServices+3; i++ {
@@ -56,7 +57,7 @@ func TestRuntimeServiceStopFailureStillFlushesStats(t *testing.T) {
 	}
 	svc := &managedService{info: ServiceInfo{ID: "failing-stop", Status: "running"}, output: newRollingBuffer(serviceOutputLimit), waitDone: make(chan struct{}), stopTree: func() error { return errors.New("termination refused") }}
 	a.services[svc.info.ID] = svc
-	a.stats = newStatsRecorder()
+	a.stats = newStatsRecorder("")
 	a.stats.storageDir = t.TempDir()
 	a.stats.start(context.Background())
 	t.Cleanup(func() {

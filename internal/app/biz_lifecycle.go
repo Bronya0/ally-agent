@@ -111,6 +111,9 @@ func (a *App) startRuntime(ctx context.Context) error {
 			manager := NewMcpManager(root, func() {
 				a.emitMcpStatus()
 			})
+			// Pin the user config file to this App's data directory: the package
+			// default is the process-wide directory, which a test App must not share.
+			manager.configPaths = []string{a.mcpUserConfigPath()}
 			manager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
 			manager.SetWarningHandler(func(message string) {
 				a.emit("config:warning", map[string]any{"field": "mcp", "message": message})

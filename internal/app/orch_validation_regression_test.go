@@ -8,59 +8,18 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// validationGoCache 是所有校验用例共享的临时 Go 构建缓存目录。每次自动校验都
-// 用一份全新 GOCACHE 时，`go vet` 要冷编译一遍标准库（实测 1s 级，而热缓存只有
-// 0.2s 级）。共享目录仍然是本进程新建的临时目录，绝不落到用户真实的
-// ~/.cache/go-build，隔离性不变。
-var validationGoCache struct {
-	once    sync.Once
-	root    string
-	goCache string
-	goMod   string
-}
-
-func validationGoCachePaths() (goCache, goMod string) {
-	validationGoCache.once.Do(func() {
-		dir, err := os.MkdirTemp("", "ally-validation-gocache-")
-		if err != nil {
-			return
-		}
-		validationGoCache.root = dir
-		validationGoCache.goCache = filepath.Join(dir, "cache")
-		validationGoCache.goMod = filepath.Join(dir, "modules")
-	})
-	return validationGoCache.goCache, validationGoCache.goMod
-}
-
-// cleanupValidationGoCache removes the shared throwaway cache; TestMain calls it.
-func cleanupValidationGoCache() {
-	if validationGoCache.root != "" {
-		_ = os.RemoveAll(validationGoCache.root)
-	}
-}
-
+// validationSandbox returns a private workspace for one validation case. Process
+// isolation (HOME, TEMP, GOCACHE, GOMODCACHE, GOWORK) is established once in
+// TestMain, so this helper needs no t.Setenv and its callers may use t.Parallel.
 func validationSandbox(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	for _, key := range []string{"HOME", "USERPROFILE", "TEMP", "TMP", "TMPDIR"} {
-		t.Setenv(key, dir)
-	}
-	goCache, goMod := validationGoCachePaths()
-	if goCache == "" {
-		// 共享目录建不出来时退回用例私有缓存：宁可慢，也不能碰用户缓存。
-		goCache, goMod = filepath.Join(dir, "cache"), filepath.Join(dir, "modules")
-	}
-	t.Setenv("GOCACHE", goCache)
-	t.Setenv("GOMODCACHE", goMod)
-	t.Setenv("GOWORK", "off")
-	root := filepath.Join(dir, "workspace")
+	root := filepath.Join(t.TempDir(), "workspace")
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +48,7 @@ func TestValidationPythonDoesNotImportWorkspaceModules(t *testing.T) {
 }
 
 func TestValidationJSONReportsLineAndColumn(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, source, location, message string }{
 		{"invalid character", "{\n  \"value\": @\n}\n", "2:12", "invalid character '@'"},
 		{"empty", "", "1:1", "unexpected end of JSON input"},
@@ -106,6 +66,7 @@ func TestValidationJSONReportsLineAndColumn(t *testing.T) {
 }
 
 func TestValidationPythonProjectMinimum(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, versionFile, project, want string }{
 		{"none", "", "", "3.0"},
 		{"pyenv patch", "3.12.2\n", "", "3.12"},
@@ -126,6 +87,7 @@ func TestValidationPythonProjectMinimum(t *testing.T) {
 }
 
 func TestValidationPythonSkipsOlderInterpreter(t *testing.T) {
+	t.Parallel()
 	root := validationSandbox(t)
 	if _, _, ok := findPythonCommand(); !ok {
 		t.Skip("Python unavailable")
@@ -166,6 +128,7 @@ func TestValidationJavaScriptBatchParsesWithoutExecuting(t *testing.T) {
 }
 
 func TestValidationGoReportsErrorsInCallers(t *testing.T) {
+	t.Parallel()
 	root := validationSandbox(t)
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("Go unavailable")
@@ -182,6 +145,7 @@ func TestValidationGoReportsErrorsInCallers(t *testing.T) {
 }
 
 func TestValidationGoSkipsUntouchedVetFindings(t *testing.T) {
+	t.Parallel()
 	root := validationSandbox(t)
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("Go unavailable")
@@ -211,6 +175,7 @@ func TestValidationJavaIgnoresInjectedLocale(t *testing.T) {
 }
 
 func TestStageValidationChecksSuccessfulWritesWhenPeerFails(t *testing.T) {
+	t.Parallel()
 	root := validationSandbox(t)
 	writeToolTestFile(t, root, "go.mod", "module example.com/check\n\ngo 1.22\n")
 	writeToolTestFile(t, root, "second.go", "package check\n")
@@ -218,7 +183,7 @@ func TestStageValidationChecksSuccessfulWritesWhenPeerFails(t *testing.T) {
 		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"first.go","content":"package check\nfunc Broken( {\n"}`}},
 		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"second.go","content":"package check\n"}`}},
 	}
-	a := NewApp()
+	a := newIsolatedToolTestApp(t)
 	enabled := true
 	cfg := ConfigState{Workspace: root, AutoValidationGo: &enabled}
 	results := make([]toolResult, len(calls))
@@ -236,6 +201,7 @@ func TestStageValidationChecksSuccessfulWritesWhenPeerFails(t *testing.T) {
 }
 
 func TestValidationTypeScriptUsesParserWithoutProjectBuild(t *testing.T) {
+	t.Parallel()
 	root := validationSandbox(t)
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("Node unavailable")
@@ -282,6 +248,7 @@ func TestValidationBudgetDoesNotCancelWrites(t *testing.T) {
 }
 
 func TestValidationIgnoresOnlyGeneratedPathsInsideWorkspace(t *testing.T) {
+	t.Parallel()
 	base := validationSandbox(t)
 	root := filepath.Join(base, "build")
 	writeToolTestFile(t, root, "source.json", "{}")

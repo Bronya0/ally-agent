@@ -32,17 +32,14 @@ type (
 // shares one cache without the tool package depending on App.
 var memoryIndexCache = memory.IndexCache
 
-// aGlobalApp is set in NewApp so package-level helpers that predate the
-// Runtime injection (listMemories, memoryIndexCache usage in prompt_builder)
-// can reach the active App without a parameter change. It is nil before NewApp
-// and after shutdown; callers must guard accordingly.
-var aGlobalApp *App
-
 // memoriesRuntime returns *App as a memory.Runtime. The interface is satisfied
 // structurally by MemoriesDir(); emit is not needed by the memory tool itself.
 func (a *App) memoriesRuntime() memory.Runtime { return a }
 
-// listMemories delegates to the memory tool with App as the Runtime.
-func listMemories() (MemoryListResult, error) {
-	return memory.List(aGlobalApp.memoriesRuntime())
+// listMemories delegates to the memory tool with this App as the Runtime. The
+// package-level aGlobalApp singleton it used to read is gone: prompt assembly
+// and the memory tool both carry their own App, so parallel tests cannot see
+// each other's memory directory.
+func (a *App) listMemories() (MemoryListResult, error) {
+	return memory.List(a.memoriesRuntime())
 }

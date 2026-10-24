@@ -89,13 +89,15 @@ type statsRecorder struct {
 	storageDir    string
 }
 
-func newStatsRecorder() *statsRecorder {
+// newStatsRecorder owns the day files under storageDir. An empty storageDir is
+// resolved lazily from the process data directory (see load/persist).
+func newStatsRecorder(storageDir string) *statsRecorder {
 	s := &statsRecorder{
 		days:       map[string][]statsRecord{},
 		dirtyDays:  map[string]bool{},
 		queue:      make(chan statsRecord, statsQueueSize),
 		done:       make(chan struct{}),
-		storageDir: statsDir(),
+		storageDir: storageDir,
 	}
 	s.lifecycleCond = sync.NewCond(&s.lifecycleMu)
 	s.accepting = true

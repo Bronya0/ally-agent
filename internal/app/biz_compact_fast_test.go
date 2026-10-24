@@ -36,6 +36,7 @@ func fastCompactFixture() []openai.ChatCompletionMessage {
 }
 
 func TestFastCompactPreservesTailAndIsIdempotent(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = nil // no OS credentials/storage in unit tests
 	history := fastCompactFixture()
@@ -77,6 +78,7 @@ func TestFastCompactPreservesTailAndIsIdempotent(t *testing.T) {
 }
 
 func TestFastCompactKeepsLatestPlanAndSmallResults(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = nil
 	history := fastCompactFixture()
@@ -93,6 +95,7 @@ func TestFastCompactKeepsLatestPlanAndSmallResults(t *testing.T) {
 }
 
 func TestFastCompactDoesNotGrowSmallHistory(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	h := fastCompactFixture()
 	for i := range h {
@@ -111,6 +114,7 @@ func TestFastCompactDoesNotGrowSmallHistory(t *testing.T) {
 }
 
 func TestFastCompactClearsOnlyOldArgumentsIncludingNativeReplay(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = nil
 	history := fastCompactFixture()
@@ -171,6 +175,7 @@ func TestFastCompactClearsOnlyOldArgumentsIncludingNativeReplay(t *testing.T) {
 }
 
 func TestFastCompactBoundsOldAnswersWithoutToolCalls(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = nil
 	var history []openai.ChatCompletionMessage
@@ -222,6 +227,7 @@ func TestFastCompactBoundsOldAnswersWithoutToolCalls(t *testing.T) {
 }
 
 func TestFastCompactAnswerEditsDistinguishRepeatedRecentText(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = nil
 	text := strings.Repeat("same answer ", 1000)
@@ -241,6 +247,7 @@ func TestFastCompactAnswerEditsDistinguishRepeatedRecentText(t *testing.T) {
 }
 
 func TestFastCompactNativeAnswersRewriteAndReindexRetainedTail(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = nil
 	var history []openai.ChatCompletionMessage
@@ -282,6 +289,7 @@ func TestFastCompactNativeAnswersRewriteAndReindexRetainedTail(t *testing.T) {
 }
 
 func TestFastCompactGuardsAndCancellation(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	a.runSessions["run"] = "running"
 	if _, err := a.FastCompactSession("running"); !errors.Is(err, errSessionRunning) {
@@ -309,6 +317,7 @@ func TestFastCompactGuardsAndCancellation(t *testing.T) {
 }
 
 func TestFastCompactSurvivesProtectedRestartAndDiskFallback(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	block, err := aes.NewCipher(make([]byte, 32))
 	if err != nil {
@@ -402,6 +411,7 @@ func TestFastCompactNativeResponsesPreservesPhaseAndCalls(t *testing.T) {
 }
 
 func TestAutoCompactMethodConfigDefaultsAndPersistence(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	if a.config.AutoCompactMethod != autoCompactMethodSummary {
 		t.Fatal("default must remain the full LLM summary")
@@ -433,6 +443,7 @@ func TestAutoCompactMethodConfigDefaultsAndPersistence(t *testing.T) {
 }
 
 func TestAutoCompactRecentPreservesRequestWithoutLLM(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = nil
 	var requests atomic.Int32
@@ -470,6 +481,7 @@ func TestAutoCompactRecentPreservesRequestWithoutLLM(t *testing.T) {
 }
 
 func TestAutoCompactRecentFallbackFailureCircuit(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = nil
 	a.stats = nil
@@ -503,6 +515,7 @@ func TestAutoCompactRecentFallbackFailureCircuit(t *testing.T) {
 }
 
 func TestAutoCompactRecentFallsBackWhenRewriteSavesNoMessageTokens(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = nil
 	a.stats = nil
@@ -532,6 +545,7 @@ func TestAutoCompactRecentFallsBackWhenRewriteSavesNoMessageTokens(t *testing.T)
 }
 
 func TestAutoCompactRecentOverflowStillUsesSummary(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	a.stats = nil
 	var requests atomic.Int32

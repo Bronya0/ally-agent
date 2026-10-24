@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"image"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -29,9 +30,56 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	cleanupEnv, err := isolateProcessEnvironment()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	code := m.Run()
-	cleanupValidationGoCache()
+	cleanupEnv()
 	os.Exit(code)
+}
+
+// isolateProcessEnvironment points every process-wide path a test can reach
+// (home, temp root, Go build caches, git config) at one throwaway directory, so
+// no case can read or write the user's real ~/.ally_agent, build cache or git
+// config. The values are set once, before m.Run, which is exactly what lets
+// isolated cases use t.Parallel: t.Setenv is forbidden there, but constants are
+// not a race. Per-case separation still comes from injecting a data directory
+// into the App (see newAppState).
+func isolateProcessEnvironment() (func(), error) {
+	root, err := os.MkdirTemp("", "ally-test-env-")
+	if err != nil {
+		return nil, err
+	}
+	tempRoot := filepath.Join(root, "tmp")
+	goCache := filepath.Join(root, "gocache")
+	goMod := filepath.Join(root, "gomod")
+	for _, dir := range []string{tempRoot, goCache, goMod} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			_ = os.RemoveAll(root)
+			return nil, err
+		}
+	}
+	env := map[string]string{
+		"HOME":                root,
+		"USERPROFILE":         root,
+		"TMP":                 tempRoot,
+		"TEMP":                tempRoot,
+		"TMPDIR":              tempRoot,
+		"GOCACHE":             goCache,
+		"GOMODCACHE":          goMod,
+		"GOWORK":              "off",
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_CONFIG_GLOBAL":   filepath.Join(root, "gitconfig"),
+	}
+	for key, value := range env {
+		if err := os.Setenv(key, value); err != nil {
+			_ = os.RemoveAll(root)
+			return nil, err
+		}
+	}
+	return func() { _ = os.RemoveAll(root) }, nil
 }
 
 func TestScreenshotScaledMetadataMatchesImage(t *testing.T) {

@@ -1332,7 +1332,7 @@ func (a *App) sessionSystemPrompt(sessionID string, cfg ConfigState, allSkills [
 // sessionSystemPrompts on App for the rationale.
 func (a *App) sessionSystemPromptParts(sessionID string, cfg ConfigState, allSkills []SkillDefinition) []systemPromptPart {
 	if strings.TrimSpace(sessionID) == "" {
-		return buildSystemPromptParts(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
+		return a.buildSystemPromptParts(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
 	}
 	a.mu.Lock()
 	if frozen, ok := a.sessionSystemPrompts[sessionID]; ok {
@@ -1341,7 +1341,7 @@ func (a *App) sessionSystemPromptParts(sessionID string, cfg ConfigState, allSki
 	}
 	a.mu.Unlock()
 
-	parts := buildSystemPromptParts(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
+	parts := a.buildSystemPromptParts(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
 	if len(parts) == 0 {
 		return nil
 	}
@@ -1393,7 +1393,7 @@ func (a *App) systemPromptPartsForBreakdown(sessionID string, cfg ConfigState, s
 			return frozen
 		}
 	}
-	return buildSystemPromptParts(skills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
+	return a.buildSystemPromptParts(skills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
 }
 
 func (a *App) loadSessionHistoryCopy(sessionID string) []openai.ChatCompletionMessage {

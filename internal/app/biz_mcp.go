@@ -241,6 +241,13 @@ func mcpUserConfigPath() string {
 	return filepath.Join(appDataDir(), "mcp.json")
 }
 
+// mcpUserConfigPath resolves mcp.json under this App's data directory. The
+// package-level helper stays for the manager default; everything App-scoped goes
+// through here so a test App never shares the file with another test.
+func (a *App) mcpUserConfigPath() string {
+	return filepath.Join(a.AppDataDir(), "mcp.json")
+}
+
 func (m *McpManager) LoadConfigs() (map[string]McpServerConfig, error) {
 	m.configMu.Lock()
 	defer m.configMu.Unlock()
@@ -2184,7 +2191,7 @@ func (a *App) emitMcpStatus() {
 }
 
 func (a *App) GetMcpConfig() (string, error) {
-	path := mcpUserConfigPath()
+	path := a.mcpUserConfigPath()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "{\n  \"mcpServers\": {}\n}", nil
@@ -2220,7 +2227,7 @@ func (a *App) SaveMcpConfig(raw string) error {
 	if err != nil {
 		return err
 	}
-	path := mcpUserConfigPath()
+	path := a.mcpUserConfigPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -2358,6 +2365,9 @@ func (a *App) RestartMcpServers() error {
 	manager := NewMcpManager(root, func() {
 		a.emitMcpStatus()
 	})
+	// Same pin as the startup path: the manager's default user config file is the
+	// process-wide one, which an App owning its own data directory must not use.
+	manager.configPaths = []string{a.mcpUserConfigPath()}
 	manager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
 	manager.SetWarningHandler(func(message string) {
 		a.emit("config:warning", map[string]any{"field": "mcp", "message": message})

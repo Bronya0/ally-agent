@@ -9,6 +9,7 @@ import (
 )
 
 func TestCopyDroppedDirectoryResolvesParentAliasesBeforeSelfCheck(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	base := t.TempDir()
 	root := filepath.Join(base, "real")

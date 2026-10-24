@@ -12,19 +12,11 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+// footerStatsTestApp: HOME/TMP and the git config already point at the throwaway
+// root set up by TestMain, so the app only needs its own private data directory.
 func footerStatsTestApp(t *testing.T) *App {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
-	app := NewApp()
-	app.initialized = true
-	app.config = ConfigState{Workspace: t.TempDir()}
-	app.sessionsDir = t.TempDir()
-	app.historiesDir = t.TempDir()
-	return app
+	return newIsolatedChatTestApp(t)
 }
 
 func TestFooterPrefixPreviewFreezeAndRefresh(t *testing.T) {
@@ -116,6 +108,7 @@ func TestFooterSavedHistoryCacheTracksRewriteAndAnchor(t *testing.T) {
 }
 
 func TestFooterGitInvalidationAndRepoDiscovery(t *testing.T) {
+	t.Parallel()
 	app := footerStatsTestApp(t)
 	root := app.config.Workspace
 	repo := filepath.Join(root, "child")

@@ -486,7 +486,7 @@ func TestCommandFenceRefusesTheDataDirectorySecrets(t *testing.T) {
 
 	// 档案文件名在 app 里，凭据清单在 pathutil 里：清单一旦误收这个名字，模型读自己
 	// 那份档案就会被围栏拒掉，这里是把两边钉在一起的地方。
-	profile := "\"" + userProfilePath() + "\""
+	profile := "\"" + (&App{}).userProfilePath() + "\""
 	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat " + profile, Cwd: workspace}, roots, workspace); err != nil {
 		t.Fatalf("the user profile is meant to be read: %v", err)
 	}

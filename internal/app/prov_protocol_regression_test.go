@@ -37,6 +37,7 @@ func nativeReply(output []json.RawMessage) string {
 }
 
 func TestResponsesNativeReplayAndProtectedRestart(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	block, _ := aes.NewCipher(make([]byte, 32))
 	gcm, _ := cipher.NewGCM(block)
@@ -196,6 +197,7 @@ func TestResponsesTerminalDoesNotWaitForConnection(t *testing.T) {
 }
 
 func TestSubagentDoesNotMultiplyAdapterRetries(t *testing.T) {
+	t.Parallel()
 	for _, format := range []string{apiFormatOpenAIChat, apiFormatOpenAIResponses} {
 		t.Run(format, func(t *testing.T) {
 			a := newApiTestApp(t)
@@ -370,6 +372,7 @@ func TestChatCacheMissIncludesCompletelyUncachedRequests(t *testing.T) {
 }
 
 func TestAnthropicFailedAttemptsKeepUsage(t *testing.T) {
+	t.Parallel()
 	for _, retry := range []bool{false, true} {
 		t.Run(fmt.Sprint("retry=", retry), func(t *testing.T) {
 			a := newApiTestApp(t)
@@ -440,6 +443,7 @@ func (unavailableHistoryProtector) Open([]byte) ([]byte, error) {
 }
 
 func TestProtectedHistoryFailureFallsBackWithoutPlaintextState(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = &modelHistoryCodec{protector: unavailableHistoryProtector{}}
 	cfg := protocolConfig("https://mock.invalid/v1", apiFormatOpenAIResponses)
@@ -493,6 +497,7 @@ func TestResponsesInterruptedBeforeTerminalCannotBecomeReplayState(t *testing.T)
 }
 
 func TestResponsesCallIDsIndependentOfNativeReplay(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, terminal string
 		scope, native  bool
@@ -566,6 +571,7 @@ func TestResponsesCallIDsIndependentOfNativeReplay(t *testing.T) {
 }
 
 func TestProtectedHistoryOmitsImagesButKeepsToolEvidence(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	block, _ := aes.NewCipher(make([]byte, 32))
 	gcm, _ := cipher.NewGCM(block)
@@ -602,6 +608,7 @@ func TestProtectedHistoryOmitsImagesButKeepsToolEvidence(t *testing.T) {
 }
 
 func TestResponsesSparseOutputIndexesDoNotDuplicateCalls(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	cfg := protocolConfig("https://mock.invalid", apiFormatOpenAIResponses)
 	wire := ""
@@ -623,6 +630,7 @@ func TestResponsesSparseOutputIndexesDoNotDuplicateCalls(t *testing.T) {
 }
 
 func TestProtectedReplayRebasesOnlyUnchangedTurns(t *testing.T) {
+	t.Parallel()
 	call := func(name, args string) openai.ToolCall {
 		return openai.ToolCall{ID: "bad_call", Type: "function", Function: openai.FunctionCall{Name: name, Arguments: args}}
 	}

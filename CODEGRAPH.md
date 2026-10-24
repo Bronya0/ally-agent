@@ -20,6 +20,8 @@
 | ChatGPT 官方 OAuth（动态注册 / PKCE / OIDC / 多账号 / 加密凭据 / 跨进程刷新锁 / 撤销） | `internal/chatgpt/`；桥接 `internal/app/biz_chatgpt.go` + `host_chatgpt.go`；订阅 Responses 兼容层 `prov_chatgpt.go`；设置与模型页共用 `ChatGPTAccounts.vue`；实现说明 `docs/chatgpt-auth.md` |
 | 模型列表拉取 | `internal/app/biz_modellist.go`（FetchModelList） |
 | AGENTS.md / CODEGRAPH.md 注入、背景图 | `internal/app/biz_project_context.go`（loadAgentsMd / loadCodeGraph） |
+| App 数据目录解析（config / sessions / histories / stats / memories / mcp.json / chatgpt 存储） | `internal/app/biz_config.go` 的 `(*App).AppDataDir`（来源是 `newAppState(dataDir)` 注入）；进程级 `appDataDir()` 只给 Bootstrap 与围栏 `pathRuntime` 用，运行期一律走 App，否则测试会读写真用户目录、并行用例互相串台 |
+| 系统提示词组装的数据来源（记忆索引 / USER.md 走 App） | `internal/app/biz_prompt.go` 的 `(*App).buildSystemPromptParts`（调用点 `biz_context.go`），已无包级单例 |
 | 临时工作区（创建/清理） | `internal/app/biz_temp_workspace.go` |
 | 内置技能清单 | `internal/app/biz_skills.go`（`builtinSkillEntries`） |
 | 错误日志轮转 | `internal/app/infra_log.go`（InitErrorLogger） |

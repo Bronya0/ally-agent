@@ -34,6 +34,7 @@ func TestLocalCommandToolWarningsUseExecutablePositions(t *testing.T) {
 }
 
 func TestCommandSearchWarningReachesModelWithoutChangingExitCode(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	for _, commandLine := range []string{`printf needle | grep needle`, `printf needle | grep absent`} {
 		args, err := json.Marshal(CommandRequest{Command: commandLine, Timeout: 10})

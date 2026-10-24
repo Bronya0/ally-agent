@@ -19,6 +19,7 @@ import (
 )
 
 func TestReadPreviewBudgetKeepsBatchBoundedAndContinuationEditable(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	root := a.config.Workspace
 	text := strings.Repeat(strings.Repeat("x", 99)+"\n", 1000)
@@ -161,6 +162,7 @@ func TestCommandSpillSkipsOutputThatFitsModel(t *testing.T) {
 }
 
 func TestCommandFullLogCanBeReadAndSearched(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		if _, name := findWindowsBash(""); name == "" {
 			t.Skip("requires Git Bash")

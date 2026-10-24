@@ -54,6 +54,7 @@ func TestReadOnlyTailCacheSeparatesRequestedLengths(t *testing.T) {
 }
 
 func TestCommandPromotionFailureRetainsOutput(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, reason    string
 		spill, stopping bool

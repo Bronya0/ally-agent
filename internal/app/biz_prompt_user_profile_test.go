@@ -57,14 +57,15 @@ func TestUserProfilePromptPartInjectsBodyWithoutFrontmatter(t *testing.T) {
 
 func TestUserProfilePathFeedsThePromptPart(t *testing.T) {
 	redirectAppStateDir(t)
-	path := userProfilePath()
+	app := NewApp()
+	path := app.userProfilePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("- 称呼：老唐\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := buildUserProfilePromptPart(userProfilePath())
+	got := buildUserProfilePromptPart(app.userProfilePath())
 	if !strings.Contains(got, "- 称呼：老唐") || !strings.Contains(got, "<user-profile") {
 		t.Fatalf("the profile under the app data directory must feed the prompt block, got %q", got)
 	}

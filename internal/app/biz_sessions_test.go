@@ -23,6 +23,7 @@ import (
 )
 
 func TestStartupSessionIndexDoesNotScanOrphanedSnapshots(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	snapshot := SessionSnapshot{ID: "orphan", Title: "Recovered", Messages: []map[string]any{{"role": "user", "content": "recover me"}}}
 	if err := writeCompressedJSONAtomic(app.sessionSnapshotPath(snapshot.ID), mustJSON(snapshot)); err != nil {
@@ -45,6 +46,7 @@ func TestStartupSessionIndexDoesNotScanOrphanedSnapshots(t *testing.T) {
 }
 
 func TestSessionIndexRepairRejectsConcurrentEditsAndDeletes(t *testing.T) {
+	t.Parallel()
 	for _, action := range []string{"rename", "delete"} {
 		t.Run(action, func(t *testing.T) {
 			app := newApiTestApp(t)
@@ -94,6 +96,7 @@ func TestSessionIndexRepairRejectsConcurrentEditsAndDeletes(t *testing.T) {
 }
 
 func TestSessionRepairCancellationDoesNotWriteIndex(t *testing.T) {
+	t.Parallel()
 	app := newApiTestApp(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

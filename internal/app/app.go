@@ -372,6 +372,12 @@ type App struct {
 	httpRateMu   sync.Mutex
 	httpLastHost map[string]time.Time
 
+	// dataDir is the data directory this App owns: config, sessions, histories,
+	// stats, memories, plugins and the ChatGPT store all resolve under it.
+	// Production sets it from appDataDir(); tests inject a t.TempDir so a run
+	// never reads or writes the user's real ~/.ally_agent and can be parallel.
+	dataDir string
+
 	// Optional scheduler for deterministic retry tests. Set before starting runs;
 	// nil uses the production timer and preserves Retry-After/backoff policy.
 	retryWait func(context.Context, time.Duration) error
@@ -438,15 +444,12 @@ type App struct {
 }
 
 func NewApp() *App {
-	a := newAppState(appDataDir())
-	// Only the desktop host publishes the legacy singleton. Isolated consumers
-	// can construct state without changing another App's package-level helpers.
-	aGlobalApp = a
-	return a
+	return newAppState(appDataDir())
 }
 
 func newAppState(dataDir string) *App {
 	a := &App{
+		dataDir:            dataDir,
 		chatGPT:            chatgpt.New(filepath.Join(dataDir, "chatgpt"), chatgpt.NewSystemProtector()),
 		runs:               map[string]context.CancelFunc{},
 		runSessions:        map[string]string{},
@@ -492,7 +495,7 @@ func newAppState(dataDir string) *App {
 		workspaceTokenUsage:  map[string]WorkspaceTokenUsage{},
 		services:             map[string]*managedService{},
 		keyCooldowns:         map[string]time.Time{},
-		stats:                newStatsRecorder(),
+		stats:                newStatsRecorder(filepath.Join(dataDir, statsSubDir)),
 		reasoningStash:       newReasoningStash(),
 		modelHistoryCodec:    newModelHistoryCodec(),
 	}
@@ -1626,13 +1629,13 @@ func (a *App) ensureInitialized() error {
 		return nil
 	}
 
-	cfgDir := appDataDir()
+	cfgDir := a.AppDataDir()
 	a.configPath = filepath.Join(cfgDir, "config.json")
 	a.historiesDir = filepath.Join(cfgDir, "histories")
 	a.sessionsDir = filepath.Join(cfgDir, "sessions")
 	os.MkdirAll(a.historiesDir, 0755)
 	os.MkdirAll(a.sessionsDir, 0755)
-	os.MkdirAll(memoriesDir(), 0755)
+	os.MkdirAll(a.memoriesDir(), 0755)
 
 	a.config = defaultConfigState()
 

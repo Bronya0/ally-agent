@@ -152,7 +152,7 @@ func TestRecordLLMUsageFeedsBothSinks(t *testing.T) {
 }
 
 func TestStatsRecorderQueueNeverBlocksWhenFull(t *testing.T) {
-	recorder := newStatsRecorder()
+	recorder := newStatsRecorder("")
 	for i := 0; i < statsQueueSize; i++ {
 		recorder.record(statsRecord{Model: "model", InputTokens: 1})
 	}
@@ -177,7 +177,7 @@ func TestStatsRecorderQueueNeverBlocksWhenFull(t *testing.T) {
 
 func TestStatsRecorderStopFlushesPendingRecords(t *testing.T) {
 	dir := t.TempDir()
-	recorder := newStatsRecorder()
+	recorder := newStatsRecorder("")
 	recorder.storageDir = dir
 	recorder.start(context.Background())
 	now := time.Now()
@@ -413,7 +413,7 @@ func TestRecoverStatsBackupsReplacesCorruptDestination(t *testing.T) {
 }
 
 func TestStatsRecorderRejectsRecordsAfterStop(t *testing.T) {
-	recorder := newStatsRecorder()
+	recorder := newStatsRecorder("")
 	if err := recorder.stop(time.Second); err != nil {
 		t.Fatalf("stop() error = %v", err)
 	}

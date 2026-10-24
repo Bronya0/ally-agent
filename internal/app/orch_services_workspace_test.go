@@ -74,10 +74,12 @@ func TestServiceToolWorkspaceIsolation(t *testing.T) {
 }
 
 func TestServiceStartAndCommandPromotionKeepWorkspaceOwner(t *testing.T) {
+	t.Parallel()
 	root := validationSandbox(t)
 	extra := t.TempDir()
 	cfg := ConfigState{Workspace: root, ExtraRoots: []string{extra}}
-	a := NewApp()
+	// Isolated App: the service and its output spill must not land in a shared data dir.
+	a := newIsolatedToolTestApp(t)
 	t.Cleanup(a.stopAllServices)
 	args, _ := json.Marshal(BackgroundProcessRequest{Action: "start", Description: " 校验服务归属 ", Command: "printf 'owner-probe\\n'", Cwd: extra})
 	started := a.executeTool(context.Background(), cfg, "s", "service", args)

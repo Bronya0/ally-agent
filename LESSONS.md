@@ -217,3 +217,5 @@
 [window-id-sign] 2026-10-24 中危 窗口 id 判据别写 >0：HWND 是符号指针，负句柄合法，列表能列出却被捕获层拒。@screenshot/ValidWindowID
 [edit-batch-receipt] 2026-10-25 中危 同轮并行 edit 只要一个失败，整批回执都填成那一个错误（别人的），模型会去改本来没问题的文件。@orch_edit.go
 [parallel-test-isolation] 2026-10-25 中危 并行用例禁用 NewApp()（写 aGlobalApp 单例）与 t.Setenv（直接 panic）：改用 newIsolatedToolTestApp。@internal/app
+[app-data-dir-scope] 2026-10-25 高危 运行期路径别用包级 appDataDir() 解析：测试会读写真 ~/.ally_agent、并行用例串台；走 (*App).AppDataDir。@biz_config.go
+[testmain-const-env] 2026-10-25 中危 逐用例 t.Setenv 等于放弃并行：HOME/TMP/GOCACHE/GIT_CONFIG 设一次进 TestMain，逐用例隔离改注入 App。@orch_screenshot_test.go

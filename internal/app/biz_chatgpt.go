@@ -21,7 +21,7 @@ func (a *App) chatGPTManager() *chatgpt.Manager {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.chatGPT == nil {
-		a.chatGPT = chatgpt.New(filepath.Join(appDataDir(), "chatgpt"), chatgpt.NewSystemProtector())
+		a.chatGPT = chatgpt.New(filepath.Join(a.AppDataDir(), "chatgpt"), chatgpt.NewSystemProtector())
 	}
 	return a.chatGPT
 }

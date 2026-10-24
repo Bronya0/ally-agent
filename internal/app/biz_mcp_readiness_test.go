@@ -52,6 +52,7 @@ func (s *mcpWaitEventSink) snapshot() []map[string]any {
 }
 
 func TestMcpFirstSessionWaitsBeforeFreezingAndReportsProgress(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	m := NewMcpManager(a.config.Workspace, nil)
 	defer m.Shutdown()
@@ -126,6 +127,7 @@ func TestMcpFirstSessionWaitsBeforeFreezingAndReportsProgress(t *testing.T) {
 }
 
 func TestMcpDiscoveryWaitIsCancellableAndBounded(t *testing.T) {
+	t.Parallel()
 	for _, timeout := range []bool{false, true} {
 		t.Run(map[bool]string{false: "cancel", true: "deadline"}[timeout], func(t *testing.T) {
 			a := newApiTestApp(t)
@@ -226,6 +228,7 @@ func TestMcpDiscoveryProgressShrinksAndShutdownWakesWaiter(t *testing.T) {
 }
 
 func TestMcpReloadFailureRetainsLiveServersAndSnapshot(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	m := NewMcpManager(a.config.Workspace, nil)
 	defer m.Shutdown()
@@ -261,6 +264,7 @@ func TestMcpReloadFailureRetainsLiveServersAndSnapshot(t *testing.T) {
 }
 
 func TestMcpSSEStartupDeadlineCoversResponseHeaders(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	arrived := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { arrived <- struct{}{}; <-r.Context().Done() }))
@@ -286,6 +290,7 @@ func TestMcpSSEStartupDeadlineCoversResponseHeaders(t *testing.T) {
 }
 
 func TestMcpReconnectedStdioOutlivesCallingContext(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	script := filepath.Join(t.TempDir(), "server.py")
 	if err := os.WriteFile(script, []byte(mcpStdioTestServerScript), 0600); err != nil {
@@ -310,6 +315,7 @@ func TestMcpReconnectedStdioOutlivesCallingContext(t *testing.T) {
 }
 
 func TestMcpSSEConnectionOutlivesStartupBudgetAndCaller(t *testing.T) {
+	t.Parallel()
 	a := newApiTestApp(t)
 	protocol := server.NewMCPServer("lifetime-test", "1.0", server.WithToolCapabilities(true))
 	protocol.AddTool(mcp.NewTool("echo"), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {

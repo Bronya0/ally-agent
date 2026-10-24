@@ -43,9 +43,7 @@ func TestInitializationLeavesCleanupOutsideConfigLock(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(appDataDir(), "config.json"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	previous := aGlobalApp
 	app := NewApp()
-	t.Cleanup(func() { aGlobalApp = previous })
 	if err := app.ensureInitialized(); err != nil {
 		t.Fatal(err)
 	}
