@@ -11,11 +11,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"ally-dev/internal/tools/read"
 	toolerrors "ally-dev/internal/tools/shared"
 )
 
@@ -453,6 +453,7 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 		start   int
 		end     int
 		newText string
+		repeat  string // nonempty only for a replaceAll stream
 	}
 	located := make([]locatedChange, 0, len(changes))
 	warnings := make([]string, 0, 2)
@@ -467,6 +468,9 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 	var index *lineIndex
 	for i, change := range changes {
 		newText := NormalizeEditString(change.NewText)
+		if len(newText) > read.MaxReadBytes {
+			return nil, 0, toolerrors.New("E_FILE_TOO_LARGE", errors.New("replacement exceeds the 32 MiB text limit"))
+		}
 		if strings.TrimSpace(change.LineRange) != "" {
 			if index == nil {
 				index = buildLineIndex(content)
@@ -497,21 +501,8 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 			continue
 		}
 		if change.ReplaceAll {
-			// Stream replacements directly without retaining every match
-			// offset: a replace-all over a large file must not allocate a
-			// slice proportional to the match count.
-			count := 0
-			for from := 0; from <= len(content)-len(oldText); {
-				rel := strings.Index(content[from:], oldText)
-				if rel < 0 {
-					break
-				}
-				start := from + rel
-				located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText})
-				count++
-				from = start + len(oldText)
-			}
-			if count > 0 {
+			if start := strings.Index(content, oldText); start >= 0 {
+				located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText, repeat: oldText})
 				continue
 			}
 		} else {
@@ -534,20 +525,13 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 				newText = strippedNew
 			}
 			oldText = strippedOld
+			if oldText == "" {
+				return nil, 0, toolerrors.New("E_BAD_EDIT", errors.New("oldText is empty after removing line-number prefixes"))
+			}
 			warnings = append(warnings, fmt.Sprintf("change %d: stripped read line-number prefixes (N: ) from oldText", i+1))
 			if change.ReplaceAll {
-				count := 0
-				for from := 0; from <= len(content)-len(oldText); {
-					rel := strings.Index(content[from:], oldText)
-					if rel < 0 {
-						break
-					}
-					start := from + rel
-					located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText})
-					count++
-					from = start + len(oldText)
-				}
-				if count > 0 {
+				if start := strings.Index(content, oldText); start >= 0 {
+					located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText, repeat: oldText})
 					continue
 				}
 			} else {
@@ -612,32 +596,60 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 	if len(located) == 0 {
 		return &Result{Content: content, Warnings: warnings}, 0, nil
 	}
-	sort.Slice(located, func(i, j int) bool {
-		if located[i].start == located[j].start {
-			return located[i].end < located[j].end
+	// Merge at most 50 match streams. A million replaceAll matches still keep
+	// only one cursor per change. Validate overlaps and final size before allocating.
+	walk := func(visit func(locatedChange)) (int, int64, error) {
+		streams := append([]locatedChange(nil), located...)
+		cursor, previous, count := 0, 0, 0
+		size := int64(len(content))
+		for len(streams) > 0 {
+			first := 0
+			for i := 1; i < len(streams); i++ {
+				if streams[i].start < streams[first].start || (streams[i].start == streams[first].start && streams[i].end < streams[first].end) {
+					first = i
+				}
+			}
+			c := streams[first]
+			if c.start < cursor {
+				return 0, 0, toolerrors.New("E_OVERLAPPING_CHANGES", fmt.Errorf("changes %d and %d match overlapping source text; merge them into one replacement", previous+1, c.index+1))
+			}
+			if visit != nil {
+				visit(c)
+			}
+			size += int64(len(c.newText)) - int64(c.end-c.start)
+			cursor, previous = c.end, c.index
+			count++
+			if c.repeat != "" {
+				if next := strings.Index(content[c.end:], c.repeat); next >= 0 {
+					c.start = c.end + next
+					c.end = c.start + len(c.repeat)
+					streams[first] = c
+					continue
+				}
+			}
+			streams[first] = streams[len(streams)-1]
+			streams = streams[:len(streams)-1]
 		}
-		return located[i].start < located[j].start
-	})
-	for i := 1; i < len(located); i++ {
-		if located[i].start < located[i-1].end {
-			return nil, 0, toolerrors.New("E_OVERLAPPING_CHANGES", fmt.Errorf("changes %d and %d match overlapping source text; merge them into one replacement", located[i-1].index+1, located[i].index+1))
-		}
+		return count, size, nil
+	}
+	replacements, outputLen, err := walk(nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	if outputLen > read.MaxReadBytes {
+		return nil, 0, toolerrors.New("E_FILE_TOO_LARGE", errors.New("edited file exceeds the 32 MiB text limit; split the generated data into separate files"))
 	}
 	var builder strings.Builder
 	// Assemble the immutable snapshot once. Applying each replacement with
 	// updated[:start] + ... + updated[end:] repeatedly copied the full file and
 	// made a batch of M edits approach O(M*N) time and allocation volume.
-	outputLen := len(content)
-	for _, change := range located {
-		outputLen += len(change.newText) - (change.end - change.start)
-	}
-	builder.Grow(outputLen)
+	builder.Grow(int(outputLen))
 	cursor := 0
-	for _, change := range located {
+	_, _, _ = walk(func(change locatedChange) {
 		builder.WriteString(content[cursor:change.start])
 		builder.WriteString(change.newText)
 		cursor = change.end
-	}
+	})
 	builder.WriteString(content[cursor:])
 	updated := builder.String()
 	if updated == content {
@@ -649,7 +661,7 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 		FirstChangedLine: changedRange.FirstChangedLine,
 		LastChangedLine:  changedRange.LastChangedLine,
 		Warnings:         warnings,
-	}, len(located), nil
+	}, replacements, nil
 }
 
 // lineRangeOffsetsWithIndex locates an inclusive whole-line range in the

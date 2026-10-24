@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	toolerrors "ally-dev/internal/tools/shared"
 )
@@ -1020,17 +1021,16 @@ func renderReadResultForModel(r BatchReadResult) string {
 	// keeps the version attribute (and the version really did change). Promising
 	// the whole file or the version is unchanged would be a claim the cache cannot
 	// back up.
-	const reusedNote = "[Content omitted: this exact path/range reads the same as what you were already sent earlier in this conversation, so it is not repeated. The version attribute above is the current file version — safe to reuse for edit. Ask for a narrower line range if you need the text itself.]"
-	if len(r.Files) == 0 {
+	if len(r.Files) == 0 && len(r.Missing) == 0 {
 		return "(no readable files returned)"
 	}
 	var b strings.Builder
 	injected := false
+	for _, f := range r.Missing {
+		b.WriteString(`<ally-file path="` + attrEscape(f.Path) + `" error="` + attrEscape(f.ErrorCode) + `"/>` + "\n")
+	}
 	for _, f := range r.Files {
 		body := f.Content
-		if f.Reused {
-			body = reusedNote
-		}
 		body = escapeClosingMarker(body, "</ally-file")
 		b.WriteString(`<ally-file path="` + attrEscape(f.Path) + `"`)
 		if f.Error != "" {
@@ -1042,7 +1042,12 @@ func renderReadResultForModel(r BatchReadResult) string {
 			b.WriteString(` error="` + attrEscape(code) + `">` + message + "</ally-file>\n")
 			continue
 		}
-		b.WriteString(` version="` + attrEscape(f.Version) + `"`)
+		if f.Version != "" {
+			b.WriteString(` version="` + attrEscape(f.Version) + `"`)
+		}
+		if !f.Editable && f.Version == "" {
+			b.WriteString(` editable="false"`)
+		}
 		if f.StartLine > 0 && f.EndLine > 0 {
 			fmt.Fprintf(&b, ` lines="%d-%d"`, f.StartLine, f.EndLine)
 		}
@@ -1056,7 +1061,8 @@ func renderReadResultForModel(r BatchReadResult) string {
 			b.WriteString(` truncated-lines="` + attrEscape(formatTruncatedLines(f.TruncatedLines, f.TruncatedLinesOmitted)) + `"`)
 		}
 		if f.Reused {
-			b.WriteString(` reused`)
+			b.WriteString(" reused/>\n")
+			continue
 		}
 		if f.DataURL != "" {
 			b.WriteString(` image="sent as image input in following message"`)
@@ -1120,6 +1126,9 @@ func renderCommandResultForModel(r CommandResult) string {
 	if r.DeniedWriteHint != "" {
 		body += "\n\n" + strings.TrimRight(r.DeniedWriteHint, "\n")
 	}
+	if r.OutputWarning != "" {
+		body += "\n\n" + r.OutputWarning
+	}
 	body = escapeClosingMarker(body, "</ally-command")
 	var b strings.Builder
 	b.WriteString("<ally-command")
@@ -1141,11 +1150,15 @@ func renderCommandResultForModel(r CommandResult) string {
 		fmt.Fprintf(&b, ` reduced-from="%d"`, reducedFrom)
 	}
 	if r.OutputFilePath != "" {
-		b.WriteString(` full="` + attrEscape(r.OutputFilePath) + `"`)
+		key := "full"
+		if r.OutputFileIncomplete {
+			key = "partial"
+		}
+		b.WriteString(" " + key + `="` + attrEscape(r.OutputFilePath) + `"`)
 	}
 	b.WriteString(">\n")
 	b.WriteString(body)
-	if reducedFrom > 0 || r.OutputFilePath != "" {
+	if !r.OutputFileIncomplete && (reducedFrom > 0 || r.OutputFilePath != "") {
 		b.WriteString("\n" + escapeClosingMarker(commandModelReducedNote(r.OutputFilePath), "</ally-command"))
 	}
 	b.WriteString("\n</ally-command>")
@@ -1157,7 +1170,7 @@ func renderCommandResultForModel(r CommandResult) string {
 // remote commands or a failed spill may have no retrievable copy.
 func commandModelReducedNote(outputFilePath string) string {
 	if outputFilePath != "" {
-		return "[中间段已从模型上下文省略；完整输出在 " + outputFilePath + "（见 full 属性），需要中间段就用 read 分段读或 grep 检索该文件，不要整读]"
+		return "[中间段已从模型上下文省略；完整输出在 " + outputFilePath + "（见 full 属性）。本地用 read/grep，远端用同一 target 的 remote_read 或只读命令检索；日志过大时用 tailLines，不要整读]"
 	}
 	return "[中间段已从模型上下文省略，未提供完整日志文件；不要仅为查看输出重复执行有副作用的命令]"
 }
@@ -1504,31 +1517,26 @@ func compactTextForModel(output string, spec compactTextSpec) (string, bool) {
 	if limit <= 0 || len(output) <= limit {
 		return output, false
 	}
-	runes := []rune(output)
-	if len(runes) <= limit {
-		return output, false
-	}
 	head := spec.head
 	if head <= 0 || head >= limit {
 		head = limit / 3
 	}
-	if head > len(runes) {
-		head = len(runes)
+	if head > len(output) {
+		head = len(output)
 	}
 	tail := spec.tail
 	if tail <= 0 || head+tail > limit {
 		tail = limit - head
 	}
-	if tail > len(runes)-head {
-		tail = len(runes) - head
+	if tail > len(output)-head {
+		tail = len(output) - head
 	}
-	omitted := len(runes) - head - tail
-	return string(runes[:head]) +
-		fmt.Sprintf("\n\n[... %d characters omitted from model context ...]\n\n", omitted) +
-		string(runes[len(runes)-tail:]), true
+	prefix, suffix := utf8Prefix(output, head), tailString(output, tail)
+	omitted := utf8.RuneCountInString(output[len(prefix) : len(output)-len(suffix)])
+	return prefix + fmt.Sprintf("\n\n[... %d characters omitted from model context ...]\n\n", omitted) + suffix, true
 }
 
-// compactTextSpec 声明 compactTextForModel 的切分策略：limit 是总预算，
+// compactTextSpec 声明 compactTextForModel 的切分策略：limit/head/tail 均按 UTF-8 字节计，
 // head/tail 是可选的定制切分（0 表示按 limit/3 均分）。head/tail 作为显式
 // 参数传入，通用函数不再按 "limit 恰好等于某个魔数" 推断调用方身份。
 type compactTextSpec struct {

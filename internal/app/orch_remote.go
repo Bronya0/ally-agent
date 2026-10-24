@@ -268,14 +268,11 @@ func remoteHelperError(resp remotePythonResponse) error {
 	if resp.Error == "" {
 		resp.Error = "remote helper failed"
 	}
-	// 每个前缀都要转成结构化错误码：模型侧靠错误码认「这是边界拒绝」，纯文本
-	// 会被当成操作自己报的错而重试。清单按远端 helper 实际会带的码收（本地同类
-	// 拒绝用的是同一批码），helper 里新增一处带码的拒绝就在这里补一行。
-	for _, code := range []string{"E_PATH_OUTSIDE", "E_PROTECTED_PATH", "E_DELETE_BLOCKED"} {
-		if strings.HasPrefix(resp.Error, code+":") {
-			msg := strings.TrimSpace(strings.TrimPrefix(resp.Error, code+":"))
-			return codedToolError(code, errors.New(msg))
-		}
+	// Stable helper codes have one transport rule, not a second allowlist that
+	// must be updated every time the shared file protocol gains an error.
+	code, msg, found := strings.Cut(resp.Error, ":")
+	if found && strings.HasPrefix(code, "E_") && len(code) <= 64 && strings.Trim(code, "ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789") == "" {
+		return codedToolError(code, errors.New(strings.TrimSpace(msg)))
 	}
 	return errors.New(resp.Error)
 }
@@ -459,6 +456,7 @@ func decodeRemoteRawFile(data struct {
 	Size       int64  `json:"size"`
 	Mode       int    `json:"mode"`
 	ModTime    string `json:"modTime"`
+	Tail       bool   `json:"tail"`
 }) (remoteRawFile, error) {
 	raw, err := base64.StdEncoding.DecodeString(data.DataBase64)
 	if err != nil {
@@ -473,7 +471,7 @@ func decodeRemoteRawFile(data struct {
 		return remoteRawFile{}, err
 	}
 	_, ending, _ := normalizeText(decoded)
-	return remoteRawFile{Path: data.Path, Data: decoded, Size: data.Size, Mode: data.Mode, ModTime: data.ModTime, LineEnding: ending}, nil
+	return remoteRawFile{Path: data.Path, Data: decoded, RawData: raw, ReadOnlyTail: data.Tail, Size: data.Size, Mode: data.Mode, ModTime: data.ModTime, LineEnding: ending}, nil
 }
 
 func (a *App) remoteReadRaw(ctx context.Context, target, relPath string) (remoteTarget, remoteRawFile, error) {
@@ -495,6 +493,7 @@ type remoteReadBatchItem struct {
 		Size       int64  `json:"size"`
 		Mode       int    `json:"mode"`
 		ModTime    string `json:"modTime"`
+		Tail       bool   `json:"tail"`
 	} `json:"data"`
 	Error string `json:"error"`
 }
@@ -503,7 +502,7 @@ type remoteReadBatchItem struct {
 // 果槽独立 try，单文件失败只写入自己的 error 字段，与本地批量 read 的隔
 // 离契约一致；连接级失败由调用方把同一错误填进所有未填充槽。返回的
 // remaining 是总字节预算装不下而未读的路径尾部，供下一轮会话继续。
-func (a *App) remoteReadRawBatch(ctx context.Context, rt remoteTarget, paths []string) ([]remoteReadBatchItem, []string, error) {
+func (a *App) remoteReadRawBatch(ctx context.Context, rt remoteTarget, paths []string, tails map[string]int) ([]remoteReadBatchItem, []string, error) {
 	var resp struct {
 		Files     []remoteReadBatchItem `json:"files"`
 		Remaining []string              `json:"remaining"`
@@ -512,6 +511,7 @@ func (a *App) remoteReadRawBatch(ctx context.Context, rt remoteTarget, paths []s
 		"paths":      paths,
 		"maxBytes":   maxReadFileBytes,
 		"totalBytes": maxRemoteReadBatchBytes,
+		"tails":      tails,
 	}), 300*time.Second, &resp)
 	if err != nil {
 		return nil, nil, err
@@ -522,6 +522,10 @@ func (a *App) remoteReadRawBatch(ctx context.Context, rt remoteTarget, paths []s
 // remoteReadRawOne 是单文件读的会话实现（edit 的读-改-写与单文件批量读
 // 共用）；路径校验失败时直接返回，不起 ssh 会话，保持原错误语义。
 func (a *App) remoteReadRawOne(ctx context.Context, rt remoteTarget, relPath string) (remoteTarget, remoteRawFile, error) {
+	return a.remoteReadRawRange(ctx, rt, relPath, 0)
+}
+
+func (a *App) remoteReadRawRange(ctx context.Context, rt remoteTarget, relPath string, tailLines int) (remoteTarget, remoteRawFile, error) {
 	cleanPath, err := validateRemoteWorkspacePath(relPath, rt.WorkspaceRoot, false)
 	if err != nil {
 		return remoteTarget{}, remoteRawFile{}, err
@@ -532,8 +536,9 @@ func (a *App) remoteReadRawOne(ctx context.Context, rt remoteTarget, relPath str
 		Size       int64  `json:"size"`
 		Mode       int    `json:"mode"`
 		ModTime    string `json:"modTime"`
+		Tail       bool   `json:"tail"`
 	}
-	err = a.invokeRemotePython(ctx, rt, remotePayload(rt, "read", map[string]any{"path": cleanPath, "maxBytes": maxReadFileBytes}), 60*time.Second, &rawResp)
+	err = a.invokeRemotePython(ctx, rt, remotePayload(rt, "read", map[string]any{"path": cleanPath, "maxBytes": maxReadFileBytes, "tailLines": tailLines}), 60*time.Second, &rawResp)
 	if err != nil {
 		return remoteTarget{}, remoteRawFile{}, err
 	}
@@ -545,6 +550,10 @@ func (a *App) remoteReadRawOne(ctx context.Context, rt remoteTarget, relPath str
 }
 
 func (a *App) remoteWriteRaw(ctx context.Context, rt remoteTarget, relPath string, data []byte, overwrite, mkdirs bool) ([]string, error) {
+	return a.remoteWriteRawExpected(ctx, rt, relPath, data, overwrite, mkdirs, "")
+}
+
+func (a *App) remoteWriteRawExpected(ctx context.Context, rt remoteTarget, relPath string, data []byte, overwrite, mkdirs bool, expectedHash string) ([]string, error) {
 	cleanPath, err := validateRemoteWorkspacePath(relPath, rt.WorkspaceRoot, false)
 	if err != nil {
 		return nil, err
@@ -558,10 +567,11 @@ func (a *App) remoteWriteRaw(ctx context.Context, rt remoteTarget, relPath strin
 		CreatedDirs []string `json:"createdDirs"`
 	}
 	err = a.invokeRemotePython(ctx, rt, remotePayload(rt, "write", map[string]any{
-		"path":       cleanPath,
-		"dataBase64": base64.StdEncoding.EncodeToString(data),
-		"overwrite":  overwrite,
-		"mkdirs":     mkdirs,
+		"path":           cleanPath,
+		"dataBase64":     base64.StdEncoding.EncodeToString(data),
+		"overwrite":      overwrite,
+		"mkdirs":         mkdirs,
+		"expectedSHA256": expectedHash,
 	}), 60*time.Second, &outcome)
 	if err != nil {
 		return nil, err
@@ -589,6 +599,11 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 	if len(fileRequests) > 20 {
 		return BatchReadResult{}, errors.New("too many files; max 20 per batch")
 	}
+	for _, f := range fileRequests {
+		if _, err := resolveReadStartLine(f.StartLine, f.EndLine, f.TailLines); err != nil {
+			return BatchReadResult{}, err
+		}
+	}
 	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
 	if err != nil {
 		return BatchReadResult{}, err
@@ -599,13 +614,13 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 	// 一轮 ssh 握手（旧的逐文件串行是 20 次完整握手）；文件很大时轮次随
 	// 预算上升，最坏每轮一个文件、与旧实现持平。
 	if len(fileRequests) == 1 {
-		_, rawFile, err := a.remoteReadRawOne(ctx, rt, fileRequests[0].Path)
+		_, rawFile, err := a.remoteReadRawRange(ctx, rt, fileRequests[0].Path, fileRequests[0].TailLines)
 		if err != nil {
-			return BatchReadResult{Files: []BatchReadResultItem{{Path: fileRequests[0].Path, Error: err.Error()}}}, nil
+			return *filteredBatchReadResult([]BatchReadResultItem{{Path: fileRequests[0].Path, Error: err.Error(), ErrorCode: batchReadErrorCode(err)}}), nil
 		}
 		item, itemErr := buildRemoteReadResultItem(rawFile, fileRequests[0])
 		if itemErr != nil {
-			return BatchReadResult{Files: []BatchReadResultItem{{Path: fileRequests[0].Path, Error: itemErr.Error()}}}, nil
+			return *filteredBatchReadResult([]BatchReadResultItem{{Path: fileRequests[0].Path, Error: itemErr.Error(), ErrorCode: batchReadErrorCode(itemErr)}}), nil
 		}
 		return BatchReadResult{Files: []BatchReadResultItem{item}}, nil
 	}
@@ -617,6 +632,7 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 	slotsOf := make(map[string][]int, len(fileRequests))
 	pendingSet := make(map[string]bool, len(fileRequests))
 	pending := make([]string, 0, len(fileRequests))
+	tails := map[string]int{}
 	for i, f := range fileRequests {
 		clean, err := validateRemoteWorkspacePath(f.Path, rt.WorkspaceRoot, false)
 		if err != nil {
@@ -628,6 +644,12 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 			pending = append(pending, clean)
 		}
 		slotsOf[clean] = append(slotsOf[clean], i)
+		// A full snapshot wins if any slot needs one; never serve a tail as an edit snapshot.
+		if len(slotsOf[clean]) == 1 {
+			tails[clean] = f.TailLines
+		} else if f.TailLines == 0 {
+			tails[clean] = 0
+		}
 	}
 	for len(pending) > 0 {
 		var items []remoteReadBatchItem
@@ -636,7 +658,7 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 		if a.remoteReadBatchFn != nil {
 			items, remaining, batchErr = a.remoteReadBatchFn(ctx, rt, pending)
 		} else {
-			items, remaining, batchErr = a.remoteReadRawBatch(ctx, rt, pending)
+			items, remaining, batchErr = a.remoteReadRawBatch(ctx, rt, pending, tails)
 		}
 		if batchErr != nil {
 			// 连接级失败：同一错误填进所有未填充槽，错误隔离契约与旧
@@ -654,8 +676,9 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 				continue
 			}
 			if !it.OK {
+				itemErr := remoteHelperError(remotePythonResponse{Error: it.Error})
 				for _, slot := range slots {
-					results[slot] = BatchReadResultItem{Path: fileRequests[slot].Path, Error: it.Error}
+					results[slot] = BatchReadResultItem{Path: fileRequests[slot].Path, Error: itemErr.Error(), ErrorCode: batchReadErrorCode(itemErr)}
 				}
 				continue
 			}
@@ -676,9 +699,35 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 		if len(remaining) == 0 {
 			break
 		}
+		allowed := map[string]bool{}
+		for _, p := range pending {
+			allowed[p] = true
+		}
+		valid := len(remaining) < len(pending)
+		for _, p := range remaining {
+			if !allowed[p] {
+				valid = false
+			}
+			delete(allowed, p)
+		}
+		if !valid {
+			for _, p := range pending {
+				for _, slot := range slotsOf[p] {
+					if results[slot].Path == "" {
+						results[slot] = BatchReadResultItem{Path: fileRequests[slot].Path, Error: "remote read batch did not advance; narrow the request before retrying", ErrorCode: "E_REMOTE_READ_PROTOCOL"}
+					}
+				}
+			}
+			break
+		}
 		pending = remaining
 	}
-	return BatchReadResult{Files: results}, nil
+	for i := range results {
+		if results[i].Path == "" {
+			results[i] = BatchReadResultItem{Path: fileRequests[i].Path, Error: "remote helper omitted the requested file", ErrorCode: "E_REMOTE_READ_PROTOCOL"}
+		}
+	}
+	return *filteredBatchReadResult(results), nil
 }
 
 // remoteReadFileCached 给 remote_read 接上会话级读缓存：同一会话里第二次读同一
@@ -704,47 +753,27 @@ func (a *App) remoteReadFileCached(ctx context.Context, req RemoteReadFileReques
 // 结果：转码/版本令牌/行号预览/截断标记全部复用本地 read 的同一套管
 // 线，远程与本地语义不分离。
 func buildRemoteReadResultItem(rawFile remoteRawFile, f BatchReadFileRequest) (BatchReadResultItem, error) {
-	text, ending, _ := normalizeText(rawFile.Data)
-	sha256Hex, version := hashBytesAndVersion(rawFile.Data)
-	_ = sha256Hex
 	previewStart, rangeErr := resolveReadStartLine(f.StartLine, f.EndLine, f.TailLines)
 	if rangeErr != nil {
 		return BatchReadResultItem{}, rangeErr
 	}
-	preview, previewErr := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
+	if rawFile.ReadOnlyTail {
+		if previewStart >= 0 {
+			return BatchReadResultItem{}, errors.New("large log requires an explicit tailLines read")
+		}
+		req := ReadFileRequest{Path: f.Path, StartLine: previewStart}
+		return batchReadResultItem(req, buildReadOnlyTailResult(rawFile.Path, rawFile.Data, rawFile.Size, -previewStart)), nil
+	}
+	req := ReadFileRequest{
+		Path:      f.Path,
 		StartLine: previewStart,
 		EndLine:   f.EndLine,
-	}, maxReadPreviewBytes)
-	if previewErr != nil {
-		return BatchReadResultItem{}, previewErr
 	}
-	return BatchReadResultItem{
-		// Req 提供读缓存的键里的行区间（见 sessionReadCache.dedupeResult）：
-		// 缺了它，同一文件的不同区间会共用一把键互相覆盖，去重直接失效。形状
-		// 与本地 read 的条目一致（previewStart 已折叠 tailLines）。
-		Req: ReadFileRequest{
-			Path:      f.Path,
-			StartLine: previewStart,
-			EndLine:   f.EndLine,
-		},
-		Path:                  rawFile.Path,
-		Content:               preview.Content,
-		Kind:                  "text",
-		ContentFormat:         "line_numbers",
-		Editable:              true,
-		StartLine:             preview.StartLine,
-		EndLine:               preview.EndLine,
-		NextStartLine:         preview.NextStartLine,
-		TotalLines:            preview.TotalLines,
-		Version:               version,
-		Size:                  rawFile.Size,
-		LineEnding:            ending,
-		Truncated:             preview.Truncated,
-		TruncatedLines:        preview.TruncatedLines,
-		TruncatedLinesOmitted: preview.TruncatedLinesOmitted,
-		RangeStatus:           preview.RangeStatus,
-		EmptyRange:            preview.EmptyRange,
-	}, nil
+	result, err := buildTextReadResult(rawFile.Path, rawFile.Data, rawFile.Size, req)
+	if err != nil {
+		return BatchReadResultItem{}, err
+	}
+	return batchReadResultItem(req, result), nil
 }
 
 // remoteEdit applies the flat single-file remote edit contract. The result is
@@ -788,20 +817,23 @@ func (a *App) remoteEdit(ctx context.Context, req RemoteEditRequest) (MultiEditR
 func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEdits, file remoteRawFile) (EditResult, error) {
 	beforeHash, beforeVersion := hashBytesAndVersion(file.Data)
 	if !strings.EqualFold(req.Version, beforeVersion) {
-		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("remote file changed: expected version %s, current %s. Re-read before editing", req.Version, beforeVersion))
+		return EditResult{}, withEditRecoverySource(file.Path, file.Data, file.Size, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("remote file changed: expected version %s, current %s. Re-read before editing", req.Version, beforeVersion)))
 	}
 	text, ending, hadBOM := normalizeText(file.Data)
 	result, replacements, err := edit.ApplyBatchTextChanges(text, toEditChanges(req.Changes))
 	if err != nil {
+		return EditResult{}, withEditRecoverySource(file.Path, file.Data, file.Size, err)
+	}
+	after, err := read.EncodeLike(file.rawBytes(), result.Content)
+	if err != nil {
 		return EditResult{}, err
 	}
-	after := encodeText(result.Content, ending, hadBOM)
-	afterHash, afterVersion := hashBytesAndVersion(after)
+	afterHash, afterVersion := hashBytesAndVersion(encodeText(result.Content, ending, hadBOM))
 	// An all-no-op batch (every change ignored as identical) succeeds without
 	// writing, mirroring the local edit contract instead of failing E_NOOP.
-	noop := bytes.Equal(file.Data, after)
+	noop := bytes.Equal(file.rawBytes(), after)
 	if !noop {
-		if _, err := a.remoteWriteRaw(ctx, rt, req.Path, after, true, true); err != nil {
+		if _, err := a.remoteWriteRawExpected(ctx, rt, req.Path, after, true, false, read.HashBytes(file.rawBytes())); err != nil {
 			return EditResult{}, err
 		}
 	}
@@ -809,9 +841,9 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 	classification := "edit"
 	if noop {
 		classification = "noop"
-	} else if len(after) > len(file.Data) {
+	} else if len(after) > len(file.rawBytes()) {
 		classification = "addition"
-	} else if len(after) < len(file.Data) {
+	} else if len(after) < len(file.rawBytes()) {
 		classification = "deletion"
 	}
 	return EditResult{
@@ -820,13 +852,13 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 		AfterSHA256:       afterHash,
 		BeforeVersion:     beforeVersion,
 		Version:           afterVersion,
-		BeforeBytes:       len(file.Data),
+		BeforeBytes:       len(file.rawBytes()),
 		AfterBytes:        len(after),
 		Replacements:      replacements,
 		AddedLines:        added,
 		RemovedLines:      removed,
 		LineEnding:        ending,
-		Summary:           fmt.Sprintf("%s updated on %s: %d -> %d bytes", file.Path, rt.Host, len(file.Data), len(after)),
+		Summary:           fmt.Sprintf("%s updated on %s: %d -> %d bytes", file.Path, rt.Host, len(file.rawBytes()), len(after)),
 		Diff:              diff,
 		FirstChanged:      result.FirstChangedLine,
 		LastChanged:       result.LastChangedLine,
@@ -1048,12 +1080,13 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 	writeTargets := remoteWriteTargets(req.Command)
 	var result CommandResult
 	err = a.invokeRemotePython(ctx, rt, remotePayload(rt, "run", map[string]any{
-		"command":        req.Command,
-		"cwd":            cwd,
-		"timeoutSeconds": timeout,
-		"shell":          shell,
-		"maxOutput":      maxToolOutput,
-		"targets":        writeTargets,
+		"command":          req.Command,
+		"cwd":              cwd,
+		"timeoutSeconds":   timeout,
+		"shell":            shell,
+		"maxOutput":        maxToolOutput,
+		"modelOutputBytes": maxModelToolOutput,
+		"targets":          writeTargets,
 	}), time.Duration(timeout+20)*time.Second, &result)
 	return result, err
 }

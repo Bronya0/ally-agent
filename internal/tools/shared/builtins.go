@@ -319,7 +319,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "files"},
 		}),
-		functionTool("remote_edit", "Edit one file on a remote SSH workspace, using the same changes contract as edit. Send parallel calls for multiple files. target selects an SSH host and absolute non-root workspace (e.g. dev:/srv/app); path is relative to it. Use the current version from remote_read or a successful remote_edit. changes must be a JSON array, not a quoted string. Re-read if the snapshot changed.", map[string]any{
+		functionTool("remote_edit", "Edit one file on a remote SSH workspace, using the same changes contract as edit. Send parallel calls for multiple files. target selects an SSH host and absolute non-root workspace (e.g. dev:/srv/app); path is relative to it. Use the current version from remote_read or a successful remote_edit. changes must be a JSON array, not a quoted string. Writes preserve the source encoding and recheck its full hash on the host before committing. Each remote file commits independently; re-read on conflicts.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  sshTargetSchema(),
@@ -348,7 +348,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "paths"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace. Use remote_delete_path for unmanaged deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Modifying existing paths outside the workspace is refused. A timeout kills the process group. Output keeps its real head and tail within 128 KiB, without a full-output file; narrow output when possible.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace. Use remote_delete_path for unmanaged deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Modifying existing paths outside the workspace is refused. A timeout kills the process group. Output keeps its real head and tail. A full log path is returned when the preview is reduced; inspect it with remote_read on the same target, or filter it with a read-only remote command. Partial logs are explicitly marked; never rerun side effects merely to recover output.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  sshTargetSchema(),
@@ -395,13 +395,14 @@ func chatToolsUncached() []openai.Tool {
 				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches", ""}, "description": "lines (default, also for an empty string) returns matching lines with capped text previews. count_matches returns occurrence counts for only the top 100 files by count, 20 files per page; pagination cannot retrieve files beyond that top 100."},
 				"path":           map[string]any{"type": "string", "description": "File or directory, relative to the workspace root or absolute. Empty means workspace root. For reading known code, use read instead."},
 				"glob":           map[string]any{"type": "string", "description": "Optional glob filter, e.g. *.go or frontend/**/*.vue."},
+				"maxMatches":     map[string]any{"type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum returned matching lines in lines mode (default 200). Exact totals still cover the entire search."},
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false. Does not enable hidden-directory traversal or remove dependency/build directory exclusions."},
 				"caseSensitive":  map[string]any{"type": "boolean", "description": "Match case exactly. Default false (case-insensitive)."},
 				"offset":         map[string]any{"type": "integer", "minimum": 0, "description": "Skip first N matching lines/files for pagination."},
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read known files directly to understand code or prepare edits. For small files, omit line ranges; for large files, read ranges covering complete relevant functions or logic rather than piecing them together through repeated grep calls or tiny reads. Batch independent files in one files array. Supports text and images (jpg, png, gif, webp; bmp returns a text notice). Text returns bounded `<ally-file path=… version=…>` previews with 1-based line numbers; edit needs that version. Use tailLines for log tails. Follow the startLine continuation hint only when more content is needed. Missing paths and directories are omitted; other failures carry an error attribute. reused means unchanged content is already in context. truncated-lines marks lines with missing tails: edit refuses lineRange over those lines, so use oldText instead.", map[string]any{
+		functionTool("read", "Read known files directly to understand code or prepare edits. For small files, omit line ranges; for large files, read ranges covering complete relevant functions or logic rather than piecing them together through repeated grep calls or tiny reads. Batch independent files in one files array. Supports text and images (jpg, png, gif, webp; bmp returns a text notice). Text returns bounded `<ally-file path=… version=…>` previews with 1-based line numbers; edit needs that version. Use tailLines for log tails. Follow the startLine continuation hint only when more content is needed. Missing paths and directories have compact error receipts; other failures carry an error attribute. reused means unchanged content is already in context. truncated-lines marks lines with missing tails: edit refuses lineRange over those lines, so use oldText instead.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -512,6 +513,9 @@ var builtinToolExamples = map[string]string{
 }
 
 func functionTool(name, description string, parameters map[string]any) openai.Tool {
+	if name == "read" || name == "remote_read" {
+		description += " Broad file previews share a 64 KiB batch budget with per-file continuations; explicit endLine ranges and tails keep the per-file budget. Files above 32 MiB support bounded UTF-8 tailLines reads only: read-only, no edit version or absolute line numbers. A self-closing reused receipt means this exact range is already in context; its version is current."
+	}
 	properties, ok := parameters["properties"].(map[string]any)
 	if !ok {
 		properties = map[string]any{}

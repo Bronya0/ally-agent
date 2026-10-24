@@ -91,9 +91,14 @@ Public License v3. See the LICENSE file for details.
                   type="button"
                   :class="['appearance-mode-btn', 'avatar-style-option', { active: avatarStyle === item.id }]"
                   :aria-pressed="avatarStyle === item.id"
-                  @click="setAvatarStyle(item.id)"
+                  :disabled="avatarUploading"
+                  @click="selectAvatar(item.id)"
                 >
                   <img v-if="item.id === 'whale'" :src="whaleAvatar" width="48" height="48" alt="" draggable="false" />
+                  <span v-else-if="item.id === 'custom'" class="avatar-custom-preview" aria-hidden="true">
+                    <img v-if="customAvatar && documentVisible" :src="customAvatar" width="48" height="48" alt="" draggable="false" />
+                    <span v-else>＋</span>
+                  </span>
                   <svg v-else width="48" height="48" viewBox="0 0 48 48" aria-hidden="true">
                     <path d="M3 24Q24 1 45 24Q24 47 3 24Z" fill="var(--ally-eye-shell-fill)" stroke="var(--ally-eye-shell-stroke)" />
                     <circle cx="24" cy="24" r="14" fill="var(--ally-eye-iris-color)" stroke="var(--ally-eye-iris-rim)" />
@@ -102,7 +107,12 @@ Public License v3. See the LICENSE file for details.
                   {{ $t(item.labelKey) }}
                 </button>
               </div>
-              <span class="settings-field-hint">{{ $t('settings.avatarHint') }}</span>
+              <input ref="avatarFileInput" type="file" hidden :accept="CUSTOM_AVATAR_ACCEPT" @change="uploadAvatar" />
+              <div v-if="customAvatar" class="avatar-custom-actions">
+                <n-button size="small" :loading="avatarUploading" @click="chooseAvatarImage">{{ $t('avatar.replace') }}</n-button>
+                <n-button size="small" :disabled="avatarUploading" @click="removeCustomAvatar">{{ $t('avatar.remove') }}</n-button>
+              </div>
+              <span class="settings-field-hint">{{ $t('settings.avatarHint', avatarLimits) }}</span>
             </div>
           </n-form-item>
           <n-form-item :label="$t('settings.customPrompt')">
@@ -561,7 +571,9 @@ import { computed, h, onBeforeUnmount, onMounted, onUnmounted, reactive, ref, wa
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
 import { getStoredMode, THEMES } from '../utils/theme.mjs';
-import { AVATAR_STYLES, useAvatarAppearance } from '../composables/avatarAppearance.mjs';
+import { AVATAR_STYLES, CUSTOM_AVATAR_ACCEPT, MAX_CUSTOM_AVATAR_BYTES, MAX_CUSTOM_AVATAR_EDGE, useAvatarAppearance } from '../composables/avatarAppearance.mjs';
+import { useDocumentVisible } from '../composables/presentation.mjs';
+import { formatBytes } from '../utils/format.mjs';
 import whaleAvatar from '../assets/avatars/whale/delighted-512.png';
 import { normalizeApiKeysArray } from '../utils/modelConfigIO.mjs';
 import { TOOL_CONCURRENCY_MIN, TOOL_CONCURRENCY_MAX, HIDEABLE_MODES, PAGE_VISIBILITY_LABELS, normalizeDraftHiddenModes, normalizeHiddenModes } from '../utils/config.mjs';
@@ -593,7 +605,51 @@ function selectColorMode(mode) {
 }
 
 const avatarOptions = AVATAR_STYLES;
-const { avatarStyle, setAvatarStyle } = useAvatarAppearance();
+const { avatarStyle, customAvatar, setAvatarStyle, setCustomAvatar, clearCustomAvatar } = useAvatarAppearance();
+const documentVisible = useDocumentVisible();
+const avatarFileInput = ref(null);
+const avatarUploading = ref(false);
+const avatarLimits = { size: formatBytes(MAX_CUSTOM_AVATAR_BYTES), edge: MAX_CUSTOM_AVATAR_EDGE };
+
+function selectAvatar(id) {
+  if (id === 'custom' && (!customAvatar.value || avatarStyle.value === 'custom')) chooseAvatarImage();
+  else setAvatarStyle(id);
+}
+
+function chooseAvatarImage() {
+  const input = avatarFileInput.value;
+  if (!input || avatarUploading.value) return;
+  input.value = '';
+  input.click();
+}
+
+function showAvatarError(error) {
+  const key = String(error?.message || '');
+  message.error(t(key.startsWith('avatar.error.') ? key : 'avatar.error.read', avatarLimits));
+}
+
+async function uploadAvatar(event) {
+  const input = event.target;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file || avatarUploading.value) return;
+  avatarUploading.value = true;
+  try {
+    await setCustomAvatar(file);
+  } catch (error) {
+    showAvatarError(error);
+  } finally {
+    avatarUploading.value = false;
+  }
+}
+
+function removeCustomAvatar() {
+  try {
+    clearCustomAvatar();
+  } catch (error) {
+    showAvatarError(error);
+  }
+}
 
 function openWhaleArtwork() {
   Browser.OpenURL('https://github.com/Small-tailqwq/dsh-deep-whale/tree/main/maid-atelier');
@@ -1259,6 +1315,20 @@ watch(() => props.visible, (visible) => {
 .avatar-style-option {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
+}
+
+.avatar-custom-preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+}
+
+.avatar-custom-actions {
+  display: flex;
   gap: 8px;
 }
 

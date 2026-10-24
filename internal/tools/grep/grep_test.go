@@ -79,6 +79,79 @@ func TestSearchDefaultReturnsLineNumbersOnly(t *testing.T) {
 	}
 }
 
+func TestSearchPaginationStableAcrossDirectories(t *testing.T) {
+	rg := requireRipgrep(t)
+	root := t.TempDir()
+	for i := 0; i < 48; i++ {
+		writeGrepTestFile(t, root, fmt.Sprintf("dir-%02d/file-%03d.txt", i%8, i), "needle\n")
+	}
+	seen := map[string]bool{}
+	offset := 0
+	for {
+		r, err := Search(context.Background(), rg, root, root, Request{Pattern: "needle", MaxMatches: 5, Offset: offset})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range r.LineHits {
+			if seen[g.Path] {
+				t.Fatalf("duplicate page row %s", g.Path)
+			}
+			seen[g.Path] = true
+		}
+		if r.NextOffset == 0 {
+			break
+		}
+		if r.NextOffset <= offset {
+			t.Fatal("cursor did not advance")
+		}
+		offset = r.NextOffset
+	}
+	if len(seen) != 48 {
+		t.Fatalf("pagination lost files: %d", len(seen))
+	}
+}
+
+func TestSearchPaginatesBeyondRawJSONBudget(t *testing.T) {
+	rg := requireRipgrep(t)
+	root := t.TempDir()
+	writeGrepTestFile(t, root, "log.txt", strings.Repeat("needle "+strings.Repeat("x", 950)+"\n", 12000))
+	r, err := Search(context.Background(), rg, root, root, Request{Pattern: "needle", Path: "log.txt", Offset: 11000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.LineHits) != 1 || len(r.LineHits[0].Lines) != 200 || r.LineHits[0].Lines[0] != 11001 || r.NextOffset != 11200 {
+		t.Fatalf("late page lost: %#v", r)
+	}
+}
+
+func TestSearchOversizedRecordKeepsLocationAndCursor(t *testing.T) {
+	rg := requireRipgrep(t)
+	root := t.TempDir()
+	writeGrepTestFile(t, root, "long.txt", "needle "+strings.Repeat("x", 3*1024*1024)+"\nneedle short\n")
+	for page := 0; page < 2; page++ {
+		r, err := Search(context.Background(), rg, root, root, Request{Pattern: "needle", Path: "long.txt", MaxMatches: 1, Offset: page})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(r.LineHits) != 1 || len(r.LineHits[0].Lines) != 1 || r.LineHits[0].Lines[0] != page+1 {
+			t.Fatalf("lost giant line on page %d: %#v", page, r)
+		}
+		if page == 0 && (r.NextOffset != 1 || !strings.Contains(r.LineHits[0].Texts[0], "preview omitted")) {
+			t.Fatalf("bad giant-line continuation: %#v", r)
+		}
+	}
+}
+
+func TestSearchLongLinePreviewContainsActualMatch(t *testing.T) {
+	rg := requireRipgrep(t)
+	root := t.TempDir()
+	writeGrepTestFile(t, root, "long.txt", strings.Repeat("x", 5000)+"NEEDLE_HERE"+strings.Repeat("x", 5000)+"\n")
+	r, err := Search(context.Background(), rg, root, root, Request{Pattern: "NEEDLE_HERE"})
+	if err != nil || len(r.LineHits) != 1 || !strings.Contains(r.LineHits[0].Texts[0], "NEEDLE_HERE") {
+		t.Fatalf("preview missed actual match: %#v %v", r, err)
+	}
+}
+
 func TestSearchExactStatsSinglePass(t *testing.T) {
 	rg := requireRipgrep(t)
 	root := t.TempDir()

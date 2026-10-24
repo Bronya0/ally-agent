@@ -13,7 +13,9 @@ package app
 // result shape used by the chat loop.
 
 import (
+	"ally-dev/internal/tools/read"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -50,6 +52,7 @@ const (
 	maxReadRangeLines         = toolshared.MaxReadRangeLines
 	maxReadLineChars          = toolshared.MaxReadLineChars
 	maxReportedTruncatedLines = 256
+	maxReadBatchPreviewBytes  = 64 * 1024
 )
 
 type readPreviewResult struct {
@@ -284,7 +287,11 @@ func resolveReadStartLine(startLine, endLine, tailLines int) (int, error) {
 }
 
 func (c *sessionReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
-	result, err := a.batchReadFilesWithConfig(cfg, req)
+	return c.readContext(context.Background(), a, cfg, req)
+}
+
+func (c *sessionReadCache) readContext(ctx context.Context, a *App, cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
+	result, err := a.batchReadFilesWithContext(ctx, cfg, req)
 	if err != nil {
 		return nil, err
 	}
@@ -312,10 +319,11 @@ func (c *sessionReadCache) dedupeResult(result *BatchReadResult, keyPath func(it
 
 	for i := range result.Files {
 		item := &result.Files[i]
-		if item.Error != "" {
+		if item.Error != "" || item.RangeStatus == "deferred" {
 			continue
 		}
-		key := fileRangeCacheKey(keyPath(item), item.Req)
+		effective := ReadFileRequest{StartLine: item.StartLine, EndLine: item.EndLine}
+		key := fileRangeCacheKey(keyPath(item), effective)
 		contentHash := hashText(item.Content, item.DataURL)
 
 		if prevHash, ok := c.entries[key]; ok && prevHash == contentHash {
@@ -330,6 +338,10 @@ func (c *sessionReadCache) dedupeResult(result *BatchReadResult, keyPath func(it
 }
 
 func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
+	return a.batchReadFilesWithContext(context.Background(), cfg, req)
+}
+
+func (a *App) batchReadFilesWithContext(ctx context.Context, cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
 	pending, err := collectPendingBatchReads(req)
 	if err != nil {
 		return nil, err
@@ -339,7 +351,7 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 	if len(pending) <= 1 {
 		// Fast path: 0 or 1 file — no goroutine overhead.
 		for i, p := range pending {
-			results[i] = a.batchReadOneWithConfig(cfg, p.path, p.req)
+			results[i] = a.batchReadOneWithContext(ctx, cfg, p.path, p.req)
 		}
 		return filteredBatchReadResult(results), nil
 	}
@@ -353,7 +365,7 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 		go func(idx int, path string, fileReq ReadFileRequest) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			results[idx] = a.batchReadOneWithConfig(cfg, path, fileReq)
+			results[idx] = a.batchReadOneWithContext(ctx, cfg, path, fileReq)
 		}(i, p.path, p.req)
 	}
 	wg.Wait()
@@ -369,14 +381,93 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 // slice slots.
 func filteredBatchReadResult(results []BatchReadResultItem) *BatchReadResult {
 	kept := results[:0]
+	var missing []ReadPathStatus
 	for _, result := range results {
 		if result.ErrorCode == "E_PATH_NOT_FOUND" || result.ErrorCode == "E_IS_DIRECTORY" {
+			missing = append(missing, ReadPathStatus{Path: result.Path, ErrorCode: result.ErrorCode})
 			continue
 		}
 		kept = append(kept, result)
 	}
 	clear(results[len(kept):])
-	return &BatchReadResult{Files: kept}
+	result := &BatchReadResult{Files: kept, Missing: missing}
+	boundBatchReadPreview(result)
+	return result
+}
+
+// Trim at complete displayed lines before deduplication. The same producer-side
+// bound serves local and SSH reads; no cache entry can claim omitted text was sent.
+func boundBatchReadPreview(result *BatchReadResult) {
+	broad := func(f BatchReadResultItem) bool {
+		return f.Error == "" && !f.EmptyRange && f.EndLine > 0 && f.Kind == "text" && f.ContentFormat == "line_numbers" && f.Req.StartLine >= 0 && f.Req.EndLine == 0 && f.Req.LineCount == 0 && f.Req.ContextBefore == 0 && f.Req.ContextAfter == 0
+	}
+	total, count := 0, 0
+	for _, f := range result.Files {
+		if broad(f) {
+			total += len(f.Content)
+			count++
+		}
+	}
+	if total <= maxReadBatchPreviewBytes {
+		return
+	}
+	remaining := maxReadBatchPreviewBytes
+	for i := range result.Files {
+		f := &result.Files[i]
+		if !broad(*f) {
+			continue
+		}
+		budget := remaining / max(1, count)
+		count--
+		if len(f.Content) <= budget {
+			remaining -= len(f.Content)
+			continue
+		}
+		body := f.Content
+		if at := strings.Index(body, "\n\n[Showing lines "); at >= 0 {
+			body = body[:at]
+		}
+		rows := strings.Split(body, "\n")
+		kept, size := 0, 0
+		for _, row := range rows {
+			cost := len(row)
+			if kept > 0 {
+				cost++
+			}
+			if size+cost > budget && kept > 0 {
+				break
+			}
+			if size+cost+160 > remaining {
+				break
+			}
+			size += cost
+			kept++
+			if size >= budget {
+				break
+			}
+		}
+		f.Truncated = true
+		if kept == 0 {
+			f.EndLine = 0
+			f.NextStartLine = f.StartLine
+			f.RangeStatus = "deferred"
+			f.Content = fmt.Sprintf("[Batch preview budget reached. Read this path with startLine=%d.]", f.StartLine)
+		} else {
+			f.EndLine = f.StartLine + kept - 1
+			f.NextStartLine = f.EndLine + 1
+			f.RangeStatus = "truncated"
+			f.Content = strings.Join(rows[:kept], "\n") + fmt.Sprintf("\n\n[Showing lines %d-%d of %d. Use startLine=%d to continue.]", f.StartLine, f.EndLine, f.TotalLines, f.NextStartLine)
+		}
+		remaining = max(0, remaining-len(f.Content))
+		visible := f.TruncatedLines[:0]
+		for _, line := range f.TruncatedLines {
+			if line >= f.StartLine && line <= f.EndLine {
+				visible = append(visible, line)
+			}
+		}
+		f.TruncatedLines = visible
+		f.TruncatedLinesOmitted = false
+	}
 }
 
 func batchReadErrorCode(err error) string {
@@ -390,6 +481,25 @@ func batchReadErrorCode(err error) string {
 }
 
 func (a *App) batchReadOneWithConfig(cfg ConfigState, path string, req ReadFileRequest) BatchReadResultItem {
+	return a.batchReadOneWithContext(context.Background(), cfg, path, req)
+}
+
+func (a *App) batchReadOneWithContext(ctx context.Context, cfg ConfigState, path string, req ReadFileRequest) BatchReadResultItem {
+	a.mu.Lock()
+	if a.fileReadSlots == nil {
+		a.fileReadSlots = make(chan struct{}, maxToolConcurrency)
+	}
+	slots := a.fileReadSlots
+	a.mu.Unlock()
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	case <-ctx.Done():
+		return BatchReadResultItem{Path: path, Error: ctx.Err().Error(), ErrorCode: "E_CANCELLED"}
+	}
+	if err := ctx.Err(); err != nil {
+		return BatchReadResultItem{Path: path, Error: err.Error(), ErrorCode: "E_CANCELLED"}
+	}
 	result, readErr := a.readFileWithConfig(cfg, req)
 	if readErr != nil {
 		return BatchReadResultItem{Req: req, Path: path, Error: readErr.Error(), ErrorCode: batchReadErrorCode(readErr)}
@@ -674,9 +784,30 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 	}
 	data, info, err := readTextFile(path)
 	if err != nil {
+		if toolErrorCode(err) == "E_FILE_TOO_LARGE" && req.StartLine < 0 {
+			tail, size, tailErr := read.ReadTextTail(path)
+			if tailErr != nil {
+				return ReadFileResult{}, tailErr
+			}
+			return buildReadOnlyTailResult(displayPathForConfig(cfg, path), tail, size, -req.StartLine), nil
+		}
 		return ReadFileResult{}, err
 	}
 	return buildTextReadResult(displayPathForConfig(cfg, path), data, info.Size(), req)
+}
+
+func buildReadOnlyTailResult(path string, data []byte, size int64, lines int) ReadFileResult {
+	text, _, _ := normalizeText(data)
+	parts, _ := splitLines(text)
+	if len(parts) > lines {
+		parts = parts[len(parts)-lines:]
+	}
+	body := strings.Join(parts, "\n")
+	if len(body) > maxReadPreviewBytes {
+		body = tailString(body, maxReadPreviewBytes)
+	}
+	notice := fmt.Sprintf("[Read-only tail, up to %d lines within the last %d bytes; absolute line numbers unavailable. Not an edit snapshot.]\n", lines, read.MaxTailBytes)
+	return ReadFileResult{Path: path, Content: notice + body, Kind: "text", ContentFormat: "text", Editable: false, Size: size, Truncated: true, RangeStatus: "read_only_tail"}
 }
 
 // buildTextReadResult formats an already decoded text snapshot. Its version and

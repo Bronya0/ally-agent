@@ -420,7 +420,8 @@ type App struct {
 	// orch_read.go). Memory-only: a restarted process starts empty, and
 	// releaseSession drops the entry together with the rest of the session
 	// state. Guarded by a.mu.
-	readCaches map[string]*sessionReadCache
+	readCaches    map[string]*sessionReadCache
+	fileReadSlots chan struct{}
 
 	// contextLocks holds one request-prefix baseline per session id
 	// (sessionContextLock in biz_context_lock.go): the fingerprint of the last
@@ -443,6 +444,7 @@ func NewApp() *App {
 		compactFailures:    map[string]int{},
 		histories:          map[string][]openai.ChatCompletionMessage{},
 		readCaches:         map[string]*sessionReadCache{},
+		fileReadSlots:      make(chan struct{}, maxToolConcurrency),
 		contextLocks:       map[string]*sessionContextLock{},
 		plans:              map[string][]PlanStep{},
 		planRevisions:      map[string]int64{},
@@ -1150,12 +1152,14 @@ type ServiceOutputResult struct {
 }
 
 type CommandResult struct {
-	Command        string `json:"command"`
-	Cwd            string `json:"cwd"`
-	Shell          string `json:"shell"`
-	ShellPath      string `json:"shellPath"`
-	Output         string `json:"output"`
-	OutputFilePath string `json:"outputFilePath,omitempty"`
+	Command              string `json:"command"`
+	Cwd                  string `json:"cwd"`
+	Shell                string `json:"shell"`
+	ShellPath            string `json:"shellPath"`
+	Output               string `json:"output"`
+	OutputFilePath       string `json:"outputFilePath,omitempty"`
+	OutputFileIncomplete bool   `json:"outputFileIncomplete,omitempty"`
+	OutputWarning        string `json:"outputWarning,omitempty"`
 	// OutputFileBytes 是截断落盘文件的字节体积，让模型在读全量前能
 	// 自行判断是否分段读取。仅 OutputFilePath 非空时有意义。
 	OutputFileBytes int64 `json:"outputFileBytes,omitempty"`
@@ -1305,12 +1309,21 @@ type remoteTarget struct {
 }
 
 type remoteRawFile struct {
-	Path       string
-	Data       []byte
-	Size       int64
-	Mode       int
-	ModTime    string
-	LineEnding string
+	Path         string
+	Data         []byte
+	RawData      []byte // original encoding; nil only in legacy in-memory callers
+	ReadOnlyTail bool
+	Size         int64
+	Mode         int
+	ModTime      string
+	LineEnding   string
+}
+
+func (f remoteRawFile) rawBytes() []byte {
+	if f.RawData != nil {
+		return f.RawData
+	}
+	return f.Data
 }
 
 type GitRepoItem struct {
@@ -1482,7 +1495,13 @@ type BatchReadResultItem struct {
 }
 
 type BatchReadResult struct {
-	Files []BatchReadResultItem `json:"files"`
+	Files   []BatchReadResultItem `json:"files"`
+	Missing []ReadPathStatus      `json:"missing,omitempty"`
+}
+
+type ReadPathStatus struct {
+	Path      string `json:"path"`
+	ErrorCode string `json:"errorCode"`
 }
 
 type DocumentReadRequest struct {
@@ -2491,7 +2510,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			outcomes[idx] = o
 			emitOutcome(o)
 		}
-		a.executeStagedToolBatch(ctx, toolCfg, toolCalls, toolConflicts, executeCall, publishCall)
+		a.executeStagedToolBatch(ctx, toolCfg, toolCalls, toolConflicts, executeCall, publishCall, a.executeLocalEditToolBatch)
 
 		// Did this batch do work the plan does not reflect? A batch that moved the
 		// plan answers that itself; only work done without a plan write leaves
@@ -2605,90 +2624,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	// a mismatch is a model bug that must fail here, naming the field, instead
 	// of reaching a handler that never promised to check it. Only tools with no
 	// built-in declaration (MCP tools, legacy aliases) keep the tolerant path.
-	decodeJSON := func(v any) (error, []string) {
-		// Missing arguments decode as an empty object so the gate reports the
-		// absent required parameters explicitly instead of letting the handler
-		// run on zero values.
-		rawArgs := args
-		if len(bytes.TrimSpace(rawArgs)) == 0 {
-			rawArgs = []byte("{}")
-		}
-		// Parse the raw JSON to a map to detect extra keys.
-		var rawMap map[string]json.RawMessage
-		if err := json.Unmarshal(rawArgs, &rawMap); err != nil {
-			// Only an unexpected end is evidence of a cut-off stream. Unknown
-			// fields, wrong types, and other complete-JSON schema errors used to
-			// be mislabeled as truncation, making small oldText/legacy oldString
-			// calls look as if they had exhausted max_tokens.
-			if isIncompleteStreamJSON(err) {
-				if name == "edit" || name == "replace_exact" || name == "replace_lines" || name == "remote_edit" {
-					return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Merge small changes into one edit call; split large changes (a whole function or section) into separate edit calls; use lineRange (inclusive A-B whole-line range) for large deletions or replacements of a contiguous line range: %w", err), nil
-				}
-				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted): %w", err), nil
-			}
-			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
-		}
-		// Unmarshal into the actual target (allows unknown fields). Type errors
-		// trigger one repair round per offending field path: double-encoded
-		// string fields are decoded in place, so a recoverable formatting slip
-		// does not waste a model round trip.
-		var repairedFields []string
-		cur := rawArgs
-		if name == "http_request" {
-			if fixed, ok := repairHTTPRequestJSONArg(cur); ok {
-				cur = fixed
-				repairedFields = append(repairedFields, "json")
-			}
-		}
-		for round := 0; ; round++ {
-			err := json.Unmarshal(cur, v)
-			if err == nil {
-				break
-			}
-			var typeErr *json.UnmarshalTypeError
-			if !errors.As(err, &typeErr) || round >= maxToolArgRepairRounds {
-				return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
-			}
-			fixed, ok := repairToolArgJSON(cur, typeErr)
-			if !ok {
-				return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
-			}
-			cur = fixed
-			repairedFields = append(repairedFields, typeErr.Field)
-		}
-		var warnings []string
-		if len(repairedFields) > 0 {
-			warnings = append(warnings, fmt.Sprintf(
-				"参数 %s 的格式有误（应为 JSON 数组/对象，却收到了带引号的字符串），已自动修复并照常执行；后续调用请直接传 JSON 数组或对象，不要序列化成字符串。",
-				strings.Join(repairedFields, ", ")))
-		}
-		// Schema gate: validate the repaired payload so the stringified-array
-		// repair above still lands, and so every keyword the declaration uses
-		// (required, ranges, patterns, enum, const, unknown keys at any depth) is
-		// enforced exactly as written. Unknown keys used to be downgraded to a
-		// warning, which let a typo execute on a default the model never asked for.
-		if schema, ok := toolshared.BuiltinSchema(name); ok {
-			if violations := schemautil.ValidateArgs(schema, cur); len(violations) > 0 {
-				return codedToolError("E_BAD_ARGS", fmt.Errorf("invalid arguments for %s: %s", name, schemautil.DescribeViolations(violations))), nil
-			}
-			return nil, warnings
-		}
-		// No declared schema (MCP tools, legacy aliases): keep the tolerant
-		// path. Only top-level extra keys are visible without a schema, which is
-		// why this check reads the target struct's tags. Repair only rewrites
-		// values, never keys, so the original rawMap stays authoritative here.
-		validFields := collectValidJSONFields(v)
-		extraFields := make([]string, 0, len(rawMap))
-		for k := range rawMap {
-			if _, ok := validFields[k]; !ok {
-				extraFields = append(extraFields, k)
-			}
-		}
-		if len(extraFields) > 0 {
-			warnings = append(warnings, fmt.Sprintf("以下参数不被该工具支持，已忽略：%s", strings.Join(extraFields, ", ")))
-		}
-		return nil, warnings
-	}
+	decodeJSON := func(v any) (error, []string) { return decodeToolArguments(name, args, v) }
 
 	// Normalize once at the boundary: lower-case and trim surrounding
 	// whitespace. There is no alias table behind it (shared.NormalizeName); MCP
@@ -2942,9 +2878,9 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		err, argWarnings = decodeJSON(&reqBR)
 		if err == nil {
 			if cache, ok := ctx.Value(sessionReadCacheContextKey{}).(*sessionReadCache); ok {
-				data, err = cache.read(a, cfg, reqBR)
+				data, err = cache.readContext(ctx, a, cfg, reqBR)
 			} else {
-				data, err = a.batchReadFilesWithConfig(cfg, reqBR)
+				data, err = a.batchReadFilesWithContext(ctx, cfg, reqBR)
 			}
 		}
 
@@ -3662,3 +3598,88 @@ func repairJSONLeaf(raw json.RawMessage, wantSlice bool) (json.RawMessage, bool)
 
 // Sub-agent frontend bindings (GetSubagents, cloneSubagentRun) moved to
 // orch_subagent.go.
+
+func decodeToolArguments(name string, args []byte, v any) (error, []string) {
+	// Missing arguments decode as an empty object so the gate reports the
+	// absent required parameters explicitly instead of letting the handler
+	// run on zero values.
+	rawArgs := args
+	if len(bytes.TrimSpace(rawArgs)) == 0 {
+		rawArgs = []byte("{}")
+	}
+	// Parse the raw JSON to a map to detect extra keys.
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(rawArgs, &rawMap); err != nil {
+		// Only an unexpected end is evidence of a cut-off stream. Unknown
+		// fields, wrong types, and other complete-JSON schema errors used to
+		// be mislabeled as truncation, making small oldText/legacy oldString
+		// calls look as if they had exhausted max_tokens.
+		if isIncompleteStreamJSON(err) {
+			if name == "edit" || name == "replace_exact" || name == "replace_lines" || name == "remote_edit" {
+				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Merge small changes into one edit call; split large changes (a whole function or section) into separate edit calls; use lineRange (inclusive A-B whole-line range) for large deletions or replacements of a contiguous line range: %w", err), nil
+			}
+			return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted): %w", err), nil
+		}
+		return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
+	}
+	// Unmarshal into the actual target (allows unknown fields). Type errors
+	// trigger one repair round per offending field path: double-encoded
+	// string fields are decoded in place, so a recoverable formatting slip
+	// does not waste a model round trip.
+	var repairedFields []string
+	cur := rawArgs
+	if name == "http_request" {
+		if fixed, ok := repairHTTPRequestJSONArg(cur); ok {
+			cur = fixed
+			repairedFields = append(repairedFields, "json")
+		}
+	}
+	for round := 0; ; round++ {
+		err := json.Unmarshal(cur, v)
+		if err == nil {
+			break
+		}
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &typeErr) || round >= maxToolArgRepairRounds {
+			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
+		}
+		fixed, ok := repairToolArgJSON(cur, typeErr)
+		if !ok {
+			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
+		}
+		cur = fixed
+		repairedFields = append(repairedFields, typeErr.Field)
+	}
+	var warnings []string
+	if len(repairedFields) > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"参数 %s 的格式有误（应为 JSON 数组/对象，却收到了带引号的字符串），已自动修复并照常执行；后续调用请直接传 JSON 数组或对象，不要序列化成字符串。",
+			strings.Join(repairedFields, ", ")))
+	}
+	// Schema gate: validate the repaired payload so the stringified-array
+	// repair above still lands, and so every keyword the declaration uses
+	// (required, ranges, patterns, enum, const, unknown keys at any depth) is
+	// enforced exactly as written. Unknown keys used to be downgraded to a
+	// warning, which let a typo execute on a default the model never asked for.
+	if schema, ok := toolshared.BuiltinSchema(name); ok {
+		if violations := schemautil.ValidateArgs(schema, cur); len(violations) > 0 {
+			return codedToolError("E_BAD_ARGS", fmt.Errorf("invalid arguments for %s: %s", name, schemautil.DescribeViolations(violations))), nil
+		}
+		return nil, warnings
+	}
+	// No declared schema (MCP tools, legacy aliases): keep the tolerant
+	// path. Only top-level extra keys are visible without a schema, which is
+	// why this check reads the target struct's tags. Repair only rewrites
+	// values, never keys, so the original rawMap stays authoritative here.
+	validFields := collectValidJSONFields(v)
+	extraFields := make([]string, 0, len(rawMap))
+	for k := range rawMap {
+		if _, ok := validFields[k]; !ok {
+			extraFields = append(extraFields, k)
+		}
+	}
+	if len(extraFields) > 0 {
+		warnings = append(warnings, fmt.Sprintf("以下参数不被该工具支持，已忽略：%s", strings.Join(extraFields, ", ")))
+	}
+	return nil, warnings
+}

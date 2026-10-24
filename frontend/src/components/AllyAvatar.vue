@@ -8,9 +8,11 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <div ref="root" class="ally-avatar" role="img" :aria-label="$t(avatarStyle === 'whale' ? 'avatar.whaleAria' : 'avatar.aria')"
-       :title="$t(avatarStyle === 'whale' ? 'avatar.whaleSakuraToggle' : 'avatar.sakuraToggle')" @click="toggleSakura">
-    <img v-if="avatarStyle === 'whale'" class="ally-whale" :src="whaleAvatar" alt="" width="164" height="164" draggable="false" />
+  <div ref="root" class="ally-avatar" role="img" :aria-label="$t(avatarAria)"
+       :title="$t(avatarTitle)" @click="toggleSakura">
+    <template v-if="avatarImage">
+      <img v-if="imageVisible" class="ally-avatar-image" :src="avatarImage" alt="" width="164" height="164" draggable="false" />
+    </template>
     <svg v-else class="ally-eye" viewBox="0 0 164 164" aria-hidden="true">
       <!-- 欢迎页多 Tab 共享同一组渐变（inlineDefs=false）；启动页内联独立渐变
            （inlineDefs=true），避免两个 SVG 同时引用同一 paint server 触发
@@ -84,14 +86,23 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, useId } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount, useId } from 'vue';
 import { isZh } from '../i18n.mjs';
 import { EYE_STYLES } from '../data/eyeLines.mjs';
 import { useSakuraBreeze } from '../composables/sakuraBreeze.mjs';
 import { useAvatarAppearance } from '../composables/avatarAppearance.mjs';
 import whaleAvatar from '../assets/avatars/whale/delighted-512.png';
 
-const { avatarStyle } = useAvatarAppearance();
+const { avatarStyle, customAvatar } = useAvatarAppearance();
+const avatarImage = computed(() => avatarStyle.value === 'custom' ? customAvatar.value
+  : avatarStyle.value === 'whale' ? whaleAvatar : '');
+const avatarAria = computed(() => avatarStyle.value === 'custom' ? 'avatar.customAria'
+  : avatarStyle.value === 'whale' ? 'avatar.whaleAria' : 'avatar.aria');
+const avatarTitle = computed(() => avatarStyle.value === 'custom' ? 'avatar.customSakuraToggle'
+  : avatarStyle.value === 'whale' ? 'avatar.whaleSakuraToggle' : 'avatar.sakuraToggle');
+// Unmount animated images offscreen/hidden; CSS animation-play-state cannot
+// suspend a native GIF decoder. Returning to the avatar restarts its playback.
+const imageVisible = ref(typeof document === 'undefined' || !document.hidden);
 
 const props = defineProps({
   // 启动页单实例用内联渐变（唯一 ID，自带资源），与欢迎页共享渐变互不干扰；
@@ -221,6 +232,7 @@ function dismissSpeech() {
 }
 
 function setPaused(paused) {
+  imageVisible.value = !paused;
   if (!root.value) return;
   root.value.classList.toggle('ally-avatar--paused', paused);
   const nowActive = !paused;
@@ -336,7 +348,7 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-.ally-whale {
+.ally-avatar-image {
   display: block;
   width: 100%;
   height: 100%;

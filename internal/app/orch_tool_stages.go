@@ -59,6 +59,9 @@ func toolStageSucceeded(result toolResult) bool {
 	case *DeletePathsResult:
 		return data != nil && data.FailedCount == 0
 	case BatchReadResult:
+		if len(data.Missing) > 0 {
+			return false
+		}
 		for _, file := range data.Files {
 			if file.Error != "" {
 				return false
@@ -72,11 +75,13 @@ func toolStageSucceeded(result toolResult) bool {
 
 // executeStagedToolBatch is the only scheduler for main and child agents.
 // A stage drains completely, including calls queued behind the concurrency
-// limit. Failures block later stages, never roll back completed work, and every
-// call receives exactly one result. Only execution cancellation stops queued work.
+// limit. Failures block later stages; the local edit executor joins same-stage
+// edits at one prepare/commit boundary. Other completed work is not rolled back.
+// Every call receives one result. Only execution cancellation stops queued work.
 func (a *App) executeStagedToolBatch(ctx context.Context, cfg ConfigState, calls []openai.ToolCall, conflicts map[int]error,
 	execute func(context.Context, int, openai.ToolCall) toolResult,
 	publish func(int, openai.ToolCall, toolResult, int64),
+	editBatch ...func(context.Context, ConfigState, []openai.ToolCall) []toolResult,
 ) {
 	groups := map[int64][]int{}
 	invalid := map[int]error{}
@@ -121,6 +126,19 @@ func (a *App) executeStagedToolBatch(ctx context.Context, cfg ConfigState, calls
 		results := make([]toolResult, len(indices))
 		durations := make([]int64, len(indices))
 		published := make([]bool, len(indices))
+		var editSlots []int
+		editPosition := map[int]int{}
+		if len(editBatch) > 0 {
+			for slot, index := range indices {
+				if normalizeToolName(calls[index].Function.Name) == "edit" && conflicts[index] == nil {
+					editPosition[slot] = len(editSlots)
+					editSlots = append(editSlots, index)
+				}
+			}
+		}
+		var editOnce sync.Once
+		var joined []toolResult
+		var editDuration int64
 		var wg sync.WaitGroup
 		for slot, index := range indices {
 			wg.Add(1)
@@ -135,6 +153,30 @@ func (a *App) executeStagedToolBatch(ctx context.Context, cfg ConfigState, calls
 				}()
 				if err := conflicts[index]; err != nil {
 					results[slot] = toolErrorResult(err)
+					return
+				}
+				if pos, ok := editPosition[slot]; ok && len(editSlots) > 1 {
+					editOnce.Do(func() {
+						joined = make([]toolResult, len(editSlots))
+						select {
+						case sem <- struct{}{}:
+							defer func() { <-sem }()
+						case <-ctx.Done():
+							for i := range joined {
+								joined[i] = toolErrorResult(codedToolError("E_CANCELLED", ctx.Err()))
+							}
+							return
+						}
+						batch := make([]openai.ToolCall, len(editSlots))
+						for i, index := range editSlots {
+							batch[i] = calls[index]
+						}
+						started := time.Now()
+						joined = editBatch[0](ctx, cfg, batch)
+						editDuration = time.Since(started).Milliseconds()
+					})
+					results[slot] = joined[pos]
+					durations[slot] = editDuration
 					return
 				}
 				select {

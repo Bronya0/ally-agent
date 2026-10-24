@@ -44,25 +44,132 @@ const MaxReadBytes = 32 * 1024 * 1024
 //     malformed/non-text UTF-16
 //   - E_NOT_UTF8: file is not valid UTF-8
 func ReadTextFile(path string) ([]byte, os.FileInfo, error) {
-	info, err := os.Stat(path)
+	raw, info, err := ReadRawTextFile(path)
+	if err != nil {
+		return nil, info, err
+	}
+	data, err := DecodeTextBytes(raw)
+	return data, info, err
+}
+
+// ReadRawTextFile bounds the actual read, including files growing after Stat.
+// Editors retain these original bytes for encoding-preserving writes/rollback.
+func ReadRawTextFile(path string) ([]byte, os.FileInfo, error) {
+	pre, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !pre.Mode().IsRegular() && !pre.IsDir() {
+		return nil, nil, toolerrors.New("E_NOT_REGULAR_FILE", errors.New("path is not a regular file"))
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
 	if err != nil {
 		return nil, nil, err
 	}
 	if info.IsDir() {
 		return nil, nil, toolerrors.New("E_IS_DIRECTORY", errors.New("path is a directory"))
 	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, toolerrors.New("E_NOT_REGULAR_FILE", errors.New("path is not a regular file"))
+	}
 	if info.Size() > MaxReadBytes {
 		return nil, nil, toolerrors.Newf("E_FILE_TOO_LARGE", "file is too large: %d bytes", info.Size())
 	}
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(io.LimitReader(f, MaxReadBytes+1))
 	if err != nil {
 		return nil, nil, err
 	}
-	data, err = DecodeTextBytes(data)
-	if err != nil {
-		return nil, nil, err
+	if len(data) > MaxReadBytes {
+		return nil, nil, toolerrors.Newf("E_FILE_TOO_LARGE", "file grew past %d bytes while reading", MaxReadBytes)
 	}
 	return data, info, nil
+}
+
+const MaxTailBytes = 128 * 1024
+
+// ReadTextTail is a read-only escape hatch for large UTF-8 logs. It never
+// loads/hashes the entire file and never issues an editable version token.
+func ReadTextTail(path string) ([]byte, int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, 0, errors.New("tail requires a regular file")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer f.Close()
+	header := make([]byte, 2)
+	_, _ = f.ReadAt(header, 0)
+	if (header[0] == 0xff && header[1] == 0xfe) || (header[0] == 0xfe && header[1] == 0xff) {
+		return nil, 0, toolerrors.New("E_FILE_TOO_LARGE", errors.New("large-file tails require UTF-8; convert this UTF-16 log before reading"))
+	}
+	offset := max(int64(0), info.Size()-MaxTailBytes)
+	if _, err = f.Seek(offset, io.SeekStart); err != nil {
+		return nil, 0, err
+	}
+	data, err := io.ReadAll(io.LimitReader(f, MaxTailBytes))
+	if err != nil {
+		return nil, 0, err
+	}
+	if offset > 0 {
+		for len(data) > 0 && !utf8.RuneStart(data[0]) {
+			data = data[1:]
+		}
+	}
+	data, err = DecodeTextBytes(data)
+	return data, info.Size(), err
+}
+
+// EncodeLike restores the source encoding, BOM and line endings. The edit
+// engine works exclusively on UTF-8; both local and SSH writes use this boundary.
+func EncodeLike(original []byte, text string) ([]byte, error) {
+	decoded, err := DecodeTextBytes(original)
+	if err != nil {
+		return nil, err
+	}
+	_, ending, bom := NormalizeText(decoded)
+	data := EncodeText(text, ending, bom)
+	le, be := false, false
+	bom16 := len(original) >= 2 && ((original[0] == 0xff && original[1] == 0xfe) || (original[0] == 0xfe && original[1] == 0xff))
+	if bom16 {
+		le, be = original[0] == 0xff, original[0] == 0xfe
+	} else {
+		le, be = probeUTF16(original)
+	}
+	if le || be {
+		units := utf16.Encode([]rune(string(data)))
+		size := len(units) * 2
+		if bom16 {
+			size += 2
+		}
+		if size > MaxReadBytes {
+			return nil, toolerrors.New("E_FILE_TOO_LARGE", errors.New("edited file exceeds the 32 MiB text limit"))
+		}
+		data = make([]byte, 0, size)
+		if bom16 {
+			data = append(data, original[:2]...)
+		}
+		for _, u := range units {
+			if le {
+				data = append(data, byte(u), byte(u>>8))
+			} else {
+				data = append(data, byte(u>>8), byte(u))
+			}
+		}
+	}
+	if len(data) > MaxReadBytes {
+		return nil, toolerrors.New("E_FILE_TOO_LARGE", errors.New("edited file exceeds the 32 MiB text limit"))
+	}
+	return data, nil
 }
 
 func hasNUL(data []byte) bool {
@@ -455,12 +562,18 @@ func writeTempSibling(path string, data []byte, perm os.FileMode, mkdirs bool) (
 	if perm == 0 {
 		perm = 0o644
 	}
-	_ = tmp.Chmod(perm)
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return "", err
 	}
-	_ = tmp.Sync()
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}

@@ -51,6 +51,9 @@ type limitedBuffer struct {
 	buf       bytes.Buffer
 	limit     int
 	truncated bool
+	total     int64
+	tail      *rollingBuffer // command-only recent output; env probes keep prefix-only behavior
+	spillErr  error
 	// spill receives every chunk verbatim once truncation has started; it is
 	// created lazily by onTruncate on the first overflow. The buffer and the
 	// spill are written under the same mutex, so the spill file is a
@@ -68,6 +71,10 @@ type limitedBuffer struct {
 func (b *limitedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.total += int64(len(p))
+	if b.tail != nil {
+		_, _ = b.tail.Write(p)
+	}
 	if b.limit <= 0 {
 		return len(p), nil
 	}
@@ -99,9 +106,17 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 		_, _ = b.buf.Write(p)
 	}
 	if b.spill != nil {
-		_, _ = b.spill.Write(p)
+		if _, err := b.spill.Write(p); err != nil && b.spillErr == nil {
+			b.spillErr = err
+		}
 	}
 	return len(p), nil
+}
+
+func (b *limitedBuffer) TotalBytes() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.total
 }
 
 // ensureSpillLocked creates the spill sink once, on the first overflow, by
@@ -142,6 +157,11 @@ func (b *limitedBuffer) TailString(n int) string {
 		return ""
 	}
 	b.mu.Lock()
+	if b.tail != nil {
+		text, _, _ := b.tail.TailSnapshot(n)
+		b.mu.Unlock()
+		return text
+	}
 	p := b.buf.Bytes()
 	if len(p) <= n {
 		s := string(p)

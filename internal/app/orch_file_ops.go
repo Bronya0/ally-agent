@@ -628,7 +628,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = commandEnvironment(cfg)
-	buf := &limitedBuffer{limit: maxToolOutput}
+	buf := &limitedBuffer{limit: maxToolOutput, tail: newRollingBuffer(maxToolOutput)}
 	// 完整输出延迟落盘：仅在内存缓冲首次溢出时创建工作区 .tmp 下的 spill 文件，
 	// 把已缓冲前缀写入后继续边跑边写；未截断的小输出全程不碰磁盘。
 	tw := &teeWriter{primary: buf, spillDir: filepath.Join(root, ".tmp")}
@@ -659,9 +659,9 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 			// the command hadn't produced any new output — for a long-running
 			// build emitting one line per second, ~99% of ticks were no-ops
 			// that still held the write lock during a multi-MB copy.
-			lastLen := -1
+			lastLen := int64(-1)
 			emit := func() {
-				curLen := buf.Len()
+				curLen := buf.TotalBytes()
 				if curLen == 0 || curLen == lastLen {
 					return
 				}
@@ -742,7 +742,10 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 				// 收编路径同样要收尾 spill：超时前的输出可能已超过内存上限，
 				// 不关句柄会泄漏 fd、不回报落盘文件会让模型误以为拿到的是全量输出。
 				outputFilePath, outputFileSize := finalizeCommandSpill(tw, buf)
-				return a.promotedCommandResult(req, shell, cwd, buf, timeout, info, outputFilePath, outputFileSize), nil
+				result := a.promotedCommandResult(req, shell, cwd, buf, timeout, info, outputFilePath, outputFileSize)
+				result.OutputWarning = commandLogWarning(tw, buf)
+				result.OutputFileIncomplete = result.OutputWarning != ""
+				return result, nil
 			}
 			if errors.Is(promoteErr, errProcessAlreadyExited) {
 				// 竞态：进程恰好在收编瞬间自行退出，drain 拿真实退出结果。
@@ -774,7 +777,9 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		Sandboxed:       spec.Enforce(),
 		OutputFilePath:  outputFilePath,
 		OutputFileBytes: outputFileSize,
+		OutputWarning:   commandLogWarning(tw, buf),
 	}
+	result.OutputFileIncomplete = result.OutputWarning != ""
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -798,7 +803,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 // spill, so its content is final). Without this the promoted path would leak the
 // handle and leave the model thinking the capped buffer is all the output.
 func finalizeCommandSpill(tw *teeWriter, buf *limitedBuffer) (string, int64) {
-	retain := buf.truncated || utf8.RuneCountInString(decodeConsoleOutput(buf.String())) > maxModelToolOutput
+	retain := buf.truncated || len(decodeConsoleOutput(buf.String())) > maxModelToolOutput
 	if retain && tw.spill == nil && !buf.truncated {
 		tw.startSpill([]byte(buf.String()))
 	}
@@ -807,7 +812,10 @@ func finalizeCommandSpill(tw *teeWriter, buf *limitedBuffer) (string, int64) {
 		return "", 0
 	}
 	name := f.Name()
-	_ = f.Close()
+	defer releaseCommandLog(name)
+	if err := f.Close(); err != nil && tw.spillErr == nil {
+		tw.spillErr = err
+	}
 	if !retain {
 		_ = os.Remove(name)
 		return "", 0
@@ -815,7 +823,9 @@ func finalizeCommandSpill(tw *teeWriter, buf *limitedBuffer) (string, int64) {
 	// On codepage-936 systems the full output is commonly GBK while the
 	// model-facing cap keeps UTF-8 in memory; rewrite the spill as UTF-8 so
 	// `read` can open it, then stat the final size.
-	transcodeSpillFileForRead(name)
+	if err := transcodeSpillFileForRead(name); err != nil && tw.spillErr == nil {
+		tw.spillErr = err
+	}
 	info, err := os.Stat(name)
 	if err != nil {
 		return name, 0
@@ -823,11 +833,27 @@ func finalizeCommandSpill(tw *teeWriter, buf *limitedBuffer) (string, int64) {
 	return name, info.Size()
 }
 
+func commandLogWarning(tw *teeWriter, buf *limitedBuffer) string {
+	err := tw.spillErr
+	if err == nil {
+		err = buf.spillErr
+	}
+	if err == nil {
+		return ""
+	}
+	return "Full output could not be retained: " + utf8Prefix(err.Error(), 512) + ". The preview keeps the actual recent output; do not repeat side effects to recover logs."
+}
+
 // commandOutputPreview replaces the end of an overflowing prefix with the true
 // final output. Read only a bounded tail from the finalized UTF-8 spill; the
 // existing model compactor will then keep the command's actual final errors.
 func commandOutputPreview(buf *limitedBuffer, outputFilePath string) string {
 	output := decodeConsoleOutput(buf.String())
+	if buf.truncated && buf.tail != nil {
+		const marker = "\n\n[... output omitted ...]\n\n"
+		tail := decodeConsoleOutput(buf.TailString(modelToolTailBytes))
+		return utf8Prefix(output, maxToolOutput-len(tail)-len(marker)) + marker + tail
+	}
 	if !buf.truncated || outputFilePath == "" {
 		return output
 	}
@@ -864,6 +890,7 @@ type teeWriter struct {
 	primary  *limitedBuffer
 	spillDir string
 	spill    *os.File // nil until the first truncation
+	spillErr error
 	// promoted 在 promoteTo 之后非 nil：新写入只进该服务的滚动缓冲，不再进
 	// primary/spill（命令已移交给服务注册表，截断报告与 spill 文件不再有意义）。
 	promoted io.Writer
@@ -896,7 +923,11 @@ func (w *teeWriter) promoteTo(sink io.Writer) {
 	if w.promoted != nil || sink == nil {
 		return
 	}
-	_, _ = sink.Write([]byte(w.primary.String()))
+	seed := w.primary.String()
+	if w.primary.tail != nil {
+		seed = w.primary.TailString(maxToolOutput)
+	}
+	_, _ = sink.Write([]byte(seed))
 	w.promoted = sink
 }
 
@@ -910,15 +941,114 @@ func (w *teeWriter) startSpill(prefix []byte) io.Writer {
 		return nil
 	}
 	if err := os.MkdirAll(w.spillDir, 0o755); err != nil {
+		w.spillErr = err
 		return nil
 	}
-	f, err := os.CreateTemp(w.spillDir, "ally-run-*.log")
+	f, err := createCommandLog(w.spillDir)
 	if err != nil {
+		w.spillErr = err
 		return nil
 	}
 	w.spill = f
-	_, _ = f.Write(prefix)
-	return f
+	sink := &commandLogSink{file: f, remaining: maxCommandLogBytes}
+	if _, err := sink.Write(prefix); err != nil {
+		w.spillErr = err
+	}
+	return sink
+}
+
+const maxCommandLogBytes = 64 * 1024 * 1024
+
+var commandLogs = struct {
+	sync.Mutex
+	active map[string]bool
+}{active: map[string]bool{}}
+
+// Reserve room for concurrent logs before opening a sink. Only completed Ally
+// logs can be evicted; active writers never lose their recovery file.
+func createCommandLog(dir string) (*os.File, error) {
+	commandLogs.Lock()
+	defer commandLogs.Unlock()
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("refusing a symlinked command log directory")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	type oldLog struct {
+		path     string
+		size     int64
+		modified time.Time
+	}
+	var old []oldLog
+	used := int64(2 * maxCommandLogBytes) // worst-case UTF-8 expansion for the new log
+	count := 1
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), "ally-run-") || !strings.HasSuffix(e.Name(), ".log") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		count++
+		if commandLogs.active[p] {
+			used += 2 * maxCommandLogBytes
+		} else {
+			used += info.Size()
+			old = append(old, oldLog{p, info.Size(), info.ModTime()})
+		}
+	}
+	sort.Slice(old, func(i, j int) bool { return old[i].modified.Before(old[j].modified) })
+	for _, log := range old {
+		if used <= 512*1024*1024 && count <= 128 && time.Since(log.modified) < 24*time.Hour {
+			break
+		}
+		if os.Remove(log.path) == nil {
+			used -= log.size
+			count--
+		}
+	}
+	if used > 512*1024*1024 || count > 128 {
+		return nil, errors.New("command log quota reached (512 MiB / 128 files); active logs retained")
+	}
+	f, err := os.CreateTemp(dir, "ally-run-*.log")
+	if err == nil {
+		commandLogs.active[f.Name()] = true
+	}
+	return f, err
+}
+
+func releaseCommandLog(path string) {
+	commandLogs.Lock()
+	delete(commandLogs.active, path)
+	commandLogs.Unlock()
+}
+
+// Keep draining the command even after the disk log reaches its explicit cap.
+type commandLogSink struct {
+	file      *os.File
+	remaining int64
+}
+
+func (s *commandLogSink) Write(p []byte) (int, error) {
+	if int64(len(p)) > s.remaining {
+		n, err := s.file.Write(p[:int(s.remaining)])
+		s.remaining -= int64(n)
+		if err != nil {
+			return n, err
+		}
+		return n, errors.New("command log reached the 64 MiB limit")
+	}
+	n, err := s.file.Write(p)
+	s.remaining -= int64(n)
+	return n, err
 }
 
 // cleanupCommandSpillFiles removes stale command full-output temp files

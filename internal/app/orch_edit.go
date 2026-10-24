@@ -14,6 +14,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -52,6 +53,16 @@ func (e *editRecoveryError) Unwrap() error { return e.err }
 // the write fence. Reuse read's guards and formatting, without another disk read
 // or the session read cache (recovery must actually show the source).
 func withEditRecovery(cfg ConfigState, path string, data []byte, size int64, err error) error {
+	readPath, guardErr := resolveReadFilePath(cfg, path)
+	if guardErr != nil || documentExtensionInRead(readPath) {
+		return err
+	}
+	return withEditRecoverySource(displayPathForConfig(cfg, readPath), data, size, err)
+}
+
+// Both hosts attach the same bounded, model-only source snapshot after their
+// own read/write fences have authorized it.
+func withEditRecoverySource(path string, data []byte, size int64, err error) error {
 	switch toolErrorCode(err) {
 	case "E_VERSION_MISMATCH", "E_NO_MATCH", "E_MULTI_MATCH", "E_RANGE_OOB", "E_BAD_ARGS":
 		// E_BAD_ARGS from ApplyBatchTextChanges is its truncated-line guard.
@@ -61,11 +72,7 @@ func withEditRecovery(cfg ConfigState, path string, data []byte, size int64, err
 	if size > maxEditRecoveryBytes || len(data) > maxEditRecoveryBytes {
 		return err
 	}
-	readPath, guardErr := resolveReadFilePath(cfg, path)
-	if guardErr != nil || documentExtensionInRead(readPath) {
-		return err
-	}
-	snapshot, readErr := buildTextReadResult(displayPathForConfig(cfg, readPath), data, size, ReadFileRequest{})
+	snapshot, readErr := buildTextReadResult(path, data, size, ReadFileRequest{})
 	if readErr != nil || snapshot.Truncated || len(snapshot.TruncatedLines) > 0 {
 		return err
 	}
@@ -98,10 +105,13 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		if _, err := resolveReadFilePath(cfg, resolved); err != nil {
 			return MultiEditResult{}, err
 		}
-		before, info, err := readTextFile(resolved)
-
+		rawBefore, info, err := read.ReadRawTextFile(resolved)
 		if err != nil {
 			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
+		}
+		before, err := read.DecodeTextBytes(rawBefore)
+		if err != nil {
+			return MultiEditResult{}, err
 		}
 		beforeHash, beforeVersion := hashBytesAndVersion(before)
 		if !strings.EqualFold(file.Version, beforeVersion) {
@@ -114,22 +124,25 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 			err = fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
 			return MultiEditResult{}, withEditRecovery(cfg, resolved, before, info.Size(), err)
 		}
-		after := encodeText(applied.Content, ending, hadBOM)
+		after, err := read.EncodeLike(rawBefore, applied.Content)
+		if err != nil {
+			return MultiEditResult{}, err
+		}
 		diff, removed, added := edit.GenerateEditDiffPreviewWithCounts(text, applied.Content, maxToolOutput)
 		classification := "edit"
-		if bytes.Equal(after, before) {
+		if bytes.Equal(after, rawBefore) {
 			classification = "noop"
-		} else if len(after) > len(before) {
+		} else if len(after) > len(rawBefore) {
 			classification = "addition"
-		} else if len(after) < len(before) {
+		} else if len(after) < len(rawBefore) {
 			classification = "deletion"
 		}
 		display := filepath.ToSlash(file.Path)
-		afterHash, afterVersion := hashBytesAndVersion(after)
+		afterHash, afterVersion := hashBytesAndVersion(encodeText(applied.Content, ending, hadBOM))
 		prepared = append(prepared, preparedFileEdit{
 			path:    resolved,
 			display: display,
-			before:  before,
+			before:  rawBefore,
 			after:   after,
 			perm:    info.Mode().Perm(),
 			result: EditResult{
@@ -138,13 +151,13 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 				AfterSHA256:       afterHash,
 				BeforeVersion:     beforeVersion,
 				Version:           afterVersion,
-				BeforeBytes:       len(before),
+				BeforeBytes:       len(rawBefore),
 				AfterBytes:        len(after),
 				Replacements:      replacements,
 				AddedLines:        added,
 				RemovedLines:      removed,
 				LineEnding:        ending,
-				Summary:           fmt.Sprintf("%s updated: %d -> %d bytes", display, len(before), len(after)),
+				Summary:           fmt.Sprintf("%s updated: %d -> %d bytes", display, len(rawBefore), len(after)),
 				Diff:              diff,
 				FirstChanged:      applied.FirstChangedLine,
 				LastChanged:       applied.LastChangedLine,
@@ -159,6 +172,11 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		var rollbackErrors []string
 		for i := len(committed) - 1; i >= 0; i-- {
 			item := prepared[committed[i]]
+			current, _, err := read.ReadRawTextFile(item.path)
+			if err != nil || !bytes.Equal(current, item.after) {
+				rollbackErrors = append(rollbackErrors, item.display+": changed again; rollback skipped to preserve concurrent edits")
+				continue
+			}
 			if err := sandboxedWriteFile(spec, roots, item.path, item.before, item.perm); err != nil {
 				rollbackErrors = append(rollbackErrors, item.display+": "+err.Error())
 			}
@@ -172,8 +190,8 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		if bytes.Equal(item.before, item.after) {
 			continue
 		}
-		current, info, err := readTextFile(item.path)
-		if err != nil || !strings.EqualFold(hashVersion(current), item.result.BeforeVersion) {
+		current, info, err := read.ReadRawTextFile(item.path)
+		if err != nil || !bytes.Equal(current, item.before) {
 			rollbackErr := rollback()
 			msg := fmt.Sprintf("file changed before commit: %s; use the current source and version before retrying (read again if no snapshot is attached)", item.display)
 			if rollbackErr != nil {
@@ -181,7 +199,9 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 			}
 			commitErr := codedToolError("E_VERSION_MISMATCH", errors.New(msg))
 			if err == nil {
-				commitErr = withEditRecovery(cfg, item.path, current, info.Size(), commitErr)
+				if decoded, decodeErr := read.DecodeTextBytes(current); decodeErr == nil {
+					commitErr = withEditRecovery(cfg, item.path, decoded, info.Size(), commitErr)
+				}
 			}
 			return MultiEditResult{}, commitErr
 		}
@@ -215,6 +235,68 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 	}
 	result.Diff = strings.Join(diffs, "\n\n")
 	return result, nil
+}
+
+// Model calls stay single-file. Same-stage local edits share the ordinary
+// argument gate and the existing multi-file prepare/commit/rollback engine.
+func (a *App) executeLocalEditToolBatch(ctx context.Context, cfg ConfigState, calls []openai.ToolCall) (results []toolResult) {
+	results = make([]toolResult, len(calls))
+	fail := func(err error) []toolResult {
+		for i := range results {
+			results[i] = toolErrorResult(err)
+		}
+		return results
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			fail(codedToolError("E_TOOL_PANIC", fmt.Errorf("edit batch panic: %v", r)))
+		}
+	}()
+	files := make([]FileTextEdits, len(calls))
+	warnings := make([][]string, len(calls))
+	for i, c := range calls {
+		err, w := decodeToolArguments("edit", []byte(c.Function.Arguments), &files[i])
+		if toolcall.IsTruncatedArguments(c.Function.Arguments) {
+			err = codedToolError("E_TRUNCATED_ARGS", errors.New("edit arguments were truncated; resend complete parameters"))
+		}
+		warnings[i] = w
+		if err == nil {
+			err = validateModelEditToolRequest([]FileTextEdits{files[i]})
+		}
+		if err == nil {
+			err = kbDenyCheckPaths(ctx, cfg, files[i].Path)
+		}
+		if err != nil {
+			fail(codedToolError("E_EDIT_BATCH_ABORTED", fmt.Errorf("no edits committed: edit for %s failed validation", files[i].Path)))
+			results[i] = toolErrorResult(err)
+			return results
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(codedToolError("E_CANCELLED", err))
+	}
+	var edited MultiEditResult
+	var err error
+	a.withFileOpsLock(func() { edited, err = a.editFilesWithConfig(cfg, files) })
+	if err != nil {
+		for i := range results {
+			results[i] = toolErrorResult(err)
+			if i > 0 {
+				results[i].modelRead = nil
+			}
+		}
+		return results
+	}
+	a.invalidateWorkspaceMapCache(cfg)
+	a.invalidateGitStatus(cfg.Workspace)
+	for i, f := range edited.Files {
+		one := MultiEditResult{Files: []EditResult{f}, FileCount: 1, Replacements: f.Replacements, AddedLines: f.AddedLines, RemovedLines: f.RemovedLines, Summary: f.Summary, Diff: f.Diff}
+		for _, w := range f.Warnings {
+			one.Warnings = append(one.Warnings, f.Path+": "+w)
+		}
+		results[i] = toolResult{OK: true, Data: one, Warnings: warnings[i]}
+	}
+	return results
 }
 
 func validateModelEditToolRequest(files []FileTextEdits) error {

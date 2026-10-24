@@ -45,10 +45,6 @@ const (
 	// maxGrepRecordBytes prevents one unusually long rg output record from
 	// forcing an unbounded allocation while parsing search results or counts.
 	maxGrepRecordBytes = 2 * 1024 * 1024
-	// maxGrepStdoutBytes bounds the amount of rg output retained for samples.
-	// The stream still drains after this cap so exact summary statistics remain
-	// available without a second traversal.
-	maxGrepStdoutBytes = 10 * 1024 * 1024
 	// maxGrepFileCountEntries caps the per-file hotspot list (fileCounts)
 	// returned to the model, sorted by count descending.
 	maxGrepFileCountEntries = 100
@@ -387,6 +383,8 @@ var windowsReservedGlobArgs = func() []string {
 func baseArgs(req Request, maxDepth int) []string {
 	args := []string{
 		"--color=never",
+		// Offsets span separate invocations: parallel traversal order is not a cursor.
+		"--sort", "path",
 		"--max-depth", strconv.Itoa(maxDepth),
 		"--threads", strconv.Itoa(grepThreads()),
 	}
@@ -488,7 +486,9 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	)
 	args = append(args, searchRoot)
 
-	cmd := exec.CommandContext(ctx, rgPath, args...)
+	processCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(processCtx, rgPath, args...)
 	cmd.Dir = root
 	hideCommandWindow(cmd)
 
@@ -520,8 +520,6 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	truncated := false
 	parseErr := error(nil)
 	sampleLimitReached := false
-	outputCapped := false
-	stdoutBytes := 0
 	// The stream always drains to completion, so summary statistics and file
 	// counts stay exact even after the sample budget is exhausted.
 	var stats *SearchStats
@@ -534,17 +532,7 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 		if ctx.Err() != nil {
 			break
 		}
-		line, recordTruncated, bytesRead, readErr := readGrepRecord(reader, maxGrepRecordBytes)
-		if !outputCapped {
-			remainingOutput := maxGrepStdoutBytes - stdoutBytes
-			if bytesRead > remainingOutput {
-				outputCapped = true
-				truncated = true
-				stdoutBytes = maxGrepStdoutBytes
-			} else {
-				stdoutBytes += bytesRead
-			}
-		}
+		line, recordTruncated, _, readErr := readGrepRecord(reader, maxGrepRecordBytes)
 		if recordTruncated {
 			truncated = true
 		}
@@ -559,25 +547,16 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 						group.matchCount = n
 					}
 				}
-			} else if !recordTruncated && !outputCapped {
+			} else if !sampleLimitReached && mode != OutputModeCountMatches {
 				path, lineNum, lineText, ok, err := parseMatch(line, root)
 				if err != nil {
 					parseErr = err
 				} else if ok {
-					if mode == OutputModeCountMatches {
-						// count_matches resolves its page from the globally
-						// sorted per-file counts collected by the end events, so
-						// line grouping is skipped entirely.
-						continue
-					}
 					// lines mode: one entry per matching line, capped by the total
 					// line budget. seen counts every consumed line (skipped by
 					// offset and sampled) up to the last sampled one, so
 					// NextOffset resumes exactly after it. The line that hits the
 					// budget is not counted — it is the first line of the next page.
-					if sampleLimitReached {
-						continue
-					}
 					if seen < req.Offset {
 						seen++
 						continue
@@ -614,6 +593,7 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 			if parseErr == nil && ctx.Err() == nil {
 				parseErr = readErr
 			}
+			cancel()
 			break
 		}
 	}
@@ -699,10 +679,6 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 		if truncated && stats.MatchedLines > seen {
 			if seen > req.Offset {
 				nextOffset = seen
-			} else if outputCapped && seen == req.Offset {
-				// An unusually large first record can consume the output budget before
-				// it is parsed. Advance once so paging cannot repeat offset zero.
-				nextOffset = seen + 1
 			}
 		}
 		offsetExhausted = req.Offset > 0 && stats.MatchedLines > 0 && req.Offset >= stats.MatchedLines && len(groups) == 0
@@ -782,9 +758,29 @@ func (h *fileCountHeap) Items() []FileCount {
 // child process even when a source line is unusually large. A zero limit
 // discards the record while still draining it.
 func readGrepRecord(reader *bufio.Reader, maxRecordBytes int) (line []byte, recordTruncated bool, bytesRead int, err error) {
+	var carry []byte
+	lineNumber := 0
 	for {
 		chunk, readErr := reader.ReadSlice('\n')
 		bytesRead += len(chunk)
+		// rg emits line_number after the line text. Retain this small field even
+		// when the text or submatch array is too large to keep. JSON escapes prevent
+		// an embedded source string from forging the literal field spelling.
+		if lineNumber == 0 {
+			probe := append(carry, chunk...)
+			key := []byte(`"line_number":`)
+			if at := bytes.Index(probe, key); at >= 0 {
+				v := bytes.TrimLeft(probe[at+len(key):], " \t")
+				end := 0
+				for end < len(v) && v[end] >= '0' && v[end] <= '9' {
+					end++
+				}
+				if end > 0 && end < len(v) {
+					lineNumber, _ = strconv.Atoi(string(v[:end]))
+				}
+			}
+			carry = append(carry[:0], probe[max(0, len(probe)-64):]...)
+		}
 
 		if maxRecordBytes <= 0 {
 			if len(chunk) > 0 {
@@ -807,13 +803,30 @@ func readGrepRecord(reader *bufio.Reader, maxRecordBytes int) (line []byte, reco
 			continue
 		}
 		if readErr == io.EOF {
-			return line, recordTruncated, bytesRead, io.EOF
+			err = io.EOF
+			break
 		}
 		if readErr != nil {
 			return line, recordTruncated, bytesRead, readErr
 		}
-		return line, recordTruncated, bytesRead, nil
+		break
 	}
+	if recordTruncated && bytes.HasPrefix(line, []byte(`{"type":"match"`)) {
+		var p struct {
+			Text string `json:"text"`
+		}
+		if at := bytes.Index(line, []byte(`"path":`)); at >= 0 {
+			_ = json.NewDecoder(bytes.NewReader(line[at+len(`"path":`):])).Decode(&p)
+		}
+		if p.Text == "" || lineNumber == 0 {
+			return nil, true, bytesRead, errors.New("oversized ripgrep match could not be located; narrow the search path or pattern")
+		}
+		line, _ = json.Marshal(map[string]any{"type": "match", "data": map[string]any{
+			"path": map[string]string{"text": p.Text}, "line_number": lineNumber,
+			"lines": map[string]string{"text": "[preview omitted: oversized matching line; use a narrower pattern or inspect this line]"},
+		}})
+	}
+	return line, recordTruncated, bytesRead, err
 }
 
 func failureError(stderr string) error {
@@ -878,6 +891,9 @@ func parseMatch(line []byte, root string) (path string, lineNum int, text string
 			Lines      struct {
 				Text string `json:"text"`
 			} `json:"lines"`
+			Submatches []struct {
+				Start int `json:"start"`
+			} `json:"submatches"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(line, &event); err != nil {
@@ -886,7 +902,19 @@ func parseMatch(line []byte, root string) (path string, lineNum int, text string
 	if event.Type != "match" || event.Data.Path.Text == "" {
 		return "", 0, "", false, nil
 	}
-	return DisplayPathForRoot(root, event.Data.Path.Text), event.Data.LineNumber, sanitizeLineText(event.Data.Lines.Text), true, nil
+	text = event.Data.Lines.Text
+	if len(event.Data.Submatches) > 0 {
+		// Keep the useful part of long lines instead of an unrelated 500-char prefix.
+		start := event.Data.Submatches[0].Start
+		if start > maxGrepLineTextChars/2 && start < len(text) {
+			start -= maxGrepLineTextChars / 4
+			for start > 0 && !utf8.RuneStart(text[start]) {
+				start--
+			}
+			text = "…" + text[start:]
+		}
+	}
+	return DisplayPathForRoot(root, event.Data.Path.Text), event.Data.LineNumber, sanitizeLineText(text), true, nil
 }
 
 // sanitizeLineText prepares a matched line's text for the model-facing
@@ -902,10 +930,14 @@ func sanitizeLineText(s string) string {
 	if s == "" {
 		return ""
 	}
-	if utf8.RuneCountInString(s) <= maxGrepLineTextChars {
-		return s
+	count := 0
+	for index := range s {
+		if count == maxGrepLineTextChars {
+			return s[:index] + "…"
+		}
+		count++
 	}
-	return string([]rune(s)[:maxGrepLineTextChars]) + "…"
+	return s
 }
 
 // ExcludedDirs 返回「内容搜索时一律跳过」的目录名：无歧义的环境目录、依赖树与工具缓存。

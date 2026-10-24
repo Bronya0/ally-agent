@@ -2929,15 +2929,14 @@ func TestSessionReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 		t.Fatalf("expected metadata-only reused read, got %#v", secondData)
 	}
 
-	// The model-facing compacted results must carry content on the first read
-	// and a human-readable explanation on the reuse, not an empty content field
-	// with a bare reused flag.
+	// The tool declaration explains reused once; repeated receipts retain just
+	// current version/range metadata instead of a paragraph longer than small files.
 	firstModel := compactToolResultForModel("read", first, "")
 	if !strings.Contains(firstModel, "one") || strings.Contains(firstModel, "Content omitted") {
 		t.Fatalf("expected first compact read to carry content, got: %s", firstModel)
 	}
 	secondModel := compactToolResultForModel("read", second, "")
-	if !strings.Contains(secondModel, "Content omitted") || !strings.Contains(secondModel, ` reused`) || !strings.Contains(secondModel, `version="`) {
+	if len(secondModel) >= len(firstModel) || !strings.Contains(secondModel, ` reused/>`) || !strings.Contains(secondModel, `version="`) {
 		t.Fatalf("expected reused compact read to explain the omission, got: %s", secondModel)
 	}
 

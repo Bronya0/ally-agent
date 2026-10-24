@@ -15,6 +15,7 @@ package app
 // and previously reached the model as U+FFFD mojibake.
 
 import (
+	"errors"
 	"io"
 	"os"
 	"unicode/utf8"
@@ -59,19 +60,19 @@ func decodeConsoleOutput(s string) string {
 // UTF-8 in place when the file is not valid UTF-8, so `read` — which rejects
 // non-UTF-8 text with E_NOT_UTF8 — can open the complete output on
 // codepage-936 systems. Valid files are left byte-identical.
-func transcodeSpillFileForRead(path string) {
+func transcodeSpillFileForRead(path string) error {
 	valid, err := fileIsUTF8(path)
 	if err != nil || valid {
-		return
+		return err
 	}
 	src, err := os.Open(path)
 	if err != nil {
-		return
+		return err
 	}
 	tmp, err := os.CreateTemp(sameDir(path), "ally-run-*.utf8")
 	if err != nil {
 		src.Close()
-		return
+		return err
 	}
 	tmpName := tmp.Name()
 	_, copyErr := io.Copy(tmp, transform.NewReader(src, simplifiedchinese.GB18030.NewDecoder()))
@@ -81,9 +82,13 @@ func transcodeSpillFileForRead(path string) {
 	tmpErr := tmp.Close()
 	if copyErr != nil || srcErr != nil || tmpErr != nil {
 		_ = os.Remove(tmpName)
-		return
+		return errors.Join(copyErr, srcErr, tmpErr)
 	}
-	_ = os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // fileIsUTF8 reports whether the whole file is valid UTF-8 without loading it

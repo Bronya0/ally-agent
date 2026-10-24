@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import print_function
-import base64, errno, json, os, stat as stat_mod, sys, tempfile, time
+import base64, errno, hashlib, json, os, stat as stat_mod, sys, tempfile, time
 
 TRANSFER_MODE = False
 
@@ -207,25 +207,41 @@ def is_protected_delete_path(path):
 def iso_mtime(st):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime))
 
-def read_raw_file(root, rel, max_bytes, remaining_bytes=None):
+def read_raw_file(root, rel, max_bytes, remaining_bytes=None, tail_lines=0):
     path = safe_join(root, rel)
-    st = os.stat(path)
+    try:
+        st = os.stat(path)
+    except (OSError, IOError) as exc:
+        if getattr(exc, "errno", None) in (errno.ENOENT, errno.ENOTDIR):
+            raise ValueError("E_PATH_NOT_FOUND: file does not exist: '%s'" % to_unicode(rel))
+        raise
     if stat_mod.S_ISDIR(st.st_mode):
-        raise ValueError("path is a directory, not a file: '%s'" % to_unicode(rel))
+        raise ValueError("E_IS_DIRECTORY: path is a directory, not a file: '%s'" % to_unicode(rel))
     if not stat_mod.S_ISREG(st.st_mode):
-        raise ValueError("path is not a regular file: '%s'" % to_unicode(rel))
-    if st.st_size > max_bytes:
-        raise ValueError("file is too large: '%s' is %d bytes (limit %d); read a line range instead of the whole file" % (to_unicode(rel), st.st_size, max_bytes))
+        raise ValueError("E_NOT_REGULAR_FILE: path is not a regular file: '%s'" % to_unicode(rel))
+    is_tail = st.st_size > max_bytes and tail_lines > 0
+    if st.st_size > max_bytes and not is_tail:
+        raise ValueError("E_FILE_TOO_LARGE: file is too large: '%s' is %d bytes (limit %d); use tailLines for UTF-8 logs or a read-only command to filter it" % (to_unicode(rel), st.st_size, max_bytes))
     # Batch deferral happens after path/type/size checks. Do not read and base64
     # encode a file that cannot fit this response and will be retried anyway.
-    if remaining_bytes is not None and st.st_size > remaining_bytes:
+    if remaining_bytes is not None and min(st.st_size, 131072 if is_tail else max_bytes) > remaining_bytes:
         return None
     with open(path, "rb") as f:
         # stat 与 read 之间文件可能被追加，按实际读取字节数兜底判定，
         # 防止增长中的文件绕过尺寸预算。
-        data = f.read(max_bytes + 1)
+        if is_tail:
+            header = f.read(2)
+            if header in (b"\xff\xfe", b"\xfe\xff"):
+                raise ValueError("E_FILE_TOO_LARGE: large-file tails require UTF-8; convert this UTF-16 log first")
+            f.seek(max(0, st.st_size - 131072))
+            data = f.read(131072)
+            for _ in range(3):
+                if data[:1] and b"\x80" <= data[:1] <= b"\xbf": data = data[1:]
+                else: break
+        else:
+            data = f.read(max_bytes + 1)
     if len(data) > max_bytes:
-        raise ValueError("file is too large: '%s' grew past the limit while it was being read (%d bytes, limit %d); read a line range instead" % (to_unicode(rel), len(data), max_bytes))
+        raise ValueError("E_FILE_TOO_LARGE: file is too large: '%s' grew past the limit while it was being read (%d bytes, limit %d); retry with tailLines for a log" % (to_unicode(rel), len(data), max_bytes))
     if remaining_bytes is not None and len(data) > remaining_bytes:
         return None
     b64 = base64.b64encode(data)
@@ -234,13 +250,15 @@ def read_raw_file(root, rel, max_bytes, remaining_bytes=None):
     return {
         "path": as_posix_rel(root, path),
         "dataBase64": to_os_text(b64),
-        "size": len(data),
+        "size": st.st_size if is_tail else len(data),
+        "tail": is_tail,
+        "readBytes": len(data),
         "mode": st.st_mode & 0o777,
         "modTime": iso_mtime(st),
     }
 
 def op_read(root, payload):
-    return read_raw_file(root, payload.get("path", ""), int(payload.get("maxBytes") or 2097152))
+    return read_raw_file(root, payload.get("path", ""), int(payload.get("maxBytes") or 2097152), tail_lines=int(payload.get("tailLines") or 0))
 
 def op_stat(root, payload):
     # 只回元数据：read_raw_file 对超限文件与目录直接报错，拿不到“是否存在”，
@@ -274,7 +292,7 @@ def op_read_batch(root, payload):
     for rel in payload.get("paths") or []:
         item = {"path": rel, "ok": False}
         try:
-            data = read_raw_file(root, rel, max_bytes, total_bytes - used if used else None)
+            data = read_raw_file(root, rel, max_bytes, total_bytes - used if used else None, int((payload.get("tails") or {}).get(rel) or 0))
         except Exception as exc:
             item["error"] = to_unicode(exc)
             files.append(item)
@@ -282,7 +300,7 @@ def op_read_batch(root, payload):
         if data is None:
             remaining.append(rel)
             continue
-        used += int(data["size"])
+        used += int(data["readBytes"])
         item["ok"] = True
         item["data"] = data
         files.append(item)
@@ -297,6 +315,17 @@ def op_write(root, payload):
         if contains_vcs(candidate):
             raise ValueError("E_PROTECTED_PATH: refusing to write version-control metadata: %s" % to_unicode(payload.get("path", "")))
     path = resolved
+    expected = payload.get("expectedSHA256") or ""
+    def check_expected():
+        if expected:
+            try:
+                with open(path, "rb") as source:
+                    current = source.read(33554433)
+            except (OSError, IOError):
+                raise ValueError("E_VERSION_MISMATCH: remote file disappeared before commit; re-read before retrying")
+            if len(current) > 33554432 or hashlib.sha256(current).hexdigest() != expected:
+                raise ValueError("E_VERSION_MISMATCH: remote file changed before commit; re-read before retrying")
+    check_expected()
     mkdirs = bool(payload.get("mkdirs"))
     overwrite = bool(payload.get("overwrite"))
     original_mode = None
@@ -352,6 +381,8 @@ def op_write(root, payload):
     try:
         raw_b64 = to_os_text(payload.get("dataBase64", ""))
         data = base64.b64decode(raw_b64)
+        if expected and len(data) > 33554432:
+            raise ValueError("E_FILE_TOO_LARGE: edited file exceeds the 32 MiB text limit")
         fd, tmp = tempfile.mkstemp(prefix=".ally-write-", dir=parent)
         # 覆盖时保留原文件权限位；新建文件对齐本地 SafeWriteFile 的 0644
         # 默认值——mkstemp 的 0600 会让远程新建文件对其他账号不可读。
@@ -367,6 +398,7 @@ def op_write(root, payload):
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
+        check_expected()
         if hasattr(os, "replace"):
             os.replace(tmp, path)
         else:
@@ -521,6 +553,37 @@ def append_command_output(out, chunk, limit):
     del out[head:len(out) - (limit - head)]
     return True
 
+def open_command_log(root):
+    directory = safe_join(root, ".tmp")
+    if not os.path.exists(directory):
+        try: os.makedirs(directory)
+        except OSError:
+            if not os.path.isdir(directory): raise
+    logs = []
+    for name in os.listdir(directory):
+        if name.startswith("ally-run-") and name.endswith(".part"):
+            p = os.path.join(directory, name)
+            if time.time() - os.lstat(p).st_mtime > 86400:
+                os.unlink(p)
+        if name.startswith("ally-run-") and name.endswith(".log"):
+            p = os.path.join(directory, name)
+            st = os.lstat(p)
+            if stat_mod.S_ISREG(st.st_mode): logs.append((st.st_mtime, p, st.st_size))
+    logs.sort()
+    used = sum(item[2] for item in logs)
+    count = len(logs)
+    for modified, p, size in logs:
+        if used + 67108864 <= 536870912 and count < 128 and time.time() - modified < 86400: break
+        os.unlink(p)
+        used -= size
+        count -= 1
+    # Active .part files are never evicted; reserve a full per-file allowance.
+    active = sum(1 for name in os.listdir(directory) if name.startswith("ally-run-") and name.endswith(".part"))
+    if used + (active + 1) * 67108864 > 536870912:
+        raise ValueError("command log quota reached; active logs retained")
+    fd, name = tempfile.mkstemp(prefix="ally-run-", suffix=".part", dir=directory)
+    return os.fdopen(fd, "wb"), name
+
 def op_run(root, payload):
     import select, signal, subprocess
     command = to_os_text(payload.get("command") or "")
@@ -594,6 +657,30 @@ def op_run(root, payload):
         except (ValueError, OSError):
             pass
     out = bytearray()
+    log_file = [None]
+    log_path = [""]
+    log_bytes = [0]
+    log_error = [""]
+    total_output = [0]
+    model_limit = int(payload.get("modelOutputBytes") or 12288)
+    def capture(chunk):
+        if not log_error[0]:
+            try:
+                if log_file[0] is None and total_output[0] + len(chunk) > model_limit:
+                    log_file[0], log_path[0] = open_command_log(root)
+                    prefix = bytes(out)
+                    log_file[0].write(prefix)
+                    log_bytes[0] = len(prefix)
+                if log_file[0] is not None:
+                    room = 67108864 - log_bytes[0]
+                    piece = chunk[:max(0, room)]
+                    log_file[0].write(piece)
+                    log_bytes[0] += len(piece)
+                    if len(piece) < len(chunk): raise ValueError("command log reached the 64 MiB limit")
+            except Exception as exc:
+                log_error[0] = to_unicode(exc)
+        total_output[0] += len(chunk)
+        return append_command_output(out, chunk, max_output)
     truncated = False
     timed_out = False
     deadline = start + timeout
@@ -631,7 +718,7 @@ def op_run(root, payload):
                 if not line:
                     eof = True
                 else:
-                    if append_command_output(out, line, max_output):
+                    if capture(line):
                         truncated = True
             else:
                 rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
@@ -643,7 +730,7 @@ def op_run(root, payload):
                     if not chunk:
                         eof = True
                     else:
-                        if append_command_output(out, chunk, max_output):
+                        if capture(chunk):
                             truncated = True
         if proc.poll() is not None:
             # 进程已退出；排空管道内剩余缓冲数据（最多等 0.5s，避免后台
@@ -661,7 +748,7 @@ def op_run(root, payload):
                     if not chunk:
                         eof = True
                         break
-                    if append_command_output(out, chunk, max_output):
+                    if capture(chunk):
                         truncated = True
             break
     try:
@@ -689,6 +776,14 @@ def op_run(root, payload):
     if timed_out:
         exit_code = -1
     duration = int((time.time() - start) * 1000)
+    if log_file[0] is not None:
+        try:
+            log_file[0].close()
+            final_path = log_path[0][:-5] + ".log"
+            os.rename(log_path[0], final_path)
+            log_path[0] = final_path
+        except Exception as exc:
+            log_error[0] = to_unicode(exc)
     if truncated:
         # Drop only a split UTF-8 sequence at each cut, preserving real U+FFFD.
         import codecs
@@ -715,6 +810,10 @@ def op_run(root, payload):
         "timedOut": timed_out,
         "durationMs": duration,
         "truncated": truncated,
+        "outputFilePath": as_posix_rel(root, log_path[0]) if log_path[0] else "",
+        "outputFileBytes": log_bytes[0],
+        "outputFileIncomplete": bool(log_error[0]),
+        "outputWarning": ("Full remote output could not be retained: " + log_error[0][:512] + ". Do not repeat side effects to recover logs.") if log_error[0] else "",
     }
 
 def get_raw_stdin():

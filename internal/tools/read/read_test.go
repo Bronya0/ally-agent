@@ -8,12 +8,40 @@
 package read
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf16"
 )
+
+func TestEncodeLikePreservesUTF16EncodingAndBOM(t *testing.T) {
+	for _, le := range []bool{true, false} {
+		for _, bom := range []bool{true, false} {
+			var original, want []byte
+			if le {
+				original = utf16LE("a\r\n中文😀\r\n")
+				want = utf16LE("b\r\n中文😀\r\n")
+			} else {
+				original = utf16BE("a\r\n中文😀\r\n")
+				want = utf16BE("b\r\n中文😀\r\n")
+			}
+			if bom {
+				prefix := []byte{0xfe, 0xff}
+				if le {
+					prefix = []byte{0xff, 0xfe}
+				}
+				original = append(append([]byte{}, prefix...), original...)
+				want = append(append([]byte{}, prefix...), want...)
+			}
+			actual, err := EncodeLike(original, "b\n中文😀\n")
+			if err != nil || !bytes.Equal(actual, want) {
+				t.Fatalf("LE=%v BOM=%v: got %x want %x err=%v", le, bom, actual, want, err)
+			}
+		}
+	}
+}
 
 func TestVersionTokenUsesSixCrockfordBase32Characters(t *testing.T) {
 	version := HashVersion([]byte("versioned content"))

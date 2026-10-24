@@ -329,6 +329,38 @@ func TestApplyBatchTextChangesReplaceAllBeyondDiagnosticLimit(t *testing.T) {
 	}
 }
 
+func TestReplaceAllMergesIndependentStreamsAndRejectsOverlap(t *testing.T) {
+	content := strings.Repeat("a-b\n", 100000)
+	r, n, err := ApplyBatchTextChanges(content, []TextChange{{OldText: "a", NewText: "A", ReplaceAll: true}, {OldText: "b", NewText: "B", ReplaceAll: true}})
+	if err != nil || n != 200000 || r.Content != strings.Repeat("A-B\n", 100000) {
+		t.Fatalf("stream merge: replacements=%d err=%v", n, err)
+	}
+	_, _, err = ApplyBatchTextChanges("aa\n", []TextChange{{OldText: "a", NewText: "A", ReplaceAll: true}, {OldText: "aa", NewText: "B"}})
+	if toolerrors.Code(err) != "E_OVERLAPPING_CHANGES" {
+		t.Fatalf("overlap escaped: %v", err)
+	}
+}
+
+func TestReplaceAllRejectsExpansionBeforeBuildingOutput(t *testing.T) {
+	_, _, err := ApplyBatchTextChanges(strings.Repeat("a", 8192), []TextChange{{OldText: "a", NewText: strings.Repeat("b", 4097), ReplaceAll: true}})
+	if toolerrors.Code(err) != "E_FILE_TOO_LARGE" {
+		t.Fatalf("expected bounded edit output: %v", err)
+	}
+}
+
+func BenchmarkReplaceAllMillionMatches(b *testing.B) {
+	content := strings.Repeat("a\n", 1000000)
+	changes := []TextChange{{OldText: "a", NewText: "b", ReplaceAll: true}}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(content)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, _, err := ApplyBatchTextChanges(content, changes); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestStripReadLineNumberPrefixes(t *testing.T) {
 	cases := []struct {
 		input    string

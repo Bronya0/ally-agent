@@ -46,7 +46,16 @@ func TestReadPreviewBudgetKeepsBatchBoundedAndContinuationEditable(t *testing.T)
 		}
 	}
 	first := result.Files[0]
-	remote, err := buildRemoteReadResultItem(remoteRawFile{Path: first.Path, Data: []byte(text)}, req.Files[0])
+	remoteBatch := BatchReadResult{}
+	for _, f := range req.Files {
+		item, itemErr := buildRemoteReadResultItem(remoteRawFile{Path: f.Path, Data: []byte(text)}, f)
+		if itemErr != nil {
+			t.Fatal(itemErr)
+		}
+		remoteBatch.Files = append(remoteBatch.Files, item)
+	}
+	boundBatchReadPreview(&remoteBatch)
+	remote := remoteBatch.Files[0]
 	if err != nil || remote.Content != first.Content || remote.Version != first.Version {
 		t.Fatalf("local/remote previews must agree: err=%v local=%d remote=%d", err, len(first.Content), len(remote.Content))
 	}
@@ -58,7 +67,7 @@ func TestReadPreviewBudgetKeepsBatchBoundedAndContinuationEditable(t *testing.T)
 		t.Fatalf("continuation must retain the version and next unread line: %#v", next)
 	}
 	model := renderReadResultForModel(*result)
-	if len(model) > 20*(maxReadPreviewBytes+1024) || !strings.Contains(model, fmt.Sprintf("Use startLine=%d to continue", first.NextStartLine)) {
+	if len(model) > maxReadBatchPreviewBytes+4096 || !strings.Contains(model, fmt.Sprintf("Use startLine=%d to continue", first.NextStartLine)) {
 		t.Fatalf("model batch must stay bounded and expose continuation: bytes=%d", len(model))
 	}
 	t.Logf("20 x 100KB file previews: %d bytes in model context", len(model))
@@ -137,7 +146,7 @@ func TestCommandPreviewRetainsFullOutputAndActualTail(t *testing.T) {
 }
 
 func TestCommandSpillSkipsOutputThatFitsModel(t *testing.T) {
-	for _, output := range []string{"small output", strings.Repeat("中", maxModelToolOutput)} {
+	for _, output := range []string{"small output", strings.Repeat("中", maxModelToolOutput/3)} {
 		buf := &limitedBuffer{limit: maxToolOutput}
 		dir := t.TempDir()
 		tw := &teeWriter{primary: buf, spillDir: dir}

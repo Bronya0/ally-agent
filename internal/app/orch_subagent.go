@@ -379,7 +379,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			}
 			emitSubOutcome(idx)
 		}
-		a.executeStagedToolBatch(ctx, cfg, assistantMessage.ToolCalls, toolConflicts, executeSubCall, publishSubCall)
+		a.executeStagedToolBatch(ctx, cfg, assistantMessage.ToolCalls, toolConflicts, executeSubCall, publishSubCall, a.executeLocalEditToolBatch)
 
 		// Process outcomes in order. File tracking and the model-facing tool
 		// messages must stay ordered (filesRead/filesEdited are order-sensitive
