@@ -551,57 +551,85 @@ func parseSkillContent(path, text string) SkillDefinition {
 		return meta
 	}
 	if front, ok := splitSkillFrontmatter(text); ok {
-		var fields struct {
-			Name            string `yaml:"name"`
-			Description     string `yaml:"description"`
-			Type            string `yaml:"type"`
-			WhenToUse       string `yaml:"whenToUse"`
-			WhenToUseCompat string `yaml:"when_to_use"`
+		fields := parseSkillMetadata(front)
+		meta.Name = strings.TrimSpace(fields["name"])
+		meta.Description = fields["description"]
+		meta.Type = fields["type"]
+		meta.WhenToUse = fields["whenToUse"]
+		if meta.WhenToUse == "" {
+			meta.WhenToUse = fields["when_to_use"]
 		}
-		parseErr := yaml.Unmarshal([]byte(front), &fields)
-		if parseErr != nil {
-			// Older skills allowed bare single-line text such as "uses: files".
-			// Quote only known top-level scalars; preserve nested YAML and blocks.
-			lines := strings.Split(front, "\n")
-			for i, line := range lines {
-				if line == "" || line[0] == ' ' || line[0] == '\t' {
-					continue
-				}
-				key, value, found := strings.Cut(line, ":")
-				if !found {
-					continue
-				}
-				switch strings.TrimSpace(key) {
-				case "name", "description", "type", "whenToUse", "when_to_use":
-					value = strings.TrimSpace(value)
-					if value == "" || strings.ContainsAny(value[:1], "\"'|>") {
-						continue
-					}
-					var scalar string
-					if err := yaml.Unmarshal([]byte(value), &scalar); err != nil {
-						lines[i] = key + ": " + skillJSONString(value)
-					}
-				}
-			}
-			parseErr = yaml.Unmarshal([]byte(strings.Join(lines, "\n")), &fields)
-		}
-		if parseErr == nil {
-			meta.Name = strings.TrimSpace(fields.Name)
-			meta.Description = fields.Description
-			meta.Type = fields.Type
-			meta.WhenToUse = fields.WhenToUse
-			if meta.WhenToUse == "" {
-				meta.WhenToUse = fields.WhenToUseCompat
-			}
-			if meta.Name != "" {
-				return meta
-			}
+		if meta.Name != "" {
+			return meta
 		}
 	}
 	// The directory's explicit SKILL.md entry point may use its parent name.
 	meta.Name = filepath.Base(filepath.Dir(path))
 	meta.Description = fmt.Sprintf("Skill loaded from %s", path)
 	return meta
+}
+
+// Parse known top-level fields independently so malformed external YAML cannot
+// change a skill's identity (and therefore bypass DisabledSkills). YAML still
+// decodes quoted strings and multiline blocks; legacy bare scalars retain their
+// entire text, including issue numbers introduced by " #". First duplicate wins.
+func parseSkillMetadata(front string) map[string]string {
+	fields := make(map[string]string)
+	var decoded struct {
+		Name            string `yaml:"name"`
+		Description     string `yaml:"description"`
+		Type            string `yaml:"type"`
+		WhenToUse       string `yaml:"whenToUse"`
+		WhenToUseCompat string `yaml:"when_to_use"`
+	}
+	validYAML := yaml.Unmarshal([]byte(front), &decoded) == nil
+	if validYAML {
+		fields = map[string]string{
+			"name": decoded.Name, "description": decoded.Description, "type": decoded.Type,
+			"whenToUse": decoded.WhenToUse, "when_to_use": decoded.WhenToUseCompat,
+		}
+	}
+	seen := make(map[string]bool)
+	lines := strings.Split(front, "\n")
+	for i, line := range lines {
+		if line == "" || line[0] == ' ' || line[0] == '	' {
+			continue
+		}
+		key, raw, found := strings.Cut(line, ":")
+		key = strings.TrimSpace(key)
+		switch key {
+		case "name", "description", "type", "whenToUse", "when_to_use":
+		default:
+			continue
+		}
+		if !found || seen[key] {
+			continue
+		}
+		seen[key] = true
+		raw = strings.TrimSpace(raw)
+		// Keep full YAML semantics, including multiline values and aliases.
+		// Only bare text containing '#' needs legacy comment preservation.
+		if validYAML && (raw == "" || !strings.Contains(raw, "#") || strings.ContainsAny(raw[:1], "\"'|>&*![{")) {
+			continue
+		}
+		value := raw
+		if strings.HasPrefix(raw, "|") || strings.HasPrefix(raw, ">") || raw == "" {
+			end := i + 1
+			for end < len(lines) && (strings.TrimSpace(lines[end]) == "" || lines[end][0] == ' ' || lines[end][0] == '	') {
+				end++
+			}
+			var block map[string]string
+			if err := yaml.Unmarshal([]byte(strings.Join(lines[i:end], "\n")+"\n"), &block); err == nil {
+				value = block[key]
+			}
+		} else if strings.HasPrefix(raw, "\"") || strings.HasPrefix(raw, "'") {
+			if err := yaml.Unmarshal([]byte(raw), &value); err != nil {
+				value = parseYAMLField(line, key)
+			}
+		}
+		fields[key] = value
+	}
+	return fields
 }
 
 // splitSkillFrontmatter extracts YAML frontmatter between a standalone opening

@@ -992,7 +992,7 @@ func createCommandLog(dir string) (*os.File, error) {
 		modified time.Time
 	}
 	var old []oldLog
-	used := int64(2 * maxCommandLogBytes) // worst-case UTF-8 expansion for the new log
+	used := int64(maxCommandLogBytes) // sink caps actual bytes written, including UTF-8 expansion
 	count := 1
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasPrefix(e.Name(), "ally-run-") || !strings.HasSuffix(e.Name(), ".log") {
@@ -1005,7 +1005,7 @@ func createCommandLog(dir string) (*os.File, error) {
 		}
 		count++
 		if commandLogs.active[p] {
-			used += 2 * maxCommandLogBytes
+			used += maxCommandLogBytes
 		} else {
 			used += info.Size()
 			old = append(old, oldLog{p, info.Size(), info.ModTime()})

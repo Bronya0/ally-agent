@@ -335,7 +335,7 @@ func chatToolsUncached() []openai.Tool {
 				"target":    sshTargetSchema(),
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Remote path of the file to create, relative to the SSH workspace root; absolute paths under that root are accepted and rebased."},
 				"content":   map[string]any{"type": "string", "description": "Full UTF-8 text of the new file (may be empty), written as-is."},
-				"overwrite": map[string]any{"type": "boolean", "description": "Set true to replace an existing file; the overwrite is approved by the user first."},
+				"overwrite": map[string]any{"type": "boolean", "description": "Set true to replace an existing file. No additional confirmation is shown."},
 			},
 			"required": []string{"target", "path", "content"},
 		}),

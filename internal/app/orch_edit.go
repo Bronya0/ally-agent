@@ -298,9 +298,17 @@ func (a *App) executeLocalEditToolBatch(ctx context.Context, cfg ConfigState, ca
 	}
 	edited, err := a.editFilesWithContext(ctx, cfg, files)
 	if err != nil {
-		for i := range results {
-			results[i] = toolErrorResult(err)
-			if i > 0 {
+		fail(err)
+		var recovery *editRecoveryError
+		if errors.As(err, &recovery) && len(recovery.read.Files) == 1 {
+			failed, ok := localMutationTarget(cfg, recovery.read.Files[0].Path)
+			attached := false
+			for i, file := range files {
+				target, valid := localMutationTarget(cfg, file.Path)
+				if ok && valid && target.key == failed.key && !attached {
+					attached = true
+					continue
+				}
 				results[i].modelRead = nil
 			}
 		}

@@ -1912,7 +1912,7 @@ func (m *McpManager) waitForDiscovery(ctx context.Context, progress func([]strin
 			return err
 		}
 		if closed {
-			return errors.New("MCP manager stopped while waiting for tool discovery")
+			return errMcpDiscoveryStopped
 		}
 		if !loading && len(pending) == 0 {
 			return nil
@@ -1930,6 +1930,8 @@ func (m *McpManager) waitForDiscovery(ctx context.Context, progress func([]strin
 		}
 	}
 }
+
+var errMcpDiscoveryStopped = errors.New("MCP manager stopped while waiting for tool discovery")
 
 const mcpDiscoveryWaitTimeout = 30 * time.Second
 
@@ -1973,7 +1975,9 @@ func (a *App) waitForSessionMcp(ctx context.Context, runID, sessionID string) er
 	}
 	// A bounded wait may finish with only a subset of tools. Tell the user before
 	// freezing that subset; discovery itself continues for future sessions.
-	if errors.Is(err, context.DeadlineExceeded) {
+	// Settings may replace the manager during this wait. Use the active
+	// manager's currently available tools, preserving run cancellation above.
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errMcpDiscoveryStopped) {
 		return nil
 	}
 	return err

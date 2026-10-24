@@ -9,12 +9,12 @@
 | | 本地 | 远端 |
 |---|---|---|
 | 圈 = | 主工作区 + 本会话附加目录 + `~/.ally_agent`（兜底白名单，永远可写） | `target` 里那个目录（`别名:/绝对/路径`） |
-| 锚点由谁定 | **用户**在界面上选 | **调用方（模型）**每次调用现写 |
+| 锚点由谁定 | **用户**在界面上选 | **调用方（模型）**每次声明主机、用户名、端口和根目录 |
 | 校验 | 圈外一律拒 | 只校验「绝对路径、不是 `/`」——**不校验是不是系统目录** |
 
 - 代码：`workspaceRoots`（`orch_file_ops.go`）= 主工作区 + `ExtraRoots`；`~/.ally_agent` 由 `pathutil.InsideWriteRoot` 追加。
 - 附加目录的**当前**列表来自会话活记录（`biz_session_roots.go`：`StartChat` 播种、面板增删经 `SetSessionExtraRoots` 即时上报），run 内每个工具批次都按它重算，所以**运行中（含模型 `ask` 暂停期间）加/删当轮生效**；只靠“下次请求带新列表”会让当轮围栏一直按旧圈判（会话忙时会话索引不落盘，那条路根本带不动这个变更）。
-- `parseRemoteTarget`（`orch_remote.go`）只拒绝相对路径、`/` 本身。
+- `parseRemoteTarget`（`orch_remote.go`）只拒绝相对路径、`/` 本身。`resolveAndAuthorizeRemoteTarget` 对已登记节点检查当前会话工作区授权；未登记端点可直连，主机、用户名与根目录均由模型声明。
 
 **沙箱现状**：`internal/sandbox` 的 `attached = false`（三个平台都只走围栏）。因此「边界归谁管」`kernelOwnsBoundary()` 恒为 false：本地两条**靠猜写入落在哪**的检查（删除命令改道、圈外已存在目标）当前满血在岗；接回沙箱时它们让位给内核，只有「删工作区根」反过来变成由围栏说。
 
@@ -30,8 +30,8 @@ flowchart TB
   end
   subgraph R["远端"]
     direction TB
-    R1["目标解析 + 授权（节点授权 / 首连审批）"]:::llm --> R2["路径形态（相对、圈内绝对、禁 ..）"]:::core
-    R2 --> R3["工具特有：读≤20/budget；写 VCS+覆盖审批；删圈根+VCS段+批内重复包含"]:::ev
+    R1["目标解析（登记节点查工作区授权；未登记端点直连）"]:::llm --> R2["路径形态（相对、圈内绝对、禁 ..）"]:::core
+    R2 --> R3["工具特有：读≤20/budget；写 VCS+overwrite 开关；删圈根+VCS段+批内重复包含"]:::ev
     R3 --> R4["SSH → helper（真身：根 / VCS / 名单+深度+临时豁免 / recursive / absent）"]:::risk
   end
 ```
@@ -133,12 +133,12 @@ flowchart TB
 |---|---|---|
 | 新建 `a/b.txt`（`a` 不存在） | 允许 | helper 自动建父目录 |
 | 同路径、overwrite=false | 拒 `E_EXISTS` | |
-| 同路径、overwrite=true（`remote_create_file`） | 弹审批 | `approve_remote_overwrite` |
+| 同路径、overwrite=true（`remote_create_file`） | 允许，不弹审批 | 显式覆盖开关；仍校验路径与 VCS |
 | `.git/config` | 拒 `E_PROTECTED_PATH` | 字面 + 解析后两形态 |
 | 目标是目录 | 拒 `E_BAD_PATH` | create 只写文件 |
 | edit 用旧 version | 拒 `E_VERSION_MISMATCH` | **不弹审批**，版本令牌就是锁 |
 | 上传本地 `~\.ssh\id_rsa` | 拒 `E_PROTECTED_PATH` | 上传的**本地源**受凭据清单管 |
-| 上传到已存在的远端文件 | 需 overwrite=true；**不弹审批** | 与工具描述「with user approval」不符（缺口 3） |
+| 上传到已存在的远端文件 | 需 overwrite=true；**不弹审批** | 显式覆盖开关 |
 
 ### 删（`remote_delete_path`）
 
@@ -160,7 +160,7 @@ flowchart TB
 | `rm -rf test1` | 拒 `E_COMMAND_BLOCKED` | 裸删改道 |
 | `git rm -r x` | 允许 | 管理上下文 |
 | target 改 `私人47:/root`，`cat .ssh/id_rsa` | **允许（缺口）** | 远端命令没有凭据禁读 |
-| `truncate -s 0 build.log` | 弹审批 | truncate/shred 风险表 |
+| `truncate -s 0 build.log` | 允许，不弹审批 | 当前风险匹配不含 truncate；仍受路径/VCS 写入检查约束 |
 | `echo x > /etc/ally-new.conf` | 允许 | 圈外新建允许（与本地同一条） |
 | `echo x >> /etc/hosts` | 拒 `E_PATH_OUTSIDE` | 改已存在的外部目标 |
 | cwd `../../..` | 拒 | cwd 必须圈内 |
@@ -168,14 +168,14 @@ flowchart TB
 ## 五、只在一边有的
 
 - **本地独有**：凭据禁读清单（`pathutil.SensitiveReadReason`，三入口共用）、危险搜索根、Ally 数据目录保护、知识库 `sources/` 只读、内核沙箱（当前空转）、文档转换提示。
-- **远端独有**：节点授权与首连审批、`remote_create_file` 的覆盖审批、破坏性命令审批、**圈由调用方声明**。
-- 两边都有但**口径不同**：覆盖确认（远端弹窗、本地无）、cwd 校验（远端只判圈内、本地同样圈内）、命令删除（同一份名单与管理上下文例外）。
+- **远端独有**：已登记节点的工作区授权；**主机和圈都由模型声明**，未登记端点直接连接，没有首连审批。集群登记与授权仍需交互审批；覆盖只要求 `overwrite=true`，高危命令直接拒绝。
+- 两边都有：覆盖开关（不弹窗）、cwd 圈内校验、命令删除名单与管理上下文例外。
 
 ## 六、已知缺口（按风险排序）
 
 1. **远端圈不校验系统目录**。`target` 写 `私人47:/etc`、`私人47:/root/.ssh` 都算合法工作区，可写可读。本地不存在这个问题只因为圈是用户选的。可选修法：根加系统位置校验；节点登记时记允许根白名单；或审批弹窗里要求确认根路径。
 2. **远端没有凭据禁读清单**。远端 `read` / 命令读凭据都不拦（本地三个入口都拦）。
-3. **`remote_transfer` 声明与行为不符**：描述写「overwrite=true with user approval」，代码里没有审批闸（全仓审批点只有远端连接、`create_file` 覆盖、远端破坏性命令、集群登记/授权五处），前端也没有确认弹窗。
+3. **工作区节点授权不是主机级访问白名单**：只有匹配已登记别名或完整端点的连接才查授权；未登记端点不审批。将 `deploy@host` 改为未登记的 `root@host`，即可按另一身份直连（能否登录由 SSH 凭据和服务器决定）。因此不能依赖节点授权阻止模型访问任意主机或切换用户名。远端相关交互审批仅保留集群登记与工作区授权两处。
 4. **浅工作区下本地也删不掉一级子目录**：工作区是 `D:\proj` 时，删 `D:\proj\src` 会被「第 2 级目录」拒（深度规则按绝对路径算，不看它相对工作区是几级）。
 5. **凭据清单只管读**：工作区恰好是家目录时，`delete` 工具能删掉 `~/.ssh/id_rsa`（删除侧只有 VCS、Ally 数据目录、系统深度/名单三道）。
 6. **沙箱空转**：`attached = false`，内核层不生效。接回后本地两条「猜写入位置」的检查会让位（见第二节）。

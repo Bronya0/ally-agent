@@ -964,3 +964,45 @@ func TestSkillBareColonMetadataCompatibility(t *testing.T) {
 		t.Fatalf("compatibility repair changed YAML block text: %+v", meta)
 	}
 }
+
+func TestSkillMalformedMetadataKeepsIdentityAndOtherFields(t *testing.T) {
+	for _, front := range []string{
+		"name: actual\ndescription: \"使用 \"read\" 工具\"\nwhenToUse: editing",
+		"name: actual\nname: duplicate\ndescription: useful\nwhenToUse: editing",
+		"name: actual\ndescription: useful\nmetadata:\n\tbroken: indentation\nwhenToUse: editing",
+		"name: actual\ndescription: |\n  first line\n  second line\nmetadata: [broken\nwhenToUse: editing",
+	} {
+		meta := parseSkillContent("different-folder/SKILL.md", "---\n"+front+"\n---\nbody")
+		if meta.Name != "actual" || meta.Description == "" || strings.HasPrefix(meta.Description, "Skill loaded from") || meta.WhenToUse != "editing" {
+			t.Fatalf("malformed YAML lost independent fields: %+v", meta)
+		}
+	}
+}
+
+func TestSkillBareMetadataPreservesIssueNumbers(t *testing.T) {
+	for _, value := range []string{"修复 issue #42 与 #43", "text # comment", "Use when: editing #1"} {
+		meta := parseSkillContent("other/SKILL.md", "---\nname: actual\ndescription: "+value+"\nwhen_to_use: "+value+"\n---\nbody")
+		if meta.Description != value || meta.WhenToUse != value {
+			t.Fatalf("bare scalar was truncated: %+v", meta)
+		}
+	}
+}
+
+func TestSkillListingFoldsMultilineMetadata(t *testing.T) {
+	meta := parseSkillContent("other/SKILL.md", "---\nname: actual\ndescription: |\n  first line\n  second line\nwhenToUse: |\n  when needed\n  for edits\n---\nbody")
+	listing := buildSkillListingMeta([]SkillDefinition{meta})
+	if !strings.Contains(listing, "- actual: first line second line\n") || !strings.Contains(listing, "  When to use: when needed for edits\n") {
+		t.Fatalf("multiline metadata escaped listing entry: %q", listing)
+	}
+}
+
+func TestSkillValidYAMLRetainsAliasesAndQuotedMultiline(t *testing.T) {
+	meta := parseSkillContent("other/SKILL.md", "---\nname: actual\ndescription: &desc \"first line\n  second line\"\nwhenToUse: *desc\n---\nbody")
+	if meta.Description != "first line second line" || meta.WhenToUse != meta.Description {
+		t.Fatalf("valid YAML semantics changed: %+v", meta)
+	}
+	meta = parseSkillContent("other/SKILL.md", "---\nname: actual\ndescription: first line\n  second line\n---\nbody")
+	if meta.Description != "first line second line" {
+		t.Fatalf("plain multiline YAML changed: %+v", meta)
+	}
+}

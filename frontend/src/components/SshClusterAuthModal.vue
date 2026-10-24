@@ -16,7 +16,7 @@ Public License v3. See the LICENSE file for details.
     preset="card"
     :title="$t('sshCluster.panel.title')"
     :style="{ width: 'min(760px, calc(100vw - 48px))' }"
-    :mask-closable="false"
+    :mask-closable="true"
     @update:show="(value) => { if (!value) commitOnClose(); $emit('close'); }"
     @after-leave="onAfterLeave"
   >

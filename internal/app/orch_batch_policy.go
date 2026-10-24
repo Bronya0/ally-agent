@@ -413,8 +413,14 @@ type localEditBatchPlan struct {
 // path. All changes remain relative to the same original version snapshot.
 func planLocalEditBatch(cfg ConfigState, files []FileTextEdits, mode localEditPlanMode) (localEditBatchPlan, error) {
 	if mode == localEditPlanForExecution {
-		if err := validateModelEditToolRequest(files); err != nil {
-			return localEditBatchPlan{}, err
+		if len(files) == 0 {
+			return localEditBatchPlan{}, validateModelEditToolRequest(files)
+		}
+		// Independent model calls share an atomic stage, not a call budget.
+		for _, file := range files {
+			if err := validateModelEditToolRequest([]FileTextEdits{file}); err != nil {
+				return localEditBatchPlan{}, err
+			}
 		}
 	}
 
@@ -472,12 +478,10 @@ func planLocalEditBatch(cfg ConfigState, files []FileTextEdits, mode localEditPl
 	}
 
 	if mode == localEditPlanForExecution {
-		merged := make([]FileTextEdits, len(plan.Files))
-		for i := range plan.Files {
-			merged[i] = plan.Files[i].Edit
-		}
-		if err := validateModelEditToolRequest(merged); err != nil {
-			return localEditBatchPlan{}, err
+		for _, file := range plan.Files {
+			if err := validateModelEditToolRequest([]FileTextEdits{file.Edit}); err != nil {
+				return localEditBatchPlan{}, err
+			}
 		}
 	}
 	return plan, nil

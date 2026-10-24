@@ -13,9 +13,6 @@ Public License v3. See the LICENSE file for details.
       <div ref="messagesRootRef" class="messages">
         <template v-for="{ msg, index, agents } in messageRows" :key="msgKey(agents ? agents[0] : msg)" v-memo="messageRenderMemo(msg, index, agents)">
         <div v-if="agents" class="rich-tool-card subagent-batch">
-          <span class="subagent-batch-status" role="img" :aria-label="$t(`subagent.status.${subagentBatchStatus(agents)}`)">
-            <ToolStatusIcon :status="presentationActive || subagentBatchStatus(agents) !== 'running' ? subagentBatchStatus(agents) : 'pending'" />
-          </span>
           <div :class="['subagent-grid', { 'is-single': agents.length === 1 }]">
             <RenderBoundary v-for="agent in agents" :key="msgKey(agent)" :label="$t('chat.subagent')">
               <SubagentInlineCard :msg="agent" @toggle-report="onSubagentReportToggle" />
@@ -157,7 +154,6 @@ import AskToolCard from './AskToolCard.vue';
 import ReadGroupCard from './ReadGroupCard.vue';
 import ReadGrepGroupCard from './ReadGrepGroupCard.vue';
 import SubagentInlineCard from './SubagentInlineCard.vue';
-import ToolStatusIcon from './ToolStatusIcon.vue';
 import StreamingMarkdownBody from './StreamingMarkdownBody.vue';
 import RenderBoundary from './RenderBoundary.vue';
 import MessageRoundStats from './MessageRoundStats.vue';
@@ -872,12 +868,6 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   margin-top: 6px;
   margin-bottom: 10px;
   contain-intrinsic-size: auto 120px;
-}
-.subagent-batch-status {
-  position: absolute;
-  left: 0;
-  top: 12px;
-  display: flex;
 }
 .subagent-grid {
   display: grid;

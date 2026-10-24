@@ -10,7 +10,7 @@ Public License v3. See the LICENSE file for details.
 <template>
   <div class="ally-row-card subagent-inline">
     <div class="ally-row-main subagent-heading">
-      <span :class="['subagent-status-dot', `is-${state}`]" aria-hidden="true"></span>
+      <span :class="['subagent-status-dot', `is-${state}`, { 'is-paused': !presentationActive }]" aria-hidden="true"></span>
       <span class="subagent-role">{{ msg.subagentRole || $t('tools.kind.subagent') }}</span>
       <span class="subagent-status-label" :title="msg.error || ''">{{ $t(`subagent.status.${state}`) }}</span>
       <time v-if="displayDuration" class="subagent-time">{{ displayDuration }}</time>
@@ -115,6 +115,16 @@ const tokenTooltip = computed(() => {
 }
 .subagent-status-dot.is-running {
   background: var(--ally-accent-text);
+  animation: subagent-status-blink 1.2s ease-in-out infinite;
+  will-change: opacity;
+}
+.subagent-status-dot.is-paused {
+  animation-play-state: paused;
+  will-change: auto;
+}
+@keyframes subagent-status-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 .subagent-status-dot.is-success {
   background: var(--ally-success-pale);
@@ -231,6 +241,10 @@ const tokenTooltip = computed(() => {
   margin-top: 6px;
 }
 @media (prefers-reduced-motion: reduce) {
+  .subagent-status-dot.is-running {
+    animation: none;
+    will-change: auto;
+  }
   .subagent-chevron {
     transition: none;
   }

@@ -465,9 +465,9 @@ func buildSkillListingMeta(skills []SkillDefinition) string {
 		}
 		b.WriteString(fmt.Sprintf("### %s\n", g.label))
 		for _, sk := range filtered {
-			b.WriteString(fmt.Sprintf("- %s: %s\n", sk.Name, truncateRunes(sk.Description, skillListingFieldLimit)))
+			b.WriteString(fmt.Sprintf("- %s: %s\n", sk.Name, truncateRunes(strings.Join(strings.Fields(sk.Description), " "), skillListingFieldLimit)))
 			if sk.WhenToUse != "" {
-				b.WriteString(fmt.Sprintf("  When to use: %s\n", truncateRunes(sk.WhenToUse, skillListingFieldLimit)))
+				b.WriteString(fmt.Sprintf("  When to use: %s\n", truncateRunes(strings.Join(strings.Fields(sk.WhenToUse), " "), skillListingFieldLimit)))
 			}
 		}
 	}
