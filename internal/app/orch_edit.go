@@ -89,6 +89,27 @@ func withEditRecoverySource(path string, data []byte, size int64, err error) err
 // required and the argument gate refuses a change that leaves it out.
 
 func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (MultiEditResult, error) {
+	return a.editFiles(context.Background(), cfg, files)
+}
+
+// Both model entry points check cancellation after acquiring the write lock.
+// Preparation also rechecks before the first commit; an already-started commit
+// finishes (or rolls back) as one batch rather than stopping halfway through.
+func (a *App) editFilesWithContext(ctx context.Context, cfg ConfigState, files []FileTextEdits) (result MultiEditResult, err error) {
+	if err = ctx.Err(); err != nil {
+		return result, codedToolError("E_CANCELLED", err)
+	}
+	a.withFileOpsLock(func() {
+		if err = ctx.Err(); err != nil {
+			err = codedToolError("E_CANCELLED", err)
+			return
+		}
+		result, err = a.editFiles(ctx, cfg, files)
+	})
+	return result, err
+}
+
+func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEdits) (MultiEditResult, error) {
 	plan, err := planLocalEditBatch(cfg, files, localEditPlanForExecution)
 	if err != nil {
 		return MultiEditResult{}, err
@@ -166,6 +187,9 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 				ChangedLinesBlock: edit.BuildLineNumberContextBlockBounded(applied.Content, applied.FirstChangedLine, applied.LastChangedLine),
 			},
 		})
+	}
+	if err := ctx.Err(); err != nil {
+		return MultiEditResult{}, codedToolError("E_CANCELLED", err)
 	}
 	committed := make([]int, 0, len(prepared))
 	rollback := func() error {
@@ -272,12 +296,7 @@ func (a *App) executeLocalEditToolBatch(ctx context.Context, cfg ConfigState, ca
 			return results
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return fail(codedToolError("E_CANCELLED", err))
-	}
-	var edited MultiEditResult
-	var err error
-	a.withFileOpsLock(func() { edited, err = a.editFilesWithConfig(cfg, files) })
+	edited, err := a.editFilesWithContext(ctx, cfg, files)
 	if err != nil {
 		for i := range results {
 			results[i] = toolErrorResult(err)

@@ -560,26 +560,33 @@ def open_command_log(root):
         except OSError:
             if not os.path.isdir(directory): raise
     logs = []
+    active = 0
     for name in os.listdir(directory):
         if name.startswith("ally-run-") and name.endswith(".part"):
             p = os.path.join(directory, name)
             if time.time() - os.lstat(p).st_mtime > 86400:
                 os.unlink(p)
+            else:
+                active += 1
         if name.startswith("ally-run-") and name.endswith(".log"):
             p = os.path.join(directory, name)
             st = os.lstat(p)
             if stat_mod.S_ISREG(st.st_mode): logs.append((st.st_mtime, p, st.st_size))
     logs.sort()
     used = sum(item[2] for item in logs)
-    count = len(logs)
+    # Include active writers and the new sink in both budgets before choosing
+    # completed files to evict. Active reservations alone may exhaust capacity;
+    # in that case deleting completed evidence cannot make this request fit.
+    reserved = (active + 1) * 67108864
+    if reserved > 536870912 or active + 1 > 128:
+        raise ValueError("command log quota reached; active logs retained")
+    count = len(logs) + active + 1
     for modified, p, size in logs:
-        if used + 67108864 <= 536870912 and count < 128 and time.time() - modified < 86400: break
+        if used + reserved <= 536870912 and count <= 128 and time.time() - modified < 86400: break
         os.unlink(p)
         used -= size
         count -= 1
-    # Active .part files are never evicted; reserve a full per-file allowance.
-    active = sum(1 for name in os.listdir(directory) if name.startswith("ally-run-") and name.endswith(".part"))
-    if used + (active + 1) * 67108864 > 536870912:
+    if used + reserved > 536870912 or count > 128:
         raise ValueError("command log quota reached; active logs retained")
     fd, name = tempfile.mkstemp(prefix="ally-run-", suffix=".part", dir=directory)
     return os.fdopen(fd, "wb"), name

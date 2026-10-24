@@ -751,7 +751,12 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 				// 竞态：进程恰好在收编瞬间自行退出，drain 拿真实退出结果。
 				err = <-waitDone
 			} else {
-				// 晋升失败（如服务配额已满，进程已被杀）：按超时错误上报。
+				// Promotion failed: keep the timeout result and its captured output.
+				// Cancel also covers failures that did not kill the process; Wait
+				// drains its output before the spill is finalized below.
+				timedOut = true
+				cancel()
+				<-waitDone
 				err = promoteErr
 			}
 		case <-runCtx.Done():
@@ -771,7 +776,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		Output:          commandOutputPreview(buf, outputFilePath),
 		ExitCode:        0,
 		TimedOut:        timedOut,
-		Cancelled:       errors.Is(runCtx.Err(), context.Canceled),
+		Cancelled:       errors.Is(parent.Err(), context.Canceled),
 		DurationMS:      duration,
 		Truncated:       buf.truncated,
 		Sandboxed:       spec.Enforce(),
@@ -786,6 +791,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 			result.ExitCode = exitErr.ExitCode()
 		} else if timedOut {
 			result.ExitCode = -1
+			result.Output = strings.TrimRight(result.Output, "\n") + "\n\n" + err.Error()
 		} else {
 			return result, err
 		}

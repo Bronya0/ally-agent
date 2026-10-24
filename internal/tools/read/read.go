@@ -16,6 +16,7 @@
 package read
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -131,13 +132,16 @@ func ReadTextTail(path string) ([]byte, int64, error) {
 
 // EncodeLike restores the source encoding, BOM and line endings. The edit
 // engine works exclusively on UTF-8; both local and SSH writes use this boundary.
+// Results must decode to the exact canonical bytes used for read/edit versions.
+// In particular, a BOM-less UTF-16 edit may lose the cues needed to recognize it.
 func EncodeLike(original []byte, text string) ([]byte, error) {
 	decoded, err := DecodeTextBytes(original)
 	if err != nil {
 		return nil, err
 	}
 	_, ending, bom := NormalizeText(decoded)
-	data := EncodeText(text, ending, bom)
+	expected := EncodeText(text, ending, bom)
+	data := expected
 	le, be := false, false
 	bom16 := len(original) >= 2 && ((original[0] == 0xff && original[1] == 0xfe) || (original[0] == 0xfe && original[1] == 0xff))
 	if bom16 {
@@ -168,6 +172,10 @@ func EncodeLike(original []byte, text string) ([]byte, error) {
 	}
 	if len(data) > MaxReadBytes {
 		return nil, toolerrors.New("E_FILE_TOO_LARGE", errors.New("edited file exceeds the 32 MiB text limit"))
+	}
+	roundTrip, decodeErr := DecodeTextBytes(data)
+	if decodeErr != nil || !bytes.Equal(roundTrip, expected) {
+		return nil, toolerrors.New("E_EDIT_ENCODING", errors.New("edited text cannot be read back faithfully in the source encoding; nothing was written. Remove binary/NUL content, or explicitly convert the source to UTF-8 or BOM-marked UTF-16 before retrying"))
 	}
 	return data, nil
 }

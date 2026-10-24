@@ -323,6 +323,11 @@ func (c *sessionReadCache) dedupeResult(result *BatchReadResult, keyPath func(it
 			continue
 		}
 		effective := ReadFileRequest{StartLine: item.StartLine, EndLine: item.EndLine}
+		if item.RangeStatus == "read_only_tail" {
+			// Large-file tails have no absolute line numbers. Keep their requested
+			// depth in the cache key without inventing a displayed/editable range.
+			effective.StartLine = item.Req.StartLine
+		}
 		key := fileRangeCacheKey(keyPath(item), effective)
 		contentHash := hashText(item.Content, item.DataURL)
 

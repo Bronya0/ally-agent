@@ -2679,7 +2679,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			err = kbDenyCheckPaths(ctx, cfg, req.Path)
 		}
 		if err == nil {
-			a.withFileOpsLock(func() { data, err = a.editFilesWithConfig(cfg, []FileTextEdits{req}) })
+			data, err = a.editFilesWithContext(ctx, cfg, []FileTextEdits{req})
 			if err == nil {
 				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, []string{req.Path}))
 				a.invalidateWorkspaceMapCache(cfg)

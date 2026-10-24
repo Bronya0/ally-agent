@@ -14,7 +14,47 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf16"
+
+	toolerrors "ally-dev/internal/tools/shared"
 )
+
+func TestEncodeLikeRejectsUnreadableResults(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		original []byte
+		text     string
+	}{
+		{"UTF16LE ambiguous text", utf16LE("a\n汉字\n"), "汉字"},
+		{"UTF16LE insufficient NUL cues", utf16LE("a\n汉字\n"), "汉字\n"},
+		{"UTF16BE ambiguous text", utf16BE("a\n汉字\n"), "汉字"},
+		{"UTF8 binary NUL", []byte("old\n"), "a\x00b"},
+		{"UTF8 mistaken for UTF16", []byte("old\n"), "a\x00b\x00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := EncodeLike(tc.original, tc.text)
+			if toolerrors.Code(err) != "E_EDIT_ENCODING" || data != nil {
+				t.Fatalf("unreadable result must be refused before write: bytes=%x err=%v", data, err)
+			}
+		})
+	}
+}
+
+func TestEncodeLikeAllowsBOMMarkedChineseOnlyUTF16(t *testing.T) {
+	for _, le := range []bool{true, false} {
+		original := append([]byte{0xfe, 0xff}, utf16BE("a\n汉字\n")...)
+		if le {
+			original = append([]byte{0xff, 0xfe}, utf16LE("a\n汉字\n")...)
+		}
+		encoded, err := EncodeLike(original, "汉字\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := DecodeTextBytes(encoded)
+		if err != nil || string(decoded) != "汉字\n" {
+			t.Fatalf("readable UTF16 was changed/refused: LE=%v text=%q err=%v", le, decoded, err)
+		}
+	}
+}
 
 func TestEncodeLikePreservesUTF16EncodingAndBOM(t *testing.T) {
 	for _, le := range []bool{true, false} {
