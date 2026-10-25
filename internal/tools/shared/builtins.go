@@ -15,6 +15,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"ally-dev/internal/tools/imagegen"
 	"ally-dev/internal/tools/screenshot"
 )
 
@@ -134,6 +135,19 @@ func BuiltinSchema(name string) (map[string]any, bool) {
 
 func chatToolsUncached() []openai.Tool {
 	return []openai.Tool{
+		functionTool("image_generate", "Generate one image from a prompt using the configured image model. The original is saved and displayed in the conversation. Returns a stable image reference for later editing. Do not retry after an ambiguous timeout: the request may already be billed.", map[string]any{
+			"type": "object", "properties": map[string]any{
+				"prompt":       map[string]any{"type": "string", "minLength": 1, "maxLength": imagegen.MaxPromptChars},
+				"aspect_ratio": map[string]any{"type": "string", "enum": []string{"1:1", "3:2", "2:3"}, "description": "Optional output aspect ratio; omit for provider default."},
+			}, "required": []string{"prompt"},
+		}),
+		functionTool("image_edit", "Edit PNG, JPEG, or WebP images using the configured editing model. For pasted/uploaded images, use the image: reference in Attached files; attachment filenames are labels, not filesystem paths. Also accepts image: references from earlier results, 'latest' for this session's latest generated image, or existing local image paths. Saves a new original and preserves sources. Never invent references or paths.", map[string]any{
+			"type": "object", "properties": map[string]any{
+				"prompt":       map[string]any{"type": "string", "minLength": 1, "maxLength": imagegen.MaxPromptChars},
+				"images":       map[string]any{"type": "array", "minItems": 1, "maxItems": imagegen.MaxInputs, "items": map[string]any{"type": "string", "minLength": 1}},
+				"aspect_ratio": map[string]any{"type": "string", "enum": []string{"1:1", "3:2", "2:3"}},
+			}, "required": []string{"prompt", "images"},
+		}),
 		functionTool("list_files", "Inspect directory structure; use read directly for known files and grep to locate code by content. Lists up to 3 levels deep and 200 entries, with directories ending in '/'. Dotfiles, gitignored paths, VCS internals and heavy dependency/build directories are omitted. At most 50 direct files per directory are shown; '+N more files' marks omitted siblings. Narrow the path for depth/global truncation; narrowing to the same directory cannot reveal omitted siblings. An absent entry does not prove a path does not exist.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{

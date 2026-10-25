@@ -730,6 +730,7 @@ import SettingsModal from './components/SettingsModal.vue';
 import SkillsPanel from './components/SkillsPanel.vue';
 import McpPanel from './components/McpPanel.vue';
 import ModelsPanel from './components/ModelsPanel.vue';
+import { hasDurableImage, imageToolTitle } from './utils/generatedImages.mjs';
 import SSHClusterPanel from './components/SSHClusterPanel.vue';
 import PluginsPanel from './components/PluginsPanel.vue';
 import PluginPage from './components/PluginPage.vue';
@@ -5253,15 +5254,25 @@ function bindRuntimeEvents() {
       totalKeys: Number(data.totalKeys || 0),
     };
   });
+  onRuntimeEvent('run:attachment', (data) => {
+    const session = sessionByEvent(data);
+    if (!session) return;
+    const user = [...session.messages].reverse().find(msg => msg.role === 'user' && msg.attachments?.some(att => att.id === data.id));
+    const attachment = user?.attachments?.find(att => att.id === data.id);
+    if (!attachment) return;
+    attachment.imageRef = data.imageRef;
+    attachment.url = data.url;
+    scheduleSaveSessions();
+  });
   onRuntimeEvent('run:image', (data) => {
     clearRetryBanner(data);
     flushStreamBuffer(data.runId);
     const session = sessionByEvent(data);
-    if (!session || !data?.dataUrl) return;
+    if (!session || (!data?.dataUrl && !data?.url)) return;
     let target = session.messages[session.messages.length - 1];
     if (!target || target.role !== 'assistant' || target.done || target.error || target.system || target.runId !== data.runId) {
-      target = { role: 'assistant', content: '', reasoningChars: 0, streaming: true, attachments: [], runId: data.runId };
-      session.messages.push(target);
+      session.messages.push({ role: 'assistant', content: '', reasoningChars: 0, streaming: true, attachments: [], runId: data.runId });
+      target = session.messages[session.messages.length - 1];
     }
     target.streaming = true;
     // 图片输出意味着思考已结束
@@ -5270,7 +5281,7 @@ function bindRuntimeEvents() {
     const imageId = data.id || `generated-${target.attachments.length + 1}`;
     let attachment = target.attachments.find((item) => item.id === imageId);
     if (!attachment) {
-      attachment = {
+      target.attachments.push({
         id: imageId,
         name: t('app.attachment.generatedImage'),
         type: data.mimeType || 'image/png',
@@ -5282,23 +5293,27 @@ function bindRuntimeEvents() {
         truncated: false,
         error: '',
         generated: true,
-      };
-      target.attachments.push(attachment);
+      });
+      attachment = target.attachments[target.attachments.length - 1];
     }
     attachment.type = data.mimeType || attachment.type || 'image/png';
-    attachment.previewUrl = data.dataUrl;
-    attachment.dataUrl = data.dataUrl;
+    attachment.url = data.url || '';
+    attachment.imageRef = data.imageRef || '';
+    attachment.error = data.error || '';
+    attachment.previewUrl = data.url || data.dataUrl;
+    attachment.dataUrl = data.url ? '' : data.dataUrl;
     attachment.partial = !!data.partial;
-    attachment.size = dataUrlByteLength(data.dataUrl);
+    attachment.size = data.bytes || dataUrlByteLength(data.dataUrl);
     if (!data.partial) {
-      createImageThumbnailDataUrl(data.dataUrl).then((thumbnail) => {
-        if (thumbnail && attachment.dataUrl === data.dataUrl) {
+      createImageThumbnailDataUrl(data.url || data.dataUrl).then((thumbnail) => {
+        if (thumbnail && (data.imageRef ? attachment.imageRef === data.imageRef : attachment.dataUrl === data.dataUrl)) {
           attachment.previewUrl = thumbnail;
           scheduleSaveSessions();
         }
       }).catch(() => {});
     }
     if (session.id === activeSessionId.value) scrollMessagesToBottom();
+    if (!data.partial) scheduleSaveSessions();
   });
   const applyToolProgressEvent = (data) => {
     clearRetryBanner(data);
@@ -5371,6 +5386,7 @@ function bindRuntimeEvents() {
     formatDurationShort,
     makeToolResultTitle,
     formatScheduledToolSchedule,
+    createImageThumbnailDataUrl,
     scrollMessagesToBottomIfStale,
     scrollMessagesToBottom,
     activeSessionId,
@@ -5906,17 +5922,12 @@ async function fileToAttachment(file) {
     filePath: '',
   };
 
-  // 浏览器 File API 出于安全限制不暴露文件的真实绝对路径。
-  // Wails 的 <input type="file"> 同样不提供 path 属性。
-  // 这里记录工作区根 + 文件名作为提示路径，帮助模型用 read 工具定位文件。
-  // file.path 在 Electron 中存在，WebView2 中为 undefined，这里取值无副作用。
+  // Browser/WebView file names are display labels, not workspace paths.
+  // Only carry a path when the host actually supplied one. Pasted/uploaded
+  // images receive a durable imageRef from the backend before model input.
   const rawPath = String(file.path || '').trim();
   if (rawPath) {
     base.filePath = rawPath;
-  } else if (activeRunWorkspace.value) {
-    base.filePath = joinWorkspacePath(activeRunWorkspace.value, file.name);
-  } else {
-    base.filePath = file.name;
   }
 
   try {
@@ -6042,7 +6053,8 @@ async function createImageThumbnailUrl(file) {
 }
 
 async function createImageThumbnailDataUrl(dataUrl) {
-  if (typeof createImageBitmap !== 'function' || !String(dataUrl || '').startsWith('data:image/')) return '';
+  const source = String(dataUrl || '');
+  if (typeof createImageBitmap !== 'function' || !(source.startsWith('data:image/') || source.startsWith('/generated-images/'))) return '';
   let bitmap;
   try {
     const blob = await (await fetch(dataUrl)).blob();
@@ -6144,6 +6156,7 @@ function attachmentDisplayLabel(attachments) {
 
 function attachmentsForModel(attachments) {
   return attachments.map((att) => ({
+    imageRef: att.imageRef || '',
     id: att.id,
     name: att.name,
     type: att.type,
@@ -7764,7 +7777,7 @@ function trimRuntimeSessionMessages(session) {
   const messages = Array.isArray(session.messages) ? session.messages : [];
   const recentRenderable = messages.filter(isRenderableMessage).slice(-MAX_RUNTIME_RENDERABLE_MESSAGES);
   const recentConversation = messages.filter(isModelHistoryMessage).slice(-MAX_MODEL_HISTORY_MESSAGES);
-  const keep = new Set([...recentRenderable, ...recentConversation]);
+  const keep = new Set([...recentRenderable, ...recentConversation, ...messages.filter(hasDurableImage)]);
   if (keep.size === messages.length) return;
   for (const msg of messages) {
     if (!keep.has(msg)) releaseMessageAttachments(msg);
@@ -7776,7 +7789,7 @@ function sanitizeStoredMessages(messages) {
   const completed = messages.filter((msg) => !msg?.transientTurn && !msg?.pendingTurn);
   const recentRenderable = completed.filter(isRenderableMessage).slice(-MAX_RUNTIME_RENDERABLE_MESSAGES);
   const recentConversation = completed.filter(isModelHistoryMessage).slice(-MAX_MODEL_HISTORY_MESSAGES);
-  const keep = new Set([...recentRenderable, ...recentConversation]);
+  const keep = new Set([...recentRenderable, ...recentConversation, ...completed.filter(hasDurableImage)]);
   return completed.filter((msg) => keep.has(msg)).map(sanitizeStoredMessage);
 }
 
@@ -8524,6 +8537,7 @@ function makeToolTitle(name, args, meta = {}) {
     return formatMcpArgsSummary(parseToolArgsForMeta(args, meta));
   }
   const parsed = parseToolArgsForMeta(args, meta);
+  if (name === 'image_generate' || name === 'image_edit') return imageToolTitle(parsed);
   if (name === 'plan') {
     // 入参通道：steps / next / finish。结果通道的格式化函数（result 里的
     // {title,status} 数组）用在这里只会得到空串。
@@ -8929,6 +8943,7 @@ function formatToolBody(name, body) {
     // hit count is rendered by formatToolChip(); do not retain matching lines
     // in the message body or build a hidden detail preview.
     if (name === 'grep' && parsed.data) return '';
+    if ((name === 'image_generate' || name === 'image_edit') && parsed.data) return `${parsed.data.width} × ${parsed.data.height}`;
     // screenshot result: two shapes. A capture's image goes to the model as
     // image input only — the card keeps a single status line (title/chip
     // carry the size), and the multi-hundred-KB base64 dataUrl must never

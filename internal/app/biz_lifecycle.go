@@ -153,6 +153,12 @@ func (a *App) runStartupMaintenance(ctx context.Context, workspace string) {
 	if ctx.Err() != nil {
 		return
 	}
+	if err := a.migrateLegacyImageFiles(ctx); err != nil && ctx.Err() == nil {
+		a.logAppError("image filename migration failed", "error", err.Error())
+	}
+	if ctx.Err() != nil {
+		return
+	}
 	if _, err := a.repairSessionIndex(ctx); err != nil && ctx.Err() == nil {
 		a.logAppError("session index repair failed", "error", err.Error())
 	}

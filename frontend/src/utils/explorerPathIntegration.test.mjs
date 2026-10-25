@@ -41,14 +41,14 @@ test('skill directory hints use the shared join without corrupting POSIX names',
   assert.equal(hint, '/work/Repo\\/.agents/skills');
 });
 
-test('attachment fallback paths preserve POSIX backslashes and Windows separators', () => {
+test('browser attachments never invent workspace paths from display filenames', () => {
   const app = readFileSync(new URL('../App.vue', import.meta.url), 'utf8');
   const from = app.indexOf('  const rawPath = String(file.path');
   const to = app.indexOf("  try {\n    if (kind === 'image')", from);
   assert.ok(from >= 0 && to > from);
   const resolve = new Function('file', 'activeRunWorkspace', 'joinWorkspacePath',
-    `const base = {}; ${app.slice(from, to)}; return base.filePath;`);
-  assert.equal(resolve({ name: 'a.txt' }, { value: '/work/Repo\\' }, joinWorkspacePath), '/work/Repo\\/a.txt');
-  assert.equal(resolve({ name: 'a.txt' }, { value: 'C:/Work/Repo' }, joinWorkspacePath), 'C:\\Work\\Repo\\a.txt');
+    `const base = { filePath: '' }; ${app.slice(from, to)}; return base.filePath;`);
+  assert.equal(resolve({ name: 'pasted.png' }, { value: '/work/Repo\\' }, joinWorkspacePath), '');
+  assert.equal(resolve({ name: 'pasted.jpg' }, { value: 'C:/Work/Repo' }, joinWorkspacePath), '');
   assert.equal(resolve({ name: 'a.txt', path: '/actual/a.txt' }, { value: '/work' }, joinWorkspacePath), '/actual/a.txt');
 });

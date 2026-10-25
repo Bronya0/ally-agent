@@ -11,6 +11,7 @@ import (
 
 // cloneConfig owns mutable values; runtime service dependencies remain shared.
 func cloneConfig(cfg ConfigState) ConfigState {
+	cfg.ImageGeneration = cloneImageConfig(cfg.ImageGeneration)
 	cfg.APIKeys = slices.Clone(cfg.APIKeys)
 	cfg.ExtraRoots = slices.Clone(cfg.ExtraRoots)
 	cfg.CustomHeaders = maps.Clone(cfg.CustomHeaders)
@@ -50,6 +51,7 @@ func cloneConfigPointer[T any](value *T) *T {
 // normalizeStoredConfig is shared by disk loading and committed writes.
 // Zero values here are values, not omitted updates.
 func normalizeStoredConfig(cfg ConfigState) ConfigState {
+	normalizeImageConfig(cfg.ImageGeneration)
 	if runtime.GOOS == "windows" {
 		cfg.GitBashPath = resolveGitBashPath(cfg.GitBashPath)
 	}
@@ -112,6 +114,9 @@ func loadedConfig(loaded ConfigState) ConfigState {
 func settingsConfig(base, req ConfigState) ConfigState {
 	cfg := cloneConfig(base)
 	req = cloneConfig(req)
+	if req.ImageGeneration != nil {
+		cfg.ImageGeneration = req.ImageGeneration
+	}
 	cfg.CustomPrompt = req.CustomPrompt
 	cfg.GitHubToken = req.GitHubToken
 	cfg.KBRoot = req.KBRoot

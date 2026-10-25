@@ -11,25 +11,232 @@ package app
 // token 参数名、思考档位拼写与端点默认值）——wire 拼写的唯一收口。
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	oa "github.com/openai/openai-go/v3"
 	legacyopenai "github.com/sashabaranov/go-openai"
 
 	"ally-dev/internal/chatgpt"
+	"ally-dev/internal/tools/imagegen"
 	"ally-dev/internal/tools/toolcall"
 )
+
+// Image wire formats stay at the same provider boundary as chat adapters.
+type imageInput struct {
+	Data []byte
+	Mime string
+}
+
+func (a *App) requestImage(ctx context.Context, cfg ConfigState, model ImageModelConfig, input imagegen.Request, images []imageInput) ([]byte, error) {
+	endpoint := "/images/generations"
+	fields := map[string]any{"model": model.Model, "prompt": input.Prompt, "n": 1}
+	size := map[string]string{"1:1": "1024x1024", "3:2": "1536x1024", "2:3": "1024x1536"}[input.AspectRatio]
+	contentType := "application/json"
+	var body bytes.Buffer
+	switch model.Protocol {
+	case "openai-images":
+		fields["output_format"] = "png"
+		if size != "" {
+			fields["size"] = size
+		}
+		if len(images) > 0 {
+			endpoint = "/images/edits"
+			writer := multipart.NewWriter(&body)
+			// Deterministic field order makes requests easy to inspect.
+			for _, key := range []string{"model", "prompt", "n", "output_format", "size"} {
+				if value, ok := fields[key]; ok {
+					if err := writer.WriteField(key, fmt.Sprint(value)); err != nil {
+						return nil, err
+					}
+				}
+			}
+			for i, image := range images {
+				ext := strings.TrimPrefix(image.Mime, "image/")
+				part, err := writer.CreateFormFile("image[]", fmt.Sprintf("reference-%d.%s", i+1, ext))
+				if err != nil {
+					return nil, err
+				}
+				if _, err = part.Write(image.Data); err != nil {
+					return nil, err
+				}
+			}
+			if err := writer.Close(); err != nil {
+				return nil, err
+			}
+			contentType = writer.FormDataContentType()
+		}
+	case "xai-images":
+		fields["response_format"] = "b64_json"
+		if input.AspectRatio != "" {
+			fields["aspect_ratio"] = input.AspectRatio
+		}
+		if len(images) > 0 {
+			endpoint = "/images/edits"
+			refs := make([]map[string]string, 0, len(images))
+			for _, image := range images {
+				refs = append(refs, map[string]string{"type": "image_url", "url": generatedImageDataURL(image.Data, image.Mime)})
+			}
+			if len(refs) == 1 {
+				fields["image"] = refs[0]
+			} else {
+				fields["images"] = refs
+			}
+		}
+	case "minimax-images":
+		if len(images) > 0 {
+			return nil, errors.New("MiniMax general image editing is unsupported")
+		}
+		if utf8.RuneCountInString(input.Prompt) > 1500 {
+			return nil, errors.New("MiniMax prompt must not exceed 1500 characters")
+		}
+		endpoint = "/image_generation"
+		fields["response_format"], fields["prompt_optimizer"] = "url", false
+		if input.AspectRatio != "" {
+			fields["aspect_ratio"] = input.AspectRatio
+		}
+	default:
+		return nil, errors.New("unsupported image protocol")
+	}
+	if contentType == "application/json" {
+		if err := json.NewEncoder(&body).Encode(fields); err != nil {
+			return nil, err
+		}
+	}
+	if !validImageBaseURL(model.BaseURL) {
+		return nil, errors.New("invalid image model Base URL; include the API version path, e.g. /v1")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(model.BaseURL, "/")+endpoint, &body)
+	if err != nil {
+		return nil, err
+	}
+	keyCfg := ConfigState{APIKey: model.APIKey, APIKeys: model.APIKeys}
+	keys := resolveKeyPool(keyCfg)
+	if len(keys) == 0 {
+		return nil, errors.New("image API key is required")
+	}
+	request.Header.Set("Content-Type", contentType)
+	headerCfg := cfg
+	headerCfg.CustomHeaders = model.CustomHeaders
+	client := proxyHTTPClient(cfg, cfg.AllowPrivateNetwork == nil || *cfg.AllowPrivateNetwork, 5*time.Minute)
+	// Never forward credentials on redirects. Only explicit credential/rate
+	// rejection can advance to another key; ambiguous billable failures stop.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	const maxResponse = imagegen.MaxImageBytes*4/3 + 1024*1024
+	var raw []byte
+	for index, key := range keys {
+		if index > 0 {
+			request.Body, err = request.GetBody()
+			if err != nil {
+				return nil, err
+			}
+		}
+		request.Header.Set("Authorization", "Bearer "+key)
+		applyModelHeaders(request, headerCfg)
+		response, err := client.Do(request)
+		if err != nil {
+			return nil, fmt.Errorf("image request failed (not retried; provider may have accepted it): %w", err)
+		}
+		raw, err = io.ReadAll(io.LimitReader(response.Body, maxResponse+1))
+		_ = response.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(raw) > maxResponse {
+			return nil, errors.New("image response exceeds the size limit")
+		}
+		if response.StatusCode >= 200 && response.StatusCode < 300 {
+			break
+		}
+		if index+1 < len(keys) && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests) {
+			continue
+		}
+		// Provider diagnostics are bounded and keys redacted before entering history.
+		message := string(raw)
+		for _, key := range keys {
+			message = strings.ReplaceAll(message, key, "[redacted]")
+		}
+		if len(message) > 2048 {
+			message = message[:2048]
+		}
+		return nil, fmt.Errorf("image API HTTP %d: %s", response.StatusCode, message)
+	}
+	var encoded, imageURL string
+	if model.Protocol == "minimax-images" {
+		var payload struct {
+			Data struct {
+				URLs []string `json:"image_urls"`
+			} `json:"data"`
+			Status *struct {
+				Code    int    `json:"status_code"`
+				Message string `json:"status_msg"`
+			} `json:"base_resp"`
+		}
+		if err = json.Unmarshal(raw, &payload); err != nil {
+			return nil, errors.New("invalid MiniMax image response")
+		}
+		if payload.Status == nil || payload.Status.Code != 0 {
+			return nil, errors.New("MiniMax image generation failed")
+		}
+		if len(payload.Data.URLs) > 0 {
+			imageURL = payload.Data.URLs[0]
+		}
+	} else {
+		var payload struct {
+			Data []struct {
+				Base64 string `json:"b64_json"`
+				URL    string `json:"url"`
+			} `json:"data"`
+		}
+		if err = json.Unmarshal(raw, &payload); err != nil {
+			return nil, errors.New("invalid image response")
+		}
+		if len(payload.Data) > 0 {
+			encoded, imageURL = payload.Data[0].Base64, payload.Data[0].URL
+		}
+	}
+	if encoded != "" {
+		return base64.StdEncoding.DecodeString(encoded)
+	}
+	if imageURL == "" {
+		return nil, errors.New("image API returned no image")
+	}
+	// Download through a credential-free, proxy-aware client. The network guard
+	// checks redirects and DNS too; remote output URLs cannot read local services.
+	u, err := url.Parse(imageURL)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
+		return nil, errors.New("invalid generated image URL")
+	}
+	download, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	imageResponse, err := proxyHTTPClient(cfg, false, time.Minute).Do(download)
+	if err != nil {
+		return nil, fmt.Errorf("image was generated but downloading failed; source URL: %s: %w", imageURL, err)
+	}
+	defer imageResponse.Body.Close()
+	if imageResponse.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("generated image download HTTP %d; source URL: %s", imageResponse.StatusCode, imageURL)
+	}
+	return io.ReadAll(io.LimitReader(imageResponse.Body, imagegen.MaxImageBytes+1))
+}
 
 type modelUsage struct {
 	PromptTokens     int

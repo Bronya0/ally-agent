@@ -8,6 +8,7 @@
 |---|---|
 | 聊天循环、工具分发、运行取消 | `internal/app/app.go`：`StartChat` / `runChat` / `executeTool` |
 | 模型协议、多 key、流式响应 | `internal/app/prov_model.go` + `internal/app/prov_adapter_*.go` |
+| 生图模型配置、文生图/编辑图、原图历史 | `biz_image_config.go` / `biz_images.go` / `orch_image.go`；协议在 `prov_model.go`，前端 `ImageModelsPanel.vue`；默认模型手动测试 `biz_image_testing.go` / `ImageModelTestModal.vue` 复用同一调用与存储 |
 | 思考与 Responses 原生回放、历史修复 | `internal/app/prov_reasoning.go` / `prov_responses_history.go` / `prov_history_hygiene.go` |
 | 上下文核算、前缀冻结、压缩 | `internal/app/biz_context.go` / `biz_context_lock.go` / `biz_compact.go` / `biz_compact_fast.go`；`docs/agent-context.md` |
 | 提示词、项目指令、代码地图、教训 | `internal/app/biz_prompt.go` + `biz_project_context.go`；内置地图技能 `internal/builtin_skills/skills/codegraph/SKILL.md` |

@@ -1637,8 +1637,10 @@ func buildAttachmentTextContext(text string, attachments []AttachmentInput) stri
 		if att.Error != "" {
 			fmt.Fprintf(&b, " (%s)", att.Error)
 		}
-		// 附件的绝对路径（如果有）：模型可据此直接 read 文件
-		if fp := strings.TrimSpace(att.FilePath); fp != "" {
+		// Saved image references take precedence over legacy UI path hints.
+		if ref := strings.TrimPrefix(att.ImageRef, "image:"); strings.HasPrefix(att.ImageRef, "image:") && imageRefPattern.MatchString(ref) {
+			fmt.Fprintf(&b, " — image reference for image_edit: image:%s (use this reference, not the attachment filename)", ref)
+		} else if fp := strings.TrimSpace(att.FilePath); fp != "" {
 			fmt.Fprintf(&b, " — path: %s", fp)
 		}
 		b.WriteString("\n")

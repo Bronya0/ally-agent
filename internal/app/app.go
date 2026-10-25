@@ -27,6 +27,7 @@ import (
 
 	"ally-dev/internal/chatgpt"
 	"ally-dev/internal/tools/grep"
+	"ally-dev/internal/tools/imagegen"
 	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/schemautil"
 	toolshared "ally-dev/internal/tools/shared"
@@ -605,8 +606,9 @@ type ConfigState struct {
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	// CustomHeaders mirrors the active model entry's extra HTTP headers
 	// (see ModelConfig.CustomHeaders); SwitchModel keeps the two in sync.
-	CustomHeaders map[string]string `json:"customHeaders,omitempty"`
-	Models        []ModelConfig     `json:"models,omitempty"`
+	CustomHeaders   map[string]string      `json:"customHeaders,omitempty"`
+	Models          []ModelConfig          `json:"models,omitempty"`
+	ImageGeneration *ImageGenerationConfig `json:"imageGeneration,omitempty"`
 	// LastUsedModel 是最近一次使用的模型**身份**（providerName + model id，
 	// 不复制连接字段与密钥）。它是新 Tab 的模型种子，也是 HTTP API 会话的模型来源：
 	// 加载/生效时按身份在 models[] 里找到那一条并展开成请求级模型配置。由前端切
@@ -778,6 +780,7 @@ type AttachmentInput struct {
 	Size      int64  `json:"size,omitempty"`
 	Kind      string `json:"kind,omitempty"`
 	DataURL   string `json:"dataUrl,omitempty"`
+	ImageRef  string `json:"imageRef,omitempty"`
 	Text      string `json:"text,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
 	Error     string `json:"error,omitempty"`
@@ -2145,6 +2148,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 
 	a.emit("run:start", map[string]any{"runId": runID, "sessionId": sessionID})
 
+	if cfg.ImageGeneration != nil && cfg.ImageGeneration.Enabled {
+		if err := a.persistRunImageAttachments(&req, runID); err != nil {
+			emitRunEnd("run:error", "error", map[string]any{"error": err.Error()})
+			return
+		}
+	}
 	messages = a.buildMessages(req, cfg, a.listCachedSkillsForConfig(cfg))
 	if err := a.waitForSessionMcp(ctx, runID, sessionID); err != nil {
 		kind := "error"
@@ -2292,10 +2301,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				if event.Image != nil && event.Image.DataURL != "" {
 					emittedEvents = true
 					streamDeltas.flush()
-					a.emit("run:image", map[string]any{
-						"runId": runID, "sessionId": sessionID, "id": event.Image.ID,
-						"dataUrl": event.Image.DataURL, "mimeType": event.Image.MimeType, "partial": event.Image.Partial,
-					})
+					a.emitStreamImage(runID, sessionID, cfg.Model, event.Image)
 				}
 				if event.ToolCalls != nil {
 					emittedEvents = true
@@ -2662,6 +2668,12 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	var argWarnings []string
 
 	switch name {
+	case "image_generate", "image_edit":
+		var req imagegen.Request
+		err, argWarnings = decodeJSON(&req)
+		if err == nil {
+			data, err = a.imageWithConfig(ctx, cfg, sessionID, name, req)
+		}
 	case "screenshot":
 		var req ScreenshotRequest
 		err, argWarnings = decodeJSON(&req)

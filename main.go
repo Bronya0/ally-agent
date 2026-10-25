@@ -13,6 +13,7 @@ package main
 import (
 	"embed"
 	"log/slog"
+	"net/http"
 	"os"
 	"runtime"
 
@@ -73,7 +74,9 @@ func main() {
 			// 与页面同源，所以插件能用原生相对 import 加载自己的多文件 bundle。
 			// application.Middleware 的底层类型就是 func(http.Handler) http.Handler，
 			// 所以实现留在 app 包、这里只接线，不把 Wails 依赖带进去。
-			Middleware: backend.PluginAssetMiddleware(app),
+			Middleware: func(next http.Handler) http.Handler {
+				return backend.GeneratedImageMiddleware(app)(backend.PluginAssetMiddleware(app)(next))
+			},
 		},
 		Windows: application.WindowsOptions{
 			WndClass: backend.WindowsWindowClassName,

@@ -40,6 +40,7 @@ function contentShape(text) {
 export function toolCardRenderSignature(msg) {
   if (!msg || msg.role !== 'tool_call') return '';
   const len = (v) => (Array.isArray(v) ? v.length : 0);
+  const image = msg.attachments?.[msg.attachments.length - 1];
   return [
     msg.kind,
     msg.status,
@@ -62,6 +63,10 @@ export function toolCardRenderSignature(msg) {
     msg.mcpTool,
     msg.validation,
     msg.chip,
+    len(msg.attachments),
+    image?.imageRef,
+    image?.url,
+    contentShape(image?.previewUrl),
     msg.askReady,
     msg.askSubmitted,
     len(msg.askQuestions),

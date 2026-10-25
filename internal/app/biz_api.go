@@ -373,6 +373,8 @@ func apiAuthWithToken(next http.Handler, getToken func() string) http.Handler {
 
 func (a *App) apiMux() *http.ServeMux {
 	mux := http.NewServeMux()
+	// Keep artifact URLs identical across the desktop host and authenticated API.
+	mux.Handle("/generated-images/", GeneratedImageMiddleware(a)(http.NotFoundHandler()))
 	mux.HandleFunc("GET /api/v1/health", a.apiHandleHealth)
 	mux.HandleFunc("POST /api/v1/ai/complete", a.apiHandleAIComplete)
 

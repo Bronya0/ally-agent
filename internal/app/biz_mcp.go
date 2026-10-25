@@ -2023,13 +2023,25 @@ func (a *App) buildToolsWithMcp(builtins []openai.Tool) []openai.Tool {
 	return tools
 }
 
-// buildToolsForConfig is the live toolset for stateless callers (sub-agents,
-// scheduled tasks) and the pre-freeze set for new chat sessions: the built-in
-// list minus the user-disabled tools (cfg.DisabledTools; the local
-// read/edit/create/delete/command core always survives), plus MCP tools.
-func (a *App) buildToolsForConfig(cfg ConfigState) []openai.Tool {
+// builtinToolsForConfig is the shared availability rule for schema injection
+// and UI inventory. The local read/edit/create/delete/command core survives.
+func builtinToolsForConfig(cfg ConfigState) []openai.Tool {
 	builtins := toolshared.FilterTools(chatTools(), cfg.DisabledTools)
-	return a.buildToolsWithMcp(builtins)
+	filtered := make([]openai.Tool, 0, len(builtins))
+	for _, tool := range builtins {
+		if tool.Function != nil && (tool.Function.Name == "image_generate" || tool.Function.Name == "image_edit") {
+			if _, err := imageModelForTool(cfg, tool.Function.Name); err != nil {
+				continue
+			}
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
+}
+
+// buildToolsForConfig is the live set for stateless callers and new sessions.
+func (a *App) buildToolsForConfig(cfg ConfigState) []openai.Tool {
+	return a.buildToolsWithMcp(builtinToolsForConfig(cfg))
 }
 
 // buildToolsForSession returns the model-visible tool schemas for a chat
@@ -2124,21 +2136,17 @@ func (a *App) GetMcpServers() []map[string]any {
 }
 
 func (a *App) ListTools() []ToolDefinitionSummary {
-	// 内置工具的 Enabled 跟随设置页的停用名单（cfg.DisabledTools）：被停用的
-	// 工具不再注入模型，清单里以 Enabled=false 呈现（与 MCP 行的 per-server
-	// 黑名单同一口径，UI 按此过滤计数）。
+	// Keep the full inventory for settings, but derive availability from the
+	// same gates as schema injection (including image model prerequisites).
 	a.mu.Lock()
-	disabled := append([]string(nil), a.config.DisabledTools...)
+	cfg := cloneConfig(a.config)
 	a.mu.Unlock()
 	all := chatTools()
 	enabled := make(map[string]bool, len(all))
-	for _, tool := range all {
+	for _, tool := range builtinToolsForConfig(cfg) {
 		if tool.Function != nil {
 			enabled[tool.Function.Name] = true
 		}
-	}
-	for _, name := range toolshared.SanitizeDisabledTools(disabled) {
-		enabled[name] = false
 	}
 	tools := make([]ToolDefinitionSummary, 0, len(all))
 	for _, tool := range all {

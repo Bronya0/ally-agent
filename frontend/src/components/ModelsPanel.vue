@@ -30,9 +30,9 @@ Public License v3. See the LICENSE file for details.
         >
           <template #prefix><SearchOutlined class="panel-search-icon" /></template>
         </n-input>
-        <n-button size="small" secondary @click="openModelImport">{{ t('settings.modelImport') }}</n-button>
-        <n-button size="small" secondary :disabled="!draft.models?.length" @click="exportModelConfigs">{{ t('settings.modelExport') }}</n-button>
-        <n-button size="small" type="primary" @click="startAddModelDraft">{{ t('common.add') }}</n-button>
+        <n-button size="small" secondary @click="modelCategory === 'images' ? imagePanel?.import() : openModelImport()">{{ t('settings.modelImport') }}</n-button>
+        <n-button size="small" secondary :disabled="modelCategory === 'images' ? !configDraft.imageGeneration?.models?.length : !draft.models?.length" @click="modelCategory === 'images' ? imagePanel?.export() : exportModelConfigs()">{{ t('settings.modelExport') }}</n-button>
+        <n-button size="small" type="primary" @click="modelCategory === 'images' ? imagePanel?.add() : startAddModelDraft()">{{ t('common.add') }}</n-button>
       </div>
     </header>
 
@@ -46,36 +46,43 @@ Public License v3. See the LICENSE file for details.
         @change="importModelConfigs"
       />
 
-      <n-tabs
-        v-if="providerTabs.length"
-        :key="providerTabSetKey"
-        v-model:value="activeProviderTab"
-        type="line"
-        :default-value="providerTabs[0]?.name"
-        class="provider-tabs panel-content-tabs"
-      >
-        <n-tab-pane v-for="tab in providerTabs" :key="tab.name" :name="tab.name" :tab="tab.label">
-          <div class="saved-model-list">
-            <div v-for="item in tab.models" :key="item.index" class="ally-row-card">
-              <div class="ally-row-main">
-                <span class="ally-row-name" :title="modelTitle(item.model)">{{ modelTitle(item.model) }}</span>
-                <span class="ally-row-badge">{{ apiFormatLabel(item.model.apiFormat) }}</span>
-                <span v-if="modelIdFact(item.model)" class="ally-row-badge">{{ modelIdFact(item.model) }}</span>
-                <div class="ally-row-side">
-                  <n-button size="tiny" quaternary @click="editModelDraft(item.index)">{{ t('common.edit') }}</n-button>
-                  <n-button size="tiny" type="error" quaternary @click="removeModelDraft(item.index)">{{ t('common.delete') }}</n-button>
+      <n-tabs v-model:value="modelCategory" type="line" size="small" class="model-category-tabs">
+        <n-tab-pane name="chat" :tab="t('imageModels.chatTab')">
+          <n-tabs
+            v-if="providerTabs.length"
+            :key="providerTabSetKey"
+            v-model:value="activeProviderTab"
+            type="line"
+            :default-value="providerTabs[0]?.name"
+            class="provider-tabs panel-content-tabs"
+          >
+            <n-tab-pane v-for="tab in providerTabs" :key="tab.name" :name="tab.name" :tab="tab.label">
+              <div class="saved-model-list">
+                <div v-for="item in tab.models" :key="item.index" class="ally-row-card">
+                  <div class="ally-row-main">
+                    <span class="ally-row-name" :title="modelTitle(item.model)">{{ modelTitle(item.model) }}</span>
+                    <span class="ally-row-badge">{{ apiFormatLabel(item.model.apiFormat) }}</span>
+                    <span v-if="modelIdFact(item.model)" class="ally-row-badge">{{ modelIdFact(item.model) }}</span>
+                    <div class="ally-row-side">
+                      <n-button size="tiny" quaternary @click="editModelDraft(item.index)">{{ t('common.edit') }}</n-button>
+                      <n-button size="tiny" type="error" quaternary @click="removeModelDraft(item.index)">{{ t('common.delete') }}</n-button>
+                    </div>
+                  </div>
+                  <div class="saved-model-facts">
+                    <span class="saved-model-fact">max {{ item.model.maxTokens || '-' }}</span>
+                    <span class="saved-model-fact">context {{ item.model.contextWindow || '-' }}</span>
+                  </div>
+                  <div class="saved-model-url" :title="item.model.baseUrl || ''">{{ item.model.baseUrl || t('settings.baseUrlNone') }}</div>
                 </div>
               </div>
-              <div class="saved-model-facts">
-                <span class="saved-model-fact">max {{ item.model.maxTokens || '-' }}</span>
-                <span class="saved-model-fact">context {{ item.model.contextWindow || '-' }}</span>
-              </div>
-              <div class="saved-model-url" :title="item.model.baseUrl || ''">{{ item.model.baseUrl || t('settings.baseUrlNone') }}</div>
-            </div>
-          </div>
+            </n-tab-pane>
+          </n-tabs>
+          <div v-else class="saved-model-empty">{{ modelSearch.trim() ? t('common.searchEmpty') : t('settings.modelsEmpty') }}</div>
+        </n-tab-pane>
+        <n-tab-pane name="images" :tab="t('imageModels.tab')" display-directive="show">
+          <ImageModelsPanel ref="imagePanel" :config="configDraft.imageGeneration" :search="modelSearch" @save="(patch, silent) => emit('save', patch, silent)" />
         </n-tab-pane>
       </n-tabs>
-      <div v-else class="saved-model-empty">{{ modelSearch.trim() ? t('common.searchEmpty') : t('settings.modelsEmpty') }}</div>
     </div>
 
     <!-- Model editor sub-modal -->
@@ -283,6 +290,7 @@ Public License v3. See the LICENSE file for details.
 
 <script setup>
 import ChatGPTAccounts from './ChatGPTAccounts.vue';
+import ImageModelsPanel from './ImageModelsPanel.vue';
 import { computed, reactive, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
 import { reasoningEffortLabel, t } from '../i18n.mjs';
@@ -328,6 +336,8 @@ const modelFormModalStyle = {
 };
 
 const modelEditorVisible = ref(false);
+const modelCategory = ref('chat');
+const imagePanel = ref(null);
 const modelEditorIndex = ref(-1);
 const modelCatalog = ref({ providers: [] });
 const modelCatalogLoading = ref(false);
@@ -963,6 +973,24 @@ watch(
   min-height: 0;
   overflow: hidden;
   padding: 16px 24px 28px;
+}
+
+.model-category-tabs {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.model-category-tabs > :deep(.n-tabs-nav) {
+  flex-shrink: 0;
+}
+.model-category-tabs > :deep(.n-tab-pane) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding-top: 16px;
 }
 
 /* 页头标题+副标题：与 Skills/MCP 面板同构，副标题紧贴标题下方。 */

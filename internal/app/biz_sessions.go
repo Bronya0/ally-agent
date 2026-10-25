@@ -258,6 +258,11 @@ func (a *App) LoadSession(sessionID string) (SessionSnapshot, error) {
 	if path := a.sessionSnapshotPath(sessionID); path != "" {
 		if snapshot, err := readCompressedSessionSnapshot(path); err == nil {
 			snapshot.HasSnapshot = true
+			// Ordinary sessions keep the snapshot-only fast path. Model history
+			// is needed for recovery only when this session has saved images.
+			if _, imageErr := os.Stat(filepath.Join(a.imagesDir(), imageSessionKey(sessionID))); imageErr == nil {
+				a.restoreGeneratedImageAttachments(&snapshot, a.loadSessionHistoryCopy(sessionID))
+			}
 			return normalizeSessionSnapshot(snapshot, sessionID), nil
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return SessionSnapshot{}, err
@@ -286,6 +291,7 @@ func (a *App) LoadSession(sessionID string) (SessionSnapshot, error) {
 		return SessionSnapshot{}, os.ErrNotExist
 	}
 	snapshot := legacySessionSnapshot(sessionID, history)
+	a.restoreGeneratedImageAttachments(&snapshot, history)
 	if entries, indexErr := a.readSessionIndexLocked(); indexErr == nil {
 		for _, entry := range entries {
 			if entry.ID != sessionID {

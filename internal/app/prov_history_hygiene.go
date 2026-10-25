@@ -121,7 +121,7 @@ func sanitizeHistoryMessagesWithOrigins(messages []openai.ChatCompletionMessage,
 			if m.Role == openai.ChatMessageRoleTool {
 				// Explicit fast compaction already reduced this result to a bounded
 				// excerpt. Keep that handoff even if protected storage is unavailable.
-				if !strings.HasPrefix(m.Content, fastCompactToolMarker) {
+				if !strings.HasPrefix(m.Content, fastCompactToolMarker) && !isGeneratedImageHistory(m.Content) {
 					m.Content = toolResultPlaceholder
 				}
 			}

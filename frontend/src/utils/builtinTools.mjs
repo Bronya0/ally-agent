@@ -15,7 +15,7 @@
 export const protectedToolNames = ['read', 'edit', 'create', 'delete', 'command'];
 
 export const defaultToggleableToolNames = [
-  'list_files', 'grep', 'screenshot', 'service', 'wait', 'ask', 'suggest',
+  'list_files', 'grep', 'screenshot', 'image_generate', 'image_edit', 'service', 'wait', 'ask', 'suggest',
   'scheduled_task', 'http_request', 'web_fetch',
   'remote_read', 'remote_edit', 'remote_create_file', 'remote_delete_path', 'remote_run_command',
   'remote_transfer',

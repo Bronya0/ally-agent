@@ -37,7 +37,7 @@ const props = defineProps({
 
 const visible = ref(false);
 // 与 MCP 计数同口径：只统计/展示实际注入的工具（ListTools 返回的 enabled
-// 标记 = 未被 per-server 黑名单勾掉）；内置工具恒为 enabled。
+// 标记包含内置工具开关、模型配置条件与 MCP 的 per-server 黑名单）。
 const enabledTools = computed(() => props.tools.filter((tool) => tool?.enabled !== false));
 const toolCount = computed(() => enabledTools.value.length);
 const builtinTools = computed(() => enabledTools.value.filter((tool) => tool?.source !== 'mcp'));

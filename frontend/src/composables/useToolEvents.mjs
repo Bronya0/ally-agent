@@ -30,6 +30,7 @@ import { formatBytes } from '../utils/format.mjs';
 import { scheduledStatusKey, scheduledStatusTone, serviceStatusKey, serviceStatusTone } from '../utils/taskStatus.mjs';
 import { isActionKeyedTool } from '../utils/toolVerb.mjs';
 import { showsSandboxAlert } from '../utils/sandboxAlert.mjs';
+import { applyGeneratedImageResult } from '../utils/generatedImages.mjs';
 
 export function useToolEvents(ctx) {
   const {
@@ -51,6 +52,7 @@ export function useToolEvents(ctx) {
     scrollMessagesToBottomIfStale,
     scrollMessagesToBottom,
     activeSessionId,
+    createImageThumbnailDataUrl,
   } = ctx;
 
   // ---- tool:result adapters ------------------------------------------------
@@ -386,7 +388,21 @@ export function useToolEvents(ctx) {
     }
   }
 
+  function applyImageResult(existing, data, resultData) {
+    const attachment = applyGeneratedImageResult(existing, resultData);
+    if (!attachment || !createImageThumbnailDataUrl) return;
+    createImageThumbnailDataUrl(attachment.url).then((thumbnail) => {
+      const current = existing.attachments?.[0];
+      if (thumbnail && current?.imageRef === attachment.imageRef) {
+        current.previewUrl = thumbnail;
+        scheduleSaveSessions();
+      }
+    }).catch(() => {});
+  }
+
   const toolResultAdapters = {
+    'image_generate': [applyImageResult],
+    'image_edit': [applyImageResult],
     'screenshot': [applyScreenshotResult],
     'edit': [applyEditValidation, applyEditDiff],
     'replace_exact': [applyEditValidation, applyEditDiff],

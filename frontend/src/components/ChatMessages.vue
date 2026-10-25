@@ -329,6 +329,8 @@ function messageRenderMemo(msg, index, agents) {
     attachments.length,
     lastAttachment?.previewUrl,
     lastAttachment?.dataUrl,
+    lastAttachment?.url,
+    lastAttachment?.imageRef,
     lastAttachment?.partial,
     msg?.role === 'user' ? isUserMessageExpanded(msg) : false,
     // Tool-card safety net: any field that can change how a tool card renders

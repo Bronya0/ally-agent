@@ -120,6 +120,7 @@ Public License v3. See the LICENSE file for details.
       <img :src="displayedMsg.screenshotDataUrl" alt="screenshot" loading="lazy" />
     </div>
     <pre v-else-if="displayedMsg.body && !cardGrid && displayedMsg.status !== 'error' && displayedMsg.kind !== 'edit' && displayedMsg.kind !== 'read' && displayedMsg.kind !== 'remote_read' && displayedMsg.kind !== 'calculate' && displayedMsg.kind !== 'grep' && displayedMsg.kind !== 'plan' && (displayedMsg.kind !== 'list' || displayedMsg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedBodyKind(displayedMsg.kind), 'body-preview': isBodyPreview(displayedMsg), 'tail-default': isServiceReadResult(displayedMsg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(displayedMsg), 'tool-body-swap': !isBodyLive }]" @click.stop="handleBodyClick(displayedMsg)">{{ toolBodyText(displayedMsg) }}</pre>
+    <MessageAttachments v-if="displayedMsg.attachments?.length" :attachments="displayedMsg.attachments" />
     <div v-if="isValidationWarning(displayedMsg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
       <div class="edit-warning validation-warning" :title="displayedMsg.validation">
         <span class="validation-warning-label">{{ $t('tools.validationWarning') }}</span>
@@ -157,6 +158,7 @@ import { t } from '../i18n.mjs';
 import { countLinesCapped, normalizedLines, tailLines } from '../utils/toolPreview.mjs';
 import CardGrid from './CardGrid.vue';
 import ToolStatusIcon from './ToolStatusIcon.vue';
+import MessageAttachments from './MessageAttachments.vue';
 
 const BODY_PREVIEW_LINES = 6;
 const TOOL_OUTPUT_PREVIEW_LINES = 4;

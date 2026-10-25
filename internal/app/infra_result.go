@@ -284,6 +284,12 @@ func injectEnvelopeWarnings(compactJSON string, warnings []string) string {
 }
 
 func compactToolDataForModel(name string, result toolResult, fullJSON string) string {
+	if name == "image_generate" || name == "image_edit" {
+		var image GeneratedImage
+		if decodeToolData(result.Data, &image) {
+			return generatedImageHistoryMarker + image.Ref + fmt.Sprintf(" (%dx%d); original saved. Sources: %s", image.Width, image.Height, strings.Join(image.Sources, ", "))
+		}
+	}
 	// MCP tool output is third-party text with no producer-side cap; clamp it
 	// to the built-in bound so one runaway server cannot flood model context.
 	if isMcpToolFunctionName(name) {

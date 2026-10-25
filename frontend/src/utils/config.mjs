@@ -8,6 +8,7 @@
  * Public License v3. See the LICENSE file for details.
  */
 import { normalizeApiKeysArray, normalizeReasoningEffort } from './modelConfigIO.mjs';
+import { cloneImageGeneration } from './imageModels.mjs';
 
 // 自动压缩阈值的默认值与 clamp 范围：与后端同一组数（Go 侧 defaultCompactThreshold /
 // clampCompactThreshold）。跨语言没法共用常量，所以由 config.test.mjs 读 Go 源码把两边
@@ -85,6 +86,7 @@ export function defaultConfig() {
     // 永不隐藏，后端 sanitizeHiddenModes 同一组键。空数组 = 全部可见。
     hiddenModes: [],
     models: [],
+    imageGeneration: { enabled: false, models: [], generateModel: null, editModel: null },
     // 最近使用模型身份（{providerName, model}，指向 models[] 里的一条）：新 Tab 的
     // 模型种子，也是后端给 HTTP API 会话与计划任务展开模型的依据。
     lastUsedModel: null,
@@ -149,6 +151,7 @@ export function assignConfig(target, source) {
     ? { providerName: String(lastUsed.providerName || '').trim(), model: String(lastUsed.model).trim(), ...(lastUsed.oauthAccountId ? { oauthAccountId: String(lastUsed.oauthAccountId).trim() } : {}) }
     : null;
   next.models = cloneModelConfigs(next.models);
+  next.imageGeneration = cloneImageGeneration(next.imageGeneration);
   const concurrency = Number(next.toolConcurrency);
   next.toolConcurrency = Number.isFinite(concurrency) && concurrency !== 0
     ? Math.min(TOOL_CONCURRENCY_MAX, Math.max(TOOL_CONCURRENCY_MIN, Math.round(concurrency)))
