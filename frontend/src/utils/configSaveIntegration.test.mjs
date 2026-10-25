@@ -14,6 +14,7 @@ function harness(SaveConfig, GetConfig = async () => ({ userAgent: 'committed' }
     let configSaveQueue = Promise.resolve();
     let configSaveVersion = 0;
     ${source.slice(start, end)}
+    queueConfigSave.wait = waitForConfigSaves;
     return queueConfigSave;
   `)(SaveConfig, GetConfig, async () => [], { value: [] }, { value: false }, config, configDraft, Object.assign, () => {}, () => {}, () => {});
   return { queue, config, configDraft };
@@ -29,6 +30,34 @@ test('queued config owns nested model credentials and headers', async () => {
   await save;
   assert.equal(received[0].models[0].apiKeys[0], 'original');
   assert.equal(received[0].models[0].customHeaders['X-Test'], 'original');
+});
+
+test('image testing waits for newer queued model saves as well as the current save', async () => {
+  const firstWrite = deferred(), secondWrite = deferred();
+  let calls = 0;
+  const { queue } = harness(() => ++calls === 1 ? firstWrite.promise : secondWrite.promise);
+  const first = queue({ imageGeneration: { models: [{ apiKey: 'first' }] } });
+  let ready = false;
+  const waiting = queue.wait().then(() => { ready = true; });
+  const second = queue({ imageGeneration: { models: [{ apiKey: 'second' }] } });
+  firstWrite.resolve();
+  await first;
+  assert.equal(ready, false);
+  secondWrite.resolve();
+  await Promise.all([second, waiting]);
+  assert.equal(ready, true);
+});
+
+test('image testing surfaces the latest save failure and recovers after a later save', async () => {
+  let fail = true;
+  const { queue } = harness(async () => { if (fail) throw Error('disk failed'); });
+  const first = queue({ userAgent: 'first' });
+  const waiting = assert.rejects(queue.wait(), /disk failed/);
+  await assert.rejects(first, /disk failed/);
+  await waiting;
+  fail = false;
+  await queue({ userAgent: 'next' });
+  await queue.wait();
 });
 
 test('failed config save restores committed state and queue recovers', async () => {
@@ -47,11 +76,13 @@ test('an older failed save cannot restore over a newer queued edit', async () =>
   const { queue, config } = harness(() => ++calls === 1 ? pending.promise : Promise.resolve(), async () => { reads++; return { userAgent: 'old' }; });
   const first = queue({ userAgent: 'first' });
   const rejected = assert.rejects(first, /disk failed/);
+  const waiting = queue.wait();
   const second = queue({ userAgent: 'second' });
   config.userAgent = 'second';
   pending.reject(Error('disk failed'));
   await rejected;
   await second;
+  await waiting;
   assert.equal(reads, 0);
   assert.equal(config.userAgent, 'second');
 });

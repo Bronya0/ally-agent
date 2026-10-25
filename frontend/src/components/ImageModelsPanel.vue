@@ -3,14 +3,8 @@
   <div class="image-model-panel">
     <div class="image-model-toolbar">
       <n-checkbox :checked="draft.enabled" @update:checked="setEnabled">{{ t('imageModels.use') }}</n-checkbox>
-      <span class="image-model-note">{{ t('imageModels.nextSession') }}</span>
-    </div>
-    <div class="image-model-defaults">
       <div class="image-default-field">
-        <div class="image-default-label">
-          <span>{{ t('imageModels.defaultGenerate') }}</span>
-          <n-button size="tiny" quaternary :disabled="!defaultGenerateModel" @click="testModel = { ...defaultGenerateModel }">{{ t('imageModels.test') }}</n-button>
-        </div>
+        <span>{{ t('imageModels.defaultGenerate') }}</span>
         <n-select
           :value="imageModelKey(draft.generateModel) || null"
           :options="generateOptions"
@@ -31,8 +25,15 @@
           @update:value="selectDefault('editModel', $event)"
         />
       </div>
+      <n-button size="small" type="primary" secondary :disabled="!defaultGenerateModel" @click="testModel = { ...defaultGenerateModel }">
+        <template #icon><ExperimentOutlined /></template>
+        {{ t('imageModels.test') }}
+      </n-button>
     </div>
-    <p class="image-model-hint">{{ t('imageModels.hint') }}</p>
+    <p class="image-model-hint">
+      <span>{{ t('imageModels.hint') }}</span>
+      <span class="image-model-note">{{ t('imageModels.nextSession') }}</span>
+    </p>
     <n-tabs
       v-if="groups.length"
       :key="groups.map(g => g.name).join('|')"
@@ -60,7 +61,7 @@
     </n-tabs>
     <n-empty v-else class="image-model-empty" :description="search ? t('common.searchEmpty') : t('imageModels.empty')" />
     <input ref="importInput" type="file" accept="application/json,.json" hidden @change="importModels" />
-    <ImageModelTestModal v-if="testModel" :model="testModel" @close="testModel = null" />
+    <ImageModelTestModal v-if="testModel" :model="testModel" :before-generate="beforeTest" @close="testModel = null" />
     <n-modal
       v-model:show="editorVisible"
       preset="card"
@@ -111,6 +112,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
+import ExperimentOutlined from '@vicons/antd/ExperimentOutlined';
 import { t } from '../i18n.mjs';
 import { saveTextFile } from '../utils/download.mjs';
 import ImageModelTestModal from './ImageModelTestModal.vue';
@@ -120,7 +122,7 @@ import {
   replaceImageModel, supportsImageEdit,
 } from '../utils/imageModels.mjs';
 
-const props = defineProps({ config: { type: Object, default: null }, search: { type: String, default: '' } });
+const props = defineProps({ config: { type: Object, default: null }, search: { type: String, default: '' }, beforeTest: { type: Function, default: null } });
 const emit = defineEmits(['save']);
 const message = useMessage();
 const draft = reactive({ enabled: false, models: [], generateModel: null, editModel: null });
@@ -238,17 +240,14 @@ defineExpose({ add: () => edit(), import: () => importInput.value?.click(), expo
 
 <style scoped>
 .image-model-panel { display: flex; flex: 1; flex-direction: column; min-height: 0; gap: 16px; }
-.image-model-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.image-model-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+.image-model-toolbar > :deep(.n-checkbox), .image-model-toolbar > :deep(.n-button) { flex-shrink: 0; }
 .image-model-note { font-size: 12px; color: var(--ally-text-faint); }
-.image-model-defaults { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; width: 100%; max-width: 800px; }
-.image-default-field { display: flex; min-width: 0; flex-direction: column; gap: 6px; font-size: 12px; color: var(--ally-text-muted); }
-.image-default-label { display: flex; align-items: center; gap: 8px; min-height: 22px; }
-.image-default-field > span { min-height: 22px; display: flex; align-items: center; }
-.image-model-hint { margin: 0; font-size: 12px; color: var(--ally-text-muted); }
+.image-default-field { display: flex; align-items: center; flex: 1 1 320px; min-width: 0; gap: 8px; font-size: 12px; color: var(--ally-text-muted); }
+.image-default-field > span, .image-default-field > :deep(.n-button) { flex-shrink: 0; white-space: nowrap; }
+.image-default-field > :deep(.n-select) { flex: 1; min-width: 0; }
+.image-model-hint { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; font-size: 12px; color: var(--ally-text-muted); }
 .image-model-list { display: flex; flex-direction: column; gap: 6px; }
 .image-model-url { font-size: 11px; color: var(--ally-text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-model-empty { padding: 32px 0; }
-@media (max-width: 700px) {
-  .image-model-defaults { grid-template-columns: minmax(0, 1fr); }
-}
 </style>

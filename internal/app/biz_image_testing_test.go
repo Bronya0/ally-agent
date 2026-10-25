@@ -3,6 +3,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -10,10 +11,73 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"ally-dev/internal/tools/imagegen"
 )
+
+func TestRepeatedImageCallsDoNotCarryState(t *testing.T) {
+	for _, protocol := range []string{"openai-images", "xai-images"} {
+		for _, manual := range []bool{false, true} {
+			name := protocol + "/tool"
+			if manual {
+				name = protocol + "/manual"
+			}
+			t.Run(name, func(t *testing.T) {
+				a := newIsolatedChatTestApp(t)
+				data := imageTestPNG(t)
+				var calls atomic.Int32
+				var firstBody []byte
+				var firstHeader http.Header
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					index := calls.Add(1)
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Error(err)
+					}
+					if index == 1 {
+						firstBody, firstHeader = body, r.Header.Clone()
+					} else if !bytes.Equal(body, firstBody) || !reflect.DeepEqual(r.Header, firstHeader) {
+						t.Error("a previous result or failure changed the next request")
+					}
+					if r.URL.Path != "/images/generations" {
+						t.Errorf("generation unexpectedly switched to editing: %s", r.URL.Path)
+					}
+					if index == 3 {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						_, _ = w.Write([]byte("upstream unavailable"))
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"b64_json": base64.StdEncoding.EncodeToString(data)}}})
+				}))
+				defer server.Close()
+				a.config = imageTestConfig(server.URL, protocol)
+				id := *a.config.ImageGeneration.GenerateModel
+				for i := 1; i <= 4; i++ {
+					var err error
+					if manual {
+						_, err = a.TestImageModel(id, ImageModelTestRequest{Prompt: "draw a cat", AspectRatio: "3:2"})
+					} else {
+						_, err = a.imageWithConfig(context.Background(), a.config, "same-session", "image_generate", imagegen.Request{Prompt: "draw a cat", AspectRatio: "3:2"})
+					}
+					if i == 3 {
+						if err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+							t.Fatalf("upstream error lost: %v", err)
+						}
+					} else if err != nil {
+						t.Fatalf("request %d failed without reopening: %v", i, err)
+					}
+					if calls.Load() != int32(i) {
+						t.Fatal("a billable call was repeated automatically")
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestImageModelManualGenerationAndEditing(t *testing.T) {
 	a := newIsolatedChatTestApp(t)
@@ -82,15 +146,13 @@ func TestImageModelManualGenerationAndEditing(t *testing.T) {
 	if err != nil || !source.SourceOnly || !bytes.Equal(data, original) {
 		t.Fatal("reference original was not retained")
 	}
-	// Reopening the app recovers history without frontend state or full image reads.
+	// Originals remain durable even though the tester starts empty when reopened.
 	reopened := newAppState(a.AppDataDir())
-	history, err := reopened.ListImageModelTests(ModelIdentity{ProviderName: "TEST", Model: "TEST-IMAGE"})
-	if err != nil || len(history) != 2 || history[0].Ref != second.Ref || history[1].Ref != first.Ref {
-		t.Fatalf("history lost or out of order: %+v %v", history, err)
-	}
-	other, err := reopened.ListImageModelTests(ModelIdentity{ProviderName: "other", Model: id.Model})
-	if err != nil || len(other) != 0 {
-		t.Fatal("test history leaked across model identities")
+	for _, meta := range []GeneratedImage{first, second, source} {
+		data, _, err := reopened.readGeneratedImage(meta.Ref)
+		if err != nil || !bytes.Equal(data, original) {
+			t.Fatalf("original lost after reopening: %v", err)
+		}
 	}
 	if calls.Load() != 2 || a.config.ImageGeneration.Enabled || a.config.ImageGeneration.GenerateModel != nil {
 		t.Fatal("manual tests changed tool configuration or retried")
@@ -132,23 +194,5 @@ func TestImageModelManualValidationBeforeStorageOrBilling(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(a.imagesDir(), imageSessionKey(imageModelTestSession(id)))); !os.IsNotExist(err) {
 		t.Fatalf("invalid upload wrote partial references: %v", err)
-	}
-}
-
-func TestImageModelManualHistoryBounded(t *testing.T) {
-	a := newIsolatedChatTestApp(t)
-	id := ModelIdentity{ProviderName: "test", Model: "image"}
-	data := imageTestPNG(t)
-	var last GeneratedImage
-	for i := 0; i < imageModelTestHistoryLimit+3; i++ {
-		var err error
-		last, err = a.saveGeneratedImage(data, GeneratedImage{SessionID: imageModelTestSession(id)})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	history, err := a.ListImageModelTests(id)
-	if err != nil || len(history) != imageModelTestHistoryLimit || history[0].Ref != last.Ref {
-		t.Fatalf("history must be bounded and newest first: %d %v", len(history), err)
 	}
 }

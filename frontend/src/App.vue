@@ -435,7 +435,7 @@ Public License v3. See the LICENSE file for details.
             <!-- Models: v-if unmounts the panel and its unsubmitted editor on
                  switch; saved configuration remains in App.vue. -->
             <div v-if="modelsActive" class="settings-page-container">
-              <ModelsPanel :show="modelsActive" :config-draft="configDraft" @save="onSettingsSave" />
+              <ModelsPanel :show="modelsActive" :config-draft="configDraft" :before-image-test="waitForConfigSaves" @save="onSettingsSave" />
             </div>
 
             <!-- SSH Clusters page (extracted onto the mode rail, below Models):
@@ -3444,6 +3444,15 @@ function queueConfigSave(snapshot) {
   configSaveQueue = save;
   save.catch(() => {});
   return save;
+}
+
+async function waitForConfigSaves() {
+  for (;;) {
+    const pending = configSaveQueue;
+    try { await pending; }
+    catch (error) { if (pending === configSaveQueue) throw error; }
+    if (pending === configSaveQueue) return;
+  }
 }
 
 async function refreshFooterStats({

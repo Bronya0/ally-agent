@@ -11,8 +11,6 @@ test('manual image uploads enforce the same limits as backend before reading fil
   assert.equal(imageTestLimits.maxInputs, goConst('MaxInputs'));
   assert.equal(imageTestLimits.maxBytes, goConst('MaxImageBytes'));
   assert.equal(imageTestLimits.promptChars, goConst('MaxPromptChars'));
-  const backend = readFileSync(new URL('../../../internal/app/biz_image_testing.go', import.meta.url), 'utf8');
-  assert.equal(imageTestLimits.history, Number(/imageModelTestHistoryLimit\s*=\s*(\d+)/.exec(backend)[1]));
   const png = { type: 'image/png', size: imageTestLimits.maxBytes };
   assert.doesNotThrow(() => validateImageTestFiles([png]));
   assert.throws(() => validateImageTestFiles([png, { ...png, size: 1 }]));

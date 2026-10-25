@@ -8,7 +8,7 @@ export const imageProtocols = [
   { value: 'minimax-images', label: 'MiniMax', baseUrl: 'https://api.minimax.io/v1' },
 ];
 
-export const imageTestLimits = { maxInputs: 5, maxBytes: 20 * 1024 * 1024, promptChars: 16000, history: 20 };
+export const imageTestLimits = { maxInputs: 5, maxBytes: 20 * 1024 * 1024, promptChars: 16000, maxResults: 20 };
 
 export function validateImageTestFiles(files) {
   if (files.length > imageTestLimits.maxInputs || files.some(file => !['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || !Number.isFinite(file.size) || file.size <= 0) || files.reduce((total, file) => total + file.size, 0) > imageTestLimits.maxBytes) {

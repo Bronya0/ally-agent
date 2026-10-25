@@ -21,12 +21,11 @@
       </div>
       <n-alert v-if="error" type="error" :show-icon="false">{{ error }}</n-alert>
       <div class="image-test-actions">
-        <span class="image-test-note">{{ t('imageModels.testHistoryHint') }}</span>
+        <span class="image-test-note">{{ t('imageModels.testResultHint') }}</span>
         <n-button type="primary" :loading="generating" :disabled="busy || !prompt.trim()" @click="generate">
           {{ t(images.length ? 'imageModels.testEdit' : 'settings.tool.image_generate') }}
         </n-button>
       </div>
-      <n-spin v-if="loadingHistory" size="small" />
       <div v-for="result in results" :key="result.imageRef" class="image-test-result">
         <div class="image-test-result-prompt">{{ result.prompt }}</div>
         <div class="image-test-note">{{ new Date(result.createdAt).toLocaleString() }} · {{ result.width }} × {{ result.height }}</div>
@@ -37,15 +36,17 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue';
-import { TestImageModel, ListImageModelTests } from '../../bindings/ally-dev/internal/app/app';
+import { computed, ref } from 'vue';
+import { useMessage } from 'naive-ui';
+import { TestImageModel } from '../../bindings/ally-dev/internal/app/app';
 import { t } from '../i18n.mjs';
 import { generatedImageAttachment } from '../utils/generatedImages.mjs';
 import { imageModelIdentity, imageTestLimits, supportsImageEdit, validateImageTestFiles } from '../utils/imageModels.mjs';
 import MessageAttachments from './MessageAttachments.vue';
 
-const props = defineProps({ model: { type: Object, required: true } });
+const props = defineProps({ model: { type: Object, required: true }, beforeGenerate: { type: Function, default: null } });
 const emit = defineEmits(['close']);
+const message = useMessage();
 const identity = imageModelIdentity(props.model);
 const canEdit = supportsImageEdit(props.model);
 const prompt = ref('');
@@ -56,16 +57,9 @@ const results = ref([]);
 const error = ref('');
 const generating = ref(false);
 const readingImages = ref(false);
-const loadingHistory = ref(true);
-const busy = computed(() => generating.value || readingImages.value || loadingHistory.value);
+const busy = computed(() => generating.value || readingImages.value);
 const fileInput = ref(null);
 function close(show) { if (!show && !busy.value) emit('close'); }
-
-onMounted(async () => {
-  try { results.value = await ListImageModelTests(identity); }
-  catch (cause) { error.value = String(cause); }
-  finally { loadingHistory.value = false; }
-});
 
 async function addImages(files) {
   if (busy.value || !canEdit || !files.length) return;
@@ -104,10 +98,14 @@ async function generate() {
   generating.value = true;
   error.value = '';
   try {
+    // Presets update optimistically; the backend must have the saved keys and
+    // endpoint before this potentially billable request starts.
+    if (props.beforeGenerate) await props.beforeGenerate();
     const result = await TestImageModel(identity, {
       prompt: prompt.value, aspectRatio: aspectRatio.value, images: images.value.map(item => item.dataUrl),
     });
-    results.value = [result, ...results.value].slice(0, imageTestLimits.history);
+    results.value = [result, ...results.value].slice(0, imageTestLimits.maxResults);
+    message.success(t('imageModels.testSuccess'));
   } catch (cause) { error.value = String(cause); }
   finally { generating.value = false; }
 }

@@ -80,7 +80,7 @@ Public License v3. See the LICENSE file for details.
           <div v-else class="saved-model-empty">{{ modelSearch.trim() ? t('common.searchEmpty') : t('settings.modelsEmpty') }}</div>
         </n-tab-pane>
         <n-tab-pane name="images" :tab="t('imageModels.tab')" display-directive="show">
-          <ImageModelsPanel ref="imagePanel" :config="configDraft.imageGeneration" :search="modelSearch" @save="(patch, silent) => emit('save', patch, silent)" />
+          <ImageModelsPanel ref="imagePanel" :config="configDraft.imageGeneration" :search="modelSearch" :before-test="beforeImageTest" @save="(patch, silent) => emit('save', patch, silent)" />
         </n-tab-pane>
       </n-tabs>
     </div>
@@ -320,6 +320,7 @@ import { TestModelConnection, FetchModelList } from '../../bindings/ally-dev/int
 const props = defineProps({
   show: { type: Boolean, default: false },
   configDraft: { type: Object, required: true },
+  beforeImageTest: { type: Function, default: null },
 });
 const emit = defineEmits(['save']);
 const message = useMessage();

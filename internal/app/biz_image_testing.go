@@ -6,8 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"ally-dev/internal/tools/imagegen"
@@ -19,8 +17,6 @@ type ImageModelTestRequest struct {
 	Images      []string `json:"images"`
 	AspectRatio string   `json:"aspectRatio"`
 }
-
-const imageModelTestHistoryLimit = 20
 
 func imageModelTestSession(id ModelIdentity) string {
 	identity, _ := json.Marshal([]string{strings.ToLower(strings.TrimSpace(id.ProviderName)), strings.ToLower(strings.TrimSpace(id.Model))})
@@ -78,31 +74,4 @@ func (a *App) TestImageModel(id ModelIdentity, input ImageModelTestRequest) (Gen
 		req.Images[i] = stored.Ref
 	}
 	return a.imageWithModel(ctx, cfg, sessionID, model, req)
-}
-
-// UUIDv7 file names sort chronologically. Read only enough metadata for a
-// bounded recent-results view; never load original image bytes for the list.
-func (a *App) ListImageModelTests(id ModelIdentity) ([]GeneratedImage, error) {
-	sessionID := imageModelTestSession(id)
-	dir := filepath.Join(a.imagesDir(), imageSessionKey(sessionID))
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return []GeneratedImage{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	results := make([]GeneratedImage, 0, imageModelTestHistoryLimit)
-	for i := len(entries) - 1; i >= 0 && len(results) < imageModelTestHistoryLimit; i-- {
-		entry := entries[i]
-		if !entry.Type().IsRegular() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-		var meta GeneratedImage
-		if err == nil && json.Unmarshal(data, &meta) == nil && !meta.SourceOnly && meta.SessionID == sessionID && meta.Ref == "image:"+imageSessionKey(sessionID)+"/"+strings.TrimSuffix(entry.Name(), ".json") {
-			results = append(results, meta)
-		}
-	}
-	return results, nil
 }
