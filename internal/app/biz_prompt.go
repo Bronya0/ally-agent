@@ -194,8 +194,8 @@ func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot 
 	b.WriteString("# Coding Guidelines\n\n" +
 		sharedCodingGuidelines() + "\n" +
 		"## Code Graph Maintenance\n\n" +
-		"- If the workspace has `CODEGRAPH.md` and your change alters architecture, module responsibilities, public workflows, major call/data flows, or hot-path files, update `CODEGRAPH.md` in the same task.\n" +
-		"- If the change is local and does not affect the project-level architecture or logic branches described there, leave `CODEGRAPH.md` unchanged.\n" +
+		"- If the workspace has `CODEGRAPH.md`, update affected navigation entries only when modules are added, entry points move, or responsibilities change. Do not create it during ordinary coding unless requested.\n" +
+		"- Local fixes, parameter changes, and new tests do not require graph updates. Keep the graph within 8192 UTF-8 bytes, using feature-to-file lookup, brief core flows, and module responsibilities; omit exhaustive file lists and implementation details.\n" +
 		"- Treat `CODEGRAPH.md` as a navigation aid that may be stale: verify current files before relying on it for edits.\n\n" +
 		"# Safety\n\n" +
 		sharedSafetyBoundaries() +

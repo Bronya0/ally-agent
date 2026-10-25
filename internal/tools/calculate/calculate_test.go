@@ -158,10 +158,7 @@ func TestEvaluateRejectsCommentsThatWouldEatTheExpression(t *testing.T) {
 	}
 }
 
-// +, -, * are int64 arithmetic: exact up to MaxInt64 and wrapping silently past
-// it. The tool schema states that range and the decimal escape hatch, so pin both
-// here; if the engine ever stops wrapping, the wording has to change with it.
-func TestEvaluateIntegerBoundaryMatchesSchemaWording(t *testing.T) {
+func TestEvaluateIntegerBoundary(t *testing.T) {
 	maxLiteral := strconv.FormatInt(math.MaxInt64, 10)
 
 	res, err := Evaluate(Request{Expression: maxLiteral})
@@ -172,12 +169,8 @@ func TestEvaluateIntegerBoundaryMatchesSchemaWording(t *testing.T) {
 		t.Errorf("Evaluate(%q) text = %q, want the exact bound", maxLiteral, res.Text)
 	}
 
-	res, err = Evaluate(Request{Expression: maxLiteral + " + 1"})
-	if err != nil {
-		t.Fatalf("overflow is silent today, not an error: %v", err)
-	}
-	if res.Text != "-9223372036854775808" {
-		t.Errorf("int64 overflow behavior changed: got %q, update the schema wording about the exact range", res.Text)
+	if _, err := Evaluate(Request{Expression: maxLiteral + " + 1"}); err == nil || !strings.Contains(err.Error(), "integer overflow") {
+		t.Fatalf("integer overflow must fail explicitly: %v", err)
 	}
 
 	res, err = Evaluate(Request{Expression: maxLiteral + " + 1.0"})
@@ -186,5 +179,57 @@ func TestEvaluateIntegerBoundaryMatchesSchemaWording(t *testing.T) {
 	}
 	if res.Text != "9.223372036854776e+18" {
 		t.Errorf("decimal escape hatch = %q, want 9.223372036854776e+18", res.Text)
+	}
+}
+
+func TestEvaluateRejectsIntegerOverflow(t *testing.T) {
+	for _, expression := range []string{
+		"9999999999 * 9999999999",
+		"let x = 9999999999; x * x",
+		"(9999999999 * 9999999999) - (9999999999 * 9999999999)",
+		"-9223372036854775807 - 2",
+		"(-9223372036854775807 - 1) * -1",
+		"-(-9223372036854775807 - 1)",
+		"abs(-9223372036854775807 - 1)",
+		"sum([9223372036854775807, 1])",
+		"sum([9223372036854775807, 1], #)",
+		"reduce([9223372036854775807, 1], #acc + #, 0)",
+		"map([9999999999], # * #)[0]",
+	} {
+		t.Run(expression, func(t *testing.T) {
+			if _, err := Evaluate(Request{Expression: expression}); err == nil || !strings.Contains(err.Error(), "integer overflow") {
+				t.Fatalf("expected overflow error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestEvaluateCheckedArithmeticPreservesValidExpressions(t *testing.T) {
+	for _, tc := range []struct{ expression, want string }{
+		{"9999999999.0 * 9999999999.0", "9.999999998e+19"},
+		{"3037000499 * 3037000499", "9223372030926249001"},
+		{"-9223372036854775807 - 1", "-9223372036854775808"},
+		{"9007199254740993 + 2", "9007199254740995"},
+		{"sqrt(4 * 4)", "4"},
+		{"pow(2 + 1, 2)", "9"},
+		{"abs(-3.5)", "3.5"},
+		{"sum([])", "0"},
+		{"sum([1.5, 2.5])", "4"},
+		{"sum([1, 2, 3], # * 2)", "12"},
+		{"sum([[1, 2], [3]], sum(#))", "6"},
+		{`"a" + "b"`, "ab"},
+		{"false ? 9999999999 * 9999999999 : 1", "1"},
+	} {
+		t.Run(tc.expression, func(t *testing.T) {
+			result, err := Evaluate(Request{Expression: tc.expression})
+			if err != nil || result.Text != tc.want {
+				t.Fatalf("got %q, %v; want %q", result.Text, err, tc.want)
+			}
+		})
+	}
+	for _, expression := range []string{"sum()", "sum(1)", "sum([1], #, 0)", "abs()", "abs(1, 2)"} {
+		if _, err := Evaluate(Request{Expression: expression}); err == nil {
+			t.Fatalf("invalid expression %q must fail", expression)
+		}
 	}
 }

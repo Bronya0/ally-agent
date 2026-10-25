@@ -341,14 +341,14 @@ type App struct {
 	gitDiffCancel context.CancelFunc
 	gitDiffRunID  int64
 
-	// updateMu guards the in-progress self-update download cancel handle so
-	// CancelUpdate can abort a running DownloadUpdate.
-	updateMu     sync.Mutex
-	updateCancel context.CancelFunc
-	// updateCancelPending records a cancel request that arrived before the
-	// download registered its handle, so DownloadUpdate aborts right after
-	// registering instead of proceeding with the download.
-	updateCancelPending bool
+	// updateMu protects operation ownership and the cancellable download.
+	// updateRunGate closes the race between registering a run and stopping all
+	// runs for an installation. It is never held during process shutdown.
+	updateRunGate         sync.RWMutex
+	updateMu              sync.Mutex
+	updateCancel          context.CancelFunc
+	updateOperation       string
+	updateCancelRequested bool
 
 	// gitStatusCache memoizes the last GetGitStatus result for a short TTL
 	// so that rapid consecutive calls (e.g. workspace switch + run:done)
@@ -653,10 +653,8 @@ type ConfigState struct {
 	// SkippedUpdates records release tags the user chose to skip. They are
 	// excluded from automatic download until the user clears them.
 	SkippedUpdates []string `json:"skippedUpdates,omitempty"`
-	// GitHubToken is an optional personal access token used to raise the
-	// GitHub API rate limit from 60/hour (anonymous) to 5000/hour when
-	// checking for updates and downloading release assets. Reading public
-	// repo releases needs no scope, so a no-scope classic token works.
+	// GitHubToken is retained for compatibility with existing configurations.
+	// Self-updates use Atom and release download URLs without API authentication.
 	GitHubToken string `json:"githubToken,omitempty"`
 	// BackgroundImage is the filename of the user-uploaded chat background
 	// image stored under ~/.ally_agent/. Empty means no custom background.
@@ -1668,6 +1666,11 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 // startChatWithConfig accepts a fully resolved config, including an API request's
 // model selection. Re-merging it would inherit empty fields from another model.
 func (a *App) startChatWithConfig(req ChatRequest, cfg ConfigState) (string, error) {
+	a.updateRunGate.RLock()
+	defer a.updateRunGate.RUnlock()
+	if a.updateBlocksRuns() {
+		return "", errors.New("an update is being installed; restart before starting another task")
+	}
 	cfg.APIFormat = normalizeAPIFormat(cfg.APIFormat)
 	if strings.TrimSpace(cfg.Model) == "" {
 		return "", errors.New("model is required")

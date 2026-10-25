@@ -1,120 +1,52 @@
-# Code Graph: ally-agent — 文件级功能速查
+# Code Graph: ally-agent — 功能导航
 
-> 一行一模块/文件的功能索引，供 AI 快速定位"某个功能在哪个文件"。规范类内容见 `AGENTS.md`。
+> 用于定位主要功能的文件与入口，可能过期，编辑前核实源码。模块新增、入口迁移或职责变化时更新；规范见 `AGENTS.md`，详细设计见 `docs/`。全文保持在 8 KiB 内。
 
 ## 功能 → 文件速查表
 
 | 想找什么 | 去哪里 |
 |---|---|
-| 聊天循环、工具分发（含 command 工具执行）、运行/会话编排 | `internal/app/app.go`（runChat / executeTool / chatTools） |
-| 模型流式适配、多 key 故障切换 | `internal/app/prov_model.go`（调度/多 key）+ `prov_adapter_*.go`（三协议适配器） |
-| 代理检测 / 代理 HTTP 客户端 | `internal/app/prov_proxy*.go`（含 darwin/scutil/windows 平台探测） |
-| 事件出口（后端 emit） | `internal/app/host_events.go`；前端路由在 `App.vue` `bindRuntimeEvents()` |
-| 高频事件的节流参数与节流原语（合并 / 采样 / 收尾三种语义，节流档位唯一来源 `eventCadenceTable`） | `internal/app/infra_stream.go`（`eventCadenceTable` 档位表 + `emitThrottle` + `textDeltaCoalescer`） |
-| 桌面生命周期、窗口几何、系统对话框 | `internal/app/host_desktop.go`（含窗口几何、桌面通知；统一退出钩子在后台服务清理前隐藏主窗口，原生/自定义关闭仍先等待前端保存） |
-| http_request / web_fetch 工具（含 SSRF 防护） | `internal/app/orch_http.go` |
-| 文件变更后校验 / 批次内校验规划 | `internal/app/orch_validation.go`（validateChangedFiles / planBatchValidation） |
-| 工具阶段调度（同 stage 并发、升序屏障、失败截断；同阶段写冲突检测） | `internal/app/orch_tool_stages.go` + `internal/app/orch_batch_policy.go` |
-| memory 工具（记忆列表/搜索） | `internal/app/orch_memory.go` + `internal/tools/memory/` |
-| git 状态查看（2 秒状态缓存 + 独立子仓库发现缓存；文件/命令/run 收尾失效，`git:changed` 合并刷新；等待/重试/多仓库共用 5 秒截止时间） | `internal/app/orch_git.go` + `internal/tools/git/` |
-| ChatGPT 官方 OAuth（动态注册 / PKCE / OIDC / 多账号 / 加密凭据 / 跨进程刷新锁 / 撤销） | `internal/chatgpt/`；桥接 `internal/app/biz_chatgpt.go` + `host_chatgpt.go`；订阅 Responses 兼容层 `prov_chatgpt.go`；设置与模型页共用 `ChatGPTAccounts.vue`；实现说明 `docs/chatgpt-auth.md` |
-| 模型列表拉取 | `internal/app/biz_modellist.go`（FetchModelList） |
-| AGENTS.md / CODEGRAPH.md 注入、背景图 | `internal/app/biz_project_context.go`（loadAgentsMd / loadCodeGraph） |
-| App 数据目录解析（config / sessions / histories / stats / memories / mcp.json / chatgpt 存储） | `internal/app/biz_config.go` 的 `(*App).AppDataDir`（来源是 `newAppState(dataDir)` 注入）；进程级 `appDataDir()` 只给 Bootstrap 与围栏 `pathRuntime` 用，运行期一律走 App，否则测试会读写真用户目录、并行用例互相串台 |
-| 系统提示词组装的数据来源（记忆索引 / USER.md 走 App） | `internal/app/biz_prompt.go` 的 `(*App).buildSystemPromptParts`（调用点 `biz_context.go`），已无包级单例 |
-| 临时工作区（创建/清理） | `internal/app/biz_temp_workspace.go` |
-| 内置技能清单 | `internal/app/biz_skills.go`（`builtinSkillEntries`） |
-| 错误日志轮转 | `internal/app/infra_log.go`（InitErrorLogger） |
-| 命令环境 / 登录 shell PATH 探测 | `internal/app/infra_shell_env.go`（commandEnvironment / warmCommandEnvironment） |
-| 在终端打开工作区路径 | `internal/app/host_terminal*.go` |
-| 内置工具 schema 定义与按名查找 | `internal/tools/shared/builtins.go`（`Builtins` / `BuiltinSchema`） |
-| 某工具的执行逻辑 | `internal/app/orch_<name>.go`（编排）+ `internal/tools/<name>/`（纯算法） |
-| 路径风格、工作区身份与展示拼接 | 前端 `utils/workspacePath.mjs`：内部 `pathStyle` 唯一判 Windows/UNC/POSIX，`workspaceHistoryDedupeKey` / `sameWorkspacePath` 仅做身份比较，`joinWorkspacePath` 保留大小写用于资源树复制、技能目录提示和附件提示路径；后端 `internal/tools/pathutil` 负责实际文件系统路径解析与边界校验，展示函数不作为授权边界 |
-| 截屏 / 窗口枚举（10 秒上限、运行取消；Windows 窗口捕获在可终止子进程中执行；原始区域尺寸与模型图片尺寸分开） | `internal/app/orch_screenshot.go` + `internal/tools/screenshot/`；助手子进程入口 `main_screenshot.go`（桌面 / server 启动前分流） |
-| edit 读写契约 / 原子写 / 冲突合并 | `orch_batch_policy.go`（`planLocalEditBatch`）→ `orch_edit.go` → `tools/edit`、`tools/read` |
-| 命令安全拦截与路径校验（含密钥/凭据禁读：`pathutil.SensitiveReadReason`，三平台清单，command / read / grep 三条入口共用） | `orch_fence.go` + `orch_read.go` + `orch_grep.go` + `internal/tools/command`（`DisclosingPathOperands`：只是用密钥不算读）+ `internal/tools/pathutil` |
-| 命令安全围栏 + 命令沙箱（沙箱**当前未接入**：`internal/sandbox` 的 `attached` 开关关着，三个平台都只走围栏；围栏是单一入口，边界归属在 `kernelOwnsBoundary` 一处判定；沙箱本体原样保留，改一个常量即可接回） | `orch_fence.go`（`checkCommandSafetyAtCwd` 唯一入口、受保护位置清单、两形态路径复判）+ `internal/app/orch_sandbox.go`（`sandboxSpec` / `wrapSandboxedCommand` / `annotateSandboxDeniedWrite` / `GetSandboxStatus` / `kernelOwnsBoundary` ＝边界归属的唯一判据；create·edit·delete·rename 的落盘也在这里经 mv/rm/mkdir/ln 包裹）+ `internal/sandbox/`（`attached` / `Attached` 接入开关、`ResolvedMode` 平台策略、`AllowsWrite` 可写判定与 SBPL / bwrap profile，不依赖 App）+ 设置页 `SettingsModal.vue` 的围栏机制说明（不再查本机状态）；command 与 service 两条执行路径共用 |
-| 文件基础读写与删除防护（含本地 `delete` 与 `remote_delete_path` 共用的 `path`/`paths` 折叠、条数上限、重复与包含判定；单条路径的落盘判定仍在各自信任域） | `internal/app/orch_file_ops.go` |
-| 受保护路径判定（VCS 元数据 / 路径别名归一） | `internal/tools/pathutil/pathutil.go`（`CanonicalPath` / `VCSMetadataReason`；本地写/删/命令与远端写/命令共用，远端只判得了字面那半） |
-| 安全围栏规则速查（圈的定义、本地/远端判定顺序与具体路径例子、已知缺口、改一条规则要同步的位置） | `docs/safety-fence.md` |
-| 会话/历史持久化（坏数据协议修复在 `prov_history_hygiene.go`；`sessionHistorySnapshot` 合并冷加载，锁外解压，按会话 ticket/revision 发布；`savedHistoryBreakdown` 按版本复用统计） | `internal/app/biz_sessions.go` |
-| 会话附加工作区（圈的扩展面）的活记录：`StartChat` 播种 + 面板 `SetSessionExtraRoots` 即时上报 + `runChat` 每批重算 roots，使运行中增删当轮生效 | `internal/app/biz_session_roots.go` |
-| 系统提示词组装（核心规则 / 技能名片 / 记忆索引 / 用户档案 USER.md / AGENTS.md / 代码图谱 / 项目教训 LESSONS.md / 自定义提示词） | `internal/app/biz_prompt.go` |
-| 对话统计行末尾「记忆」（提炼当前会话长期结论，带日期合并至项目根 AGENTS.md；普通前台 run，后续会话沿用现有项目指令加载） | `MessageRoundStats.vue` → `ChatMessages.vue` → `App.vue`（`handleProjectMemory` / `PROJECT_MEMORY_PROMPT`）；`/note` 仍保存全局记忆 |
-| 请求消息与上下文 Token 核算（口径：请求前缀 + provider 实测锚点；会话前缀快照的冻结与压缩后刷新收口在 `refreshSessionPromptPrefix`） | `internal/app/biz_context.go`（`sessionPrefixBreakdown` / `frozenPrefixTokenStats`（冻结字节的 Token 明细缓存，压缩/释放清理）/ `contextAnchor` / `finalizeSessionBreakdown` / `sessionSystemPromptParts`） |
-| 输入栏页脚统计（Git/用量/上下文分别发布，初始化与聚焦/文件树解耦；快照按 Tab + session + workspace 校验） | `frontend/src/App.vue`（`refreshFooterStats` / `prepareFooterStatsForTarget`）+ `ComposerInfoBar.vue` |
-| 计划工具（`steps` / `finish` 位置状态机：报「完成到某一步」、报最后一步即收尾、状态由位置推导、标题即身份、上限收口单一写入点、结果块带状态与进度、run 收尾对账） | `biz_context.go`（`handlePlan` / `classifyPlanRequest` / `reportPlanProgress` / `applyPlanPosition` / `planCheckMarker`）+ `infra_result.go`（`renderPlanResultForModel`）+ `orch_batch_policy.go`（`planBatchWriteSource` / `toolDidPlanWork`）；前端 `planPanel.mjs` / `toolVerb.mjs` |
-| 配置合并 / key 池管理 / 最近使用模型身份展开（`expandLastUsedModel`；配置只存 models[] + lastUsedModel，13 个模型字段是请求级派生值） | `internal/app/biz_config.go`（事务入口、请求覆盖）+ `biz_config_state.go`（深拷贝、加载/设置语义与持久配置规范化；所有运行期写入经 `commitConfig` 串行落盘成功后发布） |
-| 技能发现与加载（用户/项目 `.agents`、`.claude`、`.codex/skills`；请求工作区路由、项目优先、同目录提前去重、有界 YAML 头部解析、冷扫描合并与失效版本校验） | `internal/app/biz_skills.go` |
-| 启动加载（工作区先就绪；技能/会话/插件等空闲加载，上下文延后、更新延迟 10 秒；维护任务延迟清理并修复会话索引，锁外扫描、按版本提交并通知前端；`ListSessionIndex` 仅读索引，`ListSessions` 保留显式恢复） | `internal/app/biz_lifecycle.go` + `biz_sessions.go` + `frontend/src/App.vue` + `utils/startupTasks.mjs` |
-| 新建技能（元数据 + SKILL.md 正文写入 `.agents/skills`：用户级 `~/` 或项目级 `<工作区>`；重名/非法名拒绝，保存与加载共用文件大小上限，写完清列表缓存） | `internal/app/biz_skills.go`（`SaveSkill`） |
-| MCP 客户端生命周期 | `internal/app/biz_mcp.go`（首次请求等待工具发现：`waitForSessionMcp`，最多 30s、可取消，经 `run:mcp-wait` 显示状态与服务名单；配置加载失败保留有效快照；连接生命周期独立于启动/调用超时；stdio 环境走白名单 `mcpStdioEnv`；http/sse 共用 `allowPrivateNetwork` 开关） |
-| MCP / 模型配置导入导出（BOM 兼容、已知字段类型校验；MCP 原文保留扩展字段、仅回写已改字段，参数/环境值无损往返；模型兼容版本包/无版本包/数组并保留视觉三态） | `frontend/src/utils/mcpConfigIO.mjs` + `modelConfigIO.mjs` + `configJSON.mjs`；`McpPanel.vue` / `ModelsPanel.vue`；后端 `biz_mcp.go`（`normalizeMcpConfigJSON`） |
-| 计划任务 / 后台服务 / 命令超时收编（LLM 任务记模型身份；服务启动/收编记主工作区，模型 list/read/stop 按归属隔离，同工作区跨会话共享） | `orch_scheduler.go` / `orch_services.go`（promoteTimedOutCommand）+ `TaskCenterPanel.vue`；侧栏默认全部、Tab 底部默认当前，可切范围；`utils/taskWorkspace.mjs` + `utils/workspacePath.mjs` 共用归属筛选与路径比较（保留 POSIX 字面反斜杠及 UNC 双分隔符前缀） |
-| 远程 SSH 工具（连接、命令、覆盖不弹逐次审批，集群登记保留授权；主机指纹不一致直接换记录重连；写入与命令同过 `.git` 元数据围栏） | `orch_remote.go` / `orch_ssh_cluster.go`（按解析端点缓存并区分认证模式）+ `internal/tools/sshclient/`（纯 Go 传输、密钥认证、known_hosts 固化与不一致时替换） |
-| SSH 集群清单与工作区授权（`ssh_clusters.json` v2 按稳定 ID 落盘，旧昵称授权加载即迁移；昵称可编辑且忽略大小写唯一，导入按昵称更新时保留 ID；别名/端点两种写法、默认拒绝；分组是纯归类，空白/历史节点统一归「未分组」，集群页与授权弹窗共用一套分组与搜索口径） | `internal/app/biz_ssh_cluster.go` + `orch_ssh_cluster.go` + `SSHClusterPanel.vue` + `SshClusterAuthModal.vue` + `utils/sshClusterGroups.mjs` + `ComposerInfoBar.vue` |
-| 远端 Python helper（普通工具 JSON / 文件传输 tar 两种模式；共享路径、VCS、文本转换和结果封装） | `internal/app/remote_helper.py`（由 `orch_remote.go` 通过 `go:embed` 嵌入） |
-| 知识库模式（KB 提示词 / sources/ 只读） | `internal/app/orch_kb.go` + `ModeSider.vue` + `App.vue` |
-| 无头服务（Wails server 标签、参数/JSON 配置、统一 API + SSE/轮询、共享启动关闭/数据目录锁） | `main_server.go` + `host_server.go` + `biz_server_options.go` + `biz_lifecycle.go`；使用说明 `docs/headless.md` |
-| 对外本地 HTTP API 服务（启用状态持久化 / 单次 AI / 会话与问答 / 按请求选模型；插件复用同一套接口） | `internal/app/biz_api.go`；契约 `docs/api.md`；宿主启动恢复在 `host_desktop.go` |
-| 应用自更新 | `internal/app/biz_update.go` |
-| 内置更新日志（首启弹窗 + 设置 → 版本亮点；vite 把 release 事件正文注入为 `__ALLY_RELEASE_NOTES__`，本地未注入时显示空态） | `frontend/src/utils/releaseNotes.mjs` + `components/ReleaseNotesModal.vue` + `components/SettingsModal.vue` + `App.vue` |
-| 菜单页生命周期 / 缓存（设置、技能、MCP、模型、SSH、插件管理、统计切走卸载；Agent/KB 工作台保留；游戏保留对局状态、隐藏时卸载内层 DOM；插件默认缓存、`keepAlive:false` 切走卸载；资源管理器离开工作区页卸载、仅切 Tab 则隐藏保留） | `frontend/src/App.vue`（`workspacePageActive` / `mountedPlugins` / 页面模板）+ `games/GamePanel.vue` + `components/WorkspaceExplorer.vue` |
-| 插件系统（清单校验 / 安装 / 导出 / 删除 / 启停 / 插件存储 / HTTP 白名单代理） | `internal/app/orch_plugin.go`（编排，含 `pluginMu` 串行化）+ `internal/tools/plugin/`（纯算法：清单与包校验、主机白名单、包内路径解析、体积复验 `VerifyContentSizes`）；契约文档 `docs/plugin-system.md` |
-| 插件资源服务（`/plugins/<id>/<entry>`，与页面同源） | `internal/app/orch_plugin_assets.go`（中间件）+ `main.go`（`Assets.Middleware` 接线，唯一允许碰 Wails 的地方） |
-| 插件相关的原生对话框（选包 / 导出目标） | `internal/app/host_plugin_dialogs.go` |
-| 插件页加载与 `host` 构造（按权限现构造、未声明的能力不存在） | `frontend/src/utils/pluginHost.mjs`；路径守门 `pluginPath.mjs`；主题 token 快照 `pluginTheme.mjs` |
-| 插件管理页（导入/导出/启停/删除 + 权限摘要与拒绝记录）与插件页容器 | `PluginsPanel.vue` / `PluginPage.vue`（挂载点、shown/hidden 事件、keepAlive 由 `App.vue` 的 `mountedPlugins` 表达） |
-| 前端唯一主组件与全局状态 | `frontend/src/App.vue` |
-| 展示活动状态、共享计时与隐藏 Tab 暂停（不影响后台 run；等待/子代理/压缩共用单一定时器） | `frontend/src/composables/presentation.mjs` + `utils/displayClock.mjs`；`ChatMessages.vue` 提供 Tab 活动状态，`StreamingMarkdownBody.vue` / `ToolCallCard.vue` 暂停展示并在恢复时追平 |
-| HTML 工具结果（单 iframe 原地全屏、共享本地 ECharts 资产、离线导出内联图表库） | `frontend/src/components/HtmlRenderCard.vue` + `utils/htmlRender.mjs`；资源地址兼容 Windows HTTP 与 macOS `wails://`，保留 opaque sandbox |
-| 技能 / MCP / 模型 / SSH 集群管理内联页（列表卡统一用 `.ally-row-card` 与 `.ally-row-*`，见 `style.css`；新增列表页别再各写一套卡面） | `SkillsPanel.vue` / `McpPanel.vue` / `ModelsPanel.vue` / `SSHClusterPanel.vue` |
-| 文件树 / 编辑器 UI | `WorkspaceExplorer.vue` + `biz_workspace_editor.go` |
-| 外观主题与明暗配色（中性底色/正文 + 主题强调色；Naive 控件与 CSS 同源） | `frontend/src/style.css`（唯一色板）+ `utils/theme.mjs`（偏好持久化）+ `utils/naiveTheme.mjs`（读取 CSS 实色供 Naive 计算） |
-| 欢迎页形象切换（大眼睛 / 蓝色大肥鱼 / 自定义图片与 GIF，本地偏好即时生效） | `frontend/src/composables/avatarAppearance.mjs`（共享状态、上传校验、单张有界图片持久化）+ `components/AllyAvatar.vue`（展示，离屏/隐藏卸载 GIF）+ `components/SettingsModal.vue`（选择、上传与署名）；鲸鱼娘素材及独立许可在 `assets/avatars/whale/` |
-| 工具卡动词与展示属性 | `frontend/src/utils/toolVerb.mjs`（TOOL_VERBS / ACTION_VERBS 表、`isMcpToolName` 的 mcp__ 前缀判定）+ `frontend/src/utils/toolKind.mjs`（名字→kind、kind→展示属性（类型标签/耗时角标/默认折叠/正体固定高度）的唯一一张表，加工具只改这里） |
-| 工具结果的卡片网格（彩色卡、一行多个自动换行、单条铺满一行、空态/标题行/条数上限；ssh_cluster 服务器清单、service 进程清单、scheduled_task 任务清单，以及 create / start / 授权这类单条结果都用它展示） | `frontend/src/components/CardGrid.vue` + `ToolCallCard.vue`（只负责渲染 msg.cardGrid）+ `composables/useToolEvents.mjs`（`setCardGrid` 与行→条目映射，结果按形状分支） + `utils/toolPreview.mjs`（`sshServerRows` / `sshClusterNodeRow` / `serviceListRows` / `serviceRow` / `scheduledTaskRows` / `scheduledTaskRow`）+ `utils/taskStatus.mjs`（状态文案 key 与色调，任务中心共用） |
-| 思考回放（reasoning_content / reasoning / reasoning_text / signature / encrypted_content） | `internal/app/prov_reasoning.go` + 三适配器（`prov_adapter_*.go`）；Responses 原生 output 顺序、phase 与普通回答回放在 `prov_responses_history.go`；受 OS 保护的完整模型历史（不含图片负载）随现有历史文件原子保存，见 `prov_history_storage.go` |
-| Run 模型调用用量汇总 / 可选性能诊断 | `prov_run_usage.go`（主 Run、压缩、同步子代理与已知失败 Usage 同源汇总）；`prov_perf.go`（默认关闭，`ALLY_PERF_DIAGNOSTICS` 指定 JSONL 路径，记录 Responses 时序、重试和工具元数据，不记内容/凭据） |
-| 提示词缓存（断点位置 / 命中与写入口径；保留时长不发送，用供应商默认） | `prov_model.go`（三适配器断点与 usage）+ `biz_stats.go`（落库与汇总）；身份：会话/子代理 lane 用 `responsesPromptCacheKey`，回放台账用 `reasoningScope` |
-| 请求前缀冻结（发前比对上一轮的头部与历史段指纹，各一个哈希，只记录不拦请求；基线随读缓存一起失效） | `internal/app/biz_context_lock.go`（`noteRequestPrefix`，主对话泳道在 `app.go` 调用）+ 前端内联提示 `frontend/src/utils/contextDriftNotice.mjs` |
-| 模型输入能力（视觉）降级 / 图片占位 | `internal/app/biz_context.go`（`buildMessages` 单一收口） + 目录字段 `visionCapable`（`frontend/src/data/modelCatalog.json`，由 `scripts/generate-model-catalog.mjs` 生成） |
-| 流终止判定（finish_reason / `[DONE]` 哨兵）与 tool_calls 增量归并 | `internal/app/prov_model.go`（`sseDoneWatcher`、`toolCallAccumulator`） |
-| 工具 schema 修补（$ref 内联 / 补 type / 矛盾类型修复 / 顶层 oneOf·anyOf·allOf 展平供 Anthropic） | `internal/tools/schemautil/`（`Map` / `FlattenTopLevelComposites`） |
-| 内置工具入参按 schema 校验（闸门，报 `E_BAD_ARGS`） | `internal/tools/schemautil/validate.go`（`ValidateArgs`）+ `app.go` 的 `decodeJSON` |
-| 工具调用 ID 规范化、参数解码、截断参数标记 | `internal/tools/toolcall/` |
+| 聊天循环、工具分发、运行取消 | `internal/app/app.go`：`StartChat` / `runChat` / `executeTool` |
+| 模型协议、多 key、流式响应 | `internal/app/prov_model.go` + `internal/app/prov_adapter_*.go` |
+| 思考与 Responses 原生回放、历史修复 | `internal/app/prov_reasoning.go` / `prov_responses_history.go` / `prov_history_hygiene.go` |
+| 上下文核算、前缀冻结、压缩 | `internal/app/biz_context.go` / `biz_context_lock.go` / `biz_compact.go` / `biz_compact_fast.go`；`docs/agent-context.md` |
+| 提示词、项目指令、代码地图、教训 | `internal/app/biz_prompt.go` + `biz_project_context.go`；内置地图技能 `internal/builtin_skills/skills/codegraph/SKILL.md` |
+| 配置事务、模型身份、数据目录 | `internal/app/biz_config.go`：`commitConfig` / `AppDataDir`；`biz_config_state.go` |
+| 会话存储、索引、启动加载 | `internal/app/biz_sessions.go` + `biz_lifecycle.go`；前端 `frontend/src/utils/startupTasks.mjs` |
+| 工具阶段调度、写冲突、变更校验 | `internal/app/orch_tool_stages.go` / `orch_batch_policy.go` / `orch_validation.go` |
+| 文件读写、版本校验、搜索 | `internal/app/orch_read.go` / `orch_edit.go` / `orch_grep.go` / `orch_file_ops.go` + `internal/tools/` 对应目录 |
+| 命令与路径安全、沙箱接线 | `internal/app/orch_fence.go` / `orch_sandbox.go` + `internal/tools/pathutil/` / `internal/tools/command/` + `internal/sandbox/`；`docs/safety-fence.md` |
+| 内置工具 schema、入参校验、调用 ID | `internal/tools/shared/builtins.go` + `internal/tools/schemautil/` / `internal/tools/toolcall/` |
+| 子代理、计划任务、后台服务 | `internal/app/orch_subagent.go` / `orch_scheduler.go` / `orch_services.go`；计划工具在 `biz_context.go` |
+| HTTP 请求、网页、截图 | `internal/app/orch_http.go` / `orch_screenshot.go`；截图子进程入口 `main_screenshot.go` |
+| SSH 清单、授权、远端工具 | `internal/app/biz_ssh_cluster.go` / `orch_ssh_cluster.go` / `orch_remote*.go` / `remote_helper.py` + `internal/tools/sshclient/` |
+| 技能、记忆、MCP | `internal/app/biz_skills.go` / `orch_memory.go` / `biz_mcp.go`；内置技能在 `internal/builtin_skills/skills/` |
+| ChatGPT 登录与订阅模型 | `internal/chatgpt/` + `internal/app/biz_chatgpt.go` / `host_chatgpt.go` / `prov_chatgpt.go`；`docs/chatgpt-auth.md` |
+| 插件安装、资源、页面 API | `internal/app/orch_plugin*.go` + `internal/tools/plugin/` + `frontend/src/utils/pluginHost.mjs`；`docs/plugin-system.md` |
+| 桌面生命周期、窗口、事件出口 | `internal/app/host_desktop.go` / `host_events.go`；流式节流 `infra_stream.go` |
+| 无头服务、本地 HTTP API | `main_server.go` + `internal/app/host_server.go` / `biz_server_options.go` / `biz_api.go`；`docs/headless.md` / `docs/api.md` |
+| 自更新、完整性、原子替换 | `internal/app/biz_update.go` + `biz_update_guard.go` / `biz_update_integrity.go` / `biz_update_files.go` / `biz_update_validate.go` / `host_update_bundle_*.go` |
+| 前端工作区、Tab、会话与事件路由 | `frontend/src/App.vue`：`repointTabSession` / `bindRuntimeEvents`；`frontend/src/utils/workspacePath.mjs` / `sessionStore.mjs` |
+| 消息、工具卡、流式 Markdown | `frontend/src/components/ChatMessages.vue` / `ToolCallCard.vue` / `StreamingMarkdownBody.vue` + `frontend/src/composables/useToolEvents.mjs` |
+| 工具状态、卡片数据、计划展示 | `frontend/src/utils/toolKind.mjs` / `toolEventState.mjs` / `toolPreview.mjs` / `planPanel.mjs` + `frontend/src/components/CardGrid.vue` |
+| 输入栏统计、文件树、设置与管理页 | `frontend/src/components/ComposerInfoBar.vue` / `WorkspaceExplorer.vue` / `SettingsModal.vue`；技能、MCP、模型、SSH、插件各有 Panel 组件 |
+| 主题、动效、国际化、本地历史 | `frontend/src/style.css` / `i18n.mjs`；`frontend/src/utils/theme.mjs` / `naiveTheme.mjs` / `promptHistoryStore.mjs`；动效在 `frontend/src/composables/` |
 
 ## 核心调用流
 
-`main()` → `NewApp()` → Wails 装配 → 前端 `StartChat()` → `app.runChat()`: `buildMessages()`（biz_context）→ `buildToolsWithMcp()`（biz_mcp）→ `streamModelResponse()`（prov_model）→ 流式事件经 `host_events` 到前端 → 工具分发 `executeTool()`（内置工具先按自己的 schema 校验入参，见 `schemautil.ValidateArgs`；`orch_tool_stages.go` 为主/子代理共用调度器：内置工具可选 `stage` 默认 0、同阶段有界并发、阶段升序执行、任一失败阻断后续阶段且不回滚，MCP 保持 stage 0 且参数不变；`orch_batch_policy.go` 检测同阶段写冲突，阶段写入收尾后由 `orch_validation.go` 合并校验）→ 结果回填循环 → `saveHistory()`（biz_sessions）。子代理/调度任务走 `executeDelegate()`（orch_subagent）。
+- 桌面入口 `main.go` 装配 `App` 与 Wails；无头入口 `main_server.go` 复用业务生命周期与 API。
+- 前端 `App.vue` → `StartChat` / `runChat`（`internal/app/app.go`）→ 消息与上下文（`biz_context.go`）、MCP 工具（`biz_mcp.go`）→ `streamModelResponse`（`prov_model.go`）→ 对应协议适配器。
+- 模型工具调用 → 阶段调度（`orch_tool_stages.go`）→ `executeTool` → `orch_*` 编排与 `internal/tools/` 算法 → 工具结果回填，继续模型循环 → `saveHistory`（`biz_sessions.go`）。
+- UI 事件经 `host_events.go` 的 `App.emit` 发出，`App.vue` 路由到会话与消息展示；流式节流在 `infra_stream.go`。
+- 上下文压缩在 `biz_compact.go` / `biz_compact_fast.go`；前缀快照的冻结与刷新在 `biz_context.go`，缓存说明见 `docs/agent-prompt-cache.md`。
 
-每个 step 开头汇总上下文用量并决定是否 auto-compact：`breakdownAcc.update()`（消息估算）+ `sessionPrefixBreakdown()`（系统提示词 / 工作区地图）+ `finalizeSessionBreakdown()`（provider 实测锚点）→ `bd.Total` 与阈值比较。footer 与自动压缩读同一个数。阈值触发时走 `compactRunHistory(reason)`（`autoCompactMethod` 默认 `summary`：LLM 总结，整段历史换成一条总结 + 钉住的 plan 快照；可选 `recent`：复用本地快速压缩，保留最近 4 个完整工具回合及对话正文）：`threshold` 为阈值触发（失败不致命，但连续失败 3 次即熔断：`maxConsecutiveCompactFailures` / `autoCompactAllowed`，成功即复位，计数在 `compactFailures`），`overflow` 为请求被判定上下文超长后的强制压缩并重试（`llmErrorKindContextTooLong`）；压缩也失败才报出可操作提示。总结调用是流式的（`streamModelTextWithUsage` → `compact:delta` 事件，前端按普通对话渲染思考与总结正文），完成后前端清空对话只留总结。压缩成功是这个前缀唯一的刷新点：`compactHistory` 丢掉会话的系统提示词 / 工作区地图 / 工具 schema 快照（`refreshSessionPromptPrefix`），下一次请求以磁盘现状重建，会话中途写入的 AGENTS.md / CODEGRAPH.md / LESSONS.md / USER.md 因此立即生效；其它时刻这些快照一律冻结以保 provider 缓存。设置 → 通用的“上下文自动压缩方式”可选全文总结（默认）或保留最近内容，自动保存后对新 run 生效；真正超窗恢复始终用 LLM 全文总结兜底。手动 `/compact-fast` 与上下文弹窗的“压缩上下文(快速)”共用 `FastCompactSession`（`biz_compact_fast.go`）：无模型调用，保留最近 4 个完整工具回合及后续消息，旧工具调用参数清空为 `{}`（保留调用 ID/工具名，Responses 原生回放同步清理），旧工具输出/思考/AI 正文仅留有界摘录，旧 AI 正文总预算 8192 估算 Token、超额从最早正文清除；不足 4 轮工具时回退保留最近 4 条完整回复，保留用户提问与最新 plan；`prov_compact_fast.go` 仅保留尾部签名/加密回放，清掉测量锚点与 read 缓存，冻结系统前缀保持不变。快速压缩会使首个改写点之后的 provider 缓存失效，因此默认自动策略仍为全文总结，选择保留最近内容后才会按阈值运行；自动快速压缩没有可裁剪内容或同口径消息 Token 估算未下降时，用裁剪前完整历史回退到全文总结，并沿用连续失败 3 次熔断；手动快速压缩仍只做本地裁剪，无收益时提示跳过。工具卡按 call id 更新，旧 AI 正文按原文及倒数同文次数同步裁剪（无归档/回查）；Responses 原生正文同步改写、保留 phase/call id，删空回复后重编号近期回放。快速压缩后的历史沿用受保护存储保留近期原文；安全存储不可用时，文本回退仍保留旧工具摘录。
+## 模块职责
 
-## 后端分层架构
-
-### `internal/app/`
-- `app.go`: Agent 编排核心（聊天循环 runChat、工具分发 executeTool、内建工具 chatTools、生命周期 StartChat/CancelRun；command 工具执行也在此分发）。
-- `prov_*`: 模型与网络适配（协议脏代码唯一聚集区）。`prov_model.go`（多 key 池调度、流式归并、错误分类；协议厂商表：思考档位 `reasoningEffortFamilies`（按厂商品牌匹配、不按型号版本；OpenAI 行与 Claude 的 adaptive 行都读版本号比较，不写型号清单）、关思考拼写 `reasoningStopThinkingFamilies`、缓存路由键 `promptCacheKeyVendors`、输出上限字段 `maxCompletionTokenVendors`——每个字段「该不该发、发什么」的唯一收口（`reasoningWireForAdapter` 组装；关不掉思考的模型 `off` 退到该家档位字段的最低档，文档说无效/没有该字段的则一个字段都不发），加上 API 格式归一化与端点/token 参数默认值；工具声明与工具调用 ID 的纯规则已下沉到 `internal/tools/schemautil`、`internal/tools/toolcall`）；`prov_adapter_chat.go` / `prov_adapter_responses.go` / `prov_adapter_anthropic.go`（三家协议独立适配器：请求构造、工具/消息转换、流解析与 Usage 提取；Anthropic 的思考形态按端点家族表 `anthropicThinkingFamilies` 分派（Claude 的 adaptive 形态按版本号 ≥4.6 判：4.6 起支持、4.7 起只能自适应），「关闭思考」按端点落（DeepSeek 的 Messages 线用顶层 `reasoning.effort`，SDK 无此字段，由请求体 JSON 选项补），缓存断点的顶层标记只发给文档如此声明的端点）；`prov_reasoning.go`（思考回放台账与请求体改写；台账 scope 按 run 隔离，见 `reasoningScope`）；`prov_history_hygiene.go`（历史消息协议卫生：内存/磁盘双 profile、tool_call/tool_result 配对修复、悬空调用剥离）；`prov_proxy*.go`（代理探测、SSRF 守卫客户端与模型请求的流空闲超时 `streamIdleTimeoutTransport`）。
-- `host_*`: 桌面与宿主桥（唯一允许 import Wails）。`host_desktop.go`（桌面桥与对话框、窗口位置持久化、桌面通知音）；`host_events.go`（emit 统一出口）；`host_network.go`（网络事件环与订阅分发）；`host_terminal*.go`（在终端打开工作区路径）；另有按平台分文件：`host_clipboard_windows.go`/`_other.go`、`host_filemanager_windows.go`/`_other.go`、`host_process_windows.go`/`_other.go`、`host_update_relaunch_darwin.go`/`_other.go`。
-- `infra_*`: 共享基础设施。`infra_bridges.go`（类型别名与原子写）；`infra_result.go`（结果信封与模型端压缩）；`infra_stream.go`（流式节流：档位表 `eventCadenceTable` + 合并器）；`infra_output_encoding.go`（控制台编码与 UTF-8/GBK 转码）；`infra_log.go`（错误日志按日轮转）；`infra_shell_env.go`（登录 shell PATH 探测与命令环境组装）。
-- `biz_*`: 独立业务模块。`biz_config.go`（配置）；`biz_context.go`（上下文与 Token 核算）；`biz_compact_fast.go` / `prov_compact_fast.go`（显式本地快速压缩与尾部回放保留）；`biz_compact.go`（完整历史压缩：手动/自动/溢出恢复三入口共用唯一一档 LLM 总结、阈值与超时归一、阈值档连续失败熔断（`maxConsecutiveCompactFailures`）、总结流式产出与 plan 快照钉入、`CompactSession`（带调用方模型 overlay，无 overlay 时回落会话冻结记录，见 `compactSessionConfig`）/`CancelCompaction`）；`biz_prompt.go`（系统提示词组装：各段原料的读取与预算、用户档案与项目教训的注入、提示词缓存）；`biz_sessions.go`（会话持久化与清理）；`biz_workspace*.go`（文件列表/搜索/编辑器/文件信息，fileinfo 按平台分文件）；`biz_ssh_cluster.go`（SSH 集群清单落盘、端点/别名解析、工作区白名单与连接测试；写盘后 emit `ssh:clusters-changed`）；`biz_skills.go`（技能发现/加载 + 内置清单 + 新建技能落盘）；`biz_mcp.go`（MCP 生命周期）；`biz_api.go`（本地 HTTP API）；`biz_modellist.go`（拉取模型列表）；`biz_project_context.go`（AGENTS.md / CODEGRAPH.md 读取注入、背景图管理）；`biz_temp_workspace.go`（临时工作区创建与退出清理）；`biz_update.go`（自更新）；`biz_stats.go`（Token 统计）。
-- `orch_*`: 工具编排（绑定纯算法到 `*App` 状态）。`orch_edit.go`（编辑：批次规划与原子提交；需重读的失败仅为通过 read 围栏、原始/解码文本及完整 read 预览均不超过 8 KiB 的文件附带当前版本快照，经 `infra_result.go` 仅追加到模型工具结果，不序列化至前端）；`orch_fence.go`（安全围栏：命令拦截、受保护位置清单、凭据禁读、两形态路径复判；原 orch_command_safety.go）；`orch_tool_stages.go`（共享阶段调度、失败屏障、命令退出与批量部分失败判定）+ `orch_batch_policy.go`（同阶段写冲突检测与编辑批次规划）；`orch_validation.go`（文件变更后校验与批次校验规划）；`orch_file_ops.go`（文件读写删 + 两个删除工具共用的候选列表与重复/包含判定；拖入目录复制按源/目标真实路径拒绝复制进自身，覆盖父目录链接别名）；`orch_read.go`（读取与会话级读缓存：图片、去重哈希，本地/远端读共用）；`orch_grep.go`（ripgrep 搜索）；`orch_http.go`（http_request / web_fetch 编排）；`orch_git.go`（git 状态）；`orch_memory.go`（memory 工具编排）；`orch_remote*.go`（SSH 远端操作：读写/编辑/删除/跑命令共用一个解析并授权入口、工作区白名单隔离（逐次连接/命令/覆盖不再审批，集群登记保留授权；主机指纹不一致时不经询问直接更新记录并重连）；远端读接入会话级读缓存）；`orch_ssh_cluster.go`（模型侧 `ssh_cluster` 工具：列清单、登记新节点、对已登记节点只申请授权不覆盖；以及从清单读出的内存凭据缓存）；`orch_scheduler.go`（计划任务）；`orch_services.go`（后台服务；停止/自然退出共用完成记录淘汰，最多保留 10 条，延迟输出收尾不重新登记已淘汰项）；`orch_subagent.go`（子代理：lane 稳定的缓存路由 + run 局部回放 scope）；`orch_kb.go`（知识库 sources/ 读写保护）。
-
-### `internal/tools/`（纯算法层，绝不依赖 `*App`/`ConfigState`）
-- `calculate/`（数学求值）· `command/`（Bash AST 安全解析与目标提取）· `edit/`（LCS diff 与范围替换）· `git/`（porcelain 解析）· `grep/`（ripgrep 封装）· `memory/`（记忆条目存储与运行时接口）· `pathutil/`（路径安全解析）· `read/`（文本读取与版本计算）· `scheduler/`（调度表达式解析）· `schemautil/`（工具 JSON-Schema 修补：$ref 内联、属性 type 推断、Anthropic 顶层 oneOf/anyOf/allOf 展平；另带 `ValidateArgs`——内置工具入参的 schema 闸门）· `service/`（rolling buffer 与长进程判定）· `shared/`（CodedError 与内置 schema）· `sshclient/`（纯 Go SSH 连接、密钥/Agent 认证、主机指纹校验）· `toolcall/`（工具调用 ID 规范化、参数解码、截断参数标记）。
-
-### `internal/game/`
-（已移除：局域网联机中继服务下线，游戏区仅保留人机对战；模型调用经 `internal/app/biz_game_ai.go`。）
-
-## 前端核心结构 (`frontend/src/`)
-
-- `App.vue`: 前端根组件（状态流转、Wails 事件监听、工作区 Tab 与模式切换、流式合帧渲染；发送请求在异步保存偏好前捕获模型配置，启动/压缩失败回写发起会话并持久化，`utils/asyncSessionRouting.test.mjs` 覆盖切 Tab 竞态）。
-- `i18n.mjs`: 双语文本源（在 src 根，不在 utils/ 下）。
-- `composables/`: `useToolEvents.mjs`（工具事件流分组）、`sakuraBreeze.mjs`（樱花动效）、`digitalWave.mjs`（数码波浪的模块级单例入口，特效层挂载时注册、触发点调 burstDigitalWave）。
-- `data/`: `modelCatalog.json`（模型目录，脚本生成）、`eyeLines.mjs`。
-- `games/`: `GamePanel.vue`（人机对战面板）与规则/玩法逻辑（`rules.mjs`）；文本棋盘协议与走法解析在 `ai.mjs`（后端单次模型调用绑定 `internal/app/biz_game_ai.go`，返回 usage 供面板显示 token 用量）。
-- `components/`:
-  - 核心视图与面板: `AppHeader.vue` (顶部栏与工作区 Tab), `ModeSider.vue` (左侧模式栏), `ChatMessages.vue` (消息流), `ComposerInfoBar.vue` (输入栏), `ModelMenu.vue` (共享模型选择下拉，输入栏与游戏区共用), `WorkspaceExplorer.vue` (文件树与编辑器), `SkillsPanel.vue` (技能管理：列表/启用开关/新建弹窗), `McpPanel.vue` (MCP 管理), `ModelsPanel.vue` (模型管理), `SSHClusterPanel.vue` (SSH 集群清单管理：增删改/导入导出), `PluginsPanel.vue` (插件管理：导入/导出/启停/删除，权限摘要与拒绝记录), `PluginPage.vue` (插件页容器：挂载点/错误态/重试), `TaskCenterPanel.vue` (任务中心), `SettingsModal.vue` (系统设置), `TokenStatsModal.vue` (Token 统计), `CommandMenu.vue` (命令面板), `WelcomeMessage.vue` (欢迎页), `GamePanel.vue` (游戏面板, 在 games/)。
-  - 工具卡与消息渲染: `ToolCallCard.vue` (通用工具卡与 diff), `CardGrid.vue` (工具结果的彩色卡片网格：一行多个自动换行、单条铺满一行、空态、条数上限；ssh_cluster / service / scheduled_task 的清单与单条结果都用它), `AskToolCard.vue` (交互提问), `SubagentInlineCard.vue` (子代理卡：复用 MCP 的 ally-row-card 样式、默认等高且仅展开报告、固定报告上方的开合按钮；ChatMessages + utils/subagentRows.mjs 将同轮同工具批次的相邻子代理组成自适应网格，并在左侧统一显示整批状态), `DiffView.vue` (Diff 渲染), `HtmlRenderCard.vue` (HTML 渲染), `ReadGroupCard.vue` / `ReadGrepGroupCard.vue` (read/grep 合并卡), `TerminalOutputView.vue` (终端输出), `CodeView.vue`, `ToolStatusIcon.vue` (状态图标：成败/运行判定派生自 `utils/toolEventState.mjs`), `RenderBoundary.vue`, `StreamingMarkdownBody.vue` (流式 Markdown 缓动渲染), `MessageAttachments.vue`, `ContextUsageInline.vue` (上下文用量)。
-  - 弹层与小组件: `ToolsPopover.vue` / `McpStatusPopover.vue` / `SkillsPopover.vue` (欢迎页触发), `GitDiffModal.vue`, `FileInfoModal.vue`, `FileMentionMenu.vue`, `TokenPieChart.vue`, `AllyAvatar.vue`, `AllyWordmark.vue`, `SakuraBreeze.vue`, `DigitalWave.vue` (数码波浪全屏特效层), `RunSpinner.vue` (输入栏状态行的“在跑”三根条，纯 CSS 关键帧 + scaleY，标签为空时挂载)。
-- `utils/`: 工具卡相关（`toolVerb.mjs` 动词表、`toolKind.mjs` 名字→kind 与展示属性的唯一表、`toolEventState.mjs` 事件状态机与状态词表（`normalizeToolStatus`，`ToolStatusIcon` 由它派生）、`toolFormat.mjs`、`toolPreview.mjs`、`toolCardSignature.mjs`、`toolError.mjs`、`taskStatus.mjs` 状态词表、色调与 `isServiceActive`，工具卡与任务中心共用；`attachmentIcon.mjs` 附件类型→兜底图标文字）；模型与配置（`modelConfigIO.mjs` 归一收口、`modelProviderCatalog.mjs`、`modelLabel.mjs`、`modelUsage.mjs`、`config.mjs`）；会话与输入（`sessionStore.mjs`、`sessionState.mjs`、`promptHistoryStore.mjs` 有界历史、`planPanel.mjs`）；渲染（`diff.js`、`ansi.mjs`、`shellHighlight.mjs`、`htmlRender.mjs`、`markdownPreview.mjs`、`markdownCjkEmphasis.mjs`（中文紧贴标点时 `**` 的开闭放宽）、`markdownLists.mjs`（聊天/预览共用有序列表实际编号位数，单位数与无序列表同缩进，多位 marker 留在绘制边界内）、`mermaidShared.mjs`、`streamEase.mjs` 流式缓动）；SSH 集群（`sshClusterIO.mjs` 导入导出载荷的归一与校验、`sshClusterGroups.mjs` 分组归并与搜索口径（集群页/授权弹窗共用），未分组字面量与后端 `sshUngroupedGroup` 由 `sshClusterGroups.test.mjs` 钉住）；插件（`pluginHost.mjs` 入口加载与 `host` 构造、`pluginPath.mjs` host.files 的路径守门（有 `pluginPath.test.mjs` 钉住）、`pluginTheme.mjs` 公开 token 快照与 `data-theme`/`data-mode` 观察）；平台（`clipboard.mjs`、`download.mjs`、`theme.mjs`、`fileInfo.mjs`、`format.mjs`（体积文案唯一实现）、`attachmentLimits.mjs`（附件字节上限；与后端同数的两处由 `attachmentLimits.test.mjs` 读 Go 源码钉住）、`versionCheck.mjs`、`buildVersion.js`、`skills.mjs`）。
+- `internal/app/`：应用状态与业务编排。`prov_` 模型协议，`host_` 宿主桥，`orch_` 工具编排，`infra_` 共享设施，`biz_` 独立业务；边界以 `AGENTS.md` 为准。
+- `internal/tools/`：工具算法与共享规则；按工具名分目录。`internal/sandbox/` 提供平台沙箱策略，接入状态查源码。
+- `internal/chatgpt/`：OAuth、账号与凭据存储；`internal/builtin_skills/`：随二进制嵌入的技能内容。
+- `frontend/src/App.vue`：工作台状态与交互路由；`frontend/src/components/`：页面与展示组件；`frontend/src/composables/`：共享行为；`frontend/src/utils/`：状态、协议、格式与存储规则。
+- `frontend/src/games/`：棋盘玩法与模型走法解析；模型桥接在 `internal/app/biz_game_ai.go`。知识库模式入口在 `internal/app/orch_kb.go` 与 `App.vue`。
+- `frontend/src/data/modelCatalog.json`：生成的模型目录，来源 `scripts/generate-model-catalog.mjs`；`frontend/bindings/`：Wails 生成绑定。
+- `Taskfile.yml` / `build/` / `.github/workflows/build.yml`：构建、打包、发布；前端任务见 `frontend/package.json`，验证要求见 `AGENTS.md`。
+- `docs/agent-architecture.md`：架构说明；`docs/agent-core-loop.md`：运行循环；`docs/agent-tools.md`：工具机制；`docs/update-security-review.md`：更新安全审查。

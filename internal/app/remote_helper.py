@@ -554,7 +554,7 @@ def append_command_output(out, chunk, limit):
     return True
 
 def open_command_log(root):
-    directory = safe_join(root, ".tmp")
+    directory = safe_join(root, ".tmp/command-logs")
     if not os.path.exists(directory):
         try: os.makedirs(directory)
         except OSError:

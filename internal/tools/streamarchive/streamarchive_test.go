@@ -270,7 +270,13 @@ func TestStreamArchiveSymlinkEscapeRejection(t *testing.T) {
 	tempDir := t.TempDir()
 	destDir := filepath.Join(tempDir, "dest")
 
-	for _, badTarget := range []string{"..", "../outside", "C:escaped", "/etc/passwd"} {
+	badTargets := []string{"..", "../outside", "/etc/passwd"}
+	if runtime.GOOS == "windows" {
+		// filepath.VolumeName only sees a drive there; on POSIX "C:escaped" is an
+		// ordinary relative filename and must not be rejected.
+		badTargets = append(badTargets, "C:escaped")
+	}
+	for _, badTarget := range badTargets {
 		var buf bytes.Buffer
 		tw := tar.NewWriter(&buf)
 		_ = tw.WriteHeader(&tar.Header{

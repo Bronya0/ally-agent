@@ -3158,7 +3158,7 @@ html.rail-expanded .chat-layout {
 }
 
 .model-menu .model-menu-section-title {
-  padding: 4px 10px;
+  padding: 4px var(--n-option-prefix-width);
   color: var(--ally-text-faint);
   font-size: 11px;
 }

@@ -20,7 +20,7 @@ func TestInitializationLeavesCleanupOutsideConfigLock(t *testing.T) {
 		t.Setenv(key, tempRoot)
 	}
 	workspace := t.TempDir()
-	spill := filepath.Join(workspace, ".tmp", "ally-run-old.log")
+	spill := filepath.Join(workspace, ".tmp", "command-logs", "ally-run-old.log")
 	if err := os.MkdirAll(filepath.Dir(spill), 0o755); err != nil {
 		t.Fatal(err)
 	}

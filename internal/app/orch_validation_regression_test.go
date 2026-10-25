@@ -163,8 +163,10 @@ func TestValidationGoSkipsUntouchedVetFindings(t *testing.T) {
 
 func TestValidationJavaIgnoresInjectedLocale(t *testing.T) {
 	root := validationSandbox(t)
-	if _, err := exec.LookPath("javac"); err != nil {
-		t.Skip("javac unavailable")
+	// macOS ships /usr/bin/javac as a stub that exists without a JDK installed, so
+	// a successful LookPath does not prove the compiler can actually run.
+	if out, err := exec.Command("javac", "-version").CombinedOutput(); err != nil {
+		t.Skipf("javac unavailable: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	t.Setenv("JAVA_TOOL_OPTIONS", "-Duser.language=zh -Duser.country=CN")
 	writeToolTestFile(t, root, "Broken.java", "public class Broken { void method( { }\n")

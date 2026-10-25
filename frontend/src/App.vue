@@ -700,6 +700,7 @@ import {
   CancelUpdate,
   ApplyUpdate,
   QuitForUpdate,
+  ConfirmUpdateStartup,
   SkipUpdate,
   GetBackgroundImageURL,
   LogFrontendError,
@@ -743,6 +744,7 @@ import GamePanel from './games/GamePanel.vue';
 import { assignConfig, defaultConfig, normalizeHiddenModes, placeholderModel } from './utils/config.mjs';
 import { detectPlatform } from './utils/platform.mjs';
 import { createWindowCloseHandler } from './utils/windowClose.mjs';
+import { createUpdateRestartHandler } from './utils/updateLifecycle.mjs';
 import { isReleaseTag, markReleaseNotesSeen, readSeenVersion, releaseNotes, shouldShowReleaseNotes } from './utils/releaseNotes.mjs';
 import { enabledPlugins, fetchPlugins, pluginIdFromMode } from './utils/pluginHost.mjs';
 import { useSakuraBreeze } from './composables/sakuraBreeze.mjs';
@@ -2164,11 +2166,12 @@ Update LESSONS.md in the workspace root:
 // CODEGRAPH_PROMPT drives the “update code graph” context-bubble button. It is
 // a normal foreground prompt: the agent updates CODEGRAPH.md itself with
 // read/list + edit (version-checked, atomic), and the run shows in the chat.
-const CODEGRAPH_PROMPT = `Update CODEGRAPH.md (the file-level navigation map) in the workspace root.
-1. Read the current CODEGRAPH.md first (create it if this workspace has none yet) and list the current workspace structure to see what actually exists now.
-2. Entries whose paths no longer exist must be removed. Add new directories/files with responsibilities inferred from this conversation's changes; for files you have no evidence about, list the path only — do not speculate about their purpose.
-3. Keep the three-section structure: feature→file lookup table, core call flows, per-directory responsibilities. It is a navigation index, not documentation; conventions belong in AGENTS.md.
-4. Rewrite the file with edit; keep it concise and in the language of the existing file (Chinese when starting fresh).`;
+const CODEGRAPH_PROMPT = `Update CODEGRAPH.md (the lightweight project navigation map) in the workspace root.
+1. Read the current CODEGRAPH.md first, if present, and inspect the main workspace directories. Create it if missing. Verify relevant source paths and entry points before describing their responsibilities; omit claims you cannot verify.
+2. Keep three sections: feature→file lookup table, brief core call flows, and module responsibilities. Use workspace-relative paths and only essential entry symbols. Merge by module instead of listing every file, test, or platform variant; remove entries whose paths no longer exist.
+3. Keep the entire file within 8192 UTF-8 bytes (including headings and whitespace), preferably 4–6 KiB, so it fits Ally's automatic injection budget. Link to detailed docs instead of copying implementation details, configuration values, or conventions; conventions belong in AGENTS.md.
+4. Update affected entries incrementally unless the map needs slimming or the user requests a rewrite. Use read + version-checked edit for an existing file, or create for a missing file. Keep the existing language (Chinese when starting fresh).
+5. Read back the result, verify its paths and main flow against current source, and measure its UTF-8 byte size. Slim it further if it exceeds the budget; do not rely on runtime truncation.`;
 
 // REVIEW_PROMPT instructs the model when the user runs /review. Sub-agents
 // are used only when the change is complex enough to justify them; the main
@@ -3437,7 +3440,8 @@ function queueConfigSave(snapshot) {
       }
       throw err;
     });
-  configSaveQueue = save.catch(() => {});
+  configSaveQueue = save;
+  save.catch(() => {});
   return save;
 }
 
@@ -5749,7 +5753,8 @@ function bindRuntimeEvents() {
     updateModalVisible.value = true;
   });
   onRuntimeEvent('update:applied', () => {
-    updateState.value = 'restarting';
+    // The persistence barrier still has to finish before quitting.
+    updateState.value = 'applying';
   });
   onRuntimeEvent('update:error', (data) => {
     updateState.value = 'error';
@@ -6199,11 +6204,28 @@ async function toggleMaximiseWindow() {
   } catch (_) {}
 }
 
+async function flushPendingWindowWrites() {
+  settingsModalRef.value?.saveSettingsOnLeave();
+  if (saveSessionsTimer) {
+    window.clearTimeout(saveSessionsTimer);
+    saveSessionsTimer = 0;
+    saveSessions();
+  }
+  await nextTick();
+  // Include writes queued by run completion or settings during the barrier.
+  for (;;) {
+    const sessionsTail = sessionWriteTail;
+    const configTail = configSaveQueue;
+    // A previous failure must not skip waiting for the other queue.
+    await Promise.all([sessionsTail.catch(() => {}), configTail.catch(() => {})]);
+    await nextTick();
+    if (sessionsTail === sessionWriteTail && configTail === configSaveQueue) {
+      return;
+    }
+  }
+}
 const requestWindowClose = createWindowCloseHandler({
-  flush: () => {
-    settingsModalRef.value?.saveSettingsOnLeave();
-    return Promise.all([flushSessionWrites(), configSaveQueue]);
-  },
+  flush: () => flushPendingWindowWrites(),
   quit: () => Application.Quit(),
 });
 async function closeWindow() {
@@ -7613,12 +7635,13 @@ let sessionWriteTail = Promise.resolve();
 
 function enqueueSessionWrite(operation) {
   const result = sessionWriteTail.catch(() => {}).then(operation);
-  sessionWriteTail = result.catch(() => {});
+  sessionWriteTail = result;
+  result.catch(() => {});
   return result;
 }
 
 function flushSessionWrites() {
-  return sessionWriteTail;
+  return sessionWriteTail.catch(() => {});
 }
 
 function sessionIndexEntry(session) {
@@ -9603,31 +9626,20 @@ function openUpdateReleasesPage() {
   Browser.OpenURL(ALLY_RELEASES_URL);
 }
 
+const requestUpdateRestart = createUpdateRestartHandler({
+  flush: flushPendingWindowWrites,
+  apply: ApplyUpdate,
+  quit: QuitForUpdate,
+  onApplying: () => { updateState.value = 'applying'; },
+  onRestarting: () => { updateState.value = 'restarting'; },
+});
 async function applyAndRestart() {
   const version = latestReleaseVersion.value;
   if (!version) return;
   updateState.value = 'applying';
   updateError.value = '';
   try {
-    const result = await ApplyUpdate(version);
-    if (!result?.ok) {
-      updateState.value = 'error';
-      updateError.value = result?.error || t('app.update.errors.apply');
-      return;
-    }
-    updateState.value = 'restarting';
-    // Give the user a brief moment to see the "closing" state, then quit.
-    // On Windows the user manually relaunches; on macOS the new bundle is
-    // opened automatically by the backend after this process exits.
-    setTimeout(async () => {
-      try {
-        await QuitForUpdate();
-      } catch (_) {
-        // If quit fails, fall back to letting the user close Ally manually.
-        updateState.value = 'error';
-        updateError.value = t('app.update.errors.restart');
-      }
-    }, 600);
+    await requestUpdateRestart(version);
   } catch (err) {
     updateState.value = 'error';
     updateError.value = String(err?.message || err || t('app.update.errors.apply'));
@@ -9723,6 +9735,7 @@ onMounted(async () => {
   await init();
   if (startupDisposed) return;
   await nextTick();
+  try { await ConfirmUpdateStartup(); } catch (err) { console.error('[update] Startup confirmation failed', err); }
   // Let the workspace render before issuing secondary startup requests.
   startupTasks.schedule(refreshSkillState);
   startupTasks.schedule(loadSavedSessions);

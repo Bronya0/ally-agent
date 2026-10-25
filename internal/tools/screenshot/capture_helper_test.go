@@ -69,6 +69,15 @@ func captureTestCommand(t *testing.T, ctx context.Context, mode string) (*exec.C
 	return cmd, ready
 }
 
+// captureHelperReaped reports whether the helper terminated after its context
+// ended. A non-nil ProcessState means Run already waited and reaped it; Success
+// is false for a killed child on every platform (Unix reports a signal, Windows
+// a nonzero exit code), while a helper that exited cleanly must not pass.
+func captureHelperReaped(cmd *exec.Cmd) bool {
+	state := cmd.ProcessState
+	return state != nil && !state.Success()
+}
+
 func TestCaptureCommandCancellationReapsBlockedHelper(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -93,7 +102,7 @@ func TestCaptureCommandCancellationReapsBlockedHelper(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if !errors.Is(err, context.Canceled) || cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
+		if !errors.Is(err, context.Canceled) || !captureHelperReaped(cmd) {
 			t.Fatalf("cancel must kill and reap the helper: state=%v error=%v", cmd.ProcessState, err)
 		}
 	case <-time.After(3 * time.Second):
@@ -106,7 +115,7 @@ func TestCaptureCommandDeadline(t *testing.T) {
 	defer cancel()
 	cmd, _ := captureTestCommand(t, ctx, "hang")
 	_, _, err := runCaptureCommand(ctx, cmd)
-	if !errors.Is(err, context.DeadlineExceeded) || cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
+	if !errors.Is(err, context.DeadlineExceeded) || !captureHelperReaped(cmd) {
 		t.Fatalf("deadline must kill and reap the helper: state=%v error=%v", cmd.ProcessState, err)
 	}
 }

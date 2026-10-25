@@ -178,8 +178,8 @@ func TestRemoteCommandLogQuotaIncludesActiveReservations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := newIsolatedToolTestApp(t)
 			py := pickRemoteHelperPython(t)
-			dir := filepath.Join(a.config.Workspace, ".tmp")
-			if err := os.Mkdir(dir, 0700); err != nil {
+			dir := filepath.Join(a.config.Workspace, ".tmp", "command-logs")
+			if err := os.MkdirAll(dir, 0700); err != nil {
 				t.Fatal(err)
 			}
 			for i := 0; i < tc.completed; i++ {

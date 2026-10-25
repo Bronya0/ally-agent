@@ -9,7 +9,6 @@ package app
 
 import (
 	"archive/zip"
-	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
@@ -51,7 +50,7 @@ import (
 // keeps the existing "open browser" behavior.
 
 const (
-	allyReleasesAPI = "https://api.github.com/repos/Bronya0/ally-agent/releases"
+	allyReleaseDownloads = "https://github.com/Bronya0/ally-agent/releases/download"
 	// allyReleasesAtom is the public Atom feed for releases. It does not go
 	// through the GitHub REST API and is therefore NOT subject to the 60/hour
 	// anonymous rate limit. Used for the periodic "is there a new version?"
@@ -171,15 +170,6 @@ func saveUpdateCache(c updateReleaseCache) {
 	_ = writeAtomicBytes(updateCachePath(), data, 0o600)
 }
 
-// applyGitHubAuthHeaders sets the Authorization header when a GitHub token is
-// configured. Reading public repo releases needs no scope, so any classic
-// token works. Token presence raises the rate limit from 60/hour to 5000/hour.
-func applyGitHubAuthHeaders(req *http.Request, token string) {
-	if strings.TrimSpace(token) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
-	}
-}
-
 func updateVersionDir(tag string) string {
 	return filepath.Join(updateBaseDir(), tag)
 }
@@ -210,87 +200,20 @@ func allyExecutableDir() (string, error) {
 	return filepath.Dir(exe), nil
 }
 
-// githubAsset is a minimal subset of the GitHub Release API asset object.
-type githubAsset struct {
-	Name               string `json:"name"`
-	Size               int64  `json:"size"`
-	BrowserDownloadURL string `json:"browser_download_url"`
-}
-
-// fetchReleaseByTag queries the GitHub Release API for a specific tag and
-// returns the tag (normalized) and its assets. Uses Ally's proxy-aware client.
-func (a *App) fetchReleaseByTag(tag string) (string, []githubAsset, error) {
-	tag = strings.TrimSpace(tag)
-	if err := validateUpdateTag(tag); err != nil {
-		return "", nil, err
-	}
-	cfg := updateNetworkConfig(a.effectiveConfigSafe())
-	client := proxyHTTPClient(cfg, false, updateHTTPTimeout)
-	ctx, cancel := context.WithTimeout(context.Background(), updateHTTPTimeout)
-	defer cancel()
-	apiURL := fmt.Sprintf("%s/tags/%s", allyReleasesAPI, tag)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return "", nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "ally-agent-update-check")
-	applyGitHubAuthHeaders(req, cfg.GitHubToken)
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("github api status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return "", nil, err
-	}
-	var parsed struct {
-		TagName    string        `json:"tag_name"`
-		Prerelease bool          `json:"prerelease"`
-		Draft      bool          `json:"draft"`
-		Assets     []githubAsset `json:"assets"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", nil, err
-	}
-	normalized := strings.TrimSpace(parsed.TagName)
-	if err := validateUpdateTag(normalized); err != nil {
-		return "", nil, fmt.Errorf("invalid release response: %w", err)
-	}
-	if parsed.Prerelease || parsed.Draft {
-		return "", nil, fmt.Errorf("release %s is a pre-release or draft; automatic download is not allowed", normalized)
-	}
-	return normalized, parsed.Assets, nil
-}
-
-// ListUpdateAsset returns the Windows x64 ZIP asset info for a tag.
-// On non-Windows platforms it returns OK=false with an explanatory error so
-// the frontend can fall back to opening the browser.
+// ListUpdateAsset resolves the fixed release filename without a REST API call.
 func (a *App) ListUpdateAsset(tag string) UpdateAssetInfo {
 	if !updatePlatformSupported() {
 		return UpdateAssetInfo{Error: "automatic update is only supported on windows x64 and macOS"}
 	}
-	normalized, assets, err := a.fetchReleaseByTag(tag)
-	if err != nil {
+	tag = strings.TrimSpace(tag)
+	if err := validateUpdateTag(tag); err != nil {
 		return UpdateAssetInfo{Error: err.Error()}
 	}
-	want := expectedAssetName(normalized)
-	for _, asset := range assets {
-		if asset.Name == want {
-			return UpdateAssetInfo{
-				OK:   true,
-				Name: asset.Name,
-				Size: asset.Size,
-				URL:  asset.BrowserDownloadURL,
-				Tag:  normalized,
-			}
-		}
+	if strings.ContainsAny(tag, "-+") {
+		return UpdateAssetInfo{Error: "automatic update requires a numeric release tag"}
 	}
-	return UpdateAssetInfo{Error: fmt.Sprintf("no windows x64 asset found for tag %s (expected %s)", normalized, want)}
+	name := expectedAssetName(tag)
+	return UpdateAssetInfo{OK: true, Name: name, URL: fmt.Sprintf("%s/%s/%s", allyReleaseDownloads, tag, name), Tag: tag}
 }
 
 // downloadAsset streams an asset URL to destPath using the proxy-aware client.
@@ -298,7 +221,7 @@ func (a *App) ListUpdateAsset(tag string) UpdateAssetInfo {
 // that event in eventCadenceTable.
 func (a *App) downloadAsset(ctx context.Context, assetURL, destPath, version string, totalBytes int64) error {
 	cfg := updateNetworkConfig(a.effectiveConfigSafe())
-	client := proxyHTTPClient(cfg, false, updateDownloadTimeout)
+	client := updateHTTPClient(cfg, updateDownloadTimeout)
 	ctx, cancel := context.WithTimeout(ctx, updateDownloadTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
@@ -324,11 +247,11 @@ func (a *App) downloadAsset(ctx context.Context, assetURL, destPath, version str
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return err
 	}
-	tmpPath := destPath + ".part"
-	f, err := os.Create(tmpPath)
+	f, err := os.CreateTemp(filepath.Dir(destPath), ".download-*.part")
 	if err != nil {
 		return err
 	}
+	tmpPath := f.Name()
 	defer func() {
 		f.Close()
 		_ = os.Remove(tmpPath)
@@ -386,6 +309,12 @@ func (a *App) downloadAsset(ctx context.Context, assetURL, destPath, version str
 		if readErr != nil {
 			return readErr
 		}
+	}
+	if total > 0 && received != total {
+		return errors.New("incomplete update download")
+	}
+	if err := f.Sync(); err != nil {
+		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
@@ -480,72 +409,6 @@ func extractZipEntry(f *zip.File, absDest string) error {
 	return nil
 }
 
-// validateStagedExecutable performs a lightweight PE sanity check before the
-// current installation is touched. It is not a signature check, but rejects
-// empty, non-regular, truncated, and obviously non-Windows payloads.
-func validateStagedExecutable(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() || info.Size() < 64 {
-		return errors.New("staged executable is not a valid regular PE file")
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	header := make([]byte, 64)
-	if _, err := io.ReadFull(f, header); err != nil {
-		return err
-	}
-	if header[0] != 'M' || header[1] != 'Z' {
-		return errors.New("staged executable is missing the MZ header")
-	}
-	peOffset := int64(uint32(header[0x3c]) | uint32(header[0x3d])<<8 | uint32(header[0x3e])<<16 | uint32(header[0x3f])<<24)
-	if peOffset < 64 || peOffset > info.Size()-4 {
-		return errors.New("staged executable has an invalid PE header offset")
-	}
-	signature := make([]byte, 4)
-	if _, err := f.ReadAt(signature, peOffset); err != nil {
-		return err
-	}
-	if string(signature) != "PE\x00\x00" {
-		return errors.New("staged executable is missing the PE signature")
-	}
-	return nil
-}
-
-// validateStagedDMG performs a lightweight sanity check on a downloaded DMG
-// before it is mounted. It is not a cryptographic check; the mounted app
-// bundle is validated separately before the live install is touched.
-func validateStagedDMG(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() || info.Size() < 1024*1024 {
-		return errors.New("staged update is not a valid DMG file")
-	}
-	// UDIF disk images end with a "koly" trailer. Check the last 512 bytes so
-	// truncated or corrupt downloads fail early.
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	const trailerLen = 512
-	buf := make([]byte, trailerLen)
-	if _, err := f.ReadAt(buf, info.Size()-trailerLen); err != nil {
-		return err
-	}
-	if !bytes.Contains(buf, []byte("koly")) {
-		return errors.New("staged update is missing the UDIF trailer")
-	}
-	return nil
-}
-
 // macAppBundleDir returns the .app bundle directory containing the currently
 // running Ally binary, or an error if the executable is not inside an .app.
 func macAppBundleDir() (string, error) {
@@ -565,53 +428,13 @@ func macAppBundleDir() (string, error) {
 	return appDir, nil
 }
 
-// validateMacAppBundle checks that a staged .app has the expected structure and
-// a Mach-O (or universal) main executable before the live bundle is replaced.
-func validateMacAppBundle(appDir string) error {
-	info, err := os.Stat(appDir)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return errors.New("staged app bundle is not a directory")
-	}
-	exePath := filepath.Join(appDir, "Contents", "MacOS", "Ally")
-	exeInfo, err := os.Stat(exePath)
-	if err != nil {
-		return err
-	}
-	if !exeInfo.Mode().IsRegular() || exeInfo.Size() < 64 {
-		return errors.New("staged app main executable is missing or invalid")
-	}
-	f, err := os.Open(exePath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	magic := make([]byte, 4)
-	if _, err := io.ReadFull(f, magic); err != nil {
-		return err
-	}
-	switch {
-	case magic[0] == 0xFE && magic[1] == 0xED && magic[2] == 0xFA && magic[3] == 0xCF: // MH_MAGIC_64
-	case magic[0] == 0xCF && magic[1] == 0xFA && magic[2] == 0xED && magic[3] == 0xFE: // MH_CIGAM_64
-	case magic[0] == 0xFE && magic[1] == 0xED && magic[2] == 0xFA && magic[3] == 0xCE: // MH_MAGIC
-	case magic[0] == 0xCE && magic[1] == 0xFA && magic[2] == 0xED && magic[3] == 0xFE: // MH_CIGAM
-	case magic[0] == 0xCA && magic[1] == 0xFE && magic[2] == 0xBA && magic[3] == 0xBE: // FAT_MAGIC (universal)
-	case magic[0] == 0xBE && magic[1] == 0xBA && magic[2] == 0xFE && magic[3] == 0xCA: // FAT_CIGAM
-	default:
-		return errors.New("staged app main executable is not a Mach-O binary")
-	}
-	return nil
-}
-
 // mountDMG mounts a DMG read-only at mountPoint with hdiutil and returns the
 // mount point. The caller must detach it afterwards.
 func mountDMG(dmgPath, mountPoint string) (string, error) {
 	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
 		return "", err
 	}
-	cmd := exec.Command("hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", mountPoint, dmgPath)
+	cmd := exec.Command("/usr/bin/hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", mountPoint, dmgPath)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("hdiutil attach: %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -620,7 +443,7 @@ func mountDMG(dmgPath, mountPoint string) (string, error) {
 
 // detachDMG unmounts a previously mounted DMG.
 func detachDMG(mountPoint string) error {
-	cmd := exec.Command("hdiutil", "detach", mountPoint)
+	cmd := exec.Command("/usr/bin/hdiutil", "detach", mountPoint)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("hdiutil detach: %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -630,18 +453,11 @@ func detachDMG(mountPoint string) error {
 // copyDir copies a directory tree with ditto, preserving permissions,
 // symlinks, and extended attributes.
 func copyDir(src, dst string) error {
-	cmd := exec.Command("ditto", src, dst)
+	cmd := exec.Command("/usr/bin/ditto", src, dst)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ditto: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
-}
-
-// removeQuarantineAttr best-effort clears the quarantine attribute on an app
-// bundle. Ally-downloaded DMGs carry none, but clearing keeps the replaced
-// bundle launchable even if the attribute somehow exists.
-func removeQuarantineAttr(appDir string) {
-	_ = exec.Command("xattr", "-dr", "com.apple.quarantine", appDir).Run()
 }
 
 // DownloadUpdate downloads the platform-matched archive (ZIP on Windows, DMG
@@ -651,6 +467,15 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 	if !updatePlatformSupported() {
 		return UpdateDownloadResult{Error: "automatic update is only supported on windows x64 and macOS"}
 	}
+	if err := a.beginUpdateOperation("downloading"); err != nil {
+		return UpdateDownloadResult{Error: err.Error()}
+	}
+	defer a.endUpdateOperation()
+	lock, err := lockUpdateDownloads()
+	if err != nil {
+		return UpdateDownloadResult{Error: err.Error()}
+	}
+	defer lock.Close()
 	asset, err := a.ListUpdateAsset(tag).okOrError()
 	if err != nil {
 		a.emit("update:error", map[string]any{"stage": "match", "error": err.Error()})
@@ -664,8 +489,7 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 	dlCtx, dlCancel := context.WithCancel(context.Background())
 	a.updateMu.Lock()
 	a.updateCancel = dlCancel
-	cancelNow := a.updateCancelPending
-	a.updateCancelPending = false
+	cancelNow := a.updateCancelRequested
 	a.updateMu.Unlock()
 	// A cancel request arrived while the asset URL was still being resolved;
 	// abort immediately instead of starting the download.
@@ -709,6 +533,10 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 	}
 	if cancelled() {
 		return UpdateDownloadResult{Error: "cancelled"}
+	}
+	if err := saveUpdateReceipt(archivePath, asset.Tag, asset.Name); err != nil {
+		_ = removeAllWithinBase(updateBaseDir(), versionDir)
+		return UpdateDownloadResult{Error: err.Error()}
 	}
 
 	if goruntime.GOOS == "darwin" {
@@ -786,8 +614,11 @@ func (a *App) CancelUpdate() bool {
 	}
 	// No download handle registered yet (e.g. still resolving the asset URL):
 	// record the request so DownloadUpdate aborts once it registers.
-	a.updateCancelPending = true
-	return true
+	if a.updateOperation == "downloading" {
+		a.updateCancelRequested = true
+		return true
+	}
+	return false
 }
 
 // okOrError is a small helper to convert UpdateAssetInfo into an error when not OK.
@@ -810,40 +641,6 @@ func isDirWritable(dir string) error {
 	}
 	tmp.Close()
 	return os.Remove(tmp.Name())
-}
-
-// copyFile copies src to dst with a temp-file + rename so the destination
-// is replaced atomically (same volume only).
-func copyFileAtomic(src, dst string) error {
-	srcF, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcF.Close()
-	info, err := srcF.Stat()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := io.Copy(tmp, srcF); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, info.Mode().Perm()); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, dst)
 }
 
 // stopAllRuns cancels every active run and waits for them to exit. It returns
@@ -888,8 +685,14 @@ func stagedFileSet(stagedDir string) ([]string, error) {
 		if info.IsDir() {
 			return nil
 		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("staged resource is not regular: %s", path)
+		}
 		rel, err := filepath.Rel(stagedDir, path)
 		if err != nil {
+			return err
+		}
+		if err := updateLocalPath(rel); err != nil {
 			return err
 		}
 		files = append(files, rel)
@@ -937,164 +740,160 @@ func (a *App) ApplyUpdate(tag string) UpdateApplyResult {
 	if err := validateUpdateTag(tag); err != nil {
 		return UpdateApplyResult{Error: err.Error()}
 	}
-	if goruntime.GOOS == "darwin" {
-		return a.applyMacUpdate(tag)
+	if err := a.beginUpdateOperation("applying"); err != nil {
+		return UpdateApplyResult{Error: err.Error()}
 	}
-	return a.applyWindowsUpdate(tag)
+	defer a.endUpdateOperation()
+	a.updateRunGate.Lock()
+	a.updateRunGate.Unlock()
+	lock, err := lockUpdateDownloads()
+	if err != nil {
+		return UpdateApplyResult{Error: err.Error()}
+	}
+	defer lock.Close()
+	if err := verifyStagedUpdate(tag); err != nil {
+		return UpdateApplyResult{Error: err.Error()}
+	}
+	if goruntime.GOOS == "windows" {
+		if err := removeAllWithinBase(updateBaseDir(), updateStagedDir(tag)); err != nil {
+			return UpdateApplyResult{Error: err.Error()}
+		}
+		if err := extractZip(updateAssetPath(tag), updateStagedDir(tag)); err != nil {
+			return UpdateApplyResult{Error: err.Error()}
+		}
+	}
+	var result UpdateApplyResult
+	if goruntime.GOOS == "darwin" {
+		result = a.applyMacUpdate(tag)
+	} else {
+		result = a.applyWindowsUpdate(tag)
+	}
+	if result.OK {
+		a.updateMu.Lock()
+		a.updateOperation = "applied"
+		a.updateMu.Unlock()
+	}
+	return result
 }
 
-// applyWindowsUpdate stops all runs, services, and MCP servers, then replaces
-// the Ally executable and resource files from the staged directory. On any
-// failure it rolls back the EXE rename so the previous binary keeps running.
+// applyWindowsUpdate backs up resources before changing the live executable.
+// Backups survive until the next frontend has initialized successfully.
 func (a *App) applyWindowsUpdate(tag string) UpdateApplyResult {
 	stagedDir := updateStagedDir(tag)
-	if _, err := os.Stat(stagedDir); err != nil {
-		return UpdateApplyResult{Error: fmt.Sprintf("staged dir not found: %v", err)}
-	}
-	stagedExe := filepath.Join(stagedDir, "Ally.exe")
-	if err := validateStagedExecutable(stagedExe); err != nil {
-		return UpdateApplyResult{Error: fmt.Sprintf("invalid staged executable: %v", err)}
+	if err := validateStagedExecutable(filepath.Join(stagedDir, "Ally.exe")); err != nil {
+		return UpdateApplyResult{Error: err.Error()}
 	}
 	exeDir, err := allyExecutableDir()
 	if err != nil {
-		return UpdateApplyResult{Error: fmt.Sprintf("locate executable: %v", err)}
+		return UpdateApplyResult{Error: err.Error()}
 	}
-	if err := isDirWritable(exeDir); err != nil {
-		return UpdateApplyResult{Error: fmt.Sprintf("install dir not writable: %v", err)}
+	files, err := stagedFileSet(stagedDir)
+	if err != nil {
+		return UpdateApplyResult{Error: err.Error()}
 	}
-
-	a.emit(updateProgressEvent, map[string]any{"stage": "apply", "version": tag, "percent": 0})
-
-	// Stop everything that could hold a handle on Ally.exe.
-	// MCP servers are independent subprocesses and do not hold the Ally.exe
-	// file handle; they are shut down later by the ctx.Done() path triggered
-	// by QuitForUpdate's quitApp. Keeping them alive here means a
-	// rolled-back update leaves MCP fully functional.
+	live, err := os.OpenRoot(exeDir)
+	if err != nil {
+		return UpdateApplyResult{Error: err.Error()}
+	}
+	defer live.Close()
+	for _, name := range files {
+		if err := updateNoLinks(live, name, true); err != nil {
+			return UpdateApplyResult{Error: err.Error()}
+		}
+	}
 	if err := a.stopAllRuns(); err != nil {
-		a.emit("update:error", map[string]any{"stage": "apply", "error": err.Error()})
 		return UpdateApplyResult{Error: err.Error()}
 	}
 	a.stopAllServices()
-
-	exeName := "Ally.exe"
-	currentExe := filepath.Join(exeDir, exeName)
+	backupDir := filepath.Join(exeDir, ".ally-update-backup")
+	if err := removeAllWithinBase(exeDir, backupDir); err != nil {
+		return UpdateApplyResult{Error: err.Error()}
+	}
+	if err := os.Mkdir(backupDir, 0o700); err != nil {
+		return UpdateApplyResult{Error: err.Error()}
+	}
+	for _, name := range files {
+		if name == "Ally.exe" {
+			continue
+		}
+		if _, err := live.Lstat(name); err == nil {
+			if err := copyUpdatePath(exeDir, backupDir, name); err != nil {
+				return UpdateApplyResult{Error: fmt.Sprintf("backup resource %s: %v", name, err)}
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return UpdateApplyResult{Error: err.Error()}
+		}
+	}
+	currentExe := filepath.Join(exeDir, "Ally.exe")
 	backupExe := currentExe + exeBackupSuffix
-
-	// Remove any stale backup from a previous failed attempt.
-	_ = os.Remove(backupExe)
-
-	// Rename the running EXE to .bak. On Windows this is allowed even while
-	// the process is running; the file handle stays valid until exit.
-	if err := os.Rename(currentExe, backupExe); err != nil {
-		msg := fmt.Sprintf("backup current exe: %v", err)
-		a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
-		return UpdateApplyResult{Error: msg}
+	if err := live.Remove("Ally.exe" + exeBackupSuffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return UpdateApplyResult{Error: err.Error()}
 	}
-
-	// Copy the new EXE into place.
-	if err := copyFileAtomic(stagedExe, currentExe); err != nil {
-		// Roll back: restore the backup.
-		if rbErr := os.Rename(backupExe, currentExe); rbErr != nil {
-			// Last-resort fallback: try to copy the staged EXE directly so
-			// the install is not left without an Ally.exe. If this also
-			// fails, the user must manually restore from the staged dir.
-			if cpErr := copyFileAtomic(stagedExe, currentExe); cpErr == nil {
-				_ = os.Remove(backupExe)
-				msg := fmt.Sprintf("copy new exe failed (%v) and rollback rename also failed (%v); recovered by copying staged exe", err, rbErr)
-				a.emit("update:error", map[string]any{"stage": "rollback", "error": msg})
-				return UpdateApplyResult{Error: msg}
-			}
-			a.emit("update:error", map[string]any{
-				"stage": "rollback",
-				"error": fmt.Sprintf("copy exe failed: %v; rollback rename failed: %v; manual recovery required from %s", err, rbErr, stagedDir),
-			})
-			return UpdateApplyResult{Error: fmt.Sprintf("copy exe failed: %v; rollback rename failed: %v; manual recovery required from %s", err, rbErr, stagedDir)}
-		}
-		msg := fmt.Sprintf("copy new exe: %v (rolled back)", err)
-		a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
-		return UpdateApplyResult{Error: msg}
+	if err := live.Rename("Ally.exe", "Ally.exe"+exeBackupSuffix); err != nil {
+		return UpdateApplyResult{Error: err.Error()}
 	}
-
-	// Replace supporting resource files with per-file backups so a mid-way
-	// failure can restore the entire previous installation, not just the
-	// EXE. Each existing file is copied to the rollback dir before being
-	// overwritten; on failure the already-replaced resources are restored in
-	// reverse order and then the EXE backup is renamed back.
-	files, err := stagedFileSet(stagedDir)
-	if err != nil {
-		msg := fmt.Sprintf("list staged resources: %v", err)
-		_ = os.Rename(backupExe, currentExe)
-		a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
-		return UpdateApplyResult{Error: msg}
-	}
-	backupDir := filepath.Join(updateVersionDir(tag), "rollback")
 	replaced := make([]string, 0, len(files))
-	for _, rel := range files {
-		if rel == exeName {
-			continue // already handled
+	failed := func(err error) UpdateApplyResult {
+		message := err.Error()
+		if rollback := rollbackReplacedResources(backupDir, exeDir, replaced, backupExe, currentExe); rollback != "" {
+			message += "; " + rollback + "; backups retained in " + backupDir
 		}
-		src := filepath.Join(stagedDir, rel)
-		dst := filepath.Join(exeDir, rel)
-		if _, err := os.Stat(dst); err == nil {
-			backupPath := filepath.Join(backupDir, rel)
-			if err := copyFileAtomic(dst, backupPath); err != nil {
-				msg := fmt.Sprintf("backup resource %s: %v", rel, err)
-				// 已经替换过的资源必须一起还原，否则留下“旧二进制 + 新资源”的
-				// 混装（与下面的 replace 失败分支同源）。
-				// rollbackReplacedResources 最后会把 EXE 备份 rename 回去，
-				// 所以不必再单独动 EXE。
-				if rbMsg := rollbackReplacedResources(backupDir, exeDir, replaced, backupExe, currentExe); rbMsg != "" {
-					msg = fmt.Sprintf("%s; %s; manual recovery required from %s", msg, rbMsg, stagedDir)
-				}
-				a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
-				return UpdateApplyResult{Error: msg}
-			}
-		}
-		if err := copyFileAtomic(src, dst); err != nil {
-			msg := fmt.Sprintf("replace resource %s: %v", rel, err)
-			if rbMsg := rollbackReplacedResources(backupDir, exeDir, replaced, backupExe, currentExe); rbMsg != "" {
-				msg = fmt.Sprintf("%s; %s; manual recovery required from %s", msg, rbMsg, stagedDir)
-			}
-			a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
-			return UpdateApplyResult{Error: msg}
-		}
-		replaced = append(replaced, rel)
+		a.emit("update:error", map[string]any{"stage": "apply", "error": message})
+		return UpdateApplyResult{Error: message}
 	}
-	// Success: drop the rollback backups.
-	_ = removeAllWithinBase(updateBaseDir(), backupDir)
-
+	if err := copyUpdatePath(stagedDir, exeDir, "Ally.exe"); err != nil {
+		return failed(err)
+	}
+	for _, name := range files {
+		if name == "Ally.exe" {
+			continue
+		}
+		if err := copyUpdatePath(stagedDir, exeDir, name); err != nil {
+			return failed(fmt.Errorf("replace resource %s: %w", name, err))
+		}
+		replaced = append(replaced, name)
+	}
 	cleanAppliedUpdateDirs(updateBaseDir(), tag)
-	a.emit(updateProgressEvent, map[string]any{"stage": "apply", "version": tag, "percent": 100})
 	a.emit("update:applied", map[string]any{"version": tag})
 	return UpdateApplyResult{OK: true}
 }
 
-// rollbackReplacedResources restores already-replaced resource files from
-// backupDir back into exeDir in reverse order (files that did not exist
-// before the update are removed), then restores the EXE backup. It returns
-// a "; "-joined summary of any rollback failures (empty on full success).
 func rollbackReplacedResources(backupDir, exeDir string, replaced []string, backupExe, currentExe string) string {
-	var msgs []string
+	var failures []string
+	live, err := os.OpenRoot(exeDir)
+	if err != nil {
+		return err.Error()
+	}
+	defer live.Close()
+	backup, err := os.OpenRoot(backupDir)
+	if err != nil {
+		return err.Error()
+	}
+	defer backup.Close()
 	for i := len(replaced) - 1; i >= 0; i-- {
-		rel := replaced[i]
-		src := filepath.Join(backupDir, rel)
-		dst := filepath.Join(exeDir, rel)
-		if _, err := os.Stat(src); err == nil {
-			if err := copyFileAtomic(src, dst); err != nil {
-				msgs = append(msgs, fmt.Sprintf("rollback resource %s: %v", rel, err))
+		name := replaced[i]
+		if err := updateNoLinks(live, name, true); err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		if _, err := backup.Lstat(name); err == nil {
+			if err := copyUpdateFile(backup, live, name, name); err != nil {
+				failures = append(failures, err.Error())
 			}
 		} else if errors.Is(err, os.ErrNotExist) {
-			if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
-				msgs = append(msgs, fmt.Sprintf("rollback remove %s: %v", rel, err))
+			if err := live.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+				failures = append(failures, err.Error())
 			}
 		} else {
-			msgs = append(msgs, fmt.Sprintf("rollback stat %s: %v", rel, err))
+			failures = append(failures, err.Error())
 		}
 	}
-	if rbErr := os.Rename(backupExe, currentExe); rbErr != nil {
-		msgs = append(msgs, fmt.Sprintf("rollback exe: %v", rbErr))
+	if filepath.Dir(backupExe) != exeDir || filepath.Dir(currentExe) != exeDir {
+		failures = append(failures, "executable rollback path is outside installation")
+	} else if err := live.Rename(filepath.Base(backupExe), filepath.Base(currentExe)); err != nil {
+		failures = append(failures, err.Error())
 	}
-	return strings.Join(msgs, "; ")
+	return strings.Join(failures, "; ")
 }
 
 // applyMacUpdate replaces the running .app bundle with the app inside the
@@ -1138,38 +937,32 @@ func (a *App) applyMacUpdate(tag string) UpdateApplyResult {
 	defer func() { _ = detachDMG(mounted) }()
 
 	stagedApp := filepath.Join(mounted, "Ally.app")
-	if err := validateMacAppBundle(stagedApp); err != nil {
+	if err := validateMacUpdateBundle(stagedApp, tag); err != nil {
 		msg := fmt.Sprintf("invalid staged app: %v", err)
 		a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
 		return UpdateApplyResult{Error: msg}
 	}
 
 	backupApp := appDir + appBackupSuffix
-	// 删除时以「app bundle 所在的目录」为基目录：目标必须是它的严格子目录，所以
-	// 永远删不到安装目录本身、也删不到别处（1141 与 1151 同源）。
 	appParent := filepath.Dir(appDir)
-	_ = removeAllWithinBase(appParent, backupApp)
-	if err := os.Rename(appDir, backupApp); err != nil {
-		msg := fmt.Sprintf("backup current app: %v", err)
-		a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
-		return UpdateApplyResult{Error: msg}
+	if err := removeAllWithinBase(appParent, backupApp); err != nil {
+		return UpdateApplyResult{Error: err.Error()}
 	}
-
-	// Copy the new bundle into place with ditto, which preserves permissions
-	// and symlinks. The destination no longer exists after the rename above.
-	if err := copyDir(stagedApp, appDir); err != nil {
-		_ = removeAllWithinBase(appParent, appDir)
-		if rbErr := os.Rename(backupApp, appDir); rbErr != nil {
-			msg := fmt.Sprintf("copy new app failed (%v) and rollback rename also failed (%v); manual recovery required from %s", err, rbErr, backupApp)
-			a.emit("update:error", map[string]any{"stage": "rollback", "error": msg})
-			return UpdateApplyResult{Error: msg}
-		}
-		msg := fmt.Sprintf("copy new app: %v (rolled back)", err)
-		a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
-		return UpdateApplyResult{Error: msg}
+	// Prepare beside the live bundle. Copy failures leave the current app intact.
+	if err := copyDir(stagedApp, backupApp); err != nil {
+		_ = removeAllWithinBase(appParent, backupApp)
+		return UpdateApplyResult{Error: err.Error()}
 	}
-
-	removeQuarantineAttr(appDir)
+	if err := validateMacUpdateBundle(backupApp, tag); err != nil {
+		_ = removeAllWithinBase(appParent, backupApp)
+		return UpdateApplyResult{Error: err.Error()}
+	}
+	// The old bundle becomes .bak in one atomic exchange; there is no interval
+	// with a missing or partially copied live application.
+	if err := exchangeUpdateBundles(appDir, backupApp); err != nil {
+		_ = removeAllWithinBase(appParent, backupApp)
+		return UpdateApplyResult{Error: err.Error()}
+	}
 
 	cleanAppliedUpdateDirs(updateBaseDir(), tag)
 	a.emit(updateProgressEvent, map[string]any{"stage": "apply", "version": tag, "percent": 100})
@@ -1190,6 +983,12 @@ func (a *App) QuitForUpdate() error {
 	}
 	if a.ctx == nil {
 		return errors.New("app context not initialized")
+	}
+	a.updateMu.Lock()
+	applied := a.updateOperation == "applied"
+	a.updateMu.Unlock()
+	if !applied {
+		return errors.New("no update has been applied")
 	}
 	if goruntime.GOOS == "darwin" {
 		appDir, err := macAppBundleDir()
@@ -1270,7 +1069,9 @@ func cleanupUpdateBackup() {
 		return
 	}
 	backup := filepath.Join(exeDir, "Ally.exe"+exeBackupSuffix)
-	_ = os.Remove(backup)
+	if err := os.Remove(backup); err == nil || errors.Is(err, os.ErrNotExist) {
+		_ = removeAllWithinBase(exeDir, filepath.Join(exeDir, ".ally-update-backup"))
+	}
 }
 
 // findStagedUpdate scans ~/.ally_agent/updates/<tag>/staged/ for any directory
@@ -1322,6 +1123,15 @@ func (a *App) SkipUpdate(version string) SkipUpdateResult {
 	if err := validateUpdateTag(version); err != nil {
 		return SkipUpdateResult{Error: err.Error()}
 	}
+	if err := a.beginUpdateOperation("skipping"); err != nil {
+		return SkipUpdateResult{Error: err.Error()}
+	}
+	defer a.endUpdateOperation()
+	lock, err := lockUpdateDownloads()
+	if err != nil {
+		return SkipUpdateResult{Error: err.Error()}
+	}
+	defer lock.Close()
 	if err := a.updateConfigAndPersist(func(cfg *ConfigState) {
 		for _, skipped := range cfg.SkippedUpdates {
 			if skipped == version {
@@ -1416,7 +1226,7 @@ func parseAtomLatestTag(body []byte) (string, error) {
 // download, prompt the user, or do nothing.
 func (a *App) CheckForUpdates() CheckForUpdatesResult {
 	cfg := updateNetworkConfig(a.effectiveConfigSafe())
-	client := proxyHTTPClient(cfg, false, 60*time.Second)
+	client := updateHTTPClient(cfg, updateHTTPTimeout)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, allyReleasesAtom, nil)

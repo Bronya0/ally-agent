@@ -272,7 +272,13 @@ func TestEditRecoveryHonorsReadAndWriteFences(t *testing.T) {
 	result := executeRecoveryTestEdit(t, a, context.Background(), cfg, FileTextEdits{
 		Path: link, Version: hashVersion([]byte(secret)), Changes: []TextChange{{OldText: "missing", NewText: "updated"}},
 	})
-	if result.OK || result.modelRead != nil || result.ErrorCode != "E_PROTECTED_PATH" {
+	// The write tools refuse symlinks outright, so this is rejected by the symlink
+	// guard before the credential fence ever resolves the target. Either code is a
+	// block; what matters is that the edit is refused and the secret stays out.
+	if code := result.ErrorCode; result.OK || result.modelRead != nil || (code != "E_PROTECTED_PATH" && code != "E_SYMLINK_PATH") {
 		t.Fatalf("symlink hid a forbidden read: %#v", result)
+	}
+	if strings.Contains(recoveryTestModelResult(t, result), secret) {
+		t.Fatalf("symlink leaked the credential: %#v", result)
 	}
 }

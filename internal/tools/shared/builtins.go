@@ -31,8 +31,7 @@ const (
 	// MaxRenderHTMLCharacters bounds the HTML snippet by Unicode code points.
 	MaxRenderHTMLCharacters = 50000
 	// maxCalculateExactInteger is the largest signed 64-bit integer. The calculate
-	// engine's +, -, * are int64 arithmetic: exact up to this bound and silently
-	// wrapping past it, so the tool description has to state the range.
+	// integer arithmetic is checked rather than silently wrapping past this bound.
 	maxCalculateExactInteger = 1<<63 - 1
 	// MaxRenderHTMLTitleChars bounds the render_html title, which the UI also
 	// uses as the iframe title.
@@ -211,7 +210,7 @@ func chatToolsUncached() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"includeFinished": map[string]any{"type": "boolean", "description": "For action=list: include finished services (default false). Output remains readable by id."},
-				"action":          map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "Start a new background process, stop one by id, list starting/running services (includeFinished=true adds recent finished ones), or read a bounded tail of one service's output (works on finished services for post-mortem diagnosis)."},
+				"action":          map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "Start a new background process, stop one by id, list starting/running services (includeFinished=true adds recent finished ones), or read a bounded tail of one service's output (works on finished services for post-mortem diagnosis). Only output flushed by the subprocess is visible: empty output does not prove a hang. For Python services use python -u or flush=True when immediate logs are needed; force-stop may discard unflushed output."},
 				"name":            map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
 				"description":     map[string]any{"type": "string", "minLength": 1, "maxLength": MaxServiceDescriptionChars, "pattern": ".*\\S.*", "description": "Required with action=start: explain what the service does and why it is needed. Shown to the user in service cards and the task center."},
 				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
@@ -410,7 +409,7 @@ func chatToolsUncached() []openai.Tool {
 			"required": []string{"files"},
 		}),
 
-		functionTool("calculate", fmt.Sprintf("Evaluate a deterministic math or logical expression using expr syntax (e.g. 144 + 2**3, sqrt(16), sin(pi/2), sum([1,2,3]), 10 > 5 ? 100 : 200); `^` means the same as `**`. There is no integer-division operator: `/` yields a fraction, and `//` starts a comment that silently drops the rest of the expression, so write floor(13 / 5) or 13 / 5. Integer +, -, * are exact up to ±%d and wrap silently past it; write an operand as a decimal (9999999999.0 * 9999999999.0) to compute in floating point instead.", maxCalculateExactInteger), map[string]any{
+		functionTool("calculate", fmt.Sprintf("Evaluate a deterministic math or logical expression using expr syntax (e.g. 144 + 2**3, sqrt(16), sin(pi/2), sum([1,2,3]), 10 > 5 ? 100 : 200); `^` means the same as `**`. There is no integer-division operator: `/` yields a fraction, and comments are rejected, so write floor(13 / 5) or 13 / 5. Integer +, -, *, negation, abs and sum report overflow instead of silently wrapping (maximum signed integer: %d). Decimal operands use approximate floating-point arithmetic; they do not guarantee exact large integers or monetary values. Use an arbitrary-precision calculator when exact results exceed the supported integer range.", maxCalculateExactInteger), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"expression": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Expression to evaluate (supports arithmetic, math functions, logic, ternary, and array aggregations)."},

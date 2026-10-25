@@ -459,8 +459,7 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 		base.SkippedUpdates = cloneStringSlice(overlay.SkippedUpdates)
 	}
 	// GitHubToken 也走“非空 overlay 胜”的常规口径（与 UserAgent 同）：空 overlay 表示
-	// 字段没携带，保留 base（fetchReleaseByTag / DownloadUpdate 走
-	// effectiveConfigSafe() 的空 overlay，正是靠这一点才能读到用户配置的 token）；
+	// 字段没携带，保留 base，避免旧配置中的 token 在读取或合并时被抹掉；
 	// 清空只能经 SaveConfig 的显式写入（那里无条件采信请求值，含空串）。
 	if strings.TrimSpace(overlay.GitHubToken) != "" {
 		base.GitHubToken = strings.TrimSpace(overlay.GitHubToken)

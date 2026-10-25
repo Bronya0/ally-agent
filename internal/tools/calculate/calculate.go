@@ -85,7 +85,10 @@ func Evaluate(req Request) (Result, error) {
 	// The expression is compiled exactly as written: expr already reads `^` as
 	// exponentiation, so a textual rewrite (e.g. `^` to `**`) would buy nothing
 	// and would corrupt every string literal and regex anchor containing `^`.
-	program, err := expr.Compile(raw, expr.Env(defaultEnv), expr.MaxNodes(200))
+	program, err := expr.Compile(raw, expr.Env(defaultEnv), expr.MaxNodes(200),
+		expr.Patch(checkedArithmeticPatcher{}),
+		expr.Function("__ally_arithmetic", checkedArithmetic),
+		expr.Function("__ally_abs", checkedAbs))
 	if err != nil {
 		return Result{}, fmt.Errorf("invalid expression: %w", err)
 	}

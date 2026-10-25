@@ -141,7 +141,7 @@ func loadCodeGraph(workspace string) string {
 		content = content[:idx]
 	}
 	content = strings.ToValidUTF8(content, "")
-	return strings.TrimSpace(content) + "\n\n<!-- CODEGRAPH.md was truncated for prompt size. Run the codegraph skill to regenerate a concise graph if this omits needed architecture. -->"
+	return strings.TrimSpace(content) + "\n\n<!-- CODEGRAPH.md was truncated for prompt size. Read CODEGRAPH.md on demand for omitted entries; when updating it, keep the entire navigation map within 8192 UTF-8 bytes. -->"
 }
 
 func buildCodeGraphPromptPart(workspace string) string {

@@ -638,9 +638,9 @@ func (a *App) runCommandWithTimer(parent context.Context, cfg ConfigState, req C
 	cmd.Dir = cwd
 	cmd.Env = commandEnvironment(cfg)
 	buf := &limitedBuffer{limit: maxToolOutput, tail: newRollingBuffer(maxToolOutput)}
-	// 完整输出延迟落盘：仅在内存缓冲首次溢出时创建工作区 .tmp 下的 spill 文件，
+	// 完整输出延迟落盘：仅在内存缓冲首次溢出时创建工作区 .tmp/command-logs 下的 spill 文件，
 	// 把已缓冲前缀写入后继续边跑边写；未截断的小输出全程不碰磁盘。
-	tw := &teeWriter{primary: buf, spillDir: filepath.Join(root, ".tmp")}
+	tw := &teeWriter{primary: buf, spillDir: filepath.Join(root, ".tmp", "command-logs")}
 	buf.onTruncate = tw.startSpill
 	cmd.Stdout = tw
 	cmd.Stderr = tw
@@ -955,6 +955,11 @@ func (w *teeWriter) startSpill(prefix []byte) io.Writer {
 	if w.spill != nil || w.spillDir == "" {
 		return nil
 	}
+	// The new log subdirectory must not follow a linked .tmp parent.
+	if info, err := os.Lstat(filepath.Dir(w.spillDir)); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		w.spillErr = errors.New("refusing a symlinked command log parent directory")
+		return nil
+	}
 	if err := os.MkdirAll(w.spillDir, 0o755); err != nil {
 		w.spillErr = err
 		return nil
@@ -1067,8 +1072,8 @@ func (s *commandLogSink) Write(p []byte) (int, error) {
 }
 
 // cleanupCommandSpillFiles removes stale command full-output temp files
-// older than 24 hours from the workspace .tmp directory (and the legacy
-// .ally/tmp location), once at startup, to avoid unbounded accumulation.
+// older than 24 hours from .tmp/command-logs (and legacy locations), once at
+// startup, to avoid unbounded accumulation.
 func cleanupCommandSpillFiles(workspaceRoot string) {
 	if strings.TrimSpace(workspaceRoot) == "" {
 		return
@@ -1078,9 +1083,9 @@ func cleanupCommandSpillFiles(workspaceRoot string) {
 		return
 	}
 	dirs := []string{
+		filepath.Join(abs, ".tmp", "command-logs"),
+		// Legacy locations: sweep old logs without moving them.
 		filepath.Join(abs, ".tmp"),
-		// Legacy location used before the switch to workspace .tmp; sweep
-		// leftovers so they do not linger forever.
 		filepath.Join(abs, ".ally", "tmp"),
 	}
 	cutoff := time.Now().Add(-24 * time.Hour)

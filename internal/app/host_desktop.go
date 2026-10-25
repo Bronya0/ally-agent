@@ -172,7 +172,6 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 	if err := a.startRuntime(ctx); err != nil {
 		return err
 	}
-	scheduleUpdateBackupCleanup(ctx)
 	a.restoreApiService()
 
 	return nil

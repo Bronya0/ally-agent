@@ -176,6 +176,9 @@ func TestCommandFullLogCanBeReadAndSearched(t *testing.T) {
 	if err != nil || r.ExitCode != 0 || r.OutputFilePath == "" {
 		t.Fatalf("command must retain its full output: exit=%d path=%q err=%v", r.ExitCode, r.OutputFilePath, err)
 	}
+	if filepath.Dir(r.OutputFilePath) != filepath.Join(a.config.Workspace, ".tmp", "command-logs") {
+		t.Fatalf("command logs must use their own automatically created directory: %s", r.OutputFilePath)
+	}
 	if strings.Contains(r.Output, "完整输出已保存") || strings.Contains(r.Output, "read 分段") {
 		t.Fatal("command card output must not contain model log retrieval instructions")
 	}

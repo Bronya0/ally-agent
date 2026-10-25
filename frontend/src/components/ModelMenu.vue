@@ -217,8 +217,9 @@ function modelMenuProps() {
 // 当前生效的模型行加一个稳定的类名，样式据此铺底（naive 的 pending 只覆盖悬停态）；
 // 管理行同理，靠这个类把它钉在列表底部。
 function modelMenuNodeProps(option) {
-  if (option?.isManage) return { class: 'model-menu-manage-row' };
-  return option?.active ? { class: 'model-menu-row-active' } : undefined;
+  // Naive UI replaces the outer class with nodeProps.class rather than merging it.
+  if (option?.isManage) return { class: 'n-dropdown-option model-menu-manage-row' };
+  return option?.active ? { class: 'n-dropdown-option model-menu-row-active' } : undefined;
 }
 
 function onSelect(key) {

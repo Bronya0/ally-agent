@@ -367,11 +367,8 @@ func TestLastUsedModelSurvivesReload(t *testing.T) {
 	}
 }
 
-// TestGitHubTokenSurvivesReloadAndReachesUpdate: token 是唯一不经 UI、只能手改 config.json
-// （或旧版写盘）设置的凭据。加载路径不采纳它，内存里就是空的，GetConfig 把空值回给前端，
-// 下一次保存再把空值写回磁盘——用户的 token 被永久抹掉；即使采纳了，mergeConfig 不带
-// 空 overlay 也会让它传不进更新链路（fetchReleaseByTag/DownloadUpdate 走 effectiveConfigSafe）。
-func TestGitHubTokenSurvivesReloadAndReachesUpdate(t *testing.T) {
+// Legacy tokens remain intact even though self-updates no longer call the API.
+func TestGitHubTokenSurvivesReloadAndMerge(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -392,7 +389,7 @@ func TestGitHubTokenSurvivesReloadAndReachesUpdate(t *testing.T) {
 		t.Fatalf("the persisted token must survive the load, got %q", app.config.GitHubToken)
 	}
 	if got := app.effectiveConfigSafe().GitHubToken; got != "ghp_secret" {
-		t.Fatalf("the update path must see the configured token, got %q", got)
+		t.Fatalf("the effective config must preserve the legacy token, got %q", got)
 	}
 }
 
