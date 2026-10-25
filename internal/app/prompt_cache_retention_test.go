@@ -15,17 +15,15 @@ import (
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 )
 
-// TestAnthropicPromptCacheBreakpointsTtlOnlyOnOfficialEndpoint covers the
-// breakpoint markers: the three nested markers are always placed, the ttl field
-// is spelled out only for the official endpoint — "5m" is the provider default,
-// so every other endpoint gets the same cache lifetime from the fields it knows
-// and never receives a key it could reject — and Moonshot's Messages endpoint
+// TestAnthropicPromptCacheBreakpointsUseDefaultTtl covers the breakpoint markers:
+// the three nested markers are always placed, ttl is omitted on every endpoint,
+// and Moonshot's Messages endpoint
 // carries one marker more, the top-level one, which is the only form it honours
 // (such an endpoint ignores the nested markers and writes no cache entry at all
 // without it; see markAnthropicPromptCacheBreakpoints). Any other compatible
 // gateway keeps exactly the nested three. The marshalled request is asserted
 // because "marker without a ttl" and "no marker" are the same Go value.
-func TestAnthropicPromptCacheBreakpointsTtlOnlyOnOfficialEndpoint(t *testing.T) {
+func TestAnthropicPromptCacheBreakpointsUseDefaultTtl(t *testing.T) {
 	build := func(baseURL string) string {
 		t.Helper()
 		params := anthropic.MessageNewParams{
@@ -49,8 +47,8 @@ func TestAnthropicPromptCacheBreakpointsTtlOnlyOnOfficialEndpoint(t *testing.T) 
 	if got := strings.Count(official, "cache_control"); got != 3 {
 		t.Fatalf("official endpoint: %d breakpoints, want 3 (%s)", got, official)
 	}
-	if !strings.Contains(official, `"ttl":"5m"`) {
-		t.Fatalf("official endpoint must spell out the provider-default ttl: %s", official)
+	if strings.Contains(official, `"ttl"`) {
+		t.Fatalf("official endpoint must use the default ttl: %s", official)
 	}
 
 	// Three nested markers plus the top-level one: the endpoint that only reads the

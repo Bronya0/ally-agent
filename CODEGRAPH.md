@@ -31,6 +31,8 @@
 | 工具状态、卡片数据、计划展示 | `frontend/src/utils/toolKind.mjs` / `toolEventState.mjs` / `toolPreview.mjs` / `planPanel.mjs` + `frontend/src/components/CardGrid.vue` |
 | 输入栏统计、文件树、设置与管理页 | `frontend/src/components/ComposerInfoBar.vue` / `WorkspaceExplorer.vue` / `SettingsModal.vue`；技能、MCP、模型、SSH、插件各有 Panel 组件 |
 | 主题、动效、国际化、本地历史 | `frontend/src/style.css` / `i18n.mjs`；`frontend/src/utils/theme.mjs` / `naiveTheme.mjs` / `promptHistoryStore.mjs`；动效在 `frontend/src/composables/` |
+| 三协议实际请求字段、发送条件、思考/缓存/回放契约 | [docs/model-protocol-fields.md](docs/model-protocol-fields.md)（实现规则唯一文档入口）；供应商资料快照保留在 [docs/provider-api-fields.md](docs/provider-api-fields.md) |
+| 缓存架构与订阅零命中排查 | [docs/agent-prompt-cache.md](docs/agent-prompt-cache.md)（冻结/回放/统计）+ [docs/chatgpt-cache-diagnostics.md](docs/chatgpt-cache-diagnostics.md)（实验条件/证据边界/诊断采集） |
 
 ## 核心调用流
 

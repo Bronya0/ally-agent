@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
@@ -29,8 +30,7 @@ import (
 )
 
 // anthropicOfficialCfg is the official Anthropic endpoint. The breakpoint helper
-// takes the whole config because both the ttl and the top-level marker depend on
-// which endpoint the request lands on.
+// takes the whole config because the top-level marker is endpoint-specific.
 var anthropicOfficialCfg = ConfigState{APIFormat: apiFormatAnthropicMessages, BaseURL: defaultAnthropicMessagesURL}
 
 // TestMarkAnthropicPromptCacheBreakpointsLandOnLastBlocks pins where the three
@@ -49,17 +49,17 @@ func TestMarkAnthropicPromptCacheBreakpointsLandOnLastBlocks(t *testing.T) {
 	}
 	markAnthropicPromptCacheBreakpoints(&params, anthropicOfficialCfg)
 
-	if got := params.System[0].CacheControl.TTL; got != "5m" {
-		t.Fatalf("system breakpoint ttl = %q, want 5m", got)
+	if got := params.System[0].CacheControl; got.Type != "ephemeral" || got.TTL != "" {
+		t.Fatalf("system breakpoint = %+v, want ephemeral with default ttl", got)
 	}
 	tail := params.Messages[3].Content[0]
-	if tail.OfText == nil || tail.OfText.CacheControl.TTL != "5m" {
+	if tail.OfText == nil || tail.OfText.CacheControl.Type != "ephemeral" || tail.OfText.CacheControl.TTL != "" {
 		t.Fatalf("expected cache_control breakpoint on the last block of the last message")
 	}
 	// One message marker only: it moves with the tail instead of staying behind on
 	// the previous turn's tool result.
 	previous := params.Messages[2].Content[len(params.Messages[2].Content)-1]
-	if previous.OfToolResult == nil || previous.OfToolResult.CacheControl.TTL != "" {
+	if previous.OfToolResult == nil || previous.OfToolResult.CacheControl.Type != "" {
 		t.Fatalf("the previous turn's tool result must not keep a marker")
 	}
 
@@ -73,7 +73,7 @@ func TestMarkAnthropicPromptCacheBreakpointsLandOnLastBlocks(t *testing.T) {
 	}
 	markAnthropicPromptCacheBreakpoints(&thinkingOnly, anthropicOfficialCfg)
 	question := thinkingOnly.Messages[0].Content[0]
-	if question.OfText == nil || question.OfText.CacheControl.TTL != "5m" {
+	if question.OfText == nil || question.OfText.CacheControl.Type != "ephemeral" || question.OfText.CacheControl.TTL != "" {
 		t.Fatalf("expected the marker to fall back to the last cacheable block")
 	}
 
@@ -98,10 +98,10 @@ func TestMarkAnthropicPromptCacheBreakpointsLandOnLastBlocks(t *testing.T) {
 	if len(lastUserBlocks) != 2 {
 		t.Fatalf("expected 2 blocks in last user message, got %d", len(lastUserBlocks))
 	}
-	if lastUserBlocks[0].OfToolResult == nil || lastUserBlocks[0].OfToolResult.CacheControl.TTL != "" {
+	if lastUserBlocks[0].OfToolResult == nil || lastUserBlocks[0].OfToolResult.CacheControl.Type != "" {
 		t.Fatalf("tool result block must stay outside cache control")
 	}
-	if lastUserBlocks[1].OfText == nil || lastUserBlocks[1].OfText.CacheControl.TTL != "5m" {
+	if lastUserBlocks[1].OfText == nil || lastUserBlocks[1].OfText.CacheControl.Type != "ephemeral" || lastUserBlocks[1].OfText.CacheControl.TTL != "" {
 		t.Fatalf("expected cache_control breakpoint on the merged message's last block")
 	}
 }
@@ -191,7 +191,7 @@ func TestBuildAnthropicMessagesMergesConsecutiveSameRoleMessages(t *testing.T) {
 // prompt-cache contract: caching stays in the provider's implicit mode (no mode
 // marker, no explicit breakpoint anywhere in the input), no retention field is
 // sent — the provider default stays in place — and the session routing key travels
-// to the endpoints that document it (promptCacheKeyForRequest): the official API
+// to endpoints that need it (promptCacheKeyForRequest): the official API
 // and the vendors that declare prompt_cache_key on their Responses API (智谱 / Kimi /
 // MiniMax), so a relay of an undocumented vendor never receives a top-level key it
 // may answer with 400.
@@ -1581,11 +1581,11 @@ func TestAnthropicToolPromptCacheBreakpoint(t *testing.T) {
 	}
 	markAnthropicPromptCacheBreakpoints(&params, anthropicOfficialCfg)
 	lastTool := params.Tools[1].OfTool
-	if lastTool == nil || lastTool.CacheControl.TTL == "" {
+	if lastTool == nil || lastTool.CacheControl.Type != "ephemeral" || lastTool.CacheControl.TTL != "" {
 		t.Fatal("expected CacheControl on the last tool definition")
 	}
 	firstTool := params.Tools[0].OfTool
-	if firstTool != nil && firstTool.CacheControl.TTL != "" {
+	if firstTool != nil && firstTool.CacheControl.Type != "" {
 		t.Fatal("first tool should not have cache breakpoint")
 	}
 }
@@ -1900,19 +1900,25 @@ func TestResponsesToolItemIDCaptureAndCompleteness(t *testing.T) {
 	}
 }
 
-func TestSessionAffinityHeadersOnlyForOpenRouter(t *testing.T) {
-	cfg := ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: "https://openrouter.ai/api/v1", responsesPromptCacheKey: "ses-key"}
-	if headers := sessionAffinityHeaders(cfg); headers["x-session-id"] != "ses-key" {
-		t.Fatalf("headers = %+v, want the OpenRouter session header", headers)
+func TestSessionAffinityHeaders(t *testing.T) {
+	for _, endpoint := range []string{openAIOfficialAPIBaseURL, "https://chatgpt.com/backend-api/codex", "https://openrouter.ai/api/v1", "https://relay.example.com/v1"} {
+		for _, format := range []string{apiFormatOpenAIChat, apiFormatOpenAIResponses, apiFormatAnthropicMessages} {
+			cfg := ConfigState{APIFormat: format, BaseURL: endpoint}
+			if headers := sessionAffinityHeaders(cfg); len(headers) != 0 {
+				t.Fatalf("headers = %+v, want none without a session key", headers)
+			}
+			for _, sessionID := range []string{"session-a", "session-a", "session-b"} {
+				key := openAIResponsesPromptCacheKey(sessionID)
+				cfg.responsesPromptCacheKey = " " + key + " "
+				headers := sessionAffinityHeaders(cfg)
+				if len(headers) != 2 || headers["session-id"] != key || headers["x-session-id"] != key {
+					t.Fatalf("%s %s: headers = %+v, want both headers with %q", endpoint, format, headers, key)
+				}
+			}
+		}
 	}
-	cfg.BaseURL = "https://api.openai.com/v1"
-	if headers := sessionAffinityHeaders(cfg); len(headers) != 0 {
-		t.Fatalf("headers = %+v, want none for a non-OpenRouter endpoint", headers)
-	}
-	cfg.BaseURL = "https://openrouter.ai/api/v1"
-	cfg.responsesPromptCacheKey = ""
-	if headers := sessionAffinityHeaders(cfg); len(headers) != 0 {
-		t.Fatalf("headers = %+v, want none without a session key", headers)
+	if openAIResponsesPromptCacheKey("session-a") == openAIResponsesPromptCacheKey("session-b") {
+		t.Fatal("different sessions must have distinct routing identities")
 	}
 }
 
@@ -2017,11 +2023,10 @@ func TestAnthropicTopLevelCacheControlOnlyForEndpointsThatDocumentIt(t *testing.
 		name    string
 		baseURL string
 		wantTop bool
-		// wantTTL is the ttl carried by the nested breakpoints: only the official
-		// endpoint spells out the provider default.
+		// TTL is omitted on every endpoint; cache markers remain explicit.
 		wantTTL string
 	}{
-		{name: "official", baseURL: "https://api.anthropic.com", wantTTL: "5m"},
+		{name: "official", baseURL: "https://api.anthropic.com"},
 		{name: "Moonshot documents the top-level form", baseURL: "https://api.moonshot.cn/anthropic", wantTop: true},
 		{name: "another compatible gateway", baseURL: "https://api.deepseek.com/anthropic"},
 	}
@@ -2076,11 +2081,11 @@ func TestAnthropicThinkingShapeFollowsTheEndpointFamily(t *testing.T) {
 		t.Fatalf("interleaved beta = %q, want none for an adaptive-thinking family", got)
 	}
 
-	// A Claude adaptive model keeps the documented display field.
+	// A Claude adaptive model uses the default display behavior.
 	var adaptiveClaude anthropic.MessageNewParams
 	configureAnthropicThinking(&adaptiveClaude, "claude-opus-4-6", "high", 8192, anthropicOffPlan{})
-	if adaptiveClaude.Thinking.OfAdaptive == nil || adaptiveClaude.Thinking.OfAdaptive.Display == "" {
-		t.Fatal("a Claude adaptive model must keep display: summarized")
+	if adaptiveClaude.Thinking.OfAdaptive == nil || adaptiveClaude.Thinking.OfAdaptive.Display != "" {
+		t.Fatal("a Claude adaptive model must omit display")
 	}
 
 	// A budget-shape Claude model is untouched.
@@ -2119,8 +2124,8 @@ func TestAnthropicThinkingFamiliesCarryTheLevelWhereTheEndpointDocumentsIt(t *te
 		wantEffort     string
 		wantDisplay    string
 	}{
-		{name: "Claude 3.7 keeps the budget shape and no effort field (a 400 there)", model: "claude-3-7-sonnet-20250219", level: "high", wantConfigured: true, wantShape: "enabled", wantDisplay: "summarized"},
-		{name: "Claude adaptive", model: "claude-opus-4-7", level: "high", wantConfigured: true, wantShape: "adaptive", wantEffort: "high", wantDisplay: "summarized"},
+		{name: "Claude 3.7 keeps the budget shape and no effort field (a 400 there)", model: "claude-3-7-sonnet-20250219", level: "high", wantConfigured: true, wantShape: "enabled"},
+		{name: "Claude adaptive", model: "claude-opus-4-7", level: "high", wantConfigured: true, wantShape: "adaptive", wantEffort: "high"},
 		{name: "MiniMax adaptive without display", model: "MiniMax-M2.7", level: "high", wantConfigured: true, wantShape: "adaptive", wantEffort: "high"},
 		{name: "DeepSeek carries the level in output_config.effort", model: "deepseek-v4-pro", level: "medium", wantConfigured: true, wantShape: "enabled", wantEffort: "high"},
 		{name: "DeepSeek low", model: "deepseek-v4-pro", level: "low", wantConfigured: true, wantShape: "enabled", wantEffort: "low"},
@@ -2135,7 +2140,7 @@ func TestAnthropicThinkingFamiliesCarryTheLevelWhereTheEndpointDocumentsIt(t *te
 		{name: "智谱 maps a level its narrow set does not hold", model: "glm-5.2", level: "medium", wantConfigured: true, wantShape: "enabled", wantEffort: "high"},
 		{name: "an older 智谱 id takes the vendor row", model: "glm-4.7", level: "high", wantConfigured: true, wantShape: "enabled", wantEffort: "high"},
 		{name: "MiMo documents no thinking configuration, so nothing is written", model: "mimo-v2.5-pro", level: "high"},
-		{name: "an unknown relay model keeps the Claude shape", model: "some-relay-model", level: "high", wantConfigured: true, wantShape: "enabled", wantDisplay: "summarized"},
+		{name: "an unknown relay model keeps the Claude shape", model: "some-relay-model", level: "high", wantConfigured: true, wantShape: "enabled"},
 		// A model whose docs say it cannot stop thinking lands on its lowest level,
 		// instead of a field the endpoint never declared (Kimi K3) or rejects (GLM-5.3).
 		{name: "off on Kimi K3 falls back to its lowest level", model: "kimi-k3", level: "off", wantEffort: "low"},
@@ -2217,28 +2222,19 @@ func TestAnthropicThinkingFamiliesStayUsable(t *testing.T) {
 // bytes itself (see anthropicEnabledSwitchOnlyBlock); getting it wrong would either
 // resend the deprecated field or drop the switch entirely.
 func TestAnthropicSwitchOnlyBlockCarriesNoBudget(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		display bool
-		want    string
-	}{
-		{name: "without display", want: `"thinking":{"type":"enabled"}`},
-		{name: "with display", display: true, want: `"thinking":{"display":"summarized","type":"enabled"}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			params := anthropic.MessageNewParams{Model: "qwen3.8-max", MaxTokens: 8192}
-			params.Thinking = anthropicEnabledSwitchOnlyBlock(tc.display)
-			raw, err := json.Marshal(params)
-			if err != nil {
-				t.Fatalf("marshal anthropic params: %v", err)
-			}
-			if !strings.Contains(string(raw), tc.want) {
-				t.Fatalf("thinking block = %s, want it to contain %s", raw, tc.want)
-			}
-			if strings.Contains(string(raw), "budget_tokens") {
-				t.Fatalf("a switchOnly family must not receive the deprecated budget field: %s", raw)
-			}
-		})
+	params := anthropic.MessageNewParams{Model: "qwen3.8-max", MaxTokens: 8192}
+	params.Thinking = anthropicEnabledSwitchOnlyBlock()
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"thinking":{"type":"enabled"}`) {
+		t.Fatalf("thinking switch missing: %s", raw)
+	}
+	for _, key := range []string{"budget_tokens", "display"} {
+		if strings.Contains(string(raw), `"`+key+`"`) {
+			t.Fatalf("switch-only request must omit %s: %s", key, raw)
+		}
 	}
 }
 
@@ -2506,11 +2502,9 @@ func TestResponsesUnknownTypedEventStaysIgnored(t *testing.T) {
 	}
 }
 
-// TestBuildOpenAIResponsesRequestPairsEffortWithSummary verifies that an
-// explicit reasoning effort is paired with summary:"auto" (kimi
-// openai-responses.ts:1116-1120; pi openai-responses.ts:319-335): without the
-// summary request the Responses API emits no reasoning_summary_text deltas.
-func TestBuildOpenAIResponsesRequestPairsEffortWithSummary(t *testing.T) {
+// Request-level summaries are omitted on ordinary Responses routes as well
+// as subscriptions; the selected reasoning effort still reaches the provider.
+func TestBuildOpenAIResponsesRequestOmitsSummaryPreservesEffort(t *testing.T) {
 	cfg := ConfigState{
 		APIFormat:       apiFormatOpenAIResponses,
 		BaseURL:         defaultOpenAIResponsesURL,
@@ -2519,8 +2513,9 @@ func TestBuildOpenAIResponsesRequestPairsEffortWithSummary(t *testing.T) {
 	}
 	messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
 	body := buildOpenAIResponsesRequest(cfg, "gpt-5.5", messages, nil, nil)
-	if body.Reasoning.Summary != oa.ReasoningSummaryAuto {
-		t.Fatalf("reasoning.summary = %q, want auto", body.Reasoning.Summary)
+	wire := marshalResponsesRequest(t, body)
+	if _, present := wire["reasoning"].(map[string]any)["summary"]; present {
+		t.Fatalf("reasoning.summary must be absent from the wire: %v", wire["reasoning"])
 	}
 	if body.Reasoning.Effort != oa.ReasoningEffort("medium") {
 		t.Fatalf("reasoning.effort = %q, want medium", body.Reasoning.Effort)
@@ -2574,20 +2569,16 @@ func TestAnthropicUsageStateMergesByPresence(t *testing.T) {
 	}
 }
 
-// TestConfigureAnthropicThinkingSetsDisplayAndKeepsAnswerRoom covers two field
-// contracts. display is sent explicitly because "summarized" is what makes the
-// model stream its thinking text (pi sets it on both branches,
-// anthropic-messages.ts:1127/1135/1147), and a budget_tokens value must leave the
-// visible answer its reserved room under the shared max_tokens ceiling (pi:
-// clampThinkingBudgetToAnswerRoom / MIN_ANSWER_TOKENS).
-func TestConfigureAnthropicThinkingSetsDisplayAndKeepsAnswerRoom(t *testing.T) {
+// Display is omitted without changing thinking mode or taking away the answer
+// room reserved under the shared max_tokens ceiling.
+func TestConfigureAnthropicThinkingOmitsDisplayAndKeepsAnswerRoom(t *testing.T) {
 	adaptive := anthropic.MessageNewParams{}
 	if !configureAnthropicThinking(&adaptive, "claude-opus-4-7", "high", 64000, anthropicOffPlan{}) {
 		t.Fatal("an adaptive-thinking model must enable thinking")
 	}
 	if adaptive.Thinking.OfAdaptive == nil ||
-		adaptive.Thinking.OfAdaptive.Display != anthropic.ThinkingConfigAdaptiveDisplaySummarized {
-		t.Fatalf("adaptive thinking = %+v, want display=summarized", adaptive.Thinking.OfAdaptive)
+		adaptive.Thinking.OfAdaptive.Display != "" {
+		t.Fatalf("adaptive thinking = %+v, want display omitted", adaptive.Thinking.OfAdaptive)
 	}
 
 	budgeted := anthropic.MessageNewParams{}
@@ -2600,8 +2591,8 @@ func TestConfigureAnthropicThinkingSetsDisplayAndKeepsAnswerRoom(t *testing.T) {
 	if got := budgeted.Thinking.OfEnabled.BudgetTokens; got != 4096-minAnthropicAnswerTokens {
 		t.Fatalf("budget_tokens = %d, want %d", got, 4096-minAnthropicAnswerTokens)
 	}
-	if budgeted.Thinking.OfEnabled.Display != anthropic.ThinkingConfigEnabledDisplaySummarized {
-		t.Fatalf("display = %q, want summarized", budgeted.Thinking.OfEnabled.Display)
+	if budgeted.Thinking.OfEnabled.Display != "" {
+		t.Fatalf("display = %q, want omitted", budgeted.Thinking.OfEnabled.Display)
 	}
 
 	tiny := anthropic.MessageNewParams{}
@@ -2841,8 +2832,8 @@ func TestChatAdapterSendsEffortPerVendor(t *testing.T) {
 }
 
 // TestOpenAIResponsesEffortFollowsVendorTable: the Responses wire carries the
-// vendor-resolved level (DeepSeek's documented medium→high here) paired with the
-// summary request, while a model of no known vendor keeps reasoning unset.
+// vendor-resolved level (DeepSeek's documented medium→high here), omits the
+// summary request, and keeps reasoning unset for a model of no known vendor.
 func TestOpenAIResponsesEffortFollowsVendorTable(t *testing.T) {
 	messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
 	cfg := ConfigState{
@@ -2855,8 +2846,9 @@ func TestOpenAIResponsesEffortFollowsVendorTable(t *testing.T) {
 	if body.Reasoning.Effort != oa.ReasoningEffort(reasoningEffortHigh) {
 		t.Fatalf("reasoning.effort = %q, want %q (DeepSeek's documented translation)", body.Reasoning.Effort, reasoningEffortHigh)
 	}
-	if body.Reasoning.Summary != oa.ReasoningSummaryAuto {
-		t.Fatalf("reasoning.summary = %q, want auto", body.Reasoning.Summary)
+	wire := marshalResponsesRequest(t, body)
+	if _, present := wire["reasoning"].(map[string]any)["summary"]; present {
+		t.Fatalf("reasoning.summary must be absent from the wire: %v", wire["reasoning"])
 	}
 
 	cfg.ReasoningEffort = reasoningEffortMax
@@ -2960,14 +2952,14 @@ func TestChatAdapterRequiresStreamTerminator(t *testing.T) {
 func TestPromptCacheKeyFollowsTheVendorTable(t *testing.T) {
 	key := "ally:abc"
 	official := ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: openAIOfficialAPIBaseURL, responsesPromptCacheKey: key}
-	if got := promptCacheKeyForRequest(official, apiFormatOpenAIChat, "gpt-5.6"); got != key {
+	if got := promptCacheKeyForRequest(official, apiFormatOpenAIChat, "gpt-5.5"); got != key {
 		t.Fatalf("official key = %q, want the session key", got)
 	}
 	// The rule belongs to the field, not to the adapter: the Responses path asks the
 	// very same predicate.
 	responsesOfficial := official
 	responsesOfficial.APIFormat = apiFormatOpenAIResponses
-	if got := promptCacheKeyForRequest(responsesOfficial, apiFormatOpenAIResponses, "gpt-5.6"); got != key {
+	if got := promptCacheKeyForRequest(responsesOfficial, apiFormatOpenAIResponses, "gpt-5.5"); got != key {
 		t.Fatalf("responses official key = %q, want %q", got, key)
 	}
 
@@ -3350,5 +3342,145 @@ func TestReasoningWireForAdapter(t *testing.T) {
 		if got := reasoningWireForAdapter(c.cfg, c.format, c.model, c.effort); got != c.want {
 			t.Errorf("%s: reasoningWireForAdapter(%q, %q, %q) = %+v, want %+v", c.name, c.format, c.model, c.effort, got, c.want)
 		}
+	}
+}
+
+func TestPromptCacheKeyRestoredOnOfficialModels(t *testing.T) {
+	const key = "ally:session"
+	for _, format := range []string{apiFormatOpenAIChat, apiFormatOpenAIResponses} {
+		for _, model := range []string{"gpt-5.5", "gpt-5.6", "gpt-6-luna", "gpt-6.1-sol", "account-alias"} {
+			t.Run(format+"/"+model, func(t *testing.T) {
+				cfg := ConfigState{APIFormat: format, BaseURL: openAIOfficialAPIBaseURL, responsesPromptCacheKey: key}
+				got := promptCacheKeyForRequest(cfg, format, model)
+				if got != key || cfg.responsesPromptCacheKey != key {
+					t.Fatalf("cache key = %q, want stable session key", got)
+				}
+				if format == apiFormatOpenAIResponses {
+					wire := marshalResponsesRequest(t, buildOpenAIResponsesRequest(cfg, model, nil, nil, nil))
+					if wire["prompt_cache_key"] != key || wire["store"] != false {
+						t.Fatalf("wrong cache key or storage behavior: %v", wire)
+					}
+				} else {
+					body := []byte(`{"messages":[{"role":"user","content":"hi"}]}`)
+					patched, _ := patchChatRequestFields(body, "", nil, got, promptCachePinStore(cfg), reasoningStopThinkingNone)
+					var wire map[string]any
+					if err := json.Unmarshal(patched, &wire); err != nil {
+						t.Fatal(err)
+					}
+					if wire["prompt_cache_key"] != key || wire["store"] != false {
+						t.Fatalf("wrong cache key or storage behavior: %s", patched)
+					}
+					if again, changed := patchChatRequestFields(patched, "", nil, got, true, reasoningStopThinkingNone); changed || string(again) != string(patched) {
+						t.Fatal("request rewrite must remain idempotent")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestResponsesRequestOmitsOptionalToolControls(t *testing.T) {
+	tools := []legacyopenai.Tool{{Type: "function", Function: &legacyopenai.FunctionDefinition{
+		Name: "read", Parameters: map[string]any{"type": "object"},
+	}}}
+	for _, base := range []string{openAIOfficialAPIBaseURL, "https://relay.example/v1"} {
+		cfg := ConfigState{BaseURL: base, APIFormat: apiFormatOpenAIResponses, ReasoningEffort: "high"}
+		wire := marshalResponsesRequest(t, buildOpenAIResponsesRequest(cfg, "gpt-6.1-sol", nil, tools, nil))
+		for _, key := range []string{"tool_choice", "parallel_tool_calls"} {
+			if _, present := wire[key]; present {
+				t.Fatalf("%s must be omitted: %v", key, wire)
+			}
+		}
+		wireTools := wire["tools"].([]any)
+		if len(wireTools) != 1 {
+			t.Fatalf("unexpected automatic hosted tool: %v", wireTools)
+		}
+		fn := wireTools[0].(map[string]any)
+		if fn["type"] != "function" || fn["name"] != "read" || fn["strict"] != false {
+			t.Fatalf("local function contract changed: %v", fn)
+		}
+		if wire["reasoning"].(map[string]any)["effort"] != "high" {
+			t.Fatal("effort changed")
+		}
+	}
+}
+
+func TestDeepSeekAnthropicOffOnlyWhenSelected(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	for _, tc := range []struct{ level, outputEffort string }{
+		{"off", ""}, {"auto", ""}, {"", ""},
+		{"low", "low"}, {"medium", "high"}, {"high", "high"},
+		{"xhigh", "high"}, {"max", "max"},
+	} {
+		t.Run(tc.level, func(t *testing.T) {
+			requests := make(chan map[string]any, 1)
+			// This local proxy answers the request itself; no request reaches DeepSeek.
+			proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					w.WriteHeader(400)
+					return
+				}
+				requests <- body
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, `event: message_start
+data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":1,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"OK"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`)
+			}))
+			defer proxy.Close()
+			cfg := ConfigState{
+				APIFormat: apiFormatAnthropicMessages, BaseURL: "http://api.deepseek.com/anthropic",
+				APIKey: "test-key", MaxTokens: 8192, ReasoningEffort: tc.level,
+				ProxyMode: proxyModeManual, ProxyURL: proxy.URL,
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := newModelTestApp().streamAnthropicMessages(ctx, cfg, "deepseek-v4-pro",
+				[]legacyopenai.ChatCompletionMessage{{Role: "user", Content: "hi"}}, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]any
+			select {
+			case body = <-requests:
+			default:
+				t.Fatal("local proxy did not receive request")
+			}
+			if tc.level == "off" {
+				reasoning, _ := body["reasoning"].(map[string]any)
+				if reasoning["effort"] != "none" {
+					t.Fatalf("off switch missing: %v", body)
+				}
+				if _, present := body["thinking"]; present {
+					t.Fatalf("off carries thinking: %v", body)
+				}
+			} else if _, present := body["reasoning"]; present {
+				t.Fatalf("non-off request must not carry the off switch: %v", body)
+			}
+			output, _ := body["output_config"].(map[string]any)
+			if tc.outputEffort == "" {
+				if len(output) != 0 {
+					t.Fatalf("unexpected output effort: %v", output)
+				}
+			} else if output["effort"] != tc.outputEffort {
+				t.Fatalf("effort = %v, want %s", output, tc.outputEffort)
+			}
+		})
 	}
 }

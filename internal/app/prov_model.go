@@ -1404,10 +1404,6 @@ func isDeepSeekAnthropicEndpoint(cfg ConfigState) bool {
 	return strings.Contains(strings.ToLower(baseURLForAPIFormat(cfg)), "api.deepseek.com")
 }
 
-func isOpenRouterEndpoint(cfg ConfigState) bool {
-	return strings.Contains(strings.ToLower(baseURLForAPIFormat(cfg)), "openrouter")
-}
-
 // promptCacheKeyVendors lists the vendors whose own docs declare the
 // session-sticky prompt_cache_key, and on which wire. The field belongs to the OpenAI
 // protocol: the official API documents it, and three of the six platforms Ally
@@ -1472,8 +1468,8 @@ func vendorDocumentsPromptCacheKey(model, apiFormat string) bool {
 // promptCacheKeyForRequest returns the session-sticky prompt_cache_key for a request
 // on one of the OpenAI protocols, or "" when the field must not be sent. Both adapters
 // ask this one predicate, because the rule belongs to the field and not to the adapter:
-// the official API and the vendors in promptCacheKeyVendors receive the key, every
-// other endpoint receives nothing. The value is the hashed session key, so no raw
+// the official API and the vendors in promptCacheKeyVendors receive the key.
+// The value is the hashed session key, so no raw
 // session id leaves the client. Sticky routing for a gateway that documents a header of
 // its own travels in sessionAffinityHeaders instead.
 func promptCacheKeyForRequest(cfg ConfigState, apiFormat, model string) string {
@@ -1497,20 +1493,23 @@ func promptCachePinStore(cfg ConfigState) bool {
 	return isOfficialOpenAIEndpoint(cfg)
 }
 
-// sessionAffinityHeaders returns the sticky-routing headers that keep one
-// conversation on the same upstream so prompt / KV cache hits survive across the
-// requests of a tool loop. Only OpenRouter is handled: pi maps
-// sessionAffinityFormat "openrouter" to x-session-id and uses provider-specific
-// names elsewhere (openai-completions.ts), which Ally does not model — an unknown
-// header would be meaningless to those endpoints anyway. The value is the same
-// hashed session key used as the prompt-cache key, so no raw session id leaves
-// the client.
+// sessionAffinityHeaders keeps one conversation on the same upstream machine
+// across turns and retries. A provider's prompt cache lives per machine, so a
+// request only reuses a cached prefix when it lands where that prefix was
+// written; the header decides routing, not whether the prefix matches.
+//
+// Both names carry the same session-derived key and are sent on every endpoint
+// by design: ChatGPT routes affinity on session-id (the header Codex sends on
+// Responses), OpenRouter documents x-session-id, and the rest ignore unknown
+// headers. The value is the hashed session key, so no raw session id leaves the
+// client, and it stays stable within a conversation — that stability is what
+// makes the affinity useful.
 func sessionAffinityHeaders(cfg ConfigState) map[string]string {
 	key := strings.TrimSpace(cfg.responsesPromptCacheKey)
-	if key == "" || !isOpenRouterEndpoint(cfg) {
+	if key == "" {
 		return nil
 	}
-	return map[string]string{"x-session-id": key}
+	return map[string]string{"session-id": key, "x-session-id": key}
 }
 
 func modelResponseStopError(cfg ConfigState, result *modelStreamResult) error {

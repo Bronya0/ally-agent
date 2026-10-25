@@ -16,7 +16,7 @@ Agent core = `internal/app/app.go` 的 `runChat` 里一个 `for step := 0; step 
 | 层 | 位置 | 职责 |
 |---|---|---|
 | 编排 | `internal/app/app.go`（`runChat` / `executeTool`） | 循环、消息列表、工具分发、事件发射 |
-| 协议适配 | `internal/app/prov_model.go` | 三种 API 格式的请求构造与流式解析（协议脏代码唯一聚集区） |
+| 协议适配 | `internal/app/prov_model.go` + `prov_adapter_*.go` | 共享调度及三协议请求/流式解析；当前字段契约见[三协议请求字段](model-protocol-fields.md) |
 | 纯算法 | `internal/tools/*` | 工具实现（不认识 `*App`） |
 | 宿主桥 | `internal/app/host_*.go` | `emit()` 把事件发给前端（唯一允许 import Wails 的地方） |
 

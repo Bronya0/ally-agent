@@ -1,5 +1,7 @@
 # 六家开放平台 API 协议字段参考
 
+> **文档定位（2026-10-25）**：本文是供应商公开文档的资料快照，保留各节原抓取范围与时间。Ally 当前实际发送/省略哪些字段，统一见[三协议请求字段](model-protocol-fields.md)；缓存机制见[缓存实现与观测](agent-prompt-cache.md)。不能把这里“供应商支持”的字段当成 Ally 默认发送，也不能把实现未发送的字段改写成“供应商不支持”。本次只增加导航，不代表重新抓取或验证了六家全部页面。
+
 > 覆盖厂商：DeepSeek、智谱 GLM、Kimi / Moonshot、MiniMax、MiMo、千问AI平台。
 > 其中**千问AI平台只收录协议核心**（四套协议 OpenAPI：openai-chat / openai-responses / anthropic / dashscope，加上文本生成、工具调用、思考、错误码与限流、模型清单等）；该站其余约 800 个页面（视频/图像/语音生成、world-model、agent-infra 等）不在收录范围，详见该家章节开头的说明。
 > 抓取方式：逐页抓取各家文档站的 Markdown 原文（Mintlify 站点优先用 `llms.txt` + 页面 `.md` 后缀取原文），字段名保留英文原文，数值 / 默认值 / 枚举照抄，**未做任何推断**。

@@ -114,11 +114,59 @@ func TestChatGPTPreviewRequest(t *testing.T) {
 	if len(items) != 3 || items[1].(map[string]any)["namespace"] != "ally" || items[2].(map[string]any)["output"] != "file contents" {
 		t.Fatal(items)
 	}
-	if supportsOpenAIResponsesImageGeneration(cfg) {
-		t.Fatal("hosted image tool enabled")
+	for _, key := range []string{"tool_choice", "parallel_tool_calls"} {
+		if _, present := body[key]; present {
+			t.Fatalf("request must use the default %s", key)
+		}
 	}
 	if err := chatGPTResponsesRequest(map[string]any{"input": []any{}, "tools": []any{map[string]any{"type": "tool_search"}}}); err == nil {
 		t.Fatal("hosted tool allowed")
+	}
+}
+
+// SIWC can accept summary:auto yet return zero cache hits for identical
+// requests. Keep that display-only option off the subscription wire without
+// disabling reasoning or changing summaries inside replayed reasoning items.
+func TestChatGPTCachePreservesReasoningWithoutSummary(t *testing.T) {
+	t.Parallel()
+	cfg := ConfigState{BaseURL: chatgpt.Resource, APIFormat: apiFormatOpenAIResponses, ReasoningEffort: "high", responsesPromptCacheKey: "ally:cache-test"}
+	messages := []openai.ChatCompletionMessage{{Role: "system", Content: "frozen instructions"}, {Role: "user", Content: "question"}}
+	body := marshalResponsesRequest(t, buildOpenAIResponsesRequest(cfg, "gpt-6.1-sol", messages, nil, nil))
+	reasoning := body["reasoning"].(map[string]any)
+	if _, present := reasoning["summary"]; present || reasoning["effort"] != "high" {
+		t.Fatalf("Responses must preserve effort without requesting a summary: %v", reasoning)
+	}
+	// The shared builder already omits it; retain the subscription boundary's
+	// defensive cleanup if another caller provides a summary request.
+	reasoning["summary"] = "auto"
+	// Preserve context selection as well as opaque history; summary is only
+	// the request for a user-visible explanation of the model's reasoning.
+	reasoning["context"] = "all_turns"
+	body["input"] = append(body["input"].([]any),
+		map[string]any{"type": "reasoning", "id": "rs_one", "encrypted_content": "opaque-state", "summary": []any{}},
+		map[string]any{"type": "message", "id": "msg_one", "role": "assistant", "phase": "final_answer", "content": []any{map[string]any{"type": "output_text", "text": "OK"}}},
+	)
+	inputBefore, _ := json.Marshal(body["input"])
+	includeBefore, _ := json.Marshal(body["include"])
+	if err := chatGPTResponsesRequest(body); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := reasoning["summary"]; exists {
+		t.Fatal("subscription request still asks for a reasoning summary")
+	}
+	if reasoning["effort"] != "high" || reasoning["context"] != "all_turns" {
+		t.Fatal("cache workaround changed reasoning")
+	}
+	if body["prompt_cache_key"] != "ally:cache-test" {
+		t.Fatal("GPT-6.1 must retain the stable session cache key")
+	}
+	if cfg.responsesPromptCacheKey != "ally:cache-test" {
+		t.Fatal("internal session identity must remain available")
+	}
+	inputAfter, _ := json.Marshal(body["input"])
+	includeAfter, _ := json.Marshal(body["include"])
+	if string(inputBefore) != string(inputAfter) || string(includeBefore) != string(includeAfter) {
+		t.Fatal("cache workaround changed native history or encrypted-reasoning include")
 	}
 }
 

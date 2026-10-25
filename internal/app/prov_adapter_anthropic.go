@@ -40,7 +40,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		anthropicoption.WithMaxRetries(0),
 		anthropicoption.WithHTTPClient(modelHTTPClient(cfg, true, 0)),
 	}
-	if offPlan.reasoningEffort != "" {
+	if normalizeReasoningEffort(cfg.ReasoningEffort) == reasoningEffortOff && offPlan.reasoningEffort != "" {
 		clientOptions = append(clientOptions, anthropicoption.WithJSONSet("reasoning", map[string]string{"effort": offPlan.reasoningEffort}))
 	}
 	for key, value := range sessionAffinityHeaders(cfg) {
@@ -49,10 +49,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	client := anthropic.NewClient(clientOptions...)
 
 	replay := a.reasoningStash.get(reasoningReplayKey(cfg, model))
-	// One identity check for the whole request: the official endpoint is the one
-	// that validates thinking signatures and the one whose cache-control ttl
-	// field is written out (see buildAnthropicMessages and
-	// markAnthropicPromptCacheBreakpoints).
+	// The official endpoint validates replayed thinking signatures.
 	officialEndpoint := isOfficialAnthropicEndpoint(cfg)
 	system, anthropicMessages := buildAnthropicMessages(messages, replay, officialEndpoint)
 	if len(anthropicMessages) == 0 || anthropicMessages[0].Role != anthropic.MessageParamRoleUser {
@@ -71,9 +68,8 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	}
 	// Prompt-cache breakpoints: one on the last tool definition, one on the last
 	// system block, one on the last content block of the last message, plus the
-	// top-level marker for the endpoints that only honour that form. The ttl field is
-	// only written for the official endpoint (see
-	// markAnthropicPromptCacheBreakpoints).
+	// top-level marker for the endpoints that only honour that form. Cache lifetime
+	// uses the provider default (no explicit ttl).
 	markAnthropicPromptCacheBreakpoints(&params, cfg)
 	// Thinking configuration comes from the endpoint-family table
 	// (anthropicThinkingFamilies): Claude's adaptive models take
@@ -308,11 +304,6 @@ type anthropicThinkingFamily struct {
 	matches func(model string) bool
 	// shape is the thinking block this endpoint documents.
 	shape anthropicThinkingShape
-	// display is true when the family documents thinking.display: "summarized" is
-	// what makes Claude stream its thinking text instead of answering with a
-	// signature only. An endpoint whose docs never mention the field is not handed
-	// one.
-	display bool
 	// switchOnly is true when the family documents the thinking switch but not the
 	// budget (千问 marks budget_tokens 即将废弃 and points new integrations at
 	// output_config.effort). Its `enabled` block then goes out as {type: "enabled"}
@@ -354,13 +345,10 @@ func anthropicEffortFromVendorTable(model, level string) string {
 // expensive one) while the UI kept showing the selection.
 var anthropicThinkingFamilies = []anthropicThinkingFamily{
 	{
-		// Claude 4.6+/5: adaptive thinking, the level in output_config.effort, and
-		// display: "summarized" so the model streams its thinking text instead of a
-		// signature-only ("omitted") response.
+		// Claude 4.6+/5: adaptive thinking, the level in output_config.effort.
 		name:    "claude-adaptive",
 		matches: isAnthropicAdaptiveThinkingModel,
 		shape:   anthropicShapeAdaptive,
-		display: true,
 		effort:  anthropicEffortVerbatim,
 	},
 	{
@@ -371,7 +359,6 @@ var anthropicThinkingFamilies = []anthropicThinkingFamily{
 		name:    "minimax",
 		matches: vendorModelPrefix("minimax"),
 		shape:   anthropicShapeAdaptive,
-		display: false,
 		effort:  anthropicEffortVerbatim,
 	},
 	{
@@ -551,23 +538,17 @@ func anthropicThinkingBudget(effort string, maxTokens int) (int64, bool) {
 }
 
 // anthropicEnabledThinking builds the `enabled` thinking block for the shapes that
-// carry one, and reports whether the configured output cap can hold it (see
-// anthropicThinkingBudget). display is written only where the family documents the
-// field; a switchOnly family gets the block without budget_tokens, and needs no budget
-// resolved for it — the floor and the reserved answer room exist only for the shape
-// that actually sends one.
-func anthropicEnabledThinking(effort string, maxTokens int, display, switchOnly bool) (anthropic.ThinkingConfigParamUnion, bool) {
+// carry one, and reports whether the configured output cap can hold it. A switchOnly
+// family gets the block without budget_tokens. Display uses the provider default.
+func anthropicEnabledThinking(effort string, maxTokens int, switchOnly bool) (anthropic.ThinkingConfigParamUnion, bool) {
 	if switchOnly {
-		return anthropicEnabledSwitchOnlyBlock(display), true
+		return anthropicEnabledSwitchOnlyBlock(), true
 	}
 	budget, ok := anthropicThinkingBudget(effort, maxTokens)
 	if !ok {
 		return anthropic.ThinkingConfigParamUnion{}, false
 	}
 	enabledParam := &anthropic.ThinkingConfigEnabledParam{Type: "enabled", BudgetTokens: budget}
-	if display {
-		enabledParam.Display = anthropic.ThinkingConfigEnabledDisplaySummarized
-	}
 	return anthropic.ThinkingConfigParamUnion{OfEnabled: enabledParam}, true
 }
 
@@ -576,13 +557,9 @@ func anthropicEnabledThinking(effort string, maxTokens int, display, switchOnly 
 // budget (千问). The SDK tags budget_tokens as required, so the typed param always
 // serializes one; param.Override carries these bytes instead. They are written out
 // verbatim — the same bytes on every call, so the provider's prompt-cache prefix stays
-// stable — and display follows the same rule as the typed shape.
-func anthropicEnabledSwitchOnlyBlock(display bool) anthropic.ThinkingConfigParamUnion {
-	raw := json.RawMessage(`{"type":"enabled"}`)
-	if display {
-		raw = json.RawMessage(`{"display":"summarized","type":"enabled"}`)
-	}
-	return param.Override[anthropic.ThinkingConfigParamUnion](raw)
+// stable and do not request optional display output.
+func anthropicEnabledSwitchOnlyBlock() anthropic.ThinkingConfigParamUnion {
+	return param.Override[anthropic.ThinkingConfigParamUnion](json.RawMessage(`{"type":"enabled"}`))
 }
 
 // anthropicOffPlan is the Messages wire's answer for the "关闭思考" level. The decision
@@ -653,9 +630,6 @@ func configureAnthropicThinking(params *anthropic.MessageNewParams, model, rawEf
 		return false
 	case anthropicShapeAdaptive:
 		adaptiveParam := &anthropic.ThinkingConfigAdaptiveParam{Type: "adaptive"}
-		if family.display {
-			adaptiveParam.Display = anthropic.ThinkingConfigAdaptiveDisplaySummarized
-		}
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: adaptiveParam}
 		params.OutputConfig = anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffort(family.effort(model, effort))}
 		return true
@@ -680,7 +654,7 @@ func configureAnthropicThinking(params *anthropic.MessageNewParams, model, rawEf
 		if family.shape == anthropicShapeNone {
 			return true
 		}
-		thinking, ok := anthropicEnabledThinking(effort, maxTokens, family.display, family.switchOnly)
+		thinking, ok := anthropicEnabledThinking(effort, maxTokens, family.switchOnly)
 		if !ok {
 			log.Printf("[llm] max_tokens=%d is too small for %s extended thinking; leaving thinking unset", maxTokens, family.name)
 			return false
@@ -691,7 +665,7 @@ func configureAnthropicThinking(params *anthropic.MessageNewParams, model, rawEf
 	// Fallback: the Claude budget shape, which is what the official API and the
 	// Claude-compatible relays that copy it accept. Passing output_config.effort here
 	// would be a 400 on Claude 3.7.
-	thinking, ok := anthropicEnabledThinking(effort, maxTokens, true, false)
+	thinking, ok := anthropicEnabledThinking(effort, maxTokens, false)
 	if !ok {
 		log.Printf("[llm] max_tokens=%d is too small for Anthropic extended thinking; leaving thinking unset", maxTokens)
 		return false
@@ -842,20 +816,15 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage, repla
 // 智能识别重复上下文，无需手动配置），那三个嵌套标记对它也是空转。官方端点只带嵌套标记：
 // 顶层标记在那边只是重复最后一个块的那个。
 //
-// The ttl is written out only for the official endpoint: "5m" is the
-// documented default, so omitting it leaves the cache lifetime identical
-// everywhere else, while a compatible gateway keeps receiving only the fields
-// it knows. Every marker is always built through the SDK constructor,
+// Cache lifetime uses the provider default; no explicit ttl is sent.
+// Every marker is still built through the SDK constructor,
 // because `cache_control` is tagged omitzero and a zero-value
 // CacheControlEphemeralParam (empty type AND empty ttl) is dropped from the
 // request altogether — that would silently lose the breakpoint instead of
 // sending one without a ttl.
 func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams, cfg ConfigState) {
-	officialEndpoint := isOfficialAnthropicEndpoint(cfg)
 	cc := anthropic.NewCacheControlEphemeralParam()
-	if officialEndpoint {
-		cc.TTL = anthropic.CacheControlEphemeralTTLTTL5m
-	} else if anthropicTopLevelCacheControlEndpoint(cfg) {
+	if anthropicTopLevelCacheControlEndpoint(cfg) {
 		params.CacheControl = cc
 	}
 	if len(params.Tools) > 0 {

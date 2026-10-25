@@ -576,17 +576,12 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	// and content-block prompt_cache_breakpoint, despite the public API model
 	// documentation. Keep the frozen prefix in instructions; model names alone
 	// are not evidence that this route accepts explicit-cache controls.
-	// Store, ParallelToolCalls and Include are OpenAI-official request fields
-	// that compatible gateways may reject with 400 ("unsupported field"), so all
-	// three are gated by the same official-endpoint check, in this one place.
+	// Store and Include stay gated to official endpoints; compatible gateways
+	// may reject these fields. Tool selection and parallel calls use defaults.
 	if isOfficialOpenAIEndpoint(cfg) {
-		body.ParallelToolCalls = oa.Bool(true)
 		body.Store = oa.Bool(false)
-		// Encrypted reasoning is needed only where the request is stateless —
-		// store=false above is what makes it stateless — because it is then the
-		// only carrier of the reasoning a later request has to replay. Every
-		// other endpoint keeps the items itself, so asking for the encrypted copy
-		// would only add an unknown key to the request.
+		// Retain the encrypted-reasoning hint for older model/route compatibility.
+		// Native reasoning items must still be replayed with store=false.
 		body.Include = append(body.Include, oaresp.ResponseIncludableReasoningEncryptedContent)
 	}
 	// Thinking strength for the Responses API (reasoning.effort): the level is
@@ -595,32 +590,17 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	// sends nothing — and "off" arrives as an effort value: "none" where the docs
 	// name it (DeepSeek documents "none" as 关闭思考模式), the vendor's lowest level
 	// where they say the model cannot stop thinking. The SDK type is string-backed,
-	// so the resolved value goes out unchanged.
+	// so the resolved value goes out unchanged. Generated reasoning summaries
+	// are optional display output; omit reasoning.summary on every Responses
+	// route while preserving effort and native reasoning-item replay.
 	reasoningWire := reasoningWireForAdapter(cfg, apiFormatOpenAIResponses, model, cfg.ReasoningEffort)
 	if reasoningWire.Effort != "" {
 		body.Reasoning = oa.ReasoningParam{Effort: oa.ReasoningEffort(reasoningWire.Effort)}
-		if reasoningWire.Effort != reasoningEffortOffWireValue {
-			// Pair reasoning.effort with summary:"auto" — both kimi-code
-			// (openai-responses.ts:1116-1120) and pi (openai-responses.ts:319-335)
-			// do: without an explicit summary request the Responses API emits no
-			// reasoning_summary_text deltas, leaving the thinking panel empty even
-			// though the model reasoned. With thinking off there is nothing to
-			// summarize, so the summary request is left out.
-			body.Reasoning.Summary = oa.ReasoningSummaryAuto
-		}
 	}
 	if strings.TrimSpace(instructions) != "" {
 		body.Instructions = oa.String(instructions)
 	}
 	body.Tools = convertToolsToOpenAIResponses(tools)
-	if len(tools) > 0 && supportsOpenAIResponsesImageGeneration(cfg) {
-		body.Tools = append(body.Tools, oaresp.ToolUnionParam{
-			OfImageGeneration: &oaresp.ToolImageGenerationParam{OutputFormat: "png"},
-		})
-	}
-	if len(body.Tools) > 0 {
-		body.ToolChoice = oaresp.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: oa.Opt(oaresp.ToolChoiceOptionsAuto)}
-	}
 	// The session routing key travels to the endpoints that document it
 	// (promptCacheKeyForRequest): the official API and 智谱 / Kimi / MiniMax, whose
 	// Responses docs each declare prompt_cache_key — 用于集群路由，以提高缓存命中率 /
@@ -632,10 +612,6 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 		body.PromptCacheKey = oa.String(cacheKey)
 	}
 	return body
-}
-
-func supportsOpenAIResponsesImageGeneration(cfg ConfigState) bool {
-	return cfg.AuthType != authChatGPTOAuth && isOfficialOpenAIEndpoint(cfg)
 }
 
 type openAIResponsesSSEStream struct {

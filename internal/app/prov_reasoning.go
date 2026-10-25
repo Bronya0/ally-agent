@@ -872,11 +872,12 @@ func patchChatRequestFields(body []byte, defaultKey string, turnDetails map[stri
 			payload["prompt_cache_key"] = jsonStringValue(promptCacheKey)
 			changed = true
 		}
-		if pinStore {
-			if _, exists := payload["store"]; !exists {
-				payload["store"] = jsonBoolFalse
-				changed = true
-			}
+	}
+	// Response storage is independent of whether this model needs a cache key.
+	if pinStore {
+		if _, exists := payload["store"]; !exists {
+			payload["store"] = jsonBoolFalse
+			changed = true
 		}
 	}
 

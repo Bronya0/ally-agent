@@ -40,12 +40,8 @@ scope    = openid profile email offline_access resource.invoke chatgpt.tokens.us
 
 `Manager.Do` 只允许向官方 Resource 发送 `GET /models` 和 `POST /responses`，在后端注入 Bearer Token，禁止自动重定向，并登记在途请求供退出时取消。HTTP 客户端沿用 Ally 的代理配置。
 
-[`prov_chatgpt.go`](../internal/app/prov_chatgpt.go) 负责订阅 Responses 请求的兼容转换：
+[`prov_chatgpt.go`](../internal/app/prov_chatgpt.go) 负责订阅 Responses 请求的兼容转换。请求允许名单、角色与工具 namespace 转换、当前发送及省略的字段统一维护在[三协议字段：Responses](model-protocol-fields.md#responses)，本页只维护认证接入。缓存实测及尚未解决的零命中问题见[缓存排查](chatgpt-cache-diagnostics.md)。
 
-- 只保留支持的请求字段，固定 `store:false`、`stream:true`，要求 `input` 为完整上下文数组。
-- 将输入中的 `system` 消息转换为 `developer`。
-- 将本地 function/custom 工具封装到 `ally` namespace，并为回放的 `function_call` 补充同名 namespace；不支持的托管工具直接报错。
-- 保留用户选择的推理档位，通过现有 Responses 适配器处理流式输出与上下文续接。
-- 保留结构化错误与请求标识，并清理错误中可能回显的 Bearer Token。`subscription_sharing_usage_limit_exceeded` 会暂停该账号的调用，重新授权或显式刷新模型目录后可再次尝试；其他永久性授权错误直接返回，不自动重试。
+兼容层保留结构化错误与请求标识，并清理错误中可能回显的 Bearer Token。`subscription_sharing_usage_limit_exceeded` 会暂停该账号的调用，重新授权或显式刷新模型目录后可再次尝试；其他永久性授权错误直接返回，不自动重试。
 
 设置页与模型页共用 `ChatGPTAccounts.vue`，通过桌面桥接执行登录、取消、退出和模型目录刷新。本地 HTTP API 可以调用已经配置好的 OAuth 模型，但不提供登录、刷新凭据或读取 Token 的接口。
