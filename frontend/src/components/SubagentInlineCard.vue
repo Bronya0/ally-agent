@@ -21,6 +21,7 @@ Public License v3. See the LICENSE file for details.
       <div class="subagent-stats" :title="tokenTooltip">
         <span v-if="stepLimit > 0" :title="$t('subagent.stepBudget')">{{ $t('subagent.budget', { current: steps, limit: stepLimit }) }}</span>
         <span v-if="msg.contextTokens > 0">{{ contextChip }}</span>
+        <span v-if="cacheChip">{{ cacheChip }}</span>
         <span v-if="msg.totalTokens > 0">{{ tokenChip }}</span>
       </div>
       <button type="button" class="subagent-toggle" :disabled="!hasReport"
@@ -79,6 +80,14 @@ const tokenChip = computed(() => {
   return `↑${formatTokens(props.msg?.inputTokens)} ↓${formatTokens(props.msg?.outputTokens)}`;
 });
 
+// 缓存命中率沿用主对话统计行的口径（Σhit/Σ(hit+miss)）；两个桶都没报时不显示，
+// 因为 0% 意味着“一点没命中”，与“没有数据”是两回事。
+const cacheChip = computed(() => {
+  const rate = props.msg?.cacheRate;
+  if (typeof rate !== 'number') return '';
+  return t('subagent.cache', { rate });
+});
+
 // Context is the latest prompt size; input/output totals accumulate across steps.
 const contextChip = computed(() => {
   const context = props.msg?.contextTokens || 0;
@@ -92,7 +101,11 @@ const tokenTooltip = computed(() => {
   const output = props.msg?.outputTokens || 0;
   const total = props.msg?.totalTokens || 0;
   const context = props.msg?.contextTokens || 0;
-  return `${t('subagent.context', { tokens: context })} · Input: ${input} · Output: ${output} · Total: ${total}`;
+  const parts = [`${t('subagent.context', { tokens: context })} · Input: ${input} · Output: ${output} · Total: ${total}`];
+  if (typeof props.msg?.cacheRate === 'number') {
+    parts.push(`Cache hit ${props.msg.cacheHit || 0} / miss ${props.msg.cacheMiss || 0}`);
+  }
+  return parts.join(' · ');
 });
 </script>
 

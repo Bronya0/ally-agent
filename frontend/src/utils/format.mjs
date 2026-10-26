@@ -66,3 +66,13 @@ export function formatBytes(bytes) {
   }
   return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
+
+// cacheRatePercent is the single prompt-cache hit-rate derivation: Σhit/Σ(hit+miss)
+// floored to a whole percent. null means the provider reported neither bucket —
+// "no cache telemetry", which must not be rendered as 0% ("nothing was cached").
+export function cacheRatePercent(hit, miss) {
+  const h = Number(hit) || 0;
+  const m = Number(miss) || 0;
+  if (h + m <= 0) return null;
+  return Math.floor((h / (h + m)) * 100);
+}

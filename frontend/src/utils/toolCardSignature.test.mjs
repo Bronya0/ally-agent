@@ -129,7 +129,7 @@ test('huge content fields enter the signature as a cheap shape, not verbatim', (
 
 test('sub-agent budget and grouping metadata invalidate the render cache', () => {
   const base = { role: 'tool_call', kind: 'subagent', status: 'running', steps: 0 };
-  for (const update of [{maxSteps: 20}, {runId: 'run'}, {toolBatchId: 'batch'}]) {
+  for (const update of [{maxSteps: 20}, {runId: 'run'}, {toolBatchId: 'batch'}, {cacheHit: 5}, {cacheMiss: 7}]) {
     assert.notEqual(toolCardRenderSignature(base), toolCardRenderSignature({...base, ...update}));
   }
 });

@@ -270,12 +270,10 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			run.FilesRead = filesRead
 			run.FilesEdited = filesEdited
 			a.subRunsMu.Unlock()
-			a.emit("sub:done", map[string]any{
+			a.emit("sub:done", subagentEventPayload(run, map[string]any{
 				"id": subID, "sessionId": sessionID, "status": "completed", "steps": step,
 				"summary": summary, "filesRead": filesRead, "filesEdited": filesEdited, "durationMs": time.Now().UnixMilli() - run.StartTime,
-				"inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens,
-				"contextTokens": run.ContextTokens,
-			})
+			}))
 			return &AgentDelegateResult{
 				AgentID: subID, Role: req.Role, Description: desc, Status: "completed",
 				Steps: step, Summary: summary,
@@ -403,7 +401,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		a.subRunsMu.Lock()
 		run.Steps = step
 		a.subRunsMu.Unlock()
-		a.emit("sub:step", map[string]any{"id": subID, "sessionId": sessionID, "step": step, "inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens, "contextTokens": run.ContextTokens})
+		a.emit("sub:step", subagentEventPayload(run, map[string]any{"id": subID, "sessionId": sessionID, "step": step}))
 	}
 
 	// Budget exhausted without the sub-agent finishing on its own. Ask for the
@@ -429,12 +427,10 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	run.FilesRead = filesRead
 	run.FilesEdited = filesEdited
 	a.subRunsMu.Unlock()
-	a.emit("sub:done", map[string]any{
+	a.emit("sub:done", subagentEventPayload(run, map[string]any{
 		"id": subID, "sessionId": sessionID, "status": status, "steps": step,
 		"summary": summary, "error": errMsg, "filesRead": filesRead, "filesEdited": filesEdited, "durationMs": time.Now().UnixMilli() - run.StartTime,
-		"inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens,
-		"contextTokens": run.ContextTokens,
-	})
+	}))
 	return &AgentDelegateResult{
 		AgentID: subID, Role: req.Role, Description: desc, Status: status,
 		Steps: step, Summary: summary, FilesRead: filesRead, FilesEdited: filesEdited, Model: model,
@@ -515,6 +511,20 @@ func (a *App) forceSubagentFinalReport(ctx context.Context, cfg ConfigState, mod
 	return lastText, errForcedReportMissing
 }
 
+// subagentEventPayload merges the run's token counters into one event body. Every
+// sub-agent event carries the same counters (the card renders all of them), so
+// they are listed once here: a counter added below reaches the step event and
+// both terminal events instead of only the one the author remembered.
+func subagentEventPayload(run *SubagentRun, fields map[string]any) map[string]any {
+	fields["inputTokens"] = run.InputTokens
+	fields["outputTokens"] = run.OutputTokens
+	fields["totalTokens"] = run.TotalTokens
+	fields["contextTokens"] = run.ContextTokens
+	fields["cacheHitTokens"] = run.CacheHitTokens
+	fields["cacheMissTokens"] = run.CacheMissTokens
+	return fields
+}
+
 // recordSubagentUsage books one sub-agent model turn. The run-local totals the
 // inline card shows and the workspace-wide counters the footer and the dashboard
 // read both come from here, so a turn cannot land in one sink and be missed in
@@ -529,6 +539,10 @@ func (a *App) recordSubagentUsage(run *SubagentRun, model, workspace string, res
 		run.InputTokens += resp.Usage.PromptTokens
 		run.OutputTokens += resp.Usage.CompletionTokens
 		run.TotalTokens = run.InputTokens + run.OutputTokens
+		// 命中/未命中只累加服务商上报的拆分（解析见 modelUsage）：卡片上的命中率
+		// 因此与主对话统计行同为 Σhit/Σ(hit+miss)，两处不可能给出不同答案。
+		run.CacheHitTokens += resp.Usage.CacheHitTokens
+		run.CacheMissTokens += resp.Usage.CacheMissTokens
 		// 最近一轮的 prompt tokens 就是这个子代理当下的上下文规模（累计的输入看不出
 		// 这一点）。服务商这一轮没报就不动它，卡片继续显示上一次报过的数，而不是掉回 0。
 		if resp.Usage.PromptTokens > 0 {

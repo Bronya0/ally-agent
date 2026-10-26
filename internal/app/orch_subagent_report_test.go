@@ -305,3 +305,30 @@ func TestRecordSubagentUsageKeepsTheLatestContext(t *testing.T) {
 		t.Fatalf("a turn without prompt usage must keep the last context, got %d", run.ContextTokens)
 	}
 }
+
+// TestRecordSubagentUsageAccumulatesCacheSplit：卡片上的命中率来自服务商上报的缓存
+// 拆分，必须整轮累加——只留最后一轮会让命中率只反映最后一步，看着比实际好或差。
+func TestRecordSubagentUsageAccumulatesCacheSplit(t *testing.T) {
+	app := NewApp()
+	app.stats = nil
+	workspace := t.TempDir()
+	run := &SubagentRun{ID: "sub-cache"}
+
+	app.recordSubagentUsage(run, "test-model", workspace, &modelStreamResult{
+		Usage: &modelUsage{PromptTokens: 1000, CompletionTokens: 20, CacheHitTokens: 800, CacheMissTokens: 200},
+	})
+	app.recordSubagentUsage(run, "test-model", workspace, &modelStreamResult{
+		Usage: &modelUsage{PromptTokens: 2000, CompletionTokens: 30, CacheHitTokens: 1800, CacheMissTokens: 200},
+	})
+	if run.CacheHitTokens != 2600 || run.CacheMissTokens != 400 {
+		t.Fatalf("cache split = hit %d miss %d, want the running total 2600/400", run.CacheHitTokens, run.CacheMissTokens)
+	}
+
+	// 一轮没报缓存（两个桶都是 0）不能把前两步攒下的数改写成全命中或全未命中。
+	app.recordSubagentUsage(run, "test-model", workspace, &modelStreamResult{
+		Usage: &modelUsage{PromptTokens: 3000, CompletionTokens: 10},
+	})
+	if run.CacheHitTokens != 2600 || run.CacheMissTokens != 400 {
+		t.Fatalf("a turn without cache telemetry changed the split: hit %d miss %d", run.CacheHitTokens, run.CacheMissTokens)
+	}
+}

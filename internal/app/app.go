@@ -1607,6 +1607,12 @@ type SubagentRun struct {
 	InputTokens  int            `json:"inputTokens,omitempty"`
 	OutputTokens int            `json:"outputTokens,omitempty"`
 	TotalTokens  int            `json:"totalTokens,omitempty"`
+	// CacheHitTokens/CacheMissTokens accumulate the provider-reported prompt-cache
+	// split across the run's steps, so the inline card can show the same hit rate
+	// the parent run's stats line shows. CacheWriteTokens stays out: it is already
+	// inside miss (see modelUsage).
+	CacheHitTokens  int `json:"cacheHitTokens,omitempty"`
+	CacheMissTokens int `json:"cacheMissTokens,omitempty"`
 	// ContextTokens is the prompt-token count of the latest model turn: how big
 	// this sub-agent's context is right now. InputTokens sums every step and so
 	// cannot answer that.

@@ -770,7 +770,7 @@ import {
   shouldRecordContextDriftNotice,
   sourceWindowMapper,
 } from './utils/contextDriftNotice.mjs';
-import { fmtCompact, fmtDuration, formatBytes } from './utils/format.mjs';
+import { cacheRatePercent, fmtCompact, fmtDuration, formatBytes } from './utils/format.mjs';
 import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
 import {
   assistantRowRenderState,
@@ -5089,20 +5089,24 @@ function setAssistantRoundDuration(session, runId, durationMs) {
   msg.completedAtText = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 }
 
-function setAssistantCacheRate(session, runId, hit, miss, inputTokens, outputTokens) {
-  const msg = assistantMessageForRun(session, runId);
-  if (!msg) return;
+// 缓存统计的唯一写入口：主对话统计行与子代理卡片共用，避免两处各自
+// Math.floor 算出不同百分比。rate 为 null 时删字段，徽标随之隐藏。
+function applyCacheUsage(msg, hit, miss) {
   const h = Number(hit || 0);
   const m = Number(miss || 0);
-  const inp = Number(inputTokens || 0);
-  const out = Number(outputTokens || 0);
-  const rate = (h + m) > 0 ? Math.floor((h / (h + m)) * 100) : null;
+  const rate = cacheRatePercent(h, m);
   msg.cacheHit = h;
   msg.cacheMiss = m;
   if (rate === null) delete msg.cacheRate;
   else msg.cacheRate = rate;
-  msg.runInputTokens = inp;
-  msg.runOutputTokens = out;
+}
+
+function setAssistantCacheRate(session, runId, hit, miss, inputTokens, outputTokens) {
+  const msg = assistantMessageForRun(session, runId);
+  if (!msg) return;
+  applyCacheUsage(msg, hit, miss);
+  msg.runInputTokens = Number(inputTokens || 0);
+  msg.runOutputTokens = Number(outputTokens || 0);
 }
 
 function onRuntimeEvent(eventName, handler) {
@@ -5673,6 +5677,8 @@ function bindRuntimeEvents() {
         outputTokens: 0,
         totalTokens: 0,
         contextTokens: 0,
+        cacheHit: 0,
+        cacheMiss: 0,
       };
       if (existing) Object.assign(existing, payload);
       else session.messages.push(payload);
@@ -5688,6 +5694,7 @@ function bindRuntimeEvents() {
       // 上下文取最近一轮模型上报的 prompt tokens（输入/输出是每步累加值）。后端没给
       // 这一项时保留上一次的数，否则徽标会在收尾事件里掉回 0 自己消失。
       msg.contextTokens = data.contextTokens || msg.contextTokens || 0;
+      applyCacheUsage(msg, data.cacheHitTokens, data.cacheMissTokens);
     }
   });
   onRuntimeEvent('sub:tool:start', (data) => {
@@ -5733,6 +5740,7 @@ function bindRuntimeEvents() {
       msg.outputTokens = data.outputTokens || 0;
       msg.totalTokens = data.totalTokens || 0;
       msg.contextTokens = data.contextTokens || msg.contextTokens || 0;
+      applyCacheUsage(msg, data.cacheHitTokens, data.cacheMissTokens);
     }
   });
   onRuntimeEvent('sub:error', (data) => {

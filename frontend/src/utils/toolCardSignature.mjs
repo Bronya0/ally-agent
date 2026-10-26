@@ -102,6 +102,9 @@ export function toolCardRenderSignature(msg) {
     msg.inputTokens || 0,
     msg.outputTokens || 0,
     msg.totalTokens || 0,
+    // 命中率是派生值，但两个来源各自会变：漏掉任一字段，卡片会停在旧百分比。
+    msg.cacheHit || 0,
+    msg.cacheMiss || 0,
     len(msg.filesRead),
     len(msg.filesEdited),
     msg.editFilePath || '',

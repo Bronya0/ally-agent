@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { fmtNum, fmtTokens } from './format.mjs';
+import { cacheRatePercent, fmtNum, fmtTokens } from './format.mjs';
 
 test('fmtTokens renders compact token counts', () => {
   assert.equal(fmtTokens(0), '0');
@@ -31,4 +31,15 @@ test('fmtTokens tolerates falsy and string inputs', () => {
 test('fmtNum uses thousands separators (locale-independent)', () => {
   assert.equal(fmtNum(0), '0');
   assert.equal(fmtNum(1234567).replace(/[.,\s\u00a0]/g, ''), '1234567');
+});
+
+test('cacheRatePercent is the shared hit-rate derivation', () => {
+  assert.equal(cacheRatePercent(600, 400), 60);
+  assert.equal(cacheRatePercent(0, 100), 0);
+  assert.equal(cacheRatePercent(100, 0), 100);
+  // 两个桶都没报 = 没有数据，不能画成 0%。
+  assert.equal(cacheRatePercent(0, 0), null);
+  assert.equal(cacheRatePercent(null, undefined), null);
+  // 向下取整：99.9% 不能四舍五入成 100%。
+  assert.equal(cacheRatePercent(999, 1), 99);
 });
