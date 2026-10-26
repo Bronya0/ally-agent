@@ -199,7 +199,7 @@ test('未替换历史的压缩事件保留原提示', () => {
   assert.deepEqual(rowLabels(f.display()), ['A', 'notice']);
 });
 
-test('自动保留最近内容只更新对应工具卡，保留正文及已有提示锚点', () => {
+test('自动本地裁剪只更新对应工具卡，保留正文及已有提示锚点', () => {
   const user = { role: 'user', content: 'requirements' };
   const answer = { role: 'assistant', content: 'answer' };
   const f = fixture([user, { ...tool('old'), toolCallId: 'old', body: 'old body' }, answer, { ...tool('recent'), toolCallId: 'recent', body: 'recent body' }]);

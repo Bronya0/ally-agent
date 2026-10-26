@@ -18,6 +18,65 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+func TestReadAgentsMdBudget(t *testing.T) {
+	oversizedLine := strings.Repeat("x", maxAgentsMdPromptBytes*2)
+	for _, tc := range []struct {
+		name, input, prefix string
+		truncated           bool
+	}{
+		{"empty", "", "", false},
+		{"exact limit", strings.Repeat("a", maxAgentsMdPromptBytes), strings.Repeat("a", maxAgentsMdPromptBytes), false},
+		// 3000 whole lines end well past minAgentsMdPromptKeep, so the cut lands on the
+		// last complete line instead of the byte cap.
+		{"complete lines", strings.Repeat("line\n", 3000) + oversizedLine, strings.Repeat("line\n", 3000), true},
+		{"oversized unicode line", strings.Repeat("中", maxAgentsMdPromptBytes/3+1), strings.Repeat("中", maxAgentsMdPromptBytes/3), true},
+		// A newline at the very start must not collapse the head to one byte: below
+		// minAgentsMdPromptKeep the whole window is kept.
+		{"leading newline then one huge line", "\n" + oversizedLine, "\n" + strings.Repeat("x", maxAgentsMdPromptBytes-1), true},
+		{"heading then one huge line", "# Notes\n\n" + oversizedLine, "# Notes\n\n" + strings.Repeat("x", maxAgentsMdPromptBytes-len("# Notes\n\n")), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "AGENTS.md")
+			if err := os.WriteFile(path, []byte(tc.input), 0600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := readAgentsMd(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := tc.prefix
+			if tc.truncated {
+				want = strings.TrimRight(want, "\r\n") + "\n\n" + agentsMdTruncatedNotice(path)
+			}
+			if got != want || !utf8.ValidString(got) {
+				t.Fatalf("unexpected content: got %d bytes, want %d; valid UTF-8=%v", len(got), len(want), utf8.ValidString(got))
+			}
+		})
+	}
+}
+
+// 每个作用域各自受单文件上限保护：用户级、根级与子目录都超限时各自截断，各带一条提示。
+func TestLoadAgentsMdTruncatesEachScopeIndependently(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for _, file := range []struct{ root, path, label string }{
+		{home, ".agents/AGENTS.md", "user rules"},
+		{root, "CLAUDE.md", "root fallback rules"},
+		{root, "frontend/AGENTS.md", "frontend rules"},
+	} {
+		writeTestFile(t, file.root, file.path, file.label+"\n"+strings.Repeat("x", maxAgentsMdPromptBytes)+"OMITTED_TAIL")
+	}
+	got := loadAgentsMd(root)
+	for _, label := range []string{"user rules", "root fallback rules", "frontend rules"} {
+		mustContain(t, got, label)
+	}
+	mustNotContain(t, got, "OMITTED_TAIL")
+	if count := strings.Count(got, fmt.Sprintf("This file exceeds %d KiB", maxAgentsMdPromptBytes/1024)); count != 3 {
+		t.Fatalf("expected one truncation notice per file, got %d", count)
+	}
+}
+
 func TestBuildWorkspaceMapContextRespectsIgnoresAndDetectsStack(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, "go.mod", "module example\n")

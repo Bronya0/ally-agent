@@ -8,14 +8,68 @@
 package app
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+const (
+	// maxAgentsMdPromptBytes bounds one instruction file injected into the system
+	// prompt. Project rules are user-authored text, so they get more room than
+	// CODEGRAPH.md (8 KiB) — but every request pays for them, so the cap is real.
+	maxAgentsMdPromptBytes = 64 * 1024
+	// minAgentsMdPromptKeep is the smallest head worth keeping when the cut lands
+	// on a line boundary. Without it a file that starts with a blank line and then
+	// one huge line would keep a single newline and waste the whole budget.
+	minAgentsMdPromptKeep = 8 * 1024
+)
+
+// readAgentsMd reads one instruction file, bounding the injected text to
+// maxAgentsMdPromptBytes. An oversized file keeps its head — rules come first —
+// cut on a line boundary, never split a rune, and end with a note telling the
+// model how to read the rest. Invalid UTF-8 is dropped on both paths so the
+// prompt never carries raw bytes.
+func readAgentsMd(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxAgentsMdPromptBytes+1))
+	if err != nil {
+		return "", err
+	}
+	truncated := len(data) > maxAgentsMdPromptBytes
+	if truncated {
+		data = data[:maxAgentsMdPromptBytes]
+		// Whole lines read better than a mid-sentence cut, but an early newline
+		// must not collapse the head: below the minimum the raw window is kept.
+		if end := bytes.LastIndexByte(data, '\n'); end >= minAgentsMdPromptKeep {
+			data = data[:end+1]
+		}
+	}
+	content := strings.ToValidUTF8(string(data), "")
+	if !truncated {
+		return content, nil
+	}
+	if body := strings.TrimRight(content, "\r\n"); body != "" {
+		return body + "\n\n" + agentsMdTruncatedNotice(path), nil
+	}
+	return agentsMdTruncatedNotice(path), nil
+}
+
+// agentsMdTruncatedNotice points the model at `read` for the omitted tail. The
+// size is derived from the constant that did the truncation, so the prompt text
+// cannot drift away from the implementation.
+func agentsMdTruncatedNotice(path string) string {
+	return fmt.Sprintf("[This file exceeds %d KiB; remaining content was omitted. Use read to retrieve further sections: %s]", maxAgentsMdPromptBytes/1024, filepath.ToSlash(path))
+}
 
 type agentFile struct {
 	path    string
@@ -31,6 +85,7 @@ type agentFile struct {
 // Fallback chain: AGENTS.md → CLAUDE.md → agents.md → claude.md（根目录内
 // 逐个探测，前一个不存在才找下一个，只取第一个命中的文件）。
 // 根目录文件之后按序拼接一级子目录的 AGENTS.md，每份带目录标题隔离。
+// 每个文件各自按 maxAgentsMdPromptBytes 截断头部，其余部分只留一条指向 `read` 的提示。
 func loadAgentsMd(workspace string) string {
 	if workspace == "" {
 		return ""
@@ -57,11 +112,17 @@ func loadAgentsMd(workspace string) string {
 	}
 
 	tryRead := func(path string) bool {
-		data, err := os.ReadFile(path)
+		// Resolve first so the truncation notice and the <!-- From: --> marker name
+		// the same file, whatever the caller's working directory is.
+		abs, err := filepath.Abs(path)
 		if err != nil {
 			return false
 		}
-		return collect(path, string(data), "")
+		content, err := readAgentsMd(abs)
+		if err != nil {
+			return false
+		}
+		return collect(abs, content, "")
 	}
 
 	// ── User-level: ~/.agents/AGENTS.md (fallback agents.md) ──
@@ -91,12 +152,15 @@ func loadAgentsMd(workspace string) string {
 			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 				continue
 			}
-			path := filepath.Join(workspace, entry.Name(), "AGENTS.md")
-			data, err := os.ReadFile(path)
+			path, err := filepath.Abs(filepath.Join(workspace, entry.Name(), "AGENTS.md"))
 			if err != nil {
 				continue
 			}
-			collect(path, string(data), fmt.Sprintf("### AGENTS.md under directory `%s/`\n\n", entry.Name()))
+			content, err := readAgentsMd(path)
+			if err != nil {
+				continue
+			}
+			collect(path, content, fmt.Sprintf("### AGENTS.md under directory `%s/`\n\n", entry.Name()))
 		}
 	}
 

@@ -194,7 +194,7 @@ Public License v3. See the LICENSE file for details.
                   { label: $t('settings.autoCompactSummary'), value: 'summary' },
                   { label: $t('settings.autoCompactRecent'), value: 'recent' },
                 ]"
-                style="width: 260px"
+                style="width: 300px"
               />
               <span class="settings-field-hint">{{ $t('settings.autoCompactMethodHint') }}</span>
             </div>
