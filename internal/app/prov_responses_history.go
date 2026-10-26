@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"ally-dev/internal/tools/toolcall"
-	"github.com/openai/openai-go/v3/packages/param"
-	oaresp "github.com/openai/openai-go/v3/responses"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -131,12 +129,11 @@ func responsesOutputReplayable(output []json.RawMessage) bool {
 	return true
 }
 
-func nativeResponsesInput(output []json.RawMessage) oaresp.ResponseInputParam {
-	input := make(oaresp.ResponseInputParam, 0, len(output))
+func nativeResponsesInput(output []json.RawMessage) []any {
+	input := make([]any, 0, len(output))
 	for _, raw := range output {
-		// Override avoids losing phase, namespace, new fields or output-text
-		// content variants through the SDK's input/output union conversion.
-		input = append(input, param.Override[oaresp.ResponseInputItemUnionParam](raw))
+		// Preserve native items, including fields absent from SDK types.
+		input = append(input, raw)
 	}
 	return input
 }
@@ -210,10 +207,16 @@ func (c *responsesOutputCapture) indexedOutput() ([]json.RawMessage, []int64) {
 // Decode the nested response directly. Some SDK stream-union versions lose
 // fields of the nested object; final output, failed codes and incomplete reasons
 // must be as authoritative as usage, which is already decoded from raw JSON.
-func responsesTerminal(raw []byte) oaresp.Response {
+func responsesTerminal(raw []byte) openai.CreateResponseResponse {
 	var payload struct {
-		Response oaresp.Response `json:"response"`
+		Response openai.CreateResponseResponse `json:"response"`
 	}
 	_ = json.Unmarshal(raw, &payload)
+	if payload.Response.Error == nil {
+		payload.Response.Error = &openai.ResponseError{}
+	}
+	if payload.Response.IncompleteDetails == nil {
+		payload.Response.IncompleteDetails = &openai.ResponseIncompleteDetails{}
+	}
 	return payload.Response
 }

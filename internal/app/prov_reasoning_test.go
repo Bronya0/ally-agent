@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	legacyopenai "github.com/sashabaranov/go-openai"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -20,9 +21,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	oaresp "github.com/openai/openai-go/v3/responses"
-	legacyopenai "github.com/sashabaranov/go-openai"
 )
 
 // ── OpenAI Chat: reasoning_content replay in the tool loop ──────────────────
@@ -799,7 +797,7 @@ func TestBuildOpenAIResponsesInputReplaysReasoningPerTurn(t *testing.T) {
 
 	_, step1 := buildOpenAIResponsesInput(turn1, replay)
 	// user -> reasoning -> function_call -> function_call output
-	if len(step1) != 4 || step1[1].OfReasoning == nil || step1[1].OfReasoning.ID != "rs_1" {
+	if len(step1) != 4 || marshalResponsesRequest(t, step1[1])["type"] != "reasoning" || marshalResponsesRequest(t, step1[1])["id"] != "rs_1" {
 		t.Fatalf("step 1 input = %+v, want the reasoning item before its function_call", step1)
 	}
 	_, step2 := buildOpenAIResponsesInput(turn2, replay)
@@ -863,7 +861,7 @@ func TestResponsesReplaySkipsNamesTheUncoveredTurn(t *testing.T) {
 // documented field survives capture -> carrier -> request. pi stores the whole
 // item as JSON for exactly that reason (openai-responses-shared.ts:222/689-690).
 func TestResponsesReasoningItemKeepsEveryField(t *testing.T) {
-	var item oaresp.ResponseReasoningItem
+	var item responsesOutputItem
 	if err := json.Unmarshal([]byte(`{"type":"reasoning","id":"rs_9","status":"completed","encrypted_content":"enc-9","summary":[{"type":"summary_text","text":"part one"},{"type":"summary_text","text":"part two"}],"content":[{"type":"reasoning_text","text":"raw chain"}]}`), &item); err != nil {
 		t.Fatalf("unmarshal reasoning item: %v", err)
 	}
@@ -885,13 +883,13 @@ func TestResponsesReasoningItemKeepsEveryField(t *testing.T) {
 	}
 
 	input := responsesReasoningInputItem(ledger.turns[0].responses[0])
-	if input.OfReasoning == nil {
+	if input.Type != "reasoning" {
 		t.Fatal("expected a reasoning input item")
 	}
-	if input.OfReasoning.ID != "rs_9" || input.OfReasoning.EncryptedContent.Value != "enc-9" ||
-		len(input.OfReasoning.Summary) != 2 || len(input.OfReasoning.Content) != 1 ||
-		string(input.OfReasoning.Status) != "completed" {
-		t.Fatalf("replayed item = %+v, want every field preserved", input.OfReasoning)
+	if input.ID != "rs_9" || input.EncryptedContent != "enc-9" ||
+		len(input.Summary) != 2 || len(input.Content) != 1 ||
+		string(input.Status) != "completed" {
+		t.Fatalf("replayed item = %+v, want every field preserved", input)
 	}
 }
 
@@ -900,7 +898,7 @@ func TestResponsesReasoningItemKeepsEveryField(t *testing.T) {
 // sent back. Dropping it keeps the request valid — the follower function_call
 // carries its own id, and only a reasoning item requires its follower.
 func TestResponsesReasoningItemWithoutUsableIDDropped(t *testing.T) {
-	var item oaresp.ResponseReasoningItem
+	var item responsesOutputItem
 	if err := json.Unmarshal([]byte(`{"type":"reasoning","id":"","summary":[]}`), &item); err != nil {
 		t.Fatalf("unmarshal reasoning item: %v", err)
 	}

@@ -22,8 +22,6 @@ import (
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
-	oa "github.com/openai/openai-go/v3"
-	oaresp "github.com/openai/openai-go/v3/responses"
 	legacyopenai "github.com/sashabaranov/go-openai"
 
 	"ally-dev/internal/tools/toolcall"
@@ -288,12 +286,12 @@ func TestOpenAIResponsesEncryptedReasoningIncludeIsOfficialOnly(t *testing.T) {
 			}
 			found := false
 			for _, item := range include {
-				if item == string(oaresp.ResponseIncludableReasoningEncryptedContent) {
+				if item == string(legacyopenai.ResponseIncludeReasoningEncryptedContent) {
 					found = true
 				}
 			}
 			if !found {
-				t.Fatalf("include = %#v, want %s", include, oaresp.ResponseIncludableReasoningEncryptedContent)
+				t.Fatalf("include = %#v, want %s", include, legacyopenai.ResponseIncludeReasoningEncryptedContent)
 			}
 		})
 	}
@@ -438,9 +436,8 @@ func TestIsProvider400ErrorUsesTypedStatusCodes(t *testing.T) {
 		t.Fatal("500 must not be treated as a 400")
 	}
 	// 错误文本里恰好引用 "400 Bad Request" 但状态码不是 400，不应触发 sanitize 重试。
-	// （Response/Request 是 SDK Error() 解引用的必填字段，生产路径必有值。）
-	oa500 := &oa.Error{StatusCode: http.StatusInternalServerError, Message: "upstream returned 400 Bad Request for a nested call", Request: httptest.NewRequest(http.MethodGet, "https://api.example.com", nil), Response: &http.Response{StatusCode: http.StatusInternalServerError}}
-	if isProvider400Error(oa500) {
+	request500 := &legacyopenai.RequestError{HTTPStatusCode: http.StatusInternalServerError, Err: errors.New("upstream returned 400 Bad Request for a nested call")}
+	if isProvider400Error(request500) {
 		t.Fatal("500 with a 400-mentioning message must not be treated as a 400")
 	}
 	anthropic400 := &anthropic.Error{StatusCode: http.StatusBadRequest}
@@ -1164,9 +1161,9 @@ func TestOpenAIResponsesMidTurnSystemAndDeduplication(t *testing.T) {
 	if len(input) != 4 {
 		t.Fatalf("expected 4 input items, got %d", len(input))
 	}
-	midTurn := input[2]
-	if midTurn.OfMessage == nil || midTurn.OfMessage.Role != "developer" {
-		t.Fatalf("expected developer role for mid-turn system message, got %v", midTurn.OfMessage)
+	midTurn := marshalResponsesRequest(t, input[2])
+	if midTurn["role"] != "developer" {
+		t.Fatalf("expected developer role for mid-turn system message, got %v", midTurn)
 	}
 
 	// 2. Content deduplication when MultiContent has text
@@ -1440,7 +1437,7 @@ func TestOpenAIResponsesRequestTurnsThinkingOff(t *testing.T) {
 	}
 	messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
 	body := buildOpenAIResponsesRequest(cfg, "gpt-5.5", messages, nil, nil)
-	if body.Reasoning.Effort != oa.ReasoningEffort(reasoningEffortOffWireValue) {
+	if body.Reasoning.Effort != reasoningEffortOffWireValue {
 		t.Fatalf("reasoning.effort = %q, want %q", body.Reasoning.Effort, reasoningEffortOffWireValue)
 	}
 	if body.Reasoning.Summary != "" {
@@ -1599,11 +1596,11 @@ func TestResponseInputItemParamOfFunctionCallEmptyArgs(t *testing.T) {
 		},
 	}
 	item := responseInputItemParamOfFunctionCall(call, nil)
-	if item.OfFunctionCall == nil {
-		t.Fatal("expected OfFunctionCall")
+	if item.Type != "function_call" {
+		t.Fatal("expected function_call")
 	}
-	if item.OfFunctionCall.Arguments != "{}" {
-		t.Fatalf("expected arguments to default to {}, got %q", item.OfFunctionCall.Arguments)
+	if item.Arguments != "{}" {
+		t.Fatalf("expected arguments to default to {}, got %q", item.Arguments)
 	}
 }
 
@@ -1716,16 +1713,16 @@ func TestBuildOpenAIResponsesInputReplaysToolItemID(t *testing.T) {
 	if len(input) != 4 {
 		t.Fatalf("input items = %d, want 4: %+v", len(input), input)
 	}
-	if input[1].OfReasoning == nil {
+	if marshalResponsesRequest(t, input[1])["type"] != "reasoning" {
 		t.Fatalf("input[1] = %+v, want the captured reasoning item before its function_call", input[1])
 	}
-	if call := input[2].OfFunctionCall; call == nil || call.ID.Value != "fc_item_1" {
+	if call := marshalResponsesRequest(t, input[2]); call["id"] != "fc_item_1" {
 		t.Fatalf("function_call = %+v, want the captured item id", input[2])
 	}
 	// A call from an older turn (or another model) has no captured id: the
 	// field stays absent instead of being invented.
 	_, bare := buildOpenAIResponsesInput(messages, nil)
-	if len(bare) != 3 || bare[1].OfFunctionCall == nil || bare[1].OfFunctionCall.ID.Valid() {
+	if len(bare) != 3 || marshalResponsesRequest(t, bare[1])["type"] != "function_call" || marshalResponsesRequest(t, bare[1])["id"] != nil {
 		t.Fatalf("foreign turn must not carry an item id: %+v", bare)
 	}
 	// An id that cannot be echoed back verbatim is dropped rather than sent.
@@ -1735,8 +1732,8 @@ func TestBuildOpenAIResponsesInputReplaysToolItemID(t *testing.T) {
 		responsesItems: map[string]string{"call_1": "fc bad|id"},
 	}}}
 	_, unsafe := buildOpenAIResponsesInput(messages, unsafeTurn)
-	if unsafe[2].OfFunctionCall == nil || unsafe[2].OfFunctionCall.ID.Valid() {
-		t.Fatalf("unsafe item id must be dropped: %+v", unsafe[2].OfFunctionCall)
+	if marshalResponsesRequest(t, unsafe[2])["type"] != "function_call" || marshalResponsesRequest(t, unsafe[2])["id"] != nil {
+		t.Fatalf("unsafe item id must be dropped: %+v", unsafe[2])
 	}
 }
 
@@ -1780,12 +1777,12 @@ func TestEnsureResponsesReasoningSummaries(t *testing.T) {
 func TestOpenAIResponsesMaxOutputTokensFloor(t *testing.T) {
 	cfg := ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: defaultOpenAIResponsesURL, MaxTokens: 4}
 	body := buildOpenAIResponsesRequest(cfg, "gpt-5.5", nil, nil, nil)
-	if !body.MaxOutputTokens.Valid() || body.MaxOutputTokens.Value != 16 {
+	if body.MaxOutputTokens != 16 {
 		t.Fatalf("max_output_tokens = %+v, want the documented floor of 16", body.MaxOutputTokens)
 	}
 	for _, tc := range []struct{ in, want int64 }{{4, 16}, {15, 16}, {16, 16}, {17, 17}, {4096, 4096}} {
 		cfg.MaxTokens = int(tc.in)
-		got := buildOpenAIResponsesRequest(cfg, "gpt-5.5", nil, nil, nil).MaxOutputTokens.Value
+		got := int64(buildOpenAIResponsesRequest(cfg, "gpt-5.5", nil, nil, nil).MaxOutputTokens)
 		if got != tc.want {
 			t.Fatalf("max_output_tokens for %d = %d, want %d", tc.in, got, tc.want)
 		}
@@ -1797,10 +1794,10 @@ func TestOpenAIResponsesMaxOutputTokensFloor(t *testing.T) {
 // the miss side is input - cached. Reading cache_write_tokens as the miss side
 // would under-count it (and inflate the reported hit rate).
 func TestModelUsageFromResponsesDerivesUncachedInput(t *testing.T) {
-	usage := modelUsageFromResponses(oaresp.ResponseUsage{
+	usage := modelUsageFromResponses(&legacyopenai.ResponseUsage{
 		InputTokens:  1000,
 		OutputTokens: 8,
-		InputTokensDetails: oaresp.ResponseUsageInputTokensDetails{
+		InputTokensDetails: &legacyopenai.ResponseInputTokensDetails{
 			CachedTokens:     800,
 			CacheWriteTokens: 100,
 		},
@@ -1870,12 +1867,12 @@ func TestIsAnthropicAdaptiveThinkingModel(t *testing.T) {
 func TestResponsesToolItemIDCaptureAndCompleteness(t *testing.T) {
 	call := legacyopenai.ToolCall{ID: "call:foo|bar.1", Function: legacyopenai.FunctionCall{Name: "read"}}
 	ids := map[string]string{}
-	captureResponsesToolItemID(ids, call, oaresp.ResponseOutputItemUnion{Type: "function_call", ID: "fc_1", CallID: call.ID})
+	captureResponsesToolItemID(ids, call, legacyopenai.ResponseOutputItem{Type: "function_call", ID: "fc_1", CallID: call.ID})
 	if got := ids[toolcall.ForResponsesCall(call.ID)]; got != "fc_1" {
 		t.Fatalf("captured ids = %+v, want the sanitized call id as key", ids)
 	}
 	unsafe := map[string]string{}
-	captureResponsesToolItemID(unsafe, call, oaresp.ResponseOutputItemUnion{Type: "function_call", ID: "fc bad|id", CallID: call.ID})
+	captureResponsesToolItemID(unsafe, call, legacyopenai.ResponseOutputItem{Type: "function_call", ID: "fc bad|id", CallID: call.ID})
 	if len(unsafe) != 0 {
 		t.Fatalf("ids that cannot be echoed verbatim must be dropped: %+v", unsafe)
 	}
@@ -2517,13 +2514,13 @@ func TestBuildOpenAIResponsesRequestOmitsSummaryPreservesEffort(t *testing.T) {
 	if _, present := wire["reasoning"].(map[string]any)["summary"]; present {
 		t.Fatalf("reasoning.summary must be absent from the wire: %v", wire["reasoning"])
 	}
-	if body.Reasoning.Effort != oa.ReasoningEffort("medium") {
+	if body.Reasoning.Effort != "medium" {
 		t.Fatalf("reasoning.effort = %q, want medium", body.Reasoning.Effort)
 	}
 
 	cfg.ReasoningEffort = ""
 	body = buildOpenAIResponsesRequest(cfg, "gpt-5.5", messages, nil, nil)
-	if body.Reasoning.Summary != "" || body.Reasoning.Effort != "" {
+	if body.Reasoning != nil && (body.Reasoning.Summary != "" || body.Reasoning.Effort != "") {
 		t.Fatalf("reasoning = %+v, want unset without an explicit effort", body.Reasoning)
 	}
 }
@@ -2843,7 +2840,7 @@ func TestOpenAIResponsesEffortFollowsVendorTable(t *testing.T) {
 		ReasoningEffort: reasoningEffortMedium,
 	}
 	body := buildOpenAIResponsesRequest(cfg, "deepseek-flash", messages, nil, nil)
-	if body.Reasoning.Effort != oa.ReasoningEffort(reasoningEffortHigh) {
+	if body.Reasoning.Effort != reasoningEffortHigh {
 		t.Fatalf("reasoning.effort = %q, want %q (DeepSeek's documented translation)", body.Reasoning.Effort, reasoningEffortHigh)
 	}
 	wire := marshalResponsesRequest(t, body)
@@ -2853,7 +2850,7 @@ func TestOpenAIResponsesEffortFollowsVendorTable(t *testing.T) {
 
 	cfg.ReasoningEffort = reasoningEffortMax
 	body = buildOpenAIResponsesRequest(cfg, "some-unknown-model", messages, nil, nil)
-	if body.Reasoning.Effort != "" || body.Reasoning.Summary != "" {
+	if body.Reasoning != nil && (body.Reasoning.Effort != "" || body.Reasoning.Summary != "") {
 		t.Fatalf("reasoning = %+v, want unset for a model of no known vendor", body.Reasoning)
 	}
 }

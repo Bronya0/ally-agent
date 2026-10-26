@@ -30,7 +30,6 @@ import (
 	"unicode/utf8"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
-	oa "github.com/openai/openai-go/v3"
 	legacyopenai "github.com/sashabaranov/go-openai"
 
 	"ally-dev/internal/chatgpt"
@@ -373,10 +372,6 @@ func providerHTTPStatusCode(err error) (int, bool) {
 	if errors.As(err, &legacyReqErr) {
 		return legacyReqErr.HTTPStatusCode, true
 	}
-	var oaErr *oa.Error
-	if errors.As(err, &oaErr) {
-		return oaErr.StatusCode, true
-	}
 	var anthropicErr *anthropic.Error
 	if errors.As(err, &anthropicErr) {
 		return anthropicErr.StatusCode, true
@@ -693,12 +688,6 @@ func retryAfterFromError(err error) time.Duration {
 	var anthropicErr *anthropic.Error
 	if errors.As(err, &anthropicErr) && anthropicErr.Response != nil {
 		if d := parseRetryAfterHeader(anthropicErr.Response.Header); d > 0 {
-			return d
-		}
-	}
-	var oaErr *oa.Error
-	if errors.As(err, &oaErr) && oaErr.Response != nil {
-		if d := parseRetryAfterHeader(oaErr.Response.Header); d > 0 {
 			return d
 		}
 	}

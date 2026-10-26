@@ -24,8 +24,6 @@ import (
 	"ally-dev/internal/tools/toolcall"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
-	oa "github.com/openai/openai-go/v3"
-	oaresp "github.com/openai/openai-go/v3/responses"
 	legacyopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -408,7 +406,7 @@ func (s *reasoningStash) clearScope(scope string) {
 // without a usable id would be rejected outright. Skipping it is safe — the
 // following function_call carries its own id, and only a reasoning item requires
 // its follower, never the other way round.
-func captureResponsesReasoningItem(item oaresp.ResponseReasoningItem) (responsesReasoningItem, bool) {
+func captureResponsesReasoningItem(item responsesOutputItem) (responsesReasoningItem, bool) {
 	captured := responsesReasoningItem{
 		ID:               strings.TrimSpace(item.ID),
 		EncryptedContent: item.EncryptedContent,
@@ -431,30 +429,19 @@ func captureResponsesReasoningItem(item oaresp.ResponseReasoningItem) (responses
 }
 
 // responsesReasoningInputItem converts a captured reasoning item into a request
-// input item. The summary key itself is guaranteed by
-// ensureResponsesReasoningSummaries: the SDK drops it when it is empty, and the
-// API only accepts an exact copy of the item it produced.
-func responsesReasoningInputItem(item responsesReasoningItem) oaresp.ResponseInputItemUnionParam {
-	summary := make([]oaresp.ResponseReasoningItemSummaryParam, 0, len(item.SummaryTexts))
+// input item. Always emit summary, including an empty array: the API requires
+// that key even when the reasoning item contains only encrypted state.
+func responsesReasoningInputItem(item responsesReasoningItem) responsesReasoningWireItem {
+	input := responsesReasoningWireItem{Type: "reasoning", ID: item.ID, Summary: []responsesTextPart{}, EncryptedContent: item.EncryptedContent, Status: item.Status}
 	for _, text := range item.SummaryTexts {
 		if text != "" {
-			summary = append(summary, oaresp.ResponseReasoningItemSummaryParam{Text: text})
+			input.Summary = append(input.Summary, responsesTextPart{Type: "summary_text", Text: text})
 		}
-	}
-	input := oaresp.ResponseInputItemParamOfReasoning(item.ID, summary)
-	if input.OfReasoning == nil {
-		return input
-	}
-	if item.EncryptedContent != "" {
-		input.OfReasoning.EncryptedContent = oa.String(item.EncryptedContent)
 	}
 	for _, text := range item.ContentTexts {
 		if text != "" {
-			input.OfReasoning.Content = append(input.OfReasoning.Content, oaresp.ResponseReasoningItemContentParam{Text: text})
+			input.Content = append(input.Content, responsesTextPart{Type: "reasoning_text", Text: text})
 		}
-	}
-	if item.Status != "" {
-		input.OfReasoning.Status = oaresp.ResponseReasoningItemStatus(item.Status)
 	}
 	return input
 }

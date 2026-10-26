@@ -13,7 +13,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openai/openai-go/v3/packages/ssestream"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -26,7 +25,7 @@ func auditStream(s string, failAfterCompletion bool) *openAIResponsesSSEStream {
 	if failAfterCompletion {
 		reader = io.MultiReader(reader, auditTailErrorReader{})
 	}
-	return &openAIResponsesSSEStream{decoder: ssestream.NewDecoder(&http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(reader)})}
+	return &openAIResponsesSSEStream{decoder: newResponsesSSEDecoder(&http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(reader)})}
 }
 
 // A valid terminal event is sufficient; connection-tail errors cannot discard

@@ -27,7 +27,6 @@ import (
 	"time"
 
 	toolshared "ally-dev/internal/tools/shared"
-	oaresp "github.com/openai/openai-go/v3/responses"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -2121,10 +2120,10 @@ func TestHandlePlanBoundsKeepSchemaAndHandlerInStep(t *testing.T) {
 }
 
 func TestModelUsageFromResponsesCountsUncachedInputAsMiss(t *testing.T) {
-	usage := modelUsageFromResponses(oaresp.ResponseUsage{
+	usage := modelUsageFromResponses(&openai.ResponseUsage{
 		InputTokens:  120,
 		OutputTokens: 8,
-		InputTokensDetails: oaresp.ResponseUsageInputTokensDetails{
+		InputTokensDetails: &openai.ResponseInputTokensDetails{
 			CachedTokens:     0,
 			CacheWriteTokens: 120,
 		},

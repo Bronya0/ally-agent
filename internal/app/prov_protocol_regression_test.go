@@ -19,12 +19,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openai/openai-go/v3/packages/ssestream"
 	openai "github.com/sashabaranov/go-openai"
 )
 
-func newAuditDecoder(body io.ReadCloser) ssestream.Decoder {
-	return ssestream.NewDecoder(&http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: body})
+func newAuditDecoder(body io.ReadCloser) *responsesSSEDecoder {
+	return newResponsesSSEDecoder(&http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: body})
 }
 
 func protocolConfig(url, format string) ConfigState {

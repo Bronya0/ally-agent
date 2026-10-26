@@ -22,9 +22,6 @@ import (
 	"ally-dev/internal/tools/schemautil"
 	"ally-dev/internal/tools/toolcall"
 
-	oa "github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/packages/ssestream"
-	oaresp "github.com/openai/openai-go/v3/responses"
 	legacyopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -73,7 +70,7 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 // openAIResponsesStreamAttempt 执行一次完整的 Responses 建流与消费。第二个
 // 返回值报告本次尝试是否已产出输出(文本/推理/工具调用/图片任一非空),
 // 调用方据此判定适配器内重试是否安全(无输出则重试不会造成重复)。
-func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams, messages []legacyopenai.ChatCompletionMessage, onEvent func(modelStreamEvent)) (result *modelStreamResult, emitted bool, err error) {
+func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState, body legacyopenai.CreateResponseRequest, messages []legacyopenai.ChatCompletionMessage, onEvent func(modelStreamEvent)) (result *modelStreamResult, emitted bool, err error) {
 	diagnostic := beginPerfAttempt(ctx, cfg, string(body.Model))
 	defer func() { diagnostic.finish(err) }()
 	if diagnostic != nil {
@@ -101,7 +98,7 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 	return a.consumeOpenAIResponsesStream(cfg, body, stream, onEvent)
 }
 
-func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.ResponseNewParams, stream *openAIResponsesSSEStream, onEvent func(modelStreamEvent)) (*modelStreamResult, bool, error) {
+func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body legacyopenai.CreateResponseRequest, stream *openAIResponsesSSEStream, onEvent func(modelStreamEvent)) (*modelStreamResult, bool, error) {
 	defer stream.Close()
 
 	var assistant strings.Builder
@@ -151,35 +148,32 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 
 	for stream.Next() {
 		event, rawEvent, err := stream.Event()
-		stream.diagnostic.event(event.Type, rawEvent)
+		stream.diagnostic.event(string(event.Type), rawEvent)
 		if err != nil {
 			if cfg.AuthType != authChatGPTOAuth && isIncompleteStreamJSON(err) && len(toolCalls) == 0 && (assistant.Len() > 0 || reasoning.Len() > 0) {
 				break
 			}
 			return nil, hasOutput(), wrapLLMStreamEventDecode(fmt.Errorf("decode responses stream event: %w", err))
 		}
-		outputCapture.observe(event.Type, rawEvent)
+		outputCapture.observe(string(event.Type), rawEvent)
 		switch event.Type {
 		case "response.output_text.delta":
-			ev := event.AsResponseOutputTextDelta()
-			if ev.Delta != "" {
-				assistant.WriteString(ev.Delta)
-				emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: ev.Delta})
+			if event.Delta != "" {
+				assistant.WriteString(event.Delta)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: event.Delta})
 			}
 		case "response.reasoning_summary_text.delta":
-			ev := event.AsResponseReasoningSummaryTextDelta()
-			if ev.Delta != "" {
-				reasoning.WriteString(ev.Delta)
-				emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: ev.Delta})
+			if event.Delta != "" {
+				reasoning.WriteString(event.Delta)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: event.Delta})
 			}
 		case "response.reasoning_text.delta":
 			// Raw reasoning text, streamed when the request asks for it instead
 			// of (or in addition to) the summarized form (pi
 			// openai-responses-shared.ts:623-632 handles both).
-			ev := event.AsResponseReasoningTextDelta()
-			if ev.Delta != "" {
-				reasoning.WriteString(ev.Delta)
-				emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: ev.Delta})
+			if event.Delta != "" {
+				reasoning.WriteString(event.Delta)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: event.Delta})
 			}
 		case "response.reasoning_summary_part.done":
 			// Summary parts are separate paragraphs: pi closes each one with a
@@ -194,27 +188,23 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 		case "response.refusal.delta":
 			// A refusal is user-visible answer text: dropping it left the panel
 			// empty even though the model answered.
-			ev := event.AsResponseRefusalDelta()
-			if ev.Delta != "" {
-				assistant.WriteString(ev.Delta)
-				emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: ev.Delta})
+			if event.Delta != "" {
+				assistant.WriteString(event.Delta)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: event.Delta})
 			}
 		case "response.output_item.added":
-			ev := event.AsResponseOutputItemAdded()
-			if ev.Item.Type == "function_call" {
-				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.Item.ID)
-				updateToolCallFromResponsesItem(&toolCalls[idx], ev.Item)
-				captureResponsesToolItemID(toolItemIDs, toolCalls[idx], ev.Item)
+			if event.Item != nil && event.Item.Type == "function_call" {
+				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, int64(event.OutputIndex), event.Item.ID)
+				updateToolCallFromResponsesItem(&toolCalls[idx], *event.Item)
+				captureResponsesToolItemID(toolItemIDs, toolCalls[idx], *event.Item)
 				toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 			}
 		case "response.function_call_arguments.delta":
-			ev := event.AsResponseFunctionCallArgumentsDelta()
-			idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.ItemID)
-			toolCalls[idx].Function.Arguments += ev.Delta
+			idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, int64(event.OutputIndex), event.ItemID)
+			toolCalls[idx].Function.Arguments += event.Delta
 			toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 		case "response.function_call_arguments.done":
-			ev := event.AsResponseFunctionCallArgumentsDone()
-			idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.ItemID)
+			idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, int64(event.OutputIndex), event.ItemID)
 			// The done event carries the authoritative full arguments, but a
 			// non-compliant relay may omit the field: an empty overwrite would
 			// wipe the accumulated deltas and the tool would silently run with
@@ -222,45 +212,42 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 			// outright, openai-responses.ts:973-980; pi falls back to the
 			// terminal item, openai-responses-shared.ts:711). A non-empty final
 			// value always wins, exactly like pi's overwrite.
-			if ev.Arguments != "" {
-				toolCalls[idx].Function.Arguments = ev.Arguments
+			if event.Arguments != "" {
+				toolCalls[idx].Function.Arguments = event.Arguments
 			}
 			toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 		case "response.output_item.done":
-			ev := event.AsResponseOutputItemDone()
-			if ev.Item.Type == "function_call" {
-				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.Item.ID)
-				updateToolCallFromResponsesItem(&toolCalls[idx], ev.Item)
-				captureResponsesToolItemID(toolItemIDs, toolCalls[idx], ev.Item)
+			if event.Item != nil && event.Item.Type == "function_call" {
+				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, int64(event.OutputIndex), event.Item.ID)
+				updateToolCallFromResponsesItem(&toolCalls[idx], *event.Item)
+				captureResponsesToolItemID(toolItemIDs, toolCalls[idx], *event.Item)
 				toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
-			} else if ev.Item.Type == "reasoning" {
+			} else if event.Item != nil && event.Item.Type == "reasoning" {
 				// Capture the completed reasoning item (its encrypted_content is
 				// only complete at output_item.done) for stateless replay on the
 				// next request of this tool loop. Every documented field is kept so
 				// the next request can send back a copy of the item the API
 				// produced.
-				if captured, ok := captureResponsesReasoningItem(ev.Item.AsReasoning()); ok {
+				if captured, ok := captureResponsesReasoningItem(responsesEventItem(rawEvent)); ok {
 					reasoningItems = append(reasoningItems, captured)
 				}
-			} else if ev.Item.Type == "image_generation_call" {
-				imageCall := ev.Item.AsImageGenerationCall()
+			} else if event.Item != nil && event.Item.Type == "image_generation_call" {
+				imageCall := responsesEventItem(rawEvent)
 				emitImage(imageCall.ID, imageCall.Result, false)
 			}
 		case "response.image_generation_call.partial_image":
-			ev := event.AsResponseImageGenerationCallPartialImage()
-			emitImage(ev.ItemID, ev.PartialImageB64, true)
+			emitImage(event.ItemID, event.PartialImageB64, true)
 		case "response.completed":
 			gotTerminalEvent = true
 			stopReason = "stop"
-			ev := struct{ Response oaresp.Response }{responsesTerminal(rawEvent)}
-			usage = modelUsageFromResponses(ev.Response.Usage)
-			// The openai-go Responses union decoder currently drops the nested
-			// response object when decoding a stream event. Read usage from the
-			// original event JSON so cached input tokens are not lost.
+			response := responsesTerminal(rawEvent)
+			usage = modelUsageFromResponses(response.Usage)
+			// Read the original event for compatible providers' additional usage
+			// counters and field-presence semantics.
 			if rawUsage := modelUsageFromResponsesEvent(rawEvent); rawUsage != nil {
 				usage = rawUsage
 			}
-			finalOutputText = ev.Response.OutputText()
+			finalOutputText = response.GetOutputText()
 			// Some compatible Responses gateways omit output_text.delta and only
 			// include the final text in response.completed. Forward the missing
 			// suffix so the frontend does not end on a blank assistant message.
@@ -277,29 +264,25 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 					emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: missing})
 				}
 			}
-			for _, item := range ev.Response.Output {
-				if item.Type == "image_generation_call" {
-					imageCall := item.AsImageGenerationCall()
-					emitImage(imageCall.ID, imageCall.Result, false)
-				}
+			for _, imageCall := range responsesTerminalImages(rawEvent) {
+				emitImage(imageCall.ID, imageCall.Result, false)
 			}
 		case "error":
-			ev := event.AsError()
 			// code/message/param formatting matches kimi-code
 			// (openai-responses.ts:228-236, 1004-1012) so the text keeps the
 			// markers ("insufficient_quota", "429", "rate_limit") the retry and
 			// key classifiers match on, instead of degrading to ": message".
-			streamErr = errors.New("OpenAI Responses stream error: " + responsesErrorText(ev.Code, ev.Message, ev.Param))
+			streamErr = errors.New("OpenAI Responses stream error: " + responsesErrorText(event.Code, event.Message, responsesErrorParam(event.Param)))
 		case "response.failed":
 			usage = modelUsageFromResponsesEvent(rawEvent)
-			ev := struct{ Response oaresp.Response }{responsesTerminal(rawEvent)}
-			code := string(ev.Response.Error.Code)
-			message := ev.Response.Error.Message
+			response := responsesTerminal(rawEvent)
+			code := string(response.Error.Code)
+			message := response.Error.Message
 			if strings.TrimSpace(code) == "" && strings.TrimSpace(message) == "" {
 				// No error object: fall back to incomplete_details.reason the way
 				// kimi (openai-responses.ts:323-350) and pi
 				// (openai-responses.ts:742-752) do.
-				if reason := ev.Response.IncompleteDetails.Reason; reason != "" {
+				if reason := response.IncompleteDetails.Reason; reason != "" {
 					code = "response.incomplete"
 					message = string(reason)
 				}
@@ -307,12 +290,12 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 			streamErr = errors.New("OpenAI Responses response.failed: " + responsesErrorText(code, message, ""))
 		case "response.incomplete":
 			gotTerminalEvent = true
-			ev := struct{ Response oaresp.Response }{responsesTerminal(rawEvent)}
-			usage = modelUsageFromResponses(ev.Response.Usage)
+			response := responsesTerminal(rawEvent)
+			usage = modelUsageFromResponses(response.Usage)
 			if rawUsage := modelUsageFromResponsesEvent(rawEvent); rawUsage != nil {
 				usage = rawUsage
 			}
-			finalOutputText = ev.Response.OutputText()
+			finalOutputText = response.GetOutputText()
 			if finalOutputText != "" {
 				seen := assistant.String()
 				missing := ""
@@ -326,13 +309,10 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 					emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: missing})
 				}
 			}
-			for _, item := range ev.Response.Output {
-				if item.Type == "image_generation_call" {
-					imageCall := item.AsImageGenerationCall()
-					emitImage(imageCall.ID, imageCall.Result, false)
-				}
+			for _, imageCall := range responsesTerminalImages(rawEvent) {
+				emitImage(imageCall.ID, imageCall.Result, false)
 			}
-			reason := ev.Response.IncompleteDetails.Reason
+			reason := response.IncompleteDetails.Reason
 			// "max_output_tokens" is the Responses API equivalent of
 			// finish_reason: "length". It is a normal terminal state of the
 			// response rather than a broken stream, so it is reported through
@@ -390,17 +370,17 @@ func (a *App) consumeOpenAIResponsesStream(cfg ConfigState, body oaresp.Response
 		reasoningItems = nil
 		var finalText strings.Builder
 		for i, raw := range nativeOutput {
-			var item oaresp.ResponseOutputItemUnion
+			var item responsesOutputItem
 			if json.Unmarshal(raw, &item) != nil {
 				continue
 			}
 			switch item.Type {
 			case "function_call":
 				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, nativeIndexes[i], item.ID)
-				updateToolCallFromResponsesItem(&toolCalls[idx], item)
-				captureResponsesToolItemID(toolItemIDs, toolCalls[idx], item)
+				updateToolCallFromResponsesItem(&toolCalls[idx], item.ResponseOutputItem)
+				captureResponsesToolItemID(toolItemIDs, toolCalls[idx], item.ResponseOutputItem)
 			case "reasoning":
-				if captured, ok := captureResponsesReasoningItem(item.AsReasoning()); ok {
+				if captured, ok := captureResponsesReasoningItem(item); ok {
 					reasoningItems = append(reasoningItems, captured)
 				}
 			case "message":
@@ -563,13 +543,13 @@ func openAIResponsesPromptCacheKey(sessionID string) string {
 	return fmt.Sprintf("ally:%x", sum[:16])
 }
 
-func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, replay *sessionReasoningPayload) oaresp.ResponseNewParams {
+func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, replay *sessionReasoningPayload) legacyopenai.CreateResponseRequest {
 	instructions, inputItems := buildOpenAIResponsesInput(messages, replay)
 	cacheKey := promptCacheKeyForRequest(cfg, apiFormatOpenAIResponses, model)
-	body := oaresp.ResponseNewParams{
-		Model:           oaresp.ResponsesModel(model),
-		Input:           oaresp.ResponseNewParamsInputUnion{OfInputItemList: inputItems},
-		MaxOutputTokens: oa.Int(int64(clampResponsesMaxOutputTokens(cfg.MaxTokens))),
+	body := legacyopenai.CreateResponseRequest{
+		Model:           model,
+		Input:           inputItems,
+		MaxOutputTokens: clampResponsesMaxOutputTokens(cfg.MaxTokens),
 	}
 	// Keep the existing implicit-cache wire shape and provider-default retention.
 	// The tested ChatGPT subscription model rejects both prompt_cache_options
@@ -579,10 +559,10 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	// Store and Include stay gated to official endpoints; compatible gateways
 	// may reject these fields. Tool selection and parallel calls use defaults.
 	if isOfficialOpenAIEndpoint(cfg) {
-		body.Store = oa.Bool(false)
+		body.Store = new(false)
 		// Retain the encrypted-reasoning hint for older model/route compatibility.
 		// Native reasoning items must still be replayed with store=false.
-		body.Include = append(body.Include, oaresp.ResponseIncludableReasoningEncryptedContent)
+		body.Include = append(body.Include, legacyopenai.ResponseIncludeReasoningEncryptedContent)
 	}
 	// Thinking strength for the Responses API (reasoning.effort): the level is
 	// resolved against this model's vendor first — DeepSeek accepts low/high/max
@@ -595,10 +575,10 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	// route while preserving effort and native reasoning-item replay.
 	reasoningWire := reasoningWireForAdapter(cfg, apiFormatOpenAIResponses, model, cfg.ReasoningEffort)
 	if reasoningWire.Effort != "" {
-		body.Reasoning = oa.ReasoningParam{Effort: oa.ReasoningEffort(reasoningWire.Effort)}
+		body.Reasoning = &legacyopenai.ResponseReasoning{Effort: reasoningWire.Effort}
 	}
 	if strings.TrimSpace(instructions) != "" {
-		body.Instructions = oa.String(instructions)
+		body.Instructions = instructions
 	}
 	body.Tools = convertToolsToOpenAIResponses(tools)
 	// The session routing key travels to the endpoints that document it
@@ -609,7 +589,7 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	// come back as a 400 while omitting it only costs the sticky route; routing a
 	// gateway does document travels in its own header instead (sessionAffinityHeaders).
 	if cacheKey != "" {
-		body.PromptCacheKey = oa.String(cacheKey)
+		body.PromptCacheKey = cacheKey
 	}
 	return body
 }
@@ -620,7 +600,7 @@ type openAIResponsesSSEStream struct {
 	diagnostic    *perfAttempt
 	authorization string // only used to redact error events; never exposed
 	requestID     string
-	decoder       ssestream.Decoder
+	decoder       *responsesSSEDecoder
 }
 
 // openAIResponsesMinOutputTokens is the documented floor for max_output_tokens:
@@ -662,12 +642,12 @@ func ensureResponsesReasoningSummaries(body map[string]any) bool {
 	return changed
 }
 
-func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams) (*openAIResponsesSSEStream, error) {
+func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body legacyopenai.CreateResponseRequest) (*openAIResponsesSSEStream, error) {
 	return newOpenAIResponsesSSEStreamWithClient(ctx, cfg, body, proxyHTTPClient(cfg, true, 0))
 }
 
 // Explicit client also permits isolated mock HTTP tests of the OAuth wire path.
-func newOpenAIResponsesSSEStreamWithClient(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams, client *http.Client) (*openAIResponsesSSEStream, error) {
+func newOpenAIResponsesSSEStreamWithClient(ctx context.Context, cfg ConfigState, body legacyopenai.CreateResponseRequest, client *http.Client) (*openAIResponsesSSEStream, error) {
 	normalizeModelAuth(&cfg)
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -765,7 +745,7 @@ func newOpenAIResponsesSSEStreamWithClient(ctx context.Context, cfg ConfigState,
 		return nil, failure
 	}
 	resp.Body = newIdleTimeoutReader(resp.Body, defaultStreamIdleTimeout)
-	decoder := ssestream.NewDecoder(resp)
+	decoder := newResponsesSSEDecoder(resp)
 	if decoder == nil {
 		resp.Body.Close()
 		return nil, errors.New("responses stream was empty")
@@ -777,12 +757,8 @@ func newOpenAIResponsesSSEStreamWithClient(ctx context.Context, cfg ConfigState,
 	return &openAIResponsesSSEStream{decoder: decoder, authorization: authorization, requestID: resp.Header.Get("x-request-id")}, nil
 }
 
-func responseInputItemParamOfFunctionCallOutput(callID, output string) oaresp.ResponseInputItemUnionParam {
-	p := oaresp.ResponseInputItemParamOfFunctionCallOutput(output)
-	if p.OfFunctionCallOutput != nil && strings.TrimSpace(callID) != "" {
-		p.OfFunctionCallOutput.CallID = oa.String(callID)
-	}
-	return p
+func responseInputItemParamOfFunctionCallOutput(callID, output string) legacyopenai.ResponseFunctionCallOutput {
+	return legacyopenai.ResponseFunctionCallOutput{Type: "function_call_output", CallID: callID, Output: output}
 }
 
 func (s *openAIResponsesSSEStream) Next() bool {
@@ -792,13 +768,35 @@ func (s *openAIResponsesSSEStream) Next() bool {
 	return s.decoder.Next()
 }
 
-func (s *openAIResponsesSSEStream) Event() (oaresp.ResponseStreamEventUnion, []byte, error) {
-	var event oaresp.ResponseStreamEventUnion
+func (s *openAIResponsesSSEStream) Event() (legacyopenai.ResponseStreamEvent, []byte, error) {
+	var event legacyopenai.ResponseStreamEvent
 	if s == nil || s.decoder == nil {
 		return event, nil, io.EOF
 	}
 	raw := bytes.TrimSpace(s.decoder.Event().Data)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("[DONE]")) {
+		return event, raw, nil
+	}
+	// The SDK common event struct assigns types to fields shared by many
+	// variants. Future/ignored variants may use different shapes for those
+	// fields; inspect only their discriminator instead of failing the run.
+	var header struct {
+		Type legacyopenai.ResponseStreamEventType `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return event, raw, err
+	}
+	event.Type = header.Type
+	switch header.Type {
+	case "response.output_text.delta", "response.reasoning_summary_text.delta",
+		"response.reasoning_text.delta", "response.refusal.delta",
+		"response.output_item.added", "response.output_item.done",
+		"response.function_call_arguments.delta", "response.function_call_arguments.done",
+		"response.image_generation_call.partial_image",
+		"response.completed", "response.failed", "response.incomplete", "error":
+		// Decode fields consumed by the adapter below. Untyped gateway errors
+		// and all other events are handled directly from their raw payload.
+	default:
 		return event, raw, nil
 	}
 	if err := json.Unmarshal(raw, &event); err != nil {
@@ -882,9 +880,9 @@ func responsesReplaySkips(messages []legacyopenai.ChatCompletionMessage, replay 
 	return skips
 }
 
-func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, replay *sessionReasoningPayload) (string, oaresp.ResponseInputParam) {
+func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, replay *sessionReasoningPayload) (string, []any) {
 	systemParts := []string{}
-	input := oaresp.ResponseInputParam{}
+	input := []any{}
 	hasSeenTurn := false
 	assistantOrdinal := 0
 	for _, m := range messages {
@@ -901,7 +899,7 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, re
 				// Preserve mid-conversation system turns (compaction summaries,
 				// steering prompts) at their chronological position using the
 				// Responses API developer role.
-				input = append(input, oaresp.ResponseInputItemParamOfMessage(text, oaresp.EasyInputMessageRoleDeveloper))
+				input = append(input, legacyopenai.ResponseInputMessage{Type: "message", Role: "developer", Content: text})
 			}
 		case legacyopenai.ChatMessageRoleUser, legacyopenai.ChatMessageRoleAssistant:
 			hasSeenTurn = true
@@ -915,7 +913,7 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, re
 			}
 			if role == legacyopenai.ChatMessageRoleAssistant && len(m.ToolCalls) > 0 {
 				if text := messageText(m); text != "" {
-					input = append(input, oaresp.ResponseInputItemParamOfMessage(text, oaresp.EasyInputMessageRoleAssistant))
+					input = append(input, legacyopenai.ResponseInputMessage{Type: "message", Role: "assistant", Content: text})
 				}
 				// The turn's captured reasoning items replay right before its
 				// function_call outputs — on every request that still carries
@@ -940,10 +938,10 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, re
 			if len(m.MultiContent) > 0 {
 				content := openAIResponsesContentFromMulti(m)
 				if len(content) > 0 {
-					input = append(input, oaresp.ResponseInputItemParamOfMessage(content, oaresp.EasyInputMessageRole(role)))
+					input = append(input, legacyopenai.ResponseInputMessage{Type: "message", Role: role, Content: content})
 				}
 			} else if text := strings.TrimSpace(m.Content); text != "" {
-				input = append(input, oaresp.ResponseInputItemParamOfMessage(text, oaresp.EasyInputMessageRole(role)))
+				input = append(input, legacyopenai.ResponseInputMessage{Type: "message", Role: role, Content: text})
 			}
 		case legacyopenai.ChatMessageRoleTool:
 			hasSeenTurn = true
@@ -955,13 +953,13 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, re
 	return strings.Join(systemParts, "\n\n"), input
 }
 
-func responseInputItemParamOfFunctionCall(call legacyopenai.ToolCall, toolItemIDs map[string]string) oaresp.ResponseInputItemUnionParam {
+func responseInputItemParamOfFunctionCall(call legacyopenai.ToolCall, toolItemIDs map[string]string) legacyopenai.ResponseOutputItem {
 	args := strings.TrimSpace(call.Function.Arguments)
 	if args == "" {
 		args = "{}"
 	}
 	callID := toolcall.ForResponsesCall(toolcall.Effective(call.ID, call.Function.Name))
-	p := oaresp.ResponseInputItemParamOfFunctionCall(args, callID, call.Function.Name)
+	p := legacyopenai.ResponseOutputItem{Type: "function_call", Arguments: args, CallID: callID, Name: call.Function.Name}
 	// A replayed reasoning item is paired with its follower BY ID: sending the
 	// reasoning item's id back without the id of the function_call it precedes
 	// is rejected ("Item 'rs_…' of type 'reasoning' was provided without its
@@ -969,16 +967,14 @@ func responseInputItemParamOfFunctionCall(call legacyopenai.ToolCall, toolItemID
 	// same model (openai-responses-shared.ts:247-292). The id is only replayed
 	// when it came from the current model's last response (model-scoped stash),
 	// so a foreign or stale id can never be sent.
-	if p.OfFunctionCall != nil {
-		if id := strings.TrimSpace(toolItemIDs[callID]); id != "" && toolcall.IsSafeResponsesItemID(id) {
-			p.OfFunctionCall.ID = oa.String(id)
-		}
+	if id := strings.TrimSpace(toolItemIDs[callID]); id != "" && toolcall.IsSafeResponsesItemID(id) {
+		p.ID = id
 	}
 	return p
 }
 
-func openAIResponsesContentFromMulti(m legacyopenai.ChatCompletionMessage) oaresp.ResponseInputMessageContentListParam {
-	content := oaresp.ResponseInputMessageContentListParam{}
+func openAIResponsesContentFromMulti(m legacyopenai.ChatCompletionMessage) []any {
+	content := []any{}
 	hasMultiText := false
 	for _, part := range m.MultiContent {
 		if part.Type == legacyopenai.ChatMessagePartTypeText && strings.TrimSpace(part.Text) != "" {
@@ -987,20 +983,17 @@ func openAIResponsesContentFromMulti(m legacyopenai.ChatCompletionMessage) oares
 		}
 	}
 	if !hasMultiText && strings.TrimSpace(m.Content) != "" {
-		content = append(content, oaresp.ResponseInputContentParamOfInputText(m.Content))
+		content = append(content, legacyopenai.ResponseInputText{Type: "input_text", Text: m.Content})
 	}
 	for _, part := range m.MultiContent {
 		switch part.Type {
 		case legacyopenai.ChatMessagePartTypeText:
 			if strings.TrimSpace(part.Text) != "" {
-				content = append(content, oaresp.ResponseInputContentParamOfInputText(part.Text))
+				content = append(content, legacyopenai.ResponseInputText{Type: "input_text", Text: part.Text})
 			}
 		case legacyopenai.ChatMessagePartTypeImageURL:
 			if part.ImageURL != nil && validImageDataURL(part.ImageURL.URL) {
-				img := oaresp.ResponseInputContentParamOfInputImage(oaresp.ResponseInputImageDetailAuto)
-				if img.OfInputImage != nil {
-					img.OfInputImage.ImageURL = oa.String(part.ImageURL.URL)
-				}
+				img := legacyopenai.ResponseInputImage{Type: "input_image", Detail: "auto", ImageURL: part.ImageURL.URL}
 				content = append(content, img)
 			}
 		}
@@ -1008,16 +1001,17 @@ func openAIResponsesContentFromMulti(m legacyopenai.ChatCompletionMessage) oares
 	return content
 }
 
-func convertToolsToOpenAIResponses(tools []legacyopenai.Tool) []oaresp.ToolUnionParam {
-	out := make([]oaresp.ToolUnionParam, 0, len(tools))
+func convertToolsToOpenAIResponses(tools []legacyopenai.Tool) []legacyopenai.ResponseTool {
+	out := make([]legacyopenai.ResponseTool, 0, len(tools))
 	for _, tool := range tools {
 		if tool.Function == nil {
 			continue
 		}
 		params := schemautil.Map(tool.Function.Parameters)
-		next := oaresp.ToolParamOfFunction(tool.Function.Name, params, false)
-		if next.OfFunction != nil && strings.TrimSpace(tool.Function.Description) != "" {
-			next.OfFunction.Description = oa.String(tool.Function.Description)
+		next := legacyopenai.NewResponseFunctionTool(legacyopenai.FunctionDefinition{Name: tool.Function.Name, Parameters: params})
+		next.Parameters["strict"] = false
+		if strings.TrimSpace(tool.Function.Description) != "" {
+			next.Parameters["description"] = tool.Function.Description
 		}
 		out = append(out, next)
 	}
@@ -1078,7 +1072,7 @@ func responsesSlotHasItemID(byItemID map[string]int, slot int) bool {
 // function call, keyed by the call id its result is replayed with. A replayed
 // reasoning item must be paired with the id of the item that follows it, so the
 // next request needs this id (see responseInputItemParamOfFunctionCall).
-func captureResponsesToolItemID(ids map[string]string, call legacyopenai.ToolCall, item oaresp.ResponseOutputItemUnion) {
+func captureResponsesToolItemID(ids map[string]string, call legacyopenai.ToolCall, item legacyopenai.ResponseOutputItem) {
 	if ids == nil || item.ID == "" || item.CallID == "" {
 		return
 	}
@@ -1092,7 +1086,7 @@ func captureResponsesToolItemID(ids map[string]string, call legacyopenai.ToolCal
 	ids[toolcall.ForResponsesCall(toolcall.Effective(call.ID, call.Function.Name))] = item.ID
 }
 
-func updateToolCallFromResponsesItem(call *legacyopenai.ToolCall, item oaresp.ResponseOutputItemUnion) {
+func updateToolCallFromResponsesItem(call *legacyopenai.ToolCall, item legacyopenai.ResponseOutputItem) {
 	if item.CallID != "" {
 		call.ID = item.CallID
 	} else if call.ID == "" {
@@ -1102,7 +1096,7 @@ func updateToolCallFromResponsesItem(call *legacyopenai.ToolCall, item oaresp.Re
 	if item.Name != "" {
 		call.Function.Name = item.Name
 	}
-	if args := strings.TrimSpace(item.Arguments.OfString); args != "" {
+	if args := strings.TrimSpace(item.Arguments); args != "" {
 		call.Function.Arguments = args
 	}
 }
@@ -1113,17 +1107,21 @@ func updateToolCallFromResponsesItem(call *legacyopenai.ToolCall, item oaresp.Re
 // the denominator of the cache hit rate — is derived from input - cached instead
 // of being read from cache_write_tokens, which would under-count the miss side
 // and inflate the hit rate.
-func modelUsageFromResponses(usage oaresp.ResponseUsage) *modelUsage {
-	result := modelUsageFromResponseTokenCounts(
-		usage.InputTokens,
-		usage.OutputTokens,
-		usage.InputTokensDetails.CachedTokens,
-		0,
-		usage.InputTokensDetails.CacheWriteTokens,
-	)
+func modelUsageFromResponses(usage *legacyopenai.ResponseUsage) *modelUsage {
+	if usage == nil {
+		return nil
+	}
+	var cached, write int
+	if usage.InputTokensDetails != nil {
+		cached = usage.InputTokensDetails.CachedTokens
+		write = usage.InputTokensDetails.CacheWriteTokens
+	}
+	result := modelUsageFromResponseTokenCounts(int64(usage.InputTokens), int64(usage.OutputTokens), int64(cached), 0, int64(write))
 	if result != nil {
-		result.ReasoningTokens = int(usage.OutputTokensDetails.ReasoningTokens)
-		result.TotalTokens = int(usage.TotalTokens)
+		if usage.OutputTokensDetails != nil {
+			result.ReasoningTokens = usage.OutputTokensDetails.ReasoningTokens
+		}
+		result.TotalTokens = usage.TotalTokens
 	}
 	return result
 }
