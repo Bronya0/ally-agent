@@ -10,6 +10,8 @@
 
 // devtools 构建（wails3 build EXTRA_TAGS=devtools）下 F12 打开 WebView2
 // DevTools。Wails v3 不会自动绑定 F12，必须在这里显式挂 KeyBindings。
+// macOS 必须使用 wails3 build EXTRA_TAGS=devtools,private_mac_apis；
+// 缺少 private_mac_apis 时 OpenDevTools() 是静默 no-op。
 package main
 
 import "github.com/wailsapp/wails/v3/pkg/application"

@@ -8,6 +8,8 @@ vars:
   CROSS_IMAGE: wails-cross
 
 tasks:
+  # F12 / OpenDevTools: wails3 build EXTRA_TAGS=devtools,private_mac_apis
+  # macOS requires private_mac_apis for the Web Inspector to open.
   build:
     summary: Builds the application
     cmds:

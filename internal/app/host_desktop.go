@@ -201,6 +201,8 @@ func (a *App) showMainWindow() {
 		return
 	}
 	a.wails.window.Show()
+	// Only undo minimisation; Restore would also leave maximised/fullscreen mode.
+	a.wails.window.UnMinimise()
 	a.wails.window.Focus()
 }
 

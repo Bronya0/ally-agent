@@ -42,7 +42,7 @@ func main() {
 	// 桌面通知服务：仅用于任务完成/出错/取消的系统提示音（带声音）。
 	// SafeNotificationsService 包装平台后端：启动失败（macOS 无
 	// bundle、Linux 无会话总线）时降级为静默，绝不阻断应用启动。
-	notifier := backend.NewSafeNotificationsService()
+	notifier := backend.NewSafeNotificationsService(app.ShowMainWindow)
 	backend.SetNotifier(app, notifier)
 
 	// Error logging: open ~/.ally_agent/logs/error.log and route ALL errors
