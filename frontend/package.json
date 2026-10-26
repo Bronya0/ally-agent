@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@traptitech/markdown-it-katex": "^3.6.0",
-    "@wailsio/runtime": "^3.0.0-beta.1",
+    "@wailsio/runtime": "3.0.0",
     "ace-builds": "^1.44.0",
     "ansi_up": "^6.0.6",
     "echarts": "^6.1.0",

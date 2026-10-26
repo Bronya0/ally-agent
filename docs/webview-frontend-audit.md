@@ -104,4 +104,4 @@ Windows 使用 WebView2，macOS 使用 WKWebView，不是同一个引擎。两�
 
 建议固定相同会话、模型输出和生产包，对 Windows/macOS 各跑：冷启动；1/5/10 个工作区；连续流式与取消；多张 HTML 卡及全屏往返；大文件编辑后关闭；最小化/锁屏/唤醒；反复关闭 Tab。记录 Go 进程、WebView 内容进程和 GPU 进程的内存、JS heap、DOM/监听器数量和 CPU。关注关闭后驻留量是否逐轮上升，而不是要求 OS 工作集立即回落；浏览器缓存和分配器保留不等于对象泄漏。后台 Agent 必须继续运行、输出和历史不能丢失。
 
-官方参考：[Wails 平台引擎示例](https://pkg.go.dev/github.com/wailsapp/wails/v3/examples/webview-api-check)、[Microsoft WebView2 性能指南](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/performance)。后者建议关注最新 Runtime 和应用自身资源使用；具体框架选项需以项目锁定的 Wails beta.15 源码为准。
+官方参考：[Wails 平台引擎示例](https://pkg.go.dev/github.com/wailsapp/wails/v3/examples/webview-api-check)、[Microsoft WebView2 性能指南](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/performance)。后者建议关注最新 Runtime 和应用自身资源使用；具体框架选项需以项目锁定的 Wails v3.0.0 源码为准。

@@ -18,7 +18,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sashabaranov/go-openai v1.43.0
 	github.com/sergi/go-diff v1.4.0
-	github.com/wailsapp/wails/v3 v3.0.0-beta.15
+	github.com/wailsapp/wails/v3 v3.0.0
 	github.com/zalando/go-keyring v0.2.8
 	go.yaml.in/yaml/v4 v4.0.0-rc.2
 	golang.org/x/crypto v0.57.0
@@ -47,7 +47,6 @@ require (
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/itlightning/dateparse v0.2.1 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
-	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
