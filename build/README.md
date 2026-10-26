@@ -14,3 +14,5 @@ The structure is:
 - `Taskfile.yml` — Shared wails3 build tasks (frontend build, bindings, icons)
 
 See [Wails v3 build documentation](https://v3.wails.io) for details.
+
+Ripgrep is prepared offline from the official archives in [`tools/ripgrep`](../tools/ripgrep/README.md) during local builds and release packaging. Upgrading it only requires replacing the archives. Linux releases cover x64 and arm64; macOS retains the universal DMG filename for existing automatic updaters.

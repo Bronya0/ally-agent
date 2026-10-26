@@ -4,7 +4,7 @@ Ally is licensed under GPL-3.0-only. Third-party components are not relicensed b
 
 ## ripgrep
 
-Release packages bundle the unmodified `rg` executable from [BurntSushi/ripgrep](https://github.com/BurntSushi/ripgrep), version 15.2.0.
+Release packages bundle `rg` from the official [BurntSushi/ripgrep](https://github.com/BurntSushi/ripgrep) archives vendored in `tools/ripgrep/`. macOS universal packages combine the two official architecture binaries. Run the bundled `rg --version` to see its version.
 
 Copyright (c) 2015 Andrew Gallant.
 

@@ -1,6 +1,11 @@
 version: '3'
 
 tasks:
+  prepare:ripgrep:
+    summary: Prepares the local ripgrep archive for the target platform (offline)
+    cmds:
+      - node scripts/prepare-ripgrep.mjs --os '{{.GOOS}}' --arch '{{.ARCH | default ARCH}}' --output-dir '{{.BIN_DIR}}/tools'
+
   go:mod:tidy:
     summary: Runs `go mod tidy`
     internal: true

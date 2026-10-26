@@ -21,6 +21,7 @@ tasks:
     summary: Builds the application
     cmds:
       - task: "{{.GOOS}}:build"
+      - task: common:prepare:ripgrep
 
   package:
     summary: Packages a production build of the application

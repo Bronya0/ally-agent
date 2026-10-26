@@ -33,3 +33,7 @@
 *.png binary
 *.ico binary
 *.woff2 binary
+
+# Preserve vendored release archives as binary files
+*.zip binary
+*.gz binary

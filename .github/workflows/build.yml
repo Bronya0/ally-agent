@@ -13,7 +13,6 @@ env:
   # 永远装最新的 wails3 CLI：写死 tag 会和 go.mod 里的 runtime 版本悄悄漂移
   # （曾长期停在 beta.11，而 go.mod 已经是 beta.15）。要临时钉住就换成具体 tag。
   WAILS_VERSION: latest
-  RG_VERSION: 15.2.0
   ALLY_BUILD_VERSION: ${{ github.event.release.tag_name || github.ref_name }}
   # release 事件自带正文，vite 构建时通过 define 注入为 __ALLY_RELEASE_NOTES__，不查 API
   ALLY_RELEASE_NOTES_BODY: ${{ github.event.release.body }}
@@ -89,24 +88,11 @@ jobs:
       - name: Bundle ripgrep and licenses
         shell: pwsh
         run: |
-          $asset = "ripgrep-${{ env.RG_VERSION }}-x86_64-pc-windows-msvc.zip"
-          $base = "https://github.com/BurntSushi/ripgrep/releases/download/${{ env.RG_VERSION }}"
-          Invoke-WebRequest "$base/$asset" -OutFile $asset
-          Invoke-WebRequest "$base/$asset.sha256" -OutFile "$asset.sha256"
-          $expected = [regex]::Match((Get-Content "$asset.sha256" -Raw), '(?i)\b[0-9a-f]{64}\b').Value.ToLowerInvariant()
-          if (-not $expected) { throw "ripgrep checksum file did not contain a SHA-256 hash" }
-          $actual = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) { throw "ripgrep checksum mismatch" }
-
-          Expand-Archive $asset -DestinationPath rg-dist
-          $rg = Get-ChildItem rg-dist -Recurse -Filter rg.exe | Select-Object -First 1
-          if (-not $rg) { throw "rg.exe was not found in the ripgrep archive" }
-
           New-Item -ItemType Directory -Force dist/tools, dist/third_party/ripgrep | Out-Null
           Copy-Item "bin/${{ env.APP_NAME }}.exe" dist/
-          Copy-Item $rg.FullName dist/tools/rg.exe
+          Copy-Item bin/tools/rg.exe dist/tools/rg.exe
           Copy-Item LICENSE, THIRD_PARTY_NOTICES.md, README.md dist/
-          Copy-Item third_party/ripgrep/* dist/third_party/ripgrep/
+          Copy-Item third_party/ripgrep/* dist/third_party/ripgrep/ -Recurse -Force
           & dist/tools/rg.exe --version
 
           $version = "${{ github.event.release.tag_name || github.ref_name }}"
@@ -125,8 +111,16 @@ jobs:
           fail_on_unmatched_files: true
 
   linux:
-    name: Linux x64
-    runs-on: ubuntu-24.04
+    name: Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
 
@@ -157,21 +151,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          asset="ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl.tar.gz"
-          base="https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}"
-          curl --fail --location --retry 3 -o "$asset" "$base/$asset"
-          curl --fail --location --retry 3 -o "$asset.sha256" "$base/$asset.sha256"
-          sha256sum --check "$asset.sha256"
-
-          mkdir -p rg-dist dist/tools dist/third_party/ripgrep
-          tar -xzf "$asset" -C rg-dist
-          rg_path="$(find rg-dist -type f -name rg -print -quit)"
-          test -n "$rg_path"
-
+          mkdir -p dist/tools dist/third_party/ripgrep
           cp "bin/${APP_NAME}" dist/
-          cp "$rg_path" dist/tools/rg
+          cp bin/tools/rg dist/tools/rg
           cp LICENSE THIRD_PARTY_NOTICES.md README.md dist/
-          cp third_party/ripgrep/* dist/third_party/ripgrep/
+          cp -R third_party/ripgrep/. dist/third_party/ripgrep/
           chmod +x "dist/${APP_NAME}" dist/tools/rg
           dist/tools/rg --version
 
@@ -192,20 +176,20 @@ jobs:
           cp build/appicon.png "dist/${APP_NAME}.png"
 
           version="${{ github.event.release.tag_name || github.ref_name }}"
-          root_dir="${APP_NAME}-$version-linux-x64"
+          root_dir="${APP_NAME}-$version-linux-${{ matrix.arch }}"
           # 打包时把顶层 dist 重命名为 root_dir，解压后所有文件归在统一目录下
           tar -czf "${root_dir}.tar.gz" --transform "s,^dist,${root_dir}," dist
 
       - uses: actions/upload-artifact@v7
         with:
-          name: Ally-linux-x64
-          path: Ally-*-linux-x64.tar.gz
+          name: Ally-linux-${{ matrix.arch }}
+          path: Ally-*-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
 
       - uses: softprops/action-gh-release@v3
         if: github.event_name == 'release'
         with:
-          files: Ally-*-linux-x64.tar.gz
+          files: Ally-*-linux-${{ matrix.arch }}.tar.gz
           fail_on_unmatched_files: true
 
   macos:
@@ -253,29 +237,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base="https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}"
-          mkdir -p rg-arm64 rg-x64
-
-          for arch in aarch64 x86_64; do
-            asset="ripgrep-${RG_VERSION}-${arch}-apple-darwin.tar.gz"
-            curl --fail --location --retry 3 -o "$asset" "$base/$asset"
-            curl --fail --location --retry 3 -o "$asset.sha256" "$base/$asset.sha256"
-            shasum -a 256 -c "$asset.sha256"
-            if [ "$arch" = "aarch64" ]; then target=rg-arm64; else target=rg-x64; fi
-            tar -xzf "$asset" -C "$target"
-          done
-
-          arm_rg="$(find rg-arm64 -type f -name rg -print -quit)"
-          x64_rg="$(find rg-x64 -type f -name rg -print -quit)"
-          test -n "$arm_rg"
-          test -n "$x64_rg"
-
           app="bin/${APP_NAME}.app"
-          mkdir -p "$app/Contents/MacOS/tools" "$app/Contents/Resources/licenses/ripgrep"
-          lipo -create "$arm_rg" "$x64_rg" -output "$app/Contents/MacOS/tools/rg"
-          chmod +x "$app/Contents/MacOS/tools/rg"
-          cp LICENSE THIRD_PARTY_NOTICES.md "$app/Contents/Resources/licenses/"
-          cp third_party/ripgrep/* "$app/Contents/Resources/licenses/ripgrep/"
+          codesign --verify --deep --strict "$app"
           lipo -info "$app/Contents/MacOS/tools/rg"
           "$app/Contents/MacOS/tools/rg" --version
 

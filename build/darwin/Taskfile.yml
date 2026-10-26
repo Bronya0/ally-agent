@@ -126,6 +126,8 @@ tasks:
       - task: build:universal
     cmds:
       - task: create:app:bundle
+        vars:
+          RG_ARCH: universal
 
   package:dmg:
     summary: Packages the application into a styled `.dmg`
@@ -163,6 +165,10 @@ tasks:
       - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
       - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
+      - node scripts/prepare-ripgrep.mjs --os darwin --arch '{{.RG_ARCH | default .ARCH | default ARCH}}' --output-dir '{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS/tools'
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/licenses/ripgrep"
+      - cp LICENSE THIRD_PARTY_NOTICES.md "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/licenses/"
+      - cp -R third_party/ripgrep/. "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/licenses/ripgrep/"
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
 
   codesign:adhoc:
@@ -184,6 +190,7 @@ tasks:
       - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
       - cp "build/darwin/Info.dev.plist" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Info.plist"
+      - node scripts/prepare-ripgrep.mjs --os darwin --arch '{{.ARCH | default ARCH}}' --output-dir '{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/tools'
       - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
       - '"{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/{{.APP_NAME}}"'
 
