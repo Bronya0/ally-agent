@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { assignConfig, defaultConfig } from './config.mjs';
-import { cloneImageGeneration, imageModelIdentity, imageTestLimits, inferImageProtocol, normalizeImageModel, parseImageModelImport, replaceImageModel, supportsImageEdit, validateImageTestFiles } from './imageModels.mjs';
+import { buildImageModelExport, cloneImageGeneration, imageModelIdentity, imageModelKey, imageTestLimits, inferImageProtocol, mergeImageModels, normalizeImageModel, parseImageModelImport, replaceImageModel, supportsImageEdit, validateImageTestFiles } from './imageModels.mjs';
 
 test('manual image uploads enforce the same limits as backend before reading files', () => {
   const go = readFileSync(new URL('../../../internal/tools/imagegen/imagegen.go', import.meta.url), 'utf8');
@@ -47,8 +47,24 @@ test('image preset normalization and imports preserve credentials and reject unr
   assert.deepEqual(normalized.apiKeys, ['key', 'second']);
   assert.deepEqual(parseImageModelImport(JSON.stringify({ version: 1, kind: 'ally-image-models', models: [model] }))[0], normalizeImageModel(model));
   assert.throws(() => parseImageModelImport(JSON.stringify({ version: 1, models: [model] })));
+  assert.throws(() => parseImageModelImport(JSON.stringify({ formatVersion: 1, kind: 'ally-chat-models', models: [model] })), (error) => error.code === 'KIND_UNSUPPORTED');
   assert.throws(() => normalizeImageModel({ ...model, baseUrl: 'https://user:password@api.x.ai/v1' }));
   assert.throws(() => normalizeImageModel({ ...model, protocol: 'guess' }));
+});
+
+test('image export round-trips through import and merge reports added and updated presets', () => {
+  const other = { ...model, providerName: 'OpenAI', model: 'gpt-image-1', protocol: 'openai-images', baseUrl: 'https://api.openai.com/v1' };
+  const payload = buildImageModelExport([model, other]);
+  assert.equal(payload.version, 1);
+  assert.equal(payload.kind, 'ally-image-models');
+  assert.deepEqual(parseImageModelImport(JSON.stringify(payload)).map(imageModelKey), [imageModelKey(model), imageModelKey(other)]);
+
+  const config = { models: [model], generateModel: imageModelIdentity(model), editModel: null };
+  const rotated = { ...model, apiKeys: ['rotated'] };
+  assert.deepEqual(mergeImageModels(config, [rotated, other]), { added: 1, updated: 1 });
+  assert.deepEqual(config.models.map(imageModelKey), [imageModelKey(model), imageModelKey(other)]);
+  assert.deepEqual(config.models[0].apiKeys, ['rotated']);
+  assert.deepEqual(config.generateModel, imageModelIdentity(model));
 });
 
 test('chat config assignment owns image models and defaults without mixing chat presets', () => {

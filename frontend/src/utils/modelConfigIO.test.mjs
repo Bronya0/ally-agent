@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildModelConfigExport,
+  CHAT_MODEL_EXPORT_KIND,
   mergeModelConfigs,
   normalizeApiFormat,
   normalizeCustomHeaders,
@@ -145,6 +146,18 @@ test('model config import rejects unsupported or incomplete payloads', () => {
     () => parseModelConfigImport(JSON.stringify({ formatVersion: 1, models: [{}] })),
     (error) => error.code === 'MODEL_ID_REQUIRED',
   );
+  // 生图模型导出文件也带 models 数组：认得出是哪份文件才不会被当成聊天模型收下。
+  assert.throws(
+    () => parseModelConfigImport(JSON.stringify({ version: 1, kind: 'ally-image-models', models: [{ providerName: 'OpenAI', model: 'gpt-image-1' }] })),
+    (error) => error.code === 'KIND_UNSUPPORTED',
+  );
+});
+
+test('exports are self-describing and legacy files without a kind still import', () => {
+  assert.equal(buildModelConfigExport([model('OpenAI', 'gpt-5')]).kind, CHAT_MODEL_EXPORT_KIND);
+  const legacy = parseModelConfigImport(JSON.stringify({ formatVersion: 1, models: [model('OpenAI', 'gpt-5')] }));
+  assert.equal(legacy.length, 1);
+  assert.equal(legacy[0].model, 'gpt-5');
 });
 
 test('normalizeCustomHeaders trims, canonicalizes, and drops managed names', () => {

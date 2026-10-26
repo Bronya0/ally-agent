@@ -117,8 +117,8 @@ import { t } from '../i18n.mjs';
 import { saveTextFile } from '../utils/download.mjs';
 import ImageModelTestModal from './ImageModelTestModal.vue';
 import {
-  cloneImageGeneration, imageProtocols, imageModelIdentity, imageModelKey,
-  inferImageProtocol, normalizeImageModel, parseImageModelImport,
+  buildImageModelExport, cloneImageGeneration, imageProtocols, imageModelIdentity, imageModelKey,
+  inferImageProtocol, mergeImageModels, normalizeImageModel, parseImageModelImport,
   replaceImageModel, supportsImageEdit,
 } from '../utils/imageModels.mjs';
 
@@ -207,30 +207,33 @@ function remove(model) {
   persist();
 }
 const importInput = ref(null);
+// 导入失败按原因给文案：把对话模型文件拖进来和文件本身坏了不是一回事，报错说清才
+// 能让人换对分类。
+const IMPORT_ERROR_KEYS = { KIND_UNSUPPORTED: 'imageModels.chatFileImport', FILE_TOO_LARGE: 'settings.modelImportError.FILE_TOO_LARGE' };
 async function importModels(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    if (file.size > 2 * 1024 * 1024) throw new Error('size');
-    const models = parseImageModelImport(await file.text());
-    for (const model of models) {
-      replaceImageModel(draft, draft.models.find(item => imageModelKey(item) === imageModelKey(model)), model);
-    }
+    if (file.size > 2 * 1024 * 1024) throw Object.assign(new Error('FILE_TOO_LARGE'), { code: 'FILE_TOO_LARGE' });
+    const result = mergeImageModels(draft, parseImageModelImport(await file.text()));
     persist();
-  } catch {
-    message.error(t('imageModels.invalidImport'));
+    message.success(t('settings.modelImportSuccess', { added: result.added, updated: result.updated }));
+  } catch (err) {
+    message.error(t(IMPORT_ERROR_KEYS[err?.code] || 'imageModels.invalidImport'));
   } finally {
     event.target.value = '';
   }
 }
 async function exportModels() {
   try {
-    await saveTextFile({
+    const payload = buildImageModelExport(draft.models);
+    const result = await saveTextFile({
       filename: 'ally-image-models.json',
-      content: JSON.stringify({ version: 1, kind: 'ally-image-models', models: draft.models }, null, 2),
+      content: `${JSON.stringify(payload, null, 2)}\n`,
       filterName: 'JSON (*.json)',
       filterPattern: '*.json',
     });
+    if (result.saved) message.success(t('settings.modelExportSuccess', { count: payload.models.length }));
   } catch {
     message.error(t('settings.modelExportFailed'));
   }

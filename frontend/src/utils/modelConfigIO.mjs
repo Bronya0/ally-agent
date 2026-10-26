@@ -10,6 +10,12 @@
 import { isConfigObject, parseConfigJSON } from './configJSON.mjs';
 
 export const MODEL_CONFIG_EXPORT_VERSION = 1;
+// 两份导出文件各自报身份：聊天模型与生图模型的字段集不同（生图多 protocol，聊天
+// 多思考档位/上下文窗口），导入时必须先按 kind 认清文件。否则把生图导出文件拖进
+// 对话模型导入，gpt-image-1 会被当成聊天模型静默收下、protocol 丢失，之后拿它
+// 聊天必然报错。老版本导出的文件没有 kind，仍按 formatVersion 兼容。
+export const CHAT_MODEL_EXPORT_KIND = 'ally-chat-models';
+export const IMAGE_MODEL_EXPORT_KIND = 'ally-image-models';
 export const CHATGPT_PROVIDER_NAME = 'ChatGPT Official';
 export const CHATGPT_CONTEXT_WINDOW = 512000;
 
@@ -284,6 +290,7 @@ function normalizeImportedModel(model) {
 export function buildModelConfigExport(models) {
   return {
     formatVersion: MODEL_CONFIG_EXPORT_VERSION,
+    kind: CHAT_MODEL_EXPORT_KIND,
     models: Array.isArray(models) ? models.map(copyModelFields).map(normalizeImportedModel) : [],
   };
 }
@@ -298,6 +305,10 @@ export function parseModelConfigImport(text) {
 
   if (!parsed || typeof parsed !== 'object') {
     throw importError('ROOT_INVALID');
+  }
+  // 生图模型导出文件同样带 models 数组，不按 kind 拦就会被整份当成聊天模型收下。
+  if (!Array.isArray(parsed) && parsed.kind != null && parsed.kind !== CHAT_MODEL_EXPORT_KIND) {
+    throw importError('KIND_UNSUPPORTED');
   }
   if (!Array.isArray(parsed) && Object.hasOwn(parsed, 'formatVersion') && parsed.formatVersion !== MODEL_CONFIG_EXPORT_VERSION) {
     throw importError('VERSION_UNSUPPORTED');

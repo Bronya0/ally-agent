@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { modelConfigIdentity, normalizeApiKeysArray, normalizeCustomHeaders } from './modelConfigIO.mjs';
+import { IMAGE_MODEL_EXPORT_KIND, modelConfigIdentity, normalizeApiKeysArray, normalizeCustomHeaders } from './modelConfigIO.mjs';
 import { isConfigObject, parseConfigJSON } from './configJSON.mjs';
 
 export const imageProtocols = [
@@ -52,10 +52,45 @@ export function normalizeImageModel(model) {
   return result;
 }
 
+export const IMAGE_MODEL_EXPORT_VERSION = 1;
+const MAX_IMPORTED_IMAGE_MODELS = 200;
+
+function imageImportError(code) {
+  const error = new Error(code);
+  error.code = code;
+  return error;
+}
+
 export function parseImageModelImport(text) {
   const data = parseConfigJSON(text);
-  if (data?.version !== 1 || !Array.isArray(data.models) || data.kind !== 'ally-image-models' || data.models.length > 200) throw new Error('Invalid image model file');
+  // 先认身份再校验结构：对话模型的导出文件也带 models 数组，只说「文件无效」会让
+  // 用户反复重试同一个文件，说清是哪种文件才能让他切到对应分类。
+  if (data?.kind != null && data.kind !== IMAGE_MODEL_EXPORT_KIND) throw imageImportError('KIND_UNSUPPORTED');
+  if (data?.version !== IMAGE_MODEL_EXPORT_VERSION || !Array.isArray(data.models) || data.kind !== IMAGE_MODEL_EXPORT_KIND || data.models.length > MAX_IMPORTED_IMAGE_MODELS) throw imageImportError('INVALID_FILE');
   return data.models.map(normalizeImageModel);
+}
+
+// 导出前过一遍归一化：写出去的就是导入时认得的结构，脏字段不会流进文件。
+export function buildImageModelExport(models) {
+  return {
+    version: IMAGE_MODEL_EXPORT_VERSION,
+    kind: IMAGE_MODEL_EXPORT_KIND,
+    models: (Array.isArray(models) ? models : []).map(normalizeImageModel),
+  };
+}
+
+// 导入合并：同一供应商下的同名模型覆盖，其余追加；返回计数供界面反馈（导入成功
+// 不再一声不吭，与对话模型那条「新增 X 个，更新 Y 个」对齐）。
+export function mergeImageModels(config, models) {
+  let added = 0;
+  let updated = 0;
+  for (const model of models) {
+    const existing = (config.models || []).find((item) => imageModelKey(item) === imageModelKey(model));
+    if (existing) updated += 1;
+    else added += 1;
+    replaceImageModel(config, existing, model);
+  }
+  return { added, updated };
 }
 
 // Editing or removing a preset also repairs its default references.
