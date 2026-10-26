@@ -62,7 +62,7 @@ Public License v3. See the LICENSE file for details.
                     </n-popconfirm>
                   </div>
                 </div>
-                <div v-if="serviceDescription(service, $t)" class="service-description">{{ serviceDescription(service, $t) }}</div>
+                <div v-if="serviceDescription(service, $t)" class="service-description" :title="serviceDescription(service, $t)">{{ serviceDescription(service, $t) }}</div>
                 <div v-if="viewScope === 'all'" class="mono-muted ellipsis" :title="service.workspace">{{ $t('taskCenter.workspace') }} · {{ service.workspace || $t('taskCenter.noWorkspace') }}</div>
                 <details class="service-details">
                   <summary>{{ $t('service.details') }}</summary>
@@ -449,7 +449,9 @@ function durationLabel(seconds) {
 </script>
 
 <style scoped>
-.service-description { margin-top: 6px; color: var(--ally-text-body); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 描述是模型或用户自己写的，长度没上界（还带 pre-wrap 的原始换行）：服务卡纵向排列，
+   长描述只撑高自己，但十几行会把整页挤成一篇。3 行封顶，全文靠 title 悬停看。 */
+.service-description { display: -webkit-box; margin-top: 6px; overflow: hidden; color: var(--ally-text-body); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .task-scope { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
 .task-scope > .ellipsis { min-width: 0; flex: 1; }
 .task-scope-switch { width: 250px; max-width: 100%; flex: none; }

@@ -69,7 +69,7 @@ Public License v3. See the LICENSE file for details.
             <div class="skill-title-row">
               <span class="skill-name">{{ sk.name }}</span>
             </div>
-            <div class="skill-description">{{ sk.description || sk.whenToUse || $t('common.noDescription') }}</div>
+            <div class="skill-description" :title="sk.description || sk.whenToUse || $t('common.noDescription')">{{ sk.description || sk.whenToUse || $t('common.noDescription') }}</div>
             <div
               class="skill-meta clickable"
               :title="t('settings.openSkillPath', { path: sk.path || sk.dir })"
@@ -510,10 +510,16 @@ watch(
   font-size: var(--ally-sub-font-size);
 }
 
+/* 描述可能整段来自 whenToUse：不封顶时一条技能就把列表顶开。2 行封顶（上下分别是
+   名称与路径，本来就只有 2 行的位置），全文靠 title 悬停看。 */
 .skill-description {
   font-size: 12px;
   color: var(--ally-text-muted);
   margin-top: 2px;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .skill-meta {

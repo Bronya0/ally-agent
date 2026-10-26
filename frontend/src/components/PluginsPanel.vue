@@ -50,7 +50,7 @@ Public License v3. See the LICENSE file for details.
             <n-tag v-if="!plugin.valid" size="tiny" type="error">{{ t('plugins.invalid') }}</n-tag>
             <n-tag v-else-if="!plugin.enabled" size="tiny">{{ t('plugins.disabled') }}</n-tag>
           </div>
-          <div class="plugin-row-desc">{{ plugin.description || t('common.noDescription') }}</div>
+          <div class="plugin-row-desc" :title="plugin.description || t('common.noDescription')">{{ plugin.description || t('common.noDescription') }}</div>
           <div class="plugin-row-meta">
             <span v-if="plugin.author">{{ t('plugins.author', { author: plugin.author }) }}</span>
             <span v-if="plugin.hasPackage">{{ t('plugins.packageSize', { size: formatBytes(plugin.packageBytes) }) }}</span>
@@ -392,9 +392,14 @@ watch(
   font-family: var(--ally-mono-font), monospace;
 }
 
+/* 插件描述来自清单文件，长度不受控：2 行封顶，别让一条插件把列表撑开；全文靠 title。 */
 .plugin-row-desc {
   color: var(--ally-text-soft);
   font-size: var(--ally-sub-font-size);
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .plugin-row-meta {

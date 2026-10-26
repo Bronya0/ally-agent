@@ -211,13 +211,20 @@ html[data-mode="light"] .card-grid {
   -webkit-line-clamp: 2;
 }
 
-/* 事实行（id · pid · 目录 · 时间）：最次要信息，压到最淡一档，长 id 不该比标题显眼。 */
+/* 事实行（id · pid · 目录 · 时间 / 服务器说明）：最次要信息，压到最淡一档，长 id 不该
+   比标题显眼。说明文字的长度没有上界（服务器备注、任务命令都是模型或用户自己写的），
+   必须 3 行封顶：一张长说明卡会把整行网格按它拉高，同排其它卡跟着被撑成一片空白。
+   封顶只做在描述上，标题、副标题、徽标各自的行数不变；全文仍靠 title 悬停看。 */
 .card-grid-desc {
   padding-left: 13px;
   color: var(--ally-text-faint);
   font-size: var(--ally-aux-font-size);
   line-height: 1.5;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .card-grid-caption {
