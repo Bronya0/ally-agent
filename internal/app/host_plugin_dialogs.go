@@ -27,7 +27,7 @@ func (a *App) SelectPluginPackage() (string, error) {
 	if a.wails == nil || a.wails.app == nil {
 		return "", errors.New("desktop host not initialized")
 	}
-	dialog := a.wails.app.Dialog.OpenFile()
+	dialog := a.openFileDialog()
 	dialog.SetOptions(&application.OpenFileDialogOptions{
 		Title:                "选择插件包（.zip）",
 		CanChooseFiles:       true,
@@ -48,7 +48,7 @@ func (a *App) promptSavePluginPackage(suggested string) (string, error) {
 	if a.wails == nil || a.wails.app == nil {
 		return "", errors.New("desktop host not initialized")
 	}
-	dialog := a.wails.app.Dialog.SaveFile()
+	dialog := a.saveFileDialog()
 	dialog.SetOptions(&application.SaveFileDialogOptions{
 		Title:    "导出插件包",
 		Filename: suggested,

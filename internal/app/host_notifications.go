@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
@@ -20,16 +21,20 @@ import (
 // hard-dependency on every platform that cannot honour it.
 type SafeNotificationsService struct {
 	inner                *notifications.NotificationService
+	app                  *App
 	available            atomic.Bool
 	requestAuthorization sync.Once
+	lastErrorAt          atomic.Int64
 }
 
 // NewSafeNotificationsService creates the wrapped notifications service.
-func NewSafeNotificationsService(onActivate func()) *SafeNotificationsService {
-	s := &SafeNotificationsService{inner: notifications.New()}
+func NewSafeNotificationsService(app *App) *SafeNotificationsService {
+	s := &SafeNotificationsService{inner: notifications.New(), app: app}
 	s.inner.OnNotificationResponse(func(result notifications.NotificationResult) {
-		if result.Error == nil && result.Response.ActionIdentifier == notifications.DefaultActionIdentifier && onActivate != nil {
-			onActivate()
+		if result.Error != nil {
+			s.logFailure(result.Error)
+		} else if result.Response.ActionIdentifier == notifications.DefaultActionIdentifier {
+			app.showMainWindow()
 		}
 	})
 	return s
@@ -39,7 +44,7 @@ func NewSafeNotificationsService(onActivate func()) *SafeNotificationsService {
 // notifications; the application must keep starting.
 func (s *SafeNotificationsService) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
 	if err := s.inner.ServiceStartup(ctx, options); err != nil {
-		println("Ally notifications disabled:", err.Error())
+		s.app.logAppError("notifications disabled", "error", err)
 		return nil
 	}
 	s.available.Store(true)
@@ -48,12 +53,18 @@ func (s *SafeNotificationsService) ServiceStartup(ctx context.Context, options a
 
 // ServiceShutdown implements application.ServiceShutdown.
 func (s *SafeNotificationsService) ServiceShutdown() error {
+	s.available.Store(false)
 	return s.inner.ServiceShutdown()
 }
 
 // SendNotification implements completionNotifier and no-ops when the platform
 // backend failed to start.
-func (s *SafeNotificationsService) SendNotification(options completionNotification) error {
+func (s *SafeNotificationsService) SendNotification(options completionNotification) (err error) {
+	defer func() {
+		if err != nil {
+			s.logFailure(err)
+		}
+	}()
 	if !s.available.Load() {
 		return nil
 	}
@@ -81,4 +92,16 @@ func (s *SafeNotificationsService) SendNotification(options completionNotificati
 		opts.Sound = &notifications.NotificationSound{Name: options.Sound}
 	}
 	return s.inner.SendNotification(opts)
+}
+
+// An unavailable notification daemon must not flood the error log on each run.
+func (s *SafeNotificationsService) logFailure(err error) {
+	now := time.Now().UnixNano()
+	last := s.lastErrorAt.Load()
+	if last != 0 && now-last < int64(time.Minute) {
+		return
+	}
+	if s.lastErrorAt.CompareAndSwap(last, now) {
+		s.app.logAppError("notification failed", "error", err)
+	}
 }

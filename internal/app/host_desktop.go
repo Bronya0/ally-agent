@@ -20,6 +20,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -49,7 +50,8 @@ type wailsAppHandle struct {
 	// windowState snapshots the main window geometry (updated from window
 	// events, persisted once at shutdown). Kept here so main-window sizing
 	// state stays in the host layer, mirroring installWebviewZoomResync.
-	windowState *windowStateTracker
+	windowState  *windowStateTracker
+	closeRequest windowCloseGuard
 }
 
 // SetApp injects the Wails v3 application handle into the Agent core. It must
@@ -85,15 +87,10 @@ func (a *App) SetWindow(window *application.WebviewWindow) {
 		// Native closes must drain the same frontend write queue
 		// as the custom close button. During application shutdown let Wails
 		// destroy the window normally; its context has already been cancelled.
-		var closeRequest windowCloseGuard
 		window.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
-			if a.ctx == nil || a.ctx.Err() != nil {
-				return
+			if !DesktopShouldQuit(a) {
+				event.Cancel()
 			}
-			event.Cancel()
-			closeRequest.request(a.ctx, windowCloseFlushWait, func() {
-				a.emit("window:close-requested", nil)
-			}, a.quitApp)
 		})
 	}
 }
@@ -102,18 +99,40 @@ func (a *App) SetWindow(window *application.WebviewWindow) {
 // no-ops. Repeated clicks share the original deadline. The fallback uses normal
 // application shutdown so backend checkpoints and service cleanup still run.
 type windowCloseGuard struct {
-	once sync.Once
+	once  sync.Once
+	ready atomic.Bool
 }
 
 func (g *windowCloseGuard) request(ctx context.Context, timeout time.Duration, requestClose, quit func()) {
 	g.once.Do(func() {
 		time.AfterFunc(timeout, func() {
-			if ctx.Err() == nil {
+			if ctx.Err() == nil && g.ready.CompareAndSwap(false, true) {
 				quit()
 			}
 		})
 		requestClose()
 	})
+}
+
+// DesktopShouldQuit routes native application quit and window close through
+// the same frontend save barrier. Do not wait here: Wails calls it on the UI thread.
+func DesktopShouldQuit(a *App) bool {
+	if a.wails == nil || a.ctx == nil || a.ctx.Err() != nil || a.wails.closeRequest.ready.Load() {
+		return true
+	}
+	a.wails.closeRequest.request(a.ctx, windowCloseFlushWait, func() {
+		a.emit("window:close-requested", nil)
+	}, a.quitApp)
+	return false
+}
+
+// CompleteWindowClose acknowledges the frontend save barrier before quitting.
+// Both normal completion and the timeout fallback release the same quit guard.
+func (a *App) CompleteWindowClose() {
+	if a.wails != nil {
+		a.wails.closeRequest.ready.Store(true)
+	}
+	a.quitApp()
 }
 
 // installWebviewZoomResync guards against WebView2 restoring a stale zoom
@@ -249,7 +268,7 @@ func (a *App) SelectWorkspace() (string, error) {
 	if a.wails == nil || a.wails.app == nil {
 		return "", errors.New("desktop host not initialized")
 	}
-	selected, err := a.wails.app.Dialog.OpenFile().
+	selected, err := a.openFileDialog().
 		SetTitle("选择 Agent 工作区").
 		SetDirectory(current).
 		CanChooseDirectories(true).
@@ -288,7 +307,7 @@ func (a *App) SelectKnowledgeBaseRoot() (string, error) {
 	if a.wails == nil || a.wails.app == nil {
 		return "", errors.New("desktop host not initialized")
 	}
-	selected, err := a.wails.app.Dialog.OpenFile().
+	selected, err := a.openFileDialog().
 		SetTitle("选择知识库目录").
 		SetDirectory(current).
 		CanChooseDirectories(true).
@@ -317,7 +336,7 @@ func (a *App) SelectDirectory(current string) (string, error) {
 			start = homeDir
 		}
 	}
-	selected, err := a.wails.app.Dialog.OpenFile().
+	selected, err := a.openFileDialog().
 		SetTitle("选择目录").
 		SetDirectory(start).
 		CanChooseDirectories(true).
@@ -340,7 +359,7 @@ func (a *App) SelectBackgroundImage() (string, error) {
 	if a.wails == nil || a.wails.app == nil {
 		return "", errors.New("desktop host not initialized")
 	}
-	selected, err := a.wails.app.Dialog.OpenFile().
+	selected, err := a.openFileDialog().
 		SetTitle("选择对话背景图").
 		AddFilter("图片 (*.png *.jpg *.jpeg *.webp *.gif *.bmp)", "*.png;*.jpg;*.jpeg;*.webp;*.gif;*.bmp").
 		CanChooseFiles(true).
@@ -370,7 +389,7 @@ func (a *App) SelectPrivateKeyFile() (string, error) {
 			defaultDir = homeDir
 		}
 	}
-	dialog := a.wails.app.Dialog.OpenFile().
+	dialog := a.openFileDialog().
 		SetTitle("选择 SSH 私钥文件").
 		CanChooseFiles(true).
 		CanChooseDirectories(false)
@@ -406,7 +425,7 @@ func (a *App) ExportTextFile(suggestedFilename, content, filterName, filterPatte
 	if filterName != "" && filterPattern != "" {
 		dialogOpts.Filters = []application.FileFilter{{DisplayName: filterName, Pattern: filterPattern}}
 	}
-	dialog := a.wails.app.Dialog.SaveFile()
+	dialog := a.saveFileDialog()
 	dialog.SetOptions(dialogOpts)
 	selected, err := dialog.PromptForSingleSelection()
 	if err != nil || selected == "" {
@@ -718,7 +737,7 @@ type windowStateTracker struct {
 	mu      sync.Mutex
 	state   windowState
 	has     bool
-	checked bool // 离屏一次性修复是否已执行
+	checked atomic.Bool // 离屏一次性修复是否已执行
 }
 
 // update 用事件时刻的窗口实况刷新快照。最大化只更新标志位，普通 bounds 保留
@@ -790,26 +809,22 @@ func (a *App) installWindowStateTracking(window *application.WebviewWindow) {
 // 则居中。窗口创建时的 resize 事件与 RuntimeReady 双保险触发；屏幕缓存尚未
 // 填充时不消耗一次性机会。
 func (a *App) ensureWindowOnScreen(window *application.WebviewWindow, tracker *windowStateTracker) {
-	if a.wails == nil || a.wails.app == nil {
+	if a.wails == nil || a.wails.app == nil || tracker.checked.Load() {
 		return
 	}
 	screens := a.wails.app.Screen.GetAll()
 	if len(screens) == 0 {
 		return
 	}
-	tracker.mu.Lock()
-	if tracker.checked {
-		tracker.mu.Unlock()
-		return
-	}
-	tracker.checked = true
-	tracker.mu.Unlock()
-
 	x, y := window.Position()
 	w, h := window.Size()
 	if w <= 0 || h <= 0 {
 		return
 	}
+	if !tracker.checked.CompareAndSwap(false, true) {
+		return
+	}
+
 	for _, screen := range screens {
 		visible := screen.Bounds.Intersect(application.Rect{X: x, Y: y, Width: w, Height: h})
 		if visible.Width >= windowVisibleMinWidth && visible.Height >= windowVisibleMinHeight {
@@ -829,5 +844,7 @@ func (a *App) saveWindowState() {
 	if !ok {
 		return
 	}
-	_ = persistWindowState(s)
+	if err := persistWindowState(s); err != nil {
+		a.logAppError("save window state failed", "error", err)
+	}
 }

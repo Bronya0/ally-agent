@@ -19,10 +19,7 @@ func (a *App) ExportGeneratedImage(ref string) (string, error) {
 		return "", err
 	}
 	ext := generatedImageExtension(meta.Mime)
-	dialog := a.wails.app.Dialog.SaveFile()
-	if a.wails.window != nil {
-		dialog.AttachToWindow(a.wails.window)
-	}
+	dialog := a.saveFileDialog()
 	dialog.SetOptions(&application.SaveFileDialogOptions{Title: "保存原图", Filename: generatedImageFilename(ref, meta.Mime), Filters: []application.FileFilter{{DisplayName: meta.Mime, Pattern: "*" + ext}}})
 	selected, err := dialog.PromptForSingleSelection()
 	if err != nil || selected == "" {

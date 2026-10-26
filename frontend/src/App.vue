@@ -701,6 +701,7 @@ import {
   ApplyUpdate,
   QuitForUpdate,
   ConfirmUpdateStartup,
+  CompleteWindowClose,
   SkipUpdate,
   GetBackgroundImageURL,
   LogFrontendError,
@@ -709,7 +710,7 @@ import {
   SetWorkspaceAllowedServers,
   SetSessionExtraRoots,
 } from '../bindings/ally-dev/internal/app/app';
-import { Application, Browser, Events, Window } from '@wailsio/runtime';
+import { Browser, Events, Window } from '@wailsio/runtime';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import ReloadOutlined from '@vicons/antd/ReloadOutlined';
@@ -6256,7 +6257,7 @@ async function flushPendingWindowWrites() {
 }
 const requestWindowClose = createWindowCloseHandler({
   flush: () => flushPendingWindowWrites(),
-  quit: () => Application.Quit(),
+  quit: () => CompleteWindowClose(),
 });
 async function closeWindow() {
   try { await requestWindowClose(); } catch (err) { console.error('[close] Failed to quit', err); }

@@ -18,6 +18,57 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
+func TestApplicationQuitSharesWindowCloseBarrier(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var requests atomic.Int32
+		a := &App{ctx: t.Context(), wails: &wailsAppHandle{}, events: quitEventSink{requests: &requests}}
+		if DesktopShouldQuit(a) || DesktopShouldQuit(a) {
+			t.Fatal("quit allowed before frontend saved")
+		}
+		if requests.Load() != 1 {
+			t.Fatalf("repeated quit emitted %d save requests", requests.Load())
+		}
+		a.CompleteWindowClose()
+		if !DesktopShouldQuit(a) {
+			t.Fatal("frontend acknowledgement was intercepted again")
+		}
+	})
+}
+
+func TestApplicationQuitFallbackReleasesBarrier(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var requests atomic.Int32
+		a := &App{ctx: t.Context(), wails: &wailsAppHandle{}, events: quitEventSink{requests: &requests}}
+		if DesktopShouldQuit(a) {
+			t.Fatal("quit did not wait for frontend")
+		}
+		time.Sleep(windowCloseFlushWait)
+		synctest.Wait()
+		if !DesktopShouldQuit(a) {
+			t.Fatal("unresponsive frontend permanently blocked quit")
+		}
+	})
+}
+
+func TestApplicationQuitDuringStartupOrShutdown(t *testing.T) {
+	if !DesktopShouldQuit(&App{}) {
+		t.Fatal("missing runtime must not block startup failure cleanup")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if !DesktopShouldQuit(&App{ctx: ctx, wails: &wailsAppHandle{}}) {
+		t.Fatal("shutdown must not request frontend writes")
+	}
+}
+
+type quitEventSink struct{ requests *atomic.Int32 }
+
+func (s quitEventSink) Emit(name string, _ any) {
+	if name == "window:close-requested" {
+		s.requests.Add(1)
+	}
+}
+
 func TestWindowCloseFallsBackWhenFrontendDoesNotRespond(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var guard windowCloseGuard
@@ -61,6 +112,20 @@ func TestWindowCloseFallbackSkipsNormalShutdown(t *testing.T) {
 		synctest.Wait()
 		if quits.Load() != 0 {
 			t.Fatalf("fallback interfered with normal shutdown: quits=%d", quits.Load())
+		}
+	})
+}
+
+func TestWindowCloseAcknowledgementCancelsFallback(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var guard windowCloseGuard
+		var quits atomic.Int32
+		guard.request(t.Context(), windowCloseFlushWait, func() {}, func() { quits.Add(1) })
+		guard.ready.Store(true)
+		time.Sleep(windowCloseFlushWait)
+		synctest.Wait()
+		if quits.Load() != 0 {
+			t.Fatal("timeout repeated a frontend-confirmed quit")
 		}
 	})
 }
