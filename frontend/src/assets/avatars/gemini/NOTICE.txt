@@ -1,0 +1,26 @@
+Gemini star-cat avatar (CrossPet)
+================================
+
+Third-party derivative notice (CC BY-NC-SA 4.0 attribution chain)
+
+Source asset: lokicorvus/crosspet, revision 6e98970f6ff9b44e8ac85215241cabcd78f67d92,
+`characters/gemini/{idle,proud,stretch,happy}.webp` (<https://github.com/lokicorvus/crosspet>).
+
+Ally processing: proportionally resized from 640px to 320px high, without
+cropping; re-encoded with Sharp as WebP (quality 90, alpha quality 100, effort 6).
+Transparency and a common canvas height are preserved for pose switching.
+
+Attribution chain:
+
+1. Character design: the widely shared community Gemini-girl setting (cat ears,
+   heterochromia, four-pointed-star hair ornament). CrossPet lists this as the
+   setting source rather than a single named author.
+2. Illustration: CrossPet, redrawn with an AI image generator from the setting
+   above (<https://github.com/lokicorvus/crosspet>).
+
+License: CC BY-NC-SA 4.0, as declared in the upstream `characters/LICENSE.md`:
+attribution required, non-commercial use only, derivatives shared under the same
+license.
+
+"Gemini" is a trademark of its respective owner. This is an unofficial fan
+project, not affiliated with or endorsed by Google.

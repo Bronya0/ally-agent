@@ -10,9 +10,11 @@ Public License v3. See the LICENSE file for details.
 <template>
   <div ref="root" class="ally-avatar" role="img" :aria-label="$t(avatarAria)"
        :title="$t(avatarTitle)" @click="toggleSakura">
-    <template v-if="avatarImage">
-      <img v-if="imageVisible" class="ally-avatar-image" :src="avatarImage" alt="" width="164" height="164" draggable="false" />
-    </template>
+    <!-- 单张透明立绘切换姿势，避免底图从动作图透明区域透出。 -->
+    <div v-if="avatarImage" class="ally-avatar-stage"
+         :class="[useHeightFit ? 'ally-avatar-stage--fit-height' : '', actionPoseName ? `ally-avatar-pose--${actionPoseName}` : '']">
+      <img v-if="imageVisible" class="ally-avatar-image" :src="actionPoseImage || avatarImage" alt="" width="164" height="164" draggable="false" />
+    </div>
     <svg v-else class="ally-eye" viewBox="0 0 164 164" aria-hidden="true">
       <!-- 欢迎页多 Tab 共享同一组渐变（inlineDefs=false）；启动页内联独立渐变
            （inlineDefs=true），避免两个 SVG 同时引用同一 paint server 触发
@@ -88,18 +90,31 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, ref, onMounted, onBeforeUnmount, useId } from 'vue';
 import { isZh } from '../i18n.mjs';
-import { EYE_STYLES } from '../data/eyeLines.mjs';
+import { AVATAR_LINES } from '../data/avatarLines.mjs';
 import { useSakuraBreeze } from '../composables/sakuraBreeze.mjs';
 import { useAvatarAppearance } from '../composables/avatarAppearance.mjs';
-import whaleAvatar from '../assets/avatars/whale/delighted-512.png';
+import { AVATAR_IDLE_ACTIONS, AVATAR_SPEAK_POSE, avatarArtwork } from '../assets/avatars/index.mjs';
+import { createPosePlayer } from '../composables/avatarPose.mjs';
 
 const { avatarStyle, customAvatar } = useAvatarAppearance();
-const avatarImage = computed(() => avatarStyle.value === 'custom' ? customAvatar.value
-  : avatarStyle.value === 'whale' ? whaleAvatar : '');
-const avatarAria = computed(() => avatarStyle.value === 'custom' ? 'avatar.customAria'
-  : avatarStyle.value === 'whale' ? 'avatar.whaleAria' : 'avatar.aria');
-const avatarTitle = computed(() => avatarStyle.value === 'custom' ? 'avatar.customSakuraToggle'
-  : avatarStyle.value === 'whale' ? 'avatar.whaleSakuraToggle' : 'avatar.sakuraToggle');
+// 位图形象全部走 assets/avatars/index.mjs 这一张表；custom 用上传的图片，
+// eye 没有图片（内联 SVG）而退回默认文案。这里不再逐个形象写分支。
+const avatarAppearance = computed(() => {
+  if (avatarStyle.value === 'custom') {
+    return { image: customAvatar.value, aria: 'avatar.customAria', title: 'avatar.customSakuraToggle' };
+  }
+  return avatarArtwork(avatarStyle.value) || { image: '', aria: 'avatar.aria', title: 'avatar.sakuraToggle' };
+});
+const avatarImage = computed(() => avatarAppearance.value.image);
+const avatarAria = computed(() => avatarAppearance.value.aria);
+const avatarTitle = computed(() => avatarAppearance.value.title);
+// 动作姿势：存名字而不是图片，切换形象时旧姿势不会误用上一个角色的立绘。
+const avatarPoses = computed(() => avatarAppearance.value.poses || {});
+// 只有带姿势集的内置立绘共用 320 高画布，需要按高适配；
+// 单张立绘（鲸鱼娘）、整段动图（小机器人）和用户上传图都走 contain。
+const useHeightFit = computed(() => Object.keys(avatarPoses.value).length > 0);
+const actionPoseName = ref('');
+const actionPoseImage = computed(() => avatarPoses.value[actionPoseName.value] || '');
 // Unmount animated images offscreen/hidden; CSS animation-play-state cannot
 // suspend a native GIF decoder. Returning to the avatar restarts its playback.
 const imageVisible = ref(typeof document === 'undefined' || !document.hidden);
@@ -178,10 +193,10 @@ let observer = null;
 let visibilityHandler = null;
 let isIntersecting = true;
 
-// —— 主动搭话：眼睛被"看着"（视口内且窗口可见）时，每隔随机
-// 每 18 秒弹一句台词气泡。纯绝对定位浮层，不占文档流，布局零影响。
+// 主动搭话：形象在视口内且窗口可见时，每 18 秒弹一句台词气泡。
+// 纯绝对定位浮层，不占文档流，布局零影响。
 const speech = ref(null); // 当前台词，null = 不显示
-const active = ref(false); // 用户是否正看着本眼睛
+const active = ref(false); // 形象当前是否处于展示状态（可见且窗口活跃）
 let speechTimer = null; // 气泡展示时长定时器
 let nextSpeechTimer = null; // 下一次搭话定时器
 
@@ -194,8 +209,8 @@ const SPEECH_SHOW_MS = 3400; // 与 .ally-speech 的 CSS 动画时长一致
 const SPEECH_GAP_MS = 18000; // 固定间隔：每 18 秒一句
 
 // 纯随机：把全部风格台词合并成一个池子，直接随机抽一句，不做权重/去重。
-const ZH_SPEECH_POOL = EYE_STYLES.flatMap((style) => style.zh);
-const EN_SPEECH_POOL = EYE_STYLES.flatMap((style) => style.en);
+const ZH_SPEECH_POOL = AVATAR_LINES.flatMap((style) => style.zh);
+const EN_SPEECH_POOL = AVATAR_LINES.flatMap((style) => style.en);
 
 function pickSpeechLine() {
   const pool = isZh ? ZH_SPEECH_POOL : EN_SPEECH_POOL;
@@ -216,6 +231,8 @@ function showSpeech() {
   if (!active.value) return;
   speech.value = pickSpeechLine();
   root.value?.classList.add('ally-avatar--speaking');
+  // 说话时换成笑脸姿势：气泡和形象是同一个反应，而不是各演各的。
+  startPose(avatarPoses.value[AVATAR_SPEAK_POSE] ? AVATAR_SPEAK_POSE : '', SPEECH_SHOW_MS);
   speechTimer = setTimeout(hideSpeech, SPEECH_SHOW_MS);
 }
 
@@ -231,6 +248,24 @@ function dismissSpeech() {
   hideSpeech();
 }
 
+// 静态姿势配合 transform 动作；每个实例最多持有两个定时器。
+const idlePoseNames = computed(() => AVATAR_IDLE_ACTIONS.filter((name) => avatarPoses.value[name]));
+let motionQuery = null;
+const reducedMotion = ref(false);
+const posePlayer = createPosePlayer({
+  canPlay: () => active.value && !reducedMotion.value,
+  idleNames: () => idlePoseNames.value,
+  hasPose: (name) => !!avatarPoses.value[name],
+  show: (name) => { actionPoseName.value = name; },
+});
+const startPose = posePlayer.play;
+const schedulePoseGap = posePlayer.schedule;
+const clearPoseTimers = posePlayer.stop;
+
+// 从无动作的 eye 切到宠物时也要启动调度。
+watch([avatarStyle, reducedMotion], posePlayer.reset);
+const syncReducedMotion = () => { reducedMotion.value = !!motionQuery?.matches; };
+
 function setPaused(paused) {
   imageVisible.value = !paused;
   if (!root.value) return;
@@ -240,17 +275,23 @@ function setPaused(paused) {
   active.value = nowActive;
   if (nowActive) {
     scheduleNextSpeech();
+    schedulePoseGap();
   } else {
     clearTimeout(nextSpeechTimer);
     clearTimeout(speechTimer);
     nextSpeechTimer = null;
     speechTimer = null;
     speech.value = null;
+    clearPoseTimers();
+    actionPoseName.value = '';
     root.value.classList.remove('ally-avatar--speaking');
   }
 }
 
 onMounted(() => {
+  motionQuery = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+  syncReducedMotion();
+  motionQuery?.addEventListener('change', syncReducedMotion);
   if (!props.inlineDefs) acquireSharedDefs();
   if (typeof IntersectionObserver !== 'undefined' && root.value) {
     observer = new IntersectionObserver(
@@ -274,10 +315,12 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (!props.inlineDefs) releaseSharedDefs();
+  motionQuery?.removeEventListener('change', syncReducedMotion);
   if (observer) observer.disconnect();
   if (visibilityHandler) document.removeEventListener('visibilitychange', visibilityHandler);
   clearTimeout(speechTimer);
   clearTimeout(nextSpeechTimer);
+  clearPoseTimers();
 });
 </script>
 
@@ -348,13 +391,56 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
+/* 外框仍为 164px；内缩为放大/旋转预留空间，避免欢迎区 paint containment
+   裁掉头顶。16px 可容纳当前最大 scale(1.05, 1.08) rotate(-3deg)。 */
+.ally-avatar-stage {
+  position: absolute;
+  inset: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transform-origin: 50% 92%;
+  animation: ally-avatar-breathe 4.6s ease-in-out infinite;
+}
 .ally-avatar-image {
   display: block;
+  flex-shrink: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
   user-select: none;
   pointer-events: none;
+}
+/* 内置立绘都是 320 高的画布，宽度随手势变化。object-fit: contain
+   遇到宽图（gpt/proud 351x320）会改按宽度适配，人物高度从 132 掉到 120，
+   切姿势时整个角色突然缩小。所以内置形象统一按高度适配，横向溢出落在外框
+   内缩的 16px 里；用户上传图仍走 contain，避免非方形图片横向掉出画框。 */
+.ally-avatar-stage--fit-height .ally-avatar-image {
+  height: 100%;
+  width: auto;
+}
+@keyframes ally-avatar-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.015, 1.025); }
+}
+.ally-avatar-pose--proud { animation: ally-avatar-proud 2.6s ease; }
+.ally-avatar-pose--stretch { animation: ally-avatar-stretch 2.6s ease; }
+.ally-avatar-pose--happy,
+.ally-avatar--speaking .ally-avatar-stage { animation: ally-avatar-speak 3.4s ease; }
+@keyframes ally-avatar-proud {
+  0%, 100% { transform: rotate(0); }
+  25% { transform: rotate(-5deg); }
+  65% { transform: rotate(5deg); }
+}
+@keyframes ally-avatar-stretch {
+  0%, 100% { transform: scale(1); }
+  40%, 60% { transform: scale(1.05, 1.08) rotate(-3deg); }
+}
+@keyframes ally-avatar-speak {
+  0%, 100% { transform: translateY(0) scale(1); }
+  18%, 58% { transform: translateY(-3px) scale(1.03); }
+  38%, 78% { transform: translateY(0) scale(1); }
 }
 
 .ally-eye-shadow {
@@ -426,7 +512,9 @@ onBeforeUnmount(() => {
   .ally-eye-vortex,
   .ally-eye-lightning,
   .ally-eye-pupil,
-  .ally-avatar--speaking .ally-eye-pupil {
+  .ally-avatar-stage,
+  .ally-avatar--speaking .ally-eye-pupil,
+  .ally-avatar--speaking .ally-avatar-stage {
     animation: none;
   }
 
@@ -439,7 +527,8 @@ onBeforeUnmount(() => {
    hidden. Saves the compositor from ticking on a static frame. */
 .ally-avatar--paused .ally-eye-vortex,
 .ally-avatar--paused .ally-eye-lightning,
-.ally-avatar--paused .ally-eye-pupil {
+.ally-avatar--paused .ally-eye-pupil,
+.ally-avatar--paused .ally-avatar-stage {
   animation-play-state: paused;
 }
 </style>

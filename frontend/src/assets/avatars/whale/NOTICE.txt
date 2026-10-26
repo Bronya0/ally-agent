@@ -35,3 +35,7 @@ Artwork usage terms (LICENSE-ARTWORK): CC BY-NC-SA 4.0 —— 署名 (attributio
 
 Software code is covered by LICENSE (MIT). Artwork copyright remains with the
 respective authors above, including embedded and transformed copies.
+
+Ally processing: the upstream delighted-512.png icon is resized to 320x320
+and encoded as delighted-320.webp (WebP quality 90, alpha quality 100,
+effort 6, using Sharp). No cropping; transparency is preserved.

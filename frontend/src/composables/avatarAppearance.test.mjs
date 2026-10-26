@@ -125,3 +125,14 @@ test('corrupt or oversized stored images fall back safely', async (t) => {
   f.state.saved = JSON.stringify({ style: 'custom', image: 'x'.repeat(2_000_000) });
   assert.equal((await f.reload()).useAvatarAppearance().customAvatar.value, '');
 });
+
+test('every bundled style is selectable and a bare-id preference still restores', async (t) => {
+  const f = await fixture(t);
+  for (const id of ['whale', 'gpt', 'claude', 'deepseek', 'gemini', 'glm', 'qwen']) {
+    f.setAvatarStyle(id);
+    assert.equal(f.avatarStyle.value, id);
+    assert.deepEqual(JSON.parse(f.state.saved), { style: id, image: '' });
+    // 旧版本可能把枚举直接存成裸字符串；新增形象后这条恢复路径不能退化成 eye。
+    assert.equal((await f.reload()).useAvatarAppearance().avatarStyle.value, id);
+  }
+});

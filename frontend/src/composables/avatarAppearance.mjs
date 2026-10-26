@@ -10,6 +10,13 @@ export const CUSTOM_AVATAR_ACCEPT = [...IMAGE_TYPES].join(',');
 export const AVATAR_STYLES = [
   { id: 'eye', labelKey: 'avatar.style.eye' },
   { id: 'whale', labelKey: 'avatar.style.whale' },
+  { id: 'bot', labelKey: 'avatar.style.bot' },
+  { id: 'gpt', labelKey: 'avatar.style.gpt' },
+  { id: 'claude', labelKey: 'avatar.style.claude' },
+  { id: 'deepseek', labelKey: 'avatar.style.deepseek' },
+  { id: 'gemini', labelKey: 'avatar.style.gemini' },
+  { id: 'glm', labelKey: 'avatar.style.glm' },
+  { id: 'qwen', labelKey: 'avatar.style.qwen' },
   { id: 'custom', labelKey: 'avatar.style.custom' },
 ];
 
@@ -26,7 +33,11 @@ function storedPreference() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     // Migrate the original enum preference without introducing a second key.
-    if (raw === 'eye' || raw === 'whale') return { style: raw, image: '' };
+    // Any non-custom style may appear as a bare id, so derive the allowlist
+    // from AVATAR_STYLES: a hardcoded 'eye'/'whale' pair silently drops every
+    // style added later back to the default eye.
+    const plain = AVATAR_STYLES.find((style) => style.id === raw && style.id !== 'custom');
+    if (plain) return { style: plain.id, image: '' };
     if (!raw || raw.length > MAX_DATA_URL_CHARS + 100) return { style: 'eye', image: '' };
     const saved = JSON.parse(raw);
     const image = validImage(saved?.image) ? saved.image : '';

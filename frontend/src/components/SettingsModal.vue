@@ -94,7 +94,7 @@ Public License v3. See the LICENSE file for details.
                   :disabled="avatarUploading"
                   @click="selectAvatar(item.id)"
                 >
-                  <img v-if="item.id === 'whale'" :src="whaleAvatar" width="48" height="48" alt="" draggable="false" />
+                  <img v-if="item.thumbnail && documentVisible" :src="item.thumbnail" width="48" height="48" alt="" draggable="false" />
                   <span v-else-if="item.id === 'custom'" class="avatar-custom-preview" aria-hidden="true">
                     <img v-if="customAvatar && documentVisible" :src="customAvatar" width="48" height="48" alt="" draggable="false" />
                     <span v-else>＋</span>
@@ -543,7 +543,9 @@ Public License v3. See the LICENSE file for details.
             <div class="license-notice-title">{{ $t('settings.avatarArtwork') }}</div>
             <p>{{ $t('settings.avatarArtworkAttribution') }}</p>
             <p>{{ $t('settings.avatarArtworkLicense') }}</p>
+            <p>{{ $t('settings.avatarArtworkUserSupplied') }}</p>
             <n-button secondary @click="openWhaleArtwork">{{ $t('settings.avatarArtworkSource') }}</n-button>
+            <n-button secondary @click="openCrossPetArtwork">{{ $t('settings.avatarArtworkSourceCrossPet') }}</n-button>
           </div>
           <div class="about-update-check">
             <n-button
@@ -572,9 +574,9 @@ import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
 import { getStoredMode, THEMES } from '../utils/theme.mjs';
 import { AVATAR_STYLES, CUSTOM_AVATAR_ACCEPT, MAX_CUSTOM_AVATAR_BYTES, MAX_CUSTOM_AVATAR_EDGE, useAvatarAppearance } from '../composables/avatarAppearance.mjs';
+import { AVATAR_ARTWORK } from '../assets/avatars/index.mjs';
 import { useDocumentVisible } from '../composables/presentation.mjs';
 import { formatBytes } from '../utils/format.mjs';
-import whaleAvatar from '../assets/avatars/whale/delighted-512.png';
 import { normalizeApiKeysArray } from '../utils/modelConfigIO.mjs';
 import { TOOL_CONCURRENCY_MIN, TOOL_CONCURRENCY_MAX, HIDEABLE_MODES, PAGE_VISIBILITY_LABELS, normalizeDraftHiddenModes, normalizeHiddenModes } from '../utils/config.mjs';
 import { diffSettingsPatch, settingsSnapshot, isValidProxyURL } from '../utils/configAutosave.mjs';
@@ -604,7 +606,9 @@ function selectColorMode(mode) {
   emit('set-mode', mode);
 }
 
-const avatarOptions = AVATAR_STYLES;
+// 位图形象的缩略图与大图共用 assets/avatars/index.mjs 同一张映射表；
+// eye 没有图片，仍由模板里的内联 SVG 画。
+const avatarOptions = AVATAR_STYLES.map((item) => ({ ...item, thumbnail: AVATAR_ARTWORK[item.id]?.image || '' }));
 const { avatarStyle, customAvatar, setAvatarStyle, setCustomAvatar, clearCustomAvatar } = useAvatarAppearance();
 const documentVisible = useDocumentVisible();
 const avatarFileInput = ref(null);
@@ -653,6 +657,10 @@ function removeCustomAvatar() {
 
 function openWhaleArtwork() {
   Browser.OpenURL('https://github.com/Small-tailqwq/dsh-deep-whale/tree/main/maid-atelier');
+}
+
+function openCrossPetArtwork() {
+  Browser.OpenURL('https://github.com/lokicorvus/crosspet/tree/6e98970f6ff9b44e8ac85215241cabcd78f67d92/characters');
 }
 
 function openSourceRepository() {

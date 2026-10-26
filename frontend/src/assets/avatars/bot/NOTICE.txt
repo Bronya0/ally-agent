@@ -1,0 +1,20 @@
+Ally welcome-screen avatar: "little robot"
+
+Source
+  Supplied by the project owner as a local file (.tmp/ally-avatar.gif).
+  Original author and upstream URL are not recorded.
+
+Licence
+  Unknown. This asset is NOT covered by the CC BY-NC-SA 4.0 licence that applies
+  to the whale-girl and CrossPet artworks. Do not redistribute this animation
+  until the licence is confirmed.
+
+Processing applied (see scripts history / commit message)
+  - cropped to the artwork bounding box (removed the empty border)
+  - downscaled to 264 px wide (2x the 132 px display size)
+  - soft elliptical alpha mask so it does not show a black rectangle on light themes
+  - re-encoded from GIF to animated WebP: 1677 KB -> 464 KB, 100 frames @ 80 ms, loop forever
+
+  Re-encoding the source GIF as GIF was attempted first and made it larger
+  (1772 KB), so WebP is used instead. Any browser able to run Ally (WebView2 /
+  WebKit) renders animated WebP natively.

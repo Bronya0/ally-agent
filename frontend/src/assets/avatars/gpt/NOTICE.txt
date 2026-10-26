@@ -1,0 +1,27 @@
+GPT dragon-girl avatar (CrossPet)
+=================================
+
+Third-party derivative notice (CC BY-NC-SA 4.0 attribution chain)
+
+Source assets: lokicorvus/crosspet, revision 6e98970f6ff9b44e8ac85215241cabcd78f67d92,
+`characters/gpt/{idle,proud,stretch,happy}.webp`
+(<https://github.com/lokicorvus/crosspet>).
+
+Ally processing: proportionally resized from 640px to 320px high, without
+cropping; re-encoded with Sharp as WebP (quality 90, alpha quality 100, effort 6).
+Transparency and a common canvas height are preserved for pose switching.
+
+Attribution chain:
+
+1. Character design: 「御姐白龙」 by ZipZipPipe (Bilibili), a community
+   anthropomorphization of GPT. CrossPet lists this as the setting source for
+   its GPT portrait.
+2. Illustration: CrossPet, redrawn with an AI image generator from the setting
+   above (<https://github.com/lokicorvus/crosspet>).
+
+License: CC BY-NC-SA 4.0, as declared in the upstream `characters/LICENSE.md`:
+attribution required, non-commercial use only, derivatives shared under the
+same license.
+
+"GPT", "ChatGPT" and "OpenAI" are trademarks of their respective owners. This is
+an unofficial fan project and is not affiliated with or endorsed by OpenAI.
