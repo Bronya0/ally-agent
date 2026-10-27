@@ -2,34 +2,29 @@
 package app
 
 import (
-	"errors"
+	"github.com/egoist/mygo"
 	"os"
 	"path/filepath"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// ExportGeneratedImage saves the original bytes, never the displayed preview.
 func (a *App) ExportGeneratedImage(ref string) (string, error) {
-	if a.wails == nil || a.wails.app == nil {
-		return "", errors.New("desktop host not initialized")
-	}
 	data, meta, err := a.readGeneratedImage(ref)
 	if err != nil {
 		return "", err
 	}
-	ext := generatedImageExtension(meta.Mime)
-	dialog := a.saveFileDialog()
-	dialog.SetOptions(&application.SaveFileDialogOptions{Title: "保存原图", Filename: generatedImageFilename(ref, meta.Mime), Filters: []application.FileFilter{{DisplayName: meta.Mime, Pattern: "*" + ext}}})
-	selected, err := dialog.PromptForSingleSelection()
-	if err != nil || selected == "" {
-		return selected, err
+	p, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Title: "保存原图", DefaultPath: generatedImageFilename(ref, meta.Mime)})
+	if err != nil || p == "" {
+		return p, err
 	}
-	if filepath.Ext(selected) == "" {
-		selected += ext
+	if filepath.Ext(p) == "" {
+		p += generatedImageExtension(meta.Mime)
 	}
-	if err := os.WriteFile(selected, data, 0o600); err != nil {
-		return "", err
-	}
-	return selected, nil
+	return p, os.WriteFile(p, data, 0600)
+}
+
+// ReadNativeGeneratedImage exposes the existing validated image store to the
+// native desktop host; it does not change storage or image-generation logic.
+func (a *App) ReadNativeGeneratedImage(ref string) ([]byte, error) {
+	data, _, err := a.readGeneratedImage(ref)
+	return data, err
 }

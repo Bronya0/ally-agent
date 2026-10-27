@@ -1,450 +1,160 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//
-// Copyright (C) 2026 tangssst <tangssst@qq.com>
-// GitHub: https://github.com/Bronya0/ally-agent
-//
-// This file is part of ally-agent, licensed under the GNU General
-// Public License v3. See the LICENSE file for details.
 package app
 
-// 桌面宿主桥：应用/窗口注入、窗口几何持久化（~/.ally_agent/window.json）、桌面通知
-// 与系统对话框。Wails 运行时只允许出现在 host_* 文件里。
-
 import (
+	"ally-dev/internal/tools/pathutil"
 	"context"
-	"encoding/json"
 	"errors"
+	"github.com/egoist/mygo"
 	"os"
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/events"
-
-	"ally-dev/internal/tools/pathutil"
 )
 
-const (
-	// DefaultWindowWidth/Height follow the industry-standard default for
-	// desktop coding tools (e.g. VS Code's 1200x800). Used on first launch
-	// before the user has resized the window manually.
-	DefaultWindowWidth     = 1200
-	DefaultWindowHeight    = 800
-	MinWindowWidth         = 860
-	MinWindowHeight        = 600
-	WindowsWindowClassName = "AllyMainWindow"
-	windowCloseFlushWait   = 5 * time.Second
-)
-
-// wailsAppHandle is the minimal Wails v3 host binding injected into App by
-// SetApp/SetWindow. Concrete Wails v3 types stay in this file (and its
-// platform siblings) so core Agent code never imports the Wails runtime.
+// The legacy field name is retained so Agent core code stays unchanged.
 type wailsAppHandle struct {
-	app    *application.App
-	window *application.WebviewWindow
-	// windowState snapshots the main window geometry (updated from window
-	// events, persisted once at shutdown). Kept here so main-window sizing
-	// state stays in the host layer, mirroring installWebviewZoomResync.
-	windowState  *windowStateTracker
-	closeRequest windowCloseGuard
+	app    *mygo.Application
+	window *mygo.Window
 }
 
-// SetApp injects the Wails v3 application handle into the Agent core. It must
-// be called before app.Run() so ServiceStartup can install the host event
-// sink. Wails desktop lifecycle stays in this file; the Agent core only sees
-// the host-neutral eventSink interface.
-func (a *App) SetApp(app *application.App) {
-	if a.wails == nil {
-		a.wails = &wailsAppHandle{}
-	}
-	a.wails.app = app
-	if app != nil {
-		// Hide before service cleanup on all desktop quit paths. Native/custom
-		// closes still wait for frontend writes (or their timeout) before Quit.
-		app.OnShutdown(func() {
-			if a.wails.window != nil && a.wails.window.IsVisible() {
-				a.wails.window.Hide()
-			}
-		})
+func (a *App) SetNativeWindow(w *mygo.Window) { a.wails = &wailsAppHandle{app: mygo.App, window: w} }
+
+type nativeEventSink struct{ send func(string, any) }
+
+func (s nativeEventSink) Emit(n string, p any) {
+	if s.send != nil {
+		s.send(n, p)
 	}
 }
 
-// SetWindow injects the main window handle. Used for initial window sizing
-// and desktop-only window operations.
-func (a *App) SetWindow(window *application.WebviewWindow) {
-	if a.wails == nil {
-		a.wails = &wailsAppHandle{}
-	}
-	a.wails.window = window
-	a.installWebviewZoomResync(window)
-	a.installWindowStateTracking(window)
-	if window != nil {
-		// Native closes must drain the same frontend write queue
-		// as the custom close button. During application shutdown let Wails
-		// destroy the window normally; its context has already been cancelled.
-		window.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
-			if !DesktopShouldQuit(a) {
-				event.Cancel()
-			}
-		})
-	}
-}
-
-// A missing or stalled frontend must not make native close requests permanent
-// no-ops. Repeated clicks share the original deadline. The fallback uses normal
-// application shutdown so backend checkpoints and service cleanup still run.
-type windowCloseGuard struct {
-	once  sync.Once
-	ready atomic.Bool
-}
-
-func (g *windowCloseGuard) request(ctx context.Context, timeout time.Duration, requestClose, quit func()) {
-	g.once.Do(func() {
-		time.AfterFunc(timeout, func() {
-			if ctx.Err() == nil && g.ready.CompareAndSwap(false, true) {
-				quit()
-			}
-		})
-		requestClose()
-	})
-}
-
-// DesktopShouldQuit routes native application quit and window close through
-// the same frontend save barrier. Do not wait here: Wails calls it on the UI thread.
-func DesktopShouldQuit(a *App) bool {
-	if a.wails == nil || a.ctx == nil || a.ctx.Err() != nil || a.wails.closeRequest.ready.Load() {
-		return true
-	}
-	a.wails.closeRequest.request(a.ctx, windowCloseFlushWait, func() {
-		a.emit("window:close-requested", nil)
-	}, a.quitApp)
-	return false
-}
-
-// CompleteWindowClose acknowledges the frontend save barrier before quitting.
-// Both normal completion and the timeout fallback release the same quit guard.
-func (a *App) CompleteWindowClose() {
-	if a.wails != nil {
-		a.wails.closeRequest.ready.Store(true)
-	}
-	a.quitApp()
-}
-
-// installWebviewZoomResync guards against WebView2 restoring a stale zoom
-// state after the window leaves the minimised state (UI fonts render too
-// small). Wails only resyncs the WebView2 rasterization scale when the monitor
-// DPI actually changed across the minimise/restore (#5544/#5605); the
-// same-monitor restore path is a blind spot, so we re-assert zoom 1.0 after
-// the webview has fully resumed. The write is skipped when the zoom is already
-// correct, so normal restores are no-ops with no relayout flicker.
-func (a *App) installWebviewZoomResync(window *application.WebviewWindow) {
-	if goruntime.GOOS != "windows" || window == nil {
-		return
-	}
-	window.OnWindowEvent(events.Windows.WindowUnMinimise, func(*application.WindowEvent) {
-		// Wait until WebView2 has finished resuming; touching the controller
-		// too early can be fatal while its render/GPU process restarts
-		// (Wails #5605). SetZoom/GetZoom marshal to the main thread and are
-		// nil-safe after the window is destroyed.
-		time.AfterFunc(500*time.Millisecond, func() {
-			if current := window.GetZoom(); current != 1.0 {
-				window.SetZoom(1.0)
-			}
-		})
-	})
-}
-
-// wailsEventSink adapts the host-neutral eventSink contract to Wails v3
-// runtime events. It is the only type in package app that publishes events
-// through the Wails runtime.
-type wailsEventSink struct {
-	app *application.App
-}
-
-func (s wailsEventSink) Emit(name string, payload any) {
-	if s.app == nil {
-		return
-	}
-	s.app.Event.Emit(name, payload)
-}
-
-// ServiceStartup is the Wails v3 lifecycle adapter (registered through
-// application.NewService). It installs the desktop event sink and delegates
-// long-lived Agent services to their host-neutral modules.
-func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
-	fan := newFanoutEventSink()
-	if a.wails != nil {
-		fan.Add(wailsEventSink{app: a.wails.app})
-	}
-	// 网络事件出口（SSE/轮询/未来 WS）：默认关闭，由 ALLY_NETWORK_EVENTS 环境变量启用。
-	// 失败只记日志不阻断启动，绝不破坏桌面端功能。
-	if netSink := newNetworkEventSinkFromEnv(ctx); netSink != nil {
-		fan.Add(netSink)
-	}
-	a.events = fan
-
+// StartNative installs the host boundary before starting unchanged Agent services.
+func (a *App) StartNative(ctx context.Context, send func(string, any)) error {
+	a.events = nativeEventSink{send}
 	if err := a.startRuntime(ctx); err != nil {
 		return err
 	}
 	a.restoreApiService()
-
 	return nil
 }
-
-// ServiceShutdown waits for telemetry's final queue drain and disk flush.
-// Wails calls this lifecycle hook before process teardown, so recently
-// completed requests are not lost when the window closes inside the periodic
-// flush interval.
-func (a *App) ServiceShutdown() error {
-	a.saveWindowState()
-	return a.stopRuntime(20 * time.Second)
-}
-
-// quitApp asks the Wails application to quit. No-op when the desktop host is
-// absent (tests/headless). Used by the self-update flow.
-func (a *App) quitApp() {
-	if a.wails != nil && a.wails.app != nil {
-		a.wails.app.Quit()
-	}
-}
-
-// showMainWindow displays and focuses the main window. Used by the exposed
-// ShowMainWindow binding for the second-instance activation callback.
+func (a *App) ShutdownNative() error { return a.stopRuntime(20 * time.Second) }
+func (a *App) quitApp()              { mygo.App.Quit() }
 func (a *App) showMainWindow() {
-	if a.wails == nil || a.wails.window == nil {
-		return
+	if a.wails != nil && a.wails.window != nil {
+		a.wails.window.Show()
+		a.wails.window.Focus()
 	}
-	a.wails.window.Show()
-	// Only undo minimisation; Restore would also leave maximised/fullscreen mode.
-	a.wails.window.UnMinimise()
-	a.wails.window.Focus()
 }
-
-// ShowMainWindow displays and focuses the main window. Used by the
-// second-instance activation callback.
-func (a *App) ShowMainWindow() {
-	a.showMainWindow()
-}
-
-// GetAutostartEnabled reports whether Ally is registered to launch at login.
-func (a *App) GetAutostartEnabled() (bool, error) {
-	if a.wails == nil || a.wails.app == nil {
-		return false, errors.New("desktop host not initialized")
-	}
-	return a.wails.app.Autostart.IsEnabled()
-}
-
-// SetAutostartEnabled registers or removes Ally from OS login startup.
-func (a *App) SetAutostartEnabled(enabled bool) error {
-	if a.wails == nil || a.wails.app == nil {
-		return errors.New("desktop host not initialized")
-	}
-	if enabled {
-		return a.wails.app.Autostart.Enable()
-	}
-	return a.wails.app.Autostart.Disable()
-}
-
-func (a *App) SelectWorkspace() (string, error) {
-	if err := a.ensureInitialized(); err != nil {
-		return "", err
-	}
-	a.mu.Lock()
-	current := a.config.Workspace
-	a.mu.Unlock()
-	// If the saved workspace no longer exists, fall back to the user's home
-	// directory so the directory dialog can still open and the user can pick
-	// a valid workspace.
-	if info, err := os.Stat(current); err != nil || !info.IsDir() {
-		if homeDir, err := os.UserHomeDir(); err == nil {
-			current = homeDir
-		}
-	}
-	if a.wails == nil || a.wails.app == nil {
-		return "", errors.New("desktop host not initialized")
-	}
-	selected, err := a.openFileDialog().
-		SetTitle("选择 Agent 工作区").
-		SetDirectory(current).
-		CanChooseDirectories(true).
-		CanChooseFiles(false).
-		PromptForSingleSelection()
-	if err != nil || selected == "" {
-		return selected, err
-	}
-	// 系统根目录一当选成工作区，所有边界检查（写根、VCS、危险删除黑名单）就
-	// 形同虚设——整个磁盘都算“工作区内”。三个平台都在入口拒绝。
-	if pathutil.IsSystemRootPath(selected) {
-		return "", errors.New("系统根目录不能用作工作区：整个磁盘都会变成 Agent 的可写范围，请选择一个具体的项目目录")
-	}
-	if err := a.updateConfigAndPersist(func(cfg *ConfigState) { cfg.Workspace = selected }); err != nil {
-		return "", err
-	}
-	return selected, nil
-}
-
-// SelectKnowledgeBaseRoot opens a native directory picker for the knowledge
-// base root and returns the chosen path without persisting it — the settings
-// draft (and the KB empty-state card) own the save flow, so the picked path
-// round-trips through the normal SaveConfig boundary.
-func (a *App) SelectKnowledgeBaseRoot() (string, error) {
-	if err := a.ensureInitialized(); err != nil {
-		return "", err
-	}
-	a.mu.Lock()
-	current := a.config.KBRoot
-	a.mu.Unlock()
-	if info, err := os.Stat(current); err != nil || !info.IsDir() {
-		if homeDir, err := os.UserHomeDir(); err == nil {
-			current = homeDir
-		}
-	}
-	if a.wails == nil || a.wails.app == nil {
-		return "", errors.New("desktop host not initialized")
-	}
-	selected, err := a.openFileDialog().
-		SetTitle("选择知识库目录").
-		SetDirectory(current).
-		CanChooseDirectories(true).
-		CanChooseFiles(false).
-		PromptForSingleSelection()
-	if err != nil {
-		return "", err
-	}
-	return selected, nil
-}
-
-// SelectDirectory opens a native directory picker and returns the chosen absolute
-// path without persisting it. Settings pages that own their own draft (the sandbox
-// deny-read list, for example) call this instead of a page-specific picker; the
-// picked path round-trips through the normal SaveConfig boundary.
+func (a *App) ShowMainWindow() { a.showMainWindow() }
 func (a *App) SelectDirectory(current string) (string, error) {
-	if err := a.ensureInitialized(); err != nil {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Title: "选择目录", DefaultPath: current, Directory: true})
+	if err != nil || len(paths) == 0 {
 		return "", err
 	}
-	if a.wails == nil || a.wails.app == nil {
-		return "", errors.New("desktop host not initialized")
-	}
-	start := strings.TrimSpace(current)
-	if info, err := os.Stat(start); err != nil || !info.IsDir() {
-		if homeDir, err := os.UserHomeDir(); err == nil {
-			start = homeDir
-		}
-	}
-	selected, err := a.openFileDialog().
-		SetTitle("选择目录").
-		SetDirectory(start).
-		CanChooseDirectories(true).
-		CanChooseFiles(false).
-		PromptForSingleSelection()
+	return paths[0], nil
+}
+func (a *App) SelectWorkspace() (string, error) {
+	cfg, err := a.GetConfig()
 	if err != nil {
 		return "", err
 	}
-	return selected, nil
+	path, err := a.SelectDirectory(cfg.Workspace)
+	if err != nil || path == "" {
+		return path, err
+	}
+	if pathutil.IsSystemRootPath(path) {
+		return "", errors.New("系统根目录不能用作工作区，请选择具体项目目录")
+	}
+	return path, a.updateConfigAndPersist(func(c *ConfigState) { c.Workspace = path })
 }
-
-// SelectBackgroundImage opens a native file picker for image files, writes
-// the chosen bytes to ~/.ally_agent/background.<ext> via SaveBackgroundImage,
-// and returns the stored filename. Rejects oversized or non-image files at
-// the dialog boundary so the heavy save path never runs for invalid input.
+func (a *App) SelectKnowledgeBaseRoot() (string, error) { return a.SelectDirectory("") }
+func (a *App) selectFile(title string) (string, error) {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Title: title})
+	if err != nil || len(paths) == 0 {
+		return "", err
+	}
+	return paths[0], nil
+}
 func (a *App) SelectBackgroundImage() (string, error) {
-	if err := a.ensureInitialized(); err != nil {
+	p, e := a.selectFile("选择背景图片")
+	if e != nil || p == "" {
+		return p, e
+	}
+	return a.saveBackgroundImageFromFile(p)
+}
+func (a *App) SelectPrivateKeyFile() (string, error) { return a.selectFile("选择 SSH 私钥") }
+
+// SelectJSONFile picks a configuration file for import. Filters keep the dialog
+// honest while still accepting the generic .json files users export.
+func (a *App) SelectJSONFile(title string) (string, error) {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Title: title, Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
+	if err != nil || len(paths) == 0 {
 		return "", err
 	}
-	if a.wails == nil || a.wails.app == nil {
-		return "", errors.New("desktop host not initialized")
-	}
-	selected, err := a.openFileDialog().
-		SetTitle("选择对话背景图").
-		AddFilter("图片 (*.png *.jpg *.jpeg *.webp *.gif *.bmp)", "*.png;*.jpg;*.jpeg;*.webp;*.gif;*.bmp").
-		CanChooseFiles(true).
-		CanChooseDirectories(false).
-		PromptForSingleSelection()
+	return paths[0], nil
+}
+
+// ReadLocalTextFile reads an imported configuration file. It is a host
+// adaptation for dialogs only: the path comes from a user file picker, and the
+// size cap keeps a mistaken selection from loading a huge file.
+func (a *App) ReadLocalTextFile(path string) (string, error) {
+	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
 	}
-	if selected == "" {
-		return "", nil // user cancelled
+	if info.IsDir() {
+		return "", errors.New("请选择文件而不是目录")
 	}
-	return a.saveBackgroundImageFromFile(selected)
-}
-
-// SelectPrivateKeyFile opens a native file picker without file type restrictions
-// and returns the chosen file path (or "" if cancelled).
-func (a *App) SelectPrivateKeyFile() (string, error) {
-	if a.wails == nil || a.wails.app == nil {
-		return "", errors.New("desktop host not initialized")
+	const max = 2 << 20
+	if info.Size() > max {
+		return "", errors.New("文件过大（上限 2MB）")
 	}
-	defaultDir := ""
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		sshDir := filepath.Join(homeDir, ".ssh")
-		if info, err := os.Stat(sshDir); err == nil && info.IsDir() {
-			defaultDir = sshDir
-		} else {
-			defaultDir = homeDir
-		}
-	}
-	dialog := a.openFileDialog().
-		SetTitle("选择 SSH 私钥文件").
-		CanChooseFiles(true).
-		CanChooseDirectories(false)
-	if defaultDir != "" {
-		dialog.SetDirectory(defaultDir)
-	}
-	selected, err := dialog.PromptForSingleSelection()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
-	return selected, nil
+	return string(data), nil
 }
 
-// ExportTextFile opens a native save dialog and writes content to the chosen
-// path. suggestedFilename seeds the dialog; the user may change it. Returns
-// the saved path, or "" when the user cancels. WKWebView (macOS) ignores the
-// HTML5 <a download> attribute, so exports must go through this binding
-// instead of a frontend blob download to work on every platform.
-func (a *App) ExportTextFile(suggestedFilename, content, filterName, filterPattern string) (string, error) {
+// ReadWorkspaceMedia returns the bytes of an image inside a workspace so the
+// native explorer can preview it without a web media server.
+func (a *App) ReadWorkspaceMedia(req WorkspacePathRequest) ([]byte, error) {
 	if err := a.ensureInitialized(); err != nil {
-		return "", err
+		return nil, err
 	}
-	if suggestedFilename == "" || content == "" {
-		return "", errors.New("filename and content are required")
+	cfg, err := a.configForWorkspace(req.Workspace)
+	if err != nil {
+		return nil, err
 	}
-	if a.wails == nil || a.wails.app == nil {
-		return "", errors.New("desktop host not initialized")
+	resolved, err := resolveReadPath(cfg, req.Path)
+	if err != nil {
+		return nil, err
 	}
-	dialogOpts := &application.SaveFileDialogOptions{
-		Title:    "导出文件",
-		Filename: suggestedFilename,
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return nil, err
 	}
-	if filterName != "" && filterPattern != "" {
-		dialogOpts.Filters = []application.FileFilter{{DisplayName: filterName, Pattern: filterPattern}}
+	if info.IsDir() {
+		return nil, errors.New("not a file")
 	}
-	dialog := a.saveFileDialog()
-	dialog.SetOptions(dialogOpts)
-	selected, err := dialog.PromptForSingleSelection()
-	if err != nil || selected == "" {
-		return selected, err
+	const max = 20 << 20
+	if info.Size() > max {
+		return nil, errors.New("图片过大，无法预览（上限 20MB）")
 	}
-	// NSSavePanel appends the extension automatically, but the Windows
-	// IFileSaveDialog does not; mirror the suggested name's extension so the
-	// exported file always opens as expected.
-	if filepath.Ext(selected) == "" {
-		if ext := filepath.Ext(suggestedFilename); ext != "" {
-			selected += ext
-		}
-	}
-	if err := os.WriteFile(selected, []byte(content), 0o644); err != nil {
-		return "", err
-	}
-	return selected, nil
+	return os.ReadFile(resolved)
 }
-
+func (a *App) ExportTextFile(name, content, filterName, pattern string) (string, error) {
+	p, e := mygo.Dialog.Save(mygo.SaveDialogOptions{Title: "导出文件", DefaultPath: name})
+	if e != nil || p == "" {
+		return p, e
+	}
+	if filepath.Ext(p) == "" {
+		p += filepath.Ext(name)
+	}
+	return p, os.WriteFile(p, []byte(content), 0600)
+}
 func (a *App) OpenWorkspaceInFileManager() error {
 	if err := a.ensureInitialized(); err != nil {
 		return err
@@ -558,7 +268,7 @@ func (a *App) mainWindowMinimised() bool {
 	if a.wails == nil || a.wails.window == nil {
 		return false
 	}
-	return a.wails.window.IsMinimised()
+	return a.wails.window.IsMinimized()
 }
 
 // SetNotifier injects the notifications service used for task completion
@@ -640,211 +350,52 @@ func (a *App) notifyCompletion(kind, workspace string) {
 	}()
 }
 
-// 主窗口几何持久化：~/.ally_agent/window.json 记录 x/y/width/height/maximized，
-// 启动时经 WebviewWindowOptions 恢复（创建即定位，无闪烁），退出时落盘一次。
-//
-// 坐标全程使用 Wails 的 DIP（逻辑像素）：Size()/Position()/options 均为 DIP，
-// DPI 换算由 Wails 在创建（ScreenNearestDipRect + dipToPhysicalRect）时自动完成，
-// 跨显示器缩放无需手工处理。最大化期间不更新普通 bounds（否则还原尺寸会被
-// 最大化几何污染）；最小化期间 Windows 上 Position() 返回 -32000 一类占位值，
-// 直接跳过。落盘只读内存快照、绝不查询窗口——ServiceShutdown 时窗口通常已销毁
-// （WindowClosing 默认监听器注册在先，会先执行 markAsDestroyed）。
-const (
-	windowStateFilename = "window.json"
-	// windowStateMaxDimension 是恢复时的宽高上限，挡住损坏/异常值；
-	// 下限复用 MinWindowWidth/Height。
-	windowStateMaxDimension = 16384
-	// 判定窗口"可见"的最小交叉尺寸：窗口矩形与任一屏幕的可见交叉小于该值时
-	// 视为离屏（保存坐标来自已断开的显示器），一次性居中修复。
-	windowVisibleMinWidth  = 100
-	windowVisibleMinHeight = 50
-)
-
-// windowState 是 window.json 的持久化形状。
-type windowState struct {
-	X         int  `json:"x"`
-	Y         int  `json:"y"`
-	Width     int  `json:"width"`
-	Height    int  `json:"height"`
-	Maximized bool `json:"maximized"`
-}
-
-func windowStatePath() string {
-	return filepath.Join(appDataDir(), windowStateFilename)
-}
-
-// loadWindowState 读取并校验持久化的窗口几何。ok=false 表示没有可用状态
-// （首次启动、文件缺失/损坏或数值越界），调用方应使用默认窗口参数。
-func loadWindowState() (windowState, bool) {
-	var s windowState
-	data, err := os.ReadFile(windowStatePath())
+// GetAutostartEnabled reports whether the current build is registered to start
+// with the user session. Only Windows has an implementation; elsewhere the
+// setting is simply unavailable.
+func (a *App) GetAutostartEnabled() (bool, error) {
+	if goruntime.GOOS != "windows" {
+		return false, nil
+	}
+	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+	exe, err := os.Executable()
 	if err != nil {
-		return s, false
+		return false, nil
 	}
-	if err := json.Unmarshal(data, &s); err != nil {
-		return windowState{}, false
+	cmd := exec.Command("reg", "query", key, "/v", "AllyAgent")
+	hideCommandWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, nil
 	}
-	if s.Width < MinWindowWidth || s.Height < MinWindowHeight ||
-		s.Width > windowStateMaxDimension || s.Height > windowStateMaxDimension {
-		return windowState{}, false
-	}
-	return s, true
+	return strings.Contains(strings.ToLower(string(out)), strings.ToLower(exe)), nil
 }
 
-// persistWindowState 原子写入窗口几何。失败返回错误；调用方按宿主状态降级，
-// 不影响应用退出。
-func persistWindowState(s windowState) error {
-	data, err := json.MarshalIndent(s, "", "  ")
+// SetAutostartEnabled writes or removes the per-user Run entry pointing at this
+// executable.
+func (a *App) SetAutostartEnabled(enabled bool) error {
+	if goruntime.GOOS != "windows" {
+		return errors.New("当前系统不支持开机自启动")
+	}
+	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+	if !enabled {
+		cmd := exec.Command("reg", "delete", key, "/v", "AllyAgent", "/f")
+		hideCommandWindow(cmd)
+		out, err := cmd.CombinedOutput()
+		if err != nil && !strings.Contains(string(out), "unable to find") {
+			return errors.New(strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	return safeWriteFileWithDir(windowStatePath(), data, 0o600, true)
-}
-
-// ApplySavedWindowGeometry 把持久化的窗口几何应用到主窗口 options。
-// main.go 在 NewWithOptions 前调用；返回是否应用了持久化状态。
-//
-// InitialPosition 语义（Windows PostCreate 顺序：先处理 StartState、后定位）：
-//   - 普通恢复：X/Y 非零时设 WindowXY，PostCreate 的 setPosition 会重新断言
-//     保存的坐标（与创建时的放置一致；两条路径都经最近屏幕换算）。
-//   - 最大化恢复：只设 StartState=Maximised，不设 WindowXY——PostCreate 对
-//     最大化窗口执行 setPosition（SetWindowPos 带尺寸）会破坏最大化状态，而
-//     默认的 center() 走 SWP_NOSIZE 对最大化窗口近似 no-op。窗口创建本身仍
-//     使用非零 X/Y/W/H，因此取消最大化后能精确回到保存的位置和尺寸。
-func ApplySavedWindowGeometry(opts *application.WebviewWindowOptions) bool {
-	s, ok := loadWindowState()
-	if !ok {
-		return false
+	cmd := exec.Command("reg", "add", key, "/v", "AllyAgent", "/t", "REG_SZ", "/d", exe, "/f")
+	hideCommandWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return errors.New(strings.TrimSpace(string(out)))
 	}
-	opts.Width = s.Width
-	opts.Height = s.Height
-	if s.X != 0 || s.Y != 0 {
-		opts.X, opts.Y = s.X, s.Y
-		if !s.Maximized {
-			opts.InitialPosition = application.WindowXY
-		}
-	}
-	if s.Maximized {
-		opts.StartState = application.WindowStateMaximised
-	}
-	return true
-}
-
-// windowStateTracker 维护窗口几何的内存快照。窗口事件回调里实时查询窗口
-// （IsMaximised/Size/Position 均经 InvokeSync 到主线程，事件回调跑在独立
-// goroutine，安全）；落盘只发生在 ServiceShutdown。
-type windowStateTracker struct {
-	mu      sync.Mutex
-	state   windowState
-	has     bool
-	checked atomic.Bool // 离屏一次性修复是否已执行
-}
-
-// update 用事件时刻的窗口实况刷新快照。最大化只更新标志位，普通 bounds 保留
-// 最大化之前的值；宽高非正（销毁途中的事件）直接忽略。
-func (t *windowStateTracker) update(maximized bool, x, y, w, h int) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.state.Maximized = maximized
-	if maximized || w <= 0 || h <= 0 {
-		return
-	}
-	// Windows 上 X=Y=0 会让创建路径走 CW_USEDEFAULT 系统级联定位，
-	// 偏移 1px 规避；对用户不可见。
-	if x == 0 && y == 0 {
-		x, y = 1, 1
-	}
-	t.state.X, t.state.Y, t.state.Width, t.state.Height = x, y, w, h
-	t.has = true
-}
-
-func (t *windowStateTracker) snapshot() (windowState, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.state, t.has
-}
-
-// installWindowStateTracking 注册几何监听并初始化 tracker。用已保存状态播种，
-// 保证"整轮未触发任何窗口事件"的会话也会写回一致值。main.go 的 SetWindow
-// 在 Run 之前调用，此时注册 OnWindowEvent 是安全的（与 installWebviewZoomResync
-// 同机制）。
-func (a *App) installWindowStateTracking(window *application.WebviewWindow) {
-	if window == nil {
-		return
-	}
-	tracker := &windowStateTracker{}
-	if s, ok := loadWindowState(); ok {
-		tracker.state = s
-		tracker.has = true
-	}
-	if a.wails == nil {
-		a.wails = &wailsAppHandle{}
-	}
-	a.wails.windowState = tracker
-
-	onGeometry := func(*application.WindowEvent) {
-		// 最小化期间 Windows 报告占位坐标（-32000），跳过；快照保留
-		// 最小化之前的普通几何。
-		if window.IsMinimised() {
-			return
-		}
-		maximized := window.IsMaximised()
-		x, y, w, h := 0, 0, 0, 0
-		if !maximized {
-			x, y = window.Position()
-			w, h = window.Size()
-		}
-		tracker.update(maximized, x, y, w, h)
-		a.ensureWindowOnScreen(window, tracker)
-	}
-	window.OnWindowEvent(events.Common.WindowDidResize, onGeometry)
-	window.OnWindowEvent(events.Common.WindowDidMove, onGeometry)
-	window.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
-		a.ensureWindowOnScreen(window, tracker)
-	})
-}
-
-// ensureWindowOnScreen 一次性校验窗口是否落在任一当前屏幕内；不在（保存坐标
-// 来自已断开的显示器，Wails 创建路径只做最近屏幕的 DPI 换算、不吸附位置）
-// 则居中。窗口创建时的 resize 事件与 RuntimeReady 双保险触发；屏幕缓存尚未
-// 填充时不消耗一次性机会。
-func (a *App) ensureWindowOnScreen(window *application.WebviewWindow, tracker *windowStateTracker) {
-	if a.wails == nil || a.wails.app == nil || tracker.checked.Load() {
-		return
-	}
-	screens := a.wails.app.Screen.GetAll()
-	if len(screens) == 0 {
-		return
-	}
-	x, y := window.Position()
-	w, h := window.Size()
-	if w <= 0 || h <= 0 {
-		return
-	}
-	if !tracker.checked.CompareAndSwap(false, true) {
-		return
-	}
-
-	for _, screen := range screens {
-		visible := screen.Bounds.Intersect(application.Rect{X: x, Y: y, Width: w, Height: h})
-		if visible.Width >= windowVisibleMinWidth && visible.Height >= windowVisibleMinHeight {
-			return
-		}
-	}
-	window.Center()
-}
-
-// saveWindowState 在应用关闭（ServiceShutdown）时把最近的窗口几何落盘。
-// 只读 tracker 快照，不查询窗口。
-func (a *App) saveWindowState() {
-	if a.wails == nil || a.wails.windowState == nil {
-		return
-	}
-	s, ok := a.wails.windowState.snapshot()
-	if !ok {
-		return
-	}
-	if err := persistWindowState(s); err != nil {
-		a.logAppError("save window state failed", "error", err)
-	}
+	return nil
 }

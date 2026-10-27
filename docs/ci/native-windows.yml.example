@@ -1,0 +1,38 @@
+name: Native desktop
+
+on:
+  push:
+    branches: [mygo]
+  pull_request:
+    branches: [mygo]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: "0"
+      GOMAXPROCS: "2"
+      GOGC: "30"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        shell: bash
+        run: go test -p 1 ./...
+      - name: Check native UI
+        shell: bash
+        run: go run github.com/egoist/mygo/cmd/mygo@v0.7.1 vet .
+      - name: Build
+        shell: bash
+        run: bash build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ally-native-windows
+          path: dist/ally-native-v2.exe

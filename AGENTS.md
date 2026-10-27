@@ -1,90 +1,12 @@
-# Ally — AGENTS.md
+# Ally Native
 
-本文档仅记录 **开发 Ally 本身时不可违反的架构边界、开发规范与高危避坑铁律**。
-日常功能代码位置查阅 `CODEGRAPH.md`，标准 Go/Vue 惯用法与工具参数无需在此赘述。
-
----
-
-## 1. 构建与验证 (Build & Test)
-
-| 命令 | 用途 |
-|---|---|
-| `wails3 dev` | 启动桌面端热重载开发模式 |
-| `wails3 build` | 构建并校验桌面端二进制（修改 Go 或 Wails 绑定的唯一验证命令） |
-| `go test ./...` | 执行全套后端测试（测试前必须确保满足隔离规则） |
-| `cd frontend && npm test` | 前端测试（`node --test "src/**/*.test.mjs"`）：**跨语言同一组数**（附件上限 `attachmentLimits.test.mjs`、压缩阈值 `config.test.mjs`）与 **i18n 中英键集合**（`i18nKeys.test.mjs`）都由它读源码钉住，改一边没改另一边就红 |
-| `go test ./internal/app -run TestLayerBoundaries` | **分层边界**（`layer_boundaries_test.go`）：`internal/` 下非 app 的包反向 import `internal/app`、app 内非 `host_*.go` 文件碰 Wails runtime，都当场红 |
-| `gofmt -l .` | 格式化自查，期望输出为空（2026-09-15 已统一 25 个文件，此前长期不全绿） |
-
-## 2. Git 提交规范 (Git Convention)
-
-Ally 本身开发提交时，严格按如下命令临时指定作者身份：
-
-```bash
-git add -A
-git -c user.name="ally agent" -c user.email="ally@agent.dev" commit -m "..."
-git push origin main
-```
-
-## 3. 分层架构与唯一边界 (Architectural Boundaries)
-
-修改或添加功能时必须遵守各层职责边界，严禁跨层泄露：
-
-1. **宿主隔离 (Host Neutrality)**:
-   - Agent 核心逻辑保持宿主中立。`main.go` 与 `internal/app/host_*.go` 是**唯一**允许 import Wails v3 runtime 的代码；`app.go`、`orch_*`、`biz_*` 严禁直接调用 Wails 窗口、事件、对话框或原生 API。
-   - UI 运行时事件统一经 `App.emit()`（`host_events.go`）抛出。
-2. **模型适配边界 (Provider Boundary)**:
-   - `internal/app/prov_model.go` 是 Provider 协议适配（OpenAI/Anthropic/Responses wire 结构）的**唯一**边界，不得把 provider 特有数据结构外泄至 `app.go` 或工具编排层。
-3. **工具分层 (Tools Pure vs Orch)**:
-   - `internal/tools/<name>/`: 纯算法层，**绝对禁止**依赖 `*App`、`ConfigState` 或任何 `internal/app` 符号。
-   - `internal/app/orch_<name>.go`: 工具编排层，负责绑定纯算法到 `*App` 状态（路径校验、工作区上下文、并发锁、审计日志）。
-4. **文件命名约定**:
-   - `prov_`: 模型协议适配
-   - `host_`: Wails/窗口/桌面桥
-   - `orch_`: 工具编排（对应 `internal/tools/`）
-   - `infra_`: 跨编排共享（流式节流、结果信封、环境）
-   - `biz_`: 独立业务（配置、会话、上下文、提示词、技能、MCP、自更新）
-
-## 4. 关键避坑铁律 (Critical Gotchas)
-
-以下规则触犯会导致死锁、数据损坏或崩溃：
-
-1. **`App` 结构体锁与并发安全**:
-   - 新增 `map` 或引用类型字段时，**必须**在 `NewApp()` 初始化，且在持有 `a.mu` 写入前做 nil 懒加载兜底。持有锁期间写入未初始化的 nil map 会引发不可恢复的 panic，导致互斥锁永久无法释放，造成全局死锁。
-2. **多 Tab 与工作区路由**:
-   - 工作区解析必须调用 `tabOwnsWorkspace(tab)` / `runWorkspaceForTab(tab)`，禁止将 Tab 路径与 `config.workspace` 盲目比对。
-   - 知识库 Tab（`kind:kb`）和临时 Tab（`kind:temp`）绝不向 `config.workspace` 写回持久化路径。
-   - `tab.sessionId` 只能经 `repointTabSession(tab, nextId, { carryDraft })` 改写：switch（换会话展示，草稿留在各自桶）与 repair（槽位换后端身份，草稿跟着搬）由参数表达，禁止调用点各自手写赋值 + 搬运（`frontend/src/App.vue`）。
-3. **前端 WebView2 交互区**:
-   - `.app-header` 声明了 `--wails-draggable: drag`；其内部所有可交互元素（Tab 标签、按钮、输入框、下拉菜单）必须显式标记 `--wails-draggable: no-drag`，否则点击/拖拽手势会被 WebView2 窗口拖拽劫持。
-4. **单测安全隔离**:
-   - 单元测试**绝对禁止**读写或删除真实磁盘路径（`~`、`~/.ally_agent`、源码树、系统目录）。所有文件系统操作必须在 `t.TempDir()` 沙箱内完成，读取用户主目录的逻辑需同时设 `t.Setenv("HOME", dir)` 与 `t.Setenv("USERPROFILE", dir)` 隔离——Windows 的 `os.UserHomeDir()` 只认后者，少设一个隔离就静默失效（代码拿去真实家目录，测试却报认证/找不到文件）。
-5. **本地编辑契约 (Edit Protocol)**:
-   - 模型侧修改文件必须先 `read` 获取 `version` token，再调用 `edit`（单次调用修改单一文件；跨文件修改在同轮返回中并行调用 `edit`，由后端执行原子校验与批次写入）。
-6. **本地文本缓存必须结构性有界**:
-   - 输入历史一类本地文本缓存只有两种合法形态：结构性有界（每桶条数上限 + 单条长度上限 + 全库字符预算 + 工作区移除时显式弃桶，收口在 `frontend/src/utils/promptHistoryStore.mjs`）或明说重启即丢。只做一半 = 配额慢性泄露或丢用户数据。
-7. **前端渲染压力 (GPU / 主线程)**:
-   - 动画**只允许** `transform` / `opacity`（纯合成，跳过 Layout 与 Paint）；`transition: left, transform` 这类混写会让整段动画退化回 CPU，等价于没优化。改尺寸/位置用 `transform` 而非 `top/left/width/height`；阴影动画改用伪元素承载阴影、只动 `opacity`。
-   - `will-change` / `translateZ(0)` 是提示器不是加速器：每多一层 = 多一张 GPU 纹理（显存 + 光栅化 + 上传）。必须交互开始时动态加、结束后移除；**禁止**在 CSS 里静态写在长列表每一项上（图层爆炸）。
-   - `backdrop-filter` / `filter: blur()` 成本 = 面积 × 半径，是全屏级开销，且叠加动画或背后内容滚动时逐帧重算。禁止嵌套、禁止糊全屏遮罩层（现有 `.n-modal-mask` / `.n-drawer-mask` 显式 `none` 是正确先例）、禁止在滚动区域上新增视口级毛玻璃；新增大面积模糊前必须先测量。玻璃半径收口在 `--ally-glass-blur`，新增玻璃表面只引用该变量，不就地写裸 `blur(Npx)`。
-   - 长列表**先限长、再跳过**，不是先虚拟化：结构性上限收口在一处（`displaySourceMessages`：默认 180 行、展开归档 360 行）+ 离屏跳过 `content-visibility: auto` 配 `contain-intrinsic-size: auto <估计值>`（`auto` 记住实测高度，估计值只服务首次出现；现覆盖工具卡 / diff 行 / mermaid 卡 / 消息行 / 会话行）。**不要**用虚拟滚动替换：节点不在位会破坏原生查找与跨消息选取、`[data-user-question]` 上下跳转、mermaid 的按节点注册与流式贴底；只有“列表无界且行高可估”时才考虑，且必须逐项验上述行为。加 `content-visibility` / `contain` 前先确认该元素**本来就是**定位祖先、且无故意溢出的子元素（否则包含块与裁剪边界会静默改变）。另：`content-visibility` 会让 **0 高（空壳）行不再自折叠外边距**，因此渲染不出东西的行根本不能当作消息：同一份判定（`isRenderableMessage` / `assistantRowRenderState`）管着显示列表、归档额度与计数、以及运行时/落盘保留，显示列表缓存的失效判据必须与它同源（否则缓存过的列表会跟真实渲染静默分叉，见 LESSONS）。
-   - 避免强制同步布局（先批量读、再批量写，别在循环里交替读写布局属性）；滚动/resize 事件 `passive` + 节流，测量改用 `IntersectionObserver` / `ResizeObserver`；动画驱动用 `requestAnimationFrame`，禁止 `setInterval`。
-   - 窗口不可见即暂停：无限动画必须监听 `visibilitychange` 挂起（正例：`SakuraBreeze.vue`）；整层卸载优于隐藏。
-   - 验收口径是 Rendering 面板的对照实验（Paint flashing / Layer borders / Frame rendering stats，开关单条声明看差值），不看主观感觉。
-
-## 5. 模型协议铁律 (Model Protocol Rules)
-
-对接 provider 的约定，违反即静默降级或线上 400：
-
-1. **思考档位**:
-   - “关闭思考”（`off`）是独立档位，不得归一到 `auto`：auto = 交给供应商决定（Ally 侧按“在思考”处理，只是不发等级），off = 明确要求别思考。
-   - 同一档位在不同协议上拼写不同，映射**必须收口在一处**：Chat/Responses 走 `reasoningWireForAdapter`（`reasoningWirePlan`），Anthropic 走 `configureAnthropicThinking`；禁止适配器各自拼写。UI 下拉只产 `reasoningEffortLevels` 里的规范值，别名容错只归后端。
-2. **回填判据是端点，不是模型名单**:
-   - 思考字段（`reasoning_content` 等）按“每条助手消息”校验（DeepSeek/Kimi）：除 OpenAI 官方端点外一律回填显式空串（`chatReasoningBackfillKey` + `chatRequestRewriteTransport`）；除官方端点之外还有一处例外——“关闭思考”档位（请求本身要求对方别思考，无内容可回传）。
-   - 供应商校验的是字段**存在性**，而 `omitempty` 会丢空串键，所以只能请求侧改写；改写必须确定且幂等，否则破坏 prompt/KV 前缀缓存。
-3. **内部 LLM 调用不得改写用户的思考档位**:
-   - 压缩总结等内部调用原样传 `cfg`。写死档位会与设置静默漂移，且强推“关闭思考”会让必思考模型直接 400。
-4. **提示词前缀单调递增，严禁瞬态注入打断缓存**:
-   - 计划任务与进度完全由内置 `plan` 工具的调用与工具结果（Tool Message）自然持久化在历史中，不再向请求前缀动态注入任何瞬态计划快照；保证消息序列 100% 严格单调追加，确保最大化的 KV 前缀缓存复用。
-5. **工具调用身份以 id 为准，index 只做定位**:
-   - 流式 tool_calls 归并：带 id 的碎片未命中已有调用即新调用（同一调用不会换 id）；不带 id 时才用 index 定位续片、并用名字兜底判断是否另一个调用。**禁止把 index 当身份**——中转常把一个 index 复用给多个调用，index 优先会把两个调用焊成一个（名字与参数一起拼坏）。id 唯一性由 `toolcall.CallIDFoundry` 集中铸造（重复变 `id__2`、缺失则铸造、按对话历史播种）；Responses 侧同理：item id 是身份，output_index 只定位，命中 index 时不得回写 item 表。
+- Windows 开发命令优先使用 Git Bash，搜索文本和文件优先 rg。
+- 根目录 `main.go` 仅保留入口；原生页面、状态和组件在 `internal/desktop`，页面文件使用 `page_*.go`。共享样式和组件分别收口在 `theme.go` 与 `widgets.go`。
+- 原生界面仅使用 github.com/egoist/mygo/ui；禁止创建 WebView、HTML/JS 前端或引入 Wails。
+- Agent 模块路径保持 ally-dev。`internal/desktop` 是上层宿主，可依赖 `internal/app`；工具及纯逻辑包不可反向依赖 app/desktop。app 内非 host_* 文件保持宿主中立，桌面宿主适配放 internal/app/host_*.go。
+- UI 状态只在主线程修改。后台结果经 Window.Update 发布；不得保存 Element 或把 Context 带入后台。动态控件构造前使用 c.Key。
+- 不在视图渲染期间读写磁盘、执行网络请求或启动无条件后台任务。素材通过 resources 包嵌入。
+- 所有测试读写在 t.TempDir，读取用户目录的测试同时隔离 HOME 和 USERPROFILE。运行全套测试时不要设置全局 ALLY_DATA_DIR，测试自己管理它。
+- 构建：bash build.sh；测试：CGO_ENABLED=0 go test -p 1 ./...；UI 检查：go run github.com/egoist/mygo/cmd/mygo@v0.7.1 vet .。
+- migration/legacy-host 保留旧 Wails 专用实现/测试作为迁移参考，不参与构建。dist 和 .tmp 为生成及本地调试目录，不提交。
+- 提交作者使用 ally agent <ally@agent.dev>；本实现推送 mygo 分支，不修改 main。

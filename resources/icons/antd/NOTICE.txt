@@ -1,0 +1,4 @@
+These SVG paths are extracted from @vicons/antd 0.13.0, the icon package used
+by the original Ally frontend. @vicons/antd is distributed under the MIT
+license and integrates Ant Design Icons: https://github.com/ant-design/ant-design-icons
+Package source: https://github.com/07akioni/xicons

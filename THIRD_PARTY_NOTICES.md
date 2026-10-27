@@ -1,26 +1,19 @@
 # Third-Party Notices
 
-Ally is licensed under GPL-3.0-only. Third-party components are not relicensed by Ally and remain governed by their own license terms.
+Ally is licensed under GPL-3.0-only. Third-party components and artwork retain their respective licenses.
+
+## Native UI and Go dependencies
+
+The native desktop uses `github.com/egoist/mygo v0.7.1`. Go module versions are recorded in `go.mod` and `go.sum`; dependency license texts and copyright notices remain in their module distributions. Agent dependencies continue to include `mvdan.cc/sh/v3` (BSD-3-Clause) and `github.com/go-git/go-git/v5` (Apache-2.0).
+
+## Icons
+
+The sidebar and GitHub SVG paths are extracted from the original frontend's `@vicons/antd 0.13.0`, which integrates Ant Design Icons under the MIT license. See `resources/icons/LICENSE`, `resources/icons/NOTICE.txt`, and `resources/icons/antd/NOTICE.txt`.
+
+## Avatar artwork
+
+Character images are preserved from the original Ally frontend. Each character's source, attribution, and license conditions remain in its directory under `resources/avatar/`. These include artwork with noncommercial and share-alike conditions. The per-character notices must accompany redistribution; the artwork is not relicensed by the application's GPL license. The `resources` package embeds the accompanying notices along with the images.
 
 ## ripgrep
 
-Release packages bundle `rg` from the official [BurntSushi/ripgrep](https://github.com/BurntSushi/ripgrep) archives vendored in `tools/ripgrep/`. macOS universal packages combine the two official architecture binaries. Run the bundled `rg --version` to see its version.
-
-Copyright (c) 2015 Andrew Gallant.
-
-ripgrep is distributed under either the MIT License or the Unlicense. Copies of both texts are included in `third_party/ripgrep/` and in every Ally release package.
-
-## Direct Go parser dependencies
-
-- `mvdan.cc/sh/v3 v3.13.1` — BSD-3-Clause; Bash shell AST parsing used by `internal/tools/command`.
-- `github.com/go-git/go-git/v5 v5.19.2` — Apache-2.0; the `plumbing/format/gitignore` matcher is used for root `.gitignore` rules.
-
-Their license texts and copyright notices are retained in the Go module distributions recorded by `go.mod` and `go.sum`.
-
-## Font assets
-
-Font files under `frontend/src/assets/fonts/` are distributed under the SIL Open Font License 1.1. The full license text is stored at `frontend/src/assets/fonts/OFL.txt`.
-
-## Go and frontend dependencies
-
-Ally uses open-source Go modules and npm packages, including Wails, Vue, Naive UI, Markdown-It, highlight.js, and Mermaid. Their copyright and license notices remain in their source distributions and package metadata. The dependency versions used for a build are recorded in `go.mod`, `go.sum`, `frontend/package.json`, and `frontend/package-lock.json`.
+Official ripgrep release archives are retained under `tools/ripgrep/`. Copyright (c) 2015 Andrew Gallant. Ripgrep is available under the MIT License or the Unlicense; both texts are retained in `third_party/ripgrep/`. See `tools/ripgrep/README.md` for archive provenance.

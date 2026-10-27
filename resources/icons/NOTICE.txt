@@ -1,0 +1,2 @@
+Icons derived from Ant Design Icons, extracted from @vicons/antd 0.13.0 used by the original Ally frontend. Ant Design Icons is distributed under the MIT license in the accompanying LICENSE file.
+Sources: https://github.com/ant-design/ant-design-icons and https://github.com/07akioni/xicons.

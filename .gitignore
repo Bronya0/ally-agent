@@ -1,46 +1,6 @@
-# ── Generated Wails bindings (regenerated on each build) ──
-frontend/bindings/
-frontend/wailsjs/
-
-# ── Build output ──
-bin/
-build/bin/
-frontend/dist/
-# 在仓库根直接 go build 会按模块名产出这个二进制（wails3 build 走 bin/）
-/ally-dev
-
-# ── Dependencies ──
-frontend/node_modules/
-node_modules/
-frontend/package.json.md5
-frontend/package-lock.json
-
-# ── Dotfiles/dot-directories (except .github, .gitignore, .gitattributes) ──
-.*
-!.github/
-!.gitignore
-!.gitattributes
-
-# ── Editors ──
-*.swp
-*.swo
-*~
-
-# ── OS files ──
-Thumbs.db
-
-# ── Logs ──
-*.log
-
-# ── Wails build cache ──
+/dist/
+/.tmp/
 *.exe
-*.dll
-nul
-temp_demo/
-temp_test.txt
-nul
-
-# ── Local scratch material (not part of the app) ──
-# h5ppt deck workspace: kept on disk for reference, never published.
-h5ppt-agent-dev/
-h5ppt-agent-dev.zip
+*.log
+/coverage.out
+.DS_Store

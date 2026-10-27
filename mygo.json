@@ -1,0 +1,8 @@
+{
+  "name": "Ally Native",
+  "slug": "ally-native",
+  "identifier": "io.github.bronya0.ally.native",
+  "version": "0.1.0",
+  "icon": "resources/icon.png",
+  "out": "dist"
+}

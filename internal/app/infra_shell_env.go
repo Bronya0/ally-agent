@@ -222,6 +222,7 @@ func runLoginShellText(file string, args []string, timeout time.Duration) (strin
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, file, args...)
+	hideCommandWindow(cmd)
 	buf := &limitedBuffer{limit: maxLoginShellEnvOutput}
 	cmd.Stdout = buf
 	cmd.Stderr = io.Discard

@@ -1,0 +1,26 @@
+GLM fox-maid avatar (CrossPet)
+=============================
+
+Third-party derivative notice (CC BY-NC-SA 4.0 attribution chain)
+
+Source asset: lokicorvus/crosspet, revision 6e98970f6ff9b44e8ac85215241cabcd78f67d92,
+`characters/glm/{idle,proud,stretch,happy}.webp` (<https://github.com/lokicorvus/crosspet>).
+
+Ally processing: proportionally resized from 640px to 320px high, without
+cropping; re-encoded with Sharp as WebP (quality 90, alpha quality 100, effort 6).
+Transparency and a common canvas height are preserved for pose switching.
+
+Attribution chain:
+
+1. Character design: the black fox-maid GLM-girl by ZipZipPipe (Bilibili). The
+   「心机涨价狐」 personality and its signature actions are CrossPet's own
+   derivative take on the community's impression of Zhipu.
+2. Illustration: CrossPet, redrawn with an AI image generator from the design
+   above (<https://github.com/lokicorvus/crosspet>).
+
+License: CC BY-NC-SA 4.0, as declared in the upstream `characters/LICENSE.md`:
+attribution required, non-commercial use only, derivatives shared under the same
+license.
+
+"GLM" and "ZCode" are trademarks of their respective owners. This is an
+unofficial fan project, not affiliated with or endorsed by Zhipu AI.
