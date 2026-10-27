@@ -11,8 +11,28 @@ permissions:
   contents: read
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: build.bat
+            shell: cmd
+            artifact: ally-native-windows
+            path: mygo/dist/ally-native.exe
+          - os: macos-latest
+            script: bash build-macos.sh
+            artifact: ally-native-macos
+            path: mygo/dist/ally-native-darwin-*
+          - os: ubuntu-latest
+            script: bash build-linux.sh
+            artifact: ally-native-linux
+            path: mygo/dist/ally-native-linux-amd64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: mygo
     env:
       CGO_ENABLED: "0"
       GOMAXPROCS: "2"
@@ -21,7 +41,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: mygo/go.mod
           cache: true
       - name: Test
         shell: bash
@@ -30,9 +50,9 @@ jobs:
         shell: bash
         run: go run github.com/egoist/mygo/cmd/mygo@v0.7.1 vet .
       - name: Build
-        shell: bash
-        run: bash build.sh
+        shell: ${{ matrix.shell || 'bash' }}
+        run: ${{ matrix.script }}
       - uses: actions/upload-artifact@v4
         with:
-          name: ally-native-windows
-          path: dist/ally-native-v2.exe
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}

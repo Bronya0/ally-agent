@@ -11,16 +11,12 @@ go run .
 bash build.sh
 ```
 
-Windows 构建产物为 `dist/ally-native-v2.exe`。也可给构建脚本传入输出路径：
-
-```bash
-bash build.sh dist/ally-native.exe
-```
+Windows 构建产物固定为 `dist/ally-native.exe`，后续构建覆盖同名文件，不添加版本、日期或 `fixed` 等后缀。构建脚本不接受自定义输出文件名。
 
 默认读取原版的 `~/.ally_agent` 配置和会话。同一数据目录只允许一个进程运行，独立试用可指定目录：
 
 ```bash
-ALLY_DATA_DIR="D:/ally-native-data" ./dist/ally-native-v2.exe
+ALLY_DATA_DIR="D:/ally-native-data" ./dist/ally-native.exe
 ```
 
 Enter 发送，Ctrl+Enter 换行，Esc 中断当前会话或工具调用；弹窗打开时 Esc 优先关闭弹窗。标签栏支持鼠标滚轮横向滚动。侧栏和资源树宽度可拖拽调整并自动保存。
@@ -61,7 +57,7 @@ bash build.sh
 可用独立数据目录执行真实窗口启动检查：
 
 ```bash
-ALLY_DATA_DIR="D:/ally-native-smoke" ./dist/ally-native-v2.exe --smoke
+ALLY_DATA_DIR="D:/ally-native-smoke" ./dist/ally-native.exe --smoke
 ```
 
 `--smoke` 创建原生窗口，约四秒后保存并退出。生成文件在 `dist/`，本地调试文件在 `.tmp/`，均不提交。

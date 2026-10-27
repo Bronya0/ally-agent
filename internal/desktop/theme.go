@@ -31,20 +31,32 @@ const (
 	radiusControl float32 = 7
 	radiusSmall   float32 = 5
 
-	heightHeader    float32 = 44
-	heightRail      float32 = 44
-	heightControl   float32 = 28
-	heightRow       float32 = 26
-	heightTabRow    float32 = 32
-	widthModalWide  float32 = 760
-	widthModal      float32 = 580
-	widthModalSmall float32 = 460
+	heightHeader            float32 = 44
+	heightRail              float32 = 44
+	heightControl           float32 = 28
+	heightRow               float32 = 26
+	heightTabRow            float32 = 32
+	heightRailItem          float32 = 34
+	heightRailItemCollapsed float32 = 42
+	widthRailCollapsed      float32 = 44
+	sizeRailBadge           float32 = 34
+	sizeRailIcon            float32 = 17
+	sizeRailIconCollapsed   float32 = 20
+	sizeRailToggleIcon      float32 = 16
+	radiusRailBadge         float32 = 6
+	widthModalWide          float32 = 760
+	widthModal              float32 = 580
+	widthModalSmall         float32 = 460
 
 	fsPageTitle float32 = 20
 	fsSection   float32 = 13
 	fsBody      float32 = 12.5
 	fsSmall     float32 = 11.5
 	fsTiny      float32 = 10.5
+	// Chat-parity tokens, mirroring main's CSS variables (--ally-tool-font-size
+	// 15px for tool verbs, --ally-aux-font-size 12px for support lines).
+	fsTool float32 = 15
+	fsAux  float32 = 12
 )
 
 // Semantic colours derived from the theme rather than fixed per page.

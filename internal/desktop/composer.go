@@ -531,7 +531,8 @@ func (a *desktop) composerStatusRow(c *ui.Context, t *conversation) {
 				label = t.Status
 			}
 			if label != "" {
-				ui.Text(c, label).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine()
+				// Main's .composer-run-label: 13px semibold, 18px line height.
+				ui.Text(c, label).FontSize(13).TextColor(c.Theme().TextMuted).LineHeight(18.0 / 13).SingleLine()
 			}
 		} else if a.status != "" && a.status != "就绪" && a.status != "操作完成" {
 			ui.Text(c, short(a.status, 90)).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Tooltip(a.status)
@@ -554,21 +555,41 @@ func lastUserPrompt(t *conversation) string {
 	return ""
 }
 
-// runSpinner is the three-bar activity mark used by the original composer.
+// runSpinner mirrors main's RunSpinner: three 3px bars in a fixed 16px box,
+// rest 9px, peak 16px, one wave per 1.3s travelling left->right. The keyframes
+// are main's (rest at 0/80/100%, peak at 40%), neighbours staggered 208ms so
+// the three phases never all freeze inside the still window together. The box
+// height is frozen at the peak: only the bar scale moves, so the status row
+// never grows or shifts. The old height-driven sine changed the row height
+// every frame and ran visibly too fast.
 func (a *desktop) runSpinner(c *ui.Context) {
-	now := c.Now()
-	box := ui.Box(c).Width(26).Height(16).Center()
+	const (
+		cycle = 1300 * time.Millisecond
+		step  = 208 * time.Millisecond
+		rest  = float32(9.0 / 16)
+	)
+	box := ui.Box(c).Width(15).Height(16).Center()
 	box.Children(func() {
 		ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
 			for i := 0; i < 3; i++ {
-				phase := float64(now.UnixMilli())/1300 + float64(i)*0.16
-				frac := phase - math.Floor(phase)
-				h := float32(6 + 9*math.Abs(math.Sin(frac*6.283)))
-				ui.Box(c).Width(3).Height(h).Radius(1).Background(c.Theme().TextMuted)
+				bar := ui.Box(c).Width(3).Height(16).Radius(1).Background(c.Theme().TextMuted)
+				// Negative-looking phase: bar i starts partway through its
+				// cycle, leftmost furthest ahead, so the wave enters mid-flight
+				// instead of jumping from rest. Sampled linear for the same
+				// reason as the tool dot: Loop's ease would bend the phase.
+				offset := time.Duration(2-i) * step
+				pulse := bar.Loop(fmt.Sprintf("run-bar-%d", i), cycle, ui.Linear)
+				frac := math.Mod(float64(pulse)+float64(offset)/float64(cycle), 1)
+				scale := rest
+				if frac < 0.8 {
+					// 0->40% rest climbs to peak, 40%->80% falls back; the
+					// cosine eases both ends like the CSS keyframes.
+					scale = rest + (1-rest)*float32(0.5-0.5*math.Cos(frac/0.8*2*math.Pi))
+				}
+				bar.Scale(1, scale)
 			}
 		})
 	})
-	c.AnimationFrame()
 }
 
 func (a *desktop) retryBanner(c *ui.Context, info *retryInfo) {
@@ -685,84 +706,142 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 		st.ModelOpen = !st.ModelOpen
 		if st.ModelOpen {
 			st.ModelSearch = ""
+			st.ModelGroup = ""
 		}
 	})
-	popoverPanel(c, btn, &st.ModelOpen, 340, func() {
-		ui.TextInput(c.Key("model-menu-search"), &st.ModelSearch).Placeholder("搜索模型或供应商").Label("搜索模型或供应商").FillWidth()
-		query := strings.ToLower(strings.TrimSpace(st.ModelSearch))
-		matches := func(model backend.ModelConfig) bool {
-			return query == "" || strings.Contains(strings.ToLower(model.ProviderName+" "+model.DisplayName+" "+model.Model), query)
-		}
-		ui.Scroll(c).MaxHeight(300).Children(func() {
-			ui.Column(c).Children(func() {
-				recent := append([]string(nil), a.prefs.RecentModels...)
-				if len(recent) == 0 && a.config.LastUsedModel != nil {
-					for _, model := range a.config.Models {
-						if sameModelIdentity(modelIdentity(model), *a.config.LastUsedModel) {
-							recent = append(recent, modelOption(model))
-							break
+	ui.PopoverBase(c, btn, &st.ModelOpen, func(panel ui.Element) {
+		popoverChrome(c, panel, 340)
+		st.FlyoutHot = false
+		ui.Column(c).FillWidth().Children(func() {
+			ui.TextInput(c.Key("model-menu-search"), &st.ModelSearch).Placeholder("搜索模型或供应商").Label("搜索模型或供应商").FillWidth()
+			query := strings.ToLower(strings.TrimSpace(st.ModelSearch))
+			matches := func(model backend.ModelConfig) bool {
+				return query == "" || strings.Contains(strings.ToLower(model.ProviderName+" "+model.DisplayName+" "+model.Model), query)
+			}
+			ui.Scroll(c).MaxHeight(300).Children(func() {
+				ui.Column(c).Children(func() {
+					recent := append([]string(nil), a.prefs.RecentModels...)
+					if len(recent) == 0 && a.config.LastUsedModel != nil {
+						for _, model := range a.config.Models {
+							if sameModelIdentity(modelIdentity(model), *a.config.LastUsedModel) {
+								recent = append(recent, modelOption(model))
+								break
+							}
 						}
 					}
-				}
-				if len(recent) == 0 && t.Model != "" {
-					recent = append(recent, t.Model)
-				}
-				shownRecent := false
-				for _, identity := range recent {
+					if len(recent) == 0 && t.Model != "" {
+						recent = append(recent, t.Model)
+					}
+					shownRecent := false
+					for _, identity := range recent {
+						for i, model := range a.config.Models {
+							if modelOption(model) != identity || !matches(model) {
+								continue
+							}
+							if !shownRecent {
+								ui.Text(c, "最近使用").FontSize(fsTiny).TextColor(c.Theme().TextMuted).Padding(6, 10)
+								shownRecent = true
+							}
+							model := model
+							name := model.DisplayName
+							if name == "" {
+								name = model.Model
+							}
+							popoverItem(c, fmt.Sprintf("model-recent-%d", i), name, model.ProviderName, modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) })
+						}
+					}
+					if shownRecent {
+						divider(c)
+					}
+					groups := map[string][]int{}
 					for i, model := range a.config.Models {
-						if modelOption(model) != identity || !matches(model) {
-							continue
+						if matches(model) {
+							provider := strings.TrimSpace(model.ProviderName)
+							if provider == "" {
+								provider = "OpenAI Compatible"
+							}
+							groups[provider] = append(groups[provider], i)
 						}
-						if !shownRecent {
-							ui.Text(c, "最近使用").FontSize(fsTiny).TextColor(c.Theme().TextMuted).Padding(6, 10)
-							shownRecent = true
-						}
-						model := model
-						name := model.DisplayName
-						if name == "" {
-							name = model.Model
-						}
-						popoverItem(c, fmt.Sprintf("model-recent-%d", i), name, model.ProviderName, modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) })
 					}
-				}
-				groups := map[string][]int{}
-				for i, model := range a.config.Models {
-					if matches(model) {
-						provider := strings.TrimSpace(model.ProviderName)
-						if provider == "" {
-							provider = "OpenAI Compatible"
-						}
-						groups[provider] = append(groups[provider], i)
+					names := make([]string, 0, len(groups))
+					for name := range groups {
+						names = append(names, name)
 					}
-				}
-				names := make([]string, 0, len(groups))
-				for name := range groups {
-					names = append(names, name)
-				}
-				sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
-				for _, provider := range names {
-					ui.Text(c, provider).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Padding(8, 10, 2)
-					indices := groups[provider]
-					sort.SliceStable(indices, func(i, j int) bool {
-						return strings.ToLower(a.config.Models[indices[i]].Model) < strings.ToLower(a.config.Models[indices[j]].Model)
-					})
-					for _, i := range indices {
-						model := a.config.Models[i]
-						name := model.DisplayName
-						if name == "" {
-							name = model.Model
-						}
-						popoverItem(c, fmt.Sprintf("model-choice-%d", i), name, "", modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) })
+					sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
+					for _, provider := range names {
+						indices := groups[provider]
+						sort.SliceStable(indices, func(i, j int) bool {
+							return strings.ToLower(a.config.Models[indices[i]].Model) < strings.ToLower(a.config.Models[indices[j]].Model)
+						})
+						a.modelGroupRow(c, t, st, provider, indices)
 					}
-				}
-				if len(groups) == 0 {
-					fieldNote(c, "没有匹配的模型")
+					if len(groups) == 0 {
+						fieldNote(c, "没有匹配的模型")
+					}
+				})
+			})
+			divider(c)
+			popoverItem(c, "model-manage", "管理模型", "", false, func() { st.ModelOpen = false; a.changePage("models") })
+		})
+		// 分组浮层可能盖住本面板右缘，指针在面板或浮层任一处都保持展开；
+		// 两处都离开才收起，避免指针穿过缝隙时浮层闪退。
+		if !panel.Hovered() && !st.FlyoutHot {
+			st.ModelGroup = ""
+		}
+	})
+}
+
+// modelGroupRow is one provider in the model menu. Hovering it opens a flyout
+// on its right with that provider's models, so the menu lists groups only.
+func (a *desktop) modelGroupRow(c *ui.Context, t *conversation, st *chatUI, provider string, indices []int) {
+	th := c.Theme()
+	row := ui.ButtonBase(c.Key("model-group-"+provider)).FillWidth().MinHeight(32).Padding(6, 10).Justify(ui.Start).Radius(radiusSmall).Cursor(ui.CursorPointer).Label(provider)
+	open := st.ModelGroup == provider
+	if row.Hovered() {
+		st.ModelGroup = provider
+		open = true
+	}
+	hasActive := false
+	for _, i := range indices {
+		if modelOption(a.config.Models[i]) == t.Model {
+			hasActive = true
+		}
+	}
+	if open {
+		row.Background(th.SurfaceHover)
+	}
+	row.Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			name := ui.Text(c, provider).FontSize(fsSmall).SingleLine().Grow(1)
+			if hasActive {
+				name.TextColor(th.Accent)
+			}
+			ui.Text(c, fmt.Sprint(len(indices))).FontSize(fsTiny).TextColor(th.TextMuted)
+			iconGlyph(c, "chevron", 10).TextColor(th.TextMuted)
+		})
+	})
+	ui.PopoverBase(c.Key("model-flyout-"+provider), row, &open, func(panel ui.Element) {
+		panel.AttachTo(row, ui.AnchorTopEnd, ui.AnchorTopStart).MarginStart(-6)
+		popoverChrome(c, panel, 260)
+		if panel.Hovered() {
+			st.FlyoutHot = true
+		}
+		ui.Scroll(c).MaxHeight(360).Children(func() {
+			ui.Column(c).FillWidth().Children(func() {
+				for _, i := range indices {
+					model := a.config.Models[i]
+					name := model.DisplayName
+					if name == "" {
+						name = model.Model
+					}
+					popoverItem(c, fmt.Sprintf("model-choice-%d", i), name, "", modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) })
 				}
 			})
 		})
-		divider(c)
-		popoverItem(c, "model-manage", "管理模型", "", false, func() { st.ModelOpen = false; a.changePage("models") })
 	})
+	if !open && st.ModelGroup == provider {
+		st.ModelGroup = ""
+	}
 }
 
 func (a *desktop) selectChatModel(t *conversation, model backend.ModelConfig) {
@@ -1022,30 +1101,53 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 			ui.Text(c, fmt.Sprintf("累计输入 %s / 输出 %s", fmtK(st.Usage.InputTokens), fmtK(st.Usage.OutputTokens))).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
 		})
 		divider(c)
-		popoverItem(c, "context-compact", "压缩上下文", "", false, func() {
-			if !t.Busy {
-				st.ContextOpen = false
-				a.compact(t, false)
-			}
+		ui.Column(c).FillWidth().Padding(4, 10, 6).Children(func() {
+			ui.Grid(c.Key("context-compact-grid")).Columns(2).Gap(6).Children(func() {
+				contextCompactButton(c, "context-compact", "压缩上下文", true, t.Busy, "压缩对话上下文，用摘要替换历史消息", func() {
+					st.ContextOpen = false
+					a.compact(t, false)
+				})
+				contextCompactButton(c, "context-fast-compact", "压缩上下文(快速)", true, t.Busy, "本地裁剪旧回复、工具结果与思考，保留最近内容，不调用模型", func() {
+					st.ContextOpen = false
+					a.compact(t, true)
+				})
+				contextCompactButton(c, "context-lessons", "压缩教训", false, t.Busy, "压缩并总结项目经验教训", func() {
+					st.ContextOpen = false
+					a.send(t, "请压缩并总结这个项目的经验教训（LESSONS.md）。")
+				})
+				contextCompactButton(c, "context-graph", "更新图谱", false, t.Busy, "更新 CODEGRAPH.md 导航", func() {
+					st.ContextOpen = false
+					a.send(t, "请更新 CODEGRAPH.md，让导航与当前代码一致。")
+				})
+			})
 		})
-		popoverItem(c, "context-fast-compact", "快速压缩上下文", "", false, func() {
-			if !t.Busy {
-				st.ContextOpen = false
-				a.compact(t, true)
-			}
-		})
-		popoverItem(c, "context-lessons", "压缩教训", "", false, func() {
-			if !t.Busy {
-				st.ContextOpen = false
-				a.send(t, "请压缩并总结这个项目的经验教训（LESSONS.md）。")
-			}
-		})
-		popoverItem(c, "context-graph", "更新图谱", "", false, func() {
-			if !t.Busy {
-				st.ContextOpen = false
-				a.send(t, "请更新 CODEGRAPH.md，让导航与当前代码一致。")
-			}
-		})
+	})
+}
+
+func contextCompactButton(c *ui.Context, key, label string, primary, disabled bool, tip string, action func()) {
+	// 对齐 main 的 .context-compact-btn：透明底 + 1px 边框 + 6px 圆角，
+	// padding 2px 10px，12px 字，前两个主操作走主题高亮色。
+	t := c.Theme()
+	b := ui.ButtonBase(c.Key(key)).FillWidth().Padding(2, 10).Radius(6).
+		Border(1, t.Border).Center().Label(label).Tooltip(tip).Cursor(ui.CursorPointer).Disabled(disabled)
+	if primary {
+		b.TextColor(t.Accent)
+	} else {
+		b.TextColor(t.TextMuted)
+	}
+	if disabled {
+		b.Opacity(0.45)
+	} else if b.Hovered() {
+		b.Background(t.SurfaceHover)
+	}
+	b.OnClick(func() {
+		if disabled {
+			return
+		}
+		action()
+	})
+	b.Children(func() {
+		ui.Text(c, label).FontSize(12).SingleLine()
 	})
 }
 

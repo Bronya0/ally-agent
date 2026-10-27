@@ -8,6 +8,7 @@ package desktop
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	backend "ally-dev/internal/app"
 	"github.com/egoist/mygo"
@@ -37,7 +38,7 @@ func sectionTitle(c *ui.Context, s string) ui.Element {
 // ---- Buttons -------------------------------------------------------------
 
 func flat(c *ui.Context, s string) ui.Element {
-	return ui.Button(c, s).Background(ui.Transparent).Border(0, c.Theme().Border).Radius(radiusControl).FontSize(fsSmall)
+	return ui.Button(c, s).Background(ui.Transparent).Border(0, c.Theme().Border).Radius(radiusControl).FontSize(fsSmall).Cursor(ui.CursorPointer)
 }
 
 func flatKey(c *ui.Context, key any, s string) ui.Element {
@@ -45,19 +46,19 @@ func flatKey(c *ui.Context, key any, s string) ui.Element {
 }
 
 func ghost(c *ui.Context, s string) ui.Element {
-	return ui.Button(c, s).FontSize(fsSmall).Radius(radiusControl)
+	return ui.Button(c, s).FontSize(fsSmall).Radius(radiusControl).Cursor(ui.CursorPointer)
 }
 
 func primary(c *ui.Context, s string) ui.Element {
-	return ui.PrimaryButton(c, s).FontSize(fsSmall).Radius(radiusControl)
+	return ui.PrimaryButton(c, s).FontSize(fsSmall).Radius(radiusControl).Cursor(ui.CursorPointer)
 }
 
 func dangerButton(c *ui.Context, s string) ui.Element {
-	return ui.Button(c, s).FontSize(fsSmall).Radius(radiusControl).TextColor(colDanger())
+	return ui.Button(c, s).FontSize(fsSmall).Radius(radiusControl).TextColor(colDanger()).Cursor(ui.CursorPointer)
 }
 
 func iconButton(c *ui.Context, id, tip, name string, fn func()) ui.Element {
-	b := ui.ButtonBase(c.Key(id)).Size(30, 30).Center().Radius(radiusControl).Label(tip).Tooltip(tip).OnClick(fn)
+	b := ui.ButtonBase(c.Key(id)).Size(30, 30).Center().Radius(radiusControl).Label(tip).Tooltip(tip).Cursor(ui.CursorPointer).OnClick(fn)
 	if b.Hovered() {
 		b.Background(c.Theme().SurfaceHover)
 	}
@@ -65,7 +66,7 @@ func iconButton(c *ui.Context, id, tip, name string, fn func()) ui.Element {
 }
 
 func iconAction(c *ui.Context, id, tip, name string, size float32, fn func()) ui.Element {
-	b := ui.ButtonBase(c.Key(id)).Size(size, size).Center().Radius(radiusSmall).Label(tip).Tooltip(tip).OnClick(fn)
+	b := ui.ButtonBase(c.Key(id)).Size(size, size).Center().Radius(radiusSmall).Label(tip).Tooltip(tip).Cursor(ui.CursorPointer).OnClick(fn)
 	if b.Hovered() {
 		b.Background(c.Theme().SurfaceHover)
 	}
@@ -74,9 +75,52 @@ func iconAction(c *ui.Context, id, tip, name string, size float32, fn func()) ui
 
 func railIcon(c *ui.Context, name string, size float32) ui.Element {
 	if icon := originalRailIcons[name]; icon != nil {
-		return ui.Icon(c, icon).Size(size, size)
+		return ui.Icon(c, icon).Size(size, size).Shrink(0)
 	}
-	return iconGlyph(c, name, size)
+	return iconGlyph(c, name, size).Shrink(0)
+}
+
+// railNavigationButton keeps the collapsed icon slot separate from the
+// expanded label row, matching main's 20px glyph and centered 34px badge.
+func railNavigationButton(c *ui.Context, id, label, iconName string, expanded, active bool, trailing func()) ui.Element {
+	t := c.Theme()
+	b := ui.ButtonBase(c.Key(id)).FillWidth().Height(heightRailItem).Justify(ui.Start).Radius(radiusControl).Label(label).Cursor(ui.CursorPointer)
+	if !expanded {
+		b.Height(heightRailItemCollapsed).Center().Tooltip(label)
+	}
+	if active {
+		b.TextColor(t.Accent)
+	}
+	highlighted := active || b.Hovered()
+	if expanded && highlighted {
+		b.Background(t.SurfaceHover)
+	}
+	return b.Children(func() {
+		if !expanded {
+			badge := ui.Row(c).Size(sizeRailBadge, sizeRailBadge).Shrink(0).Center().Radius(radiusRailBadge)
+			if highlighted {
+				badge.Background(t.SurfaceHover)
+			}
+			badge.Children(func() { railIcon(c, iconName, sizeRailIconCollapsed) })
+			return
+		}
+		ui.Row(c).FillWidth().Padding(0, 8).Gap(10).AlignItems(ui.Center).Children(func() {
+			railIcon(c, iconName, sizeRailIcon)
+			ui.Text(c, label).FontSize(12.5).SingleLine()
+			if trailing != nil {
+				trailing()
+			}
+		})
+	})
+}
+
+func railToggleButton(c *ui.Context, id, tip, name string, fn func()) ui.Element {
+	b := ui.ButtonBase(c.Key(id)).Size(sizeRailBadge, sizeRailBadge).AlignSelf(ui.Center).Center().Radius(radiusRailBadge).
+		Label(tip).Tooltip(tip).TextColor(c.Theme().TextMuted).Cursor(ui.CursorPointer).OnClick(fn)
+	if b.Hovered() {
+		b.Background(c.Theme().SurfaceHover)
+	}
+	return b.Children(func() { iconGlyph(c, name, sizeRailToggleIcon).Shrink(0) })
 }
 
 func iconGlyph(c *ui.Context, name string, size float32) ui.Element {
@@ -350,23 +394,49 @@ func statusBadge(c *ui.Context, text, status string) ui.Element {
 
 // ---- Dialog scaffolding --------------------------------------------------
 
-func modalCard(c *ui.Context, open *bool, width float32, build func()) ui.Element {
+// modalTransition is the single enter/exit animation for every modal: the
+// panel fades in while rising 8px, and sinks back out on close. One place
+// owns it so all dialogs open and close the same way; transform+opacity only,
+// so no layout is disturbed. ReduceMotion is honoured by the framework.
+func modalTransition() ui.ElementTransition {
+	return ui.ElementTransition{
+		Duration: 160 * time.Millisecond,
+		Enter:    &ui.Motion{Y: 8},
+		Exit:     &ui.Motion{Y: 8},
+	}
+}
+
+// modalBackdrop dims the window behind every dialog.
+func modalBackdrop(backdrop ui.Element) {
+	backdrop.Background(ui.RGBA(0, 0, 0, 0.48))
+}
+
+// modalPanelChrome styles a dialog panel; favours a shared look with one
+// call. The Transition tracks the panel by its position among the overlay
+// children, which is stable: each dialog's panel is its overlay's content.
+func modalPanelChrome(c *ui.Context, panel ui.Element, width float32) {
 	w, h := c.Size()
+	panel.Width(width).MaxWidth(max(200, w-48)).MaxHeight(max(180, h-48)).Padding(padPage).
+		Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(radiusCard).Shadow(0, 10, 30, 0, ui.RGBA(0, 0, 0, 0.25)).
+		Transition(modalTransition())
+}
+
+func modalCard(c *ui.Context, open *bool, width float32, build func()) ui.Element {
+	_, h := c.Size()
 	return ui.DialogBase(c, open, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(0, 0, 0, 0.48))
-		panel.Width(width).MaxWidth(max(200, w-48)).MaxHeight(max(180, h-48)).Padding(padPage).
-			Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(radiusCard).Shadow(0, 10, 30, 0, ui.RGBA(0, 0, 0, 0.25))
+		modalBackdrop(backdrop)
+		modalPanelChrome(c, panel, width)
 		ui.Scroll(c).MaxHeight(max(120, h-92)).Children(func() { ui.Column(c).Gap(gapSection).Children(build) })
 	})
 }
 
 // formDialog pins the title and actions while only the form body scrolls.
 func formDialog(c *ui.Context, open *bool, width, preferredHeight float32, title, subtitle string, body, actions func(), onClose ...func()) ui.Element {
-	w, h := c.Size()
+	_, h := c.Size()
 	dialog := ui.DialogBase(c, open, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(0, 0, 0, 0.48))
-		panel.Width(width).MaxWidth(max(200, w-48)).Height(min(preferredHeight, max(240, h-48))).
-			Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(radiusCard).Shadow(0, 10, 30, 0, ui.RGBA(0, 0, 0, 0.25))
+		modalBackdrop(backdrop)
+		modalPanelChrome(c, panel, width)
+		panel.Height(min(preferredHeight, max(240, h-48)))
 		ui.Column(c).Fill().Children(func() {
 			ui.Row(c).Shrink(0).Padding(16, 20, 12).Gap(gapField).Children(func() {
 				ui.Column(c).Grow(1).Gap(2).Children(func() {
@@ -447,12 +517,15 @@ func statCard(c *ui.Context, id, title, big, detail string) {
 }
 
 // codeBlock renders read-only monospaced content with an optional line cap.
+// The 150px collapsed cap mirrors main's .tool-body so collapsed previews
+// stop at the same height in both clients.
 func codeBlock(c *ui.Context, id, content string, maxHeight float32) {
+	if maxHeight <= 0 || maxHeight > 150 {
+		maxHeight = 150
+	}
 	e := ui.Text(c.Key(id), content).Font(monoFamily).FontSize(fsSmall).
 		Selectable().FillWidth().Padding(8, 10).Background(c.Theme().Background).Radius(radiusSmall)
-	if maxHeight > 0 {
-		e.MaxHeight(maxHeight).Clip()
-	}
+	e.MaxHeight(maxHeight).Clip()
 }
 
 // inlineError is the recurring red detail line under failed operations.
@@ -532,13 +605,18 @@ func mygoMessage(title, detail, cancel, confirm string) (bool, error) {
 // selected palette instead of relying on the operating system's menu theme.
 func popoverPanel(c *ui.Context, anchor ui.Element, open *bool, width float32, build func()) {
 	ui.PopoverBase(c, anchor, open, func(panel ui.Element) {
-		panel.Width(width).MaxWidthPercent(90).MaxHeight(420).Padding(5).Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(radiusCard)
+		popoverChrome(c, panel, width)
 		ui.Column(c).FillWidth().Children(build)
 	})
 }
 
+// popoverChrome styles a popover panel; cascading flyouts share it with popoverPanel.
+func popoverChrome(c *ui.Context, panel ui.Element, width float32) {
+	panel.Width(width).MaxWidthPercent(90).MaxHeight(420).Padding(5).Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(radiusCard)
+}
+
 func popoverItem(c *ui.Context, key, text, detail string, selected bool, action func()) {
-	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(6, 10).Justify(ui.Start).Radius(radiusSmall).Label(text).OnClick(action)
+	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(6, 10).Justify(ui.Start).Radius(radiusSmall).Label(text).Cursor(ui.CursorPointer).OnClick(action)
 	if selected || b.Hovered() {
 		b.Background(c.Theme().SurfaceHover)
 	}
@@ -570,7 +648,7 @@ func (a *desktop) resizeDivider(c *ui.Context, key string, width *float32, direc
 }
 
 func windowAction(c *ui.Context, id, tip, icon string, action func()) ui.Element {
-	b := ui.ButtonBase(c.Key(id)).Size(46, 44).Center().Label(tip).Tooltip(tip).OnClick(action)
+	b := ui.ButtonBase(c.Key(id)).Size(46, 44).Center().Label(tip).Tooltip(tip).Cursor(ui.CursorPointer).OnClick(action)
 	if b.Hovered() {
 		b.Background(c.Theme().SurfaceHover)
 	}
@@ -578,7 +656,7 @@ func windowAction(c *ui.Context, id, tip, icon string, action func()) ui.Element
 }
 
 func footerBadge(c *ui.Context, id, name, value string, color ui.Color, tip string, action func()) ui.Element {
-	b := ui.ButtonBase(c.Key(id)).Height(22).Padding(1, 6).Radius(11).Border(1, c.Theme().Border).Background(c.Theme().Surface).Label(tip).Tooltip(tip).OnClick(action)
+	b := ui.ButtonBase(c.Key(id)).Height(22).Padding(1, 6).Radius(11).Border(1, c.Theme().Border).Background(c.Theme().Surface).Label(tip).Tooltip(tip).Cursor(ui.CursorPointer).OnClick(action)
 	if b.Hovered() {
 		b.Background(c.Theme().SurfaceHover)
 	}

@@ -8,5 +8,6 @@
 - 不在视图渲染期间读写磁盘、执行网络请求或启动无条件后台任务。素材通过 resources 包嵌入。
 - 所有测试读写在 t.TempDir，读取用户目录的测试同时隔离 HOME 和 USERPROFILE。运行全套测试时不要设置全局 ALLY_DATA_DIR，测试自己管理它。
 - 构建：bash build.sh；测试：CGO_ENABLED=0 go test -p 1 ./...；UI 检查：go run github.com/egoist/mygo/cmd/mygo@v0.7.1 vet .。
+- Windows 构建产物固定为 dist/ally-native.exe，不添加版本、日期或 fixed 等后缀；覆盖失败时处理文件占用，不得改名绕过。
 - migration/legacy-host 保留旧 Wails 专用实现/测试作为迁移参考，不参与构建。dist 和 .tmp 为生成及本地调试目录，不提交。
 - 提交作者使用 ally agent <ally@agent.dev>；本实现推送 mygo 分支，不修改 main。

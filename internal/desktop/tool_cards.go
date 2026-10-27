@@ -5,53 +5,56 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
 )
 
-// toolDescriptor is the single table that classifies tool cards: the verb, the
-// noun shown when the verb is not self-explanatory, whether the body expands,
-// and where the preview comes from. Cards never re-derive these per site.
+// toolDescriptor is the single table that classifies tool cards: the verb
+// shown for each state, whether the body expands, and where the preview
+// comes from. Cards never re-derive these per site.
 type toolDescriptor struct {
 	runningVerb string
 	doneVerb    string
-	noun        string
+	failedVerb  string
 	expandable  bool
 	showTiming  bool
 }
 
+// failedVerb exists because a card in error state must never claim
+// completion: "已编辑" on a failed edit misleads the reader.
 var toolTable = map[string]toolDescriptor{
-	"read":               {"读取中", "已读取", "读取", false, false},
-	"remote_read":        {"读取中", "已读取", "远程读取", false, false},
-	"edit":               {"编辑中", "已编辑", "编辑", true, false},
-	"create":             {"创建中", "已创建", "创建", true, false},
-	"delete":             {"删除中", "已删除", "删除", true, false},
-	"remote_delete_path": {"删除中", "已删除", "远程删除", true, false},
-	"remote_edit":        {"编辑中", "已编辑", "远程编辑", true, false},
-	"remote_create_file": {"创建中", "已创建", "远程创建", true, false},
-	"command":            {"运行中", "已运行", "命令", true, true},
-	"remote_run_command": {"运行中", "已运行", "远程命令", true, true},
-	"grep":               {"搜索中", "搜索", "搜索", false, false},
-	"list":               {"列目录中", "列目录", "列目录", true, false},
-	"glob":               {"匹配中", "匹配文件", "匹配文件", true, false},
-	"http_request":       {"请求中", "已请求", "HTTP", true, false},
-	"web_fetch":          {"抓取中", "已抓取", "网页", true, false},
-	"calculate":          {"计算中", "计算", "计算", false, false},
-	"plan":               {"更新中", "计划", "计划", false, false},
-	"skill":              {"加载中", "技能", "技能", false, false},
-	"ask":                {"提问中", "提问", "Ask", true, false},
-	"subagent":           {"委派中", "子代理", "子代理", true, true},
-	"ssh_cluster":        {"检查中", "SSH 集群", "SSH", true, true},
-	"service":            {"运行中", "后台服务", "服务", true, true},
-	"scheduled_task":     {"处理中", "定时任务", "任务", true, true},
-	"remote_transfer":    {"传输中", "已传输", "传输", true, true},
-	"remote_transfer_":   {"传输中", "已传输", "传输", true, true},
-	"screenshot":         {"截图中", "已截图", "截图", true, false},
-	"render_html":        {"渲染中", "已渲染", "渲染", true, true},
-	"wait":               {"等待中", "已等待", "等待", false, true},
-	"image_generate":     {"生成中", "已生成", "生图", true, true},
-	"image_edit":         {"编辑中", "已编辑", "生图编辑", true, true},
+	"read":               {"读取中", "已读取", "读取失败", false, false},
+	"remote_read":        {"读取中", "已读取", "远程读取失败", false, false},
+	"edit":               {"编辑中", "已编辑", "编辑失败", true, false},
+	"create":             {"创建中", "已创建", "创建失败", true, false},
+	"delete":             {"删除中", "已删除", "删除失败", true, false},
+	"remote_delete_path": {"删除中", "已删除", "远程删除失败", true, false},
+	"remote_edit":        {"编辑中", "已编辑", "远程编辑失败", true, false},
+	"remote_create_file": {"创建中", "已创建", "远程创建失败", true, false},
+	"command":            {"运行中", "已运行", "运行失败", true, true},
+	"remote_run_command": {"运行中", "已运行", "远程命令失败", true, true},
+	"grep":               {"搜索中", "搜索", "搜索失败", false, false},
+	"list":               {"列目录中", "列目录", "列目录失败", true, false},
+	"glob":               {"匹配中", "匹配文件", "匹配失败", true, false},
+	"http_request":       {"请求中", "已请求", "请求失败", true, false},
+	"web_fetch":          {"抓取中", "已抓取", "抓取失败", true, false},
+	"calculate":          {"计算中", "计算", "计算失败", false, false},
+	"plan":               {"更新中", "计划", "计划失败", false, false},
+	"skill":              {"加载中", "技能", "技能失败", false, false},
+	"ask":                {"提问中", "提问", "提问失败", true, false},
+	"subagent":           {"委派中", "子代理", "委派失败", true, true},
+	"ssh_cluster":        {"检查中", "SSH 集群", "SSH 检查失败", true, true},
+	"service":            {"运行中", "后台服务", "服务失败", true, true},
+	"scheduled_task":     {"处理中", "定时任务", "任务失败", true, true},
+	"remote_transfer":    {"传输中", "已传输", "传输失败", true, true},
+	"remote_transfer_":   {"传输中", "已传输", "传输失败", true, true},
+	"screenshot":         {"截图中", "已截图", "截图失败", true, false},
+	"render_html":        {"渲染中", "已渲染", "渲染失败", true, true},
+	"wait":               {"等待中", "已等待", "等待失败", false, true},
+	"image_generate":     {"生成中", "已生成", "生成失败", true, true},
+	"image_edit":         {"编辑中", "已编辑", "生图编辑失败", true, true},
 }
 
 func describeTool(name string) toolDescriptor {
@@ -67,9 +70,9 @@ func describeTool(name string) toolDescriptor {
 	case strings.HasPrefix(name, "replace_"):
 		return toolTable["edit"]
 	case strings.HasPrefix(name, "mcp__"):
-		return toolDescriptor{"调用中", "调用", "MCP", true, true}
+		return toolDescriptor{"调用中", "调用", "MCP 调用失败", true, true}
 	}
-	return toolDescriptor{"调用中", "调用", name, true, false}
+	return toolDescriptor{"调用中", "调用", name + "失败", true, false}
 }
 
 func toolState(m map[string]any) string {
@@ -86,6 +89,110 @@ func toolState(m map[string]any) string {
 	return "pending"
 }
 
+// isFoldableReadTool reports whether a message joins main's read-grep-list
+// folding: consecutive read/grep/list tool calls collapse into one group row.
+// The backend sends `list` for directory listing; main also folds
+// `batch_read`, which arrives here as plain `read`.
+func isFoldableReadTool(m map[string]any) bool {
+	name := str(m, "name")
+	if name == "" {
+		name = str(m, "toolName")
+	}
+	switch name {
+	case "read", "remote_read", "batch_read", "grep", "list", "glob":
+		return true
+	}
+	return false
+}
+
+// readGrepGroupEntry is one folded call inside a read-grep-list group.
+type readGrepGroupEntry struct {
+	verb   string
+	title  string
+	detail string
+}
+
+// readGrepGroupCard mirrors main's ReadGrepGroupCard: consecutive
+// read/grep/list calls render as one collapsed row ("已读取 N 次，搜索 M 次，
+// 罗列 K 次 ›"); expanding lists each call in order. The folded row carries
+// no status icon and never turns red for a failed child — failures show on
+// the expanded entries, same as main.
+func (a *desktop) readGrepGroupCard(c *ui.Context, t *conversation, index int) {
+	var entries []readGrepGroupEntry
+	reads, greps, lists := 0, 0, 0
+	end := index
+	for i := index; i < len(t.Messages); i++ {
+		m := t.Messages[i]
+		if str(m, "role") != "tool_call" && str(m, "toolCallId") == "" {
+			break
+		}
+		if !isFoldableReadTool(m) {
+			break
+		}
+		name := str(m, "name")
+		if name == "" {
+			name = str(m, "toolName")
+		}
+		args := parseToolArgs(str(m, "args"))
+		title := toolArgSummary(name, args)
+		switch name {
+		case "grep":
+			greps++
+			entries = append(entries, readGrepGroupEntry{"搜索", title, ""})
+		case "list":
+			lists++
+			entries = append(entries, readGrepGroupEntry{"罗列", title, ""})
+		default:
+			reads++
+			entries = append(entries, readGrepGroupEntry{"读取", title, ""})
+		}
+		end = i
+	}
+	if len(entries) == 0 {
+		return
+	}
+	key := fmt.Sprintf("%s-readgroup-%d", t.ID, index)
+	open := t.uiState().ToolOpen[key]
+	var parts []string
+	if reads > 0 {
+		parts = append(parts, fmt.Sprintf("已读取 %d 次", reads))
+	}
+	if greps > 0 {
+		parts = append(parts, fmt.Sprintf("搜索 %d 次", greps))
+	}
+	if lists > 0 {
+		parts = append(parts, fmt.Sprintf("罗列 %d 次", lists))
+	}
+	ui.Column(c).Key("tool-" + key).Gap(gapInline).Children(func() {
+		row := ui.Row(c).Padding(2, 8, 2, 0).Gap(4).AlignItems(ui.Center).Cursor(ui.CursorPointer)
+		row.Children(func() {
+			ui.Text(c, strings.Join(parts, "，")).FontSize(fsTool).TextColor(c.Theme().TextMuted).LineHeight(1.4).SingleLine()
+			caret := "›"
+			if open {
+				caret = "⌄"
+			}
+			ui.Text(c, caret).FontSize(fsTool).TextColor(c.Theme().TextMuted)
+		})
+		if row.Clicked() {
+			t.uiState().ToolOpen[key] = !open
+		}
+		if open {
+			for n, e := range entries {
+				prefix := "├─"
+				if n == len(entries)-1 {
+					prefix = "└─"
+				}
+				ui.Row(c).Padding(1, 8, 1, 0).Gap(gapInline).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, prefix).Font(monoFamily).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
+					ui.Text(c, e.verb).FontSize(fsTool).TextColor(c.Theme().TextMuted)
+					ui.Text(c, short(e.title, 80)).FontSize(fsTool).TextColor(c.Theme().Text).SingleLine().Tooltip(e.title)
+				})
+			}
+		}
+	})
+	_ = end
+}
+
 func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[string]any) {
 	name := str(m, "name")
 	if name == "" {
@@ -97,8 +204,11 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	state := toolState(m)
 	desc := describeTool(name)
 	verb := desc.doneVerb
-	if state == "running" || state == "pending" {
+	switch state {
+	case "running", "pending":
 		verb = desc.runningVerb
+	case "error":
+		verb = desc.failedVerb
 	}
 	args := parseToolArgs(str(m, "args"))
 	summary := toolArgSummary(name, args)
@@ -110,16 +220,22 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	}
 	open := t.uiState().ToolOpen[key]
 	p := a.currentPalette()
-	ui.Column(c).Key("tool-"+key).Gap(gapTight).Padding(4, 8).Border(1, p.line).Radius(radiusControl).Background(p.panel).Children(func() {
-		row := ui.Row(c).Padding(1, 0).Gap(gapInline).AlignItems(ui.Center)
+	// Tool rows mirror main's .rich-tool-card: transparent, borderless, with a
+	// hanging status icon; the row itself carries the 6px rhythm below.
+	ui.Column(c).Key("tool-" + key).Gap(gapInline).Children(func() {
+		row := ui.Row(c).Padding(2, 8, 2, 0).Gap(4).AlignItems(ui.Center)
 		if expandable {
 			row.Cursor(ui.CursorPointer)
 		}
 		row.Children(func() {
 			toolStatusIcon(c, state)
-			ui.Text(c, verb).FontSize(fsBody).TextColor(p.accent).NoWrap()
+			verbColor := p.accent
+			if state == "error" {
+				verbColor = colDanger()
+			}
+			ui.Text(c, verb).FontSize(fsTool).TextColor(verbColor).LineHeight(1.4).NoWrap()
 			if summary != "" {
-				ui.Text(c, short(summary, 120)).FontSize(fsBody).TextColor(c.Theme().Text).SingleLine().Tooltip(summary)
+				ui.Text(c, short(summary, 120)).FontSize(fsTool).TextColor(c.Theme().Text).LineHeight(1.4).SingleLine().Tooltip(summary)
 			}
 			for _, extra := range toolChips(name, state, args, result) {
 				neutralChip(c, extra)
@@ -140,9 +256,10 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			if errText == "" {
 				errText = str(m, "error")
 			}
-			ui.Row(c).FillWidth().Padding(8, 10).Gap(gapField).Background(ui.RGBA(232, 84, 84, 0.08)).
-				BorderWidth(0, 0, 0, 2).BorderColor(colDanger()).Radius(radiusSmall).Children(func() {
-				ui.Text(c, shortBlock(errText, 1800)).Font(smallMono()).FontSize(fsSmall).Selectable().TextColor(colDanger())
+			// Main's .tool-error-block: full box, red border, 8% red fill.
+			ui.Row(c).FillWidth().Padding(4, 9).Gap(gapField).Radius(6).Background(ui.RGBA(239, 68, 68, 0.08)).
+				Border(1, ui.RGBA(239, 68, 68, 0.2)).Children(func() {
+				ui.Text(c, shortBlock(errText, 1800)).FontSize(fsAux).TextColor(colDanger()).LineHeight(1.45).Selectable()
 			})
 			a.messageAttachments(c, t, m)
 		case expandable && !open:
@@ -157,16 +274,45 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 
 func smallMono() string { return monoFamily }
 
+// easeInOut is the cubic ease-in-out main's tool-svg-blink runs under:
+// slow at both ends, so the dot dwells at full and dim instead of sweeping
+// past them.
+func easeInOut(t float32) float32 {
+	if t < 0.5 {
+		return 4 * t * t * t
+	}
+	u := 2 - 2*t
+	return 1 - u*u*u/2
+}
+
+// toolStatusIcon mirrors main's ToolStatusIcon: every state owns a 16x14 box
+// so the swap running->check never shifts the line. Running is a 6px dot
+// fading 1<->0.3 on a 1.2s ease-in-out loop (main's tool-svg-blink), not a
+// cosine sweep — the cosine never sat at either end, so it read as too fast.
+// Opacity only: no scale, no rotation (a growing/spinning dot reads as
+// urgency instead of "still working").
 func toolStatusIcon(c *ui.Context, state string) {
 	switch state {
 	case "success":
-		ui.Box(c).Width(15).Height(14).Children(func() { iconGlyph(c, "check", 13).TextColor(colSuccess()) })
+		ui.Box(c).Width(16).Height(14).Center().Children(func() { iconGlyph(c, "check", 13).TextColor(colSuccess()) })
 	case "error":
-		ui.Box(c).Width(15).Height(14).Children(func() { iconGlyph(c, "close", 13).TextColor(colDanger()) })
+		ui.Box(c).Width(16).Height(14).Center().Children(func() { iconGlyph(c, "close", 13).TextColor(colDanger()) })
 	case "running":
-		ui.Box(c).Width(15).Height(14).Center().Children(func() { ui.Box(c).Size(6, 6).Radius(3).Background(c.Theme().TextMuted) })
+		dot := ui.Box(c).Width(16).Height(14).Center()
+		// Loop's ease bends the phase, so sample it linear and ease the
+		// triangle myself: the value must be a true 1<->0.3 clock, or the
+		// dot reads faster than main's.
+		pulse := dot.Loop("tool-pulse", 1200*time.Millisecond, ui.Linear)
+		tri := pulse * 2
+		if tri > 1 {
+			tri = 2 - tri
+		}
+		opacity := float32(0.3 + 0.7*easeInOut(tri))
+		dot.Children(func() {
+			ui.Box(c).Size(6, 6).Radius(3).Background(c.Theme().TextMuted).Opacity(opacity)
+		})
 	default:
-		ui.Box(c).Width(15).Height(14).Center().Children(func() {
+		ui.Box(c).Width(16).Height(14).Center().Children(func() {
 			ui.Box(c).Size(6, 6).Radius(3).Border(1, c.Theme().TextMuted)
 		})
 	}
@@ -384,23 +530,23 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 			return
 		}
 		if block := str(result, "changedLinesBlock"); block != "" {
-			codeBlock(c, fmt.Sprintf("tool-changed-%d", index), block, 220)
+			codeBlock(c, fmt.Sprintf("tool-changed-%d", index), block, 150)
 			return
 		}
-		codeBlock(c, fmt.Sprintf("tool-edit-%d", index), resultText(result), 220)
+		codeBlock(c, fmt.Sprintf("tool-edit-%d", index), resultText(result), 150)
 	case "command", "remote_run_command":
 		output := resultText(result)
 		if output == "" {
 			output = "(没有输出)"
 		}
-		codeBlock(c, fmt.Sprintf("tool-out-%d", index), output, 360)
+		codeBlock(c, fmt.Sprintf("tool-out-%d", index), output, 150)
 		if len(list(result, "warnings")) > 0 {
 			for _, w := range list(result, "warnings") {
 				fieldNote(c, fmt.Sprint(w))
 			}
 		}
 	case "create", "remote_create_file":
-		codeBlock(c, fmt.Sprintf("tool-create-%d", index), resultText(result), 260)
+		codeBlock(c, fmt.Sprintf("tool-create-%d", index), resultText(result), 150)
 	case "list":
 		a.toolListBody(c, index, result)
 	case "render_html":
@@ -408,7 +554,7 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 		if html == "" {
 			html = str(result, "source")
 		}
-		codeBlock(c, fmt.Sprintf("tool-html-%d", index), html, 300)
+		codeBlock(c, fmt.Sprintf("tool-html-%d", index), html, 150)
 		ui.Row(c).Gap(gapField).Children(func() {
 			flat(c, "导出 HTML").OnClick(func() {
 				a.exportHTML(fmt.Sprintf("render-%d.html", index), html)
@@ -456,7 +602,7 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 			fieldNote(c, "没有可显示的内容。")
 			return
 		}
-		codeBlock(c, fmt.Sprintf("tool-body-%d", index), text, 300)
+		codeBlock(c, fmt.Sprintf("tool-body-%d", index), text, 150)
 	}
 	a.messageAttachments(c, t, m)
 }
@@ -490,6 +636,11 @@ func (a *desktop) toolListBody(c *ui.Context, index int, result map[string]any) 
 	})
 }
 
+// diffHeadLimit mirrors main's DiffView: the collapsed card shows at most 20
+// diff rows with 3 context lines around changes; the full diff opens on demand
+// instead of a hard truncation.
+const diffHeadLimit = 20
+
 // diffBlock renders a unified diff with the two-tone row backgrounds the Vue
 // diff view used. split=true keeps a compact single column (edits), the same
 // reading order as the original card.
@@ -504,6 +655,8 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 			removed++
 		}
 	}
+	full := a.popupFlag(key + "-full")
+	shown := diffVisibleLines(lines, diffHeadLimit, *full)
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 		if added > 0 {
 			chip(c, fmt.Sprintf("+%d", added), colSuccess(), ui.RGBA(78, 200, 126, 0.12))
@@ -511,18 +664,17 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 		if removed > 0 {
 			chip(c, fmt.Sprintf("-%d", removed), colDanger(), ui.RGBA(232, 84, 84, 0.12))
 		}
-		if len(lines) > 200 {
-			fieldNote(c, "diff 较长，已折叠到前 200 行。")
-		}
 	})
-	limit := len(lines)
-	if limit > 200 {
-		limit = 200
-	}
 	box := ui.Column(c.Key(key)).FillWidth().Clip().Radius(radiusSmall).Background(c.Theme().Background)
 	box.Children(func() {
-		for i := 0; i < limit; i++ {
-			line := lines[i]
+		for _, dl := range shown {
+			if dl.gap > 0 {
+				ui.Box(c).FillWidth().Padding(2, 8).Children(func() {
+					ui.Text(c, fmt.Sprintf("… %d 行未变更 …", dl.gap)).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+				})
+				continue
+			}
+			line := dl.text
 			fill := ui.Transparent
 			color := c.Theme().Text
 			switch {
@@ -536,10 +688,80 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 				color = ui.Hex("#f0b5b5")
 			}
 			ui.Box(c).FillWidth().Padding(0, 8).Background(fill).Children(func() {
-				ui.Text(c, line).Font(monoFamily).FontSize(fsSmall).TextColor(color).NoWrap()
+				ui.Text(c, line).Font(monoFamily).FontSize(fsTool - 2).TextColor(color).LineHeight(1.58).NoWrap()
 			})
 		}
 	})
+	if len(lines) > diffHeadLimit {
+		label := fmt.Sprintf("… 显示完整 diff（%d 行） …", len(lines))
+		if *full {
+			label = "收起 diff"
+		}
+		flat(c.Key(key+"-toggle"), label).Cursor(ui.CursorPointer).AlignSelf(ui.Start).OnClick(func() { *full = !*full })
+	}
+}
+
+// diffVisibleLine is one rendered diff row, or a collapsed gap of unchanged
+// rows summarized by its count.
+type diffVisibleLine struct {
+	text string
+	gap  int
+}
+
+// diffVisibleLines mirrors main's DiffView collapsing: when folded, changed
+// rows show with 3 context lines around them and the gaps between windows
+// collapse into "… N 行未变更 …" markers. File headers (---/+++) and hunk
+// headers (@@) always show. Full view returns every row.
+func diffVisibleLines(lines []string, limit int, full bool) []diffVisibleLine {
+	if full || len(lines) <= limit {
+		out := make([]diffVisibleLine, 0, len(lines))
+		for _, l := range lines {
+			out = append(out, diffVisibleLine{text: l})
+		}
+		return out
+	}
+	const context = 3
+	keep := make([]bool, len(lines))
+	changed := 0
+	for i, l := range lines {
+		if strings.HasPrefix(l, "+++") || strings.HasPrefix(l, "---") || strings.HasPrefix(l, "@@") {
+			keep[i] = true
+			continue
+		}
+		if strings.HasPrefix(l, "+") || strings.HasPrefix(l, "-") {
+			changed++
+			for j := i - context; j <= i+context; j++ {
+				if j >= 0 && j < len(lines) {
+					keep[j] = true
+				}
+			}
+		}
+	}
+	if changed == 0 {
+		out := make([]diffVisibleLine, 0, limit)
+		for i := 0; i < limit && i < len(lines); i++ {
+			out = append(out, diffVisibleLine{text: lines[i]})
+		}
+		return out
+	}
+	var out []diffVisibleLine
+	gap := 0
+	flush := func() {
+		if gap > 0 {
+			out = append(out, diffVisibleLine{gap: gap})
+			gap = 0
+		}
+	}
+	for i, l := range lines {
+		if !keep[i] {
+			gap++
+			continue
+		}
+		flush()
+		out = append(out, diffVisibleLine{text: l})
+	}
+	flush()
+	return out
 }
 
 func (a *desktop) exportHTML(name, html string) {
@@ -576,8 +798,25 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 	}
 	ui.Column(c).Key(fmt.Sprintf("sub-%s-%d", str(m, "subId"), index)).Padding(10, 12).Gap(gapInline).
 		Border(1, c.Theme().Border).Background(c.Theme().Surface).Radius(radiusCard).Children(func() {
-		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-			ui.Box(c).Size(6, 6).Radius(3).Background(tone)
+		ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
+			// Main's SubagentInlineCard status dot: 6px, running blinks
+			// 1<->0.3 on a 1.2s ease-in-out loop in the accent tone;
+			// finished states are static dots in their own tones.
+			dot := status
+			if dot != "running" && dot != "success" && dot != "partial" && dot != "error" {
+				dot = "pending"
+			}
+			if dot == "running" {
+				anchor := ui.Box(c).Size(6, 6)
+				pulse := anchor.Loop(fmt.Sprintf("sub-dot-%s-%d", str(m, "subId"), index), 1200*time.Millisecond, ui.Linear)
+				tri := pulse * 2
+				if tri > 1 {
+					tri = 2 - tri
+				}
+				anchor.Radius(3).Background(c.Theme().Accent).Opacity(float32(0.3 + 0.7*easeInOut(tri)))
+			} else {
+				ui.Box(c).Size(6, 6).Radius(3).Background(tone)
+			}
 			ui.Text(c, role).FontSize(fsBody).Bold()
 			ui.Spacer(c)
 			ui.Text(c, label).FontSize(fsTiny).TextColor(tone)

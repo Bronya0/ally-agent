@@ -68,10 +68,11 @@ func (a *desktop) pluginModes() (top []backend.PluginInfo, groups [][]backend.Pl
 func (a *desktop) rail(c *ui.Context) {
 	p := a.currentPalette()
 	if !a.prefs.RailExpanded {
-		ui.Column(c).Width(44).Shrink(0).Background(p.panel).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, 2).Gap(4).Children(func() {
-			a.railModes(c, false)
-			ui.Spacer(c)
-			iconAction(c, "rail-open", "展开侧边栏（显示菜单名）", "expand", 30, func() {
+		ui.Column(c).Width(widthRailCollapsed).Shrink(0).Background(p.panel).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, 2).Gap(4).AlignItems(ui.Center).Children(func() {
+			ui.Scroll(c).Key("rail-modes").FillWidth().Grow(1).MinHeight(0).Children(func() {
+				ui.Column(c).FillWidth().Gap(4).Children(func() { a.railModes(c, false) })
+			})
+			railToggleButton(c, "rail-open", "展开侧边栏（显示菜单名）", "expand", func() {
 				a.prefs.RailExpanded = true
 				a.savePrefs()
 			}).TextColor(p.muted)
@@ -86,26 +87,18 @@ func (a *desktop) railBody(c *ui.Context, width *float32) {
 	ui.Column(c).Width(*width).Shrink(0).Background(p.panel).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(6).Gap(6).Children(func() {
 		a.railModes(c, true)
 		divider(c)
-		ui.Column(c).Grow(1).MinHeight(0).Gap(8).Children(func() {
-			workspaces := ui.Scroll(c).MinHeight(0)
-			if a.prefs.RailWorkspaceOpen {
-				workspaces.Grow(1)
-			} else {
-				workspaces.Height(30).Shrink(0)
-			}
-			workspaces.Children(func() { a.railWorkspaces(c) })
-			sessions := ui.Scroll(c).MinHeight(0)
-			if a.prefs.RailSessionsOpen {
-				sessions.Grow(1)
-			} else {
-				sessions.Height(30).Shrink(0)
-			}
-			sessions.Children(func() { a.railSessions(c) })
+		// 两个折叠区共用一个滚动容器：滚动的是一整块内容，标题行跟着列表一起
+		// 走。以前每区各自一个 ui.Scroll，滚的是局部小框，看起来像列表被截断。
+		ui.Scroll(c).Key("rail-sections").Grow(1).MinHeight(0).Children(func() {
+			ui.Column(c).FillWidth().Gap(6).Children(func() {
+				a.railWorkspaces(c)
+				a.railSessions(c)
+			})
 		})
 		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 			label := "收起侧边栏"
 			iconName := "collapse"
-			iconAction(c, "rail-close", label, iconName, 28, func() {
+			railToggleButton(c, "rail-close", label, iconName, func() {
 				a.prefs.RailExpanded = false
 				a.savePrefs()
 			}).TextColor(p.muted)
@@ -174,55 +167,22 @@ func pluginTitle(p backend.PluginInfo) string {
 }
 
 func (a *desktop) railModeButton(c *ui.Context, expanded bool, id, label, iconName string, active bool) {
-	p := a.currentPalette()
-	b := ui.ButtonBase(c.Key("nav-" + id)).FillWidth().Height(34).Justify(ui.Start).Radius(7).Label(label).OnClick(func() {
+	railNavigationButton(c, "nav-"+id, label, iconName, expanded, active, nil).OnClick(func() {
 		a.changePage(id)
-	})
-	if !expanded {
-		b.Tooltip(label)
-	}
-	if active {
-		b.Background(p.hover).TextColor(p.accent)
-	} else if b.Hovered() {
-		b.Background(p.hover)
-	}
-	b.Children(func() {
-		ui.Row(c).FillWidth().Padding(0, 8).Gap(10).AlignItems(ui.Center).Children(func() {
-			railIcon(c, iconName, 17)
-			if expanded {
-				ui.Text(c, label).FontSize(12.5).SingleLine()
-			}
-		})
 	})
 }
 
 func (a *desktop) railGroupButton(c *ui.Context, expanded bool, head backend.PluginInfo, title string, group []backend.PluginInfo, active bool) {
-	p := a.currentPalette()
 	open := a.popupFlag("rail-group-" + head.ID)
-	b := ui.ButtonBase(c.Key("nav-group-" + head.ID)).FillWidth().Height(34).Justify(ui.Start).Radius(7).Label(title).OnClick(func() { *open = !*open })
-	if !expanded {
-		b.Tooltip(title)
-	}
-	if active {
-		b.Background(p.hover).TextColor(p.accent)
-	} else if b.Hovered() {
-		b.Background(p.hover)
-	}
+	b := railNavigationButton(c, "nav-group-"+head.ID, title, "plugins", expanded, active, func() {
+		ui.Spacer(c)
+		iconGlyph(c, "chevrondown", 12)
+	}).OnClick(func() { *open = !*open })
 	popoverPanel(c, b, open, 220, func() {
 		for _, item := range group {
 			item := item
 			popoverItem(c, "plugin-group-"+item.ID, pluginTitle(item), "", item.Mode == a.page, func() { *open = false; a.changePage(item.Mode) })
 		}
-	})
-	b.Children(func() {
-		ui.Row(c).FillWidth().Padding(0, 8).Gap(10).AlignItems(ui.Center).Children(func() {
-			railIcon(c, "plugins", 17)
-			if expanded {
-				ui.Text(c, title).FontSize(12.5).SingleLine()
-				ui.Spacer(c)
-				iconGlyph(c, "chevrondown", 12)
-			}
-		})
 	})
 }
 
@@ -230,7 +190,7 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 	p := a.currentPalette()
 	ui.Column(c).Key("rail-workspaces").Gap(3).Children(func() {
 		ui.Row(c).Height(24).Padding(0, 6, 0, 4).Children(func() {
-			toggle := ui.ButtonBase(c.Key("rail-ws-toggle")).Grow(1).Height(24).Justify(ui.Start).Label("历史工作区").OnClick(func() { a.prefs.RailWorkspaceOpen = !a.prefs.RailWorkspaceOpen; a.savePrefs() })
+			toggle := ui.ButtonBase(c.Key("rail-ws-toggle")).Grow(1).Height(24).Justify(ui.Start).Label("历史工作区").Cursor(ui.CursorPointer).OnClick(func() { a.prefs.RailWorkspaceOpen = !a.prefs.RailWorkspaceOpen; a.savePrefs() })
 			toggle.Children(func() {
 				ui.Row(c).FillWidth().Gap(5).Children(func() {
 					railIcon(c, "folderopen", 13).TextColor(p.muted)
@@ -283,7 +243,7 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 	}
 	row.Tooltip(tip)
 	row.Children(func() {
-		btn := ui.ButtonBase(c.Key("rail-ws-btn-" + root)).Grow(1).Height(24).Justify(ui.Start).Label(label)
+		btn := ui.ButtonBase(c.Key("rail-ws-btn-" + root)).Grow(1).Height(24).Justify(ui.Start).Label(label).Cursor(ui.CursorPointer)
 		btn.OnClick(func() {
 			if root == "" {
 				a.newConversation("")
@@ -315,7 +275,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 	p := a.currentPalette()
 	ui.Column(c).Key("rail-sessions").Gap(3).Children(func() {
 		ui.Row(c).Height(24).Padding(0, 6, 0, 4).Children(func() {
-			toggle := ui.ButtonBase(c.Key("rail-sess-toggle")).Grow(1).Height(24).Justify(ui.Start).Label("工作区会话").OnClick(func() { a.prefs.RailSessionsOpen = !a.prefs.RailSessionsOpen; a.savePrefs() })
+			toggle := ui.ButtonBase(c.Key("rail-sess-toggle")).Grow(1).Height(24).Justify(ui.Start).Label("工作区会话").Cursor(ui.CursorPointer).OnClick(func() { a.prefs.RailSessionsOpen = !a.prefs.RailSessionsOpen; a.savePrefs() })
 			toggle.Children(func() {
 				ui.Row(c).FillWidth().Gap(5).Children(func() {
 					railIcon(c, "history", 13).TextColor(p.muted)
@@ -359,7 +319,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 			}
 			row.Tooltip(fmt.Sprintf("%s\n%s · %d 条", title, fmtTime(entry.UpdatedAt), entry.MessageCount))
 			row.Children(func() {
-				btn := ui.ButtonBase(c.Key("rail-sess-btn-" + entry.ID)).Grow(1).Height(28).Justify(ui.Start).Label(title)
+				btn := ui.ButtonBase(c.Key("rail-sess-btn-" + entry.ID)).Grow(1).Height(28).Justify(ui.Start).Label(title).Cursor(ui.CursorPointer)
 				btn.OnClick(func() { a.openSession(entry.ID) })
 				btn.Children(func() {
 					ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {

@@ -151,6 +151,8 @@ type chatUI struct {
 	SessionsIndex int
 	ModelOpen     bool
 	ModelSearch   string
+	ModelGroup    string
+	FlyoutHot     bool
 	EffortOpen    bool
 	ExtrasOpen    bool
 	ContextOpen   bool

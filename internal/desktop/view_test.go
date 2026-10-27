@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -494,6 +495,42 @@ func TestRailSectionHeadersToggle(t *testing.T) {
 		if !*item.state {
 			t.Fatalf("%s did not expand", item.label)
 		}
+	}
+}
+
+func TestRailSectionsScrollTogether(t *testing.T) {
+	a := demoDesktop()
+	a.prefs.RailExpanded = true
+	root := a.config.Workspace
+	for i := 0; i < 12; i++ {
+		a.sessions = append(a.sessions, backend.SessionIndexEntry{
+			ID:        fmt.Sprintf("ws-%02d", i),
+			Workspace: fmt.Sprintf("D:/projects/ws-%02d", i),
+			Title:     fmt.Sprintf("项目 %02d", i),
+		})
+	}
+	for i := 0; i < 24; i++ {
+		a.sessions = append(a.sessions, backend.SessionIndexEntry{
+			ID:        fmt.Sprintf("cur-%02d", i),
+			Workspace: root,
+			Title:     fmt.Sprintf("会话 %02d", i),
+		})
+	}
+	tt := ui.NewTester(a.view, 1280, 850)
+	tt.Frame()
+	before, ok := tt.Find("工作区会话")
+	if !ok {
+		t.Fatal("missing sessions header")
+	}
+	// 两个折叠区共用一个滚动容器：滚动时标题行必须跟着列表上移。
+	tt.Scroll(110, 600, 0, 260)
+	tt.Frame()
+	after, ok := tt.Find("工作区会话")
+	if !ok {
+		t.Fatal("sessions header vanished after scrolling")
+	}
+	if after.Y >= before.Y {
+		t.Fatalf("sessions header stayed put while the list scrolled: %.1f -> %.1f", before.Y, after.Y)
 	}
 }
 

@@ -21,7 +21,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	}
 	ui.Box(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Scroll(c.Key(t.ID + "-messages")).TrackScroll(&t.Scroll).Grow(1).MinHeight(0).Children(func() {
-			ui.Column(c).Padding(10, 26, 14).Gap(9).Children(func() {
+			ui.Column(c).Padding(10, 26, 14).Gap(10).Children(func() {
 				if len(t.Messages) == 0 {
 					a.welcomeView(c, t)
 				}
@@ -91,6 +91,19 @@ func (a *desktop) messageRow(c *ui.Context, t *conversation, i int) {
 	case role == "notice":
 		notice(c, "warn", str(m, "content"))
 	case role == "tool_call" || str(m, "toolCallId") != "":
+		// Adjacent read/grep/list cards fold into one group row, mirroring
+		// main's read-grep-group: only the group's first row renders, the
+		// rest are consumed by it.
+		if isFoldableReadTool(m) && i > 0 {
+			if prev := t.Messages[i-1]; isFoldableReadTool(prev) &&
+				(str(prev, "role") == "tool_call" || str(prev, "toolCallId") != "") {
+				break
+			}
+		}
+		if isFoldableReadTool(m) {
+			a.readGrepGroupCard(c, t, i)
+			break
+		}
 		a.toolCard(c, t, i, m)
 	case role == "subagent":
 		a.subagentRow(c, t, i, m)
@@ -114,11 +127,15 @@ func (a *desktop) markdownOptions(t *conversation, i int) *markdown.Options {
 	return t.MD[i]
 }
 
+// userMessage mirrors main's .message.user: full-bleed hover tint, an amber
+// rail at the head, and bright-accent text. Hover-only deletion matches the
+// Vue row; the delete button must not consume layout space.
 func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[string]any) {
 	content := str(m, "content")
 	p := a.currentPalette()
-	ui.Row(c).Gap(gapInline).AlignItems(ui.Start).Children(func() {
-		ui.Box(c).Width(2).MinHeight(18).Background(p.accent).Radius(1)
+	row := ui.Row(c).Padding(10).Gap(6).AlignItems(ui.Start).Background(p.hover)
+	row.Children(func() {
+		ui.Text(c, "›").FontSize(15).Bold().TextColor(p.accent).LineHeight(1.7)
 		ui.Column(c).Grow(1).Gap(gapInline).Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Gap(gapInline).Children(func() {
 				if skill := str(m, "skill"); skill != "" {
@@ -131,12 +148,15 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 			a.collapsiblePrompt(c, t, i, content)
 			a.messageAttachments(c, t, m)
 		})
-		ui.Spacer(c)
-		if uiState := t.uiState(); i == lastUserIndex(t.Messages) && !t.Busy {
-			iconAction(c, fmt.Sprintf("del-user-%s-%d", t.ID, i), "删除该提问及之后", "close", 20, func() {
-				a.deleteUserMessage(t, i)
-			}).TextColor(c.Theme().TextMuted)
-			_ = uiState
+		// Hover-only delete, overlaid at the row corner: it must not take part
+		// in the row flex layout (main pins it absolute), and it is available
+		// on every question row, not just the last one.
+		if !t.Busy && row.Hovered() {
+			ui.Box(c).Absolute().Top(6).Right(8).Children(func() {
+				iconAction(c, fmt.Sprintf("del-user-%s-%d", t.ID, i), "删除该提问及之后", "close", 20, func() {
+					a.deleteUserMessage(t, i)
+				}).TextColor(c.Theme().TextMuted)
+			})
 		}
 	})
 }

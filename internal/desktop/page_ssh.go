@@ -449,6 +449,9 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 		}
 		sort.Strings(groups)
 		if len(groups) > 0 {
+			// Pin the selected group before drawing the strip: the strip
+			// must sit above the list exactly like MCP's, never between
+			// the note lines, or its height shifts with the selection.
 			index := 0
 			for i, group := range groups {
 				if group == a.sshF.AuthGroup {
@@ -456,49 +459,64 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 					break
 				}
 			}
-			if len(groups) > 1 {
-				scrollTabs(c, &index, groups...)
-			}
 			a.sshF.AuthGroup = groups[index]
+			if changed := scrollTabs(c, &index, groups...); changed {
+				for i, group := range groups {
+					if i == index {
+						a.sshF.AuthGroup = group
+					}
+				}
+			}
 		}
-		ui.Column(c).Gap(1).Children(func() {
-			for _, node := range a.sshServers {
-				node := node
-				group := strings.TrimSpace(node.Group)
-				if group == "" {
-					group = sshUngrouped
-				}
-				if len(groups) > 1 && group != a.sshF.AuthGroup {
-					continue
-				}
-				checked := a.sshF.AuthDraft[node.Alias]
-				if onlyAllowed && !checked {
-					continue
-				}
-				if query != "" {
-					haystack := strings.ToLower(node.Alias + " " + node.Host + " " + node.Username + " " + node.Description)
-					if !strings.Contains(haystack, query) {
+		// The tab strip and its list stay outside the scroller: only the rows
+		// scroll (main caps .ssh-auth-scroll at 52vh). The list gets a fixed
+		// height so switching tabs never moves the tab strip.
+		ui.Scroll(c).MaxHeight(380).Children(func() {
+			ui.Column(c).Gap(1).Children(func() {
+				for _, node := range a.sshServers {
+					node := node
+					group := strings.TrimSpace(node.Group)
+					if group == "" {
+						group = sshUngrouped
+					}
+					if len(groups) > 1 && group != a.sshF.AuthGroup {
 						continue
 					}
-				}
-				row := ui.Row(c.Key("ssh-auth-"+node.ID)).Height(28).Padding(0, padRow).Gap(gapField).AlignItems(ui.Center).Radius(radiusSmall)
-				if row.Hovered() {
-					row.Background(c.Theme().SurfaceHover)
-				}
-				row.Children(func() {
-					ui.Checkbox(c.Key("ssh-auth-check-"+node.ID), &checked, "").OnClick(func() {
-						a.sshF.AuthDraft[node.Alias] = !a.sshF.AuthDraft[node.Alias]
-					})
-					ui.Text(c, node.Alias).FontSize(fsSmall).Width(140).SingleLine()
-					ui.Text(c, node.Username+"@"+node.Host+":"+fmt.Sprint(node.Port)).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Width(200).SingleLine()
-					ui.Text(c, node.Description).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Tooltip(node.Description).SingleLine().Grow(1)
-					risk := "低风险"
-					if node.RiskLevel == "high" {
-						risk = "高风险"
+					checked := a.sshF.AuthDraft[node.Alias]
+					if onlyAllowed && !checked {
+						continue
 					}
-					statusBadge(c, risk, map[bool]string{true: "error", false: "success"}[node.RiskLevel == "high"])
-				})
-			}
+					if query != "" {
+						haystack := strings.ToLower(node.Alias + " " + node.Host + " " + node.Username + " " + node.Description)
+						if !strings.Contains(haystack, query) {
+							continue
+						}
+					}
+					row := ui.Row(c.Key("ssh-auth-"+node.ID)).Height(28).Padding(0, padRow).Gap(gapField).AlignItems(ui.Center).Radius(radiusSmall)
+					if row.Hovered() {
+						row.Background(c.Theme().SurfaceHover)
+					}
+					// Main toggles on row click (checkbox stops propagation);
+					// the row also gets the pointer cursor like every rail row.
+					row.Cursor(ui.CursorPointer)
+					row.Children(func() {
+						ui.Checkbox(c.Key("ssh-auth-check-"+node.ID), &checked, "").OnClick(func() {
+							a.sshF.AuthDraft[node.Alias] = !a.sshF.AuthDraft[node.Alias]
+						})
+						ui.Text(c, node.Alias).FontSize(fsSmall).Width(140).SingleLine()
+						ui.Text(c, node.Username+"@"+node.Host+":"+fmt.Sprint(node.Port)).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Width(200).SingleLine()
+						ui.Text(c, node.Description).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Tooltip(node.Description).SingleLine().Grow(1)
+						risk := "低风险"
+						if node.RiskLevel == "high" {
+							risk = "高风险"
+						}
+						statusBadge(c, risk, map[bool]string{true: "error", false: "success"}[node.RiskLevel == "high"])
+					})
+					if row.Clicked() {
+						a.sshF.AuthDraft[node.Alias] = !a.sshF.AuthDraft[node.Alias]
+					}
+				}
+			})
 		})
 		if len(a.sshServers) == 0 {
 			emptyState(c, "暂无配置的 SSH 服务器", "先在 SSH 集群页添加服务器。")

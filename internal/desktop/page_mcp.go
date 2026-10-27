@@ -12,6 +12,12 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// mcpNoteLine is a one-line note: tab-specific notes must not change height,
+// or the content below the tab strip shifts when the tab changes.
+func mcpNoteLine(c *ui.Context, s string) {
+	ui.Text(c, s).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine()
+}
+
 // mcpServerEntry mirrors the fields the editor owns; unknown keys survive in
 // Extra so a hand-edited mcp.json is round-tripped without loss.
 type mcpServerEntry struct {
@@ -125,12 +131,8 @@ func (a *desktop) mcpPageBody(c *ui.Context) {
 		a.linkMenu(c, "mcp-market", [][2]string{{"魔搭 ModelScope", "https://modelscope.cn/mcp"}, {"火山引擎 Volcengine", "https://www.volcengine.com/mcp"}, {"Glama", "https://glama.ai/mcp/servers"}, {"PulseMCP", "https://www.pulsemcp.com"}})
 		primary(c, "添加").OnClick(func() { a.openMCPEditor("") })
 	})
-	if a.mcpF.Tab == 0 {
-		fieldNote(c, "支持 stdio、SSE 与 Streamable HTTP；只有连接成功的 MCP 工具会注入给 AI。")
-		fieldNote(c, "MCP 配置独立保存并立即重连；任何变更都会自动保存。")
-	} else {
-		fieldNote(c, "停用后，新会话不再把对应工具注入模型；已有会话保持冻结不变，MCP 服务不受影响。")
-	}
+	// tabs 必须排在随 tab 变化的说明文字之前：说明行数不同会把 tab 栏顶上顶下，
+	// 用户刚点的 tab 会跑走（"变形"）。tab 栏位置固定，只让下方内容变化。
 	if scrollTabs(c, &a.mcpF.Tab, "MCP 服务器", "Ally 内置工具") {
 		if a.mcpF.Tab == 1 && a.core != nil {
 			go func() {
@@ -138,6 +140,12 @@ func (a *desktop) mcpPageBody(c *ui.Context) {
 				a.win.Update(func() { a.toolInventory = tools; a.toolCount = enabledToolCount(tools) })
 			}()
 		}
+	}
+	// 两个 tab 的说明都固定为一行，切换时说明区高度不变，下方内容不会跳。
+	if a.mcpF.Tab == 0 {
+		mcpNoteLine(c, "支持 stdio / SSE / Streamable HTTP；只有连接成功的工具会注入 AI，改动自动保存并重连。")
+	} else {
+		mcpNoteLine(c, "停用后新会话不再注入该工具；已有会话保持冻结，MCP 服务不受影响。")
 	}
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(gapSection).Children(func() {
