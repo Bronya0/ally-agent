@@ -98,7 +98,7 @@ func checkCommandSafetyAtCwd(req CommandRequest, roots []string, workingDir stri
 	}
 	if !kernelOwns {
 		if risk := firstExistingOutsideMutationTarget(cmd, roots, workingDir); risk != nil {
-			return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录。\n可写范围：\n%s\n被拦截的命令：%s", risk.Reason, risk.Path, formatAllowedRoots(roots), cmd))
+			return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径（仍须满足其他围栏规则；工作区内符号链接逃逸和版本控制元数据写入不在此例外内）。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录；临时目录没有覆盖豁免。\n处理方式：使用工作区内的 .tmp/ 输出路径（先创建父目录），或换用尚不存在的唯一临时路径；不要通过变量或符号链接绕过本次拒绝。\n执行状态：本次命令尚未执行。\n可写范围：\n%s\n被拦截的命令：%s", risk.Reason, risk.Path, formatAllowedRoots(roots), cmd))
 		}
 	}
 	if risk := command.MatchRiskPattern(cmd); risk != nil {

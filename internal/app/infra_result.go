@@ -732,6 +732,9 @@ func renderSubagentResultForModel(r AgentDelegateResult) string {
 	if r.Description != "" {
 		fmt.Fprintf(&b, ` description=%s`, strconv.Quote(r.Description))
 	}
+	if r.StopReason != "" {
+		fmt.Fprintf(&b, ` stopReason=%s`, strconv.Quote(r.StopReason))
+	}
 	if r.Error != "" {
 		fmt.Fprintf(&b, ` error=%s`, strconv.Quote(r.Error))
 	}

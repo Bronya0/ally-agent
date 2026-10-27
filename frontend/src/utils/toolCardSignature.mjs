@@ -94,6 +94,7 @@ export function toolCardRenderSignature(msg) {
     msg.subagentRole,
     msg.description,
     msg.summary,
+    msg.stopReason,
     msg.steps,
     msg.maxSteps,
     // 子代理卡的 token 徽标：上下文取最近一轮、输入/输出是累加值，四个数都会自己变，

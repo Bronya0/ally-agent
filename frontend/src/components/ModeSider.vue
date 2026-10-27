@@ -250,7 +250,7 @@ const props = defineProps({
   sessionTooltip: { type: Function, default: (session) => session.title || '' },
   sessionBusy: { type: Function, default: () => false },
 });
-const emit = defineEmits(['switch', 'toggle', 'openWorkspace', 'addWorkspace', 'addTempWorkspace', 'removeWorkspace', 'openSession', 'removeSession', 'newSession', 'openTaskCenter', 'resize', 'resizeEnd']);
+const emit = defineEmits(['switch', 'toggle', 'openWorkspace', 'addWorkspace', 'addTempWorkspace', 'removeWorkspace', 'openSession', 'removeSession', 'newSession', 'resize', 'resizeEnd']);
 
 // 展开态是紧凑列表：行高从 Naive 默认 42px 压到 36px；收起态保持默认，图标格不变。
 const EXPANDED_MENU_THEME = { itemHeight: '36px' };
@@ -366,10 +366,6 @@ const hiddenSet = computed(() => new Set((props.hiddenModes || []).map((key) => 
 
 // chat/settings 永不隐藏：后端清洗与 assignConfig 都不会产出它们，这里再加一道
 // 最后一道闸——万一名单里混进来，Agent 与设置入口也不能被藏掉。
-const railActions = {
-  'action:task-center': { label: 'taskCenter.title', icon: CloudServerOutlined, event: 'openTaskCenter', argument: 'services' },
-};
-
 const baseModeOptions = computed(() => [
   { label: t('app.mode.chat'), key: 'chat', icon: renderIcon(SlackOutlined) },
   { label: t('app.mode.kb'), key: 'kb', icon: renderIcon(BookOutlined, props.kbRunning) },
@@ -377,7 +373,7 @@ const baseModeOptions = computed(() => [
   { label: t('app.mode.mcp'), key: 'mcp', icon: renderIcon(ApiOutlined) },
   { label: t('app.mode.models'), key: 'models', icon: renderIcon(RobotOutlined) },
   { label: t('app.mode.sshCluster'), key: 'ssh', icon: renderIcon(ClusterOutlined) },
-  ...Object.entries(railActions).map(([key, action]) => ({ label: t(action.label), key, icon: renderIcon(action.icon) })),
+  { label: t('taskCenter.title'), key: 'tasks', icon: renderIcon(CloudServerOutlined) },
   { label: t('header.tokenStats'), key: 'stats', icon: renderIcon(BarChartOutlined) },
   { label: t('header.games'), key: 'games', icon: renderIcon(SwordsIcon) },
   { label: t('app.mode.plugins'), key: 'plugins', icon: renderIcon(AppstoreOutlined) },
@@ -436,11 +432,6 @@ const modeOptions = computed(() => {
 });
 
 function onSelect(key) {
-  const action = Object.hasOwn(railActions, key) ? railActions[key] : null;
-  if (action) {
-    emit(action.event, action.argument);
-    return;
-  }
   emit('switch', key);
 }
 

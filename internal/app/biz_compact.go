@@ -23,10 +23,10 @@ const (
 )
 
 func normalizeAutoCompactMethod(value string) string {
-	if strings.EqualFold(strings.TrimSpace(value), autoCompactMethodRecent) {
-		return autoCompactMethodRecent
+	if strings.EqualFold(strings.TrimSpace(value), autoCompactMethodSummary) {
+		return autoCompactMethodSummary
 	}
-	return autoCompactMethodSummary
+	return autoCompactMethodRecent
 }
 
 // defaultCompactThreshold is the auto-compaction trigger as a fraction of

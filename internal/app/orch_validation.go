@@ -94,8 +94,17 @@ func (a *App) validateChangedFiles(ctx context.Context, cfg ConfigState, paths [
 
 	jsonFiles, pythonFiles, jsFiles, javaFiles := make([]validationFile, 0), make([]validationFile, 0), make([]validationFile, 0), make([]validationFile, 0)
 	goFiles, tsFiles, vueFiles := make([]validationFile, 0), make([]validationFile, 0), make([]validationFile, 0)
+	yamlFiles, xmlFiles := make([]validationFile, 0), make([]validationFile, 0)
 	for _, file := range files {
 		switch file.ext {
+		case ".yaml", ".yml":
+			if validationEnabled(cfg.AutoValidationYAML) {
+				yamlFiles = append(yamlFiles, file)
+			}
+		case ".xml":
+			if validationEnabled(cfg.AutoValidationXML) {
+				xmlFiles = append(xmlFiles, file)
+			}
 		case ".json":
 			if validationEnabled(cfg.AutoValidationJSON) {
 				jsonFiles = append(jsonFiles, file)
@@ -128,6 +137,18 @@ func (a *App) validateChangedFiles(ctx context.Context, cfg ConfigState, paths [
 		}
 	}
 
+	for _, group := range []struct {
+		label string
+		files []validationFile
+		parse func(context.Context, []byte) error
+	}{
+		{"YAML", yamlFiles, validateYAMLSyntax},
+		{"XML", xmlFiles, validateXMLSyntax},
+	} {
+		if len(group.files) > 0 {
+			reports = append(reports, validateDataFiles(checkCtx, group.label, group.files, roots, group.parse))
+		}
+	}
 	if len(jsonFiles) > 0 {
 		reports = append(reports, validateJSONFiles(checkCtx, jsonFiles))
 	}
@@ -380,7 +401,17 @@ func validateJSONFiles(ctx context.Context, files []validationFile) validationRe
 // legitimately allows comments and trailing commas.
 func isJSONCFileName(path string) bool {
 	name := strings.ToLower(filepath.Base(path))
-	return strings.HasPrefix(name, "tsconfig") || strings.HasPrefix(name, "jsconfig")
+	if strings.HasPrefix(name, "tsconfig") || strings.HasPrefix(name, "jsconfig") {
+		return true
+	}
+	if !strings.EqualFold(filepath.Base(filepath.Dir(path)), ".vscode") {
+		return false
+	}
+	switch name {
+	case "settings.json", "launch.json", "tasks.json", "extensions.json":
+		return true
+	}
+	return false
 }
 
 func validatePythonFiles(ctx context.Context, root string, files []validationFile) validationReport {

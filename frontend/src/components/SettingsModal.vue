@@ -376,42 +376,39 @@ Public License v3. See the LICENSE file for details.
           </n-form-item>
         </section>
 
-        <!-- Advanced: auto code validation. The built-in tool toggles that
-             used to share this page now live on the MCP page (McpPanel). -->
+        <!-- Advanced settings use the same line tabs as the MCP page. -->
         <section v-else-if="page === 'advanced'" class="settings-page">
-          <div class="config-section-header">
-            <div>
-              <div class="config-section-title">{{ $t('settings.advancedTitle') }}</div>
-              <div class="config-section-subtitle">{{ $t('settings.advancedSubtitle') }}</div>
-            </div>
-          </div>
-          <div class="settings-opt-list">
-            <div v-for="item in validationSettings" :key="item.key" class="settings-opt-row">
-              <div class="settings-opt-main">
-                <span class="settings-opt-name">{{ item.label }}</span>
-                <div class="settings-opt-side">
-                  <n-switch v-model:value="draft[item.key]" size="small" />
+          <n-tabs v-model:value="advancedTab" type="line" size="small" class="settings-advanced-tabs">
+            <n-tab name="validation">{{ $t('settings.advancedTitle') }}</n-tab>
+            <n-tab name="visibility">{{ $t('settings.pageVisibilityTitle') }}</n-tab>
+          </n-tabs>
+          <template v-if="advancedTab === 'validation'">
+            <div class="config-section-subtitle settings-tab-subtitle">{{ $t('settings.advancedSubtitle') }}</div>
+            <div class="settings-opt-list">
+              <div v-for="item in validationSettings" :key="item.key" class="settings-opt-row">
+                <div class="settings-opt-main">
+                  <span class="settings-opt-name">{{ item.label }}</span>
+                  <div class="settings-opt-side">
+                    <n-switch v-model:value="draft[item.key]" size="small" />
+                  </div>
                 </div>
-              </div>
-              <div v-if="item.hint" class="settings-opt-hint">{{ item.hint }}</div>
-            </div>
-          </div>
-          <div class="config-section-header page-visibility-header">
-            <div>
-              <div class="config-section-title">{{ $t('settings.pageVisibilityTitle') }}</div>
-              <div class="config-section-subtitle">{{ $t('settings.pageVisibilitySubtitle') }}</div>
-            </div>
-          </div>
-          <div class="settings-opt-list">
-            <div v-for="item in pageVisibilitySettings" :key="item.key" class="settings-opt-row">
-              <div class="settings-opt-main">
-                <span class="settings-opt-name">{{ item.label }}</span>
-                <div class="settings-opt-side">
-                  <n-switch :value="!isModeHidden(item.key)" size="small" @update:value="(visible) => setModeVisible(item.key, visible)" />
-                </div>
+                <div v-if="item.hint" class="settings-opt-hint">{{ item.hint }}</div>
               </div>
             </div>
-          </div>
+          </template>
+          <template v-else>
+            <div class="config-section-subtitle settings-tab-subtitle">{{ $t('settings.pageVisibilitySubtitle') }}</div>
+            <div class="settings-opt-list">
+              <div v-for="item in pageVisibilitySettings" :key="item.key" class="settings-opt-row">
+                <div class="settings-opt-main">
+                  <span class="settings-opt-name">{{ item.label }}</span>
+                  <div class="settings-opt-side">
+                    <n-switch :value="!isModeHidden(item.key)" size="small" @update:value="(visible) => setModeVisible(item.key, visible)" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
         </section>
 
         <!-- Network -->
@@ -781,6 +778,8 @@ const validationSettingKeys = [
   'autoValidationVue',
   'autoValidationJava',
   'autoValidationJson',
+  'autoValidationYaml',
+  'autoValidationXml',
 ];
 
 // Isolate editor state; leaving the page saves only the fields that change.
@@ -790,6 +789,7 @@ const draft = reactive(cloneConfigDraft(props.configDraft));
 // independent of the backend config draft. Applied live on selection.
 
 const page = ref('general');
+const advancedTab = ref('validation');
 
 defineExpose({
   saveSettingsOnLeave,
@@ -841,6 +841,8 @@ const validationSettings = computed(() => [
   { key: 'autoValidationVue', label: t('settings.validationVue'), hint: t('settings.validationVueHint') },
   { key: 'autoValidationJava', label: t('settings.validationJava'), hint: t('settings.validationJavaHint') },
   { key: 'autoValidationJson', label: t('settings.validationJson'), hint: t('settings.validationJsonHint') },
+  { key: 'autoValidationYaml', label: t('settings.validationYaml'), hint: t('settings.validationYamlHint') },
+  { key: 'autoValidationXml', label: t('settings.validationXml'), hint: t('settings.validationXmlHint') },
 ]);
 
 // 页面显隐：键集合直接取自 HIDEABLE_MODES（与 ModeSider、后端 hideableModes 同一组，
@@ -1397,9 +1399,14 @@ watch(() => props.visible, (visible) => {
   margin-top: 2px;
 }
 
-/* 页面显隐分组与上方校验组拉开距离。 */
-.page-visibility-header {
-  margin-top: 18px;
+.settings-advanced-tabs :deep(.n-tabs-tab) {
+  padding: 6px 10px;
+  font-size: 15px;
+  color: var(--ally-text-primary);
+}
+
+.settings-tab-subtitle {
+  margin: 12px 0 16px;
 }
 
 .settings-toggle-row {

@@ -44,7 +44,7 @@ Public License v3. See the LICENSE file for details.
           <template #prefix><SearchOutlined class="ssh-auth-search-icon" /></template>
         </n-input>
         <n-checkbox v-model:checked="onlyAllowed" size="small" class="ssh-auth-only-allowed">
-          {{ $t('sshCluster.panel.onlyAllowed') }}
+          {{ $t('sshCluster.panel.onlyAllowed') }}<span v-if="allowedSshServersReady && draftReady"> ({{ allowedCount }})</span>
         </n-checkbox>
       </div>
 
@@ -54,14 +54,13 @@ Public License v3. See the LICENSE file for details.
       <div v-else-if="filteredServers.length === 0" class="ssh-auth-empty">
         {{ $t('common.searchEmpty') }}
       </div>
-      <!-- 表体限高独立滚动：头部（说明+搜索+表头）保持可见，列表区自己滚，
-           不能让整个模态框跟着内容长高/整体滚动。 -->
+      <!-- 不启用页签内容动画：Naive UI 会在切换时保留较高页签的高度，
+           切到短列表时底部先留白、动画结束后才收缩。 -->
       <n-tabs
         v-else
         :key="groupTabSetKey"
         v-model:value="activeGroupTab"
         type="line"
-        animated
       >
         <n-tab-pane v-for="group in groupTabs" :key="group.name" :name="group.name" :tab="group.name">
           <div class="ssh-auth-scroll">
@@ -134,6 +133,10 @@ const onlyAllowed = ref(false);
 // 关闭模态框时一次性 emit('commit')，由父级整份保存一份。
 const draftAllowed = ref(new Set());
 const draftReady = ref(false);
+// 与“只看已授权”的过滤口径一致，计数覆盖当前工作区所有分组，不受搜索影响。
+const allowedCount = computed(() => props.sshServers.reduce(
+  (count, server) => count + (draftAllowed.value.has(normServerID(server.id)) ? 1 : 0), 0,
+));
 // 首次打开时的排序快照：仅打开那一刻的授权状态参与排序。
 const openOrderSnapshot = ref(null);
 

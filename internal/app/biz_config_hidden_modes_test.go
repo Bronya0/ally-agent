@@ -12,8 +12,8 @@ import (
 )
 
 func TestSanitizeHiddenModesKeepsOnlyHideable(t *testing.T) {
-	got := sanitizeHiddenModes([]string{"Skills", " kb ", "Chat", "SETTINGS", "bogus", "skills", "games", ""})
-	want := map[string]bool{"skills": true, "kb": true, "games": true}
+	got := sanitizeHiddenModes([]string{"Skills", " kb ", "Chat", "SETTINGS", "bogus", "skills", "games", " Tasks ", "tasks", ""})
+	want := map[string]bool{"skills": true, "kb": true, "games": true, "tasks": true}
 	if len(got) != len(want) {
 		t.Fatalf("sanitizeHiddenModes = %v, want %v", got, want)
 	}

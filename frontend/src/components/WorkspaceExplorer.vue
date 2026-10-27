@@ -115,14 +115,15 @@
           <span class="workspace-explorer-title-text" :title="workspace">{{ treeTitle }}</span>
         </span>
         <div class="workspace-explorer-header-actions">
-          <button
-            type="button"
-            class="workspace-explorer-icon-btn"
+          <n-button
+            size="small"
+            secondary
             :title="$t('common.refresh')"
             :aria-label="$t('common.refresh')"
-            :disabled="loadingTree || !workspace"
+            :loading="loadingTree"
+            :disabled="!workspace"
             @click="refreshTree"
-          ><ReloadOutlined /></button>
+          >{{ $t('common.refresh') }}</n-button>
           <button
             type="button"
             class="workspace-explorer-icon-btn"
@@ -220,7 +221,6 @@ import { copyText } from '../utils/clipboard.mjs';
 import { joinWorkspacePath } from '../utils/workspacePath.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import QuestionCircleOutlined from '@vicons/antd/QuestionCircleOutlined';
-import ReloadOutlined from '@vicons/antd/ReloadOutlined';
 import { RightOutlined } from '@vicons/antd';
 import { t } from '../i18n.mjs';
 import { mergeExplorerNodes, refreshExpandedExplorerNodes, explorerNodeKeys, remapExplorerPath, remapExplorerNodes } from '../utils/explorerTree.mjs';

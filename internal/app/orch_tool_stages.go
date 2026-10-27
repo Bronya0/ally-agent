@@ -54,6 +54,12 @@ func toolStageSucceeded(result toolResult) bool {
 		return data.ExitCode == 0 && !data.TimedOut && !data.Cancelled && !data.SandboxDenied && !data.PromotedToService
 	case *CommandResult:
 		return data != nil && toolStageSucceeded(toolResult{OK: true, Data: *data})
+	case AgentDelegateResult:
+		// A forced report closes the run, but does not establish that its task
+		// finished. Dependent stages must wait for the parent to inspect it.
+		return data.Status == "completed" && data.StopReason != "step_limit"
+	case *AgentDelegateResult:
+		return data != nil && toolStageSucceeded(toolResult{OK: true, Data: *data})
 	case DeletePathsResult:
 		return data.FailedCount == 0
 	case *DeletePathsResult:

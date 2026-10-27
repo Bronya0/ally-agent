@@ -58,10 +58,10 @@ export function normalizeMcpTransport(cfg = {}) {
 
 function projectServer(cfg) {
   return {
-    command: cfg.command ?? '', args: JSON.stringify(cfg.args ?? []),
-    env: JSON.stringify(cfg.env ?? {}, null, 2),
+    command: cfg.command ?? '', args: cfg.args?.length ? JSON.stringify(cfg.args, null, 2) : '',
+    env: Object.keys(cfg.env ?? {}).length ? JSON.stringify(cfg.env, null, 2) : '',
     transport: normalizeMcpTransport(cfg), url: cfg.url ?? '',
-    headers: JSON.stringify(cfg.headers ?? {}, null, 2),
+    headers: Object.keys(cfg.headers ?? {}).length ? JSON.stringify(cfg.headers, null, 2) : '',
     enabled: cfg.enabled !== false, disabledTools: [...(cfg.disabledTools ?? [])],
   };
 }

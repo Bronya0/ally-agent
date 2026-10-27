@@ -157,9 +157,9 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	if !req.CleanContext {
 		env := a.buildSubagentEnv(cfg)
 		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: env})
-		if instructionContext := a.buildSubagentInstructionContext(cfg); instructionContext != "" {
-			messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: instructionContext})
-		}
+	}
+	if instructionContext := a.buildSubagentInstructionContext(cfg, !req.CleanContext); instructionContext != "" {
+		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: instructionContext})
 	}
 	messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "## Task\n" + req.Task})
 	messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: subagentBudgetStartNotice(budget)})
@@ -172,7 +172,8 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 
 	var filesRead []string
 	var filesEdited []string
-	seenFiles := map[string]bool{}
+	seenReads := map[string]bool{}
+	seenEdits := map[string]bool{}
 	step := 0
 	for step < budget {
 		select {
@@ -383,7 +384,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		// emitSubOutcome as each tool completed. Read-image injections persist
 		// for the sub-agent's lifetime (same contract as the main loop).
 		for _, o := range subOutcomes {
-			trackFileFromToolResult(o.name, o.args, &o.result, &filesRead, &filesEdited, seenFiles)
+			trackFileFromToolResult(o.name, o.args, &o.result, &filesRead, &filesEdited, seenReads, seenEdits)
 			messages = append(messages, openai.ChatCompletionMessage{
 				Role: openai.ChatMessageRoleTool, ToolCallID: o.callID, Content: o.modelJSON,
 			})
@@ -421,6 +422,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	}
 	a.subRunsMu.Lock()
 	run.Status = status
+	run.StopReason = "step_limit"
 	run.Summary = summary
 	run.Error = errMsg
 	run.Steps = step
@@ -429,11 +431,11 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	a.subRunsMu.Unlock()
 	a.emit("sub:done", subagentEventPayload(run, map[string]any{
 		"id": subID, "sessionId": sessionID, "status": status, "steps": step,
-		"summary": summary, "error": errMsg, "filesRead": filesRead, "filesEdited": filesEdited, "durationMs": time.Now().UnixMilli() - run.StartTime,
+		"summary": summary, "error": errMsg, "stopReason": "step_limit", "filesRead": filesRead, "filesEdited": filesEdited, "durationMs": time.Now().UnixMilli() - run.StartTime,
 	}))
 	return &AgentDelegateResult{
 		AgentID: subID, Role: req.Role, Description: desc, Status: status,
-		Steps: step, Summary: summary, FilesRead: filesRead, FilesEdited: filesEdited, Model: model,
+		Steps: step, Summary: summary, FilesRead: filesRead, FilesEdited: filesEdited, Model: model, StopReason: "step_limit",
 		Error: errMsg,
 	}, nil
 }
@@ -668,7 +670,7 @@ func subagentSystemPrompt(role string) string {
 		"- When creating intermediate artifacts (scripts, drafts, test fixtures) that are not final deliverables, place them under a `.tmp/` directory within the workspace.\n\n" +
 		"# Output\n\n" +
 		"- Be concise. The parent agent only sees your final summary.\n" +
-		"- When done, write a summary of what you did, which files you changed, and any verification results.\n" +
+		"- Report findings and evidence, files changed, verification, and anything incomplete or blocked. Do not imply an unfinished task is complete.\n" +
 		"- Use `wait` only for a concrete short delay after asynchronous work has started. When it shares a response with other calls, it runs last, after they finished.\n" +
 		"- For remote work, every remote tool call must include an explicit target such as host:/absolute/workspace.\n" +
 		"- " + platformNote + ". Use command syntax appropriate for this platform."
@@ -696,7 +698,10 @@ func (a *App) buildSubagentEnv(cfg ConfigState) string {
 	return b.String()
 }
 
-func (a *App) buildSubagentInstructionContext(cfg ConfigState) string {
+// withProjectMap is false under cleanContext: the code graph describes project
+// structure, which is exactly what that flag asks to skip. Project instructions
+// (AGENTS.md) and custom instructions still apply.
+func (a *App) buildSubagentInstructionContext(cfg ConfigState, withProjectMap bool) string {
 	var b strings.Builder
 	if cfg.Workspace != "" {
 		if md := loadAgentsMd(cfg.Workspace); strings.TrimSpace(md) != "" {
@@ -705,14 +710,16 @@ func (a *App) buildSubagentInstructionContext(cfg ConfigState) string {
 			b.WriteString(md)
 			b.WriteString("\n")
 		}
-		if cg := buildCodeGraphPromptPart(cfg.Workspace); cg != "" {
-			if b.Len() > 0 {
+		if withProjectMap {
+			if cg := buildCodeGraphPromptPart(cfg.Workspace); cg != "" {
+				if b.Len() > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString("## Lower-priority project code graph\n")
+				b.WriteString("Use this as a reference map only. Verify current files before relying on it, and follow the sub-agent system rules and delegated task first.\n")
+				b.WriteString(cg)
 				b.WriteString("\n")
 			}
-			b.WriteString("## Lower-priority project code graph\n")
-			b.WriteString("Use this as a reference map only. Verify current files before relying on it, and follow the sub-agent system rules and delegated task first.\n")
-			b.WriteString(cg)
-			b.WriteString("\n")
 		}
 	}
 	if custom := strings.TrimSpace(cfg.CustomPrompt); custom != "" {
@@ -756,8 +763,11 @@ func (a *App) subagentTools(cfg ConfigState) []openai.Tool {
 }
 
 // trackFileFromToolResult extracts files read/edited from tool calls for the sub-agent summary.
-func trackFileFromToolResult(name string, args string, result *toolResult, filesRead *[]string, filesEdited *[]string, seen map[string]bool) {
-	addPath := func(list *[]string, p string) {
+func trackFileFromToolResult(name string, args string, result *toolResult, filesRead *[]string, filesEdited *[]string, seenReads, seenEdits map[string]bool) {
+	if result == nil || !result.OK {
+		return
+	}
+	addPath := func(list *[]string, seen map[string]bool, p string) {
 		if p == "" || seen[p] {
 			return
 		}
@@ -766,36 +776,43 @@ func trackFileFromToolResult(name string, args string, result *toolResult, files
 	}
 	switch name {
 	case "read", "remote_read":
-		// extract path from args
-		var req struct {
-			Path  string   `json:"path"`
-			Paths []string `json:"paths"`
-			Files []struct {
-				Path string `json:"path"`
-			} `json:"files"`
+		var target struct {
+			Target string `json:"target"`
 		}
-		if json.Unmarshal([]byte(args), &req) == nil {
-			if req.Path != "" {
-				addPath(filesRead, req.Path)
-			}
-			for _, p := range req.Paths {
-				addPath(filesRead, p)
-			}
-			for _, file := range req.Files {
-				addPath(filesRead, file.Path)
+		if name == "remote_read" {
+			_ = json.Unmarshal([]byte(args), &target)
+		}
+		var read BatchReadResult
+		if decodeToolData(result.Data, &read) {
+			for _, file := range read.Files {
+				if file.Error == "" {
+					path := file.Path
+					if target.Target != "" {
+						path = target.Target + " :: " + path
+					}
+					addPath(filesRead, seenReads, path)
+				}
 			}
 		}
 	case "edit":
 		var req FileTextEdits
 		if json.Unmarshal([]byte(args), &req) == nil && req.Path != "" {
-			addPath(filesEdited, req.Path)
+			addPath(filesEdited, seenEdits, req.Path)
+		}
+	case "remote_edit", "remote_create_file":
+		var req struct {
+			Target string `json:"target"`
+			Path   string `json:"path"`
+		}
+		if json.Unmarshal([]byte(args), &req) == nil && req.Target != "" && req.Path != "" {
+			addPath(filesEdited, seenEdits, req.Target+" :: "+req.Path)
 		}
 	case "create", "replace_exact", "replace_lines":
 		var req struct {
 			Path string `json:"path"`
 		}
 		if json.Unmarshal([]byte(args), &req) == nil && req.Path != "" {
-			addPath(filesEdited, req.Path)
+			addPath(filesEdited, seenEdits, req.Path)
 		}
 	}
 }

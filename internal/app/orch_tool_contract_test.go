@@ -327,6 +327,7 @@ func TestPlanToolVocabularyPassesTheGate(t *testing.T) {
 // states has to be the cap the gate enforces, otherwise a model can ask for an
 // unbounded child loop.
 func TestSubagentStepBudgetIsHeldToTheDeclaredMaximum(t *testing.T) {
+	redirectAppStateDir(t)
 	app := NewApp()
 	res := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "s-1", "subagent",
 		[]byte(`{"task":"noop","role":"tester","maxSteps":1001}`))

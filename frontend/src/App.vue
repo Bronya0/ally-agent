@@ -54,7 +54,6 @@ Public License v3. See the LICENSE file for details.
                 @open-session="selectRailSession"
                 @remove-session="deleteRailSession"
                 @new-session="createNewSession"
-                @open-task-center="(tab) => openTaskCenter(tab, 'all')"
                 @resize="setRailWidth"
                 @resize-end="saveRailWidth"
                 @switch="switchMode"
@@ -333,6 +332,7 @@ Public License v3. See the LICENSE file for details.
                   :workspace-output-tokens="workspaceOutputTokens"
                   :service-running-count="serviceRunningCount"
                   :scheduled-running-count="scheduledTaskRunningCount"
+                  :task-center-enabled="!isModeHidden('tasks')"
                   :fmt-k="fmtK"
                   :extra-roots="extraRoots"
                   :allowed-ssh-servers="allowedSSHServersForActiveWorkspace"
@@ -478,6 +478,26 @@ Public License v3. See the LICENSE file for details.
               </RenderBoundary>
             </div>
 
+            <!-- 切页卸载任务视图与日志轮询；任务状态由 App / 后端持有。 -->
+            <div v-if="taskCenterActive" class="settings-page-container">
+              <TaskCenterPanel
+                ref="taskCenterPanelRef"
+                :show="taskCenterActive"
+                :default-tab="taskCenterTab"
+                v-model:scope="taskCenterScope"
+                :workspace="activeRunWorkspace"
+                :tasks="taskCenterTasks"
+                :services="taskCenterServices"
+                :scheduled-loading="scheduledTasksLoading"
+                :services-loading="servicesLoading"
+                :deleting-ids="scheduledTaskDeletingIds"
+                :stopping-ids="serviceStoppingIds"
+                @refresh="refreshTaskCenter"
+                @delete-task="deleteScheduledTask"
+                @stop-service="stopManagedService"
+              />
+            </div>
+
             <!-- Token stats page: v-if unmounts on switch (memory); stats reload on entry. -->
             <div v-if="statsActive" class="settings-page-container">
               <TokenStatsModal :show="statsActive" @close="closeStats" />
@@ -491,22 +511,6 @@ Public License v3. See the LICENSE file for details.
 
             </div>
           </n-layout>
-          <TaskCenterPanel
-            :show="taskCenterVisible"
-            :default-tab="taskCenterTab"
-            v-model:scope="taskCenterScope"
-            :workspace="activeRunWorkspace"
-            :tasks="taskCenterTasks"
-            :services="taskCenterServices"
-            :scheduled-loading="scheduledTasksLoading"
-            :services-loading="servicesLoading"
-            :deleting-ids="scheduledTaskDeletingIds"
-            :stopping-ids="serviceStoppingIds"
-            @close="taskCenterVisible = false"
-            @refresh="refreshTaskCenter"
-            @delete-task="deleteScheduledTask"
-            @stop-service="stopManagedService"
-          />
           <!-- 工作区 SSH 授权：从信息栏气泡升级为独立模态框（勾选区太窄）。 -->
           <SshClusterAuthModal
             :show="sshAuthModalVisible"
@@ -1828,10 +1832,10 @@ const skillsLoading = ref(false);
 const availableTools = ref([]);
 const scheduledTasks = ref([]);
 const services = ref([]);
-const taskCenterVisible = ref(false);
 const sshAuthModalVisible = ref(false);
 // 工具栏两个入口 chip 各自直达对应 Tab（S=后台服务 / C=定时任务）。
 const taskCenterTab = ref('services');
+const taskCenterPanelRef = ref(null);
 const taskCenterScope = ref('all');
 // Workspace explorer 状态按 Tab 独立保存：切换 Tab 时不会重置或取消任何
 // 每个 Tab 看到自己工作区的目录树。已经打开过的 Tab
@@ -2187,13 +2191,13 @@ Step 2 — Review directly or delegate, based on the change's complexity:
 Judge the complexity from Step 1: number of files, total diff size, and whether it touches sensitive areas (auth/security, data handling, concurrency, network, destructive operations).
 
 - Simple change (1-2 small files, a few lines, cosmetic/config/docs/test-only): review it yourself in the main context — do NOT spawn sub-agents. Check the same things a correctness sub-agent would: trace the changed paths, verify error handling and edge cases.
-- Moderate change (one medium-sized file, or a few files with real logic): spawn ONE sub-agent with the correctness lens; handle security and architecture yourself. Use two only when the change touches sensitive areas.
+- Moderate change (one medium-sized file, or a few files with real logic): use one correctness sub-agent when an independent review adds value; otherwise review directly. Handle security and architecture yourself; use two only when the change touches sensitive areas.
 - Large or cross-module change (many files, or touching auth/security/data/concurrency/network): spawn 2-3 parallel sub-agents, one per lens:
   1. correctness — logic errors, edge cases, error handling, resource leaks, concurrency races
   2. security — injection, authn/authz, input validation, secrets & sensitive data exposure, plus the failure modes security-related changes introduce: e.g. a hardcoded secret moved into a database or vault must also work on a fresh install where that secret does not exist yet, must fail closed (never log the secret, never fall back to an insecure default), and must not silently break startup or existing deployments; also check missing env/config dependencies and whether the change weakens existing checks (removed validation, loosened permissions, disabled security gates)
   3. architecture & maintainability — layering violations, duplication, dead code, missing or weakened tests (skip this lens for anything but large or cross-module changes)
 
-Each sub-agent costs time and tokens: use the fewest that cover the risk, and never spawn one for a change you can fully review in the main context.
+Each sub-agent costs time and tokens: use the fewest that cover the risk. An independent perspective can justify waiting for one.
 Every sub-agent task must include all of the following:
   (a) the changed file paths only — pass relative paths and, when known, the specific functions/symbols to review; never paste file contents or the full diff into the task; let each sub-agent run git status / git diff / git diff --stat itself to inspect the actual changes;
   (b) the full requirement — extract the user's complete requirement from the conversation history: the original request, acceptance criteria, business rules, and constraints (what inputs are invalid, what side effects are forbidden); pass that whole requirement to every sub-agent so it can judge whether the code meets it; if the history has no explicit requirement, state plainly that the requirement is unknown and have the sub-agent review against the code's apparent intent — never silently guess;
@@ -2201,7 +2205,7 @@ Every sub-agent task must include all of the following:
   (d) output requirements — output is for the main agent to verify, not for the user: be complete, terse, professional, zero filler — just findings, each with file:line, a concrete trigger path, and a P0/P1/P2 grade; no greetings, disclaimers, explanatory prose, or markdown decoration;
   (e) constraints — read-only, review only this change and its direct impact (not the whole project), never modify files; read only the scoped files plus, when needed, the interfaces/dependencies they call — do NOT grep, search, or read files outside the scope unless you must understand an interface or dependency the scoped code uses; stay pragmatic: do not over-investigate or chase rabbit holes — once your lens is covered, stop and report (deep dives waste time and tokens);
   (f) deployment reality — for any changed code that now depends on something new (database records, environment variables, external services, config), check whether that dependency exists in a fresh install and in an existing deployment; if it may be missing, the code must fail safely and clearly, not silently misbehave or fall back to insecure defaults
-Keep the sub-agents fully independent: never share one sub-agent's conclusions with another. They may read files and run read-only commands (git diff, grep, tests), but must NOT modify any files.
+Keep the sub-agents fully independent: never share one sub-agent's conclusions with another. They may inspect files, search, and run safe tests, but must not modify the reviewed files.
 
 Step 3 — Verify and consolidate:
 Check the evidence for every reported issue yourself (file, line, trigger path) before accepting it. Drop findings you cannot confirm from the actual code, deduplicate across sub-agents keeping the strongest evidence per issue, and do not rubber-stamp sub-agent output.
@@ -2524,11 +2528,12 @@ const skillsActive = computed(() => mode.value === 'skills');
 const mcpActive = computed(() => mode.value === 'mcp');
 const modelsActive = computed(() => mode.value === 'models');
 const sshActive = computed(() => mode.value === 'ssh');
+const taskCenterActive = computed(() => mode.value === 'tasks');
 
 // Overlay pages fill the main area instead of the chat workbench. This set is
 // the source of truth for switchMode's pre-overlay tracking and the ESC-back
 // handler; 主区显隐的判断不靠它，而是正向的 workspacePageActive（见下）。
-const overlayModes = new Set(['settings', 'stats', 'games', 'skills', 'mcp', 'models', 'ssh', 'plugins']);
+const overlayModes = new Set(['settings', 'stats', 'games', 'skills', 'mcp', 'models', 'ssh', 'plugins', 'tasks']);
 // 插件页同样是「整块区域」形态，但 key 是动态的，所以判定要把 plugin: 前缀算进来。
 function isOverlayMode(value) {
   return overlayModes.has(value) || pluginIdFromMode(value) !== '';
@@ -2842,6 +2847,7 @@ async function switchMode(next) {
     const plugin = pluginForMode(next);
     if (plugin) openedPluginIds.add(plugin.id);
     mode.value = next;
+    if (next === 'tasks') await refreshTaskCenter();
     return;
   }
   if (isOverlayMode(mode.value)) {
@@ -5667,6 +5673,7 @@ function bindRuntimeEvents() {
         maxSteps: data.maxSteps || existing?.maxSteps || 0,
         steps: 0,
         summary: '',
+        stopReason: '',
         filesEdited: [],
         error: '',
         toolCalls: existing?.toolCalls || [],
@@ -5728,6 +5735,7 @@ function bindRuntimeEvents() {
     if (msg) {
       setToolStatus(msg, data.status || 'success');
       msg.summary = data.summary || '';
+      msg.stopReason = data.stopReason || '';
       // A run can end without a report (budget exhausted and the model kept
       // calling tools): the terminal event carries that reason, and without it
       // the card would show a partial summary as if it were the answer.
@@ -7623,8 +7631,9 @@ async function refreshTaskCenter() {
 async function openTaskCenter(tab = 'services', scope = 'all') {
   taskCenterTab.value = tab === 'scheduled' ? 'scheduled' : 'services';
   taskCenterScope.value = effectiveTaskScope(scope, activeRunWorkspace.value);
-  taskCenterVisible.value = true;
-  await refreshTaskCenter();
+  if (isModeHidden('tasks')) return;
+  if (taskCenterActive.value) await refreshTaskCenter();
+  else await switchMode('tasks');
 }
 
 async function stopManagedService(id) {
@@ -9403,6 +9412,8 @@ function handleOverlayOutsidePointerDown(event) {
 }
 
 function handleGlobalKeydown(event) {
+  // 日志弹窗先自行处理 ESC，不能连带卸载整个任务页面。
+  if (event.key === 'Escape' && taskCenterPanelRef.value?.logVisible) return;
   // The HTML viewer owns Escape while fullscreen, including while a run is
   // active. Let its listener close the viewer before considering cancellation.
   if (event.key === 'Escape' && document.querySelector('.html-render-frame-wrapper.is-fullscreen')) return;
@@ -9425,7 +9436,7 @@ function handleGlobalKeydown(event) {
     closeReleaseNotes();
     return;
   }
-  if (event.key === 'Escape' && (settingsActive.value || statsActive.value || gamesActive.value || skillsActive.value || mcpActive.value || modelsActive.value || sshActive.value || pluginsActive.value)) {
+  if (event.key === 'Escape' && (settingsActive.value || statsActive.value || gamesActive.value || skillsActive.value || mcpActive.value || modelsActive.value || sshActive.value || pluginsActive.value || taskCenterActive.value)) {
     // Settings / stats / games / skills / mcp / models / ssh / plugins are inline
     // pages now: ESC navigates back.
     event.preventDefault();
@@ -9437,10 +9448,11 @@ function handleGlobalKeydown(event) {
     else if (modelsActive.value) closeModels();
     else if (sshActive.value) closeSSH();
     else if (pluginsActive.value) closePlugins();
+    else if (taskCenterActive.value) switchMode(['chat', 'kb'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
     else closeSettings();
     return;
   }
-  if (event.key === 'Escape' && (taskCenterVisible.value || gitDiffVisible.value)) {
+  if (event.key === 'Escape' && gitDiffVisible.value) {
     // Let Naive UI modals handle their own ESC (nested stack); do not stop the run.
     return;
   }

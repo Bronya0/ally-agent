@@ -228,6 +228,7 @@ func TestForceSubagentFinalReportGivesUpAfterBoundedTurns(t *testing.T) {
 // 只够一步，那一步的工具照常执行；之后报告轮里的工具调用一个都不许落盘，最终
 // 结果仍是模型写出的报告正文。
 func TestSubagentBudgetExhaustionNeverRunsDiscardedToolCalls(t *testing.T) {
+	redirectAppStateDir(t)
 	workspace := t.TempDir()
 	marker := subagentToolCallReply("create", `{"path":"marker.txt","content":"x"}`)
 	harness := newSubagentReportHarness(t,
@@ -252,8 +253,11 @@ func TestSubagentBudgetExhaustionNeverRunsDiscardedToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("executeDelegate() error = %v", err)
 	}
-	if result.Status != "completed" || !strings.Contains(result.Summary, "report: budget was too small") {
-		t.Fatalf("result = %+v, want a completed run carrying the report text", result)
+	if result.Status != "completed" || result.StopReason != "step_limit" || !strings.Contains(result.Summary, "report: budget was too small") {
+		t.Fatalf("result = %+v, want a report with the step limit explicitly marked", result)
+	}
+	if rendered := renderSubagentResultForModel(*result); !strings.Contains(rendered, `stopReason="step_limit"`) {
+		t.Fatalf("parent cannot see the stop reason: %s", rendered)
 	}
 	if _, statErr := os.Stat(filepath.Join(workspace, "marker.txt")); !os.IsNotExist(statErr) {
 		t.Fatalf("marker.txt exists (stat err = %v); report-turn tool calls must never run", statErr)

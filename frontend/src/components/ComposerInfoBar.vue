@@ -136,7 +136,7 @@ Public License v3. See the LICENSE file for details.
         {{ $t('composer.workspace.terminal') }}
       </n-tooltip>
     </span>
-    <n-tooltip placement="top">
+    <n-tooltip v-if="taskCenterEnabled" placement="top">
       <template #trigger>
         <button
           type="button"
@@ -150,7 +150,7 @@ Public License v3. See the LICENSE file for details.
       </template>
       {{ $t('composer.taskCenter.services') }} · {{ $t('service.runningCount', { count: serviceRunningCount }) }}
     </n-tooltip>
-    <n-tooltip placement="top">
+    <n-tooltip v-if="taskCenterEnabled" placement="top">
       <template #trigger>
         <button
           type="button"
@@ -365,6 +365,7 @@ const props = defineProps({
   // 两个 chip 上的数字只数「正在跑」的条目：已退出/已跑完的仍列在任务中心里，但不该
   // 把常驻徽标撑大（面板内的总计另有 service.runningCount / scheduled.runningCount）。
   serviceRunningCount: { type: Number, default: 0 },
+  taskCenterEnabled: { type: Boolean, default: true },
   scheduledRunningCount: { type: Number, default: 0 },
   extraRoots: { type: Array, default: () => [] },
   // 名字里不要出现连续大写：`allowedSSHServers` 无法用 :allowed-ssh-servers 绑定

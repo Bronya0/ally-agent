@@ -36,6 +36,8 @@ func cloneConfig(cfg ConfigState) ConfigState {
 	cfg.AutoValidationVue = cloneConfigPointer(cfg.AutoValidationVue)
 	cfg.AutoValidationJava = cloneConfigPointer(cfg.AutoValidationJava)
 	cfg.AutoValidationJSON = cloneConfigPointer(cfg.AutoValidationJSON)
+	cfg.AutoValidationYAML = cloneConfigPointer(cfg.AutoValidationYAML)
+	cfg.AutoValidationXML = cloneConfigPointer(cfg.AutoValidationXML)
 	cfg.AutoUpdate = cloneConfigPointer(cfg.AutoUpdate)
 	return cfg
 }
@@ -167,6 +169,12 @@ func settingsConfig(base, req ConfigState) ConfigState {
 	}
 	if req.AutoValidationJava != nil {
 		cfg.AutoValidationJava = req.AutoValidationJava
+	}
+	if req.AutoValidationYAML != nil {
+		cfg.AutoValidationYAML = req.AutoValidationYAML
+	}
+	if req.AutoValidationXML != nil {
+		cfg.AutoValidationXML = req.AutoValidationXML
 	}
 	if req.AutoValidationJSON != nil {
 		cfg.AutoValidationJSON = req.AutoValidationJSON

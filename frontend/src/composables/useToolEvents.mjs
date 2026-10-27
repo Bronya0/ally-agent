@@ -430,6 +430,10 @@ export function useToolEvents(ctx) {
     existing.subagentId = resultData.agentId || existing.subagentId || '';
     existing.subagentRole = resultData.role || existing.subagentRole || '';
     setToolStatus(existing, resultData.status || 'success');
+    // The result is the authoritative copy of the run's terminal reason: a card
+    // rebuilt from it (missed sub:done event, fallback card) must not claim a
+    // clean finish when the child ran out of steps.
+    existing.stopReason = resultData.stopReason || '';
     existing.description = resultData.description || existing.description || '';
     existing.summary = resultData.summary || existing.summary || '';
     existing.filesRead = resultData.filesRead || existing.filesRead || [];

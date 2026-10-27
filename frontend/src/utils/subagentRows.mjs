@@ -31,11 +31,22 @@ export function subagentRows(messages, boundaryAfter = () => false) {
   return rows;
 }
 
+// A sub-agent card shows one more state than the generic tool vocabulary:
+// `partial` means the child hit its step budget, so its report exists but the
+// task may be unfinished. This predicate is the only place that decides it;
+// the card and the batch aggregate both read it.
+export function subagentDisplayState(agent) {
+  if (!agent) return 'default';
+  if (agent.error) return 'error';
+  const state = normalizeToolStatus(agent.status);
+  return state === 'success' && agent.stopReason === 'step_limit' ? 'partial' : state;
+}
+
 // A failed child does not finish a batch while siblings are still running.
 export function subagentBatchStatus(agents) {
-  const states = agents.map(agent => agent.error ? 'error' : normalizeToolStatus(agent.status));
-  if (states.includes('running')) return 'running';
-  if (states.includes('default')) return 'default';
-  if (states.includes('error')) return 'error';
+  const states = agents.map(subagentDisplayState);
+  for (const state of ['running', 'default', 'error', 'partial']) {
+    if (states.includes(state)) return state;
+  }
   return states.length ? 'success' : 'default';
 }

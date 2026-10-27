@@ -9,7 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { subagentRows, subagentBatchStatus } from './subagentRows.mjs';
+import { subagentRows, subagentBatchStatus, subagentDisplayState } from './subagentRows.mjs';
 const agent = (id, runId = 'run') => ({ kind: 'subagent', eventId: id, runId });
 
 test('adjacent sub-agents share a row and preserve source identities and the final stats index', () => {
@@ -46,10 +46,25 @@ test('batch status waits for running siblings, then reports aggregate success or
   const states = (...statuses) => statuses.map(status => ({status}));
   assert.equal(subagentBatchStatus(states('failed', 'running', 'completed')), 'running');
   assert.equal(subagentBatchStatus(states('completed', 'success')), 'success');
+  assert.equal(subagentBatchStatus([{status:'completed', stopReason:'step_limit'}]), 'partial');
   assert.equal(subagentBatchStatus(states('completed', 'failed')), 'error');
   assert.equal(subagentBatchStatus([{status:'completed', error:'missing report'}]), 'error');
   assert.equal(subagentBatchStatus(states('pending', 'completed')), 'default');
   assert.equal(subagentBatchStatus([]), 'default');
+});
+
+test('the card state reports partial only for a clean finish that ran out of steps', () => {
+  assert.equal(subagentDisplayState({ status: 'completed', stopReason: 'step_limit' }), 'partial');
+  assert.equal(subagentDisplayState({ status: 'completed' }), 'success');
+  // A real failure is never softened into "step limit reached", even when the
+  // run also stopped at the limit.
+  assert.equal(subagentDisplayState({ status: 'failed', stopReason: 'step_limit' }), 'error');
+  assert.equal(subagentDisplayState({ status: 'completed', error: 'missing report', stopReason: 'step_limit' }), 'error');
+  assert.equal(subagentDisplayState({ status: 'running' }), 'running');
+  assert.equal(subagentDisplayState({}), 'default');
+  assert.equal(subagentDisplayState(null), 'default');
+  // A still-running sibling keeps the batch busy regardless of the reason.
+  assert.equal(subagentBatchStatus([{ status: 'completed', stopReason: 'step_limit' }, { status: 'running' }]), 'running');
 });
 
 test('sequential tool batches in one run keep separate grids and aggregate statuses', () => {

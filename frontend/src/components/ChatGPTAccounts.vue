@@ -10,7 +10,7 @@
       <n-button v-if="busy" @click="cancelLogin">{{ t('common.cancel') }}</n-button>
       <n-button v-if="account" :disabled="busy || loggingOut" @click="login(selected, !account.planEnabled)">{{ t(account.planEnabled ? 'chatgpt.reauthorize' : 'chatgpt.enablePlan') }}</n-button>
       <n-button v-if="account?.signedIn" :disabled="busy || loggingOut" :loading="loggingOut" @click="logout">{{ t('chatgpt.logout') }}</n-button>
-      <n-button :loading="loadingModels" :disabled="!account?.planEnabled || busy || loggingOut" @click="loadModels">{{ t('chatgpt.refreshModels') }}</n-button>
+      <n-button size="small" secondary :loading="loadingModels" :disabled="!account?.planEnabled || busy || loggingOut" @click="loadModels">{{ t('chatgpt.refreshModels') }}</n-button>
       <n-button @click="Browser.OpenURL('https://chatgpt.com/settings/usage')">{{ t('chatgpt.usage') }}</n-button>
     </n-space>
     <n-alert v-if="notice" :type="noticeType" style="margin-top: 10px">{{ notice }}</n-alert>

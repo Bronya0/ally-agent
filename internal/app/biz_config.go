@@ -69,7 +69,7 @@ func defaultConfigState() ConfigState {
 		ProxyMode:             proxyModeOff,
 		BackgroundOpacity:     defaultBackgroundOpacity,
 		CompactThreshold:      defaultCompactThreshold,
-		AutoCompactMethod:     autoCompactMethodSummary,
+		AutoCompactMethod:     autoCompactMethodRecent,
 		CompactTimeoutSeconds: defaultCompactTimeoutSeconds,
 		MessageFontSize:       defaultMessageFontSize,
 		CodeFontSize:          defaultCodeFontSize,
@@ -292,7 +292,7 @@ func (a *App) updateConfigAndPersist(mutate func(*ConfigState)) error {
 // 永不隐藏，清洗时丢弃。名单收口一处：后端清洗、前端开关与一致性测试共用同一组键
 // （前端镜像是 HIDEABLE_MODES，见 frontend/src/utils/config.mjs）。有序而不用 map：
 // 测试按字面量钉住时不受迭代顺序影响，改名只改这一处。
-var hideableModes = []string{"kb", "skills", "mcp", "models", "ssh", "stats", "games", "plugins"}
+var hideableModes = []string{"kb", "skills", "mcp", "models", "ssh", "tasks", "stats", "games", "plugins"}
 
 // isHideableMode 报告 mode 是否可关闭（chat/settings 与未知键返回 false）。
 func isHideableMode(mode string) bool {
@@ -448,6 +448,12 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	}
 	if overlay.AutoValidationJava != nil {
 		base.AutoValidationJava = overlay.AutoValidationJava
+	}
+	if overlay.AutoValidationYAML != nil {
+		base.AutoValidationYAML = overlay.AutoValidationYAML
+	}
+	if overlay.AutoValidationXML != nil {
+		base.AutoValidationXML = overlay.AutoValidationXML
 	}
 	if overlay.AutoValidationJSON != nil {
 		base.AutoValidationJSON = overlay.AutoValidationJSON

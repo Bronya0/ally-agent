@@ -413,11 +413,11 @@ func TestFastCompactNativeResponsesPreservesPhaseAndCalls(t *testing.T) {
 func TestAutoCompactMethodConfigDefaultsAndPersistence(t *testing.T) {
 	t.Parallel()
 	a := newApiTestApp(t)
-	if a.config.AutoCompactMethod != autoCompactMethodSummary {
-		t.Fatal("default must remain the full LLM summary")
+	if a.config.AutoCompactMethod != autoCompactMethodRecent {
+		t.Fatal("default must be local trimming")
 	}
 	for _, tc := range []struct{ value, want string }{
-		{"recent", "recent"}, {"summary", "summary"}, {" RECENT ", "recent"}, {"unknown", "summary"},
+		{"recent", "recent"}, {"summary", "summary"}, {" SUMMARY ", "summary"}, {" RECENT ", "recent"}, {"unknown", "recent"},
 	} {
 		if err := a.SaveConfig(ConfigState{AutoCompactMethod: tc.value}); err != nil {
 			t.Fatal(err)
@@ -434,11 +434,26 @@ func TestAutoCompactMethodConfigDefaultsAndPersistence(t *testing.T) {
 			t.Fatalf("method %q did not persist as %q", tc.value, tc.want)
 		}
 	}
+	for _, tc := range []struct{ input, want string }{
+		{`{}`, "recent"}, {`{"autoCompactMethod":""}`, "recent"},
+		{`{"autoCompactMethod":"summary"}`, "summary"}, {`{"autoCompactMethod":"recent"}`, "recent"},
+	} {
+		if err := os.WriteFile(a.configPath, []byte(tc.input), 0600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := readConfigFile(a.configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := loadedConfig(loaded).AutoCompactMethod; got != tc.want {
+			t.Fatalf("load %s: got %q, want %q", tc.input, got, tc.want)
+		}
+	}
 	if got := mergeConfig(ConfigState{AutoCompactMethod: "recent"}, ConfigState{}).AutoCompactMethod; got != "recent" {
 		t.Fatal("an absent request overlay must preserve the stored method")
 	}
-	if got := mergeConfig(ConfigState{}, ConfigState{}).AutoCompactMethod; got != "summary" {
-		t.Fatal("legacy config must default to the full LLM summary")
+	if got := mergeConfig(ConfigState{}, ConfigState{}).AutoCompactMethod; got != "recent" {
+		t.Fatal("legacy config must default to local trimming")
 	}
 }
 

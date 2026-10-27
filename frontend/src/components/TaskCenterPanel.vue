@@ -8,18 +8,11 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <n-modal
-    :show="show"
-    preset="card"
-    :title="$t('taskCenter.title')"
-    :style="{ width: 'min(920px, calc(100vw - 48px))' }"
-    :mask-closable="true"
-    @update:show="(value) => !value && $emit('close')"
-    @after-enter="syncTabs"
-  >
-    <template #header-extra>
-      <n-button size="small" quaternary :loading="loading" @click="$emit('refresh')">{{ $t('common.refresh') }}</n-button>
-    </template>
+  <div class="task-center-page">
+    <header class="task-center-header">
+      <span class="task-center-title">{{ $t('taskCenter.title') }}</span>
+      <n-button size="small" secondary :loading="loading" @click="$emit('refresh')">{{ $t('common.refresh') }}</n-button>
+    </header>
 
     <div class="task-center-body">
       <div class="task-scope">
@@ -159,7 +152,7 @@ Public License v3. See the LICENSE file for details.
         </n-tab-pane>
       </n-tabs>
     </div>
-  </n-modal>
+  </div>
 
   <n-modal v-model:show="logVisible" preset="card" :title="logTitle" :style="{ width: 'min(960px, 92vw)' }" @after-enter="scrollLogToBottom">
     <div class="log-toolbar">
@@ -168,7 +161,7 @@ Public License v3. See the LICENSE file for details.
       <span v-if="logServiceId && !logFollowing" class="log-follow-state">{{ $t('taskCenter.logPaused') }}</span>
       <n-space>
         <n-button v-if="logServiceId && !logFollowing" size="small" secondary @click="resumeLogFollowing">{{ $t('taskCenter.backToLatest') }}</n-button>
-        <n-button v-if="logServiceId" size="small" quaternary :loading="logLoading" @click="refreshServiceLog()">{{ $t('common.refresh') }}</n-button>
+        <n-button v-if="logServiceId" size="small" secondary :loading="logLoading" @click="refreshServiceLog()">{{ $t('common.refresh') }}</n-button>
         <n-button size="small" quaternary :disabled="!logContent" @click="copyLog">{{ $t('taskCenter.copyBuffer') }}</n-button>
       </n-space>
     </div>
@@ -203,7 +196,7 @@ const props = defineProps({
   workspace: { type: String, default: '' },
 });
 
-defineEmits(['close', 'refresh', 'deleteTask', 'stopService', 'update:scope']);
+defineEmits(['refresh', 'deleteTask', 'stopService', 'update:scope']);
 
 // Background services come first: they are the live, interactive part of the
 // task center (stop / tail a running dev server), while scheduled tasks are
@@ -211,6 +204,7 @@ defineEmits(['close', 'refresh', 'deleteTask', 'stopService', 'update:scope']);
 const activeTab = ref('services');
 const tabsRef = ref(null);
 const logVisible = ref(false);
+defineExpose({ logVisible });
 const logLoading = ref(false);
 const logTitle = ref('');
 const logMeta = ref('');
@@ -256,12 +250,12 @@ watch([() => props.scope, () => props.workspace], () => {
 }, { flush: 'sync' });
 
 // 每次打开面板时定位到入口 chip 对应的 Tab；面板内的手动切换在下次打开前一直有效。
-watch(() => props.show, (visible) => {
+watch([() => props.show, () => props.defaultTab], ([visible]) => {
   if (!visible) return;
   const next = props.defaultTab === 'scheduled' ? 'scheduled' : 'services';
   if (activeTab.value !== next) activeTab.value = next;
   syncTabs();
-});
+}, { immediate: true });
 
 function previewHtml(text) {
   return renderAnsiToHtml(text).html;
@@ -455,7 +449,10 @@ function durationLabel(seconds) {
 .task-scope { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
 .task-scope > .ellipsis { min-width: 0; flex: 1; }
 .task-scope-switch { width: 250px; max-width: 100%; flex: none; }
-.task-center-body { height: min(72vh, 760px); min-height: 360px; overflow: auto; padding-right: 4px; }
+.task-center-page { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.task-center-header { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 22px 12px; border-bottom: 1px solid var(--ally-border); }
+.task-center-title { font-size: 18px; font-weight: 650; color: var(--ally-text-primary); }
+.task-center-body { flex: 1; min-height: 0; overflow: auto; padding: 16px 22px 22px; }
 .task-center-body :deep(.task-content-tabs) { min-height: 100%; }
 .task-overview { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 10px; color: var(--ally-text-muted); font-size: 12px; }
 .task-list { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }

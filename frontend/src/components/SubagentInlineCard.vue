@@ -42,7 +42,7 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, ref, useId } from 'vue';
 import RightOutlined from '@vicons/antd/RightOutlined';
-import { normalizeToolStatus } from '../utils/toolEventState.mjs';
+import { subagentDisplayState } from '../utils/subagentRows.mjs';
 import { useDisplayClock, usePresentationActive } from '../composables/presentation.mjs';
 import { t } from '../i18n.mjs';
 import { fmtDuration } from '../utils/format.mjs';
@@ -55,7 +55,8 @@ function toggleReport() {
   expanded.value = !expanded.value;
 }
 const detailsId = useId();
-const state = computed(() => props.msg?.error ? 'error' : normalizeToolStatus(props.msg?.status));
+// One source for the whole card state, including `partial` (step budget ran out).
+const state = computed(() => subagentDisplayState(props.msg));
 const hasReport = computed(() => !!props.msg?.error || (state.value !== 'running' && !!props.msg?.summary));
 const steps = computed(() => Math.max(0, Number(props.msg?.steps) || 0));
 const stepLimit = computed(() => Math.max(0, Number(props.msg?.maxSteps) || 0));
@@ -141,6 +142,9 @@ const tokenTooltip = computed(() => {
 }
 .subagent-status-dot.is-success {
   background: var(--ally-success-pale);
+}
+.subagent-status-dot.is-partial {
+  background: var(--ally-warning);
 }
 .subagent-status-dot.is-error {
   background: var(--ally-danger-pale);

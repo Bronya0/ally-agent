@@ -715,6 +715,10 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 		if result.Status != "" && result.Status != "completed" {
 			status = result.Status
 		}
+		if result.StopReason == "step_limit" && status == "completed" {
+			status = "timed_out"
+			errText = "step budget exhausted; task completion is unknown"
+		}
 		if result.Error != "" {
 			errText = result.Error
 		}

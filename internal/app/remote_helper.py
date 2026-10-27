@@ -532,17 +532,17 @@ def check_write_targets(root, cwd, targets):
             # 词法在工作区内但解析后逃到工作区外（symlink 父目录）：
             # 与本地 inspectCommandMutationTarget 一致，无条件拦截，
             # 无论目标文件是否已存在。
-            raise ValueError("E_PATH_OUTSIDE: remote command write target escapes workspaceRoot via symlink: %s" % p)
+            raise ValueError("E_PATH_OUTSIDE: remote command was not executed. The write target is inside workspaceRoot lexically but resolves outside it through a symlink. This is blocked even when the destination does not exist. Target: %s; resolved target: %s; workspaceRoot: %s. Use a real path inside workspaceRoot, such as .tmp/output.txt, instead of this escaping symlink." % (p, resolved, root_str))
         # 解析后落在版本控制元数据里同样拒绝：.git 被链成 gh 之后的
         # gh/hooks/pre-commit 字面干净（Go 侧按字面判过一遍），解析后才露出 .git
         # ——与本地 command 用解析后路径再判一次是同一个手法。
         for candidate in (lexical, resolved):
             if contains_vcs(candidate):
-                raise ValueError("E_PROTECTED_PATH: remote command write target is inside version-control metadata: %s" % p)
+                raise ValueError("E_PROTECTED_PATH: remote command was not executed. The write target is inside version-control metadata: %s (resolved target: %s). Creating or modifying .git/.svn/.hg metadata is blocked whether or not the destination exists. Choose a non-metadata output path inside workspaceRoot." % (p, resolved))
         if res_inside:
             continue
         if os.path.lexists(p):
-            raise ValueError("E_PATH_OUTSIDE: remote command write target is outside workspaceRoot: %s" % p)
+            raise ValueError("E_PATH_OUTSIDE: remote command was not executed. The write target ALREADY EXISTS outside workspaceRoot: %s (resolved target: %s; workspaceRoot: %s). Overwriting, appending, moving, changing permissions, or otherwise modifying an existing outside file or directory is blocked. This is not a blanket ban on outside paths: reading them, writing to /dev/null, and creating a genuinely new outside path are allowed, subject to the other safety rules. /tmp has no overwrite exemption. Use an output path inside workspaceRoot (for example .tmp/output.txt; create its parent first) or a unique unused temporary path. Do not retry this existing target or hide it behind variables or symlinks." % (p, resolved, root_str))
 
 def append_command_output(out, chunk, limit):
     # Keep the real beginning and end within the existing capture budget.

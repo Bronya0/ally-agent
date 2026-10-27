@@ -10,7 +10,7 @@ const source = readFileSync(new URL('./TaskCenterPanel.vue', import.meta.url), '
 const setup = source.match(/<script setup>([\s\S]*?)<\/script>/)[1]
   .replace(/^import .*;\r?$/gm, '');
 
-function harness() {
+function harness(defaultTab = 'services') {
   const requests = [];
   const timers = new Map();
   const frames = [];
@@ -18,13 +18,14 @@ function harness() {
   let unmount;
   let sequence = 0;
   const document = { hidden: false };
-  const props = reactive({ tasks: [], services: [], scope: 'workspace', workspace: 'F:/a' });
+  const props = reactive({ show: true, defaultTab, tasks: [], services: [], scope: 'workspace', workspace: 'F:/a' });
   const dependencies = {
     computed, nextTick, ref, effectiveTaskScope,
     watch: (...args) => { const stop = watch(...args); stops.push(stop); return stop; },
     onUnmounted: (callback) => { unmount = callback; },
     defineProps: () => props,
     defineEmits: () => {},
+    defineExpose: () => {},
     GetServiceOutput: (id) => new Promise((resolve, reject) => requests.push({ id, resolve, reject })),
     isServiceActive: (service) => service.status === 'running',
     t: (key) => key,
@@ -39,7 +40,7 @@ function harness() {
   const state = new Function(...Object.keys(dependencies), `${setup}
     return { openServiceLog, openScheduledLog, refreshServiceLog, logVisible,
       logContent, logMeta, logLoading, logServiceActive, viewScope, logPre,
-      logFollowing, onLogScroll, resumeLogFollowing };`)(...Object.values(dependencies));
+      logFollowing, onLogScroll, resumeLogFollowing, activeTab };`)(...Object.values(dependencies));
   return { ...state, props, requests, timers, frames, document,
     flushFrames() { frames.splice(0).forEach((callback) => callback()); },
     dispose() { unmount(); stops.forEach((stop) => stop()); } };
@@ -51,6 +52,19 @@ test('empty workspace cannot leave the disabled workspace filter selected', () =
     h.props.scope = 'workspace';
     h.props.workspace = '';
     assert.equal(h.viewScope.value, 'all');
+  } finally { h.dispose(); }
+});
+
+test('entry selection updates the tab while the task page is already mounted', async () => {
+  const h = harness('scheduled');
+  try {
+    assert.equal(h.activeTab.value, 'scheduled', 'a newly mounted page honors the scheduled-task entry');
+    h.props.defaultTab = 'services';
+    await nextTick();
+    assert.equal(h.activeTab.value, 'services');
+    h.props.defaultTab = 'scheduled';
+    await nextTick();
+    assert.equal(h.activeTab.value, 'scheduled');
   } finally { h.dispose(); }
 });
 

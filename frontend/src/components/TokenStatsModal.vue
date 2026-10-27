@@ -14,7 +14,7 @@ Public License v3. See the LICENSE file for details.
   <div class="stats-inline-panel">
     <header class="stats-inline-header">
       <span class="stats-inline-title">{{ $t('stats.title') }}</span>
-      <n-button size="small" quaternary :loading="loading" @click="load">{{ $t('common.refresh') }}</n-button>
+      <n-button size="small" secondary :loading="loading" @click="load">{{ $t('common.refresh') }}</n-button>
     </header>
 
     <div class="stats-body">

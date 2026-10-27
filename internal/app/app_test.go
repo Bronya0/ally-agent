@@ -876,6 +876,7 @@ func TestSaveConfigClearsCustomPrompt(t *testing.T) {
 }
 
 func TestAgentDelegateSemaphoreRespectsCancelledContext(t *testing.T) {
+	redirectAppStateDir(t)
 	app := newModelTestApp()
 	for i := 0; i < cap(app.subSem); i++ {
 		app.subSem <- struct{}{}
@@ -1250,15 +1251,31 @@ func TestSubagentInstructionContextIncludesProjectAndCustomInstructions(t *testi
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Project rule: use focused tests.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := newModelTestApp()
-
-	got := app.buildSubagentInstructionContext(ConfigState{Workspace: root, CustomPrompt: "Custom rule: concise summaries."})
-
-	if !strings.Contains(got, "Project rule: use focused tests.") {
-		t.Fatalf("expected project instructions in subagent context, got %q", got)
+	if err := os.WriteFile(filepath.Join(root, "CODEGRAPH.md"), []byte("# Code Graph\n\n- entry: main.go\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(got, "Custom rule: concise summaries.") {
-		t.Fatalf("expected custom instructions in subagent context, got %q", got)
+	app := newModelTestApp()
+	cfg := ConfigState{Workspace: root, CustomPrompt: "Custom rule: concise summaries."}
+
+	got := app.buildSubagentInstructionContext(cfg, true)
+	for _, want := range []string{"Project rule: use focused tests.", "Custom rule: concise summaries.", "# Project Code Graph", "entry: main.go"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in subagent context, got %q", want, got)
+		}
+	}
+
+	// cleanContext asks for a context that carries no project structure, so the
+	// code graph must not ride along with the instructions it does keep.
+	clean := app.buildSubagentInstructionContext(cfg, false)
+	for _, banned := range []string{"Project Code Graph", "entry: main.go"} {
+		if strings.Contains(clean, banned) {
+			t.Fatalf("cleanContext must skip %q, got %q", banned, clean)
+		}
+	}
+	for _, want := range []string{"Project rule: use focused tests.", "Custom rule: concise summaries."} {
+		if !strings.Contains(clean, want) {
+			t.Fatalf("cleanContext must keep %q, got %q", want, clean)
+		}
 	}
 }
 
@@ -1464,6 +1481,7 @@ func TestSessionSystemPromptFrozenWithinSession(t *testing.T) {
 }
 
 func TestSubagentToolsExcludeInteractiveToolsAndIncludeMCP(t *testing.T) {
+	redirectAppStateDir(t)
 	app := newModelTestApp()
 	app.mcpManager = NewMcpManager(t.TempDir(), nil)
 	app.mcpManager.clients["demo"] = &McpClientHandle{
@@ -1475,7 +1493,7 @@ func TestSubagentToolsExcludeInteractiveToolsAndIncludeMCP(t *testing.T) {
 		}},
 	}
 	tools := app.subagentTools(ConfigState{})
-	foundMCP := false
+	available := map[string]bool{"mcp__demo__lookup": false, "edit": false, "command": false, "web_fetch": false}
 	for _, tool := range tools {
 		if tool.Function == nil {
 			continue
@@ -1483,12 +1501,14 @@ func TestSubagentToolsExcludeInteractiveToolsAndIncludeMCP(t *testing.T) {
 		if tool.Function.Name == "scheduled_task" || tool.Function.Name == "ask" || tool.Function.Name == "subagent" {
 			t.Fatalf("sub-agent must not receive %s tool schema", tool.Function.Name)
 		}
-		if tool.Function.Name == "mcp__demo__lookup" {
-			foundMCP = true
+		if _, ok := available[tool.Function.Name]; ok {
+			available[tool.Function.Name] = true
 		}
 	}
-	if !foundMCP {
-		t.Fatal("sub-agent should receive connected MCP tool schemas")
+	for name, found := range available {
+		if !found {
+			t.Fatalf("sub-agent should retain the configured %s tool", name)
+		}
 	}
 }
 

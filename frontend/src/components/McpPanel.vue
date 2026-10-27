@@ -151,11 +151,12 @@ Public License v3. See the LICENSE file for details.
     <n-form label-placement="top">
       <n-grid :cols="2" :x-gap="12">
         <n-form-item-gi :label="$t('settings.mcpServerName')" :span="1">
-          <n-input v-model:value="mcpEditorDraft.name" :placeholder="$t('settings.mcpServerName')" />
+          <n-input v-model:value="mcpEditorDraft.name" :placeholder="$t('settings.mcpServerNamePlaceholder')" />
         </n-form-item-gi>
         <n-form-item-gi :label="$t('settings.mcpTransport')" :span="1">
           <n-select
             v-model:value="mcpEditorDraft.transport"
+            :placeholder="$t('settings.mcpTransportPlaceholder')"
             :options="[
               { label: $t('settings.mcpTransportStdio'), value: 'stdio' },
               { label: $t('settings.mcpTransportSse'), value: 'sse' },
@@ -165,21 +166,28 @@ Public License v3. See the LICENSE file for details.
         </n-form-item-gi>
         <template v-if="mcpEditorDraft.transport === 'stdio'">
           <n-form-item-gi :label="$t('settings.mcpCommand')" :span="2">
-            <n-input v-model:value="mcpEditorDraft.command" :placeholder="$t('settings.mcpCommand')" spellcheck="false" />
+            <n-input v-model:value="mcpEditorDraft.command" :placeholder="$t('settings.mcpCommandPlaceholder')" spellcheck="false" />
           </n-form-item-gi>
           <n-form-item-gi :label="$t('settings.mcpArgs')" :span="2">
-            <n-input v-model:value="mcpEditorDraft.args" :placeholder="$t('settings.mcpArgsPlaceholder')" spellcheck="false" />
+            <n-input
+              v-model:value="mcpEditorDraft.args"
+              type="textarea"
+              :autosize="{ minRows: 4, maxRows: 10 }"
+              :placeholder="$t('settings.mcpArgsPlaceholder')"
+              spellcheck="false"
+            />
+            <template #feedback>{{ $t('settings.mcpArgsHint') }}</template>
           </n-form-item-gi>
           <n-form-item-gi :label="$t('settings.mcpEnv')" :span="2">
-            <n-input v-model:value="mcpEditorDraft.env" type="textarea" :rows="2" :placeholder="$t('settings.mcpEnv')" spellcheck="false" />
+            <n-input v-model:value="mcpEditorDraft.env" type="textarea" :rows="3" :placeholder="$t('settings.mcpEnvPlaceholder')" spellcheck="false" />
           </n-form-item-gi>
         </template>
         <template v-else>
           <n-form-item-gi :label="$t('settings.mcpUrl')" :span="2">
-            <n-input v-model:value="mcpEditorDraft.url" :placeholder="$t('settings.mcpUrl')" spellcheck="false" />
+            <n-input v-model:value="mcpEditorDraft.url" :placeholder="$t('settings.mcpUrlPlaceholder')" spellcheck="false" />
           </n-form-item-gi>
           <n-form-item-gi :label="$t('settings.mcpHeaders')" :span="2">
-            <n-input v-model:value="mcpEditorDraft.headers" type="textarea" :rows="2" :placeholder="$t('settings.mcpHeaders')" spellcheck="false" />
+            <n-input v-model:value="mcpEditorDraft.headers" type="textarea" :rows="3" :placeholder="$t('settings.mcpHeadersPlaceholder')" spellcheck="false" />
           </n-form-item-gi>
         </template>
       </n-grid>
@@ -357,11 +365,11 @@ function blankMcpServerForm() {
     _raw: null,
     name: '',
     command: '',
-    args: '[]',
-    env: '{}',
+    args: '',
+    env: '',
     transport: 'stdio',
     url: '',
-    headers: '{}',
+    headers: '',
     enabled: true,
     disabledTools: [],
   };

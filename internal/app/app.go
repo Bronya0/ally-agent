@@ -648,6 +648,8 @@ type ConfigState struct {
 	AutoValidationVue        *bool `json:"autoValidationVue,omitempty"`
 	AutoValidationJava       *bool `json:"autoValidationJava,omitempty"`
 	AutoValidationJSON       *bool `json:"autoValidationJson,omitempty"`
+	AutoValidationYAML       *bool `json:"autoValidationYaml,omitempty"`
+	AutoValidationXML        *bool `json:"autoValidationXml,omitempty"`
 	// AutoUpdate is a pointer so that an absent field in legacy config.json
 	// is treated as "default on" rather than "off". Only an explicit false
 	// disables automatic background downloads.
@@ -678,7 +680,7 @@ type ConfigState struct {
 	// configs migrate transparently; the effective value is exposed via
 	// effectiveCompactThreshold().
 	CompactThreshold float64 `json:"compactThreshold,omitempty"`
-	// AutoCompactMethod selects threshold compaction: summary (default) or recent.
+	// AutoCompactMethod selects threshold compaction: recent (default) or summary.
 	// Provider context overflow still uses a full LLM summary for recovery.
 	AutoCompactMethod string `json:"autoCompactMethod,omitempty"`
 	// CompactTimeoutSeconds bounds the compaction LLM call (summary request).
@@ -1581,6 +1583,7 @@ type AgentDelegateResult struct {
 	Role        string   `json:"role"`
 	Description string   `json:"description"`
 	Status      string   `json:"status"`
+	StopReason  string   `json:"stopReason,omitempty"`
 	Steps       int      `json:"steps"`
 	Summary     string   `json:"summary"`
 	FilesRead   []string `json:"filesRead,omitempty"`
@@ -1597,6 +1600,7 @@ type SubagentRun struct {
 	Profile      string         `json:"profile"`
 	Role         string         `json:"role,omitempty"`
 	Status       string         `json:"status"` // running, completed, failed
+	StopReason   string         `json:"stopReason,omitempty"`
 	Steps        int            `json:"steps"`
 	Summary      string         `json:"summary,omitempty"`
 	FilesRead    []string       `json:"filesRead,omitempty"`

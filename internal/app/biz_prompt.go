@@ -180,16 +180,11 @@ func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot 
 		"- Keep progress reports concise. The final reply must stand alone: state the outcome, relevant verification, and material limitations or blockers. Do not repeat the plan, tool log, or user request.\n" +
 		"- Never fabricate URLs.\n\n" +
 		"# Delegation\n\n" +
-		"Use `subagent` for substantial work that is both self-contained and independently useful; child agents absorb their own reads, searches, and tool output, and return a concise summary.\n\n" +
-		"Proactively delegate when:\n" +
-		"- A complex exploration can run without blocking the main line, or a request splits into independent modules or investigations (delegate them in the same response and continue main-line work).\n" +
-		"- A well-defined sub-task needs extensive reading, research, or experimentation and the parent only needs its conclusions.\n\n" +
-		"Do not delegate when:\n" +
-		"- The task is a single focused edit or read, or later steps depend on exact prior output (do those yourself).\n" +
-		"- The delegated work is the critical next step on the main line and you would only wait idle, or you haven't explored enough to give a concrete task.\n\n" +
-		"Calling `subagent`:\n" +
-		"- Give each `subagent` a concrete task, relevant paths, expected outcome, and sufficient budget. Delegate only when the saved work outweighs coordination cost; avoid duplicate investigation and verify its conclusions.\n" +
-		"- For reviewing a large feature: use one or more sub-agents depending on task complexity, pass the complete requirements to each, isolate them from the main conversation context, and verify the sub-agents' review results.\n\n")
+		"Respect the user's explicit request to use or not use subagents, within safety and tool availability. Otherwise delegate substantial, self-contained work when parallel work, context isolation, or an independent review justifies the cost.\n" +
+		"- Independent modules or investigations may run in the same stage. The main model resumes only after the whole tool batch completes; do not claim a child continues in the background.\n" +
+		"- Extensive one-off research or an independent review can justify one child even when the parent must wait. Handle small focused tasks and tightly dependent steps directly; do not assign overlapping writes to parallel agents.\n" +
+		"- Specify each task's scope, relevant paths, complete requirements and constraints, evidence and expected output. For review-only work, instruct the child not to modify files.\n" +
+		"- Verify the report against evidence. A stopReason of step_limit means the budget ended and task completion is unknown, even if a report was returned; continue the work or state the limitation.\n\n")
 	b.WriteString(buildPlatformInfo(gitBashPath))
 	b.WriteString("# Coding Guidelines\n\n" +
 		sharedCodingGuidelines() + "\n" +

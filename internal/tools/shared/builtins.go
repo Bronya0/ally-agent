@@ -361,7 +361,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "paths"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace. Use remote_delete_path for unmanaged deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Modifying existing paths outside the workspace is refused. A timeout kills the process group. Output keeps its real head and tail. A full log path is returned when the preview is reduced; inspect it with remote_read on the same target, or filter it with a read-only remote command. Partial logs are explicitly marked; never rerun side effects merely to recover output.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace. Use remote_delete_path for unmanaged deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Outside-path reads and creation of new paths are allowed; modifying an existing outside file or directory is refused, including under /tmp. Writes through workspace symlinks that escape the workspace and writes to VCS metadata remain blocked. Use workspace .tmp/ or a unique unused temporary path for output. A timeout kills the process group. Output keeps its real head and tail. A full log path is returned when the preview is reduced; inspect it with remote_read on the same target, or filter it with a read-only remote command. Partial logs are explicitly marked; never rerun side effects merely to recover output.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  sshTargetSchema(),
@@ -466,14 +466,14 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("subagent", "Delegate a task to a child agent with its own tool loop. The child uses built-in and MCP tools, but never the tools that belong to the parent session or to the visible user: no ask, no subagent, no plan, no skill and no scheduled_task; only its final summary is returned. You must set `maxSteps` (the child's tool-call-round budget) based on task difficulty.", map[string]any{
+		functionTool("subagent", "Delegate a self-contained task to a child with a fresh context. The parent waits for the entire tool batch; same-stage calls can run concurrently. The child uses built-in and MCP tools, but cannot use ask, subagent, plan, skill or scheduled_task. Check its report and stopReason before treating work as complete. Set maxSteps based on difficulty.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The task for the child agent. Be specific — include file paths and expected outcomes."},
 				"role":         map[string]any{"type": "string", "minLength": 1, "maxLength": 80, "pattern": ".*\\S.*", "description": "What the sub-agent is, as a short role name such as \"researcher\", \"code reviewer\", or \"tester\", not a sentence about the task. It is injected into the sub-agent's system prompt."},
 				"maxSteps":     map[string]any{"type": "integer", "minimum": 1, "maximum": MaxDelegateStepBudget, "description": "Required tool-call-round budget, chosen by task difficulty: small lookups ~5-10, normal tasks ~15-30, large multi-file work ~40-80. The child is warned as it runs low and must output a report on the final round."},
 				"description":  map[string]any{"type": "string", "description": "Short 3-5 word summary of what the delegated agent is working on."},
-				"cleanContext": map[string]any{"type": "boolean", "description": "If true, skip workspace environment injection. Use for tasks that do not depend on project structure (e.g. write a standalone algorithm). Default false."},
+				"cleanContext": map[string]any{"type": "boolean", "description": "If true, skip the workspace file listing, project code graph and lessons; project and custom instructions still apply. Parent conversation history is always isolated. Default false."},
 				"model":        map[string]any{"type": "string", "description": "Optional model override. Default uses current model."},
 			},
 			"required": []string{"task", "role", "maxSteps"},

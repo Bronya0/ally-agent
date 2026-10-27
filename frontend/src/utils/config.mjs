@@ -22,7 +22,7 @@ export const COMPACT_THRESHOLD_MAX = 0.95;
 // sanitizeHiddenModes 同一组键，两边漂移会导致“界面关了、后端又放回来”。
 // 插件管理页（plugins）是内置页面，所以在这里；插件的**页面**不走这套，它们的显隐
 // 由各自的启用开关表达（见 App.vue 的 isModeEnterable）。
-export const HIDEABLE_MODES = ['kb', 'skills', 'mcp', 'models', 'ssh', 'stats', 'games', 'plugins'];
+export const HIDEABLE_MODES = ['kb', 'skills', 'mcp', 'models', 'ssh', 'tasks', 'stats', 'games', 'plugins'];
 
 // 可关闭页面的显示名（i18n 键）：设置页的开关列表由 HIDEABLE_MODES 派生，键集合
 // 必须与它完全一致——漏一个键就少一个开关（点了没反应），多一个键是死配置。
@@ -33,6 +33,7 @@ export const PAGE_VISIBILITY_LABELS = {
   mcp: 'app.mode.mcp',
   models: 'app.mode.models',
   ssh: 'app.mode.sshCluster',
+  tasks: 'taskCenter.title',
   stats: 'header.tokenStats',
   games: 'header.games',
   plugins: 'app.mode.plugins',
@@ -101,6 +102,8 @@ export function defaultConfig() {
     autoValidationVue: false,
     autoValidationJava: false,
     autoValidationJson: false,
+    autoValidationYaml: false,
+    autoValidationXml: false,
     // Auto-update defaults to on. Loaded config may store explicit false to
     // opt out; legacy config without the field is treated as enabled by the
     // backend (*bool pointer).
@@ -121,7 +124,7 @@ export function defaultConfig() {
     // [COMPACT_THRESHOLD_MIN, COMPACT_THRESHOLD_MAX] range; zero (legacy config
     // without the field) is replaced with the default in mergeConfig.
     compactThreshold: COMPACT_THRESHOLD_DEFAULT,
-    autoCompactMethod: 'summary',
+    autoCompactMethod: 'recent',
     // Manual/auto compaction LLM call timeout in seconds. Backend clamps
     // to [30, 3600]; zero (legacy config) falls back to the default.
     compactTimeoutSeconds: 180,
@@ -168,7 +171,9 @@ export function assignConfig(target, source) {
   next.autoValidationVue = next.autoValidationVue === true;
   next.autoValidationJava = next.autoValidationJava === true;
   next.autoValidationJson = next.autoValidationJson === true;
-  next.autoCompactMethod = String(next.autoCompactMethod || '').trim().toLowerCase() === 'recent' ? 'recent' : 'summary';
+  next.autoValidationYaml = next.autoValidationYaml === true;
+  next.autoValidationXml = next.autoValidationXml === true;
+  next.autoCompactMethod = String(next.autoCompactMethod || '').trim().toLowerCase() === 'summary' ? 'summary' : 'recent';
   // compactThreshold: legacy configs without the field (or explicit 0) fall
   // back to the default so the slider shows the effective value, not 0.
   next.compactThreshold = Number(next.compactThreshold) > 0

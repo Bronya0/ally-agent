@@ -282,6 +282,32 @@ func TestStageLocalWriteConflicts(t *testing.T) {
 	}
 }
 
+func TestSubagentStepLimitBlocksDependentStage(t *testing.T) {
+	for _, limited := range []bool{false, true} {
+		t.Run(fmt.Sprintf("limited=%v", limited), func(t *testing.T) {
+			a := newIsolatedTestApp(t)
+			calls := []openai.ToolCall{stagedCall("subagent", `{"stage":0}`), stagedCall("calculate", `{"stage":1}`)}
+			var results [2]toolResult
+			executed := false
+			a.executeStagedToolBatch(context.Background(), ConfigState{Workspace: t.TempDir()}, calls, nil,
+				func(_ context.Context, index int, _ openai.ToolCall) toolResult {
+					if index == 0 {
+						result := AgentDelegateResult{Status: "completed"}
+						if limited {
+							result.StopReason = "step_limit"
+						}
+						return toolResult{OK: true, Data: result}
+					}
+					executed = true
+					return toolResult{OK: true}
+				}, func(index int, _ openai.ToolCall, result toolResult, _ int64) { results[index] = result })
+			if executed == limited || (limited && results[1].ErrorCode != "E_STAGE_BLOCKED") {
+				t.Fatalf("executed=%v, results=%+v", executed, results)
+			}
+		})
+	}
+}
+
 func TestAgentLoopsStageFailureBlocksLaterWrites(t *testing.T) {
 	for _, child := range []bool{false, true} {
 		t.Run(fmt.Sprintf("child=%v", child), func(t *testing.T) {
