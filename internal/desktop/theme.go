@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -83,6 +84,22 @@ func (a *desktop) currentPalette() palette {
 		idx = 0
 	}
 	return palettes[idx]
+}
+
+// syncNativeAppearance keeps the OS frame in the same appearance as the
+// custom UI. Setting the ui.Context theme alone does not theme the HWND;
+// Windows 10 otherwise leaves a white sizing border around a dark window.
+// Call on appearance changes, never during view construction.
+func (a *desktop) syncNativeAppearance() {
+	p := a.currentPalette()
+	source := mygo.ThemeLight
+	if p.dark {
+		source = mygo.ThemeDark
+	}
+	mygo.Theme.SetSource(source)
+	if a.win != nil {
+		_ = a.win.SetBackgroundColor(fmt.Sprintf("#%02x%02x%02x", p.bg.R, p.bg.G, p.bg.B))
+	}
 }
 
 func (a *desktop) theme() *ui.Theme {

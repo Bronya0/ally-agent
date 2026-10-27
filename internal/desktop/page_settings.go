@@ -146,6 +146,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				}
 				btn.OnClick(func() {
 					a.prefs.Palette = i
+					a.syncNativeAppearance()
 					a.savePrefs()
 				})
 				swatch := ui.Box(c).Size(12, 12).Radius(6).Background(p.accent).Border(1, p.line)

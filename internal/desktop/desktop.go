@@ -160,7 +160,17 @@ func Run() {
 	mygo.App.SetName("Ally Native")
 	a := &desktop{core: backend.NewApp(), page: "chat", modelEdit: -1, explorer: true, status: "正在启动…", plans: map[string][]backend.PlanStep{}, planRev: map[string]int64{}, subRuns: map[string]*backend.SubagentRun{}, prefs: defaultPrefs(), extraRoots: map[string][]string{}, sshAllowed: map[string][]string{}}
 	mygo.App.WhenReady(func() {
-		a.win = mygo.NewWindow(mygo.WindowOptions{Title: "Ally", Width: 1280, Height: 850, MinWidth: 900, MinHeight: 620, StateKey: "ally-native-main", TitleBarStyle: mygo.TitleBarHidden, HideWindowButtons: true, TitleBarHeight: 44, Content: ui.View(a.view)})
+		a.syncNativeAppearance()
+		a.win = mygo.NewWindow(mygo.WindowOptions{
+			Title: "Ally", Width: 1280, Height: 850, MinWidth: 900, MinHeight: 620,
+			StateKey: "ally-native-main", TitleBarStyle: mygo.TitleBarHidden,
+			HideWindowButtons: true, TitleBarHeight: 44,
+			Hidden: true, BackgroundColor: "#1b1b1b", Content: ui.View(a.view),
+		})
+		// Configure the native frame before showing it to avoid a white border
+		// during startup, while keeping the native resize edges and shadow.
+		configureWindowFrame(a.win)
+		a.win.Show()
 		a.core.SetNativeWindow(a.win)
 		if len(os.Args) > 1 && os.Args[1] == "--smoke" {
 			time.AfterFunc(4*time.Second, func() { a.win.Update(func() { log.Print("native window startup verified"); a.shutdown() }) })
@@ -203,6 +213,7 @@ func Run() {
 			a.win.Update(func() {
 				a.config = cfg
 				a.prefs = prefs
+				a.syncNativeAppearance()
 				a.customAvatar = customAvatar
 				a.avatarStyle, a.avatarPoses = avatarStyle, avatarPoses
 				a.plugins = plugins
