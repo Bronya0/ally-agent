@@ -2,7 +2,7 @@
 package desktop
 
 import (
-	"ally-dev/pkg/uikit"
+	"ally-dev/desktop/uikit"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -325,7 +325,10 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "Model")
 					ui.Row(c).Gap(gapField).Children(func() {
-						uikit.Input(c.Key("model-id"), &a.modelDraft.Model).Label("Model").Grow(1).Placeholder("gpt-4.1 / deepseek-chat")
+						// Mirrors the Vue editor's Model n-select (filterable + tag): one
+						// searchable field that lists the models fetched from the provider
+						// and still accepts a hand-typed id.
+						uikit.ComboboxField(c.Key("model-id"), &a.modelDraft.Model, a.modelDraftOptions(), "Model ID", modelIDPlaceholder(a.modelDraft.APIFormat)).Grow(1)
 						flat(c, "拉取模型").Disabled(a.modelForm.FetchBusy).OnClick(func() { a.fetchModelList() })
 					})
 					if a.modelForm.FetchNote != "" {
@@ -341,7 +344,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 					ui.Text(c, fmt.Sprint(i+1)).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Width(14)
 					uikit.PasswordInput(c, "password", fmt.Sprintf("API Key %d", i+1), &a.modelKeys[i]).Grow(1)
 					if len(a.modelKeys) > 1 {
-						iconAction(c, "remove-key-"+fmt.Sprint(i), "移除密钥", "close", 22, func() {
+						dangerIconAction(c, "remove-key-"+fmt.Sprint(i), "移除密钥", "close", 22, func() {
 							a.modelKeys = append(a.modelKeys[:i], a.modelKeys[i+1:]...)
 							a.modelForm.KeyEpoch++
 						})
@@ -389,6 +392,53 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 		})
 		primary(c, map[bool]string{true: "添加", false: "保存修改"}[a.modelEdit < 0]).Disabled(a.modelSaving).OnClick(func() { a.saveModelDraft() })
 	}, a.cancelOAuthWhenLeaving)
+}
+
+// modelDraftOptions is what the Model dropdown can offer: the models returned
+// by the last 拉取模型 call first, then the ones already configured against the
+// same endpoint, so an existing id stays pickable before any fetch happens.
+func (a *desktop) modelDraftOptions() []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(a.modelForm.Fetched)+len(a.config.Models)+1)
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	for _, name := range a.modelForm.Fetched {
+		add(name)
+	}
+	for _, model := range a.config.Models {
+		if model.AuthType == "chatgpt_oauth" || !sameModelEndpoint(model, a.modelDraft) {
+			continue
+		}
+		add(model.Model)
+	}
+	add(a.modelDraft.Model)
+	return out
+}
+
+// sameModelEndpoint reports whether two drafts point at the same API base; an
+// empty Base URL falls back to the provider name.
+func sameModelEndpoint(model, draft backend.ModelConfig) bool {
+	trim := func(s string) string { return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(s), "/")) }
+	if base, ref := trim(model.BaseURL), trim(draft.BaseURL); base != "" && ref != "" {
+		return base == ref
+	}
+	return strings.EqualFold(strings.TrimSpace(model.ProviderName), strings.TrimSpace(draft.ProviderName))
+}
+
+func modelIDPlaceholder(format string) string {
+	switch format {
+	case "openai_responses":
+		return "gpt-4.1-mini"
+	case "anthropic":
+		return "claude-sonnet-5"
+	}
+	return "deepseek-v4-flash"
 }
 
 func (a *desktop) fetchModelList() {
@@ -591,7 +641,7 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 				ui.Text(c, fmt.Sprint(i+1)).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Width(14)
 				uikit.PasswordInput(c, "password", fmt.Sprintf("图片 API Key %d", i+1), &s.draftKeys[i]).Grow(1)
 				if len(s.draftKeys) > 1 {
-					iconAction(c, "image-remove-key-"+fmt.Sprint(i), "移除密钥", "close", 22, func() {
+					dangerIconAction(c, "image-remove-key-"+fmt.Sprint(i), "移除密钥", "close", 22, func() {
 						s.draftKeys = append(s.draftKeys[:i], s.draftKeys[i+1:]...)
 						s.keyEpoch++
 					})
@@ -689,7 +739,7 @@ func (a *desktop) imageModelTestDialog(c *ui.Context) {
 						if in.preview != nil {
 							ui.Image(c, in.preview).Size(88, 88).Fit(ui.Contain)
 						}
-						flat(c, "删除").Disabled(t.busy).OnClick(func() { t.inputs = append(t.inputs[:i], t.inputs[i+1:]...) })
+						dangerButton(c, "删除").Disabled(t.busy).OnClick(func() { t.inputs = append(t.inputs[:i], t.inputs[i+1:]...) })
 					})
 				}
 			})

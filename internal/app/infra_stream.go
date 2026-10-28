@@ -343,10 +343,9 @@ const (
 	toolUpdateThreshold = 2048
 	// updateProgressInterval 是自更新下载进度的事件间隔。
 	updateProgressInterval = 500 * time.Millisecond
-	// commandOutputSampleInterval 与 commandOutputStreamingTailBytes 是命令执行
-	// 输出的采样参数：每 120ms 采一次，且只发尾部 16KB（完整输出在命令结束时随
-	// 结果一次性返回）。
-	commandOutputSampleInterval     = 120 * time.Millisecond
+	// commandOutputStreamingTailBytes 是命令执行时每次流式更新只带尾部这么多字节
+	// （完整输出在命令结束时随结果一次性返回）。隔多久发一次不在这里定：命令输出
+	// 走的是 tool:update 那一档，频率只由 eventCadenceTable 决定。
 	commandOutputStreamingTailBytes = 16 * 1024
 )
 

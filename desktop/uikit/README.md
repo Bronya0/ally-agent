@@ -6,7 +6,7 @@ It contains no Ally state, filesystem access, goroutines, fonts or business logi
 Use the host's `ui.Theme` to supply typography and semantic colors.
 
 ```go
-import "ally-dev/pkg/uikit"
+import "ally-dev/desktop/uikit"
 
 func view(c *ui.Context) {
     uikit.Select(c.Key("auth"), &state.Auth, []string{"API Key", "OAuth"}).Label("Authentication")
@@ -18,11 +18,31 @@ func view(c *ui.Context) {
 }
 ```
 
-Exports: Button, Select, editable Combobox, Tabs, Segmented, Card, Tag, PasswordInput, NumberInput,
-FieldLabel, FieldNote, TextField, TextArea, DialogPanel, Popup and PopupTransition.
-ControlHeight and Radius are shared sizing tokens. Choice rows use a subtle
-accent fill plus a check for selection; hover and keyboard highlight use the
-surface hover color. Tabs set pointer cursors on each interactive item and label.
+Exports. Form controls: Button, IconButton, Select, editable Combobox, Tabs, Segmented,
+PasswordInput, NumberInput, TextField, TextArea, FieldLabel, FieldNote. Chrome: Card,
+RowCard, Divider, PageHeader, SectionHeader, EmptyState, BusyRow, Notice, InlineError,
+StatCard, KV, Tag, Label, Muted, SectionTitle, HoverRow, SelectableRow. Dialogs: DialogPanel,
+Popup, PopupTransition.
+
+Button takes a ButtonVariant (secondary, primary, danger, ghost) and returns its label
+element too, for the few call sites whose label colour is not the button's own.
+IconButton takes an IconTone and a *ui.SVG: the kit does not know an app's icon table,
+so the caller resolves names to images. WarningInk and FaintInk fill the two tones
+ui.Theme does not carry.
+
+ControlHeight, Radius, the Font and Gap scales and the RadiusCard / RadiusSmall pair
+are shared sizing tokens; components take padding and radius as arguments rather than
+baking one page's spacing into them. Choice rows use a subtle accent fill plus a check
+for selection; hover and keyboard highlight use the surface hover color. Tabs set
+pointer cursors on each interactive item and label.
+
+TabUnderline, TabInk and TabRadius are the strip look every tab row in the app
+wears: a rounded box whose bottom edge carries the accent, so the line curves
+away at both ends, and a label that gains weight rather than colour when chosen.
+Tabs uses them, and so does the header's workspace strip, which holds a running
+dot and a close button in the same chrome. Apply them to a tab of any size,
+taking TabRadius as the proportion for a 30 DIP tab. When the chosen edge needs
+to animate, set the border colour on top of TabUnderline, as Tabs does.
 
 Values and focus belong to the host. Set `c.Key` before constructing dynamic
 controls. Never retain returned Elements/Parts between build passes. Attach

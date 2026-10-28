@@ -139,10 +139,10 @@ func toolActionVerb(name, state string, args map[string]any, fallback string) st
 	verbs := map[string][2]string{"command": {"Running", "Ran"}, "remote_run_command": {"Remote Running", "Remote Ran"}, "edit": {"Editing", "Edited"}, "remote_edit": {"Remote Editing", "Remote Edited"}, "create": {"Creating", "Created"}, "remote_create_file": {"Remote Creating", "Remote Created"}, "delete": {"Deleting", "Deleted"}, "remote_delete_path": {"Remote Deleting", "Remote Deleted"}, "http_request": {"Requesting", "Requested"}, "web_fetch": {"Fetching", "Fetched"}, "render_html": {"Rendering", "Rendered"}, "screenshot": {"Screenshot", "Screenshot"}, "skill": {"Loading skill", "Loaded skill"}, "plan": {"Plan", "Plan"}, "ask": {"Asking", "Asked"}, "wait": {"Waiting", "Waited"}, "calculate": {"Calculating", "Calculated"}, "subagent": {"Subagent", "Subagent"}, "scheduled_task": {"Scheduling", "Scheduled"}, "service": {"Service", "Service"}, "ssh_cluster": {"SSH cluster", "SSH cluster"}, "remote_transfer": {"Transferring", "Transferred"}, "image_generate": {"Generating image", "Generated image"}, "image_edit": {"Editing image", "Edited image"}}
 	pair, ok := verbs[name]
 	if !ok {
-		if state == "running" || state == "pending" {
-			return "Calling MCP"
-		}
-		return "Called MCP"
+		// Fall back to the tool's own verb. Answering "Called MCP" here labelled
+		// every non-MCP tool that has no entry in this map (read, grep, …) as an MCP
+		// call; real MCP tools get that wording from toolCard's own MCP branch.
+		return fallback
 	}
 	if state == "error" {
 		return pair[1] + " failed"
@@ -153,20 +153,31 @@ func toolActionVerb(name, state string, args map[string]any, fallback string) st
 	return pair[1]
 }
 
+// suggestionEdgeMix pulls the suggestion chip's edge back toward the panel it
+// sits on. Cards keep the shared edge; a chip is only an optional shortcut under
+// an answer, so both its outline and its label stay grey and quiet.
+const suggestionEdgeMix float32 = 0.55
+
+// suggestionButton is built from ButtonBase rather than flat(): flat() is the
+// shared secondary button, which already paints its own edge and a full-strength
+// text label, so restyling it from the outside lost both (its border animation
+// key and its label node belong to that button).
 func suggestionButton(c *ui.Context, text string) ui.Element {
-	color := c.Theme().Text.Mix(c.Theme().TextMuted, 0.3)
-	button := flat(c, text).Height(26).Padding(3, 8).Radius(radiusSmall).FontSize(fsTiny)
-	border := c.Theme().Border
+	button := ui.ButtonBase(c).Height(26).Padding(3, 8).Radius(radiusSmall).
+		Center().Cursor(ui.CursorPointer).Label(text)
+	border := c.Theme().Border.Mix(c.Theme().Surface, suggestionEdgeMix)
 	fill := c.Theme().Surface
-	labelColor := color
+	labelColor := c.Theme().TextMuted
 	if button.Hovered() || button.Focused() {
 		border = c.Theme().Accent
 		fill = c.Theme().SurfaceHover
 		labelColor = c.Theme().Accent
 	}
-	button.Border(1, fadeColor(button, "border", border)).
-		Background(fadeColor(button, "fill", fill)).
-		TextColor(fadeColor(button, "text", labelColor))
+	button.Border(1, fadeColor(button, "chip-border", border)).
+		Background(fadeColor(button, "chip-fill", fill))
+	button.Children(func() {
+		ui.Text(c, text).FontSize(fsTiny).TextColor(fadeColor(button, "chip-label", labelColor)).SingleLine()
+	})
 	return button
 }
 

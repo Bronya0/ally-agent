@@ -6,7 +6,9 @@ package desktop
 // colours or magic sizes; it composes the widgets in ui_widgets.go instead.
 
 import (
+	"ally-dev/desktop/uikit"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -45,14 +47,20 @@ const (
 	radiusControl float32 = 7
 	radiusSmall   float32 = 5
 
-	heightHeader            float32 = 44
-	heightRail              float32 = 44
-	heightControl           float32 = 28
-	heightRow               float32 = 26
-	heightTabRow            float32 = 32
-	heightRailItem          float32 = 34
-	heightRailItemCollapsed float32 = 42
-	widthRailCollapsed      float32 = 44
+	heightHeader       float32 = 44
+	heightRail         float32 = 44
+	heightControl      float32 = 28
+	heightRow          float32 = 26
+	heightTabRow       float32 = 32
+	heightRailItem     float32 = 34
+	widthRailCollapsed float32 = 44
+	// railPadH is the collapsed rail's horizontal padding.
+	railPadH float32 = 2
+	// heightRailItemCollapsed is the side of a collapsed entry: both sides take
+	// this one token, so a selected entry is a square and cannot come out as a
+	// slightly flat rectangle. It has to fit what the rail leaves inside its 1px
+	// border and that padding (44 - 1 - 4 = 39 DIP).
+	heightRailItemCollapsed float32 = 38
 	sizeRailBadge           float32 = 34
 	sizeRailIcon            float32 = 17
 	sizeRailIconCollapsed   float32 = 20
@@ -87,6 +95,14 @@ func colWarning() ui.Color { return warnCol }
 func colDanger() ui.Color  { return errCol }
 func colFaint() ui.Color   { return faint }
 
+// ---- Selection -----------------------------------------------------------
+// One selected look for the whole desktop, so a page never assembles its own
+// "this one is chosen" styling. selectionFill and selectionEdge come from the
+// shared kit tokens; selectionInk is the accent every selected label uses.
+
+func selectionFill(tone ui.Color) ui.Color { return uikit.SelectedFill(tone) }
+func selectionEdge(tone ui.Color) ui.Color { return uikit.SelectedStrokeColor(tone) }
+
 // palette is one selectable appearance preset (mode + accent combined, as the
 // original settings page offered five looks).
 type palette struct {
@@ -95,13 +111,19 @@ type palette struct {
 	bg, panel, line, accent, accentText, text, muted, hover ui.Color
 }
 
+// Resting edges — cards, chips, inputs, buttons, popups — are the palette line
+// as-is. They used to fold 14–16% of the text colour in, which drew a stroke
+// brighter than the panel behind it, so every surface read as a bright outline.
+// Only hover and emphasis may lift an edge, and only by this much.
+const edgeHoverMix float32 = 0.18
+
 var palettes = []palette{
-	{name: "暗夜", dark: true, bg: ui.Hex("#1b1b1b"), panel: ui.Hex("#212122"), line: ui.Hex("#333335"), accent: ui.Hex("#8da5df"), accentText: ui.Hex("#15171d"), text: ui.Hex("#d4d4d4"), muted: ui.Hex("#909093"), hover: ui.Hex("#2b2b2e")},
-	{name: "亮色", dark: false, bg: ui.Hex("#f5f6f8"), panel: ui.Hex("#ffffff"), line: ui.Hex("#d4d8df"), accent: ui.Hex("#4d6bd8"), accentText: ui.Hex("#ffffff"), text: ui.Hex("#24262d"), muted: ui.Hex("#535b68"), hover: ui.Hex("#eef0f5")},
-	{name: "琥珀", dark: true, bg: ui.Hex("#1c1a17"), panel: ui.Hex("#232019"), line: ui.Hex("#3a352b"), accent: ui.Hex("#e0a458"), accentText: ui.Hex("#1a1712"), text: ui.Hex("#d7d2c8"), muted: ui.Hex("#9b9488"), hover: ui.Hex("#2c2820")},
-	{name: "海洋", dark: true, bg: ui.Hex("#151a1f"), panel: ui.Hex("#1a2027"), line: ui.Hex("#2b3641"), accent: ui.Hex("#63b3d8"), accentText: ui.Hex("#0d1418"), text: ui.Hex("#c6d0d8"), muted: ui.Hex("#8896a2"), hover: ui.Hex("#222b34")},
-	{name: "森林", dark: true, bg: ui.Hex("#151a17"), panel: ui.Hex("#1a201c"), line: ui.Hex("#2c3a30"), accent: ui.Hex("#6fbf8f"), accentText: ui.Hex("#0e1511"), text: ui.Hex("#c4d2c8"), muted: ui.Hex("#889a8e"), hover: ui.Hex("#212b24")},
-	{name: "紫罗兰", dark: true, bg: ui.Hex("#191722"), panel: ui.Hex("#1f1c29"), line: ui.Hex("#352f47"), accent: ui.Hex("#a68bea"), accentText: ui.Hex("#141019"), text: ui.Hex("#cfc8de"), muted: ui.Hex("#948aa8"), hover: ui.Hex("#292436")},
+	{name: "暗夜", dark: true, bg: ui.Hex("#1b1b1b"), panel: ui.Hex("#212122"), line: ui.Hex("#303031"), accent: ui.Hex("#8da5df"), accentText: ui.Hex("#15171d"), text: ui.Hex("#d4d4d4"), muted: ui.Hex("#909093"), hover: ui.Hex("#2b2b2e")},
+	{name: "亮色", dark: false, bg: ui.Hex("#f5f6f8"), panel: ui.Hex("#ffffff"), line: ui.Hex("#d9dce3"), accent: ui.Hex("#4d6bd8"), accentText: ui.Hex("#ffffff"), text: ui.Hex("#24262d"), muted: ui.Hex("#535b68"), hover: ui.Hex("#eef0f5")},
+	{name: "琥珀", dark: true, bg: ui.Hex("#1c1a17"), panel: ui.Hex("#232019"), line: ui.Hex("#363128"), accent: ui.Hex("#e0a458"), accentText: ui.Hex("#1a1712"), text: ui.Hex("#d7d2c8"), muted: ui.Hex("#9b9488"), hover: ui.Hex("#2c2820")},
+	{name: "海洋", dark: true, bg: ui.Hex("#151a1f"), panel: ui.Hex("#1a2027"), line: ui.Hex("#28323c"), accent: ui.Hex("#63b3d8"), accentText: ui.Hex("#0d1418"), text: ui.Hex("#c6d0d8"), muted: ui.Hex("#8896a2"), hover: ui.Hex("#222b34")},
+	{name: "森林", dark: true, bg: ui.Hex("#151a17"), panel: ui.Hex("#1a201c"), line: ui.Hex("#29362d"), accent: ui.Hex("#6fbf8f"), accentText: ui.Hex("#0e1511"), text: ui.Hex("#c4d2c8"), muted: ui.Hex("#889a8e"), hover: ui.Hex("#212b24")},
+	{name: "紫罗兰", dark: true, bg: ui.Hex("#191722"), panel: ui.Hex("#1f1c29"), line: ui.Hex("#312c42"), accent: ui.Hex("#a68bea"), accentText: ui.Hex("#141019"), text: ui.Hex("#cfc8de"), muted: ui.Hex("#948aa8"), hover: ui.Hex("#292436")},
 }
 
 func (a *desktop) currentPalette() palette {
@@ -351,11 +373,14 @@ func fmtDur(ms int64) string {
 	}
 }
 
+// pctOf renders a whole-number percentage: the footer is a glanceable badge,
+// so 12.4% only ever reads as 12%. math.Round keeps halves round-half-up instead
+// of the format verb's round-half-to-even.
 func pctOf(v, total int) string {
 	if total <= 0 {
-		return "0.0%"
+		return "0%"
 	}
-	return fmt.Sprintf("%.1f%%", float64(v)*100/float64(total))
+	return fmt.Sprintf("%d%%", int(math.Round(float64(v)*100/float64(total))))
 }
 
 func short(s string, n int) string {

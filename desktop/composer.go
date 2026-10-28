@@ -2,7 +2,7 @@
 package desktop
 
 import (
-	"ally-dev/pkg/uikit"
+	"ally-dev/desktop/uikit"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -11,7 +11,7 @@ import (
 	"time"
 
 	backend "ally-dev/internal/app"
-	"github.com/egoist/mygo/transfer"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -33,7 +33,7 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 		if st.Mention.Open {
 			a.mentionMenu(c, t)
 		}
-		if t.Busy || st.CompactNote != "" {
+		if t.Busy || st.CompactBusy {
 			a.composerStatusRow(c, t)
 		}
 		if len(t.PendingAttachments) > 0 {
@@ -56,7 +56,7 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 			}
 			a.composerKeys(c, t, input)
 		})
-		if st.CompactBusy || st.CompactNote != "" || t.AttachmentLoading {
+		if t.AttachmentLoading {
 			a.composerSendRow(c, t)
 		}
 		a.composerInfoBar(c, t)
@@ -92,7 +92,10 @@ func (a *desktop) cancelConversation(t *conversation) {
 
 func (a *desktop) composerKeys(c *ui.Context, t *conversation, input ui.Element) {
 	st := t.uiState()
-	services := c.Services()
+
+	// macOS delivers Cmd+V as the Edit menu's paste command rather than a key
+	// the input sees, so an image paste is taken here as well as below.
+	input.OnPaste(func(string) bool { return a.pasteImageFromClipboard(c, t) })
 
 	selectionStart, selectionEnd := input.TextSelection()
 	composing := input.Composing()
@@ -115,13 +118,11 @@ func (a *desktop) composerKeys(c *ui.Context, t *conversation, input ui.Element)
 			st.RestoreCaret = true
 			return true
 		}
-		if k.Key == ui.KeyV && k.Mods == ui.Cmd && !t.Busy && !t.AttachmentLoading && !composing {
-			clip := services.ReadClipboardData(transfer.PNG)
-			for _, item := range clip.Items() {
-				if data, err := item.Read(transfer.PNG); err == nil && len(data) > 0 {
-					a.pasteAttachment(t, data)
-					return true
-				}
+		if k.Key == ui.KeyV && k.Mods == ui.Cmd && !composing {
+			// Windows and Linux report the paste as a key; macOS as the command
+			// taken by OnPaste above.
+			if a.pasteImageFromClipboard(c, t) {
+				return true
 			}
 		}
 		// Menu navigation takes the arrow keys before the editor moves the caret.
@@ -392,7 +393,7 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation) {
 		}
 	}
 	p := a.currentPalette()
-	ui.Column(c).FillWidth().Height(360).Border(1, c.Theme().Border).Background(p.panel).Radius(radiusCard).Children(func() {
+	overlayPanel(c, "cmd-menu", 0, 360, func() {
 		ui.Row(c).Padding(6, 10).Gap(gapField).Children(func() {
 			ui.Text(c, fmt.Sprintf("指令 %d · 技能 %d", builtin, skills)).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
 			ui.Spacer(c)
@@ -406,9 +407,7 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation) {
 				for i, item := range items {
 					i, item := i, item
 					row := ui.Row(c.Key(fmt.Sprintf("cmd-%s-%d", item.Label, i))).Height(26).Padding(0, 10).Gap(gapField).Radius(radiusSmall).AlignItems(ui.Center)
-					if i == st.CmdIndex {
-						row.Background(c.Theme().SurfaceHover)
-					}
+					hoverRow(c, row, i == st.CmdIndex)
 					row.Children(func() {
 						ui.Text(c, "/"+item.Label).Font(monoFamily).FontSize(fsSmall).TextColor(p.accent)
 						ui.Text(c, short(item.Desc, 70)).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine()
@@ -425,8 +424,7 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation) {
 
 func (a *desktop) mentionMenu(c *ui.Context, t *conversation) {
 	st := t.uiState()
-	p := a.currentPalette()
-	ui.Column(c).FillWidth().MaxHeight(240).Border(1, c.Theme().Border).Background(p.panel).Radius(radiusCard).Children(func() {
+	overlayPanel(c, "mention-menu", 0, 240, func() {
 		ui.Row(c).Padding(6, 10).Children(func() {
 			ui.Text(c, "@ 文件和目录").FontSize(fsTiny).TextColor(c.Theme().TextMuted)
 			ui.Spacer(c)
@@ -446,9 +444,7 @@ func (a *desktop) mentionMenu(c *ui.Context, t *conversation) {
 						mark = "/"
 					}
 					row := ui.Row(c.Key(fmt.Sprintf("mention-%d-%s", i, entry.Path))).Height(24).Padding(0, 10).Gap(gapField).Radius(radiusSmall).AlignItems(ui.Center)
-					if i == st.Mention.Index {
-						row.Background(c.Theme().SurfaceHover)
-					}
+					hoverRow(c, row, i == st.Mention.Index)
 					row.Children(func() {
 						ui.Text(c, mark).Font(monoFamily).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
 						ui.Text(c, entry.Path).Font(monoFamily).FontSize(fsSmall).SingleLine()
@@ -467,7 +463,7 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 	st := t.uiState()
 	sessions := a.workspaceSessions(t.Workspace)
 	p := a.currentPalette()
-	panel := ui.Column(c).FillWidth().Height(360).Border(1, c.Theme().Border).Background(p.panel).Radius(radiusCard).Children(func() {
+	panel := overlayPanel(c, "sessions-menu", 0, 360, func() {
 		ui.Row(c).Padding(6, 10).Children(func() {
 			ui.Text(c, fmt.Sprintf("会话 (%d)", len(sessions))).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
 			ui.Spacer(c)
@@ -490,14 +486,12 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 				for i, s := range sessions {
 					i, s := i, s
 					busy := sessionBusyID(a, s.ID) != ""
-					row := ui.Row(c.Key("sess-"+s.ID)).Height(28).Padding(0, 10).Gap(gapField).Radius(radiusSmall).AlignItems(ui.Center)
+					row := ui.Row(c.Key("sess-"+s.ID)).Height(28).Padding(0, padRow).Gap(gapField).Radius(radiusSmall).AlignItems(ui.Center)
 					if row.Hovered() {
 						st.SessionsIndex = i
 					}
 					row.Cursor(ui.CursorPointer)
-					if i == st.SessionsIndex {
-						row.Background(c.Theme().SurfaceHover)
-					}
+					hoverRow(c, row, i == st.SessionsIndex)
 					row.Children(func() {
 						ui.Text(c, fmt.Sprint(i+1)).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
 						ui.Text(c, fmtTime(s.UpdatedAt)).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
@@ -534,20 +528,29 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 // ---- Status, attachments, info bar --------------------------------------
 
 func (a *desktop) composerStatusRow(c *ui.Context, t *conversation) {
-	p := a.currentPalette()
+	st := t.uiState()
 	ui.Row(c).Height(18).Gap(gapField).AlignItems(ui.Center).Children(func() {
-		if t.Busy {
+		switch {
+		case st.CompactBusy:
+			// A compaction owns this row exactly like a run does, with the same
+			// spinner and the same thinking label once the summarising model thinks.
+			ui.Spinner(c).Size(13, 13)
+			note := st.CompactNote
+			if note == "" {
+				note = "正在压缩对话上下文…"
+			}
+			ui.Text(c, note).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine().MinWidth(0)
+			if count := compactThinkingTokens(st); count > 0 {
+				ui.Text(c, fmt.Sprintf("Thinking %s tokens", fmtK(count))).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine()
+			}
+		case t.Busy:
 			a.runSpinner(c)
-			count := (t.uiState().ThinkingBytes + 3) / 4
+			count := (st.ThinkingBytes + 3) / 4
 			if count > 0 {
 				ui.Text(c, fmt.Sprintf("Thinking %s tokens", fmtK(count))).FontSize(13).TextColor(c.Theme().TextMuted).SingleLine()
 			}
 		}
 		ui.Spacer(c)
-		if note := t.uiState().CompactNote; note != "" {
-			ui.Text(c, note).FontSize(fsTiny).TextColor(p.accent)
-
-		}
 	})
 }
 
@@ -565,35 +568,34 @@ func lastUserPrompt(t *conversation) string {
 // are main's (rest at 0/80/100%, peak at 40%), neighbours staggered 208ms so
 // the three phases never all freeze inside the still window together. The box
 // height is frozen at the peak: only the bar scale moves, so the status row
-// never grows or shifts. The old height-driven sine changed the row height
-// every frame and ran visibly too fast.
+// never grows or shifts.
+//
+// The bars are drawn rather than animated with Loop: Loop asks for a frame that
+// rebuilds the whole view, so while the model ran this rebuilt every message at
+// the display's rate and made open tooltips shimmer.
 func (a *desktop) runSpinner(c *ui.Context) {
 	const (
-		cycle = 1300 * time.Millisecond
-		step  = 208 * time.Millisecond
+		cycle = 1300
+		step  = 208
 		rest  = float32(9.0 / 16)
 	)
-	box := ui.Box(c).Width(15).Height(16).Center()
-	box.Children(func() {
-		ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
-			for i := 0; i < 3; i++ {
-				bar := ui.Box(c).Width(3).Height(16).Radius(1).Background(c.Theme().TextMuted)
-				// Negative-looking phase: bar i starts partway through its
-				// cycle, leftmost furthest ahead, so the wave enters mid-flight
-				// instead of jumping from rest. Sampled linear for the same
-				// reason as the tool dot: Loop's ease would bend the phase.
-				offset := time.Duration(2-i) * step
-				pulse := bar.Loop(fmt.Sprintf("run-bar-%d", i), cycle, ui.Linear)
-				frac := math.Mod(float64(pulse)+float64(offset)/float64(cycle), 1)
-				scale := rest
-				if frac < 0.8 {
-					// 0->40% rest climbs to peak, 40%->80% falls back; the
-					// cosine eases both ends like the CSS keyframes.
-					scale = rest + (1-rest)*float32(0.5-0.5*math.Cos(frac/0.8*2*math.Pi))
-				}
-				bar.Scale(1, scale)
+	color := c.Theme().TextMuted
+	ui.Box(c).Width(15).Height(16).Draw(func(p *ui.Painter, r ui.Rect) {
+		p.AnimationFrameRate(30)
+		ms := float64(p.Now().UnixMilli() % cycle)
+		for i := 0; i < 3; i++ {
+			// Bar i starts partway through its cycle, leftmost furthest ahead,
+			// so the wave enters mid-flight instead of jumping from rest.
+			frac := math.Mod(ms/float64(cycle)+float64(2-i)*float64(step)/float64(cycle), 1)
+			scale := rest
+			if frac < 0.8 {
+				// 0->40% rest climbs to peak, 40%->80% falls back; the cosine
+				// eases both ends like the CSS keyframes.
+				scale = rest + (1-rest)*float32(0.5-0.5*math.Cos(frac/0.8*2*math.Pi))
 			}
-		})
+			h := 16 * scale
+			p.Fill(ui.Rect{X: r.X + float32(i)*6, Y: r.Y + (16-h)/2, W: 3, H: h}, color, 1)
+		}
 	})
 }
 
@@ -649,7 +651,7 @@ func (a *desktop) composerInfoBar(c *ui.Context, t *conversation) {
 	st := t.uiState()
 	p := a.currentPalette()
 	ui.Row(c).FillWidth().MinWidth(0).Gap(2).AlignItems(ui.Center).Children(func() {
-		iconAction(c, "composer-new", "新建会话", "plus", 26, func() { a.newSession() }).TextColor(p.accent)
+		addButton(c, "composer-new", "新建会话", "plus", 26, func() { a.newSession() })
 		iconAction(c, "composer-sessions", "查看和切换历史会话", "menu", 26, func() {
 			st.SessionsOpen = !st.SessionsOpen
 			if st.SessionsOpen {
@@ -658,11 +660,7 @@ func (a *desktop) composerInfoBar(c *ui.Context, t *conversation) {
 		}).TextColor(p.muted)
 		a.modelSelector(c, t)
 		a.reasoningSelector(c, t)
-		composerFlat(c, short(workspaceLabel(t.Workspace), 22)).Tooltip("在文件管理器中打开工作区：" + t.Workspace).OnClick(func() {
-			if t.Workspace != "" {
-				a.job(func() error { return a.core.OpenPathInFileManager(t.Workspace) })
-			}
-		})
+		a.workspaceButton(c, t)
 		a.extraRootsButton(c, t)
 		iconAction(c, "composer-terminal", "在终端中打开工作区", "terminal", 26, func() {
 			req := backend.WorkspacePathRequest{Workspace: t.Workspace}
@@ -875,6 +873,9 @@ func (a *desktop) selectChatModel(t *conversation, model backend.ModelConfig) {
 	}()
 }
 
+// reasoningSelector reports and sets the thinking level. The levels are a plain
+// list of values, so the system's own menu carries them: it shows the current
+// one with its radio mark and keys itself, without a popover of our own.
 func (a *desktop) reasoningSelector(c *ui.Context, t *conversation) {
 	levels := []string{"auto", "off", "low", "medium", "high", "xhigh", "max"}
 	label := t.Reasoning
@@ -885,44 +886,81 @@ func (a *desktop) reasoningSelector(c *ui.Context, t *conversation) {
 	if t.Busy {
 		btn.Disabled(true).Tooltip("运行中锁定：本轮结束后切换才生效")
 	}
-	st := t.uiState()
-	btn.OnClick(func() { st.EffortOpen = !st.EffortOpen })
-	popoverPanel(c, btn, &st.EffortOpen, 200, func() {
-		ui.Text(c, "思考强度").FontSize(fsSection).Bold().Padding(6, 10)
+	btn.OnClick(func() {
+		items := make([]*mygo.MenuItem, 0, len(levels))
 		for _, level := range levels {
 			level := level
-			popoverItem(c, "effort-"+level, level, "", level == t.Reasoning, func() { t.Reasoning = level; st.EffortOpen = false })
+			items = append(items, menuItem(level, level == label, func() {
+				t.Reasoning = level
+				a.win.Update(func() {})
+			}))
 		}
+		a.popupMenu(items)
 	})
 }
 
+// workspaceButton is the workspace entry of the info bar: the folder glyph on
+// its own, the same 26px box and 16px glyph as the icons beside it, with the
+// workspace and its path in the tip. The name already shows in the header tab.
+func (a *desktop) workspaceButton(c *ui.Context, t *conversation) {
+	tip := "在文件管理器中打开工作区：" + t.Workspace
+	if t.Workspace == "" {
+		tip = "尚未选择工作区"
+	}
+	iconAction(c, "composer-workspace", tip, "folderopen", 26, func() {
+		if t.Workspace != "" {
+			a.job(func() error { return a.core.OpenPathInFileManager(t.Workspace) })
+		}
+	}).TextColor(a.currentPalette().muted)
+}
+
+// extraRootsButton mirrors main's extra-roots entry: a glyph button with the
+// number of attached roots beside it, in the accent colour once any is set.
 func (a *desktop) extraRootsButton(c *ui.Context, t *conversation) {
 	if t.Workspace == "" {
 		return
 	}
+	p := a.currentPalette()
 	roots := a.extraRoots[t.ID]
-	label := "附加目录"
-	if len(roots) > 0 {
-		label = fmt.Sprintf("附加目录 %d", len(roots))
+	count := len(roots)
+	tip := "附加目录：会话级附加工作区，添加后允许写入其他工作区。"
+	if count > 0 {
+		tip = fmt.Sprintf("附加目录（%d 个）：添加后允许写入其他工作区。", count)
 	}
-	btn := composerFlat(c, label).Tooltip("会话级附加工作区。添加后允许写入其他工作区。")
-	st := t.uiState()
-	btn.OnClick(func() { st.ExtrasOpen = !st.ExtrasOpen })
-	popoverPanel(c, btn, &st.ExtrasOpen, 320, func() {
-		ui.Text(c, "附加目录").FontSize(fsSection).Bold().Padding(6, 10)
+	color := p.muted
+	if count > 0 {
+		color = p.accent
+	}
+	btn := ui.ButtonBase(c.Key("composer-extra-roots")).Height(26).MinWidth(26).Padding(0, 3).Gap(2).
+		Radius(radiusSmall).AlignItems(ui.Center).Center().Label("附加目录").Tooltip(tip).
+		TextColor(color).Cursor(ui.CursorPointer)
+	if btn.Hovered() {
+		btn.Background(fadeColor(btn, "fill", p.hover))
+	}
+	btn.OnClick(func() {
+		// The attached roots are a plain list with an add action, so the system's
+		// own menu carries them; the path of each one is its tooltip, which a
+		// menu shows on hover and a nested column of text could not.
+		items := make([]*mygo.MenuItem, 0, len(roots)+2)
 		if len(roots) == 0 {
-			ui.Text(c, "尚未添加附加工作区").FontSize(fsSmall).TextColor(c.Theme().TextMuted).Padding(8, 10)
+			items = append(items, &mygo.MenuItem{Label: "尚未添加附加工作区", Disabled: true})
 		}
-		ui.Scroll(c).MaxHeight(200).Children(func() {
-			ui.Column(c).Children(func() {
-				for i, root := range roots {
-					root := root
-					popoverItem(c, fmt.Sprintf("extra-root-%d", i), filepath.Base(root), root, false, func() { st.ExtrasOpen = false; a.removeExtraRoot(t, root) })
-				}
+		for _, root := range roots {
+			root := root
+			items = append(items, &mygo.MenuItem{
+				Label:   "📁 " + filepath.Base(root),
+				ToolTip: root,
+				Click:   func(*mygo.MenuItem, *mygo.Window) { a.removeExtraRoot(t, root) },
 			})
-		})
-		divider(c)
-		popoverItem(c, "extra-add", "＋ 添加目录", "", false, func() { st.ExtrasOpen = false; a.addExtraRoot(t) })
+		}
+		items = append(items, menuSeparator(), menuAction("＋ 添加目录", func() { a.addExtraRoot(t) }))
+		a.popupMenu(items)
+	})
+	btn.Children(func() {
+		iconGlyph(c, "grid", 16).TextColor(color)
+		if count > 0 {
+			ui.Text(c, fmt.Sprint(count)).FontSize(fsTiny).TextColor(color)
+		}
 	})
 }
 
@@ -1094,7 +1132,11 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 	case ratio > 0.2:
 		color = colWarning()
 	}
-	btn := composerFlat(c, label).SingleLine().Shrink(0).NoWrap().TextColor(color).Tooltip("上下文占用（点击查看明细）")
+	btn, labelEl := composerFlatParts(c, label)
+	// The colour goes on the label itself: a TextColor on the button never reaches
+	// it, which is why the meter used to sit at one muted grey whatever the ratio.
+	labelEl.TextColor(fadeColor(labelEl, "context-tone", color))
+	btn = btn.SingleLine().Shrink(0).NoWrap().Tooltip("上下文占用（点击查看明细）")
 	if !st.FooterLoaded {
 		btn.OnClick(func() { a.refreshSessionFooter(t) })
 		return
@@ -1102,36 +1144,43 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 	btn.OnClick(func() { st.ContextOpen = !st.ContextOpen })
 	ui.PopoverBase(c, btn, &st.ContextOpen, func(panel ui.Element) {
 		popoverChrome(c, panel, 300)
-		panel.Column().AttachTo(btn, ui.AnchorTopRight, ui.AnchorBottomRight).Left(-12)
+		panel.Column().Label("上下文占用明细").AttachTo(btn, ui.AnchorTopRight, ui.AnchorBottomRight).Left(-12)
 		b := st.Breakdown
 		ui.Text(c, "上下文构成").FontSize(fsSection).Bold().Padding(6, 10)
-		ui.Column(c).Padding(4, 10).Gap(6).Children(func() {
-			contextPart(c, "系统提示词", b.SystemPrompt)
-			for _, part := range b.SystemPromptParts {
-				if part.Tokens > 0 {
-					contextPart(c, "  · "+part.Label, part.Tokens)
+		// The breakdown scrolls so the panel stays inside its height limit; the
+		// buttons below keep their room instead of spilling out of the panel.
+		ui.Scroll(c).MaxHeight(280).Children(func() {
+			ui.Column(c).FillWidth().Padding(4, 10).Gap(6).Children(func() {
+				contextPart(c, "系统提示词", b.SystemPrompt)
+				for _, part := range b.SystemPromptParts {
+					if part.Tokens > 0 {
+						contextPart(c, "  · "+part.Label, part.Tokens)
+					}
 				}
-			}
-			contextPart(c, "工具 Schema", b.ToolSchemas)
-			contextPart(c, "用户提问", b.UserMessages)
-			contextPart(c, "AI 回复", b.AssistantMsgs)
-			contextPart(c, "工具结果", b.ToolResults)
-			if b.Reasoning > 0 {
-				contextPart(c, "思考内容", b.Reasoning)
-			}
-			ui.Text(c, fmt.Sprintf("累计输入 %s / 输出 %s", fmtK(st.Usage.InputTokens), fmtK(st.Usage.OutputTokens))).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+				contextPart(c, "工具 Schema", b.ToolSchemas)
+				contextPart(c, "用户提问", b.UserMessages)
+				contextPart(c, "AI 回复", b.AssistantMsgs)
+				contextPart(c, "工具结果", b.ToolResults)
+				if b.Reasoning > 0 {
+					contextPart(c, "思考内容", b.Reasoning)
+				}
+				ui.Text(c, fmt.Sprintf("累计输入 %s / 输出 %s", fmtK(st.Usage.InputTokens), fmtK(st.Usage.OutputTokens))).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+			})
 		})
 		divider(c)
-		ui.Column(c).FillWidth().Padding(4, 10, 6).Children(func() {
-			ui.Grid(c.Key("context-compact-grid")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().MinWidth(0).Gap(8).Children(func() {
-				contextCompactButton(c, "context-compact", "压缩上下文", true, t.Busy, "压缩对话上下文，用摘要替换历史消息", func() {
+		ui.Column(c).FillWidth().Shrink(0).Padding(4, 10, 6).Gap(8).Children(func() {
+			// Two rows of two buttons.
+			ui.Row(c).FillWidth().Shrink(0).Gap(8).Children(func() {
+				contextCompactButton(c, "context-compact", "压缩上下文", true, t.Busy || st.CompactBusy, "压缩对话上下文，用摘要替换历史消息", func() {
 					st.ContextOpen = false
 					a.compact(t, false)
 				})
-				contextCompactButton(c, "context-fast-compact", "压缩上下文(快速)", true, t.Busy, "本地裁剪旧回复、工具结果与思考，保留最近内容，不调用模型", func() {
+				contextCompactButton(c, "context-fast-compact", "压缩上下文(快速)", true, t.Busy || st.CompactBusy, "本地裁剪旧回复、工具结果与思考，保留最近内容，不调用模型", func() {
 					st.ContextOpen = false
 					a.compact(t, true)
 				})
+			})
+			ui.Row(c).FillWidth().Shrink(0).Gap(8).Children(func() {
 				contextCompactButton(c, "context-lessons", "压缩教训", false, t.Busy, "压缩并总结项目经验教训", func() {
 					st.ContextOpen = false
 					a.send(t, "请压缩并总结这个项目的经验教训（LESSONS.md）。")
@@ -1146,23 +1195,23 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 }
 
 func contextCompactButton(c *ui.Context, key, label string, primary, disabled bool, tip string, action func()) {
-	// 对齐 main 的 .context-compact-btn：透明底 + 1px 边框 + 6px 圆角，
-	// padding 2px 10px，12px 字，前两个主操作走主题高亮色。
+	// 对齐 main 的 .context-compact-btn：透明底 + 1px 边框，字号 12，前两个主操作走
+	// 主题高亮色；圆角与边框透明度跟其它按钮同一套 token。
 	t := c.Theme()
-	b := ui.ButtonBase(c.Key(key)).JustifySelf(ui.Stretch).MinWidth(0).Height(28).Padding(2, 4).Radius(6).
-		Border(1, t.Border).Center().Label(label).Tooltip(tip).Cursor(ui.CursorPointer).Disabled(disabled)
+	b := ui.ButtonBase(c.Key(key)).Grow(1).Basis(0).MinWidth(0).Height(28).Padding(2, 4).Radius(radiusControl).
+		Border(1, surfaceBorder(c)).Center().Label(label).Tooltip(tip).Cursor(ui.CursorPointer).Disabled(disabled)
+	color := t.TextMuted
 	if primary {
-		b.TextColor(t.Accent)
-	} else {
-		b.TextColor(t.TextMuted)
+		color = t.Accent
 	}
 	fill := ui.Transparent
 	if disabled {
 		b.Opacity(0.45)
 	} else if b.Hovered() {
-		fill = t.SurfaceHover
+		fill, color = t.SurfaceHover, t.Text
 	}
 	b.Background(fadeColor(b, "fill", fill))
+	b.TextColor(fadeColor(b, "label", color))
 	b.OnClick(func() {
 		if disabled {
 			return
@@ -1170,7 +1219,7 @@ func contextCompactButton(c *ui.Context, key, label string, primary, disabled bo
 		action()
 	})
 	b.Children(func() {
-		ui.Text(c, label).FontSize(12).SingleLine().MinWidth(0).TextAlign(ui.Center)
+		ui.Text(c, label).FontSize(12).TextColor(color).SingleLine().MinWidth(0).TextAlign(ui.Center)
 	})
 }
 
@@ -1183,44 +1232,72 @@ func contextPart(c *ui.Context, name string, tokens int) {
 }
 
 func (a *desktop) compact(t *conversation, fast bool) {
-	if t.Busy {
+	st := t.uiState()
+	if t.Busy || st.CompactBusy {
 		return
 	}
-	t.uiState().CompactBusy = true
-	t.uiState().CompactNote = "正在压缩上下文…"
-	a.job(func() error {
+	st.CompactBusy = true
+	st.CompactThinking = 0
+	// The summarising model is the Tab's, exactly as a chat request would use it:
+	// the backend cannot read Tab state, and a session restored from disk has no
+	// frozen model of its own yet.
+	cfg := a.config
+	if fast {
+		st.CompactNote = "正在快速压缩旧回复、工具参数、工具结果与思考内容…"
+	} else {
+		st.CompactNote = "正在压缩对话上下文…"
+		if resolved, ok := a.chatConfig(t); ok {
+			cfg = resolved
+		}
+	}
+	sid := t.ID
+	go func() {
+		var result map[string]any
 		var err error
 		if fast {
-			_, err = a.core.FastCompactSession(t.ID)
+			result, err = a.core.FastCompactSession(sid)
 		} else {
-			_, err = a.core.CompactSession(t.ID, "", a.config)
+			result, err = a.core.CompactSession(sid, "", cfg)
 		}
 		a.win.Update(func() {
-			t.uiState().CompactBusy = false
 			if err != nil {
-				t.uiState().CompactNote = "压缩失败：" + err.Error()
-				a.notify(t.uiState().CompactNote)
+				st.CompactBusy = false
+				st.CompactThinking = 0
+				st.CompactNote = ""
+				a.notify("压缩失败：" + err.Error())
+				a.refreshSessionFooter(t)
 				return
 			}
-			t.uiState().CompactNote = "上下文压缩完成"
-			a.notify("上下文压缩完成")
-			a.refreshSessionFooter(t)
+			a.finishCompact(t, result, fast)
 		})
-		return err
-	})
+	}()
+}
+
+// finishCompact applies the backend's rewrite to the transcript and reports it.
+// Both tiers end here, so the toast and the context footer never disagree with
+// what the history now contains.
+func (a *desktop) finishCompact(t *conversation, result map[string]any, fast bool) {
+	st := t.uiState()
+	st.CompactBusy = false
+	st.CompactThinking = 0
+	st.CompactNote = ""
+	if fast && !boolOf(result, "changed") {
+		dropCompactPreview(t)
+		a.notify(fastCompactNoop(result))
+	} else {
+		a.applyCompactionResult(t, result)
+		a.notify(compactToastText(int(num(result, "tokensBefore")), int(num(result, "tokensAfter"))))
+	}
+	st.Follow = true
+	st.FollowPending = true
+	a.persist(t)
+	a.refreshSessionFooter(t)
 }
 
 // composerSendRow carries the transient run hints under the input. The send
 // button itself lives next to the input so it stays anchored to the cursor.
 func (a *desktop) composerSendRow(c *ui.Context, t *conversation) {
-	st := t.uiState()
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-		if st.CompactBusy {
-			ui.Spinner(c).Size(13, 13)
-			muted(c, st.CompactNote, fsTiny)
-		} else if st.CompactNote != "" {
-			muted(c, st.CompactNote, fsTiny)
-		}
 		ui.Spacer(c)
 		if t.AttachmentLoading {
 			ui.Spinner(c).Size(13, 13)
@@ -1283,5 +1360,12 @@ func inputHistory(t *conversation) []string {
 }
 
 func composerFlat(c *ui.Context, text string) ui.Element {
-	return flat(c, text).Border(0, c.Theme().Border).Background(ui.Transparent).Padding(1, 4).MinWidth(0).SingleLine().Shrink(1)
+	return button(c, nil, text, btnGhost, true, "").Padding(1, 6).MinWidth(0).Shrink(1)
+}
+
+// composerFlatParts is composerFlat for a label whose colour carries meaning
+// rather than being the ghost button's own (see the context meter).
+func composerFlatParts(c *ui.Context, text string) (ui.Element, ui.Element) {
+	e, label := buttonParts(c, nil, text, btnGhost, true, "")
+	return e.Padding(1, 6).MinWidth(0).Shrink(1), label
 }

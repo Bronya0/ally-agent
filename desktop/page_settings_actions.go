@@ -26,7 +26,9 @@ func (a *desktop) setAutostart(enabled bool) {
 		err := a.core.SetAutostartEnabled(enabled)
 		a.win.Update(func() {
 			if err != nil {
-				a.status = "设置开机自启失败：" + err.Error()
+				// notify, not status: a failed toggle springs back on its own, so the
+				// reason has to show up somewhere the user is already looking.
+				a.notify("设置开机自启失败：" + err.Error())
 				a.settings.Autostart = !enabled
 				a.autostartValue = !enabled
 			}

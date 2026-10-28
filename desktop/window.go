@@ -176,7 +176,7 @@ func (a *desktop) kbPage(c *ui.Context, width float32) {
 					ui.Text(c, "知识库").FontSize(20).Bold()
 					fieldNote(c, "选择一个知识库目录，Ally 会在其中维护 index.md 与分类结构；sources/ 子目录对模型只读。")
 					ui.Row(c).Gap(gapField).Children(func() {
-						ui.PrimaryButton(c, "选择知识库目录").OnClick(func() { a.pickKBRoot() })
+						primary(c, "选择知识库目录").OnClick(func() { a.pickKBRoot() })
 						flat(c, "打开设置").OnClick(func() { a.changePage("settings") })
 					})
 				})

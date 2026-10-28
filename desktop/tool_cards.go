@@ -124,6 +124,12 @@ func toolState(m map[string]any) string {
 // The backend sends `list` for directory listing; main also folds
 // `batch_read`, which arrives here as plain `read`.
 func isFoldableReadTool(m map[string]any) bool {
+	// A locally trimmed card no longer carries its result, only an excerpt: it has
+	// nothing left to group with, so it stays its own row (as main's
+	// !next.fastCompacted check does).
+	if boolOf(m, "fastCompacted") {
+		return false
+	}
 	name := str(m, "name")
 	if name == "" {
 		name = str(m, "toolName")
@@ -350,6 +356,9 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					neutralChip(c, extra)
 				}
 			}
+			if boolOf(m, "fastCompacted") {
+				neutralChip(c, fastCompactChip)
+			}
 			ui.Spacer(c)
 			if name == "command" || name == "remote_run_command" {
 				if code, exists := result["exitCode"]; exists {
@@ -456,8 +465,18 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			case name == "http_request" || name == "web_fetch":
 				// Network tool summaries stay on the header line.
 			case name == "render_html":
-				a.toolHTMLView(c, t, m)
 				html := str(args, "html")
+				if state == "running" || state == "pending" {
+					// 工具还没回，没有结果就没有可载入的页面；把已经到达的 HTML 尾部显示
+					// 出来，让人看见页面在长，而不是只看到一个等着点的空按钮。
+					if strings.TrimSpace(html) == "" {
+						ui.Text(c, "正在生成页面…").FontSize(fsSmall).TextColor(c.Theme().TextMuted)
+					} else {
+						toolCodeWindow(c, key+"-html-stream", tailLines(html, 18), true, "preview.html")
+					}
+					break
+				}
+				a.toolHTMLView(c, t, m)
 				ui.Row(c).Gap(8).Children(func() {
 					flat(c, "导出 HTML").OnClick(func() { a.exportHTML("preview.html", html) })
 					flat(c, "在浏览器打开").OnClick(func() { a.openHTMLPreview(html) })
@@ -547,18 +566,17 @@ func toolStatusIcon(c *ui.Context, state string) {
 	case "error":
 		ui.Box(c).Width(16).Height(16).Center().Children(func() { iconGlyph(c, "close", 16).TextColor(colDanger()) })
 	case "running":
-		dot := ui.Box(c).Width(16).Height(16).Center()
-		// Loop's ease bends the phase, so sample it linear and ease the
-		// triangle myself: the value must be a true 1<->0.3 clock, or the
-		// dot reads faster than main's.
-		pulse := dot.Loop("tool-pulse", 1200*time.Millisecond, ui.Linear)
-		tri := pulse * 2
-		if tri > 1 {
-			tri = 2 - tri
-		}
-		opacity := float32(0.3 + 0.7*easeInOut(tri))
-		dot.Children(func() {
-			ui.Box(c).Size(6, 6).Radius(3).Background(c.Theme().TextMuted).Opacity(opacity)
+		color := c.Theme().TextMuted
+		// Drawn instead of a Loop on a box: Loop asks for a frame that rebuilds
+		// the whole view, which a thinking model would do at the display's rate.
+		ui.Box(c).Size(16, 16).Center().Draw(func(p *ui.Painter, r ui.Rect) {
+			p.AnimationFrameRate(30)
+			ms := float64(p.Now().UnixMilli()%1200) / 1200
+			tri := ms * 2
+			if tri > 1 {
+				tri = 2 - tri
+			}
+			p.Fill(ui.Rect{X: r.X + 5, Y: r.Y + 5, W: 6, H: 6}, color.Alpha(0.3+0.7*easeInOut(float32(tri))), 3)
 		})
 	default:
 		ui.Box(c).Width(16).Height(16).Center().Children(func() {
@@ -588,7 +606,11 @@ func parseToolArgs(raw string) map[string]any {
 				}
 				var value any
 				if err := dec.Decode(&value); err != nil {
-					if key == "content" && (err == io.ErrUnexpectedEOF || err == io.EOF) {
+					// 流式参数会在某个字符串中间断掉，断在哪个字段都可能：把已经到达的
+					// 那一段交出去，而不是整个字段丢掉。以前这里只认 content，于是
+					// render_html 的 html 字段永远取不到前缀，卡片只能显示一个空按钮，
+					// 直到工具跑完才突然出现成品。
+					if err == io.ErrUnexpectedEOF || err == io.EOF {
 						rest := strings.TrimSpace(raw[dec.InputOffset():])
 						rest = strings.TrimSpace(strings.TrimPrefix(rest, ":"))
 						if strings.HasPrefix(rest, "\"") {
@@ -1122,13 +1144,16 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 				dot = "pending"
 			}
 			if dot == "running" {
-				anchor := ui.Box(c).Size(6, 6)
-				pulse := anchor.Loop(fmt.Sprintf("sub-dot-%s-%d", str(m, "subId"), index), 1200*time.Millisecond, ui.Linear)
-				tri := pulse * 2
-				if tri > 1 {
-					tri = 2 - tri
-				}
-				anchor.Radius(3).Background(c.Theme().Accent).Opacity(float32(0.3 + 0.7*easeInOut(tri)))
+				color := c.Theme().Accent
+				ui.Box(c).Size(6, 6).Draw(func(p *ui.Painter, r ui.Rect) {
+					p.AnimationFrameRate(30)
+					ms := float64(p.Now().UnixMilli()%1200) / 1200
+					tri := ms * 2
+					if tri > 1 {
+						tri = 2 - tri
+					}
+					p.Fill(r, color.Alpha(0.3+0.7*easeInOut(float32(tri))), 3)
+				})
 			} else {
 				ui.Box(c).Size(6, 6).Radius(3).Background(tone)
 			}

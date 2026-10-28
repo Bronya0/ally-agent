@@ -72,15 +72,27 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		}
 	}
 	if t == nil {
-		if name == "compact:start" || name == "compact:done" || name == "run:compact" {
+		if name == "compact:start" || name == "compact:done" || name == "run:compact" || name == "run:compacted" {
+			// A background session has no tab here, so its compaction can only be
+			// reported in the window status line.
 			a.status = "正在压缩上下文…"
-			if name == "compact:done" {
-				a.status = "上下文压缩完成"
+			if name == "compact:done" || name == "run:compacted" {
+				a.status = ""
 			}
 		}
 		return
 	}
 	ui := t.uiState()
+	// A retry notice is about the attempt that just failed; it stays up only while
+	// the run waits for the next one. Every other event that reaches this tab
+	// means the run already moved past that failure, so the notice is dropped
+	// here, once, instead of in a list of "progress" events: such a list has to be
+	// kept in sync by hand, and whatever is missing (ask:ready, a compaction…)
+	// leaves "重试中 1/6" on screen until the whole run ends. The one exception
+	// below both re-arms it and is the only writer of this field.
+	if name != "run:retry" {
+		ui.Retry = nil
+	}
 
 	switch name {
 	case "run:start":
@@ -94,7 +106,6 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			t.Status = "正在取消…"
 		}
 		ui.ThinkingBytes = 0
-		ui.Retry = nil
 		ui.Follow = true
 		ui.CompactNote = ""
 	case "run:attachment":
@@ -108,7 +119,9 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		content := str(p, "content")
 		if content != "" {
 			n := len(t.Messages)
-			if n == 0 || str(t.Messages[n-1], "role") != "assistant" || str(t.Messages[n-1], "toolCallId") != "" {
+			// A summary that replaced the transcript is not this run's answer: the
+			// next delta opens a fresh row instead of growing the summary.
+			if n == 0 || str(t.Messages[n-1], "role") != "assistant" || str(t.Messages[n-1], "toolCallId") != "" || boolOf(t.Messages[n-1], transcriptSummaryFlag) {
 				t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": ""})
 			}
 			m := t.Messages[len(t.Messages)-1]
@@ -167,17 +180,52 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			t.Status = "正在等待 MCP…"
 		}
 	case "run:compact":
-		ui.CompactNote = "上下文已压缩"
-		a.notify("上下文已压缩")
-		t.Status = "上下文已压缩"
+		// The automatic path announces its summary request before running it: this
+		// is a start, not a result. The result arrives as run:compacted.
+		ui.CompactBusy = true
+		ui.CompactThinking = 0
+		ui.CompactNote = compactStartNote(p)
+		t.Status = ui.CompactNote
 	case "compact:start":
 		ui.CompactBusy = true
-		ui.CompactNote = "正在压缩上下文…"
+		ui.CompactThinking = 0
+		ui.CompactNote = compactStartNote(p)
+		t.Status = ui.CompactNote
+		// A previous compaction that never closed must not leave its half-written
+		// summary in front of the new one.
+		dropCompactPreview(t)
+	case "compact:delta":
+		// The summary streams like a normal answer, so the user watches it being
+		// written instead of a frozen timer.
+		a.compactDelta(t, str(p, "content"), int(num(p, "reasoningLen")))
 	case "compact:done":
 		ui.CompactBusy = false
-		if ok, _ := p["ok"].(bool); ok {
-			ui.CompactNote = "上下文压缩完成"
-			a.notify("上下文压缩完成")
+		ui.CompactThinking = 0
+		ui.CompactNote = ""
+		if ok, _ := p["ok"].(bool); !ok {
+			// A failed or cancelled compaction must not leave its half-written
+			// summary in the transcript as if it had been applied.
+			dropCompactPreview(t)
+		}
+	case "run:compacted":
+		ui.CompactBusy = false
+		ui.CompactThinking = 0
+		ui.CompactNote = ""
+		if msg := str(p, "error"); msg != "" {
+			if t == a.current() {
+				a.notify("上下文压缩失败：" + msg)
+			}
+			a.refreshSessionFooter(t)
+			return
+		}
+		// The backend already replaced or trimmed the history: mirror that here,
+		// otherwise the transcript keeps showing a conversation the next request
+		// is no longer built from.
+		a.applyCompactionResult(t, p)
+		a.persist(t)
+		a.refreshSessionFooter(t)
+		if t == a.current() {
+			a.notify(compactToastText(int(num(p, "tokensBefore")), int(num(p, "tokensAfter"))))
 		}
 	case "run:inject":
 		t.Status = "已注入新消息，继续执行…"
@@ -197,7 +245,6 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		t.RunID = ""
 		t.CancelRequested = false
 		t.AskID = ""
-		ui.Retry = nil
 		ui.CompactBusy = false
 		if name == "run:done" {
 			t.Status = "任务完成"
@@ -307,6 +354,11 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 	}
 	if t.uiState().Follow {
 		t.uiState().FollowPending = true
+	}
+	if name == "tool:result" || name == "tool:error" {
+		// A tool result is the biggest single jump in what the next request will
+		// carry: refresh the context meter here, not at the end of the run.
+		a.refreshSessionFooter(t)
 	}
 }
 
@@ -537,11 +589,17 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 }
 
 func (a *desktop) refreshSessionFooter(t *conversation) {
-	if t == nil {
+	if t == nil || a.core == nil || a.win == nil {
+		// No backend to ask: headless fixtures and the window's first frames.
 		return
 	}
 	ui := t.uiState()
 	if ui.FooterBusy {
+		// A compaction lands while the previous poll is still in flight, and that
+		// poll answers for the history it started on. Dropping the request here is
+		// what leaves the footer frozen at the pre-compaction number until some
+		// later run happens to refresh it, so keep it and rerun once it finishes.
+		ui.FooterPending = true
 		return
 	}
 	ui.FooterBusy = true
@@ -556,6 +614,10 @@ func (a *desktop) refreshSessionFooter(t *conversation) {
 			ui.Usage = usage
 			if breakdown.Total > 0 {
 				t.ContextTokens = breakdown.Total
+			}
+			if ui.FooterPending {
+				ui.FooterPending = false
+				a.refreshSessionFooter(t)
 			}
 		})
 	}()

@@ -2,7 +2,7 @@
 package desktop
 
 import (
-	"ally-dev/pkg/uikit"
+	"ally-dev/desktop/uikit"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -75,9 +75,14 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 			return
 		}
 		if a.filesF.Preview && strings.HasSuffix(strings.ToLower(file.Path), ".md") {
+			// Read the buffer once per edit, not once per frame: Buffer.String()
+			// builds the whole text again, and frames come with every animation.
+			if v := file.Editor.Buffer.Version(); !file.PreviewReady || v != file.PreviewVersion {
+				file.PreviewText, file.PreviewVersion, file.PreviewReady = file.Editor.Buffer.String(), v, true
+			}
 			ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 				ui.Column(c).Padding(padPage).Children(func() {
-					markdown.View(c, file.Editor.Buffer.String(), nil)
+					markdown.View(c, file.PreviewText, nil)
 				})
 			})
 			return
@@ -92,7 +97,10 @@ func (a *desktop) fileTree(c *ui.Context) {
 	if width < 150 || width > 600 {
 		width = 270
 	}
-	ui.Column(c).Width(width).Shrink(0).Background(a.currentPalette().panel).BorderWidth(0, 0, 0, 1).BorderColor(c.Theme().Border).Children(func() {
+	// Unselectable keeps the window-wide selectable text layer from claiming
+	// right-clicks: without it every secondary click opens the root text menu
+	// and neither a row menu nor the blank-area menu ever sees RightClicked.
+	ui.Column(c).Width(width).Shrink(0).Unselectable().Background(a.currentPalette().panel).BorderWidth(0, 0, 0, 1).BorderColor(c.Theme().Border).Children(func() {
 		c.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles() })
 		title := "文件"
 		tip := ""
@@ -106,12 +114,38 @@ func (a *desktop) fileTree(c *ui.Context) {
 			iconAction(c, "explorer-help", "文件浏览器帮助", "info", 22, func() { a.filesF.HelpOpen = !a.filesF.HelpOpen })
 			iconAction(c, "explorer-close", "关闭文件栏", "close", 22, func() { a.explorer = false })
 		})
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-			column := ui.Column(c).Padding(3, 0)
+		// The tree itself owns the blank-area menu; a row builds its own menu, so
+		// the blank one only appears where there is no file or folder under the
+		// pointer. Item order mirrors the Vue explorer's empty-tree menu.
+		tree := ui.Scroll(c).Grow(1).MinHeight(0)
+		var area ui.Element
+		tree.Children(func() {
+			// Filling the viewport makes the empty space below the last row
+			// part of this column, so a right-click there belongs to the tree
+			// and not to the scrolling surface.
+			area = ui.Column(c).Padding(3, 0).FillWidth().FillHeight()
 			if len(a.files) == 0 {
-				column.Children(func() { fieldNote(c, "目录为空") })
+				area.Children(func() { fieldNote(c, "目录为空") })
 			}
-			column.Children(func() { a.fileRows(c, a.files, 0) })
+			area.Children(func() { a.fileRows(c, a.files, 0) })
+		})
+		// ContextMenu is the system's context menu: it opens where the secondary
+		// button is, and from the keyboard on the menu key or Shift+F10, so the
+		// open flag and the hit test a popover needed are gone.
+		area.ContextMenu(func(m *ui.Menu) {
+			if m.Item("新建文件").Chosen() {
+				a.openFilePrompt(false, "")
+			}
+			if m.Item("新建目录").Chosen() {
+				a.openFilePrompt(true, "")
+			}
+			if m.Item("打开目录").Chosen() {
+				a.openInManager("")
+			}
+			m.Separator()
+			if m.Item("刷新").Chosen() {
+				a.refreshFiles()
+			}
 		})
 		if a.filesF.HelpOpen {
 			ui.Column(c).Padding(8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(c.Theme().Border).Children(func() {
@@ -136,7 +170,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 				}
 			})
 			ui.Spacer(c)
-			iconAction(c, "explorer-new-file", "新建文件", "plus", 22, func() { a.openFilePrompt(false, "", "") })
+			addButton(c, "explorer-new-file", "新建文件", "plus", 22, func() { a.openFilePrompt(false, "") })
 		})
 	})
 	a.filePromptDialog(c)
@@ -191,37 +225,51 @@ func (a *desktop) fileRows(c *ui.Context, entries []backend.FileEntry, depth int
 				a.openFile(entry.Path)
 			}
 		}
-		open := a.popupFlag("file-context-" + path)
-		if row.RightClicked() {
-			*open = true
-		}
-		popoverPanel(c, row, open, 210, func() {
+		// ContextMenu replaces the open flag, the right-click hit test and the
+		// closing of the blank-area menu: the system opens one menu at a time.
+		row.ContextMenu(func(m *ui.Menu) {
 			if entry.Dir {
-				popoverItem(c, "file-new", "新建文件", "", false, func() { *open = false; a.openFilePrompt(false, path, "") })
-				popoverItem(c, "dir-new", "新建目录", "", false, func() { *open = false; a.openFilePrompt(true, path, "") })
+				if m.Item("新建文件").Chosen() {
+					a.openFilePrompt(false, path)
+				}
+				if m.Item("新建目录").Chosen() {
+					a.openFilePrompt(true, path)
+				}
 			}
-			popoverItem(c, "file-open-dir", "打开目录", "", false, func() {
-				*open = false
+			if m.Item("打开目录").Chosen() {
 				if entry.Dir {
 					a.openInManager(path)
 				} else {
 					a.openInManager(fileParent(path))
 				}
-			})
-			divider(c)
-			popoverItem(c, "file-copy-relative", "复制相对路径", "", false, func() { *open = false; services.WriteClipboard(path) })
-			popoverItem(c, "file-copy-full", "复制完整路径", "", false, func() {
-				*open = false
+			}
+			m.Separator()
+			if m.Item("复制相对路径").Chosen() {
+				services.WriteClipboard(path)
+			}
+			if m.Item("复制完整路径").Chosen() {
 				full := path
 				if t := a.current(); t != nil {
 					full = filepath.Join(t.Workspace, filepath.FromSlash(path))
 				}
 				services.WriteClipboard(full)
-			})
-			popoverItem(c, "file-info", "属性", "", false, func() { *open = false; a.openFileInfo(entry.Path) })
-			divider(c)
-			popoverItem(c, "file-rename", "重命名", "", false, func() { *open = false; a.openFilePrompt(false, fileParent(path), name) })
-			popoverItem(c, "file-delete", "删除", "", false, func() { *open = false; a.deleteFileEntry(entry) })
+			}
+			if m.Item("属性").Chosen() {
+				a.openFileInfo(entry.Path)
+			}
+			m.Separator()
+			if m.Item("重命名").Chosen() {
+				a.openRenamePrompt(path)
+			}
+			if m.Item("删除").Chosen() {
+				a.deleteFileEntry(entry)
+			}
+			if entry.Dir {
+				// Mirror the Vue explorer: a directory row can refresh just itself.
+				if m.Item("刷新").Chosen() {
+					a.refreshFolder(path)
+				}
+			}
 		})
 		if entry.Dir && a.fileOpen[path] {
 			a.fileRows(c, a.fileChildren[path], depth+1)
@@ -236,13 +284,25 @@ func (a *desktop) openInManager(path string) {
 	}
 }
 
-func (a *desktop) openFilePrompt(dir bool, parent, name string) {
+func (a *desktop) openFilePrompt(dir bool, parent string) {
 	a.filesF.NewOpen = true
 	a.filesF.NewDir = dir
 	a.filesF.NewParent = parent
-	a.filesF.NewName = name
-	a.filesF.Rename = name != ""
+	a.filesF.NewName = ""
+	a.filesF.Rename = false
 	a.filesF.RenameOf = ""
+	a.filesF.PromptErr = ""
+}
+
+// openRenamePrompt targets the right-clicked node itself: the Vue explorer
+// renames that row, never whichever document happens to be open.
+func (a *desktop) openRenamePrompt(path string) {
+	a.filesF.NewOpen = true
+	a.filesF.NewDir = false
+	a.filesF.NewParent = fileParent(path)
+	a.filesF.NewName = filepath.Base(filepath.FromSlash(path))
+	a.filesF.Rename = true
+	a.filesF.RenameOf = path
 	a.filesF.PromptErr = ""
 }
 
@@ -281,19 +341,31 @@ func (a *desktop) submitFilePrompt() {
 	}
 	workspace := t.Workspace
 	if a.filesF.Rename {
-		old := a.activeFile()
-		path := ""
-		if old != nil {
-			path = old.Path
+		path := strings.TrimSpace(a.filesF.RenameOf)
+		if path == "" {
+			// Nothing named the node, so fall back to the open document.
+			if old := a.activeFile(); old != nil {
+				path = old.Path
+			}
 		}
 		if path == "" {
-			path = name
+			a.filesF.NewOpen = false
+			return
 		}
+		root := t.Workspace
 		a.filesF.NewOpen = false
 		a.job(func() error {
-			_, err := a.core.RenamePath(backend.RenamePathRequest{Workspace: workspace, Path: path, NewName: name})
+			_, err := a.core.RenamePath(backend.RenamePathRequest{Workspace: root, Path: path, NewName: name})
 			if err == nil {
-				a.win.Update(func() { a.refreshFiles(); a.status = "已重命名" })
+				a.win.Update(func() {
+					// The open document would keep pointing at a path that no longer
+					// exists, so release it (asking first if it has edits).
+					if file := a.activeFile(); file != nil && strings.EqualFold(filepath.ToSlash(file.Path), filepath.ToSlash(path)) {
+						a.closeFile()
+					}
+					a.refreshFiles()
+					a.status = "已重命名"
+				})
 			}
 			return err
 		})
@@ -351,17 +423,40 @@ func (a *desktop) toggleFolder(path string) {
 	if _, loaded := a.fileChildren[path]; loaded {
 		return
 	}
-	if a.fileLoading[path] || a.core == nil {
+	a.loadFolderChildren(path)
+}
+
+// refreshFolder reloads one directory in place and keeps the tree expanded,
+// the way the Vue explorer refreshes a single node instead of the whole tree.
+func (a *desktop) refreshFolder(path string) {
+	if path == "" {
+		a.refreshFiles()
+		return
+	}
+	if a.fileOpen == nil {
+		a.fileOpen = map[string]bool{}
+	}
+	if a.fileChildren == nil {
+		a.fileChildren = map[string][]backend.FileEntry{}
+	}
+	a.fileOpen[path] = true
+	delete(a.fileChildren, path)
+	a.loadFolderChildren(path)
+}
+
+// loadFolderChildren lists one directory into fileChildren.
+func (a *desktop) loadFolderChildren(path string) {
+	if a.core == nil || a.fileLoading[path] {
+		return
+	}
+	t := a.current()
+	if t == nil {
 		return
 	}
 	if a.fileLoading == nil {
 		a.fileLoading = map[string]bool{}
 	}
 	a.fileLoading[path] = true
-	t := a.current()
-	if t == nil {
-		return
-	}
 	root, epoch := t.Workspace, a.fileEpoch
 	go func() {
 		result, err := a.core.ListFiles(backend.ListFilesRequest{Workspace: root, Path: path, MaxDepth: 1, Limit: 1000, IncludeHidden: true})
@@ -680,7 +775,13 @@ func (a *desktop) gitTreeRows(c *ui.Context, nodes []*gitTreeNode, files []backe
 		folder := node.index < 0
 		closed := a.popupFlag("git-folder-" + node.path)
 		row := ui.Row(c.Key("git-tree-"+node.path)).FillWidth().MinWidth(0).Height(25).Padding(0, 6+float32(depth)*14).Gap(6).AlignItems(ui.Center).Radius(4).Cursor(ui.CursorPointer).Label(node.name)
-		if row.Hovered() || (!folder && a.filesF.GitFile == node.index) {
+		current := !folder && a.filesF.GitFile == node.index
+		ink := c.Theme().Text
+		switch {
+		case current:
+			row.Background(selectionFill(c.Theme().Accent))
+			ink = c.Theme().Accent
+		case row.Hovered():
 			row.Background(c.Theme().SurfaceHover)
 		}
 		row.Children(func() {
@@ -693,7 +794,10 @@ func (a *desktop) gitTreeRows(c *ui.Context, nodes []*gitTreeNode, files []backe
 			} else {
 				ui.Box(c).Width(10)
 			}
-			ui.Text(c, node.name).FontSize(fsSmall).SingleLine().MinWidth(0).Grow(1).Cursor(ui.CursorPointer)
+			name := ui.Text(c, node.name).FontSize(fsSmall).TextColor(ink).SingleLine().MinWidth(0).Grow(1).Cursor(ui.CursorPointer)
+			if current {
+				name.FontWeight(600)
+			}
 			if !folder {
 				file := files[node.index]
 				ui.Text(c, gitStatusLetter(file.Status)).FontSize(fsTiny).TextColor(colWarning())

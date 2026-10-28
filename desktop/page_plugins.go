@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	backend "ally-dev/internal/app"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -207,11 +208,12 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 			if sw := ui.Switch(c.Key("plugin-switch-"+p.ID), &enabled).Disabled(a.pluginsF.Busy || !p.Valid).Label(name); sw.Changed() {
 				a.setPluginEnabled(p, enabled)
 			}
-			open := a.popupFlag("plugin-export-" + p.ID)
-			export := flat(c.Key("plugin-export-button-"+p.ID), "导出 ▾").Disabled(a.pluginsF.Busy).OnClick(func() { *open = !*open })
-			popoverPanel(c, export, open, 240, func() {
-				popoverItem(c, "plugin-export-package-"+p.ID, "导出（只含包本体）", "", false, func() { *open = false; a.exportPlugin(p, false) })
-				popoverItem(c, "plugin-export-data-"+p.ID, "导出（连插件数据一起）", "", false, func() { *open = false; a.exportPlugin(p, true) })
+			p := p
+			flat(c.Key("plugin-export-button-"+p.ID), "导出 ▾").Disabled(a.pluginsF.Busy).OnClick(func() {
+				a.popupMenu([]*mygo.MenuItem{
+					menuAction("导出（只含包本体）", func() { a.exportPlugin(p, false) }),
+					menuAction("导出（连插件数据一起）", func() { a.exportPlugin(p, true) }),
+				})
 			})
 			dangerButton(c, "删除").Disabled(a.pluginsF.Busy).OnClick(func() {
 				a.pluginsF.DeleteID = p.ID

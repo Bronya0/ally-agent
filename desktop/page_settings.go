@@ -2,7 +2,7 @@
 package desktop
 
 import (
-	"ally-dev/pkg/uikit"
+	"ally-dev/desktop/uikit"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -15,6 +15,14 @@ import (
 
 var settingsSections = []string{"通用", "高级", "网络", "安全围栏", "API", "版本亮点", "关于"}
 
+// autoCompactOptions keeps the stored values ("summary" / "recent") and changes
+// only what the user reads: a raw English value in the settings form is neither
+// self-explanatory nor honest about which one is the default.
+var autoCompactOptions = []uikit.Option{
+	{Value: "summary", Label: "LLM 全文总结（默认）"},
+	{Value: "recent", Label: "本地裁剪（必要时回退总结）"},
+}
+
 // settingsPageBody is the inline settings surface: a left section rail and the
 // form for the active section. Values are saved when the user leaves the page
 // or presses the header button, mirroring the original "commit on leave".
@@ -26,11 +34,9 @@ func (a *desktop) settingsPageBody(c *ui.Context) {
 	ui.Row(c).Grow(1).MinHeight(0).Gap(gapSection).AlignItems(ui.Stretch).Justify(ui.Start).Children(func() {
 		ui.Column(c).Width(140).Shrink(0).Gap(3).Justify(ui.Start).Children(func() {
 			for _, section := range settingsSections {
-				btn := flat(c.Key("settings-"+section), section).FillWidth().Justify(ui.Start)
-				if a.settings.Tab == section {
-					btn.TextColor(c.Theme().Accent).Background(c.Theme().SurfaceHover)
-				}
-				btn.OnClick(func() { a.selectSettingsSection(section) })
+				section := section
+				selectionRow(c, "settings-"+section, section, a.settings.Tab == section).
+					OnClick(func() { a.selectSettingsSection(section) })
 			}
 		})
 		ui.Column(c).Grow(1).MinWidth(0).FillHeight().Justify(ui.Start).Children(func() {
@@ -145,18 +151,16 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			fieldLabel(c, "强调色")
 			ui.Row(c).Gap(8).Wrap().Children(func() {
 				for _, idx := range []int{0, 2, 3, 4, 5} {
+					idx := idx
 					p := palettes[idx]
-					label := p.name
+					name := p.name
 					if idx == 0 {
-						label = "蓝色"
+						name = "蓝色"
 					} else if idx == 2 {
-						label = "默认琥珀"
+						name = "默认琥珀"
 					}
-					button := flat(c.Key(fmt.Sprintf("palette-%d", idx)), label).TextColor(p.accent)
-					if a.prefs.Palette == idx || (idx == 0 && a.prefs.Palette == 1) {
-						button.Border(2, p.accent).Background(p.accent.Alpha(0.12))
-					}
-					button.OnClick(func() {
+					selected := a.prefs.Palette == idx || (idx == 0 && a.prefs.Palette == 1)
+					choiceSwatch(c, fmt.Sprintf("palette-%d", idx), name, selected, p.accent).OnClick(func() {
 						if a.prefs.Appearance == "" {
 							if a.currentPalette().dark {
 								a.prefs.Appearance = "dark"
@@ -176,11 +180,8 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			ui.Row(c).Gap(gapInline).Wrap().Children(func() {
 				for _, style := range []struct{ id, label string }{{"eye", "大眼睛"}, {"whale", "蓝色大肥鱼"}, {"bot", "小机器人"}, {"gpt", "GPT 龙娘"}, {"claude", "Claude 橙花娘"}, {"deepseek", "DeepSeek 女仆"}, {"gemini", "Gemini 星猫娘"}, {"glm", "GLM 狐狸女仆"}, {"qwen", "千问千金"}} {
 					style := style
-					btn := flat(c.Key("avatar-"+style.id), style.label)
-					if a.prefs.Avatar == style.id {
-						btn.TextColor(c.Theme().Accent).Background(c.Theme().SurfaceHover)
-					}
-					btn.OnClick(func() { a.selectAvatarStyle(style.id) })
+					choiceButton(c, "avatar-"+style.id, style.label, a.prefs.Avatar == style.id, c.Theme().Accent).
+						OnClick(func() { a.selectAvatarStyle(style.id) })
 				}
 			})
 			ui.Row(c).Gap(gapField).Children(func() {
@@ -244,19 +245,29 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					fieldNote(c, "0 表示使用默认值 6。")
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "上下文自动压缩阈值（比例）")
+					fieldLabel(c, "上下文自动压缩阈值")
 					ui.Slider(c.Key("compact-threshold"), &a.settings.Threshold, 0.2, 0.95).Label("压缩阈值")
-					fieldNote(c, fmt.Sprintf("当前 %.0f%%，占模型上下文窗口的比例。", a.settings.Threshold*100))
+					fieldNote(c, fmt.Sprintf("当前 %.0f%%：上下文占模型窗口的比例超过此值时自动压缩，范围 20%%–95%%，默认 60%%。", a.settings.Threshold*100))
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "上下文自动压缩方式")
-					uikit.Select(c.Key("compact-method"), &a.configDraft.AutoCompactMethod, []string{"recent", "summary"}).Label("压缩方式").FillWidth()
-					fieldNote(c, "summary = 调模型总结；recent = 本地裁剪，不调模型。")
+					// 未设置就是后端的默认值：全文总结。存进去的仍是 "summary"，
+					// 界面上只显示中文标签，用户不改就不写回 draft。
+					stored := a.configDraft.AutoCompactMethod
+					method := stored
+					if method == "" {
+						method = "summary"
+					}
+					uikit.SelectField(c.Key("compact-method"), &method, autoCompactOptions).Label("压缩方式").FillWidth()
+					if method != stored && method != "" {
+						a.configDraft.AutoCompactMethod = method
+					}
+					fieldNote(c, "全文总结：调用模型生成摘要。本地裁剪：不调用模型，先清空旧工具调用的参数，此前的回复与工具结果只留首尾摘录，回复正文合计最多约 8k tokens；减不下来时自动回退到全文总结。修改对新任务生效。")
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "压缩超时（秒）")
-					numberField(c, "compact-timeout", "压缩超时", &a.settings.CompactTimeout, 30, 3600, 30)
-					fieldNote(c, "等待摘要生成的最长时间。")
+					fieldLabel(c, "压缩超时时间")
+					numberField(c, "compact-timeout", "压缩超时时间", &a.settings.CompactTimeout, 30, 3600, 30)
+					fieldNote(c, "等待摘要生成的最长时间，30–3600 秒，默认 180。")
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "工具执行并发度")

@@ -6,7 +6,7 @@ package desktop
 // UI can be re-skinned or ported by touching two files.
 
 import (
-	"ally-dev/pkg/uikit"
+	"ally-dev/desktop/uikit"
 	"fmt"
 	"strings"
 	"time"
@@ -18,11 +18,11 @@ import (
 // ---- Text ----------------------------------------------------------------
 
 func label(c *ui.Context, s string) ui.Element {
-	return ui.Text(c, s).FontSize(fsBody)
+	return uikit.Label(c, s)
 }
 
 func muted(c *ui.Context, s string, size float32) ui.Element {
-	return ui.Text(c, s).FontSize(size).TextColor(c.Theme().TextMuted)
+	return uikit.Muted(c, s, size)
 }
 
 var monoFamily = nativeMonoFontFamily()
@@ -32,78 +32,124 @@ func mono(c *ui.Context, s string, size float32) ui.Element {
 }
 
 func sectionTitle(c *ui.Context, s string) ui.Element {
-	return ui.Text(c, s).FontSize(fsSection).Bold()
+	return uikit.SectionTitle(c, s)
 }
 
 // ---- Buttons -------------------------------------------------------------
+// Everything below is a thin alias over buttons.go, so a call site reads as
+// what the button means and the look stays in one place.
 
 func flat(c *ui.Context, s string) ui.Element {
-	return uikit.Button(c, s).Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(radiusControl).FontSize(fsSmall).Cursor(ui.CursorPointer)
+	return button(c, nil, s, btnSecondary, false, "")
 }
 
 func flatKey(c *ui.Context, key any, s string) ui.Element {
-	return flat(c.Key(key), s)
+	return button(c, key, s, btnSecondary, false, "")
 }
 
 func ghost(c *ui.Context, s string) ui.Element {
-	return ui.Button(c, s).FontSize(fsSmall).Radius(radiusControl).Cursor(ui.CursorPointer)
+	return button(c, nil, s, btnGhost, false, "")
 }
 
 func primary(c *ui.Context, s string) ui.Element {
-	return ui.PrimaryButton(c, s).FontSize(fsSmall).Radius(radiusControl).Cursor(ui.CursorPointer)
+	return button(c, nil, s, btnPrimary, false, "")
 }
 
 func dangerButton(c *ui.Context, s string) ui.Element {
-	return ui.Button(c, s).FontSize(fsSmall).Radius(radiusControl).TextColor(colDanger()).Cursor(ui.CursorPointer)
+	return button(c, nil, s, btnDanger, false, "")
 }
 
+func dangerIconAction(c *ui.Context, id, tip, name string, size float32, fn func()) ui.Element {
+	return iconButtonSized(c, id, tip, name, size, iconDanger, fn)
+}
+
+// ---- Selection -----------------------------------------------------------
+// Every "this one is chosen" control is built from these three: a chip, a
+// colour swatch and a vertical row. They paint their own fill, edge and label —
+// which is the whole point. flat() / primary() already painted their label, so a
+// caller that sets TextColor or Background afterwards changed nothing, and a
+// chosen item looked exactly like an unchosen one.
+
+// choiceButton is one chip in a set of mutually exclusive choices (avatar
+// styles, risk levels, game kinds).
 func choiceButton(c *ui.Context, key, text string, selected bool, tone ui.Color) ui.Element {
-	b := ui.ButtonBase(c.Key(key)).Height(heightControl).Padding(4, 10).Radius(radiusControl).
-		Border(1, c.Theme().Border).Background(c.Theme().Surface).Label(text).Cursor(ui.CursorPointer)
-	color := c.Theme().TextMuted
-	fill := c.Theme().Surface
-	if selected {
-		color = tone
-		fill = tone.Alpha(0.14)
-		b.Border(1, tone).FontWeight(600)
-	} else if b.Hovered() {
-		fill = c.Theme().SurfaceHover
+	return choiceChip(c, key, text, selected, tone, false)
+}
+
+// choiceSwatch is choiceButton for colour swatches: the label keeps the colour
+// it selects, so a palette chip previews its accent while unselected.
+func choiceSwatch(c *ui.Context, key, text string, selected bool, tone ui.Color) ui.Element {
+	return choiceChip(c, key, text, selected, tone, true)
+}
+
+func choiceChip(c *ui.Context, key, text string, selected bool, tone ui.Color, toneInk bool) ui.Element {
+	t := c.Theme()
+	b := ui.ButtonBase(c.Key(key)).Height(heightControl).Padding(3, 9).Radius(radiusControl).
+		Label(text).Cursor(ui.CursorPointer)
+	fill, ink, edge := t.Surface, t.TextMuted, surfaceBorder(c)
+	if toneInk {
+		ink = tone
 	}
-	b.Background(fadeColor(b, "fill", fill))
-	b.TextColor(color)
-	return b.Children(func() { ui.Text(c, text).FontSize(fsSmall).TextColor(color).SingleLine() })
+	switch {
+	case selected:
+		fill, ink, edge = selectionFill(tone), tone, selectionEdge(tone)
+	case b.Hovered():
+		fill, ink, edge = t.SurfaceHover, t.Text, t.Border.Mix(t.Text, edgeHoverMix)
+	}
+	b.Border(1, fadeColor(b, "choice-edge", edge)).Background(fadeColor(b, "choice-fill", fill))
+	b.TextColor(ink)
+	return b.Children(func() {
+		ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
+			// A chosen chip says so with tint, ink and weight — never a check mark:
+			// the mark doubled the signal and left a stray glyph in every chip that
+			// had to reserve room for it.
+			glyph := ui.Text(c, text).FontSize(fsSmall).TextColor(ink).SingleLine()
+			if selected {
+				glyph.FontWeight(600)
+			}
+		})
+	})
+}
+
+// selectionRow is the vertical-list form of the selected look: accent tint,
+// accent ink, bold label and a reserved accent rail, so the text never shifts
+// when the choice changes. Used by the settings rail and any other one-of-N list.
+func selectionRow(c *ui.Context, key any, text string, selected bool) ui.Element {
+	t := c.Theme()
+	b := ui.ButtonBase(c.Key(key)).FillWidth().Height(heightControl+2).Padding(0, 8).
+		Justify(ui.Start).Radius(radiusControl).Label(text).Cursor(ui.CursorPointer)
+	fill, ink := ui.Transparent, t.TextMuted
+	switch {
+	case selected:
+		fill, ink = selectionFill(t.Accent), t.Accent
+	case b.Hovered():
+		fill, ink = t.SurfaceHover, t.Text
+	}
+	b.Background(fadeColor(b, "row-fill", fill)).TextColor(ink)
+	return b.Children(func() {
+		ui.Row(c).FillWidth().Gap(gapField).AlignItems(ui.Center).Children(func() {
+			rail := ui.Box(c).Width(3).Height(13).Shrink(0).Radius(2)
+			if selected {
+				rail.Background(ink)
+			}
+			glyph := ui.Text(c, text).FontSize(fsSmall).TextColor(ink).SingleLine()
+			if selected {
+				glyph.FontWeight(600)
+			}
+		})
+	})
 }
 
 func iconButton(c *ui.Context, id, tip, name string, fn func()) ui.Element {
-	b := ui.ButtonBase(c.Key(id)).Size(30, 30).Center().Radius(radiusControl).Label(tip).Tooltip(tip).Cursor(ui.CursorPointer).OnClick(fn)
-	fill := ui.Transparent
-	if b.Hovered() {
-		fill = c.Theme().SurfaceHover
-	}
-	b.Background(fadeColor(b, "fill", fill))
-	return b.Children(func() { iconGlyph(c, name, 17) })
+	return iconButtonSized(c, id, tip, name, 30, iconNormal, fn)
 }
 
 func iconAction(c *ui.Context, id, tip, name string, size float32, fn func()) ui.Element {
-	b := ui.ButtonBase(c.Key(id)).Size(size, size).Center().Radius(radiusSmall).Label(tip).Tooltip(tip).Cursor(ui.CursorPointer).OnClick(fn)
-	fill := ui.Transparent
-	if b.Hovered() {
-		fill = c.Theme().SurfaceHover
-	}
-	b.Background(fadeColor(b, "fill", fill))
-	return b.Children(func() { iconGlyph(c, name, size*0.62) })
+	return iconButtonSized(c, id, tip, name, size, iconNormal, fn)
 }
 
 func mutedIconAction(c *ui.Context, id, tip, name string, size float32, fn func()) ui.Element {
-	color := c.Theme().TextMuted
-	b := ui.ButtonBase(c.Key(id)).Size(size, size).Center().Radius(radiusSmall).Label(tip).Tooltip(tip).
-		TextColor(color).Cursor(ui.CursorPointer).OnClick(fn)
-	fill := ui.Transparent
-	if b.Hovered() {
-		fill = c.Theme().SurfaceHover
-	}
-	b.Background(fadeColor(b, "fill", fill))
-	return b.Children(func() { iconGlyph(c, name, size*0.62).TextColor(color) })
+	return iconButtonSized(c, id, tip, name, size, iconQuiet, fn)
 }
 
 func railIcon(c *ui.Context, name string, size float32) ui.Element {
@@ -116,39 +162,7 @@ func railIcon(c *ui.Context, name string, size float32) ui.Element {
 // railNavigationButton keeps the collapsed icon slot separate from the
 // expanded label row, matching main's 20px glyph and centered 34px badge.
 func railNavigationButton(c *ui.Context, id, label, iconName string, expanded, active bool, trailing func()) ui.Element {
-	t := c.Theme()
-	b := ui.ButtonBase(c.Key(id)).FillWidth().Height(heightRailItem).Justify(ui.Start).Radius(radiusControl).Label(label).Cursor(ui.CursorPointer)
-	if !expanded {
-		b.Height(heightRailItemCollapsed).Center().Tooltip(label)
-	}
-	if active {
-		b.TextColor(t.Accent)
-	}
-	highlighted := active || b.Hovered()
-	fill := ui.Transparent
-	if expanded && highlighted {
-		fill = t.SurfaceHover
-	}
-	b.Background(fadeColor(b, "fill", fill))
-	return b.Children(func() {
-		if !expanded {
-			badge := ui.Row(c).Size(sizeRailBadge, sizeRailBadge).Shrink(0).Center().Radius(radiusRailBadge)
-			badgeFill := ui.Transparent
-			if highlighted {
-				badgeFill = t.SurfaceHover
-			}
-			badge.Background(fadeColor(badge, "fill", badgeFill))
-			badge.Children(func() { railIcon(c, iconName, sizeRailIconCollapsed) })
-			return
-		}
-		ui.Row(c).FillWidth().Padding(0, 8).Gap(10).AlignItems(ui.Center).Children(func() {
-			railIcon(c, iconName, sizeRailIcon)
-			ui.Text(c, label).FontSize(12.5).SingleLine()
-			if trailing != nil {
-				trailing()
-			}
-		})
-	})
+	return navItem(c, id, label, iconName, expanded, active, trailing)
 }
 
 func railToggleButton(c *ui.Context, id, tip, name string, fn func()) ui.Element {
@@ -177,108 +191,60 @@ func iconGlyph(c *ui.Context, name string, size float32) ui.Element {
 // ---- Surfaces ------------------------------------------------------------
 
 func card(c *ui.Context, key any, build func()) ui.Element {
-	return uikit.Card(c.Key(key)).Children(build)
+	return uikit.Card(c, key, padCard, radiusCard, build)
 }
 
 // rowCard is the hover-highlighted list row the original used for plugins,
 // skills, SSH nodes and model cards.
 func rowCard(c *ui.Context, key any, build func()) ui.Element {
-	e := ui.Column(c.Key(key)).Padding(8, 10).Gap(gapInline).Border(1, c.Theme().Border).
-		Background(c.Theme().Surface).Radius(radiusCard)
-	if e.Hovered() {
-		e.Background(c.Theme().SurfaceHover)
-	}
-	return e.Children(build)
+	return uikit.RowCard(c, key, padRow, radiusCard, build)
 }
 
 // selectableRow is a single-line row with hover and selected states.
 func selectableRow(c *ui.Context, key any, selected bool, height float32, build func()) ui.Element {
-	e := ui.Row(c.Key(key)).Height(height).Padding(0, padRow).Gap(gapInline).Radius(radiusSmall).AlignItems(ui.Center)
-	if selected {
-		e.Background(c.Theme().SurfaceHover)
-	} else if e.Hovered() {
-		e.Background(c.Theme().SurfaceHover)
-	}
-	return e.Children(build)
+	return uikit.SelectableRow(c, key, selected, height, padRow, radiusSmall, build)
 }
 
-func divider(c *ui.Context) { ui.Box(c).Height(1).FillWidth().Background(c.Theme().Border) }
+func divider(c *ui.Context) { uikit.Divider(c) }
 
 func pageHeader(c *ui.Context, title, subtitle string, actions func()) {
-	ui.Row(c).Gap(gapSection).AlignItems(ui.Center).Children(func() {
-		ui.Column(c).Gap(2).Children(func() {
-			ui.Text(c, title).FontSize(fsPageTitle).Bold()
-			if subtitle != "" {
-				muted(c, subtitle, fsSmall)
-			}
-		})
-		ui.Spacer(c)
-		if actions != nil {
-			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(actions)
-		}
-	})
-	divider(c)
+	uikit.PageHeader(c, title, subtitle, actions)
 }
 
 func sectionHeader(c *ui.Context, title string, actions func()) {
-	ui.Row(c).AlignItems(ui.Center).Children(func() {
-		sectionTitle(c, title)
-		ui.Spacer(c)
-		if actions != nil {
-			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(actions)
-		}
-	})
+	uikit.SectionHeader(c, title, actions)
 }
 
 func emptyState(c *ui.Context, title, detail string) {
-	ui.Column(c).Fill().Center().Gap(gapInline).Children(func() {
-		ui.Text(c, title).FontSize(15).TextColor(c.Theme().TextMuted)
-		if detail != "" {
-			ui.Text(c, detail).FontSize(fsSmall).TextColor(faint)
-		}
-	})
+	uikit.EmptyState(c, title, detail)
 }
 
 func busyRow(c *ui.Context, s string) {
-	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-		ui.Spinner(c).Size(14, 14)
-		muted(c, s, fsSmall)
-	})
+	uikit.BusyRow(c, s)
+}
+
+// noticeTone maps the tone words the call sites use onto the kit's tones.
+func noticeTone(tone string) uikit.NoticeTone {
+	switch tone {
+	case "error":
+		return uikit.NoticeDanger
+	case "warn":
+		return uikit.NoticeWarn
+	case "ok":
+		return uikit.NoticeOK
+	case "info":
+		return uikit.NoticeInfo
+	}
+	return uikit.NoticeNeutral
 }
 
 // notice is the coloured banner used for errors, warnings and hints.
 func notice(c *ui.Context, tone, message string) {
-	noticeStyle(c, tone, message, true)
+	uikit.Notice(c, noticeTone(tone), message, true)
 }
 
 func noticeNoBar(c *ui.Context, tone, message string) {
-	noticeStyle(c, tone, message, false)
-}
-
-func noticeStyle(c *ui.Context, tone, message string, accentBar bool) {
-	if message == "" {
-		return
-	}
-	fg := c.Theme().TextMuted
-	fill := c.Theme().SurfaceHover
-	bar := c.Theme().Border
-	switch tone {
-	case "error":
-		fg, fill, bar = colDanger(), ui.RGBA(232, 84, 84, 0.10), colDanger()
-	case "warn":
-		fg, fill, bar = colWarning(), ui.RGBA(217, 164, 65, 0.10), colWarning()
-	case "ok":
-		fg, fill, bar = colSuccess(), ui.RGBA(78, 200, 126, 0.10), colSuccess()
-	case "info":
-		fg, fill, bar = c.Theme().Accent, ui.RGBA(141, 165, 223, 0.10), c.Theme().Accent
-	}
-	row := ui.Row(c).FillWidth().Padding(7, 10).Gap(gapField).Radius(radiusSmall).Background(fill)
-	if accentBar {
-		row.BorderWidth(0, 0, 0, 3).BorderColor(bar)
-	}
-	row.Children(func() {
-		ui.Text(c, message).FontSize(fsSmall).TextColor(fg).LineHeight(1.5)
-	})
+	uikit.Notice(c, noticeTone(tone), message, false)
 }
 
 // ---- Controls ------------------------------------------------------------
@@ -286,15 +252,17 @@ func noticeStyle(c *ui.Context, tone, message string, accentBar bool) {
 func fieldLabel(c *ui.Context, s string) { uikit.FieldLabel(c, s) }
 func fieldNote(c *ui.Context, s string)  { uikit.FieldNote(c, s) }
 
+// fieldRow is a labelled text field. ui.Field owns the label: it names the
+// control for assistive technology and focuses it when clicked, which a hand
+// written Text above the input never did.
 func fieldRow(c *ui.Context, id, name string, value *string, password bool) {
-	ui.Column(c.Key("field-" + id)).JustifySelf(ui.Stretch).AlignSelf(ui.Stretch).MinWidth(0).Shrink(0).Gap(6).Children(func() {
-		fieldLabel(c, name)
+	ui.Field(c.Key("field-"+id), name, func() {
 		if password {
 			uikit.PasswordInput(c, id, name, value, fieldExample(id, name)).FillWidth()
 		} else {
-			uikit.Input(c, value).FillWidth().MinWidth(0).Label(name).Placeholder(fieldExample(id, name)).FontSize(fsBody)
+			uikit.Input(c, value).FillWidth().MinWidth(0).Placeholder(fieldExample(id, name)).FontSize(fsBody)
 		}
-	})
+	}).JustifySelf(ui.Stretch).AlignSelf(ui.Stretch).MinWidth(0).Shrink(0)
 }
 
 func textField(c *ui.Context, id, placeholder, name string, value *string) ui.Element {
@@ -343,26 +311,11 @@ func tabsBar(c *ui.Context, selected *int, labels ...string) ui.Element {
 	return uikit.Tabs(c.Key("tabs-"+strings.Join(labels, "|")), selected, labels...).Label(labels[0]).Cursor(ui.CursorPointer)
 }
 
-// tabScroller handles ordinary mouse wheels as horizontal motion. Moving the
-// scrollbar below its clipped parent keeps the native scroll behavior without
-// drawing or exposing a draggable thumb over the tab underline.
+// tabScroller scrolls the tab strip sideways. ScrollHorizontal already turns the
+// wheel into horizontal motion, so this only keeps the scrollbar below its
+// clipped parent: native scrolling without a draggable thumb over the underline.
 func tabScroller(c *ui.Context) ui.Element {
-	scroller := ui.ScrollHorizontal(c).ScrollbarInsets(0, 0, -20, 0)
-	state := ui.Local[ui.ScrollState](scroller, "tab-scroll", func() ui.ScrollState { return ui.ScrollState{} })
-	return scroller.TrackScroll(state).HandleInput(func(ev ui.InputEvent) bool {
-		if ev.Kind != ui.InputScroll {
-			return false
-		}
-		delta := ev.DY
-		if ev.DX != 0 {
-			delta = ev.DX
-		}
-		if delta == 0 {
-			return false
-		}
-		state.X = max(0, min(state.MaxX, state.X+delta))
-		return true
-	})
+	return ui.ScrollHorizontal(c).ScrollbarInsets(0, 0, -20, 0)
 }
 
 func scrollTabs(c *ui.Context, selected *int, labels ...string) bool {
@@ -384,11 +337,11 @@ func chip(c *ui.Context, text string, fg, fill ui.Color) ui.Element {
 }
 
 func neutralChip(c *ui.Context, text string) ui.Element {
-	return chip(c, text, c.Theme().TextMuted, c.Theme().SurfaceHover)
+	return pill(c, text, pillNeutral)
 }
 
 func accentChip(c *ui.Context, text string) ui.Element {
-	return chip(c, text, c.Theme().Accent, c.Theme().Surface.Mix(c.Theme().Accent, 0.14))
+	return pill(c, text, pillAccent)
 }
 
 func statusTone(status string) string {
@@ -425,12 +378,24 @@ func toneColor(c *ui.Context, status string) ui.Color {
 }
 
 func statusDot(c *ui.Context, status string) ui.Element {
-	return ui.Box(c).Size(7, 7).Radius(4).Background(toneColor(c, status))
+	return pillDot(c, pillToneOf(status))
+}
+
+// pillToneOf maps a status string onto the shared badge tones.
+func pillToneOf(status string) pillTone {
+	switch statusTone(status) {
+	case "ok":
+		return pillOK
+	case "warn":
+		return pillWarn
+	case "error":
+		return pillDanger
+	}
+	return pillNeutral
 }
 
 func statusBadge(c *ui.Context, text, status string) ui.Element {
-	fg := toneColor(c, status)
-	return chip(c, text, fg, c.Theme().Surface.Mix(fg, 0.12))
+	return pill(c, text, pillToneOf(status))
 }
 
 // ---- Dialog scaffolding --------------------------------------------------
@@ -633,19 +598,33 @@ func popoverItemColor(c *ui.Context, key, text, detail string, selected bool, co
 	popoverItemStyle(c, key, text, detail, selected, &color, action)
 }
 
+// popoverItemDanger is the menu entry for a destructive action: same row as
+// every other item, danger-colored label, so menus delete alike everywhere.
+func popoverItemDanger(c *ui.Context, key, text string, action func()) {
+	popoverItemColor(c, key, text, "", false, colDanger(), action)
+}
+
 func popoverItemStyle(c *ui.Context, key, text, detail string, selected bool, color *ui.Color, action func()) {
+	t := c.Theme()
 	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(6, 10).Justify(ui.Start).Radius(radiusSmall).Label(text).Cursor(ui.CursorPointer).OnClick(action)
-	if selected || b.Hovered() {
-		b.Background(c.Theme().SurfaceHover)
+	switch {
+	case selected:
+		b.Background(selectionFill(t.Accent))
+	case b.Hovered():
+		b.Background(t.SurfaceHover)
 	}
 	b.Children(func() {
 		ui.Column(c).FillWidth().Gap(2).Children(func() {
+			// Selection is tint + accent ink + weight, not a trailing check:
+			// the mark pulled the eye off the label it was confirming.
 			label := ui.Text(c, text).FontSize(fsBody).SingleLine()
 			if color != nil {
 				label.TextColor(*color)
+			} else if selected {
+				label.TextColor(t.Accent).FontWeight(600)
 			}
 			if detail != "" {
-				ui.Text(c, detail).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine()
+				ui.Text(c, detail).FontSize(fsTiny).TextColor(t.TextMuted).SingleLine()
 			}
 		})
 	})
@@ -669,17 +648,14 @@ func (a *desktop) resizeDivider(c *ui.Context, key string, width *float32, direc
 }
 
 func windowAction(c *ui.Context, id, tip, icon string, action func()) ui.Element {
-	b := ui.ButtonBase(c.Key(id)).Size(46, 44).Center().Label(tip).Tooltip(tip).Cursor(ui.CursorPointer).OnClick(action)
-	if b.Hovered() {
-		b.Background(c.Theme().SurfaceHover)
-	}
-	return b.Children(func() { iconGlyph(c, icon, 17) })
+	return windowButton(c, id, tip, icon, strings.HasPrefix(tip, "关闭"), action)
 }
 
 func footerBadge(c *ui.Context, id, name, value string, color ui.Color, tip string, action func()) ui.Element {
-	b := ui.ButtonBase(c.Key(id)).Height(22).Padding(1, 6).Radius(11).Border(1, c.Theme().Border).Background(c.Theme().Surface).Label(tip).Tooltip(tip).Cursor(ui.CursorPointer).OnClick(action)
+	b := ui.ButtonBase(c.Key(id)).Height(22).Padding(1, 6).Radius(11).Label(tip).Tooltip(tip).Cursor(ui.CursorPointer).OnClick(action)
+	paintSurface(b, surfaceFill(c), surfaceBorder(c))
 	if b.Hovered() {
-		b.Background(c.Theme().SurfaceHover)
+		b.Background(fadeColor(b, "surface-fill", c.Theme().SurfaceHover))
 	}
 	b.Children(func() {
 		ui.Row(c).Gap(4).Children(func() {
@@ -688,6 +664,16 @@ func footerBadge(c *ui.Context, id, name, value string, color ui.Color, tip stri
 		})
 	})
 	return b
+}
+
+// closePopups clears every popup flag whose key starts with prefix, so opening
+// one row's menu closes the menu that was already open.
+func (a *desktop) closePopups(prefix string) {
+	for key, flag := range a.popupFlags {
+		if strings.HasPrefix(key, prefix) {
+			*flag = false
+		}
+	}
 }
 
 func (a *desktop) popupFlag(key string) *bool {

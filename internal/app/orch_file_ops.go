@@ -570,7 +570,7 @@ func localCommandToolWarnings(commandLine string) []string {
 	for _, invocation := range command.Invocations(commandLine) {
 		switch invocation.Name {
 		case "grep", "egrep", "fgrep":
-			return []string{"Prefer the dedicated grep tool for local content searches instead of running grep through command. It provides structured results, output limits, and pagination."}
+			return []string{"Prefer the dedicated grep tool, or the rg command, for local content searches instead of running grep through command."}
 		}
 	}
 	return nil
@@ -659,19 +659,37 @@ func (a *App) runCommandWithTimer(parent context.Context, cfg ConfigState, req C
 		outputWG.Add(1)
 		go func() {
 			defer outputWG.Done()
-			ticker := time.NewTicker(commandOutputSampleInterval)
+			// 命令输出走 tool:update 那一档：频率只由 eventCadenceTable 决定，这里不再
+			// 自带一个 120ms 的拍子（那样等于在表外又定了一份频率，表就成了摆设）。
+			// 采样取窗口的四分之一：节流窗口按“距上次发送”判定，只在一个窗口采一次会因为
+			// 定时器早到几微秒就丢掉一拍、拖成两倍间隔；多采几次只是读一个字节数，很便宜。
+			cadence := cadenceForEvent(toolUpdateEvent)
+			sample := cadence.interval / 4
+			if sample <= 0 {
+				// 未登记档位 = 不节流，只需要一个普通的采样时钟。
+				sample = 100 * time.Millisecond
+			}
+			ticker := time.NewTicker(sample)
 			defer ticker.Stop()
-			// Track the last emitted length so we can skip the full String()
-			// copy when the buffer hasn't grown since the last tick. The
-			// previous code called buf.String() (which copies the entire
-			// buffered output under the lock) on every 120ms tick even when
-			// the command hadn't produced any new output — for a long-running
-			// build emitting one line per second, ~99% of ticks were no-ops
-			// that still held the write lock during a multi-MB copy.
+			// Track the last emitted length so we can skip the tail copy when the
+			// buffer hasn't grown since the last tick: a long-running build emitting
+			// one line per second would otherwise copy the whole buffer under the
+			// write lock on every tick for nothing.
 			lastLen := int64(-1)
-			emit := func() {
+			var throttle emitThrottle
+			emit := func(force bool) {
 				curLen := buf.TotalBytes()
 				if curLen == 0 || curLen == lastLen {
+					return
+				}
+				// 载荷是尾巴而不是整个缓冲。这条路径每次都要重发整条尾巴（前端重新分行
+				// 渲染），不是廉价的增量，所以按“满载荷”记账：窗口一定生效，不会因为尾巴
+				// 只有几行就绕过节流。
+				now := time.Now()
+				if force {
+					throttle.force(now)
+				} else if !throttle.allow(now, cadence, commandOutputStreamingTailBytes) {
+					// 被节流丢弃：lastLen 不动，下一个拍子仍然看得到增长并发出当时的尾巴。
 					return
 				}
 				lastLen = curLen
@@ -679,11 +697,10 @@ func (a *App) runCommandWithTimer(parent context.Context, cfg ConfigState, req C
 				// of the full content. A long build can fill the 128KB buffer;
 				// emitting the full content on every tick means ~1MB/s
 				// of JSON marshal + IPC transmission + frontend re-split, most
-				// of which the user cannot read at 8 FPS anyway. The complete
+				// of which the user cannot read at any frame rate. The complete
 				// output is delivered in the final CommandResult once the
 				// command exits. The tail size is enough to show the last ~100
-				// lines of typical build output. 采样间隔与尾巴长度收口在
-				// eventCadenceTable（commandOutput* 档）。
+				// lines of typical build output.
 				tail := decodeConsoleOutput(buf.TailString(commandOutputStreamingTailBytes))
 				payload := map[string]any{
 					"runId":         meta.runID,
@@ -705,9 +722,10 @@ func (a *App) runCommandWithTimer(parent context.Context, cfg ConfigState, req C
 			for {
 				select {
 				case <-ticker.C:
-					emit()
+					emit(false)
 				case <-outputDone:
-					emit()
+					// 收尾无视窗口：最后那份尾巴必须到位，因为之后的完整结果可能很长。
+					emit(true)
 					return
 				case <-parent.Done():
 					return

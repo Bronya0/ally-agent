@@ -2,7 +2,7 @@
 package desktop
 
 import (
-	"ally-dev/pkg/uikit"
+	"ally-dev/desktop/uikit"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -13,7 +13,9 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-const sshUngrouped = "未分组"
+// sshUngrouped 是界面用的未分组标签，直接取后端常量：两边各写一份“未分组”正是
+// 未分组被列成两个标签的来由——后端把空分组存成这个字面量，界面又无条件补一次。
+const sshUngrouped = backend.SSHUngroupedGroup
 
 func (a *desktop) sshPageBody(c *ui.Context) {
 	if a.sshF.TestBusy == nil {
@@ -120,20 +122,19 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 
 func (a *desktop) sshGroups() []string {
 	seen := map[string]bool{}
-	var named []string
+	named := make([]string, 0, len(a.sshServers)+1)
 	for _, node := range a.sshServers {
 		group := strings.TrimSpace(node.Group)
-		if group == "" {
+		// 空分组与字面量“未分组”是同一个桶（后端把前者存成后者），只收一次；
+		// 未分组桶最后统一追加，所以这里不能再把它当成具名分组。
+		if group == "" || group == sshUngrouped || seen[group] {
 			continue
 		}
-		if !seen[group] {
-			seen[group] = true
-			named = append(named, group)
-		}
+		seen[group] = true
+		named = append(named, group)
 	}
 	sort.Strings(named)
-	named = append(named, sshUngrouped)
-	return named
+	return append(named, sshUngrouped)
 }
 
 func sshGroupInput(group string) string {

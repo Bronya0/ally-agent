@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	backend "ally-dev/internal/app"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -68,7 +69,7 @@ func (a *desktop) pluginModes() (top []backend.PluginInfo, groups [][]backend.Pl
 func (a *desktop) rail(c *ui.Context) {
 	p := a.currentPalette()
 	if !a.prefs.RailExpanded {
-		ui.Column(c).Width(widthRailCollapsed).Shrink(0).Background(p.panel).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, 2).Gap(4).AlignItems(ui.Center).Children(func() {
+		ui.Column(c).Width(widthRailCollapsed).Shrink(0).Background(p.panel).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, railPadH).Gap(4).AlignItems(ui.Center).Children(func() {
 			ui.Scroll(c).Key("rail-modes").FillWidth().Grow(1).MinHeight(0).Children(func() {
 				ui.Column(c).FillWidth().Gap(4).Children(func() { a.railModes(c, false) })
 			})
@@ -168,17 +169,22 @@ func (a *desktop) railModeButton(c *ui.Context, expanded bool, id, label, iconNa
 	})
 }
 
+// railGroupButton opens the group's pages in the system's own menu: it is a
+// plain list of pages with the current one marked, which the menu does itself.
 func (a *desktop) railGroupButton(c *ui.Context, expanded bool, head backend.PluginInfo, title string, group []backend.PluginInfo, active bool) {
-	open := a.popupFlag("rail-group-" + head.ID)
-	b := railNavigationButton(c, "nav-group-"+head.ID, title, "plugins", expanded, active, func() {
+	railNavigationButton(c, "nav-group-"+head.ID, title, "plugins", expanded, active, func() {
 		ui.Spacer(c)
 		iconGlyph(c, "chevrondown", 12)
-	}).OnClick(func() { *open = !*open })
-	popoverPanel(c, b, open, 220, func() {
+	}).OnClick(func() {
+		items := make([]*mygo.MenuItem, 0, len(group))
 		for _, item := range group {
 			item := item
-			popoverItem(c, "plugin-group-"+item.ID, pluginTitle(item), "", item.Mode == a.page, func() { *open = false; a.changePage(item.Mode) })
+			items = append(items, menuItem(pluginTitle(item), item.Mode == a.page, func() {
+				a.changePage(item.Mode)
+				a.win.Update(func() {})
+			}))
 		}
+		a.popupMenu(items)
 	})
 }
 
@@ -189,7 +195,7 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 			toggle := ui.ButtonBase(c.Key("rail-ws-toggle")).Grow(1).Height(24).Justify(ui.Start).Label("历史工作区").Cursor(ui.CursorPointer).OnClick(func() { a.prefs.RailWorkspaceOpen = !a.prefs.RailWorkspaceOpen; a.savePrefs() })
 			toggle.Children(func() {
 				ui.Row(c).FillWidth().Gap(5).Children(func() {
-					railIcon(c, "folderopen", 13).TextColor(p.muted)
+					railIcon(c, "folderopen", 13).TextColor(p.accent)
 					ui.Text(c, "历史工作区").FontSize(11).TextColor(p.muted)
 					ui.Spacer(c)
 					name := "chevron"
@@ -199,7 +205,7 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 					iconGlyph(c, name, 10).TextColor(p.muted)
 				})
 			})
-			iconAction(c, "rail-ws-add", "添加工作区", "plus", 20, func() { a.chooseWorkspace() }).TextColor(p.muted)
+			addButton(c, "rail-ws-add", "添加工作区", "plus", 20, func() { a.chooseWorkspace() })
 		})
 		if !a.prefs.RailWorkspaceOpen {
 			return
@@ -251,9 +257,9 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 		})
 		btn.Children(func() { ui.Text(c, label).FontSize(11.5).SingleLine() })
 		if root != "" {
-			iconAction(c, "rail-ws-del-"+root, "从历史记录移除", "close", 18, func() {
+			dangerIconAction(c, "rail-ws-del-"+root, "从历史记录移除", "close", 18, func() {
 				a.removeWorkspaceHistory(root)
-			}).TextColor(p.muted)
+			})
 		}
 	})
 }
@@ -276,7 +282,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 			toggle := ui.ButtonBase(c.Key("rail-sess-toggle")).Grow(1).Height(24).Justify(ui.Start).Label("工作区会话").Cursor(ui.CursorPointer).OnClick(func() { a.prefs.RailSessionsOpen = !a.prefs.RailSessionsOpen; a.savePrefs() })
 			toggle.Children(func() {
 				ui.Row(c).FillWidth().Gap(5).Children(func() {
-					railIcon(c, "history", 13).TextColor(p.muted)
+					railIcon(c, "history", 13).TextColor(p.accent)
 					ui.Text(c, "工作区会话").FontSize(11).TextColor(p.muted)
 					ui.Spacer(c)
 					name := "chevron"
@@ -286,7 +292,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 					iconGlyph(c, name, 10).TextColor(p.muted)
 				})
 			})
-			iconAction(c, "rail-sess-new", "新建会话", "plus", 20, func() { a.newSession() }).TextColor(p.muted)
+			addButton(c, "rail-sess-new", "新建会话", "plus", 20, func() { a.newSession() })
 		})
 		if !a.prefs.RailSessionsOpen {
 			return
@@ -371,10 +377,14 @@ func (a *desktop) petalsOverlay(c *ui.Context) {
 	if !a.petals {
 		return
 	}
-	now := c.Now()
 	ui.Overlay(c, func() {
 		box := ui.Box(c).Fill().PassThrough()
 		box.Draw(func(p *ui.Painter, r ui.Rect) {
+			// Paint the petals alone: AnimationFrame on the context asked for a
+			// frame that rebuilt the whole view at the display's rate, which a
+			// chat full of messages paid for on every petal of every frame.
+			p.AnimationFrameRate(30)
+			now := p.Now()
 			for i := 0; i < 14; i++ {
 				seed := float64(i)*0.37 + float64(now.UnixMilli())/4200
 				x := float32((float64(i)*0.077 + 0.05) * float64(r.W))
@@ -384,6 +394,5 @@ func (a *desktop) petalsOverlay(c *ui.Context) {
 				p.Fill(ui.Rect{X: r.X + x + drift, Y: r.Y + float32(y), W: 7, H: 4}, ui.RGBA(240, 183, 205, 0.55), 2)
 			}
 		})
-		c.AnimationFrame()
 	})
 }

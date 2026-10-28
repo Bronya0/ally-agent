@@ -2,7 +2,7 @@
 package desktop
 
 import (
-	"ally-dev/pkg/uikit"
+	"ally-dev/desktop/uikit"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -214,7 +214,7 @@ func (a *desktop) mcpServerList(c *ui.Context) {
 					a.saveMCPDoc(doc)
 				}
 				flat(c, "编辑").OnClick(func() { a.openMCPEditor(name) })
-				flat(c, "删除").OnClick(func() {
+				dangerButton(c, "删除").OnClick(func() {
 					delete(doc.Servers, name)
 					a.saveMCPDoc(doc)
 				})

@@ -2,13 +2,14 @@
 package desktop
 
 import (
-	"ally-dev/pkg/uikit"
+	"ally-dev/desktop/uikit"
 	"fmt"
 	"math"
 	"strings"
 	"time"
 
 	backend "ally-dev/internal/app"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
 )
@@ -201,7 +202,11 @@ func (a *desktop) messageRow(c *ui.Context, t *conversation, i int) {
 			}
 			a.assistantMessage(c, t, i, m)
 		case role == "notice":
-			notice(c, "warn", str(m, "content"))
+			tone := str(m, "tone")
+			if tone == "" {
+				tone = "warn"
+			}
+			notice(c, tone, str(m, "content"))
 		case role == "tool_call" || str(m, "toolCallId") != "":
 			// Adjacent read/grep/list cards fold into one group row, mirroring
 			// main's read-grep-group: only the group's first row renders, the
@@ -294,9 +299,9 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 		// on every question row, not just the last one.
 		if !t.Busy && row.Hovered() {
 			ui.Box(c).Absolute().Top(0).Bottom(0).Right(8).Width(22).Center().Children(func() {
-				iconAction(c, fmt.Sprintf("del-user-%s-%d", t.ID, i), "删除该提问及之后", "close", 20, func() {
+				dangerIconAction(c, fmt.Sprintf("del-user-%s-%d", t.ID, i), "删除该提问及之后", "close", 20, func() {
 					a.requestDeleteUserMessage(t, i)
-				}).TextColor(c.Theme().TextMuted)
+				})
 			})
 		}
 	})
@@ -391,23 +396,23 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 			ui.Text(c, fmt.Sprintf("%d token/s", int(float64(stat.OutputTokens)/seconds))).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
 		}
 		services := c.Services()
-		exportOpen := a.popupFlag(fmt.Sprintf("message-export-%s-%d", t.ID, i))
-		export := mutedIconAction(c, fmt.Sprintf("export-%d", i), "导出", "download", 22, func() { *exportOpen = !*exportOpen })
-		popoverPanel(c, export, exportOpen, 180, func() {
-			popoverItem(c, "export-answer", "导出回答", "", false, func() { *exportOpen = false; a.exportText("ally-response.md", str(t.Messages[i], "content")) })
-			popoverItem(c, "export-session", "导出会话", "", false, func() { *exportOpen = false; a.exportText("ally-session.md", sessionMarkdown(t)) })
+		mutedIconAction(c, fmt.Sprintf("export-%d", i), "导出", "download", 22, func() {
+			a.popupMenu([]*mygo.MenuItem{
+				menuAction("导出回答", func() { a.exportText("ally-response.md", str(t.Messages[i], "content")) }),
+				menuAction("导出会话", func() { a.exportText("ally-session.md", sessionMarkdown(t)) }),
+			})
 		})
 		mutedIconAction(c, fmt.Sprintf("copy-summary-%d", i), "复制总结", "copy", 22, func() {
 			services.WriteClipboard(str(t.Messages[i], "content"))
 			c.Toast("已复制最终总结")
 		})
-		quickOpen := a.popupFlag(fmt.Sprintf("message-quick-%s-%d", t.ID, i))
-		quick := mutedIconAction(c, fmt.Sprintf("quick-%d", i), "快捷消息", "wand", 22, func() { *quickOpen = !*quickOpen })
-		popoverPanel(c, quick, quickOpen, 180, func() {
-			for idx, item := range quickMessages {
+		mutedIconAction(c, fmt.Sprintf("quick-%d", i), "快捷消息", "wand", 22, func() {
+			items := make([]*mygo.MenuItem, 0, len(quickMessages))
+			for _, item := range quickMessages {
 				item := item
-				popoverItem(c, fmt.Sprintf("quick-item-%d", idx), item.label, "", false, func() { *quickOpen = false; a.send(t, item.prompt) })
+				items = append(items, menuAction(item.label, func() { a.send(t, item.prompt) }))
 			}
+			a.popupMenu(items)
 		})
 		mutedIconAction(c, fmt.Sprintf("remember-%d", i), "记住这次对话的长期记忆", "book", 22, func() {
 			a.send(t, projectMemoryPrompt+"\n\nLocal date for this memory update: "+time.Now().Format("2006-01-02")+".")
@@ -535,20 +540,14 @@ func (a *desktop) welcomeView(c *ui.Context, t *conversation) {
 		ui.Row(c).Gap(22).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Width(170).AlignItems(ui.Center).Gap(gapSection).Children(func() {
 				img := ui.Column(c).Size(150, 150).Center()
-				img.Children(func() {
-					if bitmap := a.avatarImage(c); bitmap != nil {
-						ui.Image(c, bitmap).Size(140, 140).Fit(ui.Contain)
-					} else {
-						ui.Image(c, eyeArtwork).Size(140, 140).Fit(ui.Contain)
-					}
-				})
+				img.Children(func() { a.avatarDrawing(c) })
 				img.Cursor(ui.CursorPointer).Tooltip("点击头像：切换樱花特效")
 				if img.Clicked() {
 					a.togglePetals()
 				}
 				ui.Text(c, "Ally Native · 0.1.0").FontSize(fsTiny).TextColor(c.Theme().TextMuted)
 			})
-			ui.Column(c).Grow(1).Border(1, c.Theme().Border).Radius(radiusCard).Children(func() {
+			ui.Column(c).Grow(1).Border(1, surfaceBorder(c)).Radius(radiusCard).Children(func() {
 				rows := [][4]string{
 					{"工作区", workspaceLabel(t.Workspace), "Bash", a.config.GitBashPath},
 					{"模型", strings.ReplaceAll(t.Model, " / ", " · "), "MCP", a.mcpSummary},
@@ -712,48 +711,51 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 			done++
 		}
 	}
+	// The disclosure is MyGo's CollapsibleBase: it owns opening and closing, the
+	// arrow's progress and the expanded state assistive technology reads, so this
+	// only supplies the look of the header and the step list.
+	open := !st.PlanCollapsed
 	ui.Column(c).Key("plan-"+t.ID).FillWidth().Border(1, c.Theme().Border).Radius(radiusCard).Background(c.Theme().Surface).Children(func() {
-		header := ui.ButtonBase(c.Key("plan-head-"+t.ID)).FillWidth().Height(30).Padding(0, 10).Cursor(ui.CursorPointer)
-		header.Children(func() {
+		parts := ui.CollapsibleBase(c, &open)
+		parts.Trigger.FillWidth().Height(30).Padding(0, 10).Cursor(ui.CursorPointer).Children(func() {
 			ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(gapField).Children(func() {
 				ui.Text(c, "计划").FontSize(fsSmall).Bold()
 				ui.Text(c, fmt.Sprintf("%d/%d", done, len(steps))).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
 				ui.Spacer(c)
-				iconGlyph(c, "chevrondown", 13)
+				iconGlyph(c, "chevrondown", 13).Rotate(-90 * (1 - parts.Progress()))
 			})
 		})
-		if header.Clicked() {
-			st.PlanCollapsed = !st.PlanCollapsed
-		}
-		if st.PlanCollapsed {
-			return
-		}
-		ui.Scroll(c).Height(150).Padding(0, 6, 4).Gap(6).Children(func() {
-			for n, step := range steps {
-				mark := "○"
-				color := c.Theme().TextMuted
-				switch step.Status {
-				case "done":
-					mark = "✓"
-					color = colSuccess()
-				case "in_progress":
-					mark = "●"
-					color = c.Theme().Accent
-				}
-				ui.Row(c).Key(fmt.Sprintf("plan-step-%d", n)).Padding(2, 8).Gap(gapField).Children(func() {
-					ui.Text(c, mark).FontSize(fsTiny).TextColor(color)
-					ui.Text(c, fmt.Sprintf("%d.", n+1)).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
-					// Finished steps read as struck through, the way main's
-					// .plan-item.done .plan-title does.
-					done := step.Status == "done"
-					titleColor := c.Theme().Text
-					if done {
-						titleColor = c.Theme().TextMuted
+		parts.Panel(func() {
+			ui.Scroll(c).Height(150).Padding(0, 6, 4).Gap(6).Children(func() {
+				for n, step := range steps {
+					mark := "○"
+					color := c.Theme().TextMuted
+					switch step.Status {
+					case "done":
+						mark = "✓"
+						color = colSuccess()
+					case "in_progress":
+						mark = "●"
+						color = c.Theme().Accent
 					}
-					ui.RichText(c, ui.Span{Text: step.Title, Size: fsSmall, Color: titleColor, Strikethrough: done, DecorationColor: titleColor})
-				})
-			}
+					ui.Row(c).Key(fmt.Sprintf("plan-step-%d", n)).Padding(2, 8).Gap(gapField).Children(func() {
+						ui.Text(c, mark).FontSize(fsTiny).TextColor(color)
+						ui.Text(c, fmt.Sprintf("%d.", n+1)).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+						// Finished steps read as struck through, the way main's
+						// .plan-item.done .plan-title does.
+						finished := step.Status == "done"
+						titleColor := c.Theme().Text
+						if finished {
+							titleColor = c.Theme().TextMuted
+						}
+						ui.RichText(c, ui.Span{Text: step.Title, Size: fsSmall, Color: titleColor, Strikethrough: finished, DecorationColor: titleColor})
+					})
+				}
+			})
 		})
+		if open != !st.PlanCollapsed {
+			st.PlanCollapsed = !open
+		}
 	})
 }
 
@@ -793,11 +795,8 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 			}).Disabled(index == 0)
 			for n := range t.Questions {
 				n := n
-				btn := flat(c.Key(fmt.Sprintf("ask-tab-%d", n)), fmt.Sprint(n+1))
-				if n == index {
-					btn.TextColor(c.Theme().Accent).Background(c.Theme().SurfaceHover)
-				}
-				btn.OnClick(func() { st.AskIndex = n })
+				choiceButton(c, fmt.Sprintf("ask-tab-%d", n), fmt.Sprint(n+1), n == index, c.Theme().Accent).
+					OnClick(func() { st.AskIndex = n })
 			}
 			iconAction(c, "ask-next", "下一题", "chevron", 22, func() {
 				if st.AskIndex < len(t.Questions)-1 {
@@ -810,7 +809,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 			for _, opt := range q.Options {
 				opt := opt
 				checked := containsString(st.AskSelected[q.ID], opt.ID)
-				ui.Column(c.Key("ask-option-card-"+q.ID+"-"+opt.ID)).FillWidth().Padding(8, 10).Gap(4).Radius(radiusSmall).Border(1, c.Theme().Border).Children(func() {
+				ui.Column(c.Key("ask-option-card-"+q.ID+"-"+opt.ID)).FillWidth().Padding(8, 10).Gap(4).Radius(radiusSmall).Border(1, surfaceBorder(c)).Children(func() {
 					ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
 						box := ui.Checkbox(c.Key("ask-opt-"+q.ID+"-"+opt.ID), &checked, opt.Label)
 						if box.Changed() {

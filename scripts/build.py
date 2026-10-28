@@ -174,6 +174,12 @@ def linux(config):
             verify_archive(RELEASE / (name + '.tar.gz'), 'linux')
 
 
+def verify_universal(binary):
+    # lipo 一次只接受一个 -verify_arch：macOS 27 把第二个架构当成第二个输入文件
+    for arch in ('x86_64', 'arm64'):
+        run('lipo', binary, '-verify_arch', arch)
+
+
 def macos(config):
     if platform.system() != 'Darwin':
         raise RuntimeError('macOS is required for universal binaries, ad-hoc signing and DMG creation.')
@@ -189,8 +195,8 @@ def macos(config):
         run('lipo', '-create', work / 'amd64', work / 'arm64', '-output', rg)
         rg.chmod(0o755)
         legal_files(app / 'Contents/Resources')
-        run('lipo', '-verify_arch', 'x86_64', 'arm64', rg)
-        run('lipo', '-verify_arch', 'x86_64', 'arm64', app / 'Contents/MacOS' / config['name'])
+        verify_universal(rg)
+        verify_universal(app / 'Contents/MacOS' / config['name'])
         run('codesign', '--force', '--sign', '-', '--timestamp=none', rg)
         run('codesign', '--force', '--deep', '--sign', '-', '--timestamp=none', app)
         run('codesign', '--verify', '--deep', '--strict', app)

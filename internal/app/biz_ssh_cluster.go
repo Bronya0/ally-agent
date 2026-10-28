@@ -27,7 +27,7 @@ import (
 type SSHServerNode struct {
 	ID          string `json:"id"`                  // Stable local identity, independent of alias and endpoint
 	Alias       string `json:"alias"`               // Editable, case-insensitively unique nickname
-	Group       string `json:"group"`               // 分组（纯归类，仅供 UI 折叠/筛选）；空值归入 sshUngroupedGroup
+	Group       string `json:"group"`               // 分组（纯归类，仅供 UI 折叠/筛选）；空值归入 SSHUngroupedGroup
 	Host        string `json:"host"`                // IP or domain, e.g. "192.168.1.101"
 	Port        int    `json:"port"`                // Port, default 22
 	Username    string `json:"username"`            // User, e.g. "root"
@@ -48,15 +48,16 @@ const (
 	sshAuthTypePassword = "password"
 )
 
-// sshUngroupedGroup 是未指定分组的节点（含改版前的历史节点）所归入的组。
-// 前端 utils/sshClusterGroups.mjs 用同一字面量作默认值，改动须两边同步（有测试钉住）。
-const sshUngroupedGroup = "未分组"
+// SSHUngroupedGroup 是未指定分组的节点（含改版前的历史节点）所归入的组。宿主的
+// 界面直接引这个常量，不再各自拄一份字面量：两边各写一次“未分组”曾让未分组被当成
+// 两个不同的组列出两遍。前端 utils/sshClusterGroups.mjs 用同一字面量作默认值（有测试钉住）。
+const SSHUngroupedGroup = "未分组"
 
 // normalizeSSHGroup 去掉首尾空白；空值一律落到未分组，历史节点加载时同样补齐。
 func normalizeSSHGroup(group string) string {
 	group = strings.TrimSpace(group)
 	if group == "" {
-		return sshUngroupedGroup
+		return SSHUngroupedGroup
 	}
 	return group
 }

@@ -7,15 +7,30 @@ import (
 	"strings"
 	"time"
 
+	"ally-dev/desktop/uikit"
 	backend "ally-dev/internal/app"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
+
+// headerBarHeight is the height of the window chrome: the header bar, and the
+// title bar the window declares.
+const headerBarHeight = 44
 
 // headerBar is the 44px window chrome: wordmark, workspace tabs, workspace
 // management, explorer toggle, update entry and the window buttons.
 func (a *desktop) headerBar(c *ui.Context) {
 	p := a.currentPalette()
-	ui.Row(c).Height(44).Shrink(0).Background(p.panel).BorderWidth(0, 0, 1, 0).BorderColor(p.line).DragWindow().Children(func() {
+	// macOS draws the traffic lights over the content of a hidden title bar.
+	// Keep their room clear so no control sits under them, and start the drag
+	// strip beside them; the bar is zero elsewhere and in full screen.
+	bar := c.TitleBar()
+	row := ui.Row(c).Height(max(headerBarHeight, bar.Height)).Shrink(0).Background(p.panel).
+		BorderWidth(0, 0, 1, 0).BorderColor(p.line)
+	if bar.Left > 0 || bar.Right > 0 {
+		row.Padding(0, bar.Right, 0, bar.Left)
+	}
+	row.DragWindow().Children(func() {
 		wordmark := ui.Column(c).Width(64).Center().Children(func() {
 			colors := [4]ui.Color{
 				wordmarkGradientColor(p, 0.14),
@@ -48,8 +63,11 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 					idx := i
 					tab := t
 					label := workspaceLabel(tab.Workspace)
+					// One underline for every strip in the app: rounded box, accent
+					// bottom edge, the line curving away at both ends.
 					row := ui.Row(c.Key("wtab-"+tab.ID)).Height(44).MinWidth(112).MaxWidth(180).Padding(0, 8).
-						BorderWidth(0, 0, 2, 0).BorderColor(ui.Transparent).Gap(6).AlignItems(ui.Center)
+						Gap(6).AlignItems(ui.Center)
+					uikit.TabUnderline(row, idx == a.active, headerTabRadius, c.Theme())
 					if idx == a.active {
 						row.BorderColor(p.accent)
 					}
@@ -57,7 +75,8 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 						if tab.Busy {
 							ui.Box(c).Size(6, 6).Radius(3).Background(p.accent).Tooltip("运行中")
 						}
-						style := ui.ButtonBase(c.Key("wtab-btn-"+tab.ID)).Grow(1).Height(40).Padding(0, 2).Label(label).Cursor(ui.CursorPointer).OnClick(func() {
+						style := tabButton(c, "wtab-btn-"+tab.ID, label, idx == a.active)
+						style.OnClick(func() {
 							if a.page == "settings" {
 								a.commitSettingsOnLeave()
 							}
@@ -70,12 +89,6 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 							a.refreshSessionFooter(tab)
 							a.refreshGit(tab)
 						})
-						if idx == a.active {
-							style.TextColor(p.text)
-						} else {
-							style.TextColor(p.muted)
-						}
-						style.Children(func() { ui.Text(c, label).FontSize(12.5).SingleLine().Cursor(ui.CursorPointer) })
 						if len(a.tabs) > 1 {
 							iconAction(c, "wtab-close-"+tab.ID, "关闭标签", "close", 20, func() {
 								a.closeWorkspaceTab(idx)
@@ -88,38 +101,66 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 	})
 }
 
+// workspaceMenuLimit is how many history entries the workspace menu lists. A
+// system menu does not scroll the way a popover of ours did, so the list has to
+// stop somewhere: the entries are already newest first, and the rail lists the
+// rest, so the menu stays a shortcut rather than a second copy of the history.
+const workspaceMenuLimit = 16
+
+// showWorkspaceMenu opens the workspace menu of the header's add button: the
+// ways to start a workspace, then the ones the sessions already know. A folder
+// glyph marks each history entry, which is what the system's menu shows beside
+// a path; the entry opens its workspace rather than starting another session
+// over it.
+func (a *desktop) showWorkspaceMenu() {
+	items := []*mygo.MenuItem{
+		menuAction("＋ 添加工作区", func() { a.chooseWorkspace() }),
+		menuAction("临时工作区", func() { a.newConversation("") }),
+		menuSeparator(),
+	}
+	seen := map[string]bool{}
+	rows, found := 0, 0
+	for _, entry := range a.sessions {
+		root := entry.Workspace
+		if root == "" || seen[strings.ToLower(root)] || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
+			continue
+		}
+		seen[strings.ToLower(root)] = true
+		found++
+		if rows >= workspaceMenuLimit {
+			continue
+		}
+		rows++
+		items = append(items, menuAction("📁 "+filepath.Base(root), func() { a.openWorkspace(root) }))
+	}
+	switch {
+	case found == 0:
+		items = append(items, &mygo.MenuItem{Label: "无历史记录", Disabled: true})
+	case found > rows:
+		items = append(items, &mygo.MenuItem{Label: fmt.Sprintf("另有 %d 个，见侧栏历史工作区", found-rows), Disabled: true})
+	}
+	a.popupMenu(items)
+}
+
+// headerActions is the right side of the header: the workspace menu, the file
+// explorer toggle and the window actions.
 func (a *desktop) headerActions(c *ui.Context) {
 	p := a.currentPalette()
-	add := iconButton(c, "workspace-add", "添加工作区", "addfolder", func() { a.workspaceMenu = !a.workspaceMenu })
-	add.TextColor(p.accent)
-	popoverPanel(c, add, &a.workspaceMenu, 380, func() {
-		popoverItemColor(c, "workspace-choose", "＋ 添加工作区", "", false, p.accent, func() { a.workspaceMenu = false; a.chooseWorkspace() })
-		popoverItemColor(c, "workspace-temporary", "临时工作区", "", false, p.accent, func() { a.workspaceMenu = false; a.newConversation("") })
-		divider(c)
-		ui.Scroll(c).MaxHeight(320).Children(func() {
-			ui.Column(c).Children(func() {
-				seen := map[string]bool{}
-				for _, entry := range a.sessions {
-					root := entry.Workspace
-					if root == "" || seen[strings.ToLower(root)] || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
-						continue
-					}
-					seen[strings.ToLower(root)] = true
-					popoverItem(c, "workspace-menu-"+root, filepath.Base(root), root, false, func() { a.workspaceMenu = false; a.openWorkspace(root) })
-				}
-				if len(seen) == 0 {
-					fieldNote(c, "无历史记录")
-				}
-			})
-		})
-	})
+	// The workspace menu is the system's own: mygo.NewMenu with Popup, not
+	// Element.Menu, which carries labels only. This one keys itself, shows each
+	// workspace under a folder glyph and opens its actions as a submenu.
+	add := addButton(c, "workspace-add", "添加工作区", "addfolder", 30, func() { a.showWorkspaceMenu() })
 	add.Disabled(!a.ready)
 
 	pageOK := a.page == "chat" || a.page == "kb" || strings.HasPrefix(a.page, "plugin:")
-	explorer := iconButton(c, "files-toggle", "打开工作区文件浏览器", "folderopen", func() { a.explorer = !a.explorer })
+	// The explorer toggle carries the theme colour even while it is off: a muted
+	// glyph made the header's folder read as decoration. Off is half accent, on is
+	// the full accent, so the state reads from the stroke alone — no fill behind it.
+	tone := iconAccent
 	if a.explorer {
-		explorer.TextColor(p.accent)
+		tone = iconAccentOn
 	}
+	explorer := iconButtonSized(c, "files-toggle", "打开工作区文件浏览器", "folderopen", 30, tone, func() { a.explorer = !a.explorer })
 	explorer.Disabled(!pageOK)
 
 	services := c.Services()
@@ -132,19 +173,19 @@ func (a *desktop) headerActions(c *ui.Context) {
 		}).TextColor(p.muted)
 	}
 
-	if a.win != nil {
-		windowAction(c, "window-min", "最小化", "min", func() { a.win.Minimize() }).Height(44).Radius(0).TextColor(p.muted)
+	// The header draws these itself unless the system already shows them:
+	// macOS keeps its traffic lights, and its title bar room is never zero.
+	if bar := c.TitleBar(); a.win != nil && bar.Height == 0 && bar.Left == 0 && bar.Right == 0 {
+		windowAction(c, "window-min", "最小化", "min", func() { a.win.Minimize() })
 		windowAction(c, "window-max", "最大化", "max", func() {
 			if a.win.IsMaximized() {
 				a.win.Unmaximize()
 			} else {
 				a.win.Maximize()
 			}
-		}).Height(44).Radius(0).TextColor(p.muted)
-		closeBtn := windowAction(c, "window-close", "关闭窗口", "close", func() { a.win.Close() }).Height(44).Radius(0).TextColor(p.muted)
-		if closeBtn.Hovered() {
-			closeBtn.Background(ui.Hex("#e81123")).TextColor(ui.Hex("#ffffff"))
-		}
+		})
+		closeBtn := windowButton(c, "window-close", "关闭窗口", "close", true, func() { a.win.Close() })
+		_ = closeBtn
 	}
 }
 
@@ -288,10 +329,10 @@ func (a *desktop) updateDialog(c *ui.Context) {
 						a.upd.Open = false
 					})
 					flat(c, "稍后").OnClick(func() { a.upd.Open = false })
-					ui.PrimaryButton(c, "立即重启更新").OnClick(func() { a.applyUpdate() })
+					primary(c, "立即重启更新").OnClick(func() { a.applyUpdate() })
 				case a.upd.State == "error":
 					flat(c, fmt.Sprint("关闭")).OnClick(func() { a.upd.Open = false })
-					ui.PrimaryButton(c, "重试").OnClick(func() { a.startUpdate() })
+					primary(c, "重试").OnClick(func() { a.startUpdate() })
 				default:
 					if a.upd.State == "latest" {
 						flat(c, "关闭").OnClick(func() { a.upd.Open = false })

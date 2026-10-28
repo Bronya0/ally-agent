@@ -350,52 +350,16 @@ func (a *App) notifyCompletion(kind, workspace string) {
 	}()
 }
 
-// GetAutostartEnabled reports whether the current build is registered to start
-// with the user session. Only Windows has an implementation; elsewhere the
-// setting is simply unavailable.
+// GetAutostartEnabled 报告本构建是否已注册为登录自启。
+//
+// 这里只转发 mygo 的实现：框架已经按平台各自做好（macOS 登录项、Windows 的用户
+// Run 项、Linux 的 XDG autostart）并统一了应用 id，自己再写一份 plist / 注册表
+// 既重复，又容易和框架记录的 id 对不上。
 func (a *App) GetAutostartEnabled() (bool, error) {
-	if goruntime.GOOS != "windows" {
-		return false, nil
-	}
-	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	exe, err := os.Executable()
-	if err != nil {
-		return false, nil
-	}
-	cmd := exec.Command("reg", "query", key, "/v", "AllyAgent")
-	hideCommandWindow(cmd)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return false, nil
-	}
-	return strings.Contains(strings.ToLower(string(out)), strings.ToLower(exe)), nil
+	return mygo.App.OpenAtLogin(), nil
 }
 
-// SetAutostartEnabled writes or removes the per-user Run entry pointing at this
-// executable.
+// SetAutostartEnabled 注册或取消登录自启。
 func (a *App) SetAutostartEnabled(enabled bool) error {
-	if goruntime.GOOS != "windows" {
-		return errors.New("当前系统不支持开机自启动")
-	}
-	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	if !enabled {
-		cmd := exec.Command("reg", "delete", key, "/v", "AllyAgent", "/f")
-		hideCommandWindow(cmd)
-		out, err := cmd.CombinedOutput()
-		if err != nil && !strings.Contains(string(out), "unable to find") {
-			return errors.New(strings.TrimSpace(string(out)))
-		}
-		return nil
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command("reg", "add", key, "/v", "AllyAgent", "/t", "REG_SZ", "/d", exe, "/f")
-	hideCommandWindow(cmd)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return errors.New(strings.TrimSpace(string(out)))
-	}
-	return nil
+	return mygo.App.SetOpenAtLogin(enabled)
 }

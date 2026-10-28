@@ -2,8 +2,8 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	"ally-dev/internal/chatgpt"
-	"ally-dev/pkg/uikit"
 	"fmt"
 	"github.com/egoist/mygo/ui"
 )
@@ -52,6 +52,10 @@ func (a *desktop) cancelOAuthWhenLeaving() {
 }
 
 func (a *desktop) changeModelAuth(value string) {
+	// A different auth path means a different endpoint, so the fetched model
+	// list of the previous one must not stay in the dropdown.
+	a.modelForm.Fetched = nil
+	a.modelForm.FetchNote = ""
 	if value == "chatgpt_oauth" {
 		a.modelDraft.AuthType = value
 		a.modelDraft.ProviderName = "ChatGPT Official"
@@ -279,7 +283,7 @@ func (a *desktop) oauthPanel(c *ui.Context) {
 		a.oauth = &oauthState{}
 		o = a.oauth
 	}
-	ui.Column(c).Padding(12).Gap(8).Border(1, line).Radius(6).Children(func() {
+	ui.Column(c).Padding(12).Gap(8).Border(1, surfaceBorder(c)).Radius(6).Children(func() {
 		ui.Text(c, "ChatGPT").Bold()
 		ui.Text(c, "使用 ChatGPT 套餐与额度。登录后在模型管理中添加模型。").FontSize(12).TextColor(c.Theme().TextMuted)
 		options := make([]string, 0, len(o.accounts))
@@ -307,9 +311,9 @@ func (a *desktop) oauthPanel(c *ui.Context) {
 			ui.Text(c, fmt.Sprintf("%s · %s", accountLabel(*current), state)).FontSize(11).TextColor(c.Theme().TextMuted)
 		}
 		ui.Row(c).Gap(6).Wrap().Children(func() {
-			ui.Button(c, "使用 ChatGPT 登录").Disabled(o.busy || o.loggingOut).OnClick(func() { a.loginOAuth("", false) })
+			primary(c, "使用 ChatGPT 登录").Disabled(o.busy || o.loggingOut).OnClick(func() { a.loginOAuth("", false) })
 			if o.busy {
-				ui.Button(c, "取消登录").OnClick(func() { a.core.CancelChatGPTLogin() })
+				flat(c, "取消登录").OnClick(func() { a.core.CancelChatGPTLogin() })
 			}
 			if current != nil {
 				label := "重新登录"
@@ -319,14 +323,14 @@ func (a *desktop) oauthPanel(c *ui.Context) {
 					plan = true
 				}
 				id := current.ID
-				ui.Button(c, label).Disabled(o.busy || o.loggingOut).OnClick(func() { a.loginOAuth(id, plan) })
+				flat(c, label).Disabled(o.busy || o.loggingOut).OnClick(func() { a.loginOAuth(id, plan) })
 				if current.SignedIn {
-					ui.Button(c, "退出账号").Disabled(o.busy || o.loggingOut).OnClick(a.logoutOAuth)
+					flat(c, "退出账号").Disabled(o.busy || o.loggingOut).OnClick(a.logoutOAuth)
 				}
-				ui.Button(c, "刷新模型").Disabled(o.busy || o.loading || o.loggingOut || !current.PlanEnabled).OnClick(func() { a.fetchOAuthModels(id) })
+				flat(c, "刷新模型").Disabled(o.busy || o.loading || o.loggingOut || !current.PlanEnabled).OnClick(func() { a.fetchOAuthModels(id) })
 			}
 			services := c.Services()
-			ui.Button(c, "查看套餐用量").OnClick(func() { services.OpenURL("https://chatgpt.com/settings/usage") })
+			flat(c, "查看套餐用量").OnClick(func() { services.OpenURL("https://chatgpt.com/settings/usage") })
 		})
 		if o.loading || o.busy {
 			ui.Text(c, "正在处理…").FontSize(11).TextColor(c.Theme().TextMuted)

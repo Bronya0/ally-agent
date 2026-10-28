@@ -11,6 +11,7 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
+	"math"
 	"mime"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 	"github.com/google/uuid"
 	"golang.org/x/image/draw"
@@ -28,6 +30,21 @@ const maxAttachments = 8
 const maxAttachmentTextBytes = 200 * 1024
 const maxModelImageBytes = 5 * 1024 * 1024
 const maxOriginalImageBytes = 64 * 1024 * 1024
+
+// Limits for a picture that goes to a model. The Vue build did this in App.vue's
+// encodeModelImage (2048px, JPEG quality 0.7); the native build has no frontend
+// to do it, so the cap lives here. 2048 is more than a provider charges for:
+// anything past 1568 on the long edge is downscaled by the provider anyway, and
+// a 2048px screenshot is tiled into several blocks and billed for each.
+const (
+	modelImageMaxEdge = 1568
+	// modelImageJPEGQuality matches the Vue build's 0.7.
+	modelImageJPEGQuality = 70
+	// modelImagePassthroughBytes: under this, a picture already in a model-native
+	// format is sent untouched, so a small icon is not re-compressed for nothing.
+	// Above it, or above modelImageMaxEdge in pixels, it is re-encoded.
+	modelImagePassthroughBytes = 256 * 1024
+)
 
 var textAttachmentExt = map[string]bool{}
 
@@ -138,9 +155,13 @@ func prepareImageData(result preparedAttachment, data []byte) preparedAttachment
 	default:
 		typ = ""
 	}
-	if typ == "" || len(data) > 256*1024 {
+	// A flat screenshot compresses to well under 256kB as PNG, so the byte count
+	// alone let a 3000×2000 paste through at full size: the pixel edge has to be
+	// checked as well, or the model is billed for a picture nobody displays bigger
+	// than a few hundred DIPs.
+	if typ == "" || len(data) > modelImagePassthroughBytes || max(cfg.Width, cfg.Height) > modelImageMaxEdge {
 		var out bytes.Buffer
-		err = jpeg.Encode(&out, resizeImage(img, 2048), &jpeg.Options{Quality: 70})
+		err = jpeg.Encode(&out, opaqueOnWhite(img, modelImageMaxEdge), &jpeg.Options{Quality: modelImageJPEGQuality})
 		if err != nil {
 			result.input.Error = "图片转换失败：" + err.Error()
 			return result
@@ -154,6 +175,21 @@ func prepareImageData(result preparedAttachment, data []byte) preparedAttachment
 	}
 	result.input.DataURL = "data:" + typ + ";base64," + base64.StdEncoding.EncodeToString(data)
 	return result
+}
+
+// opaqueOnWhite scales src to fit edge and flattens it onto white. JPEG has no
+// alpha channel and Go's encoder writes a transparent pixel as black, so a
+// transparent PNG (an icon, a screenshot with rounded corners) reached the model
+// as a dark block; the Vue build filled white before drawing for that reason.
+func opaqueOnWhite(src image.Image, edge int) image.Image {
+	scaled := resizeImage(src, edge)
+	b := scaled.Bounds()
+	dst := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	for i := 0; i < len(dst.Pix); i += 4 {
+		dst.Pix[i], dst.Pix[i+1], dst.Pix[i+2], dst.Pix[i+3] = 0xff, 0xff, 0xff, 0xff
+	}
+	draw.Draw(dst, dst.Bounds(), scaled, b.Min, draw.Over)
+	return dst
 }
 
 func resizeImage(src image.Image, limit int) image.Image {
@@ -207,6 +243,36 @@ func (a *desktop) dropAttachments(t *conversation, paths []string) {
 	copyPaths := append([]string(nil), paths...)
 	go a.prepareAttachmentPaths(t, copyPaths)
 }
+
+// clipboardImage returns the image on the clipboard as PNG, or nil when it holds
+// none. A screenshot lands on the pasteboard as TIFF, which the platform reader
+// converts; reading through the view's services keeps the Tester's clipboard
+// working and never touches the real one in tests.
+func clipboardImage(c *ui.Context) []byte {
+	for _, item := range c.Services().ReadClipboardData(transfer.PNG).Items() {
+		if data, err := item.Read(transfer.PNG); err == nil && len(data) > 0 {
+			return data
+		}
+	}
+	return nil
+}
+
+// pasteImageFromClipboard turns an image on the clipboard into a pending
+// attachment and reports whether it took the paste, leaving pastes without an
+// image to the editor. Windows and Linux report Cmd+V as a key the input sees,
+// macOS as the Edit menu's paste command, so both routes call this.
+func (a *desktop) pasteImageFromClipboard(c *ui.Context, t *conversation) bool {
+	if t == nil || t.Busy || t.AttachmentLoading || a.closing {
+		return false
+	}
+	data := clipboardImage(c)
+	if len(data) == 0 {
+		return false
+	}
+	a.pasteAttachment(t, data)
+	return true
+}
+
 func (a *desktop) pasteAttachment(t *conversation, data []byte) {
 	if t.AttachmentLoading || t.Busy || a.closing {
 		return
@@ -263,7 +329,7 @@ func (a *desktop) pendingAttachmentRow(c *ui.Context, t *conversation) {
 						ui.Text(c, short(att.Error, 18)).FontSize(10).TextColor(c.Theme().Danger).Tooltip(att.Error)
 					}
 				})
-				flat(c, "×").Label("移除 " + att.Name).OnClick(func() {
+				dangerIconAction(c, "attach-remove-"+att.ID, "移除 "+att.Name, "close", 20, func() {
 					for i, item := range t.PendingAttachments {
 						if item.ID == att.ID {
 							t.PendingAttachments = append(t.PendingAttachments[:i], t.PendingAttachments[i+1:]...)
@@ -289,40 +355,97 @@ func messageAttachmentList(m map[string]any) []map[string]any {
 	}
 	return list
 }
+
+// Message images are capped in DIPs. A pasted screenshot arrives at its pixel
+// size — on a HiDPI screen that is twice the window wide — and the transcript
+// used to draw it FillWidth at a fixed 300 height, which Fit(Contain) then blew
+// up to the full column. One image gets the larger box, several share a
+// thumbnail row, and a click opens one bigger. The box is computed from the
+// picture here, never enlarged past it.
+const (
+	attachmentLoneW  float32 = 460
+	attachmentLoneH  float32 = 340
+	attachmentThumbW float32 = 220
+	attachmentThumbH float32 = 150
+	attachmentOpenW  float32 = 900
+	attachmentOpenH  float32 = 800
+)
+
+// fitBox scales w×h into maxW×maxH keeping the ratio, and never scales up: a small
+// clipboard image stays small instead of filling the transcript.
+func fitBox(w, h, maxW, maxH float32) (float32, float32) {
+	if w <= 0 || h <= 0 {
+		return maxW, maxH
+	}
+	s := min(1, maxW/w, maxH/h)
+	return max(1, float32(math.Round(float64(w*s)))), max(1, float32(math.Round(float64(h*s))))
+}
+
 func (a *desktop) messageAttachments(c *ui.Context, t *conversation, m map[string]any) {
-	for _, att := range messageAttachmentList(m) {
-		id := str(att, "id")
-		name := str(att, "name")
-		if name == "" {
-			name = "图片"
+	list := messageAttachmentList(m)
+	if len(list) == 0 {
+		return
+	}
+	// Several images wrap into rows of thumbnails; a single one may be larger.
+	lone := len(list) == 1
+	ui.Row(c).Gap(gapInline).Wrap().AlignItems(ui.Start).Children(func() {
+		for _, att := range list {
+			a.messageAttachmentTile(c, t, att, lone)
 		}
-		ui.Column(c.Key("attachment-" + id)).FillWidth().Gap(6).Children(func() {
-			if bm := t.AttachmentImages[id]; bm != nil {
-				expanded := t.uiState().ToolOpen["image-"+id]
-				height := float32(300)
-				if expanded {
-					height = 600
-				}
-				ui.Image(c, bm).FillWidth().Height(height).Fit(ui.Contain).Cursor(ui.CursorPointer).OnClick(func() { t.uiState().ToolOpen["image-"+id] = !expanded })
-			} else if str(att, "error") == "" {
+	})
+}
+
+func (a *desktop) messageAttachmentTile(c *ui.Context, t *conversation, att map[string]any, lone bool) {
+	id := str(att, "id")
+	name := str(att, "name")
+	if name == "" {
+		name = "图片"
+	}
+	key := "image-" + id
+	expanded := t.uiState().ToolOpen[key]
+	maxW, maxH := attachmentThumbW, attachmentThumbH
+	if lone {
+		maxW, maxH = attachmentLoneW, attachmentLoneH
+	}
+	if expanded {
+		maxW, maxH = attachmentOpenW, attachmentOpenH
+	}
+	ui.Column(c.Key("attachment-" + id)).Gap(5).Shrink(0).Children(func() {
+		switch bm := t.AttachmentImages[id]; {
+		case bm != nil:
+			w, h := bm.Size()
+			dw, dh := fitBox(float32(w), float32(h), maxW, maxH)
+			tip := fmt.Sprintf("%s\n%d×%d", name, w, h)
+			if expanded {
+				tip += " · 点击收小"
+			} else {
+				tip += " · 点击放大"
+			}
+			ui.Image(c, bm).Size(dw, dh).MaxWidthPercent(100).Fit(ui.Contain).
+				Cursor(ui.CursorPointer).Tooltip(tip).
+				OnClick(func() { t.uiState().ToolOpen[key] = !expanded })
+		case str(att, "error") == "":
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				fieldNote(c, "Loading image…")
 				flat(c, "加载图片").OnClick(func() {
 					if a.core != nil && a.win != nil {
 						a.loadAttachmentImage(t, id, str(att, "imageRef"), str(att, "dataUrl"))
 					}
 				})
-			}
-			ui.Row(c).Gap(8).Children(func() {
-				ui.Text(c, name).FontSize(fsAux).TextColor(c.Theme().TextMuted)
-				if err := str(att, "error"); err != "" {
-					notice(c, "error", err)
-				}
-				if ref := str(att, "imageRef"); ref != "" {
-					flat(c, "保存图片").OnClick(func() { a.job(func() error { _, err := a.core.ExportGeneratedImage(ref); return err }) })
-				}
 			})
+		}
+		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, short(name, 18)).FontSize(fsAux).TextColor(c.Theme().TextMuted).Tooltip(name)
+			if err := str(att, "error"); err != "" {
+				ui.Text(c, short(err, 18)).FontSize(fsAux).TextColor(c.Theme().Danger).Tooltip(err)
+			}
+			if ref := str(att, "imageRef"); ref != "" {
+				mutedIconAction(c, "attachment-save-"+id, "保存图片", "download", 18, func() {
+					a.job(func() error { _, err := a.core.ExportGeneratedImage(ref); return err })
+				})
+			}
 		})
-	}
+	})
 }
 func (a *desktop) recordAttachmentReference(t *conversation, p map[string]any) {
 	for i := len(t.Messages) - 1; i >= 0; i-- {

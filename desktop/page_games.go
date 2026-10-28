@@ -2,7 +2,7 @@
 package desktop
 
 import (
-	"ally-dev/pkg/uikit"
+	"ally-dev/desktop/uikit"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -149,11 +149,8 @@ func (a *desktop) gameSidebar(c *ui.Context) {
 			sectionTitle(c, "棋牌")
 			for i, meta := range gameMeta {
 				i, meta := i, meta
-				btn := flat(c.Key(fmt.Sprintf("game-kind-%d", i)), meta.label)
-				if g.Kind == i {
-					btn.TextColor(c.Theme().Accent).Background(c.Theme().SurfaceHover)
-				}
-				btn.Disabled(g.Thinking).OnClick(func() {
+				choiceButton(c, fmt.Sprintf("game-kind-%d", i), meta.label, g.Kind == i, c.Theme().Accent).
+					Disabled(g.Thinking).OnClick(func() {
 					a.resetGame(i)
 					g.Started = false
 				})

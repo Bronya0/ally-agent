@@ -158,8 +158,6 @@ type chatUI struct {
 	ModelSearch      string
 	ModelGroup       string
 	FlyoutHot        bool
-	EffortOpen       bool
-	ExtrasOpen       bool
 	ContextOpen      bool
 	Retry            *retryInfo
 	Git              backend.GitStatus
@@ -168,8 +166,10 @@ type chatUI struct {
 	Breakdown        backend.ContextBreakdown
 	FooterLoaded     bool
 	FooterBusy       bool
+	FooterPending    bool
 	CompactNote      string
 	CompactBusy      bool
+	CompactThinking  int
 	DraftCaret       int
 	RestoreCaret     bool
 	Follow           bool

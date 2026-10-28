@@ -83,6 +83,9 @@ type mcpConnToken struct {
 	lostWhy string
 	// Set before the transport starts; owned by this connection, never a tool call.
 	cancel context.CancelFunc
+	// stdioPID 是这条连接拉起的子进程组根进程（仅 stdio）。退出时直接对整组
+	// SIGKILL，不走传输层那套优雅退出。由 manager.mu 守护。
+	stdioPID int
 }
 
 func (t *mcpConnToken) stop() {
@@ -180,6 +183,10 @@ type McpManager struct {
 	// 连接提交进来，否则连接挂在无人引用的旧 manager 上，stdio 子进程与传输
 	// goroutine 会悬到进程退出。
 	closed bool
+	// exiting 表示进程正在退出：此时不再关闭任何客户端。Close 在 mcp-go 里意味着
+	// 向远程服务端发会话 DELETE 并自等 5s 超时（stdio 还有 2s 优雅退出加两段强杀
+	// 等待），而进程马上就要消失，这些请求与等待只会把点关闭的那一秒拖成好几秒。
+	exiting bool
 }
 
 // SetWarningHandler wires the config:warning sink so a broken mcp.json is
@@ -479,7 +486,7 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 	if len(closing) > 0 {
 		go func() {
 			for _, staleClient := range closing {
-				_ = staleClient.Close()
+				m.closeClient(staleClient)
 			}
 		}()
 	}
@@ -577,7 +584,7 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 	m.notifyChange()
 	if staleClient != nil {
 		existingToken.stop()
-		_ = staleClient.Close()
+		m.closeClient(staleClient)
 	}
 
 	// 一次尝试，不重试：重试会把同一个服务端的拨号锁占住十几秒（一次工具调用撞
@@ -603,7 +610,7 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 	if !live || current != handle || m.closed {
 		m.mu.Unlock()
 		established.token.stop()
-		_ = established.client.Close()
+		m.closeClient(established.client)
 		return
 	}
 	m.commitConnectionLocked(handle, established)
@@ -669,7 +676,7 @@ func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg M
 
 	if _, err := mcpClient.Initialize(initCtx, initReq); err != nil {
 		token.stop()
-		mcpClient.Close()
+		m.closeClient(mcpClient)
 		return mcpEstablished{}, fmt.Errorf("init failed: %w", err)
 	}
 
@@ -680,7 +687,7 @@ func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg M
 	discovered, err := listMcpTools(toolsCtx, name, mcpClient)
 	if err != nil {
 		token.stop()
-		mcpClient.Close()
+		m.closeClient(mcpClient)
 		return mcpEstablished{}, fmt.Errorf("list tools failed (timed out or refused after %s): %w", mcpStartupTimeout(cfg), err)
 	}
 	return mcpEstablished{client: mcpClient, tools: discovered, token: token}, nil
@@ -819,7 +826,7 @@ func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServe
 	if startErr != nil {
 		cancelConnection()
 		discardProcessJob(stdioJob)
-		_ = mcpClient.Close()
+		m.closeClient(mcpClient)
 		return nil, fmt.Errorf("%s start failed: %w", transportName, startErr)
 	}
 	if stdioCmd != nil {
@@ -972,6 +979,9 @@ func (m *McpManager) watchStdioProcess(serverName string, cmd *exec.Cmd, job uin
 		return
 	}
 	pid := proc.Pid
+	m.mu.Lock()
+	token.stdioPID = pid
+	m.mu.Unlock()
 	go func() {
 		// registerProcessJob consumes the handle on both success and failure.
 		// Closing it again could close an unrelated, recycled Windows handle.
@@ -1485,7 +1495,7 @@ func (m *McpManager) reconnectServer(ctx context.Context, serverName string, fai
 
 	if oldClient != nil {
 		oldToken.stop()
-		_ = oldClient.Close()
+		m.closeClient(oldClient)
 	}
 
 	established, err := m.initializeMcpClient(ctx, serverName, cfg)
@@ -1497,7 +1507,7 @@ func (m *McpManager) reconnectServer(ctx context.Context, serverName string, fai
 		m.mu.Unlock()
 		if established.client != nil {
 			established.token.stop()
-			_ = established.client.Close()
+			m.closeClient(established.client)
 		}
 		return fmt.Errorf("MCP server %s was replaced during reconnect", serverName)
 	}
@@ -1618,7 +1628,49 @@ func (m *McpManager) DescribeFunctionTool(functionName string) (mcpToolRef, bool
 	return mcpToolRef{ServerName: serverName, ToolName: toolName}, true
 }
 
-func (m *McpManager) Shutdown() {
+// exitingNow 报告进程是否已经进入退出流程。
+func (m *McpManager) exitingNow() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.exiting
+}
+
+// closeClient 是全仓关闭 MCP 客户端的唯一出口。退出流程里直接跳过：那个 Close
+// 只会发出没人接收的告别请求，并把退出拖成好几秒。
+func (m *McpManager) closeClient(c *client.Client) {
+	if c == nil || m.exitingNow() {
+		return
+	}
+	_ = c.Close()
+}
+
+// Shutdown 关闭全部客户端并等它们真的关完（配置重载等后台路径用）。
+func (m *McpManager) Shutdown() { m.shutdown(func(clients []*client.Client) { closeAll(clients, 0) }) }
+
+// AbandonForExit 是退出路径：只把本地 stdio 子进程组直接 SIGKILL，不关任何
+// 客户端、不发任何网络请求。进程马上消失，远程服务端的会话会自行过期，那个
+// 会话 DELETE 与 stdio 的优雅退出等待在这里一点用都没有。
+func (m *McpManager) AbandonForExit() {
+	m.mu.Lock()
+	m.exiting = true
+	pids := make([]int, 0, len(m.clients))
+	for _, handle := range m.clients {
+		if handle.token != nil && handle.token.stdioPID > 0 {
+			pids = append(pids, handle.token.stdioPID)
+		}
+	}
+	m.clients = make(map[string]*McpClientHandle)
+	m.toolLookup = make(map[string]mcpToolRef)
+	m.closed = true
+	m.mu.Unlock()
+	m.cancelLifetime()
+	for _, pid := range pids {
+		_ = stopProcessTree(pid)
+	}
+	m.notifyChange()
+}
+
+func (m *McpManager) shutdown(closeClients func([]*client.Client)) {
 	m.cancelLifetime()
 	m.mu.Lock()
 	closing := make([]*client.Client, 0, len(m.clients))
@@ -1632,10 +1684,15 @@ func (m *McpManager) Shutdown() {
 	m.closed = true
 	m.mu.Unlock()
 	m.notifyChange()
-	// Close 必须在锁外、且并行：stdio 的 Close 含 2s 优雅 + 3s+3s 强杀等待，
-	// 持锁逐个关会把整个 manager（状态推送、工具清单）卡住数秒到数十秒（与
-	// ReconcileConfigs / reconnectServer 的锁外 Close 对齐；退出时 N 个服务端
-	// 也不该串成 8s×N）。
+	if closeClients != nil {
+		closeClients(closing)
+	}
+}
+
+// closeAll 在锁外并行关客户端：stdio 的 Close 含 2s 优雅 + 3s+3s 强杀等待，持锁
+// 逐个关会把整个 manager（状态推送、工具清单）卡住数秒到数十秒（与 ReconcileConfigs /
+// reconnectServer 的锁外 Close 对齐；N 个服务端也不该串成 8s×N）。
+func closeAll(closing []*client.Client, grace time.Duration) {
 	var wg sync.WaitGroup
 	for _, mcpClient := range closing {
 		wg.Add(1)
@@ -1644,7 +1701,18 @@ func (m *McpManager) Shutdown() {
 			_ = c.Close()
 		}(mcpClient)
 	}
-	wg.Wait()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	if grace <= 0 {
+		<-done
+		return
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
 }
 
 // GetAllTools returns every discovered tool regardless of the per-server

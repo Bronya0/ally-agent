@@ -32,6 +32,8 @@ func (a *desktop) editModel(index int) {
 	a.modelEdit = index
 	a.modelForm.KeyEpoch++
 	a.modelForm.AdvancedOpen = false
+	a.modelForm.Fetched = nil
+	a.modelForm.FetchNote = ""
 	a.modelPrevious = nil
 	if index >= 0 && index < len(a.config.Models) {
 		a.modelDraft = a.config.Models[index]

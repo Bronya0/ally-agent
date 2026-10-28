@@ -48,6 +48,12 @@ type workspaceFile struct {
 	Image         *ui.Bitmap
 	Assist        *editorAssistIndex
 	Saving        bool
+	// PreviewText is the buffer as the Markdown preview last read it, and
+	// PreviewVersion the buffer version then: calling Buffer.String() on every
+	// frame allocated the whole file again, and every animation shows frames.
+	PreviewText    string
+	PreviewVersion uint64
+	PreviewReady   bool
 }
 type desktop struct {
 	htmlPreviews                              map[string]*mygo.WebView
@@ -61,7 +67,6 @@ type desktop struct {
 	welcomeMCP, welcomeSkills, welcomeTools   bool
 	popupFlags                                map[string]*bool
 	notifications                             []string
-	workspaceMenu                             bool
 	taskPopup                                 bool
 	petals                                    bool
 	ShowAllMessages                           bool
@@ -166,12 +171,25 @@ func Run() {
 	a := &desktop{core: backend.NewApp(), page: "chat", modelEdit: -1, explorer: true, status: "正在启动…", plans: map[string][]backend.PlanStep{}, planRev: map[string]int64{}, subRuns: map[string]*backend.SubagentRun{}, prefs: defaultPrefs(), extraRoots: map[string][]string{}, sshAllowed: map[string][]string{}}
 	mygo.App.WhenReady(func() {
 		a.syncNativeAppearance()
-		a.win = mygo.NewWindow(mygo.WindowOptions{
+		opts := mygo.WindowOptions{
 			Title: "Ally", Width: 1280, Height: 850, MinWidth: 900, MinHeight: 620,
 			StateKey: "ally-native-main", TitleBarStyle: mygo.TitleBarHidden,
-			HideWindowButtons: true, TitleBarHeight: 44,
-			Hidden: true, BackgroundColor: "#1b1b1b", Content: ui.View(a.view),
-		})
+			TitleBarHeight: headerBarHeight,
+			Hidden:         true, BackgroundColor: "#1b1b1b", Content: ui.View(a.view),
+		}
+		// macOS keeps the native traffic lights over the hidden title bar, so
+		// the header reserves their room instead of hiding them. Elsewhere the
+		// header draws its own window buttons and the system ones stay hidden.
+		if runtime.GOOS != "darwin" {
+			opts.HideWindowButtons = true
+		} else {
+			// AppKit's own inset leaves the lights near the top of the 44px bar,
+			// which reads as too high: put the top of the 16px buttons 14px down
+			// so their center meets the bar's at 22. The same figure makes the
+			// bar mygo reports exactly as tall as the header.
+			opts.TrafficLightPosition = &mygo.Point{X: 14, Y: (headerBarHeight - 16) / 2}
+		}
+		a.win = mygo.NewWindow(opts)
 		// Configure the native frame before showing it to avoid a white border
 		// during startup, while keeping the native resize edges and shadow.
 		configureWindowFrame(a.win)
@@ -285,11 +303,16 @@ func (a *desktop) shutdown() {
 }
 func (a *desktop) finishShutdown() {
 	a.status = "正在保存并退出…"
+	// 停后端与保存会话互不依赖：并行跑，退出只等最慢的一段。串行会把 MCP 与
+	// 托管服务的收尾时间整个叠在保存前面，用户只能对着窗口干等。
+	shutdownDone := make(chan struct{})
 	go func() {
-		err := a.core.ShutdownNative()
-		if err != nil {
+		defer close(shutdownDone)
+		if err := a.core.ShutdownNative(); err != nil {
 			log.Printf("shutdown: %v", err)
 		}
+	}()
+	go func() {
 		a.win.Update(func() {
 			for _, t := range a.tabs {
 				if len(t.Messages) > 0 {
@@ -301,6 +324,7 @@ func (a *desktop) finishShutdown() {
 				if tail != nil {
 					<-tail
 				}
+				<-shutdownDone
 				a.win.Update(func() {
 					a.releaseWorkspaceFiles()
 					a.releaseAllHTMLPreviews()
@@ -517,6 +541,41 @@ func (a *desktop) inject(t *conversation, text string) bool {
 	return true
 }
 
+// chatConfig resolves the model a Tab selected into a request config. A
+// compaction sends the same overlay a chat request does: the backend cannot read
+// Tab state, and a session restored from disk has no frozen record yet, so
+// without it a summary request would go to whatever endpoint ran last.
+func (a *desktop) chatConfig(t *conversation) (backend.ConfigState, bool) {
+	cfg := a.config
+	cfg.Workspace = t.Workspace
+	for _, m := range cfg.Models {
+		if modelOption(m) != t.Model {
+			continue
+		}
+		cfg.AuthType = m.AuthType
+		cfg.OAuthAccountID = m.OAuthAccountID
+		cfg.ProviderName = m.ProviderName
+		cfg.Model = m.Model
+		cfg.APIFormat = m.APIFormat
+		cfg.BaseURL = m.BaseURL
+		cfg.APIKey = m.APIKey
+		cfg.APIKeys = append([]string(nil), m.APIKeys...)
+		cfg.MaxTokens = m.MaxTokens
+		cfg.ContextWindow = m.ContextWindow
+		cfg.TokenParam = m.TokenParam
+		cfg.ReasoningTag = m.ReasoningTag
+		cfg.ReasoningEffort = m.ReasoningEffort
+		if t.Reasoning != "" {
+			cfg.ReasoningEffort = t.Reasoning
+		}
+		cfg.CustomHeaders = m.CustomHeaders
+		cfg.VisionCapable = m.VisionCapable
+		cfg.LastUsedModel = modelIdentityPtr(m)
+		return cfg, cfg.Model != ""
+	}
+	return cfg, false
+}
+
 func (a *desktop) send(t *conversation, text string) bool {
 	text = strings.TrimSpace(text)
 	if (text == "" && len(t.PendingAttachments) == 0) || t.AttachmentLoading || !a.ready || a.closing {
@@ -529,35 +588,8 @@ func (a *desktop) send(t *conversation, text string) bool {
 		a.status = "请先在模型页面配置并选择模型"
 		return false
 	}
-	cfg := a.config
-	cfg.Workspace = t.Workspace
-	found := false
-	for _, m := range cfg.Models {
-		if modelOption(m) == t.Model {
-			found = true
-			cfg.AuthType = m.AuthType
-			cfg.OAuthAccountID = m.OAuthAccountID
-			cfg.ProviderName = m.ProviderName
-			cfg.Model = m.Model
-			cfg.APIFormat = m.APIFormat
-			cfg.BaseURL = m.BaseURL
-			cfg.APIKey = m.APIKey
-			cfg.APIKeys = append([]string(nil), m.APIKeys...)
-			cfg.MaxTokens = m.MaxTokens
-			cfg.ContextWindow = m.ContextWindow
-			cfg.TokenParam = m.TokenParam
-			cfg.ReasoningTag = m.ReasoningTag
-			cfg.ReasoningEffort = m.ReasoningEffort
-			if t.Reasoning != "" {
-				cfg.ReasoningEffort = t.Reasoning
-			}
-			cfg.CustomHeaders = m.CustomHeaders
-			cfg.VisionCapable = m.VisionCapable
-			cfg.LastUsedModel = modelIdentityPtr(m)
-			break
-		}
-	}
-	if !found || cfg.Model == "" {
+	cfg, found := a.chatConfig(t)
+	if !found {
 		a.status = "所选模型已不存在，请重新选择"
 		return false
 	}

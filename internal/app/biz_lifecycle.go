@@ -169,6 +169,12 @@ func (a *App) runStartupMaintenance(ctx context.Context, workspace string) {
 func (a *App) stopRuntime(timeout time.Duration) error {
 	a.runtime.stopMu.Lock()
 	defer a.runtime.stopMu.Unlock()
+	// MCP 先进入退出态，且必须在取消 runtime ctx 之前：取消会让在飞的拨号失败，
+	// 那条失败路径会去 Close 客户端（远程服务端要发会话 DELETE 并自等 5s 超时，
+	// stdio 还有优雅退出等待）。先置退出标记，后面所有关闭路径直接跳过。
+	if manager := a.activeMcpManager(); manager != nil {
+		manager.AbandonForExit()
+	}
 	if a.runtime.cancel != nil {
 		a.runtime.cancel()
 	}
@@ -214,9 +220,6 @@ waitRuns:
 	var servicesErr error
 	resourceErr := waitRuntimeShutdown(deadline, func() error {
 		servicesErr = <-servicesDone
-		if manager := a.activeMcpManager(); manager != nil {
-			manager.Shutdown()
-		}
 		return nil
 	})
 	if resourceErr != nil {

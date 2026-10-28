@@ -3,11 +3,11 @@ package desktop
 
 import (
 	"fmt"
-	"math"
 	"time"
 
 	backend "ally-dev/internal/app"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/chart"
 )
 
 var chartPalette = []ui.Color{
@@ -74,7 +74,10 @@ func (a *desktop) statsSummaryCard(c *ui.Context, title string, summary backend.
 	})
 }
 
-// statsBars draws the fixed 30-day stacked bar chart with local painting.
+// statsBars draws the fixed 30-day stacked bar chart with mygo's chart package:
+// a band scale places the bars and a linear scale their heights, so the axis
+// ticks, the bar geometry and the hover target come from the package instead of
+// being recomputed by hand against the plot box.
 func (a *desktop) statsBars(c *ui.Context) {
 	daily := a.stats.Daily
 	card(c, "stats-bars", func() {
@@ -84,50 +87,44 @@ func (a *desktop) statsBars(c *ui.Context) {
 			legendSwatch(c, "输入", chartPalette[0])
 			legendSwatch(c, "输出", chartPalette[1])
 		})
-		box := ui.Box(c).Key("stats-bars-canvas").Label("近30天用量图").Tooltip("将鼠标移到柱形上查看用量").FillWidth().Height(200)
-		box.Draw(func(p *ui.Painter, r ui.Rect) {
-			if len(daily) == 0 {
-				return
-			}
-			maxValue := 1
-			for _, d := range daily {
-				if d.InputTokens+d.OutputTokens > maxValue {
-					maxValue = d.InputTokens + d.OutputTokens
-				}
-			}
-			left, right, top, bottom := r.X+44, r.X+r.W-8, r.Y+8, r.Y+r.H-22
-			plotH := bottom - top
-			for i := 0; i < 4; i++ {
-				y := top + plotH*float32(i)/3
-				p.Line(left, y, right, y, 1, c.Theme().Border)
-				value := int(math.Round(float64(maxValue) * float64(3-i) / 3))
-				p.Text(r.X+2, y-6, fmtK(value), 9, c.Theme().TextMuted)
-			}
-			barW := (right - left) / float32(len(daily)+1)
-			for i, d := range daily {
-				x := left + barW*float32(i) + barW*0.15
-				inH := plotH * float32(d.InputTokens) / float32(maxValue)
-				outH := plotH * float32(d.OutputTokens) / float32(maxValue)
-				p.Fill(ui.Rect{X: x, Y: bottom - inH, W: barW * 0.7, H: inH}, chartPalette[0], 2)
-				p.Fill(ui.Rect{X: x, Y: bottom - inH - outH, W: barW * 0.7, H: outH}, chartPalette[1], 2)
-			}
-			if len(daily) > 0 {
-				p.Text(left, bottom+4, monthDay(daily[0].Date), 9, c.Theme().TextMuted)
-				last := len(daily) - 1
-				p.Text(right-40, bottom+4, monthDay(daily[last].Date), 9, c.Theme().TextMuted)
-			}
-		})
-		if x, _, inside := box.PointerPosition(); inside && len(daily) > 0 {
-			bounds := box.Bounds()
-			plotWidth := bounds.W - 52
-			if plotWidth > 0 && x >= 44 && x < bounds.W-8 {
-				index := int((x - 44) / (plotWidth / float32(len(daily)+1)))
-				if index >= 0 && index < len(daily) {
-					d := daily[index]
-					box.Tooltip(fmt.Sprintf("%s · 输入 %s · 输出 %s · 合计 %s", d.Date, fmtK(d.InputTokens), fmtK(d.OutputTokens), fmtK(d.InputTokens+d.OutputTokens)))
-				}
+		if len(daily) == 0 {
+			fieldNote(c, "近 30 天暂无数据。")
+			return
+		}
+		dates := make([]string, len(daily))
+		input := make([]float64, len(daily))
+		output := make([]float64, len(daily))
+		maxValue := 1.0
+		for i, d := range daily {
+			dates[i] = monthDay(d.Date)
+			input[i] = float64(d.InputTokens)
+			output[i] = float64(d.OutputTokens)
+			if total := input[i] + output[i]; total > maxValue {
+				maxValue = total
 			}
 		}
+		x := chart.NewBand(dates...).Padding(0.28, 0.06)
+		y := chart.NewLinear(0, maxValue).Nice(4)
+		ticks := y.Ticks(4)
+		theme := c.Theme()
+		chart.Plot(c.Key("stats-bars-plot"), chart.Axes{Left: ticks}, func(area ui.Element) {
+			area.Draw(func(p *ui.Painter, r ui.Rect) {
+				for _, tick := range ticks {
+					p.Line(r.X, chart.Y(r, tick.At), r.X+r.W, chart.Y(r, tick.At), 1, theme.Border)
+				}
+			})
+			for i, d := range daily {
+				tip := fmt.Sprintf("%s · 输入 %s · 输出 %s · 合计 %s", d.Date, fmtK(d.InputTokens), fmtK(d.OutputTokens), fmtK(d.InputTokens+d.OutputTokens))
+				// Stacked: input from zero, output on top of it.
+				chart.Rect(c, x.Band(i), y.Span(0, input[i])).Radius(2).Background(chartPalette[0]).Tooltip(tip)
+				chart.Rect(c, x.Band(i), y.Span(input[i], input[i]+output[i])).Radius(2).Background(chartPalette[1]).Tooltip(tip)
+			}
+		}).Label("近30天用量图").Height(200).Gap(6)
+		ui.Row(c).FillWidth().Children(func() {
+			fieldNote(c, monthDay(daily[0].Date))
+			ui.Spacer(c)
+			fieldNote(c, monthDay(daily[len(daily)-1].Date))
+		})
 	})
 }
 
@@ -196,7 +193,9 @@ func (a *desktop) statsHeatmap(c *ui.Context) {
 	})
 }
 
-// statsDonut draws a ring with a legend; values are input+output per entry.
+// statsDonut draws a ring with a legend: chart.Pie divides the circle, chart.Sector
+// gives each slice's path and chart.SliceAt says which slice is under the pointer,
+// so the ring is no longer painted as a fan of small quads.
 func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenDimensionStat) {
 	card(c, "donut-"+title, func() {
 		sectionTitle(c, title)
@@ -208,49 +207,42 @@ func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenD
 			fieldNote(c, "该区间暂无数据。")
 			return
 		}
+		values := make([]float64, len(stats))
+		for i, item := range stats {
+			values[i] = float64(item.InputTokens + item.OutputTokens)
+		}
+		slices := chart.Pie(values, 0.03)
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Center).Children(func() {
-			box := ui.Box(c).Size(150, 150).Tooltip("将鼠标移到环形图上查看用量")
+			box := ui.Box(c).Size(150, 150).Label(title + "环形图")
+			hover := -1
+			if px, py, over := box.PointerPosition(); over {
+				bounds := box.Bounds()
+				if i, ok := chart.SliceAt(slices, px-bounds.W/2, py-bounds.H/2, 47, 63); ok {
+					hover = i
+				}
+			}
 			box.Draw(func(p *ui.Painter, r ui.Rect) {
 				cx, cy := r.X+r.W/2, r.Y+r.H/2
-				radius := r.W/2 - 12
-				start := float32(-90)
-				for i, item := range stats {
-					value := item.InputTokens + item.OutputTokens
-					sweep := 360 * float32(value) / float32(total)
-					color := chartPalette[i%len(chartPalette)]
-					drawArc(p, cx, cy, radius, start, start+sweep, 16, color)
-					start += sweep
+				for i, slice := range slices {
+					outer := float32(63)
+					if i == hover {
+						outer = 67
+					}
+					p.FillPath(chart.Sector(cx, cy, 47, outer, slice), chartPalette[i%len(chartPalette)])
 				}
 				p.Text(cx-26, cy-6, fmtK(total), 14, c.Theme().Text)
 				p.Text(cx-22, cy+12, "总 tokens", 9, c.Theme().TextMuted)
 			})
-			if x, y, inside := box.PointerPosition(); inside {
-				bounds := box.Bounds()
-				dx, dy := x-bounds.W/2, y-bounds.H/2
-				distance := math.Hypot(float64(dx), float64(dy))
-				if distance >= float64(bounds.W/2-28) && distance <= float64(bounds.W/2-10) {
-					angle := math.Atan2(float64(dy), float64(dx))*180/math.Pi + 90
-					if angle < 0 {
-						angle += 360
-					}
-					at := 0.0
-					for _, item := range stats {
-						value := item.InputTokens + item.OutputTokens
-						at += float64(value) * 360 / float64(total)
-						if angle <= at {
-							name := item.Name
-							if name == "" {
-								name = item.FullName
-							}
-							box.Tooltip(fmt.Sprintf("%s · 输入 %s · 输出 %s · %.1f%%", name, fmtK(item.InputTokens), fmtK(item.OutputTokens), float64(value)*100/float64(total)))
-							break
-						}
-					}
+			if hover >= 0 {
+				item := stats[hover]
+				name := item.Name
+				if name == "" {
+					name = item.FullName
 				}
+				box.Tooltip(fmt.Sprintf("%s · 输入 %s · 输出 %s · %.1f%%", name, fmtK(item.InputTokens), fmtK(item.OutputTokens), float64(item.InputTokens+item.OutputTokens)*100/float64(total)))
 			}
 			ui.Column(c).Grow(1).Gap(2).Children(func() {
 				for i, item := range stats {
-					i, item := i, item
 					value := item.InputTokens + item.OutputTokens
 					name := item.Name
 					if name == "" {
@@ -267,23 +259,4 @@ func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenD
 			})
 		})
 	})
-}
-
-// drawArc paints a ring segment with a polyline; the painter has no arc fill,
-// and short segments read the same as a filled sector at this thickness.
-func drawArc(p *ui.Painter, cx, cy, radius, from, to, width float32, color ui.Color) {
-	steps := int(math.Abs(float64(to-from))/3) + 2
-	inner := radius - width
-	outer := radius
-	for i := 0; i < steps; i++ {
-		a1 := (from + (to-from)*float32(i)/float32(steps)) * math.Pi / 180
-		a2 := (from + (to-from)*float32(i+1)/float32(steps)) * math.Pi / 180
-		path := &ui.Path{}
-		path.MoveTo(cx+outer*float32(math.Cos(float64(a1))), cy+outer*float32(math.Sin(float64(a1))))
-		path.LineTo(cx+outer*float32(math.Cos(float64(a2))), cy+outer*float32(math.Sin(float64(a2))))
-		path.LineTo(cx+inner*float32(math.Cos(float64(a2))), cy+inner*float32(math.Sin(float64(a2))))
-		path.LineTo(cx+inner*float32(math.Cos(float64(a1))), cy+inner*float32(math.Sin(float64(a1))))
-		path.Close()
-		p.FillPath(path, color)
-	}
 }
