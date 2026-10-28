@@ -1,15 +1,15 @@
 # 原生桌面目录与依赖
 
-`main.go` 是薄入口，调用 `internal/desktop.Run()`。页面、状态和原生组件集中在 `internal/desktop`；`page_*.go` 是页面及其编辑表单，`widgets.go` 与 `theme.go` 是共享组件和视觉规范。测试与被测页面在同一个包内。
+`main.go` 是薄入口，调用 `desktop.Run()`。页面、状态和原生组件集中在根目录 `desktop/`；`page_*.go` 是页面及其编辑表单，`widgets.go` 与 `theme.go` 是共享组件和视觉规范。测试与被测页面在同一个包内。
 
 依赖方向：
 
 ```text
-main → internal/desktop → internal/app → internal/tools、internal/sandbox
-                       → resources
+main → desktop → internal/app → internal/tools、internal/sandbox
+       desktop → resources
 ```
 
-`internal/desktop` 是上层桌面宿主，可以依赖 `internal/app`；工具、沙箱和其他纯逻辑包不能反向依赖 `internal/app` 或桌面页面。`internal/app` 内原生窗口、对话框和宿主生命周期适配只放在 `host_*.go`。
+`desktop/` 是上层桌面宿主，可以依赖 `internal/app`；工具、沙箱和其他纯逻辑包不能反向依赖 `internal/app` 或桌面页面。`internal/app` 内原生窗口、对话框和宿主生命周期适配只放在 `host_*.go`。
 
 UI 状态仅在主线程修改。后台工作通过 `Window.Update` 发布结果；不保存 `ui.Element`，不向后台传递 `ui.Context`。动态控件在构造前调用 `c.Key`。渲染期间不进行文件和网络 I/O，不启动无条件后台任务。
 

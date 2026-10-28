@@ -1,6 +1,7 @@
-name: Build Wails releases
+name: Build MyGo releases
 
 on:
+  workflow_call:
   workflow_dispatch:
   release:
     types: [published]
@@ -8,193 +9,9 @@ on:
 permissions:
   contents: write
 
-env:
-  APP_NAME: Ally
-  # 钉死成与 go.mod 中 runtime 相同的版本：v3.0.0 起上游按周发版（v3.1.0、v3.2.0…），
-  # CLI 与 runtime 必须同代，否则绑定生成与打包工具链会和运行时悄悄分叉（曾长期停在
-  # beta.11 而 go.mod 已是 beta.15）。升级时 go.mod 与此处一起改。
-  WAILS_VERSION: v3.0.0
-  ALLY_BUILD_VERSION: ${{ github.event.release.tag_name || github.ref_name }}
-  # release 事件自带正文，vite 构建时通过 define 注入为 __ALLY_RELEASE_NOTES__，不查 API
-  ALLY_RELEASE_NOTES_BODY: ${{ github.event.release.body }}
-  NODE_OPTIONS: --max-old-space-size=4096
-
 jobs:
-  # 正式发布时自检一遍“这一版确实带上了更新日志”。只在 release 事件下有正文；
-  # workflow_dispatch 没有 event payload，不是问题。这里只报警不失败：正文缺失只是少了
-  # 首次启动的说明，为它挡掉整个发布（用户拿不到包）代价不成比例。
-  release-notes:
-    name: Release notes sanity
-    if: github.event_name == 'release'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check the release body is usable as update notes
-        env:
-          NOTES_BODY: ${{ github.event.release.body }}
-          NOTES_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          if [ -z "$(printf '%s' "$NOTES_BODY" | tr -d '[:space:]')" ]; then
-            echo "::warning title=No release notes::$NOTES_TAG 的 release 正文是空的，这一版的包首次启动不会弹更新日志。补上正文后重新发布这一版即可。"
-          elif [[ "$NOTES_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::notice title=Release notes::$NOTES_TAG 的发布说明 $(printf '%s' "$NOTES_BODY" | wc -c) 字节，会随包进入首次启动提示。"
-          else
-            echo "::notice title=Release notes::$NOTES_TAG 的发布说明 $(printf '%s' "$NOTES_BODY" | wc -c) 字节，非正式 release 标签首次启动不自动弹窗（可在设置中查看）。"
-          fi
-
-  windows:
-    name: Windows x64
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package.json
-
-      - name: Install Wails
-        shell: pwsh
-        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}"
-
-      - name: Inject release version into exe metadata
-        shell: pwsh
-        run: |
-          $tag = "${{ github.event.release.tag_name || github.ref_name }}"
-          $base = (($tag -replace '^v', '') -split '[-+]')[0]
-          $parts = $base -split '\.'
-          if ($parts.Count -ge 3 -and $parts[0] -match '^\d+$' -and $parts[1] -match '^\d+$' -and $parts[2] -match '^\d+$') {
-            $product = "$($parts[0]).$($parts[1]).$($parts[2])"
-            $file = "$product.$($parts[3] ?? '0')"
-            $json = Get-Content build/windows/info.json -Raw | ConvertFrom-Json
-            $json.fixed.file_version = $file
-            $json.info.'0000'.ProductVersion = $product
-            $out = $json | ConvertTo-Json -Depth 10
-            [System.IO.File]::WriteAllText((Resolve-Path build/windows/info.json), $out, [System.Text.UTF8Encoding]::new($false))
-            Write-Host "Injected native version: product=$product file=$file"
-          } else {
-            Write-Host "Tag '$tag' is not a semantic release version; keeping 0.0.0"
-          }
-
-      - name: Build
-        shell: pwsh
-        run: |
-          wails3 build
-
-      - name: Bundle ripgrep and licenses
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist/tools, dist/third_party/ripgrep | Out-Null
-          Copy-Item "bin/${{ env.APP_NAME }}.exe" dist/
-          Copy-Item bin/tools/rg.exe dist/tools/rg.exe
-          Copy-Item LICENSE, THIRD_PARTY_NOTICES.md, README.md dist/
-          Copy-Item third_party/ripgrep/* dist/third_party/ripgrep/ -Recurse -Force
-          & dist/tools/rg.exe --version
-
-          $version = "${{ github.event.release.tag_name || github.ref_name }}"
-          Compress-Archive -Path dist/* -DestinationPath "${{ env.APP_NAME }}-$version-windows-x64.zip"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: Ally-windows-x64
-          path: Ally-*-windows-x64.zip
-          if-no-files-found: error
-
-      - uses: softprops/action-gh-release@v3
-        if: github.event_name == 'release'
-        with:
-          files: Ally-*-windows-x64.zip
-          fail_on_unmatched_files: true
-
-  linux:
-    name: Linux ${{ matrix.arch }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package.json
-
-      - name: Install native dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libgtk-4-dev libwebkitgtk-6.0-dev
-
-      - name: Install Wails
-        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}"
-
-      - name: Build
-        run: |
-          wails3 build
-
-      - name: Bundle ripgrep and licenses
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/tools dist/third_party/ripgrep
-          cp "bin/${APP_NAME}" dist/
-          cp bin/tools/rg dist/tools/rg
-          cp LICENSE THIRD_PARTY_NOTICES.md README.md dist/
-          cp -R third_party/ripgrep/. dist/third_party/ripgrep/
-          chmod +x "dist/${APP_NAME}" dist/tools/rg
-          dist/tools/rg --version
-
-          # Provide a .desktop entry and icon so the app appears with the correct
-          # icon in desktop environments when the archive is unpacked.
-          cat > "dist/${APP_NAME}.desktop" <<EOF
-          [Desktop Entry]
-          Version=1.0
-          Name=${APP_NAME}
-          Comment=Ally — AI coding agent desktop
-          Exec=${APP_NAME}
-          Terminal=false
-          Type=Application
-          Icon=${APP_NAME}
-          Categories=Development;
-          StartupWMClass=${APP_NAME}
-          EOF
-          cp build/appicon.png "dist/${APP_NAME}.png"
-
-          version="${{ github.event.release.tag_name || github.ref_name }}"
-          root_dir="${APP_NAME}-$version-linux-${{ matrix.arch }}"
-          # 打包时把顶层 dist 重命名为 root_dir，解压后所有文件归在统一目录下
-          tar -czf "${root_dir}.tar.gz" --transform "s,^dist,${root_dir}," dist
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: Ally-linux-${{ matrix.arch }}
-          path: Ally-*-linux-${{ matrix.arch }}.tar.gz
-          if-no-files-found: error
-
-      - uses: softprops/action-gh-release@v3
-        if: github.event_name == 'release'
-        with:
-          files: Ally-*-linux-${{ matrix.arch }}.tar.gz
-          fail_on_unmatched_files: true
-
-  macos:
-    name: macOS universal
+  build:
+    name: Cross-platform release packages
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
@@ -204,62 +21,32 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-python@v6
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package.json
+          python-version: '3.13'
 
-      - name: Install Wails
-        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}"
-
-      - name: Build universal binary
-        run: |
-          wails3 task darwin:build:universal
-
-      - name: Inject release version into macOS bundle metadata
-        run: |
-          tag="${{ github.event.release.tag_name || github.ref_name }}"
-          base="${tag#v}"
-          base="${base%%[-+]*}"
-          if [[ "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $base" build/darwin/Info.plist
-            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $base" build/darwin/Info.plist
-            echo "Injected native version: $base"
-          else
-            echo "Tag '$tag' is not a semantic release version; keeping 0.0.0"
-          fi
-
-      - name: Package universal .app
-        run: |
-          wails3 task darwin:package:universal
-
-      - name: Bundle universal ripgrep and licenses
-        shell: bash
-        run: |
-          set -euo pipefail
-          app="bin/${APP_NAME}.app"
-          codesign --verify --deep --strict "$app"
-          lipo -info "$app/Contents/MacOS/tools/rg"
-          "$app/Contents/MacOS/tools/rg" --version
-
-          mkdir -p dmg-root
-          cp -R "$app" dmg-root/
-          cp LICENSE THIRD_PARTY_NOTICES.md README.md dmg-root/
-          cp scripts/open-ally-macos.command "dmg-root/免签名启动Ally.command"
-          chmod +x "dmg-root/免签名启动Ally.command"
-          ln -s /Applications dmg-root/Applications
-          version="${{ github.event.release.tag_name || github.ref_name }}"
-          hdiutil create -volname "${APP_NAME}" -srcfolder dmg-root -ov -format UDZO "${APP_NAME}-$version-macos-universal.dmg"
+      - name: Build portable archives and ad-hoc universal DMG
+        env:
+          BUILD_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          CGO_ENABLED: '0'
+          GOGC: '30'
+          GOMAXPROCS: '2'
+        run: bash scripts/build-all.sh
 
       - uses: actions/upload-artifact@v7
         with:
-          name: Ally-macos-universal
-          path: Ally-*-macos-universal.dmg
+          name: Ally-${{ github.event.release.tag_name || github.ref_name }}
+          path: |
+            dist/release/*-windows-amd64-portable.zip
+            dist/release/*-linux-*.tar.gz
+            dist/release/*-macos-universal-adhoc.dmg
           if-no-files-found: error
 
       - uses: softprops/action-gh-release@v3
         if: github.event_name == 'release'
         with:
-          files: Ally-*-macos-universal.dmg
+          files: |
+            dist/release/*-windows-amd64-portable.zip
+            dist/release/*-linux-*.tar.gz
+            dist/release/*-macos-universal-adhoc.dmg
           fail_on_unmatched_files: true

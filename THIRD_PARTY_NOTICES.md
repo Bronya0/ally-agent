@@ -17,3 +17,9 @@ Character images are preserved from the original Ally frontend. Each character's
 ## ripgrep
 
 Official ripgrep release archives are retained under `tools/ripgrep/`. Copyright (c) 2015 Andrew Gallant. Ripgrep is available under the MIT License or the Unlicense; both texts are retained in `third_party/ripgrep/`. See `tools/ripgrep/README.md` for archive provenance.
+
+## Inter fonts and HTML preview charts
+
+Inter weights 400/500/600/700 are preserved from the original frontend and converted from WOFF2 to TrueType for native font registration. Copyright 2016 The Inter Project Authors. Distributed under SIL Open Font License 1.1; see `resources/fonts/LICENSE.txt` and `resources/fonts/NOTICE.txt`.
+
+The interactive HTML preview embeds Apache ECharts from the original frontend. Apache-2.0 license: `resources/preview/ECHARTS-LICENSE.txt`; the bundled JavaScript retains its own notices.

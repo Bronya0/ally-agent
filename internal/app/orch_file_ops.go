@@ -569,8 +569,8 @@ func planDeletePath(spec sandbox.Spec, roots []string, requestPath string, recur
 func localCommandToolWarnings(commandLine string) []string {
 	for _, invocation := range command.Invocations(commandLine) {
 		switch invocation.Name {
-		case "grep", "egrep", "fgrep", "rg", "ripgrep":
-			return []string{"Prefer the dedicated grep tool for local content searches instead of running grep/rg through command. It provides structured results, output limits, and pagination."}
+		case "grep", "egrep", "fgrep":
+			return []string{"Prefer the dedicated grep tool for local content searches instead of running grep through command. It provides structured results, output limits, and pagination."}
 		}
 	}
 	return nil

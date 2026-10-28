@@ -11,10 +11,10 @@ package app
 // prov_/host_/infra_ 只是命名约定（同一个包，谁都能调谁，这也正是它们需要文档约束的
 // 原因）。真正跨目录的两条边界破坏起来没有任何症状，所以钉在这里：
 //
-//  1. internal/ 下除 internal/app 与 internal/desktop 外的所有包（tools、sandbox、builtin_skills …）不许
+//  1. internal/ 下除 internal/app 外的所有包（tools、sandbox、builtin_skills …）不许
 //     import internal/app：纯算法层要能脱离 App 状态单测，反向依赖一出现这条前提就没了。
-//  2. internal/app 里除 host_*.go 外的实现文件不许 import Wails runtime：宿主中立，
-//     只有 host_*.go 与根目录 main.go 能碰窗口/事件/原生 API。
+//  2. internal/app 里除 host_*.go 外的实现文件不许 import Wails runtime 或 MyGo：宿主中立；
+//     界面与窗口 API 由根目录 desktop/ 包负责，main.go 只保留程序入口。
 
 import (
 	"fmt"
@@ -30,7 +30,7 @@ import (
 func TestLayerBoundaries(t *testing.T) {
 	const (
 		appImport     = "ally-dev/internal/app"
-		desktopImport = "ally-dev/internal/desktop"
+		desktopImport = "ally-dev/desktop"
 		wailsRuntime  = "github.com/wailsapp/wails/v3/"
 	)
 	root := filepath.Join("..", "..")
@@ -53,10 +53,9 @@ func TestLayerBoundaries(t *testing.T) {
 			return parseErr
 		}
 		inApp := strings.HasPrefix(relative, "internal/app/")
-		inDesktop := strings.HasPrefix(relative, "internal/desktop/")
 		for _, imported := range imports {
 			switch {
-			case !inApp && !inDesktop && (imported == appImport || imported == desktopImport):
+			case !inApp && (imported == appImport || imported == desktopImport):
 				violations = append(violations, fmt.Sprintf("%s import 了 %s（纯算法层不许反向依赖 app/desktop）", relative, imported))
 			case inApp && !strings.HasPrefix(filepath.Base(relative), "host_") && (strings.HasPrefix(imported, wailsRuntime) || strings.HasPrefix(imported, "github.com/egoist/mygo")):
 				violations = append(violations, fmt.Sprintf("%s import 了 %s（宿主中立：只有 host_*.go 能碰桌面运行时）", relative, imported))

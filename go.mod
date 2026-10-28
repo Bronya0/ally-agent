@@ -2,6 +2,8 @@ module ally-dev
 
 go 1.27.3
 
+tool github.com/egoist/mygo/cmd/mygo
+
 require (
 	codeberg.org/readeck/go-readability/v2 v2.1.2
 	github.com/Microsoft/go-winio v0.6.2

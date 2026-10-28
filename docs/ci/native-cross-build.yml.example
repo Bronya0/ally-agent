@@ -1,0 +1,9 @@
+# Reuse the same workflow rather than copying build/package commands.
+name: Native desktop cross-build
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
