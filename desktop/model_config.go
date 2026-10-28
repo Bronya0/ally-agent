@@ -30,6 +30,7 @@ func (a *desktop) editModel(index int) {
 		return
 	}
 	a.modelEdit = index
+	a.modelForm.KeyEpoch++
 	a.modelForm.AdvancedOpen = false
 	a.modelPrevious = nil
 	if index >= 0 && index < len(a.config.Models) {

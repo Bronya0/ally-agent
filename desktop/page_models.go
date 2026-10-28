@@ -337,12 +337,13 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 			fieldLabel(c, "API Keys")
 			for i := range a.modelKeys {
 				i := i
-				ui.Row(c.Key(fmt.Sprintf("chat-key-%d", i))).Gap(gapTight).Children(func() {
+				ui.Row(c.Key(fmt.Sprintf("chat-key-%d-%d", a.modelForm.KeyEpoch, i))).Gap(gapTight).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, fmt.Sprint(i+1)).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Width(14)
-					uikit.Input(c, &a.modelKeys[i]).Password().Label(fmt.Sprintf("API Key %d", i+1)).Grow(1)
+					uikit.PasswordInput(c, "password", fmt.Sprintf("API Key %d", i+1), &a.modelKeys[i]).Grow(1)
 					if len(a.modelKeys) > 1 {
 						iconAction(c, "remove-key-"+fmt.Sprint(i), "移除密钥", "close", 22, func() {
 							a.modelKeys = append(a.modelKeys[:i], a.modelKeys[i+1:]...)
+							a.modelForm.KeyEpoch++
 						})
 					}
 				})
@@ -586,12 +587,13 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 		fieldLabel(c, "API Keys")
 		for i := range s.draftKeys {
 			i := i
-			ui.Row(c.Key(fmt.Sprintf("image-key-%d", i))).Gap(gapTight).Children(func() {
+			ui.Row(c.Key(fmt.Sprintf("image-key-%d-%d", s.keyEpoch, i))).Gap(gapTight).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, fmt.Sprint(i+1)).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Width(14)
-				uikit.Input(c, &s.draftKeys[i]).Password().Label(fmt.Sprintf("图片 API Key %d", i+1)).Grow(1)
+				uikit.PasswordInput(c, "password", fmt.Sprintf("图片 API Key %d", i+1), &s.draftKeys[i]).Grow(1)
 				if len(s.draftKeys) > 1 {
 					iconAction(c, "image-remove-key-"+fmt.Sprint(i), "移除密钥", "close", 22, func() {
 						s.draftKeys = append(s.draftKeys[:i], s.draftKeys[i+1:]...)
+						s.keyEpoch++
 					})
 				}
 			})

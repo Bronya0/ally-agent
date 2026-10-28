@@ -10,6 +10,7 @@ import (
 )
 
 type imageModelsState struct {
+	keyEpoch       int
 	config         backend.ImageGenerationConfig
 	generate, edit string
 	draft          backend.ImageModelConfig
@@ -56,6 +57,7 @@ func (a *desktop) ensureImageModels() {
 	}
 }
 func (s *imageModelsState) openForm(index int) {
+	s.keyEpoch++
 	s.editing = index
 	s.formOpen = true
 	s.advancedOpen = false

@@ -18,7 +18,7 @@ func view(c *ui.Context) {
 }
 ```
 
-Exports: Button, Select, editable Combobox, Tabs, Segmented, Card, Tag,
+Exports: Button, Select, editable Combobox, Tabs, Segmented, Card, Tag, PasswordInput, NumberInput,
 FieldLabel, FieldNote, TextField, TextArea, DialogPanel, Popup and PopupTransition.
 ControlHeight and Radius are shared sizing tokens. Choice rows use a subtle
 accent fill plus a check for selection; hover and keyboard highlight use the
@@ -45,3 +45,8 @@ Combobox use `SelectBase` / `ComboboxBase`; Tabs use `TabsBase`; input fields us
 MyGo text inputs. This package styles their parts and preserves their native
 keyboard navigation, focus, popup dismissal and value binding. Use MyGo's
 Scroll / ScrollHorizontal for overflow rather than implementing wheel handling.
+
+PasswordInput combines a native text input and a visibility button. NumberInput
+combines native text and button controls: MyGo v0.7.1's NumberInput has a fixed
+inner width and does not expose its parts for styling. Both controls keep their
+state per keyed instance.

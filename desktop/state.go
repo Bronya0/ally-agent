@@ -291,6 +291,7 @@ func clampView(v, def float64) float64 {
 
 // modelForm is the chat-model editor dialog state.
 type modelForm struct {
+	KeyEpoch     int
 	AdvancedOpen bool
 	Open         bool
 	Index        int

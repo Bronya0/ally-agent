@@ -289,9 +289,10 @@ func fieldNote(c *ui.Context, s string)  { uikit.FieldNote(c, s) }
 func fieldRow(c *ui.Context, id, name string, value *string, password bool) {
 	ui.Column(c.Key("field-" + id)).JustifySelf(ui.Stretch).AlignSelf(ui.Stretch).MinWidth(0).Shrink(0).Gap(6).Children(func() {
 		fieldLabel(c, name)
-		e := uikit.Input(c, value).FillWidth().MinWidth(0).Label(name).Placeholder(fieldExample(id, name)).FontSize(fsBody)
 		if password {
-			e.Password()
+			uikit.PasswordInput(c, id, name, value, fieldExample(id, name)).FillWidth()
+		} else {
+			uikit.Input(c, value).FillWidth().MinWidth(0).Label(name).Placeholder(fieldExample(id, name)).FontSize(fsBody)
 		}
 	})
 }

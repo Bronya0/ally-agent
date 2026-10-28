@@ -2,6 +2,7 @@
 package uikit
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,8 @@ const Radius float32 = 8
 const chromeFade = 140 * time.Millisecond
 
 var chevronDown = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5L11.5 6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`))
+var eyeIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M1.3 8s2.3-4 6.7-4 6.7 4 6.7 4-2.3 4-6.7 4S1.3 8 1.3 8Z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`))
+var eyeOffIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M1.3 8s2.3-4 6.7-4 6.7 4 6.7 4-2.3 4-6.7 4S1.3 8 1.3 8Z M2 2l12 12" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`))
 
 func PopupTransition() ui.ElementTransition {
 	return ui.ElementTransition{Duration: 180 * time.Millisecond, Enter: &ui.Motion{Y: 6, Scale: 0.985}, Exit: &ui.Motion{Y: 4, Scale: 0.985}}
@@ -180,8 +183,100 @@ func Input(c *ui.Context, value *string) ui.Element {
 	return InputChrome(c, ui.TextInput(c, value)).Height(ControlHeight)
 }
 func Area(c *ui.Context, value *string) ui.Element { return InputChrome(c, ui.TextArea(c, value)) }
+
+// PasswordInput keeps the text in MyGo's input, with visibility local to this control.
+func PasswordInput(c *ui.Context, key, label string, value *string, placeholder ...string) ui.Element {
+	root := InputChrome(c, ui.Row(c.Key(key)).Height(ControlHeight).AlignItems(ui.Center).Gap(0))
+	visible := ui.Local(root, "visible", func() bool { return false })
+	root.Children(func() {
+		input := ui.TextInputBase(c.Key("input"), value).Grow(1).MinWidth(0).FillHeight().Padding(5, 10).
+			Border(0, ui.Transparent).Background(ui.Transparent).FontSize(14).TextColor(c.Theme().Text).Label(label)
+		if len(placeholder) > 0 {
+			input.Placeholder(placeholder[0])
+		}
+		if !*visible {
+			input.Password()
+		}
+		action, icon := "显示 "+label, eyeIcon
+		if *visible {
+			action, icon = "隐藏 "+label, eyeOffIcon
+		}
+		button := ui.ButtonBase(c.Key("visibility")).Size(32, ControlHeight).Shrink(0).Center().Cursor(ui.CursorPointer).Label(action).Tooltip(action)
+		button.Children(func() { ui.Icon(c, icon).Size(15, 15).TextColor(c.Theme().TextMuted) })
+		if button.Clicked() {
+			*visible = !*visible
+		}
+	})
+	return root
+}
+
+type numberInputState struct {
+	text string
+	last float64
+}
+
+// MyGo v0.7.1 NumberInput fixes the inner input width and does not expose its
+// parts. Compose its native text and button controls to fill available width.
 func NumberInput(c *ui.Context, key, label string, value *float64, lo, hi, step float64) ui.Element {
-	return InputChrome(c, ui.NumberInput(c.Key(key), value, lo, hi, step).Label(label).Height(ControlHeight))
+	root := InputChrome(c, ui.Row(c.Key(key)).Height(ControlHeight).AlignItems(ui.Center).Gap(0))
+	decimals := 0
+	if s := strconv.FormatFloat(step, 'f', -1, 64); strings.Contains(s, ".") {
+		decimals = len(s) - strings.IndexByte(s, '.') - 1
+	}
+	format := func(v float64) string { return strconv.FormatFloat(v, 'f', decimals, 64) }
+	state := ui.Local(root, "number", func() numberInputState { return numberInputState{text: format(*value), last: *value} })
+	if state.last != *value {
+		state.last, state.text = *value, format(*value)
+	}
+	set := func(v float64) {
+		v = math.Max(lo, math.Min(hi, v))
+		p := math.Pow10(decimals)
+		v = math.Round(v*p) / p
+		if *value != v {
+			*value = v
+			root.SetChanged()
+		}
+		state.last, state.text = *value, format(*value)
+	}
+	root.Children(func() {
+		input := ui.TextInputBase(c.Key("input"), &state.text).Grow(1).MinWidth(0).FillHeight().Padding(5, 10).
+			Border(0, ui.Transparent).Background(ui.Transparent).FontSize(14).TextColor(c.Theme().Text).Label(label)
+		if input.Changed() {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(state.text), 64); err == nil && !math.IsNaN(v) && v >= lo && v <= hi {
+				if *value != v {
+					*value = v
+					state.last = v
+					root.SetChanged()
+				}
+			}
+		}
+		if input.Shortcut(0, ui.KeyUp) {
+			set(*value + step)
+		}
+		if input.Shortcut(0, ui.KeyDown) {
+			set(*value - step)
+		}
+		if !input.Focused() {
+			state.text = format(*value)
+		}
+		for _, item := range []struct {
+			text, name string
+			delta      float64
+		}{{"−", "减少", -step}, {"+", "增加", step}} {
+			item := item
+			button := ui.ButtonBase(c.Key(item.name)).Size(24, 28).Shrink(0).Center().Radius(5).Cursor(ui.CursorPointer).
+				Label(item.name + " " + label).Tooltip(item.name).Disabled(item.delta < 0 && *value <= lo || item.delta > 0 && *value >= hi)
+			if button.Hovered() {
+				button.Background(c.Theme().Surface)
+			}
+			button.Children(func() { ui.Text(c, item.text).FontSize(15).TextColor(c.Theme().TextMuted).Unselectable() })
+			if button.Clicked() {
+				set(*value + item.delta)
+			}
+		}
+		ui.Box(c).Width(5).Shrink(0)
+	})
+	return root
 }
 
 // NumberStepper builds a filled numeric field with compact, borderless controls.

@@ -89,3 +89,109 @@ func TestFormFieldsHaveGap(t *testing.T) {
 		t.Fatalf("fields touch: %#v %#v", a, b)
 	}
 }
+
+func TestNumberInputFillsWidthAndSteps(t *testing.T) {
+	value := 8192.0
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(ui.DarkTheme())
+		ui.Column(c).Width(300).Children(func() { NumberInput(c, "number", "Max Tokens", &value, 0, 10000000, 1).FillWidth() })
+	}, 360, 120)
+	input, ok := tt.Find("Max Tokens")
+	if !ok {
+		t.Fatal("missing input")
+	}
+	minus, ok := tt.Find("减少 Max Tokens")
+	if !ok {
+		t.Fatal("missing decrement")
+	}
+	plus, ok := tt.Find("增加 Max Tokens")
+	if !ok {
+		t.Fatal("missing increment")
+	}
+	if input.W < 200 || minus.X < input.X+input.W-1 || plus.X < minus.X {
+		t.Fatalf("number layout: input=%+v minus=%+v plus=%+v", input, minus, plus)
+	}
+	if err := tt.Click("增加 Max Tokens"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if value != 8193 {
+		t.Fatalf("increment: %v", value)
+	}
+	if err := tt.Click("减少 Max Tokens"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if value != 8192 {
+		t.Fatalf("decrement: %v", value)
+	}
+	if err := tt.Click("Max Tokens"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(0, ui.KeyUp)
+	tt.Frame()
+	if value != 8193 {
+		t.Fatalf("keyboard increment: %v", value)
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("12345")
+	tt.Frame()
+	if value != 12345 {
+		t.Fatalf("typed value: %v", value)
+	}
+}
+
+func TestPasswordInputVisibilityToggle(t *testing.T) {
+	secret := "secret-value"
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(ui.DarkTheme())
+		ui.Column(c).Width(300).Children(func() { PasswordInput(c, "password", "API Key 1", &secret).FillWidth() })
+	}, 360, 120)
+	input, ok := tt.Find("API Key 1")
+	if !ok {
+		t.Fatal("missing password input")
+	}
+	toggle, ok := tt.Find("显示 API Key 1")
+	if !ok {
+		t.Fatal("missing visibility toggle")
+	}
+	if toggle.X < input.X+input.W-1 || toggle.X+toggle.W > 302 {
+		t.Fatalf("password layout: input=%+v toggle=%+v", input, toggle)
+	}
+	if err := tt.Click("显示 API Key 1"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if _, ok := tt.Find("隐藏 API Key 1"); !ok {
+		t.Fatal("show did not update toggle")
+	}
+	if secret != "secret-value" {
+		t.Fatal("visibility changed value")
+	}
+	if err := tt.Click("隐藏 API Key 1"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if _, ok := tt.Find("显示 API Key 1"); !ok {
+		t.Fatal("hide did not update toggle")
+	}
+}
+
+func TestPasswordInputReopenStartsHidden(t *testing.T) {
+	secret, open := "secret", true
+	tt := ui.NewTester(func(c *ui.Context) {
+		if open {
+			PasswordInput(c, "secret", "密钥", &secret).Width(200)
+		}
+	}, 300, 100)
+	if err := tt.Click("显示 密钥"); err != nil {
+		t.Fatal(err)
+	}
+	open = false
+	tt.Frame()
+	open = true
+	tt.Frame()
+	if _, ok := tt.Find("显示 密钥"); !ok {
+		t.Fatal("reopened password is still visible")
+	}
+}
