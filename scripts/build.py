@@ -147,7 +147,7 @@ def verify_archive(archive, goos, arch=None):
 
 
 def windows(config, exe_only=False):
-    for arch in (('amd64',) if exe_only else ('amd64', 'arm64')):
+    for arch in ((host_arch(),) if exe_only else ('amd64', 'arm64')):
         windows_arch(config, arch, exe_only)
 
 
@@ -162,7 +162,7 @@ def windows_arch(config, arch, exe_only=False):
             try:
                 os.replace(exe, DIST / 'ally-native.exe')
             except PermissionError as error:
-                raise RuntimeError('dist/ally-native.exe is in use. Close Ally and rerun scripts/build.sh.') from error
+                raise RuntimeError('dist/ally-native.exe is in use. Close Ally and rerun scripts/build.bat.') from error
             (DIST / 'tools').mkdir(exist_ok=True)
             shutil.copy2(stage / 'tools/rg.exe', DIST / 'tools/rg.exe')
             print('Built:', DIST / 'ally-native.exe')
@@ -248,33 +248,79 @@ def macos(config):
             run('hdiutil', 'verify', dmg)
 
 
+def host_arch():
+    machine = platform.machine().lower()
+    if machine in ('arm64', 'aarch64'):
+        return 'arm64'
+    if machine in ('amd64', 'x86_64'):
+        return 'amd64'
+    raise RuntimeError('Unsupported development architecture: ' + machine)
+
+
+def macos_app(config):
+    """Fast local .app for this Mac; no release archives or universal build."""
+    arch = host_arch()
+    with tempfile.TemporaryDirectory(prefix='ally-dev-mac-', dir=DIST) as directory:
+        stage = Path(directory)
+        run('go', 'tool', 'mygo', 'build', '-platform', 'darwin/' + arch,
+            '-skip-dmg', '-skip-notarize', '-sign', '-', '-o', stage, env=build_env())
+        app = stage / ('darwin-' + arch) / (config['name'] + '.app')
+        rg = app / 'Contents/MacOS/tools/rg'
+        ripgrep('darwin', arch, rg)
+        legal_files(app / 'Contents/Resources')
+        run('codesign', '--force', '--sign', '-', '--timestamp=none', rg)
+        run('codesign', '--force', '--deep', '--sign', '-', '--timestamp=none', app)
+        run('codesign', '--verify', '--deep', '--strict', app)
+        target = DIST / (config['name'] + '.app')
+        if target.is_symlink():
+            raise RuntimeError('Refusing to replace symlink: ' + str(target))
+        backup = stage / 'previous.app'
+        if target.exists():
+            os.replace(target, backup)
+        try:
+            os.replace(app, target)
+        except OSError:
+            if backup.exists():
+                os.replace(backup, target)
+            raise
+        print('Built:', target, flush=True)
+
+
 def main():
+    if sys.version_info < (3, 9):
+        raise RuntimeError('Python 3.9+ is required.')
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('target', choices=['windows-exe', 'windows', 'linux', 'macos', 'all'])
+    parser.add_argument('target', choices=['dev', 'release'])
     args = parser.parse_args()
+    system = platform.system()
+    if args.target == 'release' and system != 'Darwin':
+        parser.error('Release packaging requires macOS for signing and DMG creation.')
+    if args.target == 'dev' and system not in ('Windows', 'Darwin'):
+        parser.error('Local development builds support Windows and macOS.')
     config_path = ROOT / 'mygo.json'
     config = json.loads(config_path.read_text(encoding='utf-8'))
-    tag = os.environ.get('BUILD_TAG', '')
+    tag = os.environ.get('BUILD_TAG', '') if args.target == 'release' else ''
     match = re.fullmatch(r'v?([0-9]+[.][0-9]+[.][0-9]+(?:[-+][0-9A-Za-z.-]+)?)', tag)
     if match:
         config['version'] = match.group(1)
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + chr(10), encoding='utf-8')
-    if args.target in ('all', 'macos') and platform.system() != 'Darwin':
-        parser.error('This target needs macOS to sign and create the DMG.')
     DIST.mkdir(exist_ok=True)
     (DIST / 'go.mod').write_text('module ally-build-artifacts' + chr(10), encoding='utf-8')
-    RELEASE.mkdir(exist_ok=True)
-    if args.target in ('windows-exe', 'windows', 'all'):
-        windows(config, args.target == 'windows-exe')
-    if args.target in ('linux', 'all'):
+    if args.target == 'dev':
+        if system == 'Windows':
+            windows(config, exe_only=True)
+        else:
+            macos_app(config)
+    else:
+        RELEASE.mkdir(exist_ok=True)
+        windows(config)
         linux(config)
-    if args.target in ('macos', 'all'):
         macos(config)
 
 
 if __name__ == '__main__':
     try:
         main()
-    except (RuntimeError, subprocess.CalledProcessError) as error:
+    except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
         print('Build failed: ' + str(error), file=sys.stderr)
         sys.exit(1)

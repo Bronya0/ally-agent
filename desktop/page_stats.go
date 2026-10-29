@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	"fmt"
 	"time"
 
@@ -16,10 +17,19 @@ var chartPalette = []ui.Color{
 	ui.Hex("#7f9ad6"), ui.Hex("#bfa05f"),
 }
 
-func (a *desktop) loadStats() {
+func (a *desktop) loadStats(manual ...bool) {
 	go func() {
 		stats := a.core.GetTokenStats()
-		a.win.Update(func() { a.stats = stats })
+		a.win.Update(func() {
+			a.stats = stats
+			if len(manual) > 0 && manual[0] {
+				if stats.Error != "" {
+					a.notifyError(stats.Error)
+				} else {
+					a.notifySuccess("用量统计已刷新")
+				}
+			}
+		})
 	}()
 }
 
@@ -30,7 +40,7 @@ func (a *desktop) statsPageBody(c *ui.Context) {
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 		fieldNote(c, "今日 / 近 7 日 / 本月 三个固定区间")
 		ui.Spacer(c)
-		flat(c, "刷新").OnClick(func() { a.loadStats() })
+		flat(c, "刷新").OnClick(func() { a.loadStats(true) })
 	})
 	empty := a.stats.SummaryMonth.TotalTokens == 0 && a.stats.Summary7Days.TotalTokens == 0 && a.stats.SummaryToday.TotalTokens == 0
 	if empty {
@@ -116,8 +126,8 @@ func (a *desktop) statsBars(c *ui.Context) {
 			for i, d := range daily {
 				tip := fmt.Sprintf("%s · 输入 %s · 输出 %s · 合计 %s", d.Date, fmtK(d.InputTokens), fmtK(d.OutputTokens), fmtK(d.InputTokens+d.OutputTokens))
 				// Stacked: input from zero, output on top of it.
-				chart.Rect(c, x.Band(i), y.Span(0, input[i])).Radius(2).Background(chartPalette[0]).Tooltip(tip)
-				chart.Rect(c, x.Band(i), y.Span(input[i], input[i]+output[i])).Radius(2).Background(chartPalette[1]).Tooltip(tip)
+				uikit.Tooltip(c, chart.Rect(c, x.Band(i), y.Span(0, input[i])).Radius(2).Background(chartPalette[0]), tip)
+				uikit.Tooltip(c, chart.Rect(c, x.Band(i), y.Span(input[i], input[i]+output[i])).Radius(2).Background(chartPalette[1]), tip)
 			}
 		}).Label("近30天用量图").Height(200).Gap(6)
 		ui.Row(c).FillWidth().Children(func() {
@@ -185,7 +195,7 @@ func (a *desktop) statsHeatmap(c *ui.Context) {
 					fill = ui.Hex("#2a4636")
 				}
 				cell := ui.Box(c).Height(26).Radius(4).Background(fill).Center()
-				cell.Tooltip(fmt.Sprintf("%s · %s tokens", key, fmtK(value)))
+				uikit.Tooltip(c, cell, fmt.Sprintf("%s · %s tokens", key, fmtK(value)))
 				cell.Children(func() { ui.Text(c, fmt.Sprint(day)).FontSize(fsTiny).TextColor(c.Theme().TextMuted) })
 			}
 		})
@@ -239,7 +249,7 @@ func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenD
 				if name == "" {
 					name = item.FullName
 				}
-				box.Tooltip(fmt.Sprintf("%s · 输入 %s · 输出 %s · %.1f%%", name, fmtK(item.InputTokens), fmtK(item.OutputTokens), float64(item.InputTokens+item.OutputTokens)*100/float64(total)))
+				uikit.Tooltip(c, box, fmt.Sprintf("%s · 输入 %s · 输出 %s · %.1f%%", name, fmtK(item.InputTokens), fmtK(item.OutputTokens), float64(item.InputTokens+item.OutputTokens)*100/float64(total)))
 			}
 			ui.Column(c).Grow(1).Gap(2).Children(func() {
 				for i, item := range stats {
@@ -248,9 +258,9 @@ func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenD
 					if name == "" {
 						name = item.FullName
 					}
-					ui.Row(c).Gap(gapField).AlignItems(ui.Center).Tooltip(fmt.Sprintf("%s · 输入 %s · 输出 %s", name, fmtK(item.InputTokens), fmtK(item.OutputTokens))).Children(func() {
+					uikit.Tooltip(c, ui.Row(c).Gap(gapField).AlignItems(ui.Center), fmt.Sprintf("%s · 输入 %s · 输出 %s", name, fmtK(item.InputTokens), fmtK(item.OutputTokens))).Children(func() {
 						ui.Box(c).Size(8, 8).Radius(2).Background(chartPalette[i%len(chartPalette)])
-						ui.Text(c, short(name, 26)).FontSize(fsTiny).Tooltip(item.FullName).SingleLine()
+						uikit.Tooltip(c, ui.Text(c, short(name, 26)).FontSize(fsTiny), item.FullName).SingleLine()
 						ui.Spacer(c)
 						fieldNote(c, fmt.Sprintf("%.1f%%", float64(value)*100/float64(total)))
 						ui.Text(c, fmtK(value)).FontSize(fsTiny).TextColor(c.Theme().TextMuted)

@@ -25,8 +25,8 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 		uikit.Input(c.Key("ssh-search"), &a.sshF.Search).Placeholder("搜索").Label("搜索 SSH 服务器").Width(200)
 		ui.Spacer(c)
 		flat(c, "导入").OnClick(func() { a.importSSH() })
-		flat(c, "导出").Disabled(len(a.sshServers) == 0).Tooltip("导出文件含密码等凭据明文，请妥善保管").OnClick(func() { a.exportSSH() })
-		flat(c, "刷新").OnClick(func() { a.refreshSSH() })
+		uikit.Tooltip(c, flat(c, "导出").Disabled(len(a.sshServers) == 0), "导出文件含密码等凭据明文，请妥善保管").OnClick(func() { a.exportSSH() })
+		flat(c, "刷新").OnClick(func() { a.refreshSSH(true) })
 		primary(c, "添加").OnClick(func() { a.openSSHEditor("", "") })
 	})
 	groups := a.sshGroups()
@@ -78,14 +78,9 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 				node := node
 				rowCard(c, "ssh-"+node.ID, func() {
 					ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-						ui.Text(c, node.Host).Font(monoFamily).FontSize(fsBody).Bold().
-							Tooltip(fmt.Sprintf("%s@%s:%d", node.Username, node.Host, node.Port))
+						uikit.Tooltip(c, ui.Text(c, node.Host).Font(monoFamily).FontSize(fsBody).Bold(), fmt.Sprintf("%s@%s:%d", node.Username, node.Host, node.Port))
 						if node.RiskLevel != "" {
-							risk := "低风险"
-							if node.RiskLevel == "high" {
-								risk = "高风险"
-							}
-							statusBadge(c, risk, map[bool]string{true: "error", false: "success"}[node.RiskLevel == "high"])
+							sshRiskBadge(c, node.RiskLevel)
 						}
 						neutralChip(c, node.Username)
 						neutralChip(c, fmt.Sprintf(":%d", node.Port))
@@ -100,15 +95,15 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 						if a.sshF.TestBusy[node.ID] {
 							label = "测试中…"
 						}
-						flat(c, label).Disabled(a.sshF.TestBusy[node.ID]).OnClick(func() { a.testSSHNode(node) })
-						flat(c, "复制").OnClick(func() { a.openSSHClone(node) })
-						flat(c, "编辑").OnClick(func() { a.openSSHEditor(node.ID, node.Group) })
-						dangerButton(c, "删除").OnClick(func() {
+						cardFlat(c, label).Disabled(a.sshF.TestBusy[node.ID]).OnClick(func() { a.testSSHNode(node) })
+						cardFlat(c, "复制").OnClick(func() { a.openSSHClone(node) })
+						cardFlat(c, "编辑").OnClick(func() { a.openSSHEditor(node.ID, node.Group) })
+						cardDanger(c, "删除").OnClick(func() {
 							a.confirmAction("删除服务器", node.Alias, func() error { return a.core.DeleteSSHServer(node.ID) }, func() { a.refreshSSH() })
 						})
 					})
 					if node.Description != "" {
-						ui.Text(c, node.Description).FontSize(fsSmall).TextColor(c.Theme().TextMuted).SingleLine().Tooltip(node.Description)
+						uikit.Tooltip(c, ui.Text(c, node.Description).FontSize(fsSmall).TextColor(c.Theme().TextMuted).SingleLine(), node.Description)
 					}
 				})
 			}
@@ -296,7 +291,7 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 				n := n
 				tone := c.Theme().Success
 				if n == 1 {
-					tone = colDanger()
+					tone = c.Theme().Danger
 				}
 				choiceButton(c, fmt.Sprintf("ssh-risk-%d", n), title, risk == n, tone).
 					OnClick(func() { d.RiskLevel = []string{"low", "high"}[n] })
@@ -322,7 +317,7 @@ func (a *desktop) saveSSHNode() {
 		d.Group = ""
 	}
 	if d.Alias == "" {
-		a.status = "昵称必填"
+		a.notify("昵称必填")
 		return
 	}
 	for _, node := range a.sshServers {
@@ -330,33 +325,33 @@ func (a *desktop) saveSSHNode() {
 			continue
 		}
 		if node.ID != a.sshF.EditingID {
-			a.status = "该昵称已被其他服务器使用"
+			a.notify("该昵称已被其他服务器使用")
 			return
 		}
 	}
 	if d.Host == "" {
-		a.status = "主机必填"
+		a.notify("主机必填")
 		return
 	}
 	if d.Username == "" {
-		a.status = "用户名必填"
+		a.notify("用户名必填")
 		return
 	}
 	if d.Description == "" {
-		a.status = "用途描述必填"
+		a.notify("用途描述必填")
 		return
 	}
 	if d.AuthType == "password" && d.Password == "" {
-		a.status = "请填写密码，或改用其它认证方式"
+		a.notify("请填写密码，或改用其它认证方式")
 		return
 	}
 	if d.AuthType == "key" && d.KeyPath == "" {
-		a.status = "请填写私钥路径"
+		a.notify("请填写私钥路径")
 		return
 	}
 	port, err := strconv.Atoi(strings.TrimSpace(a.sshF.PortText))
 	if err != nil || port < 1 || port > 65535 {
-		a.status = "端口必须是 1 至 65535 的整数"
+		a.notify("端口必须是 1 至 65535 的整数")
 		return
 	}
 	d.Port = port
@@ -370,14 +365,14 @@ func (a *desktop) saveSSHNode() {
 		a.win.Update(func() {
 			a.sshF.Busy = false
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				return
 			}
 			a.sshF.EditorOpen = false
 			a.sshF.CloneMode = false
 			a.sshF.CloneSource = ""
 			a.sshServers = servers
-			a.notify("服务器配置已保存")
+			a.notifySuccess("服务器配置已保存")
 		})
 	}()
 }
@@ -391,7 +386,7 @@ func (a *desktop) testSSHNode(node backend.SSHServerNode) {
 			if result.OK {
 				a.notify(fmt.Sprintf("SSH 连通性测试通过（%d ms）", result.DurationMS))
 			} else {
-				a.notify("SSH 连通性测试失败：" + result.Error)
+				a.notifyError("SSH 连通性测试失败：" + result.Error)
 			}
 		})
 	}()
@@ -415,7 +410,7 @@ func (a *desktop) importSSH() {
 			Nodes []backend.SSHServerNode `json:"nodes"`
 		}
 		if err := json.Unmarshal([]byte(data), &payload); err != nil || len(payload.Nodes) == 0 {
-			a.win.Update(func() { a.status = "文件格式不正确，需要包含 nodes 数组的 JSON" })
+			a.win.Update(func() { a.notify("文件格式不正确，需要包含 nodes 数组的 JSON") })
 			return
 		}
 		added, updated := 0, 0
@@ -440,7 +435,7 @@ func (a *desktop) importSSH() {
 		servers := a.core.ListAllSSHServers()
 		a.win.Update(func() {
 			a.sshServers = servers
-			a.status = fmt.Sprintf("导入完成：新增 %d，更新 %d", added, updated)
+			a.notifySuccess(fmt.Sprintf("导入完成：新增 %d，更新 %d", added, updated))
 		})
 	}()
 }
@@ -449,7 +444,7 @@ func (a *desktop) exportSSH() {
 	payload := map[string]any{"nodes": a.sshServers}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		a.notify(err.Error())
+		a.notifyError(err.Error())
 		return
 	}
 	a.exportText("ally-ssh-cluster-"+nowDate()+".json", string(data))
@@ -591,12 +586,8 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 						})
 						ui.Text(c, node.Alias).FontSize(fsSmall).Width(140).SingleLine()
 						ui.Text(c, node.Username+"@"+node.Host+":"+fmt.Sprint(node.Port)).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Width(200).SingleLine()
-						ui.Text(c, node.Description).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Tooltip(node.Description).SingleLine().Grow(1)
-						risk := "低风险"
-						if node.RiskLevel == "high" {
-							risk = "高风险"
-						}
-						statusBadge(c, risk, map[bool]string{true: "error", false: "success"}[node.RiskLevel == "high"])
+						uikit.Tooltip(c, ui.Text(c, node.Description).FontSize(fsTiny).TextColor(c.Theme().TextMuted), node.Description).SingleLine().Grow(1)
+						sshRiskBadge(c, node.RiskLevel)
 					})
 					if row.Clicked() {
 						a.sshF.AuthDraft[node.Alias] = !a.sshF.AuthDraft[node.Alias]
@@ -633,10 +624,18 @@ func (a *desktop) commitSSHAuth(workspace string) {
 		err := a.core.SetWorkspaceAllowedServers(workspace, aliases)
 		a.win.Update(func() {
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				return
 			}
 			a.notify("当前工作区授权已更新")
 		})
 	}()
+}
+
+func sshRiskBadge(c *ui.Context, level string) ui.Element {
+	label, tone := "低风险", uikit.Success
+	if level == "high" {
+		label, tone = "高风险", uikit.Error
+	}
+	return uikit.ColorTag(c, label, uikit.TagOptions{Tone: tone, Compact: true, Round: true, Borderless: true})
 }

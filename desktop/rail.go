@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -104,7 +105,7 @@ func (a *desktop) railBody(c *ui.Context, width *float32) {
 			if a.status == "" || a.status == "就绪" || a.status == "操作完成" {
 				tone = p.muted
 			}
-			ui.Text(c, short(a.status, 20)).FontSize(10.5).TextColor(tone).Tooltip(a.status).SingleLine()
+			uikit.RightTooltip(c, ui.Text(c, short(a.status, 20)).FontSize(10.5).TextColor(tone).SingleLine(), a.status)
 		})
 	})
 }
@@ -245,7 +246,7 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 		fill = p.hover
 	}
 	row.Background(fadeColor(row, "fill", fill))
-	row.Tooltip(tip)
+	uikit.RightTooltip(c, row, tip)
 	row.Children(func() {
 		btn := ui.ButtonBase(c.Key("rail-ws-btn-" + root)).Grow(1).Height(24).Justify(ui.Start).Label(label).Cursor(ui.CursorPointer)
 		btn.OnClick(func() {
@@ -322,7 +323,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 				if title == "" {
 					title = "会话"
 				}
-				row.Tooltip(fmt.Sprintf("%s\n%s · %d 条", title, fmtTime(entry.UpdatedAt), entry.MessageCount))
+				uikit.RightTooltip(c, row, fmt.Sprintf("%s\n%s · %d 条", title, fmtTime(entry.UpdatedAt), entry.MessageCount))
 				row.Children(func() {
 					btn := ui.ButtonBase(c.Key("rail-sess-btn-" + entry.ID)).Grow(1).Height(28).Justify(ui.Start).Label(title).Cursor(ui.CursorPointer)
 					btn.OnClick(func() { a.openSession(entry.ID) })

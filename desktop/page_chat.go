@@ -342,11 +342,15 @@ func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[
 	}
 	isError := m["error"] != nil
 	if isError {
+		if userCancelledMessage(m) {
+			cancelledResult(c)
+			return
+		}
 		notice(c, "error", content)
 		return
 	}
 	markdown.View(c.Key(fmt.Sprintf("md-%s-%d", t.ID, i)), content, a.markdownOptions(t, i)).FillWidth()
-	if suggestions, ok := m["suggestions"].([]any); ok && len(suggestions) > 0 && !t.Busy {
+	if suggestions, ok := m["suggestions"].([]any); ok && len(suggestions) > 0 {
 		ui.Row(c).Gap(gapInline).Wrap().Children(func() {
 			for n, s := range suggestions {
 				text := fmt.Sprint(s)
@@ -364,14 +368,14 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 		if !show {
 			return
 		}
-		ui.Text(c, fmtDur(stat.DurationMS)).FontSize(fsSmall).TextColor(c.Theme().TextMuted).Tooltip("本轮耗时")
+		uikit.Tooltip(c, ui.Text(c, fmtDur(stat.DurationMS)).FontSize(fsSmall).TextColor(c.Theme().TextMuted), "本轮耗时")
 		if hit := stat.CacheHit + stat.CacheMiss; hit > 0 {
-			ui.Text(c, fmt.Sprintf("cache %d%%", int(float64(stat.CacheHit)*100/float64(hit)))).FontSize(fsSmall).
-				TextColor(c.Theme().TextMuted).Tooltip(fmt.Sprintf("cache hit %d / miss %d", stat.CacheHit, stat.CacheMiss))
+			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("cache %d%%", int(float64(stat.CacheHit)*100/float64(hit)))).FontSize(fsSmall).
+				TextColor(c.Theme().TextMuted), fmt.Sprintf("cache hit %d / miss %d", stat.CacheHit, stat.CacheMiss))
 		}
 		if stat.InputTokens > 0 || stat.OutputTokens > 0 {
-			ui.Text(c, fmt.Sprintf("↑%s ↓%s", fmtK(stat.InputTokens), fmtK(stat.OutputTokens))).FontSize(fsSmall).
-				TextColor(c.Theme().TextMuted).Tooltip(fmt.Sprintf("input %d / output %d tokens", stat.InputTokens, stat.OutputTokens))
+			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("↑%s ↓%s", fmtK(stat.InputTokens), fmtK(stat.OutputTokens))).FontSize(fsSmall).
+				TextColor(c.Theme().TextMuted), fmt.Sprintf("input %d / output %d tokens", stat.InputTokens, stat.OutputTokens))
 		}
 		if seconds > 0 && stat.OutputTokens > 0 {
 			ui.Text(c, fmt.Sprintf("%d token/s", int(float64(stat.OutputTokens)/seconds))).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
@@ -481,13 +485,13 @@ func (a *desktop) confirmDeleteUserMessage(d *deletePromptState) {
 	t := d.Conversation
 	index := d.MessageIndex
 	if t == nil || t.Busy || index < 0 || index >= len(t.Messages) || str(t.Messages[index], "content") != d.Content {
-		a.status = "对话已变化，请重新选择要删除的提问。"
+		a.notify("对话已变化，请重新选择要删除的提问。")
 		return
 	}
 	request := backend.TruncateSessionHistoryRequest{SessionID: t.ID, UserMessageIndex: d.UserIndex, ExpectedContent: d.Content}
 	go func() {
 		if _, syncErr := a.core.TruncateSessionHistory(request); syncErr != nil {
-			a.win.Update(func() { a.status = "界面已删除，但模型上下文同步失败：" + syncErr.Error() })
+			a.win.Update(func() { a.notifyError("界面已删除，但模型上下文同步失败：" + syncErr.Error()) })
 		}
 		a.win.Update(func() {
 			if index <= len(t.Messages) {
@@ -522,7 +526,7 @@ func (a *desktop) welcomeView(c *ui.Context, t *conversation) {
 			ui.Column(c).Width(170).AlignItems(ui.Center).Gap(gapSection).Children(func() {
 				img := ui.Column(c).Size(150, 150).Center()
 				img.Children(func() { a.avatarDrawing(c) })
-				img.Cursor(ui.CursorPointer).Tooltip("点击头像：切换樱花特效")
+				uikit.Tooltip(c, img.Cursor(ui.CursorPointer), "点击头像：切换樱花特效")
 				if img.Clicked() {
 					a.togglePetals()
 				}
@@ -570,7 +574,7 @@ func (a *desktop) welcomeView(c *ui.Context, t *conversation) {
 							}
 
 							cell.Children(func() {
-								e := ui.Text(c, value).FontSize(fsSmall).SingleLine().Tooltip(value)
+								e := uikit.Tooltip(c, ui.Text(c, value).FontSize(fsSmall).SingleLine(), value)
 								if i == 2 || (i == 1 && j == 1) {
 									e.TextColor(c.Theme().Accent)
 								}
@@ -700,7 +704,7 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 		parts := ui.CollapsibleBase(c, &open)
 		parts.Trigger.FillWidth().Height(30).Padding(0, 10).Cursor(ui.CursorPointer).Children(func() {
 			ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(gapField).Children(func() {
-				ui.Text(c, "计划").FontSize(fsSmall).Bold()
+				ui.Text(c, "计划").FontSize(fsSmall).Bold().TextColor(c.Theme().TextMuted)
 				ui.Text(c, fmt.Sprintf("%d/%d", done, len(steps))).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
 				ui.Spacer(c)
 				iconGlyph(c, "chevrondown", 13).Rotate(-90 * (1 - parts.Progress()))
@@ -714,7 +718,7 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 					switch step.Status {
 					case "done":
 						mark = "✓"
-						color = colSuccess()
+						color = c.Theme().Success
 					case "in_progress":
 						mark = "●"
 						color = c.Theme().Accent
@@ -911,4 +915,28 @@ func chatMessageWindow(t *conversation) (int, int) {
 		end = min(end, start+140)
 	}
 	return start, end
+}
+
+// Recognize explicit cancellation markers and legacy persisted cancellation text,
+// without treating errors which merely mention cancellation as a user action.
+func userCancelledMessage(m map[string]any) bool {
+	for _, key := range []string{"status", "stopReason", "reason"} {
+		switch strings.ToLower(strings.TrimSpace(str(m, key))) {
+		case "cancelled", "canceled", "user_cancelled", "user_canceled":
+			return true
+		}
+	}
+	if boolOf(m, "cancelled") || boolOf(m, "canceled") {
+		return true
+	}
+	for _, key := range []string{"content", "error"} {
+		switch strings.ToLower(strings.TrimSpace(str(m, key))) {
+		case "已取消", "用户已取消", "用户取消", "cancelled by user", "canceled by user":
+			return true
+		}
+	}
+	return false
+}
+func cancelledResult(c *ui.Context) {
+	ui.Text(c, "用户已取消").FontSize(fsSmall).TextColor(c.Theme().TextMuted).Selectable()
 }

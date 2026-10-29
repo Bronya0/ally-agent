@@ -41,7 +41,7 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 			if file.Editor.Buffer.Modified() {
 				name += " ●"
 			}
-			ui.Text(c, short(name, 46)).FontSize(fsSmall).Grow(1).Tooltip(file.Path)
+			uikit.Tooltip(c, ui.Text(c, short(name, 46)).FontSize(fsSmall).Grow(1), file.Path)
 			ext := strings.ToLower(filepath.Ext(file.Path))
 			if ext == ".md" || ext == ".html" || ext == ".htm" {
 				label := "预览"
@@ -113,8 +113,8 @@ func (a *desktop) fileTree(c *ui.Context) {
 			tip = t.Workspace
 		}
 		ui.Row(c).Height(30).Padding(0, padRow).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
-			ui.Text(c, short(title, 24)).FontSize(fsSmall).Grow(1).Tooltip(tip)
-			iconAction(c, "explorer-refresh", "刷新", "refresh", 22, func() { a.refreshFiles() })
+			uikit.Tooltip(c, ui.Text(c, short(title, 24)).FontSize(fsSmall).Grow(1), tip)
+			iconAction(c, "explorer-refresh", "刷新", "refresh", 22, func() { a.refreshFiles(true) })
 			iconAction(c, "explorer-help", "文件浏览器帮助", "info", 22, func() { a.filesF.HelpOpen = !a.filesF.HelpOpen })
 			iconAction(c, "explorer-close", "关闭文件栏", "close", 22, func() { a.explorer = false })
 		})
@@ -148,7 +148,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 			}
 			m.Separator()
 			if m.Item("刷新").Chosen() {
-				a.refreshFiles()
+				a.refreshFiles(true)
 			}
 		})
 		if a.filesF.HelpOpen {
@@ -221,7 +221,7 @@ func (a *desktop) fileRows(c *ui.Context, entries []backend.FileEntry, depth int
 				fieldNote(c, "→")
 			}
 		})
-		row.Tooltip(path)
+		uikit.Tooltip(c, row, path)
 		if row.Clicked() {
 			if entry.Dir {
 				a.toggleFolder(path)
@@ -368,7 +368,7 @@ func (a *desktop) submitFilePrompt() {
 						a.closeFile()
 					}
 					a.refreshFiles()
-					a.status = "已重命名"
+					a.notify("已重命名")
 				})
 			}
 			return err
@@ -390,7 +390,7 @@ func (a *desktop) submitFilePrompt() {
 			_, err = a.core.CreateFile(backend.CreateFileRequest{Workspace: workspace, Path: full})
 		}
 		if err == nil {
-			a.win.Update(func() { a.refreshFiles(); a.status = "已创建 " + full })
+			a.win.Update(func() { a.refreshFiles(); a.notify("已创建 " + full) })
 		}
 		return err
 	})
@@ -445,11 +445,11 @@ func (a *desktop) refreshFolder(path string) {
 	}
 	a.fileOpen[path] = true
 	delete(a.fileChildren, path)
-	a.loadFolderChildren(path)
+	a.loadFolderChildren(path, true)
 }
 
 // loadFolderChildren lists one directory into fileChildren.
-func (a *desktop) loadFolderChildren(path string) {
+func (a *desktop) loadFolderChildren(path string, manual ...bool) {
 	if a.core == nil || a.fileLoading[path] {
 		return
 	}
@@ -470,15 +470,18 @@ func (a *desktop) loadFolderChildren(path string) {
 			}
 			delete(a.fileLoading, path)
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				return
 			}
 			if a.fileChildren == nil {
 				a.fileChildren = map[string][]backend.FileEntry{}
 			}
 			a.fileChildren[path] = result.Entries
+			if len(manual) > 0 && manual[0] {
+				a.notifySuccess("目录已刷新")
+			}
 			if result.Truncated {
-				a.status = "目录过大，仅显示前 1000 项"
+				a.notify("目录过大，仅显示前 1000 项")
 			}
 		})
 	}()
@@ -497,23 +500,23 @@ func (a *desktop) pasteFiles() {
 	go func() {
 		sources, err := a.core.ReadClipboardFiles()
 		if err != nil {
-			a.win.Update(func() { a.status = "读取剪贴板失败（可能被其他程序占用，稍后再试）" })
+			a.win.Update(func() { a.notifyError("读取剪贴板失败（可能被其他程序占用，稍后再试）") })
 			return
 		}
 		if len(sources) == 0 {
-			a.win.Update(func() { a.status = "剪贴板中没有文件" })
+			a.win.Update(func() { a.notify("剪贴板中没有文件") })
 			return
 		}
 		result, err := a.core.CopyFilesIntoWorkspace(backend.CopyFilesIntoWorkspaceRequest{Workspace: t.Workspace, TargetDir: target, Sources: sources})
 		a.win.Update(func() {
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				return
 			}
 			if len(result.Failed) > 0 {
-				a.status = fmt.Sprintf("已复制 %d 项，%d 项失败", len(result.Copied), len(result.Failed))
+				a.notifyError(fmt.Sprintf("已复制 %d 项，%d 项失败", len(result.Copied), len(result.Failed)))
 			} else {
-				a.status = fmt.Sprintf("已复制 %d 个项目到工作区", len(result.Copied))
+				a.notify(fmt.Sprintf("已复制 %d 个项目到工作区", len(result.Copied)))
 			}
 			a.refreshFiles()
 		})
@@ -605,7 +608,7 @@ func (a *desktop) fileInfoSection(c *ui.Context, title string, rows [][2]string)
 			row := row
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Width(96).Children(func() { fieldLabel(c, row[0]) })
-				ui.Text(c, row[1]).Font(monoFamily).FontSize(fsTiny).Selectable().Grow(1).SingleLine().Tooltip(row[1])
+				uikit.Tooltip(c, ui.Text(c, row[1]).Font(monoFamily).FontSize(fsTiny).Selectable().Grow(1).SingleLine(), row[1])
 				iconAction(c, "copy-"+title+row[0], "复制", "copy", 18, func() {
 					c.WriteClipboard(row[1])
 					c.Toast("已复制")
@@ -617,7 +620,7 @@ func (a *desktop) fileInfoSection(c *ui.Context, title string, rows [][2]string)
 
 // ---- Git diff ------------------------------------------------------------
 
-func (a *desktop) loadGitDiff(t *conversation, repo string) {
+func (a *desktop) loadGitDiff(t *conversation, repo string, manual ...bool) {
 	if t == nil {
 		return
 	}
@@ -628,6 +631,13 @@ func (a *desktop) loadGitDiff(t *conversation, repo string) {
 		a.win.Update(func() {
 			a.filesF.GitBusy = false
 			a.filesF.GitData = result
+			if len(manual) > 0 && manual[0] {
+				if result.Error != "" {
+					a.notifyError(result.Error)
+				} else {
+					a.notifySuccess("Git 改动已刷新")
+				}
+			}
 		})
 	}()
 }
@@ -653,7 +663,7 @@ func (a *desktop) gitDiffDialog(c *ui.Context) {
 					statusBadge(c, "已截断", "warn")
 				}
 				ui.Spacer(c)
-				flat(c, "刷新").Disabled(a.filesF.GitBusy).OnClick(func() { a.loadGitDiff(t, a.filesF.GitRepo) })
+				flat(c, "刷新").Disabled(a.filesF.GitBusy).OnClick(func() { a.loadGitDiff(t, a.filesF.GitRepo, true) })
 				iconAction(c, "git-diff-close", "关闭", "close", 24, func() {
 					a.core.CancelGitDiff()
 					a.filesF.GitOpen = false
@@ -804,12 +814,12 @@ func (a *desktop) gitTreeRows(c *ui.Context, nodes []*gitTreeNode, files []backe
 			}
 			if !folder {
 				file := files[node.index]
-				ui.Text(c, gitStatusLetter(file.Status)).FontSize(fsTiny).TextColor(colWarning())
+				ui.Text(c, gitStatusLetter(file.Status)).FontSize(fsTiny).TextColor(c.Theme().Warning)
 				if file.Added > 0 {
-					ui.Textf(c, "+%d", file.Added).FontSize(fsTiny).TextColor(colSuccess())
+					ui.Textf(c, "+%d", file.Added).FontSize(fsTiny).TextColor(c.Theme().Success)
 				}
 				if file.Deleted > 0 {
-					ui.Textf(c, "-%d", file.Deleted).FontSize(fsTiny).TextColor(colDanger())
+					ui.Textf(c, "-%d", file.Deleted).FontSize(fsTiny).TextColor(c.Theme().Danger)
 				}
 			}
 		})

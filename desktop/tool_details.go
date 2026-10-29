@@ -63,7 +63,7 @@ func toolDeleteTree(c *ui.Context, args, result map[string]any) {
 			}
 			if v, ok := row["ok"]; ok && v == false {
 				suffix = " · failed: " + str(row, "errorCode") + " " + str(row, "error")
-				color = colDanger()
+				color = c.Theme().Danger
 			}
 		}
 		prefix := "├─ "
@@ -91,7 +91,7 @@ func toolAskSummary(c *ui.Context, key string, args, result map[string]any) {
 						for _, raw := range list(answer, "selections") {
 							if selection, ok := raw.(map[string]any); ok {
 								ui.Row(c).Gap(6).Children(func() {
-									ui.Text(c, "✓ "+str(selection, "label")).FontSize(fsSmall).TextColor(colSuccess())
+									ui.Text(c, "✓ "+str(selection, "label")).FontSize(fsSmall).TextColor(c.Theme().Success)
 									if boolOf(selection, "recommended") {
 										accentChip(c, "推荐")
 									}
@@ -103,7 +103,7 @@ func toolAskSummary(c *ui.Context, key string, args, result map[string]any) {
 							if option, ok := raw.(map[string]any); ok {
 								for _, id := range selected {
 									if fmt.Sprint(id) == str(option, "id") {
-										ui.Text(c, "✓ "+str(option, "label")).FontSize(fsSmall).TextColor(colSuccess())
+										ui.Text(c, "✓ "+str(option, "label")).FontSize(fsSmall).TextColor(c.Theme().Success)
 									}
 								}
 							}
@@ -155,8 +155,15 @@ func toolActionVerb(name, state string, args map[string]any, fallback string) st
 
 // suggestionEdgeMix pulls the suggestion chip's edge back toward the panel it
 // sits on. Cards keep the shared edge; a chip is only an optional shortcut under
-// an answer, so both its outline and its label stay grey and quiet.
-const suggestionEdgeMix float32 = 0.55
+// an answer, so its outline stays quieter than a card's. It cannot fade as far as
+// 0.55 did: on white and on #18181b alike the outline disappeared, and the chip
+// read as a disabled control rather than something to click.
+const suggestionEdgeMix float32 = 0.18
+
+// suggestionLabelMix lifts the chip label from muted ink toward body text. Pure
+// TextMuted measured 4.4:1 on the light surface — below AA, so 12px labels went
+// blurry — while body ink would shout next to an answer.
+const suggestionLabelMix float32 = 0.35
 
 // suggestionButton is built from ButtonBase rather than flat(): flat() is the
 // shared secondary button, which already paints its own edge and a full-strength
@@ -167,7 +174,7 @@ func suggestionButton(c *ui.Context, text string) ui.Element {
 		Center().Cursor(ui.CursorPointer).Label(text)
 	border := c.Theme().Border.Mix(c.Theme().Surface, suggestionEdgeMix)
 	fill := c.Theme().Surface
-	labelColor := c.Theme().TextMuted
+	labelColor := c.Theme().TextMuted.Mix(c.Theme().Text, suggestionLabelMix)
 	if button.Hovered() || button.Focused() {
 		border = c.Theme().Accent
 		fill = c.Theme().SurfaceHover

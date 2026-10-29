@@ -6,7 +6,10 @@ package desktop
 // so every surface shares one hairline, one radius family and one hover fade —
 // and everything here is a thin layer over a MyGo component, not a re-draw.
 
-import "github.com/egoist/mygo/ui"
+import (
+	"ally-dev/desktop/uikit"
+	"github.com/egoist/mygo/ui"
+)
 
 // surfaceBorder is the shared resting edge for panels, cards and chips: the same
 // line colour the dividers use, so every surface is one material and no edge is
@@ -91,12 +94,43 @@ func pillColor(c *ui.Context, tone pillTone) ui.Color {
 // pill is the single badge: a capsule tinted from its tone, so statuses read
 // the same on every page.
 func pill(c *ui.Context, text string, tone pillTone) ui.Element {
-	fg := pillColor(c, tone)
-	return ui.Box(c).Padding(1, 7).Radius(9).Background(fg.Alpha(0.12)).
-		Children(func() { ui.Text(c, text).FontSize(fsTiny).TextColor(fg).NoWrap() })
+	semantic := uikit.Default
+	switch tone {
+	case pillAccent:
+		semantic = uikit.Primary
+	case pillOK:
+		semantic = uikit.Success
+	case pillWarn:
+		semantic = uikit.Warning
+	case pillDanger:
+		semantic = uikit.Error
+	case pillInfo:
+		semantic = uikit.Info
+	}
+	return uikit.ColorTag(c, text, uikit.TagOptions{Tone: semantic, Small: true, Round: true, Borderless: true})
 }
 
 // pillDot is the tiny state dot used next to a pill or a row label.
 func pillDot(c *ui.Context, tone pillTone) ui.Element {
-	return ui.Box(c).Size(7, 7).Shrink(0).Radius(4).Background(pillColor(c, tone))
+	return ui.Box(c).Size(7, 7).Shrink(0).Radius(4).Background(pillDotColor(c, tone))
+}
+
+// Indicators are small solid marks, not text: keep light-mode fills clear
+// instead of reusing the deeper ink required for readable status labels.
+func pillDotColor(c *ui.Context, tone pillTone) ui.Color {
+	if c.Theme().Dark {
+		return pillColor(c, tone)
+	}
+	switch tone {
+	case pillOK:
+		return ui.Hex("#25a66b")
+	case pillWarn:
+		return ui.Hex("#dfa029")
+	case pillDanger:
+		return ui.Hex("#df5656")
+	case pillAccent, pillInfo:
+		return c.Theme().Accent
+	default:
+		return ui.Hex("#aab0bb")
+	}
 }

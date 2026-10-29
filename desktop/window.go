@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -17,7 +18,7 @@ func (a *desktop) view(c *ui.Context) {
 		pending := a.notifications
 		a.notifications = nil
 		for _, message := range pending {
-			c.Toast(message)
+			c.AddToast(message)
 		}
 	}
 	width, _ := c.Size()
@@ -31,7 +32,7 @@ func (a *desktop) view(c *ui.Context) {
 			}
 			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 				if !a.ready {
-					a.splash(c)
+					a.startupBody(c)
 					return
 				}
 				a.pageContent(c, width)
@@ -45,31 +46,15 @@ func (a *desktop) view(c *ui.Context) {
 	a.releaseNotesDialog(c)
 	a.deleteUserMessageDialog(c)
 	a.petalsOverlay(c)
-	toastWidth := min(float32(380), max(float32(220), width-32))
-	ui.ToastViewportBase(c, func(viewport ui.Element, toasts []ui.Toast) {
-		viewport.Padding(16).AlignItems(ui.End).Gap(8)
-		for _, item := range toasts {
-			toast := ui.ToastBase(c, item)
-			toast.Root.Row().Width(toastWidth).MaxWidth(width-32).AlignItems(ui.Center).Gap(10).
-				Padding(10, 14).Radius(radiusControl).Background(p.panel).Border(1, p.line).
-				Shadow(0, 5, 16, 0, ui.RGBA(0, 0, 0, 0.22))
-			toast.Root.Children(func() {
-				ui.Box(c).Size(6, 6).Radius(3).Shrink(0).Background(p.accent)
-				ui.Text(c, item.Title).Grow(1).MinWidth(0).FontSize(fsSmall).TextColor(p.text).LineHeight(1.4).MaxLines(3)
-				close := toast.CloseButton().Size(20, 20).Center().Radius(4).TextColor(p.muted).Cursor(ui.CursorPointer)
-				close.Label("关闭通知")
-				close.Children(func() { ui.Text(c, "×").FontSize(16).TextColor(p.muted) })
-			})
-		}
-	})
+	uikit.Messages(c)
 }
 
-func (a *desktop) splash(c *ui.Context) {
-	p := a.currentPalette()
-	ui.Column(c).Fill().Center().Gap(gapSection).Children(func() {
-		ui.Text(c, "Ally").FontSize(34).Bold().TextColor(p.accent)
-		ui.Text(c, a.status).FontSize(fsBody).Selectable()
-		ui.Spinner(c).Size(18, 18)
+// Startup uses the final window shell, without a second logo or animated scene.
+func (a *desktop) startupBody(c *ui.Context) {
+	ui.Column(c.Key("startup-body")).Fill().Padding(padPage).Children(func() {
+		if a.startupError != "" {
+			notice(c, "error", a.startupError)
+		}
 	})
 }
 
@@ -176,8 +161,8 @@ func (a *desktop) kbPage(c *ui.Context, width float32) {
 					ui.Text(c, "知识库").FontSize(20).Bold()
 					fieldNote(c, "选择一个知识库目录，Ally 会在其中维护 index.md 与分类结构；sources/ 子目录对模型只读。")
 					ui.Row(c).Gap(gapField).Children(func() {
-						primary(c, "选择知识库目录").OnClick(func() { a.pickKBRoot() })
-						flat(c, "打开设置").OnClick(func() { a.changePage("settings") })
+						cardPrimary(c, "选择知识库目录").OnClick(func() { a.pickKBRoot() })
+						cardFlat(c, "打开设置").OnClick(func() { a.changePage("settings") })
 					})
 				})
 			})
@@ -195,7 +180,7 @@ func (a *desktop) kbPage(c *ui.Context, width float32) {
 			ui.Text(c, "整理资料、检索与维护知识索引。").FontSize(fsSmall).TextColor(c.Theme().TextMuted)
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
 				iconGlyph(c, "folderopen", 13)
-				ui.Text(c, a.config.KBRoot).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine().Tooltip(a.config.KBRoot)
+				uikit.Tooltip(c, ui.Text(c, a.config.KBRoot).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine(), a.config.KBRoot)
 			})
 		})
 		a.chatColumn(c, width)

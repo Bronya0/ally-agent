@@ -90,10 +90,8 @@ func colText(a *desktop) ui.Color   { return a.currentPalette().text }
 func colMuted(a *desktop) ui.Color  { return a.currentPalette().muted }
 func colHover(a *desktop) ui.Color  { return a.currentPalette().hover }
 
-func colSuccess() ui.Color { return okColor }
-func colWarning() ui.Color { return warnCol }
-func colDanger() ui.Color  { return errCol }
-func colFaint() ui.Color   { return faint }
+func colDanger() ui.Color { return errCol }
+func colFaint() ui.Color  { return faint }
 
 // ---- Selection -----------------------------------------------------------
 // One selected look for the whole desktop, so a page never assembles its own
@@ -126,6 +124,15 @@ var palettes = []palette{
 	{name: "紫罗兰", dark: true, bg: ui.Hex("#191722"), panel: ui.Hex("#1f1c29"), line: ui.Hex("#312c42"), accent: ui.Hex("#a68bea"), accentText: ui.Hex("#141019"), text: ui.Hex("#cfc8de"), muted: ui.Hex("#948aa8"), hover: ui.Hex("#292436")},
 }
 
+var lightAccents = []ui.Color{
+	ui.Hex("#365dcc"), // blue
+	ui.Hex("#365dcc"), // legacy light preset
+	ui.Hex("#9b6218"), // amber, unchanged
+	ui.Hex("#126f91"), // ocean
+	ui.Hex("#247649"), // forest
+	ui.Hex("#7850b8"), // violet
+}
+
 func (a *desktop) currentPalette() palette {
 	idx := a.prefs.Palette
 	if idx < 0 || idx >= len(palettes) {
@@ -138,13 +145,9 @@ func (a *desktop) currentPalette() palette {
 	p := palettes[base]
 	p.accent = palettes[idx].accent
 	if !p.dark {
-		// Palette accents are tuned for dark surfaces; deepen them for readable
-		// labels, icons and focus states against the light surface.
-		if idx == 2 {
-			p.accent = ui.Hex("#9b6218")
-		} else {
-			p.accent = p.accent.Mix(p.text, 0.5)
-		}
+		// Light accents have their own saturated palette. Mixing a pastel dark
+		// accent with neutral text made every theme look grey-blue.
+		p.accent = lightAccents[idx]
 	}
 	if base == 0 {
 		p.accentText = palettes[0].accentText
@@ -211,6 +214,11 @@ func (a *desktop) theme() *ui.Theme {
 	t.Danger = errCol
 	t.Success = okColor
 	t.Warning = warnCol
+	if !t.Dark {
+		t.Success = uikit.ToneColorForTheme(t, uikit.Success)
+		t.Warning = uikit.ToneColorForTheme(t, uikit.Warning)
+		t.Danger = uikit.ToneColorForTheme(t, uikit.Error)
+	}
 	t.Focus = p.accent
 	t.Font = nativeFontFamily()
 	t.FontSize = 13
@@ -438,8 +446,17 @@ func obj(p map[string]any, k string) map[string]any {
 }
 
 func list(p map[string]any, k string) []any {
-	l, _ := p[k].([]any)
-	return l
+	switch values := p[k].(type) {
+	case []any:
+		return values
+	case []map[string]any:
+		out := make([]any, len(values))
+		for i, value := range values {
+			out[i] = value
+		}
+		return out
+	}
+	return nil
 }
 
 func boolOf(p map[string]any, k string) bool {

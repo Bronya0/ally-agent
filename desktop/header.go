@@ -26,7 +26,9 @@ func (a *desktop) headerBar(c *ui.Context) {
 	// strip beside them; the bar is zero elsewhere and in full screen.
 	bar := c.TitleBar()
 	row := ui.Row(c).Height(max(headerBarHeight, bar.Height)).Shrink(0).Background(p.panel).
-		BorderWidth(0, 0, 1, 0).BorderColor(p.line)
+		Border(0, ui.Transparent).Draw(func(painter *ui.Painter, r ui.Rect) {
+		painter.Fill(ui.Rect{X: r.X, Y: r.Y + r.H - 1, W: r.W, H: 1}, p.line, 0)
+	})
 	if bar.Left > 0 || bar.Right > 0 {
 		row.Padding(0, bar.Right, 0, bar.Left)
 	}
@@ -45,7 +47,7 @@ func (a *desktop) headerBar(c *ui.Context) {
 				ui.Span{Text: "y", Color: colors[3]},
 			).FontSize(20).FontWeight(700).LetterSpacing(-0.4)
 		})
-		wordmark.Cursor(ui.CursorPointer).Tooltip("点击 logo：切换樱花特效")
+		uikit.Tooltip(c, wordmark.Cursor(ui.CursorPointer), "点击 logo：切换樱花特效")
 		if wordmark.Clicked() {
 			a.togglePetals()
 		}
@@ -55,129 +57,79 @@ func (a *desktop) headerBar(c *ui.Context) {
 }
 
 func (a *desktop) workspaceTabs(c *ui.Context) {
-	p := a.currentPalette()
-	ui.Box(c).Grow(1).MinWidth(0).Clip().Children(func() {
-		tabScroller(c).FillWidth().Children(func() {
-			ui.Row(c).Gap(1).Children(func() {
+	ui.Box(c).Grow(1).MinWidth(0).FillHeight().Clip().Children(func() {
+		tabScroller(c).FillWidth().FillHeight().Children(func() {
+			ui.Row(c).FillHeight().AlignItems(ui.Stretch).Gap(0).Padding(0).Children(func() {
 				for i, t := range a.tabs {
-					idx := i
-					tab := t
-					label := workspaceLabel(tab.Workspace)
-					// One underline for every strip in the app: rounded box, accent
-					// bottom edge, the line curving away at both ends.
-					row := ui.Row(c.Key("wtab-"+tab.ID)).Height(44).MinWidth(112).MaxWidth(180).Padding(0, 8).
-						Gap(6).AlignItems(ui.Center)
-					uikit.TabUnderline(row, idx == a.active, headerTabRadius, c.Theme())
-					if idx == a.active {
-						row.BorderColor(p.accent)
-					}
-					row.Children(func() {
-						if tab.Busy {
-							ui.Box(c).Size(6, 6).Radius(3).Background(p.accent).Tooltip("运行中")
+					idx, tab := i, t
+					uikit.WorkspaceTab(c.Key("wtab-"+tab.ID), workspaceLabel(tab.Workspace), idx == a.active, tab.Busy, len(a.tabs) > 1, iconImage("close"), func() {
+						if a.page == "settings" {
+							a.commitSettingsOnLeave()
 						}
-						style := tabButton(c, "wtab-btn-"+tab.ID, label, idx == a.active)
-						style.OnClick(func() {
-							if a.page == "settings" {
-								a.commitSettingsOnLeave()
-							}
-							if a.page == "models" {
-								a.cancelOAuthWhenLeaving()
-							}
-							a.active = idx
-							a.page = "chat"
-							a.refreshFiles()
-							a.refreshSessionFooter(tab)
-							a.refreshGit(tab)
-						})
-						if len(a.tabs) > 1 {
-							iconAction(c, "wtab-close-"+tab.ID, "关闭标签", "close", 20, func() {
-								a.closeWorkspaceTab(idx)
-							}).Disabled(tab.Busy).TextColor(p.muted)
+						if a.page == "models" {
+							a.cancelOAuthWhenLeaving()
 						}
-					})
+						a.active = idx
+						a.page = "chat"
+						a.refreshFiles()
+						a.refreshSessionFooter(tab)
+						a.refreshGit(tab)
+					}, func() { a.closeWorkspaceTab(idx) }).FillHeight().Label("工作区标签 " + tab.ID)
 				}
 			})
 		})
 	})
 }
 
-// workspaceMenuLimit is how many history entries the workspace menu lists. A
-// system menu does not scroll the way a popover of ours did, so the list has to
-// stop somewhere: the entries are already newest first, and the rail lists the
-// rest, so the menu stays a shortcut rather than a second copy of the history.
-const workspaceMenuLimit = 16
+// Header history always creates a fresh tab, matching main's onHistorySelect.
+// The sidebar keeps its separate switch-to-workspace behavior.
+func (a *desktop) openWorkspaceEntry(workspace string) { a.newConversation(workspace) }
 
-// showWorkspaceMenu opens the workspace menu of the header's add button: the
-// ways to start a workspace, then the ones the sessions already know. A folder
-// glyph marks each history entry, which is what the system's menu shows beside
-// a path; the entry opens its workspace rather than starting another session
-// over it, except for the workspace the current Tab already runs in, where
-// switching to itself looks like a dead click and a second Tab is what the
-// entry promises.
-func (a *desktop) showWorkspaceMenu() {
-	items := []*mygo.MenuItem{
-		menuAction("＋ 添加工作区", func() { a.chooseWorkspace() }),
-		menuAction("临时工作区", func() { a.newConversation("") }),
-		menuSeparator(),
-	}
-	seen := map[string]bool{}
-	rows, found := 0, 0
-	for _, entry := range a.sessions {
-		root := entry.Workspace
-		if root == "" || seen[strings.ToLower(root)] || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
-			continue
-		}
-		seen[strings.ToLower(root)] = true
-		found++
-		if rows >= workspaceMenuLimit {
-			continue
-		}
-		rows++
-		items = append(items, menuAction("📁 "+filepath.Base(root), func() { a.openWorkspaceEntry(root) }))
-	}
-	switch {
-	case found == 0:
-		items = append(items, &mygo.MenuItem{Label: "无历史记录", Disabled: true})
-	case found > rows:
-		items = append(items, &mygo.MenuItem{Label: fmt.Sprintf("另有 %d 个，见侧栏历史工作区", found-rows), Disabled: true})
-	}
-	a.popupMenu(items)
-}
-
-// openWorkspaceEntry is what a workspace entry of the header menu does: it
-// brings a Tab of that workspace to the front, and when that Tab is the one
-// already on screen — where switching changes nothing — it starts another
-// conversation over the workspace. Either way the click shows something.
-func (a *desktop) openWorkspaceEntry(workspace string) {
-	if workspaceEntryTab(a.tabs, a.active, workspace) < 0 {
-		a.newConversation(workspace)
-		return
-	}
-	a.openWorkspace(workspace)
-}
-
-// workspaceEntryTab is the Tab a workspace entry brings forward: the first one
-// running that workspace, unless it is the Tab already on screen, which the
-// entry cannot make visible because it is visible. -1 means the entry has
-// nothing to show for itself and opens a new Tab instead.
-func workspaceEntryTab(tabs []*conversation, active int, workspace string) int {
-	for i, t := range tabs {
-		if i != active && strings.EqualFold(t.Workspace, workspace) {
-			return i
-		}
-	}
-	return -1
+func (a *desktop) workspaceMenu(c *ui.Context, anchor ui.Element) {
+	ui.PopoverBase(c.Key("workspace-menu"), anchor, &a.workspaceMenuOpen, func(panel ui.Element) {
+		popoverChrome(c, panel, 300)
+		panel.Label("工作区历史菜单")
+		panel.AttachTo(anchor, ui.AnchorBottomRight, ui.AnchorTopRight).Top(6).MaxHeightPercent(85).Transition(uikit.PopupTransition())
+		popoverItem(c, "add", "＋ 添加工作区", "", false, func() { a.workspaceMenuOpen = false; a.chooseWorkspace() })
+		popoverItem(c, "temporary", "临时工作区", "", false, func() { a.workspaceMenuOpen = false; a.newConversation("") })
+		divider(c)
+		_, height := c.Size()
+		ui.Scroll(c.Key("history")).FillWidth().MinHeight(0).MaxHeight(max(float32(80), min(float32(460), height-150))).Children(func() {
+			seen := map[string]bool{}
+			count := 0
+			for _, entry := range a.sessions {
+				root := entry.Workspace
+				if root == "" || seen[strings.ToLower(root)] || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
+					continue
+				}
+				seen[strings.ToLower(root)] = true
+				count++
+				b := ui.ButtonBase(c.Key(root)).FillWidth().Height(32).Padding(0, 9).Gap(8).Justify(ui.Start).AlignItems(ui.Center).Radius(5).Cursor(ui.CursorPointer).Label("打开工作区 " + root)
+				fill := ui.Transparent
+				if b.Hovered() {
+					fill = c.Theme().SurfaceHover
+				}
+				b.Background(fadeColor(b, "history-fill", fill)).OnClick(func() { a.workspaceMenuOpen = false; a.openWorkspaceEntry(root) })
+				b.Children(func() {
+					iconGlyph(c, "folderopen", 15).Shrink(0).TextColor(c.Theme().TextMuted)
+					ui.Text(c, filepath.Base(root)).FontSize(13).TextColor(c.Theme().Text).SingleLine().MinWidth(0)
+				})
+				uikit.Tooltip(c, b, root)
+			}
+			if count == 0 {
+				muted(c, "无历史记录", fsSmall).Padding(8)
+			}
+		})
+	})
 }
 
 // headerActions is the right side of the header: the workspace menu, the file
 // explorer toggle and the window actions.
 func (a *desktop) headerActions(c *ui.Context) {
 	p := a.currentPalette()
-	// The workspace menu is the system's own: mygo.NewMenu with Popup, not
-	// Element.Menu, which carries labels only. This one keys itself, shows each
-	// workspace under a folder glyph and opens its actions as a submenu.
-	add := addButton(c, "workspace-add", "添加工作区", "addfolder", 30, func() { a.showWorkspaceMenu() })
+	add := addButton(c, "workspace-add", "添加工作区", "addfolder", 30, func() { a.workspaceMenuOpen = !a.workspaceMenuOpen })
 	add.Disabled(!a.ready)
+	a.workspaceMenu(c, add)
 
 	pageOK := a.page == "chat" || a.page == "kb" || strings.HasPrefix(a.page, "plugin:")
 	// The explorer toggle carries the theme colour even while it is off: a muted
@@ -192,8 +144,8 @@ func (a *desktop) headerActions(c *ui.Context) {
 
 	services := c.Services()
 	if a.upd.Tag != "" && a.upd.Tag != a.prefs.DismissedUpdateTag {
-		download := iconButton(c, "update-badge", "发现新版本 "+a.upd.Tag+"，点击自动更新", "download", func() { a.startUpdate() })
-		download.TextColor(okColor).Background(ui.Hex("#1f2c24"))
+		tip := "发现新版本 " + a.upd.Tag + "，点击自动更新"
+		uikit.Tooltip(c, uikit.Action(c.Key("update-badge"), tip, uikit.ActionOptions{Tone: uikit.Success, Style: uikit.Secondary, Circle: true, Icon: iconImage("download")}).Size(30, 30).OnClick(func() { a.startUpdate() }), tip)
 	} else {
 		iconButton(c, "github", "打开 GitHub 项目主页", "github", func() {
 			services.OpenURL("https://github.com/Bronya0/ally-agent")
@@ -334,7 +286,7 @@ func (a *desktop) updateDialog(c *ui.Context) {
 				ui.Text(c, "更新失败").TextColor(c.Theme().Danger)
 				ui.Text(c, a.upd.Error).FontSize(12).Selectable().TextColor(c.Theme().Danger)
 			case "latest":
-				ui.Text(c, "已是最新版本").TextColor(okColor)
+				ui.Text(c, "已是最新版本").TextColor(c.Theme().Success)
 			}
 			if a.upd.Note != "" && a.upd.State != "error" {
 				fieldNote(c, a.upd.Note)

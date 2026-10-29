@@ -24,7 +24,7 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
 		uikit.Input(c.Key("skill-search"), &a.skillsF.Search).Placeholder("搜索").Label("搜索技能").Width(200)
 		ui.Spacer(c)
-		flat(c, "刷新").OnClick(func() { a.loadSkills() })
+		flat(c, "刷新").OnClick(func() { a.loadSkills(true) })
 		a.linkMenu(c, "skills-market", [][2]string{{"魔搭 ModelScope", "https://modelscope.cn"}, {"OpenAgentSkill", "https://openagentskill.com"}, {"skills.sh Trending", "https://skills.sh"}})
 		primary(c, "添加").OnClick(func() { a.openSkillDialog() })
 	})
@@ -100,7 +100,7 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 				enabled := !disabled
 				rowCard(c, "skill-"+s.Name, func() {
 					ui.Row(c).Gap(gapSection).AlignItems(ui.Center).Children(func() {
-						ui.Column(c).Grow(1).Gap(2).Children(func() {
+						ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 							ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
 								ui.Text(c, s.Name).FontSize(fsBody).Bold()
 								neutralChip(c, skillSourceLabel(s.Source))
@@ -112,30 +112,20 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 							if desc == "" {
 								desc = "无描述"
 							}
-							ui.Text(c, desc).FontSize(fsSmall).TextColor(c.Theme().TextMuted).SingleLine().Tooltip(desc)
+							uikit.Tooltip(c, ui.Text(c, desc).FontSize(fsSmall).TextColor(c.Theme().TextMuted).SingleLine(), desc)
 							path := s.Path
 							if path == "" {
 								path = s.Dir
 							}
 							if path != "" {
-								link := ui.Text(c, path).FontSize(fsTiny).TextColor(faint).SingleLine().Tooltip("点击在文件管理器中打开: " + path)
+								link := uikit.Tooltip(c, ui.Text(c, path).FontSize(fsTiny).TextColor(faint).SingleLine(), "点击在文件管理器中打开: "+path)
 								link.Cursor(ui.CursorPointer)
 								if link.Clicked() {
-									a.job(func() error { return a.core.OpenPathInFileManager(path) })
+									a.job(func() error { return a.core.OpenPathInFileManager(path) }, "")
 								}
 							}
 						})
-						if path := s.Path; path != "" {
-							flat(c, "查看").Tooltip("打开 SKILL.md").OnClick(func() {
-								a.job(func() error { return a.core.OpenPathInFileManager(path) })
-							})
-						}
-						if a.skillsF.ToggleBusy[s.Name] {
-							ui.Spinner(c).Size(13, 13)
-						}
-						if sw := ui.Switch(c.Key("skill-switch-"+s.Name), &enabled).Label(s.Name); sw.Changed() {
-							a.toggleSkill(s.Name, enabled)
-						}
+						skillCardActions(c.Key("skill-actions"), s.Name, s.Path, &enabled, a.skillsF.ToggleBusy[s.Name], func() { path := s.Path; a.job(func() error { return a.core.OpenPathInFileManager(path) }, "") }, func(value bool) { a.toggleSkill(s.Name, value) })
 					})
 				})
 			}
@@ -216,9 +206,10 @@ func (a *desktop) toggleSkill(name string, enabled bool) {
 		a.win.Update(func() {
 			delete(a.skillsF.ToggleBusy, name)
 			if err != nil {
-				a.status = fmt.Sprintf("%s技能失败：%s", map[bool]string{true: "启用", false: "停用"}[enabled], err.Error())
+				a.notifyError(fmt.Sprintf("%s技能失败：%s", map[bool]string{true: "启用", false: "停用"}[enabled], err.Error()))
 				return
 			}
+			a.notifySuccess(fmt.Sprintf("技能 %s 已%s", name, map[bool]string{true: "启用", false: "停用"}[enabled]))
 			if stateErr == nil {
 				a.skills = state.Skills
 			}
@@ -229,7 +220,7 @@ func (a *desktop) toggleSkill(name string, enabled bool) {
 	}()
 }
 
-func (a *desktop) loadSkills() {
+func (a *desktop) loadSkills(manual ...bool) {
 	if a.skillsF.Loading {
 		return
 	}
@@ -239,10 +230,13 @@ func (a *desktop) loadSkills() {
 		a.win.Update(func() {
 			a.skillsF.Loading = false
 			if err != nil {
-				a.status = "读取技能状态失败：" + err.Error()
+				a.notifyError("读取技能状态失败：" + err.Error())
 				return
 			}
 			a.skills = state.Skills
+			if len(manual) > 0 && manual[0] {
+				a.notifySuccess("技能列表已刷新")
+			}
 		})
 	}()
 }
@@ -299,11 +293,11 @@ func (a *desktop) saveSkill() {
 	name := strings.TrimSpace(a.skillsF.AddName)
 	desc := strings.TrimSpace(a.skillsF.AddDesc)
 	if name == "" {
-		a.status = "请填写技能名称"
+		a.notify("请填写技能名称")
 		return
 	}
 	if desc == "" {
-		a.status = "请填写描述（技能列表用它说明什么时候该用这个技能）"
+		a.notify("请填写描述（技能列表用它说明什么时候该用这个技能）")
 		return
 	}
 	draft := backend.SkillDraft{
@@ -320,7 +314,7 @@ func (a *desktop) saveSkill() {
 		a.win.Update(func() {
 			a.skillsF.AddBusy = false
 			if err != nil {
-				a.status = "保存技能失败：" + err.Error()
+				a.notifyError("保存技能失败：" + err.Error())
 				return
 			}
 			a.skillsF.AddOpen = false
@@ -328,7 +322,17 @@ func (a *desktop) saveSkill() {
 			if state.Skills != nil {
 				a.skills = state.Skills
 			}
-			a.notify("技能已保存：" + path)
+			a.notifySuccess("技能已保存：" + path)
 		})
 	}()
+}
+
+// Busy feedback stays inside the fixed-size switch; adjacent actions never move.
+func skillCardActions(c *ui.Context, name, path string, enabled *bool, busy bool, view func(), toggle func(bool)) ui.Element {
+	return ui.Row(c).Shrink(0).Gap(gapSection).AlignItems(ui.Center).Children(func() {
+		if path != "" {
+			uikit.Tooltip(c, cardFlat(c.Key("view"), "查看"), "打开 SKILL.md").OnClick(view)
+		}
+		uikit.SwitchWithOptions(c.Key("enabled"), enabled, name, uikit.SwitchOptions{Loading: busy}).OnClick(func() { toggle(*enabled) })
+	})
 }

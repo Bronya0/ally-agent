@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	"fmt"
 	"strings"
 
@@ -10,7 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-func (a *desktop) refreshPlugins() {
+func (a *desktop) refreshPlugins(manual ...bool) {
 	if a.pluginsF.Busy || a.core == nil {
 		return
 	}
@@ -23,10 +24,13 @@ func (a *desktop) refreshPlugins() {
 				return
 			}
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				return
 			}
 			a.plugins = plugins
+			if len(manual) > 0 && manual[0] {
+				a.notifySuccess("插件列表已刷新")
+			}
 		})
 	}()
 }
@@ -52,13 +56,13 @@ func (a *desktop) pluginAction(work func() (string, error)) {
 		a.win.Update(func() {
 			a.pluginsF.Busy = false
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				return
 			}
 			a.plugins = list
 			a.config = cfg
 			if message != "" {
-				a.status = message
+				a.notifySuccess(message)
 			}
 			if strings.HasPrefix(a.page, "plugin:") {
 				found := false
@@ -145,12 +149,12 @@ func (a *desktop) pluginsPageBody(c *ui.Context) {
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
 		fieldNote(c, fmt.Sprintf("%d 个已安装", len(a.plugins)))
 		ui.Spacer(c)
-		flat(c, "开发教程").Tooltip("在浏览器打开插件开发文档").OnClick(func() {
+		uikit.Tooltip(c, flat(c, "开发教程"), "在浏览器打开插件开发文档").OnClick(func() {
 			services.OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/plugin-system.md")
 		})
-		flat(c, "刷新").OnClick(func() { a.refreshPlugins() })
-		flat(c, "从目录安装").Tooltip("从本机任意位置的插件源码目录安装").OnClick(func() { a.importPlugin(true) })
-		primary(c, "添加").Tooltip("选择插件 zip 包").OnClick(func() { a.importPlugin(false) })
+		flat(c, "刷新").OnClick(func() { a.refreshPlugins(true) })
+		uikit.Tooltip(c, flat(c, "从目录安装"), "从本机任意位置的插件源码目录安装").OnClick(func() { a.importPlugin(true) })
+		uikit.Tooltip(c, primary(c, "添加"), "选择插件 zip 包").OnClick(func() { a.importPlugin(false) })
 	})
 	if a.pluginsF.Busy {
 		busyRow(c, "正在处理插件…")
@@ -173,7 +177,7 @@ func (a *desktop) pluginEmptyState(c *ui.Context) {
 				accentChip(c, "插件系统 v1")
 				ui.Text(c, "把 Ally 变成你自己的控制台").FontSize(19).Bold()
 				ui.Text(c, "三分钟定制自己想要的页面，比如公司 OA、BUG 管理页面、工时计划表等等。").FontSize(fsBody).TextColor(c.Theme().TextMuted)
-				flat(c, "开发教程").AlignSelf(ui.Start).OnClick(func() {
+				cardFlat(c, "开发教程").AlignSelf(ui.Start).OnClick(func() {
 					c.Services().OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/plugin-system.md")
 				})
 			})
@@ -205,24 +209,23 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 			}
 			ui.Spacer(c)
 			enabled := p.Enabled
-			if sw := ui.Switch(c.Key("plugin-switch-"+p.ID), &enabled).Disabled(a.pluginsF.Busy || !p.Valid).Label(name); sw.Changed() {
-				a.setPluginEnabled(p, enabled)
-			}
+			uikit.SwitchNative(c.Key("plugin-switch-"+p.ID), &enabled).Disabled(a.pluginsF.Busy || !p.Valid).Label(name).OnClick(func() { a.setPluginEnabled(p, enabled) })
 			p := p
-			flat(c.Key("plugin-export-button-"+p.ID), "导出 ▾").Disabled(a.pluginsF.Busy).OnClick(func() {
+			exportButton := cardFlat(c.Key("plugin-export-button-"+p.ID), "导出").Disabled(a.pluginsF.Busy).OnClick(func() {
 				a.popupMenu([]*mygo.MenuItem{
 					menuAction("导出（只含包本体）", func() { a.exportPlugin(p, false) }),
 					menuAction("导出（连插件数据一起）", func() { a.exportPlugin(p, true) }),
 				})
 			})
-			dangerButton(c, "删除").Disabled(a.pluginsF.Busy).OnClick(func() {
+			caretButton(c, exportButton, "导出", "chevrondown", fsSmall, nil)
+			cardDanger(c, "删除").Disabled(a.pluginsF.Busy).OnClick(func() {
 				a.pluginsF.DeleteID = p.ID
 				a.pluginsF.Purge = false
 				a.pluginsF.DeleteOpen = true
 			})
 		})
 		if p.Description != "" {
-			ui.Text(c, p.Description).FontSize(fsSmall).TextColor(c.Theme().TextMuted).SingleLine().Tooltip(p.Description)
+			uikit.Tooltip(c, ui.Text(c, p.Description).FontSize(fsSmall).TextColor(c.Theme().TextMuted).SingleLine(), p.Description)
 		} else {
 			fieldNote(c, "无描述")
 		}
@@ -238,7 +241,7 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 			workspace = "只读"
 		}
 		fieldNote(c, "权限：网络 "+hosts+" ｜ 工作区 "+workspace)
-		ui.Text(c, p.Dir).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine().Tooltip(p.Dir)
+		uikit.Tooltip(c, ui.Text(c, p.Dir).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine(), p.Dir)
 		if p.LoadError != "" {
 			inlineError(c, "plugin-error-"+p.ID, p.LoadError)
 		}
@@ -305,12 +308,12 @@ func (a *desktop) pluginPageBody(c *ui.Context) {
 			ui.Text(c, pluginName(*p)).FontSize(18).Bold()
 			neutralChip(c, p.ID+"@"+p.Version)
 			ui.Spacer(c)
-			flat(c, "打开插件目录").OnClick(func() {
+			cardFlat(c, "打开插件目录").OnClick(func() {
 				if p.Dir != "" {
 					a.job(func() error { return a.core.OpenPathInFileManager(p.Dir) })
 				}
 			})
-			flat(c, "插件管理").OnClick(func() { a.changePage("plugins") })
+			cardFlat(c, "插件管理").OnClick(func() { a.changePage("plugins") })
 		})
 		notice(c, "info", "这个插件是网页型页面：它在 Web 宿主里执行 JavaScript 与 DOM 渲染，原生窗口无法内嵌执行。原有数据、权限与启停状态都保留在本地。")
 		if p.Description != "" {

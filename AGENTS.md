@@ -8,7 +8,9 @@
 - UI 状态只在主线程修改。后台结果经 Window.Update 发布；不得保存 Element 或把 Context 带入后台。动态控件构造前使用 c.Key。
 - 不在视图渲染期间读写磁盘、执行网络请求或启动无条件后台任务。素材通过 resources 包嵌入。
 - 所有测试读写在 t.TempDir，读取用户目录的测试同时隔离 HOME 和 USERPROFILE。运行全套测试时不要设置全局 ALLY_DATA_DIR，测试自己管理它。
-- 构建：bash scripts/build.sh（本机 Windows 固定产物）；全平台交叉构建和 macOS DMG：在 macOS 上运行 bash scripts/build-all.sh；测试：CGO_ENABLED=0 go test -p 1 ./...；UI 检查：go tool mygo vet .。
+- 构建：python scripts/build.py dev（本机 Windows exe / macOS app；双击 scripts/build.bat / build.command）；全平台交叉构建和 macOS DMG：在 macOS 上运行 bash scripts/build-all.sh；测试：CGO_ENABLED=0 go test -p 1 ./...；UI 检查：go tool mygo vet .。
 - Windows 构建产物固定为 dist/ally-native.exe，不添加版本、日期或 fixed 等后缀；覆盖失败时处理文件占用，不得改名绕过。
 - migration/legacy-host 保留旧 Wails 专用实现/测试作为迁移参考，不参与构建。dist 和 .tmp 为生成及本地调试目录，不提交。
 - 提交作者使用 ally agent <ally@agent.dev>；本实现推送 mygo 分支，不修改 main。
+
+- 公共组件动效遵守 `desktop/uikit/README.md` 的“交互动效约束”，时长集中在 `desktop/uikit/motion.go`。悬停不改变控件尺寸和文字位置；加载不挤压邻近操作；尊重系统减少动态效果设置。

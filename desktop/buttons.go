@@ -103,8 +103,8 @@ func uikitTone(tone iconTone) uikit.IconTone {
 // before brightening under the pointer.
 func addButton(c *ui.Context, id, tip, name string, size float32, fn func()) ui.Element {
 	t := c.Theme()
-	b := ui.ButtonBase(c.Key(id)).Size(size, size).Center().Radius(radiusControl).
-		Label(tip).Tooltip(tip).Cursor(ui.CursorPointer)
+	b := uikit.Tooltip(c, ui.ButtonBase(c.Key(id)).Size(size, size).Center().Radius(radiusControl).
+		Label(tip), tip).Cursor(ui.CursorPointer)
 	// A nil fn leaves the click to Element.Menu, which opens the owner's own menu.
 	if fn != nil {
 		b.OnClick(fn)

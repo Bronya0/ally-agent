@@ -128,7 +128,7 @@ func (a *desktop) mcpPageBody(c *ui.Context) {
 		ui.Spacer(c)
 		flat(c, "导入").OnClick(func() { a.importMCP() })
 		flat(c, "导出").Disabled(len(a.mcpServerNames) == 0).OnClick(func() { a.exportMCP() })
-		flat(c, "刷新").OnClick(func() { a.refreshMCPAll() })
+		flat(c, "刷新").OnClick(func() { a.refreshMCPAll(true) })
 		a.linkMenu(c, "mcp-market", [][2]string{{"魔搭 ModelScope", "https://modelscope.cn/mcp"}, {"火山引擎 Volcengine", "https://www.volcengine.com/mcp"}, {"Glama", "https://glama.ai/mcp/servers"}, {"PulseMCP", "https://www.pulsemcp.com"}})
 		primary(c, "添加").OnClick(func() { a.openMCPEditor("") })
 	})
@@ -199,22 +199,21 @@ func (a *desktop) mcpServerList(c *ui.Context) {
 				}
 				if len(tools) > 0 {
 					label := fmt.Sprintf("工具 %d/%d", enabledCount, len(tools))
-					btn := flat(c, label).Tooltip("勾选的工具注入模型上下文，取消勾选即停用；对端新增工具默认启用；下一会话生效。")
+					btn := uikit.Tooltip(c, cardFlat(c, label), "勾选的工具注入模型上下文，取消勾选即停用；对端新增工具默认启用；下一会话生效。")
 					btn.OnClick(func() { a.mcpF.ToolOpen[name] = !a.mcpF.ToolOpen[name] })
 				} else if count := int(num(status, "toolCount")); count > 0 {
 					fieldNote(c, fmt.Sprintf("%d 个工具", count))
 				}
 				stateText := mcpStatusText(str(status, "status"))
-				ui.Text(c, stateText).FontSize(fsSmall).TextColor(toneColor(c, str(status, "status"))).Tooltip(str(status, "error"))
+				uikit.Tooltip(c, ui.Text(c, stateText).FontSize(fsSmall).TextColor(toneColor(c, str(status, "status"))), str(status, "error"))
 				enabled := entry.Enabled == nil || *entry.Enabled
-				sw := ui.Switch(c.Key("mcp-enabled-"+name), &enabled).Label("启用 " + name)
-				if sw.Changed() {
+				uikit.SwitchNative(c.Key("mcp-enabled-"+name), &enabled).Label("启用 " + name).OnClick(func() {
 					entry.Enabled = boolPtr(enabled)
 					doc.Servers[name] = entry
 					a.saveMCPDoc(doc)
-				}
-				flat(c, "编辑").OnClick(func() { a.openMCPEditor(name) })
-				dangerButton(c, "删除").OnClick(func() {
+				})
+				cardFlat(c, "编辑").OnClick(func() { a.openMCPEditor(name) })
+				cardDanger(c, "删除").OnClick(func() {
 					delete(doc.Servers, name)
 					a.saveMCPDoc(doc)
 				})
@@ -277,11 +276,18 @@ func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEn
 				continue
 			}
 			toolName := str(m, "name")
-			disabled := boolOf(m, "disabled")
+			disabled := false
+			for _, hidden := range entry.DisabledTools {
+				if hidden == toolName {
+					disabled = true
+					break
+				}
+			}
 			enabled := !disabled
 			enabledPtr := &enabled
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				if cb := ui.Checkbox(c.Key("mcp-tool-"+name+"-"+toolName), enabledPtr, toolName); cb.Changed() {
+				ui.Checkbox(c.Key("mcp-tool-"+name+"-"+toolName), enabledPtr, toolName).Disabled(a.mcpF.Busy).OnClick(func() {
+					entry = doc.Servers[name]
 					set := map[string]bool{}
 					for _, t := range entry.DisabledTools {
 						set[t] = true
@@ -298,8 +304,8 @@ func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEn
 					sort.Strings(entry.DisabledTools)
 					doc.Servers[name] = entry
 					a.saveMCPDoc(doc)
-				}
-				ui.Text(c, str(m, "description")).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine().Tooltip(str(m, "description"))
+				})
+				uikit.Tooltip(c, ui.Text(c, str(m, "description")).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine(), str(m, "description"))
 			})
 		}
 		if len(list(status, "tools")) == 0 {
@@ -311,7 +317,7 @@ func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEn
 func (a *desktop) openMCPEditor(name string) {
 	doc, err := parseMCPConfig(a.mcpText)
 	if err != nil {
-		a.status = "读取 MCP 配置失败：" + err.Error()
+		a.notifyError("读取 MCP 配置失败：" + err.Error())
 		return
 	}
 	a.mcpF.EditorOpen = true
@@ -401,12 +407,12 @@ func (a *desktop) mcpEditorDialog(c *ui.Context) {
 func (a *desktop) saveMCPEditor() {
 	name := strings.TrimSpace(a.mcpF.Name)
 	if name == "" {
-		a.status = "请填写服务名称"
+		a.notify("请填写服务名称")
 		return
 	}
 	doc, err := parseMCPConfig(a.mcpText)
 	if err != nil {
-		a.status = "读取 MCP 配置失败：" + err.Error()
+		a.notifyError("读取 MCP 配置失败：" + err.Error())
 		return
 	}
 	entry := doc.Servers[name]
@@ -492,9 +498,12 @@ func parsePairs(raw, sep string) map[string]string {
 }
 
 func (a *desktop) saveMCPDoc(doc *mcpConfigDoc) {
+	if a.core == nil || a.win == nil {
+		return
+	}
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
-		a.notify(err.Error())
+		a.notifyError(err.Error())
 		return
 	}
 	raw := string(data)
@@ -521,19 +530,19 @@ func (a *desktop) saveMCPDoc(doc *mcpConfigDoc) {
 		a.win.Update(func() {
 			a.mcpF.Busy = false
 			if err != nil {
-				a.status = "保存 MCP 配置失败：" + err.Error()
+				a.notifyError("保存 MCP 配置失败：" + err.Error())
 				return
 			}
 			a.mcpText = saved
 			a.mcpServerNames = names
 			a.mcpServers = servers
 			a.mcpSummary = mcpSummary(servers)
-			a.notify("MCP 配置已保存并重连")
+			a.notifySuccess("MCP 配置已保存")
 		})
 	}()
 }
 
-func (a *desktop) refreshMCPAll() {
+func (a *desktop) refreshMCPAll(manual ...bool) {
 	go func() {
 		raw, err := a.core.GetMcpConfig()
 		var servers []map[string]any
@@ -550,7 +559,7 @@ func (a *desktop) refreshMCPAll() {
 		tools := a.core.ListTools()
 		a.win.Update(func() {
 			if err != nil {
-				a.status = "读取 MCP 配置失败：" + err.Error()
+				a.notifyError("读取 MCP 配置失败：" + err.Error())
 				return
 			}
 			a.mcpText = raw
@@ -559,6 +568,9 @@ func (a *desktop) refreshMCPAll() {
 			a.mcpSummary = mcpSummary(servers)
 			a.toolInventory = tools
 			a.toolCount = enabledToolCount(tools)
+			if len(manual) > 0 && manual[0] {
+				a.notifySuccess("MCP 列表已刷新")
+			}
 		})
 	}()
 }
@@ -579,7 +591,7 @@ func (a *desktop) importMCP() {
 		}
 		doc, err := parseMCPConfig(data)
 		if err != nil {
-			a.win.Update(func() { a.status = "无法导入：MCP 配置不是有效的 JSON" })
+			a.win.Update(func() { a.notify("无法导入：MCP 配置不是有效的 JSON") })
 			return
 		}
 		a.win.Update(func() { a.saveMCPDoc(doc) })
@@ -621,13 +633,13 @@ func (a *desktop) builtinToolsGrid(c *ui.Context) {
 		}
 		rowCard(c, "builtin-"+tool.Name, func() {
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, builtinToolLabel(tool.Name)).FontSize(fsSmall).Bold().Tooltip(tool.Name)
+				uikit.Tooltip(c, ui.Text(c, builtinToolLabel(tool.Name)).FontSize(fsSmall).Bold(), tool.Name)
 				ui.Spacer(c)
 				enabled := tool.Enabled
 				if tool.Protected {
-					ui.Switch(c.Key("builtin-switch-"+tool.Name), &enabled).Disabled(true).Label(tool.Name)
-				} else if sw := ui.Switch(c.Key("builtin-switch-"+tool.Name), &enabled).Label(tool.Name); sw.Changed() {
-					a.toggleBuiltinTool(tool)
+					uikit.SwitchNative(c.Key("builtin-switch-"+tool.Name), &enabled).Disabled(true).Label(tool.Name)
+				} else {
+					uikit.SwitchNative(c.Key("builtin-switch-"+tool.Name), &enabled).Label(tool.Name).OnClick(func() { a.toggleBuiltinTool(tool) })
 				}
 			})
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
@@ -697,13 +709,13 @@ func (a *desktop) toggleBuiltinTool(tool backend.ToolDefinitionSummary) {
 		a.win.Update(func() {
 			a.mcpF.Busy = false
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				return
 			}
 			a.config = cfg
 			a.toolInventory = tools
 			a.toolCount = enabledToolCount(tools)
-			a.notify("工具设置已保存，新会话生效")
+			a.notifySuccess("工具设置已保存，新会话生效")
 		})
 	}()
 }

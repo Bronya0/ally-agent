@@ -43,7 +43,13 @@ func (a *desktop) loadHTMLPreview(t *conversation, m map[string]any) {
 			break
 		}
 	}
-	preview, err := a.win.NewWebView(mygo.WebViewOptions{BackgroundColor: "#1b1b1b"})
+	// mygo v0.7.2 turns a web view's pinch zoom off unless asked, where the
+	// WebView2 default before it had it on: keep previews zoomable. Swipe
+	// navigation stays off, as the preview never navigates anywhere.
+	preview, err := a.win.NewWebView(mygo.WebViewOptions{
+		BackgroundColor: "#1b1b1b",
+		Page:            mygo.PageOptions{PinchZoom: true},
+	})
 	if err != nil {
 		m["previewError"] = err.Error()
 		return

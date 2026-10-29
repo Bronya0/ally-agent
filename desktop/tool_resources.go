@@ -12,13 +12,22 @@ import (
 	"time"
 )
 
+const terminalOutputSize float32 = fsTool - 1
+
 func toolCodeWindow(c *ui.Context, key, text string, expanded bool, filename ...string) {
 	path := ""
 	if len(filename) > 0 {
 		path = filename[0]
 	}
 	body := func() {
-		ui.RichText(c, codeSpans(c, text, path)...).Font(monoFamily).FontSize(readingCodeSize).Shrink(0).Selectable().Padding(2, 8, 4, 0).NoWrap()
+		base := c.Theme().TextMuted
+		size := readingCodeSize
+		if path == "" {
+			base = terminalOutputInk(c.Theme())
+			size = terminalOutputSize
+		}
+		spans := codeSpansWithBase(c, text, path, base)
+		ui.RichText(c, spans...).AlignSelf(ui.Start).TextAlign(ui.Start).Font(monoFamily).FontSize(size).Shrink(0).Selectable().Padding(2, 8, 4, 0).NoWrap()
 	}
 	if !expanded {
 		ui.Box(c.Key(key)).FillWidth().MaxHeight(150).Clip().Background(c.Theme().Background).Radius(radiusSmall).Children(body)
@@ -31,6 +40,7 @@ type highlightCacheEntry struct {
 	text, path string
 	dark       bool
 	accent     ui.Color
+	base       ui.Color
 	spans      []ui.Span
 }
 
@@ -39,25 +49,28 @@ var highlightCache []highlightCacheEntry
 // UI-thread-only bounded cache: repeated streaming frames do not retokenize
 // unchanged previews. Oversized sources are not retained in the cache.
 func codeSpans(c *ui.Context, text, path string) []ui.Span {
+	return codeSpansWithBase(c, text, path, c.Theme().TextMuted)
+}
+func codeSpansWithBase(c *ui.Context, text, path string, base ui.Color) []ui.Span {
 	for _, entry := range highlightCache {
-		if entry.text == text && entry.path == path && entry.dark == c.Theme().Dark && entry.accent == c.Theme().Accent {
+		if entry.text == text && entry.path == path && entry.dark == c.Theme().Dark && entry.accent == c.Theme().Accent && entry.base == base {
 			return entry.spans
 		}
 	}
-	spans := buildCodeSpans(c, text, path)
+	spans := buildCodeSpans(c, text, path, base)
 	if len(text) <= 32768 {
 		if len(highlightCache) >= 32 {
 			copy(highlightCache, highlightCache[1:])
 			highlightCache = highlightCache[:31]
 		}
-		highlightCache = append(highlightCache, highlightCacheEntry{text, path, c.Theme().Dark, c.Theme().Accent, spans})
+		highlightCache = append(highlightCache, highlightCacheEntry{text: text, path: path, dark: c.Theme().Dark, accent: c.Theme().Accent, base: base, spans: spans})
 	}
 	return spans
 }
-func buildCodeSpans(c *ui.Context, text, path string) []ui.Span {
+func buildCodeSpans(c *ui.Context, text, path string, base ui.Color) []ui.Span {
 	language := editor.LanguageFor(path)
 	if language == nil || language.Tokenizer == nil {
-		return []ui.Span{{Text: text, Color: c.Theme().TextMuted}}
+		return []ui.Span{{Text: text, Color: base}}
 	}
 	var spans []ui.Span
 	var state uint64
@@ -73,24 +86,24 @@ func buildCodeSpans(c *ui.Context, text, path string) []ui.Span {
 			if end < start || end > len(line) {
 				continue
 			}
-			color := c.Theme().TextMuted
+			color := base
 			switch token.Kind {
 			case editor.TokenKeyword, editor.TokenType, editor.TokenFunction:
 				color = c.Theme().Accent
 			case editor.TokenString, editor.TokenInserted:
-				color = colSuccess()
+				color = c.Theme().Success
 			case editor.TokenNumber, editor.TokenConstant:
-				color = colWarning()
+				color = c.Theme().Warning
 			case editor.TokenComment:
 				color = c.Theme().TextMuted
 			case editor.TokenInvalid, editor.TokenDeleted:
-				color = colDanger()
+				color = c.Theme().Danger
 			}
 			spans = append(spans, ui.Span{Text: line[start:end], Color: color})
 			start = end
 		}
 		if start < len(line) {
-			spans = append(spans, ui.Span{Text: line[start:], Color: c.Theme().TextMuted})
+			spans = append(spans, ui.Span{Text: line[start:], Color: base})
 		}
 	}
 	return spans
@@ -290,10 +303,10 @@ func diffCell(c *ui.Context, text string, changed bool, number int) {
 	if changed {
 		if strings.HasPrefix(text, "-") {
 			fill = ui.RGBA(232, 84, 84, 0.10)
-			color = colDanger()
+			color = c.Theme().Danger
 		} else {
 			fill = ui.RGBA(78, 200, 126, 0.10)
-			color = colSuccess()
+			color = c.Theme().Success
 		}
 	}
 	// Each cell takes half the row and lets its code wrap: the row then grows to
@@ -336,10 +349,10 @@ func diffCellNoWrap(c *ui.Context, text string, changed bool, number int) {
 	if changed {
 		if strings.HasPrefix(text, "-") {
 			fill = ui.RGBA(232, 84, 84, 0.10)
-			color = colDanger()
+			color = c.Theme().Danger
 		} else {
 			fill = ui.RGBA(78, 200, 126, 0.10)
-			color = colSuccess()
+			color = c.Theme().Success
 		}
 	}
 	ui.Row(c).FillWidth().Height(22).Shrink(0).Padding(1, 8).AlignItems(ui.Center).Background(fill).Children(func() {
@@ -353,4 +366,19 @@ func diffCellNoWrap(c *ui.Context, text string, changed bool, number int) {
 		}
 		ui.Text(c, text).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).NoWrap().Shrink(0).Selectable()
 	})
+}
+
+// Terminal heading and transcript have different roles, especially on light
+// surfaces. Keep the dark palette intact; avoid fading light output too far.
+func commandLineInk(t *ui.Theme) ui.Color {
+	if t.Dark {
+		return t.TextMuted
+	}
+	return t.Text.Mix(t.TextMuted, 0.30)
+}
+func terminalOutputInk(t *ui.Theme) ui.Color {
+	if t.Dark {
+		return t.TextMuted
+	}
+	return t.TextMuted.Mix(t.Background, 0.12)
 }

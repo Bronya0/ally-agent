@@ -1,37 +1,57 @@
-// SPDX-License-Identifier: GPL-3.0-only
 package desktop
 
-import "testing"
+import (
+	backend "ally-dev/internal/app"
+	"github.com/egoist/mygo/ui"
+	"testing"
+)
 
-// A workspace entry of the header menu has to show something on every click: a
-// Tab of another workspace comes forward, and the workspace the current Tab
-// already runs in opens a new Tab instead of switching to itself.
-func TestWorkspaceEntryTab(t *testing.T) {
-	tabs := func(roots ...string) []*conversation {
-		out := make([]*conversation, 0, len(roots))
-		for _, root := range roots {
-			out = append(out, &conversation{Workspace: root})
+func TestHistoryWorkspaceAlwaysCreatesNewTab(t *testing.T) {
+	a := &desktop{tabs: []*conversation{{ID: "existing", Workspace: `C:\work\cam`}, {ID: "other", Workspace: `C:\other\cam`}}, active: 1}
+	for _, root := range []string{`C:\work\cam`, `C:\work\cam`, `C:\other\cam`} {
+		before := len(a.tabs)
+		a.openWorkspaceEntry(root)
+		if len(a.tabs) != before+1 || a.active != before {
+			t.Fatal("history reused an existing tab")
 		}
-		return out
-	}
-	cases := []struct {
-		name      string
-		tabs      []*conversation
-		active    int
-		workspace string
-		want      int
-	}{
-		{name: "no tab yet opens a new one", tabs: tabs(`C:\work\cam`), active: 0, workspace: `C:\work\ally`, want: -1},
-		{name: "the current workspace opens a new one", tabs: tabs(`C:\work\cam`), active: 0, workspace: `C:\work\cam`, want: -1},
-		{name: "another tab comes forward", tabs: tabs(`C:\work\cam`, `C:\work\ally`), active: 1, workspace: `C:\work\cam`, want: 0},
-		{name: "the first tab of a workspace comes forward", tabs: tabs(`C:\work\cam`, `C:\work\ally`, `C:\work\cam`), active: 1, workspace: `C:\work\cam`, want: 0},
-		{name: "the path matches whatever its case", tabs: tabs(`C:\work\CAM`), active: 1, workspace: `c:\work\cam`, want: 0},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := workspaceEntryTab(c.tabs, c.active, c.workspace); got != c.want {
-				t.Fatalf("workspaceEntryTab(%v, %d, %q) = %d, want %d", len(c.tabs), c.active, c.workspace, got, c.want)
+		added := a.tabs[a.active]
+		if added.Workspace != root {
+			t.Fatal("history opened wrong workspace")
+		}
+		for _, old := range a.tabs[:before] {
+			if old.ID == added.ID {
+				t.Fatal("history reused an existing session")
 			}
-		})
+		}
+	}
+	if a.tabs[0].ID != "existing" || a.tabs[1].ID != "other" {
+		t.Fatal("existing tabs changed")
+	}
+}
+
+func TestWorkspaceMenuOpensToLeftAndDistinguishesSameNames(t *testing.T) {
+	a := &desktop{workspaceMenuOpen: true, sessions: []backend.SessionIndexEntry{{Workspace: "C:/work/cam"}, {Workspace: "C:/other/cam"}, {Workspace: "C:/work/cam"}}}
+	tt := ui.NewTester(func(c *ui.Context) {
+		anchor := ui.ButtonBase(c.Key("add")).Absolute().Left(500).Top(10).Size(30, 30).Label("add")
+		a.workspaceMenu(c, anchor)
+	}, 600, 500)
+	panel, ok := tt.Find("工作区历史菜单")
+	if !ok {
+		t.Fatal("missing menu")
+	}
+	if panel.X >= 500 || panel.X+panel.W > 531 {
+		t.Fatalf("menu should open left of anchor: %v", panel)
+	}
+	for _, root := range []string{"C:/work/cam", "C:/other/cam"} {
+		if _, ok := tt.Find("打开工作区 " + root); !ok {
+			t.Fatal("same-name workspace missing: " + root)
+		}
+	}
+	if err := tt.Click("打开工作区 C:/other/cam"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.workspaceMenuOpen || len(a.tabs) != 1 || a.tabs[0].Workspace != "C:/other/cam" {
+		t.Fatal("history selected wrong path or did not close")
 	}
 }

@@ -12,11 +12,11 @@ import "github.com/egoist/mygo/ui"
 type ButtonVariant int
 
 const (
-	// ButtonSecondary 是次要操作：面板底色 + 一条细边。
+	// ButtonSecondary 兼容旧调用：中性次次要按钮。
 	ButtonSecondary ButtonVariant = iota
-	// ButtonPrimary 是主操作：主题色描边，底色几乎透明。
+	// ButtonPrimary 使用主题色次要按钮。
 	ButtonPrimary
-	// ButtonDanger 是危险操作：红色字，红色淡边。
+	// ButtonDanger 使用危险色次要按钮。
 	ButtonDanger
 	// ButtonGhost 平时只有字，悬停才浮出底色。
 	ButtonGhost
@@ -44,53 +44,25 @@ const (
 //
 // 图标可为 nil；有图标时画在标签前面，跟着文字一起变色。
 func Button(c *ui.Context, key any, label string, variant ButtonVariant, small bool, icon *ui.SVG) (ui.Element, ui.Element) {
-	t := c.Theme()
-	height, font, padX := ButtonHeight, ButtonFont, ButtonPadX
-	if small {
-		height, font, padX = ButtonHeightSmall, ButtonFontSmall, ButtonPadXSmall
-	}
-	ctx := c
 	if key != nil {
-		ctx = c.Key(key)
+		c = c.Key(key)
 	}
-	b := ui.ButtonBase(ctx).Height(height).Padding(0, padX).Radius(Radius).Gap(GapInline).
-		Center().Label(label).Cursor(ui.CursorPointer)
-	fill, border, fg := t.Surface, t.Border, t.Text
-	hoverFill, hoverBorder, hoverFG := t.SurfaceHover, t.Border.Mix(t.Text, chromeHoverMix), fg
-	pressedFill := t.SurfacePressed
+	o := ActionOptions{Style: Tertiary, Small: small, Icon: icon}
 	switch variant {
 	case ButtonPrimary:
-		fill, border = t.Accent.Alpha(0.07), t.Accent.Alpha(0.55)
-		fg = t.Accent.Mix(t.Text, primaryInkMix)
-		hoverFill, hoverBorder = t.Accent.Alpha(0.16), t.Accent
-		hoverFG = t.Accent.Mix(t.Text, primaryInkHoverMix)
-		pressedFill = t.Accent.Alpha(0.22)
+		o.Style = Secondary
+		o.Tone = Primary
 	case ButtonDanger:
-		fg, hoverFG = t.Danger, t.Danger
-		border, hoverBorder = t.Danger.Alpha(0.42), t.Danger.Alpha(0.62)
-		hoverFill, pressedFill = t.Danger.Alpha(0.12), t.Danger.Alpha(0.18)
+		o.Style = Secondary
+		o.Tone = Error
 	case ButtonGhost:
-		fill, border, fg = ui.Transparent, ui.Transparent, t.TextMuted
-		hoverFill, hoverBorder, hoverFG = t.SurfaceHover, ui.Transparent, t.Text
+		o.Style = Tertiary
 	}
-	switch {
-	case b.IsDisabled():
-		b.Opacity(0.45)
-	case b.Pressed():
-		fill = pressedFill
-	case b.Hovered():
-		fill, border, fg = hoverFill, hoverBorder, hoverFG
+	b, text := actionParts(c, label, o)
+	if variant == ButtonGhost {
+		b.Background(ui.Transparent).Border(0, ui.Transparent)
 	}
-	fg = fade(b, "label", fg)
-	b.Border(1, fade(b, "border", border)).Background(fade(b, "fill", fill)).TextColor(fg)
-	var labelEl ui.Element
-	b.Children(func() {
-		if icon != nil {
-			ui.Icon(c, icon).Size(font+3, font+3).TextColor(fg)
-		}
-		labelEl = ui.Text(c, label).FontSize(font).TextColor(fg).SingleLine()
-	})
-	return b, labelEl
+	return b, text
 }
 
 // IconTone 决定一个无字方块按钮能有多响。
@@ -126,13 +98,13 @@ func IconButton(c *ui.Context, id, tip string, icon *ui.SVG, size float32, tone 
 	case IconAccentOn:
 		color, hoverColor, hoverFill = t.Accent, t.AccentHover, ui.Transparent
 	}
-	b := ui.ButtonBase(c.Key(id)).Size(size, size).Center().Radius(RadiusSmall).Label(tip).
-		Tooltip(tip).Cursor(ui.CursorPointer).OnClick(fn)
+	b := Tooltip(c, ui.ButtonBase(c.Key(id)).Size(size, size).Center().Radius(RadiusSmall).Label(tip), tip).Cursor(ui.CursorPointer).OnClick(fn)
 	if !b.IsDisabled() && b.Hovered() {
 		color = hoverColor
 		fill = hoverFill
 	}
-	b.Background(fade(b, "fill", fill)).TextColor(fade(b, "label", color))
+	color = fade(b, "label", color)
+	b.Background(fade(b, "fill", fill)).TextColor(color)
 	if icon != nil {
 		b.Children(func() {
 			e := ui.Icon(c, icon)

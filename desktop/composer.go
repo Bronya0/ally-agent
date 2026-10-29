@@ -15,6 +15,11 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// composerFocusDraft names the composer's entry in the window's focus binding:
+// MyGo keeps the input focused while the bound field holds that value and lets
+// go once it is cleared, which is what a sent message does.
+const composerFocusDraft = "draft"
+
 // composer is the input area: menus, attachments, run status, the editor and
 // the info bar with model, reasoning, workspace and context controls.
 func (a *desktop) composer(c *ui.Context, t *conversation) {
@@ -43,7 +48,8 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 			input := uikit.Area(c.Key(t.ID+"-draft"), &t.Draft).Label("消息输入框").
 				Placeholder("输入消息，Enter 发送，Ctrl+Enter 换行，Esc 中断，/ 选择指令，@ 引用文件").
 				MinHeight(58).MaxHeight(576).Lines(1, 24).Border(1, c.Theme().Border).Radius(radiusControl).
-				Background(p.bg).Disabled(a.closing || (a.page == "kb" && a.kbIndexMissing())).Grow(1)
+				Background(p.bg).Disabled(a.closing || (a.page == "kb" && a.kbIndexMissing())).Grow(1).
+				FocusBind(&a.composerFocus, composerFocusDraft)
 			if paths := input.DroppedFiles(); len(paths) > 0 {
 				a.dropAttachments(t, paths)
 			}
@@ -563,49 +569,39 @@ func lastUserPrompt(t *conversation) string {
 	return ""
 }
 
-// runSpinner mirrors main's RunSpinner: three 3px bars in a fixed 16px box,
-// rest 9px, peak 16px, one wave per 1.3s travelling left->right. The keyframes
-// are main's (rest at 0/80/100%, peak at 40%), neighbours staggered 208ms so
-// the three phases never all freeze inside the still window together. The box
-// height is frozen at the peak: only the bar scale moves, so the status row
-// never grows or shifts.
-//
-// The bars are drawn rather than animated with Loop: Loop asks for a frame that
-// rebuilds the whole view, so while the model ran this rebuilt every message at
-// the display's rate and made open tooltips shimmer.
+// runSpinner draws a continuous, staggered wave in a fixed 15x16 box.
+// Only painting is scheduled; messages and layout are not rebuilt per frame.
 func (a *desktop) runSpinner(c *ui.Context) {
-	const (
-		cycle = 1300
-		step  = 208
-		rest  = float32(9.0 / 16)
-	)
 	color := c.Theme().TextMuted
+	reduced := c.Preferences().ReduceMotion
 	ui.Box(c).Width(15).Height(16).Draw(func(p *ui.Painter, r ui.Rect) {
-		p.AnimationFrameRate(30)
-		ms := float64(p.Now().UnixMilli() % cycle)
+		if !reduced {
+			p.AnimationFrameRate(60)
+		}
+		elapsed := time.Duration(p.Now().UnixNano() % int64(1300*time.Millisecond))
 		for i := 0; i < 3; i++ {
-			// Bar i starts partway through its cycle, leftmost furthest ahead,
-			// so the wave enters mid-flight instead of jumping from rest.
-			frac := math.Mod(ms/float64(cycle)+float64(2-i)*float64(step)/float64(cycle), 1)
-			scale := rest
-			if frac < 0.8 {
-				// 0->40% rest climbs to peak, 40%->80% falls back; the cosine
-				// eases both ends like the CSS keyframes.
-				scale = rest + (1-rest)*float32(0.5-0.5*math.Cos(frac/0.8*2*math.Pi))
+			height := float32(9)
+			if !reduced {
+				height = thinkingBarHeight(elapsed, i)
 			}
-			h := 16 * scale
-			p.Fill(ui.Rect{X: r.X + float32(i)*6, Y: r.Y + (16-h)/2, W: 3, H: h}, color, 1)
+			p.Fill(ui.Rect{X: r.X + float32(i)*6, Y: r.Y + (16-height)/2, W: 3, H: height}, color, 1)
 		}
 	})
+}
+
+func thinkingBarHeight(elapsed time.Duration, index int) float32 {
+	const cycle = 1300 * time.Millisecond
+	phase := float64((elapsed+time.Duration(2-index)*208*time.Millisecond)%cycle) / float64(cycle)
+	return 9 + 7*float32(0.5-0.5*math.Cos(phase*2*math.Pi))
 }
 
 func (a *desktop) retryBanner(c *ui.Context, info *retryInfo) {
 	p := a.currentPalette()
 	ui.Row(c).FillWidth().Padding(5, 10).Gap(gapField).Radius(radiusSmall).
-		Background(ui.RGBA(217, 164, 65, 0.10)).BorderWidth(0, 0, 0, 3).BorderColor(colWarning()).Children(func() {
-		iconGlyph(c, "refresh", 13).TextColor(colWarning())
+		Background(ui.RGBA(217, 164, 65, 0.10)).BorderWidth(0, 0, 0, 3).BorderColor(c.Theme().Warning).Children(func() {
+		iconGlyph(c, "refresh", 13).TextColor(c.Theme().Warning)
 		msg := fmt.Sprintf("重试中 %d/%d：%s", info.Attempt, info.MaxAttempts, info.Error)
-		ui.Text(c, short(msg, 120)).FontSize(fsTiny).TextColor(colWarning()).SingleLine().Tooltip(msg)
+		uikit.Tooltip(c, ui.Text(c, short(msg, 120)).FontSize(fsTiny).TextColor(c.Theme().Warning).SingleLine(), msg)
 		ui.Spacer(c)
 		if info.TotalKeys > 1 {
 			ui.Text(c, fmt.Sprintf("第 %d/%d 个 Key 失败", info.KeyIndex+1, info.TotalKeys)).FontSize(fsTiny).TextColor(p.muted)
@@ -662,10 +658,10 @@ func (a *desktop) composerInfoBar(c *ui.Context, t *conversation) {
 		a.reasoningSelector(c, t)
 		a.workspaceButton(c, t)
 		a.extraRootsButton(c, t)
-		iconAction(c, "composer-terminal", "在终端中打开工作区", "terminal", 26, func() {
+		mutedIconAction(c, "composer-terminal", "在终端中打开工作区", "terminal", 26, func() {
 			req := backend.WorkspacePathRequest{Workspace: t.Workspace}
 			a.job(func() error { return a.core.OpenWorkspaceTerminalAt(req) })
-		}).TextColor(p.muted)
+		})
 		ui.Spacer(c)
 		running := 0
 		for _, s := range a.services {
@@ -701,18 +697,19 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 		label = "选择模型"
 	}
 	st := t.uiState()
-	btn := composerSettingButton(c.Key("composer-model"), short(strings.ReplaceAll(label, " / ", " · "), 34), t.Busy, func() {
+	btn := uikit.Tooltip(c, composerSettingButton(c.Key("composer-model"), short(strings.ReplaceAll(label, " / ", " · "), 34), t.Busy, func() {
 		st.ModelOpen = !st.ModelOpen
 		if st.ModelOpen {
 			st.ModelSearch = ""
 			st.ModelGroup = ""
 		}
-	}).SingleLine().MinWidth(0).Shrink(1).Tooltip("切换模型")
+	}).SingleLine().MinWidth(0).Shrink(1), "切换模型")
 	if t.Busy {
-		btn.Tooltip("运行中锁定：本轮结束后切换才生效")
+		uikit.Tooltip(c, btn, "运行中锁定：本轮结束后切换才生效")
 	}
 	ui.PopoverBase(c, btn, &st.ModelOpen, func(panel ui.Element) {
 		popoverChrome(c, panel, 340)
+		panel.MaxHeight(520)
 		st.FlyoutHot = false
 		ui.Column(c).FillWidth().Children(func() {
 			uikit.Input(c.Key("model-menu-search"), &st.ModelSearch).Placeholder("搜索模型或供应商").Label("搜索模型或供应商").FillWidth()
@@ -720,7 +717,7 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 			matches := func(model backend.ModelConfig) bool {
 				return query == "" || strings.Contains(strings.ToLower(model.ProviderName+" "+model.DisplayName+" "+model.Model), query)
 			}
-			ui.Scroll(c).MaxHeight(300).Children(func() {
+			ui.Scroll(c).MaxHeight(440).Children(func() {
 				ui.Column(c).Children(func() {
 					recent := append([]string(nil), a.prefs.RecentModels...)
 					if len(recent) == 0 && a.config.LastUsedModel != nil {
@@ -733,6 +730,9 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 					}
 					if len(recent) == 0 && t.Model != "" {
 						recent = append(recent, t.Model)
+					}
+					if len(recent) > 3 {
+						recent = recent[:3]
 					}
 					shownRecent := false
 					for _, identity := range recent {
@@ -749,7 +749,7 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 							if name == "" {
 								name = model.Model
 							}
-							popoverItem(c, fmt.Sprintf("model-recent-%d", i), name, model.ProviderName, modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) })
+							popoverModelRecent(c, fmt.Sprintf("model-recent-%d", i), name, model.ProviderName, modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) })
 						}
 					}
 					if shownRecent {
@@ -760,7 +760,7 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 						if matches(model) {
 							provider := strings.TrimSpace(model.ProviderName)
 							if provider == "" {
-								provider = "OpenAI Compatible"
+								provider = customProviderName
 							}
 							groups[provider] = append(groups[provider], i)
 						}
@@ -856,7 +856,7 @@ func (a *desktop) selectChatModel(t *conversation, model backend.ModelConfig) {
 	a.config.LastUsedModel = &id
 	recent := []string{t.Model}
 	for _, old := range a.prefs.RecentModels {
-		if old != t.Model && len(recent) < 8 {
+		if old != t.Model && len(recent) < 3 {
 			recent = append(recent, old)
 		}
 	}
@@ -881,7 +881,9 @@ func (a *desktop) reasoningSelector(c *ui.Context, t *conversation) {
 	if label == "" {
 		label = "auto"
 	}
-	btn := composerSettingButton(c.Key("composer-reasoning"), label+" ▾", t.Busy, func() {
+	// The label and caret both come from caretButton below. A label on the
+	// button itself would draw the level a second time.
+	btn := uikit.Tooltip(c, composerSettingButton(c.Key("composer-reasoning"), "", t.Busy, func() {
 		items := make([]*mygo.MenuItem, 0, len(levels))
 		for _, level := range levels {
 			level := level
@@ -891,9 +893,11 @@ func (a *desktop) reasoningSelector(c *ui.Context, t *conversation) {
 			}))
 		}
 		a.popupMenu(items)
-	}).Tooltip("思考强度（需模型支持，不支持的模型请保持 auto）")
+	}), "思考强度（需模型支持，不支持的模型请保持 auto）")
+	ink := c.Theme().TextMuted
+	caretButton(c, btn, label, "chevrondown", fsSmall, &ink)
 	if t.Busy {
-		btn.Tooltip("运行中锁定：本轮结束后切换才生效")
+		uikit.Tooltip(c, btn, "运行中锁定：本轮结束后切换才生效")
 	}
 }
 
@@ -905,11 +909,11 @@ func (a *desktop) workspaceButton(c *ui.Context, t *conversation) {
 	if t.Workspace == "" {
 		tip = "尚未选择工作区"
 	}
-	iconAction(c, "composer-workspace", tip, "folderopen", 26, func() {
+	mutedIconAction(c, "composer-workspace", tip, "folderopen", 26, func() {
 		if t.Workspace != "" {
 			a.job(func() error { return a.core.OpenPathInFileManager(t.Workspace) })
 		}
-	}).TextColor(a.currentPalette().muted)
+	})
 }
 
 // extraRootsButton mirrors main's extra-roots entry: a glyph button with the
@@ -929,30 +933,37 @@ func (a *desktop) extraRootsButton(c *ui.Context, t *conversation) {
 	if count > 0 {
 		color = p.accent
 	}
-	btn := ui.ButtonBase(c.Key("composer-extra-roots")).Height(26).MinWidth(26).Padding(0, 3).Gap(2).
-		Radius(radiusSmall).AlignItems(ui.Center).Center().Label("附加目录").Tooltip(tip).
+	btn := uikit.Tooltip(c, ui.ButtonBase(c.Key("composer-extra-roots")).Height(26).MinWidth(26).Padding(0, 3).Gap(2).
+		Radius(radiusSmall).AlignItems(ui.Center).Center().Label("附加目录"), tip).
 		TextColor(color).Cursor(ui.CursorPointer)
+	fill := ui.Transparent
 	if btn.Hovered() {
-		btn.Background(fadeColor(btn, "fill", p.hover))
+		fill = p.hover
+		if count == 0 {
+			color = p.text
+		}
 	}
-	btn.OnClick(func() {
-		// The attached roots are a plain list with an add action, so the system's
-		// own menu carries them; the path of each one is its tooltip, which a
-		// menu shows on hover and a nested column of text could not.
-		items := make([]*mygo.MenuItem, 0, len(roots)+2)
-		if len(roots) == 0 {
-			items = append(items, &mygo.MenuItem{Label: "尚未添加附加工作区", Disabled: true})
-		}
-		for _, root := range roots {
-			root := root
-			items = append(items, &mygo.MenuItem{
-				Label:   "📁 " + filepath.Base(root),
-				ToolTip: root,
-				Click:   func(*mygo.MenuItem, *mygo.Window) { a.removeExtraRoot(t, root) },
-			})
-		}
-		items = append(items, menuSeparator(), menuAction("＋ 添加目录", func() { a.addExtraRoot(t) }))
-		a.popupMenu(items)
+	st := t.uiState()
+	if st.ExtraRootsOpen {
+		color = p.accent
+	}
+	color = fadeColor(btn, "icon-ink", color)
+	btn.Background(fadeColor(btn, "fill", fill)).TextColor(color)
+	btn.OnClick(func() { st.ExtraRootsOpen = !st.ExtraRootsOpen })
+	ui.PopoverBase(c.Key("extra-roots-menu"), btn, &st.ExtraRootsOpen, func(panel ui.Element) {
+		popoverChrome(c, panel, 300)
+		panel.Label("附加工作区菜单").AttachTo(btn, ui.AnchorTopLeft, ui.AnchorBottomLeft).Margin(0, 0, 6, 0).MaxHeightPercent(75).Transition(uikit.PopupTransition())
+		ui.Scroll(c.Key("roots")).FillWidth().MaxHeight(260).Children(func() {
+			if len(roots) == 0 {
+				muted(c, "尚未添加附加工作区", fsSmall).Padding(8, 10)
+			}
+			for _, root := range roots {
+				root := root
+				popoverItem(c, root, "📁 "+filepath.Base(root), root+" · 点击移除", false, func() { st.ExtraRootsOpen = false; a.removeExtraRoot(t, root) })
+			}
+		})
+		divider(c)
+		popoverItem(c, "add-root", "＋ 添加目录", "", false, func() { st.ExtraRootsOpen = false; a.addExtraRoot(t) })
 	})
 	btn.Children(func() {
 		iconGlyph(c, "grid", 16).TextColor(color)
@@ -1032,7 +1043,7 @@ func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 	if label == "" {
 		label = "git"
 	}
-	btn := ui.ButtonBase(c.Key("footer-git")).Height(22).Padding(1, 7).Radius(11).Border(1, c.Theme().Border).Background(c.Theme().Surface).Cursor(ui.CursorPointer).Tooltip("查看 Git 改动")
+	btn := uikit.Tooltip(c, ui.ButtonBase(c.Key("footer-git")).Height(22).Padding(1, 7).Radius(11).Border(1, c.Theme().Border).Background(c.Theme().Surface).Cursor(ui.CursorPointer), "查看 Git 改动")
 	btn.Children(func() {
 		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, short(label, 22)).FontSize(fsTiny).TextColor(c.Theme().Accent).SingleLine()
@@ -1040,7 +1051,7 @@ func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 				value  int
 				symbol string
 				color  ui.Color
-			}{{git.Ahead, "↑", c.Theme().TextMuted}, {git.Behind, "↓", c.Theme().TextMuted}, {git.Added, "+", colSuccess()}, {git.Modified, "~", colWarning()}, {git.Deleted, "-", colDanger()}} {
+			}{{git.Ahead, "↑", c.Theme().TextMuted}, {git.Behind, "↓", c.Theme().TextMuted}, {git.Added, "+", c.Theme().Success}, {git.Modified, "~", c.Theme().Warning}, {git.Deleted, "-", c.Theme().Danger}} {
 				if part.value > 0 {
 					ui.Text(c, fmt.Sprintf("%s%d", part.symbol, part.value)).FontSize(fsTiny).TextColor(part.color).NoWrap()
 				}
@@ -1132,15 +1143,15 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 	}
 	switch {
 	case ratio > 0.4:
-		color = colDanger()
+		color = c.Theme().Danger
 	case ratio > 0.2:
-		color = colWarning()
+		color = c.Theme().Warning
 	}
 	btn, labelEl := composerFlatParts(c, label)
 	// The colour goes on the label itself: a TextColor on the button never reaches
 	// it, which is why the meter used to sit at one muted grey whatever the ratio.
 	labelEl.TextColor(fadeColor(labelEl, "context-tone", color))
-	btn = btn.SingleLine().Shrink(0).NoWrap().Tooltip("上下文占用（点击查看明细）")
+	btn = uikit.Tooltip(c, btn.SingleLine().Shrink(0).NoWrap(), "上下文占用（点击查看明细）")
 	if !st.FooterLoaded {
 		btn.OnClick(func() { a.refreshSessionFooter(t) })
 		return
@@ -1208,8 +1219,8 @@ func contextCompactButton(c *ui.Context, key, label string, primary, disabled bo
 	// 对齐 main 的 .context-compact-btn：透明底 + 1px 边框，字号 12，前两个主操作走
 	// 主题高亮色；圆角与边框透明度跟其它按钮同一套 token。
 	t := c.Theme()
-	b := ui.ButtonBase(c.Key(key)).Grow(1).Basis(0).MinWidth(0).Height(28).Padding(2, 4).Radius(radiusControl).
-		Border(1, surfaceBorder(c)).Center().Label(label).Tooltip(tip).Cursor(ui.CursorPointer).Disabled(disabled)
+	b := uikit.Tooltip(c, ui.ButtonBase(c.Key(key)).Grow(1).Basis(0).MinWidth(0).Height(28).Padding(2, 4).Radius(radiusControl).
+		Border(1, surfaceBorder(c)).Center().Label(label), tip).Cursor(ui.CursorPointer).Disabled(disabled)
 	color := t.TextMuted
 	if primary {
 		color = t.Accent

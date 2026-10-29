@@ -12,26 +12,29 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// modelProviderPreset is the quick-fill list from the original model editor.
-type modelProviderPreset struct {
-	name         string
-	baseURL      string
-	apiFormat    string
-	maxTokens    int
-	contextToken int
-}
+const customProviderPreset = "自定义配置"
 
-var modelProviders = []modelProviderPreset{
-	{"OpenAI", "https://api.openai.com/v1", "openai", 32000, 128000},
-	{"DeepSeek", "https://api.deepseek.com", "openai", 32000, 128000},
-	{"Anthropic", "https://api.anthropic.com", "anthropic", 32000, 200000},
-	{"Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "openai", 32000, 1000000},
-	{"Moonshot", "https://api.moonshot.cn/v1", "openai", 32000, 128000},
-	{"智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "openai", 16000, 128000},
-	{"阿里云百炼", "https://dashscope.aliyuncs.com/compatible-mode/v1", "openai", 32000, 128000},
-	{"火山引擎", "https://ark.cn-beijing.volces.com/api/v3", "openai", 32000, 128000},
-	{"Ollama", "http://127.0.0.1:11434/v1", "openai", 8000, 32000},
-	{"自定义配置", "", "", 0, 0},
+func applyCatalogModel(a *desktop, model modelCatalogModel) {
+	a.modelDraft.Model = model.ID
+	if model.Name != "" && !strings.EqualFold(model.Name, model.ID) {
+		a.modelDraft.DisplayName = model.Name
+	} else {
+		a.modelDraft.DisplayName = ""
+	}
+	if model.MaxTokens > 0 {
+		a.modelDraft.MaxTokens = model.MaxTokens
+		a.modelMaxTokens = float64(model.MaxTokens)
+	}
+	if model.ContextWindow > 0 {
+		a.modelDraft.ContextWindow = model.ContextWindow
+		a.modelContextWindow = float64(model.ContextWindow)
+	}
+	if model.ReasoningTag != "" {
+		a.modelDraft.ReasoningTag = model.ReasoningTag
+	} else if a.modelDraft.ReasoningTag == "" {
+		a.modelDraft.ReasoningTag = "reasoning_content"
+	}
+	a.modelDraft.VisionCapable = model.VisionCapable
 }
 
 // modelsPageBody is the model management surface: search/import/export/add,
@@ -106,7 +109,7 @@ func (a *desktop) chatModelProviderTabs(c *ui.Context) {
 	for _, model := range a.filteredChatModels() {
 		name := model.ProviderName
 		if name == "" {
-			name = "OpenAI Compatible"
+			name = customProviderName
 		}
 		if !groups[name] {
 			groups[name] = true
@@ -126,7 +129,7 @@ func (a *desktop) chatModelProviderTabs(c *ui.Context) {
 		providerIndex = 0
 	}
 	a.modelProvider = order[providerIndex]
-	if len(order) > 1 && scrollTabs(c, &providerIndex, order...) {
+	if len(order) > 1 && scrollSubTabs(c, &providerIndex, order...) {
 		a.modelProvider = order[providerIndex]
 	}
 }
@@ -137,7 +140,7 @@ func (a *desktop) chatModelsSection(c *ui.Context) {
 	for _, m := range models {
 		name := m.ProviderName
 		if name == "" {
-			name = "OpenAI Compatible"
+			name = customProviderName
 		}
 		groups[name] = append(groups[name], m)
 	}
@@ -163,7 +166,7 @@ func (a *desktop) chatModelsSection(c *ui.Context) {
 					neutralChip(c, m.Model)
 				}
 				ui.Spacer(c)
-				flat(c, "编辑").Disabled(a.modelSaving).OnClick(func() {
+				cardFlat(c, "编辑").Disabled(a.modelSaving).OnClick(func() {
 					for i, item := range a.config.Models {
 						if sameModelIdentity(modelIdentity(item), modelIdentity(m)) {
 							a.editModel(i)
@@ -172,7 +175,7 @@ func (a *desktop) chatModelsSection(c *ui.Context) {
 					}
 					a.modelForm.Open = true
 				})
-				dangerButton(c, "删除").Disabled(a.modelSaving).OnClick(func() { a.deleteModel(m) })
+				cardDanger(c, "删除").Disabled(a.modelSaving).OnClick(func() { a.deleteModel(m) })
 			})
 			ui.Row(c).Gap(gapSection).Children(func() {
 				fieldNote(c, fmt.Sprintf("max %s · context %s", dashZero(m.MaxTokens), dashZero(m.ContextWindow)))
@@ -259,8 +262,8 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 			}
 			ui.Grid(c.Key("oauth-model-fields")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "Provider 名称")
-					uikit.Input(c.Key("oauth-provider"), &a.modelDraft.ProviderName).Label("Provider 名称").FillWidth().Disabled(true)
+					fieldLabel(c, "供应商名称")
+					uikit.Input(c.Key("oauth-provider"), &a.modelDraft.ProviderName).Label("供应商名称").FillWidth().Disabled(true)
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "ChatGPT 模型")
@@ -286,38 +289,56 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 			})
 		} else {
 			fieldLabel(c, "供应商快速配置")
-			names := make([]string, 0, len(modelProviders))
-			for _, p := range modelProviders {
-				names = append(names, p.name)
-			}
+			names := catalogProviderOptions()
 			chosen := a.modelProviderPreset
 			if chosen == "" {
-				chosen = "自定义配置"
+				chosen = customProviderPreset
 			}
 			uikit.ComboboxField(c.Key("model-provider-preset"), &chosen, names, "供应商快速配置", "").FillWidth()
 			if chosen != a.modelProviderPreset {
 				a.modelProviderPreset = chosen
-				for _, p := range modelProviders {
-					if p.name == chosen && p.baseURL != "" {
-						a.modelDraft.ProviderName = p.name
-						a.modelDraft.BaseURL = p.baseURL
-						a.modelDraft.APIFormat = p.apiFormat
-						if p.maxTokens > 0 {
-							a.modelDraft.MaxTokens = p.maxTokens
-							a.modelMaxTokens = float64(p.maxTokens)
-						}
-						if p.contextToken > 0 {
-							a.modelDraft.ContextWindow = p.contextToken
-							a.modelContextWindow = float64(p.contextToken)
-						}
+				if provider := findCatalogProviderByName(chosen); provider != nil {
+					a.modelDraft.ProviderName = provider.Name
+					a.modelDraft.BaseURL = provider.BaseURL
+					a.modelDraft.APIFormat = provider.APIFormat
+					model := findCatalogModel(provider, a.modelDraft.Model)
+					if model == nil && len(provider.Models) > 0 {
+						model = &provider.Models[0]
 					}
+					if model != nil {
+						a.modelProviderModel = catalogModelLabel(*model)
+						applyCatalogModel(a, *model)
+					}
+				} else {
+					a.modelProviderModel = ""
 				}
 			}
-			if a.modelProviderPreset != "" && a.modelProviderPreset != "自定义配置" {
-				notice(c, "info", "已根据预设自动填充 "+a.modelProviderPreset+" 的接口地址、格式与上限，API Key 仍需填写。")
+			if provider := findCatalogProviderByName(a.modelProviderPreset); provider != nil {
+				modelOptions := make([]string, 0, len(provider.Models))
+				for _, model := range provider.Models {
+					modelOptions = append(modelOptions, catalogModelLabel(model))
+				}
+				chosenModel := a.modelProviderModel
+				if chosenModel == "" && len(modelOptions) > 0 {
+					chosenModel = modelOptions[0]
+				}
+				ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
+					uikit.ComboboxField(c.Key("model-provider-model"), &chosenModel, modelOptions, "供应商模型", "").Grow(1)
+					if provider.Doc != "" {
+						services := c.Services()
+						flat(c, "查看供应商文档").OnClick(func() { services.OpenURL(provider.Doc) })
+					}
+				})
+				if chosenModel != a.modelProviderModel {
+					a.modelProviderModel = chosenModel
+					if model := findCatalogModel(provider, chosenModel); model != nil {
+						applyCatalogModel(a, *model)
+					}
+				}
+				fieldNote(c, fmt.Sprintf("已从内置目录填入 %s 的接口地址、格式和模型参数；API Key 仍需自行填写。", provider.Name))
 			}
 			ui.Grid(c.Key("model-main-fields")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
-				fieldRow(c, "provider-name", "Provider 名称", &a.modelDraft.ProviderName, false)
+				fieldRow(c, "provider-name", "供应商名称", &a.modelDraft.ProviderName, false)
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "接口格式")
 					uikit.Select(c.Key("api-format"), &a.modelDraft.APIFormat, []string{"openai", "openai_responses", "anthropic"}).Label("接口格式").FillWidth()
@@ -377,7 +398,13 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 					numberField(c, "context-window", "上下文窗口", &a.modelContextWindow, 0, 10000000, 1).FillWidth()
 				})
 			})
-			flat(c, map[bool]string{true: "⌄ 高级设置", false: "› 高级设置"}[a.modelForm.AdvancedOpen]).AlignSelf(ui.Start).OnClick(func() { a.modelForm.AdvancedOpen = !a.modelForm.AdvancedOpen })
+			advancedLabel := "高级设置"
+			advancedIcon := "chevron"
+			if a.modelForm.AdvancedOpen {
+				advancedIcon = "chevrondown"
+			}
+			advancedButton := flat(c, advancedLabel).AlignSelf(ui.Start).OnClick(func() { a.modelForm.AdvancedOpen = !a.modelForm.AdvancedOpen })
+			caretButton(c, advancedButton, advancedLabel, advancedIcon, fsSmall, nil)
 			if a.modelForm.AdvancedOpen {
 				fieldLabel(c, "自定义请求头（JSON）")
 				textArea(c, "custom-headers", "自定义请求头", `{"X-Header": "value"}`, &a.modelHeaders, 90)
@@ -481,7 +508,7 @@ func (a *desktop) fetchModelList() {
 func (a *desktop) testModelDraft() {
 	m, err := a.preparedModelDraft()
 	if err != nil {
-		a.notify(err.Error())
+		a.notifyError(err.Error())
 		return
 	}
 	a.modelForm.TestBusy = true
@@ -490,9 +517,9 @@ func (a *desktop) testModelDraft() {
 		a.win.Update(func() {
 			a.modelForm.TestBusy = false
 			if err != nil {
-				a.status = "连接失败：" + err.Error()
+				a.notifyError("连接失败：" + err.Error())
 			} else {
-				a.status = "连接成功"
+				a.notifySuccess("连接成功")
 			}
 		})
 		return err
@@ -508,7 +535,7 @@ func (a *desktop) imageModelsSection(c *ui.Context) {
 	}
 	card(c, "image-defaults", func() {
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-			if ui.Switch(c.Key("image-enabled"), &s.config.Enabled).Label("使用生图工具").Changed() {
+			if uikit.SwitchNative(c.Key("image-enabled"), &s.config.Enabled).Label("使用生图工具").Changed() {
 				a.applyImageConfig()
 			}
 			ui.Text(c, "使用生图工具").FontSize(fsSmall)
@@ -523,7 +550,7 @@ func (a *desktop) imageModelsSection(c *ui.Context) {
 				s.chooseDefault(s.edit, true)
 				a.applyImageConfig()
 			}
-			flat(c, "测试").Disabled(s.busy || s.config.GenerateModel == nil).OnClick(func() {
+			cardFlat(c, "测试").Disabled(s.busy || s.config.GenerateModel == nil).OnClick(func() {
 				if s.config.GenerateModel != nil {
 					s.test = &imageModelTest{model: *s.config.GenerateModel}
 					s.testOpen = true
@@ -549,7 +576,7 @@ func (a *desktop) imageModelsSection(c *ui.Context) {
 						accentChip(c, "默认编辑模型")
 					}
 					ui.Spacer(c)
-					flat(c, "编辑").Disabled(s.busy).OnClick(func() {
+					cardFlat(c, "编辑").Disabled(s.busy).OnClick(func() {
 						for i, item := range s.config.Models {
 							if imageIdentityKey(item.ProviderName, item.Model) == imageIdentityKey(m.ProviderName, m.Model) {
 								s.openForm(i)
@@ -557,11 +584,11 @@ func (a *desktop) imageModelsSection(c *ui.Context) {
 							}
 						}
 					})
-					flat(c, "测试").Disabled(s.busy).OnClick(func() {
+					cardFlat(c, "测试").Disabled(s.busy).OnClick(func() {
 						s.test = &imageModelTest{model: *imageIdentity(m)}
 						s.testOpen = true
 					})
-					dangerButton(c, "删除").Disabled(s.busy).OnClick(func() {
+					cardDanger(c, "删除").Disabled(s.busy).OnClick(func() {
 						a.deleteImageModel(m)
 					})
 				})
@@ -606,6 +633,7 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 		title = "添加生图模型"
 	}
 	formDialog(c, &s.formOpen, widthModal, 620, title, "", func() {
+		fieldRow(c, "image-provider", "供应商名称", &s.draft.ProviderName, false)
 		ui.Column(c).Gap(gapTight).Children(func() {
 			fieldLabel(c, "Model")
 			before := s.draft.Model
@@ -614,24 +642,21 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 				s.draft.Protocol = inferImageProtocolView(s.draft.Model)
 			}
 		})
-		ui.Grid(c.Key("image-model-provider-fields")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
-			fieldRow(c, "image-provider", "Provider 名称", &s.draft.ProviderName, false)
-			ui.Column(c).Gap(gapTight).Children(func() {
-				fieldLabel(c, "生图协议")
-				protocols := []string{"openai-images", "xai-images", "minimax-images"}
-				beforeProtocol := s.draft.Protocol
-				uikit.Select(c.Key("image-protocol"), &s.draft.Protocol, protocols).Label("生图协议").FillWidth()
-				if s.draft.Protocol != beforeProtocol {
-					switch s.draft.Protocol {
-					case "openai-images":
-						s.draft.BaseURL = "https://api.openai.com/v1"
-					case "xai-images":
-						s.draft.BaseURL = "https://api.x.ai/v1"
-					case "minimax-images":
-						s.draft.BaseURL = "https://api.minimax.io/v1"
-					}
+		ui.Column(c).Gap(gapTight).Children(func() {
+			fieldLabel(c, "生图协议")
+			protocols := []string{"openai-images", "xai-images", "minimax-images"}
+			beforeProtocol := s.draft.Protocol
+			uikit.Select(c.Key("image-protocol"), &s.draft.Protocol, protocols).Label("生图协议").FillWidth()
+			if s.draft.Protocol != beforeProtocol {
+				switch s.draft.Protocol {
+				case "openai-images":
+					s.draft.BaseURL = "https://api.openai.com/v1"
+				case "xai-images":
+					s.draft.BaseURL = "https://api.x.ai/v1"
+				case "minimax-images":
+					s.draft.BaseURL = "https://api.minimax.io/v1"
 				}
-			})
+			}
 		})
 		fieldRow(c, "image-base-url", "Base URL", &s.draft.BaseURL, false)
 		fieldLabel(c, "API Keys")
@@ -649,7 +674,12 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 			})
 		}
 		flat(c, "＋ 添加 Key").OnClick(func() { s.draftKeys = append(s.draftKeys, "") })
-		flat(c, map[bool]string{true: "⌄ 高级设置", false: "› 高级设置"}[s.advancedOpen]).AlignSelf(ui.Start).OnClick(func() { s.advancedOpen = !s.advancedOpen })
+		advancedIcon := "chevron"
+		if s.advancedOpen {
+			advancedIcon = "chevrondown"
+		}
+		advancedButton := flat(c, "高级设置").AlignSelf(ui.Start).OnClick(func() { s.advancedOpen = !s.advancedOpen })
+		caretButton(c, advancedButton, "高级设置", advancedIcon, fsSmall, nil)
 		if s.advancedOpen {
 			fieldLabel(c, "自定义请求头（JSON）")
 			textArea(c, "image-headers", "自定义请求头", `{"X-Header": "value"}`, &s.headers, 80)
@@ -680,7 +710,7 @@ func (a *desktop) saveImageModelDraft() {
 		err = s.replace(s.editing, &model)
 	}
 	if err != nil {
-		a.notify(err.Error())
+		a.notifyError(err.Error())
 		return
 	}
 	s.formOpen = false
@@ -766,7 +796,7 @@ func (a *desktop) imageModelTestDialog(c *ui.Context) {
 					ui.Image(c, result.preview).Size(260, 260).Fit(ui.Contain).Radius(radiusSmall)
 				}
 				ref := result.meta.Ref
-				flat(c, "下载原图").OnClick(func() { a.job(func() error { _, err := a.core.ExportGeneratedImage(ref); return err }) })
+				cardFlat(c, "下载原图").OnClick(func() { a.job(func() error { _, err := a.core.ExportGeneratedImage(ref); return err }) })
 			})
 		}
 	})
@@ -796,18 +826,18 @@ func (a *desktop) importModels() {
 			ImageEdit     *backend.ModelIdentity `json:"editModel"`
 		}
 		if err := json.Unmarshal([]byte(data), &payload); err != nil {
-			a.win.Update(func() { a.status = "无法导入，请选择有效的模型配置文件。" })
+			a.win.Update(func() { a.notify("无法导入，请选择有效的模型配置文件。") })
 			return
 		}
 		if image {
 			if payload.Kind != "" && payload.Kind != "ally-image-models" {
-				a.win.Update(func() { a.status = "这是对话模型配置文件，请切换到「对话模型」分类导入。" })
+				a.win.Update(func() { a.notify("这是对话模型配置文件，请切换到「对话模型」分类导入。") })
 				return
 			}
 			var models []backend.ImageModelConfig
 			raw, _ := json.Marshal(payload.Models)
 			if err := json.Unmarshal(raw, &models); err != nil {
-				a.win.Update(func() { a.status = "无法导入，请选择有效的 Ally 生图模型配置文件。" })
+				a.win.Update(func() { a.notify("无法导入，请选择有效的 Ally 生图模型配置文件。") })
 				return
 			}
 			a.win.Update(func() {
@@ -829,18 +859,18 @@ func (a *desktop) importModels() {
 					}
 				}
 				a.applyImageConfig()
-				a.status = fmt.Sprintf("导入完成：新增 %d 个，更新 %d 个", added, updated)
+				a.notifySuccess(fmt.Sprintf("导入完成：新增 %d 个，更新 %d 个", added, updated))
 			})
 			return
 		}
 		if payload.Kind != "" && payload.Kind != "ally-chat-models" {
-			a.win.Update(func() { a.status = "这是生图模型配置文件，请切换到「图片模型」分类导入。" })
+			a.win.Update(func() { a.notify("这是生图模型配置文件，请切换到「图片模型」分类导入。") })
 			return
 		}
 		var models []backend.ModelConfig
 		raw, _ := json.Marshal(payload.Models)
 		if err := json.Unmarshal(raw, &models); err != nil {
-			a.win.Update(func() { a.status = "无法导入，请选择有效的 Ally 对话模型配置文件。" })
+			a.win.Update(func() { a.notify("无法导入，请选择有效的 Ally 对话模型配置文件。") })
 			return
 		}
 		a.win.Update(func() {
@@ -862,7 +892,7 @@ func (a *desktop) importModels() {
 				}
 			}
 			a.saveConfig(cfg)
-			a.status = fmt.Sprintf("导入完成：新增 %d 个，更新 %d 个", added, updated)
+			a.notifySuccess(fmt.Sprintf("导入完成：新增 %d 个，更新 %d 个", added, updated))
 		})
 	}()
 }
@@ -882,7 +912,7 @@ func (a *desktop) exportModels() {
 	payload := map[string]any{"kind": kind, "formatVersion": 1, "models": models}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		a.notify(err.Error())
+		a.notifyError(err.Error())
 		return
 	}
 	name := "ally-chat-models.json"

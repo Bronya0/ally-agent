@@ -6,18 +6,24 @@ Ally 的 MyGo v0.7.1 原生桌面实现，使用 Go 直接绘制界面，无需 
 
 需要 Go 1.27.3；Windows 开发优先使用 Git Bash。
 
+开发入口只保留两个，直接双击即可：
+
+| 系统 | 入口 | 产物 |
+| --- | --- | --- |
+| Windows | `scripts/build.bat` | `dist/ally-native.exe` 与 `dist/tools/rg.exe` |
+| macOS | `scripts/build.command` | 当前机器架构的 `dist/Ally.app`，含 rg 和 Ad-hoc 签名 |
+
+完成或失败后窗口保留，便于查看结果。更新前先关闭正在运行的开发版。
+
 ```bash
-go run .
-bash scripts/build.sh          # Windows 开发：dist/ally-native.exe，配套 tools/rg.exe
-bash scripts/build-windows.sh  # Windows amd64 / arm64 绿色 ZIP
-bash scripts/build-linux.sh    # Linux amd64 / arm64 的 tar.gz
-bash scripts/build-macos.sh    # macOS universal / Intel / Apple 芯片 DMG，需 macOS
-bash scripts/build-all.sh      # 一个 macOS 环境构建以上全部发行包
+go run .                          # 直接运行源码
+python scripts/build.py dev       # 开发编译的命令行入口，无交互暂停
+bash scripts/build-all.sh         # 仅 macOS：全平台发行打包，供 GitHub CI 使用
 ```
 
-构建依赖 Go 1.27.3 和 Python 3.9+；macOS 还使用系统自带的 lipo、codesign、hdiutil。
-所有入口及共享打包逻辑都在 `scripts/`，从任意目录运行均可；Windows 也可运行
-`scripts/build.bat`。本地与 GitHub CI 复用 `scripts/build.py`。
+构建依赖 Go 1.27.3 和 Python 3.9+；macOS 使用系统自带的 lipo、codesign、hdiutil（需安装 Command Line Tools）。
+本地入口与 GitHub CI 共用 `scripts/build.py`，无需 Node；Windows 双击脚本不再依赖 Git Bash。
+所有入口可以从任意目录启动。`build-all.sh` 不暂停，不启动 GUI，构建失败会以非零状态退出。
 
 Windows 开发 exe 固定为 `dist/ally-native.exe`，被占用时明确报错，关闭程序后重试。
 发行包放在 `dist/release/`：Windows x64 / arm64 ZIP 解压后包含对应架构的 `Ally.exe`、`tools/rg.exe`、README 和许可文件；
@@ -61,7 +67,7 @@ docs/                    后端文档与原生界面架构说明
 ```bash
 CGO_ENABLED=0 go test -p 1 ./...
 go tool mygo vet .
-bash scripts/build.sh
+python scripts/build.py dev
 ```
 
 全平台发行构建在一个 macOS runner 上通过共享脚本交叉生成 Windows x64/ARM64、Linux x64/ARM64 和 macOS universal/Intel/ARM64 共七个发行包。Windows 只发布包含 exe 和资源的绿色 ZIP。macOS 生成 DMG，应用使用免费的 ad-hoc 签名，不做 Developer ID 签名或公证；首次打开时可能需要在 Finder 中 Control-click 并选择“打开”。MyGo CLI 版本由 `go.mod` 的 tool directive 固定。

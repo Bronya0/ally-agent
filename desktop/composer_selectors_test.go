@@ -11,7 +11,7 @@ import (
 
 func TestComposerSelectorsKeepAppearanceWhileBusy(t *testing.T) {
 	for _, appearance := range []string{"dark", "light"} {
-		for _, hover := range []string{"", "provider · model", "high ▾"} {
+		for _, hover := range []string{"", "provider · model", "high"} {
 			t.Run(fmt.Sprintf("%s/hover=%s", appearance, hover), func(t *testing.T) {
 				a := &desktop{}
 				a.prefs.Appearance = appearance
@@ -46,6 +46,25 @@ func TestComposerSelectorsKeepAppearanceWhileBusy(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestReasoningSelectorDrawsLevelOnce(t *testing.T) {
+	a := &desktop{}
+	conv := &conversation{Model: "provider / model", Reasoning: "high"}
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		a.reasoningSelector(c, conv)
+	}, 240, 48)
+	count := 0
+	for _, text := range tester.Texts() {
+		if text == "high" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("thinking level drawn %d times: %v", count, tester.Texts())
 	}
 }
 

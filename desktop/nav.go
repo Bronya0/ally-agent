@@ -88,12 +88,14 @@ func (a *desktop) saveConfig(cfg backend.ConfigState, notice ...string) {
 		}
 		a.win.Update(func() {
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				return
 			}
 			a.config = fresh
 			if len(notice) > 0 {
-				a.notify(notice[0])
+				a.notifySuccess(notice[0])
+			} else {
+				a.notifySuccess("设置已保存")
 			}
 		})
 	}()

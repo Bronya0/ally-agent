@@ -72,8 +72,8 @@ func (a *desktop) settingsPageBody(c *ui.Context) {
 }
 
 func (a *desktop) selectSettingsSection(section string) {
-	if a.settings.Tab != section {
-		a.commitSettingsOnLeave()
+	if a.settings.Tab != section && a.settings.Tab != "" && a.settings.Tab != "关于" && a.settings.Tab != "安全围栏" && a.settings.Tab != "版本亮点" && a.settings.Tab != "完整配置" {
+		a.saveSettings()
 	}
 	a.settings.Tab = section
 	a.settingsTab = section
@@ -89,7 +89,7 @@ func (a *desktop) selectSettingsSection(section string) {
 	}
 }
 
-func (a *desktop) saveSettings() {
+func (a *desktop) saveSettings(notice ...string) {
 	cfg := a.configDraft
 	cfg.LLMRetries = int(a.settings.Retries)
 	cfg.ToolConcurrency = int(a.settings.Concurrency)
@@ -115,7 +115,10 @@ func (a *desktop) saveSettings() {
 	cfg.AutoValidationYAML = boolPtr(a.settings.Validation["YAML"])
 	cfg.AutoValidationXML = boolPtr(a.settings.Validation["XML"])
 	a.configDraft = cfg
-	a.saveConfig(cfg)
+	if len(notice) == 0 {
+		notice = []string{""}
+	}
+	a.saveConfig(cfg, notice...)
 }
 
 // commitSettingsOnLeave is called when the rail switches away from settings.
@@ -123,10 +126,7 @@ func (a *desktop) commitSettingsOnLeave() {
 	if a.core == nil || a.win == nil {
 		return
 	}
-	if a.settings.Tab == "" || a.settings.Tab == "关于" || a.settings.Tab == "安全围栏" || a.settings.Tab == "版本亮点" || a.settings.Tab == "完整配置" {
-		return
-	}
-	a.saveSettings()
+	a.saveSettings("设置已保存")
 }
 
 // ---- General -------------------------------------------------------------
@@ -145,7 +145,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			}
 			divider(c)
 			fieldLabel(c, "强调色")
-			ui.Row(c).Gap(8).Wrap().Children(func() {
+			uikit.OptionGroup(c).Children(func() {
 				for _, idx := range []int{0, 2, 3, 4, 5} {
 					idx := idx
 					p := palettes[idx]
@@ -153,7 +153,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					if idx == 0 {
 						name = "蓝色"
 					} else if idx == 2 {
-						name = "默认琥珀"
+						name = "琥珀"
 					}
 					selected := a.prefs.Palette == idx || (idx == 0 && a.prefs.Palette == 1)
 					choiceSwatch(c, fmt.Sprintf("palette-%d", idx), name, selected, p.accent).OnClick(func() {
@@ -173,17 +173,17 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			fieldNote(c, "强调色只改变高亮与选中态，背景保持中性。")
 			divider(c)
 			sectionTitle(c, "欢迎页形象")
-			ui.Row(c).Gap(gapInline).Wrap().Children(func() {
-				for _, style := range []struct{ id, label string }{{"eye", "大眼睛"}, {"whale", "蓝色大肥鱼"}, {"bot", "小机器人"}, {"gpt", "GPT 龙娘"}, {"claude", "Claude 橙花娘"}, {"deepseek", "DeepSeek 女仆"}, {"gemini", "Gemini 星猫娘"}, {"glm", "GLM 狐狸女仆"}, {"qwen", "千问千金"}} {
+			uikit.OptionGroup(c).Children(func() {
+				for _, style := range []struct{ id, label string }{{"eye", "大眼睛"}, {"whale", "大肥鱼"}, {"bot", "小机器人"}, {"gpt", "GPT 龙娘"}, {"claude", "Claude 橙花娘"}, {"deepseek", "DeepSeek 女仆"}, {"gemini", "Gemini 星猫娘"}, {"glm", "GLM 狐狸女仆"}, {"qwen", "千问千金"}} {
 					style := style
 					choiceButton(c, "avatar-"+style.id, style.label, a.prefs.Avatar == style.id, c.Theme().Accent).
 						OnClick(func() { a.selectAvatarStyle(style.id) })
 				}
 			})
 			ui.Row(c).Gap(gapField).Children(func() {
-				flat(c, "上传自定义形象").OnClick(func() { a.chooseCustomAvatar() })
+				cardFlat(c, "上传自定义形象").OnClick(func() { a.chooseCustomAvatar() })
 				if a.customAvatar != nil {
-					flat(c, "使用自定义形象").OnClick(func() { a.selectAvatarStyle("custom") })
+					cardFlat(c, "使用自定义形象").OnClick(func() { a.selectAvatarStyle("custom") })
 				}
 			})
 			fieldNote(c, "点击欢迎页头像可以唤醒樱花特效。")
@@ -206,9 +206,9 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					fieldLabel(c, "知识库根目录")
 					uikit.Input(c.Key("kb-root"), &a.configDraft.KBRoot).Label("知识库根目录").FillWidth().Disabled(true)
 				})
-				flat(c, "选择目录").OnClick(func() { a.pickKBRoot() })
+				cardFlat(c, "选择目录").OnClick(func() { a.pickKBRoot() })
 				if a.configDraft.KBRoot != "" {
-					dangerButton(c, "清除").OnClick(func() { a.configDraft.KBRoot = "" })
+					cardDanger(c, "清除").OnClick(func() { a.configDraft.KBRoot = "" })
 				}
 			})
 			fieldNote(c, "其中 sources/ 子目录对模型只读。")
@@ -280,14 +280,14 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				switchRow(c, "auto-update", "自动更新", "有新版本时后台下载，完成提示重启。", &a.settings.AutoUpdate)
 			}
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				flat(c, "检查更新").OnClick(func() {
+				cardFlat(c, "检查更新").OnClick(func() {
 					a.settings.UpdateBusy = true
 					a.settings.UpdateNote = "正在检查…"
 					a.checkUpdates(true)
 					a.settings.UpdateBusy = false
 				})
 				if a.upd.ReleaseVer != "" {
-					flat(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
+					cardFlat(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
 				}
 				ui.Spacer(c)
 				if a.settings.UpdateNote != "" {
@@ -307,9 +307,9 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				if a.configDraft.BackgroundImage != "" {
 					label = "更换图片"
 				}
-				flat(c, label).OnClick(func() { a.selectBackgroundImage() })
+				cardFlat(c, label).OnClick(func() { a.selectBackgroundImage() })
 				if a.configDraft.BackgroundImage != "" {
-					dangerButton(c, "清除背景图").OnClick(func() { a.clearBackgroundImage() })
+					cardDanger(c, "清除背景图").OnClick(func() { a.clearBackgroundImage() })
 				}
 				ui.Spacer(c)
 				state := "未设置背景图"
@@ -435,8 +435,8 @@ func (a *desktop) settingsNetwork(c *ui.Context) {
 		}
 		notice(c, "warn", "代理可见连接元数据；代理不可用时不会回退直连。")
 		ui.Row(c).Gap(gapField).Children(func() {
-			flat(c, "检测系统代理").OnClick(func() { a.detectProxy() })
-			flat(c, "测试连接").Disabled(a.configDraft.ProxyMode == "off").OnClick(func() { a.testProxy() })
+			cardFlat(c, "检测系统代理").OnClick(func() { a.detectProxy() })
+			cardFlat(c, "测试连接").Disabled(a.configDraft.ProxyMode == "off").OnClick(func() { a.testProxy() })
 			if a.settings.ProxyBusy {
 				ui.Spinner(c).Size(13, 13)
 			}
@@ -551,29 +551,26 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 			fieldNote(c, "仅监听 127.0.0.1，供本机工具调用；请求需带 Bearer Token。")
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
 				enabled := a.settings.API.Enabled
-				ui.Switch(c.Key("api-enabled"), &enabled).Label("启用 API 服务")
-				if enabled != a.settings.API.Enabled {
-					a.setAPIServiceEnabled(enabled)
-				}
+				uikit.SwitchNative(c.Key("api-enabled"), &enabled).Label("启用 API 服务").OnClick(func() { a.setAPIServiceEnabled(enabled) })
 				fieldLabel(c, "端口")
 				uikit.NumberInput(c, "api-port", "API 端口", &a.settings.APIPort, 1024, 65535, 1).Width(110)
 				fieldLabel(c, "Token")
 				uikit.Input(c.Key("api-token"), &a.settings.API.Token).Label("API Token").Width(240)
-				flat(c, "复制").OnClick(func() {
+				cardFlat(c, "复制").OnClick(func() {
 					c.WriteClipboard(a.settings.API.Token)
 					c.Toast("Token 已复制")
 				})
-				flat(c, "重新生成").OnClick(func() {
+				cardFlat(c, "重新生成").OnClick(func() {
 					a.settings.API.Token = randomToken()
 					a.saveAPISettings()
 					c.Toast("已生成新 Token")
 				})
-				flat(c, "保存").OnClick(func() { a.saveAPISettings() })
+				cardFlat(c, "保存").OnClick(func() { a.saveAPISettings() })
 				services := c.Services()
-				flat(c, "接口文档").OnClick(func() {
+				cardFlat(c, "接口文档").OnClick(func() {
 					services.OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/api.md")
 				})
-				flat(c, "刷新").OnClick(func() { a.loadAPIService() })
+				cardFlat(c, "刷新").OnClick(func() { a.loadAPIService(true) })
 			})
 			fieldNote(c, "端口与 Token 改动后需点保存；Token 为空时后端会自动生成。")
 			if a.settings.APINote != "" {
@@ -594,9 +591,9 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 					methodColor := c.Theme().Accent
 					switch ep[0] {
 					case "POST":
-						methodColor = colSuccess()
+						methodColor = c.Theme().Success
 					case "PUT":
-						methodColor = colWarning()
+						methodColor = c.Theme().Warning
 					}
 					chip(c, ep[0], methodColor, c.Theme().Surface.Mix(methodColor, 0.12))
 					ui.Text(c, ep[1]).Font(monoFamily).FontSize(fsSmall)
@@ -633,17 +630,23 @@ var apiEndpoints = [][3]string{
 	{"DELETE", "/api/v1/tasks/{id}", "删除任务"},
 }
 
-func (a *desktop) loadAPIService() {
+func (a *desktop) loadAPIService(manual ...bool) {
 	go func() {
 		state, err := a.core.GetApiServiceState()
 		a.win.Update(func() {
 			if err != nil {
 				a.settings.APINote = err.Error()
+				if len(manual) > 0 && manual[0] {
+					a.notifyError(err.Error())
+				}
 				return
 			}
 			a.settings.API = state
 			a.settings.APIPort = float64(state.Port)
 			a.settings.APINote = ""
+			if len(manual) > 0 && manual[0] {
+				a.notifySuccess("API 状态已刷新")
+			}
 		})
 	}()
 }
@@ -729,8 +732,8 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 			ui.Text(c, "GPLv3 only").FontSize(fsBody).Bold()
 			fieldNote(c, "你可以自由使用、研究、修改与分发本软件；衍生作品必须以同一许可开放源代码；本软件不提供任何担保。")
 			ui.Row(c).Gap(gapField).Wrap().Children(func() {
-				flat(c, "查看源代码与许可证").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent") })
-				flat(c, "提意见 / 反馈 Issue").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent/issues") })
+				cardFlat(c, "查看源代码与许可证").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent") })
+				cardFlat(c, "提意见 / 反馈 Issue").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent/issues") })
 			})
 		})
 	}
@@ -738,7 +741,7 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 		card(c, "settings-credits", func() {
 			sectionTitle(c, "欢迎页形象素材署名")
 			fieldNote(c, "欢迎页立绘沿用原项目素材，许可为 CC BY-NC-SA 4.0：署名、非商业、相同方式共享。")
-			flat(c, "查看素材来源").OnClick(func() {
+			cardFlat(c, "查看素材来源").OnClick(func() {
 				services.OpenURL("https://github.com/Bronya0/ally-agent/blob/main/resources/avatar/NOTICE.txt")
 			})
 		})
@@ -747,12 +750,12 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 		card(c, "settings-update", func() {
 			sectionTitle(c, "更新")
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				flat(c, "检查更新").OnClick(func() {
+				cardFlat(c, "检查更新").OnClick(func() {
 					a.settings.UpdateNote = "正在检查…"
 					a.checkUpdates(true)
 				})
 				if a.upd.Tag != "" {
-					flat(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
+					cardFlat(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
 				}
 				ui.Spacer(c)
 				fieldNote(c, a.settings.UpdateNote)
@@ -767,20 +770,20 @@ func (a *desktop) settingsRaw(c *ui.Context) {
 		fieldNote(c, "高级用法：直接编辑后端完整配置（包含密钥），保存后立即生效。")
 		textArea(c, "raw-config", "配置 JSON", "{}", &a.settings.FullJSON, 420)
 		ui.Row(c).Gap(gapField).Children(func() {
-			primary(c, "保存 JSON").OnClick(func() {
+			cardPrimary(c, "保存 JSON").OnClick(func() {
 				var cfg backend.ConfigState
 				if err := json.Unmarshal([]byte(a.settings.FullJSON), &cfg); err != nil {
-					a.status = "配置解析失败：" + err.Error()
+					a.notifyError("配置解析失败：" + err.Error())
 					return
 				}
 				a.saveConfig(cfg)
 			})
-			flat(c, "从后端重新载入").OnClick(func() {
+			cardFlat(c, "从后端重新载入").OnClick(func() {
 				go func() {
 					cfg, err := a.core.GetConfig()
 					a.win.Update(func() {
 						if err != nil {
-							a.notify(err.Error())
+							a.notifyError(err.Error())
 							return
 						}
 						a.configDraft = cfg
@@ -798,7 +801,7 @@ func (a *desktop) loadSettings() {
 	go func() {
 		cfg, err := a.core.GetConfig()
 		if err != nil {
-			a.win.Update(func() { a.notify(err.Error()) })
+			a.win.Update(func() { a.notifyError(err.Error()) })
 			return
 		}
 		sandbox, _ := a.core.GetSandboxStatus()

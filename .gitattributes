@@ -37,3 +37,8 @@
 # Preserve vendored release archives as binary files
 *.zip binary
 *.gz binary
+
+# Double-click developer launchers
+*.bat text eol=crlf
+*.command text eol=lf
+*.sh text eol=lf

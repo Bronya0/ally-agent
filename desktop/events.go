@@ -130,7 +130,8 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		} else {
 			t.Status = "正在思考…"
 		}
-		if ui.Follow {
+		// Reasoning only changes the footer, not transcript geometry.
+		if content != "" && ui.Follow {
 			t.uiState().FollowPending = true
 		}
 	case "tool:start", "tool:update", "tool:result", "tool:error":
@@ -624,7 +625,7 @@ func (a *desktop) refreshSessionFooter(t *conversation) {
 }
 
 func (a *desktop) refreshGit(t *conversation) {
-	if t == nil || t.Workspace == "" {
+	if t == nil || t.Workspace == "" || a.core == nil || a.win == nil {
 		return
 	}
 	workspace := t.Workspace
@@ -663,9 +664,14 @@ func (a *desktop) applyUpdateEvent(name string, p map[string]any) {
 	}
 }
 
-func (a *desktop) refreshSSH() {
+func (a *desktop) refreshSSH(manual ...bool) {
 	go func() {
 		servers := a.core.ListAllSSHServers()
-		a.win.Update(func() { a.sshServers = servers })
+		a.win.Update(func() {
+			a.sshServers = servers
+			if len(manual) > 0 && manual[0] {
+				a.notifySuccess("SSH 列表已刷新")
+			}
+		})
 	}()
 }

@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -99,15 +100,18 @@ func describeTool(name string) toolDescriptor {
 }
 
 func toolState(m map[string]any) string {
+	if userCancelledMessage(m) || userCancelledMessage(toolResult(m)) {
+		return "cancelled"
+	}
 	status := strings.ToLower(str(m, "status"))
 	state := str(m, "toolState")
 	switch {
-	case (status == "error" || status == "failed" || status == "cancelled") || state == "tool:error":
+	case (status == "error" || status == "failed") || state == "tool:error":
 		return "error"
 	case (status == "success" || status == "completed" || status == "done") || state == "tool:result":
 		result := toolResult(m)
 		if boolOf(result, "cancelled") {
-			return "error"
+			return "cancelled"
 		}
 		if value, exists := result["ok"]; exists && value == false {
 			return "error"
@@ -232,7 +236,7 @@ func (a *desktop) readGrepGroupCard(c *ui.Context, t *conversation, index int) {
 		if row.Clicked() {
 			t.uiState().ToolOpen[key] = !open
 		}
-		if open {
+		uikit.Reveal(c.Key(key+"-reveal"), open, func() {
 			ui.Scroll(c.Key(key + "-entries")).FillWidth().Height(min(float32(240), float32(len(entries))*28)).Shrink(0).Clip().Children(func() {
 				ui.Column(c).FillWidth().Children(func() {
 					for n, e := range entries {
@@ -245,9 +249,9 @@ func (a *desktop) readGrepGroupCard(c *ui.Context, t *conversation, index int) {
 							ui.Text(c, e.verb).FontSize(fsTool).TextColor(c.Theme().TextMuted)
 							color := c.Theme().TextMuted
 							if e.state == "error" {
-								color = colDanger()
+								color = c.Theme().Danger
 							}
-							ui.Text(c, short(e.title, 80)).FontSize(fsTool).TextColor(color).SingleLine().Tooltip(e.title)
+							uikit.Tooltip(c, ui.Text(c, short(e.title, 80)).FontSize(fsTool).TextColor(color).SingleLine(), e.title)
 							if e.detail != "" {
 								ui.Text(c, e.detail).FontSize(fsAux).TextColor(color).MaxLines(2)
 							}
@@ -255,7 +259,7 @@ func (a *desktop) readGrepGroupCard(c *ui.Context, t *conversation, index int) {
 					}
 				})
 			})
-		}
+		})
 	})
 	_ = end
 }
@@ -310,19 +314,19 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			ui.Box(c).Absolute().Left(-20).Top(5).Children(func() { toolStatusIcon(c, state) })
 			verbColor := p.accent
 			if state == "error" || name == "delete" || name == "remote_delete_path" {
-				verbColor = colDanger()
+				verbColor = c.Theme().Danger
 			}
 			ui.Text(c, verb).FontSize(fsTool).TextColor(verbColor).Shrink(0).LineHeight(1.4).NoWrap()
 			if summary != "" {
 				text := "(" + short(summary, 120) + ")"
 				if name == "command" || name == "remote_run_command" {
-					ui.RichText(c, codeSpans(c, text, "command.sh")...).FontSize(fsTool).SingleLine().MinWidth(0).Shrink(1).Tooltip(summary)
+					uikit.Tooltip(c, ui.RichText(c.Key(key+"-summary"), codeSpansWithBase(c, text, "command.sh", commandLineInk(c.Theme()))...).FontSize(fsTool).SingleLine().MinWidth(0).Shrink(1), summary)
 				} else {
 					color := c.Theme().TextMuted
 					if name == "edit" || name == "create" || name == "delete" || name == "remote_edit" || name == "remote_create_file" || name == "remote_delete_path" {
 						color = color.Mix(c.Theme().Text, 0.4)
 					}
-					ui.Text(c, text).FontSize(fsTool).TextColor(color).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1).Tooltip(summary)
+					uikit.Tooltip(c, ui.Text(c.Key(key+"-summary"), text).FontSize(fsTool).TextColor(color).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1), summary)
 				}
 			}
 			if name == "wait" && state == "running" {
@@ -347,10 +351,10 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				if (name == "edit" || name == "remote_edit") && strings.HasPrefix(extra, "+") {
 					parts := strings.Fields(extra)
 					if len(parts) > 0 {
-						ui.Text(c, parts[0]).FontSize(fsAux).TextColor(colSuccess()).NoWrap()
+						ui.Text(c, parts[0]).FontSize(fsAux).TextColor(c.Theme().Success).NoWrap()
 					}
 					if len(parts) > 1 {
-						ui.Text(c, parts[1]).FontSize(fsAux).TextColor(colDanger()).NoWrap()
+						ui.Text(c, parts[1]).FontSize(fsAux).TextColor(c.Theme().Danger).NoWrap()
 					}
 				} else {
 					neutralChip(c, extra)
@@ -381,11 +385,13 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			t.uiState().ToolOpen[key] = !open
 		}
 		body := ui.Column(c).FillWidth().MinWidth(0).Gap(4)
-		if name == "create" || name == "remote_create_file" || name == "command" || name == "remote_run_command" {
+		if name == "create" || name == "remote_create_file" {
 			body.Padding(0, 0, 0, 4)
 		}
 		body.Children(func() {
 			switch {
+			case state == "cancelled":
+				cancelledResult(c)
 			case state == "error" && name != "delete" && name != "remote_delete_path":
 				errText := str(m, "body")
 				if errText == "" {
@@ -405,9 +411,9 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 						code = str(m, "errorCode")
 					}
 					if code != "" {
-						ui.Text(c, code).Font(monoFamily).FontSize(fsTiny).TextColor(colDanger())
+						ui.Text(c, code).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().Danger)
 					}
-					ui.Text(c, shortBlock(errText, 1800)).FontSize(fsAux).TextColor(colDanger()).LineHeight(1.45).Selectable()
+					ui.Text(c, shortBlock(errText, 1800)).FontSize(fsAux).TextColor(c.Theme().Danger).LineHeight(1.45).Selectable()
 				})
 			case (name == "edit" || name == "remote_edit") && len(list(result, "files")) > 0:
 				for n, item := range list(result, "files") {
@@ -450,7 +456,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				ui.Row(c).Wrap().Gap(6).Children(func() {
 					for n, raw := range list(result, "items") {
 						text := fmt.Sprint(raw)
-						suggestionButton(c.Key(fmt.Sprintf("%s-suggest-%d", key, n)), text).Disabled(t.Busy).OnClick(func() {
+						suggestionButton(c.Key(fmt.Sprintf("%s-suggest-%d", key, n)), text).OnClick(func() {
 							t.Draft = text
 							if a.core != nil {
 								a.send(t, text)
@@ -562,9 +568,9 @@ func easeInOut(t float32) float32 {
 func toolStatusIcon(c *ui.Context, state string) {
 	switch state {
 	case "success":
-		ui.Box(c).Width(16).Height(16).Center().Children(func() { iconGlyph(c, "check", 16).TextColor(colSuccess()) })
+		ui.Box(c).Width(16).Height(16).Center().Children(func() { iconGlyph(c, "check", 16).TextColor(c.Theme().Success) })
 	case "error":
-		ui.Box(c).Width(16).Height(16).Center().Children(func() { iconGlyph(c, "close", 16).TextColor(colDanger()) })
+		ui.Box(c).Width(16).Height(16).Center().Children(func() { iconGlyph(c, "close", 16).TextColor(c.Theme().Danger) })
 	case "running":
 		color := c.Theme().TextMuted
 		// Drawn instead of a Loop on a box: Loop asks for a frame that rebuilds
@@ -782,6 +788,17 @@ func stripBlankLines(s string) string {
 	return strings.Join(kept, "\n")
 }
 
+// Match main's collapsed terminal white-space: pre-line. Only the display
+// preview collapses horizontal whitespace; expanded output keeps indentation.
+func commandPreviewText(output string, lines int) string {
+	preview := tailLines(stripBlankLines(output), lines)
+	rows := strings.Split(preview, "\n")
+	for i, row := range rows {
+		rows[i] = strings.Join(strings.FieldsFunc(row, func(r rune) bool { return r == ' ' || r == 9 || r == 12 || r == 11 }), " ")
+	}
+	return strings.Join(rows, "\n")
+}
+
 func toolChips(name, state string, args, result map[string]any) []string {
 	var chips []string
 	switch name {
@@ -840,7 +857,7 @@ func toolChips(name, state string, args, result map[string]any) []string {
 func toolPreview(name string, args, result map[string]any, lines int) string {
 	switch name {
 	case "command", "remote_run_command":
-		return tailLines(stripBlankLines(commandOutput(result)), lines)
+		return commandPreviewText(commandOutput(result), lines)
 	case "edit", "remote_edit":
 		if diff := str(result, "diff"); diff != "" {
 			return tailLines(unifiedSnippet(diff, 8), lines)
@@ -931,9 +948,9 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 				if absent {
 					neutralChip(c, "本就不存在")
 				} else if okFlag {
-					chip(c, "已删除", colSuccess(), ui.RGBA(78, 200, 126, 0.12))
+					chip(c, "已删除", c.Theme().Success, ui.RGBA(78, 200, 126, 0.12))
 				} else {
-					chip(c, str(row, "error"), colDanger(), ui.RGBA(232, 84, 84, 0.12))
+					chip(c, str(row, "error"), c.Theme().Danger, ui.RGBA(232, 84, 84, 0.12))
 				}
 			})
 		}
@@ -1155,7 +1172,7 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 					p.Fill(r, color.Alpha(0.3+0.7*easeInOut(float32(tri))), 3)
 				})
 			} else {
-				ui.Box(c).Size(6, 6).Radius(3).Background(tone)
+				ui.Box(c).Size(6, 6).Radius(3).Background(pillDotColor(c, pillToneOf(status)))
 			}
 			ui.Text(c, role).FontSize(fsBody).Bold()
 			ui.Spacer(c)
@@ -1170,7 +1187,7 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 			}
 		})
 		if desc := str(m, "description"); desc != "" {
-			ui.Text(c, desc).FontSize(fsSmall).TextColor(c.Theme().TextMuted).MaxLines(2).Tooltip(desc)
+			uikit.Tooltip(c, ui.Text(c, desc).FontSize(fsSmall).TextColor(c.Theme().TextMuted).MaxLines(2), desc)
 		}
 		ui.Row(c).Gap(gapInline).Wrap().AlignItems(ui.Center).Children(func() {
 			if steps := int(num(m, "steps")); steps > 0 {
@@ -1195,20 +1212,27 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 			summary, errText := str(m, "summary"), str(m, "error")
 			hasReport := (status != "running" && summary != "") || errText != ""
 			open := t.uiState().ToolOpen["sub-"+str(m, "subId")]
-			title := "报告 ›"
-			if open {
-				title = "报告 ⌄"
-			}
-			flat(c.Key("sub-report-"+str(m, "subId")), title).Disabled(!hasReport).OnClick(func() { t.uiState().ToolOpen["sub-"+str(m, "subId")] = !open })
+			reportButton, _ := buttonParts(c, "sub-report-"+str(m, "subId"), "", btnSecondary, true, "")
+			reportButton.Disabled(!hasReport).OnClick(func() { t.uiState().ToolOpen["sub-"+str(m, "subId")] = !open })
+			reportButton.Children(func() {
+				ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "报告").FontSize(uikit.ButtonFontSmall)
+					caret := "chevron"
+					if open {
+						caret = "chevrondown"
+					}
+					iconGlyph(c, caret, 10).Shrink(0)
+				})
+			})
 		})
-		if t.uiState().ToolOpen["sub-"+str(m, "subId")] {
+		uikit.Reveal(c.Key("sub-report-reveal"), t.uiState().ToolOpen["sub-"+str(m, "subId")], func() {
 			if errText := str(m, "error"); errText != "" {
 				notice(c, "error", errText)
 			}
 			if summary := str(m, "summary"); summary != "" {
 				ui.Scroll(c.Key("sub-report-body-" + str(m, "subId"))).FillWidth().Height(240).Shrink(0).Clip().Children(func() { ui.Text(c, summary).FontSize(fsSmall).Selectable().LineHeight(1.6) })
 			}
-		}
+		})
 	})
 }
 

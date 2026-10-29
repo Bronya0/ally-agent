@@ -5,7 +5,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -13,11 +12,8 @@ import (
 const ControlHeight float32 = 34
 const Radius float32 = 8
 
-// SelectedTint and SelectedStroke are the one selected look shared by every
-// control that reports a choice: an option row, a tab, a chip. The tint has to
-// read at a glance against a plain panel, and a selected control always carries
-// accent ink (plus a check where there is room), so a choice never depends on
-// the fill alone.
+// SelectedTint is shared by option rows and choice controls. SelectedStroke
+// remains available for surfaces that need an explicit accent boundary.
 const (
 	SelectedTint   float32 = 0.18
 	SelectedStroke float32 = 0.72
@@ -31,14 +27,14 @@ func SelectedStrokeColor(accent ui.Color) ui.Color { return accent.Alpha(Selecte
 
 // chromeFade is the shared hover and focus colour transition for form controls,
 // matching the desktop's own widgets so nothing snaps when it lights up.
-const chromeFade = 140 * time.Millisecond
+const chromeFade = HoverDuration
 
 var chevronDown = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="m4.5 6 3.5 3.5L11.5 6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`))
 var eyeIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M1.3 8s2.3-4 6.7-4 6.7 4 6.7 4-2.3 4-6.7 4S1.3 8 1.3 8Z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`))
 var eyeOffIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M1.3 8s2.3-4 6.7-4 6.7 4 6.7 4-2.3 4-6.7 4S1.3 8 1.3 8Z M2 2l12 12" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`))
 
 func PopupTransition() ui.ElementTransition {
-	return ui.ElementTransition{Duration: 180 * time.Millisecond, Enter: &ui.Motion{Y: 6, Scale: 0.985}, Exit: &ui.Motion{Y: 4, Scale: 0.985}}
+	return ui.ElementTransition{Duration: OverlayDuration, Enter: &ui.Motion{Y: 6, Scale: 0.985}, Exit: &ui.Motion{Y: 4, Scale: 0.985}}
 }
 
 // chromeHoverMix is the only place an edge is allowed to brighten: a hovered
@@ -57,13 +53,15 @@ func Popup(c *ui.Context, panel ui.Element) {
 }
 func option(c *ui.Context, item ui.Element, text string, selected bool) {
 	t := c.Theme()
+	fill := ui.Transparent
 	item.Height(34).Padding(5, 10).Radius(6).Gap(8).AlignItems(ui.Center).Cursor(ui.CursorPointer).TextColor(t.Text)
 	if item.Highlighted() || item.Hovered() {
-		item.Background(t.SurfaceHover)
+		fill = t.SurfaceHover
 	}
 	if selected {
-		item.Background(SelectedFill(t.Accent))
+		fill = SelectedFill(t.Accent)
 	}
+	item.Background(fade(item, "option-fill", fill))
 	item.Children(func() {
 		label := text
 		if label == "" {
@@ -141,7 +139,7 @@ func ComboboxField(c *ui.Context, value *string, options []string, label, placeh
 		cb.Input.Height(ControlHeight).FillHeight().Grow(1).MinWidth(0).Padding(5, 10).
 			FontSize(14).Border(0, ui.Transparent).Background(ui.Transparent).Radius(0).TextColor(c.Theme().Text).
 			Label(label).Placeholder(placeholder)
-		toggle := ui.Box(c).Size(32, ControlHeight).Shrink(0).Center().Cursor(ui.CursorPointer).Label("展开选项").Tooltip("选择或输入")
+		toggle := Tooltip(c, ui.Box(c).Size(32, ControlHeight).Shrink(0).Center().Cursor(ui.CursorPointer).Label("展开选项"), "选择或输入")
 		toggle.OnClick(func() {
 			cb.Input.Focus()
 			cb.SetOpen(true)
@@ -181,14 +179,8 @@ func TabInk(t *ui.Theme, active bool) ui.Color {
 	return t.TextMuted.Mix(t.Text, 0.22)
 }
 
-// TabUnderline gives one tab the strip look the app uses everywhere: a rounded
-// box whose bottom edge carries the accent, so the line curves away at both ends.
-// No fill is involved: a fill behind the label stacked a third blue on the accent
-// ink and the accent edge, and its rounded box fought the line where the two met.
-//
-// Size, content and hover stay with the caller: the settings strip holds a plain
-// label, while the header's workspace strip also holds a running dot and a close
-// button, and both wear this same chrome.
+// TabUnderline is the legacy workspace-header treatment. Page navigation uses
+// TabsWithOptions in tabs.go; its straight underline never inherits this radius.
 func TabUnderline(e ui.Element, active bool, radius float32, t *ui.Theme) ui.Element {
 	e.Radius(radius).BorderWidth(0, 0, 2, 0)
 	if active {
@@ -199,62 +191,42 @@ func TabUnderline(e ui.Element, active bool, radius float32, t *ui.Theme) ui.Ele
 	return e
 }
 
-func Tabs(c *ui.Context, selected *int, labels ...string) ui.Element {
-	tabs := ui.TabsBase(c, selected, len(labels))
-	tabs.List.Gap(4)
-	tabs.List.Children(func() {
-		for n, label := range labels {
-			active := n == *selected
-			tab := tabs.Tab(n).Height(30).Padding(4, 10).Cursor(ui.CursorPointer)
-			TabUnderline(tab, active, TabRadius, c.Theme())
-			fill, textColor := ui.Transparent, TabInk(c.Theme(), active)
-			if !active && tab.Hovered() {
-				fill, textColor = c.Theme().SurfaceHover, c.Theme().Text
-			}
-			tab.Background(tab.AnimateColor("tab-fill", fill, ui.Animation{Duration: chromeFade, Ease: ui.EaseInOut}))
-			edge := ui.Transparent
-			if active {
-				edge = c.Theme().Accent
-			}
-			tab.BorderColor(tab.AnimateColor("tab-border", edge, ui.Animation{Duration: chromeFade, Ease: ui.EaseInOut}))
-			tab.TextColor(textColor)
-			tab.Children(func() {
-				text := ui.Text(c, label).FontSize(13).TextColor(textColor).SingleLine().Cursor(ui.CursorPointer)
-				if active {
-					text.FontWeight(600)
-				}
-			})
-		}
-	})
-	return tabs.List
+// OptionGroup is the compact neutral track shared by groups of choices.
+func OptionGroup(c *ui.Context) ui.Element {
+	return ui.Row(c).AlignSelf(ui.Start).MaxWidthPercent(100).Wrap().Padding(3).Gap(3).
+		Radius(Radius).Background(c.Theme().SurfaceHover.Alpha(0.45)).Border(1, c.Theme().Border)
 }
 
-// Segmented keeps MyGo's radio-group, focus and keyboard behavior while giving
-// the current choice a visible fill, outline and check, in every theme.
+// OptionChrome distinguishes selection with a soft fill and stronger ink;
+// keyboard focus keeps the native focus ring rather than a permanent outline.
+func OptionChrome(c *ui.Context, e ui.Element, selected bool, tone ui.Color) ui.Color {
+	t := c.Theme()
+	fill, ink := ui.Transparent, t.TextMuted
+	if selected {
+		fill, ink = SelectedFill(tone), tone.Mix(t.Text, 0.20)
+	} else if e.Hovered() {
+		fill, ink = t.SurfaceHover, t.Text
+	}
+	e.Height(28).Padding(0, 12).Radius(6).Border(0, ui.Transparent).Cursor(ui.CursorPointer).
+		Background(e.AnimateColor("option-fill", fill, ui.Animation{Duration: chromeFade, Ease: ui.EaseInOut})).TextColor(ink)
+	return fade(e, "option-ink", ink)
+}
+
+// Segmented keeps MyGo's radio-group, focus and keyboard behavior.
 func Segmented(c *ui.Context, selected *int, labels ...string) ui.Element {
 	parts := ui.SegmentedBase(c, selected, len(labels))
 	t := c.Theme()
-	el := parts.Track.Height(38).Padding(3).Gap(3).Radius(Radius).Background(t.Background).Border(1, t.Border).AlignItems(ui.Stretch).Cursor(ui.CursorPointer)
+	el := parts.Track.Height(36).AlignSelf(ui.Start).Padding(3).Gap(3).Radius(Radius).
+		Background(t.SurfaceHover.Alpha(0.45)).Border(1, t.Border).AlignItems(ui.Stretch).Cursor(ui.CursorPointer)
 	if len(labels) > 0 {
 		el.Label(labels[0])
 	}
 	el.Children(func() {
 		for i, label := range labels {
 			active := i == *selected
-			segment := parts.Segment(i).Height(30).Padding(0, 12).Radius(6).Cursor(ui.CursorPointer).Label(label).Gap(6)
-			fill, edge, ink := ui.Transparent, ui.Transparent, t.TextMuted
-			if active {
-				fill, edge, ink = t.Surface.Mix(t.Accent, 0.20), SelectedStrokeColor(t.Accent), t.Text
-			} else if segment.Hovered() {
-				fill, ink = t.SurfaceHover, t.Text
-			}
-			segment.Background(fill).Border(1, edge).TextColor(ink)
+			segment := parts.Segment(i).MinWidth(62).Label(label)
+			ink := OptionChrome(c, segment, active, t.Accent)
 			segment.Children(func() {
-				mark := ""
-				if active {
-					mark = "✓"
-				}
-				ui.Text(c, mark).Width(13).FontSize(12).TextColor(t.Accent).Unselectable().Cursor(ui.CursorPointer)
 				text := ui.Text(c, label).FontSize(13).TextColor(ink).SingleLine().Unselectable().Cursor(ui.CursorPointer)
 				if active {
 					text.FontWeight(600)
@@ -265,7 +237,7 @@ func Segmented(c *ui.Context, selected *int, labels ...string) ui.Element {
 	return el
 }
 func Tag(c *ui.Context, text string, fg, fill ui.Color) ui.Element {
-	return ui.Badge(c, text).TextColor(fg).Background(fill)
+	return colorTag(c, text, TagOptions{Small: true}, fg, fill, fg.Alpha(0.22), 22, 3)
 }
 func FieldLabel(c *ui.Context, text string) {
 	ui.Text(c, text).FontSize(FontSection).TextColor(c.Theme().Text)
@@ -298,7 +270,7 @@ func InputChrome(c *ui.Context, e ui.Element) ui.Element {
 		border = c.Theme().Accent
 	}
 	border = e.AnimateColor("chrome-border", border, ui.Animation{Duration: chromeFade, Ease: ui.EaseInOut})
-	return e.MinWidth(0).Border(1, border).Background(background).Radius(Radius).FontSize(14).TextColor(c.Theme().Text)
+	return e.MinWidth(0).Border(1, border).Background(fade(e, "chrome-fill", background)).Radius(Radius).FontSize(14).TextColor(c.Theme().Text)
 }
 func Input(c *ui.Context, value *string) ui.Element {
 	return InputChrome(c, ui.TextInput(c, value)).Height(ControlHeight)
@@ -322,7 +294,7 @@ func PasswordInput(c *ui.Context, key, label string, value *string, placeholder 
 		if *visible {
 			action, icon = "隐藏 "+label, eyeOffIcon
 		}
-		button := ui.ButtonBase(c.Key("visibility")).Size(32, ControlHeight).Shrink(0).Center().Cursor(ui.CursorPointer).Label(action).Tooltip(action)
+		button := Tooltip(c, ui.ButtonBase(c.Key("visibility")).Size(32, ControlHeight).Shrink(0).Center().Cursor(ui.CursorPointer).Label(action), action)
 		button.Children(func() { ui.Icon(c, icon).Size(15, 15).TextColor(c.Theme().TextMuted) })
 		if button.Clicked() {
 			*visible = !*visible
@@ -385,11 +357,13 @@ func NumberInput(c *ui.Context, key, label string, value *float64, lo, hi, step 
 			delta      float64
 		}{{"−", "减少", -step}, {"+", "增加", step}} {
 			item := item
-			button := ui.ButtonBase(c.Key(item.name)).Size(24, 28).Shrink(0).Center().Radius(5).Cursor(ui.CursorPointer).
-				Label(item.name + " " + label).Tooltip(item.name).Disabled(item.delta < 0 && *value <= lo || item.delta > 0 && *value >= hi)
+			button := Tooltip(c, ui.ButtonBase(c.Key(item.name)).Size(24, 28).Shrink(0).Center().Radius(5).Cursor(ui.CursorPointer).
+				Label(item.name+" "+label), item.name).Disabled(item.delta < 0 && *value <= lo || item.delta > 0 && *value >= hi)
+			fill := ui.Transparent
 			if button.Hovered() {
-				button.Background(c.Theme().Surface)
+				fill = c.Theme().Surface
 			}
+			button.Background(fade(button, "step-fill", fill))
 			button.Children(func() { ui.Text(c, item.text).FontSize(15).TextColor(c.Theme().TextMuted).Unselectable() })
 			if button.Clicked() {
 				set(*value + item.delta)
@@ -424,7 +398,7 @@ func NumberStepper(c *ui.Context, key, label string, value *string, lo, hi, step
 				control := control
 				next := current + control.delta
 				disabled := next < lo || next > hi
-				button := ui.Button(c, control.label).Size(26, 28).Padding(0).Border(0, ui.Transparent).
+				button := Action(c, control.label, ActionOptions{Style: Tertiary, Small: true}).Size(26, 28).Padding(0).Border(0, ui.Transparent).
 					Background(ui.Transparent).Radius(6).FontSize(15).TextColor(c.Theme().TextMuted).
 					Disabled(disabled).Label(control.name)
 				if button.Hovered() && !disabled {

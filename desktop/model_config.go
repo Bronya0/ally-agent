@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const customProviderName = "custom"
+
 func modelIdentity(m backend.ModelConfig) backend.ModelIdentity {
 	return backend.ModelIdentity{ProviderName: m.ProviderName, Model: m.Model, OAuthAccountID: m.OAuthAccountID}
 }
@@ -35,6 +37,8 @@ func (a *desktop) editModel(index int) {
 	a.modelForm.Fetched = nil
 	a.modelForm.FetchNote = ""
 	a.modelPrevious = nil
+	a.modelProviderPreset = customProviderPreset
+	a.modelProviderModel = ""
 	if index >= 0 && index < len(a.config.Models) {
 		a.modelDraft = a.config.Models[index]
 		a.modelPrevious = modelIdentityPtr(a.modelDraft)
@@ -42,7 +46,7 @@ func (a *desktop) editModel(index int) {
 			a.modelDraft.AuthType = "api_key"
 		}
 	} else {
-		a.modelDraft = backend.ModelConfig{AuthType: "api_key", ProviderName: "OpenAI Compatible", APIFormat: "openai", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", MaxTokens: 131072, ContextWindow: 1000000}
+		a.modelDraft = backend.ModelConfig{AuthType: "api_key", ProviderName: customProviderName, APIFormat: "openai", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", MaxTokens: 131072, ContextWindow: 1000000}
 	}
 	if a.modelDraft.TokenParam == "" || a.modelDraft.TokenParam == "max_tokens" {
 		a.modelDraft.TokenParam = "auto"
@@ -163,7 +167,7 @@ func (a *desktop) saveModelDraft() {
 	}
 	m, err := a.preparedModelDraft()
 	if err != nil {
-		a.notify(err.Error())
+		a.notifyError(err.Error())
 		return
 	}
 
@@ -185,7 +189,7 @@ func (a *desktop) saveModelDraft() {
 		a.win.Update(func() {
 			a.modelSaving = false
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				return
 			}
 			a.config = cfg
@@ -204,7 +208,7 @@ func (a *desktop) saveModelDraft() {
 					t.Model = modelOption(m)
 				}
 			}
-			a.notify("模型已保存")
+			a.notifySuccess("模型已保存")
 		})
 	}()
 }
@@ -224,7 +228,7 @@ func (a *desktop) useModel(m backend.ModelConfig) {
 		a.win.Update(func() {
 			a.modelSaving = false
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				return
 			}
 			a.config = cfg
@@ -235,7 +239,7 @@ func (a *desktop) useModel(m backend.ModelConfig) {
 					t.Reasoning = "auto"
 				}
 			}
-			a.status = "已选择 " + m.Model
+			a.notify("已选择 " + m.Model)
 		})
 	}()
 }

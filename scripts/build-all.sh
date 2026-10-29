@@ -1,4 +1,5 @@
-#!/usr/bin/env bash
+#!/bin/bash
+# CI release entry: run on macOS; the Python builder owns all platform logic.
 set -euo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/build-common.sh"
-run_build all "$@"
+cd "$(dirname "$0")/.."
+exec python3 scripts/build.py release

@@ -117,7 +117,7 @@ func (a *desktop) gameSidebar(c *ui.Context) {
 			}
 			uikit.Select(c.Key("game-model-a"), &g.ModelA, models).Label("模型 A").FillWidth().Disabled(g.Thinking)
 			uikit.Select(c.Key("game-effort-a"), &g.EffortA, []string{"auto", "low", "medium", "high", "xhigh", "max"}).Label("思考强度").FillWidth().Disabled(g.Thinking)
-			flat(c, map[bool]string{true: "改回与模型对弈", false: "切换双模型对弈（AI vs AI）"}[g.VsAI]).Disabled(g.Thinking).OnClick(func() {
+			cardFlat(c, map[bool]string{true: "改回与模型对弈", false: "切换双模型对弈（AI vs AI）"}[g.VsAI]).Disabled(g.Thinking).OnClick(func() {
 				g.VsAI = !g.VsAI
 				g.Started = false
 			})
@@ -136,9 +136,9 @@ func (a *desktop) gameSidebar(c *ui.Context) {
 			if g.Thinking {
 				label = "思考中…"
 			}
-			primary(c, label).Disabled(len(a.config.Models) == 0 || g.Thinking || g.ModelA == "").OnClick(func() { a.startGame() })
+			cardPrimary(c, label).Disabled(len(a.config.Models) == 0 || g.Thinking || g.ModelA == "").OnClick(func() { a.startGame() })
 			if g.Thinking {
-				dangerButton(c, "停止").OnClick(func() {
+				cardDanger(c, "停止").OnClick(func() {
 					a.core.GameAIActionCancel()
 					g.Thinking = false
 					g.Status = "已停止"
@@ -165,10 +165,10 @@ func (a *desktop) gameSidebar(c *ui.Context) {
 				fieldNote(c, fmt.Sprintf("%d 人局 · 你执先手，其余座位由模型接管。", players))
 			}
 			if g.Kind == gameGo {
-				flat(c, "停一手").Disabled(!g.Started || g.Thinking || g.Winner >= 0).OnClick(func() { a.gamePass() })
+				cardFlat(c, "停一手").Disabled(!g.Started || g.Thinking || g.Winner >= 0).OnClick(func() { a.gamePass() })
 			}
 			if g.Kind == gameDoudizhu && g.Phase == ddzPhaseDeal {
-				flat(c, "发牌").Disabled(g.Thinking).OnClick(func() { a.ddzDeal() })
+				cardFlat(c, "发牌").Disabled(g.Thinking).OnClick(func() { a.ddzDeal() })
 			}
 		})
 	})

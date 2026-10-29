@@ -95,5 +95,62 @@ class LegacyReleaseCompatibilityTests(unittest.TestCase):
             with mock.patch.dict(build.os.environ, {'BUILD_TAG': tag}):
                 self.assertEqual(build.release_tag({'version':'1.27.0'}), tag)
 
+class LauncherIntegrityTests(unittest.TestCase):
+    def test_launchers_have_no_hidden_control_characters(self):
+        for name in ('build.bat', 'build.command', 'build-all.sh'):
+            data = (build.ROOT / 'scripts' / name).read_bytes()
+            bad = [value for value in data if value < 32 and value not in (9, 10, 13)]
+            self.assertEqual(bad, [], name + ' contains control characters')
+        batch = (build.ROOT / 'scripts/build.bat').read_text()
+        self.assertIn('py -3 "scripts/build.py" dev', batch)
+        self.assertIn('python "scripts/build.py" dev', batch)
+
+
+class DevelopmentBuildTests(unittest.TestCase):
+    def test_windows_development_uses_host_architecture(self):
+        for machine, arch in [('AMD64', 'amd64'), ('ARM64', 'arm64')]:
+            with mock.patch.object(build.platform, 'machine', return_value=machine),                     mock.patch.object(build, 'windows_arch') as compile_arch:
+                build.windows({'name': 'Ally'}, exe_only=True)
+                compile_arch.assert_called_once_with({'name': 'Ally'}, arch, True)
+
+    def test_local_macos_build_has_rg_and_signature_without_dmg(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dist = Path(directory)
+            target = dist / 'Ally.app'
+            target.mkdir()
+            (target / 'old-build').write_text('old')
+            calls = []
+
+            def fake_run(*args, **kwargs):
+                args = tuple(map(str, args))
+                calls.append(args)
+                if args[:3] == ('go', 'tool', 'mygo'):
+                    output = Path(args[args.index('-o') + 1])
+                    binary = output / 'darwin-arm64/Ally.app/Contents/MacOS/Ally'
+                    binary.parent.mkdir(parents=True)
+                    binary.write_bytes(b'macho')
+
+            def fake_rg(system, arch, path):
+                self.assertEqual((system, arch), ('darwin', 'arm64'))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'rg')
+
+            with mock.patch.object(build, 'DIST', dist),                     mock.patch.object(build.platform, 'machine', return_value='arm64'),                     mock.patch.object(build, 'run', side_effect=fake_run),                     mock.patch.object(build, 'ripgrep', side_effect=fake_rg),                     mock.patch.object(build, 'legal_files'):
+                build.macos_app({'name': 'Ally'})
+            self.assertFalse((target / 'old-build').exists())
+            self.assertEqual((target / 'Contents/MacOS/tools/rg').read_bytes(), b'rg')
+            self.assertTrue(any(a[0] == 'codesign' and '--verify' in a for a in calls))
+            self.assertFalse(any(a[0] in ('lipo', 'hdiutil') for a in calls))
+            self.assertIn('darwin/arm64', calls[0])
+            self.assertIn('-skip-dmg', calls[0])
+
+    def test_release_rejects_non_macos_before_writing_files(self):
+        with mock.patch.object(build.sys, 'argv', ['build.py', 'release']),                 mock.patch.object(build.platform, 'system', return_value='Windows'),                 mock.patch.object(build, 'windows') as windows:
+            with self.assertRaises(SystemExit) as result:
+                build.main()
+            self.assertEqual(result.exception.code, 2)
+            windows.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

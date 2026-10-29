@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,7 +18,7 @@ func toolWarning(c *ui.Context, text string) {
 	line := strings.Join(strings.Fields(full), " ")
 	ui.Row(c).FillWidth().MinWidth(0).Padding(5, 10).Radius(radiusSmall).
 		Background(ui.RGBA(217, 164, 65, 0.06)).Children(func() {
-		ui.Text(c, line).Grow(1).MinWidth(0).SingleLine().FontSize(fsSmall).TextColor(colWarning().Mix(c.Theme().TextMuted, 0.5)).Tooltip(full)
+		uikit.Tooltip(c, ui.Text(c, line).Grow(1).MinWidth(0).SingleLine().FontSize(fsSmall).TextColor(c.Theme().Warning.Mix(c.Theme().TextMuted, 0.5)), full)
 	})
 }
 

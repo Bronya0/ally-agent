@@ -29,7 +29,7 @@ type uiPrefs struct {
 }
 
 func defaultPrefs() uiPrefs {
-	return uiPrefs{Palette: 2, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "image", TreeWidth: 270}
+	return uiPrefs{Appearance: "dark", Palette: 2, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270}
 }
 
 var prefsMu sync.Mutex
@@ -56,6 +56,8 @@ func readPrefs(path string) uiPrefs {
 		return defaultPrefs()
 	}
 	p := defaultPrefs()
+	// Older records infer appearance from the palette when this field is absent.
+	p.Appearance = ""
 	if json.Unmarshal(data, &p) != nil {
 		return defaultPrefs()
 	}
@@ -66,14 +68,14 @@ func readPrefs(path string) uiPrefs {
 		p.TreeWidth = 270
 	}
 	if p.Avatar == "" {
-		p.Avatar = "eye"
+		p.Avatar = "whale"
 	}
 	return p
 }
 
 // savePrefs is fire-and-forget: preferences are cosmetic, and a failed write
 // must never interrupt the UI.
-func (a *desktop) savePrefs() {
+func (a *desktop) savePrefs(notice ...string) {
 	if a.core == nil {
 		return
 	}
@@ -94,11 +96,17 @@ func (a *desktop) savePrefs() {
 			return
 		}
 		data, err := json.MarshalIndent(p, "", "  ")
-		if err != nil {
-			return
+		if err == nil {
+			err = os.MkdirAll(filepath.Dir(path), 0o755)
 		}
-		_ = os.MkdirAll(filepath.Dir(path), 0o755)
-		_ = os.WriteFile(path, data, 0o600)
+		if err == nil {
+			err = os.WriteFile(path, data, 0o600)
+		}
+		if a.win != nil {
+			a.win.Update(func() {
+				a.prefsSaveResult(err, notice)
+			})
+		}
 	}()
 }
 
@@ -159,6 +167,7 @@ type chatUI struct {
 	ModelGroup       string
 	FlyoutHot        bool
 	ContextOpen      bool
+	ExtraRootsOpen   bool
 	Retry            *retryInfo
 	Git              backend.GitStatus
 	GitLoaded        bool
@@ -488,3 +497,13 @@ type gameUI struct {
 // Confirm helper ----------------------------------------------------------
 
 var _ = ui.Transparent
+
+func (a *desktop) prefsSaveResult(err error, notice []string) {
+	if err != nil {
+		a.notifyError("保存外观偏好失败：" + err.Error())
+		return
+	}
+	if len(notice) > 0 {
+		a.notifySuccess(notice[0])
+	}
+}

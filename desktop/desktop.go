@@ -5,6 +5,7 @@ import (
 	"ally-dev/resources"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -57,6 +58,11 @@ type workspaceFile struct {
 	PreviewMarkdown *markdown.Options
 }
 type desktop struct {
+	// composerFocus is the window's focus binding for the composer input:
+	// MyGo releases the keyboard focus when the field it is bound to is cleared,
+	// which is how a sent message drops the focused edge from the box.
+	composerFocus string
+
 	htmlPreviews                              map[string]*mygo.WebView
 	customAvatar                              *ui.Bitmap
 	avatarStyle                               string
@@ -67,7 +73,7 @@ type desktop struct {
 	railResizing, treeResizing                bool
 	welcomeMCP, welcomeSkills, welcomeTools   bool
 	popupFlags                                map[string]*bool
-	notifications                             []string
+	notifications                             []ui.Toast
 	taskPopup                                 bool
 	petals                                    bool
 	ShowAllMessages                           bool
@@ -75,6 +81,7 @@ type desktop struct {
 	modelTabIdx                               int
 	modelProvider                             string
 	modelProviderPreset                       string
+	modelProviderModel                        string
 	extraRoots                                map[string][]string
 	sshAllowed                                map[string][]string
 	prefs                                     uiPrefs
@@ -135,6 +142,8 @@ type desktop struct {
 	active                                              int
 	sessions                                            []backend.SessionIndexEntry
 	explorer                                            bool
+	workspaceMenuOpen                                   bool
+	startupError                                        string
 	files                                               []backend.FileEntry
 	workspaceFiles                                      map[string]*workspaceFile
 	fileLoadID                                          uint64
@@ -170,13 +179,14 @@ func Run() {
 	}
 	mygo.App.SetName("Ally Native")
 	a := &desktop{core: backend.NewApp(), page: "chat", modelEdit: -1, explorer: true, status: "正在启动…", plans: map[string][]backend.PlanStep{}, planRev: map[string]int64{}, subRuns: map[string]*backend.SubagentRun{}, prefs: defaultPrefs(), extraRoots: map[string][]string{}, sshAllowed: map[string][]string{}}
+	a.loadPrefs()
 	mygo.App.WhenReady(func() {
 		a.syncNativeAppearance()
 		opts := mygo.WindowOptions{
 			Title: "Ally", Width: 1280, Height: 850, MinWidth: 900, MinHeight: 620,
 			StateKey: "ally-native-main", TitleBarStyle: mygo.TitleBarHidden,
 			TitleBarHeight: headerBarHeight,
-			Hidden:         true, BackgroundColor: "#1b1b1b", Content: ui.View(a.view),
+			Hidden:         true, BackgroundColor: fmt.Sprintf("#%02x%02x%02x", a.currentPalette().bg.R, a.currentPalette().bg.G, a.currentPalette().bg.B), Content: ui.View(a.view),
 		}
 		// macOS keeps the native traffic lights over the hidden title bar, so
 		// the header reserves their room instead of hiding them. Elsewhere the
@@ -217,32 +227,32 @@ func Run() {
 				a.shutdown()
 			}
 		})
+		prefs := a.prefs
 		go func() {
 			if logger, _, err := backend.InitErrorLogger(); err == nil {
 				a.core.SetErrorLogger(logger)
 			}
-			prefs := readPrefs(a.prefsPath())
 			customAvatar := a.loadCustomAvatar()
 			avatarStyle := normalizedAvatarStyle(prefs.Avatar)
 			avatarPoses := decodeAvatarStyle(avatarStyle)
 			err := a.core.StartNative(context.Background(), a.onEvent)
 			if err != nil {
-				a.win.Update(func() { a.status = "启动失败：" + err.Error() })
+				a.win.Update(func() { a.startupError = "启动失败：" + err.Error(); a.status = a.startupError })
 				return
 			}
 			cfg, err := a.core.GetConfig()
 			if err != nil {
-				a.fail(err)
+				a.win.Update(func() { a.startupError = "读取配置失败：" + err.Error(); a.status = a.startupError })
 				return
 			}
 			sessions, _ := a.core.ListSessionIndex()
+			workspace := startupWorkspace(sessions, cfg.Workspace)
 			skills, _ := a.core.ListSkills()
 			tools := a.core.ListTools()
 			servers := a.core.GetMcpServers()
 			plugins, pluginErr := a.core.ListPlugins()
 			a.win.Update(func() {
 				a.config = cfg
-				a.prefs = prefs
 				a.syncNativeAppearance()
 				a.customAvatar = customAvatar
 				a.avatarStyle, a.avatarPoses = avatarStyle, avatarPoses
@@ -262,7 +272,7 @@ func Run() {
 				a.syncSettingsForm()
 				a.ready = true
 				a.status = "就绪"
-				a.newConversation(cfg.Workspace)
+				a.newConversation(workspace)
 			})
 		}()
 	})
@@ -286,7 +296,7 @@ func (a *desktop) shutdown() {
 				result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: "未保存的文件", Message: "存在未保存的文件修改", Detail: "退出会放弃这些修改。", Buttons: []string{"取消", "放弃并退出"}, CancelButton: 0})
 				a.win.Update(func() {
 					if err != nil {
-						a.notify(err.Error())
+						a.notifyError(err.Error())
 						a.closing = false
 						return
 					}
@@ -435,6 +445,7 @@ func (a *desktop) newSession() {
 	next.Reasoning = t.Reasoning
 	a.tabs[a.active] = next
 	a.page = "chat"
+	a.notifySuccess("已新建会话")
 	if a.win != nil {
 		a.refreshSessionFooter(next)
 		a.refreshGit(next)
@@ -469,32 +480,41 @@ func modelLabel(p, m string) string {
 
 // notify is called on the UI thread; the view drains the queue into the
 // window's toast service so background work never captures a UI context.
-func (a *desktop) notify(message string) {
+func (a *desktop) notify(message string)        { a.queueNotice(message, "info") }
+func (a *desktop) notifyError(message string)   { a.queueNotice(message, "error") }
+func (a *desktop) notifySuccess(message string) { a.queueNotice(message, "success") }
+func (a *desktop) queueNotice(message, kind string) {
 	if message == "" {
 		return
 	}
 	a.status = message
+	item := ui.Toast{Title: message, Type: kind}
+	if len(a.notifications) > 0 && a.notifications[len(a.notifications)-1].Title == message && a.notifications[len(a.notifications)-1].Type == kind {
+		return
+	}
 	if len(a.notifications) >= 8 {
 		a.notifications = a.notifications[1:]
 	}
-	if len(a.notifications) == 0 || a.notifications[len(a.notifications)-1] != message {
-		a.notifications = append(a.notifications, message)
-	}
+	a.notifications = append(a.notifications, item)
 }
 
 func (a *desktop) fail(err error) {
 	if err != nil {
-		a.win.Update(func() { a.notify(err.Error()) })
+		a.win.Update(func() { a.notifyError(err.Error()) })
 	}
 }
-func (a *desktop) job(work func() error) {
+func (a *desktop) job(work func() error, notice ...string) {
 	go func() {
 		err := work()
 		a.win.Update(func() {
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 			} else {
-				a.status = "操作完成"
+				if len(notice) == 0 {
+					a.notifySuccess("操作完成")
+				} else if notice[0] != "" {
+					a.notifySuccess(notice[0])
+				}
 			}
 		})
 	}()
@@ -583,7 +603,11 @@ func (a *desktop) send(t *conversation, text string) bool {
 		return false
 	}
 	if t.Busy {
-		return a.inject(t, text)
+		if a.inject(t, text) {
+			a.composerFocus = ""
+			return true
+		}
+		return false
 	}
 	if t.Model == "" {
 		a.status = "请先在模型页面配置并选择模型"
@@ -613,6 +637,9 @@ func (a *desktop) send(t *conversation, text string) bool {
 	t.Status = "正在连接模型…"
 	t.uiState().Follow = true
 	t.uiState().FollowPending = true
+	// The message is away, so the composer gives the keyboard back: the box
+	// keeps its resting edge instead of the focused one while the run streams.
+	a.composerFocus = ""
 	a.persist(t)
 	go func() {
 		id, err := a.core.StartChat(backend.ChatRequest{SessionID: t.ID, Message: text, Attachments: attachments, Config: cfg})
@@ -620,7 +647,7 @@ func (a *desktop) send(t *conversation, text string) bool {
 			if err != nil {
 				t.Busy = false
 				t.Status = err.Error()
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": err.Error(), "error": true})
 				a.persist(t)
 			} else if t.Busy {
@@ -746,7 +773,10 @@ func (a *desktop) showSession(next *conversation) {
 // events.go so the chat, task and update streams stay together.
 func (a *desktop) onEvent(name string, payload any) { a.dispatchEvent(name, payload) }
 func pretty(v any) string                           { b, _ := json.MarshalIndent(v, "", "  "); return string(b) }
-func (a *desktop) refreshFiles() {
+func (a *desktop) refreshFiles(manual ...bool) {
+	if a.core == nil || a.win == nil {
+		return
+	}
 	t := a.current()
 	if t == nil {
 		return
@@ -769,11 +799,14 @@ func (a *desktop) refreshFiles() {
 				return
 			}
 			if e != nil {
-				a.status = e.Error()
+				a.notifyError(e.Error())
 
 				return
 			}
 			a.files = r.Entries
+			if len(manual) > 0 && manual[0] {
+				a.notifySuccess("资源树已刷新")
+			}
 			if r.Truncated {
 				a.status = "文件过多，目录列表仅显示前 1000 项"
 			}
@@ -842,7 +875,7 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 					return
 				}
 				if err != nil {
-					a.notify(err.Error())
+					a.notifyError(err.Error())
 					a.openFileInfo(path)
 					return
 				}
@@ -853,6 +886,9 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 					a.releaseWorkspaceFile(root)
 				}
 				a.workspaceFiles[workspaceKey(root)] = &workspaceFile{Path: path, Image: bitmap, Editor: &editor.State{Buffer: editor.NewBuffer("")}}
+				if expected != nil {
+					a.notifySuccess("文件已刷新")
+				}
 			})
 			return
 		}
@@ -884,6 +920,9 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 				a.releaseWorkspaceFile(root)
 			}
 			a.workspaceFiles[workspaceKey(root)] = newFile
+			if expected != nil {
+				a.notifySuccess("文件已刷新")
+			}
 		})
 	}()
 }
@@ -915,7 +954,7 @@ func (a *desktop) confirmDiscardFile(root string, file *workspaceFile, action fu
 		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: "未保存的文件", Message: "放弃对 " + file.Path + " 的修改？", Buttons: []string{"取消", "放弃修改"}, CancelButton: 0})
 		a.win.Update(func() {
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				return
 			}
 			if result.Button == 1 && a.workspaceFiles[workspaceKey(root)] == file {

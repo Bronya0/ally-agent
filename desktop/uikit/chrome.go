@@ -86,11 +86,11 @@ func Card(c *ui.Context, key any, padding, radius float32, build func()) ui.Elem
 // RowCard 是可悬停高亮的列表行卡片。
 func RowCard(c *ui.Context, key any, padding, radius float32, build func()) ui.Element {
 	e := ui.Column(c.Key(key)).Padding(padding).Gap(GapInline).Radius(radius)
-	e.Background(fade(e, "rowcard-fill", c.Theme().Surface)).
-		Border(1, fade(e, "rowcard-border", c.Theme().Border))
+	fill := c.Theme().Surface
 	if e.Hovered() {
-		e.Background(fade(e, "rowcard-fill", c.Theme().SurfaceHover))
+		fill = c.Theme().SurfaceHover
 	}
+	e.Background(fade(e, "rowcard-fill", fill)).Border(1, fade(e, "rowcard-border", c.Theme().Border))
 	return e.Children(build)
 }
 

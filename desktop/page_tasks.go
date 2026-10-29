@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	"fmt"
 	"strings"
 	"time"
@@ -10,7 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-func (a *desktop) loadTaskCenter() {
+func (a *desktop) loadTaskCenter(manual ...bool) {
 	if a.tasksF.Loading {
 		return
 	}
@@ -22,6 +23,9 @@ func (a *desktop) loadTaskCenter() {
 			a.tasksF.Loading = false
 			a.tasks = tasks
 			a.services = services
+			if len(manual) > 0 && manual[0] {
+				a.notifySuccess("任务列表已刷新")
+			}
 		})
 	}()
 }
@@ -45,13 +49,13 @@ func (a *desktop) tasksPageBody(c *ui.Context) {
 			a.tasksF.Scope = 1
 		}
 		if a.tasksF.Scope == 0 && workspace != "" {
-			ui.Text(c, short(workspace, 60)).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Tooltip(workspace)
+			uikit.Tooltip(c, ui.Text(c, short(workspace, 60)).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted), workspace)
 		}
 		ui.Spacer(c)
 		if a.tasksF.Loading {
 			ui.Spinner(c).Size(13, 13)
 		}
-		flat(c, "刷新").OnClick(func() { a.loadTaskCenter() })
+		flat(c, "刷新").OnClick(func() { a.loadTaskCenter(true) })
 	})
 	runningServices, runningTasks := 0, 0
 	for _, s := range a.services {
@@ -113,22 +117,36 @@ func (a *desktop) servicesSection(c *ui.Context, workspace string) {
 					if a.tasksF.StopBusy[service.ID] {
 						label = "停止中…"
 					}
-					dangerButton(c, label).Disabled(a.tasksF.StopBusy[service.ID]).OnClick(func() { a.stopService(service) })
+					cardDanger(c, label).Disabled(a.tasksF.StopBusy[service.ID]).OnClick(func() { a.stopService(service) })
 				}
 			})
 			if service.Description != "" {
-				ui.Text(c, service.Description).FontSize(fsSmall).TextColor(c.Theme().TextMuted).SingleLine().Tooltip(service.Description)
+				uikit.Tooltip(c, ui.Text(c, service.Description).FontSize(fsSmall).TextColor(c.Theme().TextMuted).SingleLine(), service.Description)
 			}
 			if a.tasksF.Scope == 1 && service.Workspace != "" {
 				fieldNote(c, "工作区 · "+service.Workspace)
 			}
 			detailsOpen := a.mcpF.ToolOpen["service-"+service.ID]
-			if flat(c, map[bool]string{true: "收起详情 ⌃", false: "详情 ⌄"}[detailsOpen]).AlignSelf(ui.Start).Clicked() {
+			detailsButton := cardFlat(c, "详情").AlignSelf(ui.Start)
+			detailsIconName := "chevrondown"
+			if detailsOpen {
+				detailsIconName = "chevron"
+			}
+			detailsButton.OnClick(func() {
 				if a.mcpF.ToolOpen == nil {
 					a.mcpF.ToolOpen = map[string]bool{}
 				}
 				a.mcpF.ToolOpen["service-"+service.ID] = !detailsOpen
-			}
+			})
+			detailsButton.Children(func() {
+				ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "详情").FontSize(fsSmall)
+					icon := iconGlyph(c, detailsIconName, 10).Shrink(0)
+					if detailsOpen {
+						icon.Rotate(-90)
+					}
+				})
+			})
 			if detailsOpen {
 				kv(c, "ID", service.ID)
 				kv(c, "PID", fmt.Sprint(service.PID))
@@ -150,7 +168,7 @@ func (a *desktop) servicesSection(c *ui.Context, workspace string) {
 			if service.Error != "" {
 				inlineError(c, "service-error-"+service.ID, service.Error)
 			}
-			flat(c, "查看完整日志").AlignSelf(ui.Start).OnClick(func() {
+			cardFlat(c, "查看完整日志").AlignSelf(ui.Start).OnClick(func() {
 				a.openServiceLog(service)
 			})
 		})
@@ -190,7 +208,7 @@ func (a *desktop) stopService(service backend.ServiceInfo) {
 		a.win.Update(func() {
 			delete(a.tasksF.StopBusy, service.ID)
 			if err != nil {
-				a.notify(err.Error())
+				a.notifyError(err.Error())
 				return
 			}
 			for i := range a.services {
@@ -272,14 +290,14 @@ func (a *desktop) scheduledSection(c *ui.Context, workspace string) {
 				fieldNote(c, task.ID)
 				ui.Spacer(c)
 				if task.LastSummary != "" || task.LastError != "" {
-					flat(c, "查看完整日志").OnClick(func() { a.openTaskLog(task) })
+					cardFlat(c, "查看完整日志").OnClick(func() { a.openTaskLog(task) })
 				}
 				busy := a.tasksF.DeleteBusy[task.ID]
 				label := "删除任务"
 				if busy {
 					label = "删除中…"
 				}
-				dangerButton(c, label).Disabled(busy).OnClick(func() { a.deleteTask(task) })
+				cardDanger(c, label).Disabled(busy).OnClick(func() { a.deleteTask(task) })
 			})
 			schedule := scheduleText(task.Schedule)
 			next := "不再触发"
@@ -483,10 +501,10 @@ func (a *desktop) taskPopupDialog(c *ui.Context) {
 		ui.Row(c).Children(func() {
 			segmented(c, "popup-task-scope", &a.tasksF.Scope, "当前工作区", "全部")
 			if a.tasksF.Scope == 0 && workspace != "" {
-				ui.Text(c, workspace).FontSize(fsSmall).SingleLine().MinWidth(0).Tooltip(workspace)
+				uikit.Tooltip(c, ui.Text(c, workspace).FontSize(fsSmall).SingleLine().MinWidth(0), workspace)
 			}
 			ui.Spacer(c)
-			flat(c, "刷新").OnClick(func() { a.loadTaskCenter() })
+			flat(c, "刷新").OnClick(func() { a.loadTaskCenter(true) })
 		})
 		if a.tasksF.Tab == 0 {
 			a.servicesSection(c, workspace)

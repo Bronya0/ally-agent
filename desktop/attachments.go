@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	backend "ally-dev/internal/app"
 	"bytes"
 	"encoding/base64"
@@ -319,14 +320,14 @@ func ensureAttachmentMaps(t *conversation) {
 func (a *desktop) pendingAttachmentRow(c *ui.Context, t *conversation) {
 	ui.Row(c).Gap(6).Wrap().Children(func() {
 		for _, att := range t.PendingAttachments {
-			ui.Row(c.Key(att.ID)).Padding(5, 8).Gap(5).Background(panel).Radius(5).Children(func() {
+			ui.Row(c.Key(att.ID)).Padding(5, 8).Gap(7).AlignItems(ui.Center).Shrink(0).Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(5).Label("待发送附件 " + att.Name).Children(func() {
 				if bm := t.AttachmentImages[att.ID]; bm != nil {
-					ui.Image(c, bm).Size(32, 32).Fit(ui.Contain)
+					ui.Image(c, bm).Size(36, 32).Shrink(0).Fit(ui.Contain)
 				}
 				ui.Column(c).Gap(2).Children(func() {
-					ui.Text(c, short(att.Name, 18)).FontSize(11).Tooltip(att.Name)
+					uikit.Tooltip(c, ui.Text(c, short(att.Name, 18)).FontSize(12).TextColor(c.Theme().Text).SingleLine(), att.Name)
 					if att.Error != "" {
-						ui.Text(c, short(att.Error, 18)).FontSize(10).TextColor(c.Theme().Danger).Tooltip(att.Error)
+						uikit.Tooltip(c, ui.Text(c, short(att.Error, 18)).FontSize(10).TextColor(c.Theme().Danger), att.Error)
 					}
 				})
 				dangerIconAction(c, "attach-remove-"+att.ID, "移除 "+att.Name, "close", 20, func() {
@@ -421,8 +422,8 @@ func (a *desktop) messageAttachmentTile(c *ui.Context, t *conversation, att map[
 			} else {
 				tip += " · 点击放大"
 			}
-			ui.Image(c, bm).Size(dw, dh).MaxWidthPercent(100).Fit(ui.Contain).
-				Cursor(ui.CursorPointer).Tooltip(tip).
+			uikit.Tooltip(c, ui.Image(c, bm).Size(dw, dh).MaxWidthPercent(100).Fit(ui.Contain).
+				Cursor(ui.CursorPointer), tip).
 				OnClick(func() { t.uiState().ToolOpen[key] = !expanded })
 		case str(att, "error") == "":
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -435,9 +436,9 @@ func (a *desktop) messageAttachmentTile(c *ui.Context, t *conversation, att map[
 			})
 		}
 		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, short(name, 18)).FontSize(fsAux).TextColor(c.Theme().TextMuted).Tooltip(name)
+			uikit.Tooltip(c, ui.Text(c, short(name, 18)).FontSize(fsAux).TextColor(c.Theme().TextMuted), name)
 			if err := str(att, "error"); err != "" {
-				ui.Text(c, short(err, 18)).FontSize(fsAux).TextColor(c.Theme().Danger).Tooltip(err)
+				uikit.Tooltip(c, ui.Text(c, short(err, 18)).FontSize(fsAux).TextColor(c.Theme().Danger), err)
 			}
 			if ref := str(att, "imageRef"); ref != "" {
 				mutedIconAction(c, "attachment-save-"+id, "保存图片", "download", 18, func() {

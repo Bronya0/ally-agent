@@ -1064,7 +1064,7 @@ func wrapProviderRequestError(err error) error {
 	}
 	msg := providerErrorMessageFromBody(reqErr.Body)
 	if msg == "" {
-		msg = "(服务商未返回错误说明)"
+		msg = "(供应商未返回错误说明)"
 	}
 	return &providerRequestError{
 		inner: err,

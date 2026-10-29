@@ -43,6 +43,23 @@ func flat(c *ui.Context, s string) ui.Element {
 	return button(c, nil, s, btnSecondary, false, "")
 }
 
+// caretButton replaces a text-font arrow with a fixed-size MyGo icon, keeping
+// the caret centered on the same row as the button label.
+func caretButton(c *ui.Context, b ui.Element, label, icon string, size float32, ink *ui.Color) ui.Element {
+	return b.Children(func() {
+		ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+			text := ui.Text(c, label).FontSize(size).SingleLine()
+			if ink != nil {
+				text.TextColor(*ink)
+			}
+			glyph := iconGlyph(c, icon, 10).Shrink(0)
+			if ink != nil {
+				glyph.TextColor(*ink)
+			}
+		})
+	})
+}
+
 func flatKey(c *ui.Context, key any, s string) ui.Element {
 	return button(c, key, s, btnSecondary, false, "")
 }
@@ -93,39 +110,13 @@ func choiceButton(c *ui.Context, key, text string, selected bool, tone ui.Color)
 	return choiceChip(c, key, text, selected, tone, false)
 }
 
-// choiceSwatch is choiceButton for colour swatches: the label keeps the colour
-// it selects, so a palette chip previews its accent while unselected.
+// choiceSwatch previews each palette with a small colour dot.
 func choiceSwatch(c *ui.Context, key, text string, selected bool, tone ui.Color) ui.Element {
 	return choiceChip(c, key, text, selected, tone, true)
 }
 
 func choiceChip(c *ui.Context, key, text string, selected bool, tone ui.Color, toneInk bool) ui.Element {
-	t := c.Theme()
-	b := ui.ButtonBase(c.Key(key)).Height(heightControl).Padding(3, 9).Radius(radiusControl).
-		Label(text).Cursor(ui.CursorPointer)
-	fill, ink, edge := t.Surface, t.TextMuted, surfaceBorder(c)
-	if toneInk {
-		ink = tone
-	}
-	switch {
-	case selected:
-		fill, ink, edge = selectionFill(tone), tone, selectionEdge(tone)
-	case b.Hovered():
-		fill, ink, edge = t.SurfaceHover, t.Text, t.Border.Mix(t.Text, edgeHoverMix)
-	}
-	b.Border(1, fadeColor(b, "choice-edge", edge)).Background(fadeColor(b, "choice-fill", fill))
-	b.TextColor(ink)
-	return b.Children(func() {
-		ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
-			// A chosen chip says so with tint, ink and weight — never a check mark:
-			// the mark doubled the signal and left a stray glyph in every chip that
-			// had to reserve room for it.
-			glyph := ui.Text(c, text).FontSize(fsSmall).TextColor(ink).SingleLine()
-			if selected {
-				glyph.FontWeight(600)
-			}
-		})
-	})
+	return uikit.Choice(c.Key(key), text, selected, tone, toneInk)
 }
 
 // selectionRow is the vertical-list form of the selected look: accent tint,
@@ -183,8 +174,8 @@ func railNavigationButton(c *ui.Context, id, label, iconName string, expanded, a
 }
 
 func railToggleButton(c *ui.Context, id, tip, name string, fn func()) ui.Element {
-	b := ui.ButtonBase(c.Key(id)).Size(sizeRailBadge, sizeRailBadge).AlignSelf(ui.Center).Center().Radius(radiusRailBadge).
-		Label(tip).Tooltip(tip).TextColor(c.Theme().TextMuted).Cursor(ui.CursorPointer).OnClick(fn)
+	b := uikit.Tooltip(c, ui.ButtonBase(c.Key(id)).Size(sizeRailBadge, sizeRailBadge).AlignSelf(ui.Center).Center().Radius(radiusRailBadge).
+		Label(tip), tip).TextColor(c.Theme().TextMuted).Cursor(ui.CursorPointer).OnClick(fn)
 	fill := ui.Transparent
 	if b.Hovered() {
 		fill = c.Theme().SurfaceHover
@@ -298,7 +289,7 @@ func switchRow(c *ui.Context, id, name, note string, value *bool) ui.Element {
 				label(c, name)
 				fieldNote(c, note)
 			})
-			sw = ui.Switch(c, value).Label(name)
+			sw = uikit.Switch(c, value, name)
 		})
 	})
 	return sw
@@ -336,9 +327,15 @@ func tabScroller(c *ui.Context) ui.Element {
 }
 
 func scrollTabs(c *ui.Context, selected *int, labels ...string) bool {
+	return scrollTabsStyle(c, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle}, labels...)
+}
+func scrollSubTabs(c *ui.Context, selected *int, labels ...string) bool {
+	return scrollTabsStyle(c, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle, Secondary: true}, labels...)
+}
+func scrollTabsStyle(c *ui.Context, selected *int, o uikit.TabOptions, labels ...string) bool {
 	changed := false
 	ui.Box(c).FillWidth().Clip().Children(func() {
-		tabScroller(c).FillWidth().Children(func() { changed = tabsBar(c, selected, labels...).Changed() })
+		tabScroller(c).FillWidth().Children(func() { changed = uikit.TabsWithOptions(c.Key("tabs"), selected, o, labels...).Changed() })
 	})
 	return changed
 }
@@ -365,7 +362,7 @@ func statusTone(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "connected", "success", "completed", "done", "ok", "approved", "signedin", "low":
 		return "ok"
-	case "warn", "warning", "connecting", "running", "pending", "in_progress", "waiting", "queued":
+	case "warn", "warning", "connecting", "running", "pending", "in_progress", "waiting", "queued", "partial":
 		return "warn"
 	case "error", "failed", "failure", "timeout", "invalid", "cancelled", "canceled", "high", "danger", "denied":
 		return "error"
@@ -376,20 +373,11 @@ func statusTone(status string) string {
 func toneColor(c *ui.Context, status string) ui.Color {
 	switch statusTone(status) {
 	case "ok":
-		if !c.Theme().Dark {
-			return ui.Hex("#19864b")
-		}
-		return colSuccess()
+		return c.Theme().Success
 	case "warn":
-		if !c.Theme().Dark {
-			return ui.Hex("#a76a16")
-		}
-		return colWarning()
+		return c.Theme().Warning
 	case "error":
-		if !c.Theme().Dark {
-			return ui.Hex("#c63e3e")
-		}
-		return colDanger()
+		return c.Theme().Danger
 	}
 	return c.Theme().TextMuted
 }
@@ -542,7 +530,7 @@ func inlineError(c *ui.Context, id, message string) {
 	if message == "" {
 		return
 	}
-	ui.Text(c.Key(id), message).FontSize(fsTiny).TextColor(colDanger()).MaxLines(4)
+	ui.Text(c.Key(id), message).FontSize(fsTiny).TextColor(c.Theme().Danger).MaxLines(4)
 }
 
 func spacerRow(c *ui.Context, build func()) {
@@ -611,6 +599,27 @@ func popoverItem(c *ui.Context, key, text, detail string, selected bool, action 
 	popoverItemStyle(c, key, text, detail, selected, nil, action)
 }
 
+// popoverModelRecent keeps the provider suffix on the model's line, so recent
+// entries stay compact even when the menu grows taller.
+func popoverModelRecent(c *ui.Context, key, name, provider string, selected bool, action func()) {
+	t := c.Theme()
+	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(6, 10).Justify(ui.Start).Radius(radiusSmall).Label(name + " " + provider).Cursor(ui.CursorPointer).OnClick(action)
+	if selected {
+		b.Background(selectionFill(t.Accent))
+	} else if b.Hovered() {
+		b.Background(t.SurfaceHover)
+	}
+	b.Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			label := ui.Text(c, name).FontSize(fsBody).SingleLine().Grow(1)
+			if selected {
+				label.TextColor(t.Accent).FontWeight(600)
+			}
+			ui.Text(c, provider).FontSize(fsTiny).TextColor(t.TextMuted).SingleLine().Shrink(0)
+		})
+	})
+}
+
 func popoverItemColor(c *ui.Context, key, text, detail string, selected bool, color ui.Color, action func()) {
 	popoverItemStyle(c, key, text, detail, selected, &color, action)
 }
@@ -618,7 +627,7 @@ func popoverItemColor(c *ui.Context, key, text, detail string, selected bool, co
 // popoverItemDanger is the menu entry for a destructive action: same row as
 // every other item, danger-colored label, so menus delete alike everywhere.
 func popoverItemDanger(c *ui.Context, key, text string, action func()) {
-	popoverItemColor(c, key, text, "", false, colDanger(), action)
+	popoverItemColor(c, key, text, "", false, c.Theme().Danger, action)
 }
 
 func popoverItemStyle(c *ui.Context, key, text, detail string, selected bool, color *ui.Color, action func()) {
@@ -669,7 +678,7 @@ func windowAction(c *ui.Context, id, tip, icon string, action func()) ui.Element
 }
 
 func footerBadge(c *ui.Context, id, name, value string, color ui.Color, tip string, action func()) ui.Element {
-	b := ui.ButtonBase(c.Key(id)).Height(22).Padding(1, 6).Radius(11).Label(tip).Tooltip(tip).Cursor(ui.CursorPointer).OnClick(action)
+	b := uikit.Tooltip(c, ui.ButtonBase(c.Key(id)).Height(22).Padding(1, 6).Radius(11).Label(tip), tip).Cursor(ui.CursorPointer).OnClick(action)
 	paintSurface(b, surfaceFill(c), surfaceBorder(c))
 	if b.Hovered() {
 		b.Background(fadeColor(b, "surface-fill", c.Theme().SurfaceHover))
@@ -705,7 +714,8 @@ func (a *desktop) popupFlag(key string) *bool {
 
 func (a *desktop) linkMenu(c *ui.Context, key string, links [][2]string) {
 	open := a.popupFlag(key)
-	btn := flat(c.Key(key+"-button"), "市场 ▾").OnClick(func() { *open = !*open })
+	btn := flat(c.Key(key+"-button"), "市场").OnClick(func() { *open = !*open })
+	caretButton(c, btn, "市场", "chevrondown", fsSmall, nil)
 	services := c.Services()
 	popoverPanel(c, btn, open, 240, func() {
 		for i, entry := range links {
@@ -738,4 +748,16 @@ func fieldExample(id, name string) string {
 	default:
 		return "请输入" + name
 	}
+}
+
+// Card actions stay quiet until hover, selection or keyboard interaction.
+func cardFlat(c *ui.Context, s string) ui.Element {
+	return uikit.Action(c.Key("card-action-"+s), s, uikit.ActionOptions{Style: uikit.Quaternary, Small: true})
+}
+func cardFlatKey(c *ui.Context, key any, s string) ui.Element { return cardFlat(c.Key(key), s) }
+func cardPrimary(c *ui.Context, s string) ui.Element {
+	return uikit.Action(c.Key("card-action-"+s), s, uikit.ActionOptions{Style: uikit.Quaternary, Tone: uikit.Primary, Small: true})
+}
+func cardDanger(c *ui.Context, s string) ui.Element {
+	return uikit.Action(c.Key("card-action-"+s), s, uikit.ActionOptions{Style: uikit.Quaternary, Tone: uikit.Error, Small: true})
 }

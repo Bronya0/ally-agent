@@ -10,7 +10,7 @@ require (
 	github.com/andybalholm/brotli v1.2.2
 	github.com/anthropics/anthropic-sdk-go v1.68.0
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/egoist/mygo v0.7.1
+	github.com/egoist/mygo v0.7.2
 	github.com/expr-lang/expr v1.17.8
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/go-jose/go-jose/v4 v4.1.4
