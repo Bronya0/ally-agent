@@ -9,9 +9,9 @@ Ally 的 MyGo v0.7.1 原生桌面实现，使用 Go 直接绘制界面，无需 
 ```bash
 go run .
 bash scripts/build.sh          # Windows 开发：dist/ally-native.exe，配套 tools/rg.exe
-bash scripts/build-windows.sh  # Windows 绿色 ZIP
+bash scripts/build-windows.sh  # Windows amd64 / arm64 绿色 ZIP
 bash scripts/build-linux.sh    # Linux amd64 / arm64 的 tar.gz
-bash scripts/build-macos.sh    # macOS universal DMG，需在 macOS 上运行
+bash scripts/build-macos.sh    # macOS universal / Intel / Apple 芯片 DMG，需 macOS
 bash scripts/build-all.sh      # 一个 macOS 环境构建以上全部发行包
 ```
 
@@ -20,11 +20,11 @@ bash scripts/build-all.sh      # 一个 macOS 环境构建以上全部发行包
 `scripts/build.bat`。本地与 GitHub CI 复用 `scripts/build.py`。
 
 Windows 开发 exe 固定为 `dist/ally-native.exe`，被占用时明确报错，关闭程序后重试。
-发行包放在 `dist/release/`：Windows ZIP 解压后包含 exe、`tools/rg.exe`、README 和许可文件；
+发行包放在 `dist/release/`：Windows amd64 / arm64 ZIP 解压后包含对应架构的 exe、`tools/rg.exe`、README 和许可文件；
 Linux tar.gz 包含单一顶层目录、可执行文件、`tools/rg` 和许可文件，不发布 deb。
 Windows 构建使用纯 Go 编译和固定版本的 go-winres 添加图标、版本信息及 DPI manifest，
 不调用 NSIS，不生成 setup；go-winres 首次运行由 Go 下载。
-macOS 应用和内置 rg 均合并 x86_64/arm64，并做免费的 ad-hoc 签名，不需要付费证书或公证。
+macOS 提供 universal、Intel（amd64）和 Apple 芯片（arm64）三个 DMG，应用和内置 rg 的架构一致，均做免费的 ad-hoc 签名，不需要付费证书或公证。
 打包器从仓库的 ripgrep 归档提取对应二进制，不要求 Node 或从网络下载 rg。
 
 默认读取原版的 `~/.ally_agent` 配置和会话。同一数据目录只允许一个进程运行，独立试用可指定目录：

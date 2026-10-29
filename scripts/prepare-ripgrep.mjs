@@ -17,6 +17,7 @@ const arch = values.arch === 'amd64' ? 'x64' : values.arch;
 const archiveDir = join(root, 'tools', 'ripgrep');
 const targets = {
   'windows/x64': 'x86_64-pc-windows-msvc.zip',
+  'windows/arm64': 'aarch64-pc-windows-msvc.zip',
   'linux/x64': 'x86_64-unknown-linux-musl.tar.gz',
   'linux/arm64': 'aarch64-unknown-linux-musl.tar.gz',
   'darwin/x64': 'x86_64-apple-darwin.tar.gz',

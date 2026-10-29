@@ -25,6 +25,9 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Check packaging logic
+        run: python3 -m unittest discover -s scripts -p 'test_build.py' -v
+
       - name: Build portable archives and ad-hoc universal DMG
         env:
           BUILD_TAG: ${{ github.event.release.tag_name || github.ref_name }}
@@ -37,16 +40,16 @@ jobs:
         with:
           name: Ally-${{ github.event.release.tag_name || github.ref_name }}
           path: |
-            dist/release/*-windows-amd64-portable.zip
+            dist/release/*-windows-*-portable.zip
             dist/release/*-linux-*.tar.gz
-            dist/release/*-macos-universal-adhoc.dmg
+            dist/release/*-macos-*-adhoc.dmg
           if-no-files-found: error
 
       - uses: softprops/action-gh-release@v3
         if: github.event_name == 'release'
         with:
           files: |
-            dist/release/*-windows-amd64-portable.zip
+            dist/release/*-windows-*-portable.zip
             dist/release/*-linux-*.tar.gz
-            dist/release/*-macos-universal-adhoc.dmg
+            dist/release/*-macos-*-adhoc.dmg
           fail_on_unmatched_files: true

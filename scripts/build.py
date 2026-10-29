@@ -7,6 +7,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -19,6 +20,7 @@ RELEASE = DIST / 'release'
 WINRES = 'github.com/tc-hib/go-winres@v0.3.3'
 RG_TARGETS = {
     ('windows', 'amd64'): 'x86_64-pc-windows-msvc.zip',
+    ('windows', 'arm64'): 'aarch64-pc-windows-msvc.zip',
     ('linux', 'amd64'): 'x86_64-unknown-linux-musl.tar.gz',
     ('linux', 'arm64'): 'aarch64-unknown-linux-musl.tar.gz',
     ('darwin', 'amd64'): 'x86_64-apple-darwin.tar.gz',
@@ -103,7 +105,7 @@ def compile_binary(config, goos, arch, destination):
             run('go', 'run', WINRES, 'patch', '--no-backup', '--in', spec, destination, env=build_env())
 
 
-def verify_archive(archive, goos):
+def verify_archive(archive, goos, arch=None):
     required = {'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md',
                 'third_party/ripgrep/LICENSE-MIT', 'third_party/ripgrep/UNLICENSE'}
     if goos == 'windows':
@@ -113,8 +115,15 @@ def verify_archive(archive, goos):
             if not required <= names or any('-setup-' in n for n in names) or z.testzip():
                 raise RuntimeError('Invalid Windows portable ZIP: ' + str(archive))
             for name in ('ally-native.exe', 'tools/rg.exe'):
-                if not z.read(name).startswith(b'MZ'):
+                data = z.read(name)
+                if len(data) < 64 or not data.startswith(b'MZ'):
                     raise RuntimeError('Not a Windows executable: ' + name)
+                offset = struct.unpack_from('<I', data, 0x3c)[0]
+                if offset + 6 > len(data) or data[offset:offset+4] != b'PE' + bytes(2):
+                    raise RuntimeError('Invalid PE header: ' + name)
+                machine = struct.unpack_from('<H', data, offset + 4)[0]
+                if arch and machine != {'amd64': 0x8664, 'arm64': 0xaa64}[arch]:
+                    raise RuntimeError('Wrong Windows architecture for ' + name + ': ' + hex(machine))
     else:
         required |= {'ally-native', 'tools/rg'}
         with tarfile.open(archive) as t:
@@ -133,11 +142,16 @@ def verify_archive(archive, goos):
 
 
 def windows(config, exe_only=False):
+    for arch in (('amd64',) if exe_only else ('amd64', 'arm64')):
+        windows_arch(config, arch, exe_only)
+
+
+def windows_arch(config, arch, exe_only=False):
     with tempfile.TemporaryDirectory(prefix='ally-windows-', dir=DIST) as work:
         stage = Path(work)
         exe = stage / 'ally-native.exe'
-        compile_binary(config, 'windows', 'amd64', exe)
-        ripgrep('windows', 'amd64', stage / 'tools/rg.exe')
+        compile_binary(config, 'windows', arch, exe)
+        ripgrep('windows', arch, stage / 'tools/rg.exe')
         if exe_only:
             # Never rename around an in-use fixed executable. os.replace fails clearly.
             try:
@@ -149,12 +163,12 @@ def windows(config, exe_only=False):
             print('Built:', DIST / 'ally-native.exe')
             return
         legal_files(stage)
-        archive = RELEASE / ('Ally-' + config['version'] + '-windows-amd64-portable.zip')
+        archive = RELEASE / ('Ally-' + config['version'] + '-windows-' + arch + '-portable.zip')
         with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as z:
             for path in sorted(stage.rglob('*')):
                 if path.is_file():
                     z.write(path, path.relative_to(stage))
-        verify_archive(archive, 'windows')
+        verify_archive(archive, 'windows', arch)
 
 
 def linux(config):
@@ -197,17 +211,36 @@ def macos(config):
         legal_files(app / 'Contents/Resources')
         verify_universal(rg)
         verify_universal(app / 'Contents/MacOS' / config['name'])
-        run('codesign', '--force', '--sign', '-', '--timestamp=none', rg)
-        run('codesign', '--force', '--deep', '--sign', '-', '--timestamp=none', app)
-        run('codesign', '--verify', '--deep', '--strict', app)
-        dmg_root = work / 'dmg-root'
-        dmg_root.mkdir()
-        shutil.copytree(app, dmg_root / app.name, symlinks=True)
-        legal_files(dmg_root)
-        (dmg_root / 'Applications').symlink_to('/Applications')
-        dmg = RELEASE / ('Ally-' + config['version'] + '-macos-universal-adhoc.dmg')
-        run('hdiutil', 'create', '-volname', 'Ally', '-srcfolder', dmg_root, '-ov', '-format', 'UDZO', dmg)
-        run('hdiutil', 'verify', dmg)
+        for name, arch in (('universal', None), ('amd64', 'x86_64'), ('arm64', 'arm64')):
+            variant_root = work / ('package-' + name)
+            variant_root.mkdir()
+            variant = variant_root / app.name
+            shutil.copytree(app, variant, symlinks=True)
+            executable = variant / 'Contents/MacOS' / config['name']
+            variant_rg = variant / 'Contents/MacOS/tools/rg'
+            if arch:
+                for binary in (executable, variant_rg):
+                    thin = variant_root / (binary.name + '.thin')
+                    run('lipo', binary, '-thin', arch, '-output', thin)
+                    thin.chmod(0o755)
+                    os.replace(thin, binary)
+                    actual = subprocess.check_output(['lipo', '-archs', str(binary)], text=True).split()
+                    if actual != [arch]:
+                        raise RuntimeError('Incorrect architecture in ' + str(binary) + ': ' + str(actual))
+            else:
+                verify_universal(executable)
+                verify_universal(variant_rg)
+            run('codesign', '--force', '--sign', '-', '--timestamp=none', variant_rg)
+            run('codesign', '--force', '--deep', '--sign', '-', '--timestamp=none', variant)
+            run('codesign', '--verify', '--deep', '--strict', variant)
+            dmg_root = variant_root / 'dmg-root'
+            dmg_root.mkdir()
+            shutil.copytree(variant, dmg_root / variant.name, symlinks=True)
+            legal_files(dmg_root)
+            (dmg_root / 'Applications').symlink_to('/Applications')
+            dmg = RELEASE / ('Ally-' + config['version'] + '-macos-' + name + '-adhoc.dmg')
+            run('hdiutil', 'create', '-volname', 'Ally', '-srcfolder', dmg_root, '-ov', '-format', 'UDZO', dmg)
+            run('hdiutil', 'verify', dmg)
 
 
 def main():
