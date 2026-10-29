@@ -10,7 +10,6 @@ import (
 	"github.com/egoist/mygo/ui/markdown"
 )
 
-const readingWidth float32 = 800
 const readingFontSize float32 = 16
 const readingCodeSize float32 = 14.5
 

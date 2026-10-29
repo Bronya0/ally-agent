@@ -70,7 +70,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 			}
 			return false
 		}).Children(func() {
-			ui.Column(c).FillWidth().MaxWidth(readingWidth+2*inlineInset).AlignSelf(ui.Center).Padding(18, inlineInset, 14).Gap(10).Children(func() {
+			ui.Column(c).FillWidth().Padding(18, inlineInset, 14).Gap(10).Children(func() {
 				if len(t.Messages) == 0 || !hasWelcomeMessage(t) {
 					a.welcomeView(c, t)
 				}
