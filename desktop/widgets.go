@@ -51,6 +51,23 @@ func ghost(c *ui.Context, s string) ui.Element {
 	return button(c, nil, s, btnGhost, false, "")
 }
 
+// Composer settings keep their muted ink during a run and on hover. MyGo dims
+// Disabled elements, so lock activation instead of dimming the current value.
+func composerSettingButton(c *ui.Context, text string, locked bool, activate func()) ui.Element {
+	b, textEl := composerFlatParts(c, text)
+	ink := c.Theme().TextMuted
+	b.TextColor(ink)
+	textEl.TextColor(ink)
+	if locked {
+		b.Cursor(ui.CursorDefault)
+	}
+	return b.OnClick(func() {
+		if !locked {
+			activate()
+		}
+	})
+}
+
 func primary(c *ui.Context, s string) ui.Element {
 	return button(c, nil, s, btnPrimary, false, "")
 }

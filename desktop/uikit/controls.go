@@ -229,13 +229,39 @@ func Tabs(c *ui.Context, selected *int, labels ...string) ui.Element {
 	return tabs.List
 }
 
-// Segmented is MyGo's own segmented control: one stop of Tab, the arrows choosing
-// a segment. It used to return Tabs, which looks and behaves like a tab strip.
+// Segmented keeps MyGo's radio-group, focus and keyboard behavior while giving
+// the current choice a visible fill, outline and check, in every theme.
 func Segmented(c *ui.Context, selected *int, labels ...string) ui.Element {
-	el := ui.Segmented(c, selected, labels...).Cursor(ui.CursorPointer)
+	parts := ui.SegmentedBase(c, selected, len(labels))
+	t := c.Theme()
+	el := parts.Track.Height(38).Padding(3).Gap(3).Radius(Radius).Background(t.Background).Border(1, t.Border).AlignItems(ui.Stretch).Cursor(ui.CursorPointer)
 	if len(labels) > 0 {
 		el.Label(labels[0])
 	}
+	el.Children(func() {
+		for i, label := range labels {
+			active := i == *selected
+			segment := parts.Segment(i).Height(30).Padding(0, 12).Radius(6).Cursor(ui.CursorPointer).Label(label).Gap(6)
+			fill, edge, ink := ui.Transparent, ui.Transparent, t.TextMuted
+			if active {
+				fill, edge, ink = t.Surface.Mix(t.Accent, 0.20), SelectedStrokeColor(t.Accent), t.Text
+			} else if segment.Hovered() {
+				fill, ink = t.SurfaceHover, t.Text
+			}
+			segment.Background(fill).Border(1, edge).TextColor(ink)
+			segment.Children(func() {
+				mark := ""
+				if active {
+					mark = "✓"
+				}
+				ui.Text(c, mark).Width(13).FontSize(12).TextColor(t.Accent).Unselectable().Cursor(ui.CursorPointer)
+				text := ui.Text(c, label).FontSize(13).TextColor(ink).SingleLine().Unselectable().Cursor(ui.CursorPointer)
+				if active {
+					text.FontWeight(600)
+				}
+			})
+		}
+	})
 	return el
 }
 func Tag(c *ui.Context, text string, fg, fill ui.Color) ui.Element {

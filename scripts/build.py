@@ -95,7 +95,7 @@ def compile_binary(config, goos, arch, destination):
                                           'dpi-awareness': 'per monitor v2', 'long-path-aware': True}}},
             'RT_VERSION': {'#1': {'0409': {'fixed': {'file_version': numeric, 'product_version': numeric},
                 'info': {'0409': {'FileDescription': config['name'], 'ProductName': config['name'],
-                    'OriginalFilename': 'ally-native.exe', 'FileVersion': config['version'],
+                    'OriginalFilename': destination.name, 'FileVersion': config['version'],
                     'ProductVersion': config['version']}}}}},
         }
         with tempfile.TemporaryDirectory(prefix='ally-winres-') as work:
@@ -105,16 +105,21 @@ def compile_binary(config, goos, arch, destination):
             run('go', 'run', WINRES, 'patch', '--no-backup', '--in', spec, destination, env=build_env())
 
 
+def release_tag(config):
+    tag = os.environ.get('BUILD_TAG', '')
+    return tag if re.fullmatch(r'v?[0-9]+[.][0-9]+[.][0-9]+', tag) else config['version']
+
+
 def verify_archive(archive, goos, arch=None):
     required = {'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md',
                 'third_party/ripgrep/LICENSE-MIT', 'third_party/ripgrep/UNLICENSE'}
     if goos == 'windows':
-        required |= {'ally-native.exe', 'tools/rg.exe'}
+        required |= {'Ally.exe', 'tools/rg.exe'}
         with zipfile.ZipFile(archive) as z:
             names = set(z.namelist())
             if not required <= names or any('-setup-' in n for n in names) or z.testzip():
                 raise RuntimeError('Invalid Windows portable ZIP: ' + str(archive))
-            for name in ('ally-native.exe', 'tools/rg.exe'):
+            for name in ('Ally.exe', 'tools/rg.exe'):
                 data = z.read(name)
                 if len(data) < 64 or not data.startswith(b'MZ'):
                     raise RuntimeError('Not a Windows executable: ' + name)
@@ -125,7 +130,7 @@ def verify_archive(archive, goos, arch=None):
                 if arch and machine != {'amd64': 0x8664, 'arm64': 0xaa64}[arch]:
                     raise RuntimeError('Wrong Windows architecture for ' + name + ': ' + hex(machine))
     else:
-        required |= {'ally-native', 'tools/rg'}
+        required |= {'Ally', 'tools/rg'}
         with tarfile.open(archive) as t:
             roots = {m.name.split('/')[0] for m in t.getmembers()}
             if len(roots) != 1:
@@ -134,7 +139,7 @@ def verify_archive(archive, goos, arch=None):
             names = {m.name for m in t.getmembers()}
             if not {root + '/' + name for name in required} <= names:
                 raise RuntimeError('Incomplete Linux archive: ' + str(archive))
-            for name in ('ally-native', 'tools/rg'):
+            for name in ('Ally', 'tools/rg'):
                 member = t.getmember(root + '/' + name)
                 if not member.mode & 0o111 or t.extractfile(member).read(4) != bytes([127, 69, 76, 70]):
                     raise RuntimeError('Invalid executable or missing execute bits: ' + name)
@@ -149,7 +154,7 @@ def windows(config, exe_only=False):
 def windows_arch(config, arch, exe_only=False):
     with tempfile.TemporaryDirectory(prefix='ally-windows-', dir=DIST) as work:
         stage = Path(work)
-        exe = stage / 'ally-native.exe'
+        exe = stage / 'Ally.exe'
         compile_binary(config, 'windows', arch, exe)
         ripgrep('windows', arch, stage / 'tools/rg.exe')
         if exe_only:
@@ -163,7 +168,7 @@ def windows_arch(config, arch, exe_only=False):
             print('Built:', DIST / 'ally-native.exe')
             return
         legal_files(stage)
-        archive = RELEASE / ('Ally-' + config['version'] + '-windows-' + arch + '-portable.zip')
+        archive = RELEASE / ('Ally-' + release_tag(config) + '-windows-' + ('x64' if arch == 'amd64' else arch) + '.zip')
         with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as z:
             for path in sorted(stage.rglob('*')):
                 if path.is_file():
@@ -173,15 +178,15 @@ def windows_arch(config, arch, exe_only=False):
 
 def linux(config):
     for arch in ('amd64', 'arm64'):
-        name = 'Ally-' + config['version'] + '-linux-' + arch
+        name = 'Ally-' + release_tag(config) + '-linux-' + ('x64' if arch == 'amd64' else arch)
         with tempfile.TemporaryDirectory(prefix='ally-linux-', dir=DIST) as work:
             stage = Path(work) / name
-            compile_binary(config, 'linux', arch, stage / 'ally-native')
+            compile_binary(config, 'linux', arch, stage / 'Ally')
             ripgrep('linux', arch, stage / 'tools/rg')
             legal_files(stage)
             with tarfile.open(RELEASE / (name + '.tar.gz'), 'w:gz') as t:
                 def archive_mode(member):
-                    executable = member.name in (name + '/ally-native', name + '/tools/rg')
+                    executable = member.name in (name + '/Ally', name + '/tools/rg')
                     member.mode = 0o755 if member.isdir() or executable else 0o644
                     return member
                 t.add(stage, arcname=name, filter=archive_mode)
@@ -238,7 +243,7 @@ def macos(config):
             shutil.copytree(variant, dmg_root / variant.name, symlinks=True)
             legal_files(dmg_root)
             (dmg_root / 'Applications').symlink_to('/Applications')
-            dmg = RELEASE / ('Ally-' + config['version'] + '-macos-' + name + '-adhoc.dmg')
+            dmg = RELEASE / ('Ally-' + release_tag(config) + '-macos-' + ('x64' if name == 'amd64' else name) + '.dmg')
             run('hdiutil', 'create', '-volname', 'Ally', '-srcfolder', dmg_root, '-ov', '-format', 'UDZO', dmg)
             run('hdiutil', 'verify', dmg)
 

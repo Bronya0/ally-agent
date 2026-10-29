@@ -43,6 +43,79 @@ func TestSelectAndTabs(t *testing.T) {
 	}
 }
 
+func TestSegmentedSelection(t *testing.T) {
+	for _, light := range []bool{false, true} {
+		t.Run(fmt.Sprint("light=", light), func(t *testing.T) {
+			selected, changes := 0, 0
+			tt := ui.NewTester(func(c *ui.Context) {
+				theme := ui.DarkTheme()
+				if light {
+					theme = ui.LightTheme()
+				}
+				c.SetTheme(theme)
+				ui.Column(c).Padding(16).Children(func() {
+					if Segmented(c.Key("mode"), &selected, "关闭代理", "跟随系统代理", "手动代理").Changed() {
+						changes++
+					}
+				})
+			}, 480, 100)
+			tt.Frame()
+			before, _ := tt.Find("跟随系统代理")
+			if err := tt.Click("跟随系统代理"); err != nil {
+				t.Fatal(err)
+			}
+			tt.Frame()
+			if selected != 1 || changes != 1 {
+				t.Fatalf("click: selected=%d changes=%d", selected, changes)
+			}
+			after, _ := tt.Find("跟随系统代理")
+			if before != after {
+				t.Fatalf("selection changed geometry: %v -> %v", before, after)
+			}
+			tt.Key(0, ui.KeyRight)
+			tt.Frame()
+			if selected != 2 || changes != 2 {
+				t.Fatalf("keyboard: selected=%d changes=%d", selected, changes)
+			}
+			for range 3 {
+				tt.Frame()
+			}
+			if selected != 2 || changes != 2 {
+				t.Fatal("selection did not persist")
+			}
+		})
+	}
+}
+
+func TestSegmentedVisual(t *testing.T) {
+	if os.Getenv("ALLY_SEGMENTED_VISUAL") == "" {
+		t.Skip("optional visual snapshot")
+	}
+	appearance, proxy := 0, 1
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Fill().Children(func() {
+			for _, light := range []bool{false, true} {
+				theme := ui.DarkTheme()
+				if light {
+					theme = ui.LightTheme()
+				}
+				theme.Accent = ui.Hex("#d4a574")
+				c.SetTheme(theme)
+				ui.Column(c.Key(light)).FillWidth().Padding(20).Gap(12).Background(theme.Surface).Children(func() {
+					Segmented(c.Key("appearance"), &appearance, "深色", "浅色")
+					Segmented(c.Key("proxy"), &proxy, "关闭代理", "跟随系统代理", "手动代理")
+				})
+			}
+		})
+	}, 520, 280)
+	tt.Frame()
+	var b bytes.Buffer
+	if err := png.Encode(&b, tt.Image()); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println("UI_PREVIEW=" + base64.StdEncoding.EncodeToString(b.Bytes()))
+}
+
 func TestControlVisual(t *testing.T) {
 	if os.Getenv("ALLY_UI_VISUAL") == "" {
 		t.Skip("optional visual snapshot")

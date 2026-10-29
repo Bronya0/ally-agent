@@ -111,7 +111,9 @@ const workspaceMenuLimit = 16
 // ways to start a workspace, then the ones the sessions already know. A folder
 // glyph marks each history entry, which is what the system's menu shows beside
 // a path; the entry opens its workspace rather than starting another session
-// over it.
+// over it, except for the workspace the current Tab already runs in, where
+// switching to itself looks like a dead click and a second Tab is what the
+// entry promises.
 func (a *desktop) showWorkspaceMenu() {
 	items := []*mygo.MenuItem{
 		menuAction("＋ 添加工作区", func() { a.chooseWorkspace() }),
@@ -131,7 +133,7 @@ func (a *desktop) showWorkspaceMenu() {
 			continue
 		}
 		rows++
-		items = append(items, menuAction("📁 "+filepath.Base(root), func() { a.openWorkspace(root) }))
+		items = append(items, menuAction("📁 "+filepath.Base(root), func() { a.openWorkspaceEntry(root) }))
 	}
 	switch {
 	case found == 0:
@@ -140,6 +142,31 @@ func (a *desktop) showWorkspaceMenu() {
 		items = append(items, &mygo.MenuItem{Label: fmt.Sprintf("另有 %d 个，见侧栏历史工作区", found-rows), Disabled: true})
 	}
 	a.popupMenu(items)
+}
+
+// openWorkspaceEntry is what a workspace entry of the header menu does: it
+// brings a Tab of that workspace to the front, and when that Tab is the one
+// already on screen — where switching changes nothing — it starts another
+// conversation over the workspace. Either way the click shows something.
+func (a *desktop) openWorkspaceEntry(workspace string) {
+	if workspaceEntryTab(a.tabs, a.active, workspace) < 0 {
+		a.newConversation(workspace)
+		return
+	}
+	a.openWorkspace(workspace)
+}
+
+// workspaceEntryTab is the Tab a workspace entry brings forward: the first one
+// running that workspace, unless it is the Tab already on screen, which the
+// entry cannot make visible because it is visible. -1 means the entry has
+// nothing to show for itself and opens a new Tab instead.
+func workspaceEntryTab(tabs []*conversation, active int, workspace string) int {
+	for i, t := range tabs {
+		if i != active && strings.EqualFold(t.Workspace, workspace) {
+			return i
+		}
+	}
+	return -1
 }
 
 // headerActions is the right side of the header: the workspace menu, the file
@@ -269,7 +296,7 @@ func (a *desktop) updateDialog(c *ui.Context) {
 				iconAction(c, "update-close", "关闭", "close", 24, func() { a.upd.Open = false })
 			})
 			switch a.upd.State {
-			case "downloading", "extracting", "applying", "restarting", "ready", "error", "latest", "checking":
+			case "downloading", "extracting", "applying", "restarting", "ready", "error", "latest", "checking", "available":
 			default:
 				a.upd.State = "idle"
 			}
@@ -291,6 +318,11 @@ func (a *desktop) updateDialog(c *ui.Context) {
 						ui.Text(c, fmtBytes(a.upd.BytesNow)+" / "+fmtBytes(a.upd.BytesTotal)).FontSize(11).TextColor(p.muted)
 					}
 				})
+			case "available":
+				ui.Text(c, "发现新版本 "+a.upd.Tag)
+				if !a.upd.CanAuto {
+					fieldNote(c, "当前平台请下载压缩包后手动更新。")
+				}
 			case "ready":
 				ui.Text(c, "新版本 "+a.upd.Tag+" 已下载完成")
 				fieldNote(c, "重启后生效。当前会话与未保存的草稿会自动保存。")
@@ -322,6 +354,13 @@ func (a *desktop) updateDialog(c *ui.Context) {
 							a.upd.Busy = false
 						}
 					})
+				case a.upd.State == "available":
+					flat(c, "稍后").OnClick(func() { a.upd.Open = false })
+					if a.upd.CanAuto {
+						primary(c, "下载更新").OnClick(func() { a.startUpdate() })
+					} else {
+						primary(c, "前往下载").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent/releases/tag/" + a.upd.Tag) })
+					}
 				case a.upd.State == "ready":
 					flat(c, "跳过此版本").OnClick(func() {
 						a.prefs.DismissedUpdateTag = a.upd.Tag
@@ -350,25 +389,12 @@ func (a *desktop) startUpdate() {
 	}
 	tag := a.upd.Tag
 	if tag == "" {
+		a.checkUpdates(false)
+		return
+	}
+	if !a.upd.CanAuto {
+		a.upd.State = "available"
 		a.upd.Open = true
-		a.upd.State = "checking"
-		go func() {
-			result := a.core.CheckForUpdates()
-			a.win.Update(func() {
-				if !result.OK {
-					a.upd.State = "error"
-					a.upd.Error = result.Error
-					return
-				}
-				if result.Tag == "" {
-					a.upd.State = "latest"
-					return
-				}
-				a.upd.Tag = result.Tag
-				a.upd.State = "ready"
-				a.startUpdate()
-			})
-		}()
 		return
 	}
 	a.upd.Open = true
@@ -391,6 +417,9 @@ func (a *desktop) startUpdate() {
 }
 
 func (a *desktop) applyUpdate() {
+	if a.upd.State != "ready" || !a.upd.CanAuto || a.upd.Busy {
+		return
+	}
 	a.upd.Busy = true
 	a.upd.State = "applying"
 	go func() {
@@ -428,13 +457,17 @@ func (a *desktop) checkUpdates(silent bool) {
 				}
 				return
 			}
-			if result.Tag == "" {
+			if result.Tag == "" || !newerStableRelease(result.Tag, mygo.App.Version()) {
 				a.upd.State = "latest"
 				a.settings.UpdateNote = "已是最新版本"
 				return
 			}
 			a.upd.Tag = result.Tag
-			a.upd.State = "ready"
+			a.upd.CanAuto = result.CanAutoUpdate
+			a.upd.State = "available"
+			if result.StagedVersion == result.Tag && result.CanAutoUpdate {
+				a.upd.State = "ready"
+			}
 			a.settings.UpdateNote = "发现新版本 " + result.Tag
 			if !silent {
 				a.upd.Open = true

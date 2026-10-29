@@ -138,12 +138,8 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 	if selected == 0 {
 		card(c, "settings-appearance", func() {
 			sectionTitle(c, "外观")
-			mode := 0
-			if !a.currentPalette().dark {
-				mode = 1
-			}
-			if segmented(c, "appearance-mode", &mode, "Dark", "Light").Changed() {
-				a.prefs.Appearance = []string{"dark", "light"}[mode]
+			if segmented(c, "appearance-mode", &a.settings.AppearanceMode, "深色", "浅色").Changed() {
+				a.prefs.Appearance = []string{"dark", "light"}[a.settings.AppearanceMode]
 				a.syncNativeAppearance()
 				a.savePrefs()
 			}
@@ -337,7 +333,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					step  float64
 				}{
 					{"消息正文", &a.settings.FontMessage, 0.5},
-					{"代码", &a.settings.FontCode, 0.5},
+					{"代码块", &a.settings.FontCode, 0.5},
 					{"工具卡", &a.settings.FontTool, 0.5},
 					{"次级正文", &a.settings.FontSub, 0.5},
 					{"辅助文字", &a.settings.FontAux, 0.5},
@@ -420,15 +416,8 @@ func (a *desktop) settingsNetwork(c *ui.Context) {
 	card(c, "settings-proxy", func() {
 		sectionTitle(c, "网络代理")
 		fieldNote(c, "应用于模型、HTTP 工具、MCP、命令和后台服务。")
-		modeIndex := 0
-		switch a.configDraft.ProxyMode {
-		case "system":
-			modeIndex = 1
-		case "manual":
-			modeIndex = 2
-		}
-		if segmented(c, "proxy-mode", &modeIndex, "关闭代理", "跟随系统代理", "手动代理").Changed() {
-			a.configDraft.ProxyMode = []string{"off", "system", "manual"}[modeIndex]
+		if segmented(c, "proxy-mode", &a.settings.ProxyModeIndex, "关闭代理", "跟随系统代理", "手动代理").Changed() {
+			a.configDraft.ProxyMode = []string{"off", "system", "manual"}[a.settings.ProxyModeIndex]
 			if a.configDraft.ProxyMode == "system" {
 				a.detectProxy()
 			}

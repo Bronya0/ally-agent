@@ -70,7 +70,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 			}
 			return false
 		}).Children(func() {
-			ui.Column(c).Padding(18, inlineInset, 14).Gap(8).Children(func() {
+			ui.Column(c).FillWidth().MaxWidth(readingWidth+2*inlineInset).AlignSelf(ui.Center).Padding(18, inlineInset, 14).Gap(10).Children(func() {
 				if len(t.Messages) == 0 || !hasWelcomeMessage(t) {
 					a.welcomeView(c, t)
 				}
@@ -244,31 +244,12 @@ func (a *desktop) markdownOptions(t *conversation, i int) *markdown.Options {
 		t.MD = map[int]*markdown.Options{}
 	}
 	if t.MD[i] == nil {
-		t.MD[i] = &markdown.Options{WrapCode: true}
+		t.MD[i] = a.readingMarkdownOptions()
 	}
 	if t.MD[i].Theme == nil {
 		t.MD[i].Theme = &markdown.Theme{}
 	}
-	t.MD[i].Theme.Font = nativeFontFamily()
-	if i >= 0 && i < len(t.Messages) && str(t.Messages[i], "role") == "user" {
-		t.MD[i].Theme.Text = a.currentPalette().accent
-	} else {
-		t.MD[i].Theme.Text = a.currentPalette().text.Mix(ui.Hex("#ffffff"), 0.20)
-	}
-	t.MD[i].Theme.StrongWeight = 600
-	t.MD[i].Theme.LineHeight = 1.75
-	t.MD[i].Theme.BlockSpacing = 0.55
-	t.MD[i].Theme.TableCellPadding = [2]float32{12 / 15.5, 8 / 15.5}
-	t.MD[i].Theme.Strong = ui.Hex("#c4b894")
-	t.MD[i].Theme.Code = ui.Hex("#d4a574")
-	t.MD[i].Theme.CodeBackground = ui.RGBA(212, 165, 116, 0.035)
-	if !a.currentPalette().dark {
-		t.MD[i].Theme.Strong = a.currentPalette().text
-		t.MD[i].Theme.Code = ui.Hex("#805326")
-	}
-	t.MD[i].Theme.CodeFont = monoFamily
-	t.MD[i].Theme.FontSize = float32(clampView(a.config.MessageFontSize, 15.5))
-	t.MD[i].Theme.CodeSize = float32(clampView(a.config.CodeFontSize, 14)) / t.MD[i].Theme.FontSize
+	a.configureReadingMarkdown(t.MD[i])
 	return t.MD[i]
 }
 

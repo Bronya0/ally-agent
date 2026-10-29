@@ -40,16 +40,16 @@ jobs:
         with:
           name: Ally-${{ github.event.release.tag_name || github.ref_name }}
           path: |
-            dist/release/*-windows-*-portable.zip
+            dist/release/*-windows-*.zip
             dist/release/*-linux-*.tar.gz
-            dist/release/*-macos-*-adhoc.dmg
+            dist/release/*-macos-*.dmg
           if-no-files-found: error
 
       - uses: softprops/action-gh-release@v3
         if: github.event_name == 'release'
         with:
           files: |
-            dist/release/*-windows-*-portable.zip
+            dist/release/*-windows-*.zip
             dist/release/*-linux-*.tar.gz
-            dist/release/*-macos-*-adhoc.dmg
+            dist/release/*-macos-*.dmg
           fail_on_unmatched_files: true

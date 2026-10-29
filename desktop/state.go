@@ -216,6 +216,8 @@ func (t *conversation) uiState() *chatUI {
 // settingsForm holds numeric mirrors for the settings tab controls. Config
 // keeps the persisted values; these exist because NumberInput binds float64.
 type settingsForm struct {
+	AppearanceMode int
+	ProxyModeIndex int
 	Modules        map[string]int
 	Tab            string
 	Retries        float64
@@ -247,6 +249,17 @@ type settingsForm struct {
 
 func (a *desktop) syncSettingsForm() {
 	f := &a.settings
+	f.AppearanceMode = 0
+	if !a.currentPalette().dark {
+		f.AppearanceMode = 1
+	}
+	f.ProxyModeIndex = 0
+	switch a.configDraft.ProxyMode {
+	case "system":
+		f.ProxyModeIndex = 1
+	case "manual":
+		f.ProxyModeIndex = 2
+	}
 	f.Tab = a.settingsTab
 	f.Retries = float64(a.configDraft.LLMRetries)
 	f.Concurrency = float64(a.configDraft.ToolConcurrency)
@@ -257,8 +270,8 @@ func (a *desktop) syncSettingsForm() {
 	if f.Threshold <= 0 {
 		f.Threshold = 0.6
 	}
-	f.FontMessage = clampView(a.configDraft.MessageFontSize, 15.5)
-	f.FontCode = clampView(a.configDraft.CodeFontSize, 14)
+	messageSize, codeSize := readingSizes(a.configDraft.MessageFontSize, a.configDraft.CodeFontSize)
+	f.FontMessage, f.FontCode = float64(messageSize), float64(codeSize)
 	f.FontTool = clampView(a.configDraft.ToolFontSize, 15)
 	f.FontSub = clampView(a.configDraft.SubFontSize, 13)
 	f.FontAux = clampView(a.configDraft.AuxFontSize, 12)
@@ -400,6 +413,7 @@ type pluginsForm struct {
 
 // updateUI drives the in-app update dialog.
 type updateUI struct {
+	CanAuto     bool
 	Open        bool
 	State       string // idle, checking, downloading, ready, applying, restarting, error, latest
 	Tag         string

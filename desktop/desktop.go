@@ -51,9 +51,10 @@ type workspaceFile struct {
 	// PreviewText is the buffer as the Markdown preview last read it, and
 	// PreviewVersion the buffer version then: calling Buffer.String() on every
 	// frame allocated the whole file again, and every animation shows frames.
-	PreviewText    string
-	PreviewVersion uint64
-	PreviewReady   bool
+	PreviewText     string
+	PreviewVersion  uint64
+	PreviewReady    bool
+	PreviewMarkdown *markdown.Options
 }
 type desktop struct {
 	htmlPreviews                              map[string]*mygo.WebView

@@ -17,6 +17,10 @@ import (
 )
 
 func validateStagedExecutable(path string) error {
+	return validateStagedExecutableForArch(path, runtime.GOARCH)
+}
+
+func validateStagedExecutableForArch(path, arch string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
@@ -29,9 +33,15 @@ func validateStagedExecutable(path string) error {
 		return fmt.Errorf("invalid PE: %w", err)
 	}
 	defer file.Close()
+	expected := uint16(pe.IMAGE_FILE_MACHINE_AMD64)
+	if arch == "arm64" {
+		expected = pe.IMAGE_FILE_MACHINE_ARM64
+	} else if arch != "amd64" {
+		return errors.New("unsupported Windows update architecture")
+	}
 	header, ok := file.OptionalHeader.(*pe.OptionalHeader64)
-	if !ok || file.Machine != pe.IMAGE_FILE_MACHINE_AMD64 || file.Characteristics&pe.IMAGE_FILE_EXECUTABLE_IMAGE == 0 || file.Characteristics&pe.IMAGE_FILE_DLL != 0 || header.AddressOfEntryPoint == 0 {
-		return errors.New("staged executable is not an executable Windows x64 image")
+	if !ok || file.Machine != expected || file.Characteristics&pe.IMAGE_FILE_EXECUTABLE_IMAGE == 0 || file.Characteristics&pe.IMAGE_FILE_DLL != 0 || header.AddressOfEntryPoint == 0 {
+		return errors.New("staged executable is not an executable Windows image for this CPU")
 	}
 	validEntry := false
 	for _, section := range file.Sections {

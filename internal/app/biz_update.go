@@ -10,6 +10,7 @@ package app
 import (
 	"archive/zip"
 	"context"
+	"debug/macho"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -109,20 +110,36 @@ type SkipUpdateResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// updatePlatformSupported returns true on windows/amd64 (ZIP replace flow)
-// and on darwin (universal DMG replace flow). All other platforms never
-// trigger an automatic download.
+// Update support follows the replacement mechanisms available on each OS.
 func updatePlatformSupported() bool {
-	return (goruntime.GOOS == "windows" && goruntime.GOARCH == "amd64") || goruntime.GOOS == "darwin"
+	return (goruntime.GOOS == "windows" || goruntime.GOOS == "darwin") && (goruntime.GOARCH == "amd64" || goruntime.GOARCH == "arm64")
 }
 
-// expectedAssetName returns the strictly-matched asset filename for a tag.
-// Windows: "Ally-v1.2.3-windows-x64.zip"; macOS: "Ally-v1.2.3-macos-universal.dmg".
-func expectedAssetName(tag string) string {
-	if goruntime.GOOS == "darwin" {
-		return fmt.Sprintf("Ally-%s-macos-universal.dmg", tag)
+func expectedAssetNameForPlatform(tag, goos, arch string) string {
+	cpu := arch
+	if arch == "amd64" {
+		cpu = "x64"
 	}
-	return fmt.Sprintf("Ally-%s-windows-x64.zip", tag)
+	if goos == "darwin" {
+		return fmt.Sprintf("Ally-%s-macos-%s.dmg", tag, cpu)
+	}
+	if goos == "linux" {
+		return fmt.Sprintf("Ally-%s-linux-%s.tar.gz", tag, cpu)
+	}
+	return fmt.Sprintf("Ally-%s-windows-%s.zip", tag, cpu)
+}
+
+func expectedAssetName(tag string) string {
+	arch := goruntime.GOARCH
+	if goruntime.GOOS == "darwin" {
+		if exe, err := os.Executable(); err == nil {
+			if fat, err := macho.OpenFat(exe); err == nil {
+				fat.Close()
+				arch = "universal"
+			}
+		}
+	}
+	return expectedAssetNameForPlatform(tag, goruntime.GOOS, arch)
 }
 
 func updateBaseDir() string {
@@ -203,7 +220,7 @@ func allyExecutableDir() (string, error) {
 // ListUpdateAsset resolves the fixed release filename without a REST API call.
 func (a *App) ListUpdateAsset(tag string) UpdateAssetInfo {
 	if !updatePlatformSupported() {
-		return UpdateAssetInfo{Error: "automatic update is only supported on windows x64 and macOS"}
+		return UpdateAssetInfo{Error: "automatic update is only supported on Windows x64/ARM64 and macOS"}
 	}
 	tag = strings.TrimSpace(tag)
 	if err := validateUpdateTag(tag); err != nil {
@@ -465,7 +482,7 @@ func copyDir(src, dst string) error {
 // update:ready (or update:error) on completion.
 func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 	if !updatePlatformSupported() {
-		return UpdateDownloadResult{Error: "automatic update is only supported on windows x64 and macOS"}
+		return UpdateDownloadResult{Error: "automatic update is only supported on Windows x64/ARM64 and macOS"}
 	}
 	if err := a.beginUpdateOperation("downloading"); err != nil {
 		return UpdateDownloadResult{Error: err.Error()}
@@ -735,7 +752,7 @@ func (a *App) ApplyUpdate(tag string) UpdateApplyResult {
 	// " v1.2.3 " 能通过校验、随后按带空格的路径去 stat 暂存目录。
 	tag = strings.TrimSpace(tag)
 	if !updatePlatformSupported() {
-		return UpdateApplyResult{Error: "automatic update is only supported on windows x64 and macOS"}
+		return UpdateApplyResult{Error: "automatic update is only supported on Windows x64/ARM64 and macOS"}
 	}
 	if err := validateUpdateTag(tag); err != nil {
 		return UpdateApplyResult{Error: err.Error()}
@@ -979,7 +996,7 @@ func (a *App) applyMacUpdate(tag string) UpdateApplyResult {
 // replacement, and the .bak sibling remains until the new process starts.
 func (a *App) QuitForUpdate() error {
 	if !updatePlatformSupported() {
-		return errors.New("automatic update is only supported on windows x64 and macOS")
+		return errors.New("automatic update is only supported on Windows x64/ARM64 and macOS")
 	}
 	if a.ctx == nil {
 		return errors.New("app context not initialized")

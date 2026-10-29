@@ -438,6 +438,8 @@ func releaseWorkspaceFileValue(file *workspaceFile) {
 		file.Image = nil
 	}
 	file.Assist = nil
+	file.PreviewMarkdown = nil
+	file.PreviewText = ""
 	file.Editor = nil
 }
 

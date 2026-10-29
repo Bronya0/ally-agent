@@ -9,7 +9,6 @@ package app
 
 import (
 	"net/url"
-	"runtime"
 	"testing"
 )
 
@@ -21,11 +20,7 @@ func TestListUpdateAssetWithoutNetworkOrConfig(t *testing.T) {
 	// preserve the exact tag spelling, and leave size discovery to the download.
 	for _, tag := range []string{"v1.26.0", "1.26.0"} {
 		asset := new(App).ListUpdateAsset(" " + tag + " ")
-		suffix := "windows-x64.zip"
-		if runtime.GOOS == "darwin" {
-			suffix = "macos-universal.dmg"
-		}
-		name := "Ally-" + tag + "-" + suffix
+		name := expectedAssetName(tag)
 		want := "https://github.com/Bronya0/ally-agent/releases/download/" + tag + "/" + name
 		if !asset.OK || asset.Tag != tag || asset.Name != name || asset.URL != want || asset.Size != 0 {
 			t.Fatalf("unexpected asset: %#v, want URL %q and unknown size", asset, want)
@@ -47,5 +42,19 @@ func TestListUpdateAssetRejectsUnsafeAndPrereleaseTags(t *testing.T) {
 	parsed, err := url.Parse(asset.URL)
 	if err != nil || parsed.Scheme != "https" || parsed.Host != "github.com" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		t.Fatalf("unexpected download destination %q: %v", asset.URL, err)
+	}
+}
+
+func TestUpdateAssetNamesMatchPublishedPlatforms(t *testing.T) {
+	for _, tc := range []struct{ os, arch, suffix string }{
+		{"windows", "amd64", "windows-x64.zip"}, {"windows", "arm64", "windows-arm64.zip"},
+		{"darwin", "universal", "macos-universal.dmg"}, {"darwin", "amd64", "macos-x64.dmg"}, {"darwin", "arm64", "macos-arm64.dmg"},
+		{"linux", "amd64", "linux-x64.tar.gz"}, {"linux", "arm64", "linux-arm64.tar.gz"},
+	} {
+		for _, tag := range []string{"v1.27.0", "1.27.0"} {
+			if got, want := expectedAssetNameForPlatform(tag, tc.os, tc.arch), "Ally-"+tag+"-"+tc.suffix; got != want {
+				t.Errorf("%s/%s: %s != %s", tc.os, tc.arch, got, want)
+			}
+		}
 	}
 }

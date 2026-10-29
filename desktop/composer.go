@@ -700,18 +700,17 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 	if label == "" {
 		label = "选择模型"
 	}
-	btn := composerFlat(c, short(strings.ReplaceAll(label, " / ", " · "), 34)).SingleLine().MinWidth(0).Shrink(1).Tooltip("切换模型")
-	if t.Busy {
-		btn.Tooltip("运行中锁定：本轮结束后切换才生效").Disabled(true)
-	}
 	st := t.uiState()
-	btn.OnClick(func() {
+	btn := composerSettingButton(c.Key("composer-model"), short(strings.ReplaceAll(label, " / ", " · "), 34), t.Busy, func() {
 		st.ModelOpen = !st.ModelOpen
 		if st.ModelOpen {
 			st.ModelSearch = ""
 			st.ModelGroup = ""
 		}
-	})
+	}).SingleLine().MinWidth(0).Shrink(1).Tooltip("切换模型")
+	if t.Busy {
+		btn.Tooltip("运行中锁定：本轮结束后切换才生效")
+	}
 	ui.PopoverBase(c, btn, &st.ModelOpen, func(panel ui.Element) {
 		popoverChrome(c, panel, 340)
 		st.FlyoutHot = false
@@ -882,11 +881,7 @@ func (a *desktop) reasoningSelector(c *ui.Context, t *conversation) {
 	if label == "" {
 		label = "auto"
 	}
-	btn := composerFlat(c, label+" ▾").Tooltip("思考强度（需模型支持，不支持的模型请保持 auto）")
-	if t.Busy {
-		btn.Disabled(true).Tooltip("运行中锁定：本轮结束后切换才生效")
-	}
-	btn.OnClick(func() {
+	btn := composerSettingButton(c.Key("composer-reasoning"), label+" ▾", t.Busy, func() {
 		items := make([]*mygo.MenuItem, 0, len(levels))
 		for _, level := range levels {
 			level := level
@@ -896,7 +891,10 @@ func (a *desktop) reasoningSelector(c *ui.Context, t *conversation) {
 			}))
 		}
 		a.popupMenu(items)
-	})
+	}).Tooltip("思考强度（需模型支持，不支持的模型请保持 auto）")
+	if t.Busy {
+		btn.Tooltip("运行中锁定：本轮结束后切换才生效")
+	}
 }
 
 // workspaceButton is the workspace entry of the info bar: the folder glyph on
@@ -1101,6 +1099,12 @@ func gitStatsText(git backend.GitStatus) string {
 	return " " + strings.Join(parts, " ")
 }
 
+// contextBreakdownHeight is how tall the context breakdown may get. Its rows are
+// a fixed set and the panel opens upwards, so the room is there: thirteen rows
+// (every instruction file a project can have) measure about 300, and this leaves
+// a handful more before anything scrolls.
+const contextBreakdownHeight float32 = 420
+
 func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 	st := t.uiState()
 	window := 0
@@ -1144,12 +1148,18 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 	btn.OnClick(func() { st.ContextOpen = !st.ContextOpen })
 	ui.PopoverBase(c, btn, &st.ContextOpen, func(panel ui.Element) {
 		popoverChrome(c, panel, 300)
+		// The breakdown is a fixed set of rows — the prompt's own sections plus the
+		// four kinds of message — so the panel is tall enough to show it whole. It
+		// opens upwards over the conversation, and the scrollbar it used to carry
+		// only hid the numbers it exists for. A short window still bounds it, and
+		// then the buttons below the list keep their room instead of spilling out.
+		panel.MaxHeightPercent(85)
 		panel.Column().Label("上下文占用明细").AttachTo(btn, ui.AnchorTopRight, ui.AnchorBottomRight).Left(-12)
 		b := st.Breakdown
 		ui.Text(c, "上下文构成").FontSize(fsSection).Bold().Padding(6, 10)
-		// The breakdown scrolls so the panel stays inside its height limit; the
-		// buttons below keep their room instead of spilling out of the panel.
-		ui.Scroll(c).MaxHeight(280).Children(func() {
+		// Only a session with more sections than usual — a long memory index, one
+		// more instruction file — scrolls here.
+		ui.Scroll(c).MaxHeight(contextBreakdownHeight).Children(func() {
 			ui.Column(c).FillWidth().Padding(4, 10).Gap(6).Children(func() {
 				contextPart(c, "系统提示词", b.SystemPrompt)
 				for _, part := range b.SystemPromptParts {

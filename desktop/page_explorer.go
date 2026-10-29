@@ -82,7 +82,11 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 			}
 			ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 				ui.Column(c).Padding(padPage).Children(func() {
-					markdown.View(c, file.PreviewText, nil)
+					if file.PreviewMarkdown == nil {
+						file.PreviewMarkdown = a.readingMarkdownOptions()
+					}
+					a.configureReadingMarkdown(file.PreviewMarkdown)
+					markdown.View(c, file.PreviewText, file.PreviewMarkdown)
 				})
 			})
 			return

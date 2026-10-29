@@ -18,7 +18,7 @@ func toolCodeWindow(c *ui.Context, key, text string, expanded bool, filename ...
 		path = filename[0]
 	}
 	body := func() {
-		ui.RichText(c, codeSpans(c, text, path)...).Font(monoFamily).FontSize(fsTool-2).Shrink(0).Selectable().Padding(2, 8, 4, 0).NoWrap()
+		ui.RichText(c, codeSpans(c, text, path)...).Font(monoFamily).FontSize(readingCodeSize).Shrink(0).Selectable().Padding(2, 8, 4, 0).NoWrap()
 	}
 	if !expanded {
 		ui.Box(c.Key(key)).FillWidth().MaxHeight(150).Clip().Background(c.Theme().Background).Radius(radiusSmall).Children(body)
@@ -305,7 +305,7 @@ func diffCell(c *ui.Context, text string, changed bool, number int) {
 		if number > 0 {
 			ui.Text(c, strconv.Itoa(number)).Width(28).Shrink(0).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Unselectable()
 		}
-		ui.Text(c, text).Font(monoFamily).FontSize(fsTool - 2).TextColor(color).Grow(1).MinWidth(0).Selectable()
+		ui.Text(c, text).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).Grow(1).MinWidth(0).Selectable()
 	})
 }
 
@@ -320,8 +320,8 @@ func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, star
 			numbers = append(numbers, strconv.Itoa(start+n))
 		}
 		ui.Row(c).AlignItems(ui.Start).Padding(2, 8, 4, 0).Gap(12).Children(func() {
-			ui.Text(c, strings.Join(numbers, "\n")).Font(monoFamily).FontSize(fsTool - 1).TextColor(c.Theme().TextMuted).FixedLineHeight(20).Unselectable()
-			ui.RichText(c, codeSpans(c, text, path)...).Font(monoFamily).FontSize(fsTool - 1).FixedLineHeight(20).Selectable().NoWrap()
+			ui.Text(c, strings.Join(numbers, "\n")).Font(monoFamily).FontSize(readingCodeSize).TextColor(c.Theme().TextMuted).FixedLineHeight(20).Unselectable()
+			ui.RichText(c, codeSpans(c, text, path)...).Font(monoFamily).FontSize(readingCodeSize).FixedLineHeight(20).Selectable().NoWrap()
 		})
 	}
 	if expanded {
@@ -351,6 +351,6 @@ func diffCellNoWrap(c *ui.Context, text string, changed bool, number int) {
 		if text == "" {
 			text = " "
 		}
-		ui.Text(c, text).Font(monoFamily).FontSize(fsTool - 2).TextColor(color).NoWrap().Shrink(0).Selectable()
+		ui.Text(c, text).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).NoWrap().Shrink(0).Selectable()
 	})
 }
