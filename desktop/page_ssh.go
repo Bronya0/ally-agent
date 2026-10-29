@@ -31,7 +31,7 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 	})
 	groups := a.sshGroups()
 	if len(a.sshServers) == 0 {
-		emptyState(c, "暂无配置的 SSH 服务器", "点击“添加”录入第一台服务器。")
+		emptyState(c, "暂无配置的 SSH 服务器", "点击“添加”录入第一台服务器。", a.secondaryInk())
 		a.sshEditorDialog(c)
 		return
 	}
@@ -45,7 +45,7 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 		if index >= len(groups) {
 			index = 0
 		}
-		if scrollTabs(c, &index, groups...) {
+		if a.scrollTabs(c, "ssh-groups", &index, groups...) {
 			a.sshF.Group = index
 			a.sshF.GroupName = groups[index]
 		}
@@ -103,12 +103,12 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 						})
 					})
 					if node.Description != "" {
-						uikit.Tooltip(c, ui.Text(c, node.Description).FontSize(fsSmall).TextColor(c.Theme().TextMuted).SingleLine(), node.Description)
+						uikit.Tooltip(c, ui.Text(c, node.Description).FontSize(fsSmall).TextColor(a.secondaryInk()).SingleLine(), node.Description)
 					}
 				})
 			}
 			if shown == 0 {
-				emptyState(c, "无匹配结果", "")
+				emptyState(c, "无匹配结果", "", a.secondaryInk())
 			}
 		})
 	})
@@ -229,15 +229,15 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 			if source == "" {
 				source = "原服务器配置"
 			}
-			fieldNote(c, "从「"+source+"」复制；保存后会创建新的服务器配置。")
+			fieldNote(c, "从「"+source+"」复制；保存后会创建新的服务器配置。", a.secondaryInk())
 		}
 		fieldLabel(c, "分组")
-		uikit.ComboboxField(c.Key("ssh-group"), &a.sshF.GroupInput, a.sshGroups(), "分组", "选择或输入分组").FillWidth()
+		uikit.ComboboxField(c.Key("ssh-group"), &a.sshF.GroupInput, a.sshGroups(), "分组", "选择或输入分组", a.secondaryInk()).FillWidth()
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(2).Basis(0).Children(func() { fieldRow(c, "ssh-host", "主机", &d.Host, false) })
 			ui.Column(c).Grow(1).Basis(0).Gap(gapTight).Children(func() {
 				fieldLabel(c, "端口")
-				uikit.NumberStepper(c, "ssh-port", "端口", &a.sshF.PortText, 1, 65535, 1, 22).FillWidth()
+				uikit.NumberStepper(c, "ssh-port", "端口", &a.sshF.PortText, 1, 65535, 1, 22, a.secondaryInk()).FillWidth()
 			})
 		})
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
@@ -249,14 +249,14 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 				if current == "" {
 					current = "密码"
 				}
-				if uikit.Select(c.Key("ssh-auth"), &current, authOptions).Label("认证方式").FillWidth().Changed() {
+				if uikit.Select(c.Key("ssh-auth"), &current, authOptions, a.secondaryInk()).Label("认证方式").FillWidth().Changed() {
 					d.AuthType = map[string]string{"本机免密": "agent", "私钥文件": "key", "密码": "password"}[current]
 				}
 			})
 		})
 		switch d.AuthType {
 		case "agent":
-			fieldNote(c, "使用本机 ~/.ssh/config、默认私钥或 SSH Agent，无需填写密码或私钥。")
+			fieldNote(c, "使用本机 ~/.ssh/config、默认私钥或 SSH Agent，无需填写密码或私钥。", a.secondaryInk())
 		case "key":
 			ui.Row(c).Gap(gapField).AlignItems(ui.End).Children(func() {
 				ui.Column(c).Grow(1).Children(func() { fieldRow(c, "ssh-key", "私钥路径", &d.KeyPath, false) })
@@ -274,10 +274,10 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 				})
 			})
 			fieldRow(c, "ssh-passphrase", "私钥口令（可选）", &d.Password, true)
-			fieldNote(c, "明文保存在本机配置目录，请勿共享该文件。")
+			fieldNote(c, "明文保存在本机配置目录，请勿共享该文件。", a.secondaryInk())
 		case "password":
 			fieldRow(c, "ssh-password", "密码", &d.Password, true)
-			fieldNote(c, "明文保存在本机配置目录，请勿共享该文件。")
+			fieldNote(c, "明文保存在本机配置目录，请勿共享该文件。", a.secondaryInk())
 		}
 		fieldLabel(c, "用途描述")
 		textArea(c, "ssh-desc", "用途描述", "例如：测试环境 Redis 节点，负责商品缓存", &d.Description, 60)
@@ -492,9 +492,9 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 			})
 			iconAction(c, "ssh-auth-close", "关闭 SSH 集群授权", "close", 24, func() { a.commitSSHAuth(workspace); a.sshF.AuthOpen = false })
 		})
-		fieldNote(c, "勾选的服务器允许当前工作区的会话使用；凭据由 Ally 管理，不会传给模型。")
+		fieldNote(c, "勾选的服务器允许当前工作区的会话使用；凭据由 Ally 管理，不会传给模型。", a.secondaryInk())
 		if !a.sshF.AuthReady {
-			busyRow(c, "正在读取工作区授权…")
+			busyRow(c, "正在读取工作区授权…", a.secondaryInk())
 			return
 		}
 		query := strings.ToLower(strings.TrimSpace(a.sshF.AuthSearch))
@@ -509,7 +509,7 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 				allowedCount++
 			}
 		}
-		fieldNote(c, fmt.Sprintf("已授权 %d 台", allowedCount))
+		fieldNote(c, fmt.Sprintf("已授权 %d 台", allowedCount), a.secondaryInk())
 		groups := []string{}
 		seen := map[string]bool{}
 		for _, node := range a.sshServers {
@@ -541,7 +541,7 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 				}
 			}
 			a.sshF.AuthGroup = groups[index]
-			if changed := scrollTabs(c, &index, groups...); changed {
+			if changed := a.scrollTabs(c, "ssh-auth-groups", &index, groups...); changed {
 				for i, group := range groups {
 					if i == index {
 						a.sshF.AuthGroup = group
@@ -585,8 +585,8 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 							a.sshF.AuthDraft[node.Alias] = !a.sshF.AuthDraft[node.Alias]
 						})
 						ui.Text(c, node.Alias).FontSize(fsSmall).Width(140).SingleLine()
-						ui.Text(c, node.Username+"@"+node.Host+":"+fmt.Sprint(node.Port)).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Width(200).SingleLine()
-						uikit.Tooltip(c, ui.Text(c, node.Description).FontSize(fsTiny).TextColor(c.Theme().TextMuted), node.Description).SingleLine().Grow(1)
+						ui.Text(c, node.Username+"@"+node.Host+":"+fmt.Sprint(node.Port)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).Width(200).SingleLine()
+						uikit.Tooltip(c, ui.Text(c, node.Description).FontSize(fsTiny).TextColor(a.secondaryInk()), node.Description).SingleLine().Grow(1)
 						sshRiskBadge(c, node.RiskLevel)
 					})
 					if row.Clicked() {
@@ -596,7 +596,7 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 			})
 		})
 		if len(a.sshServers) == 0 {
-			emptyState(c, "暂无配置的 SSH 服务器", "先在 SSH 集群页添加服务器。")
+			emptyState(c, "暂无配置的 SSH 服务器", "先在 SSH 集群页添加服务器。", a.secondaryInk())
 		}
 
 	})

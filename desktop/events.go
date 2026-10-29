@@ -14,6 +14,7 @@ import (
 // serialized before queueing because the backend may reuse them after Emit
 // returns.
 func (a *desktop) dispatchEvent(name string, payload any) {
+	payload = toolEventForDisplay(name, payload)
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return
@@ -40,7 +41,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		a.applyMCPStatus(p)
 	case "config:warning":
 		if msg := str(p, "message"); msg != "" {
-			a.status = msg
+			a.notify(msg)
 		}
 	case "plan:update":
 		a.applyPlanUpdate(p)
@@ -72,14 +73,8 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		}
 	}
 	if t == nil {
-		if name == "compact:start" || name == "compact:done" || name == "run:compact" || name == "run:compacted" {
-			// A background session has no tab here, so its compaction can only be
-			// reported in the window status line.
-			a.status = "正在压缩上下文…"
-			if name == "compact:done" || name == "run:compacted" {
-				a.status = ""
-			}
-		}
+		// No tab for this session: it runs in the background, so there is no
+		// surface for its progress and nothing to report.
 		return
 	}
 	ui := t.uiState()
@@ -255,7 +250,6 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 				msg = "运行失败"
 			}
 			t.Status = msg
-			a.status = msg
 			if !hasErrorTail(t.Messages, msg) {
 				t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": msg, "error": true})
 			}
@@ -325,10 +319,12 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 		return
 	}
 	m["toolState"] = name
-	if name == "tool:result" {
+	if name == "tool:result" || name == "tool:error" {
 		if started, ok := m["startedAt"].(time.Time); ok && num(m, "durationMs") == 0 {
 			m["durationMs"] = time.Since(started).Milliseconds()
 		}
+	}
+	if name == "tool:result" {
 		m["status"] = "success"
 		m["body"] = p["result"]
 	}
@@ -345,8 +341,12 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 	}
 	if name == "tool:result" {
 		a.attachToolImage(t, m)
-		if toolKind(str(m, "name")) == "render_html" {
-			a.loadHTMLPreview(t, m)
+	}
+	retainLocalCommandSummary(m)
+	if toolKind(str(m, "name")) == "command" && (name == "tool:result" || name == "tool:error") {
+		key := str(m, "toolCallId")
+		if t.uiState().ToolOpen[key] {
+			a.loadCommandDetail(t, key)
 		}
 	}
 	toolName := str(p, "name")

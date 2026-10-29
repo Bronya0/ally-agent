@@ -93,7 +93,7 @@ func actionParts(c *ui.Context, label string, o ActionOptions) (ui.Element, ui.E
 		if o.Tone == Default {
 			ink = c.Theme().Text
 			if c.Theme().Dark {
-				ink = c.Theme().TextMuted.Mix(c.Theme().Text, 0.55)
+				ink = SecondaryInkOf(c.Theme()).Mix(c.Theme().Text, 0.55)
 			}
 		}
 	}

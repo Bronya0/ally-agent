@@ -4456,8 +4456,13 @@ func TestScheduledTaskCreateListDelete(t *testing.T) {
 		t.Fatalf("expected one scheduled task, got %#v", listResult)
 	}
 
-	if err := app.DeleteScheduledTask(createResult.Task.ID); err != nil {
+	deleted, err := app.executeScheduledTaskTool(app.config, ScheduledTaskToolRequest{Action: "delete", ID: createResult.Task.ID})
+	if err != nil {
 		t.Fatal(err)
+	}
+	removed := deleted.(ScheduledTaskToolResult)
+	if removed.Deleted != createResult.Task.ID || removed.DeletedName != "hourly check" {
+		t.Fatalf("deletion lost task identity: %#v", removed)
 	}
 	if tasks := app.ListScheduledTasks(); len(tasks) != 0 {
 		t.Fatalf("expected task deletion, got %#v", tasks)

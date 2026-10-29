@@ -105,11 +105,10 @@ func replaceTranscript(t *conversation, summary string) {
 	st.PromptOpen = map[int]bool{}
 	st.PromptHandles = map[int]*ui.Handle{}
 	st.ToolOpen = map[string]bool{}
+	st.CommandDetails = nil
 	st.GroupOpen = map[string]bool{}
-	st.VisibleStart = 0
 	st.PendingPrompt = false
-	st.Follow = true
-	st.FollowPending = true
+	followLatest(t)
 }
 
 // applyCompactionResult mirrors the backend's rewrite. A summary tier replaced
@@ -172,6 +171,7 @@ func compactToastText(before, after int) string {
 // exact original text plus its occurrence counted from the end, because a UI row
 // carries no call id and repeated answers are indistinguishable by text alone.
 func applyFastCompaction(t *conversation, result map[string]any) {
+	releaseCommandDetails(t)
 	edits := map[string]map[int]string{}
 	if raw, ok := result["assistantEdits"].([]any); ok {
 		for _, item := range raw {

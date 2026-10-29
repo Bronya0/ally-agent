@@ -25,44 +25,69 @@ func (a *desktop) headerBar(c *ui.Context) {
 	// Keep their room clear so no control sits under them, and start the drag
 	// strip beside them; the bar is zero elsewhere and in full screen.
 	bar := c.TitleBar()
-	row := ui.Row(c).Height(max(headerBarHeight, bar.Height)).Shrink(0).Background(p.panel).
+	railWidth := widthRailCollapsed
+	railSpan := railWidth
+	if a.prefs.RailExpanded {
+		railWidth = a.prefs.RailWidth
+		railSpan = railWidth + railDividerWidth
+	}
+	leading := max(widthRailCollapsed, railSpan-bar.Left)
+	logoInset := railPadH
+	if a.prefs.RailExpanded {
+		logoInset = 6 + railInsetForWidth(a.prefs.RailWidth)
+	}
+	logoInset = max(float32(0), logoInset-bar.Left)
+	tabsStart := bar.Left + leading
+	row := ui.Row(c).Height(max(headerBarHeight, bar.Height)).Shrink(0).Background(colChrome(a)).
 		Border(0, ui.Transparent).Draw(func(painter *ui.Painter, r ui.Rect) {
-		painter.Fill(ui.Rect{X: r.X, Y: r.Y + r.H - 1, W: r.W, H: 1}, p.line, 0)
+		painter.Fill(ui.Rect{X: r.X + tabsStart, Y: r.Y + r.H - 1, W: max(float32(0), r.W-tabsStart), H: 1}, p.line, 0)
+		if railWidth >= bar.Left {
+			painter.Fill(ui.Rect{X: r.X + railWidth - 1, Y: r.Y, W: 1, H: r.H}, p.line, 0)
+		}
 	})
 	if bar.Left > 0 || bar.Right > 0 {
 		row.Padding(0, bar.Right, 0, bar.Left)
 	}
 	row.DragWindow().Children(func() {
-		wordmark := ui.Column(c).Width(64).Center().Children(func() {
-			colors := [4]ui.Color{
-				wordmarkGradientColor(p, 0.14),
-				wordmarkGradientColor(p, 0.43),
-				wordmarkGradientColor(p, 0.61),
-				wordmarkGradientColor(p, 0.84),
+		// The leading header column shares the rail's live width, including
+		// its resize divider. Native traffic lights take precedence on macOS.
+		ui.Column(c.Key("header-rail")).Label("标题栏侧栏区").Width(leading).Shrink(0).FillHeight().Padding(0, 0, 0, logoInset).Justify(ui.Center).AlignItems(ui.Start).Children(func() {
+			wordmark := ui.Column(c).Label("应用 Logo").Width(min(float32(64), leading-logoInset)).FillHeight().Justify(ui.Center).AlignItems(ui.Start).Children(func() {
+				colors := [4]ui.Color{
+					wordmarkGradientColor(p, 0.14),
+					wordmarkGradientColor(p, 0.43),
+					wordmarkGradientColor(p, 0.61),
+					wordmarkGradientColor(p, 0.84),
+				}
+				ui.RichText(c,
+					ui.Span{Text: "A", Color: colors[0]},
+					ui.Span{Text: "l", Color: colors[1]},
+					ui.Span{Text: "l", Color: colors[2]},
+					ui.Span{Text: "y", Color: colors[3]},
+				).FontSize(20).FontWeight(700).LetterSpacing(-0.4)
+			})
+			uikit.Tooltip(c, wordmark.Cursor(ui.CursorPointer), "点击 logo：切换樱花特效")
+			if wordmark.Clicked() {
+				a.togglePetals()
 			}
-			ui.RichText(c,
-				ui.Span{Text: "A", Color: colors[0]},
-				ui.Span{Text: "l", Color: colors[1]},
-				ui.Span{Text: "l", Color: colors[2]},
-				ui.Span{Text: "y", Color: colors[3]},
-			).FontSize(20).FontWeight(700).LetterSpacing(-0.4)
 		})
-		uikit.Tooltip(c, wordmark.Cursor(ui.CursorPointer), "点击 logo：切换樱花特效")
-		if wordmark.Clicked() {
-			a.togglePetals()
-		}
 		a.workspaceTabs(c)
 		a.headerActions(c)
 	})
 }
 
 func (a *desktop) workspaceTabs(c *ui.Context) {
+	s := a.tabStripOf("header-tabs")
 	ui.Box(c).Grow(1).MinWidth(0).FillHeight().Clip().Children(func() {
-		tabScroller(c).FillWidth().FillHeight().Children(func() {
+		tabScroller(c, s).FillWidth().FillHeight().Children(func() {
 			ui.Row(c).FillHeight().AlignItems(ui.Stretch).Gap(0).Padding(0).Children(func() {
 				for i, t := range a.tabs {
 					idx, tab := i, t
 					uikit.WorkspaceTab(c.Key("wtab-"+tab.ID), workspaceLabel(tab.Workspace), idx == a.active, tab.Busy, len(a.tabs) > 1, iconImage("close"), func() {
+						if s.gesture.Panning {
+							// The press panned the strip: it chose nothing.
+							return
+						}
 						if a.page == "settings" {
 							a.commitSettingsOnLeave()
 						}
@@ -74,11 +99,12 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 						a.refreshFiles()
 						a.refreshSessionFooter(tab)
 						a.refreshGit(tab)
-					}, func() { a.closeWorkspaceTab(idx) }).FillHeight().Label("工作区标签 " + tab.ID)
+					}, func() { a.closeWorkspaceTab(idx) }, &s.gesture, a.secondaryInk()).FillHeight().Label("工作区标签 " + tab.ID)
 				}
 			})
 		})
 	})
+	s.pan()
 }
 
 // Header history always creates a fresh tab, matching main's onHistorySelect.
@@ -90,8 +116,8 @@ func (a *desktop) workspaceMenu(c *ui.Context, anchor ui.Element) {
 		popoverChrome(c, panel, 300)
 		panel.Label("工作区历史菜单")
 		panel.AttachTo(anchor, ui.AnchorBottomRight, ui.AnchorTopRight).Top(6).MaxHeightPercent(85).Transition(uikit.PopupTransition())
-		popoverItem(c, "add", "＋ 添加工作区", "", false, func() { a.workspaceMenuOpen = false; a.chooseWorkspace() })
-		popoverItem(c, "temporary", "临时工作区", "", false, func() { a.workspaceMenuOpen = false; a.newConversation("") })
+		popoverItem(c, "add", "＋ 添加工作区", "", false, func() { a.workspaceMenuOpen = false; a.chooseWorkspace() }, a.secondaryInk())
+		popoverItem(c, "temporary", "临时工作区", "", false, func() { a.workspaceMenuOpen = false; a.newConversation("") }, a.secondaryInk())
 		divider(c)
 		_, height := c.Size()
 		ui.Scroll(c.Key("history")).FillWidth().MinHeight(0).MaxHeight(max(float32(80), min(float32(460), height-150))).Children(func() {
@@ -111,13 +137,13 @@ func (a *desktop) workspaceMenu(c *ui.Context, anchor ui.Element) {
 				}
 				b.Background(fadeColor(b, "history-fill", fill)).OnClick(func() { a.workspaceMenuOpen = false; a.openWorkspaceEntry(root) })
 				b.Children(func() {
-					iconGlyph(c, "folderopen", 15).Shrink(0).TextColor(c.Theme().TextMuted)
+					iconGlyph(c, "folderopen", 15).Shrink(0).TextColor(a.secondaryInk())
 					ui.Text(c, filepath.Base(root)).FontSize(13).TextColor(c.Theme().Text).SingleLine().MinWidth(0)
 				})
 				uikit.Tooltip(c, b, root)
 			}
 			if count == 0 {
-				muted(c, "无历史记录", fsSmall).Padding(8)
+				muted(c, "无历史记录", fsSmall, a.secondaryInk()).Padding(8)
 			}
 		})
 	})
@@ -155,15 +181,15 @@ func (a *desktop) headerActions(c *ui.Context) {
 	// The header draws these itself unless the system already shows them:
 	// macOS keeps its traffic lights, and its title bar room is never zero.
 	if bar := c.TitleBar(); a.win != nil && bar.Height == 0 && bar.Left == 0 && bar.Right == 0 {
-		windowAction(c, "window-min", "最小化", "min", func() { a.win.Minimize() })
+		windowAction(c, "window-min", "最小化", "min", func() { a.win.Minimize() }, a.secondaryInk())
 		windowAction(c, "window-max", "最大化", "max", func() {
 			if a.win.IsMaximized() {
 				a.win.Unmaximize()
 			} else {
 				a.win.Maximize()
 			}
-		})
-		closeBtn := windowButton(c, "window-close", "关闭窗口", "close", true, func() { a.win.Close() })
+		}, a.secondaryInk())
+		closeBtn := windowButton(c, "window-close", "关闭窗口", "close", true, func() { a.win.Close() }, a.secondaryInk())
 		_ = closeBtn
 	}
 }
@@ -220,6 +246,7 @@ func (a *desktop) closeWorkspaceTab(index int) {
 		}
 	}
 	if !sessionStillOpen {
+		releaseCommandDetails(t)
 		a.releaseSessionHTMLPreviews(t.ID)
 	}
 	if index < a.active {
@@ -254,7 +281,7 @@ func (a *desktop) updateDialog(c *ui.Context) {
 			}
 			switch a.upd.State {
 			case "checking":
-				busyRow(c, "正在检查更新…")
+				busyRow(c, "正在检查更新…", a.secondaryInk())
 			case "downloading", "extracting":
 				ui.Text(c, map[string]string{"downloading": "正在下载更新…", "extracting": "正在解压更新…"}[a.upd.State])
 				ui.Text(c, "版本 "+a.upd.Tag).FontSize(11).TextColor(p.muted)
@@ -273,15 +300,15 @@ func (a *desktop) updateDialog(c *ui.Context) {
 			case "available":
 				ui.Text(c, "发现新版本 "+a.upd.Tag)
 				if !a.upd.CanAuto {
-					fieldNote(c, "当前平台请下载压缩包后手动更新。")
+					fieldNote(c, "当前平台请下载压缩包后手动更新。", a.secondaryInk())
 				}
 			case "ready":
 				ui.Text(c, "新版本 "+a.upd.Tag+" 已下载完成")
-				fieldNote(c, "重启后生效。当前会话与未保存的草稿会自动保存。")
+				fieldNote(c, "重启后生效。当前会话与未保存的草稿会自动保存。", a.secondaryInk())
 			case "applying":
-				busyRow(c, "正在应用更新…")
+				busyRow(c, "正在应用更新…", a.secondaryInk())
 			case "restarting":
-				busyRow(c, "正在重启 Ally…")
+				busyRow(c, "正在重启 Ally…", a.secondaryInk())
 			case "error":
 				ui.Text(c, "更新失败").TextColor(c.Theme().Danger)
 				ui.Text(c, a.upd.Error).FontSize(12).Selectable().TextColor(c.Theme().Danger)
@@ -289,7 +316,7 @@ func (a *desktop) updateDialog(c *ui.Context) {
 				ui.Text(c, "已是最新版本").TextColor(c.Theme().Success)
 			}
 			if a.upd.Note != "" && a.upd.State != "error" {
-				fieldNote(c, a.upd.Note)
+				fieldNote(c, a.upd.Note, a.secondaryInk())
 			}
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				services := c.Services()

@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	"fmt"
 	"github.com/egoist/mygo/ui"
 )
@@ -29,7 +30,7 @@ func (a *desktop) attachToolImage(t *conversation, m map[string]any) {
 	}
 }
 
-func toolDeleteTree(c *ui.Context, args, result map[string]any) {
+func toolDeleteTree(c *ui.Context, args, result map[string]any, ink ...ui.Color) {
 	rows := list(result, "paths")
 	if len(rows) == 0 {
 		rows = list(result, "results")
@@ -52,7 +53,7 @@ func toolDeleteTree(c *ui.Context, args, result map[string]any) {
 	for n, raw := range rows {
 		path := fmt.Sprint(raw)
 		suffix := " · ok"
-		color := c.Theme().TextMuted
+		color := uikit.SecondaryInk(c, ink)
 		if row, ok := raw.(map[string]any); ok {
 			path = str(row, "path")
 			if path == "" {
@@ -73,7 +74,7 @@ func toolDeleteTree(c *ui.Context, args, result map[string]any) {
 		ui.Text(c, prefix+path+suffix).Font(monoFamily).FontSize(fsTool - 2).TextColor(color.Mix(c.Theme().Text, 0.3)).Selectable()
 	}
 	if count := int(num(result, "failedCount")); count > 0 {
-		notice(c, "error", fmt.Sprintf("%d 个路径删除失败", count))
+		notice(c, "error", fmt.Sprintf("%d 个路径删除失败", count), ink...)
 	}
 }
 
@@ -153,37 +154,27 @@ func toolActionVerb(name, state string, args map[string]any, fallback string) st
 	return pair[1]
 }
 
-// suggestionEdgeMix pulls the suggestion chip's edge back toward the panel it
-// sits on. Cards keep the shared edge; a chip is only an optional shortcut under
-// an answer, so its outline stays quieter than a card's. It cannot fade as far as
-// 0.55 did: on white and on #18181b alike the outline disappeared, and the chip
-// read as a disabled control rather than something to click.
-const suggestionEdgeMix float32 = 0.18
-
-// suggestionLabelMix lifts the chip label from muted ink toward body text. Pure
-// TextMuted measured 4.4:1 on the light surface — below AA, so 12px labels went
+// suggestionLabelMix lifts the suggestion label from muted ink toward body text.
+// Pure muted measured 4.4:1 on the light surface — below AA, so 12px labels went
 // blurry — while body ink would shout next to an answer.
 const suggestionLabelMix float32 = 0.35
 
-// suggestionButton is built from ButtonBase rather than flat(): flat() is the
-// shared secondary button, which already paints its own edge and a full-strength
-// text label, so restyling it from the outside lost both (its border animation
-// key and its label node belong to that button).
-func suggestionButton(c *ui.Context, text string) ui.Element {
+// suggestionButton is a bare suggestion under an answer: no edge, no fill, only
+// the label, which takes the accent while the pointer or the focus is on it. A
+// chip outline competed with the tool card edges around it and read as a control
+// rather than a shortcut. It stays built from ButtonBase rather than flat():
+// flat() paints its own edge and a full-strength label, so restyling it from the
+// outside lost both.
+func suggestionButton(c *ui.Context, text string, ink ...ui.Color) ui.Element {
 	button := ui.ButtonBase(c).Height(26).Padding(3, 8).Radius(radiusSmall).
 		Center().Cursor(ui.CursorPointer).Label(text)
-	border := c.Theme().Border.Mix(c.Theme().Surface, suggestionEdgeMix)
-	fill := c.Theme().Surface
-	labelColor := c.Theme().TextMuted.Mix(c.Theme().Text, suggestionLabelMix)
+	color := uikit.SecondaryInk(c, ink).Mix(c.Theme().Text, suggestionLabelMix)
 	if button.Hovered() || button.Focused() {
-		border = c.Theme().Accent
-		fill = c.Theme().SurfaceHover
-		labelColor = c.Theme().Accent
+		color = c.Theme().Accent
 	}
-	button.Border(1, fadeColor(button, "chip-border", border)).
-		Background(fadeColor(button, "chip-fill", fill))
+	button.Background(ui.Transparent).Border(0, ui.Transparent)
 	button.Children(func() {
-		ui.Text(c, text).FontSize(fsTiny).TextColor(fadeColor(button, "chip-label", labelColor)).SingleLine()
+		ui.Text(c, text).FontSize(fsTiny).TextColor(fadeColor(button, "suggestion-label", color)).SingleLine()
 	})
 	return button
 }
@@ -202,4 +193,34 @@ func subagentParent(t *conversation, child map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func (a *desktop) scheduledTaskSummary(args, result map[string]any) string {
+	action := str(args, "action")
+	name := str(args, "name")
+	if name == "" {
+		name = str(obj(result, "task"), "name")
+	}
+	if name == "" {
+		name = str(result, "deletedName")
+	}
+	id := str(args, "id")
+	if id == "" {
+		id = str(result, "deleted")
+	}
+	if name == "" {
+		for _, task := range a.tasks {
+			if task.ID == id {
+				name = task.Name
+				break
+			}
+		}
+	}
+	if name == "" {
+		name = id
+	}
+	if name == "" {
+		return action
+	}
+	return action + " · " + name
 }

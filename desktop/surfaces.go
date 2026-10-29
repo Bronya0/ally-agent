@@ -75,20 +75,20 @@ const (
 )
 
 // pillColor resolves a tone against the active theme.
-func pillColor(c *ui.Context, tone pillTone) ui.Color {
+func pillColor(c *ui.Context, tone pillTone, ink ...ui.Color) ui.Color {
 	switch tone {
 	case pillAccent:
 		return c.Theme().Accent
 	case pillOK:
-		return toneColor(c, "ok")
+		return toneColor(c, "ok", ink...)
 	case pillWarn:
-		return toneColor(c, "warn")
+		return toneColor(c, "warn", ink...)
 	case pillDanger:
-		return toneColor(c, "error")
+		return toneColor(c, "error", ink...)
 	case pillInfo:
-		return toneColor(c, "info")
+		return toneColor(c, "info", ink...)
 	}
-	return c.Theme().TextMuted
+	return uikit.SecondaryInk(c, ink)
 }
 
 // pill is the single badge: a capsule tinted from its tone, so statuses read

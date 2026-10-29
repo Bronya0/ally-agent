@@ -9,7 +9,7 @@ import (
 
 func TestStartupShellIsStatic(t *testing.T) {
 	for _, appearance := range []string{"light", "dark"} {
-		a := &desktop{page: "chat", prefs: defaultPrefs(), status: "正在启动…"}
+		a := &desktop{page: "chat", prefs: defaultPrefs()}
 		a.prefs.Appearance = appearance
 		builds := 0
 		tt := ui.NewTester(func(c *ui.Context) { builds++; a.view(c) }, 900, 620)

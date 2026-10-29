@@ -16,13 +16,13 @@ import (
 var windowCloseHover = ui.Hex("#e81123")
 
 // windowButton is a caption-bar control (minimize / maximize / close).
-func windowButton(c *ui.Context, id, tip, icon string, close bool, action func()) ui.Element {
+func windowButton(c *ui.Context, id, tip, icon string, close bool, action func(), ink ...ui.Color) ui.Element {
 	t := c.Theme()
 	b := uikit.Tooltip(c, ui.ButtonBase(c.Key(id)).Width(46).FillHeight().MinHeight(headerBarHeight).Shrink(0).Padding(0).Border(0, ui.Transparent).Radius(0).Center().Label(tip), tip).
 		Cursor(ui.CursorPointer).OnClick(action)
 	// Caption controls must always paint an opaque surface. A transparent
 	// resting target can expose stale/native backing pixels during hover fades.
-	fill, color := t.Surface, t.TextMuted
+	fill, color := t.Surface, uikit.SecondaryInk(c, ink)
 	if b.Hovered() {
 		fill, color = t.SurfaceHover, t.Text
 		if close {
@@ -38,7 +38,7 @@ func windowButton(c *ui.Context, id, tip, icon string, close bool, action func()
 
 // navItem is one sidebar entry: a 34px row when the rail is expanded, a square
 // badge when it is collapsed. Active entries get the accent tint and ink.
-func navItem(c *ui.Context, id, label, iconName string, expanded, active bool, trailing func()) ui.Element {
+func navItem(c *ui.Context, id, label, iconName string, expanded, active bool, trailing func(), ink ...ui.Color) ui.Element {
 	t := c.Theme()
 	b := ui.ButtonBase(c.Key(id)).Height(heightRailItem).Justify(ui.Start).
 		Radius(radiusControl).Label(label).Cursor(ui.CursorPointer)
@@ -51,10 +51,10 @@ func navItem(c *ui.Context, id, label, iconName string, expanded, active bool, t
 		b.Size(heightRailItemCollapsed, heightRailItemCollapsed).Center()
 		uikit.RightTooltip(c, b, label)
 	}
-	fill, color := ui.Transparent, t.TextMuted
+	fill, color := ui.Transparent, uikit.SecondaryInk(c, ink)
 	switch {
 	case active:
-		fill, color = selectionFill(t.Accent), t.Accent
+		fill, color = t.Accent.Alpha(0.09), t.Accent
 	case b.Hovered():
 		fill, color = t.SurfaceHover, t.Text
 	}
@@ -66,15 +66,26 @@ func navItem(c *ui.Context, id, label, iconName string, expanded, active bool, t
 			})
 			return
 		}
-		ui.Row(c).FillWidth().Padding(0, 8).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Padding(0, railContentInset(c)).Gap(10).AlignItems(ui.Center).Children(func() {
 			railIcon(c, iconName, sizeRailIcon).TextColor(color)
 			text := ui.Text(c, label).FontSize(12.5).TextColor(color).SingleLine()
 			if active {
 				text.FontWeight(600)
 			}
 			if trailing != nil {
+				text.Grow(1).MinWidth(0)
 				trailing()
 			}
 		})
 	})
+}
+
+// Wider rails give their content breathing room without pinning it to the edge.
+func railContentInset(c *ui.Context) float32 {
+	width := ui.Local(c.Root(), "rail-content-width", func() float32 { return 200 })
+	return railInsetForWidth(*width)
+}
+
+func railInsetForWidth(width float32) float32 {
+	return 8 + max(float32(0), min(float32(24), (width-200)*0.15))
 }

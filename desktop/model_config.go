@@ -10,6 +10,12 @@ import (
 
 const customProviderName = "custom"
 
+// reasoningLevels is the one list of thinking levels: the composer selector, the
+// model form and the chess page offer the same words, so a level reads the same
+// wherever it is set. "auto" leaves the choice to the provider, "off" turns
+// thinking off, and the backend clamps what a model cannot do.
+var reasoningLevels = []string{"auto", "off", "low", "medium", "high", "xhigh", "max"}
+
 func modelIdentity(m backend.ModelConfig) backend.ModelIdentity {
 	return backend.ModelIdentity{ProviderName: m.ProviderName, Model: m.Model, OAuthAccountID: m.OAuthAccountID}
 }

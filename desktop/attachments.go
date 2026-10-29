@@ -211,7 +211,7 @@ func resizeImage(src image.Image, limit int) image.Image {
 	return dst
 }
 func (a *desktop) chooseAttachments(t *conversation) {
-	if t.AttachmentLoading || t.Busy {
+	if !canAddAttachments(t, a.closing) {
 		return
 	}
 	t.AttachmentLoading = true
@@ -237,7 +237,7 @@ func (a *desktop) prepareAttachmentPaths(t *conversation, paths []string) {
 	a.win.Update(func() { a.finishAttachments(t, prepared, len(paths)) })
 }
 func (a *desktop) dropAttachments(t *conversation, paths []string) {
-	if t.AttachmentLoading || t.Busy || a.closing {
+	if !canAddAttachments(t, a.closing) {
 		return
 	}
 	t.AttachmentLoading = true
@@ -258,12 +258,21 @@ func clipboardImage(c *ui.Context) []byte {
 	return nil
 }
 
+// canAddAttachments reports whether the conversation can take one more
+// attachment. Pending attachments belong to the next message, which a run does
+// not touch, so a reply streaming in does not block one: typing stays open while
+// a run goes on, and so does pasting the screenshot that goes with it. A second
+// attachment waits for the one being prepared, as the loader is one at a time.
+func canAddAttachments(t *conversation, closing bool) bool {
+	return t != nil && !t.AttachmentLoading && !closing
+}
+
 // pasteImageFromClipboard turns an image on the clipboard into a pending
 // attachment and reports whether it took the paste, leaving pastes without an
 // image to the editor. Windows and Linux report Cmd+V as a key the input sees,
 // macOS as the Edit menu's paste command, so both routes call this.
 func (a *desktop) pasteImageFromClipboard(c *ui.Context, t *conversation) bool {
-	if t == nil || t.Busy || t.AttachmentLoading || a.closing {
+	if !canAddAttachments(t, a.closing) {
 		return false
 	}
 	data := clipboardImage(c)
@@ -275,7 +284,7 @@ func (a *desktop) pasteImageFromClipboard(c *ui.Context, t *conversation) bool {
 }
 
 func (a *desktop) pasteAttachment(t *conversation, data []byte) {
-	if t.AttachmentLoading || t.Busy || a.closing {
+	if !canAddAttachments(t, a.closing) {
 		return
 	}
 	t.AttachmentLoading = true
@@ -292,7 +301,7 @@ func (a *desktop) finishAttachments(t *conversation, prepared []preparedAttachme
 	}
 	for _, p := range prepared {
 		if len(t.PendingAttachments) >= maxAttachments {
-			a.status = "每条消息最多添加 8 个附件"
+			a.notify("每条消息最多添加 8 个附件")
 			break
 		}
 		t.PendingAttachments = append(t.PendingAttachments, p.input)
@@ -301,11 +310,11 @@ func (a *desktop) finishAttachments(t *conversation, prepared []preparedAttachme
 			t.AttachmentImages[p.input.ID] = ui.NewBitmap(p.preview)
 		}
 		if p.input.Error != "" {
-			a.status = p.input.Error
+			a.notify(p.input.Error)
 		}
 	}
 	if count > maxAttachments {
-		a.status = "每条消息最多添加 8 个附件"
+		a.notify("每条消息最多添加 8 个附件")
 	}
 }
 
@@ -427,7 +436,7 @@ func (a *desktop) messageAttachmentTile(c *ui.Context, t *conversation, att map[
 				OnClick(func() { t.uiState().ToolOpen[key] = !expanded })
 		case str(att, "error") == "":
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				fieldNote(c, "Loading image…")
+				fieldNote(c, "Loading image…", a.secondaryInk())
 				flat(c, "加载图片").OnClick(func() {
 					if a.core != nil && a.win != nil {
 						a.loadAttachmentImage(t, id, str(att, "imageRef"), str(att, "dataUrl"))
@@ -436,7 +445,7 @@ func (a *desktop) messageAttachmentTile(c *ui.Context, t *conversation, att map[
 			})
 		}
 		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-			uikit.Tooltip(c, ui.Text(c, short(name, 18)).FontSize(fsAux).TextColor(c.Theme().TextMuted), name)
+			uikit.Tooltip(c, ui.Text(c, short(name, 18)).FontSize(fsAux).TextColor(a.secondaryInk()), name)
 			if err := str(att, "error"); err != "" {
 				uikit.Tooltip(c, ui.Text(c, short(err, 18)).FontSize(fsAux).TextColor(c.Theme().Danger), err)
 			}
@@ -499,14 +508,10 @@ func appendAttachment(v any, att map[string]any) []any {
 	return append(items, att)
 }
 func (a *desktop) loadSessionAttachmentImages(t *conversation) {
-	htmlCount, imageCount := 0, 0
+	imageCount := 0
 	for n := len(t.Messages) - 1; n >= max(0, len(t.Messages)-140); n-- {
 		m := t.Messages[n]
 		if toolKind(str(m, "name")) == "render_html" {
-			if htmlCount < 4 {
-				a.loadHTMLPreview(t, m)
-				htmlCount++
-			}
 			continue
 		}
 		if imageCount >= 24 {

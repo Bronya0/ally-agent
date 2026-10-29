@@ -58,57 +58,60 @@ type workspaceFile struct {
 	PreviewMarkdown *markdown.Options
 }
 type desktop struct {
-	// composerFocus is the window's focus binding for the composer input:
-	// MyGo releases the keyboard focus when the field it is bound to is cleared,
-	// which is how a sent message drops the focused edge from the box.
-	composerFocus string
-
-	htmlPreviews                              map[string]*mygo.WebView
-	customAvatar                              *ui.Bitmap
-	avatarStyle                               string
-	avatarPoses                               map[string]*ui.Bitmap
-	avatarLoadID                              uint64
-	configSaveTail                            chan struct{}
-	prefsSaveTail                             chan struct{}
-	railResizing, treeResizing                bool
-	welcomeMCP, welcomeSkills, welcomeTools   bool
-	popupFlags                                map[string]*bool
-	notifications                             []ui.Toast
-	taskPopup                                 bool
-	petals                                    bool
-	ShowAllMessages                           bool
-	modelSearch                               string
-	modelTabIdx                               int
-	modelProvider                             string
-	modelProviderPreset                       string
-	modelProviderModel                        string
-	extraRoots                                map[string][]string
-	sshAllowed                                map[string][]string
-	prefs                                     uiPrefs
-	settings                                  settingsForm
-	modelForm                                 modelForm
-	mcpF                                      mcpForm
-	skillsF                                   skillsForm
-	sshF                                      sshForm
-	tasksF                                    tasksForm
-	pluginsF                                  pluginsForm
-	upd                                       updateUI
-	filesF                                    fileUI
-	gameF                                     gameUI
-	plans                                     map[string][]backend.PlanStep
-	planRev                                   map[string]int64
-	subRuns                                   map[string]*backend.SubagentRun
-	railExpanded                              bool
-	plugins                                   []backend.PluginInfo
-	pluginBusy                                bool
-	pluginSeq                                 uint64
-	pluginDelete                              *backend.PluginInfo
-	pluginDeleteOpen, pluginPurge             bool
-	pluginGroupOpen                           map[string]bool
-	fileOpen                                  map[string]bool
-	fileChildren                              map[string][]backend.FileEntry
-	fileLoading                               map[string]bool
-	openSessions                              map[string]*conversation
+	previews                                previewPool
+	previewRequests                         []previewRequest
+	previewTimer                            *time.Timer
+	previewGeneration                       uint64
+	customAvatar                            *ui.Bitmap
+	avatarStyle                             string
+	avatarPoses                             map[string]*ui.Bitmap
+	avatarLoadID                            uint64
+	configSaveTail                          chan struct{}
+	prefsSaveTail                           chan struct{}
+	railResizing, treeResizing              bool
+	welcomeMCP, welcomeSkills, welcomeTools bool
+	popupFlags                              map[string]*bool
+	notifications                           []ui.Toast
+	taskPopup                               bool
+	petals                                  bool
+	ShowAllMessages                         bool
+	modelSearch                             string
+	modelTabIdx                             int
+	modelProvider                           string
+	modelProviderPreset                     string
+	modelProviderModel                      string
+	extraRoots                              map[string][]string
+	sshAllowed                              map[string][]string
+	prefs                                   uiPrefs
+	autoAppearance                          autoAppearanceState
+	settings                                settingsForm
+	modelForm                               modelForm
+	mcpF                                    mcpForm
+	skillsF                                 skillsForm
+	sshF                                    sshForm
+	tasksF                                  tasksForm
+	pluginsF                                pluginsForm
+	upd                                     updateUI
+	filesF                                  fileUI
+	gameF                                   gameUI
+	plans                                   map[string][]backend.PlanStep
+	planRev                                 map[string]int64
+	subRuns                                 map[string]*backend.SubagentRun
+	railExpanded                            bool
+	plugins                                 []backend.PluginInfo
+	pluginBusy                              bool
+	pluginSeq                               uint64
+	pluginDelete                            *backend.PluginInfo
+	pluginDeleteOpen, pluginPurge           bool
+	pluginGroupOpen                         map[string]bool
+	fileOpen                                map[string]bool
+	fileChildren                            map[string][]backend.FileEntry
+	fileLoading                             map[string]bool
+	openSessions                            map[string]*conversation
+	// tabStrips keeps one scroll position and one press per tab strip, by id
+	// (see tabStrip): a strip's offset has to live in app state for the wheel to
+	// move it, and its press outlives a frame.
+	tabStrips                                 map[string]*tabStrip
 	mcpSummary                                string
 	toolCount                                 int
 	toolInventory                             []backend.ToolDefinitionSummary
@@ -136,7 +139,7 @@ type desktop struct {
 	core                                                *backend.App
 	win                                                 *mygo.Window
 	ready, closing, quitReady                           bool
-	page, status, filter                                string
+	page, filter                                        string
 	config                                              backend.ConfigState
 	tabs                                                []*conversation
 	active                                              int
@@ -178,9 +181,10 @@ func Run() {
 		return
 	}
 	mygo.App.SetName("Ally Native")
-	a := &desktop{core: backend.NewApp(), page: "chat", modelEdit: -1, explorer: true, status: "正在启动…", plans: map[string][]backend.PlanStep{}, planRev: map[string]int64{}, subRuns: map[string]*backend.SubagentRun{}, prefs: defaultPrefs(), extraRoots: map[string][]string{}, sshAllowed: map[string][]string{}}
+	a := &desktop{core: backend.NewApp(), page: "chat", modelEdit: -1, explorer: true, plans: map[string][]backend.PlanStep{}, planRev: map[string]int64{}, subRuns: map[string]*backend.SubagentRun{}, prefs: defaultPrefs(), extraRoots: map[string][]string{}, sshAllowed: map[string][]string{}}
 	a.loadPrefs()
 	mygo.App.WhenReady(func() {
+		a.refreshAutoAppearance(time.Now())
 		a.syncNativeAppearance()
 		opts := mygo.WindowOptions{
 			Title: "Ally", Width: 1280, Height: 850, MinWidth: 900, MinHeight: 620,
@@ -204,6 +208,7 @@ func Run() {
 		// Configure the native frame before showing it to avoid a white border
 		// during startup, while keeping the native resize edges and shadow.
 		configureWindowFrame(a.win)
+		a.startAutoAppearance()
 		if icon, err := resources.Assets.ReadFile("icon.png"); err == nil {
 			_ = a.win.SetIcon(icon)
 			if runtime.GOOS == "darwin" {
@@ -237,12 +242,12 @@ func Run() {
 			avatarPoses := decodeAvatarStyle(avatarStyle)
 			err := a.core.StartNative(context.Background(), a.onEvent)
 			if err != nil {
-				a.win.Update(func() { a.startupError = "启动失败：" + err.Error(); a.status = a.startupError })
+				a.win.Update(func() { a.startupError = "启动失败：" + err.Error() })
 				return
 			}
 			cfg, err := a.core.GetConfig()
 			if err != nil {
-				a.win.Update(func() { a.startupError = "读取配置失败：" + err.Error(); a.status = a.startupError })
+				a.win.Update(func() { a.startupError = "读取配置失败：" + err.Error() })
 				return
 			}
 			sessions, _ := a.core.ListSessionIndex()
@@ -258,7 +263,7 @@ func Run() {
 				a.avatarStyle, a.avatarPoses = avatarStyle, avatarPoses
 				a.plugins = plugins
 				if pluginErr != nil {
-					a.status = "插件列表加载失败：" + pluginErr.Error()
+					a.notifyError("插件列表加载失败：" + pluginErr.Error())
 				}
 				a.skills = skills
 				a.toolInventory = tools
@@ -271,7 +276,6 @@ func Run() {
 				}
 				a.syncSettingsForm()
 				a.ready = true
-				a.status = "就绪"
 				a.newConversation(workspace)
 			})
 		}()
@@ -288,7 +292,7 @@ func (a *desktop) shutdown() {
 	for _, file := range a.workspaceFiles {
 		if file.Saving {
 			a.closing = false
-			a.status = "文件正在保存，请稍后退出"
+			a.notify("文件正在保存，请稍后退出")
 			return
 		}
 		if file.Editor.Buffer.Modified() {
@@ -313,7 +317,7 @@ func (a *desktop) shutdown() {
 	a.finishShutdown()
 }
 func (a *desktop) finishShutdown() {
-	a.status = "正在保存并退出…"
+	a.stopAutoAppearance()
 	// 停后端与保存会话互不依赖：并行跑，退出只等最慢的一段。串行会把 MCP 与
 	// 托管服务的收尾时间整个叠在保存前面，用户只能对着窗口干等。
 	shutdownDone := make(chan struct{})
@@ -411,6 +415,7 @@ func (a *desktop) rememberSession(t *conversation) {
 	if t == nil {
 		return
 	}
+	releaseCommandDetails(t)
 	if a.openSessions == nil {
 		a.openSessions = map[string]*conversation{}
 	}
@@ -436,7 +441,7 @@ func (a *desktop) newSession() {
 		return
 	}
 	if t.Busy {
-		a.status = "当前会话正在运行，请等待完成后再切换会话"
+		a.notify("当前会话正在运行，请等待完成后再切换会话")
 		return
 	}
 	a.rememberSession(t)
@@ -487,7 +492,6 @@ func (a *desktop) queueNotice(message, kind string) {
 	if message == "" {
 		return
 	}
-	a.status = message
 	item := ui.Toast{Title: message, Type: kind}
 	if len(a.notifications) > 0 && a.notifications[len(a.notifications)-1].Title == message && a.notifications[len(a.notifications)-1].Type == kind {
 		return
@@ -538,19 +542,19 @@ func (a *desktop) chooseWorkspace() {
 // carries no attachments.
 func (a *desktop) inject(t *conversation, text string) bool {
 	if text == "" {
-		a.status = "运行中只能追加文字消息"
+		a.notifyError("运行中只能追加文字消息")
 		return false
 	}
 	if len(t.PendingAttachments) > 0 {
-		a.status = "运行中不能追加附件，请等本轮结束"
+		a.notifyError("运行中不能追加附件，请等本轮结束")
 		return false
 	}
 	if t.RunID == "" {
-		a.status = "本轮正在启动，请稍后再追加"
+		a.notifyError("本轮正在启动，请稍后再追加")
 		return false
 	}
 	if err := a.core.InjectRunMessage(t.RunID, text); err != nil {
-		a.status = "追加失败：" + err.Error()
+		a.notifyError("追加失败：" + err.Error())
 		return false
 	}
 	t.Messages = append(t.Messages, map[string]any{"role": "user", "content": text})
@@ -603,19 +607,15 @@ func (a *desktop) send(t *conversation, text string) bool {
 		return false
 	}
 	if t.Busy {
-		if a.inject(t, text) {
-			a.composerFocus = ""
-			return true
-		}
-		return false
+		return a.inject(t, text)
 	}
 	if t.Model == "" {
-		a.status = "请先在模型页面配置并选择模型"
+		a.notifyError("请先在模型页面配置并选择模型")
 		return false
 	}
 	cfg, found := a.chatConfig(t)
 	if !found {
-		a.status = "所选模型已不存在，请重新选择"
+		a.notifyError("所选模型已不存在，请重新选择")
 		return false
 	}
 	attachments := append([]backend.AttachmentInput(nil), t.PendingAttachments...)
@@ -632,14 +632,10 @@ func (a *desktop) send(t *conversation, text string) bool {
 	t.Messages = append(t.Messages, map[string]any{"role": "user", "content": display, "attachments": displayAttachments})
 	t.PendingAttachments = nil
 	t.Busy = true
-	a.status = "就绪"
 	t.Draft = ""
 	t.Status = "正在连接模型…"
 	t.uiState().Follow = true
 	t.uiState().FollowPending = true
-	// The message is away, so the composer gives the keyboard back: the box
-	// keeps its resting edge instead of the focused one while the run streams.
-	a.composerFocus = ""
 	a.persist(t)
 	go func() {
 		id, err := a.core.StartChat(backend.ChatRequest{SessionID: t.ID, Message: text, Attachments: attachments, Config: cfg})
@@ -669,6 +665,7 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 	// Stored image references are durable; avoid copying large base64 payloads
 	// into every snapshot once the backend confirms the image was saved.
 	for _, m := range msgs {
+		retainLocalCommandSummary(m)
 		for _, att := range messageAttachmentList(m) {
 			if str(att, "imageRef") != "" {
 				delete(att, "dataUrl")
@@ -738,6 +735,9 @@ func (a *desktop) openSession(id string) {
 		a.win.Update(func() {
 			t := a.freshConversation(s.Workspace)
 			t.ID, t.Title, t.Created, t.Messages, t.ContextTokens = s.ID, s.Title, s.CreatedAt, s.Messages, s.ContextTokens
+			for _, message := range t.Messages {
+				retainLocalCommandSummary(message)
+			}
 			restoreRoundStats(t)
 			a.showSession(t)
 			a.loadSessionAttachmentImages(t)
@@ -746,6 +746,12 @@ func (a *desktop) openSession(id string) {
 }
 
 func (a *desktop) showSession(next *conversation) {
+	// A transcript restored from disk carries no offset, and a scroll container
+	// shows its start at 0. Park it at the newest message; a conversation the
+	// user left scrolled somewhere keeps that position.
+	if len(next.Messages) > 0 && next.uiState().Follow && next.Scroll.Y == 0 {
+		followLatest(next)
+	}
 	if a.page == "models" {
 		a.cancelOAuthWhenLeaving()
 	}
@@ -808,7 +814,7 @@ func (a *desktop) refreshFiles(manual ...bool) {
 				a.notifySuccess("资源树已刷新")
 			}
 			if r.Truncated {
-				a.status = "文件过多，目录列表仅显示前 1000 项"
+				a.notify("文件过多，目录列表仅显示前 1000 项")
 			}
 		})
 	}()
@@ -824,7 +830,7 @@ func (a *desktop) openFile(path string) {
 			return
 		}
 		if old.Saving {
-			a.status = "文件正在保存，请稍后打开其他文件"
+			a.notify("文件正在保存，请稍后打开其他文件")
 			return
 		}
 		if old.Editor.Buffer.Modified() {
@@ -905,7 +911,7 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 				return
 			}
 			if e != nil {
-				a.status = e.Error()
+				a.notifyError(e.Error())
 				a.openFileInfo(path)
 				return
 			}
@@ -935,15 +941,15 @@ func (a *desktop) workspaceFileLoadStillCurrent(root string, expected *workspace
 		return true
 	}
 	if expected.Saving || expected.Editor == nil || expected.Editor.Buffer == nil {
-		a.status = "文件状态已变化，已取消加载"
+		a.notify("文件状态已变化，已取消加载")
 		return false
 	}
 	if expected.Editor.Buffer.Version() != version {
-		a.status = "文件加载期间内容已变化，已取消替换"
+		a.notify("文件加载期间内容已变化，已取消替换")
 		return false
 	}
 	if expected.Editor.Buffer.Modified() && !discardConfirmed {
-		a.status = "文件有未保存修改，已取消替换"
+		a.notify("文件有未保存修改，已取消替换")
 		return false
 	}
 	return true
@@ -971,7 +977,7 @@ func (a *desktop) closeFile() {
 		return
 	}
 	if file.Saving {
-		a.status = "文件正在保存，请稍后关闭"
+		a.notify("文件正在保存，请稍后关闭")
 		return
 	}
 	root := t.Workspace
@@ -997,7 +1003,7 @@ func (a *desktop) saveFile() {
 		a.win.Update(func() {
 			file.Saving = false
 			if err != nil {
-				a.status = "保存失败：" + err.Error()
+				a.notifyError("保存失败：" + err.Error())
 				return
 			}
 			file.Version = result.Version

@@ -1,48 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package desktop
 
-import (
-	"testing"
+import "testing"
 
-	"ally-dev/desktop/uikit"
-	"github.com/egoist/mygo/ui"
-)
-
-// TestComposerFocusLeavesOnSend pins what a send relies on: the composer input
-// takes the keyboard focus from a click, and clearing the window's focus field
-// takes it away again, so the box drops its focused edge once the message is
-// gone.
-func TestComposerFocusLeavesOnSend(t *testing.T) {
-	a := &desktop{}
-	value := ""
-	focused := false
-	tt := ui.NewTester(func(c *ui.Context) {
-		c.SetTheme(a.theme())
-		ui.Column(c).Padding(20).Children(func() {
-			input := uikit.Area(c.Key("draft"), &value).Label("消息输入框").Height(60).Width(240)
-			focused = input.Focused()
-			input.FocusBind(&a.composerFocus, composerFocusDraft)
-		})
-	}, 320, 140)
-	tt.Frame()
-	if focused || a.composerFocus != "" {
-		t.Fatalf("input starts focused=%v field=%q", focused, a.composerFocus)
-	}
-	box, ok := tt.Find("消息输入框")
-	if !ok {
-		t.Fatal("input not found")
-	}
-
-	tt.ClickAt(box.X+box.W/2, box.Y+box.H/2)
-	tt.Frame()
-	if !focused || a.composerFocus != composerFocusDraft {
-		t.Fatalf("after a click focused=%v field=%q", focused, a.composerFocus)
-	}
-
-	a.composerFocus = ""
-	tt.Frame()
-	tt.Frame()
-	if focused {
-		t.Fatal("input kept the focus after the focus field was cleared")
+// Clearing a submitted draft and showing the running state must leave the
+// real composer ready for typing, including another submission during a run.
+func TestComposerKeepsFocusAfterDraftIsSent(t *testing.T) {
+	conv := &conversation{ID: "keep-focus", Draft: "待发送消息"}
+	tt := pasteInto(t, conv)
+	for _, busy := range []bool{true, true, false} {
+		conv.Draft = ""
+		conv.Busy = busy
+		tt.Frame()
+		tt.Type("继续输入")
+		if conv.Draft != "继续输入" {
+			t.Fatalf("composer lost focus after send: busy=%v draft=%q", busy, conv.Draft)
+		}
 	}
 }

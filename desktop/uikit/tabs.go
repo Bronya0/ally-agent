@@ -1,6 +1,10 @@
 package uikit
 
-import "github.com/egoist/mygo/ui"
+import (
+	"math"
+
+	"github.com/egoist/mygo/ui"
+)
 
 // TabStyle selects the two approved navigation treatments.
 type TabStyle uint8
@@ -14,13 +18,72 @@ const DefaultTabStyle = TabSegmented
 type TabOptions struct {
 	Style     TabStyle
 	Secondary bool
+	// Gesture, if set, collects the press on a tab, so the strip around the
+	// tabs can pan with it: MyGo's wheel and press only know the axes an
+	// element scrolls, and a strip overflowing sideways has to be dragged
+	// by its owner.
+	Gesture *TabGesture
+}
+
+// tabPanSlop is how far a press moves before it pans the strip instead of
+// choosing a tab, as MyGo's dragStart: a click that shakes still clicks.
+const tabPanSlop = 4
+
+// TabGesture is the press on a tab strip: how far it moved since the last
+// frame, and whether it moved far enough to pan the strip rather than
+// choose the tab it pressed. Its owner keeps one per strip, so a press
+// reads across the frames it lasts.
+type TabGesture struct {
+	// DX and DY are how far the pointer moved, in DIPs, since the last
+	// frame while a tab is pressed.
+	DX, DY float32
+	// Panning reports a press that moved far enough to pan the strip: the
+	// tab it ends on is not chosen.
+	Panning bool
+	// Released reports, in the frame the panning press lets go, that the
+	// tab under it reports a click the strip drops.
+	Released bool
+	moved    float32
+	pressed  bool
+}
+
+// Watch takes a tab's press, if it has one, and keeps the gesture. A strip
+// whose tabs are not uikit's own calls it for each.
+func (g *TabGesture) Watch(tab ui.Element) {
+	if dx, dy, ok := tab.Dragged(); ok {
+		if !g.pressed {
+			// A new press: what the last one moved says nothing of it.
+			*g = TabGesture{pressed: true}
+		}
+		g.DX, g.DY = dx, dy
+		g.moved += float32(math.Hypot(float64(dx), float64(dy)))
+		if g.moved >= tabPanSlop {
+			g.Panning = true
+		}
+		return
+	}
+	if _, _, ok := tab.DragEnded(); ok {
+		// DragEnded reports the panning press once, where the tab also
+		// reports the click it ends with.
+		g.pressed, g.Released = false, g.Panning
+		g.DX, g.DY = 0, 0
+	}
 }
 
 func Tabs(c *ui.Context, selected *int, labels ...string) ui.Element {
 	return TabsWithOptions(c, selected, TabOptions{Style: DefaultTabStyle}, labels...)
 }
 
+// TabsSecondary 显式传次要文字色：Theme.TextMuted 是占位淡色。
+func TabsSecondary(c *ui.Context, secondary ui.Color, selected *int, o TabOptions, labels ...string) ui.Element {
+	return tabsWithInk(c, selected, o, secondary, labels...)
+}
+
 func TabsWithOptions(c *ui.Context, selected *int, o TabOptions, labels ...string) ui.Element {
+	return tabsWithInk(c, selected, o, SecondaryInkOf(c.Theme()), labels...)
+}
+
+func tabsWithInk(c *ui.Context, selected *int, o TabOptions, secondary ui.Color, labels ...string) ui.Element {
 	parts := ui.TabsBase(c, selected, len(labels))
 	t := c.Theme()
 	track := parts.List.AlignSelf(ui.Start).Shrink(0)
@@ -35,7 +98,10 @@ func TabsWithOptions(c *ui.Context, selected *int, o TabOptions, labels ...strin
 		for i, label := range labels {
 			active := i == *selected
 			tab := parts.Tab(i).Shrink(0).Height(28).Padding(0, 12).Cursor(ui.CursorPointer).Label(label)
-			fill, ink, edge := ui.Transparent, t.TextMuted, ui.Transparent
+			if o.Gesture != nil {
+				o.Gesture.Watch(tab)
+			}
+			fill, ink, edge := ui.Transparent, secondary, ui.Transparent
 			if o.Style == TabSegmented {
 				tab.Radius(4)
 				if active {

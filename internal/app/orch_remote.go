@@ -1032,7 +1032,7 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 		return CommandResult{}, errors.New("command is required")
 	}
 	if command.ContainsExplicitDeleteCommand(req.Command) && !command.IsAllowedDeleteContext(req.Command) {
-		return CommandResult{}, codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("remote_run_command refuses explicit deletion commands. Use remote_delete_path for deletion.\n被拦截的命令: %s", req.Command))
+		return CommandResult{}, codedToolError("E_COMMAND_BLOCKED", errors.New("remote_run_command refuses explicit deletion commands. Use remote_delete_path for deletion."))
 	}
 	if err := validateRemoteCommandSafety(req.Command); err != nil {
 		return CommandResult{}, err
@@ -1051,7 +1051,7 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 	// 没有内核兜底，更必须有等价的一份，否则远端命令能写 .git/hooks（下次 git 即
 	// 执行代码）。字面目标里出现 .git 段即拒；解析后的复判在 helper 侧。
 	if risk := remoteCommandVCSMetadataTarget(req.Command, path.Join(rt.WorkspaceRoot, cwd)); risk != "" {
-		return CommandResult{}, codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：远端命令的写入目标是版本控制元数据内的路径。\n原因：创建或覆盖 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码。\n检测到的目标：%s\n处理方式：版本控制状态请手动在服务器上变更。\n被拦截的命令：%s", risk, req.Command))
+		return CommandResult{}, codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：远端命令的写入目标是版本控制元数据内的路径。\n原因：创建或覆盖 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码。\n检测到的目标：%s\n处理方式：版本控制状态请手动在服务器上变更。", risk))
 	}
 
 	timeout := req.Timeout

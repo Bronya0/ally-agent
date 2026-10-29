@@ -21,8 +21,8 @@ func label(c *ui.Context, s string) ui.Element {
 	return uikit.Label(c, s)
 }
 
-func muted(c *ui.Context, s string, size float32) ui.Element {
-	return uikit.Muted(c, s, size)
+func muted(c *ui.Context, s string, size float32, ink ...ui.Color) ui.Element {
+	return uikit.Muted(c, s, size, ink...)
 }
 
 var monoFamily = nativeMonoFontFamily()
@@ -43,20 +43,16 @@ func flat(c *ui.Context, s string) ui.Element {
 	return button(c, nil, s, btnSecondary, false, "")
 }
 
-// caretButton replaces a text-font arrow with a fixed-size MyGo icon, keeping
-// the caret centered on the same row as the button label.
-func caretButton(c *ui.Context, b ui.Element, label, icon string, size float32, ink *ui.Color) ui.Element {
+// caretButton puts a chevron after a button's own label. The button stays the
+// only place its label is drawn: drawing it in a row of its own as well showed
+// it twice (市场 市场 ⌄), and the record of that row is what this signature
+// removes — there is no label here to draw.
+func caretButton(c *ui.Context, b ui.Element, icon string, size float32, ink *ui.Color) ui.Element {
 	return b.Children(func() {
-		ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-			text := ui.Text(c, label).FontSize(size).SingleLine()
-			if ink != nil {
-				text.TextColor(*ink)
-			}
-			glyph := iconGlyph(c, icon, 10).Shrink(0)
-			if ink != nil {
-				glyph.TextColor(*ink)
-			}
-		})
+		glyph := iconGlyph(c, icon, size).Shrink(0)
+		if ink != nil {
+			glyph.TextColor(*ink)
+		}
 	})
 }
 
@@ -70,11 +66,11 @@ func ghost(c *ui.Context, s string) ui.Element {
 
 // Composer settings keep their muted ink during a run and on hover. MyGo dims
 // Disabled elements, so lock activation instead of dimming the current value.
-func composerSettingButton(c *ui.Context, text string, locked bool, activate func()) ui.Element {
+func composerSettingButton(c *ui.Context, text string, locked bool, activate func(), ink ...ui.Color) ui.Element {
 	b, textEl := composerFlatParts(c, text)
-	ink := c.Theme().TextMuted
-	b.TextColor(ink)
-	textEl.TextColor(ink)
+	color := uikit.SecondaryInk(c, ink)
+	b.TextColor(color)
+	textEl.TextColor(color)
 	if locked {
 		b.Cursor(ui.CursorDefault)
 	}
@@ -122,25 +118,25 @@ func choiceChip(c *ui.Context, key, text string, selected bool, tone ui.Color, t
 // selectionRow is the vertical-list form of the selected look: accent tint,
 // accent ink, bold label and a reserved accent rail, so the text never shifts
 // when the choice changes. Used by the settings rail and any other one-of-N list.
-func selectionRow(c *ui.Context, key any, text string, selected bool) ui.Element {
+func selectionRow(c *ui.Context, key any, text string, selected bool, ink ...ui.Color) ui.Element {
 	t := c.Theme()
 	b := ui.ButtonBase(c.Key(key)).FillWidth().Height(heightControl+2).Padding(0, 8).
 		Justify(ui.Start).Radius(radiusControl).Label(text).Cursor(ui.CursorPointer)
-	fill, ink := ui.Transparent, t.TextMuted
+	fill, color := ui.Transparent, uikit.SecondaryInk(c, ink)
 	switch {
 	case selected:
-		fill, ink = selectionFill(t.Accent), t.Accent
+		fill, color = selectionFill(t.Accent), t.Accent
 	case b.Hovered():
-		fill, ink = t.SurfaceHover, t.Text
+		fill, color = t.SurfaceHover, t.Text
 	}
-	b.Background(fadeColor(b, "row-fill", fill)).TextColor(ink)
+	b.Background(fadeColor(b, "row-fill", fill)).TextColor(color)
 	return b.Children(func() {
 		ui.Row(c).FillWidth().Gap(gapField).AlignItems(ui.Center).Children(func() {
 			rail := ui.Box(c).Width(3).Height(13).Shrink(0).Radius(2)
 			if selected {
-				rail.Background(ink)
+				rail.Background(color)
 			}
-			glyph := ui.Text(c, text).FontSize(fsSmall).TextColor(ink).SingleLine()
+			glyph := ui.Text(c, text).FontSize(fsSmall).TextColor(color).SingleLine()
 			if selected {
 				glyph.FontWeight(600)
 			}
@@ -169,13 +165,13 @@ func railIcon(c *ui.Context, name string, size float32) ui.Element {
 
 // railNavigationButton keeps the collapsed icon slot separate from the
 // expanded label row, matching main's 20px glyph and centered 34px badge.
-func railNavigationButton(c *ui.Context, id, label, iconName string, expanded, active bool, trailing func()) ui.Element {
-	return navItem(c, id, label, iconName, expanded, active, trailing)
+func railNavigationButton(c *ui.Context, id, label, iconName string, expanded, active bool, trailing func(), ink ...ui.Color) ui.Element {
+	return navItem(c, id, label, iconName, expanded, active, trailing, ink...)
 }
 
-func railToggleButton(c *ui.Context, id, tip, name string, fn func()) ui.Element {
+func railToggleButton(c *ui.Context, id, tip, name string, fn func(), ink ...ui.Color) ui.Element {
 	b := uikit.Tooltip(c, ui.ButtonBase(c.Key(id)).Size(sizeRailBadge, sizeRailBadge).AlignSelf(ui.Center).Center().Radius(radiusRailBadge).
-		Label(tip), tip).TextColor(c.Theme().TextMuted).Cursor(ui.CursorPointer).OnClick(fn)
+		Label(tip), tip).TextColor(uikit.SecondaryInk(c, ink)).Cursor(ui.CursorPointer).OnClick(fn)
 	fill := ui.Transparent
 	if b.Hovered() {
 		fill = c.Theme().SurfaceHover
@@ -223,12 +219,12 @@ func sectionHeader(c *ui.Context, title string, actions func()) {
 	uikit.SectionHeader(c, title, actions)
 }
 
-func emptyState(c *ui.Context, title, detail string) {
-	uikit.EmptyState(c, title, detail)
+func emptyState(c *ui.Context, title, detail string, ink ...ui.Color) {
+	uikit.EmptyState(c, title, detail, ink...)
 }
 
-func busyRow(c *ui.Context, s string) {
-	uikit.BusyRow(c, s)
+func busyRow(c *ui.Context, s string, ink ...ui.Color) {
+	uikit.BusyRow(c, s, ink...)
 }
 
 // noticeTone maps the tone words the call sites use onto the kit's tones.
@@ -247,18 +243,18 @@ func noticeTone(tone string) uikit.NoticeTone {
 }
 
 // notice is the coloured banner used for errors, warnings and hints.
-func notice(c *ui.Context, tone, message string) {
-	uikit.Notice(c, noticeTone(tone), message, true)
+func notice(c *ui.Context, tone, message string, ink ...ui.Color) {
+	uikit.Notice(c, noticeTone(tone), message, true, ink...)
 }
 
-func noticeNoBar(c *ui.Context, tone, message string) {
-	uikit.Notice(c, noticeTone(tone), message, false)
+func noticeNoBar(c *ui.Context, tone, message string, ink ...ui.Color) {
+	uikit.Notice(c, noticeTone(tone), message, false, ink...)
 }
 
 // ---- Controls ------------------------------------------------------------
 
-func fieldLabel(c *ui.Context, s string) { uikit.FieldLabel(c, s) }
-func fieldNote(c *ui.Context, s string)  { uikit.FieldNote(c, s) }
+func fieldLabel(c *ui.Context, s string)                 { uikit.FieldLabel(c, s) }
+func fieldNote(c *ui.Context, s string, ink ...ui.Color) { uikit.FieldNote(c, s, ink...) }
 
 // fieldRow is a labelled text field. ui.Field owns the label: it names the
 // control for assistive technology and focuses it when clicked, which a hand
@@ -319,29 +315,146 @@ func tabsBar(c *ui.Context, selected *int, labels ...string) ui.Element {
 	return uikit.Tabs(c.Key("tabs-"+strings.Join(labels, "|")), selected, labels...).Label(labels[0]).Cursor(ui.CursorPointer)
 }
 
-// tabScroller scrolls the tab strip sideways. ScrollHorizontal already turns the
-// wheel into horizontal motion, so this only keeps the scrollbar below its
-// clipped parent: native scrolling without a draggable thumb over the underline.
-func tabScroller(c *ui.Context) ui.Element {
-	return ui.ScrollHorizontal(c).ScrollbarInsets(0, 0, -20, 0)
+// tabsBarInk is tabsBar with the palette's secondary-text tone.
+func tabsBarInk(c *ui.Context, ink ui.Color, selected *int, labels ...string) ui.Element {
+	return uikit.TabsSecondary(c.Key("tabs-"+strings.Join(labels, "|")), ink, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle}, labels...).Label(labels[0]).Cursor(ui.CursorPointer)
 }
 
-func scrollTabs(c *ui.Context, selected *int, labels ...string) bool {
-	return scrollTabsStyle(c, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle}, labels...)
+// tabStrip is one scrollable strip of tabs: where it shows them, and the
+// press dragging it.
+type tabStrip struct {
+	scroll  ui.ScrollState
+	gesture uikit.TabGesture
 }
-func scrollSubTabs(c *ui.Context, selected *int, labels ...string) bool {
-	return scrollTabsStyle(c, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle, Secondary: true}, labels...)
-}
-func scrollTabsStyle(c *ui.Context, selected *int, o uikit.TabOptions, labels ...string) bool {
-	changed := false
-	ui.Box(c).FillWidth().Clip().Children(func() {
-		tabScroller(c).FillWidth().Children(func() { changed = uikit.TabsWithOptions(c.Key("tabs"), selected, o, labels...).Changed() })
+
+// tabWheelStep scales a wheel's notches along a strip: a notch moves a page
+// down by a few lines, while a strip is as long as it has tabs, so 1:1
+// crawls. A touchpad's pixels go as they come.
+const tabWheelStep = 3
+
+// tabPan is how a drag moves the strip: a drag follows the pointer, so the
+// offset lands in the frame after the one that asked for it.
+var tabPan = ui.Animation{Duration: time.Millisecond}
+
+// tabScroller scrolls the tab strip sideways. MyGo turns the wheel on the axis
+// its notches point at, so a strip that scrolls only sideways ignored the wheel
+// unless Shift was held. The tracked offset turns the plain wheel sideways here,
+// and hands the wheel on to the page once the strip has nowhere left to go.
+// ScrollbarInsets keeps the thumb below its clipped parent.
+func tabScroller(c *ui.Context, s *tabStrip) ui.Element {
+	e := ui.ScrollHorizontal(c).ScrollbarInsets(0, 0, -20, 0)
+	if s == nil {
+		return e
+	}
+	st := &s.scroll
+	return e.TrackScroll(st).HandleInput(func(ev ui.InputEvent) bool {
+		// A strip that fits, and one at either end, leaves the wheel to the
+		// page around it.
+		if ev.Kind != ui.InputScroll || ev.DY == 0 || ev.DX != 0 || ev.Mods&ui.Shift != 0 || st.MaxX <= 0 {
+			return false
+		}
+		step := ev.DY
+		if !ev.Precise {
+			step *= tabWheelStep
+		}
+		to := max(float32(0), min(st.X+step, st.MaxX))
+		if to == st.X {
+			return false
+		}
+		st.ScrollTo(to, st.Y, ui.Smooth)
+		return true
 	})
+}
+
+// tabStripOf is the strip known by id. It lives on the desktop so two strips,
+// or two windows in a test, never share a place.
+func (a *desktop) tabStripOf(id string) *tabStrip {
+	if a.tabStrips == nil {
+		a.tabStrips = map[string]*tabStrip{}
+	}
+	s := a.tabStrips[id]
+	if s == nil {
+		s = &tabStrip{}
+		a.tabStrips[id] = s
+	}
+	return s
+}
+
+// pan moves the strip with the press dragging it, when it has somewhere to go:
+// a strip that fits stays put whatever the pointer does.
+func (s *tabStrip) pan() {
+	defer func() { s.gesture.DX, s.gesture.DY = 0, 0 }()
+	if s.scroll.MaxX <= 0 || s.gesture.DX == 0 {
+		return
+	}
+	// The tabs follow the pointer: it moves right, they show earlier.
+	s.scroll.ScrollTo(s.scroll.X-s.gesture.DX, s.scroll.Y, tabPan)
+}
+
+// afterTabs pans the strip with the press dragging its tabs, and gives back the
+// choice that press ends with: a press that moves the strip pans it, and is no
+// click. Both only happen when the strip overflows, which is the only time it
+// scrolls at all.
+func (s *tabStrip) afterTabs(selected *int, before int, changed bool) bool {
+	defer func() { s.gesture.Released = false }()
+	s.pan()
+	if s.scroll.MaxX <= 0 {
+		return changed
+	}
+	// A pan shorter than a tab leaves the pointer on the tab it pressed, which
+	// then reports a click the strip drops: a press that moved pans.
+	if g := &s.gesture; g.Released && g.Panning && changed {
+		*selected = before
+		return false
+	}
 	return changed
+}
+
+func (a *desktop) scrollTabs(c *ui.Context, id string, selected *int, labels ...string) bool {
+	return a.scrollTabsStyle(c, id, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle}, labels...)
+}
+
+func (a *desktop) scrollSubTabs(c *ui.Context, id string, selected *int, labels ...string) bool {
+	return a.scrollTabsStyle(c, id, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle, Secondary: true}, labels...)
+}
+
+func (a *desktop) scrollTabsInk(c *ui.Context, id string, ink ui.Color, selected *int, labels ...string) bool {
+	return a.scrollTabsStyleInk(c, id, ink, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle}, labels...)
+}
+
+func (a *desktop) scrollSubTabsInk(c *ui.Context, id string, ink ui.Color, selected *int, labels ...string) bool {
+	return a.scrollTabsStyleInk(c, id, ink, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle, Secondary: true}, labels...)
+}
+
+func (a *desktop) scrollTabsStyle(c *ui.Context, id string, selected *int, o uikit.TabOptions, labels ...string) bool {
+	s, before, changed := a.tabStripOf(id), *selected, false
+	o.Gesture = &s.gesture
+	ui.Box(c).FillWidth().Clip().Children(func() {
+		tabScroller(c, s).FillWidth().Children(func() {
+			changed = uikit.TabsWithOptions(c.Key("tabs"), selected, o, labels...).Changed()
+		})
+	})
+	return s.afterTabs(selected, before, changed)
+}
+
+func (a *desktop) scrollTabsStyleInk(c *ui.Context, id string, ink ui.Color, selected *int, o uikit.TabOptions, labels ...string) bool {
+	s, before, changed := a.tabStripOf(id), *selected, false
+	o.Gesture = &s.gesture
+	ui.Box(c).FillWidth().Clip().Children(func() {
+		tabScroller(c, s).FillWidth().Children(func() {
+			changed = uikit.TabsSecondary(c.Key("tabs"), ink, selected, o, labels...).Changed()
+		})
+	})
+	return s.afterTabs(selected, before, changed)
 }
 
 func segmented(c *ui.Context, id string, selected *int, labels ...string) ui.Element {
 	return uikit.Segmented(c.Key(id), selected, labels...).Label(labels[0]).Cursor(ui.CursorPointer)
+}
+
+// segmentedInk is segmented with the palette's secondary-text tone.
+func segmentedInk(c *ui.Context, id string, selected *int, ink ui.Color, labels ...string) ui.Element {
+	return uikit.SegmentedInk(c.Key(id), selected, []ui.Color{ink}, labels...).Label(labels[0]).Cursor(ui.CursorPointer)
 }
 
 // ---- Pills and status ----------------------------------------------------
@@ -370,7 +483,7 @@ func statusTone(status string) string {
 	return "idle"
 }
 
-func toneColor(c *ui.Context, status string) ui.Color {
+func toneColor(c *ui.Context, status string, ink ...ui.Color) ui.Color {
 	switch statusTone(status) {
 	case "ok":
 		return c.Theme().Success
@@ -379,7 +492,7 @@ func toneColor(c *ui.Context, status string) ui.Color {
 	case "error":
 		return c.Theme().Danger
 	}
-	return c.Theme().TextMuted
+	return uikit.SecondaryInk(c, ink)
 }
 
 func statusDot(c *ui.Context, status string) ui.Element {
@@ -491,9 +604,9 @@ func twoColumn(c *ui.Context, left, right func()) {
 	})
 }
 
-func kv(c *ui.Context, key, value string) {
+func kv(c *ui.Context, key, value string, ink ...ui.Color) {
 	ui.Row(c).Gap(gapField).Children(func() {
-		ui.Box(c).Width(96).Children(func() { ui.Text(c, key).FontSize(fsSmall).TextColor(c.Theme().TextMuted) })
+		ui.Box(c).Width(96).Children(func() { ui.Text(c, key).FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink)) })
 		ui.Text(c, value).FontSize(fsSmall).Selectable()
 	})
 }
@@ -508,12 +621,12 @@ func progressBar(c *ui.Context, id, name string, value float64) {
 	ui.Progress(c.Key(id), v).Label(name)
 }
 
-func statCard(c *ui.Context, id, title, big, detail string) {
+func statCard(c *ui.Context, id, title, big, detail string, ink ...ui.Color) {
 	card(c, "stat-"+id, func() {
-		ui.Text(c, title).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
+		ui.Text(c, title).FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink))
 		ui.Text(c, big).FontSize(22).Bold()
 		if detail != "" {
-			ui.Text(c, detail).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+			ui.Text(c, detail).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink))
 		}
 	})
 }
@@ -521,8 +634,8 @@ func statCard(c *ui.Context, id, title, big, detail string) {
 // codeBlock renders read-only monospaced content with an optional line cap.
 // The 150px collapsed cap mirrors main's .tool-body so collapsed previews
 // stop at the same height in both clients.
-func codeBlock(c *ui.Context, id, content string, maxHeight float32) {
-	toolCodeWindow(c, id, content, true)
+func codeBlock(c *ui.Context, id, content string, maxHeight float32, ink ...ui.Color) {
+	toolCodeWindow(c, id, content, true, "", ink...)
 }
 
 // inlineError is the recurring red detail line under failed operations.
@@ -590,18 +703,35 @@ func popoverPanel(c *ui.Context, anchor ui.Element, open *bool, width float32, b
 	})
 }
 
+// menuPopoverButton opens the app's own menu panel from a toolbar button: the
+// same chrome, rows and dismissal as every other app menu, instead of the
+// operating system's menu, which painted a foreign box with square rows beside
+// our controls. The open flag stays on the button itself (ui.Local), so a row
+// needs only a stable key and no new app state. Never pair it with OnClick: that
+// consumes the click before this can open the panel.
+func menuPopoverButton(c *ui.Context, button ui.Element, width float32, build func(dismiss func())) ui.Element {
+	open := ui.Local(button, "menu", func() bool { return false })
+	if button.Clicked() {
+		*open = !*open
+	}
+	popoverPanel(c, button, open, width, func() {
+		build(func() { *open = false })
+	})
+	return button
+}
+
 // popoverChrome styles a popover panel; cascading flyouts share it with popoverPanel.
 func popoverChrome(c *ui.Context, panel ui.Element, width float32) {
 	panel.Width(width).MaxWidthPercent(90).MaxHeight(420).Padding(5).Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(radiusCard)
 }
 
-func popoverItem(c *ui.Context, key, text, detail string, selected bool, action func()) {
-	popoverItemStyle(c, key, text, detail, selected, nil, action)
+func popoverItem(c *ui.Context, key, text, detail string, selected bool, action func(), ink ...ui.Color) {
+	popoverItemStyle(c, key, text, detail, selected, nil, action, ink...)
 }
 
 // popoverModelRecent keeps the provider suffix on the model's line, so recent
 // entries stay compact even when the menu grows taller.
-func popoverModelRecent(c *ui.Context, key, name, provider string, selected bool, action func()) {
+func popoverModelRecent(c *ui.Context, key, name, provider string, selected bool, action func(), ink ...ui.Color) {
 	t := c.Theme()
 	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(6, 10).Justify(ui.Start).Radius(radiusSmall).Label(name + " " + provider).Cursor(ui.CursorPointer).OnClick(action)
 	if selected {
@@ -615,13 +745,13 @@ func popoverModelRecent(c *ui.Context, key, name, provider string, selected bool
 			if selected {
 				label.TextColor(t.Accent).FontWeight(600)
 			}
-			ui.Text(c, provider).FontSize(fsTiny).TextColor(t.TextMuted).SingleLine().Shrink(0)
+			ui.Text(c, provider).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).SingleLine().Shrink(0)
 		})
 	})
 }
 
-func popoverItemColor(c *ui.Context, key, text, detail string, selected bool, color ui.Color, action func()) {
-	popoverItemStyle(c, key, text, detail, selected, &color, action)
+func popoverItemColor(c *ui.Context, key, text, detail string, selected bool, color ui.Color, action func(), ink ...ui.Color) {
+	popoverItemStyle(c, key, text, detail, selected, &color, action, ink...)
 }
 
 // popoverItemDanger is the menu entry for a destructive action: same row as
@@ -630,7 +760,7 @@ func popoverItemDanger(c *ui.Context, key, text string, action func()) {
 	popoverItemColor(c, key, text, "", false, c.Theme().Danger, action)
 }
 
-func popoverItemStyle(c *ui.Context, key, text, detail string, selected bool, color *ui.Color, action func()) {
+func popoverItemStyle(c *ui.Context, key, text, detail string, selected bool, color *ui.Color, action func(), ink ...ui.Color) {
 	t := c.Theme()
 	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(6, 10).Justify(ui.Start).Radius(radiusSmall).Label(text).Cursor(ui.CursorPointer).OnClick(action)
 	switch {
@@ -650,7 +780,7 @@ func popoverItemStyle(c *ui.Context, key, text, detail string, selected bool, co
 				label.TextColor(t.Accent).FontWeight(600)
 			}
 			if detail != "" {
-				ui.Text(c, detail).FontSize(fsTiny).TextColor(t.TextMuted).SingleLine()
+				ui.Text(c, detail).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).SingleLine()
 			}
 		})
 	})
@@ -658,7 +788,7 @@ func popoverItemStyle(c *ui.Context, key, text, detail string, selected bool, co
 
 // resizeDivider keeps the drag target independent of either pane's contents.
 func (a *desktop) resizeDivider(c *ui.Context, key string, width *float32, direction, minimum, maximum float32, dragging *bool) {
-	edge := ui.Box(c.Key(key)).Width(5).FillHeight().Shrink(0).Cursor(ui.CursorResizeEW)
+	edge := ui.Box(c.Key(key)).Width(railDividerWidth).FillHeight().Shrink(0).Cursor(ui.CursorResizeEW)
 	if edge.Hovered() {
 		edge.Background(c.Theme().Accent.Alpha(0.35))
 	}
@@ -673,20 +803,20 @@ func (a *desktop) resizeDivider(c *ui.Context, key string, width *float32, direc
 	}
 }
 
-func windowAction(c *ui.Context, id, tip, icon string, action func()) ui.Element {
-	return windowButton(c, id, tip, icon, strings.HasPrefix(tip, "关闭"), action)
+func windowAction(c *ui.Context, id, tip, icon string, action func(), ink ...ui.Color) ui.Element {
+	return windowButton(c, id, tip, icon, strings.HasPrefix(tip, "关闭"), action, ink...)
 }
 
-func footerBadge(c *ui.Context, id, name, value string, color ui.Color, tip string, action func()) ui.Element {
+func footerBadge(c *ui.Context, id, name, value string, color ui.Color, tip string, action func(), ink ...ui.Color) ui.Element {
 	b := uikit.Tooltip(c, ui.ButtonBase(c.Key(id)).Height(22).Padding(1, 6).Radius(11).Label(tip), tip).Cursor(ui.CursorPointer).OnClick(action)
-	paintSurface(b, surfaceFill(c), surfaceBorder(c))
+	b.Background(surfaceFill(c))
 	if b.Hovered() {
 		b.Background(fadeColor(b, "surface-fill", c.Theme().SurfaceHover))
 	}
 	b.Children(func() {
 		ui.Row(c).Gap(4).Children(func() {
 			ui.Box(c).Padding(1, 4).Radius(6).Background(c.Theme().Surface.Mix(color, 0.18)).Children(func() { ui.Text(c, name).FontSize(fsTiny).Bold().TextColor(color) })
-			ui.Text(c, value).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+			ui.Text(c, value).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink))
 		})
 	})
 	return b
@@ -715,12 +845,12 @@ func (a *desktop) popupFlag(key string) *bool {
 func (a *desktop) linkMenu(c *ui.Context, key string, links [][2]string) {
 	open := a.popupFlag(key)
 	btn := flat(c.Key(key+"-button"), "市场").OnClick(func() { *open = !*open })
-	caretButton(c, btn, "市场", "chevrondown", fsSmall, nil)
+	caretButton(c, btn, "chevrondown", fsSmall, nil)
 	services := c.Services()
 	popoverPanel(c, btn, open, 240, func() {
 		for i, entry := range links {
 			entry := entry
-			popoverItem(c, fmt.Sprintf("%s-%d", key, i), entry[0], "", false, func() { *open = false; services.OpenURL(entry[1]) })
+			popoverItem(c, fmt.Sprintf("%s-%d", key, i), entry[0], "", false, func() { *open = false; services.OpenURL(entry[1]) }, a.secondaryInk())
 		}
 	})
 }
@@ -760,4 +890,9 @@ func cardPrimary(c *ui.Context, s string) ui.Element {
 }
 func cardDanger(c *ui.Context, s string) ui.Element {
 	return uikit.Action(c.Key("card-action-"+s), s, uikit.ActionOptions{Style: uikit.Quaternary, Tone: uikit.Error, Small: true})
+}
+
+// disclosureIcon uses a stable slot before folding labels, without changing on hover.
+func disclosureIcon(c *ui.Context, name string, ink ui.Color) {
+	iconGlyph(c, name, 15).Shrink(0).TextColor(ink).Unselectable().PassThrough().Label("折叠图标 " + name)
 }

@@ -226,6 +226,7 @@ type App struct {
 	historiesDir         string
 	sessionsDir          string
 	histories            map[string][]openai.ChatCompletionMessage
+	liveCommandContext   map[string]map[string]string // model projection only, while tools/run are in flight
 	sessionMu            sync.Mutex
 	sessionIndexRevision uint64 // guarded by sessionMu; rejects stale background repairs
 	initialized          bool
@@ -1900,6 +1901,7 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 		return errSessionCompacting
 	}
 	delete(a.histories, sessionID)
+	delete(a.liveCommandContext, sessionID)
 	delete(a.historyCacheStates, sessionID)
 	delete(a.frozenPrefixStats, sessionID)
 	delete(a.plans, sessionID)
@@ -2143,6 +2145,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				a.logAppError("session index sync failed", "sessionId", sessionID, "error", err.Error())
 			}
 		}
+		a.mu.Lock()
+		delete(a.liveCommandContext, sessionID)
+		a.mu.Unlock()
 		a.finishRun(runID)
 	}()
 	// Panic 兜底：runChat 在独立 goroutine 里运行，逃逸的 panic 会直接击穿
@@ -2183,8 +2188,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	// history rewrite (see sessionReadCache) drops it.
 	readCache := a.sessionReadCacheFor(sessionID)
 
+	a.syncCommandContext(sessionID, messages)
 	syncBreakdown := func(msgs []openai.ChatCompletionMessage, resetAcc bool) ContextBreakdown {
 		if resetAcc {
+			a.syncCommandContext(sessionID, msgs)
 			breakdownAcc.reset(msgs)
 		}
 		b := breakdownAcc.update(msgs)
@@ -2535,6 +2542,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)
 			o := toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration}
+			if c.Function.Name == "command" || c.Function.Name == "Bash" {
+				a.rememberCommandContext(sessionID, c.ID, o.modelJSON)
+			}
 			outcomes[idx] = o
 			emitOutcome(o)
 		}

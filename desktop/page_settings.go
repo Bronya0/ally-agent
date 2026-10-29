@@ -35,7 +35,7 @@ func (a *desktop) settingsPageBody(c *ui.Context) {
 		ui.Column(c).Width(140).Shrink(0).Gap(3).Justify(ui.Start).Children(func() {
 			for _, section := range settingsSections {
 				section := section
-				selectionRow(c, "settings-"+section, section, a.settings.Tab == section).
+				selectionRow(c, "settings-"+section, section, a.settings.Tab == section, a.secondaryInk()).
 					OnClick(func() { a.selectSettingsSection(section) })
 			}
 		})
@@ -43,7 +43,7 @@ func (a *desktop) settingsPageBody(c *ui.Context) {
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 				ui.Spacer(c)
 				if a.settings.UpdateNote != "" {
-					fieldNote(c, a.settings.UpdateNote)
+					fieldNote(c, a.settings.UpdateNote, a.secondaryInk())
 				}
 
 			})
@@ -122,11 +122,13 @@ func (a *desktop) saveSettings(notice ...string) {
 }
 
 // commitSettingsOnLeave is called when the rail switches away from settings.
+// It stays silent: the form saves on every change already, so a "saved" notice
+// on leaving would only tell the user something they just watched happen.
 func (a *desktop) commitSettingsOnLeave() {
 	if a.core == nil || a.win == nil {
 		return
 	}
-	a.saveSettings("设置已保存")
+	a.saveSettings()
 }
 
 // ---- General -------------------------------------------------------------
@@ -134,14 +136,15 @@ func (a *desktop) commitSettingsOnLeave() {
 func (a *desktop) settingsGeneral(c *ui.Context) {
 	selected := a.settingsModule(c, "settingsGeneral", "外观", "提示词", "路径", "对话行为", "应用", "背景", "字体")
 
-	fieldNote(c, "每次对话都会附带给模型的偏好")
+	fieldNote(c, "每次对话都会附带给模型的偏好", a.secondaryInk())
 	if selected == 0 {
 		card(c, "settings-appearance", func() {
 			sectionTitle(c, "外观")
-			if segmented(c, "appearance-mode", &a.settings.AppearanceMode, "深色", "浅色").Changed() {
-				a.prefs.Appearance = []string{"dark", "light"}[a.settings.AppearanceMode]
-				a.syncNativeAppearance()
-				a.savePrefs()
+			if segmentedInk(c, "appearance-mode", &a.settings.AppearanceMode, a.secondaryInk(), "深色", "浅色", "自动").Changed() {
+				a.selectAppearance([]string{"dark", "light", "auto"}[a.settings.AppearanceMode])
+			}
+			if a.prefs.Appearance == "auto" {
+				fieldNote(c, "按电脑本地时间自动切换：07:00–17:59 浅色，18:00–06:59 深色。", a.secondaryInk())
 			}
 			divider(c)
 			fieldLabel(c, "强调色")
@@ -170,7 +173,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					})
 				}
 			})
-			fieldNote(c, "强调色只改变高亮与选中态，背景保持中性。")
+			fieldNote(c, "强调色只改变高亮与选中态，背景保持中性。", a.secondaryInk())
 			divider(c)
 			sectionTitle(c, "欢迎页形象")
 			uikit.OptionGroup(c).Children(func() {
@@ -186,7 +189,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					cardFlat(c, "使用自定义形象").OnClick(func() { a.selectAvatarStyle("custom") })
 				}
 			})
-			fieldNote(c, "点击欢迎页头像可以唤醒樱花特效。")
+			fieldNote(c, "点击欢迎页头像可以唤醒樱花特效。", a.secondaryInk())
 		})
 	}
 	if selected == 1 {
@@ -194,7 +197,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			sectionTitle(c, "自定义提示词")
 			a.configDraft.CustomPrompt = strings.TrimSpace(a.configDraft.CustomPrompt)
 			textArea(c, "custom-prompt", "自定义提示词", "例如：请用中文回答、保持回复简洁", &a.configDraft.CustomPrompt, 240)
-			fieldNote(c, "会随每次对话一起发送给模型。")
+			fieldNote(c, "会随每次对话一起发送给模型。", a.secondaryInk())
 			switchRow(c, "allow-private", "允许访问内网地址", "允许 http_request、web_fetch 与 MCP 访问内网地址。", &a.settings.AllowPrivate)
 		})
 	}
@@ -211,10 +214,10 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					cardDanger(c, "清除").OnClick(func() { a.configDraft.KBRoot = "" })
 				}
 			})
-			fieldNote(c, "其中 sources/ 子目录对模型只读。")
+			fieldNote(c, "其中 sources/ 子目录对模型只读。", a.secondaryInk())
 			if runtime.GOOS == "windows" {
 				fieldRow(c, "git-bash", "Git Bash 路径", &a.configDraft.GitBashPath, false)
-				fieldNote(c, "留空自动检测；也可手动指定，例如 C:\\Program Files\\Git\\bin\\bash.exe。")
+				fieldNote(c, "留空自动检测；也可手动指定，例如 C:\\Program Files\\Git\\bin\\bash.exe。", a.secondaryInk())
 			}
 			fieldLabel(c, "自定义 User-Agent")
 			uaPresets := []string{"AllyAgent（默认）", "Codex CLI", "Claude Code", "OpenCode", "Pi"}
@@ -222,13 +225,13 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			if currentUA == "" {
 				currentUA = uaPresets[0]
 			}
-			uikit.ComboboxField(c.Key("user-agent"), &currentUA, uaPresets, "User-Agent", "").FillWidth()
+			uikit.ComboboxField(c.Key("user-agent"), &currentUA, uaPresets, "User-Agent", "", a.secondaryInk()).FillWidth()
 			if currentUA != uaPresets[0] {
 				a.configDraft.UserAgent = strings.TrimSpace(currentUA)
 			} else {
 				a.configDraft.UserAgent = ""
 			}
-			fieldNote(c, "仅用于模型 API 请求；http_request / web_fetch 不受影响。")
+			fieldNote(c, "仅用于模型 API 请求；http_request / web_fetch 不受影响。", a.secondaryInk())
 		})
 	}
 	if selected == 3 {
@@ -238,12 +241,12 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "LLM 请求重试次数")
 					numberField(c, "llm-retries", "LLM 请求重试次数", &a.settings.Retries, 0, 10, 1)
-					fieldNote(c, "0 表示使用默认值 6。")
+					fieldNote(c, "0 表示使用默认值 6。", a.secondaryInk())
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "上下文自动压缩阈值")
 					ui.Slider(c.Key("compact-threshold"), &a.settings.Threshold, 0.2, 0.95).Label("压缩阈值")
-					fieldNote(c, fmt.Sprintf("当前 %.0f%%：上下文占模型窗口的比例超过此值时自动压缩，范围 20%%–95%%，默认 60%%。", a.settings.Threshold*100))
+					fieldNote(c, fmt.Sprintf("当前 %.0f%%：上下文占模型窗口的比例超过此值时自动压缩，范围 20%%–95%%，默认 60%%。", a.settings.Threshold*100), a.secondaryInk())
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "上下文自动压缩方式")
@@ -254,21 +257,21 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					if method == "" {
 						method = "summary"
 					}
-					uikit.SelectField(c.Key("compact-method"), &method, autoCompactOptions).Label("压缩方式").FillWidth()
+					uikit.SelectField(c.Key("compact-method"), &method, autoCompactOptions, a.secondaryInk()).Label("压缩方式").FillWidth()
 					if method != stored && method != "" {
 						a.configDraft.AutoCompactMethod = method
 					}
-					fieldNote(c, "全文总结：调用模型生成摘要。本地裁剪：不调用模型，先清空旧工具调用的参数，此前的回复与工具结果只留首尾摘录，回复正文合计最多约 8k tokens；减不下来时自动回退到全文总结。修改对新任务生效。")
+					fieldNote(c, "全文总结：调用模型生成摘要。本地裁剪：不调用模型，先清空旧工具调用的参数，此前的回复与工具结果只留首尾摘录，回复正文合计最多约 8k tokens；减不下来时自动回退到全文总结。修改对新任务生效。", a.secondaryInk())
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "压缩超时时间")
 					numberField(c, "compact-timeout", "压缩超时时间", &a.settings.CompactTimeout, 30, 3600, 30)
-					fieldNote(c, "等待摘要生成的最长时间，30–3600 秒，默认 180。")
+					fieldNote(c, "等待摘要生成的最长时间，30–3600 秒，默认 180。", a.secondaryInk())
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "工具执行并发度")
 					numberField(c, "tool-concurrency", "工具执行并发度", &a.settings.Concurrency, 1, 16, 1)
-					fieldNote(c, "同时执行的工具数，默认 4。")
+					fieldNote(c, "同时执行的工具数，默认 4。", a.secondaryInk())
 				})
 			})
 		})
@@ -291,7 +294,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				}
 				ui.Spacer(c)
 				if a.settings.UpdateNote != "" {
-					fieldNote(c, a.settings.UpdateNote)
+					fieldNote(c, a.settings.UpdateNote, a.secondaryInk())
 				}
 			})
 			if sw := switchRow(c, "autostart", "开机自启", "登录系统时自动启动 Ally。", &a.settings.Autostart); sw.Changed() {
@@ -316,11 +319,11 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				if a.configDraft.BackgroundImage != "" {
 					state = "已设置：" + a.configDraft.BackgroundImage
 				}
-				fieldNote(c, state)
+				fieldNote(c, state, a.secondaryInk())
 			})
-			fieldNote(c, "淡色铺在对话区背景，建议不超过 12 MB。")
+			fieldNote(c, "淡色铺在对话区背景，建议不超过 12 MB。", a.secondaryInk())
 			ui.Slider(c.Key("bg-opacity"), &a.settings.BgOpacity, 0, 1).Label("背景图透明度")
-			fieldNote(c, fmt.Sprintf("当前 %.0f%%，越大越明显。", a.settings.BgOpacity*100))
+			fieldNote(c, fmt.Sprintf("当前 %.0f%%，越大越明显。", a.settings.BgOpacity*100), a.secondaryInk())
 		})
 	}
 	if selected == 6 {
@@ -340,11 +343,11 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				} {
 					ui.Column(c).Gap(gapTight).Children(func() {
 						fieldLabel(c, item.label)
-						uikit.NumberInput(c, "font-"+item.label, item.label, item.value, 10, 24, item.step).FillWidth()
+						uikit.NumberInput(c, "font-"+item.label, item.label, item.value, 10, 24, item.step, a.secondaryInk()).FillWidth()
 					})
 				}
 			})
-			fieldNote(c, "范围 10–24px，保存后即时生效。")
+			fieldNote(c, "范围 10–24px，保存后即时生效。", a.secondaryInk())
 		})
 	}
 }
@@ -357,7 +360,7 @@ func (a *desktop) settingsAdvanced(c *ui.Context) {
 	if selected == 0 {
 		card(c, "settings-validation", func() {
 			sectionTitle(c, "自动代码校验")
-			fieldNote(c, "写入文件后做轻量语法检查，默认全部关闭。")
+			fieldNote(c, "写入文件后做轻量语法检查，默认全部关闭。", a.secondaryInk())
 			languages := []struct{ key, label, note string }{
 				{"Python", "Python", "对改动的 .py 执行语法检查（py_compile）。"},
 				{"Go", "Go", "对受影响包执行 go vet，不下载依赖。"},
@@ -381,7 +384,7 @@ func (a *desktop) settingsAdvanced(c *ui.Context) {
 	if selected == 1 {
 		card(c, "settings-visibility", func() {
 			sectionTitle(c, "页面显隐")
-			fieldNote(c, "隐藏后左侧菜单不再显示该入口；Agent 与设置始终保留。")
+			fieldNote(c, "隐藏后左侧菜单不再显示该入口；Agent 与设置始终保留。", a.secondaryInk())
 			for _, mode := range baseModes {
 				if mode.id == "chat" || mode.id == "plugins" {
 					continue
@@ -415,8 +418,8 @@ func (a *desktop) setModeVisible(id string, visible bool) {
 func (a *desktop) settingsNetwork(c *ui.Context) {
 	card(c, "settings-proxy", func() {
 		sectionTitle(c, "网络代理")
-		fieldNote(c, "应用于模型、HTTP 工具、MCP、命令和后台服务。")
-		if segmented(c, "proxy-mode", &a.settings.ProxyModeIndex, "关闭代理", "跟随系统代理", "手动代理").Changed() {
+		fieldNote(c, "应用于模型、HTTP 工具、MCP、命令和后台服务。", a.secondaryInk())
+		if segmentedInk(c, "proxy-mode", &a.settings.ProxyModeIndex, a.secondaryInk(), "关闭代理", "跟随系统代理", "手动代理").Changed() {
 			a.configDraft.ProxyMode = []string{"off", "system", "manual"}[a.settings.ProxyModeIndex]
 			if a.configDraft.ProxyMode == "system" {
 				a.detectProxy()
@@ -427,13 +430,13 @@ func (a *desktop) settingsNetwork(c *ui.Context) {
 			if a.configDraft.ProxyURL != "" && !validProxyURL(a.configDraft.ProxyURL) {
 				inlineError(c, "proxy-error", "请输入有效的 HTTP、HTTPS 或 SOCKS5 代理地址；填写完整后自动生效。")
 			}
-			fieldNote(c, "例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891。")
+			fieldNote(c, "例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891。", a.secondaryInk())
 		}
 		if a.configDraft.ProxyMode != "off" {
 			fieldRow(c, "proxy-no-proxy", "不使用代理的地址", &a.configDraft.ProxyNoProxy, false)
-			fieldNote(c, "例如 localhost,127.0.0.1,::1。")
+			fieldNote(c, "例如 localhost,127.0.0.1,::1。", a.secondaryInk())
 		}
-		notice(c, "warn", "代理可见连接元数据；代理不可用时不会回退直连。")
+		notice(c, "warn", "代理可见连接元数据；代理不可用时不会回退直连。", a.secondaryInk())
 		ui.Row(c).Gap(gapField).Children(func() {
 			cardFlat(c, "检测系统代理").OnClick(func() { a.detectProxy() })
 			cardFlat(c, "测试连接").Disabled(a.configDraft.ProxyMode == "off").OnClick(func() { a.testProxy() })
@@ -442,7 +445,7 @@ func (a *desktop) settingsNetwork(c *ui.Context) {
 			}
 			ui.Spacer(c)
 			if a.settings.ProxyNote != "" {
-				fieldNote(c, a.settings.ProxyNote)
+				fieldNote(c, a.settings.ProxyNote, a.secondaryInk())
 			}
 		})
 	})
@@ -450,15 +453,15 @@ func (a *desktop) settingsNetwork(c *ui.Context) {
 		card(c, "settings-proxy-result", func() {
 			sectionTitle(c, "代理检测结果")
 			if a.settings.Proxy.Error != "" {
-				notice(c, "error", a.settings.Proxy.Error)
+				notice(c, "error", a.settings.Proxy.Error, a.secondaryInk())
 			}
-			kv(c, "来源", a.settings.Proxy.Source)
-			kv(c, "HTTP", a.settings.Proxy.HTTPProxy)
-			kv(c, "HTTPS", a.settings.Proxy.HTTPSProxy)
-			kv(c, "NO_PROXY", a.settings.Proxy.NoProxy)
+			kv(c, "来源", a.settings.Proxy.Source, a.secondaryInk())
+			kv(c, "HTTP", a.settings.Proxy.HTTPProxy, a.secondaryInk())
+			kv(c, "HTTPS", a.settings.Proxy.HTTPSProxy, a.secondaryInk())
+			kv(c, "NO_PROXY", a.settings.Proxy.NoProxy, a.secondaryInk())
 			if a.settings.Proxy.PACURL != "" {
-				kv(c, "PAC", a.settings.Proxy.PACURL)
-				notice(c, "warn", "检测到 PAC 自动配置，但当前版本暂不执行 PAC 脚本。")
+				kv(c, "PAC", a.settings.Proxy.PACURL, a.secondaryInk())
+				notice(c, "warn", "检测到 PAC 自动配置，但当前版本暂不执行 PAC 脚本。", a.secondaryInk())
 			}
 		})
 	}
@@ -514,7 +517,7 @@ func (a *desktop) testProxy() {
 func (a *desktop) settingsFence(c *ui.Context) {
 	card(c, "settings-fence", func() {
 		sectionTitle(c, "安全围栏机制")
-		fieldNote(c, "命令与文件改动统一受以下规则约束，模型无法绕过。")
+		fieldNote(c, "命令与文件改动统一受以下规则约束，模型无法绕过。", a.secondaryInk())
 		rules := []string{
 			"删除命令一律拦下，改用 delete 工具。",
 			"写入 .git / .svn / .hg 一律拦下。",
@@ -548,12 +551,12 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 	{
 		card(c, "settings-api", func() {
 			sectionTitle(c, "API 服务")
-			fieldNote(c, "仅监听 127.0.0.1，供本机工具调用；请求需带 Bearer Token。")
+			fieldNote(c, "仅监听 127.0.0.1，供本机工具调用；请求需带 Bearer Token。", a.secondaryInk())
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
 				enabled := a.settings.API.Enabled
 				uikit.SwitchNative(c.Key("api-enabled"), &enabled).Label("启用 API 服务").OnClick(func() { a.setAPIServiceEnabled(enabled) })
 				fieldLabel(c, "端口")
-				uikit.NumberInput(c, "api-port", "API 端口", &a.settings.APIPort, 1024, 65535, 1).Width(110)
+				uikit.NumberInput(c, "api-port", "API 端口", &a.settings.APIPort, 1024, 65535, 1, a.secondaryInk()).Width(110)
 				fieldLabel(c, "Token")
 				uikit.Input(c.Key("api-token"), &a.settings.API.Token).Label("API Token").Width(240)
 				cardFlat(c, "复制").OnClick(func() {
@@ -572,15 +575,15 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 				})
 				cardFlat(c, "刷新").OnClick(func() { a.loadAPIService(true) })
 			})
-			fieldNote(c, "端口与 Token 改动后需点保存；Token 为空时后端会自动生成。")
+			fieldNote(c, "端口与 Token 改动后需点保存；Token 为空时后端会自动生成。", a.secondaryInk())
 			if a.settings.APINote != "" {
-				notice(c, "info", a.settings.APINote)
+				notice(c, "info", a.settings.APINote, a.secondaryInk())
 			}
 			base := a.settings.API.BaseURL
 			if base == "" {
 				base = fmt.Sprintf("http://127.0.0.1:%d", int(a.settings.APIPort))
 			}
-			fieldNote(c, fmt.Sprintf("地址 %s，请求头加 Authorization: Bearer <Token>。", base))
+			fieldNote(c, fmt.Sprintf("地址 %s，请求头加 Authorization: Bearer <Token>。", base), a.secondaryInk())
 		})
 	}
 	{
@@ -598,7 +601,7 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 					chip(c, ep[0], methodColor, c.Theme().Surface.Mix(methodColor, 0.12))
 					ui.Text(c, ep[1]).Font(monoFamily).FontSize(fsSmall)
 					ui.Spacer(c)
-					ui.Text(c, ep[2]).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+					ui.Text(c, ep[2]).FontSize(fsTiny).TextColor(a.secondaryInk())
 				})
 			}
 		})
@@ -712,9 +715,9 @@ func randomToken() string {
 func (a *desktop) settingsReleaseNotes(c *ui.Context) {
 	card(c, "settings-notes", func() {
 		sectionTitle(c, "版本亮点")
-		fieldNote(c, "版本 "+a.upd.ReleaseVer)
+		fieldNote(c, "版本 "+a.upd.ReleaseVer, a.secondaryInk())
 		if strings.TrimSpace(a.upd.ReleaseBody) == "" {
-			fieldNote(c, "此构建未内置更新日志。")
+			fieldNote(c, "此构建未内置更新日志。", a.secondaryInk())
 			return
 		}
 		ui.Text(c, a.upd.ReleaseBody).Selectable().FontSize(fsBody).LineHeight(1.7)
@@ -727,10 +730,10 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 	{
 		card(c, "settings-about", func() {
 			ui.Text(c, "关于 Ally").FontSize(18).Bold()
-			fieldNote(c, "自由、开源的桌面 AI 编程助手。")
+			fieldNote(c, "自由、开源的桌面 AI 编程助手。", a.secondaryInk())
 			divider(c)
 			ui.Text(c, "GPLv3 only").FontSize(fsBody).Bold()
-			fieldNote(c, "你可以自由使用、研究、修改与分发本软件；衍生作品必须以同一许可开放源代码；本软件不提供任何担保。")
+			fieldNote(c, "你可以自由使用、研究、修改与分发本软件；衍生作品必须以同一许可开放源代码；本软件不提供任何担保。", a.secondaryInk())
 			ui.Row(c).Gap(gapField).Wrap().Children(func() {
 				cardFlat(c, "查看源代码与许可证").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent") })
 				cardFlat(c, "提意见 / 反馈 Issue").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent/issues") })
@@ -740,7 +743,7 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 	{
 		card(c, "settings-credits", func() {
 			sectionTitle(c, "欢迎页形象素材署名")
-			fieldNote(c, "欢迎页立绘沿用原项目素材，许可为 CC BY-NC-SA 4.0：署名、非商业、相同方式共享。")
+			fieldNote(c, "欢迎页立绘沿用原项目素材，许可为 CC BY-NC-SA 4.0：署名、非商业、相同方式共享。", a.secondaryInk())
 			cardFlat(c, "查看素材来源").OnClick(func() {
 				services.OpenURL("https://github.com/Bronya0/ally-agent/blob/main/resources/avatar/NOTICE.txt")
 			})
@@ -758,7 +761,7 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 					cardFlat(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
 				}
 				ui.Spacer(c)
-				fieldNote(c, a.settings.UpdateNote)
+				fieldNote(c, a.settings.UpdateNote, a.secondaryInk())
 			})
 		})
 	}
@@ -767,7 +770,7 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 func (a *desktop) settingsRaw(c *ui.Context) {
 	card(c, "settings-raw", func() {
 		sectionTitle(c, "完整配置 JSON")
-		fieldNote(c, "高级用法：直接编辑后端完整配置（包含密钥），保存后立即生效。")
+		fieldNote(c, "高级用法：直接编辑后端完整配置（包含密钥），保存后立即生效。", a.secondaryInk())
 		textArea(c, "raw-config", "配置 JSON", "{}", &a.settings.FullJSON, 420)
 		ui.Row(c).Gap(gapField).Children(func() {
 			cardPrimary(c, "保存 JSON").OnClick(func() {
@@ -824,7 +827,7 @@ func (a *desktop) settingsModule(c *ui.Context, key string, labels ...string) in
 		a.settings.Modules = map[string]int{}
 	}
 	index := a.settings.Modules[key]
-	if scrollTabs(c, &index, labels...) {
+	if a.scrollTabs(c, "settings-"+key, &index, labels...) {
 		a.settings.Modules[key] = index
 	}
 	return index

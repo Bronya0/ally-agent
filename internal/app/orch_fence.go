@@ -17,6 +17,7 @@ package app
 // boundary while attached —— in orch_sandbox*.go.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -84,25 +85,25 @@ func checkCommandSafetyAtCwd(req CommandRequest, roots []string, workingDir stri
 	kernelOwns := kernelOwnsBoundary()
 	if kernelOwns {
 		if root := firstWorkspaceRootDeleteTarget(cmd, workingDir, roots); root != "" {
-			return codedToolError("E_DELETE_BLOCKED", fmt.Errorf("安全围栏已拦截：不允许删除工作区根目录。\n原因：删掉工作区根等于删掉整个项目，而 delete 工具明确拒绝同一个目标，所以这一档必须由围栏自己说。\n检测到的目标：%s\n处理方式：要删工作区里的具体条目请用 delete 工具（它逐条检查目标与递归范围）；确实要清空整个工作区，请手动在终端执行。\n被拦截的命令：%s", root, cmd))
+			return codedToolError("E_DELETE_BLOCKED", fmt.Errorf("安全围栏已拦截：不允许删除工作区根目录。\n原因：删掉工作区根等于删掉整个项目，而 delete 工具明确拒绝同一个目标，所以这一档必须由围栏自己说。\n检测到的目标：%s\n处理方式：要删工作区里的具体条目请用 delete 工具（它逐条检查目标与递归范围）；确实要清空整个工作区，请手动在终端执行。", root))
 		}
 	} else if command.ContainsExplicitDeleteCommand(cmd) && !command.IsAllowedDeleteContext(cmd) {
-		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("安全围栏已拦截：command 不允许直接执行文件删除命令。\n原因：shell 删除命令可能绕过工作区边界、系统目录和 .git 保护。\n处理方式：请改用 delete 工具，由专用工具检查目标路径和递归范围。\n被拦截的命令：%s", cmd))
+		return codedToolError("E_COMMAND_BLOCKED", errors.New("安全围栏已拦截：command 不允许直接执行文件删除命令。\n原因：shell 删除命令可能绕过工作区边界、系统目录和 .git 保护。\n处理方式：请改用 delete 工具，由专用工具检查目标路径和递归范围。"))
 	}
 	if risk := firstVCSMetadataMutationTarget(cmd, workingDir); risk != nil {
-		return codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：命令目标是版本控制元数据内的路径。\n原因：创建、覆盖或删除 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码；目标在工作区内，所以「工作区外写入」那道检查不会拦它。\n检测到的目标：%s\n处理方式：版本控制状态请手动在终端变更。\n被拦截的命令：%s", risk.Path, cmd))
+		return codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：命令目标是版本控制元数据内的路径。\n原因：创建、覆盖或删除 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码；目标在工作区内，所以「工作区外写入」那道检查不会拦它。\n检测到的目标：%s\n处理方式：版本控制状态请手动在终端变更。", risk.Path))
 	}
 	// 密钥/凭据位置一律禁读：这一道不分边界归属，围栏自己管还是内核管都要拦。
 	if path, reason := firstSensitiveReadTarget(cmd, workingDir); path != "" {
-		return codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：命令要读的是密钥/凭据位置。\n原因：%s 属于凭据存储，读出来等于把私钥或令牌交进模型上下文（被注入的指令可以把它带走）。\n检测到的目标：%s\n处理方式：确需这些凭据请你自己手动执行；让 Ally 干活时用专门的工具（例如 ssh_cluster），不要读密钥文件。\n被拦截的命令：%s", reason, path, cmd))
+		return codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：命令要读的是密钥/凭据位置。\n原因：%s 属于凭据存储，读出来等于把私钥或令牌交进模型上下文（被注入的指令可以把它带走）。\n检测到的目标：%s\n处理方式：确需这些凭据请你自己手动执行；让 Ally 干活时用专门的工具（例如 ssh_cluster），不要读密钥文件。", reason, path))
 	}
 	if !kernelOwns {
 		if risk := firstExistingOutsideMutationTarget(cmd, roots, workingDir); risk != nil {
-			return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径（仍须满足其他围栏规则；工作区内符号链接逃逸和版本控制元数据写入不在此例外内）。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录；临时目录没有覆盖豁免。\n处理方式：使用工作区内的 .tmp/ 输出路径（先创建父目录），或换用尚不存在的唯一临时路径；不要通过变量或符号链接绕过本次拒绝。\n执行状态：本次命令尚未执行。\n可写范围：\n%s\n被拦截的命令：%s", risk.Reason, risk.Path, formatAllowedRoots(roots), cmd))
+			return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径（仍须满足其他围栏规则；工作区内符号链接逃逸和版本控制元数据写入不在此例外内）。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录；临时目录没有覆盖豁免。\n处理方式：使用工作区内的 .tmp/ 输出路径（先创建父目录），或换用尚不存在的唯一临时路径；不要通过变量或符号链接绕过本次拒绝。\n执行状态：本次命令尚未执行。\n可写范围：\n%s", risk.Reason, risk.Path, formatAllowedRoots(roots)))
 		}
 	}
 	if risk := command.MatchRiskPattern(cmd); risk != nil {
-		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。\n被拦截的命令: %s", risk.Reason, cmd))
+		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。", risk.Reason))
 	}
 	return nil
 }
@@ -266,7 +267,7 @@ func inspectCommandMutationTarget(target, workingDir string, roots []string, exi
 
 func validateRemoteCommandSafety(cmd string) error {
 	if risk := command.MatchRiskPattern(cmd); risk != nil {
-		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。\n被拦截的命令: %s", risk.Reason, cmd))
+		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。", risk.Reason))
 	}
 	return nil
 }

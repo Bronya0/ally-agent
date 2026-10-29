@@ -9,7 +9,6 @@ import (
 	"time"
 
 	backend "ally-dev/internal/app"
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
 )
@@ -168,7 +167,8 @@ func (a *desktop) jumpToPreviousPrompt(c *ui.Context, t *conversation) {
 func (a *desktop) messageRow(c *ui.Context, t *conversation, i int) {
 	m := t.Messages[i]
 	start, _ := chatMessageWindow(t)
-	if isFoldableReadTool(m) && i > start && isFoldableReadTool(t.Messages[i-1]) &&
+	if i > start && ((isFoldableReadTool(m) && isFoldableReadTool(t.Messages[i-1])) ||
+		(isFoldableCommand(m) && isFoldableCommand(t.Messages[i-1]))) &&
 		(str(t.Messages[i-1], "role") == "tool_call" || str(t.Messages[i-1], "toolCallId") != "") {
 		st := t.uiState()
 		if idx, ok := st.RoundAt[i]; ok {
@@ -206,7 +206,7 @@ func (a *desktop) messageRow(c *ui.Context, t *conversation, i int) {
 			if tone == "" {
 				tone = "warn"
 			}
-			notice(c, tone, str(m, "content"))
+			notice(c, tone, str(m, "content"), a.secondaryInk())
 		case role == "tool_call" || str(m, "toolCallId") != "":
 			// Adjacent read/grep/list cards fold into one group row, mirroring
 			// main's read-grep-group: only the group's first row renders, the
@@ -220,6 +220,10 @@ func (a *desktop) messageRow(c *ui.Context, t *conversation, i int) {
 			}
 			if isFoldableReadTool(m) {
 				a.readGrepGroupCard(c, t, i)
+				break
+			}
+			if isFoldableCommand(m) {
+				a.commandGroupCard(c, t, i)
 				break
 			}
 			a.toolCard(c, t, i, m)
@@ -244,7 +248,7 @@ func (a *desktop) markdownOptions(t *conversation, i int) *markdown.Options {
 		t.MD = map[int]*markdown.Options{}
 	}
 	if t.MD[i] == nil {
-		t.MD[i] = a.readingMarkdownOptions()
+		t.MD[i] = a.readingMarkdownOptions(fmt.Sprintf("%s:markdown:%d", t.ID, i))
 	}
 	if t.MD[i].Theme == nil {
 		t.MD[i].Theme = &markdown.Theme{}
@@ -253,38 +257,45 @@ func (a *desktop) markdownOptions(t *conversation, i int) *markdown.Options {
 	return t.MD[i]
 }
 
-// userMessage mirrors the full-width user tint and hanging caret. Hover-only deletion matches the
-// Vue row; the delete button must not consume layout space.
+// userMessage keeps prompts in a right-aligned bubble with hover actions below.
 func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[string]any) {
 	content := str(m, "content")
 	p := a.currentPalette()
-	row := ui.Row(c).Margin(0, -28).Padding(10).Gap(6).AlignItems(ui.Start).Background(p.hover)
-	row.Children(func() {
-		ui.Text(c, "›").Width(12).Shrink(0).FontSize(15).Bold().TextColor(p.accent).LineHeight(1.7)
-		ui.Column(c).Grow(1).Gap(gapInline).Children(func() {
-			if str(m, "skill") != "" || str(m, "skillArgs") != "" {
-				ui.Row(c).AlignItems(ui.Center).Gap(gapInline).Children(func() {
-					if skill := str(m, "skill"); skill != "" {
-						accentChip(c, "/"+skill)
-					}
-					if args := str(m, "skillArgs"); args != "" && args != content {
-						ui.Text(c, args).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
-					}
-				})
-			}
-			a.collapsiblePrompt(c, t, i, content)
-			a.messageAttachments(c, t, m)
-		})
-		// Hover-only delete, overlaid at the row corner: it must not take part
-		// in the row flex layout (main pins it absolute), and it is available
-		// on every question row, not just the last one.
-		if !t.Busy && row.Hovered() {
-			ui.Box(c).Absolute().Top(0).Bottom(0).Right(8).Width(22).Center().Children(func() {
-				dangerIconAction(c, fmt.Sprintf("del-user-%s-%d", t.ID, i), "删除该提问及之后", "close", 20, func() {
-					a.requestDeleteUserMessage(t, i)
-				})
+	services := c.Services()
+	message := ui.Column(c.Key(fmt.Sprintf("user-bubble-%s-%d", t.ID, i))).Label("用户消息区域").AlignSelf(ui.End).AlignItems(ui.End).MaxWidthPercent(85).MinWidth(0).Gap(4)
+	message.Children(func() {
+		ui.Column(c.Key("bubble")).Label("用户消息").Selectable().MinWidth(0).Padding(10, 16).Radius(16).Background(p.accent.Alpha(0.10)).Children(func() {
+			ui.Column(c).MinWidth(0).Gap(gapInline).Children(func() {
+				if str(m, "skill") != "" || str(m, "skillArgs") != "" {
+					ui.Row(c).AlignItems(ui.Center).Gap(gapInline).Children(func() {
+						if skill := str(m, "skill"); skill != "" {
+							accentChip(c, "/"+skill)
+						}
+						if args := str(m, "skillArgs"); args != "" && args != content {
+							ui.Text(c, args).FontSize(fsSmall).TextColor(a.secondaryInk())
+						}
+					})
+				}
+				a.collapsiblePrompt(c, t, i, content)
+				a.messageAttachments(c, t, m)
 			})
+		})
+		// Keep the action row in the hover area and reserve its space so moving
+		// from the bubble to a button neither hides it nor shifts the transcript.
+		show := message.Hovered() || message.FocusWithin()
+		opacity := float32(0)
+		if show {
+			opacity = 1
 		}
+		actions := ui.Row(c.Key("actions")).Label("用户消息操作").Height(26).Gap(4).Shrink(0)
+		actions.Opacity(actions.Animate("visibility", opacity, uikit.HoverDuration)).Children(func() {
+			mutedIconAction(c, "copy", "复制提问", "copy", 26, func() {
+				services.WriteClipboard(content)
+			}).Disabled(!show).Shrink(0)
+			dangerIconAction(c, "delete", "删除该提问及之后", "trash", 26, func() {
+				a.requestDeleteUserMessage(t, i)
+			}).Disabled(!show || t.Busy).Shrink(0)
+		})
 	})
 }
 
@@ -317,13 +328,17 @@ func (a *desktop) collapsiblePrompt(c *ui.Context, t *conversation, i int, conte
 	}
 	v := ui.Column(c).Key(fmt.Sprintf("prompt-%s-%d", t.ID, i)).Gap(gapInline)
 	v.Children(func() {
-		markdown.View(c, shown, a.markdownOptions(t, i)).FillWidth()
+		// Share selection with the bubble instead of installing a separate
+		// Markdown selection scope.
+		options := a.markdownOptions(t, i)
+		options.ShareSelection = true
+		markdown.View(c, shown, options).FillWidth()
 		if long {
 			labelText := fmt.Sprintf("展开完整提问（%d 行，%d 字）", lines, len([]rune(content)))
 			if st.PromptOpen[i] {
 				labelText = "收起提问"
 			}
-			flat(c, labelText).AlignSelf(ui.Start).OnClick(func() { st.PromptOpen[i] = !st.PromptOpen[i] })
+			button(c, nil, labelText, btnSecondary, false, "chat").AlignSelf(ui.Start).OnClick(func() { st.PromptOpen[i] = !st.PromptOpen[i] })
 		}
 	})
 }
@@ -343,10 +358,10 @@ func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[
 	isError := m["error"] != nil
 	if isError {
 		if userCancelledMessage(m) {
-			cancelledResult(c)
+			cancelledResult(c, a.secondaryInk())
 			return
 		}
-		notice(c, "error", content)
+		notice(c, "error", content, a.secondaryInk())
 		return
 	}
 	markdown.View(c.Key(fmt.Sprintf("md-%s-%d", t.ID, i)), content, a.markdownOptions(t, i)).FillWidth()
@@ -354,7 +369,7 @@ func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[
 		ui.Row(c).Gap(gapInline).Wrap().Children(func() {
 			for n, s := range suggestions {
 				text := fmt.Sprint(s)
-				suggestionButton(c.Key(fmt.Sprintf("suggest-%d-%d", i, n)), short(text, 40)).OnClick(func() {
+				suggestionButton(c.Key(fmt.Sprintf("suggest-%d-%d", i, n)), short(text, 40), a.secondaryInk()).OnClick(func() {
 					a.send(t, text)
 				})
 			}
@@ -364,40 +379,54 @@ func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[
 
 func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *roundStat, show bool) {
 	seconds := float64(stat.DurationMS) / 1000
-	ui.Row(c.Key(fmt.Sprintf("round-stats-%s-%d", t.ID, i))).FillWidth().Height(heightRow + 2).Gap(gapInline + 1).AlignItems(ui.Center).Children(func() {
-		if !show {
-			return
-		}
-		uikit.Tooltip(c, ui.Text(c, fmtDur(stat.DurationMS)).FontSize(fsSmall).TextColor(c.Theme().TextMuted), "本轮耗时")
+	row := ui.Row(c.Key(fmt.Sprintf("round-stats-%s-%d", t.ID, i))).FillWidth().Height(heightRow + 2).Gap(gapInline + 1).AlignItems(ui.Center)
+	// The controls stay in the view, faded and inert, while the row is not
+	// hovered. Removing them instead took away the button a panel is anchored
+	// to, and the panel lives in the window's overlay: it vanished the moment
+	// the pointer moved onto it, so its entries could never be chosen.
+	visible := float32(0)
+	if show {
+		visible = 1
+	}
+	row.Opacity(visible).Disabled(!show)
+	row.Children(func() {
+		uikit.Tooltip(c, ui.Text(c, fmtDur(stat.DurationMS)).FontSize(fsSmall).TextColor(a.secondaryInk()), "本轮耗时")
 		if hit := stat.CacheHit + stat.CacheMiss; hit > 0 {
 			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("cache %d%%", int(float64(stat.CacheHit)*100/float64(hit)))).FontSize(fsSmall).
-				TextColor(c.Theme().TextMuted), fmt.Sprintf("cache hit %d / miss %d", stat.CacheHit, stat.CacheMiss))
+				TextColor(a.secondaryInk()), fmt.Sprintf("cache hit %d / miss %d", stat.CacheHit, stat.CacheMiss))
 		}
 		if stat.InputTokens > 0 || stat.OutputTokens > 0 {
 			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("↑%s ↓%s", fmtK(stat.InputTokens), fmtK(stat.OutputTokens))).FontSize(fsSmall).
-				TextColor(c.Theme().TextMuted), fmt.Sprintf("input %d / output %d tokens", stat.InputTokens, stat.OutputTokens))
+				TextColor(a.secondaryInk()), fmt.Sprintf("input %d / output %d tokens", stat.InputTokens, stat.OutputTokens))
 		}
 		if seconds > 0 && stat.OutputTokens > 0 {
-			ui.Text(c, fmt.Sprintf("%d token/s", int(float64(stat.OutputTokens)/seconds))).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
+			ui.Text(c, fmt.Sprintf("%d token/s", int(float64(stat.OutputTokens)/seconds))).FontSize(fsSmall).TextColor(a.secondaryInk())
 		}
 		services := c.Services()
-		mutedIconAction(c, fmt.Sprintf("export-%d", i), "导出", "download", 22, func() {
-			a.popupMenu([]*mygo.MenuItem{
-				menuAction("导出回答", func() { a.exportText("ally-response.md", str(t.Messages[i], "content")) }),
-				menuAction("导出会话", func() { a.exportText("ally-session.md", sessionMarkdown(t)) }),
-			})
+		exportButton := mutedIconAction(c, fmt.Sprintf("export-%d", i), "导出", "download", 22, nil)
+		menuPopoverButton(c, exportButton, 180, func(dismiss func()) {
+			popoverItem(c, fmt.Sprintf("export-answer-%d", i), "导出回答", "", false, func() {
+				dismiss()
+				a.exportText("ally-response.md", str(t.Messages[i], "content"))
+			}, a.secondaryInk())
+			popoverItem(c, fmt.Sprintf("export-session-%d", i), "导出会话", "", false, func() {
+				dismiss()
+				a.exportText("ally-session.md", sessionMarkdown(t))
+			}, a.secondaryInk())
 		})
 		mutedIconAction(c, fmt.Sprintf("copy-summary-%d", i), "复制总结", "copy", 22, func() {
 			services.WriteClipboard(str(t.Messages[i], "content"))
 			c.Toast("已复制最终总结")
 		})
-		mutedIconAction(c, fmt.Sprintf("quick-%d", i), "快捷消息", "wand", 22, func() {
-			items := make([]*mygo.MenuItem, 0, len(quickMessages))
+		quickButton := mutedIconAction(c, fmt.Sprintf("quick-%d", i), "快捷消息", "wand", 22, nil)
+		menuPopoverButton(c, quickButton, 180, func(dismiss func()) {
 			for _, item := range quickMessages {
 				item := item
-				items = append(items, menuAction(item.label, func() { a.send(t, item.prompt) }))
+				popoverItem(c, fmt.Sprintf("quick-%d-%s", i, item.label), item.label, "", false, func() {
+					dismiss()
+					a.send(t, item.prompt)
+				}, a.secondaryInk())
 			}
-			a.popupMenu(items)
 		})
 		mutedIconAction(c, fmt.Sprintf("remember-%d", i), "记住这次对话的长期记忆", "book", 22, func() {
 			a.send(t, projectMemoryPrompt+"\n\nLocal date for this memory update: "+time.Now().Format("2006-01-02")+".")
@@ -469,7 +498,7 @@ func (a *desktop) deleteUserMessageDialog(c *ui.Context) {
 	modalCard(c, &d.Open, widthModalSmall, func() {
 		modalTitle(c, "删除该提问及之后？", "")
 		ui.Text(c, "将删除此提问及之后的所有对话，并同步清理模型上下文。此操作不可恢复。").
-			FontSize(fsSmall).TextColor(c.Theme().TextMuted).LineHeight(1.5).Selectable()
+			FontSize(fsSmall).TextColor(a.secondaryInk()).LineHeight(1.5).Selectable()
 		modalActions(c, func() {
 			flat(c, "取消").OnClick(func() { d.Open = false })
 			dangerButton(c, "删除").OnClick(func() { a.confirmDeleteUserMessage(d) })
@@ -497,6 +526,7 @@ func (a *desktop) confirmDeleteUserMessage(d *deletePromptState) {
 			if index <= len(t.Messages) {
 				t.Messages = append([]map[string]any(nil), t.Messages[:index]...)
 			}
+			releaseCommandDetails(t)
 			t.uiState().Round = map[int]*roundStat{}
 			a.persist(t)
 		})
@@ -530,7 +560,7 @@ func (a *desktop) welcomeView(c *ui.Context, t *conversation) {
 				if img.Clicked() {
 					a.togglePetals()
 				}
-				ui.Text(c, "Ally Native · 0.1.0").FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+				ui.Text(c, "Ally Native · 0.1.0").FontSize(fsTiny).TextColor(a.secondaryInk())
 			})
 			ui.Column(c).Grow(1).Border(1, surfaceBorder(c)).Radius(radiusCard).Children(func() {
 				rows := [][4]string{
@@ -607,22 +637,22 @@ func (a *desktop) welcomePopover(c *ui.Context, anchor ui.Element, open *bool, r
 				switch {
 				case row == 1:
 					if len(a.mcpServers) == 0 {
-						fieldNote(c, "无 MCP 服务")
+						fieldNote(c, "无 MCP 服务", a.secondaryInk())
 					}
 					for _, server := range a.mcpServers {
-						ui.Text(c, fmt.Sprintf("%s · %s · %d 个工具", str(server, "name"), mcpStatusText(str(server, "status")), int(num(server, "toolCount")))).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
+						ui.Text(c, fmt.Sprintf("%s · %s · %d 个工具", str(server, "name"), mcpStatusText(str(server, "status")), int(num(server, "toolCount")))).FontSize(fsSmall).TextColor(a.secondaryInk())
 					}
 				case col == 0:
 					names := a.enabledSkillNames()
 					if len(names) == 0 {
-						fieldNote(c, "当前没有可用技能")
+						fieldNote(c, "当前没有可用技能", a.secondaryInk())
 					}
 					for _, name := range names {
 						ui.Text(c, name).FontSize(fsSmall)
 					}
 				default:
 					if len(a.toolInventory) == 0 {
-						fieldNote(c, "暂无工具")
+						fieldNote(c, "暂无工具", a.secondaryInk())
 					}
 					for _, tool := range a.toolInventory {
 						suffix := ""
@@ -647,7 +677,7 @@ func (a *desktop) welcomePopover(c *ui.Context, anchor ui.Element, open *bool, r
 			if row == 2 && col == 1 {
 				a.mcpF.Tab = 1
 			}
-		})
+		}, a.secondaryInk())
 	})
 }
 
@@ -704,8 +734,8 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 		parts := ui.CollapsibleBase(c, &open)
 		parts.Trigger.FillWidth().Height(30).Padding(0, 10).Cursor(ui.CursorPointer).Children(func() {
 			ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(gapField).Children(func() {
-				ui.Text(c, "计划").FontSize(fsSmall).Bold().TextColor(c.Theme().TextMuted)
-				ui.Text(c, fmt.Sprintf("%d/%d", done, len(steps))).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+				ui.Text(c, "plan").FontSize(fsSmall).Bold().TextColor(a.secondaryInk())
+				ui.Text(c, fmt.Sprintf("%d/%d", done, len(steps))).FontSize(fsTiny).TextColor(a.secondaryInk())
 				ui.Spacer(c)
 				iconGlyph(c, "chevrondown", 13).Rotate(-90 * (1 - parts.Progress()))
 			})
@@ -714,7 +744,7 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 			ui.Scroll(c).Height(150).Padding(0, 6, 4).Gap(6).Children(func() {
 				for n, step := range steps {
 					mark := "○"
-					color := c.Theme().TextMuted
+					color := a.secondaryInk()
 					switch step.Status {
 					case "done":
 						mark = "✓"
@@ -725,13 +755,13 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 					}
 					ui.Row(c).Key(fmt.Sprintf("plan-step-%d", n)).Padding(2, 8).Gap(gapField).Children(func() {
 						ui.Text(c, mark).FontSize(fsTiny).TextColor(color)
-						ui.Text(c, fmt.Sprintf("%d.", n+1)).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+						ui.Text(c, fmt.Sprintf("%d.", n+1)).FontSize(fsTiny).TextColor(a.secondaryInk())
 						// Finished steps read as struck through, the way main's
 						// .plan-item.done .plan-title does.
 						finished := step.Status == "done"
 						titleColor := c.Theme().Text
 						if finished {
-							titleColor = c.Theme().TextMuted
+							titleColor = a.secondaryInk()
 						}
 						ui.RichText(c, ui.Span{Text: step.Title, Size: fsSmall, Color: titleColor, Strikethrough: finished, DecorationColor: titleColor})
 					})
@@ -770,7 +800,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 			ui.Text(c, "Ally 需要你的输入").Bold().FontSize(fsBody)
 			neutralChip(c, fmt.Sprintf("%d 个问题", len(t.Questions)))
 			ui.Spacer(c)
-			fieldNote(c, fmt.Sprintf("%d/%d 已回答", answered, len(t.Questions)))
+			fieldNote(c, fmt.Sprintf("%d/%d 已回答", answered, len(t.Questions)), a.secondaryInk())
 		})
 		ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
 			iconAction(c, "ask-prev", "上一题", "chevron", 22, func() {
@@ -805,7 +835,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 						}
 					})
 					if opt.Description != "" {
-						ui.Text(c, opt.Description).PaddingStart(22).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+						ui.Text(c, opt.Description).PaddingStart(22).FontSize(fsTiny).TextColor(a.secondaryInk())
 					}
 				})
 			}
@@ -917,6 +947,16 @@ func chatMessageWindow(t *conversation) (int, int) {
 	return start, end
 }
 
+// followLatest parks a transcript at its newest message. A scroll container
+// shows its start at offset 0, so a history restored from disk — or replaced by
+// a summary — would otherwise open on its oldest message.
+func followLatest(t *conversation) {
+	st := t.uiState()
+	st.VisibleStart = 0
+	st.Follow = true
+	st.FollowPending = true
+}
+
 // Recognize explicit cancellation markers and legacy persisted cancellation text,
 // without treating errors which merely mention cancellation as a user action.
 func userCancelledMessage(m map[string]any) bool {
@@ -937,6 +977,6 @@ func userCancelledMessage(m map[string]any) bool {
 	}
 	return false
 }
-func cancelledResult(c *ui.Context) {
-	ui.Text(c, "用户已取消").FontSize(fsSmall).TextColor(c.Theme().TextMuted).Selectable()
+func cancelledResult(c *ui.Context, ink ...ui.Color) {
+	ui.Text(c, "用户已取消").FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink)).Selectable()
 }

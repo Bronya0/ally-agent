@@ -11,6 +11,8 @@ import (
 // view composes the window: header, mode rail and the active page. Every
 // sub-view is a method so a page can be read (and ported) on its own.
 func (a *desktop) view(c *ui.Context) {
+	a.previewRequests = a.previewRequests[:0]
+	defer a.schedulePreviewSync()
 	c.SetTheme(a.theme())
 	a.globalShortcuts(c)
 	c.OnShortcut(0, ui.KeyEscape, func() { a.cancelConversation(a.current()) })
@@ -53,7 +55,7 @@ func (a *desktop) view(c *ui.Context) {
 func (a *desktop) startupBody(c *ui.Context) {
 	ui.Column(c.Key("startup-body")).Fill().Padding(padPage).Children(func() {
 		if a.startupError != "" {
-			notice(c, "error", a.startupError)
+			notice(c, "error", a.startupError, a.secondaryInk())
 		}
 	})
 }
@@ -87,7 +89,7 @@ func (a *desktop) pageContent(c *ui.Context, width float32) {
 	case a.page == "games":
 		a.panelPage(c, "人机对战", "", nil, a.gamesPageBody)
 	default:
-		emptyState(c, "页面不存在", a.page)
+		emptyState(c, "页面不存在", a.page, a.secondaryInk())
 	}
 }
 
@@ -142,10 +144,10 @@ func (a *desktop) chatPage(c *ui.Context, width float32) {
 func (a *desktop) chatColumn(c *ui.Context, width float32) {
 	t := a.current()
 	if t == nil {
-		emptyState(c, "还没有会话", "选择或创建一个工作区开始对话")
+		emptyState(c, "还没有会话", "选择或创建一个工作区开始对话", a.secondaryInk())
 		return
 	}
-	ui.Column(c).Grow(1).MinHeight(0).Children(func() {
+	ui.Column(c).FillWidth().MaxWidth(chatMaxWidth).AlignSelf(ui.Center).Grow(1).MinHeight(0).Children(func() {
 		a.chatMessages(c, t, width)
 		a.composer(c, t)
 	})
@@ -159,7 +161,7 @@ func (a *desktop) kbPage(c *ui.Context, width float32) {
 			card(c, "kb-empty", func() {
 				ui.Column(c).Width(460).Gap(gapSection).Children(func() {
 					ui.Text(c, "知识库").FontSize(20).Bold()
-					fieldNote(c, "选择一个知识库目录，Ally 会在其中维护 index.md 与分类结构；sources/ 子目录对模型只读。")
+					fieldNote(c, "选择一个知识库目录，Ally 会在其中维护 index.md 与分类结构；sources/ 子目录对模型只读。", a.secondaryInk())
 					ui.Row(c).Gap(gapField).Children(func() {
 						cardPrimary(c, "选择知识库目录").OnClick(func() { a.pickKBRoot() })
 						cardFlat(c, "打开设置").OnClick(func() { a.changePage("settings") })
@@ -177,10 +179,10 @@ func (a *desktop) kbPage(c *ui.Context, width float32) {
 	ui.Column(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Padding(16, padPage, 4).Gap(2).Children(func() {
 			ui.Text(c, "知识库").FontSize(19).Bold()
-			ui.Text(c, "整理资料、检索与维护知识索引。").FontSize(fsSmall).TextColor(c.Theme().TextMuted)
+			ui.Text(c, "整理资料、检索与维护知识索引。").FontSize(fsSmall).TextColor(a.secondaryInk())
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
 				iconGlyph(c, "folderopen", 13)
-				uikit.Tooltip(c, ui.Text(c, a.config.KBRoot).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine(), a.config.KBRoot)
+				uikit.Tooltip(c, ui.Text(c, a.config.KBRoot).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine(), a.config.KBRoot)
 			})
 		})
 		a.chatColumn(c, width)
@@ -215,7 +217,7 @@ func (a *desktop) releaseNotesDialog(c *ui.Context) {
 	modalCard(c, &a.upd.ReleaseOpen, widthModalWide, func() {
 		modalTitle(c, "本次更新", "版本 "+a.upd.ReleaseVer)
 		if strings.TrimSpace(a.upd.ReleaseBody) == "" {
-			fieldNote(c, "此构建未内置更新日志。")
+			fieldNote(c, "此构建未内置更新日志。", a.secondaryInk())
 		} else {
 			ui.Text(c, a.upd.ReleaseBody).Selectable().FontSize(fsBody).LineHeight(1.6)
 		}

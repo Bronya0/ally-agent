@@ -15,8 +15,8 @@ import (
 
 // mcpNoteLine is a one-line note: tab-specific notes must not change height,
 // or the content below the tab strip shifts when the tab changes.
-func mcpNoteLine(c *ui.Context, s string) {
-	ui.Text(c, s).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine()
+func mcpNoteLine(c *ui.Context, s string, ink ...ui.Color) {
+	ui.Text(c, s).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).SingleLine()
 }
 
 // mcpServerEntry mirrors the fields the editor owns; unknown keys survive in
@@ -134,7 +134,7 @@ func (a *desktop) mcpPageBody(c *ui.Context) {
 	})
 	// tabs 必须排在随 tab 变化的说明文字之前：说明行数不同会把 tab 栏顶上顶下，
 	// 用户刚点的 tab 会跑走（"变形"）。tab 栏位置固定，只让下方内容变化。
-	if scrollTabs(c, &a.mcpF.Tab, "MCP 服务器", "Ally 内置工具") {
+	if a.scrollTabs(c, "mcp-tabs", &a.mcpF.Tab, "MCP 服务器", "Ally 内置工具") {
 		if a.mcpF.Tab == 1 && a.core != nil {
 			go func() {
 				tools := a.core.ListTools()
@@ -144,9 +144,9 @@ func (a *desktop) mcpPageBody(c *ui.Context) {
 	}
 	// 两个 tab 的说明都固定为一行，切换时说明区高度不变，下方内容不会跳。
 	if a.mcpF.Tab == 0 {
-		mcpNoteLine(c, "支持 stdio / SSE / Streamable HTTP；只有连接成功的工具会注入 AI，改动自动保存并重连。")
+		mcpNoteLine(c, "支持 stdio / SSE / Streamable HTTP；只有连接成功的工具会注入 AI，改动自动保存并重连。", a.secondaryInk())
 	} else {
-		mcpNoteLine(c, "停用后新会话不再注入该工具；已有会话保持冻结，MCP 服务不受影响。")
+		mcpNoteLine(c, "停用后新会话不再注入该工具；已有会话保持冻结，MCP 服务不受影响。", a.secondaryInk())
 	}
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(gapInline).Children(func() {
@@ -163,7 +163,7 @@ func (a *desktop) mcpPageBody(c *ui.Context) {
 func (a *desktop) mcpServerList(c *ui.Context) {
 	doc, err := parseMCPConfig(a.mcpText)
 	if err != nil {
-		notice(c, "error", "读取 MCP 配置失败："+err.Error())
+		notice(c, "error", "读取 MCP 配置失败："+err.Error(), a.secondaryInk())
 		return
 	}
 	names := make([]string, 0, len(doc.Servers))
@@ -202,10 +202,10 @@ func (a *desktop) mcpServerList(c *ui.Context) {
 					btn := uikit.Tooltip(c, cardFlat(c, label), "勾选的工具注入模型上下文，取消勾选即停用；对端新增工具默认启用；下一会话生效。")
 					btn.OnClick(func() { a.mcpF.ToolOpen[name] = !a.mcpF.ToolOpen[name] })
 				} else if count := int(num(status, "toolCount")); count > 0 {
-					fieldNote(c, fmt.Sprintf("%d 个工具", count))
+					fieldNote(c, fmt.Sprintf("%d 个工具", count), a.secondaryInk())
 				}
 				stateText := mcpStatusText(str(status, "status"))
-				uikit.Tooltip(c, ui.Text(c, stateText).FontSize(fsSmall).TextColor(toneColor(c, str(status, "status"))), str(status, "error"))
+				uikit.Tooltip(c, ui.Text(c, stateText).FontSize(fsSmall).TextColor(toneColor(c, str(status, "status"), a.secondaryInk())), str(status, "error"))
 				enabled := entry.Enabled == nil || *entry.Enabled
 				uikit.SwitchNative(c.Key("mcp-enabled-"+name), &enabled).Label("启用 " + name).OnClick(func() {
 					entry.Enabled = boolPtr(enabled)
@@ -228,9 +228,9 @@ func (a *desktop) mcpServerList(c *ui.Context) {
 	}
 	if shown == 0 {
 		if len(names) == 0 {
-			emptyState(c, "暂无 MCP 服务", "点击“添加”创建第一个服务。")
+			emptyState(c, "暂无 MCP 服务", "点击“添加”创建第一个服务。", a.secondaryInk())
 		} else {
-			emptyState(c, "无匹配结果", "")
+			emptyState(c, "无匹配结果", "", a.secondaryInk())
 		}
 	}
 }
@@ -269,7 +269,7 @@ func mcpTransportLabel(entry mcpServerEntry, status map[string]any) string {
 
 func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEntry, doc *mcpConfigDoc, status map[string]any) {
 	ui.Column(c).Key("mcp-tools-"+name).FillWidth().Padding(8, 10).Gap(2).Background(c.Theme().Background).Radius(radiusSmall).Children(func() {
-		fieldNote(c, "勾选的工具注入模型上下文，取消勾选即停用；对端新增工具默认启用；下一会话生效，不触发重连。")
+		fieldNote(c, "勾选的工具注入模型上下文，取消勾选即停用；对端新增工具默认启用；下一会话生效，不触发重连。", a.secondaryInk())
 		for _, item := range list(status, "tools") {
 			m, ok := item.(map[string]any)
 			if !ok {
@@ -305,11 +305,11 @@ func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEn
 					doc.Servers[name] = entry
 					a.saveMCPDoc(doc)
 				})
-				uikit.Tooltip(c, ui.Text(c, str(m, "description")).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine(), str(m, "description"))
+				uikit.Tooltip(c, ui.Text(c, str(m, "description")).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine(), str(m, "description"))
 			})
 		}
 		if len(list(status, "tools")) == 0 {
-			fieldNote(c, "连接成功后这里会列出该服务发现的工具。")
+			fieldNote(c, "连接成功后这里会列出该服务发现的工具。", a.secondaryInk())
 		}
 	})
 }
@@ -378,7 +378,7 @@ func (a *desktop) mcpEditorDialog(c *ui.Context) {
 				if current == "" {
 					current = "stdio"
 				}
-				if uikit.Select(c.Key("mcp-transport"), &current, transports).Label("传输方式").FillWidth().Changed() {
+				if uikit.Select(c.Key("mcp-transport"), &current, transports, a.secondaryInk()).Label("传输方式").FillWidth().Changed() {
 					a.mcpF.Transport = current
 				}
 			})
@@ -387,16 +387,16 @@ func (a *desktop) mcpEditorDialog(c *ui.Context) {
 			fieldRow(c, "mcp-command", "命令", &a.mcpF.Command, false)
 			fieldLabel(c, "参数")
 			textArea(c, "mcp-args", "参数", `-y, @playwright/mcp`, &a.mcpF.Args, 90).FillWidth()
-			fieldNote(c, "每个参数写成一个字符串用逗号分隔；也兼容简单的空格分隔输入。")
+			fieldNote(c, "每个参数写成一个字符串用逗号分隔；也兼容简单的空格分隔输入。", a.secondaryInk())
 			fieldLabel(c, "环境变量")
 			textArea(c, "mcp-env", "环境变量", `{"API_KEY": "your-api-key"}`, &a.mcpF.Env, 70)
-			fieldNote(c, "JSON 对象，也支持每行 KEY=value。")
+			fieldNote(c, "JSON 对象，也支持每行 KEY=value。", a.secondaryInk())
 		} else {
 			fieldRow(c, "mcp-url", "URL", &a.mcpF.URL, false)
-			fieldNote(c, "例如 http://127.0.0.1:9121/mcp（SSE 通常为 /sse）。")
+			fieldNote(c, "例如 http://127.0.0.1:9121/mcp（SSE 通常为 /sse）。", a.secondaryInk())
 			fieldLabel(c, "请求头")
 			textArea(c, "mcp-headers", "请求头", `{"Authorization": "Bearer your-token"}`, &a.mcpF.Headers, 70)
-			fieldNote(c, "JSON 对象，也支持每行 Key:Value。")
+			fieldNote(c, "JSON 对象，也支持每行 Key:Value。", a.secondaryInk())
 		}
 	}, func() {
 		flat(c, "取消").OnClick(func() { a.mcpF.EditorOpen = false })
@@ -508,7 +508,6 @@ func (a *desktop) saveMCPDoc(doc *mcpConfigDoc) {
 	}
 	raw := string(data)
 	a.mcpF.Busy = true
-	a.status = "正在保存 MCP 配置…"
 	go func() {
 		err := a.core.SaveMcpConfig(raw)
 		if err == nil {
@@ -645,13 +644,13 @@ func (a *desktop) builtinToolsGrid(c *ui.Context) {
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
 				neutralChip(c, tool.Name)
 				if tool.Protected {
-					fieldNote(c, "核心工具，不可停用")
+					fieldNote(c, "核心工具，不可停用", a.secondaryInk())
 				}
 			})
 		})
 	}
 	if len(core) > 0 {
-		fieldNote(c, "核心工具始终可用。")
+		fieldNote(c, "核心工具始终可用。", a.secondaryInk())
 		ui.Grid(c.Key("builtin-core")).Columns(3).Gap(gapField).Children(func() {
 			for _, tool := range core {
 				render(tool)
@@ -664,7 +663,7 @@ func (a *desktop) builtinToolsGrid(c *ui.Context) {
 		}
 	})
 	if len(core)+len(rest) == 0 {
-		emptyState(c, "没有匹配的工具", "")
+		emptyState(c, "没有匹配的工具", "", a.secondaryInk())
 	}
 }
 

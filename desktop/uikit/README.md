@@ -18,7 +18,7 @@ func view(c *ui.Context) {
 }
 ```
 
-Exports. Form controls: Button, IconButton, Select, editable Combobox, Tabs, Segmented,
+Exports. Form controls: Button, IconButton, Select, CompactSelect, editable Combobox, Tabs, Segmented,
 PasswordInput, NumberInput, TextField, TextArea, FieldLabel, FieldNote. Chrome: Card,
 RowCard, Divider, PageHeader, SectionHeader, EmptyState, BusyRow, Notice, InlineError,
 StatCard, KV, Tag, Label, Muted, SectionTitle, HoverRow, SelectableRow. Dialogs: DialogPanel,
@@ -33,7 +33,9 @@ ui.Theme does not carry.
 ControlHeight, Radius, the Font and Gap scales and the RadiusCard / RadiusSmall pair
 are shared sizing tokens; components take padding and radius as arguments rather than
 baking one page's spacing into them. Choice rows use a subtle accent fill plus a check
-for selection; hover and keyboard highlight use the surface hover color. Tabs set
+for selection; hover and keyboard highlight use the surface hover color. CompactSelect
+uses the same popup with a quiet 28-DIP toolbar trigger; its locked argument prevents
+opening or changing the value without dimming or moving the trigger. Tabs set
 pointer cursors on each interactive item and label.
 
 TabUnderline、TabInk、TabRadius 保留为旧接口；当前工作区标签使用 WorkspaceTab，页面内 Tabs 使用 tabs.go 的两套独立样式。

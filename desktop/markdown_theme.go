@@ -65,8 +65,17 @@ func readingSizes(body, code float64) (float32, float32) {
 
 // Reuse MyGo's entire code-block renderer (copy, syntax, scrolling and selection).
 // A nested native view gives fenced code its own size without shrinking inline code.
-func (a *desktop) readingMarkdownOptions() *markdown.Options {
+func (a *desktop) readingMarkdownOptions(scope ...string) *markdown.Options {
 	options := &markdown.Options{Theme: &markdown.Theme{}, WrapCode: true}
+	previewScope := fmt.Sprintf("markdown:%p", options)
+	if len(scope) > 0 {
+		previewScope = scope[0]
+	}
+	options.Code = map[string]func(*ui.Context, *markdown.CodeBlockView){
+		"mermaid": func(c *ui.Context, block *markdown.CodeBlockView) {
+			a.mermaidView(c, block, previewScope)
+		},
+	}
 	type cachedBlock struct {
 		code, source, language string
 		options                markdown.Options

@@ -97,6 +97,8 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 }
 
 func (a *desktop) fileTree(c *ui.Context) {
+	p := a.currentPalette()
+	ink := p.muted.Mix(p.text, 0.25)
 	width := a.prefs.TreeWidth
 	if width < 150 || width > 600 {
 		width = 270
@@ -104,7 +106,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 	// Unselectable keeps the window-wide selectable text layer from claiming
 	// right-clicks: without it every secondary click opens the root text menu
 	// and neither a row menu nor the blank-area menu ever sees RightClicked.
-	ui.Column(c).Width(width).Shrink(0).Unselectable().Background(a.currentPalette().panel).BorderWidth(0, 0, 0, 1).BorderColor(c.Theme().Border).Children(func() {
+	ui.Column(c).Width(width).Shrink(0).Unselectable().Background(colChrome(a)).BorderWidth(0, 0, 0, 1).BorderColor(c.Theme().Border).Children(func() {
 		c.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles() })
 		title := "文件"
 		tip := ""
@@ -113,10 +115,10 @@ func (a *desktop) fileTree(c *ui.Context) {
 			tip = t.Workspace
 		}
 		ui.Row(c).Height(30).Padding(0, padRow).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
-			uikit.Tooltip(c, ui.Text(c, short(title, 24)).FontSize(fsSmall).Grow(1), tip)
-			iconAction(c, "explorer-refresh", "刷新", "refresh", 22, func() { a.refreshFiles(true) })
-			iconAction(c, "explorer-help", "文件浏览器帮助", "info", 22, func() { a.filesF.HelpOpen = !a.filesF.HelpOpen })
-			iconAction(c, "explorer-close", "关闭文件栏", "close", 22, func() { a.explorer = false })
+			uikit.Tooltip(c, ui.Text(c, short(title, 24)).FontSize(fsSmall).TextColor(ink).Grow(1), tip)
+			uikit.IconButton(c, "explorer-refresh", "刷新", iconImage("refresh"), 22, uikit.IconQuiet, func() { a.refreshFiles(true) }, ink)
+			uikit.IconButton(c, "explorer-help", "文件浏览器帮助", iconImage("info"), 22, uikit.IconQuiet, func() { a.filesF.HelpOpen = !a.filesF.HelpOpen }, ink)
+			uikit.IconButton(c, "explorer-close", "关闭文件栏", iconImage("close"), 22, uikit.IconQuiet, func() { a.explorer = false }, ink)
 		})
 		// The tree itself owns the blank-area menu; a row builds its own menu, so
 		// the blank one only appears where there is no file or folder under the
@@ -129,7 +131,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 			// and not to the scrolling surface.
 			area = ui.Column(c).Padding(3, 0).FillWidth().FillHeight()
 			if len(a.files) == 0 {
-				area.Children(func() { fieldNote(c, "目录为空") })
+				area.Children(func() { fieldNote(c, "目录为空", a.secondaryInk()) })
 			}
 			area.Children(func() { a.fileRows(c, a.files, 0) })
 		})
@@ -153,7 +155,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 		})
 		if a.filesF.HelpOpen {
 			ui.Column(c).Padding(8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(c.Theme().Border).Children(func() {
-				fieldNote(c, "文件浏览器帮助")
+				fieldNote(c, "文件浏览器帮助", a.secondaryInk())
 				for _, line := range []string{
 					"单击文件打开，单击目录展开",
 					"右键：新建 / 重命名 / 删除 / 复制路径 / 属性",
@@ -162,7 +164,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 					"Ctrl+Space 补全，悬停查看符号信息，F12 / ⌘或Ctrl+点击跳转 Go 定义",
 					"Markdown 可切换预览，图片直接预览",
 				} {
-					fieldNote(c, "· "+line)
+					fieldNote(c, "· "+line, a.secondaryInk())
 				}
 			})
 		}
@@ -184,8 +186,8 @@ func (a *desktop) fileTree(c *ui.Context) {
 func (a *desktop) fileRows(c *ui.Context, entries []backend.FileEntry, depth int) {
 	services := c.Services()
 	p := a.currentPalette()
-	dirColor := p.text.Mix(p.muted, 0.25)
 	fileColor := p.muted.Mix(p.text, 0.25)
+	dirColor := fileColor
 	for _, entry := range entries {
 		entry := entry
 		path := strings.ReplaceAll(entry.Path, "\\", "/")
@@ -218,7 +220,7 @@ func (a *desktop) fileRows(c *ui.Context, entries []backend.FileEntry, depth int
 				return fileColor
 			}())
 			if entry.Symlink {
-				fieldNote(c, "→")
+				fieldNote(c, "→", a.secondaryInk())
 			}
 		})
 		uikit.Tooltip(c, row, path)
@@ -555,11 +557,11 @@ func (a *desktop) fileInfoDialog(c *ui.Context) {
 	modalCard(c, &a.filesF.InfoOpen, 640, func() {
 		modalTitle(c, "文件信息", a.filesF.InfoPath)
 		if a.filesF.InfoBusy {
-			busyRow(c, "正在计算，请稍候…")
+			busyRow(c, "正在计算，请稍候…", a.secondaryInk())
 			return
 		}
 		if a.filesF.InfoError != "" {
-			notice(c, "error", "读取文件信息失败："+a.filesF.InfoError)
+			notice(c, "error", "读取文件信息失败："+a.filesF.InfoError, a.secondaryInk())
 			return
 		}
 		a.fileInfoSection(c, "基本信息", [][2]string{
@@ -599,7 +601,7 @@ func (a *desktop) fileInfoDialog(c *ui.Context) {
 
 func (a *desktop) fileInfoSection(c *ui.Context, title string, rows [][2]string) {
 	ui.Column(c).Gap(3).Children(func() {
-		ui.Text(c, strings.ToUpper(title)).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+		ui.Text(c, strings.ToUpper(title)).FontSize(fsTiny).TextColor(a.secondaryInk())
 		divider(c)
 		for _, row := range rows {
 			if row[1] == "" {
@@ -670,19 +672,19 @@ func (a *desktop) gitDiffDialog(c *ui.Context) {
 				})
 			})
 			if a.filesF.GitBusy {
-				busyRow(c, "正在加载 diff…")
+				busyRow(c, "正在加载 diff…", a.secondaryInk())
 				return
 			}
 			if data.Error != "" {
-				notice(c, "error", data.Error)
+				notice(c, "error", data.Error, a.secondaryInk())
 				return
 			}
 			if !data.IsRepo {
-				emptyState(c, "当前目录不是 Git 仓库", "")
+				emptyState(c, "当前目录不是 Git 仓库", "", a.secondaryInk())
 				return
 			}
 			if len(data.Files) == 0 {
-				emptyState(c, "当前没有 Git 改动", "")
+				emptyState(c, "当前没有 Git 改动", "", a.secondaryInk())
 				return
 			}
 			ui.Row(c).Grow(1).MinHeight(0).Gap(gapSection).AlignItems(ui.Stretch).Children(func() {
@@ -694,7 +696,7 @@ func (a *desktop) gitDiffDialog(c *ui.Context) {
 				ui.Scroll(c).Grow(1).MinWidth(0).Children(func() {
 					ui.Column(c).Gap(gapInline).Children(func() {
 						if a.filesF.GitFile < 0 || a.filesF.GitFile >= len(data.Files) {
-							fieldNote(c, "选择一个文件查看 diff。")
+							fieldNote(c, "选择一个文件查看 diff。", a.secondaryInk())
 							return
 						}
 						file := data.Files[a.filesF.GitFile]
@@ -708,10 +710,10 @@ func (a *desktop) gitDiffDialog(c *ui.Context) {
 							}
 						})
 						if file.Diff == "" {
-							fieldNote(c, "无文本 diff。")
+							fieldNote(c, "无文本 diff。", a.secondaryInk())
 							return
 						}
-						gitUnifiedDiff(c, file.Diff)
+						gitUnifiedDiff(c, file.Diff, a.secondaryInk())
 					})
 				})
 			})
@@ -804,7 +806,7 @@ func (a *desktop) gitTreeRows(c *ui.Context, nodes []*gitTreeNode, files []backe
 				if *closed {
 					glyph = "chevron"
 				}
-				iconGlyph(c, glyph, 10).TextColor(c.Theme().TextMuted)
+				iconGlyph(c, glyph, 10).TextColor(a.secondaryInk())
 			} else {
 				ui.Box(c).Width(10)
 			}

@@ -34,14 +34,15 @@ func fadeColor(e ui.Element, key string, target ui.Color) ui.Color {
 // ---- Design tokens -------------------------------------------------------
 
 const (
-	gapTight   float32 = 4
-	gapInline  float32 = 6
-	gapField   float32 = 8
-	gapSection float32 = 12
-	gapPage    float32 = 18
-	padRow     float32 = 8
-	padCard    float32 = 10
-	padPage    float32 = 22
+	chatMaxWidth float32 = 1120
+	gapTight     float32 = 4
+	gapInline    float32 = 6
+	gapField     float32 = 8
+	gapSection   float32 = 12
+	gapPage      float32 = 18
+	padRow       float32 = 8
+	padCard      float32 = 10
+	padPage      float32 = 22
 
 	radiusCard    float32 = 8
 	radiusControl float32 = 7
@@ -52,8 +53,9 @@ const (
 	heightControl      float32 = 28
 	heightRow          float32 = 26
 	heightTabRow       float32 = 32
-	heightRailItem     float32 = 34
+	heightRailItem     float32 = 32
 	widthRailCollapsed float32 = 44
+	railDividerWidth   float32 = 5
 	// railPadH is the collapsed rail's horizontal padding.
 	railPadH float32 = 2
 	// heightRailItemCollapsed is the side of a collapsed entry: both sides take
@@ -87,8 +89,14 @@ func colPanel(a *desktop) ui.Color  { return a.currentPalette().panel }
 func colLine(a *desktop) ui.Color   { return a.currentPalette().line }
 func colAccent(a *desktop) ui.Color { return a.currentPalette().accent }
 func colText(a *desktop) ui.Color   { return a.currentPalette().text }
-func colMuted(a *desktop) ui.Color  { return a.currentPalette().muted }
-func colHover(a *desktop) ui.Color  { return a.currentPalette().hover }
+
+// secondaryInk is the tone of secondary text: timestamps, counts, captions.
+// It stays at the palette's muted while Theme.TextMuted carries the fainter
+// placeholder tone, so pass it down to leaf helpers that only see the context.
+func (a *desktop) secondaryInk() ui.Color { return a.currentPalette().muted }
+func colMuted(a *desktop) ui.Color        { return a.secondaryInk() }
+func colHover(a *desktop) ui.Color        { return a.currentPalette().hover }
+func colChrome(a *desktop) ui.Color       { return a.currentPalette().chromeColor() }
 
 func colDanger() ui.Color { return errCol }
 func colFaint() ui.Color  { return faint }
@@ -107,6 +115,24 @@ type palette struct {
 	name                                                    string
 	dark                                                    bool
 	bg, panel, line, accent, accentText, text, muted, hover ui.Color
+	// hint is what empty inputs show: muted faded toward the background, so an
+	// empty composer stops shouting. It rides Theme.TextMuted, the tone MyGo
+	// paints placeholders in; muted itself stays put for secondary text.
+	hint ui.Color
+	// chrome is the window frame behind the header, the mode rail and the file
+	// tree. Zero means "the same as panel"; only the light presets move it half
+	// a step off white, so the frame stops reading as one more white card while
+	// everything that sits on it stays panel.
+	chrome ui.Color
+}
+
+// chromeColor resolves chrome, falling back to panel so a new preset cannot
+// leave the frame unpainted.
+func (p palette) chromeColor() ui.Color {
+	if p.chrome.A == 0 {
+		return p.panel
+	}
+	return p.chrome
 }
 
 // Resting edges — cards, chips, inputs, buttons, popups — are the palette line
@@ -116,12 +142,12 @@ type palette struct {
 const edgeHoverMix float32 = 0.18
 
 var palettes = []palette{
-	{name: "暗夜", dark: true, bg: ui.Hex("#1b1b1b"), panel: ui.Hex("#212122"), line: ui.Hex("#303031"), accent: ui.Hex("#8da5df"), accentText: ui.Hex("#15171d"), text: ui.Hex("#d4d4d4"), muted: ui.Hex("#909093"), hover: ui.Hex("#2b2b2e")},
-	{name: "亮色", dark: false, bg: ui.Hex("#f5f6f8"), panel: ui.Hex("#ffffff"), line: ui.Hex("#d9dce3"), accent: ui.Hex("#4d6bd8"), accentText: ui.Hex("#ffffff"), text: ui.Hex("#24262d"), muted: ui.Hex("#535b68"), hover: ui.Hex("#eef0f5")},
-	{name: "琥珀", dark: true, bg: ui.Hex("#1c1a17"), panel: ui.Hex("#232019"), line: ui.Hex("#363128"), accent: ui.Hex("#e0a458"), accentText: ui.Hex("#1a1712"), text: ui.Hex("#d7d2c8"), muted: ui.Hex("#9b9488"), hover: ui.Hex("#2c2820")},
-	{name: "海洋", dark: true, bg: ui.Hex("#151a1f"), panel: ui.Hex("#1a2027"), line: ui.Hex("#28323c"), accent: ui.Hex("#63b3d8"), accentText: ui.Hex("#0d1418"), text: ui.Hex("#c6d0d8"), muted: ui.Hex("#8896a2"), hover: ui.Hex("#222b34")},
-	{name: "森林", dark: true, bg: ui.Hex("#151a17"), panel: ui.Hex("#1a201c"), line: ui.Hex("#29362d"), accent: ui.Hex("#6fbf8f"), accentText: ui.Hex("#0e1511"), text: ui.Hex("#c4d2c8"), muted: ui.Hex("#889a8e"), hover: ui.Hex("#212b24")},
-	{name: "紫罗兰", dark: true, bg: ui.Hex("#191722"), panel: ui.Hex("#1f1c29"), line: ui.Hex("#312c42"), accent: ui.Hex("#a68bea"), accentText: ui.Hex("#141019"), text: ui.Hex("#cfc8de"), muted: ui.Hex("#948aa8"), hover: ui.Hex("#292436")},
+	{name: "暗夜", dark: true, bg: ui.Hex("#1b1b1b"), panel: ui.Hex("#212122"), line: ui.Hex("#303031"), accent: ui.Hex("#8da5df"), accentText: ui.Hex("#15171d"), text: ui.Hex("#d4d4d4"), muted: ui.Hex("#909093"), hover: ui.Hex("#2b2b2e"), hint: ui.Hex("#5d5d62")},
+	{name: "亮色", dark: false, bg: ui.Hex("#f5f6f8"), panel: ui.Hex("#ffffff"), line: ui.Hex("#d9dce3"), accent: ui.Hex("#4d6bd8"), accentText: ui.Hex("#ffffff"), text: ui.Hex("#24262d"), muted: ui.Hex("#535b68"), hover: ui.Hex("#eef0f5"), chrome: ui.Hex("#f9fafb"), hint: ui.Hex("#8b929e")},
+	{name: "琥珀", dark: true, bg: ui.Hex("#1c1a17"), panel: ui.Hex("#232019"), line: ui.Hex("#363128"), accent: ui.Hex("#e0a458"), accentText: ui.Hex("#1a1712"), text: ui.Hex("#d7d2c8"), muted: ui.Hex("#9b9488"), hover: ui.Hex("#2c2820"), hint: ui.Hex("#6b655b")},
+	{name: "海洋", dark: true, bg: ui.Hex("#151a1f"), panel: ui.Hex("#1a2027"), line: ui.Hex("#28323c"), accent: ui.Hex("#63b3d8"), accentText: ui.Hex("#0d1418"), text: ui.Hex("#c6d0d8"), muted: ui.Hex("#8896a2"), hover: ui.Hex("#222b34"), hint: ui.Hex("#5c686f")},
+	{name: "森林", dark: true, bg: ui.Hex("#151a17"), panel: ui.Hex("#1a201c"), line: ui.Hex("#29362d"), accent: ui.Hex("#6fbf8f"), accentText: ui.Hex("#0e1511"), text: ui.Hex("#c4d2c8"), muted: ui.Hex("#889a8e"), hover: ui.Hex("#212b24"), hint: ui.Hex("#5a6960")},
+	{name: "紫罗兰", dark: true, bg: ui.Hex("#191722"), panel: ui.Hex("#1f1c29"), line: ui.Hex("#312c42"), accent: ui.Hex("#a68bea"), accentText: ui.Hex("#141019"), text: ui.Hex("#cfc8de"), muted: ui.Hex("#948aa8"), hover: ui.Hex("#292436"), hint: ui.Hex("#645c76")},
 }
 
 var lightAccents = []ui.Color{
@@ -139,7 +165,8 @@ func (a *desktop) currentPalette() palette {
 		idx = 2
 	}
 	base := 0
-	if a.prefs.Appearance == "light" || (a.prefs.Appearance == "" && idx == 1) {
+	if a.prefs.Appearance == "light" || (a.prefs.Appearance == "" && idx == 1) ||
+		(a.prefs.Appearance == "auto" && a.autoAppearance.Mode == "light") {
 		base = 1
 	}
 	p := palettes[base]
@@ -210,7 +237,10 @@ func (a *desktop) theme() *ui.Theme {
 	t.AccentPressed = p.accent.Mix(ui.Hex("#000000"), 0.12)
 	t.AccentText = p.accentText
 	t.Text = p.text
-	t.TextMuted = p.muted
+	// TextMuted carries the placeholder tone: MyGo paints empty inputs in it.
+	// Secondary text keeps muted through secondaryInk, passed down from the
+	// palette by the caller.
+	t.TextMuted = p.hint
 	t.Danger = errCol
 	t.Success = okColor
 	t.Warning = warnCol

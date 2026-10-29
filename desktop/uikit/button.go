@@ -83,15 +83,16 @@ const (
 
 // IconButton 是唯一无字方块按钮工厂：和 Button 同一套圆角、悬停渐变和
 // 图标缩放比例，尺寸由调用方定。
-func IconButton(c *ui.Context, id, tip string, icon *ui.SVG, size float32, tone IconTone, fn func()) ui.Element {
+func IconButton(c *ui.Context, id, tip string, icon *ui.SVG, size float32, tone IconTone, fn func(), ink ...ui.Color) ui.Element {
 	t := c.Theme()
-	color, hoverColor := t.TextMuted, t.Text
+	muted := SecondaryInk(c, ink)
+	color, hoverColor := muted, t.Text
 	fill, hoverFill := ui.Transparent, t.SurfaceHover
 	switch tone {
 	case IconNormal:
 		color, hoverColor = t.Text, t.Text
 	case IconDanger:
-		color, hoverColor = t.TextMuted, t.Danger
+		color, hoverColor = muted, t.Danger
 		hoverFill = t.Danger.Alpha(0.14)
 	case IconAccent:
 		color, hoverColor, hoverFill = t.Accent.Alpha(0.55), t.Accent, ui.Transparent

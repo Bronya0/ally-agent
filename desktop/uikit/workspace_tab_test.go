@@ -16,7 +16,7 @@ func TestWorkspaceTabSlotsStayFixed(t *testing.T) {
 	closed, selected := 0, 0
 	tt := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Padding(10).Children(func() {
-			WorkspaceTab(c.Key("tab"), "apisec", active, busy, canClose, nil, func() { selected++ }, func() { closed++ })
+			WorkspaceTab(c.Key("tab"), "apisec", active, busy, canClose, nil, func() { selected++ }, func() { closed++ }, nil)
 		})
 	}, 300, 100)
 	label, _ := tt.Find("apisec")
@@ -74,7 +74,7 @@ func TestWorkspaceTabPreview(t *testing.T) {
 					ui.Row(c).FillWidth().Height(44).Padding(0, 12).Gap(6).AlignItems(ui.Center).Background(theme.Surface).BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
 						ui.Text(c, "Ally").FontSize(20).FontWeight(700).TextColor(theme.Accent).Margin(0, 10, 0, 0)
 						for i, label := range []string{"apisec", "ally-agent-v2", "另一个工作区"} {
-							WorkspaceTab(c.Key(i), label, i == 0, i == 1, true, nil, func() {}, func() {})
+							WorkspaceTab(c.Key(i), label, i == 0, i == 1, true, nil, func() {}, func() {}, nil)
 						}
 					})
 				})
@@ -91,8 +91,8 @@ func TestWorkspaceTabPreview(t *testing.T) {
 func TestWorkspaceTabsUseIntrinsicWidth(t *testing.T) {
 	tt := ui.NewTester(func(c *ui.Context) {
 		ui.Row(c).Children(func() {
-			WorkspaceTab(c.Key("short"), "a", true, false, true, nil, func() {}, func() {}).Label("short-tab")
-			WorkspaceTab(c.Key("long"), "ally-agent-workspace", false, false, true, nil, func() {}, func() {}).Label("long-tab")
+			WorkspaceTab(c.Key("short"), "a", true, false, true, nil, func() {}, func() {}, nil).Label("short-tab")
+			WorkspaceTab(c.Key("long"), "ally-agent-workspace", false, false, true, nil, func() {}, func() {}, nil).Label("long-tab")
 		})
 	}, 600, 80)
 	short, _ := tt.Find("short-tab")

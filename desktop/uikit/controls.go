@@ -51,10 +51,10 @@ func Popup(c *ui.Context, panel ui.Element) {
 	panel.Padding(6).Gap(2).Radius(10).Border(1, hairline(c.Theme())).Background(c.Theme().Surface).
 		Shadow(0, 6, 20, 0, ui.RGBA(0, 0, 0, 0.25)).Transition(PopupTransition()).MaxHeight(320)
 }
-func option(c *ui.Context, item ui.Element, text string, selected bool) {
+func option(c *ui.Context, item ui.Element, text string, selected bool, ink ...ui.Color) {
 	t := c.Theme()
 	fill := ui.Transparent
-	item.Height(34).Padding(5, 10).Radius(6).Gap(8).AlignItems(ui.Center).Cursor(ui.CursorPointer).TextColor(t.Text)
+	item.Height(34).Padding(5, 10).Radius(6).Gap(8).AlignItems(ui.Center).Cursor(ui.CursorPointer).TextColor(SecondaryInk(c, ink))
 	if item.Highlighted() || item.Hovered() {
 		fill = t.SurfaceHover
 	}
@@ -88,16 +88,16 @@ type Option struct {
 }
 
 // Select is a select whose options read exactly as their values.
-func Select(c *ui.Context, value *string, options []string) ui.Element {
+func Select(c *ui.Context, value *string, options []string, ink ...ui.Color) ui.Element {
 	list := make([]Option, 0, len(options))
 	for _, text := range options {
 		list = append(list, Option{Value: text, Label: text})
 	}
-	return SelectField(c, value, list)
+	return SelectField(c, value, list, ink...)
 }
 
 // SelectField is a select with per-option labels.
-func SelectField(c *ui.Context, value *string, options []Option) ui.Element {
+func SelectField(c *ui.Context, value *string, options []Option, ink ...ui.Color) ui.Element {
 	sel := ui.SelectBase(c, value)
 	b := sel.Trigger.Height(ControlHeight).Padding(4, 10).Gap(8).AlignItems(ui.Center).Radius(Radius).Border(1, hairline(c.Theme())).Background(c.Theme().SurfaceHover).Cursor(ui.CursorPointer)
 	b.Children(func() {
@@ -113,24 +113,68 @@ func SelectField(c *ui.Context, value *string, options []Option) ui.Element {
 		}
 		ui.Text(c, label).FontSize(14).SingleLine().Grow(1).MinWidth(0).Cursor(ui.CursorPointer)
 		ui.Box(c).Size(18, 18).Shrink(0).Center().Children(func() {
-			ui.Icon(c, chevronDown).Size(13, 13).TextColor(c.Theme().TextMuted)
+			ui.Icon(c, chevronDown).Size(13, 13).TextColor(SecondaryInk(c, ink))
 		})
 	})
-	sel.Popup(func(panel ui.Element) {
+	selectPopup(c, sel, value, options, ink...)
+	return InputChrome(c, b)
+}
+
+// CompactSelect keeps the toolbar trigger quiet while sharing the form select's
+// popup and option styling. Locked controls show the same value and geometry,
+// but use an inert button instead of a select so neither pointer nor keyboard
+// input can open a popup. Separate keyed children discard an open select when
+// locking, rather than restoring its popup after the operation finishes.
+func CompactSelect(c *ui.Context, value *string, options []string, locked bool, ink ...ui.Color) ui.Element {
+	var sel ui.SelectParts[string]
+	var b ui.Element
+	ui.Row(c).MinWidth(0).Shrink(1).Children(func() {
+		if locked {
+			b = ui.ButtonBase(c.Key("locked"))
+		} else {
+			sel = ui.SelectBase(c.Key("select"), value)
+			b = sel.Trigger
+		}
+		color := SecondaryInk(c, ink)
+		b.Height(ButtonHeightSmall).Padding(1, 6).MinWidth(0).Shrink(1).Gap(7).
+			Radius(Radius).Background(ui.Transparent).TextColor(color).Label(*value).
+			Cursor(ui.CursorPointer)
+		if locked {
+			b.Cursor(ui.CursorDefault)
+		}
+		b.Children(func() {
+			ui.Text(c, *value).FontSize(FontBody).SingleLine().Unselectable().TextColor(color)
+			ui.Icon(c, chevronDown).Size(13, 13).Shrink(0).TextColor(color)
+		})
+	})
+	if !locked {
+		list := make([]Option, 0, len(options))
+		for _, text := range options {
+			list = append(list, Option{Value: text, Label: text})
+		}
+		if panel := selectPopup(c, sel, value, list, ink...); panel.Valid() {
+			panel.MinWidth(160).MaxWidthPercent(90)
+		}
+	}
+	return b
+}
+
+func selectPopup(c *ui.Context, sel ui.SelectParts[string], value *string, options []Option, ink ...ui.Color) ui.Element {
+	return sel.Popup(func(panel ui.Element) {
 		Popup(c, panel)
 		ui.Scroll(c).MaxHeight(300).Children(func() {
 			for _, item := range options {
-				option(c, sel.Item(item.Value), item.Label, item.Value == *value)
+				option(c, sel.Item(item.Value), item.Label, item.Value == *value, SecondaryInk(c, ink))
 			}
 		})
 	})
-	return InputChrome(c, b)
-}
-func Combobox(c *ui.Context, value *string, options []string) ui.Element {
-	return ComboboxField(c, value, options, "", "")
 }
 
-func ComboboxField(c *ui.Context, value *string, options []string, label, placeholder string) ui.Element {
+func Combobox(c *ui.Context, value *string, options []string, ink ...ui.Color) ui.Element {
+	return ComboboxField(c, value, options, "", "", ink...)
+}
+
+func ComboboxField(c *ui.Context, value *string, options []string, label, placeholder string, ink ...ui.Color) ui.Element {
 	var cb ui.ComboboxParts
 	root := ui.Row(c).FillWidth().Height(ControlHeight).AlignItems(ui.Center).Gap(0)
 	root = InputChrome(c, root)
@@ -145,7 +189,7 @@ func ComboboxField(c *ui.Context, value *string, options []string, label, placeh
 			cb.SetOpen(true)
 		})
 		toggle.Children(func() {
-			ui.Icon(c, chevronDown).Size(13, 13).TextColor(c.Theme().TextMuted)
+			ui.Icon(c, chevronDown).Size(13, 13).TextColor(SecondaryInk(c, ink))
 		})
 	})
 	cb.Popup(func(panel ui.Element) {
@@ -153,7 +197,7 @@ func ComboboxField(c *ui.Context, value *string, options []string, label, placeh
 		ui.Scroll(c).MaxHeight(300).Children(func() {
 			for _, text := range options {
 				if !cb.Filtering() || strings.Contains(strings.ToLower(text), strings.ToLower(*value)) {
-					option(c, cb.Item(text), text, text == *value)
+					option(c, cb.Item(text), text, text == *value, SecondaryInk(c, ink))
 				}
 			}
 		})
@@ -171,12 +215,13 @@ const TabRadius float32 = 6
 
 // TabInk is the label colour of one tab: the text colour when chosen, a shade
 // darker than it otherwise. Weight, not colour, marks the chosen tab, so the
-// accent appears once in the strip rather than twice.
-func TabInk(t *ui.Theme, active bool) ui.Color {
+// accent appears once in the strip rather than twice. secondary 传调用方的次要
+// 文字色（Theme.TextMuted 是占位淡色）。
+func TabInk(t *ui.Theme, active bool, secondary ...ui.Color) ui.Color {
 	if active {
 		return t.Text
 	}
-	return t.TextMuted.Mix(t.Text, 0.22)
+	return SecondaryInkOf(t, secondary...).Mix(t.Text, 0.22)
 }
 
 // TabUnderline is the legacy workspace-header treatment. Page navigation uses
@@ -199,9 +244,9 @@ func OptionGroup(c *ui.Context) ui.Element {
 
 // OptionChrome distinguishes selection with a soft fill and stronger ink;
 // keyboard focus keeps the native focus ring rather than a permanent outline.
-func OptionChrome(c *ui.Context, e ui.Element, selected bool, tone ui.Color) ui.Color {
+func OptionChrome(c *ui.Context, e ui.Element, selected bool, tone ui.Color, secondary ...ui.Color) ui.Color {
 	t := c.Theme()
-	fill, ink := ui.Transparent, t.TextMuted
+	fill, ink := ui.Transparent, SecondaryInkOf(t, secondary...)
 	if selected {
 		fill, ink = SelectedFill(tone), tone.Mix(t.Text, 0.20)
 	} else if e.Hovered() {
@@ -214,6 +259,11 @@ func OptionChrome(c *ui.Context, e ui.Element, selected bool, tone ui.Color) ui.
 
 // Segmented keeps MyGo's radio-group, focus and keyboard behavior.
 func Segmented(c *ui.Context, selected *int, labels ...string) ui.Element {
+	return SegmentedInk(c, selected, nil, labels...)
+}
+
+// SegmentedInk is Segmented with the caller's secondary-text tone.
+func SegmentedInk(c *ui.Context, selected *int, ink []ui.Color, labels ...string) ui.Element {
 	parts := ui.SegmentedBase(c, selected, len(labels))
 	t := c.Theme()
 	el := parts.Track.Height(36).AlignSelf(ui.Start).Padding(3).Gap(3).Radius(Radius).
@@ -225,9 +275,9 @@ func Segmented(c *ui.Context, selected *int, labels ...string) ui.Element {
 		for i, label := range labels {
 			active := i == *selected
 			segment := parts.Segment(i).MinWidth(62).Label(label)
-			ink := OptionChrome(c, segment, active, t.Accent)
+			optionInk := OptionChrome(c, segment, active, t.Accent, ink...)
 			segment.Children(func() {
-				text := ui.Text(c, label).FontSize(13).TextColor(ink).SingleLine().Unselectable().Cursor(ui.CursorPointer)
+				text := ui.Text(c, label).FontSize(13).TextColor(optionInk).SingleLine().Unselectable().Cursor(ui.CursorPointer)
 				if active {
 					text.FontWeight(600)
 				}
@@ -242,9 +292,9 @@ func Tag(c *ui.Context, text string, fg, fill ui.Color) ui.Element {
 func FieldLabel(c *ui.Context, text string) {
 	ui.Text(c, text).FontSize(FontSection).TextColor(c.Theme().Text)
 }
-func FieldNote(c *ui.Context, text string) {
+func FieldNote(c *ui.Context, text string, ink ...ui.Color) {
 	if text != "" {
-		ui.Text(c, text).FontSize(12).TextColor(c.Theme().TextMuted).LineHeight(1.5)
+		ui.Text(c, text).FontSize(12).TextColor(SecondaryInk(c, ink)).LineHeight(1.5)
 	}
 }
 func TextField(c *ui.Context, value *string, placeholder string) ui.Element {
@@ -279,6 +329,16 @@ func Area(c *ui.Context, value *string) ui.Element { return InputChrome(c, ui.Te
 
 // PasswordInput keeps the text in MyGo's input, with visibility local to this control.
 func PasswordInput(c *ui.Context, key, label string, value *string, placeholder ...string) ui.Element {
+	return passwordInputInk(c, key, label, value, nil, placeholder...)
+}
+
+// PasswordInputInk is PasswordInput with the caller's secondary-text tone.
+func PasswordInputInk(c *ui.Context, key, label string, value *string, ink ui.Color, placeholder ...string) ui.Element {
+	return passwordInputInk(c, key, label, value, []ui.Color{ink}, placeholder...)
+}
+
+func passwordInputInk(c *ui.Context, key, label string, value *string, tone []ui.Color, placeholder ...string) ui.Element {
+	ink := SecondaryInk(c, tone)
 	root := InputChrome(c, ui.Row(c.Key(key)).Height(ControlHeight).AlignItems(ui.Center).Gap(0))
 	visible := ui.Local(root, "visible", func() bool { return false })
 	root.Children(func() {
@@ -295,7 +355,7 @@ func PasswordInput(c *ui.Context, key, label string, value *string, placeholder 
 			action, icon = "隐藏 "+label, eyeOffIcon
 		}
 		button := Tooltip(c, ui.ButtonBase(c.Key("visibility")).Size(32, ControlHeight).Shrink(0).Center().Cursor(ui.CursorPointer).Label(action), action)
-		button.Children(func() { ui.Icon(c, icon).Size(15, 15).TextColor(c.Theme().TextMuted) })
+		button.Children(func() { ui.Icon(c, icon).Size(15, 15).TextColor(ink) })
 		if button.Clicked() {
 			*visible = !*visible
 		}
@@ -310,7 +370,8 @@ type numberInputState struct {
 
 // MyGo v0.7.1 NumberInput fixes the inner input width and does not expose its
 // parts. Compose its native text and button controls to fill available width.
-func NumberInput(c *ui.Context, key, label string, value *float64, lo, hi, step float64) ui.Element {
+func NumberInput(c *ui.Context, key, label string, value *float64, lo, hi, step float64, ink ...ui.Color) ui.Element {
+	secondary := SecondaryInk(c, ink)
 	root := InputChrome(c, ui.Row(c.Key(key)).Height(ControlHeight).AlignItems(ui.Center).Gap(0))
 	decimals := 0
 	if s := strconv.FormatFloat(step, 'f', -1, 64); strings.Contains(s, ".") {
@@ -364,7 +425,7 @@ func NumberInput(c *ui.Context, key, label string, value *float64, lo, hi, step 
 				fill = c.Theme().Surface
 			}
 			button.Background(fade(button, "step-fill", fill))
-			button.Children(func() { ui.Text(c, item.text).FontSize(15).TextColor(c.Theme().TextMuted).Unselectable() })
+			button.Children(func() { ui.Text(c, item.text).FontSize(15).TextColor(secondary).Unselectable() })
 			if button.Clicked() {
 				set(*value + item.delta)
 			}
@@ -376,7 +437,8 @@ func NumberInput(c *ui.Context, key, label string, value *float64, lo, hi, step 
 
 // NumberStepper builds a filled numeric field with compact, borderless controls.
 // The string binding lets callers keep invalid intermediate edits until save-time validation.
-func NumberStepper(c *ui.Context, key, label string, value *string, lo, hi, step, fallback int) ui.Element {
+func NumberStepper(c *ui.Context, key, label string, value *string, lo, hi, step, fallback int, ink ...ui.Color) ui.Element {
+	secondary := SecondaryInk(c, ink)
 	root := ui.Row(c).FillWidth().Height(ControlHeight).AlignItems(ui.Center).Gap(0)
 	root = InputChrome(c, root)
 	root.Children(func() {
@@ -399,7 +461,7 @@ func NumberStepper(c *ui.Context, key, label string, value *string, lo, hi, step
 				next := current + control.delta
 				disabled := next < lo || next > hi
 				button := Action(c, control.label, ActionOptions{Style: Tertiary, Small: true}).Size(26, 28).Padding(0).Border(0, ui.Transparent).
-					Background(ui.Transparent).Radius(6).FontSize(15).TextColor(c.Theme().TextMuted).
+					Background(ui.Transparent).Radius(6).FontSize(15).TextColor(secondary).
 					Disabled(disabled).Label(control.name)
 				if button.Hovered() && !disabled {
 					button.Background(c.Theme().Surface)

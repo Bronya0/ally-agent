@@ -17,9 +17,10 @@ func TestTerminalRolesAreDistinctAndReadable(t *testing.T) {
 			a.prefs.Palette = index
 			a.prefs.Appearance = appearance
 			theme := a.theme()
-			command, output := commandLineInk(theme), terminalOutputInk(theme)
+			secondary := a.secondaryInk()
+			command, output := commandLineInk(theme, secondary), terminalOutputInk(theme, secondary)
 			if appearance == "dark" {
-				if command != theme.TextMuted || output != theme.TextMuted {
+				if command != secondary || output != secondary {
 					t.Fatal("dark terminal palette changed")
 				}
 				continue

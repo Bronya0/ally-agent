@@ -150,6 +150,7 @@ type chatUI struct {
 	PendingPrompt    bool
 	PendingPromptIdx int
 	ToolOpen         map[string]bool
+	CommandDetails   map[string]*commandDetail
 	GroupOpen        map[string]bool
 	AskIndex         int
 	AskSelected      map[string][]string
@@ -261,6 +262,9 @@ func (a *desktop) syncSettingsForm() {
 	f.AppearanceMode = 0
 	if !a.currentPalette().dark {
 		f.AppearanceMode = 1
+	}
+	if a.prefs.Appearance == "auto" {
+		f.AppearanceMode = 2
 	}
 	f.ProxyModeIndex = 0
 	switch a.configDraft.ProxyMode {

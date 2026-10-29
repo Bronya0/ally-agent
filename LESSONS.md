@@ -26,3 +26,19 @@
 
 [mygo-imgsize] 2026-10-28 中危 只按字节上限决定图片直传：PNG 截图几 kB 却有 3000px，模型白付 token；按像素边重编码，透明图先铺白。@desktop/attachments.go
 
+[mygo-ink] 2026-10-29 中危 Theme.TextMuted 只给框架画占位；次要文字必须传 uikit.SecondaryInk，否则两者一起变淡。@desktop/theme.go
+
+[mygo-crlf] 2026-10-29 中危 Python 脚本写 Go 文件默认转 CRLF，gofmt 会把整文件报未格式化；写时用 newline=""。@desktop
+
+[mygo-restore] 2026-10-29 中危 从外部灌入历史后没设 FollowPending：Y=0 就是开头，恢复会话停在最旧消息。@desktop/page_chat.go
+
+[mygo-wheel] 2026-10-29 中危 ScrollHorizontal 只吃 Shift+滚轮，纯横向容器普通滚轮无效；TrackScroll 后把 DY 转成 X。@desktop/widgets.go
+
+[mygo-interactive] 2026-10-29 中危 Dragged() 会让元素变 interactive，放在 DragWindow 区会抢走窗口拖拽，只在按钮上采集。@desktop/uikit
+
+[mygo-caret] 2026-10-29 中危 caretButton 既给按钮画标签又在里面画一遍：按钮显示“市场 市场 ⌄”；标签只由按钮画。@desktop/widgets.go
+
+[mygo-paste] 2026-10-29 中危 运行中拦下附件粘贴/拖拽且不提示：用户以为输入框坏了；pending 附件属下一轮，应允许添加。@desktop/attachments.go
+
+[mygo-hover-menu] 2026-10-30 中危 悬停才渲染的行里挂 popover：指针移到浮层行失焦、控件被删，菜单跟着消失点不到；改常驻+Opacity/Disabled。@desktop/page_chat.go
+

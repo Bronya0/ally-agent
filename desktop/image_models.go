@@ -196,7 +196,6 @@ func (a *desktop) applyImageConfig() {
 	}
 	s.busy = true
 	value := cloneImages(&s.config)
-	a.status = "正在保存图片模型配置…"
 	go func() {
 		err := a.core.SaveNativeImageConfig(value)
 		var cfg backend.ConfigState

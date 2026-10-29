@@ -110,10 +110,11 @@ type ScheduledTaskToolResult struct {
 	// 带空态文案的网格，模型也能区分「一条都没有」与「结果里根本没有这个字段」——
 	// ServiceListToolResult.Services 是同一约定。create / delete 的结果里它是 null，
 	// 两种非列表形状都不受影响。
-	Tasks     []ScheduledTaskToolView `json:"tasks"`
-	Count     int                     `json:"count,omitempty"`
-	Truncated bool                    `json:"truncated,omitempty"`
-	Deleted   string                  `json:"deleted,omitempty"`
+	Tasks       []ScheduledTaskToolView `json:"tasks"`
+	Count       int                     `json:"count,omitempty"`
+	Truncated   bool                    `json:"truncated,omitempty"`
+	Deleted     string                  `json:"deleted,omitempty"`
+	DeletedName string                  `json:"deletedName,omitempty"`
 }
 
 type scheduledTaskManager struct {
@@ -240,10 +241,17 @@ func (a *App) executeScheduledTaskTool(cfg ConfigState, req ScheduledTaskToolReq
 		if id == "" {
 			return nil, codedToolError("E_SCHEDULED_TASK_ID", errors.New("id is required for delete"))
 		}
+		name := ""
+		for _, task := range manager.list() {
+			if task.ID == id {
+				name = task.Name
+				break
+			}
+		}
 		if err := manager.delete(id); err != nil {
 			return nil, err
 		}
-		return ScheduledTaskToolResult{Deleted: id}, nil
+		return ScheduledTaskToolResult{Deleted: id, DeletedName: name}, nil
 	default:
 		return nil, codedToolError("E_SCHEDULED_TASK_ACTION", errors.New("action must be create, list, or delete"))
 	}

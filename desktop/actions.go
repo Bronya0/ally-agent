@@ -29,7 +29,6 @@ func (a *desktop) confirmAction(title, detail string, run func() error, after fu
 			return
 		}
 		a.win.Update(func() {
-			a.status = "操作完成"
 			if after != nil {
 				after()
 			}

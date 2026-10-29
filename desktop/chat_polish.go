@@ -10,7 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-func toolWarning(c *ui.Context, text string) {
+func toolWarning(c *ui.Context, text string, ink ...ui.Color) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
@@ -18,11 +18,11 @@ func toolWarning(c *ui.Context, text string) {
 	line := strings.Join(strings.Fields(full), " ")
 	ui.Row(c).FillWidth().MinWidth(0).Padding(5, 10).Radius(radiusSmall).
 		Background(ui.RGBA(217, 164, 65, 0.06)).Children(func() {
-		uikit.Tooltip(c, ui.Text(c, line).Grow(1).MinWidth(0).SingleLine().FontSize(fsSmall).TextColor(c.Theme().Warning.Mix(c.Theme().TextMuted, 0.5)), full)
+		uikit.Tooltip(c, ui.Text(c, line).Grow(1).MinWidth(0).SingleLine().FontSize(fsSmall).TextColor(c.Theme().Warning.Mix(uikit.SecondaryInk(c, ink), 0.5)), full)
 	})
 }
 
-func gitUnifiedDiff(c *ui.Context, diff string) {
+func gitUnifiedDiff(c *ui.Context, diff string, ink ...ui.Color) {
 	oldLine, newLine := 0, 0
 	inHunk := false
 	ui.Column(c).FillWidth().MinWidth(0).Children(func() {
@@ -34,7 +34,7 @@ func gitUnifiedDiff(c *ui.Context, diff string) {
 					oldLine, _ = strconv.Atoi(strings.Split(strings.TrimPrefix(fields[1], "-"), ",")[0])
 					newLine, _ = strconv.Atoi(strings.Split(strings.TrimPrefix(fields[2], "+"), ",")[0])
 				}
-				ui.Text(c, line).FillWidth().Padding(4, 8).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+				ui.Text(c, line).FillWidth().Padding(4, 8).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink))
 				continue
 			}
 			if !inHunk && (strings.HasPrefix(line, "diff ") || strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++")) {
@@ -55,7 +55,7 @@ func gitUnifiedDiff(c *ui.Context, diff string) {
 			default:
 				number = 0
 			}
-			ui.Row(c).FillWidth().MinWidth(0).Shrink(0).Children(func() { diffCell(c, line, changed, number) })
+			ui.Row(c).FillWidth().MinWidth(0).Shrink(0).Children(func() { diffCell(c, line, changed, number, ink...) })
 		}
 	})
 }

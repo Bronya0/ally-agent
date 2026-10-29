@@ -96,7 +96,6 @@ func (a *desktop) importImageModels(s *imageModelsState) {
 				_ = s.replace(index, &model)
 			}
 			a.applyImageConfig()
-			a.status = fmt.Sprintf("导入完成：新增 %d，更新 %d，正在保存…", added, updated)
 		})
 	}()
 }
@@ -127,7 +126,7 @@ func (a *desktop) exportImageModels(s *imageModelsState) {
 			if err != nil {
 				a.notify(err.Error())
 			} else if path != "" {
-				a.status = fmt.Sprintf("已导出 %d 个图片模型", len(models))
+				a.notifySuccess(fmt.Sprintf("已导出 %d 个图片模型", len(models)))
 			}
 		})
 	}()

@@ -57,9 +57,31 @@ func Label(c *ui.Context, s string) ui.Element {
 	return ui.Text(c, s).FontSize(FontBody)
 }
 
-// Muted 是比正文淡一档的说明文字。
-func Muted(c *ui.Context, s string, size float32) ui.Element {
-	return ui.Text(c, s).FontSize(size).TextColor(c.Theme().TextMuted)
+// Muted 是比正文淡一档的说明文字。ink 传调用方的次要文字色：Theme.TextMuted
+// 走占位淡色，不能再从它取次要文字（见 desktop/theme.go）。
+func Muted(c *ui.Context, s string, size float32, ink ...ui.Color) ui.Element {
+	return ui.Text(c, s).FontSize(size).TextColor(SecondaryInk(c, ink))
+}
+
+// SecondaryInk 取次要文字色：显式传入优先，否则回退主题。Theme.TextMuted 是
+// 占位淡色，裸 ui.Theme（测试）里没有调色板可查，只能按深浅给固定值。
+func SecondaryInk(c *ui.Context, ink []ui.Color) ui.Color {
+	if len(ink) > 0 {
+		return ink[0]
+	}
+	return SecondaryInkOf(c.Theme())
+}
+
+// SecondaryInkOf 是 SecondaryInk 的无上下文版本，给只有主题的纯函数用。
+// secondary 显式传调用方的次要文字色时优先使用。
+func SecondaryInkOf(t *ui.Theme, secondary ...ui.Color) ui.Color {
+	if len(secondary) > 0 {
+		return secondary[0]
+	}
+	if t.Dark {
+		return ui.Hex("#909093")
+	}
+	return ui.Hex("#535b68")
 }
 
 // SectionTitle 是小节标题：比正文小一号但加粗。
@@ -141,9 +163,9 @@ func SectionHeader(c *ui.Context, title string, actions func()) {
 }
 
 // EmptyState 是一整块空白区域里的居中提示。
-func EmptyState(c *ui.Context, title, detail string) {
+func EmptyState(c *ui.Context, title, detail string, ink ...ui.Color) {
 	ui.Column(c).Fill().Center().Gap(GapInline).Children(func() {
-		ui.Text(c, title).FontSize(15).TextColor(c.Theme().TextMuted)
+		ui.Text(c, title).FontSize(15).TextColor(SecondaryInk(c, ink))
 		if detail != "" {
 			ui.Text(c, detail).FontSize(FontSmall).TextColor(FaintInk(c.Theme()))
 		}
@@ -151,10 +173,10 @@ func EmptyState(c *ui.Context, title, detail string) {
 }
 
 // BusyRow 是一个转圈加一行说明。
-func BusyRow(c *ui.Context, s string) {
+func BusyRow(c *ui.Context, s string, ink ...ui.Color) {
 	ui.Row(c).Gap(GapField).AlignItems(ui.Center).Children(func() {
 		ui.Spinner(c).Size(14, 14)
-		Muted(c, s, FontSmall)
+		Muted(c, s, FontSmall, ink...)
 	})
 }
 
@@ -173,12 +195,12 @@ const (
 
 // Notice 是彩色提示条，左边一道竖线表明语气。message 为空时什么都不画，
 // 这样调用点可以无条件调用它。
-func Notice(c *ui.Context, tone NoticeTone, message string, accentBar bool) {
+func Notice(c *ui.Context, tone NoticeTone, message string, accentBar bool, ink ...ui.Color) {
 	if message == "" {
 		return
 	}
 	t := c.Theme()
-	fg, fill, bar := t.TextMuted, t.SurfaceHover, t.Border
+	fg, fill, bar := SecondaryInk(c, ink), t.SurfaceHover, t.Border
 	switch tone {
 	case NoticeInfo:
 		fg, fill, bar = t.Accent, t.Accent.Alpha(0.10), t.Accent
@@ -210,20 +232,20 @@ func InlineError(c *ui.Context, id, message string) {
 // ---- 统计块 --------------------------------------------------------------
 
 // StatCard 是一个数字加一行说明的统计块。
-func StatCard(c *ui.Context, key any, title, big, detail string, padding, radius float32) ui.Element {
+func StatCard(c *ui.Context, key any, title, big, detail string, padding, radius float32, ink ...ui.Color) ui.Element {
 	return Card(c, key, padding, radius, func() {
-		Muted(c, title, FontSmall)
+		Muted(c, title, FontSmall, ink...)
 		ui.Text(c, big).FontSize(22).Bold()
 		if detail != "" {
-			ui.Text(c, detail).FontSize(FontTiny).TextColor(c.Theme().TextMuted)
+			ui.Text(c, detail).FontSize(FontTiny).TextColor(SecondaryInk(c, ink))
 		}
 	})
 }
 
 // KV 是一行「名：值」，名字淡、值正常。
-func KV(c *ui.Context, key, value string) {
+func KV(c *ui.Context, key, value string, ink ...ui.Color) {
 	ui.Row(c).Gap(GapField).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, key).FontSize(FontSmall).TextColor(c.Theme().TextMuted)
+		ui.Text(c, key).FontSize(FontSmall).TextColor(SecondaryInk(c, ink))
 		ui.Text(c, value).FontSize(FontSmall)
 	})
 }

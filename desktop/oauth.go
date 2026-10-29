@@ -285,12 +285,12 @@ func (a *desktop) oauthPanel(c *ui.Context) {
 	}
 	ui.Column(c).Padding(12).Gap(8).Border(1, surfaceBorder(c)).Radius(6).Children(func() {
 		ui.Text(c, "ChatGPT").Bold()
-		ui.Text(c, "使用 ChatGPT 套餐与额度。登录后在模型管理中添加模型。").FontSize(12).TextColor(c.Theme().TextMuted)
+		ui.Text(c, "使用 ChatGPT 套餐与额度。登录后在模型管理中添加模型。").FontSize(12).TextColor(a.secondaryInk())
 		options := make([]string, 0, len(o.accounts))
 		for _, account := range o.accounts {
 			options = append(options, accountLabel(account))
 		}
-		if uikit.Select(c, &o.accountLabel, options).Label("ChatGPT 账号").FillWidth().Disabled(o.busy || o.loggingOut).Changed() {
+		if uikit.Select(c, &o.accountLabel, options, a.secondaryInk()).Label("ChatGPT 账号").FillWidth().Disabled(o.busy || o.loggingOut).Changed() {
 			a.selectOAuthAccount(o.accountLabel)
 		}
 		var current *chatgpt.Account
@@ -308,7 +308,7 @@ func (a *desktop) oauthPanel(c *ui.Context) {
 					state = "已授权套餐调用"
 				}
 			}
-			ui.Text(c, fmt.Sprintf("%s · %s", accountLabel(*current), state)).FontSize(11).TextColor(c.Theme().TextMuted)
+			ui.Text(c, fmt.Sprintf("%s · %s", accountLabel(*current), state)).FontSize(11).TextColor(a.secondaryInk())
 		}
 		ui.Row(c).Gap(6).Wrap().Children(func() {
 			primary(c, "使用 ChatGPT 登录").Disabled(o.busy || o.loggingOut).OnClick(func() { a.loginOAuth("", false) })
@@ -333,10 +333,10 @@ func (a *desktop) oauthPanel(c *ui.Context) {
 			flat(c, "查看套餐用量").OnClick(func() { services.OpenURL("https://chatgpt.com/settings/usage") })
 		})
 		if o.loading || o.busy {
-			ui.Text(c, "正在处理…").FontSize(11).TextColor(c.Theme().TextMuted)
+			ui.Text(c, "正在处理…").FontSize(11).TextColor(a.secondaryInk())
 		}
 		if o.notice != "" {
-			ui.Text(c, o.notice).FontSize(11).TextColor(c.Theme().TextMuted).MaxLines(4)
+			ui.Text(c, o.notice).FontSize(11).TextColor(a.secondaryInk()).MaxLines(4)
 		}
 	})
 }

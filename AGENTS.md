@@ -2,7 +2,7 @@
 
 - Windows 开发命令优先使用 Git Bash，搜索文本和文件优先 rg。
 - 根目录 `main.go` 仅保留入口；原生页面、状态和组件在根目录 `desktop/`，页面文件使用 `page_*.go`。共享样式和组件分别收口在 `theme.go` 与 `widgets.go`。
-- 原生界面仅使用 github.com/egoist/mygo/ui；禁止创建 WebView、HTML/JS 前端或引入 Wails。
+- 原生界面仅使用 github.com/egoist/mygo/ui；禁止创建 HTML/JS 前端或引入 Wails。经用户授权，render_html 与 Mermaid 图表预览可使用受控 WebView；仅在可见时按需创建，统一限量复用，离开预览后销毁。
 - Agent 模块路径保持 ally-dev。`desktop/` 是上层宿主，可依赖 `internal/app`；工具及纯逻辑包不可反向依赖 app/desktop。app 内非 host_* 文件保持宿主中立，桌面宿主适配放 internal/app/host_*.go。
 - 优先复用 MyGo 标准组件；需要定制外观时使用对应的 Base/Parts API，并在 pkg/uikit 统一微调样式。不要重复实现已有的选择、键盘导航、焦点、浮层和滚动行为。
 - UI 状态只在主线程修改。后台结果经 Window.Update 发布；不得保存 Element 或把 Context 带入后台。动态控件构造前使用 c.Key。

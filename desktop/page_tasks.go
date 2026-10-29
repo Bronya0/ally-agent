@@ -45,11 +45,11 @@ func (a *desktop) tasksPageBody(c *ui.Context) {
 		a.tasksF.Scope = 1
 	}
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-		if segmented(c, "task-scope", &a.tasksF.Scope, "当前工作区", "全部").Changed() && a.tasksF.Scope == 0 && workspace == "" {
+		if segmentedInk(c, "task-scope", &a.tasksF.Scope, a.secondaryInk(), "当前工作区", "全部").Changed() && a.tasksF.Scope == 0 && workspace == "" {
 			a.tasksF.Scope = 1
 		}
 		if a.tasksF.Scope == 0 && workspace != "" {
-			uikit.Tooltip(c, ui.Text(c, short(workspace, 60)).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted), workspace)
+			uikit.Tooltip(c, ui.Text(c, short(workspace, 60)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()), workspace)
 		}
 		ui.Spacer(c)
 		if a.tasksF.Loading {
@@ -72,7 +72,7 @@ func (a *desktop) tasksPageBody(c *ui.Context) {
 		fmt.Sprintf("后台服务 (%d/%d)", runningServices, len(a.services)),
 		fmt.Sprintf("定时任务 (%d/%d)", runningTasks, len(a.tasks)),
 	}
-	scrollTabs(c, &a.tasksF.Tab, tabs...)
+	a.scrollTabs(c, "tasks-tabs", &a.tasksF.Tab, tabs...)
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(gapSection).Children(func() {
 			if a.tasksF.Tab == 0 {
@@ -93,9 +93,9 @@ func (a *desktop) servicesSection(c *ui.Context, workspace string) {
 			running++
 		}
 	}
-	fieldNote(c, fmt.Sprintf("运行中 %d", running))
+	fieldNote(c, fmt.Sprintf("运行中 %d", running), a.secondaryInk())
 	if len(services) == 0 {
-		emptyState(c, "暂无后台服务", "模型通过 service 工具启动的后台进程会出现在这里。")
+		emptyState(c, "暂无后台服务", "模型通过 service 工具启动的后台进程会出现在这里。", a.secondaryInk())
 		return
 	}
 	for _, service := range services {
@@ -121,10 +121,10 @@ func (a *desktop) servicesSection(c *ui.Context, workspace string) {
 				}
 			})
 			if service.Description != "" {
-				uikit.Tooltip(c, ui.Text(c, service.Description).FontSize(fsSmall).TextColor(c.Theme().TextMuted).SingleLine(), service.Description)
+				uikit.Tooltip(c, ui.Text(c, service.Description).FontSize(fsSmall).TextColor(a.secondaryInk()).SingleLine(), service.Description)
 			}
 			if a.tasksF.Scope == 1 && service.Workspace != "" {
-				fieldNote(c, "工作区 · "+service.Workspace)
+				fieldNote(c, "工作区 · "+service.Workspace, a.secondaryInk())
 			}
 			detailsOpen := a.mcpF.ToolOpen["service-"+service.ID]
 			detailsButton := cardFlat(c, "详情").AlignSelf(ui.Start)
@@ -148,22 +148,22 @@ func (a *desktop) servicesSection(c *ui.Context, workspace string) {
 				})
 			})
 			if detailsOpen {
-				kv(c, "ID", service.ID)
-				kv(c, "PID", fmt.Sprint(service.PID))
-				kv(c, "工作目录", service.Cwd)
+				kv(c, "ID", service.ID, a.secondaryInk())
+				kv(c, "PID", fmt.Sprint(service.PID), a.secondaryInk())
+				kv(c, "工作目录", service.Cwd, a.secondaryInk())
 				if service.Command != "" {
-					codeBlock(c, "service-cmd-"+service.ID, service.Command, 60)
+					codeBlock(c, "service-cmd-"+service.ID, service.Command, 60, a.secondaryInk())
 				}
 				if service.Status == "running" {
-					kv(c, "启动时间", fmtTime(service.StartedAt))
+					kv(c, "启动时间", fmtTime(service.StartedAt), a.secondaryInk())
 				} else {
-					kv(c, "退出码", fmt.Sprint(service.ExitCode))
-					kv(c, "停止时间", fmtTime(service.StoppedAt))
+					kv(c, "退出码", fmt.Sprint(service.ExitCode), a.secondaryInk())
+					kv(c, "停止时间", fmtTime(service.StoppedAt), a.secondaryInk())
 				}
-				kv(c, "输出缓冲", fmt.Sprintf("%s（保留最新部分）", fmtBytes(service.OutputBytes)))
+				kv(c, "输出缓冲", fmt.Sprintf("%s（保留最新部分）", fmtBytes(service.OutputBytes)), a.secondaryInk())
 			}
 			if service.OutputTail != "" {
-				codeBlock(c, "service-tail-"+service.ID, tailLines(asciiStrip(service.OutputTail), 6), 100)
+				codeBlock(c, "service-tail-"+service.ID, tailLines(asciiStrip(service.OutputTail), 6), 100, a.secondaryInk())
 			}
 			if service.Error != "" {
 				inlineError(c, "service-error-"+service.ID, service.Error)
@@ -267,9 +267,9 @@ func (a *desktop) scheduledSection(c *ui.Context, workspace string) {
 			running++
 		}
 	}
-	fieldNote(c, fmt.Sprintf("运行中 %d · 任务会持久保存，重新启动 Ally 后继续运行", running))
+	fieldNote(c, fmt.Sprintf("运行中 %d · 任务会持久保存，重新启动 Ally 后继续运行", running), a.secondaryInk())
 	if len(tasks) == 0 {
-		emptyState(c, "暂无定时任务", "可以让模型通过 scheduled_task 工具创建。")
+		emptyState(c, "暂无定时任务", "可以让模型通过 scheduled_task 工具创建。", a.secondaryInk())
 		return
 	}
 	for _, task := range tasks {
@@ -287,7 +287,7 @@ func (a *desktop) scheduledSection(c *ui.Context, workspace string) {
 				} else {
 					neutralChip(c, "Agent")
 				}
-				fieldNote(c, task.ID)
+				fieldNote(c, task.ID, a.secondaryInk())
 				ui.Spacer(c)
 				if task.LastSummary != "" || task.LastError != "" {
 					cardFlat(c, "查看完整日志").OnClick(func() { a.openTaskLog(task) })
@@ -305,17 +305,17 @@ func (a *desktop) scheduledSection(c *ui.Context, workspace string) {
 				next = "下次运行 " + time.UnixMilli(task.NextRunAt).Local().Format("2006-01-02 15:04")
 			}
 			ui.Row(c).Gap(gapSection).Children(func() {
-				fieldNote(c, schedule)
+				fieldNote(c, schedule, a.secondaryInk())
 				ui.Spacer(c)
-				fieldNote(c, next)
+				fieldNote(c, next, a.secondaryInk())
 			})
 			if task.Command != "" {
-				codeBlock(c, "task-cmd-"+task.ID, task.Command, 60)
+				codeBlock(c, "task-cmd-"+task.ID, task.Command, 60, a.secondaryInk())
 			} else {
-				ui.Text(c, task.Instruction).FontSize(fsSmall).TextColor(c.Theme().TextMuted).MaxLines(3)
+				ui.Text(c, task.Instruction).FontSize(fsSmall).TextColor(a.secondaryInk()).MaxLines(3)
 			}
 			if a.tasksF.Scope == 1 && task.Workspace != "" {
-				fieldNote(c, "工作区 · "+task.Workspace)
+				fieldNote(c, "工作区 · "+task.Workspace, a.secondaryInk())
 			}
 			facts := []string{fmt.Sprintf("上次运行 %s", fmtTime(task.LastRunAt)), fmt.Sprintf("运行 %d 次", task.RunCount)}
 			if task.ConsecutiveFailures > 0 {
@@ -324,9 +324,9 @@ func (a *desktop) scheduledSection(c *ui.Context, workspace string) {
 			if task.MaxSteps > 0 || task.TimeoutSeconds > 0 {
 				facts = append(facts, fmt.Sprintf("单次 %d 步 · %d 秒", task.MaxSteps, task.TimeoutSeconds))
 			}
-			fieldNote(c, strings.Join(facts, "  ·  "))
+			fieldNote(c, strings.Join(facts, "  ·  "), a.secondaryInk())
 			if task.LastSummary != "" {
-				codeBlock(c, "task-summary-"+task.ID, tailLines(asciiStrip(task.LastSummary), 4), 80)
+				codeBlock(c, "task-summary-"+task.ID, tailLines(asciiStrip(task.LastSummary), 4), 80, a.secondaryInk())
 			}
 			if task.LastError != "" {
 				inlineError(c, "task-error-"+task.ID, short(task.LastError, 240))
@@ -444,8 +444,8 @@ func (a *desktop) taskLogDialog(c *ui.Context) {
 				c.Toast("已复制日志")
 			})
 		})
-		fieldNote(c, a.tasksF.LogMeta)
-		codeBlock(c, "task-log-body", asciiStrip(a.tasksF.LogBody), 460)
+		fieldNote(c, a.tasksF.LogMeta, a.secondaryInk())
+		codeBlock(c, "task-log-body", asciiStrip(a.tasksF.LogBody), 460, a.secondaryInk())
 		modalActions(c, func() { flat(c, "关闭").OnClick(func() { a.tasksF.LogOpen = false }) })
 	})
 }
@@ -499,7 +499,7 @@ func (a *desktop) taskPopupDialog(c *ui.Context) {
 			iconAction(c, "task-popup-close", "关闭", "close", 24, func() { a.taskPopup = false })
 		})
 		ui.Row(c).Children(func() {
-			segmented(c, "popup-task-scope", &a.tasksF.Scope, "当前工作区", "全部")
+			segmentedInk(c, "popup-task-scope", &a.tasksF.Scope, a.secondaryInk(), "当前工作区", "全部")
 			if a.tasksF.Scope == 0 && workspace != "" {
 				uikit.Tooltip(c, ui.Text(c, workspace).FontSize(fsSmall).SingleLine().MinWidth(0), workspace)
 			}

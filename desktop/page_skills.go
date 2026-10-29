@@ -34,7 +34,7 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 			enabled++
 		}
 	}
-	fieldNote(c, fmt.Sprintf("%d 个已启用 · %d 个可用", enabled, len(a.skills)))
+	fieldNote(c, fmt.Sprintf("%d 个已启用 · %d 个可用", enabled, len(a.skills)), a.secondaryInk())
 	filtered := a.filteredSkills()
 	if len(a.skills) > 0 {
 		counts := map[string]int{}
@@ -59,7 +59,7 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 			if index >= len(ids) {
 				index = 0
 			}
-			if scrollTabs(c, &index, labels...) {
+			if a.scrollTabs(c, "skills-source", &index, labels...) {
 				a.skillsF.Source = index
 				a.skillsF.sourceIDs = ids
 			}
@@ -78,18 +78,18 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(gapInline).Children(func() {
 			if a.skillsF.Loading && len(a.skills) == 0 {
-				busyRow(c, "正在读取技能…")
+				busyRow(c, "正在读取技能…", a.secondaryInk())
 				return
 			}
 			if len(a.skills) == 0 {
-				emptyState(c, "暂无可用技能", "把 SKILL.md 放进 ~/.agents/skills 或项目的 .agents/skills。")
+				emptyState(c, "暂无可用技能", "把 SKILL.md 放进 ~/.agents/skills 或项目的 .agents/skills。", a.secondaryInk())
 				return
 			}
 			if len(filtered) == 0 {
 				if strings.TrimSpace(a.skillsF.Search) != "" {
-					emptyState(c, "无匹配结果", "")
+					emptyState(c, "无匹配结果", "", a.secondaryInk())
 				} else {
-					emptyState(c, "该来源暂无技能", "")
+					emptyState(c, "该来源暂无技能", "", a.secondaryInk())
 				}
 				return
 			}
@@ -112,7 +112,7 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 							if desc == "" {
 								desc = "无描述"
 							}
-							uikit.Tooltip(c, ui.Text(c, desc).FontSize(fsSmall).TextColor(c.Theme().TextMuted).SingleLine(), desc)
+							uikit.Tooltip(c, ui.Text(c, desc).FontSize(fsSmall).TextColor(a.secondaryInk()).SingleLine(), desc)
 							path := s.Path
 							if path == "" {
 								path = s.Dir
@@ -260,7 +260,7 @@ func (a *desktop) skillDialog(c *ui.Context) {
 		if a.skillsF.AddTarget == "project" {
 			target = 1
 		}
-		if segmented(c, "skill-target", &target, "用户级", "项目级").AlignSelf(ui.Start).Changed() {
+		if segmentedInk(c, "skill-target", &target, a.secondaryInk(), "用户级", "项目级").AlignSelf(ui.Start).Changed() {
 			a.skillsF.AddTarget = []string{"user", "project"}[target]
 		}
 		switch a.skillsF.AddTarget {
@@ -269,15 +269,15 @@ func (a *desktop) skillDialog(c *ui.Context) {
 			if t := a.current(); t != nil {
 				root = t.Workspace
 			}
-			fieldNote(c, fmt.Sprintf("写入 %s/.agents/skills，只对当前工作区生效。", root))
+			fieldNote(c, fmt.Sprintf("写入 %s/.agents/skills，只对当前工作区生效。", root), a.secondaryInk())
 			if root == "" {
-				fieldNote(c, "当前没有打开工作区，无法写入项目级技能。")
+				fieldNote(c, "当前没有打开工作区，无法写入项目级技能。", a.secondaryInk())
 			}
 		default:
-			fieldNote(c, "写入 ~/.agents/skills/（每个技能一个子目录，里面是 SKILL.md），本机所有工作区都可用。")
+			fieldNote(c, "写入 ~/.agents/skills/（每个技能一个子目录，里面是 SKILL.md），本机所有工作区都可用。", a.secondaryInk())
 		}
 		fieldRow(c, "skill-name", "名称", &a.skillsF.AddName, false)
-		fieldNote(c, "首字符必须是字母或数字，只允许字母、数字、点、短横线和下划线，不能以点结尾。")
+		fieldNote(c, "首字符必须是字母或数字，只允许字母、数字、点、短横线和下划线，不能以点结尾。", a.secondaryInk())
 		fieldLabel(c, "描述")
 		textArea(c, "skill-desc", "描述", "技能列表用它说明什么时候该用这个技能", &a.skillsF.AddDesc, 60)
 		fieldRow(c, "skill-when", "何时使用（可选）", &a.skillsF.AddWhen, false)

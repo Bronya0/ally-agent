@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	backend "ally-dev/internal/app"
 	"encoding/json"
 	"fmt"
@@ -14,16 +15,15 @@ import (
 
 const terminalOutputSize float32 = fsTool - 1
 
-func toolCodeWindow(c *ui.Context, key, text string, expanded bool, filename ...string) {
-	path := ""
-	if len(filename) > 0 {
-		path = filename[0]
-	}
+// toolCodeWindow shows a tool's code or terminal output. path names the file the
+// text came from (it picks syntax highlighting); it is empty for terminal output.
+// ink is the caller's secondary-text tone.
+func toolCodeWindow(c *ui.Context, key, text string, expanded bool, path string, ink ...ui.Color) {
 	body := func() {
-		base := c.Theme().TextMuted
+		base := uikit.SecondaryInk(c, ink)
 		size := readingCodeSize
 		if path == "" {
-			base = terminalOutputInk(c.Theme())
+			base = terminalOutputInk(c.Theme(), ink...)
 			size = terminalOutputSize
 		}
 		spans := codeSpansWithBase(c, text, path, base)
@@ -48,8 +48,8 @@ var highlightCache []highlightCacheEntry
 
 // UI-thread-only bounded cache: repeated streaming frames do not retokenize
 // unchanged previews. Oversized sources are not retained in the cache.
-func codeSpans(c *ui.Context, text, path string) []ui.Span {
-	return codeSpansWithBase(c, text, path, c.Theme().TextMuted)
+func codeSpans(c *ui.Context, text, path string, ink ...ui.Color) []ui.Span {
+	return codeSpansWithBase(c, text, path, uikit.SecondaryInk(c, ink))
 }
 func codeSpansWithBase(c *ui.Context, text, path string, base ui.Color) []ui.Span {
 	for _, entry := range highlightCache {
@@ -95,7 +95,7 @@ func buildCodeSpans(c *ui.Context, text, path string, base ui.Color) []ui.Span {
 			case editor.TokenNumber, editor.TokenConstant:
 				color = c.Theme().Warning
 			case editor.TokenComment:
-				color = c.Theme().TextMuted
+				color = base
 			case editor.TokenInvalid, editor.TokenDeleted:
 				color = c.Theme().Danger
 			}
@@ -109,7 +109,7 @@ func buildCodeSpans(c *ui.Context, text, path string, base ui.Color) []ui.Span {
 	return spans
 }
 
-func toolFields(c *ui.Context, data map[string]any, keys []string) {
+func toolFields(c *ui.Context, data map[string]any, keys []string, ink ...ui.Color) {
 	labels := map[string]string{"action": "操作", "localPath": "本地路径", "remotePath": "远端路径", "files": "文件", "dirs": "目录", "bytes": "大小", "command": "命令", "cwd": "工作目录", "pid": "PID", "schedule": "调度", "nextRunAt": "下次执行", "prompt": "任务", "host": "主机", "port": "端口", "user": "用户", "description": "说明", "id": "ID", "instruction": "任务内容", "username": "用户", "fileCount": "文件", "dirCount": "目录", "totalBytes": "大小", "target": "目标", "riskLevel": "风险级别", "timeoutSeconds": "超时秒数", "outputBytes": "输出大小", "exitCode": "退出码", "model": "模型", "width": "宽度", "height": "高度"}
 	for _, k := range keys {
 		v, ok := data[k]
@@ -121,7 +121,7 @@ func toolFields(c *ui.Context, data map[string]any, keys []string) {
 			label = k
 		}
 		ui.Row(c).Gap(8).Children(func() {
-			ui.Text(c, label+":").Width(76).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+			ui.Text(c, label+":").Width(76).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink))
 			text := fmt.Sprint(v)
 			if k == "schedule" {
 				raw, _ := json.Marshal(v)
@@ -150,13 +150,13 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 	items, isList := result[collection].([]any)
 	if kind == "service" {
 		if max := int(num(result, "maxActive")); max > 0 {
-			fieldNote(c, fmt.Sprintf("运行中 %d / %d", int(num(result, "activeCount")), max))
+			fieldNote(c, fmt.Sprintf("运行中 %d / %d", int(num(result, "activeCount")), max), a.secondaryInk())
 		}
 		if output, ok := result["output"].(string); ok {
 			if !open {
 				output = tailLines(output, 6)
 			}
-			toolCodeWindow(c, key+"-output", output, open)
+			toolCodeWindow(c, key+"-output", output, open, "", a.secondaryInk())
 			return
 		}
 	}
@@ -167,14 +167,14 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 		}
 		if str(item, "id") == "" && str(item, "name") == "" && str(item, "host") == "" && str(item, "alias") == "" {
 			if text := commandOutput(result); text != "" {
-				toolCodeWindow(c, key+"-output", tailLines(text, 6), false)
+				toolCodeWindow(c, key+"-output", tailLines(text, 6), false, "", a.secondaryInk())
 			}
 			return
 		}
 		items = []any{item}
 	}
 	if len(items) == 0 {
-		fieldNote(c, "暂无记录")
+		fieldNote(c, "暂无记录", a.secondaryInk())
 		return
 	}
 	ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
@@ -205,10 +205,10 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 						}
 					}
 					if status != "" {
-						chip(c, resourceStatus(status), toneColor(c, status), c.Theme().Background)
+						chip(c, resourceStatus(status), toneColor(c, status, a.secondaryInk()), c.Theme().Background)
 					}
 				})
-				toolFields(c, item, strings.Fields("description command cwd host port username riskLevel schedule nextRunAt instruction pid timeoutSeconds outputBytes error id"))
+				toolFields(c, item, strings.Fields("description command cwd host port username riskLevel schedule nextRunAt instruction pid timeoutSeconds outputBytes error id"), a.secondaryInk())
 			})
 		}
 	})
@@ -297,9 +297,9 @@ func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
 	return rows
 }
 
-func diffCell(c *ui.Context, text string, changed bool, number int) {
+func diffCell(c *ui.Context, text string, changed bool, number int, ink ...ui.Color) {
 	fill := ui.Transparent
-	color := c.Theme().TextMuted
+	color := uikit.SecondaryInk(c, ink)
 	if changed {
 		if strings.HasPrefix(text, "-") {
 			fill = ui.RGBA(232, 84, 84, 0.10)
@@ -316,13 +316,13 @@ func diffCell(c *ui.Context, text string, changed bool, number int) {
 			text = " "
 		}
 		if number > 0 {
-			ui.Text(c, strconv.Itoa(number)).Width(28).Shrink(0).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Unselectable()
+			ui.Text(c, strconv.Itoa(number)).Width(28).Shrink(0).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Unselectable()
 		}
 		ui.Text(c, text).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).Grow(1).MinWidth(0).Selectable()
 	})
 }
 
-func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, start int) {
+func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, start int, ink ...ui.Color) {
 	height := float32(150)
 	if expanded {
 		height = 300
@@ -333,8 +333,8 @@ func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, star
 			numbers = append(numbers, strconv.Itoa(start+n))
 		}
 		ui.Row(c).AlignItems(ui.Start).Padding(2, 8, 4, 0).Gap(12).Children(func() {
-			ui.Text(c, strings.Join(numbers, "\n")).Font(monoFamily).FontSize(readingCodeSize).TextColor(c.Theme().TextMuted).FixedLineHeight(20).Unselectable()
-			ui.RichText(c, codeSpans(c, text, path)...).Font(monoFamily).FontSize(readingCodeSize).FixedLineHeight(20).Selectable().NoWrap()
+			ui.Text(c, strings.Join(numbers, "\n")).Font(monoFamily).FontSize(readingCodeSize).TextColor(uikit.SecondaryInk(c, ink)).FixedLineHeight(20).Unselectable()
+			ui.RichText(c, codeSpans(c, text, path, ink...)...).Font(monoFamily).FontSize(readingCodeSize).FixedLineHeight(20).Selectable().NoWrap()
 		})
 	}
 	if expanded {
@@ -344,8 +344,8 @@ func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, star
 	}
 }
 
-func diffCellNoWrap(c *ui.Context, text string, changed bool, number int) {
-	fill, color := ui.Transparent, c.Theme().TextMuted
+func diffCellNoWrap(c *ui.Context, text string, changed bool, number int, ink ...ui.Color) {
+	fill, color := ui.Transparent, uikit.SecondaryInk(c, ink)
 	if changed {
 		if strings.HasPrefix(text, "-") {
 			fill = ui.RGBA(232, 84, 84, 0.10)
@@ -360,7 +360,7 @@ func diffCellNoWrap(c *ui.Context, text string, changed bool, number int) {
 		if number > 0 {
 			label = strconv.Itoa(number)
 		}
-		ui.Text(c, label).Width(34).Shrink(0).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted).Unselectable()
+		ui.Text(c, label).Width(34).Shrink(0).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Unselectable()
 		if text == "" {
 			text = " "
 		}
@@ -370,15 +370,16 @@ func diffCellNoWrap(c *ui.Context, text string, changed bool, number int) {
 
 // Terminal heading and transcript have different roles, especially on light
 // surfaces. Keep the dark palette intact; avoid fading light output too far.
-func commandLineInk(t *ui.Theme) ui.Color {
+// secondary 是调用方的次要文字色：Theme.TextMuted 现在只作占位淡色。
+func commandLineInk(t *ui.Theme, secondary ...ui.Color) ui.Color {
 	if t.Dark {
-		return t.TextMuted
+		return uikit.SecondaryInkOf(t, secondary...)
 	}
-	return t.Text.Mix(t.TextMuted, 0.30)
+	return t.Text.Mix(uikit.SecondaryInkOf(t, secondary...), 0.30)
 }
-func terminalOutputInk(t *ui.Theme) ui.Color {
+func terminalOutputInk(t *ui.Theme, secondary ...ui.Color) ui.Color {
 	if t.Dark {
-		return t.TextMuted
+		return uikit.SecondaryInkOf(t, secondary...)
 	}
-	return t.TextMuted.Mix(t.Background, 0.12)
+	return uikit.SecondaryInkOf(t, secondary...).Mix(t.Background, 0.12)
 }

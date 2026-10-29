@@ -35,16 +35,16 @@ func (a *desktop) loadStats(manual ...bool) {
 
 func (a *desktop) statsPageBody(c *ui.Context) {
 	if a.stats.Error != "" {
-		notice(c, "error", a.stats.Error)
+		notice(c, "error", a.stats.Error, a.secondaryInk())
 	}
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-		fieldNote(c, "今日 / 近 7 日 / 本月 三个固定区间")
+		fieldNote(c, "今日 / 近 7 日 / 本月 三个固定区间", a.secondaryInk())
 		ui.Spacer(c)
 		flat(c, "刷新").OnClick(func() { a.loadStats(true) })
 	})
 	empty := a.stats.SummaryMonth.TotalTokens == 0 && a.stats.Summary7Days.TotalTokens == 0 && a.stats.SummaryToday.TotalTokens == 0
 	if empty {
-		emptyState(c, "暂无用量数据", "开始对话后，这里会显示 token 用量与缓存命中率。")
+		emptyState(c, "暂无用量数据", "开始对话后，这里会显示 token 用量与缓存命中率。", a.secondaryInk())
 		return
 	}
 	ui.Grid(c.Key("stats-overview")).Columns(3).Gap(gapSection).Children(func() {
@@ -67,19 +67,19 @@ func (a *desktop) statsPageBody(c *ui.Context) {
 func (a *desktop) statsSummaryCard(c *ui.Context, title string, summary backend.TokenStatsSummary) {
 	card(c, "stats-summary-"+title, func() {
 		ui.Row(c).Children(func() {
-			ui.Text(c, title).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
+			ui.Text(c, title).FontSize(fsSmall).TextColor(a.secondaryInk())
 			ui.Spacer(c)
-			fieldNote(c, fmt.Sprintf("%d 次请求", summary.Requests))
+			fieldNote(c, fmt.Sprintf("%d 次请求", summary.Requests), a.secondaryInk())
 		})
 		ui.Text(c, fmtK(summary.TotalTokens)).FontSize(24).Bold()
-		ui.Text(c, fmt.Sprintf("输入 %s · 输出 %s", fmtK(summary.InputTokens), fmtK(summary.OutputTokens))).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
+		ui.Text(c, fmt.Sprintf("输入 %s · 输出 %s", fmtK(summary.InputTokens), fmtK(summary.OutputTokens))).FontSize(fsSmall).TextColor(a.secondaryInk())
 		ui.Row(c).Gap(gapField).Children(func() {
-			fieldNote(c, fmt.Sprintf("单次平均 %s", fmtK(summary.AvgPerRequest)))
+			fieldNote(c, fmt.Sprintf("单次平均 %s", fmtK(summary.AvgPerRequest)), a.secondaryInk())
 			ui.Spacer(c)
-			fieldNote(c, fmt.Sprintf("缓存命中 %.1f%%", summary.CacheHitRate*100))
+			fieldNote(c, fmt.Sprintf("缓存命中 %.1f%%", summary.CacheHitRate*100), a.secondaryInk())
 		})
 		if summary.CacheWriteTokens > 0 {
-			fieldNote(c, fmt.Sprintf("缓存写入 %s", fmtK(summary.CacheWriteTokens)))
+			fieldNote(c, fmt.Sprintf("缓存写入 %s", fmtK(summary.CacheWriteTokens)), a.secondaryInk())
 		}
 	})
 }
@@ -98,7 +98,7 @@ func (a *desktop) statsBars(c *ui.Context) {
 			legendSwatch(c, "输出", chartPalette[1])
 		})
 		if len(daily) == 0 {
-			fieldNote(c, "近 30 天暂无数据。")
+			fieldNote(c, "近 30 天暂无数据。", a.secondaryInk())
 			return
 		}
 		dates := make([]string, len(daily))
@@ -131,9 +131,9 @@ func (a *desktop) statsBars(c *ui.Context) {
 			}
 		}).Label("近30天用量图").Height(200).Gap(6)
 		ui.Row(c).FillWidth().Children(func() {
-			fieldNote(c, monthDay(daily[0].Date))
+			fieldNote(c, monthDay(daily[0].Date), a.secondaryInk())
 			ui.Spacer(c)
-			fieldNote(c, monthDay(daily[len(daily)-1].Date))
+			fieldNote(c, monthDay(daily[len(daily)-1].Date), a.secondaryInk())
 		})
 	})
 }
@@ -196,7 +196,7 @@ func (a *desktop) statsHeatmap(c *ui.Context) {
 				}
 				cell := ui.Box(c).Height(26).Radius(4).Background(fill).Center()
 				uikit.Tooltip(c, cell, fmt.Sprintf("%s · %s tokens", key, fmtK(value)))
-				cell.Children(func() { ui.Text(c, fmt.Sprint(day)).FontSize(fsTiny).TextColor(c.Theme().TextMuted) })
+				cell.Children(func() { ui.Text(c, fmt.Sprint(day)).FontSize(fsTiny).TextColor(a.secondaryInk()) })
 			}
 		})
 		_ = grid
@@ -214,7 +214,7 @@ func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenD
 			total += s.InputTokens + s.OutputTokens
 		}
 		if total == 0 || len(stats) == 0 {
-			fieldNote(c, "该区间暂无数据。")
+			fieldNote(c, "该区间暂无数据。", a.secondaryInk())
 			return
 		}
 		values := make([]float64, len(stats))
@@ -241,7 +241,7 @@ func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenD
 					p.FillPath(chart.Sector(cx, cy, 47, outer, slice), chartPalette[i%len(chartPalette)])
 				}
 				p.Text(cx-26, cy-6, fmtK(total), 14, c.Theme().Text)
-				p.Text(cx-22, cy+12, "总 tokens", 9, c.Theme().TextMuted)
+				p.Text(cx-22, cy+12, "总 tokens", 9, a.secondaryInk())
 			})
 			if hover >= 0 {
 				item := stats[hover]
@@ -262,8 +262,8 @@ func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenD
 						ui.Box(c).Size(8, 8).Radius(2).Background(chartPalette[i%len(chartPalette)])
 						uikit.Tooltip(c, ui.Text(c, short(name, 26)).FontSize(fsTiny), item.FullName).SingleLine()
 						ui.Spacer(c)
-						fieldNote(c, fmt.Sprintf("%.1f%%", float64(value)*100/float64(total)))
-						ui.Text(c, fmtK(value)).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+						fieldNote(c, fmt.Sprintf("%.1f%%", float64(value)*100/float64(total)), a.secondaryInk())
+						ui.Text(c, fmtK(value)).FontSize(fsTiny).TextColor(a.secondaryInk())
 					})
 				}
 			})

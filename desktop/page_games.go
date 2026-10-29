@@ -74,11 +74,11 @@ func (a *desktop) gamesPageBody(c *ui.Context) {
 				card(c, "game-idle", func() {
 					ui.Column(c).Gap(gapField).Padding(12).Children(func() {
 						sectionTitle(c, gameMeta[g.Kind].label)
-						fieldNote(c, "选好模型与棋牌后点左侧「开始对局」。棋盘文字会发给模型，模型只回一个坐标。")
-						fieldNote(c, "战绩统计只在本次打开期间累计。")
+						fieldNote(c, "选好模型与棋牌后点左侧「开始对局」。棋盘文字会发给模型，模型只回一个坐标。", a.secondaryInk())
+						fieldNote(c, "战绩统计只在本次打开期间累计。", a.secondaryInk())
 					})
 				})
-				notice(c, "info", g.Status)
+				notice(c, "info", g.Status, a.secondaryInk())
 				return
 			}
 			switch g.Kind {
@@ -97,7 +97,7 @@ func (a *desktop) gamesPageBody(c *ui.Context) {
 				if g.Winner >= 0 {
 					tone = "ok"
 				}
-				notice(c, tone, g.Status)
+				notice(c, tone, g.Status, a.secondaryInk())
 			})
 		})
 	})
@@ -113,21 +113,21 @@ func (a *desktop) gameSidebar(c *ui.Context) {
 				models = append(models, modelOption(m))
 			}
 			if len(models) == 0 {
-				fieldNote(c, "尚未配置模型。")
+				fieldNote(c, "尚未配置模型。", a.secondaryInk())
 			}
-			uikit.Select(c.Key("game-model-a"), &g.ModelA, models).Label("模型 A").FillWidth().Disabled(g.Thinking)
-			uikit.Select(c.Key("game-effort-a"), &g.EffortA, []string{"auto", "low", "medium", "high", "xhigh", "max"}).Label("思考强度").FillWidth().Disabled(g.Thinking)
+			uikit.Select(c.Key("game-model-a"), &g.ModelA, models, a.secondaryInk()).Label("模型 A").FillWidth().Disabled(g.Thinking)
+			uikit.Select(c.Key("game-effort-a"), &g.EffortA, reasoningLevels, a.secondaryInk()).Label("思考强度").FillWidth().Disabled(g.Thinking)
 			cardFlat(c, map[bool]string{true: "改回与模型对弈", false: "切换双模型对弈（AI vs AI）"}[g.VsAI]).Disabled(g.Thinking).OnClick(func() {
 				g.VsAI = !g.VsAI
 				g.Started = false
 			})
 			if g.VsAI {
-				uikit.Select(c.Key("game-model-b"), &g.ModelB, models).Label("模型 B").FillWidth().Disabled(g.Thinking)
-				uikit.Select(c.Key("game-effort-b"), &g.EffortB, []string{"auto", "low", "medium", "high", "xhigh", "max"}).Label("模型 B 思考强度").FillWidth().Disabled(g.Thinking)
+				uikit.Select(c.Key("game-model-b"), &g.ModelB, models, a.secondaryInk()).Label("模型 B").FillWidth().Disabled(g.Thinking)
+				uikit.Select(c.Key("game-effort-b"), &g.EffortB, reasoningLevels, a.secondaryInk()).Label("模型 B 思考强度").FillWidth().Disabled(g.Thinking)
 			}
 			if g.Calls > 0 {
-				fieldNote(c, fmt.Sprintf("上轮 输入 %s · 输出 %s", fmtK(g.InTokens), fmtK(g.OutTokens)))
-				fieldNote(c, fmt.Sprintf("本局 %d 次调用 · 累计 %s tokens", g.Calls, fmtK(g.InTokens+g.OutTokens)))
+				fieldNote(c, fmt.Sprintf("上轮 输入 %s · 输出 %s", fmtK(g.InTokens), fmtK(g.OutTokens)), a.secondaryInk())
+				fieldNote(c, fmt.Sprintf("本局 %d 次调用 · 累计 %s tokens", g.Calls, fmtK(g.InTokens+g.OutTokens)), a.secondaryInk())
 			}
 			label := "开始对局"
 			if g.Started {
@@ -160,9 +160,9 @@ func (a *desktop) gameSidebar(c *ui.Context) {
 				players = 3
 			}
 			if g.VsAI {
-				fieldNote(c, fmt.Sprintf("两个模型轮流执子对弈，你观战（%d 人局）。", players))
+				fieldNote(c, fmt.Sprintf("两个模型轮流执子对弈，你观战（%d 人局）。", players), a.secondaryInk())
 			} else {
-				fieldNote(c, fmt.Sprintf("%d 人局 · 你执先手，其余座位由模型接管。", players))
+				fieldNote(c, fmt.Sprintf("%d 人局 · 你执先手，其余座位由模型接管。", players), a.secondaryInk())
 			}
 			if g.Kind == gameGo {
 				cardFlat(c, "停一手").Disabled(!g.Started || g.Thinking || g.Winner >= 0).OnClick(func() { a.gamePass() })
@@ -262,7 +262,7 @@ func (a *desktop) gameXiangqiBoard(c *ui.Context) {
 				}
 			})
 			if y == 4 {
-				ui.Row(c).Height(14).Center().Children(func() { fieldNote(c, "楚河　　汉界") })
+				ui.Row(c).Height(14).Center().Children(func() { fieldNote(c, "楚河　　汉界", a.secondaryInk()) })
 			}
 		}
 	})
@@ -284,7 +284,7 @@ func xiangqiGlyph(piece string) string {
 func (a *desktop) gameDoudizhu(c *ui.Context) {
 	g := &a.gameF
 	if g.Phase == ddzPhaseDeal {
-		emptyState(c, "点击“发牌”开始一局", "")
+		emptyState(c, "点击“发牌”开始一局", "", a.secondaryInk())
 		return
 	}
 	ui.Column(c).Gap(gapSection).Children(func() {
@@ -299,7 +299,7 @@ func (a *desktop) gameDoudizhu(c *ui.Context) {
 					label += "（你）"
 				}
 				count := len(g.Hands[seat])
-				ui.Text(c, fmt.Sprintf("%s · %d 张", label, count)).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
+				ui.Text(c, fmt.Sprintf("%s · %d 张", label, count)).FontSize(fsSmall).TextColor(a.secondaryInk())
 			}
 		})
 		if g.Phase == ddzPhaseBid {
@@ -333,7 +333,7 @@ func (a *desktop) gameDoudizhu(c *ui.Context) {
 				flat(c, "清空选择").OnClick(func() { g.SelectedCards = nil })
 			})
 			if len(g.LastCards) > 0 {
-				fieldNote(c, fmt.Sprintf("上一手（座位 %d）：%s", g.LastPlayer+1, cardList(g.LastCards)))
+				fieldNote(c, fmt.Sprintf("上一手（座位 %d）：%s", g.LastPlayer+1, cardList(g.LastCards)), a.secondaryInk())
 			}
 		}
 	})

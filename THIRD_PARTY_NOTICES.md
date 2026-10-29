@@ -23,3 +23,5 @@ Official ripgrep release archives are retained under `tools/ripgrep/`. Copyright
 Inter weights 400/500/600/700 are preserved from the original frontend and converted from WOFF2 to TrueType for native font registration. Copyright 2016 The Inter Project Authors. Distributed under SIL Open Font License 1.1; see `resources/fonts/LICENSE.txt` and `resources/fonts/NOTICE.txt`.
 
 The interactive HTML preview embeds Apache ECharts from the original frontend. Apache-2.0 license: `resources/preview/ECHARTS-LICENSE.txt`; the bundled JavaScript retains its own notices.
+
+Mermaid diagram previews embed Mermaid 12.2.0 (MIT). License: `resources/preview/MERMAID-LICENSE.txt`; the bundled JavaScript retains dependency notices.

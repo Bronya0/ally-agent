@@ -11,14 +11,13 @@ import (
 	"time"
 
 	backend "ally-dev/internal/app"
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
-// composerFocusDraft names the composer's entry in the window's focus binding:
-// MyGo keeps the input focused while the bound field holds that value and lets
-// go once it is cleared, which is what a sent message does.
-const composerFocusDraft = "draft"
+// composerHint is what an empty composer shows. MyGo paints it in the theme's
+// TextMuted, which this app now sets to the faint placeholder tone: an empty
+// box says where to type without competing with the conversation above it.
+const composerHint = "输入消息，Enter 发送，Ctrl+Enter 换行，Esc 中断，/ 选择指令，@ 引用文件"
 
 // composer is the input area: menus, attachments, run status, the editor and
 // the info bar with model, reasoning, workspace and context controls.
@@ -46,10 +45,9 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 		}
 		ui.Row(c.Key("composer-input-row")).Gap(gapField).AlignItems(ui.End).Children(func() {
 			input := uikit.Area(c.Key(t.ID+"-draft"), &t.Draft).Label("消息输入框").
-				Placeholder("输入消息，Enter 发送，Ctrl+Enter 换行，Esc 中断，/ 选择指令，@ 引用文件").
+				Placeholder(composerHint).
 				MinHeight(58).MaxHeight(576).Lines(1, 24).Border(1, c.Theme().Border).Radius(radiusControl).
-				Background(p.bg).Disabled(a.closing || (a.page == "kb" && a.kbIndexMissing())).Grow(1).
-				FocusBind(&a.composerFocus, composerFocusDraft)
+				Background(p.bg).Disabled(a.closing || (a.page == "kb" && a.kbIndexMissing())).Grow(1)
 			if paths := input.DroppedFiles(); len(paths) > 0 {
 				a.dropAttachments(t, paths)
 			}
@@ -401,14 +399,14 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation) {
 	p := a.currentPalette()
 	overlayPanel(c, "cmd-menu", 0, 360, func() {
 		ui.Row(c).Padding(6, 10).Gap(gapField).Children(func() {
-			ui.Text(c, fmt.Sprintf("指令 %d · 技能 %d", builtin, skills)).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+			ui.Text(c, fmt.Sprintf("指令 %d · 技能 %d", builtin, skills)).FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
-			fieldNote(c, "↑↓ 选择 · Enter 执行 · Tab 补全")
+			fieldNote(c, "↑↓ 选择 · Enter 执行 · Tab 补全", a.secondaryInk())
 		})
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).Padding(0, 4, 4).Gap(1).Children(func() {
 				if len(items) == 0 {
-					fieldNote(c, "无匹配指令")
+					fieldNote(c, "无匹配指令", a.secondaryInk())
 				}
 				for i, item := range items {
 					i, item := i, item
@@ -416,7 +414,7 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation) {
 					hoverRow(c, row, i == st.CmdIndex)
 					row.Children(func() {
 						ui.Text(c, "/"+item.Label).Font(monoFamily).FontSize(fsSmall).TextColor(p.accent)
-						ui.Text(c, short(item.Desc, 70)).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine()
+						ui.Text(c, short(item.Desc, 70)).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine()
 						ui.Spacer(c)
 					})
 					if row.Clicked() {
@@ -432,16 +430,16 @@ func (a *desktop) mentionMenu(c *ui.Context, t *conversation) {
 	st := t.uiState()
 	overlayPanel(c, "mention-menu", 0, 240, func() {
 		ui.Row(c).Padding(6, 10).Children(func() {
-			ui.Text(c, "@ 文件和目录").FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+			ui.Text(c, "@ 文件和目录").FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
-			ui.Text(c, st.Mention.Meta).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+			ui.Text(c, st.Mention.Meta).FontSize(fsTiny).TextColor(a.secondaryInk())
 		})
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).Padding(0, 4, 4).Gap(1).Children(func() {
 				if st.Mention.Loading && len(st.Mention.Entries) == 0 {
-					busyRow(c, "索引中…")
+					busyRow(c, "索引中…", a.secondaryInk())
 				} else if len(st.Mention.Entries) == 0 {
-					fieldNote(c, "没有匹配路径")
+					fieldNote(c, "没有匹配路径", a.secondaryInk())
 				}
 				for i, entry := range st.Mention.Entries {
 					i, entry := i, entry
@@ -452,7 +450,7 @@ func (a *desktop) mentionMenu(c *ui.Context, t *conversation) {
 					row := ui.Row(c.Key(fmt.Sprintf("mention-%d-%s", i, entry.Path))).Height(24).Padding(0, 10).Gap(gapField).Radius(radiusSmall).AlignItems(ui.Center)
 					hoverRow(c, row, i == st.Mention.Index)
 					row.Children(func() {
-						ui.Text(c, mark).Font(monoFamily).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
+						ui.Text(c, mark).Font(monoFamily).FontSize(fsSmall).TextColor(a.secondaryInk())
 						ui.Text(c, entry.Path).Font(monoFamily).FontSize(fsSmall).SingleLine()
 					})
 					if row.Clicked() {
@@ -471,14 +469,14 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 	p := a.currentPalette()
 	panel := overlayPanel(c, "sessions-menu", 0, 360, func() {
 		ui.Row(c).Padding(6, 10).Children(func() {
-			ui.Text(c, fmt.Sprintf("会话 (%d)", len(sessions))).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+			ui.Text(c, fmt.Sprintf("会话 (%d)", len(sessions))).FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
 			iconAction(c, "sess-close", "关闭", "close", 20, func() { st.SessionsOpen = false })
 		})
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).Padding(0, 4, 4).Gap(1).Children(func() {
 				if len(sessions) == 0 {
-					fieldNote(c, "当前工作区暂无历史会话")
+					fieldNote(c, "当前工作区暂无历史会话", a.secondaryInk())
 					other := 0
 					for _, s := range a.sessions {
 						if !sameWorkspace(s.Workspace, t.Workspace) {
@@ -486,7 +484,7 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 						}
 					}
 					if other > 0 {
-						fieldNote(c, fmt.Sprintf("其他工作区还有 %d 个（切换工作区后可见）", other))
+						fieldNote(c, fmt.Sprintf("其他工作区还有 %d 个（切换工作区后可见）", other), a.secondaryInk())
 					}
 				}
 				for i, s := range sessions {
@@ -499,9 +497,9 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 					row.Cursor(ui.CursorPointer)
 					hoverRow(c, row, i == st.SessionsIndex)
 					row.Children(func() {
-						ui.Text(c, fmt.Sprint(i+1)).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
-						ui.Text(c, fmtTime(s.UpdatedAt)).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
-						ui.Text(c, fmt.Sprintf("%d条", s.MessageCount)).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+						ui.Text(c, fmt.Sprint(i+1)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk())
+						ui.Text(c, fmtTime(s.UpdatedAt)).FontSize(fsTiny).TextColor(a.secondaryInk())
+						ui.Text(c, fmt.Sprintf("%d条", s.MessageCount)).FontSize(fsTiny).TextColor(a.secondaryInk())
 						title := s.Title
 						if title == "" {
 							title = "会话"
@@ -545,15 +543,15 @@ func (a *desktop) composerStatusRow(c *ui.Context, t *conversation) {
 			if note == "" {
 				note = "正在压缩对话上下文…"
 			}
-			ui.Text(c, note).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine().MinWidth(0)
+			ui.Text(c, note).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine().MinWidth(0)
 			if count := compactThinkingTokens(st); count > 0 {
-				ui.Text(c, fmt.Sprintf("Thinking %s tokens", fmtK(count))).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine()
+				ui.Text(c, fmt.Sprintf("Thinking %s tokens", fmtK(count))).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine()
 			}
 		case t.Busy:
 			a.runSpinner(c)
 			count := (st.ThinkingBytes + 3) / 4
 			if count > 0 {
-				ui.Text(c, fmt.Sprintf("Thinking %s tokens", fmtK(count))).FontSize(13).TextColor(c.Theme().TextMuted).SingleLine()
+				ui.Text(c, fmt.Sprintf("Thinking %s tokens", fmtK(count))).FontSize(13).TextColor(a.secondaryInk()).SingleLine()
 			}
 		}
 		ui.Spacer(c)
@@ -572,7 +570,7 @@ func lastUserPrompt(t *conversation) string {
 // runSpinner draws a continuous, staggered wave in a fixed 15x16 box.
 // Only painting is scheduled; messages and layout are not rebuilt per frame.
 func (a *desktop) runSpinner(c *ui.Context) {
-	color := c.Theme().TextMuted
+	color := a.secondaryInk()
 	reduced := c.Preferences().ReduceMotion
 	ui.Box(c).Width(15).Height(16).Draw(func(p *ui.Painter, r ui.Rect) {
 		if !reduced {
@@ -613,14 +611,14 @@ func (a *desktop) kbActionBar(c *ui.Context, t *conversation) {
 	running := t.Busy
 	if a.kbIndexMissing() {
 		composerFlat(c, "初始化知识库").Disabled(running).OnClick(func() { a.send(t, "请创建知识库根索引 index.md 与分类结构。") })
-		fieldNote(c, "请先初始化知识库")
+		fieldNote(c, "请先初始化知识库", a.secondaryInk())
 		return
 	}
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 		composerFlat(c, "资料入库").Disabled(running).OnClick(func() { a.send(t, "请把 sources/ 里新增的资料整理入库，并更新索引。") })
 		composerFlat(c, "整理索引").Disabled(running).OnClick(func() { a.send(t, "请检查并整理知识库索引，修正过期或重复的条目。") })
 		if running {
-			fieldNote(c, "知识库任务运行中…")
+			fieldNote(c, "知识库任务运行中…", a.secondaryInk())
 		}
 	})
 }
@@ -673,7 +671,7 @@ func (a *desktop) composerInfoBar(c *ui.Context, t *conversation) {
 			a.tasksF.Tab = 0
 			a.taskPopup = true
 			a.loadTaskCenter()
-		})
+		}, a.secondaryInk())
 		tasksRunning := 0
 		for _, task := range a.tasks {
 			if task.Running {
@@ -684,7 +682,7 @@ func (a *desktop) composerInfoBar(c *ui.Context, t *conversation) {
 			a.tasksF.Tab = 1
 			a.taskPopup = true
 			a.loadTaskCenter()
-		})
+		}, a.secondaryInk())
 		a.sshChip(c, t)
 		a.gitButton(c, t)
 		a.contextUsage(c, t)
@@ -703,7 +701,7 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 			st.ModelSearch = ""
 			st.ModelGroup = ""
 		}
-	}).SingleLine().MinWidth(0).Shrink(1), "切换模型")
+	}, a.secondaryInk()).SingleLine().MinWidth(0).Shrink(1), "切换模型")
 	if t.Busy {
 		uikit.Tooltip(c, btn, "运行中锁定：本轮结束后切换才生效")
 	}
@@ -741,7 +739,7 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 								continue
 							}
 							if !shownRecent {
-								ui.Text(c, "最近使用").FontSize(fsTiny).TextColor(c.Theme().TextMuted).Padding(6, 10)
+								ui.Text(c, "最近使用").FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(6, 10)
 								shownRecent = true
 							}
 							model := model
@@ -749,7 +747,7 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 							if name == "" {
 								name = model.Model
 							}
-							popoverModelRecent(c, fmt.Sprintf("model-recent-%d", i), name, model.ProviderName, modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) })
+							popoverModelRecent(c, fmt.Sprintf("model-recent-%d", i), name, model.ProviderName, modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) }, a.secondaryInk())
 						}
 					}
 					if shownRecent {
@@ -778,12 +776,12 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 						a.modelGroupRow(c, t, st, provider, indices)
 					}
 					if len(groups) == 0 {
-						fieldNote(c, "没有匹配的模型")
+						fieldNote(c, "没有匹配的模型", a.secondaryInk())
 					}
 				})
 			})
 			divider(c)
-			popoverItem(c, "model-manage", "管理模型", "", false, func() { st.ModelOpen = false; a.changePage("models") })
+			popoverItem(c, "model-manage", "管理模型", "", false, func() { st.ModelOpen = false; a.changePage("models") }, a.secondaryInk())
 		})
 		// 分组浮层可能盖住本面板右缘，指针在面板或浮层任一处都保持展开；
 		// 两处都离开才收起，避免指针穿过缝隙时浮层闪退。
@@ -818,8 +816,8 @@ func (a *desktop) modelGroupRow(c *ui.Context, t *conversation, st *chatUI, prov
 			if hasActive {
 				name.TextColor(th.Accent)
 			}
-			ui.Text(c, fmt.Sprint(len(indices))).FontSize(fsTiny).TextColor(th.TextMuted)
-			iconGlyph(c, "chevron", 10).TextColor(th.TextMuted)
+			ui.Text(c, fmt.Sprint(len(indices))).FontSize(fsTiny).TextColor(a.secondaryInk())
+			iconGlyph(c, "chevron", 10).TextColor(a.secondaryInk())
 		})
 	})
 	ui.PopoverBase(c.Key("model-flyout-"+provider), row, &open, func(panel ui.Element) {
@@ -836,7 +834,7 @@ func (a *desktop) modelGroupRow(c *ui.Context, t *conversation, st *chatUI, prov
 					if name == "" {
 						name = model.Model
 					}
-					popoverItem(c, fmt.Sprintf("model-choice-%d", i), name, "", modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) })
+					popoverItem(c, fmt.Sprintf("model-choice-%d", i), name, "", modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) }, a.secondaryInk())
 				}
 			})
 		})
@@ -872,33 +870,18 @@ func (a *desktop) selectChatModel(t *conversation, model backend.ModelConfig) {
 	}()
 }
 
-// reasoningSelector reports and sets the thinking level. The levels are a plain
-// list of values, so the system's own menu carries them: it shows the current
-// one with its radio mark and keys itself, without a popover of our own.
+// reasoningSelector shares the kit's select popup and option styling while
+// keeping the info-bar trigger compact and locked during a run.
 func (a *desktop) reasoningSelector(c *ui.Context, t *conversation) {
-	levels := []string{"auto", "off", "low", "medium", "high", "xhigh", "max"}
-	label := t.Reasoning
-	if label == "" {
-		label = "auto"
+	if t.Reasoning == "" {
+		t.Reasoning = "auto"
 	}
-	// The label and caret both come from caretButton below. A label on the
-	// button itself would draw the level a second time.
-	btn := uikit.Tooltip(c, composerSettingButton(c.Key("composer-reasoning"), "", t.Busy, func() {
-		items := make([]*mygo.MenuItem, 0, len(levels))
-		for _, level := range levels {
-			level := level
-			items = append(items, menuItem(level, level == label, func() {
-				t.Reasoning = level
-				a.win.Update(func() {})
-			}))
-		}
-		a.popupMenu(items)
-	}), "思考强度（需模型支持，不支持的模型请保持 auto）")
-	ink := c.Theme().TextMuted
-	caretButton(c, btn, label, "chevrondown", fsSmall, &ink)
+	btn := uikit.CompactSelect(c.Key("composer-reasoning"), &t.Reasoning, reasoningLevels, t.Busy, a.secondaryInk()).Label("思考强度")
+	tip := "思考强度（需模型支持，不支持的模型请保持 auto）"
 	if t.Busy {
-		uikit.Tooltip(c, btn, "运行中锁定：本轮结束后切换才生效")
+		tip = "运行中锁定：本轮结束后切换才生效"
 	}
+	uikit.Tooltip(c, btn, tip)
 }
 
 // workspaceButton is the workspace entry of the info bar: the folder glyph on
@@ -955,15 +938,15 @@ func (a *desktop) extraRootsButton(c *ui.Context, t *conversation) {
 		panel.Label("附加工作区菜单").AttachTo(btn, ui.AnchorTopLeft, ui.AnchorBottomLeft).Margin(0, 0, 6, 0).MaxHeightPercent(75).Transition(uikit.PopupTransition())
 		ui.Scroll(c.Key("roots")).FillWidth().MaxHeight(260).Children(func() {
 			if len(roots) == 0 {
-				muted(c, "尚未添加附加工作区", fsSmall).Padding(8, 10)
+				muted(c, "尚未添加附加工作区", fsSmall, a.secondaryInk()).Padding(8, 10)
 			}
 			for _, root := range roots {
 				root := root
-				popoverItem(c, root, "📁 "+filepath.Base(root), root+" · 点击移除", false, func() { st.ExtraRootsOpen = false; a.removeExtraRoot(t, root) })
+				popoverItem(c, root, "📁 "+filepath.Base(root), root+" · 点击移除", false, func() { st.ExtraRootsOpen = false; a.removeExtraRoot(t, root) }, a.secondaryInk())
 			}
 		})
 		divider(c)
-		popoverItem(c, "add-root", "＋ 添加目录", "", false, func() { st.ExtraRootsOpen = false; a.addExtraRoot(t) })
+		popoverItem(c, "add-root", "＋ 添加目录", "", false, func() { st.ExtraRootsOpen = false; a.addExtraRoot(t) }, a.secondaryInk())
 	})
 	btn.Children(func() {
 		iconGlyph(c, "grid", 16).TextColor(color)
@@ -985,12 +968,12 @@ func (a *desktop) addExtraRoot(t *conversation) {
 		}
 		a.win.Update(func() {
 			if sameWorkspace(p, t.Workspace) {
-				a.status = "该目录就是当前主工作区"
+				a.notify("该目录就是当前主工作区")
 				return
 			}
 			for _, existing := range a.extraRoots[t.ID] {
 				if sameWorkspace(existing, p) {
-					a.status = "该目录已在附加工作区中"
+					a.notify("该目录已在附加工作区中")
 					return
 				}
 			}
@@ -1023,13 +1006,13 @@ func (a *desktop) sshChip(c *ui.Context, t *conversation) {
 	footerBadge(c, "footer-ssh", "SSH", fmt.Sprint(count), ui.Hex("#3b9f70"), "SSH 集群授权", func() {
 		a.sshF.AuthOpen = true
 		a.loadSSHAuth(t.Workspace)
-	})
+	}, a.secondaryInk())
 }
 
 func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 	st := t.uiState()
 	if !st.GitLoaded {
-		muted(c, "…", fsTiny)
+		muted(c, "…", fsTiny, a.secondaryInk())
 		return
 	}
 	git := st.Git
@@ -1043,7 +1026,7 @@ func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 	if label == "" {
 		label = "git"
 	}
-	btn := uikit.Tooltip(c, ui.ButtonBase(c.Key("footer-git")).Height(22).Padding(1, 7).Radius(11).Border(1, c.Theme().Border).Background(c.Theme().Surface).Cursor(ui.CursorPointer), "查看 Git 改动")
+	btn := uikit.Tooltip(c, ui.ButtonBase(c.Key("footer-git")).Height(22).Padding(1, 7).Radius(11).Background(c.Theme().Surface).Cursor(ui.CursorPointer), "查看 Git 改动")
 	btn.Children(func() {
 		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, short(label, 22)).FontSize(fsTiny).TextColor(c.Theme().Accent).SingleLine()
@@ -1051,7 +1034,7 @@ func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 				value  int
 				symbol string
 				color  ui.Color
-			}{{git.Ahead, "↑", c.Theme().TextMuted}, {git.Behind, "↓", c.Theme().TextMuted}, {git.Added, "+", c.Theme().Success}, {git.Modified, "~", c.Theme().Warning}, {git.Deleted, "-", c.Theme().Danger}} {
+			}{{git.Ahead, "↑", a.secondaryInk()}, {git.Behind, "↓", a.secondaryInk()}, {git.Added, "+", c.Theme().Success}, {git.Modified, "~", c.Theme().Warning}, {git.Deleted, "-", c.Theme().Danger}} {
 				if part.value > 0 {
 					ui.Text(c, fmt.Sprintf("%s%d", part.symbol, part.value)).FontSize(fsTiny).TextColor(part.color).NoWrap()
 				}
@@ -1079,7 +1062,7 @@ func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 						if repo.Ahead+repo.Behind+repo.Added+repo.Modified+repo.Deleted == 0 {
 							stats = "clean"
 						}
-						popoverItem(c, fmt.Sprintf("git-repo-%d", i), repo.Name+"/  "+repo.Branch, stats, false, func() { *open = false; a.filesF.GitOpen = true; a.loadGitDiff(t, repo.Path) })
+						popoverItem(c, fmt.Sprintf("git-repo-%d", i), repo.Name+"/  "+repo.Branch, stats, false, func() { *open = false; a.filesF.GitOpen = true; a.loadGitDiff(t, repo.Path) }, a.secondaryInk())
 					}
 				})
 			})
@@ -1172,20 +1155,20 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 		// more instruction file — scrolls here.
 		ui.Scroll(c).MaxHeight(contextBreakdownHeight).Children(func() {
 			ui.Column(c).FillWidth().Padding(4, 10).Gap(6).Children(func() {
-				contextPart(c, "系统提示词", b.SystemPrompt)
+				contextPart(c, "系统提示词", b.SystemPrompt, a.secondaryInk())
 				for _, part := range b.SystemPromptParts {
 					if part.Tokens > 0 {
-						contextPart(c, "  · "+part.Label, part.Tokens)
+						contextPart(c, "  · "+part.Label, part.Tokens, a.secondaryInk())
 					}
 				}
-				contextPart(c, "工具 Schema", b.ToolSchemas)
-				contextPart(c, "用户提问", b.UserMessages)
-				contextPart(c, "AI 回复", b.AssistantMsgs)
-				contextPart(c, "工具结果", b.ToolResults)
+				contextPart(c, "工具 Schema", b.ToolSchemas, a.secondaryInk())
+				contextPart(c, "用户提问", b.UserMessages, a.secondaryInk())
+				contextPart(c, "AI 回复", b.AssistantMsgs, a.secondaryInk())
+				contextPart(c, "工具结果", b.ToolResults, a.secondaryInk())
 				if b.Reasoning > 0 {
-					contextPart(c, "思考内容", b.Reasoning)
+					contextPart(c, "思考内容", b.Reasoning, a.secondaryInk())
 				}
-				ui.Text(c, fmt.Sprintf("累计输入 %s / 输出 %s", fmtK(st.Usage.InputTokens), fmtK(st.Usage.OutputTokens))).FontSize(fsTiny).TextColor(c.Theme().TextMuted)
+				ui.Text(c, fmt.Sprintf("累计输入 %s / 输出 %s", fmtK(st.Usage.InputTokens), fmtK(st.Usage.OutputTokens))).FontSize(fsTiny).TextColor(a.secondaryInk())
 			})
 		})
 		divider(c)
@@ -1195,33 +1178,33 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 				contextCompactButton(c, "context-compact", "压缩上下文", true, t.Busy || st.CompactBusy, "压缩对话上下文，用摘要替换历史消息", func() {
 					st.ContextOpen = false
 					a.compact(t, false)
-				})
+				}, a.secondaryInk())
 				contextCompactButton(c, "context-fast-compact", "压缩上下文(快速)", true, t.Busy || st.CompactBusy, "本地裁剪旧回复、工具结果与思考，保留最近内容，不调用模型", func() {
 					st.ContextOpen = false
 					a.compact(t, true)
-				})
+				}, a.secondaryInk())
 			})
 			ui.Row(c).FillWidth().Shrink(0).Gap(8).Children(func() {
 				contextCompactButton(c, "context-lessons", "压缩教训", false, t.Busy, "压缩并总结项目经验教训", func() {
 					st.ContextOpen = false
 					a.send(t, "请压缩并总结这个项目的经验教训（LESSONS.md）。")
-				})
+				}, a.secondaryInk())
 				contextCompactButton(c, "context-graph", "更新图谱", false, t.Busy, "更新 CODEGRAPH.md 导航", func() {
 					st.ContextOpen = false
 					a.send(t, "请更新 CODEGRAPH.md，让导航与当前代码一致。")
-				})
+				}, a.secondaryInk())
 			})
 		})
 	})
 }
 
-func contextCompactButton(c *ui.Context, key, label string, primary, disabled bool, tip string, action func()) {
+func contextCompactButton(c *ui.Context, key, label string, primary, disabled bool, tip string, action func(), ink ...ui.Color) {
 	// 对齐 main 的 .context-compact-btn：透明底 + 1px 边框，字号 12，前两个主操作走
 	// 主题高亮色；圆角与边框透明度跟其它按钮同一套 token。
 	t := c.Theme()
 	b := uikit.Tooltip(c, ui.ButtonBase(c.Key(key)).Grow(1).Basis(0).MinWidth(0).Height(28).Padding(2, 4).Radius(radiusControl).
 		Border(1, surfaceBorder(c)).Center().Label(label), tip).Cursor(ui.CursorPointer).Disabled(disabled)
-	color := t.TextMuted
+	color := uikit.SecondaryInk(c, ink)
 	if primary {
 		color = t.Accent
 	}
@@ -1244,9 +1227,9 @@ func contextCompactButton(c *ui.Context, key, label string, primary, disabled bo
 	})
 }
 
-func contextPart(c *ui.Context, name string, tokens int) {
+func contextPart(c *ui.Context, name string, tokens int, ink ...ui.Color) {
 	ui.Row(c).FillWidth().Children(func() {
-		ui.Text(c, name).FontSize(fsSmall).TextColor(c.Theme().TextMuted)
+		ui.Text(c, name).FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink))
 		ui.Spacer(c)
 		ui.Text(c, fmtK(tokens)).FontSize(fsSmall)
 	})
@@ -1322,7 +1305,7 @@ func (a *desktop) composerSendRow(c *ui.Context, t *conversation) {
 		ui.Spacer(c)
 		if t.AttachmentLoading {
 			ui.Spinner(c).Size(13, 13)
-			muted(c, "正在处理附件…", fsTiny)
+			muted(c, "正在处理附件…", fsTiny, a.secondaryInk())
 		}
 	})
 }

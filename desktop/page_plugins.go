@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	backend "ally-dev/internal/app"
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -147,7 +146,7 @@ func pluginName(p backend.PluginInfo) string {
 func (a *desktop) pluginsPageBody(c *ui.Context) {
 	services := c.Services()
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-		fieldNote(c, fmt.Sprintf("%d 个已安装", len(a.plugins)))
+		fieldNote(c, fmt.Sprintf("%d 个已安装", len(a.plugins)), a.secondaryInk())
 		ui.Spacer(c)
 		uikit.Tooltip(c, flat(c, "开发教程"), "在浏览器打开插件开发文档").OnClick(func() {
 			services.OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/plugin-system.md")
@@ -157,7 +156,7 @@ func (a *desktop) pluginsPageBody(c *ui.Context) {
 		uikit.Tooltip(c, primary(c, "添加"), "选择插件 zip 包").OnClick(func() { a.importPlugin(false) })
 	})
 	if a.pluginsF.Busy {
-		busyRow(c, "正在处理插件…")
+		busyRow(c, "正在处理插件…", a.secondaryInk())
 	}
 	if len(a.plugins) == 0 {
 		a.pluginEmptyState(c)
@@ -176,13 +175,13 @@ func (a *desktop) pluginEmptyState(c *ui.Context) {
 			ui.Column(c).Grow(1).Gap(gapField).Children(func() {
 				accentChip(c, "插件系统 v1")
 				ui.Text(c, "把 Ally 变成你自己的控制台").FontSize(19).Bold()
-				ui.Text(c, "三分钟定制自己想要的页面，比如公司 OA、BUG 管理页面、工时计划表等等。").FontSize(fsBody).TextColor(c.Theme().TextMuted)
+				ui.Text(c, "三分钟定制自己想要的页面，比如公司 OA、BUG 管理页面、工时计划表等等。").FontSize(fsBody).TextColor(a.secondaryInk())
 				cardFlat(c, "开发教程").AlignSelf(ui.Start).OnClick(func() {
 					c.Services().OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/plugin-system.md")
 				})
 			})
 			ui.Column(c).Width(240).Gap(gapTight).Children(func() {
-				fieldNote(c, "可用的宿主能力")
+				fieldNote(c, "可用的宿主能力", a.secondaryInk())
 				for _, cap := range []string{"host.http", "host.store", "host.files", "host.ui.notify", "host.events", "host.ui.theme"} {
 					ui.Text(c, cap).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().Accent)
 				}
@@ -200,7 +199,7 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 			if p.Version == "" {
 				version = p.ID + "@-"
 			}
-			fieldNote(c, version)
+			fieldNote(c, version, a.secondaryInk())
 			switch {
 			case !p.Valid:
 				statusBadge(c, "不可用", "error")
@@ -211,13 +210,18 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 			enabled := p.Enabled
 			uikit.SwitchNative(c.Key("plugin-switch-"+p.ID), &enabled).Disabled(a.pluginsF.Busy || !p.Valid).Label(name).OnClick(func() { a.setPluginEnabled(p, enabled) })
 			p := p
-			exportButton := cardFlat(c.Key("plugin-export-button-"+p.ID), "导出").Disabled(a.pluginsF.Busy).OnClick(func() {
-				a.popupMenu([]*mygo.MenuItem{
-					menuAction("导出（只含包本体）", func() { a.exportPlugin(p, false) }),
-					menuAction("导出（连插件数据一起）", func() { a.exportPlugin(p, true) }),
-				})
+			exportButton := cardFlat(c.Key("plugin-export-button-"+p.ID), "导出").Disabled(a.pluginsF.Busy)
+			caretButton(c, exportButton, "chevrondown", fsSmall, nil)
+			menuPopoverButton(c, exportButton, 210, func(dismiss func()) {
+				popoverItem(c, "plugin-export-package-"+p.ID, "导出（只含包本体）", "", false, func() {
+					dismiss()
+					a.exportPlugin(p, false)
+				}, a.secondaryInk())
+				popoverItem(c, "plugin-export-data-"+p.ID, "导出（连插件数据一起）", "", false, func() {
+					dismiss()
+					a.exportPlugin(p, true)
+				}, a.secondaryInk())
 			})
-			caretButton(c, exportButton, "导出", "chevrondown", fsSmall, nil)
 			cardDanger(c, "删除").Disabled(a.pluginsF.Busy).OnClick(func() {
 				a.pluginsF.DeleteID = p.ID
 				a.pluginsF.Purge = false
@@ -225,12 +229,12 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 			})
 		})
 		if p.Description != "" {
-			uikit.Tooltip(c, ui.Text(c, p.Description).FontSize(fsSmall).TextColor(c.Theme().TextMuted).SingleLine(), p.Description)
+			uikit.Tooltip(c, ui.Text(c, p.Description).FontSize(fsSmall).TextColor(a.secondaryInk()).SingleLine(), p.Description)
 		} else {
-			fieldNote(c, "无描述")
+			fieldNote(c, "无描述", a.secondaryInk())
 		}
 		if meta := pluginMeta(p); meta != "" {
-			fieldNote(c, meta)
+			fieldNote(c, meta, a.secondaryInk())
 		}
 		hosts := "无"
 		if len(p.Permissions.HTTP) > 0 {
@@ -240,8 +244,8 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 		if p.Permissions.Workspace == "read" {
 			workspace = "只读"
 		}
-		fieldNote(c, "权限：网络 "+hosts+" ｜ 工作区 "+workspace)
-		uikit.Tooltip(c, ui.Text(c, p.Dir).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().TextMuted).SingleLine(), p.Dir)
+		fieldNote(c, "权限：网络 "+hosts+" ｜ 工作区 "+workspace, a.secondaryInk())
+		uikit.Tooltip(c, ui.Text(c, p.Dir).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine(), p.Dir)
 		if p.LoadError != "" {
 			inlineError(c, "plugin-error-"+p.ID, p.LoadError)
 		}
@@ -276,7 +280,7 @@ func (a *desktop) pluginDeleteDialog(c *ui.Context) {
 	modalCard(c, &a.pluginsF.DeleteOpen, widthModalSmall, func() {
 		modalTitle(c, "删除插件 "+pluginName(target), "删除后侧栏入口会一并消失；重新导入同一个包即可恢复。")
 		ui.Checkbox(c.Key("plugin-purge"), &a.pluginsF.Purge, "同时删除插件自己保存的数据（账号、令牌等）")
-		fieldNote(c, "不勾选时，重装插件可继续使用原有数据。")
+		fieldNote(c, "不勾选时，重装插件可继续使用原有数据。", a.secondaryInk())
 		modalActions(c, func() {
 			flat(c, "取消").OnClick(func() { a.pluginsF.DeleteOpen = false })
 			dangerButton(c, "删除").Disabled(a.pluginsF.Busy).OnClick(func() { a.deletePlugin(target, a.pluginsF.Purge) })
@@ -299,7 +303,7 @@ func (a *desktop) currentPlugin() *backend.PluginInfo {
 func (a *desktop) pluginPageBody(c *ui.Context) {
 	p := a.currentPlugin()
 	if p == nil {
-		emptyState(c, "插件不存在或已停用", "返回插件管理重新启用。")
+		emptyState(c, "插件不存在或已停用", "返回插件管理重新启用。", a.secondaryInk())
 		flat(c, "插件管理").AlignSelf(ui.Start).OnClick(func() { a.changePage("plugins") })
 		return
 	}
@@ -315,11 +319,11 @@ func (a *desktop) pluginPageBody(c *ui.Context) {
 			})
 			cardFlat(c, "插件管理").OnClick(func() { a.changePage("plugins") })
 		})
-		notice(c, "info", "这个插件是网页型页面：它在 Web 宿主里执行 JavaScript 与 DOM 渲染，原生窗口无法内嵌执行。原有数据、权限与启停状态都保留在本地。")
+		notice(c, "info", "这个插件是网页型页面：它在 Web 宿主里执行 JavaScript 与 DOM 渲染，原生窗口无法内嵌执行。原有数据、权限与启停状态都保留在本地。", a.secondaryInk())
 		if p.Description != "" {
-			ui.Text(c, p.Description).FontSize(fsBody).TextColor(c.Theme().TextMuted)
+			ui.Text(c, p.Description).FontSize(fsBody).TextColor(a.secondaryInk())
 		}
-		kv(c, "入口", p.Entry)
-		kv(c, "安装目录", p.Dir)
+		kv(c, "入口", p.Entry, a.secondaryInk())
+		kv(c, "安装目录", p.Dir, a.secondaryInk())
 	})
 }
