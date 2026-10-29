@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/egoist/mygo"
 )
 
 // dispatchEvent is called from the backend run loop. Payload maps are
@@ -32,6 +34,11 @@ func (a *desktop) dispatchEvent(name string, payload any) {
 func (a *desktop) applyEvent(name string, p map[string]any) {
 	if a.closing && name != "service:update" {
 		return
+	}
+	// Completion is app-wide: background sessions and scheduled tasks may
+	// have no open tab. Use the system alert sound only while Ally is inactive.
+	if (name == "run:done" || name == "scheduled:run_done") && a.win != nil && !mygo.App.IsActive() {
+		mygo.Shell.Beep()
 	}
 	switch name {
 	case "service:update":
