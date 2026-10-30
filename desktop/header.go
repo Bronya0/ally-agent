@@ -17,6 +17,8 @@ import (
 // title bar the window declares.
 const headerBarHeight = 44
 
+const headerTrafficLightGap float32 = 12
+
 // headerBar is the 44px window chrome: wordmark, workspace tabs, workspace
 // management, explorer toggle, update entry and the window buttons.
 func (a *desktop) headerBar(c *ui.Context) {
@@ -31,12 +33,19 @@ func (a *desktop) headerBar(c *ui.Context) {
 		railWidth = a.prefs.RailWidth
 		railSpan = railWidth + railDividerWidth
 	}
-	leading := max(widthRailCollapsed, railSpan-bar.Left)
+	minLeading := widthRailCollapsed
+	if bar.Left > 0 {
+		minLeading += headerTrafficLightGap
+	}
+	leading := max(minLeading, railSpan-bar.Left)
 	logoInset := railPadH
 	if a.prefs.RailExpanded {
 		logoInset = 6 + railInsetForWidth(a.prefs.RailWidth)
 	}
 	logoInset = max(float32(0), logoInset-bar.Left)
+	if bar.Left > 0 {
+		logoInset = max(headerTrafficLightGap, logoInset)
+	}
 	tabsStart := bar.Left + leading
 	row := ui.Row(c).Height(max(headerBarHeight, bar.Height)).Shrink(0).Background(colChrome(a)).
 		Border(0, ui.Transparent).Draw(func(painter *ui.Painter, r ui.Rect) {

@@ -119,7 +119,11 @@ func TestHeaderTabsTrackSidebarBoundary(t *testing.T) {
 			a.prefs.RailWidth = width
 			tt.Frame()
 			tab, ok := tt.Find("工作区标签 aligned")
-			want := max(railSpan, bar.Left+widthRailCollapsed)
+			minLeading := widthRailCollapsed
+			if bar.Left > 0 {
+				minLeading += headerTrafficLightGap
+			}
+			want := max(railSpan, bar.Left+minLeading)
 			if !ok || tab.X != want {
 				t.Fatalf("bar=%v rail=%v tab starts %v want %v", bar, width, tab.X, want)
 			}
@@ -128,7 +132,9 @@ func TestHeaderTabsTrackSidebarBoundary(t *testing.T) {
 			if width > 0 {
 				left = 6 + railInsetForWidth(width)
 			}
-			left = max(left, bar.Left)
+			if bar.Left > 0 {
+				left = max(left, bar.Left+headerTrafficLightGap)
+			}
 			if !ok || logo.X != left {
 				t.Fatalf("bar=%v rail=%v logo left=%v want %v", bar, width, logo.X, left)
 			}
