@@ -34,3 +34,20 @@ func TestInitialAppearanceAndAvatar(t *testing.T) {
 		t.Fatal("legacy light selection was overwritten")
 	}
 }
+
+func TestHistoryPageSizePreference(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "native-ui.json")
+	for _, tc := range []struct {
+		data string
+		want int
+	}{
+		{`{}`, 80}, {`{"historyPageSize":20}`, 20}, {`{"historyPageSize":140}`, 140}, {`{"historyPageSize":999999}`, 80},
+	} {
+		if err := os.WriteFile(path, []byte(tc.data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := readPrefs(path).HistoryPageSize; got != tc.want {
+			t.Fatalf("%s: %d", tc.data, got)
+		}
+	}
+}

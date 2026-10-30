@@ -76,7 +76,7 @@ func TestReasoningSelectorDrawsLevelOnce(t *testing.T) {
 	}
 }
 
-func TestReasoningSelectorUsesThemedPopup(t *testing.T) {
+func TestReasoningSelectorUsesDrawnMenu(t *testing.T) {
 	for _, appearance := range []string{"dark", "light"} {
 		t.Run(appearance, func(t *testing.T) {
 			a := &desktop{}
@@ -103,10 +103,17 @@ func TestReasoningSelectorUsesThemedPopup(t *testing.T) {
 			}
 			option, ok := tester.Find("max")
 			if !ok || option.Y+option.H > trigger.Y || option.Y < 0 {
-				t.Fatalf("bottom select did not fit its popup above the trigger: option=%+v trigger=%+v", option, trigger)
+				t.Fatalf("bottom menu did not fit above the trigger: option=%+v trigger=%+v", option, trigger)
 			}
-			if !tester.HasText("✓") {
-				t.Fatal("popup does not mark the current level")
+			// MyGo's drawn menu marks the current choice with a radio mark painted in
+			// the column left of the labels, not with a text glyph.
+			current, _ := tester.Find("low")
+			other, _ := tester.Find("high")
+			img := tester.Image()
+			marked := img.RGBAAt(int(current.X)+16, int(current.Y+current.H/2))
+			plain := img.RGBAAt(int(other.X)+16, int(other.Y+other.H/2))
+			if marked == plain {
+				t.Fatalf("menu does not mark the current level: mark column %v", marked)
 			}
 			if os.Getenv("ALLY_REASONING_PREVIEW") != "" {
 				var preview bytes.Buffer
@@ -126,14 +133,14 @@ func TestReasoningSelectorUsesThemedPopup(t *testing.T) {
 			}
 			tester.Key(0, ui.KeyEscape)
 			if conv.Reasoning != "max" || tester.HasText("medium") {
-				t.Fatal("Escape did not cancel the popup without changing the value")
+				t.Fatal("Escape did not close the menu without changing the value")
 			}
 			if err := tester.Click("思考强度"); err != nil {
 				t.Fatal(err)
 			}
 			tester.ClickAt(4, 4)
 			if tester.HasText("medium") {
-				t.Fatal("clicking outside did not close the popup")
+				t.Fatal("clicking outside did not close the menu")
 			}
 		})
 	}
@@ -153,7 +160,7 @@ func TestReasoningSelectorKeyboardAndRunLock(t *testing.T) {
 	tester.Key(0, ui.KeyTab)
 	tester.Key(0, ui.KeyDown)
 	if !tester.HasText("medium") {
-		t.Fatal("keyboard did not open the select")
+		t.Fatal("keyboard did not open the menu")
 	}
 	tester.Key(0, ui.KeyEnd)
 	tester.Key(0, ui.KeyEnter)
@@ -195,7 +202,7 @@ func TestReasoningSelectorKeyboardAndRunLock(t *testing.T) {
 	tester.Key(0, ui.KeyHome)
 	tester.Key(0, ui.KeyEnter)
 	if conv.Reasoning != "auto" {
-		t.Fatal("select did not recover after the run ended")
+		t.Fatal("menu did not recover after the run ended")
 	}
 }
 

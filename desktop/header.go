@@ -83,7 +83,7 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 			ui.Row(c).FillHeight().AlignItems(ui.Stretch).Gap(0).Padding(0).Children(func() {
 				for i, t := range a.tabs {
 					idx, tab := i, t
-					uikit.WorkspaceTab(c.Key("wtab-"+tab.ID), workspaceLabel(tab.Workspace), idx == a.active, tab.Busy, len(a.tabs) > 1, iconImage("close"), func() {
+					uikit.WorkspaceTab(c.Key("wtab-"+tab.ID), workspaceLabel(tab.Workspace), workspaceTip(tab.Workspace), idx == a.active, tab.Busy, len(a.tabs) > 1, iconImage("close"), func() {
 						if s.gesture.Panning {
 							// The press panned the strip: it chose nothing.
 							return
@@ -203,6 +203,15 @@ func workspaceLabel(root string) string {
 		return "临时"
 	}
 	return base
+}
+
+// workspaceTip is what a tab's hover reveals: the label keeps only the last
+// segment, so the tooltip carries the workspace's full path.
+func workspaceTip(root string) string {
+	if root == "" {
+		return "未选择工作区"
+	}
+	return root
 }
 
 func (a *desktop) closeWorkspaceTab(index int) {

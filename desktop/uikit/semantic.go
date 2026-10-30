@@ -73,7 +73,7 @@ func Action(c *ui.Context, label string, o ActionOptions) ui.Element {
 	return b
 }
 func actionParts(c *ui.Context, label string, o ActionOptions) (ui.Element, ui.Element) {
-	b := ui.ButtonBase(c).Shrink(0).Label(label).Disabled(o.Disabled || o.Loading).Cursor(ui.CursorPointer)
+	b := ui.ButtonBase(c).AlignSelf(ui.Start).Shrink(0).Label(label).Disabled(o.Disabled || o.Loading).Cursor(ui.CursorPointer)
 	h := float32(34)
 	if o.Small {
 		h = 28

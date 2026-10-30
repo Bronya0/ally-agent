@@ -86,13 +86,15 @@ func (a *desktop) rail(c *ui.Context) {
 func (a *desktop) railBody(c *ui.Context, width *float32) {
 	*ui.Local(c.Root(), "rail-content-width", func() float32 { return 200 }) = *width
 	p := a.currentPalette()
-	ui.Column(c).Width(*width).Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(6).Gap(3).Children(func() {
+	// Split panes are boxes: the rail must explicitly take the pane's height
+	// before the middle section can grow and keep the toggle at the bottom.
+	ui.Column(c).Width(*width).FillHeight().Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(6).Gap(3).Children(func() {
 		a.railModes(c, true)
 		ui.Column(c).Grow(1).MinHeight(0).Gap(6).Children(func() {
 			a.railWorkspaces(c)
 			a.railSessions(c)
 		})
-		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Shrink(0).Gap(4).AlignItems(ui.Center).Children(func() {
 			railToggleButton(c, "rail-close", "收起侧边栏", "collapse", func() {
 				a.prefs.RailExpanded = false
 				a.savePrefs()

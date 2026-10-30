@@ -107,3 +107,21 @@ func TestTooltipContentChangeDoesNotRestartFade(t *testing.T) {
 		t.Fatalf("content update restarted fade: %v -> %v", before, got)
 	}
 }
+
+func TestTooltipForIntrinsicLabelInWideColumn(t *testing.T) {
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Fill().Padding(80, 24).Children(func() {
+			RightTooltip(c, ui.Text(c.Key("label"), "展示块数 ⓘ").AlignSelf(ui.Start), "标题的计算方式说明")
+		})
+	}, 900, 400)
+	r, ok := tt.Find("展示块数 ⓘ")
+	if !ok || r.W > 200 {
+		t.Fatalf("label stretched: %+v", r)
+	}
+	tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	tt.Advance(time.Second)
+	tip, ok := tt.Find("标题的计算方式说明")
+	if !ok || tip.X <= r.X+r.W || tip.X > r.X+r.W+40 {
+		t.Fatalf("tip detached from label: anchor=%+v tip=%+v", r, tip)
+	}
+}

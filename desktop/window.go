@@ -4,6 +4,7 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -16,30 +17,32 @@ func (a *desktop) view(c *ui.Context) {
 	c.SetTheme(a.theme())
 	a.globalShortcuts(c)
 	c.OnShortcut(0, ui.KeyEscape, func() { a.cancelConversation(a.current()) })
-	if len(a.notifications) > 0 {
-		pending := a.notifications
-		a.notifications = nil
-		for _, message := range pending {
-			c.AddToast(message)
-		}
-	}
+	a.flushNotices(c, time.Now())
 	width, _ := c.Size()
 	p := a.currentPalette()
 	ui.Column(c).Fill().Background(p.bg).Selectable().Children(func() {
 		a.headerBar(c)
-		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-			a.rail(c)
-			if a.prefs.RailExpanded {
-				a.resizeDivider(c, "rail-resize", &a.prefs.RailWidth, 1, 160, 360, &a.railResizing)
-			}
-			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+		content := func() {
+			ui.Column(c.Key("page-content")).Grow(1).MinWidth(0).MinHeight(0).FillHeight().Children(func() {
 				if !a.ready {
 					a.startupBody(c)
 					return
 				}
 				a.pageContent(c, width)
 			})
-		})
+		}
+		if a.prefs.RailExpanded {
+			ui.Split(c.Key("rail-split"), &a.prefs.RailWidth, func() { a.rail(c) }, content).
+				Grow(1).MinHeight(0).FillWidth().OnChange(func() {
+				a.prefs.RailWidth = max(160, min(360, a.prefs.RailWidth))
+				a.savePrefs()
+			})
+		} else {
+			ui.Row(c.Key("collapsed-layout")).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+				a.rail(c)
+				content()
+			})
+		}
 	})
 	a.gitDiffDialog(c)
 	a.taskPopupDialog(c)
@@ -120,25 +123,31 @@ func (a *desktop) panelPage(c *ui.Context, title, subtitle string, headerActions
 // chatPage hosts the conversation column plus the optional explorer.
 func (a *desktop) chatPage(c *ui.Context, width float32) {
 	chat := func() { a.chatColumn(c, width) }
-	if a.explorer && a.current() != nil {
-		if a.activeFile() != nil {
-			// A file being edited takes the main area, the tree keeps its
-			// column, exactly like the Vue explorer overlay.
-			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-				a.fileEditor(c, a.activeFile())
-				a.resizeDivider(c, "tree-resize", &a.prefs.TreeWidth, -1, 150, 600, &a.treeResizing)
-				a.fileTree(c)
-			})
-			return
-		}
-		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).Children(func() { chat() })
-			a.resizeDivider(c, "tree-resize", &a.prefs.TreeWidth, -1, 150, 600, &a.treeResizing)
-			a.fileTree(c)
-		})
+	if !a.explorer || a.current() == nil {
+		chat()
 		return
 	}
-	chat()
+	if a.prefs.TreeWidth < 150 || a.prefs.TreeWidth > 600 {
+		a.prefs.TreeWidth = 270
+	}
+	// Split sizes its first pane. RTL places that pane on the right; each
+	// pane restores the application's text direction before building content.
+	ui.Column(c.Key("explorer-layout")).Direction(ui.RightToLeft).Grow(1).MinHeight(0).FillWidth().Children(func() {
+		ui.Split(c.Key("explorer-split"), &a.prefs.TreeWidth, func() {
+			ui.Column(c).Direction(ui.LeftToRight).Fill().Children(func() { a.fileTree(c) })
+		}, func() {
+			ui.Column(c).Direction(ui.LeftToRight).Fill().MinWidth(0).Children(func() {
+				if file := a.activeFile(); file != nil {
+					a.fileEditor(c, file)
+				} else {
+					chat()
+				}
+			})
+		}).Fill().OnChange(func() {
+			a.prefs.TreeWidth = max(150, min(600, a.prefs.TreeWidth))
+			a.savePrefs()
+		})
+	})
 }
 
 func (a *desktop) chatColumn(c *ui.Context, width float32) {
@@ -207,22 +216,4 @@ func (a *desktop) pickKBRoot() {
 			a.page = "kb"
 		})
 	}()
-}
-
-// releaseNotesDialog shows the bundled changelog once per version.
-func (a *desktop) releaseNotesDialog(c *ui.Context) {
-	if !a.upd.ReleaseOpen {
-		return
-	}
-	modalCard(c, &a.upd.ReleaseOpen, widthModalWide, func() {
-		modalTitle(c, "本次更新", "版本 "+a.upd.ReleaseVer)
-		if strings.TrimSpace(a.upd.ReleaseBody) == "" {
-			fieldNote(c, "此构建未内置更新日志。", a.secondaryInk())
-		} else {
-			ui.Text(c, a.upd.ReleaseBody).Selectable().FontSize(fsBody).LineHeight(1.6)
-		}
-		modalActions(c, func() {
-			primary(c, "关闭").OnClick(func() { a.upd.ReleaseOpen = false })
-		})
-	})
 }

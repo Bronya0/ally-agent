@@ -16,7 +16,7 @@ func TestWorkspaceTabSlotsStayFixed(t *testing.T) {
 	closed, selected := 0, 0
 	tt := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Padding(10).Children(func() {
-			WorkspaceTab(c.Key("tab"), "apisec", active, busy, canClose, nil, func() { selected++ }, func() { closed++ }, nil)
+			WorkspaceTab(c.Key("tab"), "apisec", "/coding/go/src/apisec", active, busy, canClose, nil, func() { selected++ }, func() { closed++ }, nil)
 		})
 	}, 300, 100)
 	label, _ := tt.Find("apisec")
@@ -44,6 +44,9 @@ func TestWorkspaceTabSlotsStayFixed(t *testing.T) {
 	if closed != 1 {
 		t.Fatal("close did not activate")
 	}
+	if selected != 1 {
+		t.Fatal("closing the tab also activated it")
+	}
 	busy = true
 	tt.Frame()
 	if err := tt.Click("关闭标签"); err != nil {
@@ -51,6 +54,36 @@ func TestWorkspaceTabSlotsStayFixed(t *testing.T) {
 	}
 	if closed != 1 {
 		t.Fatal("busy tab closed")
+	}
+}
+
+func TestWorkspaceTabStatusAndPaddingActivate(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
+			selected := 0
+			tt := ui.NewTester(func(c *ui.Context) {
+				ui.Column(c).Padding(10).Children(func() {
+					WorkspaceTab(c.Key("tab"), "apisec", "/w/apisec", false, busy, true, nil, func() { selected++ }, func() {}, nil).Label("workspace-tab")
+				})
+			}, 300, 100)
+			tab, ok := tt.Find("workspace-tab")
+			if !ok {
+				t.Fatal("tab not found")
+			}
+			for i, point := range [][2]float32{
+				{tab.X + 1, tab.Y + tab.H/2},         // left padding
+				{tab.X + 10, tab.Y + tab.H/2},        // status dot, including when transparent
+				{tab.X + 15, tab.Y + tab.H/2},        // gap before the title
+				{tab.X + tab.W/2, tab.Y + 1},         // top edge
+				{tab.X + tab.W/2, tab.Y + tab.H - 1}, // bottom underline
+				{tab.X + tab.W - 1, tab.Y + tab.H/2}, // right padding
+			} {
+				tt.ClickAt(point[0], point[1])
+				if selected != i+1 {
+					t.Fatalf("click at %v did not activate exactly once: got %d activations, want %d", point, selected, i+1)
+				}
+			}
+		})
 	}
 }
 func TestWorkspaceTabPreview(t *testing.T) {
@@ -74,7 +107,7 @@ func TestWorkspaceTabPreview(t *testing.T) {
 					ui.Row(c).FillWidth().Height(44).Padding(0, 12).Gap(6).AlignItems(ui.Center).Background(theme.Surface).BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
 						ui.Text(c, "Ally").FontSize(20).FontWeight(700).TextColor(theme.Accent).Margin(0, 10, 0, 0)
 						for i, label := range []string{"apisec", "ally-agent-v2", "另一个工作区"} {
-							WorkspaceTab(c.Key(i), label, i == 0, i == 1, true, nil, func() {}, func() {}, nil)
+							WorkspaceTab(c.Key(i), label, "/w/"+label, i == 0, i == 1, true, nil, func() {}, func() {}, nil)
 						}
 					})
 				})
@@ -91,8 +124,8 @@ func TestWorkspaceTabPreview(t *testing.T) {
 func TestWorkspaceTabsUseIntrinsicWidth(t *testing.T) {
 	tt := ui.NewTester(func(c *ui.Context) {
 		ui.Row(c).Children(func() {
-			WorkspaceTab(c.Key("short"), "a", true, false, true, nil, func() {}, func() {}, nil).Label("short-tab")
-			WorkspaceTab(c.Key("long"), "ally-agent-workspace", false, false, true, nil, func() {}, func() {}, nil).Label("long-tab")
+			WorkspaceTab(c.Key("short"), "a", "/w/a", true, false, true, nil, func() {}, func() {}, nil).Label("short-tab")
+			WorkspaceTab(c.Key("long"), "ally-agent-workspace", "/w/ally-agent-workspace", false, false, true, nil, func() {}, func() {}, nil).Label("long-tab")
 		})
 	}, 600, 80)
 	short, _ := tt.Find("short-tab")

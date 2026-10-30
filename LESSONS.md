@@ -42,3 +42,32 @@
 
 [mygo-hover-menu] 2026-10-30 中危 悬停才渲染的行里挂 popover：指针移到浮层行失焦、控件被删，菜单跟着消失点不到；改常驻+Opacity/Disabled。@desktop/page_chat.go
 
+[mygo-menu-clip] 2026-10-30 中危 原生菜单末字裁切：应用菜单统一走 uikit.ContextMenu，测长中文和快捷键。@desktop/uikit/menu.go
+
+[session-roots] 2026-10-30 高危 附加目录只改界面会被新轮配置清空；发布后显示并随 chatConfig 携带，每轮刷新授权。@desktop/composer.go
+
+[ssh-auth-id] 2026-10-30 高危 SSH 授权草稿按节点 ID 为键，加载完成且工作区匹配才提交，失败回滚。@desktop/page_ssh.go
+
+[mygo-render-bind] 2026-10-31 中危 渲染期重写输入框绑定变量会抹掉当帧换行，像按键失灵；只在存盘归一。@desktop/page_settings.go
+
+[memory-render-json] 2026-10-30 高危 每帧解析工具结果并复制封装，64KB 单次约 132KB；入口解析一次，渲染只读结构体。@desktop/tool_cards.go
+
+[preview-document-life] 2026-10-30 高危 预览销毁后 LoadHTML 仍留大正文；改可撤销协议 URL，换页/销毁删正文。@desktop/preview_documents.go
+
+[toast-wall-time] 2026-10-30 中危 Toast 失焦/悬停暂停；全局提示按实际时间截止，过期队列不重播。@desktop/notification_deadlines.go
+
+[mermaid-dark-export] 2026-10-30 中危 内置 dark 主题偏灰，改 base 加显式彩色变量；SVG 从已渲染 DOM 导出。@desktop/mermaid_preview.go
+
+[display-bound] 2026-10-30 中危 suggest/ask 展示文案用 maxLength 硬校验，超两字整次失败丢 chips；改为裁剪。@internal/app/app.go
+
+[tool-render-memo] 2026-10-30 中危 参数与 diff 派生行按控件局部状态复用，不做全局无界缓存；卡展开/收起须重置展开量。@desktop/tool_render_memo.go
+
+[compact-token-basis] 2026-10-30 高危 本地裁剪使实测锚点失效，前后须同一估算口径；liveBreakdown 要同步重建。@internal/app/biz_compact_fast.go
+
+[action-intrinsic-width] 2026-10-30 中危 Column 默认 stretch 会拉满未设宽按钮；actionParts 默认 AlignSelf(Start)。@desktop/uikit/semantic.go
+
+[render-small-allocations] 2026-10-30 中危 字段名表收口静态表，字段值每帧只格式化一次；累计分配不等于存活堆。@desktop/tool_resources.go
+
+[history-window] 2026-10-30 中危 页大小存 native-ui.json，默认 80、范围 20–200；分页、工具分组与跳转共用同一窗口值。@desktop/page_chat.go
+
+[tooltip-anchor-width] 2026-10-30 中危 Column 里 Text 可被拉成整行，Tooltip 按锚点定位会飘到页面中央；说明标签用 AlignSelf(Start)。@desktop/page_settings.go

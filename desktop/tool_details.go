@@ -71,7 +71,7 @@ func toolDeleteTree(c *ui.Context, args, result map[string]any, ink ...ui.Color)
 		if n == len(rows)-1 {
 			prefix = "└─ "
 		}
-		ui.Text(c, prefix+path+suffix).Font(monoFamily).FontSize(fsTool - 2).TextColor(color.Mix(c.Theme().Text, 0.3)).Selectable()
+		ui.Text(c, prefix+path+suffix).Font(monoFamily).FontSize(fsTool - 2).TextColor(color.Mix(c.Theme().Text, 0.3)).FillWidth().MinWidth(0).SingleLine().Selectable()
 	}
 	if count := int(num(result, "failedCount")); count > 0 {
 		notice(c, "error", fmt.Sprintf("%d 个路径删除失败", count), ink...)
@@ -136,9 +136,11 @@ func resourceStatus(status string) string {
 	return status
 }
 
+var toolActionVerbs = map[string][2]string{"command": {"Running", "Ran"}, "remote_run_command": {"Remote Running", "Remote Ran"}, "edit": {"Editing", "Edited"}, "remote_edit": {"Remote Editing", "Remote Edited"}, "create": {"Creating", "Created"}, "remote_create_file": {"Remote Creating", "Remote Created"}, "delete": {"Deleting", "Deleted"}, "remote_delete_path": {"Remote Deleting", "Remote Deleted"}, "http_request": {"Requesting", "Requested"}, "web_fetch": {"Fetching", "Fetched"}, "render_html": {"Rendering", "Rendered"}, "screenshot": {"Screenshot", "Screenshot"}, "skill": {"Loading skill", "Loaded skill"}, "plan": {"Plan", "Plan"}, "ask": {"Asking", "Asked"}, "wait": {"Waiting", "Waited"}, "calculate": {"Calculating", "Calculated"}, "subagent": {"Subagent", "Subagent"}, "scheduled_task": {"Scheduling", "Scheduled"}, "service": {"Service", "Service"}, "ssh_cluster": {"SSH cluster", "SSH cluster"}, "remote_transfer": {"Transferring", "Transferred"}, "image_generate": {"Generating image", "Generated image"}, "image_edit": {"Editing image", "Edited image"}}
+
 func toolActionVerb(name, state string, args map[string]any, fallback string) string {
-	verbs := map[string][2]string{"command": {"Running", "Ran"}, "remote_run_command": {"Remote Running", "Remote Ran"}, "edit": {"Editing", "Edited"}, "remote_edit": {"Remote Editing", "Remote Edited"}, "create": {"Creating", "Created"}, "remote_create_file": {"Remote Creating", "Remote Created"}, "delete": {"Deleting", "Deleted"}, "remote_delete_path": {"Remote Deleting", "Remote Deleted"}, "http_request": {"Requesting", "Requested"}, "web_fetch": {"Fetching", "Fetched"}, "render_html": {"Rendering", "Rendered"}, "screenshot": {"Screenshot", "Screenshot"}, "skill": {"Loading skill", "Loaded skill"}, "plan": {"Plan", "Plan"}, "ask": {"Asking", "Asked"}, "wait": {"Waiting", "Waited"}, "calculate": {"Calculating", "Calculated"}, "subagent": {"Subagent", "Subagent"}, "scheduled_task": {"Scheduling", "Scheduled"}, "service": {"Service", "Service"}, "ssh_cluster": {"SSH cluster", "SSH cluster"}, "remote_transfer": {"Transferring", "Transferred"}, "image_generate": {"Generating image", "Generated image"}, "image_edit": {"Editing image", "Edited image"}}
-	pair, ok := verbs[name]
+
+	pair, ok := toolActionVerbs[name]
 	if !ok {
 		// Fall back to the tool's own verb. Answering "Called MCP" here labelled
 		// every non-MCP tool that has no entry in this map (read, grep, …) as an MCP

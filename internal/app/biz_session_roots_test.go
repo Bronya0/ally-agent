@@ -8,9 +8,50 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestToolExecutionRefreshesLiveExtraRoots(t *testing.T) {
+	isolateSandboxHome(t)
+	pinBoundaryOwnership(t, false)
+	a := NewApp()
+	workspace, extra := t.TempDir(), t.TempDir()
+	stale := ConfigState{Workspace: workspace}
+	target := filepath.Join(extra, "notes.txt")
+	args, err := json.Marshal(CreateFileRequest{Path: target, Content: "approved"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(session string, cfg ConfigState) toolResult {
+		return a.executeTool(context.Background(), cfg, session, "create", args)
+	}
+	if result := call("session", stale); result.ErrorCode != "E_PATH_OUTSIDE" {
+		t.Fatalf("unapproved directory: %+v", result)
+	}
+	if err := a.SetSessionExtraRoots("session", []string{extra}); err != nil {
+		t.Fatal(err)
+	}
+	if result := call("other", stale); result.ErrorCode != "E_PATH_OUTSIDE" {
+		t.Fatalf("another session gained access: %+v", result)
+	}
+	if result := call("session", stale); !result.OK {
+		t.Fatalf("live grant did not override stale batch config: %+v", result)
+	}
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != "approved" {
+		t.Fatalf("created file = %q, err=%v", contents, err)
+	}
+	if err := a.SetSessionExtraRoots("session", nil); err != nil {
+		t.Fatal(err)
+	}
+	stale.ExtraRoots = []string{extra}
+	if result := call("session", stale); result.ErrorCode != "E_PATH_OUTSIDE" {
+		t.Fatalf("revoked grant survived in batch config: %+v", result)
+	}
+}
 
 // 会话附加工作区的活记录必须当轮生效：run 起步时冻结的 cfg 只是快照，运行中
 // （含模型 ask 暂停期间）加/删只能靠这条记录追上围栏。

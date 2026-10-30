@@ -314,6 +314,11 @@ func (a *App) copyFilesIntoWorkspaceWithConfig(cfg ConfigState, req CopyFilesInt
 		if src == "" {
 			continue
 		}
+		if req.FilesOnly {
+			if info, err := os.Lstat(src); err == nil && info.IsDir() {
+				continue
+			}
+		}
 		destRel, err := copyDroppedSource(src, targetAbs, roots[0])
 		if err != nil {
 			result.Failed = append(result.Failed, CopyFileFailure{Source: src, Error: err.Error()})

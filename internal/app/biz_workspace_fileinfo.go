@@ -8,6 +8,7 @@
 package app
 
 import (
+	"context"
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -57,6 +58,20 @@ func (a *App) GetWorkspaceFileInfoAt(req WorkspacePathRequest) (WorkspaceFileInf
 }
 
 func (a *App) getWorkspaceFileInfoAt(workspace, path string) (WorkspaceFileInfo, error) {
+	return a.inspectWorkspaceFile(context.Background(), WorkspacePathRequest{Workspace: workspace, Path: path}, true)
+}
+
+// Basic properties do no content IO. Hashing and directory walks are explicit,
+// cancellable actions, so clicking a large binary never scans the whole file.
+func (a *App) InspectWorkspaceFile(ctx context.Context, req WorkspacePathRequest, details bool) (WorkspaceFileInfo, error) {
+	return a.inspectWorkspaceFile(ctx, req, details)
+}
+
+func (a *App) inspectWorkspaceFile(ctx context.Context, req WorkspacePathRequest, details bool) (WorkspaceFileInfo, error) {
+	workspace, path := req.Workspace, req.Path
+	if err := ctx.Err(); err != nil {
+		return WorkspaceFileInfo{}, err
+	}
 	cfg, err := a.configForWorkspace(workspace)
 	if err != nil {
 		return WorkspaceFileInfo{}, err
@@ -93,13 +108,16 @@ func (a *App) getWorkspaceFileInfoAt(workspace, path string) (WorkspaceFileInfo,
 		LinkTarget: linkTarget,
 	}
 	result.AllocSize, result.Blocks, result.BlockSize = statAlloc(info)
+	if !details {
+		return result, nil
+	}
 	if !info.IsDir() {
-		if err := hashWorkspaceFile(resolved, &result); err != nil {
+		if err := hashWorkspaceFileContext(ctx, resolved, &result); err != nil {
 			return WorkspaceFileInfo{}, err
 		}
 		return result, nil
 	}
-	if err := summarizeWorkspaceDir(resolved, &result); err != nil {
+	if err := summarizeWorkspaceDirContext(ctx, resolved, &result); err != nil {
 		return WorkspaceFileInfo{}, err
 	}
 	return result, nil
@@ -108,6 +126,9 @@ func (a *App) getWorkspaceFileInfoAt(workspace, path string) (WorkspaceFileInfo,
 // hashWorkspaceFile streams one file through MD5/SHA1/SHA256/SHA512/CRC32 in
 // a single pass. Only the rolling hash states live in memory.
 func hashWorkspaceFile(path string, out *WorkspaceFileInfo) error {
+	return hashWorkspaceFileContext(context.Background(), path, out)
+}
+func hashWorkspaceFileContext(ctx context.Context, path string, out *WorkspaceFileInfo) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -118,6 +139,9 @@ func hashWorkspaceFile(path string, out *WorkspaceFileInfo) error {
 	crc32h := crc32.NewIEEE()
 	buf := make([]byte, 64*1024)
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		n, rerr := file.Read(buf)
 		if n > 0 {
 			// Direct calls instead of a []hash.Hash literal: the slice was rebuilt
@@ -149,8 +173,14 @@ func hashWorkspaceFile(path string, out *WorkspaceFileInfo) error {
 const workspaceFileInfoMaxEntries = 200000
 
 func summarizeWorkspaceDir(root string, out *WorkspaceFileInfo) error {
+	return summarizeWorkspaceDirContext(context.Background(), root, out)
+}
+func summarizeWorkspaceDirContext(ctx context.Context, root string, out *WorkspaceFileInfo) error {
 	entries := 0
 	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return cancelErr
+		}
 		if err != nil {
 			return nil
 		}

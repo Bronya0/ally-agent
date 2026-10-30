@@ -7,9 +7,7 @@ import (
 	"errors"
 	"github.com/egoist/mygo"
 	"os"
-	"os/exec"
 	"path/filepath"
-	goruntime "runtime"
 	"strings"
 	"time"
 )
@@ -207,6 +205,20 @@ func (a *App) OpenPathInFileManager(path string) error {
 	return openPathInFileManager(path)
 }
 
+// OpenWorkspaceFile opens only a resolved workspace file with its registered
+// system application. Unlike OpenPathInFileManager it does not open its parent.
+func (a *App) OpenWorkspaceFile(req WorkspacePathRequest) error {
+	cfg, err := a.configForWorkspace(req.Workspace)
+	if err != nil {
+		return err
+	}
+	resolved, err := resolveReadPath(cfg, req.Path)
+	if err != nil {
+		return err
+	}
+	return mygo.Shell.OpenPath(resolved)
+}
+
 func openPathInFileManager(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("path is required")
@@ -221,133 +233,7 @@ func openPathInFileManager(path string) error {
 	}
 	// 路径归一化为各平台原生分隔符，避免 explorer.exe 收到混合分隔符
 	path = filepath.Clean(path)
-	var cmd *exec.Cmd
-	switch goruntime.GOOS {
-	case "windows":
-		cmd = explorerCommand(path)
-	case "darwin":
-		cmd = exec.Command("open", path)
-	default:
-		// Linux：优先 xdg-open，回退常见文件管理器
-		if _, err := exec.LookPath("xdg-open"); err == nil {
-			cmd = exec.Command("xdg-open", path)
-		} else if _, err := exec.LookPath("nautilus"); err == nil {
-			cmd = exec.Command("nautilus", path)
-		} else if _, err := exec.LookPath("dolphin"); err == nil {
-			cmd = exec.Command("dolphin", path)
-		} else if _, err := exec.LookPath("thunar"); err == nil {
-			cmd = exec.Command("thunar", path)
-		} else {
-			cmd = exec.Command("xdg-open", path)
-		}
-	}
-	// explorer.exe（Windows）不退出属预期，交给 explorerCommand 内部处理；
-	// POSIX 上 open/xdg-open 通常立即退出，Start 后不 Wait 会积累僵尸进程，
-	// 异步收割即可。
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go func() { _ = cmd.Wait() }()
-	return nil
-}
-
-// completionNotifier is the minimal notifications surface the Agent core
-// needs: sending a completion toast with sound. The concrete implementation
-// is injected through SetNotifier from the host wiring (main.go); tests and
-// headless embeddings leave it nil and get silent no-ops.
-type completionNotification struct{ ID, Title, Body, Sound string }
-
-type completionNotifier interface {
-	SendNotification(options completionNotification) error
-}
-
-// mainWindowMinimised reports whether the main window is currently
-// minimised. A missing window handle (headless embedding, tests) counts as
-// not minimised so completion notifications stay silent.
-func (a *App) mainWindowMinimised() bool {
-	if a.wails == nil || a.wails.window == nil {
-		return false
-	}
-	return a.wails.window.IsMinimized()
-}
-
-// SetNotifier injects the notifications service used for task completion
-// sounds. Must be called before app.Run().
-//
-// This is a package-level function rather than an (a *App) method on purpose:
-// the parameter is a non-empty interface, and Wails' binding generator would
-// reject any exported method on *App (which is registered as a service) that
-// takes one, since encoding/json cannot unmarshal into a concrete type it
-// cannot infer. Package-level functions are not scanned by the generator, so
-// keeping the injection here keeps the interface while leaving the generated
-// frontend bindings clean.
-func SetNotifier(a *App, n completionNotifier) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.notifier = n
-}
-
-// completionNotifyCooldown mirrors the old frontend sound throttle so rapid
-// consecutive runs (e.g. quick send bursts) don't spam the Action Center.
-const completionNotifyCooldown = 700 * time.Millisecond
-
-// completionToastBodies is the toast body per run-end kind. The backend has
-// no i18n pipeline (locale detection lives in the frontend), so the strings
-// are centralized here in the primary UI language.
-var completionToastBodies = map[string]string{
-	"done":      "任务完成",
-	"cancelled": "任务已取消",
-	"error":     "任务出错",
-}
-
-// notifyCompletion sends a short sound-carrying system notification when a
-// chat run finishes, but only while the main window is minimised. When the
-// window is visible the run result is already on screen, so a toast would
-// only interrupt. kind is "done", "error" or "cancelled". Non-Windows
-// platforms use the platform default sound; Windows picks a distinct built-in
-// toast event sound per kind. The send itself is async so a slow platform
-// backend (Windows PowerShell fallback, unresponsive Linux daemon) never
-// blocks the run teardown path (checkpoint save, session release).
-func (a *App) notifyCompletion(kind, workspace string) {
-	a.mu.Lock()
-	n := a.notifier
-	if n == nil || time.Since(a.lastCompletionNotifyAt) < completionNotifyCooldown {
-		a.mu.Unlock()
-		return
-	}
-	a.lastCompletionNotifyAt = time.Now()
-	a.mu.Unlock()
-
-	// 仅当主窗口处于最小化状态时才发系统通知：窗口可见（含最大化）时
-	// 结果就在眼前，弹窗与提示音纯属打扰。窗口句柄缺失（headless
-	// 嵌入/测试）时按不可见对待，保持静默。
-	if !a.mainWindowMinimised() {
-		return
-	}
-
-	body := completionToastBodies[kind]
-	if body == "" {
-		body = completionToastBodies["error"]
-	}
-	if name := workspaceDisplayName(workspace); name != statsUnknownName {
-		body += " · " + name
-	}
-
-	opts := completionNotification{
-		ID:    "ally-run-" + kind,
-		Title: "Ally",
-		Body:  body,
-	}
-	if goruntime.GOOS == "windows" {
-		sound := "Default"
-		if kind != "done" {
-			sound = "Reminder"
-		}
-		opts.Sound = sound
-	}
-	go func() {
-		_ = n.SendNotification(opts)
-	}()
+	return mygo.Shell.OpenPath(path)
 }
 
 // GetAutostartEnabled 报告本构建是否已注册为登录自启。

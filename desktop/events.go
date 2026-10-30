@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/egoist/mygo"
 )
 
 // dispatchEvent is called from the backend run loop. Payload maps are
@@ -35,11 +33,8 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	if a.closing && name != "service:update" {
 		return
 	}
-	// Completion is app-wide: background sessions and scheduled tasks may
-	// have no open tab. Use the system alert sound only while Ally is inactive.
-	if (name == "run:done" || name == "scheduled:run_done") && a.win != nil && !mygo.App.IsActive() {
-		mygo.Shell.Beep()
-	}
+	a.notifyRunCompletion(name, p)
+
 	switch name {
 	case "service:update":
 		a.applyServiceUpdate(p)
@@ -228,7 +223,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		a.persist(t)
 		a.refreshSessionFooter(t)
 		if t == a.current() {
-			a.notify(compactToastText(int(num(p, "tokensBefore")), int(num(p, "tokensAfter"))))
+			a.notify(compactionToast(p))
 		}
 	case "run:inject":
 		t.Status = "已注入新消息，继续执行…"
@@ -346,6 +341,7 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 	if name == "tool:update" && m["status"] != "success" && m["status"] != "error" {
 		m["status"] = "running"
 	}
+	normalizeToolMessage(m)
 	if name == "tool:result" {
 		a.attachToolImage(t, m)
 	}
@@ -672,10 +668,30 @@ func (a *desktop) applyUpdateEvent(name string, p map[string]any) {
 }
 
 func (a *desktop) refreshSSH(manual ...bool) {
+	a.sshRefreshSeq++
+	seq, tail := a.sshRefreshSeq, a.sshAuthTail
+	workspaces := map[string]bool{}
+	for workspace := range a.sshAllowed {
+		workspaces[workspace] = true
+	}
+	for _, tab := range a.tabs {
+		workspaces[tab.Workspace] = true
+	}
 	go func() {
+		if tail != nil {
+			<-tail
+		}
 		servers := a.core.ListAllSSHServers()
+		allowed := make(map[string][]string, len(workspaces))
+		for workspace := range workspaces {
+			allowed[workspace] = a.core.GetWorkspaceAllowedServers(workspace)
+		}
 		a.win.Update(func() {
+			if seq != a.sshRefreshSeq {
+				return
+			}
 			a.sshServers = servers
+			a.sshAllowed = allowed
 			if len(manual) > 0 && manual[0] {
 				a.notifySuccess("SSH 列表已刷新")
 			}

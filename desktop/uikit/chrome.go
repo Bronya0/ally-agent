@@ -6,7 +6,11 @@ package uikit
 // （以及别的 Go 项目）都能直接用。尺寸由调用方传入：同一套组件在侧栏和
 // 设置页需要的留白不一样，把它钉死在组件里只会逼调用点再改回去。
 
-import "github.com/egoist/mygo/ui"
+import (
+	"strings"
+
+	"github.com/egoist/mygo/ui"
+)
 
 // 排版与间距档位。和 ControlHeight、Radius 一起构成这套组件的外部尺度。
 const (
@@ -217,8 +221,19 @@ func Notice(c *ui.Context, tone NoticeTone, message string, accentBar bool, ink 
 		row.BorderWidth(0, 0, 0, 3).BorderColor(bar)
 	}
 	row.Children(func() {
+		if tone == NoticeDanger {
+			ErrorText(c, message)
+			return
+		}
 		ui.Text(c, message).FontSize(FontSmall).TextColor(fg).LineHeight(1.5)
 	})
+}
+
+// ErrorText is the shared one-line error presentation. Normalize only this
+// display string; callers retain the original diagnostics and model context.
+func ErrorText(c *ui.Context, message string) ui.Element {
+	return ui.Text(c, strings.Join(strings.Fields(message), " ")).FontSize(FontSmall).
+		TextColor(c.Theme().Danger).FillWidth().MinWidth(0).SingleLine().Selectable()
 }
 
 // InlineError 是一行红字，用于表单字段下面。
@@ -226,7 +241,7 @@ func InlineError(c *ui.Context, id, message string) {
 	if message == "" {
 		return
 	}
-	ui.Text(c, message).FontSize(FontSmall).TextColor(c.Theme().Danger).Key(id)
+	ErrorText(c.Key(id), message)
 }
 
 // ---- 统计块 --------------------------------------------------------------

@@ -6,5 +6,5 @@ import "embed"
 
 // Assets contains compressed avatar artwork and icon sources.
 //
-//go:embed icon.png icons avatar fonts preview
+//go:embed icon.png icons avatar fonts preview release_notes.json
 var Assets embed.FS

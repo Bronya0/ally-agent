@@ -12,6 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 )
 
@@ -414,6 +415,10 @@ func (a *desktop) workspaceFileCurrent(root string, file *workspaceFile) bool {
 
 func (a *desktop) releaseWorkspaceFile(root string) {
 	key := workspaceKey(root)
+	if a.filePreviewRoot == key {
+		a.cancelFilePreview()
+		a.fileLoadID++
+	}
 	file := a.workspaceFiles[key]
 	if file == nil {
 		return
@@ -440,10 +445,16 @@ func releaseWorkspaceFileValue(file *workspaceFile) {
 	file.Assist = nil
 	file.PreviewMarkdown = nil
 	file.PreviewText = ""
+	file.Document = nil
+	file.DocumentSheet = ""
+	file.DocumentList = ui.ListState{}
 	file.Editor = nil
 }
 
 func (a *desktop) releaseWorkspaceFiles() {
+	a.cancelFilePreview()
+	a.fileLoadID++
+	a.closeFileInfo()
 	for key, file := range a.workspaceFiles {
 		delete(a.workspaceFiles, key)
 		releaseWorkspaceFileValue(file)

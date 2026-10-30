@@ -186,11 +186,6 @@ type App struct {
 	// host_desktop.go so core Agent code never imports the Wails runtime.
 	wails *wailsAppHandle
 
-	// notifier is the desktop notifications service injected by SetNotifier
-	// (host_desktop.go); nil in tests and headless embeddings.
-	notifier               completionNotifier
-	lastCompletionNotifyAt time.Time
-
 	configWriteMu sync.Mutex // serializes config transactions; acquire before mu
 	mu            sync.Mutex
 	config        ConfigState
@@ -930,13 +925,15 @@ type RenamePathRequest struct {
 	NewName   string `json:"newName"`
 }
 
-// CopyFilesIntoWorkspaceRequest is the UI drag-and-drop copy payload: absolute
-// source paths from the native file-drop event plus a workspace-relative
+// CopyFilesIntoWorkspaceRequest is the UI file-transfer payload: absolute
+// source paths from native drag-and-drop or the clipboard plus a workspace-relative
 // destination directory ("" = workspace root).
 type CopyFilesIntoWorkspaceRequest struct {
 	Workspace string   `json:"workspace,omitempty"`
 	TargetDir string   `json:"targetDir,omitempty"`
 	Sources   []string `json:"sources"`
+	// FilesOnly skips directories for clipboard pastes; drag-and-drop keeps its existing behavior.
+	FilesOnly bool `json:"filesOnly,omitempty"`
 }
 
 type CopyFilesIntoWorkspaceResult struct {
@@ -2118,6 +2115,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			payload = map[string]any{}
 		}
 		payload["runId"] = runID
+		payload["status"] = kind
 		payload["sessionId"] = sessionID
 		payload["durationMs"] = time.Since(startTime).Milliseconds()
 		publishRunModelUsage(ctx, payload)
@@ -2130,10 +2128,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		}
 		a.mu.Unlock()
 		a.emit(event, payload)
-		// 任务结束的系统提示音（done/error/cancelled），经桌面通知服务
-		// 播放。服务不可用（headless/测试/平台后端失败）时是静默 no-op。
-		// kind 由调用点显式给出，避免从用户可见文案反推状态。
-		a.notifyCompletion(kind, cfg.Workspace)
+
 	}
 	defer func() {
 		if !success && len(sanitizeHistoryMessages(messages)) > 0 {
@@ -2637,6 +2632,9 @@ func (a *App) withFileOpsLock(fn func()) {
 }
 
 func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name string, args []byte) (result toolResult) {
+	// Recheck when each call actually starts, including calls queued behind
+	// an ask or another stage of the same batch. Batch config can be stale.
+	cfg = a.cfgWithLiveExtraRoots(sessionID, cfg)
 	finishPerfTool := startPerfTool(ctx, name, args)
 	defer finishPerfTool()
 	// Tool execution digests model-controlled JSON and is the single choke
@@ -2830,10 +2828,12 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			err = validateSuggestItems(req.Items)
-		}
-		if err == nil {
-			data = map[string]any{"items": req.Items}
+			items, _ := normalizeSuggestItems(req.Items)
+			if len(items) == 0 {
+				err = codedToolError("E_BAD_SUGGEST", errors.New("items must contain at least 1 suggestion with text"))
+			} else {
+				data = map[string]any{"items": items}
+			}
 		}
 	case "scheduled_task":
 		var req ScheduledTaskToolRequest
@@ -3026,27 +3026,136 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	return toolResult{OK: true, Data: data, Warnings: argWarnings}
 }
 
-// validateSuggestItems enforces the contract the suggest schema declares: 1-4
-// non-blank suggestions of at most 80 characters each. The app does not validate
-// arguments against schemas, so without this check the limits were decoration —
-// a five-item or 300-character suggestion reached the UI unfiltered while the
-// tool description promised otherwise.
-func validateSuggestItems(items []string) error {
-	if len(items) == 0 {
-		return codedToolError("E_BAD_SUGGEST", errors.New("items must contain at least 1 suggestion"))
-	}
-	if len(items) > toolshared.MaxSuggestItems {
-		return codedToolError("E_BAD_SUGGEST", fmt.Errorf("items supports at most %d suggestions, got %d", toolshared.MaxSuggestItems, len(items)))
-	}
-	for i, item := range items {
-		if strings.TrimSpace(item) == "" {
-			return codedToolError("E_BAD_SUGGEST", fmt.Errorf("item %d must not be blank", i+1))
+// normalizeSuggestItems trims, drops blanks, clips each item to the declared
+// length and keeps at most the declared count. changed reports whether the input
+// had to be repaired, so an untouched call is not rewritten.
+func normalizeSuggestItems(items []string) ([]string, bool) {
+	out := make([]string, 0, len(items))
+	changed := false
+	for _, item := range items {
+		text, clipped := clipDisplayText(item, toolshared.MaxSuggestItemChars)
+		changed = changed || clipped
+		if text == "" {
+			// A blank chip would become an empty user message when clicked.
+			changed = true
+			continue
 		}
-		if n := utf8.RuneCountInString(item); n > toolshared.MaxSuggestItemChars {
-			return codedToolError("E_BAD_SUGGEST", fmt.Errorf("item %d is %d characters long; keep each suggestion within %d characters", i+1, n, toolshared.MaxSuggestItemChars))
+		out = append(out, text)
+	}
+	if len(out) > toolshared.MaxSuggestItems {
+		out = out[:toolshared.MaxSuggestItems]
+		changed = true
+	}
+	return out, changed
+}
+
+// clipDisplayText trims s and cuts it to limit runes, ending a cut string with an
+// ellipsis so the shortened text does not read as a typo.
+func clipDisplayText(s string, limit int) (string, bool) {
+	trimmed := strings.TrimSpace(s)
+	runes := []rune(trimmed)
+	if len(runes) <= limit {
+		return trimmed, trimmed != s
+	}
+	return string(runes[:limit-1]) + "…", true
+}
+
+// repairDisplayBounds clamps arguments whose declared limit is presentational, so
+// a chip or a card label one character over the limit does not take the whole
+// call away. Content bounds keep the gate's refusal: cutting a command, an edit
+// body or a prompt would change what the tool does.
+func repairDisplayBounds(name string, raw []byte) ([]byte, bool) {
+	switch name {
+	case "suggest":
+		return repairSuggestArgs(raw)
+	case "ask":
+		return repairAskArgs(raw)
+	}
+	return raw, false
+}
+
+// repairSuggestArgs rewrites `items` only, so an undeclared argument still
+// reaches the gate instead of being dropped here.
+func repairSuggestArgs(raw []byte) ([]byte, bool) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return raw, false
+	}
+	rawItems, ok := payload["items"]
+	if !ok {
+		return raw, false
+	}
+	var items []string
+	if err := json.Unmarshal(rawItems, &items); err != nil {
+		return raw, false
+	}
+	normalized, changed := normalizeSuggestItems(items)
+	// Nothing usable is left: let the gate name the problem instead of hiding it.
+	if !changed || len(normalized) == 0 {
+		return raw, false
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return raw, false
+	}
+	payload["items"] = encoded
+	fixed, err := json.Marshal(payload)
+	if err != nil {
+		return raw, false
+	}
+	return fixed, true
+}
+
+// repairAskArgs clips what an ask card shows: the question and each option's
+// label and description. Ids stay untouched, since the answer resolver matches
+// on them.
+func repairAskArgs(raw []byte) ([]byte, bool) {
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return raw, false
+	}
+	changed := false
+	questions, _ := payload["questions"].([]any)
+	for _, rawQuestion := range questions {
+		question, ok := rawQuestion.(map[string]any)
+		if !ok {
+			continue
+		}
+		if text, ok := question["question"].(string); ok {
+			if clipped, c := clipDisplayText(text, toolshared.MaxAskQuestionChars); c {
+				question["question"] = clipped
+				changed = true
+			}
+		}
+		options, _ := question["options"].([]any)
+		for _, rawOption := range options {
+			option, ok := rawOption.(map[string]any)
+			if !ok {
+				continue
+			}
+			for field, limit := range map[string]int{
+				"label":       toolshared.MaxAskOptionLabelChars,
+				"description": toolshared.MaxAskOptionDescriptionChars,
+			} {
+				text, ok := option[field].(string)
+				if !ok {
+					continue
+				}
+				if clipped, c := clipDisplayText(text, limit); c {
+					option[field] = clipped
+					changed = true
+				}
+			}
 		}
 	}
-	return nil
+	if !changed {
+		return raw, false
+	}
+	fixed, err := json.Marshal(payload)
+	if err != nil {
+		return raw, false
+	}
+	return fixed, true
 }
 
 func waitWithContext(ctx context.Context, req WaitRequest) (WaitResult, error) {
@@ -3398,9 +3507,9 @@ func (a *App) DeletePath(req DeletePathRequest) error {
 	return nil
 }
 
-// CopyFilesIntoWorkspace copies files/directories dropped from the system
-// file manager into a workspace directory (UI drag-and-drop; not a model
-// tool). Sources are absolute paths from the native drop event; TargetDir is
+// CopyFilesIntoWorkspace copies files/directories from the system file manager
+// or clipboard into a workspace directory (a UI operation, not a model tool).
+// FilesOnly skips directories for file clipboard operations. TargetDir is
 // workspace-relative ("" = workspace root). Name conflicts get "name (N)"
 // copies instead of overwriting.
 func (a *App) CopyFilesIntoWorkspace(req CopyFilesIntoWorkspaceRequest) (CopyFilesIntoWorkspaceResult, error) {
@@ -3421,7 +3530,7 @@ func (a *App) CopyFilesIntoWorkspace(req CopyFilesIntoWorkspaceRequest) (CopyFil
 // ReadClipboardFiles returns the absolute file/folder paths currently on the
 // system clipboard (Explorer/Finder Ctrl+C), or an empty list when the
 // clipboard holds no file list. Used by the explorer's paste-into-workspace
-// flow; platform-specific readers live in host_clipboard_*.go.
+// flow; the MyGo adapter lives in host_clipboard.go.
 func (a *App) ReadClipboardFiles() ([]string, error) {
 	return clipboardFiles()
 }
@@ -3693,6 +3802,16 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 		}
 		cur = fixed
 		repairedFields = append(repairedFields, typeErr.Field)
+	}
+	// Display-only bounds are clamped instead of refused (see
+	// repairDisplayBounds). This runs after the type repair, so a stringified
+	// payload is already an array here, and the re-decode hands the handler the
+	// clipped text the gate is about to approve.
+	if fixed, ok := repairDisplayBounds(name, cur); ok {
+		cur = fixed
+		if err := json.Unmarshal(cur, v); err != nil {
+			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
+		}
 	}
 	var warnings []string
 	if len(repairedFields) > 0 {

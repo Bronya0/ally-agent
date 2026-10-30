@@ -163,7 +163,7 @@ func TestFormFieldsHaveGap(t *testing.T) {
 	}
 }
 
-func TestNumberInputFillsWidthAndSteps(t *testing.T) {
+func TestNumberInputNativeEditingAndSteps(t *testing.T) {
 	value := 8192.0
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(ui.DarkTheme())
@@ -173,34 +173,32 @@ func TestNumberInputFillsWidthAndSteps(t *testing.T) {
 	if !ok {
 		t.Fatal("missing input")
 	}
-	minus, ok := tt.Find("减少 Max Tokens")
+	minus, ok := tt.Find("Decrease")
 	if !ok {
 		t.Fatal("missing decrement")
 	}
-	plus, ok := tt.Find("增加 Max Tokens")
+	plus, ok := tt.Find("Increase")
 	if !ok {
 		t.Fatal("missing increment")
 	}
-	if input.W < 200 || minus.X < input.X+input.W-1 || plus.X < minus.X {
+	if minus.X <= input.X || plus.X < minus.X || plus.X+plus.W > input.X+input.W+1 {
 		t.Fatalf("number layout: input=%+v minus=%+v plus=%+v", input, minus, plus)
 	}
-	if err := tt.Click("增加 Max Tokens"); err != nil {
+	if err := tt.Click("Increase"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if value != 8193 {
 		t.Fatalf("increment: %v", value)
 	}
-	if err := tt.Click("减少 Max Tokens"); err != nil {
+	if err := tt.Click("Decrease"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if value != 8192 {
 		t.Fatalf("decrement: %v", value)
 	}
-	if err := tt.Click("Max Tokens"); err != nil {
-		t.Fatal(err)
-	}
+	tt.ClickAt(input.X+10, input.Y+input.H/2)
 	tt.Key(0, ui.KeyUp)
 	tt.Frame()
 	if value != 8193 {

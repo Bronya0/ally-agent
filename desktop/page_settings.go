@@ -13,6 +13,14 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+const historyPageSizeHelp = `按从最新往前的展示块计数，不按对话轮数或工具调用次数。
+• 每条用户消息、助手回复各算 1 块。
+• 连续的读取/搜索/目录工具合为 1 块；连续本地命令也合为 1 块。其他工具各算 1 块。
+• 分组展开后仍算 1 块，组内先展示 100 项；大 diff 另有限制，可继续展开。
+例如：提问 + 回复 + 连续 10 次读取 + 回复，共 4 块。
+默认 80 块，适合一般任务；长任务想多看历史可设 100。数值越大，界面通常占用越多内存。
+超出的历史可翻页查看，不删除消息、不改变模型上下文，也不是精确的内存限额。`
+
 var settingsSections = []string{"通用", "高级", "网络", "安全围栏", "API", "版本亮点", "关于"}
 
 // autoCompactOptions keeps the stored values ("summary" / "recent") and changes
@@ -90,6 +98,11 @@ func (a *desktop) selectSettingsSection(section string) {
 }
 
 func (a *desktop) saveSettings(notice ...string) {
+	size := normalizeHistoryPageSize(int(a.settings.HistoryPageSize))
+	if size != a.messageWindowSize() {
+		a.prefs.HistoryPageSize = size
+		a.savePrefs()
+	}
 	cfg := a.configDraft
 	cfg.LLMRetries = int(a.settings.Retries)
 	cfg.ToolConcurrency = int(a.settings.Concurrency)
@@ -122,13 +135,14 @@ func (a *desktop) saveSettings(notice ...string) {
 }
 
 // commitSettingsOnLeave is called when the rail switches away from settings.
-// It stays silent: the form saves on every change already, so a "saved" notice
-// on leaving would only tell the user something they just watched happen.
+// Edits inside the page save silently, but leaving reports the save once: a
+// textarea has no per-keystroke feedback, so without it the user cannot tell
+// whether the prompt was stored.
 func (a *desktop) commitSettingsOnLeave() {
 	if a.core == nil || a.win == nil {
 		return
 	}
-	a.saveSettings()
+	a.saveSettings("设置已保存")
 }
 
 // ---- General -------------------------------------------------------------
@@ -149,7 +163,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			divider(c)
 			fieldLabel(c, "强调色")
 			uikit.OptionGroup(c).Children(func() {
-				for _, idx := range []int{0, 2, 3, 4, 5} {
+				for _, idx := range []int{0, 2, 4, 5} {
 					idx := idx
 					p := palettes[idx]
 					name := p.name
@@ -158,7 +172,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					} else if idx == 2 {
 						name = "琥珀"
 					}
-					selected := a.prefs.Palette == idx || (idx == 0 && a.prefs.Palette == 1)
+					selected := a.prefs.Palette == idx || (idx == 0 && (a.prefs.Palette == 1 || a.prefs.Palette == 3))
 					choiceSwatch(c, fmt.Sprintf("palette-%d", idx), name, selected, p.accent).OnClick(func() {
 						if a.prefs.Appearance == "" {
 							if a.currentPalette().dark {
@@ -195,7 +209,6 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 	if selected == 1 {
 		card(c, "settings-prompt", func() {
 			sectionTitle(c, "自定义提示词")
-			a.configDraft.CustomPrompt = strings.TrimSpace(a.configDraft.CustomPrompt)
 			textArea(c, "custom-prompt", "自定义提示词", "例如：请用中文回答、保持回复简洁", &a.configDraft.CustomPrompt, 240)
 			fieldNote(c, "会随每次对话一起发送给模型。", a.secondaryInk())
 			switchRow(c, "allow-private", "允许访问内网地址", "允许 http_request、web_fetch 与 MCP 访问内网地址。", &a.settings.AllowPrivate)
@@ -237,6 +250,11 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 	if selected == 3 {
 		card(c, "settings-behavior", func() {
 			sectionTitle(c, "对话行为")
+			ui.Column(c).Gap(gapTight).Children(func() {
+				uikit.RightTooltip(c, ui.Text(c.Key("history-page-label"), "每页展示块数 ⓘ").FontSize(fsBody).AlignSelf(ui.Start), historyPageSizeHelp)
+				uikit.RightTooltip(c, numberField(c, "history-page-size", "每页展示块数", &a.settings.HistoryPageSize, 20, 200, 10), historyPageSizeHelp)
+				fieldNote(c, "默认 80，一般任务建议 80，长任务可设 100。范围 20–200；悬浮查看计算方式，保存后生效。", a.secondaryInk())
+			})
 			ui.Grid(c.Key("settings-behavior-grid")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "LLM 请求重试次数")
@@ -289,7 +307,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					a.checkUpdates(true)
 					a.settings.UpdateBusy = false
 				})
-				if a.upd.ReleaseVer != "" {
+				if strings.TrimSpace(a.upd.ReleaseBody) != "" {
 					cardFlat(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
 				}
 				ui.Spacer(c)
@@ -556,7 +574,7 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 				enabled := a.settings.API.Enabled
 				uikit.SwitchNative(c.Key("api-enabled"), &enabled).Label("启用 API 服务").OnClick(func() { a.setAPIServiceEnabled(enabled) })
 				fieldLabel(c, "端口")
-				uikit.NumberInput(c, "api-port", "API 端口", &a.settings.APIPort, 1024, 65535, 1, a.secondaryInk()).Width(110)
+				uikit.NumberInput(c, "api-port", "API 端口", &a.settings.APIPort, 1024, 65535, 1, a.secondaryInk()).Width(200)
 				fieldLabel(c, "Token")
 				uikit.Input(c.Key("api-token"), &a.settings.API.Token).Label("API Token").Width(240)
 				cardFlat(c, "复制").OnClick(func() {
@@ -715,16 +733,24 @@ func randomToken() string {
 func (a *desktop) settingsReleaseNotes(c *ui.Context) {
 	card(c, "settings-notes", func() {
 		sectionTitle(c, "版本亮点")
-		fieldNote(c, "版本 "+a.upd.ReleaseVer, a.secondaryInk())
+		if a.upd.ReleaseVer != "" {
+			fieldNote(c, "版本 "+a.upd.ReleaseVer, a.secondaryInk())
+		}
 		if strings.TrimSpace(a.upd.ReleaseBody) == "" {
 			fieldNote(c, "此构建未内置更新日志。", a.secondaryInk())
 			return
 		}
-		ui.Text(c, a.upd.ReleaseBody).Selectable().FontSize(fsBody).LineHeight(1.7)
+		a.releaseNotesMarkdown(c, &a.upd.ReleaseSettingsMD, "release-notes-settings-markdown")
 	})
 }
 
 func (a *desktop) settingsAbout(c *ui.Context) {
+
+	card(c, "settings-memory-diagnostics", func() {
+		sectionTitle(c, "内存诊断")
+		fieldNote(c, "导出 Go 堆与分配调用栈、协程和回收前后内存数据；会短暂触发垃圾回收。也可在聊天页按 Ctrl+Shift+F12。建议在空闲时、内存增长后各导出一次。", a.secondaryInk())
+		cardFlat(c, "导出内存诊断").Disabled(a.memoryDiagnosticBusy).OnClick(a.exportMemoryDiagnostics)
+	})
 
 	services := c.Services()
 	{
@@ -757,7 +783,7 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 					a.settings.UpdateNote = "正在检查…"
 					a.checkUpdates(true)
 				})
-				if a.upd.Tag != "" {
+				if strings.TrimSpace(a.upd.ReleaseBody) != "" {
 					cardFlat(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
 				}
 				ui.Spacer(c)

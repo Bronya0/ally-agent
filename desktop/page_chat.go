@@ -17,7 +17,9 @@ import (
 // panel and the floating jump-to-bottom controls.
 func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	st := t.uiState()
-	start, end := chatMessageWindow(t)
+	start, end := historyMessageWindow(t, a.messageWindowSize())
+	st.windowStart, st.windowEnd, st.windowBuilding = start, end, true
+	defer func() { st.windowBuilding = false }()
 	st.RoundAt = map[int]int{}
 	for idx, stat := range st.Round {
 		if stat != nil && stat.Done {
@@ -79,11 +81,16 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 					}
 				}
 				if start > 0 {
-					flat(c, "查看更早消息").OnClick(func() { st.VisibleStart = max(0, start-140) + 1; st.Follow = false; t.Scroll.Y = 0 })
+					olderCount := historyBlockIndex(historyBlockStarts(t), start)
+					transcriptAction(c, "history-older", fmt.Sprintf("更早消息（%d 条）", olderCount), "history").OnClick(func() {
+						st.VisibleStart = previousHistoryPage(t, start, a.messageWindowSize()) + 1
+						st.Follow = false
+						t.Scroll.Y = 0
+					})
 				}
 				if end < len(t.Messages) {
-					flat(c, "查看更新消息").OnClick(func() { st.VisibleStart = min(len(t.Messages)-1, start+140) + 1; t.Scroll.Y = 0 })
-					flat(c, "回到最新消息").OnClick(func() { st.VisibleStart = 0; st.Follow = true; st.FollowPending = true })
+					transcriptAction(c, "history-newer", "更新消息").OnClick(func() { st.VisibleStart = end + 1; t.Scroll.Y = 0 })
+					transcriptAction(c, "history-latest", "回到最新").OnClick(func() { st.VisibleStart = 0; st.Follow = true; st.FollowPending = true })
 				}
 				for i := start; i < end; i++ {
 					a.messageRow(c, t, i)
@@ -145,7 +152,7 @@ func (a *desktop) jumpToPreviousPrompt(c *ui.Context, t *conversation) {
 		t.Scroll.Y = max(float32(0), t.Scroll.Y+targetY-viewport.Y-12)
 		return
 	}
-	start, _ := chatMessageWindow(t)
+	start, _ := a.chatMessageWindow(t)
 	for i := start - 1; i >= 0; i-- {
 		if str(t.Messages[i], "role") == "user" {
 			targetIndex = i
@@ -158,7 +165,7 @@ func (a *desktop) jumpToPreviousPrompt(c *ui.Context, t *conversation) {
 	st.Follow = false
 	st.FollowPending = false
 	st.LastScrollY = 0
-	st.VisibleStart = max(0, targetIndex-80) + 1
+	st.VisibleStart = max(0, targetIndex-min(80, a.messageWindowSize()/2)) + 1
 	st.PendingPromptIdx = targetIndex
 	st.PendingPrompt = true
 	t.Scroll.Y = 0
@@ -166,10 +173,8 @@ func (a *desktop) jumpToPreviousPrompt(c *ui.Context, t *conversation) {
 
 func (a *desktop) messageRow(c *ui.Context, t *conversation, i int) {
 	m := t.Messages[i]
-	start, _ := chatMessageWindow(t)
-	if i > start && ((isFoldableReadTool(m) && isFoldableReadTool(t.Messages[i-1])) ||
-		(isFoldableCommand(m) && isFoldableCommand(t.Messages[i-1]))) &&
-		(str(t.Messages[i-1], "role") == "tool_call" || str(t.Messages[i-1], "toolCallId") != "") {
+	start, _ := a.chatMessageWindow(t)
+	if i > start && sameHistoryBlock(t.Messages[i-1], m) {
 		st := t.uiState()
 		if idx, ok := st.RoundAt[i]; ok {
 			a.roundStatsRow(c, t, idx, st.Round[idx], false)
@@ -211,7 +216,7 @@ func (a *desktop) messageRow(c *ui.Context, t *conversation, i int) {
 			// Adjacent read/grep/list cards fold into one group row, mirroring
 			// main's read-grep-group: only the group's first row renders, the
 			// rest are consumed by it.
-			start, _ := chatMessageWindow(t)
+			start, _ := a.chatMessageWindow(t)
 			if isFoldableReadTool(m) && i > start {
 				if prev := t.Messages[i-1]; isFoldableReadTool(prev) &&
 					(str(prev, "role") == "tool_call" || str(prev, "toolCallId") != "") {
@@ -264,7 +269,11 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 	services := c.Services()
 	message := ui.Column(c.Key(fmt.Sprintf("user-bubble-%s-%d", t.ID, i))).Label("用户消息区域").AlignSelf(ui.End).AlignItems(ui.End).MaxWidthPercent(85).MinWidth(0).Gap(4)
 	message.Children(func() {
-		ui.Column(c.Key("bubble")).Label("用户消息").Selectable().MinWidth(0).Padding(10, 16).Radius(16).Background(p.accent.Alpha(0.10)).Children(func() {
+		background := p.accent.Alpha(0.10)
+		if p.dark {
+			background = ui.Transparent
+		}
+		ui.Column(c.Key("bubble")).Label("用户消息").Selectable().MinWidth(0).Padding(10, 16).Radius(16).Background(background).Children(func() {
 			ui.Column(c).MinWidth(0).Gap(gapInline).Children(func() {
 				if str(m, "skill") != "" || str(m, "skillArgs") != "" {
 					ui.Row(c).AlignItems(ui.Center).Gap(gapInline).Children(func() {
@@ -446,7 +455,10 @@ const projectMemoryPrompt = "请把这次对话里值得长期记住的项目事
 
 func (a *desktop) exportText(name, content string) {
 	a.job(func() error {
-		_, err := a.core.ExportTextFile(name, content, "Markdown", "*.md")
+		path, err := a.core.ExportTextFile(name, content, "Markdown", "*.md")
+		if err == nil && path != "" {
+			a.win.Update(func() { a.notify("已导出：" + path) })
+		}
 		return err
 	})
 }
@@ -937,14 +949,62 @@ func roundStatsIndex(t *conversation, index int) int {
 	}
 	return target
 }
-func chatMessageWindow(t *conversation) (int, int) {
-	end := len(t.Messages)
-	start := max(0, end-140)
-	if t.uiState().VisibleStart > 0 {
-		start = min(end, t.uiState().VisibleStart-1)
-		end = min(end, start+140)
+func normalizeHistoryPageSize(size int) int {
+	if size < 20 || size > 200 {
+		return 80
 	}
-	return start, end
+	return size
+}
+func (a *desktop) messageWindowSize() int { return normalizeHistoryPageSize(a.prefs.HistoryPageSize) }
+func (a *desktop) chatMessageWindow(t *conversation) (int, int) {
+	st := t.uiState()
+	if st.windowBuilding {
+		return st.windowStart, st.windowEnd
+	}
+	return historyMessageWindow(t, a.messageWindowSize())
+}
+
+// Pagination and row rendering share this grouping rule. Only adjacent tool
+// records combine; an ordinary message always starts its own visible block.
+func sameHistoryBlock(left, right map[string]any) bool {
+	tool := func(m map[string]any) bool { return str(m, "role") == "tool_call" || str(m, "toolCallId") != "" }
+	return tool(left) && tool(right) && ((isFoldableReadTool(left) && isFoldableReadTool(right)) || (isFoldableCommand(left) && isFoldableCommand(right)))
+}
+func historyBlockStarts(t *conversation) []int {
+	starts := make([]int, 0, len(t.Messages)+1)
+	for i := range t.Messages {
+		if i == 0 || !sameHistoryBlock(t.Messages[i-1], t.Messages[i]) {
+			starts = append(starts, i)
+		}
+	}
+	return append(starts, len(t.Messages))
+}
+func historyMessageWindow(t *conversation, size int) (int, int) {
+	size = normalizeHistoryPageSize(size)
+	starts := historyBlockStarts(t)
+	blocks := len(starts) - 1
+	first := max(0, blocks-size)
+	if t.uiState().VisibleStart > 0 {
+		first = historyBlockIndex(starts, min(len(t.Messages), t.uiState().VisibleStart-1))
+	}
+	return starts[first], starts[min(blocks, first+size)]
+}
+func historyBlockIndex(starts []int, index int) int {
+	// Upper bound keeps a restored index inside a tool group on its header.
+	lo, hi := 0, len(starts)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if starts[mid] <= index {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return max(0, lo-1)
+}
+func previousHistoryPage(t *conversation, start, size int) int {
+	starts := historyBlockStarts(t)
+	return starts[max(0, historyBlockIndex(starts, start)-normalizeHistoryPageSize(size))]
 }
 
 // followLatest parks a transcript at its newest message. A scroll container
@@ -970,8 +1030,9 @@ func userCancelledMessage(m map[string]any) bool {
 		return true
 	}
 	for _, key := range []string{"content", "error"} {
-		switch strings.ToLower(strings.TrimSpace(str(m, key))) {
-		case "已取消", "用户已取消", "用户取消", "cancelled by user", "canceled by user":
+		text := strings.TrimSpace(str(m, key))
+		if text == "已取消" || text == "用户已取消" || text == "用户取消" ||
+			strings.EqualFold(text, "cancelled by user") || strings.EqualFold(text, "canceled by user") {
 			return true
 		}
 	}

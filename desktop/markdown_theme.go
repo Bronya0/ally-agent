@@ -13,8 +13,7 @@ import (
 const readingFontSize float32 = 16
 const readingCodeSize float32 = 14.5
 
-// Each accent owns both appearance variants. Prose stays neutral; headings,
-// emphasis and inline code receive only a restrained hint of the selected hue.
+// Prose stays neutral while emphasis follows the selected palette.
 type markdownColors struct {
 	text, muted, heading, strong, code, codeBG, link, panel, border ui.Color
 	syntax                                                          *editor.Theme
@@ -29,6 +28,19 @@ func proseColors(text, muted, heading, strong, code, tint, link, panel, border s
 	colors.syntax.Tokens[editor.TokenFunction].Color = colors.strong
 	colors.syntax.Tokens[editor.TokenNumber].Color = colors.code
 	colors.syntax.Tokens[editor.TokenComment].Color = colors.muted
+	// Keep body text neutral and use the palette accent for reading emphasis.
+	colors.heading = colors.link
+	colors.code = colors.link
+	// Nonzero RGB prevents Markdown theme resolution from substituting a background.
+	colors.codeBG = ui.Hex("#ffffff").Alpha(0)
+	if colors.panel.R < 128 {
+		colors.text = ui.Hex("#cccccc")
+		colors.muted = ui.Hex("#969da7")
+	} else {
+		colors.text = ui.Hex("#343a43")
+		colors.muted = ui.Hex("#68717e")
+	}
+
 	return colors
 }
 
@@ -46,10 +58,36 @@ func (a *desktop) readingColors() markdownColors {
 	if index < 0 || index >= len(markdownPalettes) {
 		index = 2
 	}
-	if a.currentPalette().dark {
-		return markdownPalettes[index].dark
+	if index == 3 {
+		index = 0 // Retired ocean preference follows blue.
 	}
-	return markdownPalettes[index].light
+	colors := markdownPalettes[index].light
+	if a.currentPalette().dark {
+		colors = markdownPalettes[index].dark
+		colors.text = ui.Hex("#d7dedc")
+		colors.muted = ui.Hex("#9aa6a3")
+		colors.heading = ui.Hex("#e5e5e5")
+		seed := []string{"#8da5df", "#8da5df", "#e0a458", "#5b9cf6", "#57c98a", "#a78bfa"}[index]
+		accent := ui.Hex(seed)
+		colors.strong = ui.Hex("#d4d4d4").Mix(accent, 0.35)
+		colors.code = accent.Mix(ui.Hex("#ffffff"), 0.28)
+		colors.link = accent.Mix(ui.Hex("#ffffff"), 0.18)
+		if index == 2 {
+			colors.heading = ui.Hex("#d7dedc")
+			colors.strong = ui.Hex("#c4b894")
+			colors.code = ui.Hex("#d4a574")
+			colors.link = ui.Hex("#f0b66c")
+		}
+	} else {
+		colors.text = ui.Hex("#252a37")
+		colors.muted = ui.Hex("#3a4154")
+		colors.heading = ui.Hex("#0f1219")
+		colors.strong = colors.heading
+		accent := []string{"#245fc2", "#245fc2", "#92530f", "#245fc2", "#217747", "#7042bd"}[index]
+		colors.code = ui.Hex(accent)
+		colors.link = colors.code
+	}
+	return colors
 }
 
 func readingSizes(body, code float64) (float32, float32) {
@@ -127,8 +165,21 @@ func (a *desktop) configureReadingMarkdown(options *markdown.Options) {
 	th.CodeBlockBackground, th.CodeBlockBorder = colors.panel, colors.border
 	th.CodeColors = colors.syntax
 	th.QuoteText, th.QuoteBar, th.Rule = colors.muted, colors.border, colors.border
-	for n, size := range []float32{1.4, 1.25, 1.125, 1, 1, 1} {
-		th.Headings[n] = markdown.HeadingStyle{Size: size, Weight: 600, Color: colors.heading, Top: 1, Bottom: 0.5}
+	for n, size := range []float32{1.55, 1.32, 1.12, 1, 1, 1} {
+		color := colors.heading
+		if n == 2 {
+			color = colors.code
+			if a.currentPalette().dark {
+				if a.prefs.Palette == 2 {
+					color = ui.Hex("#e8c489")
+				} else {
+					color = colors.link.Mix(ui.Hex("#ffffff"), 0.243902)
+				}
+			}
+		} else if n == 1 && !a.currentPalette().dark {
+			color = colors.text
+		}
+		th.Headings[n] = markdown.HeadingStyle{Size: size, Weight: 600, Color: color, Top: 1, Bottom: 0.5}
 	}
 
 }

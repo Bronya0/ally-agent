@@ -55,7 +55,7 @@ const (
 	heightTabRow       float32 = 32
 	heightRailItem     float32 = 32
 	widthRailCollapsed float32 = 44
-	railDividerWidth   float32 = 5
+	railDividerWidth   float32 = 1
 	// railPadH is the collapsed rail's horizontal padding.
 	railPadH float32 = 2
 	// heightRailItemCollapsed is the side of a collapsed entry: both sides take
@@ -163,6 +163,9 @@ func (a *desktop) currentPalette() palette {
 	idx := a.prefs.Palette
 	if idx < 0 || idx >= len(palettes) {
 		idx = 2
+	}
+	if idx == 3 {
+		idx = 0 // Retired ocean preference falls back to blue.
 	}
 	base := 0
 	if a.prefs.Appearance == "light" || (a.prefs.Appearance == "" && idx == 1) ||

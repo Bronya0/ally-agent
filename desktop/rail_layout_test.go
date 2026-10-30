@@ -104,3 +104,25 @@ func TestRailSectionTitlesUseAvailableSpace(t *testing.T) {
 		}
 	}
 }
+
+func TestExpandedRailToggleStaysAtBottom(t *testing.T) {
+	for _, height := range []int{620, 850} {
+		for _, sectionsOpen := range []bool{false, true} {
+			a := &desktop{prefs: defaultPrefs()}
+			a.prefs.RailExpanded = true
+			a.prefs.RailWorkspaceOpen, a.prefs.RailSessionsOpen = sectionsOpen, sectionsOpen
+			tt := ui.NewTester(func(c *ui.Context) {
+				c.SetTheme(a.theme())
+				c.DisableAnimations()
+				ui.Column(c).Fill().Children(func() {
+					ui.Box(c).Height(heightHeader).Shrink(0)
+					ui.Split(c, &a.prefs.RailWidth, func() { a.rail(c) }, func() { ui.Column(c).Fill() }).Grow(1).MinHeight(0).FillWidth()
+				})
+			}, 1000, height)
+			button, ok := tt.Find("收起侧边栏")
+			if !ok || button.Y+button.H != float32(height)-6 {
+				t.Fatalf("height=%d sectionsOpen=%t: toggle is not at bottom: %v", height, sectionsOpen, button)
+			}
+		}
+	}
+}

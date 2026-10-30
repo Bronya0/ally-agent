@@ -80,6 +80,7 @@ func (a *desktop) globalShortcuts(c *ui.Context) {
 	if !a.ready || a.closing {
 		return
 	}
+	c.OnShortcut(ui.Ctrl|ui.Shift, ui.KeyF12, a.exportMemoryDiagnostics)
 	c.OnShortcut(ui.Cmd, ui.KeyN, a.newSession)
 	c.OnShortcut(ui.Cmd, ui.KeyT, func() {
 		root := a.config.Workspace

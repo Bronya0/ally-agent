@@ -156,11 +156,12 @@ func (s *previewLoadState) complete(token string) bool {
 }
 
 type nativePreview struct {
-	view     *mygo.WebView
-	state    previewLoadState
-	timer    *time.Timer
-	update   func(func())
-	offTitle func()
+	view        *mygo.WebView
+	state       previewLoadState
+	timer       *time.Timer
+	update      func(func())
+	offTitle    func()
+	documentURL string
 }
 
 func (p *nativePreview) Native() ui.NativeWebView { return p.view }
@@ -176,6 +177,8 @@ func (p *nativePreview) Destroy() {
 		p.offTitle()
 		p.offTitle = nil
 	}
+	releasePreviewDocument(p.documentURL)
+	p.documentURL = ""
 	p.view.Destroy()
 }
 func (p *nativePreview) Load(req previewRequest) {
@@ -199,7 +202,9 @@ func (p *nativePreview) Load(req previewRequest) {
 	} else {
 		document = toolHTMLDocument(req.Source)
 	}
-	p.view.Page().LoadHTML(previewReadyDocument(document, token, req.Kind == "mermaid"), "https://ally-tool-preview.invalid/")
+	releasePreviewDocument(p.documentURL)
+	p.documentURL = storePreviewDocument(previewReadyDocument(document, token, req.Kind == "mermaid"))
+	p.view.Page().LoadURL(p.documentURL)
 }
 
 func (a *desktop) newPreviewSurface() (previewSurface, error) {

@@ -4,9 +4,15 @@ import "github.com/egoist/mygo/ui"
 
 // WorkspaceTab is the quiet title-bar tab. Status and close slots are always
 // present, so loading, hover and closing availability never move the label.
-func WorkspaceTab(c *ui.Context, label string, active, busy, canClose bool, closeIcon *ui.SVG, activate, close func(), gesture *TabGesture, secondary ...ui.Color) ui.Element {
+// tip is what hovering reveals: the label keeps only the workspace's last
+// segment, so the tip carries the full path.
+func WorkspaceTab(c *ui.Context, label, tip string, active, busy, canClose bool, closeIcon *ui.SVG, activate, close func(), gesture *TabGesture, secondary ...ui.Color) ui.Element {
 	t := c.Theme()
-	row := ui.Row(c).Height(44).Shrink(0).MinWidth(64).MaxWidth(220).Padding(0, 7).Gap(5).AlignItems(ui.Center).Radius(0)
+	row := ui.ButtonBase(c).Height(44).Shrink(0).MinWidth(64).MaxWidth(220).Padding(0, 7).Gap(5).AlignItems(ui.Center).Radius(0).Cursor(ui.CursorPointer).Label(label).OnClick(activate)
+	if gesture != nil {
+		// The entire tab, including its status slot and padding, pans the strip.
+		gesture.Watch(row)
+	}
 	fill := ui.Transparent
 	if row.Hovered() {
 		fill = t.SurfaceHover
@@ -29,12 +35,7 @@ func WorkspaceTab(c *ui.Context, label string, active, busy, canClose bool, clos
 			dot = t.Accent
 		}
 		ui.Box(c.Key("status")).Size(6, 6).Shrink(0).Radius(3).Background(fade(row, "workspace-status", dot))
-		button := ui.ButtonBase(c.Key("activate")).Grow(1).MinWidth(0).FillHeight().Cursor(ui.CursorPointer).Label(label).OnClick(activate)
-		if gesture != nil {
-			// The strip pans with a press here: the button is where one falls,
-			// and watching it leaves the tab's edges to the title bar.
-			gesture.Watch(button)
-		}
+		button := ui.Row(c.Key("title")).Grow(1).MinWidth(0).FillHeight().Center()
 		ink := SecondaryInkOf(t, secondary...)
 		if active || row.Hovered() {
 			ink = t.Text
@@ -42,11 +43,15 @@ func WorkspaceTab(c *ui.Context, label string, active, busy, canClose bool, clos
 		ink = fade(row, "workspace-ink", ink)
 
 		button.Children(func() { ui.Text(c, label).FontSize(13).FontWeight(500).TextColor(ink).SingleLine().Unselectable() })
-		if busy {
-			Tooltip(c, button, "运行中 · "+label)
-		} else {
-			Tooltip(c, button, label)
+		hover := tip
+		if hover == "" {
+			hover = label
 		}
+		if busy {
+			// The path keeps its own line: a prefixed path wraps unreadably.
+			hover = "运行中\n" + hover
+		}
+		Tooltip(c, row, hover)
 		end := IconButton(c, "close", "关闭标签", closeIcon, 20, IconQuiet, close, SecondaryInkOf(t, secondary...)).Shrink(0).Disabled(!canClose || busy)
 		opacity := float32(0)
 		if canClose && showClose {

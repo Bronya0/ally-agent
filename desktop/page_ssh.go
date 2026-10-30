@@ -5,8 +5,8 @@ import (
 	"ally-dev/desktop/uikit"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
-	"strconv"
 	"strings"
 
 	backend "ally-dev/internal/app"
@@ -139,11 +139,11 @@ func sshGroupInput(group string) string {
 	return group
 }
 
-func sshPortInput(port int) string {
+func sshPortInput(port int) float64 {
 	if port < 1 || port > 65535 {
-		port = 22
+		return 22
 	}
-	return strconv.Itoa(port)
+	return float64(port)
 }
 
 func (a *desktop) openSSHEditor(id, group string) {
@@ -152,13 +152,13 @@ func (a *desktop) openSSHEditor(id, group string) {
 	a.sshF.CloneSource = ""
 	a.sshF.EditingID = id
 	a.sshF.GroupInput = sshGroupInput(group)
-	a.sshF.PortText = "22"
+	a.sshF.Port = 22
 	if id != "" {
 		for _, node := range a.sshServers {
 			if node.ID == id {
 				a.sshF.Draft = node
 				a.sshF.GroupInput = sshGroupInput(node.Group)
-				a.sshF.PortText = sshPortInput(node.Port)
+				a.sshF.Port = sshPortInput(node.Port)
 				a.sshF.OrgGroup = node.Group
 				return
 			}
@@ -180,7 +180,7 @@ func (a *desktop) openSSHClone(source backend.SSHServerNode) {
 	a.sshF.OrgGroup = source.Group
 	a.sshF.Draft = clone
 	a.sshF.GroupInput = sshGroupInput(clone.Group)
-	a.sshF.PortText = sshPortInput(clone.Port)
+	a.sshF.Port = sshPortInput(clone.Port)
 }
 
 func nextSSHCloneAlias(base string, servers []backend.SSHServerNode) string {
@@ -237,7 +237,7 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 			ui.Column(c).Grow(2).Basis(0).Children(func() { fieldRow(c, "ssh-host", "主机", &d.Host, false) })
 			ui.Column(c).Grow(1).Basis(0).Gap(gapTight).Children(func() {
 				fieldLabel(c, "端口")
-				uikit.NumberStepper(c, "ssh-port", "端口", &a.sshF.PortText, 1, 65535, 1, 22, a.secondaryInk()).FillWidth()
+				ui.NumberInput(c.Key("ssh-port"), &a.sshF.Port, 1, 65535, 1).Label("端口")
 			})
 		})
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
@@ -349,12 +349,12 @@ func (a *desktop) saveSSHNode() {
 		a.notify("请填写私钥路径")
 		return
 	}
-	port, err := strconv.Atoi(strings.TrimSpace(a.sshF.PortText))
-	if err != nil || port < 1 || port > 65535 {
+	port := a.sshF.Port
+	if math.IsNaN(port) || math.IsInf(port, 0) || port < 1 || port > 65535 || port != math.Trunc(port) {
 		a.notify("端口必须是 1 至 65535 的整数")
 		return
 	}
-	d.Port = port
+	d.Port = int(port)
 	if d.RiskLevel == "" {
 		d.RiskLevel = "low"
 	}
@@ -455,17 +455,23 @@ func (a *desktop) exportSSH() {
 func (a *desktop) loadSSHAuth(workspace string) {
 	a.sshF.AuthWorkspace = workspace
 	a.sshF.AuthReady = false
+	a.sshF.AuthDraft = nil
+	a.sshF.AuthLoadSeq++
+	seq, tail := a.sshF.AuthLoadSeq, a.sshAuthTail
 	go func() {
+		if tail != nil {
+			<-tail
+		}
 		servers := a.core.ListAllSSHServers()
 		allowed := a.core.GetWorkspaceAllowedServers(workspace)
 		a.win.Update(func() {
-			if !a.sshF.AuthOpen || !sameWorkspace(a.sshF.AuthWorkspace, workspace) {
+			if seq != a.sshF.AuthLoadSeq || !a.sshF.AuthOpen || !sameWorkspace(a.sshF.AuthWorkspace, workspace) {
 				return
 			}
 			a.sshServers = servers
 			a.sshF.AuthDraft = map[string]bool{}
-			for _, alias := range allowed {
-				a.sshF.AuthDraft[alias] = true
+			for _, id := range allowed {
+				a.sshF.AuthDraft[id] = true
 			}
 			a.sshF.AuthReady = true
 			if a.sshAllowed == nil {
@@ -513,7 +519,7 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 		groups := []string{}
 		seen := map[string]bool{}
 		for _, node := range a.sshServers {
-			if onlyAllowed && !a.sshF.AuthDraft[node.Alias] {
+			if onlyAllowed && !a.sshF.AuthDraft[node.ID] {
 				continue
 			}
 			if query != "" && !strings.Contains(strings.ToLower(node.Alias+" "+node.Host+" "+node.Username+" "+node.Description+" "+node.Group), query) {
@@ -563,12 +569,12 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 					if len(groups) > 1 && group != a.sshF.AuthGroup {
 						continue
 					}
-					checked := a.sshF.AuthDraft[node.Alias]
+					checked := a.sshF.AuthDraft[node.ID]
 					if onlyAllowed && !checked {
 						continue
 					}
 					if query != "" {
-						haystack := strings.ToLower(node.Alias + " " + node.Host + " " + node.Username + " " + node.Description)
+						haystack := strings.ToLower(node.Alias + " " + node.Host + " " + node.Username + " " + node.Description + " " + node.Group)
 						if !strings.Contains(haystack, query) {
 							continue
 						}
@@ -582,7 +588,7 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 					row.Cursor(ui.CursorPointer)
 					row.Children(func() {
 						ui.Checkbox(c.Key("ssh-auth-check-"+node.ID), &checked, "").OnClick(func() {
-							a.sshF.AuthDraft[node.Alias] = !a.sshF.AuthDraft[node.Alias]
+							a.sshF.AuthDraft[node.ID] = !a.sshF.AuthDraft[node.ID]
 						})
 						ui.Text(c, node.Alias).FontSize(fsSmall).Width(140).SingleLine()
 						ui.Text(c, node.Username+"@"+node.Host+":"+fmt.Sprint(node.Port)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).Width(200).SingleLine()
@@ -590,7 +596,7 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 						sshRiskBadge(c, node.RiskLevel)
 					})
 					if row.Clicked() {
-						a.sshF.AuthDraft[node.Alias] = !a.sshF.AuthDraft[node.Alias]
+						a.sshF.AuthDraft[node.ID] = !a.sshF.AuthDraft[node.ID]
 					}
 				}
 			})
@@ -606,23 +612,23 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 }
 
 func (a *desktop) commitSSHAuth(workspace string) {
-	if workspace == "" {
+	if workspace == "" || !a.sshF.AuthReady || !sameWorkspace(a.sshF.AuthWorkspace, workspace) {
 		return
 	}
-	var aliases []string
-	for alias, allowed := range a.sshF.AuthDraft {
+	var ids []string
+	for id, allowed := range a.sshF.AuthDraft {
 		if allowed {
-			aliases = append(aliases, alias)
+			ids = append(ids, id)
 		}
 	}
-	sort.Strings(aliases)
-	if a.sshAllowed == nil {
-		a.sshAllowed = map[string][]string{}
-	}
-	a.sshAllowed[workspace] = aliases
+	sort.Strings(ids)
+	// A close click can also produce Dismissed; submit this draft only once.
+	a.sshF.AuthReady = false
+	result := a.queueSSHAuthSave(workspace, ids)
 	go func() {
-		err := a.core.SetWorkspaceAllowedServers(workspace, aliases)
+		err := <-result
 		a.win.Update(func() {
+			a.refreshSSH()
 			if err != nil {
 				a.notifyError(err.Error())
 				return
@@ -630,6 +636,24 @@ func (a *desktop) commitSSHAuth(workspace string) {
 			a.notify("当前工作区授权已更新")
 		})
 	}()
+}
+
+// Capture queue state on the UI thread; disk writes stay in ordered workers.
+func (a *desktop) queueSSHAuthSave(workspace string, ids []string) <-chan error {
+	previous := a.sshAuthTail
+	done := make(chan struct{})
+	result := make(chan error, 1)
+	a.sshAuthTail = done
+	ids = append([]string(nil), ids...)
+	go func() {
+		defer close(done)
+		if previous != nil {
+			<-previous
+		}
+		result <- a.core.SetWorkspaceAllowedServers(workspace, ids)
+		close(result)
+	}()
+	return result
 }
 
 func sshRiskBadge(c *ui.Context, level string) ui.Element {

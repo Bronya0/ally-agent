@@ -10,6 +10,8 @@ const (
 	HoverDuration      = 140 * time.Millisecond
 	OverlayDuration    = 180 * time.Millisecond
 	DisclosureDuration = 200 * time.Millisecond
+	ThinkingCycle      = 1300 * time.Millisecond
+	ThinkingStagger    = 208 * time.Millisecond
 )
 
 // Reveal keeps a stable clipping parent during closing, like MyGo's native

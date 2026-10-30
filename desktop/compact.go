@@ -251,3 +251,12 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 		t.Messages[i] = row
 	}
 }
+
+// Local rewrites invalidate provider usage; both numbers are text estimates.
+func compactionToast(result map[string]any) string {
+	text := compactToastText(int(num(result, "tokensBefore")), int(num(result, "tokensAfter")))
+	if str(result, "tier") == "fast" {
+		text += "（本地估算）"
+	}
+	return text
+}

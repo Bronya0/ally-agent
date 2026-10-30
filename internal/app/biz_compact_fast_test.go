@@ -579,3 +579,33 @@ func TestAutoCompactRecentOverflowStillUsesSummary(t *testing.T) {
 		t.Fatal("overflow must use the full summary recovery even when recent mode is selected")
 	}
 }
+
+func TestFastCompactRebuildsLiveCountersWithComparableTotals(t *testing.T) {
+	a := newApiTestApp(t)
+	a.modelHistoryCodec = nil
+	history := fastCompactFixture()
+	const sid = "live-compact-counts"
+	a.saveHistory(sid, history)
+	a.recordContextAnchor(sid, history, &modelUsage{PromptTokens: 1})
+	a.mu.Lock()
+	if a.liveBreakdown == nil {
+		a.liveBreakdown = map[string]ContextBreakdown{}
+	}
+	a.liveBreakdown[sid] = ContextBreakdown{ToolResults: 999999, Total: 999999}
+	a.mu.Unlock()
+	result, err := a.FastCompactSession(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["changed"] != true {
+		t.Fatal("fixture must shrink")
+	}
+	before, after := intFromAny(result["tokensBefore"]), intFromAny(result["tokensAfter"])
+	if after >= before {
+		t.Fatalf("incomparable counts: %d -> %d", before, after)
+	}
+	got := a.getContextBreakdown(sid, "")
+	if got.Total != after || got.MeasuredTokens != 0 {
+		t.Fatalf("stale live breakdown: %+v, want %d", got, after)
+	}
+}

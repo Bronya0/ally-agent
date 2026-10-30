@@ -3,12 +3,15 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	backend "ally-dev/internal/app"
+	"errors"
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
@@ -66,12 +69,19 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 				label = "保存中…"
 			}
 			flat(c, label).Disabled(file.Image != nil || file.Saving || !file.Editor.Buffer.Modified()).OnClick(func() { a.saveFile() })
+			if file.Document != nil {
+				flat(c, "系统打开").OnClick(func() { a.openSystemFile(file.Path) })
+			}
 			iconAction(c, "editor-close", "关闭编辑器", "close", 24, func() { a.closeFile() })
 		})
 		if file.Image != nil {
 			ui.Box(c).Grow(1).MinHeight(0).Padding(20).Center().Children(func() {
 				ui.Image(c, file.Image).Fill().Fit(ui.Contain)
 			})
+			return
+		}
+		if file.Document != nil {
+			a.documentFileView(c, file)
 			return
 		}
 		if a.filesF.Preview && strings.HasSuffix(strings.ToLower(file.Path), ".md") {
@@ -106,8 +116,10 @@ func (a *desktop) fileTree(c *ui.Context) {
 	// Unselectable keeps the window-wide selectable text layer from claiming
 	// right-clicks: without it every secondary click opens the root text menu
 	// and neither a row menu nor the blank-area menu ever sees RightClicked.
-	ui.Column(c).Width(width).Shrink(0).Unselectable().Background(colChrome(a)).BorderWidth(0, 0, 0, 1).BorderColor(c.Theme().Border).Children(func() {
-		c.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles() })
+	// MyGo Split owns the separator; a left border here doubles its width.
+	ui.Column(c).Width(width).FillHeight().Shrink(0).Unselectable().Background(colChrome(a)).Children(func() {
+		services := c.Services()
+		c.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, "") })
 		title := "文件"
 		tip := ""
 		if t := a.current(); t != nil {
@@ -120,25 +132,18 @@ func (a *desktop) fileTree(c *ui.Context) {
 			uikit.IconButton(c, "explorer-help", "文件浏览器帮助", iconImage("info"), 22, uikit.IconQuiet, func() { a.filesF.HelpOpen = !a.filesF.HelpOpen }, ink)
 			uikit.IconButton(c, "explorer-close", "关闭文件栏", iconImage("close"), 22, uikit.IconQuiet, func() { a.explorer = false }, ink)
 		})
-		// The tree itself owns the blank-area menu; a row builds its own menu, so
-		// the blank one only appears where there is no file or folder under the
-		// pointer. Item order mirrors the Vue explorer's empty-tree menu.
-		tree := ui.Scroll(c).Grow(1).MinHeight(0)
-		var area ui.Element
+		// Put the fallback menu on the viewport: the content column can be
+		// shorter than it, even with FillHeight in a scrolling container.
+		// A row's own menu takes precedence over this ancestor's menu.
+		tree := ui.Scroll(c.Key("explorer-tree")).Grow(1).MinHeight(0).Focusable().Label("工作区文件列表")
 		tree.Children(func() {
-			// Filling the viewport makes the empty space below the last row
-			// part of this column, so a right-click there belongs to the tree
-			// and not to the scrolling surface.
-			area = ui.Column(c).Padding(3, 0).FillWidth().FillHeight()
+			area := ui.Column(c).Padding(3, 0).FillWidth()
 			if len(a.files) == 0 {
 				area.Children(func() { fieldNote(c, "目录为空", a.secondaryInk()) })
 			}
-			area.Children(func() { a.fileRows(c, a.files, 0) })
+			area.Children(func() { ui.Tree(c.Key("workspace-tree"), func() { a.fileRows(c, a.files) }).FillWidth() })
 		})
-		// ContextMenu is the system's context menu: it opens where the secondary
-		// button is, and from the keyboard on the menu key or Shift+F10, so the
-		// open flag and the hit test a popover needed are gone.
-		area.ContextMenu(func(m *ui.Menu) {
+		uikit.ContextMenu(tree, func(m *ui.Menu) {
 			if m.Item("新建文件").Chosen() {
 				a.openFilePrompt(false, "")
 			}
@@ -147,6 +152,10 @@ func (a *desktop) fileTree(c *ui.Context) {
 			}
 			if m.Item("打开目录").Chosen() {
 				a.openInManager("")
+			}
+			m.Separator()
+			if m.Item("粘贴文件").Chosen() {
+				a.pasteFiles(services, "")
 			}
 			m.Separator()
 			if m.Item("刷新").Chosen() {
@@ -158,8 +167,9 @@ func (a *desktop) fileTree(c *ui.Context) {
 				fieldNote(c, "文件浏览器帮助", a.secondaryInk())
 				for _, line := range []string{
 					"单击文件打开，单击目录展开",
-					"右键：新建 / 重命名 / 删除 / 复制路径 / 属性",
-					"Ctrl+V 粘贴系统剪贴板里的文件到工作区",
+					"右键文件：复制文件 / 复制路径 / 重命名 / 删除 / 属性",
+					"右键空白处或目录：粘贴文件；同名文件自动另存副本",
+					"Ctrl+C 复制聚焦文件，Ctrl+V 粘贴到聚焦目录（文件行则为其父目录）",
 					"Ctrl+S 保存当前文件（带版本校验）",
 					"Ctrl+Space 补全，悬停查看符号信息，F12 / ⌘或Ctrl+点击跳转 Go 定义",
 					"Markdown 可切换预览，图片直接预览",
@@ -183,11 +193,11 @@ func (a *desktop) fileTree(c *ui.Context) {
 	a.fileInfoDialog(c)
 }
 
-func (a *desktop) fileRows(c *ui.Context, entries []backend.FileEntry, depth int) {
+func (a *desktop) fileRows(c *ui.Context, entries []backend.FileEntry) {
 	services := c.Services()
-	p := a.currentPalette()
-	fileColor := p.muted.Mix(p.text, 0.25)
-	dirColor := fileColor
+	if a.fileOpen == nil {
+		a.fileOpen = map[string]bool{}
+	}
 	for _, entry := range entries {
 		entry := entry
 		path := strings.ReplaceAll(entry.Path, "\\", "/")
@@ -195,45 +205,58 @@ func (a *desktop) fileRows(c *ui.Context, entries []backend.FileEntry, depth int
 		if name == "" {
 			name = filepath.Base(path)
 		}
-		hidden := strings.HasPrefix(name, ".")
-		row := ui.Row(c.Key("file-"+path)).Height(23).Padding(0, 6+float32(depth)*14).Gap(gapInline).Radius(radiusSmall).AlignItems(ui.Center)
-		if row.Hovered() {
-			row.Background(c.Theme().SurfaceHover)
+		if entry.Symlink {
+			name += " →"
 		}
-		if hidden {
+		open := a.fileOpen[path]
+		var children func()
+		var expanded *bool
+		if entry.Dir {
+			expanded = &open
+			children = func() { a.fileRows(c, a.fileChildren[path]) }
+		}
+		row := ui.TreeItem(c.Key("file-"+path), name, expanded, children).
+			Height(23).FontSize(fsSmall).Label(entry.Name)
+		if a.currentPalette().dark {
+			row.TextColor(ui.Hex("#cccccc"))
+		}
+		selected := false
+		if file := a.activeFile(); file != nil {
+			selected = file.Path == entry.Path
+		}
+		if a.filesF.InfoOpen {
+			selected = a.filesF.InfoPath == entry.Path
+		}
+		uikit.TreeSelection(c, row, selected)
+		if strings.HasPrefix(entry.Name, ".") {
 			row.Opacity(0.55)
 		}
-		row.Children(func() {
-			if entry.Dir {
-				arrow := "chevron"
-				if a.fileOpen[path] {
-					arrow = "chevrondown"
-				}
-				iconGlyph(c, arrow, 10).TextColor(dirColor)
-			} else {
-				ui.Box(c).Width(10)
-			}
-			ui.Text(c, name).FontSize(fsSmall).SingleLine().TextColor(func() ui.Color {
-				if entry.Dir {
-					return dirColor
-				}
-				return fileColor
-			}())
-			if entry.Symlink {
-				fieldNote(c, "→", a.secondaryInk())
-			}
-		})
 		uikit.Tooltip(c, row, path)
-		if row.Clicked() {
+		// Only an actual arrow/key expansion starts a lazy directory read.
+		// MyGo owns focus, keyboard navigation and the disclosure control.
+		if open != a.fileOpen[path] {
+			a.fileOpen[path] = open
+			if open {
+				a.loadFolderChildren(path)
+			}
+		}
+		target := fileParent(path)
+		if entry.Dir {
+			target = path
+		}
+		row.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, target) })
+		if !entry.Dir {
+			row.OnShortcut(ui.Cmd, ui.KeyC, func() { a.copyExplorerFile(services, path) })
+		}
+		row.OnClick(func() {
 			if entry.Dir {
 				a.toggleFolder(path)
 			} else {
 				a.openFile(entry.Path)
 			}
-		}
-		// ContextMenu replaces the open flag, the right-click hit test and the
-		// closing of the blank-area menu: the system opens one menu at a time.
-		row.ContextMenu(func(m *ui.Menu) {
+		})
+		// The shared menu keeps row-specific actions ahead of the viewport's.
+		uikit.ContextMenu(row, func(m *ui.Menu) {
 			if entry.Dir {
 				if m.Item("新建文件").Chosen() {
 					a.openFilePrompt(false, path)
@@ -248,6 +271,15 @@ func (a *desktop) fileRows(c *ui.Context, entries []backend.FileEntry, depth int
 				} else {
 					a.openInManager(fileParent(path))
 				}
+			}
+			m.Separator()
+			if !entry.Dir {
+				if m.Item("复制文件").Chosen() {
+					a.copyExplorerFile(services, path)
+				}
+			}
+			if m.Item("粘贴文件").Chosen() {
+				a.pasteFiles(services, target)
 			}
 			m.Separator()
 			if m.Item("复制相对路径").Chosen() {
@@ -277,9 +309,6 @@ func (a *desktop) fileRows(c *ui.Context, entries []backend.FileEntry, depth int
 				}
 			}
 		})
-		if entry.Dir && a.fileOpen[path] {
-			a.fileRows(c, a.fileChildren[path], depth+1)
-		}
 	}
 }
 
@@ -489,38 +518,67 @@ func (a *desktop) loadFolderChildren(path string, manual ...bool) {
 	}()
 }
 
-// pasteFiles copies files from the OS clipboard into the current directory.
-func (a *desktop) pasteFiles() {
+// copyExplorerFile publishes native file representations rather than path text,
+// allowing Explorer/Finder and other applications to paste the actual file.
+func (a *desktop) copyExplorerFile(services ui.Services, path string) {
 	t := a.current()
 	if t == nil {
 		return
 	}
-	target := ""
-	if file := a.activeFile(); file != nil {
-		target = fileParent(file.Path)
+	data, err := transfer.FileData(filepath.Join(t.Workspace, filepath.FromSlash(path)))
+	if err != nil {
+		a.notifyError("复制文件失败：" + err.Error())
+		return
 	}
+	services.WriteClipboardData(data)
+	a.notifySuccess("文件已复制")
+}
+
+// pasteFiles captures the clipboard and destination on the UI thread. The
+// background copy stays pinned to that workspace even if the user switches tabs.
+func (a *desktop) pasteFiles(services ui.Services, target string) {
+	t := a.current()
+	if t == nil {
+		return
+	}
+	sources, err := services.ReadClipboardData(transfer.FileList, transfer.URIList).Files()
+	if err != nil && !errors.Is(err, transfer.ErrFormat) {
+		a.notifyError("读取剪贴板失败：" + err.Error())
+		return
+	}
+	if len(sources) == 0 {
+		a.notify("剪贴板中没有文件")
+		return
+	}
+	if a.core == nil {
+		return
+	}
+	req := backend.CopyFilesIntoWorkspaceRequest{Workspace: t.Workspace, TargetDir: target, Sources: sources, FilesOnly: true}
+	win := a.win
 	go func() {
-		sources, err := a.core.ReadClipboardFiles()
-		if err != nil {
-			a.win.Update(func() { a.notifyError("读取剪贴板失败（可能被其他程序占用，稍后再试）") })
+		result, err := a.core.CopyFilesIntoWorkspace(req)
+		if win == nil {
 			return
 		}
-		if len(sources) == 0 {
-			a.win.Update(func() { a.notify("剪贴板中没有文件") })
-			return
-		}
-		result, err := a.core.CopyFilesIntoWorkspace(backend.CopyFilesIntoWorkspaceRequest{Workspace: t.Workspace, TargetDir: target, Sources: sources})
-		a.win.Update(func() {
+		win.Update(func() {
 			if err != nil {
 				a.notifyError(err.Error())
 				return
 			}
 			if len(result.Failed) > 0 {
-				a.notifyError(fmt.Sprintf("已复制 %d 项，%d 项失败", len(result.Copied), len(result.Failed)))
+				a.notifyError(fmt.Sprintf("已复制 %d 个文件，%d 项失败", len(result.Copied), len(result.Failed)))
+			} else if len(result.Copied) == 0 {
+				a.notify("剪贴板中没有可复制的文件（不支持目录）")
 			} else {
-				a.notify(fmt.Sprintf("已复制 %d 个项目到工作区", len(result.Copied)))
+				a.notifySuccess(fmt.Sprintf("已粘贴 %d 个文件", len(result.Copied)))
 			}
-			a.refreshFiles()
+			if current := a.current(); current != nil && workspaceKey(current.Workspace) == workspaceKey(req.Workspace) {
+				if req.TargetDir == "" {
+					a.refreshFiles()
+				} else {
+					a.refreshFolder(req.TargetDir)
+				}
+			}
 		})
 	}()
 }
@@ -528,23 +586,62 @@ func (a *desktop) pasteFiles() {
 // ---- File info -----------------------------------------------------------
 
 func (a *desktop) openFileInfo(path string) {
+	a.openFileInfoWithNote(path, "")
+}
+
+func (a *desktop) openFileInfoWithNote(path, note string) {
 	t := a.current()
 	if t == nil {
 		return
 	}
+	a.closeFileInfo()
 	a.filesF.InfoOpen = true
 	a.filesF.InfoPath = path
+	a.filesF.InfoWorkspace = t.Workspace
+	a.filesF.InfoNote = note
+	a.filesF.InfoDetails = false
+	a.filesF.Info = backend.WorkspaceFileInfo{}
+	a.loadFileInfo(false)
+}
+
+func (a *desktop) closeFileInfo() {
+	if a.filesF.InfoCancel != nil {
+		a.filesF.InfoCancel()
+		a.filesF.InfoCancel = nil
+	}
+	a.filesF.InfoGeneration++
+	a.filesF.InfoOpen = false
+	a.filesF.Info = backend.WorkspaceFileInfo{}
+}
+
+func (a *desktop) loadFileInfo(details bool) {
+	if a.filesF.InfoCancel != nil {
+		a.filesF.InfoCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.filesF.InfoCancel = cancel
+	a.filesF.InfoGeneration++
+	generation := a.filesF.InfoGeneration
+	req := backend.WorkspacePathRequest{Workspace: a.filesF.InfoWorkspace, Path: a.filesF.InfoPath}
 	a.filesF.InfoBusy = true
 	a.filesF.InfoError = ""
 	go func() {
-		info, err := a.core.GetWorkspaceFileInfoAt(backend.WorkspacePathRequest{Workspace: t.Workspace, Path: path})
+		defer cancel()
+		info, err := a.core.InspectWorkspaceFile(ctx, req, details)
+		if ctx.Err() != nil {
+			return
+		}
 		a.win.Update(func() {
+			if generation != a.filesF.InfoGeneration || !a.filesF.InfoOpen || a.closing {
+				return
+			}
 			a.filesF.InfoBusy = false
 			if err != nil {
 				a.filesF.InfoError = err.Error()
 				return
 			}
 			a.filesF.Info = info
+			a.filesF.InfoDetails = details
 		})
 	}()
 }
@@ -554,10 +651,18 @@ func (a *desktop) fileInfoDialog(c *ui.Context) {
 		return
 	}
 	info := a.filesF.Info
-	modalCard(c, &a.filesF.InfoOpen, 640, func() {
-		modalTitle(c, "文件信息", a.filesF.InfoPath)
+	dialog := modalCard(c, &a.filesF.InfoOpen, 640, func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "文件信息").FontSize(17).Bold()
+			ui.Spacer(c)
+			iconAction(c, "file-info-close", "关闭属性", "close", 24, a.closeFileInfo)
+		})
+		fieldNote(c, a.filesF.InfoPath, a.secondaryInk())
+		if a.filesF.InfoNote != "" {
+			fieldNote(c, a.filesF.InfoNote, a.secondaryInk())
+		}
 		if a.filesF.InfoBusy {
-			busyRow(c, "正在计算，请稍候…", a.secondaryInk())
+			busyRow(c, "正在读取文件信息…", a.secondaryInk())
 			return
 		}
 		if a.filesF.InfoError != "" {
@@ -574,7 +679,7 @@ func (a *desktop) fileInfoDialog(c *ui.Context) {
 			{"修改时间", info.ModTime},
 			{"创建时间", info.BirthTime},
 		})
-		if info.IsDir {
+		if info.IsDir && a.filesF.InfoDetails {
 			a.fileInfoSection(c, "目录统计", [][2]string{
 				{"子目录数", fmt.Sprint(info.DirCount)},
 				{"文件数", fmt.Sprint(info.FileCount)},
@@ -595,8 +700,24 @@ func (a *desktop) fileInfoDialog(c *ui.Context) {
 			{"块大小", fmtBytes(info.BlockSize)},
 			{"链接目标", info.LinkTarget},
 		})
-		modalActions(c, func() { flat(c, "关闭").OnClick(func() { a.filesF.InfoOpen = false }) })
+		modalActions(c, func() {
+			if !a.filesF.InfoDetails {
+				label := "计算校验和"
+				if info.IsDir {
+					label = "统计目录"
+				}
+				flat(c, label).OnClick(func() { a.loadFileInfo(true) })
+			}
+			if !info.IsDir {
+				req := backend.WorkspacePathRequest{Workspace: a.filesF.InfoWorkspace, Path: a.filesF.InfoPath}
+				flat(c, "系统应用打开").OnClick(func() { a.job(func() error { return a.core.OpenWorkspaceFile(req) }) })
+			}
+			flat(c, "关闭").OnClick(a.closeFileInfo)
+		})
 	})
+	if dialog.Dismissed() {
+		a.closeFileInfo()
+	}
 }
 
 func (a *desktop) fileInfoSection(c *ui.Context, title string, rows [][2]string) {
@@ -689,8 +810,8 @@ func (a *desktop) gitDiffDialog(c *ui.Context) {
 			}
 			ui.Row(c).Grow(1).MinHeight(0).Gap(gapSection).AlignItems(ui.Stretch).Children(func() {
 				ui.Scroll(c).WidthPercent(30).MinWidth(120).MinHeight(0).Children(func() {
-					ui.Column(c).Gap(1).Children(func() {
-						a.gitTreeRows(c, buildGitTree(data.Files), data.Files, 0)
+					ui.Tree(c.Key("git-tree"), func() {
+						a.gitTreeRows(c, buildGitTree(data.Files), data.Files)
 					})
 				})
 				ui.Scroll(c).Grow(1).MinWidth(0).Children(func() {
@@ -786,54 +907,41 @@ func buildGitTree(files []backend.GitDiffFile) []*gitTreeNode {
 	order(root)
 	return root.children
 }
-func (a *desktop) gitTreeRows(c *ui.Context, nodes []*gitTreeNode, files []backend.GitDiffFile, depth int) {
+func (a *desktop) gitTreeRows(c *ui.Context, nodes []*gitTreeNode, files []backend.GitDiffFile) {
 	for _, node := range nodes {
+		node := node
 		folder := node.index < 0
-		closed := a.popupFlag("git-folder-" + node.path)
-		row := ui.Row(c.Key("git-tree-"+node.path)).FillWidth().MinWidth(0).Height(25).Padding(0, 6+float32(depth)*14).Gap(6).AlignItems(ui.Center).Radius(4).Cursor(ui.CursorPointer).Label(node.name)
-		current := !folder && a.filesF.GitFile == node.index
-		ink := c.Theme().Text
-		switch {
-		case current:
-			row.Background(selectionFill(c.Theme().Accent))
-			ink = c.Theme().Accent
-		case row.Hovered():
-			row.Background(c.Theme().SurfaceHover)
+		// Git folders start expanded, retaining their state across diff reloads.
+		open := a.popupFlag("git-folder-open-" + node.path)
+		initialized := a.popupFlag("git-folder-initialized-" + node.path)
+		if !*initialized {
+			*open, *initialized = true, true
 		}
-		row.Children(func() {
+		var expanded *bool
+		var children func()
+		label := node.name
+		if folder {
+			expanded = open
+			children = func() { a.gitTreeRows(c, node.children, files) }
+		} else {
+			file := files[node.index]
+			label += "  " + gitStatusLetter(file.Status)
+			if file.Added > 0 {
+				label += fmt.Sprintf(" +%d", file.Added)
+			}
+			if file.Deleted > 0 {
+				label += fmt.Sprintf(" −%d", file.Deleted)
+			}
+		}
+		row := ui.TreeItem(c.Key("git-tree-"+node.path), label, expanded, children).
+			Height(25).FontSize(fsSmall).Label(node.name).
+			Selected(!folder && a.filesF.GitFile == node.index)
+		row.OnClick(func() {
 			if folder {
-				glyph := "chevrondown"
-				if *closed {
-					glyph = "chevron"
-				}
-				iconGlyph(c, glyph, 10).TextColor(a.secondaryInk())
-			} else {
-				ui.Box(c).Width(10)
-			}
-			name := ui.Text(c, node.name).FontSize(fsSmall).TextColor(ink).SingleLine().MinWidth(0).Grow(1).Cursor(ui.CursorPointer)
-			if current {
-				name.FontWeight(600)
-			}
-			if !folder {
-				file := files[node.index]
-				ui.Text(c, gitStatusLetter(file.Status)).FontSize(fsTiny).TextColor(c.Theme().Warning)
-				if file.Added > 0 {
-					ui.Textf(c, "+%d", file.Added).FontSize(fsTiny).TextColor(c.Theme().Success)
-				}
-				if file.Deleted > 0 {
-					ui.Textf(c, "-%d", file.Deleted).FontSize(fsTiny).TextColor(c.Theme().Danger)
-				}
-			}
-		})
-		if row.Clicked() {
-			if folder {
-				*closed = !*closed
+				*open = !*open
 			} else {
 				a.filesF.GitFile = node.index
 			}
-		}
-		if folder && !*closed {
-			a.gitTreeRows(c, node.children, files, depth+1)
-		}
+		})
 	}
 }

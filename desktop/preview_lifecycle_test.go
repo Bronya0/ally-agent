@@ -151,7 +151,7 @@ func TestMermaidDocumentEscapesSourceAndUsesLocalEngine(t *testing.T) {
 		}
 		theme := "default"
 		if dark {
-			theme = "dark"
+			theme = "base"
 		}
 		if !strings.Contains(doc, "theme:'"+theme+"'") {
 			t.Fatal("wrong Mermaid theme")

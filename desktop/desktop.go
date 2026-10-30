@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/internal/documentpreview"
 	"ally-dev/resources"
 	"context"
 	"encoding/json"
@@ -49,6 +50,9 @@ type workspaceFile struct {
 	Image         *ui.Bitmap
 	Assist        *editorAssistIndex
 	Saving        bool
+	Document      *documentpreview.Document
+	DocumentSheet string
+	DocumentList  ui.ListState
 	// PreviewText is the buffer as the Markdown preview last read it, and
 	// PreviewVersion the buffer version then: calling Buffer.String() on every
 	// frame allocated the whole file again, and every animation shows frames.
@@ -58,6 +62,7 @@ type workspaceFile struct {
 	PreviewMarkdown *markdown.Options
 }
 type desktop struct {
+	memoryDiagnosticBusy                    bool
 	previews                                previewPool
 	previewRequests                         []previewRequest
 	previewTimer                            *time.Timer
@@ -68,10 +73,13 @@ type desktop struct {
 	avatarLoadID                            uint64
 	configSaveTail                          chan struct{}
 	prefsSaveTail                           chan struct{}
-	railResizing, treeResizing              bool
+	lastCompletionNotice                    time.Time
+	composerFocus                           string
 	welcomeMCP, welcomeSkills, welcomeTools bool
 	popupFlags                              map[string]*bool
 	notifications                           []ui.Toast
+	noticeDeadlines                         map[string]time.Time
+	noticeSequence                          uint64
 	taskPopup                               bool
 	petals                                  bool
 	ShowAllMessages                         bool
@@ -150,6 +158,8 @@ type desktop struct {
 	files                                               []backend.FileEntry
 	workspaceFiles                                      map[string]*workspaceFile
 	fileLoadID                                          uint64
+	filePreviewCancel                                   context.CancelFunc
+	filePreviewRoot                                     string
 	fileEpoch                                           int
 	modelTab                                            string
 	modelSaving                                         bool
@@ -166,6 +176,8 @@ type desktop struct {
 	skills                                              []backend.SkillDefinition
 	pageEpoch                                           int
 	persistTail                                         chan struct{}
+	sshAuthTail                                         chan struct{}
+	sshRefreshSeq                                       uint64
 	deletePrompt                                        *deletePromptState
 }
 
@@ -180,9 +192,13 @@ func Run() {
 		}
 		return
 	}
+	if err := mygo.Protocol.HandleFunc("ally-preview", servePreviewDocument); err != nil {
+		log.Fatal(err)
+	}
 	mygo.App.SetName("Ally Native")
 	a := &desktop{core: backend.NewApp(), page: "chat", modelEdit: -1, explorer: true, plans: map[string][]backend.PlanStep{}, planRev: map[string]int64{}, subRuns: map[string]*backend.SubagentRun{}, prefs: defaultPrefs(), extraRoots: map[string][]string{}, sshAllowed: map[string][]string{}}
 	a.loadPrefs()
+	a.loadReleaseNotes()
 	mygo.App.WhenReady(func() {
 		a.refreshAutoAppearance(time.Now())
 		a.syncNativeAppearance()
@@ -277,6 +293,7 @@ func Run() {
 				a.syncSettingsForm()
 				a.ready = true
 				a.newConversation(workspace)
+				a.maybeShowReleaseNotes()
 			})
 		}()
 	})
@@ -335,9 +352,17 @@ func (a *desktop) finishShutdown() {
 				}
 			}
 			tail := a.persistTail
+			prefsTail := a.prefsSaveTail
+			sshTail := a.sshAuthTail
 			go func() {
+				if prefsTail != nil {
+					<-prefsTail
+				}
 				if tail != nil {
 					<-tail
+				}
+				if sshTail != nil {
+					<-sshTail
 				}
 				<-shutdownDone
 				a.win.Update(func() {
@@ -380,6 +405,7 @@ func (a *desktop) newConversation(workspace string) {
 	}
 
 	t := a.freshConversation(workspace)
+	a.composerFocus = t.ID
 	a.tabs = append(a.tabs, t)
 	a.active = len(a.tabs) - 1
 	a.page = "chat"
@@ -426,6 +452,13 @@ func (a *desktop) rememberSession(t *conversation) {
 		}
 		t.AttachmentImages = nil
 	}
+	// Keep only the most recent disposable transcript. Unsaved input and
+	// running work must survive; older clean sessions can reload from disk.
+	for id, old := range a.openSessions {
+		if old != t && !old.Busy && old.Draft == "" && len(old.PendingAttachments) == 0 && !old.AttachmentLoading {
+			delete(a.openSessions, id)
+		}
+	}
 	a.openSessions[t.ID] = t
 }
 
@@ -440,15 +473,19 @@ func (a *desktop) newSession() {
 	if t == nil {
 		return
 	}
-	if t.Busy {
-		a.notify("当前会话正在运行，请等待完成后再切换会话")
-		return
-	}
-	a.rememberSession(t)
 	next := a.freshConversation(t.Workspace)
 	next.Model = t.Model
 	next.Reasoning = t.Reasoning
-	a.tabs[a.active] = next
+	a.composerFocus = next.ID
+	if t.Busy || t.uiState().CompactBusy {
+		// Active sessions must stay in tabs: event dispatch routes their
+		// streaming output and completion by session ID through this list.
+		a.tabs = append(a.tabs, next)
+		a.active = len(a.tabs) - 1
+	} else {
+		a.rememberSession(t)
+		a.tabs[a.active] = next
+	}
 	a.page = "chat"
 	a.notifySuccess("已新建会话")
 	if a.win != nil {
@@ -492,7 +529,8 @@ func (a *desktop) queueNotice(message, kind string) {
 	if message == "" {
 		return
 	}
-	item := ui.Toast{Title: message, Type: kind}
+	a.noticeSequence++
+	item := ui.Toast{ID: fmt.Sprintf("ally-notice-%d", a.noticeSequence), Title: message, Type: kind, Data: time.Now().Add(4 * time.Second)}
 	if len(a.notifications) > 0 && a.notifications[len(a.notifications)-1].Title == message && a.notifications[len(a.notifications)-1].Type == kind {
 		return
 	}
@@ -507,18 +545,20 @@ func (a *desktop) fail(err error) {
 		a.win.Update(func() { a.notifyError(err.Error()) })
 	}
 }
+
+// job runs work off the UI thread and reports the failure it meets. A success
+// shows only the notice the caller names: opening a folder or cancelling a run
+// speaks for itself, and a default "操作完成" there told the user nothing.
 func (a *desktop) job(work func() error, notice ...string) {
 	go func() {
 		err := work()
 		a.win.Update(func() {
 			if err != nil {
 				a.notifyError(err.Error())
-			} else {
-				if len(notice) == 0 {
-					a.notifySuccess("操作完成")
-				} else if notice[0] != "" {
-					a.notifySuccess(notice[0])
-				}
+				return
+			}
+			if len(notice) > 0 {
+				a.notifySuccess(notice[0])
 			}
 		})
 	}()
@@ -573,6 +613,9 @@ func (a *desktop) inject(t *conversation, text string) bool {
 func (a *desktop) chatConfig(t *conversation) (backend.ConfigState, bool) {
 	cfg := a.config
 	cfg.Workspace = t.Workspace
+	// Always send the session's list, including an explicit empty list. A new
+	// run publishes this config as its live roots and must not erase UI grants.
+	cfg.ExtraRoots = append([]string{}, a.extraRoots[t.ID]...)
 	for _, m := range cfg.Models {
 		if modelOption(m) != t.Model {
 			continue
@@ -736,6 +779,9 @@ func (a *desktop) openSession(id string) {
 			t := a.freshConversation(s.Workspace)
 			t.ID, t.Title, t.Created, t.Messages, t.ContextTokens = s.ID, s.Title, s.CreatedAt, s.Messages, s.ContextTokens
 			for _, message := range t.Messages {
+				if str(message, "role") == "tool_call" || str(message, "toolCallId") != "" {
+					normalizeToolMessage(message)
+				}
 				retainLocalCommandSummary(message)
 			}
 			restoreRoundStats(t)
@@ -791,6 +837,8 @@ func (a *desktop) refreshFiles(manual ...bool) {
 	epoch := a.fileEpoch
 	root := t.Workspace
 	a.files = nil
+	a.cancelFilePreview()
+	a.closeFileInfo()
 	a.fileOpen = map[string]bool{}
 	a.fileChildren = map[string][]backend.FileEntry{}
 	a.fileLoading = map[string]bool{}
@@ -825,6 +873,12 @@ func (a *desktop) openFile(path string) {
 		return
 	}
 	root := t.Workspace
+	if propertiesOnlyFile(path) {
+		a.cancelFilePreview()
+		a.fileLoadID++
+		a.openFileInfo(path)
+		return
+	}
 	if old := a.workspaceFiles[workspaceKey(root)]; old != nil {
 		if old.Path == path {
 			return
@@ -852,6 +906,10 @@ func (a *desktop) activeFile() *workspaceFile {
 }
 
 func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, discardConfirmed bool) {
+	a.cancelFilePreview()
+	ctx, cancel := context.WithCancel(context.Background())
+	a.filePreviewCancel = cancel
+	a.filePreviewRoot = workspaceKey(root)
 	epoch := a.fileEpoch
 	a.fileLoadID++
 	loadID := a.fileLoadID
@@ -860,7 +918,42 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 		expectedVersion = expected.Editor.Buffer.Version()
 	}
 	go func() {
+		defer cancel()
 		req := backend.WorkspacePathRequest{Workspace: root, Path: path}
+		if documentpreview.Supported(path) {
+			doc, err := a.core.ReadWorkspaceDocument(ctx, req)
+			if ctx.Err() != nil {
+				return
+			}
+			a.win.Update(func() {
+				if epoch != a.fileEpoch || loadID != a.fileLoadID || a.closing || !a.workspaceFileLoadStillCurrent(root, expected, expectedVersion, discardConfirmed) {
+					return
+				}
+				if err != nil {
+					a.openFileInfoWithNote(path, "此文档暂无法在应用内预览，可使用系统应用打开。")
+					return
+				}
+				if a.workspaceFiles == nil {
+					a.workspaceFiles = map[string]*workspaceFile{}
+				}
+				// Retain at most one document preview across all workspaces.
+				for key, file := range a.workspaceFiles {
+					if file.Document != nil && file != expected {
+						delete(a.workspaceFiles, key)
+						releaseWorkspaceFileValue(file)
+					}
+				}
+				if expected != nil {
+					a.releaseWorkspaceFile(root)
+				}
+				file := &workspaceFile{Path: path, Document: doc, Editor: &editor.State{Buffer: editor.NewBuffer("")}}
+				if len(doc.Sheets) > 0 {
+					file.DocumentSheet = doc.Sheets[0].Name
+				}
+				a.workspaceFiles[workspaceKey(root)] = file
+			})
+			return
+		}
 		if isPreviewImage(path) {
 			data, err := a.core.ReadNativeWorkspaceImage(req)
 			var bitmap *ui.Bitmap
@@ -881,8 +974,7 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 					return
 				}
 				if err != nil {
-					a.notifyError(err.Error())
-					a.openFileInfo(path)
+					a.openFileInfoWithNote(path, "此图片暂无法在应用内预览，可使用系统应用打开。")
 					return
 				}
 				if a.workspaceFiles == nil {
@@ -911,8 +1003,11 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 				return
 			}
 			if e != nil {
-				a.notifyError(e.Error())
-				a.openFileInfo(path)
+				if note := backend.WorkspaceFilePreviewNote(e); note != "" {
+					a.openFileInfoWithNote(path, note)
+				} else {
+					a.notifyError("打开文件失败：" + e.Error())
+				}
 				return
 			}
 			buffer := editor.NewBuffer(r.Content)
@@ -971,6 +1066,8 @@ func (a *desktop) confirmDiscardFile(root string, file *workspaceFile, action fu
 }
 
 func (a *desktop) closeFile() {
+	a.cancelFilePreview()
+	a.fileLoadID++
 	t := a.current()
 	file := a.activeFile()
 	if t == nil || file == nil {

@@ -37,10 +37,15 @@ const (
 	// MaxRenderHTMLTitleChars bounds the render_html title, which the UI also
 	// uses as the iframe title.
 	MaxRenderHTMLTitleChars = 200
-	// Suggest limits: the schema and the runtime check read these same constants,
-	// so the promise "1-4 short texts" cannot drift from what is enforced.
-	MaxSuggestItems     = 4
-	MaxSuggestItemChars = 80
+	// Suggest and ask bounds: the declarations and the argument repair both read
+	// these numbers. They limit text the UI prints, so the repair clips an
+	// over-long value instead of rejecting the call and taking the chips or the
+	// question card away.
+	MaxSuggestItems              = 4
+	MaxSuggestItemChars          = 80
+	MaxAskQuestionChars          = 500
+	MaxAskOptionLabelChars       = 120
+	MaxAskOptionDescriptionChars = 400
 	// Plan bounds. Every plan call echoes the plan back into the conversation,
 	// and a step title is what a later call names, so the number of steps and the
 	// title length are both bounded here and checked against these same numbers
@@ -258,7 +263,7 @@ func chatToolsUncached() []openai.Tool {
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"question": map[string]any{"type": "string", "minLength": 1, "maxLength": 500, "pattern": ".*\\S.*", "description": "Question text shown to the user, 1-500 characters."},
+							"question": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxAskQuestionChars, "pattern": ".*\\S.*", "description": fmt.Sprintf("Question text shown to the user, 1-%d characters.", MaxAskQuestionChars)},
 							"id":       map[string]any{"type": "string", "maxLength": 64, "description": "Optional. Omit it and Ally assigns one; only supply it when you need to reference this question yourself. At most 64 characters."},
 							"options": map[string]any{
 								"type": "array", "minItems": 2, "maxItems": 6,
@@ -266,9 +271,9 @@ func chatToolsUncached() []openai.Tool {
 								"items": map[string]any{
 									"type": "object",
 									"properties": map[string]any{
-										"label":       map[string]any{"type": "string", "minLength": 1, "maxLength": 120, "pattern": ".*\\S.*", "description": "Short label shown on the option, 1-120 characters."},
+										"label":       map[string]any{"type": "string", "minLength": 1, "maxLength": MaxAskOptionLabelChars, "pattern": ".*\\S.*", "description": fmt.Sprintf("Short label shown on the option, 1-%d characters.", MaxAskOptionLabelChars)},
 										"id":          map[string]any{"type": "string", "maxLength": 64, "description": "Optional. Omit it and Ally assigns one; only supply it when you need to reference this option yourself. At most 64 characters."},
-										"description": map[string]any{"type": "string", "minLength": 1, "maxLength": 400, "pattern": ".*\\S.*", "description": "Required non-empty details for this option."},
+										"description": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxAskOptionDescriptionChars, "pattern": ".*\\S.*", "description": "Required non-empty details for this option."},
 										"recommended": map[string]any{"type": "boolean", "description": "Optional flag marking a recommended option."},
 									},
 									"required": []string{"label", "description"},

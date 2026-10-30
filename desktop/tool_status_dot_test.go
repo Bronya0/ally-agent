@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"image"
+	"math"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -28,6 +29,10 @@ func toolCardMark(t *testing.T, state string) (*ui.Tester, image.Rectangle) {
 	r, ok := tt.Find(toolStatusLabel(state))
 	if !ok {
 		t.Fatalf("state %q shows no mark: %v", state, tt.Texts())
+	}
+	header, ok := tt.Find("工具详情 dot")
+	if !ok || math.Abs(float64(r.Y+r.H/2-header.Y-header.H/2)) > 0.5 {
+		t.Fatalf("state %q mark is not centered in header: mark=%+v header=%+v", state, r, header)
 	}
 	return tt, image.Rect(int(r.X), int(r.Y), int(r.X+r.W), int(r.Y+r.H))
 }

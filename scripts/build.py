@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Shared local/CI release builder. Requires Go and Python 3; macOS for DMG."""
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -44,6 +45,22 @@ def build_env(goos=None, arch=None):
         env.pop('GOOS', None)
         env.pop('GOARCH', None)
     return env
+
+
+@contextmanager
+def bundled_release_notes(config, release=False):
+    """Embed the release event's Markdown in every platform; never retain it locally."""
+    path = ROOT / 'resources/release_notes.json'
+    original = path.read_bytes()
+    notes = {
+        'version': release_tag(config) if release else '',
+        'body': os.environ.get('ALLY_RELEASE_NOTES_BODY', '').strip() if release else '',
+    }
+    try:
+        path.write_text(json.dumps(notes, ensure_ascii=False), encoding='utf-8')
+        yield
+    finally:
+        path.write_bytes(original)
 
 
 def ripgrep(goos, arch, destination):
@@ -306,16 +323,17 @@ def main():
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + chr(10), encoding='utf-8')
     DIST.mkdir(exist_ok=True)
     (DIST / 'go.mod').write_text('module ally-build-artifacts' + chr(10), encoding='utf-8')
-    if args.target == 'dev':
-        if system == 'Windows':
-            windows(config, exe_only=True)
+    with bundled_release_notes(config, release=args.target == 'release'):
+        if args.target == 'dev':
+            if system == 'Windows':
+                windows(config, exe_only=True)
+            else:
+                macos_app(config)
         else:
-            macos_app(config)
-    else:
-        RELEASE.mkdir(exist_ok=True)
-        windows(config)
-        linux(config)
-        macos(config)
+            RELEASE.mkdir(exist_ok=True)
+            windows(config)
+            linux(config)
+            macos(config)
 
 
 if __name__ == '__main__':

@@ -7,6 +7,57 @@ from unittest import mock
 import build
 
 
+class ReleaseNotesTests(unittest.TestCase):
+    def test_notes_round_trip_and_restore_after_build_failure(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / 'resources/release_notes.json'
+            path.parent.mkdir()
+            original = b'{"version":"","body":""}\n'
+            path.write_bytes(original)
+            body = '## 新增\n\n**重点** `code` "quotes" \\path $()\n第二行'
+            with mock.patch.object(build, 'ROOT', root), mock.patch.dict(build.os.environ, {
+                'BUILD_TAG': 'v1.27.0', 'ALLY_RELEASE_NOTES_BODY': body,
+            }):
+                with self.assertRaisesRegex(RuntimeError, 'compile failed'):
+                    with build.bundled_release_notes({'version': '1.27.0'}, release=True):
+                        self.assertEqual(json.loads(path.read_text(encoding='utf-8')), {
+                            'version': 'v1.27.0', 'body': body,
+                        })
+                        raise RuntimeError('compile failed')
+                self.assertEqual(path.read_bytes(), original)
+                with build.bundled_release_notes({'version': '1.27.0'}):
+                    self.assertEqual(json.loads(path.read_text(encoding='utf-8')), {'version': '', 'body': ''})
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_release_main_embeds_same_notes_for_all_platforms(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'resources').mkdir()
+            path = root / 'resources/release_notes.json'
+            path.write_text('{}', encoding='utf-8')
+            (root / 'mygo.json').write_text(json.dumps({'version': '0.1.0'}), encoding='utf-8')
+            calls = []
+
+            def packaged(config):
+                self.assertEqual(config['version'], '1.27.0')
+                calls.append(json.loads(path.read_text(encoding='utf-8')))
+
+            with mock.patch.object(build, 'ROOT', root), mock.patch.object(build, 'DIST', root / 'dist'), \
+                    mock.patch.object(build, 'RELEASE', root / 'dist/release'), \
+                    mock.patch.object(build.sys, 'argv', ['build.py', 'release']), \
+                    mock.patch.object(build.platform, 'system', return_value='Darwin'), \
+                    mock.patch.dict(build.os.environ, {'BUILD_TAG': 'v1.27.0', 'ALLY_RELEASE_NOTES_BODY': '## 本次更新'}), \
+                    mock.patch.object(build, 'windows', side_effect=packaged), \
+                    mock.patch.object(build, 'linux', side_effect=packaged), \
+                    mock.patch.object(build, 'macos', side_effect=packaged):
+                build.main()
+            self.assertEqual(calls, [{'version': 'v1.27.0', 'body': '## 本次更新'}] * 3)
+            self.assertEqual(path.read_text(), '{}')
+
+
 class WindowsReleaseTests(unittest.TestCase):
     @staticmethod
     def binary(machine):

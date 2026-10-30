@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	toolshared "ally-dev/internal/tools/shared"
 )
@@ -58,49 +59,142 @@ func TestEditRejectsChangeWithoutNewText(t *testing.T) {
 	}
 }
 
-// TestSuggestItemsEnforceTheDeclaredLimits keeps schema and runtime in step: the
-// description promises 1-4 short texts, and every one of those limits is also
-// written into the schema, which the argument gate enforces. The rejection code
-// is therefore whichever layer gets there first — the gate for model calls — so
-// the test pins the refusal and the named limit, not the code.
-func TestSuggestItemsEnforceTheDeclaredLimits(t *testing.T) {
+// TestSuggestItemsAreRepairedNotRejected pins what a repairable suggest call
+// does now: an item a couple of runes over the declared limit, a blank entry or
+// one item too many comes back as a usable chip row (clipped, blanks dropped,
+// extras ignored). It used to lose every chip and show the user a raw argument
+// error over a character count the model cannot get right.
+func TestSuggestItemsAreRepairedNotRejected(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: t.TempDir()}
 	ctx := context.Background()
-	cases := []struct {
-		name  string
-		items []string
-	}{
-		{"too many items", []string{"a", "b", "c", "d", "e"}},
-		{"blank item", []string{"ok", "   "}},
-		{"item over the character limit", []string{strings.Repeat("x", toolshared.MaxSuggestItemChars+1)}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			args, err := json.Marshal(map[string]any{"items": tc.items})
-			if err != nil {
-				t.Fatal(err)
-			}
-			res := app.executeTool(ctx, cfg, "s-1", "suggest", args)
-			if res.OK {
-				t.Fatalf("%s must be rejected, got ok=true", tc.name)
-			}
-			// One layer gives E_BAD_SUGGEST, the schema gate gives E_BAD_ARGS;
-			// both must name the limit that was broken.
-			if res.ErrorCode != "E_BAD_SUGGEST" && res.ErrorCode != "E_BAD_ARGS" {
-				t.Fatalf("%s must be rejected, got ok=%v code=%q err=%q", tc.name, res.OK, res.ErrorCode, res.Error)
-			}
-		})
-	}
 
-	bounded, err := json.Marshal(map[string]any{"items": []string{
-		strings.Repeat("x", toolshared.MaxSuggestItemChars), "second", "third", "fourth",
+	args, err := json.Marshal(map[string]any{"items": []string{
+		strings.Repeat("x", toolshared.MaxSuggestItemChars+2),
+		"   ",
+		"second",
+		"third",
+		"fourth",
+		"fifth",
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res := app.executeTool(ctx, cfg, "s-1", "suggest", bounded); !res.OK {
-		t.Fatalf("four items at the character limit must pass, got %q", res.Error)
+	res := app.executeTool(ctx, cfg, "s-1", "suggest", args)
+	if !res.OK {
+		t.Fatalf("a repairable suggest call must go through, got ok=%v code=%q err=%q", res.OK, res.ErrorCode, res.Error)
+	}
+	data, ok := res.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected result shape: %#v", res.Data)
+	}
+	items, _ := data["items"].([]string)
+	if len(items) != toolshared.MaxSuggestItems {
+		t.Fatalf("the blank and the extra item must be dropped, got %d items: %q", len(items), items)
+	}
+	longest := items[0]
+	if n := utf8.RuneCountInString(longest); n != toolshared.MaxSuggestItemChars {
+		t.Fatalf("the over-long item must be clipped to %d runes, got %d (%q)", toolshared.MaxSuggestItemChars, n, longest)
+	}
+	if !strings.HasSuffix(longest, "…") {
+		t.Fatalf("a clipped item must end with an ellipsis, got %q", longest)
+	}
+
+	// Nothing usable left is still a failure: a call that would render an empty
+	// chip row must not pass as a success.
+	if empty := app.executeTool(ctx, cfg, "s-1", "suggest", []byte(`{"items":["  "]}`)); empty.OK {
+		t.Fatal("a call with no usable item must fail, got ok=true")
+	}
+}
+
+// TestRepairAskArgsClipsDisplayText keeps the question card alive when the model
+// overshoots a display bound: the label and description are clipped, while ids
+// and the other option fields arrive untouched because the answer resolver
+// matches on the ids.
+func TestRepairAskArgsClipsDisplayText(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"questions": []any{map[string]any{
+			"question": "pick one",
+			"id":       "q1",
+			"options": []any{
+				map[string]any{"label": strings.Repeat("a", toolshared.MaxAskOptionLabelChars+5), "description": "d", "id": "o1"},
+				map[string]any{"label": "b", "description": strings.Repeat("d", toolshared.MaxAskOptionDescriptionChars+5), "id": "o2", "recommended": true},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed, ok := repairAskArgs(raw)
+	if !ok {
+		t.Fatal("an over-long ask label must be repaired")
+	}
+	var decoded struct {
+		Questions []struct {
+			ID      string `json:"id"`
+			Options []struct {
+				ID          string `json:"id"`
+				Label       string `json:"label"`
+				Description string `json:"description"`
+				Recommended bool   `json:"recommended"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(fixed, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	question := decoded.Questions[0]
+	if question.ID != "q1" || question.Options[0].ID != "o1" {
+		t.Fatalf("ids must survive the repair, got question %q option %q", question.ID, question.Options[0].ID)
+	}
+	if n := utf8.RuneCountInString(question.Options[0].Label); n != toolshared.MaxAskOptionLabelChars {
+		t.Fatalf("the label must be clipped to %d runes, got %d", toolshared.MaxAskOptionLabelChars, n)
+	}
+	if n := utf8.RuneCountInString(question.Options[1].Description); n != toolshared.MaxAskOptionDescriptionChars {
+		t.Fatalf("the description must be clipped to %d runes, got %d", toolshared.MaxAskOptionDescriptionChars, n)
+	}
+	if !question.Options[1].Recommended {
+		t.Fatal("other option fields must arrive untouched")
+	}
+}
+
+// TestDisplayClippingRunsAfterTypeRepair guards the order inside the gate. A
+// stringified payload is only unwrapped by the type repair, so clipping that runs
+// first sees a string and clips nothing, leaving the gate to reject the call with
+// exactly the error the clipping exists to remove.
+func TestDisplayClippingRunsAfterTypeRepair(t *testing.T) {
+	longItem := strings.Repeat("x", toolshared.MaxSuggestItemChars+2)
+	items, err := json.Marshal(map[string]any{"items": "[\"" + longItem + "\"]"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var suggest struct {
+		Items []string `json:"items"`
+	}
+	if err, _ := decodeToolArguments("suggest", items, &suggest); err != nil {
+		t.Fatalf("a stringified items array must be repaired, got %v", err)
+	}
+	if len(suggest.Items) != 1 || utf8.RuneCountInString(suggest.Items[0]) != toolshared.MaxSuggestItemChars {
+		t.Fatalf("expected one clipped item, got %q", suggest.Items)
+	}
+
+	inner, err := json.Marshal([]any{map[string]any{"question": "q", "options": []any{
+		map[string]any{"label": strings.Repeat("a", toolshared.MaxAskOptionLabelChars+5), "description": "d"},
+		map[string]any{"label": "b", "description": "d2"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	questions, err := json.Marshal(map[string]any{"questions": string(inner)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ask AskRequest
+	if err, _ := decodeToolArguments("ask", questions, &ask); err != nil {
+		t.Fatalf("a stringified questions array must be repaired, got %v", err)
+	}
+	if n := utf8.RuneCountInString(ask.Questions[0].Options[0].Label); n != toolshared.MaxAskOptionLabelChars {
+		t.Fatalf("expected the label clipped to %d runes, got %d", toolshared.MaxAskOptionLabelChars, n)
 	}
 }
 

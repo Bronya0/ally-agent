@@ -37,8 +37,20 @@ func TestReadingThemesHaveLegibleIndependentColors(t *testing.T) {
 			}
 		}
 	}
-	if markdownPalettes[0].dark.code == markdownPalettes[2].dark.code {
-		t.Fatal("blue and amber share inline-code color")
+}
+
+func TestReadingInkMatchesLegacyPalette(t *testing.T) {
+	a := &desktop{}
+	a.prefs.Appearance = "dark"
+	a.prefs.Palette = 2
+	colors := a.readingColors()
+	if colors.text != ui.Hex("#d7dedc") || colors.strong != ui.Hex("#c4b894") || colors.code != ui.Hex("#d4a574") || colors.codeBG.A != 0 {
+		t.Fatalf("amber palette: %+v", colors)
+	}
+	a.prefs.Palette = 3
+	colors = a.readingColors()
+	if colors.code != ui.Hex("#8da5df").Mix(ui.Hex("#ffffff"), 0.28) {
+		t.Fatalf("retired ocean fallback code: %+v", colors.code)
 	}
 }
 func TestReadingTypographySeparatesInlineAndFencedCode(t *testing.T) {
@@ -68,7 +80,7 @@ func TestReadingTypographySeparatesInlineAndFencedCode(t *testing.T) {
 	}
 	a.prefs.Palette = 4
 	options = a.markdownOptions(conversation, 0)
-	if options.Theme.Code != markdownPalettes[4].dark.code {
+	if options.Theme.Code != a.readingColors().code {
 		t.Fatal("cached message did not follow palette change")
 	}
 }

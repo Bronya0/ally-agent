@@ -58,3 +58,19 @@ func TestRadioKeyboardAndSwitchLock(t *testing.T) {
 		t.Fatal("loading switch changed")
 	}
 }
+
+func TestActionDefaultsToContentWidth(t *testing.T) {
+	var compact, full ui.Handle
+	var compactWidth, fullWidth float32
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).FillWidth().Children(func() {
+			Action(c.Key("compact"), "导出内存诊断", ActionOptions{}).Bind(&compact)
+			Action(c.Key("full"), "显式铺满", ActionOptions{}).FillWidth().Bind(&full)
+		})
+		compactWidth, fullWidth = compact.Bounds(c).W, full.Bounds(c).W
+	}, 600, 160)
+	tt.Frame()
+	if compactWidth <= 0 || compactWidth >= 300 || fullWidth < 590 {
+		t.Fatalf("compact=%v full=%v", compactWidth, fullWidth)
+	}
+}

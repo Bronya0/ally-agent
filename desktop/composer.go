@@ -44,10 +44,16 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 			a.pendingAttachmentRow(c, t)
 		}
 		ui.Row(c.Key("composer-input-row")).Gap(gapField).AlignItems(ui.End).Children(func() {
-			input := uikit.Area(c.Key(t.ID+"-draft"), &t.Draft).Label("消息输入框").
+			input := ui.TextAreaBase(c.Key(t.ID+"-draft"), &t.Draft).Label("消息输入框").
+				FocusBind(&a.composerFocus, t.ID).
 				Placeholder(composerHint).
-				MinHeight(58).MaxHeight(576).Lines(1, 24).Border(1, c.Theme().Border).Radius(radiusControl).
+				MinHeight(58).MaxHeight(576).Lines(1, 24).Padding(c.Theme().Space(1.5), c.Theme().Space(2.5)).FontSize(14).TextColor(c.Theme().Text).MinWidth(0).Radius(radiusControl).
 				Background(p.bg).Disabled(a.closing || (a.page == "kb" && a.kbIndexMissing())).Grow(1)
+			border := c.Theme().Border
+			if input.Focused() || input.FocusWithin() {
+				border = border.Mix(p.accent, 0.35)
+			}
+			input.Border(1, input.AnimateColor("composer-border", border, ui.Animation{Duration: motionFade, Ease: ui.EaseInOut}))
 			if paths := input.DroppedFiles(); len(paths) > 0 {
 				a.dropAttachments(t, paths)
 			}
@@ -574,22 +580,40 @@ func (a *desktop) runSpinner(c *ui.Context) {
 	reduced := c.Preferences().ReduceMotion
 	ui.Box(c).Width(15).Height(16).Draw(func(p *ui.Painter, r ui.Rect) {
 		if !reduced {
-			p.AnimationFrameRate(60)
+			p.AnimationFrameRate(30)
 		}
-		elapsed := time.Duration(p.Now().UnixNano() % int64(1300*time.Millisecond))
+		elapsed := time.Duration(p.Now().UnixNano() % int64(uikit.ThinkingCycle))
 		for i := 0; i < 3; i++ {
 			height := float32(9)
 			if !reduced {
 				height = thinkingBarHeight(elapsed, i)
 			}
-			p.Fill(ui.Rect{X: r.X + float32(i)*6, Y: r.Y + (16-height)/2, W: 3, H: height}, color, 1)
+			drawThinkingBar(p, ui.Rect{X: r.X + float32(i)*6, Y: r.Y + (16-height)/2, W: 3, H: height}, color)
 		}
 	})
 }
 
+// Paths retain subpixel coverage; Fill snaps edges to whole device pixels,
+// making these small, slowly moving bars appear to stop and jump.
+func drawThinkingBar(p *ui.Painter, r ui.Rect, color ui.Color) {
+	x, y, right, bottom := r.X, r.Y, r.X+r.W, r.Y+r.H
+	const radius = float32(1)
+	const k = float32(0.55228475) // Cubic approximation of a quarter circle.
+	var path ui.Path
+	path.MoveTo(x+radius, y).LineTo(right-radius, y).
+		CubeTo(right-radius+k*radius, y, right, y+radius-k*radius, right, y+radius).
+		LineTo(right, bottom-radius).
+		CubeTo(right, bottom-radius+k*radius, right-radius+k*radius, bottom, right-radius, bottom).
+		LineTo(x+radius, bottom).
+		CubeTo(x+radius-k*radius, bottom, x, bottom-radius+k*radius, x, bottom-radius).
+		LineTo(x, y+radius).
+		CubeTo(x, y+radius-k*radius, x+radius-k*radius, y, x+radius, y).Close()
+	p.FillPath(&path, color)
+}
+
 func thinkingBarHeight(elapsed time.Duration, index int) float32 {
-	const cycle = 1300 * time.Millisecond
-	phase := float64((elapsed+time.Duration(2-index)*208*time.Millisecond)%cycle) / float64(cycle)
+	const cycle = uikit.ThinkingCycle
+	phase := float64((elapsed+time.Duration(2-index)*uikit.ThinkingStagger)%cycle) / float64(cycle)
 	return 9 + 7*float32(0.5-0.5*math.Cos(phase*2*math.Pi))
 }
 
@@ -870,13 +894,13 @@ func (a *desktop) selectChatModel(t *conversation, model backend.ModelConfig) {
 	}()
 }
 
-// reasoningSelector shares the kit's select popup and option styling while
-// keeping the info-bar trigger compact and locked during a run.
+// reasoningSelector is the info bar's thinking-level trigger: compact while a
+// run is off, locked while one is on, and its choices are MyGo's drawn menu.
 func (a *desktop) reasoningSelector(c *ui.Context, t *conversation) {
 	if t.Reasoning == "" {
 		t.Reasoning = "auto"
 	}
-	btn := uikit.CompactSelect(c.Key("composer-reasoning"), &t.Reasoning, reasoningLevels, t.Busy, a.secondaryInk()).Label("思考强度")
+	btn := uikit.CompactMenu(c.Key("composer-reasoning"), &t.Reasoning, reasoningLevels, t.Busy, a.secondaryInk()).Label("思考强度")
 	tip := "思考强度（需模型支持，不支持的模型请保持 auto）"
 	if t.Busy {
 		tip = "运行中锁定：本轮结束后切换才生效"
@@ -977,12 +1001,10 @@ func (a *desktop) addExtraRoot(t *conversation) {
 					return
 				}
 			}
-			if a.extraRoots == nil {
-				a.extraRoots = map[string][]string{}
+			roots := append(append([]string(nil), a.extraRoots[t.ID]...), p)
+			if err := a.setExtraRoots(t, roots); err != nil {
+				a.notifyError(err.Error())
 			}
-			a.extraRoots[t.ID] = append(a.extraRoots[t.ID], p)
-			roots := append([]string(nil), a.extraRoots[t.ID]...)
-			a.job(func() error { return a.core.SetSessionExtraRoots(t.ID, roots) })
 		})
 	}()
 }
@@ -994,8 +1016,23 @@ func (a *desktop) removeExtraRoot(t *conversation, root string) {
 			kept = append(kept, item)
 		}
 	}
-	a.extraRoots[t.ID] = kept
-	a.job(func() error { return a.core.SetSessionExtraRoots(t.ID, kept) })
+	if err := a.setExtraRoots(t, kept); err != nil {
+		a.notifyError(err.Error())
+	}
+}
+
+// This setter only publishes in-memory state under a short backend lock.
+// Commit the UI after the fence has accepted the list; asynchronous jobs can
+// otherwise publish add/remove operations in the wrong order.
+func (a *desktop) setExtraRoots(t *conversation, roots []string) error {
+	if err := a.core.SetSessionExtraRoots(t.ID, roots); err != nil {
+		return err
+	}
+	if a.extraRoots == nil {
+		a.extraRoots = map[string][]string{}
+	}
+	a.extraRoots[t.ID] = append([]string{}, roots...)
+	return nil
 }
 
 func (a *desktop) sshChip(c *ui.Context, t *conversation) {
@@ -1290,7 +1327,7 @@ func (a *desktop) finishCompact(t *conversation, result map[string]any, fast boo
 		a.notify(fastCompactNoop(result))
 	} else {
 		a.applyCompactionResult(t, result)
-		a.notify(compactToastText(int(num(result, "tokensBefore")), int(num(result, "tokensAfter"))))
+		a.notify(compactionToast(result))
 	}
 	st.Follow = true
 	st.FollowPending = true

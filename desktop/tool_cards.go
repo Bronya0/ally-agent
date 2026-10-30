@@ -163,10 +163,15 @@ type readGrepGroupEntry struct {
 func (a *desktop) readGrepGroupCard(c *ui.Context, t *conversation, index int) {
 	key := fmt.Sprintf("%s-readgroup-%d", t.ID, index)
 	open := t.uiState().ToolOpen[key]
+	container := ui.Column(c.Key("tool-" + key)).Gap(2)
+	extra := ui.Local(container, "entries-extra", func() int { return 0 })
+	if !open {
+		*extra = 0
+	}
 	var entries []readGrepGroupEntry
 	reads, greps, lists := 0, 0, 0
 	end := index
-	_, windowEnd := chatMessageWindow(t)
+	_, windowEnd := a.chatMessageWindow(t)
 	for i := index; i < windowEnd; i++ {
 		m := t.Messages[i]
 		if str(m, "role") != "tool_call" && str(m, "toolCallId") == "" {
@@ -180,7 +185,7 @@ func (a *desktop) readGrepGroupCard(c *ui.Context, t *conversation, index int) {
 			name = str(m, "toolName")
 		}
 		name = toolKind(name)
-		if !open {
+		if !open || i-index >= 100+*extra {
 			switch name {
 			case "grep":
 				greps++
@@ -237,7 +242,7 @@ func (a *desktop) readGrepGroupCard(c *ui.Context, t *conversation, index int) {
 	if lists > 0 {
 		parts = append(parts, fmt.Sprintf("罗列 %d 次", lists))
 	}
-	ui.Column(c).Key("tool-" + key).Gap(2).Children(func() {
+	container.Children(func() {
 		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(4).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label("读取分组 " + key)
 		row.Children(func() {
 			disclosureIcon(c, "search", a.secondaryInk())
@@ -268,12 +273,18 @@ func (a *desktop) readGrepGroupCard(c *ui.Context, t *conversation, index int) {
 							}
 							uikit.Tooltip(c, ui.Text(c, short(e.title, 80)).FontSize(fsTool).TextColor(color).SingleLine(), e.title)
 							if e.detail != "" {
-								ui.Text(c, e.detail).FontSize(fsAux).TextColor(color).MaxLines(2)
+								uikit.ErrorText(c, e.detail).FontSize(fsAux).Grow(1)
 							}
 						})
 					}
 				})
 			})
+			if remaining := end - index + 1 - len(entries); remaining > 0 {
+				transcriptAction(c, key+"-more", fmt.Sprintf("Show more (%d)", remaining)).OnClick(func() { *extra += 100 })
+			}
+			if *extra > 0 {
+				transcriptAction(c, key+"-less", "Show less").OnClick(func() { *extra = 0 })
+			}
 		})
 	})
 	_ = end
@@ -297,7 +308,9 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	case "error":
 		verb = desc.failedVerb
 	}
-	args := parseToolArgs(str(m, "args"))
+	container := ui.Column(c.Key("tool-" + toolCardKey(t, index, m))).Gap(2)
+	parsed := ui.Local(container, "parsed-args", func() toolArgsMemo { return toolArgsMemo{} })
+	args := parsed.get(str(m, "args"))
 	verb = toolActionVerb(name, state, args, verb)
 	summary := toolArgSummary(name, args)
 	isMCP := str(m, "mcpServer") != "" || str(m, "mcpTool") != "" || strings.HasPrefix(name, "mcp")
@@ -327,13 +340,13 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	p := a.currentPalette()
 	// Tool rows mirror main's .rich-tool-card: transparent, borderless, with a
 	// hanging status icon; the row itself carries the 6px rhythm below.
-	ui.Column(c).Key("tool-" + key).Gap(2).Children(func() {
+	container.Children(func() {
 		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(4).AlignItems(ui.Center).Justify(ui.Start).Label("工具详情 " + key)
 		if expandable {
 			row.Cursor(ui.CursorPointer)
 		}
 		row.Hidden(name == "suggest").Children(func() {
-			ui.Box(c).Absolute().Left(-20).Top(5).Children(func() { toolStatusIcon(c, state) })
+			ui.Box(c).Absolute().Left(-20).Top(0).Width(16).HeightPercent(100).Center().Children(func() { toolStatusIcon(c, state) })
 			verbColor := p.accent
 			if state == "error" || name == "delete" || name == "remote_delete_path" {
 				verbColor = c.Theme().Danger
@@ -467,17 +480,10 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				if reason := str(result, "error"); reason != "" {
 					errText = reason
 				}
-				// Main's .tool-error-block: full box, red border, 8% red fill.
+				// Keep diagnostics in context; the visible error is one ellipsized line.
 				ui.Row(c).FillWidth().Padding(4, 9).Gap(gapField).Radius(6).Background(ui.RGBA(239, 68, 68, 0.08)).
 					Border(1, ui.RGBA(239, 68, 68, 0.2)).Children(func() {
-					code := str(result, "errorCode")
-					if code == "" {
-						code = str(m, "errorCode")
-					}
-					if code != "" {
-						ui.Text(c, code).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().Danger)
-					}
-					ui.Text(c, shortBlock(errText, 1800)).FontSize(fsAux).TextColor(c.Theme().Danger).LineHeight(1.45).Selectable()
+					uikit.ErrorText(c, errText).FontSize(fsAux)
 				})
 			case (name == "edit" || name == "remote_edit") && len(list(result, "files")) > 0:
 				for n, item := range list(result, "files") {
@@ -800,7 +806,33 @@ func toolArgSummary(name string, args map[string]any) string {
 	return pick("path", "name", "title", "action")
 }
 
-// toolResult normalizes the result payload: the backend sends a JSON string.
+// normalizeToolMessage runs at ingestion, replacing the wire JSON with its
+// decoded value. Keep one representation rather than a raw string plus a cache.
+func normalizeToolMessage(m map[string]any) {
+	raw, ok := m["result"].(string)
+	if !ok {
+		if _, exists := m["result"].(map[string]any); exists {
+			return
+		}
+		raw, ok = m["body"].(string)
+	}
+	if !ok || raw == "" {
+		return
+	}
+	var decoded map[string]any
+	if json.Unmarshal([]byte(raw), &decoded) != nil || decoded == nil {
+		decoded = map[string]any{"_text": raw}
+	}
+	m["result"] = decoded
+	// Result events used to retain the same wire string in body as well.
+	if body, ok := m["body"].(string); ok && body == raw && str(m, "toolState") != "tool:error" {
+		delete(m, "body")
+	}
+}
+
+// toolResult also accepts legacy wire values; live/history ingestion normalizes
+// them once, so drawing reads maps without decoding JSON.
+
 func toolResult(m map[string]any) map[string]any {
 	switch raw := m["result"].(type) {
 	case string:
@@ -826,10 +858,9 @@ func toolResult(m map[string]any) map[string]any {
 // out of presentation while retaining errors for failed operations.
 func unwrapToolResult(raw map[string]any) map[string]any {
 	if data, ok := raw["data"].(map[string]any); ok {
-		out := make(map[string]any, len(data)+2)
-		for k, v := range data {
-			out[k] = v
-		}
+		// These are UI-owned maps. Merge envelope metadata in place instead of
+		// allocating and copying the entire payload on every render.
+		out := data
 		for _, k := range []string{"error", "errorCode", "ok", "warnings"} {
 			if _, exists := out[k]; !exists && raw[k] != nil {
 				if k != "ok" || raw[k] == false {
@@ -1052,7 +1083,7 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 				} else if okFlag {
 					chip(c, "已删除", c.Theme().Success, ui.RGBA(78, 200, 126, 0.12))
 				} else {
-					chip(c, str(row, "error"), c.Theme().Danger, ui.RGBA(232, 84, 84, 0.12))
+					uikit.ErrorText(c, str(row, "error")).Grow(1)
 				}
 			})
 		}
@@ -1112,17 +1143,16 @@ func (a *desktop) toolListBody(c *ui.Context, index int, result map[string]any) 
 // diffBlock keeps vertical rows aligned and gives each side its own native
 // horizontal scroller. Long lines never wrap or truncate.
 func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
-	_ = compact
-	lines := strings.Split(diff, string(rune(10)))
-	for i := range lines {
-		lines[i] = strings.TrimSuffix(lines[i], string(rune(13)))
-	}
-	pairs := splitDiffRows(diffVisibleLines(lines, 0, false))
-	ui.Row(c.Key(key)).FillWidth().MinWidth(0).Shrink(0).AlignItems(ui.Stretch).Children(func() {
+	row := ui.Row(c.Key(key)).FillWidth().MinWidth(0).Shrink(0).AlignItems(ui.Stretch)
+	memo := ui.Local(row, "diff", func() diffMemo { return diffMemo{} })
+	pairs := memo.get(diff)
+	limit := memo.limit(compact)
+	visible := pairs[:min(len(pairs), limit)]
+	row.Children(func() {
 		for side := 0; side < 2; side++ {
 			ui.ScrollHorizontal(c.Key(fmt.Sprintf("%s-side-%d", key, side))).Grow(1).Basis(0).MinWidth(0).Children(func() {
 				ui.Column(c).Children(func() {
-					for _, pair := range pairs {
+					for _, pair := range visible {
 						if strings.HasPrefix(pair.left, "@@") || strings.HasPrefix(pair.left, "---") || strings.HasPrefix(pair.right, "+++") {
 							continue
 						}
@@ -1140,6 +1170,12 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 			})
 		}
 	})
+	if len(visible) < len(pairs) {
+		transcriptAction(c, key+"-more", fmt.Sprintf("Show more (%d)", len(pairs)-len(visible))).OnClick(func() { memo.extra += 120 })
+	}
+	if memo.extra > 0 {
+		transcriptAction(c, key+"-less", "Show less").OnClick(func() { memo.extra = 0 })
+	}
 }
 
 // diffVisibleLine is one rendered diff row, or a collapsed gap of unchanged
@@ -1398,14 +1434,20 @@ func isFoldableCommand(m map[string]any) bool {
 }
 
 func (a *desktop) commandGroupCard(c *ui.Context, t *conversation, index int) {
-	_, limit := chatMessageWindow(t)
+	_, limit := a.chatMessageWindow(t)
 	end := index
 	for end < limit && isFoldableCommand(t.Messages[end]) {
 		end++
 	}
 	key := fmt.Sprintf("%s-commandgroup-%d", t.ID, index)
 	open := t.uiState().ToolOpen[key]
-	ui.Column(c.Key(key)).FillWidth().MinWidth(0).Gap(2).Children(func() {
+	container := ui.Column(c.Key(key)).FillWidth().MinWidth(0).Gap(2)
+	extra := ui.Local(container, "entries-extra", func() int { return 0 })
+	if !open {
+		*extra = 0
+	}
+	visibleEnd := min(end, index+100+*extra)
+	container.Children(func() {
 		row := ui.ButtonBase(c.Key(key + "-header")).FillWidth().Height(24).Justify(ui.Start).Gap(4).Cursor(ui.CursorPointer).Label("命令分组 " + key)
 		row.Children(func() {
 			disclosureIcon(c, "terminal", a.secondaryInk())
@@ -1431,10 +1473,16 @@ func (a *desktop) commandGroupCard(c *ui.Context, t *conversation, index int) {
 		}
 		uikit.Reveal(c.Key(key+"-reveal"), open, func() {
 			ui.Column(c).FillWidth().MinWidth(0).Gap(10).Children(func() {
-				for i := index; i < end; i++ {
+				for i := index; i < visibleEnd; i++ {
 					a.toolCard(c, t, i, t.Messages[i])
 				}
 			})
+			if visibleEnd < end {
+				transcriptAction(c, key+"-more", fmt.Sprintf("Show more (%d)", end-visibleEnd)).OnClick(func() { *extra += 100 })
+			}
+			if *extra > 0 {
+				transcriptAction(c, key+"-less", "Show less").OnClick(func() { *extra = 0 })
+			}
 		})
 	})
 }

@@ -60,6 +60,10 @@ func TestMermaidBrowser(t *testing.T) {
 			} else if !strings.Contains(body, "<svg") || strings.Contains(body, "图表渲染失败") {
 				t.Fatalf("diagram did not render: %.1000s", body)
 			}
+			if tc.dark && !tc.invalid && !strings.Contains(body, "#263d63") {
+				t.Fatal("dark chart lost colored palette")
+			}
+
 		})
 	}
 }

@@ -274,7 +274,7 @@ func textField(c *ui.Context, id, placeholder, name string, value *string) ui.El
 }
 
 func numberField(c *ui.Context, id, name string, value *float64, lo, hi, step float64) ui.Element {
-	return uikit.NumberInput(c, id, name, value, lo, hi, step).Width(150)
+	return uikit.NumberInput(c, id, name, value, lo, hi, step).Width(200)
 }
 
 func switchRow(c *ui.Context, id, name, note string, value *bool) ui.Element {
@@ -643,7 +643,7 @@ func inlineError(c *ui.Context, id, message string) {
 	if message == "" {
 		return
 	}
-	ui.Text(c.Key(id), message).FontSize(fsTiny).TextColor(c.Theme().Danger).MaxLines(4)
+	uikit.ErrorText(c.Key(id), message).FontSize(fsTiny)
 }
 
 func spacerRow(c *ui.Context, build func()) {
@@ -786,23 +786,6 @@ func popoverItemStyle(c *ui.Context, key, text, detail string, selected bool, co
 	})
 }
 
-// resizeDivider keeps the drag target independent of either pane's contents.
-func (a *desktop) resizeDivider(c *ui.Context, key string, width *float32, direction, minimum, maximum float32, dragging *bool) {
-	edge := ui.Box(c.Key(key)).Width(railDividerWidth).FillHeight().Shrink(0).Cursor(ui.CursorResizeEW)
-	if edge.Hovered() {
-		edge.Background(c.Theme().Accent.Alpha(0.35))
-	}
-	if dx, _, held := edge.Dragged(); held {
-		*dragging = true
-		if dx != 0 {
-			*width = max(minimum, min(maximum, *width+direction*dx))
-		}
-	} else if *dragging {
-		*dragging = false
-		a.savePrefs()
-	}
-}
-
 func windowAction(c *ui.Context, id, tip, icon string, action func(), ink ...ui.Color) ui.Element {
 	return windowButton(c, id, tip, icon, strings.HasPrefix(tip, "关闭"), action, ink...)
 }
@@ -895,4 +878,15 @@ func cardDanger(c *ui.Context, s string) ui.Element {
 // disclosureIcon uses a stable slot before folding labels, without changing on hover.
 func disclosureIcon(c *ui.Context, name string, ink ui.Color) {
 	iconGlyph(c, name, 15).Shrink(0).TextColor(ink).Unselectable().PassThrough().Label("折叠图标 " + name)
+}
+
+// Transcript navigation stays subordinate to the conversation content.
+func transcriptAction(c *ui.Context, key, label string, icons ...string) ui.Element {
+	icon := ""
+	if len(icons) > 0 {
+		icon = icons[0]
+	}
+	b, text := buttonParts(c, key, label, btnGhost, true, icon)
+	text.FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, nil))
+	return b.Height(24).Padding(2, 4)
 }

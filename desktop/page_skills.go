@@ -121,11 +121,11 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 								link := uikit.Tooltip(c, ui.Text(c, path).FontSize(fsTiny).TextColor(faint).SingleLine(), "点击在文件管理器中打开: "+path)
 								link.Cursor(ui.CursorPointer)
 								if link.Clicked() {
-									a.job(func() error { return a.core.OpenPathInFileManager(path) }, "")
+									a.job(func() error { return a.core.OpenPathInFileManager(path) })
 								}
 							}
 						})
-						skillCardActions(c.Key("skill-actions"), s.Name, s.Path, &enabled, a.skillsF.ToggleBusy[s.Name], func() { path := s.Path; a.job(func() error { return a.core.OpenPathInFileManager(path) }, "") }, func(value bool) { a.toggleSkill(s.Name, value) })
+						skillCardActions(c.Key("skill-actions"), s.Name, s.Path, &enabled, a.skillsF.ToggleBusy[s.Name], func() { path := s.Path; a.job(func() error { return a.core.OpenPathInFileManager(path) }) }, func(value bool) { a.toggleSkill(s.Name, value) })
 					})
 				})
 			}

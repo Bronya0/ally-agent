@@ -63,9 +63,9 @@ keyboard navigation, focus, popup dismissal and value binding. Use MyGo's
 Scroll / ScrollHorizontal for overflow rather than implementing wheel handling.
 
 PasswordInput combines a native text input and a visibility button. NumberInput
-combines native text and button controls: MyGo v0.7.1's NumberInput has a fixed
-inner width and does not expose its parts for styling. Both controls keep their
-state per keyed instance.
+is a thin wrapper around MyGo v0.7.3's standard NumberInput: numeric editing,
+stepping, range validation, keyboard input and accessibility belong to MyGo.
+Use the standard inner layout; do not reimplement it to stretch the input.
 
 
 ## Naive 风格公共组件
@@ -114,7 +114,18 @@ state per keyed instance.
 
 回归测试：`motion_test.go`、`message_animation_test.go`、宿主的 `skill_card_layout_test.go`。
 
+### 小尺寸动画的像素取整案例
+
+2026-10-30：运行状态三线动画在请求 60 FPS 时仍有轻微停顿感。柱高在 9～16 DIP 之间按连续余弦曲线变化，但 MyGo v0.7.3 的 `Painter.Fill` 会将边缘对齐整数物理像素。相邻帧的小数变化被舍去，视觉上变成“保持几帧，再跳一个像素”；曲线在最高／最低附近减速时更明显。循环首尾连续，并非重置跳变。
+
+- 修复：保留原有曲线、1300ms 周期、208ms 错峰和固定布局，改用 `ui.Path + Painter.FillPath` 绘制圆角轮廓，请求 30 FPS。该版本路径绘制按四分之一物理像素量化，配合抗锯齿，比整数边缘能表现更细微的变化；并非无限精度。
+- 排查顺序：先检查坐标量化与抗锯齿，再检查曲线端点速度、循环衔接和实际帧间隔；提高 FPS 无法消除整数坐标造成的阶梯。
+- 验证：`desktop/thinking_motion_test.go` 覆盖整数取整后边缘相同的两个高度仍产生不同像素覆盖，以及 ReduceMotion 下静止且不持续请求帧。用户运行新版后确认卡顿感已修复；静态截图不能单独证明动画流畅。
+- 实现入口：`desktop/composer.go` 的 `runSpinner`、`drawThinkingBar`；周期与错峰集中在 `motion.go`。只请求重绘，不为动画重建布局或创建后台定时线程。30 FPS 是该动画的请求值，窗口实际绘制频率仍由 MyGo 和其他动效共同决定。
+
 ### 全局结果提示策略
+
+应用自定义右键菜单统一使用 `uikit.ContextMenu(anchor, build)`，内部复用 MyGo `PopoverMenu` 的文字测量、布局、键盘导航和关闭行为，避免 Windows 原生 owner-draw 菜单测量不足裁切末字。菜单挂在覆盖目标区域的视口，行菜单优先；检查长中文、快捷键、大字号和窗口边缘。组件自带系统菜单不由此入口接管。不得为应用菜单问题直接修改 MyGo 依赖源码。
 
 - 设置页内部切换分区及偏好即时写入静默成功，只在离开整个设置页后提示一次实际保存结果；失败即时提示。
 - 查看／打开文件等导航操作不提示成功，失败才提示。
@@ -148,9 +159,11 @@ uikit.TabsWithOptions(c.Key("provider"), &state.Provider,
 
 状态色分为文字色与指示灯填充色。文字／图标使用 Theme.Success、Warning、Danger（浅色模式深一些以保证可读性）；小圆点由宿主 pillDotColor 提供清晰填充色，停用态使用浅灰。不要再在页面里调用固定深色模式常量充当状态文字色；不能把深色文字色直接用于浅色模式的小状态灯。Git 增删、工具结果、计划完成、子代理、更新标记均遵循此规则。
 
+资源树选中项使用 `TreeSelection`：保留原生 TreeItem 的选择语义、方向键和焦点环，用 18% 主题色浅底和正文文字代替整行实色。文件内容预览优先原生 List / Table 的虚拟化，不为 Office 文档创建 WebView；仅保留一个有界文档预览，关闭时清空文档数据与列表状态。
+
 ## 标题栏工作区标签：B 直线标签
 
-`WorkspaceTab` 使用 B 直线样式：默认高 44 DIP，宿主填满标题栏高度，默认透明背景，选中项底部显示占满整个标签宽度的笔直 2 DIP 主题色线（包含状态点与关闭槽位）；无弧形底边，选中不铺浅底。状态点和关闭按钮始终占据固定槽位，关闭按钮只在悬停或键盘焦点进入时显示；运行中的标签不可关闭。标题字重固定、底边始终预留空间，切换时文字不移动。页面内 Tabs 继续使用 C 紧凑分段，互不影响。
+`WorkspaceTab` 使用 B 直线样式：默认高 44 DIP，宿主填满标题栏高度，默认透明背景，选中项底部显示占满整个标签宽度的笔直 2 DIP 主题色线（包含状态点与关闭槽位）；无弧形底边，选中不铺浅底。状态点和关闭按钮始终占据固定槽位，关闭按钮只在悬停或键盘焦点进入时显示；运行中的标签不可关闭。标题字重固定、底边始终预留空间，切换时文字不移动。标题只保留工作区目录名，悬停时 Tooltip 给出完整路径（运行中的标签在路径上一行标「运行中」），同名目录不会认错。页面内 Tabs 继续使用 C 紧凑分段，互不影响。
 
 Tooltip 身份绑定锚点自身的 Local 轻量标记，不用提示文字作为 identity；文字更新不得重播入场动画。提示正文 Unselectable + PassThrough，不抢锚点悬停。Painter.AnimationFrameRate 用于思考等持续装饰动画，不用 Context.Invalidate/Loop 反复重建整页。纯 reasoning token 事件只更新底部计数，不能设置 transcript FollowPending；只有可见正文增长才请求跟随滚动。
 

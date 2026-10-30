@@ -2,8 +2,6 @@
 package uikit
 
 import (
-	"math"
-	"strconv"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -120,42 +118,37 @@ func SelectField(c *ui.Context, value *string, options []Option, ink ...ui.Color
 	return InputChrome(c, b)
 }
 
-// CompactSelect keeps the toolbar trigger quiet while sharing the form select's
-// popup and option styling. Locked controls show the same value and geometry,
-// but use an inert button instead of a select so neither pointer nor keyboard
-// input can open a popup. Separate keyed children discard an open select when
-// locking, rather than restoring its popup after the operation finishes.
-func CompactSelect(c *ui.Context, value *string, options []string, locked bool, ink ...ui.Color) ui.Element {
-	var sel ui.SelectParts[string]
-	var b ui.Element
-	ui.Row(c).MinWidth(0).Shrink(1).Children(func() {
-		if locked {
-			b = ui.ButtonBase(c.Key("locked"))
-		} else {
-			sel = ui.SelectBase(c.Key("select"), value)
-			b = sel.Trigger
-		}
-		color := SecondaryInk(c, ink)
-		b.Height(ButtonHeightSmall).Padding(1, 6).MinWidth(0).Shrink(1).Gap(7).
-			Radius(Radius).Background(ui.Transparent).TextColor(color).Label(*value).
-			Cursor(ui.CursorPointer)
-		if locked {
-			b.Cursor(ui.CursorDefault)
-		}
-		b.Children(func() {
-			ui.Text(c, *value).FontSize(FontBody).SingleLine().Unselectable().TextColor(color)
-			ui.Icon(c, chevronDown).Size(13, 13).Shrink(0).TextColor(color)
-		})
-	})
-	if !locked {
-		list := make([]Option, 0, len(options))
-		for _, text := range options {
-			list = append(list, Option{Value: text, Label: text})
-		}
-		if panel := selectPopup(c, sel, value, list, ink...); panel.Valid() {
-			panel.MinWidth(160).MaxWidthPercent(90)
-		}
+// CompactMenu keeps the toolbar trigger quiet while its choices open as MyGo's
+// drawn menu: the same value and chevron, the current choice marked with the
+// theme's radio mark, and no menu at all while locked. Locked controls show the
+// same value and geometry but open nothing.
+func CompactMenu(c *ui.Context, value *string, options []string, locked bool, ink ...ui.Color) ui.Element {
+	color := SecondaryInk(c, ink)
+	label := *value
+	if label == "" && len(options) > 0 {
+		label = options[0]
 	}
+	b := ui.ButtonBase(c).Height(ButtonHeightSmall).Padding(1, 6).MinWidth(0).Shrink(1).Gap(7).
+		Radius(Radius).Background(ui.Transparent).TextColor(color).Cursor(ui.CursorPointer)
+	b.Children(func() {
+		ui.Text(c, label).FontSize(FontBody).SingleLine().Unselectable().TextColor(color)
+		ui.Icon(c, chevronDown).Size(13, 13).Shrink(0).TextColor(color)
+	})
+	if locked {
+		// Disabled would paint the whole trigger at half opacity, so the value
+		// would visibly change as a run starts. Without the menu the locked
+		// trigger opens nothing, and the menu it had open goes with the frame
+		// that stops building it.
+		b.Cursor(ui.CursorDefault)
+		return b
+	}
+	b.PopoverMenuButton(func(m *ui.Menu) {
+		for _, option := range options {
+			if m.Item(option).Radio(*value == option).Chosen() {
+				*value = option
+			}
+		}
+	})
 	return b
 }
 
@@ -363,115 +356,8 @@ func passwordInputInk(c *ui.Context, key, label string, value *string, tone []ui
 	return root
 }
 
-type numberInputState struct {
-	text string
-	last float64
-}
-
-// MyGo v0.7.1 NumberInput fixes the inner input width and does not expose its
-// parts. Compose its native text and button controls to fill available width.
+// NumberInput keeps the compatibility entry point while MyGo owns numeric
+// editing, range validation, stepping, keyboard input and accessibility.
 func NumberInput(c *ui.Context, key, label string, value *float64, lo, hi, step float64, ink ...ui.Color) ui.Element {
-	secondary := SecondaryInk(c, ink)
-	root := InputChrome(c, ui.Row(c.Key(key)).Height(ControlHeight).AlignItems(ui.Center).Gap(0))
-	decimals := 0
-	if s := strconv.FormatFloat(step, 'f', -1, 64); strings.Contains(s, ".") {
-		decimals = len(s) - strings.IndexByte(s, '.') - 1
-	}
-	format := func(v float64) string { return strconv.FormatFloat(v, 'f', decimals, 64) }
-	state := ui.Local(root, "number", func() numberInputState { return numberInputState{text: format(*value), last: *value} })
-	if state.last != *value {
-		state.last, state.text = *value, format(*value)
-	}
-	set := func(v float64) {
-		v = math.Max(lo, math.Min(hi, v))
-		p := math.Pow10(decimals)
-		v = math.Round(v*p) / p
-		if *value != v {
-			*value = v
-			root.SetChanged()
-		}
-		state.last, state.text = *value, format(*value)
-	}
-	root.Children(func() {
-		input := ui.TextInputBase(c.Key("input"), &state.text).Grow(1).MinWidth(0).FillHeight().Padding(5, 10).
-			Border(0, ui.Transparent).Background(ui.Transparent).FontSize(14).TextColor(c.Theme().Text).Label(label)
-		if input.Changed() {
-			if v, err := strconv.ParseFloat(strings.TrimSpace(state.text), 64); err == nil && !math.IsNaN(v) && v >= lo && v <= hi {
-				if *value != v {
-					*value = v
-					state.last = v
-					root.SetChanged()
-				}
-			}
-		}
-		if input.Shortcut(0, ui.KeyUp) {
-			set(*value + step)
-		}
-		if input.Shortcut(0, ui.KeyDown) {
-			set(*value - step)
-		}
-		if !input.Focused() {
-			state.text = format(*value)
-		}
-		for _, item := range []struct {
-			text, name string
-			delta      float64
-		}{{"−", "减少", -step}, {"+", "增加", step}} {
-			item := item
-			button := Tooltip(c, ui.ButtonBase(c.Key(item.name)).Size(24, 28).Shrink(0).Center().Radius(5).Cursor(ui.CursorPointer).
-				Label(item.name+" "+label), item.name).Disabled(item.delta < 0 && *value <= lo || item.delta > 0 && *value >= hi)
-			fill := ui.Transparent
-			if button.Hovered() {
-				fill = c.Theme().Surface
-			}
-			button.Background(fade(button, "step-fill", fill))
-			button.Children(func() { ui.Text(c, item.text).FontSize(15).TextColor(secondary).Unselectable() })
-			if button.Clicked() {
-				set(*value + item.delta)
-			}
-		}
-		ui.Box(c).Width(5).Shrink(0)
-	})
-	return root
-}
-
-// NumberStepper builds a filled numeric field with compact, borderless controls.
-// The string binding lets callers keep invalid intermediate edits until save-time validation.
-func NumberStepper(c *ui.Context, key, label string, value *string, lo, hi, step, fallback int, ink ...ui.Color) ui.Element {
-	secondary := SecondaryInk(c, ink)
-	root := ui.Row(c).FillWidth().Height(ControlHeight).AlignItems(ui.Center).Gap(0)
-	root = InputChrome(c, root)
-	root.Children(func() {
-		ui.TextInputBase(c.Key(key), value).Height(ControlHeight).FillHeight().Grow(1).MinWidth(0).
-			Padding(5, 10).FontSize(14).Border(0, ui.Transparent).Background(ui.Transparent).Radius(0).
-			TextColor(c.Theme().Text).Label(label)
-
-		current, err := strconv.Atoi(strings.TrimSpace(*value))
-		if err != nil || current < lo || current > hi {
-			current = fallback
-		}
-		controls := ui.Row(c).Shrink(0).Gap(2).Padding(0, 5).AlignItems(ui.Center)
-		controls.Children(func() {
-			for _, control := range []struct {
-				label string
-				delta int
-				name  string
-			}{{"−", -step, "减少"}, {"+", step, "增加"}} {
-				control := control
-				next := current + control.delta
-				disabled := next < lo || next > hi
-				button := Action(c, control.label, ActionOptions{Style: Tertiary, Small: true}).Size(26, 28).Padding(0).Border(0, ui.Transparent).
-					Background(ui.Transparent).Radius(6).FontSize(15).TextColor(secondary).
-					Disabled(disabled).Label(control.name)
-				if button.Hovered() && !disabled {
-					button.Background(c.Theme().Surface)
-					button.TextColor(c.Theme().Text)
-				}
-				button.OnClick(func() {
-					*value = strconv.Itoa(next)
-				})
-			}
-		})
-	})
-	return root
+	return ui.NumberInput(c.Key(key), value, lo, hi, step).Label(label)
 }

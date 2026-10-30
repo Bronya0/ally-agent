@@ -25,6 +25,8 @@ bash scripts/build-all.sh         # 仅 macOS：全平台发行打包，供 GitH
 本地入口与 GitHub CI 共用 `scripts/build.py`，无需 Node；Windows 双击脚本不再依赖 Git Bash。
 所有入口可以从任意目录启动。`build-all.sh` 不暂停，不启动 GUI，构建失败会以非零状态退出。
 
+正式发行构建通过 `BUILD_TAG` 和 `ALLY_RELEASE_NOTES_BODY` 嵌入版本号与 Markdown 更新说明；GitHub Release 发布事件会自动提供这两项。说明随各平台程序交付，无需联网。正式版本有正文且尚未读过时，初始化完成后弹出一次限高滚动窗口，关闭后记录到 `native-ui.json`；设置的“版本亮点”可再次查看。开发构建不注入、不弹窗，未提供正文的手动发行构建也不弹窗。打包结束（包括失败）会恢复仓库中的空说明文件。
+
 Windows 开发 exe 固定为 `dist/ally-native.exe`，被占用时明确报错，关闭程序后重试。
 发行包放在 `dist/release/`：Windows x64 / arm64 ZIP 解压后包含对应架构的 `Ally.exe`、`tools/rg.exe`、README 和许可文件；
 Linux tar.gz 包含单一顶层目录、可执行文件、`tools/rg` 和许可文件，不发布 deb。

@@ -173,7 +173,19 @@ func (a *App) fastCompactHistory(ctx context.Context, sessionID string, history 
 	}
 	tokensAfter := tokensBefore
 	if changed {
-		tokensAfter = a.getContextBreakdown(sessionID, "").Total
+		// Compare like with like: a provider measurement cannot be compared
+		// with a text estimate after its measurement anchor was invalidated.
+		prefix := a.getContextBreakdown(sessionID, "")
+		before := computeLiveBreakdown(history)
+		after := computeLiveBreakdown(out)
+		tokensBefore = prefix.SystemPrompt + prefix.ToolSchemas + before.Total
+		tokensAfter = prefix.SystemPrompt + prefix.ToolSchemas + after.Total
+		// A running session otherwise keeps serving pre-rewrite categories.
+		a.mu.Lock()
+		if _, live := a.liveBreakdown[sessionID]; live {
+			a.liveBreakdown[sessionID] = after
+		}
+		a.mu.Unlock()
 	}
 	return map[string]any{
 		"tier": "fast", "changed": changed,

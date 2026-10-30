@@ -796,7 +796,15 @@ func (a *desktop) imageModelTestDialog(c *ui.Context) {
 					ui.Image(c, result.preview).Size(260, 260).Fit(ui.Contain).Radius(radiusSmall)
 				}
 				ref := result.meta.Ref
-				cardFlat(c, "下载原图").OnClick(func() { a.job(func() error { _, err := a.core.ExportGeneratedImage(ref); return err }) })
+				cardFlat(c, "下载原图").OnClick(func() {
+					a.job(func() error {
+						path, err := a.core.ExportGeneratedImage(ref)
+						if err == nil && path != "" {
+							a.win.Update(func() { a.notify("已导出：" + path) })
+						}
+						return err
+					})
+				})
 			})
 		}
 	})

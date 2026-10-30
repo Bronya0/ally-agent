@@ -451,7 +451,13 @@ func (a *desktop) messageAttachmentTile(c *ui.Context, t *conversation, att map[
 			}
 			if ref := str(att, "imageRef"); ref != "" {
 				mutedIconAction(c, "attachment-save-"+id, "保存图片", "download", 18, func() {
-					a.job(func() error { _, err := a.core.ExportGeneratedImage(ref); return err })
+					a.job(func() error {
+						path, err := a.core.ExportGeneratedImage(ref)
+						if err == nil && path != "" {
+							a.win.Update(func() { a.notify("已导出：" + path) })
+						}
+						return err
+					})
 				})
 			}
 		})

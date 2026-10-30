@@ -24,6 +24,37 @@ func newSSHIdentityTestApp(t *testing.T) *App {
 	return a
 }
 
+func TestSSHGrantSaveFailureKeepsPreviousAuthorization(t *testing.T) {
+	a := newSSHIdentityTestApp(t)
+	if err := a.SaveSSHServer(SSHServerNode{Alias: "dev", Host: "example.invalid", Username: "user", Description: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	node, _ := a.GetSSHServer("dev")
+	if err := a.SetWorkspaceAllowedServers(workspace, []string{node.ID}); err != nil {
+		t.Fatal(err)
+	}
+	// A regular file in place of the config directory makes persistence fail.
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("block"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.configPath = filepath.Join(blocker, "config.json")
+	if err := a.SetWorkspaceAllowedServers(workspace, nil); err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	if !a.IsServerAuthorizedForWorkspace(workspace, node.ID) {
+		t.Fatal("failed revocation changed effective grants")
+	}
+	other := t.TempDir()
+	if err := a.SetWorkspaceAllowedServers(other, []string{node.ID}); err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	if a.IsServerAuthorizedForWorkspace(other, node.ID) {
+		t.Fatal("failed grant authorized a new workspace")
+	}
+}
+
 func TestSSHIdentityLegacySelectionSurvivesRenameAndReload(t *testing.T) {
 	a := newSSHIdentityTestApp(t)
 	legacy := `{"servers":[

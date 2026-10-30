@@ -109,20 +109,26 @@ func buildCodeSpans(c *ui.Context, text, path string, base ui.Color) []ui.Span {
 	return spans
 }
 
+var toolFieldLabels = map[string]string{"action": "操作", "localPath": "本地路径", "remotePath": "远端路径", "files": "文件", "dirs": "目录", "bytes": "大小", "command": "命令", "cwd": "工作目录", "pid": "PID", "schedule": "调度", "nextRunAt": "下次执行", "prompt": "任务", "host": "主机", "port": "端口", "user": "用户", "description": "说明", "id": "ID", "instruction": "任务内容", "username": "用户", "fileCount": "文件", "dirCount": "目录", "totalBytes": "大小", "target": "目标", "riskLevel": "风险级别", "timeoutSeconds": "超时秒数", "outputBytes": "输出大小", "exitCode": "退出码", "model": "模型", "width": "宽度", "height": "高度"}
+
 func toolFields(c *ui.Context, data map[string]any, keys []string, ink ...ui.Color) {
-	labels := map[string]string{"action": "操作", "localPath": "本地路径", "remotePath": "远端路径", "files": "文件", "dirs": "目录", "bytes": "大小", "command": "命令", "cwd": "工作目录", "pid": "PID", "schedule": "调度", "nextRunAt": "下次执行", "prompt": "任务", "host": "主机", "port": "端口", "user": "用户", "description": "说明", "id": "ID", "instruction": "任务内容", "username": "用户", "fileCount": "文件", "dirCount": "目录", "totalBytes": "大小", "target": "目标", "riskLevel": "风险级别", "timeoutSeconds": "超时秒数", "outputBytes": "输出大小", "exitCode": "退出码", "model": "模型", "width": "宽度", "height": "高度"}
+
 	for _, k := range keys {
 		v, ok := data[k]
-		if !ok || v == nil || fmt.Sprint(v) == "" {
+		if !ok || v == nil {
 			continue
 		}
-		label := labels[k]
+		valueText := fmt.Sprint(v)
+		if valueText == "" {
+			continue
+		}
+		label := toolFieldLabels[k]
 		if label == "" {
 			label = k
 		}
-		ui.Row(c).Gap(8).Children(func() {
-			ui.Text(c, label+":").Width(76).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink))
-			text := fmt.Sprint(v)
+		ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Start).Children(func() {
+			ui.Text(c, label+":").Width(76).Shrink(0).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink))
+			text := valueText
 			if k == "schedule" {
 				raw, _ := json.Marshal(v)
 				var schedule backend.ScheduledTaskSchedule
@@ -140,7 +146,7 @@ func toolFields(c *ui.Context, data map[string]any, keys []string, ink ...ui.Col
 			if k == "totalBytes" || k == "bytes" || k == "outputBytes" {
 				text = fmtBytes(int64(num(data, k)))
 			}
-			ui.Text(c, text).FontSize(fsSmall).Selectable()
+			ui.Text(c, text).FontSize(fsSmall).Grow(1).MinWidth(0).Selectable()
 		})
 	}
 }
@@ -177,13 +183,13 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 		fieldNote(c, "暂无记录", a.secondaryInk())
 		return
 	}
-	ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
+	ui.Column(c).FillWidth().MinWidth(0).Gap(8).Children(func() {
 		for n, raw := range items {
 			item, ok := raw.(map[string]any)
 			if !ok {
 				continue
 			}
-			ui.Column(c.Key(fmt.Sprintf("%s-resource-%d", key, n))).MinWidth(240).Grow(1).Padding(10, 12).Gap(6).Border(1, c.Theme().Border).Radius(radiusCard).Background(c.Theme().Surface).Children(func() {
+			ui.Column(c.Key(fmt.Sprintf("%s-resource-%d", key, n))).FillWidth().MinWidth(0).Padding(10, 12).Gap(6).Border(1, c.Theme().Border).Radius(radiusCard).Background(c.Theme().Surface).Children(func() {
 				title := str(item, "name")
 				if title == "" {
 					title = str(item, "alias")
@@ -191,9 +197,8 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 				if title == "" {
 					title = str(item, "id")
 				}
-				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, title).FontSize(fsSmall).Bold()
-					ui.Spacer(c)
+				ui.Row(c).FillWidth().MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, title).FontSize(fsSmall).Bold().Grow(1).MinWidth(0)
 					status := str(item, "status")
 					if kind == "scheduled_task" {
 						status = str(item, "lastStatus")
@@ -297,18 +302,28 @@ func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
 	return rows
 }
 
-func diffCell(c *ui.Context, text string, changed bool, number int, ink ...ui.Color) {
-	fill := ui.Transparent
-	color := uikit.SecondaryInk(c, ink)
-	if changed {
-		if strings.HasPrefix(text, "-") {
-			fill = ui.RGBA(232, 84, 84, 0.10)
-			color = c.Theme().Danger
-		} else {
-			fill = ui.RGBA(78, 200, 126, 0.10)
-			color = c.Theme().Success
+// diffColors matches the legacy diff palette, independently of status colors.
+func diffColors(t *ui.Theme, changed, removed bool) (ui.Color, ui.Color) {
+	if !changed {
+		if t.Dark {
+			return ui.Transparent, ui.Hex("#d4d4d4")
 		}
+		return ui.Transparent, ui.Hex("#3a3f45")
 	}
+	if t.Dark {
+		if removed {
+			return ui.RGBA(232, 84, 84, 0.10), ui.Hex("#f0b5b5")
+		}
+		return ui.RGBA(78, 200, 126, 0.10), ui.Hex("#8fd4b4")
+	}
+	if removed {
+		return ui.RGBA(220, 38, 38, 0.09), ui.Hex("#a33a3a")
+	}
+	return ui.RGBA(22, 163, 74, 0.10), ui.Hex("#14683c")
+}
+
+func diffCell(c *ui.Context, text string, changed bool, number int, ink ...ui.Color) {
+	fill, color := diffColors(c.Theme(), changed, strings.HasPrefix(text, "-"))
 	// Each cell takes half the row and lets its code wrap: the row then grows to
 	// the taller side, so wrapped lines keep the two columns lined up.
 	ui.Row(c).Grow(1).Basis(0).MinWidth(0).Shrink(1).MinHeight(22).Padding(1, 8).AlignItems(ui.Start).Background(fill).Children(func() {
@@ -345,16 +360,7 @@ func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, star
 }
 
 func diffCellNoWrap(c *ui.Context, text string, changed bool, number int, ink ...ui.Color) {
-	fill, color := ui.Transparent, uikit.SecondaryInk(c, ink)
-	if changed {
-		if strings.HasPrefix(text, "-") {
-			fill = ui.RGBA(232, 84, 84, 0.10)
-			color = c.Theme().Danger
-		} else {
-			fill = ui.RGBA(78, 200, 126, 0.10)
-			color = c.Theme().Success
-		}
-	}
+	fill, color := diffColors(c.Theme(), changed, strings.HasPrefix(text, "-"))
 	ui.Row(c).FillWidth().Height(22).Shrink(0).Padding(1, 8).AlignItems(ui.Center).Background(fill).Children(func() {
 		label := ""
 		if number > 0 {

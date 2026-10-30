@@ -33,6 +33,7 @@ jobs:
       - name: Build portable archives and ad-hoc universal DMG
         env:
           BUILD_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          ALLY_RELEASE_NOTES_BODY: ${{ github.event.release.body }}
           CGO_ENABLED: '0'
           GOGC: '30'
           GOMAXPROCS: '2'

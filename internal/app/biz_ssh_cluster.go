@@ -603,10 +603,23 @@ func (a *App) setWorkspaceAllowedServersLocked(normWS string, aliases []string) 
 	if a.sshWorkspaceAllowed == nil {
 		a.sshWorkspaceAllowed = make(map[string]map[string]bool)
 	}
+	previous, existed := a.sshWorkspaceAllowed[normWS]
 	a.sshWorkspaceAllowed[normWS] = m
 	a.sshWorkspaceAllowedMu.Unlock()
 
-	return a.saveSSHClustersLocked()
+	if err := a.saveSSHClustersLocked(); err != nil {
+		// Authorization checks also hold sshClustersMu: none can observe an
+		// unsuccessful update before the previous grants are restored.
+		a.sshWorkspaceAllowedMu.Lock()
+		if existed {
+			a.sshWorkspaceAllowed[normWS] = previous
+		} else {
+			delete(a.sshWorkspaceAllowed, normWS)
+		}
+		a.sshWorkspaceAllowedMu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // GetWorkspaceAllowedServers returns stable server IDs allowed for a workspace.

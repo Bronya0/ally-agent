@@ -3,18 +3,21 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/markdown"
 )
 
 // uiPrefs mirrors the localStorage preferences the Vue app kept: appearance,
 // rail geometry, section folding and the welcome-page avatar. It lives next to
 // the agent data so both builds share the same machine.
 type uiPrefs struct {
+	HistoryPageSize    int      `json:"historyPageSize"`
 	Appearance         string   `json:"appearance,omitempty"`
 	Palette            int      `json:"palette"`
 	RailExpanded       bool     `json:"railExpanded"`
@@ -29,7 +32,7 @@ type uiPrefs struct {
 }
 
 func defaultPrefs() uiPrefs {
-	return uiPrefs{Appearance: "dark", Palette: 2, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270}
+	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: 2, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270}
 }
 
 var prefsMu sync.Mutex
@@ -67,6 +70,7 @@ func readPrefs(path string) uiPrefs {
 	if p.TreeWidth < 150 || p.TreeWidth > 600 {
 		p.TreeWidth = 270
 	}
+	p.HistoryPageSize = normalizeHistoryPageSize(p.HistoryPageSize)
 	if p.Avatar == "" {
 		p.Avatar = "whale"
 	}
@@ -143,53 +147,55 @@ type mentionState struct {
 // chatUI is per-conversation, non-persisted UI state. Message content stays in
 // conversation.Messages; this only remembers what the reader expanded.
 type chatUI struct {
-	RoundAt          map[int]int
-	Round            map[int]*roundStat
-	PromptOpen       map[int]bool
-	PromptHandles    map[int]*ui.Handle
-	PendingPrompt    bool
-	PendingPromptIdx int
-	ToolOpen         map[string]bool
-	CommandDetails   map[string]*commandDetail
-	GroupOpen        map[string]bool
-	AskIndex         int
-	AskSelected      map[string][]string
-	AskCustom        map[string]bool
-	AskCustomTxt     map[string]string
-	AskSubmitted     bool
-	PlanCollapsed    bool
-	CmdOpen          bool
-	CmdIndex         int
-	Mention          mentionState
-	SessionsOpen     bool
-	SessionsIndex    int
-	ModelOpen        bool
-	ModelSearch      string
-	ModelGroup       string
-	FlyoutHot        bool
-	ContextOpen      bool
-	ExtraRootsOpen   bool
-	Retry            *retryInfo
-	Git              backend.GitStatus
-	GitLoaded        bool
-	Usage            backend.WorkspaceTokenUsage
-	Breakdown        backend.ContextBreakdown
-	FooterLoaded     bool
-	FooterBusy       bool
-	FooterPending    bool
-	CompactNote      string
-	CompactBusy      bool
-	CompactThinking  int
-	DraftCaret       int
-	RestoreCaret     bool
-	Follow           bool
-	FollowPending    bool
-	LastScrollY      float32
-	HistoryIndex     int
-	HistoryDraft     string
-	WorkspaceHistory []string
-	VisibleStart     int
-	ThinkingBytes    int
+	RoundAt                map[int]int
+	Round                  map[int]*roundStat
+	PromptOpen             map[int]bool
+	PromptHandles          map[int]*ui.Handle
+	PendingPrompt          bool
+	PendingPromptIdx       int
+	ToolOpen               map[string]bool
+	CommandDetails         map[string]*commandDetail
+	GroupOpen              map[string]bool
+	AskIndex               int
+	AskSelected            map[string][]string
+	AskCustom              map[string]bool
+	AskCustomTxt           map[string]string
+	AskSubmitted           bool
+	PlanCollapsed          bool
+	CmdOpen                bool
+	CmdIndex               int
+	Mention                mentionState
+	SessionsOpen           bool
+	SessionsIndex          int
+	ModelOpen              bool
+	ModelSearch            string
+	ModelGroup             string
+	FlyoutHot              bool
+	ContextOpen            bool
+	ExtraRootsOpen         bool
+	Retry                  *retryInfo
+	Git                    backend.GitStatus
+	GitLoaded              bool
+	Usage                  backend.WorkspaceTokenUsage
+	Breakdown              backend.ContextBreakdown
+	FooterLoaded           bool
+	FooterBusy             bool
+	FooterPending          bool
+	CompactNote            string
+	CompactBusy            bool
+	CompactThinking        int
+	DraftCaret             int
+	RestoreCaret           bool
+	Follow                 bool
+	FollowPending          bool
+	LastScrollY            float32
+	HistoryIndex           int
+	HistoryDraft           string
+	WorkspaceHistory       []string
+	VisibleStart           int
+	windowStart, windowEnd int
+	windowBuilding         bool
+	ThinkingBytes          int
 }
 
 type deletePromptState struct {
@@ -226,39 +232,41 @@ func (t *conversation) uiState() *chatUI {
 // settingsForm holds numeric mirrors for the settings tab controls. Config
 // keeps the persisted values; these exist because NumberInput binds float64.
 type settingsForm struct {
-	AppearanceMode int
-	ProxyModeIndex int
-	Modules        map[string]int
-	Tab            string
-	Retries        float64
-	Concurrency    float64
-	CompactTimeout float64
-	Threshold      float64
-	FontMessage    float64
-	FontCode       float64
-	FontTool       float64
-	FontSub        float64
-	FontAux        float64
-	BgOpacity      float64
-	AllowPrivate   bool
-	AutoUpdate     bool
-	Autostart      bool
-	Validation     map[string]bool
-	UpdateNote     string
-	UpdateBusy     bool
-	Proxy          backend.ProxyStatus
-	ProxyNote      string
-	ProxyBusy      bool
-	API            backend.ApiServiceState
-	APIPort        float64
-	APIBusy        bool
-	APINote        string
-	FullJSON       string
-	NewToken       bool
+	HistoryPageSize float64
+	AppearanceMode  int
+	ProxyModeIndex  int
+	Modules         map[string]int
+	Tab             string
+	Retries         float64
+	Concurrency     float64
+	CompactTimeout  float64
+	Threshold       float64
+	FontMessage     float64
+	FontCode        float64
+	FontTool        float64
+	FontSub         float64
+	FontAux         float64
+	BgOpacity       float64
+	AllowPrivate    bool
+	AutoUpdate      bool
+	Autostart       bool
+	Validation      map[string]bool
+	UpdateNote      string
+	UpdateBusy      bool
+	Proxy           backend.ProxyStatus
+	ProxyNote       string
+	ProxyBusy       bool
+	API             backend.ApiServiceState
+	APIPort         float64
+	APIBusy         bool
+	APINote         string
+	FullJSON        string
+	NewToken        bool
 }
 
 func (a *desktop) syncSettingsForm() {
 	f := &a.settings
+	f.HistoryPageSize = float64(a.messageWindowSize())
 	f.AppearanceMode = 0
 	if !a.currentPalette().dark {
 		f.AppearanceMode = 1
@@ -384,7 +392,7 @@ type sshForm struct {
 	OrgGroup        string
 	GroupInput      string
 	Draft           backend.SSHServerNode
-	PortText        string
+	Port            float64
 	Busy            bool
 	TestBusy        map[string]bool
 	DeleteID        string
@@ -397,6 +405,7 @@ type sshForm struct {
 	AuthWorkspace   string
 	AuthDraft       map[string]bool
 	AuthReady       bool
+	AuthLoadSeq     uint64
 	AuthBusy        bool
 }
 
@@ -426,44 +435,50 @@ type pluginsForm struct {
 
 // updateUI drives the in-app update dialog.
 type updateUI struct {
-	CanAuto     bool
-	Open        bool
-	State       string // idle, checking, downloading, ready, applying, restarting, error, latest
-	Tag         string
-	Progress    float64
-	BytesNow    int64
-	BytesTotal  int64
-	Error       string
-	Note        string
-	Busy        bool
-	ReleaseOpen bool
-	ReleaseVer  string
-	ReleaseBody string
-	ReleaseHTML string
+	CanAuto           bool
+	Open              bool
+	State             string // idle, checking, downloading, ready, applying, restarting, error, latest
+	Tag               string
+	Progress          float64
+	BytesNow          int64
+	BytesTotal        int64
+	Error             string
+	Note              string
+	Busy              bool
+	ReleaseOpen       bool
+	ReleaseVer        string
+	ReleaseBody       string
+	ReleaseDialogMD   *markdown.Options
+	ReleaseSettingsMD *markdown.Options
 }
 
 // fileUI holds explorer-only state that is not part of the workspace files.
 type fileUI struct {
-	Preview   bool
-	InfoOpen  bool
-	Info      backend.WorkspaceFileInfo
-	InfoPath  string
-	InfoBusy  bool
-	InfoError string
-	GitOpen   bool
-	GitBusy   bool
-	GitData   backend.GitDiffResult
-	GitRepo   string
-	GitFile   int
-	NewOpen   bool
-	NewDir    bool
-	NewName   string
-	NewParent string
-	Rename    bool
-	RenameOf  string
-	RenameTo  string
-	PromptErr string
-	HelpOpen  bool
+	InfoGeneration uint64
+	InfoCancel     context.CancelFunc
+	InfoWorkspace  string
+	InfoNote       string
+	InfoDetails    bool
+	Preview        bool
+	InfoOpen       bool
+	Info           backend.WorkspaceFileInfo
+	InfoPath       string
+	InfoBusy       bool
+	InfoError      string
+	GitOpen        bool
+	GitBusy        bool
+	GitData        backend.GitDiffResult
+	GitRepo        string
+	GitFile        int
+	NewOpen        bool
+	NewDir         bool
+	NewName        string
+	NewParent      string
+	Rename         bool
+	RenameOf       string
+	RenameTo       string
+	PromptErr      string
+	HelpOpen       bool
 }
 
 // gameUI keeps one local match per game kind plus the model choices.

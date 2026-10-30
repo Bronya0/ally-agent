@@ -8,6 +8,37 @@ import (
 	"testing"
 )
 
+func TestClipboardFilesOnlyPreservesConflictsAndBoundary(t *testing.T) {
+	a := newApiTestApp(t)
+	root, sourceDir := t.TempDir(), t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(sourceDir, "file.txt")
+	if err := os.WriteFile(file, []byte("incoming"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "file.txt"), []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	request := CopyFilesIntoWorkspaceRequest{TargetDir: "target", Sources: []string{sourceDir, file}, FilesOnly: true}
+	result, err := a.copyFilesIntoWorkspaceWithConfig(ConfigState{Workspace: root}, request)
+	if err != nil || len(result.Copied) != 1 || len(result.Failed) != 0 || result.Copied[0] != "target/file (2).txt" {
+		t.Fatalf("file-only clipboard paste = %+v, %v", result, err)
+	}
+	for name, want := range map[string]string{"file.txt": "original", "file (2).txt": "incoming"} {
+		data, err := os.ReadFile(filepath.Join(target, name))
+		if err != nil || string(data) != want {
+			t.Fatalf("%s = %q, %v", name, data, err)
+		}
+	}
+	request.TargetDir = "../outside"
+	if _, err := a.copyFilesIntoWorkspaceWithConfig(ConfigState{Workspace: root}, request); err == nil {
+		t.Fatal("clipboard paste escaped the workspace")
+	}
+}
+
 func TestCopyDroppedDirectoryResolvesParentAliasesBeforeSelfCheck(t *testing.T) {
 	t.Parallel()
 	a := newApiTestApp(t)
