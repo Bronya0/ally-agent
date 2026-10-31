@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -943,16 +944,131 @@ func patchChatRequestFields(body []byte, defaultKey string, turnDetails map[stri
 	if !changed {
 		return body, false
 	}
-	newMessages, err := json.Marshal(messages)
-	if err != nil {
-		return body, false
-	}
-	payload["messages"] = newMessages
-	out, err := json.Marshal(payload)
+	out, err := marshalPatchedChatRequest(payload, messages)
 	if err != nil {
 		return body, false
 	}
 	return out, true
+}
+
+// marshalPatchedChatRequest and its append helpers preserve already-encoded
+// RawMessage values while deterministically ordering object keys. json.Marshal
+// reformats every RawMessage value in the large request body; these helpers
+// append the validated bytes directly instead.
+func marshalPatchedChatRequest(payload map[string]json.RawMessage, messages []map[string]json.RawMessage) ([]byte, error) {
+	size := rawJSONObjectSize(payload) - len(payload["messages"]) + rawJSONArraySize(messages)
+	out := make([]byte, 0, size)
+	keys := make([]string, 0, len(payload))
+	for key := range payload {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out = append(out, '{')
+	for i, key := range keys {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		keyJSON, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, keyJSON...)
+		out = append(out, ':')
+		if key == "messages" {
+			out, err = appendRawObjectArray(out, messages)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		out, err = appendRawJSONValue(out, payload[key])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return append(out, '}'), nil
+}
+
+func rawJSONArraySize(objects []map[string]json.RawMessage) int {
+	if objects == nil {
+		return len("null")
+	}
+	size := 2
+	for _, object := range objects {
+		size += rawJSONObjectSize(object)
+	}
+	if len(objects) > 1 {
+		size += len(objects) - 1
+	}
+	return size
+}
+
+func appendRawObjectArray(dst []byte, objects []map[string]json.RawMessage) ([]byte, error) {
+	if objects == nil {
+		return append(dst, "null"...), nil
+	}
+	dst = append(dst, '[')
+	for i, object := range objects {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		var err error
+		dst, err = appendRawJSONObject(dst, object)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return append(dst, ']'), nil
+}
+
+func rawJSONObjectSize(fields map[string]json.RawMessage) int {
+	if fields == nil {
+		return len("null")
+	}
+	size := 2
+	for key, raw := range fields {
+		size += len(key) + len(raw) + 3 // key quotes and colon
+	}
+	if len(fields) > 1 {
+		size += len(fields) - 1 // commas between fields
+	}
+	return size
+}
+
+func appendRawJSONObject(dst []byte, fields map[string]json.RawMessage) ([]byte, error) {
+	if fields == nil {
+		return append(dst, "null"...), nil
+	}
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	dst = append(dst, '{')
+	for i, key := range keys {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		keyJSON, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		dst = append(dst, keyJSON...)
+		dst = append(dst, ':')
+		dst, err = appendRawJSONValue(dst, fields[key])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return append(dst, '}'), nil
+}
+
+func appendRawJSONValue(dst []byte, raw json.RawMessage) ([]byte, error) {
+	raw = bytes.TrimSpace(raw)
+	if !json.Valid(raw) {
+		return nil, errors.New("invalid raw JSON in chat request")
+	}
+	return append(dst, raw...), nil
 }
 
 func chatMessageRole(m map[string]json.RawMessage) string {

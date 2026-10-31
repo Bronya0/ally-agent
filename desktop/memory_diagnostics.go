@@ -23,6 +23,7 @@ func (a *desktop) memoryCounts() map[string]int {
 		counts["messages"] += len(t.Messages)
 		counts["markdownOptions"] += len(t.MD)
 		counts["attachmentImages"] += len(t.AttachmentImages)
+		counts["pendingAttachmentImages"] += len(t.PendingAttachmentImages)
 		if t.Busy {
 			counts["busyConversations"]++
 		}

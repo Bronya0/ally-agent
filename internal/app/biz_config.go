@@ -227,7 +227,7 @@ func (a *App) getConfig() (ConfigState, error) {
 
 // persistableConfig 施加落盘前的四条不变式：悬空身份收敛（展开不出东西的身份等于
 // “没有最近使用模型”）+ 派生模型字段清空（磁盘上只留 models[] 与 lastUsedModel）+
-// 隐藏页面名单清洗（只留可关闭的页面键，知识库与设置永不隐藏）+ 禁用插件名单清洗
+// 隐藏页面名单清洗（只留当前接入且可关闭的页面键）+ 禁用插件名单清洗
 // （只留合法 id）。落盘路径共用这一份，免得新加的写入方漏掉其中一条。
 func persistableConfig(cfg ConfigState) ConfigState {
 	cfg = normalizeStoredConfig(cloneConfig(cfg))
@@ -289,10 +289,10 @@ func (a *App) updateConfigAndPersist(mutate func(*ConfigState)) error {
 }
 
 // hideableModes 是允许隐藏的页面键（有序切片）：Agent（chat）与设置（settings）
-// 永不隐藏，清洗时丢弃。名单收口一处：后端清洗、前端开关与一致性测试共用同一组键
-// （前端镜像是 HIDEABLE_MODES，见 frontend/src/utils/config.mjs）。有序而不用 map：
+// 永不隐藏，清洗时丢弃。新增可隐藏页面时需同步原生导航与设置页。
+// 有序而不用 map：
 // 测试按字面量钉住时不受迭代顺序影响，改名只改这一处。
-var hideableModes = []string{"kb", "skills", "mcp", "models", "ssh", "tasks", "stats", "games", "plugins"}
+var hideableModes = []string{"skills", "mcp", "models", "ssh", "tasks", "stats", "plugins"}
 
 // isHideableMode 报告 mode 是否可关闭（chat/settings 与未知键返回 false）。
 func isHideableMode(mode string) bool {
@@ -423,8 +423,8 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 		base.DisabledPlugins = plugin.NormalizeIDList(overlay.DisabledPlugins)
 	}
 	// HiddenModes：non-nil overlay 整体替换（含空切片表示“全部可见”）；nil 表示
-	// 字段没携带（旧前端），保留 base。赋值前清洗：只留可关闭的页面键，kb 与
-	// settings 永不隐藏，未知键丢弃。
+	// 字段没携带，保留 base。赋值前清洗：只留可关闭的页面键，chat 与 settings
+	// 永不隐藏，未知键丢弃。
 	if overlay.HiddenModes != nil {
 		base.HiddenModes = sanitizeHiddenModes(overlay.HiddenModes)
 	}

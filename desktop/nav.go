@@ -13,6 +13,10 @@ func (a *desktop) changePage(page string) {
 	if !a.ready {
 		return
 	}
+	// These pages are intentionally not connected to navigation yet.
+	if page == "kb" || page == "games" {
+		return
+	}
 	if page != "chat" {
 		a.releaseFilePreview()
 	}
@@ -24,6 +28,9 @@ func (a *desktop) changePage(page string) {
 	}
 	a.page = page
 	a.pageEpoch++
+	if page == "chat" {
+		a.activateTab(a.active)
+	}
 	switch page {
 	case "plugins":
 		a.refreshPlugins()
@@ -67,8 +74,6 @@ func (a *desktop) refreshPage(page string) {
 		a.loadTaskCenter()
 	case "stats":
 		a.loadStats()
-	case "kb":
-		a.kbRefresh()
 	}
 }
 

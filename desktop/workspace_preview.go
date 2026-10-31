@@ -28,7 +28,7 @@ var errMarkupPreviewLimit = errors.New("预览内容超过大小上限")
 var markdownImageTag = regexp.MustCompile(`(?i)<img\b[^>]*>`)
 
 func emptyFileEditor() *editor.State {
-	return &editor.State{Buffer: editor.NewBuffer("")}
+	return &editor.State{Buffer: editor.NewBuffer(""), Font: ui.Font{Family: "Inter", Size: fsEditor}}
 }
 
 func documentPreviewHTML(name string, doc *documentpreview.Document, sheetName string) string {

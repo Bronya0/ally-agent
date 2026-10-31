@@ -65,9 +65,9 @@ func buttonParts(c *ui.Context, key any, label string, kind buttonKind, small bo
 
 func buttonWithState(c *ui.Context, label string, kind buttonKind, loading, disabled bool) ui.Element {
 	e, _ := uikit.ButtonWithOptions(c, nil, label, uikitVariant(kind), false, nil, uikit.ActionOptions{
-		Loading:             loading,
-		Disabled:            disabled,
-		ReserveLoadingSpace: true,
+		Loading:        loading,
+		LoadingOverlay: true,
+		Disabled:       disabled,
 	})
 	return e
 }

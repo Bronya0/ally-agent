@@ -13,7 +13,7 @@ import (
 
 func TestSanitizeHiddenModesKeepsOnlyHideable(t *testing.T) {
 	got := sanitizeHiddenModes([]string{"Skills", " kb ", "Chat", "SETTINGS", "bogus", "skills", "games", " Tasks ", "tasks", ""})
-	want := map[string]bool{"skills": true, "kb": true, "games": true, "tasks": true}
+	want := map[string]bool{"skills": true, "tasks": true}
 	if len(got) != len(want) {
 		t.Fatalf("sanitizeHiddenModes = %v, want %v", got, want)
 	}
@@ -29,17 +29,17 @@ func TestSanitizeHiddenModesKeepsOnlyHideable(t *testing.T) {
 
 func TestMergeConfigHiddenModesReplacesAndCleans(t *testing.T) {
 	// 非 nil overlay（含空切片）整体替换并清洗：chat/settings/未知键丢弃。
-	got := mergeConfig(ConfigState{}, ConfigState{HiddenModes: []string{"kb", "Chat", "bogus"}}).HiddenModes
-	if len(got) != 1 || got[0] != "kb" {
-		t.Fatalf("mergeConfig.HiddenModes = %v, want [kb]", got)
+	got := mergeConfig(ConfigState{}, ConfigState{HiddenModes: []string{"kb", "Chat", "bogus", "games", "skills"}}).HiddenModes
+	if len(got) != 1 || got[0] != "skills" {
+		t.Fatalf("mergeConfig.HiddenModes = %v, want [skills]", got)
 	}
-	got = mergeConfig(ConfigState{HiddenModes: []string{"kb"}}, ConfigState{HiddenModes: []string{}}).HiddenModes
+	got = mergeConfig(ConfigState{HiddenModes: []string{"skills"}}, ConfigState{HiddenModes: []string{}}).HiddenModes
 	if len(got) != 0 {
 		t.Fatalf("empty overlay must clear the list, got %v", got)
 	}
 	// nil overlay 表示字段没携带：保留 base。
-	got = mergeConfig(ConfigState{HiddenModes: []string{"kb"}}, ConfigState{}).HiddenModes
-	if len(got) != 1 || got[0] != "kb" {
+	got = mergeConfig(ConfigState{HiddenModes: []string{"skills"}}, ConfigState{}).HiddenModes
+	if len(got) != 1 || got[0] != "skills" {
 		t.Fatalf("nil overlay must keep base, got %v", got)
 	}
 }

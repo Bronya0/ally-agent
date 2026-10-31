@@ -260,17 +260,6 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 	if selected == 2 {
 		card(c, "settings-paths", func() {
 			sectionTitle(c, "路径")
-			ui.Row(c).Gap(gapField).AlignItems(ui.End).Children(func() {
-				ui.Column(c).Grow(1).Gap(gapTight).Children(func() {
-					fieldLabel(c, "知识库根目录")
-					uikit.Input(c.Key("kb-root"), &a.configDraft.KBRoot).Label("知识库根目录").FillWidth().Disabled(true)
-				})
-				cardFlat(c, "选择目录").OnClick(func() { a.pickKBRoot() })
-				if a.configDraft.KBRoot != "" {
-					cardDanger(c, "清除").OnClick(func() { a.configDraft.KBRoot = "" })
-				}
-			})
-			fieldNote(c, "其中 sources/ 子目录对模型只读。", a.secondaryInk())
 			if runtime.GOOS == "windows" {
 				fieldRow(c, "git-bash", "Git Bash 路径", &a.configDraft.GitBashPath, false)
 				fieldNote(c, "留空自动检测；也可手动指定，例如 C:\\Program Files\\Git\\bin\\bash.exe。", a.secondaryInk())
@@ -401,7 +390,7 @@ func (a *desktop) settingsAdvanced(c *ui.Context) {
 					continue
 				}
 				mode := mode
-				visible := !a.modeHidden(mode.id)
+				visible := !modeHiddenIn(a.configDraft.HiddenModes, mode.id)
 				if sw := switchRow(c, "visible-"+mode.id, mode.label, "", &visible); sw.Changed() {
 					a.setModeVisible(mode.id, visible)
 				}
@@ -411,7 +400,9 @@ func (a *desktop) settingsAdvanced(c *ui.Context) {
 }
 
 func (a *desktop) setModeVisible(id string, visible bool) {
-	var hidden []string
+	// Keep an explicit empty slice when the last hidden page is restored. Nil
+	// means "field omitted" to settingsConfig and would preserve the old list.
+	hidden := make([]string, 0, len(a.configDraft.HiddenModes)+1)
 	for _, name := range a.configDraft.HiddenModes {
 		if !strings.EqualFold(name, id) {
 			hidden = append(hidden, name)

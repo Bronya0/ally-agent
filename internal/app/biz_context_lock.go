@@ -50,9 +50,9 @@ import (
 //   - 只读、只记：不改请求内容，也不拦请求。
 //
 // 性能：每轮固定两次 O(前缀字节) 的哈希（几十万字节 ≈ 零点几毫秒），相对一次网络
-// 请求可以忽略；逐条 json.Marshal 是正确性要求而不是开销：供应商缓存判据是序列化
-// 后 JSON 的 token 前缀，键的存在性（omitempty 吞空串键）只有 marshal 后才量得准，
-// 所以不能改成按结构体字段手工拼帧。
+// 请求可以忽略。历史消息仍按 JSON 序列化语义计算指纹，避免 omitempty、空值和工具
+// 调用字段被手工字段表漏掉；编码器直接写入单条消息哈希，不再为每条历史消息分配完整
+// JSON 字节数组。工具头部仍只序列化一次后写入哈希。
 
 // contextLockLaneChat 是主对话的泳道名。子代理、压缩总结各自是一条独立泳道，前缀
 // 本来就完全不同，混进一条基线只会天天假警（同 cache-route-vs-replay-scope 的教训）。
@@ -129,16 +129,76 @@ func writeFramedHash(h hash.Hash, data []byte) {
 	_, _ = h.Write(data)
 }
 
-// writeContextMessageHash 把一条消息的线上结构（JSON）喂进历史段摘要：角色、正文、
-// 工具调用、思考字段都在里面，任何一处变了都算变。
-func writeContextMessageHash(h hash.Hash, message openai.ChatCompletionMessage) {
-	raw, err := json.Marshal(message)
-	if err != nil {
-		// 结构化字段里出现无法序列化的值时退化为 role + content：仍然确定，
-		// 只是粒度粗一点。
-		raw = []byte(message.Role + "\x00" + message.Content)
+type contextLockTextMessage struct {
+	Role             string                   `json:"role"`
+	Content          string                   `json:"content,omitempty"`
+	Refusal          string                   `json:"refusal,omitempty"`
+	MultiContent     []openai.ChatMessagePart `json:"-"`
+	Name             string                   `json:"name,omitempty"`
+	ReasoningContent string                   `json:"reasoning_content,omitempty"`
+	FunctionCall     *openai.FunctionCall     `json:"function_call,omitempty"`
+	ToolCalls        []openai.ToolCall        `json:"tool_calls,omitempty"`
+	ToolCallID       string                   `json:"tool_call_id,omitempty"`
+}
+
+type contextLockPartsMessage struct {
+	Role             string                   `json:"role"`
+	Content          string                   `json:"-"`
+	Refusal          string                   `json:"refusal,omitempty"`
+	MultiContent     []openai.ChatMessagePart `json:"content,omitempty"`
+	Name             string                   `json:"name,omitempty"`
+	ReasoningContent string                   `json:"reasoning_content,omitempty"`
+	FunctionCall     *openai.FunctionCall     `json:"function_call,omitempty"`
+	ToolCalls        []openai.ToolCall        `json:"tool_calls,omitempty"`
+	ToolCallID       string                   `json:"tool_call_id,omitempty"`
+}
+
+// contextLockMessageHasher keeps one encoder and one digest state for all
+// history messages in a prefix check. The local wire structs mirror
+// ChatCompletionMessage.MarshalJSON's two content shapes while bypassing its
+// per-message MarshalJSON byte slice. The digest is fixed-size, so the outer
+// history hash needs no temporary copy of the full serialized message.
+type contextLockMessageHasher struct {
+	digest hash.Hash
+	enc    *json.Encoder
+	sum    [sha256.Size]byte
+}
+
+func newContextLockMessageHasher() *contextLockMessageHasher {
+	digest := sha256.New()
+	return &contextLockMessageHasher{digest: digest, enc: json.NewEncoder(digest)}
+}
+
+func (m *contextLockMessageHasher) write(h hash.Hash, message openai.ChatCompletionMessage) {
+	m.digest.Reset()
+	if message.Content != "" && message.MultiContent != nil {
+		// Match ChatCompletionMessage.MarshalJSON's validation fallback.
+		_, _ = m.digest.Write([]byte(message.Role + "\x00" + message.Content))
+	} else {
+		var value any
+		if len(message.MultiContent) > 0 {
+			value = contextLockPartsMessage{
+				Role: message.Role, Content: message.Content, Refusal: message.Refusal,
+				MultiContent: message.MultiContent, Name: message.Name,
+				ReasoningContent: message.ReasoningContent, FunctionCall: message.FunctionCall,
+				ToolCalls: message.ToolCalls, ToolCallID: message.ToolCallID,
+			}
+		} else {
+			value = contextLockTextMessage{
+				Role: message.Role, Content: message.Content, Refusal: message.Refusal,
+				MultiContent: message.MultiContent, Name: message.Name,
+				ReasoningContent: message.ReasoningContent, FunctionCall: message.FunctionCall,
+				ToolCalls: message.ToolCalls, ToolCallID: message.ToolCallID,
+			}
+		}
+		if err := m.enc.Encode(value); err != nil {
+			// These wire structs contain only JSON-safe fields. Keep the old
+			// deterministic fallback if that contract changes in the future.
+			m.digest.Reset()
+			_, _ = m.digest.Write([]byte(message.Role + "\x00" + message.Content))
+		}
 	}
-	writeFramedHash(h, raw)
+	writeFramedHash(h, m.digest.Sum(m.sum[:0]))
 }
 
 // compareContextFingerprint 比对基准与本次请求：头部不同 → "head"；比基准短 →
@@ -204,12 +264,13 @@ func (a *App) noteRequestPrefix(sessionID, lane string, cfg ConfigState, message
 		overlap = base.count
 	}
 	tail := sha256.New()
+	messageHasher := newContextLockMessageHasher()
 	for i := 0; i < overlap; i++ {
-		writeContextMessageHash(tail, messages[headCount+i])
+		messageHasher.write(tail, messages[headCount+i])
 	}
 	overlapHash := hex.EncodeToString(tail.Sum(nil))
 	for i := headCount + overlap; i < len(messages); i++ {
-		writeContextMessageHash(tail, messages[i])
+		messageHasher.write(tail, messages[i])
 	}
 	fp := contextFingerprint{head: headHash, tail: hex.EncodeToString(tail.Sum(nil)), count: tailCount}
 

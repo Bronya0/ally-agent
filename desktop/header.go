@@ -104,8 +104,8 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 							a.cancelOAuthWhenLeaving()
 						}
 						a.releaseFilePreview()
-						a.active = idx
 						a.page = "chat"
+						a.activateTab(idx)
 						a.refreshFiles()
 						a.refreshSessionFooter(tab)
 						a.refreshGit(tab)
@@ -167,7 +167,7 @@ func (a *desktop) headerActions(c *ui.Context) {
 	add.Disabled(!a.ready)
 	a.workspaceMenu(c, add)
 
-	pageOK := a.page == "chat" || a.page == "kb" || strings.HasPrefix(a.page, "plugin:")
+	pageOK := a.page == "chat" || strings.HasPrefix(a.page, "plugin:")
 	// The explorer toggle carries the theme colour even while it is off: a muted
 	// glyph made the header's folder read as decoration. Off is half accent, on is
 	// the full accent, so the state reads from the stroke alone — no fill behind it.
@@ -274,6 +274,7 @@ func (a *desktop) closeWorkspaceTab(index int) {
 	if a.active >= len(a.tabs) {
 		a.active = len(a.tabs) - 1
 	}
+	a.activateTab(a.active)
 	if a.page == "chat" {
 		a.refreshFiles()
 		if t := a.current(); t != nil {

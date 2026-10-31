@@ -19,22 +19,24 @@ type modeItem struct {
 
 var baseModes = []modeItem{
 	{"chat", "Agent", "chat"},
-	{"kb", "知识库", "kb"},
 	{"skills", "技能", "skills"},
 	{"mcp", "MCP 服务", "mcp"},
 	{"models", "模型", "models"},
 	{"ssh", "SSH 集群", "ssh"},
 	{"tasks", "任务中心", "tasks"},
 	{"stats", "Token 统计", "stats"},
-	{"games", "人机对战", "sword"},
 	{"plugins", "插件", "plugins"},
 }
 
 func (a *desktop) modeHidden(id string) bool {
+	return modeHiddenIn(a.config.HiddenModes, id)
+}
+
+func modeHiddenIn(hiddenModes []string, id string) bool {
 	if id == "chat" || id == "settings" {
 		return false
 	}
-	for _, name := range a.config.HiddenModes {
+	for _, name := range hiddenModes {
 		if strings.EqualFold(strings.TrimSpace(name), id) {
 			return true
 		}
@@ -136,9 +138,6 @@ func (a *desktop) railModes(c *ui.Context, expanded bool) {
 			continue
 		}
 		active := a.page == mode.id
-		if mode.id == "kb" && strings.HasPrefix(a.page, "kb") {
-			active = true
-		}
 		if mode.id == "chat" && strings.HasPrefix(a.page, "plugin:") {
 			active = false
 		}

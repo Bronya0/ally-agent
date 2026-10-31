@@ -758,7 +758,8 @@ func (h *fileCountHeap) Items() []FileCount {
 // child process even when a source line is unusually large. A zero limit
 // discards the record while still draining it.
 func readGrepRecord(reader *bufio.Reader, maxRecordBytes int) (line []byte, recordTruncated bool, bytesRead int, err error) {
-	var carry []byte
+	var carryStorage [64]byte
+	carry := carryStorage[:0]
 	lineNumber := 0
 	for {
 		chunk, readErr := reader.ReadSlice('\n')
@@ -767,19 +768,10 @@ func readGrepRecord(reader *bufio.Reader, maxRecordBytes int) (line []byte, reco
 		// when the text or submatch array is too large to keep. JSON escapes prevent
 		// an embedded source string from forging the literal field spelling.
 		if lineNumber == 0 {
-			probe := append(carry, chunk...)
-			key := []byte(`"line_number":`)
-			if at := bytes.Index(probe, key); at >= 0 {
-				v := bytes.TrimLeft(probe[at+len(key):], " \t")
-				end := 0
-				for end < len(v) && v[end] >= '0' && v[end] <= '9' {
-					end++
-				}
-				if end > 0 && end < len(v) {
-					lineNumber, _ = strconv.Atoi(string(v[:end]))
-				}
+			lineNumber = grepRecordLineNumber(carry, chunk)
+			if lineNumber == 0 {
+				carry = retainGrepRecordTail(carry, chunk)
 			}
-			carry = append(carry[:0], probe[max(0, len(probe)-64):]...)
 		}
 
 		if maxRecordBytes <= 0 {
@@ -827,6 +819,63 @@ func readGrepRecord(reader *bufio.Reader, maxRecordBytes int) (line []byte, reco
 		}})
 	}
 	return line, recordTruncated, bytesRead, err
+}
+
+const grepLineNumberKey = `"line_number":`
+
+// grepRecordLineNumber searches the current chunk directly and only copies a
+// small prefix when the JSON key or its value straddles a chunk boundary.
+func grepRecordLineNumber(carry, chunk []byte) int {
+	if at := bytes.Index(chunk, []byte(grepLineNumberKey)); at >= 0 {
+		if lineNumber, ok := parseGrepLineNumber(chunk[at+len(grepLineNumberKey):]); ok {
+			return lineNumber
+		}
+	}
+	if len(carry) == 0 || len(chunk) == 0 {
+		return 0
+	}
+	var boundary [128]byte // carry is at most 64 bytes; inspect another 64 only
+	n := copy(boundary[:], carry)
+	n += copy(boundary[n:], chunk[:min(len(chunk), len(boundary)-n)])
+	if at := bytes.Index(boundary[:n], []byte(grepLineNumberKey)); at >= 0 {
+		if lineNumber, ok := parseGrepLineNumber(boundary[at+len(grepLineNumberKey) : n]); ok {
+			return lineNumber
+		}
+	}
+	return 0
+}
+
+func parseGrepLineNumber(value []byte) (int, bool) {
+	value = bytes.TrimLeft(value, " \t")
+	end := 0
+	for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+		end++
+	}
+	if end == 0 || end == len(value) {
+		return 0, false
+	}
+
+	maxInt := int(^uint(0) >> 1)
+	lineNumber := 0
+	for _, digit := range value[:end] {
+		n := int(digit - '0')
+		if lineNumber > (maxInt-n)/10 {
+			return 0, false
+		}
+		lineNumber = lineNumber*10 + n
+	}
+	return lineNumber, true
+}
+
+func retainGrepRecordTail(dst, chunk []byte) []byte {
+	const tailBytes = 64
+	if len(chunk) >= tailBytes {
+		return append(dst[:0], chunk[len(chunk)-tailBytes:]...)
+	}
+	keep := min(len(dst), tailBytes-len(chunk))
+	n := copy(dst[:keep], dst[len(dst)-keep:])
+	n += copy(dst[n:], chunk)
+	return dst[:n]
 }
 
 func failureError(stderr string) error {

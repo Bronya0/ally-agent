@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"time"
@@ -36,7 +38,9 @@ type conversation struct {
 	PendingAttachments                                []backend.AttachmentInput
 	AttachmentLoading                                 bool
 	AttachmentImages                                  map[string]*ui.Bitmap
+	PendingAttachmentImages                           map[string]*ui.Bitmap
 	AttachmentImageVersions                           map[string]uint64
+	AttachmentImageJobs                               int
 	AskID                                             string
 	Questions                                         []backend.AskQuestion
 	Answers                                           []string
@@ -118,6 +122,8 @@ type desktop struct {
 	fileChildren                            map[string][]backend.FileEntry
 	fileLoading                             map[string]bool
 	openSessions                            map[string]*conversation
+	attachmentImageCacheSessions            []string
+	attachmentImageJobSessions              map[*conversation]struct{}
 	// tabStrips keeps one scroll position and one press per tab strip, by id
 	// (see tabStrip): a strip's offset has to live in app state for the wheel to
 	// move it, and its press outlives a frame.
@@ -376,6 +382,7 @@ func (a *desktop) finishQuit() {
 			log.Printf("shutdown: %v", err)
 		}
 		a.win.Update(func() {
+			a.discardAttachmentImagesOnShutdown()
 			a.releaseWorkspaceFiles()
 			a.releaseAllHTMLPreviews()
 			if a.pluginHost != nil {
@@ -418,8 +425,8 @@ func (a *desktop) newConversation(workspace string) {
 	t := a.freshConversation(workspace)
 	a.composerFocus = t.ID
 	a.tabs = append(a.tabs, t)
-	a.active = len(a.tabs) - 1
 	a.page = "chat"
+	a.activateTab(len(a.tabs) - 1)
 	a.refreshFiles()
 	a.refreshSessionFooter(t)
 	a.refreshGit(t)
@@ -458,10 +465,8 @@ func (a *desktop) rememberSession(t *conversation) {
 	}
 	if !t.Busy && len(t.PendingAttachments) == 0 {
 		t.MD = nil
-		for id := range t.AttachmentImageVersions {
-			t.AttachmentImageVersions[id]++
-		}
-		t.AttachmentImages = nil
+		a.releaseAttachmentImages(t)
+		a.forgetAttachmentImageCache(t.ID)
 	}
 	// Keep only the most recent disposable transcript. Unsaved input and
 	// running work must survive; older clean sessions can reload from disk.
@@ -488,16 +493,21 @@ func (a *desktop) newSession() {
 	next.Model = t.Model
 	next.Reasoning = t.Reasoning
 	a.composerFocus = next.ID
-	if t.Busy || t.uiState().CompactBusy {
+	keepInTabs := t.Busy || t.uiState().CompactBusy
+	if keepInTabs {
 		// Active sessions must stay in tabs: event dispatch routes their
 		// streaming output and completion by session ID through this list.
 		a.tabs = append(a.tabs, next)
-		a.active = len(a.tabs) - 1
 	} else {
 		a.rememberSession(t)
 		a.tabs[a.active] = next
 	}
 	a.page = "chat"
+	if keepInTabs {
+		a.activateTab(len(a.tabs) - 1)
+	} else {
+		a.activateTab(a.active)
+	}
 	a.notifySuccess("已新建会话")
 	if a.win != nil {
 		a.refreshSessionFooter(next)
@@ -514,8 +524,8 @@ func (a *desktop) openWorkspace(workspace string) {
 	}
 	for i, t := range a.tabs {
 		if strings.EqualFold(t.Workspace, workspace) {
-			a.active = i
 			a.page = "chat"
+			a.activateTab(i)
 			a.refreshFiles()
 			a.refreshSessionFooter(t)
 			a.refreshGit(t)
@@ -610,10 +620,9 @@ func (a *desktop) inject(t *conversation, text string) bool {
 	if display == "" && len(attachments) > 0 {
 		display = "附件：" + attachments[0].Name
 	}
-	raw, _ := json.Marshal(attachments)
-	var displayAttachments []any
-	_ = json.Unmarshal(raw, &displayAttachments)
+	displayAttachments := attachmentDisplayRows(attachments)
 	t.Messages = append(t.Messages, map[string]any{"role": "user", "content": display, "attachments": displayAttachments})
+	commitPendingPreviews(t)
 	t.PendingAttachments = nil
 	t.Draft = ""
 	t.Status = "已追加，本轮继续执行…"
@@ -686,10 +695,9 @@ func (a *desktop) send(t *conversation, text string) bool {
 	if len(t.Messages) == 0 {
 		t.Title = short(display, 36)
 	}
-	raw, _ := json.Marshal(attachments)
-	var displayAttachments []any
-	_ = json.Unmarshal(raw, &displayAttachments)
+	displayAttachments := attachmentDisplayRows(attachments)
 	t.Messages = append(t.Messages, map[string]any{"role": "user", "content": display, "attachments": displayAttachments})
+	commitPendingPreviews(t)
 	t.PendingAttachments = nil
 	t.Busy = true
 	t.Draft = ""
@@ -718,14 +726,39 @@ func (a *desktop) send(t *conversation, text string) bool {
 	return true
 }
 func snapshot(t *conversation) backend.SessionSnapshot {
-	// JSON makes nested tool payloads independent of subsequent UI mutation.
-	data, _ := json.Marshal(t.Messages)
+	// Detach the JSON-shaped transcript before the asynchronous save. Copying
+	// maps/slices directly avoids encoding and decoding the entire conversation
+	// on every persisted UI event. Unusual values still use a JSON round-trip so
+	// the snapshot keeps the old normalization behavior for them.
 	var msgs []map[string]any
-	_ = json.Unmarshal(data, &msgs)
+	if t.Messages != nil {
+		msgs = make([]map[string]any, len(t.Messages))
+		active := make(map[snapshotCloneVisit]struct{})
+		for i, message := range t.Messages {
+			if message == nil {
+				continue
+			}
+			messageCopy := make(map[string]any, len(message))
+			for key, value := range message {
+				messageCopy[key] = value
+			}
+			// Drop large command output before recursively copying it. This only
+			// mutates the shallow copy; the live transcript remains unchanged.
+			retainLocalCommandSummary(messageCopy)
+			clear(active)
+			cloned, err := cloneSnapshotJSONValue(messageCopy, 0, active)
+			if err != nil {
+				// Match the former failed Marshal/Unmarshal path: do not persist a
+				// partially cloned transcript.
+				msgs = nil
+				break
+			}
+			msgs[i], _ = cloned.(map[string]any)
+		}
+	}
 	// Stored image references are durable; avoid copying large base64 payloads
 	// into every snapshot once the backend confirms the image was saved.
 	for _, m := range msgs {
-		retainLocalCommandSummary(m)
 		for _, att := range messageAttachmentList(m) {
 			if str(att, "imageRef") != "" {
 				delete(att, "dataUrl")
@@ -734,6 +767,123 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 	}
 	return backend.SessionSnapshot{ID: t.ID, Title: t.Title, Draft: t.Draft, Workspace: t.Workspace, CreatedAt: t.Created, UpdatedAt: time.Now().UnixMilli(), ContextTokens: t.ContextTokens, HasSnapshot: true, Messages: msgs}
 }
+
+const maxSnapshotCloneDepth = 10_000
+
+type snapshotCloneVisit struct {
+	kind reflect.Kind
+	ptr  uintptr
+}
+
+// cloneSnapshotJSONValue detaches the generic JSON values used by transcript
+// messages. The bounded recursion also turns cycles into the same all-or-none
+// snapshot failure the previous JSON marshal path produced.
+func cloneSnapshotJSONValue(value any, depth int, active map[snapshotCloneVisit]struct{}) (any, error) {
+	if depth > maxSnapshotCloneDepth {
+		return nil, fmt.Errorf("session snapshot nesting exceeds %d", maxSnapshotCloneDepth)
+	}
+	switch value := value.(type) {
+	case map[string]any:
+		if value == nil {
+			return map[string]any(nil), nil
+		}
+		visit := snapshotCloneVisit{kind: reflect.Map, ptr: reflect.ValueOf(value).Pointer()}
+		if _, exists := active[visit]; exists {
+			return nil, fmt.Errorf("session snapshot contains a cycle")
+		}
+		active[visit] = struct{}{}
+		defer delete(active, visit)
+		mapCopy := make(map[string]any, len(value))
+		for key, nested := range value {
+			cloned, err := cloneSnapshotJSONValue(nested, depth+1, active)
+			if err != nil {
+				return nil, err
+			}
+			mapCopy[key] = cloned
+		}
+		return mapCopy, nil
+	case []any:
+		if value == nil {
+			return []any(nil), nil
+		}
+		visit := snapshotCloneVisit{kind: reflect.Slice, ptr: reflect.ValueOf(value).Pointer()}
+		if len(value) > 0 {
+			if _, exists := active[visit]; exists {
+				return nil, fmt.Errorf("session snapshot contains a cycle")
+			}
+			active[visit] = struct{}{}
+			defer delete(active, visit)
+		}
+		sliceCopy := make([]any, len(value))
+		for i, nested := range value {
+			cloned, err := cloneSnapshotJSONValue(nested, depth+1, active)
+			if err != nil {
+				return nil, err
+			}
+			sliceCopy[i] = cloned
+		}
+		return sliceCopy, nil
+	case []map[string]any:
+		if value == nil {
+			return []any(nil), nil
+		}
+		visit := snapshotCloneVisit{kind: reflect.Slice, ptr: reflect.ValueOf(value).Pointer()}
+		if len(value) > 0 {
+			if _, exists := active[visit]; exists {
+				return nil, fmt.Errorf("session snapshot contains a cycle")
+			}
+			active[visit] = struct{}{}
+			defer delete(active, visit)
+		}
+		sliceCopy := make([]any, len(value))
+		for i, nested := range value {
+			cloned, err := cloneSnapshotJSONValue(nested, depth+1, active)
+			if err != nil {
+				return nil, err
+			}
+			sliceCopy[i] = cloned
+		}
+		return sliceCopy, nil
+	case nil, bool, string:
+		return value, nil
+	case float64:
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return nil, fmt.Errorf("session snapshot contains a non-finite number")
+		}
+		return value, nil
+	case int:
+		return float64(value), nil
+	case int8:
+		return float64(value), nil
+	case int16:
+		return float64(value), nil
+	case int32:
+		return float64(value), nil
+	case int64:
+		return float64(value), nil
+	case uint:
+		return float64(value), nil
+	case uint8:
+		return float64(value), nil
+	case uint16:
+		return float64(value), nil
+	case uint32:
+		return float64(value), nil
+	case uint64:
+		return float64(value), nil
+	default:
+		data, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		var cloned any
+		if err := json.Unmarshal(data, &cloned); err != nil {
+			return nil, err
+		}
+		return cloned, nil
+	}
+}
+
 func (a *desktop) persist(t *conversation) {
 	t.SnapshotQueued = true
 	s := snapshot(t)
@@ -764,8 +914,8 @@ func (a *desktop) openSession(id string) {
 	}
 	for i, t := range a.tabs {
 		if t.ID == id {
-			a.active = i
 			a.page = "chat"
+			a.activateTab(i)
 			a.refreshFiles()
 			a.refreshSessionFooter(t)
 			a.refreshGit(t)
@@ -774,9 +924,6 @@ func (a *desktop) openSession(id string) {
 	}
 	if t := a.openSessions[id]; t != nil {
 		a.showSession(t)
-		if t.AttachmentImages == nil && a.win != nil {
-			a.loadSessionAttachmentImages(t)
-		}
 		return
 	}
 	go func() {
@@ -808,7 +955,6 @@ func (a *desktop) openSession(id string) {
 			}
 			restoreRoundStats(t)
 			a.showSession(t)
-			a.loadSessionAttachmentImages(t)
 		})
 	}()
 }
@@ -829,7 +975,9 @@ func (a *desktop) showSession(next *conversation) {
 			if next.Model == "" {
 				next.Model = t.Model
 			}
-			a.tabs[i], a.active, a.page = next, i, "chat"
+			a.tabs[i] = next
+			a.page = "chat"
+			a.activateTab(i)
 			a.refreshFiles()
 			a.refreshSessionFooter(next)
 			a.refreshGit(next)
@@ -837,7 +985,8 @@ func (a *desktop) showSession(next *conversation) {
 		}
 	}
 	a.tabs = append(a.tabs, next)
-	a.active, a.page = len(a.tabs)-1, "chat"
+	a.page = "chat"
+	a.activateTab(len(a.tabs) - 1)
 	a.refreshFiles()
 	a.refreshSessionFooter(next)
 	a.refreshGit(next)
@@ -1030,7 +1179,7 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 			} else {
 				buffer := editor.NewBuffer(loadedText)
 				buffer.SetLanguage(editor.LanguageFor(path))
-				newFile.Editor = &editor.State{Buffer: buffer, Font: ui.Font{Family: "Inter", Size: 13}, Label: "文件编辑器", NoScrollPastEnd: true}
+				newFile.Editor = &editor.State{Buffer: buffer, Font: ui.Font{Family: "Inter", Size: fsEditor}, Label: "文件编辑器", NoScrollPastEnd: true}
 				newFile.Assist = assist
 			}
 			if newFile.Document != nil {

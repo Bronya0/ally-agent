@@ -38,12 +38,17 @@ func (a *desktop) confirmAction(title, detail string, run func() error, after fu
 
 func (a *desktop) deleteSession(id, label string) {
 	a.confirmAction("删除会话", label, func() error { return a.core.DeleteSession(id) }, func() {
+		if t := a.openSessions[id]; t != nil {
+			a.releaseAttachmentImages(t)
+		}
 		delete(a.openSessions, id)
+		a.forgetAttachmentImageCache(id)
 		a.releaseSessionHTMLPreviews(id)
 		for i, t := range a.tabs {
 			if t.ID != id {
 				continue
 			}
+			a.releaseAttachmentImages(t)
 			next := a.freshConversation(t.Workspace)
 			next.Model, next.Reasoning = t.Model, t.Reasoning
 			a.tabs[i] = next

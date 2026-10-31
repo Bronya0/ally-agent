@@ -254,21 +254,23 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 		case "agent":
 			fieldNote(c, "使用本机 ~/.ssh/config、默认私钥或 SSH Agent，无需填写密码或私钥。", a.secondaryInk())
 		case "key":
-			ui.Row(c).Gap(gapField).AlignItems(ui.End).Children(func() {
-				ui.Column(c).Grow(1).Children(func() { fieldRow(c, "ssh-key", "私钥路径", &d.KeyPath, false) })
-				flat(c, "选择文件").OnClick(func() {
-					go func() {
-						p, err := a.core.SelectPrivateKeyFile()
-						if err != nil {
-							a.fail(err)
-							return
-						}
-						if p != "" {
-							a.win.Update(func() { d.KeyPath = p })
-						}
-					}()
+			ui.Field(c.Key("field-ssh-key"), "私钥路径", func() {
+				ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
+					uikit.Input(c, &d.KeyPath).FillWidth().MinWidth(0).Placeholder(fieldExample("ssh-key", "私钥路径")).FontSize(fsBody)
+					flat(c, "选择文件").Shrink(0).OnClick(func() {
+						go func() {
+							p, err := a.core.SelectPrivateKeyFile()
+							if err != nil {
+								a.fail(err)
+								return
+							}
+							if p != "" {
+								a.win.Update(func() { d.KeyPath = p })
+							}
+						}()
+					})
 				})
-			})
+			}).JustifySelf(ui.Stretch).AlignSelf(ui.Stretch).MinWidth(0).Shrink(0)
 			fieldRow(c, "ssh-passphrase", "私钥口令（可选）", &d.Password, true)
 			fieldNote(c, "明文保存在本机配置目录，请勿共享该文件。", a.secondaryInk())
 		case "password":

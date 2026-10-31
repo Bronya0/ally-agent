@@ -20,7 +20,11 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	start, end := historyMessageWindow(t, a.messageWindowSize())
 	st.windowStart, st.windowEnd, st.windowBuilding = start, end, true
 	defer func() { st.windowBuilding = false }()
-	st.RoundAt = map[int]int{}
+	if st.RoundAt == nil {
+		st.RoundAt = make(map[int]int)
+	} else {
+		clear(st.RoundAt)
+	}
 	for idx, stat := range st.Round {
 		if stat != nil && stat.Done {
 			st.RoundAt[roundStatsIndex(t, idx)] = idx
@@ -354,11 +358,11 @@ func (a *desktop) collapsiblePrompt(c *ui.Context, t *conversation, i int, conte
 
 func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[string]any) {
 	content := str(m, "content")
-	attachments := messageAttachmentList(m)
-	if content == "" && len(attachments) == 0 {
+	attachmentCount := messageAttachmentCount(m)
+	if content == "" && attachmentCount == 0 {
 		return
 	}
-	if len(attachments) > 0 {
+	if attachmentCount > 0 {
 		a.messageAttachments(c, t, m)
 	}
 	if content == "" {

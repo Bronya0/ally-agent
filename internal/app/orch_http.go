@@ -804,9 +804,11 @@ func (a *App) waitHTTPRateLimit(ctx context.Context, target *url.URL) error {
 }
 
 func readLimited(r io.Reader, limit int) ([]byte, bool, error) {
-	// Pre-grow to the limit so we don't pay for 2-3 reallocations as the
-	// buffer climbs through 64K → 128K → 256K on typical HTML/JSON bodies.
-	buf := bytes.NewBuffer(make([]byte, 0, limit+1))
+	// Keep the ordinary HTTP request's existing allocation size, but don't let
+	// SaveTo or a caller-supplied larger limit reserve the full response cap for
+	// a small body.
+	const initialHTTPBodyBufferBytes = defaultHTTPMaxBody + 1
+	buf := bytes.NewBuffer(make([]byte, 0, min(limit+1, initialHTTPBodyBufferBytes)))
 	_, err := io.Copy(buf, io.LimitReader(r, int64(limit)+1))
 	if err != nil {
 		return nil, false, err

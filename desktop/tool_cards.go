@@ -1151,7 +1151,9 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 	row.Children(func() {
 		for side := 0; side < 2; side++ {
 			ui.ScrollHorizontal(c.Key(fmt.Sprintf("%s-side-%d", key, side))).Grow(1).Basis(0).MinWidth(0).Children(func() {
-				ui.Column(c).Children(func() {
+				// Keep the content column at its max-content width so each
+				// no-wrap row contributes its full line width to the scroll range.
+				ui.Column(c).Shrink(0).Children(func() {
 					for _, pair := range visible {
 						if strings.HasPrefix(pair.left, "@@") || strings.HasPrefix(pair.left, "---") || strings.HasPrefix(pair.right, "+++") {
 							continue

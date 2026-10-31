@@ -63,9 +63,11 @@ type ActionOptions struct {
 	Tone                                    Tone
 	Style                                   ActionStyle
 	Small, Round, Circle, Disabled, Loading bool
-	ReserveLoadingSpace                     bool
-	Selected                                bool
-	Icon                                    *ui.SVG
+	// LoadingOverlay replaces the visible label/icon with a centered spinner
+	// while preserving their layout size and the button's width.
+	LoadingOverlay bool
+	Selected       bool
+	Icon           *ui.SVG
 }
 
 // Action uses ButtonBase for activation, keyboard and accessibility.
@@ -127,12 +129,22 @@ func actionParts(c *ui.Context, label string, o ActionOptions) (ui.Element, ui.E
 	}
 	var text ui.Element
 	b.Children(func() {
+		if o.Loading && o.LoadingOverlay {
+			if o.Icon != nil {
+				ui.Icon(c, o.Icon).Size(16, 16).TextColor(ink).Opacity(0)
+			}
+			if label != "" && !o.Circle {
+				text = ui.Text(c, label).FontSize(14).TextColor(ink).SingleLine().Unselectable().Opacity(0)
+			}
+			ui.Box(c).Absolute().Left(0).Right(0).Top(0).Bottom(0).Center().Children(func() {
+				ui.Spinner(c).Size(14, 14).TextColor(ink)
+			})
+			return
+		}
 		if o.Loading {
 			ui.Spinner(c).Size(14, 14).TextColor(ink)
 		} else if o.Icon != nil {
 			ui.Icon(c, o.Icon).Size(16, 16).TextColor(ink)
-		} else if o.ReserveLoadingSpace {
-			ui.Box(c).Size(14, 14).Shrink(0)
 		}
 		if label != "" && !o.Circle {
 			text = ui.Text(c, label).FontSize(14).TextColor(ink).SingleLine().Unselectable()

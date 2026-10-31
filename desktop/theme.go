@@ -75,6 +75,7 @@ const (
 	fsPageTitle float32 = 20
 	fsSection   float32 = 13
 	fsBody      float32 = 14
+	fsEditor    float32 = 15
 	fsSmall     float32 = 13
 	fsTiny      float32 = 12
 	// Chat-parity tokens, mirroring main's CSS variables (--ally-tool-font-size

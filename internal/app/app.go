@@ -628,8 +628,8 @@ type ConfigState struct {
 	// 每条落盘路径共用同一条规则；加载侧直接读配置，不另设内存镜像。
 	DisabledPlugins []string `json:"disabledPlugins,omitempty"`
 	// HiddenModes lists mode-rail pages the user hid in Settings →
-	// Advanced → Page visibility. Values are mode keys (kb, skills, mcp,
-	// models, ssh, stats, games); chat and settings are never hidden — the
+	// Advanced → Page visibility. Values are supported mode keys (skills, mcp,
+	// models, ssh, tasks, stats, plugins); chat and settings are never hidden — the
 	// sanitizer drops them. The frontend filters the sider menu and bounces
 	// an open page that gets hidden back to a visible one; no other
 	// behavior keys off this list.

@@ -864,7 +864,7 @@ func cardFlat(c *ui.Context, s string) ui.Element {
 	return uikit.Action(c.Key("card-action-"+s), s, uikit.ActionOptions{Style: uikit.Quaternary, Small: true})
 }
 func cardFlatBusy(c *ui.Context, s string, loading bool) ui.Element {
-	return uikit.Action(c.Key("card-action-"+s), s, uikit.ActionOptions{Style: uikit.Quaternary, Small: true, Loading: loading, ReserveLoadingSpace: true})
+	return uikit.Action(c.Key("card-action-"+s), s, uikit.ActionOptions{Style: uikit.Quaternary, Small: true, Loading: loading, LoadingOverlay: true})
 }
 func cardFlatKey(c *ui.Context, key any, s string) ui.Element { return cardFlat(c.Key(key), s) }
 func cardPrimary(c *ui.Context, s string) ui.Element {

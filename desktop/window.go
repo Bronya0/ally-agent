@@ -70,8 +70,6 @@ func (a *desktop) pageContent(c *ui.Context, width float32) {
 		a.pluginPageBody(c)
 	case a.page == "chat":
 		a.chatPage(c, width)
-	case a.page == "kb":
-		a.kbPage(c, width)
 	case a.page == "settings":
 		a.panelPage(c, "设置", "", nil, a.settingsPageBody)
 	case a.page == "models":
@@ -90,8 +88,6 @@ func (a *desktop) pageContent(c *ui.Context, width float32) {
 		a.panelPage(c, "任务中心", "", nil, a.tasksPageBody)
 	case a.page == "stats":
 		a.panelPage(c, "用量统计", "", nil, a.statsPageBody)
-	case a.page == "games":
-		a.panelPage(c, "人机对战", "", nil, a.gamesPageBody)
 	default:
 		emptyState(c, "页面不存在", a.page, a.secondaryInk())
 	}
@@ -215,9 +211,6 @@ func (a *desktop) pickKBRoot() {
 			a.config.KBRoot = p
 			cfg := a.config
 			a.saveConfig(cfg)
-			a.openWorkspace(p)
-			a.releaseFilePreview()
-			a.page = "kb"
 		})
 	}()
 }

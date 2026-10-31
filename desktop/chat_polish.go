@@ -70,7 +70,8 @@ func (a *desktop) activateWorkspaceTab(index int) {
 	if a.page == "models" {
 		a.cancelOAuthWhenLeaving()
 	}
-	a.active, a.page = index, "chat"
+	a.page = "chat"
+	a.activateTab(index)
 	a.refreshFiles()
 	a.refreshSessionFooter(a.tabs[index])
 	a.refreshGit(a.tabs[index])

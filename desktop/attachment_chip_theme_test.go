@@ -22,7 +22,7 @@ func TestPendingAttachmentUsesThemeSurface(t *testing.T) {
 			return im
 		}())
 		defer bm.ReleasePixels()
-		conv := &conversation{PendingAttachments: []backend.AttachmentInput{{ID: "image", Name: "截图.png", Kind: "image"}}, AttachmentImages: map[string]*ui.Bitmap{"image": bm}}
+		conv := &conversation{PendingAttachments: []backend.AttachmentInput{{ID: "image", Name: "截图.png", Kind: "image"}}, PendingAttachmentImages: map[string]*ui.Bitmap{"image": bm}}
 		tt := ui.NewTester(func(c *ui.Context) {
 			c.SetTheme(a.theme())
 			ui.Column(c).Fill().Padding(10).Background(c.Theme().Background).Children(func() { a.pendingAttachmentRow(c, conv) })
@@ -40,7 +40,7 @@ func TestPendingAttachmentUsesThemeSurface(t *testing.T) {
 			t.Fatal(err)
 		}
 		tt.Frame()
-		if len(conv.PendingAttachments) != 0 || len(conv.AttachmentImages) != 0 {
+		if len(conv.PendingAttachments) != 0 || len(conv.PendingAttachmentImages) != 0 {
 			t.Fatal("remove did not clear attachment")
 		}
 	}

@@ -31,6 +31,7 @@ const maxAttachments = 8
 const maxAttachmentTextBytes = 200 * 1024
 const maxModelImageBytes = 5 * 1024 * 1024
 const maxOriginalImageBytes = 64 * 1024 * 1024
+const maxAttachmentImageCacheSessions = 2
 
 // Limits for a picture that goes to a model. The Vue build did this in App.vue's
 // encodeModelImage (2048px, JPEG quality 0.7); the native build has no frontend
@@ -58,6 +59,52 @@ func init() {
 type preparedAttachment struct {
 	input   backend.AttachmentInput
 	preview image.Image
+}
+
+// attachmentDisplayRows mirrors AttachmentInput's JSON shape without
+// serializing and decoding DataURL (which may contain several megabytes of
+// base64 image data) just to obtain UI maps.
+func attachmentDisplayRows(inputs []backend.AttachmentInput) []any {
+	if len(inputs) == 0 {
+		return nil
+	}
+	rows := make([]any, 0, len(inputs))
+	for _, input := range inputs {
+		row := make(map[string]any, 12)
+		if input.ID != "" {
+			row["id"] = input.ID
+		}
+		row["name"] = input.Name
+		if input.Type != "" {
+			row["type"] = input.Type
+		}
+		if input.Size != 0 {
+			row["size"] = float64(input.Size)
+		}
+		if input.Kind != "" {
+			row["kind"] = input.Kind
+		}
+		if input.DataURL != "" {
+			row["dataUrl"] = input.DataURL
+		}
+		if input.ImageRef != "" {
+			row["imageRef"] = input.ImageRef
+		}
+		if input.Text != "" {
+			row["text"] = input.Text
+		}
+		if input.Truncated {
+			row["truncated"] = true
+		}
+		if input.Error != "" {
+			row["error"] = input.Error
+		}
+		if input.FilePath != "" {
+			row["filePath"] = input.FilePath
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 // prepareAttachment runs off the UI thread and only reads a bounded amount of
@@ -306,8 +353,10 @@ func (a *desktop) finishAttachments(t *conversation, prepared []preparedAttachme
 		}
 		t.PendingAttachments = append(t.PendingAttachments, p.input)
 		if p.preview != nil {
-			ensureAttachmentMaps(t)
-			t.AttachmentImages[p.input.ID] = ui.NewBitmap(p.preview)
+			if t.PendingAttachmentImages == nil {
+				t.PendingAttachmentImages = map[string]*ui.Bitmap{}
+			}
+			t.PendingAttachmentImages[p.input.ID] = ui.NewBitmap(p.preview)
 		}
 		if p.input.Error != "" {
 			a.notify(p.input.Error)
@@ -318,6 +367,20 @@ func (a *desktop) finishAttachments(t *conversation, prepared []preparedAttachme
 	}
 }
 
+// commitPendingPreviews moves the previews of just-sent attachments into the
+// transcript image cache, where message tiles read them. Unsent previews live
+// outside that LRU-managed cache, so evicting history bitmaps never drops the
+// thumbnail of an attachment that is still waiting to be sent.
+func commitPendingPreviews(t *conversation) {
+	if len(t.PendingAttachmentImages) > 0 {
+		ensureAttachmentMaps(t)
+		for id, bm := range t.PendingAttachmentImages {
+			t.AttachmentImages[id] = bm
+		}
+	}
+	t.PendingAttachmentImages = nil
+}
+
 func ensureAttachmentMaps(t *conversation) {
 	if t.AttachmentImages == nil {
 		t.AttachmentImages = map[string]*ui.Bitmap{}
@@ -326,11 +389,162 @@ func ensureAttachmentMaps(t *conversation) {
 		t.AttachmentImageVersions = map[string]uint64{}
 	}
 }
+
+// activateTab keeps decoded attachment bitmaps for only the active and most
+// recently used chat. Message references remain in the transcript, so an
+// evicted preview can be reconstructed when that tab is selected again.
+func (a *desktop) activateTab(index int) {
+	if index < 0 || index >= len(a.tabs) {
+		return
+	}
+	previous := a.current()
+	next := a.tabs[index]
+	if previous != nil && previous != next {
+		a.touchAttachmentImageCache(previous.ID)
+	}
+	a.active = index
+	a.touchAttachmentImageCache(next.ID)
+	a.trimAttachmentImageCache()
+	if a.page == "chat" && a.win != nil && next.AttachmentImages == nil {
+		a.loadSessionAttachmentImages(next)
+	}
+}
+
+func (a *desktop) touchAttachmentImageCache(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	order := a.attachmentImageCacheSessions
+	for i, id := range order {
+		if id == sessionID {
+			copy(order[i:], order[i+1:])
+			order = order[:len(order)-1]
+			break
+		}
+	}
+	a.attachmentImageCacheSessions = append(order, sessionID)
+}
+
+func (a *desktop) forgetAttachmentImageCache(sessionID string) {
+	order := a.attachmentImageCacheSessions
+	for i, id := range order {
+		if id == sessionID {
+			copy(order[i:], order[i+1:])
+			a.attachmentImageCacheSessions = order[:len(order)-1]
+			return
+		}
+	}
+}
+
+func (a *desktop) trimAttachmentImageCache() {
+	order := a.attachmentImageCacheSessions
+	if len(order) > maxAttachmentImageCacheSessions {
+		order = order[len(order)-maxAttachmentImageCacheSessions:]
+		a.attachmentImageCacheSessions = order
+	}
+	keep := make(map[string]struct{}, len(order))
+	for _, id := range order {
+		keep[id] = struct{}{}
+	}
+	seen := make(map[*conversation]struct{}, len(a.tabs)+len(a.openSessions))
+	releaseIfStale := func(t *conversation) {
+		if t == nil || t.AttachmentImages == nil {
+			return
+		}
+		if _, ok := seen[t]; ok {
+			return
+		}
+		seen[t] = struct{}{}
+		if _, ok := keep[t.ID]; !ok {
+			a.releaseAttachmentImages(t)
+		}
+	}
+	for _, t := range a.tabs {
+		releaseIfStale(t)
+	}
+	for _, t := range a.openSessions {
+		releaseIfStale(t)
+	}
+}
+
+func (a *desktop) releaseAttachmentImages(t *conversation) {
+	if t == nil {
+		return
+	}
+	// Let active decodes finish before dropping their map. That keeps a quick
+	// tab switch from starting a second batch for the same conversation.
+	if t.AttachmentImageJobs > 0 {
+		return
+	}
+	t.AttachmentImages = nil
+	t.AttachmentImageVersions = nil
+}
+
+// discardAttachmentImagesOnShutdown releases caches even when a decode job is
+// still waiting to publish its completion through Window.Update. The window is
+// about to close, so those callbacks may never run and no result can be shown.
+func (a *desktop) discardAttachmentImagesOnShutdown() {
+	seen := make(map[*conversation]struct{}, len(a.tabs)+len(a.openSessions)+len(a.attachmentImageJobSessions))
+	discard := func(t *conversation) {
+		if t == nil {
+			return
+		}
+		if _, exists := seen[t]; exists {
+			return
+		}
+		seen[t] = struct{}{}
+		t.AttachmentImages = nil
+		t.PendingAttachmentImages = nil
+		t.AttachmentImageVersions = nil
+		t.AttachmentImageJobs = 0
+	}
+	for _, t := range a.tabs {
+		discard(t)
+	}
+	for _, t := range a.openSessions {
+		discard(t)
+	}
+	for t := range a.attachmentImageJobSessions {
+		discard(t)
+	}
+	a.attachmentImageCacheSessions = nil
+	a.attachmentImageJobSessions = nil
+}
+
+func (a *desktop) shouldCacheAttachmentImages(t *conversation) bool {
+	if t == nil {
+		return false
+	}
+	if a.current() == t {
+		return true
+	}
+	for _, id := range a.attachmentImageCacheSessions {
+		if id == t.ID {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *desktop) finishAttachmentImageJob(t *conversation) {
+	if t.AttachmentImageJobs > 0 {
+		t.AttachmentImageJobs--
+	}
+	if t.AttachmentImageJobs == 0 {
+		delete(a.attachmentImageJobSessions, t)
+		// All result and completion callbacks have run, so no in-flight decode
+		// can still depend on these generation numbers. Reset them between batches.
+		t.AttachmentImageVersions = nil
+		if !a.shouldCacheAttachmentImages(t) {
+			a.releaseAttachmentImages(t)
+		}
+	}
+}
 func (a *desktop) pendingAttachmentRow(c *ui.Context, t *conversation) {
 	ui.Row(c).Gap(6).Wrap().Children(func() {
 		for _, att := range t.PendingAttachments {
 			ui.Row(c.Key(att.ID)).Padding(5, 8).Gap(7).AlignItems(ui.Center).Shrink(0).Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(5).Label("待发送附件 " + att.Name).Children(func() {
-				if bm := t.AttachmentImages[att.ID]; bm != nil {
+				if bm := t.PendingAttachmentImages[att.ID]; bm != nil {
 					ui.Image(c, bm).Size(36, 32).Shrink(0).Fit(ui.Contain)
 				}
 				ui.Column(c).Gap(2).Children(func() {
@@ -343,7 +557,7 @@ func (a *desktop) pendingAttachmentRow(c *ui.Context, t *conversation) {
 					for i, item := range t.PendingAttachments {
 						if item.ID == att.ID {
 							t.PendingAttachments = append(t.PendingAttachments[:i], t.PendingAttachments[i+1:]...)
-							delete(t.AttachmentImages, att.ID)
+							delete(t.PendingAttachmentImages, att.ID)
 							break
 						}
 					}
@@ -364,6 +578,23 @@ func messageAttachmentList(m map[string]any) []map[string]any {
 		}
 	}
 	return list
+}
+
+func messageAttachmentCount(m map[string]any) int {
+	switch raw := m["attachments"].(type) {
+	case []any:
+		count := 0
+		for _, item := range raw {
+			if _, ok := item.(map[string]any); ok {
+				count++
+			}
+		}
+		return count
+	case []map[string]any:
+		return len(raw)
+	default:
+		return 0
+	}
 }
 
 // Message images are capped in DIPs. A pasted screenshot arrives at its pixel
@@ -392,15 +623,24 @@ func fitBox(w, h, maxW, maxH float32) (float32, float32) {
 }
 
 func (a *desktop) messageAttachments(c *ui.Context, t *conversation, m map[string]any) {
-	list := messageAttachmentList(m)
-	if len(list) == 0 {
+	count := messageAttachmentCount(m)
+	if count == 0 {
 		return
 	}
 	// Several images wrap into rows of thumbnails; a single one may be larger.
-	lone := len(list) == 1
+	lone := count == 1
 	ui.Row(c).Gap(gapInline).Wrap().AlignItems(ui.Start).Children(func() {
-		for _, att := range list {
-			a.messageAttachmentTile(c, t, att, lone)
+		switch raw := m["attachments"].(type) {
+		case []any:
+			for _, item := range raw {
+				if att, ok := item.(map[string]any); ok {
+					a.messageAttachmentTile(c, t, att, lone)
+				}
+			}
+		case []map[string]any:
+			for _, att := range raw {
+				a.messageAttachmentTile(c, t, att, lone)
+			}
 		}
 	})
 }
@@ -541,12 +781,21 @@ func (a *desktop) loadSessionAttachmentImages(t *conversation) {
 	}
 }
 func (a *desktop) loadAttachmentImage(t *conversation, id, ref, dataURL string) {
-	if ref == "" && dataURL == "" {
+	if a.win == nil || t == nil || ref == "" && dataURL == "" {
+		return
+	}
+	if !a.shouldCacheAttachmentImages(t) {
+		a.releaseAttachmentImages(t)
 		return
 	}
 	ensureAttachmentMaps(t)
 	t.AttachmentImageVersions[id]++
 	version := t.AttachmentImageVersions[id]
+	t.AttachmentImageJobs++
+	if a.attachmentImageJobSessions == nil {
+		a.attachmentImageJobSessions = make(map[*conversation]struct{})
+	}
+	a.attachmentImageJobSessions[t] = struct{}{}
 	go func() {
 		var data []byte
 		var err error
@@ -554,18 +803,20 @@ func (a *desktop) loadAttachmentImage(t *conversation, id, ref, dataURL string) 
 			if err != nil {
 				reason := err.Error()
 				a.win.Update(func() {
-					if t.AttachmentImageVersions[id] != version {
-						return
-					}
-					for _, m := range t.Messages {
-						for _, att := range messageAttachmentList(m) {
-							if str(att, "id") == id {
-								att["error"] = reason
+					if t.AttachmentImageVersions[id] == version {
+						for _, m := range t.Messages {
+							for _, att := range messageAttachmentList(m) {
+								if str(att, "id") == id {
+									att["error"] = reason
+								}
 							}
 						}
 					}
+					a.finishAttachmentImageJob(t)
 				})
+				return
 			}
+			a.win.Update(func() { a.finishAttachmentImageJob(t) })
 		}()
 		if ref != "" {
 			data, err = a.core.ReadNativeGeneratedImage(ref)
@@ -595,17 +846,22 @@ func (a *desktop) loadAttachmentImage(t *conversation, id, ref, dataURL string) 
 		}
 		img = resizeImage(img, 1024)
 		a.win.Update(func() {
-			if !a.closing && t.AttachmentImages != nil && t.AttachmentImageVersions[id] == version {
-				if len(t.AttachmentImages) >= 24 {
-					for oldID := range t.AttachmentImages {
-						if oldID != id {
-							delete(t.AttachmentImages, oldID)
-							break
-						}
+			if a.closing || t.AttachmentImages == nil || t.AttachmentImageVersions[id] != version {
+				return
+			}
+			if !a.shouldCacheAttachmentImages(t) {
+				a.releaseAttachmentImages(t)
+				return
+			}
+			if len(t.AttachmentImages) >= 24 {
+				for oldID := range t.AttachmentImages {
+					if oldID != id {
+						delete(t.AttachmentImages, oldID)
+						break
 					}
 				}
-				t.AttachmentImages[id] = ui.NewBitmap(img)
 			}
+			t.AttachmentImages[id] = ui.NewBitmap(img)
 		})
 	}()
 }

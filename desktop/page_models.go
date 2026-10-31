@@ -116,15 +116,17 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 			a.openChatModelEditorIfNeeded()
 		}
 	}
+	var chatModels []backend.ModelConfig
 	if a.modelTab == "对话模型" {
-		a.chatModelProviderTabs(c)
+		chatModels = a.filteredChatModels()
+		a.chatModelProviderTabs(c, chatModels)
 	}
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(gapInline).Children(func() {
 			if a.modelTab == "图片模型" {
 				a.imageModelsSection(c)
 			} else {
-				a.chatModelsSection(c)
+				a.chatModelsSection(c, chatModels)
 			}
 		})
 	})
@@ -142,10 +144,10 @@ func (a *desktop) openChatModelEditorIfNeeded() {
 	}
 }
 
-func (a *desktop) chatModelProviderTabs(c *ui.Context) {
+func (a *desktop) chatModelProviderTabs(c *ui.Context, models []backend.ModelConfig) {
 	groups := map[string]bool{}
 	var order []string
-	for _, model := range a.filteredChatModels() {
+	for _, model := range models {
 		name := model.ProviderName
 		if name == "" {
 			name = customProviderName
@@ -173,8 +175,7 @@ func (a *desktop) chatModelProviderTabs(c *ui.Context) {
 	}
 }
 
-func (a *desktop) chatModelsSection(c *ui.Context) {
-	models := a.filteredChatModels()
+func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig) {
 	groups := map[string][]backend.ModelConfig{}
 	for _, m := range models {
 		name := m.ProviderName
