@@ -44,10 +44,19 @@ const (
 //
 // 图标可为 nil；有图标时画在标签前面，跟着文字一起变色。
 func Button(c *ui.Context, key any, label string, variant ButtonVariant, small bool, icon *ui.SVG) (ui.Element, ui.Element) {
+	return ButtonWithOptions(c, key, label, variant, small, icon, ActionOptions{})
+}
+
+// ButtonWithOptions preserves Button's app-wide styles while adding states
+// such as loading and disabled without each page composing its own control.
+func ButtonWithOptions(c *ui.Context, key any, label string, variant ButtonVariant, small bool, icon *ui.SVG, options ActionOptions) (ui.Element, ui.Element) {
 	if key != nil {
 		c = c.Key(key)
 	}
-	o := ActionOptions{Style: Tertiary, Small: small, Icon: icon}
+	o := options
+	o.Style = Tertiary
+	o.Small = small
+	o.Icon = icon
 	switch variant {
 	case ButtonPrimary:
 		o.Style = Secondary

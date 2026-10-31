@@ -63,6 +63,7 @@ type ActionOptions struct {
 	Tone                                    Tone
 	Style                                   ActionStyle
 	Small, Round, Circle, Disabled, Loading bool
+	ReserveLoadingSpace                     bool
 	Selected                                bool
 	Icon                                    *ui.SVG
 }
@@ -130,6 +131,8 @@ func actionParts(c *ui.Context, label string, o ActionOptions) (ui.Element, ui.E
 			ui.Spinner(c).Size(14, 14).TextColor(ink)
 		} else if o.Icon != nil {
 			ui.Icon(c, o.Icon).Size(16, 16).TextColor(ink)
+		} else if o.ReserveLoadingSpace {
+			ui.Box(c).Size(14, 14).Shrink(0)
 		}
 		if label != "" && !o.Circle {
 			text = ui.Text(c, label).FontSize(14).TextColor(ink).SingleLine().Unselectable()

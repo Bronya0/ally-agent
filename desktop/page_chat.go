@@ -836,7 +836,16 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 			for _, opt := range q.Options {
 				opt := opt
 				checked := containsString(st.AskSelected[q.ID], opt.ID)
-				ui.Column(c.Key("ask-option-card-"+q.ID+"-"+opt.ID)).FillWidth().Padding(8, 10).Gap(4).Radius(radiusSmall).Border(1, surfaceBorder(c)).Children(func() {
+				card := ui.Column(c.Key("ask-option-card-"+q.ID+"-"+opt.ID)).FillWidth().Padding(8, 10).Gap(4).
+					Radius(radiusSmall).Border(1, surfaceBorder(c)).Cursor(ui.CursorPointer)
+				if card.Hovered() {
+					card.Background(c.Theme().SurfaceHover)
+				}
+				if card.Clicked() {
+					checked = !checked
+					st.AskSelected[q.ID] = toggleString(st.AskSelected[q.ID], opt.ID, checked)
+				}
+				card.Children(func() {
 					ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
 						box := ui.Checkbox(c.Key("ask-opt-"+q.ID+"-"+opt.ID), &checked, opt.Label)
 						if box.Changed() {
@@ -852,7 +861,17 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 				})
 			}
 			custom := st.AskCustom[q.ID]
-			ui.Checkbox(c.Key("ask-custom-"+q.ID), &custom, "自定义回答")
+			customRow := ui.Row(c.Key("ask-custom-row-"+q.ID)).FillWidth().MinHeight(32).Padding(4, 8).
+				AlignItems(ui.Center).Radius(radiusSmall).Cursor(ui.CursorPointer)
+			if customRow.Hovered() {
+				customRow.Background(c.Theme().SurfaceHover)
+			}
+			if customRow.Clicked() {
+				custom = !custom
+			}
+			customRow.Children(func() {
+				ui.Checkbox(c.Key("ask-custom-"+q.ID), &custom, "自定义回答")
+			})
 			st.AskCustom[q.ID] = custom
 			if custom {
 				txt := st.AskCustomTxt[q.ID]

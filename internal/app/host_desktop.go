@@ -158,6 +158,7 @@ func (a *App) ReadWorkspaceMedia(req WorkspacePathRequest) ([]byte, error) {
 	}
 	return os.ReadFile(resolved)
 }
+
 func (a *App) ExportTextFile(name, content, filterName, pattern string) (string, error) {
 	p, e := mygo.Dialog.Save(mygo.SaveDialogOptions{Title: "导出文件", DefaultPath: name})
 	if e != nil || p == "" {

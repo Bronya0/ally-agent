@@ -216,6 +216,7 @@ func (a *desktop) pickKBRoot() {
 			cfg := a.config
 			a.saveConfig(cfg)
 			a.openWorkspace(p)
+			a.releaseFilePreview()
 			a.page = "kb"
 		})
 	}()

@@ -3043,9 +3043,10 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if isMcpToolFunctionName(name) {
 			var mcpArgs map[string]any
 			if decodeErr := json.Unmarshal(args, &mcpArgs); decodeErr == nil {
-				// MCP arguments are forwarded unchanged (there is no built-in
-				// declaration to gate them against), so an argument the model
-				// invented is only ever surfaced by naming it here.
+				// stage is Ally scheduling metadata, never an MCP tool argument.
+				delete(mcpArgs, "stage")
+				// Other MCP arguments pass through without a built-in schema gate;
+				// surface undeclared ones here so the model can correct them.
 				argWarnings = append(argWarnings, a.mcpUnknownArgWarnings(name, mcpArgs)...)
 				result, callErr := a.executeMcpFunctionTool(ctx, name, mcpArgs)
 				if callErr != nil {

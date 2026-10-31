@@ -103,6 +103,7 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 						if a.page == "models" {
 							a.cancelOAuthWhenLeaving()
 						}
+						a.releaseFilePreview()
 						a.active = idx
 						a.page = "chat"
 						a.refreshFiles()
@@ -174,7 +175,7 @@ func (a *desktop) headerActions(c *ui.Context) {
 	if a.explorer {
 		tone = iconAccentOn
 	}
-	explorer := iconButtonSized(c, "files-toggle", "打开工作区文件浏览器", "folderopen", 30, tone, func() { a.explorer = !a.explorer })
+	explorer := iconButtonSized(c, "files-toggle", "打开工作区文件浏览器", "folderopen", 30, tone, func() { a.setExplorerOpen(!a.explorer) })
 	explorer.Disabled(!pageOK)
 
 	services := c.Services()

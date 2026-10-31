@@ -632,7 +632,7 @@ func thinkingBarHeight(elapsed time.Duration, index int) float32 {
 func (a *desktop) retryBanner(c *ui.Context, info *retryInfo) {
 	p := a.currentPalette()
 	ui.Row(c).FillWidth().Padding(5, 10).Gap(gapField).Radius(radiusSmall).
-		Background(ui.RGBA(217, 164, 65, 0.10)).BorderWidth(0, 0, 0, 3).BorderColor(c.Theme().Warning).Children(func() {
+		Background(ui.RGBA(217, 164, 65, 0.10)).Children(func() {
 		iconGlyph(c, "refresh", 13).TextColor(c.Theme().Warning)
 		msg := fmt.Sprintf("重试中 %d/%d：%s", info.Attempt, info.MaxAttempts, info.Error)
 		uikit.Tooltip(c, ui.Text(c, short(msg, 120)).FontSize(fsTiny).TextColor(c.Theme().Warning).SingleLine(), msg)

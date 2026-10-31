@@ -244,11 +244,7 @@ func noticeTone(tone string) uikit.NoticeTone {
 
 // notice is the coloured banner used for errors, warnings and hints.
 func notice(c *ui.Context, tone, message string, ink ...ui.Color) {
-	uikit.Notice(c, noticeTone(tone), message, true, ink...)
-}
-
-func noticeNoBar(c *ui.Context, tone, message string, ink ...ui.Color) {
-	uikit.Notice(c, noticeTone(tone), message, false, ink...)
+	uikit.Notice(c, noticeTone(tone), message, ink...)
 }
 
 // ---- Controls ------------------------------------------------------------
@@ -866,6 +862,9 @@ func fieldExample(id, name string) string {
 // Card actions stay quiet until hover, selection or keyboard interaction.
 func cardFlat(c *ui.Context, s string) ui.Element {
 	return uikit.Action(c.Key("card-action-"+s), s, uikit.ActionOptions{Style: uikit.Quaternary, Small: true})
+}
+func cardFlatBusy(c *ui.Context, s string, loading bool) ui.Element {
+	return uikit.Action(c.Key("card-action-"+s), s, uikit.ActionOptions{Style: uikit.Quaternary, Small: true, Loading: loading, ReserveLoadingSpace: true})
 }
 func cardFlatKey(c *ui.Context, key any, s string) ui.Element { return cardFlat(c.Key(key), s) }
 func cardPrimary(c *ui.Context, s string) ui.Element {

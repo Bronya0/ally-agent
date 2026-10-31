@@ -164,9 +164,11 @@ type nativePreview struct {
 	documentURL string
 }
 
-func (p *nativePreview) Native() ui.NativeWebView { return p.view }
-func (p *nativePreview) IsDestroyed() bool        { return p.view.IsDestroyed() }
-func (p *nativePreview) Status() (bool, error)    { return p.state.ready, p.state.err }
+func (p *nativePreview) Native() ui.NativeWebView   { return p.view }
+func (p *nativePreview) IsDestroyed() bool          { return p.view.IsDestroyed() }
+func (p *nativePreview) Status() (bool, error)      { return p.state.ready, p.state.err }
+func (p *nativePreview) LoadFile(path string) error { return p.view.Page().LoadFile(path) }
+func (p *nativePreview) LoadHTML(source string)     { p.view.Page().LoadHTML(source, "") }
 func (p *nativePreview) Destroy() {
 	p.state.generation++
 	if p.timer != nil {
@@ -208,7 +210,11 @@ func (p *nativePreview) Load(req previewRequest) {
 }
 
 func (a *desktop) newPreviewSurface() (previewSurface, error) {
-	view, err := a.win.NewWebView(mygo.WebViewOptions{BackgroundColor: "#1b1b1b", Page: mygo.PageOptions{PinchZoom: true}})
+	return a.newNativePreview()
+}
+
+func (a *desktop) newNativePreview() (*nativePreview, error) {
+	view, err := a.win.NewWebView(mygo.WebViewOptions{BackgroundColor: "#1b1b1b", Page: mygo.PageOptions{PinchZoom: true, Untrusted: true}})
 	if err != nil {
 		return nil, err
 	}

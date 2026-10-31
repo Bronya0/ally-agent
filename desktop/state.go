@@ -327,23 +327,25 @@ func clampView(v, def float64) float64 {
 
 // modelForm is the chat-model editor dialog state.
 type modelForm struct {
-	KeyEpoch     int
-	AdvancedOpen bool
-	Open         bool
-	Index        int
-	Draft        backend.ModelConfig
-	Keys         []string
-	Headers      string
-	Auth         string
-	MaxTokens    float64
-	Context      float64
-	Busy         bool
-	FetchBusy    bool
-	FetchNote    string
-	Providers    []string
-	ProviderIdx  int
-	TestBusy     bool
-	Fetched      []string
+	KeyEpoch       int
+	AdvancedOpen   bool
+	Open           bool
+	Index          int
+	MaxTokensInput string
+	ContextInput   string
+	Draft          backend.ModelConfig
+	Keys           []string
+	Headers        string
+	Auth           string
+	MaxTokens      float64
+	Context        float64
+	Busy           bool
+	FetchBusy      bool
+	FetchNote      string
+	Providers      []string
+	ProviderIdx    int
+	TestBusy       bool
+	Fetched        []string
 }
 
 // mcpForm is the MCP page + server editor state.
@@ -467,7 +469,6 @@ type fileUI struct {
 	InfoWorkspace  string
 	InfoNote       string
 	InfoDetails    bool
-	Preview        bool
 	InfoOpen       bool
 	Info           backend.WorkspaceFileInfo
 	InfoPath       string

@@ -12,6 +12,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -162,12 +163,18 @@ var imageExtensions = map[string]string{
 }
 
 var videoExtensions = map[string]string{
-	".mp4": "video/mp4", ".webm": "video/webm", ".ogg": "video/ogg",
-	".ogv": "video/ogg", ".mov": "video/quicktime", ".m4v": "video/mp4",
+	".mp4": "video/mp4", ".webm": "video/webm", ".ogv": "video/ogg",
+	".mov": "video/quicktime", ".m4v": "video/mp4",
 }
 
 var pdfExtensions = map[string]string{
 	".pdf": "application/pdf",
+}
+
+var audioExtensions = map[string]string{
+	".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
+	".aac": "audio/aac", ".flac": "audio/flac", ".ogg": "audio/ogg",
+	".oga": "audio/ogg", ".opus": "audio/ogg",
 }
 
 func imageExtMime(path string) string {
@@ -185,11 +192,16 @@ func pdfExtMime(path string) string {
 	return pdfExtensions[ext]
 }
 
-// ── 媒体流式服务 ──
+func audioExtMime(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	return audioExtensions[ext]
+}
+
+// ── 插件媒体流式服务 ──
 //
-// 图片/视频/PDF 预览不再走 base64 data URL（整文件 ×4 份内存副本，视频直接
-// 上 GB），改用本机回环 HTTP 服务按需流式输出。端口由操作系统分配
-// （127.0.0.1:0），不存在占用冲突；进程级随机 token 防止其他本机程序访问。
+// 资源树通过 GetWorkspaceMediaPath 让 WebView 直接读取本地文件。插件宿主
+// 仍使用此回环 HTTP 接口，以便插件通过受限、带 Range 的 URL 播放媒体。
+// 端口由操作系统分配，进程级随机 token 防止其他本机程序访问。
 
 // mediaServer 持有媒体流式服务单例；首次请求媒体 URL 时懒启动。
 type mediaServer struct {
@@ -203,9 +215,65 @@ type mediaServer struct {
 
 var mediaSvc = &mediaServer{}
 
-// GetWorkspaceMediaURL 校验文件后返回一个回环流式 URL，前端直接塞进
-// <video>/<img>/<iframe> 的 src。浏览器原生支持 Range 请求，拖进度条按需拉取。
+// GetWorkspaceMediaPath returns a validated local path for the native desktop
+// WebView. The browser reads the file directly, without routing its bytes through
+// the app process.
+func (a *App) GetWorkspaceMediaPath(req WorkspacePathRequest) (string, error) {
+	return a.resolveWorkspaceMediaPath(req)
+}
+
+// ReadWorkspaceSVGAt returns bounded SVG source so the UI can render it inside
+// an HTML document with a restrictive Content Security Policy.
+func (a *App) ReadWorkspaceSVGAt(ctx context.Context, req WorkspacePathRequest) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	resolved, err := a.resolveWorkspaceMediaPath(req)
+	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if !strings.EqualFold(filepath.Ext(resolved), ".svg") {
+		return "", codedToolError("E_BAD_PATH", errors.New("not an SVG file"))
+	}
+	f, err := os.Open(resolved)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	const maxSVGBytes = 2 << 20
+	data, err := io.ReadAll(io.LimitReader(f, maxSVGBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if len(data) > maxSVGBytes {
+		return "", codedToolError("E_FILE_TOO_LARGE", errors.New("SVG exceeds the 2 MiB preview limit"))
+	}
+	content, _, _ := normalizeText(data)
+	return content, nil
+}
+
+// GetWorkspaceMediaURL remains the plugin host's authenticated streaming API.
+// The resource-tree preview uses GetWorkspaceMediaPath and loads files directly.
 func (a *App) GetWorkspaceMediaURL(req WorkspacePathRequest) (string, error) {
+	_, err := a.resolveWorkspaceMediaPath(req)
+	if err != nil {
+		return "", err
+	}
+	base, token, err := a.ensureMediaServer()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s/media?t=%s&ws=%s&p=%s", base, token,
+		url.QueryEscape(req.Workspace), url.QueryEscape(req.Path)), nil
+}
+
+func (a *App) resolveWorkspaceMediaPath(req WorkspacePathRequest) (string, error) {
 	if err := a.ensureInitialized(); err != nil {
 		return "", err
 	}
@@ -227,19 +295,17 @@ func (a *App) GetWorkspaceMediaURL(req WorkspacePathRequest) (string, error) {
 	if info.IsDir() {
 		return "", codedToolError("E_BAD_PATH", fmt.Errorf("not a file: %s", req.Path))
 	}
-	if mediaExtMime(req.Path) == "" {
+	if mediaExtMime(req.Path) == "" || mediaExtMime(resolved) == "" {
 		return "", codedToolError("E_BAD_PATH", fmt.Errorf("unsupported media file: %s", req.Path))
 	}
-	base, token, err := a.ensureMediaServer()
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%s/media?t=%s&ws=%s&p=%s", base, token,
-		url.QueryEscape(req.Workspace), url.QueryEscape(req.Path)), nil
+	return resolved, nil
 }
 
 func mediaExtMime(path string) string {
 	if m := imageExtMime(path); m != "" {
+		return m
+	}
+	if m := audioExtMime(path); m != "" {
 		return m
 	}
 	if m := videoExtMime(path); m != "" {
@@ -300,8 +366,8 @@ func stopMediaServer() {
 	_ = server.Shutdown(ctx)
 }
 
-// handleWorkspaceMedia 校验 token 与路径（必须位于工作区内）后交给
-// http.ServeContent：自动处理 Range / HEAD / 条件请求，浏览器按需拉取。
+// handleWorkspaceMedia 校验 token 与工作区路径后交给 http.ServeContent，
+// 由插件 WebView 按需拉取 Range / HEAD / 条件请求。
 func (a *App) handleWorkspaceMedia(w http.ResponseWriter, r *http.Request) {
 	mediaSvc.mu.Lock()
 	token := mediaSvc.token
@@ -342,5 +408,8 @@ func (a *App) handleWorkspaceMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	w.Header().Set("Content-Type", mime)
+	if strings.EqualFold(filepath.Ext(resolved), ".svg") {
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'")
+	}
 	http.ServeContent(w, r, filepath.Base(resolved), info.ModTime(), f)
 }

@@ -75,22 +75,23 @@ func TestLocalEditStageRecoveryBelongsToFailedCall(t *testing.T) {
 				calls = append(calls, stagedCall("edit", string(raw)))
 			}
 			for i, result := range a.executeLocalEditToolBatch(t.Context(), a.config, calls) {
-				wantCode := "E_EDIT_BATCH_ABORTED"
 				if i == failedIndex {
-					wantCode = "E_VERSION_MISMATCH"
-				}
-				if result.ErrorCode != wantCode {
-					t.Fatalf("call %d received another file's error: want %s, got %+v", i, wantCode, result)
-				}
-				if result.OK || (result.modelRead != nil) != (i == failedIndex) {
-					t.Fatalf("snapshot attached to wrong call %d (failed %d): %+v", i, failedIndex, result)
+					if result.OK || result.ErrorCode != "E_VERSION_MISMATCH" || result.modelRead == nil {
+						t.Fatalf("failed edit lost its source snapshot: %+v", result)
+					}
+				} else if !result.OK || result.modelRead != nil {
+					t.Fatalf("valid peer edit was cancelled: %+v", result)
 				}
 				if result.modelRead != nil && result.modelRead.Files[0].Path != fmt.Sprintf("file-%d.txt", i) {
 					t.Fatalf("wrong source snapshot: %+v", result.modelRead)
 				}
 				data, err := os.ReadFile(filepath.Join(a.config.Workspace, fmt.Sprintf("file-%d.txt", i)))
-				if err != nil || string(data) != "old\n" {
-					t.Fatalf("failed batch wrote file %d: %q, %v", i, data, err)
+				want := "new\n"
+				if i == failedIndex {
+					want = "old\n"
+				}
+				if err != nil || string(data) != want {
+					t.Fatalf("independent batch result for file %d: %q want %q, %v", i, data, want, err)
 				}
 			}
 		})
@@ -120,12 +121,10 @@ func TestLocalEditBatchDistinctFailuresDoNotShareDiagnostics(t *testing.T) {
 				calls = append(calls, stagedCall("edit", string(raw)))
 			}
 			results := a.executeLocalEditToolBatch(t.Context(), a.config, calls)
-			if results[0].OK || results[0].ErrorCode != codes[first] || results[0].modelRead == nil {
-				t.Fatalf("first failed call lost its diagnosis: %+v", results[0])
-			}
-			for i, result := range results[1:] {
-				if result.OK || result.ErrorCode != "E_EDIT_BATCH_ABORTED" || result.modelRead != nil || result.Details != nil || strings.Contains(result.Error, files[first].Path) {
-					t.Fatalf("unprocessed call %d received another file's diagnosis: %+v", i+1, result)
+			for i, result := range results {
+				fileIndex := (first + i) % len(files)
+				if result.OK || result.ErrorCode != codes[fileIndex] || result.modelRead == nil || result.modelRead.Files[0].Path != files[fileIndex].Path {
+					t.Fatalf("call %d lost its own diagnosis: %+v", i, result)
 				}
 			}
 			for i, file := range files {
@@ -164,15 +163,15 @@ func TestLocalEditBatchErrorOwnershipWithoutRecovery(t *testing.T) {
 				calls = append(calls, stagedCall("edit", string(raw)))
 			}
 			results := a.executeLocalEditToolBatch(t.Context(), a.config, calls)
-			if results[0].OK || results[0].ErrorCode != "E_EDIT_BATCH_ABORTED" || results[0].modelRead != nil || results[0].Details != nil {
-				t.Fatalf("healthy peer received file error: %+v", results[0])
+			if !results[0].OK {
+				t.Fatalf("healthy peer edit was cancelled: %+v", results[0])
 			}
 			if results[1].OK || results[1].ErrorCode != wantCode || results[1].modelRead != nil || results[1].Error == "" {
 				t.Fatalf("failed call lost snapshot-free error: %+v", results[1])
 			}
 			data, err := os.ReadFile(filepath.Join(a.config.Workspace, peer.Path))
-			if err != nil || string(data) != "old\n" {
-				t.Fatalf("aborted peer was modified: %q, %v", data, err)
+			if err != nil || string(data) != "new\n" {
+				t.Fatalf("successful peer edit was lost: %q, %v", data, err)
 			}
 		})
 	}

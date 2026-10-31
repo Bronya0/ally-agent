@@ -3,6 +3,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,5 +97,31 @@ func TestWorkspaceEditorRejectsOversizedFile(t *testing.T) {
 	_, err := app.ReadWorkspaceFileAt(WorkspacePathRequest{Path: "large.txt"})
 	if err == nil || !strings.Contains(err.Error(), "E_FILE_TOO_LARGE") {
 		t.Fatalf("expected oversized file to fail with E_FILE_TOO_LARGE, got %v", err)
+	}
+}
+
+func TestWorkspaceSVGReadIsBoundedAndCancellationAware(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "image.svg"), []byte("<svg xmlns=\"http://www.w3.org/2000/svg\"><title>ok</title></svg>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := newWorkspaceEditorTestApp(dir)
+	content, err := app.ReadWorkspaceSVGAt(context.Background(), WorkspacePathRequest{Path: "image.svg"})
+	if err != nil || !strings.Contains(content, "<title>ok</title>") {
+		t.Fatalf("unexpected SVG preview content %q, error %v", content, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := app.ReadWorkspaceSVGAt(ctx, WorkspacePathRequest{Path: "missing.svg"}); err != context.Canceled {
+		t.Fatalf("canceled SVG read should stop before path resolution, got %v", err)
+	}
+
+	large := bytes.Repeat([]byte{'x'}, (2<<20)+1)
+	if err := os.WriteFile(filepath.Join(dir, "large.svg"), large, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.ReadWorkspaceSVGAt(context.Background(), WorkspacePathRequest{Path: "large.svg"}); err == nil || !strings.Contains(err.Error(), "E_FILE_TOO_LARGE") {
+		t.Fatalf("oversized SVG should stay bounded, got %v", err)
 	}
 }

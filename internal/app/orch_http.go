@@ -143,7 +143,7 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 		var extractErr error
 		title, text, links, extractErr = htmlExtractContent(htmlData, fetched.Result.FinalURL)
 		if extractErr != nil {
-			return WebFetchResult{}, codedToolError("E_WEB_FETCH_EXTRACT", fmt.Errorf("no readable article found on this page (%w); retry with \"format\":\"raw\" for the page source, or use http_request", extractErr))
+			return WebFetchResult{}, codedToolError("E_WEB_FETCH_EXTRACT", fmt.Errorf("no readable article found on this page (HTTP status %d; %w); retry with \"format\":\"raw\" for the page source, or use http_request", fetched.Result.Status, extractErr))
 		}
 	case fetched.Result.BodyEncoding == "text":
 		text = fetched.Result.Body

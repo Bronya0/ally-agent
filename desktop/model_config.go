@@ -5,6 +5,7 @@ import (
 	backend "ally-dev/internal/app"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -15,6 +16,39 @@ const customProviderName = "custom"
 // wherever it is set. "auto" leaves the choice to the provider, "off" turns
 // thinking off, and the backend clamps what a model cannot do.
 var reasoningLevels = []string{"auto", "off", "low", "medium", "high", "xhigh", "max"}
+
+func modelNumberInputText(value int, presets []modelNumberPreset) string {
+	for _, preset := range presets {
+		if value == preset.value {
+			return preset.label
+		}
+	}
+	return strconv.Itoa(value)
+}
+
+func parseModelNumberInput(text string, max int, label string) (int, error) {
+	text = strings.ToUpper(strings.TrimSpace(text))
+	if text == "" {
+		return 0, nil
+	}
+	multiplier := 1
+	switch {
+	case strings.HasSuffix(text, "K"):
+		multiplier = 1_000
+		text = strings.TrimSpace(strings.TrimSuffix(text, "K"))
+	case strings.HasSuffix(text, "M"):
+		multiplier = 1_000_000
+		text = strings.TrimSpace(strings.TrimSuffix(text, "M"))
+	}
+	value, err := strconv.Atoi(text)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("%s 必须是非负整数，可使用 K 或 M 后缀", label)
+	}
+	if value > max/multiplier {
+		return 0, fmt.Errorf("%s 不能超过 %d", label, max)
+	}
+	return value * multiplier, nil
+}
 
 func modelIdentity(m backend.ModelConfig) backend.ModelIdentity {
 	return backend.ModelIdentity{ProviderName: m.ProviderName, Model: m.Model, OAuthAccountID: m.OAuthAccountID}
@@ -78,6 +112,8 @@ func (a *desktop) editModel(index int) {
 	}
 	a.modelMaxTokens = float64(a.modelDraft.MaxTokens)
 	a.modelContextWindow = float64(a.modelDraft.ContextWindow)
+	a.modelForm.MaxTokensInput = modelNumberInputText(a.modelDraft.MaxTokens, modelMaxTokenPresets)
+	a.modelForm.ContextInput = modelNumberInputText(a.modelDraft.ContextWindow, modelContextWindowPresets)
 	a.resetOAuth()
 	if a.modelDraft.AuthType == "chatgpt_oauth" {
 		a.loadOAuthAccounts()
@@ -103,8 +139,16 @@ func (a *desktop) updateModelLabels(before *backend.ModelIdentity, after backend
 }
 func (a *desktop) preparedModelDraft() (backend.ModelConfig, error) {
 	m := a.modelDraft
-	m.MaxTokens = int(a.modelMaxTokens)
-	m.ContextWindow = int(a.modelContextWindow)
+	maxTokens, err := parseModelNumberInput(a.modelForm.MaxTokensInput, 2_000_000, "Max Tokens")
+	if err != nil {
+		return m, err
+	}
+	contextWindow, err := parseModelNumberInput(a.modelForm.ContextInput, 10_000_000, "上下文窗口")
+	if err != nil {
+		return m, err
+	}
+	m.MaxTokens = maxTokens
+	m.ContextWindow = contextWindow
 	if m.AuthType != "chatgpt_oauth" {
 		m.APIKeys = nil
 		seen := map[string]bool{}
@@ -168,7 +212,7 @@ func (a *desktop) preparedModelDraft() (backend.ModelConfig, error) {
 	return m, nil
 }
 func (a *desktop) saveModelDraft() {
-	if a.modelSaving {
+	if a.modelSaving || a.modelForm.TestBusy {
 		return
 	}
 	m, err := a.preparedModelDraft()
@@ -214,6 +258,8 @@ func (a *desktop) saveModelDraft() {
 					t.Model = modelOption(m)
 				}
 			}
+			a.modelForm.Open = false
+			a.cancelOAuthWhenLeaving()
 			a.notifySuccess("模型已保存")
 		})
 	}()

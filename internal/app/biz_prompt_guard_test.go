@@ -44,7 +44,7 @@ var promptNonToolTokens = map[string]bool{
 	"echarts": true, "python": true,
 	// plan request fields and statuses named in guidance
 	"changes": true, "done": true, "files": true, "finish": true,
-	"in_progress": true, "next": true, "offset": true, "path": true,
+	"in_progress": true, "next": true, "offset": true, "path": true, "step_limit": true,
 	"pending": true, "steps": true, "stage": true, "validation": true, "version": true,
 	// frontmatter fields and IO nouns named in guidance
 	"aliases": true, "date": true, "description": true, "output": true,
@@ -177,7 +177,7 @@ func TestPromptExecutionEfficiency(t *testing.T) {
 	app := NewApp()
 	main := joinSystemPromptParts(app.buildSystemPromptParts(nil, "", nil, "", "", ""))
 	for label, prompt := range map[string]string{"main": main, "child": subagentSystemPrompt("")} {
-		for _, rule := range []string{"same stage only for independent operations", "Inspect every result", "Reuse reliable context", "preserve failure/exit status", "JSON encoding is not shell escaping", "repeat or broaden verification only", "stages run in ascending order", "blocks every later stage", "stage does not substitute result values"} {
+		for _, rule := range []string{"same stage only for independent operations", "Check every result for errors", "Reuse reliable context", "failures stay visible", "JSON encoding is not shell escaping", "repeat or broaden verification only", "later stages run in order", "blocks later stages", "stage does not substitute result values"} {
 			if !strings.Contains(prompt, rule) {
 				t.Errorf("%s missing %q", label, rule)
 			}
@@ -188,7 +188,7 @@ func TestPromptExecutionEfficiency(t *testing.T) {
 			}
 		}
 	}
-	for _, rule := range []string{"Existing authorization remains valid", "mid-task user messages", "do not restart exploration", "omit only when no useful follow-up exists", "final reply must stand alone"} {
+	for _, rule := range []string{"Authorization remains valid for the same action and scope", "Use `ask` only when a required decision remains", "After compaction, continue from completed work", "final replies state the outcome, relevant verification, and material limitations"} {
 		if !strings.Contains(main, rule) {
 			t.Errorf("main missing %q", rule)
 		}

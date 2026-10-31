@@ -63,6 +63,23 @@ func buttonParts(c *ui.Context, key any, label string, kind buttonKind, small bo
 	return uikit.Button(c, key, label, uikitVariant(kind), small, iconImage(icon))
 }
 
+func buttonWithState(c *ui.Context, label string, kind buttonKind, loading, disabled bool) ui.Element {
+	e, _ := uikit.ButtonWithOptions(c, nil, label, uikitVariant(kind), false, nil, uikit.ActionOptions{
+		Loading:             loading,
+		Disabled:            disabled,
+		ReserveLoadingSpace: true,
+	})
+	return e
+}
+
+func flatBusy(c *ui.Context, label string, loading, disabled bool) ui.Element {
+	return buttonWithState(c, label, btnSecondary, loading, disabled)
+}
+
+func primaryBusy(c *ui.Context, label string, loading, disabled bool) ui.Element {
+	return buttonWithState(c, label, btnPrimary, loading, disabled)
+}
+
 // iconTone picks how loud a square, label-less button may get.
 type iconTone int
 

@@ -81,8 +81,9 @@ func toolStageSucceeded(result toolResult) bool {
 
 // executeStagedToolBatch is the only scheduler for main and child agents.
 // A stage drains completely, including calls queued behind the concurrency
-// limit. Failures block later stages; the local edit executor joins same-stage
-// edits at one prepare/commit boundary. Other completed work is not rolled back.
+// limit. Failures block later stages; same-stage edit calls commit independently
+// so one file's failure does not discard successful peer edits. Completed work
+// is not rolled back.
 // Every call receives one result. Only execution cancellation stops queued work.
 func (a *App) executeStagedToolBatch(ctx context.Context, cfg ConfigState, calls []openai.ToolCall, conflicts map[int]error,
 	execute func(context.Context, int, openai.ToolCall) toolResult,

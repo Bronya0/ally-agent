@@ -1,30 +1,91 @@
+// SPDX-License-Identifier: GPL-3.0-only
 package desktop
 
 import (
-	"ally-dev/desktop/uikit"
-	backend "ally-dev/internal/app"
-	"ally-dev/internal/documentpreview"
-	"fmt"
 	"path/filepath"
 	"strings"
 
-	"github.com/egoist/mygo/ui"
+	backend "ally-dev/internal/app"
+	"ally-dev/internal/documentpreview"
 )
 
-func propertiesOnlyFile(name string) bool {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".pdf", ".doc", ".xls", ".ppt", ".pptx", ".zip", ".7z", ".rar", ".gz", ".tar", ".exe", ".dll", ".bin", ".mp4", ".mov", ".mp3", ".wav":
-		return true
-	}
-	return false
+type workspaceFileKind uint8
+
+const (
+	workspaceFileText workspaceFileKind = iota
+	workspaceFileMarkdown
+	workspaceFileHTML
+	workspaceFileImage
+	workspaceFileSVG
+	workspaceFileAudio
+	workspaceFileVideo
+	workspaceFilePDF
+	workspaceFileDocument
+	workspaceFileProperties
+)
+
+// Keep extension routing in one place. The document preview package owns its
+// supported Office formats; all other UI paths use this table.
+var workspaceFileKindsByExtension = map[string]workspaceFileKind{
+	".md": workspaceFileMarkdown, ".markdown": workspaceFileMarkdown,
+	".html": workspaceFileHTML, ".htm": workspaceFileHTML,
+	".png": workspaceFileImage, ".jpg": workspaceFileImage, ".jpeg": workspaceFileImage,
+	".gif": workspaceFileImage, ".webp": workspaceFileImage, ".bmp": workspaceFileImage,
+	".ico": workspaceFileImage, ".svg": workspaceFileSVG,
+	".mp3": workspaceFileAudio, ".wav": workspaceFileAudio, ".m4a": workspaceFileAudio,
+	".aac": workspaceFileAudio, ".flac": workspaceFileAudio, ".ogg": workspaceFileAudio,
+	".oga": workspaceFileAudio, ".opus": workspaceFileAudio,
+	".mp4": workspaceFileVideo, ".m4v": workspaceFileVideo, ".mov": workspaceFileVideo,
+	".webm": workspaceFileVideo, ".ogv": workspaceFileVideo,
+	".pdf": workspaceFilePDF,
+	".doc": workspaceFileProperties, ".xls": workspaceFileProperties,
+	".ppt": workspaceFileProperties, ".pptx": workspaceFileProperties,
+	".zip": workspaceFileProperties, ".7z": workspaceFileProperties,
+	".rar": workspaceFileProperties, ".gz": workspaceFileProperties,
+	".tar": workspaceFileProperties, ".exe": workspaceFileProperties,
+	".dll": workspaceFileProperties, ".bin": workspaceFileProperties,
+	".avi": workspaceFileProperties, ".mkv": workspaceFileProperties,
+	".wmv": workspaceFileProperties, ".flv": workspaceFileProperties,
 }
 
-func (a *desktop) cancelFilePreview() {
-	if a.filePreviewCancel != nil {
-		a.filePreviewCancel()
-		a.filePreviewCancel = nil
+func workspaceFileKindForPath(name string) workspaceFileKind {
+	if kind, ok := workspaceFileKindsByExtension[strings.ToLower(filepath.Ext(name))]; ok {
+		return kind
 	}
-	a.filePreviewRoot = ""
+	if documentpreview.Supported(name) {
+		return workspaceFileDocument
+	}
+	return workspaceFileText
+}
+
+func (kind workspaceFileKind) isMedia() bool {
+	return kind == workspaceFileImage || kind == workspaceFileSVG || kind == workspaceFileAudio || kind == workspaceFileVideo
+}
+
+func (kind workspaceFileKind) isDirectWebViewFile() bool {
+	return kind == workspaceFileImage || kind == workspaceFileAudio || kind == workspaceFileVideo || kind == workspaceFilePDF
+}
+
+func (kind workspaceFileKind) isPreviewOnly() bool {
+	return kind.isDirectWebViewFile() || kind == workspaceFileSVG || kind == workspaceFileDocument
+}
+
+func (kind workspaceFileKind) hasWebViewPreview() bool {
+	return kind.isPreviewOnly() || kind == workspaceFileMarkdown || kind == workspaceFileHTML
+}
+
+func (kind workspaceFileKind) hasMarkupToggle() bool {
+	return kind == workspaceFileMarkdown || kind == workspaceFileHTML
+}
+
+func (a *desktop) setExplorerOpen(open bool) {
+	if a.explorer == open {
+		return
+	}
+	a.explorer = open
+	if !open {
+		a.releaseFilePreview()
+	}
 }
 
 func (a *desktop) openSystemFile(path string) {
@@ -32,67 +93,4 @@ func (a *desktop) openSystemFile(path string) {
 		req := backend.WorkspacePathRequest{Workspace: t.Workspace, Path: path}
 		a.job(func() error { return a.core.OpenWorkspaceFile(req) })
 	}
-}
-
-func (a *desktop) documentFileView(c *ui.Context, file *workspaceFile) {
-	doc := file.Document
-	ui.Column(c.Key("document-" + file.Path)).Grow(1).MinHeight(0).FillWidth().Gap(gapField).Padding(padRow).Children(func() {
-		if doc.Truncated {
-			fieldNote(c, "已显示部分内容，可用系统应用查看完整文档。", a.secondaryInk())
-		}
-		if strings.EqualFold(filepath.Ext(file.Path), ".xlsx") && len(doc.Sheets) == 0 {
-			emptyState(c, "暂无可预览的工作表", "可使用系统应用查看完整文档。", a.secondaryInk())
-			return
-		}
-		if len(doc.Sheets) > 0 {
-			ui.Row(c).FillWidth().Gap(gapField).AlignItems(ui.Center).Children(func() {
-				fieldLabel(c, "工作表")
-				names := make([]string, len(doc.Sheets))
-				for i, s := range doc.Sheets {
-					names[i] = s.Name
-				}
-				uikit.Select(c.Key("document-sheet"), &file.DocumentSheet, names).Width(220).Label("预览工作表").OnChange(func() { file.DocumentList = ui.ListState{} })
-			})
-			fieldNote(c, "内容预览 · 公式显示已保存的结果，不含图表与复杂格式", a.secondaryInk())
-			var sheet *documentpreview.Sheet
-			for i := range doc.Sheets {
-				if doc.Sheets[i].Name == file.DocumentSheet {
-					sheet = &doc.Sheets[i]
-					break
-				}
-			}
-			if sheet == nil {
-				return
-			}
-			cols := []ui.TableColumn{{Title: "行", Width: 54, Fixed: true, RowHeader: true}}
-			for i := 0; i < sheet.Columns; i++ {
-				cols = append(cols, ui.TableColumn{Title: documentpreview.ColumnName(i), Width: 140, MinWidth: 70})
-			}
-			ui.Table(c.Key("document-table-"+file.DocumentSheet), &file.DocumentList, cols, len(sheet.Rows), func(row, col int) {
-				value := fmt.Sprint(sheet.Rows[row].Number)
-				if col > 0 {
-					value = ""
-					if col <= len(sheet.Rows[row].Values) {
-						value = sheet.Rows[row].Values[col-1]
-					}
-				}
-				uikit.Tooltip(c, ui.Text(c, value).FontSize(fsSmall).SingleLine().FillWidth().MinWidth(0).Selectable(), value)
-			}).Fill().MinHeight(0).Label("文档表格预览")
-			return
-		}
-		fieldNote(c, "正文预览 · 不含图片、页眉页脚和原版分页", a.secondaryInk())
-		if len(doc.Paragraphs) == 0 {
-			emptyState(c, "暂无可预览的正文", "可使用系统应用查看完整文档。", a.secondaryInk())
-			return
-		}
-		ui.List(c.Key("document-paragraphs"), &file.DocumentList, len(doc.Paragraphs), func(index int) {
-			p := doc.Paragraphs[index]
-			ui.Column(c).FillWidth().Padding(6, 10).Children(func() {
-				text := ui.Text(c, p.Text).FillWidth().FontSize(fsBody).LineHeight(1.6).Selectable()
-				if p.Heading > 0 {
-					text.Bold().FontSize(max(fsBody, 22-float32(p.Heading)*2))
-				}
-			})
-		}).Fill().MinHeight(0).Label("文档正文预览")
-	})
 }

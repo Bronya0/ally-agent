@@ -13,6 +13,9 @@ func (a *desktop) changePage(page string) {
 	if !a.ready {
 		return
 	}
+	if page != "chat" {
+		a.releaseFilePreview()
+	}
 	if a.page == "settings" && page != "settings" {
 		a.commitSettingsOnLeave()
 	}

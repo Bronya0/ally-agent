@@ -12,7 +12,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 )
 
@@ -261,7 +260,7 @@ func firstRune(s string) rune {
 }
 
 func (a *desktop) configureEditorAssist(root string, file *workspaceFile) {
-	if file == nil || file.Editor == nil || file.Editor.Buffer == nil || file.Image != nil {
+	if file == nil || file.Editor == nil || file.Editor.Buffer == nil {
 		return
 	}
 	st := file.Editor
@@ -415,10 +414,7 @@ func (a *desktop) workspaceFileCurrent(root string, file *workspaceFile) bool {
 
 func (a *desktop) releaseWorkspaceFile(root string) {
 	key := workspaceKey(root)
-	if a.filePreviewRoot == key {
-		a.cancelFilePreview()
-		a.fileLoadID++
-	}
+	a.workspacePreview.releaseWorkspace(key)
 	file := a.workspaceFiles[key]
 	if file == nil {
 		return
@@ -438,22 +434,18 @@ func releaseWorkspaceFileValue(file *workspaceFile) {
 		st.RenderCompletions, st.RenderHover = nil, nil
 		st.GutterMarks, st.LineBackgrounds, st.TextBackgrounds = nil, nil, nil
 	}
-	if file.Image != nil {
-		file.Image.ReleasePixels()
-		file.Image = nil
-	}
+	file.PreviewPath = ""
+	file.PreviewHTML = ""
+	file.PreviewError = ""
+	file.MarkupPreview = false
 	file.Assist = nil
-	file.PreviewMarkdown = nil
-	file.PreviewText = ""
 	file.Document = nil
 	file.DocumentSheet = ""
-	file.DocumentList = ui.ListState{}
 	file.Editor = nil
 }
 
 func (a *desktop) releaseWorkspaceFiles() {
-	a.cancelFilePreview()
-	a.fileLoadID++
+	a.workspacePreview.release()
 	a.closeFileInfo()
 	for key, file := range a.workspaceFiles {
 		delete(a.workspaceFiles, key)

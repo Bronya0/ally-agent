@@ -1106,8 +1106,8 @@ func formatTruncatedLines(lines []int, omitted bool) string {
 // the merged stdout/stderr in the body. The command text and cwd are
 // deliberately not echoed — the model just sent them in the tool call one
 // message earlier, and re-quoting them only doubles long commands in history.
-// A zero exit code is the implicit success path (attribute omitted); non-zero
-// exit, timeout, truncation, the spilled-output pointer, and a promotion to a
+// The exit attribute is always present, including zero, so success is explicit;
+// timeout, truncation, the spilled-output pointer, and a promotion to a
 // background service (`promoted-to-service`) stay as attributes. A
 // closing-marker shape in the output is escaped (see escapeClosingMarker).
 // A sandbox-denied write carries its model-facing note (DeniedWriteHint) here,
@@ -1141,9 +1141,7 @@ func renderCommandResultForModel(r CommandResult) string {
 	body = escapeClosingMarker(body, "</ally-command")
 	var b strings.Builder
 	b.WriteString("<ally-command")
-	if r.ExitCode != 0 {
-		fmt.Fprintf(&b, ` exit="%d"`, r.ExitCode)
-	}
+	fmt.Fprintf(&b, ` exit="%d"`, r.ExitCode)
 	if r.TimedOut {
 		b.WriteString(` timed-out`)
 	}

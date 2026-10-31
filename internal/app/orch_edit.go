@@ -275,70 +275,54 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 	return result, nil
 }
 
-// Model calls stay single-file. Same-stage local edits share the ordinary
-// argument gate and the existing multi-file prepare/commit/rollback engine.
+// Model calls stay single-file. Same-stage edits are independent transactions:
+// a rejected edit never cancels a successful edit for another file.
 func (a *App) executeLocalEditToolBatch(ctx context.Context, cfg ConfigState, calls []openai.ToolCall) (results []toolResult) {
 	results = make([]toolResult, len(calls))
-	fail := func(err error) []toolResult {
-		for i := range results {
-			results[i] = toolErrorResult(err)
-		}
-		return results
+	for i, call := range calls {
+		results[i] = a.executeLocalEditToolCall(ctx, cfg, call)
 	}
+	return results
+}
+
+func (a *App) executeLocalEditToolCall(ctx context.Context, cfg ConfigState, call openai.ToolCall) (result toolResult) {
 	defer func() {
 		if r := recover(); r != nil {
-			fail(codedToolError("E_TOOL_PANIC", fmt.Errorf("edit batch panic: %v", r)))
+			result = toolErrorResult(codedToolError("E_TOOL_PANIC", fmt.Errorf("edit call panic: %v", r)))
 		}
 	}()
-	files := make([]FileTextEdits, len(calls))
-	warnings := make([][]string, len(calls))
-	for i, c := range calls {
-		err, w := decodeToolArguments("edit", []byte(c.Function.Arguments), &files[i])
-		if toolcall.IsTruncatedArguments(c.Function.Arguments) {
-			err = codedToolError("E_TRUNCATED_ARGS", errors.New("edit arguments were truncated; resend complete parameters"))
-		}
-		warnings[i] = w
-		if err == nil {
-			err = validateModelEditToolRequest([]FileTextEdits{files[i]})
-		}
-		if err == nil {
-			err = kbDenyCheckPaths(ctx, cfg, files[i].Path)
-		}
-		if err != nil {
-			fail(codedToolError("E_EDIT_BATCH_ABORTED", fmt.Errorf("no edits committed: edit for %s failed validation", files[i].Path)))
-			results[i] = toolErrorResult(err)
-			return results
-		}
+	if err := ctx.Err(); err != nil {
+		return toolErrorResult(codedToolError("E_CANCELLED", err))
 	}
-	edited, err := a.editFilesWithContext(ctx, cfg, files)
+	var file FileTextEdits
+	err, warnings := decodeToolArguments("edit", []byte(call.Function.Arguments), &file)
+	if toolcall.IsTruncatedArguments(call.Function.Arguments) {
+		err = codedToolError("E_TRUNCATED_ARGS", errors.New("edit arguments were truncated; resend complete parameters"))
+	}
+	if err == nil {
+		err = validateModelEditToolRequest([]FileTextEdits{file})
+	}
+	if err == nil {
+		err = kbDenyCheckPaths(ctx, cfg, file.Path)
+	}
 	if err != nil {
-		var fileErr *editFileError
-		if errors.As(err, &fileErr) {
-			fail(codedToolError("E_EDIT_BATCH_ABORTED", errors.New("edit batch aborted because another edit failed; inspect the failing call before retrying the batch")))
-			failed, ok := localMutationTarget(cfg, fileErr.path)
-			for i, file := range files {
-				target, valid := localMutationTarget(cfg, file.Path)
-				if ok && valid && target.key == failed.key {
-					results[i] = toolErrorResult(err)
-					break
-				}
-			}
-		} else {
-			// Cancellation and workspace-wide failures apply to every call.
-			fail(err)
-		}
-		return results
+		return toolErrorResult(err)
+	}
+	edited, err := a.editFilesWithContext(ctx, cfg, []FileTextEdits{file})
+	if err != nil {
+		return toolErrorResult(err)
+	}
+	if len(edited.Files) != 1 {
+		return toolErrorResult(codedToolError("E_EDIT_COMMIT", errors.New("edit did not return its file result")))
 	}
 	a.invalidateWorkspaceMapCache(cfg)
 	a.invalidateGitStatus(cfg.Workspace)
-	for i, f := range edited.Files {
-		one := MultiEditResult{Files: []EditResult{f}, FileCount: 1, Replacements: f.Replacements, AddedLines: f.AddedLines, RemovedLines: f.RemovedLines, Summary: f.Summary, Diff: f.Diff}
-		for _, w := range f.Warnings {
-			one.Warnings = append(one.Warnings, f.Path+": "+w)
-		}
-		results[i] = toolResult{OK: true, Data: one, Warnings: warnings[i]}
+	f := edited.Files[0]
+	one := MultiEditResult{Files: []EditResult{f}, FileCount: 1, Replacements: f.Replacements, AddedLines: f.AddedLines, RemovedLines: f.RemovedLines, Summary: f.Summary, Diff: f.Diff}
+	for _, warning := range f.Warnings {
+		one.Warnings = append(one.Warnings, f.Path+": "+warning)
 	}
-	return results
+	return toolResult{OK: true, Data: one, Warnings: warnings}
 }
 
 func validateModelEditToolRequest(files []FileTextEdits) error {

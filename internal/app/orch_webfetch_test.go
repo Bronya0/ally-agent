@@ -105,6 +105,43 @@ func TestWebFetchRawReturnsSourceWithMeta(t *testing.T) {
 	}
 }
 
+func TestWebFetchExtractionErrorKeepsHTTPStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	_, err := app.webFetchToolWithConfig(context.Background(), webFetchTestConfig(), WebFetchRequest{URL: server.URL})
+	if err == nil {
+		t.Fatal("expected readable extraction error")
+	}
+	var coded shared.CodedError
+	if !errors.As(err, &coded) || coded.ToolErrorCode() != "E_WEB_FETCH_EXTRACT" {
+		t.Fatalf("expected E_WEB_FETCH_EXTRACT, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP status 404") {
+		t.Fatalf("extraction error must retain HTTP status, got %v", err)
+	}
+
+	got, err := app.webFetchToolWithConfig(context.Background(), webFetchTestConfig(), WebFetchRequest{URL: server.URL, Format: "raw"})
+	if err != nil {
+		t.Fatalf("raw mode should return the empty response with status: %v", err)
+	}
+	if got.Status != http.StatusNotFound {
+		t.Fatalf("raw mode status = %d, want %d", got.Status, http.StatusNotFound)
+	}
+
+	requestResult, err := app.httpRequestToolWithConfig(context.Background(), webFetchTestConfig(), HTTPRequestToolRequest{URL: server.URL})
+	if err != nil {
+		t.Fatalf("http_request should return the response status: %v", err)
+	}
+	if requestResult.Status != http.StatusNotFound {
+		t.Fatalf("http_request status = %d, want %d", requestResult.Status, http.StatusNotFound)
+	}
+}
+
 // raw 对纯文本响应同样生效，且不报错。
 func TestWebFetchRawPlainText(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

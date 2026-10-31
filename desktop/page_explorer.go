@@ -14,7 +14,6 @@ import (
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
-	"github.com/egoist/mygo/ui/markdown"
 )
 
 func fileParent(path string) string {
@@ -28,15 +27,45 @@ func (a *desktop) filePanel(c *ui.Context) {
 	a.fileTree(c)
 }
 
-func isPreviewImage(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp":
-		return true
+func normalizeExplorerPath(path string) string {
+	path = filepath.ToSlash(filepath.Clean(path))
+	return strings.TrimPrefix(path, "./")
+}
+
+func (a *desktop) previewMediaSiblings(path string) (previous, next string, index, count int) {
+	parent := fileParent(path)
+	entries := a.files
+	if parent != "" && parent != "." {
+		entries = a.fileChildren[parent]
 	}
-	return false
+	current := normalizeExplorerPath(path)
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Dir || !workspaceFileKindForPath(entry.Path).isMedia() {
+			continue
+		}
+		paths = append(paths, entry.Path)
+	}
+	index = -1
+	for i, candidate := range paths {
+		if normalizeExplorerPath(candidate) == current {
+			index = i
+			break
+		}
+	}
+	if index >= 0 {
+		if index > 0 {
+			previous = paths[index-1]
+		}
+		if index+1 < len(paths) {
+			next = paths[index+1]
+		}
+	}
+	return previous, next, index, len(paths)
 }
 
 func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
+	kind := workspaceFileKindForPath(file.Path)
 	ui.Column(c).Grow(1).MinWidth(0).BorderWidth(0, 0, 0, 1).BorderColor(c.Theme().Border).Children(func() {
 		c.OnShortcut(ui.Cmd, ui.KeyS, func() { a.saveFile() })
 		ui.Row(c).Height(34).Padding(0, padRow).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
@@ -45,13 +74,28 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 				name += " ●"
 			}
 			uikit.Tooltip(c, ui.Text(c, short(name, 46)).FontSize(fsSmall).Grow(1), file.Path)
-			ext := strings.ToLower(filepath.Ext(file.Path))
-			if ext == ".md" || ext == ".html" || ext == ".htm" {
+			if kind.isMedia() {
+				previous, next, index, count := a.previewMediaSiblings(file.Path)
+				if count > 1 {
+					flat(c, "上一个").Disabled(previous == "").OnClick(func() {
+						if previous != "" {
+							a.openFile(previous)
+						}
+					})
+					ui.Text(c, fmt.Sprintf("%d/%d", index+1, count)).FontSize(fsTiny).TextColor(a.secondaryInk()).Shrink(0)
+					flat(c, "下一个").Disabled(next == "").OnClick(func() {
+						if next != "" {
+							a.openFile(next)
+						}
+					})
+				}
+			}
+			if kind.hasMarkupToggle() {
 				label := "预览"
-				if a.filesF.Preview {
+				if file.MarkupPreview {
 					label = "编辑源码"
 				}
-				flat(c, label).OnClick(func() { a.filesF.Preview = !a.filesF.Preview })
+				flat(c, label).OnClick(func() { a.toggleWorkspaceFileMarkupPreview(file) })
 			}
 			flat(c, "刷新").Disabled(file.Saving).OnClick(func() {
 				if t := a.current(); t != nil {
@@ -68,37 +112,38 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 			if file.Saving {
 				label = "保存中…"
 			}
-			flat(c, label).Disabled(file.Image != nil || file.Saving || !file.Editor.Buffer.Modified()).OnClick(func() { a.saveFile() })
-			if file.Document != nil {
+			flat(c, label).Disabled(kind.isPreviewOnly() || file.Saving || !file.Editor.Buffer.Modified()).OnClick(func() { a.saveFile() })
+			if kind.isPreviewOnly() || file.MarkupPreview {
 				flat(c, "系统打开").OnClick(func() { a.openSystemFile(file.Path) })
 			}
 			iconAction(c, "editor-close", "关闭编辑器", "close", 24, func() { a.closeFile() })
 		})
-		if file.Image != nil {
-			ui.Box(c).Grow(1).MinHeight(0).Padding(20).Center().Children(func() {
-				ui.Image(c, file.Image).Fill().Fit(ui.Contain)
-			})
-			return
-		}
-		if file.Document != nil {
-			a.documentFileView(c, file)
-			return
-		}
-		if a.filesF.Preview && strings.HasSuffix(strings.ToLower(file.Path), ".md") {
-			// Read the buffer once per edit, not once per frame: Buffer.String()
-			// builds the whole text again, and frames come with every animation.
-			if v := file.Editor.Buffer.Version(); !file.PreviewReady || v != file.PreviewVersion {
-				file.PreviewText, file.PreviewVersion, file.PreviewReady = file.Editor.Buffer.String(), v, true
-			}
-			ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-				ui.Column(c).Padding(padPage).Children(func() {
-					if file.PreviewMarkdown == nil {
-						file.PreviewMarkdown = a.readingMarkdownOptions()
-					}
-					a.configureReadingMarkdown(file.PreviewMarkdown)
-					markdown.View(c, file.PreviewText, file.PreviewMarkdown)
+		if file.PreviewError != "" {
+			ui.Box(c).Grow(1).MinHeight(0).Padding(padPage).Center().Children(func() {
+				ui.Column(c).FillWidth().MaxWidth(560).AlignSelf(ui.Center).Gap(gapSection).Children(func() {
+					ui.Text(c, "无法预览此文件").FontSize(fsPageTitle).Bold().TextAlign(ui.Center).FillWidth()
+					fieldNote(c, file.PreviewError, a.secondaryInk())
+					ui.Row(c).Justify(ui.Center).Children(func() {
+						flat(c, "用系统应用打开").OnClick(func() { a.openSystemFile(file.Path) })
+					})
 				})
 			})
+			return
+		}
+		if file.Document != nil && len(file.Document.Sheets) > 0 {
+			ui.Row(c).FillWidth().Padding(padRow).Gap(gapField).AlignItems(ui.Center).Children(func() {
+				fieldLabel(c, "工作表")
+				names := make([]string, len(file.Document.Sheets))
+				for i, sheet := range file.Document.Sheets {
+					names[i] = sheet.Name
+				}
+				uikit.Select(c.Key("document-sheet"), &file.DocumentSheet, names).Width(220).Label("预览工作表").OnChange(func() {
+					a.selectWorkspaceDocumentSheet(file, file.DocumentSheet)
+				})
+			})
+		}
+		if file.PreviewPath != "" || file.PreviewHTML != "" || file.Document != nil || file.MarkupPreview {
+			a.workspaceFilePreviewView(c, file)
 			return
 		}
 		file.Editor.ReadOnly = a.closing || file.Saving
@@ -130,7 +175,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 			uikit.Tooltip(c, ui.Text(c, short(title, 24)).FontSize(fsSmall).TextColor(ink).Grow(1), tip)
 			uikit.IconButton(c, "explorer-refresh", "刷新", iconImage("refresh"), 22, uikit.IconQuiet, func() { a.refreshFiles(true) }, ink)
 			uikit.IconButton(c, "explorer-help", "文件浏览器帮助", iconImage("info"), 22, uikit.IconQuiet, func() { a.filesF.HelpOpen = !a.filesF.HelpOpen }, ink)
-			uikit.IconButton(c, "explorer-close", "关闭文件栏", iconImage("close"), 22, uikit.IconQuiet, func() { a.explorer = false }, ink)
+			uikit.IconButton(c, "explorer-close", "关闭文件栏", iconImage("close"), 22, uikit.IconQuiet, func() { a.setExplorerOpen(false) }, ink)
 		})
 		// Put the fallback menu on the viewport: the content column can be
 		// shorter than it, even with FillHeight in a scrolling container.
@@ -153,6 +198,16 @@ func (a *desktop) fileTree(c *ui.Context) {
 			if m.Item("打开目录").Chosen() {
 				a.openInManager("")
 			}
+			if m.Item("复制绝对路径").Chosen() {
+				if t := a.current(); t != nil && t.Workspace != "" {
+					full, err := filepath.Abs(t.Workspace)
+					if err != nil {
+						a.notifyError("复制工作区路径失败：" + err.Error())
+					} else {
+						services.WriteClipboard(full)
+					}
+				}
+			}
 			m.Separator()
 			if m.Item("粘贴文件").Chosen() {
 				a.pasteFiles(services, "")
@@ -168,7 +223,8 @@ func (a *desktop) fileTree(c *ui.Context) {
 				for _, line := range []string{
 					"单击文件打开，单击目录展开",
 					"右键文件：复制文件 / 复制路径 / 重命名 / 删除 / 属性",
-					"右键空白处或目录：粘贴文件；同名文件自动另存副本",
+					"右键空白处：复制工作区绝对路径 / 粘贴文件；同名文件自动另存副本",
+					"右键目录：粘贴文件；同名文件自动另存副本",
 					"Ctrl+C 复制聚焦文件，Ctrl+V 粘贴到聚焦目录（文件行则为其父目录）",
 					"Ctrl+S 保存当前文件（带版本校验）",
 					"Ctrl+Space 补全，悬停查看符号信息，F12 / ⌘或Ctrl+点击跳转 Go 定义",
@@ -461,6 +517,83 @@ func (a *desktop) toggleFolder(path string) {
 	a.loadFolderChildren(path)
 }
 
+// prepareFileTree retains visible rows and disclosure state during a refresh of
+// the same workspace. Collapsed listings are invalidated for their next open.
+func (a *desktop) prepareFileTree(root string) {
+	key := ""
+	if root != "" {
+		key = workspaceKey(root)
+	}
+	if key == "" || key != a.fileRoot {
+		a.releaseFilePreview()
+		a.files = nil
+		a.fileOpen = map[string]bool{}
+		a.fileChildren = map[string][]backend.FileEntry{}
+	} else {
+		for path := range a.fileChildren {
+			if !a.fileOpen[path] {
+				delete(a.fileChildren, path)
+			}
+		}
+	}
+	a.fileRoot = key
+	a.fileLoading = map[string]bool{}
+}
+
+// applyFileTreeEntries refreshes expanded descendants lazily, using the current
+// disclosure state so a user collapse during an in-flight refresh is respected.
+func (a *desktop) applyFileTreeEntries(parent string, entries []backend.FileEntry) {
+	prefix := ""
+	if parent != "" {
+		prefix = parent + "/"
+	}
+	dirs := map[string]bool{}
+	for _, entry := range entries {
+		if entry.Dir {
+			dirs[strings.ReplaceAll(entry.Path, "\\", "/")] = true
+		}
+	}
+	for path := range a.fileOpen {
+		if !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		child, _, _ := strings.Cut(strings.TrimPrefix(path, prefix), "/")
+		if !dirs[prefix+child] {
+			delete(a.fileOpen, path)
+			delete(a.fileChildren, path)
+			delete(a.fileLoading, path)
+		}
+	}
+	if parent == "" {
+		a.files = entries
+	} else {
+		if a.fileChildren == nil {
+			a.fileChildren = map[string][]backend.FileEntry{}
+		}
+		a.fileChildren[parent] = entries
+	}
+	for path := range dirs {
+		if a.fileBranchOpen(path) {
+			a.loadFolderChildren(path)
+		}
+	}
+}
+
+// A remembered expansion below a collapsed ancestor is not visible and must
+// not cause background reads, including when an older parent read completes.
+func (a *desktop) fileBranchOpen(path string) bool {
+	for {
+		if !a.fileOpen[path] {
+			return false
+		}
+		index := strings.LastIndexByte(path, '/')
+		if index < 0 {
+			return true
+		}
+		path = path[:index]
+	}
+}
+
 // refreshFolder reloads one directory in place and keeps the tree expanded,
 // the way the Vue explorer refreshes a single node instead of the whole tree.
 func (a *desktop) refreshFolder(path string) {
@@ -496,7 +629,7 @@ func (a *desktop) loadFolderChildren(path string, manual ...bool) {
 	go func() {
 		result, err := a.core.ListFiles(backend.ListFilesRequest{Workspace: root, Path: path, MaxDepth: 1, Limit: 1000, IncludeHidden: true, IncludeIgnored: true})
 		a.win.Update(func() {
-			if epoch != a.fileEpoch {
+			if epoch != a.fileEpoch || !a.fileLoading[path] {
 				return
 			}
 			delete(a.fileLoading, path)
@@ -504,10 +637,7 @@ func (a *desktop) loadFolderChildren(path string, manual ...bool) {
 				a.notifyError(err.Error())
 				return
 			}
-			if a.fileChildren == nil {
-				a.fileChildren = map[string][]backend.FileEntry{}
-			}
-			a.fileChildren[path] = result.Entries
+			a.applyFileTreeEntries(path, result.Entries)
 			if len(manual) > 0 && manual[0] {
 				a.notifySuccess("目录已刷新")
 			}
@@ -594,6 +724,10 @@ func (a *desktop) openFileInfoWithNote(path, note string) {
 	if t == nil {
 		return
 	}
+	// A modal can cover an actively playing media preview. Destroy the native
+	// surface while the preview is not visible; the next render recreates it
+	// after the dialog closes if the same file is still selected.
+	a.releaseFilePreview()
 	a.closeFileInfo()
 	a.filesF.InfoOpen = true
 	a.filesF.InfoPath = path

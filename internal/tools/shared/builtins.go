@@ -153,7 +153,7 @@ func chatToolsUncached() []openai.Tool {
 				"aspect_ratio": map[string]any{"type": "string", "enum": []string{"1:1", "3:2", "2:3"}},
 			}, "required": []string{"prompt", "images"},
 		}),
-		functionTool("list_files", "Inspect directory structure; use read directly for known files and grep to locate code by content. Lists up to 3 levels deep and 200 entries, with directories ending in '/'. Dotfiles, gitignored paths, VCS internals and heavy dependency/build directories are omitted. At most 50 direct files per directory are shown; '+N more files' marks omitted siblings. Narrow the path for depth/global truncation; narrowing to the same directory cannot reveal omitted siblings. An absent entry does not prove a path does not exist.", map[string]any{
+		functionTool("list_files", "Inspect directory structure. Lists up to 3 levels deep and 200 entries, with directories ending in '/'. Dotfiles, gitignored paths, VCS internals and heavy dependency/build directories are omitted. At most 50 direct files per directory are shown; '+N more files' marks omitted siblings. Narrow the path for depth/global truncation; narrowing to the same directory cannot reveal omitted siblings. An absent entry does not prove a path does not exist.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{"type": "string", "description": "Workspace-relative directory path, or explicit absolute path for read-only listing. Empty means workspace root."},
@@ -167,7 +167,7 @@ func chatToolsUncached() []openai.Tool {
 		// model calls the tool — unique windowTitle match, mutually exclusive
 		// targets, negative region coordinates, downscaling, the privacy
 		// guard — are all still here.
-		functionTool("screenshot", "Capture a screen/window image, or list visible windows with action=list. Default capture uses the primary display; region uses virtual-screen coordinates (negative values allowed). Prefer windowId from list; windowTitle must match exactly one window, otherwise the error includes candidates. windowId, windowTitle and region are mutually exclusive. Window capture excludes covering windows; display/region capture shows what is visible. focus=true restores and raises a window. Images are downscaled. Capture only when the user asks to see the screen or a UI element.", map[string]any{
+		functionTool("screenshot", "Capture a screen/window image, or list visible windows with action=list. Default capture uses the primary display; region uses virtual-screen coordinates (negative values allowed). Prefer windowId from list. windowId, windowTitle and region are mutually exclusive. Window capture excludes covering windows; display/region capture shows what is visible. focus=true restores and raises a window. Images are downscaled. Capture only when the user asks to see the screen or a UI element.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":      map[string]any{"type": "string", "enum": []string{"capture", "list"}, "description": "capture (default) or list (return visible windows instead)."},
@@ -189,7 +189,7 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("edit", "Edit one workspace file per call; send parallel calls for multiple files. Read first and use its current version, or reuse the version from a successful edit. Each change uses oldText or lineRange, never both. Prefer small, unique oldText copied verbatim from read without line-number prefixes; replaceAll applies only to oldText. Use lineRange for large block replacements/deletions. All changes refer to the same original snapshot: never shift line numbers for earlier changes. Overlapping changes fail together; merge edits in the same region into one change whose newText is the final content. For insertions next to an edited line, include both in one change. Source/version/range errors may attach a complete read-format snapshot of a small text file: rebuild using its source and version; otherwise re-read the needed range before retrying.", map[string]any{
+		functionTool("edit", "Edit one workspace file using its current version from read or a preceding successful edit. For adjacent edits or insertions in the same region, combine them into one change. On source/version/range errors, use an attached complete snapshot or re-read the needed range.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the single file to edit in this call."},
@@ -199,16 +199,16 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path", "version", "changes"},
 		}),
-		functionTool("create", "Create a UTF-8 file and missing parent directories. Existing files require overwrite=true; directories, symlinks and existing non-text files are refused.", map[string]any{
+		functionTool("create", "Create a UTF-8 file and missing parent directories. Directories, symlinks and existing non-text files are refused.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the file to create; parent directories are created automatically."},
+				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative file path."},
 				"content":   map[string]any{"type": "string", "description": "Full UTF-8 text of the new file (may be empty). It is written as-is, so add a trailing newline yourself when you want one."},
 				"overwrite": map[string]any{"type": "boolean", "description": "Allow replacing an existing text file; default false."},
 			},
 			"required": []string{"path", "content"},
 		}),
-		functionTool("delete", "Delete a file or directory in the workspace. Directories require recursive=true. Strictly prohibited from deleting drive roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*, C:\\Windows, C:\\Users/*), VCS metadata (.git), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs)."+deleteBatchNote(), map[string]any{
+		functionTool("delete", "Delete files or directories in the workspace. Strictly prohibited from deleting drive roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*, C:\\Windows, C:\\Users/*), VCS metadata (.git), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs)."+deleteBatchNote(), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"paths":     deletePathsSchema("Workspace-relative or authorized path to delete."),
@@ -216,7 +216,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"paths"},
 		}),
-		functionTool("command", "Run a shell command with cwd inside the workspace. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. Read-only outside inspection and new outside paths are allowed; modifying existing outside paths is refused. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. Output is a bounded preview; use the full log path with read/grep when provided, rather than rerunning side effects. A timeout promotes the still-running process to a background service: use service read/stop with its returned id, never start a duplicate.", map[string]any{
+		functionTool("command", "Run a shell command or related shell sequence with cwd inside the workspace. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. Read-only outside inspection and new outside paths are allowed; modifying existing outside paths is refused. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. Output is a bounded preview; use the full log path with read/grep when provided, rather than rerunning side effects. A timeout promotes the still-running process to a background service: use service read/stop with its returned id, never start a duplicate.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run."},
@@ -225,11 +225,11 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("service", "Manage long-running local processes in the current workspace without blocking. Sessions and sub-agents in the same workspace share services; list/read/stop cannot access other workspaces. The active service limit is global across workspaces. List reports activeCount for this workspace and globalActiveCount/maxActive for global capacity. A workspace is required for model service operations. start requires a description explaining the service purpose and returns an id; list defaults to starting/running services; includeFinished=true also lists recent finished services; read returns recent output, including from finished services; stop immediately force-kills the owned process tree and confirms exit. Model output keeps at most the last 8 KiB; reduced-from reports clipping. Avoid polling loops; read after a concrete condition or wait.", map[string]any{
+		functionTool("service", "Manage background processes owned by the current workspace. Sessions and sub-agents in the same workspace share services; operations cannot access other workspaces. The active service limit is global, and model calls require a workspace. stop immediately force-kills the owned process tree.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"includeFinished": map[string]any{"type": "boolean", "description": "For action=list: include finished services (default false). Output remains readable by id."},
-				"action":          map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "Start a new background process, stop one by id, list starting/running services (includeFinished=true adds recent finished ones), or read a bounded tail of one service's output (works on finished services for post-mortem diagnosis). Only output flushed by the subprocess is visible: empty output does not prove a hang. For Python services use python -u or flush=True when immediate logs are needed; force-stop may discard unflushed output."},
+				"includeFinished": map[string]any{"type": "boolean", "description": "For action=list: include finished services (default false)."},
+				"action":          map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "start launches a process; stop force-kills it; list shows active services and reports workspace/global limits; read returns output, including for finished services. Only flushed output is visible, so empty output does not prove a hang; use python -u or flush=True for immediate Python logs. Stop may discard unflushed output."},
 				"name":            map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
 				"description":     map[string]any{"type": "string", "minLength": 1, "maxLength": MaxServiceDescriptionChars, "pattern": ".*\\S.*", "description": "Required with action=start: explain what the service does and why it is needed. Shown to the user in service cards and the task center."},
 				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
@@ -237,7 +237,7 @@ func chatToolsUncached() []openai.Tool {
 				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start. Required with action=stop and action=read."},
 				"graceSeconds": map[string]any{
 					"type": "integer", "minimum": 0, "maximum": MaxServiceStopGraceSeconds,
-					"description": fmt.Sprintf("Deprecated compatibility field (legacy default %d, maximum %d); ignored. Stop always immediately force-kills the owned process tree.", DefaultServiceStopGraceSeconds, MaxServiceStopGraceSeconds),
+					"description": fmt.Sprintf("Deprecated compatibility field (legacy default %d, maximum %d); ignored.", DefaultServiceStopGraceSeconds, MaxServiceStopGraceSeconds),
 				},
 				"tailBytes": map[string]any{
 					"type": "integer", "minimum": 0, "maximum": MaxServiceReadTailBytes,
@@ -246,7 +246,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("wait", "Pause the current agent run for a short, cancellable delay (1-3600 seconds) with a reason. To wait after other operations, assign a later stage; wait has no implicit ordering and never ends the run. A delay does not verify readiness: check the expected condition afterward.", map[string]any{
+		functionTool("wait", "Pause the current agent run for a short, cancellable delay. To wait after preceding operations, assign a later stage; wait has no implicit ordering. A delay does not verify readiness; check the expected condition afterward.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": MaxWaitSeconds, "description": "Delay in whole seconds, from 1 to 3600."},
@@ -254,26 +254,26 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"seconds", "reason"},
 		}),
-		functionTool("ask", "Ask user decisions together in one card. Each question needs concise options with labels and non-empty descriptions; recommended is optional. Omit ids to have them assigned automatically. This must be the only tool call in the response.", map[string]any{
+		functionTool("ask", "Ask the user one or more decisions together in a single card. Each option needs a label and a short description; marking one as recommended is optional. This must be the only tool call in the response.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"questions": map[string]any{
 					"type": "array", "minItems": 1, "maxItems": 5,
-					"description": "One to five questions; all of them are shown in a single card and answered together.",
+					"description": "Questions to show in the same card.",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"question": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxAskQuestionChars, "pattern": ".*\\S.*", "description": fmt.Sprintf("Question text shown to the user, 1-%d characters.", MaxAskQuestionChars)},
+							"question": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxAskQuestionChars, "pattern": ".*\\S.*", "description": "Question shown to the user."},
 							"id":       map[string]any{"type": "string", "maxLength": 64, "description": "Optional. Omit it and Ally assigns one; only supply it when you need to reference this question yourself. At most 64 characters."},
 							"options": map[string]any{
 								"type": "array", "minItems": 2, "maxItems": 6,
-								"description": "Two to six options the user can pick from.",
+								"description": "Choices for this question.",
 								"items": map[string]any{
 									"type": "object",
 									"properties": map[string]any{
-										"label":       map[string]any{"type": "string", "minLength": 1, "maxLength": MaxAskOptionLabelChars, "pattern": ".*\\S.*", "description": fmt.Sprintf("Short label shown on the option, 1-%d characters.", MaxAskOptionLabelChars)},
+										"label":       map[string]any{"type": "string", "minLength": 1, "maxLength": MaxAskOptionLabelChars, "pattern": ".*\\S.*", "description": "Short label shown on the option."},
 										"id":          map[string]any{"type": "string", "maxLength": 64, "description": "Optional. Omit it and Ally assigns one; only supply it when you need to reference this option yourself. At most 64 characters."},
-										"description": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxAskOptionDescriptionChars, "pattern": ".*\\S.*", "description": "Required non-empty details for this option."},
+										"description": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxAskOptionDescriptionChars, "pattern": ".*\\S.*", "description": "Details shown for this option."},
 										"recommended": map[string]any{"type": "boolean", "description": "Optional flag marking a recommended option."},
 									},
 									"required": []string{"label", "description"},
@@ -286,28 +286,28 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"questions"},
 		}),
-		functionTool("scheduled_task", "Create, list, or delete persistent scheduled tasks that survive Ally restarts. Recurring schedules resume from startup without catching up missed fires. The backend also accepts future RFC3339 one-shot times; past-due one-shots are reported as missed and never run late. For agent-created tasks, create only when the user explicitly requests scheduled or recurring automation. Task content must be exactly one of instruction (an LLM agent runs with fresh context each fire, on the model that was active when the task was created) or command (a shell command runs in the task workspace through command safety checks, max 600s per run).", map[string]any{
+		functionTool("scheduled_task", "Create, list, or delete persistent tasks that survive Ally restarts. Recurring schedules resume at startup without catching up missed runs. Supports future RFC3339 one-shot times, durations, or five-field cron; past-due one-shots are marked missed. For agent-created tasks, create only when the user explicitly requests scheduled or recurring automation. For create, provide exactly one of `instruction` or `command`. Instructions run with fresh context on the model active at creation; commands run in the workspace through command safety checks and have a 600-second limit.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"includeFinished": map[string]any{"type": "boolean", "description": "For action=list: include completed, missed, or invalid tasks with no next run (default false). Running tasks and tasks with a next run are always listed."},
 				"action":          map[string]any{"type": "string", "enum": []string{"create", "list", "delete"}, "description": "Create, list active tasks, or delete a scheduled task. Use includeFinished=true to list all retained tasks."},
 				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Task id required for delete."},
 				"name":            map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Short task name required for create."},
-				"instruction":     map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Self-contained instruction executed by an LLM agent with fresh context on every run. Mutually exclusive with command; provide either instruction or command for action=create."},
-				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command executed in the task workspace on every run (same safety rules as the command tool; not for long-running services). Mutually exclusive with instruction; provide either instruction or command for action=create."},
+				"instruction":     map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Self-contained instruction for the scheduled agent run."},
+				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command for the workspace; not for long-running services."},
 				"schedule":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Required for create: future RFC3339 one-shot time, Go duration such as 30m/2h (at least 1m), or a standard five-field cron expression. @-descriptors such as @daily are rejected: use a duration for intervals."},
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("http_request", "Make a single HTTP/HTTPS request with method, headers, query, body or JSON.", map[string]any{
+		functionTool("http_request", "Make a single HTTP/HTTPS request with method, headers, query, and at most one of body or JSON.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"method":             map[string]any{"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9!#$%&'*+.^_`|~-]*$", "description": "HTTP method token. Default GET; normalized to uppercase before sending."},
 				"url":                map[string]any{"type": "string", "minLength": 1, "pattern": `^https?://\S+$`, "description": "Absolute http:// or https:// URL."},
 				"headers":            map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Request headers. User-Agent defaults to AllyAgent unless provided."},
 				"query":              map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Query parameters merged into the URL."},
-				"body":               map[string]any{"type": "string", "description": "Raw request body text. Mutually exclusive with json; provide either body or json, not both."},
-				"json":               map[string]any{"type": "object", "additionalProperties": true, "description": "JSON object to encode as the request body. Mutually exclusive with body; provide either body or json, not both. Sets Content-Type to application/json unless provided."},
+				"body":               map[string]any{"type": "string", "description": "Raw request body text."},
+				"json":               map[string]any{"type": "object", "additionalProperties": true, "description": "JSON object to encode as the request body. Sets Content-Type to application/json unless provided."},
 				"saveTo":             map[string]any{"type": "string", "description": "Optional workspace-relative download path for large responses; parent directories are created automatically."},
 				"timeout":            httpTimeoutSchema(),
 				"maxBytes":           map[string]any{"type": "integer", "minimum": 0, "maximum": MaxHTTPBodyBytes, "description": fmt.Sprintf("Response body cap in bytes (default %d, max %d; omit or send 0 for the default, larger requests are clamped). saveTo raises the default to the max.", DefaultHTTPMaxBody, MaxHTTPBodyBytes)},
@@ -347,7 +347,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path", "version", "changes"},
 		}),
-		functionTool("remote_create_file", "Create a UTF-8 file and missing parents on a remote SSH workspace. Directories are refused. Existing files require overwrite=true.", map[string]any{
+		functionTool("remote_create_file", "Create a UTF-8 file and missing parents on a remote SSH workspace. Directories are refused.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    sshTargetSchema(),
@@ -377,12 +377,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "command"},
 		}),
-		functionTool("remote_transfer", "Transfer files or directories between the local workspace and a remote SSH workspace using raw binary streaming with bounded O(1) memory.\n"+
-			"- action='upload': streams localPath (file or directory) to remotePath on the remote workspace.\n"+
-			"- action='download': streams remotePath (file or directory) from the remote workspace to localPath.\n"+
-			"- Preserves file modes, permissions, and directory structures.\n"+
-			"- Both localPath and remotePath must stay within their respective workspaces (strict workspace fences enforced).\n"+
-			"- Existing destinations require overwrite=true; version-control metadata (.git) is strictly protected.", map[string]any{
+		functionTool("remote_transfer", "Transfer files or directories between local and remote workspaces using bounded-memory binary streaming. Workspace fences are enforced; .git is protected. File modes, permissions, and directory structure are preserved.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":     sshTargetSchema(),
@@ -393,25 +388,25 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "action", "localPath", "remotePath"},
 		}),
-		functionTool("ssh_cluster", "Inspect or register SSH cluster servers for the current workspace. action=list shows servers authorized for this workspace; action=add asks the user to approve registering a new node — or, when the alias is already registered, only to authorize that existing node for the workspace (stored nodes and credentials are never overwritten). Credentials (password / private key path) are configured by the user in the SSH cluster manager; this tool cannot store them. An alias that is not registered yet also needs host, username, description and reason in the same call — the schema can only require `alias`, because the already-registered path ignores the other four.", map[string]any{
+		functionTool("ssh_cluster", "Inspect or register SSH servers for the current workspace. Credentials are configured in the SSH cluster manager; this tool cannot store them. For a new alias, also provide host, username, description and reason. An existing alias only requests workspace authorization; other fields are ignored and the stored node or credentials are never overwritten.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":      map[string]any{"type": "string", "enum": []string{"list", "add"}, "description": "list: Show servers authorized for the current workspace; add: Request to register a new server node, or to authorize an already-registered one."},
-				"alias":       map[string]any{"type": "string", "minLength": 1, "pattern": `^[a-zA-Z0-9_\-\.]+$`, "description": "Short friendly identifier, e.g. dev-api or staging-db. Required for add. An alias that is already registered is never modified: only workspace authorization is requested and the fields below are ignored."},
-				"host":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Server IP address or hostname. Required when registering a new alias."},
+				"action":      map[string]any{"type": "string", "enum": []string{"list", "add"}, "description": "list: Show authorized servers; add: register or authorize an alias."},
+				"alias":       map[string]any{"type": "string", "minLength": 1, "pattern": `^[a-zA-Z0-9_\-\.]+$`, "description": "Short friendly identifier, e.g. dev-api or staging-db. Required for add."},
+				"host":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Server IP address or hostname."},
 				"port":        map[string]any{"type": "integer", "minimum": 0, "maximum": 65535, "description": "SSH port; omit or send 0 for the default (22)."},
-				"username":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "SSH login user. Required when registering a new alias."},
-				"description": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Required when registering a new alias: human-readable description of server role, environment, or purpose (e.g. 'staging redis cluster node', 'build runner')."},
-				"reason":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explanation to the user why this server is needed. Required when registering a new alias."},
+				"username":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "SSH login user."},
+				"description": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Server role, environment, or purpose."},
+				"reason":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Why this server is needed."},
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("grep", "Locate code by content when its location is unknown; prefer this over shell grep/rg. Once the target code file is known, use read to understand its relevant functions or logic before editing; do not repeatedly grep that file to piece together its contents. Single-file searches suit specific match queries, log filtering or counting. Searches UTF-8 content; default lines mode groups matching lines by file with line numbers and text previews capped at 500 characters each. Totals are exact within the searched scope. Use the returned next-offset to paginate available entries, or narrow path/glob. Hidden files are skipped during directory traversal; dependency/build directories are excluded unless path points inside them. An empty path also skips files over 10 MB.", map[string]any{
+		functionTool("grep", "Search UTF-8 content for specific matches, log filtering, or counts. Default lines mode groups matches by file with line numbers and previews capped at 500 characters. Totals are exact within the searched scope. Hidden files are skipped during traversal; dependency/build directories are excluded unless the path points inside them. Empty path also skips files over 10 MB.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Rust regex pattern; look-around and backreferences are unsupported. Escape regex metacharacters when matching literal text."},
 				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches", ""}, "description": "lines (default, also for an empty string) returns matching lines with capped text previews. count_matches returns occurrence counts for only the top 100 files by count, 20 files per page; pagination cannot retrieve files beyond that top 100."},
-				"path":           map[string]any{"type": "string", "description": "File or directory, relative to the workspace root or absolute. Empty means workspace root. For reading known code, use read instead."},
+				"path":           map[string]any{"type": "string", "description": "File or directory, relative to the workspace root or absolute. Empty means workspace root."},
 				"glob":           map[string]any{"type": "string", "description": "Optional glob filter, e.g. *.go or frontend/**/*.vue."},
 				"maxMatches":     map[string]any{"type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum returned matching lines in lines mode (default 200). Exact totals still cover the entire search."},
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false. Does not enable hidden-directory traversal or remove dependency/build directory exclusions."},
@@ -420,7 +415,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read known files directly to understand code or prepare edits. For small files, omit line ranges; for large files, read ranges covering complete relevant functions or logic rather than piecing them together through repeated grep calls or tiny reads. Batch independent files in one files array. Supports text and images (jpg, png, gif, webp; bmp returns a text notice). Text returns bounded `<ally-file path=… version=…>` previews with 1-based line numbers; edit needs that version. Use tailLines for log tails. Follow the startLine continuation hint only when more content is needed. Missing paths and directories have compact error receipts; other failures carry an error attribute. reused means unchanged content is already in context. truncated-lines marks lines with missing tails: edit refuses lineRange over those lines, so use oldText instead.", map[string]any{
+		functionTool("read", "Read text files and images (jpg, png, gif, webp; bmp returns a text notice). Text is returned as bounded `<ally-file path=… version=…>` previews with 1-based line numbers; use the version for edit. Use tailLines for logs. Missing paths and directories have compact error receipts; other failures carry an error attribute. `truncated-lines` marks incomplete line tails; edit refuses lineRange over them, so use oldText instead.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -435,14 +430,14 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"expression"},
 		}),
-		functionTool("render_html", fmt.Sprintf("Render a self-contained HTML snippet inline in the chat UI. Use for interactive widgets, data explorers, styled mockups, animated SVG, or rich charts. Apache ECharts (global `echarts`) is pre-installed in the environment—do not fetch external scripts or styles. Rendered in a sandboxed dark-theme iframe. Max %d characters.", MaxRenderHTMLCharacters), map[string]any{
+		functionTool("render_html", fmt.Sprintf("Render a self-contained HTML snippet inline in the chat UI for interactive widgets, styled mockups, animated SVG, or rich charts. ECharts (`echarts`) is pre-installed; do not fetch external assets. Rendered in a sandboxed dark-theme iframe. Max %d characters.", MaxRenderHTMLCharacters), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"html": map[string]any{
 					"type":        "string",
 					"minLength":   1,
 					"maxLength":   MaxRenderHTMLCharacters,
-					"description": "Self-contained HTML snippet with inline CSS and JS. Global `echarts` is pre-loaded for rich data visualizations (e.g. line, bar, pie, scatter, radar, heatmap). Give chart containers explicit dimensions (e.g. style=\"width:100%;height:350px;\"). No external scripts or resources.",
+					"description": "Self-contained HTML snippet with inline CSS and JavaScript.",
 				},
 				"title": map[string]any{
 					"type":        "string",
@@ -452,7 +447,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"html"},
 		}),
-		functionTool("plan", "Maintain the plan for the session: the short, ordered list of steps of a multi-step task, shown to the user as a progress panel. steps starts or replaces the plan (step titles in order; the first one starts immediately). finish reports where the work got to: a step title means that step and every step before it are done — the step after it becomes current, and naming the last step ends the plan with every step done. Call with neither of them to read the current plan back. Carry at most one of steps and finish per call — a call that gives both is refused, because the order of intent would be anyone's guess. Every result names the plan's state (empty, running or closed) and echoes the whole plan with its progress and the call that moves it forward, so there is nothing to remember between calls. A step title is how a report names that step, so keep the titles unique and tell the steps apart at a glance, and report a title the plan actually carries: an unknown one is refused instead of added. Statuses are never written by hand and exactly one step is current at a time. Start a plan when the work has several steps; skip the tool for single-step requests.", map[string]any{
+		functionTool("plan", "Maintain the session's user-visible progress plan for multi-step work. A call carries at most one of steps and finish; omit both to read the current plan. See their parameter descriptions for how to start or update it.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"steps": map[string]any{
@@ -471,7 +466,7 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("subagent", "Delegate a self-contained task to a child with a fresh context. The parent waits for the entire tool batch; same-stage calls can run concurrently. The child uses built-in and MCP tools, but cannot use ask, subagent, plan, skill or scheduled_task. Check its report and stopReason before treating work as complete. Set maxSteps based on difficulty.", map[string]any{
+		functionTool("subagent", "Run an isolated child task. The parent waits for the tool batch; same-stage calls can run concurrently. The child uses built-in and MCP tools, but cannot use ask, subagent, plan, skill or scheduled_task. Verify its report and stopReason.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The task for the child agent. Be specific — include file paths and expected outcomes."},
@@ -491,7 +486,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"skill"},
 		}),
-		functionTool("suggest", "By default, end replies with 1-4 useful next actions; omit when none are useful. Order by relevance and prefix each item with its ordinal (1., 2., ...). Items become user messages verbatim, so write self-contained instructions the user could send. This must be the only tool call in the response and ends the run; finish your reply first.", map[string]any{
+		functionTool("suggest", "Offer concise follow-up actions when useful. Suggestions are sent to the user verbatim. This must be the only tool call in the response and ends the run; finish the reply first.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"items": map[string]any{
@@ -526,7 +521,6 @@ var builtinToolExamples = map[string]string{
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","tailLines":200}]}`,
 	"render_html":        `{"html":"<div id=\"chart\" style=\"width:100%;height:350px;\"></div><script>const c=echarts.init(document.getElementById('chart'),'dark');c.setOption({title:{text:'Metrics'},xAxis:{data:['Mon','Tue','Wed','Thu','Fri']},yAxis:{},series:[{type:'bar',data:[12,34,56,78,90]}]});</script>"}`,
 	"screenshot":         `list: {"action":"list"}; a window by id: {"windowId":131076}; by unique title: {"windowTitle":"ally-agent"}; region: {"region":{"x":0,"y":0,"width":1280,"height":800}}`,
-	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","maxSteps":20,"description":"Review authentication"}`,
 	"plan":               `start: {"steps":["Inspect code","Run tests"]}; report progress: {"finish":"Inspect code"}; read: {}`,
 }
 
@@ -541,7 +535,7 @@ func functionTool(name, description string, parameters map[string]any) openai.To
 	}
 	properties["stage"] = map[string]any{
 		"type": "integer", "minimum": 0, "maximum": MaxToolStage,
-		"description": "Execution stage (default 0): equal stages run concurrently; stages ascend; failure blocks later stages.",
+		"description": "Execution order; default 0. Same-stage calls run concurrently; later stages wait.",
 	}
 
 	if example := builtinToolExamples[name]; example != "" {
@@ -576,7 +570,7 @@ func batchReadFilesSchema() map[string]any {
 			},
 			"required": []string{"path"},
 		},
-		"description": "Required array of file request objects for reading one or more files in parallel.",
+		"description": "File paths with optional line ranges or log tails.",
 	}
 }
 
@@ -608,7 +602,7 @@ func httpTimeoutSchema() map[string]any {
 // pre-validation promise, the per-path result and the absent case are one policy,
 // so the wording is written once and appended by both declarations.
 func deleteBatchNote() string {
-	return fmt.Sprintf(" One call may delete several entries: `paths` takes at most %d. Every path is validated before anything is deleted (one refused path means nothing is deleted), and the result reports each path separately. Naming the same path twice is harmless, and listing a directory together with a path inside it is handled for you: each identity is deleted once, deepest first. A path that does not exist is not an error: it comes back as an `absent` slot with nothing deleted, so there is no need to retry it.", DeletePathListLimit)
+	return fmt.Sprintf(" One call may delete at most %d paths. All paths are validated before deletion; one refused path aborts the batch. Results report each path. Duplicate paths and a directory listed with its children are de-duplicated, deepest first. Missing paths return an `absent` result and need no retry.", DeletePathListLimit)
 }
 
 // deletePathsSchema is the batch spelling both delete tools declare, built once
@@ -617,11 +611,10 @@ func deleteBatchNote() string {
 // differently.
 func deletePathsSchema(itemDescription string) map[string]any {
 	return map[string]any{
-		"type":        "array",
-		"minItems":    1,
-		"maxItems":    DeletePathListLimit,
-		"items":       map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": itemDescription},
-		"description": fmt.Sprintf("Paths to delete in one call, at most %d. One refused path refuses the whole call before anything is deleted.", DeletePathListLimit),
+		"type":     "array",
+		"minItems": 1,
+		"maxItems": DeletePathListLimit,
+		"items":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": itemDescription},
 	}
 }
 

@@ -91,11 +91,7 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 							statusBadge(c, "待审批", "warn")
 						}
 						ui.Spacer(c)
-						label := "测试"
-						if a.sshF.TestBusy[node.ID] {
-							label = "测试中…"
-						}
-						cardFlat(c, label).Disabled(a.sshF.TestBusy[node.ID]).OnClick(func() { a.testSSHNode(node) })
+						cardFlatBusy(c, "测试", a.sshF.TestBusy[node.ID]).OnClick(func() { a.testSSHNode(node) })
 						cardFlat(c, "复制").OnClick(func() { a.openSSHClone(node) })
 						cardFlat(c, "编辑").OnClick(func() { a.openSSHEditor(node.ID, node.Group) })
 						cardDanger(c, "删除").OnClick(func() {
@@ -299,7 +295,7 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 		})
 	}, func() {
 		flat(c, "取消").OnClick(func() { a.sshF.EditorOpen = false; a.sshF.CloneMode = false; a.sshF.CloneSource = "" })
-		primary(c, "保存").Disabled(a.sshF.Busy).OnClick(func() { a.saveSSHNode() })
+		primaryBusy(c, "保存", a.sshF.Busy, a.sshF.Busy).OnClick(func() { a.saveSSHNode() })
 	}, func() {
 		a.sshF.CloneMode = false
 		a.sshF.CloneSource = ""

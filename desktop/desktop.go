@@ -49,19 +49,14 @@ type conversation struct {
 type workspaceFile struct {
 	Path, Version string
 	Editor        *editor.State
-	Image         *ui.Bitmap
+	PreviewPath   string
+	PreviewHTML   string
+	PreviewError  string
 	Assist        *editorAssistIndex
 	Saving        bool
 	Document      *documentpreview.Document
 	DocumentSheet string
-	DocumentList  ui.ListState
-	// PreviewText is the buffer as the Markdown preview last read it, and
-	// PreviewVersion the buffer version then: calling Buffer.String() on every
-	// frame allocated the whole file again, and every animation shows frames.
-	PreviewText     string
-	PreviewVersion  uint64
-	PreviewReady    bool
-	PreviewMarkdown *markdown.Options
+	MarkupPreview bool
 }
 type desktop struct {
 	memoryDiagnosticBusy                    bool
@@ -119,6 +114,7 @@ type desktop struct {
 	pluginDeleteOpen, pluginPurge           bool
 	pluginGroupOpen                         map[string]bool
 	fileOpen                                map[string]bool
+	fileRoot                                string
 	fileChildren                            map[string][]backend.FileEntry
 	fileLoading                             map[string]bool
 	openSessions                            map[string]*conversation
@@ -163,9 +159,7 @@ type desktop struct {
 	startupError                                        string
 	files                                               []backend.FileEntry
 	workspaceFiles                                      map[string]*workspaceFile
-	fileLoadID                                          uint64
-	filePreviewCancel                                   context.CancelFunc
-	filePreviewRoot                                     string
+	workspacePreview                                    workspacePreviewLifecycle
 	fileEpoch                                           int
 	modelTab                                            string
 	modelSaving                                         bool
@@ -864,13 +858,9 @@ func (a *desktop) refreshFiles(manual ...bool) {
 	a.fileEpoch++
 	epoch := a.fileEpoch
 	root := t.Workspace
-	a.files = nil
-	a.cancelFilePreview()
+	a.prepareFileTree(root)
+	a.workspacePreview.cancelLoad("")
 	a.closeFileInfo()
-	a.fileOpen = map[string]bool{}
-	a.fileChildren = map[string][]backend.FileEntry{}
-	a.fileLoading = map[string]bool{}
-	a.fileLoadID++
 	if root == "" {
 		return
 	}
@@ -885,7 +875,7 @@ func (a *desktop) refreshFiles(manual ...bool) {
 
 				return
 			}
-			a.files = r.Entries
+			a.applyFileTreeEntries("", r.Entries)
 			if len(manual) > 0 && manual[0] {
 				a.notifySuccess("资源树已刷新")
 			}
@@ -901,9 +891,8 @@ func (a *desktop) openFile(path string) {
 		return
 	}
 	root := t.Workspace
-	if propertiesOnlyFile(path) {
-		a.cancelFilePreview()
-		a.fileLoadID++
+	if workspaceFileKindForPath(path) == workspaceFileProperties {
+		a.releaseFilePreview()
 		a.openFileInfo(path)
 		return
 	}
@@ -934,121 +923,136 @@ func (a *desktop) activeFile() *workspaceFile {
 }
 
 func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, discardConfirmed bool) {
-	a.cancelFilePreview()
-	ctx, cancel := context.WithCancel(context.Background())
-	a.filePreviewCancel = cancel
-	a.filePreviewRoot = workspaceKey(root)
+	kind := workspaceFileKindForPath(path)
+	ctx, load := a.workspacePreview.beginLoad(root, path)
 	epoch := a.fileEpoch
-	a.fileLoadID++
-	loadID := a.fileLoadID
 	expectedVersion := uint64(0)
 	if expected != nil && expected.Editor != nil && expected.Editor.Buffer != nil {
 		expectedVersion = expected.Editor.Buffer.Version()
 	}
 	go func() {
-		defer cancel()
 		req := backend.WorkspacePathRequest{Workspace: root, Path: path}
-		if documentpreview.Supported(path) {
-			doc, err := a.core.ReadWorkspaceDocument(ctx, req)
-			if ctx.Err() != nil {
-				return
-			}
-			a.win.Update(func() {
-				if epoch != a.fileEpoch || loadID != a.fileLoadID || a.closing || !a.workspaceFileLoadStillCurrent(root, expected, expectedVersion, discardConfirmed) {
-					return
-				}
-				if err != nil {
-					a.openFileInfoWithNote(path, "此文档暂无法在应用内预览，可使用系统应用打开。")
-					return
-				}
-				if a.workspaceFiles == nil {
-					a.workspaceFiles = map[string]*workspaceFile{}
-				}
-				// Retain at most one document preview across all workspaces.
-				for key, file := range a.workspaceFiles {
-					if file.Document != nil && file != expected {
-						delete(a.workspaceFiles, key)
-						releaseWorkspaceFileValue(file)
-					}
-				}
-				if expected != nil {
-					a.releaseWorkspaceFile(root)
-				}
-				file := &workspaceFile{Path: path, Document: doc, Editor: &editor.State{Buffer: editor.NewBuffer("")}}
-				if len(doc.Sheets) > 0 {
-					file.DocumentSheet = doc.Sheets[0].Name
-				}
-				a.workspaceFiles[workspaceKey(root)] = file
-			})
-			return
-		}
-		if isPreviewImage(path) {
-			data, err := a.core.ReadNativeWorkspaceImage(req)
-			var bitmap *ui.Bitmap
-			if err == nil {
-				bitmap, err = ui.DecodeBitmap(data)
-			}
-			a.win.Update(func() {
-				if epoch != a.fileEpoch || loadID != a.fileLoadID || a.closing {
-					if bitmap != nil {
-						bitmap.ReleasePixels()
-					}
-					return
-				}
-				if !a.workspaceFileLoadStillCurrent(root, expected, expectedVersion, discardConfirmed) {
-					if bitmap != nil {
-						bitmap.ReleasePixels()
-					}
-					return
-				}
-				if err != nil {
-					a.openFileInfoWithNote(path, "此图片暂无法在应用内预览，可使用系统应用打开。")
-					return
-				}
-				if a.workspaceFiles == nil {
-					a.workspaceFiles = map[string]*workspaceFile{}
-				}
-				if expected != nil {
-					a.releaseWorkspaceFile(root)
-				}
-				a.workspaceFiles[workspaceKey(root)] = &workspaceFile{Path: path, Image: bitmap, Editor: &editor.State{Buffer: editor.NewBuffer("")}}
-				if expected != nil {
-					a.notifySuccess("文件已刷新")
-				}
-			})
-			return
-		}
-		r, e := a.core.ReadWorkspaceFileAt(req)
+		var newFile *workspaceFile
+		var previewErr error
 		var assist *editorAssistIndex
-		if e == nil {
-			assist = buildEditorAssistIndex(path, r.Content, 0)
+		var loadedText string
+		if kind == workspaceFileDocument {
+			doc, err := a.core.ReadWorkspaceDocument(ctx, req)
+			previewErr = err
+			if err == nil {
+				newFile = &workspaceFile{Path: path, Document: doc}
+			}
+		} else if kind == workspaceFileSVG {
+			source, err := a.core.ReadWorkspaceSVGAt(ctx, req)
+			previewErr = err
+			if err == nil {
+				document, renderErr := svgPreviewHTML(path, source)
+				previewErr = renderErr
+				if renderErr == nil {
+					newFile = &workspaceFile{Path: path, PreviewHTML: document}
+				}
+			}
+		} else if kind.isDirectWebViewFile() {
+			localPath, err := a.core.GetWorkspaceMediaPath(req)
+			previewErr = err
+			if err == nil {
+				newFile = &workspaceFile{Path: path, PreviewPath: localPath}
+			}
+		} else {
+			r, err := a.core.ReadWorkspaceFileAt(req)
+			previewErr = err
+			if err == nil {
+				assist = buildEditorAssistIndex(path, r.Content, 0)
+				loadedText = r.Content
+				newFile = &workspaceFile{Path: path, Version: r.Version}
+			}
+		}
+		if ctx.Err() != nil {
+			if newFile != nil {
+				releaseWorkspaceFileValue(newFile)
+			}
+			return
 		}
 		a.win.Update(func() {
-			if epoch != a.fileEpoch || loadID != a.fileLoadID || a.closing {
+			if ctx.Err() != nil {
+				if newFile != nil {
+					releaseWorkspaceFileValue(newFile)
+				}
+				return
+			}
+			if !a.workspacePreview.finishLoad(load) {
+				if newFile != nil {
+					releaseWorkspaceFileValue(newFile)
+				}
+				return
+			}
+			if epoch != a.fileEpoch || a.closing {
+				if newFile != nil {
+					releaseWorkspaceFileValue(newFile)
+				}
 				return
 			}
 			if !a.workspaceFileLoadStillCurrent(root, expected, expectedVersion, discardConfirmed) {
-				return
-			}
-			if e != nil {
-				if note := backend.WorkspaceFilePreviewNote(e); note != "" {
-					a.openFileInfoWithNote(path, note)
-				} else {
-					a.notifyError("打开文件失败：" + e.Error())
+				if newFile != nil {
+					releaseWorkspaceFileValue(newFile)
 				}
 				return
 			}
-			buffer := editor.NewBuffer(r.Content)
-			buffer.SetLanguage(editor.LanguageFor(path))
-			newFile := &workspaceFile{Path: path, Version: r.Version, Editor: &editor.State{Buffer: buffer, Font: ui.Font{Family: "Inter", Size: 13}, Label: "文件编辑器", NoScrollPastEnd: true}, Assist: assist}
-			a.configureEditorAssist(root, newFile)
+			if previewErr != nil {
+				if kind.hasWebViewPreview() {
+					if expected != nil {
+						a.releaseWorkspaceFile(root)
+					}
+					if a.workspaceFiles == nil {
+						a.workspaceFiles = map[string]*workspaceFile{}
+					}
+					newFile = &workspaceFile{Path: path, PreviewError: previewErr.Error(), Editor: emptyFileEditor()}
+					a.workspaceFiles[workspaceKey(root)] = newFile
+					a.notifyError("文件预览失败：" + previewErr.Error())
+					return
+				}
+				if note := backend.WorkspaceFilePreviewNote(previewErr); note != "" {
+					a.openFileInfoWithNote(path, note)
+				} else {
+					a.notifyError("打开文件失败：" + previewErr.Error())
+				}
+				return
+			}
 			if a.workspaceFiles == nil {
 				a.workspaceFiles = map[string]*workspaceFile{}
+			}
+			if newFile == nil {
+				a.notifyError("打开文件失败：未返回文件内容")
+				return
+			}
+			if kind.isPreviewOnly() {
+				newFile.Editor = emptyFileEditor()
+			} else {
+				buffer := editor.NewBuffer(loadedText)
+				buffer.SetLanguage(editor.LanguageFor(path))
+				newFile.Editor = &editor.State{Buffer: buffer, Font: ui.Font{Family: "Inter", Size: 13}, Label: "文件编辑器", NoScrollPastEnd: true}
+				newFile.Assist = assist
+			}
+			if newFile.Document != nil {
+				if len(newFile.Document.Sheets) > 0 {
+					newFile.DocumentSheet = newFile.Document.Sheets[0].Name
+				}
+				// Keep parsed document previews to one open file at a time.
+				for key, old := range a.workspaceFiles {
+					if old != newFile && old != expected && old.Document != nil {
+						a.workspacePreview.releaseMountedWorkspace(key)
+						delete(a.workspaceFiles, key)
+						releaseWorkspaceFileValue(old)
+					}
+				}
 			}
 			if expected != nil {
 				a.releaseWorkspaceFile(root)
 			}
 			a.workspaceFiles[workspaceKey(root)] = newFile
+			if !kind.isPreviewOnly() {
+				a.configureEditorAssist(root, newFile)
+			}
 			if expected != nil {
 				a.notifySuccess("文件已刷新")
 			}
@@ -1094,8 +1098,7 @@ func (a *desktop) confirmDiscardFile(root string, file *workspaceFile, action fu
 }
 
 func (a *desktop) closeFile() {
-	a.cancelFilePreview()
-	a.fileLoadID++
+	a.workspacePreview.cancelLoad("")
 	t := a.current()
 	file := a.activeFile()
 	if t == nil || file == nil {
@@ -1117,7 +1120,7 @@ func (a *desktop) closeFile() {
 func (a *desktop) saveFile() {
 	t := a.current()
 	file := a.activeFile()
-	if t == nil || file == nil || file.Saving || !file.Editor.Buffer.Modified() {
+	if t == nil || file == nil || file.Editor == nil || file.Editor.Buffer == nil || workspaceFileKindForPath(file.Path).isPreviewOnly() || file.Saving || !file.Editor.Buffer.Modified() {
 		return
 	}
 	text := file.Editor.Buffer.String()

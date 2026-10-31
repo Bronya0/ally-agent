@@ -136,19 +136,13 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 				t.Fatal(err)
 			}
 			batch := a.executeLocalEditToolBatch(context.Background(), a.config, []openai.ToolCall{stagedCall("edit", string(peerRaw)), stagedCall("edit", string(raw))})
-			for i, result := range batch {
-				want := "E_EDIT_BATCH_ABORTED"
-				if i == 1 {
-					want = "E_EDIT_ENCODING"
-				}
-				if result.OK || result.ErrorCode != want {
-					t.Fatalf("invalid encoding did not abort peers: %#v", result)
-				}
+			if !batch[0].OK || batch[1].OK || batch[1].ErrorCode != "E_EDIT_ENCODING" {
+				t.Fatalf("invalid encoding should fail only its own edit: %#v", batch)
 			}
-			for p, expected := range map[string][]byte{path: tc.original, peerPath: []byte("old\n")} {
+			for p, expected := range map[string][]byte{path: tc.original, peerPath: []byte("new\n")} {
 				actual, err := os.ReadFile(p)
 				if err != nil || !bytes.Equal(actual, expected) {
-					t.Fatalf("refused edit changed %s: %x err=%v", p, actual, err)
+					t.Fatalf("unexpected edit result for %s: %x err=%v", p, actual, err)
 				}
 			}
 			// A cancelled transport ensures even a regression cannot contact a host.

@@ -167,16 +167,7 @@ func (a *desktop) configureReadingMarkdown(options *markdown.Options) {
 	th.QuoteText, th.QuoteBar, th.Rule = colors.muted, colors.border, colors.border
 	for n, size := range []float32{1.55, 1.32, 1.12, 1, 1, 1} {
 		color := colors.heading
-		if n == 2 {
-			color = colors.code
-			if a.currentPalette().dark {
-				if a.prefs.Palette == 2 {
-					color = ui.Hex("#e8c489")
-				} else {
-					color = colors.link.Mix(ui.Hex("#ffffff"), 0.243902)
-				}
-			}
-		} else if n == 1 && !a.currentPalette().dark {
+		if n == 1 && !a.currentPalette().dark {
 			color = colors.text
 		}
 		th.Headings[n] = markdown.HeadingStyle{Size: size, Weight: 600, Color: color, Top: 1, Bottom: 0.5}

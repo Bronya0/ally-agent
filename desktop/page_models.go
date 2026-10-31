@@ -14,6 +14,43 @@ import (
 
 const customProviderPreset = "自定义配置"
 
+type modelNumberPreset struct {
+	label string
+	value int
+}
+
+var modelMaxTokenPresets = []modelNumberPreset{
+	{label: "32K", value: 32_000},
+	{label: "64K", value: 64_000},
+	{label: "128K", value: 128_000},
+	{label: "256K", value: 256_000},
+	{label: "384K", value: 384_000},
+}
+
+var modelContextWindowPresets = []modelNumberPreset{
+	{label: "64K", value: 64_000},
+	{label: "128K", value: 128_000},
+	{label: "200K", value: 200_000},
+	{label: "256K", value: 256_000},
+	{label: "400K", value: 400_000},
+	{label: "500K", value: 500_000},
+	{label: "1M", value: 1_000_000},
+}
+
+func modelNumberCombobox(c *ui.Context, id, label string, input *string, value *float64, presets []modelNumberPreset, max int, ink ui.Color) error {
+	options := make([]string, 0, len(presets))
+	for _, preset := range presets {
+		options = append(options, preset.label)
+	}
+	uikit.ComboboxField(c.Key(id), input, options, label, "输入数字或选择常用值", ink).FillWidth()
+	parsed, err := parseModelNumberInput(*input, max, label)
+	if err != nil {
+		return err
+	}
+	*value = float64(parsed)
+	return nil
+}
+
 func applyCatalogModel(a *desktop, model modelCatalogModel) {
 	a.modelDraft.Model = model.ID
 	if model.Name != "" && !strings.EqualFold(model.Name, model.ID) {
@@ -24,10 +61,12 @@ func applyCatalogModel(a *desktop, model modelCatalogModel) {
 	if model.MaxTokens > 0 {
 		a.modelDraft.MaxTokens = model.MaxTokens
 		a.modelMaxTokens = float64(model.MaxTokens)
+		a.modelForm.MaxTokensInput = modelNumberInputText(model.MaxTokens, modelMaxTokenPresets)
 	}
 	if model.ContextWindow > 0 {
 		a.modelDraft.ContextWindow = model.ContextWindow
 		a.modelContextWindow = float64(model.ContextWindow)
+		a.modelForm.ContextInput = modelNumberInputText(model.ContextWindow, modelContextWindowPresets)
 	}
 	if model.ReasoningTag != "" {
 		a.modelDraft.ReasoningTag = model.ReasoningTag
@@ -284,7 +323,9 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "上下文窗口")
-					numberField(c, "oauth-context-window", "上下文窗口", &a.modelContextWindow, 0, 10000000, 1).FillWidth()
+					if err := modelNumberCombobox(c, "oauth-context-window", "上下文窗口", &a.modelForm.ContextInput, &a.modelContextWindow, modelContextWindowPresets, 10_000_000, a.secondaryInk()); err != nil {
+						inlineError(c, "oauth-context-window-error", err.Error())
+					}
 				})
 			})
 		} else {
@@ -350,7 +391,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 						// searchable field that lists the models fetched from the provider
 						// and still accepts a hand-typed id.
 						uikit.ComboboxField(c.Key("model-id"), &a.modelDraft.Model, a.modelDraftOptions(), "Model ID", modelIDPlaceholder(a.modelDraft.APIFormat), a.secondaryInk()).Grow(1)
-						flat(c, "拉取模型").Disabled(a.modelForm.FetchBusy).OnClick(func() { a.fetchModelList() })
+						flatBusy(c, "拉取模型", a.modelForm.FetchBusy, a.modelForm.FetchBusy || a.modelSaving).OnClick(func() { a.fetchModelList() })
 					})
 					if a.modelForm.FetchNote != "" {
 						inlineError(c, "model-fetch-note", a.modelForm.FetchNote)
@@ -377,7 +418,9 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 			ui.Grid(c.Key("model-parameters")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "Max Tokens")
-					numberField(c, "max-tokens", "Max Tokens", &a.modelMaxTokens, 0, 2000000, 1).FillWidth()
+					if err := modelNumberCombobox(c, "max-tokens", "Max Tokens", &a.modelForm.MaxTokensInput, &a.modelMaxTokens, modelMaxTokenPresets, 2_000_000, a.secondaryInk()); err != nil {
+						inlineError(c, "max-tokens-error", err.Error())
+					}
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "推理标签")
@@ -395,7 +438,9 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "上下文窗口")
-					numberField(c, "context-window", "上下文窗口", &a.modelContextWindow, 0, 10000000, 1).FillWidth()
+					if err := modelNumberCombobox(c, "context-window", "上下文窗口", &a.modelForm.ContextInput, &a.modelContextWindow, modelContextWindowPresets, 10_000_000, a.secondaryInk()); err != nil {
+						inlineError(c, "context-window-error", err.Error())
+					}
 				})
 			})
 			advancedLabel := "高级设置"
@@ -412,12 +457,12 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 			}
 		}
 	}, func() {
-		flat(c, "测试连接").Disabled(a.modelSaving).OnClick(func() { a.testModelDraft() })
+		flatBusy(c, "测试连接", a.modelForm.TestBusy, a.modelForm.TestBusy || a.modelSaving).OnClick(func() { a.testModelDraft() })
 		flat(c, "取消").OnClick(func() {
 			a.modelForm.Open = false
 			a.cancelOAuthWhenLeaving()
 		})
-		primary(c, map[bool]string{true: "添加", false: "保存修改"}[a.modelEdit < 0]).Disabled(a.modelSaving).OnClick(func() { a.saveModelDraft() })
+		primaryBusy(c, map[bool]string{true: "添加", false: "保存修改"}[a.modelEdit < 0], a.modelSaving, a.modelSaving || a.modelForm.TestBusy).OnClick(func() { a.saveModelDraft() })
 	}, a.cancelOAuthWhenLeaving)
 }
 
@@ -469,7 +514,7 @@ func modelIDPlaceholder(format string) string {
 }
 
 func (a *desktop) fetchModelList() {
-	if a.modelForm.FetchBusy {
+	if a.modelForm.FetchBusy || a.modelSaving {
 		return
 	}
 	key := ""
@@ -506,6 +551,9 @@ func (a *desktop) fetchModelList() {
 }
 
 func (a *desktop) testModelDraft() {
+	if a.modelForm.TestBusy || a.modelSaving {
+		return
+	}
 	m, err := a.preparedModelDraft()
 	if err != nil {
 		a.notifyError(err.Error())
@@ -782,10 +830,7 @@ func (a *desktop) imageModelTestDialog(c *ui.Context) {
 			if len(t.inputs) > 0 {
 				label = "图生图"
 			}
-			primary(c, label).Disabled(t.busy || strings.TrimSpace(t.prompt) == "").OnClick(func() { a.runImageModelTest(s, t) })
-			if t.busy {
-				ui.Spinner(c).Size(14, 14)
-			}
+			primaryBusy(c, label, t.busy, t.busy || strings.TrimSpace(t.prompt) == "").OnClick(func() { a.runImageModelTest(s, t) })
 		})
 		for _, result := range t.results {
 			result := result

@@ -1333,9 +1333,7 @@ func TestLoadAgentsMdLoadsSubdirsWhenRootMissing(t *testing.T) {
 	}
 }
 
-// 系统提示词里那些「必须一直在」的规矩按组摆在一张表里：wait 的用法、越界写之后
-// 怎么恢复、安全红线、别为安心重复读文件、edit 的行为准则。分组只是为了报错时能
-// 说清缺的是哪一类，断言与原来五个用例逐条一致（多条缺失一次全报，不再只报第一条）。
+// 系统提示词的关键约束按组检查，便于提示词精简或改写后定位缺失项。
 func TestSystemPromptCarriesTheStandingRules(t *testing.T) {
 	redirectAppStateDir(t)
 	app := NewApp()
@@ -1346,8 +1344,8 @@ func TestSystemPromptCarriesTheStandingRules(t *testing.T) {
 	}{
 		{"wait guidance", []string{
 			"Use `wait` only",
-			"wait has no implicit ordering",
-			"verify the condition after it completes",
+			"then verify it",
+			"Do not wait for user input",
 		}},
 		{"command outside-path recovery", []string{
 			"`E_PATH_OUTSIDE`",
@@ -1360,23 +1358,20 @@ func TestSystemPromptCarriesTheStandingRules(t *testing.T) {
 			"`~/.ssh/*`",
 			"`~/.ally_agent/config.json`",
 			"`.env`",
-			"explicit user confirmation",
+			"Run git commit/push/reset/rebase only when explicitly authorized by the user",
 			"`E_PATH_OUTSIDE`",
-			"stop and ask the user",
 		}},
 		{"redundant-read guidance", []string{
-			"assume workspace files are not concurrently edited by another person",
-			"do not re-read a file merely for reassurance",
-			"reuse its returned `version`",
-			"context compaction removed the reliable snapshot",
-			"formatter/generator/command or other external process may have changed the file",
+			"Reuse the returned `version` while the source is unchanged",
+			"compaction removed the reliable snapshot",
+			"an external process may have changed the file",
 			"Use startLine=C to continue",
 		}},
 		{"edit behavioral rules", []string{
 			"must never be copied into edit text",
-			"do not re-read a file merely for reassurance",
-			"Batch edits by risk and size",
-			"one failed `oldText` match or stale `version` rejects the entire call",
+			"Combine independent changes to one file in one `edit` call",
+			"same-stage edits to different files are independent",
+			"retry only failed files",
 			"Never send multiple file-mutation tool calls for the same path in one stage",
 			"Do not use patch, unified diff, or git apply",
 		}},
@@ -1390,7 +1385,7 @@ func TestSystemPromptCarriesTheStandingRules(t *testing.T) {
 	}
 	// 子代理提示词共用安全那一节，别只有主提示词有。
 	sub := subagentSystemPrompt("")
-	for _, want := range []string{"# Safety", "Sensitive files", "explicit user confirmation", "`E_PATH_OUTSIDE`"} {
+	for _, want := range []string{"# Safety", "Sensitive files", "only when explicitly authorized by the user", "`E_PATH_OUTSIDE`"} {
 		if !strings.Contains(sub, want) {
 			t.Errorf("sub-agent prompt missing safety rule %q", want)
 		}

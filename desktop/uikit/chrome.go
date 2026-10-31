@@ -197,29 +197,26 @@ const (
 	NoticeDanger
 )
 
-// Notice 是彩色提示条，左边一道竖线表明语气。message 为空时什么都不画，
+// Notice 用背景和文字颜色表达提示语气，不加左侧竖线。message 为空时不绘制，
 // 这样调用点可以无条件调用它。
-func Notice(c *ui.Context, tone NoticeTone, message string, accentBar bool, ink ...ui.Color) {
+func Notice(c *ui.Context, tone NoticeTone, message string, ink ...ui.Color) {
 	if message == "" {
 		return
 	}
 	t := c.Theme()
-	fg, fill, bar := SecondaryInk(c, ink), t.SurfaceHover, t.Border
+	fg, fill := SecondaryInk(c, ink), t.SurfaceHover
 	switch tone {
 	case NoticeInfo:
-		fg, fill, bar = t.Accent, t.Accent.Alpha(0.10), t.Accent
+		fg, fill = t.Accent, t.Accent.Alpha(0.10)
 	case NoticeOK:
-		fg, fill, bar = t.Success, t.Success.Alpha(0.10), t.Success
+		fg, fill = t.Success, t.Success.Alpha(0.10)
 	case NoticeWarn:
 		warn := WarningInk(t)
-		fg, fill, bar = warn, warn.Alpha(0.10), warn
+		fg, fill = warn, warn.Alpha(0.10)
 	case NoticeDanger:
-		fg, fill, bar = t.Danger, t.Danger.Alpha(0.10), t.Danger
+		fg, fill = t.Danger, t.Danger.Alpha(0.10)
 	}
 	row := ui.Row(c).FillWidth().Padding(7, 10).Gap(GapField).Radius(RadiusSmall).Background(fill)
-	if accentBar {
-		row.BorderWidth(0, 0, 0, 3).BorderColor(bar)
-	}
 	row.Children(func() {
 		if tone == NoticeDanger {
 			ErrorText(c, message)

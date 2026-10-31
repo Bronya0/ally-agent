@@ -820,7 +820,8 @@ func TestBuiltinSkillEntriesContainsAllyAgent(t *testing.T) {
 }
 
 func TestListSkillsIncludesCodexSkills(t *testing.T) {
-	t.Parallel()
+	// The user-scope case writes under the process-wide isolated home. Keep this
+	// test serial so it cannot race other parallel tests using that same skill root.
 	for _, scope := range []string{"user", "project"} {
 		t.Run(scope, func(t *testing.T) {
 			app := newApiTestApp(t)

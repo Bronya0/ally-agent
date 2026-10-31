@@ -4971,22 +4971,23 @@ func TestCompactToolResultForModelNeutralizesRowBreaks(t *testing.T) {
 
 func TestCompactToolResultForModelCommandRendersTagBlock(t *testing.T) {
 	// 模型侧改为 <ally-command> 标签体：输出原样落体（无 JSON 转义），command/cwd 不再
-	// 回显（模型刚在 tool call 参数里写过），exit=0 是隐含成功态不占属性；
-	// 非零退出码 / 超时 / 截断 / 落盘指针以属性表达。
+	// 回显（模型刚在 tool call 参数里写过），所有退出码（包括 0）都以属性明确返回；
+	// 超时 / 截断 / 落盘指针也以属性表达。
 	result := toolResult{OK: true, Data: map[string]any{
 		"command": "go build ./...", "cwd": "", "shell": "bash", "shellPath": "/bin/bash",
 		"output": "c1\nc2\nc3\nc4\nc5\n", "exitCode": 0, "timedOut": false, "durationMs": 10, "truncated": false,
 	}}
 	full := `{"command":"go build ./...","cwd":"","shell":"bash","shellPath":"/bin/bash","output":"c1\nc2\nc3\nc4\nc5\n","exitCode":0,"timedOut":false,"durationMs":10,"truncated":false}`
 	modelJSON := compactToolDataForModel("command", result, full)
-	if !strings.HasPrefix(modelJSON, "<ally-command>\n") || !strings.Contains(modelJSON, "c1\nc2\nc3\nc4\nc5\n</ally-command>") {
+	if !strings.HasPrefix(modelJSON, "<ally-command exit=\"0\">\n") || !strings.Contains(modelJSON, "c1\nc2\nc3\nc4\nc5\n</ally-command>") {
 		t.Fatalf("command output must pass through verbatim in the tag body, got %s", modelJSON)
 	}
 	if strings.Contains(modelJSON, "go build") {
 		t.Fatalf("command/cwd echo must be gone from the model payload, got %s", modelJSON)
 	}
-	if strings.Contains(modelJSON, `exit="0"`) {
-		t.Fatalf("zero exit code is implicit and must be omitted, got %s", modelJSON)
+	remoteModel := compactToolDataForModel("remote_run_command", result, full)
+	if !strings.HasPrefix(remoteModel, `<ally-command exit="0">`) {
+		t.Fatalf("remote command must also expose zero exit code, got %s", remoteModel)
 	}
 
 	failed := toolResult{OK: true, Data: map[string]any{

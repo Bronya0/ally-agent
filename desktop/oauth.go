@@ -63,6 +63,7 @@ func (a *desktop) changeModelAuth(value string) {
 		a.modelDraft.BaseURL = "https://api.openai.com/v1"
 		a.modelDraft.ContextWindow = 512000
 		a.modelContextWindow = 512000
+		a.modelForm.ContextInput = modelNumberInputText(512000, modelContextWindowPresets)
 		a.modelDraft.Model = ""
 		a.modelDraft.OAuthAccountID = ""
 		a.modelDraft.APIKey = ""

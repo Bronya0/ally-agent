@@ -17,7 +17,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-func TestLocalEditStageCommitsTogether(t *testing.T) {
+func TestLocalEditStageIndependentFileCommits(t *testing.T) {
 	t.Parallel()
 	for _, stale := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stale=%v", stale), func(t *testing.T) {
@@ -48,11 +48,20 @@ func TestLocalEditStageCommitsTogether(t *testing.T) {
 					t.Fatal(err)
 				}
 				want := "new\n"
-				if stale {
+				if stale && p == "b.txt" {
 					want = "old\n"
 				}
-				if string(data) != want || results[i].OK == stale {
-					t.Fatalf("stage atomicity: %s=%q result=%#v", p, data, results[i])
+				if string(data) != want {
+					t.Fatalf("independent edit result: %s=%q want=%q result=%#v", p, data, want, results[i])
+				}
+				if !stale && !results[i].OK {
+					t.Fatalf("valid edit %s failed: %#v", p, results[i])
+				}
+				if stale && p == "a.txt" && !results[i].OK {
+					t.Fatalf("valid peer edit was cancelled: %#v", results[i])
+				}
+				if stale && p == "b.txt" && (results[i].OK || results[i].ErrorCode != "E_VERSION_MISMATCH") {
+					t.Fatalf("stale edit should fail independently: %#v", results[i])
 				}
 			}
 		})
@@ -131,12 +140,13 @@ func TestEditRollbackPreservesRawUTF16(t *testing.T) {
 		calls = append(calls, stagedCall("edit", string(raw)))
 	}
 	results := a.executeLocalEditToolBatch(t.Context(), a.config, calls)
-	if results[0].ErrorCode != "E_EDIT_BATCH_ABORTED" || results[1].ErrorCode != "E_EDIT_COMMIT" {
+	if !results[0].OK || results[1].ErrorCode != "E_EDIT_COMMIT" {
 		t.Fatalf("commit error was not assigned to its file: %+v", results)
 	}
 	after, err := os.ReadFile(filepath.Join(root, "a.txt"))
-	if err != nil || !bytes.Equal(after, before) {
-		t.Fatalf("rollback converted UTF16: %x %v", after, err)
+	want := []byte{0xff, 0xfe, 'A', 0, '\n', 0}
+	if err != nil || !bytes.Equal(after, want) {
+		t.Fatalf("successful peer edit changed UTF16 encoding: %x %v", after, err)
 	}
 }
 
