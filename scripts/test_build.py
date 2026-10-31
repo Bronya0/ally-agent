@@ -158,6 +158,18 @@ class LauncherIntegrityTests(unittest.TestCase):
 
 
 class DevelopmentBuildTests(unittest.TestCase):
+    def test_release_requires_an_explicit_stable_tag(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'mygo.json').write_text(json.dumps({'version':'0.1.0'}),encoding='utf-8')
+            for tag in ('', 'mygo', 'v1.28.0-beta.1'):
+                with mock.patch.object(build, 'ROOT', root), mock.patch.object(build.platform,'system',return_value='Darwin'), \
+                     mock.patch.object(build.sys,'argv',['build.py','release']), mock.patch.dict(build.os.environ,{'BUILD_TAG':tag}), \
+                     mock.patch.object(build,'windows') as windows:
+                    with self.assertRaises(SystemExit): build.main()
+                    windows.assert_not_called()
+
     def test_windows_development_uses_host_architecture(self):
         for machine, arch in [('AMD64', 'amd64'), ('ARM64', 'arm64')]:
             with mock.patch.object(build.platform, 'machine', return_value=machine),                     mock.patch.object(build, 'windows_arch') as compile_arch:

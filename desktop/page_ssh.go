@@ -650,7 +650,9 @@ func (a *desktop) queueSSHAuthSave(workspace string, ids []string) <-chan error 
 		if previous != nil {
 			<-previous
 		}
-		result <- a.core.SetWorkspaceAllowedServers(workspace, ids)
+		err := a.core.SetWorkspaceAllowedServers(workspace, ids)
+		a.writeFailures.record("ssh:"+workspace, err)
+		result <- err
 		close(result)
 	}()
 	return result

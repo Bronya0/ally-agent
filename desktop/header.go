@@ -4,12 +4,12 @@ package desktop
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"ally-dev/desktop/uikit"
 	backend "ally-dev/internal/app"
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -47,10 +47,10 @@ func (a *desktop) headerBar(c *ui.Context) {
 		logoInset = max(headerTrafficLightGap, logoInset)
 	}
 	tabsStart := bar.Left + leading
-	row := ui.Row(c).Height(max(headerBarHeight, bar.Height)).Shrink(0).Background(colChrome(a)).
+	row := ui.Row(c).Height(max(headerBarHeight, bar.Height)).Shrink(0).Background(p.headerColor()).
 		Border(0, ui.Transparent).Draw(func(painter *ui.Painter, r ui.Rect) {
 		painter.Fill(ui.Rect{X: r.X + tabsStart, Y: r.Y + r.H - 1, W: max(float32(0), r.W-tabsStart), H: 1}, p.line, 0)
-		if railWidth >= bar.Left {
+		if runtime.GOOS != "windows" && railWidth >= bar.Left {
 			painter.Fill(ui.Rect{X: r.X + railWidth - 1, Y: r.Y, W: 1, H: r.H}, p.line, 0)
 		}
 	})
@@ -190,15 +190,15 @@ func (a *desktop) headerActions(c *ui.Context) {
 	// The header draws these itself unless the system already shows them:
 	// macOS keeps its traffic lights, and its title bar room is never zero.
 	if bar := c.TitleBar(); a.win != nil && bar.Height == 0 && bar.Left == 0 && bar.Right == 0 {
-		windowAction(c, "window-min", "最小化", "min", func() { a.win.Minimize() }, a.secondaryInk())
-		windowAction(c, "window-max", "最大化", "max", func() {
+		windowAction(c, "window-min", "最小化", "min", p.headerColor(), func() { a.win.Minimize() }, a.secondaryInk())
+		windowAction(c, "window-max", "最大化", "max", p.headerColor(), func() {
 			if a.win.IsMaximized() {
 				a.win.Unmaximize()
 			} else {
 				a.win.Maximize()
 			}
 		}, a.secondaryInk())
-		closeBtn := windowButton(c, "window-close", "关闭窗口", "close", true, func() { a.win.Close() }, a.secondaryInk())
+		closeBtn := windowButton(c, "window-close", "关闭窗口", "close", p.headerColor(), true, func() { a.win.Close() }, a.secondaryInk())
 		_ = closeBtn
 	}
 }
@@ -284,16 +284,23 @@ func (a *desktop) closeWorkspaceTab(index int) {
 // updateDialog mirrors the original card modal: progress, state text, and the
 // action row that changes with the update lifecycle.
 func (a *desktop) updateDialog(c *ui.Context) {
+	if a.upd.installing() {
+		a.upd.Open = true
+	}
 	p := a.currentPalette()
 	modalCard(c, &a.upd.Open, 460, func() {
 		ui.Column(c).Gap(12).Children(func() {
 			ui.Row(c).Children(func() {
 				ui.Text(c, "软件更新").FontSize(17).Bold()
 				ui.Spacer(c)
-				iconAction(c, "update-close", "关闭", "close", 24, func() { a.upd.Open = false })
+				iconAction(c, "update-close", "关闭", "close", 24, func() {
+					if !a.upd.installing() {
+						a.upd.Open = false
+					}
+				}).Disabled(a.upd.installing())
 			})
 			switch a.upd.State {
-			case "downloading", "extracting", "applying", "restarting", "ready", "error", "latest", "checking", "available":
+			case "downloading", "extracting", "preparing", "applying", "restarting", "ready", "error", "latest", "checking", "available":
 			default:
 				a.upd.State = "idle"
 			}
@@ -309,7 +316,11 @@ func (a *desktop) updateDialog(c *ui.Context) {
 				}
 				ui.Progress(c, value).Label("更新进度")
 				ui.Row(c).Children(func() {
-					ui.Text(c, fmt.Sprintf("%.0f%%", a.upd.Progress)).FontSize(11).TextColor(p.muted)
+					label := fmt.Sprintf("%.0f%%", a.upd.Progress)
+					if a.upd.Progress < 0 {
+						label = "已下载 " + fmtBytes(a.upd.BytesNow)
+					}
+					ui.Text(c, label).FontSize(11).TextColor(p.muted)
 					ui.Spacer(c)
 					if a.upd.BytesTotal > 0 {
 						ui.Text(c, fmtBytes(a.upd.BytesNow)+" / "+fmtBytes(a.upd.BytesTotal)).FontSize(11).TextColor(p.muted)
@@ -322,11 +333,17 @@ func (a *desktop) updateDialog(c *ui.Context) {
 				}
 			case "ready":
 				ui.Text(c, "新版本 "+a.upd.Tag+" 已下载完成")
-				fieldNote(c, "重启后生效。当前会话与未保存的草稿会自动保存。", a.secondaryInk())
+				fieldNote(c, updateReadyNote(runtime.GOOS), a.secondaryInk())
+			case "preparing":
+				busyRow(c, "正在保存会话与设置…", a.secondaryInk())
 			case "applying":
 				busyRow(c, "正在应用更新…", a.secondaryInk())
 			case "restarting":
-				busyRow(c, "正在重启 Ally…", a.secondaryInk())
+				label := "正在重启 Ally…"
+				if runtime.GOOS == "windows" {
+					label = "更新已安装，正在退出；请重新打开 Ally。"
+				}
+				busyRow(c, label, a.secondaryInk())
 			case "error":
 				ui.Text(c, "更新失败").TextColor(c.Theme().Danger)
 				ui.Text(c, a.upd.Error).FontSize(12).Selectable().TextColor(c.Theme().Danger)
@@ -345,12 +362,13 @@ func (a *desktop) updateDialog(c *ui.Context) {
 				ui.Spacer(c)
 				switch {
 				case a.upd.Busy:
-					flat(c, "取消").OnClick(func() {
-						if a.core.CancelUpdate() {
-							a.upd.State = "idle"
-							a.upd.Busy = false
-						}
-					})
+					if a.upd.State == "downloading" || a.upd.State == "extracting" {
+						flat(c, "取消下载").Disabled(a.upd.Cancelling).OnClick(func() {
+							if a.core.CancelUpdate() {
+								a.upd.Cancelling = true
+							}
+						})
+					}
 				case a.upd.State == "available":
 					flat(c, "稍后").OnClick(func() { a.upd.Open = false })
 					if a.upd.CanAuto {
@@ -359,16 +377,18 @@ func (a *desktop) updateDialog(c *ui.Context) {
 						primary(c, "前往下载").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent/releases/tag/" + a.upd.Tag) })
 					}
 				case a.upd.State == "ready":
-					flat(c, "跳过此版本").OnClick(func() {
-						a.prefs.DismissedUpdateTag = a.upd.Tag
-						a.savePrefs()
-						a.upd.Open = false
-					})
+					flat(c, "跳过此版本").OnClick(a.skipUpdate)
 					flat(c, "稍后").OnClick(func() { a.upd.Open = false })
-					primary(c, "立即重启更新").OnClick(func() { a.applyUpdate() })
+					primary(c, updateApplyLabel(runtime.GOOS)).OnClick(a.applyUpdate)
 				case a.upd.State == "error":
 					flat(c, fmt.Sprint("关闭")).OnClick(func() { a.upd.Open = false })
-					primary(c, "重试").OnClick(func() { a.startUpdate() })
+					primary(c, "重试").OnClick(func() {
+						if a.upd.Applied || a.upd.RetryApply {
+							a.applyUpdate()
+						} else {
+							a.startUpdate()
+						}
+					})
 				default:
 					if a.upd.State == "latest" {
 						flat(c, "关闭").OnClick(func() { a.upd.Open = false })
@@ -378,99 +398,6 @@ func (a *desktop) updateDialog(c *ui.Context) {
 		})
 	})
 	_ = backend.UpdateDownloadResult{}
-}
-
-func (a *desktop) startUpdate() {
-	if a.upd.Busy || a.core == nil {
-		return
-	}
-	tag := a.upd.Tag
-	if tag == "" {
-		a.checkUpdates(false)
-		return
-	}
-	if !a.upd.CanAuto {
-		a.upd.State = "available"
-		a.upd.Open = true
-		return
-	}
-	a.upd.Open = true
-	a.upd.State = "downloading"
-	a.upd.Progress = 0
-	a.upd.Busy = true
-	go func() {
-		result := a.core.DownloadUpdate(tag)
-		a.win.Update(func() {
-			a.upd.Busy = false
-			if !result.OK {
-				a.upd.State = "error"
-				a.upd.Error = result.Error
-				return
-			}
-			a.upd.State = "ready"
-			a.upd.Progress = 100
-		})
-	}()
-}
-
-func (a *desktop) applyUpdate() {
-	if a.upd.State != "ready" || !a.upd.CanAuto || a.upd.Busy {
-		return
-	}
-	a.upd.Busy = true
-	a.upd.State = "applying"
-	go func() {
-		res := a.core.ApplyUpdate(a.upd.Tag)
-		a.win.Update(func() {
-			a.upd.Busy = false
-			if !res.OK {
-				a.upd.State = "error"
-				a.upd.Error = res.Error
-				return
-			}
-			a.upd.State = "restarting"
-			if err := a.core.QuitForUpdate(); err != nil {
-				a.upd.State = "error"
-				a.upd.Error = err.Error()
-			}
-		})
-	}()
-}
-
-func (a *desktop) checkUpdates(silent bool) {
-	if a.upd.State == "checking" {
-		return
-	}
-	a.upd.State = "checking"
-	go func() {
-		result := a.core.CheckForUpdates()
-		a.win.Update(func() {
-			if !result.OK {
-				a.upd.State = "error"
-				a.upd.Error = result.Error
-				if silent {
-					a.upd.State = "idle"
-					a.settings.UpdateNote = "检查更新失败：" + result.Error
-				}
-				return
-			}
-			if result.Tag == "" || !newerStableRelease(result.Tag, mygo.App.Version()) {
-				a.upd.State = "latest"
-				a.settings.UpdateNote = "已是最新版本"
-				return
-			}
-			a.upd.Tag = result.Tag
-			a.upd.CanAuto = result.CanAutoUpdate
-			a.upd.State = "available"
-			if result.StagedVersion == result.Tag && result.CanAutoUpdate {
-				a.upd.State = "ready"
-			}
-			a.settings.UpdateNote = "发现新版本 " + result.Tag
-			if !silent {
-				a.upd.Open = true
-			}
-		})
-	}()
 }
 
 // togglePetals is a small decorative switch kept from the Vue welcome page:

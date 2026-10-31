@@ -178,6 +178,7 @@ func TestRefreshSessionPromptPrefixDropsEveryFrozenSnapshot(t *testing.T) {
 	const sessionID = "s-refresh"
 	app.mu.Lock()
 	app.sessionSystemPrompts[sessionID] = []systemPromptPart{{label: "core", content: "frozen"}}
+	app.sessionSkills = map[string][]SkillDefinition{sessionID: {{Name: "frozen"}}}
 	app.sessionWorkspaceMaps = map[string]string{sessionID: "frozen map"}
 	app.sessionToolsets[sessionID] = []openai.Tool{}
 	app.mu.Unlock()
@@ -192,6 +193,9 @@ func TestRefreshSessionPromptPrefixDropsEveryFrozenSnapshot(t *testing.T) {
 	defer app.mu.Unlock()
 	if _, ok := app.sessionSystemPrompts[sessionID]; ok {
 		t.Fatal("system prompt snapshot must be dropped by a compaction")
+	}
+	if _, ok := app.sessionSkills[sessionID]; ok {
+		t.Fatal("skill definitions must be dropped with the prompt snapshot")
 	}
 	if _, ok := app.sessionWorkspaceMaps[sessionID]; ok {
 		t.Fatal("workspace map snapshot must be dropped by a compaction")

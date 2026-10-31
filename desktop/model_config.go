@@ -54,7 +54,7 @@ func (a *desktop) editModel(index int) {
 	} else {
 		a.modelDraft = backend.ModelConfig{AuthType: "api_key", ProviderName: customProviderName, APIFormat: "openai", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", MaxTokens: 131072, ContextWindow: 1000000}
 	}
-	if a.modelDraft.TokenParam == "" || a.modelDraft.TokenParam == "max_tokens" {
+	if a.modelDraft.TokenParam == "" {
 		a.modelDraft.TokenParam = "auto"
 	}
 	if a.modelDraft.ReasoningTag == "" {

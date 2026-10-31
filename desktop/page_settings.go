@@ -148,7 +148,7 @@ func (a *desktop) commitSettingsOnLeave() {
 // ---- General -------------------------------------------------------------
 
 func (a *desktop) settingsGeneral(c *ui.Context) {
-	selected := a.settingsModule(c, "settingsGeneral", "外观", "提示词", "路径", "对话行为", "应用", "背景", "字体")
+	selected := a.settingsModule(c, "settingsGeneral", "外观", "提示词", "路径", "对话行为", "应用")
 
 	fieldNote(c, "每次对话都会附带给模型的偏好", a.secondaryInk())
 	if selected == 0 {
@@ -205,13 +205,56 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			})
 			fieldNote(c, "点击欢迎页头像可以唤醒樱花特效。", a.secondaryInk())
 		})
+		card(c, "settings-background", func() {
+			sectionTitle(c, "对话背景图")
+			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
+				label := "选择图片"
+				if a.configDraft.BackgroundImage != "" {
+					label = "更换图片"
+				}
+				cardFlat(c, label).OnClick(func() { a.selectBackgroundImage() })
+				if a.configDraft.BackgroundImage != "" {
+					cardDanger(c, "清除背景图").OnClick(func() { a.clearBackgroundImage() })
+				}
+				ui.Spacer(c)
+				state := "未设置背景图"
+				if a.configDraft.BackgroundImage != "" {
+					state = "已设置：" + a.configDraft.BackgroundImage
+				}
+				fieldNote(c, state, a.secondaryInk())
+			})
+			fieldNote(c, "淡色铺在对话区背景，建议不超过 12 MB。", a.secondaryInk())
+			ui.Slider(c.Key("bg-opacity"), &a.settings.BgOpacity, 0, 1).Label("背景图透明度")
+			fieldNote(c, fmt.Sprintf("当前 %.0f%%，越大越明显。", a.settings.BgOpacity*100), a.secondaryInk())
+		})
+		card(c, "settings-fonts", func() {
+			sectionTitle(c, "字号")
+			ui.Grid(c.Key("font-grid")).Columns(5).Gap(gapSection).Children(func() {
+				for _, item := range []struct {
+					label string
+					value *float64
+					step  float64
+				}{
+					{"消息正文", &a.settings.FontMessage, 0.5},
+					{"代码块", &a.settings.FontCode, 0.5},
+					{"工具卡", &a.settings.FontTool, 0.5},
+					{"次级正文", &a.settings.FontSub, 0.5},
+					{"辅助文字", &a.settings.FontAux, 0.5},
+				} {
+					ui.Column(c).Gap(gapTight).Children(func() {
+						fieldLabel(c, item.label)
+						uikit.NumberInput(c, "font-"+item.label, item.label, item.value, 10, 24, item.step, a.secondaryInk()).FillWidth()
+					})
+				}
+			})
+			fieldNote(c, "范围 10–24px，保存后即时生效。", a.secondaryInk())
+		})
 	}
 	if selected == 1 {
 		card(c, "settings-prompt", func() {
 			sectionTitle(c, "自定义提示词")
 			textArea(c, "custom-prompt", "自定义提示词", "例如：请用中文回答、保持回复简洁", &a.configDraft.CustomPrompt, 240)
 			fieldNote(c, "会随每次对话一起发送给模型。", a.secondaryInk())
-			switchRow(c, "allow-private", "允许访问内网地址", "允许 http_request、web_fetch 与 MCP 访问内网地址。", &a.settings.AllowPrivate)
 		})
 	}
 	if selected == 2 {
@@ -302,10 +345,8 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			}
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 				cardFlat(c, "检查更新").OnClick(func() {
-					a.settings.UpdateBusy = true
 					a.settings.UpdateNote = "正在检查…"
-					a.checkUpdates(true)
-					a.settings.UpdateBusy = false
+					a.checkUpdates(false)
 				})
 				if strings.TrimSpace(a.upd.ReleaseBody) != "" {
 					cardFlat(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
@@ -318,54 +359,6 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			if sw := switchRow(c, "autostart", "开机自启", "登录系统时自动启动 Ally。", &a.settings.Autostart); sw.Changed() {
 				a.setAutostart(a.settings.Autostart)
 			}
-		})
-	}
-	if selected == 5 {
-		card(c, "settings-background", func() {
-			sectionTitle(c, "对话背景图")
-			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				label := "选择图片"
-				if a.configDraft.BackgroundImage != "" {
-					label = "更换图片"
-				}
-				cardFlat(c, label).OnClick(func() { a.selectBackgroundImage() })
-				if a.configDraft.BackgroundImage != "" {
-					cardDanger(c, "清除背景图").OnClick(func() { a.clearBackgroundImage() })
-				}
-				ui.Spacer(c)
-				state := "未设置背景图"
-				if a.configDraft.BackgroundImage != "" {
-					state = "已设置：" + a.configDraft.BackgroundImage
-				}
-				fieldNote(c, state, a.secondaryInk())
-			})
-			fieldNote(c, "淡色铺在对话区背景，建议不超过 12 MB。", a.secondaryInk())
-			ui.Slider(c.Key("bg-opacity"), &a.settings.BgOpacity, 0, 1).Label("背景图透明度")
-			fieldNote(c, fmt.Sprintf("当前 %.0f%%，越大越明显。", a.settings.BgOpacity*100), a.secondaryInk())
-		})
-	}
-	if selected == 6 {
-		card(c, "settings-fonts", func() {
-			sectionTitle(c, "字号")
-			ui.Grid(c.Key("font-grid")).Columns(5).Gap(gapSection).Children(func() {
-				for _, item := range []struct {
-					label string
-					value *float64
-					step  float64
-				}{
-					{"消息正文", &a.settings.FontMessage, 0.5},
-					{"代码块", &a.settings.FontCode, 0.5},
-					{"工具卡", &a.settings.FontTool, 0.5},
-					{"次级正文", &a.settings.FontSub, 0.5},
-					{"辅助文字", &a.settings.FontAux, 0.5},
-				} {
-					ui.Column(c).Gap(gapTight).Children(func() {
-						fieldLabel(c, item.label)
-						uikit.NumberInput(c, "font-"+item.label, item.label, item.value, 10, 24, item.step, a.secondaryInk()).FillWidth()
-					})
-				}
-			})
-			fieldNote(c, "范围 10–24px，保存后即时生效。", a.secondaryInk())
 		})
 	}
 }
@@ -483,6 +476,11 @@ func (a *desktop) settingsNetwork(c *ui.Context) {
 			}
 		})
 	}
+	card(c, "settings-private-network", func() {
+		sectionTitle(c, "内网访问")
+		switchRow(c, "allow-private", "允许访问内网地址", "允许 http_request、web_fetch 与 MCP 访问内网地址。", &a.settings.AllowPrivate)
+		fieldNote(c, "关闭后，这些工具与 MCP 的 HTTP/SSE 连接将拒绝 localhost 和内网地址。", a.secondaryInk())
+	})
 }
 
 func validProxyURL(raw string) bool {
@@ -781,7 +779,7 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 				cardFlat(c, "检查更新").OnClick(func() {
 					a.settings.UpdateNote = "正在检查…"
-					a.checkUpdates(true)
+					a.checkUpdates(false)
 				})
 				if strings.TrimSpace(a.upd.ReleaseBody) != "" {
 					cardFlat(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })

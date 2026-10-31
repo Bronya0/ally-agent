@@ -10,6 +10,18 @@
 
 ---
 
+## MyGo 原生宿主兼容说明
+
+mygo 分支在原生窗口中通过 MyGo 的 `examples/embed-webview` 接入插件页面，继续支持本文的 `mount(element, host)` 与公开 host API。原有插件包、相对模块/CSS/图片资源、存储和 HTTP 权限声明无需迁移。插件管理仍使用原生 UI。兼容实现及测试集中在 `desktop/pluginhost/`，页面仅通过 `Host.Update / Page / Reload / Close` 接入；未打开过扩展时不会创建 WebView 或本地监听。
+
+页面按首次访问创建，最多缓存 **3 个** WebView（包含当前页面），超出后回收最久未访问的页面；所以 `keepAlive: true` 在缓存范围内保留状态，被回收后再次进入会重新 mount。`keepAlive: false` 切走即回收。重新导入、禁用、删除或切换工作区也会清理对应旧页面。卸载时先发 hidden 并调用 mount 返回的清理函数，最多等待 500ms，随后强制销毁页面；退出直接释放所有 WebView、监听端口与事件连接。插件应及时保存重要数据，不依赖页面永久驻留。
+
+宿主复用 main 分支的 host 与主题 token 契约；主题色映射到原生主题，字体由 WebView 的系统字体回退。每个页面使用独立的本机随机端口与身份校验，不注入 Wails 绑定；直接引用 Wails 运行时、宿主 DOM、未公开 CSS 或跨插件 localStorage 的历史插件需要改用公开 host API。`host.files.mediaUrl` 继续使用已有的媒体服务。
+
+可选浏览器回归（需本机 Python Playwright）：设置 `ALLY_PLUGIN_BROWSER` 为 Chromium/Edge 可执行文件路径，运行 `CGO_ENABLED=0 go test -p 1 ./desktop/pluginhost -run TestPluginLegacyBrowser -v`。
+
+---
+
 ## 1. 五分钟上手
 
 ### 1.1 最小骨架

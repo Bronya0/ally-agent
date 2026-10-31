@@ -201,7 +201,7 @@ type App struct {
 	// channel). runChat drains it at the top of every agent step so injected
 	// messages enter the model context only after the current tool batch
 	// completes, and they are persisted with the rest of the run history.
-	runInputs map[string]chan string
+	runInputs map[string]chan runInput
 	// compactingSessions holds the session IDs with a compaction LLM call in
 	// flight. Compaction is a session-scoped operation, so the composer run
 	// indicator and the /compact guard must be keyed per session instead of
@@ -254,6 +254,8 @@ type App struct {
 	// (refreshSessionPromptPrefix) because it rewrote the history anyway. Guarded
 	// by mu.
 	sessionSystemPrompts map[string][]systemPromptPart
+	// Skill loading uses the same definitions frozen with the prompt metadata.
+	sessionSkills map[string][]SkillDefinition
 
 	// frozenTurnNotices records, per session, the turn-notice states frozen into
 	// sessionSystemPrompts: what the model was told in the system prompt (kind id → state).
@@ -450,7 +452,7 @@ func newAppState(dataDir string) *App {
 		chatGPT:            chatgpt.New(filepath.Join(dataDir, "chatgpt"), chatgpt.NewSystemProtector()),
 		runs:               map[string]context.CancelFunc{},
 		runSessions:        map[string]string{},
-		runInputs:          map[string]chan string{},
+		runInputs:          map[string]chan runInput{},
 		compactingSessions: map[string]struct{}{},
 		compactingCancels:  map[string]context.CancelFunc{},
 		compactFailures:    map[string]int{},
@@ -1748,7 +1750,7 @@ func (a *App) startChatWithConfig(req ChatRequest, cfg ConfigState) (string, err
 	a.sessionRunOutcomes[req.SessionID] = sessionRunOutcome{RunID: runID, Status: "running"}
 	a.runs[runID] = cancel
 	a.runSessions[runID] = req.SessionID
-	a.runInputs[runID] = make(chan string, runInputBufferSize)
+	a.runInputs[runID] = make(chan runInput, runInputBufferSize)
 	a.mu.Unlock()
 	if req.SessionID != "" {
 		a.publishSessionExtraRoots(req.SessionID, cfg.ExtraRoots)
@@ -1814,23 +1816,27 @@ func (a *App) finishRun(runID string) {
 	a.mu.Unlock()
 }
 
-// InjectRunMessage queues a new user message into a live run. runChat injects
-// it at the next agent step boundary (after the current tool batch finishes),
-// so the model sees it on the following request. It returns an error when the
-// run no longer exists or the queue is full.
-func (a *App) InjectRunMessage(runID string, text string) error {
+type runInput struct {
+	Text        string
+	Attachments []AttachmentInput
+}
+
+// InjectRunMessage queues text and attachments into a live run. The model sees
+// them at the next agent step, after the current tool batch finishes. It returns
+// an error when the run no longer exists or the queue is full.
+func (a *App) InjectRunMessage(runID string, text string, attachments ...AttachmentInput) error {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(attachments) == 0 {
 		return errors.New("message is required")
 	}
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	ch := a.runInputs[runID]
-	a.mu.Unlock()
 	if ch == nil {
 		return errors.New("run not found or already finished")
 	}
 	select {
-	case ch <- text:
+	case ch <- runInput{Text: text, Attachments: append([]AttachmentInput(nil), attachments...)}:
 		return nil
 	default:
 		return fmt.Errorf("run message queue is full (limit %d)", runInputBufferSize)
@@ -1839,14 +1845,14 @@ func (a *App) InjectRunMessage(runID string, text string) error {
 
 // drainPendingInputs non-blockingly takes every queued injected message for a
 // run, in arrival order.
-func (a *App) drainPendingInputs(runID string) []string {
+func (a *App) drainPendingInputs(runID string) []runInput {
 	a.mu.Lock()
 	ch := a.runInputs[runID]
 	a.mu.Unlock()
 	if ch == nil {
 		return nil
 	}
-	var out []string
+	var out []runInput
 	for {
 		select {
 		case text := <-ch:
@@ -1857,17 +1863,31 @@ func (a *App) drainPendingInputs(runID string) []string {
 	}
 }
 
-// appendPendingRunInputs drains the run's injected-message queue and appends
-// each text as a user message. It reports whether anything was injected.
-func (a *App) appendPendingRunInputs(runID string, messages []openai.ChatCompletionMessage) ([]openai.ChatCompletionMessage, bool) {
-	texts := a.drainPendingInputs(runID)
-	if len(texts) == 0 {
-		return messages, false
+// appendPendingRunInputs gives queued attachments the same durable editing
+// references as an ordinary send, before appending their model-facing messages.
+// On a save failure, keep all original inputs in the run's checkpoint history.
+func (a *App) appendPendingRunInputs(runID, sessionID string, cfg ConfigState, messages []openai.ChatCompletionMessage) ([]openai.ChatCompletionMessage, bool, error) {
+	inputs := a.drainPendingInputs(runID)
+	if len(inputs) == 0 {
+		return messages, false, nil
 	}
-	for _, text := range texts {
-		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: text})
+	var err error
+	if cfg.ImageGeneration != nil && cfg.ImageGeneration.Enabled {
+		req := ChatRequest{SessionID: sessionID, Messages: make([]ChatMessageInput, len(inputs))}
+		for i, input := range inputs {
+			req.Messages[i] = ChatMessageInput{Role: openai.ChatMessageRoleUser, Content: input.Text, Attachments: input.Attachments}
+		}
+		err = a.persistRunImageAttachments(&req, runID)
+		if err == nil {
+			for i := range inputs {
+				inputs[i].Attachments = req.Messages[i].Attachments
+			}
+		}
 	}
-	return messages, true
+	for _, input := range inputs {
+		messages = appendUserMessageWithAttachments(messages, input.Text, input.Attachments)
+	}
+	return messages, true, err
 }
 
 // ReleaseSession releases backend-only state while preserving persisted history.
@@ -1906,6 +1926,7 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.liveBreakdown, sessionID)
 	delete(a.sessionWorkspaceMaps, sessionID)
 	delete(a.sessionSystemPrompts, sessionID)
+	delete(a.sessionSkills, sessionID)
 	delete(a.sessionToolsets, sessionID)
 	delete(a.sessionWorkspaces, sessionID)
 	delete(a.sessionExtraRoots, sessionID)
@@ -2176,6 +2197,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	// This run sends the same immutable tool list on every step. Count it once
 	// from that exact list, including across in-run history compaction.
 	tools := a.buildToolsForSession(sessionID, cfg)
+	ctx = withBuiltinToolAvailability(ctx, tools)
 	toolSchemaTokens := estimateToolSchemaTokens(tools)
 	breakdownAcc := newLiveBreakdownAccumulator(messages)
 	// Read de-duplication is scoped to the session, not to this run: a file range
@@ -2215,7 +2237,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// right before the next model request, so the model sees them in the
 		// following turn. They are persisted with the rest of the history.
 		var injected bool
-		messages, injected = a.appendPendingRunInputs(runID, messages)
+		var inputErr error
+		messages, injected, inputErr = a.appendPendingRunInputs(runID, sessionID, cfg, messages)
+		if inputErr != nil {
+			emitRunEnd("run:error", "error", map[string]any{"error": inputErr.Error()})
+			return
+		}
 		if injected {
 			// Frontend boundary: the queued message has now entered the model
 			// context. The UI may close out the previous assistant message so
@@ -2450,7 +2477,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// another step so the model actually sees it, instead of ending
 			// the run with the injection still queued.
 			var injected bool
-			messages, injected = a.appendPendingRunInputs(runID, messages)
+			var inputErr error
+			messages, injected, inputErr = a.appendPendingRunInputs(runID, sessionID, cfg, messages)
+			if inputErr != nil {
+				emitRunEnd("run:error", "error", map[string]any{"error": inputErr.Error()})
+				return
+			}
 			if injected {
 				a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
 				continue
@@ -2593,7 +2625,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// after the chips.
 		if len(outcomes) == 1 && outcomes[0].name == "suggest" && outcomes[0].result.OK {
 			var injected bool
-			messages, injected = a.appendPendingRunInputs(runID, messages)
+			var inputErr error
+			messages, injected, inputErr = a.appendPendingRunInputs(runID, sessionID, cfg, messages)
+			if inputErr != nil {
+				emitRunEnd("run:error", "error", map[string]any{"error": inputErr.Error()})
+				return
+			}
 			if injected {
 				a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
 				continue
@@ -2667,6 +2704,9 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	// tools (mcp__*) pass through unchanged because their sanitized names are
 	// already lowercase.
 	name = normalizeToolName(name)
+	if toolshared.IsBuiltinTool(name) && builtinToolDisabled(ctx, cfg, name) {
+		return toolErrorResult(codedToolError("E_TOOL_DISABLED", fmt.Errorf("工具 %q 已禁用，请勿再次调用该工具。", name)))
+	}
 
 	// 截断参数的 tool call 一律不执行：normalizeToolCalls 把流式截断的
 	// arguments 替换成了 {"allyTruncatedArguments":true}。直接执行会让 MCP
@@ -2996,7 +3036,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 		err, argWarnings = decodeJSON(&skReq)
 		if err == nil {
-			data, err = a.handleSkillToolCall(cfg, skReq.Skill, skReq.Args)
+			data, err = a.handleSkillToolCall(cfg, sessionID, skReq.Skill, skReq.Args)
 		}
 	default:
 		// Route MCP tool calls by their sanitized OpenAI function name.

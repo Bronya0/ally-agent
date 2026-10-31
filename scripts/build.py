@@ -317,6 +317,8 @@ def main():
     config_path = ROOT / 'mygo.json'
     config = json.loads(config_path.read_text(encoding='utf-8'))
     tag = os.environ.get('BUILD_TAG', '') if args.target == 'release' else ''
+    if args.target == 'release' and not re.fullmatch(r'v?[0-9]+[.][0-9]+[.][0-9]+', tag):
+        parser.error('Release packaging requires BUILD_TAG (for example v1.28.0); never publish a development version.')
     match = re.fullmatch(r'v?([0-9]+[.][0-9]+[.][0-9]+(?:[-+][0-9A-Za-z.-]+)?)', tag)
     if match:
         config['version'] = match.group(1)

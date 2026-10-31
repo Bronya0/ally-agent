@@ -494,7 +494,7 @@ func (a *desktop) loadFolderChildren(path string, manual ...bool) {
 	a.fileLoading[path] = true
 	root, epoch := t.Workspace, a.fileEpoch
 	go func() {
-		result, err := a.core.ListFiles(backend.ListFilesRequest{Workspace: root, Path: path, MaxDepth: 1, Limit: 1000, IncludeHidden: true})
+		result, err := a.core.ListFiles(backend.ListFilesRequest{Workspace: root, Path: path, MaxDepth: 1, Limit: 1000, IncludeHidden: true, IncludeIgnored: true})
 		a.win.Update(func() {
 			if epoch != a.fileEpoch {
 				return
@@ -863,6 +863,7 @@ func gitStatusLetter(status string) string {
 
 type gitTreeNode struct {
 	name, path string
+	status     string
 	index      int
 	children   []*gitTreeNode
 }
@@ -887,6 +888,7 @@ func buildGitTree(files []backend.GitDiffFile) []*gitTreeNode {
 			}
 			if n == len(parts)-1 {
 				child.index = index
+				child.status = gitStatusLetter(file.Status)
 			}
 			node = child
 		}
@@ -902,6 +904,11 @@ func buildGitTree(files []backend.GitDiffFile) []*gitTreeNode {
 		})
 		for _, child := range n.children {
 			order(child)
+			if n.status == "" {
+				n.status = child.status
+			} else if n.status != child.status {
+				n.status = "M"
+			}
 		}
 	}
 	order(root)
@@ -919,23 +926,16 @@ func (a *desktop) gitTreeRows(c *ui.Context, nodes []*gitTreeNode, files []backe
 		}
 		var expanded *bool
 		var children func()
-		label := node.name
+		added, deleted := 0, 0
 		if folder {
 			expanded = open
 			children = func() { a.gitTreeRows(c, node.children, files) }
 		} else {
-			file := files[node.index]
-			label += "  " + gitStatusLetter(file.Status)
-			if file.Added > 0 {
-				label += fmt.Sprintf(" +%d", file.Added)
-			}
-			if file.Deleted > 0 {
-				label += fmt.Sprintf(" −%d", file.Deleted)
-			}
+			added, deleted = files[node.index].Added, files[node.index].Deleted
 		}
-		row := ui.TreeItem(c.Key("git-tree-"+node.path), label, expanded, children).
-			Height(25).FontSize(fsSmall).Label(node.name).
-			Selected(!folder && a.filesF.GitFile == node.index)
+		row := uikit.GitTreeItem(c.Key("git-tree-"+node.path), node.name, node.status, added, deleted, expanded, children).
+			Height(25).FontSize(fsSmall)
+		uikit.TreeSelection(c, row, !folder && a.filesF.GitFile == node.index)
 		row.OnClick(func() {
 			if folder {
 				*open = !*open

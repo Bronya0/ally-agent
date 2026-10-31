@@ -112,7 +112,14 @@ func computeGitStatusWithContext(ctx context.Context, workspace string, discover
 	// The caller's deadline covers waits, invalidation retries and worker batches.
 	out, _, err := runGitLimited(ctx, workspace, 256*1024, "status", "--porcelain=v2", "--branch", "-z")
 	if err == nil {
-		return parseGitStatusV2(out)
+		// A repository can itself contain linked worktrees or nested repos.
+		// A successful parent status must not hide their independent changes.
+		candidates := discover(ctx, workspace)
+		if len(candidates) == 0 {
+			return parseGitStatusV2(out)
+		}
+		candidates = append([]gitRepoCandidate{{name: ".", path: workspace}}, candidates...)
+		return computeMultiRepoGitStatusWithContext(ctx, candidates)
 	}
 	// Permission errors, timeouts and broken repositories are not evidence that
 	// the workspace is a container of repositories.

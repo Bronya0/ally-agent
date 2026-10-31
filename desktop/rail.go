@@ -69,7 +69,8 @@ func (a *desktop) pluginModes() (top []backend.PluginInfo, groups [][]backend.Pl
 func (a *desktop) rail(c *ui.Context) {
 	p := a.currentPalette()
 	if !a.prefs.RailExpanded {
-		ui.Column(c).Width(widthRailCollapsed).Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, railPadH).Gap(4).AlignItems(ui.Center).Children(func() {
+		rail := ui.Column(c).Width(widthRailCollapsed).Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, railPadH).Gap(4).AlignItems(ui.Center)
+		rail.Children(func() {
 			ui.Scroll(c).Key("rail-modes").FillWidth().Grow(1).MinHeight(0).Children(func() {
 				ui.Column(c).FillWidth().Gap(4).Children(func() { a.railModes(c, false) })
 			})
@@ -88,7 +89,8 @@ func (a *desktop) railBody(c *ui.Context, width *float32) {
 	p := a.currentPalette()
 	// Split panes are boxes: the rail must explicitly take the pane's height
 	// before the middle section can grow and keep the toggle at the bottom.
-	ui.Column(c).Width(*width).FillHeight().Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(6).Gap(3).Children(func() {
+	rail := ui.Column(c).Width(*width).FillHeight().Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(6).Gap(3)
+	rail.Children(func() {
 		a.railModes(c, true)
 		ui.Column(c).Grow(1).MinHeight(0).Gap(6).Children(func() {
 			a.railWorkspaces(c)

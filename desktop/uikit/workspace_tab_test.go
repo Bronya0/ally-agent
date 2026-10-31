@@ -57,6 +57,37 @@ func TestWorkspaceTabSlotsStayFixed(t *testing.T) {
 	}
 }
 
+func TestWorkspaceTabSelectionDoesNotStretchHoverFill(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		theme := ui.LightTheme()
+		if dark {
+			theme = ui.DarkTheme()
+		}
+		active := false
+		tt := ui.NewTester(func(c *ui.Context) {
+			c.SetTheme(theme)
+			ui.Row(c).Fill().Background(theme.Surface.Mix(theme.Accent, 0.18)).Children(func() {
+				WorkspaceTab(c.Key("tab"), "workspace", "/w/workspace", active, false, true, nil,
+					func() { active = true }, func() {}, nil)
+			})
+		}, 300, 80)
+		r, _ := tt.Find("workspace")
+		tt.Move(r.X+12, r.Y+20)
+		tt.Advance(200 * time.Millisecond)
+		tt.ClickAt(r.X+12, r.Y+20)
+		if !active {
+			t.Fatal("tab did not activate")
+		}
+		// Check immediately: the former hover fill must not enter the newly
+		// expanded bottom edge before fading into the active surface.
+		got := tt.Image().RGBAAt(int(r.X+r.W/2), int(r.Y+r.H-2))
+		want := theme.Background
+		if got.R != want.R || got.G != want.G || got.B != want.B {
+			t.Fatalf("dark=%t selection retained hover fill: %v want %v", dark, got, want)
+		}
+	}
+}
+
 func TestWorkspaceTabStatusAndPaddingActivate(t *testing.T) {
 	for _, busy := range []bool{false, true} {
 		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
@@ -104,7 +135,7 @@ func TestWorkspaceTabPreview(t *testing.T) {
 				c.SetTheme(theme)
 				c.DisableAnimations()
 				ui.Column(c.Key(dark)).FillWidth().Height(125).Background(theme.Background).Children(func() {
-					ui.Row(c).FillWidth().Height(44).Padding(0, 12).Gap(6).AlignItems(ui.Center).Background(theme.Surface).BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
+					ui.Row(c).FillWidth().Height(44).Padding(0, 12).Gap(0).AlignItems(ui.Center).Background(theme.Surface.Mix(theme.Accent, 0.18)).Children(func() {
 						ui.Text(c, "Ally").FontSize(20).FontWeight(700).TextColor(theme.Accent).Margin(0, 10, 0, 0)
 						for i, label := range []string{"apisec", "ally-agent-v2", "另一个工作区"} {
 							WorkspaceTab(c.Key(i), label, "/w/"+label, i == 0, i == 1, true, nil, func() {}, func() {}, nil)

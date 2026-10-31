@@ -119,6 +119,18 @@ func (a *desktop) composerKeys(c *ui.Context, t *conversation, input ui.Element)
 		a.updateComposerMenus(t)
 	}
 	input.OnTextKey(func(k ui.TextKey) bool {
+		// Even an empty native text editor consumes word-navigation arrows.
+		// Use the live editor text, not the possibly stale bound draft, and
+		// handle the tab shortcut before the editor takes it.
+		if !composing && k.Mods == ui.Cmd && (k.Key == ui.KeyLeft || k.Key == ui.KeyRight) && a.workspaceTabArrowsAvailable(t, k.Text()) {
+			delta := 1
+			if k.Key == ui.KeyLeft {
+				delta = -1
+			}
+			a.activateWorkspaceTab((a.active + len(a.tabs) + delta) % len(a.tabs))
+			a.composerFocus = a.current().ID
+			return true
+		}
 		if k.Key == ui.KeyEnter && k.Mods&ui.Ctrl != 0 && !composing {
 			runes := []rune(k.Text())
 			start := max(0, min(len(runes), selectionStart))
@@ -1099,7 +1111,13 @@ func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 						if repo.Ahead+repo.Behind+repo.Added+repo.Modified+repo.Deleted == 0 {
 							stats = "clean"
 						}
-						popoverItem(c, fmt.Sprintf("git-repo-%d", i), repo.Name+"/  "+repo.Branch, stats, false, func() { *open = false; a.filesF.GitOpen = true; a.loadGitDiff(t, repo.Path) }, a.secondaryInk())
+						popoverItem(c, fmt.Sprintf("git-repo-%d", i), repo.Name+"/  "+repo.Branch, stats, false, func() {
+							*open = false
+							a.filesF.GitOpen = true
+							a.filesF.GitRepo = repo.Path
+							a.filesF.GitFile = -1
+							a.loadGitDiff(t, repo.Path)
+						}, a.secondaryInk())
 					}
 				})
 			})

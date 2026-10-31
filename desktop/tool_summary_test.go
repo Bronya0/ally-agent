@@ -84,9 +84,17 @@ func TestChatWidthIsBoundedAndResponsive(t *testing.T) {
 	if !ok || input.W > chatMaxWidth || input.X < 600 {
 		t.Fatalf("wide chat is not centered/constrained: %v", input)
 	}
+	viewport, ok := tt.Find("聊天滚动区域")
+	if !ok || viewport.X != 0 || viewport.W != 2600 {
+		t.Fatalf("scrollbar viewport does not span the wide chat panel: %v", viewport)
+	}
 	tt.SetSize(800, 700)
 	input, ok = tt.Find("消息输入框")
 	if !ok || input.X < 0 || input.X+input.W > 800 || input.W < 700 {
 		t.Fatalf("narrow chat does not use available space: %v", input)
+	}
+	viewport, ok = tt.Find("聊天滚动区域")
+	if !ok || viewport.X != 0 || viewport.W != 800 {
+		t.Fatalf("scrollbar viewport does not follow the narrow chat panel: %v", viewport)
 	}
 }

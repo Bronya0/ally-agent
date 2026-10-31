@@ -1,9 +1,60 @@
 package desktop
 
 import (
+	"encoding/json"
 	"github.com/egoist/mygo/ui"
+	"reflect"
 	"testing"
 )
+
+func TestMCPEditorPreservesArguments(t *testing.T) {
+	for _, args := range [][]string{
+		{"C:/Program Files/mcp/server.js"},
+		{"--config", "a,b", "", " hello ", `C:\目录\a.js`, `quoted "argument"`},
+	} {
+		raw, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"srv": mcpServerEntry{Command: "node", Args: args}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := &desktop{mcpText: string(raw)}
+		a.openMCPEditor("srv")
+		got, err := splitArgs(a.mcpF.Args)
+		if err != nil || !reflect.DeepEqual(got, args) {
+			t.Fatalf("arguments changed: %q -> %q, err=%v", args, got, err)
+		}
+	}
+	for _, raw := range []string{`["unfinished"`, `[1]`} {
+		if _, err := splitArgs(raw); err == nil {
+			t.Fatalf("invalid JSON args accepted: %s", raw)
+		}
+	}
+	for _, raw := range []string{"-y, @playwright/mcp", "-y @playwright/mcp"} {
+		got, err := splitArgs(raw)
+		if err != nil || !reflect.DeepEqual(got, []string{"-y", "@playwright/mcp"}) {
+			t.Fatalf("simple args compatibility lost: %q, %v", got, err)
+		}
+	}
+}
+
+func TestMCPEditorUsesTheConnectionTransport(t *testing.T) {
+	for _, tc := range []struct {
+		entry mcpServerEntry
+		want  string
+	}{
+		{mcpServerEntry{Command: "node"}, "stdio"},
+		{mcpServerEntry{URL: "https://example.invalid/mcp"}, "streamable-http"},
+		{mcpServerEntry{Transport: "sse", URL: "https://example.invalid/sse"}, "sse"},
+		{mcpServerEntry{Transport: "http", URL: "https://example.invalid/mcp"}, "streamable-http"},
+		{mcpServerEntry{Transport: "rest", URL: "https://example.invalid/mcp"}, "streamable-http"},
+	} {
+		raw, _ := json.Marshal(map[string]any{"mcpServers": map[string]mcpServerEntry{"srv": tc.entry}})
+		a := &desktop{mcpText: string(raw)}
+		a.openMCPEditor("srv")
+		if a.mcpF.Transport != tc.want || a.mcpF.URL != tc.entry.URL {
+			t.Fatalf("wrong editor transport/url: %+v", a.mcpF)
+		}
+	}
+}
 
 func TestMCPNativeAndJSONToolsOpenChecklist(t *testing.T) {
 	native := []map[string]any{{"name": "read_file", "description": "Read a file"}, {"name": "write_file", "description": "Write a file"}}

@@ -1,20 +1,41 @@
 name: Build MyGo releases
 
 on:
-  workflow_call:
+  push:
+    tags: ['v*']
   workflow_dispatch:
-  release:
-    types: [published]
+    inputs:
+      tag:
+        description: Existing stable tag to build and publish (e.g. v1.28.0)
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
 
 permissions:
   contents: write
+
+concurrency:
+  group: ally-release
+  cancel-in-progress: false
 
 jobs:
   build:
     name: Cross-platform release packages
     runs-on: macos-15
+    env:
+      BUILD_TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      CGO_ENABLED: '0'
+      GOGC: '30'
+      GOMAXPROCS: '2'
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-go@v7
         with:
@@ -25,34 +46,25 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Check shared builder and entry points
+      - name: Check builder, publisher and update contracts
         run: |
           bash -n scripts/build-all.sh scripts/build.command
-          python3 -m unittest discover -s scripts -p 'test_build.py' -v
+          python3 -m unittest discover -s scripts -p 'test_*.py' -v
+          go test -p 1 ./internal/app -run Update
 
-      - name: Build portable archives and ad-hoc universal DMG
-        env:
-          BUILD_TAG: ${{ github.event.release.tag_name || github.ref_name }}
-          ALLY_RELEASE_NOTES_BODY: ${{ github.event.release.body }}
-          CGO_ENABLED: '0'
-          GOGC: '30'
-          GOMAXPROCS: '2'
-        run: bash scripts/build-all.sh
+      - name: Prepare unpublished release and bundled notes
+        run: python3 scripts/release.py prepare "$BUILD_TAG"
+
+      - name: Build all seven packages
+        run: |
+          export ALLY_RELEASE_NOTES_BODY="$(cat .tmp/release-notes.md)"
+          bash scripts/build-all.sh
 
       - uses: actions/upload-artifact@v7
         with:
-          name: Ally-${{ github.event.release.tag_name || github.ref_name }}
-          path: |
-            dist/release/*-windows-*.zip
-            dist/release/*-linux-*.tar.gz
-            dist/release/*-macos-*.dmg
+          name: Ally-${{ inputs.tag || github.ref_name }}
+          path: dist/release/*
           if-no-files-found: error
 
-      - uses: softprops/action-gh-release@v3
-        if: github.event_name == 'release'
-        with:
-          files: |
-            dist/release/*-windows-*.zip
-            dist/release/*-linux-*.tar.gz
-            dist/release/*-macos-*.dmg
-          fail_on_unmatched_files: true
+      - name: Upload, verify every architecture, then publish
+        run: python3 scripts/release.py publish "$BUILD_TAG"

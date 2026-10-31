@@ -3,9 +3,12 @@ package app
 
 import (
 	"ally-dev/internal/tools/pathutil"
+	"ally-dev/internal/tools/read"
+	"bytes"
 	"context"
 	"errors"
 	"github.com/egoist/mygo"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,11 +112,23 @@ func (a *App) ReadLocalTextFile(path string) (string, error) {
 	if info.Size() > max {
 		return "", errors.New("文件过大（上限 2MB）")
 	}
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	return string(data), nil
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) > max {
+		return "", errors.New("文件过大（上限 2MB）")
+	}
+	data, err = read.DecodeTextBytes(data)
+	if err != nil {
+		return "", err
+	}
+	return string(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))), nil
 }
 
 // ReadWorkspaceMedia returns the bytes of an image inside a workspace so the

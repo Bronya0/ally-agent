@@ -114,7 +114,7 @@ func TestSkillInstructionsAreWholeOrReturnTargetedReadGuidance(t *testing.T) {
 		}
 		writeSkillTestFile(t, a.config.Workspace, ".agents/skills/"+name+"/SKILL.md", content)
 	}
-	loaded, err := a.handleSkillToolCall(a.config, "normal", "")
+	loaded, err := a.handleSkillToolCall(a.config, "", "normal", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestSkillInstructionsAreWholeOrReturnTargetedReadGuidance(t *testing.T) {
 	if got != loaded["content"] || !strings.Contains(got, "END_INSTRUCTIONS") || strings.Contains(got, "characters omitted") {
 		t.Fatal("skill instructions must arrive verbatim without a JSON wrapper")
 	}
-	if _, err := a.handleSkillToolCall(a.config, "large", ""); err == nil || !strings.Contains(err.Error(), "use read") || !strings.Contains(err.Error(), "SKILL.md") {
+	if _, err := a.handleSkillToolCall(a.config, "", "large", ""); err == nil || !strings.Contains(err.Error(), "use read") || !strings.Contains(err.Error(), "SKILL.md") {
 		t.Fatalf("oversize instructions need actionable guidance, not a partial load: %v", err)
 	}
 }

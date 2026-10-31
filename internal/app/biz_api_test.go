@@ -169,9 +169,9 @@ func TestApiCreateAndListSessions(t *testing.T) {
 }
 
 // registerApiRun 手工注册一个活跃 run（模拟 StartChat 的注册状态）。
-func registerApiRun(t *testing.T, app *App, runID, sessionID string) chan string {
+func registerApiRun(t *testing.T, app *App, runID, sessionID string) chan runInput {
 	t.Helper()
-	ch := make(chan string, runInputBufferSize)
+	ch := make(chan runInput, runInputBufferSize)
 	app.mu.Lock()
 	app.runs[runID] = func() {}
 	app.runSessions[runID] = sessionID
@@ -684,7 +684,16 @@ func TestApiBusySessionAndQuestions(t *testing.T) {
 	rec, payload := apiRequest(t, handler, "POST", "/api/v1/sessions", token, `{}`)
 	sid := apiRequireOK(t, rec, payload)["id"].(string)
 	registerApiRun(t, app, "run", sid)
-	for _, body := range []string{`{"message":"hi","attachments":[{"name":"a"}]}`, `{"message":"hi","modelIndex":0}`} {
+	rec, payload = apiRequest(t, handler, "POST", "/api/v1/sessions/"+sid+"/messages", token,
+		`{"attachments":[{"name":"note.txt","kind":"text","text":"queued file contents"}]}`)
+	if apiRequireOK(t, rec, payload)["queued"] != true {
+		t.Fatal("attachment-only message was not queued")
+	}
+	inputs := app.drainPendingInputs("run")
+	if len(inputs) != 1 || len(inputs[0].Attachments) != 1 || inputs[0].Attachments[0].Text != "queued file contents" {
+		t.Fatalf("queued attachments lost: %+v", inputs)
+	}
+	for _, body := range []string{`{"message":"hi","modelIndex":0}`} {
 		rec, _ := apiRequest(t, handler, "POST", "/api/v1/sessions/"+sid+"/messages", token, body)
 		if rec.Code != 409 {
 			t.Fatalf("expected 409: %s", rec.Body.String())

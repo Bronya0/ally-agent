@@ -20,6 +20,33 @@ import (
 	toolshared "ally-dev/internal/tools/shared"
 )
 
+func TestDisabledBuiltinFollowsInjectedTools(t *testing.T) {
+	a := &App{}
+	cfg := ConfigState{}
+	existing := withBuiltinToolAvailability(context.Background(), a.buildToolsForSession("existing", cfg))
+	cfg.DisabledTools = []string{"CALCULATE"}
+	fresh := withBuiltinToolAvailability(context.Background(), a.buildToolsForSession("fresh", cfg))
+	child := withBuiltinToolAvailability(existing, a.subagentTools(cfg))
+	for _, tc := range []struct {
+		name    string
+		ctx     context.Context
+		allowed bool
+	}{
+		{"existing", existing, true}, {"fresh", fresh, false},
+		{"child", child, false}, {"stateless", context.Background(), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := a.executeTool(tc.ctx, cfg, "s", "calculate", []byte(`{"expression":"1+1"}`))
+			if result.OK != tc.allowed {
+				t.Fatalf("allowed=%v result=%+v", tc.allowed, result)
+			}
+			if !tc.allowed && (result.ErrorCode != "E_TOOL_DISABLED" || !strings.Contains(result.Error, "已禁用")) {
+				t.Fatalf("missing disabled-tool message: %+v", result)
+			}
+		})
+	}
+}
+
 // TestEditRejectsChangeWithoutNewText pins the rule the declaration states: a
 // change that omits newText fails at the argument gate instead of quietly
 // replacing the matched text with nothing. An explicit empty string is still the

@@ -297,33 +297,34 @@ func (a *desktop) currentPlugin() *backend.PluginInfo {
 	return nil
 }
 
-// pluginPageBody is the native presentation of a web plugin page. Plugin code
-// is JavaScript running in the web host, which the native build cannot embed;
-// the page states that plainly and keeps the plugin's data reachable.
+// pluginPageBody hosts the unchanged v1 plugin mount contract in a MyGo WebView.
 func (a *desktop) pluginPageBody(c *ui.Context) {
 	p := a.currentPlugin()
 	if p == nil {
 		emptyState(c, "插件不存在或已停用", "返回插件管理重新启用。", a.secondaryInk())
-		flat(c, "插件管理").AlignSelf(ui.Start).OnClick(func() { a.changePage("plugins") })
 		return
 	}
-	card(c, "plugin-page", func() {
-		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, pluginName(*p)).FontSize(18).Bold()
-			neutralChip(c, p.ID+"@"+p.Version)
+	ui.Column(c.Key("plugin-page-" + p.ID)).Fill().MinHeight(0).Children(func() {
+		ui.Row(c).Padding(8, 16).Gap(gapField).Children(func() {
+			ui.Text(c, pluginName(*p)).Bold()
 			ui.Spacer(c)
-			cardFlat(c, "打开插件目录").OnClick(func() {
-				if p.Dir != "" {
-					a.job(func() error { return a.core.OpenPathInFileManager(p.Dir) })
+			flat(c, "重新加载").OnClick(func() {
+				if a.pluginHost != nil {
+					a.pluginHost.Reload(p.ID)
 				}
 			})
-			cardFlat(c, "插件管理").OnClick(func() { a.changePage("plugins") })
+			flat(c, "插件管理").OnClick(func() { a.changePage("plugins") })
 		})
-		notice(c, "info", "这个插件是网页型页面：它在 Web 宿主里执行 JavaScript 与 DOM 渲染，原生窗口无法内嵌执行。原有数据、权限与启停状态都保留在本地。", a.secondaryInk())
-		if p.Description != "" {
-			ui.Text(c, p.Description).FontSize(fsBody).TextColor(a.secondaryInk())
+		if a.pluginHost == nil {
+			return
 		}
-		kv(c, "入口", p.Entry, a.secondaryInk())
-		kv(c, "安装目录", p.Dir, a.secondaryInk())
+		view, err := a.pluginHost.Page(p.ID)
+		if err != nil {
+			notice(c, "error", err.Error(), a.secondaryInk())
+		} else if view != nil {
+			ui.WebView(c.Key("plugin-surface-"+p.ID), view).Grow(1).FillWidth()
+		} else {
+			busyRow(c, "正在加载插件…", a.secondaryInk())
+		}
 	})
 }

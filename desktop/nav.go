@@ -82,6 +82,7 @@ func (a *desktop) saveConfig(cfg backend.ConfigState, notice ...string) {
 			<-previous
 		}
 		err := a.core.SaveConfig(cfg)
+		a.writeFailures.record("config", err)
 		var fresh backend.ConfigState
 		if err == nil {
 			fresh, err = a.core.GetConfig()

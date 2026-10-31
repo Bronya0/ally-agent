@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/pluginhost"
 	"ally-dev/internal/documentpreview"
 	"ally-dev/resources"
 	"context"
@@ -30,6 +31,7 @@ type conversation struct {
 	Busy                                              bool
 	CancelRequested                                   bool
 	Created                                           int64
+	SnapshotQueued                                    bool
 	Scroll                                            ui.ScrollState
 	PendingAttachments                                []backend.AttachmentInput
 	AttachmentLoading                                 bool
@@ -63,6 +65,7 @@ type workspaceFile struct {
 }
 type desktop struct {
 	memoryDiagnosticBusy                    bool
+	pluginHost                              *pluginhost.Host
 	previews                                previewPool
 	previewRequests                         []previewRequest
 	previewTimer                            *time.Timer
@@ -72,8 +75,11 @@ type desktop struct {
 	avatarPoses                             map[string]*ui.Bitmap
 	avatarLoadID                            uint64
 	configSaveTail                          chan struct{}
+	writeFailures                           windowWriteFailures
 	prefsSaveTail                           chan struct{}
 	lastCompletionNotice                    time.Time
+	completionNotices                       map[string]bool
+	completionNoticeOrder                   []string
 	composerFocus                           string
 	welcomeMCP, welcomeSkills, welcomeTools bool
 	popupFlags                              map[string]*bool
@@ -221,6 +227,12 @@ func Run() {
 			opts.TrafficLightPosition = &mygo.Point{X: 14, Y: (headerBarHeight - 16) / 2}
 		}
 		a.win = mygo.NewWindow(opts)
+		a.pluginHost = pluginhost.New(a.core, a.win, func(message, kind string) {
+			if !a.closing {
+				a.queueNotice(message, kind)
+			}
+		})
+		mygo.App.OnDidBecomeActive(mygo.ClearNotifications)
 		// Configure the native frame before showing it to avoid a white border
 		// during startup, while keeping the native resize edges and shadow.
 		configureWindowFrame(a.win)
@@ -294,6 +306,10 @@ func Run() {
 				a.ready = true
 				a.newConversation(workspace)
 				a.maybeShowReleaseNotes()
+				if a.installedRelease() {
+					go a.core.ConfirmUpdateStartup()
+				}
+				a.scheduleUpdateCheck(10 * time.Second)
 			})
 		}()
 	})
@@ -305,73 +321,74 @@ func (a *desktop) shutdown() {
 	if a.closing {
 		return
 	}
+	if a.upd.installing() && !a.upd.Applied {
+		a.notify("正在准备更新，请等待完成")
+		return
+	}
 	a.closing = true
+	if a.upd.Applied && a.upd.State == "restarting" {
+		// The updater already flushed after ApplyUpdate stopped all runs.
+		a.finishQuit()
+		return
+	}
+	a.prepareWindowClose(a.finishShutdown, func() { a.closing = false })
+}
+
+// Both normal quit and updating check editor changes before replacing files.
+func (a *desktop) prepareWindowClose(proceed, cancel func()) {
 	for _, file := range a.workspaceFiles {
 		if file.Saving {
-			a.closing = false
+			cancel()
 			a.notify("文件正在保存，请稍后退出")
 			return
 		}
-		if file.Editor.Buffer.Modified() {
+		if file.Editor != nil && file.Editor.Buffer.Modified() {
 			go func() {
 				result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: "未保存的文件", Message: "存在未保存的文件修改", Detail: "退出会放弃这些修改。", Buttons: []string{"取消", "放弃并退出"}, CancelButton: 0})
 				a.win.Update(func() {
 					if err != nil {
 						a.notifyError(err.Error())
-						a.closing = false
+						cancel()
 						return
 					}
 					if result.Button != 1 {
-						a.closing = false
+						cancel()
 						return
 					}
-					a.finishShutdown()
+					proceed()
 				})
 			}()
 			return
 		}
 	}
-	a.finishShutdown()
+	proceed()
 }
 func (a *desktop) finishShutdown() {
+	a.flushWindowWrites(func(err error) {
+		if err != nil {
+			a.closing = false
+			a.notifyError("保存失败，窗口保持打开：" + err.Error())
+			return
+		}
+		a.finishQuit()
+	})
+}
+
+func (a *desktop) finishQuit() {
 	a.stopAutoAppearance()
-	// 停后端与保存会话互不依赖：并行跑，退出只等最慢的一段。串行会把 MCP 与
-	// 托管服务的收尾时间整个叠在保存前面，用户只能对着窗口干等。
-	shutdownDone := make(chan struct{})
+	a.stopUpdateChecks()
 	go func() {
-		defer close(shutdownDone)
 		if err := a.core.ShutdownNative(); err != nil {
 			log.Printf("shutdown: %v", err)
 		}
-	}()
-	go func() {
 		a.win.Update(func() {
-			for _, t := range a.tabs {
-				if len(t.Messages) > 0 {
-					a.persist(t)
-				}
+			a.releaseWorkspaceFiles()
+			a.releaseAllHTMLPreviews()
+			if a.pluginHost != nil {
+				a.pluginHost.Close()
 			}
-			tail := a.persistTail
-			prefsTail := a.prefsSaveTail
-			sshTail := a.sshAuthTail
-			go func() {
-				if prefsTail != nil {
-					<-prefsTail
-				}
-				if tail != nil {
-					<-tail
-				}
-				if sshTail != nil {
-					<-sshTail
-				}
-				<-shutdownDone
-				a.win.Update(func() {
-					a.releaseWorkspaceFiles()
-					a.releaseAllHTMLPreviews()
-					a.quitReady = true
-					mygo.App.Quit()
-				})
-			}()
+			a.quitReady = true
+			mygo.App.Quit()
 		})
 	}()
 }
@@ -578,26 +595,32 @@ func (a *desktop) chooseWorkspace() {
 
 // inject delivers a follow-up into the live run instead of starting a new one:
 // the backend queues it and the model picks it up at the next agent step, so a
-// running conversation accepts more input. Text only: the injection protocol
-// carries no attachments.
+// running conversation accepts more input, including attachments.
 func (a *desktop) inject(t *conversation, text string) bool {
-	if text == "" {
-		a.notifyError("运行中只能追加文字消息")
+	if a.upd.installing() || a.upd.Applied {
 		return false
 	}
-	if len(t.PendingAttachments) > 0 {
-		a.notifyError("运行中不能追加附件，请等本轮结束")
+	if text == "" && len(t.PendingAttachments) == 0 {
 		return false
 	}
 	if t.RunID == "" {
 		a.notifyError("本轮正在启动，请稍后再追加")
 		return false
 	}
-	if err := a.core.InjectRunMessage(t.RunID, text); err != nil {
+	attachments := append([]backend.AttachmentInput(nil), t.PendingAttachments...)
+	if err := a.core.InjectRunMessage(t.RunID, text, attachments...); err != nil {
 		a.notifyError("追加失败：" + err.Error())
 		return false
 	}
-	t.Messages = append(t.Messages, map[string]any{"role": "user", "content": text})
+	display := text
+	if display == "" && len(attachments) > 0 {
+		display = "附件：" + attachments[0].Name
+	}
+	raw, _ := json.Marshal(attachments)
+	var displayAttachments []any
+	_ = json.Unmarshal(raw, &displayAttachments)
+	t.Messages = append(t.Messages, map[string]any{"role": "user", "content": display, "attachments": displayAttachments})
+	t.PendingAttachments = nil
 	t.Draft = ""
 	t.Status = "已追加，本轮继续执行…"
 	t.uiState().Follow = true
@@ -646,7 +669,7 @@ func (a *desktop) chatConfig(t *conversation) (backend.ConfigState, bool) {
 
 func (a *desktop) send(t *conversation, text string) bool {
 	text = strings.TrimSpace(text)
-	if (text == "" && len(t.PendingAttachments) == 0) || t.AttachmentLoading || !a.ready || a.closing {
+	if (text == "" && len(t.PendingAttachments) == 0) || t.AttachmentLoading || !a.ready || a.closing || a.upd.installing() || a.upd.Applied {
 		return false
 	}
 	if t.Busy {
@@ -715,9 +738,10 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 			}
 		}
 	}
-	return backend.SessionSnapshot{ID: t.ID, Title: t.Title, Workspace: t.Workspace, CreatedAt: t.Created, UpdatedAt: time.Now().UnixMilli(), ContextTokens: t.ContextTokens, HasSnapshot: true, Messages: msgs}
+	return backend.SessionSnapshot{ID: t.ID, Title: t.Title, Draft: t.Draft, Workspace: t.Workspace, CreatedAt: t.Created, UpdatedAt: time.Now().UnixMilli(), ContextTokens: t.ContextTokens, HasSnapshot: true, Messages: msgs}
 }
 func (a *desktop) persist(t *conversation) {
+	t.SnapshotQueued = true
 	s := snapshot(t)
 	previous := a.persistTail
 	done := make(chan struct{})
@@ -727,7 +751,9 @@ func (a *desktop) persist(t *conversation) {
 		if previous != nil {
 			<-previous
 		}
-		if err := a.core.SaveSession(s); err != nil {
+		err := a.core.SaveSession(s)
+		a.writeFailures.record("session:"+s.ID, err)
+		if err != nil {
 			a.fail(err)
 			return
 		}
@@ -778,6 +804,8 @@ func (a *desktop) openSession(id string) {
 		a.win.Update(func() {
 			t := a.freshConversation(s.Workspace)
 			t.ID, t.Title, t.Created, t.Messages, t.ContextTokens = s.ID, s.Title, s.CreatedAt, s.Messages, s.ContextTokens
+			t.Draft = s.Draft
+			t.SnapshotQueued = true
 			for _, message := range t.Messages {
 				if str(message, "role") == "tool_call" || str(message, "toolCallId") != "" {
 					normalizeToolMessage(message)
@@ -847,7 +875,7 @@ func (a *desktop) refreshFiles(manual ...bool) {
 		return
 	}
 	go func() {
-		r, e := a.core.ListFiles(backend.ListFilesRequest{Workspace: root, Path: ".", MaxDepth: 1, Limit: 1000, IncludeHidden: true})
+		r, e := a.core.ListFiles(backend.ListFilesRequest{Workspace: root, Path: ".", MaxDepth: 1, Limit: 1000, IncludeHidden: true, IncludeIgnored: true})
 		a.win.Update(func() {
 			if epoch != a.fileEpoch {
 				return

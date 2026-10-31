@@ -386,7 +386,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 			})
 			if a.modelDraft.APIFormat == "openai" {
 				fieldLabel(c, "Token 参数")
-				uikit.Select(c.Key("token-param"), &a.modelDraft.TokenParam, []string{"auto", "max_completion_tokens"}, a.secondaryInk()).Label("Token 参数").FillWidth()
+				uikit.Select(c.Key("token-param"), &a.modelDraft.TokenParam, []string{"auto", "max_tokens", "max_completion_tokens"}, a.secondaryInk()).Label("Token 参数").FillWidth()
 			}
 			ui.Grid(c.Key("model-effort-context")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
 				ui.Column(c).Gap(gapTight).Children(func() {

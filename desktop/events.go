@@ -55,9 +55,10 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		if t := a.current(); t != nil && strings.EqualFold(str(p, "workspace"), t.Workspace) {
 			a.refreshGit(t)
 		}
-	case "scheduled:update":
+	case "scheduled:update", "scheduled:run_start", "scheduled:run_done", "scheduled:run_error":
 		a.applyScheduledUpdate(p)
-	case "update:ready", "update:error", "update:applied", "update:cancelled":
+		return
+	case "update:progress", "update:ready", "update:error", "update:applied", "update:cancelled":
 		a.applyUpdateEvent(name, p)
 		return
 	}
@@ -646,8 +647,23 @@ func (a *desktop) refreshGit(t *conversation) {
 }
 
 func (a *desktop) applyUpdateEvent(name string, p map[string]any) {
+	if version := str(p, "version"); version != "" && a.upd.Tag != "" && version != a.upd.Tag {
+		return
+	}
 	switch name {
+	case "update:progress":
+		if a.upd.Cancelling || a.upd.Applied {
+			return
+		}
+		a.upd.Progress = num(p, "percent")
+		a.upd.BytesNow, a.upd.BytesTotal = int64(num(p, "bytesDownloaded")), int64(num(p, "bytesTotal"))
+		if a.upd.State == "downloading" && str(p, "stage") == "extract" {
+			a.upd.State = "extracting"
+		}
 	case "update:ready":
+		if a.upd.Cancelling {
+			return
+		}
 		a.upd.State = "ready"
 		a.upd.Tag = str(p, "version")
 		if a.upd.Tag == "" {
@@ -656,14 +672,16 @@ func (a *desktop) applyUpdateEvent(name string, p map[string]any) {
 		a.upd.Progress = 100
 		a.upd.Open = true
 	case "update:error":
-		a.upd.State = "error"
-		a.upd.Error = str(p, "error")
-		a.upd.Open = true
+		// The worker owns Busy until its final callback, preventing an old
+		// error/cancellation from racing with the next download.
+		a.upd.State, a.upd.Error = "error", str(p, "error")
+		if !a.upd.Silent {
+			a.upd.Open = true
+		}
 	case "update:applied":
-		a.upd.State = "restarting"
+		// ApplyUpdate's completion callback owns saving and then quitting.
 	case "update:cancelled":
 		a.upd.State = "idle"
-		a.upd.Busy = false
 	}
 }
 

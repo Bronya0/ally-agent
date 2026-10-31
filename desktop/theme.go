@@ -119,20 +119,27 @@ type palette struct {
 	// empty composer stops shouting. It rides Theme.TextMuted, the tone MyGo
 	// paints placeholders in; muted itself stays put for secondary text.
 	hint ui.Color
-	// chrome is the window frame behind the header, the mode rail and the file
-	// tree. Zero means "the same as panel"; only the light presets move it half
-	// a step off white, so the frame stops reading as one more white card while
-	// everything that sits on it stays panel.
+	// chrome is the header's neutral base before its accent tint. The rail,
+	// explorer and active workspace tab share the main content background.
 	chrome ui.Color
 }
 
-// chromeColor resolves chrome, falling back to panel so a new preset cannot
-// leave the frame unpainted.
+// chromeColor keeps both sidebars continuous with the main content surface.
 func (p palette) chromeColor() ui.Color {
-	if p.chrome.A == 0 {
-		return p.panel
+	return p.bg
+}
+
+func (p palette) headerColor() ui.Color {
+	if p.dark {
+		// Keep dark chrome close to a neutral charcoal. Saturated frame tints
+		// lift its brightness too far above the conversation surface.
+		return p.panel.Mix(p.accent, 0.06)
 	}
-	return p.chrome
+	base := p.chrome
+	if base.A == 0 {
+		base = p.panel
+	}
+	return base.Mix(p.accent, 0.18)
 }
 
 // Resting edges — cards, chips, inputs, buttons, popups — are the palette line
@@ -235,6 +242,8 @@ func (a *desktop) theme() *ui.Theme {
 	t.SurfaceHover = p.hover
 	t.SurfacePressed = p.hover
 	t.Border = p.line
+	t.ScrollbarWidth = 4
+	t.Scrollbar = p.text.Alpha(0.24)
 	t.Accent = p.accent
 	t.AccentHover = p.accent.Mix(ui.Hex("#ffffff"), 0.18)
 	t.AccentPressed = p.accent.Mix(ui.Hex("#000000"), 0.12)
@@ -261,17 +270,18 @@ func (a *desktop) theme() *ui.Theme {
 
 // Raw base colours used by the token presets above.
 var (
-	bg       = ui.Hex("#1b1b1b")
-	panel    = ui.Hex("#212122")
-	panelAlt = ui.Hex("#1f1f20")
-	line     = ui.Hex("#333335")
-	green    = ui.Hex("#8da5df")
-	hoverBg  = ui.Hex("#2b2b2e")
-	softText = ui.Hex("#9a9a9f")
-	faint    = ui.Hex("#6f6f74")
-	okColor  = ui.Hex("#4ec87e")
-	warnCol  = ui.Hex("#d9a441")
-	errCol   = ui.Hex("#e85454")
+	userBubbleDark = ui.Hex("#29292c")
+	bg             = ui.Hex("#1b1b1b")
+	panel          = ui.Hex("#212122")
+	panelAlt       = ui.Hex("#1f1f20")
+	line           = ui.Hex("#333335")
+	green          = ui.Hex("#8da5df")
+	hoverBg        = ui.Hex("#2b2b2e")
+	softText       = ui.Hex("#9a9a9f")
+	faint          = ui.Hex("#6f6f74")
+	okColor        = ui.Hex("#4ec87e")
+	warnCol        = ui.Hex("#d9a441")
+	errCol         = ui.Hex("#e85454")
 )
 
 // ---- Icons ---------------------------------------------------------------

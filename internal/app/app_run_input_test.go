@@ -9,10 +9,37 @@ package app
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	openai "github.com/sashabaranov/go-openai"
 )
+
+func TestInjectRunAttachments(t *testing.T) {
+	app := NewApp()
+	app.runInputs["run"] = make(chan runInput, runInputBufferSize)
+	attachments := []AttachmentInput{
+		{Name: "note.txt", Kind: "text", Text: "attachment marker"},
+		{Name: "image.png", Kind: "image", Type: "image/png", DataURL: "data:image/png;base64,aGVsbG8="},
+	}
+	if err := app.InjectRunMessage("run", "", attachments...); err != nil {
+		t.Fatal(err)
+	}
+	attachments[0].Text = "mutated"
+	out, injected, err := app.appendPendingRunInputs("run", "session", ConfigState{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !injected || len(out) != 1 || len(out[0].MultiContent) != 2 {
+		t.Fatalf("expected multimodal user input: %+v", out)
+	}
+	if !strings.Contains(out[0].MultiContent[0].Text, "attachment marker") || strings.Contains(out[0].MultiContent[0].Text, "mutated") {
+		t.Fatal("queued attachment data was lost or shared with caller")
+	}
+	if out[0].MultiContent[1].ImageURL.URL != attachments[1].DataURL {
+		t.Fatal("image data was not delivered")
+	}
+}
 
 func TestInjectRunMessageRequiresText(t *testing.T) {
 	app := NewApp()
@@ -36,14 +63,14 @@ func TestInjectRunMessageQueueFull(t *testing.T) {
 
 	app.mu.Lock()
 	app.runs[runID] = cancel
-	app.runInputs[runID] = make(chan string, 2)
+	app.runInputs[runID] = make(chan runInput, 2)
 	app.mu.Unlock()
 
 	// Fill the queue directly, then a normal call must fail fast instead of
 	// blocking the frontend.
 	app.mu.Lock()
-	app.runInputs[runID] <- "a"
-	app.runInputs[runID] <- "b"
+	app.runInputs[runID] <- runInput{Text: "a"}
+	app.runInputs[runID] <- runInput{Text: "b"}
 	app.mu.Unlock()
 
 	if err := app.InjectRunMessage(runID, "c"); err == nil {
@@ -55,7 +82,7 @@ func TestInjectRunMessageAfterFinishRun(t *testing.T) {
 	app := NewApp()
 	runID := "run-finished"
 	app.mu.Lock()
-	app.runInputs[runID] = make(chan string, 2)
+	app.runInputs[runID] = make(chan runInput, 2)
 	app.mu.Unlock()
 
 	app.finishRun(runID)
@@ -72,11 +99,14 @@ func TestAppendPendingRunInputsEmpty(t *testing.T) {
 
 	app.mu.Lock()
 	app.runs[runID] = cancel
-	app.runInputs[runID] = make(chan string, runInputBufferSize)
+	app.runInputs[runID] = make(chan runInput, runInputBufferSize)
 	app.mu.Unlock()
 
 	messages := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleAssistant, Content: "ok"}}
-	out, injected := app.appendPendingRunInputs(runID, messages)
+	out, injected, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, messages)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if injected {
 		t.Fatal("appendPendingRunInputs(empty queue) injected = true, want false")
 	}
@@ -94,7 +124,7 @@ func TestAppendPendingRunInputsOrder(t *testing.T) {
 	app.mu.Lock()
 	app.runs[runID] = cancel
 	app.runSessions[runID] = "session-order"
-	app.runInputs[runID] = make(chan string, runInputBufferSize)
+	app.runInputs[runID] = make(chan runInput, runInputBufferSize)
 	app.mu.Unlock()
 
 	if err := app.InjectRunMessage(runID, "first"); err != nil {
@@ -105,7 +135,10 @@ func TestAppendPendingRunInputsOrder(t *testing.T) {
 	}
 
 	base := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleAssistant, Content: "prior"}}
-	out, injected := app.appendPendingRunInputs(runID, base)
+	out, injected, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !injected {
 		t.Fatal("appendPendingRunInputs(queued) injected = false, want true")
 	}
@@ -119,8 +152,8 @@ func TestAppendPendingRunInputsOrder(t *testing.T) {
 		}
 	}
 	// The queue is drained: a second call injects nothing.
-	if _, injected := app.appendPendingRunInputs(runID, out); injected {
-		t.Fatal("appendPendingRunInputs(after drain) injected = true, want false")
+	if _, injected, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, out); injected || err != nil {
+		t.Fatalf("appendPendingRunInputs(after drain) = injected %v, err %v", injected, err)
 	}
 }
 
@@ -132,12 +165,15 @@ func TestAppendPendingRunInputsAfterFinishRun(t *testing.T) {
 
 	app.mu.Lock()
 	app.runs[runID] = cancel
-	app.runInputs[runID] = make(chan string, runInputBufferSize)
+	app.runInputs[runID] = make(chan runInput, runInputBufferSize)
 	app.mu.Unlock()
 	app.finishRun(runID)
 
 	base := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "keep"}}
-	out, injected := app.appendPendingRunInputs(runID, base)
+	out, injected, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if injected || len(out) != 1 || out[0].Content != "keep" {
 		t.Fatalf("appendPendingRunInputs(after finish) = injected %v, %d messages; want false, 1", injected, len(out))
 	}

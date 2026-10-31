@@ -786,8 +786,8 @@ func popoverItemStyle(c *ui.Context, key, text, detail string, selected bool, co
 	})
 }
 
-func windowAction(c *ui.Context, id, tip, icon string, action func(), ink ...ui.Color) ui.Element {
-	return windowButton(c, id, tip, icon, strings.HasPrefix(tip, "关闭"), action, ink...)
+func windowAction(c *ui.Context, id, tip, icon string, background ui.Color, action func(), ink ...ui.Color) ui.Element {
+	return windowButton(c, id, tip, icon, background, strings.HasPrefix(tip, "关闭"), action, ink...)
 }
 
 func footerBadge(c *ui.Context, id, name, value string, color ui.Color, tip string, action func(), ink ...ui.Color) ui.Element {

@@ -34,6 +34,10 @@ type mcpServerEntry struct {
 	Extra         map[string]json.RawMessage
 }
 
+func (e mcpServerEntry) transportName() string {
+	return (backend.McpServerConfig{Transport: e.Transport, Command: e.Command, URL: e.URL}).TransportName()
+}
+
 func (e *mcpServerEntry) UnmarshalJSON(data []byte) error {
 	type plain mcpServerEntry
 	var p plain
@@ -258,10 +262,10 @@ func mcpTransportLabel(entry mcpServerEntry, status map[string]any) string {
 	if t := str(status, "transport"); t != "" {
 		return t
 	}
-	switch entry.Transport {
+	switch entry.transportName() {
 	case "sse":
 		return "sse"
-	case "http", "streamable-http", "streamableHttp":
+	case "streamable-http":
 		return "Streamable HTTP"
 	}
 	return "stdio"
@@ -325,12 +329,12 @@ func (a *desktop) openMCPEditor(name string) {
 	if name != "" {
 		entry := doc.Servers[name]
 		a.mcpF.Name = name
-		a.mcpF.Transport = entry.Transport
+		a.mcpF.Transport = entry.transportName()
 		if a.mcpF.Transport == "" {
 			a.mcpF.Transport = "stdio"
 		}
 		a.mcpF.Command = entry.Command
-		a.mcpF.Args = strings.Join(entry.Args, ", ")
+		a.mcpF.Args = formatArgs(entry.Args)
 		a.mcpF.Env = formatPairs(entry.Env)
 		a.mcpF.URL = entry.URL
 		a.mcpF.Headers = formatPairs(entry.Headers)
@@ -387,7 +391,7 @@ func (a *desktop) mcpEditorDialog(c *ui.Context) {
 			fieldRow(c, "mcp-command", "命令", &a.mcpF.Command, false)
 			fieldLabel(c, "参数")
 			textArea(c, "mcp-args", "参数", `-y, @playwright/mcp`, &a.mcpF.Args, 90).FillWidth()
-			fieldNote(c, "每个参数写成一个字符串用逗号分隔；也兼容简单的空格分隔输入。", a.secondaryInk())
+			fieldNote(c, "推荐 JSON 字符串数组，可完整保留空格和逗号；也兼容简单的逗号或空格分隔输入。", a.secondaryInk())
 			fieldLabel(c, "环境变量")
 			textArea(c, "mcp-env", "环境变量", `{"API_KEY": "your-api-key"}`, &a.mcpF.Env, 70)
 			fieldNote(c, "JSON 对象，也支持每行 KEY=value。", a.secondaryInk())
@@ -431,8 +435,13 @@ func (a *desktop) saveMCPEditor() {
 	}
 	entry.Transport = transport
 	if transport == "stdio" {
+		args, err := splitArgs(a.mcpF.Args)
+		if err != nil {
+			a.notifyError("参数必须是 JSON 字符串数组：" + err.Error())
+			return
+		}
 		entry.Command = strings.TrimSpace(a.mcpF.Command)
-		entry.Args = splitArgs(a.mcpF.Args)
+		entry.Args = args
 		entry.Env = parsePairs(a.mcpF.Env, "=")
 		entry.URL = ""
 		entry.Headers = nil
@@ -448,16 +457,25 @@ func (a *desktop) saveMCPEditor() {
 	a.saveMCPDoc(doc)
 }
 
-func splitArgs(raw string) []string {
+func formatArgs(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	data, _ := json.MarshalIndent(args, "", "  ")
+	return string(data)
+}
+
+func splitArgs(raw string) ([]string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil
+		return nil, nil
 	}
 	if strings.HasPrefix(raw, "[") {
 		var args []string
-		if json.Unmarshal([]byte(raw), &args) == nil {
-			return args
+		if err := json.Unmarshal([]byte(raw), &args); err != nil {
+			return nil, err
 		}
+		return args, nil
 	}
 	parts := strings.Split(raw, ",")
 	if len(parts) == 1 {
@@ -469,7 +487,7 @@ func splitArgs(raw string) []string {
 			out = append(out, p)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func parsePairs(raw, sep string) map[string]string {

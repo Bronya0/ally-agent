@@ -9,8 +9,11 @@ package app
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestParseGitStatusV2(t *testing.T) {
@@ -68,5 +71,62 @@ func TestComputeMultiRepoGitStatusEmptyOrNonRepo(t *testing.T) {
 	st := computeMultiRepoGitStatusWithContext(ctx, discoverSubRepos(ctx, tempDir))
 	if st.IsRepo {
 		t.Fatalf("expected IsRepo=false for empty dir, got %#v", st)
+	}
+}
+
+// A worktree container can also be a detached worktree itself. Its ignored
+// branch directories must remain browsable and independently selectable in Git.
+func TestGitParentRepoIncludesIgnoredLinkedWorktrees(t *testing.T) {
+	redirectAppStateDir(t)
+	root := t.TempDir()
+	write := func(path, text string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGitTestCommand(t, root, "init", "--initial-branch=container")
+	runGitTestCommand(t, root, "config", "user.name", "Ally Test")
+	runGitTestCommand(t, root, "config", "user.email", "ally-test@example.com")
+	runGitTestCommand(t, root, "config", "commit.gpgsign", "false")
+	runGitTestCommand(t, root, "config", "core.hooksPath", t.TempDir())
+	write(filepath.Join(root, ".gitignore"), "/main/\n/mygo/\n")
+	write(filepath.Join(root, "tracked.txt"), "before\n")
+	runGitTestCommand(t, root, "add", ".")
+	runGitTestCommand(t, root, "commit", "-m", "initial")
+	runGitTestCommand(t, root, "checkout", "--detach")
+	for _, branch := range []string{"main", "mygo"} {
+		runGitTestCommand(t, root, "worktree", "add", "-b", branch, filepath.Join(root, branch))
+		write(filepath.Join(root, branch, "tracked.txt"), "after "+branch+"\n")
+	}
+	write(filepath.Join(root, "parent-local.txt"), "parent change\n")
+	app := NewApp()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	status := computeGitStatusWithContext(ctx, root, app.discoverGitRepos)
+	if !status.IsMultiRepo || len(status.Repos) != 3 || status.Modified != 2 || status.Added != 1 {
+		t.Fatalf("missing parent/worktree changes: %#v", status)
+	}
+	for _, repo := range status.Repos {
+		diff := app.GetGitDiff(root, repo.Path)
+		if !diff.IsRepo || diff.Error != "" || len(diff.Files) != 1 {
+			t.Fatalf("%s diff: %#v", repo.Path, diff)
+		}
+		if repo.Path != "." && (repo.Branch != repo.Path || diff.Branch != repo.Path || diff.Files[0].Path != "tracked.txt") {
+			t.Fatalf("wrong worktree: %#v %#v", repo, diff)
+		}
+	}
+	for _, ignored := range []bool{false, true} {
+		listing, err := app.listFilesWithConfig(ConfigState{Workspace: root}, ListFilesRequest{Path: ".", MaxDepth: 1, IncludeHidden: true, IncludeIgnored: ignored})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := map[string]bool{}
+		for _, entry := range listing.Entries {
+			found[entry.Name] = true
+		}
+		if found["main"] != ignored || found["mygo"] != ignored {
+			t.Fatalf("includeIgnored=%v: %#v", ignored, listing.Entries)
+		}
 	}
 }

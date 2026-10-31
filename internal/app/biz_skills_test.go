@@ -16,6 +16,59 @@ import (
 	"testing"
 )
 
+func TestSkillToggleUsesThePromptSnapshot(t *testing.T) {
+	redirectAppStateDir(t)
+	a := newIsolatedToolTestApp(t)
+	for _, name := range []string{"initial", "later"} {
+		writeSkillTestFile(t, a.config.Workspace, ".agents/skills/"+name+"/SKILL.md", "---\nname: "+name+"\ndescription: example\n---\nbody")
+	}
+	if err := a.DeactivateSkill("later"); err != nil {
+		t.Fatal(err)
+	}
+	prompt := a.sessionSystemPrompt("existing", a.config, a.listCachedSkillsForConfig(a.config))
+	if err := a.DeactivateSkill("initial"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.enableSkill("later"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.sessionSystemPrompt("existing", a.config, a.listCachedSkillsForConfig(a.config)); got != prompt {
+		t.Fatal("toggling skills changed an existing prompt")
+	}
+	a.sessionSystemPrompt("fresh", a.config, a.listCachedSkillsForConfig(a.config))
+	for _, tc := range []struct {
+		session, skill string
+		allowed        bool
+	}{
+		{"existing", "initial", true}, {"existing", "later", false},
+		{"fresh", "initial", false}, {"fresh", "later", true},
+		{"", "initial", false}, {"", "later", true},
+	} {
+		_, err := a.handleSkillToolCall(a.config, tc.session, tc.skill, "")
+		if (err == nil) != tc.allowed {
+			t.Errorf("session=%q skill=%q allowed=%v, err=%v", tc.session, tc.skill, tc.allowed, err)
+		}
+	}
+}
+
+func TestManualSkillRefreshReadsDiskBeforeTTL(t *testing.T) {
+	redirectAppStateDir(t)
+	a := newIsolatedToolTestApp(t)
+	const path = ".agents/skills/sample/SKILL.md"
+	writeSkillTestFile(t, a.config.Workspace, path, "---\nname: sample\ndescription: before\n---\nbody")
+	if _, err := a.GetSkillState(); err != nil {
+		t.Fatal(err)
+	}
+	writeSkillTestFile(t, a.config.Workspace, path, "---\nname: sample\ndescription: after\n---\nbody")
+	state, err := a.RefreshSkillState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sk := findSkill(t, state.Skills, "sample"); sk.Description != "after" {
+		t.Fatalf("manual refresh kept stale metadata: %+v", sk)
+	}
+}
+
 func TestGetSkillStateReturnsOneListingAndItsEnabledNames(t *testing.T) {
 	t.Parallel()
 	app := newApiTestApp(t)

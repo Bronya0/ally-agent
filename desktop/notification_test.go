@@ -3,7 +3,62 @@ package desktop
 import (
 	"fmt"
 	"testing"
+	"time"
 )
+
+func TestCompletionNoticeDuplicates(t *testing.T) {
+	now := time.Now()
+	a := &desktop{}
+	p := map[string]any{"runId": "run-1"}
+	if !a.acceptCompletionNotice("run:done", p, false, now) {
+		t.Fatal("first completion was suppressed")
+	}
+	if a.acceptCompletionNotice("run:done", p, false, now.Add(time.Minute)) ||
+		a.acceptCompletionNotice("run:error", p, false, now.Add(2*time.Minute)) {
+		t.Fatal("the same run notified again")
+	}
+	if !a.acceptCompletionNotice("run:done", map[string]any{"runId": "run-2"}, false, now.Add(3*time.Minute)) {
+		t.Fatal("a new run must still notify")
+	}
+}
+
+func TestCompletionNoticeSuppressedRunsStaySeen(t *testing.T) {
+	for _, active := range []bool{true, false} {
+		now := time.Now()
+		a := &desktop{lastCompletionNotice: now}
+		p := map[string]any{"runId": "run-1"}
+		if a.acceptCompletionNotice("run:done", p, active, now) ||
+			a.acceptCompletionNotice("run:done", p, false, now.Add(time.Minute)) {
+			t.Fatal("foreground or rate-limited completion was replayed")
+		}
+	}
+}
+
+func TestScheduledCompletionNoticePerExecution(t *testing.T) {
+	now := time.Now()
+	a := &desktop{}
+	task := map[string]any{"id": "task-1", "lastRunAt": float64(1000), "runCount": float64(1)}
+	p := map[string]any{"task": task}
+	if !a.acceptCompletionNotice("scheduled:run_done", p, false, now) ||
+		a.acceptCompletionNotice("scheduled:run_done", p, false, now.Add(time.Minute)) {
+		t.Fatal("scheduled completion must notify once")
+	}
+	task["lastRunAt"], task["runCount"] = float64(2000), float64(2)
+	if !a.acceptCompletionNotice("scheduled:run_done", p, false, now.Add(2*time.Minute)) {
+		t.Fatal("next scheduled execution must notify")
+	}
+}
+
+func TestScheduledNoticeIdentifiesTask(t *testing.T) {
+	p := map[string]any{"task": map[string]any{"name": "周期心跳", "lastStatus": "completed"}}
+	if got := completionTitle("scheduled:run_done", p); got != "定时任务「周期心跳」已完成" {
+		t.Fatalf("ambiguous scheduled notice: %q", got)
+	}
+	p["task"].(map[string]any)["lastStatus"] = "cancelled"
+	if got := completionTitle("scheduled:run_error", p); got != "定时任务「周期心跳」已取消" {
+		t.Fatalf("wrong scheduled cancellation: %q", got)
+	}
+}
 
 func TestOperationNotices(t *testing.T) {
 	a := &desktop{}

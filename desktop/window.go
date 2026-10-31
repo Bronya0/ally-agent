@@ -14,6 +14,7 @@ import (
 func (a *desktop) view(c *ui.Context) {
 	a.previewRequests = a.previewRequests[:0]
 	defer a.schedulePreviewSync()
+	defer a.syncPluginHost()
 	c.SetTheme(a.theme())
 	a.globalShortcuts(c)
 	c.OnShortcut(0, ui.KeyEscape, func() { a.cancelConversation(a.current()) })
@@ -66,7 +67,7 @@ func (a *desktop) startupBody(c *ui.Context) {
 func (a *desktop) pageContent(c *ui.Context, width float32) {
 	switch {
 	case strings.HasPrefix(a.page, "plugin:"):
-		a.panelPage(c, "插件页面", "", nil, a.pluginPageBody)
+		a.pluginPageBody(c)
 	case a.page == "chat":
 		a.chatPage(c, width)
 	case a.page == "kb":
@@ -156,9 +157,11 @@ func (a *desktop) chatColumn(c *ui.Context, width float32) {
 		emptyState(c, "还没有会话", "选择或创建一个工作区开始对话", a.secondaryInk())
 		return
 	}
-	ui.Column(c).FillWidth().MaxWidth(chatMaxWidth).AlignSelf(ui.Center).Grow(1).MinHeight(0).Children(func() {
+	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
 		a.chatMessages(c, t, width)
-		a.composer(c, t)
+		ui.Column(c).FillWidth().MaxWidth(chatMaxWidth).AlignSelf(ui.Center).Shrink(0).Children(func() {
+			a.composer(c, t)
+		})
 	})
 }
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
@@ -106,6 +107,7 @@ func (a *desktop) savePrefs(notice ...string) {
 		if err == nil {
 			err = os.WriteFile(path, data, 0o600)
 		}
+		a.writeFailures.record("prefs", err)
 		if a.win != nil {
 			a.win.Update(func() {
 				a.prefsSaveResult(err, notice)
@@ -437,7 +439,7 @@ type pluginsForm struct {
 type updateUI struct {
 	CanAuto           bool
 	Open              bool
-	State             string // idle, checking, downloading, ready, applying, restarting, error, latest
+	State             string // idle, checking, downloading, extracting, ready, preparing, applying, restarting, error, latest
 	Tag               string
 	Progress          float64
 	BytesNow          int64
@@ -445,6 +447,12 @@ type updateUI struct {
 	Error             string
 	Note              string
 	Busy              bool
+	CheckBusy         bool
+	Silent            bool
+	Cancelling        bool
+	Applied           bool
+	RetryApply        bool
+	Timer             *time.Timer
 	ReleaseOpen       bool
 	ReleaseVer        string
 	ReleaseBody       string

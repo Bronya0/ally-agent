@@ -169,6 +169,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	if len(tools) == 0 {
 		tools = a.subagentTools(cfg)
 	}
+	ctx = withBuiltinToolAvailability(ctx, tools)
 
 	var filesRead []string
 	var filesEdited []string

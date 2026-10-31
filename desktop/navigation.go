@@ -16,13 +16,13 @@ import (
 var windowCloseHover = ui.Hex("#e81123")
 
 // windowButton is a caption-bar control (minimize / maximize / close).
-func windowButton(c *ui.Context, id, tip, icon string, close bool, action func(), ink ...ui.Color) ui.Element {
+func windowButton(c *ui.Context, id, tip, icon string, background ui.Color, close bool, action func(), ink ...ui.Color) ui.Element {
 	t := c.Theme()
 	b := uikit.Tooltip(c, ui.ButtonBase(c.Key(id)).Width(46).FillHeight().MinHeight(headerBarHeight).Shrink(0).Padding(0).Border(0, ui.Transparent).Radius(0).Center().Label(tip), tip).
 		Cursor(ui.CursorPointer).OnClick(action)
 	// Caption controls must always paint an opaque surface. A transparent
 	// resting target can expose stale/native backing pixels during hover fades.
-	fill, color := t.Surface, uikit.SecondaryInk(c, ink)
+	fill, color := background, uikit.SecondaryInk(c, ink)
 	if b.Hovered() {
 		fill, color = t.SurfaceHover, t.Text
 		if close {

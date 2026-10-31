@@ -741,18 +741,18 @@ func (a *App) apiHandleSendMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// 与界面一致的自动判断：运行中 → InjectRunMessage 排队追加（纯文本）；
+	// 与界面一致的自动判断：运行中 → InjectRunMessage 排队追加；
 	// 空闲 → StartChat 新回合（首次发送与继续都是同一条持久化历史路径）。
 	if runID, running, _ := a.apiSessionRuntime(sessionID); running {
-		if len(body.Attachments) > 0 || body.ModelIndex != nil {
-			apiWriteError(w, http.StatusConflict, "running sessions only accept text; attachments and modelIndex require an idle session")
+		if body.ModelIndex != nil {
+			apiWriteError(w, http.StatusConflict, "modelIndex requires an idle session")
 			return
 		}
-		if message == "" {
+		if message == "" && len(body.Attachments) == 0 {
 			apiWriteError(w, http.StatusBadRequest, "message is required")
 			return
 		}
-		if err := a.InjectRunMessage(runID, message); err != nil {
+		if err := a.InjectRunMessage(runID, message, body.Attachments...); err != nil {
 			apiWriteError(w, http.StatusConflict, err.Error())
 			return
 		}

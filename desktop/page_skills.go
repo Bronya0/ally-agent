@@ -225,8 +225,15 @@ func (a *desktop) loadSkills(manual ...bool) {
 		return
 	}
 	a.skillsF.Loading = true
+	refresh := len(manual) > 0 && manual[0]
 	go func() {
-		state, err := a.core.GetSkillState()
+		var state backend.SkillState
+		var err error
+		if refresh {
+			state, err = a.core.RefreshSkillState()
+		} else {
+			state, err = a.core.GetSkillState()
+		}
 		a.win.Update(func() {
 			a.skillsF.Loading = false
 			if err != nil {
@@ -234,7 +241,7 @@ func (a *desktop) loadSkills(manual ...bool) {
 				return
 			}
 			a.skills = state.Skills
-			if len(manual) > 0 && manual[0] {
+			if refresh {
 				a.notifySuccess("技能列表已刷新")
 			}
 		})

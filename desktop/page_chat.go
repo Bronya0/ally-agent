@@ -64,14 +64,14 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	}
 
 	ui.Column(c).Grow(1).MinHeight(0).FillWidth().Children(func() {
-		ui.Scroll(c.Key(t.ID + "-messages")).TrackScroll(&t.Scroll).Grow(1).MinHeight(0).HandleInput(func(ev ui.InputEvent) bool {
+		ui.Scroll(c.Key(t.ID + "-messages")).Label("聊天滚动区域").TrackScroll(&t.Scroll).Grow(1).MinHeight(0).HandleInput(func(ev ui.InputEvent) bool {
 			if ev.Kind == ui.InputScroll && ev.DY < 0 {
 				st.Follow = false
 				st.FollowPending = false
 			}
 			return false
 		}).Children(func() {
-			ui.Column(c).FillWidth().Padding(18, inlineInset, 14).Gap(10).Children(func() {
+			ui.Column(c).FillWidth().MaxWidth(chatMaxWidth).AlignSelf(ui.Center).Padding(18, inlineInset, 14).Gap(10).Children(func() {
 				if len(t.Messages) == 0 || !hasWelcomeMessage(t) {
 					a.welcomeView(c, t)
 				}
@@ -271,7 +271,7 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 	message.Children(func() {
 		background := p.accent.Alpha(0.10)
 		if p.dark {
-			background = ui.Transparent
+			background = userBubbleDark
 		}
 		ui.Column(c.Key("bubble")).Label("用户消息").Selectable().MinWidth(0).Padding(10, 16).Radius(16).Background(background).Children(func() {
 			ui.Column(c).MinWidth(0).Gap(gapInline).Children(func() {

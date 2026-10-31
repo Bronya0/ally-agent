@@ -76,6 +76,16 @@ func (a *desktop) activateWorkspaceTab(index int) {
 	a.refreshGit(a.tabs[index])
 }
 
+// workspaceTabArrowsAvailable is shared by window shortcuts and the composer
+// key hook, which runs before the text editor consumes navigation keys.
+func (a *desktop) workspaceTabArrowsAvailable(t *conversation, draft string) bool {
+	if !a.ready || a.closing || a.page != "chat" || t == nil || t != a.current() || draft != "" {
+		return false
+	}
+	file := a.activeFile()
+	return file == nil || file.Editor == nil || !file.Editor.Focused()
+}
+
 func (a *desktop) globalShortcuts(c *ui.Context) {
 	if !a.ready || a.closing {
 		return
@@ -100,12 +110,9 @@ func (a *desktop) globalShortcuts(c *ui.Context) {
 			a.activateWorkspaceTab((a.active + len(a.tabs) - 1) % len(a.tabs))
 		}
 	})
-	if current := a.current(); current != nil && current.Draft == "" && a.page == "chat" {
-		file := a.activeFile()
-		if file == nil || file.Editor == nil || !file.Editor.Focused() {
-			c.OnShortcut(ui.Cmd, ui.KeyLeft, func() { a.activateWorkspaceTab((a.active + len(a.tabs) - 1) % len(a.tabs)) })
-			c.OnShortcut(ui.Cmd, ui.KeyRight, func() { a.activateWorkspaceTab((a.active + 1) % len(a.tabs)) })
-		}
+	if current := a.current(); current != nil && a.workspaceTabArrowsAvailable(current, current.Draft) {
+		c.OnShortcut(ui.Cmd, ui.KeyLeft, func() { a.activateWorkspaceTab((a.active + len(a.tabs) - 1) % len(a.tabs)) })
+		c.OnShortcut(ui.Cmd, ui.KeyRight, func() { a.activateWorkspaceTab((a.active + 1) % len(a.tabs)) })
 	}
 	for i, key := range []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9} {
 		c.OnShortcut(ui.Alt, key, func() { a.activateWorkspaceTab(i) })

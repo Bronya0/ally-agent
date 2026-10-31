@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+html,body,#plugin {margin:0;min-height:100%;box-sizing:border-box}body {background:var(--ally-surface-content);color:var(--ally-text-body);font:14px var(--ally-ui-font)}#plugin{padding:16px}*{box-sizing:border-box}
+</style></head><body><div id="plugin"></div><script src="/config.js"></script><script type="module">
+import {mountPlugin,notifyNative} from '/pluginHost.mjs';
+let handle, disposed=false, active=false, lastActive;
+const events=new EventSource('/events?token='+encodeURIComponent(pluginConfig.token));
+const apply=s=>{active=s.active; const root=document.documentElement;
+for(const [k,v] of Object.entries(s.tokens)) root.style.setProperty(k,v);
+root.setAttribute('data-theme',s.name);root.setAttribute('data-mode',s.mode);
+if(handle && active!==lastActive){lastActive=active;handle.setActive(active);}};
+apply(pluginConfig.state);
+events.onmessage=e=>apply(JSON.parse(e.data));
+window.allyDispose=()=>{if(disposed)return;disposed=true;events.close();handle?.dispose();handle=null;};
+window.addEventListener('pagehide',window.allyDispose,{once:true});
+try {const next=await mountPlugin(pluginConfig.plugin,document.getElementById('plugin'),pluginConfig.env,{notify:notifyNative});
+if(disposed)next.dispose();else{handle=next;lastActive=active;handle.setActive(active);}}
+catch(e){if(!disposed)document.getElementById('plugin').textContent=String(e.message||e);}
+</script></body></html>

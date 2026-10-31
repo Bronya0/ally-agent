@@ -1931,6 +1931,11 @@ func (m *McpManager) GetServerStatuses() []map[string]any {
 // 按 command/url 推断，http/rest 是 streamable-http 的别名。调用点（连接、
 // 状态展示）共用本函数，不要各自实现。
 func mcpTransportName(cfg McpServerConfig) string {
+	return cfg.TransportName()
+}
+
+// TransportName is shared by connection setup and the native config editor.
+func (cfg McpServerConfig) TransportName() string {
 	name := strings.ToLower(strings.TrimSpace(cfg.Transport))
 	if name == "" && cfg.Command != "" {
 		return "stdio"
@@ -2110,6 +2115,36 @@ func builtinToolsForConfig(cfg ConfigState) []openai.Tool {
 // buildToolsForConfig is the live set for stateless callers and new sessions.
 func (a *App) buildToolsForConfig(cfg ConfigState) []openai.Tool {
 	return a.buildToolsWithMcp(builtinToolsForConfig(cfg))
+}
+
+type builtinToolAvailabilityKey struct{}
+
+// Execution follows the exact tool list injected into this run, including child
+// runs. Later settings changes cannot change an existing conversation's tools.
+func withBuiltinToolAvailability(ctx context.Context, tools []openai.Tool) context.Context {
+	enabled := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		if tool.Function != nil {
+			enabled[normalizeToolName(tool.Function.Name)] = true
+		}
+	}
+	return context.WithValue(ctx, builtinToolAvailabilityKey{}, enabled)
+}
+
+func builtinToolDisabled(ctx context.Context, cfg ConfigState, name string) bool {
+	if enabled, ok := ctx.Value(builtinToolAvailabilityKey{}).(map[string]bool); ok {
+		return !enabled[name]
+	}
+	// Direct/stateless callers have no injected snapshot.
+	if toolshared.IsProtectedTool(name) {
+		return false
+	}
+	for _, disabled := range cfg.DisabledTools {
+		if normalizeToolName(disabled) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // buildToolsForSession returns the model-visible tool schemas for a chat

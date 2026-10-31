@@ -1347,10 +1347,19 @@ func (a *App) sessionSystemPromptParts(sessionID string, cfg ConfigState, allSki
 	}
 
 	a.mu.Lock()
+	// A concurrent first caller must not replace the prompt/skill pair.
+	if frozen, ok := a.sessionSystemPrompts[sessionID]; ok {
+		a.mu.Unlock()
+		return frozen
+	}
 	if a.sessionSystemPrompts == nil {
 		a.sessionSystemPrompts = map[string][]systemPromptPart{}
 	}
 	a.sessionSystemPrompts[sessionID] = parts
+	if a.sessionSkills == nil {
+		a.sessionSkills = map[string][]SkillDefinition{}
+	}
+	a.sessionSkills[sessionID] = cloneSkillDefinitions(allSkills)
 	if a.frozenTurnNotices == nil {
 		a.frozenTurnNotices = map[string]map[string]string{}
 	}
@@ -1374,6 +1383,7 @@ func (a *App) refreshSessionPromptPrefix(sessionID string) {
 	a.mu.Lock()
 	delete(a.frozenPrefixStats, sessionID)
 	delete(a.sessionSystemPrompts, sessionID)
+	delete(a.sessionSkills, sessionID)
 	delete(a.frozenTurnNotices, sessionID)
 	delete(a.sessionWorkspaceMaps, sessionID)
 	delete(a.sessionToolsets, sessionID)

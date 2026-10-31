@@ -64,6 +64,7 @@ type SessionIndexEntry struct {
 // to tool cards and generated media that are not part of the model history
 // protocol.
 type SessionSnapshot struct {
+	Draft         string           `json:"draft,omitempty"`
 	ID            string           `json:"id"`
 	Title         string           `json:"title"`
 	FirstPrompt   string           `json:"firstPrompt,omitempty"`

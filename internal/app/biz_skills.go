@@ -240,6 +240,12 @@ func (a *App) GetSkillState() (SkillState, error) {
 	return SkillState{Skills: skills, Active: active}, nil
 }
 
+// RefreshSkillState bypasses the listing TTL for an explicit user refresh.
+func (a *App) RefreshSkillState() (SkillState, error) {
+	a.clearSkillListCache()
+	return a.GetSkillState()
+}
+
 func (a *App) GetActiveSkills() []string {
 	state, _ := a.GetSkillState()
 	return state.Active
@@ -349,15 +355,16 @@ func skillNameInList(list []string, name string) bool {
 }
 
 // handleSkillToolCall is called when the AI invokes the "skill" tool.
-func (a *App) handleSkillToolCall(cfg ConfigState, skillName, skillArgs string) (map[string]any, error) {
+func (a *App) handleSkillToolCall(cfg ConfigState, sessionID, skillName, skillArgs string) (map[string]any, error) {
 	if strings.TrimSpace(skillName) == "" {
 		return nil, errors.New("skill is required")
 	}
-	skills, err := a.listSkillsForConfig(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list skills: %w", err)
+	a.mu.Lock()
+	skills, frozen := a.sessionSkills[sessionID]
+	a.mu.Unlock()
+	if !frozen {
+		skills = a.listCachedSkillsForConfig(cfg)
 	}
-	skills = a.enabledSkillsFrom(skills)
 	for _, sk := range skills {
 		if strings.EqualFold(sk.Name, skillName) {
 			content, err := readSkillContent(sk)
