@@ -107,7 +107,9 @@ def compile_binary(config, goos, arch, destination):
     if goos == 'windows':
         numeric = re.match(r'([0-9]+[.][0-9]+[.][0-9]+)', config['version']).group(1) + '.0'
         metadata = {
-            'RT_GROUP_ICON': {'APP': {'0000': 'icon.png'}},
+            # Numeric ID 1: MyGo's notifications and tray load the icon with LoadIcon(instance, 1);
+            # a named "APP" icon has no such ID and Windows shows a generic icon instead.
+            'RT_GROUP_ICON': {'#1': {'0000': 'icon.png'}},
             'RT_MANIFEST': {'#1': {'0409': {'minimum-os': 'win10', 'execution-level': 'as invoker',
                                           'dpi-awareness': 'per monitor v2', 'long-path-aware': True}}},
             'RT_VERSION': {'#1': {'0409': {'fixed': {'file_version': numeric, 'product_version': numeric},
