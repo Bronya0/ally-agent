@@ -89,3 +89,7 @@
 [menu-tree] 2026-11-02 中危 悬停浮层别改成点击折叠（用户要悬停）；一帧只建一个浮层+粘滞，行 hover 与池层 hover 分开判。@desktop/composer.go
 
 [review-verify] 2026-11-02 中危 转述审查结论前先查后端归一化（空串已改 auto），否则误报已修的事。@internal/app/biz_config_state.go
+
+[log-scroll-track] 2026-11-03 中危 输出窗口未 TrackScroll，“回到最新”只重取数据不改位置，看着像按钮坏了。@desktop/page_tasks.go
+
+[stream-fixed-height] 2026-11-03 中危 流式态用固定高度 Box 包会自收缩的内容：短内容卡片偏高，完成时下方内容被上顶。@desktop/tool_cards.go
