@@ -233,8 +233,9 @@ func Run() {
 			}
 		})
 		mygo.App.OnDidBecomeActive(mygo.ClearNotifications)
-		// Configure the native frame before showing it to avoid a white border
-		// during startup, while keeping the native resize edges and shadow.
+		// Take the accent outline off the hidden title bar, then let MyGo show
+		// the window once its first frame is drawn: a window made hidden stays
+		// out of sight until then, so it opens drawn instead of blank.
 		configureWindowFrame(a.win)
 		a.startAutoAppearance()
 		if icon, err := resources.Assets.ReadFile("icon.png"); err == nil {
@@ -243,7 +244,7 @@ func Run() {
 				_ = mygo.App.Dock.SetIcon(icon)
 			}
 		}
-		showWindowAfterFirstFrame(a.win)
+		a.win.OnReadyToShow(a.win.Show)
 		a.core.SetNativeWindow(a.win)
 		if len(os.Args) > 1 && os.Args[1] == "--smoke" {
 			time.AfterFunc(4*time.Second, func() { a.win.Update(func() { log.Print("native window startup verified"); a.shutdown() }) })
