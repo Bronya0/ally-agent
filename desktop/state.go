@@ -427,6 +427,9 @@ type tasksForm struct {
 	LogMeta    string
 	LogBody    string
 	LogService string
+	// LogScroll keeps the log dialog's place; it follows the newest line unless
+	// the reader scrolled up, so a running service does not yank them away.
+	LogScroll  ui.ScrollState
 	StopBusy   map[string]bool
 	DeleteBusy map[string]bool
 }

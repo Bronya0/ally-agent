@@ -429,8 +429,14 @@ func (a *desktop) applyServiceUpdate(p map[string]any) {
 		if a.services[i].ID == service.ID {
 			a.services[i] = service
 			if a.tasksF.LogService == service.ID && a.tasksF.LogOpen {
+				// A running service appends: keep the dialog on the newest line
+				// unless the reader scrolled up from it.
+				atEnd := a.serviceLogAtEnd()
 				a.tasksF.LogBody = service.OutputTail
 				a.tasksF.LogMeta = serviceMeta(service)
+				if atEnd {
+					a.followServiceLog()
+				}
 			}
 			return
 		}

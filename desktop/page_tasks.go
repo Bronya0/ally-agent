@@ -4,6 +4,7 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -211,7 +212,9 @@ func (a *desktop) stopService(service backend.ServiceInfo) {
 	}()
 }
 
-func (a *desktop) openServiceLog(service backend.ServiceInfo) {
+// showServiceLog opens the dialog on the newest output the list already has; it
+// keeps the fetch separate so the dialog state can be checked on its own.
+func (a *desktop) showServiceLog(service backend.ServiceInfo) {
 	a.tasksF.LogOpen = true
 	a.tasksF.LogTitle = service.Name
 	if a.tasksF.LogTitle == "" {
@@ -220,16 +223,60 @@ func (a *desktop) openServiceLog(service backend.ServiceInfo) {
 	a.tasksF.LogService = service.ID
 	a.tasksF.LogMeta = serviceMeta(service)
 	a.tasksF.LogBody = service.OutputTail
+	a.followServiceLog()
+}
+
+func (a *desktop) openServiceLog(service backend.ServiceInfo) {
+	a.showServiceLog(service)
+	a.fetchServiceLog(service.ID)
+}
+
+// loggedService is the service the open log dialog belongs to. The dialog stays
+// usable when that service has already left the list (stopped, or a refreshed
+// list raced the dialog), so the callers treat a miss as "nothing to refresh".
+func (a *desktop) loggedService() (backend.ServiceInfo, bool) {
+	for _, service := range a.services {
+		if a.tasksF.LogService != "" && service.ID == a.tasksF.LogService {
+			return service, true
+		}
+	}
+	return backend.ServiceInfo{}, false
+}
+
+// followServiceLog puts the log dialog on its newest line. math.MaxFloat32 is
+// the end of a tracked scroll container, and the container writes the settled
+// offset back, so asking once is enough and the pointer still scrolls.
+func (a *desktop) followServiceLog() {
+	a.tasksF.LogScroll.Y = math.MaxFloat32
+}
+
+// serviceLogAtEnd reports whether the dialog shows the newest line, including
+// the frame right after followServiceLog, before layout settles the offset.
+func (a *desktop) serviceLogAtEnd() bool {
+	s := a.tasksF.LogScroll
+	return s.Y > 1e8 || s.Y >= s.MaxY-2
+}
+
+func (a *desktop) fetchServiceLog(id string) {
 	go func() {
-		result, err := a.core.GetServiceOutput(service.ID)
+		result, err := a.core.GetServiceOutput(id)
 		a.win.Update(func() {
+			if a.tasksF.LogService != id || !a.tasksF.LogOpen {
+				return
+			}
 			if err != nil {
 				a.tasksF.LogBody = err.Error()
 				return
 			}
+			// The full output replaces the tail the card showed, and the end moved
+			// with it: keep following unless the reader scrolled up.
+			atEnd := a.serviceLogAtEnd()
 			a.tasksF.LogBody = result.Output
 			if result.Truncated {
 				a.tasksF.LogMeta += " · 已截断"
+			}
+			if atEnd {
+				a.followServiceLog()
 			}
 		})
 	}()
@@ -404,6 +451,7 @@ func (a *desktop) openTaskLog(task backend.ScheduledTask) {
 	a.tasksF.LogService = ""
 	a.tasksF.LogMeta = scheduleText(task.Schedule)
 	a.tasksF.LogBody = task.LastSummary
+	a.tasksF.LogScroll.X, a.tasksF.LogScroll.Y = 0, 0
 	if task.LastError != "" {
 		if a.tasksF.LogBody != "" {
 			a.tasksF.LogBody += "\n\n"
@@ -416,16 +464,18 @@ func (a *desktop) taskLogDialog(c *ui.Context) {
 	if !a.tasksF.LogOpen {
 		return
 	}
+	_, h := c.Size()
 	modalCard(c, &a.tasksF.LogOpen, 900, func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, a.tasksF.LogTitle).FontSize(17).Bold()
 			ui.Spacer(c)
 			if a.tasksF.LogService != "" {
 				flat(c, "回到最新").OnClick(func() {
-					for _, service := range a.services {
-						if service.ID == a.tasksF.LogService {
-							a.openServiceLog(service)
-						}
+					// Jump first: the backdrop already shows the newest tail, so the
+					// button has to work even when the refresh below finds nothing.
+					a.followServiceLog()
+					if service, ok := a.loggedService(); ok {
+						a.fetchServiceLog(service.ID)
 					}
 				})
 			}
@@ -435,7 +485,13 @@ func (a *desktop) taskLogDialog(c *ui.Context) {
 			})
 		})
 		fieldNote(c, a.tasksF.LogMeta, a.secondaryInk())
-		codeBlock(c, "task-log-body", asciiStrip(a.tasksF.LogBody), 460, a.secondaryInk())
+		// The log keeps its own scroll position: a running service appends, and the
+		// reader needs to get back to the newest line without reopening the dialog.
+		ui.ScrollBoth(c.Key("task-log-body")).FillWidth().MinWidth(0).Height(min(float32(460), max(float32(160), h*0.45))).Shrink(0).Clip().
+			Label("服务日志").Background(c.Theme().Background).Radius(radiusSmall).
+			TrackScroll(&a.tasksF.LogScroll).Children(func() {
+			toolCodeLines(c, asciiStrip(a.tasksF.LogBody), "", a.secondaryInk())
+		})
 		modalActions(c, func() { flat(c, "关闭").OnClick(func() { a.tasksF.LogOpen = false }) })
 	})
 }
