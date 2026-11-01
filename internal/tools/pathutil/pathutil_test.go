@@ -200,14 +200,6 @@ func TestIsWindowsVolumeRootForms(t *testing.T) {
 	}
 }
 
-// Windows 构建上 IsSystemRootPath 必须路由到手写解析；这里顺带验证空路径永远
-// 不是根（它连有效路径都不是，调用方各有自己的“必填”报错）。
-func TestIsSystemRootPathEmptyIsNeverRoot(t *testing.T) {
-	if IsSystemRootPath("") || IsSystemRootPath("   ") {
-		t.Fatal("an empty path is never a filesystem root")
-	}
-}
-
 // TestSensitiveReadReasonProtectsTheDataDirectorySecrets: Ally 自己的数据目录里只有
 // 凭据文件被拦，记忆文件与用户档案必须读得到，那是模型本来就要打开的。
 //

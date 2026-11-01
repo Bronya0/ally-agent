@@ -44,6 +44,9 @@ func proseColors(text, muted, heading, strong, code, tint, link, panel, border s
 	return colors
 }
 
+// markdownPalettes holds the reading colours per palette index: the same value
+// native-ui.json stores as "palette", so it must stay the same length and order
+// as palettes.
 var markdownPalettes = []markdownColorPair{
 	{proseColors("#c9cbd0", "#9498a1", "#d7deed", "#d0d7e5", "#bac8df", "#8da5df", "#98b3e8", "#202228", "#30343e"), proseColors("#303642", "#6b7482", "#26354e", "#34435d", "#485d7c", "#597cb5", "#365fc4", "#eff2f7", "#d9dfea")},
 	{proseColors("#cacdd4", "#959ba6", "#d9e0ee", "#d0d8e8", "#bdcbe2", "#829fdf", "#9bb6ed", "#20232a", "#303743"), proseColors("#303640", "#6d7582", "#28364e", "#34445f", "#4a5f80", "#6b8bc4", "#365ebd", "#eef2f8", "#d9e0eb")},
@@ -56,10 +59,10 @@ var markdownPalettes = []markdownColorPair{
 func (a *desktop) readingColors() markdownColors {
 	index := a.prefs.Palette
 	if index < 0 || index >= len(markdownPalettes) {
-		index = 2
+		index = defaultPalette
 	}
-	if index == 3 {
-		index = 0 // Retired ocean preference follows blue.
+	if index == paletteOcean {
+		index = paletteBlue // Retired ocean preference follows blue.
 	}
 	colors := markdownPalettes[index].light
 	if a.currentPalette().dark {
@@ -72,7 +75,7 @@ func (a *desktop) readingColors() markdownColors {
 		colors.strong = ui.Hex("#d4d4d4").Mix(accent, 0.35)
 		colors.code = accent.Mix(ui.Hex("#ffffff"), 0.28)
 		colors.link = accent.Mix(ui.Hex("#ffffff"), 0.18)
-		if index == 2 {
+		if index == paletteAmber {
 			colors.heading = ui.Hex("#d7dedc")
 			colors.strong = ui.Hex("#c4b894")
 			colors.code = ui.Hex("#d4a574")

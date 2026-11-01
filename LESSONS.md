@@ -71,3 +71,7 @@
 [history-window] 2026-10-30 中危 页大小存 native-ui.json，默认 80、范围 20–200；分页、工具分组与跳转共用同一窗口值。@desktop/page_chat.go
 
 [tooltip-anchor-width] 2026-10-30 中危 Column 里 Text 可被拉成整行，Tooltip 按锚点定位会飘到页面中央；说明标签用 AlignSelf(Start)。@desktop/page_settings.go
+
+[py-stdin-src] 2026-11-01 中危 把含中文的 py 脚本经 stdin 喂 python3.9：按块解码，中文跨块即报 Non-UTF-8；首行补 coding cookie。@internal/app
+
+[transcript-row-owner] 2026-11-01 中危 谁画这条消息只能由 transcriptRows 一处定；渲染与分页各自判一次，空行就会照旧吃列间距。@desktop/transcript_rows.go

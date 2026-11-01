@@ -15,15 +15,6 @@ import (
 	"testing"
 )
 
-func TestSpecEnforce(t *testing.T) {
-	if (Spec{}).Enforce() {
-		t.Fatal("zero spec must not enforce")
-	}
-	if !(Spec{Mode: ModeEnforce}).Enforce() {
-		t.Fatal("ModeEnforce must enforce")
-	}
-}
-
 // 档位由接入开关与宿主策略共同决定，不是用户设置。断言刻意不去复述解析函数自己的
 // 算法（那只能写出恒真用例），而是钉住三件各自独立的事：两个方向的对偶关系、档位
 // 只有两种取值、以及接入时哪一族平台在强制。

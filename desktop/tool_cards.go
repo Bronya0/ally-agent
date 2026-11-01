@@ -25,41 +25,41 @@ type toolDescriptor struct {
 }
 
 // failedVerb exists because a card in error state must never claim
-// completion: "编辑" on a failed edit misleads the reader. The done verbs are
-// bare action words, the same shape as 搜索 and 计算, so a card reads as the
-// action it took rather than as a badge that already happened.
+// completion: "Edited" on a failed edit misleads the reader. Every state has
+// its own word here, so no failed verb is ever built by suffixing a done verb
+// (that produced "Remote Ran failed"). Cards read English; the folded
+// read/grep/list row writes its own Chinese counts and never reads this table.
 var toolTable = map[string]toolDescriptor{
-	"read":               {"读取中", "读取", "读取失败", false, false},
-	"remote_read":        {"读取中", "读取", "远程读取失败", false, false},
-	"edit":               {"编辑中", "编辑", "编辑失败", true, false},
-	"create":             {"创建中", "创建", "创建失败", true, false},
-	"delete":             {"删除中", "删除", "删除失败", true, false},
-	"remote_delete_path": {"删除中", "删除", "远程删除失败", true, false},
-	"remote_edit":        {"编辑中", "编辑", "远程编辑失败", true, false},
-	"remote_create_file": {"创建中", "创建", "远程创建失败", true, false},
-	"command":            {"运行中", "运行", "运行失败", true, true},
-	"remote_run_command": {"运行中", "运行", "远程命令失败", true, true},
-	"grep":               {"搜索中", "搜索", "搜索失败", false, false},
-	"list":               {"列目录中", "列目录", "列目录失败", true, false},
-	"glob":               {"匹配中", "匹配文件", "匹配失败", true, false},
-	"http_request":       {"请求中", "请求", "请求失败", true, true},
-	"web_fetch":          {"抓取中", "抓取", "抓取失败", true, true},
-	"calculate":          {"计算中", "计算", "计算失败", false, false},
-	"plan":               {"更新中", "计划", "计划失败", false, false},
-	"skill":              {"加载中", "技能", "技能失败", false, false},
-	"ask":                {"提问中", "提问", "提问失败", true, false},
-	"subagent":           {"委派中", "子代理", "委派失败", true, true},
-	"ssh_cluster":        {"检查中", "SSH 集群", "SSH 检查失败", true, false},
-	"service":            {"运行中", "后台服务", "服务失败", true, false},
-	"scheduled_task":     {"处理中", "定时任务", "任务失败", true, true},
-	"remote_transfer":    {"传输中", "传输", "传输失败", true, true},
-	"remote_transfer_":   {"传输中", "传输", "传输失败", true, true},
-	"screenshot":         {"截图中", "截图", "截图失败", true, false},
-	"render_html":        {"渲染中", "渲染", "渲染失败", true, true},
-	"suggest":            {"建议中", "建议", "建议失败", true, false},
-	"wait":               {"等待中", "等待", "等待失败", false, true},
-	"image_generate":     {"生成中", "生成", "生成失败", true, true},
-	"image_edit":         {"编辑中", "编辑", "生图编辑失败", true, true},
+	"read":               {"Reading", "Read", "Read failed", false, false},
+	"remote_read":        {"Remote Reading", "Remote Read", "Remote read failed", false, false},
+	"edit":               {"Editing", "Edited", "Edit failed", true, false},
+	"remote_edit":        {"Remote Editing", "Remote Edited", "Remote edit failed", true, false},
+	"create":             {"Creating", "Created", "Create failed", true, false},
+	"remote_create_file": {"Remote Creating", "Remote Created", "Remote create failed", true, false},
+	"delete":             {"Deleting", "Deleted", "Delete failed", true, false},
+	"remote_delete_path": {"Remote Deleting", "Remote Deleted", "Remote delete failed", true, false},
+	"command":            {"Running", "Ran", "Command failed", true, true},
+	"remote_run_command": {"Remote Running", "Remote Ran", "Remote command failed", true, true},
+	"grep":               {"Searching", "Searched", "Search failed", false, false},
+	"list":               {"Listing", "Listed", "List failed", true, false},
+	"glob":               {"Matching", "Matched", "Match failed", true, false},
+	"http_request":       {"Requesting", "Requested", "Request failed", true, true},
+	"web_fetch":          {"Fetching", "Fetched", "Fetch failed", true, true},
+	"calculate":          {"Calculating", "Calculated", "Calculation failed", false, false},
+	"plan":               {"Updating plan", "Plan", "Plan failed", false, false},
+	"skill":              {"Loading skill", "Loaded skill", "Skill failed", false, false},
+	"ask":                {"Asking", "Asked", "Ask failed", true, false},
+	"subagent":           {"Delegating", "Subagent", "Delegation failed", true, true},
+	"ssh_cluster":        {"Checking SSH", "SSH cluster", "SSH check failed", true, false},
+	"service":            {"Managing service", "Service", "Service failed", true, false},
+	"scheduled_task":     {"Scheduling", "Scheduled", "Scheduling failed", true, true},
+	"remote_transfer":    {"Remote Transferring", "Remote Transferred", "Remote transfer failed", true, true},
+	"screenshot":         {"Taking screenshot", "Screenshot", "Screenshot failed", true, false},
+	"render_html":        {"Rendering", "Rendered", "Render failed", true, true},
+	"suggest":            {"Suggesting", "Suggested", "Suggestion failed", true, false},
+	"wait":               {"Waiting", "Waited", "Wait failed", false, true},
+	"image_generate":     {"Generating image", "Generated image", "Image generation failed", true, true},
+	"image_edit":         {"Editing image", "Edited image", "Image edit failed", true, true},
 }
 
 func toolKind(name string) string {
@@ -87,18 +87,13 @@ func describeTool(name string) toolDescriptor {
 	if d, ok := toolTable[name]; ok {
 		return d
 	}
-	for prefix, d := range toolTable {
-		if strings.HasSuffix(prefix, "_") && strings.HasPrefix(name, prefix) {
-			return d
-		}
-	}
-	switch {
-	case strings.HasPrefix(name, "replace_"):
+	if strings.HasPrefix(name, "replace_") {
 		return toolTable["edit"]
-	case strings.HasPrefix(name, "mcp__"):
-		return toolDescriptor{"调用中", "调用", "MCP 调用失败", true, true}
 	}
-	return toolDescriptor{"调用中", "调用", name + "失败", true, false}
+	if strings.HasPrefix(name, "mcp__") {
+		return toolDescriptor{"Calling MCP", "Called MCP", "MCP call failed", true, true}
+	}
+	return toolDescriptor{"Calling", "Called", "Call failed", true, false}
 }
 
 func toolState(m map[string]any) string {
@@ -245,7 +240,9 @@ func (a *desktop) readGrepGroupCard(c *ui.Context, t *conversation, index int) {
 	container.Children(func() {
 		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(4).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label("读取分组 " + key)
 		row.Children(func() {
-			disclosureIcon(c, "search", a.secondaryInk())
+			// The leading icon carries the tool card's accent ink, so a folded run
+			// reads as the same kind of row as a single call.
+			disclosureIcon(c, "search", a.currentPalette().accent)
 			ui.Text(c, strings.Join(parts, "，")).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
 			caret := "chevron"
 			if open {
@@ -311,13 +308,20 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	container := ui.Column(c.Key("tool-" + toolCardKey(t, index, m))).Gap(2)
 	parsed := ui.Local(container, "parsed-args", func() toolArgsMemo { return toolArgsMemo{} })
 	args := parsed.get(str(m, "args"))
-	verb = toolActionVerb(name, state, args, verb)
 	summary := toolArgSummary(name, args)
 	isMCP := str(m, "mcpServer") != "" || str(m, "mcpTool") != "" || strings.HasPrefix(name, "mcp")
 	if isMCP {
-		verb = "Called MCP"
+		// A failed MCP call must not read as "Called": the state word comes from
+		// the same table the builtin cards use.
+		verb = ""
+		if state == "error" {
+			verb = "MCP call failed"
+		}
 		if state == "running" || state == "pending" {
 			verb = "Calling MCP"
+		}
+		if verb == "" {
+			verb = "Called MCP"
 		}
 		summary = strings.Trim(str(m, "mcpServer")+"/"+str(m, "mcpTool"), "/")
 		if summary == "" {
@@ -572,14 +576,17 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					toolAskSummary(c, key, args, result)
 				}
 			case name == "subagent":
-				found := false
-				for n, child := range t.Messages {
-					if str(child, "role") == "subagent" && subagentParent(t, child) == str(m, "toolCallId") {
-						a.subagentRow(c, t, n, child)
-						found = true
-					}
+				// The card draws its children through the same judgement the
+				// transcript uses, so a child is either shown once or not at all.
+				rows := t.uiState().transcriptRows
+				if rows == nil {
+					rows = newTranscriptRows(t)
 				}
-				if !found && open {
+				children := rows.childrenOf(str(m, "toolCallId"))
+				for _, n := range children {
+					a.subagentRow(c, t, n, t.Messages[n])
+				}
+				if len(children) == 0 && open {
 					if summary := str(result, "summary"); summary != "" {
 						fieldNote(c, summary, a.secondaryInk())
 					}
@@ -1452,7 +1459,7 @@ func (a *desktop) commandGroupCard(c *ui.Context, t *conversation, index int) {
 	container.Children(func() {
 		row := ui.ButtonBase(c.Key(key + "-header")).FillWidth().Height(24).Justify(ui.Start).Gap(4).Cursor(ui.CursorPointer).Label("命令分组 " + key)
 		row.Children(func() {
-			disclosureIcon(c, "terminal", a.secondaryInk())
+			disclosureIcon(c, "terminal", a.currentPalette().accent)
 			ui.Text(c, fmt.Sprintf("执行命令 %d 次", end-index)).FontSize(fsTool).TextColor(a.secondaryInk()).SingleLine()
 			caret := "chevron"
 			if open {

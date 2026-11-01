@@ -110,8 +110,11 @@ func colFaint() ui.Color  { return faint }
 func selectionFill(tone ui.Color) ui.Color { return uikit.SelectedFill(tone) }
 func selectionEdge(tone ui.Color) ui.Color { return uikit.SelectedStrokeColor(tone) }
 
-// palette is one selectable appearance preset (mode + accent combined, as the
-// original settings page offered five looks).
+// palette is one appearance preset: a neutral surface pair plus an accent.
+//
+// The index into palettes is what native-ui.json stores as "palette", so an
+// entry may be retired but never deleted or reordered — an old value still has
+// to decode into something sane.
 type palette struct {
 	name                                                    string
 	dark                                                    bool
@@ -149,18 +152,51 @@ func (p palette) headerColor() ui.Color {
 // Only hover and emphasis may lift an edge, and only by this much.
 const edgeHoverMix float32 = 0.18
 
+// Palette indices are the value native-ui.json stores as "palette", so they
+// are part of the on-disk format: reusing a number, reordering the table or
+// deleting an entry silently repaints every existing profile. Append new looks
+// at the end instead, and retire one by remapping it in currentPalette.
+//
+// palettes, lightAccents and markdownPalettes are all addressed by this value
+// and must keep the same length and order.
+const (
+	paletteBlue   = 0 // 蓝色 — dark surface base and the default accent
+	paletteLight  = 1 // 亮色 — light surface base; retired as an accent choice
+	paletteAmber  = 2 // 琥珀
+	paletteOcean  = 3 // 海洋 — retired, remapped to paletteBlue
+	paletteForest = 4 // 森林
+	paletteViolet = 5 // 紫罗兰
+
+	// defaultPalette is the accent a profile without a saved choice starts on.
+	defaultPalette = paletteBlue
+)
+
+// The accents Settings → 外观 offers are paletteBlue, paletteAmber,
+// paletteForest and paletteViolet. paletteBlue doubles as the dark surface base
+// and paletteLight as the light one, so their bg/panel/line are in use even
+// when another entry supplies the accent.
 var palettes = []palette{
-	{name: "暗夜", dark: true, bg: ui.Hex("#1b1b1b"), panel: ui.Hex("#212122"), line: ui.Hex("#303031"), accent: ui.Hex("#8da5df"), accentText: ui.Hex("#15171d"), text: ui.Hex("#d4d4d4"), muted: ui.Hex("#909093"), hover: ui.Hex("#2b2b2e"), hint: ui.Hex("#5d5d62")},
+	// paletteBlue: dark base surface, and the default accent.
+	{name: "蓝色", dark: true, bg: ui.Hex("#1b1b1b"), panel: ui.Hex("#212122"), line: ui.Hex("#303031"), accent: ui.Hex("#8da5df"), accentText: ui.Hex("#15171d"), text: ui.Hex("#d4d4d4"), muted: ui.Hex("#909093"), hover: ui.Hex("#2b2b2e"), hint: ui.Hex("#5d5d62")},
+	// paletteLight: light base surface; its accent is never used, lightAccents
+	// supplies it.
 	{name: "亮色", dark: false, bg: ui.Hex("#f5f6f8"), panel: ui.Hex("#ffffff"), line: ui.Hex("#d9dce3"), accent: ui.Hex("#4d6bd8"), accentText: ui.Hex("#ffffff"), text: ui.Hex("#24262d"), muted: ui.Hex("#535b68"), hover: ui.Hex("#eef0f5"), chrome: ui.Hex("#f9fafb"), hint: ui.Hex("#8b929e")},
+	// paletteAmber
 	{name: "琥珀", dark: true, bg: ui.Hex("#1c1a17"), panel: ui.Hex("#232019"), line: ui.Hex("#363128"), accent: ui.Hex("#e0a458"), accentText: ui.Hex("#1a1712"), text: ui.Hex("#d7d2c8"), muted: ui.Hex("#9b9488"), hover: ui.Hex("#2c2820"), hint: ui.Hex("#6b655b")},
+	// paletteOcean: retired, kept so old preference files still decode.
 	{name: "海洋", dark: true, bg: ui.Hex("#151a1f"), panel: ui.Hex("#1a2027"), line: ui.Hex("#28323c"), accent: ui.Hex("#63b3d8"), accentText: ui.Hex("#0d1418"), text: ui.Hex("#c6d0d8"), muted: ui.Hex("#8896a2"), hover: ui.Hex("#222b34"), hint: ui.Hex("#5c686f")},
+	// paletteForest
 	{name: "森林", dark: true, bg: ui.Hex("#151a17"), panel: ui.Hex("#1a201c"), line: ui.Hex("#29362d"), accent: ui.Hex("#6fbf8f"), accentText: ui.Hex("#0e1511"), text: ui.Hex("#c4d2c8"), muted: ui.Hex("#889a8e"), hover: ui.Hex("#212b24"), hint: ui.Hex("#5a6960")},
+	// paletteViolet
 	{name: "紫罗兰", dark: true, bg: ui.Hex("#191722"), panel: ui.Hex("#1f1c29"), line: ui.Hex("#312c42"), accent: ui.Hex("#a68bea"), accentText: ui.Hex("#141019"), text: ui.Hex("#cfc8de"), muted: ui.Hex("#948aa8"), hover: ui.Hex("#292436"), hint: ui.Hex("#645c76")},
 }
 
+// lightAccents is the light-mode accent for the same indices. The dark pastels
+// read as washed-out grey-blue on a white surface, so each one has a saturated
+// counterpart. paletteLight owns the one in its row.
 var lightAccents = []ui.Color{
 	ui.Hex("#365dcc"), // blue
-	ui.Hex("#365dcc"), // legacy light preset
+	ui.Hex("#365dcc"), // the 亮色 preset's own accent
 	ui.Hex("#9b6218"), // amber, unchanged
 	ui.Hex("#126f91"), // ocean
 	ui.Hex("#247649"), // forest
@@ -170,15 +206,17 @@ var lightAccents = []ui.Color{
 func (a *desktop) currentPalette() palette {
 	idx := a.prefs.Palette
 	if idx < 0 || idx >= len(palettes) {
-		idx = 2
+		idx = defaultPalette
 	}
-	if idx == 3 {
-		idx = 0 // Retired ocean preference falls back to blue.
+	if idx == paletteOcean {
+		// Retired: an old choice lands on the blue accent instead of a colour
+		// the settings page can no longer show as selected.
+		idx = paletteBlue
 	}
-	base := 0
-	if a.prefs.Appearance == "light" || (a.prefs.Appearance == "" && idx == 1) ||
+	base := paletteBlue
+	if a.prefs.Appearance == "light" || (a.prefs.Appearance == "" && idx == paletteLight) ||
 		(a.prefs.Appearance == "auto" && a.autoAppearance.Mode == "light") {
-		base = 1
+		base = paletteLight
 	}
 	p := palettes[base]
 	p.accent = palettes[idx].accent
@@ -187,11 +225,7 @@ func (a *desktop) currentPalette() palette {
 		// accent with neutral text made every theme look grey-blue.
 		p.accent = lightAccents[idx]
 	}
-	if base == 0 {
-		p.accentText = palettes[0].accentText
-	} else {
-		p.accentText = palettes[1].accentText
-	}
+	p.accentText = palettes[base].accentText
 	return p
 }
 

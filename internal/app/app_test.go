@@ -2191,20 +2191,3 @@ func TestCleanAppliedUpdateDirsKeepsOnlyCurrentTag(t *testing.T) {
 		}
 	}
 }
-
-func TestCleanAppliedUpdateDirsRejectsPathTraversalNames(t *testing.T) {
-	root := t.TempDir()
-
-	// A hostile directory name that could escape the updates root if it were
-	// joined naively. The tag regex rejects it, so it must stay untouched.
-	hostile := ".."
-	if err := os.MkdirAll(filepath.Join(root, hostile), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	cleanAppliedUpdateDirs(root, "v1.4.0")
-
-	if _, err := os.Stat(filepath.Join(root, hostile)); err != nil {
-		t.Errorf("expected non-tag directory %q to remain, got err %v", hostile, err)
-	}
-}

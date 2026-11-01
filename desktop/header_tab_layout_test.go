@@ -1,16 +1,13 @@
 package desktop
 
 import (
-	"bytes"
-	"encoding/base64"
 	"fmt"
-	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
-	"image/png"
-	"os"
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 )
 
 // A press on the header's tabs drags the strip, and the tab it lets go over is
@@ -92,13 +89,6 @@ func TestHeaderLeadingSurfaceIsSquare(t *testing.T) {
 				if got.R != sample.want.R || got.G != sample.want.G || got.B != sample.want.B {
 					t.Fatalf("%s expanded=%t corner %d,%d: got %v want %v", appearance, expanded, sample.x, sample.y, got, sample.want)
 				}
-			}
-			if os.Getenv("ALLY_HEADER_PREVIEW") != "" {
-				var b bytes.Buffer
-				if err := png.Encode(&b, tt.Image()); err != nil {
-					t.Fatal(err)
-				}
-				fmt.Println("HEADER_PREVIEW=" + base64.StdEncoding.EncodeToString(b.Bytes()))
 			}
 		}
 	}

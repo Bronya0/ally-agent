@@ -125,22 +125,16 @@ func countInkNear(img *image.RGBA, box ui.Rect, background, tone ui.Color) int {
 	return n
 }
 
-// TestSecondaryInkKeepsPaletteTone checks the tone reaches helpers that only see
-// the context: an explicit ink wins, so a leaf cannot fall back to the generic
-// per-appearance value and lose the preset's own muted colour.
+// TestSecondaryInkKeepsPaletteTone pins the rule helpers depend on: an explicit
+// ink wins over the per-appearance fallback, and that ink is the palette's own
+// muted tone. Without it a leaf silently loses the preset's colour.
 func TestSecondaryInkKeepsPaletteTone(t *testing.T) {
 	a := &desktop{}
-	a.prefs.Palette = 4 // 森林: its muted differs from the generic dark value
-	theme := a.theme()
+	a.prefs.Palette = paletteForest
 	ui.NewTester(func(c *ui.Context) {
-		c.SetTheme(theme)
+		c.SetTheme(a.theme())
 		if got, want := uikit.SecondaryInk(c, []ui.Color{a.secondaryInk()}), a.secondaryInk(); got != want {
 			t.Errorf("explicit ink resolved to %v, want the palette's %v", got, want)
-		}
-		// Without the ink, a helper can only fall back to the generic tone; the
-		// callers that render real UI must pass it, which is what this pins.
-		if generic := uikit.SecondaryInkOf(c.Theme()); generic != a.secondaryInk() {
-			t.Logf("the generic fallback %v differs from the preset's %v, so callers must pass it", generic, a.secondaryInk())
 		}
 	}, 200, 60)
 	if a.secondaryInk() != a.currentPalette().muted {

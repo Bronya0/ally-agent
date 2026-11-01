@@ -3,10 +3,7 @@ package desktop
 
 import (
 	"bytes"
-	"encoding/base64"
 	"fmt"
-	"image/png"
-	"os"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -114,13 +111,6 @@ func TestReasoningSelectorUsesDrawnMenu(t *testing.T) {
 			plain := img.RGBAAt(int(other.X)+16, int(other.Y+other.H/2))
 			if marked == plain {
 				t.Fatalf("menu does not mark the current level: mark column %v", marked)
-			}
-			if os.Getenv("ALLY_REASONING_PREVIEW") != "" {
-				var preview bytes.Buffer
-				if err := png.Encode(&preview, tester.Image()); err != nil {
-					t.Fatal(err)
-				}
-				fmt.Printf("REASONING_PREVIEW_%s=%s\n", appearance, base64.StdEncoding.EncodeToString(preview.Bytes()))
 			}
 			if err := tester.Click("max"); err != nil {
 				t.Fatal(err)

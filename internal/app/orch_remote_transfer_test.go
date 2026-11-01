@@ -649,7 +649,11 @@ func TestRemoteTransferDownloadReadErrorIsFailure(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{"action": "download", "workspaceRoot": root, "remotePath": "pkg"})
 	// Deterministically simulate a file becoming unreadable between walk and add,
 	// including when the test process is an administrator/root.
-	prelude := "import tarfile\noriginal_add = tarfile.TarFile.add\ndef failing_add(self, name, *args, **kwargs):\n    if name.endswith('unreadable.txt'): raise IOError('simulated read failure')\n    return original_add(self, name, *args, **kwargs)\ntarfile.TarFile.add = failing_add\n"
+	// The composed source is a stream of its own, so it must declare its
+	// encoding: the helper's own cookie no longer sits in the first two lines,
+	// and CPython 3.9 decodes a stdin source in fixed chunks, reading a Chinese
+	// message split across them as "Non-UTF-8 code" (3.14 tolerates it).
+	prelude := "# -*- coding: utf-8 -*-\nimport tarfile\noriginal_add = tarfile.TarFile.add\ndef failing_add(self, name, *args, **kwargs):\n    if name.endswith('unreadable.txt'): raise IOError('simulated read failure')\n    return original_add(self, name, *args, **kwargs)\ntarfile.TarFile.add = failing_add\n"
 	// The helper contains a future import, so execute it as a separate compilation.
 	cmd := exec.Command(py, "-u", "-", base64.RawURLEncoding.EncodeToString(payload))
 	cmd.Stdin = strings.NewReader(prelude + "exec(compile(" + stringMustJSON(remoteTransferPythonScript) + ", '<ally-transfer>', 'exec'))")

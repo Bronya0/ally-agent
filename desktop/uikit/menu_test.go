@@ -2,12 +2,19 @@ package uikit
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
 )
 
 func TestContextMenuFitsLabelsAndShortcuts(t *testing.T) {
+	// MyGo paints an accelerator with macOS's symbols there ("⌃⇧C") and as it
+	// is written elsewhere ("Ctrl+Shift+C"), so measure what the menu shows.
+	shortcut := "Ctrl+Shift+C"
+	if runtime.GOOS == "darwin" {
+		shortcut = "⌃⇧C"
+	}
 	for _, size := range []float32{12, 16, 20} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			const label = "复制完整路径与文件名称"
@@ -18,7 +25,7 @@ func TestContextMenuFitsLabelsAndShortcuts(t *testing.T) {
 				theme.FontSize = size
 				c.SetTheme(theme)
 				labelWidth, _ = c.MeasureText(0, ui.Span{Text: label, Size: size})
-				shortcutWidth, _ = c.MeasureText(0, ui.Span{Text: "Ctrl+Shift+C", Size: size})
+				shortcutWidth, _ = c.MeasureText(0, ui.Span{Text: shortcut, Size: size})
 				anchor := ui.Box(c.Key("menu-area")).Fill().Label("menu-area")
 				ContextMenu(anchor, func(m *ui.Menu) {
 					if m.Item(label).Shortcut(ui.Ctrl|ui.Shift, ui.KeyC).Chosen() {
@@ -34,6 +41,10 @@ func TestContextMenuFitsLabelsAndShortcuts(t *testing.T) {
 			row, ok := tt.Find(label)
 			if !ok {
 				t.Fatal("menu did not open")
+			}
+			// The width below is only meaningful against the text painted.
+			if !tt.HasText(shortcut) {
+				t.Fatalf("menu painted no %q for Ctrl+Shift+C: %v", shortcut, tt.Texts())
 			}
 			if row.W < labelWidth+shortcutWidth+16 || row.X < 0 || row.X+row.W > 700 || row.Y+row.H > 400 {
 				t.Fatalf("label/shortcut do not fit: row=%+v text=%v shortcut=%v", row, labelWidth, shortcutWidth)

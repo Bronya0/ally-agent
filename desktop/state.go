@@ -33,7 +33,7 @@ type uiPrefs struct {
 }
 
 func defaultPrefs() uiPrefs {
-	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: 2, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270}
+	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270}
 }
 
 var prefsMu sync.Mutex
@@ -197,7 +197,10 @@ type chatUI struct {
 	VisibleStart           int
 	windowStart, windowEnd int
 	windowBuilding         bool
-	ThinkingBytes          int
+	// transcriptRows is the frame's ownership view. The transcript sets it for
+	// the duration of one render so a card does not rebuild it per child.
+	transcriptRows *transcriptRows
+	ThinkingBytes  int
 }
 
 type deletePromptState struct {

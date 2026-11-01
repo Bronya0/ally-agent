@@ -1,13 +1,10 @@
 package desktop
 
 import (
-	"ally-dev/desktop/uikit"
-	"bytes"
-	"encoding/base64"
 	"fmt"
-	"image/png"
-	"os"
 	"testing"
+
+	"ally-dev/desktop/uikit"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -51,13 +48,6 @@ func TestChoiceGroupsWrap(t *testing.T) {
 			tt.Frame()
 			if selected != 4 {
 				t.Fatal("choice did not select")
-			}
-			if os.Getenv("ALLY_CHOICES_VISUAL") != "" {
-				var b bytes.Buffer
-				if err := png.Encode(&b, tt.Image()); err != nil {
-					t.Fatal(err)
-				}
-				fmt.Println("CHOICE_PREVIEW=" + base64.StdEncoding.EncodeToString(b.Bytes()))
 			}
 		})
 	}

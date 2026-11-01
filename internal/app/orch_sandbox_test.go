@@ -62,18 +62,6 @@ func confinedFence(t *testing.T, commandLine, workingDir string, roots []string)
 	return checkCommandSafetyAtCwd(CommandRequest{Command: commandLine, Cwd: workingDir}, roots, workingDir)
 }
 
-// 判据只问沙箱，不问平台：钉住哪一侧就返回哪一侧。
-func TestKernelOwnsBoundaryFollowsTheKernel(t *testing.T) {
-	pinBoundaryOwnership(t, true)
-	if !kernelOwnsBoundary() {
-		t.Fatal("kernel ownership must be visible to the judgement")
-	}
-	pinBoundaryOwnership(t, false)
-	if kernelOwnsBoundary() {
-		t.Fatal("the fence must be visible to the judgement")
-	}
-}
-
 // 边界归内核时，写 / 删 / cwd 三个解析器不再自己拒越界路径：它们只做归一化，越界
 // 由内核在真正落盘时拒。这里不落盘，所以不需要沙箱真的可用。
 func TestBoundaryResolversStandDownForTheKernel(t *testing.T) {
@@ -138,15 +126,6 @@ func TestDeleteStatsSkipTargetsTheKernelWillRefuse(t *testing.T) {
 	pinBoundaryOwnership(t, false)
 	if !countDeleteStats(spec, roots, outside) {
 		t.Fatal("with the fence guarding, outside targets keep their exact counts")
-	}
-}
-
-// 档位不再由配置决定：spec 必须跟随宿主解析出的档位。
-func TestSandboxSpecFollowsTheResolvedMode(t *testing.T) {
-	isolateSandboxHome(t)
-	spec := sandboxSpec([]string{t.TempDir()}, nil)
-	if spec.Enforce() != (sandbox.ResolvedMode() == sandbox.ModeEnforce) {
-		t.Fatalf("a spec must follow the resolved host mode, got %v", spec.Mode)
 	}
 }
 

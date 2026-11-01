@@ -31,7 +31,7 @@ func TestLightAccentsRemainColoredAndReadable(t *testing.T) {
 		}
 	}
 	a := &desktop{}
-	a.prefs.Palette = 2
+	a.prefs.Palette = paletteAmber
 	a.prefs.Appearance = "light"
 	if a.currentPalette().accent != ui.Hex("#9b6218") {
 		t.Fatal("amber changed")

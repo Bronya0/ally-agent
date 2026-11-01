@@ -22,7 +22,7 @@ func TestLocalCommandGroupPreservesCardsOnExpansion(t *testing.T) {
 			c.DisableAnimations()
 			ui.Column(c).FillWidth().Padding(20).Children(func() {
 				for i := range conv.Messages {
-					a.messageRow(c, conv, i)
+					a.messageRow(c, conv, i, newTranscriptRows(conv))
 				}
 			})
 		}, 700, 700)
@@ -60,7 +60,7 @@ func TestCommandGroupsStopAtRemoteAndProse(t *testing.T) {
 			c.DisableAnimations()
 			ui.Column(c).FillWidth().Padding(20).Children(func() {
 				for i := range conv.Messages {
-					a.messageRow(c, conv, i)
+					a.messageRow(c, conv, i, newTranscriptRows(conv))
 				}
 			})
 		}, 700, 600)
@@ -87,8 +87,9 @@ func TestCommandGroupStaysCollapsedThroughoutExecution(t *testing.T) {
 		c.SetTheme(a.theme())
 		c.DisableAnimations()
 		ui.Column(c).FillWidth().Padding(20).Children(func() {
+			rows := newTranscriptRows(conv)
 			for i := range conv.Messages {
-				a.messageRow(c, conv, i)
+				a.messageRow(c, conv, i, rows)
 			}
 		})
 	}, 700, 700)

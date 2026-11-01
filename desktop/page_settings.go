@@ -163,17 +163,13 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			divider(c)
 			fieldLabel(c, "强调色")
 			uikit.OptionGroup(c).Children(func() {
-				for _, idx := range []int{0, 2, 4, 5} {
+				// The retired 亮色 and 海洋 presets are not offered: a stored value of
+				// either still shows 蓝色 as selected and paints the blue accent.
+				for _, idx := range []int{paletteBlue, paletteAmber, paletteForest, paletteViolet} {
 					idx := idx
 					p := palettes[idx]
-					name := p.name
-					if idx == 0 {
-						name = "蓝色"
-					} else if idx == 2 {
-						name = "琥珀"
-					}
-					selected := a.prefs.Palette == idx || (idx == 0 && (a.prefs.Palette == 1 || a.prefs.Palette == 3))
-					choiceSwatch(c, fmt.Sprintf("palette-%d", idx), name, selected, p.accent).OnClick(func() {
+					selected := a.prefs.Palette == idx || (idx == paletteBlue && (a.prefs.Palette == paletteLight || a.prefs.Palette == paletteOcean))
+					choiceSwatch(c, fmt.Sprintf("palette-%d", idx), p.name, selected, p.accent).OnClick(func() {
 						if a.prefs.Appearance == "" {
 							if a.currentPalette().dark {
 								a.prefs.Appearance = "dark"

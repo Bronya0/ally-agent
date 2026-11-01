@@ -18,8 +18,13 @@ import (
 func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	st := t.uiState()
 	start, end := historyMessageWindow(t, a.messageWindowSize())
+	rows := newTranscriptRows(t)
 	st.windowStart, st.windowEnd, st.windowBuilding = start, end, true
-	defer func() { st.windowBuilding = false }()
+	st.transcriptRows = rows
+	defer func() {
+		st.windowBuilding = false
+		st.transcriptRows = nil
+	}()
 	if st.RoundAt == nil {
 		st.RoundAt = make(map[int]int)
 	} else {
@@ -97,7 +102,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 					transcriptAction(c, "history-latest", "回到最新").OnClick(func() { st.VisibleStart = 0; st.Follow = true; st.FollowPending = true })
 				}
 				for i := start; i < end; i++ {
-					a.messageRow(c, t, i)
+					a.messageRow(c, t, i, rows)
 				}
 				if st.PendingPrompt {
 					c.After(16 * time.Millisecond)
@@ -175,14 +180,14 @@ func (a *desktop) jumpToPreviousPrompt(c *ui.Context, t *conversation) {
 	t.Scroll.Y = 0
 }
 
-func (a *desktop) messageRow(c *ui.Context, t *conversation, i int) {
+func (a *desktop) messageRow(c *ui.Context, t *conversation, i int, rows *transcriptRows) {
 	m := t.Messages[i]
 	start, _ := a.chatMessageWindow(t)
-	if i > start && sameHistoryBlock(t.Messages[i-1], m) {
-		st := t.uiState()
-		if idx, ok := st.RoundAt[i]; ok {
-			a.roundStatsRow(c, t, idx, st.Round[idx], false)
-		}
+	kind := rows.kindAt(i, start)
+	if kind == rowSkipped {
+		// Nothing draws here: rowKindAt decided it, and the container stays
+		// unbuilt because an empty one still costs the column its gap.
+		a.roundStatsIfAny(c, t, i, false)
 		return
 	}
 	role := str(m, "role")
@@ -201,55 +206,50 @@ func (a *desktop) messageRow(c *ui.Context, t *conversation, i int) {
 	}
 	showStats := row.Hovered()
 	row.Children(func() {
-		switch {
-		case role == "user":
-			a.userMessage(c, t, i, m)
-		case role == "assistant":
-			if _, ok := m["welcome"]; ok {
-				a.welcomeView(c, t)
-				return
-			}
-			a.assistantMessage(c, t, i, m)
-		case role == "notice":
-			tone := str(m, "tone")
-			if tone == "" {
-				tone = "warn"
-			}
-			notice(c, tone, str(m, "content"), a.secondaryInk())
-		case role == "tool_call" || str(m, "toolCallId") != "":
-			// Adjacent read/grep/list cards fold into one group row, mirroring
-			// main's read-grep-group: only the group's first row renders, the
-			// rest are consumed by it.
-			start, _ := a.chatMessageWindow(t)
-			if isFoldableReadTool(m) && i > start {
-				if prev := t.Messages[i-1]; isFoldableReadTool(prev) &&
-					(str(prev, "role") == "tool_call" || str(prev, "toolCallId") != "") {
-					break
-				}
-			}
-			if isFoldableReadTool(m) {
-				a.readGrepGroupCard(c, t, i)
-				break
-			}
-			if isFoldableCommand(m) {
-				a.commandGroupCard(c, t, i)
-				break
-			}
-			a.toolCard(c, t, i, m)
-		case role == "subagent":
-			if subagentParent(t, m) != "" {
-				return
-			}
-			a.subagentRow(c, t, i, m)
+		switch kind {
+		case rowReadGroup:
+			a.readGrepGroupCard(c, t, i)
+		case rowCommandGroup:
+			a.commandGroupCard(c, t, i)
 		default:
-			if content := str(m, "content"); content != "" {
-				markdown.View(c, content, a.markdownOptions(t, i)).FillWidth()
-			}
+			a.messageBody(c, t, i, m, role)
 		}
 		if idx, ok := st.RoundAt[i]; ok {
 			a.roundStatsRow(c, t, idx, st.Round[idx], showStats)
 		}
 	})
+}
+
+// messageBody draws the message itself; its row, grouping and statistics belong
+// to messageRow. Precedence is by role first, exactly as the transcript always
+// resolved it: a tool record only draws as a card when no role claims it.
+func (a *desktop) messageBody(c *ui.Context, t *conversation, i int, m map[string]any, role string) {
+	switch role {
+	case "user":
+		a.userMessage(c, t, i, m)
+	case "assistant":
+		if _, ok := m["welcome"]; ok {
+			a.welcomeView(c, t)
+			return
+		}
+		a.assistantMessage(c, t, i, m)
+	case "notice":
+		tone := str(m, "tone")
+		if tone == "" {
+			tone = "warn"
+		}
+		notice(c, tone, str(m, "content"), a.secondaryInk())
+	case "subagent":
+		a.subagentRow(c, t, i, m)
+	default:
+		if isToolRecord(m) {
+			a.toolCard(c, t, i, m)
+			return
+		}
+		if content := str(m, "content"); content != "" {
+			markdown.View(c, content, a.markdownOptions(t, i)).FillWidth()
+		}
+	}
 }
 
 func (a *desktop) markdownOptions(t *conversation, i int) *markdown.Options {
@@ -987,16 +987,14 @@ func (a *desktop) chatMessageWindow(t *conversation) (int, int) {
 	return historyMessageWindow(t, a.messageWindowSize())
 }
 
-// Pagination and row rendering share this grouping rule. Only adjacent tool
-// records combine; an ordinary message always starts its own visible block.
-func sameHistoryBlock(left, right map[string]any) bool {
-	tool := func(m map[string]any) bool { return str(m, "role") == "tool_call" || str(m, "toolCallId") != "" }
-	return tool(left) && tool(right) && ((isFoldableReadTool(left) && isFoldableReadTool(right)) || (isFoldableCommand(left) && isFoldableCommand(right)))
-}
+// historyBlockStarts marks the rows a history page may begin at. The grouping
+// rule lives in foldsInto/startsBlock, so a page never starts on a row that
+// another row already draws.
 func historyBlockStarts(t *conversation) []int {
+	rows := newTranscriptRows(t)
 	starts := make([]int, 0, len(t.Messages)+1)
 	for i := range t.Messages {
-		if i == 0 || !sameHistoryBlock(t.Messages[i-1], t.Messages[i]) {
+		if rows.startsBlock(i) {
 			starts = append(starts, i)
 		}
 	}

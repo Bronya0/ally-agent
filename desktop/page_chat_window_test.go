@@ -3,7 +3,12 @@ package desktop
 import "testing"
 
 func TestHistoryWindowConfigDefaultsAndBounds(t *testing.T) {
+	// Real prompts: a page counts blocks that draw, and an empty message draws
+	// nothing, so a fixture of blanks would measure no paging at all.
 	conv := &conversation{Messages: make([]map[string]any, 500)}
+	for i := range conv.Messages {
+		conv.Messages[i] = map[string]any{"role": "user", "content": "question"}
+	}
 	for _, size := range []int{0, -1, 19, 20, 60, 140, 200, 201} {
 		app := &desktop{prefs: uiPrefs{HistoryPageSize: size}}
 		start, end := app.chatMessageWindow(conv)
@@ -38,7 +43,7 @@ func TestHistoryPagesCountGroupsAndNeverSplitThem(t *testing.T) {
 		if end < previousEnd {
 			t.Fatal("pagination skipped a block")
 		}
-		if start > 0 && sameHistoryBlock(conv.Messages[start-1], conv.Messages[start]) {
+		if start > 0 && newTranscriptRows(conv).foldsInto(start) {
 			t.Fatal("split group")
 		}
 	}

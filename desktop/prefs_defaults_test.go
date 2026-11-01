@@ -9,7 +9,7 @@ import (
 func TestInitialAppearanceAndAvatar(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "native-ui.json")
 	for _, prefs := range []uiPrefs{defaultPrefs(), readPrefs(path)} {
-		if prefs.Appearance != "dark" || prefs.Palette != 2 || prefs.Avatar != "whale" {
+		if prefs.Appearance != "dark" || prefs.Palette != defaultPalette || prefs.Avatar != "whale" {
 			t.Fatalf("wrong initial preferences: %+v", prefs)
 		}
 	}

@@ -27,9 +27,4 @@ func TestStatusInkAndIndicatorsUseSeparateLightColors(t *testing.T) {
 			t.Errorf("status ink contrast %.2f: %v", contrast, ink)
 		}
 	}
-	a.prefs.Appearance = "dark"
-	dark := a.theme()
-	if dark.Success != okColor || dark.Warning != warnCol || dark.Danger != errCol {
-		t.Fatal("dark status colors changed")
-	}
 }

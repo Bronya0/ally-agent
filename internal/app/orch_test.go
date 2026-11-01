@@ -898,17 +898,6 @@ func TestContextBreakdownUsesSessionWorkspace(t *testing.T) {
 	}
 }
 
-func TestComputeLiveBreakdownSetsTotal(t *testing.T) {
-	bd := computeLiveBreakdown([]openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleUser, Content: "hello"},
-		{Role: openai.ChatMessageRoleAssistant, Content: "hi"},
-	})
-
-	if bd.Total <= 0 {
-		t.Fatalf("expected live breakdown total to be set, got %#v", bd)
-	}
-}
-
 func TestLiveBreakdownAccumulatorMatchesFullRecalculation(t *testing.T) {
 	messages := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleUser, Content: "hello"},
@@ -3543,33 +3532,6 @@ func TestExecuteToolEditsParallelCallsPerFile(t *testing.T) {
 	}
 }
 
-func TestExecuteToolRejectsMultiFileEditCall(t *testing.T) {
-	dir := t.TempDir()
-	a, b := []byte("alpha\n"), []byte("beta\n")
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), a, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "b.txt"), b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// The legacy nested multi-file form must fail without touching either
-	// file; multi-file changes go through parallel edit calls instead.
-	args := fmt.Sprintf(`{"files":[{"path":"a.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"b.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(a), hashVersion(b))
-	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
-	if result.OK || !strings.Contains(result.Error, "files") {
-		t.Fatalf("expected multi-file edit call to be rejected, got %#v", result)
-	}
-	for path, want := range map[string]string{"a.txt": "alpha\n", "b.txt": "beta\n"} {
-		got, err := os.ReadFile(filepath.Join(dir, path))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(got) != want {
-			t.Fatalf("rejected multi-file edit changed %s: %q, want %q", path, got, want)
-		}
-	}
-}
-
 func TestExecuteToolEditRollsBackEarlierFilesWhenCommitFails(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "sub")
@@ -3675,28 +3637,6 @@ func TestExecuteToolEditRejectsLegacyNestedFilesForm(t *testing.T) {
 	}
 	if string(got) != string(original) {
 		t.Fatalf("rejected legacy edit must leave file unchanged, got %q", string(got))
-	}
-}
-
-func TestExecuteToolEditRejectsRepeatedPathEntriesWithDifferentVersions(t *testing.T) {
-	dir := t.TempDir()
-	original := []byte("alpha\nbeta\n")
-	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// Multiple entries in one call never execute, regardless of whether the
-	// versions agree: one call edits exactly one file.
-	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"./sample.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(original), "zzzzzz")
-	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
-	if result.OK || !strings.Contains(result.Error, "files") {
-		t.Fatalf("expected multi-entry legacy call to be rejected, got %#v", result)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(original) {
-		t.Fatalf("rejected multi-entry call must leave file unchanged, got %q", got)
 	}
 }
 

@@ -18,8 +18,6 @@ mygo 分支在原生窗口中通过 MyGo 的 `examples/embed-webview` 接入插�
 
 宿主复用 main 分支的 host 与主题 token 契约；主题色映射到原生主题，字体由 WebView 的系统字体回退。每个页面使用独立的本机随机端口与身份校验，不注入 Wails 绑定；直接引用 Wails 运行时、宿主 DOM、未公开 CSS 或跨插件 localStorage 的历史插件需要改用公开 host API。`host.files.mediaUrl` 继续使用已有的媒体服务。
 
-可选浏览器回归（需本机 Python Playwright）：设置 `ALLY_PLUGIN_BROWSER` 为 Chromium/Edge 可执行文件路径，运行 `CGO_ENABLED=0 go test -p 1 ./desktop/pluginhost -run TestPluginLegacyBrowser -v`。
-
 ---
 
 ## 1. 五分钟上手

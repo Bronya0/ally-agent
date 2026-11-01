@@ -136,26 +136,6 @@ func resourceStatus(status string) string {
 	return status
 }
 
-var toolActionVerbs = map[string][2]string{"command": {"Running", "Ran"}, "remote_run_command": {"Remote Running", "Remote Ran"}, "edit": {"Editing", "Edited"}, "remote_edit": {"Remote Editing", "Remote Edited"}, "create": {"Creating", "Created"}, "remote_create_file": {"Remote Creating", "Remote Created"}, "delete": {"Deleting", "Deleted"}, "remote_delete_path": {"Remote Deleting", "Remote Deleted"}, "http_request": {"Requesting", "Requested"}, "web_fetch": {"Fetching", "Fetched"}, "render_html": {"Rendering", "Rendered"}, "screenshot": {"Screenshot", "Screenshot"}, "skill": {"Loading skill", "Loaded skill"}, "plan": {"Plan", "Plan"}, "ask": {"Asking", "Asked"}, "wait": {"Waiting", "Waited"}, "calculate": {"Calculating", "Calculated"}, "subagent": {"Subagent", "Subagent"}, "scheduled_task": {"Scheduling", "Scheduled"}, "service": {"Service", "Service"}, "ssh_cluster": {"SSH cluster", "SSH cluster"}, "remote_transfer": {"Transferring", "Transferred"}, "image_generate": {"Generating image", "Generated image"}, "image_edit": {"Editing image", "Edited image"}}
-
-func toolActionVerb(name, state string, args map[string]any, fallback string) string {
-
-	pair, ok := toolActionVerbs[name]
-	if !ok {
-		// Fall back to the tool's own verb. Answering "Called MCP" here labelled
-		// every non-MCP tool that has no entry in this map (read, grep, …) as an MCP
-		// call; real MCP tools get that wording from toolCard's own MCP branch.
-		return fallback
-	}
-	if state == "error" {
-		return pair[1] + " failed"
-	}
-	if state == "running" || state == "pending" {
-		return pair[0]
-	}
-	return pair[1]
-}
-
 // suggestionLabelMix lifts the suggestion label from muted ink toward body text.
 // Pure muted measured 4.4:1 on the light surface — below AA, so 12px labels went
 // blurry — while body ink would shout next to an answer.
@@ -179,22 +159,6 @@ func suggestionButton(c *ui.Context, text string, ink ...ui.Color) ui.Element {
 		ui.Text(c, text).FontSize(fsTiny).TextColor(fadeColor(button, "suggestion-label", color)).SingleLine()
 	})
 	return button
-}
-
-func subagentParent(t *conversation, child map[string]any) string {
-	id := str(child, "parentToolCallId")
-	for _, m := range t.Messages {
-		if toolKind(str(m, "name")) != "subagent" {
-			continue
-		}
-		if id != "" && str(m, "toolCallId") == id {
-			return id
-		}
-		if str(toolResult(m), "agentId") == str(child, "subId") {
-			return str(m, "toolCallId")
-		}
-	}
-	return ""
 }
 
 func (a *desktop) scheduledTaskSummary(args, result map[string]any) string {

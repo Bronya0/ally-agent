@@ -3,12 +3,10 @@ package pluginhost
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -199,87 +197,5 @@ func TestPluginWebCacheInvalidation(t *testing.T) {
 			}
 			a.Close()
 		})
-	}
-}
-
-// Runs the real historical demo module, its relative CSS, store, HTTP denial,
-// workspace reads and unmount in Chromium. No production source is modified.
-func TestPluginLegacyBrowser(t *testing.T) {
-	browser := os.Getenv("ALLY_PLUGIN_BROWSER")
-	if browser == "" {
-		t.Skip("set ALLY_PLUGIN_BROWSER to a Chromium executable")
-	}
-	a, info, workspace := pluginTestHost(t)
-	source := t.TempDir()
-	for _, name := range []string{"plugin.json", "index.js", "style.css"} {
-		data, err := os.ReadFile(filepath.Join(info.Dir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		target := name
-		if name == "index.js" {
-			target = "demo.js"
-		}
-		if err = os.WriteFile(filepath.Join(source, target), data, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	harness := `import {mount as legacyMount} from './demo.js';
-export async function mount(element,host){
- const cleanup=await legacyMount(element,host);
- if(!element.querySelector('#demo-theme-mode'))throw Error('legacy DOM missing');
- await host.store.set({compatible:true});if(!(await host.store.get()).compatible)throw Error('store');
- if(await host.files.read('hello.txt')!=='plugin workspace')throw Error('workspace');
- try{await host.http.request({url:'https://not-declared.invalid/'});throw Error('allowlist bypass')}catch(e){if(!String(e).includes('E_PLUGIN_HOST_DENIED'))throw e;}
- let shown=0,hidden=0;host.events.on('shown',()=>shown++);host.events.on('hidden',()=>hidden++);
- setTimeout(()=>{
-  if(shown!==1){document.body.dataset.result='bad-shown';return}
-  window.allyDispose();window.allyDispose();
-  document.body.dataset.result=hidden===1 && !document.querySelector('style[data-plugin]') && !element.children.length?'passed':'bad-cleanup';
- },100);
- return cleanup;
-}`
-	if err := os.WriteFile(filepath.Join(source, "index.js"), []byte(harness), 0600); err != nil {
-		t.Fatal(err)
-	}
-	var err error
-	info, err = a.core.ImportPluginFromDir(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := NewTheme(Palette{Name: "test", Dark: true})
-	state.Active = true
-	p, err := a.newServer(info, workspace, state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer p.server.Close()
-	dir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	// Playwright waits for a DOM result without treating the persistent SSE
-	// stream as a pending navigation, as dump-dom virtual time can do.
-	script := `import sys
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    context = p.chromium.launch_persistent_context(sys.argv[3], executable_path=sys.argv[1], headless=True, timeout=10000)
-    page = context.pages[0] if context.pages else context.new_page()
-    page.on("pageerror", lambda e: print("PAGE ERROR", e, flush=True))
-    page.on("console", lambda m: print("CONSOLE", m.type, m.text, flush=True))
-    page.goto(sys.argv[2], wait_until="domcontentloaded")
-    try:
-        page.wait_for_function("document.body.dataset.result !== undefined", timeout=10000, polling=100)
-    finally:
-        print(page.content(), flush=True)
-        context.close()
-`
-	cmd := exec.CommandContext(ctx, "python", "-c", script, browser, p.url, filepath.Join(dir, "profile"))
-	cmd.WaitDelay = 3 * time.Second
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("browser: %v: %.4000s", err, out)
-	}
-	if !strings.Contains(string(out), `data-result="passed"`) {
-		t.Fatalf("legacy plugin failed: %.5000s", out)
 	}
 }

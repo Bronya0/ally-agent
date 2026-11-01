@@ -18,7 +18,7 @@ func TestTranscriptDisclosureIcons(t *testing.T) {
 		conv := &conversation{ID: "icon", Messages: []map[string]any{msg}}
 		tt := ui.NewTester(func(c *ui.Context) {
 			c.SetTheme(a.theme())
-			ui.Column(c).FillWidth().Padding(24).Children(func() { a.messageRow(c, conv, 0) })
+			ui.Column(c).FillWidth().Padding(24).Children(func() { a.messageRow(c, conv, 0, newTranscriptRows(conv)) })
 		}, 700, 300)
 		icon, ok := tt.Find("折叠图标 " + tc.icon)
 		if !ok || icon.W != 15 || icon.H != 15 {

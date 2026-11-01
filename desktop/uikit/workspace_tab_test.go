@@ -1,14 +1,11 @@
 package uikit
 
 import (
-	"bytes"
-	"encoding/base64"
 	"fmt"
-	"github.com/egoist/mygo/ui"
-	"image/png"
-	"os"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestWorkspaceTabSlotsStayFixed(t *testing.T) {
@@ -116,40 +113,6 @@ func TestWorkspaceTabStatusAndPaddingActivate(t *testing.T) {
 			}
 		})
 	}
-}
-func TestWorkspaceTabPreview(t *testing.T) {
-	if os.Getenv("ALLY_WORKSPACE_TABS_PREVIEW") == "" {
-		t.Skip("visual preview")
-	}
-	tt := ui.NewTester(func(c *ui.Context) {
-		ui.Column(c).Fill().Children(func() {
-			for _, dark := range []bool{false, true} {
-				theme := ui.LightTheme()
-				if dark {
-					theme = ui.DarkTheme()
-				}
-				theme.Accent = ui.Hex("#365dcc")
-				if dark {
-					theme.Accent = ui.Hex("#9eb7f1")
-				}
-				c.SetTheme(theme)
-				c.DisableAnimations()
-				ui.Column(c.Key(dark)).FillWidth().Height(125).Background(theme.Background).Children(func() {
-					ui.Row(c).FillWidth().Height(44).Padding(0, 12).Gap(0).AlignItems(ui.Center).Background(theme.Surface.Mix(theme.Accent, 0.18)).Children(func() {
-						ui.Text(c, "Ally").FontSize(20).FontWeight(700).TextColor(theme.Accent).Margin(0, 10, 0, 0)
-						for i, label := range []string{"apisec", "ally-agent-v2", "另一个工作区"} {
-							WorkspaceTab(c.Key(i), label, "/w/"+label, i == 0, i == 1, true, nil, func() {}, func() {}, nil)
-						}
-					})
-				})
-			}
-		})
-	}, 700, 250)
-	var b bytes.Buffer
-	if err := png.Encode(&b, tt.Image()); err != nil {
-		t.Fatal(err)
-	}
-	fmt.Println("WORKSPACE_PREVIEW=" + base64.StdEncoding.EncodeToString(b.Bytes()))
 }
 
 func TestWorkspaceTabsUseIntrinsicWidth(t *testing.T) {

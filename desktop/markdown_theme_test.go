@@ -18,6 +18,15 @@ func colorLuminance(c ui.Color) float64 {
 	}
 	return .2126*channel(c.R) + .7152*channel(c.G) + .0722*channel(c.B)
 }
+func TestPaletteTablesStayIndexAligned(t *testing.T) {
+	if len(lightAccents) != len(palettes) || len(markdownPalettes) != len(palettes) {
+		t.Fatalf("palette tables disagree: palettes=%d lightAccents=%d markdownPalettes=%d", len(palettes), len(lightAccents), len(markdownPalettes))
+	}
+	if defaultPalette < 0 || defaultPalette >= len(palettes) {
+		t.Fatalf("defaultPalette %d is outside the table", defaultPalette)
+	}
+}
+
 func TestReadingThemesHaveLegibleIndependentColors(t *testing.T) {
 	for index := range palettes {
 		for _, appearance := range []string{"dark", "light"} {
@@ -42,12 +51,12 @@ func TestReadingThemesHaveLegibleIndependentColors(t *testing.T) {
 func TestReadingInkMatchesLegacyPalette(t *testing.T) {
 	a := &desktop{}
 	a.prefs.Appearance = "dark"
-	a.prefs.Palette = 2
+	a.prefs.Palette = paletteAmber
 	colors := a.readingColors()
 	if colors.text != ui.Hex("#d7dedc") || colors.strong != ui.Hex("#c4b894") || colors.code != ui.Hex("#d4a574") || colors.codeBG.A != 0 {
 		t.Fatalf("amber palette: %+v", colors)
 	}
-	a.prefs.Palette = 3
+	a.prefs.Palette = paletteOcean
 	colors = a.readingColors()
 	if colors.code != ui.Hex("#8da5df").Mix(ui.Hex("#ffffff"), 0.28) {
 		t.Fatalf("retired ocean fallback code: %+v", colors.code)
@@ -55,7 +64,7 @@ func TestReadingInkMatchesLegacyPalette(t *testing.T) {
 }
 func TestReadingTypographySeparatesInlineAndFencedCode(t *testing.T) {
 	a := &desktop{}
-	a.prefs.Palette = 0
+	a.prefs.Palette = paletteBlue
 	conversation := &conversation{Messages: []map[string]any{{"role": "assistant"}}}
 	options := a.markdownOptions(conversation, 0)
 	if options.Theme.Font != "Inter" || options.Theme.CodeFont != "Inter" || options.Theme.FontSize != 16 || options.Theme.CodeSize != 1 {
@@ -78,7 +87,7 @@ func TestReadingTypographySeparatesInlineAndFencedCode(t *testing.T) {
 	if !found {
 		t.Fatalf("native fenced-code renderer lost code: %v", tt.Texts())
 	}
-	a.prefs.Palette = 4
+	a.prefs.Palette = paletteForest
 	options = a.markdownOptions(conversation, 0)
 	if options.Theme.Code != a.readingColors().code {
 		t.Fatal("cached message did not follow palette change")

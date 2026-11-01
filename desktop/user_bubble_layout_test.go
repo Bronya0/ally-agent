@@ -17,7 +17,7 @@ func TestUserBubbleLayout(t *testing.T) {
 			tt := ui.NewTester(func(c *ui.Context) {
 				c.SetTheme(a.theme())
 				ui.Column(c).FillWidth().Padding(20).Children(func() {
-					a.messageRow(c, conv, 0)
+					a.messageRow(c, conv, 0, newTranscriptRows(conv))
 				})
 			}, int(width), 700)
 
@@ -47,7 +47,7 @@ func TestUserBubbleHoverActions(t *testing.T) {
 		conv := &conversation{ID: "actions", Busy: busy, Messages: []map[string]any{{"role": "user", "content": content}}}
 		tt := ui.NewTester(func(c *ui.Context) {
 			c.SetTheme(a.theme())
-			ui.Column(c).Fill().Selectable().Children(func() { a.messageRow(c, conv, 0) })
+			ui.Column(c).Fill().Selectable().Children(func() { a.messageRow(c, conv, 0, newTranscriptRows(conv)) })
 		}, 700, 500)
 		bubble, _ := tt.Find("用户消息")
 		actions, ok := tt.Find("用户消息操作")

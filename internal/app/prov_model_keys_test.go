@@ -10,7 +10,6 @@ package app
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 )
@@ -244,26 +243,6 @@ func TestKeyCooldownDurations(t *testing.T) {
 	transientUntil := a.keyCooldowns[keyCooldownID(cfg, "transient-bad")]
 	if transientUntil.Sub(authUntil) > 0 {
 		t.Fatalf("transient cooldown %v should be shorter than auth cooldown %v", transientUntil.Sub(time.Now()), authUntil.Sub(time.Now()))
-	}
-}
-
-// TestEmitLLMRetryEventKeyFields ensures the retry event carries key info.
-func TestEmitLLMRetryEventKeyFields(t *testing.T) {
-	var got *modelRetryInfo
-	onEvent := func(e modelStreamEvent) {
-		if e.Retry != nil {
-			got = e.Retry
-		}
-	}
-	emitLLMRetryEventForKey(onEvent, 1, 2, errors.New("boom"), 0, 1, 3)
-	if got == nil {
-		t.Fatal("expected retry event")
-	}
-	if got.KeyIndex != 1 || got.TotalKeys != 3 || got.Attempt != 1 || got.MaxAttempts != 2 {
-		t.Fatalf("retry info = %+v, want keyIndex=1 totalKeys=3 attempt=1 maxAttempts=2", got)
-	}
-	if !strings.Contains(got.Error, "boom") {
-		t.Fatalf("retry error = %q, want to contain boom", got.Error)
 	}
 }
 

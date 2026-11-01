@@ -85,8 +85,6 @@ Use the standard inner layout; do not reimplement it to stretch the input.
 
 `SwitchWithOptions` 可配置 Small、Square、Tone、Disabled、Loading。按钮式 Radios 使用相连描边，普通 Radios 使用细环和主题色圆点。
 
-视觉预览：`ALLY_SEMANTIC_PREVIEW=1 CGO_ENABLED=0 go test ./desktop/uikit -run TestSemanticPreview -v`，输出深浅主题控件与悬浮信息预览 PNG（Base64）。
-
 `Quaternary`（次次次要）默认仅显示文字，悬停或按下时显示浅底；`ActionOptions.Selected` 可持续显示选中底色。Card 内的文字操作统一使用此样式，语义颜色保持不变。
 
 ## 交互动效约束
@@ -155,7 +153,6 @@ uikit.TabsWithOptions(c.Key("provider"), &state.Provider,
 - 标签字重固定，切换时不改变文字测量宽度；仅颜色／底色／底边平滑变化。
 - 页面水平溢出使用宿主现有 tabScroller，不换行挤压内容区。
 - 当前页面统一采用 C；窗口顶端的工作区标签保持独立样式。
-- 视觉预览：`ALLY_TABS_PREVIEW=1 CGO_ENABLED=0 go test ./desktop/uikit -run TestNativeTabStylesPreview -v`。
 
 状态色分为文字色与指示灯填充色。文字／图标使用 Theme.Success、Warning、Danger（浅色模式深一些以保证可读性）；小圆点由宿主 pillDotColor 提供清晰填充色，停用态使用浅灰。不要再在页面里调用固定深色模式常量充当状态文字色；不能把深色文字色直接用于浅色模式的小状态灯。Git 增删、工具结果、计划完成、子代理、更新标记均遵循此规则。
 

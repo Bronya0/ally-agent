@@ -1,13 +1,10 @@
 package uikit
 
 import (
-	"bytes"
-	"encoding/base64"
 	"fmt"
-	"github.com/egoist/mygo/ui"
-	"image/png"
-	"os"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestSelectAndTabs(t *testing.T) {
@@ -85,60 +82,6 @@ func TestSegmentedSelection(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSegmentedVisual(t *testing.T) {
-	if os.Getenv("ALLY_SEGMENTED_VISUAL") == "" {
-		t.Skip("optional visual snapshot")
-	}
-	appearance, proxy := 0, 1
-	tt := ui.NewTester(func(c *ui.Context) {
-		ui.Column(c).Fill().Children(func() {
-			for _, light := range []bool{false, true} {
-				theme := ui.DarkTheme()
-				if light {
-					theme = ui.LightTheme()
-				}
-				theme.Accent = ui.Hex("#d4a574")
-				c.SetTheme(theme)
-				ui.Column(c.Key(light)).FillWidth().Padding(20).Gap(12).Background(theme.Surface).Children(func() {
-					Segmented(c.Key("appearance"), &appearance, "深色", "浅色")
-					Segmented(c.Key("proxy"), &proxy, "关闭代理", "跟随系统代理", "手动代理")
-				})
-			}
-		})
-	}, 520, 280)
-	tt.Frame()
-	var b bytes.Buffer
-	if err := png.Encode(&b, tt.Image()); err != nil {
-		t.Fatal(err)
-	}
-	fmt.Println("UI_PREVIEW=" + base64.StdEncoding.EncodeToString(b.Bytes()))
-}
-
-func TestControlVisual(t *testing.T) {
-	if os.Getenv("ALLY_UI_VISUAL") == "" {
-		t.Skip("optional visual snapshot")
-	}
-	value := "API Key 认证"
-	tt := ui.NewTester(func(c *ui.Context) {
-		c.SetTheme(ui.DarkTheme())
-		c.DisableAnimations()
-		ui.Column(c).Fill().Padding(20).Gap(12).Children(func() {
-			FieldLabel(c, "认证方式")
-			Select(c.Key("auth"), &value, []string{"API Key 认证", "ChatGPT 登录"}).FillWidth().Label("认证方式选择")
-		})
-	}, 720, 260)
-	tt.Frame()
-	if err := tt.Click("认证方式选择"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	var b bytes.Buffer
-	if err := png.Encode(&b, tt.Image()); err != nil {
-		t.Fatal(err)
-	}
-	fmt.Println("UI_PREVIEW=" + base64.StdEncoding.EncodeToString(b.Bytes()))
 }
 
 func TestFormFieldsHaveGap(t *testing.T) {
