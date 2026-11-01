@@ -119,7 +119,8 @@ class MacReleaseTests(unittest.TestCase):
                     mock.patch.object(build, 'ripgrep', side_effect=fake_rg), \
                     mock.patch.object(build, 'legal_files', side_effect=fake_legal), \
                     mock.patch.object(Path, 'symlink_to'), \
-                    mock.patch.object(build.subprocess, 'check_output', side_effect=fake_archs):
+                    mock.patch.object(build.subprocess, 'check_output', side_effect=fake_archs), \
+                    mock.patch.dict(build.os.environ, {'BUILD_TAG': ''}):
                 build.macos(config)
             self.assertEqual({p.name for p in release.iterdir()}, {
                 'Ally-1.2.3-macos-universal.dmg',
