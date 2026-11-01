@@ -1,96 +1,161 @@
-# Ally Native（mygo 分支）
+# Ally
 
-Ally 的 MyGo v0.7.1 原生桌面实现，使用 Go 直接绘制界面，无需 WebView2。Agent 核心继续使用 `ally-dev` 模块中的后端实现。
+Ally Native 是一款面向本地项目的桌面 AI 编程助手。它使用 Go 与 MyGo 直接绘制桌面主界面，Agent 核心继续使用 `ally-dev` 后端。Ally 可以通过对话帮助你理解代码、编辑文件、搜索项目、管理任务并完成开发工作。
 
-## 运行与构建
+⭐ 如果 Ally 帮到了你，欢迎在 GitHub 点个 Star，这是对项目最大的支持，谢谢！
 
-需要 Go 1.27.3；Windows 开发优先使用 Git Bash。
+<p>
+  <a href="https://github.com/Bronya0/ally-agent/releases">
+    <img alt="下载 Ally" src="https://img.shields.io/badge/下载_Ally-GitHub_Releases-2ea44f?style=for-the-badge&logo=github">
+  </a>
+</p>
 
-开发入口只保留两个，直接双击即可：
+前往 [Releases 页面](https://github.com/Bronya0/ally-agent/releases)下载 Windows、macOS 或 Linux 安装包。
+
+![Ally Native 界面截图](docs/imgs/1.jpg)
+
+![Ally 界面截图](docs/img2.jpg)
+
+![Ally 界面截图](docs/img3.jpg)
+
+## 主要功能
+
+- 使用 Go 与 MyGo 绘制原生桌面界面，统一 Windows、macOS 和 Linux 上的主要交互与视觉样式
+- 通过自然语言对话、附件和持久化会话处理本地项目
+- 在工作区安全边界和版本校验保护下读取、搜索、创建、编辑及删除文件
+- 通过 SSH 操作远程主机工作区：读取、编辑、创建、删除文件，执行命令，并在本地与远端之间传输文件或目录，复用本机已有的 `ssh` 登录配置
+- 在聊天中直接查看可视化 Diff、多文件修改、命令输出和完整的工具失败原因
+- 支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 及兼容模型服务
+- 支持读取服务商推理字段，也可配置 `reasoning_content`、`think`、`sink` 等推理标签
+- 工作区级模型选择，每个项目可独立配置使用的模型
+- 可配置思考强度（reasoningEffort），按模型精细控制推理开销
+- 支持配置多个 API Key，自动优先级故障转移与冷却恢复，保障可用性
+- 内置服务商/模型预设目录，添加模型时自动填充 API 格式、地址与上下文窗口
+- 支持在聊天中安全渲染沙箱 HTML，用于小工具、交互预览和组件展示
+- 聊天中内联渲染 Mermaid 图表（滚轮缩放、拖拽平移、双击复位）、KaTeX 数学公式与高亮代码块
+- 可为支持视觉能力的模型附带图片输入，模型生成的图片直接在聊天中预览
+- 可将复杂任务委派给并行子代理，实时查看步骤、工具活动、Token 用量和最终摘要
+- 插件系统：一个 zip 包即可在侧栏新增一个整页，页面用纯 JS/TS 编写，HTTP、存储与工作区访问由清单声明
+- MCP 支持 stdio、SSE 和 Streamable HTTP，可使用表单或原始 JSON 配置
+- 使用可发现的 Skills 扩展工作流程，并通过全局记忆保存跨项目知识；内置技能含 `ally-agent`（Ally 使用手册）、`codegraph`、`playwright-cli`、`anydoc`（Office/PDF 转 Markdown）
+- 管理多个工作区、聊天会话、Todo 和重启后继续运行的定时任务，内置原生文件浏览器与文件编辑器
+- 支持短时命令和带任务中心日志查看的后台进程；Windows 会自动发现 Git Bash，必要时回退到 PowerShell
+- 支持抓取网页与调用 HTTP API，带响应大小上限、超时、重定向限制与每主机限速
+- 异步 Token 统计仪表盘，可视化用量趋势
+- 自定义聊天背景图，可调节透明度
+- 支持深色、浅色和自动主题，以及多种强调色；欢迎页提供多种内置形象与自定义图片
+- Windows 与 macOS 自动升级（macOS 走 DMG 替换流程），失败时暂存目录自动回滚
+- 可跟随 Windows 或 macOS 系统代理，或手动配置 HTTP/HTTPS/SOCKS5 代理，并统一应用到模型、HTTP 工具、MCP、命令和后台服务
+- 提供中文和英文界面，包括启动警告、设置与工具状态信息
+- 发行包已内置 ripgrep，无需单独安装即可搜索代码
+
+## 开始使用
+
+1. 从 [GitHub Releases](https://github.com/Bronya0/ally-agent/releases) 下载对应平台的软件包。
+2. 启动 Ally 并选择一个项目目录。
+3. 打开设置，配置模型服务、模型名称、API 地址和 API Key。
+4. 开始与 Ally 对话。
+
+Windows 发行包为 ZIP，解压后运行 `Ally.exe`。macOS 发行包为 DMG，应用使用免费的 ad-hoc 签名且未做公证；如果首次打开时被系统拦截，请在 Finder 中按住 Control 点击 `Ally.app`，再选择“打开”。Linux 提供 x64 和 ARM64 压缩包，当前需要手动下载和替换版本。
+
+Ally Native 沿用原版的 `~/.ally_agent` 配置和会话数据。常用快捷键：Enter 发送，Ctrl+Enter 换行，Esc 中断当前会话或工具调用。
+
+## 分阶段工具调用
+
+模型可以在一次回复里发多个工具调用，每个调用可以带一个可选的段号（`stage`）。同一段内的调用并发执行。上一段的调用全部结束后才会进入下一段，包括仍在并发上限后排队的调用。任何一处真实失败都会让后续段停止执行，并把跳过原因返回给模型；已经完成的写入、安装和服务不会回滚。所以“先改代码，再跑测试，最后校验”这类有先后的任务，用段号表达就够了，不必拆成多轮对话。
+
+段号只排先后，不传值。依赖上一步返回结果的参数（比如文件版本号）仍然需要分轮发起。
+
+```mermaid
+flowchart LR
+  subgraph S0["stage 0 并发执行"]
+    A["读 src/app.go"]
+    B["grep TODO"]
+    C["命令 git status"]
+  end
+  subgraph S1["stage 1"]
+    D["编辑 src/app.go"]
+  end
+  subgraph S2["stage 2"]
+    E["命令 go test"]
+  end
+  S0 -->|"全部结束才放行"| S1
+  S1 -->|"全部结束才放行"| S2
+```
+
+## 插件系统
+
+插件就是一个 zip 包，装进来后侧栏会多出一个整页。页面用纯 JavaScript/TypeScript 编写，不用写 Go、不用打包、不用重启应用。页面通过 Ally 注入的 `host` 对象使用后端能力，包括 HTTP、插件私有存储、工作区只读访问、事件和主题。
+
+在**插件**页管理插件：导入 zip（也可以直接拖进来）、从已展开的目录安装、导出（可选是否包含插件数据）、启用或禁用、删除。
+
+一个最小的 `plugin.json`：
+
+```json
+{
+  "id": "my-helper",
+  "name": "工单助手",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "menu": [{ "key": "helper", "title": "工单", "icon": "ApiOutlined" }],
+  "permissions": { "http": ["api.example.com"], "workspace": "read" }
+}
+```
+
+入口模块导出 `mount(element, host)`，返回值是卸载函数。
+
+- 清单只认文档列出的键，写了未知键会在导入时报错。
+- 未在 `permissions.http` 中声明的主机，HTTP 请求一律拒绝。
+- 用相同 `id` 重新导入即为覆盖升级，`host.store` 中的数据会保留。
+- 插件代码运行在主页面上下文中，不是沙箱：它可以直接调用后端绑定，安装时也不会弹出权限确认。请只安装你信任的插件。
+- 插件页以及 HTML、Mermaid 内容预览按需使用受控 WebView；主界面与常规页面仍由 Go 和 MyGo 原生绘制。
+
+完整说明（`host` API、样式规范与常见坑）见 [docs/plugin-system.md](docs/plugin-system.md)。也可以把这个链接发给 AI 助手，让它帮你写插件。
+
+## 本地构建
+
+需要 Go 1.27.3 和 Python 3.9+。Windows 与 macOS 开发构建可以直接使用以下入口：
 
 | 系统 | 入口 | 产物 |
 | --- | --- | --- |
 | Windows | `scripts/build.bat` | `dist/ally-native.exe` 与 `dist/tools/rg.exe` |
-| macOS | `scripts/build.command` | 当前机器架构的 `dist/Ally.app`，含 rg 和 Ad-hoc 签名 |
+| macOS | `scripts/build.command` | 当前机器架构的 `dist/Ally.app` |
 
-完成或失败后窗口保留，便于查看结果。更新前先关闭正在运行的开发版。
-
-```bash
-go run .                          # 直接运行源码
-python scripts/build.py dev       # 开发编译的命令行入口，无交互暂停
-bash scripts/build-all.sh         # 仅 macOS：全平台发行打包，供 GitHub CI 使用
-```
-
-构建依赖 Go 1.27.3 和 Python 3.9+；macOS 使用系统自带的 lipo、codesign、hdiutil（需安装 Command Line Tools）。
-本地入口与 GitHub CI 共用 `scripts/build.py`，无需 Node；Windows 双击脚本不再依赖 Git Bash。
-所有入口可以从任意目录启动。`build-all.sh` 不暂停，不启动 GUI，构建失败会以非零状态退出。
-
-正式发行构建通过 `BUILD_TAG` 和 `ALLY_RELEASE_NOTES_BODY` 嵌入版本号与 Markdown 更新说明；GitHub Release 发布事件会自动提供这两项。说明随各平台程序交付，无需联网。正式版本有正文且尚未读过时，初始化完成后弹出一次限高滚动窗口，关闭后记录到 `native-ui.json`；设置的“版本亮点”可再次查看。开发构建不注入、不弹窗，未提供正文的手动发行构建也不弹窗。打包结束（包括失败）会恢复仓库中的空说明文件。
-
-Windows 开发 exe 固定为 `dist/ally-native.exe`，被占用时明确报错，关闭程序后重试。
-发行包放在 `dist/release/`：Windows x64 / arm64 ZIP 解压后包含对应架构的 `Ally.exe`、`tools/rg.exe`、README 和许可文件；
-Linux tar.gz 包含单一顶层目录、可执行文件、`tools/rg` 和许可文件，不发布 deb。
-Windows 构建使用纯 Go 编译和固定版本的 go-winres 添加图标、版本信息及 DPI manifest，
-不调用 NSIS，不生成 setup；go-winres 首次运行由 Go 下载。
-macOS 提供 universal、Intel（x64）和 Apple 芯片（arm64）三个 DMG，应用和内置 rg 的架构一致，均做免费的 ad-hoc 签名，不需要付费证书或公证。
-打包器从仓库的 ripgrep 归档提取对应二进制，不要求 Node 或从网络下载 rg。
-
-默认读取原版的 `~/.ally_agent` 配置和会话。同一数据目录只允许一个进程运行，独立试用可指定目录：
+也可以从命令行运行：
 
 ```bash
-ALLY_DATA_DIR="D:/ally-native-data" ./dist/ally-native.exe
-```
-
-Enter 发送，Ctrl+Enter 换行，Esc 中断当前会话或工具调用；弹窗打开时 Esc 优先关闭弹窗。标签栏支持鼠标滚轮横向滚动。侧栏和资源树宽度可拖拽调整并自动保存。
-
-## 代码目录
-
-```text
-main.go                  原生程序入口，只调用 desktop.Run
-desktop/                 原生页面、窗口状态、事件路由和可复用 UI
-  page_*.go              按功能命名的页面及表单
-  widgets.go             按钮、标签、表单、弹窗等公共组件
-  theme.go               配色、尺寸、字体和图标样式
-  desktop.go             桌面生命周期与会话协调
-  window.go              窗口与页面组合
-  *_test.go              原生界面交互和布局回归测试
-internal/app/            Agent 业务与桌面宿主适配（host_*.go）
-internal/tools/          可独立测试的工具逻辑
-internal/sandbox/        命令沙箱
-resources/               嵌入的图标、头像与许可说明
-migration/legacy-host/   旧 Wails 宿主实现的迁移参考，不参与编译
-docs/                    后端文档与原生界面架构说明
-```
-
-界面保持在根目录的 `desktop` 包内，使页面能共享受主线程约束的状态，无需导出内部控件或引入跨页面全局变量。界面公共样式收口在 `theme.go` 与 `widgets.go`，素材只通过 `resources` 包嵌入。目录边界详见 [原生界面架构](docs/native-architecture.md)。
-
-## 验证
-
-```bash
-CGO_ENABLED=0 go test -p 1 ./...
-go tool mygo vet .
+go run .
 python scripts/build.py dev
 ```
 
-全平台发行构建在一个 macOS runner 上通过共享脚本交叉生成 Windows x64/ARM64、Linux x64/ARM64 和 macOS universal/Intel/ARM64 共七个发行包。Windows 只发布包含 exe 和资源的绿色 ZIP。macOS 生成 DMG，应用使用免费的 ad-hoc 签名，不做 Developer ID 签名或公证；首次打开时可能需要在 Finder 中 Control-click 并选择“打开”。MyGo CLI 版本由 `go.mod` 的 tool directive 固定。
-
-测试使用临时目录和本地模拟模型服务，不依赖真实模型密钥。页面和弹窗测试覆盖多次重建及窗口尺寸变化；交互测试覆盖输入快捷键、主题浮层、表单、标签切换、分隔条拖拽和配置持久化。
-
-可用独立数据目录执行真实窗口启动检查：
+全平台发行构建仅在 macOS 上执行，需显式指定稳定版标签：
 
 ```bash
-ALLY_DATA_DIR="D:/ally-native-smoke" ./dist/ally-native.exe --smoke
+BUILD_TAG=v2.1.0 bash scripts/build-all.sh
 ```
 
-`--smoke` 创建原生窗口，约四秒后保存并退出。生成文件在 `dist/`，本地调试文件在 `.tmp/`，均不提交。
+构建会生成 Windows x64/ARM64、macOS Universal/Intel/Apple Silicon 和 Linux x64/ARM64 共七个发行包。更多构建与架构说明见 [升级兼容文档](docs/update-compatibility.md)。
 
-## 功能与边界
+## 许可证
 
-原生界面包含 Agent 对话、技能、MCP 和工具管理、对话与图片模型、SSH、任务中心、用量统计、插件管理和设置。知识库与游戏页面暂不接入导航。图片文件使用原生预览，文本文件使用 MyGo 编辑器。模型调用、工具执行、沙箱、上下文和会话持久化由后端负责。
+Copyright (C) 2026 Bronya0。
 
-页面已迁移并保留持续完善的交互测试；这不表示每个视觉细节都与原 Vue 页面完全一致。插件网页不会在本分支中创建 WebView。动画 WebP 当前按静态首帧显示；支持姿势集的内置头像会切换姿势。发行构建可由单个 macOS runner 交叉生成各平台包；仍需在对应系统做运行验收，不能直接用旧 Wails 发行包替换本程序。
+Ally 是采用 [GNU General Public License v3.0 only](LICENSE)（`GPL-3.0-only`）发布的自由软件。你可以依照该许可证使用、研究、修改和重新分发本项目。分发 Ally 或其修改版本时，必须提供对应源代码并保留 GPLv3 许可证声明。
 
-原项目版权和 GPL-3.0 许可保留，详见 [LICENSE](LICENSE)。第三方素材与组件说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+发行包包含采用自身 MIT/Unlicense 条款的 [ripgrep](https://github.com/BurntSushi/ripgrep)。其他第三方资源保留各自的许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-升级兼容规则见 [升级兼容说明](docs/update-compatibility.md)。发行资产名保留 Release tag 的
-完整拼写（包括 v 前缀），Windows x64 和 macOS universal 沿用 main 的精确名称。
+## 联系方式
+
+问题反馈、建议或合作请联系：[tangssst@qq.com](mailto:tangssst@qq.com)
+
+## 参考项目
+
+Ally 在部分实现细节上参考了下列项目与工程文章的做法，在此致谢。各项目遵循其自身许可证，Ally 与它们没有隶属关系。
+
+- [Anthropic — Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents)
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+- [Anthropic — Managed Agents](https://www.anthropic.com/engineering/managed-agents)
+- [Kimi Code CLI（kimicode）](https://github.com/MoonshotAI/kimi-code) — 亮色主题色板、图片 token 估算、中断提醒等交互与计量细节
+- [Codex CLI](https://github.com/openai/codex) — Responses 协议的会话缓存键与用量字段处理
+- [pi](https://github.com/earendil-works/pi) — 编辑模糊匹配、上下文估算、思考档位能力判定、溢出恢复压缩
+- [OpenCode](https://github.com/sst/opencode) — 请求头与 User-Agent 等兼容性约定
