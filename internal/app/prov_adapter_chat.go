@@ -53,24 +53,14 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	// reasoningEffortFamilies).
 	reasoningWire := reasoningWireForAdapter(cfg, apiFormatOpenAIChat, model, cfg.ReasoningEffort)
 	stopThinking := reasoningWire.StopThinking
+	promptCacheKey := promptCacheKeyForRequest(cfg, apiFormatOpenAIChat, model)
+	pinStore := promptCachePinStore(cfg)
 	streamDone := &sseDoneWatcher{}
 	base := modelHTTPClient(cfg, true, 0)
 	rt := base.Transport
 	if rt == nil {
 		rt = http.DefaultTransport
 	}
-	base.Transport = &chatRequestRewriteTransport{
-		base:           rt,
-		reasoningKey:   reasoningKey,
-		turnDetails:    turnDetails,
-		headers:        sessionAffinityHeaders(cfg),
-		promptCacheKey: promptCacheKeyForRequest(cfg, apiFormatOpenAIChat, model),
-		pinStore:       promptCachePinStore(cfg),
-		streamDone:     streamDone,
-		stopThinking:   stopThinking,
-	}
-	clientCfg.HTTPClient = base
-	client := legacyopenai.NewClientWithConfig(clientCfg)
 
 	streamReq := legacyopenai.ChatCompletionRequest{
 		Model:         model,
@@ -102,6 +92,24 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	if len(tools) > 0 {
 		streamReq.Tools = normalizeToolsForOpenAIChat(tools)
 	}
+	// The rewrite transport only needs to buffer and inspect the request body
+	// when one of its normalizations can actually apply. Deciding that from the
+	// typed request keeps plain prompts on the SDK's original replayable body
+	// instead of copying and re-parsing the encoded JSON once more.
+	skipRewrite := !chatRequestRewriteNeeded(streamReq, reasoningKey, turnDetails, promptCacheKey, pinStore, stopThinking)
+	base.Transport = &chatRequestRewriteTransport{
+		base:           rt,
+		reasoningKey:   reasoningKey,
+		turnDetails:    turnDetails,
+		headers:        sessionAffinityHeaders(cfg),
+		promptCacheKey: promptCacheKey,
+		pinStore:       pinStore,
+		streamDone:     streamDone,
+		stopThinking:   stopThinking,
+		skipRewrite:    skipRewrite,
+	}
+	clientCfg.HTTPClient = base
+	client := legacyopenai.NewClientWithConfig(clientCfg)
 	// Note: Do NOT set streamReq.ToolChoice = "none" when len(tools) == 0.
 	// The official OpenAI Chat Completions API specification (and compatible
 	// gateways like Azure, Groq, DeepSeek) strictly rejects requests with

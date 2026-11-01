@@ -444,9 +444,11 @@ func readStatsDayFile(path, dateStr string) ([]statsRecord, error) {
 		return nil, err
 	}
 	defer f.Close()
-	if info, err := f.Stat(); err != nil {
+	info, err := f.Stat()
+	if err != nil {
 		return nil, err
-	} else if !info.Mode().IsRegular() || info.Size() > statsMaxFileBytes {
+	}
+	if !info.Mode().IsRegular() || info.Size() > statsMaxFileBytes {
 		return nil, fmt.Errorf("stats file exceeds %d bytes", statsMaxFileBytes)
 	}
 
@@ -455,7 +457,13 @@ func readStatsDayFile(path, dateStr string) ([]statsRecord, error) {
 	if err != nil || token != json.Delim('[') {
 		return nil, errors.New("stats file must contain a JSON array")
 	}
-	records := make([]statsRecord, 0, minInt(statsMaxRecordsPerDay, 1024))
+	// Size the day's backing array from the file instead of reserving 1,024
+	// records for every day: files observed in practice average a little over
+	// 200 bytes per record, so dividing by 256 stays below the decoded count
+	// and lets append grow once at most for typical days. The old fixed
+	// preallocation kept about 4 MiB alive across the 90-day retention window.
+	capacity := minInt(1024, int(info.Size()/256))
+	records := make([]statsRecord, 0, minInt(statsMaxRecordsPerDay, capacity))
 	decoded := 0
 	next := 0
 	for decoder.More() {

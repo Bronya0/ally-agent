@@ -1219,3 +1219,129 @@ func TestParseStreamReasoningSupportsReasoningText(t *testing.T) {
 		t.Fatal("reasoning_text must be a known replay dialect")
 	}
 }
+
+// TestChatRequestRewriteNeededConservative locks the outer fast path: only a
+// request none of the transport's rules can touch may skip the body rewrite.
+// Every global field and every tool-bearing message must stay on the old path.
+func TestChatRequestRewriteNeededConservative(t *testing.T) {
+	plain := legacyopenai.ChatCompletionRequest{
+		Messages: []legacyopenai.ChatCompletionMessage{
+			{Role: legacyopenai.ChatMessageRoleUser, Content: "hello"},
+			{Role: legacyopenai.ChatMessageRoleAssistant, Content: "hi"},
+		},
+	}
+	if chatRequestRewriteNeeded(plain, "", nil, "", false, reasoningStopThinkingNone) {
+		t.Fatal("a plain request must be allowed to skip the rewrite")
+	}
+
+	toolMessage := plain
+	toolMessage.Messages = append([]legacyopenai.ChatCompletionMessage(nil), plain.Messages...)
+	toolMessage.Messages = append(toolMessage.Messages, legacyopenai.ChatCompletionMessage{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call_1"})
+	if !chatRequestRewriteNeeded(toolMessage, "", nil, "", false, reasoningStopThinkingNone) {
+		t.Fatal("a tool message must keep the rewrite path")
+	}
+
+	assistantToolCall := plain
+	assistantToolCall.Messages = append([]legacyopenai.ChatCompletionMessage(nil), plain.Messages...)
+	assistantToolCall.Messages = append(assistantToolCall.Messages, legacyopenai.ChatCompletionMessage{
+		Role:      legacyopenai.ChatMessageRoleAssistant,
+		ToolCalls: []legacyopenai.ToolCall{{ID: "call_1", Type: legacyopenai.ToolTypeFunction}},
+	})
+	if !chatRequestRewriteNeeded(assistantToolCall, "", nil, "", false, reasoningStopThinkingNone) {
+		t.Fatal("an assistant tool call must keep the rewrite path")
+	}
+
+	if !chatRequestRewriteNeeded(plain, defaultReasoningTag, nil, "", false, reasoningStopThinkingNone) {
+		t.Fatal("a reasoning backfill key must keep the rewrite path")
+	}
+	if !chatRequestRewriteNeeded(plain, "", map[string]json.RawMessage{"call_1": json.RawMessage(`[]`)}, "", false, reasoningStopThinkingNone) {
+		t.Fatal("captured reasoning details must keep the rewrite path")
+	}
+	if !chatRequestRewriteNeeded(plain, "", nil, "ally:key", false, reasoningStopThinkingNone) {
+		t.Fatal("a prompt cache key must keep the rewrite path")
+	}
+	if !chatRequestRewriteNeeded(plain, "", nil, "", true, reasoningStopThinkingNone) {
+		t.Fatal("pinning store=false must keep the rewrite path")
+	}
+	if !chatRequestRewriteNeeded(plain, "", nil, "", false, reasoningStopThinkingQwenEnableFalse) {
+		t.Fatal("a stop-thinking field must keep the rewrite path")
+	}
+}
+
+// TestChatRequestRewriteTransportSkipsBodyCopy verifies the outer fast path
+// itself: an unrewritable request reaches the base transport byte-for-byte,
+// keeps its SDK-provided replayable body, and still gets the SSE [DONE]
+// watcher that distinguishes a completed stream from a cut connection.
+func TestChatRequestRewriteTransportSkipsBodyCopy(t *testing.T) {
+	const payload = `{"model":"gpt-test","messages":[{"role":"user","content":"hello"}],"stream":true}`
+	capture := &rewriteCaptureTransport{}
+	watcher := &sseDoneWatcher{}
+	transport := &chatRequestRewriteTransport{
+		base:        capture,
+		streamDone:  watcher,
+		skipRewrite: true,
+	}
+	req, err := http.NewRequest(http.MethodPost, "https://example.test/v1/chat/completions", bytes.NewReader([]byte(payload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(capture.body) != payload {
+		t.Fatalf("base transport body = %q, want the original payload", capture.body)
+	}
+	if capture.contentType != "application/json" {
+		t.Fatalf("Content-Type = %q", capture.contentType)
+	}
+	if req.GetBody == nil {
+		t.Fatal("the SDK request must keep its replayable body")
+	}
+	replayed, err := req.GetBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayedBody, err := io.ReadAll(replayed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = replayed.Close()
+	if string(replayedBody) != payload {
+		t.Fatalf("replayed body = %q, want %q", replayedBody, payload)
+	}
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if !watcher.Done() {
+		t.Fatalf("SSE watcher did not observe [DONE]; body=%q", responseBody)
+	}
+}
+
+type rewriteCaptureTransport struct {
+	body         []byte
+	contentType  string
+	requestCount int
+}
+
+func (t *rewriteCaptureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.requestCount++
+	t.contentType = req.Header.Get("Content-Type")
+	var err error
+	t.body, err = io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Request:    req,
+	}, nil
+}

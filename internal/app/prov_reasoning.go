@@ -750,6 +750,10 @@ type chatRequestRewriteTransport struct {
 	// the actual parameters in reasoningStopThinkingFields (see
 	// patchChatRequestFields).
 	stopThinking reasoningStopThinking
+	// skipRewrite records that no normalization can apply to this request. The
+	// zero value keeps the original inspect-and-patch path, so a transport built
+	// without the typed-request check never silently skips a rewrite.
+	skipRewrite bool
 }
 
 func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -766,24 +770,26 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 	if req.Body == nil || req.Method != http.MethodPost {
 		return base.RoundTrip(req)
 	}
-	body, err := io.ReadAll(req.Body)
-	_ = req.Body.Close()
-	if err != nil {
-		return nil, err
+	if !t.skipRewrite {
+		body, err := io.ReadAll(req.Body)
+		_ = req.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		rewritten := body
+		if patched, ok := patchChatRequestFields(body, t.reasoningKey, t.turnDetails, t.promptCacheKey, t.pinStore, t.stopThinking); ok {
+			rewritten = patched
+		}
+		// Restore a replayable body: the SDK may retry the request object, so
+		// GetBody must yield the rewritten bytes every time — otherwise net/http
+		// fails retries with "ContentLength=X with Body length 0".
+		req = req.Clone(req.Context())
+		req.Body = io.NopCloser(bytes.NewReader(rewritten))
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(rewritten)), nil
+		}
+		req.ContentLength = int64(len(rewritten))
 	}
-	rewritten := body
-	if patched, ok := patchChatRequestFields(body, t.reasoningKey, t.turnDetails, t.promptCacheKey, t.pinStore, t.stopThinking); ok {
-		rewritten = patched
-	}
-	// Restore a replayable body: the SDK may retry the request object, so
-	// GetBody must yield the rewritten bytes every time — otherwise net/http
-	// fails retries with "ContentLength=X with Body length 0".
-	req = req.Clone(req.Context())
-	req.Body = io.NopCloser(bytes.NewReader(rewritten))
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(rewritten)), nil
-	}
-	req.ContentLength = int64(len(rewritten))
 	resp, err := base.RoundTrip(req)
 	if err != nil || resp == nil || resp.Body == nil || t.streamDone == nil {
 		return resp, err
@@ -792,6 +798,29 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 		resp.Body = &sseDoneReadCloser{rc: resp.Body, watcher: t.streamDone}
 	}
 	return resp, nil
+}
+
+// chatRequestRewriteNeeded reports whether any chatRequestRewriteTransport
+// normalization can apply to the typed request. It is deliberately
+// conservative: whenever a global field or replay ledger may matter it says
+// true, so the only skipped work is a plain request for which no rule could
+// change the body. False negatives here would silently drop a provider
+// compatibility fix; false positives only cost the old inspect-and-patch path.
+func chatRequestRewriteNeeded(req legacyopenai.ChatCompletionRequest, reasoningKey string, turnDetails map[string]json.RawMessage, promptCacheKey string, pinStore bool, stopThinking reasoningStopThinking) bool {
+	if reasoningKey != "" || len(turnDetails) > 0 || promptCacheKey != "" || pinStore || len(reasoningStopThinkingFields[stopThinking]) > 0 {
+		return true
+	}
+	for _, message := range req.Messages {
+		switch message.Role {
+		case legacyopenai.ChatMessageRoleTool:
+			return true
+		case legacyopenai.ChatMessageRoleAssistant:
+			if len(message.ToolCalls) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // patchChatRequestFields applies the Chat Completions request normalizations

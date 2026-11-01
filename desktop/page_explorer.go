@@ -250,6 +250,17 @@ func (a *desktop) fileTree(c *ui.Context) {
 }
 
 func (a *desktop) fileRows(c *ui.Context, entries []backend.FileEntry) {
+	// The active file and palette cannot change while one view pass builds;
+	// resolving them once keeps filepath.Clean and ToLower out of the per-row
+	// path. The recursive helper carries the resolved values down the tree.
+	activePath := ""
+	if file := a.activeFile(); file != nil {
+		activePath = file.Path
+	}
+	a.fileRowsWithState(c, entries, activePath, a.currentPalette().dark)
+}
+
+func (a *desktop) fileRowsWithState(c *ui.Context, entries []backend.FileEntry, activePath string, dark bool) {
 	services := c.Services()
 	if a.fileOpen == nil {
 		a.fileOpen = map[string]bool{}
@@ -269,17 +280,14 @@ func (a *desktop) fileRows(c *ui.Context, entries []backend.FileEntry) {
 		var expanded *bool
 		if entry.Dir {
 			expanded = &open
-			children = func() { a.fileRows(c, a.fileChildren[path]) }
+			children = func() { a.fileRowsWithState(c, a.fileChildren[path], activePath, dark) }
 		}
 		row := ui.TreeItem(c.Key("file-"+path), name, expanded, children).
 			Height(23).FontSize(fsSmall).Label(entry.Name)
-		if a.currentPalette().dark {
+		if dark {
 			row.TextColor(ui.Hex("#cccccc"))
 		}
-		selected := false
-		if file := a.activeFile(); file != nil {
-			selected = file.Path == entry.Path
-		}
+		selected := activePath != "" && activePath == entry.Path
 		if a.filesF.InfoOpen {
 			selected = a.filesF.InfoPath == entry.Path
 		}
