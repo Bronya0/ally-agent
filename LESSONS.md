@@ -75,3 +75,11 @@
 [py-stdin-src] 2026-11-01 中危 把含中文的 py 脚本经 stdin 喂 python3.9：按块解码，中文跨块即报 Non-UTF-8；首行补 coding cookie。@internal/app
 
 [transcript-row-owner] 2026-11-01 中危 谁画这条消息只能由 transcriptRows 一处定；渲染与分页各自判一次，空行就会照旧吃列间距。@desktop/transcript_rows.go
+
+[render-parse] 2026-11-01 高危 渲染期每帧重新解析工具参数/结果，被帧数放大成 GC 压力；派生值挂 ui.Local memo，读同一份 JSON。@desktop/tool_cards.go
+
+[deref-copy] 2026-11-01 中危 cloneMap 后 resolveNode 无条件重建全树，无 $ref 时白拷一遍；按 hasAnyRef 跳过。@internal/tools/schemautil
+
+[schema-map-shared] 2026-11-01 高危 schemautil.Map 的返回值会被 responses 适配器写入 strict/description，禁止返回共享的冻结清单。@internal/app/prov_adapter_responses.go
+
+[collapse-alloc] 2026-11-01 中危 折叠态仍分配行结构与派生缓存，长对话里每组常驻；折叠即释放。@desktop/tool_cards.go
