@@ -772,13 +772,10 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					content = tailLines(content, 6)
 				}
 				if content != "" {
-					if state == "running" || state == "pending" {
-						ui.Box(c).FillWidth().Height(150).Clip().Children(func() {
-							toolSourceWindow(c, key+"-source", content, str(args, "path"), false, startLine, a.secondaryInk())
-						})
-					} else {
-						toolSourceWindow(c, key+"-source", content, str(args, "path"), open, startLine, a.secondaryInk())
-					}
+					// One shape from the first streamed line to the result: a fixed-height
+					// box while the file was still arriving left a short card taller than its
+					// finished form, and finishing pulled everything below it up.
+					toolSourceWindow(c, key+"-source", content, str(args, "path"), open, startLine, a.secondaryInk())
 				}
 			case name == "suggest":
 				ui.Row(c).Wrap().Gap(6).Children(func() {
