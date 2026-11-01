@@ -207,10 +207,8 @@ func (a *desktop) messageRow(c *ui.Context, t *conversation, i int, rows *transc
 	showStats := row.Hovered()
 	row.Children(func() {
 		switch kind {
-		case rowReadGroup:
-			a.readGrepGroupCard(c, t, i)
-		case rowCommandGroup:
-			a.commandGroupCard(c, t, i)
+		case rowReadGroup, rowCommandGroup:
+			a.toolActivityGroupCard(c, t, i)
 		default:
 			a.messageBody(c, t, i, m, role)
 		}

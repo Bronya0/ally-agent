@@ -40,7 +40,7 @@ var toolTable = map[string]toolDescriptor{
 	"remote_delete_path": {"Remote Deleting", "Remote Deleted", "Remote delete failed", true, false},
 	"command":            {"Running", "Ran", "Command failed", true, true},
 	"remote_run_command": {"Remote Running", "Remote Ran", "Remote command failed", true, true},
-	"grep":               {"Searching", "Searched", "Search failed", false, false},
+	"grep":               {"Grepping", "Grep", "Grep failed", false, false},
 	"list":               {"Listing", "Listed", "List failed", true, false},
 	"glob":               {"Matching", "Matched", "Match failed", true, false},
 	"http_request":       {"Requesting", "Requested", "Request failed", true, true},
@@ -142,108 +142,237 @@ func isFoldableReadTool(m map[string]any) bool {
 	return false
 }
 
-// readGrepGroupEntry is one folded call inside a read-grep-list group.
-type readGrepGroupEntry struct {
-	verb   string
-	title  string
-	detail string
-	state  string
+// toolGroupEntry is one tree item in a consecutive read/search/list/command
+// run. Reads that return several paths retain one leaf per path; commands keep
+// their message so the result can be loaded only when opened.
+type toolGroupEntry struct {
+	index   int
+	message map[string]any
+	name    string
+	verb    string
+	title   string
+	summary string
+	detail  string
+	state   string
 }
 
-// readGrepGroupCard mirrors main's ReadGrepGroupCard: consecutive
-// read/grep/list calls render as one collapsed row ("读取 N 次，搜索 M 次，
-// 罗列 K 次 ›"); expanding lists each call in order. The folded row carries
-// no status icon and never turns red for a failed child — failures show on
-// the expanded entries, same as main.
-func (a *desktop) readGrepGroupCard(c *ui.Context, t *conversation, index int) {
-	key := fmt.Sprintf("%s-readgroup-%d", t.ID, index)
+func isFoldableToolGroupItem(m map[string]any) bool {
+	return isToolRecord(m) && (isFoldableReadTool(m) || isFoldableCommand(m))
+}
+
+func readGrepGroupName(m map[string]any) string {
+	name := str(m, "name")
+	if name == "" {
+		name = str(m, "toolName")
+	}
+	return toolKind(name)
+}
+
+func toolGroupReadSummary(result map[string]any) string {
+	if str(result, "error") != "" {
+		return ""
+	}
+	start, end := int(num(result, "startLine")), int(num(result, "endLine"))
+	readLines := -1
+	if boolOf(result, "emptyRange") {
+		readLines = 0
+	} else if start > 0 {
+		if end >= start {
+			readLines = end - start + 1
+		} else if end == 0 {
+			readLines = 0
+		}
+	} else if _, exists := result["totalLines"]; exists {
+		readLines = int(num(result, "totalLines"))
+	}
+	if readLines < 0 {
+		return ""
+	}
+	unit := "lines"
+	if readLines == 1 {
+		unit = "line"
+	}
+	return fmt.Sprintf("%d %s", readLines, unit)
+}
+
+func toolGroupGrepSummary(result map[string]any) string {
+	hits := -1
+	if _, exists := result["hits"]; exists {
+		hits = int(num(result, "hits"))
+	} else if _, exists := result["count"]; exists {
+		hits = int(num(result, "count"))
+	} else if _, exists := result["matches"]; exists {
+		hits = 0
+		for _, raw := range list(result, "matches") {
+			if match, ok := raw.(map[string]any); ok {
+				hits += len(list(match, "lines"))
+			} else {
+				hits++
+			}
+		}
+	}
+	if hits < 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d hits", hits)
+}
+
+func toolGroupListSummary(result map[string]any) string {
+	count, exists := result["count"]
+	if !exists || count == nil {
+		count = len(list(result, "entries"))
+		if count == 0 {
+			count = len(list(result, "matches"))
+		}
+	}
+	parts := []string{fmt.Sprintf("%v 项", count)}
+	if boolOf(result, "truncated") {
+		parts = append(parts, "已截断")
+	}
+	return strings.Join(parts, "，")
+}
+
+func toolGroupResultSummary(name string, result map[string]any) string {
+	switch name {
+	case "read", "remote_read", "batch_read":
+		return toolGroupReadSummary(result)
+	case "grep":
+		return toolGroupGrepSummary(result)
+	case "list", "glob":
+		return toolGroupListSummary(result)
+	}
+	return ""
+}
+
+// toolActivityGroupCard draws one card for a consecutive run of read, grep,
+// list and command calls. The head message decides the wording; entries load
+// their output only when opened. a11yLabel prefixes the hidden control label
+// so the header stays findable by tests and assistive tooling.
+func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index int) {
+	if index < 0 || index >= len(t.Messages) || !isFoldableToolGroupItem(t.Messages[index]) {
+		return
+	}
+	headIsCommand := isFoldableCommand(t.Messages[index])
+	a11yLabel := "读取分组 "
+	groupType := "readgroup"
+	if headIsCommand {
+		groupType, a11yLabel = "commandgroup", "命令分组 "
+	}
+	key := fmt.Sprintf("%s-%s-%d", t.ID, groupType, index)
 	open := t.uiState().ToolOpen[key]
-	container := ui.Column(c.Key("tool-" + key)).Gap(2)
+	container := ui.Column(c.Key("tool-" + key)).FillWidth().MinWidth(0).Gap(2)
 	extra := ui.Local(container, "entries-extra", func() int { return 0 })
 	if !open {
 		*extra = 0
 	}
-	var entries []readGrepGroupEntry
-	reads, greps, lists := 0, 0, 0
-	end := index
+
 	_, windowEnd := a.chatMessageWindow(t)
-	for i := index; i < windowEnd; i++ {
-		m := t.Messages[i]
-		if str(m, "role") != "tool_call" && str(m, "toolCallId") == "" {
-			break
-		}
-		if !isFoldableReadTool(m) {
-			break
-		}
-		name := str(m, "name")
-		if name == "" {
-			name = str(m, "toolName")
-		}
-		name = toolKind(name)
-		if !open || i-index >= 100+*extra {
-			switch name {
-			case "grep":
-				greps++
-			case "list", "glob":
-				lists++
-			default:
-				reads++
-			}
-			end = i
-			continue
-		}
-		args := parseToolArgs(str(m, "args"))
-		title := toolArgSummary(name, args)
-		switch name {
+	end := index
+	reads, greps, lists, commands := 0, 0, 0, 0
+	for i := index; i < windowEnd && isFoldableToolGroupItem(t.Messages[i]); i++ {
+		end = i + 1
+		switch readGrepGroupName(t.Messages[i]) {
 		case "grep":
 			greps++
-			entries = append(entries, readGrepGroupEntry{"搜索", title, "", toolState(m)})
 		case "list", "glob":
 			lists++
-			entries = append(entries, readGrepGroupEntry{"罗列", title, "", toolState(m)})
+		case "command":
+			commands++
 		default:
 			reads++
-			entries = append(entries, readGrepGroupEntry{"读取", title, "", toolState(m)})
 		}
-		entry := &entries[len(entries)-1]
-		result := toolResult(m)
-		// Entries show paths/queries only; preserve error diagnostics below.
-		if entry.state == "error" {
-			entry.detail = str(result, "error")
-			if entry.detail == "" {
-				entry.detail = str(m, "error")
-			}
-		}
-		if files := list(result, "files"); len(files) > 0 && (name == "read" || name == "remote_read") {
-			entries = entries[:len(entries)-1]
-			for _, raw := range files {
-				if file, ok := raw.(map[string]any); ok {
-					entries = append(entries, readGrepGroupEntry{"读取", str(file, "path"), "", toolState(m)})
-				}
-			}
-		}
-		end = i
 	}
-	if reads+greps+lists == 0 {
+	if end == index {
 		return
 	}
-	var parts []string
-	if reads > 0 {
-		parts = append(parts, fmt.Sprintf("读取 %d 次", reads))
+	hasReadTools := reads+greps+lists > 0
+	if commands > 0 && hasReadTools {
+		a11yLabel = "工具分组 "
 	}
-	if greps > 0 {
-		parts = append(parts, fmt.Sprintf("搜索 %d 次", greps))
+
+	visibleEnd := end
+	if open {
+		visibleEnd = min(end, index+100+*extra)
 	}
-	if lists > 0 {
-		parts = append(parts, fmt.Sprintf("罗列 %d 次", lists))
+	entries := make([]toolGroupEntry, 0, visibleEnd-index)
+	if open {
+		for i := index; i < visibleEnd; i++ {
+			m := t.Messages[i]
+			name := readGrepGroupName(m)
+			state := toolState(m)
+			args := parseToolArgs(str(m, "args"))
+			title := toolArgSummary(name, args)
+			if name == "command" {
+				entries = append(entries, toolGroupEntry{index: i, message: m, name: name, title: title, state: state})
+				continue
+			}
+			entry := toolGroupEntry{index: i, message: m, name: name, title: title, state: state}
+			switch name {
+			case "grep":
+				entry.verb = "Grep"
+			case "list":
+				entry.verb = "List"
+			case "glob":
+				entry.verb = "Glob"
+			default:
+				entry.verb = "Read"
+			}
+			result := toolResult(m)
+			entry.summary = toolGroupResultSummary(name, result)
+			if state == "error" {
+				entry.detail = str(result, "error")
+				if entry.detail == "" {
+					entry.detail = str(m, "error")
+				}
+			}
+			if files := list(result, "files"); len(files) > 0 && (name == "read" || name == "remote_read" || name == "batch_read") {
+				for _, raw := range files {
+					if file, ok := raw.(map[string]any); ok {
+						fileState, fileDetail := state, entry.detail
+						if message := str(file, "error"); message != "" {
+							fileState, fileDetail = "error", message
+						}
+						entries = append(entries, toolGroupEntry{index: i, message: m, name: name, verb: "Read", title: str(file, "path"), summary: toolGroupReadSummary(file), state: fileState, detail: fileDetail})
+					}
+				}
+				continue
+			}
+			entries = append(entries, entry)
+		}
 	}
+
 	container.Children(func() {
-		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(4).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label("读取分组 " + key)
+		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(4).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(a11yLabel + key)
 		row.Children(func() {
-			// The leading icon carries the tool card's accent ink, so a folded run
-			// reads as the same kind of row as a single call.
-			disclosureIcon(c, "search", a.currentPalette().accent)
-			ui.Text(c, strings.Join(parts, "，")).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+			separator := false
+			if reads > 0 {
+				disclosureIcon(c, "book", a.currentPalette().accent)
+				ui.Text(c, fmt.Sprintf("读取 %d 次", reads)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+				separator = true
+			}
+			if greps > 0 {
+				if separator {
+					ui.Text(c, "，").FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+				}
+				disclosureIcon(c, "search", a.currentPalette().accent)
+				ui.Text(c, fmt.Sprintf("搜索 %d 次", greps)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+				separator = true
+			}
+			if lists > 0 {
+				if separator {
+					ui.Text(c, "，").FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+				}
+				disclosureIcon(c, "list", a.currentPalette().accent)
+				ui.Text(c, fmt.Sprintf("罗列 %d 次", lists)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+				separator = true
+			}
+			if commands > 0 {
+				if separator {
+					ui.Text(c, "，").FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+				}
+				disclosureIcon(c, "terminal", a.currentPalette().accent)
+				ui.Text(c, fmt.Sprintf("执行命令 %d 次", commands)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+			}
 			caret := "chevron"
 			if open {
 				caret = "chevrondown"
@@ -252,31 +381,57 @@ func (a *desktop) readGrepGroupCard(c *ui.Context, t *conversation, index int) {
 		})
 		if row.Clicked() {
 			t.uiState().ToolOpen[key] = !open
+			if open {
+				for i := index; i < end; i++ {
+					if !isFoldableCommand(t.Messages[i]) {
+						continue
+					}
+					child := toolCardKey(t, i, t.Messages[i])
+					delete(t.uiState().ToolOpen, child)
+					delete(t.uiState().CommandDetails, child)
+				}
+			}
 		}
 		uikit.Reveal(c.Key(key+"-reveal"), open, func() {
-			ui.Scroll(c.Key(key + "-entries")).FillWidth().Height(min(float32(240), float32(len(entries))*28)).Shrink(0).Clip().Children(func() {
-				ui.Column(c).FillWidth().Children(func() {
-					for n, e := range entries {
+			height := float32(len(entries)) * 28
+			for _, entry := range entries {
+				if entry.name == "command" && t.uiState().ToolOpen[toolCardKey(t, entry.index, entry.message)] {
+					height += 240
+					break
+				}
+			}
+			ui.Scroll(c.Key(key + "-entries")).FillWidth().Height(min(float32(360), max(float32(28), height))).Shrink(0).Clip().Children(func() {
+				ui.Column(c).FillWidth().MinWidth(0).Children(func() {
+					for n, entry := range entries {
+						last := n == len(entries)-1
 						prefix := "├─"
-						if n == len(entries)-1 {
+						if last {
 							prefix = "└─"
+						}
+						if entry.name == "command" {
+							a.toolGroupCommandEntry(c, t, entry, prefix)
+							continue
 						}
 						ui.Row(c).Padding(1, 8, 1, 16).Gap(gapInline).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, prefix).Font(monoFamily).FontSize(fsSmall).TextColor(a.secondaryInk())
-							ui.Text(c, e.verb).FontSize(fsTool).TextColor(a.secondaryInk())
+							ui.Text(c, entry.verb).FontSize(fsTool).TextColor(a.secondaryInk())
 							color := a.secondaryInk()
-							if e.state == "error" {
+							if entry.state == "error" {
 								color = c.Theme().Danger
 							}
-							uikit.Tooltip(c, ui.Text(c, short(e.title, 80)).FontSize(fsTool).TextColor(color).SingleLine(), e.title)
-							if e.detail != "" {
-								uikit.ErrorText(c, e.detail).FontSize(fsAux).Grow(1)
+							uikit.Tooltip(c, ui.Text(c, short(entry.title, 80)).FontSize(fsTool).TextColor(color).SingleLine().MinWidth(0).Shrink(1), entry.title)
+							if entry.detail != "" {
+								uikit.ErrorText(c, entry.detail).FontSize(fsTool).MinWidth(0).Grow(1).Shrink(1)
+							}
+							if entry.summary != "" {
+								summary := "(" + entry.summary + ")"
+								uikit.Tooltip(c, ui.Text(c, short(summary, 72)).FontSize(fsTool).TextColor(a.secondaryInk()).SingleLine().Shrink(0), summary)
 							}
 						})
 					}
 				})
 			})
-			if remaining := end - index + 1 - len(entries); remaining > 0 {
+			if remaining := end - visibleEnd; remaining > 0 {
 				transcriptAction(c, key+"-more", fmt.Sprintf("Show more (%d)", remaining)).OnClick(func() { *extra += 100 })
 			}
 			if *extra > 0 {
@@ -284,7 +439,79 @@ func (a *desktop) readGrepGroupCard(c *ui.Context, t *conversation, index int) {
 			}
 		})
 	})
-	_ = end
+}
+
+func (a *desktop) toolGroupCommandEntry(c *ui.Context, t *conversation, entry toolGroupEntry, prefix string) {
+	m := entry.message
+	key := toolCardKey(t, entry.index, m)
+	state := entry.state
+	result := toolResult(m)
+	open := t.uiState().ToolOpen[key]
+	metadataInk := a.secondaryInk()
+	if state == "error" || (result["exitCode"] != nil && num(result, "exitCode") != 0) {
+		metadataInk = c.Theme().Danger
+	}
+	verb := toolTable["command"].doneVerb
+	if state == "pending" || state == "running" {
+		verb = toolTable["command"].runningVerb
+	} else if state == "error" {
+		verb = toolTable["command"].failedVerb
+	}
+	command := entry.title
+	if command == "" {
+		command = "命令"
+	}
+	button := ui.ButtonBase(c.Key(key+"-group-row")).FillWidth().MinWidth(0).Height(24).Padding(1, 8, 1, 16).Gap(gapInline).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label("命令结果 " + key + " " + verb + " " + short(command, 120))
+	// Same cache as toolCard: an expanded group redraws every frame, so the
+	// arguments must not be decoded again on each one.
+	args := ui.Local(button, "parsed-args", func() toolArgsMemo { return toolArgsMemo{} }).get(str(m, "args"))
+	button.Children(func() {
+		ui.Text(c, prefix).Font(monoFamily).FontSize(fsSmall).TextColor(a.secondaryInk())
+		commandRow := ui.Row(c.Key(key + "-group-command-text")).Grow(1).MinWidth(0).Gap(gapInline).AlignItems(ui.Center)
+		commandRow.Children(func() {
+			ink := a.secondaryInk()
+			ui.Text(c, verb).FontSize(fsTool).TextColor(ink).Shrink(0).NoWrap()
+			uikit.Tooltip(c, ui.Text(c, short(command, 120)).Font(monoFamily).FontSize(fsTool).TextColor(ink).SingleLine().MinWidth(0).Shrink(1), command)
+			var resultParts []string
+			if code, exists := result["exitCode"]; exists {
+				resultParts = append(resultParts, fmt.Sprintf("exit %v", code))
+			}
+			if boolOf(result, "timedOut") {
+				resultParts = append(resultParts, "超时")
+			}
+			if boolOf(result, "promotedToService") {
+				resultParts = append(resultParts, "已转后台服务")
+			}
+			if ms := toolDuration(m, result); ms > 0 {
+				resultParts = append(resultParts, fmtDur(ms))
+			}
+			if len(resultParts) > 0 {
+				suffix := "(" + strings.Join(resultParts, " · ") + ")"
+				uikit.Tooltip(c, ui.Text(c, short(suffix, 72)).FontSize(fsTool).TextColor(metadataInk).SingleLine().Shrink(0), suffix)
+			}
+		})
+		caret := "chevron"
+		if open {
+			caret = "chevrondown"
+		}
+		iconGlyph(c, caret, 11).Shrink(0).TextColor(a.secondaryInk())
+	})
+	if button.Clicked() {
+		t.uiState().ToolOpen[key] = !open
+		if open {
+			delete(t.uiState().CommandDetails, key)
+		} else if state != "pending" && state != "running" {
+			a.loadCommandDetail(t, key)
+		}
+	}
+	if open {
+		ui.Row(c.Key(key + "-group-output-row")).FillWidth().MinWidth(0).Gap(gapInline).Children(func() {
+			ui.Text(c, " ").Padding(0, 8, 0, 16).Font(monoFamily).FontSize(fsSmall).TextColor(a.secondaryInk())
+			ui.Column(c.Key(key+"-group-output")).FillWidth().MinWidth(0).Padding(0, 8, 0, 0).Children(func() {
+				a.commandDetailView(c, t, entry.index, key, args, m)
+			})
+		})
+	}
 }
 
 func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[string]any) {
@@ -357,10 +584,11 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			}
 			ui.Text(c, verb).FontSize(fsTool).TextColor(verbColor).Shrink(0).LineHeight(1.4).NoWrap()
 			if summary != "" {
-				text := "(" + short(summary, 120) + ")"
 				if name == "command" || name == "remote_run_command" {
+					text := short(summary, 120)
 					uikit.Tooltip(c, ui.RichText(c.Key(key+"-summary"), codeSpansWithBase(c, text, "command.sh", commandLineInk(c.Theme(), a.secondaryInk()))...).FontSize(fsTool).SingleLine().MinWidth(0).Shrink(1), summary)
 				} else {
+					text := "(" + short(summary, 120) + ")"
 					color := a.secondaryInk()
 					if name == "edit" || name == "create" || name == "delete" || name == "remote_edit" || name == "remote_create_file" || name == "remote_delete_path" {
 						color = color.Mix(c.Theme().Text, 0.4)
@@ -943,12 +1171,6 @@ func toolChips(name, state string, args, result map[string]any) []string {
 				chips = append(chips, fmt.Sprintf("+%d -%d", added, removed))
 			}
 		}
-	case "read", "remote_read":
-		if total := int(num(result, "totalLines")); total > 0 {
-			chips = append(chips, fmt.Sprintf("%d lines", total))
-		} else if next := int(num(result, "nextStartLine")); next > 0 {
-			chips = append(chips, "已截断")
-		}
 	case "calculate":
 		if v, ok := result["text"]; ok {
 			chips = append(chips, "= "+fmt.Sprint(v))
@@ -956,16 +1178,6 @@ func toolChips(name, state string, args, result map[string]any) []string {
 			chips = append(chips, "= "+fmt.Sprint(v))
 		} else if v, ok := result["result"]; ok {
 			chips = append(chips, fmt.Sprint(v))
-		}
-	case "grep":
-		if n := len(list(result, "matches")); n > 0 {
-			chips = append(chips, fmt.Sprintf("%d 命中", n))
-		} else if c := int(num(result, "count")); c > 0 {
-			chips = append(chips, fmt.Sprintf("%d 命中", c))
-		}
-	case "list":
-		if c := int(num(result, "count")); c > 0 {
-			chips = append(chips, fmt.Sprintf("%d 项", c))
 		}
 	case "ask":
 		if qs := list(result, "questions"); len(qs) > 0 {
@@ -1440,58 +1652,4 @@ func isFoldableCommand(m map[string]any) bool {
 	// Membership depends on tool kind, never execution state: pending and
 	// streaming calls enter the same group they keep after completion.
 	return toolKind(name) == "command"
-}
-
-func (a *desktop) commandGroupCard(c *ui.Context, t *conversation, index int) {
-	_, limit := a.chatMessageWindow(t)
-	end := index
-	for end < limit && isFoldableCommand(t.Messages[end]) {
-		end++
-	}
-	key := fmt.Sprintf("%s-commandgroup-%d", t.ID, index)
-	open := t.uiState().ToolOpen[key]
-	container := ui.Column(c.Key(key)).FillWidth().MinWidth(0).Gap(2)
-	extra := ui.Local(container, "entries-extra", func() int { return 0 })
-	if !open {
-		*extra = 0
-	}
-	visibleEnd := min(end, index+100+*extra)
-	container.Children(func() {
-		row := ui.ButtonBase(c.Key(key + "-header")).FillWidth().Height(24).Justify(ui.Start).Gap(4).Cursor(ui.CursorPointer).Label("命令分组 " + key)
-		row.Children(func() {
-			disclosureIcon(c, "terminal", a.currentPalette().accent)
-			ui.Text(c, fmt.Sprintf("执行命令 %d 次", end-index)).FontSize(fsTool).TextColor(a.secondaryInk()).SingleLine()
-			caret := "chevron"
-			if open {
-				caret = "chevrondown"
-			}
-			iconGlyph(c, caret, 12).Shrink(0).TextColor(a.secondaryInk())
-		})
-		if row.Clicked() {
-			t.uiState().ToolOpen[key] = !open
-			if open {
-				for i := index; i < end; i++ {
-					child := str(t.Messages[i], "toolCallId")
-					if child == "" {
-						child = fmt.Sprintf("%s-%d", t.ID, i)
-					}
-					delete(t.uiState().ToolOpen, child)
-					delete(t.uiState().CommandDetails, child)
-				}
-			}
-		}
-		uikit.Reveal(c.Key(key+"-reveal"), open, func() {
-			ui.Column(c).FillWidth().MinWidth(0).Gap(10).Children(func() {
-				for i := index; i < visibleEnd; i++ {
-					a.toolCard(c, t, i, t.Messages[i])
-				}
-			})
-			if visibleEnd < end {
-				transcriptAction(c, key+"-more", fmt.Sprintf("Show more (%d)", end-visibleEnd)).OnClick(func() { *extra += 100 })
-			}
-			if *extra > 0 {
-				transcriptAction(c, key+"-less", "Show less").OnClick(func() { *extra = 0 })
-			}
-		})
-	})
 }

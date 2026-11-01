@@ -15,9 +15,10 @@ const (
 	rowSkipped rowKind = iota
 	// rowPlain: the message draws its own row.
 	rowPlain
-	// rowReadGroup: the message heads a run of read/grep/list calls.
+	// rowReadGroup: the message heads a run of read/grep/list/command calls
+	// that starts with a read-like tool.
 	rowReadGroup
-	// rowCommandGroup: the message heads a run of command calls.
+	// rowCommandGroup: the same mixed tool run when it starts with a command.
 	rowCommandGroup
 )
 
@@ -98,7 +99,7 @@ func (r *transcriptRows) foldsInto(i int) bool {
 	if !isToolRecord(m) || !isToolRecord(prev) {
 		return false
 	}
-	return (isFoldableReadTool(prev) && isFoldableReadTool(m)) || (isFoldableCommand(prev) && isFoldableCommand(m))
+	return isFoldableToolGroupItem(prev) && isFoldableToolGroupItem(m)
 }
 
 // kindAt reports how message i appears in the window that starts at start: a

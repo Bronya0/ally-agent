@@ -9,9 +9,9 @@ import (
 func TestTranscriptDisclosureIcons(t *testing.T) {
 	for _, tc := range []struct{ name, icon, title string }{
 		{"command", "terminal", "执行命令 1 次"},
-		{"read", "search", "读取 1 次"},
+		{"read", "book", "读取 1 次"},
 		{"grep", "search", "搜索 1 次"},
-		{"list", "search", "罗列 1 次"},
+		{"list", "list", "罗列 1 次"},
 	} {
 		a := &desktop{}
 		msg := groupCommand("icon", tc.name, "success")

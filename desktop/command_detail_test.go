@@ -81,7 +81,7 @@ func TestCommandGroupCollapseReleasesChildResults(t *testing.T) {
 	st.CommandDetails = map[string]*commandDetail{"child": {Result: map[string]any{"_text": "CACHED_RESULT"}}}
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.DisableAnimations()
-		ui.Column(c).Children(func() { a.commandGroupCard(c, conv, 0) })
+		ui.Column(c).Children(func() { a.toolActivityGroupCard(c, conv, 0) })
 	}, 800, 500)
 	if !tt.HasText("CACHED_RESULT") {
 		t.Fatal("test requires expanded child")

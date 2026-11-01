@@ -19,21 +19,24 @@ const terminalOutputSize float32 = fsTool - 1
 // text came from (it picks syntax highlighting); it is empty for terminal output.
 // ink is the caller's secondary-text tone.
 func toolCodeWindow(c *ui.Context, key, text string, expanded bool, path string, ink ...ui.Color) {
-	body := func() {
-		base := uikit.SecondaryInk(c, ink)
-		size := readingCodeSize
-		if path == "" {
-			base = terminalOutputInk(c.Theme(), ink...)
-			size = terminalOutputSize
-		}
-		spans := codeSpansWithBase(c, text, path, base)
-		ui.RichText(c, spans...).AlignSelf(ui.Start).TextAlign(ui.Start).Font(monoFamily).FontSize(size).Shrink(0).Selectable().Padding(2, 8, 4, 0).NoWrap()
-	}
+	body := func() { toolCodeLines(c, text, path, ink...) }
 	if !expanded {
 		ui.Box(c.Key(key)).FillWidth().MaxHeight(150).Clip().Background(c.Theme().Background).Radius(radiusSmall).Children(body)
 		return
 	}
 	ui.ScrollBoth(c.Key(key)).FillWidth().MinWidth(0).Height(240).Shrink(0).Clip().Label("工具输出 " + key).Background(c.Theme().Background).Radius(radiusSmall).Children(body)
+}
+
+// toolCodeLines draws the text itself; callers wrap it in the scroll area they want.
+func toolCodeLines(c *ui.Context, text, path string, ink ...ui.Color) {
+	base := uikit.SecondaryInk(c, ink)
+	size := readingCodeSize
+	if path == "" {
+		base = terminalOutputInk(c.Theme(), ink...)
+		size = terminalOutputSize
+	}
+	spans := codeSpansWithBase(c, text, path, base)
+	ui.RichText(c, spans...).AlignSelf(ui.Start).TextAlign(ui.Start).Font(monoFamily).FontSize(size).Shrink(0).Selectable().Padding(2, 8, 4, 0).NoWrap()
 }
 
 type highlightCacheEntry struct {

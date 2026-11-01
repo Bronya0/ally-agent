@@ -371,7 +371,7 @@ var iconPaths = map[string]string{
 	"arrowup":     `<path d="M12 19V5m-7 7 7-7 7 7"/>`,
 	"arrowdown":   `<path d="M12 5v14m7-7-7 7-7-7"/>`,
 	"dot":         `<circle cx="12" cy="12" r="4"/>`,
-	"book":        `<path d="M4 4h6a3 3 0 0 1 3 3v13a3 3 0 0 0-3-3H4zM20 4h-6a3 3 0 0 0-3 3v13a3 3 0 0 1 3-3h6z"/>`,
+	"book":        `<path d="M3.5 5.5c3.1 -1.1 6.2 -0.7 8.5 1.5v13c-2.5 -2.1 -5.6 -2.5 -8.5 -1.5zM20.5 5.5c-3.1 -1.1 -6.2 -0.7 -8.5 1.5v13c2.5 -2.1 5.6 -2.5 8.5 -1.5z"/>`,
 	"shield":      `<path d="M12 3 4 6v6c0 5 4 8 8 9 4-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/>`,
 	"globe":       `<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18-3-3-3-15 0-18z"/>`,
 	"server":      `<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.5M7 17.5h.5"/>`,

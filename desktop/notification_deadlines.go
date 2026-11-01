@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const allyNoticeDuration = 2 * time.Second
+
 // MyGo pauses toast age while unfocused/hovered. Application notices instead
 // expire against wall time, including notices queued while the view is hidden.
 func (a *desktop) flushNotices(c *ui.Context, now time.Time) {
@@ -17,7 +19,7 @@ func (a *desktop) flushNotices(c *ui.Context, now time.Time) {
 	for _, item := range pending {
 		deadline, ok := item.Data.(time.Time)
 		if !ok {
-			deadline = now.Add(4 * time.Second)
+			deadline = now.Add(allyNoticeDuration)
 		}
 		if !now.Before(deadline) {
 			continue

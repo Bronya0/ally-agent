@@ -50,9 +50,6 @@ func (a *desktop) headerBar(c *ui.Context) {
 	row := ui.Row(c).Height(max(headerBarHeight, bar.Height)).Shrink(0).Background(p.headerColor()).
 		Border(0, ui.Transparent).Draw(func(painter *ui.Painter, r ui.Rect) {
 		painter.Fill(ui.Rect{X: r.X + tabsStart, Y: r.Y + r.H - 1, W: max(float32(0), r.W-tabsStart), H: 1}, p.line, 0)
-		if runtime.GOOS != "windows" && railWidth >= bar.Left {
-			painter.Fill(ui.Rect{X: r.X + railWidth - 1, Y: r.Y, W: 1, H: r.H}, p.line, 0)
-		}
 	})
 	if bar.Left > 0 || bar.Right > 0 {
 		row.Padding(0, bar.Right, 0, bar.Left)

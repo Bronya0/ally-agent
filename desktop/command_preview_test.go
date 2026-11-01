@@ -37,7 +37,7 @@ func TestCommandHeaderKeepsExitAndDurationAfterTheCommand(t *testing.T) {
 	tt := ui.NewTester(func(c *ui.Context) {
 		ui.Column(c).Padding(20).Children(func() { a.toolCard(c, conv, 0, msg) })
 	}, 900, 300)
-	cmd, ok := tt.Find("(echo hi)")
+	cmd, ok := tt.Find("echo hi")
 	if !ok {
 		t.Fatalf("missing command summary: %v", tt.Texts())
 	}

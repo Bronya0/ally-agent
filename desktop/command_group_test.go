@@ -35,7 +35,7 @@ func TestLocalCommandGroupPreservesCardsOnExpansion(t *testing.T) {
 		}
 		tt.Frame()
 		for i := 0; i < count; i++ {
-			if tt.HasText("OUTPUT-"+fmt.Sprint(i)) || !tt.HasText("(echo "+fmt.Sprint(i)+")") {
+			if tt.HasText("OUTPUT-"+fmt.Sprint(i)) || !tt.HasText("echo "+fmt.Sprint(i)) {
 				t.Fatalf("expanded group must show commands without results: %v", tt.Texts())
 			}
 		}
@@ -95,7 +95,7 @@ func TestCommandGroupStaysCollapsedThroughoutExecution(t *testing.T) {
 	}, 700, 700)
 	check := func(title string) {
 		t.Helper()
-		if !tt.HasText(title) || tt.HasText("(echo") || tt.HasText("OUTPUT-") {
+		if !tt.HasText(title) || tt.HasText("echo live") || tt.HasText("OUTPUT-") {
 			t.Fatalf("command escaped its collapsed group: %v", tt.Texts())
 		}
 	}
@@ -111,12 +111,71 @@ func TestCommandGroupStaysCollapsedThroughoutExecution(t *testing.T) {
 	if err := tt.Click("命令分组 lifecycle-commandgroup-0"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("(echo next)") {
+	if !tt.HasText("echo next") {
 		t.Fatal("expanded group does not show live command")
 	}
 	conv.Messages[1]["status"] = "success"
 	tt.Frame()
-	if !tt.HasText("(echo next)") || tt.HasText("OUTPUT-next") {
+	if !tt.HasText("echo next") || tt.HasText("OUTPUT-next") {
 		t.Fatal("completion changed expanded group")
+	}
+}
+
+func mixedReadTool(id, path string) map[string]any {
+	return map[string]any{
+		"role": "tool_call", "name": "read", "toolCallId": id, "status": "success",
+		"args":   `{"path":"` + path + `"}`,
+		"result": map[string]any{"files": []any{map[string]any{"path": path, "startLine": 1, "endLine": 40, "totalLines": 40}}},
+	}
+}
+
+// Reads and commands used to fold into separate cards. One batch of work now
+// stays one group, whichever tool it starts with, and collapsing it must still
+// release the commands it expanded.
+func TestReadsAndCommandsShareOneGroup(t *testing.T) {
+	a := &desktop{}
+	conv := &conversation{ID: "mixed", Messages: []map[string]any{
+		mixedReadTool("mixed-read", "main.go"),
+		groupCommand("mixed-cmd", "command", "success"),
+	}}
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		ui.Column(c).FillWidth().Padding(20).Children(func() {
+			rows := newTranscriptRows(conv)
+			for i := range conv.Messages {
+				a.messageRow(c, conv, i, rows)
+			}
+		})
+	}, 700, 600)
+	if !tt.HasText("读取 1 次") || !tt.HasText("执行命令 1 次") {
+		t.Fatalf("mixed group header: %v", tt.Texts())
+	}
+	if tt.HasText("main.go") || tt.HasText("echo mixed-cmd") {
+		t.Fatalf("collapsed group leaked entries: %v", tt.Texts())
+	}
+	if err := tt.Click("工具分组 mixed-readgroup-0"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("main.go") || !tt.HasText("echo mixed-cmd") || !tt.HasText("(40 lines)") {
+		t.Fatalf("expanded entries: %v", tt.Texts())
+	}
+	conv.uiState().ToolOpen["mixed-cmd"] = true
+	conv.uiState().CommandDetails = map[string]*commandDetail{"mixed-cmd": {Result: map[string]any{"stdout": "OUTPUT-mixed"}}}
+	tt.Frame()
+	if !tt.HasText("OUTPUT-mixed") {
+		t.Fatalf("expanded command output: %v", tt.Texts())
+	}
+	// A grouped command keeps its own fixed-height scroll window: expanding it must
+	// not spill the whole output into the group at once.
+	if _, ok := tt.Find("工具输出 tool-out-1"); !ok {
+		t.Fatal("grouped command lost its fixed-height output window")
+	}
+	if err := tt.Click("工具分组 mixed-readgroup-0"); err != nil {
+		t.Fatal(err)
+	}
+	if conv.uiState().ToolOpen["mixed-cmd"] {
+		t.Fatal("collapsing the group left its command open")
 	}
 }

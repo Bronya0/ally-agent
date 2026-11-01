@@ -13,17 +13,20 @@ func TestCommandTooltipStableDuringThinking(t *testing.T) {
 	a.prefs.Appearance = "dark"
 	conv := &conversation{ID: "tip", Busy: true}
 	conv.uiState().ThinkingBytes = 10000
-	const cmd = "cd /coding/go/src/ally-agent-v2 && rg -n suggestions --glob '*.go' | head -30"
+	const cmd = "cd /coding/go/src/ally-agent-v2 && rg -n suggestions --glob '*.go' --glob '*.ts' | head -30 && go test -v ./desktop/ | tail -20"
 	msg := map[string]any{"name": "command", "toolCallId": "command-1", "status": "success", "args": `{"command":"` + cmd + `"}`, "result": map[string]any{"ok": true, "stdout": "results"}}
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(a.theme())
 		ui.Column(c).Fill().Padding(24).Children(func() { a.toolCard(c, conv, 0, msg); a.composerStatusRow(c, conv) })
 	}, 800, 350)
-	r, ok := tt.Find("(" + cmd + ")")
+	// The command outruns the row's summary limit, so the row keeps truncated
+	// text and only the tooltip shows it in full: each has its own text to find,
+	// as the parentheses used to give.
+	anchor, ok := tt.Find(short(cmd, 120))
 	if !ok {
 		t.Fatalf("missing anchor: %v", tt.Texts())
 	}
-	tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	tt.Move(anchor.X+anchor.W/2, anchor.Y+anchor.H/2)
 	tt.Advance(time.Second)
 	tip, ok := tt.Find(cmd)
 	if !ok {
@@ -45,7 +48,7 @@ func TestCommandTooltipStableDuringThinking(t *testing.T) {
 		tt.Frame()
 		tt.Advance(33 * time.Millisecond)
 		if !bytes.Equal(before, region()) {
-			t.Fatalf("command/tooltip changed on thinking frame %d; anchor=%v texts=%v", i, r, tt.Texts())
+			t.Fatalf("command/tooltip changed on thinking frame %d; anchor=%v texts=%v", i, anchor, tt.Texts())
 		}
 	}
 }

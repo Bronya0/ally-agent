@@ -551,7 +551,7 @@ func (a *desktop) queueNotice(message, kind string) {
 		return
 	}
 	a.noticeSequence++
-	item := ui.Toast{ID: fmt.Sprintf("ally-notice-%d", a.noticeSequence), Title: message, Type: kind, Data: time.Now().Add(4 * time.Second)}
+	item := ui.Toast{ID: fmt.Sprintf("ally-notice-%d", a.noticeSequence), Title: message, Type: kind, Data: time.Now().Add(allyNoticeDuration)}
 	if len(a.notifications) > 0 && a.notifications[len(a.notifications)-1].Title == message && a.notifications[len(a.notifications)-1].Type == kind {
 		return
 	}

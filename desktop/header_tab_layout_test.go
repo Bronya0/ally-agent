@@ -210,15 +210,9 @@ func TestHeaderSidebarChrome(t *testing.T) {
 			a.prefs.RailExpanded = width != 44
 			a.prefs.RailWidth = width
 			tt := ui.NewTester(func(c *ui.Context) { c.SetTheme(a.theme()); a.headerBar(c) }, 900, 100)
-			line := a.currentPalette().line
 			bottom := a.currentPalette().headerColor()
-			rightTop, rightBottom := line, line
-			if runtime.GOOS == "windows" {
-				// The logo shares the tab strip's background. The rounded lower
-				// surface begins below the header, without a logo-shaped cutout.
-				rightTop = bottom
-				rightBottom = bottom
-			}
+			// The logo and tab strip share one uninterrupted header background.
+			rightTop, rightBottom := bottom, bottom
 			for _, point := range []struct {
 				x, y int
 				want ui.Color
