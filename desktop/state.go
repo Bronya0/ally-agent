@@ -171,8 +171,9 @@ type chatUI struct {
 	SessionsIndex          int
 	ModelOpen              bool
 	ModelSearch            string
-	ModelGroup             string
-	FlyoutHot              bool
+	ModelGroup             string // the group whose flyout shows; one at a time
+	FlyoutHot              bool   // the pointer is inside that flyout
+	FlyoutDismiss          string // the group Escape closed; its row stays shut until the pointer leaves
 	ContextOpen            bool
 	ExtraRootsOpen         bool
 	Retry                  *retryInfo

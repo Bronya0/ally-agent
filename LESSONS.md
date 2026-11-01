@@ -83,3 +83,9 @@
 [schema-map-shared] 2026-11-01 高危 schemautil.Map 的返回值会被 responses 适配器写入 strict/description，禁止返回共享的冻结清单。@internal/app/prov_adapter_responses.go
 
 [collapse-alloc] 2026-11-01 中危 折叠态仍分配行结构与派生缓存，长对话里每组常驻；折叠即释放。@desktop/tool_cards.go
+
+[composer-reasoning] 2026-11-02 中危 输入框改的思考强度只写 Tab：会话快照无模型字段、重启从模型配置读→静默回退；改模型条目并保存。@desktop/composer.go
+
+[menu-tree] 2026-11-02 中危 悬停浮层别改成点击折叠（用户要悬停）；一帧只建一个浮层+粘滞，行 hover 与池层 hover 分开判。@desktop/composer.go
+
+[review-verify] 2026-11-02 中危 转述审查结论前先查后端归一化（空串已改 auto），否则误报已修的事。@internal/app/biz_config_state.go

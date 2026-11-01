@@ -382,7 +382,11 @@ func (a *desktop) testSSHNode(node backend.SSHServerNode) {
 		a.win.Update(func() {
 			delete(a.sshF.TestBusy, node.ID)
 			if result.OK {
-				a.notify(fmt.Sprintf("SSH 连通性测试通过（%d ms）", result.DurationMS))
+				note := "SSH 连通性测试通过"
+				if dur := fmtDur(result.DurationMS); dur != "" {
+					note += "（" + dur + "）"
+				}
+				a.notify(note)
 			} else {
 				a.notifyError("SSH 连通性测试失败：" + result.Error)
 			}

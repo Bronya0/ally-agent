@@ -292,7 +292,11 @@ func (a *desktop) searchMentions(t *conversation, query string) {
 					}
 					st.Mention.Entries = result.Entries
 					st.Mention.Index = 0
-					st.Mention.Meta = fmt.Sprintf("%d/%d · %s · %dms", result.Count, result.Total, result.Source, result.BuildDuration)
+					meta := fmt.Sprintf("%d/%d · %s", result.Count, result.Total, result.Source)
+					if dur := fmtDur(result.BuildDuration); dur != "" {
+						meta += " · " + dur
+					}
+					st.Mention.Meta = meta
 				})
 			}()
 		})
@@ -735,7 +739,10 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 		st.ModelOpen = !st.ModelOpen
 		if st.ModelOpen {
 			st.ModelSearch = ""
+			// The menu opens as a plain list of providers; a group opens on hover.
 			st.ModelGroup = ""
+			st.FlyoutHot = false
+			st.FlyoutDismiss = ""
 		}
 	}, a.secondaryInk()).SingleLine().MinWidth(0).Shrink(1), "切换模型")
 	if t.Busy {
@@ -744,7 +751,6 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 	ui.PopoverBase(c, btn, &st.ModelOpen, func(panel ui.Element) {
 		popoverChrome(c, panel, 340)
 		panel.MaxHeight(520)
-		st.FlyoutHot = false
 		ui.Column(c).FillWidth().Children(func() {
 			uikit.Input(c.Key("model-menu-search"), &st.ModelSearch).Placeholder("搜索模型或供应商").Label("搜索模型或供应商").FillWidth()
 			query := strings.ToLower(strings.TrimSpace(st.ModelSearch))
@@ -769,13 +775,19 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 						recent = recent[:3]
 					}
 					shownRecent := false
+					// recentHot tracks the pointer on the recents block, which is the one
+					// part of the menu that belongs to no provider.
+					recentHot := false
 					for _, identity := range recent {
 						for i, model := range a.config.Models {
 							if modelOption(model) != identity || !matches(model) {
 								continue
 							}
 							if !shownRecent {
-								ui.Text(c, "最近使用").FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(6, 10)
+								head := ui.Text(c, "最近使用").FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(6, 10)
+								if head.Hovered() {
+									recentHot = true
+								}
 								shownRecent = true
 							}
 							model := model
@@ -783,7 +795,9 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 							if name == "" {
 								name = model.Model
 							}
-							popoverModelRecent(c, fmt.Sprintf("model-recent-%d", i), name, model.ProviderName, modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) }, a.secondaryInk())
+							if popoverModelRecent(c, fmt.Sprintf("model-recent-%d", i), name, model.ProviderName, modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) }, a.secondaryInk()) {
+								recentHot = true
+							}
 						}
 					}
 					if shownRecent {
@@ -792,10 +806,7 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 					groups := map[string][]int{}
 					for i, model := range a.config.Models {
 						if matches(model) {
-							provider := strings.TrimSpace(model.ProviderName)
-							if provider == "" {
-								provider = customProviderName
-							}
+							provider := providerGroupName(model)
 							groups[provider] = append(groups[provider], i)
 						}
 					}
@@ -803,13 +814,122 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 					for name := range groups {
 						names = append(names, name)
 					}
-					sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
+					// Groups reached recently come first, in the order they were used. A
+					// group with no entry in rank was never used: the alphabet only decides
+					// the order among those, never between a used and an unused one. The
+					// Tab's own model counts as the most recent.
+					rank := map[string]int{}
+					for pos, identity := range recent {
+						for _, model := range a.config.Models {
+							if modelOption(model) != identity {
+								continue
+							}
+							provider := providerGroupName(model)
+							if seen, ok := rank[provider]; !ok || pos < seen {
+								rank[provider] = pos
+							}
+						}
+					}
+					for _, model := range a.config.Models {
+						if modelOption(model) == t.Model {
+							rank[providerGroupName(model)] = -1
+							break
+						}
+					}
+					sort.Slice(names, func(i, j int) bool {
+						ri, iUsed := rank[names[i]]
+						rj, jUsed := rank[names[j]]
+						switch {
+						case iUsed && jUsed:
+							return ri < rj
+						case iUsed != jUsed:
+							return iUsed
+						default:
+							return strings.ToLower(names[i]) < strings.ToLower(names[j])
+						}
+					})
+					// The pointer opens a group's models beside it. One group at a time:
+					// every row only reports whether it is hovered, this loop picks the
+					// single group to attach a flyout to, and the flyout then holds it open
+					// while the pointer is on its way into the list.
+					providers := make([]string, 0, len(names))
+					rows := make([]ui.Element, 0, len(names))
+					hovered := ""
 					for _, provider := range names {
 						indices := groups[provider]
 						sort.SliceStable(indices, func(i, j int) bool {
 							return strings.ToLower(a.config.Models[indices[i]].Model) < strings.ToLower(a.config.Models[indices[j]].Model)
 						})
-						a.modelGroupRow(c, t, st, provider, indices)
+						row, hot := a.modelGroupRow(c, t, provider, indices)
+						providers = append(providers, provider)
+						rows = append(rows, row)
+						if hot && hovered == "" {
+							hovered = provider
+						}
+					}
+					// Not on a row: the pointer may be heading into the flyout, resting on
+					// the menu, or gone. Carry the current group and let the check below
+					// decide whether it stays.
+					// Escape closed a flyout under the pointer: that row must not rebuild
+					// it on the next frame, or the key reads as doing nothing. The mark
+					// clears as soon as the pointer leaves the row, so hovering the group
+					// again opens it as always.
+					if st.FlyoutDismiss != "" {
+						if hovered == st.FlyoutDismiss {
+							hovered = ""
+						} else {
+							st.FlyoutDismiss = ""
+						}
+					}
+					open := hovered
+					sticky := false
+					switch {
+					case open != "":
+						// A row is hovered: its group opens.
+					case recentHot:
+						// The pointer is on the recents block, which belongs to no provider:
+						// drop the flyout instead of leaving it over the very models the
+						// pointer is reaching for.
+					case st.ModelGroup != "":
+						open = st.ModelGroup
+						sticky = true
+					}
+					st.FlyoutHot = false
+					opened := false
+					closed := false
+					for i, provider := range providers {
+						if provider != open {
+							continue
+						}
+						st.FlyoutHot, closed = a.modelGroupFlyout(c, t, providers[i], groups[provider], rows[i])
+						opened = true
+						break
+					}
+					switch {
+					case !opened:
+						// The group is gone from the list, as after a search that no longer
+						// matches any of its models.
+						open = ""
+					case closed:
+						// Escape or a press outside the flyout closed it: drop the group, and
+						// keep its row from opening it again while the pointer rests there.
+						st.FlyoutHot = false
+						st.FlyoutDismiss = open
+						open = ""
+					case sticky && !st.FlyoutHot && !panel.Hovered():
+						// The pointer left both the menu and the flyout: drop the group.
+						open = ""
+					}
+					st.ModelGroup = open
+					// One row reads as current: the one the pointer is on, or the one whose
+					// flyout it went into. The rows were drawn before this frame knew which,
+					// so the highlight lands here, once, instead of leaving the group the
+					// pointer just left lit beside the new one.
+					for i, provider := range providers {
+						if provider == open {
+							rows[i].Background(c.Theme().SurfaceHover)
+							break
+						}
 					}
 					if len(groups) == 0 {
 						fieldNote(c, "没有匹配的模型", a.secondaryInk())
@@ -819,32 +939,34 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 			divider(c)
 			popoverItem(c, "model-manage", "管理模型", "", false, func() { st.ModelOpen = false; a.changePage("models") }, a.secondaryInk())
 		})
-		// 分组浮层可能盖住本面板右缘，指针在面板或浮层任一处都保持展开；
-		// 两处都离开才收起，避免指针穿过缝隙时浮层闪退。
-		if !panel.Hovered() && !st.FlyoutHot {
-			st.ModelGroup = ""
-		}
 	})
 }
 
-// modelGroupRow is one provider in the model menu. Hovering it opens a flyout
-// on its right with that provider's models, so the menu lists groups only.
-func (a *desktop) modelGroupRow(c *ui.Context, t *conversation, st *chatUI, provider string, indices []int) {
+// providerGroupName is the menu's grouping key for one model: its provider, with
+// the unnamed entries folded into the custom group.
+func providerGroupName(model backend.ModelConfig) string {
+	provider := strings.TrimSpace(model.ProviderName)
+	if provider == "" {
+		provider = customProviderName
+	}
+	return provider
+}
+
+// modelGroupRow draws one provider in the model menu: its name, how many models
+// it holds, and a chevron. It reports whether the pointer is on the row, which
+// is what opens the flyout; the row itself builds no flyout, so a frame cannot
+// end up showing two. Its highlight is left to the caller, which alone knows
+// which group the frame settled on.
+func (a *desktop) modelGroupRow(c *ui.Context, t *conversation, provider string, indices []int) (ui.Element, bool) {
 	th := c.Theme()
 	row := ui.ButtonBase(c.Key("model-group-"+provider)).FillWidth().MinHeight(32).Padding(6, 10).Justify(ui.Start).Radius(radiusSmall).Cursor(ui.CursorPointer).Label(provider)
-	open := st.ModelGroup == provider
-	if row.Hovered() {
-		st.ModelGroup = provider
-		open = true
-	}
+	hovered := row.Hovered()
 	hasActive := false
 	for _, i := range indices {
 		if modelOption(a.config.Models[i]) == t.Model {
 			hasActive = true
+			break
 		}
-	}
-	if open {
-		row.Background(th.SurfaceHover)
 	}
 	row.Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
@@ -856,11 +978,21 @@ func (a *desktop) modelGroupRow(c *ui.Context, t *conversation, st *chatUI, prov
 			iconGlyph(c, "chevron", 10).TextColor(a.secondaryInk())
 		})
 	})
+	return row, hovered
+}
+
+// modelGroupFlyout lists one provider's models beside its row and reports whether
+// the pointer is inside it, which keeps it open on the next frame, and whether
+// this frame closed it (Escape, or a press outside it and its row), so the caller
+// can drop the group instead of rebuilding a flyout nobody asked for.
+func (a *desktop) modelGroupFlyout(c *ui.Context, t *conversation, provider string, indices []int, row ui.Element) (bool, bool) {
+	open := true
+	hot := false
 	ui.PopoverBase(c.Key("model-flyout-"+provider), row, &open, func(panel ui.Element) {
 		panel.AttachTo(row, ui.AnchorTopEnd, ui.AnchorTopStart).MarginStart(-6)
 		popoverChrome(c, panel, 260)
 		if panel.Hovered() {
-			st.FlyoutHot = true
+			hot = true
 		}
 		ui.Scroll(c).MaxHeight(360).Children(func() {
 			ui.Column(c).FillWidth().Children(func() {
@@ -870,14 +1002,15 @@ func (a *desktop) modelGroupRow(c *ui.Context, t *conversation, st *chatUI, prov
 					if name == "" {
 						name = model.Model
 					}
-					popoverItem(c, fmt.Sprintf("model-choice-%d", i), name, "", modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) }, a.secondaryInk())
+					popoverItem(c, fmt.Sprintf("model-choice-%d", i), name, "", modelOption(model) == t.Model, func() {
+						t.uiState().ModelOpen = false
+						a.selectChatModel(t, model)
+					}, a.secondaryInk())
 				}
 			})
 		})
 	})
-	if !open && st.ModelGroup == provider {
-		st.ModelGroup = ""
-	}
+	return hot, !open
 }
 
 func (a *desktop) selectChatModel(t *conversation, model backend.ModelConfig) {
@@ -896,6 +1029,9 @@ func (a *desktop) selectChatModel(t *conversation, model backend.ModelConfig) {
 	}
 	a.prefs.RecentModels = recent
 	a.savePrefs()
+	if a.core == nil || a.win == nil {
+		return
+	}
 	go func() {
 		err := a.core.SelectNativeModel(id)
 		a.win.Update(func() {
@@ -908,16 +1044,144 @@ func (a *desktop) selectChatModel(t *conversation, model backend.ModelConfig) {
 
 // reasoningSelector is the info bar's thinking-level trigger: compact while a
 // run is off, locked while one is on, and its choices are MyGo's drawn menu.
+// Picking a level edits the model entry itself, so the choice survives a
+// restart: a session snapshot carries no model fields, and a fresh
+// conversation re-reads the model config.
 func (a *desktop) reasoningSelector(c *ui.Context, t *conversation) {
 	if t.Reasoning == "" {
 		t.Reasoning = "auto"
 	}
-	btn := uikit.CompactMenu(c.Key("composer-reasoning"), &t.Reasoning, reasoningLevels, t.Busy, a.secondaryInk()).Label("思考强度")
+	btn := uikit.CompactMenu(c.Key("composer-reasoning"), &t.Reasoning, reasoningLevels, t.Busy, func(level string) {
+		a.rememberReasoning(t, level)
+	}).Label("思考强度")
 	tip := "思考强度（需模型支持，不支持的模型请保持 auto）"
 	if t.Busy {
 		tip = "运行中锁定：本轮结束后切换才生效"
 	}
 	uikit.Tooltip(c, btn, tip)
+}
+
+// rememberReasoning stores the picked level on the model entry the Tab uses.
+// The info bar edits that model's default instead of a per-session override:
+// keeping it in the Tab alone lost the choice on every restart and reset it
+// again whenever the Tab switched models.
+//
+// The pick is replayed on the config as it is on disk, not on the copy this
+// window holds: a tool toggle or a model save may be halfway through, and
+// writing this window's copy would throw that one away.
+func (a *desktop) rememberReasoning(t *conversation, level string) {
+	if a.core == nil || a.win == nil || t.Model == "" {
+		t.Reasoning = level
+		return
+	}
+	t.Reasoning = level
+	model := t.Model
+	previous, done := a.configWriteSlot()
+	go func() {
+		defer close(done)
+		waitConfigWrite(previous)
+		fresh, status, err := a.writeReasoning(model, level)
+		a.win.Update(func() {
+			if err != nil {
+				// The entry keeps the level it had, so the Tab may not show one the
+				// next restart would not read back.
+				if t.Model == model && t.Reasoning == level {
+					t.Reasoning = persistedReasoning(a.config, model)
+				}
+				a.notifyError(err.Error())
+				return
+			}
+			a.config = fresh
+			switch status {
+			case reasoningMissing:
+				if t.Model == model {
+					t.Reasoning = persistedReasoning(fresh, model)
+				}
+				a.notify("这个模型已不在模型配置里，思考强度没改")
+			case reasoningSaved:
+				a.notifySuccess("思考强度已改为 " + level)
+			}
+		})
+	}()
+}
+
+// reasoningWrite is what replaying a pick on disk did.
+type reasoningWrite int
+
+const (
+	reasoningSaved     reasoningWrite = iota // the entry now carries the level
+	reasoningUnchanged                       // it already did: nothing to write
+	reasoningMissing                         // the Tab points at a model the config lost
+)
+
+// writeReasoning replays one thinking-level pick against the config on disk and
+// returns the config afterwards, so every save that landed before it survives.
+func (a *desktop) writeReasoning(model, level string) (backend.ConfigState, reasoningWrite, error) {
+	cfg, err := a.core.GetConfig()
+	if err != nil {
+		return backend.ConfigState{}, reasoningSaved, err
+	}
+	next, changed := withModelReasoning(cfg, model, level)
+	if !changed {
+		// withModelReasoning also reports nothing to change for a model that is
+		// gone; telling the two apart keeps a stale Tab from looking saved.
+		if _, found := modelReasoning(cfg, model); !found {
+			return cfg, reasoningMissing, nil
+		}
+		return cfg, reasoningUnchanged, nil
+	}
+	if err := a.core.SaveConfig(next); err != nil {
+		return backend.ConfigState{}, reasoningSaved, err
+	}
+	fresh, err := a.core.GetConfig()
+	return fresh, reasoningSaved, err
+}
+
+// modelReasoning is the level the model entry behind option holds, "auto" when it
+// has none, and whether that entry is there at all.
+func modelReasoning(cfg backend.ConfigState, option string) (string, bool) {
+	for _, m := range cfg.Models {
+		if modelOption(m) != option {
+			continue
+		}
+		if m.ReasoningEffort == "" {
+			return "auto", true
+		}
+		return m.ReasoningEffort, true
+	}
+	return "auto", false
+}
+
+// persistedReasoning is the level the model entry behind option holds, "auto"
+// when it has none or is gone.
+func persistedReasoning(cfg backend.ConfigState, option string) string {
+	level, _ := modelReasoning(cfg, option)
+	return level
+}
+
+// withModelReasoning writes level onto the model entry behind option. changed is
+// false when that model is gone (deleted, or the Tab points at a stale option)
+// or already carries the level: there is nothing to persist then.
+func withModelReasoning(cfg backend.ConfigState, option, level string) (backend.ConfigState, bool) {
+	for i, m := range cfg.Models {
+		if modelOption(m) != option {
+			continue
+		}
+		// An entry that never carried a level means "auto", so picking auto on
+		// it is no change and must not rewrite the config or announce one.
+		stored := cfg.Models[i].ReasoningEffort
+		if stored == "" {
+			stored = "auto"
+		}
+		if stored == level {
+			return cfg, false
+		}
+		models := append([]backend.ModelConfig(nil), cfg.Models...)
+		models[i].ReasoningEffort = level
+		cfg.Models = models
+		return cfg, true
+	}
+	return cfg, false
 }
 
 // workspaceButton is the workspace entry of the info bar: the folder glyph on

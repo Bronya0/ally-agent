@@ -726,13 +726,16 @@ func popoverItem(c *ui.Context, key, text, detail string, selected bool, action 
 }
 
 // popoverModelRecent keeps the provider suffix on the model's line, so recent
-// entries stay compact even when the menu grows taller.
-func popoverModelRecent(c *ui.Context, key, name, provider string, selected bool, action func(), ink ...ui.Color) {
+// entries stay compact even when the menu grows taller. It reports whether the
+// pointer is on the row: the block belongs to no provider, so the model menu
+// closes a provider flyout the pointer left behind instead of keeping it open.
+func popoverModelRecent(c *ui.Context, key, name, provider string, selected bool, action func(), ink ...ui.Color) bool {
 	t := c.Theme()
 	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(6, 10).Justify(ui.Start).Radius(radiusSmall).Label(name + " " + provider).Cursor(ui.CursorPointer).OnClick(action)
+	hot := b.Hovered()
 	if selected {
 		b.Background(selectionFill(t.Accent))
-	} else if b.Hovered() {
+	} else if hot {
 		b.Background(t.SurfaceHover)
 	}
 	b.Children(func() {
@@ -744,6 +747,7 @@ func popoverModelRecent(c *ui.Context, key, name, provider string, selected bool
 			ui.Text(c, provider).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).SingleLine().Shrink(0)
 		})
 	})
+	return hot
 }
 
 func popoverItemColor(c *ui.Context, key, text, detail string, selected bool, color ui.Color, action func(), ink ...ui.Color) {

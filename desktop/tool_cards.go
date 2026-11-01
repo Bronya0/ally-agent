@@ -568,6 +568,13 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			summary = name
 		}
 	}
+	if name == "subagent" {
+		// The header says what the card is; the child rows below carry the
+		// role, state, task and counters.
+		verb = "Subagent"
+		summary = ""
+		desc.showTiming = false
+	}
 	result := toolResult(m)
 	if name == "scheduled_task" {
 		summary = a.scheduledTaskSummary(args, result)
@@ -590,12 +597,16 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			row.Cursor(ui.CursorPointer)
 		}
 		row.Hidden(name == "suggest").Children(func() {
-			ui.Box(c).Absolute().Left(-20).Top(0).Width(16).HeightPercent(100).Center().Children(func() { toolStatusIcon(c, state) })
+			if name != "subagent" {
+				ui.Box(c).Absolute().Left(-20).Top(0).Width(16).HeightPercent(100).Center().Children(func() { toolStatusIcon(c, state) })
+			}
 			verbColor := p.accent
 			if state == "error" || name == "delete" || name == "remote_delete_path" {
 				verbColor = c.Theme().Danger
 			}
-			ui.Text(c, verb).FontSize(fsTool).TextColor(verbColor).Shrink(0).LineHeight(1.4).NoWrap()
+			if verb != "" {
+				ui.Text(c, verb).FontSize(fsTool).TextColor(verbColor).Shrink(0).LineHeight(1.4).NoWrap()
+			}
 			if summary != "" {
 				if name == "command" || name == "remote_run_command" {
 					text := short(summary, 120)
@@ -656,7 +667,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				}
 			}
 			chips := toolChips(name, state, args, result)
-			if isMCP {
+			if isMCP || name == "subagent" {
 				chips = nil
 			}
 			for _, extra := range chips {
@@ -1513,7 +1524,9 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 	if status == "failed" {
 		status = "error"
 	}
-	if str(m, "error") != "" {
+	// A running sub-agent may already carry a tool error; that is its own
+	// business and it keeps going, so only a finished run can read as failed.
+	if str(m, "error") != "" && status != "running" {
 		status = "error"
 	} else if status == "success" && str(m, "stopReason") == "step_limit" {
 		status = "partial"
@@ -1527,94 +1540,113 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 	if label == "" {
 		label = status
 	}
-	ui.Column(c).Key(fmt.Sprintf("sub-%s-%d", str(m, "subId"), index)).Padding(10, 12).Gap(gapInline).
-		Border(1, c.Theme().Border).Background(c.Theme().Surface).Radius(radiusCard).Children(func() {
-		ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
-			// Main's SubagentInlineCard status dot: 6px, running blinks
-			// 1<->0.3 on a 1.2s ease-in-out loop in the accent tone;
-			// finished states are static dots in their own tones.
-			dot := status
-			if dot != "running" && dot != "success" && dot != "partial" && dot != "error" {
-				dot = "pending"
-			}
-			if dot == "running" {
-				color := c.Theme().Accent
-				still := uikit.StillMotion(c)
-				ui.Box(c).Size(6, 6).Draw(func(p *ui.Painter, r ui.Rect) {
-					level := float32(0.75)
-					if !still {
-						p.AnimationFrameRate(30)
-						ms := float64(p.Now().UnixMilli()%1200) / 1200
-						tri := ms * 2
-						if tri > 1 {
-							tri = 2 - tri
-						}
-						level = 0.3 + 0.7*easeInOut(float32(tri))
-					}
-					p.Fill(r, color.Alpha(level), 3)
-				})
-			} else {
-				ui.Box(c).Size(6, 6).Radius(3).Background(pillDotColor(c, pillToneOf(status)))
-			}
-			ui.Text(c, role).FontSize(fsBody).Bold()
-			ui.Spacer(c)
-			ui.Text(c, label).FontSize(fsTiny).TextColor(tone)
-			ms := int64(num(m, "durationMs"))
-			if status == "running" && num(m, "startTime") > 0 {
-				ms = time.Now().UnixMilli() - int64(num(m, "startTime"))
-				c.After(time.Second)
-			}
-			if ms > 0 {
-				ui.Text(c, fmtDur(ms)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk())
-			}
-		})
-		if desc := str(m, "description"); desc != "" {
-			uikit.Tooltip(c, ui.Text(c, desc).FontSize(fsSmall).TextColor(a.secondaryInk()).MaxLines(2), desc)
+	subID := str(m, "subId")
+	// The card hangs off the tool call that spawned it, so it carries the same
+	// "├─"/"└─" junction the grouped tool rows spell out; the card gives up that
+	// width instead of running edge to edge like the header above it.
+	prefix := "└─"
+	parentID := str(m, "parentToolCallId")
+	if index+1 < len(t.Messages) {
+		next := t.Messages[index+1]
+		if str(next, "role") == "subagent" && str(next, "parentToolCallId") == parentID {
+			prefix = "├─"
 		}
-		ui.Row(c).Gap(gapInline).Wrap().AlignItems(ui.Center).Children(func() {
-			if steps := int(num(m, "steps")); steps > 0 {
-				label := fmt.Sprintf("%d 步", steps)
-				if limit := int(num(m, "maxSteps")); limit > 0 {
-					label = fmt.Sprintf("%d/%d 步", steps, limit)
+	}
+	ui.Row(c).Key("sub-line-" + subID).FillWidth().MinWidth(0).Gap(gapInline).Children(func() {
+		// The junction sits on the card's title line, like the one in a tool
+		// group sits on its first text line.
+		ui.Box(c).Shrink(0).AlignSelf(ui.Start).Padding(11, 0).Children(func() {
+			ui.Text(c, prefix).Font(monoFamily).FontSize(fsSmall).TextColor(a.secondaryInk())
+		})
+		ui.Column(c).Key(fmt.Sprintf("sub-%s-%d", subID, index)).Grow(1).MinWidth(0).Padding(10, 12).Gap(gapInline).
+			Border(1, c.Theme().Border).Background(c.Theme().Surface).Radius(radiusCard).Children(func() {
+			ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
+				// Main's SubagentInlineCard status dot: 6px, running blinks
+				// 1<->0.3 on a 1.2s ease-in-out loop in the accent tone;
+				// finished states are static dots in their own tones.
+				dot := status
+				if dot != "running" && dot != "success" && dot != "partial" && dot != "error" {
+					dot = "pending"
 				}
-				neutralChip(c, label)
+				if dot == "running" {
+					color := c.Theme().Accent
+					still := uikit.StillMotion(c)
+					ui.Box(c).Size(6, 6).Draw(func(p *ui.Painter, r ui.Rect) {
+						level := float32(0.75)
+						if !still {
+							p.AnimationFrameRate(30)
+							ms := float64(p.Now().UnixMilli()%1200) / 1200
+							tri := ms * 2
+							if tri > 1 {
+								tri = 2 - tri
+							}
+							level = 0.3 + 0.7*easeInOut(float32(tri))
+						}
+						p.Fill(r, color.Alpha(level), 3)
+					})
+				} else {
+					ui.Box(c).Size(6, 6).Radius(3).Background(pillDotColor(c, pillToneOf(status)))
+				}
+				ui.Text(c, role).FontSize(fsBody).Bold()
+				ui.Spacer(c)
+				ui.Text(c, label).FontSize(fsTiny).TextColor(tone)
+				ms := int64(num(m, "durationMs"))
+				if status == "running" && num(m, "startTime") > 0 {
+					ms = time.Now().UnixMilli() - int64(num(m, "startTime"))
+					c.After(time.Second)
+				}
+				if ms > 0 {
+					ui.Text(c, fmtDur(ms)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk())
+				}
+			})
+			if desc := str(m, "description"); desc != "" {
+				uikit.Tooltip(c, ui.Text(c, desc).FontSize(fsSmall).TextColor(a.secondaryInk()).MaxLines(2), desc)
 			}
-			if ctxTokens := int(num(m, "contextTokens")); ctxTokens > 0 {
-				neutralChip(c, "上下文 "+fmtK(ctxTokens))
-			}
-			hit, miss := int(num(m, "cacheHitTokens")), int(num(m, "cacheMissTokens"))
-			if hit+miss > 0 {
-				neutralChip(c, fmt.Sprintf("缓存 %d%%", hit*100/(hit+miss)))
-			}
-			in, out := int(num(m, "inputTokens")), int(num(m, "outputTokens"))
-			if in+out > 0 {
-				neutralChip(c, fmt.Sprintf("↑%s ↓%s", fmtK(in), fmtK(out)))
-			}
-			ui.Spacer(c)
-			summary, errText := str(m, "summary"), str(m, "error")
-			hasReport := (status != "running" && summary != "") || errText != ""
-			open := t.uiState().ToolOpen["sub-"+str(m, "subId")]
-			reportButton, _ := buttonParts(c, "sub-report-"+str(m, "subId"), "", btnSecondary, true, "")
-			reportButton.Disabled(!hasReport).OnClick(func() { t.uiState().ToolOpen["sub-"+str(m, "subId")] = !open })
-			reportButton.Children(func() {
-				ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-					disclosureIcon(c, "file", a.secondaryInk())
-					ui.Text(c, "报告").FontSize(uikit.ButtonFontSmall)
-					caret := "chevron"
-					if open {
-						caret = "chevrondown"
+			ui.Row(c).Gap(gapInline).Wrap().AlignItems(ui.Center).Children(func() {
+				if steps := int(num(m, "steps")); steps > 0 {
+					label := fmt.Sprintf("%d 步", steps)
+					if limit := int(num(m, "maxSteps")); limit > 0 {
+						label = fmt.Sprintf("%d/%d 步", steps, limit)
 					}
-					iconGlyph(c, caret, 10).Shrink(0)
+					neutralChip(c, label)
+				}
+				if ctxTokens := int(num(m, "contextTokens")); ctxTokens > 0 {
+					neutralChip(c, "上下文 "+fmtK(ctxTokens))
+				}
+				hit, miss := int(num(m, "cacheHitTokens")), int(num(m, "cacheMissTokens"))
+				if hit+miss > 0 {
+					neutralChip(c, fmt.Sprintf("缓存 %d%%", hit*100/(hit+miss)))
+				}
+				in, out := int(num(m, "inputTokens")), int(num(m, "outputTokens"))
+				if in+out > 0 {
+					neutralChip(c, fmt.Sprintf("↑%s ↓%s", fmtK(in), fmtK(out)))
+				}
+				ui.Spacer(c)
+				summary, errText := str(m, "summary"), str(m, "error")
+				hasReport := (status != "running" && summary != "") || errText != ""
+				open := t.uiState().ToolOpen["sub-"+str(m, "subId")]
+				reportButton, _ := buttonParts(c, "sub-report-"+str(m, "subId"), "", btnSecondary, true, "")
+				reportButton.Disabled(!hasReport).OnClick(func() { t.uiState().ToolOpen["sub-"+str(m, "subId")] = !open })
+				reportButton.Children(func() {
+					ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+						disclosureIcon(c, "file", a.secondaryInk())
+						ui.Text(c, "报告").FontSize(uikit.ButtonFontSmall)
+						caret := "chevron"
+						if open {
+							caret = "chevrondown"
+						}
+						iconGlyph(c, caret, 10).Shrink(0)
+					})
 				})
 			})
-		})
-		uikit.Reveal(c.Key("sub-report-reveal"), t.uiState().ToolOpen["sub-"+str(m, "subId")], func() {
-			if errText := str(m, "error"); errText != "" {
-				notice(c, "error", errText, a.secondaryInk())
-			}
-			if summary := str(m, "summary"); summary != "" {
-				ui.Scroll(c.Key("sub-report-body-" + str(m, "subId"))).FillWidth().Height(240).Shrink(0).Clip().Children(func() { ui.Text(c, summary).FontSize(fsSmall).Selectable().LineHeight(1.6) })
-			}
+			uikit.Reveal(c.Key("sub-report-reveal"), t.uiState().ToolOpen["sub-"+str(m, "subId")], func() {
+				if errText := str(m, "error"); errText != "" {
+					notice(c, "error", errText, a.secondaryInk())
+				}
+				if summary := str(m, "summary"); summary != "" {
+					ui.Scroll(c.Key("sub-report-body-" + subID)).FillWidth().Height(240).Shrink(0).Clip().Children(func() { ui.Text(c, summary).FontSize(fsSmall).Selectable().LineHeight(1.6) })
+				}
+			})
 		})
 	})
 }

@@ -785,7 +785,9 @@ func (m *scheduledTaskManager) runCommandTask(task ScheduledTask, ctx context.Co
 	if output := strings.TrimSpace(result.Output); output != "" {
 		summary = tailString(output, scheduledTaskSummaryLimit)
 	} else if status == "completed" {
-		summary = fmt.Sprintf("exit 0 in %dms", result.DurationMS)
+		if dur := FormatDurationMS(result.DurationMS); dur != "" {
+			summary = "exit 0 in " + dur
+		}
 	}
 	m.finish(task.ID, status, summary, tailString(errText, scheduledTaskErrorTextLimit))
 }

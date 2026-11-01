@@ -7,6 +7,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	backend "ally-dev/internal/app"
 	"fmt"
 	"math"
 	"strconv"
@@ -446,17 +447,11 @@ func fmtClock(ms int64) string {
 	return time.UnixMilli(ms).Local().Format("15:04")
 }
 
+// fmtDur renders card timings with the backend's shared whole-second format,
+// so a tool card, a sub-agent summary and a scheduled-task summary never
+// disagree about how long the same run took.
 func fmtDur(ms int64) string {
-	switch {
-	case ms <= 0:
-		return ""
-	case ms < 1000:
-		return fmt.Sprintf("%dms", ms)
-	case ms < 60_000:
-		return trimZero(float64(ms)/1000) + "s"
-	default:
-		return fmt.Sprintf("%dm%02ds", ms/60000, (ms%60000)/1000)
-	}
+	return backend.FormatDurationMS(ms)
 }
 
 // pctOf renders a whole-number percentage: the footer is a glanceable badge,

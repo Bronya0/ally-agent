@@ -77,18 +77,16 @@ func (a *desktop) refreshPage(page string) {
 	}
 }
 
+// saveConfig writes the config in the background, queued behind every write
+// that came before it, and publishes the reloaded config once it lands.
 func (a *desktop) saveConfig(cfg backend.ConfigState, notice ...string) {
 	if a.core == nil || a.win == nil {
 		return
 	}
-	previous := a.configSaveTail
-	done := make(chan struct{})
-	a.configSaveTail = done
+	previous, done := a.configWriteSlot()
 	go func() {
 		defer close(done)
-		if previous != nil {
-			<-previous
-		}
+		waitConfigWrite(previous)
 		err := a.core.SaveConfig(cfg)
 		a.writeFailures.record("config", err)
 		var fresh backend.ConfigState
@@ -108,4 +106,23 @@ func (a *desktop) saveConfig(cfg backend.ConfigState, notice ...string) {
 			}
 		})
 	}()
+}
+
+// configWriteSlot reserves a place in the queue every config write joins: the
+// settings pages, the thinking level, the tool toggles and a model save. It
+// returns the write this one must wait for and the signal the next writer waits
+// on, so two of them never interleave and a later one cannot overwrite what an
+// earlier one just saved. Close done once the write and its publish are through.
+func (a *desktop) configWriteSlot() (chan struct{}, chan struct{}) {
+	previous := a.configSaveTail
+	done := make(chan struct{})
+	a.configSaveTail = done
+	return previous, done
+}
+
+// waitConfigWrite holds a background writer until the write before it landed.
+func waitConfigWrite(previous chan struct{}) {
+	if previous != nil {
+		<-previous
+	}
 }

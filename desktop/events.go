@@ -516,7 +516,10 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 			t.uiState().FollowPending = true
 		}
 	}
-	for _, k := range []string{"description", "profile", "status", "maxSteps", "startTime", "stopReason", "summary", "error", "step"} {
+	// "error" is deliberately absent: a sub:tool:error carries the failing
+	// tool's message, and copying it here marked the whole run failed while it
+	// was still working. Terminal events set the row's error explicitly below.
+	for _, k := range []string{"description", "profile", "status", "maxSteps", "startTime", "stopReason", "summary", "step"} {
 		if v, ok := p[k]; ok {
 			row[k] = v
 		}
@@ -540,8 +543,18 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 		if stop := str(p, "stopReason"); strings.Contains(strings.ToLower(stop), "limit") {
 			row["status"] = "partial"
 		}
+		// Only a terminal event may put an error on the row; a clean finish also
+		// clears anything an older event left behind.
+		if e := str(p, "error"); e != "" {
+			row["error"] = e
+		} else {
+			delete(row, "error")
+		}
 	case "sub:error":
 		row["status"] = "error"
+		if e := str(p, "error"); e != "" {
+			row["error"] = e
+		}
 	case "sub:tool:start", "sub:tool:result", "sub:tool:error":
 		tools, _ := row["toolCalls"].([]any)
 		var entry map[string]any

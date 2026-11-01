@@ -34,6 +34,9 @@ func WorkspaceTab(c *ui.Context, label, tip string, active, busy, canClose bool,
 	}
 	row.Background(ui.Transparent).Border(0, ui.Transparent).Draw(func(p *ui.Painter, r ui.Rect) {
 		if active {
+			// Active tabs fill their slot edge to edge and join the surface
+			// below, so the sides stay straight; only the top corners round
+			// into the title bar, which keeps the gap above the label.
 			paintWorkspaceTab(p, r, fill)
 		} else {
 			p.Fill(ui.Rect{X: r.X + 4, Y: r.Y + 6, W: r.W - 8, H: r.H - 12}, fill, 8)
@@ -74,22 +77,29 @@ func WorkspaceTab(c *ui.Context, label, tip string, active, busy, canClose bool,
 	return row
 }
 
-// Keep the top corners and the outward feet inside the tab's own bounds so
-// neighboring tabs never paint over its curves or intercept their input.
+// workspaceTabTop is the title bar gap an active tab leaves above its fill, so
+// the label never touches the window's top edge.
+const workspaceTabTop float32 = 6
+
+// workspaceTabCorner is the radius an active tab rounds into the title bar.
+const workspaceTabCorner float32 = 10
+
+// paintWorkspaceTab fills an active tab: straight sides spanning the whole tab
+// and joining the surface below, rounded only at the top corners. The curves
+// stay inside the tab's own bounds so neighbouring tabs never paint over them
+// or intercept their input.
 func paintWorkspaceTab(p *ui.Painter, r ui.Rect, fill ui.Color) {
 	const k float32 = 0.55228475
-	const foot float32 = 6
-	const corner float32 = 10
-	x, right, top, bottom := r.X, r.X+r.W, r.Y+6, r.Y+r.H
+	left, right := r.X, r.X+r.W
+	top, bottom := r.Y+workspaceTabTop, r.Y+r.H
+	corner := min(workspaceTabCorner, r.W/2, bottom-top)
 	var path ui.Path
-	path.MoveTo(x, bottom).
-		CubeTo(x+k*foot, bottom, x+foot, bottom-foot+k*foot, x+foot, bottom-foot).
-		LineTo(x+foot, top+corner).
-		CubeTo(x+foot, top+corner-k*corner, x+foot+corner-k*corner, top, x+foot+corner, top).
-		LineTo(right-foot-corner, top).
-		CubeTo(right-foot-corner+k*corner, top, right-foot, top+corner-k*corner, right-foot, top+corner).
-		LineTo(right-foot, bottom-foot).
-		CubeTo(right-foot, bottom-foot+k*foot, right-k*foot, bottom, right, bottom).
+	path.MoveTo(left, bottom).
+		LineTo(left, top+corner).
+		CubeTo(left, top+corner-k*corner, left+corner-k*corner, top, left+corner, top).
+		LineTo(right-corner, top).
+		CubeTo(right-corner+k*corner, top, right, top+corner-k*corner, right, top+corner).
+		LineTo(right, bottom).
 		Close()
 	p.FillPath(&path, fill)
 }

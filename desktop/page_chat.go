@@ -582,7 +582,7 @@ func (a *desktop) welcomeView(c *ui.Context, t *conversation) {
 				if img.Clicked() {
 					a.togglePetals()
 				}
-				ui.Text(c, "Ally Native · 0.1.0").FontSize(fsTiny).TextColor(a.secondaryInk())
+				ui.Text(c, a.versionLabel).FontSize(fsTiny).TextColor(a.secondaryInk())
 			})
 			ui.Column(c).Grow(1).Border(1, surfaceBorder(c)).Radius(radiusCard).Children(func() {
 				rows := [][4]string{

@@ -42,7 +42,7 @@ func TestCommandHeaderKeepsExitAndDurationAfterTheCommand(t *testing.T) {
 		t.Fatalf("missing command summary: %v", tt.Texts())
 	}
 	prev := cmd
-	for _, want := range []string{"exit 0", "12ms"} {
+	for _, want := range []string{"exit 0", "<1s"} {
 		box, ok := tt.Find(want)
 		if !ok {
 			t.Fatalf("missing %q: %v", want, tt.Texts())

@@ -21,7 +21,7 @@ func TestMCPOnlyShowsStatusAndDuration(t *testing.T) {
 				t.Fatalf("MCP leaked result: %v", tt.Texts())
 			}
 		}
-		if !tt.HasText("12ms") {
+		if !tt.HasText("<1s") {
 			t.Fatal("MCP lost timing")
 		}
 		want := "成功"
@@ -49,7 +49,7 @@ func TestToolMetadataStaysOnHeader(t *testing.T) {
 	for _, name := range []string{"http_request", "web_fetch"} {
 		msg := map[string]any{"name": name, "toolCallId": "web", "status": "success", "args": `{"url":"https://example.com"}`, "result": map[string]any{"durationMs": 37, "status": 200}}
 		tt := compactToolView(&desktop{}, msg)
-		timing, ok := tt.Find("37ms")
+		timing, ok := tt.Find("<1s")
 		header, _ := tt.Find("工具详情 web")
 		if !ok || timing.X > 400 || timing.Y < header.Y || timing.Y+timing.H > header.Y+header.H {
 			t.Fatalf("%s timing hidden or pushed away: %v", name, timing)

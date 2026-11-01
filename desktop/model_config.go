@@ -60,6 +60,23 @@ func modelIdentityPtr(m backend.ModelConfig) *backend.ModelIdentity {
 func sameModelIdentity(a, b backend.ModelIdentity) bool {
 	return strings.EqualFold(strings.TrimSpace(a.ProviderName), strings.TrimSpace(b.ProviderName)) && strings.EqualFold(strings.TrimSpace(a.Model), strings.TrimSpace(b.Model)) && a.OAuthAccountID == b.OAuthAccountID
 }
+
+// savedReasoning is the level the saved config holds for one model identity,
+// "auto" when the entry has none. The first matching entry wins, exactly as in
+// modelReasoning and withModelReasoning, so duplicate entries cannot make them
+// disagree about whether a level changed.
+func savedReasoning(cfg backend.ConfigState, id backend.ModelIdentity) string {
+	for _, saved := range cfg.Models {
+		if !sameModelIdentity(modelIdentity(saved), id) {
+			continue
+		}
+		if saved.ReasoningEffort == "" {
+			return "auto"
+		}
+		return saved.ReasoningEffort
+	}
+	return "auto"
+}
 func modelOption(m backend.ModelConfig) string {
 	label := modelLabel(m.ProviderName, m.Model)
 	if m.OAuthAccountID != "" {
@@ -94,6 +111,8 @@ func (a *desktop) editModel(index int) {
 	if a.modelDraft.ReasoningTag == "" {
 		a.modelDraft.ReasoningTag = "reasoning_content"
 	}
+	// Only a fresh draft is empty here: saved entries went through the backend's
+	// normalizeModelEntry, which rewrites every spelling of "none" to "auto".
 	if a.modelDraft.ReasoningEffort == "" {
 		a.modelDraft.ReasoningEffort = "max"
 	}
@@ -230,7 +249,10 @@ func (a *desktop) saveModelDraft() {
 	first := a.config.LastUsedModel == nil
 	target := a.current()
 	a.modelSaving = true
+	prevWrite, done := a.configWriteSlot()
 	go func() {
+		defer close(done)
+		waitConfigWrite(prevWrite)
 		err := a.core.SaveNativeModel(m, old)
 		var cfg backend.ConfigState
 		if err == nil {
@@ -242,8 +264,32 @@ func (a *desktop) saveModelDraft() {
 				a.notifyError(err.Error())
 				return
 			}
+			prevLevel := ""
+			if old != nil {
+				prevLevel = savedReasoning(a.config, *old)
+			}
 			a.config = cfg
+			level := savedReasoning(cfg, modelIdentity(m))
 			a.updateModelLabels(old, m)
+			// A Tab's own value wins at request time, so a stored level that changed has
+			// to reach the Tabs already on this model, or the info bar would show one
+			// level while the next restart reads another. Only a change does it: an
+			// unrelated edit such as the API key leaves every Tab's pick alone. It runs
+			// after the rename, so Tabs under the old label are matched, and it covers
+			// the sessions of other workspaces the rename reached as well.
+			if old != nil && level != prevLevel {
+				label := modelOption(m)
+				for _, tab := range a.tabs {
+					if tab != nil && tab.Model == label {
+						tab.Reasoning = level
+					}
+				}
+				for _, tab := range a.openSessions {
+					if tab != nil && tab.Model == label {
+						tab.Reasoning = level
+					}
+				}
+			}
 			a.modelPrevious = modelIdentityPtr(m)
 			a.modelDraft = m
 			a.modelEdit = -1

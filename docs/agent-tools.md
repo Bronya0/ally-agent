@@ -177,7 +177,7 @@ type toolResult struct {                       // infra_result.go:19
 
 `injectEnvelopeWarnings` 把参数警告合并进 `data.warnings`，解析失败就退化成追加一行纯文本——**通知必须送达模型**。
 
-`toolResultSummary`（`infra_result.go:49`）是给人看的短摘要（如 `3 files · +12 -4`、`exit 0 (120ms)`），子代理卡片用它展示进度（`orch_subagent.go:350`）。
+`toolResultSummary`（`infra_result.go:60`）是给人看的短摘要（如 `3 files · +12 -4`、`exit 0 (2s)`），子代理卡片用它展示进度（`orch_subagent.go:333`）。时长统一走 `FormatDurationMS` 的整秒格式，卡片、摘要与任务中心读同一个数。
 
 ## 七、批次策略：按 stage 调度
 

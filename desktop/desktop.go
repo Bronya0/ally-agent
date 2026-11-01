@@ -104,6 +104,7 @@ type desktop struct {
 	sshF                                    sshForm
 	tasksF                                  tasksForm
 	pluginsF                                pluginsForm
+	versionLabel                            string
 	upd                                     updateUI
 	filesF                                  fileUI
 	gameF                                   gameUI
@@ -162,6 +163,7 @@ type desktop struct {
 	sessions                                            []backend.SessionIndexEntry
 	explorer                                            bool
 	workspaceMenuOpen                                   bool
+	workspaceMenuFrom                                   string // "header" or "tabs": the entry that opened the menu
 	startupError                                        string
 	files                                               []backend.FileEntry
 	workspaceFiles                                      map[string]*workspaceFile
@@ -206,6 +208,10 @@ func Run() {
 	a.loadPrefs()
 	a.loadReleaseNotes()
 	mygo.App.WhenReady(func() {
+		a.versionLabel = "Ally Native"
+		if v := strings.TrimSpace(mygo.App.Version()); v != "" {
+			a.versionLabel = "Ally Native · " + v
+		}
 		a.refreshAutoAppearance(time.Now())
 		a.syncNativeAppearance()
 		opts := mygo.WindowOptions{

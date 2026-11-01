@@ -122,7 +122,10 @@ func SelectField(c *ui.Context, value *string, options []Option, ink ...ui.Color
 // drawn menu: the same value and chevron, the current choice marked with the
 // theme's radio mark, and no menu at all while locked. Locked controls show the
 // same value and geometry but open nothing.
-func CompactMenu(c *ui.Context, value *string, options []string, locked bool, ink ...ui.Color) ui.Element {
+//
+// onChosen receives a newly picked value on the click that picked it, so a
+// caller can persist the choice; a nil callback leaves the value in memory.
+func CompactMenu(c *ui.Context, value *string, options []string, locked bool, onChosen func(string), ink ...ui.Color) ui.Element {
 	color := SecondaryInk(c, ink)
 	label := *value
 	if label == "" && len(options) > 0 {
@@ -145,7 +148,13 @@ func CompactMenu(c *ui.Context, value *string, options []string, locked bool, in
 	b.PopoverMenuButton(func(m *ui.Menu) {
 		for _, option := range options {
 			if m.Item(option).Radio(*value == option).Chosen() {
+				if *value == option {
+					continue
+				}
 				*value = option
+				if onChosen != nil {
+					onChosen(option)
+				}
 			}
 		}
 	})

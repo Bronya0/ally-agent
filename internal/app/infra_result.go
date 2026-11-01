@@ -108,10 +108,14 @@ func toolResultSummary(name string, result *toolResult) string {
 		data, _ := json.Marshal(result.Data)
 		var r CommandResult
 		if json.Unmarshal(data, &r) == nil {
-			if r.ExitCode == 0 {
-				return fmt.Sprintf("exit 0 (%dms)", r.DurationMS)
+			exit := "exit 0"
+			if r.ExitCode != 0 {
+				exit = fmt.Sprintf("exit %d", r.ExitCode)
 			}
-			return fmt.Sprintf("exit %d (%dms)", r.ExitCode, r.DurationMS)
+			if dur := FormatDurationMS(r.DurationMS); dur != "" {
+				return exit + " (" + dur + ")"
+			}
+			return exit
 		}
 	case "service":
 		switch typed := result.Data.(type) {

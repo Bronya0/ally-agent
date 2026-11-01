@@ -704,7 +704,10 @@ func builtinToolLabel(name string) string {
 
 func (a *desktop) toggleBuiltinTool(tool backend.ToolDefinitionSummary) {
 	a.mcpF.Busy = true
+	previous, done := a.configWriteSlot()
 	go func() {
+		defer close(done)
+		waitConfigWrite(previous)
 		cfg, err := a.core.GetConfig()
 		if err == nil {
 			disabled := make([]string, 0, len(cfg.DisabledTools)+1)

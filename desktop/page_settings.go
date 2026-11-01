@@ -507,7 +507,14 @@ func (a *desktop) testProxy() {
 		a.win.Update(func() {
 			a.settings.ProxyBusy = false
 			if result.OK {
-				a.settings.ProxyNote = fmt.Sprintf("连接成功 · HTTP %d · %d ms · %s", result.StatusCode, result.DurationMS, result.Proxy)
+				note := fmt.Sprintf("连接成功 · HTTP %d", result.StatusCode)
+				if dur := fmtDur(result.DurationMS); dur != "" {
+					note += " · " + dur
+				}
+				if result.Proxy != "" {
+					note += " · " + result.Proxy
+				}
+				a.settings.ProxyNote = note
 			} else {
 				a.settings.ProxyNote = "连接失败：" + result.Error
 			}
