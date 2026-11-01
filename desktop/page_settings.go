@@ -524,6 +524,26 @@ func (a *desktop) testProxy() {
 
 // ---- Security fence ------------------------------------------------------
 
+// fenceRuleDot is the bullet in front of every safety fence rule. A dot marks a
+// list item; the shield it replaced was a status mark, and a row of identical
+// shields read like a column of warnings.
+const fenceRuleDot float32 = 5
+
+// fenceRuleLine is the height of a rule's first text line. The bullet's gutter
+// matches it and centres the dot inside, which is what keeps the mark on the
+// text's line: aligning the row to the top left the 12px shield riding above
+// the 13px text, and a rule that wraps keeps its dot on the first line.
+func fenceRuleLine() float32 { return fsSmall * 1.6 }
+
+func fenceRule(c *ui.Context, text string) {
+	ui.Row(c).Gap(gapField).AlignItems(ui.Start).Children(func() {
+		ui.Box(c).Width(fenceRuleDot).Height(fenceRuleLine()).Center().Shrink(0).Children(func() {
+			ui.Box(c).Size(fenceRuleDot, fenceRuleDot).Radius(fenceRuleDot / 2).Background(c.Theme().Accent)
+		})
+		ui.Text(c, text).FontSize(fsSmall).LineHeight(1.6)
+	})
+}
+
 func (a *desktop) settingsFence(c *ui.Context) {
 	card(c, "settings-fence", func() {
 		sectionTitle(c, "安全围栏机制")
@@ -546,10 +566,7 @@ func (a *desktop) settingsFence(c *ui.Context) {
 			"更新包在应用前校验摘要与来源。",
 		}
 		for _, rule := range rules {
-			ui.Row(c).Gap(gapField).AlignItems(ui.Start).Children(func() {
-				iconGlyph(c, "shield", 12).TextColor(c.Theme().Accent)
-				ui.Text(c, rule).FontSize(fsSmall).LineHeight(1.6)
-			})
+			fenceRule(c, rule)
 		}
 	})
 }
