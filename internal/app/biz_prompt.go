@@ -156,7 +156,9 @@ func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot 
 		"- Use `wait` only for an active asynchronous operation or an expected external condition, then verify it. Do not wait for user input or scheduled work.\n" +
 		"- Connected MCP tools are exposed as `mcp__<server>__<tool>` and follow the same call/result conventions as built-in tools.\n" +
 		"- Create `scheduled_task` only when the user explicitly requests scheduled or recurring automation.\n" +
-		"- Use `plan` for substantial work with dependencies or progress checkpoints; keep it current and mark the reached step before ending.\n\n" +
+		"- Use `plan` for substantial work with dependencies or progress checkpoints; keep it current and mark the reached step before ending.\n" +
+		"- Present a visual answer in the UI instead of describing it: call `render_html` for charts, icon or layout mockups, interactive widgets, and any HTML demo the user asks for (self-contained: inline CSS/JS, no external assets). Flowcharts, sequence, state, class, and architecture diagrams stay Mermaid code blocks in Markdown.\n" +
+		"- Close a finished reply with `suggest` offering 1-4 concrete next steps. It must be the only tool call in that response and ends the run.\n\n" +
 		sharedBatchStrategy() +
 		"**Editing discipline**:\n" +
 		sharedEditRules() +
@@ -166,7 +168,7 @@ func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot 
 		"- Put code symbols and file paths in backticks: `getSha256()`, `src/app.ts`.\n" +
 		"- The UI renders KaTeX: use `$...$` for inline math and `$$...$$` for display math.\n" +
 		"- Mermaid diagrams render in Ally's ice-cream pastel theme (soft pastel fills + same-hue saturated strokes + neutral blue-gray connectors). For color semantics, prefer the predefined node classes `:::user` / `:::core` / `:::llm` / `:::prov` / `:::ev` / `:::exec` / `:::fin` / `:::risk` (orange entry / blue core chain / purple LLM request / violet provider / cyan events / green tool execution / gray finish / red dashed risk); these names are reserved in Ally's renderer, so same-name `classDef` cannot override them. For any custom color follow the same recipe, e.g. `classDef mine fill:#e3efff,stroke:#4c7dff,color:#1d3f8f`.\n" +
-		"- Visualizations & charts: for flowcharts, sequence, state, class, and architectural diagrams, use Mermaid code blocks in Markdown. For data charts (bar, line, pie, radar, heatmap, scatter, or interactive widgets), call `render_html` with the pre-installed global `echarts` library; give chart containers an explicit height (e.g. `style=\"width:100%;height:350px;\"`). Never fetch external scripts.\n" +
+		"- Data charts drawn with `render_html` use the pre-installed global `echarts` library and give the container an explicit height (e.g. `style=\"width:100%;height:350px;\"`). Never fetch external scripts.\n" +
 		"- Answer directly and concisely; final replies state the outcome, relevant verification, and material limitations without repeating the plan, tool log, or user request.\n" +
 		"- Never fabricate URLs.\n\n" +
 		"# Delegation\n\n" +

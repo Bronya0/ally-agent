@@ -466,7 +466,7 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("subagent", "Run an isolated child task. The parent waits for the tool batch; same-stage calls can run concurrently. The child uses built-in and MCP tools, but cannot use ask, subagent, plan, skill or scheduled_task. Verify its report and stopReason.", map[string]any{
+		functionTool("subagent", "Run an isolated child task. The parent waits for the tool batch; same-stage calls can run concurrently. The child uses built-in and MCP tools, but cannot use ask, suggest, subagent, plan, skill, scheduled_task, render_html or screenshot. Verify its report and stopReason.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The task for the child agent. Be specific — include file paths and expected outcomes."},

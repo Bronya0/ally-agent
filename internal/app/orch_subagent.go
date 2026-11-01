@@ -746,7 +746,13 @@ var subagentBlockedTools = map[string]bool{
 	"plan":           true,
 	"skill":          true,
 	"scheduled_task": true,
-	"ask":            true,
+	// These address the visible user or the main session's chat UI. A sub-agent
+	// has neither: the call would either do something the user cannot see or
+	// speak past the parent that owns the conversation.
+	"ask":         true,
+	"suggest":     true,
+	"render_html": true,
+	"screenshot":  true,
 }
 
 // subagentTools returns tools available to sub-agents, excluding parent-owned
