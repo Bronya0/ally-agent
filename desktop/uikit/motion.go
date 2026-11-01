@@ -5,7 +5,9 @@ import (
 	"time"
 )
 
-// Motion durations are shared by every kit component. MyGo handles ReduceMotion.
+// Motion durations are shared by every kit component. MyGo settles the values
+// of Animate on its own when ReduceMotion or DisableAnimations is on; motion a
+// view paints itself has to ask StillMotion.
 const (
 	HoverDuration      = 140 * time.Millisecond
 	OverlayDuration    = 180 * time.Millisecond
@@ -32,4 +34,10 @@ func Reveal(c *ui.Context, open bool, build func()) ui.Element {
 		root.ClipY().Height(progress * inner.Bounds().H)
 	}
 	return root
+}
+
+// StillMotion reports that motion painted frame by frame must settle at once:
+// the user asked for reduced motion, or this frame runs with animations off.
+func StillMotion(c *ui.Context) bool {
+	return c.Preferences().ReduceMotion || c.Instant()
 }

@@ -299,13 +299,15 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 			opacity = 1
 		}
 		actions := ui.Row(c.Key("actions")).Label("用户消息操作").Height(26).Gap(4).Shrink(0)
+		// IgnoreInput keeps an unseen button out of the pointer's way while a
+		// screen reader can still reach it, which Disabled takes away.
 		actions.Opacity(actions.Animate("visibility", opacity, uikit.HoverDuration)).Children(func() {
 			mutedIconAction(c, "copy", "复制提问", "copy", 26, func() {
 				services.WriteClipboard(content)
-			}).Disabled(!show).Shrink(0)
+			}).IgnoreInput(!show).Shrink(0)
 			dangerIconAction(c, "delete", "删除该提问及之后", "trash", 26, func() {
 				a.requestDeleteUserMessage(t, i)
-			}).Disabled(!show || t.Busy).Shrink(0)
+			}).IgnoreInput(!show).Disabled(t.Busy).Shrink(0)
 		})
 	})
 }
@@ -395,11 +397,17 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 	// hovered. Removing them instead took away the button a panel is anchored
 	// to, and the panel lives in the window's overlay: it vanished the moment
 	// the pointer moved onto it, so its entries could never be chosen.
+	// The controls stay in the view, faded and inert, while the row is not
+	// hovered. Removing them instead took away the button a panel is anchored
+	// to, and the panel lives in the window's overlay: it vanished the moment
+	// the pointer moved onto it, so its entries could never be chosen.
+	// IgnoreInput leaves them in the tree for that anchor and reachable by a
+	// screen reader, while an unseen row stays out of the pointer's way.
 	visible := float32(0)
 	if show {
 		visible = 1
 	}
-	row.Opacity(visible).Disabled(!show)
+	row.Opacity(visible).IgnoreInput(!show)
 	row.Children(func() {
 		uikit.Tooltip(c, ui.Text(c, fmtDur(stat.DurationMS)).FontSize(fsSmall).TextColor(a.secondaryInk()), "本轮耗时")
 		if hit := stat.CacheHit + stat.CacheMiss; hit > 0 {

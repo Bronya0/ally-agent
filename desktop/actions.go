@@ -16,7 +16,7 @@ func (a *desktop) confirmAction(title, detail string, run func() error, after fu
 		confirmButton = "删除"
 	}
 	go func() {
-		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: title, Message: title, Detail: detail, Buttons: []string{"取消", confirmButton}, CancelButton: 0})
+		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: title, Message: title, Detail: detail, Buttons: []string{"取消", confirmButton}, CancelButton: 0, DestructiveButtons: []int{1}})
 		if err != nil {
 			a.fail(err)
 			return

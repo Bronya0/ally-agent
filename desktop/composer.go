@@ -589,7 +589,7 @@ func lastUserPrompt(t *conversation) string {
 // Only painting is scheduled; messages and layout are not rebuilt per frame.
 func (a *desktop) runSpinner(c *ui.Context) {
 	color := a.secondaryInk()
-	reduced := c.Preferences().ReduceMotion
+	reduced := uikit.StillMotion(c)
 	ui.Box(c).Width(15).Height(16).Draw(func(p *ui.Painter, r ui.Rect) {
 		if !reduced {
 			p.AnimationFrameRate(30)

@@ -363,19 +363,24 @@ func (a *desktop) petalsOverlay(c *ui.Context) {
 	if !a.petals {
 		return
 	}
+	still := uikit.StillMotion(c)
 	ui.Overlay(c, func() {
 		box := ui.Box(c).Fill().PassThrough()
 		box.Draw(func(p *ui.Painter, r ui.Rect) {
 			// Paint the petals alone: AnimationFrame on the context asked for a
 			// frame that rebuilt the whole view at the display's rate, which a
 			// chat full of messages paid for on every petal of every frame.
-			p.AnimationFrameRate(30)
-			now := p.Now()
+			// With reduced motion they rest in one still arrangement.
+			ms := 0.0
+			if !still {
+				p.AnimationFrameRate(30)
+				ms = float64(p.Now().UnixMilli())
+			}
 			for i := 0; i < 14; i++ {
-				seed := float64(i)*0.37 + float64(now.UnixMilli())/4200
+				seed := float64(i)*0.37 + ms/4200
 				x := float32((float64(i)*0.077 + 0.05) * float64(r.W))
 				drift := float32(24 * math.Sin(seed*2.1))
-				y := float64(now.UnixMilli())/9000 + float64(i)*0.113
+				y := ms/9000 + float64(i)*0.113
 				y = float64(r.H) * (y - float64(int(y)))
 				p.Fill(ui.Rect{X: r.X + x + drift, Y: r.Y + float32(y), W: 7, H: 4}, ui.RGBA(240, 183, 205, 0.55), 2)
 			}

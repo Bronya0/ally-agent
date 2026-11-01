@@ -914,15 +914,20 @@ func toolStatusIcon(c *ui.Context, state string) {
 			color := c.Theme().Accent
 			// Drawn instead of a Loop on a box: Loop asks for a frame that
 			// rebuilds the whole view, which a thinking model would do at the
-			// display's rate.
+			// display's rate. Reduced motion keeps the dot steady.
+			still := uikit.StillMotion(c)
 			ui.Box(c).Size(toolStatusDot, toolStatusDot).Draw(func(p *ui.Painter, r ui.Rect) {
-				p.AnimationFrameRate(30)
-				ms := float64(p.Now().UnixMilli()%1200) / 1200
-				tri := ms * 2
-				if tri > 1 {
-					tri = 2 - tri
+				level := float32(0.75)
+				if !still {
+					p.AnimationFrameRate(30)
+					ms := float64(p.Now().UnixMilli()%1200) / 1200
+					tri := ms * 2
+					if tri > 1 {
+						tri = 2 - tri
+					}
+					level = 0.3 + 0.7*easeInOut(float32(tri))
 				}
-				p.Fill(r, color.Alpha(0.3+0.7*easeInOut(float32(tri))), toolStatusDot/2)
+				p.Fill(r, color.Alpha(level), toolStatusDot/2)
 			})
 		default:
 			tone := pillNeutral
@@ -1534,14 +1539,19 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 			}
 			if dot == "running" {
 				color := c.Theme().Accent
+				still := uikit.StillMotion(c)
 				ui.Box(c).Size(6, 6).Draw(func(p *ui.Painter, r ui.Rect) {
-					p.AnimationFrameRate(30)
-					ms := float64(p.Now().UnixMilli()%1200) / 1200
-					tri := ms * 2
-					if tri > 1 {
-						tri = 2 - tri
+					level := float32(0.75)
+					if !still {
+						p.AnimationFrameRate(30)
+						ms := float64(p.Now().UnixMilli()%1200) / 1200
+						tri := ms * 2
+						if tri > 1 {
+							tri = 2 - tri
+						}
+						level = 0.3 + 0.7*easeInOut(float32(tri))
 					}
-					p.Fill(r, color.Alpha(0.3+0.7*easeInOut(float32(tri))), 3)
+					p.Fill(r, color.Alpha(level), 3)
 				})
 			} else {
 				ui.Box(c).Size(6, 6).Radius(3).Background(pillDotColor(c, pillToneOf(status)))

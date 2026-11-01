@@ -345,7 +345,7 @@ func (a *desktop) prepareWindowClose(proceed, cancel func()) {
 		}
 		if file.Editor != nil && file.Editor.Buffer.Modified() {
 			go func() {
-				result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: "未保存的文件", Message: "存在未保存的文件修改", Detail: "退出会放弃这些修改。", Buttons: []string{"取消", "放弃并退出"}, CancelButton: 0})
+				result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: "未保存的文件", Message: "存在未保存的文件修改", Detail: "退出会放弃这些修改。", Buttons: []string{"取消", "放弃并退出"}, CancelButton: 0, DestructiveButtons: []int{1}})
 				a.win.Update(func() {
 					if err != nil {
 						a.notifyError(err.Error())
@@ -1234,7 +1234,7 @@ func (a *desktop) workspaceFileLoadStillCurrent(root string, expected *workspace
 
 func (a *desktop) confirmDiscardFile(root string, file *workspaceFile, action func()) {
 	go func() {
-		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: "未保存的文件", Message: "放弃对 " + file.Path + " 的修改？", Buttons: []string{"取消", "放弃修改"}, CancelButton: 0})
+		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: "未保存的文件", Message: "放弃对 " + file.Path + " 的修改？", Buttons: []string{"取消", "放弃修改"}, CancelButton: 0, DestructiveButtons: []int{1}})
 		a.win.Update(func() {
 			if err != nil {
 				a.notifyError(err.Error())
