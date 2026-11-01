@@ -10,9 +10,10 @@ class PublicationTests(unittest.TestCase):
     tag = 'v1.28.0'
     repo = 'Bronya0/ally-agent'
 
-    def records(self):
+    def records(self, assets=None):
         return [[{'tag_name': 'v1.27.0', 'draft': False, 'prerelease': False},
-                 {'tag_name': self.tag, 'draft': True, 'prerelease': False}]]
+                 {'tag_name': self.tag, 'draft': True, 'prerelease': False,
+                  'assets': assets or []}]]
 
     def test_rejects_invalid_older_and_public_tags_before_writing(self):
         for tag in ('mygo', '../v1.28.0', 'v1.28.0-beta.1'):
@@ -53,16 +54,20 @@ class PublicationTests(unittest.TestCase):
                 if broken=='wrong-size': assets[0]['size']=1
                 if broken=='unfinished': assets[0]['state']='starter'
                 calls=[]
+                list_calls=0
                 def gh(*args, **kwargs):
+                    nonlocal list_calls
                     calls.append(args)
-                    if args[:2]==('api','--paginate'): return self.records()
-                    if args[0]=='api': return {'tag_name':self.tag,'draft':True,'assets':assets}
+                    if args[:2]==('api','--paginate'):
+                        list_calls += 1
+                        return self.records(assets if list_calls > 1 else None)
                     return ''
                 with mock.patch.object(release, 'ROOT', root), mock.patch.object(release, 'gh', side_effect=gh):
                     if broken:
                         with self.assertRaises(RuntimeError): release.publish(self.repo,self.tag)
                     else: release.publish(self.repo,self.tag)
                 edits=[c for c in calls if c[:2]==('release','edit')]
+                self.assertFalse(any(c[:2]==('api','repos/'+self.repo+'/releases/tags/'+self.tag) for c in calls))
                 self.assertEqual(bool(edits), broken is None)
                 if edits:
                     self.assertEqual(calls[-1], edits[0])

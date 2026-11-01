@@ -69,10 +69,15 @@ def publish(repo, tag):
     if release_context(repo, tag) is None:
         raise RuntimeError('Prepare the draft before publishing.')
     gh('release', 'upload', tag, '--repo', repo, '--clobber', *paths)
-    release = gh('api', 'repos/' + repo + '/releases/tags/' + tag, data=True)
+    # GitHub's release-by-tag endpoint can return 404 for an unpublished draft.
+    # The releases list includes drafts and their assets, so re-read it after
+    # upload and verify the draft that release_context already recognizes.
+    release = release_context(repo, tag)
+    if release is None:
+        raise RuntimeError('Draft release disappeared after uploading assets.')
     if not release['draft'] or release['tag_name'] != tag:
         raise RuntimeError('Release changed while uploading; leave publication to the operator.')
-    assets = {a['name']: a for a in release['assets']}
+    assets = {a['name']: a for a in release.get('assets', [])}
     for path in paths:
         asset = assets.get(path.name, {})
         if asset.get('size') != path.stat().st_size or asset.get('state') != 'uploaded':
