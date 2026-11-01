@@ -211,8 +211,7 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 			enabled := p.Enabled
 			uikit.SwitchNative(c.Key("plugin-switch-"+p.ID), &enabled).Disabled(a.pluginsF.Busy || !p.Valid).Label(name).OnClick(func() { a.setPluginEnabled(p, enabled) })
 			p := p
-			exportButton := cardFlat(c.Key("plugin-export-button-"+p.ID), "导出").Disabled(a.pluginsF.Busy)
-			caretButton(c, exportButton, "chevrondown", fsSmall, nil)
+			exportButton := disclosure(c, "plugin-export-button-"+p.ID, "导出", disclosureCard, "chevrondown").Disabled(a.pluginsF.Busy)
 			menuPopoverButton(c, exportButton, 210, func(dismiss func()) {
 				popoverItem(c, "plugin-export-package-"+p.ID, "导出（只含包本体）", "", false, func() {
 					dismiss()

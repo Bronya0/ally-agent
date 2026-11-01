@@ -127,25 +127,15 @@ func (a *desktop) servicesSection(c *ui.Context, workspace string) {
 				fieldNote(c, "工作区 · "+service.Workspace, a.secondaryInk())
 			}
 			detailsOpen := a.mcpF.ToolOpen["service-"+service.ID]
-			detailsButton := cardFlat(c, "详情").AlignSelf(ui.Start)
-			detailsIconName := "chevrondown"
+			detailsIcon := "chevron"
 			if detailsOpen {
-				detailsIconName = "chevron"
+				detailsIcon = "chevrondown"
 			}
-			detailsButton.OnClick(func() {
+			disclosure(c, "card-action-详情-"+service.ID, "详情", disclosureCard, detailsIcon).AlignSelf(ui.Start).OnClick(func() {
 				if a.mcpF.ToolOpen == nil {
 					a.mcpF.ToolOpen = map[string]bool{}
 				}
 				a.mcpF.ToolOpen["service-"+service.ID] = !detailsOpen
-			})
-			detailsButton.Children(func() {
-				ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "详情").FontSize(fsSmall)
-					icon := iconGlyph(c, detailsIconName, 10).Shrink(0)
-					if detailsOpen {
-						icon.Rotate(-90)
-					}
-				})
 			})
 			if detailsOpen {
 				kv(c, "ID", service.ID, a.secondaryInk())

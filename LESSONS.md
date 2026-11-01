@@ -36,7 +36,7 @@
 
 [mygo-interactive] 2026-10-29 中危 Dragged() 会让元素变 interactive，放在 DragWindow 区会抢走窗口拖拽，只在按钮上采集。@desktop/uikit
 
-[mygo-caret] 2026-10-29 中危 caretButton 既给按钮画标签又在里面画一遍：按钮显示“市场 市场 ⌄”；标签只由按钮画。@desktop/widgets.go
+[mygo-caret] 2026-10-29 中危 ButtonBase.Label 不画字、flat/cardFlat 画；同一文字再 ui.Text 一遍即“详情 详情 ⌄”，带箭头只用 disclosure()。@desktop/widgets.go
 
 [mygo-paste] 2026-10-29 中危 运行中拦下附件粘贴/拖拽且不提示：用户以为输入框坏了；pending 附件属下一轮，应允许添加。@desktop/attachments.go
 

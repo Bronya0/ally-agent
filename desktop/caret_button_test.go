@@ -7,9 +7,10 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// The market menu button shows its label once. caretButton used to draw the
-// label in a row of its own inside the button as well, which showed it twice on
-// the skills and MCP pages: 市场 市场 ⌄.
+// The market menu button shows its label once. The chevron helper used to draw
+// the label in a row of its own inside the button as well, which showed it twice
+// on the skills and MCP pages: 市场 市场 ⌄. disclosure() now builds the button,
+// so a caller has no children hook to draw the label into.
 func TestMarketMenuButtonDrawsItsLabelOnce(t *testing.T) {
 	a := &desktop{}
 	a.prefs.Appearance = "dark"

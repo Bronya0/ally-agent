@@ -449,8 +449,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 			if a.modelForm.AdvancedOpen {
 				advancedIcon = "chevrondown"
 			}
-			advancedButton := flat(c, advancedLabel).AlignSelf(ui.Start).OnClick(func() { a.modelForm.AdvancedOpen = !a.modelForm.AdvancedOpen })
-			caretButton(c, advancedButton, advancedIcon, fsSmall, nil)
+			disclosure(c, nil, advancedLabel, disclosureFlat, advancedIcon).AlignSelf(ui.Start).OnClick(func() { a.modelForm.AdvancedOpen = !a.modelForm.AdvancedOpen })
 			if a.modelForm.AdvancedOpen {
 				fieldLabel(c, "自定义请求头（JSON）")
 				textArea(c, "custom-headers", "自定义请求头", `{"X-Header": "value"}`, &a.modelHeaders, 90)
@@ -727,8 +726,7 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 		if s.advancedOpen {
 			advancedIcon = "chevrondown"
 		}
-		advancedButton := flat(c, "高级设置").AlignSelf(ui.Start).OnClick(func() { s.advancedOpen = !s.advancedOpen })
-		caretButton(c, advancedButton, advancedIcon, fsSmall, nil)
+		disclosure(c, nil, "高级设置", disclosureFlat, advancedIcon).AlignSelf(ui.Start).OnClick(func() { s.advancedOpen = !s.advancedOpen })
 		if s.advancedOpen {
 			fieldLabel(c, "自定义请求头（JSON）")
 			textArea(c, "image-headers", "自定义请求头", `{"X-Header": "value"}`, &s.headers, 80)

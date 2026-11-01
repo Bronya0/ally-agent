@@ -43,17 +43,36 @@ func flat(c *ui.Context, s string) ui.Element {
 	return button(c, nil, s, btnSecondary, false, "")
 }
 
-// caretButton puts a chevron after a button's own label. The button stays the
-// only place its label is drawn: drawing it in a row of its own as well showed
-// it twice (市场 市场 ⌄), and the record of that row is what this signature
-// removes — there is no label here to draw.
-func caretButton(c *ui.Context, b ui.Element, icon string, size float32, ink *ui.Color) ui.Element {
-	return b.Children(func() {
-		glyph := iconGlyph(c, icon, size).Shrink(0)
-		if ink != nil {
-			glyph.TextColor(*ink)
-		}
-	})
+// disclosureKind picks the weight of a disclosure button.
+type disclosureKind int
+
+const (
+	// disclosureFlat is the page-level button, the same weight as 编辑/取消.
+	disclosureFlat disclosureKind = iota
+	// disclosureCard is the quiet card action that stays out of the way until
+	// the pointer or keyboard reaches it.
+	disclosureCard
+)
+
+// disclosure is the only way to render a button with a trailing chevron, and
+// the button is the only place its label is drawn. Callers never get the
+// children hook, because drawing the label there as well showed it twice:
+// 市场 市场 ⌄ in the link menus and 详情 详情 ⌄ on a service card.
+//
+// icon is "chevron" while the section is closed and "chevrondown" while it is
+// open; the arrow is chosen per state instead of being rotated, so both states
+// keep the same optical weight.
+func disclosure(c *ui.Context, key any, label string, kind disclosureKind, icon string) ui.Element {
+	if key != nil {
+		c = c.Key(key)
+	}
+	var b ui.Element
+	if kind == disclosureCard {
+		b = uikit.Action(c, label, uikit.ActionOptions{Style: uikit.Quaternary, Small: true})
+	} else {
+		b = flat(c, label)
+	}
+	return b.Children(func() { iconGlyph(c, icon, fsSmall).Shrink(0) })
 }
 
 func flatKey(c *ui.Context, key any, s string) ui.Element {
@@ -827,8 +846,7 @@ func (a *desktop) popupFlag(key string) *bool {
 
 func (a *desktop) linkMenu(c *ui.Context, key string, links [][2]string) {
 	open := a.popupFlag(key)
-	btn := flat(c.Key(key+"-button"), "市场").OnClick(func() { *open = !*open })
-	caretButton(c, btn, "chevrondown", fsSmall, nil)
+	btn := disclosure(c, key+"-button", "市场", disclosureFlat, "chevrondown").OnClick(func() { *open = !*open })
 	services := c.Services()
 	popoverPanel(c, btn, open, 240, func() {
 		for i, entry := range links {
