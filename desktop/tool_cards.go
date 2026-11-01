@@ -262,8 +262,15 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	open := t.uiState().ToolOpen[key]
 	container := ui.Column(c.Key("tool-" + key)).FillWidth().MinWidth(0).Gap(2)
 	extra := ui.Local(container, "entries-extra", func() int { return 0 })
+	// An open group rebuilds its rows on every frame. Keep one parsed-argument
+	// memo per visible row beside the widget, so each row decodes its JSON only
+	// when that row's raw arguments actually change.
+	entryArgs := ui.Local(container, "entry-args", func() []toolArgsMemo { return nil })
 	if !open {
 		*extra = 0
+		// Releasing the memos together with the rows keeps a long transcript from
+		// holding one decoded map per row of every group the user ever opened.
+		*entryArgs = nil
 	}
 
 	_, windowEnd := a.chatMessageWindow(t)
@@ -294,13 +301,19 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	if open {
 		visibleEnd = min(end, index+100+*extra)
 	}
-	entries := make([]toolGroupEntry, 0, visibleEnd-index)
+	// A collapsed group draws no rows, so only allocate them when it is open.
+	var entries []toolGroupEntry
 	if open {
+		entries = make([]toolGroupEntry, 0, visibleEnd-index)
 		for i := index; i < visibleEnd; i++ {
 			m := t.Messages[i]
 			name := readGrepGroupName(m)
 			state := toolState(m)
-			args := parseToolArgs(str(m, "args"))
+			slot := i - index
+			for len(*entryArgs) <= slot {
+				*entryArgs = append(*entryArgs, toolArgsMemo{})
+			}
+			args := (*entryArgs)[slot].get(str(m, "args"))
 			title := toolArgSummary(name, args)
 			if name == "command" {
 				entries = append(entries, toolGroupEntry{index: i, message: m, name: name, title: title, state: state})
@@ -786,7 +799,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					}
 					break
 				}
-				a.toolHTMLView(c, t, m)
+				a.toolHTMLView(c, t, m, args)
 				ui.Row(c).Gap(8).Children(func() {
 					flat(c, "导出 HTML").OnClick(func() { a.exportHTML("preview.html", html) })
 					flat(c, "在浏览器打开").OnClick(func() { a.openHTMLPreview(html) })

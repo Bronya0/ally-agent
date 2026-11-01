@@ -287,6 +287,14 @@ func deref(root map[string]any) map[string]any {
 		return nil
 	}
 	cloned := cloneMap(root)
+	// Without a local $ref there is nothing to resolve, and rebuilding the tree
+	// here would copy data cloneMap already made private. Tool schemas take this
+	// path on every chat request, so the skipped copy is the common case.
+	if !hasAnyRef(cloned) {
+		delete(cloned, "$defs")
+		delete(cloned, "definitions")
+		return cloned
+	}
 	visited := make(map[string]bool)
 	resolved := resolveNode(cloned, cloned, visited)
 	resMap, ok := resolved.(map[string]any)
@@ -346,6 +354,30 @@ func resolveNode(node any, root map[string]any, visited map[string]bool) any {
 	default:
 		return node
 	}
+}
+
+// hasAnyRef reports whether a schema tree contains a $ref anywhere. A tree
+// without one has nothing for resolveNode to merge, so deref can keep the copy
+// cloneMap already produced instead of rebuilding every node a second time.
+func hasAnyRef(node any) bool {
+	switch val := node.(type) {
+	case []any:
+		for _, v := range val {
+			if hasAnyRef(v) {
+				return true
+			}
+		}
+	case map[string]any:
+		if _, ok := val["$ref"].(string); ok {
+			return true
+		}
+		for _, v := range val {
+			if hasAnyRef(v) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func resolveLocalPointer(root map[string]any, ref string) (any, bool) {
