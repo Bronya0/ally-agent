@@ -40,7 +40,7 @@ scope    = openid profile email offline_access resource.invoke chatgpt.tokens.us
 
 `Manager.Do` 只允许向官方 Resource 发送 `GET /models` 和 `POST /responses`，在后端注入 Bearer Token，禁止自动重定向，并登记在途请求供退出时取消。HTTP 客户端沿用 Ally 的代理配置。
 
-[`prov_chatgpt.go`](../internal/app/prov_chatgpt.go) 负责订阅 Responses 请求的兼容转换。请求允许名单、角色与工具 namespace 转换、当前发送及省略的字段统一维护在[三协议字段：Responses](model-protocol-fields.md#responses)，本页只维护认证接入。缓存实测及尚未解决的零命中问题见[缓存排查](chatgpt-cache-diagnostics.md)。
+[`prov_chatgpt.go`](../internal/app/prov_chatgpt.go) 负责订阅 Responses 请求的兼容转换。请求允许名单、角色与工具 namespace 转换、当前发送及省略的字段统一维护在[三协议字段：Responses](model-protocol-fields.md#responses)，本页只维护认证接入。缓存实现与排查方法见[缓存实现与观测](agent-prompt-cache.md)。
 
 兼容层保留结构化错误与请求标识，并清理错误中可能回显的 Bearer Token。`subscription_sharing_usage_limit_exceeded` 会暂停该账号的调用，重新授权或显式刷新模型目录后可再次尝试；其他永久性授权错误直接返回，不自动重试。
 

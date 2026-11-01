@@ -8,7 +8,7 @@
 | 六家兼容平台公开的字段及抓取来源 | [供应商字段资料](provider-api-fields.md)（资料快照，不是实现清单） |
 | 提示词冻结、追加历史、用量统计 | [缓存实现与观测](agent-prompt-cache.md) |
 | ChatGPT 登录和凭据生命周期 | [ChatGPT Auth](chatgpt-auth.md) |
-| 订阅零缓存实测、限制与采集方法 | [订阅缓存排查](chatgpt-cache-diagnostics.md) |
+| 缓存实现、诊断开关与排查顺序 | [缓存实现与观测](agent-prompt-cache.md) |
 
 “省略”表示 Ally 不主动设置该请求字段，不表示服务端禁用该能力；服务端可能采用默认值。历史内容中的同名字段按回放契约处理。
 
@@ -105,7 +105,7 @@
 
 内部 `responsesPromptCacheKey` 仍按会话生成，用于回放作用域与诊断分组；省略请求字段不会清空它。子代理继续使用父会话的稳定通道身份，并以单独的 `reasoningScope` 隔离每个 run 的思考台账。OpenRouter 的 `x-session-id` 请求头也保留，见下一节。
 
-OpenAI Docs 将 GPT-5.6+ 的 key 定义为可选的缓存核算分组，而非必需路由开关。Ally 当前仍发送稳定 key，以恢复此前请求形状供用户验证；这不代表恢复 key 已被证实能改善订阅额度。2026-10-25 小样本对照中，带 key 与不带 key 都出现过命中和零命中；不能承诺任何一项请求精简必然提高命中率，详见[实测记录](chatgpt-cache-diagnostics.md)。
+OpenAI Docs 将 GPT-5.6+ 的 key 定义为可选的缓存核算分组，而非必需路由开关。Ally 当前仍发送稳定 key，以恢复此前请求形状供用户验证；这不代表恢复 key 已被证实能改善订阅额度。2026-10-25 小样本对照中，带 key 与不带 key 都出现过命中和零命中；不能承诺任何一项请求精简必然提高命中率，详见[缓存实现与观测](agent-prompt-cache.md)。
 
 <a id="history"></a>
 ## 5. 请求开关与历史回放

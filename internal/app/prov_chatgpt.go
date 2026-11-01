@@ -43,7 +43,7 @@ func chatGPTResponsesRequest(body map[string]any) error {
 	// byte-identical requests (Sol A/B probe, 2026-10-25). Omit the optional
 	// display summary on this route; retain effort, context and encrypted
 	// reasoning items so the model still reasons and replays its full history.
-	// See docs/chatgpt-cache-diagnostics.md. API-key requests do not pass here.
+	// See docs/agent-prompt-cache.md. API-key requests do not pass here.
 	if reasoning, ok := body["reasoning"].(map[string]any); ok {
 		delete(reasoning, "summary")
 	}

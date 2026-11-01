@@ -1,6 +1,6 @@
 # Agent 提示词缓存：实现与观测
 
-本文记录 Ally 为复用稳定上下文所做的工程措施。三协议的**当前字段清单只维护在[模型协议字段](model-protocol-fields.md)**；供应商资料见[字段参考](provider-api-fields.md)，订阅实测见[缓存排查](chatgpt-cache-diagnostics.md)。
+本文记录 Ally 为复用稳定上下文所做的工程措施。三协议的**当前字段清单只维护在[模型协议字段](model-protocol-fields.md)**；供应商资料见[字段参考](provider-api-fields.md)。
 
 ## 1. 一致性不等于命中
 
@@ -94,9 +94,17 @@ CacheHitRate = Σ CacheHitTokens / Σ (CacheHitTokens + CacheMissTokens)
 5. 对相同账号/端点做控制变量实验。每组分别预热、重复、追加完整原生输出；记录时间、返回模型、effort、service tier 及原始计数。
 6. 对请求被接受、字段被省略、前缀未变、缓存确实命中分别下结论，不能相互替代。
 
-最终请求诊断开关、字段含义和已知局限统一见[订阅缓存排查](chatgpt-cache-diagnostics.md#diagnostics)。其中的客户端前缀比较目前只覆盖同一 run，不能用多个 run 都出现 first_request 来证明跨提问前缀一致。
+## 6. 采集最终请求诊断
 
-## 6. 参考
+默认关闭。把 `ALLY_PERF_DIAGNOSTICS` 设成日志文件路径后再启动程序，日志按行追加；诊断结束后关掉该变量。
+
+- 比较对象是 SDK 序列化和订阅兼容处理之后的**最终请求**；编排层的 `noteRequestPrefix` 覆盖不到这层差异。
+- 主要字段：`wire_prefix`（first_request / unchanged_prefix / head_changed / tail_changed / removed_changed / lane_limit）、`wire_input_items`、`wire_reasoning_items`、`wire_cache_key_present`、`wire_cache_mode`、`cache_usage_reported`、`cache_write_tokens`。
+- 只保存时序、计数和比较结论，不保存请求正文、工具参数、凭据、账号、缓存键值或前缀哈希。
+- `cache_usage_reported: false` 表示没拿到缓存计数，不能当成实测零命中。
+- 比较基线只在单次 run 内保存，按模型/端点/内部回放身份分组，最多 64 组，run 结束即释放；多个 run 都出现 first_request 不能证明跨提问前缀一致。
+
+## 7. 参考
 
 - [OpenAI Docs：Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)
 - [OpenAI Docs：Prompt cache diagnostics](https://developers.openai.com/api/docs/guides/prompt-caching/diagnostics)
