@@ -24,6 +24,23 @@ func toolCardKey(t *conversation, index int, message map[string]any) string {
 	return fmt.Sprintf("%s-%d", t.ID, index)
 }
 
+// toolTextMemo keeps one derived block of text while its source stays the same
+// string. Frame after frame the source is the string the message already holds,
+// so this compares a header rather than scanning the whole log again.
+type toolTextMemo struct {
+	valid  bool
+	source string
+	text   string
+}
+
+func (m *toolTextMemo) get(source string) string {
+	if m.valid && m.source == source {
+		return m.text
+	}
+	m.valid, m.source, m.text = true, source, stripBlankLines(source)
+	return m.text
+}
+
 type diffMemo struct {
 	source  string
 	rows    []splitDiffRow

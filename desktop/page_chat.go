@@ -328,16 +328,17 @@ func lastUserIndex(messages []map[string]any) int {
 // the rest expands on demand.
 func (a *desktop) collapsiblePrompt(c *ui.Context, t *conversation, i int, content string) {
 	lines := strings.Count(content, "\n") + 1
-	long := len([]rune(content)) > 400 || lines > 6
+	// Cutting walks rune boundaries instead of converting the whole prompt: this
+	// runs for every visible message on every frame.
+	cut, truncated := cutRunes(content, 400)
+	long := truncated || lines > 6
 	st := t.uiState()
 	shown := content
 	if long && !st.PromptOpen[i] {
-		cut := content
-		if r := []rune(cut); len(r) > 400 {
-			cut = string(r[:400]) + "…"
+		if truncated {
+			cut += "…"
 		}
-		ls := strings.Split(cut, "\n")
-		if len(ls) > 6 {
+		if ls := strings.Split(cut, "\n"); len(ls) > 6 {
 			cut = strings.Join(ls[:6], "\n") + "\n…"
 		}
 		shown = cut

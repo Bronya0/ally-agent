@@ -1174,13 +1174,38 @@ func stripBlankLines(s string) string {
 
 // Match main's collapsed terminal white-space: pre-line. Only the display
 // preview collapses horizontal whitespace; expanded output keeps indentation.
+// The tail is taken first: blank lines are dropped from it rather than from the
+// whole log, which this runs on for every frame while the card is collapsed.
 func commandPreviewText(output string, lines int) string {
-	preview := tailLines(stripBlankLines(output), lines)
-	rows := strings.Split(preview, "\n")
-	for i, row := range rows {
-		rows[i] = strings.Join(strings.FieldsFunc(row, func(r rune) bool { return r == ' ' || r == 9 || r == 12 || r == 11 }), " ")
+	if lines <= 0 {
+		return ""
 	}
-	return strings.Join(rows, "\n")
+	trimmed := strings.TrimRight(output, "\n")
+	if trimmed == "" {
+		return ""
+	}
+	// A run of blank lines at the end would leave the window short of rows, so
+	// widen it until enough survive or the whole output is in hand.
+	for window := lines*4 + 8; ; window *= 4 {
+		tail := tailLines(trimmed, window)
+		rows := strings.Split(tail, "\n")
+		kept := rows[:0]
+		for _, row := range rows {
+			// \r is a separator too: Windows output arrives as CRLF, and dropping the
+			// blank-line pass upstream means each row still carries its own \r.
+			row = strings.Join(strings.FieldsFunc(row, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\f' || r == '\v' }), " ")
+			if row != "" {
+				kept = append(kept, row)
+			}
+		}
+		if len(kept) < lines && len(tail) < len(trimmed) {
+			continue
+		}
+		if len(kept) > lines {
+			kept = kept[len(kept)-lines:]
+		}
+		return strings.Join(kept, "\n")
+	}
 }
 
 func toolChips(name, state string, args, result map[string]any) []string {
@@ -1290,11 +1315,17 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 		}
 		codeBlock(c, fmt.Sprintf("tool-edit-%d", index), resultText(result), 150, a.secondaryInk())
 	case "command", "remote_run_command":
-		output := stripBlankLines(commandOutput(result))
-		if output == "" {
-			output = "(没有输出)"
-		}
-		toolCodeWindow(c, fmt.Sprintf("tool-out-%d", index), output, true, "", a.secondaryInk())
+		// The transcript is the whole log: joining and stripping it again on every
+		// frame copied the entire output, the biggest text a card holds.
+		holder := ui.Column(c.Key(fmt.Sprintf("tool-out-holder-%d", index)))
+		memo := ui.Local(holder, "output", func() toolTextMemo { return toolTextMemo{} })
+		holder.Children(func() {
+			output := memo.get(commandOutput(result))
+			if output == "" {
+				output = "(没有输出)"
+			}
+			toolCodeWindow(c, fmt.Sprintf("tool-out-%d", index), output, true, "", a.secondaryInk())
+		})
 	case "create", "remote_create_file":
 		codeBlock(c, fmt.Sprintf("tool-create-%d", index), resultText(result), 150, a.secondaryInk())
 	case "list":
@@ -1654,16 +1685,29 @@ func head(items []string, n int) []string {
 	return items
 }
 
+// tailLines returns the last n lines by scanning back from the end. A collapsed
+// card asks for this on every frame and its output can be a whole build log, so
+// splitting the entire string and joining it again was the expensive part.
 func tailLines(s string, n int) string {
-	s = strings.TrimRight(s, "\n")
-	if s == "" {
+	if n <= 0 {
 		return ""
 	}
-	lines := strings.Split(s, "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
+	end := len(s)
+	for end > 0 && s[end-1] == '\n' {
+		end--
 	}
-	return strings.Join(lines, "\n")
+	if end == 0 {
+		return ""
+	}
+	start := strings.LastIndexByte(s[:end], '\n') + 1
+	for kept := 1; kept < n && start > 0; kept++ {
+		previous := strings.LastIndexByte(s[:start-1], '\n')
+		if previous < 0 {
+			return s[:end]
+		}
+		start = previous + 1
+	}
+	return s[start:end]
 }
 
 func shortBlock(s string, n int) string {
@@ -1675,11 +1719,19 @@ func shortBlock(s string, n int) string {
 }
 
 func unifiedSnippet(diff string, context int) string {
-	lines := strings.Split(strings.ReplaceAll(diff, "\r\n", "\n"), "\n")
 	var out []string
-	for _, l := range lines {
-		if strings.HasPrefix(l, "+") || strings.HasPrefix(l, "-") || strings.HasPrefix(l, "@@") {
-			out = append(out, l)
+	// Scanned line by line instead of split into a slice of every line: this runs
+	// for a collapsed card on every frame, and only the +/- rows are kept.
+	for rest := diff; rest != ""; {
+		line := rest
+		if i := strings.IndexByte(rest, '\n'); i >= 0 {
+			line, rest = rest[:i], rest[i+1:]
+		} else {
+			rest = ""
+		}
+		line = strings.TrimSuffix(line, "\r")
+		if strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") || strings.HasPrefix(line, "@@") {
+			out = append(out, line)
 		}
 	}
 	if len(out) == 0 {
