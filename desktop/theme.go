@@ -136,9 +136,10 @@ func (p palette) chromeColor() ui.Color {
 
 func (p palette) headerColor() ui.Color {
 	if p.dark {
-		// Lift the dark frame enough to separate the active tab from the
-		// conversation surface, while keeping its accent tint restrained.
-		return p.panel.Mix(p.accent, 0.03).Mix(ui.Hex("#ffffff"), 0.08)
+		// One fixed charcoal for every dark palette: tinting the frame with the
+		// accent and lifting it toward white read brighter than the panel it
+		// wraps, and the window controls have to match it exactly.
+		return ui.Hex("#2e2e2e")
 	}
 	base := p.chrome
 	if base.A == 0 {
@@ -283,6 +284,10 @@ func (a *desktop) theme() *ui.Theme {
 	t.Accent = p.accent
 	t.AccentHover = p.accent.Mix(ui.Hex("#ffffff"), 0.18)
 	t.AccentPressed = p.accent.Mix(ui.Hex("#000000"), 0.12)
+	if !p.dark {
+		t.AccentHover = p.accent.Mix(p.text, 0.18)
+		t.AccentPressed = p.accent.Mix(p.text, 0.26)
+	}
 	t.AccentText = p.accentText
 	t.Text = p.text
 	// TextMuted carries the placeholder tone: MyGo paints empty inputs in it.
@@ -298,6 +303,7 @@ func (a *desktop) theme() *ui.Theme {
 		t.Danger = uikit.ToneColorForTheme(t, uikit.Error)
 	}
 	t.Focus = p.accent
+	t.Selection = p.accent.Alpha(0.30)
 	t.Font = nativeFontFamily()
 	t.FontSize = 13
 	t.Radius = radiusControl
@@ -556,8 +562,18 @@ func boolOf(p map[string]any, k string) bool {
 	return v
 }
 
-func nativeFontFamily() string {
-	return "Inter"
-}
+func nativeFontFamily() string { return appFontFamily }
 
-func nativeMonoFontFamily() string { return "Inter" }
+const (
+	// interFamily is the name the bundled Inter files register under.
+	interFamily = "Inter"
+	// appFontFamily is the one font Ally uses, Latin and everything else in a
+	// single list: Inter draws the letters it ships, the system UI font draws
+	// the rest, digits included, because the bundled subset has neither digits
+	// nor CJK. One list is also the fast path: naming the fallback explicitly
+	// costs one cached lookup (5 ms to first paint of a 79 KB Markdown file),
+	// where the empty family and a bare "monospace" re-run font matching for
+	// every run (713 ms and 727 ms for the same file). Never ship a generic
+	// name on its own, and never let a second family list appear elsewhere.
+	appFontFamily = interFamily + ", system-ui"
+)

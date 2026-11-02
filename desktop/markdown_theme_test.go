@@ -67,7 +67,7 @@ func TestReadingTypographySeparatesInlineAndFencedCode(t *testing.T) {
 	a.prefs.Palette = paletteBlue
 	conversation := &conversation{Messages: []map[string]any{{"role": "assistant"}}}
 	options := a.markdownOptions(conversation, 0)
-	if options.Theme.Font != "Inter" || options.Theme.CodeFont != "Inter" || options.Theme.FontSize != 16 || options.Theme.CodeSize != 1 {
+	if options.Theme.Font != appFontFamily || options.Theme.CodeFont != appFontFamily || options.Theme.FontSize != 16 || options.Theme.CodeSize != 1 {
 		t.Fatalf("inline typography: %+v", options.Theme)
 	}
 	if body, code := readingSizes(18, 15); body != 18 || code != 15 {

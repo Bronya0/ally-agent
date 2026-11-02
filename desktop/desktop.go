@@ -65,6 +65,12 @@ type workspaceFile struct {
 type desktop struct {
 	memoryDiagnosticBusy                    bool
 	pluginHost                              *pluginhost.Host
+	pluginThemePalette                      pluginhost.Palette
+	pluginTheme                             pluginhost.Theme
+	pluginThemeReady                        bool
+	pluginSyncKey                           pluginHostSyncKey
+	pluginSyncReady                         bool
+	pluginsRevision                         uint64
 	previews                                previewPool
 	previewRequests                         []previewRequest
 	previewTimer                            *time.Timer
@@ -77,6 +83,7 @@ type desktop struct {
 	configSaveTail                          chan struct{}
 	writeFailures                           windowWriteFailures
 	prefsSaveTail                           chan struct{}
+	prefsGeometryTimer                      *time.Timer
 	lastCompletionNotice                    time.Time
 	completionNotices                       map[string]bool
 	completionNoticeOrder                   []string
@@ -326,6 +333,7 @@ func Run() {
 				a.customAvatar = customAvatar
 				a.avatarStyle, a.avatarPoses = avatarStyle, avatarPoses
 				a.plugins = plugins
+				a.pluginsRevision++
 				if pluginErr != nil {
 					a.notifyError("插件列表加载失败：" + pluginErr.Error())
 				}
@@ -633,7 +641,7 @@ func (a *desktop) chooseWorkspace() {
 			return
 		}
 		if p != "" {
-			a.win.Update(func() { a.config.Workspace = p; a.newConversation(p) })
+			a.win.Update(func() { a.restoreWorkspaceHistory(p); a.config.Workspace = p; a.newConversation(p) })
 		}
 	}()
 }
@@ -667,8 +675,7 @@ func (a *desktop) inject(t *conversation, text string) bool {
 	t.PendingAttachments = nil
 	t.Draft = ""
 	t.Status = "已追加，本轮继续执行…"
-	t.uiState().Follow = true
-	t.uiState().FollowPending = true
+	followLatest(t)
 	a.persist(t)
 	return true
 }
@@ -743,8 +750,7 @@ func (a *desktop) send(t *conversation, text string) bool {
 	t.Busy = true
 	t.Draft = ""
 	t.Status = "正在连接模型…"
-	t.uiState().Follow = true
-	t.uiState().FollowPending = true
+	followLatest(t)
 	a.persist(t)
 	go func() {
 		id, err := a.core.StartChat(backend.ChatRequest{SessionID: t.ID, Message: text, Attachments: attachments, Config: cfg})
@@ -1088,6 +1094,8 @@ func (a *desktop) openFile(path string) {
 	}
 	if old := a.workspaceFiles[workspaceKey(root)]; old != nil {
 		if old.Path == path {
+			// A pending switch must not replace the file the user just chose again.
+			a.workspacePreview.cancelLoad(root)
 			return
 		}
 		if old.Saving {
@@ -1124,7 +1132,7 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 		req := backend.WorkspacePathRequest{Workspace: root, Path: path}
 		var newFile *workspaceFile
 		var previewErr error
-		var assist *editorAssistIndex
+		var buffer *editor.Buffer
 		var loadedText string
 		if kind == workspaceFileDocument {
 			doc, err := a.core.ReadWorkspaceDocument(ctx, req)
@@ -1152,8 +1160,12 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 			r, err := a.core.ReadWorkspaceFileAt(req)
 			previewErr = err
 			if err == nil {
-				assist = buildEditorAssistIndex(path, r.Content, 0)
+				if ctx.Err() != nil {
+					return
+				}
 				loadedText = r.Content
+				buffer = editor.NewBuffer(loadedText)
+				buffer.SetLanguage(editor.LanguageFor(path))
 				newFile = &workspaceFile{Path: path, Version: r.Version}
 			}
 		}
@@ -1218,10 +1230,7 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 			if kind.isPreviewOnly() {
 				newFile.Editor = emptyFileEditor()
 			} else {
-				buffer := editor.NewBuffer(loadedText)
-				buffer.SetLanguage(editor.LanguageFor(path))
-				newFile.Editor = &editor.State{Buffer: buffer, Font: ui.Font{Family: "Inter", Size: fsEditor}, Label: "文件编辑器", NoScrollPastEnd: true}
-				newFile.Assist = assist
+				newFile.Editor = &editor.State{Buffer: buffer, Font: ui.Font{Family: monoFamily, Size: fsEditor}, Label: "文件编辑器", NoScrollPastEnd: true}
 			}
 			if newFile.Document != nil {
 				// Keep parsed document previews to one open file at a time.
@@ -1239,8 +1248,15 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 			a.workspaceFiles[workspaceKey(root)] = newFile
 			if !kind.isPreviewOnly() {
 				a.configureEditorAssist(root, newFile)
+				// Display the file before preparing completions and symbols. The
+				// worker owns its text snapshot; only the UI thread publishes it.
+				version := buffer.Version()
+				go func(file *workspaceFile, source string) {
+					index := buildEditorAssistIndex(path, source, version)
+					a.win.Update(func() { a.installEditorAssist(root, file, buffer, index) })
+				}(newFile, loadedText)
 			}
-			if expected != nil {
+			if expected != nil && expected.Path == path {
 				a.notifySuccess("文件已刷新")
 			}
 		})

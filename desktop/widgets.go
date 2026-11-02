@@ -25,7 +25,7 @@ func muted(c *ui.Context, s string, size float32, ink ...ui.Color) ui.Element {
 	return uikit.Muted(c, s, size, ink...)
 }
 
-var monoFamily = nativeMonoFontFamily()
+var monoFamily = nativeFontFamily()
 
 func mono(c *ui.Context, s string, size float32) ui.Element {
 	return ui.Text(c, s).Font(monoFamily).FontSize(size).Selectable()
@@ -650,7 +650,10 @@ func statCard(c *ui.Context, id, title, big, detail string, ink ...ui.Color) {
 // The 150px collapsed cap mirrors main's .tool-body so collapsed previews
 // stop at the same height in both clients.
 func codeBlock(c *ui.Context, id, content string, maxHeight float32, ink ...ui.Color) {
-	toolCodeWindow(c, id, content, true, "", ink...)
+	if maxHeight <= 0 {
+		maxHeight = 240
+	}
+	toolCodeWindowHeight(c, id, content, true, "", maxHeight, true, ink...)
 }
 
 // inlineError is the recurring red detail line under failed operations.
