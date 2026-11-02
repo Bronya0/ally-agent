@@ -33,7 +33,9 @@ func surfacePanel(c *ui.Context, key any, padding, radius float32, build func())
 }
 
 // overlayPanel is the floating picker used by the composer and the model menu:
-// same material as a card, plus the shadow and max height an overlay needs.
+// same material as a card, plus the shadow and max height an overlay needs. It
+// keeps the keyboard focus in the composer, whose input drives these pickers, so
+// pressing a row or the button that opened it leaves the arrow keys working.
 func overlayPanel(c *ui.Context, key any, width, height float32, build func()) ui.Element {
 	e := ui.Column(c.Key(key)).FillWidth().Gap(gapTight).Radius(radiusCard).Clip()
 	if width > 0 {
@@ -44,16 +46,20 @@ func overlayPanel(c *ui.Context, key any, width, height float32, build func()) u
 	}
 	paintSurface(e, surfaceFill(c), surfaceBorder(c))
 	e.Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.28))
+	e.KeepFocus()
 	return e.Children(build)
 }
 
 // hoverRow paints the shared hover / selected tint on a row that already lays
-// out its own content, without touching its padding or height.
+// out its own content, without touching its padding or height. A selected row
+// takes the accent tint the other one-of-N lists use: on the panel fill the
+// hover tint is barely a shade lighter, which read as "nothing is selected" in
+// a picker the arrow keys drive.
 func hoverRow(c *ui.Context, e ui.Element, selected bool) ui.Element {
 	fill := ui.Transparent
 	switch {
 	case selected:
-		fill = c.Theme().SurfaceHover
+		fill = selectionFill(c.Theme().Accent)
 	case e.Hovered():
 		fill = c.Theme().SurfaceHover
 	}

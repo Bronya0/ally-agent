@@ -200,9 +200,32 @@ func (a *desktop) composerKeys(c *ui.Context, t *conversation, input ui.Element)
 				return true
 			}
 		}
-		if st.SessionsOpen && k.Key == ui.KeyEscape {
-			st.SessionsOpen = false
-			return true
+		// The history picker owns the arrows while it is open: without this the
+		// editor moved the caret and the draft history behind the panel, and a row
+		// could only ever be opened with the mouse.
+		if st.SessionsOpen {
+			sessions := a.workspaceSessions(t.Workspace)
+			switch k.Key {
+			case ui.KeyUp:
+				if st.SessionsIndex > 0 {
+					st.SessionsIndex--
+				}
+				return true
+			case ui.KeyDown:
+				if st.SessionsIndex < len(sessions)-1 {
+					st.SessionsIndex++
+				}
+				return true
+			case ui.KeyEnter:
+				if st.SessionsIndex >= 0 && st.SessionsIndex < len(sessions) {
+					st.SessionsOpen = false
+					a.chooseSession(sessions[st.SessionsIndex].ID)
+					return true
+				}
+			case ui.KeyEscape:
+				st.SessionsOpen = false
+				return true
+			}
 		}
 		if !composing && k.Mods == 0 && (k.Key == ui.KeyUp || k.Key == ui.KeyDown) {
 			if text, ok := navigateInputHistory(t, k.Text(), k.Key == ui.KeyUp); ok {
@@ -337,7 +360,7 @@ func (a *desktop) builtinCommands(t *conversation) []slashCommand {
 	return []slashCommand{
 		{"new", "新建会话，清空上下文", "", func() { a.newSession() }},
 		{"skills", "查看可用技能", "", func() { a.changePage("skills") }},
-		{"sessions", "查看/切换历史会话", "", func() { t.uiState().SessionsOpen = true }},
+		{"sessions", "查看/切换历史会话", "", func() { a.openSessionsMenu(t) }},
 		{"init", "分析项目并生成 AGENTS.md", "", func() { a.send(t, "请分析这个项目，生成或更新 AGENTS.md。") }},
 		{"note", "保存长期记忆", "", func() { a.send(t, projectMemoryPrompt) }},
 		{"lesson", "总结易踩坑并更新 LESSONS.md", "", func() { a.send(t, "请总结这次对话里容易踩坑的地方，并更新 LESSONS.md。") }},
@@ -485,14 +508,52 @@ func (a *desktop) mentionMenu(c *ui.Context, t *conversation) {
 	})
 }
 
+// openSessionsMenu opens the history picker with a row already selected. Both
+// entries (the /sessions command and the info-bar button) come through here, so
+// the list never opens with nothing highlighted: the current session when the
+// list holds it, otherwise the newest one.
+func (a *desktop) openSessionsMenu(t *conversation) {
+	st := t.uiState()
+	st.SessionsOpen = true
+	st.SessionsIndex = 0
+	for i, s := range a.workspaceSessions(t.Workspace) {
+		if s.ID == t.ID {
+			st.SessionsIndex = i
+			break
+		}
+	}
+	// The arrows and Enter for this panel arrive through the composer input, so
+	// opening the panel from its button hands the keyboard back to it.
+	a.composerFocus = t.ID
+}
+
+func (a *desktop) toggleSessionsMenu(t *conversation) {
+	if t.uiState().SessionsOpen {
+		t.uiState().SessionsOpen = false
+		return
+	}
+	a.openSessionsMenu(t)
+}
+
+// chooseSession switches to the picked session and hands the keyboard back to
+// its composer, so the next keystroke is a message instead of dead input.
+func (a *desktop) chooseSession(id string) {
+	a.openSession(id)
+	a.composerFocus = id
+}
+
 func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 	st := t.uiState()
 	sessions := a.workspaceSessions(t.Workspace)
+	// A background index refresh can shrink the list under an open panel; keeping
+	// the index in range keeps exactly one row selected.
+	st.SessionsIndex = max(0, min(st.SessionsIndex, len(sessions)-1))
 	p := a.currentPalette()
 	panel := overlayPanel(c, "sessions-menu", 0, 360, func() {
 		ui.Row(c).Padding(6, 10).Children(func() {
 			ui.Text(c, fmt.Sprintf("会话 (%d)", len(sessions))).FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
+			fieldNote(c, "↑↓ 选择 · Enter 打开", a.secondaryInk())
 			iconAction(c, "sess-close", "关闭", "close", 20, func() { st.SessionsOpen = false })
 		})
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
@@ -512,13 +573,17 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 				for i, s := range sessions {
 					i, s := i, s
 					busy := sessionBusyID(a, s.ID) != ""
+					selected := i == st.SessionsIndex
 					row := ui.Row(c.Key("sess-"+s.ID)).Height(28).Padding(0, padRow).Gap(gapField).Radius(radiusSmall).AlignItems(ui.Center)
-					if row.Hovered() {
-						st.SessionsIndex = i
-					}
 					row.Cursor(ui.CursorPointer)
-					hoverRow(c, row, i == st.SessionsIndex)
+					hoverRow(c, row, selected)
 					row.Children(func() {
+						// The rail reserves its width on every row, so selecting a row cannot
+						// shift the columns beside it.
+						rail := ui.Box(c).Width(3).Height(13).Shrink(0).Radius(2)
+						if selected {
+							rail.Background(p.accent)
+						}
 						ui.Text(c, fmt.Sprint(i+1)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk())
 						ui.Text(c, fmtTime(s.UpdatedAt)).FontSize(fsTiny).TextColor(a.secondaryInk())
 						ui.Text(c, fmt.Sprintf("%d条", s.MessageCount)).FontSize(fsTiny).TextColor(a.secondaryInk())
@@ -526,7 +591,10 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 						if title == "" {
 							title = "会话"
 						}
-						ui.Text(c, short(title, 50)).FontSize(fsSmall).SingleLine()
+						label := ui.Text(c, short(title, 50)).FontSize(fsSmall).SingleLine()
+						if selected {
+							label.TextColor(p.accent).FontWeight(600)
+						}
 						if s.ID == t.ID {
 							accentChip(c, "当前")
 						}
@@ -540,7 +608,7 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 					})
 					if row.Clicked() {
 						st.SessionsOpen = false
-						a.openSession(s.ID)
+						a.chooseSession(s.ID)
 					}
 				}
 			})
@@ -682,16 +750,12 @@ func (a *desktop) kbIndexMissing() bool {
 }
 
 func (a *desktop) composerInfoBar(c *ui.Context, t *conversation) {
-	st := t.uiState()
 	p := a.currentPalette()
 	ui.Row(c).FillWidth().MinWidth(0).Gap(2).AlignItems(ui.Center).Children(func() {
 		addButton(c, "composer-new", "新建会话", "plus", 26, func() { a.newSession() })
 		iconAction(c, "composer-sessions", "查看和切换历史会话", "menu", 26, func() {
-			st.SessionsOpen = !st.SessionsOpen
-			if st.SessionsOpen {
-				st.SessionsIndex = 0
-			}
-		}).TextColor(p.muted)
+			a.toggleSessionsMenu(t)
+		}).KeepFocus().TextColor(p.muted)
 		a.modelSelector(c, t)
 		a.reasoningSelector(c, t)
 		a.workspaceButton(c, t)
