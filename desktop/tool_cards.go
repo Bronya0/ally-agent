@@ -1385,35 +1385,32 @@ func (a *desktop) toolListBody(c *ui.Context, index int, result map[string]any) 
 	})
 }
 
-// diffBlock keeps vertical rows aligned and gives each side its own native
-// horizontal scroller. Long lines never wrap or truncate.
+// diffBlock draws a side-by-side diff: one row per pair, two half-width cells,
+// both wrapping. The rows used to sit in two independent horizontal scrollers,
+// which kept the code shape but hid the tail of any long line behind a scroller
+// the reader had to find and then move with Shift held. Wrapping cannot hide
+// anything, and the row grows to its taller cell so the two sides stay lined up.
 func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
-	row := ui.Row(c.Key(key)).FillWidth().MinWidth(0).Shrink(0).AlignItems(ui.Stretch)
-	memo := ui.Local(row, "diff", func() diffMemo { return diffMemo{} })
+	outer := ui.Column(c.Key(key)).FillWidth().MinWidth(0).Shrink(0)
+	memo := ui.Local(outer, "diff", func() diffMemo { return diffMemo{} })
 	pairs := memo.get(diff)
 	limit := memo.limit(compact)
 	visible := pairs[:min(len(pairs), limit)]
-	row.Children(func() {
-		for side := 0; side < 2; side++ {
-			ui.ScrollHorizontal(c.Key(fmt.Sprintf("%s-side-%d", key, side))).Grow(1).Basis(0).MinWidth(0).Children(func() {
-				// Keep the content column at its max-content width so each
-				// no-wrap row contributes its full line width to the scroll range.
-				ui.Column(c).Shrink(0).Children(func() {
-					for _, pair := range visible {
-						if strings.HasPrefix(pair.left, "@@") || strings.HasPrefix(pair.left, "---") || strings.HasPrefix(pair.right, "+++") {
-							continue
-						}
-						if pair.gap > 0 {
-							ui.Text(c, fmt.Sprintf("… %d 行未变更 …", pair.gap)).Height(22).FontSize(fsTiny).TextColor(a.secondaryInk()).NoWrap().Padding(1, 8)
-							continue
-						}
-						text, changed, number := pair.left, pair.removed, pair.leftNumber
-						if side == 1 {
-							text, changed, number = pair.right, pair.added, pair.rightNumber
-						}
-						diffCellNoWrap(c, text, changed, number, a.secondaryInk())
-					}
+	outer.Children(func() {
+		for _, pair := range visible {
+			if strings.HasPrefix(pair.left, "@@") || strings.HasPrefix(pair.left, "---") || strings.HasPrefix(pair.right, "+++") {
+				continue
+			}
+			row := ui.Row(c).FillWidth().MinWidth(0).Shrink(0).AlignItems(ui.Stretch)
+			if pair.gap > 0 {
+				row.Children(func() {
+					ui.Text(c, fmt.Sprintf("… %d 行未变更 …", pair.gap)).FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(3, 8)
 				})
+				continue
+			}
+			row.Children(func() {
+				diffCell(c, pair.left, pair.removed, pair.leftNumber, a.secondaryInk())
+				diffCell(c, pair.right, pair.added, pair.rightNumber, a.secondaryInk())
 			})
 		}
 	})

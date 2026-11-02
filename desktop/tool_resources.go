@@ -328,7 +328,9 @@ func diffColors(t *ui.Theme, changed, removed bool) (ui.Color, ui.Color) {
 func diffCell(c *ui.Context, text string, changed bool, number int, ink ...ui.Color) {
 	fill, color := diffColors(c.Theme(), changed, strings.HasPrefix(text, "-"))
 	// Each cell takes half the row and lets its code wrap: the row then grows to
-	// the taller side, so wrapped lines keep the two columns lined up.
+	// the taller side, so wrapped lines keep the two columns lined up. Tabs are
+	// expanded first: a tab advance is about four characters, so a deeply indented
+	// line would otherwise spend a third of the cell on one indent level.
 	ui.Row(c).Grow(1).Basis(0).MinWidth(0).Shrink(1).MinHeight(22).Padding(1, 8).AlignItems(ui.Start).Background(fill).Children(func() {
 		if text == "" {
 			text = " "
@@ -336,7 +338,7 @@ func diffCell(c *ui.Context, text string, changed bool, number int, ink ...ui.Co
 		if number > 0 {
 			ui.Text(c, strconv.Itoa(number)).Width(28).Shrink(0).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Unselectable()
 		}
-		ui.Text(c, text).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).Grow(1).MinWidth(0).Selectable()
+		ui.Text(c, strings.ReplaceAll(text, "\t", "    ")).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).Grow(1).MinWidth(0).Selectable()
 	})
 }
 
@@ -360,21 +362,6 @@ func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, star
 	} else {
 		ui.Box(c.Key(key)).FillWidth().MaxHeight(height).Clip().Children(body)
 	}
-}
-
-func diffCellNoWrap(c *ui.Context, text string, changed bool, number int, ink ...ui.Color) {
-	fill, color := diffColors(c.Theme(), changed, strings.HasPrefix(text, "-"))
-	ui.Row(c).FillWidth().Height(22).Shrink(0).Padding(1, 8).AlignItems(ui.Center).Background(fill).Children(func() {
-		label := ""
-		if number > 0 {
-			label = strconv.Itoa(number)
-		}
-		ui.Text(c, label).Width(34).Shrink(0).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Unselectable()
-		if text == "" {
-			text = " "
-		}
-		ui.Text(c, text).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).NoWrap().Shrink(0).Selectable()
-	})
 }
 
 // Terminal heading and transcript have different roles, especially on light
