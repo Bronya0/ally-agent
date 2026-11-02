@@ -29,6 +29,8 @@ func cloneConfig(cfg ConfigState) ConfigState {
 	cfg.VisionCapable = cloneConfigPointer(cfg.VisionCapable)
 	cfg.LastUsedModel = cloneConfigPointer(cfg.LastUsedModel)
 	cfg.AllowPrivateNetwork = cloneConfigPointer(cfg.AllowPrivateNetwork)
+	cfg.SendSessionIDHeader = cloneConfigPointer(cfg.SendSessionIDHeader)
+	cfg.SendXSessionIDHeader = cloneConfigPointer(cfg.SendXSessionIDHeader)
 	cfg.AutoValidationPython = cloneConfigPointer(cfg.AutoValidationPython)
 	cfg.AutoValidationGo = cloneConfigPointer(cfg.AutoValidationGo)
 	cfg.AutoValidationJavaScript = cloneConfigPointer(cfg.AutoValidationJavaScript)
@@ -127,6 +129,12 @@ func settingsConfig(base, req ConfigState) ConfigState {
 	cfg.ProxyURL = req.ProxyURL
 	cfg.ProxyNoProxy = req.ProxyNoProxy
 	cfg.UserAgent = req.UserAgent
+	if req.SendSessionIDHeader != nil {
+		cfg.SendSessionIDHeader = req.SendSessionIDHeader
+	}
+	if req.SendXSessionIDHeader != nil {
+		cfg.SendXSessionIDHeader = req.SendXSessionIDHeader
+	}
 	cfg.BackgroundOpacity = req.BackgroundOpacity
 	if req.Workspace != "" {
 		cfg.Workspace = req.Workspace

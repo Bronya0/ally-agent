@@ -196,6 +196,7 @@ func TestConfigDiskRoundTripPreservesExplicitValues(t *testing.T) {
 	cfg.BackgroundOpacity = 0
 	cfg.CustomPrompt, cfg.GitHubToken, cfg.KBRoot = "", "", ""
 	cfg.AutoUpdate, cfg.AllowPrivateNetwork = boolPtr(false), boolPtr(false)
+	cfg.SendSessionIDHeader, cfg.SendXSessionIDHeader = boolPtr(false), boolPtr(false)
 	cfg.Models = []ModelConfig{}
 	cfg.HiddenModes = []string{}
 	if err := a.SaveConfig(cfg); err != nil {
@@ -209,6 +210,19 @@ func TestConfigDiskRoundTripPreservesExplicitValues(t *testing.T) {
 	if got.BackgroundOpacity != 0 || *got.AutoUpdate || *got.AllowPrivateNetwork || len(got.Models) != 0 || got.CustomPrompt != "" {
 		t.Fatal("explicit zero/false/empty lost on reload")
 	}
+	if got.SendSessionIDHeader == nil || got.SendXSessionIDHeader == nil || *got.SendSessionIDHeader || *got.SendXSessionIDHeader {
+		t.Fatal("disabled session headers lost on reload")
+	}
+	if err := a.SaveConfig(ConfigState{}); err != nil {
+		t.Fatal(err)
+	}
+	preserved, err := a.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *preserved.SendSessionIDHeader || *preserved.SendXSessionIDHeader {
+		t.Fatal("omitted settings reset disabled session headers")
+	}
 	if err := os.WriteFile(a.configPath, []byte(`{}`), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -218,6 +232,11 @@ func TestConfigDiskRoundTripPreservesExplicitValues(t *testing.T) {
 	}
 	if got := loadedConfig(loaded); got.BackgroundOpacity != defaultBackgroundOpacity {
 		t.Fatal("missing legacy field lost its default")
+	}
+	legacy := loadedConfig(loaded)
+	legacy.responsesPromptCacheKey = openAIResponsesPromptCacheKey("legacy-session")
+	if len(sessionAffinityHeaders(legacy)) != 2 {
+		t.Fatal("legacy config must enable both session headers")
 	}
 }
 

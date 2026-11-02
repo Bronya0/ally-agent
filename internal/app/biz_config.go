@@ -66,6 +66,8 @@ func defaultConfigState() ConfigState {
 	cfg := ConfigState{
 		ToolConcurrency:       defaultToolConcurrency,
 		AllowPrivateNetwork:   boolPtr(true),
+		SendSessionIDHeader:   boolPtr(true),
+		SendXSessionIDHeader:  boolPtr(true),
 		ProxyMode:             proxyModeOff,
 		BackgroundOpacity:     defaultBackgroundOpacity,
 		CompactThreshold:      defaultCompactThreshold,
@@ -401,6 +403,12 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	}
 	if strings.TrimSpace(overlay.UserAgent) != "" {
 		base.UserAgent = overlay.UserAgent
+	}
+	if overlay.SendSessionIDHeader != nil {
+		base.SendSessionIDHeader = overlay.SendSessionIDHeader
+	}
+	if overlay.SendXSessionIDHeader != nil {
+		base.SendXSessionIDHeader = overlay.SendXSessionIDHeader
 	}
 	// CustomHeaders: non-nil overlay replaces the whole map (an explicitly
 	// empty map clears the headers); nil means "field absent" and keeps the

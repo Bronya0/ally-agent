@@ -128,7 +128,8 @@ off 与 auto 是独立档位：auto 省略等级、采用供应商默认；off �
 - Anthropic 由 SDK 设置 API Key 鉴权及 `anthropic-version:2023-06-01`；SDK 还会附带自身版本、运行时等传输标识。
 - JSON / SSE 所需 Content-Type、Accept 按各传输实现设置。
 - `modelRequestHeaders` 应用配置或默认 User-Agent；普通模型自定义头可覆盖内置头。OAuth 模型归一时清空自定义头。
-- 有内部会话键时，所有端点都添加 `session-id` 与 `x-session-id`（值为同一个哈希会话键）。这两个头决定**路由亲和**，不参与前缀匹配：供应商的提示词缓存按机器存放，同一会话落到同一台机器才可能复用前缀，所以该值必须在一段会话内保持稳定。ChatGPT 按 `session-id` 做缓存亲和（与 Codex 同名头），OpenRouter 文档定义 `x-session-id`，其余端点忽略未知头。
+- 有内部会话键时，所有端点默认添加 `session-id` 与 `x-session-id`（值为同一个哈希会话键）。「设置 → 通用 → 对话行为 → 会话请求头」提供两个独立开关，缺失配置仍默认开启。关闭只停止自动添加对应头，不清除模型自定义头、不改变请求体的 `prompt_cache_key`；保存后对后续任务生效。
+- 会话请求头用于**路由亲和**，不参与前缀匹配，也不保证端点支持或实际缓存命中。ChatGPT 使用 `session-id`，OpenRouter 文档定义 `x-session-id`；标识在一段会话内保持稳定。
 - Anthropic 显式开启思考、有工具、且不是 adaptive / 无思考块族时，添加 `anthropic-beta:interleaved-thinking-2025-05-14`。
 
 代理、超时、重试次数、流式节流属于客户端配置，不是请求体参数。删除某个请求字段不会减少工具循环或重试实际发出的请求数。

@@ -597,7 +597,10 @@ type ConfigState struct {
 	ProxyURL            string `json:"proxyUrl,omitempty"`
 	ProxyNoProxy        string `json:"proxyNoProxy,omitempty"`
 	UserAgent           string `json:"userAgent,omitempty"`
-	ReasoningTag        string `json:"reasoningTag,omitempty"`
+	// Nil keeps automatic session-affinity headers enabled for legacy configs.
+	SendSessionIDHeader  *bool  `json:"sendSessionIdHeader,omitempty"`
+	SendXSessionIDHeader *bool  `json:"sendXSessionIdHeader,omitempty"`
+	ReasoningTag         string `json:"reasoningTag,omitempty"`
 	// VisionCapable mirrors ModelConfig.VisionCapable for the effective request
 	// config; see that field for the tri-state contract.
 	VisionCapable   *bool  `json:"visionCapable,omitempty"`
@@ -2317,13 +2320,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// 指纹的职责是盯住"持久化的那段被谁改了"，一次性消息按定义不在其列。
 			a.noteRequestPrefix(sessionID, contextLockLaneChat, cfg, messages, tools)
 			modelResp, err = a.streamModelResponse(perfReason(ctx, requestTrigger), cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
-				if event.ContentDelta != "" {
+				if event.ContentDelta != "" || event.ReasoningDelta != "" {
 					emittedEvents = true
-					streamDeltas.addContent(event.ContentDelta)
-				}
-				if event.ReasoningDelta != "" {
-					emittedEvents = true
-					streamDeltas.addReasoning(event.ReasoningDelta)
+					streamDeltas.add(event.ContentDelta, event.ReasoningDelta)
 				}
 				if event.Retry != nil {
 					streamDeltas.flush()
