@@ -3,6 +3,7 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"ally-dev/internal/tools/read"
 	"context"
 	"encoding/json"
 	"os"
@@ -18,22 +19,23 @@ import (
 // rail geometry, section folding and the welcome-page avatar. It lives next to
 // the agent data so both builds share the same machine.
 type uiPrefs struct {
-	HistoryPageSize    int      `json:"historyPageSize"`
-	Appearance         string   `json:"appearance,omitempty"`
-	Palette            int      `json:"palette"`
-	RailExpanded       bool     `json:"railExpanded"`
-	RailWidth          float32  `json:"railWidth"`
-	RailWorkspaceOpen  bool     `json:"railWorkspaceOpen"`
-	RailSessionsOpen   bool     `json:"railSessionsOpen"`
-	Avatar             string   `json:"avatar"`
-	RecentModels       []string `json:"recentModels"`
-	TreeWidth          float32  `json:"treeWidth"`
-	SeenReleaseNotes   string   `json:"seenReleaseNotes"`
-	DismissedUpdateTag string   `json:"dismissedUpdateTag"`
+	HistoryPageSize    int            `json:"historyPageSize"`
+	Appearance         string         `json:"appearance,omitempty"`
+	Palette            int            `json:"palette"`
+	RailExpanded       bool           `json:"railExpanded"`
+	RailWidth          float32        `json:"railWidth"`
+	RailWorkspaceOpen  bool           `json:"railWorkspaceOpen"`
+	RailSessionsOpen   bool           `json:"railSessionsOpen"`
+	Avatar             string         `json:"avatar"`
+	RecentModels       []string       `json:"recentModels"`
+	TreeWidth          float32        `json:"treeWidth"`
+	SeenReleaseNotes   string         `json:"seenReleaseNotes"`
+	DismissedUpdateTag string         `json:"dismissedUpdateTag"`
+	Pet                petPreferences `json:"pet"`
 }
 
 func defaultPrefs() uiPrefs {
-	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270}
+	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, Pet: petPreferences{Size: 180}}
 }
 
 var prefsMu sync.Mutex
@@ -75,6 +77,7 @@ func readPrefs(path string) uiPrefs {
 	if p.Avatar == "" {
 		p.Avatar = "whale"
 	}
+	p.Pet.normalize()
 	return p
 }
 
@@ -86,6 +89,7 @@ func (a *desktop) savePrefs(notice ...string) {
 	}
 	p := a.prefs
 	p.RecentModels = append([]string(nil), p.RecentModels...)
+	p.Pet = p.Pet.clone()
 	previous := a.prefsSaveTail
 	done := make(chan struct{})
 	a.prefsSaveTail = done
@@ -102,10 +106,7 @@ func (a *desktop) savePrefs(notice ...string) {
 		}
 		data, err := json.MarshalIndent(p, "", "  ")
 		if err == nil {
-			err = os.MkdirAll(filepath.Dir(path), 0o755)
-		}
-		if err == nil {
-			err = os.WriteFile(path, data, 0o600)
+			err = read.SafeWriteFile(path, data, 0o600)
 		}
 		a.writeFailures.record("prefs", err)
 		if a.win != nil {

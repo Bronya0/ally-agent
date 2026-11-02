@@ -576,11 +576,18 @@ func (a *desktop) welcomeView(c *ui.Context, t *conversation) {
 	ui.Column(c).Key("welcome").Padding(36, 0, 12).Gap(gapPage).Children(func() {
 		ui.Row(c).Gap(22).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Width(170).AlignItems(ui.Center).Gap(gapSection).Children(func() {
-				img := ui.Column(c).Size(150, 150).Center()
+				img := ui.Column(c.Key("welcome-avatar")).Size(150, 150).Center().Label("欢迎页头像")
 				img.Children(func() { a.avatarDrawing(c) })
-				uikit.Tooltip(c, img.Cursor(ui.CursorPointer), "点击头像：切换樱花特效")
+				hint := "点击头像：切换樱花特效"
+				if !a.prefs.Pet.Enabled {
+					hint = "点击头像：摸摸头并切换樱花特效"
+				}
+				uikit.Tooltip(c, img.Cursor(ui.CursorPointer), hint)
 				if img.Clicked() {
 					a.togglePetals()
+					if !a.prefs.Pet.Enabled {
+						a.patAvatar(time.Now())
+					}
 				}
 				ui.Text(c, a.versionLabel).FontSize(fsTiny).TextColor(a.secondaryInk())
 			})

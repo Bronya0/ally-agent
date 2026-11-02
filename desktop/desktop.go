@@ -73,6 +73,7 @@ type desktop struct {
 	avatarStyle                             string
 	avatarPoses                             map[string]*ui.Bitmap
 	avatarLoadID                            uint64
+	pet                                     petRuntime
 	configSaveTail                          chan struct{}
 	writeFailures                           windowWriteFailures
 	prefsSaveTail                           chan struct{}
@@ -206,6 +207,7 @@ func Run() {
 	mygo.App.SetName("Ally Native")
 	a := &desktop{core: backend.NewApp(), page: "chat", modelEdit: -1, explorer: true, plans: map[string][]backend.PlanStep{}, planRev: map[string]int64{}, subRuns: map[string]*backend.SubagentRun{}, prefs: defaultPrefs(), extraRoots: map[string][]string{}, sshAllowed: map[string][]string{}}
 	a.loadPrefs()
+	a.pet.lastActivity = time.Now()
 	a.loadReleaseNotes()
 	mygo.App.WhenReady(func() {
 		a.versionLabel = "Ally Native"
@@ -311,6 +313,9 @@ func Run() {
 				}
 				a.syncSettingsForm()
 				a.ready = true
+				if a.prefs.Pet.Enabled {
+					a.openPet()
+				}
 				a.newConversation(workspace)
 				a.maybeShowReleaseNotes()
 				if a.installedRelease() {
@@ -384,6 +389,7 @@ func (a *desktop) finishShutdown() {
 func (a *desktop) finishQuit() {
 	a.stopAutoAppearance()
 	a.stopUpdateChecks()
+	a.closePet()
 	go func() {
 		if err := a.core.ShutdownNative(); err != nil {
 			log.Printf("shutdown: %v", err)

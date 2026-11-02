@@ -3,7 +3,6 @@ package desktop
 
 import (
 	"fmt"
-	"time"
 
 	"ally-dev/resources"
 
@@ -38,16 +37,22 @@ func decodeAvatarStyle(style string) map[string]*ui.Bitmap {
 	if style == "eye" || style == "custom" {
 		return result
 	}
-	for _, pose := range []string{"idle", "proud", "stretch", "happy"} {
-		if (style == "whale" || style == "bot") && pose != "idle" {
+	for _, pose := range []string{"idle", "proud", "stretch", "happy", "idle-blink", "pat", "sleeping", "thinking"} {
+		if style == "bot" {
+			continue // Animated WebP is decoded into bounded PNG frames below.
+		}
+		if style == "whale" && pose != "idle" && pose != "idle-blink" && pose != "pat" && pose != "sleeping" && pose != "thinking" {
+			continue
+		}
+		if (pose == "idle-blink" || pose == "pat" || pose == "sleeping" || pose == "thinking") && style != "deepseek" && style != "glm" && style != "whale" {
 			continue
 		}
 		path := fmt.Sprintf("avatar/%s/%s.webp", style, pose)
-		if style == "whale" {
+		if style == "whale" && pose == "idle" {
 			path = "avatar/whale/delighted-320.webp"
 		}
-		if style == "bot" {
-			continue // Animated WebP is decoded into bounded PNG frames below.
+		if style == "whale" && pose == "sleeping" {
+			path = "avatar/whale/sleeping-bust.webp"
 		}
 		data, err := resources.Assets.ReadFile(path)
 		if err != nil {
@@ -78,6 +83,7 @@ func (a *desktop) selectAvatarStyle(style string) {
 	id := a.avatarLoadID
 	releaseAvatarPoses(a.avatarPoses)
 	a.avatarStyle, a.avatarPoses = normalizedAvatarStyle(style), nil
+	a.resetAvatarMotion()
 	if style == "custom" || style == "eye" || a.win == nil {
 		return
 	}
@@ -86,6 +92,7 @@ func (a *desktop) selectAvatarStyle(style string) {
 		a.win.Update(func() {
 			if !a.closing && id == a.avatarLoadID {
 				a.avatarPoses = poses
+				a.invalidatePet()
 			} else {
 				releaseAvatarPoses(poses)
 			}
@@ -95,52 +102,12 @@ func (a *desktop) selectAvatarStyle(style string) {
 
 var eyeArtwork = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="164" height="164" viewBox="0 0 164 164"><path d="M17 82c14-28 38-43 65-43s51 15 65 43c-14 28-38 43-65 43S31 110 17 82Z" fill="#d9e1fa"/><circle cx="82" cy="82" r="47" fill="#8da5df" stroke="#536a9e" stroke-width="2"/><path d="M82 34 Q71 82 82 130 Q93 82 82 34Z" fill="#252c42"/><path d="M85 50 L78 76 L83 76 L75 114 L91 70 L84 70Z" fill="#e7edff"/><path d="M26 82c13 18 32 28 56 28s43-10 56-28" fill="none" stroke="#8da5df" stroke-width="2"/></svg>`))
 
-// avatarFrame picks the avatar art to show at now, and how long until the next
-// frame. An animated avatar changes its art, so it asks to be painted again.
-func (a *desktop) avatarFrame(now time.Time) (ui.ImageSource, time.Duration) {
-	style := a.prefs.Avatar
-	if style == "custom" {
-		return a.customAvatar, 0
-	}
-	style = normalizedAvatarStyle(style)
-	if style != a.avatarStyle || len(a.avatarPoses) == 0 {
-		return nil, 0
-	}
-	poses := a.avatarPoses
-	if style == "bot" {
-		return poses[fmt.Sprintf("frame%02d", (now.UnixMilli()/80)%100)], 80 * time.Millisecond
-	}
-	pose := "idle"
-	phase := now.Unix() % 16
-	if phase >= 11 && phase < 13 {
-		pose = "proud"
-	} else if phase >= 13 && phase < 15 {
-		pose = "stretch"
-	}
-	if poses[pose] == nil {
-		pose = "idle"
-	}
-	next := time.Duration(0)
-	if poses["proud"] != nil {
-		next = time.Second
-	}
-	return poses[pose], next
-}
-
-// avatarDrawing is the avatar as a drawing, stepping its frames by repainting
-// itself. After on the view would rebuild the whole welcome page twelve times
-// a second while the animated avatar shows.
+// The welcome and pet windows use the same artwork and animation state. Only
+// one surface asks for animation frames; the other paints a fixed idle pose.
 func (a *desktop) avatarDrawing(c *ui.Context) ui.Element {
-	return ui.Box(c).Size(140, 140).Draw(func(p *ui.Painter, r ui.Rect) {
-		src, next := a.avatarFrame(p.Now())
-		if next > 0 {
-			p.After(next)
-		}
-		if src == nil {
-			p.Image(eyeArtwork, r, ui.Contain)
-			return
-		}
-		p.Image(src, r, ui.Contain)
+	reducedMotion := c.Preferences().ReduceMotion
+	return ui.Box(c.Key("welcome-avatar-art")).Size(140, 140).Draw(func(p *ui.Painter, r ui.Rect) {
+		a.paintAvatar(p, r, reducedMotion, a.avatarAnimationEnabled(avatarOnWelcome))
 	})
 }
 

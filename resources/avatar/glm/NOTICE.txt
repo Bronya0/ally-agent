@@ -22,5 +22,10 @@ License: CC BY-NC-SA 4.0, as declared in the upstream `characters/LICENSE.md`:
 attribution required, non-commercial use only, derivatives shared under the same
 license.
 
+Desktop-pet poses `idle-blink`, `pat`, `sleeping`, and `thinking` are
+unmodified WebP files from CrossPet revision
+5c64326b6e7fc175eda0360c0bb5c4732541d138, under the same artwork license
+and attribution chain above.
+
 "GLM" and "ZCode" are trademarks of their respective owners. This is an
 unofficial fan project, not affiliated with or endorsed by Zhipu AI.

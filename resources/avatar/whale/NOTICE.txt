@@ -39,3 +39,14 @@ respective authors above, including embedded and transformed copies.
 Ally processing: the upstream delighted-512.png icon is resized to 320x320
 and encoded as delighted-320.webp (WebP quality 90, alpha quality 100,
 effort 6, using Sharp). No cropping; transparency is preserved.
+
+Desktop-pet sleeping.png is the unmodified 256x256 PNG image extracted from
+the upstream sleepy.ico at revision dc561129f3bb3bc94c4a7c3e4007eaa274650d31.
+It carries the same CC BY-NC-SA 4.0 license and attribution chain above.
+
+The desktop-pet expression sprites `idle-blink.webp`, `pat.webp`,
+`thinking.webp`, and `sleeping-bust.webp` were generated with OpenAI's
+imagegen from Ally's `delighted-320.webp`, then resized to 320x320 and
+encoded as WebP with Sharp. Their prompts are recorded in PROMPTS.md.
+These derivative sprites retain the complete attribution chain and are
+shared under CC BY-NC-SA 4.0.

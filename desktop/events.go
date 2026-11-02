@@ -34,6 +34,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		return
 	}
 	a.notifyRunCompletion(name, p)
+	a.updatePetForEvent(name, p)
 
 	switch name {
 	case "service:update":

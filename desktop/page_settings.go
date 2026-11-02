@@ -199,7 +199,9 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					cardFlat(c, "使用自定义形象").OnClick(func() { a.selectAvatarStyle("custom") })
 				}
 			})
-			fieldNote(c, "点击欢迎页头像可以唤醒樱花特效。", a.secondaryInk())
+			fieldNote(c, "点击欢迎页头像可以切换樱花特效；桌宠未开启时也可以摸摸头。", a.secondaryInk())
+			divider(c)
+			a.petSettings(c)
 		})
 		card(c, "settings-background", func() {
 			sectionTitle(c, "对话背景图")
