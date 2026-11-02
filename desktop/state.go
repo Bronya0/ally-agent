@@ -268,6 +268,7 @@ type settingsForm struct {
 	API             backend.ApiServiceState
 	APIPort         float64
 	APIBusy         bool
+	APIRevision     uint64
 	APINote         string
 	FullJSON        string
 	NewToken        bool
@@ -359,21 +360,23 @@ type modelForm struct {
 
 // mcpForm is the MCP page + server editor state.
 type mcpForm struct {
-	Tab        int
-	Search     string
-	Busy       bool
-	EditorOpen bool
-	Editing    string
-	Name       string
-	Transport  string
-	Command    string
-	Args       string
-	Env        string
-	URL        string
-	Headers    string
-	ToolOpen   map[string]bool
-	ToolsDirty bool
-	ImportBusy bool
+	Tab          int
+	Search       string
+	Busy         bool
+	Revision     uint64
+	ToolRevision uint64
+	EditorOpen   bool
+	Editing      string
+	Name         string
+	Transport    string
+	Command      string
+	Args         string
+	Env          string
+	URL          string
+	Headers      string
+	ToolOpen     map[string]bool
+	ToolsDirty   bool
+	ImportBusy   bool
 }
 
 // skillsForm is the skills page + add-skill dialog state.
@@ -423,15 +426,22 @@ type sshForm struct {
 }
 
 // tasksForm is the task center state (tabs, scope, log dialog).
+type scheduledTaskChange struct {
+	task    backend.ScheduledTask
+	deleted bool
+}
+
 type tasksForm struct {
-	Tab        int
-	Scope      int
-	Loading    bool
-	LogOpen    bool
-	LogTitle   string
-	LogMeta    string
-	LogBody    string
-	LogService string
+	Tab              int
+	Scope            int
+	Loading          bool
+	ScheduledChanges map[string]scheduledTaskChange
+	ServiceChanges   map[string]backend.ServiceInfo
+	LogOpen          bool
+	LogTitle         string
+	LogMeta          string
+	LogBody          string
+	LogService       string
 	// LogScroll keeps the log dialog's place; it follows the newest line unless
 	// the reader scrolled up, so a running service does not yank them away.
 	LogScroll  ui.ScrollState

@@ -434,23 +434,33 @@ func (a *desktop) applyServiceUpdate(p map[string]any) {
 	if json.Unmarshal(b, &service) != nil || service.ID == "" {
 		return
 	}
-	for i := range a.services {
-		if a.services[i].ID == service.ID {
-			a.services[i] = service
-			if a.tasksF.LogService == service.ID && a.tasksF.LogOpen {
-				// A running service appends: keep the dialog on the newest line
-				// unless the reader scrolled up from it.
-				atEnd := a.serviceLogAtEnd()
-				a.tasksF.LogBody = service.OutputTail
-				a.tasksF.LogMeta = serviceMeta(service)
-				if atEnd {
-					a.followServiceLog()
-				}
-			}
-			return
+	a.services = upsertServiceInfo(a.services, service)
+	if a.tasksF.Loading {
+		if a.tasksF.ServiceChanges == nil {
+			a.tasksF.ServiceChanges = make(map[string]backend.ServiceInfo)
+		}
+		a.tasksF.ServiceChanges[service.ID] = service
+	}
+	if a.tasksF.LogService == service.ID && a.tasksF.LogOpen {
+		// A running service appends: keep the dialog on the newest line unless
+		// the reader scrolled up from it.
+		atEnd := a.serviceLogAtEnd()
+		a.tasksF.LogBody = service.OutputTail
+		a.tasksF.LogMeta = serviceMeta(service)
+		if atEnd {
+			a.followServiceLog()
 		}
 	}
-	a.services = append([]backend.ServiceInfo{service}, a.services...)
+}
+
+func upsertServiceInfo(services []backend.ServiceInfo, service backend.ServiceInfo) []backend.ServiceInfo {
+	for i := range services {
+		if services[i].ID == service.ID {
+			services[i] = service
+			return services
+		}
+	}
+	return append([]backend.ServiceInfo{service}, services...)
 }
 
 func (a *desktop) applyMCPStatus(p map[string]any) {
@@ -459,24 +469,17 @@ func (a *desktop) applyMCPStatus(p map[string]any) {
 	_ = json.Unmarshal(b, &servers)
 	a.mcpServers = servers
 	a.mcpSummary = mcpSummary(servers)
-	go func() {
-		tools := a.core.ListTools()
-		a.win.Update(func() {
-			if !a.closing {
-				a.toolInventory = tools
-				a.toolCount = enabledToolCount(tools)
-			}
-		})
-	}()
+	a.refreshMCPInventory()
 }
 
 func (a *desktop) applyScheduledUpdate(p map[string]any) {
 	if id := str(p, "deleted"); id != "" {
-		for i := range a.tasks {
-			if a.tasks[i].ID == id {
-				a.tasks = append(a.tasks[:i], a.tasks[i+1:]...)
-				return
+		a.tasks = removeScheduledTask(a.tasks, id)
+		if a.tasksF.Loading {
+			if a.tasksF.ScheduledChanges == nil {
+				a.tasksF.ScheduledChanges = make(map[string]scheduledTaskChange)
 			}
+			a.tasksF.ScheduledChanges[id] = scheduledTaskChange{deleted: true}
 		}
 		return
 	}
@@ -489,13 +492,32 @@ func (a *desktop) applyScheduledUpdate(p map[string]any) {
 	if json.Unmarshal(b, &task) != nil || task.ID == "" {
 		return
 	}
-	for i := range a.tasks {
-		if a.tasks[i].ID == task.ID {
-			a.tasks[i] = task
-			return
+	a.tasks = upsertScheduledTask(a.tasks, task)
+	if a.tasksF.Loading {
+		if a.tasksF.ScheduledChanges == nil {
+			a.tasksF.ScheduledChanges = make(map[string]scheduledTaskChange)
+		}
+		a.tasksF.ScheduledChanges[task.ID] = scheduledTaskChange{task: task}
+	}
+}
+
+func upsertScheduledTask(tasks []backend.ScheduledTask, task backend.ScheduledTask) []backend.ScheduledTask {
+	for i := range tasks {
+		if tasks[i].ID == task.ID {
+			tasks[i] = task
+			return tasks
 		}
 	}
-	a.tasks = append(a.tasks, task)
+	return append(tasks, task)
+}
+
+func removeScheduledTask(tasks []backend.ScheduledTask, id string) []backend.ScheduledTask {
+	for i := range tasks {
+		if tasks[i].ID == id {
+			return append(tasks[:i], tasks[i+1:]...)
+		}
+	}
+	return tasks
 }
 
 func (a *desktop) applySubagentEvent(name string, p map[string]any) {

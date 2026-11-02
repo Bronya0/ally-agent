@@ -227,6 +227,7 @@ type App struct {
 	initialized          bool
 	disabledSkills       []string
 	mcpManager           *McpManager
+	mcpConfigMu          sync.Mutex // serializes MCP config read/merge/write transactions
 	// mcpRestartMu 串行化 MCP 全量重启（RestartMcpServers）：网络配置变更可能
 	// 从后台连发两次，无互斥时第二次会把第一次还在 StartAll 里的新 manager
 	// Shutdown 掉——commit 核对虽能自愈，整轮拨号却白跑。重启耗时可达分钟级，

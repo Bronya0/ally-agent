@@ -600,26 +600,22 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 			fieldNote(c, "仅监听 127.0.0.1，供本机工具调用；请求需带 Bearer Token。", a.secondaryInk())
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
 				enabled := a.settings.API.Enabled
-				uikit.SwitchNative(c.Key("api-enabled"), &enabled).Label("启用 API 服务").OnClick(func() { a.setAPIServiceEnabled(enabled) })
+				uikit.SwitchNative(c.Key("api-enabled"), &enabled).Label("启用 API 服务").Disabled(a.settings.APIBusy).OnClick(func() { a.setAPIServiceEnabled(enabled) })
 				fieldLabel(c, "端口")
-				uikit.NumberInput(c, "api-port", "API 端口", &a.settings.APIPort, 1024, 65535, 1, a.secondaryInk()).Width(200)
+				uikit.NumberInput(c, "api-port", "API 端口", &a.settings.APIPort, 1024, 65535, 1, a.secondaryInk()).Width(200).Disabled(a.settings.APIBusy)
 				fieldLabel(c, "Token")
-				uikit.Input(c.Key("api-token"), &a.settings.API.Token).Label("API Token").Width(240)
+				uikit.Input(c.Key("api-token"), &a.settings.API.Token).Label("API Token").Width(240).Disabled(a.settings.APIBusy)
 				settingsAction(c, "复制").OnClick(func() {
 					c.WriteClipboard(a.settings.API.Token)
 					c.Toast("Token 已复制")
 				})
-				settingsAction(c, "重新生成").OnClick(func() {
-					a.settings.API.Token = randomToken()
-					a.saveAPISettings()
-					c.Toast("已生成新 Token")
-				})
-				settingsAction(c, "保存").OnClick(func() { a.saveAPISettings() })
+				settingsAction(c, "重新生成").Disabled(a.settings.APIBusy).OnClick(func() { a.regenerateAPIToken() })
+				settingsAction(c, "保存").Disabled(a.settings.APIBusy).OnClick(func() { a.saveAPISettings() })
 				services := c.Services()
 				settingsAction(c, "接口文档").OnClick(func() {
 					services.OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/api.md")
 				})
-				settingsAction(c, "刷新").OnClick(func() { a.loadAPIService(true) })
+				settingsAction(c, "刷新").Disabled(a.settings.APIBusy).OnClick(func() { a.loadAPIService(true) })
 			})
 			fieldNote(c, "端口与 Token 改动后需点保存；Token 为空时后端会自动生成。", a.secondaryInk())
 			if a.settings.APINote != "" {
@@ -680,9 +676,17 @@ var apiEndpoints = [][3]string{
 }
 
 func (a *desktop) loadAPIService(manual ...bool) {
+	if a.settings.APIBusy {
+		return
+	}
+	a.settings.APIRevision++
+	revision := a.settings.APIRevision
 	go func() {
 		state, err := a.core.GetApiServiceState()
 		a.win.Update(func() {
+			if revision != a.settings.APIRevision {
+				return
+			}
 			if err != nil {
 				a.settings.APINote = err.Error()
 				if len(manual) > 0 && manual[0] {
@@ -701,37 +705,78 @@ func (a *desktop) loadAPIService(manual ...bool) {
 }
 
 func (a *desktop) saveAPISettings() {
+	a.persistAPISettings(a.settings.API.Token, false)
+}
+
+func (a *desktop) regenerateAPIToken() {
+	// An empty token asks the backend to generate one with crypto/rand. Keep the
+	// current value visible until the save succeeds, so a disk/listener error
+	// cannot leave the UI claiming that a weak or unsaved token is active.
+	a.persistAPISettings("", true)
+}
+
+func (a *desktop) persistAPISettings(token string, regenerated bool) {
+	if a.settings.APIBusy {
+		return
+	}
 	port := int(a.settings.APIPort)
 	if port < 1024 || port > 65535 {
 		a.settings.APIPort = float64(a.settings.API.Port)
 		a.settings.APINote = "端口需为 1024-65535 之间的整数"
 		return
 	}
-	req := backend.ApiSettingsRequest{Port: port, Token: a.settings.API.Token}
+	a.settings.APIBusy = true
+	a.settings.APIRevision++
+	revision := a.settings.APIRevision
+	req := backend.ApiSettingsRequest{Port: port, Token: token}
 	go func() {
 		state, err := a.core.SaveApiSettings(req)
 		a.win.Update(func() {
+			if revision != a.settings.APIRevision {
+				return
+			}
+			a.settings.APIBusy = false
 			if err != nil {
 				a.settings.APINote = err.Error()
+				a.notifyError(err.Error())
 				return
 			}
 			a.settings.API = state
 			a.settings.APIPort = float64(state.Port)
-			a.settings.APINote = "API 设置已保存"
+			if regenerated {
+				a.settings.APINote = "API Token 已重新生成并保存"
+				a.notifySuccess("已生成新 Token")
+			} else {
+				a.settings.APINote = "API 设置已保存"
+			}
 		})
 	}()
 }
 
 func (a *desktop) setAPIServiceEnabled(enabled bool) {
+	if a.settings.APIBusy {
+		return
+	}
 	if a.settings.APIPort < 1024 || a.settings.APIPort > 65535 || strings.TrimSpace(a.settings.API.Token) == "" {
 		a.settings.APINote = "请先填写有效端口与 Token"
 		return
 	}
+	previousEnabled := a.settings.API.Enabled
+	a.settings.APIBusy = true
+	a.settings.API.Enabled = enabled
+	a.settings.APIRevision++
+	revision := a.settings.APIRevision
 	go func() {
 		state, err := a.core.SetApiServiceEnabled(enabled)
 		a.win.Update(func() {
+			if revision != a.settings.APIRevision {
+				return
+			}
+			a.settings.APIBusy = false
 			if err != nil {
+				a.settings.API.Enabled = previousEnabled
 				a.settings.APINote = err.Error()
+				a.notifyError(err.Error())
 				return
 			}
 			a.settings.API = state
@@ -743,17 +788,6 @@ func (a *desktop) setAPIServiceEnabled(enabled bool) {
 			}
 		})
 	}()
-}
-
-func randomToken() string {
-	const alphabet = "0123456789abcdef"
-	buf := make([]byte, 32)
-	seed := uint64(nowUnixNano())
-	for i := range buf {
-		seed = seed*6364136223846793005 + 1442695040888963407
-		buf[i] = alphabet[(seed>>33)%16]
-	}
-	return string(buf)
 }
 
 // ---- Release notes / about / raw ----------------------------------------

@@ -423,6 +423,24 @@ func (a *App) sshServerByRefLocked(ref string) (SSHServerNode, bool) {
 
 // SaveSSHServer creates or updates a server node in the cluster.
 func (a *App) SaveSSHServer(node SSHServerNode) error {
+	return a.saveSSHServer(node, "")
+}
+
+// SaveSSHServerForWorkspace atomically creates a new server node and grants it
+// to one workspace. The registration flow must not publish an authorized node
+// if only one of the two changes reached disk.
+func (a *App) SaveSSHServerForWorkspace(node SSHServerNode, workspace string) error {
+	normWS := normalizeWorkspaceKey(workspace)
+	if normWS == "" {
+		return errors.New("workspace is required to authorize the server")
+	}
+	if strings.TrimSpace(node.ID) != "" {
+		return errors.New("workspace registration must create a new server")
+	}
+	return a.saveSSHServer(node, normWS)
+}
+
+func (a *App) saveSSHServer(node SSHServerNode, authorizeWorkspace string) error {
 	alias := strings.ToLower(strings.TrimSpace(node.Alias))
 	if alias == "" {
 		return errors.New("server alias is required")
@@ -442,15 +460,17 @@ func (a *App) SaveSSHServer(node SSHServerNode) error {
 	if node.Port <= 0 {
 		node.Port = 22
 	}
-	if err := a.storeSSHServerLocked(alias, node); err != nil {
+	if err := a.storeSSHServerLocked(alias, node, authorizeWorkspace); err != nil {
 		return err
 	}
 	a.emitSSHClustersChanged()
 	return nil
 }
 
-// storeSSHServerLocked 落盘一份节点，并失效被它改掉的凭据槽位。调用方不得持有锁。
-func (a *App) storeSSHServerLocked(alias string, node SSHServerNode) error {
+// storeSSHServerLocked 落盘一份节点和可选的工作区授权，并失效被它改掉的凭据槽位。
+// authorizeWorkspace 非空时只允许创建新别名，避免审批期间的并发新增被模型 upsert 覆盖。
+// 调用方不得持有锁。
+func (a *App) storeSSHServerLocked(alias string, node SSHServerNode, authorizeWorkspace string) error {
 	a.sshClustersMu.Lock()
 	defer a.sshClustersMu.Unlock()
 	if a.sshClusters == nil {
@@ -462,6 +482,9 @@ func (a *App) storeSSHServerLocked(alias string, node SSHServerNode) error {
 		return errors.New("server no longer exists; reload the server list")
 	}
 	if sameAlias, exists := a.sshServerByAliasLocked(alias); exists {
+		if authorizeWorkspace != "" {
+			return fmt.Errorf("server alias %q is already in use; reload the server list", node.Alias)
+		}
 		if node.ID != "" && node.ID != sameAlias.ID {
 			return fmt.Errorf("server alias %q is already in use", node.Alias)
 		}
@@ -487,11 +510,50 @@ func (a *App) storeSSHServerLocked(alias string, node SSHServerNode) error {
 	}
 	node.UpdatedAtMS = now
 	a.sshClusters[node.ID] = node
+	var (
+		previousWorkspaceMap map[string]bool
+		workspaceExisted     bool
+		previousGrant        bool
+		grantExisted         bool
+		allowedMapWasNil     bool
+	)
+	if authorizeWorkspace != "" {
+		a.sshWorkspaceAllowedMu.Lock()
+		allowedMapWasNil = a.sshWorkspaceAllowed == nil
+		previousWorkspaceMap, workspaceExisted = a.sshWorkspaceAllowed[authorizeWorkspace]
+		previousGrant, grantExisted = previousWorkspaceMap[node.ID]
+		if a.sshWorkspaceAllowed == nil {
+			a.sshWorkspaceAllowed = make(map[string]map[string]bool)
+		}
+		if previousWorkspaceMap == nil {
+			previousWorkspaceMap = make(map[string]bool)
+		}
+		previousWorkspaceMap[node.ID] = true
+		a.sshWorkspaceAllowed[authorizeWorkspace] = previousWorkspaceMap
+		a.sshWorkspaceAllowedMu.Unlock()
+	}
 	if err := a.saveSSHClustersLocked(); err != nil {
 		if updating {
 			a.sshClusters[node.ID] = previous
 		} else {
 			delete(a.sshClusters, node.ID)
+		}
+		if authorizeWorkspace != "" {
+			a.sshWorkspaceAllowedMu.Lock()
+			if workspaceExisted {
+				if grantExisted {
+					previousWorkspaceMap[node.ID] = previousGrant
+				} else {
+					delete(previousWorkspaceMap, node.ID)
+				}
+				a.sshWorkspaceAllowed[authorizeWorkspace] = previousWorkspaceMap
+			} else {
+				delete(a.sshWorkspaceAllowed, authorizeWorkspace)
+			}
+			if allowedMapWasNil && len(a.sshWorkspaceAllowed) == 0 {
+				a.sshWorkspaceAllowed = nil
+			}
+			a.sshWorkspaceAllowedMu.Unlock()
 		}
 		return err
 	}
@@ -529,49 +591,106 @@ func (a *App) deleteSSHServerLocked(ref string) error {
 	}
 	delete(a.sshClusters, previous.ID)
 	// 删除节点必须同时撤销所有工作区的授权，避免计数残留以及同名节点继承旧授权。
+	removedGrants := make(map[string]bool)
+	allowedMapWasNil := a.sshWorkspaceAllowed == nil
 	a.sshWorkspaceAllowedMu.Lock()
 	for ws, allowed := range a.sshWorkspaceAllowed {
+		grant, exists := allowed[previous.ID]
+		if !exists {
+			continue
+		}
+		removedGrants[ws] = grant
 		delete(allowed, previous.ID)
 		if len(allowed) == 0 {
 			delete(a.sshWorkspaceAllowed, ws)
 		}
 	}
 	a.sshWorkspaceAllowedMu.Unlock()
+	if err := a.saveSSHClustersLocked(); err != nil {
+		a.sshClusters[previous.ID] = previous
+		a.sshWorkspaceAllowedMu.Lock()
+		if a.sshWorkspaceAllowed == nil {
+			a.sshWorkspaceAllowed = make(map[string]map[string]bool)
+		}
+		for ws, grant := range removedGrants {
+			if a.sshWorkspaceAllowed[ws] == nil {
+				a.sshWorkspaceAllowed[ws] = make(map[string]bool)
+			}
+			a.sshWorkspaceAllowed[ws][previous.ID] = grant
+		}
+		if allowedMapWasNil && len(a.sshWorkspaceAllowed) == 0 {
+			a.sshWorkspaceAllowed = nil
+		}
+		a.sshWorkspaceAllowedMu.Unlock()
+		return err
+	}
 	a.sshCredentials.purgeHost(nodeSSHHost(previous))
-	return a.saveSSHClustersLocked()
+	return nil
 }
 
 // AuthorizeServerForWorkspace grants access by ID (legacy aliases accepted).
-func (a *App) AuthorizeServerForWorkspace(workspace, alias string) {
+func (a *App) AuthorizeServerForWorkspace(workspace, alias string) error {
 	normWS := normalizeWorkspaceKey(workspace)
 	alias = strings.TrimSpace(alias)
-	if normWS == "" || alias == "" {
-		return
+	if normWS == "" {
+		return errors.New("workspace is required")
 	}
-	a.authorizeServerForWorkspaceLocked(normWS, alias)
+	if alias == "" {
+		return errors.New("server reference is required")
+	}
+	if err := a.authorizeServerForWorkspaceLocked(normWS, alias); err != nil {
+		return err
+	}
 	a.emitSSHClustersChanged()
+	return nil
 }
 
 // authorizeServerForWorkspaceLocked 落盘工作区白名单的增量授权。调用方不得持有锁。
-func (a *App) authorizeServerForWorkspaceLocked(normWS, alias string) {
+func (a *App) authorizeServerForWorkspaceLocked(normWS, alias string) error {
 	a.sshClustersMu.Lock()
 	defer a.sshClustersMu.Unlock()
 	node, exists := a.sshServerByRefLocked(alias)
 	if !exists {
-		return
+		return errors.New("server no longer exists; reload the server list")
 	}
 
 	a.sshWorkspaceAllowedMu.Lock()
+	allowedMapWasNil := a.sshWorkspaceAllowed == nil
 	if a.sshWorkspaceAllowed == nil {
 		a.sshWorkspaceAllowed = make(map[string]map[string]bool)
 	}
-	if a.sshWorkspaceAllowed[normWS] == nil {
-		a.sshWorkspaceAllowed[normWS] = make(map[string]bool)
+	previousWorkspaceMap, workspaceExisted := a.sshWorkspaceAllowed[normWS]
+	previousGrant, grantExisted := previousWorkspaceMap[node.ID]
+	if grantExisted && previousGrant {
+		a.sshWorkspaceAllowedMu.Unlock()
+		return nil
 	}
-	a.sshWorkspaceAllowed[normWS][node.ID] = true
+	if previousWorkspaceMap == nil {
+		previousWorkspaceMap = make(map[string]bool)
+	}
+	previousWorkspaceMap[node.ID] = true
+	a.sshWorkspaceAllowed[normWS] = previousWorkspaceMap
 	a.sshWorkspaceAllowedMu.Unlock()
 
-	_ = a.saveSSHClustersLocked()
+	if err := a.saveSSHClustersLocked(); err != nil {
+		a.sshWorkspaceAllowedMu.Lock()
+		if workspaceExisted {
+			if grantExisted {
+				previousWorkspaceMap[node.ID] = previousGrant
+			} else {
+				delete(previousWorkspaceMap, node.ID)
+			}
+			a.sshWorkspaceAllowed[normWS] = previousWorkspaceMap
+		} else {
+			delete(a.sshWorkspaceAllowed, normWS)
+		}
+		if allowedMapWasNil && len(a.sshWorkspaceAllowed) == 0 {
+			a.sshWorkspaceAllowed = nil
+		}
+		a.sshWorkspaceAllowedMu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // SetWorkspaceAllowedServers replaces a workspace's grants with canonical IDs.

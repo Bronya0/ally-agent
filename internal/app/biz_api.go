@@ -129,12 +129,12 @@ func normalizeApiPort(port int) int {
 }
 
 // generateApiToken 生成 32 位十六进制随机 token。
-func generateApiToken() string {
+func generateApiToken() (string, error) {
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {
-		return fmt.Sprintf("%x", time.Now().UnixNano())
+		return "", fmt.Errorf("generate API token: %w", err)
 	}
-	return hex.EncodeToString(buf)
+	return hex.EncodeToString(buf), nil
 }
 
 // ── 服务生命周期（Wails 绑定） ──
@@ -168,7 +168,11 @@ func (a *App) SaveApiSettings(req ApiSettingsRequest) (ApiServiceState, error) {
 	settings.Port = normalizeApiPort(req.Port)
 	settings.Token = strings.TrimSpace(req.Token)
 	if settings.Token == "" {
-		settings.Token = generateApiToken()
+		token, err := generateApiToken()
+		if err != nil {
+			return ApiServiceState{}, err
+		}
+		settings.Token = token
 	}
 	if err := saveApiSettings(settings); err != nil {
 		return ApiServiceState{}, err
@@ -235,7 +239,11 @@ func (a *App) startApiListenerLocked(settings apiSettings) error {
 		return err
 	}
 	if strings.TrimSpace(settings.Token) == "" {
-		settings.Token = generateApiToken()
+		var err error
+		settings.Token, err = generateApiToken()
+		if err != nil {
+			return err
+		}
 		if err := saveApiSettings(settings); err != nil {
 			return err
 		}

@@ -2302,6 +2302,12 @@ func (a *App) emitMcpStatus() {
 }
 
 func (a *App) GetMcpConfig() (string, error) {
+	a.mcpConfigMu.Lock()
+	defer a.mcpConfigMu.Unlock()
+	return a.readMcpConfigLocked()
+}
+
+func (a *App) readMcpConfigLocked() (string, error) {
 	path := a.mcpUserConfigPath()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -2334,6 +2340,54 @@ func drainMcpStderr(c *client.Client) {
 // "结构校验 + 统一缩进"。按固定 struct 重建会把 cwd、超时与外部客户端
 // （Claude Desktop / Cursor）的专有键整段吃掉——用户从面板导入一次就少一半。
 func (a *App) SaveMcpConfig(raw string) error {
+	a.mcpConfigMu.Lock()
+	defer a.mcpConfigMu.Unlock()
+	return a.saveMcpConfigLocked(raw)
+}
+
+// MergeMcpConfig applies the UI's changed server entries onto the latest saved
+// config. Unchanged entries and top-level unknown fields come from current disk
+// state; conflicting edits to the same server fail instead of silently winning.
+func (a *App) MergeMcpConfig(baseRaw, proposedRaw string) (string, error) {
+	a.mcpConfigMu.Lock()
+	defer a.mcpConfigMu.Unlock()
+
+	currentRaw, err := a.readMcpConfigLocked()
+	if err != nil {
+		return "", err
+	}
+	merged, err := mergeMcpConfigEntries(baseRaw, proposedRaw, currentRaw)
+	if err != nil {
+		return "", err
+	}
+	if err := a.saveMcpConfigLocked(string(merged)); err != nil {
+		return "", err
+	}
+	return string(merged), nil
+}
+
+// SaveMcpConfigIfUnchanged is used for intentional whole-document replacement
+// such as import. It rejects a stale base so changes made while the file picker
+// was open are not erased by the imported document.
+func (a *App) SaveMcpConfigIfUnchanged(expectedRaw, proposedRaw string) error {
+	a.mcpConfigMu.Lock()
+	defer a.mcpConfigMu.Unlock()
+
+	currentRaw, err := a.readMcpConfigLocked()
+	if err != nil {
+		return err
+	}
+	equal, err := equalMcpConfig(expectedRaw, currentRaw)
+	if err != nil {
+		return err
+	}
+	if !equal {
+		return errors.New("MCP 配置在编辑期间已变化，请刷新后重试")
+	}
+	return a.saveMcpConfigLocked(proposedRaw)
+}
+
+func (a *App) saveMcpConfigLocked(raw string) error {
 	data, err := normalizeMcpConfigJSON(raw)
 	if err != nil {
 		return err
@@ -2345,6 +2399,127 @@ func (a *App) SaveMcpConfig(raw string) error {
 	// mcp.json 与 config.json 同规格：走原子写。原地截断写在崩溃时留下半截 JSON，
 	// 下次启动整份 MCP 配置回默认值，用户自己写的服务器列表就没了。
 	return writeAtomicBytes(path, data, 0o600)
+}
+
+func mergeMcpConfigEntries(baseRaw, proposedRaw, currentRaw string) ([]byte, error) {
+	_, baseServers, err := decodeMcpConfigDocument(baseRaw)
+	if err != nil {
+		return nil, fmt.Errorf("read MCP edit base: %w", err)
+	}
+	_, proposedServers, err := decodeMcpConfigDocument(proposedRaw)
+	if err != nil {
+		return nil, fmt.Errorf("read proposed MCP config: %w", err)
+	}
+	currentDoc, currentServers, err := decodeMcpConfigDocument(currentRaw)
+	if err != nil {
+		return nil, fmt.Errorf("read current MCP config: %w", err)
+	}
+
+	keys := make(map[string]struct{}, len(baseServers)+len(proposedServers))
+	for key := range baseServers {
+		keys[key] = struct{}{}
+	}
+	for key := range proposedServers {
+		keys[key] = struct{}{}
+	}
+	for name := range keys {
+		if mcpEntryEqual(baseServers, proposedServers, name) {
+			continue
+		}
+		if mcpEntryEqual(currentServers, proposedServers, name) {
+			continue
+		}
+		if !mcpEntryEqual(currentServers, baseServers, name) {
+			return nil, fmt.Errorf("MCP 服务 %q 在编辑期间已变化，请刷新后重试", name)
+		}
+		if entry, exists := proposedServers[name]; exists {
+			currentServers[name] = entry
+		} else {
+			delete(currentServers, name)
+		}
+	}
+
+	servers, err := json.Marshal(currentServers)
+	if err != nil {
+		return nil, err
+	}
+	currentDoc["mcpServers"] = servers
+	merged, err := json.Marshal(currentDoc)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeMcpConfigJSON(string(merged))
+}
+
+func decodeMcpConfigDocument(raw string) (map[string]json.RawMessage, map[string]json.RawMessage, error) {
+	normalized, err := normalizeMcpConfigJSON(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	doc := map[string]json.RawMessage{}
+	if err := json.Unmarshal(normalized, &doc); err != nil {
+		return nil, nil, err
+	}
+	servers := map[string]json.RawMessage{}
+	if rawServers := doc["mcpServers"]; len(rawServers) > 0 {
+		if err := json.Unmarshal(rawServers, &servers); err != nil {
+			return nil, nil, err
+		}
+	}
+	if servers == nil {
+		servers = make(map[string]json.RawMessage)
+	}
+	return doc, servers, nil
+}
+
+func mcpEntryEqual(left, right map[string]json.RawMessage, name string) bool {
+	a, aOK := left[name]
+	b, bOK := right[name]
+	if aOK != bOK {
+		return false
+	}
+	if !aOK {
+		return true
+	}
+	av, errA := decodeExactJSONValue(a)
+	bv, errB := decodeExactJSONValue(b)
+	if errA != nil || errB != nil {
+		return bytes.Equal(bytes.TrimSpace(a), bytes.TrimSpace(b))
+	}
+	return reflect.DeepEqual(av, bv)
+}
+
+func equalMcpConfig(left, right string) (bool, error) {
+	leftData, err := normalizeMcpConfigJSON(left)
+	if err != nil {
+		// Keep the import repair path for a malformed existing mcp.json. Exact
+		// byte equality still provides a safe compare-and-swap against the value
+		// the user saw; any concurrent edit fails conservatively.
+		return left == right, nil
+	}
+	rightData, err := normalizeMcpConfigJSON(right)
+	if err != nil {
+		return left == right, nil
+	}
+	leftValue, err := decodeExactJSONValue(leftData)
+	if err != nil {
+		return false, err
+	}
+	rightValue, err := decodeExactJSONValue(rightData)
+	if err != nil {
+		return false, err
+	}
+	return reflect.DeepEqual(leftValue, rightValue), nil
+}
+
+func decodeExactJSONValue(raw []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return value, nil
 }
 
 // defaultMcpConfigJSON 是空配置的落盘形态。

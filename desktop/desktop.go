@@ -332,6 +332,7 @@ func Run() {
 				a.skills = skills
 				a.toolInventory = tools
 				a.toolCount = enabledToolCount(tools)
+				a.refreshMCPInventory()
 				a.mcpServers = servers
 				a.mcpSummary = mcpSummary(servers)
 				a.sessions = sessions

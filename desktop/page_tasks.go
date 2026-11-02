@@ -17,11 +17,28 @@ func (a *desktop) loadTaskCenter(manual ...bool) {
 		return
 	}
 	a.tasksF.Loading = true
+	a.tasksF.ScheduledChanges = make(map[string]scheduledTaskChange)
+	a.tasksF.ServiceChanges = make(map[string]backend.ServiceInfo)
 	go func() {
 		tasks := a.core.ListScheduledTasks()
 		services := a.core.ListServices().Services
 		a.win.Update(func() {
+			// The backend snapshots can predate lifecycle events already delivered
+			// to this window while the requests were in flight. Reapply the latest
+			// event per ID before publishing the snapshot.
+			for id, change := range a.tasksF.ScheduledChanges {
+				if change.deleted {
+					tasks = removeScheduledTask(tasks, id)
+				} else {
+					tasks = upsertScheduledTask(tasks, change.task)
+				}
+			}
+			for _, service := range a.tasksF.ServiceChanges {
+				services = upsertServiceInfo(services, service)
+			}
 			a.tasksF.Loading = false
+			a.tasksF.ScheduledChanges = nil
+			a.tasksF.ServiceChanges = nil
 			a.tasks = tasks
 			a.services = services
 			if len(manual) > 0 && manual[0] {
