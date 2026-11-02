@@ -79,6 +79,7 @@ func TestPetClickAndSettings(t *testing.T) {
 	if got := a.prefs.Pet.Affection["whale"].Points; got != 25 {
 		t.Fatalf("click did not award daily companionship and pat: %d", got)
 	}
+	a.prefs.Pet.Enabled = false
 	settings := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(a.theme())
 		ui.Column(c).Fill().Children(func() { a.petSettings(c) })

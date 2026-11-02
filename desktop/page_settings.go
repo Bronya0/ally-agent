@@ -110,6 +110,8 @@ func (a *desktop) saveSettings(notice ...string) {
 	cfg.AllowPrivateNetwork = &allow
 	autoUpdate := a.settings.AutoUpdate
 	cfg.AutoUpdate = &autoUpdate
+	cfg.SendSessionIDHeader = boolPtr(a.settings.SendSessionID)
+	cfg.SendXSessionIDHeader = boolPtr(a.settings.SendXSessionID)
 	cfg.CompactTimeoutSeconds = int(a.settings.CompactTimeout)
 	cfg.CompactThreshold = a.settings.Threshold
 	cfg.MessageFontSize = a.settings.FontMessage
@@ -146,6 +148,16 @@ func (a *desktop) commitSettingsOnLeave() {
 }
 
 // ---- General -------------------------------------------------------------
+
+// Settings actions need a visible outline at rest so file pickers, update
+// checks and other one-shot operations read as buttons rather than labels.
+func settingsAction(c *ui.Context, label string, tone ...uikit.Tone) ui.Element {
+	options := uikit.ActionOptions{Style: uikit.Ghost, Small: true}
+	if len(tone) > 0 {
+		options.Tone = tone[0]
+	}
+	return uikit.Action(c.Key("settings-action-"+label), label, options)
+}
 
 func (a *desktop) settingsGeneral(c *ui.Context) {
 	selected := a.settingsModule(c, "settingsGeneral", "外观", "提示词", "路径", "对话行为", "应用")
@@ -194,9 +206,9 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				}
 			})
 			ui.Row(c).Gap(gapField).Children(func() {
-				cardFlat(c, "上传自定义形象").OnClick(func() { a.chooseCustomAvatar() })
+				settingsAction(c, "上传自定义形象").OnClick(func() { a.chooseCustomAvatar() })
 				if a.customAvatar != nil {
-					cardFlat(c, "使用自定义形象").OnClick(func() { a.selectAvatarStyle("custom") })
+					settingsAction(c, "使用自定义形象").OnClick(func() { a.selectAvatarStyle("custom") })
 				}
 			})
 			fieldNote(c, "点击欢迎页头像可以切换樱花特效；桌宠未开启时也可以摸摸头。", a.secondaryInk())
@@ -210,9 +222,9 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				if a.configDraft.BackgroundImage != "" {
 					label = "更换图片"
 				}
-				cardFlat(c, label).OnClick(func() { a.selectBackgroundImage() })
+				settingsAction(c, label).OnClick(func() { a.selectBackgroundImage() })
 				if a.configDraft.BackgroundImage != "" {
-					cardDanger(c, "清除背景图").OnClick(func() { a.clearBackgroundImage() })
+					settingsAction(c, "清除背景图", uikit.Error).OnClick(func() { a.clearBackgroundImage() })
 				}
 				ui.Spacer(c)
 				state := "未设置背景图"
@@ -322,6 +334,11 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					fieldNote(c, "同时执行的工具数，默认 4。", a.secondaryInk())
 				})
 			})
+			divider(c)
+			sectionTitle(c, "会话请求头")
+			switchRow(c, "send-session-id", "自动发送 session-id", "用于同一会话的后端路由与缓存复用，默认开启。", &a.settings.SendSessionID)
+			switchRow(c, "send-x-session-id", "自动发送 x-session-id", "与 session-id 使用同一会话标识，可独立关闭，默认开启。", &a.settings.SendXSessionID)
+			fieldNote(c, "保存后对后续任务生效；手动配置的同名请求头不受影响。", a.secondaryInk())
 		})
 	}
 	if selected == 4 {
@@ -331,12 +348,12 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				switchRow(c, "auto-update", "自动更新", "有新版本时后台下载，完成提示重启。", &a.settings.AutoUpdate)
 			}
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				cardFlat(c, "检查更新").OnClick(func() {
+				settingsAction(c, "检查更新").OnClick(func() {
 					a.settings.UpdateNote = "正在检查…"
 					a.checkUpdates(false)
 				})
 				if strings.TrimSpace(a.upd.ReleaseBody) != "" {
-					cardFlat(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
+					settingsAction(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
 				}
 				ui.Spacer(c)
 				if a.settings.UpdateNote != "" {
@@ -438,8 +455,8 @@ func (a *desktop) settingsNetwork(c *ui.Context) {
 		}
 		notice(c, "warn", "代理可见连接元数据；代理不可用时不会回退直连。", a.secondaryInk())
 		ui.Row(c).Gap(gapField).Children(func() {
-			cardFlat(c, "检测系统代理").OnClick(func() { a.detectProxy() })
-			cardFlat(c, "测试连接").Disabled(a.configDraft.ProxyMode == "off").OnClick(func() { a.testProxy() })
+			settingsAction(c, "检测系统代理").OnClick(func() { a.detectProxy() })
+			settingsAction(c, "测试连接").Disabled(a.configDraft.ProxyMode == "off").OnClick(func() { a.testProxy() })
 			if a.settings.ProxyBusy {
 				ui.Spinner(c).Size(13, 13)
 			}
@@ -588,21 +605,21 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 				uikit.NumberInput(c, "api-port", "API 端口", &a.settings.APIPort, 1024, 65535, 1, a.secondaryInk()).Width(200)
 				fieldLabel(c, "Token")
 				uikit.Input(c.Key("api-token"), &a.settings.API.Token).Label("API Token").Width(240)
-				cardFlat(c, "复制").OnClick(func() {
+				settingsAction(c, "复制").OnClick(func() {
 					c.WriteClipboard(a.settings.API.Token)
 					c.Toast("Token 已复制")
 				})
-				cardFlat(c, "重新生成").OnClick(func() {
+				settingsAction(c, "重新生成").OnClick(func() {
 					a.settings.API.Token = randomToken()
 					a.saveAPISettings()
 					c.Toast("已生成新 Token")
 				})
-				cardFlat(c, "保存").OnClick(func() { a.saveAPISettings() })
+				settingsAction(c, "保存").OnClick(func() { a.saveAPISettings() })
 				services := c.Services()
-				cardFlat(c, "接口文档").OnClick(func() {
+				settingsAction(c, "接口文档").OnClick(func() {
 					services.OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/api.md")
 				})
-				cardFlat(c, "刷新").OnClick(func() { a.loadAPIService(true) })
+				settingsAction(c, "刷新").OnClick(func() { a.loadAPIService(true) })
 			})
 			fieldNote(c, "端口与 Token 改动后需点保存；Token 为空时后端会自动生成。", a.secondaryInk())
 			if a.settings.APINote != "" {
@@ -760,7 +777,7 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 	card(c, "settings-memory-diagnostics", func() {
 		sectionTitle(c, "内存诊断")
 		fieldNote(c, "导出 Go 堆与分配调用栈、协程和回收前后内存数据；会短暂触发垃圾回收。也可在聊天页按 Ctrl+Shift+F12。建议在空闲时、内存增长后各导出一次。", a.secondaryInk())
-		cardFlat(c, "导出内存诊断").Disabled(a.memoryDiagnosticBusy).OnClick(a.exportMemoryDiagnostics)
+		settingsAction(c, "导出内存诊断").Disabled(a.memoryDiagnosticBusy).OnClick(a.exportMemoryDiagnostics)
 	})
 
 	services := c.Services()
@@ -772,8 +789,8 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 			ui.Text(c, "GPLv3 only").FontSize(fsBody).Bold()
 			fieldNote(c, "你可以自由使用、研究、修改与分发本软件；衍生作品必须以同一许可开放源代码；本软件不提供任何担保。", a.secondaryInk())
 			ui.Row(c).Gap(gapField).Wrap().Children(func() {
-				cardFlat(c, "查看源代码与许可证").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent") })
-				cardFlat(c, "提意见 / 反馈 Issue").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent/issues") })
+				settingsAction(c, "查看源代码与许可证").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent") })
+				settingsAction(c, "提意见 / 反馈 Issue").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent/issues") })
 			})
 		})
 	}
@@ -781,7 +798,7 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 		card(c, "settings-credits", func() {
 			sectionTitle(c, "欢迎页形象素材署名")
 			fieldNote(c, "欢迎页立绘沿用原项目素材，许可为 CC BY-NC-SA 4.0：署名、非商业、相同方式共享。", a.secondaryInk())
-			cardFlat(c, "查看素材来源").OnClick(func() {
+			settingsAction(c, "查看素材来源").OnClick(func() {
 				services.OpenURL("https://github.com/Bronya0/ally-agent/blob/main/resources/avatar/NOTICE.txt")
 			})
 		})
@@ -790,12 +807,12 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 		card(c, "settings-update", func() {
 			sectionTitle(c, "更新")
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				cardFlat(c, "检查更新").OnClick(func() {
+				settingsAction(c, "检查更新").OnClick(func() {
 					a.settings.UpdateNote = "正在检查…"
 					a.checkUpdates(false)
 				})
 				if strings.TrimSpace(a.upd.ReleaseBody) != "" {
-					cardFlat(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
+					settingsAction(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
 				}
 				ui.Spacer(c)
 				fieldNote(c, a.settings.UpdateNote, a.secondaryInk())
@@ -810,7 +827,7 @@ func (a *desktop) settingsRaw(c *ui.Context) {
 		fieldNote(c, "高级用法：直接编辑后端完整配置（包含密钥），保存后立即生效。", a.secondaryInk())
 		textArea(c, "raw-config", "配置 JSON", "{}", &a.settings.FullJSON, 420)
 		ui.Row(c).Gap(gapField).Children(func() {
-			cardPrimary(c, "保存 JSON").OnClick(func() {
+			settingsAction(c, "保存 JSON", uikit.Primary).OnClick(func() {
 				var cfg backend.ConfigState
 				if err := json.Unmarshal([]byte(a.settings.FullJSON), &cfg); err != nil {
 					a.notifyError("配置解析失败：" + err.Error())
@@ -818,7 +835,7 @@ func (a *desktop) settingsRaw(c *ui.Context) {
 				}
 				a.saveConfig(cfg)
 			})
-			cardFlat(c, "从后端重新载入").OnClick(func() {
+			settingsAction(c, "从后端重新载入").OnClick(func() {
 				go func() {
 					cfg, err := a.core.GetConfig()
 					a.win.Update(func() {

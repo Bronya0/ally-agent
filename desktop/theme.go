@@ -136,9 +136,9 @@ func (p palette) chromeColor() ui.Color {
 
 func (p palette) headerColor() ui.Color {
 	if p.dark {
-		// Keep dark chrome close to a neutral charcoal. Saturated frame tints
-		// lift its brightness too far above the conversation surface.
-		return p.panel.Mix(p.accent, 0.06)
+		// Lift the dark frame enough to separate the active tab from the
+		// conversation surface, while keeping its accent tint restrained.
+		return p.panel.Mix(p.accent, 0.03).Mix(ui.Hex("#ffffff"), 0.08)
 	}
 	base := p.chrome
 	if base.A == 0 {

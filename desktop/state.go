@@ -35,7 +35,7 @@ type uiPrefs struct {
 }
 
 func defaultPrefs() uiPrefs {
-	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, Pet: petPreferences{Size: 180}}
+	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, Pet: petPreferences{Enabled: true, Size: 180}}
 }
 
 var prefsMu sync.Mutex
@@ -256,6 +256,8 @@ type settingsForm struct {
 	BgOpacity       float64
 	AllowPrivate    bool
 	AutoUpdate      bool
+	SendSessionID   bool
+	SendXSessionID  bool
 	Autostart       bool
 	Validation      map[string]bool
 	UpdateNote      string
@@ -293,6 +295,8 @@ func (a *desktop) syncSettingsForm() {
 	f.Concurrency = float64(a.configDraft.ToolConcurrency)
 	f.AllowPrivate = boolValue(a.configDraft.AllowPrivateNetwork)
 	f.AutoUpdate = a.configDraft.AutoUpdate == nil || *a.configDraft.AutoUpdate
+	f.SendSessionID = a.configDraft.SendSessionIDHeader == nil || *a.configDraft.SendSessionIDHeader
+	f.SendXSessionID = a.configDraft.SendXSessionIDHeader == nil || *a.configDraft.SendXSessionIDHeader
 	f.CompactTimeout = float64(a.configDraft.CompactTimeoutSeconds)
 	f.Threshold = a.configDraft.CompactThreshold
 	if f.Threshold <= 0 {
