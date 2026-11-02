@@ -230,6 +230,13 @@ type splitDiffRow struct {
 }
 
 func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
+	// Tabs are expanded once here, with the rows the card memoises, rather than
+	// in every cell on every frame. A tab advance is about four characters, so a
+	// deeply indented line would otherwise spend a third of its half-width cell on
+	// one indent level.
+	for n := range lines {
+		lines[n].text = strings.ReplaceAll(lines[n].text, "\t", "    ")
+	}
 	var rows []splitDiffRow
 	for i := 0; i < len(lines); {
 		l := lines[i]
@@ -328,9 +335,7 @@ func diffColors(t *ui.Theme, changed, removed bool) (ui.Color, ui.Color) {
 func diffCell(c *ui.Context, text string, changed bool, number int, ink ...ui.Color) {
 	fill, color := diffColors(c.Theme(), changed, strings.HasPrefix(text, "-"))
 	// Each cell takes half the row and lets its code wrap: the row then grows to
-	// the taller side, so wrapped lines keep the two columns lined up. Tabs are
-	// expanded first: a tab advance is about four characters, so a deeply indented
-	// line would otherwise spend a third of the cell on one indent level.
+	// the taller side, so wrapped lines keep the two columns lined up.
 	ui.Row(c).Grow(1).Basis(0).MinWidth(0).Shrink(1).MinHeight(22).Padding(1, 8).AlignItems(ui.Start).Background(fill).Children(func() {
 		if text == "" {
 			text = " "
@@ -338,7 +343,7 @@ func diffCell(c *ui.Context, text string, changed bool, number int, ink ...ui.Co
 		if number > 0 {
 			ui.Text(c, strconv.Itoa(number)).Width(28).Shrink(0).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Unselectable()
 		}
-		ui.Text(c, strings.ReplaceAll(text, "\t", "    ")).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).Grow(1).MinWidth(0).Selectable()
+		ui.Text(c, text).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).Grow(1).MinWidth(0).Selectable()
 	})
 }
 
