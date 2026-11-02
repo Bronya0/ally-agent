@@ -359,9 +359,9 @@ func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, star
 	}
 	body := func() {
 		row := ui.Row(c).AlignItems(ui.Start).Padding(2, 8, 4, 0).Gap(12)
-		gutter := ui.Local(row, "line-numbers", func() lineNumberGutter { return lineNumberGutter{} })
+		gutter := memoAt[lineMemo](row, "line-numbers")
 		row.Children(func() {
-			ui.Text(c, gutter.get(text, start)).Font(monoFamily).FontSize(readingCodeSize).TextColor(uikit.SecondaryInk(c, ink)).FixedLineHeight(20).Unselectable()
+			ui.Text(c, gutter.get(lineKey{text, start}, lineNumberColumn)).Font(monoFamily).FontSize(readingCodeSize).TextColor(uikit.SecondaryInk(c, ink)).FixedLineHeight(20).Unselectable()
 			ui.RichText(c, codeSpans(c, text, path, ink...)...).Font(monoFamily).FontSize(readingCodeSize).FixedLineHeight(20).Selectable().NoWrap()
 		})
 	}
@@ -372,31 +372,19 @@ func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, star
 	}
 }
 
-// lineNumberGutter keeps the number column of one source window. It is derived
-// from the whole text, which does not change between frames, so rebuilding it
-// each frame meant splitting the file and renumbering it for nothing.
-type lineNumberGutter struct {
-	valid bool
-	text  string
-	start int
-	label string
-}
-
-func (g *lineNumberGutter) get(text string, start int) string {
-	if g.valid && g.start == start && g.text == text {
-		return g.label
-	}
-	count := strings.Count(strings.TrimSuffix(text, "\n"), "\n") + 1
+// lineNumberColumn builds the number column of a source window: every line of
+// the text, counted up from the first number the window shows.
+func lineNumberColumn(key lineKey) string {
+	count := strings.Count(strings.TrimSuffix(key.text, "\n"), "\n") + 1
 	var b strings.Builder
 	b.Grow(count * 4)
 	for n := 0; n < count; n++ {
 		if n > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(strconv.Itoa(start + n))
+		b.WriteString(strconv.Itoa(key.start + n))
 	}
-	g.valid, g.text, g.start, g.label = true, text, start, b.String()
-	return g.label
+	return b.String()
 }
 
 // Terminal heading and transcript have different roles, especially on light

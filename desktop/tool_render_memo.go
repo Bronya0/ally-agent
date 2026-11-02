@@ -1,22 +1,57 @@
+// SPDX-License-Identifier: GPL-3.0-only
 package desktop
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/egoist/mygo/ui"
 )
 
-// These values belong to a widget, never to persisted messages or a global cache.
-type toolArgsMemo struct {
-	source string
-	value  map[string]any
+// These values belong to a widget, never to persisted messages or a global
+// cache: every frame rebuilds the tree, so a memo pays a derivation once per
+// change and is dropped together with the widget that holds it.
+//
+// memoOf keeps one derived value while its key stays the same. The kind of key
+// differs per use (raw arguments, a log, a diff), so it stays generic instead of
+// each card growing its own copy of the compare-and-derive dance.
+type memoOf[K comparable, V any] struct {
+	ready bool
+	key   K
+	value V
 }
 
-func (m *toolArgsMemo) get(source string) map[string]any {
-	if m.value == nil || m.source != source {
-		m.source, m.value = source, parseToolArgs(source)
+func (m *memoOf[K, V]) get(key K, derive func(K) V) V {
+	if !m.ready || m.key != key {
+		m.key, m.value, m.ready = key, derive(key), true
 	}
 	return m.value
 }
+
+// memoAt attaches a memo to e under name, so it lives as long as e does.
+func memoAt[V any](e ui.Element, name string) *V {
+	return ui.Local(e, name, func() V {
+		var zero V
+		return zero
+	})
+}
+
+// The memos the tool cards and source windows keep, named after the value they
+// hold so a call site says what it caches.
+type (
+	argsMemo = memoOf[string, map[string]any]
+	textMemo = memoOf[string, string]
+	rowsMemo = memoOf[string, []splitDiffRow]
+	lineMemo = memoOf[lineKey, string]
+)
+
+// lineKey addresses the number column of a source window: the text it numbers
+// and the first number it starts at.
+type lineKey struct {
+	text  string
+	start int
+}
+
 func toolCardKey(t *conversation, index int, message map[string]any) string {
 	if key := str(message, "toolCallId"); key != "" {
 		return key
@@ -24,39 +59,31 @@ func toolCardKey(t *conversation, index int, message map[string]any) string {
 	return fmt.Sprintf("%s-%d", t.ID, index)
 }
 
-// toolTextMemo keeps one derived block of text while its source stays the same
-// string. Frame after frame the source is the string the message already holds,
-// so this compares a header rather than scanning the whole log again.
-type toolTextMemo struct {
-	valid  bool
-	source string
-	text   string
-}
-
-func (m *toolTextMemo) get(source string) string {
-	if m.valid && m.source == source {
-		return m.text
-	}
-	m.valid, m.source, m.text = true, source, stripBlankLines(source)
-	return m.text
-}
-
+// diffMemo holds the split rows of one diff beside how many rows "show more" has
+// revealed, since that button outlives neither the card nor the source.
 type diffMemo struct {
-	source  string
-	rows    []splitDiffRow
+	rows    rowsMemo
 	extra   int
 	compact bool
 }
 
+// get keeps the rows of one diff. A new diff also drops whatever "show more"
+// had opened on the old one.
 func (m *diffMemo) get(source string) []splitDiffRow {
-	if m.rows == nil || m.source != source {
-		lines := strings.Split(source, "\n")
-		for i := range lines {
-			lines[i] = strings.TrimSuffix(lines[i], "\r")
-		}
-		m.source, m.rows, m.extra = source, splitDiffRows(diffVisibleLines(lines, 0, false)), 0
+	if m.rows.ready && m.rows.key == source {
+		return m.rows.value
 	}
-	return m.rows
+	m.extra = 0
+	return m.rows.get(source, splitDiffPairs)
+}
+
+// splitDiffPairs cuts a diff into the aligned row pairs both views draw.
+func splitDiffPairs(source string) []splitDiffRow {
+	lines := strings.Split(source, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimSuffix(lines[i], "\r")
+	}
+	return splitDiffRows(diffVisibleLines(lines, 0, false))
 }
 
 func (m *diffMemo) limit(compact bool) int {

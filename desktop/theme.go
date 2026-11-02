@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -465,19 +464,12 @@ func pctOf(v, total int) string {
 	return fmt.Sprintf("%d%%", int(math.Round(float64(v)*100/float64(total))))
 }
 
-// short cuts s to n runes for a one-line label. Most calls cut a title that
-// already fits, and this runs on every frame, so the common case returns the
-// string as it is instead of copying it into runes first.
+// short cuts s to n runes for a one-line label. Cutting is cutRunes', so the
+// common case of a title that already fits copies nothing.
 func short(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if !strings.ContainsAny(s, "\r\n") && utf8.RuneCountInString(s) <= n {
-		return s
-	}
-	r := []rune(strings.ReplaceAll(strings.ReplaceAll(s, "\n", " "), "\r", ""))
-	if len(r) > n {
-		return string(r[:n]) + "…"
+	flat := strings.ReplaceAll(strings.ReplaceAll(s, "\n", " "), "\r", "")
+	if cut, truncated := cutRunes(flat, n); truncated {
+		return cut + "…"
 	}
 	return s
 }

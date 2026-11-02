@@ -261,11 +261,11 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	key := fmt.Sprintf("%s-%s-%d", t.ID, groupType, index)
 	open := t.uiState().ToolOpen[key]
 	container := ui.Column(c.Key("tool-" + key)).FillWidth().MinWidth(0).Gap(2)
-	extra := ui.Local(container, "entries-extra", func() int { return 0 })
+	extra := memoAt[int](container, "entries-extra")
 	// An open group rebuilds its rows on every frame. Keep one parsed-argument
 	// memo per visible row beside the widget, so each row decodes its JSON only
 	// when that row's raw arguments actually change.
-	entryArgs := ui.Local(container, "entry-args", func() []toolArgsMemo { return nil })
+	entryArgs := memoAt[[]argsMemo](container, "entry-args")
 	if !open {
 		*extra = 0
 		// Releasing the memos together with the rows keeps a long transcript from
@@ -311,9 +311,9 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 			state := toolState(m)
 			slot := i - index
 			for len(*entryArgs) <= slot {
-				*entryArgs = append(*entryArgs, toolArgsMemo{})
+				*entryArgs = append(*entryArgs, argsMemo{})
 			}
-			args := (*entryArgs)[slot].get(str(m, "args"))
+			args := (*entryArgs)[slot].get(str(m, "args"), parseToolArgs)
 			title := toolArgSummary(name, args)
 			if name == "command" {
 				entries = append(entries, toolGroupEntry{index: i, message: m, name: name, title: title, state: state})
@@ -477,7 +477,7 @@ func (a *desktop) toolGroupCommandEntry(c *ui.Context, t *conversation, entry to
 	button := ui.ButtonBase(c.Key(key+"-group-row")).FillWidth().MinWidth(0).Height(24).Padding(1, 8, 1, 16).Gap(gapInline).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label("命令结果 " + key + " " + verb + " " + short(command, 120))
 	// Same cache as toolCard: an expanded group redraws every frame, so the
 	// arguments must not be decoded again on each one.
-	args := ui.Local(button, "parsed-args", func() toolArgsMemo { return toolArgsMemo{} }).get(str(m, "args"))
+	args := memoAt[argsMemo](button, "parsed-args").get(str(m, "args"), parseToolArgs)
 	button.Children(func() {
 		ui.Text(c, prefix).Font(monoFamily).FontSize(fsSmall).TextColor(a.secondaryInk())
 		commandRow := ui.Row(c.Key(key + "-group-command-text")).Grow(1).MinWidth(0).Gap(gapInline).AlignItems(ui.Center)
@@ -546,8 +546,8 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		verb = desc.failedVerb
 	}
 	container := ui.Column(c.Key("tool-" + toolCardKey(t, index, m))).Gap(2)
-	parsed := ui.Local(container, "parsed-args", func() toolArgsMemo { return toolArgsMemo{} })
-	args := parsed.get(str(m, "args"))
+	parsed := memoAt[argsMemo](container, "parsed-args")
+	args := parsed.get(str(m, "args"), parseToolArgs)
 	summary := toolArgSummary(name, args)
 	isMCP := str(m, "mcpServer") != "" || str(m, "mcpTool") != "" || strings.HasPrefix(name, "mcp")
 	if isMCP {
@@ -1318,9 +1318,9 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 		// The transcript is the whole log: joining and stripping it again on every
 		// frame copied the entire output, the biggest text a card holds.
 		holder := ui.Column(c.Key(fmt.Sprintf("tool-out-holder-%d", index)))
-		memo := ui.Local(holder, "output", func() toolTextMemo { return toolTextMemo{} })
+		memo := memoAt[textMemo](holder, "output")
 		holder.Children(func() {
-			output := memo.get(commandOutput(result))
+			output := memo.get(commandOutput(result), stripBlankLines)
 			if output == "" {
 				output = "(没有输出)"
 			}
@@ -1423,7 +1423,7 @@ func (a *desktop) toolListBody(c *ui.Context, index int, result map[string]any) 
 // anything, and the row grows to its taller cell so the two sides stay lined up.
 func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 	outer := ui.Column(c.Key(key)).FillWidth().MinWidth(0).Shrink(0)
-	memo := ui.Local(outer, "diff", func() diffMemo { return diffMemo{} })
+	memo := memoAt[diffMemo](outer, "diff")
 	pairs := memo.get(diff)
 	limit := memo.limit(compact)
 	visible := pairs[:min(len(pairs), limit)]
