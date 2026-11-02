@@ -91,7 +91,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 				}
 				if start > 0 {
 					olderCount := historyBlockIndex(historyBlockStarts(t), start)
-					transcriptAction(c, "history-older", fmt.Sprintf("更早消息（%d 条）", olderCount), "history").OnClick(func() {
+					transcriptAction(c, "history-older", fmt.Sprintf("更早消息（%d 块）", olderCount), "history").OnClick(func() {
 						st.VisibleStart = previousHistoryPage(t, start, a.messageWindowSize()) + 1
 						st.Follow = false
 						t.Scroll.Y = 0
@@ -99,7 +99,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 				}
 				if end < len(t.Messages) {
 					transcriptAction(c, "history-newer", "更新消息").OnClick(func() { st.VisibleStart = end + 1; t.Scroll.Y = 0 })
-					transcriptAction(c, "history-latest", "回到最新").OnClick(func() { st.VisibleStart = 0; st.Follow = true; st.FollowPending = true })
+					transcriptAction(c, "history-latest", "回到最新").OnClick(func() { followLatest(t) })
 				}
 				for i := start; i < end; i++ {
 					a.messageRow(c, t, i, rows)
@@ -117,8 +117,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 						a.jumpToPreviousPrompt(c, t)
 					})
 					iconAction(c, "chat-jump-down", "回到最新", "arrowdown", 28, func() {
-						st.Follow = true
-						st.FollowPending = true
+						followLatest(t)
 					})
 				})
 			})
@@ -1051,6 +1050,7 @@ func previousHistoryPage(t *conversation, start, size int) int {
 func followLatest(t *conversation) {
 	st := t.uiState()
 	st.VisibleStart = 0
+	st.LastScrollY = 0
 	st.Follow = true
 	st.FollowPending = true
 }

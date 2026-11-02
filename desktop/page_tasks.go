@@ -171,7 +171,9 @@ func (a *desktop) servicesSection(c *ui.Context, workspace string) {
 				kv(c, "输出缓冲", fmt.Sprintf("%s（保留最新部分）", fmtBytes(service.OutputBytes)), a.secondaryInk())
 			}
 			if service.OutputTail != "" {
-				codeBlock(c, "service-tail-"+service.ID, tailLines(asciiStrip(service.OutputTail), 6), 100, a.secondaryInk())
+				holder := ui.Column(c.Key("service-tail-holder-" + service.ID))
+				preview := memoAt[textMemo](holder, "preview").get(service.OutputTail, func(s string) string { return tailLines(asciiStrip(s), 6) })
+				holder.Children(func() { codeBlock(c, "service-tail-"+service.ID, preview, 100, a.secondaryInk()) })
 			}
 			if service.Error != "" {
 				inlineError(c, "service-error-"+service.ID, service.Error)
@@ -238,6 +240,9 @@ func (a *desktop) showServiceLog(service backend.ServiceInfo) {
 		a.tasksF.LogTitle = service.ID
 	}
 	a.tasksF.LogService = service.ID
+	a.tasksF.LogRequestSeq++
+	a.tasksF.LogComplete = false
+	a.tasksF.LogTruncated = false
 	a.tasksF.LogMeta = serviceMeta(service)
 	a.tasksF.LogBody = service.OutputTail
 	a.followServiceLog()
@@ -275,23 +280,27 @@ func (a *desktop) serviceLogAtEnd() bool {
 }
 
 func (a *desktop) fetchServiceLog(id string) {
+	a.tasksF.LogRequestSeq++
+	seq := a.tasksF.LogRequestSeq
 	go func() {
 		result, err := a.core.GetServiceOutput(id)
 		a.win.Update(func() {
-			if a.tasksF.LogService != id || !a.tasksF.LogOpen {
+			if a.tasksF.LogService != id || !a.tasksF.LogOpen || a.tasksF.LogRequestSeq != seq {
 				return
 			}
 			if err != nil {
-				a.tasksF.LogBody = err.Error()
+				if !a.tasksF.LogComplete {
+					a.tasksF.LogBody = err.Error()
+				}
+				a.notifyError("读取服务日志失败：" + err.Error())
 				return
 			}
 			// The full output replaces the tail the card showed, and the end moved
 			// with it: keep following unless the reader scrolled up.
 			atEnd := a.serviceLogAtEnd()
 			a.tasksF.LogBody = result.Output
-			if result.Truncated {
-				a.tasksF.LogMeta += " · 已截断"
-			}
+			a.tasksF.LogComplete = true
+			a.tasksF.LogTruncated = result.Truncated
 			if atEnd {
 				a.followServiceLog()
 			}
@@ -380,10 +389,12 @@ func (a *desktop) scheduledSection(c *ui.Context, workspace string) {
 			}
 			fieldNote(c, strings.Join(facts, "  ·  "), a.secondaryInk())
 			if task.LastSummary != "" {
-				codeBlock(c, "task-summary-"+task.ID, tailLines(asciiStrip(task.LastSummary), 4), 80, a.secondaryInk())
+				holder := ui.Column(c.Key("task-summary-holder-" + task.ID))
+				preview := memoAt[textMemo](holder, "preview").get(task.LastSummary, func(s string) string { return tailLines(asciiStrip(s), 4) })
+				holder.Children(func() { codeBlock(c, "task-summary-"+task.ID, preview, 80, a.secondaryInk()) })
 			}
 			if task.LastError != "" {
-				inlineError(c, "task-error-"+task.ID, short(task.LastError, 240))
+				inlineError(c, "task-error-"+task.ID, task.LastError)
 			}
 		})
 	}
@@ -466,6 +477,9 @@ func (a *desktop) openTaskLog(task backend.ScheduledTask) {
 	a.tasksF.LogOpen = true
 	a.tasksF.LogTitle = task.Name
 	a.tasksF.LogService = ""
+	a.tasksF.LogRequestSeq++
+	a.tasksF.LogComplete = false
+	a.tasksF.LogTruncated = false
 	a.tasksF.LogMeta = scheduleText(task.Schedule)
 	a.tasksF.LogBody = task.LastSummary
 	a.tasksF.LogScroll.X, a.tasksF.LogScroll.Y = 0, 0
@@ -501,13 +515,19 @@ func (a *desktop) taskLogDialog(c *ui.Context) {
 				c.Toast("已复制日志")
 			})
 		})
-		fieldNote(c, a.tasksF.LogMeta, a.secondaryInk())
+		meta := a.tasksF.LogMeta
+		if a.tasksF.LogTruncated {
+			meta += " · 已截断"
+		}
+		fieldNote(c, meta, a.secondaryInk())
 		// The log keeps its own scroll position: a running service appends, and the
 		// reader needs to get back to the newest line without reopening the dialog.
-		ui.ScrollBoth(c.Key("task-log-body")).FillWidth().MinWidth(0).Height(min(float32(460), max(float32(160), h*0.45))).Shrink(0).Clip().
+		scroll := ui.ScrollBoth(c.Key("task-log-body")).FillWidth().MinWidth(0).Height(min(float32(460), max(float32(160), h*0.45))).Shrink(0).Clip().
 			Label("服务日志").Background(c.Theme().Background).Radius(radiusSmall).
-			TrackScroll(&a.tasksF.LogScroll).Children(func() {
-			toolCodeLines(c, asciiStrip(a.tasksF.LogBody), "", a.secondaryInk())
+			TrackScroll(&a.tasksF.LogScroll)
+		body := memoAt[textMemo](scroll, "log-body").get(a.tasksF.LogBody, asciiStrip)
+		scroll.Children(func() {
+			toolCodeLines(c, body, "", a.secondaryInk())
 		})
 		modalActions(c, func() { flat(c, "关闭").OnClick(func() { a.tasksF.LogOpen = false }) })
 	})
@@ -516,25 +536,28 @@ func (a *desktop) taskLogDialog(c *ui.Context) {
 // asciiStrip removes ANSI escape sequences so the native text view shows the
 // same readable output the web terminal did.
 func asciiStrip(s string) string {
-	out := make([]rune, 0, len(s))
-	runes := []rune(s)
-	for i := 0; i < len(runes); i++ {
-		if runes[i] != 0x1b {
-			out = append(out, runes[i])
+	if !strings.ContainsRune(s, '\x1b') {
+		return s
+	}
+	var out strings.Builder
+	out.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != 0x1b {
+			out.WriteByte(s[i])
 			continue
 		}
-		if i+1 < len(runes) && runes[i+1] == '[' {
+		if i+1 < len(s) && s[i+1] == '[' {
 			i += 2
-			for i < len(runes) && (runes[i] < '@' || runes[i] > '~') {
+			for i < len(s) && (s[i] < '@' || s[i] > '~') {
 				i++
 			}
 			continue
 		}
-		if i+1 < len(runes) {
+		if i+1 < len(s) {
 			i++
 		}
 	}
-	return string(out)
+	return out.String()
 }
 
 func (a *desktop) taskPopupDialog(c *ui.Context) {

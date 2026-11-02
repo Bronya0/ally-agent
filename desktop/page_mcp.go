@@ -5,6 +5,7 @@ import (
 	"ally-dev/desktop/uikit"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"time"
@@ -116,7 +117,7 @@ func (d mcpConfigDoc) MarshalJSON() ([]byte, error) {
 }
 
 func parseMCPConfig(raw string) (*mcpConfigDoc, error) {
-	doc := &mcpConfigDoc{}
+	doc := &mcpConfigDoc{Servers: map[string]mcpServerEntry{}}
 	if strings.TrimSpace(raw) == "" {
 		return doc, nil
 	}
@@ -127,6 +128,24 @@ func parseMCPConfig(raw string) (*mcpConfigDoc, error) {
 		doc.Servers = map[string]mcpServerEntry{}
 	}
 	return doc, nil
+}
+
+type mcpListData struct {
+	doc   *mcpConfigDoc
+	names []string
+	err   error
+}
+
+func prepareMCPList(raw string) mcpListData {
+	doc, err := parseMCPConfig(raw)
+	data := mcpListData{doc: doc, err: err}
+	if err == nil {
+		for name := range doc.Servers {
+			data.names = append(data.names, name)
+		}
+		sort.Strings(data.names)
+	}
+	return data
 }
 
 func (a *desktop) mcpPageBody(c *ui.Context) {
@@ -168,25 +187,34 @@ func (a *desktop) mcpPageBody(c *ui.Context) {
 }
 
 func (a *desktop) mcpServerList(c *ui.Context) {
-	doc, err := parseMCPConfig(a.mcpText)
-	if err != nil {
-		notice(c, "error", "读取 MCP 配置失败："+err.Error(), a.secondaryInk())
+	holder := ui.Column(c.Key("mcp-server-list")).FillWidth().Gap(gapInline)
+	data := memoAt[memoOf[string, mcpListData]](holder, "config").get(a.mcpText, prepareMCPList)
+	holder.Children(func() { a.renderMCPServerList(c, data) })
+}
+
+func (a *desktop) renderMCPServerList(c *ui.Context, data mcpListData) {
+	if data.err != nil {
+		notice(c, "error", "读取 MCP 配置失败："+data.err.Error(), a.secondaryInk())
 		return
 	}
-	names := make([]string, 0, len(doc.Servers))
-	for name := range doc.Servers {
-		names = append(names, name)
+	// Event handlers edit a shallow copy; the memoized source stays immutable.
+	doc := &mcpConfigDoc{Extra: data.doc.Extra, Servers: maps.Clone(data.doc.Servers)}
+	names := data.names
+	statuses := make(map[string]map[string]any, len(a.mcpServers))
+	for _, status := range a.mcpServers {
+		name := str(status, "name")
+		if _, exists := statuses[name]; !exists {
+			statuses[name] = status
+		}
 	}
-	sort.Strings(names)
 	query := strings.ToLower(strings.TrimSpace(a.mcpF.Search))
 	shown := 0
 	for _, name := range names {
 		entry := doc.Servers[name]
-		status := a.mcpStatusFor(name)
+		status := statuses[name]
 		if query != "" {
 			haystack := strings.ToLower(name + " " + entry.Command + " " + entry.URL + " " + entry.Transport + " " + mcpToolNames(status))
 			if !strings.Contains(haystack, query) {
-				shown++
 				continue
 			}
 		}
@@ -226,7 +254,7 @@ func (a *desktop) mcpServerList(c *ui.Context) {
 				})
 			})
 			if errText := str(status, "error"); errText != "" {
-				inlineError(c, "mcp-error-"+name, short(errText, 220))
+				inlineError(c, "mcp-error-"+name, errText)
 			}
 			if a.mcpF.ToolOpen[name] {
 				a.mcpToolChecklist(c, name, entry, doc, status)
@@ -304,7 +332,7 @@ func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEn
 					} else {
 						set[toolName] = true
 					}
-					entry.DisabledTools = entry.DisabledTools[:0]
+					entry.DisabledTools = nil
 					for t := range set {
 						entry.DisabledTools = append(entry.DisabledTools, t)
 					}
@@ -449,12 +477,20 @@ func (a *desktop) saveMCPEditor() {
 		}
 		entry.Command = strings.TrimSpace(a.mcpF.Command)
 		entry.Args = args
-		entry.Env = parsePairs(a.mcpF.Env, "=")
+		entry.Env, err = parsePairs(a.mcpF.Env, "=")
+		if err != nil {
+			a.notifyError("环境变量必须是 JSON 字符串对象：" + err.Error())
+			return
+		}
 		entry.URL = ""
 		entry.Headers = nil
 	} else {
 		entry.URL = strings.TrimSpace(a.mcpF.URL)
-		entry.Headers = parsePairs(a.mcpF.Headers, ":")
+		entry.Headers, err = parsePairs(a.mcpF.Headers, ":")
+		if err != nil {
+			a.notifyError("请求头必须是 JSON 字符串对象：" + err.Error())
+			return
+		}
 		entry.Command = ""
 		entry.Args = nil
 		entry.Env = nil
@@ -496,16 +532,17 @@ func splitArgs(raw string) ([]string, error) {
 	return out, nil
 }
 
-func parsePairs(raw, sep string) map[string]string {
+func parsePairs(raw, sep string) (map[string]string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil
+		return nil, nil
 	}
 	out := map[string]string{}
 	if strings.HasPrefix(raw, "{") {
-		if json.Unmarshal([]byte(raw), &out) == nil {
-			return out
+		if err := json.Unmarshal([]byte(raw), &out); err != nil {
+			return nil, err
 		}
+		return out, nil
 	}
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
@@ -516,9 +553,9 @@ func parsePairs(raw, sep string) map[string]string {
 		out[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
-	return out
+	return out, nil
 }
 
 func (a *desktop) saveMCPDoc(doc *mcpConfigDoc, options ...mcpSaveOptions) {
@@ -713,8 +750,12 @@ func (a *desktop) builtinToolsGrid(c *ui.Context) {
 	tools := a.toolInventory
 	var core []backend.ToolDefinitionSummary
 	var rest []backend.ToolDefinitionSummary
+	query := strings.ToLower(strings.TrimSpace(a.mcpF.Search))
 	for _, tool := range tools {
 		if tool.Source == "mcp" {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(tool.Name+" "+tool.Description), query) {
 			continue
 		}
 		if tool.Protected {
@@ -725,11 +766,7 @@ func (a *desktop) builtinToolsGrid(c *ui.Context) {
 	}
 	sort.SliceStable(rest, func(i, j int) bool { return rest[i].Name < rest[j].Name })
 	sort.SliceStable(core, func(i, j int) bool { return core[i].Name < core[j].Name })
-	query := strings.ToLower(strings.TrimSpace(a.mcpF.Search))
 	render := func(tool backend.ToolDefinitionSummary) {
-		if query != "" && !strings.Contains(strings.ToLower(tool.Name+" "+tool.Description), query) {
-			return
-		}
 		rowCard(c, "builtin-"+tool.Name, func() {
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 				uikit.Tooltip(c, ui.Text(c, builtinToolLabel(tool.Name)).FontSize(fsSmall).Bold(), tool.Name)

@@ -105,7 +105,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			t.Status = "正在取消…"
 		}
 		ui.ThinkingBytes = 0
-		ui.Follow = true
+		followLatest(t)
 		ui.CompactNote = ""
 	case "run:attachment":
 		a.recordAttachmentReference(t, p)
@@ -261,9 +261,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 				msg = "运行失败"
 			}
 			t.Status = msg
-			if !hasErrorTail(t.Messages, msg) {
-				t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": msg, "error": true})
-			}
+			appendRunError(t, msg)
 		}
 		idx := lastContentIndex(t.Messages)
 		if idx >= 0 {
@@ -287,6 +285,16 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			a.refreshFiles()
 			a.refreshGit(t)
 		}
+	}
+}
+
+func appendRunError(t *conversation, msg string) {
+	if hasErrorTail(t.Messages, msg) {
+		return
+	}
+	t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": msg, "error": true})
+	if st := t.uiState(); st.Follow {
+		st.FollowPending = true
 	}
 }
 
@@ -442,11 +450,15 @@ func (a *desktop) applyServiceUpdate(p map[string]any) {
 		a.tasksF.ServiceChanges[service.ID] = service
 	}
 	if a.tasksF.LogService == service.ID && a.tasksF.LogOpen {
+		a.tasksF.LogMeta = serviceMeta(service)
+		if a.tasksF.LogComplete {
+			// Event snapshots are only a short tail; do not discard a fetched log.
+			return
+		}
 		// A running service appends: keep the dialog on the newest line unless
 		// the reader scrolled up from it.
 		atEnd := a.serviceLogAtEnd()
 		a.tasksF.LogBody = service.OutputTail
-		a.tasksF.LogMeta = serviceMeta(service)
 		if atEnd {
 			a.followServiceLog()
 		}

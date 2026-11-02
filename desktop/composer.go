@@ -190,11 +190,12 @@ func (a *desktop) composerKeys(c *ui.Context, t *conversation, input ui.Element)
 				}
 				return true
 			case ui.KeyTab, ui.KeyEnter:
-				if st.Mention.Loading {
+				if st.Mention.Loading && len(st.Mention.Entries) == 0 && k.Key == ui.KeyTab {
 					return true
 				}
-				a.applyMention(t)
-				return true
+				if !st.Mention.Loading && a.applyMention(t) {
+					return true
+				}
 			case ui.KeyEscape:
 				st.Mention.Open = false
 				return true
@@ -326,10 +327,10 @@ func (a *desktop) searchMentions(t *conversation, query string) {
 	})
 }
 
-func (a *desktop) applyMention(t *conversation) {
+func (a *desktop) applyMention(t *conversation) bool {
 	st := t.uiState()
 	if st.Mention.Index < 0 || st.Mention.Index >= len(st.Mention.Entries) {
-		return
+		return false
 	}
 	entry := st.Mention.Entries[st.Mention.Index]
 	path := entry.Path
@@ -341,10 +342,12 @@ func (a *desktop) applyMention(t *conversation) {
 		replacement = "@\"" + path + "\""
 	}
 	at := strings.LastIndex(t.Draft, "@")
-	if at >= 0 {
-		t.Draft = t.Draft[:at] + replacement + " "
+	if at < 0 {
+		return false
 	}
+	t.Draft = t.Draft[:at] + replacement + " "
 	st.Mention.Open = false
+	return true
 }
 
 // ---- Menus ---------------------------------------------------------------

@@ -285,6 +285,9 @@ func (a *desktop) prepareAttachmentPaths(t *conversation, paths []string) {
 }
 func (a *desktop) dropAttachments(t *conversation, paths []string) {
 	if !canAddAttachments(t, a.closing) {
+		if t != nil && t.AttachmentLoading && len(paths) > 0 {
+			a.notify("附件仍在准备，请稍后重新拖入")
+		}
 		return
 	}
 	t.AttachmentLoading = true
@@ -319,12 +322,16 @@ func canAddAttachments(t *conversation, closing bool) bool {
 // image to the editor. Windows and Linux report Cmd+V as a key the input sees,
 // macOS as the Edit menu's paste command, so both routes call this.
 func (a *desktop) pasteImageFromClipboard(c *ui.Context, t *conversation) bool {
-	if !canAddAttachments(t, a.closing) {
+	if t == nil || a.closing {
 		return false
 	}
 	data := clipboardImage(c)
 	if len(data) == 0 {
 		return false
+	}
+	if t.AttachmentLoading {
+		a.notify("附件仍在准备，请稍后重新粘贴图片")
+		return true
 	}
 	a.pasteAttachment(t, data)
 	return true

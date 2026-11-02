@@ -90,9 +90,8 @@ func (a *desktop) editModel(index int) {
 	}
 	a.modelEdit = index
 	a.modelForm.KeyEpoch++
+	a.invalidateModelFetch()
 	a.modelForm.AdvancedOpen = false
-	a.modelForm.Fetched = nil
-	a.modelForm.FetchNote = ""
 	a.modelPrevious = nil
 	a.modelProviderPreset = customProviderPreset
 	a.modelProviderModel = ""

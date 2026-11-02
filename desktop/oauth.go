@@ -54,8 +54,7 @@ func (a *desktop) cancelOAuthWhenLeaving() {
 func (a *desktop) changeModelAuth(value string) {
 	// A different auth path means a different endpoint, so the fetched model
 	// list of the previous one must not stay in the dropdown.
-	a.modelForm.Fetched = nil
-	a.modelForm.FetchNote = ""
+	a.invalidateModelFetch()
 	if value == "chatgpt_oauth" {
 		a.modelDraft.AuthType = value
 		a.modelDraft.ProviderName = "ChatGPT Official"

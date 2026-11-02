@@ -415,31 +415,48 @@ func (a *desktop) importSSH() {
 			a.win.Update(func() { a.notify("文件格式不正确，需要包含 nodes 数组的 JSON") })
 			return
 		}
-		added, updated := 0, 0
-		for _, node := range payload.Nodes {
-			existing := false
-			for _, current := range a.core.ListAllSSHServers() {
-				if strings.EqualFold(current.Alias, node.Alias) {
-					node.ID = current.ID
-					existing = true
-					break
-				}
-			}
-			if err := a.core.SaveSSHServer(node); err != nil {
-				continue
-			}
-			if existing {
-				updated++
-			} else {
-				added++
-			}
-		}
+		added, updated, failures := importSSHNodes(a.core, payload.Nodes)
 		servers := a.core.ListAllSSHServers()
 		a.win.Update(func() {
 			a.sshServers = servers
-			a.notifySuccess(fmt.Sprintf("导入完成：新增 %d，更新 %d", added, updated))
+			message := fmt.Sprintf("导入完成：新增 %d，更新 %d", added, updated)
+			if len(failures) > 0 {
+				a.notifyError(message + fmt.Sprintf("，失败 %d：", len(failures)) + strings.Join(failures, "；"))
+			} else {
+				a.notifySuccess(message)
+			}
 		})
 	}()
+}
+
+type sshImportStore interface {
+	ListAllSSHServers() []backend.SSHServerNode
+	SaveSSHServer(backend.SSHServerNode) error
+}
+
+func importSSHNodes(store sshImportStore, nodes []backend.SSHServerNode) (added, updated int, failures []string) {
+	for _, node := range nodes {
+		existing := false
+		// IDs identify nodes on this installation, not in the exported file.
+		node.ID = ""
+		for _, current := range store.ListAllSSHServers() {
+			if strings.EqualFold(current.Alias, node.Alias) {
+				node.ID = current.ID
+				existing = true
+				break
+			}
+		}
+		if err := store.SaveSSHServer(node); err != nil {
+			failures = append(failures, fmt.Sprintf("%s：%v", node.Alias, err))
+			continue
+		}
+		if existing {
+			updated++
+		} else {
+			added++
+		}
+	}
+	return
 }
 
 func (a *desktop) exportSSH() {

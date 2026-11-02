@@ -338,6 +338,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 			}
 			uikit.ComboboxField(c.Key("model-provider-preset"), &chosen, names, "供应商快速配置", "", a.secondaryInk()).FillWidth()
 			if chosen != a.modelProviderPreset {
+				a.invalidateModelFetch()
 				a.modelProviderPreset = chosen
 				if provider := findCatalogProviderByName(chosen); provider != nil {
 					a.modelDraft.ProviderName = provider.Name
@@ -361,9 +362,6 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 					modelOptions = append(modelOptions, catalogModelLabel(model))
 				}
 				chosenModel := a.modelProviderModel
-				if chosenModel == "" && len(modelOptions) > 0 {
-					chosenModel = modelOptions[0]
-				}
 				ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 					uikit.ComboboxField(c.Key("model-provider-model"), &chosenModel, modelOptions, "供应商模型", "", a.secondaryInk()).Grow(1)
 					if provider.Doc != "" {
@@ -375,6 +373,9 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 					a.modelProviderModel = chosenModel
 					if model := findCatalogModel(provider, chosenModel); model != nil {
 						applyCatalogModel(a, *model)
+					} else {
+						a.modelDraft.Model = chosenModel
+						a.modelDraft.DisplayName = ""
 					}
 				}
 				fieldNote(c, fmt.Sprintf("已从内置目录填入 %s 的接口地址、格式和模型参数；API Key 仍需自行填写。", provider.Name), a.secondaryInk())
@@ -530,11 +531,25 @@ func (a *desktop) fetchModelList() {
 	}
 	a.modelForm.FetchBusy = true
 	a.modelForm.FetchNote = "拉取中…"
-	base, format := a.modelDraft.BaseURL, a.modelDraft.APIFormat
+	a.modelForm.FetchSeq++
+	seq := a.modelForm.FetchSeq
+	base, format, auth, provider := a.modelDraft.BaseURL, a.modelDraft.APIFormat, a.modelDraft.AuthType, a.modelDraft.ProviderName
+	rawHeaders := a.modelHeaders
 	go func() {
 		models, err := a.core.FetchModelList(base, key, headers)
 		a.win.Update(func() {
+			if a.modelForm.FetchSeq != seq {
+				return
+			}
 			a.modelForm.FetchBusy = false
+			currentKey := ""
+			if len(a.modelKeys) > 0 {
+				currentKey = strings.TrimSpace(a.modelKeys[0])
+			}
+			if !a.modelForm.Open || a.modelDraft.BaseURL != base || a.modelDraft.APIFormat != format || a.modelDraft.AuthType != auth || a.modelDraft.ProviderName != provider || currentKey != key || a.modelHeaders != rawHeaders {
+				a.modelForm.FetchNote = ""
+				return
+			}
 			if err != nil {
 				a.modelForm.FetchNote = "拉取模型列表失败：" + err.Error()
 				return
@@ -545,9 +560,15 @@ func (a *desktop) fetchModelList() {
 			}
 			a.modelForm.FetchNote = fmt.Sprintf("已获取 %d 个模型，可在 Model 下拉中选择。", len(models))
 			a.modelForm.Fetched = models
-			_ = format
 		})
 	}()
+}
+
+func (a *desktop) invalidateModelFetch() {
+	a.modelForm.FetchSeq++
+	a.modelForm.FetchBusy = false
+	a.modelForm.FetchNote = ""
+	a.modelForm.Fetched = nil
 }
 
 func (a *desktop) testModelDraft() {
@@ -785,11 +806,15 @@ func (a *desktop) deleteImageModel(m backend.ImageModelConfig) {
 
 func (a *desktop) imageModelTestDialog(c *ui.Context) {
 	s := a.imageModels
-	if s == nil || s.test == nil || !s.testOpen {
+	if s == nil || s.test == nil {
+		return
+	}
+	if !s.testOpen {
+		s.test = nil
 		return
 	}
 	t := s.test
-	modalCard(c, &s.testOpen, widthModalWide, func() {
+	dialog := modalCard(c, &s.testOpen, widthModalWide, func() {
 		modalTitle(c, "测试", modelLabel(t.model.ProviderName, t.model.Model))
 		textArea(c, "test-prompt", "提示词", "描述要生成或编辑的图片…", &t.prompt, 100)
 		canEdit := false
@@ -852,6 +877,9 @@ func (a *desktop) imageModelTestDialog(c *ui.Context) {
 			})
 		}
 	})
+	if dialog.Dismissed() || !s.testOpen {
+		s.test = nil
+	}
 }
 
 // ---- Import / export ----------------------------------------------------

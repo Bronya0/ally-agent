@@ -28,6 +28,7 @@ type uiPrefs struct {
 	RailSessionsOpen   bool           `json:"railSessionsOpen"`
 	Avatar             string         `json:"avatar"`
 	RecentModels       []string       `json:"recentModels"`
+	HiddenWorkspaces   []string       `json:"hiddenWorkspaces,omitempty"`
 	TreeWidth          float32        `json:"treeWidth"`
 	SeenReleaseNotes   string         `json:"seenReleaseNotes"`
 	DismissedUpdateTag string         `json:"dismissedUpdateTag"`
@@ -84,11 +85,16 @@ func readPrefs(path string) uiPrefs {
 // savePrefs is fire-and-forget: preferences are cosmetic, and a failed write
 // must never interrupt the UI.
 func (a *desktop) savePrefs(notice ...string) {
+	if a.prefsGeometryTimer != nil {
+		a.prefsGeometryTimer.Stop()
+		a.prefsGeometryTimer = nil
+	}
 	if a.core == nil {
 		return
 	}
 	p := a.prefs
 	p.RecentModels = append([]string(nil), p.RecentModels...)
+	p.HiddenWorkspaces = append([]string(nil), p.HiddenWorkspaces...)
 	p.Pet = p.Pet.clone()
 	previous := a.prefsSaveTail
 	done := make(chan struct{})
@@ -115,6 +121,28 @@ func (a *desktop) savePrefs(notice ...string) {
 			})
 		}
 	}()
+}
+
+// Split controls report every drag frame. Save the final geometry after the
+// drag settles; any ordinary save or the quit/update barrier also flushes it.
+func (a *desktop) scheduleGeometryPrefsSave() {
+	if a.core == nil || a.win == nil {
+		return
+	}
+	if a.prefsGeometryTimer != nil {
+		a.prefsGeometryTimer.Stop()
+	}
+	var timer *time.Timer
+	timer = time.AfterFunc(300*time.Millisecond, func() {
+		a.win.Update(func() {
+			if a.prefsGeometryTimer != timer {
+				return
+			}
+			a.prefsGeometryTimer = nil
+			a.savePrefs()
+		})
+	})
+	a.prefsGeometryTimer = timer
 }
 
 // roundStat mirrors one finished turn's numbers shown in the round footer.
@@ -272,6 +300,9 @@ type settingsForm struct {
 	APINote         string
 	FullJSON        string
 	NewToken        bool
+
+	SessionHeaderConfirmOpen bool
+	SessionHeaderToDisable   string
 }
 
 func (a *desktop) syncSettingsForm() {
@@ -351,6 +382,7 @@ type modelForm struct {
 	Context        float64
 	Busy           bool
 	FetchBusy      bool
+	FetchSeq       uint64
 	FetchNote      string
 	Providers      []string
 	ProviderIdx    int
@@ -442,6 +474,9 @@ type tasksForm struct {
 	LogMeta          string
 	LogBody          string
 	LogService       string
+	LogComplete      bool
+	LogTruncated     bool
+	LogRequestSeq    uint64
 	// LogScroll keeps the log dialog's place; it follows the newest line unless
 	// the reader scrolled up, so a running service does not yank them away.
 	LogScroll  ui.ScrollState
@@ -486,6 +521,7 @@ type updateUI struct {
 
 // fileUI holds explorer-only state that is not part of the workspace files.
 type fileUI struct {
+	TreeSelection  int
 	InfoGeneration uint64
 	InfoCancel     context.CancelFunc
 	InfoWorkspace  string
@@ -516,12 +552,14 @@ type fileUI struct {
 type gameUI struct {
 	Kind          int
 	Started       bool
+	Finished      bool
 	VsAI          bool
 	ModelA        string
 	ModelB        string
 	EffortA       string
 	EffortB       string
 	Thinking      bool
+	RequestSeq    uint64
 	Calls         int
 	InTokens      int
 	OutTokens     int
