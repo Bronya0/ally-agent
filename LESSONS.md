@@ -97,3 +97,6 @@
 2026-11-02 中危 image-restore 在途结果丢弃须记补载；所有唤回统一 OnShow，不能只判缓存 nil。@desktop/attachments.go
 
 2026-11-02 中危 thinking-phase 思考计数只在整轮清零会跨段累加；工具/正文结束即清零，正文与思考同包须合并发出。@desktop/events.go
+[preview-loadurl] 2026-11-03 中危 文件预览走异步 LoadURL+协议处理器比 NavigateToString 慢，切换像卡死。@desktop/preview_lifecycle.go
+
+[mono-generic-font] 2026-11-03 高危 字体用泛型 "" 或 "monospace"：中文每段重做字体匹配，79KB md 首屏 720ms。统一用 appFontFamily。@desktop/theme.go
