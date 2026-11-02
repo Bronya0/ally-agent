@@ -11,7 +11,7 @@ func TestDocumentPreviewRendersEscapedHTMLAndReleasesData(t *testing.T) {
 	root := t.TempDir()
 	document := &documentpreview.Document{Paragraphs: []documentpreview.Paragraph{{Text: "<script>alert('x')</script>"}}}
 	file := &workspaceFile{Path: "report.docx", Document: document}
-	content := documentPreviewHTML(file.Path, file.Document, "")
+	content := documentPreviewHTML(file.Path, file.Document)
 	if strings.Contains(content, "<script>") || !strings.Contains(content, "&lt;script&gt;") {
 		t.Fatal("document text was not escaped in preview HTML")
 	}

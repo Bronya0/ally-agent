@@ -1196,9 +1196,6 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 				newFile.Assist = assist
 			}
 			if newFile.Document != nil {
-				if len(newFile.Document.Sheets) > 0 {
-					newFile.DocumentSheet = newFile.Document.Sheets[0].Name
-				}
 				// Keep parsed document previews to one open file at a time.
 				for key, old := range a.workspaceFiles {
 					if old != newFile && old != expected && old.Document != nil {

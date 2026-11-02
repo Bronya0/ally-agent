@@ -440,7 +440,6 @@ func releaseWorkspaceFileValue(file *workspaceFile) {
 	file.MarkupPreview = false
 	file.Assist = nil
 	file.Document = nil
-	file.DocumentSheet = ""
 	file.Editor = nil
 }
 

@@ -130,18 +130,6 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 			})
 			return
 		}
-		if file.Document != nil && len(file.Document.Sheets) > 0 {
-			ui.Row(c).FillWidth().Padding(padRow).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				fieldLabel(c, "工作表")
-				names := make([]string, len(file.Document.Sheets))
-				for i, sheet := range file.Document.Sheets {
-					names[i] = sheet.Name
-				}
-				uikit.Select(c.Key("document-sheet"), &file.DocumentSheet, names).Width(220).Label("预览工作表").OnChange(func() {
-					a.selectWorkspaceDocumentSheet(file, file.DocumentSheet)
-				})
-			})
-		}
 		if file.PreviewPath != "" || file.PreviewHTML != "" || file.Document != nil || file.MarkupPreview {
 			a.workspaceFilePreviewView(c, file)
 			return
