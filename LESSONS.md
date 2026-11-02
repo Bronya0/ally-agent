@@ -93,3 +93,7 @@
 [log-scroll-track] 2026-11-03 中危 输出窗口未 TrackScroll，“回到最新”只重取数据不改位置，看着像按钮坏了。@desktop/page_tasks.go
 
 [stream-fixed-height] 2026-11-03 中危 流式态用固定高度 Box 包会自收缩的内容：短内容卡片偏高，完成时下方内容被上顶。@desktop/tool_cards.go
+
+2026-11-02 中危 image-restore 在途结果丢弃须记补载；所有唤回统一 OnShow，不能只判缓存 nil。@desktop/attachments.go
+
+2026-11-02 中危 thinking-phase 思考计数只在整轮清零会跨段累加；工具/正文结束即清零，正文与思考同包须合并发出。@desktop/events.go

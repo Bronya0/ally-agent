@@ -39,8 +39,18 @@ func (a *desktop) headerBar(c *ui.Context) {
 	}
 	leading := max(minLeading, railSpan-bar.Left)
 	logoInset := railPadH
+	logoRightInset := float32(0)
+	logoFontSize := float32(20)
+	logoAlign := ui.Start
 	if a.prefs.RailExpanded {
 		logoInset = 6 + railInsetForWidth(a.prefs.RailWidth)
+	} else {
+		// The collapsed rail is only 44px wide. Reserve even space around a
+		// slightly smaller wordmark so it does not feel pressed against the edge.
+		logoInset = 6
+		logoRightInset = 6
+		logoFontSize = 18
+		logoAlign = ui.Center
 	}
 	logoInset = max(float32(0), logoInset-bar.Left)
 	if bar.Left > 0 {
@@ -57,8 +67,8 @@ func (a *desktop) headerBar(c *ui.Context) {
 	row.DragWindow().Children(func() {
 		// The leading header column shares the rail's live width, including
 		// its resize divider. Native traffic lights take precedence on macOS.
-		ui.Column(c.Key("header-rail")).Label("标题栏侧栏区").Width(leading).Shrink(0).FillHeight().Padding(0, 0, 0, logoInset).Justify(ui.Center).AlignItems(ui.Start).Children(func() {
-			wordmark := ui.Column(c).Label("应用 Logo").Width(min(float32(64), leading-logoInset)).FillHeight().Justify(ui.Center).AlignItems(ui.Start).Children(func() {
+		ui.Column(c.Key("header-rail")).Label("标题栏侧栏区").Width(leading).Shrink(0).FillHeight().Padding(0, logoRightInset, 0, logoInset).Justify(ui.Center).AlignItems(ui.Start).Children(func() {
+			wordmark := ui.Column(c).Label("应用 Logo").Width(min(float32(64), leading-logoInset-logoRightInset)).FillHeight().Justify(ui.Center).AlignItems(logoAlign).Children(func() {
 				colors := [4]ui.Color{
 					wordmarkGradientColor(p, 0.14),
 					wordmarkGradientColor(p, 0.43),
@@ -70,7 +80,7 @@ func (a *desktop) headerBar(c *ui.Context) {
 					ui.Span{Text: "l", Color: colors[1]},
 					ui.Span{Text: "l", Color: colors[2]},
 					ui.Span{Text: "y", Color: colors[3]},
-				).FontSize(20).FontWeight(700).LetterSpacing(-0.4)
+				).FontSize(logoFontSize).FontWeight(700).LetterSpacing(-0.4)
 			})
 			uikit.Tooltip(c, wordmark.Cursor(ui.CursorPointer), "点击 logo：切换樱花特效")
 			if wordmark.Clicked() {
@@ -230,7 +240,11 @@ func (a *desktop) headerActions(c *ui.Context) ui.Element {
 				a.win.Maximize()
 			}
 		}, a.secondaryInk())
-		closeBtn := windowButton(c, "window-close", "关闭窗口", "close", p.headerColor(), true, func() { a.win.Close() }, a.secondaryInk())
+		closeLabel := "退出应用"
+		if a.tray != nil {
+			closeLabel = "隐藏到系统托盘"
+		}
+		closeBtn := windowButton(c, "window-close", closeLabel, "close", p.headerColor(), true, func() { a.win.Close() }, a.secondaryInk())
 		_ = closeBtn
 	}
 	return add

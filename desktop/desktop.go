@@ -41,6 +41,7 @@ type conversation struct {
 	PendingAttachmentImages                           map[string]*ui.Bitmap
 	AttachmentImageVersions                           map[string]uint64
 	AttachmentImageJobs                               int
+	AttachmentImagesNeedReload                        bool
 	AskID                                             string
 	Questions                                         []backend.AskQuestion
 	Answers                                           []string
@@ -59,7 +60,6 @@ type workspaceFile struct {
 	Assist        *editorAssistIndex
 	Saving        bool
 	Document      *documentpreview.Document
-	DocumentSheet string
 	MarkupPreview bool
 }
 type desktop struct {
@@ -156,7 +156,9 @@ type desktop struct {
 
 	core                                                *backend.App
 	win                                                 *mygo.Window
+	tray                                                *mygo.Tray
 	ready, closing, quitReady                           bool
+	mainWindowHidden                                    bool
 	page, filter                                        string
 	config                                              backend.ConfigState
 	tabs                                                []*conversation
@@ -187,6 +189,7 @@ type desktop struct {
 	persistTail                                         chan struct{}
 	sshAuthTail                                         chan struct{}
 	sshRefreshSeq                                       uint64
+	sshRefreshPending                                   map[string]bool
 	deletePrompt                                        *deletePromptState
 }
 
@@ -201,11 +204,18 @@ func Run() {
 		}
 		return
 	}
+	a := &desktop{core: backend.NewApp(), page: "chat", modelEdit: -1, explorer: true, plans: map[string][]backend.PlanStep{}, planRev: map[string]int64{}, subRuns: map[string]*backend.SubagentRun{}, prefs: defaultPrefs(), extraRoots: map[string][]string{}, sshAllowed: map[string][]string{}}
+	mygo.App.OnSecondInstance(func([]string, string) { a.showMainWindow() })
+	// MyGo keys its single-instance handoff by the application name. Include the
+	// data-directory identity for the lock, then restore the visible app name.
+	mygo.App.SetName(singleInstanceLockName(a.core.AppDataDir()))
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
+	mygo.App.SetName("Ally Native")
 	if err := mygo.Protocol.HandleFunc("ally-preview", servePreviewDocument); err != nil {
 		log.Fatal(err)
 	}
-	mygo.App.SetName("Ally Native")
-	a := &desktop{core: backend.NewApp(), page: "chat", modelEdit: -1, explorer: true, plans: map[string][]backend.PlanStep{}, planRev: map[string]int64{}, subRuns: map[string]*backend.SubagentRun{}, prefs: defaultPrefs(), extraRoots: map[string][]string{}, sshAllowed: map[string][]string{}}
 	a.loadPrefs()
 	a.pet.lastActivity = time.Now()
 	a.loadReleaseNotes()
@@ -235,6 +245,11 @@ func Run() {
 			opts.TrafficLightPosition = &mygo.Point{X: 14, Y: (headerBarHeight - 16) / 2}
 		}
 		a.win = mygo.NewWindow(opts)
+		a.win.OnHide(func() {
+			a.mainWindowHidden = true
+			a.releaseHiddenWindowResources()
+		})
+		a.win.OnShow(a.mainWindowShown)
 		a.pluginHost = pluginhost.New(a.core, a.win, func(message, kind string) {
 			if !a.closing {
 				a.queueNotice(message, kind)
@@ -247,12 +262,20 @@ func Run() {
 		configureWindowFrame(a.win)
 		a.startAutoAppearance()
 		if icon, err := resources.Assets.ReadFile("icon.png"); err == nil {
-			_ = a.win.SetIcon(icon)
-			if runtime.GOOS == "darwin" {
-				_ = mygo.App.Dock.SetIcon(icon)
+			if err := configureWindowIcon(a.win, icon); err != nil {
+				log.Printf("window icon unavailable: %v", err)
 			}
+			if trayIcon, template, err := systemTrayIcon(); err == nil {
+				if err := a.createSystemTray(trayIcon, template); err != nil {
+					log.Printf("system tray unavailable: %v", err)
+				}
+			} else {
+				log.Printf("system tray icon unavailable: %v", err)
+			}
+		} else {
+			log.Printf("system tray icon unavailable: %v", err)
 		}
-		a.win.OnReadyToShow(a.win.Show)
+		a.win.OnReadyToShow(a.showMainWindow)
 		a.core.SetNativeWindow(a.win)
 		if len(os.Args) > 1 && os.Args[1] == "--smoke" {
 			time.AfterFunc(4*time.Second, func() { a.win.Update(func() { log.Print("native window startup verified"); a.shutdown() }) })
@@ -260,7 +283,11 @@ func Run() {
 		a.win.OnClose(func(e *mygo.CloseEvent) {
 			if !a.quitReady {
 				e.PreventDefault()
-				a.shutdown()
+				if a.tray != nil {
+					a.win.Hide()
+				} else {
+					a.shutdown()
+				}
 			}
 		})
 		mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {

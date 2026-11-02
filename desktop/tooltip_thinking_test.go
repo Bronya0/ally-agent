@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"github.com/egoist/mygo/ui"
 	"image"
+	"strings"
 	"testing"
 	"time"
 )
@@ -70,6 +71,63 @@ func TestReasoningDeltaDoesNotRequestTranscriptScroll(t *testing.T) {
 	a.applyEvent("run:delta", map[string]any{"sessionId": conv.ID, "content": "answer"})
 	if !st.FollowPending {
 		t.Fatal("new visible content must still follow the transcript")
+	}
+	if st.ThinkingBytes != 0 {
+		t.Fatal("answer retained the previous thinking count")
+	}
+}
+
+func TestThinkingTokenCountFollowsModelPhases(t *testing.T) {
+	for _, streamEvent := range []string{"run:stream", "run:delta"} {
+		t.Run(streamEvent, func(t *testing.T) {
+			conv := &conversation{ID: "phases", Busy: true}
+			a := &desktop{tabs: []*conversation{conv}}
+			tester := ui.NewTester(func(c *ui.Context) { a.composerStatusRow(c, conv) }, 400, 80)
+			steps := []struct {
+				event   string
+				payload map[string]any
+				label   string
+			}{
+				{streamEvent, map[string]any{"reasoningLen": 400}, "Thinking 100 tokens"},
+				{streamEvent, map[string]any{"reasoningLen": 40}, "Thinking 110 tokens"},
+				{"tool:start", map[string]any{"toolCallId": "first", "name": "calculate", "args": `{}`}, ""},
+				{"tool:update", map[string]any{"toolCallId": "first", "name": "calculate"}, ""},
+				{"tool:result", map[string]any{"toolCallId": "first", "name": "calculate", "result": map[string]any{"ok": true}}, ""},
+				{streamEvent, map[string]any{"reasoningLen": 80}, "Thinking 20 tokens"},
+				{"tool:update", map[string]any{"toolCallId": "first", "name": "calculate"}, "Thinking 20 tokens"},
+				{streamEvent, map[string]any{"reasoningLen": 4}, "Thinking 21 tokens"},
+				{"tool:start", map[string]any{"toolCallId": "second", "name": "calculate", "args": `{}`}, ""},
+				{"tool:error", map[string]any{"toolCallId": "second", "name": "calculate", "error": "invalid expression"}, ""},
+				{streamEvent, map[string]any{"reasoningLen": 12}, "Thinking 3 tokens"},
+				{streamEvent, map[string]any{"content": "answer", "reasoningLen": 8}, ""},
+				{streamEvent, map[string]any{"reasoningLen": 4}, "Thinking 1 tokens"},
+				{"run:retry", map[string]any{"attempt": 1, "maxAttempts": 2}, ""},
+				{streamEvent, map[string]any{"reasoningLen": 8}, "Thinking 2 tokens"},
+				{"run:inject", map[string]any{}, ""},
+				{streamEvent, map[string]any{"reasoningLen": 12}, "Thinking 3 tokens"},
+				{"compact:start", map[string]any{}, ""},
+				{"compact:delta", map[string]any{"reasoningLen": 16}, "Thinking 4 tokens"},
+				{"compact:delta", map[string]any{"content": "summary", "reasoningLen": 4}, ""},
+				{"compact:done", map[string]any{"ok": false}, ""},
+				{streamEvent, map[string]any{"reasoningLen": 20}, "Thinking 5 tokens"},
+			}
+			for i, step := range steps {
+				step.payload["sessionId"] = conv.ID
+				a.applyEvent(step.event, step.payload)
+				for frame := 0; frame < 3; frame++ {
+					tester.Frame()
+					var labels []string
+					for _, text := range tester.Texts() {
+						if strings.HasPrefix(text, "Thinking ") {
+							labels = append(labels, text)
+						}
+					}
+					if step.label == "" && len(labels) != 0 || step.label != "" && (len(labels) != 1 || labels[0] != step.label) {
+						t.Fatalf("step %d (%s), frame %d: thinking labels = %v, want %q", i, step.event, frame, labels, step.label)
+					}
+				}
+			}
+		})
 	}
 }
 

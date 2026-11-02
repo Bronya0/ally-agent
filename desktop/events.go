@@ -110,13 +110,12 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	case "run:attachment":
 		a.recordAttachmentReference(t, p)
 	case "run:image":
+		ui.ThinkingBytes = 0
 		a.recordGeneratedImage(t, p)
 	case "run:stream", "run:delta":
-		if n := int(num(p, "reasoningLen")); n > 0 {
-			t.uiState().ThinkingBytes += n
-		}
 		content := str(p, "content")
 		if content != "" {
+			ui.ThinkingBytes = 0
 			n := len(t.Messages)
 			// A summary that replaced the transcript is not this run's answer: the
 			// next delta opens a fresh row instead of growing the summary.
@@ -126,7 +125,8 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			m := t.Messages[len(t.Messages)-1]
 			m["content"] = str(m, "content") + content
 			t.Status = "正在回复…"
-		} else {
+		} else if n := int(num(p, "reasoningLen")); n > 0 {
+			ui.ThinkingBytes += n
 			t.Status = "正在思考…"
 		}
 		// Reasoning only changes the footer, not transcript geometry.
@@ -136,6 +136,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	case "tool:start", "tool:update", "tool:result", "tool:error":
 		a.applyToolEvent(t, name, p)
 	case "ask:ready":
+		ui.ThinkingBytes = 0
 		t.AskID = str(p, "askId")
 		b, _ := json.Marshal(p["questions"])
 		_ = json.Unmarshal(b, &t.Questions)
@@ -152,6 +153,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		t.Questions = nil
 		ui.AskSubmitted = false
 	case "run:retry":
+		ui.ThinkingBytes = 0
 		ui.Retry = &retryInfo{
 			Attempt:     int(num(p, "attempt")),
 			MaxAttempts: int(num(p, "maxAttempts")),
@@ -182,11 +184,13 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	case "run:compact":
 		// The automatic path announces its summary request before running it: this
 		// is a start, not a result. The result arrives as run:compacted.
+		ui.ThinkingBytes = 0
 		ui.CompactBusy = true
 		ui.CompactThinking = 0
 		ui.CompactNote = compactStartNote(p)
 		t.Status = ui.CompactNote
 	case "compact:start":
+		ui.ThinkingBytes = 0
 		ui.CompactBusy = true
 		ui.CompactThinking = 0
 		ui.CompactNote = compactStartNote(p)
@@ -208,6 +212,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			dropCompactPreview(t)
 		}
 	case "run:compacted":
+		ui.ThinkingBytes = 0
 		ui.CompactBusy = false
 		ui.CompactThinking = 0
 		ui.CompactNote = ""
@@ -228,8 +233,10 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			a.notify(compactionToast(p))
 		}
 	case "run:inject":
+		ui.ThinkingBytes = 0
 		t.Status = "已注入新消息，继续执行…"
 	case "run:done", "run:error":
+		ui.ThinkingBytes = 0
 		ui.PlanCollapsed = true
 		for _, call := range t.Messages {
 			if str(call, "role") == "tool_call" && toolState(call) == "running" {
@@ -322,6 +329,7 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 	if name == "tool:update" && (str(m, "status") == "success" || str(m, "status") == "error") {
 		return
 	}
+	t.uiState().ThinkingBytes = 0
 	m["toolState"] = name
 	if name == "tool:result" || name == "tool:error" {
 		if started, ok := m["startedAt"].(time.Time); ok && num(m, "durationMs") == 0 {
@@ -728,11 +736,57 @@ func (a *desktop) refreshSSH(manual ...bool) {
 			if seq != a.sshRefreshSeq {
 				return
 			}
+			// A workspace may have been activated while this refresh was reading
+			// its snapshot. Keep any cache entry populated for that new workspace.
+			for workspace, ids := range a.sshAllowed {
+				if _, exists := allowed[workspace]; !exists {
+					allowed[workspace] = ids
+				}
+			}
 			a.sshServers = servers
 			a.sshAllowed = allowed
 			if len(manual) > 0 && manual[0] {
 				a.notifySuccess("SSH 列表已刷新")
 			}
+		})
+	}()
+}
+
+// ensureSSHWorkspaceLoaded keeps the footer authorization count accurate as
+// soon as a workspace tab is activated, including on startup. The map key's
+// presence distinguishes a loaded empty grant list from an uncached workspace.
+func (a *desktop) ensureSSHWorkspaceLoaded(workspace string) {
+	if workspace == "" || !a.ready || a.closing || a.core == nil || a.win == nil {
+		return
+	}
+	if _, loaded := a.sshAllowed[workspace]; loaded {
+		return
+	}
+	if a.sshRefreshPending == nil {
+		a.sshRefreshPending = map[string]bool{}
+	}
+	if a.sshRefreshPending[workspace] {
+		return
+	}
+	a.sshRefreshPending[workspace] = true
+	seq, tail := a.sshRefreshSeq, a.sshAuthTail
+	go func() {
+		if tail != nil {
+			<-tail
+		}
+		allowed := a.core.GetWorkspaceAllowedServers(workspace)
+		a.win.Update(func() {
+			delete(a.sshRefreshPending, workspace)
+			if a.closing || seq != a.sshRefreshSeq {
+				return
+			}
+			if _, loaded := a.sshAllowed[workspace]; loaded {
+				return
+			}
+			if a.sshAllowed == nil {
+				a.sshAllowed = map[string][]string{}
+			}
+			a.sshAllowed[workspace] = allowed
 		})
 	}()
 }

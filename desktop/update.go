@@ -51,6 +51,8 @@ func (a *desktop) scheduleUpdateCheck(delay time.Duration) {
 	if !a.ready || a.closing || !a.installedRelease() {
 		return
 	}
+	// This one-shot timer stays armed while the main window is hidden; only a
+	// real process shutdown stops it.
 	a.upd.Timer = time.AfterFunc(delay, func() {
 		a.win.Update(func() {
 			if a.closing {
