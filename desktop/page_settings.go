@@ -23,6 +23,8 @@ const historyPageSizeHelp = `按从最新往前的展示块计数，不按对话
 
 var settingsSections = []string{"通用", "高级", "网络", "安全围栏", "API", "版本亮点", "关于"}
 
+const defaultUserAgentOption = "AllyAgent（默认）"
+
 // autoCompactOptions keeps the stored values ("summary" / "recent") and changes
 // only what the user reads: a raw English value in the settings form is neither
 // self-explanatory nor honest about which one is the default.
@@ -104,6 +106,9 @@ func (a *desktop) saveSettings(notice ...string) {
 		a.savePrefs()
 	}
 	cfg := a.configDraft
+	if cfg.UserAgent == defaultUserAgentOption {
+		cfg.UserAgent = ""
+	}
 	cfg.LLMRetries = int(a.settings.Retries)
 	cfg.ToolConcurrency = int(a.settings.Concurrency)
 	allow := a.settings.AllowPrivate
@@ -275,17 +280,8 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				fieldNote(c, "留空自动检测；也可手动指定，例如 C:\\Program Files\\Git\\bin\\bash.exe。", a.secondaryInk())
 			}
 			fieldLabel(c, "自定义 User-Agent")
-			uaPresets := []string{"AllyAgent（默认）", "Codex CLI", "Claude Code", "OpenCode", "Pi"}
-			currentUA := a.configDraft.UserAgent
-			if currentUA == "" {
-				currentUA = uaPresets[0]
-			}
-			uikit.ComboboxField(c.Key("user-agent"), &currentUA, uaPresets, "User-Agent", "", a.secondaryInk()).FillWidth()
-			if currentUA != uaPresets[0] {
-				a.configDraft.UserAgent = strings.TrimSpace(currentUA)
-			} else {
-				a.configDraft.UserAgent = ""
-			}
+			uaPresets := []string{defaultUserAgentOption, "Codex CLI", "Claude Code", "OpenCode", "Pi"}
+			uikit.ComboboxField(c.Key("user-agent"), &a.configDraft.UserAgent, uaPresets, "User-Agent", uaPresets[0], a.secondaryInk()).FillWidth()
 			fieldNote(c, "仅用于模型 API 请求；http_request / web_fetch 不受影响。", a.secondaryInk())
 		})
 	}
@@ -336,8 +332,16 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			})
 			divider(c)
 			sectionTitle(c, "会话请求头")
-			switchRow(c, "send-session-id", "自动发送 session-id", "用于同一会话的后端路由与缓存复用，默认开启。", &a.settings.SendSessionID)
-			switchRow(c, "send-x-session-id", "自动发送 x-session-id", "与 session-id 使用同一会话标识，可独立关闭，默认开启。", &a.settings.SendXSessionID)
+			if sw := switchRow(c, "send-session-id", "自动发送 session-id", "用于同一会话的后端路由与缓存复用，默认开启。", &a.settings.SendSessionID); sw.Changed() && !a.settings.SendSessionID {
+				a.settings.SendSessionID = true
+				a.settings.SessionHeaderToDisable = "session-id"
+				a.settings.SessionHeaderConfirmOpen = true
+			}
+			if sw := switchRow(c, "send-x-session-id", "自动发送 x-session-id", "与 session-id 使用同一会话标识，可独立关闭，默认开启。", &a.settings.SendXSessionID); sw.Changed() && !a.settings.SendXSessionID {
+				a.settings.SendXSessionID = true
+				a.settings.SessionHeaderToDisable = "x-session-id"
+				a.settings.SessionHeaderConfirmOpen = true
+			}
 			fieldNote(c, "保存后对后续任务生效；手动配置的同名请求头不受影响。", a.secondaryInk())
 		})
 	}
@@ -364,6 +368,38 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				a.setAutostart(a.settings.Autostart)
 			}
 		})
+	}
+	a.sessionHeaderConfirmDialog(c)
+}
+
+func (a *desktop) sessionHeaderConfirmDialog(c *ui.Context) {
+	if !a.settings.SessionHeaderConfirmOpen {
+		return
+	}
+	header := a.settings.SessionHeaderToDisable
+	closeDialog := func() {
+		a.settings.SessionHeaderConfirmOpen = false
+		a.settings.SessionHeaderToDisable = ""
+	}
+	dialog := modalCard(c.Key("session-header-confirm"), &a.settings.SessionHeaderConfirmOpen, widthModalSmall, func() {
+		modalTitle(c, "关闭 "+header+" 请求头？", "")
+		ui.Text(c, "关闭后，OpenCode、GPT（ChatGPT）和 OpenRouter 等服务的会话路由可能受到影响，严重降低缓存命中率，并可能导致请求不稳定或可用性下降。实际影响取决于服务端实现，建议保持开启。").
+			FontSize(fsSmall).TextColor(a.secondaryInk()).LineHeight(1.5).Selectable()
+		modalActions(c, func() {
+			flat(c, "取消").OnClick(closeDialog)
+			primary(c, "继续关闭").OnClick(func() {
+				switch header {
+				case "session-id":
+					a.settings.SendSessionID = false
+				case "x-session-id":
+					a.settings.SendXSessionID = false
+				}
+				closeDialog()
+			})
+		})
+	})
+	if dialog.Dismissed() || !a.settings.SessionHeaderConfirmOpen {
+		a.settings.SessionHeaderToDisable = ""
 	}
 }
 

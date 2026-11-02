@@ -36,7 +36,7 @@ func (a *desktop) view(c *ui.Context) {
 			ui.Split(c.Key("rail-split"), &a.prefs.RailWidth, func() { a.rail(c) }, content).
 				Grow(1).MinHeight(0).FillWidth().OnChange(func() {
 				a.prefs.RailWidth = max(160, min(360, a.prefs.RailWidth))
-				a.savePrefs()
+				a.scheduleGeometryPrefsSave()
 			})
 		} else {
 			ui.Row(c.Key("collapsed-layout")).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
@@ -142,7 +142,7 @@ func (a *desktop) chatPage(c *ui.Context, width float32) {
 			})
 		}).Fill().OnChange(func() {
 			a.prefs.TreeWidth = max(150, min(600, a.prefs.TreeWidth))
-			a.savePrefs()
+			a.scheduleGeometryPrefsSave()
 		})
 	})
 }

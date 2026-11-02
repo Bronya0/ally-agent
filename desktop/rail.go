@@ -212,7 +212,7 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 			var roots []string
 			for _, entry := range a.sessions {
 				root := entry.Workspace
-				if root == "" || seen[strings.ToLower(root)] || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
+				if root == "" || seen[strings.ToLower(root)] || a.workspaceHistoryHidden(root) || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
 					continue
 				}
 				seen[strings.ToLower(root)] = true
@@ -237,7 +237,11 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 	}
 	row := ui.Row(c.Key("rail-ws-"+root)).Height(26).Radius(6).Padding(0, railContentInset(c)).Gap(6).AlignItems(ui.Center)
 	fill := ui.Transparent
-	if active || row.Hovered() {
+	ink := a.secondaryInk()
+	if active {
+		fill = selectionFill(c.Theme().Accent)
+		ink = c.Theme().Accent
+	} else if row.Hovered() {
 		fill = p.hover
 	}
 	row.Background(fadeColor(row, "fill", fill))
@@ -251,7 +255,7 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 			}
 			a.openWorkspace(root)
 		})
-		btn.Children(func() { ui.Text(c, label).FontSize(fsSmall).TextColor(a.secondaryInk()).SingleLine() })
+		btn.Children(func() { ui.Text(c, label).FontSize(fsSmall).TextColor(ink).SingleLine() })
 		if root != "" {
 			b := dangerIconAction(c, "rail-ws-del-"+root, "从历史记录移除", "close", 18, func() {
 				a.removeWorkspaceHistory(root)
@@ -262,14 +266,34 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 }
 
 func (a *desktop) removeWorkspaceHistory(root string) {
-	filtered := a.sessions[:0]
-	for _, entry := range a.sessions {
-		if !strings.EqualFold(entry.Workspace, root) {
-			filtered = append(filtered, entry)
+	if root == "" || a.workspaceHistoryHidden(root) {
+		return
+	}
+	a.prefs.HiddenWorkspaces = append(a.prefs.HiddenWorkspaces, root)
+	a.savePrefs("已从历史记录移除")
+}
+
+func (a *desktop) workspaceHistoryHidden(root string) bool {
+	for _, hidden := range a.prefs.HiddenWorkspaces {
+		if sameWorkspace(hidden, root) {
+			return true
 		}
 	}
-	a.sessions = filtered
-	a.notify("已从历史记录移除")
+	return false
+}
+
+func (a *desktop) restoreWorkspaceHistory(root string) {
+	if !a.workspaceHistoryHidden(root) {
+		return
+	}
+	filtered := a.prefs.HiddenWorkspaces[:0]
+	for _, hidden := range a.prefs.HiddenWorkspaces {
+		if !sameWorkspace(hidden, root) {
+			filtered = append(filtered, hidden)
+		}
+	}
+	a.prefs.HiddenWorkspaces = filtered
+	a.savePrefs()
 }
 
 func (a *desktop) railSessions(c *ui.Context) {
@@ -299,7 +323,11 @@ func (a *desktop) railSessions(c *ui.Context) {
 				active := t != nil && t.ID == entry.ID
 				row := ui.Row(c.Key("rail-sess-"+entry.ID)).Height(30).Radius(6).Padding(0, railContentInset(c)).AlignItems(ui.Center).Gap(6)
 				fill := ui.Transparent
-				if active || row.Hovered() {
+				ink := a.secondaryInk()
+				if active {
+					fill = selectionFill(c.Theme().Accent)
+					ink = c.Theme().Accent
+				} else if row.Hovered() {
 					fill = p.hover
 				}
 				row.Background(fadeColor(row, "fill", fill))
@@ -313,7 +341,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 					btn.OnClick(func() { a.openSession(entry.ID) })
 					btn.Children(func() {
 						ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, title).FontSize(fsSmall).TextColor(a.secondaryInk()).SingleLine()
+							ui.Text(c, title).FontSize(fsSmall).TextColor(ink).SingleLine()
 							if busy {
 								ui.Box(c).Size(5, 5).Radius(3).Background(p.accent)
 							}

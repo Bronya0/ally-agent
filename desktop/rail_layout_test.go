@@ -77,8 +77,8 @@ func TestWorkspaceDeleteRevealsWithoutMovingTitle(t *testing.T) {
 	if err := tt.Click("从历史记录移除"); err != nil {
 		t.Fatal(err)
 	}
-	if len(a.sessions) != 0 {
-		t.Fatal("history deletion no longer works")
+	if !a.workspaceHistoryHidden(root) || len(a.sessions) != 1 {
+		t.Fatal("workspace history was not hidden while preserving its sessions")
 	}
 }
 
