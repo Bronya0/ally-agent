@@ -52,6 +52,22 @@ type lineKey struct {
 	start int
 }
 
+type commandOutputKey struct{ output, stdout, stderr, text, raw string }
+
+func commandKey(result map[string]any) commandOutputKey {
+	return commandOutputKey{str(result, "output"), str(result, "stdout"), str(result, "stderr"), str(result, "text"), str(result, "_text")}
+}
+
+func commandOutputFromKey(key commandOutputKey) string {
+	parts := make([]string, 0, 5)
+	for _, s := range [...]string{key.output, key.stdout, key.stderr, key.text, key.raw} {
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 func toolCardKey(t *conversation, index int, message map[string]any) string {
 	if key := str(message, "toolCallId"); key != "" {
 		return key

@@ -3,11 +3,23 @@ package desktop
 
 import "ally-dev/desktop/pluginhost"
 
+type pluginHostSyncKey struct {
+	page, workspace string
+	palette         pluginhost.Palette
+	revision        uint64
+	empty           bool
+}
+
 func (a *desktop) syncPluginHost() {
 	if a.pluginHost == nil || a.closing {
 		return
 	}
 	if len(a.plugins) == 0 {
+		key := pluginHostSyncKey{empty: true}
+		if a.pluginSyncReady && a.pluginSyncKey == key {
+			return
+		}
+		a.pluginSyncKey, a.pluginSyncReady = key, true
 		a.pluginHost.Update(pluginhost.Input{})
 		return
 	}
@@ -16,12 +28,27 @@ func (a *desktop) syncPluginHost() {
 		workspace = t.Workspace
 	}
 	p := a.currentPalette()
+	palette := pluginhost.Palette{
+		Name: p.name, Dark: p.dark, Bg: p.bg, Panel: p.panel, Chrome: p.chromeColor(),
+		Line: p.line, Accent: p.accent, AccentText: p.accentText, Text: p.text,
+		Muted: p.muted, Hover: p.hover, Hint: p.hint,
+	}
+	key := pluginHostSyncKey{page: a.page, workspace: workspace, palette: palette, revision: a.pluginsRevision}
+	if a.pluginSyncReady && a.pluginSyncKey == key {
+		return
+	}
+	a.pluginSyncKey, a.pluginSyncReady = key, true
 	a.pluginHost.Update(pluginhost.Input{
 		Page: a.page, Workspace: workspace, Plugins: a.plugins,
-		Theme: pluginhost.NewTheme(pluginhost.Palette{
-			Name: p.name, Dark: p.dark, Bg: p.bg, Panel: p.panel, Chrome: p.chromeColor(),
-			Line: p.line, Accent: p.accent, AccentText: p.accentText, Text: p.text,
-			Muted: p.muted, Hover: p.hover, Hint: p.hint,
-		}),
+		Theme: a.pluginThemeFor(palette),
 	})
+}
+
+func (a *desktop) pluginThemeFor(palette pluginhost.Palette) pluginhost.Theme {
+	if !a.pluginThemeReady || a.pluginThemePalette != palette {
+		a.pluginThemePalette = palette
+		a.pluginTheme = pluginhost.NewTheme(palette)
+		a.pluginThemeReady = true
+	}
+	return a.pluginTheme
 }
