@@ -1,11 +1,8 @@
 package desktop
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -320,24 +317,19 @@ func TestCommandPreviewMatchesJoinedOutput(t *testing.T) {
 	}
 }
 
-func TestWorkspaceHistoryHidePersistsAndCanBeRestored(t *testing.T) {
+// Removing a workspace entry deletes its sessions, so it must collect every
+// one recorded there, not just the window the rail displays.
+func TestWorkspaceHistoryRemovalCoversEverySession(t *testing.T) {
 	root := t.TempDir()
-	a := &desktop{sessions: []backend.SessionIndexEntry{{ID: "keep", Workspace: root}}}
-	a.removeWorkspaceHistory(root)
-	data, err := json.Marshal(a.prefs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "native-ui.json")
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	b := &desktop{prefs: readPrefs(path), sessions: a.sessions}
-	if !b.workspaceHistoryHidden(root) || len(b.workspaceSessions(root)) != 1 {
-		t.Fatal("hidden workspace or its sessions did not survive reload")
-	}
-	b.restoreWorkspaceHistory(root)
-	if b.workspaceHistoryHidden(root) {
-		t.Fatal("explicitly reopening the workspace did not restore its history")
+	other := t.TempDir()
+	a := &desktop{sessions: []backend.SessionIndexEntry{
+		{ID: "one", Workspace: root},
+		{ID: "two", Workspace: strings.ToUpper(root)},
+		{ID: "three", Workspace: other},
+		{ID: "", Workspace: root},
+	}}
+	ids := a.workspaceSessionIDs(root)
+	if len(ids) != 2 || ids[0] != "one" || ids[1] != "two" {
+		t.Fatalf("workspace removal targeted %v", ids)
 	}
 }

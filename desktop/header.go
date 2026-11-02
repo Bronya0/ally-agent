@@ -176,7 +176,7 @@ func (a *desktop) workspaceMenu(c *ui.Context, from string, anchor ui.Element) {
 			count := 0
 			for _, entry := range a.sessions {
 				root := entry.Workspace
-				if root == "" || seen[strings.ToLower(root)] || a.workspaceHistoryHidden(root) || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
+				if root == "" || seen[strings.ToLower(root)] || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
 					continue
 				}
 				seen[strings.ToLower(root)] = true

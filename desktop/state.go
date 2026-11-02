@@ -28,7 +28,6 @@ type uiPrefs struct {
 	RailSessionsOpen   bool           `json:"railSessionsOpen"`
 	Avatar             string         `json:"avatar"`
 	RecentModels       []string       `json:"recentModels"`
-	HiddenWorkspaces   []string       `json:"hiddenWorkspaces,omitempty"`
 	TreeWidth          float32        `json:"treeWidth"`
 	SeenReleaseNotes   string         `json:"seenReleaseNotes"`
 	DismissedUpdateTag string         `json:"dismissedUpdateTag"`
@@ -94,7 +93,6 @@ func (a *desktop) savePrefs(notice ...string) {
 	}
 	p := a.prefs
 	p.RecentModels = append([]string(nil), p.RecentModels...)
-	p.HiddenWorkspaces = append([]string(nil), p.HiddenWorkspaces...)
 	p.Pet = p.Pet.clone()
 	previous := a.prefsSaveTail
 	done := make(chan struct{})

@@ -212,7 +212,7 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 			var roots []string
 			for _, entry := range a.sessions {
 				root := entry.Workspace
-				if root == "" || seen[strings.ToLower(root)] || a.workspaceHistoryHidden(root) || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
+				if root == "" || seen[strings.ToLower(root)] || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
 					continue
 				}
 				seen[strings.ToLower(root)] = true
@@ -228,6 +228,10 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 		})
 	})
 }
+
+// workspaceDeleteHint labels the rail's per-workspace delete action, which
+// removes the workspace's persisted sessions.
+const workspaceDeleteHint = "删除该工作区的全部会话"
 
 func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 	p := a.currentPalette()
@@ -257,7 +261,7 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 		})
 		btn.Children(func() { ui.Text(c, label).FontSize(fsSmall).TextColor(ink).SingleLine() })
 		if root != "" {
-			b := dangerIconAction(c, "rail-ws-del-"+root, "从历史记录移除", "close", 18, func() {
+			b := dangerIconAction(c, "rail-ws-del-"+root, workspaceDeleteHint, "close", 18, func() {
 				a.removeWorkspaceHistory(root)
 			})
 			railHoverAction(row, b, false)
@@ -265,35 +269,48 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 	})
 }
 
+// removeWorkspaceHistory deletes the persisted sessions recorded for one
+// workspace. The rail entry is derived from the session index, so hiding the
+// row would survive only until the next refresh and leave the files behind.
 func (a *desktop) removeWorkspaceHistory(root string) {
-	if root == "" || a.workspaceHistoryHidden(root) {
+	if root == "" || a.closing || a.core == nil {
 		return
 	}
-	a.prefs.HiddenWorkspaces = append(a.prefs.HiddenWorkspaces, root)
-	a.savePrefs("已从历史记录移除")
-}
-
-func (a *desktop) workspaceHistoryHidden(root string) bool {
-	for _, hidden := range a.prefs.HiddenWorkspaces {
-		if sameWorkspace(hidden, root) {
-			return true
-		}
-	}
-	return false
-}
-
-func (a *desktop) restoreWorkspaceHistory(root string) {
-	if !a.workspaceHistoryHidden(root) {
+	ids := a.workspaceSessionIDs(root)
+	if len(ids) == 0 {
 		return
 	}
-	filtered := a.prefs.HiddenWorkspaces[:0]
-	for _, hidden := range a.prefs.HiddenWorkspaces {
-		if !sameWorkspace(hidden, root) {
-			filtered = append(filtered, hidden)
+	var failures []string
+	a.confirmAction("删除历史记录", fmt.Sprintf("%s 的 %d 个会话将被永久删除，无法恢复。正在运行或压缩中的会话会跳过。", workspaceLabel(root), len(ids)), func() error {
+		failures = failures[:0]
+		for _, id := range ids {
+			if err := a.core.DeleteSession(id); err != nil {
+				failures = append(failures, err.Error())
+			}
+		}
+		return nil
+	}, func() {
+		a.forgetSessions(ids)
+		a.reloadSessions()
+		if len(failures) > 0 {
+			a.notifyError(fmt.Sprintf("已删除 %d 个会话，%d 个未能删除：%s", len(ids)-len(failures), len(failures), strings.Join(failures, "；")))
+			return
+		}
+		a.notifySuccess(fmt.Sprintf("已删除 %d 个会话", len(ids)))
+	})
+}
+
+// workspaceSessionIDs lists every session recorded under root. It walks the
+// whole index: workspaceSessions caps the list for display, and a deletion must
+// not silently leave the rest on disk.
+func (a *desktop) workspaceSessionIDs(root string) []string {
+	ids := make([]string, 0, len(a.sessions))
+	for _, entry := range a.sessions {
+		if entry.ID != "" && sameWorkspace(entry.Workspace, root) {
+			ids = append(ids, entry.ID)
 		}
 	}
-	a.prefs.HiddenWorkspaces = filtered
-	a.savePrefs()
+	return ids
 }
 
 func (a *desktop) railSessions(c *ui.Context) {

@@ -641,7 +641,7 @@ func (a *desktop) chooseWorkspace() {
 			return
 		}
 		if p != "" {
-			a.win.Update(func() { a.restoreWorkspaceHistory(p); a.config.Workspace = p; a.newConversation(p) })
+			a.win.Update(func() { a.config.Workspace = p; a.newConversation(p) })
 		}
 	}()
 }

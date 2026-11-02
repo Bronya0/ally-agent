@@ -38,6 +38,15 @@ func (a *desktop) confirmAction(title, detail string, run func() error, after fu
 
 func (a *desktop) deleteSession(id, label string) {
 	a.confirmAction("删除会话", label, func() error { return a.core.DeleteSession(id) }, func() {
+		a.forgetSessions([]string{id})
+		a.reloadSessions()
+	})
+}
+
+// forgetSessions drops every in-memory trace of deleted sessions and replaces
+// their tabs with a fresh conversation that keeps the chosen model.
+func (a *desktop) forgetSessions(ids []string) {
+	for _, id := range ids {
 		if t := a.openSessions[id]; t != nil {
 			a.releaseAttachmentImages(t)
 		}
@@ -53,15 +62,19 @@ func (a *desktop) deleteSession(id, label string) {
 			next.Model, next.Reasoning = t.Model, t.Reasoning
 			a.tabs[i] = next
 		}
-		go func() {
-			list, err := a.core.ListSessionIndex()
-			if err != nil {
-				a.fail(err)
-				return
-			}
-			a.win.Update(func() { a.sessions = list })
-		}()
-	})
+	}
+}
+
+// reloadSessions refreshes the index the rail and the workspace menu read.
+func (a *desktop) reloadSessions() {
+	go func() {
+		list, err := a.core.ListSessionIndex()
+		if err != nil {
+			a.fail(err)
+			return
+		}
+		a.win.Update(func() { a.sessions = list })
+	}()
 }
 
 func (a *desktop) deleteModel(model backend.ModelConfig) {
