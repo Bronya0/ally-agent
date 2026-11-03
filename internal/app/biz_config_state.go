@@ -12,6 +12,7 @@ import (
 // cloneConfig owns mutable values; runtime service dependencies remain shared.
 func cloneConfig(cfg ConfigState) ConfigState {
 	cfg.ImageGeneration = cloneImageConfig(cfg.ImageGeneration)
+	cfg.VoiceModels = cloneVoiceModels(cfg.VoiceModels)
 	cfg.APIKeys = slices.Clone(cfg.APIKeys)
 	cfg.ExtraRoots = slices.Clone(cfg.ExtraRoots)
 	cfg.CustomHeaders = maps.Clone(cfg.CustomHeaders)
@@ -77,6 +78,7 @@ func normalizeStoredConfig(cfg ConfigState) ConfigState {
 	for i := range cfg.Models {
 		cfg.Models[i] = normalizeModelEntry(cfg.Models[i])
 	}
+	cfg.VoiceModels = normalizeVoiceModels(cfg.VoiceModels)
 	return cfg
 }
 
@@ -118,6 +120,9 @@ func settingsConfig(base, req ConfigState) ConfigState {
 	req = cloneConfig(req)
 	if req.ImageGeneration != nil {
 		cfg.ImageGeneration = req.ImageGeneration
+	}
+	if req.VoiceModels != nil {
+		cfg.VoiceModels = req.VoiceModels
 	}
 	cfg.CustomPrompt = req.CustomPrompt
 	cfg.GitHubToken = req.GitHubToken

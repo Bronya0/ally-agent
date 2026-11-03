@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"reflect"
 	"runtime"
 	"strings"
 
@@ -97,12 +98,10 @@ func (a *desktop) selectSettingsSection(section string) {
 	}
 }
 
-func (a *desktop) saveSettings(notice ...string) {
-	size := normalizeHistoryPageSize(int(a.settings.HistoryPageSize))
-	if size != a.messageWindowSize() {
-		a.prefs.HistoryPageSize = size
-		a.savePrefs()
-	}
+// settingsConfigDraft projects the page state onto the config that would be
+// saved. Leaving the page compares it with the saved config instead of always
+// writing, so an untouched settings page is silent.
+func (a *desktop) settingsConfigDraft() backend.ConfigState {
 	cfg := a.configDraft
 	cfg.LLMRetries = int(a.settings.Retries)
 	cfg.ToolConcurrency = int(a.settings.Concurrency)
@@ -127,6 +126,23 @@ func (a *desktop) saveSettings(notice ...string) {
 	cfg.AutoValidationJSON = boolPtr(a.settings.Validation["JSON"])
 	cfg.AutoValidationYAML = boolPtr(a.settings.Validation["YAML"])
 	cfg.AutoValidationXML = boolPtr(a.settings.Validation["XML"])
+	return cfg
+}
+
+// settingsPendingEdits reports whether the page holds anything the backend does
+// not have yet. Both sides are normalized through the form's own defaults first,
+// so an untouched page with a sparse config file never looks edited.
+func (a *desktop) settingsPendingEdits() bool {
+	return !reflect.DeepEqual(normalizeSettingsConfig(a.settingsConfigDraft()), normalizeSettingsConfig(a.config))
+}
+
+func (a *desktop) saveSettings(notice ...string) {
+	size := normalizeHistoryPageSize(int(a.settings.HistoryPageSize))
+	if size != a.messageWindowSize() {
+		a.prefs.HistoryPageSize = size
+		a.savePrefs()
+	}
+	cfg := a.settingsConfigDraft()
 	a.configDraft = cfg
 	if len(notice) == 0 {
 		notice = []string{""}
@@ -135,11 +151,14 @@ func (a *desktop) saveSettings(notice ...string) {
 }
 
 // commitSettingsOnLeave is called when the rail switches away from settings.
-// Edits inside the page save silently, but leaving reports the save once: a
-// textarea has no per-keystroke feedback, so without it the user cannot tell
-// whether the prompt was stored.
+// Edits inside the page save silently, and leaving only writes and reports once
+// when the draft actually differs from the saved config: announcing a save that
+// changed nothing is noise every time the page is closed.
 func (a *desktop) commitSettingsOnLeave() {
 	if a.core == nil || a.win == nil {
+		return
+	}
+	if !a.settingsPendingEdits() {
 		return
 	}
 	a.saveSettings("设置已保存")
@@ -148,7 +167,7 @@ func (a *desktop) commitSettingsOnLeave() {
 // ---- General -------------------------------------------------------------
 
 func (a *desktop) settingsGeneral(c *ui.Context) {
-	selected := a.settingsModule(c, "settingsGeneral", "外观", "提示词", "路径", "对话行为", "应用")
+	selected := a.settingsModule(c, "settingsGeneral", "外观", "提示词", "路径", "对话行为", "应用", "语音输入")
 
 	fieldNote(c, "每次对话都会附带给模型的偏好", a.secondaryInk())
 	if selected == 0 {
@@ -324,6 +343,9 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			})
 		})
 	}
+	if selected == 5 {
+		a.settingsVoiceInput(c)
+	}
 	if selected == 4 {
 		card(c, "settings-app", func() {
 			sectionTitle(c, "应用")
@@ -348,6 +370,113 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			}
 		})
 	}
+}
+
+func (a *desktop) settingsVoiceInput(c *ui.Context) {
+	card(c, "settings-voice-input", func() {
+		sectionTitle(c, "语音输入")
+		fieldNote(c, "启用后会预热录音设备；只有按住快捷键时才采集麦克风。松开后停止录音，将转写结果填入当前输入框。快捷键仅在 Ally 窗口活动时生效。", a.secondaryInk())
+		if len(a.config.VoiceModels) == 0 {
+			fieldNote(c, "请先在模型页面添加语音模型。", a.secondaryInk())
+			return
+		}
+		options := make([]uikit.Option, 0, len(a.config.VoiceModels))
+		for _, model := range a.config.VoiceModels {
+			label := model.Name
+			if label == "" {
+				label = model.Model
+			}
+			if label == "" {
+				label = model.ID
+			}
+			options = append(options, uikit.Option{Value: model.ID, Label: label})
+		}
+		selected := a.prefs.VoiceModelID
+		stored := selected
+		if !voiceModelIDExists(a.config.VoiceModels, selected) {
+			selected = a.config.VoiceModels[0].ID
+		}
+		fieldLabel(c, "语音模型")
+		uikit.SelectField(c.Key("voice-input-model"), &selected, options, a.secondaryInk()).Label("语音模型").FillWidth().OnChange(func() {
+			if selected != stored {
+				a.prefs.VoiceModelID = selected
+				a.savePrefs()
+				a.configureVoiceInput()
+			}
+		})
+		fieldLabel(c, "输入设备")
+		deviceID := a.prefs.VoiceInputDeviceID
+		deviceOptions := []uikit.Option{{Value: "", Label: "系统默认设备"}}
+		foundDevice := deviceID == ""
+		for _, device := range a.voiceInputDevices {
+			deviceOptions = append(deviceOptions, uikit.Option{Value: device.ID, Label: device.Name})
+			foundDevice = foundDevice || device.ID == deviceID
+		}
+		if !foundDevice {
+			deviceOptions = append(deviceOptions, uikit.Option{Value: deviceID, Label: "已选设备不可用（请选择其他设备）"})
+		}
+		ui.Row(c.Key("voice-input-device-row")).Gap(gapField).AlignItems(ui.Center).Children(func() {
+			uikit.SelectField(c.Key("voice-input-device"), &deviceID, deviceOptions, a.secondaryInk()).Label("输入设备").FillWidth().Grow(1).OnChange(func() {
+				if deviceID != a.prefs.VoiceInputDeviceID {
+					a.selectVoiceInputDevice(deviceID)
+				}
+			})
+			cardFlat(c, "刷新设备").OnClick(func() { a.refreshVoiceInputDevices() })
+			if a.voiceInputDevicesBusy {
+				ui.Spinner(c).Size(13, 13)
+			}
+		})
+		if a.voiceInputDevicesError != "" {
+			inlineError(c, "voice-input-device-error", a.voiceInputDevicesError)
+		} else {
+			fieldNote(c, "系统默认会跟随 Windows 输入设备；也可固定选择一个活动麦克风。", a.secondaryInk())
+		}
+		hotkeyParts, hotkeyPlaceholder := voiceHotkeyParts(a.prefs.VoiceHotkey), ""
+		if a.voiceHotkeyCapturing {
+			hotkeyParts = a.voiceHotkeyPreviewParts
+			hotkeyPlaceholder = "请按下快捷键组合…"
+		}
+		// One row holds the bound keys, which modifier sides count and the change
+		// action: three separate rows pushed the rest of the card off screen.
+		ui.Row(c.Key("voice-hotkey-row")).Gap(gapField).AlignItems(ui.Center).Children(func() {
+			fieldLabel(c, "按住录音快捷键")
+			ui.Row(c.Key("voice-hotkey-keys-row")).Gap(gapInline).AlignItems(ui.Center).Children(func() {
+				a.hotkeyKeycaps(c, hotkeyParts, hotkeyPlaceholder)
+			})
+			ui.Row(c.Key("voice-hotkey-row-spacer")).Grow(1)
+			ui.Row(c.Key("voice-modifier-sides")).Gap(gapInline).AlignItems(ui.Center).Children(func() {
+				fieldLabel(c, "修饰键")
+				choiceButton(c, "voice-modifier-left", "左", a.prefs.VoiceModifierLeft, c.Theme().Accent).OnClick(func() {
+					a.setVoiceModifierSide(!a.prefs.VoiceModifierLeft, a.prefs.VoiceModifierRight)
+				})
+				choiceButton(c, "voice-modifier-right", "右", a.prefs.VoiceModifierRight, c.Theme().Accent).OnClick(func() {
+					a.setVoiceModifierSide(a.prefs.VoiceModifierLeft, !a.prefs.VoiceModifierRight)
+				})
+			})
+			if a.voiceHotkeyCapturing {
+				cardFlat(c, "取消更换").OnClick(func() { a.finishVoiceHotkeyCapture("") })
+			} else {
+				cardFlat(c, "更换").OnClick(func() { a.beginVoiceHotkeyCapture() })
+			}
+		})
+		if a.voiceHotkeyCapturing {
+			fieldNote(c, "正在录入：按下想要的组合，全部松开后生效；Esc 取消。", a.secondaryInk())
+		} else {
+			fieldNote(c, "点「更换」后直接按键（Esc 取消）：单键（F9、Alt）或修饰键加 1–3 个按键；「修饰键」左/右都选时按哪一侧都生效，只选一侧则只认那一侧（至少保留一侧）。", a.secondaryInk())
+		}
+		if sw := switchRow(c, "voice-input-enabled", "语音输入", "启用并预热已选语音模型的录音设备。", &a.prefs.VoiceInputEnabled); sw.Changed() {
+			if a.prefs.VoiceInputEnabled {
+				if !voiceModelIDExists(a.config.VoiceModels, selected) {
+					a.prefs.VoiceInputEnabled = false
+					a.notifyError("请先选择有效的语音模型")
+					return
+				}
+				a.prefs.VoiceModelID = selected
+			}
+			a.savePrefs()
+			a.configureVoiceInput()
+		}
+	})
 }
 
 // ---- Advanced ------------------------------------------------------------

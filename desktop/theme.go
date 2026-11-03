@@ -359,6 +359,7 @@ var iconPaths = map[string]string{
 	"alert":       `<path d="M12 3 2 21h20zM12 9v5m0 3v.5"/>`,
 	"info":        `<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>`,
 	"play":        `<path d="m6 4 14 8-14 8z"/>`,
+	"microphone":  `<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5m-4 0h8"/>`,
 	"stop":        `<rect x="6" y="6" width="12" height="12" rx="1"/>`,
 	"file":        `<path d="M6 2h8l4 4v16H6zM14 2v5h5"/>`,
 	"code":        `<path d="m8 7-5 5 5 5M16 7l5 5-5 5"/>`,

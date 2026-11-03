@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -24,11 +25,20 @@ import (
 // error status, request failure, or unexpected response shape is returned
 // verbatim as an error; the UI surfaces it directly.
 func (a *App) FetchModelList(baseUrl, apiKey string, customHeaders map[string]string) ([]string, error) {
+	return a.fetchModelListQuery(baseUrl, apiKey, customHeaders, nil)
+}
+
+// fetchModelListQuery is FetchModelList with optional query parameters, which
+// providers such as SiliconFlow use to filter by modality (`sub_type=speech-to-text`).
+func (a *App) fetchModelListQuery(baseUrl, apiKey string, customHeaders map[string]string, query url.Values) ([]string, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseUrl), "/")
 	if base == "" {
 		return nil, fmt.Errorf("base URL is required")
 	}
-	url := base + "/models"
+	modelsURL := base + "/models"
+	if len(query) > 0 {
+		modelsURL += "?" + query.Encode()
+	}
 
 	// Model-list fetching rides the user's network settings (proxy) the same
 	// way LLM requests do; allowPrivate keeps local endpoints such as Ollama
@@ -49,7 +59,7 @@ func (a *App) FetchModelList(baseUrl, apiKey string, customHeaders map[string]st
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +85,7 @@ func (a *App) FetchModelList(baseUrl, apiKey string, customHeaders map[string]st
 		snippet = snippet[:200]
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("GET %s returned HTTP %d: %s", url, resp.StatusCode, snippet)
+		return nil, fmt.Errorf("GET %s returned HTTP %d: %s", modelsURL, resp.StatusCode, snippet)
 	}
 
 	var payload struct {
@@ -84,7 +94,7 @@ func (a *App) FetchModelList(baseUrl, apiKey string, customHeaders map[string]st
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil || payload.Data == nil {
-		return nil, fmt.Errorf("unexpected response format from GET %s", url)
+		return nil, fmt.Errorf("unexpected response format from GET %s", modelsURL)
 	}
 	models := make([]string, 0, len(payload.Data))
 	for _, item := range payload.Data {

@@ -24,6 +24,7 @@ func (a *desktop) changePage(page string) {
 		a.commitSettingsOnLeave()
 	}
 	if a.page == "models" && page != "models" {
+		a.cancelVoiceRecording()
 		a.cancelOAuthWhenLeaving()
 	}
 	a.page = page
@@ -36,7 +37,7 @@ func (a *desktop) changePage(page string) {
 		a.refreshPlugins()
 		return
 	case "models", "chat":
-		if page == "models" && a.modelTab != "图片模型" && a.modelDraft.AuthType == "chatgpt_oauth" && a.oauth != nil {
+		if page == "models" && a.modelTab == "对话模型" && a.modelDraft.AuthType == "chatgpt_oauth" && a.oauth != nil {
 			a.loadOAuthAccounts()
 		}
 		if page == "models" && a.imageModels != nil && !a.imageModels.busy && !a.imageModels.formOpen && a.imageModels.test == nil {

@@ -179,6 +179,15 @@ type desktop struct {
 	modelPrevious                                       *backend.ModelIdentity
 	oauth                                               *oauthState
 	imageModels                                         *imageModelsState
+	voiceModels                                         *voiceModelsState
+	voiceInput                                          voiceInputRuntime
+	voiceInputDevices                                   []voiceCaptureDevice
+	voiceInputDevicesBusy                               bool
+	voiceInputDevicesError                              string
+	voiceHotkeyCapturing                                bool
+	voiceHotkeyPreviewParts                             []string
+	voiceHotkeyCaptureStop                              func()
+	voiceHotkeyCaptureTimer                             *time.Timer
 	modelDraft                                          backend.ModelConfig
 	modelEdit                                           int
 	mcpText, configText, infoText, skillText, skillName string
@@ -313,6 +322,10 @@ func Run() {
 				}
 				a.syncSettingsForm()
 				a.ready = true
+				a.refreshVoiceInputDevices()
+				if a.prefs.VoiceInputEnabled {
+					a.configureVoiceInput()
+				}
 				if a.prefs.Pet.Enabled {
 					a.openPet()
 				}
@@ -338,12 +351,18 @@ func (a *desktop) shutdown() {
 		return
 	}
 	a.closing = true
+	a.closeVoiceInput()
 	if a.upd.Applied && a.upd.State == "restarting" {
 		// The updater already flushed after ApplyUpdate stopped all runs.
 		a.finishQuit()
 		return
 	}
-	a.prepareWindowClose(a.finishShutdown, func() { a.closing = false })
+	a.prepareWindowClose(a.finishShutdown, func() {
+		a.closing = false
+		if a.prefs.VoiceInputEnabled {
+			a.configureVoiceInput()
+		}
+	})
 }
 
 // Both normal quit and updating check editor changes before replacing files.
@@ -387,6 +406,7 @@ func (a *desktop) finishShutdown() {
 }
 
 func (a *desktop) finishQuit() {
+	a.closeVoiceInput()
 	a.stopAutoAppearance()
 	a.stopUpdateChecks()
 	a.closePet()
