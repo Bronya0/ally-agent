@@ -8,6 +8,7 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,27 @@ var monoFamily = nativeFontFamily()
 
 func mono(c *ui.Context, s string, size float32) ui.Element {
 	return ui.Text(c, s).Font(monoFamily).FontSize(size).Selectable()
+}
+
+// ---- Identities ----------------------------------------------------------
+
+// widgetKey builds a widget key without fmt: a frame builds one for every row it
+// shows, and parsing a format costs more than the string it returns. An empty id
+// drops that part, so widgetKey("export", "", 7) is "export-7".
+func widgetKey(prefix, id string, n int) string {
+	var num [20]byte
+	digits := strconv.AppendInt(num[:0], int64(n), 10)
+	var b strings.Builder
+	// Sized exactly, so the builder allocates the string once.
+	b.Grow(len(prefix) + len(id) + len(digits) + 2)
+	b.WriteString(prefix)
+	if id != "" {
+		b.WriteByte('-')
+		b.WriteString(id)
+	}
+	b.WriteByte('-')
+	b.Write(digits)
+	return b.String()
 }
 
 func sectionTitle(c *ui.Context, s string) ui.Element {

@@ -41,3 +41,15 @@ func Reveal(c *ui.Context, open bool, build func()) ui.Element {
 func StillMotion(c *ui.Context) bool {
 	return c.Preferences().ReduceMotion || c.Instant()
 }
+
+// HoverFade shows e at opacity as the pointer asks, over HoverDuration. It
+// fades through a pose: a pose fades in frames that only paint, where animating
+// the opacity here would rebuild the whole view, and the accessibility tree
+// every built frame carries, once per frame of the fade. With reduced motion it
+// settles at once, as the animated opacity did.
+func HoverFade(c *ui.Context, e ui.Element, opacity float32) ui.Element {
+	if StillMotion(c) {
+		return e.Opacity(opacity)
+	}
+	return e.AnimatePose(ui.Pose{Fade: 1 - opacity}, ui.Animation{Duration: HoverDuration})
+}

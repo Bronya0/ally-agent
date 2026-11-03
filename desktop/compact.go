@@ -76,7 +76,12 @@ func (a *desktop) compactDelta(t *conversation, content string, reasoningLen int
 			row = map[string]any{"role": "assistant", "content": "", compactPreviewFlag: true}
 			t.Messages = append(t.Messages, row)
 		}
-		row["content"] = str(row, "content") + content
+		if before := str(row, "content"); before == "" {
+			row["content"] = content
+			t.markHistory()
+		} else {
+			row["content"] = before + content
+		}
 		st.CompactThinking = 0
 	}
 	if content != "" && st.Follow {
@@ -250,6 +255,8 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 		}
 		t.Messages[i] = row
 	}
+	// A trimmed card no longer folds into the group it belonged to.
+	t.markHistory()
 }
 
 // Local rewrites invalidate provider usage; both numbers are text estimates.

@@ -52,6 +52,10 @@ type conversation struct {
 	MD                                                map[int]*markdown.Options
 	Expanded                                          map[int]bool
 	UI                                                *chatUI
+	// historyStarts holds the transcript's block starts for historyRev, so a
+	// frame asks once per change instead of once per row. See blockStarts.
+	historyStarts memoOf[historyKey, []int]
+	historyRev    uint64
 }
 
 type workspaceFile struct {
@@ -74,6 +78,7 @@ type desktop struct {
 	pluginSyncKey                           pluginHostSyncKey
 	pluginSyncReady                         bool
 	pluginsRevision                         uint64
+	pluginIndex                             memoOf[uint64, pluginModeIndex]
 	previews                                previewPool
 	previewRequests                         []previewRequest
 	previewTimer                            *time.Timer

@@ -123,7 +123,14 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 				t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": ""})
 			}
 			m := t.Messages[len(t.Messages)-1]
-			m["content"] = str(m, "content") + content
+			if before := str(m, "content"); before == "" {
+				// A row that starts drawing may open a history block: the cached
+				// block starts have to know without the transcript growing.
+				m["content"] = content
+				t.markHistory()
+			} else {
+				m["content"] = before + content
+			}
 			t.Status = "正在回复…"
 		} else if n := int(num(p, "reasoningLen")); n > 0 {
 			ui.ThinkingBytes += n

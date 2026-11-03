@@ -28,6 +28,23 @@ func TestNewRunLeavesOlderHistoryPage(t *testing.T) {
 	}
 }
 
+// A streamed answer is the one row that starts drawing after its index exists:
+// history paging has to see it even though the transcript did not grow.
+func TestStreamedAnswerOpensHistoryBlock(t *testing.T) {
+	conv := &conversation{ID: "stream", Messages: []map[string]any{
+		{"role": "user", "content": "问题"},
+		{"role": "assistant", "content": ""},
+	}}
+	a := &desktop{tabs: []*conversation{conv}}
+	if starts := conv.blockStarts(); len(starts) != 2 || starts[1] != 2 {
+		t.Fatalf("an empty answer opens no block: %v", starts)
+	}
+	a.applyEvent("run:stream", map[string]any{"sessionId": conv.ID, "content": "答"})
+	if starts := conv.blockStarts(); len(starts) != 3 || starts[1] != 1 {
+		t.Fatalf("a streamed answer must open a block: %v", starts)
+	}
+}
+
 func TestRunErrorFollowsOnlyWhenReaderIsFollowing(t *testing.T) {
 	for _, follow := range []bool{false, true} {
 		conv := &conversation{}

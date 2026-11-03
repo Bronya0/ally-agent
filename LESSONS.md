@@ -100,3 +100,19 @@
 [preview-loadurl] 2026-11-03 中危 文件预览走异步 LoadURL+协议处理器比 NavigateToString 慢，切换像卡死。@desktop/preview_lifecycle.go
 
 [mono-generic-font] 2026-11-03 高危 字体用泛型 "" 或 "monospace"：中文每段重做字体匹配，79KB md 首屏 720ms。统一用 appFontFamily。@desktop/theme.go
+
+[access-tree-frames] 2026-11-03 中危 UIA 碰过一次窗口后 mygo 每帧新 make 约 160KB 节点数组，占当天分配 45%；只重绘的帧不建。@mygo ui/access.go
+
+[access-tree-upstream] 2026-11-03 中危 那行 make 在 mygo main 仍未修；复用缓冲区可归零，但 darwin 的 s.access=*tree 留着同一 slice，须双缓冲。@go.mod
+
+[history-memo] 2026-11-03 中危 历史块起点缓存须在“行由空变非空”时递增修订号，否则流式首 token 不进窗口（条数没变）。@desktop/transcript_rows.go
+
+[hover-animate] 2026-11-03 中危 悬停淡入淡出别用 Animate：整帧重建并建无障碍树；改 HoverFade，减动效退回 Opacity。@desktop/uikit/motion.go
+
+[fmt-map-render] 2026-11-03 中危 渲染期 fmt.Sprint(map) 先排序全部键再拼串，每帧一遍；先判类型取字段。@desktop/tool_details.go
+
+[widget-key] 2026-11-03 中危 每行 key 用 Sprintf 每帧解析格式串；统一 widgetKey，输出须逐字节不变否则元素状态重置。@desktop/widgets.go
+
+[request-json-thrice] 2026-11-03 中危 一次请求把同一份历史编三次：SDK 编码、传输层重写、工具 schema 哈希（可缓存）。@internal/app/prov_reasoning.go
+
+[stats-full-rewrite] 2026-11-03 中危 统计每 5 秒把当天整份日文件重写一遍（marshal + 临时文件改名），记录越多越贵。@internal/app/biz_stats.go

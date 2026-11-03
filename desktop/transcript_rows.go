@@ -155,3 +155,35 @@ func (a *desktop) roundStatsIfAny(c *ui.Context, t *conversation, i int, visible
 		a.roundStatsRow(c, t, idx, st.Round[idx], visible)
 	}
 }
+
+// historyKey identifies one answer to "which rows open a history block": the
+// transcript's length, and a revision that moves when a row changes what it
+// shows without that length changing (a first token, a generated image).
+type historyKey struct {
+	rows int
+	rev  uint64
+}
+
+// markHistory records that a row changed in place, so the block starts cached
+// for the transcript are worked out again on the next frame.
+func (t *conversation) markHistory() { t.historyRev++ }
+
+// blockStarts answers which rows open a history block: a page may only begin on
+// a row that draws. The grouping rule lives in foldsInto/startsBlock, so a page
+// never starts on a row another row already draws. One frame asks more than
+// once (the window, the older-page count) and every answer walks the whole
+// transcript, so the answer stays until the transcript changes. Callers read it
+// and never append to it.
+func (t *conversation) blockStarts() []int {
+	key := historyKey{rows: len(t.Messages), rev: t.historyRev}
+	return t.historyStarts.get(key, func(historyKey) []int {
+		rows := newTranscriptRows(t)
+		starts := make([]int, 0, len(t.Messages)+1)
+		for i := range t.Messages {
+			if rows.startsBlock(i) {
+				starts = append(starts, i)
+			}
+		}
+		return append(starts, len(t.Messages))
+	})
+}

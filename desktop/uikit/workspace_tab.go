@@ -72,7 +72,7 @@ func WorkspaceTab(c *ui.Context, label, tip string, active, busy, canClose bool,
 		if canClose && showClose {
 			opacity = 1
 		}
-		end.Opacity(end.Animate("visibility", opacity, HoverDuration))
+		HoverFade(c, end, opacity)
 	})
 	return row
 }

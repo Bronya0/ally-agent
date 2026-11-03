@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	backend "ally-dev/internal/app"
 	"github.com/egoist/mygo/ui"
@@ -90,7 +91,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 					}
 				}
 				if start > 0 {
-					olderCount := historyBlockIndex(historyBlockStarts(t), start)
+					olderCount := historyBlockIndex(t.blockStarts(), start)
 					transcriptAction(c, "history-older", fmt.Sprintf("更早消息（%d 块）", olderCount), "history").OnClick(func() {
 						st.VisibleStart = previousHistoryPage(t, start, a.messageWindowSize()) + 1
 						st.Follow = false
@@ -194,7 +195,7 @@ func (a *desktop) messageRow(c *ui.Context, t *conversation, i int, rows *transc
 	}
 	role := str(m, "role")
 	st := t.uiState()
-	row := ui.Column(c.Key(fmt.Sprintf("message-%s-%d", t.ID, i))).FillWidth().MinWidth(0).Gap(10)
+	row := ui.Column(c.Key(widgetKey("message", t.ID, i))).FillWidth().MinWidth(0).Gap(10)
 	if role == "user" {
 		if st.PromptHandles == nil {
 			st.PromptHandles = map[int]*ui.Handle{}
@@ -271,7 +272,7 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 	content := str(m, "content")
 	p := a.currentPalette()
 	services := c.Services()
-	message := ui.Column(c.Key(fmt.Sprintf("user-bubble-%s-%d", t.ID, i))).Label("用户消息区域").AlignSelf(ui.End).AlignItems(ui.End).MaxWidthPercent(85).MinWidth(0).Gap(4)
+	message := ui.Column(c.Key(widgetKey("user-bubble", t.ID, i))).Label("用户消息区域").AlignSelf(ui.End).AlignItems(ui.End).MaxWidthPercent(85).MinWidth(0).Gap(4)
 	message.Children(func() {
 		background := p.accent.Alpha(0.10)
 		if p.dark {
@@ -303,7 +304,7 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 		actions := ui.Row(c.Key("actions")).Label("用户消息操作").Height(26).Gap(4).Shrink(0)
 		// IgnoreInput keeps an unseen button out of the pointer's way while a
 		// screen reader can still reach it, which Disabled takes away.
-		actions.Opacity(actions.Animate("visibility", opacity, uikit.HoverDuration)).Children(func() {
+		uikit.HoverFade(c, actions, opacity).Children(func() {
 			mutedIconAction(c, "copy", "复制提问", "copy", 26, func() {
 				services.WriteClipboard(content)
 			}).IgnoreInput(!show).Shrink(0)
@@ -342,7 +343,7 @@ func (a *desktop) collapsiblePrompt(c *ui.Context, t *conversation, i int, conte
 		}
 		shown = cut
 	}
-	v := ui.Column(c).Key(fmt.Sprintf("prompt-%s-%d", t.ID, i)).Gap(gapInline)
+	v := ui.Column(c).Key(widgetKey("prompt", t.ID, i)).Gap(gapInline)
 	v.Children(func() {
 		// Share selection with the bubble instead of installing a separate
 		// Markdown selection scope.
@@ -350,7 +351,7 @@ func (a *desktop) collapsiblePrompt(c *ui.Context, t *conversation, i int, conte
 		options.ShareSelection = true
 		markdown.View(c, shown, options).FillWidth()
 		if long {
-			labelText := fmt.Sprintf("展开完整提问（%d 行，%d 字）", lines, len([]rune(content)))
+			labelText := fmt.Sprintf("展开完整提问（%d 行，%d 字）", lines, utf8.RuneCountInString(content))
 			if st.PromptOpen[i] {
 				labelText = "收起提问"
 			}
@@ -380,7 +381,7 @@ func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[
 		notice(c, "error", content, a.secondaryInk())
 		return
 	}
-	markdown.View(c.Key(fmt.Sprintf("md-%s-%d", t.ID, i)), content, a.markdownOptions(t, i)).FillWidth()
+	markdown.View(c.Key(widgetKey("md", t.ID, i)), content, a.markdownOptions(t, i)).FillWidth()
 	if suggestions, ok := m["suggestions"].([]any); ok && len(suggestions) > 0 {
 		ui.Row(c).Gap(gapInline).Wrap().Children(func() {
 			for n, s := range suggestions {
@@ -395,7 +396,7 @@ func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[
 
 func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *roundStat, show bool) {
 	modelSeconds := float64(stat.ModelDurationMS) / 1000
-	row := ui.Row(c.Key(fmt.Sprintf("round-stats-%s-%d", t.ID, i))).FillWidth().Height(heightRow + 2).Gap(gapInline + 1).AlignItems(ui.Center)
+	row := ui.Row(c.Key(widgetKey("round-stats", t.ID, i))).FillWidth().Height(heightRow + 2).Gap(gapInline + 1).AlignItems(ui.Center)
 	// The controls stay in the view, faded and inert, while the row is not
 	// hovered. Removing them instead took away the button a panel is anchored
 	// to, and the panel lives in the window's overlay: it vanished the moment
@@ -421,22 +422,22 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("%d token/s", int(float64(stat.OutputTokens)/modelSeconds))).FontSize(fsSmall).TextColor(a.secondaryInk()), "累计模型请求耗时内的平均输出速度，包含首 token 等待，不含工具执行时间")
 		}
 		services := c.Services()
-		exportButton := mutedIconAction(c, fmt.Sprintf("export-%d", i), "导出", "download", 22, nil)
+		exportButton := mutedIconAction(c, widgetKey("export", "", i), "导出", "download", 22, nil)
 		menuPopoverButton(c, exportButton, 180, func(dismiss func()) {
-			popoverItem(c, fmt.Sprintf("export-answer-%d", i), "导出回答", "", false, func() {
+			popoverItem(c, widgetKey("export-answer", "", i), "导出回答", "", false, func() {
 				dismiss()
 				a.exportText("ally-response.md", str(t.Messages[i], "content"))
 			}, a.secondaryInk())
-			popoverItem(c, fmt.Sprintf("export-session-%d", i), "导出会话", "", false, func() {
+			popoverItem(c, widgetKey("export-session", "", i), "导出会话", "", false, func() {
 				dismiss()
 				a.exportText("ally-session.md", sessionMarkdown(t))
 			}, a.secondaryInk())
 		})
-		mutedIconAction(c, fmt.Sprintf("copy-summary-%d", i), "复制总结", "copy", 22, func() {
+		mutedIconAction(c, widgetKey("copy-summary", "", i), "复制总结", "copy", 22, func() {
 			services.WriteClipboard(str(t.Messages[i], "content"))
 			c.Toast("已复制最终总结")
 		})
-		quickButton := mutedIconAction(c, fmt.Sprintf("quick-%d", i), "快捷消息", "wand", 22, nil)
+		quickButton := mutedIconAction(c, widgetKey("quick", "", i), "快捷消息", "wand", 22, nil)
 		menuPopoverButton(c, quickButton, 180, func(dismiss func()) {
 			for _, item := range quickMessages {
 				item := item
@@ -446,7 +447,7 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 				}, a.secondaryInk())
 			}
 		})
-		mutedIconAction(c, fmt.Sprintf("remember-%d", i), "记住这次对话的长期记忆", "book", 22, func() {
+		mutedIconAction(c, widgetKey("remember", "", i), "记住这次对话的长期记忆", "book", 22, func() {
 			a.send(t, projectMemoryPrompt+"\n\nLocal date for this memory update: "+time.Now().Format("2006-01-02")+".")
 		})
 	})
@@ -1020,22 +1021,12 @@ func (a *desktop) chatMessageWindow(t *conversation) (int, int) {
 	return historyMessageWindow(t, a.messageWindowSize())
 }
 
-// historyBlockStarts marks the rows a history page may begin at. The grouping
-// rule lives in foldsInto/startsBlock, so a page never starts on a row that
-// another row already draws.
-func historyBlockStarts(t *conversation) []int {
-	rows := newTranscriptRows(t)
-	starts := make([]int, 0, len(t.Messages)+1)
-	for i := range t.Messages {
-		if rows.startsBlock(i) {
-			starts = append(starts, i)
-		}
-	}
-	return append(starts, len(t.Messages))
-}
+// historyMessageWindow returns the rows of the history page showing: the last
+// `size` blocks of the transcript, or the page a restored offset points into.
+// The block starts come from blockStarts, which owns the grouping rule.
 func historyMessageWindow(t *conversation, size int) (int, int) {
 	size = normalizeHistoryPageSize(size)
-	starts := historyBlockStarts(t)
+	starts := t.blockStarts()
 	blocks := len(starts) - 1
 	first := max(0, blocks-size)
 	if t.uiState().VisibleStart > 0 {
@@ -1057,7 +1048,7 @@ func historyBlockIndex(starts []int, index int) int {
 	return max(0, lo-1)
 }
 func previousHistoryPage(t *conversation, start, size int) int {
-	starts := historyBlockStarts(t)
+	starts := t.blockStarts()
 	return starts[max(0, historyBlockIndex(starts, start)-normalizeHistoryPageSize(size))]
 }
 

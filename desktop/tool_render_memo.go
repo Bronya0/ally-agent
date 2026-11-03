@@ -2,7 +2,6 @@
 package desktop
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -72,7 +71,7 @@ func toolCardKey(t *conversation, index int, message map[string]any) string {
 	if key := str(message, "toolCallId"); key != "" {
 		return key
 	}
-	return fmt.Sprintf("%s-%d", t.ID, index)
+	return widgetKey(t.ID, "", index)
 }
 
 // diffMemo holds derived diff rows beside how many lines "show more" has

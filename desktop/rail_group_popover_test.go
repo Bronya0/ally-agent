@@ -11,16 +11,15 @@ import (
 // The rail group used to open the operating system's menu. Its pages now list in
 // the app's own panel, and the current page is the tinted one there.
 func TestRailGroupOpensAppPanel(t *testing.T) {
-	a := &desktop{ready: true, page: "stats"}
-	group := []backend.PluginInfo{
+	a := &desktop{ready: true, page: "stats", plugins: []backend.PluginInfo{
 		{ID: "a", Name: "插件甲", Mode: "stats"},
 		{ID: "b", Name: "插件乙", Mode: "tasks"},
-	}
+	}}
 	tester := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(a.theme())
 		c.DisableAnimations()
 		ui.Column(c).Width(220).Padding(8).Children(func() {
-			a.railGroupButton(c, true, group[0], "插件组", group, true)
+			a.railGroupButton(c, true, a.plugins[0], "插件组", []int{0, 1}, true)
 		})
 	}, 420, 320)
 	tester.Frame()
