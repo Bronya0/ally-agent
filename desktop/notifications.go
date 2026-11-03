@@ -3,7 +3,10 @@ package desktop
 
 import (
 	"fmt"
+	"runtime"
 	"time"
+
+	"ally-dev/resources"
 
 	"github.com/egoist/mygo"
 )
@@ -15,12 +18,14 @@ func (a *desktop) notifyRunCompletion(event string, payload map[string]any) {
 	if title == "" || a.win == nil || !a.acceptCompletionNotice(event, payload, mygo.App.IsActive(), time.Now()) {
 		return
 	}
-	notification := mygo.NewNotification(mygo.NotificationOptions{
-		Title: "Ally",
-		Body:  title,
-	})
-	win := a.win
-	notification.OnClick(func() { win.Show(); win.Focus(); notification.Close() })
+	opts := mygo.NotificationOptions{Title: "Ally", Body: title}
+	if runtime.GOOS == "windows" {
+		// A balloon otherwise enlarges the 16–32px tray icon for its main image.
+		// Other platforms already show the app icon; Image adds an attachment there.
+		opts.Image, _ = resources.Assets.ReadFile("icon.png")
+	}
+	notification := mygo.NewNotification(opts)
+	notification.OnClick(func() { a.showMainWindow(); notification.Close() })
 	// Permission prompts on macOS can block Show until the user answers.
 	go func() {
 		if notification.Show() == nil {

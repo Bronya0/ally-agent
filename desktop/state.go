@@ -44,7 +44,7 @@ type uiPrefs struct {
 }
 
 func defaultPrefs() uiPrefs {
-	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, VoiceHotkey: "Alt", VoiceModifierLeft: true, VoiceModifierRight: true, Pet: petPreferences{Size: 180}}
+	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, VoiceHotkey: "Alt", VoiceModifierLeft: true, VoiceModifierRight: true, Pet: petPreferences{Enabled: true, Size: 180}}
 }
 
 var prefsMu sync.Mutex
@@ -104,6 +104,10 @@ func readPrefs(path string) uiPrefs {
 // savePrefs is fire-and-forget: preferences are cosmetic, and a failed write
 // must never interrupt the UI.
 func (a *desktop) savePrefs(notice ...string) {
+	if a.prefsGeometryTimer != nil {
+		a.prefsGeometryTimer.Stop()
+		a.prefsGeometryTimer = nil
+	}
 	if a.core == nil {
 		return
 	}
@@ -135,6 +139,28 @@ func (a *desktop) savePrefs(notice ...string) {
 			})
 		}
 	}()
+}
+
+// Split controls report every drag frame. Save the final geometry after the
+// drag settles; any ordinary save or the quit/update barrier also flushes it.
+func (a *desktop) scheduleGeometryPrefsSave() {
+	if a.core == nil || a.win == nil {
+		return
+	}
+	if a.prefsGeometryTimer != nil {
+		a.prefsGeometryTimer.Stop()
+	}
+	var timer *time.Timer
+	timer = time.AfterFunc(300*time.Millisecond, func() {
+		a.win.Update(func() {
+			if a.prefsGeometryTimer != timer {
+				return
+			}
+			a.prefsGeometryTimer = nil
+			a.savePrefs()
+		})
+	})
+	a.prefsGeometryTimer = timer
 }
 
 // roundStat mirrors one finished turn's numbers shown in the round footer.
@@ -276,6 +302,8 @@ type settingsForm struct {
 	BgOpacity       float64
 	AllowPrivate    bool
 	AutoUpdate      bool
+	SendSessionID   bool
+	SendXSessionID  bool
 	Autostart       bool
 	Validation      map[string]bool
 	UpdateNote      string
@@ -286,9 +314,13 @@ type settingsForm struct {
 	API             backend.ApiServiceState
 	APIPort         float64
 	APIBusy         bool
+	APIRevision     uint64
 	APINote         string
 	FullJSON        string
 	NewToken        bool
+
+	SessionHeaderConfirmOpen bool
+	SessionHeaderToDisable   string
 }
 
 func (a *desktop) syncSettingsForm() {
@@ -313,6 +345,8 @@ func (a *desktop) syncSettingsForm() {
 	f.Concurrency = float64(a.configDraft.ToolConcurrency)
 	f.AllowPrivate = boolValue(a.configDraft.AllowPrivateNetwork)
 	f.AutoUpdate = a.configDraft.AutoUpdate == nil || *a.configDraft.AutoUpdate
+	f.SendSessionID = a.configDraft.SendSessionIDHeader == nil || *a.configDraft.SendSessionIDHeader
+	f.SendXSessionID = a.configDraft.SendXSessionIDHeader == nil || *a.configDraft.SendXSessionIDHeader
 	f.CompactTimeout = float64(a.configDraft.CompactTimeoutSeconds)
 	f.Threshold = a.configDraft.CompactThreshold
 	if f.Threshold <= 0 {
@@ -399,6 +433,7 @@ type modelForm struct {
 	Context        float64
 	Busy           bool
 	FetchBusy      bool
+	FetchSeq       uint64
 	FetchNote      string
 	Providers      []string
 	ProviderIdx    int
@@ -408,21 +443,23 @@ type modelForm struct {
 
 // mcpForm is the MCP page + server editor state.
 type mcpForm struct {
-	Tab        int
-	Search     string
-	Busy       bool
-	EditorOpen bool
-	Editing    string
-	Name       string
-	Transport  string
-	Command    string
-	Args       string
-	Env        string
-	URL        string
-	Headers    string
-	ToolOpen   map[string]bool
-	ToolsDirty bool
-	ImportBusy bool
+	Tab          int
+	Search       string
+	Busy         bool
+	Revision     uint64
+	ToolRevision uint64
+	EditorOpen   bool
+	Editing      string
+	Name         string
+	Transport    string
+	Command      string
+	Args         string
+	Env          string
+	URL          string
+	Headers      string
+	ToolOpen     map[string]bool
+	ToolsDirty   bool
+	ImportBusy   bool
 }
 
 // skillsForm is the skills page + add-skill dialog state.
@@ -472,15 +509,25 @@ type sshForm struct {
 }
 
 // tasksForm is the task center state (tabs, scope, log dialog).
+type scheduledTaskChange struct {
+	task    backend.ScheduledTask
+	deleted bool
+}
+
 type tasksForm struct {
-	Tab        int
-	Scope      int
-	Loading    bool
-	LogOpen    bool
-	LogTitle   string
-	LogMeta    string
-	LogBody    string
-	LogService string
+	Tab              int
+	Scope            int
+	Loading          bool
+	ScheduledChanges map[string]scheduledTaskChange
+	ServiceChanges   map[string]backend.ServiceInfo
+	LogOpen          bool
+	LogTitle         string
+	LogMeta          string
+	LogBody          string
+	LogService       string
+	LogComplete      bool
+	LogTruncated     bool
+	LogRequestSeq    uint64
 	// LogScroll keeps the log dialog's place; it follows the newest line unless
 	// the reader scrolled up, so a running service does not yank them away.
 	LogScroll  ui.ScrollState
@@ -525,6 +572,7 @@ type updateUI struct {
 
 // fileUI holds explorer-only state that is not part of the workspace files.
 type fileUI struct {
+	TreeSelection  int
 	InfoGeneration uint64
 	InfoCancel     context.CancelFunc
 	InfoWorkspace  string
@@ -555,12 +603,14 @@ type fileUI struct {
 type gameUI struct {
 	Kind          int
 	Started       bool
+	Finished      bool
 	VsAI          bool
 	ModelA        string
 	ModelB        string
 	EffortA       string
 	EffortB       string
 	Thinking      bool
+	RequestSeq    uint64
 	Calls         int
 	InTokens      int
 	OutTokens     int

@@ -19,12 +19,22 @@ const terminalOutputSize float32 = fsTool - 1
 // text came from (it picks syntax highlighting); it is empty for terminal output.
 // ink is the caller's secondary-text tone.
 func toolCodeWindow(c *ui.Context, key, text string, expanded bool, path string, ink ...ui.Color) {
+	toolCodeWindowHeight(c, key, text, expanded, path, 240, false, ink...)
+}
+
+func toolCodeWindowHeight(c *ui.Context, key, text string, expanded bool, path string, height float32, maximum bool, ink ...ui.Color) {
 	body := func() { toolCodeLines(c, text, path, ink...) }
 	if !expanded {
 		ui.Box(c.Key(key)).FillWidth().MaxHeight(150).Clip().Background(c.Theme().Background).Radius(radiusSmall).Children(body)
 		return
 	}
-	ui.ScrollBoth(c.Key(key)).FillWidth().MinWidth(0).Height(240).Shrink(0).Clip().Label("工具输出 " + key).Background(c.Theme().Background).Radius(radiusSmall).Children(body)
+	scroll := ui.ScrollBoth(c.Key(key)).FillWidth().MinWidth(0).Shrink(0).Clip().Label("工具输出 " + key).Background(c.Theme().Background).Radius(radiusSmall)
+	if maximum {
+		scroll.MaxHeight(height)
+	} else {
+		scroll.Height(height)
+	}
+	scroll.Children(body)
 }
 
 // toolCodeLines draws the text itself; callers wrap it in the scroll area they want.

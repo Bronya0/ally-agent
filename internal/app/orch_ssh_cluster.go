@@ -70,6 +70,9 @@ func (a *App) executeSSHClusterTool(ctx context.Context, sessionID, workspace st
 		}, nil
 
 	case "add":
+		if normalizeWorkspaceKey(workspace) == "" {
+			return nil, codedToolError("E_BAD_SSH_CLUSTER", errors.New("no workspace for the current session; authorize the server from the chat footer instead"))
+		}
 		alias := strings.ToLower(strings.TrimSpace(req.Alias))
 		if alias == "" {
 			return nil, codedToolError("E_BAD_SSH_CLUSTER", errors.New("alias is required for action=add"))
@@ -168,13 +171,8 @@ func (a *App) executeSSHClusterTool(ctx context.Context, sessionID, workspace st
 			Status:      "approved",
 			CreatedBy:   "agent",
 		}
-		if err := a.SaveSSHServer(node); err != nil {
-			return nil, codedToolError("E_SAVE_FAILED", fmt.Errorf("failed to save server node: %w", err))
-		}
-
-		// Also authorize for this workspace
-		if workspace != "" {
-			a.AuthorizeServerForWorkspace(workspace, alias)
+		if err := a.SaveSSHServerForWorkspace(node, workspace); err != nil {
+			return nil, codedToolError("E_SAVE_FAILED", fmt.Errorf("failed to register and authorize server node: %w", err))
 		}
 
 		return map[string]any{
@@ -264,7 +262,9 @@ func (a *App) authorizeExistingSSHServer(ctx context.Context, sessionID, workspa
 		return nil, codedToolError("E_APPROVAL_REJECTED", fmt.Errorf("user rejected authorizing server %q for the current workspace", node.Alias))
 	}
 
-	a.AuthorizeServerForWorkspace(workspace, node.ID)
+	if err := a.AuthorizeServerForWorkspace(workspace, node.ID); err != nil {
+		return nil, codedToolError("E_SAVE_FAILED", fmt.Errorf("failed to authorize server %q for the current workspace: %w", node.Alias, err))
+	}
 	return map[string]any{
 		"ok":                true,
 		"alias":             node.Alias,

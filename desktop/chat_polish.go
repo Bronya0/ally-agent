@@ -22,41 +22,81 @@ func toolWarning(c *ui.Context, text string, ink ...ui.Color) {
 	})
 }
 
-func gitUnifiedDiff(c *ui.Context, diff string, ink ...ui.Color) {
+type gitDiffLine struct {
+	text    string
+	number  int
+	changed bool
+	hunk    bool
+}
+
+type gitUnifiedDiffMemo struct {
+	source string
+	ready  bool
+	lines  []gitDiffLine
+	list   ui.ListState
+}
+
+func (m *gitUnifiedDiffMemo) get(diff string) []gitDiffLine {
+	if !m.ready || m.source != diff {
+		m.source, m.ready = diff, true
+		m.lines = parseGitUnifiedDiff(diff)
+		m.list = ui.ListState{}
+	}
+	return m.lines
+}
+
+func parseGitUnifiedDiff(diff string) []gitDiffLine {
 	oldLine, newLine := 0, 0
 	inHunk := false
-	ui.Column(c).FillWidth().MinWidth(0).Children(func() {
-		for _, line := range strings.Split(strings.ReplaceAll(diff, "\r\n", "\n"), "\n") {
-			if strings.HasPrefix(line, "@@") {
-				inHunk = true
-				fields := strings.Fields(line)
-				if len(fields) >= 3 {
-					oldLine, _ = strconv.Atoi(strings.Split(strings.TrimPrefix(fields[1], "-"), ",")[0])
-					newLine, _ = strconv.Atoi(strings.Split(strings.TrimPrefix(fields[2], "+"), ",")[0])
-				}
-				ui.Text(c, line).FillWidth().Padding(4, 8).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink))
-				continue
+	lines := strings.Split(strings.ReplaceAll(diff, "\r\n", "\n"), "\n")
+	out := make([]gitDiffLine, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(line, "@@") {
+			inHunk = true
+			fields := strings.Fields(line)
+			if len(fields) >= 3 {
+				oldLine, _ = strconv.Atoi(strings.Split(strings.TrimPrefix(fields[1], "-"), ",")[0])
+				newLine, _ = strconv.Atoi(strings.Split(strings.TrimPrefix(fields[2], "+"), ",")[0])
 			}
-			if !inHunk && (strings.HasPrefix(line, "diff ") || strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++")) {
-				continue
-			}
-			number, changed := newLine, false
-			switch {
-			case strings.HasPrefix(line, "-"):
-				number = oldLine
-				oldLine++
-				changed = true
-			case strings.HasPrefix(line, "+"):
-				newLine++
-				changed = true
-			case strings.HasPrefix(line, " "):
-				oldLine++
-				newLine++
-			default:
-				number = 0
-			}
-			ui.Row(c).FillWidth().MinWidth(0).Shrink(0).Children(func() { diffCell(c, line, changed, number, ink...) })
+			out = append(out, gitDiffLine{text: line, hunk: true})
+			continue
 		}
+		if !inHunk && (strings.HasPrefix(line, "diff ") || strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++")) {
+			continue
+		}
+		number, changed := newLine, false
+		switch {
+		case strings.HasPrefix(line, "-"):
+			number = oldLine
+			oldLine++
+			changed = true
+		case strings.HasPrefix(line, "+"):
+			newLine++
+			changed = true
+		case strings.HasPrefix(line, " "):
+			oldLine++
+			newLine++
+		default:
+			number = 0
+		}
+		out = append(out, gitDiffLine{text: line, number: number, changed: changed})
+	}
+	return out
+}
+
+func gitUnifiedDiff(c *ui.Context, diff string, ink ...ui.Color) {
+	holder := ui.Column(c.Key("git-unified-diff")).Grow(1).MinHeight(0).FillWidth().MinWidth(0)
+	memo := memoAt[gitUnifiedDiffMemo](holder, "diff")
+	lines := memo.get(diff)
+	holder.Children(func() {
+		ui.List(c.Key("git-diff-lines"), &memo.list, len(lines), func(i int) {
+			line := lines[i]
+			if line.hunk {
+				ui.Text(c, line.text).FillWidth().Padding(4, 8).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Selectable()
+				return
+			}
+			ui.Row(c).FillWidth().MinWidth(0).Shrink(0).Children(func() { diffCell(c, line.text, line.changed, line.number, ink...) })
+		}).Grow(1).MinHeight(0).FillWidth().MinWidth(0).Label("Git diff")
 	})
 }
 

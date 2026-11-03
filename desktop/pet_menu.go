@@ -39,12 +39,7 @@ func (a *desktop) petContextMenu(m *ui.Menu) {
 	}
 	m.Separator()
 	if m.Item("打开主界面").Chosen() {
-		a.petMenuAction(func() {
-			if a.win != nil {
-				a.win.Show()
-				a.win.Focus()
-			}
-		})
+		a.petMenuAction(a.showMainWindow)
 	}
 	if m.Item("宠物设置").Chosen() {
 		a.petMenuAction(a.openPetSettings)
@@ -82,6 +77,5 @@ func (a *desktop) openPetSettings() {
 	}
 	a.settings.Modules["settingsGeneral"] = 0
 	a.changePage("settings")
-	a.win.Show()
-	a.win.Focus()
+	a.showMainWindow()
 }

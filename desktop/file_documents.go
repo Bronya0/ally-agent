@@ -25,7 +25,7 @@ const (
 )
 
 // Keep extension routing in one place. The document preview package owns its
-// supported Office formats; all other UI paths use this table.
+// supported Word format; all other UI paths use this table.
 var workspaceFileKindsByExtension = map[string]workspaceFileKind{
 	".md": workspaceFileMarkdown, ".markdown": workspaceFileMarkdown,
 	".html": workspaceFileHTML, ".htm": workspaceFileHTML,
@@ -38,7 +38,7 @@ var workspaceFileKindsByExtension = map[string]workspaceFileKind{
 	".mp4": workspaceFileVideo, ".m4v": workspaceFileVideo, ".mov": workspaceFileVideo,
 	".webm": workspaceFileVideo, ".ogv": workspaceFileVideo,
 	".pdf": workspaceFilePDF,
-	".doc": workspaceFileProperties, ".xls": workspaceFileProperties,
+	".doc": workspaceFileProperties, ".xls": workspaceFileProperties, ".xlsx": workspaceFileProperties,
 	".ppt": workspaceFileProperties, ".pptx": workspaceFileProperties,
 	".zip": workspaceFileProperties, ".7z": workspaceFileProperties,
 	".rar": workspaceFileProperties, ".gz": workspaceFileProperties,

@@ -52,46 +52,12 @@ func TestWordPreviewReadsRunsHeadingsAndClosesArchive(t *testing.T) {
 	}
 }
 
-func workbookFixture(sheet string) map[string]string {
-	return map[string]string{
-		"xl/workbook.xml":            `<workbook xmlns:r="relationships"><sheets><sheet name="销售数据" sheetId="1" r:id="rId7"/></sheets></workbook>`,
-		"xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="rId7" Target="worksheets/custom.xml"/></Relationships>`,
-		"xl/sharedStrings.xml":       `<sst><si><t>产品</t></si><si><r><t>总</t></r><r><t>数</t></r></si></sst>`,
-		"xl/worksheets/custom.xml":   sheet,
-	}
-}
-
-func TestSpreadsheetPreviewSparseCellsAndCachedFormulas(t *testing.T) {
-	name := archiveFixture(t, ".xlsx", workbookFixture(`<worksheet><sheetData><row r="3"><c r="A3" t="s"><v>0</v></c><c r="C3" t="inlineStr"><is><t>名称</t></is></c></row><row r="1048576"><c r="A1048576" t="s"><v>1</v></c><c r="B1048576"><f>1+2</f><v>3</v></c><c r="D1048576" t="b"><v>1</v></c><c r="XFD1048576"><v>huge coordinate</v></c></row></sheetData></worksheet>`))
-	doc, err := Load(context.Background(), name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(doc.Sheets) != 1 || !doc.Truncated {
-		t.Fatalf("sheets=%+v", doc)
-	}
-	s := doc.Sheets[0]
-	if s.Name != "销售数据" || len(s.Rows) != 2 || s.Rows[1].Number != 1048576 || s.Columns != 4 {
-		t.Fatalf("sparse coordinates expanded memory: %+v", s)
-	}
-	if strings.Join(s.Rows[0].Values, "|") != "产品||名称" || strings.Join(s.Rows[1].Values, "|") != "总数|3||TRUE" {
-		t.Fatalf("values=%+v", s.Rows)
-	}
-}
-
 func TestDocumentPreviewLimitsAndCancellation(t *testing.T) {
 	t.Run("paragraphs", func(t *testing.T) {
 		name := archiveFixture(t, ".docx", map[string]string{"word/document.xml": "<document>" + strings.Repeat("<p><r><t>内容</t></r></p>", maxParagraphs+10) + "</document>"})
 		doc, err := Load(context.Background(), name)
 		if err != nil || !doc.Truncated || len(doc.Paragraphs) != maxParagraphs {
 			t.Fatalf("limit: doc=%+v err=%v", doc, err)
-		}
-	})
-	t.Run("rows", func(t *testing.T) {
-		name := archiveFixture(t, ".xlsx", workbookFixture("<worksheet><sheetData>"+strings.Repeat("<row><c><v>1</v></c></row>", maxRows+10)+"</sheetData></worksheet>"))
-		doc, err := Load(context.Background(), name)
-		if err != nil || !doc.Truncated || len(doc.Sheets[0].Rows) != maxRows {
-			t.Fatalf("row limit: err=%v", err)
 		}
 	})
 	t.Run("expanded XML", func(t *testing.T) {

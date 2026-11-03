@@ -166,12 +166,13 @@ func (a *desktop) showPetBubble(message string, important bool) {
 	seq, generation := a.pet.bubbleSeq, a.pet.generation
 	a.pet.bubbleText, a.pet.bubbleImportant = message, important
 	a.pet.bubbleUntil = now.Add(petBubbleDuration)
+	width, height := petBubbleSize(message)
 	if a.pet.bubbleTimer != nil {
 		a.pet.bubbleTimer.Stop()
 	}
 	if a.pet.bubble == nil {
 		w := mygo.NewWindow(mygo.WindowOptions{
-			Title: "Ally 宠物消息", Width: 260, Height: 78,
+			Title: "Ally 宠物消息", Width: width, Height: height,
 			Frameless: true, Transparent: true, AlwaysOnTop: true, SkipTaskbar: true,
 			DisableResize: true, DisableMaximize: true, DisableMinimize: true, DisableFullScreen: true,
 			DisableShadow: true, Hidden: true, Content: ui.View(a.petBubbleView),
@@ -185,6 +186,7 @@ func (a *desktop) showPetBubble(message string, important bool) {
 			}
 		})
 	} else {
+		a.pet.bubble.SetSize(width, height)
 		a.positionPetBubble()
 		a.pet.bubble.Invalidate()
 		a.pet.bubble.ShowInactive()
@@ -216,31 +218,54 @@ func (a *desktop) positionPetBubble() {
 	if a.pet.win == nil || a.pet.bubble == nil {
 		return
 	}
+	width, height := petBubbleSize(a.pet.bubbleText)
 	r := a.pet.win.Bounds()
 	work := mygo.Screen.DisplayMatching(r).WorkArea
-	x := r.X + (r.Width-260)/2
-	y := r.Y - 78
+	x := r.X + (r.Width-width)/2
+	y := r.Y - height
 	if y < work.Y {
 		y = r.Y + r.Height
 	}
-	if work.Width >= 260 {
-		x = max(work.X, min(x, work.X+work.Width-260))
+	if work.Width >= width {
+		x = max(work.X, min(x, work.X+work.Width-width))
 	}
-	if work.Height >= 78 {
-		y = max(work.Y, min(y, work.Y+work.Height-78))
+	if work.Height >= height {
+		y = max(work.Y, min(y, work.Y+work.Height-height))
 	}
 	a.pet.bubble.SetPosition(x, y)
 }
 
+func petBubbleSize(message string) (width, height int) {
+	textWidth := 0
+	for _, r := range message {
+		if r <= 0x7f {
+			textWidth += 7
+		} else {
+			textWidth += 13
+		}
+	}
+	width = max(petBubbleMinWidth, min(petBubbleMaxWidth, textWidth+petBubblePaddingX*2))
+	contentWidth := width - petBubblePaddingX*2
+	lines := max(1, (textWidth+contentWidth-1)/contentWidth)
+	height = max(petBubbleMinHeight, petBubblePaddingY*2+lines*petBubbleLineHeight)
+	return width, height
+}
+
 func (a *desktop) petBubbleView(c *ui.Context) {
 	c.Root().Background(ui.Transparent)
-	ui.Column(c).Fill().Padding(10, 14).Justify(ui.Center).Radius(14).
+	ui.Column(c).Fill().Padding(petBubblePaddingY, petBubblePaddingX).Justify(ui.Center).Radius(12).
 		Background(ui.RGB(248, 246, 244)).Children(func() {
-		ui.Text(c, a.pet.bubbleText).FontSize(13).TextColor(ui.RGB(53, 55, 64))
+		ui.Text(c, a.pet.bubbleText).FontSize(13).TextColor(ui.RGB(53, 55, 64)).FillWidth().MinWidth(0)
 	})
 }
 
 const (
+	petBubbleMinWidth    = 150
+	petBubbleMaxWidth    = 220
+	petBubbleMinHeight   = 48
+	petBubblePaddingX    = 12
+	petBubblePaddingY    = 8
+	petBubbleLineHeight  = 17
 	petFirstChatterDelay = time.Minute
 	petChatterRetryDelay = 45 * time.Second
 	petMutedChatterDelay = 10 * time.Minute

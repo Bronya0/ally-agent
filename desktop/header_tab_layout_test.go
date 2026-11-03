@@ -124,7 +124,7 @@ func TestHeaderDividerContinuesUnderCaptionControls(t *testing.T) {
 		a := &desktop{ready: true, page: "chat", win: &mygo.Window{}, tabs: []*conversation{{ID: "tab", Workspace: "cam"}}}
 		a.prefs.Appearance = appearance
 		tt := ui.NewTester(func(c *ui.Context) { c.SetTheme(a.theme()); a.headerBar(c) }, 900, 100)
-		for _, name := range []string{"最小化", "最大化", "关闭窗口"} {
+		for _, name := range []string{"最小化", "最大化", "退出应用"} {
 			r, ok := tt.Find(name)
 			if !ok {
 				t.Fatalf("missing %s", name)
@@ -135,7 +135,7 @@ func TestHeaderDividerContinuesUnderCaptionControls(t *testing.T) {
 				t.Fatalf("%s %s background differs from header: %v want %v", appearance, name, got, want)
 			}
 		}
-		for _, hover := range []string{"最小化", "最大化", "关闭窗口"} {
+		for _, hover := range []string{"最小化", "最大化", "退出应用"} {
 			r, ok := tt.Find(hover)
 			if !ok {
 				t.Fatal("missing window control")
@@ -145,7 +145,7 @@ func TestHeaderDividerContinuesUnderCaptionControls(t *testing.T) {
 			}
 			tt.Move(r.X+r.W/2, r.Y+r.H/2)
 			tt.Advance(200 * time.Millisecond)
-			for _, name := range []string{"最小化", "最大化", "关闭窗口"} {
+			for _, name := range []string{"最小化", "最大化", "退出应用"} {
 				b, _ := tt.Find(name)
 				for x := int(b.X) + 1; x < int(b.X+b.W)-1; x++ {
 					v := tt.Image().RGBAAt(x, 43)
@@ -188,7 +188,7 @@ func TestHeaderTabsTrackSidebarBoundary(t *testing.T) {
 				t.Fatalf("bar=%v rail=%v tab starts %v want %v", bar, width, tab.X, want)
 			}
 			logo, ok := tt.Find("应用 Logo")
-			left := railPadH
+			left := float32(6)
 			if width > 0 {
 				left = 6 + railInsetForWidth(width)
 			}

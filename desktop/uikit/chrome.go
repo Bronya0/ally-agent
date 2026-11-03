@@ -229,8 +229,15 @@ func Notice(c *ui.Context, tone NoticeTone, message string, ink ...ui.Color) {
 // ErrorText is the shared one-line error presentation. Normalize only this
 // display string; callers retain the original diagnostics and model context.
 func ErrorText(c *ui.Context, message string) ui.Element {
-	return ui.Text(c, strings.Join(strings.Fields(message), " ")).FontSize(FontSmall).
+	text := ui.Text(c, strings.Join(strings.Fields(message), " ")).FontSize(FontSmall).
 		TextColor(c.Theme().Danger).FillWidth().MinWidth(0).SingleLine().Selectable()
+	Tooltip(c, text, message)
+	ContextMenu(text, func(menu *ui.Menu) {
+		if menu.Item("复制错误全文").Chosen() {
+			c.WriteClipboard(message)
+		}
+	})
+	return text
 }
 
 // InlineError 是一行红字，用于表单字段下面。

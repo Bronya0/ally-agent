@@ -321,7 +321,10 @@ func (a *App) ensureMediaServer() (baseURL, token string, err error) {
 	if mediaSvc.running {
 		return mediaSvc.baseURL, mediaSvc.token, nil
 	}
-	tok := generateApiToken()
+	tok, err := generateApiToken()
+	if err != nil {
+		return "", "", err
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", "", fmt.Errorf("media listen: %w", err)

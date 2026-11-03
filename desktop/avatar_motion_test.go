@@ -150,6 +150,7 @@ func TestWelcomeAnimationStopsWhenPetEnabledAndResumes(t *testing.T) {
 
 func TestWelcomeAvatarRespondsWithoutChangingPetAffection(t *testing.T) {
 	a := &desktop{prefs: defaultPrefs(), avatarStyle: "glm"}
+	a.prefs.Pet.Enabled = false
 	a.prefs.Avatar = "glm"
 	a.avatarPoses = decodeAvatarStyle("glm")
 	defer releaseAvatarPoses(a.avatarPoses)

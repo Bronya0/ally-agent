@@ -285,6 +285,9 @@ func (a *desktop) prepareAttachmentPaths(t *conversation, paths []string) {
 }
 func (a *desktop) dropAttachments(t *conversation, paths []string) {
 	if !canAddAttachments(t, a.closing) {
+		if t != nil && t.AttachmentLoading && len(paths) > 0 {
+			a.notify("附件仍在准备，请稍后重新拖入")
+		}
 		return
 	}
 	t.AttachmentLoading = true
@@ -319,12 +322,16 @@ func canAddAttachments(t *conversation, closing bool) bool {
 // image to the editor. Windows and Linux report Cmd+V as a key the input sees,
 // macOS as the Edit menu's paste command, so both routes call this.
 func (a *desktop) pasteImageFromClipboard(c *ui.Context, t *conversation) bool {
-	if !canAddAttachments(t, a.closing) {
+	if t == nil || a.closing {
 		return false
 	}
 	data := clipboardImage(c)
 	if len(data) == 0 {
 		return false
+	}
+	if t.AttachmentLoading {
+		a.notify("附件仍在准备，请稍后重新粘贴图片")
+		return true
 	}
 	a.pasteAttachment(t, data)
 	return true
@@ -403,11 +410,22 @@ func (a *desktop) activateTab(index int) {
 		a.touchAttachmentImageCache(previous.ID)
 	}
 	a.active = index
+	a.ensureSSHWorkspaceLoaded(next.Workspace)
 	a.touchAttachmentImageCache(next.ID)
 	a.trimAttachmentImageCache()
-	if a.page == "chat" && a.win != nil && next.AttachmentImages == nil {
-		a.loadSessionAttachmentImages(next)
+	a.restoreAttachmentImages(next)
+}
+
+func (a *desktop) restoreAttachmentImages(t *conversation) {
+	if t == nil || a.win == nil || a.closing || a.mainWindowHidden || a.page != "chat" || a.current() != t || t.AttachmentImageJobs > 0 {
+		return
 	}
+	if t.AttachmentImages != nil && !t.AttachmentImagesNeedReload {
+		return
+	}
+	a.releaseAttachmentImages(t)
+	t.AttachmentImagesNeedReload = false
+	a.loadSessionAttachmentImages(t)
 }
 
 func (a *desktop) touchAttachmentImageCache(sessionID string) {
@@ -471,8 +489,9 @@ func (a *desktop) releaseAttachmentImages(t *conversation) {
 	if t == nil {
 		return
 	}
-	// Let active decodes finish before dropping their map. That keeps a quick
-	// tab switch from starting a second batch for the same conversation.
+	// A live batch may lose results while hidden. Wait for it before rebuilding
+	// the cache, but remember the reload even if the window returns meanwhile.
+	t.AttachmentImagesNeedReload = true
 	if t.AttachmentImageJobs > 0 {
 		return
 	}
@@ -497,6 +516,7 @@ func (a *desktop) discardAttachmentImagesOnShutdown() {
 		t.PendingAttachmentImages = nil
 		t.AttachmentImageVersions = nil
 		t.AttachmentImageJobs = 0
+		t.AttachmentImagesNeedReload = false
 	}
 	for _, t := range a.tabs {
 		discard(t)
@@ -512,7 +532,7 @@ func (a *desktop) discardAttachmentImagesOnShutdown() {
 }
 
 func (a *desktop) shouldCacheAttachmentImages(t *conversation) bool {
-	if t == nil {
+	if t == nil || a.mainWindowHidden {
 		return false
 	}
 	if a.current() == t {
@@ -537,6 +557,8 @@ func (a *desktop) finishAttachmentImageJob(t *conversation) {
 		t.AttachmentImageVersions = nil
 		if !a.shouldCacheAttachmentImages(t) {
 			a.releaseAttachmentImages(t)
+		} else if t.AttachmentImagesNeedReload {
+			a.restoreAttachmentImages(t)
 		}
 	}
 }

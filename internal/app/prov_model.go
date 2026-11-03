@@ -1694,18 +1694,22 @@ func promptCachePinStore(cfg ConfigState) bool {
 // request only reuses a cached prefix when it lands where that prefix was
 // written; the header decides routing, not whether the prefix matches.
 //
-// Both names carry the same session-derived key and are sent on every endpoint
-// by design: ChatGPT routes affinity on session-id (the header Codex sends on
-// Responses), OpenRouter documents x-session-id, and the rest ignore unknown
-// headers. The value is the hashed session key, so no raw session id leaves the
-// client, and it stays stable within a conversation — that stability is what
-// makes the affinity useful.
+// Both names default to enabled on every endpoint; settings can independently
+// disable automatic injection without affecting custom model headers. Values
+// use the same hashed session key and stay stable within a conversation.
 func sessionAffinityHeaders(cfg ConfigState) map[string]string {
 	key := strings.TrimSpace(cfg.responsesPromptCacheKey)
 	if key == "" {
 		return nil
 	}
-	return map[string]string{"session-id": key, "x-session-id": key}
+	headers := make(map[string]string, 2)
+	if boolDefault(cfg.SendSessionIDHeader, true) {
+		headers["session-id"] = key
+	}
+	if boolDefault(cfg.SendXSessionIDHeader, true) {
+		headers["x-session-id"] = key
+	}
+	return headers
 }
 
 func modelResponseStopError(cfg ConfigState, result *modelStreamResult) error {

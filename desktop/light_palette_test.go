@@ -29,6 +29,13 @@ func TestLightAccentsRemainColoredAndReadable(t *testing.T) {
 				t.Errorf("palette %d contrast %.2f", index, contrast)
 			}
 		}
+		for _, bg := range []ui.Color{p.bg, p.panel, p.headerColor()} {
+			hover := a.theme().AccentHover
+			contrast := (colorLuminance(bg) + .05) / (colorLuminance(hover) + .05)
+			if contrast < 4.5 {
+				t.Errorf("palette %d hover contrast %.2f", index, contrast)
+			}
+		}
 	}
 	a := &desktop{}
 	a.prefs.Palette = paletteAmber

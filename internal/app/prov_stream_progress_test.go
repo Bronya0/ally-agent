@@ -110,3 +110,44 @@ func TestOpenAIChatStreamEmitsToolStartDuringStreaming(t *testing.T) {
 		t.Fatalf("expected at least one tool:update during streaming, got events %v", events)
 	}
 }
+
+func TestRunChatKeepsMixedReasoningAndContentTogether(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"id":"mixed","choices":[{"index":0,"delta":{"reasoning_content":"tail","content":"answer"}}]}`+"\n\n")
+		fmt.Fprint(w, sseChatFinishChunk("stop"), sseDone)
+	}))
+	defer server.Close()
+
+	a := newIsolatedChatTestApp(t)
+	cfg := a.config
+	cfg.APIFormat = apiFormatOpenAIChat
+	cfg.BaseURL = server.URL
+	cfg.APIKey = "test"
+	cfg.Model = "test-model"
+	var deltas []map[string]any
+	var terminal string
+	a.events = nativeEventSink{send: func(name string, payload any) {
+		if name == runStreamEvent {
+			deltas = append(deltas, payload.(map[string]any))
+		}
+		if name == "run:done" || name == "run:error" {
+			terminal = name
+		}
+	}}
+	a.runChat(t.Context(), "mixed-run", ChatRequest{SessionID: "mixed-session", Message: "hi"}, cfg)
+	if terminal != "run:done" {
+		t.Fatalf("run ended with %q, want run:done", terminal)
+	}
+	if len(deltas) != 1 || deltas[0]["content"] != "answer" || deltas[0]["reasoningLen"] != len("tail") {
+		t.Fatalf("mixed chunk must not emit thinking after its answer: %#v", deltas)
+	}
+	history := a.histories["mixed-session"]
+	last := history[len(history)-1]
+	if last.Content != "answer" || last.ReasoningContent != "tail" {
+		t.Fatalf("mixed chunk lost model history: %+v", last)
+	}
+}

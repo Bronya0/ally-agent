@@ -1148,13 +1148,38 @@ func resultText(result map[string]any) string {
 
 // commandOutput keeps protocol metadata out of the terminal transcript.
 func commandOutput(result map[string]any) string {
-	var parts []string
-	for _, key := range []string{"output", "stdout", "stderr", "text", "_text"} {
-		if value := str(result, key); value != "" {
-			parts = append(parts, value)
+	return commandOutputFromKey(commandKey(result))
+}
+
+// Walk the original fields from the end, without copying a potentially large
+// command transcript just to display its last few nonblank lines.
+func commandResultPreview(result map[string]any, lines int) string {
+	if lines <= 0 {
+		return ""
+	}
+	key := commandKey(result)
+	kept := make([]string, 0, lines)
+	for _, part := range [...]string{key.raw, key.text, key.stderr, key.stdout, key.output} {
+		for part != "" && len(kept) < lines {
+			index := strings.LastIndexByte(part, '\n')
+			row := part[index+1:]
+			row = strings.Join(strings.FieldsFunc(row, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\f' || r == '\v' }), " ")
+			if row != "" {
+				kept = append(kept, row)
+			}
+			if index < 0 {
+				break
+			}
+			part = part[:index]
+		}
+		if len(kept) >= lines {
+			break
 		}
 	}
-	return strings.Join(parts, "\n")
+	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
+		kept[i], kept[j] = kept[j], kept[i]
+	}
+	return strings.Join(kept, "\n")
 }
 
 // stripBlankLines drops empty and whitespace-only lines. Shell output arrives
@@ -1234,10 +1259,6 @@ func toolChips(name, state string, args, result map[string]any) []string {
 		if qs := list(result, "questions"); len(qs) > 0 {
 			chips = append(chips, fmt.Sprintf("%d 个问题", len(qs)))
 		}
-	case "wait":
-		if s := int(num(args, "seconds")); s > 0 {
-			chips = append(chips, fmt.Sprintf("%ds", s))
-		}
 	case "subagent":
 		if steps := int(num(result, "steps")); steps > 0 {
 			chips = append(chips, fmt.Sprintf("%d 步", steps))
@@ -1260,7 +1281,7 @@ func toolChips(name, state string, args, result map[string]any) []string {
 func toolPreview(name string, args, result map[string]any, lines int) string {
 	switch name {
 	case "command", "remote_run_command":
-		return commandPreviewText(commandOutput(result), lines)
+		return commandResultPreview(result, lines)
 	case "edit", "remote_edit":
 		if diff := str(result, "diff"); diff != "" {
 			return tailLines(unifiedSnippet(diff, 8), lines)
@@ -1318,9 +1339,9 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 		// The transcript is the whole log: joining and stripping it again on every
 		// frame copied the entire output, the biggest text a card holds.
 		holder := ui.Column(c.Key(fmt.Sprintf("tool-out-holder-%d", index)))
-		memo := memoAt[textMemo](holder, "output")
+		memo := memoAt[memoOf[commandOutputKey, string]](holder, "output")
 		holder.Children(func() {
-			output := memo.get(commandOutput(result), stripBlankLines)
+			output := memo.get(commandKey(result), func(key commandOutputKey) string { return stripBlankLines(commandOutputFromKey(key)) })
 			if output == "" {
 				output = "(没有输出)"
 			}
@@ -1430,6 +1451,7 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 	outer.Children(func() {
 		for _, pair := range visible {
 			if strings.HasPrefix(pair.left, "@@") || strings.HasPrefix(pair.left, "---") || strings.HasPrefix(pair.right, "+++") {
+				ui.Text(c, pair.left).FillWidth().Padding(3, 8).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).Selectable()
 				continue
 			}
 			row := ui.Row(c).FillWidth().MinWidth(0).Shrink(0).AlignItems(ui.Stretch)
@@ -1625,7 +1647,7 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 				}
 			})
 			if desc := str(m, "description"); desc != "" {
-				uikit.Tooltip(c, ui.Text(c, desc).FontSize(fsSmall).TextColor(a.secondaryInk()).MaxLines(2), desc)
+				uikit.Tooltip(c, ui.Text(c, desc).AlignSelf(ui.Start).FontSize(fsSmall).TextColor(a.secondaryInk()).MaxLines(2), desc)
 			}
 			ui.Row(c).Gap(gapInline).Wrap().AlignItems(ui.Center).Children(func() {
 				if steps := int(num(m, "steps")); steps > 0 {

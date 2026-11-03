@@ -118,19 +118,27 @@ type ScheduledTaskToolResult struct {
 }
 
 type scheduledTaskManager struct {
-	app       *App
-	events    eventSink
-	cron      *cron.Cron
-	path      string
-	mu        sync.Mutex
-	tasks     map[string]*ScheduledTask
-	entries   map[string]cron.EntryID
-	timers    map[string]*time.Timer
-	schedules map[string]cron.Schedule
-	cancels   map[string]context.CancelFunc
-	runSem    chan struct{}
-	stopped   bool
-	workers   sync.WaitGroup
+	app        *App
+	events     eventSink
+	cron       *cron.Cron
+	path       string
+	mu         sync.Mutex
+	eventMu    sync.Mutex
+	flushing   bool
+	eventQueue []scheduledTaskEvent // protected by mu; published in mutation order
+	tasks      map[string]*ScheduledTask
+	entries    map[string]cron.EntryID
+	timers     map[string]*time.Timer
+	schedules  map[string]cron.Schedule
+	cancels    map[string]context.CancelFunc
+	runSem     chan struct{}
+	stopped    bool
+	workers    sync.WaitGroup
+}
+
+type scheduledTaskEvent struct {
+	name    string
+	payload map[string]any
 }
 
 func (a *App) startScheduledTaskManager() error {
@@ -413,25 +421,30 @@ func (m *scheduledTaskManager) create(cfg ConfigState, req ScheduledTaskToolRequ
 		}
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.stopped {
+		m.mu.Unlock()
 		return nil, errors.New("scheduled task manager is stopped")
 	}
 	if len(m.tasks) >= maxScheduledTasks {
+		m.mu.Unlock()
 		return nil, codedToolError("E_SCHEDULED_TASK_LIMIT", fmt.Errorf("scheduled task limit reached (%d)", maxScheduledTasks))
 	}
 	m.tasks[task.ID] = task
 	if err := m.registerLocked(task, now); err != nil {
 		delete(m.tasks, task.ID)
+		m.mu.Unlock()
 		return nil, err
 	}
 	if err := m.persistLocked(); err != nil {
 		m.unregisterLocked(task.ID)
 		delete(m.tasks, task.ID)
+		m.mu.Unlock()
 		return nil, err
 	}
 	copyTask := cloneScheduledTask(task)
-	go m.emit("scheduled:update", map[string]any{"task": copyTask})
+	m.queueEventLocked("scheduled:update", map[string]any{"task": copyTask})
+	m.mu.Unlock()
+	m.flushEvents()
 	return &copyTask, nil
 }
 
@@ -468,11 +481,14 @@ func (m *scheduledTaskManager) delete(id string) error {
 	}
 	delete(m.tasks, id)
 	err := m.persistLocked()
+	if err == nil {
+		m.queueEventLocked("scheduled:update", map[string]any{"deleted": id})
+	}
 	m.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	m.emit("scheduled:update", map[string]any{"deleted": id})
+	m.flushEvents()
 	return nil
 }
 
@@ -569,8 +585,9 @@ func (m *scheduledTaskManager) trigger(id string) {
 		task.UpdatedAt = time.Now().UnixMilli()
 		_ = m.persistLocked()
 		copyTask := cloneScheduledTask(task)
+		m.queueEventLocked("scheduled:update", map[string]any{"task": copyTask})
 		m.mu.Unlock()
-		m.emit("scheduled:update", map[string]any{"task": copyTask})
+		m.flushEvents()
 		return
 	}
 	select {
@@ -582,8 +599,9 @@ func (m *scheduledTaskManager) trigger(id string) {
 		task.UpdatedAt = time.Now().UnixMilli()
 		_ = m.persistLocked()
 		copyTask := cloneScheduledTask(task)
+		m.queueEventLocked("scheduled:update", map[string]any{"task": copyTask})
 		m.mu.Unlock()
-		m.emit("scheduled:update", map[string]any{"task": copyTask})
+		m.flushEvents()
 		return
 	}
 	now := time.Now()
@@ -599,9 +617,10 @@ func (m *scheduledTaskManager) trigger(id string) {
 	}
 	_ = m.persistLocked()
 	copyTask := cloneScheduledTask(task)
+	m.queueEventLocked("scheduled:run_start", map[string]any{"task": copyTask})
 	m.workers.Add(1)
 	m.mu.Unlock()
-	m.emit("scheduled:run_start", map[string]any{"task": copyTask})
+	m.flushEvents()
 	go func() { defer m.workers.Done(); m.run(copyTask) }()
 }
 
@@ -814,12 +833,59 @@ func (m *scheduledTaskManager) finish(id, status, summary, errText string) {
 	task.UpdatedAt = time.Now().UnixMilli()
 	_ = m.persistLocked()
 	copyTask := cloneScheduledTask(task)
-	m.mu.Unlock()
 	event := "scheduled:run_done"
 	if status != "completed" {
 		event = "scheduled:run_error"
 	}
-	m.emit(event, map[string]any{"task": copyTask})
+	m.queueEventLocked(event, map[string]any{"task": copyTask})
+	m.mu.Unlock()
+	m.flushEvents()
+}
+
+// queueEventLocked records an event while the task mutation lock is held.
+// flushEvents publishes this FIFO only after unlocking, so a create event can
+// never arrive after a later delete even when the event sink calls back into app.
+func (m *scheduledTaskManager) queueEventLocked(name string, payload map[string]any) {
+	m.eventQueue = append(m.eventQueue, scheduledTaskEvent{name: name, payload: payload})
+}
+
+func (m *scheduledTaskManager) flushEvents() {
+	m.eventMu.Lock()
+	if m.flushing {
+		m.eventMu.Unlock()
+		return
+	}
+	m.flushing = true
+	m.eventMu.Unlock()
+
+	for {
+		m.mu.Lock()
+		if len(m.eventQueue) > 0 {
+			event := m.eventQueue[0]
+			m.eventQueue[0] = scheduledTaskEvent{}
+			m.eventQueue = m.eventQueue[1:]
+			if len(m.eventQueue) == 0 {
+				m.eventQueue = nil
+			}
+			m.mu.Unlock()
+			m.emit(event.name, event.payload)
+			continue
+		}
+		m.mu.Unlock()
+
+		// Recheck with both guards so a mutation queued between the empty check
+		// and clearing flushing is either drained here or starts a new flusher.
+		m.eventMu.Lock()
+		m.mu.Lock()
+		if len(m.eventQueue) == 0 {
+			m.flushing = false
+			m.mu.Unlock()
+			m.eventMu.Unlock()
+			return
+		}
+		m.mu.Unlock()
+		m.eventMu.Unlock()
+	}
 }
 
 func (m *scheduledTaskManager) emit(name string, payload map[string]any) {

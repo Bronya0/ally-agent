@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -129,18 +130,6 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 				})
 			})
 			return
-		}
-		if file.Document != nil && len(file.Document.Sheets) > 0 {
-			ui.Row(c).FillWidth().Padding(padRow).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				fieldLabel(c, "工作表")
-				names := make([]string, len(file.Document.Sheets))
-				for i, sheet := range file.Document.Sheets {
-					names[i] = sheet.Name
-				}
-				uikit.Select(c.Key("document-sheet"), &file.DocumentSheet, names).Width(220).Label("预览工作表").OnChange(func() {
-					a.selectWorkspaceDocumentSheet(file, file.DocumentSheet)
-				})
-			})
 		}
 		if file.PreviewPath != "" || file.PreviewHTML != "" || file.Document != nil || file.MarkupPreview {
 			a.workspaceFilePreviewView(c, file)
@@ -504,11 +493,40 @@ func (a *desktop) deleteFileEntry(entry backend.FileEntry) {
 	a.confirmAction("确认删除", detail, func() error {
 		return a.core.DeletePath(backend.DeletePathRequest{Workspace: t.Workspace, Paths: []string{entry.Path}, Recursive: entry.Dir})
 	}, func() {
-		if file := a.activeFile(); file != nil && strings.HasPrefix(file.Path, entry.Path) {
+		if file := a.activeFile(); file != nil && workspacePathContains(entry.Path, file.Path) {
 			a.closeFile()
 		}
 		a.refreshFiles()
 	})
+}
+
+// workspacePathContains reports whether child is the same workspace-relative
+// path as parent or lies beneath it at a path-segment boundary.
+func workspacePathContains(parent, child string) bool {
+	parent = filepath.Clean(filepath.FromSlash(parent))
+	child = filepath.Clean(filepath.FromSlash(child))
+	if parent == "." {
+		return !filepath.IsAbs(child)
+	}
+	if child == "." {
+		return false
+	}
+	parentParts := strings.Split(filepath.ToSlash(parent), "/")
+	childParts := strings.Split(filepath.ToSlash(child), "/")
+	if len(parentParts) > len(childParts) {
+		return false
+	}
+	caseInsensitive := runtime.GOOS == "windows" || runtime.GOOS == "darwin"
+	for i, part := range parentParts {
+		if caseInsensitive {
+			if !strings.EqualFold(part, childParts[i]) {
+				return false
+			}
+		} else if part != childParts[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *desktop) toggleFolder(path string) {

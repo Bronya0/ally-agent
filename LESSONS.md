@@ -94,4 +94,12 @@
 
 [stream-fixed-height] 2026-11-03 中危 流式态用固定高度 Box 包会自收缩的内容：短内容卡片偏高，完成时下方内容被上顶。@desktop/tool_cards.go
 
+2026-11-02 中危 image-restore 在途结果丢弃须记补载；所有唤回统一 OnShow，不能只判缓存 nil。@desktop/attachments.go
+
+2026-11-02 中危 thinking-phase 思考计数只在整轮清零会跨段累加；工具/正文结束即清零，正文与思考同包须合并发出。@desktop/events.go
+
+[preview-loadurl] 2026-11-03 中危 文件预览走异步 LoadURL+协议处理器比 NavigateToString 慢，切换像卡死。@desktop/preview_lifecycle.go
+
+[mono-generic-font] 2026-11-03 高危 字体用泛型 "" 或 "monospace"：中文每段重做字体匹配，79KB md 首屏 720ms。统一用 appFontFamily。@desktop/theme.go
+
 [asr-route] 2026-11-03 中危 百炼 ASR 路由随模型而非模式：qwen3-asr→chat、qwen-audio/fun-asr→multimodal，音频只收 data URI。@internal/app/biz_voice.go

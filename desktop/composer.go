@@ -193,11 +193,12 @@ func (a *desktop) composerKeys(c *ui.Context, t *conversation, input ui.Element)
 				}
 				return true
 			case ui.KeyTab, ui.KeyEnter:
-				if st.Mention.Loading {
+				if st.Mention.Loading && len(st.Mention.Entries) == 0 && k.Key == ui.KeyTab {
 					return true
 				}
-				a.applyMention(t)
-				return true
+				if !st.Mention.Loading && a.applyMention(t) {
+					return true
+				}
 			case ui.KeyEscape:
 				st.Mention.Open = false
 				return true
@@ -329,10 +330,10 @@ func (a *desktop) searchMentions(t *conversation, query string) {
 	})
 }
 
-func (a *desktop) applyMention(t *conversation) {
+func (a *desktop) applyMention(t *conversation) bool {
 	st := t.uiState()
 	if st.Mention.Index < 0 || st.Mention.Index >= len(st.Mention.Entries) {
-		return
+		return false
 	}
 	entry := st.Mention.Entries[st.Mention.Index]
 	path := entry.Path
@@ -344,10 +345,12 @@ func (a *desktop) applyMention(t *conversation) {
 		replacement = "@\"" + path + "\""
 	}
 	at := strings.LastIndex(t.Draft, "@")
-	if at >= 0 {
-		t.Draft = t.Draft[:at] + replacement + " "
+	if at < 0 {
+		return false
 	}
+	t.Draft = t.Draft[:at] + replacement + " "
 	st.Mention.Open = false
+	return true
 }
 
 // ---- Menus ---------------------------------------------------------------
@@ -1438,11 +1441,7 @@ func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 				ui.Column(c).Children(func() {
 					for i, repo := range git.Repos {
 						repo := repo
-						stats := fmt.Sprintf("↑%d ↓%d +%d ~%d -%d", repo.Ahead, repo.Behind, repo.Added, repo.Modified, repo.Deleted)
-						if repo.Ahead+repo.Behind+repo.Added+repo.Modified+repo.Deleted == 0 {
-							stats = "clean"
-						}
-						popoverItem(c, fmt.Sprintf("git-repo-%d", i), repo.Name+"/  "+repo.Branch, stats, false, func() {
+						gitRepoPopoverItem(c, fmt.Sprintf("git-repo-%d", i), repo, func() {
 							*open = false
 							a.filesF.GitOpen = true
 							a.filesF.GitRepo = repo.Path
@@ -1454,6 +1453,51 @@ func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 			})
 		})
 	}
+}
+
+func gitRepoPopoverItem(c *ui.Context, key string, repo backend.GitRepoItem, action func(), ink ...ui.Color) {
+	t := c.Theme()
+	label := repo.Name + "/" + repo.Branch
+	row := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(44).Padding(5, 10).
+		Justify(ui.Start).Radius(radiusSmall).Label(label).Cursor(ui.CursorPointer).OnClick(action)
+	if row.Hovered() {
+		row.Background(t.SurfaceHover)
+	}
+	row.Children(func() {
+		ui.Column(c).FillWidth().Gap(4).Children(func() {
+			ui.Row(c).FillWidth().Gap(3).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, short(repo.Name, 22)).FontSize(fsBody).TextColor(t.Text).SingleLine().Shrink(1).MinWidth(0)
+				ui.Text(c, "/").FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Shrink(0)
+				ui.Text(c, short(repo.Branch, 18)).FontSize(fsSmall).TextColor(t.Accent).SingleLine().Shrink(0)
+				ui.Spacer(c)
+			})
+			if repo.Ahead > 0 || repo.Behind > 0 || repo.Added > 0 || repo.Modified > 0 || repo.Deleted > 0 {
+				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+					gitRepoStatusTag(c, "ahead", "↑", repo.Ahead, uikit.Info)
+					gitRepoStatusTag(c, "behind", "↓", repo.Behind, uikit.Warning)
+					gitRepoStatusTag(c, "added", "+", repo.Added, uikit.Success)
+					gitRepoStatusTag(c, "modified", "~", repo.Modified, uikit.Warning)
+					gitRepoStatusTag(c, "deleted", "−", repo.Deleted, uikit.Error)
+				})
+			}
+		})
+	})
+	uikit.Tooltip(c, row, label)
+}
+
+func gitRepoStatusTag(c *ui.Context, key, symbol string, count int, tone uikit.Tone) {
+	if count <= 0 {
+		return
+	}
+	gitRepoStatusChip(c.Key(key), fmt.Sprintf("%s%d", symbol, count), tone)
+}
+
+func gitRepoStatusChip(c *ui.Context, label string, tone uikit.Tone) {
+	color := uikit.ToneColor(c, tone)
+	ui.Row(c).Height(18).Padding(0, 5).AlignItems(ui.Center).Radius(5).
+		Background(color.Alpha(0.08)).Children(func() {
+		ui.Text(c, label).FontSize(fsTiny).TextColor(color).SingleLine()
+	})
 }
 
 func gitStatsText(git backend.GitStatus) string {

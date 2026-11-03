@@ -105,18 +105,17 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			t.Status = "正在取消…"
 		}
 		ui.ThinkingBytes = 0
-		ui.Follow = true
+		followLatest(t)
 		ui.CompactNote = ""
 	case "run:attachment":
 		a.recordAttachmentReference(t, p)
 	case "run:image":
+		ui.ThinkingBytes = 0
 		a.recordGeneratedImage(t, p)
 	case "run:stream", "run:delta":
-		if n := int(num(p, "reasoningLen")); n > 0 {
-			t.uiState().ThinkingBytes += n
-		}
 		content := str(p, "content")
 		if content != "" {
+			ui.ThinkingBytes = 0
 			n := len(t.Messages)
 			// A summary that replaced the transcript is not this run's answer: the
 			// next delta opens a fresh row instead of growing the summary.
@@ -126,7 +125,8 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			m := t.Messages[len(t.Messages)-1]
 			m["content"] = str(m, "content") + content
 			t.Status = "正在回复…"
-		} else {
+		} else if n := int(num(p, "reasoningLen")); n > 0 {
+			ui.ThinkingBytes += n
 			t.Status = "正在思考…"
 		}
 		// Reasoning only changes the footer, not transcript geometry.
@@ -136,6 +136,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	case "tool:start", "tool:update", "tool:result", "tool:error":
 		a.applyToolEvent(t, name, p)
 	case "ask:ready":
+		ui.ThinkingBytes = 0
 		t.AskID = str(p, "askId")
 		b, _ := json.Marshal(p["questions"])
 		_ = json.Unmarshal(b, &t.Questions)
@@ -152,6 +153,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		t.Questions = nil
 		ui.AskSubmitted = false
 	case "run:retry":
+		ui.ThinkingBytes = 0
 		ui.Retry = &retryInfo{
 			Attempt:     int(num(p, "attempt")),
 			MaxAttempts: int(num(p, "maxAttempts")),
@@ -182,11 +184,13 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	case "run:compact":
 		// The automatic path announces its summary request before running it: this
 		// is a start, not a result. The result arrives as run:compacted.
+		ui.ThinkingBytes = 0
 		ui.CompactBusy = true
 		ui.CompactThinking = 0
 		ui.CompactNote = compactStartNote(p)
 		t.Status = ui.CompactNote
 	case "compact:start":
+		ui.ThinkingBytes = 0
 		ui.CompactBusy = true
 		ui.CompactThinking = 0
 		ui.CompactNote = compactStartNote(p)
@@ -208,6 +212,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			dropCompactPreview(t)
 		}
 	case "run:compacted":
+		ui.ThinkingBytes = 0
 		ui.CompactBusy = false
 		ui.CompactThinking = 0
 		ui.CompactNote = ""
@@ -228,8 +233,10 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			a.notify(compactionToast(p))
 		}
 	case "run:inject":
+		ui.ThinkingBytes = 0
 		t.Status = "已注入新消息，继续执行…"
 	case "run:done", "run:error":
+		ui.ThinkingBytes = 0
 		ui.PlanCollapsed = true
 		for _, call := range t.Messages {
 			if str(call, "role") == "tool_call" && toolState(call) == "running" {
@@ -254,9 +261,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 				msg = "运行失败"
 			}
 			t.Status = msg
-			if !hasErrorTail(t.Messages, msg) {
-				t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": msg, "error": true})
-			}
+			appendRunError(t, msg)
 		}
 		idx := lastContentIndex(t.Messages)
 		if idx >= 0 {
@@ -280,6 +285,16 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			a.refreshFiles()
 			a.refreshGit(t)
 		}
+	}
+}
+
+func appendRunError(t *conversation, msg string) {
+	if hasErrorTail(t.Messages, msg) {
+		return
+	}
+	t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": msg, "error": true})
+	if st := t.uiState(); st.Follow {
+		st.FollowPending = true
 	}
 }
 
@@ -322,6 +337,7 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 	if name == "tool:update" && (str(m, "status") == "success" || str(m, "status") == "error") {
 		return
 	}
+	t.uiState().ThinkingBytes = 0
 	m["toolState"] = name
 	if name == "tool:result" || name == "tool:error" {
 		if started, ok := m["startedAt"].(time.Time); ok && num(m, "durationMs") == 0 {
@@ -426,23 +442,37 @@ func (a *desktop) applyServiceUpdate(p map[string]any) {
 	if json.Unmarshal(b, &service) != nil || service.ID == "" {
 		return
 	}
-	for i := range a.services {
-		if a.services[i].ID == service.ID {
-			a.services[i] = service
-			if a.tasksF.LogService == service.ID && a.tasksF.LogOpen {
-				// A running service appends: keep the dialog on the newest line
-				// unless the reader scrolled up from it.
-				atEnd := a.serviceLogAtEnd()
-				a.tasksF.LogBody = service.OutputTail
-				a.tasksF.LogMeta = serviceMeta(service)
-				if atEnd {
-					a.followServiceLog()
-				}
-			}
+	a.services = upsertServiceInfo(a.services, service)
+	if a.tasksF.Loading {
+		if a.tasksF.ServiceChanges == nil {
+			a.tasksF.ServiceChanges = make(map[string]backend.ServiceInfo)
+		}
+		a.tasksF.ServiceChanges[service.ID] = service
+	}
+	if a.tasksF.LogService == service.ID && a.tasksF.LogOpen {
+		a.tasksF.LogMeta = serviceMeta(service)
+		if a.tasksF.LogComplete {
+			// Event snapshots are only a short tail; do not discard a fetched log.
 			return
 		}
+		// A running service appends: keep the dialog on the newest line unless
+		// the reader scrolled up from it.
+		atEnd := a.serviceLogAtEnd()
+		a.tasksF.LogBody = service.OutputTail
+		if atEnd {
+			a.followServiceLog()
+		}
 	}
-	a.services = append([]backend.ServiceInfo{service}, a.services...)
+}
+
+func upsertServiceInfo(services []backend.ServiceInfo, service backend.ServiceInfo) []backend.ServiceInfo {
+	for i := range services {
+		if services[i].ID == service.ID {
+			services[i] = service
+			return services
+		}
+	}
+	return append([]backend.ServiceInfo{service}, services...)
 }
 
 func (a *desktop) applyMCPStatus(p map[string]any) {
@@ -451,24 +481,17 @@ func (a *desktop) applyMCPStatus(p map[string]any) {
 	_ = json.Unmarshal(b, &servers)
 	a.mcpServers = servers
 	a.mcpSummary = mcpSummary(servers)
-	go func() {
-		tools := a.core.ListTools()
-		a.win.Update(func() {
-			if !a.closing {
-				a.toolInventory = tools
-				a.toolCount = enabledToolCount(tools)
-			}
-		})
-	}()
+	a.refreshMCPInventory()
 }
 
 func (a *desktop) applyScheduledUpdate(p map[string]any) {
 	if id := str(p, "deleted"); id != "" {
-		for i := range a.tasks {
-			if a.tasks[i].ID == id {
-				a.tasks = append(a.tasks[:i], a.tasks[i+1:]...)
-				return
+		a.tasks = removeScheduledTask(a.tasks, id)
+		if a.tasksF.Loading {
+			if a.tasksF.ScheduledChanges == nil {
+				a.tasksF.ScheduledChanges = make(map[string]scheduledTaskChange)
 			}
+			a.tasksF.ScheduledChanges[id] = scheduledTaskChange{deleted: true}
 		}
 		return
 	}
@@ -481,13 +504,32 @@ func (a *desktop) applyScheduledUpdate(p map[string]any) {
 	if json.Unmarshal(b, &task) != nil || task.ID == "" {
 		return
 	}
-	for i := range a.tasks {
-		if a.tasks[i].ID == task.ID {
-			a.tasks[i] = task
-			return
+	a.tasks = upsertScheduledTask(a.tasks, task)
+	if a.tasksF.Loading {
+		if a.tasksF.ScheduledChanges == nil {
+			a.tasksF.ScheduledChanges = make(map[string]scheduledTaskChange)
+		}
+		a.tasksF.ScheduledChanges[task.ID] = scheduledTaskChange{task: task}
+	}
+}
+
+func upsertScheduledTask(tasks []backend.ScheduledTask, task backend.ScheduledTask) []backend.ScheduledTask {
+	for i := range tasks {
+		if tasks[i].ID == task.ID {
+			tasks[i] = task
+			return tasks
 		}
 	}
-	a.tasks = append(a.tasks, task)
+	return append(tasks, task)
+}
+
+func removeScheduledTask(tasks []backend.ScheduledTask, id string) []backend.ScheduledTask {
+	for i := range tasks {
+		if tasks[i].ID == id {
+			return append(tasks[:i], tasks[i+1:]...)
+		}
+	}
+	return tasks
 }
 
 func (a *desktop) applySubagentEvent(name string, p map[string]any) {
@@ -728,11 +770,57 @@ func (a *desktop) refreshSSH(manual ...bool) {
 			if seq != a.sshRefreshSeq {
 				return
 			}
+			// A workspace may have been activated while this refresh was reading
+			// its snapshot. Keep any cache entry populated for that new workspace.
+			for workspace, ids := range a.sshAllowed {
+				if _, exists := allowed[workspace]; !exists {
+					allowed[workspace] = ids
+				}
+			}
 			a.sshServers = servers
 			a.sshAllowed = allowed
 			if len(manual) > 0 && manual[0] {
 				a.notifySuccess("SSH 列表已刷新")
 			}
+		})
+	}()
+}
+
+// ensureSSHWorkspaceLoaded keeps the footer authorization count accurate as
+// soon as a workspace tab is activated, including on startup. The map key's
+// presence distinguishes a loaded empty grant list from an uncached workspace.
+func (a *desktop) ensureSSHWorkspaceLoaded(workspace string) {
+	if workspace == "" || !a.ready || a.closing || a.core == nil || a.win == nil {
+		return
+	}
+	if _, loaded := a.sshAllowed[workspace]; loaded {
+		return
+	}
+	if a.sshRefreshPending == nil {
+		a.sshRefreshPending = map[string]bool{}
+	}
+	if a.sshRefreshPending[workspace] {
+		return
+	}
+	a.sshRefreshPending[workspace] = true
+	seq, tail := a.sshRefreshSeq, a.sshAuthTail
+	go func() {
+		if tail != nil {
+			<-tail
+		}
+		allowed := a.core.GetWorkspaceAllowedServers(workspace)
+		a.win.Update(func() {
+			delete(a.sshRefreshPending, workspace)
+			if a.closing || seq != a.sshRefreshSeq {
+				return
+			}
+			if _, loaded := a.sshAllowed[workspace]; loaded {
+				return
+			}
+			if a.sshAllowed == nil {
+				a.sshAllowed = map[string][]string{}
+			}
+			a.sshAllowed[workspace] = allowed
 		})
 	}()
 }

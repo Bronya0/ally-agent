@@ -27,6 +27,7 @@ func (a *desktop) refreshPlugins(manual ...bool) {
 				return
 			}
 			a.plugins = plugins
+			a.pluginsRevision++
 			if len(manual) > 0 && manual[0] {
 				a.notifySuccess("插件列表已刷新")
 			}
@@ -59,6 +60,7 @@ func (a *desktop) pluginAction(work func() (string, error)) {
 				return
 			}
 			a.plugins = list
+			a.pluginsRevision++
 			a.config = cfg
 			if message != "" {
 				a.notifySuccess(message)

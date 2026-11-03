@@ -79,7 +79,7 @@ func (a *desktop) compactDelta(t *conversation, content string, reasoningLen int
 		row["content"] = str(row, "content") + content
 		st.CompactThinking = 0
 	}
-	if st.Follow {
+	if content != "" && st.Follow {
 		st.FollowPending = true
 	}
 }
@@ -237,7 +237,7 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 		row := map[string]any{
 			"role": "tool_call", "name": str(m, "name"), "toolCallId": id,
 			"title": str(m, "title"), "status": "success",
-			"body": summary, "result": summary, "fastCompacted": true,
+			"body": summary, "result": map[string]any{"_text": summary}, "fastCompacted": true,
 		}
 		if v := str(m, "mcpServer"); v != "" {
 			row["mcpServer"] = v

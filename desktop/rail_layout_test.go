@@ -55,7 +55,7 @@ func TestRailContentMovesWithWidth(t *testing.T) {
 }
 
 // Revealing the reserved delete slot must keep the title stable, and the
-// revealed action must still remove only the intended history entry.
+// revealed action must still target only the intended workspace.
 func TestWorkspaceDeleteRevealsWithoutMovingTitle(t *testing.T) {
 	root := t.TempDir()
 	a := &desktop{sessions: []backend.SessionIndexEntry{{ID: "history", Workspace: root}}}
@@ -64,7 +64,7 @@ func TestWorkspaceDeleteRevealsWithoutMovingTitle(t *testing.T) {
 		ui.Column(c).Width(240).Children(func() { a.railWorkspaceRow(c, root, "workspace", root) })
 	}, 300, 90)
 	title, _ := tt.Find("workspace")
-	_, ok := tt.Find("从历史记录移除")
+	_, ok := tt.Find(workspaceDeleteHint)
 	if !ok {
 		t.Fatal("missing reserved delete slot")
 	}
@@ -74,11 +74,11 @@ func TestWorkspaceDeleteRevealsWithoutMovingTitle(t *testing.T) {
 	if title != after {
 		t.Fatalf("delete reveal moved title: %v -> %v", title, after)
 	}
-	if err := tt.Click("从历史记录移除"); err != nil {
+	if err := tt.Click(workspaceDeleteHint); err != nil {
 		t.Fatal(err)
 	}
-	if len(a.sessions) != 0 {
-		t.Fatal("history deletion no longer works")
+	if ids := a.workspaceSessionIDs(root); len(ids) != 1 || ids[0] != "history" {
+		t.Fatalf("workspace history removal targeted %v", ids)
 	}
 }
 

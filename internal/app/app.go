@@ -227,6 +227,7 @@ type App struct {
 	initialized          bool
 	disabledSkills       []string
 	mcpManager           *McpManager
+	mcpConfigMu          sync.Mutex // serializes MCP config read/merge/write transactions
 	// mcpRestartMu 串行化 MCP 全量重启（RestartMcpServers）：网络配置变更可能
 	// 从后台连发两次，无互斥时第二次会把第一次还在 StartAll 里的新 manager
 	// Shutdown 掉——commit 核对虽能自愈，整轮拨号却白跑。重启耗时可达分钟级，
@@ -597,7 +598,10 @@ type ConfigState struct {
 	ProxyURL            string `json:"proxyUrl,omitempty"`
 	ProxyNoProxy        string `json:"proxyNoProxy,omitempty"`
 	UserAgent           string `json:"userAgent,omitempty"`
-	ReasoningTag        string `json:"reasoningTag,omitempty"`
+	// Nil keeps automatic session-affinity headers enabled for legacy configs.
+	SendSessionIDHeader  *bool  `json:"sendSessionIdHeader,omitempty"`
+	SendXSessionIDHeader *bool  `json:"sendXSessionIdHeader,omitempty"`
+	ReasoningTag         string `json:"reasoningTag,omitempty"`
 	// VisionCapable mirrors ModelConfig.VisionCapable for the effective request
 	// config; see that field for the tri-state contract.
 	VisionCapable   *bool  `json:"visionCapable,omitempty"`
@@ -2321,13 +2325,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// 指纹的职责是盯住"持久化的那段被谁改了"，一次性消息按定义不在其列。
 			a.noteRequestPrefix(sessionID, contextLockLaneChat, cfg, messages, tools)
 			modelResp, err = a.streamModelResponse(perfReason(ctx, requestTrigger), cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
-				if event.ContentDelta != "" {
+				if event.ContentDelta != "" || event.ReasoningDelta != "" {
 					emittedEvents = true
-					streamDeltas.addContent(event.ContentDelta)
-				}
-				if event.ReasoningDelta != "" {
-					emittedEvents = true
-					streamDeltas.addReasoning(event.ReasoningDelta)
+					streamDeltas.add(event.ContentDelta, event.ReasoningDelta)
 				}
 				if event.Retry != nil {
 					streamDeltas.flush()

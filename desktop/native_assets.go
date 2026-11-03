@@ -115,7 +115,7 @@ func init() {
 	for _, weight := range []int{400, 500, 600, 700} {
 		data, err := resources.Assets.ReadFile(fmt.Sprintf("fonts/Inter-%d.ttf", weight))
 		if err == nil {
-			_ = ui.RegisterFont(data, "Inter")
+			_ = ui.RegisterFont(data, interFamily)
 		}
 	}
 }

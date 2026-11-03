@@ -412,6 +412,18 @@ func (a *desktop) workspaceFileCurrent(root string, file *workspaceFile) bool {
 	return !a.closing && file != nil && a.workspaceFiles[workspaceKey(root)] == file
 }
 
+func (a *desktop) installEditorAssist(root string, file *workspaceFile, buffer *editor.Buffer, index *editorAssistIndex) {
+	if index == nil || buffer == nil || !a.workspaceFileCurrent(root, file) || file.Editor == nil || file.Editor.Buffer != buffer {
+		return
+	}
+	// Completion can use the original index after edits, as it did before;
+	// never replace an index already rebuilt from a newer snapshot.
+	if file.Assist != nil && file.Assist.version > index.version {
+		return
+	}
+	file.Assist = index
+}
+
 func (a *desktop) releaseWorkspaceFile(root string) {
 	key := workspaceKey(root)
 	a.workspacePreview.releaseWorkspace(key)
@@ -440,7 +452,6 @@ func releaseWorkspaceFileValue(file *workspaceFile) {
 	file.MarkupPreview = false
 	file.Assist = nil
 	file.Document = nil
-	file.DocumentSheet = ""
 	file.Editor = nil
 }
 

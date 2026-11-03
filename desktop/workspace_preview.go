@@ -28,55 +28,14 @@ var errMarkupPreviewLimit = errors.New("预览内容超过大小上限")
 var markdownImageTag = regexp.MustCompile(`(?i)<img\b[^>]*>`)
 
 func emptyFileEditor() *editor.State {
-	return &editor.State{Buffer: editor.NewBuffer(""), Font: ui.Font{Family: "Inter", Size: fsEditor}}
+	return &editor.State{Buffer: editor.NewBuffer(""), Font: ui.Font{Family: nativeFontFamily(), Size: fsEditor}}
 }
 
-func documentPreviewHTML(name string, doc *documentpreview.Document, sheetName string) string {
+func documentPreviewHTML(name string, doc *documentpreview.Document) string {
 	var body strings.Builder
 	if doc.Truncated {
 		body.WriteString(`<p class="note">预览内容已截断，可用系统应用查看完整文档。</p>`)
 	}
-	if len(doc.Sheets) > 0 {
-		body.WriteString(`<p class="note">表格仅显示已保存的单元格结果，不含图表与复杂格式。</p>`)
-		var sheet *documentpreview.Sheet
-		for i := range doc.Sheets {
-			if doc.Sheets[i].Name == sheetName {
-				sheet = &doc.Sheets[i]
-				break
-			}
-		}
-		if sheet == nil {
-			sheet = &doc.Sheets[0]
-		}
-		body.WriteString(`<table><thead><tr><th>行</th>`)
-		for column := 0; column < sheet.Columns; column++ {
-			fmt.Fprintf(&body, `<th>%s</th>`, documentpreview.ColumnName(column))
-		}
-		body.WriteString(`</tr></thead><tbody>`)
-		truncated := false
-		for _, row := range sheet.Rows {
-			body.WriteString(`<tr>`)
-			fmt.Fprintf(&body, `<th scope="row">%d</th>`, row.Number)
-			for column := 0; column < sheet.Columns; column++ {
-				value := ""
-				if column < len(row.Values) {
-					value = row.Values[column]
-				}
-				writeDocumentCell(&body, value)
-			}
-			body.WriteString(`</tr>`)
-			if body.Len() >= maxDocumentPreviewHTML {
-				truncated = true
-				break
-			}
-		}
-		body.WriteString(`</tbody></table>`)
-		if truncated {
-			body.WriteString(`<p class="note">表格预览达到大小上限，后续内容未显示。</p>`)
-		}
-		return previewHTML(filepath.Base(name), body.String())
-	}
-
 	if len(doc.Paragraphs) == 0 {
 		body.WriteString(`<p class="note">没有可预览的正文，可用系统应用查看完整文档。</p>`)
 	} else {
@@ -232,7 +191,7 @@ func workspaceFilePreviewHTML(file *workspaceFile) (string, error) {
 		return file.PreviewHTML, nil
 	}
 	if file.Document != nil {
-		return documentPreviewHTML(file.Path, file.Document, file.DocumentSheet), nil
+		return documentPreviewHTML(file.Path, file.Document), nil
 	}
 	if !file.MarkupPreview || file.Editor == nil || file.Editor.Buffer == nil {
 		return "", fmt.Errorf("文件没有 HTML 预览")
@@ -249,14 +208,6 @@ func workspaceFilePreviewHTML(file *workspaceFile) (string, error) {
 	default:
 		return "", fmt.Errorf("此文件类型没有 WebView 预览")
 	}
-}
-
-func (a *desktop) selectWorkspaceDocumentSheet(file *workspaceFile, sheet string) {
-	if file == nil || file.Document == nil || file.DocumentSheet == sheet {
-		return
-	}
-	file.DocumentSheet = sheet
-	a.workspacePreview.loadHTML(a.workspaceFilePreviewKey(file), documentPreviewHTML(file.Path, file.Document, sheet))
 }
 
 type pendingWorkspaceFileLoad struct {

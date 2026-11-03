@@ -1,12 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package desktop
 
-import (
-	"time"
-
-	backend "ally-dev/internal/app"
-)
-
 // autostartValue mirrors the OS state so the switch can detect a toggle.
 // Set by loadAutostart / setAutostart only.
 
@@ -66,7 +60,3 @@ func (a *desktop) clearBackgroundImage() {
 		})
 	}()
 }
-
-func nowUnixNano() int64 { return time.Now().UnixNano() }
-
-var _ = backend.ConfigState{}

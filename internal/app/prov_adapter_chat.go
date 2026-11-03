@@ -346,19 +346,20 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 				}
 			}
 		} else {
-			// Original behavior: use delta.Content and delta.ReasoningContent separately.
-			if delta.Content != "" {
-				assistant.WriteString(delta.Content)
-				emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: delta.Content})
-			}
 			reasoningText := delta.ReasoningContent
 			if reasoningText == "" {
 				reasoningText = streamReasoningText
 			}
+			if delta.Content != "" {
+				assistant.WriteString(delta.Content)
+			}
 			if reasoningText != "" {
 				reasoning.WriteString(reasoningText)
 				reasoningPresent = true
-				emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: reasoningText})
+			}
+			// Keep the chunk atomic: its last reasoning must not follow its answer.
+			if delta.Content != "" || reasoningText != "" {
+				emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: delta.Content, ReasoningDelta: reasoningText})
 			}
 		}
 		if len(delta.ToolCalls) > 0 {

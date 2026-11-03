@@ -5,6 +5,7 @@ import (
 	"ally-dev/desktop/uikit"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"sort"
 	"strings"
@@ -43,7 +44,7 @@ const (
 
 func (a *desktop) resetGame(kind int) {
 	g := &a.gameF
-	*g = gameUI{Kind: kind, ModelA: g.ModelA, ModelB: g.ModelB, EffortA: g.EffortA, EffortB: g.EffortB, Winner: -1}
+	*g = gameUI{Kind: kind, VsAI: g.VsAI, ModelA: g.ModelA, ModelB: g.ModelB, EffortA: g.EffortA, EffortB: g.EffortB, Winner: -1, Selected: -1, RequestSeq: g.RequestSeq + 1}
 	switch kind {
 	case gameGomoku:
 		g.Board = make([]int, gomokuSize*gomokuSize)
@@ -70,7 +71,7 @@ func (a *desktop) gamesPageBody(c *ui.Context) {
 	ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
 		a.gameSidebar(c)
 		ui.Column(c).Grow(1).MinWidth(0).Gap(gapField).Children(func() {
-			if !g.Started {
+			if !g.Started && !g.Finished {
 				card(c, "game-idle", func() {
 					ui.Column(c).Gap(gapField).Padding(12).Children(func() {
 						sectionTitle(c, gameMeta[g.Kind].label)
@@ -119,7 +120,7 @@ func (a *desktop) gameSidebar(c *ui.Context) {
 			uikit.Select(c.Key("game-effort-a"), &g.EffortA, reasoningLevels, a.secondaryInk()).Label("思考强度").FillWidth().Disabled(g.Thinking)
 			cardFlat(c, map[bool]string{true: "改回与模型对弈", false: "切换双模型对弈（AI vs AI）"}[g.VsAI]).Disabled(g.Thinking).OnClick(func() {
 				g.VsAI = !g.VsAI
-				g.Started = false
+				a.resetGame(g.Kind)
 			})
 			if g.VsAI {
 				uikit.Select(c.Key("game-model-b"), &g.ModelB, models, a.secondaryInk()).Label("模型 B").FillWidth().Disabled(g.Thinking)
@@ -136,10 +137,11 @@ func (a *desktop) gameSidebar(c *ui.Context) {
 			if g.Thinking {
 				label = "思考中…"
 			}
-			cardPrimary(c, label).Disabled(len(a.config.Models) == 0 || g.Thinking || g.ModelA == "").OnClick(func() { a.startGame() })
+			cardPrimary(c, label).Disabled(len(a.config.Models) == 0 || g.Thinking || g.ModelA == "" || (g.VsAI && g.ModelB == "")).OnClick(func() { a.startGame() })
 			if g.Thinking {
 				cardDanger(c, "停止").OnClick(func() {
 					a.core.GameAIActionCancel()
+					g.RequestSeq++
 					g.Thinking = false
 					g.Status = "已停止"
 				})
@@ -165,10 +167,10 @@ func (a *desktop) gameSidebar(c *ui.Context) {
 				fieldNote(c, fmt.Sprintf("%d 人局 · 你执先手，其余座位由模型接管。", players), a.secondaryInk())
 			}
 			if g.Kind == gameGo {
-				cardFlat(c, "停一手").Disabled(!g.Started || g.Thinking || g.Winner >= 0).OnClick(func() { a.gamePass() })
+				cardFlat(c, "停一手").Disabled(!g.Started || g.Thinking || g.Winner >= 0 || g.VsAI || g.Turn != 0).OnClick(func() { a.gamePass() })
 			}
 			if g.Kind == gameDoudizhu && g.Phase == ddzPhaseDeal {
-				cardFlat(c, "发牌").Disabled(g.Thinking).OnClick(func() { a.ddzDeal() })
+				cardFlat(c, "发牌").Disabled(g.Thinking || g.ModelA == "" || (g.VsAI && g.ModelB == "")).OnClick(func() { a.startGame() })
 			}
 		})
 	})
@@ -179,13 +181,17 @@ func (a *desktop) startGame() {
 	a.resetGame(g.Kind)
 	g.Started = true
 	g.Winner = -1
+	if g.Kind == gameDoudizhu {
+		a.ddzDeal()
+		if g.VsAI {
+			a.ddzAIIfNeeded()
+		}
+		return
+	}
 	if g.VsAI {
 		g.Status = "模型 A 思考中…"
 		a.gameAIMove()
 		return
-	}
-	if g.Kind == gameDoudizhu {
-		a.ddzDeal()
 	}
 }
 
@@ -295,7 +301,7 @@ func (a *desktop) gameDoudizhu(c *ui.Context) {
 			}
 			for seat := 0; seat < 3; seat++ {
 				label := fmt.Sprintf("座位 %d", seat+1)
-				if seat == 0 {
+				if seat == 0 && !g.VsAI {
 					label += "（你）"
 				}
 				count := len(g.Hands[seat])
@@ -304,8 +310,8 @@ func (a *desktop) gameDoudizhu(c *ui.Context) {
 		})
 		if g.Phase == ddzPhaseBid {
 			ui.Row(c).Gap(gapField).Children(func() {
-				primary(c, "叫地主").Disabled(g.Turn != 0 || g.Thinking).OnClick(func() { a.ddzBid(0, true) })
-				flat(c, "不叫").Disabled(g.Turn != 0 || g.Thinking).OnClick(func() { a.ddzBid(0, false) })
+				primary(c, "叫地主").Disabled(!g.Started || g.VsAI || g.Turn != 0 || g.Thinking).OnClick(func() { a.ddzBid(0, true) })
+				flat(c, "不叫").Disabled(!g.Started || g.VsAI || g.Turn != 0 || g.Thinking).OnClick(func() { a.ddzBid(0, false) })
 			})
 		}
 		if g.Phase == ddzPhasePlay {
@@ -322,15 +328,15 @@ func (a *desktop) gameDoudizhu(c *ui.Context) {
 					btn.Children(func() {
 						ui.Text(c, cardName(card)).FontSize(15).Bold().TextColor(ui.Hex("#2a2620"))
 					})
-					if btn.Clicked() && g.Turn == 0 && !g.Thinking {
+					if btn.Clicked() && g.Started && !g.VsAI && g.Turn == 0 && !g.Thinking {
 						a.ddzToggleCard(card)
 					}
 				}
 			})
 			ui.Row(c).Gap(gapField).Children(func() {
-				primary(c, "出牌").Disabled(g.Turn != 0 || g.Thinking || len(g.SelectedCards) == 0).OnClick(func() { a.ddzPlay(0, g.SelectedCards) })
-				flat(c, "不要").Disabled(g.Turn != 0 || g.Thinking || len(g.LastCards) == 0).OnClick(func() { a.ddzPass(0) })
-				flat(c, "清空选择").OnClick(func() { g.SelectedCards = nil })
+				primary(c, "出牌").Disabled(!g.Started || g.VsAI || g.Turn != 0 || g.Thinking || len(g.SelectedCards) == 0).OnClick(func() { a.ddzPlay(0, g.SelectedCards) })
+				flat(c, "不要").Disabled(!g.Started || g.VsAI || g.Turn != 0 || g.Thinking || len(g.LastCards) == 0).OnClick(func() { a.ddzPass(0) })
+				flat(c, "清空选择").Disabled(!g.Started || g.VsAI).OnClick(func() { g.SelectedCards = nil })
 			})
 			if len(g.LastCards) > 0 {
 				fieldNote(c, fmt.Sprintf("上一手（座位 %d）：%s", g.LastPlayer+1, cardList(g.LastCards)), a.secondaryInk())
@@ -401,7 +407,7 @@ func (a *desktop) gameHumanPlace(x, y int) {
 
 func (a *desktop) gamePass() {
 	g := &a.gameF
-	if g.Kind != gameGo || g.Thinking || !g.Started {
+	if g.Kind != gameGo || g.Thinking || !g.Started || g.VsAI || g.Turn != 0 {
 		return
 	}
 	if err := a.applyGameAction(0, map[string]any{"type": "pass"}); err != nil {
@@ -413,7 +419,7 @@ func (a *desktop) gamePass() {
 
 func (a *desktop) afterGameMove() {
 	g := &a.gameF
-	if g.Winner >= 0 {
+	if g.Winner >= 0 || (g.Kind == gameGo && g.Passes >= 2) {
 		a.gameFinished()
 		return
 	}
@@ -440,6 +446,7 @@ func (a *desktop) gameFinished() {
 		g.Status = "模型赢了"
 	}
 	g.Started = false
+	g.Finished = true
 }
 
 func (a *desktop) gameXiangqiClick(x, y int) {
@@ -485,15 +492,16 @@ func (a *desktop) gameAIMove() {
 	}
 	cfg.ReasoningEffort = effort
 	g.Thinking = true
+	g.RequestSeq++
 	g.Status = fmt.Sprintf("座位 %d 思考中…", seat+1)
 	system, user := a.gamePrompt(seat)
-	a.gameAIRequest(seat, cfg, system, user, 0)
+	a.gameAIRequest(seat, cfg, system, user, 0, g.RequestSeq)
 }
 
 // gameAIRequest asks the model for one action and applies it on the UI thread.
 // Failed parses and illegal moves are fed back up to three times; the rules
 // engine stays the only arbiter.
-func (a *desktop) gameAIRequest(seat int, cfg backend.ModelConfig, system, user string, round int) {
+func (a *desktop) gameAIRequest(seat int, cfg backend.ModelConfig, system, user string, round int, seq uint64) {
 	g := &a.gameF
 	if round >= 3 {
 		g.Thinking = false
@@ -503,13 +511,17 @@ func (a *desktop) gameAIRequest(seat int, cfg backend.ModelConfig, system, user 
 	go func() {
 		result, err := a.core.GameAIAction(cfg, system, user)
 		a.win.Update(func() {
+			if g.RequestSeq != seq || !g.Thinking {
+				return
+			}
 			if err != nil {
-				a.gameAIRequest(seat, cfg, system, "", round+1)
+				g.Thinking = false
+				g.Status = "模型请求失败：" + err.Error()
 				return
 			}
 			action, perr := parseFirstJSON(result.Reply)
 			if perr != nil {
-				a.gameAIRequest(seat, cfg, "只输出一个 JSON 对象，不要包含其它文字。", user, round+1)
+				a.gameAIRequest(seat, cfg, system+"\n请只输出一个 JSON 对象，不要包含其它文字。", user, round+1, seq)
 				return
 			}
 			if g.Kind == gameDoudizhu && g.Phase == ddzPhaseBid {
@@ -524,15 +536,19 @@ func (a *desktop) gameAIRequest(seat int, cfg backend.ModelConfig, system, user 
 				a.ddzBid(seat, value == 1)
 				return
 			}
-			if err := a.applyGameAction(seat, action); err != nil {
-				a.gameAIRequest(seat, cfg, "上一次走法不合法："+err.Error()+"。请重新给出合法走法，只输出一个 JSON 对象。", user, round+1)
+			err = normalizeGameAIAction(g.Kind, action)
+			if err == nil {
+				err = a.applyGameAction(seat, action)
+			}
+			if err != nil {
+				a.gameAIRequest(seat, cfg, system+"\n上一次走法不合法："+err.Error()+"。请重新给出合法走法，只输出一个 JSON 对象。", user, round+1, seq)
 				return
 			}
 			g.Calls++
 			g.InTokens += result.PromptTokens
 			g.OutTokens += result.CompletionTokens
 			g.Thinking = false
-			if g.Winner >= 0 {
+			if g.Winner >= 0 || (g.Kind == gameGo && g.Passes >= 2) {
 				a.gameFinished()
 				return
 			}
@@ -547,6 +563,30 @@ func (a *desktop) gameAIRequest(seat int, cfg backend.ModelConfig, system, user 
 			a.gameAIMove()
 		})
 	}()
+}
+
+// Model prompts and board labels use one-based coordinates; the local engine
+// and human input use zero-based coordinates.
+func normalizeGameAIAction(kind int, action map[string]any) error {
+	var limits map[string]int
+	switch {
+	case kind == gameGomoku && str(action, "type") == "place":
+		limits = map[string]int{"x": gomokuSize, "y": gomokuSize}
+	case kind == gameGo && str(action, "type") == "place":
+		limits = map[string]int{"x": goSize, "y": goSize}
+	case kind == gameXiangqi && str(action, "type") == "move":
+		limits = map[string]int{"fromX": 9, "fromY": 10, "toX": 9, "toY": 10}
+	}
+	for key, limit := range limits {
+		v, ok := action[key].(float64)
+		if !ok || v < 1 || v > float64(limit) || math.Trunc(v) != v {
+			return fmt.Errorf("坐标 %s 必须是 1-%d 的整数", key, limit)
+		}
+	}
+	for key := range limits {
+		action[key] = action[key].(float64) - 1
+	}
+	return nil
 }
 
 func (a *desktop) gameModelConfig(label string) (backend.ModelConfig, bool) {
@@ -1093,7 +1133,7 @@ func (a *desktop) ddzAIIfNeeded() {
 	if g.Winner >= 0 {
 		return
 	}
-	if g.Turn == 0 {
+	if g.Turn == 0 && !g.VsAI {
 		if g.Phase == ddzPhaseBid {
 			g.Status = "叫地主：轮到你"
 		} else {
@@ -1101,17 +1141,7 @@ func (a *desktop) ddzAIIfNeeded() {
 		}
 		return
 	}
-	g.Thinking = true
-	g.Status = fmt.Sprintf("座位 %d 思考中…", g.Turn+1)
-	seat := g.Turn
-	cfg, ok := a.gameModelConfig(g.ModelA)
-	if !ok {
-		g.Thinking = false
-		g.Status = "请选择可用模型"
-		return
-	}
-	system, user := a.gamePrompt(seat)
-	a.gameAIRequest(seat, cfg, system, user, 0)
+	a.gameAIMove()
 }
 
 func (a *desktop) ddzPlay(player int, cards []int) {
