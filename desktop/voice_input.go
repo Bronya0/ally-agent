@@ -885,17 +885,15 @@ func (a *desktop) installVoiceHotkey() {
 		a.voiceInput.stopHotkey = nil
 	}
 	stop, err := startNativeVoiceHotkey(a.prefs.VoiceHotkey, a.prefs.VoiceModifierLeft, a.prefs.VoiceModifierRight, func() {
+		// win.Update posts to the main loop's FIFO queue, so down and up keep
+		// their order without a goroutine that could overtake its own partner.
 		a.win.Update(func() {
 			if a.closing {
 				return
 			}
 			if a.page == "chat" {
 				a.beginVoiceInput(a.current())
-				return
 			}
-			// The chord did fire, so staying silent here reads like a broken
-			// shortcut instead of an out-of-place one.
-			a.notify("语音输入仅在聊天页可用，请先切回对话页")
 		})
 	}, func() {
 		a.win.Update(func() {

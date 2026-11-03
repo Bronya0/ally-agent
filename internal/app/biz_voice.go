@@ -575,39 +575,64 @@ func voiceWAVSampleRate(audio []byte) string {
 	return "16000"
 }
 
+// voiceReply is one response from a speech endpoint. The body is already
+// capped, so an oversized page can never enter memory.
+type voiceReply struct {
+	status      int
+	statusText  string
+	body        []byte
+	contentType string
+}
+
+// doVoiceRequest performs one voice HTTP call and reads at most limit bytes of the
+// reply. Both the inline-audio routes and the multipart test go through it, so the
+// timeout, credential handling, user-agent path and read cap stay in one place.
+func (a *App) doVoiceRequest(cfg ConfigState, model VoiceModelConfig, method, endpoint string, header http.Header, body io.Reader, limit int64) (voiceReply, error) {
+	timeout := time.Duration(model.TimeoutSeconds) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return voiceReply{}, err
+	}
+	for name, values := range header {
+		req.Header[name] = append([]string(nil), values...)
+	}
+	applyVoiceAuth(req, model)
+	resp, err := proxyHTTPClient(cfg, true, timeout).Do(req)
+	if err != nil {
+		return voiceReply{}, fmt.Errorf("请求语音服务失败：%w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err != nil {
+		return voiceReply{}, err
+	}
+	return voiceReply{status: resp.StatusCode, statusText: resp.Status, body: raw, contentType: resp.Header.Get("Content-Type")}, nil
+}
+
 // postVoiceJSON performs one transcription request and returns its transcript.
 func (a *App) postVoiceJSON(cfg ConfigState, model VoiceModelConfig, endpoint string, payload map[string]any) (string, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}
-	timeout := time.Duration(model.TimeoutSeconds) * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	header := http.Header{
+		"Content-Type": {"application/json"},
+		// Harmless for chat endpoints, required by DashScope's synchronous ASR.
+		"X-DashScope-Sse": {"disable"},
+	}
+	reply, err := a.doVoiceRequest(cfg, model, http.MethodPost, endpoint, header, bytes.NewReader(body), 1<<20)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	// Harmless for chat endpoints, required by DashScope's synchronous ASR.
-	req.Header.Set("X-DashScope-SSE", "disable")
-	applyVoiceAuth(req, model)
-	resp, err := proxyHTTPClient(cfg, true, timeout).Do(req)
-	if err != nil {
-		return "", fmt.Errorf("请求语音服务失败：%w", err)
+	if reply.status < 200 || reply.status >= 300 {
+		message := redactVoiceSecrets(voiceChatErrorMessage(reply.body), model)
+		return "", fmt.Errorf("语音服务返回 HTTP %d：%s%s", reply.status, message, voiceAudioErrorHint(message))
 	}
-	defer resp.Body.Close()
-	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if readErr != nil {
-		return "", readErr
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		message := redactVoiceSecrets(voiceChatErrorMessage(raw), model)
-		return "", fmt.Errorf("语音服务返回 HTTP %d：%s%s", resp.StatusCode, message, voiceAudioErrorHint(message))
-	}
-	text := parseVoiceAudioText(raw)
+	text := parseVoiceAudioText(reply.body)
 	if strings.TrimSpace(text) == "" {
-		return "", fmt.Errorf("语音服务已接受音频（HTTP %d），但没有返回转写文字：「测试转写效果」默认发送空白测试音，请按住语音快捷键用真实说话验证", resp.StatusCode)
+		return "", fmt.Errorf("语音服务已接受音频（HTTP %d），但没有返回转写文字：「测试转写效果」默认发送空白测试音，请按住语音快捷键用真实说话验证", reply.status)
 	}
 	return text, nil
 }
@@ -819,44 +844,30 @@ func (a *App) TestNativeVoiceModelAudioStream(model VoiceModelConfig, audio []by
 		return "", err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(model.TimeoutSeconds)*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, model.Endpoint, &body)
+	header := http.Header{"Content-Type": {writer.FormDataContentType()}}
+	reply, err := a.doVoiceRequest(cfg, model, http.MethodPost, model.Endpoint, header, &body, 64*1024+1)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	applyVoiceAuth(req, model)
-	client := proxyHTTPClient(cfg, true, time.Duration(model.TimeoutSeconds)*time.Second)
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("请求语音服务失败：%w", err)
+	if reply.status < 200 || reply.status >= 300 {
+		message := redactVoiceSecrets(voiceChatErrorMessage(reply.body), model)
+		return "", fmt.Errorf("语音服务返回 HTTP %d：%s", reply.status, message)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		message := strings.TrimSpace(string(data))
-		return "", fmt.Errorf("语音服务返回 HTTP %d：%s", resp.StatusCode, redactVoiceSecrets(message, model))
-	}
-	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-		return readVoiceSSE(resp.Body, onText)
-	}
-	data, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024+1))
-	if readErr != nil {
-		return "", readErr
-	}
-	if len(data) > 64*1024 {
+	if len(reply.body) > 64*1024 {
 		return "", errors.New("语音服务测试响应超过 64 KiB")
 	}
-	text := strings.TrimSpace(string(data))
+	if strings.Contains(strings.ToLower(reply.contentType), "text/event-stream") {
+		return readVoiceSSE(bytes.NewReader(reply.body), onText)
+	}
+	text := strings.TrimSpace(string(reply.body))
 	var parsed map[string]any
-	if json.Unmarshal(data, &parsed) == nil {
+	if json.Unmarshal(reply.body, &parsed) == nil {
 		if value, ok := parsed["text"].(string); ok {
 			text = strings.TrimSpace(value)
 		}
 	}
 	if text == "" {
-		text = "服务已接受测试音频（HTTP " + resp.Status + "），未返回转写文字。"
+		text = "服务已接受测试音频（HTTP " + reply.statusText + "），未返回转写文字。"
 	} else if len(text) > 180 {
 		text = text[:180] + "…"
 	}

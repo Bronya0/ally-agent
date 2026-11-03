@@ -106,7 +106,7 @@ func (a *desktop) importVoiceModels() {
 					updated++
 				}
 			}
-			a.persistVoiceModels(next, fmt.Sprintf("导入完成：新增 %d 个，更新 %d 个", added, updated))
+			a.commitVoiceModels(next, fmt.Sprintf("导入完成：新增 %d 个，更新 %d 个", added, updated), false, cloneVoiceModelConfigs(s.models))
 		})
 	}()
 }
@@ -136,18 +136,23 @@ func (a *desktop) exportVoiceModels() {
 	a.exportText("ally-voice-models.json", string(data))
 }
 
-func (a *desktop) persistVoiceModels(models []backend.VoiceModelConfig, success string) {
+// commitVoiceModels serializes one voice-model change through the shared config
+// write queue: clone the list, mark the page busy, wait for earlier writers, save,
+// reload the config and report on the main thread. Save, delete and import all go
+// through this one path so they cannot drift apart. restore, when not nil, is the
+// list put back if the save fails.
+func (a *desktop) commitVoiceModels(models []backend.VoiceModelConfig, success string, closeForm bool, restore []backend.VoiceModelConfig) {
 	s := a.voiceModels
 	if s == nil || s.busy {
 		return
 	}
 	s.busy = true
 	previous, done := a.configWriteSlot()
-	models = cloneVoiceModelConfigs(models)
+	next := cloneVoiceModelConfigs(models)
 	go func() {
 		defer close(done)
 		waitConfigWrite(previous)
-		err := a.core.SaveNativeVoiceModels(models)
+		err := a.core.SaveNativeVoiceModels(next)
 		var cfg backend.ConfigState
 		if err == nil {
 			cfg, err = a.core.GetConfig()
@@ -155,11 +160,17 @@ func (a *desktop) persistVoiceModels(models []backend.VoiceModelConfig, success 
 		a.win.Update(func() {
 			s.busy = false
 			if err != nil {
+				if restore != nil {
+					s.models = restore
+				}
 				a.notifyError(err.Error())
 				return
 			}
 			a.config = cfg
 			s.models = cloneVoiceModelConfigs(cfg.VoiceModels)
+			if closeForm {
+				s.formOpen = false
+			}
 			a.notifySuccess(success)
 		})
 	}()

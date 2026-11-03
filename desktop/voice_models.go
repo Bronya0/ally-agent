@@ -111,13 +111,13 @@ func (s *voiceModelsState) applyVoicePreset(preset backend.VoiceProviderPreset, 
 // voicePresetFor names the preset an existing model was built from, so reopening
 // it shows the service instead of an empty picker.
 func voicePresetFor(endpoint string) string {
-	host := strings.ToLower(strings.TrimSpace(endpoint))
+	host := voiceEndpointHost(endpoint)
 	switch {
 	case strings.Contains(host, "dashscope.aliyuncs.com"):
 		return "dashscope"
 	case strings.Contains(host, "siliconflow"):
 		return "siliconflow"
-	case inferVoiceDeployment(endpoint) == "local":
+	case inferVoiceDeployment(host) == "local":
 		return "local_openai_asr"
 	}
 	return ""
@@ -148,8 +148,9 @@ func (s *voiceModelsState) requestDraft() backend.VoiceModelConfig {
 
 // voiceAuthFor derives the auth chrome from the only credential the editor still
 // asks for. An empty key means an open local service; a filled key keeps a
-// configured bearer/header chrome and otherwise falls back to the protocol's
-// default. Signed cloud protocols keep their own mode and credential pair.
+// configured bearer/header chrome when the protocol allows it and otherwise falls
+// back to the protocol's default. A protocol with its own signed request keeps its
+// mode and credentials.
 func voiceAuthFor(model backend.VoiceModelConfig) (string, string, string) {
 	spec, _ := backend.VoiceProtocolSpec(model.Protocol)
 	header, prefix := strings.TrimSpace(model.AuthHeader), model.AuthPrefix
@@ -157,12 +158,14 @@ func voiceAuthFor(model backend.VoiceModelConfig) (string, string, string) {
 		header = "Authorization"
 	}
 	mode := strings.ToLower(strings.TrimSpace(model.AuthMode))
+	if mode != "" && mode != "none" && mode != "bearer" && mode != "header" {
+		return mode, header, prefix
+	}
 	switch {
-	case mode != "" && mode != "none" && mode != "bearer" && mode != "header":
-		// tencent / xfyun sign each request with their own credential pair.
 	case strings.TrimSpace(model.APIKey) == "":
 		mode = "none"
 	case (mode == "bearer" || mode == "header") && spec.AllowsAuth(mode):
+		// Keep the stored chrome.
 	case spec.AllowsAuth("bearer"):
 		mode = "bearer"
 	case len(spec.AuthModes) > 0:
@@ -240,28 +243,7 @@ func (a *desktop) saveVoiceModels() {
 	} else {
 		next = append(next, s.draft)
 	}
-	s.busy = true
-	previous, done := a.configWriteSlot()
-	go func() {
-		defer close(done)
-		waitConfigWrite(previous)
-		err := a.core.SaveNativeVoiceModels(next)
-		var cfg backend.ConfigState
-		if err == nil {
-			cfg, err = a.core.GetConfig()
-		}
-		a.win.Update(func() {
-			s.busy = false
-			if err != nil {
-				a.notifyError(err.Error())
-				return
-			}
-			a.config = cfg
-			s.models = cloneVoiceModelConfigs(cfg.VoiceModels)
-			s.formOpen = false
-			a.notifySuccess("语音模型已保存")
-		})
-	}()
+	a.commitVoiceModels(next, "语音模型已保存", true, nil)
 }
 
 func (a *desktop) testVoiceEndpoint() {
@@ -275,7 +257,7 @@ func (a *desktop) testVoiceEndpoint() {
 	}
 	s.endpointBusy = true
 	s.endpointState, s.endpointPassKey = "正在检查 Endpoint（不会上传录音）…", ""
-	fingerprint := voiceEndpointFingerprint(s)
+	fingerprint := voiceEndpointFingerprint(draft)
 	go func() {
 		result, err := a.core.TestNativeVoiceEndpoint(draft)
 		a.win.Update(func() {
@@ -292,19 +274,23 @@ func (a *desktop) testVoiceEndpoint() {
 	}()
 }
 
-// inferVoiceDeployment labels a model local or api from its endpoint host, so
-// the list chip stays meaningful without a form field.
-func inferVoiceDeployment(endpoint string) string {
+// voiceEndpointHost is the lowercased host part of an endpoint, without scheme,
+// port or path. Both the deployment label and the preset guess read it.
+func voiceEndpointHost(endpoint string) string {
 	host := strings.ToLower(strings.TrimSpace(endpoint))
-	if host == "" {
-		return "local"
-	}
 	if idx := strings.Index(host, "://"); idx >= 0 {
 		host = host[idx+3:]
 	}
 	if slash := strings.IndexAny(host, "/:?"); slash >= 0 {
 		host = host[:slash]
 	}
+	return host
+}
+
+// inferVoiceDeployment labels a model local or api from its endpoint host, so
+// the list chip stays meaningful without a form field.
+func inferVoiceDeployment(endpoint string) string {
+	host := voiceEndpointHost(endpoint)
 	switch {
 	case host == "", host == "localhost", host == "127.0.0.1", host == "::1", strings.HasSuffix(host, ".local"):
 		return "local"
@@ -328,14 +314,16 @@ func voiceModelIDExists(models []backend.VoiceModelConfig, id string) bool {
 	return false
 }
 
-func voiceEndpointFingerprint(s *voiceModelsState) string {
-	value := strings.Join([]string{s.draft.Endpoint, s.draft.AuthMode, s.draft.AuthHeader, s.draft.AuthPrefix, s.draft.APIKey}, "\x00")
+// voiceEndpointFingerprint identifies one set of connection parameters. It reads
+// the normalized draft, so a change to auth derivation also invalidates the check.
+func voiceEndpointFingerprint(draft backend.VoiceModelConfig) string {
+	value := strings.Join([]string{draft.Endpoint, draft.AuthMode, draft.AuthHeader, draft.AuthPrefix, draft.APIKey}, "\x00")
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
 
 func (a *desktop) endpointVerified(s *voiceModelsState) bool {
-	return s != nil && s.endpointPassKey != "" && s.endpointPassKey == voiceEndpointFingerprint(s)
+	return s != nil && s.endpointPassKey != "" && s.endpointPassKey == voiceEndpointFingerprint(s.requestDraft())
 }
 
 func (a *desktop) openVoiceRecorder() {
@@ -483,28 +471,6 @@ func (a *desktop) deleteVoiceModel(index int) {
 	a.confirmAction("删除语音模型", s.models[index].Name, func() error { return nil }, func() {
 		before := cloneVoiceModelConfigs(s.models)
 		s.models = append(s.models[:index], s.models[index+1:]...)
-		s.busy = true
-		previous, done := a.configWriteSlot()
-		next := cloneVoiceModelConfigs(s.models)
-		go func() {
-			defer close(done)
-			waitConfigWrite(previous)
-			err := a.core.SaveNativeVoiceModels(next)
-			var cfg backend.ConfigState
-			if err == nil {
-				cfg, err = a.core.GetConfig()
-			}
-			a.win.Update(func() {
-				s.busy = false
-				if err != nil {
-					s.models = before
-					a.notifyError(err.Error())
-					return
-				}
-				a.config = cfg
-				s.models = cloneVoiceModelConfigs(cfg.VoiceModels)
-				a.notifySuccess("语音模型已删除")
-			})
-		}()
+		a.commitVoiceModels(s.models, "语音模型已删除", false, before)
 	})
 }

@@ -87,7 +87,6 @@ func (r *windowsAudioRecording) Stop() ([]byte, error) {
 	}
 	select {
 	case result := <-r.result:
-		r.setReusable(result.reusable)
 		return result.wav, result.err
 	case <-r.done:
 		if result, ok := r.takeResult(); ok {
@@ -185,6 +184,9 @@ func (r *windowsAudioRecording) capture(ready chan<- error) {
 		collector := r.collector
 		collector.Reset()
 		var captureErr error
+		// silence is reused for silent buffers so a muted device never allocates
+		// on every poll.
+		var silence []byte
 		ticker := time.NewTicker(20 * time.Millisecond)
 		collecting := true
 		for collecting {
@@ -216,7 +218,10 @@ func (r *windowsAudioRecording) capture(ready chan<- error) {
 					if keepFrames > 0 {
 						n := keepFrames * pcmFormat.BlockAlign
 						if flags&wca.AUDCLNT_BUFFERFLAGS_SILENT != 0 {
-							collector.Append(make([]byte, n))
+							if len(silence) < n {
+								silence = make([]byte, n)
+							}
+							collector.Append(silence[:n])
 							r.publishLevel(0)
 						} else if data != nil {
 							raw := unsafe.Slice(data, n)

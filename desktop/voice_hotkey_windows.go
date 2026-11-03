@@ -291,16 +291,16 @@ func (h *voiceHotkeyHook) handleEvent(event, vk uint32, isAlly bool) bool {
 		// A modifier-only shortcut must not turn a system shortcut into a
 		// recording just because another window took the foreground.
 		h.active = false
-		go h.onUp()
+		h.onUp()
 	case down && !wasActive && matching && isAlly:
 		if !(h.modifierOnly && h.down[vkTab]) {
 			h.active = true
 			activated = true
-			go h.onDown()
+			h.onDown()
 		}
 	case wasActive && (!matching || !isAlly):
 		h.active = false
-		go h.onUp()
+		h.onUp()
 	}
 	return (activated || wasActive) && h.owned[vk]
 }
@@ -350,14 +350,14 @@ func (h *voiceHotkeyCaptureHook) handle(event, vk uint32) bool {
 func voiceHotkeyFromVirtualKeys(pressed []uint32) (value string, parts []string, ok bool) {
 	modTokens := make([]string, 0, 4)
 	keyTokens := make([]string, 0, voiceHotkeyMaxKeys)
-	seenMods := map[ui.Modifiers]bool{}
+	var seenMods ui.Modifiers
 	for _, vk := range pressed {
 		if token, isModifier := voiceModifierTokensByVK[vk]; isModifier {
 			mod, valid := voiceModifierByToken(token)
-			if !valid || seenMods[mod] {
+			if !valid || seenMods&mod != 0 {
 				continue
 			}
-			seenMods[mod] = true
+			seenMods |= mod
 			modTokens = append(modTokens, token)
 			continue
 		}
