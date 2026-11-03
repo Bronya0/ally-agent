@@ -1362,14 +1362,15 @@ func TestSystemPromptCarriesTheStandingRules(t *testing.T) {
 			"`E_PATH_OUTSIDE`",
 		}},
 		{"redundant-read guidance", []string{
-			"Reuse the returned `version` while the source is unchanged",
+			"Reuse a version only while its source snapshot is current",
 			"compaction removed the reliable snapshot",
 			"an external process may have changed the file",
 			"Use startLine=C to continue",
 		}},
 		{"edit behavioral rules", []string{
 			"must never be copied into edit text",
-			"Combine independent changes to one file in one `edit` call",
+			"Put all changes to one file in one `edit` call",
+			"Use `lineRange` only for whole-line changes",
 			"same-stage edits to different files are independent",
 			"retry only failed files",
 			"Never send multiple file-mutation tool calls for the same path in one stage",

@@ -394,12 +394,8 @@ func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[
 }
 
 func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *roundStat, show bool) {
-	seconds := float64(stat.DurationMS) / 1000
+	modelSeconds := float64(stat.ModelDurationMS) / 1000
 	row := ui.Row(c.Key(fmt.Sprintf("round-stats-%s-%d", t.ID, i))).FillWidth().Height(heightRow + 2).Gap(gapInline + 1).AlignItems(ui.Center)
-	// The controls stay in the view, faded and inert, while the row is not
-	// hovered. Removing them instead took away the button a panel is anchored
-	// to, and the panel lives in the window's overlay: it vanished the moment
-	// the pointer moved onto it, so its entries could never be chosen.
 	// The controls stay in the view, faded and inert, while the row is not
 	// hovered. Removing them instead took away the button a panel is anchored
 	// to, and the panel lives in the window's overlay: it vanished the moment
@@ -421,8 +417,8 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("↑%s ↓%s", fmtK(stat.InputTokens), fmtK(stat.OutputTokens))).FontSize(fsSmall).
 				TextColor(a.secondaryInk()), fmt.Sprintf("input %d / output %d tokens", stat.InputTokens, stat.OutputTokens))
 		}
-		if seconds > 0 && stat.OutputTokens > 0 {
-			ui.Text(c, fmt.Sprintf("%d token/s", int(float64(stat.OutputTokens)/seconds))).FontSize(fsSmall).TextColor(a.secondaryInk())
+		if modelSeconds > 0 && stat.OutputTokens > 0 {
+			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("%d token/s", int(float64(stat.OutputTokens)/modelSeconds))).FontSize(fsSmall).TextColor(a.secondaryInk()), "累计模型请求耗时内的平均输出速度，包含首 token 等待，不含工具执行时间")
 		}
 		services := c.Services()
 		exportButton := mutedIconAction(c, fmt.Sprintf("export-%d", i), "导出", "download", 22, nil)
@@ -773,7 +769,24 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 			})
 		})
 		parts.Panel(func() {
-			ui.Scroll(c).Height(150).Padding(0, 6, 4).Gap(6).Children(func() {
+			scroll := ui.Scroll(c.Key("plan-scroll-"+t.ID)).Height(150).Padding(0, 6, 4).Gap(6)
+			lastScrolledRevision := ui.Local(scroll, "auto-scroll-revision", func() int64 { return -1 })
+			revision := a.planRev[t.ID]
+			autoScroll := open && *lastScrolledRevision != revision
+			if autoScroll {
+				*lastScrolledRevision = revision
+			}
+			target := len(steps) - 1
+			for n, step := range steps {
+				if step.Status != "done" && step.Status != "completed" {
+					target = n
+					break
+				}
+			}
+			// Follow the current step only when the plan itself changes. Revealing
+			// it every frame, or again each time the panel reopens, would fight the
+			// user's own scrolling.
+			scroll.Children(func() {
 				for n, step := range steps {
 					mark := "○"
 					color := a.secondaryInk()
@@ -785,7 +798,11 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 						mark = "●"
 						color = c.Theme().Accent
 					}
-					ui.Row(c).Key(fmt.Sprintf("plan-step-%d", n)).Padding(2, 8).Gap(gapField).Children(func() {
+					row := ui.Row(c).Key(fmt.Sprintf("plan-step-%d", n)).Padding(2, 8).Gap(gapField)
+					if autoScroll && n == target {
+						row.ScrollIntoView()
+					}
+					row.Children(func() {
 						ui.Text(c, mark).FontSize(fsTiny).TextColor(color)
 						ui.Text(c, fmt.Sprintf("%d.", n+1)).FontSize(fsTiny).TextColor(a.secondaryInk())
 						// Finished steps read as struck through, the way main's

@@ -4,12 +4,14 @@ package app
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 type modelRunUsageKey struct{}
 type modelRunUsage struct {
 	mu                                                  sync.Mutex
 	input, output, reasoning, hit, miss, calls, unknown int
+	modelDuration                                       time.Duration
 }
 
 func withModelRunUsage(ctx context.Context) context.Context {
@@ -48,6 +50,19 @@ func noteRunModelUsage(ctx context.Context, usage *modelUsage, result *modelStre
 	total.miss += usage.CacheMissTokens
 }
 
+// noteRunModelDuration keeps provider request time separate from end-to-end
+// run time, which also includes tools and user waits. The UI uses it for the
+// approximate output-token rate.
+func noteRunModelDuration(ctx context.Context, duration time.Duration) {
+	total, _ := ctx.Value(modelRunUsageKey{}).(*modelRunUsage)
+	if total == nil || duration <= 0 {
+		return
+	}
+	total.mu.Lock()
+	total.modelDuration += duration
+	total.mu.Unlock()
+}
+
 func publishRunModelUsage(ctx context.Context, payload map[string]any) {
 	total, _ := ctx.Value(modelRunUsageKey{}).(*modelRunUsage)
 	if total == nil {
@@ -62,4 +77,5 @@ func publishRunModelUsage(ctx context.Context, payload map[string]any) {
 	payload["cacheMiss"] = total.miss
 	payload["modelRequests"] = total.calls
 	payload["usageUnknownAttempts"] = total.unknown
+	payload["modelDurationMs"] = total.modelDuration.Milliseconds()
 }

@@ -39,10 +39,10 @@ func memoAt[V any](e ui.Element, name string) *V {
 // The memos the tool cards and source windows keep, named after the value they
 // hold so a call site says what it caches.
 type (
-	argsMemo = memoOf[string, map[string]any]
-	textMemo = memoOf[string, string]
-	rowsMemo = memoOf[string, []splitDiffRow]
-	lineMemo = memoOf[lineKey, string]
+	argsMemo        = memoOf[string, map[string]any]
+	textMemo        = memoOf[string, string]
+	displayRowsMemo = memoOf[string, []diffDisplayLine]
+	lineMemo        = memoOf[lineKey, string]
 )
 
 // lineKey addresses the number column of a source window: the text it numbers
@@ -75,25 +75,34 @@ func toolCardKey(t *conversation, index int, message map[string]any) string {
 	return fmt.Sprintf("%s-%d", t.ID, index)
 }
 
-// diffMemo holds the split rows of one diff beside how many rows "show more" has
+// diffMemo holds derived diff rows beside how many lines "show more" has
 // revealed, since that button outlives neither the card nor the source.
 type diffMemo struct {
-	rows    rowsMemo
-	extra   int
-	compact bool
+	displayRows displayRowsMemo
+	source      string
+	sourceReady bool
+	extra       int
+	compact     bool
 }
 
-// get keeps the rows of one diff. A new diff also drops whatever "show more"
-// had opened on the old one.
-func (m *diffMemo) get(source string) []splitDiffRow {
-	if m.rows.ready && m.rows.key == source {
-		return m.rows.value
+func (m *diffMemo) noteSource(source string) {
+	if !m.sourceReady || m.source != source {
+		m.source = source
+		m.sourceReady = true
+		m.extra = 0
 	}
-	m.extra = 0
-	return m.rows.get(source, splitDiffPairs)
 }
 
-// splitDiffPairs cuts a diff into the aligned row pairs both views draw.
+// display keeps the single-column rows rendered by tool cards.
+func (m *diffMemo) display(source string) []diffDisplayLine {
+	m.noteSource(source)
+	return m.displayRows.get(source, func(source string) []diffDisplayLine {
+		return singleColumnDiffRows(splitDiffPairs(source))
+	})
+}
+
+// splitDiffPairs groups adjacent removed/added lines into pairs, retaining their
+// source order so the card can flatten them back into a unified single column.
 func splitDiffPairs(source string) []splitDiffRow {
 	lines := strings.Split(source, "\n")
 	for i := range lines {

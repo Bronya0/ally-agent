@@ -765,10 +765,11 @@ type ToolDefinitionSummary struct {
 	Description string `json:"description"`
 	Source      string `json:"source"`
 	Server      string `json:"server,omitempty"`
-	// Enabled reflects the MCP per-tool injection blacklist; built-ins are
-	// always true. Disabled tools stay listed (inventory-visible, not injected).
-	Enabled   bool `json:"enabled"`
-	Protected bool `json:"protected"`
+	// Enabled reports whether a built-in is injected or an MCP tool is enabled.
+	// AvailabilityReason explains why an image tool cannot be turned on yet.
+	Enabled            bool   `json:"enabled"`
+	Protected          bool   `json:"protected"`
+	AvailabilityReason string `json:"availabilityReason,omitempty"`
 }
 
 type ChatMessageInput struct {
@@ -2265,8 +2266,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		usedTokens := bd.Total
 		compactThreshold := compactThresholdLimit(cfg)
 		if usedTokens > compactThreshold {
-			// compactRunHistory selects the configured threshold strategy. A
-			// local compaction with no space savings falls back to a full summary.
+			// compactRunHistory selects the configured threshold strategy. A local
+			// rewrite is accepted only when its estimate drops below half;
+			// otherwise it falls back to a full summary before sending the request.
 			if newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonThreshold, req, messages, usedTokens); compactErr == nil {
 				messages = newMessages
 				bd = syncBreakdown(messages, true)
@@ -2837,6 +2839,8 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				if err = a.checkServiceWorkspace(cfg, req.ID); err == nil {
 					data, err = a.stopService(StopServiceRequest{ID: req.ID, GraceSeconds: req.GraceSeconds})
 				}
+			case "restart":
+				data, err = a.restartServiceWithConfig(ctx, cfg, req.ID)
 			case "list":
 				data, err = a.listServicesForTool(cfg, req.IncludeFinished)
 			case "read":
@@ -2847,7 +2851,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 					})
 				}
 			default:
-				err = codedToolError("E_BAD_BACKGROUND_ACTION", errors.New("action must be start, stop, list, or read"))
+				err = codedToolError("E_BAD_BACKGROUND_ACTION", errors.New("action must be start, stop, restart, list, or read"))
 			}
 		}
 	case "wait":

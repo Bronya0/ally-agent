@@ -9,7 +9,10 @@ if not errorlevel 1 (
 )
 set "build_status=%errorlevel%"
 echo.
-if not "%build_status%"=="0" echo Build failed. See the error above.
-if "%build_status%"=="0" echo Built: dist/ally-native.exe
-pause
+if not "%build_status%"=="0" (
+    echo Build failed. See the error above.
+    pause
+) else (
+    echo Built: dist/ally-native.exe
+)
 exit /b %build_status%

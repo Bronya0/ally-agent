@@ -276,9 +276,12 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	_, windowEnd := a.chatMessageWindow(t)
 	end := index
 	reads, greps, lists, commands := 0, 0, 0, 0
+	runningCommands := 0
 	for i := index; i < windowEnd && isFoldableToolGroupItem(t.Messages[i]); i++ {
 		end = i + 1
-		switch readGrepGroupName(t.Messages[i]) {
+		m := t.Messages[i]
+		name := readGrepGroupName(m)
+		switch name {
 		case "grep":
 			greps++
 		case "list", "glob":
@@ -288,6 +291,9 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 		default:
 			reads++
 		}
+		if isFoldableCommand(m) && toolState(m) == "running" {
+			runningCommands++
+		}
 	}
 	if end == index {
 		return
@@ -295,6 +301,10 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	hasReadTools := reads+greps+lists > 0
 	if commands > 0 && hasReadTools {
 		a11yLabel = "工具分组 "
+	}
+	rowLabel := a11yLabel + key
+	if runningCommands > 0 {
+		rowLabel += " 命令执行中"
 	}
 
 	visibleEnd := end
@@ -355,7 +365,30 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	}
 
 	container.Children(func() {
-		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(4).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(a11yLabel + key)
+		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(4).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(rowLabel)
+		if runningCommands > 0 && !open {
+			still := uikit.StillMotion(c)
+			shine := a.currentPalette().accent.Mix(c.Theme().Text, 0.55).Alpha(0.14)
+			gradient := ui.LinearGradient{
+				Angle: 90,
+				Stops: []ui.GradientStop{{Color: ui.Transparent, At: 0}, {Color: shine, At: 0.5}, {Color: ui.Transparent, At: 1}},
+			}
+			row.Draw(func(p *ui.Painter, r ui.Rect) {
+				if still || r.W <= 0 {
+					return
+				}
+				p.AnimationFrameRate(30)
+				phase := float32(p.Now().UnixMilli()%2400) / 2400
+				bandWidth := min(float32(96), r.W*0.24)
+				start := r.X - bandWidth + phase*(r.W+bandWidth)
+				left := max(r.X, start)
+				right := min(r.X+r.W, start+bandWidth)
+				if right <= left {
+					return
+				}
+				p.FillGradient(ui.Rect{X: left, Y: r.Y, W: right - left, H: r.H}, gradient, 0)
+			})
+		}
 		row.Children(func() {
 			separator := false
 			if reads > 0 {
@@ -385,6 +418,10 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 				}
 				disclosureIcon(c, "terminal", a.currentPalette().accent)
 				ui.Text(c, fmt.Sprintf("执行命令 %d 次", commands)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+			}
+			if runningCommands > 0 {
+				toolStatusIcon(c, "running")
+				ui.Text(c, "命令执行中").FontSize(fsTool).TextColor(a.currentPalette().accent).Shrink(0).NoWrap()
 			}
 			caret := "chevron"
 			if open {
@@ -1437,38 +1474,26 @@ func (a *desktop) toolListBody(c *ui.Context, index int, result map[string]any) 
 	})
 }
 
-// diffBlock draws a side-by-side diff: one row per pair, two half-width cells,
-// both wrapping. The rows used to sit in two independent horizontal scrollers,
-// which kept the code shape but hid the tail of any long line behind a scroller
-// the reader had to find and then move with Shift held. Wrapping cannot hide
-// anything, and the row grows to its taller cell so the two sides stay lined up.
+// diffBlock draws a single-column unified diff. Each source line gets the full
+// card width, so long lines wrap in place while additions and removals keep
+// their own color and line number.
 func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 	outer := ui.Column(c.Key(key)).FillWidth().MinWidth(0).Shrink(0)
 	memo := memoAt[diffMemo](outer, "diff")
-	pairs := memo.get(diff)
+	lines := memo.display(diff)
 	limit := memo.limit(compact)
-	visible := pairs[:min(len(pairs), limit)]
+	visible := lines[:min(len(lines), limit)]
 	outer.Children(func() {
-		for _, pair := range visible {
-			if strings.HasPrefix(pair.left, "@@") || strings.HasPrefix(pair.left, "---") || strings.HasPrefix(pair.right, "+++") {
-				ui.Text(c, pair.left).FillWidth().Padding(3, 8).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).Selectable()
+		for _, line := range visible {
+			if line.gap > 0 || strings.HasPrefix(line.text, "@@") || strings.HasPrefix(line.text, "---") || strings.HasPrefix(line.text, "+++") {
+				ui.Text(c, line.text).FillWidth().Padding(3, 8).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).Selectable()
 				continue
 			}
-			row := ui.Row(c).FillWidth().MinWidth(0).Shrink(0).AlignItems(ui.Stretch)
-			if pair.gap > 0 {
-				row.Children(func() {
-					ui.Text(c, fmt.Sprintf("… %d 行未变更 …", pair.gap)).FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(3, 8)
-				})
-				continue
-			}
-			row.Children(func() {
-				diffCell(c, pair.left, pair.removed, pair.leftNumber, a.secondaryInk())
-				diffCell(c, pair.right, pair.added, pair.rightNumber, a.secondaryInk())
-			})
+			diffLine(c, line.text, line.changed, line.number, a.secondaryInk())
 		}
 	})
-	if len(visible) < len(pairs) {
-		transcriptAction(c, key+"-more", fmt.Sprintf("Show more (%d)", len(pairs)-len(visible))).OnClick(func() { memo.extra += 120 })
+	if len(visible) < len(lines) {
+		transcriptAction(c, key+"-more", fmt.Sprintf("Show more %d rows", len(lines)-len(visible))).OnClick(func() { memo.extra += 120 })
 	}
 	if memo.extra > 0 {
 		transcriptAction(c, key+"-less", "Show less").OnClick(func() { memo.extra = 0 })

@@ -323,23 +323,25 @@ func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID,
 	// Overflow always falls through to the LLM recovery path below.
 	if reason == compactReasonThreshold && normalizeAutoCompactMethod(cfg.AutoCompactMethod) == autoCompactMethodRecent {
 		h := sanitizeHistoryMessages(history)
-		result, err := a.fastCompactHistory(ctx, sessionID, h, tokensBefore)
+		candidate, err := a.prepareFastCompactHistory(ctx, sessionID, h, tokensBefore)
 		if err != nil {
 			return nil, nil, err
 		}
-		compacted := a.loadSessionHistoryCopy(sessionID)
-		// 自动快压没有释放空间时必须继续全文总结，不能每个 step 都原地跳过。
-		// 用同口径的消息估算比较，避免 provider 实测值与压后本地估算的差异误判收益。
-		if changed, _ := result["changed"].(bool); changed && computeLiveBreakdown(compacted).Total < computeLiveBreakdown(h).Total {
+		result := candidate.result
+		// 快压至少要把估算上下文压到原来的一半以下才采用；否则丢弃候选，
+		// 用未经快压的原始历史做全文总结，避免少量收益让大上下文继续膨胀。
+		if candidate.messageChange && fastCompactLeavesLessThanHalf(intFromAny(result["tokensBefore"]), intFromAny(result["tokensAfter"])) {
+			result = a.commitFastCompactHistory(sessionID, h, candidate)
 			a.clearCompactFailures(sessionID)
+			compacted := a.loadSessionHistoryCopy(sessionID)
 			messages := cloneChatMessages(history[:leadingSystemCount(history)])
 			messages = append(messages, compacted...)
 			result["sessionId"] = sessionID
 			result["reason"] = reason
 			return messages, result, nil
 		}
-		// 保留原始 history 给总结，快压的摘录/空参数不应丢掉可用于总结的细节。
-		// 失败计数也不能在此清零：回退必须遵守下方总结调用的连续失败熔断。
+		// 候选尚未提交，回退总结拿到原始 history；失败计数也保持不变，
+		// 让下方摘要调用继续遵守连续失败熔断。
 		fastFallback = true
 	}
 	// 熔断只拦阈值档（对齐 zcode 的 MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES）：

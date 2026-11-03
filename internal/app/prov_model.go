@@ -1076,6 +1076,8 @@ func wrapProviderRequestError(err error) error {
 // streamModelResponseWithKey 按 apiFormat 分发到具体适配器,key 已由调用方
 // 写入 cfg.APIKey。
 func (a *App) streamModelResponseWithKey(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
+	started := time.Now()
+	defer func() { noteRunModelDuration(ctx, time.Since(started)) }()
 	switch cfg.APIFormat {
 	case apiFormatOpenAIResponses:
 		return a.streamOpenAIResponses(ctx, cfg, model, messages, tools, onEvent)

@@ -114,7 +114,10 @@ func TestPetContextMenuOnHeadAndBody(t *testing.T) {
 	a := &desktop{prefs: defaultPrefs()}
 	a.prefs.Pet.Enabled = true
 	tt := ui.NewTester(a.petView, 180, 180)
-	want := []string{"摸摸头", "和我说句话", "查看好感度", "-", "宠物大小", "闲时说话", "-", "打开主界面", "宠物设置", "关闭桌宠"}
+	want := []string{
+		"摸摸头", "和我说句话", "查看好感度", "-", "宠物大小",
+		petMenuCheckLabel("闲时说话", !a.prefs.Pet.MuteChatter), "-", "打开主界面", "宠物设置", "关闭桌宠",
+	}
 	for _, target := range []string{"摸摸宠物的头", "拖动宠物位置"} {
 		if err := tt.RightClick(target); err != nil {
 			t.Fatal(err)
@@ -122,7 +125,7 @@ func TestPetContextMenuOnHeadAndBody(t *testing.T) {
 		if got := tt.Menu(); !slices.Equal(got, want) {
 			t.Fatalf("right-click %s: got menu %q", target, got)
 		}
-		if err := tt.ChooseMenuItem("宠物大小", "大"); err != nil {
+		if err := tt.ChooseMenuItem("宠物大小", petMenuCheckLabel("大", a.prefs.Pet.Size == 230)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -133,7 +136,7 @@ func TestPetContextMenuOnHeadAndBody(t *testing.T) {
 		if err := tt.RightClick("拖动宠物位置"); err != nil {
 			t.Fatal(err)
 		}
-		if err := tt.ChooseMenuItem("闲时说话"); err != nil {
+		if err := tt.ChooseMenuItem(petMenuCheckLabel("闲时说话", !a.prefs.Pet.MuteChatter)); err != nil {
 			t.Fatal(err)
 		}
 		if a.prefs.Pet.MuteChatter != muted {

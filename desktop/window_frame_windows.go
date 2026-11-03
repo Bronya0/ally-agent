@@ -5,17 +5,19 @@ import (
 	"unsafe"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 	"golang.org/x/sys/windows"
 )
 
-// configureWindowFrame suppresses the light DWM outline Windows 11 draws
-// around a window whose title bar is hidden. COLOR_NONE takes only that
-// outline away, keeping the native resize edges, rounded corners and the
-// shadow; older Windows ignore the attribute. MyGo keeps the accent off the
-// caption itself (plainCaption), and this is the outline it leaves behind.
-func configureWindowFrame(win *mygo.Window) {
+// configureWindowFrame suppresses the DWM outline and colors the one-pixel
+// caption MyGo retains on Windows 11 to match the app header. Older Windows
+// ignore the caption color attribute.
+func configureWindowFrame(win *mygo.Window, header ui.Color) {
 	const colorNone uint32 = 0xfffffffe
-	color := colorNone
+	borderColor := colorNone
 	_ = windows.DwmSetWindowAttribute(windows.HWND(win.NativeHandle()),
-		windows.DWMWA_BORDER_COLOR, unsafe.Pointer(&color), uint32(unsafe.Sizeof(color)))
+		windows.DWMWA_BORDER_COLOR, unsafe.Pointer(&borderColor), uint32(unsafe.Sizeof(borderColor)))
+	captionColor := uint32(header.R) | uint32(header.G)<<8 | uint32(header.B)<<16 // COLORREF is 0x00BBGGRR.
+	_ = windows.DwmSetWindowAttribute(windows.HWND(win.NativeHandle()),
+		windows.DWMWA_CAPTION_COLOR, unsafe.Pointer(&captionColor), uint32(unsafe.Sizeof(captionColor)))
 }

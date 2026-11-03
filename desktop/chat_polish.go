@@ -95,7 +95,7 @@ func gitUnifiedDiff(c *ui.Context, diff string, ink ...ui.Color) {
 				ui.Text(c, line.text).FillWidth().Padding(4, 8).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Selectable()
 				return
 			}
-			ui.Row(c).FillWidth().MinWidth(0).Shrink(0).Children(func() { diffCell(c, line.text, line.changed, line.number, ink...) })
+			diffLine(c, line.text, line.changed, line.number, ink...)
 		}).Grow(1).MinHeight(0).FillWidth().MinWidth(0).Label("Git diff")
 	})
 }
@@ -173,6 +173,6 @@ func restoreRoundStats(t *conversation) {
 				continue
 			}
 		}
-		st.Round[i] = &roundStat{DurationMS: int64(num(raw, "durationMs")), InputTokens: int(num(raw, "inputTokens")), OutputTokens: int(num(raw, "outputTokens")), CacheHit: int(num(raw, "cacheHit")), CacheMiss: int(num(raw, "cacheMiss")), Done: true}
+		st.Round[i] = &roundStat{DurationMS: int64(num(raw, "durationMs")), ModelDurationMS: int64(num(raw, "modelDurationMs")), InputTokens: int(num(raw, "inputTokens")), OutputTokens: int(num(raw, "outputTokens")), CacheHit: int(num(raw, "cacheHit")), CacheMiss: int(num(raw, "cacheMiss")), Done: true}
 	}
 }

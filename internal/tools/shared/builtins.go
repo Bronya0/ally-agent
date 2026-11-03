@@ -189,11 +189,11 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("edit", "Edit one workspace file using its current version from read or a preceding successful edit. For adjacent edits or insertions in the same region, combine them into one change. On source/version/range errors, use an attached complete snapshot or re-read the needed range.", map[string]any{
+		functionTool("edit", "Edit one workspace file using the current version from read or the preceding successful edit; never guess a version or source text. Prefer short exact unique oldText. Use lineRange only for whole-line changes immediately after reading that range, and re-read before using line numbers after any edit. Put all changes to this file in one call. On source/version/range errors, use an attached complete snapshot or re-read the needed range.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the single file to edit in this call."},
-				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-character current version from read or the preceding successful edit of this file. Comparison is case-insensitive."},
+				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-character current version from the latest read or preceding successful edit of this file. Never guess it; use the new version returned after every successful edit. Comparison is case-insensitive."},
 				// Same declaration as remote_edit; only the read tool it names differs.
 				"changes": editChangesSchema("read"),
 			},
@@ -216,7 +216,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"paths"},
 		}),
-		functionTool("command", "Run a shell command or related shell sequence with cwd inside the workspace. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. Read-only outside inspection and new outside paths are allowed; modifying existing outside paths is refused. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. Output is a bounded preview; use the full log path with read/grep when provided, rather than rerunning side effects. A timeout promotes the still-running process to a background service: use service read/stop with its returned id, never start a duplicate.", map[string]any{
+		functionTool("command", "Run a shell command or related shell sequence with cwd inside the workspace. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. Read-only outside inspection and new outside paths are allowed; modifying existing outside paths is refused. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. Output is a bounded preview; use the full log path with read/grep when provided, rather than rerunning side effects. A timeout promotes the still-running process to a background service: use service read/stop/restart with its returned id, never start a duplicate.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run."},
@@ -225,16 +225,16 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("service", "Manage background processes owned by the current workspace. Sessions and sub-agents in the same workspace share services; operations cannot access other workspaces. The active service limit is global, and model calls require a workspace. stop immediately force-kills the owned process tree.", map[string]any{
+		functionTool("service", "Manage background processes owned by the current workspace. Sessions and sub-agents in the same workspace share services; operations cannot access other workspaces. The active service limit is global, and model calls require a workspace. stop immediately force-kills the owned process tree. restart stops the service and starts the same command again, returning a new service ID; the old record remains available for logs.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"includeFinished": map[string]any{"type": "boolean", "description": "For action=list: include finished services (default false)."},
-				"action":          map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "start launches a process; stop force-kills it; list shows active services and reports workspace/global limits; read returns output, including for finished services. Only flushed output is visible, so empty output does not prove a hang; use python -u or flush=True for immediate Python logs. Stop may discard unflushed output."},
+				"action":          map[string]any{"type": "string", "enum": []string{"start", "stop", "restart", "list", "read"}, "description": "start launches a process; stop force-kills it; restart stops it and starts the same command again, returning a new service ID; list shows active services and reports workspace/global limits; read returns output, including for finished services. Only flushed output is visible, so empty output does not prove a hang; use python -u or flush=True for immediate Python logs. Stop may discard unflushed output."},
 				"name":            map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
 				"description":     map[string]any{"type": "string", "minLength": 1, "maxLength": MaxServiceDescriptionChars, "pattern": ".*\\S.*", "description": "Required with action=start: explain what the service does and why it is needed. Shown to the user in service cards and the task center."},
 				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
 				"cwd":             map[string]any{"type": "string", "description": "Workspace-relative working directory. Empty means workspace root. Used only with action=start."},
-				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start. Required with action=stop and action=read."},
+				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start or action=restart. Required with action=stop, action=restart, and action=read."},
 				"graceSeconds": map[string]any{
 					"type": "integer", "minimum": 0, "maximum": MaxServiceStopGraceSeconds,
 					"description": fmt.Sprintf("Deprecated compatibility field (legacy default %d, maximum %d); ignored.", DefaultServiceStopGraceSeconds, MaxServiceStopGraceSeconds),
@@ -337,12 +337,12 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "files"},
 		}),
-		functionTool("remote_edit", "Edit one file on a remote SSH workspace, using the same changes contract as edit. Send parallel calls for multiple files. target selects an SSH host and absolute non-root workspace (e.g. dev:/srv/app); path is relative to it. Use the current version from remote_read or a successful remote_edit. changes must be a JSON array, not a quoted string. Writes preserve the source encoding and recheck its full hash on the host before committing. Each remote file commits independently; re-read on conflicts.", map[string]any{
+		functionTool("remote_edit", "Edit one file on a remote SSH workspace, using the same changes contract as edit: prefer short exact unique oldText, use lineRange only immediately after reading that range, and put all changes to one file in one call. Send parallel calls for multiple files. target selects an SSH host and absolute non-root workspace (e.g. dev:/srv/app); path is relative to it. Use the current version from remote_read or the preceding successful remote_edit; never guess it. changes must be a JSON array, not a quoted string. Writes preserve the source encoding and recheck its full hash on the host before committing. Each remote file commits independently; re-read on conflicts.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  sshTargetSchema(),
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Relative path of the single file to edit in this call. Absolute paths under the workspace root are also accepted and rebased (the root itself is not)."},
-				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-char current version from remote_read."},
+				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required current 6-char version from the latest remote_read or preceding successful remote_edit; never guess it. Use the new version returned after every successful edit."},
 				"changes": editChangesSchema("remote_read"),
 			},
 			"required": []string{"target", "path", "version", "changes"},
@@ -508,9 +508,9 @@ func chatToolsUncached() []openai.Tool {
 }
 
 var builtinToolExamples = map[string]string{
-	"edit":               `{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}; lineRange: {"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}`,
+	"edit":               `oldText preferred: {"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}; lineRange only immediately after reading that range: {"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}`,
 	"command":            `{"command":"go test ./...","cwd":".","timeout":120}`,
-	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
+	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm run dev","cwd":"frontend"}; restart: {"action":"restart","id":"svc_..."}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
 	"ask":                `{"questions":[{"question":"Which database should we use?","options":[{"label":"SQLite","description":"Simple local storage.","recommended":true},{"label":"PostgreSQL","description":"Production database."}]}]}`,
 	"remote_read":        `{"target":"my-dev:/srv/app","files":[{"path":"main.go"}]}`,
 	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
@@ -628,7 +628,7 @@ func editChangesSchema(sourceTool string) map[string]any {
 		"type":        "array",
 		"minItems":    1,
 		"maxItems":    50,
-		"description": fmt.Sprintf("All changes for this one file (max 50). Every change names exactly one source plus `newText` and matches against the same original `%s` snapshot; overlapping source regions fail the whole call.", sourceTool),
+		"description": fmt.Sprintf("All changes for this one file (max 50); put all desired changes to the file in this call. Every change names exactly one source plus `newText` and matches against the same original `%s` snapshot; overlapping source regions fail the whole call.", sourceTool),
 		"items":       editChangeSchema(sourceTool),
 	}
 }
@@ -639,7 +639,7 @@ func editChangeSchema(sourceTool string) map[string]any {
 		"properties": map[string]any{
 			"oldText": map[string]any{
 				"type":        "string",
-				"description": fmt.Sprintf("Small exact unique source snippet copied exactly from the `%s` result, without the displayed line number prefixes; preferred over `lineRange`. Mutually exclusive with lineRange; provide either oldText or lineRange.", sourceTool),
+				"description": fmt.Sprintf("Short, exact, unique source snippet copied from complete current `%s` text, without displayed line number prefixes; preferred over `lineRange`. Never use compressed, truncated, or omitted text as `oldText`: re-read the target range first. Mutually exclusive with lineRange; provide either oldText or lineRange.", sourceTool),
 			},
 			"replaceAll": map[string]any{
 				"type":        "boolean",
@@ -647,7 +647,7 @@ func editChangeSchema(sourceTool string) map[string]any {
 			},
 			"lineRange": map[string]any{
 				"type": "string", "pattern": editLineRangeOptionalPattern,
-				"description": fmt.Sprintf("Inclusive whole-line A-B range from `%s`'s numbered output, or a single line A (e.g. \"12\" means \"12-12\"). Use for whole-line replacements or deletions. Mutually exclusive with oldText; provide either oldText or lineRange. Align the range with the exact first and last lines you mean — a closing brace inside the range must be included, one outside stays untouched. All ranges use the original `%s` version, so never adjust for earlier changes.", sourceTool, sourceTool),
+				"description": fmt.Sprintf("Inclusive whole-line A-B range from `%s`'s numbered output, or a single line A (e.g. \"12\" means \"12-12\"). Use only for whole-line replacements or deletions, immediately after reading that range and before any edit to this file. If an edit has intervened, re-read before using line numbers again. Mutually exclusive with oldText; provide either oldText or lineRange. Align the range with the exact first and last lines you mean — a closing brace inside the range must be included, one outside stays untouched. All ranges in this call use the original `%s` version, so never adjust numbers for earlier changes in the same call.", sourceTool, sourceTool),
 			},
 			"newText": map[string]any{
 				"type":        "string",

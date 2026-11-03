@@ -74,11 +74,27 @@ func imageModelForTool(cfg ConfigState, name string) (ImageModelConfig, error) {
 			return ImageModelConfig{}, errors.New("image tool is disabled")
 		}
 	}
-	id := images.GenerateModel
-	if name == "image_edit" {
-		id = images.EditModel
+	return imageModelByIdentity(images, imageIdentityForTool(images, name), name == "image_edit")
+}
+
+// imageToolAvailabilityReason tells the tool switch why an image tool cannot be
+// turned on yet: the picture model is missing or not usable. Whether the user
+// disabled the tool itself is not part of it.
+func imageToolAvailabilityReason(cfg ConfigState, name string) string {
+	images := cfg.ImageGeneration
+	if images != nil && images.Enabled {
+		if _, err := imageModelByIdentity(images, imageIdentityForTool(images, name), name == "image_edit"); err == nil {
+			return ""
+		}
 	}
-	return imageModelByIdentity(images, id, name == "image_edit")
+	return "尚未配置可用的图片模型，请先到「模型 → 图片模型」添加并启用"
+}
+
+func imageIdentityForTool(images *ImageGenerationConfig, name string) *ModelIdentity {
+	if name == "image_edit" {
+		return images.EditModel
+	}
+	return images.GenerateModel
 }
 
 // Manual tests resolve the same registry without enabling conversation tools.

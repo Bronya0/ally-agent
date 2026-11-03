@@ -92,6 +92,10 @@ type managedService struct {
 	waitDone  chan struct{}
 	stopTree  func() error
 	stopError string // transient stop diagnostic; protected by mu
+	// restartedAs links a historical service ID to the replacement created by
+	// its last successful restart. Protected by mu; it prevents a second
+	// concurrent restart using a stale ID from launching a duplicate process.
+	restartedAs string
 	// writeRoots 是该服务的可写根（启动时算出的工作区 + 附加工作区），只在拒写
 	// 提示里报给模型：命令卡与服务卡说的是同一句「可写范围是哪些」。
 	writeRoots []string
@@ -160,6 +164,12 @@ func (a *App) checkServiceWorkspace(cfg ConfigState, id string) error {
 func (a *App) startServiceWithConfig(parent context.Context, cfg ConfigState, req StartServiceRequest) (ServiceInfo, error) {
 	a.servicesStartMu.Lock()
 	defer a.servicesStartMu.Unlock()
+	return a.startServiceWithConfigLocked(parent, cfg, req)
+}
+
+// startServiceWithConfigLocked is the shared service startup path for callers
+// that already hold servicesStartMu, so restart can pair stop and start.
+func (a *App) startServiceWithConfigLocked(parent context.Context, cfg ConfigState, req StartServiceRequest) (ServiceInfo, error) {
 	a.mu.Lock()
 	stopping := a.stopping
 	a.mu.Unlock()
@@ -395,6 +405,12 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 
 	service.stopMu.Lock()
 	defer service.stopMu.Unlock()
+	return a.stopServiceLocked(id, service)
+}
+
+// stopServiceLocked shares the exact stop behavior with restart. The caller
+// must hold service.stopMu so simultaneous stop/restart operations serialize.
+func (a *App) stopServiceLocked(id string, service *managedService) (ServiceInfo, error) {
 	service.mu.Lock()
 	alreadyDone := service.info.Status == "stopped" || service.info.Status == "exited"
 	service.mu.Unlock()
@@ -436,6 +452,72 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 	// 与自然退出共用淘汰入口；忽略 retain 返回值会使队列有界而注册表持续泄漏。
 	a.finalizeService(id, service)
 	return info, nil
+}
+
+func (a *App) restartServiceWithConfig(parent context.Context, cfg ConfigState, id string) (ServiceInfo, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ServiceInfo{}, codedToolError("E_BAD_SERVICE_ID", errors.New("id is required"))
+	}
+	workspace, err := serviceWorkspace(cfg)
+	if err != nil {
+		return ServiceInfo{}, err
+	}
+
+	// Keep the same lock order as start/shutdown: servicesStartMu before the
+	// per-service stop lock. This makes the stop -> start pair atomic with
+	// respect to other service startups and shutdown.
+	a.servicesStartMu.Lock()
+	defer a.servicesStartMu.Unlock()
+	for {
+		a.servicesMu.Lock()
+		service := a.services[id]
+		a.servicesMu.Unlock()
+		if service == nil {
+			return ServiceInfo{}, codedToolError("E_SERVICE_NOT_FOUND", errServiceNotFound)
+		}
+
+		service.stopMu.Lock()
+		service.mu.Lock()
+		replacement := service.restartedAs
+		original := service.info
+		service.mu.Unlock()
+		if replacement != "" {
+			service.stopMu.Unlock()
+			id = replacement
+			continue
+		}
+		if !serviceBelongsToWorkspace(original.Workspace, workspace) {
+			service.stopMu.Unlock()
+			return ServiceInfo{}, codedToolError("E_SERVICE_NOT_FOUND", fmt.Errorf("service not found in the current workspace: %w", errServiceNotFound))
+		}
+
+		if _, err := a.stopServiceLocked(id, service); err != nil {
+			service.stopMu.Unlock()
+			return ServiceInfo{}, err
+		}
+		description := original.Description
+		if strings.TrimSpace(description) == "" {
+			// Timed-out commands promoted to services do not have a user-authored
+			// description, while normal starts require one.
+			description = "Restarted background process"
+		}
+		started, err := a.startServiceWithConfigLocked(parent, cfg, StartServiceRequest{
+			Name:        original.Name,
+			Description: description,
+			Command:     original.Command,
+			Cwd:         original.Cwd,
+		})
+		if err != nil {
+			service.stopMu.Unlock()
+			return ServiceInfo{}, fmt.Errorf("service %s was stopped but restart failed: %w", id, err)
+		}
+		service.mu.Lock()
+		service.restartedAs = started.ID
+		service.mu.Unlock()
+		service.stopMu.Unlock()
+		return started, nil
+	}
 }
 
 func (a *App) listServices() ServiceListResult {
@@ -949,6 +1031,6 @@ func (a *App) promotedCommandResult(req CommandRequest, shell shellInvocation, c
 		OutputFileBytes:   outputFileSize,
 		PromotedToService: true,
 	}
-	result.Output += fmt.Sprintf("\n\n[命令在 %d 秒内未退出，已转为后台服务继续运行（未杀进程，端口/状态保持不变）]\n服务 ID: %s\n用 service 工具继续交互：action=read 查看输出（dev server ready 日志通常在尾部）、action=stop 停止、action=list 查看；任务中心面板也能看到该服务。若这本来就该是一次性命令，请 action=stop 停掉后自行修复超时问题。", timeout, info.ID)
+	result.Output += fmt.Sprintf("\n\n[命令在 %d 秒内未退出，已转为后台服务继续运行（未杀进程，端口/状态保持不变）]\n服务 ID: %s\n用 service 工具继续交互：action=read 查看输出（dev server ready 日志通常在尾部）、action=restart 重启、action=stop 停止、action=list 查看；任务中心面板也能看到该服务。若这本来就该是一次性命令，请 action=stop 停掉后自行修复超时问题。", timeout, info.ID)
 	return result
 }

@@ -266,17 +266,18 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		idx := lastContentIndex(t.Messages)
 		if idx >= 0 {
 			stat := &roundStat{
-				DurationMS:   int64(num(p, "durationMs")),
-				InputTokens:  int(num(p, "inputTokens")),
-				OutputTokens: int(num(p, "outputTokens")),
-				CacheHit:     int(num(p, "cacheHit")),
-				CacheMiss:    int(num(p, "cacheMiss")),
-				Done:         true,
+				DurationMS:      int64(num(p, "durationMs")),
+				ModelDurationMS: int64(num(p, "modelDurationMs")),
+				InputTokens:     int(num(p, "inputTokens")),
+				OutputTokens:    int(num(p, "outputTokens")),
+				CacheHit:        int(num(p, "cacheHit")),
+				CacheMiss:       int(num(p, "cacheMiss")),
+				Done:            true,
 			}
 			ui.Round[idx] = stat
 			if m := t.Messages[idx]; name == "run:done" {
 				m["roundDoneAt"] = time.Now().UnixMilli()
-				m["roundStats"] = map[string]any{"durationMs": stat.DurationMS, "inputTokens": stat.InputTokens, "outputTokens": stat.OutputTokens, "cacheHit": stat.CacheHit, "cacheMiss": stat.CacheMiss}
+				m["roundStats"] = map[string]any{"durationMs": stat.DurationMS, "modelDurationMs": stat.ModelDurationMS, "inputTokens": stat.InputTokens, "outputTokens": stat.OutputTokens, "cacheHit": stat.CacheHit, "cacheMiss": stat.CacheMiss}
 			}
 		}
 		a.persist(t)
@@ -487,6 +488,7 @@ func (a *desktop) applyMCPStatus(p map[string]any) {
 func (a *desktop) applyScheduledUpdate(p map[string]any) {
 	if id := str(p, "deleted"); id != "" {
 		a.tasks = removeScheduledTask(a.tasks, id)
+		delete(a.tasksF.InstructionOpen, id)
 		if a.tasksF.Loading {
 			if a.tasksF.ScheduledChanges == nil {
 				a.tasksF.ScheduledChanges = make(map[string]scheduledTaskChange)

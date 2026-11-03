@@ -2256,12 +2256,17 @@ func (a *App) ListTools() []ToolDefinitionSummary {
 		if tool.Function == nil {
 			continue
 		}
+		availabilityReason := ""
+		if tool.Function.Name == "image_generate" || tool.Function.Name == "image_edit" {
+			availabilityReason = imageToolAvailabilityReason(cfg, tool.Function.Name)
+		}
 		tools = append(tools, ToolDefinitionSummary{
-			Name:        tool.Function.Name,
-			Description: strings.TrimSpace(tool.Function.Description),
-			Source:      "built-in",
-			Enabled:     enabled[tool.Function.Name],
-			Protected:   toolshared.IsProtectedTool(tool.Function.Name),
+			Name:               tool.Function.Name,
+			Description:        strings.TrimSpace(tool.Function.Description),
+			Source:             "built-in",
+			Enabled:            enabled[tool.Function.Name],
+			Protected:          toolshared.IsProtectedTool(tool.Function.Name),
+			AvailabilityReason: availabilityReason,
 		})
 	}
 	if manager := a.activeMcpManager(); manager != nil {
