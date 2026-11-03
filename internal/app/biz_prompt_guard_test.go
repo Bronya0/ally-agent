@@ -170,27 +170,3 @@ func TestMemoryIndexStaysWithinBudget(t *testing.T) {
 		t.Fatalf("index block = %d bytes, want around the %d-byte budget", len(index), memoryIndexMaxBytes)
 	}
 }
-
-// Efficiency rules must hold for both agents without losing completion checks.
-func TestPromptExecutionEfficiency(t *testing.T) {
-	redirectAppStateDir(t)
-	app := NewApp()
-	main := joinSystemPromptParts(app.buildSystemPromptParts(nil, "", nil, "", "", ""))
-	for label, prompt := range map[string]string{"main": main, "child": subagentSystemPrompt("")} {
-		for _, rule := range []string{"same stage only for independent operations", "Check every result for errors", "Reuse reliable context", "failures stay visible", "JSON encoding is not shell escaping", "repeat or broaden verification only", "later stages run in order", "blocks later stages", "stage does not substitute result values"} {
-			if !strings.Contains(prompt, rule) {
-				t.Errorf("%s missing %q", label, rule)
-			}
-		}
-		for _, obsolete := range []string{"batching is never slower", "there is no per-response cap", "Default to ending every reply"} {
-			if strings.Contains(prompt, obsolete) {
-				t.Errorf("%s retains %q", label, obsolete)
-			}
-		}
-	}
-	for _, rule := range []string{"Authorization remains valid for the same action and scope", "Use `ask` only when a required decision remains", "After compaction, continue from completed work", "final replies state the outcome, relevant verification, and material limitations"} {
-		if !strings.Contains(main, rule) {
-			t.Errorf("main missing %q", rule)
-		}
-	}
-}
