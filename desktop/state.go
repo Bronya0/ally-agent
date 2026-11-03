@@ -19,21 +19,21 @@ import (
 // rail geometry, section folding and the welcome-page avatar. It lives next to
 // the agent data so both builds share the same machine.
 type uiPrefs struct {
-	HistoryPageSize    int            `json:"historyPageSize"`
-	Appearance         string         `json:"appearance,omitempty"`
-	Palette            int            `json:"palette"`
-	RailExpanded       bool           `json:"railExpanded"`
-	RailWidth          float32        `json:"railWidth"`
-	RailWorkspaceOpen  bool           `json:"railWorkspaceOpen"`
-	RailSessionsOpen   bool           `json:"railSessionsOpen"`
-	Avatar             string         `json:"avatar"`
-	RecentModels       []string       `json:"recentModels"`
-	TreeWidth          float32        `json:"treeWidth"`
-	SeenReleaseNotes   string         `json:"seenReleaseNotes"`
-	DismissedUpdateTag string         `json:"dismissedUpdateTag"`
-	VoiceInputEnabled  bool           `json:"voiceInputEnabled,omitempty"`
-	VoiceModelID       string         `json:"voiceModelId,omitempty"`
-	VoiceHotkey        string         `json:"voiceHotkey,omitempty"`
+	HistoryPageSize    int      `json:"historyPageSize"`
+	Appearance         string   `json:"appearance,omitempty"`
+	Palette            int      `json:"palette"`
+	RailExpanded       bool     `json:"railExpanded"`
+	RailWidth          float32  `json:"railWidth"`
+	RailWorkspaceOpen  bool     `json:"railWorkspaceOpen"`
+	RailSessionsOpen   bool     `json:"railSessionsOpen"`
+	Avatar             string   `json:"avatar"`
+	RecentModels       []string `json:"recentModels"`
+	TreeWidth          float32  `json:"treeWidth"`
+	SeenReleaseNotes   string   `json:"seenReleaseNotes"`
+	DismissedUpdateTag string   `json:"dismissedUpdateTag"`
+	VoiceInputEnabled  bool     `json:"voiceInputEnabled,omitempty"`
+	VoiceModelID       string   `json:"voiceModelId,omitempty"`
+	VoiceHotkey        string   `json:"voiceHotkey,omitempty"`
 	// VoiceModifierLeft and VoiceModifierRight decide which physical sides of
 	// Ctrl/Alt/Shift/Win satisfy a hotkey modifier. Both are on by default, so a
 	// chord never has to pin a side.

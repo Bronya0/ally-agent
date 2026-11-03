@@ -7,6 +7,7 @@ import (
 	"errors"
 	"runtime"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/egoist/mygo/ui"
@@ -47,8 +48,38 @@ type voiceKeyboardHook interface {
 	handle(event, vk uint32) bool
 }
 
-var voiceHookMu sync.Mutex
-var voiceHookCurrent voiceKeyboardHook
+// voiceHookCurrent is the one hook that receives keyboard events. A hook claims
+// the slot when it installs and releases it only while it still owns it: a hook
+// that finishes stopping after its replacement was installed must not clear the
+// slot, or the keyboard would stay unwatched and no chord could ever fire again.
+var (
+	voiceHookMu      sync.Mutex
+	voiceHookCurrent voiceKeyboardHook
+)
+
+func claimVoiceHook(hook voiceKeyboardHook) {
+	voiceHookMu.Lock()
+	voiceHookCurrent = hook
+	voiceHookMu.Unlock()
+}
+
+func releaseVoiceHook(hook voiceKeyboardHook) {
+	voiceHookMu.Lock()
+	if voiceHookCurrent == hook {
+		voiceHookCurrent = nil
+	}
+	voiceHookMu.Unlock()
+}
+
+func activeVoiceHook() voiceKeyboardHook {
+	voiceHookMu.Lock()
+	defer voiceHookMu.Unlock()
+	return voiceHookCurrent
+}
+
+// voiceHotkeyHookLive reports whether a hook is installed right now, so a stale
+// handle can be told apart from a working chord.
+func voiceHotkeyHookLive() bool { return activeVoiceHook() != nil }
 
 var voiceUser32 = windows.NewLazySystemDLL("user32.dll")
 var procSetWindowsHookEx = voiceUser32.NewProc("SetWindowsHookExW")
@@ -233,6 +264,11 @@ type voiceHotkeyHook struct {
 	modifierOnly bool
 	onDown       func()
 	onUp         func()
+	// onMismatch explains a chord whose primary keys were pressed but whose
+	// modifiers did not match, e.g. the other physical side of Alt. Without it a
+	// wrong-side press looks exactly like a broken shortcut.
+	onMismatch   func()
+	lastMismatch time.Time
 }
 
 func (h *voiceHotkeyHook) handle(event, vk uint32) bool {
@@ -270,8 +306,26 @@ func (h *voiceHotkeyHook) handleEvent(event, vk uint32, isAlly bool) bool {
 	case wasActive && (!matching || !isAlly):
 		h.active = false
 		go h.onUp()
+	case down && !wasActive && isAlly && !matching && h.primaryKeysDown():
+		// The exact primary keys were pressed, so the miss is about the
+		// modifiers: name it instead of failing silently.
+		if h.onMismatch != nil && time.Since(h.lastMismatch) > 3*time.Second {
+			h.lastMismatch = time.Now()
+			go h.onMismatch()
+		}
 	}
 	return (activated || wasActive) && h.owned[vk]
+}
+
+// primaryKeysDown reports whether every primary key of the chord is held, which
+// separates "wrong or missing modifier" from an unrelated key press.
+func (h *voiceHotkeyHook) primaryKeysDown() bool {
+	for _, vk := range h.require.keyVKs {
+		if !h.down[vk] {
+			return false
+		}
+	}
+	return true
 }
 
 // voiceHotkeyCaptureHook reads a chord for the settings field: it reports every
@@ -340,6 +394,8 @@ func voiceHotkeyFromVirtualKeys(pressed []uint32) (value string, parts []string,
 	return "", voiceHotkeyTokenParts(modTokens, keyTokens), false
 }
 
+// voiceForegroundIsAlly reports whether Ally owns the foreground window: the
+// hold-to-talk chord must not fire while the user works in another app.
 func voiceForegroundIsAlly() bool {
 	foreground, _, _ := procGetForegroundWindow.Call()
 	if foreground == 0 {
@@ -351,7 +407,7 @@ func voiceForegroundIsAlly() bool {
 }
 
 // startNativeVoiceHotkey installs the recording hook for one chord.
-func startNativeVoiceHotkey(value string, left, right bool, onDown, onUp func()) (func(), error) {
+func startNativeVoiceHotkey(value string, left, right bool, onDown, onUp, onMismatch func()) (func(), error) {
 	hotkey, ok := parseVoiceHotkey(value)
 	if !ok {
 		return nil, errors.New("快捷键格式无效")
@@ -371,6 +427,7 @@ func startNativeVoiceHotkey(value string, left, right bool, onDown, onUp func())
 		modifierOnly: len(require.keyVKs) == 0,
 		onDown:       onDown,
 		onUp:         onUp,
+		onMismatch:   onMismatch,
 	})
 	if err != nil {
 		return nil, err
@@ -392,17 +449,34 @@ func startNativeHotkeyCapture(onChange func(parts []string, value string), onFin
 	return handle.stop, nil
 }
 
+// voiceHookStopTimeout bounds how long stop waits for its thread to unwind, so a
+// stuck thread cannot freeze the caller (which is the window's main thread when
+// the settings editor hands the hook back).
+const voiceHookStopTimeout = 2 * time.Second
+
 type voiceHookHandle struct {
 	done     chan struct{}
 	threadID uint32
+	stopOnce sync.Once
 }
 
+// stop uninstalls the hook and waits for its message loop to end. It is
+// idempotent, and a call from the hook's own thread returns after posting instead
+// of waiting on itself.
 func (h *voiceHookHandle) stop() {
 	if h == nil {
 		return
 	}
-	procPostThreadMessage.Call(uintptr(h.threadID), wmQuit, 0, 0)
-	<-h.done
+	h.stopOnce.Do(func() {
+		procPostThreadMessage.Call(uintptr(h.threadID), wmQuit, 0, 0)
+		if windows.GetCurrentThreadId() == h.threadID {
+			return
+		}
+		select {
+		case <-h.done:
+		case <-time.After(voiceHookStopTimeout):
+		}
+	})
 }
 
 // startVoiceHook installs a low-level keyboard hook on its own thread and pumps
@@ -417,15 +491,11 @@ func startVoiceHook(hook voiceKeyboardHook) (*voiceHookHandle, error) {
 		// Create the thread message queue before another thread posts WM_QUIT.
 		procPeekMessage.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0, 0, 0)
 		handle.threadID = windows.GetCurrentThreadId()
-		voiceHookMu.Lock()
-		voiceHookCurrent = hook
-		voiceHookMu.Unlock()
+		claimVoiceHook(hook)
 		callback := windows.NewCallback(voiceLowLevelCallback)
 		installed, _, callErr := procSetWindowsHookEx.Call(whKeyboardLL, callback, 0, 0)
 		if installed == 0 {
-			voiceHookMu.Lock()
-			voiceHookCurrent = nil
-			voiceHookMu.Unlock()
+			releaseVoiceHook(hook)
 			ready <- callErr
 			close(handle.done)
 			return
@@ -433,9 +503,7 @@ func startVoiceHook(hook voiceKeyboardHook) (*voiceHookHandle, error) {
 		ready <- nil
 		defer func() {
 			procUnhookWindowsHookEx.Call(installed)
-			voiceHookMu.Lock()
-			voiceHookCurrent = nil
-			voiceHookMu.Unlock()
+			releaseVoiceHook(hook)
 			close(handle.done)
 		}()
 		for {

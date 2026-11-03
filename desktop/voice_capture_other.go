@@ -5,13 +5,15 @@ package desktop
 
 import "errors"
 
-func startNativeVoiceHotkey(string, bool, bool, func(), func()) (func(), error) {
+func startNativeVoiceHotkey(string, bool, bool, func(), func(), func()) (func(), error) {
 	return nil, errors.New("语音快捷键目前仅支持 Windows 桌面版")
 }
 
 func startNativeHotkeyCapture(func([]string, string), func(string)) (func(), error) {
 	return nil, errors.New("语音快捷键目前仅支持 Windows 桌面版")
 }
+
+func voiceHotkeyHookLive() bool { return false }
 
 type unavailableAudioRecording struct{}
 

@@ -515,7 +515,8 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 		if a.voiceHotkeyCapturing {
 			fieldNote(c, "正在录入：按下想要的组合，全部松开后生效；Esc 取消。", a.secondaryInk())
 		} else {
-			fieldNote(c, "点「更换」后直接按键（Esc 取消）：单键（F9、Alt）或修饰键加 1–3 个按键；「修饰键」左/右都选时按哪一侧都生效，只选一侧则只认那一侧（至少保留一侧）。", a.secondaryInk())
+			fieldNote(c, "点「更换」后直接按键（Esc 取消）：单键（F9、Alt）或修饰键加 1–3 个按键。", a.secondaryInk())
+			fieldNote(c, voiceModifierSidesNote(a.prefs.VoiceModifierLeft, a.prefs.VoiceModifierRight), a.secondaryInk())
 		}
 		if sw := switchRow(c, "voice-input-enabled", "语音输入", "启用并预热已选语音模型的录音设备。", &a.prefs.VoiceInputEnabled); sw.Changed() {
 			if a.prefs.VoiceInputEnabled {

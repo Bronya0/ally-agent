@@ -21,6 +21,12 @@ func (a *desktop) changePage(page string) {
 		a.releaseFilePreview()
 	}
 	if a.page == "settings" && page != "settings" {
+		// A pending chord capture must not outlive the settings page: while it
+		// listens it owns the only keyboard hook, so the shortcut would look
+		// unbound until its timeout fired.
+		if a.voiceHotkeyCapturing {
+			a.finishVoiceHotkeyCapture("")
+		}
 		a.commitSettingsOnLeave()
 	}
 	if a.page == "models" && page != "models" {
