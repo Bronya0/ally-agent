@@ -264,11 +264,6 @@ type voiceHotkeyHook struct {
 	modifierOnly bool
 	onDown       func()
 	onUp         func()
-	// onMismatch explains a chord whose primary keys were pressed but whose
-	// modifiers did not match, e.g. the other physical side of Alt. Without it a
-	// wrong-side press looks exactly like a broken shortcut.
-	onMismatch   func()
-	lastMismatch time.Time
 }
 
 func (h *voiceHotkeyHook) handle(event, vk uint32) bool {
@@ -306,26 +301,8 @@ func (h *voiceHotkeyHook) handleEvent(event, vk uint32, isAlly bool) bool {
 	case wasActive && (!matching || !isAlly):
 		h.active = false
 		go h.onUp()
-	case down && !wasActive && isAlly && !matching && h.primaryKeysDown():
-		// The exact primary keys were pressed, so the miss is about the
-		// modifiers: name it instead of failing silently.
-		if h.onMismatch != nil && time.Since(h.lastMismatch) > 3*time.Second {
-			h.lastMismatch = time.Now()
-			go h.onMismatch()
-		}
 	}
 	return (activated || wasActive) && h.owned[vk]
-}
-
-// primaryKeysDown reports whether every primary key of the chord is held, which
-// separates "wrong or missing modifier" from an unrelated key press.
-func (h *voiceHotkeyHook) primaryKeysDown() bool {
-	for _, vk := range h.require.keyVKs {
-		if !h.down[vk] {
-			return false
-		}
-	}
-	return true
 }
 
 // voiceHotkeyCaptureHook reads a chord for the settings field: it reports every
@@ -407,7 +384,7 @@ func voiceForegroundIsAlly() bool {
 }
 
 // startNativeVoiceHotkey installs the recording hook for one chord.
-func startNativeVoiceHotkey(value string, left, right bool, onDown, onUp, onMismatch func()) (func(), error) {
+func startNativeVoiceHotkey(value string, left, right bool, onDown, onUp func()) (func(), error) {
 	hotkey, ok := parseVoiceHotkey(value)
 	if !ok {
 		return nil, errors.New("快捷键格式无效")
@@ -427,7 +404,6 @@ func startNativeVoiceHotkey(value string, left, right bool, onDown, onUp, onMism
 		modifierOnly: len(require.keyVKs) == 0,
 		onDown:       onDown,
 		onUp:         onUp,
-		onMismatch:   onMismatch,
 	})
 	if err != nil {
 		return nil, err

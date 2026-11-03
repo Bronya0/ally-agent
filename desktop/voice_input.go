@@ -508,21 +508,6 @@ func voiceModifierSidesNote(left, right bool) string {
 	return "「修饰键」至少保留一侧，否则快捷键不会生效。"
 }
 
-// voiceModifierMismatchNotice explains why a chord whose primary keys were
-// pressed did not start recording. Naming the side is what makes a wrong-side
-// press distinguishable from a dead shortcut.
-func voiceModifierMismatchNotice(left, right bool) string {
-	switch {
-	case left && right:
-		return "快捷键未触发：请同时按住已设置的修饰键（Ctrl/Alt/Shift/Win）"
-	case left:
-		return "快捷键未触发：当前只认左侧修饰键，刚才按的是右侧"
-	case right:
-		return "快捷键未触发：当前只认右侧修饰键，刚才按的是左侧"
-	}
-	return "快捷键未触发：请检查「修饰键」左/右设置"
-}
-
 func (a *desktop) setVoiceHotkey(value string) {
 	hotkey, ok := parseVoiceHotkey(value)
 	if !ok {
@@ -917,13 +902,6 @@ func (a *desktop) installVoiceHotkey() {
 			if !a.closing {
 				a.finishVoiceInput(false)
 			}
-		})
-	}, func() {
-		a.win.Update(func() {
-			if a.closing {
-				return
-			}
-			a.notify(voiceModifierMismatchNotice(a.prefs.VoiceModifierLeft, a.prefs.VoiceModifierRight))
 		})
 	})
 	if err != nil {
