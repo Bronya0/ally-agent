@@ -276,10 +276,13 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	_, windowEnd := a.chatMessageWindow(t)
 	end := index
 	reads, greps, lists, commands := 0, 0, 0, 0
-	runningCommands := 0
+	commandInFlight, commandRunning := false, false
+	lastState := "pending"
 	for i := index; i < windowEnd && isFoldableToolGroupItem(t.Messages[i]); i++ {
 		end = i + 1
 		m := t.Messages[i]
+		state := toolState(m)
+		lastState = state
 		name := readGrepGroupName(m)
 		switch name {
 		case "grep":
@@ -291,8 +294,13 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 		default:
 			reads++
 		}
-		if isFoldableCommand(m) && toolState(m) == "running" {
-			runningCommands++
+		if isFoldableCommand(m) {
+			switch state {
+			case "running":
+				commandInFlight, commandRunning = true, true
+			case "pending":
+				commandInFlight = true
+			}
 		}
 	}
 	if end == index {
@@ -302,8 +310,12 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	if commands > 0 && hasReadTools {
 		a11yLabel = "工具分组 "
 	}
+	groupStatus := lastState
+	if commandInFlight || groupStatus == "running" || groupStatus == "pending" || groupStatus == "cancelled" {
+		groupStatus = "pending"
+	}
 	rowLabel := a11yLabel + key
-	if runningCommands > 0 {
+	if commandRunning {
 		rowLabel += " 命令执行中"
 	}
 
@@ -366,30 +378,10 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 
 	container.Children(func() {
 		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(4).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(rowLabel)
-		if runningCommands > 0 && !open {
-			still := uikit.StillMotion(c)
-			shine := a.currentPalette().accent.Mix(c.Theme().Text, 0.55).Alpha(0.14)
-			gradient := ui.LinearGradient{
-				Angle: 90,
-				Stops: []ui.GradientStop{{Color: ui.Transparent, At: 0}, {Color: shine, At: 0.5}, {Color: ui.Transparent, At: 1}},
-			}
-			row.Draw(func(p *ui.Painter, r ui.Rect) {
-				if still || r.W <= 0 {
-					return
-				}
-				p.AnimationFrameRate(30)
-				phase := float32(p.Now().UnixMilli()%2400) / 2400
-				bandWidth := min(float32(96), r.W*0.24)
-				start := r.X - bandWidth + phase*(r.W+bandWidth)
-				left := max(r.X, start)
-				right := min(r.X+r.W, start+bandWidth)
-				if right <= left {
-					return
-				}
-				p.FillGradient(ui.Rect{X: left, Y: r.Y, W: right - left, H: r.H}, gradient, 0)
-			})
-		}
 		row.Children(func() {
+			ui.Box(c).Absolute().Left(-20).Top(0).Width(16).HeightPercent(100).Center().Children(func() {
+				toolStatusIcon(c, groupStatus)
+			})
 			separator := false
 			if reads > 0 {
 				disclosureIcon(c, "book", a.currentPalette().accent)
@@ -419,9 +411,8 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 				disclosureIcon(c, "terminal", a.currentPalette().accent)
 				ui.Text(c, fmt.Sprintf("执行命令 %d 次", commands)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
 			}
-			if runningCommands > 0 {
-				toolStatusIcon(c, "running")
-				ui.Text(c, "命令执行中").FontSize(fsTool).TextColor(a.currentPalette().accent).Shrink(0).NoWrap()
+			if commandRunning {
+				ui.Text(c, "命令执行中").FontSize(fsTool).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 			}
 			caret := "chevron"
 			if open {
