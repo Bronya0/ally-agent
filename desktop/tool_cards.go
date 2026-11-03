@@ -276,13 +276,19 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	_, windowEnd := a.chatMessageWindow(t)
 	end := index
 	reads, greps, lists, commands := 0, 0, 0, 0
-	commandInFlight, commandRunning := false, false
+	anyRunning, anyQueued := false, false
 	lastState := "pending"
 	for i := index; i < windowEnd && isFoldableToolGroupItem(t.Messages[i]); i++ {
 		end = i + 1
 		m := t.Messages[i]
 		state := toolState(m)
 		lastState = state
+		switch state {
+		case "running":
+			anyRunning = true
+		case "pending":
+			anyQueued = true
+		}
 		name := readGrepGroupName(m)
 		switch name {
 		case "grep":
@@ -294,14 +300,6 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 		default:
 			reads++
 		}
-		if isFoldableCommand(m) {
-			switch state {
-			case "running":
-				commandInFlight, commandRunning = true, true
-			case "pending":
-				commandInFlight = true
-			}
-		}
 	}
 	if end == index {
 		return
@@ -310,14 +308,16 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	if commands > 0 && hasReadTools {
 		a11yLabel = "工具分组 "
 	}
+	// A group's mark follows its calls: it breathes while any call runs, waits
+	// grey while one is still queued, and otherwise keeps the last result. None
+	// of that is repeated in words beside the counts.
 	groupStatus := lastState
-	if commandInFlight || groupStatus == "running" || groupStatus == "pending" || groupStatus == "cancelled" {
+	if anyRunning {
+		groupStatus = "running"
+	} else if anyQueued {
 		groupStatus = "pending"
 	}
 	rowLabel := a11yLabel + key
-	if commandRunning {
-		rowLabel += " 命令执行中"
-	}
 
 	visibleEnd := end
 	if open {
@@ -410,9 +410,6 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 				}
 				disclosureIcon(c, "terminal", a.currentPalette().accent)
 				ui.Text(c, fmt.Sprintf("执行命令 %d 次", commands)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
-			}
-			if commandRunning {
-				ui.Text(c, "命令执行中").FontSize(fsTool).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 			}
 			caret := "chevron"
 			if open {
