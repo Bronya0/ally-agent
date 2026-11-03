@@ -33,6 +33,9 @@ type windowsAudioRecording struct {
 	reusable   bool
 	cancelOnce sync.Once
 	deviceID   string
+	// collector is sized once per session and reset per take, so a reused
+	// recording never allocates a fresh multi-megabyte buffer.
+	collector *pcmCollector
 }
 
 const audclntSBufferEmpty = uintptr(0x08890001)
@@ -158,6 +161,7 @@ func (r *windowsAudioRecording) capture(ready chan<- error) {
 	}
 	defer capture.Release()
 	r.setReusable(true)
+	r.collector = newPCMCollector(pcmFormat.pcmBudgetBytes(voiceCaptureMaxDuration))
 	ready <- nil
 
 	for {
@@ -178,7 +182,8 @@ func (r *windowsAudioRecording) capture(ready chan<- error) {
 		r.started <- nil
 		drainFloat32(r.levels)
 
-		collector := newPCMCollector(pcmFormat.pcmBudgetBytes(voiceCaptureMaxDuration))
+		collector := r.collector
+		collector.Reset()
 		var captureErr error
 		ticker := time.NewTicker(20 * time.Millisecond)
 		collecting := true

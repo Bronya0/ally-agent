@@ -93,3 +93,5 @@
 [log-scroll-track] 2026-11-03 中危 输出窗口未 TrackScroll，“回到最新”只重取数据不改位置，看着像按钮坏了。@desktop/page_tasks.go
 
 [stream-fixed-height] 2026-11-03 中危 流式态用固定高度 Box 包会自收缩的内容：短内容卡片偏高，完成时下方内容被上顶。@desktop/tool_cards.go
+
+[asr-route] 2026-11-03 中危 百炼 ASR 路由随模型而非模式：qwen3-asr→chat、qwen-audio/fun-asr→multimodal，音频只收 data URI。@internal/app/biz_voice.go

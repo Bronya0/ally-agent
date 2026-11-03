@@ -59,13 +59,22 @@ func (f capturePCMFormat) isTarget() bool {
 	return f.SampleRate == voiceCaptureSampleRate && f.Channels == 1 && f.BytesPerSample == 2 && !f.Float
 }
 
+// voiceCaptureMaxBytes caps the collector budget. A realistic capture format is
+// 48 kHz stereo float32 (384 kB/s, 7.7 MB for a 20 s take) and 16 MB still covers
+// 96 kHz stereo in full; a device that reports something bigger loses the tail
+// instead of reserving hundreds of megabytes for one recording.
+const voiceCaptureMaxBytes = 16 << 20
+
 // pcmBudgetBytes is the exact buffer a full capture window needs, used to size
 // the collector once instead of regrowing a bytes.Buffer on every chunk.
 func (f capturePCMFormat) pcmBudgetBytes(window time.Duration) int {
 	if !f.valid() || window <= 0 {
 		return 0
 	}
-	return f.bytesPerSecond() * int(window/time.Second)
+	if budget := f.bytesPerSecond() * int(window/time.Second); budget < voiceCaptureMaxBytes {
+		return budget
+	}
+	return voiceCaptureMaxBytes
 }
 
 // pcmCollector accumulates captured PCM into a preallocated, fixed budget. A
@@ -97,6 +106,10 @@ func (c *pcmCollector) Append(src []byte) int {
 }
 
 func (c *pcmCollector) Bytes() []byte { return c.buf }
+
+// Reset empties the collector without releasing its preallocated buffer, so one
+// capture session serves every take without a fresh allocation per recording.
+func (c *pcmCollector) Reset() { c.buf = c.buf[:0] }
 
 func (c *pcmCollector) Len() int { return len(c.buf) }
 
