@@ -70,8 +70,9 @@ func (kind workspaceFileKind) isPreviewOnly() bool {
 	return kind.isDirectWebViewFile() || kind == workspaceFileSVG || kind == workspaceFileDocument
 }
 
+// Markdown and Word previews draw in the window itself; only these kinds need a web view.
 func (kind workspaceFileKind) hasWebViewPreview() bool {
-	return kind.isPreviewOnly() || kind == workspaceFileMarkdown || kind == workspaceFileHTML
+	return kind.isDirectWebViewFile() || kind == workspaceFileSVG || kind == workspaceFileHTML
 }
 
 func (kind workspaceFileKind) hasMarkupToggle() bool {

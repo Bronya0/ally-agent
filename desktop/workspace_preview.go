@@ -8,15 +8,13 @@ import (
 	"fmt"
 	"html"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"ally-dev/internal/documentpreview"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/extension"
+	"github.com/egoist/mygo/ui/markdown"
 	xhtml "golang.org/x/net/html"
 )
 
@@ -25,75 +23,69 @@ const maxDocumentPreviewHTML = 2 << 20
 
 var errMarkupPreviewLimit = errors.New("预览内容超过大小上限")
 
-var markdownImageTag = regexp.MustCompile(`(?i)<img\b[^>]*>`)
-
 func emptyFileEditor() *editor.State {
 	return &editor.State{Buffer: editor.NewBuffer(""), Font: ui.Font{Family: nativeFontFamily(), Size: fsEditor}}
 }
 
-func documentPreviewHTML(name string, doc *documentpreview.Document) string {
-	var body strings.Builder
-	if doc.Truncated {
-		body.WriteString(`<p class="note">预览内容已截断，可用系统应用查看完整文档。</p>`)
+func documentPreviewNote(doc *documentpreview.Document) string {
+	switch {
+	case doc == nil || len(doc.Paragraphs) == 0:
+		return "没有可预览的正文，可用“系统打开”查看完整文档。"
+	case doc.Truncated:
+		return "预览内容已截断，可用“系统打开”查看完整文档。"
+	default:
+		return "正文提取预览，不包含图片、页眉页脚和原版分页。"
 	}
-	if len(doc.Paragraphs) == 0 {
-		body.WriteString(`<p class="note">没有可预览的正文，可用系统应用查看完整文档。</p>`)
-	} else {
-		body.WriteString(`<p class="note">正文提取预览，不包含图片、页眉页脚和原版分页。</p>`)
+}
+
+func documentHeadingSize(level int) float32 {
+	switch {
+	case level <= 1:
+		return fsPageTitle
+	case level == 2:
+		return fsHeading
+	case level == 3:
+		return fsSubtitle
+	default:
+		return fsBody
 	}
-	truncated := false
-	for _, paragraph := range doc.Paragraphs {
-		level := paragraph.Heading
-		if level > 0 {
-			if level > 6 {
-				level = 6
+}
+
+// A Word preview draws the paragraphs the document package extracted: heading
+// levels and text, no markup, so it needs no web view.
+func (a *desktop) documentFilePreviewView(c *ui.Context, file *workspaceFile) {
+	doc := file.Document
+	ui.Column(c.Key("file-preview-document")).Grow(1).MinHeight(0).FillWidth().Children(func() {
+		ui.Column(c).Padding(gapSection, padPage).FillWidth().Children(func() {
+			fieldNote(c, documentPreviewNote(doc), a.secondaryInk())
+		})
+		if doc == nil || len(doc.Paragraphs) == 0 {
+			ui.Box(c).Grow(1).MinHeight(0).Center().Children(func() {
+				emptyState(c, "没有可预览的正文", "可用“系统打开”查看完整文档。", a.secondaryInk())
+			})
+			return
+		}
+		// The reader allows 2000 paragraphs, so build only the rows on screen.
+		ui.List(c.Key("file-preview-document-body"), nil, len(doc.Paragraphs), func(i int) {
+			paragraph := doc.Paragraphs[i]
+			text := strings.TrimRight(paragraph.Text, " \t\r\n")
+			row := ui.Column(c.Key(i)).FillWidth().Padding(0, padPage, gapField, padPage)
+			if paragraph.Heading > 0 {
+				row.Padding(gapSection, padPage, gapField/2, padPage)
 			}
-			fmt.Fprintf(&body, `<h%d>`, level)
-			writeDocumentCell(&body, paragraph.Text)
-			fmt.Fprintf(&body, `</h%d>`, level)
-		} else {
-			body.WriteString(`<p>`)
-			writeDocumentCell(&body, paragraph.Text)
-			body.WriteString(`</p>`)
-		}
-		if body.Len() >= maxDocumentPreviewHTML {
-			truncated = true
-			break
-		}
-	}
-	if truncated {
-		body.WriteString(`<p class="note">文档预览达到大小上限，后续内容未显示。</p>`)
-	}
-	return previewHTML(filepath.Base(name), body.String())
-}
-
-func writeDocumentCell(body *strings.Builder, value string) {
-	if len(value) > 16<<10 {
-		value = value[:16<<10]
-	}
-	body.WriteString(html.EscapeString(value))
-}
-
-func previewHTML(title, body string) string {
-	return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; connect-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none"><meta name="viewport" content="width=device-width,initial-scale=1"><title>` + html.EscapeString(title) + `</title><style>
-:root{color-scheme:light dark;font:15px/1.65 system-ui,"Segoe UI",sans-serif}body{margin:0 auto;padding:24px;max-width:1000px;color:#242424;background:#fff}h1{font-size:1.35rem;margin:0 0 1.5rem}h1,h2,h3{line-height:1.3}p{white-space:pre-wrap}table{border-collapse:collapse;width:max-content;max-width:100%;font-size:13px}th,td{border:1px solid #bbb;padding:5px 9px;text-align:left;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}th{background:#f1f1f1;position:sticky;top:0}.note{color:#777;font-size:.9rem}@media(prefers-color-scheme:dark){body{color:#dedede;background:#202020}th,td{border-color:#555}th{background:#333}.note{color:#aaa}}
-</style></head><body><h1>` + html.EscapeString(title) + `</h1>` + body + `</body></html>`
-}
-
-func markdownPreviewHTML(source string) (string, error) {
-	if len(source) > maxMarkupPreviewBytes {
-		return "", fmt.Errorf("Markdown 预览超过 2 MB 限制")
-	}
-	body := limitedPreviewBuffer{limit: maxDocumentPreviewHTML}
-	parser := goldmark.New(goldmark.WithExtensions(extension.GFM))
-	if err := parser.Convert([]byte(source), &body); err != nil {
-		if errors.Is(err, errMarkupPreviewLimit) {
-			return "", fmt.Errorf("Markdown 渲染结果超过 2 MB 限制")
-		}
-		return "", err
-	}
-	content := markdownImageTag.ReplaceAllString(body.String(), `<span class="note">[图片未加载]</span>`)
-	return previewHTML("Markdown 预览", content), nil
+			row.Children(func() {
+				if text == "" {
+					ui.Box(c).Height(gapField)
+					return
+				}
+				if paragraph.Heading > 0 {
+					ui.Text(c, text).FillWidth().LineHeight(1.3).FontSize(documentHeadingSize(paragraph.Heading)).Bold()
+					return
+				}
+				ui.Text(c, text).FillWidth().LineHeight(1.6)
+			})
+		}).Grow(1).MinHeight(0).FillWidth()
+	})
 }
 
 type limitedPreviewBuffer struct {
@@ -190,24 +182,63 @@ func workspaceFilePreviewHTML(file *workspaceFile) (string, error) {
 	if file.PreviewHTML != "" {
 		return file.PreviewHTML, nil
 	}
-	if file.Document != nil {
-		return documentPreviewHTML(file.Path, file.Document), nil
-	}
 	if !file.MarkupPreview || file.Editor == nil || file.Editor.Buffer == nil {
 		return "", fmt.Errorf("文件没有 HTML 预览")
 	}
 	if file.Editor.Buffer.Len() > maxMarkupPreviewBytes {
-		return "", fmt.Errorf("HTML/Markdown 预览超过 2 MB 限制")
+		return "", fmt.Errorf("HTML 预览超过 2 MB 限制")
 	}
 	source := file.Editor.Buffer.String()
-	switch strings.ToLower(filepath.Ext(file.Path)) {
-	case ".md", ".markdown":
-		return markdownPreviewHTML(source)
-	case ".html", ".htm":
+	if ext := strings.ToLower(filepath.Ext(file.Path)); ext == ".html" || ext == ".htm" {
 		return htmlFilePreview(source)
-	default:
-		return "", fmt.Errorf("此文件类型没有 WebView 预览")
 	}
+	return "", fmt.Errorf("此文件类型没有 WebView 预览")
+}
+
+func markdownPreviewSource(box ui.Element, file *workspaceFile) string {
+	if file.Editor == nil || file.Editor.Buffer == nil {
+		return ""
+	}
+	type sourceCache struct {
+		// buffer identifies which file the text came from: two files opened in
+		// turn share this element and can both sit at version 1, so the version
+		// alone would keep showing the previous file's text.
+		buffer  *editor.Buffer
+		version uint64
+		text    string
+	}
+	// The view runs every frame; the buffer only changes while the editor shows.
+	cache := ui.Local(box, "markdown-source", func() sourceCache { return sourceCache{} })
+	if cache == nil {
+		return ""
+	}
+	buffer := file.Editor.Buffer
+	if version := buffer.Version(); cache.buffer != buffer || cache.version != version {
+		cache.buffer, cache.version, cache.text = buffer, version, buffer.String()
+	}
+	return cache.text
+}
+
+// A markdown preview draws in the window: no web view, no HTML round trip, so
+// it keeps the app theme and works where WebView2 is missing.
+func (a *desktop) markdownFilePreviewView(c *ui.Context, file *workspaceFile) {
+	scroll := ui.Scroll(c.Key("file-preview-markdown")).Grow(1).MinHeight(0).FillWidth()
+	source := markdownPreviewSource(scroll, file)
+	if len(source) > maxMarkupPreviewBytes {
+		ui.Box(c.Key("file-preview-markdown-limit")).Grow(1).MinHeight(0).Padding(padPage).Center().Children(func() {
+			fieldNote(c, "Markdown 预览超过 2 MB 限制，可用“系统打开”查看全文。", a.secondaryInk())
+		})
+		return
+	}
+	if file.MD == nil {
+		file.MD = a.readingMarkdownOptions("file-preview:" + file.Path)
+	}
+	a.configureReadingMarkdown(file.MD)
+	scroll.Children(func() {
+		ui.Column(c).FillWidth().Padding(padPage).Children(func() {
+			markdown.View(c.Key("file-preview-markdown-body"), source, file.MD).FillWidth().MinWidth(0)
+		})
+	})
 }
 
 type pendingWorkspaceFileLoad struct {
@@ -386,6 +417,11 @@ func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile) {
 	if a.win == nil || a.closing || !a.explorer || a.filesF.InfoOpen || a.page != "chat" || file == nil || a.activeFile() != file {
 		return
 	}
+	// Markdown and Word previews draw in the window, so they never own a web view.
+	switch workspaceFileKindForPath(file.Path) {
+	case workspaceFileMarkdown, workspaceFileDocument:
+		return
+	}
 	if file.PreviewPath == "" && file.PreviewHTML == "" && file.Document == nil && !file.MarkupPreview {
 		return
 	}
@@ -435,6 +471,14 @@ func (a *desktop) releaseFilePreview() {
 }
 
 func (a *desktop) workspaceFilePreviewView(c *ui.Context, file *workspaceFile) {
+	switch workspaceFileKindForPath(file.Path) {
+	case workspaceFileMarkdown:
+		a.markdownFilePreviewView(c, file)
+		return
+	case workspaceFileDocument:
+		a.documentFilePreviewView(c, file)
+		return
+	}
 	a.requestWorkspaceFilePreview(file)
 	key := a.workspaceFilePreviewKey(file)
 	if surface := a.workspacePreview.mountedFor(key); surface != nil {

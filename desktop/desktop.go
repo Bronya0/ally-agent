@@ -68,6 +68,9 @@ type workspaceFile struct {
 	Saving        bool
 	Document      *documentpreview.Document
 	MarkupPreview bool
+	// MD holds the native markdown preview state so a re-render keeps the
+	// parse and layout it already did.
+	MD *markdown.Options
 }
 type desktop struct {
 	memoryDiagnosticBusy                    bool

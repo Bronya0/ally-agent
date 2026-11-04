@@ -3,18 +3,13 @@ package desktop
 import (
 	"ally-dev/internal/documentpreview"
 	"context"
-	"strings"
 	"testing"
 )
 
-func TestDocumentPreviewRendersEscapedHTMLAndReleasesData(t *testing.T) {
+func TestClosingDocumentPreviewReleasesDocument(t *testing.T) {
 	root := t.TempDir()
-	document := &documentpreview.Document{Paragraphs: []documentpreview.Paragraph{{Text: "<script>alert('x')</script>"}}}
+	document := &documentpreview.Document{Paragraphs: []documentpreview.Paragraph{{Text: "正文"}}}
 	file := &workspaceFile{Path: "report.docx", Document: document}
-	content := documentPreviewHTML(file.Path, file.Document)
-	if strings.Contains(content, "<script>") || !strings.Contains(content, "&lt;script&gt;") {
-		t.Fatal("document text was not escaped in preview HTML")
-	}
 	a := &desktop{prefs: defaultPrefs(), tabs: []*conversation{{Workspace: root}}, workspaceFiles: map[string]*workspaceFile{workspaceKey(root): file}}
 	a.releaseWorkspaceFile(root)
 	if a.activeFile() != nil || file.Document != nil || file.PreviewPath != "" || file.PreviewHTML != "" {
