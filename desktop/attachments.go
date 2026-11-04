@@ -563,16 +563,16 @@ func (a *desktop) finishAttachmentImageJob(t *conversation) {
 	}
 }
 func (a *desktop) pendingAttachmentRow(c *ui.Context, t *conversation) {
-	ui.Row(c).Gap(6).Wrap().Children(func() {
+	ui.Row(c).Gap(gapInline).Wrap().Children(func() {
 		for _, att := range t.PendingAttachments {
-			ui.Row(c.Key(att.ID)).Padding(5, 8).Gap(7).AlignItems(ui.Center).Shrink(0).Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(5).Label("待发送附件 " + att.Name).Children(func() {
+			ui.Row(c.Key(att.ID)).Padding(5, 8).Gap(7).AlignItems(ui.Center).Shrink(0).Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(radiusSmall).Label("待发送附件 " + att.Name).Children(func() {
 				if bm := t.PendingAttachmentImages[att.ID]; bm != nil {
 					ui.Image(c, bm).Size(36, 32).Shrink(0).Fit(ui.Contain)
 				}
 				ui.Column(c).Gap(2).Children(func() {
-					uikit.Tooltip(c, ui.Text(c, short(att.Name, 18)).FontSize(12).TextColor(c.Theme().Text).SingleLine(), att.Name)
+					uikit.Tooltip(c, ui.Text(c, short(att.Name, 18)).FontSize(fsTiny).TextColor(c.Theme().Text).SingleLine(), att.Name)
 					if att.Error != "" {
-						uikit.Tooltip(c, ui.Text(c, short(att.Error, 18)).FontSize(10).TextColor(c.Theme().Danger), att.Error)
+						uikit.Tooltip(c, ui.Text(c, short(att.Error, 18)).FontSize(fsMicro).TextColor(c.Theme().Danger), att.Error)
 					}
 				})
 				dangerIconAction(c, "attach-remove-"+att.ID, "移除 "+att.Name, "close", 20, func() {
@@ -697,7 +697,7 @@ func (a *desktop) messageAttachmentTile(c *ui.Context, t *conversation, att map[
 				Cursor(ui.CursorPointer), tip).
 				OnClick(func() { t.uiState().ToolOpen[key] = !expanded })
 		case str(att, "error") == "":
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 				fieldNote(c, "Loading image…", a.secondaryInk())
 				flat(c, "加载图片").OnClick(func() {
 					if a.core != nil && a.win != nil {
@@ -706,7 +706,7 @@ func (a *desktop) messageAttachmentTile(c *ui.Context, t *conversation, att map[
 				})
 			})
 		}
-		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(gapTight).AlignItems(ui.Center).Children(func() {
 			uikit.Tooltip(c, ui.Text(c, short(name, 18)).FontSize(fsAux).TextColor(a.secondaryInk()), name)
 			if err := str(att, "error"); err != "" {
 				uikit.Tooltip(c, ui.Text(c, short(err, 18)).FontSize(fsAux).TextColor(c.Theme().Danger), err)

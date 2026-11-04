@@ -316,7 +316,7 @@ func numberField(c *ui.Context, id, name string, value *float64, lo, hi, step fl
 
 func switchRow(c *ui.Context, id, name, note string, value *bool) ui.Element {
 	var sw ui.Element
-	ui.Column(c.Key("switch-" + id)).Shrink(0).Gap(6).Children(func() {
+	ui.Column(c.Key("switch-" + id)).Shrink(0).Gap(gapInline).Children(func() {
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Grow(1).Gap(2).Children(func() {
 				label(c, name)
@@ -592,7 +592,7 @@ func formDialog(c *ui.Context, open *bool, width, preferredHeight float32, title
 		ui.Column(c).Fill().Selectable().Children(func() {
 			ui.Row(c).Shrink(0).Padding(8, 8, 10).Gap(gapField).Children(func() {
 				ui.Column(c).Grow(1).Gap(2).Children(func() {
-					ui.Text(c, title).FontSize(17).Bold()
+					ui.Text(c, title).FontSize(fsDialogTitle).Bold()
 					if subtitle != "" {
 						fieldNote(c, subtitle)
 					}
@@ -617,7 +617,7 @@ func formDialog(c *ui.Context, open *bool, width, preferredHeight float32, title
 func modalTitle(c *ui.Context, title, subtitle string) {
 	ui.Row(c).AlignItems(ui.Center).Children(func() {
 		ui.Column(c).Gap(2).Children(func() {
-			ui.Text(c, title).FontSize(17).Bold()
+			ui.Text(c, title).FontSize(fsDialogTitle).Bold()
 			if subtitle != "" {
 				fieldNote(c, subtitle)
 			}
@@ -661,7 +661,7 @@ func progressBar(c *ui.Context, id, name string, value float64) {
 func statCard(c *ui.Context, id, title, big, detail string, ink ...ui.Color) {
 	card(c, "stat-"+id, func() {
 		ui.Text(c, title).FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink))
-		ui.Text(c, big).FontSize(22).Bold()
+		ui.Text(c, big).FontSize(fsStat).Bold()
 		if detail != "" {
 			ui.Text(c, detail).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink))
 		}
@@ -775,7 +775,7 @@ func popoverItem(c *ui.Context, key, text, detail string, selected bool, action 
 // closes a provider flyout the pointer left behind instead of keeping it open.
 func popoverModelRecent(c *ui.Context, key, name, provider string, selected bool, action func(), ink ...ui.Color) bool {
 	t := c.Theme()
-	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(6, 10).Justify(ui.Start).Radius(radiusSmall).Label(name + " " + provider).Cursor(ui.CursorPointer).OnClick(action)
+	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(gapInline, padCard).Justify(ui.Start).Radius(radiusSmall).Label(name + " " + provider).Cursor(ui.CursorPointer).OnClick(action)
 	hot := b.Hovered()
 	if selected {
 		b.Background(selectionFill(t.Accent))
@@ -783,7 +783,7 @@ func popoverModelRecent(c *ui.Context, key, name, provider string, selected bool
 		b.Background(t.SurfaceHover)
 	}
 	b.Children(func() {
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Gap(gapField).AlignItems(ui.Center).Children(func() {
 			label := ui.Text(c, name).FontSize(fsBody).SingleLine().Grow(1)
 			if selected {
 				label.TextColor(t.Accent).FontWeight(600)
@@ -806,7 +806,7 @@ func popoverItemDanger(c *ui.Context, key, text string, action func()) {
 
 func popoverItemStyle(c *ui.Context, key, text, detail string, selected bool, color *ui.Color, action func(), ink ...ui.Color) {
 	t := c.Theme()
-	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(6, 10).Justify(ui.Start).Radius(radiusSmall).Label(text).Cursor(ui.CursorPointer).OnClick(action)
+	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(gapInline, padCard).Justify(ui.Start).Radius(radiusSmall).Label(text).Cursor(ui.CursorPointer).OnClick(action)
 	switch {
 	case selected:
 		b.Background(selectionFill(t.Accent))
@@ -841,7 +841,7 @@ func footerBadge(c *ui.Context, id, name, value string, color ui.Color, tip stri
 		b.Background(fadeColor(b, "surface-fill", c.Theme().SurfaceHover))
 	}
 	b.Children(func() {
-		ui.Row(c).Gap(4).Children(func() {
+		ui.Row(c).Gap(gapTight).Children(func() {
 			ui.Box(c).Padding(1, 4).Radius(6).Background(c.Theme().Surface.Mix(color, 0.18)).Children(func() { ui.Text(c, name).FontSize(fsTiny).Bold().TextColor(color) })
 			ui.Text(c, value).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink))
 		})

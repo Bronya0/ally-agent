@@ -134,7 +134,7 @@ func actionParts(c *ui.Context, label string, o ActionOptions) (ui.Element, ui.E
 				ui.Icon(c, o.Icon).Size(16, 16).TextColor(ink).Opacity(0)
 			}
 			if label != "" && !o.Circle {
-				text = ui.Text(c, label).FontSize(14).TextColor(ink).SingleLine().Unselectable().Opacity(0)
+				text = ui.Text(c, label).FontSize(FontBody).TextColor(ink).SingleLine().Unselectable().Opacity(0)
 			}
 			ui.Box(c).Absolute().Left(0).Right(0).Top(0).Bottom(0).Center().Children(func() {
 				ui.Spinner(c).Size(14, 14).TextColor(ink)
@@ -147,7 +147,7 @@ func actionParts(c *ui.Context, label string, o ActionOptions) (ui.Element, ui.E
 			ui.Icon(c, o.Icon).Size(16, 16).TextColor(ink)
 		}
 		if label != "" && !o.Circle {
-			text = ui.Text(c, label).FontSize(14).TextColor(ink).SingleLine().Unselectable()
+			text = ui.Text(c, label).FontSize(FontBody).TextColor(ink).SingleLine().Unselectable()
 		}
 	})
 	return b, text
@@ -183,9 +183,9 @@ func ColorTag(c *ui.Context, label string, o TagOptions) ui.Element {
 	return colorTag(c, label, o, ink, fill, edge, h, r)
 }
 func colorTag(c *ui.Context, label string, o TagOptions, ink, fill, edge ui.Color, h, r float32) ui.Element {
-	pad, font := float32(7), float32(13)
+	pad, font := float32(7), FontSmall
 	if o.Compact {
-		pad, font = 5, 11
+		pad, font = 5, FontCaption
 	}
 	e := ui.Row(c).Height(h).Padding(0, pad).Gap(5).AlignItems(ui.Center).Radius(r).Background(fill).Disabled(o.Disabled)
 	if !o.Borderless {
@@ -225,9 +225,9 @@ func Radios[T comparable](c *ui.Context, selected *T, options []RadioOption[T], 
 				}
 				ink = fade(b, "radio-ink", ink)
 				b.Height(34).Padding(0, 14).Border(1, fade(b, "radio-edge", edge)).Radius(0).Background(ui.Transparent)
-				b.Children(func() { ui.Text(c, o.Label).FontSize(14).TextColor(ink).SingleLine().Unselectable() })
+				b.Children(func() { ui.Text(c, o.Label).FontSize(FontBody).TextColor(ink).SingleLine().Unselectable() })
 			} else {
-				b.Gap(8).Height(28)
+				b.Gap(GapField).Height(28)
 				edge := c.Theme().Border
 				if active || b.Hovered() {
 					edge = c.Theme().Accent
@@ -238,7 +238,7 @@ func Radios[T comparable](c *ui.Context, selected *T, options []RadioOption[T], 
 							ui.Box(c).Size(8, 8).Radius(4).Background(c.Theme().Accent)
 						}
 					})
-					ui.Text(c, o.Label).FontSize(14).TextColor(ink).Unselectable()
+					ui.Text(c, o.Label).FontSize(FontBody).TextColor(ink).Unselectable()
 				})
 			}
 		}
@@ -313,9 +313,9 @@ func Messages(c *ui.Context) ui.Element {
 				if item.Type == "loading" {
 					ui.Spinner(c).Size(16, 16).TextColor(c.Theme().Accent)
 				} else {
-					ui.Box(c).Size(18, 18).Shrink(0).Radius(9).Center().Background(ToneColor(c, tone)).Children(func() { ui.Text(c, mark).FontSize(12).TextColor(ui.Hex("#ffffff")) })
+					ui.Box(c).Size(18, 18).Shrink(0).Radius(9).Center().Background(ToneColor(c, tone)).Children(func() { ui.Text(c, mark).FontSize(FontTiny).TextColor(ui.Hex("#ffffff")) })
 				}
-				ui.Text(c, item.Title).MinWidth(0).FontSize(14).TextColor(c.Theme().Text).MaxWidth(max(float32(60), w-110))
+				ui.Text(c, item.Title).MinWidth(0).FontSize(FontBody).TextColor(c.Theme().Text).MaxWidth(max(float32(60), w-110))
 				if item.Action != "" {
 					toast.ActionButton().Children(func() { ui.Text(c, item.Action).TextColor(c.Theme().Accent) })
 				}
@@ -333,11 +333,11 @@ func Choice(c *ui.Context, text string, selected bool, tone ui.Color, swatch boo
 		Label(text).Cursor(ui.CursorPointer)
 	ink := OptionChrome(c, b, selected, tone)
 	return b.Children(func() {
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(GapInline).AlignItems(ui.Center).Children(func() {
 			if swatch {
 				ui.Box(c).Size(9, 9).Shrink(0).Radius(5).Background(tone)
 			}
-			glyph := ui.Text(c, text).FontSize(13).TextColor(ink).SingleLine()
+			glyph := ui.Text(c, text).FontSize(FontSmall).TextColor(ink).SingleLine()
 			if selected {
 				glyph.FontWeight(600)
 			}

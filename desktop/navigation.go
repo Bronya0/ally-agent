@@ -68,7 +68,7 @@ func navItem(c *ui.Context, id, label, iconName string, expanded, active bool, t
 		}
 		ui.Row(c).FillWidth().Padding(0, railContentInset(c)).Gap(10).AlignItems(ui.Center).Children(func() {
 			railIcon(c, iconName, sizeRailIcon).TextColor(color)
-			text := ui.Text(c, label).FontSize(12.5).TextColor(color).SingleLine()
+			text := ui.Text(c, label).FontSize(fontRailLabel).TextColor(color).SingleLine()
 			if active {
 				text.FontWeight(600)
 			}

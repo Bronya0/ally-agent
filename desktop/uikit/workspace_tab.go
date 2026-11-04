@@ -8,7 +8,7 @@ import "github.com/egoist/mygo/ui"
 // segment, so the tip carries the full path.
 func WorkspaceTab(c *ui.Context, label, tip string, active, busy, canClose bool, closeIcon *ui.SVG, activate, close func(), gesture *TabGesture, secondary ...ui.Color) ui.Element {
 	t := c.Theme()
-	row := ui.ButtonBase(c).Height(44).Shrink(0).MinWidth(64).MaxWidth(220).Padding(0, 12).Gap(5).AlignItems(ui.Center).Radius(0).Cursor(ui.CursorPointer).Label(label).OnClick(activate)
+	row := ui.ButtonBase(c).Height(44).Shrink(0).MinWidth(64).MaxWidth(220).Padding(0, GapSection).Gap(5).AlignItems(ui.Center).Radius(0).Cursor(ui.CursorPointer).Label(label).OnClick(activate)
 	if gesture != nil {
 		// The entire tab, including its status slot and padding, pans the strip.
 		gesture.Watch(row)
@@ -57,7 +57,9 @@ func WorkspaceTab(c *ui.Context, label, tip string, active, busy, canClose bool,
 		}
 		ink = fade(row, "workspace-ink", ink)
 
-		button.Children(func() { ui.Text(c, label).FontSize(13).FontWeight(500).TextColor(ink).SingleLine().Unselectable() })
+		button.Children(func() {
+			ui.Text(c, label).FontSize(FontSmall).FontWeight(500).TextColor(ink).SingleLine().Unselectable()
+		})
 		hover := tip
 		if hover == "" {
 			hover = label

@@ -28,7 +28,7 @@ func GitTreeItem(c *ui.Context, name, status string, added, deleted int, open *b
 	}
 	row := ui.TreeItem(c, "", open, children).Gap(0).Label(name)
 	row.Children(func() {
-		ui.Row(c).Grow(1).MinWidth(0).Gap(6).PaddingStart(2).Children(func() {
+		ui.Row(c).Grow(1).MinWidth(0).Gap(GapInline).PaddingStart(2).Children(func() {
 			ui.Text(c, name).Grow(1).MinWidth(0).SingleLine().TextColor(ink)
 			if children == nil {
 				ui.Text(c, status).Shrink(0).TextColor(ink)

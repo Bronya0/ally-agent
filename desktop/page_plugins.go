@@ -177,7 +177,7 @@ func (a *desktop) pluginEmptyState(c *ui.Context) {
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(1).Gap(gapField).Children(func() {
 				accentChip(c, "插件系统 v1")
-				ui.Text(c, "把 Ally 变成你自己的控制台").FontSize(19).Bold()
+				ui.Text(c, "把 Ally 变成你自己的控制台").FontSize(fsHeadline).Bold()
 				ui.Text(c, "三分钟定制自己想要的页面，比如公司 OA、BUG 管理页面、工时计划表等等。").FontSize(fsBody).TextColor(a.secondaryInk())
 				cardFlat(c, "开发教程").AlignSelf(ui.Start).OnClick(func() {
 					c.Services().OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/plugin-system.md")

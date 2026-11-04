@@ -26,8 +26,8 @@ const (
 const (
 	ButtonHeight      float32 = ControlHeight
 	ButtonHeightSmall float32 = 28
-	ButtonFont        float32 = 13
-	ButtonFontSmall   float32 = 12
+	ButtonFont                = FontSmall
+	ButtonFontSmall           = FontTiny
 	ButtonPadX        float32 = 12
 	ButtonPadXSmall   float32 = 8
 )

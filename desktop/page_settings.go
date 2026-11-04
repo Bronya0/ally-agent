@@ -853,7 +853,7 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 	services := c.Services()
 	{
 		card(c, "settings-about", func() {
-			ui.Text(c, "关于 Ally").FontSize(18).Bold()
+			ui.Text(c, "关于 Ally").FontSize(fsHeading).Bold()
 			fieldNote(c, "自由、开源的桌面 AI 编程助手。", a.secondaryInk())
 			divider(c)
 			ui.Text(c, "GPLv3 only").FontSize(fsBody).Bold()

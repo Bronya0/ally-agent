@@ -181,7 +181,7 @@ func (a *desktop) workspaceMenu(c *ui.Context, from string, anchor ui.Element) {
 				}
 				seen[strings.ToLower(root)] = true
 				count++
-				b := ui.ButtonBase(c.Key(root)).FillWidth().Height(32).Padding(0, 9).Gap(8).Justify(ui.Start).AlignItems(ui.Center).Radius(5).Cursor(ui.CursorPointer).Label("打开工作区 " + root)
+				b := ui.ButtonBase(c.Key(root)).FillWidth().Height(32).Padding(0, 9).Gap(gapField).Justify(ui.Start).AlignItems(ui.Center).Radius(radiusSmall).Cursor(ui.CursorPointer).Label("打开工作区 " + root)
 				fill := ui.Transparent
 				if b.Hovered() {
 					fill = c.Theme().SurfaceHover
@@ -189,12 +189,12 @@ func (a *desktop) workspaceMenu(c *ui.Context, from string, anchor ui.Element) {
 				b.Background(fadeColor(b, "history-fill", fill)).OnClick(func() { a.workspaceMenuOpen = false; a.openWorkspaceEntry(root) })
 				b.Children(func() {
 					iconGlyph(c, "folderopen", 15).Shrink(0).TextColor(a.secondaryInk())
-					ui.Text(c, filepath.Base(root)).FontSize(13).TextColor(c.Theme().Text).SingleLine().MinWidth(0)
+					ui.Text(c, filepath.Base(root)).FontSize(fsSmall).TextColor(c.Theme().Text).SingleLine().MinWidth(0)
 				})
 				uikit.Tooltip(c, b, root)
 			}
 			if count == 0 {
-				muted(c, "无历史记录", fsSmall, a.secondaryInk()).Padding(8)
+				muted(c, "无历史记录", fsSmall, a.secondaryInk()).Padding(padRow)
 			}
 		})
 	})
@@ -337,9 +337,9 @@ func (a *desktop) updateDialog(c *ui.Context) {
 	}
 	p := a.currentPalette()
 	modalCard(c, &a.upd.Open, 460, func() {
-		ui.Column(c).Gap(12).Children(func() {
+		ui.Column(c).Gap(gapSection).Children(func() {
 			ui.Row(c).Children(func() {
-				ui.Text(c, "软件更新").FontSize(17).Bold()
+				ui.Text(c, "软件更新").FontSize(fsDialogTitle).Bold()
 				ui.Spacer(c)
 				iconAction(c, "update-close", "关闭", "close", 24, func() {
 					if !a.upd.installing() {
@@ -357,7 +357,7 @@ func (a *desktop) updateDialog(c *ui.Context) {
 				busyRow(c, "正在检查更新…", a.secondaryInk())
 			case "downloading", "extracting":
 				ui.Text(c, map[string]string{"downloading": "正在下载更新…", "extracting": "正在解压更新…"}[a.upd.State])
-				ui.Text(c, "版本 "+a.upd.Tag).FontSize(11).TextColor(p.muted)
+				ui.Text(c, "版本 "+a.upd.Tag).FontSize(fsCaption).TextColor(p.muted)
 				value := a.upd.Progress / 100
 				if value < 0 || value > 1 {
 					value = -1
@@ -368,10 +368,10 @@ func (a *desktop) updateDialog(c *ui.Context) {
 					if a.upd.Progress < 0 {
 						label = "已下载 " + fmtBytes(a.upd.BytesNow)
 					}
-					ui.Text(c, label).FontSize(11).TextColor(p.muted)
+					ui.Text(c, label).FontSize(fsCaption).TextColor(p.muted)
 					ui.Spacer(c)
 					if a.upd.BytesTotal > 0 {
-						ui.Text(c, fmtBytes(a.upd.BytesNow)+" / "+fmtBytes(a.upd.BytesTotal)).FontSize(11).TextColor(p.muted)
+						ui.Text(c, fmtBytes(a.upd.BytesNow)+" / "+fmtBytes(a.upd.BytesTotal)).FontSize(fsCaption).TextColor(p.muted)
 					}
 				})
 			case "available":
@@ -394,14 +394,14 @@ func (a *desktop) updateDialog(c *ui.Context) {
 				busyRow(c, label, a.secondaryInk())
 			case "error":
 				ui.Text(c, "更新失败").TextColor(c.Theme().Danger)
-				ui.Text(c, a.upd.Error).FontSize(12).Selectable().TextColor(c.Theme().Danger)
+				ui.Text(c, a.upd.Error).FontSize(fsTiny).Selectable().TextColor(c.Theme().Danger)
 			case "latest":
 				ui.Text(c, "已是最新版本").TextColor(c.Theme().Success)
 			}
 			if a.upd.Note != "" && a.upd.State != "error" {
 				fieldNote(c, a.upd.Note, a.secondaryInk())
 			}
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 				services := c.Services()
 				flat(c, "发行说明").OnClick(func() {
 					services.OpenURL("https://github.com/Bronya0/ally-agent/releases")
