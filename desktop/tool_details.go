@@ -21,6 +21,9 @@ func (a *desktop) attachToolImage(t *conversation, m map[string]any) {
 	id := str(m, "toolCallId") + "-image"
 	if len(messageAttachmentList(m)) == 0 {
 		m["attachments"] = []any{map[string]any{"id": id, "name": map[bool]string{true: "截图", false: "生成的图片"}[name == "screenshot"], "kind": "image", "generated": name != "screenshot", "imageRef": ref, "dataUrl": url, "type": str(data, "mime")}}
+		// A row that only carried a tool call now draws an image: it may open a
+		// history block where it did not before.
+		t.markHistory()
 	}
 	if existing := messageAttachmentList(m); len(existing) > 0 {
 		id = str(existing[0], "id")
@@ -51,10 +54,13 @@ func toolDeleteTree(c *ui.Context, args, result map[string]any, ink ...ui.Color)
 		}
 	}
 	for n, raw := range rows {
-		path := fmt.Sprint(raw)
+		path := ""
 		suffix := " · ok"
 		color := uikit.SecondaryInk(c, ink)
-		if row, ok := raw.(map[string]any); ok {
+		// The common row is an object: read its path before anything formats
+		// the value, since printing a map sorts its keys on every frame.
+		switch row := raw.(type) {
+		case map[string]any:
 			path = str(row, "path")
 			if path == "" {
 				path = str(row, "deleted")
@@ -66,6 +72,11 @@ func toolDeleteTree(c *ui.Context, args, result map[string]any, ink ...ui.Color)
 				suffix = " · failed: " + str(row, "errorCode") + " " + str(row, "error")
 				color = c.Theme().Danger
 			}
+		case string:
+			path = row
+		default:
+			// Not what the tool writes: format it rather than hide it.
+			path = fmt.Sprint(raw)
 		}
 		prefix := "├─ "
 		if n == len(rows)-1 {

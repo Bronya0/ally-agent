@@ -20,6 +20,17 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+func TestFastCompactLeavesLessThanHalf(t *testing.T) {
+	for _, tc := range []struct {
+		before, after int
+		want          bool
+	}{{100, 49, true}, {100, 50, false}, {101, 50, true}, {101, 51, false}, {0, 0, false}} {
+		if got := fastCompactLeavesLessThanHalf(tc.before, tc.after); got != tc.want {
+			t.Errorf("fastCompactLeavesLessThanHalf(%d, %d) = %v, want %v", tc.before, tc.after, got, tc.want)
+		}
+	}
+}
+
 func fastCompactFixture() []openai.ChatCompletionMessage {
 	h := []openai.ChatCompletionMessage{{Role: "user", Content: "keep my requirements"}}
 	for i := 0; i < 6; i++ {
@@ -471,6 +482,15 @@ func TestAutoCompactRecentPreservesRequestWithoutLLM(t *testing.T) {
 	cfg := ConfigState{AutoCompactMethod: "recent", Model: "test", APIKey: "key", BaseURL: server.URL, APIFormat: apiFormatOpenAIChat}
 	prefix := []openai.ChatCompletionMessage{{Role: "system", Content: "frozen rules"}, {Role: "system", Content: "frozen workspace map"}}
 	history := append(cloneChatMessages(prefix), fastCompactFixture()...)
+	cutoff := fastCompactCutoff(history[len(prefix):], defaultFastCompactKeepRecentRounds)
+	for i := len(prefix); i < len(prefix)+cutoff; i++ {
+		switch history[i].Role {
+		case openai.ChatMessageRoleAssistant:
+			history[i].ReasoningContent = strings.Repeat("旧思考依据", 12000)
+		case openai.ChatMessageRoleTool:
+			history[i].Content = "BEGIN " + strings.Repeat("旧工具结果", 12000) + " END"
+		}
+	}
 	history = append(history, openai.ChatCompletionMessage{Role: "user", Content: "current question"}, openai.ChatCompletionMessage{Role: "user", Content: "injected followup"})
 	a.compactFailures["recent-run"] = maxConsecutiveCompactFailures
 	compacted, payload, err := a.compactRunHistory(context.Background(), cfg, "recent-run", compactReasonThreshold, ChatRequest{Message: "current question"}, history, 50000)
@@ -556,6 +576,45 @@ func TestAutoCompactRecentFallsBackWhenRewriteSavesNoMessageTokens(t *testing.T)
 	_, payload, err := a.compactRunHistory(context.Background(), cfg, sid, compactReasonThreshold, ChatRequest{}, history, 50000)
 	if err != nil || requests.Load() != 1 || payload["summary"] != "space-saving summary" {
 		t.Fatalf("a state-only rewrite must fall back to a summary: %v %v", payload, err)
+	}
+}
+
+func TestAutoCompactRecentDiscardsInsufficientCandidateOnSummaryFailure(t *testing.T) {
+	t.Parallel()
+	a := newApiTestApp(t)
+	a.modelHistoryCodec = nil
+	a.stats = nil
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "summary rejected", http.StatusBadRequest)
+	}))
+	defer server.Close()
+	cfg := ConfigState{AutoCompactMethod: "recent", Model: "test", APIKey: "key", BaseURL: server.URL, APIFormat: apiFormatOpenAIChat}
+	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: strings.Repeat("keep requirements ", 5000)}}
+	for i := 0; i < 6; i++ {
+		id := fmt.Sprintf("call-%d", i)
+		history = append(history,
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: id, Type: "function", Function: openai.FunctionCall{Name: "read", Arguments: `{"x":1}`}}}},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: id, Content: "OK"},
+		)
+	}
+	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: "done"})
+	const sid = "insufficient-fast-candidate"
+	a.saveHistory(sid, history)
+	candidate, err := a.prepareFastCompactHistory(context.Background(), sid, history, 50000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !candidate.messageChange || fastCompactLeavesLessThanHalf(intFromAny(candidate.result["tokensBefore"]), intFromAny(candidate.result["tokensAfter"])) {
+		t.Fatal("fixture must produce a real fast rewrite that saves less than half")
+	}
+	_, _, err = a.compactRunHistory(context.Background(), cfg, sid, compactReasonThreshold, ChatRequest{}, history, 50000)
+	if err == nil || requests.Load() != 1 {
+		t.Fatalf("insufficient fast savings must fall back to the summary model: err=%v requests=%d", err, requests.Load())
+	}
+	if !reflect.DeepEqual(a.loadSessionHistoryCopy(sid), history) {
+		t.Fatal("a rejected fast candidate must not alter history when summary fallback fails")
 	}
 }
 

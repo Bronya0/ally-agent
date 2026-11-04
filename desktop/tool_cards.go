@@ -276,9 +276,21 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	_, windowEnd := a.chatMessageWindow(t)
 	end := index
 	reads, greps, lists, commands := 0, 0, 0, 0
+	anyRunning, anyQueued := false, false
+	lastState := "pending"
 	for i := index; i < windowEnd && isFoldableToolGroupItem(t.Messages[i]); i++ {
 		end = i + 1
-		switch readGrepGroupName(t.Messages[i]) {
+		m := t.Messages[i]
+		state := toolState(m)
+		lastState = state
+		switch state {
+		case "running":
+			anyRunning = true
+		case "pending":
+			anyQueued = true
+		}
+		name := readGrepGroupName(m)
+		switch name {
 		case "grep":
 			greps++
 		case "list", "glob":
@@ -296,6 +308,16 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	if commands > 0 && hasReadTools {
 		a11yLabel = "工具分组 "
 	}
+	// A group's mark follows its calls: it breathes while any call runs, waits
+	// grey while one is still queued, and otherwise keeps the last result. None
+	// of that is repeated in words beside the counts.
+	groupStatus := lastState
+	if anyRunning {
+		groupStatus = "running"
+	} else if anyQueued {
+		groupStatus = "pending"
+	}
+	rowLabel := a11yLabel + key
 
 	visibleEnd := end
 	if open {
@@ -355,8 +377,11 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	}
 
 	container.Children(func() {
-		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(4).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(a11yLabel + key)
+		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(4).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(rowLabel)
 		row.Children(func() {
+			ui.Box(c).Absolute().Left(-20).Top(0).Width(16).HeightPercent(100).Center().Children(func() {
+				toolStatusIcon(c, groupStatus)
+			})
 			separator := false
 			if reads > 0 {
 				disclosureIcon(c, "book", a.currentPalette().accent)
@@ -1437,38 +1462,26 @@ func (a *desktop) toolListBody(c *ui.Context, index int, result map[string]any) 
 	})
 }
 
-// diffBlock draws a side-by-side diff: one row per pair, two half-width cells,
-// both wrapping. The rows used to sit in two independent horizontal scrollers,
-// which kept the code shape but hid the tail of any long line behind a scroller
-// the reader had to find and then move with Shift held. Wrapping cannot hide
-// anything, and the row grows to its taller cell so the two sides stay lined up.
+// diffBlock draws a single-column unified diff. Each source line gets the full
+// card width, so long lines wrap in place while additions and removals keep
+// their own color and line number.
 func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 	outer := ui.Column(c.Key(key)).FillWidth().MinWidth(0).Shrink(0)
 	memo := memoAt[diffMemo](outer, "diff")
-	pairs := memo.get(diff)
+	lines := memo.display(diff)
 	limit := memo.limit(compact)
-	visible := pairs[:min(len(pairs), limit)]
+	visible := lines[:min(len(lines), limit)]
 	outer.Children(func() {
-		for _, pair := range visible {
-			if strings.HasPrefix(pair.left, "@@") || strings.HasPrefix(pair.left, "---") || strings.HasPrefix(pair.right, "+++") {
-				ui.Text(c, pair.left).FillWidth().Padding(3, 8).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).Selectable()
+		for _, line := range visible {
+			if line.gap > 0 || strings.HasPrefix(line.text, "@@") || strings.HasPrefix(line.text, "---") || strings.HasPrefix(line.text, "+++") {
+				ui.Text(c, line.text).FillWidth().Padding(3, 8).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).Selectable()
 				continue
 			}
-			row := ui.Row(c).FillWidth().MinWidth(0).Shrink(0).AlignItems(ui.Stretch)
-			if pair.gap > 0 {
-				row.Children(func() {
-					ui.Text(c, fmt.Sprintf("… %d 行未变更 …", pair.gap)).FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(3, 8)
-				})
-				continue
-			}
-			row.Children(func() {
-				diffCell(c, pair.left, pair.removed, pair.leftNumber, a.secondaryInk())
-				diffCell(c, pair.right, pair.added, pair.rightNumber, a.secondaryInk())
-			})
+			diffLine(c, line.text, line.changed, line.number, a.secondaryInk())
 		}
 	})
-	if len(visible) < len(pairs) {
-		transcriptAction(c, key+"-more", fmt.Sprintf("Show more (%d)", len(pairs)-len(visible))).OnClick(func() { memo.extra += 120 })
+	if len(visible) < len(lines) {
+		transcriptAction(c, key+"-more", fmt.Sprintf("Show more %d rows", len(lines)-len(visible))).OnClick(func() { memo.extra += 120 })
 	}
 	if memo.extra > 0 {
 		transcriptAction(c, key+"-less", "Show less").OnClick(func() { memo.extra = 0 })

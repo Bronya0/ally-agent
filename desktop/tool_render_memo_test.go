@@ -4,11 +4,11 @@ import "testing"
 
 func TestDiffMemoReplacesRowsAndResetsExpansion(t *testing.T) {
 	var memo diffMemo
-	memo.get("-old\n+new")
+	memo.display("-old\n+new")
 	memo.extra = 120
-	rows := memo.get("-before\n+after")
-	if len(rows) != 1 || rows[0].right != "+after" || memo.extra != 0 {
-		t.Fatalf("stale diff: %+v extra=%d", rows, memo.extra)
+	lines := memo.display("-before\n+after")
+	if len(lines) != 2 || lines[1].text != "+after" || !lines[1].changed || memo.extra != 0 {
+		t.Fatalf("stale diff: %+v extra=%d", lines, memo.extra)
 	}
 }
 

@@ -2,6 +2,7 @@
 """Shared local/CI release builder. Requires Go and Python 3; macOS for DMG."""
 import argparse
 from contextlib import contextmanager
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -34,11 +35,14 @@ def run(*args, env=None):
     subprocess.run(list(map(str, args)), cwd=ROOT, env=env, check=True)
 
 
-def build_env(goos=None, arch=None):
+def build_env(goos=None, arch=None, extra_ldflags=''):
     env = os.environ.copy()
     env['CGO_ENABLED'] = '0'
     env.setdefault('GOMAXPROCS', '2')
     env.setdefault('GOGC', '30')
+    if extra_ldflags:
+        inherited = env.get('MYGO_LDFLAGS', '').strip()
+        env['MYGO_LDFLAGS'] = ' '.join(value for value in (inherited, extra_ldflags) if value)
     if goos:
         env['GOOS'], env['GOARCH'] = goos, arch
     else:
@@ -94,11 +98,13 @@ def legal_files(destination):
     shutil.copytree(ROOT / 'third_party/ripgrep', destination / 'third_party/ripgrep', dirs_exist_ok=True)
 
 
-def compile_binary(config, goos, arch, destination):
+def compile_binary(config, goos, arch, destination, build_time=''):
     destination.parent.mkdir(parents=True, exist_ok=True)
     flags = '-s -w -X github.com/egoist/mygo.production=1'
     for field, key in [('packageName', 'name'), ('packageVersion', 'version'), ('packageIdentifier', 'identifier')]:
         flags += ' -X ' + "'github.com/egoist/mygo." + field + '=' + config[key] + "'"
+    if build_time:
+        flags += ' -X ally-dev/desktop.buildTime=' + build_time
     if goos == 'windows':
         flags += ' -H=windowsgui'
     run('go', 'build', '-trimpath', '-tags', 'mygo_noinspector', '-ldflags', flags,
@@ -165,16 +171,19 @@ def verify_archive(archive, goos, arch=None):
     print('Verified:', archive, flush=True)
 
 
-def windows(config, exe_only=False):
+def windows(config, exe_only=False, build_time=''):
     for arch in ((host_arch(),) if exe_only else ('amd64', 'arm64')):
-        windows_arch(config, arch, exe_only)
+        if build_time:
+            windows_arch(config, arch, exe_only, build_time)
+        else:
+            windows_arch(config, arch, exe_only)
 
 
-def windows_arch(config, arch, exe_only=False):
+def windows_arch(config, arch, exe_only=False, build_time=''):
     with tempfile.TemporaryDirectory(prefix='ally-windows-', dir=DIST) as work:
         stage = Path(work)
         exe = stage / 'Ally.exe'
-        compile_binary(config, 'windows', arch, exe)
+        compile_binary(config, 'windows', arch, exe, build_time)
         ripgrep('windows', arch, stage / 'tools/rg.exe')
         if exe_only:
             # Never rename around an in-use fixed executable. os.replace fails clearly.
@@ -276,13 +285,15 @@ def host_arch():
     raise RuntimeError('Unsupported development architecture: ' + machine)
 
 
-def macos_app(config):
+def macos_app(config, build_time=''):
     """Fast local .app for this Mac; no release archives or universal build."""
     arch = host_arch()
+    extra_ldflags = '-X ally-dev/desktop.buildTime=' + build_time if build_time else ''
     with tempfile.TemporaryDirectory(prefix='ally-dev-mac-', dir=DIST) as directory:
         stage = Path(directory)
         run('go', 'tool', 'mygo', 'build', '-platform', 'darwin/' + arch,
-            '-skip-dmg', '-skip-notarize', '-sign', '-', '-o', stage, env=build_env())
+            '-skip-dmg', '-skip-notarize', '-sign', '-', '-o', stage,
+            env=build_env(extra_ldflags=extra_ldflags))
         app = stage / ('darwin-' + arch) / (config['name'] + '.app')
         rg = app / 'Contents/MacOS/tools/rg'
         ripgrep('darwin', arch, rg)
@@ -327,12 +338,13 @@ def main():
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + chr(10), encoding='utf-8')
     DIST.mkdir(exist_ok=True)
     (DIST / 'go.mod').write_text('module ally-build-artifacts' + chr(10), encoding='utf-8')
+    build_time = datetime.now().astimezone().strftime('%Y-%m-%dT%H:%M') if args.target == 'dev' else ''
     with bundled_release_notes(config, release=args.target == 'release'):
         if args.target == 'dev':
             if system == 'Windows':
-                windows(config, exe_only=True)
+                windows(config, exe_only=True, build_time=build_time)
             else:
-                macos_app(config)
+                macos_app(config, build_time=build_time)
         else:
             RELEASE.mkdir(exist_ok=True)
             windows(config)

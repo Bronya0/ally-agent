@@ -825,6 +825,12 @@ func (a *desktop) toggleBuiltinTool(tool backend.ToolDefinitionSummary) {
 	if a.mcpF.Busy || a.mcpF.ImportBusy {
 		return
 	}
+	// Turning an image tool on without a usable picture model would fail on the
+	// first call, so say so instead of saving the switch.
+	if !tool.Enabled && tool.AvailabilityReason != "" {
+		a.notify(tool.AvailabilityReason)
+		return
+	}
 	a.mcpF.Busy = true
 	a.mcpF.Revision++
 	previous, done := a.configWriteSlot()

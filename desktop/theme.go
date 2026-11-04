@@ -136,10 +136,10 @@ func (p palette) chromeColor() ui.Color {
 
 func (p palette) headerColor() ui.Color {
 	if p.dark {
-		// One fixed charcoal for every dark palette: tinting the frame with the
-		// accent and lifting it toward white read brighter than the panel it
-		// wraps, and the window controls have to match it exactly.
-		return ui.Hex("#2e2e2e")
+		// One fixed neutral charcoal for every dark palette. Keep it distinct
+		// from the background-filled active workspace tab, and keep window
+		// controls on the same surface.
+		return ui.Hex("#353535")
 	}
 	base := p.chrome
 	if base.A == 0 {
@@ -265,6 +265,7 @@ func (a *desktop) syncNativeAppearance() {
 	mygo.Theme.SetSource(source)
 	if a.win != nil {
 		_ = a.win.SetBackgroundColor(fmt.Sprintf("#%02x%02x%02x", p.bg.R, p.bg.G, p.bg.B))
+		configureWindowFrame(a.win, p.headerColor())
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	backend "ally-dev/internal/app"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/markdown"
 )
 
 var skillSources = []struct{ id, label string }{
@@ -117,7 +118,9 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 							if path == "" {
 								path = s.Dir
 							}
-							if path != "" {
+							if sourceKey(s.Source) == "builtin" {
+								uikit.Tooltip(c, ui.Text(c, "随 Ally 内置").FontSize(fsTiny).TextColor(faint).SingleLine(), "内置技能随应用发布")
+							} else if path != "" {
 								link := uikit.Tooltip(c, ui.Text(c, path).FontSize(fsTiny).TextColor(faint).SingleLine(), "点击在文件管理器中打开: "+path)
 								link.Cursor(ui.CursorPointer)
 								if link.Clicked() {
@@ -125,13 +128,14 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 								}
 							}
 						})
-						skillCardActions(c.Key("skill-actions"), s.Name, s.Path, &enabled, a.skillsF.ToggleBusy[s.Name], func() { path := s.Path; a.job(func() error { return a.core.OpenPathInFileManager(path) }) }, func(value bool) { a.toggleSkill(s.Name, value) })
+						skillCardActions(c.Key("skill-actions"), s.Name, s.Path, &enabled, a.skillsF.ToggleBusy[s.Name], func() { a.viewSkill(s.Name) }, func(value bool) { a.toggleSkill(s.Name, value) })
 					})
 				})
 			}
 		})
 	})
 	a.skillDialog(c)
+	a.skillViewer(c)
 }
 
 func sourceKey(source string) string {
@@ -296,6 +300,54 @@ func (a *desktop) skillDialog(c *ui.Context) {
 	})
 }
 
+func (a *desktop) viewSkill(name string) {
+	a.skillsF.ViewRequestSeq++
+	seq := a.skillsF.ViewRequestSeq
+	a.skillsF.ViewOpen = true
+	a.skillsF.ViewLoading = true
+	a.skillsF.ViewName = name
+	a.skillsF.ViewContent = ""
+	a.skillsF.ViewError = ""
+	go func() {
+		content, err := a.core.GetSkill(name)
+		a.win.Update(func() {
+			if !a.skillsF.ViewOpen || a.skillsF.ViewRequestSeq != seq {
+				return
+			}
+			a.skillsF.ViewLoading = false
+			if err != nil {
+				a.skillsF.ViewError = err.Error()
+				return
+			}
+			a.skillsF.ViewContent = content
+		})
+	}()
+}
+
+func (a *desktop) skillViewer(c *ui.Context) {
+	if !a.skillsF.ViewOpen {
+		return
+	}
+	formDialog(c.Key("skill-viewer"), &a.skillsF.ViewOpen, widthModalWide, 760, "查看技能", a.skillsF.ViewName, func() {
+		switch {
+		case a.skillsF.ViewLoading:
+			busyRow(c, "正在读取技能内容…", a.secondaryInk())
+		case a.skillsF.ViewError != "":
+			inlineError(c, "skill-view-error", a.skillsF.ViewError)
+		case a.skillsF.ViewContent == "":
+			emptyState(c, "技能内容为空", "", a.secondaryInk())
+		default:
+			if a.skillsF.ViewMD == nil {
+				a.skillsF.ViewMD = a.readingMarkdownOptions("skill-viewer-markdown")
+			}
+			a.configureReadingMarkdown(a.skillsF.ViewMD)
+			markdown.View(c.Key("skill-viewer-markdown"), a.skillsF.ViewContent, a.skillsF.ViewMD).FillWidth().MinWidth(0)
+		}
+	}, func() {
+		flat(c, "关闭").OnClick(func() { a.skillsF.ViewOpen = false })
+	})
+}
+
 func (a *desktop) saveSkill() {
 	name := strings.TrimSpace(a.skillsF.AddName)
 	desc := strings.TrimSpace(a.skillsF.AddDesc)
@@ -335,11 +387,9 @@ func (a *desktop) saveSkill() {
 }
 
 // Busy feedback stays inside the fixed-size switch; adjacent actions never move.
-func skillCardActions(c *ui.Context, name, path string, enabled *bool, busy bool, view func(), toggle func(bool)) ui.Element {
+func skillCardActions(c *ui.Context, name, _ string, enabled *bool, busy bool, view func(), toggle func(bool)) ui.Element {
 	return ui.Row(c).Shrink(0).Gap(gapSection).AlignItems(ui.Center).Children(func() {
-		if path != "" {
-			uikit.Tooltip(c, cardFlat(c.Key("view"), "查看"), "打开 SKILL.md").OnClick(view)
-		}
+		uikit.Tooltip(c, cardFlat(c.Key("view"), "查看"), "查看 SKILL.md 内容").OnClick(view)
 		uikit.SwitchWithOptions(c.Key("enabled"), enabled, name, uikit.SwitchOptions{Loading: busy}).OnClick(func() { toggle(*enabled) })
 	})
 }

@@ -234,6 +234,10 @@ func (a *desktop) composerKeys(c *ui.Context, t *conversation, input ui.Element)
 		if !composing && k.Mods == 0 && (k.Key == ui.KeyUp || k.Key == ui.KeyDown) {
 			if text, ok := navigateInputHistory(t, k.Text(), k.Key == ui.KeyUp); ok {
 				k.SetText(text)
+				// Recalling history puts the caret after the recalled text, so
+				// typing continues it instead of prepending to it.
+				st.DraftCaret = len([]rune(text))
+				st.RestoreCaret = true
 				return true
 			}
 		}

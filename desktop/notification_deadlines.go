@@ -14,6 +14,11 @@ func (a *desktop) flushNotices(c *ui.Context, now time.Time) {
 	if a.noticeDeadlines == nil {
 		a.noticeDeadlines = map[string]time.Time{}
 	}
+	for key, deadline := range a.noticeRecent {
+		if !now.Before(deadline) {
+			delete(a.noticeRecent, key)
+		}
+	}
 	pending := a.notifications
 	a.notifications = nil
 	for _, item := range pending {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -241,14 +242,23 @@ type splitDiffRow struct {
 	left, right             string
 	removed, added          bool
 	leftNumber, rightNumber int
+	leftOrder, rightOrder   int
+	leftPresent             bool
+	rightPresent            bool
 	gap                     int
 }
 
+type diffDisplayLine struct {
+	text    string
+	number  int
+	order   int
+	changed bool
+	gap     int
+}
+
 func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
-	// Tabs are expanded once here, with the rows the card memoises, rather than
-	// in every cell on every frame. A tab advance is about four characters, so a
-	// deeply indented line would otherwise spend a third of its half-width cell on
-	// one indent level.
+	// Tabs are expanded once while deriving the memoized display rows, rather
+	// than in every code line on every frame.
 	for n := range lines {
 		lines[n].text = strings.ReplaceAll(lines[n].text, "\t", "    ")
 	}
@@ -257,32 +267,37 @@ func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
 		l := lines[i]
 		if l.gap > 0 {
 			text := fmt.Sprintf("… %d 行未变更 …", l.gap)
-			rows = append(rows, splitDiffRow{left: text, right: text, gap: l.gap})
+			rows = append(rows, splitDiffRow{left: text, right: text, leftOrder: i, rightOrder: i, leftPresent: true, rightPresent: true, gap: l.gap})
 			i++
 			continue
 		}
 		if strings.HasPrefix(l.text, "-") && !strings.HasPrefix(l.text, "---") {
-			var removed, added []string
+			type orderedLine struct {
+				text  string
+				order int
+			}
+			var removed, added []orderedLine
 			for i < len(lines) && lines[i].gap == 0 && strings.HasPrefix(lines[i].text, "-") && !strings.HasPrefix(lines[i].text, "---") {
-				removed = append(removed, lines[i].text)
+				removed = append(removed, orderedLine{text: lines[i].text, order: i})
 				i++
 			}
 			for i < len(lines) && lines[i].gap == 0 && strings.HasPrefix(lines[i].text, "+") && !strings.HasPrefix(lines[i].text, "+++") {
-				added = append(added, lines[i].text)
+				added = append(added, orderedLine{text: lines[i].text, order: i})
 				i++
 			}
-			count := len(removed)
-			if len(added) > count {
-				count = len(added)
-			}
+			count := max(len(removed), len(added))
 			for n := 0; n < count; n++ {
 				row := splitDiffRow{}
 				if n < len(removed) {
-					row.left = removed[n]
+					row.left = removed[n].text
+					row.leftOrder = removed[n].order
+					row.leftPresent = true
 					row.removed = true
 				}
 				if n < len(added) {
-					row.right = added[n]
+					row.right = added[n].text
+					row.rightOrder = added[n].order
+					row.rightPresent = true
 					row.added = true
 				}
 				rows = append(rows, row)
@@ -290,9 +305,9 @@ func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
 			continue
 		}
 		if strings.HasPrefix(l.text, "+") && !strings.HasPrefix(l.text, "+++") {
-			rows = append(rows, splitDiffRow{right: l.text, added: true})
+			rows = append(rows, splitDiffRow{right: l.text, rightOrder: i, rightPresent: true, added: true})
 		} else {
-			rows = append(rows, splitDiffRow{left: l.text, right: l.text})
+			rows = append(rows, splitDiffRow{left: l.text, right: l.text, leftOrder: i, rightOrder: i, leftPresent: true, rightPresent: true})
 		}
 		i++
 	}
@@ -315,16 +330,42 @@ func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
 		if strings.HasPrefix(row.left, "---") || strings.HasPrefix(row.right, "+++") {
 			continue
 		}
-		if row.left != "" && oldLine > 0 {
+		if row.leftPresent && oldLine > 0 {
 			row.leftNumber = oldLine
 			oldLine++
 		}
-		if row.right != "" && newLine > 0 {
+		if row.rightPresent && newLine > 0 {
 			row.rightNumber = newLine
 			newLine++
 		}
 	}
 	return rows
+}
+
+func singleColumnDiffRows(rows []splitDiffRow) []diffDisplayLine {
+	visible := make([]diffDisplayLine, 0, len(rows)*2)
+	for _, row := range rows {
+		if row.gap > 0 {
+			visible = append(visible, diffDisplayLine{text: row.left, order: row.leftOrder, gap: row.gap})
+			continue
+		}
+		if row.removed || row.added {
+			if row.removed && row.leftPresent {
+				visible = append(visible, diffDisplayLine{text: row.left, number: row.leftNumber, order: row.leftOrder, changed: true})
+			}
+			if row.added && row.rightPresent {
+				visible = append(visible, diffDisplayLine{text: row.right, number: row.rightNumber, order: row.rightOrder, changed: true})
+			}
+			continue
+		}
+		if row.leftPresent {
+			visible = append(visible, diffDisplayLine{text: row.left, number: row.leftNumber, order: row.leftOrder})
+		} else if row.rightPresent {
+			visible = append(visible, diffDisplayLine{text: row.right, number: row.rightNumber, order: row.rightOrder})
+		}
+	}
+	sort.SliceStable(visible, func(i, j int) bool { return visible[i].order < visible[j].order })
+	return visible
 }
 
 // diffColors matches the legacy diff palette, independently of status colors.
@@ -347,16 +388,14 @@ func diffColors(t *ui.Theme, changed, removed bool) (ui.Color, ui.Color) {
 	return ui.RGBA(22, 163, 74, 0.10), ui.Hex("#14683c")
 }
 
-func diffCell(c *ui.Context, text string, changed bool, number int, ink ...ui.Color) {
+func diffLine(c *ui.Context, text string, changed bool, number int, ink ...ui.Color) {
 	fill, color := diffColors(c.Theme(), changed, strings.HasPrefix(text, "-"))
-	// Each cell takes half the row and lets its code wrap: the row then grows to
-	// the taller side, so wrapped lines keep the two columns lined up.
-	ui.Row(c).Grow(1).Basis(0).MinWidth(0).Shrink(1).MinHeight(22).Padding(1, 8).AlignItems(ui.Start).Background(fill).Children(func() {
+	ui.Row(c).FillWidth().MinWidth(0).Shrink(0).MinHeight(22).Padding(1, 8).AlignItems(ui.Start).Background(fill).Children(func() {
 		if text == "" {
 			text = " "
 		}
 		if number > 0 {
-			ui.Text(c, strconv.Itoa(number)).Width(28).Shrink(0).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Unselectable()
+			ui.Text(c, strconv.Itoa(number)).Width(42).Shrink(0).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Unselectable()
 		}
 		ui.Text(c, text).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).Grow(1).MinWidth(0).Selectable()
 	})

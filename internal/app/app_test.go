@@ -1333,65 +1333,6 @@ func TestLoadAgentsMdLoadsSubdirsWhenRootMissing(t *testing.T) {
 	}
 }
 
-// 系统提示词的关键约束按组检查，便于提示词精简或改写后定位缺失项。
-func TestSystemPromptCarriesTheStandingRules(t *testing.T) {
-	redirectAppStateDir(t)
-	app := NewApp()
-	prompt := joinSystemPromptParts(app.buildSystemPromptParts(nil, "", nil, "", "", ""))
-	groups := []struct {
-		name string
-		want []string
-	}{
-		{"wait guidance", []string{
-			"Use `wait` only",
-			"then verify it",
-			"Do not wait for user input",
-		}},
-		{"command outside-path recovery", []string{
-			"`E_PATH_OUTSIDE`",
-			"Do not retry the unchanged command",
-			"read the returned Chinese explanation",
-		}},
-		{"consolidated safety rules", []string{
-			"# Safety",
-			"Sensitive files",
-			"`~/.ssh/*`",
-			"`~/.ally_agent/config.json`",
-			"`.env`",
-			"Run git commit/push/reset/rebase only when explicitly authorized by the user",
-			"`E_PATH_OUTSIDE`",
-		}},
-		{"redundant-read guidance", []string{
-			"Reuse the returned `version` while the source is unchanged",
-			"compaction removed the reliable snapshot",
-			"an external process may have changed the file",
-			"Use startLine=C to continue",
-		}},
-		{"edit behavioral rules", []string{
-			"must never be copied into edit text",
-			"Combine independent changes to one file in one `edit` call",
-			"same-stage edits to different files are independent",
-			"retry only failed files",
-			"Never send multiple file-mutation tool calls for the same path in one stage",
-			"Do not use patch, unified diff, or git apply",
-		}},
-	}
-	for _, group := range groups {
-		for _, want := range group.want {
-			if !strings.Contains(prompt, want) {
-				t.Errorf("system prompt missing %s %q", group.name, want)
-			}
-		}
-	}
-	// 子代理提示词共用安全那一节，别只有主提示词有。
-	sub := subagentSystemPrompt("")
-	for _, want := range []string{"# Safety", "Sensitive files", "only when explicitly authorized by the user", "`E_PATH_OUTSIDE`"} {
-		if !strings.Contains(sub, want) {
-			t.Errorf("sub-agent prompt missing safety rule %q", want)
-		}
-	}
-}
-
 // TestSessionToolsetFrozenWithinSession guards the prompt-cache prefix
 // contract for tool schemas: once a session has frozen its toolset, later runs
 // must see the exact same schemas even when the live MCP connection state

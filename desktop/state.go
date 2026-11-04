@@ -165,12 +165,14 @@ func (a *desktop) scheduleGeometryPrefsSave() {
 
 // roundStat mirrors one finished turn's numbers shown in the round footer.
 type roundStat struct {
-	DurationMS   int64
-	InputTokens  int
-	OutputTokens int
-	CacheHit     int
-	CacheMiss    int
-	Done         bool
+	DurationMS int64
+	// ModelDurationMS sums provider-call time and excludes local tool execution.
+	ModelDurationMS int64
+	InputTokens     int
+	OutputTokens    int
+	CacheHit        int
+	CacheMiss       int
+	Done            bool
 }
 
 // retryInfo drives the retry banner above the composer.
@@ -464,18 +466,25 @@ type mcpForm struct {
 
 // skillsForm is the skills page + add-skill dialog state.
 type skillsForm struct {
-	Search     string
-	Source     int
-	sourceIDs  []string
-	Loading    bool
-	ToggleBusy map[string]bool
-	AddOpen    bool
-	AddTarget  string
-	AddName    string
-	AddDesc    string
-	AddWhen    string
-	AddContent string
-	AddBusy    bool
+	Search         string
+	Source         int
+	sourceIDs      []string
+	Loading        bool
+	ToggleBusy     map[string]bool
+	AddOpen        bool
+	AddTarget      string
+	AddName        string
+	AddDesc        string
+	AddWhen        string
+	AddContent     string
+	AddBusy        bool
+	ViewOpen       bool
+	ViewLoading    bool
+	ViewName       string
+	ViewContent    string
+	ViewError      string
+	ViewRequestSeq uint64
+	ViewMD         *markdown.Options
 }
 
 // sshForm is the SSH cluster page + editor dialog state.
@@ -518,6 +527,7 @@ type tasksForm struct {
 	Tab              int
 	Scope            int
 	Loading          bool
+	InstructionOpen  map[string]bool
 	ScheduledChanges map[string]scheduledTaskChange
 	ServiceChanges   map[string]backend.ServiceInfo
 	LogOpen          bool

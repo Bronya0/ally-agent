@@ -758,6 +758,8 @@ func (a *desktop) recordGeneratedImage(t *conversation, p map[string]any) {
 	if att == nil {
 		att = map[string]any{"id": id, "name": "生成的图片", "kind": "image", "generated": true}
 		m["attachments"] = appendAttachment(m["attachments"], att)
+		// The row draws an image now, where a text-only row may draw nothing.
+		t.markHistory()
 	}
 	att["imageRef"] = str(p, "imageRef")
 	att["url"] = str(p, "url")

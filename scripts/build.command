@@ -10,8 +10,8 @@ if ! command -v python3 >/dev/null 2>&1; then
 else
     python3 scripts/build.py dev || status=$?
 fi
-if [[ -t 0 ]]; then
-    printf '\nPress Enter to close...'
+if [[ $status -ne 0 && -t 0 ]]; then
+    printf '\nBuild failed. Press Enter to close...'
     read -r _ || true
 fi
 exit "$status"

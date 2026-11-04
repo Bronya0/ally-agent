@@ -108,7 +108,9 @@ func TestCommandGroupStaysCollapsedThroughoutExecution(t *testing.T) {
 	conv.Messages = append(conv.Messages, groupCommand("next", "Bash", "running"))
 	tt.Frame()
 	check("执行命令 2 次")
-	if err := tt.Click("命令分组 lifecycle-commandgroup-0"); err != nil {
+	// The header no longer prints an executing hint, so click the visible count
+	// instead: what this asserts is that a live group can be expanded.
+	if err := tt.Click("执行命令 2 次"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText("echo next") {

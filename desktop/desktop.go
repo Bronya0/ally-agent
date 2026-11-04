@@ -25,6 +25,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// Set by local development builds to make packaged binaries easy to identify.
+var buildTime string
+
 type conversation struct {
 	ID, Workspace, Title, Draft, RunID, Model, Status string
 	Reasoning                                         string
@@ -49,6 +52,10 @@ type conversation struct {
 	MD                                                map[int]*markdown.Options
 	Expanded                                          map[int]bool
 	UI                                                *chatUI
+	// historyStarts holds the transcript's block starts for historyRev, so a
+	// frame asks once per change instead of once per row. See blockStarts.
+	historyStarts memoOf[historyKey, []int]
+	historyRev    uint64
 }
 
 type workspaceFile struct {
@@ -71,6 +78,7 @@ type desktop struct {
 	pluginSyncKey                           pluginHostSyncKey
 	pluginSyncReady                         bool
 	pluginsRevision                         uint64
+	pluginIndex                             memoOf[uint64, pluginModeIndex]
 	previews                                previewPool
 	previewRequests                         []previewRequest
 	previewTimer                            *time.Timer
@@ -92,6 +100,7 @@ type desktop struct {
 	popupFlags                              map[string]*bool
 	notifications                           []ui.Toast
 	noticeDeadlines                         map[string]time.Time
+	noticeRecent                            map[string]time.Time
 	noticeSequence                          uint64
 	taskPopup                               bool
 	petals                                  bool
@@ -240,6 +249,9 @@ func Run() {
 		if v := strings.TrimSpace(mygo.App.Version()); v != "" {
 			a.versionLabel = "Ally Native · " + v
 		}
+		if buildTime != "" {
+			a.versionLabel += " · 构建于 " + strings.Replace(buildTime, "T", " ", 1)
+		}
 		a.refreshAutoAppearance(time.Now())
 		a.syncNativeAppearance()
 		opts := mygo.WindowOptions{
@@ -272,10 +284,9 @@ func Run() {
 			}
 		})
 		mygo.App.OnDidBecomeActive(mygo.ClearNotifications)
-		// Take the accent outline off the hidden title bar, then let MyGo show
-		// the window once its first frame is drawn: a window made hidden stays
-		// out of sight until then, so it opens drawn instead of blank.
-		configureWindowFrame(a.win)
+		// Match the retained title-bar pixel and suppress the DWM outline before
+		// showing the window, so its first visible frame already has the right colors.
+		configureWindowFrame(a.win, a.currentPalette().headerColor())
 		a.startAutoAppearance()
 		if icon, err := resources.Assets.ReadFile("icon.png"); err == nil {
 			if err := configureWindowIcon(a.win, icon); err != nil {
@@ -619,11 +630,23 @@ func (a *desktop) queueNotice(message, kind string) {
 	if message == "" {
 		return
 	}
-	a.noticeSequence++
-	item := ui.Toast{ID: fmt.Sprintf("ally-notice-%d", a.noticeSequence), Title: message, Type: kind, Data: time.Now().Add(allyNoticeDuration)}
-	if len(a.notifications) > 0 && a.notifications[len(a.notifications)-1].Title == message && a.notifications[len(a.notifications)-1].Type == kind {
+	now := time.Now()
+	if a.noticeRecent == nil {
+		a.noticeRecent = map[string]time.Time{}
+	}
+	for key, deadline := range a.noticeRecent {
+		if !now.Before(deadline) {
+			delete(a.noticeRecent, key)
+		}
+	}
+	dedupeKey := kind + "\x00" + message
+	if deadline := a.noticeRecent[dedupeKey]; now.Before(deadline) {
 		return
 	}
+	a.noticeSequence++
+	deadline := now.Add(allyNoticeDuration)
+	a.noticeRecent[dedupeKey] = deadline
+	item := ui.Toast{ID: fmt.Sprintf("ally-notice-%d", a.noticeSequence), Title: message, Type: kind, Data: deadline}
 	if len(a.notifications) >= 8 {
 		a.notifications = a.notifications[1:]
 	}

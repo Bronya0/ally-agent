@@ -15,6 +15,13 @@ const fastCompactToolMarker = "[Fast-compacted tool result; partial excerpt, not
 const fastCompactReasoningMarker = "[Earlier reasoning excerpt; incomplete]\n"
 const fastCompactAssistantMarker = "[Earlier assistant reply; partial excerpt]\n"
 
+type fastCompactCandidate struct {
+	history       []openai.ChatCompletionMessage
+	cutoff        int
+	messageChange bool
+	result        map[string]any
+}
+
 type fastCompactAssistantEdit struct {
 	Before  string `json:"before"`
 	After   string `json:"after"`
@@ -72,7 +79,7 @@ func fastCompactExcerpt(text string) string {
 	return string(runes[:fastCompactExcerptRunes*2/3]) + "\n[… omitted …]\n" + string(runes[len(runes)-fastCompactExcerptRunes/3:])
 }
 
-func (a *App) fastCompactHistory(ctx context.Context, sessionID string, history []openai.ChatCompletionMessage, tokensBefore int) (map[string]any, error) {
+func (a *App) prepareFastCompactHistory(ctx context.Context, sessionID string, history []openai.ChatCompletionMessage, tokensBefore int) (*fastCompactCandidate, error) {
 	cutoff := fastCompactCutoff(history, defaultFastCompactKeepRecentRounds)
 	out := cloneChatMessages(history)
 	tools := map[string]string{}
@@ -162,37 +169,75 @@ func (a *App) fastCompactHistory(ctx context.Context, sessionID string, history 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	replayChanged := a.reasoningStash.retainFastCompactTail(sessionID, history, out, cutoff)
-	changed := len(tools) > 0 || reasoningCount > 0 || assistantCount > 0 || toolArgumentsCount > 0 || replayChanged
-	if changed {
-		// Rewrites must invalidate measurement anchors even when the message
-		// count stays unchanged. Read-cache hits must stop hiding old files too.
-		a.clearContextAnchor(sessionID)
-		a.invalidateSessionReadCache(sessionID)
-		a.saveHistory(sessionID, out)
-	}
+	messageChange := len(tools) > 0 || reasoningCount > 0 || assistantCount > 0 || toolArgumentsCount > 0
 	tokensAfter := tokensBefore
-	if changed {
-		// Compare like with like: a provider measurement cannot be compared
-		// with a text estimate after its measurement anchor was invalidated.
+	if messageChange {
+		// Compare like with like: the provider's measured count cannot be
+		// compared with a local estimate after a history rewrite.
 		prefix := a.getContextBreakdown(sessionID, "")
 		before := computeLiveBreakdown(history)
 		after := computeLiveBreakdown(out)
 		tokensBefore = prefix.SystemPrompt + prefix.ToolSchemas + before.Total
 		tokensAfter = prefix.SystemPrompt + prefix.ToolSchemas + after.Total
-		// A running session otherwise keeps serving pre-rewrite categories.
-		a.mu.Lock()
-		if _, live := a.liveBreakdown[sessionID]; live {
-			a.liveBreakdown[sessionID] = after
-		}
-		a.mu.Unlock()
 	}
-	return map[string]any{
-		"tier": "fast", "changed": changed,
-		"keepRecent":    defaultFastCompactKeepRecentRounds,
-		"toolSummaries": tools, "reasoningCount": reasoningCount,
-		"toolArgumentsCount": toolArgumentsCount,
-		"assistantEdits":     assistantEdits, "assistantCount": assistantCount,
-		"tokensBefore": tokensBefore, "tokensAfter": tokensAfter,
+	return &fastCompactCandidate{
+		history:       out,
+		cutoff:        cutoff,
+		messageChange: messageChange,
+		result: map[string]any{
+			"tier": "fast", "changed": messageChange,
+			"keepRecent":         defaultFastCompactKeepRecentRounds,
+			"toolSummaries":      tools,
+			"reasoningCount":     reasoningCount,
+			"toolArgumentsCount": toolArgumentsCount,
+			"assistantEdits":     assistantEdits,
+			"assistantCount":     assistantCount,
+			"tokensBefore":       tokensBefore,
+			"tokensAfter":        tokensAfter,
+		},
 	}, nil
+}
+
+// commitFastCompactHistory applies a candidate only after its caller accepts
+// the rewrite. Automatic compaction can discard an insufficient candidate and
+// summarize the untouched history instead.
+func (a *App) commitFastCompactHistory(sessionID string, history []openai.ChatCompletionMessage, candidate *fastCompactCandidate) map[string]any {
+	replayChanged := a.reasoningStash.retainFastCompactTail(sessionID, history, candidate.history, candidate.cutoff)
+	changed := candidate.messageChange || replayChanged
+	result := candidate.result
+	result["changed"] = changed
+	if !changed {
+		return result
+	}
+	// Rewrites must invalidate measurement anchors even when the message
+	// count stays unchanged. Read-cache hits must stop hiding old files too.
+	a.clearContextAnchor(sessionID)
+	a.invalidateSessionReadCache(sessionID)
+	a.saveHistory(sessionID, candidate.history)
+	// Save recalculates the same live message categories for a running session.
+	after := computeLiveBreakdown(candidate.history)
+	a.mu.Lock()
+	if _, live := a.liveBreakdown[sessionID]; live {
+		a.liveBreakdown[sessionID] = after
+	}
+	a.mu.Unlock()
+
+	// Refresh comparable totals after the measurement anchor has been dropped.
+	prefix := a.getContextBreakdown(sessionID, "")
+	before := computeLiveBreakdown(history)
+	result["tokensBefore"] = prefix.SystemPrompt + prefix.ToolSchemas + before.Total
+	result["tokensAfter"] = prefix.SystemPrompt + prefix.ToolSchemas + after.Total
+	return result
+}
+
+func (a *App) fastCompactHistory(ctx context.Context, sessionID string, history []openai.ChatCompletionMessage, tokensBefore int) (map[string]any, error) {
+	candidate, err := a.prepareFastCompactHistory(ctx, sessionID, history, tokensBefore)
+	if err != nil {
+		return nil, err
+	}
+	return a.commitFastCompactHistory(sessionID, history, candidate), nil
+}
+
+func fastCompactLeavesLessThanHalf(tokensBefore, tokensAfter int) bool {
+	return tokensBefore > 0 && tokensAfter >= 0 && int64(tokensAfter)*2 < int64(tokensBefore)
 }

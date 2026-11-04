@@ -94,3 +94,7 @@
 - 内置工具禁用与本轮注入权限：`internal/app/orch_tool_contract_test.go`；MCP 参数往返和协议推断：`desktop/mcp_tool_ui_test.go`。
 - 导入编码与大小限制：`internal/app/host_config_import_test.go`；模型参数编辑保留：`desktop/model_config_test.go`；任务运行事件：`desktop/task_sync_test.go`。
 - 对这些主流程的修改，先运行对应回归，再按顶部命令运行全套测试和 UI 检查。测试只证明所覆盖的客户端行为，不把通过测试等同于真实供应商、MCP 服务端或 SSH 服务器已完成联调。
+
+## 测试边界
+
+- 禁止为提示词、工具描述、界面文案编写“必须包含某句话”的断言测试：文案会持续改写，这类测试只会制造无意义红灯，同类的 `TestSystemPromptCarriesTheStandingRules`、`TestPromptExecutionEfficiency` 已删除。要守的是行为：提示词引用的工具名必须真实注册、子代理不宣传它拿不到的工具、截断后仍是合法 UTF-8、预算不超上限。

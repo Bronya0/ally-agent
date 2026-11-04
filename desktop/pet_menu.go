@@ -3,12 +3,15 @@ package desktop
 
 import (
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 )
 
-// The native menu can extend outside the small transparent pet window.
+// Checked and radio menu items reserve a leading mark column. Keep pet menu
+// labels flush-left by drawing the check in the label's trailing column.
 func (a *desktop) petContextMenu(m *ui.Menu) {
 	if m.Item("摸摸头").Chosen() {
 		a.petMenuAction(a.patPet)
@@ -29,12 +32,13 @@ func (a *desktop) petContextMenu(m *ui.Menu) {
 			size  int
 		}{{"小", 140}, {"中", 180}, {"大", 230}} {
 			option := option
-			if m.Item(option.label).Radio(a.prefs.Pet.Size == option.size).Chosen() {
+			checked := a.prefs.Pet.Size == option.size
+			if m.Item(petMenuCheckLabel(option.label, checked)).Chosen() {
 				a.petMenuAction(func() { a.setPetSize(option.size) })
 			}
 		}
 	})
-	if m.Item("闲时说话").Checked(!a.prefs.Pet.MuteChatter).Chosen() {
+	if m.Item(petMenuCheckLabel("闲时说话", !a.prefs.Pet.MuteChatter)).Chosen() {
 		a.petMenuAction(func() { a.setPetChatter(a.prefs.Pet.MuteChatter) })
 	}
 	m.Separator()
@@ -47,6 +51,17 @@ func (a *desktop) petContextMenu(m *ui.Menu) {
 	if m.Item("关闭桌宠").Chosen() {
 		a.petMenuAction(func() { a.setPetEnabled(false) })
 	}
+}
+
+const petMenuCheckTextWidth = 6
+
+func petMenuCheckLabel(label string, checked bool) string {
+	if !checked {
+		return label
+	}
+	// Full-width spaces put each check mark in the same trailing column.
+	spaces := max(0, petMenuCheckTextWidth-utf8.RuneCountInString(label))
+	return label + strings.Repeat("\u3000", spaces) + "✓"
 }
 
 // Menu callbacks are evaluated while the pet view is being built. Queue

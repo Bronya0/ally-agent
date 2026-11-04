@@ -49,6 +49,9 @@ func (a *desktop) loadTaskCenter(manual ...bool) {
 }
 
 func (a *desktop) tasksPageBody(c *ui.Context) {
+	if a.tasksF.InstructionOpen == nil {
+		a.tasksF.InstructionOpen = map[string]bool{}
+	}
 	if a.tasksF.StopBusy == nil {
 		a.tasksF.StopBusy = map[string]bool{}
 	}
@@ -375,7 +378,28 @@ func (a *desktop) scheduledSection(c *ui.Context, workspace string) {
 			if task.Command != "" {
 				codeBlock(c, "task-cmd-"+task.ID, task.Command, 60, a.secondaryInk())
 			} else {
-				ui.Text(c, task.Instruction).FontSize(fsSmall).TextColor(a.secondaryInk()).MaxLines(3)
+				holder := ui.Column(c.Key("task-instruction-holder-" + task.ID))
+				preview := memoAt[memoOf[string, taskInstructionPreview]](holder, "preview").get(task.Instruction, compactTaskInstructionPreview)
+				open := a.tasksF.InstructionOpen[task.ID]
+				instruction := preview.text
+				label, icon := "展开指令", "chevron"
+				if open {
+					instruction = task.Instruction
+					label, icon = "收起指令", "chevrondown"
+				}
+				holder.Children(func() {
+					ui.Row(c).Gap(gapField).AlignItems(ui.Start).Children(func() {
+						text := ui.Text(c, instruction).FontSize(fsSmall).TextColor(a.secondaryInk()).Grow(1)
+						if !open {
+							text.MaxLines(2)
+						}
+						if preview.truncated {
+							disclosure(c, "task-instruction-"+task.ID, label, disclosureCard, icon).Shrink(0).OnClick(func() {
+								a.tasksF.InstructionOpen[task.ID] = !open
+							})
+						}
+					})
+				})
 			}
 			if a.tasksF.Scope == 1 && task.Workspace != "" {
 				fieldNote(c, "工作区 · "+task.Workspace, a.secondaryInk())
@@ -388,16 +412,22 @@ func (a *desktop) scheduledSection(c *ui.Context, workspace string) {
 				facts = append(facts, fmt.Sprintf("单次 %d 步 · %d 秒", task.MaxSteps, task.TimeoutSeconds))
 			}
 			fieldNote(c, strings.Join(facts, "  ·  "), a.secondaryInk())
-			if task.LastSummary != "" {
-				holder := ui.Column(c.Key("task-summary-holder-" + task.ID))
-				preview := memoAt[textMemo](holder, "preview").get(task.LastSummary, func(s string) string { return tailLines(asciiStrip(s), 4) })
-				holder.Children(func() { codeBlock(c, "task-summary-"+task.ID, preview, 80, a.secondaryInk()) })
-			}
-			if task.LastError != "" {
-				inlineError(c, "task-error-"+task.ID, task.LastError)
-			}
 		})
 	}
+}
+
+type taskInstructionPreview struct {
+	text      string
+	truncated bool
+}
+
+func compactTaskInstructionPreview(s string) taskInstructionPreview {
+	flat := strings.Join(strings.Fields(s), " ")
+	preview, truncated := cutRunes(flat, 140)
+	if truncated {
+		preview = strings.TrimRight(preview, " ,.;:，。；：") + "…"
+	}
+	return taskInstructionPreview{text: preview, truncated: truncated}
 }
 
 func (a *desktop) filteredTasks(workspace string) []backend.ScheduledTask {
@@ -460,6 +490,7 @@ func (a *desktop) deleteTask(task backend.ScheduledTask) {
 		return a.core.DeleteScheduledTask(task.ID)
 	}, func() {
 		a.tasks = filterTasks(a.tasks, task.ID)
+		delete(a.tasksF.InstructionOpen, task.ID)
 	})
 }
 

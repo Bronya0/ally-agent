@@ -3,6 +3,9 @@
 
 package desktop
 
-import "github.com/egoist/mygo"
+import (
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+)
 
-func configureWindowFrame(win *mygo.Window) {}
+func configureWindowFrame(win *mygo.Window, header ui.Color) {}

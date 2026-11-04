@@ -44,28 +44,38 @@ func modeHiddenIn(hiddenModes []string, id string) bool {
 	return false
 }
 
-// pluginModes returns the rail entries contributed by enabled plugins, with
-// grouped plugins folded into a single entry.
-func (a *desktop) pluginModes() (top []backend.PluginInfo, groups [][]backend.PluginInfo) {
-	groupIndex := map[string]int{}
-	for _, p := range a.plugins {
-		if !p.Enabled || !p.Valid || p.Mode == "" {
-			continue
+// pluginModeIndex lists the rail entries enabled plugins contribute, as places
+// in a.plugins: grouped plugins fold into one entry led by their first member.
+type pluginModeIndex struct {
+	top    []int
+	groups [][]int
+}
+
+// pluginModes answers the rail's plugin entries once per change of the plugin
+// list: the rail asks on every frame, and building the groups allocates a map.
+func (a *desktop) pluginModes() pluginModeIndex {
+	return a.pluginIndex.get(a.pluginsRevision, func(uint64) pluginModeIndex {
+		var index pluginModeIndex
+		groupIndex := map[string]int{}
+		for i, p := range a.plugins {
+			if !p.Enabled || !p.Valid || p.Mode == "" {
+				continue
+			}
+			if p.Group == nil || p.Group.Key == "" {
+				index.top = append(index.top, i)
+				continue
+			}
+			key := p.Group.Key
+			at, ok := groupIndex[key]
+			if !ok {
+				at = len(index.groups)
+				groupIndex[key] = at
+				index.groups = append(index.groups, nil)
+			}
+			index.groups[at] = append(index.groups[at], i)
 		}
-		if p.Group == nil || p.Group.Key == "" {
-			top = append(top, p)
-			continue
-		}
-		key := p.Group.Key
-		idx, ok := groupIndex[key]
-		if !ok {
-			idx = len(groups)
-			groupIndex[key] = idx
-			groups = append(groups, nil)
-		}
-		groups[idx] = append(groups[idx], p)
-	}
-	return top, groups
+		return index
+	})
 }
 
 func (a *desktop) rail(c *ui.Context) {
@@ -108,26 +118,27 @@ func (a *desktop) railBody(c *ui.Context, width *float32) {
 }
 
 func (a *desktop) railModes(c *ui.Context, expanded bool) {
-	pluginTop, pluginGroups := a.pluginModes()
+	plugins := a.pluginModes()
 	for _, mode := range baseModes {
 		if mode.id == "plugins" {
 			// Plugin entries sit right before the plugin manager, matching the
 			// original rail order.
-			for _, item := range pluginTop {
+			for _, i := range plugins.top {
+				item := a.plugins[i]
 				a.railModeButton(c, expanded, item.Mode, pluginTitle(item), "plugins", false)
 			}
-			for _, group := range pluginGroups {
+			for _, group := range plugins.groups {
 				if len(group) == 0 {
 					continue
 				}
-				head := group[0]
+				head := a.plugins[group[0]]
 				title := pluginTitle(head)
 				if head.Group != nil && head.Group.Title != "" {
 					title = head.Group.Title
 				}
 				active := false
-				for _, item := range group {
-					if item.Mode == a.page {
+				for _, i := range group {
+					if a.plugins[i].Mode == a.page {
 						active = true
 					}
 				}
@@ -170,7 +181,7 @@ func (a *desktop) railModeButton(c *ui.Context, expanded bool, id, label, iconNa
 				if show {
 					opacity = 1
 				}
-				b.Opacity(b.Animate("visibility", opacity, uikit.HoverDuration))
+				uikit.HoverFade(c, b, opacity)
 			})
 		})
 		return
@@ -182,13 +193,13 @@ func (a *desktop) railModeButton(c *ui.Context, expanded bool, id, label, iconNa
 
 // railGroupButton opens the group's pages in the app's own menu panel, the same
 // one the composer selectors use: the current page carries the accent tint.
-func (a *desktop) railGroupButton(c *ui.Context, expanded bool, head backend.PluginInfo, title string, group []backend.PluginInfo, active bool) {
+func (a *desktop) railGroupButton(c *ui.Context, expanded bool, head backend.PluginInfo, title string, group []int, active bool) {
 	button := railNavigationButton(c, "nav-group-"+head.ID, title, "plugins", expanded, active, func() {
 		iconGlyph(c, "chevrondown", 12).Shrink(0)
 	}, a.secondaryInk())
 	menuPopoverButton(c, button, 210, func(dismiss func()) {
-		for _, item := range group {
-			item := item
+		for _, i := range group {
+			item := a.plugins[i]
 			popoverItem(c, "nav-group-"+item.ID, pluginTitle(item), "", item.Mode == a.page, func() {
 				dismiss()
 				a.changePage(item.Mode)
@@ -264,7 +275,7 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 			b := dangerIconAction(c, "rail-ws-del-"+root, workspaceDeleteHint, "close", 18, func() {
 				a.removeWorkspaceHistory(root)
 			})
-			railHoverAction(row, b, false)
+			railHoverAction(c, row, b, false)
 		}
 	})
 }
@@ -367,7 +378,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 					b := dangerIconAction(c, "rail-sess-del-"+entry.ID, "删除会话", "close", 18, func() {
 						a.deleteSession(entry.ID, title)
 					})
-					railHoverAction(row, b, busy)
+					railHoverAction(c, row, b, busy)
 				})
 			}
 		})
@@ -449,11 +460,12 @@ func (a *desktop) railSectionHeader(c *ui.Context, id, label, icon string, open 
 }
 
 // Reserve the close slot while hidden; revealing it cannot move the title.
-func railHoverAction(row, button ui.Element, disabled bool) {
+func railHoverAction(c *ui.Context, row, button ui.Element, disabled bool) {
 	show := row.Hovered() || row.FocusWithin()
 	opacity := float32(0)
 	if show {
 		opacity = 1
 	}
-	button.Shrink(0).Disabled(disabled || !show).Opacity(button.Animate("visibility", opacity, uikit.HoverDuration))
+	button.Shrink(0).Disabled(disabled || !show)
+	uikit.HoverFade(c, button, opacity)
 }
