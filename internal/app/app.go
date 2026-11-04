@@ -1576,6 +1576,7 @@ func (f *PlanFinish) UnmarshalJSON(data []byte) error {
 type AgentDelegateRequest struct {
 	Task         string `json:"task"`
 	Role         string `json:"role"`
+	Name         string `json:"name,omitempty"`
 	Description  string `json:"description,omitempty"`
 	CleanContext bool   `json:"cleanContext,omitempty"`
 	Model        string `json:"model,omitempty"`
@@ -1585,6 +1586,7 @@ type AgentDelegateRequest struct {
 
 type AgentDelegateResult struct {
 	AgentID     string   `json:"agentId"`
+	Name        string   `json:"name,omitempty"`
 	Role        string   `json:"role"`
 	Description string   `json:"description"`
 	Status      string   `json:"status"`
@@ -1600,6 +1602,7 @@ type AgentDelegateResult struct {
 // SubagentRun tracks a running/complete sub-agent instance.
 type SubagentRun struct {
 	ID           string         `json:"id"`
+	Name         string         `json:"name,omitempty"`
 	SessionID    string         `json:"sessionId,omitempty"`
 	Description  string         `json:"description"`
 	Profile      string         `json:"profile"`
@@ -2107,6 +2110,7 @@ func (a *App) stripSessionReasoning(sessionID string) {
 }
 
 func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg ConfigState) {
+	ctx, closeBlackboard := newRunBlackboard(ctx)
 	ctx = withModelRunUsage(ctx)
 	ctx, finishPerf := beginPerfRun(ctx, runID)
 	defer finishPerf()
@@ -2158,6 +2162,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 
 	}
 	defer func() {
+		closeBlackboard() // The synchronous tool/child execution barrier has drained.
 		if !success && len(sanitizeHistoryMessages(messages)) > 0 {
 			a.saveHistory(req.SessionID, messages)
 		}
@@ -2541,6 +2546,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// effect in the next run.
 		toolCfg := a.cfgWithLiveExtraRoots(sessionID, cfg)
 		toolConflicts := detectToolBatchConflicts(toolCfg, toolCalls)
+		blackboardNames, toolConflicts := a.reserveBlackboardDelegates(ctx, toolCfg, toolCalls, toolConflicts)
 
 		// emitOutcome pushes a single tool's result/error to the frontend as
 		// soon as that tool finishes, instead of waiting for the whole batch.
@@ -2566,6 +2572,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				toolCallIndex: idx, toolCallID: c.ID, toolName: c.Function.Name, toolArgs: c.Function.Arguments,
 			})
 			toolCtx = context.WithValue(toolCtx, sessionReadCacheContextKey{}, readCache)
+			toolCtx = withBlackboardReservation(toolCtx, blackboardNames[idx])
 			return a.executeTool(toolCtx, toolCfg, sessionID, c.Function.Name, []byte(executionArgs))
 		}
 		publishCall := func(idx int, c openai.ToolCall, r toolResult, duration int64) {

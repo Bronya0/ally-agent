@@ -15,6 +15,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"ally-dev/internal/blackboard"
 	"ally-dev/internal/tools/imagegen"
 	"ally-dev/internal/tools/screenshot"
 )
@@ -466,10 +467,11 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("subagent", "Run an isolated child task. The parent waits for the tool batch; same-stage calls can run concurrently. The child uses built-in and MCP tools, but cannot use ask, suggest, subagent, plan, skill, scheduled_task, render_html or screenshot. Verify its report and stopReason.", map[string]any{
+		functionTool("subagent", "Run an isolated child task. The parent waits for the tool batch; same-stage calls can run concurrently. Children in the same chat run share a temporary Blackboard, not conversation history; give collaborating children unique names and mention peer names in their tasks. The child uses built-in and MCP tools, but cannot use ask, suggest, subagent, plan, skill, scheduled_task, render_html or screenshot. Verify its report and stopReason.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The task for the child agent. Be specific — include file paths and expected outcomes."},
+				"name":         map[string]any{"type": "string", "minLength": 1, "maxLength": blackboard.MaxNameLength, "pattern": blackboard.NamePattern, "description": "Optional case-sensitive Blackboard address, unique within this chat run (for example agent-a or backend). Omit it for an automatic agent-N name. Share chosen peer names in collaborating agents' tasks."},
 				"role":         map[string]any{"type": "string", "minLength": 1, "maxLength": 80, "pattern": ".*\\S.*", "description": "What the sub-agent is, as a short role name such as \"researcher\", \"code reviewer\", or \"tester\", not a sentence about the task. It is injected into the sub-agent's system prompt."},
 				"maxSteps":     map[string]any{"type": "integer", "minimum": 1, "maximum": MaxDelegateStepBudget, "description": "Required tool-call-round budget, chosen by task difficulty: small lookups ~5-10, normal tasks ~15-30, large multi-file work ~40-80. The child is warned as it runs low and must output a report on the final round."},
 				"description":  map[string]any{"type": "string", "description": "Short 3-5 word summary of what the delegated agent is working on."},

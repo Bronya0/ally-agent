@@ -733,6 +733,9 @@ func planModelWindow(total, current int) (start, end int) {
 func renderSubagentResultForModel(r AgentDelegateResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `<ally-subagent id=%s role=%s status=%s steps="%d" model=%s`, strconv.Quote(r.AgentID), strconv.Quote(r.Role), strconv.Quote(r.Status), r.Steps, strconv.Quote(r.Model))
+	if r.Name != "" {
+		fmt.Fprintf(&b, ` name=%s`, strconv.Quote(r.Name))
+	}
 	if r.Description != "" {
 		fmt.Fprintf(&b, ` description=%s`, strconv.Quote(r.Description))
 	}
