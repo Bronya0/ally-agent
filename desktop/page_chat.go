@@ -272,7 +272,7 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 	content := str(m, "content")
 	p := a.currentPalette()
 	services := c.Services()
-	message := ui.Column(c.Key(widgetKey("user-bubble", t.ID, i))).Label("用户消息区域").AlignSelf(ui.End).AlignItems(ui.End).MaxWidthPercent(85).MinWidth(0).Gap(4)
+	message := ui.Column(c.Key(widgetKey("user-bubble", t.ID, i))).Label("用户消息区域").AlignSelf(ui.End).AlignItems(ui.End).MaxWidthPercent(85).MinWidth(0).Gap(gapTight)
 	message.Children(func() {
 		background := p.accent.Alpha(0.10)
 		if p.dark {
@@ -301,7 +301,7 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 		if show {
 			opacity = 1
 		}
-		actions := ui.Row(c.Key("actions")).Label("用户消息操作").Height(26).Gap(4).Shrink(0)
+		actions := ui.Row(c.Key("actions")).Label("用户消息操作").Height(26).Gap(gapTight).Shrink(0)
 		// IgnoreInput keeps an unseen button out of the pointer's way while a
 		// screen reader can still reach it, which Disabled takes away.
 		uikit.HoverFade(c, actions, opacity).Children(func() {
@@ -660,7 +660,7 @@ func (a *desktop) welcomePopover(c *ui.Context, anchor ui.Element, open *bool, r
 		} else if row == 2 {
 			title = "工具"
 		}
-		ui.Text(c, title).FontSize(fsSection).Bold().Padding(6, 10)
+		ui.Text(c, title).FontSize(fsSection).Bold().Padding(gapInline, padCard)
 		ui.Scroll(c).MaxHeight(260).Children(func() {
 			ui.Column(c).Gap(3).Padding(4, 10).Children(func() {
 				switch {
@@ -770,7 +770,7 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 			})
 		})
 		parts.Panel(func() {
-			scroll := ui.Scroll(c.Key("plan-scroll-"+t.ID)).Height(150).Padding(0, 6, 4).Gap(6)
+			scroll := ui.Scroll(c.Key("plan-scroll-"+t.ID)).Height(150).Padding(0, 6, 4).Gap(gapInline)
 			lastScrolledRevision := ui.Local(scroll, "auto-scroll-revision", func() int64 { return -1 })
 			revision := a.planRev[t.ID]
 			autoScroll := open && *lastScrolledRevision != revision
@@ -874,7 +874,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 			for _, opt := range q.Options {
 				opt := opt
 				checked := containsString(st.AskSelected[q.ID], opt.ID)
-				card := ui.Column(c.Key("ask-option-card-"+q.ID+"-"+opt.ID)).FillWidth().Padding(8, 10).Gap(4).
+				card := ui.Column(c.Key("ask-option-card-"+q.ID+"-"+opt.ID)).FillWidth().Padding(8, 10).Gap(gapTight).
 					Radius(radiusSmall).Border(1, surfaceBorder(c)).Cursor(ui.CursorPointer)
 				if card.Hovered() {
 					card.Background(c.Theme().SurfaceHover)
@@ -884,7 +884,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 					st.AskSelected[q.ID] = toggleString(st.AskSelected[q.ID], opt.ID, checked)
 				}
 				card.Children(func() {
-					ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+					ui.Row(c).AlignItems(ui.Center).Gap(gapInline).Children(func() {
 						box := ui.Checkbox(c.Key("ask-opt-"+q.ID+"-"+opt.ID), &checked, opt.Label)
 						if box.Changed() {
 							st.AskSelected[q.ID] = toggleString(st.AskSelected[q.ID], opt.ID, checked)
