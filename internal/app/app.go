@@ -2147,6 +2147,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		payload["runId"] = runID
 		payload["status"] = kind
 		payload["sessionId"] = sessionID
+		payload["workspace"] = cfg.Workspace
 		payload["durationMs"] = time.Since(startTime).Milliseconds()
 		publishRunModelUsage(ctx, payload)
 		a.mu.Lock()
@@ -2695,14 +2696,15 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	// decodeJSON unmarshals args into v and reports whatever the model got
 	// wrong. Returns (error, warnings) where warnings are finished model-facing
 	// notices: auto-repair notes when the model emitted JSON-encoded strings
-	// where arrays/objects belong (e.g. {"files":"[{...}]"}), plus ignored
-	// unknown argument keys for the few tools that have no declared schema.
+	// where arrays/objects belong (e.g. {"files":"[{...}]"}), plus the argument
+	// keys the tool does not declare.
 	//
 	// For a built-in tool the payload is then checked against its declared
 	// schema (the gate below): that declaration is what the model was shown, so
-	// a mismatch is a model bug that must fail here, naming the field, instead
-	// of reaching a handler that never promised to check it. Only tools with no
-	// built-in declaration (MCP tools, legacy aliases) keep the tolerant path.
+	// a bad value is a model bug that must fail here, naming the field, instead
+	// of reaching a handler that never promised to check it. Undeclared keys are
+	// the exception: they are dropped with a warning because no handler reads
+	// them.
 	decodeJSON := func(v any) (error, []string) { return decodeToolArguments(name, args, v) }
 
 	// Normalize once at the boundary: lower-case and trim surrounding
@@ -3801,6 +3803,16 @@ func repairJSONLeaf(raw json.RawMessage, wantSlice bool) (json.RawMessage, bool)
 // Sub-agent frontend bindings (GetSubagents, cloneSubagentRun) moved to
 // orch_subagent.go.
 
+// violationPath names an ignored key the way the model wrote it: the enclosing
+// object path plus the key, so a typo nested in an array item is not reported as
+// if it were top level.
+func violationPath(v schemautil.Violation) string {
+	if v.Path == "" {
+		return v.UnsupportedKey
+	}
+	return v.Path + "." + v.UnsupportedKey
+}
+
 func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 	// Missing arguments decode as an empty object so the gate reports the
 	// absent required parameters explicitly instead of letting the handler
@@ -3870,12 +3882,27 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 	}
 	// Schema gate: validate the repaired payload so the stringified-array
 	// repair above still lands, and so every keyword the declaration uses
-	// (required, ranges, patterns, enum, const, unknown keys at any depth) is
-	// enforced exactly as written. Unknown keys used to be downgraded to a
-	// warning, which let a typo execute on a default the model never asked for.
+	// (required, ranges, patterns, enum, const) is enforced exactly as written.
+	//
+	// Undeclared keys are the one exception: no handler reads them, so they are
+	// dropped and named in a warning instead of failing the call. Failing cost
+	// the model a whole round trip to fix a key nothing downstream would use.
 	if schema, ok := toolshared.BuiltinSchema(name); ok {
-		if violations := schemautil.ValidateArgs(schema, cur); len(violations) > 0 {
-			return codedToolError("E_BAD_ARGS", fmt.Errorf("invalid arguments for %s: %s", name, schemautil.DescribeViolations(violations))), nil
+		violations := schemautil.ValidateArgs(schema, cur)
+		ignored := make([]string, 0, len(violations))
+		fatal := make([]schemautil.Violation, 0, len(violations))
+		for _, violation := range violations {
+			if violation.UnsupportedKey == "" {
+				fatal = append(fatal, violation)
+				continue
+			}
+			ignored = append(ignored, violationPath(violation))
+		}
+		if len(fatal) > 0 {
+			return codedToolError("E_BAD_ARGS", fmt.Errorf("invalid arguments for %s: %s", name, schemautil.DescribeViolations(fatal))), nil
+		}
+		if len(ignored) > 0 {
+			warnings = append(warnings, fmt.Sprintf("以下参数不被该工具支持，已忽略：%s", strings.Join(ignored, ", ")))
 		}
 		return nil, warnings
 	}

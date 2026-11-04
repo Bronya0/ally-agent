@@ -90,7 +90,7 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 
 | 情况 | 处理 |
 |---|---|
-| 未知参数键 | 声明了 schema 的内置工具：直接拒绝（`E_BAD_ARGS`，报出键名与可选清单）；无声明的名字（MCP 工具、弃用别名）仍收集进 `Warnings` 回给模型 |
+| 未知参数键 | 忽略并进 `Warnings`（报出键名与路径），工具照常执行；缺必填、类型、范围、枚举等仍然失败 |
 | 值被双重编码（`{"files":"[{...}]"}`） | 按字段路径自动修复一次并记 warning（`repairToolArgJSON`、`maxToolArgRepairRounds`）；校验跑在修复后的载荷上 |
 | JSON 被流截断（`isIncompleteStreamJSON`） | 明确报 "tool arguments JSON was truncated"，edit 类工具附可操作建议 |
 | 类型 / schema 错 | 失败报错，且**不能**误标成截断（历史上这个混淆让老的 `oldString` 调用看起来像耗尽了 max_tokens） |

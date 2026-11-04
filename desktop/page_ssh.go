@@ -284,7 +284,7 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 		if d.RiskLevel == "high" {
 			risk = 1
 		}
-		ui.Row(c).Gap(8).Children(func() {
+		ui.Row(c).Gap(gapField).Children(func() {
 			for n, title := range []string{"常规", "生产（高危保护）"} {
 				n := n
 				tone := c.Theme().Success
@@ -508,7 +508,7 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 	workspace := a.sshF.AuthWorkspace
 	dialog := modalCard(c, &a.sshF.AuthOpen, widthModalWide, func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "SSH 集群授权").FontSize(17).Bold()
+			ui.Text(c, "SSH 集群授权").FontSize(fsDialogTitle).Bold()
 			ui.Spacer(c)
 			flat(c, "管理集群").OnClick(func() {
 				a.commitSSHAuth(workspace)

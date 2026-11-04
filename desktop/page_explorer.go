@@ -33,63 +33,21 @@ func normalizeExplorerPath(path string) string {
 	return strings.TrimPrefix(path, "./")
 }
 
-func (a *desktop) previewMediaSiblings(path string) (previous, next string, index, count int) {
-	parent := fileParent(path)
-	entries := a.files
-	if parent != "" && parent != "." {
-		entries = a.fileChildren[parent]
-	}
-	current := normalizeExplorerPath(path)
-	paths := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.Dir || !workspaceFileKindForPath(entry.Path).isMedia() {
-			continue
-		}
-		paths = append(paths, entry.Path)
-	}
-	index = -1
-	for i, candidate := range paths {
-		if normalizeExplorerPath(candidate) == current {
-			index = i
-			break
-		}
-	}
-	if index >= 0 {
-		if index > 0 {
-			previous = paths[index-1]
-		}
-		if index+1 < len(paths) {
-			next = paths[index+1]
-		}
-	}
-	return previous, next, index, len(paths)
-}
-
 func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 	kind := workspaceFileKindForPath(file.Path)
 	ui.Column(c).Grow(1).MinWidth(0).BorderWidth(0, 0, 0, 1).BorderColor(c.Theme().Border).Children(func() {
 		c.OnShortcut(ui.Cmd, ui.KeyS, func() { a.saveFile() })
+		if kind.hasMediaPlayer() {
+			a.workspaceMediaShortcuts(c, file)
+		}
 		ui.Row(c).Height(34).Padding(0, padRow).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
 			name := file.Path
 			if file.Editor.Buffer.Modified() {
 				name += " ●"
 			}
-			uikit.Tooltip(c, ui.Text(c, short(name, 46)).FontSize(fsSmall).Grow(1), file.Path)
-			if kind.isMedia() {
-				previous, next, index, count := a.previewMediaSiblings(file.Path)
-				if count > 1 {
-					flat(c, "上一个").Disabled(previous == "").OnClick(func() {
-						if previous != "" {
-							a.openFile(previous)
-						}
-					})
-					ui.Text(c, fmt.Sprintf("%d/%d", index+1, count)).FontSize(fsTiny).TextColor(a.secondaryInk()).Shrink(0)
-					flat(c, "下一个").Disabled(next == "").OnClick(func() {
-						if next != "" {
-							a.openFile(next)
-						}
-					})
-				}
+			uikit.Tooltip(c, ui.Text(c, name).FontSize(fsSmall).Grow(1).SingleLine().MinWidth(0), file.Path)
+			if kind.hasMediaPlayer() {
+				a.workspaceMediaToolbar(c, file)
 			}
 			if kind.hasMarkupToggle() {
 				label := "预览"
@@ -161,7 +119,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 			tip = t.Workspace
 		}
 		ui.Row(c).Height(30).Padding(0, padRow).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
-			uikit.Tooltip(c, ui.Text(c, short(title, 24)).FontSize(fsSmall).TextColor(ink).Grow(1), tip)
+			uikit.Tooltip(c, ui.Text(c, title).FontSize(fsSmall).TextColor(ink).Grow(1).SingleLine().MinWidth(0), tip)
 			uikit.IconButton(c, "explorer-refresh", "刷新", iconImage("refresh"), 22, uikit.IconQuiet, func() { a.refreshFiles(true) }, ink)
 			uikit.IconButton(c, "explorer-help", "文件浏览器帮助", iconImage("info"), 22, uikit.IconQuiet, func() { a.filesF.HelpOpen = !a.filesF.HelpOpen }, ink)
 			uikit.IconButton(c, "explorer-close", "关闭文件栏", iconImage("close"), 22, uikit.IconQuiet, func() { a.setExplorerOpen(false) }, ink)
@@ -497,6 +455,7 @@ func (a *desktop) deleteFileEntry(entry backend.FileEntry) {
 			a.closeFile()
 		}
 		a.refreshFiles()
+		a.notifySuccess("已删除" + kind + "「" + entry.Name + "」")
 	})
 }
 
@@ -813,7 +772,7 @@ func (a *desktop) fileInfoDialog(c *ui.Context) {
 	info := a.filesF.Info
 	dialog := modalCard(c, &a.filesF.InfoOpen, 640, func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "文件信息").FontSize(17).Bold()
+			ui.Text(c, "文件信息").FontSize(fsDialogTitle).Bold()
 			ui.Spacer(c)
 			iconAction(c, "file-info-close", "关闭属性", "close", 24, a.closeFileInfo)
 		})
@@ -938,7 +897,7 @@ func (a *desktop) gitDiffDialog(c *ui.Context) {
 			t := a.current()
 			data := a.filesF.GitData
 			ui.Row(c).AlignItems(ui.Center).Gap(gapField).Wrap().Children(func() {
-				ui.Text(c, "Git 改动").FontSize(17).Bold()
+				ui.Text(c, "Git 改动").FontSize(fsDialogTitle).Bold()
 				if data.Branch != "" {
 					neutralChip(c, data.Branch)
 				}

@@ -173,7 +173,7 @@ func (a *desktop) kbPage(c *ui.Context, width float32) {
 		ui.Column(c).Fill().Center().Children(func() {
 			card(c, "kb-empty", func() {
 				ui.Column(c).Width(460).Gap(gapSection).Children(func() {
-					ui.Text(c, "知识库").FontSize(20).Bold()
+					ui.Text(c, "知识库").FontSize(fsPageTitle).Bold()
 					fieldNote(c, "选择一个知识库目录，Ally 会在其中维护 index.md 与分类结构；sources/ 子目录对模型只读。", a.secondaryInk())
 					ui.Row(c).Gap(gapField).Children(func() {
 						cardPrimary(c, "选择知识库目录").OnClick(func() { a.pickKBRoot() })
@@ -191,7 +191,7 @@ func (a *desktop) kbPage(c *ui.Context, width float32) {
 	}
 	ui.Column(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Padding(16, padPage, 4).Gap(2).Children(func() {
-			ui.Text(c, "知识库").FontSize(19).Bold()
+			ui.Text(c, "知识库").FontSize(fsHeadline).Bold()
 			ui.Text(c, "整理资料、检索与维护知识索引。").FontSize(fsSmall).TextColor(a.secondaryInk())
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
 				iconGlyph(c, "folderopen", 13)

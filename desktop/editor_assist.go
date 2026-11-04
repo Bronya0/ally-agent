@@ -450,6 +450,7 @@ func releaseWorkspaceFileValue(file *workspaceFile) {
 	file.PreviewHTML = ""
 	file.PreviewError = ""
 	file.MarkupPreview = false
+	file.MD = nil
 	file.Assist = nil
 	file.Document = nil
 	file.Editor = nil

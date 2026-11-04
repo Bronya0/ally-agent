@@ -36,18 +36,20 @@ func fadeColor(e ui.Element, key string, target ui.Color) ui.Color {
 
 const (
 	chatMaxWidth float32 = 1120
-	gapTight     float32 = 4
-	gapInline    float32 = 6
-	gapField     float32 = 8
-	gapSection   float32 = 12
-	gapPage      float32 = 18
-	padRow       float32 = 8
-	padCard      float32 = 10
-	padPage      float32 = 22
+	// 间距与圆角刻度也只有一份，在 uikit 的 Gap*/Pad*/Radius*；这里只是别名。
+	// gapPage、padPage、radiusControl 是 desktop 自己的页面尺度，uikit 没有对应档。
+	gapTight           = uikit.GapTight
+	gapInline          = uikit.GapInline
+	gapField           = uikit.GapField
+	gapSection         = uikit.GapSection
+	gapPage    float32 = 18
+	padRow             = uikit.PadRow
+	padCard            = uikit.PadCard
+	padPage    float32 = 22
 
-	radiusCard    float32 = 8
+	radiusCard            = uikit.RadiusCard
 	radiusControl float32 = 7
-	radiusSmall   float32 = 5
+	radiusSmall           = uikit.RadiusSmall
 
 	heightHeader       float32 = 44
 	heightRail         float32 = 44
@@ -68,21 +70,36 @@ const (
 	sizeRailIcon            float32 = 17
 	sizeRailIconCollapsed   float32 = 20
 	sizeRailToggleIcon      float32 = 16
-	radiusRailBadge         float32 = 6
-	widthModalWide          float32 = 760
-	widthModal              float32 = 580
-	widthModalSmall         float32 = 460
+	// fontRailLabel 是唯一偏出字号刻度的值：侧栏窄，13 在收起态会挤掉图标，
+	// 12 又偏小；其余字号一律取 uikit 的 Font*。
+	fontRailLabel   float32 = 12.5
+	radiusRailBadge float32 = 6
+	widthModalWide  float32 = 760
+	widthModal      float32 = 580
+	widthModalSmall float32 = 460
 
-	fsPageTitle float32 = 20
-	fsSection   float32 = 13
-	fsBody      float32 = 14
-	fsEditor    float32 = 15
-	fsSmall     float32 = 13
-	fsTiny      float32 = 12
+	// 字号刻度只有一份，在 uikit 的 Font*；这里只是 desktop 侧的别名，调用点用
+	// fs* 更贴近界面语义。要调字号请改 uikit，不要在调用点写数字。
+	fsDisplay     = uikit.FontDisplay
+	fsStat        = uikit.FontStat
+	fsPageTitle   = uikit.FontPageTitle
+	fsHeadline    = uikit.FontHeadline
+	fsHeading     = uikit.FontHeading
+	fsDialogTitle = uikit.FontDialogTitle
+	fsGlyph       = uikit.FontGlyph
+	fsSubtitle    = uikit.FontSubtitle
+	fsBody        = uikit.FontBody
+	fsSection     = uikit.FontSection
+	fsSmall       = uikit.FontSmall
+	fsTiny        = uikit.FontTiny
+	fsCaption     = uikit.FontCaption
+	fsMicro       = uikit.FontMicro
+	fsAux         = uikit.FontTiny
+	// 编辑器和工具卡正文是 desktop 自己的尺度。
+	fsEditor float32 = 15
 	// Chat-parity tokens, mirroring main's CSS variables (--ally-tool-font-size
 	// 15px for tool verbs, --ally-aux-font-size 12px for support lines).
 	fsTool float32 = 15
-	fsAux  float32 = 12
 )
 
 // Semantic colours derived from the theme rather than fixed per page.

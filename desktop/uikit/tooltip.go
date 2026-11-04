@@ -32,6 +32,8 @@ func tooltip(c *ui.Context, anchor ui.Element, text string, right bool) ui.Eleme
 		} else {
 			tip.AttachTo(anchor, ui.AnchorTop, ui.AnchorBottom).Margin(0, 0, 6, 0)
 		}
-		tip.Children(func() { ui.Text(c, text).FontSize(12).TextColor(ink).LineHeight(1.4).Unselectable().PassThrough() })
+		tip.Children(func() {
+			ui.Text(c, text).FontSize(FontTiny).TextColor(ink).LineHeight(1.4).Unselectable().PassThrough()
+		})
 	})
 }

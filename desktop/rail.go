@@ -81,10 +81,10 @@ func (a *desktop) pluginModes() pluginModeIndex {
 func (a *desktop) rail(c *ui.Context) {
 	p := a.currentPalette()
 	if !a.prefs.RailExpanded {
-		rail := ui.Column(c).Width(widthRailCollapsed).Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, railPadH).Gap(4).AlignItems(ui.Center)
+		rail := ui.Column(c).Width(widthRailCollapsed).Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, railPadH).Gap(gapTight).AlignItems(ui.Center)
 		rail.Children(func() {
 			ui.Scroll(c).Key("rail-modes").FillWidth().Grow(1).MinHeight(0).Children(func() {
-				ui.Column(c).FillWidth().Gap(4).Children(func() { a.railModes(c, false) })
+				ui.Column(c).FillWidth().Gap(gapTight).Children(func() { a.railModes(c, false) })
 			})
 			railToggleButton(c, "rail-open", "展开侧边栏（显示菜单名）", "expand", func() {
 				a.prefs.RailExpanded = true
@@ -104,11 +104,11 @@ func (a *desktop) railBody(c *ui.Context, width *float32) {
 	rail := ui.Column(c).Width(*width).FillHeight().Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(6).Gap(3)
 	rail.Children(func() {
 		a.railModes(c, true)
-		ui.Column(c).Grow(1).MinHeight(0).Gap(6).Children(func() {
+		ui.Column(c).Grow(1).MinHeight(0).Gap(gapInline).Children(func() {
 			a.railWorkspaces(c)
 			a.railSessions(c)
 		})
-		ui.Row(c).Shrink(0).Gap(4).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Shrink(0).Gap(gapTight).AlignItems(ui.Center).Children(func() {
 			railToggleButton(c, "rail-close", "收起侧边栏", "collapse", func() {
 				a.prefs.RailExpanded = false
 				a.savePrefs()
@@ -250,7 +250,7 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 	if t := a.current(); t != nil && strings.EqualFold(t.Workspace, root) {
 		active = true
 	}
-	row := ui.Row(c.Key("rail-ws-"+root)).Height(26).Radius(6).Padding(0, railContentInset(c)).Gap(6).AlignItems(ui.Center)
+	row := ui.Row(c.Key("rail-ws-"+root)).Height(26).Radius(6).Padding(0, railContentInset(c)).Gap(gapInline).AlignItems(ui.Center)
 	fill := ui.Transparent
 	ink := a.secondaryInk()
 	if active {
@@ -349,7 +349,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 				entry := entry
 				busy := entry.ID == sessionBusyID(a, entry.ID)
 				active := t != nil && t.ID == entry.ID
-				row := ui.Row(c.Key("rail-sess-"+entry.ID)).Height(30).Radius(6).Padding(0, railContentInset(c)).AlignItems(ui.Center).Gap(6)
+				row := ui.Row(c.Key("rail-sess-"+entry.ID)).Height(30).Radius(6).Padding(0, railContentInset(c)).AlignItems(ui.Center).Gap(gapInline)
 				fill := ui.Transparent
 				ink := a.secondaryInk()
 				if active {

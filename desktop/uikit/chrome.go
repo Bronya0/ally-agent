@@ -13,12 +13,22 @@ import (
 )
 
 // 排版与间距档位。和 ControlHeight、Radius 一起构成这套组件的外部尺度。
+// 字号只有这一份：desktop/theme.go 的 fs* 都指向这里。
 const (
-	FontPageTitle float32 = 20
-	FontBody      float32 = 14
-	FontSection   float32 = 13
-	FontSmall     float32 = 13
-	FontTiny      float32 = 12
+	FontDisplay     float32 = 28
+	FontStat        float32 = 22
+	FontPageTitle   float32 = 20
+	FontHeadline    float32 = 19
+	FontHeading     float32 = 18
+	FontDialogTitle float32 = 17
+	FontGlyph       float32 = 16
+	FontSubtitle    float32 = 15
+	FontBody        float32 = 14
+	FontSection     float32 = 13
+	FontSmall       float32 = 13
+	FontTiny        float32 = 12
+	FontCaption     float32 = 11
+	FontMicro       float32 = 10
 
 	GapTight   float32 = 4
 	GapInline  float32 = 6
@@ -169,7 +179,7 @@ func SectionHeader(c *ui.Context, title string, actions func()) {
 // EmptyState 是一整块空白区域里的居中提示。
 func EmptyState(c *ui.Context, title, detail string, ink ...ui.Color) {
 	ui.Column(c).Fill().Center().Gap(GapInline).Children(func() {
-		ui.Text(c, title).FontSize(15).TextColor(SecondaryInk(c, ink))
+		ui.Text(c, title).FontSize(FontSubtitle).TextColor(SecondaryInk(c, ink))
 		if detail != "" {
 			ui.Text(c, detail).FontSize(FontSmall).TextColor(FaintInk(c.Theme()))
 		}
@@ -254,7 +264,7 @@ func InlineError(c *ui.Context, id, message string) {
 func StatCard(c *ui.Context, key any, title, big, detail string, padding, radius float32, ink ...ui.Color) ui.Element {
 	return Card(c, key, padding, radius, func() {
 		Muted(c, title, FontSmall, ink...)
-		ui.Text(c, big).FontSize(22).Bold()
+		ui.Text(c, big).FontSize(FontStat).Bold()
 		if detail != "" {
 			ui.Text(c, detail).FontSize(FontTiny).TextColor(SecondaryInk(c, ink))
 		}

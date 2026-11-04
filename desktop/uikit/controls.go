@@ -52,7 +52,7 @@ func Popup(c *ui.Context, panel ui.Element) {
 func option(c *ui.Context, item ui.Element, text string, selected bool, ink ...ui.Color) {
 	t := c.Theme()
 	fill := ui.Transparent
-	item.Height(34).Padding(5, 10).Radius(6).Gap(8).AlignItems(ui.Center).Cursor(ui.CursorPointer).TextColor(SecondaryInk(c, ink))
+	item.Height(34).Padding(5, 10).Radius(6).Gap(GapField).AlignItems(ui.Center).Cursor(ui.CursorPointer).TextColor(SecondaryInk(c, ink))
 	if item.Highlighted() || item.Hovered() {
 		fill = t.SurfaceHover
 	}
@@ -69,10 +69,10 @@ func option(c *ui.Context, item ui.Element, text string, selected bool, ink ...u
 		if selected {
 			ink = t.Accent
 		}
-		choice := ui.Text(c, label).FontSize(14).SingleLine().Grow(1).Cursor(ui.CursorPointer).TextColor(ink)
+		choice := ui.Text(c, label).FontSize(FontBody).SingleLine().Grow(1).Cursor(ui.CursorPointer).TextColor(ink)
 		if selected {
 			choice.FontWeight(600)
-			ui.Text(c, "✓").FontSize(12).TextColor(t.Accent).Cursor(ui.CursorPointer)
+			ui.Text(c, "✓").FontSize(FontTiny).TextColor(t.Accent).Cursor(ui.CursorPointer)
 		}
 	})
 }
@@ -97,7 +97,7 @@ func Select(c *ui.Context, value *string, options []string, ink ...ui.Color) ui.
 // SelectField is a select with per-option labels.
 func SelectField(c *ui.Context, value *string, options []Option, ink ...ui.Color) ui.Element {
 	sel := ui.SelectBase(c, value)
-	b := sel.Trigger.Height(ControlHeight).Padding(4, 10).Gap(8).AlignItems(ui.Center).Radius(Radius).Border(1, hairline(c.Theme())).Background(c.Theme().SurfaceHover).Cursor(ui.CursorPointer)
+	b := sel.Trigger.Height(ControlHeight).Padding(4, 10).Gap(GapField).AlignItems(ui.Center).Radius(Radius).Border(1, hairline(c.Theme())).Background(c.Theme().SurfaceHover).Cursor(ui.CursorPointer)
 	b.Children(func() {
 		label := *value
 		for _, item := range options {
@@ -109,7 +109,7 @@ func SelectField(c *ui.Context, value *string, options []Option, ink ...ui.Color
 		if label == "" {
 			label = "自动"
 		}
-		ui.Text(c, label).FontSize(14).SingleLine().Grow(1).MinWidth(0).Cursor(ui.CursorPointer)
+		ui.Text(c, label).FontSize(FontBody).SingleLine().Grow(1).MinWidth(0).Cursor(ui.CursorPointer)
 		ui.Box(c).Size(18, 18).Shrink(0).Center().Children(func() {
 			ui.Icon(c, chevronDown).Size(13, 13).TextColor(SecondaryInk(c, ink))
 		})
@@ -183,7 +183,7 @@ func ComboboxField(c *ui.Context, value *string, options []string, label, placeh
 	root.Children(func() {
 		cb = ui.ComboboxBase(c, value)
 		cb.Input.Height(ControlHeight).FillHeight().Grow(1).MinWidth(0).Padding(5, 10).
-			FontSize(14).Border(0, ui.Transparent).Background(ui.Transparent).Radius(0).TextColor(c.Theme().Text).
+			FontSize(FontBody).Border(0, ui.Transparent).Background(ui.Transparent).Radius(0).TextColor(c.Theme().Text).
 			Label(label).Placeholder(placeholder)
 		toggle := Tooltip(c, ui.Box(c).Size(32, ControlHeight).Shrink(0).Center().Cursor(ui.CursorPointer).Label("展开选项"), "选择或输入")
 		toggle.OnClick(func() {
@@ -254,7 +254,7 @@ func OptionChrome(c *ui.Context, e ui.Element, selected bool, tone ui.Color, sec
 	} else if e.Hovered() {
 		fill, ink = t.SurfaceHover, t.Text
 	}
-	e.Height(28).Padding(0, 12).Radius(6).Border(0, ui.Transparent).Cursor(ui.CursorPointer).
+	e.Height(28).Padding(0, GapSection).Radius(6).Border(0, ui.Transparent).Cursor(ui.CursorPointer).
 		Background(e.AnimateColor("option-fill", fill, ui.Animation{Duration: chromeFade, Ease: ui.EaseInOut})).TextColor(ink)
 	return fade(e, "option-ink", ink)
 }
@@ -279,7 +279,7 @@ func SegmentedInk(c *ui.Context, selected *int, ink []ui.Color, labels ...string
 			segment := parts.Segment(i).MinWidth(62).Label(label)
 			optionInk := OptionChrome(c, segment, active, t.Accent, ink...)
 			segment.Children(func() {
-				text := ui.Text(c, label).FontSize(13).TextColor(optionInk).SingleLine().Unselectable().Cursor(ui.CursorPointer)
+				text := ui.Text(c, label).FontSize(FontSmall).TextColor(optionInk).SingleLine().Unselectable().Cursor(ui.CursorPointer)
 				if active {
 					text.FontWeight(600)
 				}
@@ -296,14 +296,14 @@ func FieldLabel(c *ui.Context, text string) {
 }
 func FieldNote(c *ui.Context, text string, ink ...ui.Color) {
 	if text != "" {
-		ui.Text(c, text).FontSize(12).TextColor(SecondaryInk(c, ink)).LineHeight(1.5)
+		ui.Text(c, text).FontSize(FontTiny).TextColor(SecondaryInk(c, ink)).LineHeight(1.5)
 	}
 }
 func TextField(c *ui.Context, value *string, placeholder string) ui.Element {
-	return Input(c, value).FillWidth().FontSize(14).Placeholder(placeholder)
+	return Input(c, value).FillWidth().FontSize(FontBody).Placeholder(placeholder)
 }
 func TextArea(c *ui.Context, value *string, placeholder string, height float32) ui.Element {
-	return Area(c, value).FillWidth().Shrink(0).FontSize(14).Placeholder(placeholder).Height(height)
+	return Area(c, value).FillWidth().Shrink(0).FontSize(FontBody).Placeholder(placeholder).Height(height)
 }
 func DialogPanel(c *ui.Context, panel ui.Element, width float32) {
 	w, h := c.Size()
@@ -322,7 +322,7 @@ func InputChrome(c *ui.Context, e ui.Element) ui.Element {
 		border = c.Theme().Accent
 	}
 	border = e.AnimateColor("chrome-border", border, ui.Animation{Duration: chromeFade, Ease: ui.EaseInOut})
-	return e.MinWidth(0).Border(1, border).Background(fade(e, "chrome-fill", background)).Radius(Radius).FontSize(14).TextColor(c.Theme().Text)
+	return e.MinWidth(0).Border(1, border).Background(fade(e, "chrome-fill", background)).Radius(Radius).FontSize(FontBody).TextColor(c.Theme().Text)
 }
 func Input(c *ui.Context, value *string) ui.Element {
 	return InputChrome(c, ui.TextInput(c, value)).Height(ControlHeight)
@@ -345,7 +345,7 @@ func passwordInputInk(c *ui.Context, key, label string, value *string, tone []ui
 	visible := ui.Local(root, "visible", func() bool { return false })
 	root.Children(func() {
 		input := ui.TextInputBase(c.Key("input"), value).Grow(1).MinWidth(0).FillHeight().Padding(5, 10).
-			Border(0, ui.Transparent).Background(ui.Transparent).FontSize(14).TextColor(c.Theme().Text).Label(label)
+			Border(0, ui.Transparent).Background(ui.Transparent).FontSize(FontBody).TextColor(c.Theme().Text).Label(label)
 		if len(placeholder) > 0 {
 			input.Placeholder(placeholder[0])
 		}

@@ -96,13 +96,13 @@ func toolAskSummary(c *ui.Context, key string, args, result map[string]any) {
 	}
 	for n, raw := range questions {
 		if q, ok := raw.(map[string]any); ok {
-			ui.Column(c.Key(fmt.Sprintf("%s-question-%d", key, n))).Padding(10).Gap(5).Border(1, c.Theme().Border).Radius(radiusCard).Children(func() {
+			ui.Column(c.Key(fmt.Sprintf("%s-question-%d", key, n))).Padding(padCard).Gap(5).Border(1, c.Theme().Border).Radius(radiusCard).Children(func() {
 				ui.Text(c, str(q, "question")).FontSize(fsSmall).Bold()
 				for _, raw := range list(result, "answers") {
 					if answer, ok := raw.(map[string]any); ok && str(answer, "questionId") == str(q, "id") {
 						for _, raw := range list(answer, "selections") {
 							if selection, ok := raw.(map[string]any); ok {
-								ui.Row(c).Gap(6).Children(func() {
+								ui.Row(c).Gap(gapInline).Children(func() {
 									ui.Text(c, "✓ "+str(selection, "label")).FontSize(fsSmall).TextColor(c.Theme().Success)
 									if boolOf(selection, "recommended") {
 										accentChip(c, "推荐")

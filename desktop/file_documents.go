@@ -58,8 +58,10 @@ func workspaceFileKindForPath(name string) workspaceFileKind {
 	return workspaceFileText
 }
 
-func (kind workspaceFileKind) isMedia() bool {
-	return kind == workspaceFileImage || kind == workspaceFileSVG || kind == workspaceFileAudio || kind == workspaceFileVideo
+// Media kinds drawn by the built-in player. SVG stays out: the loopback media
+// server does not serve it.
+func (kind workspaceFileKind) hasMediaPlayer() bool {
+	return kind == workspaceFileImage || kind == workspaceFileAudio || kind == workspaceFileVideo
 }
 
 func (kind workspaceFileKind) isDirectWebViewFile() bool {
@@ -70,8 +72,9 @@ func (kind workspaceFileKind) isPreviewOnly() bool {
 	return kind.isDirectWebViewFile() || kind == workspaceFileSVG || kind == workspaceFileDocument
 }
 
+// Markdown and Word previews draw in the window itself; only these kinds need a web view.
 func (kind workspaceFileKind) hasWebViewPreview() bool {
-	return kind.isPreviewOnly() || kind == workspaceFileMarkdown || kind == workspaceFileHTML
+	return kind.isDirectWebViewFile() || kind == workspaceFileSVG || kind == workspaceFileHTML
 }
 
 func (kind workspaceFileKind) hasMarkupToggle() bool {

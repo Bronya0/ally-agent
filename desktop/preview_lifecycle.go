@@ -161,6 +161,7 @@ type nativePreview struct {
 	timer       *time.Timer
 	update      func(func())
 	offTitle    func()
+	offMedia    func()
 	documentURL string
 }
 
@@ -170,6 +171,10 @@ func (p *nativePreview) Status() (bool, error)      { return p.state.ready, p.st
 func (p *nativePreview) LoadFile(path string) error { return p.view.Page().LoadFile(path) }
 func (p *nativePreview) LoadHTML(source string)     { p.view.Page().LoadHTML(source, "") }
 func (p *nativePreview) Destroy() {
+	if p.offMedia != nil {
+		p.offMedia()
+		p.offMedia = nil
+	}
 	p.state.generation++
 	if p.timer != nil {
 		p.timer.Stop()

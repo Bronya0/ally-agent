@@ -63,7 +63,7 @@ func (a *desktop) petSettings(c *ui.Context) {
 	})
 	score := a.prefs.Pet.Affection[normalizedAvatarStyle(a.prefs.Avatar)].Points
 	stars := max(0, min(10, score/1000))
-	ui.Text(c, strings.Repeat("★", stars)+strings.Repeat("☆", 10-stars)).FontSize(16).TextColor(c.Theme().Accent)
+	ui.Text(c, strings.Repeat("★", stars)+strings.Repeat("☆", 10-stars)).FontSize(fsGlyph).TextColor(c.Theme().Accent)
 	fieldNote(c, fmt.Sprintf("好感度 %.3f / 10 星 · 每天陪伴 +0.020，前三次摸头各 +0.005，前三个完成任务各 +0.010。", float64(score)/1000), a.secondaryInk())
 }
 

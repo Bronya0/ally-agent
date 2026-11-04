@@ -70,7 +70,7 @@ func (a *desktop) tasksPageBody(c *ui.Context) {
 			a.tasksF.Scope = 1
 		}
 		if a.tasksF.Scope == 0 && workspace != "" {
-			uikit.Tooltip(c, ui.Text(c, short(workspace, 60)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()), workspace)
+			uikit.Tooltip(c, ui.Text(c, short(workspace, 60)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine(), workspace)
 		}
 		ui.Spacer(c)
 		if a.tasksF.Loading {
@@ -529,7 +529,7 @@ func (a *desktop) taskLogDialog(c *ui.Context) {
 	_, h := c.Size()
 	modalCard(c, &a.tasksF.LogOpen, 900, func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, a.tasksF.LogTitle).FontSize(17).Bold()
+			ui.Text(c, a.tasksF.LogTitle).FontSize(fsDialogTitle).Bold()
 			ui.Spacer(c)
 			if a.tasksF.LogService != "" {
 				flat(c, "回到最新").OnClick(func() {
@@ -611,7 +611,7 @@ func (a *desktop) taskPopupDialog(c *ui.Context) {
 			title = "定时任务"
 		}
 		ui.Row(c).Children(func() {
-			ui.Text(c, title).FontSize(17).Bold()
+			ui.Text(c, title).FontSize(fsDialogTitle).Bold()
 			ui.Spacer(c)
 			iconAction(c, "task-popup-close", "关闭", "close", 24, func() { a.taskPopup = false })
 		})

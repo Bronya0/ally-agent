@@ -23,7 +23,7 @@ func toneProbe(t *testing.T, a *desktop, inkOf func(c *ui.Context) ui.Color) flo
 		c.SetTheme(a.theme())
 		c.DisableAnimations()
 		ui.Column(c).Fill().Background(a.currentPalette().bg).Padding(12).Children(func() {
-			ui.Text(c, composerHint).FontSize(14).TextColor(inkOf(c))
+			ui.Text(c, composerHint).FontSize(fsBody).TextColor(inkOf(c))
 		})
 	}, toneProbeWidth, toneProbeHeight)
 	tester.Frame()

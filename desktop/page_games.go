@@ -260,7 +260,7 @@ func (a *desktop) gameXiangqiBoard(c *ui.Context) {
 						if strings.HasPrefix(piece, "r") {
 							color = ui.Hex("#8f2f2a")
 						}
-						ui.Text(c, xiangqiGlyph(piece)).FontSize(18).Bold().TextColor(color)
+						ui.Text(c, xiangqiGlyph(piece)).FontSize(fsHeading).Bold().TextColor(color)
 					})
 					if box.Clicked() {
 						a.gameXiangqiClick(x, y)
@@ -326,7 +326,7 @@ func (a *desktop) gameDoudizhu(c *ui.Context) {
 						btn.Border(2, c.Theme().Accent)
 					}
 					btn.Children(func() {
-						ui.Text(c, cardName(card)).FontSize(15).Bold().TextColor(ui.Hex("#2a2620"))
+						ui.Text(c, cardName(card)).FontSize(fsSubtitle).Bold().TextColor(ui.Hex("#2a2620"))
 					})
 					if btn.Clicked() && g.Started && !g.VsAI && g.Turn == 0 && !g.Thinking {
 						a.ddzToggleCard(card)

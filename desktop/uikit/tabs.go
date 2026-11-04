@@ -92,12 +92,12 @@ func tabsWithInk(c *ui.Context, selected *int, o TabOptions, secondary ui.Color,
 	} else if o.Style == TabLine && !o.Secondary {
 		track.Gap(14).BorderWidth(0, 0, 1, 0).BorderColor(t.Border)
 	} else {
-		track.Gap(4)
+		track.Gap(GapTight)
 	}
 	track.Children(func() {
 		for i, label := range labels {
 			active := i == *selected
-			tab := parts.Tab(i).Shrink(0).Height(28).Padding(0, 12).Cursor(ui.CursorPointer).Label(label)
+			tab := parts.Tab(i).Shrink(0).Height(28).Padding(0, GapSection).Cursor(ui.CursorPointer).Label(label)
 			if o.Gesture != nil {
 				o.Gesture.Watch(tab)
 			}
@@ -133,7 +133,7 @@ func tabsWithInk(c *ui.Context, selected *int, o TabOptions, secondary ui.Color,
 			tab.Background(fade(tab, "tab-fill", fill)).TextColor(ink)
 			// Constant weight avoids labels changing width while navigating.
 			tab.Children(func() {
-				ui.Text(c, label).FontSize(13).FontWeight(500).TextColor(ink).SingleLine().Unselectable().Cursor(ui.CursorPointer)
+				ui.Text(c, label).FontSize(FontSmall).FontWeight(500).TextColor(ink).SingleLine().Unselectable().Cursor(ui.CursorPointer)
 			})
 		}
 	})

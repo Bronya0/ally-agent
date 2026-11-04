@@ -86,9 +86,9 @@ func TestExecuteToolHTTPRequestJSONBodyDoubleEncodedString(t *testing.T) {
 }
 
 // TestHTTPRequestCannotWidenAllowPrivateNetwork: the config owns the SSRF
-// switch and the model has no path to it. `allowPrivateNetwork` is not a
-// declared parameter, so the argument gate rejects a call that tries to carry
-// the override rather than silently ignoring it (or, worse, honouring it).
+// switch and the model has no path to it. The undeclared `allowPrivateNetwork`
+// key is dropped before the handler runs, so a request is decided by the
+// configured policy and never by what the model asked for.
 func TestHTTPRequestCannotWidenAllowPrivateNetwork(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":true}`))
@@ -101,8 +101,8 @@ func TestHTTPRequestCannotWidenAllowPrivateNetwork(t *testing.T) {
 	if result.OK {
 		t.Fatalf("a request must not be able to open the private-network guard, got %+v", result.Data)
 	}
-	if result.ErrorCode != "E_BAD_ARGS" || !strings.Contains(result.Error, "allowPrivateNetwork") {
-		t.Fatalf("expected the undeclared parameter to be rejected by name, got %#v", result)
+	if result.ErrorCode == "E_BAD_ARGS" {
+		t.Fatalf("the undeclared parameter must be dropped, not rejected: %#v", result)
 	}
 }
 
@@ -3355,7 +3355,9 @@ func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
 			{"oldString": "alpha", "newString": "ALPHA"},
 			{"oldString": "gamma", "newString": "GAMMA"}
 		]}`))
-	if result.OK || !strings.Contains(result.Error, "edits") {
+	// The legacy array is dropped as an undeclared key, so the call fails on the
+	// missing `changes` it should have carried.
+	if result.OK || result.ErrorCode != "E_BAD_ARGS" {
 		t.Fatalf("expected model-facing edit tool to reject legacy edits array, got %#v", result)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
@@ -3367,7 +3369,7 @@ func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
 	}
 }
 
-func TestExecuteToolRejectsUnknownArguments(t *testing.T) {
+func TestExecuteToolIgnoresUnknownArguments(t *testing.T) {
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\ngamma\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
@@ -3376,22 +3378,25 @@ func TestExecuteToolRejectsUnknownArguments(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: dir}
 
-	// A stray key is a model bug: it used to run on a default and come back
-	// with a warning, which hid the mistake. It now fails, names the key and
-	// lists what the tool does accept.
+	// A stray key never reaches the handler, so the call runs and the key is
+	// named in a warning. Failing instead cost the model a round trip to fix a
+	// value nothing downstream would have read.
 	result := app.executeTool(context.Background(), cfg, "session-1", "list_files", []byte(`{"path":".","recursiveTypo":true}`))
-	if result.OK || result.ErrorCode != "E_BAD_ARGS" {
-		t.Fatalf("unknown arguments must fail with E_BAD_ARGS, got %#v", result)
+	if !result.OK {
+		t.Fatalf("a stray key must not fail the call, got %#v", result)
 	}
-	if !strings.Contains(result.Error, "recursiveTypo") || !strings.Contains(result.Error, "path") {
-		t.Fatalf("the rejection must name the stray key and the accepted ones, got %q", result.Error)
+	if len(result.Warnings) == 0 || !strings.Contains(result.Warnings[0], "recursiveTypo") {
+		t.Fatalf("expected the ignored key to be named, got %#v", result.Warnings)
 	}
 
-	// The same holds one level down: without the schema walk, a typo inside a
-	// nested object was invisible to the struct-tag check.
+	// The schema walk covers nested objects, so a typo one level down is
+	// dropped the same way and reported with its path.
 	nested := app.executeTool(context.Background(), cfg, "session-1", "read", []byte(`{"files":[{"path":"sample.txt","tailLine":5}]}`))
-	if nested.OK || !strings.Contains(nested.Error, "tailLine") {
-		t.Fatalf("a nested unknown key must be rejected by name, got %#v", nested)
+	if !nested.OK {
+		t.Fatalf("a nested stray key must not fail the call, got %#v", nested)
+	}
+	if len(nested.Warnings) == 0 || !strings.Contains(nested.Warnings[0], "files[0].tailLine") {
+		t.Fatalf("expected the ignored key to carry its path, got %#v", nested.Warnings)
 	}
 
 	// Auto-repair still runs before validation, so a stringified array whose
@@ -3404,14 +3409,14 @@ func TestExecuteToolRejectsUnknownArguments(t *testing.T) {
 		t.Fatalf("expected the repair warning to survive, got %#v", repaired.Warnings)
 	}
 
-	// Missing required parameters still fail loudly, and the report covers
-	// both problems in one round instead of one per call.
+	// A value the handler does read still fails loudly, and the ignored key
+	// does not drown the real problem out.
 	missing := app.executeTool(context.Background(), cfg, "session-1", "wait", []byte(`{"seconds":1,"whyTypo":"x"}`))
 	if missing.OK || missing.ErrorCode != "E_BAD_ARGS" {
 		t.Fatalf("missing required reason must still fail, got %#v", missing)
 	}
-	if !strings.Contains(missing.Error, "reason") || !strings.Contains(missing.Error, "whyTypo") {
-		t.Fatalf("the rejection must report the missing and the stray key together, got %q", missing.Error)
+	if !strings.Contains(missing.Error, "reason") {
+		t.Fatalf("the rejection must name the missing parameter, got %q", missing.Error)
 	}
 }
 
@@ -3619,7 +3624,7 @@ func TestExecuteToolEditRejectsLegacyNestedFilesForm(t *testing.T) {
 	// touching the file — there is no compatibility backdoor.
 	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]}]}`, version)
 	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(args))
-	if result.OK || !strings.Contains(result.Error, "files") {
+	if result.OK || result.ErrorCode != "E_BAD_ARGS" {
 		t.Fatalf("expected legacy nested files form to be rejected, got %#v", result)
 	}
 
@@ -3627,7 +3632,7 @@ func TestExecuteToolEditRejectsLegacyNestedFilesForm(t *testing.T) {
 	// an edit.
 	stringEncoded := fmt.Sprintf(`{"files":"[{\"path\":\"sample.txt\",\"version\":\"%s\",\"changes\":[{\"oldText\":\"alpha\",\"newText\":\"ALPHA\"}]}]"}`, version)
 	result = app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(stringEncoded))
-	if result.OK || !strings.Contains(result.Error, "files") {
+	if result.OK || result.ErrorCode != "E_BAD_ARGS" {
 		t.Fatalf("expected string-encoded legacy files form to be rejected, got %#v", result)
 	}
 
@@ -4350,11 +4355,10 @@ func TestExecuteToolEditDoesNotMislabelSchemaErrorAsTruncation(t *testing.T) {
 	if strings.Contains(strings.ToLower(result.Error), "truncated") {
 		t.Fatalf("complete schema error must not be reported as truncation: %q", result.Error)
 	}
-	// Unknown keys inside a change used to be tolerated with a warning while
-	// the change itself failed validation; both problems are now reported
-	// together, naming every offending key.
-	if !strings.Contains(result.Error, "oldString") || !strings.Contains(result.Error, "newText") {
-		t.Fatalf("expected the unknown keys and the missing newText, got %q", result.Error)
+	// Legacy change fields are dropped as undeclared keys, so the change itself
+	// fails on the newText the handler reads.
+	if !strings.Contains(result.Error, "newText") {
+		t.Fatalf("expected the missing newText to be named, got %q", result.Error)
 	}
 }
 

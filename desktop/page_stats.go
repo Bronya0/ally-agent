@@ -94,7 +94,7 @@ func (a *desktop) statsSummaryCard(c *ui.Context, title string, summary backend.
 			uikit.Tooltip(c, ui.Text(c, statsNumber(float64(summary.Requests))+" 次请求").FontSize(fsSmall).TextColor(a.secondaryInk()).NoWrap(), statsExact(summary.Requests)+" 次请求")
 		})
 		ui.Row(c).Gap(gapField).AlignItems(ui.Baseline).Children(func() {
-			statsTokens(c, summary.TotalTokens).FontSize(28).Bold()
+			statsTokens(c, summary.TotalTokens).FontSize(fsDisplay).Bold()
 			fieldNote(c, "tokens", a.secondaryInk())
 		})
 		ui.Row(c).FillWidth().Gap(gapSection).Wrap().Children(func() {
@@ -174,7 +174,7 @@ func (a *desktop) statsBars(c *ui.Context) {
 				uikit.Tooltip(c, chart.Rect(c, x.Band(i), y.Span(0, input[i])).Radius(2).Background(chartPalette[0]), tip)
 				uikit.Tooltip(c, chart.Rect(c, x.Band(i), y.Span(input[i], input[i]+output[i])).Radius(2).Background(chartPalette[1]), tip)
 			}
-		}).Label("近30天用量图").Height(200).Gap(6)
+		}).Label("近30天用量图").Height(200).Gap(gapInline)
 		ui.Row(c).FillWidth().Children(func() {
 			fieldNote(c, monthDay(daily[0].Date), a.secondaryInk())
 			ui.Spacer(c)
@@ -286,7 +286,7 @@ func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenD
 			})
 			box.Children(func() {
 				ui.Column(c).Center().Gap(2).PassThrough().Children(func() {
-					ui.Text(c, statsNumber(float64(total))).FontSize(18).Bold()
+					ui.Text(c, statsNumber(float64(total))).FontSize(fsHeading).Bold()
 					fieldNote(c, "tokens", a.secondaryInk())
 				})
 			})
@@ -300,7 +300,7 @@ func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenD
 			} else {
 				uikit.Tooltip(c, box, statsExact(total)+" tokens")
 			}
-			ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(gapInline).Children(func() {
 				for i, item := range stats {
 					value := item.InputTokens + item.OutputTokens
 					name := item.Name

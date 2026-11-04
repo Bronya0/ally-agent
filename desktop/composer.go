@@ -50,7 +50,7 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 			input := ui.TextAreaBase(c.Key(t.ID+"-draft"), &t.Draft).Label("消息输入框").
 				FocusBind(&a.composerFocus, t.ID).
 				Placeholder(composerHint).
-				MinHeight(58).MaxHeight(576).Lines(1, 24).Padding(c.Theme().Space(1.5), c.Theme().Space(2.5)).FontSize(14).TextColor(c.Theme().Text).MinWidth(0).Radius(radiusControl).
+				MinHeight(58).MaxHeight(576).Lines(1, 24).Padding(c.Theme().Space(1.5), c.Theme().Space(2.5)).FontSize(fsBody).TextColor(c.Theme().Text).MinWidth(0).Radius(radiusControl).
 				Background(p.bg).Disabled(a.closing || (a.page == "kb" && a.kbIndexMissing())).Grow(1)
 			border := c.Theme().Border
 			if input.Focused() || input.FocusWithin() {
@@ -453,7 +453,7 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation) {
 	}
 	p := a.currentPalette()
 	overlayPanel(c, "cmd-menu", 0, 360, func() {
-		ui.Row(c).Padding(6, 10).Gap(gapField).Children(func() {
+		ui.Row(c).Padding(gapInline, padCard).Gap(gapField).Children(func() {
 			ui.Text(c, fmt.Sprintf("指令 %d · 技能 %d", builtin, skills)).FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
 			fieldNote(c, "↑↓ 选择 · Enter 执行 · Tab 补全", a.secondaryInk())
@@ -484,7 +484,7 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation) {
 func (a *desktop) mentionMenu(c *ui.Context, t *conversation) {
 	st := t.uiState()
 	overlayPanel(c, "mention-menu", 0, 240, func() {
-		ui.Row(c).Padding(6, 10).Children(func() {
+		ui.Row(c).Padding(gapInline, padCard).Children(func() {
 			ui.Text(c, "@ 文件和目录").FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
 			ui.Text(c, st.Mention.Meta).FontSize(fsTiny).TextColor(a.secondaryInk())
@@ -560,7 +560,7 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 	st.SessionsIndex = max(0, min(st.SessionsIndex, len(sessions)-1))
 	p := a.currentPalette()
 	panel := overlayPanel(c, "sessions-menu", 0, 360, func() {
-		ui.Row(c).Padding(6, 10).Children(func() {
+		ui.Row(c).Padding(gapInline, padCard).Children(func() {
 			ui.Text(c, fmt.Sprintf("会话 (%d)", len(sessions))).FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
 			fieldNote(c, "↑↓ 选择 · Enter 打开", a.secondaryInk())
@@ -645,14 +645,11 @@ func (a *desktop) composerStatusRow(c *ui.Context, t *conversation) {
 			}
 			ui.Text(c, note).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine().MinWidth(0)
 			if count := compactThinkingTokens(st); count > 0 {
-				ui.Text(c, fmt.Sprintf("Thinking %s tokens", fmtK(count))).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine()
+				a.thinkingTokensLine(c, count)
 			}
 		case t.Busy:
 			a.runSpinner(c)
-			count := (st.ThinkingBytes + 3) / 4
-			if count > 0 {
-				ui.Text(c, fmt.Sprintf("Thinking %s tokens", fmtK(count))).FontSize(13).TextColor(a.secondaryInk()).SingleLine()
-			}
+			a.thinkingTokensLine(c, (st.ThinkingBytes+3)/4)
 		}
 		ui.Spacer(c)
 	})
@@ -665,6 +662,15 @@ func lastUserPrompt(t *conversation) string {
 		}
 	}
 	return ""
+}
+
+// thinkingTokensLine draws the one "Thinking N tokens" line shared by the
+// compacting and busy states, so both keep a single font size.
+func (a *desktop) thinkingTokensLine(c *ui.Context, count int) {
+	if count <= 0 {
+		return
+	}
+	ui.Text(c, fmt.Sprintf("Thinking %s tokens", fmtK(count))).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine()
 }
 
 // runSpinner draws a continuous, staggered wave in a fixed 15x16 box.
@@ -858,7 +864,7 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 								continue
 							}
 							if !shownRecent {
-								head := ui.Text(c, "最近使用").FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(6, 10)
+								head := ui.Text(c, "最近使用").FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(gapInline, padCard)
 								if head.Hovered() {
 									recentHot = true
 								}
@@ -1033,7 +1039,7 @@ func providerGroupName(model backend.ModelConfig) string {
 // which group the frame settled on.
 func (a *desktop) modelGroupRow(c *ui.Context, t *conversation, provider string, indices []int) (ui.Element, bool) {
 	th := c.Theme()
-	row := ui.ButtonBase(c.Key("model-group-"+provider)).FillWidth().MinHeight(32).Padding(6, 10).Justify(ui.Start).Radius(radiusSmall).Cursor(ui.CursorPointer).Label(provider)
+	row := ui.ButtonBase(c.Key("model-group-"+provider)).FillWidth().MinHeight(32).Padding(gapInline, padCard).Justify(ui.Start).Radius(radiusSmall).Cursor(ui.CursorPointer).Label(provider)
 	hovered := row.Hovered()
 	hasActive := false
 	for _, i := range indices {
@@ -1043,7 +1049,7 @@ func (a *desktop) modelGroupRow(c *ui.Context, t *conversation, provider string,
 		}
 	}
 	row.Children(func() {
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Gap(gapField).AlignItems(ui.Center).Children(func() {
 			name := ui.Text(c, provider).FontSize(fsSmall).SingleLine().Grow(1)
 			if hasActive {
 				name.TextColor(th.Accent)
@@ -1415,7 +1421,7 @@ func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 	}
 	btn := uikit.Tooltip(c, ui.ButtonBase(c.Key("footer-git")).Height(22).Padding(1, 7).Radius(11).Background(c.Theme().Surface).Cursor(ui.CursorPointer), "查看 Git 改动")
 	btn.Children(func() {
-		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(gapTight).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, short(label, 22)).FontSize(fsTiny).TextColor(c.Theme().Accent).SingleLine()
 			for _, part := range []struct {
 				value  int
@@ -1468,7 +1474,7 @@ func gitRepoPopoverItem(c *ui.Context, key string, repo backend.GitRepoItem, act
 		row.Background(t.SurfaceHover)
 	}
 	row.Children(func() {
-		ui.Column(c).FillWidth().Gap(4).Children(func() {
+		ui.Column(c).FillWidth().Gap(gapTight).Children(func() {
 			ui.Row(c).FillWidth().Gap(3).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, short(repo.Name, 22)).FontSize(fsBody).TextColor(t.Text).SingleLine().Shrink(1).MinWidth(0)
 				ui.Text(c, "/").FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Shrink(0)
@@ -1476,7 +1482,7 @@ func gitRepoPopoverItem(c *ui.Context, key string, repo backend.GitRepoItem, act
 				ui.Spacer(c)
 			})
 			if repo.Ahead > 0 || repo.Behind > 0 || repo.Added > 0 || repo.Modified > 0 || repo.Deleted > 0 {
-				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Gap(gapTight).AlignItems(ui.Center).Children(func() {
 					gitRepoStatusTag(c, "ahead", "↑", repo.Ahead, uikit.Info)
 					gitRepoStatusTag(c, "behind", "↓", repo.Behind, uikit.Warning)
 					gitRepoStatusTag(c, "added", "+", repo.Added, uikit.Success)
@@ -1498,7 +1504,7 @@ func gitRepoStatusTag(c *ui.Context, key, symbol string, count int, tone uikit.T
 
 func gitRepoStatusChip(c *ui.Context, label string, tone uikit.Tone) {
 	color := uikit.ToneColor(c, tone)
-	ui.Row(c).Height(18).Padding(0, 5).AlignItems(ui.Center).Radius(5).
+	ui.Row(c).Height(18).Padding(0, 5).AlignItems(ui.Center).Radius(radiusSmall).
 		Background(color.Alpha(0.08)).Children(func() {
 		ui.Text(c, label).FontSize(fsTiny).TextColor(color).SingleLine()
 	})
@@ -1584,11 +1590,11 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 		panel.MaxHeightPercent(85)
 		panel.Column().Label("上下文占用明细").AttachTo(btn, ui.AnchorTopRight, ui.AnchorBottomRight).Left(-12)
 		b := st.Breakdown
-		ui.Text(c, "上下文构成").FontSize(fsSection).Bold().Padding(6, 10)
+		ui.Text(c, "上下文构成").FontSize(fsSection).Bold().Padding(gapInline, padCard)
 		// Only a session with more sections than usual — a long memory index, one
 		// more instruction file — scrolls here.
 		ui.Scroll(c).MaxHeight(contextBreakdownHeight).Children(func() {
-			ui.Column(c).FillWidth().Padding(4, 10).Gap(6).Children(func() {
+			ui.Column(c).FillWidth().Padding(4, 10).Gap(gapInline).Children(func() {
 				contextPart(c, "系统提示词", b.SystemPrompt, a.secondaryInk())
 				for _, part := range b.SystemPromptParts {
 					if part.Tokens > 0 {
@@ -1606,9 +1612,9 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 			})
 		})
 		divider(c)
-		ui.Column(c).FillWidth().Shrink(0).Padding(4, 10, 6).Gap(8).Children(func() {
+		ui.Column(c).FillWidth().Shrink(0).Padding(4, 10, 6).Gap(gapField).Children(func() {
 			// Two rows of two buttons.
-			ui.Row(c).FillWidth().Shrink(0).Gap(8).Children(func() {
+			ui.Row(c).FillWidth().Shrink(0).Gap(gapField).Children(func() {
 				contextCompactButton(c, "context-compact", "压缩上下文", true, t.Busy || st.CompactBusy, "压缩对话上下文，用摘要替换历史消息", func() {
 					st.ContextOpen = false
 					a.compact(t, false)
@@ -1618,7 +1624,7 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 					a.compact(t, true)
 				}, a.secondaryInk())
 			})
-			ui.Row(c).FillWidth().Shrink(0).Gap(8).Children(func() {
+			ui.Row(c).FillWidth().Shrink(0).Gap(gapField).Children(func() {
 				contextCompactButton(c, "context-lessons", "压缩教训", false, t.Busy, "压缩并总结项目经验教训", func() {
 					st.ContextOpen = false
 					a.send(t, "请压缩并总结这个项目的经验教训（LESSONS.md）。")
@@ -1657,7 +1663,7 @@ func contextCompactButton(c *ui.Context, key, label string, primary, disabled bo
 		action()
 	})
 	b.Children(func() {
-		ui.Text(c, label).FontSize(12).TextColor(color).SingleLine().MinWidth(0).TextAlign(ui.Center)
+		ui.Text(c, label).FontSize(fsTiny).TextColor(color).SingleLine().MinWidth(0).TextAlign(ui.Center)
 	})
 }
 
