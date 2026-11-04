@@ -58,8 +58,10 @@ func workspaceFileKindForPath(name string) workspaceFileKind {
 	return workspaceFileText
 }
 
-func (kind workspaceFileKind) isMedia() bool {
-	return kind == workspaceFileImage || kind == workspaceFileSVG || kind == workspaceFileAudio || kind == workspaceFileVideo
+// Media kinds drawn by the built-in player. SVG stays out: the loopback media
+// server does not serve it.
+func (kind workspaceFileKind) hasMediaPlayer() bool {
+	return kind == workspaceFileImage || kind == workspaceFileAudio || kind == workspaceFileVideo
 }
 
 func (kind workspaceFileKind) isDirectWebViewFile() bool {

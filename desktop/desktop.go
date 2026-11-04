@@ -190,6 +190,7 @@ type desktop struct {
 	files                                               []backend.FileEntry
 	workspaceFiles                                      map[string]*workspaceFile
 	workspacePreview                                    workspacePreviewLifecycle
+	media                                               workspaceMediaState
 	fileEpoch                                           int
 	modelTab                                            string
 	modelSaving                                         bool
@@ -1117,6 +1118,11 @@ func (a *desktop) openFile(path string) {
 		a.releaseFilePreview()
 		a.openFileInfo(path)
 		return
+	}
+	// Normalize the playlist policy here, where the file is chosen, so rendering
+	// the toolbar never writes UI state.
+	if workspaceFileKindForPath(path).hasMediaPlayer() {
+		a.media.ensureMode()
 	}
 	if old := a.workspaceFiles[workspaceKey(root)]; old != nil {
 		if old.Path == path {

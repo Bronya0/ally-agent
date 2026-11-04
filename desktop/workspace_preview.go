@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
 
+	backend "ally-dev/internal/app"
 	"ally-dev/internal/documentpreview"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
@@ -22,6 +24,49 @@ const maxMarkupPreviewBytes = 2 << 20
 const maxDocumentPreviewHTML = 2 << 20
 
 var errMarkupPreviewLimit = errors.New("预览内容超过大小上限")
+
+// newMediaPlayerDocument builds the player page for an image, audio or video
+// file, reporting false for every other kind. It starts playback only for an
+// explicit user action or while continuing a playlist, so it also clears the
+// one-shot autoplay flag.
+func (a *desktop) newMediaPlayerDocument(file *workspaceFile) (string, bool) {
+	kind := workspaceFileKindForPath(file.Path)
+	if !kind.hasMediaPlayer() {
+		return "", false
+	}
+	tab := a.current()
+	if tab == nil || a.core == nil {
+		return "", false
+	}
+	source, err := a.core.GetWorkspaceMediaURL(backend.WorkspacePathRequest{Workspace: tab.Workspace, Path: file.Path})
+	if err != nil || strings.TrimSpace(source) == "" {
+		return "", false
+	}
+	a.media.ensureMode()
+	page := mediaPreviewHTML(filepath.Base(file.Path), source, kind)
+	script := strings.NewReplacer("SINGLE", fmt.Sprint(a.media.mode == mediaModeSingle), "ENHANCE", fmt.Sprint(a.media.enhance && kind == workspaceFileImage), "START", fmt.Sprint(a.media.autoplay)).Replace(workspaceMediaScript)
+	a.media.autoplay = false
+	a.media.playing = false
+	return strings.Replace(page, "</body>", script+"</body>", 1), true
+}
+
+func mediaPreviewHTML(name, source string, kind workspaceFileKind) string {
+	// Only the media origin is reachable: the page reads nothing else.
+	mediaSource := "'none'"
+	if parsed, err := url.Parse(source); err == nil && parsed.Host != "" {
+		mediaSource = parsed.Scheme + "://" + parsed.Host
+	}
+	style := `html,body{margin:0;height:100%;background:#1b1b1b;color-scheme:dark}body{display:grid;place-items:center}video,img{width:100%;height:100%;object-fit:contain}svg{position:absolute;width:0;height:0}`
+	player := `<video controls playsinline preload="metadata" src="` + html.EscapeString(source) + `"></video>`
+	if kind == workspaceFileImage {
+		player = `<img alt="" src="` + html.EscapeString(source) + `">`
+	}
+	if kind == workspaceFileAudio {
+		style = `html,body{margin:0;height:100%;background:#1b1b1b;color-scheme:dark}body{display:grid;place-items:center;padding:0 24px;box-sizing:border-box}audio{width:100%;max-width:560px}`
+		player = `<audio controls preload="metadata" src="` + html.EscapeString(source) + `"></audio>`
+	}
+	return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src ` + mediaSource + `; img-src ` + mediaSource + `; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><meta name="viewport" content="width=device-width,initial-scale=1"><title>` + html.EscapeString(name) + `</title><style>` + style + `</style></head><body><svg xmlns="http://www.w3.org/2000/svg"><filter id="sharpen" color-interpolation-filters="sRGB"><feConvolveMatrix order="3" kernelMatrix="0 -.12 0 -.12 1.48 -.12 0 -.12 0" preserveAlpha="true"/></filter></svg>` + player + `</body></html>`
+}
 
 func emptyFileEditor() *editor.State {
 	return &editor.State{Buffer: editor.NewBuffer(""), Font: ui.Font{Family: nativeFontFamily(), Size: fsEditor}}
@@ -451,14 +496,17 @@ func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile) {
 			if err != nil {
 				return nil, err
 			}
-			if file.PreviewPath != "" {
-				err = surface.LoadFile(file.PreviewPath)
-			} else {
+			switch {
+			case file.PreviewPath != "":
+				if page, ok := a.newMediaPlayerDocument(file); ok {
+					a.attachWorkspaceMedia(surface, file)
+					surface.LoadHTML(page)
+				} else if err = surface.LoadFile(file.PreviewPath); err != nil {
+					surface.Destroy()
+					return nil, err
+				}
+			default:
 				surface.LoadHTML(document)
-			}
-			if err != nil {
-				surface.Destroy()
-				return nil, err
 			}
 			file.PreviewError = ""
 			return surface, nil
