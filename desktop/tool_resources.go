@@ -140,7 +140,7 @@ func toolFields(c *ui.Context, data map[string]any, keys []string, ink ...ui.Col
 		if label == "" {
 			label = k
 		}
-		ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Start).Children(func() {
+		ui.Row(c).FillWidth().MinWidth(0).Gap(gapField).AlignItems(ui.Start).Children(func() {
 			ui.Text(c, label+":").Width(76).Shrink(0).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink))
 			text := valueText
 			if k == "schedule" {
@@ -197,13 +197,33 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 		fieldNote(c, "暂无记录", a.secondaryInk())
 		return
 	}
-	ui.Column(c).FillWidth().MinWidth(0).Gap(8).Children(func() {
-		for n, raw := range items {
+	// A stopped service keeps its full card only when the tool card is open:
+	// a list that asked for finished services would otherwise fill the chat
+	// with one card per dead process.
+	type resourceEntry struct {
+		index int
+		item  any
+	}
+	shown := make([]resourceEntry, 0, len(items))
+	hidden := 0
+	for n, raw := range items {
+		if kind == "service" && !open {
+			item, ok := raw.(map[string]any)
+			if ok && !serviceIsActive(str(item, "status")) {
+				hidden++
+				continue
+			}
+		}
+		shown = append(shown, resourceEntry{index: n, item: raw})
+	}
+	ui.Column(c).FillWidth().MinWidth(0).Gap(gapField).Children(func() {
+		for _, entry := range shown {
+			n, raw := entry.index, entry.item
 			item, ok := raw.(map[string]any)
 			if !ok {
 				continue
 			}
-			ui.Column(c.Key(fmt.Sprintf("%s-resource-%d", key, n))).FillWidth().MinWidth(0).Padding(10, 12).Gap(6).Border(1, c.Theme().Border).Radius(radiusCard).Background(c.Theme().Surface).Children(func() {
+			ui.Column(c.Key(fmt.Sprintf("%s-resource-%d", key, n))).FillWidth().MinWidth(0).Padding(10, 12).Gap(gapInline).Border(1, c.Theme().Border).Radius(radiusCard).Background(c.Theme().Surface).Children(func() {
 				title := str(item, "name")
 				if title == "" {
 					title = str(item, "alias")
@@ -211,7 +231,7 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 				if title == "" {
 					title = str(item, "id")
 				}
-				ui.Row(c).FillWidth().MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().MinWidth(0).Gap(gapInline).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, title).FontSize(fsSmall).Bold().Grow(1).MinWidth(0)
 					status := str(item, "status")
 					if kind == "scheduled_task" {
@@ -230,7 +250,15 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 				toolFields(c, item, resourceFieldOrder, a.secondaryInk())
 			})
 		}
+		if hidden > 0 {
+			fieldNote(c, fmt.Sprintf("另有 %d 个已停止的服务，展开卡片查看", hidden), a.secondaryInk())
+		}
 	})
+}
+
+// serviceIsActive reports a service the card shows without expanding it.
+func serviceIsActive(status string) bool {
+	return status == "running" || status == "starting"
 }
 
 // resourceFieldOrder is the order the resource cards read a tool's own fields.
@@ -254,6 +282,13 @@ type diffDisplayLine struct {
 	order   int
 	changed bool
 	gap     int
+}
+
+// isHunkHeader reports a unified-diff hunk line ("@@ -90,7 +90,7 @@"), which
+// the card drops: every row already carries its own number, so the header only
+// repeats bookkeeping the reader cannot use.
+func isHunkHeader(text string) bool {
+	return strings.HasPrefix(text, "@@ -") && strings.Contains(text, " +")
 }
 
 func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
@@ -319,7 +354,7 @@ func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
 			newLine += row.gap
 			continue
 		}
-		if strings.HasPrefix(row.left, "@@") {
+		if isHunkHeader(row.left) {
 			fields := strings.Fields(row.left)
 			if len(fields) >= 3 {
 				oldLine, _ = strconv.Atoi(strings.Split(strings.TrimPrefix(fields[1], "-"), ",")[0])
@@ -347,6 +382,11 @@ func singleColumnDiffRows(rows []splitDiffRow) []diffDisplayLine {
 	for _, row := range rows {
 		if row.gap > 0 {
 			visible = append(visible, diffDisplayLine{text: row.left, order: row.leftOrder, gap: row.gap})
+			continue
+		}
+		// The hunk header is dropped here rather than while splitting, because
+		// splitting still needs its line numbers to label the rows below it.
+		if isHunkHeader(row.left) {
 			continue
 		}
 		if row.removed || row.added {
@@ -407,7 +447,7 @@ func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, star
 		height = 300
 	}
 	body := func() {
-		row := ui.Row(c).AlignItems(ui.Start).Padding(2, 8, 4, 0).Gap(12)
+		row := ui.Row(c).AlignItems(ui.Start).Padding(2, 8, 4, 0).Gap(gapSection)
 		gutter := memoAt[lineMemo](row, "line-numbers")
 		row.Children(func() {
 			ui.Text(c, gutter.get(lineKey{text, start}, lineNumberColumn)).Font(monoFamily).FontSize(readingCodeSize).TextColor(uikit.SecondaryInk(c, ink)).FixedLineHeight(20).Unselectable()

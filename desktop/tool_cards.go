@@ -377,7 +377,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	}
 
 	container.Children(func() {
-		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(4).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(rowLabel)
+		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(gapTight).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(rowLabel)
 		row.Children(func() {
 			ui.Box(c).Absolute().Left(-20).Top(0).Width(16).HeightPercent(100).Center().Children(func() {
 				toolStatusIcon(c, groupStatus)
@@ -617,7 +617,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	// Tool rows mirror main's .rich-tool-card: transparent, borderless, with a
 	// hanging status icon; the row itself carries the 6px rhythm below.
 	container.Children(func() {
-		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(4).AlignItems(ui.Center).Justify(ui.Start).Label("工具详情 " + key)
+		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(gapTight).AlignItems(ui.Center).Justify(ui.Start).Label("工具详情 " + key)
 		if expandable {
 			row.Cursor(ui.CursorPointer)
 		}
@@ -740,7 +740,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			}
 			return
 		}
-		body := ui.Column(c).FillWidth().MinWidth(0).Gap(4)
+		body := ui.Column(c).FillWidth().MinWidth(0).Gap(gapTight)
 		inset := float32(0)
 		if name == "create" || name == "remote_create_file" {
 			inset += 4
@@ -803,7 +803,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					toolSourceWindow(c, key+"-source", content, str(args, "path"), open, startLine, a.secondaryInk())
 				}
 			case name == "suggest":
-				ui.Row(c).Wrap().Gap(6).Children(func() {
+				ui.Row(c).Wrap().Gap(gapInline).Children(func() {
 					for n, raw := range list(result, "items") {
 						text := fmt.Sprint(raw)
 						suggestionButton(c.Key(fmt.Sprintf("%s-suggest-%d", key, n)), text, a.secondaryInk()).OnClick(func() {
@@ -833,7 +833,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					break
 				}
 				a.toolHTMLView(c, t, m, args)
-				ui.Row(c).Gap(8).Children(func() {
+				ui.Row(c).Gap(gapField).Children(func() {
 					flat(c, "导出 HTML").OnClick(func() { a.exportHTML("preview.html", html) })
 					flat(c, "在浏览器打开").OnClick(func() { a.openHTMLPreview(html) })
 				})
@@ -1497,8 +1497,10 @@ type diffVisibleLine struct {
 
 // diffVisibleLines mirrors main's DiffView clustering: changed rows show with 3
 // context lines around them and the gaps between windows collapse into
-// "… N 行未变更 …" markers. File headers (---/+++) and hunk headers (@@) always
-// show. limit trims a diff that has no changes at all; limit <= 0 keeps every row.
+// "… N 行未变更 …" markers. File headers (---/+++) and hunk headers (@@) are
+// always kept so the gaps between windows stay separated; the card then drops
+// the headers themselves. limit trims a diff that has no changes at all;
+// limit <= 0 keeps every row.
 func diffVisibleLines(lines []string, limit int, full bool) []diffVisibleLine {
 	if full || (limit > 0 && len(lines) <= limit) {
 		out := make([]diffVisibleLine, 0, len(lines))
