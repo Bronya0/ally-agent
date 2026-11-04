@@ -204,6 +204,7 @@ type chatUI struct {
 	FlyoutHot              bool   // the pointer is inside that flyout
 	FlyoutDismiss          string // the group Escape closed; its row stays shut until the pointer leaves
 	ContextOpen            bool
+	PromptPartsOpen        bool // the prompt's sections are detail: folded until the parent row is clicked
 	ExtraRootsOpen         bool
 	Retry                  *retryInfo
 	Git                    backend.GitStatus
