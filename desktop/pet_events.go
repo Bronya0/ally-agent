@@ -114,23 +114,12 @@ func (a *desktop) petCompletionText(event string, p map[string]any) string {
 		}
 	} else {
 		ms = int64(num(p, "durationMs"))
-		name := ""
-		for _, t := range a.tabs {
-			if t.ID == str(p, "sessionId") {
-				name = t.Title
-				break
+		// 气泡报的是工作区：一次运行可能属于已经关掉的标签页，而工作区的
+		// 名字比会话标题更能说明这些活发生在哪个项目里。
+		if ws := strings.TrimSpace(str(p, "workspace")); ws != "" {
+			if name := petShortTitle(workspaceLabel(ws)); name != "" {
+				label = "工作区「" + name + "」" + strings.TrimPrefix(label, "任务")
 			}
-		}
-		if name == "" {
-			for _, entry := range a.sessions {
-				if entry.ID == str(p, "sessionId") {
-					name = entry.Title
-					break
-				}
-			}
-		}
-		if name = petShortTitle(name); name != "" {
-			label = "「" + name + "」" + strings.TrimPrefix(label, "任务")
 		}
 	}
 	if elapsed := backend.FormatDurationMS(ms); elapsed != "" {
@@ -255,7 +244,7 @@ func (a *desktop) petBubbleView(c *ui.Context) {
 	c.Root().Background(ui.Transparent)
 	ui.Column(c).Fill().Padding(petBubblePaddingY, petBubblePaddingX).Justify(ui.Center).Radius(12).
 		Background(ui.RGB(248, 246, 244)).Children(func() {
-		ui.Text(c, a.pet.bubbleText).FontSize(13).TextColor(ui.RGB(53, 55, 64)).FillWidth().MinWidth(0)
+		ui.Text(c, a.pet.bubbleText).FontSize(fsSmall).TextColor(ui.RGB(53, 55, 64)).FillWidth().MinWidth(0)
 	})
 }
 
