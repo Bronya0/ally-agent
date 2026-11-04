@@ -138,8 +138,13 @@ func (a *desktop) settingsConfigDraft() backend.ConfigState {
 
 // settingsPendingEdits reports whether the page holds anything the backend does
 // not have yet. Both sides are normalized through the form's own defaults first,
-// so an untouched page with a sparse config file never looks edited.
+// so an untouched page with a sparse config file never looks edited. Fields that
+// live in prefs rather than the config are compared here too: 每页展示块数 is only
+// written by saveSettings, so ignoring it made a real edit disappear on leave.
 func (a *desktop) settingsPendingEdits() bool {
+	if normalizeHistoryPageSize(int(a.settings.HistoryPageSize)) != a.messageWindowSize() {
+		return true
+	}
 	return !reflect.DeepEqual(normalizeSettingsConfig(a.settingsConfigDraft()), normalizeSettingsConfig(a.config))
 }
 
@@ -426,15 +431,25 @@ func (a *desktop) sessionHeaderConfirmDialog(c *ui.Context) {
 }
 
 func (a *desktop) settingsVoiceInput(c *ui.Context) {
+	// The recorder and the keyboard hook are Windows-only today. Offering a switch
+	// that fails the moment it is turned on is worse than saying so once.
+	if !voiceInputSupported() {
+		card(c, "settings-voice-input", func() {
+			sectionTitle(c, "语音输入")
+			fieldNote(c, "仅支持 Windows 桌面版", a.secondaryInk())
+		})
+		return
+	}
 	card(c, "settings-voice-input", func() {
 		sectionTitle(c, "语音输入")
-		fieldNote(c, "启用后会预热录音设备；只有按住快捷键时才采集麦克风。松开后停止录音，将转写结果填入当前输入框。快捷键仅在 Ally 窗口活动时生效。", a.secondaryInk())
-		if len(a.config.VoiceModels) == 0 {
-			fieldNote(c, "请先在模型页面添加语音模型。", a.secondaryInk())
-			return
-		}
+		// Only ASR models can drive dictation. TTS models are stored and shown on the
+		// models page, but they must not appear as a choice here. Build the options in
+		// one pass: this runs on every frame while the settings page is open.
 		options := make([]uikit.Option, 0, len(a.config.VoiceModels))
 		for _, model := range a.config.VoiceModels {
+			if backend.VoiceKindOf(model.Kind) != backend.VoiceKindASR {
+				continue
+			}
 			label := model.Name
 			if label == "" {
 				label = model.Model
@@ -444,10 +459,14 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 			}
 			options = append(options, uikit.Option{Value: model.ID, Label: label})
 		}
+		if len(options) == 0 {
+			fieldNote(c, "请先在模型页添加 ASR 模型", a.secondaryInk())
+			return
+		}
 		selected := a.prefs.VoiceModelID
 		stored := selected
-		if !voiceModelIDExists(a.config.VoiceModels, selected) {
-			selected = a.config.VoiceModels[0].ID
+		if !voiceModelIDExistsInOptions(options, selected) {
+			selected = options[0].Value
 		}
 		fieldLabel(c, "语音模型")
 		uikit.SelectField(c.Key("voice-input-model"), &selected, options, a.secondaryInk()).Label("语音模型").FillWidth().OnChange(func() {
@@ -482,9 +501,9 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 		if a.voiceInputDevicesError != "" {
 			inlineError(c, "voice-input-device-error", a.voiceInputDevicesError)
 		} else {
-			fieldNote(c, "系统默认会跟随 Windows 输入设备；也可固定选择一个活动麦克风。", a.secondaryInk())
+			fieldNote(c, "跟随系统默认，或固定一个麦克风", a.secondaryInk())
 		}
-		hotkeyParts, hotkeyPlaceholder := voiceHotkeyParts(a.prefs.VoiceHotkey), ""
+		hotkeyParts, hotkeyPlaceholder := a.hotkeyPartsFor(a.prefs.VoiceHotkey), ""
 		if a.voiceHotkeyCapturing {
 			hotkeyParts = a.voiceHotkeyPreviewParts
 			hotkeyPlaceholder = "请按下快捷键组合…"
@@ -515,7 +534,7 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 		if a.voiceHotkeyCapturing {
 			fieldNote(c, "正在录入：按下想要的组合，全部松开后生效；Esc 取消。", a.secondaryInk())
 		} else {
-			fieldNote(c, "点「更换」后直接按键（Esc 取消）：单键（F9、Alt）或修饰键加 1–3 个按键。", a.secondaryInk())
+			fieldNote(c, "直接按键，Esc 取消", a.secondaryInk())
 			fieldNote(c, voiceModifierSidesNote(a.prefs.VoiceModifierLeft, a.prefs.VoiceModifierRight), a.secondaryInk())
 		}
 		if sw := switchRow(c, "voice-input-enabled", "语音输入", "启用并预热已选语音模型的录音设备。", &a.prefs.VoiceInputEnabled); sw.Changed() {

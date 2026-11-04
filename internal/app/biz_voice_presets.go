@@ -19,6 +19,9 @@ type VoicePresetMode struct {
 type VoiceProviderPreset struct {
 	ID    string
 	Label string
+	// Kind is the model category this service preset serves. Only ASR presets
+	// exist today; a TTS preset arrives with the synthesis request.
+	Kind string
 	// Modes are the call modes this service offers. When there is more than one,
 	// the editor asks which one and picks its protocol, endpoint and list filter.
 	Modes []VoicePresetMode
@@ -31,6 +34,7 @@ var voiceProviderPresets = []VoiceProviderPreset{
 	{
 		ID:    "local_openai_asr",
 		Label: "本地 ASR（OpenAI 格式）",
+		Kind:  VoiceKindASR,
 		Model: VoiceModelConfig{
 			Deployment: "local", Protocol: "openai_audio", Provider: "本地服务",
 			Endpoint:   "http://127.0.0.1:8786/v1/audio/transcriptions",
@@ -42,6 +46,7 @@ var voiceProviderPresets = []VoiceProviderPreset{
 	{
 		ID:    "siliconflow",
 		Label: "硅基流动（OpenAI 格式）",
+		Kind:  VoiceKindASR,
 		Model: VoiceModelConfig{
 			Deployment: "api", Protocol: "openai_audio", Provider: "SiliconFlow",
 			Endpoint:   "https://api.siliconflow.cn/v1/audio/transcriptions",
@@ -53,6 +58,7 @@ var voiceProviderPresets = []VoiceProviderPreset{
 	{
 		ID:    "dashscope",
 		Label: "阿里云百炼",
+		Kind:  VoiceKindASR,
 		// Bailian serves non-realtime ASR through two routes, but the model name
 		// decides which one: qwen3-asr on chat/completions, qwen-audio and fun-asr
 		// on multimodal-generation. One preset, one mode, no pairing to get wrong.
@@ -99,6 +105,12 @@ func (p VoiceProviderPreset) Apply(current VoiceModelConfig, modeID string) Voic
 		template = mergeVoicePresetTemplate(template, mode.Model)
 	}
 	out := current
+	if p.Kind != "" {
+		out.Kind = p.Kind
+	}
+	if template.Kind != "" {
+		out.Kind = template.Kind
+	}
 	if template.Deployment != "" {
 		out.Deployment = template.Deployment
 	}

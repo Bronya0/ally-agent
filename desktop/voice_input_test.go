@@ -3,6 +3,8 @@ package desktop
 
 import (
 	"testing"
+
+	backend "ally-dev/internal/app"
 )
 
 type voiceRecorderReuseStub struct{ reusable bool }
@@ -137,6 +139,8 @@ func TestVoiceTakeOutstandingCount(t *testing.T) {
 	}
 }
 
+// The deployment label comes from the backend now: the same rule decides what a
+// config file without the field means, so the desktop must not keep its own copy.
 func TestInferVoiceDeployment(t *testing.T) {
 	for _, test := range []struct{ endpoint, want string }{
 		{"", "local"},
@@ -149,8 +153,8 @@ func TestInferVoiceDeployment(t *testing.T) {
 		{"https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "api"},
 		{"https://asr.example.com:8443/v1", "api"},
 	} {
-		if got := inferVoiceDeployment(test.endpoint); got != test.want {
-			t.Errorf("inferVoiceDeployment(%q) = %q, want %q", test.endpoint, got, test.want)
+		if got := backend.VoiceDeploymentForEndpoint(test.endpoint); got != test.want {
+			t.Errorf("VoiceDeploymentForEndpoint(%q) = %q, want %q", test.endpoint, got, test.want)
 		}
 	}
 }

@@ -81,6 +81,10 @@ func activeVoiceHook() voiceKeyboardHook {
 // handle can be told apart from a working chord.
 func voiceHotkeyHookLive() bool { return activeVoiceHook() != nil }
 
+// voiceInputSupported reports whether this build can capture audio and install a
+// keyboard hook; the settings page hides the section when it cannot.
+func voiceInputSupported() bool { return true }
+
 var voiceUser32 = windows.NewLazySystemDLL("user32.dll")
 var procSetWindowsHookEx = voiceUser32.NewProc("SetWindowsHookExW")
 var procCallNextHookEx = voiceUser32.NewProc("CallNextHookEx")
@@ -253,17 +257,19 @@ func (r voiceHotkeyRequirement) satisfiedBy(down map[uint32]bool) bool {
 	return true
 }
 
-// voiceHotkeyHook matches the hold-to-talk chord while Ally is in front. The
-// chord's primary keys are swallowed while it records so the same keystrokes do
-// not also reach the focused control.
+// voiceHotkeyHook matches the hold-to-talk chord while Ally is in front and the
+// current page can accept dictation. Its primary keys are swallowed only while it
+// actually records, so the same keystrokes do not also reach the focused control.
 type voiceHotkeyHook struct {
 	require      voiceHotkeyRequirement
 	owned        map[uint32]bool
 	down         map[uint32]bool
 	active       bool
 	modifierOnly bool
-	onDown       func()
-	onUp         func()
+	// armed reports whether recording can start here; nil means "always".
+	armed  func() bool
+	onDown func()
+	onUp   func()
 }
 
 func (h *voiceHotkeyHook) handle(event, vk uint32) bool {
@@ -292,7 +298,7 @@ func (h *voiceHotkeyHook) handleEvent(event, vk uint32, isAlly bool) bool {
 		// recording just because another window took the foreground.
 		h.active = false
 		h.onUp()
-	case down && !wasActive && matching && isAlly:
+	case down && !wasActive && matching && isAlly && h.activationAllowed():
 		if !(h.modifierOnly && h.down[vkTab]) {
 			h.active = true
 			activated = true
@@ -303,6 +309,11 @@ func (h *voiceHotkeyHook) handleEvent(event, vk uint32, isAlly bool) bool {
 		h.onUp()
 	}
 	return (activated || wasActive) && h.owned[vk]
+}
+
+// activationAllowed reports whether a matching chord may start recording here.
+func (h *voiceHotkeyHook) activationAllowed() bool {
+	return h.armed == nil || h.armed()
 }
 
 // voiceHotkeyCaptureHook reads a chord for the settings field: it reports every
@@ -383,8 +394,10 @@ func voiceForegroundIsAlly() bool {
 	return pid == windows.GetCurrentProcessId()
 }
 
-// startNativeVoiceHotkey installs the recording hook for one chord.
-func startNativeVoiceHotkey(value string, left, right bool, onDown, onUp func()) (func(), error) {
+// startNativeVoiceHotkey installs the recording hook for one chord. armed, when
+// not nil, decides on the hook thread whether a matching chord may start
+// recording here at all.
+func startNativeVoiceHotkey(value string, left, right bool, armed func() bool, onDown, onUp func()) (func(), error) {
 	hotkey, ok := parseVoiceHotkey(value)
 	if !ok {
 		return nil, errors.New("快捷键格式无效")
@@ -402,6 +415,7 @@ func startNativeVoiceHotkey(value string, left, right bool, onDown, onUp func())
 		owned:        owned,
 		down:         map[uint32]bool{},
 		modifierOnly: len(require.keyVKs) == 0,
+		armed:        armed,
 		onDown:       onDown,
 		onUp:         onUp,
 	})
@@ -500,14 +514,13 @@ func startVoiceHook(hook voiceKeyboardHook) (*voiceHookHandle, error) {
 func voiceLowLevelCallback(code int, wparam uintptr, lparam uintptr) uintptr {
 	if code == hcAction && lparam != 0 {
 		key := (*lowLevelKey)(unsafe.Pointer(lparam))
+		// Snapshot the owner and release the slot lock before deciding: Windows
+		// drops a hook whose callback takes too long, so the mutex is held only for
+		// the lookup, never across the foreground query or the dispatch.
 		voiceHookMu.Lock()
 		hook := voiceHookCurrent
-		swallow := false
-		if hook != nil {
-			swallow = hook.handle(uint32(wparam), key.vk)
-		}
 		voiceHookMu.Unlock()
-		if swallow {
+		if hook != nil && hook.handle(uint32(wparam), key.vk) {
 			// Non-zero stops Windows from passing the key on.
 			return 1
 		}

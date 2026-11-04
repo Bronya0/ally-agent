@@ -16,13 +16,42 @@ func TestVoiceModifierSidesNoteNamesTheSideThatCounts(t *testing.T) {
 		left, right bool
 		want        string
 	}{
-		{true, true, "左、右侧"},
+		{true, true, "左 / 右"},
 		{true, false, "只认左侧"},
 		{false, true, "只认右侧"},
 	} {
 		if got := voiceModifierSidesNote(test.left, test.right); !strings.Contains(got, test.want) {
 			t.Errorf("voiceModifierSidesNote(%v,%v) = %q, want it to mention %q", test.left, test.right, got, test.want)
 		}
+	}
+}
+
+// A chord that cannot record on this page must not swallow its keys: on a page
+// without a composer the shortcut used to eat the letters and do nothing, which
+// reads like a broken keyboard.
+func TestVoiceHotkeyDoesNotSwallowWhereItCannotRecord(t *testing.T) {
+	hook, spy := newTestVoiceHook(t, "Ctrl+Alt+K", true, true)
+	hook.armed = func() bool { return false }
+	hook.handleEvent(wmKeyDown, 0xA2, true)
+	hook.handleEvent(wmKeyDown, 0xA4, true)
+	if swallow := hook.handleEvent(wmKeyDown, 0x4B, true); swallow {
+		t.Fatal("a chord that cannot record must pass its key through")
+	}
+	if spy.downs.Load() != 0 {
+		t.Fatal("no recording may start where it cannot record")
+	}
+	// Once the page can record again the same chord must work and swallow.
+	hook.armed = func() bool { return true }
+	hook.handleEvent(wmKeyUp, 0x4B, true)
+	hook.handleEvent(wmKeyUp, 0xA4, true)
+	hook.handleEvent(wmKeyUp, 0xA2, true)
+	hook.handleEvent(wmKeyDown, 0xA2, true)
+	hook.handleEvent(wmKeyDown, 0xA4, true)
+	if swallow := hook.handleEvent(wmKeyDown, 0x4B, true); !swallow {
+		t.Fatal("the chord must swallow its key where recording is possible")
+	}
+	if spy.downs.Load() != 1 {
+		t.Fatalf("recording started %d times, want 1", spy.downs.Load())
 	}
 }
 

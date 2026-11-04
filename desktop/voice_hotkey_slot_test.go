@@ -31,7 +31,7 @@ func TestVoiceHookSlotKeepsTheNewestOwner(t *testing.T) {
 // The real rebind sequence: the settings field takes the hook over, then hands it
 // back while the recorder's hook is installed. Both must end with a live hook.
 func TestVoiceHookSlotSurvivesRebind(t *testing.T) {
-	stopRecorder, err := startNativeVoiceHotkey("Alt", true, true, func() {}, func() {})
+	stopRecorder, err := startNativeVoiceHotkey("Alt", true, true, func() bool { return true }, func() {}, func() {})
 	if err != nil {
 		t.Skipf("low-level keyboard hooks are unavailable here: %v", err)
 	}
@@ -40,21 +40,27 @@ func TestVoiceHookSlotSurvivesRebind(t *testing.T) {
 		t.Fatal("the slot must be free once the hook stopped")
 	}
 
+	// The capture hook takes the slot, as the settings editor does.
 	stopCapture, err := startNativeHotkeyCapture(func([]string, string) {}, func(string) {})
 	if err != nil {
 		t.Fatalf("capture hook: %v", err)
 	}
-	// Releasing the capture hook asynchronously is how the editor handed it back.
-	go stopCapture()
-	stopRebound, err := startNativeVoiceHotkey("Ctrl+Alt+K", true, true, func() {}, func() {})
+	oldHook := activeVoiceHook()
+
+	// The recorder's hook is installed while the old one is still unwinding.
+	stopRebound, err := startNativeVoiceHotkey("Ctrl+Alt+K", true, true, func() bool { return true }, func() {}, func() {})
 	if err != nil {
 		t.Fatalf("rebound hook: %v", err)
 	}
-	// Give the stopped capture hook time to finish if it is going to.
-	time.Sleep(300 * time.Millisecond)
+	defer stopRebound()
+
+	// Replay the old hook's late cleanup deterministically instead of hoping a
+	// sleep wins the race. Unconditionally clearing the slot is exactly the bug.
+	releaseVoiceHook(oldHook)
 	if activeVoiceHook() == nil {
 		t.Fatal("the stopped capture hook cleared the slot its replacement owns")
 	}
+	stopCapture()
 	stopRebound()
 	if activeVoiceHook() != nil {
 		t.Fatal("stop must release the slot")
@@ -114,15 +120,10 @@ func TestVoiceHotkeyMatchesReboundChords(t *testing.T) {
 			for _, key := range test.keys {
 				hook.handleEvent(key.event, key.vk, true)
 			}
-			// onDown/onUp run on their own goroutine so the hook returns to
-			// Windows at once: give them the same short grace the app relies on.
-			if test.wantDown > 0 {
-				waitForCount(t, &spy.downs, test.wantDown)
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
-			if got := spy.downs.Load(); got != 0 {
-				t.Fatalf("%q activated %d times, want none", test.value, got)
+			// onDown runs inline now (the hook returns to Windows immediately), so
+			// the counter is already final and no sleep is needed.
+			if got := spy.downs.Load(); got != test.wantDown {
+				t.Fatalf("%q activated %d times, want %d", test.value, got, test.wantDown)
 			}
 		})
 	}

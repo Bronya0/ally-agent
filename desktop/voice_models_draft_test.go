@@ -67,7 +67,8 @@ func TestApplyVoicePresetClearsServiceSpecificValues(t *testing.T) {
 		fetchNote:        "已获取 1 个语音模型",
 		includeAllModels: true,
 		endpointEditing:  true,
-		endpointPassKey:  "stale",
+		endpointChecked:  true,
+		endpointPassed:   endpointShape{endpoint: "stale"},
 	}
 	s.applyVoicePreset(dashscope, dashscope.DefaultMode())
 	if s.draft.APIKey != "" || s.draft.Model != "" || s.draft.Name != "" {
@@ -76,8 +77,8 @@ func TestApplyVoicePresetClearsServiceSpecificValues(t *testing.T) {
 	if len(s.draft.Headers) != 0 || len(s.fetched) != 0 || s.fetchNote != "" {
 		t.Fatalf("fetched list/headers survived the switch: %+v %v %q", s.draft.Headers, s.fetched, s.fetchNote)
 	}
-	if s.includeAllModels || s.endpointEditing || s.endpointPassKey != "" {
-		t.Fatalf("endpoint state survived the switch: %v %v %q", s.includeAllModels, s.endpointEditing, s.endpointPassKey)
+	if s.includeAllModels || s.endpointEditing || s.endpointChecked {
+		t.Fatalf("endpoint state survived the switch: %v %v %v", s.includeAllModels, s.endpointEditing, s.endpointChecked)
 	}
 	if s.draft.ID != "voice-1" || !strings.Contains(s.draft.Endpoint, "dashscope.aliyuncs.com") {
 		t.Fatalf("the preset must keep the id and replace the endpoint: %+v", s.draft)

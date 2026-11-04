@@ -206,6 +206,7 @@ type desktop struct {
 	voiceHotkeyPreviewParts                             []string
 	voiceHotkeyCaptureStop                              func()
 	voiceHotkeyCaptureTimer                             *time.Timer
+	hotkeyMemo                                          hotkeyMemo
 	modelDraft                                          backend.ModelConfig
 	modelEdit                                           int
 	mcpText, configText, infoText, skillText, skillName string
@@ -369,9 +370,12 @@ func Run() {
 				}
 				a.syncSettingsForm()
 				a.ready = true
-				a.refreshVoiceInputDevices()
-				if a.prefs.VoiceInputEnabled {
-					a.configureVoiceInput()
+				// Voice warm-up needs the platform recorder; elsewhere it can only fail.
+				if voiceInputSupported() {
+					a.refreshVoiceInputDevices()
+					if a.prefs.VoiceInputEnabled {
+						a.configureVoiceInput()
+					}
 				}
 				if a.prefs.Pet.Enabled {
 					a.openPet()
@@ -406,7 +410,7 @@ func (a *desktop) shutdown() {
 	}
 	a.prepareWindowClose(a.finishShutdown, func() {
 		a.closing = false
-		if a.prefs.VoiceInputEnabled {
+		if voiceInputSupported() && a.prefs.VoiceInputEnabled {
 			a.configureVoiceInput()
 		}
 	})

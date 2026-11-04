@@ -2,44 +2,101 @@
 package desktop
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
+	"math"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"ally-dev/desktop/uikit"
 	backend "ally-dev/internal/app"
 )
 
 const voiceCaptureMaxDuration = 20 * time.Second
 
 type voiceModelsState struct {
-	models                         []backend.VoiceModelConfig
-	draft                          backend.VoiceModelConfig
-	preset                         string
-	presetMode                     string
-	endpointEditing                bool
-	fetched                        []string
-	includeAllModels               bool
-	fetchBusy                      bool
-	fetchNote                      string
-	editing                        int
-	formOpen, busy, testBusy       bool
-	endpointBusy, recorderOpen     bool
-	endpointState, endpointPassKey string
-	transcript                     string
-	waveLevels                     []float32
-	micLevel                       float32
-	recordStartedAt                time.Time
-	recording                      nativeAudioRecording
-	recordState                    string
-	recordTimer                    *time.Timer
+	models                     []backend.VoiceModelConfig
+	draft                      backend.VoiceModelConfig
+	preset                     string
+	presetMode                 string
+	endpointEditing            bool
+	fetched                    []string
+	includeAllModels           bool
+	fetchBusy                  bool
+	fetchNote                  string
+	editing                    int
+	formOpen, busy, testBusy   bool
+	endpointBusy, recorderOpen bool
+	endpointState              string
+	// endpointPassed is the request shape that last passed the check. Comparing
+	// the shape directly keeps the per-frame green/red decision allocation-free
+	// and makes it obvious that model and protocol belong to it.
+	endpointPassed  endpointShape
+	endpointChecked bool
+	transcript      string
+	// wave is the meter history. The capture side writes it as it reads levels
+	// and the painter reads it during Draw, so an animating meter never rebuilds
+	// the window just to move a bar.
+	wave voiceLevelRing
+	// lines caches each row's derived text (see rowLines).
+	lines           map[string]voiceRowLines
+	recordStartedAt time.Time
+	recording       nativeAudioRecording
+	recordState     string
+	recordTimer     *time.Timer
+	// presetOptions is built once: the dialog asks for the service list every
+	// frame, and the presets never change at runtime.
+	presetOptions []uikit.Option
 }
+
+// voiceLevelRing keeps the last voiceWaveBars levels in a fixed array written by
+// the capture pump and read by the painter. Atomics instead of a slice: the meter
+// would otherwise need the view to be rebuilt 10 times a second to stay in sync.
+type voiceLevelRing struct {
+	levels [voiceWaveBars]atomic.Uint32
+	count  atomic.Int32
+}
+
+func (r *voiceLevelRing) reset() {
+	r.count.Store(0)
+}
+
+func (r *voiceLevelRing) push(level float32) {
+	r.levels[int(r.count.Load())%voiceWaveBars].Store(math.Float32bits(level))
+	r.count.Add(1)
+}
+
+// level returns the level index bars back from the newest sample, or 0 when the
+// meter has not filled that slot yet.
+func (r *voiceLevelRing) level(index int) float32 {
+	total := int(r.count.Load())
+	if index < 0 || index >= voiceWaveBars || index >= total {
+		return 0
+	}
+	return math.Float32frombits(r.levels[(total-1-index)%voiceWaveBars].Load())
+}
+
+func (r *voiceLevelRing) filled() int { return min(int(r.count.Load()), voiceWaveBars) }
+
+// voiceWaveBars is how many meter bars the dialog draws.
+const voiceWaveBars = 56
 
 func (a *desktop) ensureVoiceModels() {
 	if a.voiceModels == nil {
 		a.voiceModels = &voiceModelsState{models: cloneVoiceModelConfigs(a.config.VoiceModels), editing: -1}
+		a.voiceModels.presetOptions = voicePresetOptions()
 	}
+}
+
+// voicePresetOptions is the service picker's contents: fixed at build time, so it
+// is built once instead of on every frame of the dialog.
+func voicePresetOptions() []uikit.Option {
+	presets := backend.VoiceProviderPresets()
+	options := make([]uikit.Option, 0, len(presets))
+	for _, preset := range presets {
+		options = append(options, uikit.Option{Value: preset.ID, Label: preset.Label})
+	}
+	return options
 }
 
 func cloneVoiceModelConfigs(in []backend.VoiceModelConfig) []backend.VoiceModelConfig {
@@ -60,13 +117,13 @@ func cloneVoiceModelConfigs(in []backend.VoiceModelConfig) []backend.VoiceModelC
 
 func (s *voiceModelsState) open(index int) {
 	s.editing, s.formOpen = index, true
-	s.endpointBusy, s.endpointState, s.endpointPassKey = false, "", ""
+	s.endpointBusy, s.endpointState, s.endpointChecked = false, "", false
 	s.preset, s.presetMode = "", ""
 	s.endpointEditing = false
 	s.fetched, s.fetchBusy, s.fetchNote = nil, false, ""
 	s.includeAllModels = false
 	s.recorderOpen, s.transcript = false, ""
-	s.waveLevels, s.micLevel = nil, 0
+	s.wave.reset()
 	if index >= 0 && index < len(s.models) {
 		s.draft = s.models[index]
 		s.preset = voicePresetFor(s.draft.Endpoint)
@@ -76,18 +133,40 @@ func (s *voiceModelsState) open(index int) {
 		return
 	}
 	// The editor asks for nothing but the service and the model: identity, auth
-	// and timeout are derived, so a new draft starts from sane defaults plus the
-	// local preset, which fills the endpoint, protocol and auth mode.
-	s.draft = backend.VoiceModelConfig{
-		ID: nextVoiceModelID(s.models), Deployment: "local", Protocol: "openai_audio",
-		FileField: "file", AuthMode: "none", AuthHeader: "Authorization", AuthPrefix: "Bearer ",
-		TimeoutSeconds: 30,
-	}
+	// and timeout are derived, so a new draft is just an id plus the backend's own
+	// normalization, then the local preset fills endpoint, protocol and auth.
+	s.draft = backend.NormalizeVoiceModels([]backend.VoiceModelConfig{{ID: nextVoiceModelID(s.models)}})[0]
 	s.preset = defaultVoicePreset
 	if preset, ok := backend.VoiceProviderPresetSpec(s.preset); ok {
 		s.presetMode = preset.DefaultMode()
-		s.draft = preset.Apply(s.draft, s.presetMode)
+		s.draft = backend.NormalizeVoiceModels([]backend.VoiceModelConfig{preset.Apply(s.draft, s.presetMode)})[0]
 	}
+}
+
+// voiceRowLines is one model row's derived text, cached with the fields it was
+// built from. The list rebuilds every frame, so joining provider and endpoint
+// there would allocate on every frame; comparing the sources costs nothing.
+type voiceRowLines struct {
+	provider, endpoint, model string
+	providerLine, modelLine   string
+}
+
+// rowLines returns the cached lines for one model, rebuilding them only when the
+// fields they were derived from changed.
+func (s *voiceModelsState) rowLines(m backend.VoiceModelConfig) voiceRowLines {
+	if cached, ok := s.lines[m.ID]; ok && cached.provider == m.Provider && cached.endpoint == m.Endpoint && cached.model == m.Model {
+		return cached
+	}
+	line := voiceRowLines{provider: m.Provider, endpoint: m.Endpoint, model: m.Model}
+	line.providerLine = m.Provider + " · " + m.Endpoint
+	if m.Model != "" {
+		line.modelLine = "模型：" + m.Model
+	}
+	if s.lines == nil {
+		s.lines = make(map[string]voiceRowLines, len(s.models))
+	}
+	s.lines[m.ID] = line
+	return line
 }
 
 // Every voice model starts from one of the offered presets: there is no manual
@@ -105,7 +184,7 @@ func (s *voiceModelsState) applyVoicePreset(preset backend.VoiceProviderPreset, 
 	s.fetched, s.fetchBusy, s.fetchNote = nil, false, ""
 	s.includeAllModels = false
 	s.endpointEditing = false
-	s.endpointState, s.endpointPassKey = "", ""
+	s.endpointState, s.endpointChecked = "", false
 }
 
 // voicePresetFor names the preset an existing model was built from, so reopening
@@ -117,7 +196,7 @@ func voicePresetFor(endpoint string) string {
 		return "dashscope"
 	case strings.Contains(host, "siliconflow"):
 		return "siliconflow"
-	case inferVoiceDeployment(host) == "local":
+	case backend.VoiceDeploymentForEndpoint(host) == "local":
 		return "local_openai_asr"
 	}
 	return ""
@@ -141,7 +220,7 @@ func (s *voiceModelsState) requestDraft() backend.VoiceModelConfig {
 	if strings.TrimSpace(draft.ID) == "" {
 		draft.ID = nextVoiceModelID(s.models)
 	}
-	draft.Deployment = inferVoiceDeployment(draft.Endpoint)
+	draft.Deployment = backend.VoiceDeploymentForEndpoint(draft.Endpoint)
 	draft.AuthMode, draft.AuthHeader, draft.AuthPrefix = voiceAuthFor(draft)
 	return draft
 }
@@ -256,8 +335,8 @@ func (a *desktop) testVoiceEndpoint() {
 		draft.ID = "voice-endpoint-check"
 	}
 	s.endpointBusy = true
-	s.endpointState, s.endpointPassKey = "正在检查 Endpoint（不会上传录音）…", ""
-	fingerprint := voiceEndpointFingerprint(draft)
+	s.endpointState, s.endpointChecked = "正在检查 Endpoint（不会上传录音）…", false
+	shape := voiceEndpointShape(s.requestDraft())
 	go func() {
 		result, err := a.core.TestNativeVoiceEndpoint(draft)
 		a.win.Update(func() {
@@ -267,8 +346,8 @@ func (a *desktop) testVoiceEndpoint() {
 				return
 			}
 			// The probe result is a one-line status, not page copy: report it as a
-			// transient toast and keep only the verified fingerprint in the page.
-			s.endpointPassKey = fingerprint
+			// transient toast and keep only the verified shape in the page.
+			s.endpointPassed, s.endpointChecked = shape, true
 			a.notify(result)
 		})
 	}()
@@ -287,24 +366,6 @@ func voiceEndpointHost(endpoint string) string {
 	return host
 }
 
-// inferVoiceDeployment labels a model local or api from its endpoint host, so
-// the list chip stays meaningful without a form field.
-func inferVoiceDeployment(endpoint string) string {
-	host := voiceEndpointHost(endpoint)
-	switch {
-	case host == "", host == "localhost", host == "127.0.0.1", host == "::1", strings.HasSuffix(host, ".local"):
-		return "local"
-	case strings.HasPrefix(host, "10."), strings.HasPrefix(host, "192.168."), strings.HasPrefix(host, "127."):
-		return "local"
-	}
-	for _, block := range []string{"172.16.", "172.17.", "172.18.", "172.19.", "172.2", "172.30.", "172.31."} {
-		if strings.HasPrefix(host, block) {
-			return "local"
-		}
-	}
-	return "api"
-}
-
 func voiceModelIDExists(models []backend.VoiceModelConfig, id string) bool {
 	for _, model := range models {
 		if model.ID == id {
@@ -314,16 +375,35 @@ func voiceModelIDExists(models []backend.VoiceModelConfig, id string) bool {
 	return false
 }
 
-// voiceEndpointFingerprint identifies one set of connection parameters. It reads
-// the normalized draft, so a change to auth derivation also invalidates the check.
-func voiceEndpointFingerprint(draft backend.VoiceModelConfig) string {
-	value := strings.Join([]string{draft.Endpoint, draft.AuthMode, draft.AuthHeader, draft.AuthPrefix, draft.APIKey}, "\x00")
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
+// voiceModelIDExistsInOptions is the same check against a built picker, so the
+// settings page does not have to assemble an ASR slice it throws away.
+func voiceModelIDExistsInOptions(options []uikit.Option, id string) bool {
+	for _, option := range options {
+		if option.Value == id {
+			return true
+		}
+	}
+	return false
+}
+
+// endpointShape is the part of a model that decides where a request goes: the
+// route, the model that picks it, and the credential. The endpoint check is only
+// valid for one shape; comparing the fields directly avoids both a hash per frame
+// and a stale pass after a model change (which returned "format is empty").
+type endpointShape struct {
+	endpoint, protocol, model, authMode, authHeader, authPrefix, apiKey string
+}
+
+func voiceEndpointShape(draft backend.VoiceModelConfig) endpointShape {
+	return endpointShape{
+		endpoint: draft.Endpoint, protocol: draft.Protocol, model: draft.Model,
+		authMode: draft.AuthMode, authHeader: draft.AuthHeader, authPrefix: draft.AuthPrefix,
+		apiKey: draft.APIKey,
+	}
 }
 
 func (a *desktop) endpointVerified(s *voiceModelsState) bool {
-	return s != nil && s.endpointPassKey != "" && s.endpointPassKey == voiceEndpointFingerprint(s.requestDraft())
+	return s != nil && s.endpointChecked && s.endpointPassed == voiceEndpointShape(s.requestDraft())
 }
 
 func (a *desktop) openVoiceRecorder() {
@@ -332,7 +412,7 @@ func (a *desktop) openVoiceRecorder() {
 		return
 	}
 	s.recorderOpen, s.transcript = true, ""
-	s.waveLevels, s.micLevel = nil, 0
+	s.wave.reset()
 	s.recordState = "准备就绪。按下开始后允许麦克风访问，再说一句话。"
 }
 
@@ -413,35 +493,36 @@ func (a *desktop) stopVoiceRecording() {
 	}()
 }
 
+// watchVoiceLevels moves the meter and the elapsed label. Levels go straight into
+// the ring the painter reads, so the animation costs no view rebuild; only the
+// once-a-second elapsed text asks the window to repaint.
 func (a *desktop) watchVoiceLevels(s *voiceModelsState, recorder nativeAudioRecording) {
 	levels := recorder.Levels()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	var latest float32
-	dirty := false
+	meter := time.NewTicker(60 * time.Millisecond)
+	clock := time.NewTicker(time.Second)
+	defer meter.Stop()
+	defer clock.Stop()
+	var latest atomic.Uint32
+	var dirty atomic.Bool
 	for {
 		select {
 		case level, ok := <-levels:
 			if !ok {
 				return
 			}
-			latest, dirty = level, true
-		case <-ticker.C:
-			if !dirty {
+			latest.Store(math.Float32bits(level))
+			dirty.Store(true)
+		case <-meter.C:
+			if !dirty.Swap(false) {
 				continue
 			}
-			dirty = false
+			s.wave.push(math.Float32frombits(latest.Load()))
+		case <-clock.C:
+			elapsed := time.Since(s.recordStartedAt).Round(time.Second)
 			a.win.Update(func() {
 				if s.recording != recorder {
 					return
 				}
-				s.micLevel = latest
-				s.waveLevels = append(s.waveLevels, latest)
-				if len(s.waveLevels) > 56 {
-					copy(s.waveLevels, s.waveLevels[len(s.waveLevels)-56:])
-					s.waveLevels = s.waveLevels[:56]
-				}
-				elapsed := time.Since(s.recordStartedAt).Round(time.Second)
 				s.recordState = fmt.Sprintf("录音中 · %s / 20 秒", elapsed)
 			})
 		}

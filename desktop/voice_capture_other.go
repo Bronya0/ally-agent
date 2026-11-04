@@ -5,7 +5,7 @@ package desktop
 
 import "errors"
 
-func startNativeVoiceHotkey(string, bool, bool, func(), func()) (func(), error) {
+func startNativeVoiceHotkey(string, bool, bool, func() bool, func(), func()) (func(), error) {
 	return nil, errors.New("语音快捷键目前仅支持 Windows 桌面版")
 }
 
@@ -14,6 +14,11 @@ func startNativeHotkeyCapture(func([]string, string), func(string)) (func(), err
 }
 
 func voiceHotkeyHookLive() bool { return false }
+
+// voiceInputSupported reports whether this build can capture audio and install a
+// keyboard hook, so the settings page can stay out of the way instead of offering
+// a switch that fails on use.
+func voiceInputSupported() bool { return false }
 
 type unavailableAudioRecording struct{}
 

@@ -203,6 +203,18 @@ func encodeVoiceWAV(raw []byte, format capturePCMFormat) ([]byte, error) {
 
 var errUnsupportedCaptureFormat = errors.New("麦克风音频格式不受支持")
 
+// voiceMinClipPCMBytes is the shortest clip worth transcribing: 300 ms of the
+// 16 kHz mono target format. A mistaken tap on a modifier-only shortcut produces
+// only a few milliseconds of audio, and sending it would either cost a request
+// or, worse, hand an empty or made-up transcript to the composer.
+const voiceMinClipPCMBytes = voiceCaptureSampleRate * 2 * 300 / 1000
+
+// voiceClipTooShort reports whether a finished take is too short to mean
+// anything. It reads the WAV data chunk size, so it works for any backend.
+func voiceClipTooShort(wav []byte) bool {
+	return len(wav) < 44+voiceMinClipPCMBytes
+}
+
 func writeVoiceWAVHeader(out []byte, dataSize uint32) {
 	copy(out[0:4], "RIFF")
 	binary.LittleEndian.PutUint32(out[4:8], 36+dataSize)

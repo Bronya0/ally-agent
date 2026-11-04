@@ -20,13 +20,24 @@ import (
 	"time"
 )
 
-// VoiceModelConfig describes one speech-to-text endpoint. Endpoint is the full
-// transcription URL (for example http://127.0.0.1:8786/v1/audio/transcriptions).
-// The multipart protocol is deliberately configurable so both local servers
-// and hosted APIs can use the same adapter without baking in vendor names.
+// Voice kinds. The editor already records which kind a model is, because the two
+// have different request shapes and settings; only speech-to-text is implemented
+// today, so a TTS model is stored and shown but cannot be selected for dictation.
+const (
+	VoiceKindASR = "asr"
+	VoiceKindTTS = "tts"
+)
+
+// VoiceModelConfig describes one speech endpoint. Endpoint is the full request URL
+// (for example http://127.0.0.1:8786/v1/audio/transcriptions). The multipart
+// protocol is deliberately configurable so both local servers and hosted APIs can
+// use the same adapter without baking in vendor names.
 type VoiceModelConfig struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Kind is asr (speech to text) or tts (text to speech). Empty means asr: every
+	// model created before the split was an ASR model.
+	Kind           string            `json:"kind,omitempty"`
 	Provider       string            `json:"provider,omitempty"`
 	Deployment     string            `json:"deployment,omitempty"` // local / api
 	Protocol       string            `json:"protocol,omitempty"`   // openai_audio / multipart
@@ -64,6 +75,7 @@ func normalizeVoiceModels(in []VoiceModelConfig) []VoiceModelConfig {
 	for _, m := range out {
 		m.ID = strings.TrimSpace(m.ID)
 		m.Name = strings.TrimSpace(m.Name)
+		m.Kind = normalizeVoiceKind(m.Kind)
 		m.Provider = strings.TrimSpace(m.Provider)
 		m.Deployment = strings.ToLower(strings.TrimSpace(m.Deployment))
 		m.Protocol = strings.ToLower(strings.TrimSpace(m.Protocol))
@@ -82,7 +94,7 @@ func normalizeVoiceModels(in []VoiceModelConfig) []VoiceModelConfig {
 			m.FileField = "file"
 		}
 		if m.Deployment == "" {
-			m.Deployment = "local"
+			m.Deployment = VoiceDeploymentForEndpoint(m.Endpoint)
 		}
 		if m.AuthMode == "" {
 			if spec, ok := VoiceProtocolSpec(m.Protocol); ok && len(spec.AuthModes) > 0 {
@@ -111,6 +123,65 @@ func normalizeVoiceModels(in []VoiceModelConfig) []VoiceModelConfig {
 	return clean
 }
 
+// NormalizeVoiceModels fills in the defaults one model config needs before it is
+// stored or sent. Callers that build a model themselves (a new draft, an imported
+// file) go through this instead of repeating the defaults, so an empty field can
+// never disagree with what the backend would have chosen.
+func NormalizeVoiceModels(in []VoiceModelConfig) []VoiceModelConfig {
+	return normalizeVoiceModels(in)
+}
+
+// VoiceDeploymentForEndpoint labels an endpoint local or api from its host, so the
+// list chip stays honest even when the config file omits the field.
+func VoiceDeploymentForEndpoint(endpoint string) string {
+	host := strings.ToLower(strings.TrimSpace(endpoint))
+	if idx := strings.Index(host, "://"); idx >= 0 {
+		host = host[idx+3:]
+	}
+	if slash := strings.IndexAny(host, "/:?"); slash >= 0 {
+		host = host[:slash]
+	}
+	switch {
+	case host == "", host == "localhost", host == "127.0.0.1", host == "::1", strings.HasSuffix(host, ".local"):
+		return "local"
+	case strings.HasPrefix(host, "10."), strings.HasPrefix(host, "192.168."), strings.HasPrefix(host, "127."):
+		return "local"
+	}
+	// 172.16.0.0/12 is the private block; 172.2 is not, so match the third octet.
+	for _, third := range []string{"172.16.", "172.17.", "172.18.", "172.19.", "172.2", "172.30.", "172.31."} {
+		if strings.HasPrefix(host, third) {
+			return "local"
+		}
+	}
+	return "api"
+}
+
+// normalizeVoiceKind maps any stored value onto asr or tts. Everything written
+// before the split is asr, and an unrecognized value is treated as asr too: a
+// typo must not silently hide the model from the dictation picker.
+func normalizeVoiceKind(kind string) string {
+	if strings.ToLower(strings.TrimSpace(kind)) == VoiceKindTTS {
+		return VoiceKindTTS
+	}
+	return VoiceKindASR
+}
+
+// VoiceKindOf normalizes a stored kind to asr or tts, so callers can compare
+// without repeating the default rule.
+func VoiceKindOf(kind string) string { return normalizeVoiceKind(kind) }
+
+// VoiceKindLabel is the user-facing name of a kind.
+func VoiceKindLabel(kind string) string {
+	if normalizeVoiceKind(kind) == VoiceKindTTS {
+		return "TTS · 语音合成"
+	}
+	return "ASR · 语音识别"
+}
+
+// VoiceKindImplemented reports whether this build can use a kind. TTS is stored
+// and shown, but there is no synthesis request yet.
+func VoiceKindImplemented(kind string) bool { return normalizeVoiceKind(kind) == VoiceKindASR }
+
 func validateVoiceModel(m VoiceModelConfig) error {
 	if strings.TrimSpace(m.ID) == "" {
 		return errors.New("语音模型配置 ID 不能为空")
@@ -118,13 +189,23 @@ func validateVoiceModel(m VoiceModelConfig) error {
 	if m.Deployment != "local" && m.Deployment != "api" {
 		return errors.New("部署类型必须是 local 或 api")
 	}
-	protocol, ok := VoiceProtocolSpec(m.Protocol)
-	if !ok {
-		return errors.New("暂不支持该语音协议")
-	}
 	u, err := url.Parse(strings.TrimSpace(m.Endpoint))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" {
 		return errors.New("Endpoint 必须是有效的 http:// 或 https:// URL，且不能包含用户名密码")
+	}
+	if normalizeVoiceKind(m.Kind) == VoiceKindTTS {
+		// TTS is a stored category, not a working one: it is kept so the split exists
+		// in the config, and no synthesis request will ever be built from it. Only the
+		// fields that will matter then are checked; the ASR protocol rules do not
+		// apply, because no TTS protocol exists yet.
+		if strings.TrimSpace(m.Model) == "" {
+			return errors.New("语音合成模型需要填写模型名")
+		}
+		return validateVoiceConnection(m)
+	}
+	protocol, ok := VoiceProtocolSpec(m.Protocol)
+	if !ok {
+		return errors.New("暂不支持该语音协议")
 	}
 	if protocol.Uses(VoiceFieldFileField) && m.FileField == "" {
 		return errors.New("音频文件字段名不能为空")
@@ -132,6 +213,12 @@ func validateVoiceModel(m VoiceModelConfig) error {
 	if !protocol.AllowsAuth(m.AuthMode) {
 		return errors.New("鉴权方式必须是 " + strings.Join(protocol.AuthModes, " / "))
 	}
+	return validateVoiceConnection(m)
+}
+
+// validateVoiceConnection checks the fields every kind shares: credentials, their
+// header names, the timeout and the optional custom headers and form fields.
+func validateVoiceConnection(m VoiceModelConfig) error {
 	if (m.AuthMode == "bearer" || m.AuthMode == "header") && m.APIKey == "" {
 		return errors.New("所选鉴权方式需要填写 API Key")
 	}
@@ -793,6 +880,11 @@ func (a *App) TestNativeVoiceModelAudio(model VoiceModelConfig, audio []byte) (s
 
 // TestNativeVoiceModelAudioStream reports cumulative partial text when an endpoint responds with SSE.
 func (a *App) TestNativeVoiceModelAudioStream(model VoiceModelConfig, audio []byte, onText func(string)) (string, error) {
+	if VoiceKindOf(model.Kind) != VoiceKindASR {
+		// A TTS model is stored and listed, but there is no transcription request to
+		// build from it; saying so beats posting audio to a synthesis route.
+		return "", errors.New("该模型是语音合成（TTS），暂不支持转写")
+	}
 	if len(audio) < 44 || len(audio) > 20*1024*1024 || string(audio[:4]) != "RIFF" || string(audio[8:12]) != "WAVE" {
 		return "", errors.New("录音 WAV 无效或超过 20 MiB")
 	}
@@ -862,18 +954,24 @@ func (a *App) TestNativeVoiceModelAudioStream(model VoiceModelConfig, audio []by
 	text := strings.TrimSpace(string(reply.body))
 	var parsed map[string]any
 	if json.Unmarshal(reply.body, &parsed) == nil {
+		// A JSON reply is authoritative: only its text field is a transcript. Using
+		// the raw body here pasted "{}" or a whole error object into the draft.
+		text = ""
 		if value, ok := parsed["text"].(string); ok {
 			text = strings.TrimSpace(value)
 		}
+	} else if strings.HasPrefix(text, "<") || strings.Contains(strings.ToLower(reply.contentType), "text/html") {
+		// An HTML page in a 200 is a proxy or login error, not a transcript.
+		return "", errors.New("语音服务返回了 HTML 页面而不是转写结果，请检查 Endpoint 与网络代理")
 	}
-	if text == "" {
-		text = "服务已接受测试音频（HTTP " + reply.statusText + "），未返回转写文字。"
-	} else if len(text) > 180 {
+	if len(text) > 180 {
 		text = text[:180] + "…"
 	}
 	if onText != nil {
 		onText(text)
 	}
+	// An empty transcript stays empty: the caller decides what to say about it,
+	// so no display copy can leak into a dictation draft.
 	return text, nil
 }
 

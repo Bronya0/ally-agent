@@ -30,30 +30,18 @@ func parseVoiceModelFile(data []byte) ([]backend.VoiceModelConfig, error) {
 	}
 	seen := map[string]bool{}
 	for i := range doc.Models {
-		m := &doc.Models[i]
-		m.ID, m.Name = strings.TrimSpace(m.ID), strings.TrimSpace(m.Name)
-		if m.ID == "" || seen[m.ID] {
+		doc.Models[i].ID = strings.TrimSpace(doc.Models[i].ID)
+		if doc.Models[i].ID == "" || seen[doc.Models[i].ID] {
 			return nil, fmt.Errorf("语音模型 ID 必须填写且不能重复")
 		}
-		seen[m.ID] = true
-		if m.Protocol == "" {
-			m.Protocol = "openai_audio"
-		}
-		if m.Deployment == "" {
-			m.Deployment = "local"
-		}
-		if m.AuthMode == "" {
-			m.AuthMode = "none"
-		}
-		if m.FileField == "" {
-			m.FileField = "file"
-		}
-		if m.TimeoutSeconds == 0 {
-			m.TimeoutSeconds = 30
-		}
-		if m.AuthMode == "bearer" && m.AuthPrefix == "" {
-			m.AuthPrefix = "Bearer "
-		}
+		seen[doc.Models[i].ID] = true
+	}
+	// Defaults come from the backend, not from this file: a second copy here
+	// already disagreed with the protocol defaults and made a valid chat_audio
+	// model unimportable (authMode was forced to none instead of bearer).
+	doc.Models = backend.NormalizeVoiceModels(doc.Models)
+	if len(doc.Models) == 0 {
+		return nil, fmt.Errorf("导出的文件里没有可用的语音模型")
 	}
 	return doc.Models, nil
 }

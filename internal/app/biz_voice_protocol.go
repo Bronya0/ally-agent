@@ -27,22 +27,31 @@ const (
 	VoiceListNonRealtime = "speech_non_realtime"
 )
 
-// VoiceProtocol describes how one transcription endpoint is called: which fields
-// carry its configuration, and which auth modes it accepts. Adding a vendor
-// adapter means adding a spec here and one request builder next to the multipart
-// one; the form, normalization and validation follow the table.
+// VoiceProtocol describes how one transcription endpoint is called: which config
+// fields its request builder reads, and which auth modes it accepts. Adding a
+// vendor adapter means adding a spec here and one request builder next to the
+// multipart one.
+//
+// Fields is the request's field list, not a form schema: the editor and validation
+// currently enforce only Model, APIKey and FileField through Uses. Anything else
+// listed here is sent by the builder and may be edited by a preset, but a form
+// that stops asking for it does not make the protocol stop reading it.
 type VoiceProtocol struct {
 	ID    string
 	Label string
+	// Kind is the model category this protocol serves: asr or tts. Only ASR has a
+	// request builder today; a TTS protocol is added here when synthesis lands.
+	Kind string
 	// AuthModes are the accepted AuthMode values for this protocol.
 	AuthModes []string
-	// Fields are the config fields this protocol reads.
+	// Fields are the config fields this protocol's request builder reads.
 	Fields []string
 	// ListFilter narrows the 拉取模型 result to models this protocol can drive.
 	ListFilter string
 }
 
-// Uses reports whether the protocol reads a config field.
+// Uses reports whether the protocol reads a config field. Only Model, APIKey and
+// FileField are enforced by the editor and by validateVoiceModel.
 func (p VoiceProtocol) Uses(field string) bool {
 	for _, f := range p.Fields {
 		if f == field {
@@ -66,6 +75,7 @@ var voiceProtocols = []VoiceProtocol{
 	{
 		ID:        "openai_audio",
 		Label:     "OpenAI 格式（multipart 上传）",
+		Kind:      VoiceKindASR,
 		AuthModes: []string{"none", "bearer", "header"},
 		Fields: []string{
 			VoiceFieldEndpoint, VoiceFieldModel, VoiceFieldLanguage, VoiceFieldResponseFormat,
@@ -76,6 +86,7 @@ var voiceProtocols = []VoiceProtocol{
 		// The stored value older configs use for the same multipart adapter.
 		ID:        "multipart",
 		Label:     "自定义 multipart 上传",
+		Kind:      VoiceKindASR,
 		AuthModes: []string{"none", "bearer", "header"},
 		Fields: []string{
 			VoiceFieldEndpoint, VoiceFieldModel, VoiceFieldLanguage, VoiceFieldResponseFormat,
@@ -88,6 +99,7 @@ var voiceProtocols = []VoiceProtocol{
 		// /audio/transcriptions; the reply is ordinary assistant text.
 		ID:         "chat_audio",
 		Label:      "OpenAI 格式 chat/completions（非实时）",
+		Kind:       VoiceKindASR,
 		AuthModes:  []string{"bearer", "header"},
 		ListFilter: VoiceListNonRealtime,
 		Fields: []string{
@@ -101,6 +113,7 @@ var voiceProtocols = []VoiceProtocol{
 		// automatically for qwen-audio and fun-asr models.
 		ID:         "dashscope_sync_audio",
 		Label:      "百炼 multimodal-generation（非实时）",
+		Kind:       VoiceKindASR,
 		AuthModes:  []string{"bearer", "header"},
 		ListFilter: VoiceListNonRealtime,
 		Fields: []string{
