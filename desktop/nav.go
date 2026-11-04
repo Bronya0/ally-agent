@@ -35,6 +35,11 @@ func (a *desktop) changePage(page string) {
 	}
 	a.page = page
 	a.pageEpoch++
+	if page == "settings" && voiceInputSupported() && !a.voiceInputDevicesScanned {
+		// The scan is a COM enumeration, so it waits until someone opens the page that
+		// shows the device list instead of running on every start.
+		a.refreshVoiceInputDevices()
+	}
 	if page == "chat" {
 		a.activateTab(a.active)
 	}

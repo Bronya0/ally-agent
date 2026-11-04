@@ -35,6 +35,9 @@ type voiceTake struct {
 // cannot see; the oldest waiting take is dropped instead.
 const voiceTakeQueueLimit = 3
 
+// nextTakeSeq hands out the recording order. It is called on the main thread only,
+// while the queue's own fields are guarded by mu because the worker reads them from
+// another goroutine; nextSeq is deliberately outside that lock.
 func (v *voiceInputRuntime) nextTakeSeq() uint64 {
 	v.takes.nextSeq++
 	return v.takes.nextSeq
@@ -133,6 +136,9 @@ func (a *desktop) publishVoiceTranscript(take voiceTake, text string, err error)
 	}
 	target := take.target
 	if target == nil || !conversationOpen(a.tabs, target) {
+		// The user closed the tab while the request was in flight: say so instead of
+		// letting the text vanish after the "正在转录" promise.
+		a.notify("目标会话已关闭，本次转写结果未插入")
 		return
 	}
 	target.Draft = appendVoiceTranscript(target.Draft, text)
@@ -168,6 +174,13 @@ func voiceModelsOfKind(models []backend.VoiceModelConfig, kind string) []backend
 		}
 	}
 	return out
+}
+
+// backendVoiceModelUsable reports whether this id still points at a transcription
+// model: it must exist and be ASR.
+func backendVoiceModelUsable(models []backend.VoiceModelConfig, id string) bool {
+	model := voiceModelByID(models, id)
+	return model.ID != "" && backend.VoiceKindOf(model.Kind) == backend.VoiceKindASR
 }
 
 func voiceModelByID(models []backend.VoiceModelConfig, id string) backend.VoiceModelConfig {

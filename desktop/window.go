@@ -21,6 +21,7 @@ func (a *desktop) view(c *ui.Context) {
 	// here". Without it, pressing the shortcut on a non-chat page ate the keys
 	// and then did nothing.
 	a.syncVoiceRecordable()
+	a.globalShortcuts(c)
 	c.OnShortcut(0, ui.KeyEscape, func() { a.cancelConversation(a.current()) })
 	a.flushNotices(c, time.Now())
 	width, _ := c.Size()

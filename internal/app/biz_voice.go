@@ -13,6 +13,7 @@ import (
 	"io"
 	"maps"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -134,26 +135,42 @@ func NormalizeVoiceModels(in []VoiceModelConfig) []VoiceModelConfig {
 // VoiceDeploymentForEndpoint labels an endpoint local or api from its host, so the
 // list chip stays honest even when the config file omits the field.
 func VoiceDeploymentForEndpoint(endpoint string) string {
-	host := strings.ToLower(strings.TrimSpace(endpoint))
+	host := VoiceEndpointHost(endpoint)
+	switch {
+	case host == "", host == "localhost", host == "::1", strings.HasSuffix(host, ".local"):
+		return "local"
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		// ParseIP knows the real private ranges, so 172.200.0.0/16 is correctly public
+		// while 172.16.0.0/12 stays local; a "172.2" prefix test got that wrong.
+		if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			return "local"
+		}
+		return "api"
+	}
+	return "api"
+}
+
+// VoiceEndpointHost is the lowercased host of an endpoint, without scheme, port or
+// path. url.Parse handles the bracketed IPv6 form and userinfo, which a manual split
+// on "/:?" turned into "[" and then treated as a public host.
+func VoiceEndpointHost(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
+		return strings.ToLower(u.Hostname())
+	}
+	host := strings.ToLower(endpoint)
 	if idx := strings.Index(host, "://"); idx >= 0 {
 		host = host[idx+3:]
+	}
+	host = strings.TrimPrefix(host, "[")
+	if idx := strings.Index(host, "]"); idx >= 0 {
+		return host[:idx]
 	}
 	if slash := strings.IndexAny(host, "/:?"); slash >= 0 {
 		host = host[:slash]
 	}
-	switch {
-	case host == "", host == "localhost", host == "127.0.0.1", host == "::1", strings.HasSuffix(host, ".local"):
-		return "local"
-	case strings.HasPrefix(host, "10."), strings.HasPrefix(host, "192.168."), strings.HasPrefix(host, "127."):
-		return "local"
-	}
-	// 172.16.0.0/12 is the private block; 172.2 is not, so match the third octet.
-	for _, third := range []string{"172.16.", "172.17.", "172.18.", "172.19.", "172.2", "172.30.", "172.31."} {
-		if strings.HasPrefix(host, third) {
-			return "local"
-		}
-	}
-	return "api"
+	return host
 }
 
 // normalizeVoiceKind maps any stored value onto asr or tts. Everything written
@@ -164,6 +181,22 @@ func normalizeVoiceKind(kind string) string {
 		return VoiceKindTTS
 	}
 	return VoiceKindASR
+}
+
+// normalizeVoiceModel fills the defaults for one model. A draft has no registry ID
+// yet and normalizeVoiceModels drops entries without one, so an ID is borrowed for the
+// call and cleared again: identity is a save-time concern, connection settings are not.
+// Indexing the list result directly used to panic on an unnamed draft.
+func normalizeVoiceModel(m VoiceModelConfig) VoiceModelConfig {
+	borrowed := strings.TrimSpace(m.ID) == ""
+	if borrowed {
+		m.ID = "voice-draft"
+	}
+	m = normalizeVoiceModels([]VoiceModelConfig{m})[0]
+	if borrowed {
+		m.ID = ""
+	}
+	return m
 }
 
 // VoiceKindOf normalizes a stored kind to asr or tts, so callers can compare
@@ -177,10 +210,6 @@ func VoiceKindLabel(kind string) string {
 	}
 	return "ASR · 语音识别"
 }
-
-// VoiceKindImplemented reports whether this build can use a kind. TTS is stored
-// and shown, but there is no synthesis request yet.
-func VoiceKindImplemented(kind string) bool { return normalizeVoiceKind(kind) == VoiceKindASR }
 
 func validateVoiceModel(m VoiceModelConfig) error {
 	if strings.TrimSpace(m.ID) == "" {
@@ -270,7 +299,7 @@ func (a *App) FetchVoiceModelList(model VoiceModelConfig, includeAll bool) ([]st
 	fetch := func(query url.Values) ([]string, error) {
 		models, err := a.fetchModelListQuery(base, key, headers, query)
 		if err != nil {
-			return nil, errors.New(redactVoiceSecrets(voiceModelListHint(base, err).Error(), model))
+			return nil, voiceModelListAdvice(base, err, model)
 		}
 		return models, nil
 	}
@@ -285,10 +314,12 @@ func (a *App) FetchVoiceModelList(model VoiceModelConfig, includeAll bool) ([]st
 		}
 		return rankVoiceModels(models), nil
 	}
-	// Ask for the narrowest filter first, then the audio modality, then the
-	// plain list. Whatever the server answers, the picker keeps only speech
-	// models: a provider that ignores the filter (as the OpenAI-compatible
-	// gateways do) would otherwise fill the voice dialog with chat models.
+	// Ask for the narrowest filter first, then the audio modality, then the plain
+	// list. Whatever the server answers, the picker keeps only speech models: a
+	// provider that ignores the filter (as the OpenAI-compatible gateways do) would
+	// otherwise fill the voice dialog with chat models. A request that fails stops
+	// the walk: a 404 or a refused connection means the next two would fail the same
+	// way, and three serial round trips is a long wait for the same answer.
 	var lastErr error
 	for _, query := range []url.Values{
 		{"sub_type": {"speech-to-text"}},
@@ -298,6 +329,9 @@ func (a *App) FetchVoiceModelList(model VoiceModelConfig, includeAll bool) ([]st
 		models, err := fetch(query)
 		if err != nil {
 			lastErr = err
+			if !voiceModelListRetryable(err) {
+				break
+			}
 			continue
 		}
 		if speech := filterVoiceModels(models, listFilter, model.Protocol); len(speech) > 0 {
@@ -311,6 +345,38 @@ func (a *App) FetchVoiceModelList(model VoiceModelConfig, includeAll bool) ([]st
 	// offering a chat model catalogue in a voice picker; the dialog tells the
 	// user to type the id or switch to 「全部」.
 	return []string{}, nil
+}
+
+// voiceModelListRetryable reports whether another filter is worth a request. A server
+// that rejects the query parameter (400/422, or a 5xx from a gateway that does not
+// recognise it) may answer the next shape, which is why the fallback exists; a missing
+// route or a refused connection will fail the same way, so walking on would just triple
+// the wait. The decision comes from the status, not from the message text.
+func voiceModelListRetryable(err error) bool {
+	var statusErr *modelListStatusError
+	if errors.As(err, &statusErr) {
+		switch statusErr.status {
+		case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusGone, http.StatusNotImplemented:
+			return false
+		}
+		return true
+	}
+	// No status means the request never reached the server (refused, DNS, timeout), or
+	// the reply was not a model list at all. Only the latter is worth another shape, and
+	// it is the one non-status error that can be recognised without one.
+	return strings.Contains(strings.ToLower(err.Error()), "unexpected response format")
+}
+
+// voiceModelListAdvice turns a raw failure into advice while keeping the HTTP status,
+// so the filter fallback can tell "this server rejects the parameter" apart from "there
+// is no model list here" without matching message text.
+func voiceModelListAdvice(base string, err error, model VoiceModelConfig) error {
+	message := redactVoiceSecrets(voiceModelListHint(base, err).Error(), model)
+	var statusErr *modelListStatusError
+	if errors.As(err, &statusErr) {
+		return &modelListStatusError{status: statusErr.status, message: message}
+	}
+	return errors.New(message)
 }
 
 // voiceModelListHint turns a raw model-list failure into advice. Most local ASR
@@ -456,17 +522,18 @@ func validVoiceHeaderName(name string) bool {
 // HEAD/GET even though the route exists, so a HEAD miss falls back to an empty
 // POST: a 400/415/422 there proves the path is routed and only the body is bad.
 func (a *App) TestNativeVoiceEndpoint(model VoiceModelConfig) (string, error) {
-	// Endpoint probing is intentionally independent of the display name and
-	// transcription form fields. Supply a temporary name only because the
-	// shared normalizer/validator is also used when saving a complete model.
-	if strings.TrimSpace(model.ID) == "" {
-		model.ID = "voice-endpoint-check"
+	// Probing is about the connection, not about identity: it fills the same defaults a
+	// transcription would and runs the same checks, so both entries behave alike.
+	model = normalizeVoiceModel(model)
+	if usesInlineAudio(model.Protocol) {
+		if protocol, ok := VoiceProtocolSpec(model.Protocol); ok && !protocol.AllowsAuth(model.AuthMode) {
+			return "", errors.New("鉴权方式必须是 " + strings.Join(protocol.AuthModes, " / "))
+		}
 	}
-	if strings.TrimSpace(model.Name) == "" {
-		model.Name = "endpoint-probe"
+	if u, err := url.Parse(strings.TrimSpace(model.Endpoint)); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return "", errors.New("Endpoint 必须是有效的 http:// 或 https:// URL，且不能包含用户名密码")
 	}
-	model = normalizeVoiceModels([]VoiceModelConfig{model})[0]
-	if err := validateVoiceModel(model); err != nil {
+	if err := validateVoiceConnection(model); err != nil {
 		return "", err
 	}
 	cfg, err := a.GetConfig()
@@ -542,6 +609,13 @@ func voiceAudioFamilyForID(model string) string {
 		return "dashscope_sync_audio"
 	}
 	return ""
+}
+
+// usesInlineAudio reports whether a protocol posts JSON with inline audio rather than
+// a multipart upload. Those two routes share the transcription path and the endpoint
+// correction, so the list lives here instead of being spelled out at each call site.
+func usesInlineAudio(protocol string) bool {
+	return protocol == "chat_audio" || protocol == "dashscope_sync_audio"
 }
 
 // voiceAudioShapeFor resolves the shape actually sent: a known model family wins
@@ -855,10 +929,7 @@ func voiceChatErrorMessage(data []byte) string {
 		}
 	}
 	text := strings.TrimSpace(string(data))
-	if len(text) > 200 {
-		text = text[:200] + "…"
-	}
-	return text
+	return truncateRunes(text, 200)
 }
 
 func applyVoiceAuth(req *http.Request, model VoiceModelConfig) {
@@ -888,22 +959,23 @@ func (a *App) TestNativeVoiceModelAudioStream(model VoiceModelConfig, audio []by
 	if len(audio) < 44 || len(audio) > 20*1024*1024 || string(audio[:4]) != "RIFF" || string(audio[8:12]) != "WAVE" {
 		return "", errors.New("录音 WAV 无效或超过 20 MiB")
 	}
-	// Testing an unsaved draft must not depend on a registry ID.
-	if strings.TrimSpace(model.ID) == "" {
-		model.ID = "voice-test-draft"
+	// Testing an unsaved draft must not depend on a registry ID or a display name:
+	// normalize fills the connection defaults, and only the connection is validated.
+	model = normalizeVoiceModel(model)
+	if usesInlineAudio(model.Protocol) {
+		if protocol, ok := VoiceProtocolSpec(model.Protocol); ok && !protocol.AllowsAuth(model.AuthMode) {
+			return "", errors.New("鉴权方式必须是 " + strings.Join(protocol.AuthModes, " / "))
+		}
 	}
-	if strings.TrimSpace(model.Name) == "" {
-		model.Name = "voice-test"
-	}
-	model = normalizeVoiceModels([]VoiceModelConfig{model})[0]
-	if err := validateVoiceModel(model); err != nil {
+	if err := validateVoiceConnection(model); err != nil {
 		return "", err
 	}
 	cfg, err := a.GetConfig()
 	if err != nil {
 		return "", err
 	}
-	if model.Protocol == "chat_audio" || model.Protocol == "dashscope_sync_audio" {
+	// One place decides whether a model is posted as inline audio or as multipart.
+	if usesInlineAudio(model.Protocol) {
 		return a.transcribeInlineAudio(cfg, model, audio, onText)
 	}
 	var body bytes.Buffer
@@ -964,9 +1036,9 @@ func (a *App) TestNativeVoiceModelAudioStream(model VoiceModelConfig, audio []by
 		// An HTML page in a 200 is a proxy or login error, not a transcript.
 		return "", errors.New("语音服务返回了 HTML 页面而不是转写结果，请检查 Endpoint 与网络代理")
 	}
-	if len(text) > 180 {
-		text = text[:180] + "…"
-	}
+	// Truncate by rune: a byte slice can cut a Chinese character or emoji in half and
+	// leave the dialog showing a replacement glyph.
+	text = truncateRunes(text, 180)
 	if onText != nil {
 		onText(text)
 	}

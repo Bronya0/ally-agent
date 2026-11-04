@@ -31,7 +31,7 @@ func TestVoiceHookSlotKeepsTheNewestOwner(t *testing.T) {
 // The real rebind sequence: the settings field takes the hook over, then hands it
 // back while the recorder's hook is installed. Both must end with a live hook.
 func TestVoiceHookSlotSurvivesRebind(t *testing.T) {
-	stopRecorder, err := startNativeVoiceHotkey("Alt", true, true, func() bool { return true }, func() {}, func() {})
+	stopRecorder, err := startNativeVoiceHotkey("Alt", true, true, func() bool { return true }, func() {}, func() {}, func() {})
 	if err != nil {
 		t.Skipf("low-level keyboard hooks are unavailable here: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestVoiceHookSlotSurvivesRebind(t *testing.T) {
 	oldHook := activeVoiceHook()
 
 	// The recorder's hook is installed while the old one is still unwinding.
-	stopRebound, err := startNativeVoiceHotkey("Ctrl+Alt+K", true, true, func() bool { return true }, func() {}, func() {})
+	stopRebound, err := startNativeVoiceHotkey("Ctrl+Alt+K", true, true, func() bool { return true }, func() {}, func() {}, func() {})
 	if err != nil {
 		t.Fatalf("rebound hook: %v", err)
 	}

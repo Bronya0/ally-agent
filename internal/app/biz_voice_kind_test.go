@@ -32,12 +32,8 @@ func TestNormalizeVoiceKindDefaultsToASR(t *testing.T) {
 // TTS is a stored category, not a working one: a TTS model saves and lists, but no
 // transcription request is ever built from it.
 func TestVoiceTTSPresetAndValidation(t *testing.T) {
-	if VoiceKindImplemented(VoiceKindTTS) {
-		t.Fatal("TTS must not be reported as implemented")
-	}
-	if !VoiceKindImplemented(VoiceKindASR) {
-		t.Fatal("ASR must be implemented")
-	}
+	// Transcription is the only implemented direction, which the request path
+	// enforces; there is no separate "implemented" flag left to drift from it.
 	if got := VoiceKindLabel(VoiceKindTTS); !strings.Contains(got, "合成") {
 		t.Fatalf("tts label = %q", got)
 	}

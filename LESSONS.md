@@ -119,3 +119,9 @@
 [request-json-thrice] 2026-11-03 中危 一次请求把同一份历史编三次：SDK 编码、传输层重写、工具 schema 哈希（可缓存）。@internal/app/prov_reasoning.go
 
 [stats-full-rewrite] 2026-11-03 中危 统计每 5 秒把当天整份日文件重写一遍（marshal + 临时文件改名），记录越多越贵。@internal/app/biz_stats.go
+
+[voice-ui-copy-leak] 2026-11-03 高危 弹窗占位文案从业务返回值拼，听写路径会写进输入框；返回值只给纯正文。@internal/app/biz_voice.go
+
+[voice-defaults-dupe] 2026-11-03 中危 前后端各写一份字段默认值，与协议默认冲突会让合法配置导入被拒。@desktop/voice_models_io.go
+
+[settings-prefs-dirty] 2026-11-03 中危 设置页 dirty check 只比 ConfigState，存 prefs 的字段离开页面即丢。@desktop/page_settings.go

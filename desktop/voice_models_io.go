@@ -159,6 +159,12 @@ func (a *desktop) commitVoiceModels(models []backend.VoiceModelConfig, success s
 			if closeForm {
 				s.formOpen = false
 			}
+			if a.prefs.VoiceInputEnabled {
+				// The selected model may be gone or may have turned into TTS. Re-running
+				// the configure step re-points the shortcut at a usable model, or explains
+				// that none is left, instead of recording into a dead configuration.
+				a.configureVoiceInput()
+			}
 			a.notifySuccess(success)
 		})
 	}()

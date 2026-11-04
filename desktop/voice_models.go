@@ -15,12 +15,18 @@ import (
 const voiceCaptureMaxDuration = 20 * time.Second
 
 type voiceModelsState struct {
-	models                     []backend.VoiceModelConfig
-	draft                      backend.VoiceModelConfig
-	preset                     string
-	presetMode                 string
-	endpointEditing            bool
-	fetched                    []string
+	models          []backend.VoiceModelConfig
+	draft           backend.VoiceModelConfig
+	preset          string
+	presetMode      string
+	endpointEditing bool
+	fetched         []string
+	// fetchEpoch advances whenever the fetched list changes, so modelOptions can
+	// cache its result without comparing slices.
+	fetchEpoch                 int
+	optionsMemo                []string
+	optionsEpoch               int
+	optionsDraft               string
 	includeAllModels           bool
 	fetchBusy                  bool
 	fetchNote                  string
@@ -39,11 +45,18 @@ type voiceModelsState struct {
 	// the window just to move a bar.
 	wave voiceLevelRing
 	// lines caches each row's derived text (see rowLines).
+	// draftMemo caches the derived request draft (see requestDraft).
+	draftMemo       *backend.VoiceModelConfig
+	draftMemoKey    voiceDraftKey
 	lines           map[string]voiceRowLines
 	recordStartedAt time.Time
 	recording       nativeAudioRecording
+	levelWatchStop  chan struct{}
 	recordState     string
 	recordTimer     *time.Timer
+	// recordSeconds is the elapsed whole second of the running take. The watcher
+	// stores it and the dialog formats it, so a clock tick only repaints.
+	recordSeconds atomic.Int32
 	// presetOptions is built once: the dialog asks for the service list every
 	// frame, and the presets never change at runtime.
 	presetOptions []uikit.Option
@@ -121,6 +134,7 @@ func (s *voiceModelsState) open(index int) {
 	s.preset, s.presetMode = "", ""
 	s.endpointEditing = false
 	s.fetched, s.fetchBusy, s.fetchNote = nil, false, ""
+	s.fetchEpoch++
 	s.includeAllModels = false
 	s.recorderOpen, s.transcript = false, ""
 	s.wave.reset()
@@ -182,6 +196,7 @@ func (s *voiceModelsState) applyVoicePreset(preset backend.VoiceProviderPreset, 
 	s.draft.APIKey, s.draft.Model, s.draft.Name = "", "", ""
 	s.draft.Headers, s.draft.ExtraFields = nil, nil
 	s.fetched, s.fetchBusy, s.fetchNote = nil, false, ""
+	s.fetchEpoch++
 	s.includeAllModels = false
 	s.endpointEditing = false
 	s.endpointState, s.endpointChecked = "", false
@@ -216,13 +231,45 @@ func nextVoiceModelID(models []backend.VoiceModelConfig) string {
 // exposes identity or auth fields, so both are derived here from the endpoint and
 // the API key; a saved custom auth survives because a filled key keeps it.
 func (s *voiceModelsState) requestDraft() backend.VoiceModelConfig {
+	// The dialog asks for this (directly and through endpointVerified) on every frame,
+	// and deriving the deployment + auth chrome walks strings each time. Cache it keyed
+	// by the fields it is derived from; those are compared, not hashed.
+	if key := voiceDraftKeyOf(s.draft); s.draftMemo != nil && s.draftMemoKey == key {
+		return *s.draftMemo
+	}
 	draft := s.draft
 	if strings.TrimSpace(draft.ID) == "" {
 		draft.ID = nextVoiceModelID(s.models)
 	}
+	// A saved model without a display name would list as its model id and give the
+	// delete confirmation an empty subject, so the name falls back once here.
+	if strings.TrimSpace(draft.Name) == "" {
+		draft.Name = strings.TrimSpace(draft.Model)
+	}
 	draft.Deployment = backend.VoiceDeploymentForEndpoint(draft.Endpoint)
 	draft.AuthMode, draft.AuthHeader, draft.AuthPrefix = voiceAuthFor(draft)
+	s.draftMemo, s.draftMemoKey = &draft, voiceDraftKeyOf(s.draft)
 	return draft
+}
+
+// voiceDraftKey is the comparable part of a draft: every field requestDraft derives
+// from or may overwrite. Missing one (Kind, FileField, TimeoutSeconds were missing) let a
+// cached copy hide a field a preset had just written, because saveVoiceModels writes the
+// request draft back into the editor. VoiceModelConfig carries maps, which are not
+// comparable and are copied by reference anyway, so their contents stay visible.
+type voiceDraftKey struct {
+	id, name, protocol, endpoint, model  string
+	apiKey, authMode, authHeader, prefix string
+	kind, fileField                      string
+	timeoutSeconds                       int
+}
+
+func voiceDraftKeyOf(m backend.VoiceModelConfig) voiceDraftKey {
+	return voiceDraftKey{
+		id: m.ID, name: m.Name, protocol: m.Protocol, endpoint: m.Endpoint, model: m.Model,
+		apiKey: m.APIKey, authMode: m.AuthMode, authHeader: m.AuthHeader, prefix: m.AuthPrefix,
+		kind: m.Kind, fileField: m.FileField, timeoutSeconds: m.TimeoutSeconds,
+	}
 }
 
 // voiceAuthFor derives the auth chrome from the only credential the editor still
@@ -260,16 +307,23 @@ func voiceAuthFor(model backend.VoiceModelConfig) (string, string, string) {
 // endpoint first, then whatever is already typed so a hand-written id never
 // disappears from its own dropdown.
 func (s *voiceModelsState) modelOptions() []string {
+	// The combobox asks every frame. Rebuilding the list there allocated a slice and
+	// a map per frame; the cache key is the fetched batch plus the typed name.
+	if s.optionsMemo != nil && s.optionsEpoch == s.fetchEpoch && s.optionsDraft == s.draft.Model {
+		return s.optionsMemo
+	}
 	out := make([]string, 0, len(s.fetched)+1)
-	seen := map[string]bool{}
-	for _, id := range append(append([]string{}, s.fetched...), s.draft.Model) {
-		id = strings.TrimSpace(id)
-		if id == "" || seen[id] {
-			continue
+	seen := make(map[string]bool, len(s.fetched)+1)
+	for _, id := range s.fetched {
+		if id = strings.TrimSpace(id); id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
 		}
-		seen[id] = true
+	}
+	if id := strings.TrimSpace(s.draft.Model); id != "" && !seen[id] {
 		out = append(out, id)
 	}
+	s.optionsMemo, s.optionsEpoch, s.optionsDraft = out, s.fetchEpoch, s.draft.Model
 	return out
 }
 
@@ -295,6 +349,7 @@ func (a *desktop) fetchVoiceModelList() {
 				return
 			}
 			s.fetched = models
+			s.fetchEpoch++
 			if s.includeAllModels {
 				s.fetchNote = fmt.Sprintf("已获取全部 %d 个模型，也可以直接输入模型名。", len(models))
 			} else {
@@ -353,17 +408,20 @@ func (a *desktop) testVoiceEndpoint() {
 	}()
 }
 
-// voiceEndpointHost is the lowercased host part of an endpoint, without scheme,
-// port or path. Both the deployment label and the preset guess read it.
-func voiceEndpointHost(endpoint string) string {
-	host := strings.ToLower(strings.TrimSpace(endpoint))
-	if idx := strings.Index(host, "://"); idx >= 0 {
-		host = host[idx+3:]
+// voiceEndpointHost is the lowercased host part of an endpoint. The backend owns the
+// rule (it also needs it when a config file omits the deployment), so this is a thin
+// alias instead of a second copy.
+func voiceEndpointHost(endpoint string) string { return backend.VoiceEndpointHost(endpoint) }
+
+// voiceModelLabel is the one display-name fallback: a model may have a friendly name,
+// only an id, or neither. The model page and the settings picker both use it.
+func voiceModelLabel(model backend.VoiceModelConfig) string {
+	for _, candidate := range []string{model.Name, model.Model, model.ID} {
+		if candidate = strings.TrimSpace(candidate); candidate != "" {
+			return candidate
+		}
 	}
-	if slash := strings.IndexAny(host, "/:?"); slash >= 0 {
-		host = host[:slash]
-	}
-	return host
+	return "未命名模型"
 }
 
 func voiceModelIDExists(models []backend.VoiceModelConfig, id string) bool {
@@ -440,8 +498,11 @@ func (a *desktop) testVoiceModel() {
 			}
 			s.recording = recorder
 			s.recordStartedAt = time.Now()
+			s.recordSeconds.Store(0)
 			s.recordState = "正在录音…"
-			go a.watchVoiceLevels(s, recorder)
+			levelWatchStop := make(chan struct{})
+			s.levelWatchStop = levelWatchStop
+			go a.watchVoiceLevels(s, recorder, levelWatchStop)
 			s.recordTimer = time.AfterFunc(voiceCaptureMaxDuration, func() {
 				a.win.Update(func() {
 					if s.recording == recorder {
@@ -460,6 +521,7 @@ func (a *desktop) stopVoiceRecording() {
 	}
 	recorder := s.recording
 	s.recording = nil
+	stopVoiceLevelWatch(s)
 	if s.recordTimer != nil {
 		s.recordTimer.Stop()
 		s.recordTimer = nil
@@ -467,16 +529,52 @@ func (a *desktop) stopVoiceRecording() {
 	s.testBusy = true
 	s.transcript = ""
 	s.recordState = "正在处理录音并请求语音模型…"
+	s.recordSeconds.Store(0)
 	draft := s.requestDraft()
 	go func() {
 		audio, err := recorder.Stop()
-		recorder.Cancel()
+		// Cancel waits at most voiceCancelTimeout for the thread to exit, but a hung
+		// device should not delay the result either: retiring it in the background keeps
+		// this path bounded.
+		go recorder.Cancel()
 		var result string
+		finished := &atomic.Bool{}
 		if err == nil {
+			// SSE can deliver many partials per second; publishing each one rebuilt the
+			// whole window. Coalesce to the latest text at 5 Hz, which still reads as
+			// live typing, and stop as soon as the final text is in: a late partial must
+			// never overwrite a finished transcript.
+			var pending atomic.Value
+			var publish atomic.Bool
+			done := make(chan struct{})
+			defer close(done)
+			go func() {
+				ticker := time.NewTicker(200 * time.Millisecond)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-done:
+						return
+					case <-ticker.C:
+						if finished.Load() || !publish.Swap(false) {
+							continue
+						}
+						if text, ok := pending.Load().(string); ok {
+							a.win.Update(func() {
+								if !finished.Load() {
+									s.transcript = text
+								}
+							})
+						}
+					}
+				}
+			}()
 			result, err = a.core.TestNativeVoiceModelAudioStream(draft, audio, func(text string) {
-				a.win.Update(func() { s.transcript = text })
+				pending.Store(text)
+				publish.Store(true)
 			})
 		}
+		finished.Store(true)
 		a.win.Update(func() {
 			s.testBusy = false
 			if err != nil {
@@ -493,38 +591,50 @@ func (a *desktop) stopVoiceRecording() {
 	}()
 }
 
-// watchVoiceLevels moves the meter and the elapsed label. Levels go straight into
-// the ring the painter reads, so the animation costs no view rebuild; only the
-// once-a-second elapsed text asks the window to repaint.
-func (a *desktop) watchVoiceLevels(s *voiceModelsState, recorder nativeAudioRecording) {
+func stopVoiceLevelWatch(s *voiceModelsState) {
+	if s.levelWatchStop != nil {
+		close(s.levelWatchStop)
+		s.levelWatchStop = nil
+	}
+}
+
+// watchVoiceLevels moves the meter and the elapsed label. Levels go straight into the
+// ring the painter reads and the elapsed second into an atomic, so the pump avoids
+// reading mutable UI state. The explicit stop signal retires it when the take ends, even
+// if a hung device never closes the level channel.
+func (a *desktop) watchVoiceLevels(s *voiceModelsState, recorder nativeAudioRecording, stop <-chan struct{}) {
 	levels := recorder.Levels()
-	meter := time.NewTicker(60 * time.Millisecond)
-	clock := time.NewTicker(time.Second)
-	defer meter.Stop()
-	defer clock.Stop()
+	// One ticker drives both jobs: the meter wants every tick, the clock counter wants
+	// every sixteenth.
+	ticker := time.NewTicker(62 * time.Millisecond)
+	defer ticker.Stop()
 	var latest atomic.Uint32
 	var dirty atomic.Bool
+	ticks := 0
 	for {
 		select {
+		case <-stop:
+			return
 		case level, ok := <-levels:
 			if !ok {
 				return
 			}
 			latest.Store(math.Float32bits(level))
 			dirty.Store(true)
-		case <-meter.C:
-			if !dirty.Swap(false) {
+		case <-ticker.C:
+			if dirty.Swap(false) {
+				s.wave.push(math.Float32frombits(latest.Load()))
+			}
+			if ticks = (ticks + 1) % 16; ticks != 0 {
 				continue
 			}
-			s.wave.push(math.Float32frombits(latest.Load()))
-		case <-clock.C:
-			elapsed := time.Since(s.recordStartedAt).Round(time.Second)
-			a.win.Update(func() {
-				if s.recording != recorder {
-					return
-				}
-				s.recordState = fmt.Sprintf("录音中 · %s / 20 秒", elapsed)
-			})
+			seconds := int32(time.Since(s.recordStartedAt) / time.Second)
+			if s.recordSeconds.Swap(seconds) == seconds {
+				continue
+			}
+			if a.win != nil {
+				a.win.Invalidate()
+			}
 		}
 	}
 }
@@ -537,6 +647,7 @@ func (a *desktop) cancelVoiceRecording() {
 	s.recorderOpen = false
 	recorder := s.recording
 	s.recording = nil
+	stopVoiceLevelWatch(s)
 	if s.recordTimer != nil {
 		s.recordTimer.Stop()
 		s.recordTimer = nil
@@ -549,7 +660,14 @@ func (a *desktop) deleteVoiceModel(index int) {
 	if s == nil || s.busy || index < 0 || index >= len(s.models) {
 		return
 	}
-	a.confirmAction("删除语音模型", s.models[index].Name, func() error { return nil }, func() {
+	label := voiceModelLabel(s.models[index])
+	// Deleting has no background work to do before the UI may change, so run is empty
+	// and the list is edited in after, which confirmAction posts to the main thread.
+	// Editing s.models from run would race with the render loop reading it.
+	a.confirmAction("删除语音模型", label, func() error { return nil }, func() {
+		if s.busy || index >= len(s.models) {
+			return
+		}
 		before := cloneVoiceModelConfigs(s.models)
 		s.models = append(s.models[:index], s.models[index+1:]...)
 		a.commitVoiceModels(s.models, "语音模型已删除", false, before)

@@ -450,14 +450,7 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 			if backend.VoiceKindOf(model.Kind) != backend.VoiceKindASR {
 				continue
 			}
-			label := model.Name
-			if label == "" {
-				label = model.Model
-			}
-			if label == "" {
-				label = model.ID
-			}
-			options = append(options, uikit.Option{Value: model.ID, Label: label})
+			options = append(options, uikit.Option{Value: model.ID, Label: voiceModelLabel(model)})
 		}
 		if len(options) == 0 {
 			fieldNote(c, "请先在模型页添加 ASR 模型", a.secondaryInk())
@@ -537,7 +530,7 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 			fieldNote(c, "直接按键，Esc 取消", a.secondaryInk())
 			fieldNote(c, voiceModifierSidesNote(a.prefs.VoiceModifierLeft, a.prefs.VoiceModifierRight), a.secondaryInk())
 		}
-		if sw := switchRow(c, "voice-input-enabled", "语音输入", "启用并预热已选语音模型的录音设备。", &a.prefs.VoiceInputEnabled); sw.Changed() {
+		if sw := switchRow(c, "voice-input-enabled", "语音输入", "按住快捷键说话，松开后转写并填入输入框。", &a.prefs.VoiceInputEnabled); sw.Changed() {
 			if a.prefs.VoiceInputEnabled {
 				if !voiceModelIDExists(a.config.VoiceModels, selected) {
 					a.prefs.VoiceInputEnabled = false

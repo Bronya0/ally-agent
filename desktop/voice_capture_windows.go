@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -32,26 +33,84 @@ type windowsAudioRecording struct {
 	mu         sync.Mutex
 	reusable   bool
 	cancelOnce sync.Once
-	deviceID   string
+	// stopPending marks a take whose stop was requested, so a second Stop returns
+	// instead of waiting on a result that was already collected. It is cleared when
+	// the capture loop finishes the take, which keeps a reused session usable.
+	stopPending atomic.Bool
+	deviceID    string
 	// collector is created on the first take and reset afterwards, so a warm
 	// session holds no audio buffer until it is needed.
-	collector *pcmCollector
+	collector     *pcmCollector
+	stopTimeout   time.Duration
+	cancelTimeout time.Duration
 }
 
 const audclntSBufferEmpty = uintptr(0x08890001)
+
+// A timed-out WASAPI call cannot be safely force-killed. Keep its locked COM
+// thread as the sole capture worker until it exits, rather than leaking one thread
+// and device session for every subsequent retry. Ownership is tied to the recorder
+// so a late exit cannot release a newer session's slot.
+var voiceCaptureSlot = struct {
+	sync.Mutex
+	owner   *windowsAudioRecording
+	changed chan struct{}
+}{changed: make(chan struct{}, 1)}
+
+func acquireVoiceCaptureSlot(r *windowsAudioRecording, timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		voiceCaptureSlot.Lock()
+		if voiceCaptureSlot.owner == nil {
+			voiceCaptureSlot.owner = r
+			voiceCaptureSlot.Unlock()
+			return true
+		}
+		voiceCaptureSlot.Unlock()
+		select {
+		case <-voiceCaptureSlot.changed:
+		case <-timer.C:
+			return false
+		}
+	}
+}
+
+func releaseVoiceCaptureSlot(r *windowsAudioRecording) {
+	voiceCaptureSlot.Lock()
+	if voiceCaptureSlot.owner == r {
+		voiceCaptureSlot.owner = nil
+		voiceCaptureSlot.Unlock()
+		select {
+		case voiceCaptureSlot.changed <- struct{}{}:
+		default:
+		}
+		return
+	}
+	voiceCaptureSlot.Unlock()
+}
 
 func startNativeAudioRecording(deviceIDs ...string) (nativeAudioRecording, error) {
 	deviceID := ""
 	if len(deviceIDs) > 0 {
 		deviceID = deviceIDs[0]
 	}
-	r := &windowsAudioRecording{stop: make(chan struct{}, 1), begin: make(chan struct{}, 1), cancel: make(chan struct{}), done: make(chan struct{}), started: make(chan error, 1), result: make(chan captureResult, 1), levels: make(chan float32, 1), deviceID: deviceID}
+	r := &windowsAudioRecording{stop: make(chan struct{}, 1), begin: make(chan struct{}, 1), cancel: make(chan struct{}), done: make(chan struct{}), started: make(chan error, 1), result: make(chan captureResult, 1), levels: make(chan float32, 1), deviceID: deviceID, stopTimeout: 8 * time.Second, cancelTimeout: 2 * time.Second}
+	if !acquireVoiceCaptureSlot(r, 2*time.Second) {
+		return nil, errors.New("此前的录音设备会话仍未退出，无法安全启动新会话；若持续发生，请重启应用")
+	}
 	ready := make(chan error, 1)
 	go r.capture(ready)
-	if err := <-ready; err != nil {
-		return nil, err
+	select {
+	case err := <-ready:
+		if err != nil {
+			return nil, err
+		}
+		return r, nil
+	case <-time.After(8 * time.Second):
+		go r.Cancel()
+		return nil, errors.New("初始化录音设备超时，会话正在退出")
 	}
-	return r, nil
 }
 
 func (r *windowsAudioRecording) Start() error {
@@ -73,17 +132,15 @@ func (r *windowsAudioRecording) Start() error {
 	}
 }
 
+// Stop timeout bounds how long a device may hold up the transcription queue.
 func (r *windowsAudioRecording) Stop() ([]byte, error) {
 	if result, ok := r.takeResult(); ok {
 		return result.wav, result.err
 	}
-	select {
-	case <-r.done:
-		if result, ok := r.takeResult(); ok {
-			return result.wav, result.err
-		}
-		return nil, errors.New("录音设备会话已关闭")
-	case r.stop <- struct{}{}:
+	// A second Stop after the take was collected must not wait on a channel that
+	// will never fire again, so the request is consumed once.
+	if !r.beginStop() {
+		return nil, errors.New("本次录音已经结束")
 	}
 	select {
 	case result := <-r.result:
@@ -93,7 +150,26 @@ func (r *windowsAudioRecording) Stop() ([]byte, error) {
 			return result.wav, result.err
 		}
 		return nil, errors.New("录音设备会话已关闭")
+	case <-time.After(r.stopTimeout):
+		// Retire the session: the capture thread may still deliver this take's result
+		// later, and a reused session would then hand that stale audio to the next
+		// Stop as if it were new. A retired session is recreated on the next press.
+		r.setReusable(false)
+		go r.Cancel()
+		return nil, errors.New("录音设备无响应，本次录音已放弃")
 	}
+}
+
+// beginStop hands the stop request to the capture thread once per take.
+func (r *windowsAudioRecording) beginStop() bool {
+	if !r.stopPending.CompareAndSwap(false, true) {
+		return false
+	}
+	select {
+	case r.stop <- struct{}{}:
+	default:
+	}
+	return true
 }
 
 func (r *windowsAudioRecording) takeResult() (captureResult, bool) {
@@ -114,13 +190,27 @@ func (r *windowsAudioRecording) CanReuse() bool {
 	return r.reusable
 }
 
+// Cancel timeout bounds the wait for a device thread that stopped responding.
 func (r *windowsAudioRecording) Cancel() {
-	r.cancelOnce.Do(func() { close(r.cancel) })
-	<-r.done
+	r.cancelOnce.Do(func() {
+		if r.cancel != nil {
+			close(r.cancel)
+		}
+	})
+	if r.done == nil {
+		return
+	}
+	select {
+	case <-r.done:
+	case <-time.After(r.cancelTimeout):
+	}
 }
 
 func (r *windowsAudioRecording) capture(ready chan<- error) {
-	defer close(r.done)
+	defer func() {
+		close(r.done)
+		releaseVoiceCaptureSlot(r)
+	}()
 	defer close(r.levels)
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -258,6 +348,7 @@ func (r *windowsAudioRecording) capture(ready chan<- error) {
 		}
 		if captureErr != nil {
 			r.result <- captureResult{err: captureErr, reusable: false}
+			r.stopPending.Store(false)
 			return
 		}
 		// A device switch keeps this take intact; it only retires the session so
@@ -273,6 +364,9 @@ func (r *windowsAudioRecording) capture(ready chan<- error) {
 			result.wav, result.err = encodeVoiceWAV(collector.Bytes(), pcmFormat)
 		}
 		r.result <- result
+		// The session is reused for the next take, so the stop request has to be
+		// consumable again; without this reset a second Stop would wait forever.
+		r.stopPending.Store(false)
 		if !result.reusable {
 			return
 		}

@@ -2,7 +2,9 @@
 package desktop
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"ally-dev/desktop/uikit"
 	backend "ally-dev/internal/app"
@@ -22,11 +24,7 @@ func (a *desktop) voiceModelsSection(c *ui.Context) {
 		idx, m := i, m
 		rowCard(c, "voice-model-"+m.ID, func() {
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Wrap().Children(func() {
-				title := m.Name
-				if title == "" {
-					title = m.Model
-				}
-				ui.Text(c, title).FontSize(fsBody).Bold()
+				ui.Text(c, voiceModelLabel(m)).FontSize(fsBody).Bold()
 				neutralChip(c, backend.VoiceKindLabel(m.Kind))
 				neutralChip(c, m.Deployment)
 				neutralChip(c, backend.VoiceProtocolLabel(m.Protocol))
@@ -149,7 +147,8 @@ func (a *desktop) voiceRecorderDialog(c *ui.Context) {
 			ui.Box(c.Key("voice-recorder-mic")).Size(68, 68).Radius(34).Background(selectionFill(c.Theme().Accent)).Children(func() { iconGlyph(c, "microphone", 32).TextColor(c.Theme().Accent) })
 			status := "准备录音"
 			if s.recording != nil {
-				status = s.recordState
+				// The elapsed second lives in an atomic, so the clock tick only repaints.
+				status = fmt.Sprintf("录音中 · %d 秒 / %d 秒", s.recordSeconds.Load(), int(voiceCaptureMaxDuration/time.Second))
 			} else if s.testBusy {
 				status = "正在识别录音…"
 			} else if s.recordState != "" {

@@ -30,6 +30,15 @@ func (a *App) FetchModelList(baseUrl, apiKey string, customHeaders map[string]st
 
 // fetchModelListQuery is FetchModelList with optional query parameters, which
 // providers such as SiliconFlow use to filter by modality (`sub_type=speech-to-text`).
+// modelListStatusError keeps the HTTP status of a model-list failure so callers can
+// decide from the number instead of matching the message text.
+type modelListStatusError struct {
+	status  int
+	message string
+}
+
+func (e *modelListStatusError) Error() string { return e.message }
+
 func (a *App) fetchModelListQuery(baseUrl, apiKey string, customHeaders map[string]string, query url.Values) ([]string, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseUrl), "/")
 	if base == "" {
@@ -80,12 +89,9 @@ func (a *App) fetchModelListQuery(baseUrl, apiKey string, customHeaders map[stri
 	if err != nil {
 		return nil, err
 	}
-	snippet := strings.TrimSpace(string(body))
-	if len(snippet) > 200 {
-		snippet = snippet[:200]
-	}
+	snippet := truncateRunes(strings.TrimSpace(string(body)), 200)
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("GET %s returned HTTP %d: %s", modelsURL, resp.StatusCode, snippet)
+		return nil, &modelListStatusError{status: resp.StatusCode, message: fmt.Sprintf("GET %s returned HTTP %d: %s", modelsURL, resp.StatusCode, snippet)}
 	}
 
 	var payload struct {

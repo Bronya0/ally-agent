@@ -20,9 +20,12 @@ type voiceInputRuntime struct {
 	target           *conversation
 	timer            *time.Timer
 	pressed          bool
-	busy             bool
-	quietWarmup      bool
-	takes            voiceTakeQueue
+	// aborted marks a take that must not be transcribed, including one whose recorder is
+	// still starting.
+	aborted     bool
+	busy        bool
+	quietWarmup bool
+	takes       voiceTakeQueue
 	// level holds math.Float32bits of the live capture level. The capture pump
 	// stores it and the meter paints it, so a recording never rebuilds the view
 	// just to move a bar.
@@ -146,10 +149,9 @@ func (a *desktop) configureVoiceInput() {
 			}
 			if err != nil {
 				if errors.Is(err, errVoiceCaptureDeviceUnavailable) && deviceID != "" {
-					a.prefs.VoiceInputDeviceID = ""
-					a.savePrefs()
-					a.notifyError("所选麦克风已不可用，已切换到系统默认输入设备")
-					a.configureVoiceInput()
+					// One fallback path for every stage: clear the pin, say so and warm up
+					// again on the default device.
+					a.fallBackToDefaultVoiceDevice()
 					return
 				}
 				a.prefs.VoiceInputEnabled = false
@@ -169,6 +171,7 @@ func (a *desktop) refreshVoiceInputDevices() {
 		return
 	}
 	a.voiceInputDevicesBusy = true
+	a.voiceInputDevicesScanned = true
 	go func() {
 		devices, err := listNativeAudioInputDevices()
 		a.win.Update(func() {
@@ -176,6 +179,9 @@ func (a *desktop) refreshVoiceInputDevices() {
 			a.voiceInputDevicesError = ""
 			if err != nil {
 				a.voiceInputDevicesError = err.Error()
+				// Let the next visit retry: a transient COM failure must not disable the
+				// scan for the rest of the session.
+				a.voiceInputDevicesScanned = false
 				return
 			}
 			a.voiceInputDevices = devices
@@ -185,12 +191,23 @@ func (a *desktop) refreshVoiceInputDevices() {
 			a.prefs.VoiceInputDeviceID = ""
 			a.savePrefs()
 			a.resetVoiceInputDeviceSession()
-			a.notify("所选麦克风已断开，已切换到系统默认输入设备")
 			if a.prefs.VoiceInputEnabled {
+				a.notify("所选麦克风不可用，已切换到系统默认输入设备")
 				a.configureVoiceInput()
 			}
 		})
 	}()
+}
+
+// fallBackToDefaultVoiceDevice clears a pinned microphone that turned out to be
+// unusable, tells the user once and warms the session up again. Every stage that can
+// discover a dead device (warm-up, start, rescan) goes through this one path.
+func (a *desktop) fallBackToDefaultVoiceDevice() {
+	a.prefs.VoiceInputDeviceID = ""
+	a.voiceInput.preparedDeviceID = ""
+	a.savePrefs()
+	a.notify("所选麦克风不可用，已切换到系统默认输入设备")
+	a.configureVoiceInput()
 }
 
 func voiceCaptureDeviceAvailable(devices []voiceCaptureDevice, id string) bool {
@@ -232,6 +249,11 @@ func (a *desktop) resetVoiceInputDeviceSession() {
 			go recorder.Cancel()
 		}
 	}
+	if a.voiceInput.active != nil {
+		// Switching the microphone mid-take used to discard the words silently; say
+		// so, because the user was talking.
+		a.notify("已切换麦克风，本次录音已丢弃")
+	}
 	a.voiceInput.active, a.voiceInput.prepared = nil, nil
 	a.voiceInput.preparedDeviceID = ""
 	a.voiceInput.target = nil
@@ -248,6 +270,7 @@ func (a *desktop) beginVoiceInput(t *conversation) {
 		return
 	}
 	a.voiceInput.prepared = nil
+	a.voiceInput.aborted = false
 	a.syncVoiceRecordable()
 	a.voiceInput.busy = true
 	a.voiceInput.target = t
@@ -260,6 +283,14 @@ func (a *desktop) beginVoiceInput(t *conversation) {
 		}
 		a.win.Update(func() {
 			a.voiceInput.busy = false
+			if a.voiceInput.aborted {
+				// The take was cancelled while the device was starting; do not start it
+				// again or finish it.
+				if err == nil {
+					go r.Cancel()
+				}
+				return
+			}
 			if deviceID != a.prefs.VoiceInputDeviceID {
 				if err == nil {
 					go r.Cancel()
@@ -276,11 +307,7 @@ func (a *desktop) beginVoiceInput(t *conversation) {
 			}
 			if err != nil {
 				if errors.Is(err, errVoiceCaptureDeviceUnavailable) && deviceID != "" {
-					a.prefs.VoiceInputDeviceID = ""
-					a.savePrefs()
-					a.notifyError("所选麦克风已断开，已切换到系统默认输入设备")
-					a.voiceInput.preparedDeviceID = ""
-					a.configureVoiceInput()
+					a.fallBackToDefaultVoiceDevice()
 					return
 				}
 				a.voiceInput.pressed = false
@@ -293,6 +320,11 @@ func (a *desktop) beginVoiceInput(t *conversation) {
 			a.voiceInput.levelStop = make(chan struct{})
 			levelStop := a.voiceInput.levelStop
 			a.voiceInput.timer = time.AfterFunc(voiceCaptureMaxDuration, func() { a.win.Update(func() { a.finishVoiceInput(true) }) })
+			if a.voiceInput.aborted {
+				// Aborted while starting: retire it without enqueueing a take.
+				a.abortVoiceInput()
+				return
+			}
 			if !a.voiceInput.pressed {
 				a.finishVoiceInput(false)
 			}
@@ -317,7 +349,63 @@ func (a *desktop) beginVoiceInput(t *conversation) {
 	}()
 }
 
+// abortVoiceInput stops the current take without transcribing it. It is used when
+// the chord turned out to be a system shortcut, and when the selected model has
+// become unusable: neither case should spend a request or write anything.
+func (a *desktop) abortVoiceInput() {
+	r := a.voiceInput.active
+	// Mark the abort even before the recorder is assigned: beginVoiceInput starts the
+	// device asynchronously, and without this flag that callback would finish the
+	// already-aborted take, spend a request on silence and report a misleading error.
+	a.voiceInput.aborted = true
+	a.voiceInput.active = nil
+	a.voiceInput.pressed = false
+	if a.voiceInput.levelStop != nil {
+		close(a.voiceInput.levelStop)
+		a.voiceInput.levelStop = nil
+	}
+	a.voiceInput.setLevel(0)
+	if a.voiceInput.timer != nil {
+		a.voiceInput.timer.Stop()
+		a.voiceInput.timer = nil
+	}
+	a.voiceInput.target = nil
+	a.syncVoiceRecordable()
+	if r == nil {
+		return
+	}
+	// The session is reused when it can be, so the next press still starts fast.
+	go func() {
+		_, _ = r.Stop()
+		if recorderCanReuse(r) {
+			a.win.Update(func() {
+				if a.closing || !a.prefs.VoiceInputEnabled {
+					go r.Cancel()
+					return
+				}
+				a.voiceInput.prepared = r
+				a.syncVoiceRecordable()
+				a.installVoiceHotkey()
+			})
+			return
+		}
+		go r.Cancel()
+		a.win.Update(func() {
+			if a.closing || !a.prefs.VoiceInputEnabled {
+				return
+			}
+			a.voiceInput.quietWarmup = true
+			a.configureVoiceInput()
+		})
+	}()
+}
+
 func (a *desktop) finishVoiceInput(timeout bool) {
+	if a.voiceInput.aborted {
+		// The chord was already abandoned; do not enqueue the silence as a take.
+		a.abortVoiceInput()
+		return
+	}
 	r := a.voiceInput.active
 	if r == nil {
 		a.voiceInput.pressed = false
@@ -336,6 +424,17 @@ func (a *desktop) finishVoiceInput(timeout bool) {
 	}
 	target := a.voiceInput.target
 	a.voiceInput.target = nil
+	if a.prefs.VoiceInputEnabled && !backendVoiceModelUsable(a.config.VoiceModels, a.prefs.VoiceModelID) {
+		// The selected model was deleted, or turned into a TTS model, while recording.
+		// Stop the session and say so: sending this take nowhere would fail with an
+		// unrelated validation error ("Endpoint 必须是有效的 URL"). No reconfigure here:
+		// cancelling the recorder already disarms the shortcut, and configureVoiceInput
+		// would add a second toast ("请先添加 ASR 模型") for the same event.
+		go r.Cancel()
+		a.syncVoiceRecordable()
+		a.notifyError("所选语音模型已不可用，请在设置中重新选择")
+		return
+	}
 	model := voiceModelByID(a.config.VoiceModels, a.prefs.VoiceModelID)
 	// The take joins the queue in recording order even though Stop() and the
 	// transcription are asynchronous, so a fast second take can never overtake
@@ -364,10 +463,10 @@ func (a *desktop) finishVoiceInput(timeout bool) {
 				a.notifyError("语音转写失败：" + err.Error())
 				return
 			}
-			if voiceClipTooShort(wav) {
-				// A mistaken tap (or a modifier-only shortcut) yields a few
-				// milliseconds of audio: drop it silently instead of spending a
-				// request and a «转写失败» toast on it.
+			if voiceClipTooShort(wav) || !voiceClipHasSignal(wav) {
+				// A mistaken tap yields too little audio; holding a modifier-only
+				// shortcut for a menu may yield a full-length take of silence. Drop
+				// either case instead of spending an ASR request on it.
 				a.voiceInput.finishTake()
 				return
 			}
@@ -410,6 +509,14 @@ func (a *desktop) installVoiceHotkey() {
 		a.win.Update(func() {
 			if !a.closing {
 				a.finishVoiceInput(false)
+			}
+		})
+	}, func() {
+		// A bare-modifier chord also drives system shortcuts; drop the take instead
+		// of transcribing silence.
+		a.win.Update(func() {
+			if !a.closing {
+				a.abortVoiceInput()
 			}
 		})
 	})

@@ -180,6 +180,27 @@ func TestFetchVoiceModelListFallsBackWhenFilterUnsupported(t *testing.T) {
 	}
 }
 
+// A missing /models route must cost one request, not three: the same 404 would come
+// back every time, and a local server often has no list endpoint at all.
+func TestFetchVoiceModelListStopsWhenTheRouteIsMissing(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	if _, err := app.FetchVoiceModelList(VoiceModelConfig{
+		Endpoint: server.URL + "/v1/audio/transcriptions", AuthMode: "none",
+	}, false); err == nil {
+		t.Fatal("a missing model list must fail")
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want a single probe of a missing route", calls)
+	}
+}
+
 // A provider that ignores the capability filter (most OpenAI-compatible
 // gateways including DashScope) still must not fill the voice picker with chat
 // models, so the answer is filtered locally.

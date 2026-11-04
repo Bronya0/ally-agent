@@ -215,6 +215,26 @@ func voiceClipTooShort(wav []byte) bool {
 	return len(wav) < 44+voiceMinClipPCMBytes
 }
 
+// voiceClipHasSignal rejects a full-length take containing only digital silence or
+// near-silence. This matters for modifier-only shortcuts: holding Alt for a menu
+// should not spend an ASR request merely because the take exceeded the duration floor.
+func voiceClipHasSignal(wav []byte) bool {
+	if len(wav) < 44 || string(wav[:4]) != "RIFF" || string(wav[8:12]) != "WAVE" {
+		return false
+	}
+	pcm := wav[44:]
+	if len(pcm) < 2 || len(pcm)%2 != 0 {
+		return false
+	}
+	const minRMS = 0.001 // about -60 dBFS; well below ordinary speech levels.
+	var sumSquares float64
+	for i := 0; i < len(pcm); i += 2 {
+		sample := float64(int16(binary.LittleEndian.Uint16(pcm[i:i+2]))) / 32768
+		sumSquares += sample * sample
+	}
+	return math.Sqrt(sumSquares/float64(len(pcm)/2)) >= minRMS
+}
+
 func writeVoiceWAVHeader(out []byte, dataSize uint32) {
 	copy(out[0:4], "RIFF")
 	binary.LittleEndian.PutUint32(out[4:8], 36+dataSize)

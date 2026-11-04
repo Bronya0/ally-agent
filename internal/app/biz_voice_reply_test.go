@@ -60,17 +60,22 @@ func TestVoiceModelRejectsHTMLReply(t *testing.T) {
 }
 
 // Deployment must follow the endpoint when a config omits it, so an imported
-// remote model is not labelled local.
+// remote model is not labelled local. A prefix test on "172.2" also matched
+// 172.200.x, which is public, so the real private ranges decide now.
 func TestVoiceDeploymentForEndpoint(t *testing.T) {
 	for _, test := range []struct{ endpoint, want string }{
 		{"http://127.0.0.1:8786/v1/audio/transcriptions", "local"},
 		{"http://localhost:9000/v1/audio/transcriptions", "local"},
 		{"http://192.168.1.7:9000/v1/audio/transcriptions", "local"},
 		{"http://10.0.0.5/v1/audio/transcriptions", "local"},
+		{"http://172.16.3.4/v1/audio/transcriptions", "local"},
 		{"http://172.20.3.4/v1/audio/transcriptions", "local"},
+		{"http://172.31.255.1:8786/v1", "local"},
 		{"https://api.siliconflow.cn/v1/audio/transcriptions", "api"},
 		{"https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "api"},
 		{"http://172.32.0.1/v1/audio/transcriptions", "api"},
+		{"http://172.200.0.9/v1/audio/transcriptions", "api"},
+		{"https://8.8.8.8/v1/audio/transcriptions", "api"},
 	} {
 		if got := VoiceDeploymentForEndpoint(test.endpoint); got != test.want {
 			t.Errorf("VoiceDeploymentForEndpoint(%q) = %q, want %q", test.endpoint, got, test.want)

@@ -202,6 +202,7 @@ type desktop struct {
 	voiceInputDevices                                   []voiceCaptureDevice
 	voiceInputDevicesBusy                               bool
 	voiceInputDevicesError                              string
+	voiceInputDevicesScanned                            bool
 	voiceHotkeyCapturing                                bool
 	voiceHotkeyPreviewParts                             []string
 	voiceHotkeyCaptureStop                              func()
@@ -370,12 +371,12 @@ func Run() {
 				}
 				a.syncSettingsForm()
 				a.ready = true
-				// Voice warm-up needs the platform recorder; elsewhere it can only fail.
-				if voiceInputSupported() {
+				// Voice warm-up needs the platform recorder; elsewhere it can only fail. The
+				// device scan is skipped until dictation is actually enabled: it is a COM
+				// enumeration, and a user who never opens voice settings should not pay for it.
+				if voiceInputSupported() && a.prefs.VoiceInputEnabled {
 					a.refreshVoiceInputDevices()
-					if a.prefs.VoiceInputEnabled {
-						a.configureVoiceInput()
-					}
+					a.configureVoiceInput()
 				}
 				if a.prefs.Pet.Enabled {
 					a.openPet()

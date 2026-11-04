@@ -261,44 +261,99 @@ func (r voiceHotkeyRequirement) satisfiedBy(down map[uint32]bool) bool {
 // current page can accept dictation. Its primary keys are swallowed only while it
 // actually records, so the same keystrokes do not also reach the focused control.
 type voiceHotkeyHook struct {
+	// mu guards everything below: see handle for why two threads can reach it.
+	mu           sync.Mutex
 	require      voiceHotkeyRequirement
 	owned        map[uint32]bool
 	down         map[uint32]bool
 	active       bool
 	modifierOnly bool
+	// suppressed keeps a bare-modifier chord from re-arming while its modifier is
+	// still held after an abort, so Alt+letter does not start a take per keystroke.
+	suppressed bool
 	// armed reports whether recording can start here; nil means "always".
 	armed  func() bool
 	onDown func()
 	onUp   func()
+	// onAbort drops a take that turned out to be a system shortcut: a bare
+	// modifier is also Alt+Tab, Alt+F4 and the window menu, and those must not
+	// spend a request on silence.
+	onAbort func()
 }
 
+// handle is called from the low-level hook thread. During a rebind two hooks can be
+// live for a moment (the old thread leaves its message loop late), and both dispatch
+// through the shared slot to *this* object, so the state below is touched from two OS
+// threads. Idempotent decisions do not make concurrent map writes safe: the mutex is
+// required, and it is cheap because the critical section is a few map operations.
 func (h *voiceHotkeyHook) handle(event, vk uint32) bool {
-	return h.handleEvent(event, vk, voiceForegroundIsAlly())
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	// The foreground query is two user32 calls, and this runs on every keystroke in
+	// the system. Track the key first and ask who is in front only when the chord
+	// could matter: a matching chord or an already running take.
+	h.trackKey(event, vk)
+	if !h.needsForeground() {
+		return h.decide(event, vk, true)
+	}
+	return h.decide(event, vk, voiceForegroundIsAlly())
 }
 
 // handleEvent is the decision without the foreground query, so the chord and
 // swallow rules are testable.
 func (h *voiceHotkeyHook) handleEvent(event, vk uint32, isAlly bool) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.trackKey(event, vk)
+	return h.decide(event, vk, isAlly)
+}
+
+// trackKey records the key in the held set. It is separated from the decision so the
+// callback can test "might this matter?" before spending two user32 calls.
+func (h *voiceHotkeyHook) trackKey(event, vk uint32) {
+	switch event {
+	case wmKeyDown, wmSysKeyDown:
+		h.down[vk] = true
+	case wmKeyUp, wmSysKeyUp:
+		delete(h.down, vk)
+	}
+}
+
+// needsForeground reports whether the next decision depends on the foreground
+// window: either a take is running or the chord is currently satisfied.
+func (h *voiceHotkeyHook) needsForeground() bool {
+	return h.active || h.require.satisfiedBy(h.down)
+}
+
+func (h *voiceHotkeyHook) decide(event, vk uint32, isAlly bool) bool {
 	down := event == wmKeyDown || event == wmSysKeyDown
 	up := event == wmKeyUp || event == wmSysKeyUp
 	if !down && !up {
 		return false
 	}
-	if down {
-		h.down[vk] = true
-	} else {
-		delete(h.down, vk)
-	}
 	wasActive := h.active
 	matching := h.require.satisfiedBy(h.down)
+	if !matching {
+		// The chord is no longer held, so a previous abort stops applying.
+		h.suppressed = false
+	}
 	activated := false
 	switch {
+	case down && wasActive && h.modifierOnly && !h.require.isModifierKey(vk):
+		// Another key arrived while only modifiers are held: this is a system
+		// shortcut (menu, Alt+Tab), not dictation. Drop the take silently, and stay
+		// suppressed until the chord is released: Alt is still down, so otherwise the
+		// next keystroke would start another take and abort again, restarting the
+		// microphone and re-encoding a clip per key.
+		h.active = false
+		h.suppressed = true
+		h.onAbort()
 	case down && wasActive && !isAlly:
 		// A modifier-only shortcut must not turn a system shortcut into a
 		// recording just because another window took the foreground.
 		h.active = false
 		h.onUp()
-	case down && !wasActive && matching && isAlly && h.activationAllowed():
+	case down && !wasActive && matching && isAlly && h.activationAllowed() && !h.suppressed:
 		if !(h.modifierOnly && h.down[vkTab]) {
 			h.active = true
 			activated = true
@@ -309,6 +364,19 @@ func (h *voiceHotkeyHook) handleEvent(event, vk uint32, isAlly bool) bool {
 		h.onUp()
 	}
 	return (activated || wasActive) && h.owned[vk]
+}
+
+// isModifierKey reports whether vk is one of the chord's modifiers, which are the
+// only keys that may repeat while a modifier-only chord records.
+func (h voiceHotkeyRequirement) isModifierKey(vk uint32) bool {
+	for _, alternatives := range h.modVKs {
+		for _, candidate := range alternatives {
+			if candidate == vk {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // activationAllowed reports whether a matching chord may start recording here.
@@ -341,16 +409,27 @@ func (h *voiceHotkeyCaptureHook) handle(event, vk uint32) bool {
 	}
 	if down && vk == vkEscape && len(h.order) == 1 {
 		h.onFinish("")
-		return false
+		return true
 	}
 	if up && h.started && len(h.down) == 0 {
 		value, _, _ := voiceHotkeyFromVirtualKeys(h.order)
 		h.onFinish(value)
-		return false
+		return true
 	}
 	if h.started && h.onChange != nil {
 		value, parts, _ := voiceHotkeyFromVirtualKeys(h.order)
 		h.onChange(parts, value)
+	}
+	// Swallow only keys that can belong to a chord: a modifier or a bindable key. Other
+	// keys (letters while a modifier is held, app shortcuts) pass through, so a capture
+	// that lingers cannot make the whole keyboard feel dead.
+	if h.started {
+		if _, isModifier := voiceModifierTokensByVK[vk]; isModifier {
+			return true
+		}
+		if _, isBindable := voiceKeyByVK[vk]; isBindable {
+			return true
+		}
 	}
 	return false
 }
@@ -396,8 +475,10 @@ func voiceForegroundIsAlly() bool {
 
 // startNativeVoiceHotkey installs the recording hook for one chord. armed, when
 // not nil, decides on the hook thread whether a matching chord may start
-// recording here at all.
-func startNativeVoiceHotkey(value string, left, right bool, armed func() bool, onDown, onUp func()) (func(), error) {
+// recording here at all. onAbort is required for a bare-modifier chord: those
+// double as Alt+Tab and the window menu, and a system shortcut must not be sent to
+// a speech endpoint.
+func startNativeVoiceHotkey(value string, left, right bool, armed func() bool, onDown, onUp, onAbort func()) (func(), error) {
 	hotkey, ok := parseVoiceHotkey(value)
 	if !ok {
 		return nil, errors.New("快捷键格式无效")
@@ -410,6 +491,9 @@ func startNativeVoiceHotkey(value string, left, right bool, armed func() bool, o
 	for _, vk := range require.keyVKs {
 		owned[vk] = true
 	}
+	if onAbort == nil {
+		onAbort = onUp
+	}
 	handle, err := startVoiceHook(&voiceHotkeyHook{
 		require:      require,
 		owned:        owned,
@@ -418,6 +502,7 @@ func startNativeVoiceHotkey(value string, left, right bool, armed func() bool, o
 		armed:        armed,
 		onDown:       onDown,
 		onUp:         onUp,
+		onAbort:      onAbort,
 	})
 	if err != nil {
 		return nil, err
@@ -439,10 +524,11 @@ func startNativeHotkeyCapture(onChange func(parts []string, value string), onFin
 	return handle.stop, nil
 }
 
-// voiceHookStopTimeout bounds how long stop waits for its thread to unwind, so a
-// stuck thread cannot freeze the caller (which is the window's main thread when
-// the settings editor hands the hook back).
-const voiceHookStopTimeout = 2 * time.Second
+// voiceHookStopTimeout bounds how long stop waits for its thread to unwind. The
+// caller is the window's main thread when the settings editor hands the hook back,
+// so the wait is deliberately short: the slot already tolerates a late ownerless
+// release, and freezing the UI for two seconds to be tidy is the worse trade.
+const voiceHookStopTimeout = 200 * time.Millisecond
 
 type voiceHookHandle struct {
 	done     chan struct{}
@@ -511,9 +597,15 @@ func startVoiceHook(hook voiceKeyboardHook) (*voiceHookHandle, error) {
 	return handle, nil
 }
 
-func voiceLowLevelCallback(code int, wparam uintptr, lparam uintptr) uintptr {
-	if code == hcAction && lparam != 0 {
-		key := (*lowLevelKey)(unsafe.Pointer(lparam))
+// The lparam is the KBDLLHOOKSTRUCT*. It is declared as a pointer parameter rather
+// than a uintptr the callback converts back: windows.NewCallback accepts any
+// pointer-sized parameter, and going through uintptr here made go vet report
+// "possible misuse of unsafe.Pointer" on the one line that reads the key code.
+// The callback can run on two threads for one keystroke: a replaced hook waits only
+// voiceHookStopTimeout for its thread to end, and until it does, both hooks dispatch
+// into the same slot. voiceHotkeyHook serializes its own state for that reason.
+func voiceLowLevelCallback(code int, wparam uintptr, key *lowLevelKey) uintptr {
+	if code == hcAction && key != nil {
 		// Snapshot the owner and release the slot lock before deciding: Windows
 		// drops a hook whose callback takes too long, so the mutex is held only for
 		// the lookup, never across the foreground query or the dispatch.
@@ -525,6 +617,6 @@ func voiceLowLevelCallback(code int, wparam uintptr, lparam uintptr) uintptr {
 			return 1
 		}
 	}
-	result, _, _ := procCallNextHookEx.Call(0, uintptr(code), wparam, lparam)
+	result, _, _ := procCallNextHookEx.Call(0, uintptr(code), wparam, uintptr(unsafe.Pointer(key)))
 	return result
 }

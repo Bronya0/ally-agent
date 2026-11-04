@@ -64,6 +64,31 @@ func TestEncodeVoiceWAVRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestVoiceClipHasSignal(t *testing.T) {
+	format := capturePCMFormat{SampleRate: voiceCaptureSampleRate, Channels: 1, BytesPerSample: 2, BlockAlign: 2}
+	quiet, err := encodeVoiceWAV(make([]byte, voiceMinClipPCMBytes), format)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if voiceClipHasSignal(quiet) {
+		t.Fatal("digital silence must not be sent as a transcription request")
+	}
+	pcm := make([]byte, voiceMinClipPCMBytes)
+	for i := 0; i < len(pcm); i += 2 {
+		binary.LittleEndian.PutUint16(pcm[i:], uint16(int16(256)))
+	}
+	speechLike, err := encodeVoiceWAV(pcm, format)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !voiceClipHasSignal(speechLike) {
+		t.Fatal("low-level non-silent audio should pass the signal gate")
+	}
+	if voiceClipHasSignal([]byte("not a WAV")) {
+		t.Fatal("invalid WAV must not pass the signal gate")
+	}
+}
+
 func TestPCMCollectorDropsOverflowTail(t *testing.T) {
 	collector := newPCMCollector(8)
 	if kept := collector.Append([]byte{1, 2, 3, 4, 5, 6}); kept != 6 {

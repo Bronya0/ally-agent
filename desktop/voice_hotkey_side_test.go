@@ -5,6 +5,7 @@ package desktop
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -52,6 +53,46 @@ func TestVoiceHotkeyDoesNotSwallowWhereItCannotRecord(t *testing.T) {
 	}
 	if spy.downs.Load() != 1 {
 		t.Fatalf("recording started %d times, want 1", spy.downs.Load())
+	}
+}
+
+// A bare-modifier chord doubles as Alt+Tab / the window menu. Pressing another key
+// while it records must drop the take instead of sending silence to the endpoint.
+func TestVoiceBareModifierChordAbortsOnSystemShortcut(t *testing.T) {
+	var aborts, ups int32
+	hook, _ := newTestVoiceHook(t, "Alt", true, true)
+	hook.onAbort = func() { atomic.AddInt32(&aborts, 1) }
+	hook.onUp = func() { atomic.AddInt32(&ups, 1) }
+
+	hook.handleEvent(wmSysKeyDown, 0xA4, true) // left Alt starts a take
+	if hook.active != true {
+		t.Fatal("the chord must start recording on the modifier press")
+	}
+	hook.handleEvent(wmKeyDown, vkTab, true) // Alt+Tab
+	if hook.active {
+		t.Fatal("Alt+Tab must end the take")
+	}
+	if aborts != 1 {
+		t.Fatalf("aborts = %d, want the take dropped once", aborts)
+	}
+	if ups != 0 {
+		t.Fatalf("ups = %d, want no transcription of a system shortcut", ups)
+	}
+}
+
+// A chord with primary keys is unaffected: pressing them is the normal path.
+func TestVoiceChordWithKeysIgnoresAbortRule(t *testing.T) {
+	var aborts int32
+	hook, spy := newTestVoiceHook(t, "Ctrl+Alt+K", true, true)
+	hook.onAbort = func() { atomic.AddInt32(&aborts, 1) }
+	hook.handleEvent(wmKeyDown, 0xA2, true)
+	hook.handleEvent(wmSysKeyDown, 0xA4, true)
+	hook.handleEvent(wmKeyDown, 0x4B, true)
+	if aborts != 0 {
+		t.Fatalf("a normal chord must not abort, got %d", aborts)
+	}
+	if spy.downs.Load() != 1 {
+		t.Fatalf("recording started %d times", spy.downs.Load())
 	}
 }
 
