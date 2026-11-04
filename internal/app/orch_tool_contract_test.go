@@ -282,10 +282,11 @@ func TestSSHClusterAddNamesEveryMissingField(t *testing.T) {
 }
 
 // TestExecuteToolGatesEveryBuiltinTool is the guard against a schema that only
-// exists in the prompt: each declared tool must refuse an undeclared argument at
-// the boundary, naming it, no matter which handler sits behind it. A tool that
-// silently accepted the stray key would mean the gate never ran for it (or the
-// declaration stopped being a strict object).
+// exists in the prompt: each declared tool must run its declaration at the
+// boundary, no matter which handler sits behind it. Undeclared arguments are
+// dropped rather than fatal, so the proof is either a still-failing required
+// parameter or a warning that names the stray key. A tool that accepted the key
+// without naming it would mean the gate never ran for it.
 func TestExecuteToolGatesEveryBuiltinTool(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: t.TempDir()}
@@ -296,11 +297,16 @@ func TestExecuteToolGatesEveryBuiltinTool(t *testing.T) {
 		name := tool.Function.Name
 		t.Run(name, func(t *testing.T) {
 			res := app.executeTool(context.Background(), cfg, "s-1", name, []byte(`{"allyUnknownArgument":1}`))
-			if res.OK || res.ErrorCode != "E_BAD_ARGS" {
-				t.Fatalf("%s must reject an undeclared argument with E_BAD_ARGS, got ok=%v code=%q err=%q", name, res.OK, res.ErrorCode, res.Error)
+			if res.OK {
+				for _, warning := range res.Warnings {
+					if strings.Contains(warning, "allyUnknownArgument") {
+						return
+					}
+				}
+				t.Fatalf("%s accepted an undeclared argument without naming it", name)
 			}
-			if !strings.Contains(res.Error, "allyUnknownArgument") {
-				t.Fatalf("%s must name the undeclared argument, got %q", name, res.Error)
+			if res.ErrorCode != "E_BAD_ARGS" {
+				t.Fatalf("%s must still fail its required parameters, got ok=%v code=%q err=%q", name, res.OK, res.ErrorCode, res.Error)
 			}
 		})
 	}
@@ -399,17 +405,19 @@ func TestPlanToolVocabularyPassesTheGate(t *testing.T) {
 		}
 	}
 
-	// The retired parameter is not a second spelling: it fails by name instead of
-	// being silently accepted, so nothing can quietly depend on it again.
-	retired := app.executeTool(ctx, cfg, "s-1", "plan", []byte(`{"next":"Run tests"}`))
-	if retired.OK || retired.ErrorCode != "E_BAD_ARGS" || !strings.Contains(retired.Error, "next") {
-		t.Fatalf("the retired next parameter must be refused by name, got ok=%v code=%q err=%q", retired.OK, retired.ErrorCode, retired.Error)
-	}
-
-	// The retired todos form is not a second spelling either.
-	todos := app.executeTool(ctx, cfg, "s-1", "plan", []byte(`{"todos":[{"title":"Read code","status":"in_progress"}]}`))
-	if todos.OK || todos.ErrorCode != "E_BAD_ARGS" || !strings.Contains(todos.Error, "todos") {
-		t.Fatalf("the retired todos form must be refused by name, got ok=%v code=%q err=%q", todos.OK, todos.ErrorCode, todos.Error)
+	// A retired parameter is dropped with a warning instead of failing the call,
+	// so nothing can quietly depend on it and the model still learns it is gone.
+	for _, retired := range []string{
+		`{"next":"Run tests"}`,
+		`{"todos":[{"title":"Read code","status":"in_progress"}]}`,
+	} {
+		res := app.executeTool(ctx, cfg, "s-1", "plan", []byte(retired))
+		if !res.OK {
+			t.Fatalf("plan %s must still run, got code=%q err=%q", retired, res.ErrorCode, res.Error)
+		}
+		if len(res.Warnings) == 0 {
+			t.Fatalf("plan %s must name the retired parameter", retired)
+		}
 	}
 
 	// finish takes a step title and nothing else: a boolean, a number and an
@@ -437,10 +445,14 @@ func TestPlanToolVocabularyPassesTheGate(t *testing.T) {
 		t.Fatalf("steps + finish must fail as a contract error, got ok=%v code=%q err=%q", both.OK, both.ErrorCode, both.Error)
 	}
 
-	// A field the description never mentions still fails loudly.
+	// A misspelled field is dropped with a warning: the call runs, and the model
+	// still learns which key it got wrong.
 	typo := app.executeTool(ctx, cfg, "s-1", "plan", []byte(`{"step":["a"]}`))
-	if typo.OK || typo.ErrorCode != "E_BAD_ARGS" || !strings.Contains(typo.Error, "step") {
-		t.Fatalf("a misspelled field must be refused by name, got ok=%v code=%q err=%q", typo.OK, typo.ErrorCode, typo.Error)
+	if !typo.OK {
+		t.Fatalf("a misspelled field must not fail the call, got code=%q err=%q", typo.ErrorCode, typo.Error)
+	}
+	if len(typo.Warnings) == 0 || !strings.Contains(typo.Warnings[0], "step") {
+		t.Fatalf("the misspelled field must be named in a warning, got %#v", typo.Warnings)
 	}
 }
 

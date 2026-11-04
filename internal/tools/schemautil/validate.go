@@ -31,6 +31,11 @@ const MaxReportedViolations = 8
 type Violation struct {
 	Path    string
 	Message string
+	// UnsupportedKey is the undeclared key name, empty for every other
+	// violation. A caller that would rather keep executing drops these and
+	// warns about the key instead of failing the call; the handler never read
+	// the value, so nothing it does depends on the key being gone.
+	UnsupportedKey string
 }
 
 func (v Violation) Error() string {
@@ -78,11 +83,16 @@ func ValidateArgs(schema map[string]any, args []byte) []Violation {
 	}
 	checker := &checker{}
 	checker.check(value, schema, "")
-	return checker.violations
+	// Undeclared keys trail the fatal violations, so a report that names one
+	// still opens with the problem the caller has to fix.
+	return append(checker.violations, checker.unsupported...)
 }
 
 type checker struct {
 	violations []Violation
+	// unsupported holds undeclared keys. They never consume the fatal budget:
+	// a caller that ignores them still has to see every real error.
+	unsupported []Violation
 }
 
 func (c *checker) add(path, format string, args ...any) {
@@ -90,6 +100,17 @@ func (c *checker) add(path, format string, args ...any) {
 		return
 	}
 	c.violations = append(c.violations, Violation{Path: path, Message: fmt.Sprintf(format, args...)})
+}
+
+func (c *checker) addUnsupported(path, key string, properties map[string]any) {
+	if len(c.unsupported) >= MaxReportedViolations {
+		return
+	}
+	c.unsupported = append(c.unsupported, Violation{
+		Path:           path,
+		Message:        fmt.Sprintf("unsupported parameter %q (%s)", key, supportedHint(properties)),
+		UnsupportedKey: key,
+	})
 }
 
 func (c *checker) full() bool { return len(c.violations) >= MaxReportedViolations }
@@ -139,7 +160,7 @@ func (c *checker) checkObject(object map[string]any, schema map[string]any, path
 	case bool:
 		if !additional {
 			for _, key := range unsupportedKeys(object, properties) {
-				c.add(path, "unsupported parameter %q (%s)", key, supportedHint(properties))
+				c.addUnsupported(path, key, properties)
 			}
 		}
 	case map[string]any:
