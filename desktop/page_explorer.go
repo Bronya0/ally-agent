@@ -72,9 +72,7 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 				label = "保存中…"
 			}
 			flat(c, label).Disabled(kind.isPreviewOnly() || file.Saving || !file.Editor.Buffer.Modified()).OnClick(func() { a.saveFile() })
-			if kind.isPreviewOnly() || file.MarkupPreview {
-				flat(c, "系统打开").OnClick(func() { a.openSystemFile(file.Path) })
-			}
+			flat(c, "系统打开").OnClick(func() { a.openSystemFile(file.Path) })
 			iconAction(c, "editor-close", "关闭编辑器", "close", 24, func() { a.closeFile() })
 		})
 		if file.PreviewError != "" {

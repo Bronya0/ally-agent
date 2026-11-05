@@ -127,3 +127,7 @@
 [settings-prefs-dirty] 2026-11-03 中危 设置页 dirty check 只比 ConfigState，存 prefs 的字段离开页面即丢。@desktop/page_settings.go
 
 [memory-tidy] 2026-11-04 中危 别在每帧或固定定时器里调 FreeOSMemory：STW 加缺页抖动，只在隐藏/最小化去抖后调。@desktop/memory_tidy.go
+
+2026-11-05 高危 blackboard-history 收信只进请求副本就 Ack，下一步丢协作约束；历史与确认须一起提交。@internal/app/orch_blackboard.go
+2026-11-05 高危 blackboard-report 消息标签剥离后报告为空仍标完成，父代理就拿到空结论；完成须有报告。@internal/app/orch_subagent.go
+2026-11-05 高危 blackboard-lexer 行作用域状态(反引号/注释/伪标签)跨行续用会静默吞掉后续消息；无闭合标记即复位。@internal/blackboard/protocol.go

@@ -1647,7 +1647,7 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 		ui.Box(c).Shrink(0).AlignSelf(ui.Start).Padding(11, 0).Children(func() {
 			ui.Text(c, prefix).Font(monoFamily).FontSize(fsSmall).TextColor(a.secondaryInk())
 		})
-		ui.Column(c).Key(fmt.Sprintf("sub-%s-%d", subID, index)).Grow(1).MinWidth(0).Padding(10, 12).Gap(gapInline).
+		ui.Column(c.Key("sub-card-"+subID)).Grow(1).MinWidth(0).Padding(10, 12).Gap(gapInline).
 			Border(1, c.Theme().Border).Background(c.Theme().Surface).Radius(radiusCard).Children(func() {
 			ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
 				// Main's SubagentInlineCard status dot: 6px, running blinks
@@ -1713,9 +1713,10 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 				ui.Spacer(c)
 				summary, errText := str(m, "summary"), str(m, "error")
 				hasReport := (status != "running" && summary != "") || errText != ""
-				open := t.uiState().ToolOpen["sub-"+str(m, "subId")]
-				reportButton, _ := buttonParts(c, "sub-report-"+str(m, "subId"), "", btnSecondary, true, "")
-				reportButton.Disabled(!hasReport).OnClick(func() { t.uiState().ToolOpen["sub-"+str(m, "subId")] = !open })
+				a.subagentBlackboardButton(c, t, m)
+				open := t.uiState().ToolOpen["sub-"+subID]
+				reportButton, _ := buttonParts(c, "sub-report-"+subID, "", btnSecondary, true, "")
+				reportButton.Label("子代理报告 " + subID).Disabled(!hasReport).OnClick(func() { toggleSubagentDetail(t, subID, false) })
 				reportButton.Children(func() {
 					ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
 						disclosureIcon(c, "file", a.secondaryInk())
@@ -1728,7 +1729,11 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 					})
 				})
 			})
-			uikit.Reveal(c.Key("sub-report-reveal"), t.uiState().ToolOpen["sub-"+str(m, "subId")], func() {
+			a.subagentBlackboardDetails(c, t, m)
+			uikit.Reveal(c.Key("sub-report-reveal"), t.uiState().ToolOpen["sub-"+subID], func() {
+				if !t.uiState().ToolOpen["sub-"+subID] {
+					return
+				}
 				if errText := str(m, "error"); errText != "" {
 					notice(c, "error", errText, a.secondaryInk())
 				}

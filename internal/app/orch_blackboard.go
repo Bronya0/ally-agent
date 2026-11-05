@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"ally-dev/internal/blackboard"
 	openai "github.com/sashabaranov/go-openai"
@@ -17,6 +18,7 @@ type blackboardParticipantContextKey struct{}
 type blackboardParticipant struct {
 	board *blackboard.Blackboard
 	name  string
+	subID string
 }
 
 func newRunBlackboard(ctx context.Context) (context.Context, func()) {
@@ -65,7 +67,7 @@ func (a *App) reserveBlackboardDelegates(ctx context.Context, cfg ConfigState, c
 		if err, _ := decodeToolArguments(name, []byte(call.Function.Arguments), &req); err != nil || strings.TrimSpace(req.Task) == "" {
 			continue
 		}
-		identity, err := board.Register(req.Name)
+		identity, err := board.Reserve(req.Name)
 		if err != nil {
 			if conflicts == nil {
 				conflicts = make(map[int]error)
@@ -79,6 +81,12 @@ func (a *App) reserveBlackboardDelegates(ctx context.Context, cfg ConfigState, c
 		names[i] = identity
 	}
 	return names, conflicts
+}
+
+func releaseBlackboardReservation(ctx context.Context, name string) {
+	if board := runBlackboard(ctx); board != nil && name != "" {
+		board.ReleaseReservation(name)
+	}
 }
 
 func withBlackboardReservation(ctx context.Context, name string) context.Context {
@@ -100,6 +108,8 @@ func startBlackboardDelegate(ctx context.Context, name string) (context.Context,
 		if err != nil {
 			return ctx, "", err
 		}
+	} else if err := board.StartReserved(identity); err != nil {
+		return ctx, "", err
 	}
 	ctx = context.WithValue(ctx, blackboardReservationContextKey{}, "")
 	ctx = context.WithValue(ctx, blackboardParticipantContextKey{}, blackboardParticipant{board: board, name: identity})
@@ -120,8 +130,8 @@ func blackboardIdentityMessage(ctx context.Context) string {
 	return fmt.Sprintf("## Blackboard Identity\nYour name in this run is %s (case-sensitive). Registered peers, which may be queued or finished: %s. Other named peers may join later in this run. Use these names or * as message destinations; never set from or seq.", participant.name, strings.Join(peers, ", "))
 }
 
-// Only the request copy carries delivery data. Neither tool-result history nor
-// the system prompt is rewritten, and an empty suffix changes no request bytes.
+// Delivery is prepared on a copy. A successful turn commits it to this child's
+// private history; failed turns leave both history and unread messages intact.
 func blackboardRequestMessages(messages []openai.ChatCompletionMessage, incoming []blackboard.Message) []openai.ChatCompletionMessage {
 	if len(incoming) == 0 {
 		return messages
@@ -154,30 +164,91 @@ func blackboardRequestMessages(messages []openai.ChatCompletionMessage, incoming
 }
 
 // All child model calls (normal turns, retries and forced reports) use this
-// wrapper. Acknowledgment waits for a valid nonempty turn, not merely an HTTP
-// connection or a partial stream, so failed deliveries remain available.
-func (a *App) streamSubagentModelResponse(ctx context.Context, cfg ConfigState, model string, messages []openai.ChatCompletionMessage, tools []openai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
+// wrapper. History and acknowledgment advance together only after a valid
+// nonempty turn, never after a partial stream or a provider-rejected response.
+func (a *App) streamSubagentModelResponse(ctx context.Context, cfg ConfigState, model string, messages *[]openai.ChatCompletionMessage, tools []openai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	participant, connected := currentBlackboardParticipant(ctx)
-	request := messages
+	request := *messages
 	var scanned int64
+	var incoming []blackboard.Message
 	if connected {
-		var incoming []blackboard.Message
 		incoming, scanned = participant.board.Read(participant.name)
-		request = blackboardRequestMessages(messages, incoming)
+		request = blackboardRequestMessages(*messages, incoming)
 	}
 	response, err := a.streamModelResponse(ctx, cfg, model, request, tools, onEvent)
 	if connected && err == nil && modelResponseStopError(cfg, response) == nil && emptyModelResponseError(response) == nil {
+		*messages = request
 		participant.board.Ack(participant.name, scanned)
+		a.recordSubagentBlackboard(ctx, "received", incoming...)
 	}
 	return response, err
 }
 
-func interceptSubagentBlackboard(ctx context.Context, content string) string {
+func (a *App) interceptSubagentBlackboard(ctx context.Context, content string) string {
 	participant, connected := currentBlackboardParticipant(ctx)
 	if !connected {
 		return content
 	}
 	return blackboard.Intercept(content, func(message blackboard.Message) bool {
-		return participant.board.Publish(participant.name, message)
+		published, ok := participant.board.PublishMessage(participant.name, message)
+		if ok {
+			a.recordSubagentBlackboard(ctx, "sent", published)
+		}
+		return ok
 	})
+}
+
+const maxSubagentBlackboardBodyRunes = 1024
+
+func (a *App) recordSubagentBlackboard(ctx context.Context, direction string, messages ...blackboard.Message) {
+	participant, connected := currentBlackboardParticipant(ctx)
+	if !connected || participant.subID == "" || (direction != "sent" && direction != "received") {
+		return
+	}
+	for _, message := range messages {
+		a.subRunsMu.Lock()
+		run := a.subRuns[participant.subID]
+		if run == nil {
+			a.subRunsMu.Unlock()
+			return
+		}
+		lastSeq, count := &run.blackboardReceivedSeq, &run.BlackboardReceived
+		if direction == "sent" {
+			lastSeq, count = &run.blackboardSentSeq, &run.BlackboardSent
+		}
+		if message.Seq <= *lastSeq {
+			a.subRunsMu.Unlock()
+			continue
+		}
+		*lastSeq = message.Seq
+		*count += 1
+		body, truncated, runes := message.Body, false, 0
+		for offset := range body {
+			if runes == maxSubagentBlackboardBodyRunes {
+				body, truncated = body[:offset], true
+				break
+			}
+			runes++
+		}
+		event := SubagentBlackboardEvent{
+			Direction: direction, Seq: message.Seq, From: message.From, To: message.To, Type: message.Type,
+			Body: strings.Clone(body), At: time.Now().UnixMilli(), Truncated: truncated,
+		}
+		if message.ReplyTo != nil {
+			event.ReplyTo = *message.ReplyTo
+		}
+		if len(run.BlackboardEvents) == MaxSubagentBlackboardEvents {
+			copy(run.BlackboardEvents, run.BlackboardEvents[1:])
+			run.BlackboardEvents[len(run.BlackboardEvents)-1] = event
+		} else {
+			run.BlackboardEvents = append(run.BlackboardEvents, event)
+		}
+		payload := map[string]any{
+			"id": run.ID, "sessionId": run.SessionID, "name": run.Name,
+			"blackboardSent": run.BlackboardSent, "blackboardReceived": run.BlackboardReceived,
+			"blackboardEvent": event,
+		}
+		a.subRunsMu.Unlock()
+		a.emit("sub:blackboard", payload)
+	}
 }

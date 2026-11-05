@@ -1605,24 +1605,28 @@ type AgentDelegateResult struct {
 
 // SubagentRun tracks a running/complete sub-agent instance.
 type SubagentRun struct {
-	ID           string         `json:"id"`
-	Name         string         `json:"name,omitempty"`
-	SessionID    string         `json:"sessionId,omitempty"`
-	Description  string         `json:"description"`
-	Profile      string         `json:"profile"`
-	Role         string         `json:"role,omitempty"`
-	Status       string         `json:"status"` // running, completed, failed
-	StopReason   string         `json:"stopReason,omitempty"`
-	Steps        int            `json:"steps"`
-	Summary      string         `json:"summary,omitempty"`
-	FilesRead    []string       `json:"filesRead,omitempty"`
-	FilesEdited  []string       `json:"filesEdited,omitempty"`
-	Error        string         `json:"error,omitempty"`
-	ToolCalls    []SubToolEvent `json:"toolCalls,omitempty"`
-	StartTime    int64          `json:"startTime"`
-	InputTokens  int            `json:"inputTokens,omitempty"`
-	OutputTokens int            `json:"outputTokens,omitempty"`
-	TotalTokens  int            `json:"totalTokens,omitempty"`
+	ID                                       string                    `json:"id"`
+	Name                                     string                    `json:"name,omitempty"`
+	SessionID                                string                    `json:"sessionId,omitempty"`
+	Description                              string                    `json:"description"`
+	Profile                                  string                    `json:"profile"`
+	Role                                     string                    `json:"role,omitempty"`
+	Status                                   string                    `json:"status"` // running, completed, failed
+	StopReason                               string                    `json:"stopReason,omitempty"`
+	Steps                                    int                       `json:"steps"`
+	Summary                                  string                    `json:"summary,omitempty"`
+	FilesRead                                []string                  `json:"filesRead,omitempty"`
+	FilesEdited                              []string                  `json:"filesEdited,omitempty"`
+	Error                                    string                    `json:"error,omitempty"`
+	ToolCalls                                []SubToolEvent            `json:"toolCalls,omitempty"`
+	BlackboardSent                           int                       `json:"blackboardSent,omitempty"`
+	BlackboardReceived                       int                       `json:"blackboardReceived,omitempty"`
+	BlackboardEvents                         []SubagentBlackboardEvent `json:"blackboardEvents,omitempty"`
+	blackboardSentSeq, blackboardReceivedSeq int64
+	StartTime                                int64 `json:"startTime"`
+	InputTokens                              int   `json:"inputTokens,omitempty"`
+	OutputTokens                             int   `json:"outputTokens,omitempty"`
+	TotalTokens                              int   `json:"totalTokens,omitempty"`
 	// CacheHitTokens/CacheMissTokens accumulate the provider-reported prompt-cache
 	// split across the run's steps, so the inline card can show the same hit rate
 	// the parent run's stats line shows. CacheWriteTokens stays out: it is already
@@ -1633,6 +1637,23 @@ type SubagentRun struct {
 	// this sub-agent's context is right now. InputTokens sums every step and so
 	// cannot answer that.
 	ContextTokens int `json:"contextTokens,omitempty"`
+}
+
+const MaxSubagentBlackboardEvents = 32
+
+// SubagentBlackboardEvent is a bounded display preview, not model context.
+// Received means a successful model turn consumed the delivery; sent only means
+// publication succeeded, even if the destination is queued or never starts.
+type SubagentBlackboardEvent struct {
+	Direction string `json:"direction"`
+	Seq       int64  `json:"seq"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Type      string `json:"type"`
+	ReplyTo   int64  `json:"replyTo,omitempty"`
+	Body      string `json:"body"`
+	At        int64  `json:"at"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // SubToolEvent records a single tool invocation inside a sub-agent.
@@ -2580,6 +2601,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			return a.executeTool(toolCtx, toolCfg, sessionID, c.Function.Name, []byte(executionArgs))
 		}
 		publishCall := func(idx int, c openai.ToolCall, r toolResult, duration int64) {
+			releaseBlackboardReservation(ctx, blackboardNames[idx])
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)
 			o := toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration}

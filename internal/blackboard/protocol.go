@@ -30,6 +30,7 @@ func Intercept(text string, publish func(Message) bool) string {
 	for position < len(text) {
 		lineEnd := nextLine(text, position)
 		line := text[position:lineEnd]
+		markdown.rest = text[lineEnd:]
 		if markdown.blockLine(line) {
 			position = lineEnd
 			continue
@@ -190,40 +191,155 @@ func decodeMessage(text string) (message Message, length int, valid bool, err er
 // A small Markdown lexer keeps protocol-looking examples inert. XML parsing is
 // deliberately separate: fenced/indented/inline code and HTML code/comments are
 // excluded before any XML decoder or publisher sees their contents.
+type markdownContainer struct {
+	quote  bool
+	indent int
+}
+
 type markdownState struct {
-	fence      byte
-	fenceWidth int
-	ticks      int
-	comment    bool
-	htmlCode   string
+	fence           byte
+	fenceWidth      int
+	containers      []markdownContainer
+	fenceContainers []markdownContainer
+	ticks           int
+	comment         bool
+	htmlCode        string
+	htmlDepth       int
+	htmlTag         bool
+	htmlEnd         bool
+	htmlQuote       byte
+	rest            string // Everything after the line being scanned.
 }
 
 func (m *markdownState) blockLine(line string) bool {
-	trimmed := strings.TrimLeft(line, " ")
-	indent := len(line) - len(trimmed)
 	if m.htmlCode != "" {
-		if strings.Contains(strings.ToLower(line), "</"+m.htmlCode+">") {
-			m.htmlCode = ""
-		}
+		m.inline(line)
 		return true
 	}
 	if m.fence != 0 {
-		if indent <= 3 && prefixRun(trimmed, m.fence) >= m.fenceWidth && strings.TrimSpace(trimmed[prefixRun(trimmed, m.fence):]) == "" {
-			m.fence = 0
-		}
-		return true
-	}
-	if indent >= 4 || strings.HasPrefix(trimmed, "\t") {
-		return true
-	}
-	if !m.comment && m.ticks == 0 && len(trimmed) > 0 && (trimmed[0] == '`' || trimmed[0] == '~') {
-		width := prefixRun(trimmed, trimmed[0])
-		if width >= 3 && (trimmed[0] == '~' || !strings.Contains(trimmed[width:], "`")) {
-			m.fence, m.fenceWidth = trimmed[0], width
+		content, _, contained := continueContainers(line, m.fenceContainers)
+		if contained || strings.TrimSpace(line) == "" {
+			trimmed := strings.TrimLeft(content, " ")
+			width := prefixRun(trimmed, m.fence)
+			if len(content)-len(trimmed) <= 3 && width >= m.fenceWidth && strings.TrimSpace(trimmed[width:]) == "" {
+				m.fence = 0
+			}
 			return true
 		}
+		// A fenced block cannot outlive its list item or block quote.
+		m.fence = 0
 	}
-	return false
+	if !m.comment && m.ticks == 0 {
+		content, containers := markdownContainers(line, m.containers)
+		m.containers = containers
+		trimmed := strings.TrimLeft(content, " ")
+		if len(content)-len(trimmed) <= 3 && len(trimmed) > 0 && (trimmed[0] == '`' || trimmed[0] == '~') {
+			width := prefixRun(trimmed, trimmed[0])
+			if width >= 3 && (trimmed[0] == '~' || !strings.Contains(trimmed[width:], "`")) {
+				m.fence, m.fenceWidth = trimmed[0], width
+				m.fenceContainers = containers
+				return true
+			}
+		}
+	}
+	trimmed := strings.TrimLeft(line, " ")
+	return len(line)-len(trimmed) >= 4 || strings.HasPrefix(trimmed, "\t")
+}
+
+// Only container prefixes are stripped, never the body of a fenced block. In
+// particular, list-looking example text cannot open or close another container.
+func continueContainers(line string, containers []markdownContainer) (string, int, bool) {
+	for i, container := range containers {
+		spaces, columns := markdownIndent(line)
+		if container.quote {
+			if columns > 3 || spaces == len(line) || line[spaces] != '>' {
+				return line, i, false
+			}
+			line = line[spaces+1:]
+			if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+				line = line[1:]
+			}
+		} else {
+			if columns < container.indent {
+				return line, i, false
+			}
+			columns, spaces = 0, 0
+			for columns < container.indent {
+				if line[spaces] == '\t' {
+					columns += 4 - columns%4
+				} else {
+					columns++
+				}
+				spaces++
+			}
+			line = strings.Repeat(" ", columns-container.indent) + line[spaces:]
+		}
+	}
+	return line, len(containers), true
+}
+
+func markdownContainers(line string, previous []markdownContainer) (string, []markdownContainer) {
+	if strings.TrimSpace(line) == "" {
+		return line, previous
+	}
+	content, continued, _ := continueContainers(line, previous)
+	containers := append([]markdownContainer(nil), previous[:continued]...)
+	for {
+		spaces, columns := markdownIndent(content)
+		if columns > 3 || spaces == len(content) {
+			return content, containers
+		}
+		tail := content[spaces:]
+		if tail[0] == '>' {
+			containers = append(containers, markdownContainer{quote: true})
+			content = tail[1:]
+			if len(content) > 0 && (content[0] == ' ' || content[0] == '\t') {
+				content = content[1:]
+			}
+			continue
+		}
+		marker := 0
+		if tail[0] == '-' || tail[0] == '+' || tail[0] == '*' {
+			marker = 1
+		} else {
+			for marker < len(tail) && marker < 9 && tail[marker] >= '0' && tail[marker] <= '9' {
+				marker++
+			}
+			if marker == 0 || marker == len(tail) || (tail[marker] != '.' && tail[marker] != ')') {
+				return content, containers
+			}
+			marker++
+		}
+		if marker == len(tail) || (tail[marker] != ' ' && tail[marker] != '\t') {
+			return content, containers
+		}
+		padding, width := markdownIndentAt(tail[marker:], columns+marker)
+		if width > 4 {
+			padding, width = markdownIndentAt(tail[marker:marker+1], columns+marker)
+		}
+		containers = append(containers, markdownContainer{indent: columns + marker + width})
+		content = tail[marker+padding:]
+	}
+}
+
+func markdownIndent(text string) (bytes, columns int) {
+	return markdownIndentAt(text, 0)
+}
+
+func markdownIndentAt(text string, startColumn int) (bytes, width int) {
+	columns := startColumn
+	for bytes < len(text) {
+		switch text[bytes] {
+		case ' ':
+			columns++
+		case '\t':
+			columns += 4 - columns%4
+		default:
+			return bytes, columns - startColumn
+		}
+		bytes++
+	}
+	return bytes, columns - startColumn
 }
 
 func prefixRun(text string, character byte) int {
@@ -234,12 +350,28 @@ func prefixRun(text string, character byte) int {
 	return i
 }
 
+// finishLine ends the state that only a closing marker can extend: a code span's
+// backticks and an HTML comment. With no such marker left below, the run was
+// literal text, and carrying it would silently hide every later line.
+func (m *markdownState) finishLine() {
+	if m.ticks != 0 && !strings.Contains(m.rest, strings.Repeat("`", m.ticks)) {
+		m.ticks = 0
+	}
+	if m.comment && !strings.Contains(m.rest, "-->") {
+		m.comment = false
+	}
+}
+
 func (m *markdownState) inline(line string) {
 	for i := 0; i < len(line); {
+		if m.htmlCode != "" {
+			i = m.html(line, i)
+			continue
+		}
 		if m.comment {
 			end := strings.Index(line[i:], "-->")
 			if end < 0 {
-				return
+				break // The rest of this line is inside the comment.
 			}
 			i += end + 3
 			m.comment = false
@@ -265,15 +397,118 @@ func (m *markdownState) inline(line string) {
 			continue
 		}
 		if m.ticks == 0 && line[i] == '<' {
-			lower := strings.ToLower(line[i:])
 			for _, tag := range [...]string{"pre", "code", "script", "style", "textarea"} {
-				opening := "<" + tag
-				if strings.HasPrefix(lower, opening) && len(lower) > len(opening) && (lower[len(opening)] == '>' || lower[len(opening)] == ' ' || lower[len(opening)] == '\t') && !strings.Contains(lower, "</"+tag+">") {
-					m.htmlCode = tag
-					return
+				if htmlTagPrefix(line[i:], "<"+tag) {
+					m.htmlCode, m.htmlDepth, m.htmlTag = tag, 1, true
+					i += len(tag) + 1
+					break
+				}
+			}
+			if m.htmlCode != "" {
+				continue
+			}
+		}
+		i++
+	}
+	m.finishLine()
+}
+
+func htmlTagPrefix(text, prefix string) bool {
+	if len(text) <= len(prefix) || !strings.EqualFold(text[:len(prefix)], prefix) {
+		return false
+	}
+	switch text[len(prefix)] {
+	case ' ', '\t', '\r', '\n', '\f', '>', '/':
+		return true
+	}
+	return false
+}
+
+// tagClosesOnLine reports whether the tag whose "<" starts the text ends on this
+// same line, quotes included. A tag that never closes here is literal code.
+func tagClosesOnLine(text string) bool {
+	var quote byte
+	for i := 1; i < len(text); i++ {
+		switch {
+		case quote != 0:
+			if text[i] == quote {
+				quote = 0
+			}
+		case text[i] == '\'' || text[i] == '"':
+			quote = text[i]
+		case text[i] == '>':
+			return true
+		}
+	}
+	return false
+}
+
+// Keep tag/attribute state across lines: a quoted closing-tag example in an
+// opening attribute must not release the surrounding HTML code block.
+func (m *markdownState) html(line string, i int) int {
+	for i < len(line) && m.htmlCode != "" {
+		if m.htmlTag {
+			switch {
+			case m.htmlQuote != 0:
+				if line[i] == m.htmlQuote {
+					m.htmlQuote = 0
+				}
+			case line[i] == '\'' || line[i] == '"':
+				m.htmlQuote = line[i]
+			case line[i] == '>':
+				m.htmlTag = false
+				if m.htmlEnd {
+					m.htmlDepth--
+					m.htmlEnd = false
+					if m.htmlDepth == 0 {
+						m.htmlCode = ""
+					}
+				}
+			}
+			i++
+			continue
+		}
+		if m.comment {
+			end := strings.Index(line[i:], "-->")
+			if end < 0 {
+				return len(line)
+			}
+			i += end + 3
+			m.comment = false
+			continue
+		}
+		if line[i] == '<' {
+			if (m.htmlCode == "pre" || m.htmlCode == "code") && strings.HasPrefix(line[i:], "<!--") {
+				m.comment = true
+				i += 4
+				continue
+			}
+			if htmlTagPrefix(line[i:], "</"+m.htmlCode) {
+				i += len(m.htmlCode) + 2
+				m.htmlTag, m.htmlEnd = true, true
+				continue
+			}
+			if m.htmlCode == "pre" || m.htmlCode == "code" {
+				if htmlTagPrefix(line[i:], "<"+m.htmlCode) {
+					m.htmlDepth++
+					i += len(m.htmlCode) + 1
+					m.htmlTag = true
+					continue
+				}
+				// Other tags' attributes can also contain a literal closing tag, but
+				// this state may only outlive the line when the tag really ends here:
+				// "<b" in code is literal, and holding it open ate the real closing
+				// tag on the next line, hiding the rest of the turn.
+				name := i + 1
+				if name < len(line) && line[name] == '/' {
+					name++
+				}
+				if name < len(line) && asciiLetter(line[name]) && tagClosesOnLine(line[i:]) {
+					m.htmlTag = true
 				}
 			}
 		}
 		i++
 	}
+	return i
 }

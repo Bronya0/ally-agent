@@ -35,12 +35,13 @@ type Blackboard struct {
 	messages []Message
 	nextSeq  int64
 	cursors  map[string]int64
+	reserved map[string]bool
 	nextName int64
 	closed   bool
 }
 
 func New() *Blackboard {
-	return &Blackboard{nextSeq: 1, nextName: 1, cursors: make(map[string]int64)}
+	return &Blackboard{nextSeq: 1, nextName: 1, cursors: make(map[string]int64), reserved: make(map[string]bool)}
 }
 
 func ValidName(name string) bool {
@@ -66,11 +67,49 @@ func validType(kind string) bool {
 	return false
 }
 
-// Register reserves a name for the whole run, even while its agent is queued or
-// after it finishes. Empty names receive a collision-free agent-N identity.
+// Register starts an identity that remains unique for the whole run.
+// Empty names receive a collision-free agent-N identity.
 func (b *Blackboard) Register(name string) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.register(name)
+}
+
+// Reserve makes a queued peer visible before the batch starts executing.
+func (b *Blackboard) Reserve(name string) (string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	identity, err := b.register(name)
+	if err == nil {
+		b.reserved[identity] = true
+	}
+	return identity, err
+}
+
+// StartReserved claims a reservation exactly once. Started identities cannot be
+// released or reused, even after their delegate fails or finishes.
+func (b *Blackboard) StartReserved(name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed || !b.reserved[name] {
+		return fmt.Errorf("blackboard agent name %q has no pending reservation", name)
+	}
+	delete(b.reserved, name)
+	return nil
+}
+
+// ReleaseReservation frees only a never-started identity. Its addressed messages
+// stay in the log so a later retry with the same name can still receive them.
+func (b *Blackboard) ReleaseReservation(name string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.reserved[name] {
+		delete(b.reserved, name)
+		delete(b.cursors, name)
+	}
+}
+
+func (b *Blackboard) register(name string) (string, error) {
 	if b.closed {
 		return "", errors.New("blackboard is closed")
 	}
@@ -113,19 +152,26 @@ func validPayload(message Message) bool {
 // Publish accepts a named destination even before it is registered: the log
 // retains it for a later delegate in this run. Unknown names never cross runs.
 func (b *Blackboard) Publish(from string, message Message) bool {
+	_, ok := b.PublishMessage(from, message)
+	return ok
+}
+
+// PublishMessage returns the runtime-assigned snapshot for display without
+// exposing the stored message or requiring a second read of the log.
+func (b *Blackboard) PublishMessage(from string, message Message) (Message, bool) {
 	if !validPayload(message) {
-		return false
+		return Message{}, false
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
-		return false
+		return Message{}, false
 	}
 	if _, registered := b.cursors[from]; !registered {
-		return false
+		return Message{}, false
 	}
 	if message.ReplyTo != nil && (*message.ReplyTo <= 0 || *message.ReplyTo >= b.nextSeq) {
-		return false
+		return Message{}, false
 	}
 	message.Seq = b.nextSeq
 	message.From = from
@@ -133,7 +179,7 @@ func (b *Blackboard) Publish(from string, message Message) bool {
 	message = cloneMessage(message)
 	b.nextSeq++
 	b.messages = append(b.messages, message)
-	return true
+	return cloneMessage(message), true
 }
 
 // Read snapshots the unread suffix without acknowledging deliverable messages.
@@ -178,6 +224,7 @@ func (b *Blackboard) Close() {
 	b.closed = true
 	b.messages = nil
 	b.cursors = nil
+	b.reserved = nil
 	b.nextSeq = 0
 	b.nextName = 0
 }

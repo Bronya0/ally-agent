@@ -566,6 +566,12 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 			break
 		}
 	}
+	if name == "sub:blackboard" {
+		if row != nil {
+			applySubagentBlackboard(row, p)
+		}
+		return
+	}
 	if row == nil {
 		row = map[string]any{"role": "subagent", "subId": id, "parentToolCallId": str(p, "toolCallId")}
 		t.Messages = append(t.Messages, row)
@@ -573,6 +579,9 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 		if t.uiState().Follow {
 			t.uiState().FollowPending = true
 		}
+	}
+	if _, hasCounts := p["blackboardSent"]; hasCounts {
+		applySubagentBlackboard(row, p)
 	}
 	// "error" is deliberately absent: a sub:tool:error carries the failing
 	// tool's message, and copying it here marked the whole run failed while it
@@ -640,6 +649,9 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 		go func() {
 			runs := a.core.GetSubagents()
 			a.win.Update(func() {
+				if !a.hasSubagentConversation(t, sid) {
+					return
+				}
 				for _, run := range runs {
 					if run == nil || run.SessionID != sid {
 						continue
@@ -656,6 +668,7 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 							msg["cacheHitTokens"] = run.CacheHitTokens
 							msg["cacheMissTokens"] = run.CacheMissTokens
 							msg["status"] = strings.ToLower(run.Status)
+							mergeSubagentBlackboardRun(msg, run)
 						}
 					}
 				}

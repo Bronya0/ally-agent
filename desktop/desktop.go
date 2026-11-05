@@ -1068,6 +1068,7 @@ func (a *desktop) openSession(id string) {
 					normalizeToolMessage(message)
 				}
 				retainLocalCommandSummary(message)
+				normalizeSubagentBlackboard(message)
 			}
 			restoreRoundStats(t)
 			a.showSession(t)
