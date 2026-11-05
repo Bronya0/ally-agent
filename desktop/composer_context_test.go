@@ -18,6 +18,9 @@ func TestContextBreakdownPanelShowsEveryRow(t *testing.T) {
 	st := conv.uiState()
 	st.FooterLoaded = true
 	st.ContextOpen = true
+	// The prompt's sections start folded, so the tallest state — every row the
+	// panel can show, sections included — is the one that has to fit.
+	st.PromptPartsOpen = true
 	st.Breakdown = backend.ContextBreakdown{
 		Total:        738_700,
 		SystemPrompt: 2_600,
@@ -69,5 +72,81 @@ func TestContextBreakdownPanelShowsEveryRow(t *testing.T) {
 	}
 	if tail, buttons := rects["the last row"], rects["the buttons"]; tail.Y+tail.H > buttons.Y {
 		t.Errorf("the last row ends at y %v, below the buttons at y %v: the breakdown was capped and scrolls", tail.Y+tail.H, buttons.Y)
+	}
+}
+
+// The prompt's sections are the one group long enough to fold: the total on the
+// parent line is what the reader came for, and the seven lines under it are
+// detail. The parent row opens and closes them without closing the panel.
+func TestContextBreakdownFoldsSystemPromptParts(t *testing.T) {
+	conv := &conversation{ID: "fold", Workspace: `C:\work\ally`, Model: "provider / model"}
+	st := conv.uiState()
+	st.FooterLoaded = true
+	st.ContextOpen = true
+	st.Breakdown = backend.ContextBreakdown{
+		SystemPrompt: 4_900,
+		SystemPromptParts: []backend.ContextBreakdownPart{
+			{Label: "核心系统提示词", Tokens: 2_900},
+			{Label: "项目经验 Lessons", Tokens: 383},
+		},
+		ToolSchemas: 18_700,
+	}
+	a := &desktop{}
+	a.config.Models = []backend.ModelConfig{{ProviderName: "provider", Model: "model", ContextWindow: 1_000_000}}
+
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		a.contextUsage(c, conv)
+	}, 900, 800)
+
+	if st.PromptPartsOpen {
+		t.Fatal("the prompt's sections start folded")
+	}
+	if tester.HasText("核心系统提示词") {
+		t.Fatalf("the folded row still lists its sections: %v", tester.Texts())
+	}
+	folded, ok := tester.Find("系统提示词")
+	if !ok || folded.W == 0 || folded.H == 0 {
+		t.Fatalf("the folded row is missing or has no room: %+v", folded)
+	}
+	// The total rides on the same line rather than on a row of its own: folding a
+	// group must not cost the reader the number it stands for.
+	total, ok := tester.Find(fmtK(st.Breakdown.SystemPrompt))
+	if !ok || total.Y+total.H <= folded.Y || total.Y >= folded.Y+folded.H {
+		t.Fatalf("the folded row lost its total: %+v beside a row at y %v..%v", total, folded.Y, folded.Y+folded.H)
+	}
+	// The chevron takes the trailing edge, after the value, so this one number stops
+	// short of the column the rows below share instead of pushing them out of line.
+	if plain, ok := tester.Find(fmtK(st.Breakdown.ToolSchemas)); !ok {
+		t.Fatalf("the rows below lost their numbers: %v", tester.Texts())
+	} else if total.X+total.W >= plain.X+plain.W-10 {
+		t.Fatalf("the chevron is not trailing: the total ends at %v, the column at %v", total.X+total.W, plain.X+plain.W)
+	}
+
+	if err := tester.Click("系统提示词"); err != nil {
+		t.Fatal(err)
+	}
+	if !st.PromptPartsOpen {
+		t.Fatal("the click did not open the prompt's sections")
+	}
+	if !tester.HasText("核心系统提示词") {
+		t.Fatalf("the sections stayed hidden: %v", tester.Texts())
+	}
+	if !st.ContextOpen {
+		t.Fatal("opening the sections closed the panel")
+	}
+
+	if err := tester.Click("系统提示词"); err != nil {
+		t.Fatal(err)
+	}
+	if st.PromptPartsOpen || tester.HasText("核心系统提示词") {
+		t.Fatal("the second click did not fold the sections again")
+	}
+
+	// The row is a button, not a caption: once it holds the focus, Space opens it the
+	// same way a click does.
+	tester.Key(0, ui.KeySpace)
+	if !st.PromptPartsOpen || !tester.HasText("核心系统提示词") {
+		t.Fatal("the focused row ignored the keyboard")
 	}
 }

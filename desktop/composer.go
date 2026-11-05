@@ -1582,8 +1582,9 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 	btn.OnClick(func() { st.ContextOpen = !st.ContextOpen })
 	ui.PopoverBase(c, btn, &st.ContextOpen, func(panel ui.Element) {
 		popoverChrome(c, panel, 300)
-		// The breakdown is a fixed set of rows — the prompt's own sections plus the
-		// four kinds of message — so the panel is tall enough to show it whole. It
+		// The breakdown is a short list — the prompt's total, the four kinds of
+		// message, the running tally — and the sections behind the fold still fit
+		// when a reader opens them, so the panel shows the whole thing at once. It
 		// opens upwards over the conversation, and the scrollbar it used to carry
 		// only hid the numbers it exists for. A short window still bounds it, and
 		// then the buttons below the list keep their room instead of spilling out.
@@ -1595,10 +1596,17 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 		// more instruction file — scrolls here.
 		ui.Scroll(c).MaxHeight(contextBreakdownHeight).Children(func() {
 			ui.Column(c).FillWidth().Padding(4, 10).Gap(gapInline).Children(func() {
-				contextPart(c, "系统提示词", b.SystemPrompt, a.secondaryInk())
-				for _, part := range b.SystemPromptParts {
-					if part.Tokens > 0 {
-						contextPart(c, "  · "+part.Label, part.Tokens, a.secondaryInk())
+				// The prompt's own sections are detail, and the message kinds below are
+				// the rows that actually grow, so the sections start folded behind the
+				// total they add up to.
+				contextPartFold(c, "system-prompt", "系统提示词", b.SystemPrompt, st.PromptPartsOpen, func() {
+					st.PromptPartsOpen = !st.PromptPartsOpen
+				}, a.secondaryInk())
+				if st.PromptPartsOpen {
+					for _, part := range b.SystemPromptParts {
+						if part.Tokens > 0 {
+							contextPart(c, "  · "+part.Label, part.Tokens, a.secondaryInk())
+						}
 					}
 				}
 				contextPart(c, "工具 Schema", b.ToolSchemas, a.secondaryInk())
@@ -1672,6 +1680,39 @@ func contextPart(c *ui.Context, name string, tokens int, ink ...ui.Color) {
 		ui.Text(c, name).FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink))
 		ui.Spacer(c)
 		ui.Text(c, fmtK(tokens)).FontSize(fsSmall)
+	})
+}
+
+// contextPartFold is a breakdown row whose sections fold away: the total stays on
+// the parent line, so a closed group hides detail and no number. It follows the
+// model menu's group row — a keyed ButtonBase whose chevron sits at the trailing
+// edge, after the value — and the chevron is chosen per state instead of rotated,
+// so both keep the same optical weight. The chevron's gutter is what the row's own
+// number gives up, which is why only this line sits short of the column below it.
+func contextPartFold(c *ui.Context, key, name string, tokens int, open bool, toggle func(), ink ...ui.Color) {
+	// The 1px of vertical padding is the hover band: without it the fill hugs the
+	// glyphs. Horizontal padding stays 0 so the name keeps the column's left edge.
+	row := ui.ButtonBase(c.Key(key)).FillWidth().Padding(1, 0).Radius(radiusSmall).
+		Justify(ui.Start).Cursor(ui.CursorPointer).Label(name)
+	fill := ui.Transparent
+	if row.Hovered() {
+		fill = c.Theme().SurfaceHover
+	}
+	// The fill snaps instead of fading: a popover row is rebuilt every frame, and a
+	// colour animation here would rebuild the whole view for each frame of the fade.
+	row.Background(fill).OnClick(toggle)
+	icon := "chevron"
+	if open {
+		icon = "chevrondown"
+	}
+	mut := uikit.SecondaryInk(c, ink)
+	row.Children(func() {
+		ui.Row(c).FillWidth().Gap(gapInline).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, name).FontSize(fsSmall).TextColor(mut).SingleLine()
+			ui.Spacer(c)
+			ui.Text(c, fmtK(tokens)).FontSize(fsSmall)
+			iconGlyph(c, icon, 9).TextColor(mut).Shrink(0)
+		})
 	})
 }
 
