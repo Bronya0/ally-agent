@@ -50,8 +50,9 @@ const (
 	// maxModelToolOutput 是「原始工具输出」进模型上下文的预算，消费者是第三方 MCP
 	// 文本与命令输出：超限时留头 modelToolHeadBytes、尾 modelToolTailBytes，中间以省略
 	// 标记替换。它和 maxToolOutput(128KB) 是两条线：后者管内存储存（界面滚动缓冲与
-	// 落盘 spill），前者只管模型看到的正文。
-	maxModelToolOutput      = 12 * 1024
+	// 落盘 spill），前者只管模型看到的正文。字面量在 toolshared，command 的 schema
+	// 引同一常量，模型读到的数字不会和实际收到的不一致。
+	maxModelToolOutput      = toolshared.MaxModelToolOutput
 	maxModelWebOutput       = 96 * 1024
 	maxCodeGraphPromptBytes = 8 * 1024
 	// modelToolHeadBytes / modelToolTailBytes 是 maxModelToolOutput 被突破时保留的
@@ -681,11 +682,13 @@ type ConfigState struct {
 	// after the first user-driven resize.
 	WindowWidth  int `json:"windowWidth,omitempty"`
 	WindowHeight int `json:"windowHeight,omitempty"`
-	// CompactThreshold is the context-usage fraction (0..1) at which the
-	// chat loop auto-compacts history. Zero means "use default" so legacy
-	// configs migrate transparently; the effective value is exposed via
-	// effectiveCompactThreshold().
+	// CompactThresholdMode selects ratio (default) or an absolute token count.
+	CompactThresholdMode string `json:"compactThresholdMode,omitempty"`
+	// CompactThreshold is the context-usage fraction used in ratio mode.
+	// Zero means "use default" so legacy configs migrate transparently.
 	CompactThreshold float64 `json:"compactThreshold,omitempty"`
+	// CompactThresholdTokens is used only in tokens mode; zero uses the default.
+	CompactThresholdTokens int `json:"compactThresholdTokens,omitempty"`
 	// AutoCompactMethod selects threshold compaction: recent (default) or summary.
 	// Provider context overflow still uses a full LLM summary for recovery.
 	AutoCompactMethod string `json:"autoCompactMethod,omitempty"`
@@ -2288,11 +2291,11 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// Update live breakdown for context display (includes all tool calls/results)
 		bd := syncBreakdown(messages, false)
 
-		// Auto-compact: when context usage exceeds the configured threshold
-		// of the window, compact history. Threshold uses only usedTokens
+		// Auto-compact: when context usage exceeds the selected ratio or absolute
+		// token threshold, compact history. Threshold uses only usedTokens
 		// (not usedTokens + maxTokens) so it reflects actual context state
 		// instead of pre-reserving a fixed reply budget. The threshold is
-		// configurable via Settings → General (default 60%); legacy config
+		// configurable via Settings → General (default ratio, 60%); legacy config
 		// without the field migrates to the default through mergeConfig.
 		usedTokens := bd.Total
 		compactThreshold := compactThresholdLimit(cfg)

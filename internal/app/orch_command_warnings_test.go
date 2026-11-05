@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	toolshared "ally-dev/internal/tools/shared"
 )
 
 func TestLocalCommandToolWarningsUseExecutablePositions(t *testing.T) {
@@ -54,7 +56,7 @@ func TestCommandSearchWarningReachesModelWithoutChangingExitCode(t *testing.T) {
 		}
 		full, _ := json.Marshal(result)
 		model := compactToolResultForModel("command", result, string(full))
-		if !strings.Contains(model, "Prefer the dedicated grep tool") {
+		if !strings.Contains(model, toolshared.ContentSearchGuidance) {
 			t.Fatalf("model reminder missing: %s", model)
 		}
 	}

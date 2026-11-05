@@ -34,6 +34,11 @@ var autoCompactOptions = []uikit.Option{
 	{Value: "recent", Label: "本地裁剪（必要时回退总结）"},
 }
 
+var compactThresholdModes = []uikit.RadioOption[string]{
+	{Value: backend.CompactThresholdModeRatio, Label: "按比例（默认）"},
+	{Value: backend.CompactThresholdModeTokens, Label: "按绝对值"},
+}
+
 // settingsPageBody is the inline settings surface: a left section rail and the
 // form for the active section. Values are saved when the user leaves the page
 // or presses the header button, mirroring the original "commit on leave".
@@ -118,6 +123,8 @@ func (a *desktop) settingsConfigDraft() backend.ConfigState {
 	cfg.SendXSessionIDHeader = boolPtr(a.settings.SendXSessionID)
 	cfg.CompactTimeoutSeconds = int(a.settings.CompactTimeout)
 	cfg.CompactThreshold = a.settings.Threshold
+	cfg.CompactThresholdMode = a.settings.ThresholdMode
+	cfg.CompactThresholdTokens = int(a.settings.ThresholdTokens)
 	cfg.MessageFontSize = a.settings.FontMessage
 	cfg.CodeFontSize = a.settings.FontCode
 	cfg.ToolFontSize = a.settings.FontTool
@@ -325,9 +332,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 					fieldNote(c, "0 表示使用默认值 6。", a.secondaryInk())
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "上下文自动压缩阈值")
-					ui.Slider(c.Key("compact-threshold"), &a.settings.Threshold, 0.2, 0.95).Label("压缩阈值")
-					fieldNote(c, fmt.Sprintf("当前 %.0f%%：上下文占模型窗口的比例超过此值时自动压缩，范围 20%%–95%%，默认 60%%。", a.settings.Threshold*100), a.secondaryInk())
+					a.settingsCompactThreshold(c)
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "上下文自动压缩方式")
@@ -398,6 +403,18 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 		})
 	}
 	a.sessionHeaderConfirmDialog(c)
+}
+
+func (a *desktop) settingsCompactThreshold(c *ui.Context) {
+	fieldLabel(c, "上下文自动压缩阈值")
+	uikit.Radios(c.Key("compact-threshold-mode"), &a.settings.ThresholdMode, compactThresholdModes, false)
+	if a.settings.ThresholdMode == backend.CompactThresholdModeTokens {
+		numberField(c, "compact-threshold-tokens", "压缩阈值（tokens）", &a.settings.ThresholdTokens, 1, backend.MaxCompactThresholdTokens, 1000)
+		fieldNote(c, "上下文 token 数超过此值时自动压缩，不随模型窗口变化。范围 1–10,000,000，默认 100,000 tokens。", a.secondaryInk())
+	} else {
+		ui.Slider(c.Key("compact-threshold"), &a.settings.Threshold, 0.2, 0.95).Label("压缩阈值")
+		fieldNote(c, fmt.Sprintf("当前 %.0f%%：上下文占模型窗口的比例超过此值时自动压缩，范围 20%%–95%%，默认 60%%。", a.settings.Threshold*100), a.secondaryInk())
+	}
 }
 
 func (a *desktop) sessionHeaderConfirmDialog(c *ui.Context) {

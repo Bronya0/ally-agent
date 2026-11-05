@@ -297,6 +297,8 @@ type settingsForm struct {
 	Concurrency     float64
 	CompactTimeout  float64
 	Threshold       float64
+	ThresholdMode   string
+	ThresholdTokens float64
 	FontMessage     float64
 	FontCode        float64
 	FontTool        float64
@@ -355,6 +357,9 @@ func (a *desktop) syncSettingsForm() {
 	if f.Threshold <= 0 {
 		f.Threshold = 0.6
 	}
+	compactCfg := normalizeSettingsConfig(a.configDraft)
+	f.ThresholdMode = compactCfg.CompactThresholdMode
+	f.ThresholdTokens = float64(compactCfg.CompactThresholdTokens)
 	messageSize, codeSize := readingSizes(a.configDraft.MessageFontSize, a.configDraft.CodeFontSize)
 	f.FontMessage, f.FontCode = float64(messageSize), float64(codeSize)
 	f.FontTool = clampView(a.configDraft.ToolFontSize, 15)
@@ -408,6 +413,12 @@ func normalizeSettingsConfig(cfg backend.ConfigState) backend.ConfigState {
 	}
 	if cfg.CompactThreshold <= 0 {
 		cfg.CompactThreshold = 0.6
+	}
+	if cfg.CompactThresholdMode != backend.CompactThresholdModeTokens {
+		cfg.CompactThresholdMode = backend.CompactThresholdModeRatio
+	}
+	if cfg.CompactThresholdTokens <= 0 {
+		cfg.CompactThresholdTokens = backend.DefaultCompactThresholdTokens
 	}
 	if cfg.BackgroundOpacity <= 0 {
 		cfg.BackgroundOpacity = 0.15

@@ -29,12 +29,26 @@ func normalizeAutoCompactMethod(value string) string {
 	return autoCompactMethodRecent
 }
 
-// defaultCompactThreshold is the auto-compaction trigger as a fraction of
-// the context window (0.6 = 60%). Treated as "use default" when the
-// stored value is zero, so legacy config.json without the field migrates
-// to the default transparently. Keep it in sync with the frontend default
-// (frontend/src/utils/config.mjs): a request that omits the field must
-// land on the same trigger the Settings UI displays.
+const (
+	CompactThresholdModeRatio     = "ratio"
+	CompactThresholdModeTokens    = "tokens"
+	DefaultCompactThresholdTokens = 100_000
+	MaxCompactThresholdTokens     = 10_000_000
+)
+
+func normalizeCompactThresholdMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), CompactThresholdModeTokens) {
+		return CompactThresholdModeTokens
+	}
+	return CompactThresholdModeRatio
+}
+
+func clampCompactThresholdTokens(tokens int) int {
+	if tokens <= 0 {
+		return DefaultCompactThresholdTokens
+	}
+	return min(tokens, MaxCompactThresholdTokens)
+}
 
 // clampCompactThreshold normalizes the auto-compaction threshold. Zero (or
 // out-of-range values) fall back to the default so legacy config.json and
@@ -388,8 +402,11 @@ func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID,
 }
 
 // compactThresholdLimit returns the absolute token count at which
-// auto-compaction triggers for the given config (context window × threshold).
+// auto-compaction triggers, using only the selected mode's threshold.
 func compactThresholdLimit(cfg ConfigState) int {
+	if normalizeCompactThresholdMode(cfg.CompactThresholdMode) == CompactThresholdModeTokens {
+		return clampCompactThresholdTokens(cfg.CompactThresholdTokens)
+	}
 	maxCtx := cfg.ContextWindow
 	if maxCtx <= 0 {
 		maxCtx = 1000000

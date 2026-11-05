@@ -37,6 +37,14 @@ flowchart TD
   D -- "有" --> X["并发 4 执行工具，文件变更按序"]:::exec
   X --> B
   L -. "错误 / 超窗 / 半截流" .-> K["重试 · 压缩 · 报错退出"]:::risk
+  classDef user fill:#ffe6d0,stroke:#e0823a,color:#7a3c0c
+  classDef core fill:#e3efff,stroke:#4c7dff,color:#1d3f8f
+  classDef llm fill:#efe4ff,stroke:#8a63e8,color:#40257f
+  classDef prov fill:#f3e8ff,stroke:#a855f7,color:#5b1d8a
+  classDef ev fill:#d9f6ff,stroke:#22a7c9,color:#0b5566
+  classDef exec fill:#dff5e1,stroke:#34a853,color:#175c2a
+  classDef fin fill:#eaeaea,stroke:#8a8a8a,color:#333333
+  classDef risk fill:#ffe3e3,stroke:#e53935,color:#8e1c1a
 ```
 
 ## 3. 入口：`StartChat`（`app.go:1412`）

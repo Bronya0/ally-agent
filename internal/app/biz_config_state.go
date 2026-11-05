@@ -70,6 +70,8 @@ func normalizeStoredConfig(cfg ConfigState) ConfigState {
 	cfg.BackgroundOpacity = clampBackgroundOpacity(cfg.BackgroundOpacity)
 	cfg.AutoCompactMethod = normalizeAutoCompactMethod(cfg.AutoCompactMethod)
 	cfg.CompactThreshold = clampCompactThreshold(cfg.CompactThreshold)
+	cfg.CompactThresholdMode = normalizeCompactThresholdMode(cfg.CompactThresholdMode)
+	cfg.CompactThresholdTokens = clampCompactThresholdTokens(cfg.CompactThresholdTokens)
 	cfg.CompactTimeoutSeconds = clampCompactTimeoutSeconds(cfg.CompactTimeoutSeconds)
 	cfg.MessageFontSize = clampMessageFontSize(cfg.MessageFontSize)
 	cfg.CodeFontSize = clampFontSize(cfg.CodeFontSize, defaultCodeFontSize, 12, 24)
@@ -203,6 +205,12 @@ func settingsConfig(base, req ConfigState) ConfigState {
 	}
 	if req.CompactThreshold != 0 {
 		cfg.CompactThreshold = req.CompactThreshold
+	}
+	if strings.TrimSpace(req.CompactThresholdMode) != "" {
+		cfg.CompactThresholdMode = req.CompactThresholdMode
+	}
+	if req.CompactThresholdTokens != 0 {
+		cfg.CompactThresholdTokens = req.CompactThresholdTokens
 	}
 	if req.CompactTimeoutSeconds != 0 {
 		cfg.CompactTimeoutSeconds = req.CompactTimeoutSeconds
