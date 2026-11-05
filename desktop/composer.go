@@ -422,8 +422,15 @@ func (a *desktop) selectedCommand(t *conversation) *slashCommand {
 
 func (a *desktop) completeCommand(t *conversation) {
 	if cmd := a.selectedCommand(t); cmd != nil {
-		t.Draft = "/" + cmd.Label + " "
-		t.uiState().CmdOpen = false
+		st := t.uiState()
+		// Keep the exact command visible and executable after completion: users can
+		// still click its row or press Enter. Typing a space closes the menu and
+		// starts command arguments through updateComposerMenus.
+		t.Draft = "/" + cmd.Label
+		st.DraftCaret = len([]rune(t.Draft))
+		st.RestoreCaret = true
+		st.CmdIndex = 0
+		st.CmdOpen = true
 	}
 }
 
