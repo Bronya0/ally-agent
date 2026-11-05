@@ -371,25 +371,33 @@ func commandSubstitutions(commandLine string) []string {
 }
 
 func nestedShellScript(invocation Invocation) (string, bool) {
-	var flags []string
-	switch invocation.Name {
-	case "bash", "sh", "zsh", "dash", "ksh":
-		flags = []string{"-c"}
-	case "cmd":
-		flags = []string{"/c", "/k"}
-	case "powershell", "pwsh":
-		flags = []string{"-command", "-c", "/c"}
-	default:
-		return "", false
-	}
 	for i, arg := range invocation.Args {
-		for _, flag := range flags {
-			if strings.EqualFold(arg, flag) && i+1 < len(invocation.Args) {
-				return invocation.Args[i+1], true
-			}
+		if !shellScriptFlag(invocation.Name, arg) || i+1 >= len(invocation.Args) {
+			continue
 		}
+		return invocation.Args[i+1], true
 	}
 	return "", false
+}
+
+// shellScriptFlag reports whether arg makes the next argument a shell script.
+// Login/interactive shells merge short options (`bash -lc`, `sh -ec`), so a
+// merged group containing c counts: missing it would hide the script from the
+// safety fence's delete and redirection checks.
+func shellScriptFlag(name, arg string) bool {
+	switch name {
+	case "bash", "sh", "zsh", "dash", "ksh":
+		if arg == "-c" {
+			return true
+		}
+		return len(arg) > 2 && arg[0] == '-' && arg[1] != '-' && strings.ContainsRune(arg[1:], 'c')
+	case "cmd":
+		return strings.EqualFold(arg, "/c") || strings.EqualFold(arg, "/k")
+	case "powershell", "pwsh":
+		return strings.EqualFold(arg, "-command") || strings.EqualFold(arg, "-c") || strings.EqualFold(arg, "/c")
+	default:
+		return false
+	}
 }
 
 func normalizeCommandName(value string) string {

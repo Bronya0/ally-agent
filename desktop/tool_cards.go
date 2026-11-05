@@ -767,7 +767,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			}
 			return
 		}
-		body := ui.Column(c).FillWidth().MinWidth(0).Gap(gapTight)
+		body := ui.Column(c.Key(key + "-body")).FillWidth().MinWidth(0).Gap(gapTight)
 		inset := float32(0)
 		if name == "create" || name == "remote_create_file" {
 			inset += 4
@@ -820,8 +820,13 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					content = str(result, "content")
 				}
 				if !open {
-					startLine = max(1, strings.Count(strings.TrimSuffix(content, "\n"), "\n")+1-5)
-					content = tailLines(content, 6)
+					preview := memoAt[createPreviewMemo](body, "create-preview").get(content, func(content string) createPreview {
+						return createPreview{
+							startLine: max(1, strings.Count(strings.TrimSuffix(content, "\n"), "\n")+1-5),
+							content:   tailLines(content, 6),
+						}
+					})
+					content, startLine = preview.content, preview.startLine
 				}
 				if content != "" {
 					// One shape from the first streamed line to the result: a fixed-height

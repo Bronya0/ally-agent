@@ -129,10 +129,11 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 		}
 	}
 
-	// 会话上下文决定工作区隔离；原始端点直接连接，不做逐次审批。
+	// 本轮请求的工作区决定隔离范围：聊天、子代理和计划任务都会在执行入口
+	// 写入 cfg.Workspace，没有它时再回退到会话记录。原始端点仍直接连接。
 	sessionID := toolSessionID(ctx)
-	var workspace string
-	if sessionID != "" {
+	workspace := toolWorkspace(ctx)
+	if workspace == "" && sessionID != "" {
 		a.mu.Lock()
 		workspace = a.sessionWorkspaces[sessionID]
 		if workspace == "" {
@@ -148,14 +149,13 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 		}
 	}
 
-	// In interactive sessions, enforce workspace authorization for registered nodes.
-	if sessionID != "" {
-		// 1. Tab-level authorization (prevent lateral movement / diffusion)
-		if isRegistered && !a.IsServerAuthorizedForWorkspace(workspace, serverNode.ID) {
-			return remoteTarget{}, codedToolError("E_SERVER_UNAUTHORIZED",
-				fmt.Errorf("server %q is not authorized for current workspace tab; please authorize it in the tab footer or request access via ssh_cluster", serverKey))
-		}
-
+	// Enforce workspace authorization for registered nodes whenever the caller
+	// declares a workspace. Scheduled tasks have no session meta but still run
+	// against one; without this check they could borrow a node authorized only
+	// in another workspace.
+	if isRegistered && workspace != "" && !a.IsServerAuthorizedForWorkspace(workspace, serverNode.ID) {
+		return remoteTarget{}, codedToolError("E_SERVER_UNAUTHORIZED",
+			fmt.Errorf("server %q is not authorized for current workspace tab; please authorize it in the tab footer or request access via ssh_cluster", serverKey))
 	}
 
 	// 工作区授权通过后才缓存节点凭据。
@@ -325,6 +325,23 @@ func toolSessionID(ctx context.Context) string {
 		return meta.sessionID
 	}
 	return ""
+}
+
+// toolWorkspaceContextKey carries the workspace of the request being executed
+// (the caller's cfg.Workspace). Scheduled tasks and sub-agents have no session
+// meta, so remote tools must not fall back to the active tab's config.
+type toolWorkspaceContextKey struct{}
+
+func withToolWorkspace(ctx context.Context, workspace string) context.Context {
+	return context.WithValue(ctx, toolWorkspaceContextKey{}, strings.TrimSpace(workspace))
+}
+
+func toolWorkspace(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	workspace, _ := ctx.Value(toolWorkspaceContextKey{}).(string)
+	return strings.TrimSpace(workspace)
 }
 
 // errRemoteScriptTimeout 标记一次远端脚本调用在超时预算内没能返回，由调用方渲染
@@ -1219,20 +1236,24 @@ func (a *App) executeRemoteTransfer(ctx context.Context, req RemoteTransferReque
 		return RemoteTransferResult{}, err
 	}
 
-	// 3. Resolve local workspace and validate local path
-	sessionID := toolSessionID(ctx)
-	var workspace string
-	if sessionID != "" {
-		a.mu.Lock()
-		workspace = a.sessionWorkspaces[sessionID]
-		if workspace == "" {
+	// 3. Resolve local workspace and validate local path. The request's own
+	// workspace wins: a scheduled task must transfer files from/to its task
+	// workspace, not the active tab's persisted config.
+	workspace := toolWorkspace(ctx)
+	if workspace == "" {
+		sessionID := toolSessionID(ctx)
+		if sessionID != "" {
+			a.mu.Lock()
+			workspace = a.sessionWorkspaces[sessionID]
+			if workspace == "" {
+				workspace = a.config.Workspace
+			}
+			a.mu.Unlock()
+		} else {
+			a.mu.Lock()
 			workspace = a.config.Workspace
+			a.mu.Unlock()
 		}
-		a.mu.Unlock()
-	} else {
-		a.mu.Lock()
-		workspace = a.config.Workspace
-		a.mu.Unlock()
 	}
 	if workspace == "" {
 		return RemoteTransferResult{}, errors.New("no workspace configured for local transfer")

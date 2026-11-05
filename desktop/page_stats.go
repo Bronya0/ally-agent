@@ -44,6 +44,7 @@ func (a *desktop) loadStats(manual ...bool) {
 		stats := a.core.GetTokenStats()
 		a.win.Update(func() {
 			a.stats = stats
+			a.statsChart = buildStatsBars(stats.Daily)
 			if len(manual) > 0 && manual[0] {
 				if stats.Error != "" {
 					a.notifyError(stats.Error)
@@ -126,6 +127,36 @@ func (a *desktop) statsSummaryCard(c *ui.Context, title string, summary backend.
 	}).Basis(240).Grow(1).MinWidth(0).Label(title + "用量概览")
 }
 
+// statsBarsData is the 30-day chart's derived series. The page rebuilds the
+// widget tree every frame; dates/tips/slices change only when the snapshot does.
+type statsBarsData struct {
+	dates  []string
+	input  []float64
+	output []float64
+	tips   []string
+	max    float64
+}
+
+func buildStatsBars(daily []backend.TokenDailyStat) statsBarsData {
+	data := statsBarsData{
+		dates:  make([]string, len(daily)),
+		input:  make([]float64, len(daily)),
+		output: make([]float64, len(daily)),
+		tips:   make([]string, len(daily)),
+		max:    1.0,
+	}
+	for i, d := range daily {
+		data.dates[i] = monthDay(d.Date)
+		data.input[i] = float64(d.InputTokens)
+		data.output[i] = float64(d.OutputTokens)
+		if total := data.input[i] + data.output[i]; total > data.max {
+			data.max = total
+		}
+		data.tips[i] = fmt.Sprintf("%s · 输入 %s · 输出 %s · 合计 %s tokens", d.Date, statsExact(d.InputTokens), statsExact(d.OutputTokens), statsExact(d.InputTokens+d.OutputTokens))
+	}
+	return data
+}
+
 // statsBars draws the fixed 30-day stacked bar chart with mygo's chart package:
 // a band scale places the bars and a linear scale their heights, so the axis
 // ticks, the bar geometry and the hover target come from the package instead of
@@ -143,18 +174,14 @@ func (a *desktop) statsBars(c *ui.Context) {
 			fieldNote(c, "近 30 天暂无数据。", a.secondaryInk())
 			return
 		}
-		dates := make([]string, len(daily))
-		input := make([]float64, len(daily))
-		output := make([]float64, len(daily))
-		maxValue := 1.0
-		for i, d := range daily {
-			dates[i] = monthDay(d.Date)
-			input[i] = float64(d.InputTokens)
-			output[i] = float64(d.OutputTokens)
-			if total := input[i] + output[i]; total > maxValue {
-				maxValue = total
-			}
+		bars := a.statsChart
+		if len(bars.dates) != len(daily) {
+			bars = buildStatsBars(daily)
 		}
+		dates := bars.dates
+		input := bars.input
+		output := bars.output
+		maxValue := bars.max
 		x := chart.NewBand(dates...).Padding(0.28, 0.06)
 		y := chart.NewLinear(0, maxValue).Nice(4)
 		y.Format = statsNumber
@@ -168,8 +195,8 @@ func (a *desktop) statsBars(c *ui.Context) {
 					p.Line(r.X, chart.Y(r, tick.At), r.X+r.W, chart.Y(r, tick.At), 1, theme.Border)
 				}
 			})
-			for i, d := range daily {
-				tip := fmt.Sprintf("%s · 输入 %s · 输出 %s · 合计 %s tokens", d.Date, statsExact(d.InputTokens), statsExact(d.OutputTokens), statsExact(d.InputTokens+d.OutputTokens))
+			for i := range daily {
+				tip := bars.tips[i]
 				// Stacked: input from zero, output on top of it.
 				uikit.Tooltip(c, chart.Rect(c, x.Band(i), y.Span(0, input[i])).Radius(2).Background(chartPalette[0]), tip)
 				uikit.Tooltip(c, chart.Rect(c, x.Band(i), y.Span(input[i], input[i]+output[i])).Radius(2).Background(chartPalette[1]), tip)

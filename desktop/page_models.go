@@ -617,13 +617,16 @@ func (a *desktop) testModelDraft() {
 // ---- Image models -------------------------------------------------------
 
 func (a *desktop) imageModelsSection(c *ui.Context) {
+	// Leaving the models page clears this state so the next visit rereads the
+	// config; the image tab must rebuild it here or the section renders nothing.
+	a.ensureImageModels()
 	s := a.imageModels
 	if s == nil {
 		return
 	}
 	card(c, "image-defaults", func() {
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-			if uikit.SwitchNative(c.Key("image-enabled"), &s.config.Enabled).Label("使用生图工具").Changed() {
+			if uikit.SwitchNative(c.Key("image-enabled"), &s.config.Enabled).Disabled(s.busy).Label("使用生图工具").Changed() {
 				a.applyImageConfig()
 			}
 			ui.Text(c, "使用生图工具").FontSize(fsSmall)
@@ -994,8 +997,7 @@ func (a *desktop) importModels() {
 					added++
 				}
 			}
-			a.saveConfig(cfg)
-			a.notifySuccess(fmt.Sprintf("导入完成：新增 %d 个，更新 %d 个", added, updated))
+			a.saveConfig(cfg, fmt.Sprintf("导入完成：新增 %d 个，更新 %d 个", added, updated))
 		})
 	}()
 }

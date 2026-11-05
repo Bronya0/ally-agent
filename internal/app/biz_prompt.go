@@ -611,7 +611,7 @@ func buildUserProfilePromptPart(filePath string) string {
 	}
 	truncated := false
 	if len(body) > userProfileMaxBytes {
-		body = body[:userProfileMaxBytes]
+		body = utf8Prefix(body, userProfileMaxBytes)
 		if idx := strings.LastIndexByte(body, '\n'); idx > 0 {
 			body = body[:idx]
 		}

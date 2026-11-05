@@ -879,6 +879,7 @@ func (a *desktop) loadGitDiff(t *conversation, repo string, manual ...bool) {
 		a.win.Update(func() {
 			a.filesF.GitBusy = false
 			a.filesF.GitData = result
+			a.filesF.GitTree = buildGitTree(result.Files)
 			if len(manual) > 0 && manual[0] {
 				if result.Error != "" {
 					a.notifyError(result.Error)
@@ -936,7 +937,7 @@ func (a *desktop) gitDiffDialog(c *ui.Context) {
 			ui.Row(c).Grow(1).MinHeight(0).Gap(gapSection).AlignItems(ui.Stretch).Children(func() {
 				ui.Scroll(c).WidthPercent(30).MinWidth(120).MinHeight(0).Children(func() {
 					ui.Tree(c.Key("git-tree"), func() {
-						a.gitTreeRows(c, buildGitTree(data.Files), data.Files)
+						a.gitTreeRows(c, a.filesF.GitTree, data.Files)
 					})
 				})
 				ui.Scroll(c).Grow(1).MinWidth(0).Children(func() {

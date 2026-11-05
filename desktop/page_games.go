@@ -924,6 +924,9 @@ func xiangqiMoveOK(board [10][9]string, fx, fy, tx, ty int, piece string) bool {
 	dx, dy := tx-fx, ty-fy
 	ax, ay := absInt(dx), absInt(dy)
 	red := isRedPiece(piece)
+	if target := board[ty][tx]; target != "" && isRedPiece(target) == red {
+		return false
+	}
 	countBetween := func() int {
 		n := 0
 		x, y := fx+signInt(dx), fy+signInt(dy)

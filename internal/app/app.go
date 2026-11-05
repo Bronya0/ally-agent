@@ -1997,6 +1997,13 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 		if err := a.deleteSessionSnapshot(sessionID); err != nil {
 			return err
 		}
+		// Generated images and persisted reference-image copies live in a
+		// per-session directory; deleting only the snapshots would leave them
+		// unreachable on disk forever.
+		imageDir := filepath.Join(a.imagesDir(), imageSessionKey(sessionID))
+		if err := removeAllWithinBase(a.imagesDir(), imageDir); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -2711,6 +2718,10 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	// Recheck when each call actually starts, including calls queued behind
 	// an ask or another stage of the same batch. Batch config can be stale.
 	cfg = a.cfgWithLiveExtraRoots(sessionID, cfg)
+	// Tool handlers resolve workspace-relative paths and SSH authorization
+	// against this call's workspace. Scheduled tasks have no session meta, so
+	// the context is the only place that carries it.
+	ctx = withToolWorkspace(ctx, cfg.Workspace)
 	finishPerfTool := startPerfTool(ctx, name, args)
 	defer finishPerfTool()
 	// Tool execution digests model-controlled JSON and is the single choke

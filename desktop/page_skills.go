@@ -64,8 +64,6 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 				a.skillsF.Source = index
 				a.skillsF.sourceIDs = ids
 			}
-			a.skillsF.sourceIDs = ids
-			a.skillsF.Source = index
 			active := ids[index]
 			var visible []backend.SkillDefinition
 			for _, s := range filtered {

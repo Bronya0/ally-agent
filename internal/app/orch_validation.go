@@ -900,10 +900,14 @@ func runValidationCommand(ctx context.Context, dir, program string, args ...stri
 	cmd.Stdout = buf
 	cmd.Stderr = buf
 	err := cmd.Run()
+	// The validator is a native tool: on a zh-CN Windows host its diagnostics
+	// can be GBK while the buffer holds raw bytes. Decode once at the boundary so
+	// the UTF-8 cut below never has to walk back to the first invalid byte.
+	output := decodeConsoleOutput(buf.String())
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return buf.String(), ctxErr
+		return output, ctxErr
 	}
-	return buf.String(), err
+	return output, err
 }
 
 // Validation must not inherit interpreter preloads, compiler wrappers or
@@ -953,7 +957,7 @@ func validationSkipReport(label string, err error) (validationReport, bool) {
 func compactValidationOutput(output string) string {
 	output = strings.TrimSpace(output)
 	if len(output) > autoValidationOutputBytes {
-		output = output[:autoValidationOutputBytes] + "..."
+		output = utf8Prefix(output, autoValidationOutputBytes) + "..."
 	}
 	return output
 }

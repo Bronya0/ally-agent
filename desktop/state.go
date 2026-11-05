@@ -536,9 +536,12 @@ type scheduledTaskChange struct {
 }
 
 type tasksForm struct {
-	Tab              int
-	Scope            int
-	Loading          bool
+	Tab     int
+	Scope   int
+	Loading bool
+	// ManualPending records a refresh click that arrived while a snapshot was
+	// in flight; the completion handler starts that load instead of dropping it.
+	ManualPending    bool
 	InstructionOpen  map[string]bool
 	ScheduledChanges map[string]scheduledTaskChange
 	ServiceChanges   map[string]backend.ServiceInfo
@@ -609,6 +612,7 @@ type fileUI struct {
 	GitOpen        bool
 	GitBusy        bool
 	GitData        backend.GitDiffResult
+	GitTree        []*gitTreeNode
 	GitRepo        string
 	GitFile        int
 	NewOpen        bool

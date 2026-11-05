@@ -13,7 +13,13 @@ import (
 )
 
 func (a *desktop) loadTaskCenter(manual ...bool) {
+	isManual := len(manual) > 0 && manual[0]
 	if a.tasksF.Loading {
+		// A click that lands while a snapshot is in flight must still produce
+		// a fresh load; remember it and start one when the current one ends.
+		if isManual {
+			a.tasksF.ManualPending = true
+		}
 		return
 	}
 	a.tasksF.Loading = true
@@ -41,7 +47,10 @@ func (a *desktop) loadTaskCenter(manual ...bool) {
 			a.tasksF.ServiceChanges = nil
 			a.tasks = tasks
 			a.services = services
-			if len(manual) > 0 && manual[0] {
+			if a.tasksF.ManualPending {
+				a.tasksF.ManualPending = false
+				a.loadTaskCenter(true)
+			} else if isManual {
 				a.notifySuccess("任务列表已刷新")
 			}
 		})

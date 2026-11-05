@@ -531,7 +531,7 @@ func (a *App) GetGitDiff(workspace string, repoPath string) GitDiffResult {
 			}
 			combined := strings.TrimRight(strings.Join(sections, "\n"), "\n")
 			if len(combined) > fileLimit {
-				combined = combined[:fileLimit]
+				combined = utf8Prefix(combined, fileLimit)
 				file.Truncated = true
 			}
 			file.Diff = combined

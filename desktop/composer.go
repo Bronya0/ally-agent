@@ -383,18 +383,21 @@ func (a *desktop) builtinCommands(t *conversation) []slashCommand {
 
 func (a *desktop) allCommands(t *conversation) []slashCommand {
 	cmds := a.builtinCommands(t)
-	for _, name := range a.enabledSkillNames() {
-		desc := ""
-		for _, s := range a.skills {
-			if s.Name == name {
-				desc = s.Description
-				if desc == "" {
-					desc = s.WhenToUse
-				}
-				break
-			}
+	// Resolve each skill's description once: the slash menu is rebuilt on every
+	// keystroke, and a per-name scan of a.skills made this O(skills²).
+	descByName := make(map[string]string, len(a.skills))
+	for _, s := range a.skills {
+		if _, ok := descByName[s.Name]; ok {
+			continue
 		}
-		cmds = append(cmds, slashCommand{Label: name, Desc: desc, Skill: name})
+		desc := s.Description
+		if desc == "" {
+			desc = s.WhenToUse
+		}
+		descByName[s.Name] = desc
+	}
+	for _, name := range a.enabledSkillNames() {
+		cmds = append(cmds, slashCommand{Label: name, Desc: descByName[name], Skill: name})
 	}
 	return cmds
 }

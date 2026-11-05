@@ -19,7 +19,7 @@ import (
 func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	st := t.uiState()
 	start, end := historyMessageWindow(t, a.messageWindowSize())
-	rows := newTranscriptRows(t)
+	rows := t.cachedTranscriptRows()
 	st.windowStart, st.windowEnd, st.windowBuilding = start, end, true
 	st.transcriptRows = rows
 	defer func() {
@@ -548,11 +548,26 @@ func (a *desktop) confirmDeleteUserMessage(d *deletePromptState) {
 			if index <= len(t.Messages) {
 				t.Messages = append([]map[string]any(nil), t.Messages[:index]...)
 			}
-			releaseCommandDetails(t)
-			t.uiState().Round = map[int]*roundStat{}
+			resetTranscriptAfterDelete(t, index)
 			a.persist(t)
 		})
 	}()
+}
+
+// resetTranscriptAfterDelete clears view state bound to the deleted tail.
+// Round entries below the cut still describe the remaining messages, so only
+// the removed indices are dropped; followLatest is required because deleting
+// the first row of the visible page would otherwise leave VisibleStart past
+// the shortened transcript and collapse the history window.
+func resetTranscriptAfterDelete(t *conversation, index int) {
+	releaseCommandDetails(t)
+	rounds := t.uiState().Round
+	for k := range rounds {
+		if k >= index {
+			delete(rounds, k)
+		}
+	}
+	followLatest(t)
 }
 
 // ---- Welcome -------------------------------------------------------------

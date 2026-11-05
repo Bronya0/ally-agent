@@ -147,7 +147,7 @@ func EncodeLike(original []byte, text string) ([]byte, error) {
 	if bom16 {
 		le, be = original[0] == 0xff, original[0] == 0xfe
 	} else {
-		le, be = probeUTF16(original)
+		le, be, _ = probeUTF16(original)
 	}
 	if le || be {
 		units := utf16.Encode([]rune(string(data)))
@@ -217,10 +217,9 @@ func DecodeTextBytes(data []byte) ([]byte, error) {
 			return decodeUTF16(data[2:], false)
 		}
 	}
-	if le, be := probeUTF16(data); le || be {
+	if le, be, hasNUL := probeUTF16(data); le || be {
 		return decodeUTF16(data, le)
-	}
-	if hasNUL(data) {
+	} else if hasNUL {
 		return nil, toolerrors.New("E_BINARY_FILE", errors.New("binary file is not supported"))
 	}
 	if !utf8.Valid(data) {
@@ -235,10 +234,16 @@ func DecodeTextBytes(data []byte) ([]byte, error) {
 // threshold keeps uniform binary NULs from being misread as UTF-16, and at
 // least two NUL bytes are required so a lone NUL in otherwise-UTF-8 content
 // is not silently re-paired into garbage.
-func probeUTF16(data []byte) (le, be bool) {
+func probeUTF16(data []byte) (le, be, hasNUL bool) {
 	n := len(data) / 2 * 2
 	if n < 4 {
-		return false, false
+		for _, b := range data {
+			if b == 0 {
+				hasNUL = true
+				break
+			}
+		}
+		return false, false, hasNUL
 	}
 	even, odd := 0, 0
 	for i := 0; i < n; i += 2 {
@@ -249,16 +254,19 @@ func probeUTF16(data []byte) (le, be bool) {
 			odd++
 		}
 	}
+	// The same pass that detects UTF-16 answers the NUL check: every byte
+	// except an odd trailing one has been inspected already.
+	hasNUL = even > 0 || odd > 0 || (len(data)%2 == 1 && data[len(data)-1] == 0)
 	if even+odd < 2 {
-		return false, false
+		return false, false, hasNUL
 	}
 	if odd > even*4 {
-		return true, false // UTF-16LE: ASCII occupies the low byte
+		return true, false, hasNUL // UTF-16LE: ASCII occupies the low byte
 	}
 	if even > odd*4 {
-		return false, true // UTF-16BE: ASCII occupies the high byte
+		return false, true, hasNUL // UTF-16BE: ASCII occupies the high byte
 	}
-	return false, false
+	return false, false, hasNUL
 }
 
 // decodeUTF16 transcodes UTF-16 code units (already stripped of any BOM) to

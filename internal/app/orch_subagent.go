@@ -129,7 +129,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	if desc == "" {
 		desc = req.Task
 		if len(desc) > 40 {
-			desc = desc[:37] + "..."
+			desc = utf8Prefix(desc, 37) + "..."
 		}
 	}
 	req.Role = strings.TrimSpace(req.Role)

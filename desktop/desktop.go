@@ -55,6 +55,7 @@ type conversation struct {
 	// historyStarts holds the transcript's block starts for historyRev, so a
 	// frame asks once per change instead of once per row. See blockStarts.
 	historyStarts memoOf[historyKey, []int]
+	historyRows   memoOf[historyKey, *transcriptRows]
 	historyRev    uint64
 }
 
@@ -131,6 +132,7 @@ type desktop struct {
 	versionLabel                            string
 	upd                                     updateUI
 	filesF                                  fileUI
+	statsChart                              statsBarsData
 	gameF                                   gameUI
 	plans                                   map[string][]backend.PlanStep
 	planRev                                 map[string]int64
