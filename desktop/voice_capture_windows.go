@@ -47,10 +47,12 @@ type windowsAudioRecording struct {
 
 const audclntSBufferEmpty = uintptr(0x08890001)
 
-// A timed-out WASAPI call cannot be safely force-killed. Keep its locked COM
-// thread as the sole capture worker until it exits, rather than leaking one thread
-// and device session for every subsequent retry. Ownership is tied to the recorder
-// so a late exit cannot release a newer session's slot.
+// WASAPI/COM calls such as Start, GetBuffer and Stop are synchronous and expose no
+// cancellation handle for an in-progress call. A timeout can stop waiting in Go, but
+// cannot safely terminate that COM call or its locked OS thread. Keep the stalled
+// session as the sole capture worker rather than accumulating threads on retries; if it
+// never returns, new recording sessions remain unavailable until the app is restarted.
+// Ownership is tied to the recorder so a late exit cannot release a newer session's slot.
 var voiceCaptureSlot = struct {
 	sync.Mutex
 	owner   *windowsAudioRecording
@@ -190,7 +192,9 @@ func (r *windowsAudioRecording) CanReuse() bool {
 	return r.reusable
 }
 
-// Cancel timeout bounds the wait for a device thread that stopped responding.
+// Cancel only signals the capture loop and bounds how long this caller waits. It cannot
+// interrupt a WASAPI/COM method already in progress; a permanently stuck call keeps the
+// capture thread and slot alive until the process exits.
 func (r *windowsAudioRecording) Cancel() {
 	r.cancelOnce.Do(func() {
 		if r.cancel != nil {
