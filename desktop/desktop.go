@@ -205,6 +205,17 @@ type desktop struct {
 	modelPrevious                                       *backend.ModelIdentity
 	oauth                                               *oauthState
 	imageModels                                         *imageModelsState
+	voiceModels                                         *voiceModelsState
+	voiceInput                                          voiceInputRuntime
+	voiceInputDevices                                   []voiceCaptureDevice
+	voiceInputDevicesBusy                               bool
+	voiceInputDevicesError                              string
+	voiceInputDevicesScanned                            bool
+	voiceHotkeyCapturing                                bool
+	voiceHotkeyPreviewParts                             []string
+	voiceHotkeyCaptureStop                              func()
+	voiceHotkeyCaptureTimer                             *time.Timer
+	hotkeyMemo                                          hotkeyMemo
 	modelDraft                                          backend.ModelConfig
 	modelEdit                                           int
 	mcpText, configText, infoText, skillText, skillName string
@@ -380,6 +391,13 @@ func Run() {
 				}
 				a.syncSettingsForm()
 				a.ready = true
+				// Voice warm-up needs the platform recorder; elsewhere it can only fail. The
+				// device scan is skipped until dictation is actually enabled: it is a COM
+				// enumeration, and a user who never opens voice settings should not pay for it.
+				if voiceInputSupported() && a.prefs.VoiceInputEnabled {
+					a.refreshVoiceInputDevices()
+					a.configureVoiceInput()
+				}
 				if a.prefs.Pet.Enabled {
 					a.openPet()
 				}
@@ -405,13 +423,19 @@ func (a *desktop) shutdown() {
 		return
 	}
 	a.closing = true
+	a.closeVoiceInput()
 	a.cancelMemoryTidy()
 	if a.upd.Applied && a.upd.State == "restarting" {
 		// The updater already flushed after ApplyUpdate stopped all runs.
 		a.finishQuit()
 		return
 	}
-	a.prepareWindowClose(a.finishShutdown, func() { a.closing = false })
+	a.prepareWindowClose(a.finishShutdown, func() {
+		a.closing = false
+		if voiceInputSupported() && a.prefs.VoiceInputEnabled {
+			a.configureVoiceInput()
+		}
+	})
 }
 
 // Both normal quit and updating check editor changes before replacing files.
@@ -455,6 +479,7 @@ func (a *desktop) finishShutdown() {
 }
 
 func (a *desktop) finishQuit() {
+	a.closeVoiceInput()
 	a.stopAutoAppearance()
 	a.stopUpdateChecks()
 	a.closePet()

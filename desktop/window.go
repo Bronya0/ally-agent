@@ -16,6 +16,11 @@ func (a *desktop) view(c *ui.Context) {
 	defer a.schedulePreviewSync()
 	defer a.syncPluginHost()
 	c.SetTheme(a.theme())
+	// The keyboard hook runs on its own thread and must decide synchronously
+	// whether to swallow a key, so it reads this mirror of "recording can start
+	// here". Without it, pressing the shortcut on a non-chat page ate the keys
+	// and then did nothing.
+	a.syncVoiceRecordable()
 	a.globalShortcuts(c)
 	c.OnShortcut(0, ui.KeyEscape, func() { a.cancelConversation(a.current()) })
 	a.flushNotices(c, time.Now())

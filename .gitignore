@@ -1,5 +1,7 @@
 /dist/
 /.tmp/
+# 旧 Wails 前端残留（原生分支不使用，构建也不读）
+/frontend/
 *.exe
 *.log
 /coverage.out

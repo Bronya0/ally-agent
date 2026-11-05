@@ -419,6 +419,9 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.Models != nil {
 		base.Models = overlay.Models
 	}
+	if overlay.VoiceModels != nil {
+		base.VoiceModels = normalizeVoiceModels(overlay.VoiceModels)
+	}
 	if overlay.DisabledSkills != nil {
 		base.DisabledSkills = normalizeSkillNameList(overlay.DisabledSkills)
 	}

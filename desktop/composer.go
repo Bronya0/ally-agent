@@ -43,6 +43,9 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 		if len(t.PendingAttachments) > 0 {
 			a.pendingAttachmentRow(c, t)
 		}
+		if a.prefs.VoiceInputEnabled {
+			a.voiceStatusRow(c)
+		}
 		ui.Row(c.Key("composer-input-row")).Gap(gapField).AlignItems(ui.End).Children(func() {
 			input := ui.TextAreaBase(c.Key(t.ID+"-draft"), &t.Draft).Label("消息输入框").
 				FocusBind(&a.composerFocus, t.ID).

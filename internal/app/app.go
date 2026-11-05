@@ -611,6 +611,10 @@ type ConfigState struct {
 	CustomHeaders   map[string]string      `json:"customHeaders,omitempty"`
 	Models          []ModelConfig          `json:"models,omitempty"`
 	ImageGeneration *ImageGenerationConfig `json:"imageGeneration,omitempty"`
+	// VoiceModels is a separate registry for speech-to-text providers. It is not
+	// mixed into chat/image models: each entry can target a local OpenAI-compatible
+	// ASR server or a remote multipart transcription API.
+	VoiceModels []VoiceModelConfig `json:"voiceModels,omitempty"`
 	// LastUsedModel 是最近一次使用的模型**身份**（providerName + model id，
 	// 不复制连接字段与密钥）。它是新 Tab 的模型种子，也是 HTTP API 会话的模型来源：
 	// 加载/生效时按身份在 models[] 里找到那一条并展开成请求级模型配置。由前端切

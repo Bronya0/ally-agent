@@ -97,9 +97,12 @@
 2026-11-02 中危 image-restore 在途结果丢弃须记补载；所有唤回统一 OnShow，不能只判缓存 nil。@desktop/attachments.go
 
 2026-11-02 中危 thinking-phase 思考计数只在整轮清零会跨段累加；工具/正文结束即清零，正文与思考同包须合并发出。@desktop/events.go
+
 [preview-loadurl] 2026-11-03 中危 文件预览走异步 LoadURL+协议处理器比 NavigateToString 慢，切换像卡死。@desktop/preview_lifecycle.go
 
 [mono-generic-font] 2026-11-03 高危 字体用泛型 "" 或 "monospace"：中文每段重做字体匹配，79KB md 首屏 720ms。统一用 appFontFamily。@desktop/theme.go
+
+[asr-route] 2026-11-03 中危 百炼 ASR 路由随模型而非模式：qwen3-asr→chat、qwen-audio/fun-asr→multimodal，音频只收 data URI。@internal/app/biz_voice.go
 
 [access-tree-frames] 2026-11-03 中危 UIA 碰过一次窗口后 mygo 每帧新 make 约 160KB 节点数组，占当天分配 45%；只重绘的帧不建。@mygo ui/access.go
 
@@ -116,5 +119,11 @@
 [request-json-thrice] 2026-11-03 中危 一次请求把同一份历史编三次：SDK 编码、传输层重写、工具 schema 哈希（可缓存）。@internal/app/prov_reasoning.go
 
 [stats-full-rewrite] 2026-11-03 中危 统计每 5 秒把当天整份日文件重写一遍（marshal + 临时文件改名），记录越多越贵。@internal/app/biz_stats.go
+
+[voice-ui-copy-leak] 2026-11-03 高危 弹窗占位文案从业务返回值拼，听写路径会写进输入框；返回值只给纯正文。@internal/app/biz_voice.go
+
+[voice-defaults-dupe] 2026-11-03 中危 前后端各写一份字段默认值，与协议默认冲突会让合法配置导入被拒。@desktop/voice_models_io.go
+
+[settings-prefs-dirty] 2026-11-03 中危 设置页 dirty check 只比 ConfigState，存 prefs 的字段离开页面即丢。@desktop/page_settings.go
 
 [memory-tidy] 2026-11-04 中危 别在每帧或固定定时器里调 FreeOSMemory：STW 加缺页抖动，只在隐藏/最小化去抖后调。@desktop/memory_tidy.go

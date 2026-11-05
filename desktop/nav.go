@@ -24,13 +24,25 @@ func (a *desktop) changePage(page string) {
 		a.releaseFilePreview()
 	}
 	if a.page == "settings" && page != "settings" {
+		// A pending chord capture must not outlive the settings page: while it
+		// listens it owns the only keyboard hook, so the shortcut would look
+		// unbound until its timeout fired.
+		if a.voiceHotkeyCapturing {
+			a.finishVoiceHotkeyCapture("")
+		}
 		a.commitSettingsOnLeave()
 	}
 	if a.page == "models" && page != "models" {
+		a.cancelVoiceRecording()
 		a.cancelOAuthWhenLeaving()
 	}
 	a.page = page
 	a.pageEpoch++
+	if page == "settings" && voiceInputSupported() && !a.voiceInputDevicesScanned {
+		// The scan is a COM enumeration, so it waits until someone opens the page that
+		// shows the device list instead of running on every start.
+		a.refreshVoiceInputDevices()
+	}
 	if page == "chat" {
 		a.activateTab(a.active)
 	}
@@ -39,7 +51,7 @@ func (a *desktop) changePage(page string) {
 		a.refreshPlugins()
 		return
 	case "models", "chat":
-		if page == "models" && a.modelTab != "图片模型" && a.modelDraft.AuthType == "chatgpt_oauth" && a.oauth != nil {
+		if page == "models" && a.modelTab == "对话模型" && a.modelDraft.AuthType == "chatgpt_oauth" && a.oauth != nil {
 			a.loadOAuthAccounts()
 		}
 		if page == "models" && a.imageModels != nil && !a.imageModels.busy && !a.imageModels.formOpen && a.imageModels.test == nil {

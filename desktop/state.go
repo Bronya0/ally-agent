@@ -19,23 +19,32 @@ import (
 // rail geometry, section folding and the welcome-page avatar. It lives next to
 // the agent data so both builds share the same machine.
 type uiPrefs struct {
-	HistoryPageSize    int            `json:"historyPageSize"`
-	Appearance         string         `json:"appearance,omitempty"`
-	Palette            int            `json:"palette"`
-	RailExpanded       bool           `json:"railExpanded"`
-	RailWidth          float32        `json:"railWidth"`
-	RailWorkspaceOpen  bool           `json:"railWorkspaceOpen"`
-	RailSessionsOpen   bool           `json:"railSessionsOpen"`
-	Avatar             string         `json:"avatar"`
-	RecentModels       []string       `json:"recentModels"`
-	TreeWidth          float32        `json:"treeWidth"`
-	SeenReleaseNotes   string         `json:"seenReleaseNotes"`
-	DismissedUpdateTag string         `json:"dismissedUpdateTag"`
+	HistoryPageSize    int      `json:"historyPageSize"`
+	Appearance         string   `json:"appearance,omitempty"`
+	Palette            int      `json:"palette"`
+	RailExpanded       bool     `json:"railExpanded"`
+	RailWidth          float32  `json:"railWidth"`
+	RailWorkspaceOpen  bool     `json:"railWorkspaceOpen"`
+	RailSessionsOpen   bool     `json:"railSessionsOpen"`
+	Avatar             string   `json:"avatar"`
+	RecentModels       []string `json:"recentModels"`
+	TreeWidth          float32  `json:"treeWidth"`
+	SeenReleaseNotes   string   `json:"seenReleaseNotes"`
+	DismissedUpdateTag string   `json:"dismissedUpdateTag"`
+	VoiceInputEnabled  bool     `json:"voiceInputEnabled,omitempty"`
+	VoiceModelID       string   `json:"voiceModelId,omitempty"`
+	VoiceHotkey        string   `json:"voiceHotkey,omitempty"`
+	// VoiceModifierLeft and VoiceModifierRight decide which physical sides of
+	// Ctrl/Alt/Shift/Win satisfy a hotkey modifier. Both are on by default, so a
+	// chord never has to pin a side.
+	VoiceModifierLeft  bool           `json:"voiceModifierLeft"`
+	VoiceModifierRight bool           `json:"voiceModifierRight"`
+	VoiceInputDeviceID string         `json:"voiceInputDeviceId,omitempty"`
 	Pet                petPreferences `json:"pet"`
 }
 
 func defaultPrefs() uiPrefs {
-	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, Pet: petPreferences{Enabled: true, Size: 180}}
+	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, VoiceHotkey: "Alt", VoiceModifierLeft: true, VoiceModifierRight: true, Pet: petPreferences{Enabled: true, Size: 180}}
 }
 
 var prefsMu sync.Mutex
@@ -76,6 +85,17 @@ func readPrefs(path string) uiPrefs {
 	p.HistoryPageSize = normalizeHistoryPageSize(p.HistoryPageSize)
 	if p.Avatar == "" {
 		p.Avatar = "whale"
+	}
+	// Older builds stored the side inside the hotkey ("RightAlt") and defaulted
+	// to a single side; both normalize to the side-less chord plus the global
+	// modifier-side preference.
+	if hotkey, ok := parseVoiceHotkey(p.VoiceHotkey); ok {
+		p.VoiceHotkey = hotkey.String()
+	} else {
+		p.VoiceHotkey = "Alt"
+	}
+	if !p.VoiceModifierLeft && !p.VoiceModifierRight {
+		p.VoiceModifierLeft, p.VoiceModifierRight = true, true
 	}
 	p.Pet.normalize()
 	return p
@@ -365,6 +385,39 @@ func clampView(v, def float64) float64 {
 		return def
 	}
 	return v
+}
+
+// normalizeSettingsConfig maps a saved config onto the values the settings form
+// shows, so comparing it with the form's projection does not report nil
+// pointers and unset defaults as edits. Keep it in step with syncSettingsForm.
+func normalizeSettingsConfig(cfg backend.ConfigState) backend.ConfigState {
+	if cfg.AllowPrivateNetwork == nil {
+		cfg.AllowPrivateNetwork = boolPtr(false)
+	}
+	if cfg.AutoUpdate == nil {
+		cfg.AutoUpdate = boolPtr(true)
+	}
+	for _, field := range []**bool{
+		&cfg.AutoValidationPython, &cfg.AutoValidationGo, &cfg.AutoValidationJavaScript,
+		&cfg.AutoValidationTypeScript, &cfg.AutoValidationVue, &cfg.AutoValidationJava,
+		&cfg.AutoValidationJSON, &cfg.AutoValidationYAML, &cfg.AutoValidationXML,
+	} {
+		if *field == nil {
+			*field = boolPtr(false)
+		}
+	}
+	if cfg.CompactThreshold <= 0 {
+		cfg.CompactThreshold = 0.6
+	}
+	if cfg.BackgroundOpacity <= 0 {
+		cfg.BackgroundOpacity = 0.15
+	}
+	body, code := readingSizes(cfg.MessageFontSize, cfg.CodeFontSize)
+	cfg.MessageFontSize, cfg.CodeFontSize = float64(body), float64(code)
+	cfg.ToolFontSize = clampView(cfg.ToolFontSize, 15)
+	cfg.SubFontSize = clampView(cfg.SubFontSize, 13)
+	cfg.AuxFontSize = clampView(cfg.AuxFontSize, 12)
+	return cfg
 }
 
 // modelForm is the chat-model editor dialog state.

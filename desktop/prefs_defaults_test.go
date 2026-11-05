@@ -35,6 +35,40 @@ func TestInitialAppearanceAndAvatar(t *testing.T) {
 	}
 }
 
+func TestVoiceInputPreferencesDefaultAndRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "native-ui.json")
+	prefs := readPrefs(path)
+	if prefs.VoiceInputEnabled || prefs.VoiceHotkey != "Alt" || prefs.VoiceInputDeviceID != "" {
+		t.Fatalf("unexpected voice defaults: %+v", prefs)
+	}
+	if !prefs.VoiceModifierLeft || !prefs.VoiceModifierRight {
+		t.Fatalf("modifier sides should default to both: %+v", prefs)
+	}
+	if err := os.WriteFile(path, []byte(`{"voiceInputEnabled":true,"voiceModelId":"qwen","voiceHotkey":"Ctrl+Alt+R","voiceInputDeviceId":"endpoint-1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	prefs = readPrefs(path)
+	if !prefs.VoiceInputEnabled || prefs.VoiceModelID != "qwen" || prefs.VoiceHotkey != "Ctrl+Alt+R" || prefs.VoiceInputDeviceID != "endpoint-1" {
+		t.Fatalf("voice preferences did not load: %+v", prefs)
+	}
+	if err := os.WriteFile(path, []byte(`{"voiceHotkey":"RightAlt","voiceModifierLeft":false}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	legacy := readPrefs(path)
+	if legacy.VoiceHotkey != "Alt" {
+		t.Fatalf("legacy Alt shortcut migrated to %q, want Alt", legacy.VoiceHotkey)
+	}
+	if legacy.VoiceModifierLeft || !legacy.VoiceModifierRight {
+		t.Fatalf("explicit modifier side preference was not preserved: %+v", legacy)
+	}
+	if err := os.WriteFile(path, []byte(`{"voiceModifierLeft":false,"voiceModifierRight":false}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPrefs(path); !got.VoiceModifierLeft || !got.VoiceModifierRight {
+		t.Fatalf("both sides off must fall back to both on: %+v", got)
+	}
+}
+
 func TestHistoryPageSizePreference(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "native-ui.json")
 	for _, tc := range []struct {

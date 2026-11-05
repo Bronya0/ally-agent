@@ -83,7 +83,9 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 		a.modelTab = "对话模型"
 	}
 	wantTab := 0
-	if a.modelTab == "图片模型" {
+	if a.modelTab == "语音模型" {
+		wantTab = 2
+	} else if a.modelTab == "图片模型" {
 		wantTab = 1
 	}
 	if a.modelTabIdx != wantTab {
@@ -93,9 +95,14 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 		uikit.Input(c.Key("model-search"), &a.modelSearch).Placeholder("搜索").Label("搜索模型").Width(200)
 		ui.Spacer(c)
 		flat(c, "导入").OnClick(func() { a.importModels() })
-		flat(c, "导出").Disabled(len(a.config.Models) == 0 && (a.config.ImageGeneration == nil || len(a.config.ImageGeneration.Models) == 0)).
+		flat(c, "导出").Disabled(len(a.config.Models) == 0 && (a.config.ImageGeneration == nil || len(a.config.ImageGeneration.Models) == 0) && len(a.config.VoiceModels) == 0).
 			OnClick(func() { a.exportModels() })
 		primary(c, "添加").OnClick(func() {
+			if a.modelTab == "语音模型" {
+				a.ensureVoiceModels()
+				a.voiceModels.open(-1)
+				return
+			}
 			if a.modelTab == "图片模型" {
 				a.ensureImageModels()
 				a.imageModels.openForm(-1)
@@ -106,8 +113,15 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 		})
 	})
 	tabIndex := &a.modelTabIdx
-	if a.scrollTabs(c, "models-tabs", tabIndex, "对话模型", "图片模型") {
-		if *tabIndex == 1 {
+	if a.scrollTabs(c, "models-tabs", tabIndex, "对话模型", "图片模型", "语音模型") {
+		if a.modelTab == "语音模型" && *tabIndex != 2 {
+			a.cancelVoiceRecording()
+		}
+		if *tabIndex == 2 {
+			a.cancelOAuthWhenLeaving()
+			a.ensureVoiceModels()
+			a.modelTab = "语音模型"
+		} else if *tabIndex == 1 {
 			a.cancelOAuthWhenLeaving()
 			a.ensureImageModels()
 			a.modelTab = "图片模型"
@@ -123,14 +137,19 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 	}
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(gapInline).Children(func() {
-			if a.modelTab == "图片模型" {
+			if a.modelTab == "语音模型" {
+				a.voiceModelsSection(c)
+			} else if a.modelTab == "图片模型" {
 				a.imageModelsSection(c)
 			} else {
 				a.chatModelsSection(c, chatModels)
 			}
 		})
 	})
-	if a.modelTab == "图片模型" {
+	if a.modelTab == "语音模型" {
+		a.voiceModelsDialog(c)
+		a.voiceRecorderDialog(c)
+	} else if a.modelTab == "图片模型" {
 		a.imageModelDialog(c)
 		a.imageModelTestDialog(c)
 	} else {
@@ -885,6 +904,10 @@ func (a *desktop) imageModelTestDialog(c *ui.Context) {
 // ---- Import / export ----------------------------------------------------
 
 func (a *desktop) importModels() {
+	if a.modelTab == "语音模型" {
+		a.importVoiceModels()
+		return
+	}
 	image := a.modelTab == "图片模型"
 	go func() {
 		path, err := a.core.SelectJSONFile("导入模型配置")
@@ -978,6 +1001,10 @@ func (a *desktop) importModels() {
 }
 
 func (a *desktop) exportModels() {
+	if a.modelTab == "语音模型" {
+		a.exportVoiceModels()
+		return
+	}
 	image := a.modelTab == "图片模型"
 	var kind string
 	var models any

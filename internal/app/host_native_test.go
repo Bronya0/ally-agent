@@ -200,6 +200,66 @@ func TestNativeImageConfigPreservesUnrelatedSettings(t *testing.T) {
 	}
 }
 
+func TestNativeVoiceConfigPreservesUnrelatedSettingsAndTestsMultipart(t *testing.T) {
+	home := redirectAppStateDir(t)
+	t.Setenv("ALLY_DATA_DIR", home)
+	a := NewApp()
+	if err := a.StartNative(context.Background(), func(string, any) {}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := a.ShutdownNative(); err != nil {
+			t.Error(err)
+		}
+	})
+	cfg, err := a.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.CustomPrompt = "preserve voice unrelated"
+	if err = a.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer secret" {
+			t.Errorf("request headers: %v", r.Header)
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Error(err)
+			return
+		}
+		if r.FormValue("model") != "tiny" || r.FormValue("language") != "zh" || r.FormValue("custom") != "value" {
+			t.Errorf("form fields: %v", r.MultipartForm.Value)
+		}
+		f, _, err := r.FormFile("audio")
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer f.Close()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"ok"}`))
+	}))
+	defer server.Close()
+	model := VoiceModelConfig{ID: "v1", Name: "local", Deployment: "local", Protocol: "multipart", Endpoint: server.URL, Model: "tiny", Language: "zh", FileField: "audio", APIKey: "secret", AuthMode: "bearer", AuthPrefix: "Bearer ", ExtraFields: map[string]string{"custom": "value"}}
+	if _, err := a.TestNativeVoiceModelAudio(model, makeSilenceWAV(4000, 16000)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.TestNativeVoiceModelAudio(model, []byte("not a wav")); err == nil {
+		t.Fatal("accepted malformed recording WAV")
+	}
+	if err := a.SaveNativeVoiceModels([]VoiceModelConfig{model}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := a.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CustomPrompt != "preserve voice unrelated" || len(got.VoiceModels) != 1 || got.VoiceModels[0].APIKey != "secret" {
+		t.Fatal("voice save lost unrelated settings or model config")
+	}
+}
+
 func TestNativeModelsKeepOAuthAccountsSeparate(t *testing.T) {
 	home := redirectAppStateDir(t)
 	t.Setenv("ALLY_DATA_DIR", home)
