@@ -17,6 +17,7 @@ func TestRowOwnershipDecidesWhoDraws(t *testing.T) {
 		{"role": "tool_call", "name": "read", "toolCallId": "call-read-1"},
 		{"role": "tool_call", "name": "read", "toolCallId": "call-read-2"},
 		{"role": "tool_call", "name": "read", "toolCallId": "call-read-3", "fastCompacted": true},
+		{"role": "assistant", "content": "done reading"},
 		{"role": "tool_call", "name": "command", "toolCallId": "call-cmd-1"},
 		{"role": "tool_call", "name": "command", "toolCallId": "call-cmd-2"},
 		{"role": "notice", "content": "note"},
@@ -37,12 +38,13 @@ func TestRowOwnershipDecidesWhoDraws(t *testing.T) {
 		{5, rowPlain, "an answer draws itself"},
 		{6, rowReadGroup, "the first read heads the group"},
 		{7, rowSkipped, "the second read folds into the group"},
-		{8, rowPlain, "a locally trimmed card has nothing to group with"},
-		{9, rowCommandGroup, "the first command heads the group"},
-		{10, rowSkipped, "the second command folds into the group"},
-		{11, rowPlain, "a notice draws itself"},
-		{12, rowSkipped, "an unknown role without content draws nothing"},
-		{13, rowPlain, "an unknown role with content still draws"},
+		{8, rowSkipped, "a locally trimmed card keeps the run it belongs to"},
+		{9, rowPlain, "an answer ends the read run"},
+		{10, rowCommandGroup, "the first command heads the group"},
+		{11, rowSkipped, "the second command folds into the group"},
+		{12, rowPlain, "a notice draws itself"},
+		{13, rowSkipped, "an unknown role without content draws nothing"},
+		{14, rowPlain, "an unknown role with content still draws"},
 	} {
 		if got := rows.kindAt(tc.index, -1); got != tc.want {
 			t.Errorf("message %d: kind %v, want %v (%s)", tc.index, got, tc.want, tc.why)

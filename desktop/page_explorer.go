@@ -112,25 +112,26 @@ func (a *desktop) fileTree(c *ui.Context) {
 	ui.Column(c).Width(width).FillHeight().Shrink(0).Unselectable().Background(colChrome(a)).Children(func() {
 		services := c.Services()
 		c.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, "") })
-		title := "文件"
-		tip := ""
-		if t := a.current(); t != nil {
-			title = workspaceLabel(t.Workspace)
-			tip = t.Workspace
-		}
-		ui.Row(c).Height(30).Padding(0, padRow).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
-			uikit.Tooltip(c, ui.Text(c, title).FontSize(fsSmall).TextColor(ink).Grow(1).SingleLine().MinWidth(0), tip)
-			uikit.IconButton(c, "explorer-refresh", "刷新", iconImage("refresh"), 22, uikit.IconQuiet, func() { a.refreshFiles(true) }, ink)
-			uikit.IconButton(c, "explorer-help", "文件浏览器帮助", iconImage("info"), 22, uikit.IconQuiet, func() { a.filesF.HelpOpen = !a.filesF.HelpOpen }, ink)
+		ui.Row(c).Height(34).Padding(0, padRow).Gap(3).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
+			search := uikit.InputChrome(c, ui.SearchField(c.Key("explorer-search"), &a.filesF.Search.Input)).
+				Placeholder("").Label("搜索工作区文件").Height(26).Padding(0, 6).FontSize(fsSmall).Grow(1).
+				OnSubmit(func() { a.searchFiles(a.filesF.Search.Input) })
+			uikit.Tooltip(c, search, "输入文件名后回车搜索，清空后回车还原")
+			uikit.IconButton(c, "explorer-refresh", "刷新", iconImage("refresh"), 22, uikit.IconQuiet, func() { a.searchFiles(a.filesF.Search.Input) }, ink)
 			uikit.IconButton(c, "explorer-close", "关闭文件栏", iconImage("close"), 22, uikit.IconQuiet, func() { a.setExplorerOpen(false) }, ink)
 		})
+		if a.filesF.Search.Busy {
+			fieldNote(c, "正在搜索…", a.secondaryInk())
+		} else if a.filesF.Search.Note != "" {
+			fieldNote(c, a.filesF.Search.Note, a.secondaryInk())
+		}
 		// Put the fallback menu on the viewport: the content column can be
 		// shorter than it, even with FillHeight in a scrolling container.
 		// A row's own menu takes precedence over this ancestor's menu.
 		tree := ui.Scroll(c.Key("explorer-tree")).Grow(1).MinHeight(0).Focusable().Label("工作区文件列表")
 		tree.Children(func() {
 			area := ui.Column(c).Padding(3, 0).FillWidth()
-			if len(a.files) == 0 {
+			if len(a.files) == 0 && a.filesF.Search.Query == "" {
 				area.Children(func() { fieldNote(c, "目录为空", a.secondaryInk()) })
 			}
 			area.Children(func() { ui.Tree(c.Key("workspace-tree"), func() { a.fileRows(c, a.files) }).FillWidth() })
@@ -168,6 +169,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 			ui.Column(c).Padding(8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(c.Theme().Border).Children(func() {
 				fieldNote(c, "文件浏览器帮助", a.secondaryInk())
 				for _, line := range []string{
+					"输入文件名后回车搜索；清空后回车还原目录树",
 					"单击文件打开，单击目录展开",
 					"右键文件：复制文件 / 复制路径 / 重命名 / 删除 / 属性",
 					"右键空白处：复制工作区绝对路径 / 粘贴文件；同名文件自动另存副本",
@@ -189,6 +191,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 				}
 			})
 			ui.Spacer(c)
+			uikit.IconButton(c, "explorer-help", "文件浏览器帮助", iconImage("info"), 22, uikit.IconQuiet, func() { a.filesF.HelpOpen = !a.filesF.HelpOpen }, ink)
 			addButton(c, "explorer-new-file", "新建文件", "plus", 22, func() { a.openFilePrompt(false, "") })
 		})
 	})
@@ -510,6 +513,7 @@ func (a *desktop) prepareFileTree(root string) {
 		key = workspaceKey(root)
 	}
 	if key == "" || key != a.fileRoot {
+		a.resetFileExplorer()
 		a.releaseFilePreview()
 		a.files = nil
 		a.fileOpen = map[string]bool{}
@@ -582,6 +586,10 @@ func (a *desktop) fileBranchOpen(path string) bool {
 // refreshFolder reloads one directory in place and keeps the tree expanded,
 // the way the Vue explorer refreshes a single node instead of the whole tree.
 func (a *desktop) refreshFolder(path string) {
+	if a.filesF.Search.Query != "" {
+		a.refreshFiles()
+		return
+	}
 	if path == "" {
 		a.refreshFiles()
 		return
@@ -599,7 +607,7 @@ func (a *desktop) refreshFolder(path string) {
 
 // loadFolderChildren lists one directory into fileChildren.
 func (a *desktop) loadFolderChildren(path string, manual ...bool) {
-	if a.core == nil || a.fileLoading[path] {
+	if a.core == nil || a.fileLoading[path] || a.filesF.Search.Query != "" {
 		return
 	}
 	t := a.current()

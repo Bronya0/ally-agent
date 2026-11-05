@@ -77,6 +77,9 @@ func decodeAvatarStyle(style string) map[string]*ui.Bitmap {
 }
 
 func (a *desktop) selectAvatarStyle(style string) {
+	if style != "custom" {
+		a.customAvatar = nil
+	}
 	a.prefs.Avatar = style
 	a.savePrefs()
 	a.avatarLoadID++
@@ -84,6 +87,18 @@ func (a *desktop) selectAvatarStyle(style string) {
 	releaseAvatarPoses(a.avatarPoses)
 	a.avatarStyle, a.avatarPoses = normalizedAvatarStyle(style), nil
 	a.resetAvatarMotion()
+	if style == "custom" && a.customAvatar == nil && a.win != nil {
+		go func() {
+			bitmap := a.loadCustomAvatar()
+			a.win.Update(func() {
+				if !a.closing && id == a.avatarLoadID {
+					a.customAvatar = bitmap
+					a.invalidatePet()
+				}
+			})
+		}()
+		return
+	}
 	if style == "custom" || style == "eye" || a.win == nil {
 		return
 	}

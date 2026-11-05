@@ -123,14 +123,10 @@ func toolState(m map[string]any) string {
 // isFoldableReadTool reports whether a message joins main's read-grep-list
 // folding: consecutive read/grep/list tool calls collapse into one group row.
 // The backend sends `list` for directory listing; main also folds
-// `batch_read`, which arrives here as plain `read`.
+// `batch_read`, which arrives here as plain `read`. A locally trimmed card keeps
+// its membership: dropping it out of the run spreads one collapsed row into as
+// many rows as the run held, right after every compaction.
 func isFoldableReadTool(m map[string]any) bool {
-	// A locally trimmed card no longer carries its result, only an excerpt: it has
-	// nothing left to group with, so it stays its own row (as main's
-	// !next.fastCompacted check does).
-	if boolOf(m, "fastCompacted") {
-		return false
-	}
 	name := str(m, "name")
 	if name == "" {
 		name = str(m, "toolName")
@@ -276,11 +272,15 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	_, windowEnd := a.chatMessageWindow(t)
 	end := index
 	reads, greps, lists, commands := 0, 0, 0, 0
+	trimmed := 0
 	anyRunning, anyQueued := false, false
 	lastState := "pending"
 	for i := index; i < windowEnd && isFoldableToolGroupItem(t.Messages[i]); i++ {
 		end = i + 1
 		m := t.Messages[i]
+		if boolOf(m, "fastCompacted") {
+			trimmed++
+		}
 		state := toolState(m)
 		lastState = state
 		switch state {
@@ -337,6 +337,11 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 			}
 			args := (*entryArgs)[slot].get(str(m, "args"), parseToolArgs)
 			title := toolArgSummary(name, args)
+			if title == "" {
+				// A trimmed card's arguments are gone; its stored title is all that is
+				// left to name it.
+				title = str(m, "title")
+			}
 			if name == "command" {
 				entries = append(entries, toolGroupEntry{index: i, message: m, name: name, title: title, state: state})
 				continue
@@ -411,6 +416,11 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 				disclosureIcon(c, "terminal", a.currentPalette().accent)
 				ui.Text(c, fmt.Sprintf("执行命令 %d 次", commands)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
 			}
+			if trimmed == end-index {
+				// Nothing in this run kept its body, so opening it shows excerpts; the
+				// chip keeps the report the trimmed cards used to carry one by one.
+				neutralChip(c, fastCompactChip)
+			}
 			caret := "chevron"
 			if open {
 				caret = "chevrondown"
@@ -457,7 +467,11 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 							if entry.state == "error" {
 								color = c.Theme().Danger
 							}
-							uikit.Tooltip(c, ui.Text(c, short(entry.title, 80)).FontSize(fsTool).TextColor(color).SingleLine().MinWidth(0).Shrink(1), entry.title)
+							if boolOf(entry.message, "fastCompacted") {
+								toolGroupCompactedChip(c, entry.message)
+							} else {
+								uikit.Tooltip(c, ui.Text(c, short(entry.title, 80)).FontSize(fsTool).TextColor(color).SingleLine().MinWidth(0).Shrink(1), entry.title)
+							}
 							if entry.detail != "" {
 								uikit.ErrorText(c, entry.detail).FontSize(fsTool).MinWidth(0).Grow(1).Shrink(1)
 							}
@@ -477,6 +491,16 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 			}
 		})
 	})
+}
+
+// toolGroupCompactedChip labels an entry whose arguments and result were
+// replaced by a local trim, and keeps the excerpt it was replaced with on hover:
+// the group row no longer draws that body anywhere else.
+func toolGroupCompactedChip(c *ui.Context, m map[string]any) {
+	chip := neutralChip(c, fastCompactChip)
+	if body := str(m, "body"); body != "" {
+		uikit.Tooltip(c, chip, body)
+	}
 }
 
 func (a *desktop) toolGroupCommandEntry(c *ui.Context, t *conversation, entry toolGroupEntry, prefix string) {
@@ -510,6 +534,9 @@ func (a *desktop) toolGroupCommandEntry(c *ui.Context, t *conversation, entry to
 			ink := a.secondaryInk()
 			ui.Text(c, verb).FontSize(fsTool).TextColor(ink).Shrink(0).NoWrap()
 			uikit.Tooltip(c, ui.Text(c, short(command, 120)).Font(monoFamily).FontSize(fsTool).TextColor(ink).SingleLine().MinWidth(0).Shrink(1), command)
+			if boolOf(m, "fastCompacted") {
+				toolGroupCompactedChip(c, m)
+			}
 			var resultParts []string
 			if code, exists := result["exitCode"]; exists {
 				resultParts = append(resultParts, fmt.Sprintf("exit %v", code))

@@ -583,6 +583,7 @@ type updateUI struct {
 
 // fileUI holds explorer-only state that is not part of the workspace files.
 type fileUI struct {
+	Search         explorerSearch
 	TreeSelection  int
 	InfoGeneration uint64
 	InfoCancel     context.CancelFunc

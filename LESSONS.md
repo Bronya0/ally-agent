@@ -125,3 +125,5 @@
 [voice-defaults-dupe] 2026-11-03 中危 前后端各写一份字段默认值，与协议默认冲突会让合法配置导入被拒。@desktop/voice_models_io.go
 
 [settings-prefs-dirty] 2026-11-03 中危 设置页 dirty check 只比 ConfigState，存 prefs 的字段离开页面即丢。@desktop/page_settings.go
+
+[memory-tidy] 2026-11-04 中危 别在每帧或固定定时器里调 FreeOSMemory：STW 加缺页抖动，只在隐藏/最小化去抖后调。@desktop/memory_tidy.go

@@ -10,13 +10,14 @@ import (
 	"image"
 	_ "image/gif"
 	"image/jpeg"
-	_ "image/png"
+	"image/png"
 	"io"
 	"math"
 	"mime"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo"
@@ -183,8 +184,8 @@ func prepareImageData(result preparedAttachment, data []byte) preparedAttachment
 		result.input.Error = "无法读取图片：" + err.Error()
 		return result
 	}
-	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 64*1024*1024 {
-		result.input.Error = "图片尺寸过大，无法解码"
+	if e := oversizedImageError(cfg, format); e != nil {
+		result.input.Error = e.Error()
 		return result
 	}
 	img, _, err := image.Decode(bytes.NewReader(data))
@@ -257,6 +258,34 @@ func resizeImage(src image.Image, limit int) image.Image {
 	draw.CatmullRom.Scale(dst, dst.Bounds(), src, b, draw.Over, nil)
 	return dst
 }
+
+// decodeBudgetBytes is the memory one decode may hold, which keeps it inside
+// the app's soft limit (320 MB over a live heap of about 130 MB): a picture
+// larger than this would drive the runtime into constant collection just to be
+// thrown away.
+const decodeBudgetBytes = 100 << 20
+
+// oversizedImageError returns why a picture of cfg in format must not be
+// decoded, or nil when it may be: callers check the header first, since
+// decoding is what costs. Decoded formats hold different bytes a pixel: a
+// JPEG's YCbCr about 1.5 (measured 68 MB for 48 MP), an RGBA one 4, so the cap
+// by pixels follows the format rather than rejecting large photos outright.
+func oversizedImageError(cfg image.Config, format string) error {
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		return fmt.Errorf("图片尺寸无效")
+	}
+	bytesPerPixel := int64(4)
+	if format == "jpeg" {
+		bytesPerPixel = 2
+	}
+	pixels := int64(cfg.Width) * int64(cfg.Height)
+	limit := int64(decodeBudgetBytes) / bytesPerPixel
+	if pixels <= limit {
+		return nil
+	}
+	return fmt.Errorf("图片过大（%d 万像素），请先裁剪或缩小后再发送", pixels/10000)
+}
+
 func (a *desktop) chooseAttachments(t *conversation) {
 	if !canAddAttachments(t, a.closing) {
 		return
@@ -856,19 +885,29 @@ func (a *desktop) loadAttachmentImage(t *conversation, id, ref, dataURL string) 
 			}
 			return
 		}
-		cfg, _, decodeErr := image.DecodeConfig(bytes.NewReader(data))
+		cfg, format, decodeErr := image.DecodeConfig(bytes.NewReader(data))
 		err = decodeErr
-		if err != nil || int64(cfg.Width)*int64(cfg.Height) > 64*1024*1024 {
-			if err == nil {
-				err = fmt.Errorf("图片像素超过预览上限")
-			}
+		if err == nil {
+			err = oversizedImageError(cfg, format)
+		}
+		if err != nil {
 			return
 		}
 		img, _, err := image.Decode(bytes.NewReader(data))
 		if err != nil {
 			return
 		}
-		img = resizeImage(img, 1024)
+		// Keep the encoded picture, not its pixels: a bitmap DecodeBitmap made
+		// can drop the CPU copies once they have shown, and decodes them again
+		// from this data if a renderer asks. The data costs a fraction of them.
+		var encoded bytes.Buffer
+		if err = png.Encode(&encoded, resizeImage(img, 1024)); err != nil {
+			return
+		}
+		bitmap, err := ui.DecodeBitmap(encoded.Bytes())
+		if err != nil {
+			return
+		}
 		a.win.Update(func() {
 			if a.closing || t.AttachmentImages == nil || t.AttachmentImageVersions[id] != version {
 				return
@@ -885,7 +924,30 @@ func (a *desktop) loadAttachmentImage(t *conversation, id, ref, dataURL string) 
 					}
 				}
 			}
-			t.AttachmentImages[id] = ui.NewBitmap(img)
+			t.AttachmentImages[id] = bitmap
+			a.releaseAttachmentPixels(t, id, bitmap)
 		})
 	}()
+}
+
+// attachmentPixelReleaseDelay gives a preview the frames that paint it before
+// its CPU pixels go: the texture holds the picture from then on.
+const attachmentPixelReleaseDelay = 500 * time.Millisecond
+
+// releaseAttachmentPixels drops the CPU pixels of a shown preview, as
+// ui.Bitmap.ReleasePixels asks. A bitmap NewBitmap made keeps them, which is
+// why previews are decoded from encoded data instead.
+func (a *desktop) releaseAttachmentPixels(t *conversation, id string, bm *ui.Bitmap) {
+	if a.win == nil {
+		return
+	}
+	win := a.win
+	time.AfterFunc(attachmentPixelReleaseDelay, func() {
+		win.Update(func() {
+			if a.closing || t.AttachmentImages[id] != bm {
+				return
+			}
+			bm.ReleasePixels()
+		})
+	})
 }

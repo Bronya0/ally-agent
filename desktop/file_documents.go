@@ -85,7 +85,11 @@ func (a *desktop) setExplorerOpen(open bool) {
 	if a.explorer == open {
 		return
 	}
+	a.resetFileExplorer()
 	a.explorer = open
+	if open {
+		a.refreshFiles()
+	}
 	if !open {
 		a.releaseFilePreview()
 	}

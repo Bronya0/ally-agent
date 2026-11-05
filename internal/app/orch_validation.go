@@ -36,10 +36,13 @@ type validationFile struct {
 }
 
 type validationReport struct {
-	label   string
-	detail  string
-	passed  bool
+	label  string
+	detail string
+	passed bool
+	// skipped tells the user the check did not run; silent drops it entirely,
+	// for a reason that says nothing about the edit.
 	skipped bool
+	silent  bool
 }
 
 func attachValidation(data any, message string) any {
@@ -522,6 +525,11 @@ func validateGoFiles(ctx context.Context, root string, files []validationFile) v
 		args := append([]string{"vet", "-p=2"}, packageList...)
 		output, runErr := runValidationCommand(ctx, root, goProgram, args...)
 		if runErr != nil {
+			// A go older than go.mod asks for is the user's environment, not
+			// code the agent broke: say nothing about the edit.
+			if goToolchainIssue(output) {
+				return validationReport{label: "Go vet", silent: true}
+			}
 			// Missing modules / go.sum entries are dependency problems,
 			// not code the agent broke.
 			if goDependencyIssue(output) {
@@ -565,6 +573,14 @@ func goDependencyIssue(output string) bool {
 		}
 	}
 	return false
+}
+
+// goToolchainIssue reports whether the go command refused a go.mod that asks for
+// a newer language version. Validation pins GOTOOLCHAIN=local so no run can
+// download a toolchain, which makes an older installed go a limit of the user's
+// environment rather than a finding about the edit.
+func goToolchainIssue(output string) bool {
+	return strings.Contains(output, "go.mod requires go >= ") || strings.Contains(output, "module requires Go ")
 }
 
 // filterGoVetOutput keeps only diagnostics whose file path matches one of the
@@ -946,6 +962,7 @@ func formatValidationReports(reports []validationReport) string {
 	var passed, failed, skipped []string
 	for _, report := range reports {
 		switch {
+		case report.silent:
 		case report.skipped:
 			skipped = append(skipped, report.label+"（"+report.detail+"）")
 		case report.passed:

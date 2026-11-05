@@ -255,7 +255,8 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 		}
 		t.Messages[i] = row
 	}
-	// A trimmed card no longer folds into the group it belonged to.
+	// Rows were replaced in place: same positions, same group membership, new
+	// bodies. The cached history blocks are rebuilt for their new shape.
 	t.markHistory()
 }
 

@@ -73,8 +73,11 @@ func readImageTestInputs(paths []string, existingCount, existingBytes int) ([]pr
 			return nil, fmt.Errorf("图片合计不得超过 20 MiB")
 		}
 		cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
-		if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 64*1024*1024 {
+		if err != nil {
 			return nil, fmt.Errorf("图片无法读取或尺寸过大")
+		}
+		if err := oversizedImageError(cfg, format); err != nil {
+			return nil, err
 		}
 		typ := ""
 		switch format {
@@ -162,7 +165,7 @@ func (a *desktop) runImageModelTest(s *imageModelsState, t *imageModelTest) {
 		if err == nil {
 			data, e := a.core.ReadNativeGeneratedImage(result.Ref)
 			if e == nil {
-				if cfg, _, e := image.DecodeConfig(bytes.NewReader(data)); e == nil && int64(cfg.Width)*int64(cfg.Height) <= 64*1024*1024 {
+				if cfg, format, e := image.DecodeConfig(bytes.NewReader(data)); e == nil && oversizedImageError(cfg, format) == nil {
 					if img, _, e := image.Decode(bytes.NewReader(data)); e == nil {
 						preview = resizeImage(img, 512)
 					}

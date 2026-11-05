@@ -86,7 +86,11 @@ type desktop struct {
 	previewRequests                         []previewRequest
 	previewTimer                            *time.Timer
 	previewGeneration                       uint64
+	memoryTidyTimer                         *time.Timer
+	memoryTidyAt                            time.Time
 	customAvatar                            *ui.Bitmap
+	customAvatarAvailable                   bool
+	customAvatarBusy                        bool
 	avatarStyle                             string
 	avatarPoses                             map[string]*ui.Bitmap
 	avatarLoadID                            uint64
@@ -235,6 +239,7 @@ func Run() {
 		}
 		return
 	}
+	applyMemorySoftLimit()
 	a := &desktop{core: backend.NewApp(), page: "chat", modelEdit: -1, explorer: true, plans: map[string][]backend.PlanStep{}, planRev: map[string]int64{}, subRuns: map[string]*backend.SubagentRun{}, prefs: defaultPrefs(), extraRoots: map[string][]string{}, sshAllowed: map[string][]string{}}
 	mygo.App.OnSecondInstance(func([]string, string) { a.showMainWindow() })
 	// MyGo keys its single-instance handoff by the application name. Include the
@@ -282,8 +287,13 @@ func Run() {
 		a.win.OnHide(func() {
 			a.mainWindowHidden = true
 			a.releaseHiddenWindowResources()
+			a.scheduleMemoryTidy()
 		})
 		a.win.OnShow(a.mainWindowShown)
+		// Minimizing leaves previews and pixels in place, so only the heap is
+		// released here; restoring cancels a release the user would pay for.
+		a.win.OnMinimize(func() { a.scheduleMemoryTidy() })
+		a.win.OnRestore(a.cancelMemoryTidy)
 		a.pluginHost = pluginhost.New(a.core, a.win, func(message, kind string) {
 			if !a.closing {
 				a.queueNotice(message, kind)
@@ -334,7 +344,12 @@ func Run() {
 			if logger, _, err := backend.InitErrorLogger(); err == nil {
 				a.core.SetErrorLogger(logger)
 			}
-			customAvatar := a.loadCustomAvatar()
+			avatarPath := filepath.Join(a.core.AppDataDir(), "native-avatar")
+			_, avatarErr := os.Stat(avatarPath)
+			var customAvatar *ui.Bitmap
+			if prefs.Avatar == "custom" {
+				customAvatar = a.loadCustomAvatar()
+			}
 			avatarStyle := normalizedAvatarStyle(prefs.Avatar)
 			avatarPoses := decodeAvatarStyle(avatarStyle)
 			err := a.core.StartNative(context.Background(), a.onEvent)
@@ -357,6 +372,7 @@ func Run() {
 				a.config = cfg
 				a.syncNativeAppearance()
 				a.customAvatar = customAvatar
+				a.customAvatarAvailable = avatarErr == nil
 				a.avatarStyle, a.avatarPoses = avatarStyle, avatarPoses
 				a.plugins = plugins
 				a.pluginsRevision++
@@ -408,6 +424,7 @@ func (a *desktop) shutdown() {
 	}
 	a.closing = true
 	a.closeVoiceInput()
+	a.cancelMemoryTidy()
 	if a.upd.Applied && a.upd.State == "restarting" {
 		// The updater already flushed after ApplyUpdate stopped all runs.
 		a.finishQuit()
@@ -1103,10 +1120,14 @@ func (a *desktop) refreshFiles(manual ...bool) {
 	if t == nil {
 		return
 	}
+	if a.filesF.Search.Query != "" && workspaceKey(t.Workspace) == a.fileRoot {
+		a.searchFiles(a.filesF.Search.Query)
+		return
+	}
 	a.fileEpoch++
-	epoch := a.fileEpoch
 	root := t.Workspace
 	a.prepareFileTree(root)
+	epoch := a.fileEpoch
 	a.workspacePreview.cancelLoad("")
 	a.closeFileInfo()
 	if root == "" {
