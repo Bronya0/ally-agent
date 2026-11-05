@@ -116,3 +116,5 @@
 [request-json-thrice] 2026-11-03 中危 一次请求把同一份历史编三次：SDK 编码、传输层重写、工具 schema 哈希（可缓存）。@internal/app/prov_reasoning.go
 
 [stats-full-rewrite] 2026-11-03 中危 统计每 5 秒把当天整份日文件重写一遍（marshal + 临时文件改名），记录越多越贵。@internal/app/biz_stats.go
+
+[memory-tidy] 2026-11-04 中危 别在每帧或固定定时器里调 FreeOSMemory：STW 加缺页抖动，只在隐藏/最小化去抖后调。@desktop/memory_tidy.go

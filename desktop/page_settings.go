@@ -211,9 +211,10 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				}
 			})
 			ui.Row(c).Gap(gapField).Children(func() {
-				settingsAction(c, "上传自定义形象").OnClick(func() { a.chooseCustomAvatar() })
-				if a.customAvatar != nil {
-					settingsAction(c, "使用自定义形象").OnClick(func() { a.selectAvatarStyle("custom") })
+				settingsAction(c, "上传自定义形象").Disabled(a.customAvatarBusy).OnClick(func() { a.chooseCustomAvatar() })
+				if a.customAvatarAvailable {
+					settingsAction(c, "使用自定义形象").Disabled(a.customAvatarBusy).OnClick(func() { a.selectAvatarStyle("custom") })
+					settingsAction(c, "删除自定义形象", uikit.Error).Disabled(a.customAvatarBusy).OnClick(func() { a.deleteCustomAvatar() })
 				}
 			})
 			fieldNote(c, "点击欢迎页头像可以切换樱花特效；桌宠未开启时也可以摸摸头。", a.secondaryInk())

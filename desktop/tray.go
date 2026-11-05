@@ -82,6 +82,7 @@ func (a *desktop) showMainWindow() {
 
 func (a *desktop) mainWindowShown() {
 	a.mainWindowHidden = false
+	a.cancelMemoryTidy()
 	a.restoreAttachmentImages(a.current())
 }
 

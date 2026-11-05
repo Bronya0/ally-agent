@@ -161,6 +161,25 @@ func TestValidationGoSkipsUntouchedVetFindings(t *testing.T) {
 	}
 }
 
+func TestValidationGoSilentOnOlderInterpreter(t *testing.T) {
+	t.Parallel()
+	root := validationSandbox(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("Go unavailable")
+	}
+	// Validation pins GOTOOLCHAIN=local, so it can never fetch the toolchain
+	// go.mod asks for. That is the user's environment, not the edit, and the
+	// check stays out of the report entirely.
+	writeToolTestFile(t, root, "go.mod", "module example.invalid/check\ngo 99.0\n")
+	writeToolTestFile(t, root, "api.go", "package check\nfunc Value() int { return 1 }\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r := validateGoFiles(ctx, root, collectValidationFiles([]string{root}, []string{"api.go"}))
+	if !r.silent || r.passed || r.skipped || formatValidationReports([]validationReport{r}) != "" {
+		t.Fatalf("outdated toolchain was reported: %+v", r)
+	}
+}
+
 func TestValidationJavaIgnoresInjectedLocale(t *testing.T) {
 	root := validationSandbox(t)
 	// macOS ships /usr/bin/javac as a stub that exists without a JDK installed, so

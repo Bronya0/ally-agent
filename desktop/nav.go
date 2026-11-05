@@ -18,6 +18,9 @@ func (a *desktop) changePage(page string) {
 		return
 	}
 	if page != "chat" {
+		if a.page == "chat" {
+			a.resetFileExplorer()
+		}
 		a.releaseFilePreview()
 	}
 	if a.page == "settings" && page != "settings" {

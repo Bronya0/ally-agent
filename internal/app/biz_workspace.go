@@ -9,6 +9,7 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"container/heap"
 	"context"
 	"fmt"
@@ -727,16 +728,23 @@ func (b *workspacePathIndexBuilder) add(rel string, dir bool) bool {
 }
 
 func workspacePathFilesWithRipgrep(ctx context.Context, root string, add func(string) bool) (string, bool, error) {
-	rgPath, err := grep.Find()
-	if err != nil {
-		return "", false, err
-	}
-	runCtx, stop := context.WithCancel(ctx)
-	defer stop()
 	args := []string{"--files", "--hidden", "-g", "!.git", "-g", "!.git/**"}
 	for _, dir := range workspacePathIndexIgnoredDirs() {
 		args = append(args, "-g", "!"+dir+"/**", "-g", "!**/"+dir+"/**")
 	}
+	return streamWorkspacePathsWithRipgrep(ctx, root, args, add)
+}
+
+// streamWorkspacePathsWithRipgrep bounds process concurrency and reads one path
+// at a time. NUL delimiters preserve spaces and newlines in filenames.
+func streamWorkspacePathsWithRipgrep(ctx context.Context, root string, args []string, add func(string) bool) (string, bool, error) {
+	rgPath, err := grep.Find()
+	if err != nil {
+		return "", false, grep.MissingError()
+	}
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	args = append(args, "--null", "--no-config", "--threads", "2")
 	cmd := exec.CommandContext(runCtx, rgPath, args...)
 	cmd.Dir = root
 	hideCommandWindow(cmd)
@@ -752,8 +760,14 @@ func workspacePathFilesWithRipgrep(ctx context.Context, root string, add func(st
 	truncated := false
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if i := bytes.IndexByte(data, 0); i >= 0 {
+			return i + 1, data[:i], nil
+		}
+		return 0, nil, nil
+	})
 	for scanner.Scan() {
-		p := strings.TrimSpace(scanner.Text())
+		p := scanner.Text()
 		if p == "" {
 			continue
 		}
@@ -764,12 +778,18 @@ func workspacePathFilesWithRipgrep(ctx context.Context, root string, add func(st
 		}
 	}
 	scanErr := scanner.Err()
+	if scanErr != nil {
+		stop()
+	}
 	waitErr := cmd.Wait()
 	if ctx.Err() != nil {
 		return "rg", true, ctx.Err()
 	}
 	if scanErr != nil && !truncated {
 		return "", truncated, scanErr
+	}
+	if exit, ok := waitErr.(*exec.ExitError); ok && exit.ExitCode() == 1 && stderr.String() == "" {
+		waitErr = nil // rg reports an empty directory with exit status 1.
 	}
 	if waitErr != nil && !truncated {
 		msg := strings.TrimSpace(stderr.String())
