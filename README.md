@@ -8,6 +8,9 @@ Ally Native 是一款使用 Go 与 MyGo 绘制界面的桌面 AI 编程助手，
   <a href="https://github.com/Bronya0/ally-agent/releases">
     <img alt="下载 Ally" src="https://img.shields.io/badge/下载_Ally-GitHub_Releases-2ea44f?style=for-the-badge&logo=github">
   </a>
+  <a href="https://awesomemygo.dev/apps/ally">
+    <img alt="Listed on Awesome MyGo" src="https://awesomemygo.dev/badge.svg" height="28">
+  </a>
 </p>
 
 前往 [Releases 页面](https://github.com/Bronya0/ally-agent/releases)下载 Windows、macOS 或 Linux 安装包。
