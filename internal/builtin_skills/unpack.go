@@ -17,7 +17,7 @@ import (
 )
 
 // SkillFiles lists every file an embedded skill ships, as paths inside FS.
-func SkillFiles(name string) []string {
+func skillFiles(name string) []string {
 	root := path.Join(Root, name)
 	var files []string
 	_ = fs.WalkDir(FS, root, func(p string, d fs.DirEntry, err error) error {
@@ -38,7 +38,7 @@ func SkillFiles(name string) []string {
 // one read per file and never rewrites what did not change; a file that changed
 // in a new version is replaced.
 func Unpack(name, dest string) (bool, error) {
-	files := SkillFiles(name)
+	files := skillFiles(name)
 	if len(files) <= 1 {
 		return false, nil
 	}

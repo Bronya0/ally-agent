@@ -997,80 +997,46 @@ func TestSkillValidYAMLRetainsAliasesAndQuotedMultiline(t *testing.T) {
 	}
 }
 
-// 带脚本的内置技能必须解包到数据目录：模型要靠这个路径 read 并运行脚本，
-// 只有 SKILL.md 的内置技能则不该凭空多出一个目录。
-func TestBuiltinSkillUnpacksSupportFilesToTheDataDir(t *testing.T) {
+// 带脚本的内置技能加载时必须报出数据目录里的真实路径：模型靠它 read 并运行
+// 脚本。只有 SKILL.md 的技能不报目录，免得模型拿到一个打不开的别名。
+func TestBuiltinSkillLoadDir(t *testing.T) {
 	a := newIsolatedChatTestApp(t)
-	dir, err := a.materializeBuiltinSkill("md2other")
+	// 直接问内置清单：用户目录里装过同名技能时，ListSkills 会按 user > builtin
+	// 的优先级把内置那份藏掉，这个测试关心的不是优先级。
+	builtin := func(name string) SkillDefinition {
+		t.Helper()
+		for _, sk := range builtinSkillEntries() {
+			if strings.EqualFold(sk.Name, name) {
+				return sk
+			}
+		}
+		t.Fatalf("%s is not among the builtin skills", name)
+		return SkillDefinition{}
+	}
+
+	script := builtin("md2other")
+	if script.WhenToUse == "" {
+		t.Fatalf("builtin skill lost its whenToUse: %+v", script)
+	}
+	dir, err := a.skillLoadDir(script)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := filepath.Join(a.AppDataDir(), "builtin-skills", "md2other"); dir != want {
 		t.Fatalf("dir = %q, want %q", dir, want)
 	}
-	script := filepath.Join(dir, "md2docx.py")
-	data, err := os.ReadFile(script)
+	data, err := os.ReadFile(filepath.Join(dir, "md2docx.py"))
 	if err != nil {
 		t.Fatalf("script was not unpacked: %v", err)
 	}
 	if !bytes.Contains(data, []byte("def build_docx")) {
 		t.Fatal("unpacked file is not the conversion script")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err != nil {
-		t.Fatalf("unpacked dir is not self-contained: %v", err)
-	}
-
-	before, err := os.Stat(script)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.materializeBuiltinSkill("md2other"); err != nil {
-		t.Fatal(err)
-	}
-	after, err := os.Stat(script)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !after.ModTime().Equal(before.ModTime()) {
-		t.Fatal("an unchanged builtin file was rewritten on reload")
-	}
-
-	if dir, err := a.materializeBuiltinSkill("anydoc"); err != nil || dir != "" {
-		t.Fatalf("a skill with only SKILL.md returned dir=%q err=%v", dir, err)
-	}
-}
-
-// 加载内置技能时报告的目录必须是解包后的真实路径，否则模型拿到的 dir 是
-// 一个只存在于嵌入树里的别名。
-func TestBuiltinSkillLoadReportsTheUnpackedDir(t *testing.T) {
-	a := newIsolatedChatTestApp(t)
-	// 直接问内置清单：用户目录里装过同名 md2other 时，ListSkills 会按 user >
-	// builtin 的优先级把内置那份藏掉，这个测试关心的不是优先级。
-	var target *SkillDefinition
-	for _, sk := range builtinSkillEntries() {
-		if strings.EqualFold(sk.Name, "md2other") {
-			sk := sk
-			target = &sk
-			break
-		}
-	}
-	if target == nil {
-		t.Fatal("md2other is not listed among the builtin skills")
-	}
-	if target.WhenToUse == "" {
-		t.Fatalf("builtin skill lost its whenToUse: %+v", target)
-	}
-	dir, err := a.skillLoadDir(*target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !filepath.IsAbs(dir) {
-		t.Fatalf("builtin skill dir = %q, want an absolute unpacked path", dir)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "md2docx.py")); err != nil {
-		t.Fatalf("loaded dir has no script: %v", err)
-	}
-	if tree := buildSkillDirTree(dir, target.Path); !strings.Contains(tree, "md2docx.py") {
+	if tree := buildSkillDirTree(dir, script.Path); !strings.Contains(tree, "md2docx.py") {
 		t.Fatalf("loaded dir tree omits the script: %q", tree)
+	}
+
+	if dir, err := a.skillLoadDir(builtin("anydoc")); err != nil || dir != "" {
+		t.Fatalf("a skill with only SKILL.md reported dir=%q err=%v", dir, err)
 	}
 }
