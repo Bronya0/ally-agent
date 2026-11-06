@@ -216,7 +216,11 @@ func (a *App) ActivateSkill(name string) (string, error) {
 			if err := a.enableSkill(sk.Name); err != nil {
 				return "", err
 			}
-			return renderSkillLoadedBlock(sk.Name, sk.Source, sk.Dir, "", content), nil
+			dir, err := a.skillLoadDir(sk)
+			if err != nil {
+				return "", err
+			}
+			return renderSkillLoadedBlock(sk.Name, sk.Source, dir, "", content), nil
 		}
 	}
 	return "", fmt.Errorf("skill not found: %s", name)
@@ -373,11 +377,17 @@ func (a *App) handleSkillToolCall(cfg ConfigState, sessionID, skillName, skillAr
 			}
 
 			loadedContent := content
-			if tree := buildSkillDirTree(sk.Dir, sk.Path); tree != "" {
+			// A built-in skill that ships scripts is unpacked before its directory is
+			// reported, so the tree below and the dir in the block point at real files.
+			dir, err := a.skillLoadDir(sk)
+			if err != nil {
+				return nil, err
+			}
+			if tree := buildSkillDirTree(dir, sk.Path); tree != "" {
 				loadedContent = loadedContent + "\n" + tree
 			}
 
-			loadedBlock := renderSkillLoadedBlock(sk.Name, sk.Source, sk.Dir, skillArgs, loadedContent)
+			loadedBlock := renderSkillLoadedBlock(sk.Name, sk.Source, dir, skillArgs, loadedContent)
 			return map[string]any{
 				"loaded":  true,
 				"name":    sk.Name,
