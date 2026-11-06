@@ -83,25 +83,28 @@ func TestWorkspaceDeleteRevealsWithoutMovingTitle(t *testing.T) {
 }
 
 func TestRailSectionTitlesUseAvailableSpace(t *testing.T) {
+	titles := []string{"工作区", "历史会话"}
 	for _, width := range []float32{160, 200, 340} {
 		a := &desktop{prefs: defaultPrefs()}
 		a.prefs.RailWidth = width
-		var textWidth float32
+		textWidths := make([]float32, len(titles))
 		tt := ui.NewTester(func(c *ui.Context) {
 			c.SetTheme(a.theme())
 			c.DisableAnimations()
 			a.railBody(c, &a.prefs.RailWidth)
-			textWidth, _ = c.MeasureText(1000, ui.Span{Text: "历史工作区", Size: 12.5})
+			for i, title := range titles {
+				textWidths[i], _ = c.MeasureText(1000, ui.Span{Text: title, Size: fontRailLabel})
+			}
 		}, 500, 850)
-		for _, title := range []string{"历史工作区", "工作区会话"} {
+		for i, title := range titles {
 			r, ok := tt.Find(title)
 			// The found rect already stops where the add button starts and begins at
 			// the row edge; only the caret and its gap sit inside it. Subtracting the
 			// row inset and the button again counted that chrome twice, so the label
 			// read as 1 DIP too narrow while the drawn text still had plenty of room.
 			available := r.W - sizeRailIcon - 10
-			if !ok || available < textWidth {
-				t.Fatalf("width=%v header=%v leaves %.1f for %.1f text", width, r, available, textWidth)
+			if !ok || available < textWidths[i] {
+				t.Fatalf("width=%v title=%q header=%v leaves %.1f for %.1f text", width, title, r, available, textWidths[i])
 			}
 		}
 	}

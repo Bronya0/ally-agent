@@ -193,7 +193,7 @@ func (a *desktop) showPetBubble(message string, important bool) {
 				if a.pet.bubbleOverflow > 0 {
 					count := a.pet.bubbleOverflow
 					a.pet.bubbleOverflow = 0
-					a.showPetBubble(fmt.Sprintf("还有 %d 项任务结束了，请查看对话或任务中心。", count), true)
+					a.showPetBubble(fmt.Sprintf("还有 %d 项任务结束了，请查看对话或任务页面。", count), true)
 					return
 				}
 				a.pet.bubble.Hide()

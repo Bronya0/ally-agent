@@ -1417,7 +1417,7 @@ func (a *desktop) sshChip(c *ui.Context, t *conversation) {
 		return
 	}
 	count := len(a.sshAllowed[t.Workspace])
-	footerBadge(c, "footer-ssh", "SSH", fmt.Sprint(count), ui.Hex("#3b9f70"), "SSH 集群授权", func() {
+	footerBadge(c, "footer-ssh", "SSH", fmt.Sprint(count), ui.Hex("#3b9f70"), "SSH 授权", func() {
 		a.sshF.AuthOpen = true
 		a.loadSSHAuth(t.Workspace)
 	}, a.secondaryInk())

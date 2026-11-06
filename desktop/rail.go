@@ -20,11 +20,11 @@ type modeItem struct {
 var baseModes = []modeItem{
 	{"chat", "Agent", "chat"},
 	{"skills", "技能", "skills"},
-	{"mcp", "MCP 服务", "mcp"},
+	{"mcp", "MCP", "mcp"},
 	{"models", "模型", "models"},
-	{"ssh", "SSH 集群", "ssh"},
-	{"tasks", "任务中心", "tasks"},
-	{"stats", "Token 统计", "stats"},
+	{"ssh", "SSH", "ssh"},
+	{"tasks", "任务", "tasks"},
+	{"stats", "Token", "stats"},
 	{"plugins", "插件", "plugins"},
 }
 
@@ -210,7 +210,7 @@ func (a *desktop) railGroupButton(c *ui.Context, expanded bool, head backend.Plu
 
 func (a *desktop) railWorkspaces(c *ui.Context) {
 	ui.Column(c).Key("rail-workspaces").FillWidth().Shrink(1).MinHeight(24).Gap(3).Children(func() {
-		a.railSectionHeader(c, "rail-ws", "历史工作区", "folderopen", a.prefs.RailWorkspaceOpen, "添加工作区", func() {
+		a.railSectionHeader(c, "rail-ws", "工作区", "folderopen", a.prefs.RailWorkspaceOpen, "添加工作区", func() {
 			a.prefs.RailWorkspaceOpen = !a.prefs.RailWorkspaceOpen
 			a.savePrefs()
 		}, func() { a.chooseWorkspace() })
@@ -318,7 +318,7 @@ func (a *desktop) workspaceSessionIDs(root string) []string {
 func (a *desktop) railSessions(c *ui.Context) {
 	p := a.currentPalette()
 	ui.Column(c).Key("rail-sessions").FillWidth().Grow(1).MinHeight(24).Gap(3).Children(func() {
-		a.railSectionHeader(c, "rail-sess", "工作区会话", "history", a.prefs.RailSessionsOpen, "新建会话", func() {
+		a.railSectionHeader(c, "rail-sess", "历史会话", "history", a.prefs.RailSessionsOpen, "新建会话", func() {
 			a.prefs.RailSessionsOpen = !a.prefs.RailSessionsOpen
 			a.savePrefs()
 		}, func() { a.newSession() })

@@ -80,19 +80,19 @@ func (a *desktop) pageContent(c *ui.Context, width float32) {
 	case a.page == "models":
 		a.panelPage(c, "模型", "按 Provider 管理对话模型与生图模型", nil, a.modelsPageBody)
 	case a.page == "mcp":
-		a.panelPage(c, "MCP 服务", "", nil, a.mcpPageBody)
+		a.panelPage(c, "MCP", "", nil, a.mcpPageBody)
 	case a.page == "skills":
-		a.panelPage(c, "技能", "", nil, a.skillsPageBody)
+		a.panelPage(c, "技能", "", func() { a.skillSourcesHelp(c) }, a.skillsPageBody)
 	case a.page == "ssh":
-		a.panelPage(c, "SSH 集群授权",
+		a.panelPage(c, "SSH 授权",
 			"添加服务器后，在对话底部勾选授权，模型即可使用 Ally 的 SSH 工具；密钥等凭据由 Ally 管理，不会传给模型。",
 			nil, a.sshPageBody)
 	case a.page == "plugins":
 		a.panelPage(c, "插件", "", nil, a.pluginsPageBody)
 	case a.page == "tasks":
-		a.panelPage(c, "任务中心", "", nil, a.tasksPageBody)
+		a.panelPage(c, "任务", "", nil, a.tasksPageBody)
 	case a.page == "stats":
-		a.panelPage(c, "用量统计", "", nil, a.statsPageBody)
+		a.panelPage(c, "Token", "", nil, a.statsPageBody)
 	default:
 		emptyState(c, "页面不存在", a.page, a.secondaryInk())
 	}

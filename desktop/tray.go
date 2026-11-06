@@ -44,7 +44,7 @@ func (a *desktop) createSystemTray(icon []byte, template bool) error {
 		tray.OnClick(a.showMainWindow)
 		tray.OnRightClick(func() {
 			tray.SetMenu(menu)
-			tray.PopUpMenu()
+			popUpSystemTrayMenu(tray)
 			tray.SetMenu(nil)
 		})
 	}
