@@ -24,15 +24,24 @@ func writeUserProfileFile(t *testing.T, content string) string {
 	return path
 }
 
-func TestUserProfilePromptPartEmptyWithoutFile(t *testing.T) {
-	if got := buildUserProfilePromptPart(filepath.Join(t.TempDir(), "missing", userProfileFileName)); got != "" {
-		t.Fatalf("expected no block without a profile file, got %q", got)
-	}
-	// A file whose body is only a frontmatter block injects nothing: there is no
-	// user content to carry.
-	path := writeUserProfileFile(t, "---\ndescription: nothing here\n---\n\n")
-	if got := buildUserProfilePromptPart(path); got != "" {
-		t.Fatalf("expected no block for an empty body, got %q", got)
+// 没有档案文件时也要给出写法规矩：新装的人先要知道 USER.md 干什么用，
+// 第一条偏好才有地方落。正文仍然只在文件有内容时注入。
+func TestUserProfileRulesSurviveAnEmptyProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{"missing file", filepath.Join(t.TempDir(), "missing", userProfileFileName)},
+		// 只有 frontmatter 的文件等于没有内容。
+		{"frontmatter only", writeUserProfileFile(t, "---\ndescription: nothing here\n---\n\n")},
+	} {
+		got := buildUserProfilePromptPart(tc.path)
+		if !strings.Contains(got, userProfileDisplayPath) {
+			t.Fatalf("%s: the rules must still name the file to edit, got %q", tc.name, got)
+		}
+		if strings.Contains(got, "<user-profile") {
+			t.Fatalf("%s: an empty profile must not carry a body block, got %q", tc.name, got)
+		}
 	}
 }
 
