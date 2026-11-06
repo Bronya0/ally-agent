@@ -371,8 +371,30 @@ func commandSubstitutions(commandLine string) []string {
 }
 
 func nestedShellScript(invocation Invocation) (string, bool) {
-	for i, arg := range invocation.Args {
+	unixShell := false
+	switch invocation.Name {
+	case "bash", "sh", "zsh", "dash", "ksh":
+		unixShell = true
+	}
+	for i := 0; i < len(invocation.Args); i++ {
+		arg := invocation.Args[i]
+		if unixShell {
+			// Once a script operand or -- is reached, all remaining words are
+			// script arguments, even when they look like -c or contain code.
+			if arg == "--" || arg == "-" || len(arg) == 0 || (arg[0] != '-' && arg[0] != '+') {
+				return "", false
+			}
+			if arg == "--rcfile" || arg == "--init-file" {
+				i++ // The next word is an option value, not a script operand.
+				continue
+			}
+		}
 		if !shellScriptFlag(invocation.Name, arg) || i+1 >= len(invocation.Args) {
+			// -o/+o and Bash's -O/+O consume an option name. They may
+			// also be grouped with other short flags, e.g. -eo pipefail.
+			if unixShell && len(arg) > 1 && arg[1] != '-' && strings.ContainsAny(arg[1:], "oO") {
+				i++
+			}
 			continue
 		}
 		return invocation.Args[i+1], true

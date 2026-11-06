@@ -337,6 +337,19 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 		m = map[string]any{"role": "tool_call", "toolCallId": id}
 		t.Messages = append(t.Messages, m)
 	}
+	// Ownership also depends on the tool kind and a sub-agent result's ID,
+	// both of which can arrive after this row has already been rendered.
+	beforeKind := toolKind(str(m, "name"))
+	beforeAgent := ""
+	if beforeKind == "subagent" {
+		beforeAgent = str(toolResult(m), "agentId")
+	}
+	defer func() {
+		afterKind := toolKind(str(m, "name"))
+		if beforeKind != afterKind || ((beforeKind == "subagent" || afterKind == "subagent") && beforeAgent != str(toolResult(m), "agentId")) {
+			t.markHistory()
+		}
+	}()
 	for _, k := range []string{"name", "args", "result", "error", "errorCode", "durationMs", "mcpServer", "mcpTool"} {
 		if v, ok := p[k]; ok {
 			m[k] = v
