@@ -613,7 +613,7 @@ func TestSaveSkillFlattensMultilineMetadata(t *testing.T) {
 }
 
 // 内置技能没有磁盘目录（Dir 是嵌入树里的相对路径），冲突提示必须指到
-// builtin:// 上，否则用户会照着 "skills/codegraph" 去工作区里找。
+// builtin:// 上，否则用户会照着 "skills/playwright-cli" 去工作区里找。
 func TestSaveSkillBuiltinConflictNamesTheVirtualPath(t *testing.T) {
 	t.Parallel()
 	app := newApiTestApp(t)
@@ -733,42 +733,6 @@ func TestParseSkillContentFromMemory(t *testing.T) {
 	}
 	if meta.WhenToUse != "when testing" {
 		t.Fatalf("expected whenToUse, got %q", meta.WhenToUse)
-	}
-}
-
-func TestBuiltinSkillEntriesContainsCodeGraph(t *testing.T) {
-	entries := builtinSkillEntries()
-	var cg *SkillDefinition
-	for i := range entries {
-		if entries[i].Name == "codegraph" {
-			cg = &entries[i]
-			break
-		}
-	}
-	if cg == nil {
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			names = append(names, e.Name)
-		}
-		t.Fatalf("expected codegraph in built-in skills, got %v", names)
-	}
-	if cg.Source != "builtin" {
-		t.Fatalf("expected Source=builtin, got %q", cg.Source)
-	}
-	if cg.embeddedContent == "" {
-		t.Fatal("expected embeddedContent to be populated for built-in skill")
-	}
-	if !strings.Contains(cg.embeddedContent, "CODEGRAPH.md") {
-		t.Fatalf("expected embedded content to reference CODEGRAPH.md")
-	}
-	if !strings.Contains(cg.embeddedContent, "速查表") {
-		t.Fatalf("expected embedded content to specify the feature-lookup table section")
-	}
-	if !strings.HasPrefix(cg.Path, "builtin://") {
-		t.Fatalf("expected Path to start with builtin://, got %q", cg.Path)
-	}
-	if cg.WhenToUse == "" {
-		t.Fatal("expected WhenToUse to be populated from frontmatter")
 	}
 }
 
