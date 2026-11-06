@@ -861,7 +861,7 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 func (a *desktop) planMark(c *ui.Context, status string) ui.Element {
 	switch status {
 	case "done":
-		return iconGlyph(c, "check", 9).Shrink(0)
+		return iconGlyph(c, "check", 9).Shrink(0).TextColor(c.Theme().Success)
 	case "in_progress":
 		return ui.Box(c).Size(9, 9).Shrink(0).Radius(5).Background(c.Theme().Accent)
 	}

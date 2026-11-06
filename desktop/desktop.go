@@ -229,6 +229,12 @@ type desktop struct {
 	sshRefreshPending                                   map[string]bool
 	deletePrompt                                        *deletePromptState
 
+	// mcpServersRev is the revision of the status list below. The list is replaced
+	// as a whole on every update, so bumping it with the replacement is enough for
+	// the per-row lookups to see a new index.
+	mcpServersRev uint64
+	mcpStatusMemo memoOf[uint64, map[string]map[string]any]
+
 	// Derived from sessions. The rail, the composer's session menu and the
 	// workspace menus ask for them on every frame, so they are rebuilt only
 	// when the index itself is replaced (sessRev).
@@ -392,7 +398,7 @@ func Run() {
 				a.toolInventory = tools
 				a.toolCount = enabledToolCount(tools)
 				a.refreshMCPInventory()
-				a.mcpServers = servers
+				a.setMCPServers(servers)
 				a.mcpSummary = mcpSummary(servers)
 				a.sessions, a.sessRev = sessions, a.sessRev+1
 				for _, tab := range a.tabs {

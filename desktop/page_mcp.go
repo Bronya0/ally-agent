@@ -209,12 +209,13 @@ func (a *desktop) renderMCPServerList(c *ui.Context, data mcpListData) {
 	}
 	names := data.names
 	query := strings.ToLower(strings.TrimSpace(a.mcpF.Search))
+	// The index is built once per replacement of the status list, so each row
+	// reads its status by name instead of asking for the whole index again.
+	statuses := a.mcpStatusIndex()
 	shown := 0
 	for _, name := range names {
 		entry := data.doc.Servers[name]
-		// The status is looked up per row instead of indexing the whole server
-		// list into a fresh map every frame; the map itself stays live this way.
-		status := a.mcpStatusFor(name)
+		status := statuses[name]
 		if query != "" {
 			haystack := strings.ToLower(name + " " + entry.Command + " " + entry.URL + " " + entry.Transport + " " + mcpToolNames(status))
 			if !strings.Contains(haystack, query) {
@@ -262,10 +263,10 @@ func (a *desktop) renderMCPServerList(c *ui.Context, data mcpListData) {
 				inlineError(c, "mcp-error-"+name, errText)
 			}
 			if a.mcpF.ToolOpen[name] {
-				// The checklist writes into the document it is given, so it gets the
-				// private copy; it only exists for the row the user expanded, so an
-				// ordinary frame of the list clones nothing.
-				a.mcpToolChecklist(c, name, entry, editDoc(), status)
+				// The checklist writes into the document it is given, so it takes a
+				// provider instead of a copy: an open checklist repaints every frame,
+				// and the clone belongs to the click that changes something.
+				a.mcpToolChecklist(c, name, entry, editDoc, status)
 			}
 		})
 	}
@@ -278,15 +279,26 @@ func (a *desktop) renderMCPServerList(c *ui.Context, data mcpListData) {
 	}
 }
 
-func (a *desktop) mcpStatusFor(name string) map[string]any {
-	for _, server := range a.mcpServers {
-		if str(server, "name") == name {
-			return server
+func (a *desktop) setMCPServers(servers []map[string]any) {
+	a.mcpServers = servers
+	a.mcpServersRev++
+}
+
+// mcpStatusIndex maps a server name to its status map. It is rebuilt once per
+// replacement of the status list instead of being walked once per row: the list
+// page reads every visible row on every frame. A server without status is simply
+// absent, and a missing map reads like an empty one through str and list.
+func (a *desktop) mcpStatusIndex() map[string]map[string]any {
+	return a.mcpStatusMemo.get(a.mcpServersRev, func(uint64) map[string]map[string]any {
+		index := make(map[string]map[string]any, len(a.mcpServers))
+		for _, server := range a.mcpServers {
+			name := str(server, "name")
+			if _, exists := index[name]; !exists {
+				index[name] = server
+			}
 		}
-	}
-	// A nil map reads like an empty one through the str/list helpers, so a
-	// server without status costs no allocation per frame.
-	return nil
+		return index
+	})
 }
 
 func mcpToolNames(status map[string]any) string {
@@ -312,7 +324,7 @@ func mcpTransportLabel(entry mcpServerEntry, status map[string]any) string {
 	return "stdio"
 }
 
-func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEntry, doc *mcpConfigDoc, status map[string]any) {
+func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEntry, docOf func() *mcpConfigDoc, status map[string]any) {
 	ui.Column(c).Key("mcp-tools-"+name).FillWidth().Padding(8, 10).Gap(2).Background(c.Theme().Background).Radius(radiusSmall).Children(func() {
 		fieldNote(c, "勾选的工具注入模型上下文，取消勾选即停用；对端新增工具默认启用；下一会话生效，不触发重连。", a.secondaryInk())
 		for _, item := range list(status, "tools") {
@@ -332,6 +344,7 @@ func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEn
 			enabledPtr := &enabled
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 				ui.Checkbox(c.Key("mcp-tool-"+name+"-"+toolName), enabledPtr, toolName).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
+					doc := docOf()
 					entry = doc.Servers[name]
 					set := map[string]bool{}
 					for _, t := range entry.DisabledTools {
@@ -625,7 +638,7 @@ func (a *desktop) saveMCPDoc(doc *mcpConfigDoc, options ...mcpSaveOptions) {
 			}
 			a.mcpText = saved
 			a.mcpServerNames = names
-			a.mcpServers = servers
+			a.setMCPServers(servers)
 			a.mcpSummary = mcpSummary(servers)
 			a.refreshMCPInventory()
 			if opt.onSuccess != nil {
@@ -666,7 +679,7 @@ func (a *desktop) refreshMCPAll(manual ...bool) {
 				return
 			}
 			a.mcpText = raw
-			a.mcpServers = servers
+			a.setMCPServers(servers)
 			a.mcpServerNames = names
 			a.mcpSummary = mcpSummary(servers)
 			a.refreshMCPInventory()

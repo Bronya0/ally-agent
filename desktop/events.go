@@ -527,7 +527,7 @@ func (a *desktop) applyMCPStatus(p map[string]any) {
 	b, _ := json.Marshal(p["servers"])
 	var servers []map[string]any
 	_ = json.Unmarshal(b, &servers)
-	a.mcpServers = servers
+	a.setMCPServers(servers)
 	a.mcpSummary = mcpSummary(servers)
 	a.refreshMCPInventory()
 }
