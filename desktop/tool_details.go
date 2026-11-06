@@ -4,6 +4,8 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	"fmt"
+	"strings"
+
 	"github.com/egoist/mygo/ui"
 )
 
@@ -140,8 +142,17 @@ func toolDuration(m, result map[string]any) int64 {
 	}
 	return ms
 }
+
+// 资源卡右上角的状态阀：表里没有的值原样显示，所以新增状态不会变成空白，
+// 但也别让已授权这种常见值落成英文。
+var resourceStatusText = map[string]string{
+	"running": "运行中", "starting": "启动中", "stopped": "已停止",
+	"success": "已完成", "error": "失败", "idle": "空闲",
+	"approved": "已授权", "pending_approval": "等待授权",
+}
+
 func resourceStatus(status string) string {
-	if text, ok := map[string]string{"running": "运行中", "stopped": "已停止", "success": "已完成", "error": "失败", "pending_approval": "等待授权", "idle": "空闲"}[status]; ok {
+	if text, ok := resourceStatusText[strings.ToLower(strings.TrimSpace(status))]; ok {
 		return text
 	}
 	return status

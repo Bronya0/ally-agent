@@ -142,16 +142,11 @@ func buildCodeSpans(c *ui.Context, text, path string, base ui.Color) []ui.Span {
 	return spans
 }
 
-var toolFieldLabels = map[string]string{"action": "操作", "localPath": "本地路径", "remotePath": "远端路径", "files": "文件", "dirs": "目录", "bytes": "大小", "command": "命令", "cwd": "工作目录", "pid": "PID", "schedule": "调度", "nextRunAt": "下次执行", "prompt": "任务", "host": "主机", "port": "端口", "user": "用户", "description": "说明", "id": "ID", "instruction": "任务内容", "username": "用户", "fileCount": "文件", "dirCount": "目录", "totalBytes": "大小", "target": "目标", "riskLevel": "风险级别", "timeoutSeconds": "超时秒数", "outputBytes": "输出大小", "exitCode": "退出码", "model": "模型", "width": "宽度", "height": "高度"}
+var toolFieldLabels = map[string]string{"action": "操作", "localPath": "本地路径", "remotePath": "远端路径", "files": "文件", "dirs": "目录", "bytes": "大小", "command": "命令", "cwd": "工作目录", "pid": "PID", "schedule": "调度", "nextRunAt": "下次执行", "prompt": "任务", "host": "主机", "port": "端口", "user": "用户", "description": "说明", "id": "ID", "instruction": "任务内容", "username": "用户", "fileCount": "文件", "dirCount": "目录", "totalBytes": "大小", "target": "目标", "riskLevel": "风险级别", "timeoutSeconds": "超时秒数", "outputBytes": "输出大小", "exitCode": "退出码", "model": "模型", "width": "宽度", "height": "高度", "error": "失败原因"}
 
 func toolFields(c *ui.Context, data map[string]any, keys []string, ink ...ui.Color) {
-
 	for _, k := range keys {
-		v, ok := data[k]
-		if !ok || v == nil {
-			continue
-		}
-		valueText := fmt.Sprint(v)
+		valueText := resourceFieldValue(k, data)
 		if valueText == "" {
 			continue
 		}
@@ -161,25 +156,7 @@ func toolFields(c *ui.Context, data map[string]any, keys []string, ink ...ui.Col
 		}
 		ui.Row(c).FillWidth().MinWidth(0).Gap(gapField).AlignItems(ui.Start).Children(func() {
 			ui.Text(c, label+":").Width(76).Shrink(0).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink))
-			text := valueText
-			if k == "schedule" {
-				raw, _ := json.Marshal(v)
-				var schedule backend.ScheduledTaskSchedule
-				if json.Unmarshal(raw, &schedule) == nil {
-					text = scheduleText(schedule)
-				}
-			}
-			if k == "nextRunAt" {
-				if ms := int64(num(data, k)); ms > 0 {
-					text = time.UnixMilli(ms).Format("01-02 15:04:05")
-				} else {
-					text = "—"
-				}
-			}
-			if k == "totalBytes" || k == "bytes" || k == "outputBytes" {
-				text = fmtBytes(int64(num(data, k)))
-			}
-			ui.Text(c, text).FontSize(fsSmall).Grow(1).MinWidth(0).Selectable()
+			ui.Text(c, valueText).FontSize(fsSmall).Grow(1).MinWidth(0).Selectable()
 		})
 	}
 }
@@ -242,7 +219,7 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 			if !ok {
 				continue
 			}
-			ui.Column(c.Key(fmt.Sprintf("%s-resource-%d", key, n))).FillWidth().MinWidth(0).Padding(10, 12).Gap(gapInline).Border(1, c.Theme().Border).Radius(radiusCard).Background(c.Theme().Surface).Children(func() {
+			ui.Column(c.Key(fmt.Sprintf("%s-resource-%d", key, n))).FillWidth().MinWidth(0).Padding(8, 10).Gap(gapTight).Border(1, c.Theme().Border).Radius(radiusCard).Background(c.Theme().Surface).Children(func() {
 				title := str(item, "name")
 				if title == "" {
 					title = str(item, "alias")
@@ -251,7 +228,7 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 					title = str(item, "id")
 				}
 				ui.Row(c).FillWidth().MinWidth(0).Gap(gapInline).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, title).FontSize(fsSmall).Bold().Grow(1).MinWidth(0)
+					ui.Text(c, title).FontSize(fsSmall).Bold().Grow(1).MinWidth(0).SingleLine()
 					status := str(item, "status")
 					if kind == "scheduled_task" {
 						status = str(item, "lastStatus")
@@ -266,7 +243,9 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 						chip(c, resourceStatus(status), toneColor(c, status, a.secondaryInk()), c.Theme().Background)
 					}
 				})
-				toolFields(c, item, resourceFieldOrder, a.secondaryInk())
+				resourceMetaChips(c, item, title)
+				resourceTextLines(c, item, a.secondaryInk())
+				resourceDetailLine(c, item, a.secondaryInk())
 			})
 		}
 		if hidden > 0 {
@@ -280,10 +259,119 @@ func serviceIsActive(status string) bool {
 	return status == "running" || status == "starting"
 }
 
-// resourceFieldOrder is the order the resource cards read a tool's own fields.
-// It is parsed once: calling strings.Fields here re-split the same sentence for
-// every resource on every frame.
-var resourceFieldOrder = strings.Fields("description command cwd host port username riskLevel schedule nextRunAt instruction pid timeoutSeconds outputBytes error id")
+// 资源卡把工具的字段分三类画，而不是一个字段一行：短值排成一行标签，长文本压成
+// 一行省略，时间与毫秒数这类零碎值并为一行。三个字段表在包加载时切一次，
+// 不再每帧对同一句话做 Fields。
+var (
+	resourceMetaFields   = strings.Fields("host port username riskLevel")
+	resourceTextFields   = strings.Fields("description command cwd instruction error")
+	resourceDetailFields = strings.Fields("schedule nextRunAt pid timeoutSeconds outputBytes")
+)
+
+// riskLevelText 把后端的 low/high 译成中文；原始值仍然参与颜色判断，
+// 所以没有落进这张表的值会原样显示，不会变成空白。
+var riskLevelText = map[string]string{"low": "低", "high": "高", "medium": "中"}
+
+// resourceFieldValue 把字段渲染成一行文本。schedule、nextRunAt 和字节数在这里
+// 统一转换，三类卡片和 toolFields 因此不会各写一份格式。先判字段是否存在，
+// 所以 nextRunAt 为 0 能显示成“—”，而缺失的字段什么都不画。
+func resourceFieldValue(k string, item map[string]any) string {
+	raw, exists := item[k]
+	if !exists || raw == nil {
+		return ""
+	}
+	switch k {
+	case "schedule":
+		encoded, _ := json.Marshal(raw)
+		var schedule backend.ScheduledTaskSchedule
+		if json.Unmarshal(encoded, &schedule) == nil {
+			return scheduleText(schedule)
+		}
+	case "nextRunAt":
+		if ms := int64(num(item, k)); ms > 0 {
+			return time.UnixMilli(ms).Format("01-02 15:04:05")
+		}
+		return "—"
+	case "totalBytes", "bytes", "outputBytes":
+		if size := int64(num(item, k)); size > 0 {
+			return fmtBytes(size)
+		}
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(raw))
+}
+
+// resourceMetaChips 把短字段排成一行标签：端口、用户、风险级别以前各占一行。
+// 和标题重复的值直接跳过，ssh 节点的 host 通常就等于别名，没必要再写一遍。
+func resourceMetaChips(c *ui.Context, item map[string]any, title string) {
+	ui.Row(c).FillWidth().MinWidth(0).Wrap().Gap(gapTight).AlignItems(ui.Center).Children(func() {
+		for _, k := range resourceMetaFields {
+			value := resourceFieldValue(k, item)
+			if value == "" || value == title {
+				continue
+			}
+			label := toolFieldLabels[k]
+			if label == "" {
+				label = k
+			}
+			if k == "riskLevel" {
+				if zh := riskLevelText[strings.ToLower(value)]; zh != "" {
+					value = zh
+				}
+				// 风险是这一行里唯一需要靠颜色区分的值，low 绿、high 红。
+				pill(c, label+" "+value, pillToneOf(str(item, k)))
+				continue
+			}
+			neutralChip(c, label+" "+value)
+		}
+	})
+}
+
+// resourceTextLines 给长文本一行位置并带省略号，全文放进悬停提示：服务器的说明、
+// 服务的启动命令以前会把卡片撑开好几行。
+func resourceTextLines(c *ui.Context, item map[string]any, ink ...ui.Color) {
+	for _, k := range resourceTextFields {
+		value := resourceFieldValue(k, item)
+		if value == "" {
+			continue
+		}
+		label := toolFieldLabels[k]
+		if label == "" {
+			label = k
+		}
+		color := uikit.SecondaryInk(c, ink)
+		if k == "error" {
+			color = c.Theme().Danger
+		}
+		ui.Row(c).FillWidth().MinWidth(0).Gap(gapField).AlignItems(ui.Center).Children(func() {
+			// 标签列固定宽，并且不许折行：工作目录、任务内容这类四个字的标签会
+			// 折成两行，把一整张紧凑卡片又拉高一行。
+			ui.Text(c, label+":").Width(64).Shrink(0).FontSize(fsTiny).TextColor(color).NoWrap()
+			uikit.Tooltip(c, ui.Text(c, value).FontSize(fsSmall).TextColor(color).Grow(1).MinWidth(0).SingleLine(), value)
+		})
+	}
+}
+
+// resourceDetailLine 把时间、PID、大小这类零碎值并成一行，用 · 分隔，
+// 不再一个字段占一整行。
+func resourceDetailLine(c *ui.Context, item map[string]any, ink ...ui.Color) {
+	parts := make([]string, 0, len(resourceDetailFields))
+	for _, k := range resourceDetailFields {
+		value := resourceFieldValue(k, item)
+		if value == "" {
+			continue
+		}
+		label := toolFieldLabels[k]
+		if label == "" {
+			label = k
+		}
+		parts = append(parts, label+" "+value)
+	}
+	if len(parts) == 0 {
+		return
+	}
+	ui.Text(c, strings.Join(parts, " · ")).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).SingleLine()
+}
 
 type splitDiffRow struct {
 	left, right             string
