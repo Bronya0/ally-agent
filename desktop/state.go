@@ -237,6 +237,7 @@ type chatUI struct {
 	CompactNote            string
 	CompactBusy            bool
 	CompactThinking        int
+	Search                 chatSearch
 	DraftCaret             int
 	RestoreCaret           bool
 	Follow                 bool

@@ -4,8 +4,36 @@ package desktop
 import (
 	"testing"
 
+	backend "ally-dev/internal/app"
 	"github.com/egoist/mygo/ui"
 )
+
+// A skill takes arguments, so completing one leaves the space that starts them and
+// hands the input back; a built-in command must stay whole so Enter runs it.
+func TestTabCompletionAddsSpaceOnlyForSkills(t *testing.T) {
+	conv := &conversation{ID: "cmd-tab-skill", Workspace: t.TempDir()}
+	a := &desktop{ready: true, page: "chat", tabs: []*conversation{conv}, skills: []backend.SkillDefinition{{Name: "review-nav"}}}
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		a.composer(c, conv)
+	}, 800, 400)
+	if err := tester.Click("消息输入框"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Type("/review-nav")
+	tester.Key(0, ui.KeyTab)
+	if got, want := conv.Draft, "/review-nav "; got != want {
+		t.Fatalf("skill completion = %q, want %q", got, want)
+	}
+	if conv.uiState().CmdOpen {
+		t.Fatal("the command menu stayed open over the arguments of a skill")
+	}
+	tester.Type("src/app.go")
+	if got, want := conv.Draft, "/review-nav src/app.go"; got != want {
+		t.Fatalf("typing arguments produced %q, want %q", got, want)
+	}
+}
 
 func TestTabCompletionMovesCaretToEnd(t *testing.T) {
 	conv := &conversation{ID: "cmd-tab-caret"}

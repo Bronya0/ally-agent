@@ -127,3 +127,5 @@
 [settings-prefs-dirty] 2026-11-03 中危 设置页 dirty check 只比 ConfigState，存 prefs 的字段离开页面即丢。@desktop/page_settings.go
 
 [memory-tidy] 2026-11-04 中危 别在每帧或固定定时器里调 FreeOSMemory：STW 加缺页抖动，只在隐藏/最小化去抖后调。@desktop/memory_tidy.go
+
+[md-options-maps] 2026-11-06 高危 给会话加并列 map 只随 MD 初始化就写：新建会话已建 MD，nil map 写入首帧 panic 崩进程。@desktop/page_chat.go

@@ -22,7 +22,6 @@ func (a *desktop) view(c *ui.Context) {
 	// and then did nothing.
 	a.syncVoiceRecordable()
 	a.globalShortcuts(c)
-	c.OnShortcut(0, ui.KeyEscape, func() { a.cancelConversation(a.current()) })
 	a.flushNotices(c, time.Now())
 	width, _ := c.Size()
 	p := a.currentPalette()

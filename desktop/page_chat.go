@@ -18,6 +18,7 @@ import (
 // panel and the floating jump-to-bottom controls.
 func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	st := t.uiState()
+	a.beginChatSearchFrame(t)
 	start, end := historyMessageWindow(t, a.messageWindowSize())
 	rows := newTranscriptRows(t)
 	st.windowStart, st.windowEnd, st.windowBuilding = start, end, true
@@ -41,6 +42,13 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 			delete(st.PromptHandles, idx)
 		}
 	}
+	if st.Search.handles != nil {
+		for idx := range st.Search.handles {
+			if idx < start || idx >= end {
+				delete(st.Search.handles, idx)
+			}
+		}
+	}
 	if st.PendingPrompt {
 		if handle := st.PromptHandles[st.PendingPromptIdx]; handle != nil {
 			question := handle.Bounds(c)
@@ -51,6 +59,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 			}
 		}
 	}
+	a.chatSearchReveal(c, t, start, end)
 	if t.Scroll.Y < 1e8 && t.Scroll.Y < st.LastScrollY-2 {
 		st.Follow = false
 		st.FollowPending = false
@@ -74,6 +83,13 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	}
 
 	ui.Column(c).Grow(1).MinHeight(0).FillWidth().Children(func() {
+		if st.Search.Open {
+			// The bar sits in the column above the viewport, capped and centred like
+			// the transcript, so it lines up with the messages it searches.
+			ui.Column(c).FillWidth().MaxWidth(chatMaxWidth).AlignSelf(ui.Center).Shrink(0).Padding(0, 20, 8).Children(func() {
+				a.chatSearchBar(c, t)
+			})
+		}
 		ui.Scroll(c.Key(t.ID + "-messages")).Label("聊天滚动区域").TrackScroll(&t.Scroll).Grow(1).MinHeight(0).HandleInput(func(ev ui.InputEvent) bool {
 			if ev.Kind == ui.InputScroll && ev.DY < 0 {
 				st.Follow = false
@@ -207,6 +223,26 @@ func (a *desktop) messageRow(c *ui.Context, t *conversation, i int, rows *transc
 		}
 		row.Bind(handle)
 	}
+	if st.Search.Open {
+		// The bar needs the row's bounds to scroll a hit into view. A prompt row
+		// already carries the jump-to-prompt handle, and any other row takes a
+		// search handle on itself: extra wrappers on the row would change the
+		// subtree's shape, which resets the state of the widgets under it (a code
+		// block's sideways scroll, a selection).
+		if st.Search.handles == nil {
+			st.Search.handles = map[int]*ui.Handle{}
+		}
+		handle := st.Search.handles[i]
+		if role == "user" {
+			st.Search.handles[i] = st.PromptHandles[i]
+		} else {
+			if handle == nil {
+				handle = &ui.Handle{}
+				st.Search.handles[i] = handle
+			}
+			row.Bind(handle)
+		}
+	}
 	showStats := row.Hovered()
 	row.Children(func() {
 		switch kind {
@@ -254,16 +290,39 @@ func (a *desktop) messageBody(c *ui.Context, t *conversation, i int, m map[strin
 }
 
 func (a *desktop) markdownOptions(t *conversation, i int) *markdown.Options {
+	// Both maps are filled in here: a conversation can arrive with its options
+	// already started (a new session creates them), and writing to a nil map
+	// panics on the very frame it is first drawn.
 	if t.MD == nil {
 		t.MD = map[int]*markdown.Options{}
 	}
+	if t.MDCodeBlock == nil {
+		t.MDCodeBlock = map[int]func(*ui.Context, *markdown.CodeBlockView){}
+	}
 	if t.MD[i] == nil {
 		t.MD[i] = a.readingMarkdownOptions(fmt.Sprintf("%s:markdown:%d", t.ID, i))
+		t.MDCodeBlock[i] = t.MD[i].CodeBlock
 	}
 	if t.MD[i].Theme == nil {
 		t.MD[i].Theme = &markdown.Theme{}
 	}
 	a.configureReadingMarkdown(t.MD[i])
+	// While the find bar is open, the blocks that hold a hit draw their text with
+	// the matched runs marked; every other block and message is untouched. The
+	// code blocks are wrapped too, so a hit inside them is marked as well, and a
+	// block without one keeps the renderer's colouring. The wrapper always wraps
+	// the theme's own hook, never the wrapper a previous frame installed: this
+	// runs every frame, and a chain of them would grow for as long as the bar is
+	// open and stay after it closes.
+	if t.uiState().Search.Open && a.chatSearchMessageMatch(t, i) {
+		t.MD[i].Block = a.chatSearchBlock(t, i)
+		t.MD[i].CodeBlock = a.chatSearchCodeHook(t, i, t.MDCodeBlock[i])
+	} else {
+		t.MD[i].Block = nil
+		if base, ok := t.MDCodeBlock[i]; ok {
+			t.MD[i].CodeBlock = base
+		}
+	}
 	return t.MD[i]
 }
 
@@ -546,6 +605,7 @@ func (a *desktop) confirmDeleteUserMessage(d *deletePromptState) {
 		}
 		a.win.Update(func() {
 			if index <= len(t.Messages) {
+				invalidateChatSearch(t)
 				t.Messages = append([]map[string]any(nil), t.Messages[:index]...)
 			}
 			releaseCommandDetails(t)
