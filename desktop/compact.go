@@ -108,6 +108,9 @@ func replaceTranscript(t *conversation, summary string) {
 	t.Messages = []map[string]any{{"role": "assistant", "content": summary, transcriptSummaryFlag: true}}
 	t.MD = nil
 	t.MDCodeBlock = nil
+	// The row set changed even when the old length was also 1; drop the cached
+	// ownership/block-starts answer instead of reusing it.
+	t.markHistory()
 	st := t.uiState()
 	st.Round = map[int]*roundStat{}
 	st.RoundAt = map[int]int{}
@@ -226,6 +229,11 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 	for i, after := range shortened {
 		t.Messages[i]["content"] = after
 		t.Messages[i]["fastCompacted"] = true
+	}
+	// Shortening an answer can change its block kind, so the memoized rows are
+	// invalidated before the early return below skips the tool-card rewrite.
+	if len(shortened) > 0 {
+		t.markHistory()
 	}
 	summaries, _ := result["toolSummaries"].(map[string]any)
 	if summaries == nil {

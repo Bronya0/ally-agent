@@ -253,6 +253,8 @@ type chatUI struct {
 	// the duration of one render so a card does not rebuild it per child.
 	transcriptRows *transcriptRows
 	ThinkingBytes  int
+	// Stream grows the row that is streaming: see appendStreamChunk.
+	Stream *streamAccumulator
 }
 
 type deletePromptState struct {
@@ -298,6 +300,8 @@ type settingsForm struct {
 	Concurrency     float64
 	CompactTimeout  float64
 	Threshold       float64
+	ThresholdMode   string
+	ThresholdTokens float64
 	FontMessage     float64
 	FontCode        float64
 	FontTool        float64
@@ -356,6 +360,9 @@ func (a *desktop) syncSettingsForm() {
 	if f.Threshold <= 0 {
 		f.Threshold = 0.6
 	}
+	compactCfg := normalizeSettingsConfig(a.configDraft)
+	f.ThresholdMode = compactCfg.CompactThresholdMode
+	f.ThresholdTokens = float64(compactCfg.CompactThresholdTokens)
 	messageSize, codeSize := readingSizes(a.configDraft.MessageFontSize, a.configDraft.CodeFontSize)
 	f.FontMessage, f.FontCode = float64(messageSize), float64(codeSize)
 	f.FontTool = clampView(a.configDraft.ToolFontSize, 15)
@@ -409,6 +416,12 @@ func normalizeSettingsConfig(cfg backend.ConfigState) backend.ConfigState {
 	}
 	if cfg.CompactThreshold <= 0 {
 		cfg.CompactThreshold = 0.6
+	}
+	if cfg.CompactThresholdMode != backend.CompactThresholdModeTokens {
+		cfg.CompactThresholdMode = backend.CompactThresholdModeRatio
+	}
+	if cfg.CompactThresholdTokens <= 0 {
+		cfg.CompactThresholdTokens = backend.DefaultCompactThresholdTokens
 	}
 	if cfg.BackgroundOpacity <= 0 {
 		cfg.BackgroundOpacity = 0.15
@@ -526,9 +539,12 @@ type scheduledTaskChange struct {
 }
 
 type tasksForm struct {
-	Tab              int
-	Scope            int
-	Loading          bool
+	Tab     int
+	Scope   int
+	Loading bool
+	// ManualPending records a refresh click that arrived while a snapshot was
+	// in flight; the completion handler starts that load instead of dropping it.
+	ManualPending    bool
 	InstructionOpen  map[string]bool
 	ScheduledChanges map[string]scheduledTaskChange
 	ServiceChanges   map[string]backend.ServiceInfo
@@ -599,6 +615,7 @@ type fileUI struct {
 	GitOpen        bool
 	GitBusy        bool
 	GitData        backend.GitDiffResult
+	GitTree        []*gitTreeNode
 	GitRepo        string
 	GitFile        int
 	NewOpen        bool

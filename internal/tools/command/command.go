@@ -84,10 +84,57 @@ func ShellRedirectionTargets(command string) []string {
 }
 
 func redirectionTargets(command string) (writes, reads []string) {
-	if writes, reads, ok := astRedirectionTargets(command); ok {
-		return writes, reads
+	return redirectionTargetsDepth(command, 0)
+}
+
+func redirectionTargetsDepth(command string, depth int) (writes, reads []string) {
+	if depth > 4 {
+		return nil, nil
 	}
-	return legacyRedirectionTargets(command)
+	writes, reads, ok := astRedirectionTargets(command)
+	if !ok {
+		return legacyRedirectionTargets(command)
+	}
+	// The parser sees only this command line. A nested shell carries its own
+	// script (`sh -c 'echo x > path'`), so collect those redirects too; otherwise
+	// the fence never sees a write hidden one level down.
+	for _, invocation := range astInvocations(command) {
+		if script, nested := nestedShellScript(invocation); nested {
+			nestedWrites, nestedReads := redirectionTargetsDepth(script, depth+1)
+			writes = append(writes, nestedWrites...)
+			reads = append(reads, nestedReads...)
+			continue
+		}
+		// eval/iex take the script as ordinary arguments rather than behind
+		// a shell flag; the same hidden-write rule applies.
+		switch invocation.Name {
+		case "eval", "invoke-expression", "iex":
+			if len(invocation.Args) > 0 {
+				nestedWrites, nestedReads := redirectionTargetsDepth(strings.Join(invocation.Args, " "), depth+1)
+				writes = append(writes, nestedWrites...)
+				reads = append(reads, nestedReads...)
+			}
+		}
+	}
+	return uniqueTargets(writes), uniqueTargets(reads)
+}
+
+// uniqueTargets removes duplicates introduced by walking both the outer parse
+// and its nested invocations. Targets are usually a handful of paths.
+func uniqueTargets(targets []string) []string {
+	if len(targets) < 2 {
+		return targets
+	}
+	seen := make(map[string]struct{}, len(targets))
+	out := targets[:0]
+	for _, target := range targets {
+		if _, ok := seen[target]; ok {
+			continue
+		}
+		seen[target] = struct{}{}
+		out = append(out, target)
+	}
+	return out
 }
 
 func legacyRedirectionTargets(command string) (writes, reads []string) {

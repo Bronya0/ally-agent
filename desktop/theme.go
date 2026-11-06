@@ -70,6 +70,14 @@ const (
 	sizeRailIcon            float32 = 17
 	sizeRailIconCollapsed   float32 = 20
 	sizeRailToggleIcon      float32 = 16
+	// 折叠三角按角色分档，同一个角色里不再出现第二个尺寸：
+	// sizeCaretGroupCard 是工具组卡标题栏（与 15 级摘要图标同高），sizeCaretRow 是
+	// 卡内的命令行，sizeCaretInline 是弹层和侧栏的紧凑行，sizeCaretBlock 是内容区块头
+	// （与 disclosure 的 fsSmall 同档，带箭头只用 disclosure）。
+	sizeCaretGroupCard float32 = 16
+	sizeCaretRow       float32 = 11
+	sizeCaretInline    float32 = 10
+	sizeCaretBlock     float32 = 13
 	// fontRailLabel 是唯一偏出字号刻度的值：侧栏窄，13 在收起态会挤掉图标，
 	// 12 又偏小；其余字号一律取 uikit 的 Font*。
 	fontRailLabel   float32 = 12.5

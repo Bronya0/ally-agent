@@ -162,7 +162,11 @@ func TestBlackboardSnapshotsDoNotAliasReplyPointers(t *testing.T) {
 	registerAgents(t, board, "agent-a", "agent-b")
 	publish(t, board, "agent-a", "agent-b", "question", "question", nil)
 	reply := int64(1)
-	publish(t, board, "agent-b", "agent-a", "answer", "answer", &reply)
+	published, ok := board.PublishMessage("agent-b", Message{To: "agent-a", Type: "answer", Body: "answer", ReplyTo: &reply})
+	if !ok || published.Seq != 2 || published.From != "agent-b" {
+		t.Fatalf("published snapshot = %+v, accepted=%v", published, ok)
+	}
+	*published.ReplyTo = 77
 	reply = 99
 	first, _ := board.Read("agent-a")
 	if *first[0].ReplyTo != 1 {
@@ -246,6 +250,71 @@ func TestBlackboardConcurrentPublishAndIndependentReaders(t *testing.T) {
 	}
 }
 
+func TestBlackboardReservationLifecycleRetainsQueuedDelivery(t *testing.T) {
+	t.Parallel()
+	board := New()
+	registerAgents(t, board, "sender")
+	if name, err := board.Reserve("worker"); err != nil || name != "worker" {
+		t.Fatalf("Reserve = %q, %v", name, err)
+	}
+	if !reflect.DeepEqual(board.Names(), []string{"sender", "worker"}) {
+		t.Fatalf("queued peer is not visible: %v", board.Names())
+	}
+	if _, err := board.Register("worker"); err == nil {
+		t.Fatal("pending reservation was reused before release")
+	}
+	publish(t, board, "sender", "worker", "finding", "queued delivery", nil)
+	board.ReleaseReservation("worker")
+	board.ReleaseReservation("worker")
+	if err := board.StartReserved("worker"); err == nil {
+		t.Fatal("released reservation could be started")
+	}
+	if _, err := board.Reserve("worker"); err != nil {
+		t.Fatalf("never-started identity could not be retried: %v", err)
+	}
+	if err := board.StartReserved("worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := board.StartReserved("worker"); err == nil {
+		t.Fatal("reservation was claimed twice")
+	}
+	board.ReleaseReservation("worker")
+	if _, err := board.Register("worker"); err == nil {
+		t.Fatal("started identity was released and reused")
+	}
+	if messages, _ := board.Read("worker"); len(messages) != 1 || messages[0].Body != "queued delivery" {
+		t.Fatalf("retry lost queued messages: %+v", messages)
+	}
+	board.Close()
+	if _, err := board.Reserve("later"); err == nil {
+		t.Fatal("closed board accepted a reservation")
+	}
+	board.ReleaseReservation("worker")
+}
+
+func TestBlackboardReservationStartAndReleaseAreAtomic(t *testing.T) {
+	t.Parallel()
+	for i := 0; i < 100; i++ {
+		board := New()
+		if _, err := board.Reserve("worker"); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		var startErr error
+		wg.Add(2)
+		go func() { defer wg.Done(); startErr = board.StartReserved("worker") }()
+		go func() { defer wg.Done(); board.ReleaseReservation("worker") }()
+		wg.Wait()
+		if startErr == nil {
+			if _, err := board.Register("worker"); err == nil {
+				t.Fatal("release removed a concurrently started identity")
+			}
+		} else if _, err := board.Register("worker"); err != nil {
+			t.Fatalf("released identity was left occupied: %v", err)
+		}
+	}
+}
+
 func TestBlackboardCloseReleasesRunState(t *testing.T) {
 	t.Parallel()
 	board := New()
@@ -253,7 +322,7 @@ func TestBlackboardCloseReleasesRunState(t *testing.T) {
 	publish(t, board, "agent-a", "agent-b", "finding", "old run", nil)
 	board.Close()
 	board.Close() // Cleanup is idempotent.
-	if board.messages != nil || board.cursors != nil || board.nextSeq != 0 || len(board.Names()) != 0 {
+	if board.messages != nil || board.cursors != nil || board.reserved != nil || board.nextSeq != 0 || len(board.Names()) != 0 {
 		t.Fatal("closed board retained messages or cursor state")
 	}
 	if messages, _ := board.Read("agent-b"); len(messages) != 0 {

@@ -50,8 +50,9 @@ const (
 	// maxModelToolOutput 是「原始工具输出」进模型上下文的预算，消费者是第三方 MCP
 	// 文本与命令输出：超限时留头 modelToolHeadBytes、尾 modelToolTailBytes，中间以省略
 	// 标记替换。它和 maxToolOutput(128KB) 是两条线：后者管内存储存（界面滚动缓冲与
-	// 落盘 spill），前者只管模型看到的正文。
-	maxModelToolOutput      = 12 * 1024
+	// 落盘 spill），前者只管模型看到的正文。字面量在 toolshared，command 的 schema
+	// 引同一常量，模型读到的数字不会和实际收到的不一致。
+	maxModelToolOutput      = toolshared.MaxModelToolOutput
 	maxModelWebOutput       = 96 * 1024
 	maxCodeGraphPromptBytes = 8 * 1024
 	// modelToolHeadBytes / modelToolTailBytes 是 maxModelToolOutput 被突破时保留的
@@ -681,11 +682,13 @@ type ConfigState struct {
 	// after the first user-driven resize.
 	WindowWidth  int `json:"windowWidth,omitempty"`
 	WindowHeight int `json:"windowHeight,omitempty"`
-	// CompactThreshold is the context-usage fraction (0..1) at which the
-	// chat loop auto-compacts history. Zero means "use default" so legacy
-	// configs migrate transparently; the effective value is exposed via
-	// effectiveCompactThreshold().
+	// CompactThresholdMode selects ratio (default) or an absolute token count.
+	CompactThresholdMode string `json:"compactThresholdMode,omitempty"`
+	// CompactThreshold is the context-usage fraction used in ratio mode.
+	// Zero means "use default" so legacy configs migrate transparently.
 	CompactThreshold float64 `json:"compactThreshold,omitempty"`
+	// CompactThresholdTokens is used only in tokens mode; zero uses the default.
+	CompactThresholdTokens int `json:"compactThresholdTokens,omitempty"`
 	// AutoCompactMethod selects threshold compaction: recent (default) or summary.
 	// Provider context overflow still uses a full LLM summary for recovery.
 	AutoCompactMethod string `json:"autoCompactMethod,omitempty"`
@@ -1605,24 +1608,28 @@ type AgentDelegateResult struct {
 
 // SubagentRun tracks a running/complete sub-agent instance.
 type SubagentRun struct {
-	ID           string         `json:"id"`
-	Name         string         `json:"name,omitempty"`
-	SessionID    string         `json:"sessionId,omitempty"`
-	Description  string         `json:"description"`
-	Profile      string         `json:"profile"`
-	Role         string         `json:"role,omitempty"`
-	Status       string         `json:"status"` // running, completed, failed
-	StopReason   string         `json:"stopReason,omitempty"`
-	Steps        int            `json:"steps"`
-	Summary      string         `json:"summary,omitempty"`
-	FilesRead    []string       `json:"filesRead,omitempty"`
-	FilesEdited  []string       `json:"filesEdited,omitempty"`
-	Error        string         `json:"error,omitempty"`
-	ToolCalls    []SubToolEvent `json:"toolCalls,omitempty"`
-	StartTime    int64          `json:"startTime"`
-	InputTokens  int            `json:"inputTokens,omitempty"`
-	OutputTokens int            `json:"outputTokens,omitempty"`
-	TotalTokens  int            `json:"totalTokens,omitempty"`
+	ID                                       string                    `json:"id"`
+	Name                                     string                    `json:"name,omitempty"`
+	SessionID                                string                    `json:"sessionId,omitempty"`
+	Description                              string                    `json:"description"`
+	Profile                                  string                    `json:"profile"`
+	Role                                     string                    `json:"role,omitempty"`
+	Status                                   string                    `json:"status"` // running, completed, failed
+	StopReason                               string                    `json:"stopReason,omitempty"`
+	Steps                                    int                       `json:"steps"`
+	Summary                                  string                    `json:"summary,omitempty"`
+	FilesRead                                []string                  `json:"filesRead,omitempty"`
+	FilesEdited                              []string                  `json:"filesEdited,omitempty"`
+	Error                                    string                    `json:"error,omitempty"`
+	ToolCalls                                []SubToolEvent            `json:"toolCalls,omitempty"`
+	BlackboardSent                           int                       `json:"blackboardSent,omitempty"`
+	BlackboardReceived                       int                       `json:"blackboardReceived,omitempty"`
+	BlackboardEvents                         []SubagentBlackboardEvent `json:"blackboardEvents,omitempty"`
+	blackboardSentSeq, blackboardReceivedSeq int64
+	StartTime                                int64 `json:"startTime"`
+	InputTokens                              int   `json:"inputTokens,omitempty"`
+	OutputTokens                             int   `json:"outputTokens,omitempty"`
+	TotalTokens                              int   `json:"totalTokens,omitempty"`
 	// CacheHitTokens/CacheMissTokens accumulate the provider-reported prompt-cache
 	// split across the run's steps, so the inline card can show the same hit rate
 	// the parent run's stats line shows. CacheWriteTokens stays out: it is already
@@ -1633,6 +1640,23 @@ type SubagentRun struct {
 	// this sub-agent's context is right now. InputTokens sums every step and so
 	// cannot answer that.
 	ContextTokens int `json:"contextTokens,omitempty"`
+}
+
+const MaxSubagentBlackboardEvents = 32
+
+// SubagentBlackboardEvent is a bounded display preview, not model context.
+// Received means a successful model turn consumed the delivery; sent only means
+// publication succeeded, even if the destination is queued or never starts.
+type SubagentBlackboardEvent struct {
+	Direction string `json:"direction"`
+	Seq       int64  `json:"seq"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Type      string `json:"type"`
+	ReplyTo   int64  `json:"replyTo,omitempty"`
+	Body      string `json:"body"`
+	At        int64  `json:"at"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // SubToolEvent records a single tool invocation inside a sub-agent.
@@ -1973,6 +1997,13 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 		if err := a.deleteSessionSnapshot(sessionID); err != nil {
 			return err
 		}
+		// Generated images and persisted reference-image copies live in a
+		// per-session directory; deleting only the snapshots would leave them
+		// unreachable on disk forever.
+		imageDir := filepath.Join(a.imagesDir(), imageSessionKey(sessionID))
+		if err := removeAllWithinBase(a.imagesDir(), imageDir); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -2267,11 +2298,11 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// Update live breakdown for context display (includes all tool calls/results)
 		bd := syncBreakdown(messages, false)
 
-		// Auto-compact: when context usage exceeds the configured threshold
-		// of the window, compact history. Threshold uses only usedTokens
+		// Auto-compact: when context usage exceeds the selected ratio or absolute
+		// token threshold, compact history. Threshold uses only usedTokens
 		// (not usedTokens + maxTokens) so it reflects actual context state
 		// instead of pre-reserving a fixed reply budget. The threshold is
-		// configurable via Settings → General (default 60%); legacy config
+		// configurable via Settings → General (default ratio, 60%); legacy config
 		// without the field migrates to the default through mergeConfig.
 		usedTokens := bd.Total
 		compactThreshold := compactThresholdLimit(cfg)
@@ -2580,6 +2611,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			return a.executeTool(toolCtx, toolCfg, sessionID, c.Function.Name, []byte(executionArgs))
 		}
 		publishCall := func(idx int, c openai.ToolCall, r toolResult, duration int64) {
+			releaseBlackboardReservation(ctx, blackboardNames[idx])
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)
 			o := toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration}
@@ -2686,6 +2718,10 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	// Recheck when each call actually starts, including calls queued behind
 	// an ask or another stage of the same batch. Batch config can be stale.
 	cfg = a.cfgWithLiveExtraRoots(sessionID, cfg)
+	// Tool handlers resolve workspace-relative paths and SSH authorization
+	// against this call's workspace. Scheduled tasks have no session meta, so
+	// the context is the only place that carries it.
+	ctx = withToolWorkspace(ctx, cfg.Workspace)
 	finishPerfTool := startPerfTool(ctx, name, args)
 	defer finishPerfTool()
 	// Tool execution digests model-controlled JSON and is the single choke

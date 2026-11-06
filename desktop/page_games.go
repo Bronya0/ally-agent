@@ -127,7 +127,7 @@ func (a *desktop) gameSidebar(c *ui.Context) {
 				uikit.Select(c.Key("game-effort-b"), &g.EffortB, reasoningLevels, a.secondaryInk()).Label("模型 B 思考强度").FillWidth().Disabled(g.Thinking)
 			}
 			if g.Calls > 0 {
-				fieldNote(c, fmt.Sprintf("上轮 输入 %s · 输出 %s", fmtK(g.InTokens), fmtK(g.OutTokens)), a.secondaryInk())
+				fieldNote(c, fmt.Sprintf("合计 输入 %s · 输出 %s", fmtK(g.InTokens), fmtK(g.OutTokens)), a.secondaryInk())
 				fieldNote(c, fmt.Sprintf("本局 %d 次调用 · 累计 %s tokens", g.Calls, fmtK(g.InTokens+g.OutTokens)), a.secondaryInk())
 			}
 			label := "开始对局"
@@ -924,6 +924,9 @@ func xiangqiMoveOK(board [10][9]string, fx, fy, tx, ty int, piece string) bool {
 	dx, dy := tx-fx, ty-fy
 	ax, ay := absInt(dx), absInt(dy)
 	red := isRedPiece(piece)
+	if target := board[ty][tx]; target != "" && isRedPiece(target) == red {
+		return false
+	}
 	countBetween := func() int {
 		n := 0
 		x, y := fx+signInt(dx), fy+signInt(dy)

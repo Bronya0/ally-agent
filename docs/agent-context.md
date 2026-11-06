@@ -103,13 +103,18 @@ type contextAnchor struct { covered int; tokens int }   // biz_context.go:695
 usedTokens := bd.Total                                  // app.go:1836
 if usedTokens > compactThresholdLimit(cfg) { ... }      // 自动压缩
 
-func compactThresholdLimit(cfg ConfigState) int {       // biz_compact.go:270
+func compactThresholdLimit(cfg ConfigState) int {       // biz_compact.go
+    if normalizeCompactThresholdMode(cfg.CompactThresholdMode) == CompactThresholdModeTokens {
+        return clampCompactThresholdTokens(cfg.CompactThresholdTokens)
+    }
     maxCtx := cfg.ContextWindow; if maxCtx <= 0 { maxCtx = 1000000 }
     return int(float64(maxCtx) * clampCompactThreshold(cfg.CompactThreshold))
 }
 ```
 
 `clampCompactThreshold`（`biz_compact.go:32`）：`<=0` → 默认 0.6；否则夹到 `[0.2, 0.95]`（太低会反复抖、太高会等到 provider 直接报错）。配置合并时也会 clamp 一次（`biz_config.go:322`）。
+
+设置页通过单选切换按比例（`compactThresholdMode: "ratio"`，默认）或按绝对值（`"tokens"`）。绝对值读取 `compactThresholdTokens`，范围 1–10,000,000，未设置或非正数使用 100,000；不再乘模型窗口，也不与比例取最小值。两种数值分别保留，只使用选中模式。旧配置缺少模式时继续使用原来的比例。
 
 ## 六、压缩：三个入口，一套内核
 

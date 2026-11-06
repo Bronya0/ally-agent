@@ -172,7 +172,7 @@ func (a *App) requestImage(ctx context.Context, cfg ConfigState, model ImageMode
 			message = strings.ReplaceAll(message, key, "[redacted]")
 		}
 		if len(message) > 2048 {
-			message = message[:2048]
+			message = utf8Prefix(message, 2048)
 		}
 		return nil, fmt.Errorf("image API HTTP %d: %s", response.StatusCode, message)
 	}
@@ -1049,7 +1049,7 @@ func providerErrorMessageFromBody(body []byte) string {
 	if len(trimmed) <= 200 {
 		return trimmed
 	}
-	return trimmed[:200] + "..."
+	return utf8Prefix(trimmed, 200) + "..."
 }
 
 // wrapProviderRequestError 把 Err 为 nil 的 RequestError 重新包成可读消息;

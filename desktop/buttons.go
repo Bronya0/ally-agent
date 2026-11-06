@@ -91,9 +91,16 @@ const (
 	iconAccentOn                 // full accent at rest: the same control, engaged
 )
 
+// iconButtonMinHit 是可点图标方块的下限。紧凑行里的删除、关闭按钮按 18、20 DIP
+// 画出来只有一丁点点得中；命中区补到 22，画出来的图标仍是原来的 size*0.62。
+const iconButtonMinHit float32 = 22
+
 // iconButtonSized is the only icon-button factory: same hover fill, radius and
 // fade as `button`, at whatever square size the owner needs.
 func iconButtonSized(c *ui.Context, id, tip, name string, size float32, tone iconTone, fn func()) ui.Element {
+	if size < iconButtonMinHit {
+		return uikit.IconButtonSized(c, id, tip, iconImage(name), iconButtonMinHit, size*uikit.IconGlyphScale, uikitTone(tone), fn)
+	}
 	return uikit.IconButton(c, id, tip, iconImage(name), size, uikitTone(tone), fn)
 }
 

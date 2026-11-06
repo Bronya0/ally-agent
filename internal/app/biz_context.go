@@ -240,7 +240,16 @@ func estimateTokensFromText(text string) int {
 	}
 	asciiCount := 0
 	nonAsciiCount := 0
-	for _, r := range text {
+	// Pure-ASCII text (code, JSON, most tool output) is common; scan it as
+	// bytes and only fall back to rune decoding after the first non-ASCII byte.
+	i := 0
+	for ; i < len(text); i++ {
+		if text[i] >= utf8.RuneSelf {
+			break
+		}
+		asciiCount++
+	}
+	for _, r := range text[i:] {
 		if r <= 127 {
 			asciiCount++
 		} else {
@@ -1662,7 +1671,7 @@ func buildAttachmentTextContext(text string, attachments []AttachmentInput) stri
 		text := att.Text
 		truncated := att.Truncated
 		if len(text) > maxAttachmentText {
-			text = text[:maxAttachmentText]
+			text = utf8Prefix(text, maxAttachmentText)
 			truncated = true
 		}
 		b.WriteString("\n<attached_file name=\"")

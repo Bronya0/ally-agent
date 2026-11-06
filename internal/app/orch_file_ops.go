@@ -575,7 +575,7 @@ func localCommandToolWarnings(commandLine string) []string {
 	for _, invocation := range command.Invocations(commandLine) {
 		switch invocation.Name {
 		case "grep", "egrep", "fgrep":
-			return []string{"Prefer the dedicated grep tool, or the rg command, for local content searches instead of running grep through command."}
+			return []string{toolshared.ContentSearchGuidance}
 		}
 	}
 	return nil

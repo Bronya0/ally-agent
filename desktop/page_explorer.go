@@ -72,9 +72,7 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 				label = "保存中…"
 			}
 			flat(c, label).Disabled(kind.isPreviewOnly() || file.Saving || !file.Editor.Buffer.Modified()).OnClick(func() { a.saveFile() })
-			if kind.isPreviewOnly() || file.MarkupPreview {
-				flat(c, "系统打开").OnClick(func() { a.openSystemFile(file.Path) })
-			}
+			flat(c, "系统打开").OnClick(func() { a.openSystemFile(file.Path) })
 			iconAction(c, "editor-close", "关闭编辑器", "close", 24, func() { a.closeFile() })
 		})
 		if file.PreviewError != "" {
@@ -112,7 +110,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 	ui.Column(c).Width(width).FillHeight().Shrink(0).Unselectable().Background(colChrome(a)).Children(func() {
 		services := c.Services()
 		c.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, "") })
-		ui.Row(c).Height(34).Padding(0, padRow).Gap(3).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
+		ui.Row(c).Height(34).Padding(0, padRow).Gap(3).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
 			search := uikit.InputChrome(c, ui.SearchField(c.Key("explorer-search"), &a.filesF.Search.Input)).
 				Placeholder("").Label("搜索工作区文件").Height(26).Padding(0, 6).FontSize(fsSmall).Grow(1).
 				OnSubmit(func() { a.searchFiles(a.filesF.Search.Input) })
@@ -254,11 +252,13 @@ func (a *desktop) fileRowsWithState(c *ui.Context, entries []backend.FileEntry, 
 				a.loadFolderChildren(path)
 			}
 		}
-		target := fileParent(path)
+		// Only the callbacks below need the paste target. Deriving it here ran
+		// filepath.Dir for every row on every frame.
 		if entry.Dir {
-			target = path
+			row.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, path) })
+		} else {
+			row.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, fileParent(path)) })
 		}
-		row.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, target) })
 		if !entry.Dir {
 			row.OnShortcut(ui.Cmd, ui.KeyC, func() { a.copyExplorerFile(services, path) })
 		}
@@ -293,6 +293,10 @@ func (a *desktop) fileRowsWithState(c *ui.Context, entries []backend.FileEntry, 
 				}
 			}
 			if m.Item("粘贴文件").Chosen() {
+				target := path
+				if !entry.Dir {
+					target = fileParent(path)
+				}
 				a.pasteFiles(services, target)
 			}
 			m.Separator()
@@ -881,6 +885,7 @@ func (a *desktop) loadGitDiff(t *conversation, repo string, manual ...bool) {
 		a.win.Update(func() {
 			a.filesF.GitBusy = false
 			a.filesF.GitData = result
+			a.filesF.GitTree = buildGitTree(result.Files)
 			if len(manual) > 0 && manual[0] {
 				if result.Error != "" {
 					a.notifyError(result.Error)
@@ -938,7 +943,7 @@ func (a *desktop) gitDiffDialog(c *ui.Context) {
 			ui.Row(c).Grow(1).MinHeight(0).Gap(gapSection).AlignItems(ui.Stretch).Children(func() {
 				ui.Scroll(c).WidthPercent(30).MinWidth(120).MinHeight(0).Children(func() {
 					ui.Tree(c.Key("git-tree"), func() {
-						a.gitTreeRows(c, buildGitTree(data.Files), data.Files)
+						a.gitTreeRows(c, a.filesF.GitTree, data.Files)
 					})
 				})
 				ui.Scroll(c).Grow(1).MinWidth(0).Children(func() {

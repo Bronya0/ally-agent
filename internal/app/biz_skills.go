@@ -216,7 +216,11 @@ func (a *App) ActivateSkill(name string) (string, error) {
 			if err := a.enableSkill(sk.Name); err != nil {
 				return "", err
 			}
-			return renderSkillLoadedBlock(sk.Name, sk.Source, sk.Dir, "", content), nil
+			dir, err := a.skillLoadDir(sk)
+			if err != nil {
+				return "", err
+			}
+			return renderSkillLoadedBlock(sk.Name, sk.Source, dir, "", content), nil
 		}
 	}
 	return "", fmt.Errorf("skill not found: %s", name)
@@ -373,11 +377,17 @@ func (a *App) handleSkillToolCall(cfg ConfigState, sessionID, skillName, skillAr
 			}
 
 			loadedContent := content
-			if tree := buildSkillDirTree(sk.Dir, sk.Path); tree != "" {
+			// A built-in skill that ships scripts is unpacked before its directory is
+			// reported, so the tree below and the dir in the block point at real files.
+			dir, err := a.skillLoadDir(sk)
+			if err != nil {
+				return nil, err
+			}
+			if tree := buildSkillDirTree(dir, sk.Path); tree != "" {
 				loadedContent = loadedContent + "\n" + tree
 			}
 
-			loadedBlock := renderSkillLoadedBlock(sk.Name, sk.Source, sk.Dir, skillArgs, loadedContent)
+			loadedBlock := renderSkillLoadedBlock(sk.Name, sk.Source, dir, skillArgs, loadedContent)
 			return map[string]any{
 				"loaded":  true,
 				"name":    sk.Name,
@@ -951,4 +961,25 @@ func builtinSkillEntries() []SkillDefinition {
 		return nil
 	})
 	return out
+}
+
+// skillLoadDir 是加载技能时报告的目录。内置技能原本只活在嵌入树里，Dir 是
+// "skills/<name>" 这种谁都打不开的别名；带支撑文件的技能（比如自带脚本的
+// md2other）必须先把文件落到数据目录，模型才能 read 那个目录、并跑其中的脚本。
+// 只有 SKILL.md 的技能不做这件事：正文随加载一起给出，凭空建一个没人读的
+// 目录只是垃圾。没有目录时返回空串，调用方据此不写 dir 属性。
+func (a *App) skillLoadDir(sk SkillDefinition) (string, error) {
+	if sk.Source != "builtin" {
+		return sk.Dir, nil
+	}
+	dir := filepath.Join(a.AppDataDir(), "builtin-skills", sk.Name)
+	shipped, err := builtin_skills.Unpack(sk.Name, dir)
+	if err != nil {
+		// 不退回那个打不开的别名：假装加载成功只会让模型稍后 read 失败。
+		return "", fmt.Errorf("failed to unpack builtin skill %q: %w", sk.Name, err)
+	}
+	if !shipped {
+		return "", nil
+	}
+	return dir, nil
 }

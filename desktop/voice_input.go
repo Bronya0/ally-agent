@@ -77,35 +77,21 @@ func (a *desktop) configureVoiceInput() {
 		return
 	}
 	if !a.prefs.VoiceInputEnabled {
-		a.voiceInput.quietWarmup = false
-		a.voiceInput.preparedDeviceID = ""
-		a.dropQueuedTakes()
-		if a.voiceInput.levelStop != nil {
-			close(a.voiceInput.levelStop)
-			a.voiceInput.levelStop = nil
-		}
-		if a.voiceInput.stopHotkey != nil {
-			a.voiceInput.stopHotkey()
-			a.voiceInput.stopHotkey = nil
-		}
-		a.voiceInput.pressed = false
-		if a.voiceInput.timer != nil {
-			a.voiceInput.timer.Stop()
-			a.voiceInput.timer = nil
-		}
-		if r := a.voiceInput.active; r != nil {
-			a.voiceInput.active = nil
-			go r.Cancel()
-		}
-		if r := a.voiceInput.prepared; r != nil {
-			a.voiceInput.prepared = nil
-			go r.Cancel()
-		}
+		a.disposeVoiceInput()
 		return
 	}
 	// Dictation needs an ASR model: a TTS model has no transcription request.
 	asrModels := voiceModelsOfKind(a.config.VoiceModels, backend.VoiceKindASR)
 	if len(asrModels) == 0 {
+		if a.prefs.VoiceInputEnabled {
+			// Deleting the last ASR model must not leave the preference stuck
+			// on: the settings page hides the switch while no model exists.
+			a.prefs.VoiceInputEnabled = false
+			a.savePrefs()
+			// Tear down anything the preference had already warmed up (hotkey,
+			// recorder); the disabled branch above no longer runs for this call.
+			a.disposeVoiceInput()
+		}
 		a.notifyError("请先添加语音识别（ASR）模型，再启用语音输入")
 		return
 	}
@@ -164,6 +150,36 @@ func (a *desktop) configureVoiceInput() {
 			a.installVoiceHotkey()
 		})
 	}()
+}
+
+// disposeVoiceInput releases the hotkey, timers and recorders owned by the
+// dictation preference. Shared by the disabled branch and the no-ASR branch so
+// clearing the preference cannot leave a warmed-up recorder behind.
+func (a *desktop) disposeVoiceInput() {
+	a.voiceInput.quietWarmup = false
+	a.voiceInput.preparedDeviceID = ""
+	a.dropQueuedTakes()
+	if a.voiceInput.levelStop != nil {
+		close(a.voiceInput.levelStop)
+		a.voiceInput.levelStop = nil
+	}
+	if a.voiceInput.stopHotkey != nil {
+		a.voiceInput.stopHotkey()
+		a.voiceInput.stopHotkey = nil
+	}
+	a.voiceInput.pressed = false
+	if a.voiceInput.timer != nil {
+		a.voiceInput.timer.Stop()
+		a.voiceInput.timer = nil
+	}
+	if r := a.voiceInput.active; r != nil {
+		a.voiceInput.active = nil
+		go r.Cancel()
+	}
+	if r := a.voiceInput.prepared; r != nil {
+		a.voiceInput.prepared = nil
+		go r.Cancel()
+	}
 }
 
 func (a *desktop) refreshVoiceInputDevices() {

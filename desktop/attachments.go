@@ -725,6 +725,10 @@ func (a *desktop) messageAttachmentTile(c *ui.Context, t *conversation, att map[
 			uikit.Tooltip(c, ui.Image(c, bm).Size(dw, dh).MaxWidthPercent(100).Fit(ui.Contain).
 				Cursor(ui.CursorPointer), tip).
 				OnClick(func() { t.uiState().ToolOpen[key] = !expanded })
+		case !attachmentHasImage(att):
+			// A text file sent with the message has no picture to decode; it used
+			// to sit on "Loading image…" forever next to a button that returned
+			// at once, because there was no source to load.
 		case str(att, "error") == "":
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 				fieldNote(c, "Loading image…", a.secondaryInk())
@@ -737,6 +741,11 @@ func (a *desktop) messageAttachmentTile(c *ui.Context, t *conversation, att map[
 		}
 		ui.Row(c).Gap(gapTight).AlignItems(ui.Center).Children(func() {
 			uikit.Tooltip(c, ui.Text(c, short(name, 18)).FontSize(fsAux).TextColor(a.secondaryInk()), name)
+			if !attachmentHasImage(att) {
+				if size := int64(num(att, "size")); size > 0 {
+					fieldNote(c, fmtBytes(size), a.secondaryInk())
+				}
+			}
 			if err := str(att, "error"); err != "" {
 				uikit.Tooltip(c, ui.Text(c, short(err, 18)).FontSize(fsAux).TextColor(c.Theme().Danger), err)
 			}
@@ -753,6 +762,16 @@ func (a *desktop) messageAttachmentTile(c *ui.Context, t *conversation, att map[
 			}
 		})
 	})
+}
+
+// attachmentHasImage reports whether a tile has a picture to load: only image
+// attachments carry one, so a text file must not wait for a decode.
+func attachmentHasImage(att map[string]any) bool {
+	if kind := str(att, "kind"); kind != "" {
+		return kind == "image"
+	}
+	// Rows saved before "kind" was recorded still carry their picture source.
+	return str(att, "dataUrl") != "" || str(att, "imageRef") != ""
 }
 func (a *desktop) recordAttachmentReference(t *conversation, p map[string]any) {
 	for i := len(t.Messages) - 1; i >= 0; i-- {

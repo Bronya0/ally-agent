@@ -160,11 +160,21 @@ func TestSessionFilesUseIndexAndOnDemandSnapshot(t *testing.T) {
 		t.Fatalf("unexpected loaded snapshot: %#v", loaded)
 	}
 
+	imageDir := filepath.Join(app.imagesDir(), imageSessionKey(sessionID))
+	if err := os.MkdirAll(imageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(imageDir, "test.png"), []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := app.DeleteSession(sessionID); err != nil {
 		t.Fatalf("DeleteSession() error = %v", err)
 	}
 	if _, err := os.Stat(app.sessionSnapshotPath(sessionID)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("session snapshot still exists after delete, stat error = %v", err)
+	}
+	if _, err := os.Stat(imageDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session image directory still exists after delete, stat error = %v", err)
 	}
 	entries, err = app.ListSessions()
 	if err != nil {

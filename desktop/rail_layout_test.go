@@ -86,18 +86,20 @@ func TestRailSectionTitlesUseAvailableSpace(t *testing.T) {
 	for _, width := range []float32{160, 200, 340} {
 		a := &desktop{prefs: defaultPrefs()}
 		a.prefs.RailWidth = width
-		var textWidth, inset float32
+		var textWidth float32
 		tt := ui.NewTester(func(c *ui.Context) {
 			c.SetTheme(a.theme())
 			c.DisableAnimations()
 			a.railBody(c, &a.prefs.RailWidth)
 			textWidth, _ = c.MeasureText(1000, ui.Span{Text: "历史工作区", Size: 12.5})
-			inset = railContentInset(c)
 		}, 500, 850)
 		for _, title := range []string{"历史工作区", "工作区会话"} {
 			r, ok := tt.Find(title)
-			// The label shares the header with the icon, caret and two gaps.
-			available := r.W - 2*inset - sizeRailIcon - 10 - 20
+			// The found rect already stops where the add button starts and begins at
+			// the row edge; only the caret and its gap sit inside it. Subtracting the
+			// row inset and the button again counted that chrome twice, so the label
+			// read as 1 DIP too narrow while the drawn text still had plenty of room.
+			available := r.W - sizeRailIcon - 10
 			if !ok || available < textWidth {
 				t.Fatalf("width=%v header=%v leaves %.1f for %.1f text", width, r, available, textWidth)
 			}

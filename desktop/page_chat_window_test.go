@@ -22,6 +22,44 @@ func TestHistoryWindowConfigDefaultsAndBounds(t *testing.T) {
 	}
 }
 
+// Deleting the first row of the visible page used to leave VisibleStart past
+// the shortened transcript, which made historyMessageWindow return an empty
+// range.
+func TestDeletingPageStartKeepsTranscriptVisible(t *testing.T) {
+	conv := &conversation{}
+	for i := 0; i < 200; i++ {
+		conv.Messages = append(conv.Messages, map[string]any{"role": "user", "content": "question"})
+	}
+	conv.uiState().VisibleStart = 121
+	conv.Messages = conv.Messages[:120]
+	resetTranscriptAfterDelete(conv, 120)
+	start, end := historyMessageWindow(conv, 80)
+	if start == end {
+		t.Fatalf("transcript renders nothing after deleting the page's first row")
+	}
+}
+
+// Rounds before the cut still describe surviving messages; only the deleted
+// tail's entries may be dropped.
+func TestDeletingTailKeepsRoundStatsBeforeCut(t *testing.T) {
+	conv := &conversation{}
+	for i := 0; i < 10; i++ {
+		conv.Messages = append(conv.Messages, map[string]any{"role": "user", "content": "question"})
+	}
+	rounds := conv.uiState().Round
+	rounds[1] = &roundStat{}
+	rounds[7] = &roundStat{}
+	conv.Messages = conv.Messages[:6]
+	resetTranscriptAfterDelete(conv, 6)
+	rounds = conv.uiState().Round
+	if rounds[1] == nil {
+		t.Fatal("a round before the cut must survive")
+	}
+	if rounds[7] != nil {
+		t.Fatal("a round in the deleted tail must be dropped")
+	}
+}
+
 // Paging counts grouped blocks and must never split a run of tool calls.
 func TestHistoryPagesCountGroupsAndNeverSplitThem(t *testing.T) {
 	conv := &conversation{}

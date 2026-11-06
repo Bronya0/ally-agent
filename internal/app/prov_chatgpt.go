@@ -83,7 +83,7 @@ func chatGPTResponseError(resp *http.Response, raw []byte) error {
 		text = redactBearer(text, req.Header.Get("Authorization"))
 	}
 	if len(text) > 4096 {
-		text = text[:4096]
+		text = utf8Prefix(text, 4096)
 	}
 	var payload struct {
 		Error struct {

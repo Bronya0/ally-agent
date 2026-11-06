@@ -547,6 +547,21 @@ func (a *App) apiHandleAIComplete(w http.ResponseWriter, r *http.Request) {
 
 // ── 会话 ──
 
+// apiRequireSession applies the same 404/500 mapping as apiLoadSession for
+// handlers that only need the session to exist. It skips rebuilding the
+// message list, ContextTokens and the disk mtime, which those callers discard.
+func (a *App) apiRequireSession(w http.ResponseWriter, sessionID string) bool {
+	if _, err := a.LoadSession(sessionID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		}
+		apiWriteError(w, status, err.Error())
+		return false
+	}
+	return true
+}
+
 // apiLoadSession keeps metadata from the UI snapshot while reading conversation
 // data from backend history. API-only runs do not write UI snapshots.
 func (a *App) apiLoadSession(w http.ResponseWriter, sessionID string) (SessionSnapshot, bool) {
@@ -801,7 +816,7 @@ func (a *App) apiHandleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) apiHandleCancelSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
-	if _, ok := a.apiLoadSession(w, sessionID); !ok {
+	if !a.apiRequireSession(w, sessionID) {
 		return
 	}
 	_, compacting := a.apiSessionOutcome(sessionID)
@@ -1146,7 +1161,7 @@ func (a *App) apiHandleSessionMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiHandleSessionPlan(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.apiLoadSession(w, r.PathValue("id")); !ok {
+	if !a.apiRequireSession(w, r.PathValue("id")) {
 		return
 	}
 	apiWriteOK(w, map[string]any{"todos": a.GetPlan(r.PathValue("id"))})
@@ -1154,7 +1169,7 @@ func (a *App) apiHandleSessionPlan(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) apiHandleSessionQuestions(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
-	if _, ok := a.apiLoadSession(w, sessionID); !ok {
+	if !a.apiRequireSession(w, sessionID) {
 		return
 	}
 	questions := make([]map[string]any, 0)
@@ -1170,7 +1185,7 @@ func (a *App) apiHandleSessionQuestions(w http.ResponseWriter, r *http.Request) 
 
 func (a *App) apiHandleSessionAnswers(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
-	if _, ok := a.apiLoadSession(w, sessionID); !ok {
+	if !a.apiRequireSession(w, sessionID) {
 		return
 	}
 	var body AskSubmitRequest
@@ -1197,7 +1212,7 @@ func (a *App) apiHandleSessionAnswers(w http.ResponseWriter, r *http.Request) {
 // apiHandleCompactSession 压缩会话历史（同步调用：等 LLM 总结完成才返回；
 // 客户端断开连接即取消总结调用）。
 func (a *App) apiHandleCompactSession(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.apiLoadSession(w, r.PathValue("id")); !ok {
+	if !a.apiRequireSession(w, r.PathValue("id")) {
 		return
 	}
 	var body struct {

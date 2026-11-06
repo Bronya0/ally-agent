@@ -195,7 +195,7 @@ func (a *desktop) railModeButton(c *ui.Context, expanded bool, id, label, iconNa
 // one the composer selectors use: the current page carries the accent tint.
 func (a *desktop) railGroupButton(c *ui.Context, expanded bool, head backend.PluginInfo, title string, group []int, active bool) {
 	button := railNavigationButton(c, "nav-group-"+head.ID, title, "plugins", expanded, active, func() {
-		iconGlyph(c, "chevrondown", 12).Shrink(0)
+		iconGlyph(c, "chevrondown", sizeCaretInline).Shrink(0)
 	}, a.secondaryInk())
 	menuPopoverButton(c, button, 210, func(dismiss func()) {
 		for _, i := range group {
@@ -219,16 +219,7 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 		}
 		ui.Scroll(c.Key("workspace-items")).FillWidth().MaxHeight(180).MinHeight(0).Children(func() {
 			a.railWorkspaceRow(c, "", "临时工作区", "在系统临时目录创建沙箱，随标签页关闭自动删除")
-			seen := map[string]bool{}
-			var roots []string
-			for _, entry := range a.sessions {
-				root := entry.Workspace
-				if root == "" || seen[strings.ToLower(root)] || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
-					continue
-				}
-				seen[strings.ToLower(root)] = true
-				roots = append(roots, root)
-			}
+			roots := a.sessionWorkspaceRoots()
 			for _, root := range roots {
 				root := root
 				a.railWorkspaceRow(c, root, workspaceLabel(root), root)
@@ -339,7 +330,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 		if t != nil {
 			workspace = t.Workspace
 		}
-		entries := a.workspaceSessions(workspace)
+		entries, _ := a.workspaceSessions(workspace)
 		if len(entries) == 0 {
 			ui.Text(c, "当前工作区暂无历史会话").FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset(c))
 			return
@@ -397,20 +388,60 @@ func sessionBusyID(a *desktop, id string) string {
 	return ""
 }
 
-func (a *desktop) workspaceSessions(workspace string) []backend.SessionIndexEntry {
-	var entries []backend.SessionIndexEntry
-	for _, entry := range a.sessions {
-		if workspace == "" || strings.EqualFold(entry.Workspace, workspace) {
-			entries = append(entries, entry)
+// sessionWorkspaceRoots is the distinct workspace list the rail and the header's
+// workspace menu both offer. It is derived from the whole session index, so it is
+// rebuilt when that index is replaced instead of on every frame.
+func (a *desktop) sessionWorkspaceRoots() []string {
+	return a.wsRootsMemo.get(a.sessRev, func(uint64) []string {
+		seen := make(map[string]bool, len(a.sessions))
+		var roots []string
+		for _, entry := range a.sessions {
+			root := entry.Workspace
+			key := strings.ToLower(root)
+			if root == "" || seen[key] || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
+				continue
+			}
+			seen[key] = true
+			roots = append(roots, root)
 		}
-	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		return entries[i].UpdatedAt > entries[j].UpdatedAt
+		return roots
 	})
-	if len(entries) > 80 {
-		entries = entries[:80]
-	}
-	return entries
+}
+
+type workspaceSessionKey struct {
+	revision  uint64
+	workspace string
+}
+
+// workspaceSessionList is the bounded list the rail and the pickers draw plus
+// the number of sessions that exist: the header must say how many there are, not
+// how many of them fit on screen.
+type workspaceSessionList struct {
+	entries []backend.SessionIndexEntry
+	total   int
+}
+
+// workspaceSessions is a per-frame read for the rail, the composer's session
+// menu and the workspace menus: the scan, the copy and the sort run once per
+// replacement of the session index instead of once per frame.
+func (a *desktop) workspaceSessions(workspace string) ([]backend.SessionIndexEntry, int) {
+	list := a.wsSessionMemo.get(workspaceSessionKey{a.sessRev, workspace}, func(key workspaceSessionKey) workspaceSessionList {
+		var entries []backend.SessionIndexEntry
+		for _, entry := range a.sessions {
+			if key.workspace == "" || strings.EqualFold(entry.Workspace, key.workspace) {
+				entries = append(entries, entry)
+			}
+		}
+		sort.SliceStable(entries, func(i, j int) bool {
+			return entries[i].UpdatedAt > entries[j].UpdatedAt
+		})
+		total := len(entries)
+		if len(entries) > 80 {
+			entries = entries[:80]
+		}
+		return workspaceSessionList{entries: entries, total: total}
+	})
+	return list.entries, list.total
 }
 
 // petalsOverlay draws a light decorative layer after the original welcome
@@ -453,9 +484,9 @@ func (a *desktop) railSectionHeader(c *ui.Context, id, label, icon string, open 
 			if open {
 				arrow = "chevrondown"
 			}
-			iconGlyph(c, arrow, 10).Shrink(0).TextColor(a.secondaryInk())
+			iconGlyph(c, arrow, sizeCaretInline).Shrink(0).TextColor(a.secondaryInk())
 		}, a.secondaryInk()).Grow(1).MinWidth(0).OnClick(toggle)
-		uikit.IconButton(c, id+"-add", tip, iconImage("plus"), 20, uikit.IconQuiet, add, a.secondaryInk()).Shrink(0)
+		uikit.IconButtonSized(c, id+"-add", tip, iconImage("plus"), 22, 20*uikit.IconGlyphScale, uikit.IconQuiet, add, a.secondaryInk()).Shrink(0)
 	})
 }
 

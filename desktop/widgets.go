@@ -590,7 +590,7 @@ func formDialog(c *ui.Context, open *bool, width, preferredHeight float32, title
 		modalPanelChrome(c, panel, width)
 		panel.Height(min(max(preferredHeight, h*0.65), max(240, h*0.88)))
 		ui.Column(c).Fill().Selectable().Children(func() {
-			ui.Row(c).Shrink(0).Padding(8, 8, 10).Gap(gapField).Children(func() {
+			ui.Row(c).Shrink(0).Padding(8, 8, 10).Gap(gapField).AlignItems(ui.Center).Children(func() {
 				ui.Column(c).Grow(1).Gap(2).Children(func() {
 					ui.Text(c, title).FontSize(fsDialogTitle).Bold()
 					if subtitle != "" {

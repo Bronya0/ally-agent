@@ -29,6 +29,29 @@ func (a *desktop) dispatchEvent(name string, payload any) {
 	})
 }
 
+// streamAccumulator grows the text of the transcript row that is streaming. Its
+// string goes to the row without a copy, so a delta costs amortized O(1) bytes
+// instead of copying the whole answer.
+type streamAccumulator struct {
+	row  int
+	text strings.Builder
+}
+
+// appendStreamChunk returns before+delta through the streaming row's builder. It
+// rebuilds that builder whenever the row no longer holds what the builder has (a
+// reloaded transcript, a compaction preview, another row streaming), so the row
+// stays the only source of truth for the text.
+func appendStreamChunk(st *chatUI, row int, before, delta string) string {
+	acc := st.Stream
+	if acc == nil || acc.row != row || acc.text.String() != before {
+		acc = &streamAccumulator{row: row}
+		acc.text.WriteString(before)
+		st.Stream = acc
+	}
+	acc.text.WriteString(delta)
+	return acc.text.String()
+}
+
 func (a *desktop) applyEvent(name string, p map[string]any) {
 	if a.closing && name != "service:update" {
 		return
@@ -124,13 +147,14 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 				t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": ""})
 			}
 			m := t.Messages[len(t.Messages)-1]
-			if before := str(m, "content"); before == "" {
+			// Appending through the row's own builder keeps a long answer from
+			// being copied again on every delta.
+			before := str(m, "content")
+			m["content"] = appendStreamChunk(ui, len(t.Messages)-1, before, content)
+			if before == "" {
 				// A row that starts drawing may open a history block: the cached
 				// block starts have to know without the transcript growing.
-				m["content"] = content
 				t.markHistory()
-			} else {
-				m["content"] = before + content
 			}
 			t.Status = "正在回复…"
 		} else if n := int(num(p, "reasoningLen")); n > 0 {
@@ -261,6 +285,9 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		t.CancelRequested = false
 		t.AskID = ""
 		ui.CompactBusy = false
+		// Release the streaming builder: its buffer aliases the row's content, so
+		// keeping it would hold one extra copy of the whole answer per tab.
+		ui.Stream = nil
 		if name == "run:done" {
 			t.Status = "任务完成"
 		} else {
@@ -340,6 +367,19 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 		m = map[string]any{"role": "tool_call", "toolCallId": id}
 		t.Messages = append(t.Messages, m)
 	}
+	// Ownership also depends on the tool kind and a sub-agent result's ID,
+	// both of which can arrive after this row has already been rendered.
+	beforeKind := toolKind(str(m, "name"))
+	beforeAgent := ""
+	if beforeKind == "subagent" {
+		beforeAgent = str(toolResult(m), "agentId")
+	}
+	defer func() {
+		afterKind := toolKind(str(m, "name"))
+		if beforeKind != afterKind || ((beforeKind == "subagent" || afterKind == "subagent") && beforeAgent != str(toolResult(m), "agentId")) {
+			t.markHistory()
+		}
+	}()
 	for _, k := range []string{"name", "args", "result", "error", "errorCode", "durationMs", "mcpServer", "mcpTool"} {
 		if v, ok := p[k]; ok {
 			m[k] = v
@@ -490,7 +530,7 @@ func (a *desktop) applyMCPStatus(p map[string]any) {
 	b, _ := json.Marshal(p["servers"])
 	var servers []map[string]any
 	_ = json.Unmarshal(b, &servers)
-	a.mcpServers = servers
+	a.setMCPServers(servers)
 	a.mcpSummary = mcpSummary(servers)
 	a.refreshMCPInventory()
 }
@@ -569,6 +609,12 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 			break
 		}
 	}
+	if name == "sub:blackboard" {
+		if row != nil {
+			applySubagentBlackboard(row, p)
+		}
+		return
+	}
 	if row == nil {
 		invalidateChatSearch(t)
 		row = map[string]any{"role": "subagent", "subId": id, "parentToolCallId": str(p, "toolCallId")}
@@ -577,6 +623,9 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 		if t.uiState().Follow {
 			t.uiState().FollowPending = true
 		}
+	}
+	if _, hasCounts := p["blackboardSent"]; hasCounts {
+		applySubagentBlackboard(row, p)
 	}
 	// "error" is deliberately absent: a sub:tool:error carries the failing
 	// tool's message, and copying it here marked the whole run failed while it
@@ -644,6 +693,9 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 		go func() {
 			runs := a.core.GetSubagents()
 			a.win.Update(func() {
+				if !a.hasSubagentConversation(t, sid) {
+					return
+				}
 				for _, run := range runs {
 					if run == nil || run.SessionID != sid {
 						continue
@@ -660,6 +712,7 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 							msg["cacheHitTokens"] = run.CacheHitTokens
 							msg["cacheMissTokens"] = run.CacheMissTokens
 							msg["status"] = strings.ToLower(run.Status)
+							mergeSubagentBlackboardRun(msg, run)
 						}
 					}
 				}

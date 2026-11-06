@@ -425,7 +425,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 			if open {
 				caret = "chevrondown"
 			}
-			iconGlyph(c, caret, 12).Size(16, 16).TextColor(a.secondaryInk())
+			iconGlyph(c, caret, sizeCaretGroupCard).TextColor(a.secondaryInk())
 		})
 		if row.Clicked() {
 			t.uiState().ToolOpen[key] = !open
@@ -559,7 +559,7 @@ func (a *desktop) toolGroupCommandEntry(c *ui.Context, t *conversation, entry to
 		if open {
 			caret = "chevrondown"
 		}
-		iconGlyph(c, caret, 11).Shrink(0).TextColor(a.secondaryInk())
+		iconGlyph(c, caret, sizeCaretRow).Shrink(0).TextColor(a.secondaryInk())
 	})
 	if button.Clicked() {
 		t.uiState().ToolOpen[key] = !open
@@ -767,7 +767,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			}
 			return
 		}
-		body := ui.Column(c).FillWidth().MinWidth(0).Gap(gapTight)
+		body := ui.Column(c.Key(key + "-body")).FillWidth().MinWidth(0).Gap(gapTight)
 		inset := float32(0)
 		if name == "create" || name == "remote_create_file" {
 			inset += 4
@@ -820,8 +820,13 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					content = str(result, "content")
 				}
 				if !open {
-					startLine = max(1, strings.Count(strings.TrimSuffix(content, "\n"), "\n")+1-5)
-					content = tailLines(content, 6)
+					preview := memoAt[createPreviewMemo](body, "create-preview").get(content, func(content string) createPreview {
+						return createPreview{
+							startLine: max(1, strings.Count(strings.TrimSuffix(content, "\n"), "\n")+1-5),
+							content:   tailLines(content, 6),
+						}
+					})
+					content, startLine = preview.content, preview.startLine
 				}
 				if content != "" {
 					// One shape from the first streamed line to the result: a fixed-height
@@ -1647,7 +1652,7 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 		ui.Box(c).Shrink(0).AlignSelf(ui.Start).Padding(11, 0).Children(func() {
 			ui.Text(c, prefix).Font(monoFamily).FontSize(fsSmall).TextColor(a.secondaryInk())
 		})
-		ui.Column(c).Key(fmt.Sprintf("sub-%s-%d", subID, index)).Grow(1).MinWidth(0).Padding(10, 12).Gap(gapInline).
+		ui.Column(c.Key("sub-card-"+subID)).Grow(1).MinWidth(0).Padding(10, 12).Gap(gapInline).
 			Border(1, c.Theme().Border).Background(c.Theme().Surface).Radius(radiusCard).Children(func() {
 			ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
 				// Main's SubagentInlineCard status dot: 6px, running blinks
@@ -1713,9 +1718,10 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 				ui.Spacer(c)
 				summary, errText := str(m, "summary"), str(m, "error")
 				hasReport := (status != "running" && summary != "") || errText != ""
-				open := t.uiState().ToolOpen["sub-"+str(m, "subId")]
-				reportButton, _ := buttonParts(c, "sub-report-"+str(m, "subId"), "", btnSecondary, true, "")
-				reportButton.Disabled(!hasReport).OnClick(func() { t.uiState().ToolOpen["sub-"+str(m, "subId")] = !open })
+				a.subagentBlackboardButton(c, t, m)
+				open := t.uiState().ToolOpen["sub-"+subID]
+				reportButton, _ := buttonParts(c, "sub-report-"+subID, "", btnSecondary, true, "")
+				reportButton.Label("子代理报告 " + subID).Disabled(!hasReport).OnClick(func() { toggleSubagentDetail(t, subID, false) })
 				reportButton.Children(func() {
 					ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
 						disclosureIcon(c, "file", a.secondaryInk())
@@ -1724,11 +1730,15 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 						if open {
 							caret = "chevrondown"
 						}
-						iconGlyph(c, caret, 10).Shrink(0)
+						iconGlyph(c, caret, sizeCaretInline).Shrink(0)
 					})
 				})
 			})
-			uikit.Reveal(c.Key("sub-report-reveal"), t.uiState().ToolOpen["sub-"+str(m, "subId")], func() {
+			a.subagentBlackboardDetails(c, t, m)
+			uikit.Reveal(c.Key("sub-report-reveal"), t.uiState().ToolOpen["sub-"+subID], func() {
+				if !t.uiState().ToolOpen["sub-"+subID] {
+					return
+				}
 				if errText := str(m, "error"); errText != "" {
 					notice(c, "error", errText, a.secondaryInk())
 				}

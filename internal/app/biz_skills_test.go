@@ -8,6 +8,7 @@
 package app
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -613,7 +614,7 @@ func TestSaveSkillFlattensMultilineMetadata(t *testing.T) {
 }
 
 // 内置技能没有磁盘目录（Dir 是嵌入树里的相对路径），冲突提示必须指到
-// builtin:// 上，否则用户会照着 "skills/codegraph" 去工作区里找。
+// builtin:// 上，否则用户会照着 "skills/playwright-cli" 去工作区里找。
 func TestSaveSkillBuiltinConflictNamesTheVirtualPath(t *testing.T) {
 	t.Parallel()
 	app := newApiTestApp(t)
@@ -733,42 +734,6 @@ func TestParseSkillContentFromMemory(t *testing.T) {
 	}
 	if meta.WhenToUse != "when testing" {
 		t.Fatalf("expected whenToUse, got %q", meta.WhenToUse)
-	}
-}
-
-func TestBuiltinSkillEntriesContainsCodeGraph(t *testing.T) {
-	entries := builtinSkillEntries()
-	var cg *SkillDefinition
-	for i := range entries {
-		if entries[i].Name == "codegraph" {
-			cg = &entries[i]
-			break
-		}
-	}
-	if cg == nil {
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			names = append(names, e.Name)
-		}
-		t.Fatalf("expected codegraph in built-in skills, got %v", names)
-	}
-	if cg.Source != "builtin" {
-		t.Fatalf("expected Source=builtin, got %q", cg.Source)
-	}
-	if cg.embeddedContent == "" {
-		t.Fatal("expected embeddedContent to be populated for built-in skill")
-	}
-	if !strings.Contains(cg.embeddedContent, "CODEGRAPH.md") {
-		t.Fatalf("expected embedded content to reference CODEGRAPH.md")
-	}
-	if !strings.Contains(cg.embeddedContent, "速查表") {
-		t.Fatalf("expected embedded content to specify the feature-lookup table section")
-	}
-	if !strings.HasPrefix(cg.Path, "builtin://") {
-		t.Fatalf("expected Path to start with builtin://, got %q", cg.Path)
-	}
-	if cg.WhenToUse == "" {
-		t.Fatal("expected WhenToUse to be populated from frontmatter")
 	}
 }
 
@@ -1029,5 +994,49 @@ func TestSkillValidYAMLRetainsAliasesAndQuotedMultiline(t *testing.T) {
 	meta = parseSkillContent("other/SKILL.md", "---\nname: actual\ndescription: first line\n  second line\n---\nbody")
 	if meta.Description != "first line second line" {
 		t.Fatalf("plain multiline YAML changed: %+v", meta)
+	}
+}
+
+// 带脚本的内置技能加载时必须报出数据目录里的真实路径：模型靠它 read 并运行
+// 脚本。只有 SKILL.md 的技能不报目录，免得模型拿到一个打不开的别名。
+func TestBuiltinSkillLoadDir(t *testing.T) {
+	a := newIsolatedChatTestApp(t)
+	// 直接问内置清单：用户目录里装过同名技能时，ListSkills 会按 user > builtin
+	// 的优先级把内置那份藏掉，这个测试关心的不是优先级。
+	builtin := func(name string) SkillDefinition {
+		t.Helper()
+		for _, sk := range builtinSkillEntries() {
+			if strings.EqualFold(sk.Name, name) {
+				return sk
+			}
+		}
+		t.Fatalf("%s is not among the builtin skills", name)
+		return SkillDefinition{}
+	}
+
+	script := builtin("md2other")
+	if script.WhenToUse == "" {
+		t.Fatalf("builtin skill lost its whenToUse: %+v", script)
+	}
+	dir, err := a.skillLoadDir(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(a.AppDataDir(), "builtin-skills", "md2other"); dir != want {
+		t.Fatalf("dir = %q, want %q", dir, want)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "md2docx.py"))
+	if err != nil {
+		t.Fatalf("script was not unpacked: %v", err)
+	}
+	if !bytes.Contains(data, []byte("def build_docx")) {
+		t.Fatal("unpacked file is not the conversion script")
+	}
+	if tree := buildSkillDirTree(dir, script.Path); !strings.Contains(tree, "md2docx.py") {
+		t.Fatalf("loaded dir tree omits the script: %q", tree)
+	}
+
+	if dir, err := a.skillLoadDir(builtin("anydoc")); err != nil || dir != "" {
+		t.Fatalf("a skill with only SKILL.md reported dir=%q err=%v", dir, err)
 	}
 }

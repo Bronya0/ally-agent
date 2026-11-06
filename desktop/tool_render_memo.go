@@ -44,6 +44,16 @@ type (
 	lineMemo        = memoOf[lineKey, string]
 )
 
+// createPreview holds the collapsed create card's tail and first line number.
+// The source text can be a whole file, so counting its lines on every frame is
+// avoided until the content changes.
+type createPreview struct {
+	content   string
+	startLine int
+}
+
+type createPreviewMemo = memoOf[string, createPreview]
+
 // lineKey addresses the number column of a source window: the text it numbers
 // and the first number it starts at.
 type lineKey struct {

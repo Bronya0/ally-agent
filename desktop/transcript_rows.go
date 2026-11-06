@@ -168,6 +168,16 @@ type historyKey struct {
 // for the transcript are worked out again on the next frame.
 func (t *conversation) markHistory() { t.historyRev++ }
 
+// cachedTranscriptRows answers "who draws what" for the current transcript.
+// It shares blockStarts' revision key: both walk the whole message list, and a
+// frame asks for both (the window and the cards' children lookup).
+func (t *conversation) cachedTranscriptRows() *transcriptRows {
+	key := historyKey{rows: len(t.Messages), rev: t.historyRev}
+	return t.historyRows.get(key, func(historyKey) *transcriptRows {
+		return newTranscriptRows(t)
+	})
+}
+
 // blockStarts answers which rows open a history block: a page may only begin on
 // a row that draws. The grouping rule lives in foldsInto/startsBlock, so a page
 // never starts on a row another row already draws. One frame asks more than
@@ -177,7 +187,7 @@ func (t *conversation) markHistory() { t.historyRev++ }
 func (t *conversation) blockStarts() []int {
 	key := historyKey{rows: len(t.Messages), rev: t.historyRev}
 	return t.historyStarts.get(key, func(historyKey) []int {
-		rows := newTranscriptRows(t)
+		rows := t.cachedTranscriptRows()
 		starts := make([]int, 0, len(t.Messages)+1)
 		for i := range t.Messages {
 			if rows.startsBlock(i) {

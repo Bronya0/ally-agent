@@ -172,15 +172,8 @@ func (a *desktop) workspaceMenu(c *ui.Context, from string, anchor ui.Element) {
 		divider(c)
 		_, height := c.Size()
 		ui.Scroll(c.Key("history")).FillWidth().MinHeight(0).MaxHeight(max(float32(80), min(float32(460), height-150))).Children(func() {
-			seen := map[string]bool{}
-			count := 0
-			for _, entry := range a.sessions {
-				root := entry.Workspace
-				if root == "" || seen[strings.ToLower(root)] || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
-					continue
-				}
-				seen[strings.ToLower(root)] = true
-				count++
+			roots := a.sessionWorkspaceRoots()
+			for _, root := range roots {
 				b := ui.ButtonBase(c.Key(root)).FillWidth().Height(32).Padding(0, 9).Gap(gapField).Justify(ui.Start).AlignItems(ui.Center).Radius(radiusSmall).Cursor(ui.CursorPointer).Label("打开工作区 " + root)
 				fill := ui.Transparent
 				if b.Hovered() {
@@ -193,7 +186,7 @@ func (a *desktop) workspaceMenu(c *ui.Context, from string, anchor ui.Element) {
 				})
 				uikit.Tooltip(c, b, root)
 			}
-			if count == 0 {
+			if len(roots) == 0 {
 				muted(c, "无历史记录", fsSmall, a.secondaryInk()).Padding(padRow)
 			}
 		})
@@ -338,7 +331,7 @@ func (a *desktop) updateDialog(c *ui.Context) {
 	p := a.currentPalette()
 	modalCard(c, &a.upd.Open, 460, func() {
 		ui.Column(c).Gap(gapSection).Children(func() {
-			ui.Row(c).Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "软件更新").FontSize(fsDialogTitle).Bold()
 				ui.Spacer(c)
 				iconAction(c, "update-close", "关闭", "close", 24, func() {

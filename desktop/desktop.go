@@ -58,6 +58,7 @@ type conversation struct {
 	// historyStarts holds the transcript's block starts for historyRev, so a
 	// frame asks once per change instead of once per row. See blockStarts.
 	historyStarts memoOf[historyKey, []int]
+	historyRows   memoOf[historyKey, *transcriptRows]
 	historyRev    uint64
 }
 
@@ -139,6 +140,7 @@ type desktop struct {
 	versionLabel                            string
 	upd                                     updateUI
 	filesF                                  fileUI
+	statsChart                              statsBarsData
 	gameF                                   gameUI
 	plans                                   map[string][]backend.PlanStep
 	planRev                                 map[string]int64
@@ -234,6 +236,19 @@ type desktop struct {
 	sshRefreshSeq                                       uint64
 	sshRefreshPending                                   map[string]bool
 	deletePrompt                                        *deletePromptState
+
+	// mcpServersRev is the revision of the status list below. The list is replaced
+	// as a whole on every update, so bumping it with the replacement is enough for
+	// the per-row lookups to see a new index.
+	mcpServersRev uint64
+	mcpStatusMemo memoOf[uint64, map[string]map[string]any]
+
+	// Derived from sessions. The rail, the composer's session menu and the
+	// workspace menus ask for them on every frame, so they are rebuilt only
+	// when the index itself is replaced (sessRev).
+	sessRev       uint64
+	wsRootsMemo   memoOf[uint64, []string]
+	wsSessionMemo memoOf[workspaceSessionKey, workspaceSessionList]
 }
 
 // Run starts the native desktop host and its Agent runtime.
@@ -391,9 +406,9 @@ func Run() {
 				a.toolInventory = tools
 				a.toolCount = enabledToolCount(tools)
 				a.refreshMCPInventory()
-				a.mcpServers = servers
+				a.setMCPServers(servers)
 				a.mcpSummary = mcpSummary(servers)
-				a.sessions = sessions
+				a.sessions, a.sessRev = sessions, a.sessRev+1
 				for _, tab := range a.tabs {
 					a.loadWorkspaceInputHistory(tab)
 				}
@@ -1030,7 +1045,7 @@ func (a *desktop) persist(t *conversation) {
 			return
 		}
 		list, _ := a.core.ListSessionIndex()
-		a.win.Update(func() { a.sessions = list })
+		a.win.Update(func() { a.sessions, a.sessRev = list, a.sessRev+1 })
 	}()
 }
 func (a *desktop) openSession(id string) {
@@ -1080,6 +1095,7 @@ func (a *desktop) openSession(id string) {
 					normalizeToolMessage(message)
 				}
 				retainLocalCommandSummary(message)
+				normalizeSubagentBlackboard(message)
 			}
 			restoreRoundStats(t)
 			a.showSession(t)
@@ -1441,7 +1457,7 @@ func (a *desktop) loadWorkspaceInputHistory(t *conversation) {
 	if a.core == nil || a.win == nil {
 		return
 	}
-	entries := a.workspaceSessions(t.Workspace)
+	entries, _ := a.workspaceSessions(t.Workspace)
 	if len(entries) > 30 {
 		entries = entries[:30]
 	}

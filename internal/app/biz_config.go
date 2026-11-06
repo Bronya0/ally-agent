@@ -78,6 +78,9 @@ func defaultConfigState() ConfigState {
 		ToolFontSize:          defaultToolFontSize,
 		SubFontSize:           defaultSubFontSize,
 		AuxFontSize:           defaultAuxFontSize,
+
+		CompactThresholdMode:   CompactThresholdModeRatio,
+		CompactThresholdTokens: DefaultCompactThresholdTokens,
 	}
 	if goruntime.GOOS == "windows" {
 		cfg.GitBashPath = resolveGitBashPath("")
@@ -505,6 +508,13 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	// cannot starve the model of reply budget or trigger thrashing.
 	if overlay.CompactThreshold != 0 {
 		base.CompactThreshold = clampCompactThreshold(overlay.CompactThreshold)
+	}
+	if strings.TrimSpace(overlay.CompactThresholdMode) != "" {
+		base.CompactThresholdMode = overlay.CompactThresholdMode
+	}
+	base.CompactThresholdMode = normalizeCompactThresholdMode(base.CompactThresholdMode)
+	if overlay.CompactThresholdTokens != 0 {
+		base.CompactThresholdTokens = clampCompactThresholdTokens(overlay.CompactThresholdTokens)
 	}
 	// CompactTimeoutSeconds: same zero-means-absent pattern. Non-zero values
 	// are clamped to [30, 3600] so an edit cannot hang the app on compaction

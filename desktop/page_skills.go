@@ -64,8 +64,6 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 				a.skillsF.Source = index
 				a.skillsF.sourceIDs = ids
 			}
-			a.skillsF.sourceIDs = ids
-			a.skillsF.Source = index
 			active := ids[index]
 			var visible []backend.SkillDefinition
 			for _, s := range filtered {
@@ -119,9 +117,9 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 								path = s.Dir
 							}
 							if sourceKey(s.Source) == "builtin" {
-								uikit.Tooltip(c, ui.Text(c, "随 Ally 内置").FontSize(fsTiny).TextColor(faint).SingleLine(), "内置技能随应用发布")
+								uikit.Tooltip(c, ui.Text(c, "随 Ally 内置").FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine(), "内置技能随应用发布")
 							} else if path != "" {
-								link := uikit.Tooltip(c, ui.Text(c, path).FontSize(fsTiny).TextColor(faint).SingleLine(), "点击在文件管理器中打开: "+path)
+								link := uikit.Tooltip(c, ui.Text(c, path).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine(), "点击在文件管理器中打开: "+path)
 								link.Cursor(ui.CursorPointer)
 								if link.Clicked() {
 									a.job(func() error { return a.core.OpenPathInFileManager(path) })

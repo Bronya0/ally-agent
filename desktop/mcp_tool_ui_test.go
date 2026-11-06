@@ -81,7 +81,9 @@ func TestMCPCheckboxWritesNewValueAndSurvivesRebuild(t *testing.T) {
 	a := &desktop{}
 	doc := &mcpConfigDoc{Servers: map[string]mcpServerEntry{"server": {DisabledTools: []string{"read_file", "unknown"}}}}
 	status := map[string]any{"tools": []map[string]any{{"name": "read_file"}, {"name": "write_file"}}}
-	tt := ui.NewTester(func(c *ui.Context) { a.mcpToolChecklist(c, "server", doc.Servers["server"], doc, status) }, 700, 300)
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.mcpToolChecklist(c, "server", doc.Servers["server"], func() *mcpConfigDoc { return doc }, status)
+	}, 700, 300)
 	for _, step := range []struct {
 		name string
 		want []string

@@ -1200,7 +1200,11 @@ func utf8Prefix(text string, maxBytes int) string {
 		return text
 	}
 	cut := maxBytes
-	for cut > 0 && !utf8.ValidString(text[:cut]) {
+	// Step back only over an incomplete trailing rune (at most UTFMax-1
+	// bytes). Bytes earlier in the text must not shorten the prefix: validation
+	// output and git diffs may legitimately be GBK, and walking back to the
+	// first invalid byte would drop almost everything.
+	for back := 0; back < utf8.UTFMax-1 && cut > 0 && !utf8.RuneStart(text[cut]); back++ {
 		cut--
 	}
 	return text[:cut]

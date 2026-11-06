@@ -85,6 +85,17 @@ const (
 	// passes through the gate), so a declared bound cannot drift from what the
 	// runtime accepts.
 	DeletePathListLimit = 20
+	// ContentSearchGuidance is the single wording for where local content searches
+	// go. The command schema states it as that tool's boundary and the runtime
+	// repeats it after a shell grep, so the model never reads two versions of the
+	// same rule.
+	ContentSearchGuidance = "Use the grep tool, or rg in a shell, for content searches; do not build them from grep/find/sed/awk pipelines."
+	// MaxModelToolOutput bounds the raw tool output that reaches model context
+	// (command output, service reads, third-party MCP text). internal/app aliases
+	// this constant and elides the middle beyond it, so the command schema can
+	// quote the number the model actually receives instead of repeating the
+	// storage-side preview (maxToolOutput) that never reaches it.
+	MaxModelToolOutput = 12 * 1024
 )
 
 // chatToolsCache memoizes the built-in tool list. The schema is pure static
@@ -217,11 +228,14 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"paths"},
 		}),
-		functionTool("command", "Run a shell command or related shell sequence with cwd inside the workspace. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. Read-only outside inspection and new outside paths are allowed; modifying existing outside paths is refused. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. Output is a bounded preview; use the full log path with read/grep when provided, rather than rerunning side effects. A timeout promotes the still-running process to a background service: use service read/stop/restart with its returned id, never start a duplicate.", map[string]any{
+		// The non-blank pattern on the command argument is a blank-command guard
+		// only: Go's `.` never crosses a newline, so a multi-line command passes as
+		// soon as any one line carries a non-space character.
+		functionTool("command", "Run a shell command or related shell sequence with cwd inside the workspace. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. "+ContentSearchGuidance+" Read-only outside inspection and new outside paths are allowed; modifying existing outside paths is refused. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. "+modelOutputNote+" A timeout promotes the still-running process to a background service: use service read/stop/restart with its returned id, never start a duplicate. Commands that touch the same files or bind the same port need distinct stages.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run."},
-				"cwd":     map[string]any{"type": "string", "description": "Working directory inside the workspace. Relative to the workspace root; an absolute path inside the workspace is also accepted and rebased. Empty means workspace root."},
+				"cwd":     map[string]any{"type": "string", "description": "Working directory inside the workspace. Relative to the workspace root; an absolute path inside the workspace is also accepted and rebased. A path outside the workspace is refused. Empty means workspace root."},
 				"timeout": commandTimeoutSchema(),
 			},
 			"required": []string{"command"},
@@ -488,7 +502,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"skill"},
 		}),
-		functionTool("suggest", "Offer concise follow-up actions when useful. Suggestions are sent to the user verbatim. This must be the only tool call in the response and ends the run; finish the reply first.", map[string]any{
+		functionTool("suggest", "Offer concise follow-up actions when useful. Suggestions are sent to the user verbatim. This must be the only tool call in the response and ends the run, so the reply it closes must already be written: put the answer, summary, or result in the reply text first, then call this. Never call it as the whole response, and never deliver the answer through the suggestions themselves; calling it with no reply text is a broken turn.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"items": map[string]any{
@@ -525,6 +539,14 @@ var builtinToolExamples = map[string]string{
 	"screenshot":         `list: {"action":"list"}; a window by id: {"windowId":131076}; by unique title: {"windowTitle":"ally-agent"}; region: {"region":{"x":0,"y":0,"width":1280,"height":800}}`,
 	"plan":               `start: {"steps":["Inspect code","Run tests"]}; report progress: {"finish":"Inspect code"}; read: {}`,
 }
+
+// modelOutputNote is the command schema's account of what the model receives.
+// The runtime keeps the head and the tail of long output and replaces the middle
+// with a marker, so two different byte counts are in play: the storage preview
+// (maxToolOutput, what the card and a spilled file hold) and this model-facing
+// budget. The schema quotes the second one, because that is the copy the model
+// reads, and points at the spilled file for the rest.
+var modelOutputNote = fmt.Sprintf("Output is a bounded preview: at most %d KiB reaches you, with the start and the end kept and the middle elided (a `reduced-from` attribute reports the real length). When the run spilled a full log, the result carries its path: read that file with the read or grep tool instead of rerunning side effects.", MaxModelToolOutput/1024)
 
 func functionTool(name, description string, parameters map[string]any) openai.Tool {
 	if name == "read" || name == "remote_read" {
