@@ -198,20 +198,23 @@ func (a *desktop) renderMCPServerList(c *ui.Context, data mcpListData) {
 		return
 	}
 	// Event handlers edit a shallow copy; the memoized source stays immutable.
-	doc := &mcpConfigDoc{Extra: data.doc.Extra, Servers: maps.Clone(data.doc.Servers)}
-	names := data.names
-	statuses := make(map[string]map[string]any, len(a.mcpServers))
-	for _, status := range a.mcpServers {
-		name := str(status, "name")
-		if _, exists := statuses[name]; !exists {
-			statuses[name] = status
+	// The copy is made by the click itself: a frame that only repaints needs none,
+	// and the whole server table would otherwise be cloned on every frame.
+	var edit *mcpConfigDoc
+	editDoc := func() *mcpConfigDoc {
+		if edit == nil {
+			edit = &mcpConfigDoc{Extra: data.doc.Extra, Servers: maps.Clone(data.doc.Servers)}
 		}
+		return edit
 	}
+	names := data.names
 	query := strings.ToLower(strings.TrimSpace(a.mcpF.Search))
 	shown := 0
 	for _, name := range names {
-		entry := doc.Servers[name]
-		status := statuses[name]
+		entry := data.doc.Servers[name]
+		// The status is looked up per row instead of indexing the whole server
+		// list into a fresh map every frame; the map itself stays live this way.
+		status := a.mcpStatusFor(name)
 		if query != "" {
 			haystack := strings.ToLower(name + " " + entry.Command + " " + entry.URL + " " + entry.Transport + " " + mcpToolNames(status))
 			if !strings.Contains(haystack, query) {
@@ -244,11 +247,13 @@ func (a *desktop) renderMCPServerList(c *ui.Context, data mcpListData) {
 				enabled := entry.Enabled == nil || *entry.Enabled
 				uikit.SwitchNative(c.Key("mcp-enabled-"+name), &enabled).Label("启用 " + name).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
 					entry.Enabled = boolPtr(enabled)
+					doc := editDoc()
 					doc.Servers[name] = entry
 					a.saveMCPDoc(doc)
 				})
 				cardFlat(c, "编辑").Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.openMCPEditor(name) })
 				cardDanger(c, "删除").Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
+					doc := editDoc()
 					delete(doc.Servers, name)
 					a.saveMCPDoc(doc)
 				})
@@ -257,7 +262,10 @@ func (a *desktop) renderMCPServerList(c *ui.Context, data mcpListData) {
 				inlineError(c, "mcp-error-"+name, errText)
 			}
 			if a.mcpF.ToolOpen[name] {
-				a.mcpToolChecklist(c, name, entry, doc, status)
+				// The checklist writes into the document it is given, so it gets the
+				// private copy; it only exists for the row the user expanded, so an
+				// ordinary frame of the list clones nothing.
+				a.mcpToolChecklist(c, name, entry, editDoc(), status)
 			}
 		})
 	}
@@ -276,7 +284,9 @@ func (a *desktop) mcpStatusFor(name string) map[string]any {
 			return server
 		}
 	}
-	return map[string]any{}
+	// A nil map reads like an empty one through the str/list helpers, so a
+	// server without status costs no allocation per frame.
+	return nil
 }
 
 func mcpToolNames(status map[string]any) string {
@@ -746,62 +756,122 @@ func nowDate() string {
 	return time.Now().Format("2006-01-02")
 }
 
-func (a *desktop) builtinToolsGrid(c *ui.Context) {
-	tools := a.toolInventory
-	var core []backend.ToolDefinitionSummary
-	var rest []backend.ToolDefinitionSummary
-	query := strings.ToLower(strings.TrimSpace(a.mcpF.Search))
-	for _, tool := range tools {
+// builtinToolKey identifies one filtered, sorted grid: the search text plus a
+// fingerprint of the inventory it was derived from.
+type builtinToolKey struct {
+	query string
+	count int
+	sum   uint64
+}
+
+type builtinToolLists struct {
+	core []backend.ToolDefinitionSummary
+	rest []backend.ToolDefinitionSummary
+}
+
+// builtinToolKeyFor fingerprints the inventory without allocating. The pointer
+// moves and every keystroke repaint the grid, so neither may re-lower and re-sort
+// the whole inventory.
+func builtinToolKeyFor(inventory []backend.ToolDefinitionSummary, query string) builtinToolKey {
+	key := builtinToolKey{query: query, count: len(inventory), sum: 14695981039346656037}
+	mix := func(s string) {
+		for i := 0; i < len(s); i++ {
+			key.sum = (key.sum ^ uint64(s[i])) * 1099511628211
+		}
+		key.sum = (key.sum ^ 0xff) * 1099511628211
+	}
+	for _, tool := range inventory {
+		mix(tool.Name)
+		if query != "" {
+			// Only the search reads the description, so without a query it cannot
+			// make the memo stale and stays out of the fingerprint.
+			mix(tool.Description)
+		}
+		mix(tool.Source)
+		mix(tool.Server)
+		if tool.AvailabilityReason != "" {
+			// The switch reads the reason when it is pressed, so a copy kept from before
+			// the model was configured must not outlive it and refuse the toggle.
+			mix(tool.AvailabilityReason)
+		}
+		flags := uint64(0)
+		if tool.Enabled {
+			flags |= 1
+		}
+		if tool.Protected {
+			flags |= 2
+		}
+		key.sum = (key.sum ^ flags) * 1099511628211
+	}
+	return key
+}
+
+// builtinToolListsFor filters and sorts the inventory once per key.
+func (a *desktop) builtinToolListsFor(key builtinToolKey) builtinToolLists {
+	var lists builtinToolLists
+	for _, tool := range a.toolInventory {
 		if tool.Source == "mcp" {
 			continue
 		}
-		if query != "" && !strings.Contains(strings.ToLower(tool.Name+" "+tool.Description), query) {
+		if key.query != "" && !strings.Contains(strings.ToLower(tool.Name+" "+tool.Description), key.query) {
 			continue
 		}
 		if tool.Protected {
-			core = append(core, tool)
+			lists.core = append(lists.core, tool)
 		} else {
-			rest = append(rest, tool)
+			lists.rest = append(lists.rest, tool)
 		}
 	}
-	sort.SliceStable(rest, func(i, j int) bool { return rest[i].Name < rest[j].Name })
-	sort.SliceStable(core, func(i, j int) bool { return core[i].Name < core[j].Name })
-	render := func(tool backend.ToolDefinitionSummary) {
-		rowCard(c, "builtin-"+tool.Name, func() {
-			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				uikit.Tooltip(c, ui.Text(c, builtinToolLabel(tool.Name)).FontSize(fsSmall).Bold(), tool.Name)
-				ui.Spacer(c)
-				enabled := tool.Enabled
-				if tool.Protected {
-					uikit.SwitchNative(c.Key("builtin-switch-"+tool.Name), &enabled).Disabled(true).Label(tool.Name)
-				} else {
-					uikit.SwitchNative(c.Key("builtin-switch-"+tool.Name), &enabled).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).Label(tool.Name).OnClick(func() { a.toggleBuiltinTool(tool) })
+	sort.SliceStable(lists.rest, func(i, j int) bool { return lists.rest[i].Name < lists.rest[j].Name })
+	sort.SliceStable(lists.core, func(i, j int) bool { return lists.core[i].Name < lists.core[j].Name })
+	return lists
+}
+
+func (a *desktop) builtinToolsGrid(c *ui.Context) {
+	// The column repeats the page's own gap and carries the grid's memo: the
+	// built-in list is filtered and sorted once per change, not once per repaint.
+	holder := ui.Column(c.Key("builtin-tools-list")).Gap(gapInline)
+	query := strings.ToLower(strings.TrimSpace(a.mcpF.Search))
+	lists := memoAt[memoOf[builtinToolKey, builtinToolLists]](holder, "builtin-tools").get(builtinToolKeyFor(a.toolInventory, query), a.builtinToolListsFor)
+	holder.Children(func() {
+		core, rest := lists.core, lists.rest
+		render := func(tool backend.ToolDefinitionSummary) {
+			rowCard(c, "builtin-"+tool.Name, func() {
+				ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
+					uikit.Tooltip(c, ui.Text(c, builtinToolLabel(tool.Name)).FontSize(fsSmall).Bold(), tool.Name)
+					ui.Spacer(c)
+					enabled := tool.Enabled
+					if tool.Protected {
+						uikit.SwitchNative(c.Key("builtin-switch-"+tool.Name), &enabled).Disabled(true).Label(tool.Name)
+					} else {
+						uikit.SwitchNative(c.Key("builtin-switch-"+tool.Name), &enabled).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).Label(tool.Name).OnClick(func() { a.toggleBuiltinTool(tool) })
+					}
+				})
+				ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
+					neutralChip(c, tool.Name)
+					if tool.Protected {
+						fieldNote(c, "核心工具，不可停用", a.secondaryInk())
+					}
+				})
+			})
+		}
+		if len(core) > 0 {
+			fieldNote(c, "核心工具始终可用。", a.secondaryInk())
+			ui.Grid(c.Key("builtin-core")).Columns(3).Gap(gapField).Children(func() {
+				for _, tool := range core {
+					render(tool)
 				}
 			})
-			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
-				neutralChip(c, tool.Name)
-				if tool.Protected {
-					fieldNote(c, "核心工具，不可停用", a.secondaryInk())
-				}
-			})
-		})
-	}
-	if len(core) > 0 {
-		fieldNote(c, "核心工具始终可用。", a.secondaryInk())
-		ui.Grid(c.Key("builtin-core")).Columns(3).Gap(gapField).Children(func() {
-			for _, tool := range core {
+		}
+		ui.Grid(c.Key("builtin-rest")).Columns(3).Gap(gapField).Children(func() {
+			for _, tool := range rest {
 				render(tool)
 			}
 		})
-	}
-	ui.Grid(c.Key("builtin-rest")).Columns(3).Gap(gapField).Children(func() {
-		for _, tool := range rest {
-			render(tool)
+		if len(core)+len(rest) == 0 {
+			emptyState(c, "没有匹配的工具", "", a.secondaryInk())
 		}
 	})
-	if len(core)+len(rest) == 0 {
-		emptyState(c, "没有匹配的工具", "", a.secondaryInk())
-	}
 }
 
 var builtinToolLabels = map[string]string{

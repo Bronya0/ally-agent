@@ -208,7 +208,7 @@ func (a *desktop) composerKeys(c *ui.Context, t *conversation, input ui.Element)
 		// editor moved the caret and the draft history behind the panel, and a row
 		// could only ever be opened with the mouse.
 		if st.SessionsOpen {
-			sessions := a.workspaceSessions(t.Workspace)
+			sessions, _ := a.workspaceSessions(t.Workspace)
 			switch k.Key {
 			case ui.KeyUp:
 				if st.SessionsIndex > 0 {
@@ -529,7 +529,8 @@ func (a *desktop) openSessionsMenu(t *conversation) {
 	st := t.uiState()
 	st.SessionsOpen = true
 	st.SessionsIndex = 0
-	for i, s := range a.workspaceSessions(t.Workspace) {
+	sessions, _ := a.workspaceSessions(t.Workspace)
+	for i, s := range sessions {
 		if s.ID == t.ID {
 			st.SessionsIndex = i
 			break
@@ -557,14 +558,14 @@ func (a *desktop) chooseSession(id string) {
 
 func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 	st := t.uiState()
-	sessions := a.workspaceSessions(t.Workspace)
+	sessions, total := a.workspaceSessions(t.Workspace)
 	// A background index refresh can shrink the list under an open panel; keeping
 	// the index in range keeps exactly one row selected.
 	st.SessionsIndex = max(0, min(st.SessionsIndex, len(sessions)-1))
 	p := a.currentPalette()
 	panel := overlayPanel(c, "sessions-menu", 0, 360, func() {
-		ui.Row(c).Padding(gapInline, padCard).Children(func() {
-			ui.Text(c, fmt.Sprintf("会话 (%d)", len(sessions))).FontSize(fsTiny).TextColor(a.secondaryInk())
+		ui.Row(c).Padding(gapInline, padCard).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, fmt.Sprintf("会话 (%d)", total)).FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
 			fieldNote(c, "↑↓ 选择 · Enter 打开", a.secondaryInk())
 			iconAction(c, "sess-close", "关闭", "close", 20, func() { st.SessionsOpen = false })
@@ -722,7 +723,7 @@ func thinkingBarHeight(elapsed time.Duration, index int) float32 {
 
 func (a *desktop) retryBanner(c *ui.Context, info *retryInfo) {
 	p := a.currentPalette()
-	ui.Row(c).FillWidth().Padding(5, 10).Gap(gapField).Radius(radiusSmall).
+	ui.Row(c).FillWidth().Padding(5, 10).Gap(gapField).Radius(radiusSmall).AlignItems(ui.Center).
 		Background(ui.RGBA(217, 164, 65, 0.10)).Children(func() {
 		iconGlyph(c, "refresh", 13).TextColor(c.Theme().Warning)
 		msg := fmt.Sprintf("重试中 %d/%d：%s", info.Attempt, info.MaxAttempts, info.Error)
@@ -837,8 +838,25 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 		ui.Column(c).FillWidth().Children(func() {
 			uikit.Input(c.Key("model-menu-search"), &st.ModelSearch).Placeholder("搜索模型或供应商").Label("搜索模型或供应商").FillWidth()
 			query := strings.ToLower(strings.TrimSpace(st.ModelSearch))
-			matches := func(model backend.ModelConfig) bool {
-				return query == "" || strings.Contains(strings.ToLower(model.ProviderName+" "+model.DisplayName+" "+model.Model), query)
+			// The menu is rebuilt on every frame the pointer moves, so the option
+			// identity, the provider group, the lowered model name and the search
+			// haystack are worked out once per model here, not once per comparison or
+			// once per recently used entry.
+			models := a.config.Models
+			options := make([]string, len(models))
+			providerOf := make([]string, len(models))
+			lowerNames := make([]string, len(models))
+			haystacks := make([]string, len(models))
+			for i, model := range models {
+				options[i] = modelOption(model)
+				providerOf[i] = providerGroupName(model)
+				lowerNames[i] = strings.ToLower(model.Model)
+				if query != "" {
+					haystacks[i] = strings.ToLower(model.ProviderName + " " + model.DisplayName + " " + model.Model)
+				}
+			}
+			matches := func(i int) bool {
+				return query == "" || strings.Contains(haystacks[i], query)
 			}
 			ui.Scroll(c).MaxHeight(440).Children(func() {
 				ui.Column(c).Children(func() {
@@ -862,8 +880,8 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 					// part of the menu that belongs to no provider.
 					recentHot := false
 					for _, identity := range recent {
-						for i, model := range a.config.Models {
-							if modelOption(model) != identity || !matches(model) {
+						for i := range models {
+							if options[i] != identity || !matches(i) {
 								continue
 							}
 							if !shownRecent {
@@ -873,12 +891,12 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 								}
 								shownRecent = true
 							}
-							model := model
+							model := models[i]
 							name := model.DisplayName
 							if name == "" {
 								name = model.Model
 							}
-							if popoverModelRecent(c, fmt.Sprintf("model-recent-%d", i), name, model.ProviderName, modelOption(model) == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) }, a.secondaryInk()) {
+							if popoverModelRecent(c, fmt.Sprintf("model-recent-%d", i), name, model.ProviderName, options[i] == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) }, a.secondaryInk()) {
 								recentHot = true
 							}
 						}
@@ -887,9 +905,9 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 						divider(c)
 					}
 					groups := map[string][]int{}
-					for i, model := range a.config.Models {
-						if matches(model) {
-							provider := providerGroupName(model)
+					for i := range models {
+						if matches(i) {
+							provider := providerOf[i]
 							groups[provider] = append(groups[provider], i)
 						}
 					}
@@ -903,19 +921,19 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 					// Tab's own model counts as the most recent.
 					rank := map[string]int{}
 					for pos, identity := range recent {
-						for _, model := range a.config.Models {
-							if modelOption(model) != identity {
+						for i := range models {
+							if options[i] != identity {
 								continue
 							}
-							provider := providerGroupName(model)
+							provider := providerOf[i]
 							if seen, ok := rank[provider]; !ok || pos < seen {
 								rank[provider] = pos
 							}
 						}
 					}
-					for _, model := range a.config.Models {
-						if modelOption(model) == t.Model {
-							rank[providerGroupName(model)] = -1
+					for i := range models {
+						if options[i] == t.Model {
+							rank[providerOf[i]] = -1
 							break
 						}
 					}
@@ -941,7 +959,7 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 					for _, provider := range names {
 						indices := groups[provider]
 						sort.SliceStable(indices, func(i, j int) bool {
-							return strings.ToLower(a.config.Models[indices[i]].Model) < strings.ToLower(a.config.Models[indices[j]].Model)
+							return lowerNames[indices[i]] < lowerNames[indices[j]]
 						})
 						row, hot := a.modelGroupRow(c, t, provider, indices)
 						providers = append(providers, provider)
@@ -1058,7 +1076,7 @@ func (a *desktop) modelGroupRow(c *ui.Context, t *conversation, provider string,
 				name.TextColor(th.Accent)
 			}
 			ui.Text(c, fmt.Sprint(len(indices))).FontSize(fsTiny).TextColor(a.secondaryInk())
-			iconGlyph(c, "chevron", 10).TextColor(a.secondaryInk())
+			iconGlyph(c, "chevron", sizeCaretInline).TextColor(a.secondaryInk())
 		})
 	})
 	return row, hovered
@@ -1714,7 +1732,7 @@ func contextPartFold(c *ui.Context, key, name string, tokens int, open bool, tog
 			ui.Text(c, name).FontSize(fsSmall).TextColor(mut).SingleLine()
 			ui.Spacer(c)
 			ui.Text(c, fmtK(tokens)).FontSize(fsSmall)
-			iconGlyph(c, icon, 9).TextColor(mut).Shrink(0)
+			iconGlyph(c, icon, sizeCaretInline).TextColor(mut).Shrink(0)
 		})
 	})
 }

@@ -228,6 +228,13 @@ type desktop struct {
 	sshRefreshSeq                                       uint64
 	sshRefreshPending                                   map[string]bool
 	deletePrompt                                        *deletePromptState
+
+	// Derived from sessions. The rail, the composer's session menu and the
+	// workspace menus ask for them on every frame, so they are rebuilt only
+	// when the index itself is replaced (sessRev).
+	sessRev       uint64
+	wsRootsMemo   memoOf[uint64, []string]
+	wsSessionMemo memoOf[workspaceSessionKey, workspaceSessionList]
 }
 
 // Run starts the native desktop host and its Agent runtime.
@@ -387,7 +394,7 @@ func Run() {
 				a.refreshMCPInventory()
 				a.mcpServers = servers
 				a.mcpSummary = mcpSummary(servers)
-				a.sessions = sessions
+				a.sessions, a.sessRev = sessions, a.sessRev+1
 				for _, tab := range a.tabs {
 					a.loadWorkspaceInputHistory(tab)
 				}
@@ -1020,7 +1027,7 @@ func (a *desktop) persist(t *conversation) {
 			return
 		}
 		list, _ := a.core.ListSessionIndex()
-		a.win.Update(func() { a.sessions = list })
+		a.win.Update(func() { a.sessions, a.sessRev = list, a.sessRev+1 })
 	}()
 }
 func (a *desktop) openSession(id string) {
@@ -1432,7 +1439,7 @@ func (a *desktop) loadWorkspaceInputHistory(t *conversation) {
 	if a.core == nil || a.win == nil {
 		return
 	}
-	entries := a.workspaceSessions(t.Workspace)
+	entries, _ := a.workspaceSessions(t.Workspace)
 	if len(entries) > 30 {
 		entries = entries[:30]
 	}

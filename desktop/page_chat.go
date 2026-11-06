@@ -327,23 +327,17 @@ func lastUserIndex(messages []map[string]any) int {
 // collapsiblePrompt keeps very long questions readable: the first lines show,
 // the rest expands on demand.
 func (a *desktop) collapsiblePrompt(c *ui.Context, t *conversation, i int, content string) {
-	lines := strings.Count(content, "\n") + 1
-	// Cutting walks rune boundaries instead of converting the whole prompt: this
-	// runs for every visible message on every frame.
-	cut, truncated := cutRunes(content, 400)
-	long := truncated || lines > 6
+	v := ui.Column(c).Key(widgetKey("prompt", t.ID, i)).Gap(gapInline)
+	// The counts and the collapsed preview change only with the content, so a
+	// pasted log is cut, split and joined once per message instead of on every
+	// frame the bubble is visible.
+	counts := memoAt[promptCounts](v, "counts").get(content)
+	lines, runes, long := counts.lines, counts.runes, counts.long
 	st := t.uiState()
 	shown := content
 	if long && !st.PromptOpen[i] {
-		if truncated {
-			cut += "…"
-		}
-		if ls := strings.Split(cut, "\n"); len(ls) > 6 {
-			cut = strings.Join(ls[:6], "\n") + "\n…"
-		}
-		shown = cut
+		shown = counts.head
 	}
-	v := ui.Column(c).Key(widgetKey("prompt", t.ID, i)).Gap(gapInline)
 	v.Children(func() {
 		// Share selection with the bubble instead of installing a separate
 		// Markdown selection scope.
@@ -351,13 +345,45 @@ func (a *desktop) collapsiblePrompt(c *ui.Context, t *conversation, i int, conte
 		options.ShareSelection = true
 		markdown.View(c, shown, options).FillWidth()
 		if long {
-			labelText := fmt.Sprintf("展开完整提问（%d 行，%d 字）", lines, utf8.RuneCountInString(content))
+			labelText := fmt.Sprintf("展开完整提问（%d 行，%d 字）", lines, runes)
 			if st.PromptOpen[i] {
 				labelText = "收起提问"
 			}
 			button(c, nil, labelText, btnSecondary, false, "chat").AlignSelf(ui.Start).OnClick(func() { st.PromptOpen[i] = !st.PromptOpen[i] })
 		}
 	})
+}
+
+// promptCounts is how long a question reads: its lines, its runes and the
+// preview it collapses to. All three follow the content, so they are derived
+// once and kept beside the prompt until that content changes.
+type promptCounts struct {
+	content string
+	lines   int
+	runes   int
+	head    string
+	long    bool
+	ready   bool
+}
+
+func (p *promptCounts) get(content string) promptCounts {
+	if !p.ready || p.content != content {
+		lines := strings.Count(content, "\n") + 1
+		runes := utf8.RuneCountInString(content)
+		// Cutting walks rune boundaries instead of converting the whole prompt.
+		head, truncated := cutRunes(content, 400)
+		long := truncated || lines > 6
+		if long {
+			if truncated {
+				head += "…"
+			}
+			if ls := strings.Split(head, "\n"); len(ls) > 6 {
+				head = strings.Join(ls[:6], "\n") + "\n…"
+			}
+		}
+		p.content, p.lines, p.runes, p.head, p.long, p.ready = content, lines, runes, head, long, true
+	}
+	return *p
 }
 
 func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[string]any) {
@@ -781,7 +807,7 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 				ui.Text(c, "plan").FontSize(fsSmall).Bold().TextColor(a.secondaryInk())
 				ui.Text(c, fmt.Sprintf("%d/%d", done, len(steps))).FontSize(fsTiny).TextColor(a.secondaryInk())
 				ui.Spacer(c)
-				iconGlyph(c, "chevrondown", 13).Rotate(-90 * (1 - parts.Progress()))
+				iconGlyph(c, "chevrondown", sizeCaretBlock).Rotate(-90 * (1 - parts.Progress()))
 			})
 		})
 		parts.Panel(func() {
@@ -804,22 +830,12 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 			// user's own scrolling.
 			scroll.Children(func() {
 				for n, step := range steps {
-					mark := "○"
-					color := a.secondaryInk()
-					switch step.Status {
-					case "done":
-						mark = "✓"
-						color = c.Theme().Success
-					case "in_progress":
-						mark = "●"
-						color = c.Theme().Accent
-					}
-					row := ui.Row(c).Key(fmt.Sprintf("plan-step-%d", n)).Padding(2, 8).Gap(gapField)
+					row := ui.Row(c).Key(fmt.Sprintf("plan-step-%d", n)).AlignItems(ui.Center).Padding(2, 8).Gap(gapField)
 					if autoScroll && n == target {
 						row.ScrollIntoView()
 					}
 					row.Children(func() {
-						ui.Text(c, mark).FontSize(fsTiny).TextColor(color)
+						a.planMark(c, step.Status)
 						ui.Text(c, fmt.Sprintf("%d.", n+1)).FontSize(fsTiny).TextColor(a.secondaryInk())
 						// Finished steps read as struck through, the way main's
 						// .plan-item.done .plan-title does.
@@ -837,6 +853,19 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 			st.PlanCollapsed = !open
 		}
 	})
+}
+
+// planMark is the step bullet. Every state occupies the same 9px square: the
+// glyphs ○ and ● have different ink sizes at one font size, so a pending step
+// read as a much bigger circle than a running one.
+func (a *desktop) planMark(c *ui.Context, status string) ui.Element {
+	switch status {
+	case "done":
+		return iconGlyph(c, "check", 9).Shrink(0)
+	case "in_progress":
+		return ui.Box(c).Size(9, 9).Shrink(0).Radius(5).Background(c.Theme().Accent)
+	}
+	return ui.Box(c).Size(9, 9).Shrink(0).Radius(5).Border(1, a.secondaryInk())
 }
 
 // ---- Ask form ------------------------------------------------------------
@@ -986,13 +1015,44 @@ func (a *desktop) submitAsk(t *conversation) {
 	})
 }
 
-func hasWelcomeMessage(t *conversation) bool {
-	for _, m := range t.Messages {
-		if _, ok := m["welcome"]; ok {
-			return true
+// welcomeKey names the transcript a welcome lookup was made for: the count, the
+// session, and the first row's role and its leading bytes (sliced, never copied).
+type welcomeKey struct {
+	id      string
+	count   int
+	role    string
+	head    string
+	headLen int
+}
+
+func welcomeKeyFor(t *conversation) welcomeKey {
+	key := welcomeKey{id: t.ID, count: len(t.Messages)}
+	if len(t.Messages) > 0 {
+		first := t.Messages[0]
+		key.role = str(first, "role")
+		content := str(first, "content")
+		key.headLen = len(content)
+		if len(content) > 32 {
+			content = content[:32]
 		}
+		key.head = content
 	}
-	return false
+	return key
+}
+
+// welcomeMemo is one slot: only the conversation being drawn asks, so the scan
+// below runs once per change of that transcript instead of once per frame.
+var welcomeMemo memoOf[welcomeKey, bool]
+
+func hasWelcomeMessage(t *conversation) bool {
+	return welcomeMemo.get(welcomeKeyFor(t), func(welcomeKey) bool {
+		for _, m := range t.Messages {
+			if _, ok := m["welcome"]; ok {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func hasLaterSuggestion(t *conversation, index int) bool {

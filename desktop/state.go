@@ -252,6 +252,8 @@ type chatUI struct {
 	// the duration of one render so a card does not rebuild it per child.
 	transcriptRows *transcriptRows
 	ThinkingBytes  int
+	// Stream grows the row that is streaming: see appendStreamChunk.
+	Stream *streamAccumulator
 }
 
 type deletePromptState struct {

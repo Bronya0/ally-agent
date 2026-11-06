@@ -196,9 +196,15 @@ func ComboboxField(c *ui.Context, value *string, options []string, label, placeh
 	})
 	cb.Popup(func(panel ui.Element) {
 		Popup(c, panel)
+		// The typed query is the same for every option: lower it once per frame
+		// instead of once per row.
+		query := ""
+		if cb.Filtering() {
+			query = strings.ToLower(*value)
+		}
 		ui.Scroll(c).MaxHeight(300).Children(func() {
 			for _, text := range options {
-				if !cb.Filtering() || strings.Contains(strings.ToLower(text), strings.ToLower(*value)) {
+				if query == "" || strings.Contains(strings.ToLower(text), query) {
 					option(c, cb.Item(text), text, text == *value, SecondaryInk(c, ink))
 				}
 			}

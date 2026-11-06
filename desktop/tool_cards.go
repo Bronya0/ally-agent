@@ -425,7 +425,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 			if open {
 				caret = "chevrondown"
 			}
-			iconGlyph(c, caret, 12).Size(16, 16).TextColor(a.secondaryInk())
+			iconGlyph(c, caret, sizeCaretGroupCard).TextColor(a.secondaryInk())
 		})
 		if row.Clicked() {
 			t.uiState().ToolOpen[key] = !open
@@ -559,7 +559,7 @@ func (a *desktop) toolGroupCommandEntry(c *ui.Context, t *conversation, entry to
 		if open {
 			caret = "chevrondown"
 		}
-		iconGlyph(c, caret, 11).Shrink(0).TextColor(a.secondaryInk())
+		iconGlyph(c, caret, sizeCaretRow).Shrink(0).TextColor(a.secondaryInk())
 	})
 	if button.Clicked() {
 		t.uiState().ToolOpen[key] = !open
@@ -1730,7 +1730,7 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 						if open {
 							caret = "chevrondown"
 						}
-						iconGlyph(c, caret, 10).Shrink(0)
+						iconGlyph(c, caret, sizeCaretInline).Shrink(0)
 					})
 				})
 			})

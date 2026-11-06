@@ -104,7 +104,13 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 				})
 			}
 			if shown == 0 {
-				emptyState(c, "无匹配结果", "", a.secondaryInk())
+				// shown counts search hits, so it cannot say whether the group holds
+				// any server: an empty 未分组 tab used to report a search that never ran.
+				if query != "" {
+					emptyState(c, "无匹配结果", "", a.secondaryInk())
+				} else {
+					emptyState(c, "这个分组还没有服务器", "在“添加”里把服务器归到这个分组。", a.secondaryInk())
+				}
 			}
 		})
 	})

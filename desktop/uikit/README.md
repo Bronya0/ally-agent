@@ -28,7 +28,9 @@ Button takes a ButtonVariant (secondary, primary, danger, ghost) and returns its
 element too, for the few call sites whose label colour is not the button's own.
 IconButton takes an IconTone and a *ui.SVG: the kit does not know an app's icon table,
 so the caller resolves names to images. WarningInk and FaintInk fill the two tones
-ui.Theme does not carry.
+ui.Theme does not carry. IconButton's size is both the pressable square and the icon
+box (IconGlyphScale); IconButtonSized takes them separately, for the compact rows whose
+close button needs a ≥22 DIP hit area but must keep its small glyph.
 
 ControlHeight, Radius, the Font and Gap scales and the RadiusCard / RadiusSmall pair
 are shared sizing tokens; components take padding and radius as arguments rather than

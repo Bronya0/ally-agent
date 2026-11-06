@@ -87,20 +87,25 @@ func (a *desktop) tasksPageBody(c *ui.Context) {
 		}
 		flat(c, "刷新").OnClick(func() { a.loadTaskCenter(true) })
 	})
-	runningServices, runningTasks := 0, 0
-	for _, s := range a.services {
+	// The counts read the same filtered lists the sections below show, so the
+	// "当前工作区" scope never counts rows its list leaves out.
+	services := a.filteredServices(workspace)
+	runningServices := 0
+	for _, s := range services {
 		if s.Status == "running" {
 			runningServices++
 		}
 	}
-	for _, t := range a.tasks {
-		if t.Running {
+	tasks := a.filteredTasks(workspace)
+	runningTasks := 0
+	for _, task := range tasks {
+		if task.Running {
 			runningTasks++
 		}
 	}
 	tabs := []string{
-		fmt.Sprintf("后台服务 (%d/%d)", runningServices, len(a.services)),
-		fmt.Sprintf("定时任务 (%d/%d)", runningTasks, len(a.tasks)),
+		fmt.Sprintf("后台服务 (%d/%d)", runningServices, len(services)),
+		fmt.Sprintf("定时任务 (%d/%d)", runningTasks, len(tasks)),
 	}
 	a.scrollTabs(c, "tasks-tabs", &a.tasksF.Tab, tabs...)
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
@@ -619,7 +624,7 @@ func (a *desktop) taskPopupDialog(c *ui.Context) {
 		if a.tasksF.Tab == 1 {
 			title = "定时任务"
 		}
-		ui.Row(c).Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, title).FontSize(fsDialogTitle).Bold()
 			ui.Spacer(c)
 			iconAction(c, "task-popup-close", "关闭", "close", 24, func() { a.taskPopup = false })

@@ -110,7 +110,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 	ui.Column(c).Width(width).FillHeight().Shrink(0).Unselectable().Background(colChrome(a)).Children(func() {
 		services := c.Services()
 		c.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, "") })
-		ui.Row(c).Height(34).Padding(0, padRow).Gap(3).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
+		ui.Row(c).Height(34).Padding(0, padRow).Gap(3).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
 			search := uikit.InputChrome(c, ui.SearchField(c.Key("explorer-search"), &a.filesF.Search.Input)).
 				Placeholder("").Label("搜索工作区文件").Height(26).Padding(0, 6).FontSize(fsSmall).Grow(1).
 				OnSubmit(func() { a.searchFiles(a.filesF.Search.Input) })
@@ -252,11 +252,13 @@ func (a *desktop) fileRowsWithState(c *ui.Context, entries []backend.FileEntry, 
 				a.loadFolderChildren(path)
 			}
 		}
-		target := fileParent(path)
+		// Only the callbacks below need the paste target. Deriving it here ran
+		// filepath.Dir for every row on every frame.
 		if entry.Dir {
-			target = path
+			row.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, path) })
+		} else {
+			row.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, fileParent(path)) })
 		}
-		row.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, target) })
 		if !entry.Dir {
 			row.OnShortcut(ui.Cmd, ui.KeyC, func() { a.copyExplorerFile(services, path) })
 		}
@@ -291,6 +293,10 @@ func (a *desktop) fileRowsWithState(c *ui.Context, entries []backend.FileEntry, 
 				}
 			}
 			if m.Item("粘贴文件").Chosen() {
+				target := path
+				if !entry.Dir {
+					target = fileParent(path)
+				}
 				a.pasteFiles(services, target)
 			}
 			m.Separator()

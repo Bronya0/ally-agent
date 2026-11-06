@@ -73,7 +73,7 @@ func (a *desktop) reloadSessions() {
 			a.fail(err)
 			return
 		}
-		a.win.Update(func() { a.sessions = list })
+		a.win.Update(func() { a.sessions, a.sessRev = list, a.sessRev+1 })
 	}()
 }
 

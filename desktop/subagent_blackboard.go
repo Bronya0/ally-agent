@@ -183,7 +183,7 @@ func (a *desktop) subagentBlackboardButton(c *ui.Context, t *conversation, row m
 			if open {
 				caret = "chevrondown"
 			}
-			iconGlyph(c, caret, 10).Shrink(0)
+			iconGlyph(c, caret, sizeCaretInline).Shrink(0)
 		})
 	})
 	uikit.Tooltip(c, button, subagentBlackboardSemantics)

@@ -198,9 +198,9 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 	rowCard(c, "plugin-row-"+p.ID, func() {
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Text(c, name).FontSize(fsBody).Bold()
-			version := p.ID + "@" + p.Version
-			if p.Version == "" {
-				version = p.ID + "@-"
+			version := p.ID
+			if p.Version != "" {
+				version += "@" + p.Version
 			}
 			fieldNote(c, version, a.secondaryInk())
 			switch {

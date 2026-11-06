@@ -224,6 +224,21 @@ func legendSwatch(c *ui.Context, label string, color ui.Color) {
 	})
 }
 
+// heatmapDay is one day of the month grid: the text and the tooltip are
+// formatted once per month instead of once per frame.
+type heatmapDay struct {
+	label   string
+	tooltip string
+	ratio   float64
+	value   int
+}
+
+// heatmapKey is the month plus a fingerprint of the day totals behind it.
+type heatmapKey struct {
+	month string
+	sum   uint64
+}
+
 // statsHeatmap draws the current month as a 7-column weekday grid.
 func (a *desktop) statsHeatmap(c *ui.Context) {
 	card(c, "stats-heatmap", func() {
@@ -234,39 +249,62 @@ func (a *desktop) statsHeatmap(c *ui.Context) {
 			}
 		})
 		daily := a.stats.MonthDaily
-		maxValue := 1
-		byDay := map[string]int{}
-		for _, d := range daily {
-			total := d.InputTokens + d.OutputTokens
-			byDay[d.Date] = total
-			if total > maxValue {
-				maxValue = total
-			}
-		}
 		now := time.Now()
+		// The month and the day totals are the whole input of the cells. Both go
+		// into the key, so a new month, a new day or new numbers rebuild them.
+		key := heatmapKey{month: now.Format("2006-01"), sum: 14695981039346656037}
+		for _, d := range daily {
+			for i := 0; i < len(d.Date); i++ {
+				key.sum = (key.sum ^ uint64(d.Date[i])) * 1099511628211
+			}
+			key.sum = (key.sum ^ uint64(d.InputTokens)) * 1099511628211
+			key.sum = (key.sum ^ uint64(d.OutputTokens)) * 1099511628211
+		}
 		first := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.Local)
 		daysInMonth := time.Date(now.Year(), now.Month()+1, 0, 0, 0, 0, 0, time.Local).Day()
 		offset := (int(first.Weekday()) + 6) % 7 // Monday-first
 		cells := offset + daysInMonth
 		rows := (cells + 6) / 7
-		ui.Grid(c.Key("heatmap-grid")).Columns(7).Gap(gapTight).Children(func() {
+		grid := ui.Grid(c.Key("heatmap-grid")).Columns(7).Gap(gapTight)
+		days := memoAt[memoOf[heatmapKey, []heatmapDay]](grid, "days").get(key, func(heatmapKey) []heatmapDay {
+			byDay := make(map[string]int, len(daily))
+			maxValue := 1
+			for _, d := range daily {
+				total := d.InputTokens + d.OutputTokens
+				byDay[d.Date] = total
+				if total > maxValue {
+					maxValue = total
+				}
+			}
+			monthDays := make([]heatmapDay, daysInMonth)
+			for day := 1; day <= daysInMonth; day++ {
+				date := time.Date(now.Year(), now.Month(), day, 0, 0, 0, 0, time.Local)
+				dateKey := date.Format("2006-01-02")
+				value := byDay[dateKey]
+				monthDays[day-1] = heatmapDay{
+					label:   fmt.Sprint(day),
+					tooltip: fmt.Sprintf("%s · %s tokens", dateKey, statsExact(value)),
+					ratio:   float64(value) / float64(maxValue),
+					value:   value,
+				}
+			}
+			return monthDays
+		})
+		grid.Children(func() {
 			for i := 0; i < rows*7; i++ {
 				day := i - offset + 1
 				if day < 1 || day > daysInMonth {
 					ui.Box(c).Height(26)
 					continue
 				}
-				date := time.Date(now.Year(), now.Month(), day, 0, 0, 0, 0, time.Local)
-				key := date.Format("2006-01-02")
-				value := byDay[key]
-				ratio := float64(value) / float64(maxValue)
+				data := days[day-1]
 				fill := c.Theme().SurfaceHover
-				if value > 0 {
-					fill = fill.Mix(c.Theme().Success, float32(0.15+0.45*ratio))
+				if data.value > 0 {
+					fill = fill.Mix(c.Theme().Success, float32(0.15+0.45*data.ratio))
 				}
 				cell := ui.Box(c).Height(26).Radius(4).Background(fill).Center()
-				uikit.Tooltip(c, cell, fmt.Sprintf("%s · %s tokens", key, statsExact(value)))
-				cell.Children(func() { ui.Text(c, fmt.Sprint(day)).FontSize(fsTiny).TextColor(c.Theme().Text) })
+				uikit.Tooltip(c, cell, data.tooltip)
+				cell.Children(func() { ui.Text(c, data.label).FontSize(fsTiny).TextColor(c.Theme().Text) })
 			}
 		})
 		fieldNote(c, "色彩越明显，用量越高", a.secondaryInk())

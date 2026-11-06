@@ -29,6 +29,29 @@ func (a *desktop) dispatchEvent(name string, payload any) {
 	})
 }
 
+// streamAccumulator grows the text of the transcript row that is streaming. Its
+// string goes to the row without a copy, so a delta costs amortized O(1) bytes
+// instead of copying the whole answer.
+type streamAccumulator struct {
+	row  int
+	text strings.Builder
+}
+
+// appendStreamChunk returns before+delta through the streaming row's builder. It
+// rebuilds that builder whenever the row no longer holds what the builder has (a
+// reloaded transcript, a compaction preview, another row streaming), so the row
+// stays the only source of truth for the text.
+func appendStreamChunk(st *chatUI, row int, before, delta string) string {
+	acc := st.Stream
+	if acc == nil || acc.row != row || acc.text.String() != before {
+		acc = &streamAccumulator{row: row}
+		acc.text.WriteString(before)
+		st.Stream = acc
+	}
+	acc.text.WriteString(delta)
+	return acc.text.String()
+}
+
 func (a *desktop) applyEvent(name string, p map[string]any) {
 	if a.closing && name != "service:update" {
 		return
@@ -123,13 +146,14 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 				t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": ""})
 			}
 			m := t.Messages[len(t.Messages)-1]
-			if before := str(m, "content"); before == "" {
+			// Appending through the row's own builder keeps a long answer from
+			// being copied again on every delta.
+			before := str(m, "content")
+			m["content"] = appendStreamChunk(ui, len(t.Messages)-1, before, content)
+			if before == "" {
 				// A row that starts drawing may open a history block: the cached
 				// block starts have to know without the transcript growing.
-				m["content"] = content
 				t.markHistory()
-			} else {
-				m["content"] = before + content
 			}
 			t.Status = "正在回复…"
 		} else if n := int(num(p, "reasoningLen")); n > 0 {
@@ -260,6 +284,9 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		t.CancelRequested = false
 		t.AskID = ""
 		ui.CompactBusy = false
+		// Release the streaming builder: its buffer aliases the row's content, so
+		// keeping it would hold one extra copy of the whole answer per tab.
+		ui.Stream = nil
 		if name == "run:done" {
 			t.Status = "任务完成"
 		} else {

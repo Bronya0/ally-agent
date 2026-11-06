@@ -131,9 +131,10 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 		}
 	}
 	var chatModels []backend.ModelConfig
+	provider := ""
 	if a.modelTab == "对话模型" {
 		chatModels = a.filteredChatModels()
-		a.chatModelProviderTabs(c, chatModels)
+		provider = a.chatModelProviderTabs(c, chatModels)
 	}
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(gapInline).Children(func() {
@@ -142,7 +143,7 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 			} else if a.modelTab == "图片模型" {
 				a.imageModelsSection(c)
 			} else {
-				a.chatModelsSection(c, chatModels)
+				a.chatModelsSection(c, chatModels, provider)
 			}
 		})
 	})
@@ -163,7 +164,7 @@ func (a *desktop) openChatModelEditorIfNeeded() {
 	}
 }
 
-func (a *desktop) chatModelProviderTabs(c *ui.Context, models []backend.ModelConfig) {
+func (a *desktop) chatModelProviderTabs(c *ui.Context, models []backend.ModelConfig) string {
 	groups := map[string]bool{}
 	var order []string
 	for _, model := range models {
@@ -177,7 +178,7 @@ func (a *desktop) chatModelProviderTabs(c *ui.Context, models []backend.ModelCon
 		}
 	}
 	if len(order) == 0 {
-		return
+		return a.modelProvider
 	}
 	providerIndex := 0
 	for i, name := range order {
@@ -185,16 +186,17 @@ func (a *desktop) chatModelProviderTabs(c *ui.Context, models []backend.ModelCon
 			providerIndex = i
 		}
 	}
-	if providerIndex >= len(order) {
-		providerIndex = 0
-	}
-	a.modelProvider = order[providerIndex]
-	if len(order) > 1 && a.scrollSubTabs(c, "models-providers", &providerIndex, order...) {
+	// The search box filters the list, so the provider the user picked can drop out of
+	// order. Falling back to the first match here is display only: writing it back into
+	// a.modelProvider would silently replace the user's choice for good, and clearing the
+	// search could not restore it. Only a real tab click owns the selection.
+	if a.scrollSubTabs(c, "models-providers", &providerIndex, order...) {
 		a.modelProvider = order[providerIndex]
 	}
+	return order[providerIndex]
 }
 
-func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig) {
+func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig, provider string) {
 	groups := map[string][]backend.ModelConfig{}
 	for _, m := range models {
 		name := m.ProviderName
@@ -208,7 +210,7 @@ func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig)
 		return
 	}
 
-	for _, m := range groups[a.modelProvider] {
+	for _, m := range groups[provider] {
 		m := m
 		rowCard(c, "chat-model-"+modelOption(m), func() {
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Wrap().Children(func() {

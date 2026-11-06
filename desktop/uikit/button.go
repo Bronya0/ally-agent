@@ -90,9 +90,19 @@ const (
 	IconAccentOn
 )
 
+// IconGlyphScale 是图标在 IconButton 方块里的占比。命中区需要比视觉尺寸大时，
+// 用 IconButtonSized 把这个比例套在原尺寸上，图标才不会被连带放大。
+const IconGlyphScale float32 = 0.62
+
 // IconButton 是唯一无字方块按钮工厂：和 Button 同一套圆角、悬停渐变和
 // 图标缩放比例，尺寸由调用方定。
 func IconButton(c *ui.Context, id, tip string, icon *ui.SVG, size float32, tone IconTone, fn func(), ink ...ui.Color) ui.Element {
+	return IconButtonSized(c, id, tip, icon, size, size*IconGlyphScale, tone, fn, ink...)
+}
+
+// IconButtonSized 把命中方块和画出来的图标分开传：紧凑工具条上的关闭按钮要有
+// ≥22 DIP 的命中区，图标却仍该是原来的 11 DIP。
+func IconButtonSized(c *ui.Context, id, tip string, icon *ui.SVG, size, glyph float32, tone IconTone, fn func(), ink ...ui.Color) ui.Element {
 	t := c.Theme()
 	muted := SecondaryInk(c, ink)
 	color, hoverColor := muted, t.Text
@@ -119,7 +129,7 @@ func IconButton(c *ui.Context, id, tip string, icon *ui.SVG, size float32, tone 
 		b.Children(func() {
 			e := ui.Icon(c, icon)
 			if e.Valid() {
-				e.Size(size*0.62, size*0.62)
+				e.Size(glyph, glyph)
 			}
 			e.TextColor(color)
 		})

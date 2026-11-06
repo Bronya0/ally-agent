@@ -56,12 +56,24 @@ type highlightCacheEntry struct {
 	accent     ui.Color
 	base       ui.Color
 	spans      []ui.Span
+	bytes      int
 }
 
-var highlightCache []highlightCacheEntry
+// The cache is bounded by the bytes it keeps rather than by one source's size:
+// a large preview used to stay out of it and be tokenized on every frame.
+const (
+	highlightCacheBudget = 256 << 10
+	highlightSpanCost    = 48 // what one span costs beside its text
+	highlightCacheSize   = 32
+)
+
+var (
+	highlightCache      []highlightCacheEntry
+	highlightCacheBytes int
+)
 
 // UI-thread-only bounded cache: repeated streaming frames do not retokenize
-// unchanged previews. Oversized sources are not retained in the cache.
+// unchanged previews. The oldest entries go first once the cache is full.
 func codeSpans(c *ui.Context, text, path string, ink ...ui.Color) []ui.Span {
 	return codeSpansWithBase(c, text, path, uikit.SecondaryInk(c, ink))
 }
@@ -72,13 +84,20 @@ func codeSpansWithBase(c *ui.Context, text, path string, base ui.Color) []ui.Spa
 		}
 	}
 	spans := buildCodeSpans(c, text, path, base)
-	if len(text) <= 32768 {
-		if len(highlightCache) >= 32 {
-			copy(highlightCache, highlightCache[1:])
-			highlightCache = highlightCache[:31]
-		}
-		highlightCache = append(highlightCache, highlightCacheEntry{text: text, path: path, dark: c.Theme().Dark, accent: c.Theme().Accent, base: base, spans: spans})
+	// A source that would take the whole budget is drawn but not kept, so one
+	// huge file cannot push every other preview out on each frame.
+	size := len(text) + len(spans)*highlightSpanCost
+	if size > highlightCacheBudget {
+		return spans
 	}
+	for len(highlightCache) > 0 && (len(highlightCache) >= highlightCacheSize || highlightCacheBytes+size > highlightCacheBudget) {
+		highlightCacheBytes -= highlightCache[0].bytes
+		copy(highlightCache, highlightCache[1:])
+		highlightCache[len(highlightCache)-1] = highlightCacheEntry{}
+		highlightCache = highlightCache[:len(highlightCache)-1]
+	}
+	highlightCache = append(highlightCache, highlightCacheEntry{text: text, path: path, dark: c.Theme().Dark, accent: c.Theme().Accent, base: base, spans: spans, bytes: size})
+	highlightCacheBytes += size
 	return spans
 }
 func buildCodeSpans(c *ui.Context, text, path string, base ui.Color) []ui.Span {

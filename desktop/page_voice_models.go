@@ -40,7 +40,13 @@ func (a *desktop) voiceModelsSection(c *ui.Context) {
 		})
 	}
 	if count == 0 {
-		emptyState(c, "尚未配置语音模型", "", a.secondaryInk())
+		// count only counts search hits, so it cannot answer "is anything configured?".
+		// A typo used to hide every row behind 尚未配置语音模型 and read as lost config.
+		if len(s.models) == 0 {
+			emptyState(c, "尚未配置语音模型", "", a.secondaryInk())
+		} else {
+			emptyState(c, "没有匹配的语音模型", "清空上方搜索框可查看全部语音模型。", a.secondaryInk())
+		}
 	}
 }
 
