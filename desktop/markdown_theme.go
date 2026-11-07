@@ -153,6 +153,17 @@ func (a *desktop) readingMarkdownOptions(scope ...string) *markdown.Options {
 	return options
 }
 
+// readingHeadingScales are the reading theme's heading sizes, relative to its body
+// size, and readingLineHeight its line height. They live here because a block the
+// find bar draws stands in for a Markdown one and must measure the same.
+var readingHeadingScales = [...]float32{1.55, 1.32, 1.12, 1, 1, 1}
+
+const readingLineHeight = 1.6
+
+// readingCodeLineHeight is the reading theme's code line height, shared with the
+// code blocks the find bar draws itself.
+const readingCodeLineHeight = 1.5
+
 func (a *desktop) configureReadingMarkdown(options *markdown.Options) {
 	colors := a.readingColors()
 	th := options.Theme
@@ -161,14 +172,14 @@ func (a *desktop) configureReadingMarkdown(options *markdown.Options) {
 	th.CodeSize = 1
 	th.Text, th.Muted, th.Link = colors.text, colors.muted, colors.link
 	th.Strong, th.Code, th.CodeBackground = colors.strong, colors.code, colors.codeBG
-	th.StrongWeight, th.LineHeight, th.CodeLineHeight = 600, 1.6, 1.5
+	th.StrongWeight, th.LineHeight, th.CodeLineHeight = 600, readingLineHeight, readingCodeLineHeight
 	th.BlockSpacing, th.ItemSpacing = 10/th.FontSize, 6/th.FontSize
 	th.TableCellPadding = [2]float32{12 / th.FontSize, 8 / th.FontSize}
 	th.TableBorder, th.TableHeader = colors.border, colors.panel
 	th.CodeBlockBackground, th.CodeBlockBorder = colors.panel, colors.border
 	th.CodeColors = colors.syntax
 	th.QuoteText, th.QuoteBar, th.Rule = colors.muted, colors.border, colors.border
-	for n, size := range []float32{1.55, 1.32, 1.12, 1, 1, 1} {
+	for n, size := range readingHeadingScales {
 		color := colors.heading
 		if n == 1 && !a.currentPalette().dark {
 			color = colors.text

@@ -50,8 +50,11 @@ type conversation struct {
 	Answers                                           []string
 	Selected                                          []string
 	MD                                                map[int]*markdown.Options
-	Expanded                                          map[int]bool
-	UI                                                *chatUI
+	// MDCodeBlock keeps the reading theme's own code-block hook per message: the
+	// find bar wraps it while it is open, and this is what it is restored to.
+	MDCodeBlock map[int]func(*ui.Context, *markdown.CodeBlockView)
+	Expanded    map[int]bool
+	UI          *chatUI
 	// historyStarts holds the transcript's block starts for historyRev, so a
 	// frame asks once per change instead of once per row. See blockStarts.
 	historyStarts memoOf[historyKey, []int]
@@ -74,37 +77,42 @@ type workspaceFile struct {
 	MD *markdown.Options
 }
 type desktop struct {
-	memoryDiagnosticBusy                    bool
-	pluginHost                              *pluginhost.Host
-	pluginThemePalette                      pluginhost.Palette
-	pluginTheme                             pluginhost.Theme
-	pluginThemeReady                        bool
-	pluginSyncKey                           pluginHostSyncKey
-	pluginSyncReady                         bool
-	pluginsRevision                         uint64
-	pluginIndex                             memoOf[uint64, pluginModeIndex]
-	previews                                previewPool
-	previewRequests                         []previewRequest
-	previewTimer                            *time.Timer
-	previewGeneration                       uint64
-	memoryTidyTimer                         *time.Timer
-	memoryTidyGeneration                    uint64
-	memoryTidyAt                            time.Time
-	customAvatar                            *ui.Bitmap
-	customAvatarAvailable                   bool
-	customAvatarBusy                        bool
-	avatarStyle                             string
-	avatarPoses                             map[string]*ui.Bitmap
-	avatarLoadID                            uint64
-	pet                                     petRuntime
-	configSaveTail                          chan struct{}
-	writeFailures                           windowWriteFailures
-	prefsSaveTail                           chan struct{}
-	prefsGeometryTimer                      *time.Timer
-	lastCompletionNotice                    time.Time
-	completionNotices                       map[string]bool
-	completionNoticeOrder                   []string
-	composerFocus                           string
+	memoryDiagnosticBusy  bool
+	pluginHost            *pluginhost.Host
+	pluginThemePalette    pluginhost.Palette
+	pluginTheme           pluginhost.Theme
+	pluginThemeReady      bool
+	pluginSyncKey         pluginHostSyncKey
+	pluginSyncReady       bool
+	pluginsRevision       uint64
+	pluginIndex           memoOf[uint64, pluginModeIndex]
+	previews              previewPool
+	previewRequests       []previewRequest
+	previewTimer          *time.Timer
+	previewGeneration     uint64
+	memoryTidyTimer       *time.Timer
+	memoryTidyGeneration  uint64
+	memoryTidyAt          time.Time
+	customAvatar          *ui.Bitmap
+	customAvatarAvailable bool
+	customAvatarBusy      bool
+	avatarStyle           string
+	avatarPoses           map[string]*ui.Bitmap
+	avatarLoadID          uint64
+	pet                   petRuntime
+	configSaveTail        chan struct{}
+	writeFailures         windowWriteFailures
+	prefsSaveTail         chan struct{}
+	prefsGeometryTimer    *time.Timer
+	lastCompletionNotice  time.Time
+	completionNotices     map[string]bool
+	completionNoticeOrder []string
+	composerFocus         string
+	chatSearchFocus       string
+	// focusBack is a conversation waiting for the caret after the find bar closed.
+	// The bar and the composer both change focus in that frame, and the engine
+	// visits its focus bindings in map order, so the composer asks one frame later.
+	focusBack                               string
 	welcomeMCP, welcomeSkills, welcomeTools bool
 	popupFlags                              map[string]*bool
 	notifications                           []ui.Toast
@@ -604,6 +612,7 @@ func (a *desktop) rememberSession(t *conversation) {
 	}
 	if !t.Busy && len(t.PendingAttachments) == 0 {
 		t.MD = nil
+		t.MDCodeBlock = nil
 		a.releaseAttachmentImages(t)
 		a.forgetAttachmentImageCache(t.ID)
 	}
@@ -772,6 +781,7 @@ func (a *desktop) inject(t *conversation, text string) bool {
 		display = "附件：" + attachments[0].Name
 	}
 	displayAttachments := attachmentDisplayRows(attachments)
+	invalidateChatSearch(t)
 	t.Messages = append(t.Messages, map[string]any{"role": "user", "content": display, "attachments": displayAttachments})
 	commitPendingPreviews(t)
 	t.PendingAttachments = nil
@@ -846,6 +856,7 @@ func (a *desktop) send(t *conversation, text string) bool {
 		t.Title = short(display, 36)
 	}
 	displayAttachments := attachmentDisplayRows(attachments)
+	invalidateChatSearch(t)
 	t.Messages = append(t.Messages, map[string]any{"role": "user", "content": display, "attachments": displayAttachments})
 	commitPendingPreviews(t)
 	t.PendingAttachments = nil
@@ -861,6 +872,7 @@ func (a *desktop) send(t *conversation, text string) bool {
 				t.Busy = false
 				t.Status = err.Error()
 				a.notifyError(err.Error())
+				invalidateChatSearch(t)
 				t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": err.Error(), "error": true})
 				a.persist(t)
 			} else if t.Busy {

@@ -51,6 +51,7 @@ func compactPreviewRow(t *conversation) map[string]any {
 // dropCompactPreview removes a half-written summary. A failed or cancelled
 // compaction must not leave its preview behind as if it had been applied.
 func dropCompactPreview(t *conversation) {
+	invalidateChatSearch(t)
 	kept := t.Messages[:0]
 	for _, m := range t.Messages {
 		if boolOf(m, compactPreviewFlag) {
@@ -71,6 +72,7 @@ func (a *desktop) compactDelta(t *conversation, content string, reasoningLen int
 		st.CompactThinking += reasoningLen
 	}
 	if content != "" {
+		invalidateChatSearch(t)
 		row := compactPreviewRow(t)
 		if row == nil {
 			row = map[string]any{"role": "assistant", "content": "", compactPreviewFlag: true}
@@ -102,8 +104,10 @@ func compactThinkingTokens(st *chatUI) int {
 // just wrote to the history. Every per-index view cache has to go with it: the
 // old indices describe messages that no longer exist.
 func replaceTranscript(t *conversation, summary string) {
+	invalidateChatSearch(t)
 	t.Messages = []map[string]any{{"role": "assistant", "content": summary, transcriptSummaryFlag: true}}
 	t.MD = nil
+	t.MDCodeBlock = nil
 	// The row set changed even when the old length was also 1; drop the cached
 	// ownership/block-starts answer instead of reusing it.
 	t.markHistory()
@@ -132,6 +136,7 @@ func (a *desktop) applyCompactionResult(t *conversation, result map[string]any) 
 			return
 		}
 		applyFastCompaction(t, result)
+		invalidateChatSearch(t)
 		t.Messages = append(t.Messages, map[string]any{"role": "notice", "tone": "info", "content": fastCompactNote(result)})
 		dropCompactPreview(t)
 		return
@@ -220,6 +225,7 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 			shortened[i] = after
 		}
 	}
+	invalidateChatSearch(t)
 	for i, after := range shortened {
 		t.Messages[i]["content"] = after
 		t.Messages[i]["fastCompacted"] = true

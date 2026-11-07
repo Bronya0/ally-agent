@@ -38,19 +38,13 @@ func (a *desktop) headerBar(c *ui.Context) {
 		minLeading += headerTrafficLightGap
 	}
 	leading := max(minLeading, railSpan-bar.Left)
-	logoInset := railPadH
-	logoRightInset := float32(0)
-	logoFontSize := float32(20)
+	// The wordmark starts on the icon column when the rail is open, and is centred
+	// in the 45 wide collapsed rail, where a left-aligned mark would read as
+	// crowded to one side. The few DIPs it moves there are worth the balance.
+	logoInset := float32(6) + railGutter
 	logoAlign := ui.Start
-	if a.prefs.RailExpanded {
-		logoInset = 6 + railInsetForWidth(a.prefs.RailWidth)
-	} else {
-		// The collapsed rail is only 44px wide. Reserve even space around a
-		// slightly smaller wordmark so it does not feel pressed against the edge.
-		logoInset = 6
-		logoRightInset = 6
-		logoFontSize = 18
-		logoAlign = ui.Center
+	if !a.prefs.RailExpanded {
+		logoInset, logoAlign = 0, ui.Center
 	}
 	logoInset = max(float32(0), logoInset-bar.Left)
 	if bar.Left > 0 {
@@ -67,8 +61,8 @@ func (a *desktop) headerBar(c *ui.Context) {
 	row.DragWindow().Children(func() {
 		// The leading header column shares the rail's live width, including
 		// its resize divider. Native traffic lights take precedence on macOS.
-		ui.Column(c.Key("header-rail")).Label("标题栏侧栏区").Width(leading).Shrink(0).FillHeight().Padding(0, logoRightInset, 0, logoInset).Justify(ui.Center).AlignItems(ui.Start).Children(func() {
-			wordmark := ui.Column(c).Label("应用 Logo").Width(min(float32(64), leading-logoInset-logoRightInset)).FillHeight().Justify(ui.Center).AlignItems(logoAlign).Children(func() {
+		ui.Column(c.Key("header-rail")).Label("标题栏侧栏区").Width(leading).Shrink(0).FillHeight().Padding(0, 0, 0, logoInset).Justify(ui.Center).AlignItems(ui.Start).Children(func() {
+			wordmark := ui.Column(c).Label("应用 Logo").Width(min(float32(64), leading-logoInset)).FillHeight().Justify(ui.Center).AlignItems(logoAlign).Children(func() {
 				colors := [4]ui.Color{
 					wordmarkGradientColor(p, 0.14),
 					wordmarkGradientColor(p, 0.43),

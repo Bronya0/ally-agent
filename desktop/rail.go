@@ -16,6 +16,10 @@ type modeItem struct {
 	id, label, icon string
 }
 
+// railModeGap is the distance between two rail entries, shared by both states:
+// with one row pitch the entries keep their heights when the rail collapses.
+const railModeGap float32 = 3
+
 var baseModes = []modeItem{
 	{"chat", "Agent", "chat"},
 	{"skills", "技能", "skills"},
@@ -80,10 +84,10 @@ func (a *desktop) pluginModes() pluginModeIndex {
 func (a *desktop) rail(c *ui.Context) {
 	p := a.currentPalette()
 	if !a.prefs.RailExpanded {
-		rail := ui.Column(c).Width(widthRailCollapsed).Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, railPadH).Gap(gapTight).AlignItems(ui.Center)
+		rail := ui.Column(c).Width(widthRailCollapsed).Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, railPadH).Gap(railModeGap).AlignItems(ui.Center)
 		rail.Children(func() {
 			ui.Scroll(c).Key("rail-modes").FillWidth().Grow(1).MinHeight(0).Children(func() {
-				ui.Column(c).FillWidth().Gap(gapTight).Children(func() { a.railModes(c, false) })
+				ui.Column(c).FillWidth().AlignItems(ui.Center).Gap(railModeGap).Children(func() { a.railModes(c, false) })
 			})
 			railToggleButton(c, "rail-open", "展开侧边栏（显示菜单名）", "expand", func() {
 				a.prefs.RailExpanded = true
@@ -96,11 +100,11 @@ func (a *desktop) rail(c *ui.Context) {
 }
 
 func (a *desktop) railBody(c *ui.Context, width *float32) {
-	*ui.Local(c.Root(), "rail-content-width", func() float32 { return 200 }) = *width
 	p := a.currentPalette()
-	// Split panes are boxes: the rail must explicitly take the pane's height
-	// before the middle section can grow and keep the toggle at the bottom.
-	rail := ui.Column(c).Width(*width).FillHeight().Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(6).Gap(3)
+	// The vertical padding matches the collapsed rail's 4, and the gap their shared
+	// railModeGap: one row pitch in both states keeps the entries at the same
+	// heights, so collapsing does not scroll them.
+	rail := ui.Column(c).Width(*width).FillHeight().Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, 6).Gap(railModeGap)
 	rail.Children(func() {
 		a.railModes(c, true)
 		ui.Column(c).Grow(1).MinHeight(0).Gap(gapInline).Children(func() {
@@ -227,7 +231,7 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 				a.railWorkspaceRow(c, root, workspaceLabel(root), root)
 			}
 			if len(roots) == 0 {
-				ui.Text(c, "无历史记录").FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset(c))
+				ui.Text(c, "无历史记录").FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset())
 			}
 		})
 	})
@@ -243,7 +247,7 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 	if t := a.current(); t != nil && strings.EqualFold(t.Workspace, root) {
 		active = true
 	}
-	row := ui.Row(c.Key("rail-ws-"+root)).Height(26).Radius(6).Padding(0, railContentInset(c)).Gap(gapInline).AlignItems(ui.Center)
+	row := ui.Row(c.Key("rail-ws-"+root)).Height(26).Radius(6).Padding(0, railContentInset()).Gap(gapInline).AlignItems(ui.Center)
 	fill := ui.Transparent
 	ink := a.secondaryInk()
 	if active {
@@ -336,7 +340,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 		}
 		entries, _ := a.workspaceSessions(workspace)
 		if len(entries) == 0 {
-			ui.Text(c, "当前工作区暂无历史会话").FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset(c))
+			ui.Text(c, "当前工作区暂无历史会话").FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset())
 			return
 		}
 		ui.Scroll(c.Key("session-items")).FillWidth().Grow(1).MinHeight(0).Children(func() {
@@ -344,7 +348,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 				entry := entry
 				busy := entry.ID == sessionBusyID(a, entry.ID)
 				active := t != nil && t.ID == entry.ID
-				row := ui.Row(c.Key("rail-sess-"+entry.ID)).Height(30).Radius(6).Padding(0, railContentInset(c)).AlignItems(ui.Center).Gap(gapInline)
+				row := ui.Row(c.Key("rail-sess-"+entry.ID)).Height(30).Radius(6).Padding(0, railContentInset()).AlignItems(ui.Center).Gap(gapInline)
 				fill := ui.Transparent
 				ink := a.secondaryInk()
 				if active {

@@ -54,25 +54,31 @@ const (
 	radiusControl float32 = 7
 	radiusSmall           = uikit.RadiusSmall
 
-	heightHeader       float32 = 44
-	heightRail         float32 = 44
-	heightControl      float32 = 28
-	heightRow          float32 = 26
-	heightTabRow       float32 = 32
-	heightRailItem     float32 = 32
-	widthRailCollapsed float32 = 44
+	heightHeader   float32 = 44
+	heightRail     float32 = 44
+	heightControl  float32 = 28
+	heightRow      float32 = 26
+	heightTabRow   float32 = 32
+	heightRailItem float32 = 32
+	// widthRailCollapsed holds the selected square on the same left edge as an
+	// expanded row, so the tinted block does not step sideways when the rail
+	// collapses: 45 - 1 border - 4 padding leaves 40, and (40-32)/2 = 4 puts the
+	// square at 2 + 4 = 6, exactly where the expanded row starts.
+	widthRailCollapsed float32 = 45
 	railDividerWidth   float32 = 1
 	// railPadH is the collapsed rail's horizontal padding.
 	railPadH float32 = 2
-	// heightRailItemCollapsed is the side of a collapsed entry: both sides take
-	// this one token, so a selected entry is a square and cannot come out as a
-	// slightly flat rectangle. It has to fit what the rail leaves inside its 1px
-	// border and that padding (44 - 1 - 4 = 39 DIP).
-	heightRailItemCollapsed float32 = 38
-	sizeRailBadge           float32 = 34
-	sizeRailIcon            float32 = 17
-	sizeRailIconCollapsed   float32 = 20
-	sizeRailToggleIcon      float32 = 16
+	// heightRailItemCollapsed is the side of a collapsed entry. It equals the
+	// expanded row's height on purpose: the two states then share one row pitch,
+	// so the entries stay at the same heights instead of drifting down the rail.
+	// Both sides take this one token, so a selected entry is a square.
+	heightRailItemCollapsed float32 = heightRailItem
+	// Both states draw the same 20, centred in a square as tall as a row: the icon
+	// keeps its size (a 20 glyph in a 32 square reads as a badge, not a speck) and
+	// its height, so collapsing only turns the row into that square.
+	sizeRailIcon          float32 = 20
+	sizeRailIconCollapsed float32 = 20
+	sizeRailToggleIcon    float32 = 16
 	// 折叠三角按角色分档，同一个角色里不再出现第二个尺寸：
 	// sizeCaretGroupCard 是工具组卡标题栏（与 15 级摘要图标同高），sizeCaretRow 是
 	// 卡内的命令行，sizeCaretInline 是弹层和侧栏的紧凑行，sizeCaretBlock 是内容区块头
@@ -83,7 +89,10 @@ const (
 	sizeCaretBlock     float32 = 13
 	// fontRailLabel 是唯一偏出字号刻度的值：侧栏窄，13 在收起态会挤掉图标，
 	// 12 又偏小；其余字号一律取 uikit 的 Font*。
-	fontRailLabel   float32 = 12.5
+	fontRailLabel float32 = 12.5
+	// logoFontSize fits the collapsed rail's whole 45 wide column, and leaves room
+	// beside the 12 DIP inset of an expanded rail at its minimum width.
+	logoFontSize    float32 = 16
 	radiusRailBadge float32 = 6
 	widthModalWide  float32 = 760
 	widthModal      float32 = 580

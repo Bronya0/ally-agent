@@ -141,6 +141,23 @@ func (a *desktop) globalShortcuts(c *ui.Context) {
 		a.newConversation(root)
 	})
 	c.OnShortcut(ui.Cmd, ui.KeyW, func() { a.closeWorkspaceTab(a.active) })
+	// Find in the transcript, as Ctrl+F finds in an editor. It opens only on the
+	// chat page: the code editor binds its own find bar.
+	c.OnShortcut(ui.Cmd, ui.KeyF, func() {
+		if a.page == "chat" {
+			a.openChatSearch(a.current())
+		}
+	})
+	// Escape closes the find bar, and cancels the run otherwise. It has to be one
+	// registration: the window keeps only the first handler of a chord, so a
+	// separate Escape here would swallow the cancel.
+	c.OnShortcut(0, ui.KeyEscape, func() {
+		if t := a.current(); t != nil && a.page == "chat" && t.uiState().Search.Open {
+			a.closeChatSearch(t)
+			return
+		}
+		a.cancelConversation(a.current())
+	})
 	c.OnShortcut(ui.Ctrl, ui.KeyTab, func() {
 		if len(a.tabs) > 0 {
 			a.activateWorkspaceTab((a.active + 1) % len(a.tabs))

@@ -799,6 +799,7 @@ func (a *desktop) recordGeneratedImage(t *conversation, p map[string]any) {
 	if n := len(t.Messages); n > 0 && str(t.Messages[n-1], "role") == "assistant" && str(t.Messages[n-1], "toolCallId") == "" {
 		m = t.Messages[n-1]
 	} else {
+		invalidateChatSearch(t)
 		m = map[string]any{"role": "assistant", "content": ""}
 		t.Messages = append(t.Messages, m)
 	}

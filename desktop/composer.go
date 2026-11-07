@@ -24,6 +24,14 @@ const composerHint = "输入消息，Enter 发送，Ctrl+Enter 换行，Esc 中�
 func (a *desktop) composer(c *ui.Context, t *conversation) {
 	st := t.uiState()
 	p := a.currentPalette()
+	// A closed find bar hands the caret back here, once the engine no longer holds
+	// its field and the window can take it: both fields change in the closing frame,
+	// and the engine walks its focus bindings in map order, so granting the composer
+	// then can be undone by the bar's own release. An inactive window reads every
+	// focus binding as empty, so it must not be taken as the bar having let go.
+	if a.focusBack != "" && c.WindowActive() && ui.FocusedValue(c, &a.chatSearchFocus) == "" {
+		a.focusBack, a.composerFocus = "", a.focusBack
+	}
 	box := ui.Column(c.Key("composer")).Shrink(0).Padding(6, 20, 8).Gap(gapInline)
 	box.Children(func() {
 		if a.page == "kb" {
@@ -247,6 +255,17 @@ func (a *desktop) composerKeys(c *ui.Context, t *conversation, input ui.Element)
 			if st.CmdOpen && a.selectedCommand(t) != nil {
 				return false
 			}
+			// A built-in command typed by hand runs here rather than going to the
+			// model: only the menu path ever executed one, so "/sessions" and Enter
+			// used to arrive as plain text. It is taken at this entry point only, so
+			// the same words coming from a suggestion button stay a message, and a
+			// skill is left alone since the backend reads its arguments.
+			if cmd := a.builtinCommandFor(t, k.Text()); cmd != nil {
+				a.runCommand(t, cmd)
+				k.SetText("")
+				st.CmdOpen, st.Mention.Open = false, false
+				return true
+			}
 			if a.send(t, k.Text()) {
 				k.SetText("")
 				st.CmdOpen = false
@@ -431,10 +450,46 @@ func (a *desktop) selectedCommand(t *conversation) *slashCommand {
 }
 
 func (a *desktop) completeCommand(t *conversation) {
-	if cmd := a.selectedCommand(t); cmd != nil {
-		t.Draft = "/" + cmd.Label + " "
-		t.uiState().CmdOpen = false
+	cmd := a.selectedCommand(t)
+	if cmd == nil {
+		return
 	}
+	st := t.uiState()
+	t.Draft = "/" + cmd.Label
+	if cmd.Skill != "" {
+		// A skill takes arguments, so completion leaves the space that starts them
+		// and hands the input back: typing a letter must not become /skillargs.
+		t.Draft += " "
+		st.CmdOpen = false
+	} else {
+		// A built-in command runs as it stands: keep it whole and the menu open, so
+		// Enter or a click executes exactly what was completed.
+		st.CmdOpen = true
+	}
+	st.DraftCaret = len([]rune(t.Draft))
+	st.RestoreCaret = true
+	st.CmdIndex = 0
+}
+
+// builtinCommandFor reports the built-in command a draft names exactly, so Enter
+// runs it rather than sending it as a message. A skill is not one: the backend
+// reads "/skill args" from the message, so it has to be sent.
+func (a *desktop) builtinCommandFor(t *conversation, text string) *slashCommand {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, "/") {
+		return nil
+	}
+	fields := strings.Fields(strings.TrimPrefix(text, "/"))
+	if len(fields) != 1 {
+		return nil
+	}
+	cmds := a.builtinCommands(t)
+	for i := range cmds {
+		if cmds[i].Skill == "" && strings.EqualFold(cmds[i].Label, fields[0]) {
+			return &cmds[i]
+		}
+	}
+	return nil
 }
 
 func (a *desktop) runCommand(t *conversation, cmd *slashCommand) {

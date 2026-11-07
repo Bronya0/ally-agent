@@ -197,7 +197,7 @@ func railNavigationButton(c *ui.Context, id, label, iconName string, expanded, a
 }
 
 func railToggleButton(c *ui.Context, id, tip, name string, fn func(), ink ...ui.Color) ui.Element {
-	b := uikit.Tooltip(c, ui.ButtonBase(c.Key(id)).Size(sizeRailBadge, sizeRailBadge).AlignSelf(ui.Center).Center().Radius(radiusRailBadge).
+	b := uikit.Tooltip(c, ui.ButtonBase(c.Key(id)).Size(heightRailItemCollapsed, heightRailItemCollapsed).AlignSelf(ui.Center).Center().Radius(radiusRailBadge).
 		Label(tip), tip).TextColor(uikit.SecondaryInk(c, ink)).Cursor(ui.CursorPointer).OnClick(fn)
 	fill := ui.Transparent
 	if b.Hovered() {

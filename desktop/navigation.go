@@ -65,12 +65,12 @@ func navItemOn(c *ui.Context, b ui.Element, label, iconName string, expanded, ac
 	b.Background(fadeColor(b, "fill", fill)).TextColor(color)
 	return b.Children(func() {
 		if !expanded {
-			ui.Row(c).Size(sizeRailBadge, sizeRailBadge).Shrink(0).Center().Radius(radiusRailBadge).Children(func() {
+			ui.Row(c).Size(heightRailItemCollapsed, heightRailItemCollapsed).Shrink(0).Center().Radius(radiusRailBadge).Children(func() {
 				railIcon(c, iconName, sizeRailIconCollapsed).TextColor(color)
 			})
 			return
 		}
-		ui.Row(c).FillWidth().Padding(0, railContentInset(c)).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Padding(0, railContentInset()).Gap(10).AlignItems(ui.Center).Children(func() {
 			railIcon(c, iconName, sizeRailIcon).TextColor(color)
 			text := ui.Text(c, label).FontSize(fontRailLabel).TextColor(color).SingleLine()
 			if active {
@@ -84,12 +84,13 @@ func navItemOn(c *ui.Context, b ui.Element, label, iconName string, expanded, ac
 	})
 }
 
-// Wider rails give their content breathing room without pinning it to the edge.
-func railContentInset(c *ui.Context) float32 {
-	width := ui.Local(c.Root(), "rail-content-width", func() float32 { return 200 })
-	return railInsetForWidth(*width)
-}
+// railGutter keeps the expanded rail's content on the column the collapsed
+// badges draw their icons in: a badge centres a 20 icon at 12 from the rail's
+// edge (2 padding + 4 for the 32 square inside 40 + 6 half of the icon), and the
+// expanded rail's own 6 padding leaves 6 to add.
+const railGutter float32 = 6
 
-func railInsetForWidth(width float32) float32 {
-	return 8 + max(float32(0), min(float32(24), (width-200)*0.15))
-}
+// railContentInset is the rail's content column. It no longer depends on the
+// rail's width: extra room belongs on the right, and a left inset that grew with
+// it moved the icons out of the column the collapsed rail draws them in.
+func railContentInset() float32 { return railGutter }

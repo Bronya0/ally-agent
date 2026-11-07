@@ -375,7 +375,14 @@ func (a *desktop) filePromptDialog(c *ui.Context) {
 	modalCard(c, &a.filesF.NewOpen, widthModalSmall, func() {
 		modalTitle(c, title, "名称不含路径分隔符。")
 		value := a.filesF.NewName
-		uikit.Input(c.Key("file-prompt-name"), &value).Label(title).FillWidth().AutoFocus()
+		name := uikit.Input(c.Key("file-prompt-name"), &value).Label("文件名称").FillWidth().AutoFocus()
+		// Enter in the name field submits, as a desktop dialog does: the button is
+		// not the only way to confirm. The field's own value is the newest one at
+		// that point, so it is copied into the dialog state before submitting.
+		name.OnSubmit(func() {
+			a.filesF.NewName = value
+			a.submitFilePrompt()
+		})
 		a.filesF.NewName = value
 		inlineError(c, "file-prompt-error", a.filesF.PromptErr)
 		modalActions(c, func() {

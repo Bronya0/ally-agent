@@ -138,6 +138,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	case "run:stream", "run:delta":
 		content := str(p, "content")
 		if content != "" {
+			invalidateChatSearchTail(t)
 			ui.ThinkingBytes = 0
 			n := len(t.Messages)
 			// A summary that replaced the transcript is not this run's answer: the
@@ -327,6 +328,7 @@ func appendRunError(t *conversation, msg string) {
 	if hasErrorTail(t.Messages, msg) {
 		return
 	}
+	invalidateChatSearch(t)
 	t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": msg, "error": true})
 	if st := t.uiState(); st.Follow {
 		st.FollowPending = true
@@ -361,6 +363,7 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 		}
 	}
 	if m == nil {
+		invalidateChatSearch(t)
 		m = map[string]any{"role": "tool_call", "toolCallId": id}
 		t.Messages = append(t.Messages, m)
 	}
@@ -613,6 +616,7 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 		return
 	}
 	if row == nil {
+		invalidateChatSearch(t)
 		row = map[string]any{"role": "subagent", "subId": id, "parentToolCallId": str(p, "toolCallId")}
 		t.Messages = append(t.Messages, row)
 		// Nudge the reader only when a new sub-agent row appears.
