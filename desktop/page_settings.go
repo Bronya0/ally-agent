@@ -620,7 +620,6 @@ func (a *desktop) settingsNetwork(c *ui.Context) {
 			})
 		}
 		ui.Column(c).PaddingY(gapSection).Gap(gapSection).Children(func() {
-			notice(c, "warn", "代理可见连接元数据；代理不可用时不会回退直连。", a.secondaryInk())
 			ui.Row(c).Wrap().Gap(gapField).Children(func() {
 				settingsAction(c, "检测系统代理").OnClick(func() { a.detectProxy() })
 				settingsAction(c, "测试连接").Disabled(a.configDraft.ProxyMode == "off").OnClick(func() { a.testProxy() })
