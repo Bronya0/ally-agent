@@ -3,7 +3,12 @@ package desktop
 import (
 	"ally-dev/internal/documentpreview"
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/egoist/mygo/ui/editor"
 )
 
 func TestClosingDocumentPreviewReleasesDocument(t *testing.T) {
@@ -14,6 +19,39 @@ func TestClosingDocumentPreviewReleasesDocument(t *testing.T) {
 	a.releaseWorkspaceFile(root)
 	if a.activeFile() != nil || file.Document != nil || file.PreviewPath != "" || file.PreviewHTML != "" {
 		t.Fatal("closing preview retained document data")
+	}
+}
+
+func TestMissingFileLoadPreservesCurrentEditorAndPreview(t *testing.T) {
+	for _, path := range []string{"missing.txt", "missing.md", "missing.html", "missing.png", "missing.svg", "missing.pdf", "missing.docx"} {
+		for _, retain := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/retain=%t", path, retain), func(t *testing.T) {
+				root := t.TempDir()
+				conv := &conversation{Workspace: root}
+				a := &desktop{tabs: []*conversation{conv}, workspaceFiles: map[string]*workspaceFile{}}
+				var old *workspaceFile
+				if retain {
+					buffer := editor.NewBuffer("original")
+					buffer.Set("unsaved content")
+					old = &workspaceFile{Path: "current.txt", Editor: &editor.State{Buffer: buffer}, PreviewPath: "current.png"}
+					a.workspaceFiles[workspaceKey(root)] = old
+				}
+				_, err := os.Stat(filepath.Join(root, path))
+				if err == nil {
+					t.Fatal("test target unexpectedly exists")
+				}
+				a.handleFileLoadError(root, path, workspaceFileKindForPath(path), old, fmt.Errorf("load: %w", err))
+				if a.activeFile() != old || !retain && len(a.workspaceFiles) != 0 {
+					t.Fatal("missing file replaced the current editor or created an empty one")
+				}
+				if retain && (old.PreviewPath != "current.png" || old.Editor.Buffer.String() != "unsaved content" || !old.Editor.Buffer.Modified()) {
+					t.Fatal("missing file load cleared existing preview or unsaved contents")
+				}
+				if len(a.notifications) != 1 || a.notifications[0].Type != "error" {
+					t.Fatal("missing file did not produce a user-visible failure")
+				}
+			})
+		}
 	}
 }
 

@@ -628,11 +628,11 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		desc.showTiming = false
 	}
 	result := toolResult(m)
-	editPath := ""
-	if name == "edit" && !isMCP {
-		editPath = toolEditFilePath(args, result)
+	filePath := ""
+	if (name == "edit" || name == "create") && !isMCP {
+		filePath = toolFilePath(args, result)
 		if summary == "" {
-			summary = editPath
+			summary = filePath
 			if files := list(args, "files"); len(files) > 1 {
 				summary = fmt.Sprintf("%d files", len(files))
 			}
@@ -655,12 +655,12 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	// hanging status icon; the row itself carries the 6px rhythm below.
 	container.Children(func() {
 		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(gapTight).AlignItems(ui.Center).Justify(ui.Start).Label("工具详情 " + key)
-		if expandable || editPath != "" {
+		if expandable || filePath != "" {
 			row.Cursor(ui.CursorPointer)
 		}
-		if editPath != "" {
-			uikit.Tooltip(c, row, "在编辑器打开 "+editPath)
-			row.OnClick(func() { a.openToolFile(t, editPath) })
+		if filePath != "" {
+			uikit.Tooltip(c, row, "在编辑器打开 "+filePath)
+			row.OnClick(func() { a.openToolFile(t, filePath) })
 		}
 		row.Hidden(name == "suggest").Children(func() {
 			if name != "subagent" {

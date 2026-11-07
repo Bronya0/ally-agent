@@ -85,9 +85,10 @@ func TestEditHeaderOpensEditorWithoutResettingDiffExpansion(t *testing.T) {
 	}
 }
 
-func TestCreatePreviewStaysBoundedWhileStreamingAndIgnoresHeaderClicks(t *testing.T) {
+func TestCreatePreviewStaysBoundedWhileHeaderOpensEditor(t *testing.T) {
 	conv := &conversation{ID: "create", Workspace: t.TempDir()}
-	a := &desktop{tabs: []*conversation{conv}, prefs: defaultPrefs()}
+	file := &workspaceFile{Path: "new.txt", Editor: &editor.State{Buffer: editor.NewBuffer("created content")}}
+	a := &desktop{tabs: []*conversation{conv}, prefs: defaultPrefs(), workspaceFiles: map[string]*workspaceFile{workspaceKey(conv.Workspace): file}}
 	msg := map[string]any{"name": "create", "toolCallId": "create-call", "status": "running"}
 	setContent := func(content string) {
 		raw, _ := json.Marshal(map[string]any{"path": "new.txt", "content": content})
@@ -108,8 +109,8 @@ func TestCreatePreviewStaysBoundedWhileStreamingAndIgnoresHeaderClicks(t *testin
 		if err := tt.Click("工具详情 create-call"); err != nil {
 			t.Fatal(err)
 		}
-		if len(conv.uiState().ToolOpen) != 0 || a.explorer || !tt.HasText("line-2\nline-3\nline-4\nline-5\nline-6\nline-7") {
-			t.Fatal("create header allocated expansion state or opened a file")
+		if len(conv.uiState().ToolOpen) != 0 || !a.explorer || a.activeFile() != file || !tt.HasText("line-2\nline-3\nline-4\nline-5\nline-6\nline-7") {
+			t.Fatal("create header did not open its editor independently of the fixed tail")
 		}
 	}
 	setContent("old-line\nline-2\nline-3\nline-4\nline-5\nline-6\nline-7\nline-8")

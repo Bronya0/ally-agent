@@ -9,9 +9,9 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// The result names the files actually edited. Arguments also support opening a
-// file while an edit is running or failed, including legacy single-file calls.
-func toolEditFilePath(args, result map[string]any) string {
+// The result names the file actually written. Arguments also support opening a
+// target while create/edit is running or failed, including legacy calls.
+func toolFilePath(args, result map[string]any) string {
 	for _, source := range []map[string]any{result, args} {
 		for _, key := range []string{"path", "file_path", "file"} {
 			if path := str(source, key); strings.TrimSpace(path) != "" {

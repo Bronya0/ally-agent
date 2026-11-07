@@ -1324,23 +1324,7 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 				return
 			}
 			if previewErr != nil {
-				if kind.hasWebViewPreview() {
-					if expected != nil {
-						a.releaseWorkspaceFile(root)
-					}
-					if a.workspaceFiles == nil {
-						a.workspaceFiles = map[string]*workspaceFile{}
-					}
-					newFile = &workspaceFile{Path: path, PreviewError: previewErr.Error(), Editor: emptyFileEditor()}
-					a.workspaceFiles[workspaceKey(root)] = newFile
-					a.notifyError("文件预览失败：" + previewErr.Error())
-					return
-				}
-				if note := backend.WorkspaceFilePreviewNote(previewErr); note != "" {
-					a.openFileInfoWithNote(path, note)
-				} else {
-					a.notifyError("打开文件失败：" + previewErr.Error())
-				}
+				a.handleFileLoadError(root, path, kind, expected, previewErr)
 				return
 			}
 			if a.workspaceFiles == nil {
