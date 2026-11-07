@@ -465,9 +465,12 @@ Decisions already made and the brief reason each matters for continuation. Inclu
 
 ## Completed Work / 已完成事项
 Concrete results that still matter: implemented changes, produced artifacts, and validation actually performed with its outcome. Attach necessary file paths or identifiers to the relevant item. Clearly distinguish implemented, tested, committed, and deployed states; never claim an unrun check passed.
+Identify this task's changed files or artifacts and any partial, unverified, uncommitted, or pending-cleanup state that matters for continuation. Distinguish known pre-existing user changes that must not be overwritten; mark ownership as unknown when not established.
 
 ## Current State / 当前进度
 Where work stopped: the active step, partial or unverified changes, unresolved questions, blockers, and any running operation or result still awaited. Preserve exact task, session, or process identifiers only when needed to resume. If the objective is complete, say so rather than inventing more work.
+Preserve essential user-provided data, examples, reproduction conditions, decision-driving facts, and their known sources. For large material that can be reread, keep precise file, symbol, or artifact references instead of copying it; retain critical information that cannot be recovered, except secrets or credentials.
+For running operations or uncertain outcomes, include the last observed state, how to check status, and the completion condition when known. Note side effects that may already have occurred; if safe retry has not been established, say so and require checking the outcome before repeating the operation.
 
 ## Next Steps / 待办
 Prioritized remaining actions. When interrupted mid-task, make the first item the concrete next action, with the necessary path, command, identifier, or decision to resolve. Include required verification and pending user input. Do not use vague instructions such as "continue as planned".

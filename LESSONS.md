@@ -141,3 +141,4 @@
 2026-11-07 高危 plugin-retire 异步卸载须返回 Promise；旧存储写回与安装/删除共锁并验版本，否则覆盖新数据。@desktop/pluginhost
 2026-11-07 中危 timer-dispatch Stop 撤不回已排队的 UI 回调；须验 generation，否则旧回调清掉新计时器并提前释放。@desktop/memory_tidy.go
 2026-11-07 中危 chat-wheel 滚轮缓动首帧位置未变，按贴底恢复 Follow 会取消滚动；只在实际下移到底恢复。@desktop/page_chat.go
+2026-11-07 中危 compact-outcome 裁剪重建工具卡时硬写 success 会把失败或取消伪装成成功；复用状态判定并保留结果元数据。@desktop/compact.go

@@ -10,6 +10,7 @@ package desktop
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -266,12 +267,24 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 		if !ok || summary == "" {
 			continue
 		}
-		// The original arguments and result are gone from the history, so the
-		// card keeps only its identity plus the excerpt it was replaced with.
+		// Unwrapping an envelope can merge metadata into its nested data map.
+		// Detach it before reading the outcome so the original evidence is unchanged.
+		source := maps.Clone(m)
+		detachToolResultEnvelope(source)
+		state := toolState(source)
+		outcome := toolOutcomeSummary(toolResult(source))
+		outcome["_text"] = summary
+		// Drop original arguments/output, but compaction must not turn a failed
+		// or cancelled operation into success.
 		row := map[string]any{
 			"role": "tool_call", "name": str(m, "name"), "toolCallId": id,
-			"title": str(m, "title"), "status": "success",
-			"body": summary, "result": map[string]any{"_text": summary}, "fastCompacted": true,
+			"title": str(m, "title"), "status": state,
+			"body": summary, "result": outcome, "fastCompacted": true,
+		}
+		for _, key := range []string{"error", "errorCode"} {
+			if value, ok := m[key]; ok {
+				row[key] = value
+			}
 		}
 		if v := str(m, "mcpServer"); v != "" {
 			row["mcpServer"] = v

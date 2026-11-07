@@ -45,8 +45,9 @@ func retainLocalCommandSummary(m map[string]any) {
 	retainCommandSummary(m)
 }
 
-func retainCommandSummary(m map[string]any) {
-	result := toolResult(m)
+// toolOutcomeSummary retains outcome metadata without keeping output bodies.
+// Command cards and local-compaction excerpts use the same projection.
+func toolOutcomeSummary(result map[string]any) map[string]any {
 	summary := map[string]any{}
 	for _, key := range []string{"ok", "exitCode", "timedOut", "promotedToService", "cancelled", "durationMs", "elapsedMs", "errorCode"} {
 		switch value := result[key].(type) {
@@ -57,7 +58,11 @@ func retainCommandSummary(m map[string]any) {
 	if text := str(result, "error"); text != "" {
 		summary["error"] = short(text, 300)
 	}
-	m["result"] = summary
+	return summary
+}
+
+func retainCommandSummary(m map[string]any) {
+	m["result"] = toolOutcomeSummary(toolResult(m))
 	delete(m, "body")
 	if text := str(m, "error"); text != "" {
 		m["error"] = short(text, 300)
