@@ -60,6 +60,8 @@ type conversation struct {
 	historyStarts memoOf[historyKey, []int]
 	historyRows   memoOf[historyKey, *transcriptRows]
 	historyRev    uint64
+	toolRev       uint64
+	messageLookup transcriptLookup
 }
 
 type workspaceFile struct {
@@ -899,13 +901,20 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 			if message == nil {
 				continue
 			}
-			messageCopy := make(map[string]any, len(message))
-			for key, value := range message {
-				messageCopy[key] = value
-			}
+			messageCopy := message
 			// Drop large command output before recursively copying it. This only
 			// mutates the shallow copy; the live transcript remains unchanged.
-			retainLocalCommandSummary(messageCopy)
+			name := str(message, "name")
+			if name == "" {
+				name = str(message, "toolName")
+			}
+			if toolKind(name) == "command" {
+				messageCopy = make(map[string]any, len(message))
+				for key, value := range message {
+					messageCopy[key] = value
+				}
+				retainLocalCommandSummary(messageCopy)
+			}
 			clear(active)
 			cloned, err := cloneSnapshotJSONValue(messageCopy, 0, active)
 			if err != nil {

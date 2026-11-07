@@ -61,6 +61,7 @@ func dropCompactPreview(t *conversation) {
 	}
 	clear(t.Messages[len(kept):])
 	t.Messages = kept
+	t.resetTranscriptLookup()
 }
 
 // compactDelta appends one summary fragment to the live preview row, so the
@@ -107,6 +108,7 @@ func compactThinkingTokens(st *chatUI) int {
 func replaceTranscript(t *conversation, summary string) {
 	invalidateChatSearch(t)
 	t.Messages = []map[string]any{{"role": "assistant", "content": summary, transcriptSummaryFlag: true}}
+	t.resetTranscriptLookup()
 	t.MD = nil
 	t.MDCodeBlock = nil
 	// The row set changed even when the old length was also 1; drop the cached

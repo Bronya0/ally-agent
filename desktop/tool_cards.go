@@ -240,6 +240,52 @@ func toolGroupResultSummary(name string, result map[string]any) string {
 	return ""
 }
 
+type toolGroupSummaryKey struct {
+	historyKey
+	toolRev          uint64
+	index, windowEnd int
+}
+
+type toolGroupSummary struct {
+	end, reads, greps, lists, commands, trimmed int
+	status                                      string
+}
+
+func summarizeToolGroup(t *conversation, index, windowEnd int) toolGroupSummary {
+	s := toolGroupSummary{end: index, status: "pending"}
+	anyRunning, anyQueued := false, false
+	for i := index; i < windowEnd && isFoldableToolGroupItem(t.Messages[i]); i++ {
+		s.end = i + 1
+		m := t.Messages[i]
+		if boolOf(m, "fastCompacted") {
+			s.trimmed++
+		}
+		s.status = toolState(m)
+		switch s.status {
+		case "running":
+			anyRunning = true
+		case "pending":
+			anyQueued = true
+		}
+		switch readGrepGroupName(m) {
+		case "grep":
+			s.greps++
+		case "list", "glob":
+			s.lists++
+		case "command":
+			s.commands++
+		default:
+			s.reads++
+		}
+	}
+	if anyRunning {
+		s.status = "running"
+	} else if anyQueued {
+		s.status = "pending"
+	}
+	return s
+}
+
 // toolActivityGroupCard draws one card for a consecutive run of read, grep,
 // list and command calls. The head message decides the wording; entries load
 // their output only when opened. a11yLabel prefixes the hidden control label
@@ -270,37 +316,15 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	}
 
 	_, windowEnd := a.chatMessageWindow(t)
-	end := index
-	reads, greps, lists, commands := 0, 0, 0, 0
-	trimmed := 0
-	anyRunning, anyQueued := false, false
-	lastState := "pending"
-	for i := index; i < windowEnd && isFoldableToolGroupItem(t.Messages[i]); i++ {
-		end = i + 1
-		m := t.Messages[i]
-		if boolOf(m, "fastCompacted") {
-			trimmed++
-		}
-		state := toolState(m)
-		lastState = state
-		switch state {
-		case "running":
-			anyRunning = true
-		case "pending":
-			anyQueued = true
-		}
-		name := readGrepGroupName(m)
-		switch name {
-		case "grep":
-			greps++
-		case "list", "glob":
-			lists++
-		case "command":
-			commands++
-		default:
-			reads++
-		}
-	}
+	// This widget keeps scalar header metadata, including while collapsed.
+	// Events retire/update tool states through toolRev; topology and compaction
+	// changes use historyRev. No row arguments or output are retained here.
+	summaryMemo := memoAt[memoOf[toolGroupSummaryKey, toolGroupSummary]](container, "summary")
+	summary := summaryMemo.get(toolGroupSummaryKey{historyKey{len(t.Messages), t.historyRev}, t.toolRev, index, windowEnd}, func(key toolGroupSummaryKey) toolGroupSummary {
+		return summarizeToolGroup(t, key.index, key.windowEnd)
+	})
+	end := summary.end
+	reads, greps, lists, commands, trimmed := summary.reads, summary.greps, summary.lists, summary.commands, summary.trimmed
 	if end == index {
 		return
 	}
@@ -311,12 +335,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	// A group's mark follows its calls: it breathes while any call runs, waits
 	// grey while one is still queued, and otherwise keeps the last result. None
 	// of that is repeated in words beside the counts.
-	groupStatus := lastState
-	if anyRunning {
-		groupStatus = "running"
-	} else if anyQueued {
-		groupStatus = "pending"
-	}
+	groupStatus := summary.status
 	rowLabel := a11yLabel + key
 
 	visibleEnd := end
@@ -326,6 +345,13 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	// A collapsed group draws no rows, so only allocate them when it is open.
 	var entries []toolGroupEntry
 	if open {
+		if count := visibleEnd - index; len(*entryArgs) > count {
+			// "Show less" drops hidden parsed arguments and their backing slots,
+			// not just the output widgets. The surviving rows keep their memos.
+			kept := make([]argsMemo, count)
+			copy(kept, *entryArgs)
+			*entryArgs = kept
+		}
 		entries = make([]toolGroupEntry, 0, visibleEnd-index)
 		for i := index; i < visibleEnd; i++ {
 			m := t.Messages[i]
@@ -487,7 +513,15 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 				transcriptAction(c, key+"-more", fmt.Sprintf("Show more (%d)", remaining)).OnClick(func() { *extra += 100 })
 			}
 			if *extra > 0 {
-				transcriptAction(c, key+"-less", "Show less").OnClick(func() { *extra = 0 })
+				transcriptAction(c, key+"-less", "Show less").OnClick(func() {
+					*extra = 0
+					for child, detail := range t.uiState().CommandDetails {
+						if detail != nil && detail.Index >= index+100 && detail.Index < end {
+							delete(t.uiState().CommandDetails, child)
+							delete(t.uiState().ToolOpen, child)
+						}
+					}
+				})
 			}
 		})
 	})
@@ -566,7 +600,7 @@ func (a *desktop) toolGroupCommandEntry(c *ui.Context, t *conversation, entry to
 		if open {
 			delete(t.uiState().CommandDetails, key)
 		} else if state != "pending" && state != "running" {
-			a.loadCommandDetail(t, key)
+			a.loadCommandDetail(t, entry.index, key)
 		}
 	}
 	if open {
@@ -770,7 +804,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				if open {
 					delete(t.uiState().CommandDetails, key)
 				} else if state != "pending" && state != "running" {
-					a.loadCommandDetail(t, key)
+					a.loadCommandDetail(t, index, key)
 				}
 			}
 		}

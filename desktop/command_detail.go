@@ -26,6 +26,7 @@ func toolEventForDisplay(name string, payload any) any {
 }
 
 type commandDetail struct {
+	Index   int
 	Loading bool
 	Result  map[string]any
 	Error   string
@@ -66,7 +67,7 @@ func commandContextResult(content string) map[string]any {
 	return map[string]any{"_text": content}
 }
 
-func (a *desktop) loadCommandDetail(t *conversation, key string) {
+func (a *desktop) loadCommandDetail(t *conversation, index int, key string) {
 	st := t.uiState()
 	if st.CommandDetails == nil {
 		st.CommandDetails = map[string]*commandDetail{}
@@ -74,7 +75,7 @@ func (a *desktop) loadCommandDetail(t *conversation, key string) {
 	if st.CommandDetails[key] != nil {
 		return
 	}
-	detail := &commandDetail{Loading: true}
+	detail := &commandDetail{Index: index, Loading: true}
 	st.CommandDetails[key] = detail
 	if a.core == nil || a.win == nil {
 		detail.Loading = false
@@ -101,7 +102,7 @@ func (a *desktop) commandDetailView(c *ui.Context, t *conversation, index int, k
 	}
 	if detail.Error != "" {
 		ui.Text(c, detail.Error).FontSize(fsSmall).TextColor(a.secondaryInk())
-		flat(c, "重试").OnClick(func() { delete(t.uiState().CommandDetails, key); a.loadCommandDetail(t, key) })
+		flat(c, "重试").OnClick(func() { delete(t.uiState().CommandDetails, key); a.loadCommandDetail(t, index, key) })
 		return
 	}
 	a.toolBody(c, t, index, "command", args, detail.Result, m)
@@ -126,4 +127,17 @@ func releaseCommandDetails(t *conversation) {
 		delete(st.ToolOpen, key)
 	}
 	st.CommandDetails = nil
+}
+
+// A command can be opened again from model context. Once its history page is
+// gone, release its duplicate output and close the child disclosure together,
+// so returning to the page cannot leave a spinner waiting for a dropped cache.
+func releaseCommandDetailsOutsideWindow(t *conversation, start, end int) {
+	st := t.uiState()
+	for key, detail := range st.CommandDetails {
+		if detail == nil || detail.Index < start || detail.Index >= end {
+			delete(st.CommandDetails, key)
+			delete(st.ToolOpen, key)
+		}
+	}
 }

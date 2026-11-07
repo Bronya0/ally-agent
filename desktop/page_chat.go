@@ -5,6 +5,7 @@ import (
 	"ally-dev/desktop/uikit"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -27,16 +28,8 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 		st.windowBuilding = false
 		st.transcriptRows = nil
 	}()
-	if st.RoundAt == nil {
-		st.RoundAt = make(map[int]int)
-	} else {
-		clear(st.RoundAt)
-	}
-	for idx, stat := range st.Round {
-		if stat != nil && stat.Done {
-			st.RoundAt[roundStatsIndex(t, idx)] = idx
-		}
-	}
+	refreshRoundPlacements(t, start, end)
+	releaseCommandDetailsOutsideWindow(t, start, end)
 	for idx := range st.PromptHandles {
 		if idx < start || idx >= end {
 			delete(st.PromptHandles, idx)
@@ -125,7 +118,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 					transcriptAction(c, "history-newer", "更新消息").OnClick(func() { st.VisibleStart = end + 1; t.Scroll.Y = 0 })
 					transcriptAction(c, "history-latest", "回到最新").OnClick(func() { followLatest(t) })
 				}
-				for i := start; i < end; i++ {
+				for _, i := range st.visibleRows {
 					a.messageRow(c, t, i, rows)
 				}
 				if st.PendingPrompt {
@@ -653,6 +646,7 @@ func (a *desktop) confirmDeleteUserMessage(d *deletePromptState) {
 // the first row of the visible page would otherwise leave VisibleStart past
 // the shortened transcript and collapse the history window.
 func resetTranscriptAfterDelete(t *conversation, index int) {
+	t.resetTranscriptLookup()
 	releaseCommandDetails(t)
 	rounds := t.uiState().Round
 	for k := range rounds {
@@ -1131,6 +1125,54 @@ func hasLaterSuggestion(t *conversation, index int) bool {
 		}
 	}
 	return false
+}
+
+type roundPlacementKey struct {
+	historyKey
+	start, end, rounds int
+}
+
+// Completed statistics have a fixed message index. Only appended/rewritten
+// rows (not another frame of the same stream) can move them onto a suggestion.
+// Keep just this page's placements; a day's Round map remains the source.
+func refreshRoundPlacements(t *conversation, start, end int) {
+	st := t.uiState()
+	key := roundPlacementKey{historyKey{len(t.Messages), t.historyRev}, start, end, len(st.Round)}
+	if st.roundPlacementReady && st.roundPlacementKey == key {
+		return
+	}
+	if st.RoundAt == nil {
+		st.RoundAt = make(map[int]int)
+	} else {
+		clear(st.RoundAt)
+	}
+	// A page may begin between an answer and its suggestions. Include that
+	// preceding partial round without walking all earlier rounds.
+	lower := start
+	for lower > 0 && lower < len(t.Messages) && str(t.Messages[lower], "role") != "user" {
+		lower--
+	}
+	for idx := lower; idx < end; idx++ {
+		if stat := st.Round[idx]; stat != nil && stat.Done {
+			if target := roundStatsIndex(t, idx); target >= start && target < end {
+				st.RoundAt[target] = idx
+			}
+		}
+	}
+	// Block starts already omit grouped followers and nested children. Merge
+	// the few footer-only rows before rendering, instead of visiting thousands
+	// of folded tool records just to decide that they draw nothing each frame.
+	st.visibleRows = st.visibleRows[:0]
+	starts := t.blockStarts()
+	for n := historyBlockIndex(starts, start); n < len(starts) && starts[n] < end; n++ {
+		st.visibleRows = append(st.visibleRows, starts[n])
+	}
+	for idx := range st.RoundAt {
+		st.visibleRows = append(st.visibleRows, idx)
+	}
+	slices.Sort(st.visibleRows)
+	st.visibleRows = slices.Compact(st.visibleRows)
+	st.roundPlacementKey, st.roundPlacementReady = key, true
 }
 
 func roundStatsIndex(t *conversation, index int) int {

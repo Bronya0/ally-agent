@@ -216,6 +216,9 @@ type mentionState struct {
 // conversation.Messages; this only remembers what the reader expanded.
 type chatUI struct {
 	RoundAt                map[int]int
+	roundPlacementKey      roundPlacementKey
+	roundPlacementReady    bool
+	visibleRows            []int
 	Round                  map[int]*roundStat
 	PromptOpen             map[int]bool
 	PromptHandles          map[int]*ui.Handle

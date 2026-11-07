@@ -269,6 +269,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		ui.ThinkingBytes = 0
 		t.Status = "已注入新消息，继续执行…"
 	case "run:done", "run:error":
+		t.toolRev++
 		ui.ThinkingBytes = 0
 		ui.PlanCollapsed = true
 		for _, call := range t.Messages {
@@ -355,18 +356,18 @@ func lastContentIndex(messages []map[string]any) int {
 }
 
 func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any) {
+	t.toolRev++
 	id := str(p, "toolCallId")
 	var m map[string]any
-	for i := len(t.Messages) - 1; i >= 0; i-- {
-		if id != "" && str(t.Messages[i], "toolCallId") == id {
-			m = t.Messages[i]
-			break
-		}
+	index := t.toolCallIndex(id)
+	if index >= 0 {
+		m = t.Messages[index]
 	}
 	if m == nil {
 		invalidateChatSearch(t)
 		m = map[string]any{"role": "tool_call", "toolCallId": id}
 		t.Messages = append(t.Messages, m)
+		index = len(t.Messages) - 1
 	}
 	// Ownership also depends on the tool kind and a sub-agent result's ID,
 	// both of which can arrive after this row has already been rendered.
@@ -419,7 +420,7 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 	if toolKind(str(m, "name")) == "command" && (name == "tool:result" || name == "tool:error") {
 		key := str(m, "toolCallId")
 		if t.uiState().ToolOpen[key] {
-			a.loadCommandDetail(t, key)
+			a.loadCommandDetail(t, index, key)
 		}
 	}
 	toolName := str(p, "name")
@@ -604,11 +605,8 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 	// A sub-agent row is a message so it keeps its chronological place among
 	// the parent's tool cards; the event stream keeps that row up to date.
 	var row map[string]any
-	for i := len(t.Messages) - 1; i >= 0; i-- {
-		if str(t.Messages[i], "role") == "subagent" && str(t.Messages[i], "subId") == id {
-			row = t.Messages[i]
-			break
-		}
+	if i := t.subagentIndex(id); i >= 0 {
+		row = t.Messages[i]
 	}
 	if name == "sub:blackboard" {
 		if row != nil {
@@ -701,20 +699,19 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 					if run == nil || run.SessionID != sid {
 						continue
 					}
-					for _, msg := range t.Messages {
-						if str(msg, "role") == "subagent" && str(msg, "subId") == run.ID {
-							msg["steps"] = run.Steps
-							msg["summary"] = run.Summary
-							msg["error"] = run.Error
-							msg["stopReason"] = run.StopReason
-							msg["inputTokens"] = run.InputTokens
-							msg["outputTokens"] = run.OutputTokens
-							msg["contextTokens"] = run.ContextTokens
-							msg["cacheHitTokens"] = run.CacheHitTokens
-							msg["cacheMissTokens"] = run.CacheMissTokens
-							msg["status"] = strings.ToLower(run.Status)
-							mergeSubagentBlackboardRun(msg, run)
-						}
+					if i := t.subagentIndex(run.ID); i >= 0 {
+						msg := t.Messages[i]
+						msg["steps"] = run.Steps
+						msg["summary"] = run.Summary
+						msg["error"] = run.Error
+						msg["stopReason"] = run.StopReason
+						msg["inputTokens"] = run.InputTokens
+						msg["outputTokens"] = run.OutputTokens
+						msg["contextTokens"] = run.ContextTokens
+						msg["cacheHitTokens"] = run.CacheHitTokens
+						msg["cacheMissTokens"] = run.CacheMissTokens
+						msg["status"] = strings.ToLower(run.Status)
+						mergeSubagentBlackboardRun(msg, run)
 					}
 				}
 			})
