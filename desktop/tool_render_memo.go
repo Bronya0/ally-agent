@@ -44,7 +44,9 @@ type (
 	lineMemo        = memoOf[lineKey, string]
 )
 
-// createPreview holds the collapsed create card's tail and first line number.
+const createPreviewLines = 6
+
+// createPreview holds the create card's fixed tail and first line number.
 // The source text can be a whole file, so counting its lines on every frame is
 // avoided until the content changes.
 type createPreview struct {

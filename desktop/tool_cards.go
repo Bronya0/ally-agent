@@ -32,10 +32,10 @@ type toolDescriptor struct {
 var toolTable = map[string]toolDescriptor{
 	"read":               {"Reading", "Read", "Read failed", false, false},
 	"remote_read":        {"Remote Reading", "Remote Read", "Remote read failed", false, false},
-	"edit":               {"Editing", "Edited", "Edit failed", true, false},
-	"remote_edit":        {"Remote Editing", "Remote Edited", "Remote edit failed", true, false},
-	"create":             {"Creating", "Created", "Create failed", true, false},
-	"remote_create_file": {"Remote Creating", "Remote Created", "Remote create failed", true, false},
+	"edit":               {"Editing", "Edited", "Edit failed", false, false},
+	"remote_edit":        {"Remote Editing", "Remote Edited", "Remote edit failed", false, false},
+	"create":             {"Creating", "Created", "Create failed", false, false},
+	"remote_create_file": {"Remote Creating", "Remote Created", "Remote create failed", false, false},
 	"delete":             {"Deleting", "Deleted", "Delete failed", true, false},
 	"remote_delete_path": {"Remote Deleting", "Remote Deleted", "Remote delete failed", true, false},
 	"command":            {"Running", "Ran", "Command failed", true, true},
@@ -628,6 +628,16 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		desc.showTiming = false
 	}
 	result := toolResult(m)
+	editPath := ""
+	if name == "edit" && !isMCP {
+		editPath = toolEditFilePath(args, result)
+		if summary == "" {
+			summary = editPath
+			if files := list(args, "files"); len(files) > 1 {
+				summary = fmt.Sprintf("%d files", len(files))
+			}
+		}
+	}
 	if name == "scheduled_task" {
 		summary = a.scheduledTaskSummary(args, result)
 	}
@@ -639,14 +649,18 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	if key == "" {
 		key = fmt.Sprintf("%s-%d", t.ID, index)
 	}
-	open := t.uiState().ToolOpen[key]
+	open := expandable && t.uiState().ToolOpen[key]
 	p := a.currentPalette()
 	// Tool rows mirror main's .rich-tool-card: transparent, borderless, with a
 	// hanging status icon; the row itself carries the 6px rhythm below.
 	container.Children(func() {
 		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(gapTight).AlignItems(ui.Center).Justify(ui.Start).Label("工具详情 " + key)
-		if expandable {
+		if expandable || editPath != "" {
 			row.Cursor(ui.CursorPointer)
+		}
+		if editPath != "" {
+			uikit.Tooltip(c, row, "在编辑器打开 "+editPath)
+			row.OnClick(func() { a.openToolFile(t, editPath) })
 		}
 		row.Hidden(name == "suggest").Children(func() {
 			if name != "subagent" {
@@ -797,9 +811,14 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				for n, item := range list(result, "files") {
 					if file, ok := item.(map[string]any); ok {
 						if len(list(result, "files")) > 1 {
-							ui.Text(c, str(file, "path")).FontSize(fsSmall).TextColor(a.secondaryInk())
+							path := str(file, "path")
+							if name == "edit" && path != "" {
+								transcriptAction(c, fmt.Sprintf("%s-file-%d-open", key, n), path).OnClick(func() { a.openToolFile(t, path) })
+							} else {
+								ui.Text(c, path).FontSize(fsSmall).TextColor(a.secondaryInk())
+							}
 						}
-						a.diffBlock(c, fmt.Sprintf("%s-file-%d", key, n), str(file, "diff"), !open)
+						a.diffBlock(c, fmt.Sprintf("%s-file-%d", key, n), str(file, "diff"), true)
 					}
 				}
 			case name == "delete" || name == "remote_delete_path":
@@ -812,27 +831,24 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					notice(c, "error", reason, a.secondaryInk())
 				}
 			case (name == "edit" || name == "remote_edit") && str(result, "diff") != "":
-				a.diffBlock(c, key+"-diff", str(result, "diff"), !open)
+				a.diffBlock(c, key+"-diff", str(result, "diff"), true)
 			case name == "create" || name == "remote_create_file":
 				content := str(args, "content")
-				startLine := 1
 				if content == "" {
 					content = str(result, "content")
 				}
-				if !open {
-					preview := memoAt[createPreviewMemo](body, "create-preview").get(content, func(content string) createPreview {
-						return createPreview{
-							startLine: max(1, strings.Count(strings.TrimSuffix(content, "\n"), "\n")+1-5),
-							content:   tailLines(content, 6),
-						}
-					})
-					content, startLine = preview.content, preview.startLine
-				}
+				preview := memoAt[createPreviewMemo](body, "create-preview").get(content, func(content string) createPreview {
+					return createPreview{
+						startLine: max(1, strings.Count(strings.TrimRight(content, "\n"), "\n")+2-createPreviewLines),
+						content:   tailLines(content, createPreviewLines),
+					}
+				})
+				content = preview.content
 				if content != "" {
 					// One shape from the first streamed line to the result: a fixed-height
 					// box while the file was still arriving left a short card taller than its
 					// finished form, and finishing pulled everything below it up.
-					toolSourceWindow(c, key+"-source", content, str(args, "path"), open, startLine, a.secondaryInk())
+					toolSourceWindow(c, key+"-source", content, str(args, "path"), preview.startLine, a.secondaryInk())
 				}
 			case name == "suggest":
 				ui.Row(c).Wrap().Gap(gapInline).Children(func() {

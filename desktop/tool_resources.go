@@ -548,11 +548,7 @@ func diffLine(c *ui.Context, text string, changed bool, number int, ink ...ui.Co
 	})
 }
 
-func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, start int, ink ...ui.Color) {
-	height := float32(150)
-	if expanded {
-		height = 300
-	}
+func toolSourceWindow(c *ui.Context, key, text, path string, start int, ink ...ui.Color) {
 	body := func() {
 		row := ui.Row(c).AlignItems(ui.Start).Padding(2, 8, 4, 0).Gap(gapSection)
 		gutter := memoAt[lineMemo](row, "line-numbers")
@@ -561,11 +557,7 @@ func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, star
 			ui.RichText(c, codeSpans(c, text, path, ink...)...).Font(monoFamily).FontSize(readingCodeSize).FixedLineHeight(20).Selectable().NoWrap()
 		})
 	}
-	if expanded {
-		ui.ScrollBoth(c.Key(key)).FillWidth().Height(height).Shrink(0).Clip().Children(body)
-	} else {
-		ui.Box(c.Key(key)).FillWidth().MaxHeight(height).Clip().Children(body)
-	}
+	ui.Box(c.Key(key)).FillWidth().MaxHeight(150).Clip().Children(body)
 }
 
 // lineNumberColumn builds the number column of a source window: every line of

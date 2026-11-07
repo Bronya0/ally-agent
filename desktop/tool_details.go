@@ -9,6 +9,36 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// The result names the files actually edited. Arguments also support opening a
+// file while an edit is running or failed, including legacy single-file calls.
+func toolEditFilePath(args, result map[string]any) string {
+	for _, source := range []map[string]any{result, args} {
+		for _, key := range []string{"path", "file_path", "file"} {
+			if path := str(source, key); strings.TrimSpace(path) != "" {
+				return path
+			}
+		}
+		for _, raw := range list(source, "files") {
+			if file, ok := raw.(map[string]any); ok {
+				if path := str(file, "path"); strings.TrimSpace(path) != "" {
+					return path
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func (a *desktop) openToolFile(t *conversation, path string) {
+	// A queued click belongs to the conversation that drew it, just like the
+	// explorer's file operations. Never resolve its path in a different workspace.
+	if t == nil || a.current() != t || a.closing || strings.TrimSpace(path) == "" {
+		return
+	}
+	a.setExplorerOpen(true)
+	a.openFile(path)
+}
+
 // attachToolImage runs on event/session ingestion, never during rendering.
 func (a *desktop) attachToolImage(t *conversation, m map[string]any) {
 	name := toolKind(str(m, "name"))
