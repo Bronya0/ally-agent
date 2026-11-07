@@ -3,9 +3,12 @@ package desktop
 import (
 	backend "ally-dev/internal/app"
 	"bytes"
-	"github.com/egoist/mygo/ui"
+	"image"
+	"image/color"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestAgentHoverNewSessionKeepsLayout(t *testing.T) {
@@ -36,22 +39,152 @@ func TestAgentHoverNewSessionKeepsLayout(t *testing.T) {
 	}
 }
 
-func TestRailContentMovesWithWidth(t *testing.T) {
-	a := &desktop{prefs: defaultPrefs()}
-	var inset float32
+func TestRailContentKeepsOneColumn(t *testing.T) {
+	xs := map[float32]float32{}
+	for _, width := range []float32{160, 340} {
+		a := &desktop{prefs: defaultPrefs()}
+		a.prefs.RailWidth = width
+		tt := ui.NewTester(func(c *ui.Context) {
+			c.SetTheme(a.theme())
+			c.DisableAnimations()
+			a.railBody(c, &a.prefs.RailWidth)
+		}, 500, 850)
+		title, ok := tt.Find("历史工作区")
+		if !ok {
+			t.Fatalf("width=%v: section title not found", width)
+		}
+		xs[width] = title.X
+	}
+	// A wider rail keeps its content in one column, so nothing shifts when the
+	// window is resized or the rail collapses.
+	if xs[160] != xs[340] {
+		t.Fatalf("section title moved with the rail width: %v at 160, %v at 340", xs[160], xs[340])
+	}
+}
+
+// Collapsing the rail must not move the navigation entries at all: the badge and
+// the expanded row keep one column and one row pitch.
+func TestRailIconsShareOneColumn(t *testing.T) {
+	for _, page := range []string{"chat", "models"} {
+		a := &desktop{prefs: defaultPrefs(), page: page}
+		boxes := map[bool]ui.Rect{}
+		for _, expanded := range []bool{false, true} {
+			a.prefs.RailExpanded = expanded
+			tt := ui.NewTester(func(c *ui.Context) {
+				c.SetTheme(a.theme())
+				c.DisableAnimations()
+				a.rail(c)
+			}, 500, 850)
+			button, ok := tt.Find(navLabelFor(page))
+			if !ok {
+				t.Fatalf("page=%s expanded=%t: nav entry not found", page, expanded)
+			}
+			boxes[expanded] = button
+		}
+		// The entry keeps its left edge, its height and its place down the rail;
+		// only its width changes, since one state has no label to show.
+		if boxes[true].X != boxes[false].X || boxes[true].Y != boxes[false].Y || boxes[true].H != boxes[false].H {
+			t.Fatalf("page=%s: entry moved between states: collapsed %v, expanded %v", page, boxes[false], boxes[true])
+		}
+	}
+}
+
+func navLabelFor(page string) string {
+	for _, item := range baseModes {
+		if item.id == page {
+			return item.label
+		}
+	}
+	return "Agent"
+}
+
+// The navigation keeps one column and one row pitch as the rail opens; the
+// wordmark's own placement is covered by the header and centring tests.
+func TestRailKeepsItsColumnAcrossStates(t *testing.T) {
+	for _, expanded := range []bool{false, true} {
+		a := &desktop{prefs: defaultPrefs(), page: "chat"}
+		a.prefs.RailExpanded = expanded
+		tt := ui.NewTester(func(c *ui.Context) {
+			c.SetTheme(a.theme())
+			c.DisableAnimations()
+			ui.Column(c).Fill().Children(func() {
+				a.headerBar(c)
+				content := func() { ui.Column(c).Key("page-content").Grow(1).MinHeight(0).Fill() }
+				if a.prefs.RailExpanded {
+					ui.Split(c, &a.prefs.RailWidth, func() { a.rail(c) }, content).Grow(1).MinHeight(0).FillWidth()
+				} else {
+					ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+						a.rail(c)
+						content()
+					})
+				}
+			})
+		}, 1200, 800)
+		tt.Frame()
+		entry, okEntry := tt.Find("Agent")
+		if !okEntry {
+			t.Fatalf("expanded=%t: nav entry not found", expanded)
+		}
+		// The tinted block and the icons keep their column in both states.
+		if entry.X != 6 {
+			t.Fatalf("expanded=%t: selected block starts at %v, want 6", expanded, entry.X)
+		}
+		iconEdge := entry.X + railContentInset()
+		if !expanded {
+			iconEdge = entry.X + (heightRailItemCollapsed-sizeRailIconCollapsed)/2
+		}
+		if iconEdge != 12 {
+			t.Fatalf("expanded=%t: icons start at %v, want 12", expanded, iconEdge)
+		}
+	}
+}
+
+// The collapsed rail centres the wordmark across its whole width: the ink keeps
+// the same gap on both sides. Left-aligning it, or centring it in a narrower
+// column, breaks one of them.
+func TestCollapsedWordmarkIsCentred(t *testing.T) {
+	a := &desktop{prefs: defaultPrefs(), page: "chat"}
+	a.prefs.RailExpanded = false
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(a.theme())
-		a.railBody(c, &a.prefs.RailWidth)
-		inset = railContentInset(c)
-	}, 500, 850)
-	a.prefs.RailWidth = 200
+		c.DisableAnimations()
+		a.headerBar(c)
+	}, 200, 44)
 	tt.Frame()
-	narrow := inset
-	a.prefs.RailWidth = 340
-	tt.Frame()
-	if inset <= narrow {
-		t.Fatalf("wider sidebar did not inset content: %v -> %v", narrow, inset)
+	img := tt.Image()
+	left, right := inkEdges(img, 0, int(widthRailCollapsed), 8, 36, img.RGBAAt(180, 6), 40)
+	if left < 0 {
+		t.Fatal("no wordmark ink in the rail's width")
 	}
+	leftGap, rightGap := left, int(widthRailCollapsed)-1-right
+	if d := leftGap - rightGap; d > 1 || d < -1 {
+		t.Fatalf("wordmark is not centred: %d DIP on the left, %d on the right", leftGap, rightGap)
+	}
+}
+
+// inkEdges is the first and last column holding a pixel that differs from ref in
+// the given band, or -1 when the band is empty.
+func inkEdges(img *image.RGBA, x0, x1, y0, y1 int, ref color.RGBA, tol int) (int, int) {
+	first, last := -1, -1
+	for x := x0; x < x1; x++ {
+		for y := y0; y < y1; y++ {
+			if channelSpread(img.RGBAAt(x, y), ref) > tol {
+				if first < 0 {
+					first = x
+				}
+				last = x
+				break
+			}
+		}
+	}
+	return first, last
+}
+
+func channelSpread(a, b color.RGBA) int {
+	dr := int(a.R) - int(b.R)
+	dg := int(a.G) - int(b.G)
+	db := int(a.B) - int(b.B)
+	return max(max(dr, -dr), max(max(dg, -dg), max(db, -db)))
 }
 
 // Revealing the reserved delete slot must keep the title stable, and the
@@ -122,7 +255,8 @@ func TestExpandedRailToggleStaysAtBottom(t *testing.T) {
 				})
 			}, 1000, height)
 			button, ok := tt.Find("收起侧边栏")
-			if !ok || button.Y+button.H != float32(height)-6 {
+			// The rail's vertical padding is 4, matching the collapsed rail.
+			if !ok || button.Y+button.H != float32(height)-4 {
 				t.Fatalf("height=%d sectionsOpen=%t: toggle is not at bottom: %v", height, sectionsOpen, button)
 			}
 		}
