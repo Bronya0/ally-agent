@@ -213,16 +213,13 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 			enabled := p.Enabled
 			uikit.SwitchNative(c.Key("plugin-switch-"+p.ID), &enabled).Disabled(a.pluginsF.Busy || !p.Valid).Label(name).OnClick(func() { a.setPluginEnabled(p, enabled) })
 			p := p
-			exportButton := disclosure(c, "plugin-export-button-"+p.ID, "导出", disclosureCard, "chevrondown").Disabled(a.pluginsF.Busy)
-			menuPopoverButton(c, exportButton, 210, func(dismiss func()) {
-				popoverItem(c, "plugin-export-package-"+p.ID, "导出（只含包本体）", "", false, func() {
-					dismiss()
+			disclosureMenu(c, "plugin-export-button-"+p.ID, "导出", disclosureCard, 210, a.pluginsF.Busy, func(m ui.MenuParts) {
+				uikit.MenuItem(c, m, "package", "导出（只含包本体）", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
 					a.exportPlugin(p, false)
-				}, a.secondaryInk())
-				popoverItem(c, "plugin-export-data-"+p.ID, "导出（连插件数据一起）", "", false, func() {
-					dismiss()
+				})
+				uikit.MenuItem(c, m, "data", "导出（连插件数据一起）", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
 					a.exportPlugin(p, true)
-				}, a.secondaryInk())
+				})
 			})
 			cardDanger(c, "删除").Disabled(a.pluginsF.Busy).OnClick(func() {
 				a.pluginsF.DeleteID = p.ID

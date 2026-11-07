@@ -121,6 +121,7 @@ export function createPluginHost(plugin, env = {}, ui = {}) {
   const canReadWorkspace = permissions.workspace === 'read' || permissions.workspace === 'write';
   const bus = createEventBus();
   const stopThemeWatch = onThemeChange(() => bus.emit('theme'));
+  let hostDisposePromise;
 
   const store = {
     async get() {
@@ -236,8 +237,11 @@ export function createPluginHost(plugin, env = {}, ui = {}) {
     __host: {
       emit: bus.emit,
       dispose: () => {
-        stopThemeWatch();
-        bus.clear();
+        if (!hostDisposePromise) hostDisposePromise = Promise.resolve().then(() => {
+          stopThemeWatch();
+          bus.clear();
+        });
+        return hostDisposePromise;
       },
     },
   };
@@ -276,28 +280,33 @@ export async function mountPlugin(plugin, element, env, ui) {
   try {
     unmount = await module.mount(element, host);
   } catch (err) {
-    host.__host.dispose();
+    await host.__host.dispose();
     throw err;
   }
+  let disposePromise;
   return {
     host,
     setActive(active) {
-      host.__host.emit(active ? 'shown' : 'hidden');
+      if (!disposePromise) host.__host.emit(active ? 'shown' : 'hidden');
     },
     // dispose 会清空 element，所以调用方必须传「本次挂载专属」的容器：传共享容器时，
     // 过期的那次挂载回头清理就会把后来者已渲染的内容一起清掉（见 PluginPage.vue）。
     dispose: () => {
-      try {
-        host.__host.emit('hidden');
-      } catch {
-        /* 卸载阶段的报错不该影响宿主 */
-      }
-      try {
-        if (typeof unmount === 'function') unmount();
-      } finally {
-        host.__host.dispose();
-        if (element) element.innerHTML = '';
-      }
+      // Assign before invoking plugin code, including reentrant hidden handlers.
+      if (!disposePromise) disposePromise = Promise.resolve().then(async () => {
+        try {
+          host.__host.emit('hidden');
+        } catch {
+          /* 卸载阶段的报错不该影响宿主 */
+        }
+        try {
+          if (typeof unmount === 'function') await unmount();
+        } finally {
+          await host.__host.dispose();
+          if (element) element.innerHTML = '';
+        }
+      });
+      return disposePromise;
     },
   };
 }

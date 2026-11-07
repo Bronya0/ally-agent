@@ -31,9 +31,11 @@ type uiPrefs struct {
 	TreeWidth          float32  `json:"treeWidth"`
 	SeenReleaseNotes   string   `json:"seenReleaseNotes"`
 	DismissedUpdateTag string   `json:"dismissedUpdateTag"`
-	VoiceInputEnabled  bool     `json:"voiceInputEnabled,omitempty"`
-	VoiceModelID       string   `json:"voiceModelId,omitempty"`
-	VoiceHotkey        string   `json:"voiceHotkey,omitempty"`
+	// AutostartInitialized gates the one-time default, not the current OS state.
+	AutostartInitialized bool   `json:"autostartInitialized"`
+	VoiceInputEnabled    bool   `json:"voiceInputEnabled,omitempty"`
+	VoiceModelID         string `json:"voiceModelId,omitempty"`
+	VoiceHotkey          string `json:"voiceHotkey,omitempty"`
 	// VoiceModifierLeft and VoiceModifierRight decide which physical sides of
 	// Ctrl/Alt/Shift/Win satisfy a hotkey modifier. Both are on by default, so a
 	// chord never has to pin a side.
@@ -68,13 +70,22 @@ func readPrefs(path string) uiPrefs {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return defaultPrefs()
+		p := defaultPrefs()
+		// Only a missing file establishes a new installation; other read errors
+		// must not turn an existing opt-out back on.
+		p.AutostartInitialized = !os.IsNotExist(err)
+		return p
 	}
 	p := defaultPrefs()
+	// Existing records predate the default-on behavior. Keep their OS state,
+	// including an explicit opt-out, rather than enabling it during an upgrade.
+	p.AutostartInitialized = true
 	// Older records infer appearance from the palette when this field is absent.
 	p.Appearance = ""
 	if json.Unmarshal(data, &p) != nil {
-		return defaultPrefs()
+		p = defaultPrefs()
+		p.AutostartInitialized = true
+		return p
 	}
 	if p.RailWidth < 160 || p.RailWidth > 360 {
 		p.RailWidth = 220
@@ -101,8 +112,8 @@ func readPrefs(path string) uiPrefs {
 	return p
 }
 
-// savePrefs is fire-and-forget: preferences are cosmetic, and a failed write
-// must never interrupt the UI.
+// savePrefs writes an owned snapshot asynchronously. Failures are reported
+// without blocking the UI and retained for the quit/update save barrier.
 func (a *desktop) savePrefs(notice ...string) {
 	if a.prefsGeometryTimer != nil {
 		a.prefsGeometryTimer.Stop()
@@ -220,9 +231,6 @@ type chatUI struct {
 	SessionsIndex          int
 	ModelOpen              bool
 	ModelSearch            string
-	ModelGroup             string // the group whose flyout shows; one at a time
-	FlyoutHot              bool   // the pointer is inside that flyout
-	FlyoutDismiss          string // the group Escape closed; its row stays shut until the pointer leaves
 	ContextOpen            bool
 	PromptPartsOpen        bool // the prompt's sections are detail: folded until the parent row is clicked
 	ExtraRootsOpen         bool
@@ -352,6 +360,7 @@ func (a *desktop) syncSettingsForm() {
 	f.Concurrency = float64(a.configDraft.ToolConcurrency)
 	f.AllowPrivate = boolValue(a.configDraft.AllowPrivateNetwork)
 	f.AutoUpdate = a.configDraft.AutoUpdate == nil || *a.configDraft.AutoUpdate
+	f.Autostart = a.autostartValue
 	f.SendSessionID = a.configDraft.SendSessionIDHeader == nil || *a.configDraft.SendSessionIDHeader
 	f.SendXSessionID = a.configDraft.SendXSessionIDHeader == nil || *a.configDraft.SendXSessionIDHeader
 	f.CompactTimeout = float64(a.configDraft.CompactTimeoutSeconds)

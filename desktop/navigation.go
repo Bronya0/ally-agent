@@ -39,8 +39,12 @@ func windowButton(c *ui.Context, id, tip, icon string, background ui.Color, clos
 // navItem is one sidebar entry: a 34px row when the rail is expanded, a square
 // badge when it is collapsed. Active entries get the accent tint and ink.
 func navItem(c *ui.Context, id, label, iconName string, expanded, active bool, trailing func(), ink ...ui.Color) ui.Element {
+	return navItemOn(c, ui.ButtonBase(c.Key(id)), label, iconName, expanded, active, trailing, ink...)
+}
+
+func navItemOn(c *ui.Context, b ui.Element, label, iconName string, expanded, active bool, trailing func(), ink ...ui.Color) ui.Element {
 	t := c.Theme()
-	b := ui.ButtonBase(c.Key(id)).Height(heightRailItem).Justify(ui.Start).
+	b.Height(heightRailItem).Justify(ui.Start).
 		Radius(radiusControl).Label(label).Cursor(ui.CursorPointer)
 	if expanded {
 		b.FillWidth()

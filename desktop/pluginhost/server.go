@@ -2,6 +2,7 @@
 package pluginhost
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,16 +32,24 @@ type Theme struct {
 	Tokens map[string]string `json:"tokens"`
 }
 type page struct {
-	info       backend.PluginInfo
-	workspace  string
-	view       *mygo.WebView
-	server     *http.Server
-	url, token string
-	mu         sync.Mutex
-	state      Theme
-	changed    chan struct{}
-	closed     bool
-	used       uint64
+	info         backend.PluginInfo
+	workspace    string
+	view         *mygo.WebView
+	surface      pluginSurface
+	off          []func()
+	ctx          context.Context
+	cancel       context.CancelFunc
+	retireCancel context.CancelFunc
+	rpcs         sync.WaitGroup
+	retiring     bool
+	cleanupRPC   int
+	server       *http.Server
+	url, token   string
+	mu           sync.Mutex
+	state        Theme
+	changed      chan struct{}
+	closed       bool
+	used         uint64
 }
 
 func pluginRelativePath(raw string) (string, error) {
@@ -70,11 +79,27 @@ func (p *page) rpc(h *Host, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.mu.Lock()
-	closed := p.closed
-	p.mu.Unlock()
-	if closed {
+	cleanup := call.Method == "PluginStoreGet" || call.Method == "PluginStoreSet" || call.Method == "LogFrontendError"
+	if p.closed || (p.retiring && (!cleanup || p.cleanupRPC >= 8)) {
+		p.mu.Unlock()
 		http.Error(w, "closed", 410)
 		return
+	}
+	if p.retiring {
+		p.cleanupRPC++
+	}
+	p.rpcs.Add(1)
+	pageCtx := p.ctx
+	p.mu.Unlock()
+	defer p.rpcs.Done()
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	if pageCtx != nil {
+		stop := context.AfterFunc(pageCtx, cancel)
+		defer stop()
+		if pageCtx.Err() != nil {
+			cancel()
+		}
 	}
 	var result any
 	var err error
@@ -90,13 +115,13 @@ func (p *page) rpc(h *Host, w http.ResponseWriter, r *http.Request) {
 		var req backend.PluginHTTPRequest
 		if err = arg(0, &req); err == nil {
 			req.PluginID = p.info.ID
-			result, err = h.core.PluginHTTPRequest(req)
+			result, err = h.core.PluginHTTPRequestContext(ctx, req)
 		}
 	case "PluginStoreGet":
-		result, err = h.core.PluginStoreGet(p.info.ID)
+		result, err = h.core.PluginStoreGetForVersion(p.info.ID, p.info.UpdatedAt)
 	case "PluginStoreSet":
 		if err = arg(1, &value); err == nil {
-			err = h.core.PluginStoreSet(p.info.ID, value)
+			err = h.core.PluginStoreSetForVersion(p.info.ID, p.info.UpdatedAt, value)
 		}
 	case "ReadWorkspaceFileAt", "ListFiles", "GetWorkspaceFileInfoAt", "GetWorkspaceMediaURL", "OpenPathInFileManager":
 		if p.info.Permissions.Workspace != "read" || p.workspace == "" {
@@ -144,11 +169,7 @@ func (p *page) rpc(h *Host, w http.ResponseWriter, r *http.Request) {
 		err = arg(0, &value)
 		_ = arg(1, &kind)
 		if err == nil {
-			h.win.Update(func() {
-				if !h.closed {
-					h.notify(value, kind)
-				}
-			})
+			h.post(func() { h.deliverNotify(p, value, kind) })
 		}
 	default:
 		err = errors.New("unsupported plugin method")
@@ -183,7 +204,7 @@ func (p *page) serveEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	for {
 		p.mu.Lock()
-		s, closed := p.state, p.closed
+		s, closed := p.state, p.closed || p.retiring
 		p.mu.Unlock()
 		if closed {
 			return
@@ -197,6 +218,8 @@ func (p *page) serveEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-p.ctx.Done():
+			return
 		case <-p.changed:
 		}
 	}
@@ -207,7 +230,8 @@ func (h *Host) newServer(info backend.PluginInfo, workspace string, state Theme)
 	if err != nil {
 		return nil, err
 	}
-	p := &page{info: info, workspace: workspace, url: "http://" + listener.Addr().String(), token: uuid.NewString(), state: state, changed: make(chan struct{}, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &page{info: info, workspace: workspace, url: "http://" + listener.Addr().String(), token: uuid.NewString(), state: state, changed: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
 	assets, _ := fs.Sub(resources.Assets, "plugin")
 	static := http.FileServer(http.FS(assets))
 	mux := http.NewServeMux()

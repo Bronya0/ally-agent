@@ -53,6 +53,11 @@ func ButtonWithOptions(c *ui.Context, key any, label string, variant ButtonVaria
 	if key != nil {
 		c = c.Key(key)
 	}
+	return ButtonOn(c, ui.ButtonBase(c), label, variant, small, icon, options)
+}
+
+// ButtonOn shares Button's chrome with controls that own their trigger.
+func ButtonOn(c *ui.Context, trigger ui.Element, label string, variant ButtonVariant, small bool, icon *ui.SVG, options ActionOptions) (ui.Element, ui.Element) {
 	o := options
 	o.Style = Tertiary
 	o.Small = small
@@ -67,7 +72,7 @@ func ButtonWithOptions(c *ui.Context, key any, label string, variant ButtonVaria
 	case ButtonGhost:
 		o.Style = Tertiary
 	}
-	b, text := actionParts(c, label, o)
+	b, text := actionPartsOn(c, trigger, label, o)
 	if variant == ButtonGhost {
 		b.Background(ui.Transparent).Border(0, ui.Transparent)
 	}
@@ -103,6 +108,11 @@ func IconButton(c *ui.Context, id, tip string, icon *ui.SVG, size float32, tone 
 // IconButtonSized 把命中方块和画出来的图标分开传：紧凑工具条上的关闭按钮要有
 // ≥22 DIP 的命中区，图标却仍该是原来的 11 DIP。
 func IconButtonSized(c *ui.Context, id, tip string, icon *ui.SVG, size, glyph float32, tone IconTone, fn func(), ink ...ui.Color) ui.Element {
+	return IconButtonOn(c, ui.ButtonBase(c.Key(id)).OnClick(fn), tip, icon, size, glyph, tone, ink...)
+}
+
+// IconButtonOn draws the same glyph and chrome on a MenuBase trigger.
+func IconButtonOn(c *ui.Context, trigger ui.Element, tip string, icon *ui.SVG, size, glyph float32, tone IconTone, ink ...ui.Color) ui.Element {
 	t := c.Theme()
 	muted := SecondaryInk(c, ink)
 	color, hoverColor := muted, t.Text
@@ -118,7 +128,7 @@ func IconButtonSized(c *ui.Context, id, tip string, icon *ui.SVG, size, glyph fl
 	case IconAccentOn:
 		color, hoverColor, hoverFill = t.Accent, t.AccentHover, ui.Transparent
 	}
-	b := Tooltip(c, ui.ButtonBase(c.Key(id)).Size(size, size).Center().Radius(RadiusSmall).Label(tip), tip).Cursor(ui.CursorPointer).OnClick(fn)
+	b := Tooltip(c, trigger.Size(size, size).Center().Radius(RadiusSmall).Label(tip), tip).Cursor(ui.CursorPointer)
 	if !b.IsDisabled() && b.Hovered() {
 		color = hoverColor
 		fill = hoverFill

@@ -51,7 +51,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 			}
 		}
 	}
-	if t.Scroll.Y < 1e8 && t.Scroll.Y < st.LastScrollY-2 {
+	if t.Scroll.Y < 1e8 && t.Scroll.Y < st.LastScrollY-2 && t.Scroll.Y < t.Scroll.MaxY-2 {
 		st.Follow = false
 		st.FollowPending = false
 	}
@@ -61,7 +61,9 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	if t.Scroll.Y < 1e8 {
 		st.LastScrollY = t.Scroll.Y
 	}
-	if st.Follow && st.FollowPending {
+	// Keep the end pinned through later layouts too: Markdown wrapping and
+	// composer height can change after the initial restore has scrolled.
+	if st.Follow {
 		t.Scroll.Y = math.MaxFloat32
 		st.FollowPending = false
 	}
@@ -448,31 +450,26 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("%d token/s", int(float64(stat.OutputTokens)/modelSeconds))).FontSize(fsSmall).TextColor(a.secondaryInk()), "累计模型请求耗时内的平均输出速度，包含首 token 等待，不含工具执行时间")
 		}
 		services := c.Services()
-		exportButton := mutedIconAction(c, widgetKey("export", "", i), "导出", "download", 22, nil)
-		menuPopoverButton(c, exportButton, 180, func(dismiss func()) {
-			popoverItem(c, widgetKey("export-answer", "", i), "导出回答", "", false, func() {
-				dismiss()
+		iconMenu(c, widgetKey("export", "", i), "导出", "download", 22, 180, func(m ui.MenuParts) {
+			uikit.MenuItem(c, m, "answer", "导出回答", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
 				a.exportText("ally-response.md", str(t.Messages[i], "content"))
-			}, a.secondaryInk())
-			popoverItem(c, widgetKey("export-session", "", i), "导出会话", "", false, func() {
-				dismiss()
+			})
+			uikit.MenuItem(c, m, "session", "导出会话", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
 				a.exportText("ally-session.md", sessionMarkdown(t))
-			}, a.secondaryInk())
-		})
+			})
+		}, a.secondaryInk())
 		mutedIconAction(c, widgetKey("copy-summary", "", i), "复制总结", "copy", 22, func() {
 			services.WriteClipboard(str(t.Messages[i], "content"))
 			c.Toast("已复制最终总结")
 		})
-		quickButton := mutedIconAction(c, widgetKey("quick", "", i), "快捷消息", "wand", 22, nil)
-		menuPopoverButton(c, quickButton, 180, func(dismiss func()) {
+		iconMenu(c, widgetKey("quick", "", i), "快捷消息", "wand", 22, 180, func(m ui.MenuParts) {
 			for _, item := range quickMessages {
 				item := item
-				popoverItem(c, fmt.Sprintf("quick-%d-%s", i, item.label), item.label, "", false, func() {
-					dismiss()
+				uikit.MenuItem(c, m, item.label, item.label, uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
 					a.send(t, item.prompt)
-				}, a.secondaryInk())
+				})
 			}
-		})
+		}, a.secondaryInk())
 		mutedIconAction(c, widgetKey("remember", "", i), "记住这次对话的长期记忆", "book", 22, func() {
 			a.send(t, projectMemoryPrompt+"\n\nLocal date for this memory update: "+time.Now().Format("2006-01-02")+".")
 		})
@@ -811,7 +808,7 @@ func (a *desktop) planPanel(c *ui.Context, t *conversation) {
 			})
 		})
 		parts.Panel(func() {
-			scroll := ui.Scroll(c.Key("plan-scroll-"+t.ID)).Height(150).Padding(0, 6, 4).Gap(gapInline)
+			scroll := ui.Scroll(c.Key("plan-scroll-"+t.ID)).MaxHeight(150).Padding(0, 6, 4).Gap(gapInline)
 			lastScrolledRevision := ui.Local(scroll, "auto-scroll-revision", func() int64 { return -1 })
 			revision := a.planRev[t.ID]
 			autoScroll := open && *lastScrolledRevision != revision

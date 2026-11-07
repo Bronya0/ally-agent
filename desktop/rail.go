@@ -194,18 +194,21 @@ func (a *desktop) railModeButton(c *ui.Context, expanded bool, id, label, iconNa
 // railGroupButton opens the group's pages in the app's own menu panel, the same
 // one the composer selectors use: the current page carries the accent tint.
 func (a *desktop) railGroupButton(c *ui.Context, expanded bool, head backend.PluginInfo, title string, group []int, active bool) {
-	button := railNavigationButton(c, "nav-group-"+head.ID, title, "plugins", expanded, active, func() {
-		iconGlyph(c, "chevrondown", sizeCaretInline).Shrink(0)
-	}, a.secondaryInk())
-	menuPopoverButton(c, button, 210, func(dismiss func()) {
+	root := uikit.MenuButton(c.Key("nav-group-"+head.ID), nil, uikit.MenuOptions{Width: 210}, func(b ui.Element) {
+		navItemOn(c, b, title, "plugins", expanded, active, func() {
+			iconGlyph(c, "chevrondown", sizeCaretInline).Shrink(0)
+		}, a.secondaryInk())
+	}, func(m ui.MenuParts) {
 		for _, i := range group {
 			item := a.plugins[i]
-			popoverItem(c, "nav-group-"+item.ID, pluginTitle(item), "", item.Mode == a.page, func() {
-				dismiss()
+			uikit.MenuItem(c, m, item.ID, pluginTitle(item), uikit.MenuItemOptions{Choice: true, Selected: item.Mode == a.page}, a.secondaryInk()).OnClick(func() {
 				a.changePage(item.Mode)
-			}, a.secondaryInk())
+			})
 		}
 	})
+	if expanded {
+		root.FillWidth()
+	}
 }
 
 func (a *desktop) railWorkspaces(c *ui.Context) {

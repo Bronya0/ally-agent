@@ -75,8 +75,19 @@ func Action(c *ui.Context, label string, o ActionOptions) ui.Element {
 	b, _ := actionParts(c, label, o)
 	return b
 }
+
+// ActionOn applies the shared action style to a framework-owned trigger.
+func ActionOn(c *ui.Context, b ui.Element, label string, o ActionOptions) ui.Element {
+	b, _ = actionPartsOn(c, b, label, o)
+	return b
+}
+
 func actionParts(c *ui.Context, label string, o ActionOptions) (ui.Element, ui.Element) {
-	b := ui.ButtonBase(c).AlignSelf(ui.Start).Shrink(0).Label(label).Disabled(o.Disabled || o.Loading).Cursor(ui.CursorPointer)
+	return actionPartsOn(c, ui.ButtonBase(c), label, o)
+}
+
+func actionPartsOn(c *ui.Context, b ui.Element, label string, o ActionOptions) (ui.Element, ui.Element) {
+	b.AlignSelf(ui.Start).Shrink(0).Label(label).Disabled(o.Disabled || o.Loading).Cursor(ui.CursorPointer)
 	h := float32(34)
 	if o.Small {
 		h = 28

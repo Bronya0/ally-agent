@@ -24,12 +24,12 @@ func TestSessionHeaderDisableConfirmation(t *testing.T) {
 			label := "自动发送 " + header
 			clickSwitch := func() {
 				t.Helper()
-				// The text and the switch share a label; Find returns the text first.
-				r, ok := tt.Find(label)
+				control, ok := tt.AccessByRole(ui.RoleSwitch, label)
 				if !ok {
-					t.Fatalf("missing switch label %q", label)
+					t.Fatalf("missing switch %q", label)
 				}
-				tt.ClickAt(r.X+r.W+gapSection+20, r.Y+r.H+1)
+				r := control.Bounds
+				tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
 			}
 			open := func() {
 				t.Helper()

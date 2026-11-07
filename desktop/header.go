@@ -87,26 +87,14 @@ func (a *desktop) headerBar(c *ui.Context) {
 				a.togglePetals()
 			}
 		})
-		// One popover serves both workspace entries. Build it here, after either
-		// button has had its say this frame, against the entry that owns it: built
-		// from inside each entry, a press that switched entries would leave the first
-		// panel closing and put the second one up beside it in the same frame.
-		plus := a.workspaceTabs(c)
-		add := a.headerActions(c)
-		switch a.workspaceMenuFrom {
-		case "tabs":
-			a.workspaceMenu(c, "tabs", plus)
-		case "header":
-			a.workspaceMenu(c, "header", add)
-		}
+		a.workspaceTabs(c)
+		a.headerActions(c)
 	})
 }
 
-// workspaceTabs draws the open workspaces and the plus after the last one, and
-// returns that plus: the header bar attaches the workspace menu to it.
-func (a *desktop) workspaceTabs(c *ui.Context) ui.Element {
+// workspaceTabs draws open workspaces and their history-menu entry.
+func (a *desktop) workspaceTabs(c *ui.Context) {
 	s := a.tabStripOf("header-tabs")
-	var plus ui.Element
 	ui.Box(c).Grow(1).MinWidth(0).FillHeight().Clip().Children(func() {
 		tabScroller(c, s).FillWidth().FillHeight().Children(func() {
 			ui.Row(c).FillHeight().AlignItems(ui.Stretch).Gap(0).Padding(0).Children(func() {
@@ -123,7 +111,9 @@ func (a *desktop) workspaceTabs(c *ui.Context) ui.Element {
 						if a.page == "models" {
 							a.cancelOAuthWhenLeaving()
 						}
-						a.releaseFilePreview()
+						if a.page != "chat" || idx != a.active {
+							a.releaseFilePreview()
+						}
 						a.page = "chat"
 						a.activateTab(idx)
 						a.refreshFiles()
@@ -134,72 +124,48 @@ func (a *desktop) workspaceTabs(c *ui.Context) ui.Element {
 				// The plus closes the strip, right where the tabs end: it asks for
 				// another workspace and opens the same history the header's add
 				// button does — one menu, built by whichever entry opened it.
-				plus = mutedIconAction(c, "tabs-workspace-add", "打开工作区历史", "plus", 26, func() {
-					a.toggleWorkspaceMenu("tabs")
-				}).AlignSelf(ui.Center).Shrink(0).MarginStart(4).Disabled(!a.ready)
+				a.workspaceHistoryMenu(c.Key("tabs-workspace-add"), func(b ui.Element) {
+					uikit.IconButtonOn(c, b.Disabled(!a.ready), "打开工作区历史", iconImage("plus"), 26, 26*uikit.IconGlyphScale, uikit.IconQuiet, a.secondaryInk())
+				}).AlignSelf(ui.Center).MarginStart(4)
 			})
 		})
 	})
 	s.pan()
-	return plus
 }
 
 // Header history always creates a fresh tab, matching main's onHistorySelect.
 // The sidebar keeps its separate switch-to-workspace behavior.
 func (a *desktop) openWorkspaceEntry(workspace string) { a.newConversation(workspace) }
 
-// toggleWorkspaceMenu opens the workspace history under one of its two entries,
-// "header" (the add button) or "tabs" (the plus beside the last tab). They share
-// one state and one panel, so only the entry that opened it renders the menu.
-func (a *desktop) toggleWorkspaceMenu(from string) {
-	if a.workspaceMenuOpen && a.workspaceMenuFrom == from {
-		a.workspaceMenuOpen = false
-		return
-	}
-	a.workspaceMenuFrom = from
-	a.workspaceMenuOpen = true
-}
-
-// workspaceMenu draws the workspace history under the entry named by from. Each
-// entry keeps its own key, so the panel of one never stands in for the other's.
-func (a *desktop) workspaceMenu(c *ui.Context, from string, anchor ui.Element) {
-	ui.PopoverBase(c.Key("workspace-menu-"+from), anchor, &a.workspaceMenuOpen, func(panel ui.Element) {
-		popoverChrome(c, panel, 300)
-		panel.Label("工作区历史菜单")
-		panel.AttachTo(anchor, ui.AnchorBottomRight, ui.AnchorTopRight).Top(6).MaxHeightPercent(85).Transition(uikit.PopupTransition())
-		popoverItem(c, "add", "＋ 添加工作区", "", false, func() { a.workspaceMenuOpen = false; a.chooseWorkspace() }, a.secondaryInk())
-		popoverItem(c, "temporary", "临时工作区", "", false, func() { a.workspaceMenuOpen = false; a.newConversation("") }, a.secondaryInk())
+// Both workspace entries share the same menu builder. Their open flags belong
+// to the controls, not global desktop state; MenuBase handles outside presses.
+func (a *desktop) workspaceHistoryMenu(c *ui.Context, trigger func(ui.Element)) ui.Element {
+	return uikit.MenuButton(c, nil, uikit.MenuOptions{
+		Width: 300, MaxHeightPercent: 85, Label: "工作区历史菜单",
+		At: ui.AnchorBottomRight, Self: ui.AnchorTopRight, Gap: 6,
+	}, trigger, func(m ui.MenuParts) {
+		uikit.MenuItem(c, m, "add", "＋ 添加工作区", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(a.chooseWorkspace)
+		uikit.MenuItem(c, m, "temporary", "临时工作区", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.newConversation("") })
 		divider(c)
-		_, height := c.Size()
-		ui.Scroll(c.Key("history")).FillWidth().MinHeight(0).MaxHeight(max(float32(80), min(float32(460), height-150))).Children(func() {
-			roots := a.sessionWorkspaceRoots()
-			for _, root := range roots {
-				b := ui.ButtonBase(c.Key(root)).FillWidth().Height(32).Padding(0, 9).Gap(gapField).Justify(ui.Start).AlignItems(ui.Center).Radius(radiusSmall).Cursor(ui.CursorPointer).Label("打开工作区 " + root)
-				fill := ui.Transparent
-				if b.Hovered() {
-					fill = c.Theme().SurfaceHover
-				}
-				b.Background(fadeColor(b, "history-fill", fill)).OnClick(func() { a.workspaceMenuOpen = false; a.openWorkspaceEntry(root) })
-				b.Children(func() {
-					iconGlyph(c, "folderopen", 15).Shrink(0).TextColor(a.secondaryInk())
-					ui.Text(c, filepath.Base(root)).FontSize(fsSmall).TextColor(c.Theme().Text).SingleLine().MinWidth(0)
-				})
-				uikit.Tooltip(c, b, root)
-			}
-			if len(roots) == 0 {
-				muted(c, "无历史记录", fsSmall, a.secondaryInk()).Padding(padRow)
-			}
-		})
+		roots := a.sessionWorkspaceRoots()
+		for _, root := range roots {
+			root := root
+			item := uikit.MenuItem(c, m, root, filepath.Base(root), uikit.MenuItemOptions{Icon: iconImage("folderopen"), FontSize: fsSmall}, a.secondaryInk()).
+				Label("打开工作区 "+root).Height(32).Padding(0, 9)
+			uikit.Tooltip(c, item, root).OnClick(func() { a.openWorkspaceEntry(root) })
+		}
+		if len(roots) == 0 {
+			muted(c, "无历史记录", fsSmall, a.secondaryInk()).Padding(padRow)
+		}
 	})
 }
 
-// headerActions is the right side of the header: the add button, the file
-// explorer toggle and the window actions. It returns its add button, which the
-// header bar attaches the workspace menu to.
-func (a *desktop) headerActions(c *ui.Context) ui.Element {
+// headerActions draws the workspace history, explorer and window actions.
+func (a *desktop) headerActions(c *ui.Context) {
 	p := a.currentPalette()
-	add := addButton(c, "workspace-add", "添加工作区", "addfolder", 30, func() { a.toggleWorkspaceMenu("header") })
-	add.Disabled(!a.ready)
+	a.workspaceHistoryMenu(c.Key("workspace-add"), func(b ui.Element) {
+		addButtonOn(c, b.Disabled(!a.ready), "添加工作区", "addfolder", 30)
+	})
 
 	pageOK := a.page == "chat" || strings.HasPrefix(a.page, "plugin:")
 	// The explorer toggle carries the theme colour even while it is off: a muted
@@ -240,7 +206,6 @@ func (a *desktop) headerActions(c *ui.Context) ui.Element {
 		closeBtn := windowButton(c, "window-close", closeLabel, "close", p.headerColor(), true, func() { a.win.Close() }, a.secondaryInk())
 		_ = closeBtn
 	}
-	return add
 }
 
 func workspaceLabel(root string) string {

@@ -35,7 +35,10 @@ func fadeColor(e ui.Element, key string, target ui.Color) ui.Color {
 // ---- Design tokens -------------------------------------------------------
 
 const (
-	chatMaxWidth float32 = 1120
+	chatMaxWidth         float32 = 1120
+	settingsMaxWidth     float32 = 1040
+	settingsControlWidth         = uikit.FormControlWidth
+	settingsNumberWidth  float32 = 200
 	// 间距与圆角刻度也只有一份，在 uikit 的 Gap*/Pad*/Radius*；这里只是别名。
 	// gapPage、padPage、radiusControl 是 desktop 自己的页面尺度，uikit 没有对应档。
 	gapTight           = uikit.GapTight

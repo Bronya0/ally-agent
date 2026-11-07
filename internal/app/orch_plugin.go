@@ -666,7 +666,17 @@ func (a *App) SetPluginEnabled(id string, enabled bool) error {
 
 // PluginStoreGet 读插件自己的 data.json（不存在返回空串）。
 func (a *App) PluginStoreGet(id string) (string, error) {
+	return a.PluginStoreGetForVersion(id, "")
+}
+
+// PluginStoreGetForVersion rejects a retired realm from an older installation.
+func (a *App) PluginStoreGetForVersion(id, version string) (string, error) {
 	if err := a.ensureInitialized(); err != nil {
+		return "", err
+	}
+	a.pluginMu.Lock()
+	defer a.pluginMu.Unlock()
+	if err := a.checkPluginStoreVersion(id, version); err != nil {
 		return "", err
 	}
 	manifest, _, err := a.installedManifest(id)
@@ -685,7 +695,17 @@ func (a *App) PluginStoreGet(id string) (string, error) {
 
 // PluginStoreSet 写插件自己的 data.json（要求是合法 JSON，且有体积上限）。
 func (a *App) PluginStoreSet(id, value string) error {
+	return a.PluginStoreSetForVersion(id, "", value)
+}
+
+// PluginStoreSetForVersion shares the install/delete lock through the atomic write.
+func (a *App) PluginStoreSetForVersion(id, version, value string) error {
 	if err := a.ensureInitialized(); err != nil {
+		return err
+	}
+	a.pluginMu.Lock()
+	defer a.pluginMu.Unlock()
+	if err := a.checkPluginStoreVersion(id, version); err != nil {
 		return err
 	}
 	manifest, _, err := a.installedManifest(id)
@@ -705,13 +725,48 @@ func (a *App) PluginStoreSet(id, value string) error {
 	return writeAtomicBytes(plugin.DataPath(a.pluginRoot(), manifest.ID), []byte(trimmed), 0o600)
 }
 
+func (a *App) checkPluginStoreVersion(id, version string) error {
+	if version == "" {
+		return nil // Compatibility entry points still require an installed manifest.
+	}
+	info, err := a.pluginInfoByID(id)
+	if err != nil {
+		return err
+	}
+	if !info.Valid || info.UpdatedAt != version {
+		return codedToolError("E_PLUGIN_RETIRED", errors.New("插件安装已改变，旧页面不能访问存储"))
+	}
+	return nil
+}
+
 // ── HTTP 代理 ──
 
 // PluginHTTPRequest 代插件发出 HTTP 请求。目标主机必须命中插件清单里声明的
 // permissions.http（默认拒绝，含重定向后的目标），所以这里把白名单交给统一的
 // 目标判定，而不是开关一个全局的「允许内网」。
 func (a *App) PluginHTTPRequest(req PluginHTTPRequest) (HTTPRequestToolResult, error) {
+	return a.PluginHTTPRequestContext(nil, req)
+}
+
+// PluginHTTPRequestContext combines caller cancellation with application shutdown.
+// A canceled request is never replayed: it may already have caused side effects.
+func (a *App) PluginHTTPRequestContext(ctx context.Context, req PluginHTTPRequest) (HTTPRequestToolResult, error) {
 	if err := a.ensureInitialized(); err != nil {
+		return HTTPRequestToolResult{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if appCtx := a.ctx; appCtx != nil {
+		stop := context.AfterFunc(appCtx, cancel)
+		defer stop()
+		if appCtx.Err() != nil {
+			cancel()
+		}
+	}
+	if err := ctx.Err(); err != nil {
 		return HTTPRequestToolResult{}, err
 	}
 	manifest, _, err := a.installedManifest(req.PluginID)
@@ -728,10 +783,6 @@ func (a *App) PluginHTTPRequest(req PluginHTTPRequest) (HTTPRequestToolResult, e
 	cfg, err := a.getConfig()
 	if err != nil {
 		return HTTPRequestToolResult{}, err
-	}
-	ctx := a.ctx
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	fetched, err := a.doHTTPRequest(ctx, cfg, HTTPRequestToolRequest{
 		Method:  req.Method,

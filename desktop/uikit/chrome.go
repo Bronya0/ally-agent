@@ -36,6 +36,10 @@ const (
 	GapSection float32 = 12
 	PadRow     float32 = 8
 	PadCard    float32 = 10
+	PadForm    float32 = 20
+
+	FormControlWidth float32 = 320
+	FormLabelBasis   float32 = 260
 
 	RadiusCard  float32 = 8
 	RadiusSmall float32 = 5
@@ -117,6 +121,37 @@ func Card(c *ui.Context, key any, padding, radius float32, build func()) ui.Elem
 	e.Background(fade(e, "card-fill", c.Theme().Surface)).
 		Border(1, fade(e, "card-border", c.Theme().Border))
 	return e.Children(build)
+}
+
+// FormCard groups related settings without inheriting the compact spacing of
+// tool cards. MyGo draws the row dividers; the fields keep their natural height.
+func FormCard(c *ui.Context, key any, title, note string, build func(), ink ...ui.Color) ui.Element {
+	return Card(c, key, PadForm, RadiusCard, func() {
+		ui.Column(c.Key("heading")).Gap(GapTight).Children(func() {
+			ui.Text(c, title).FontSize(FontSubtitle).FontWeight(600)
+			FieldNote(c, note, ink...)
+		})
+		ui.Column(c.Key("fields")).Gap(0).Dividers(1, c.Theme().Border).Children(build)
+	}).MinWidth(0).Shrink(0).Gap(GapSection).Role(ui.RoleGroup).Label(title)
+}
+
+// FormRow keeps the explanation and the control in separate columns. Wrapping
+// uses the actual parent width, not the window width (which includes sidebars).
+// The label and control stay under the same keyed parents across a wrap, so
+// resizing does not discard a numeric edit, selection or keyboard focus.
+func FormRow(c *ui.Context, key any, title, note string, controlWidth float32, build func() ui.Element, ink ...ui.Color) ui.Element {
+	var caption, control ui.Element
+	ui.Row(c.Key(key)).MinWidth(0).Shrink(0).Wrap().AlignItems(ui.Center).
+		GapX(GapSection * 2).GapY(GapField).PaddingY(GapSection).Children(func() {
+		ui.Column(c.Key("caption")).Basis(FormLabelBasis).Grow(1).MinWidth(0).Gap(GapTight).Children(func() {
+			caption = ui.Text(c, title).FontSize(FontBody).FontWeight(500).AlignSelf(ui.Start)
+			FieldNote(c, note, ink...)
+		})
+		ui.Column(c.Key("control")).Width(controlWidth).MaxWidthPercent(100).MinWidth(0).Shrink(0).AlignItems(ui.End).Children(func() {
+			control = build()
+		})
+	})
+	return control.LabelledBy(caption).Description(note)
 }
 
 // RowCard 是可悬停高亮的列表行卡片。

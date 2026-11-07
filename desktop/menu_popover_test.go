@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -16,16 +17,9 @@ func TestMenuPopoverButtonOpensAppPanel(t *testing.T) {
 		c.SetTheme(ui.DarkTheme())
 		c.DisableAnimations()
 		ui.Column(c).Fill().Padding(12).Children(func() {
-			button := mutedIconAction(c, "export", "导出", "download", 22, nil)
-			menuPopoverButton(c, button, 180, func(dismiss func()) {
-				popoverItem(c, "answer", "导出回答", "", false, func() {
-					dismiss()
-					chosen = "answer"
-				})
-				popoverItem(c, "session", "导出会话", "", false, func() {
-					dismiss()
-					chosen = "session"
-				})
+			iconMenu(c, "export", "导出", "download", 22, 180, func(m ui.MenuParts) {
+				uikit.MenuItem(c, m, "answer", "导出回答", uikit.MenuItemOptions{}).OnClick(func() { chosen = "answer" })
+				uikit.MenuItem(c, m, "session", "导出会话", uikit.MenuItemOptions{}).OnClick(func() { chosen = "session" })
 			})
 		})
 	}, 320, 240)
