@@ -167,7 +167,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			if before == "" {
 				// A row that starts drawing may open a history block: the cached
 				// block starts have to know without the transcript growing.
-				t.markHistory()
+				t.markHistoryAt(len(t.Messages) - 1)
 			}
 			t.Status = "正在回复…"
 		} else if n := int(num(p, "reasoningLen")); n > 0 {
@@ -284,16 +284,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		t.toolRev++
 		ui.ThinkingBytes = 0
 		ui.PlanCollapsed = true
-		for _, call := range t.Messages {
-			if str(call, "role") == "tool_call" && toolState(call) == "running" {
-				call["status"] = "success"
-				call["toolState"] = "tool:result"
-				if name == "run:error" {
-					call["status"] = "error"
-					call["error"] = str(p, "error")
-				}
-			}
-		}
+		settleRunningToolMessages(t, name == "run:error", str(p, "error"))
 		t.Busy = false
 		t.RunID = ""
 		t.CancelRequested = false
@@ -338,6 +329,20 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	}
 }
 
+func settleRunningToolMessages(t *conversation, failed bool, reason string) {
+	for index, call := range t.Messages {
+		if str(call, "role") != "tool_call" || toolState(call) != "running" {
+			continue
+		}
+		before := groupItem(call)
+		call["status"], call["toolState"] = "success", "tool:result"
+		if failed {
+			call["status"], call["error"] = "error", reason
+		}
+		recordToolGroupChange(t, index, before, call)
+	}
+}
+
 func appendRunError(t *conversation, msg string) {
 	if hasErrorTail(t.Messages, msg) {
 		return
@@ -375,6 +380,10 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 	if index >= 0 {
 		m = t.Messages[index]
 	}
+	if name == "tool:update" && m != nil && (str(m, "status") == "success" || str(m, "status") == "error") {
+		return // a delayed progress event must not overwrite completed arguments/results
+	}
+	beforeGroup := groupItem(m)
 	if m == nil {
 		invalidateChatSearch(t)
 		m = map[string]any{"role": "tool_call", "toolCallId": id}
@@ -389,18 +398,20 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 		beforeAgent = str(toolResult(m), "agentId")
 	}
 	defer func() {
+		recordToolGroupChange(t, index, beforeGroup, m)
 		afterKind := toolKind(str(m, "name"))
 		if beforeKind != afterKind || ((beforeKind == "subagent" || afterKind == "subagent") && beforeAgent != str(toolResult(m), "agentId")) {
-			t.markHistory()
+			t.markHistoryAt(index)
 		}
 	}()
 	for _, k := range []string{"name", "args", "result", "error", "errorCode", "durationMs", "mcpServer", "mcpTool"} {
 		if v, ok := p[k]; ok {
+			if k == "args" {
+				delete(m, "createPreviewTrimmed")
+				delete(m, "createPreviewStartLine")
+			}
 			m[k] = v
 		}
-	}
-	if name == "tool:update" && (str(m, "status") == "success" || str(m, "status") == "error") {
-		return
 	}
 	t.uiState().ThinkingBytes = 0
 	m["toolState"] = name
@@ -429,6 +440,8 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 		a.attachToolImage(t, m)
 	}
 	retainLocalCommandSummary(m)
+	retainReadDisplaySummary(m)
+	retainCreateDisplayPreview(m)
 	if toolKind(str(m, "name")) == "command" && (name == "tool:result" || name == "tool:error") {
 		key := str(m, "toolCallId")
 		if t.uiState().ToolOpen[key] {

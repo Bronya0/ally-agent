@@ -653,6 +653,8 @@ func (a *desktop) confirmDeleteUserMessage(d *deletePromptState) {
 // the shortened transcript and collapse the history window.
 func resetTranscriptAfterDelete(t *conversation, index int) {
 	t.resetTranscriptLookup()
+	t.markHistory()
+	t.groupChanges = nil
 	releaseStaleStream(t)
 	pruneTranscriptHandles(t, 0, index)
 	releaseCommandDetails(t)
@@ -1084,42 +1086,9 @@ func (a *desktop) submitAsk(t *conversation) {
 	})
 }
 
-// welcomeKey names the transcript a welcome lookup was made for: the count, the
-// session, and the first row's role and its leading bytes. Store those bytes
-// inline so this single cache slot cannot retain an entire closed transcript.
-type welcomeKey struct {
-	id      string
-	count   int
-	role    string
-	head    [32]byte
-	headLen int
-}
-
-func welcomeKeyFor(t *conversation) welcomeKey {
-	key := welcomeKey{id: t.ID, count: len(t.Messages)}
-	if len(t.Messages) > 0 {
-		first := t.Messages[0]
-		key.role = str(first, "role")
-		content := str(first, "content")
-		key.headLen = len(content)
-		copy(key.head[:], content)
-	}
-	return key
-}
-
-// welcomeMemo is one slot: only the conversation being drawn asks, so the scan
-// below runs once per change of that transcript instead of once per frame.
-var welcomeMemo memoOf[welcomeKey, bool]
-
+// Welcome detection shares the append-aware transcript index.
 func hasWelcomeMessage(t *conversation) bool {
-	return welcomeMemo.get(welcomeKeyFor(t), func(welcomeKey) bool {
-		for _, m := range t.Messages {
-			if _, ok := m["welcome"]; ok {
-				return true
-			}
-		}
-		return false
-	})
+	return t.cachedTranscriptRows().welcome
 }
 
 func hasLaterSuggestion(t *conversation, index int) bool {
@@ -1140,6 +1109,11 @@ type roundPlacementKey struct {
 	start, end, rounds int
 }
 
+type roundIndexKey struct {
+	rev   uint64
+	count int
+}
+
 // Completed statistics have a fixed message index. Only appended/rewritten
 // rows (not another frame of the same stream) can move them onto a suggestion.
 // Keep just this page's placements; a day's Round map remains the source.
@@ -1156,13 +1130,28 @@ func refreshRoundPlacements(t *conversation, start, end int) {
 	}
 	// A page may begin between an answer and its suggestions. Include that
 	// preceding partial round without walking all earlier rounds.
-	lower := start
-	for lower > 0 && lower < len(t.Messages) && str(t.Messages[lower], "role") != "user" {
-		lower--
-	}
-	for idx := lower; idx < end; idx++ {
+	rows := t.cachedTranscriptRows()
+	lower := rows.roundStart(start)
+	// Tool events append many folded records between completed rounds. Scan
+	// the statistics' indices, not every record in those growing tool runs.
+	indices := st.roundIndices.get(roundIndexKey{t.historyRev, len(st.Round)}, func(roundIndexKey) []int {
+		indices := st.roundIndices.value[:0]
+		if cap(indices) > 4*len(st.Round)+256 {
+			indices = nil
+		}
+		for idx := range st.Round {
+			indices = append(indices, idx)
+		}
+		slices.Sort(indices)
+		return indices
+	})
+	first, _ := slices.BinarySearch(indices, lower)
+	for _, idx := range indices[first:] {
+		if idx >= end {
+			break
+		}
 		if stat := st.Round[idx]; stat != nil && stat.Done {
-			if target := roundStatsIndex(t, idx); target >= start && target < end {
+			if target := rows.roundStatsIndex(idx); target >= start && target < end {
 				st.RoundAt[target] = idx
 			}
 		}
@@ -1183,19 +1172,6 @@ func refreshRoundPlacements(t *conversation, start, end int) {
 	st.roundPlacementKey, st.roundPlacementReady = key, true
 }
 
-func roundStatsIndex(t *conversation, index int) int {
-	target := index
-	for n := index + 1; n < len(t.Messages); n++ {
-		m := t.Messages[n]
-		if str(m, "role") == "user" {
-			break
-		}
-		if toolKind(str(m, "name")) == "suggest" {
-			target = n
-		}
-	}
-	return target
-}
 func normalizeHistoryPageSize(size int) int {
 	if size < 20 || size > 200 {
 		return 80

@@ -58,10 +58,11 @@ type conversation struct {
 	UI          *chatUI
 	// historyStarts holds the transcript's block starts for historyRev, so a
 	// frame asks once per change instead of once per row. See blockStarts.
-	historyStarts memoOf[historyKey, []int]
+	historyStarts memoOf[historyBlocksKey, []int]
 	historyRows   memoOf[historyKey, *transcriptRows]
 	historyRev    uint64
 	toolRev       uint64
+	groupChanges  *toolGroupChanges
 	messageLookup transcriptLookup
 }
 
@@ -1132,6 +1133,7 @@ func (a *desktop) openSession(id string) {
 					normalizeToolMessage(message)
 				}
 				retainSnapshotToolSummary(message)
+				retainCreateDisplayPreview(message)
 				normalizeSubagentBlackboard(message)
 			}
 			restoreRoundStats(t)

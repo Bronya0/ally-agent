@@ -218,6 +218,7 @@ type chatUI struct {
 	RoundAt                map[int]int
 	roundPlacementKey      roundPlacementKey
 	roundPlacementReady    bool
+	roundIndices           memoOf[roundIndexKey, []int]
 	visibleRows            []int
 	Round                  map[int]*roundStat
 	PromptOpen             map[int]bool

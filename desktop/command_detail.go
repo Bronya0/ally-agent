@@ -7,14 +7,14 @@ import (
 	"strings"
 )
 
-// Drop shell payloads before serializing/queueing a UI update, not just after
-// ingestion. Leave the runtime's original event untouched for other hosts.
+// Project shell/read payloads before serializing/queueing a UI update, not just
+// after ingestion. Leave the runtime's original event untouched for other hosts.
 func toolEventForDisplay(name string, payload any) any {
 	if !strings.HasPrefix(name, "tool:") {
 		return payload
 	}
 	message, ok := payload.(map[string]any)
-	if !ok || toolKind(str(message, "name")) != "command" {
+	if !ok || (toolKind(str(message, "name")) != "command" && !isFoldableReadTool(message)) {
 		return payload
 	}
 	copy := make(map[string]any, len(message))
@@ -22,6 +22,7 @@ func toolEventForDisplay(name string, payload any) any {
 		copy[key] = value
 	}
 	retainLocalCommandSummary(copy)
+	retainReadDisplaySummary(copy)
 	return copy
 }
 

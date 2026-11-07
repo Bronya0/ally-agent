@@ -252,42 +252,134 @@ type toolGroupSummaryKey struct {
 
 type toolGroupSummary struct {
 	end, reads, greps, lists, commands, trimmed int
-	status                                      string
+	status, lastStatus                          string
+	running, queued                             int
+	changeRev                                   uint64
+}
+
+// A bounded journal lets visible group headers apply changed scalar counts.
+// It never retains arguments, outputs or message maps. A frame that misses
+// the entire journal simply rebuilds its summary from the transcript.
+const toolGroupChangeLimit = 64
+
+type toolGroupItem struct {
+	kind, state     string
+	folded, trimmed bool
+}
+
+type toolGroupChange struct {
+	index         int
+	before, after toolGroupItem
+}
+
+type toolGroupChanges struct {
+	rev     uint64
+	entries [toolGroupChangeLimit]toolGroupChange
+}
+
+func groupItem(m map[string]any) toolGroupItem {
+	if !isFoldableToolGroupItem(m) {
+		return toolGroupItem{}
+	}
+	return toolGroupItem{readGrepGroupName(m), toolState(m), true, boolOf(m, "fastCompacted")}
+}
+
+func recordToolGroupChange(t *conversation, index int, before toolGroupItem, m map[string]any) {
+	after := groupItem(m)
+	if before == after {
+		return
+	}
+	if t.groupChanges == nil {
+		t.groupChanges = &toolGroupChanges{}
+	}
+	log := t.groupChanges
+	log.rev++
+	log.entries[log.rev%toolGroupChangeLimit] = toolGroupChange{index, before, after}
+}
+
+func (s *toolGroupSummary) count(item toolGroupItem, delta int) {
+	if !item.folded {
+		return
+	}
+	if item.trimmed {
+		s.trimmed += delta
+	}
+	switch item.state {
+	case "running":
+		s.running += delta
+	case "pending":
+		s.queued += delta
+	}
+	switch item.kind {
+	case "grep":
+		s.greps += delta
+	case "list", "glob":
+		s.lists += delta
+	case "command":
+		s.commands += delta
+	default:
+		s.reads += delta
+	}
+}
+
+func (s *toolGroupSummary) finish(t *conversation) {
+	s.status = s.lastStatus
+	if s.running > 0 {
+		s.status = "running"
+	} else if s.queued > 0 {
+		s.status = "pending"
+	}
+	if t.groupChanges != nil {
+		s.changeRev = t.groupChanges.rev
+	}
+}
+
+func appendToolGroupSummary(s *toolGroupSummary, t *conversation, windowEnd int) {
+	for s.end < windowEnd && isFoldableToolGroupItem(t.Messages[s.end]) {
+		item := groupItem(t.Messages[s.end])
+		s.count(item, 1)
+		s.lastStatus = item.state
+		s.end++
+	}
+	s.finish(t)
 }
 
 func summarizeToolGroup(t *conversation, index, windowEnd int) toolGroupSummary {
-	s := toolGroupSummary{end: index, status: "pending"}
-	anyRunning, anyQueued := false, false
-	for i := index; i < windowEnd && isFoldableToolGroupItem(t.Messages[i]); i++ {
-		s.end = i + 1
-		m := t.Messages[i]
-		if boolOf(m, "fastCompacted") {
-			s.trimmed++
-		}
-		s.status = toolState(m)
-		switch s.status {
-		case "running":
-			anyRunning = true
-		case "pending":
-			anyQueued = true
-		}
-		switch readGrepGroupName(m) {
-		case "grep":
-			s.greps++
-		case "list", "glob":
-			s.lists++
-		case "command":
-			s.commands++
-		default:
-			s.reads++
-		}
-	}
-	if anyRunning {
-		s.status = "running"
-	} else if anyQueued {
-		s.status = "pending"
-	}
+	s := toolGroupSummary{end: index, lastStatus: "pending"}
+	appendToolGroupSummary(&s, t, windowEnd)
 	return s
+}
+
+func cachedToolGroupSummary(memo *memoOf[toolGroupSummaryKey, toolGroupSummary], t *conversation, key toolGroupSummaryKey) toolGroupSummary {
+	return memo.get(key, func(toolGroupSummaryKey) toolGroupSummary {
+		s := memo.value
+		previous := memo.key
+		if !memo.ready || previous.rev != key.rev || previous.index != key.index || previous.windowEnd > key.windowEnd || previous.rows > key.rows {
+			return summarizeToolGroup(t, key.index, key.windowEnd)
+		}
+		if log := t.groupChanges; log != nil {
+			if s.changeRev > log.rev || log.rev-s.changeRev > toolGroupChangeLimit {
+				return summarizeToolGroup(t, key.index, key.windowEnd)
+			}
+			for rev := s.changeRev + 1; rev <= log.rev; rev++ {
+				change := log.entries[rev%toolGroupChangeLimit]
+				if change.index < key.index || change.index >= s.end {
+					continue
+				}
+				s.count(change.before, -1)
+				s.count(change.after, 1)
+				if change.index == s.end-1 {
+					s.lastStatus = change.after.state
+				}
+			}
+		}
+		if s.end == previous.windowEnd {
+			appendToolGroupSummary(&s, t, key.windowEnd)
+		} else {
+			s.finish(t)
+		}
+		return s
+	})
 }
 
 // toolActivityGroupCard draws one card for a consecutive run of read, grep,
@@ -324,9 +416,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	// Events retire/update tool states through toolRev; topology and compaction
 	// changes use historyRev. No row arguments or output are retained here.
 	summaryMemo := memoAt[memoOf[toolGroupSummaryKey, toolGroupSummary]](container, "summary")
-	summary := summaryMemo.get(toolGroupSummaryKey{historyKey{len(t.Messages), t.historyRev}, t.toolRev, index, windowEnd}, func(key toolGroupSummaryKey) toolGroupSummary {
-		return summarizeToolGroup(t, key.index, key.windowEnd)
-	})
+	summary := cachedToolGroupSummary(summaryMemo, t, toolGroupSummaryKey{historyKey{len(t.Messages), t.historyRev}, t.toolRev, index, windowEnd})
 	end := summary.end
 	reads, greps, lists, commands, trimmed := summary.reads, summary.greps, summary.lists, summary.commands, summary.trimmed
 	if end == index {
@@ -881,6 +971,9 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 						content:   tailLines(content, createPreviewLines),
 					}
 				})
+				if start := int(num(m, "createPreviewStartLine")); boolOf(m, "createPreviewTrimmed") && start > 0 {
+					preview.startLine = start
+				}
 				content = preview.content
 				if content != "" {
 					// One shape from the first streamed line to the result: a fixed-height
@@ -1223,7 +1316,7 @@ func toolResult(m map[string]any) map[string]any {
 		}
 		return map[string]any{"_text": body}
 	}
-	return map[string]any{}
+	return nil
 }
 
 // The runtime wraps every tool payload in {ok, data}; keep the envelope

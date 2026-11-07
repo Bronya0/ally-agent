@@ -36,6 +36,26 @@ func TestHistoryRewritesReleaseRetiredStreamingAnswers(t *testing.T) {
 	}
 }
 
+func TestCompactStreamDropsPreviewAndResumesOriginalAnswer(t *testing.T) {
+	conv := &conversation{ID: "compact", Messages: []map[string]any{{"role": "assistant", "content": "original answer"}}}
+	a := &desktop{}
+	st := conv.uiState()
+	a.compactDelta(conv, "first ", 0)
+	a.compactDelta(conv, "second", 0)
+	if len(conv.Messages) != 2 || str(conv.Messages[1], "content") != "first second" || str(conv.Messages[0], "content") != "original answer" {
+		t.Fatal("summary streaming changed the original answer or lost its tail")
+	}
+	dropCompactPreview(conv)
+	if st.Stream != nil || len(conv.Messages) != 1 {
+		t.Fatal("cancelled summary retained its streaming buffer")
+	}
+	a.tabs = []*conversation{conv}
+	a.applyEvent("run:delta", map[string]any{"sessionId": conv.ID, "content": " continued"})
+	if str(conv.Messages[0], "content") != "original answer continued" {
+		t.Fatal("resumed answer appended the cancelled summary")
+	}
+}
+
 func TestSnapshotOmitsTransientOutputsAndPreservesCardMetadata(t *testing.T) {
 	body := strings.Repeat("STALE_RESULT_BODY", 8000)
 	for _, tc := range []struct {
@@ -144,7 +164,7 @@ func TestToolResultNormalizesOnceAndRefreshesOnEvent(t *testing.T) {
 	a := &desktop{}
 	conv := &conversation{}
 	raw := `{"ok":false,"errorCode":"DENIED","data":{"output":"` + strings.Repeat("x", 64000) + `"}}`
-	a.applyToolEvent(conv, "tool:result", map[string]any{"toolCallId": "call", "name": "read", "result": raw})
+	a.applyToolEvent(conv, "tool:result", map[string]any{"toolCallId": "call", "name": "web_fetch", "result": raw})
 	m := conv.Messages[0]
 	if _, ok := m["result"].(map[string]any); !ok {
 		t.Fatal("wire JSON retained")
@@ -155,7 +175,7 @@ func TestToolResultNormalizesOnceAndRefreshesOnEvent(t *testing.T) {
 	if toolState(m) != "error" || str(toolResult(m), "errorCode") != "DENIED" {
 		t.Fatal("envelope failure lost")
 	}
-	a.applyToolEvent(conv, "tool:result", map[string]any{"toolCallId": "call", "name": "read", "result": `{"ok":true,"data":{"output":"new"}}`})
+	a.applyToolEvent(conv, "tool:result", map[string]any{"toolCallId": "call", "name": "web_fetch", "result": `{"ok":true,"data":{"output":"new"}}`})
 	if toolState(m) != "success" || str(toolResult(m), "output") != "new" || str(toolResult(m), "errorCode") != "" {
 		t.Fatal("old result reused after update")
 	}
@@ -181,6 +201,67 @@ func TestToolResultLegacyAndRoundTrip(t *testing.T) {
 	normalizeToolMessage(restored)
 	if str(toolResult(restored), "output") != "saved" || toolResult(restored)["ok"] != false {
 		t.Fatal("snapshot lost normalized result")
+	}
+}
+
+func TestReadDisplayProjectionPreservesMetadataAndBackendEvidence(t *testing.T) {
+	body := strings.Repeat("file content\n", 10000)
+	detail := strings.Repeat("cannot access ", 100)
+	for _, tc := range []struct {
+		name string
+		data map[string]any
+	}{
+		{"read", map[string]any{"files": []any{map[string]any{"path": "main.go", "startLine": 1, "endLine": 40, "content": body}, map[string]any{"path": "bad.go", "error": detail}}, "missing": []any{map[string]any{"path": "gone.go", "errorCode": "NOT_FOUND"}}}},
+		{"remote_read", map[string]any{"path": "main.go", "startLine": 1, "endLine": 40, "content": body}},
+		{"grep", map[string]any{"matches": []any{map[string]any{"path": "main.go", "lines": []any{map[string]any{"text": body}}}}}},
+		{"list_files", map[string]any{"entries": []any{map[string]any{"path": body}}, "truncated": true}},
+		{"Glob", map[string]any{"matches": []any{body}, "truncated": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]any{"name": tc.name, "toolCallId": "call", "result": map[string]any{"ok": true, "data": tc.data}}
+			before, _ := json.Marshal(payload)
+			// Capture the original header summary on detached JSON maps.
+			var original map[string]any
+			_ = json.Unmarshal(before, &original)
+			want := toolGroupResultSummary(toolKind(tc.name), toolResult(original))
+			projected := toolEventForDisplay("tool:result", payload).(map[string]any)
+			encoded, _ := json.Marshal(projected)
+			if strings.Contains(string(encoded), body) {
+				t.Fatal("the UI event retained file/log content")
+			}
+			conv := &conversation{}
+			a := &desktop{}
+			a.applyToolEvent(conv, "tool:result", projected)
+			result := toolResult(conv.Messages[0])
+			if toolGroupResultSummary(toolKind(tc.name), result) != want || boolOf(result, "resultOmitted") {
+				t.Fatal("live header metadata changed or was marked as a missing history result")
+			}
+			if files := list(result, "files"); len(files) > 1 && str(files[1].(map[string]any), "error") != detail {
+				t.Fatal("the live per-file error was shortened")
+			}
+			// A delayed argument update must not erase the completed result.
+			update := toolEventForDisplay("tool:update", map[string]any{"name": tc.name, "toolCallId": "call", "args": "{}"}).(map[string]any)
+			a.applyToolEvent(conv, "tool:update", update)
+			if toolGroupResultSummary(toolKind(tc.name), toolResult(conv.Messages[0])) != want {
+				t.Fatal("a delayed update erased the result metadata")
+			}
+			after, _ := json.Marshal(payload)
+			if string(after) != string(before) {
+				t.Fatal("display projection mutated backend evidence")
+			}
+		})
+	}
+	for _, m := range []map[string]any{
+		{"name": "read", "fastCompacted": true, "result": map[string]any{"_text": "excerpt"}},
+		{"name": "read", "mcpServer": "custom", "result": map[string]any{"content": body}},
+		{"name": "edit", "result": map[string]any{"content": body}},
+	} {
+		before, _ := json.Marshal(m)
+		retainReadDisplaySummary(m)
+		after, _ := json.Marshal(m)
+		if string(before) != string(after) {
+			t.Fatal("projection changed an excerpt or another tool's result")
+		}
 	}
 }
 

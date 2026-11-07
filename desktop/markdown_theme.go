@@ -136,15 +136,16 @@ func (a *desktop) readingMarkdownOptionsForSource(source func() string, scope ..
 		holder := ui.Column(c.Key(fmt.Sprintf("reading-code-%d", block.Index))).FillWidth()
 		cached := memoAt[cachedBlock](holder, "reading-code")
 		input, code := "", ""
-		fromSource := source != nil && !block.Open
+		fromSource := source != nil
 		if fromSource {
 			input = source()
 		} else {
 			code = block.Code()
 			input = code
 		}
-		// Open blocks can still change as the parser reveals/heals their tail.
-		// Other viewers without a source key retain the existing Code() behavior.
+		// Main conversation views show their source immediately, including open
+		// fences. Other viewers retain Code() because they may reveal more of an
+		// unchanged source across frames through markdown.Stream.
 		if !cached.ready || cached.input != input || cached.fromSource != fromSource || cached.language != block.Language || cached.extensions != options.Extensions {
 			if fromSource {
 				code = block.Code()

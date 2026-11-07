@@ -129,6 +129,129 @@ func TestToolEventsRefreshCachedRowOwnership(t *testing.T) {
 	}
 }
 
+func TestHistoryAppendMatchesFullOwnershipRebuild(t *testing.T) {
+	conv := &conversation{ID: "incremental"}
+	check := func() {
+		t.Helper()
+		full := newTranscriptRows(conv)
+		want := []int{}
+		for i := range conv.Messages {
+			if full.startsBlock(i) {
+				want = append(want, i)
+			}
+		}
+		want = append(want, len(conv.Messages))
+		if got := conv.blockStarts(); !slices.Equal(got, want) {
+			t.Fatalf("history %d: page boundaries %v, full rebuild %v", len(conv.Messages), got, want)
+		}
+		got := conv.cachedTranscriptRows()
+		for i := range conv.Messages {
+			if got.kindAt(i, 0) != full.kindAt(i, 0) {
+				t.Fatalf("history %d: row %d changed owner", len(conv.Messages), i)
+			}
+		}
+		for id, children := range full.children {
+			if !slices.Equal(got.childrenOf(id), children) {
+				t.Fatalf("parent %s lost child order", id)
+			}
+		}
+	}
+	check() // empty sentinel must not become a duplicate first row
+	for _, m := range []map[string]any{
+		{"role": "user", "content": "question"},
+		{"role": "assistant", "content": ""},
+		{"role": "tool_call", "name": "read", "toolCallId": "read-1"},
+		{"role": "tool_call", "name": "command", "toolCallId": "command-1"},
+		{"role": "subagent", "parentToolCallId": "parent", "subId": "agent"},
+		{"role": "tool_call", "name": "subagent", "toolCallId": "parent", "result": map[string]any{"agentId": "agent"}},
+		{"role": "subagent", "subId": "agent"},
+		{"role": "tool_call", "name": "list", "toolCallId": "list-1"},
+		{"role": "tool_call", "name": "read", "toolCallId": "read-2"},
+		{"role": "assistant", "content": "done"},
+	} {
+		conv.Messages = append(conv.Messages, m)
+		check()
+	}
+	// Multiple appends may reach the ownership cache before the page index.
+	for i := 0; i < 3; i++ {
+		conv.Messages = append(conv.Messages, map[string]any{"role": "tool_call", "name": "read"})
+		_ = conv.cachedTranscriptRows()
+	}
+	check()
+	a := &desktop{}
+	a.applyToolEvent(conv, "tool:result", map[string]any{"name": "subagent", "toolCallId": "parent", "result": map[string]any{"agentId": "other"}})
+	check()
+	conv.Messages[1]["content"] = "first token"
+	conv.markHistoryAt(1)
+	check()
+	conv.Messages = conv.Messages[:4]
+	conv.resetTranscriptLookup()
+	conv.markHistory()
+	check()
+	conv.Messages = append(conv.Messages, map[string]any{"role": "assistant", "content": "after deletion"})
+	check()
+	replaceTranscript(conv, "summary")
+	check()
+}
+
+func TestRoundFootersFollowSuggestionsAcrossPartialPages(t *testing.T) {
+	conv := &conversation{Messages: []map[string]any{
+		{"role": "user", "content": "question"},
+		{"role": "assistant", "content": "answer"},
+		{"role": "tool_call", "name": "read"},
+		{"role": "tool_call", "name": "command"},
+		{"role": "tool_call", "name": "suggest"},
+		{"role": "user", "content": "next question"},
+		{"role": "assistant", "content": "next answer"},
+	}}
+	st := conv.uiState()
+	st.Round[1], st.Round[6] = &roundStat{Done: true}, &roundStat{Done: true}
+	refreshRoundPlacements(conv, 2, 5)
+	if len(st.RoundAt) != 1 || st.RoundAt[4] != 1 {
+		t.Fatal("a partial page lost the preceding round's suggestion footer")
+	}
+	refreshRoundPlacements(conv, 5, 7)
+	if len(st.RoundAt) != 1 || st.RoundAt[6] != 6 {
+		t.Fatal("the next prompt inherited the previous round's footer")
+	}
+	conv.Messages = append(conv.Messages, map[string]any{"role": "tool_call", "name": "suggest"})
+	refreshRoundPlacements(conv, 5, 8)
+	if len(st.RoundAt) != 1 || st.RoundAt[7] != 6 {
+		t.Fatal("an appended suggestion did not move its round's footer")
+	}
+	conv.Messages = conv.Messages[:4]
+	resetTranscriptAfterDelete(conv, 4)
+	refreshRoundPlacements(conv, 0, 4)
+	if len(st.RoundAt) != 1 || st.RoundAt[1] != 1 {
+		t.Fatal("deleting suggestions retained a retired footer placement")
+	}
+}
+
+func TestHistoryRewritesInvalidateBeforeSameLengthRegrowth(t *testing.T) {
+	for _, operation := range []string{"delete", "drop preview"} {
+		t.Run(operation, func(t *testing.T) {
+			conv := &conversation{Messages: []map[string]any{
+				{"role": "user", "content": "question"},
+				{"role": "tool_call", "name": "read"},
+				{"role": "assistant", "content": "old", compactPreviewFlag: true},
+			}}
+			_ = conv.blockStarts()
+			if operation == "delete" {
+				conv.Messages = conv.Messages[:2]
+				resetTranscriptAfterDelete(conv, 2)
+			} else {
+				dropCompactPreview(conv)
+			}
+			// No UI frame between removal and another append: the length key
+			// returns to its old value, but this tool now folds into the read.
+			conv.Messages = append(conv.Messages, map[string]any{"role": "tool_call", "name": "command"})
+			if got := conv.blockStarts(); !slices.Equal(got, []int{0, 1, 3}) {
+				t.Fatalf("retired answer still opens a block: %v", got)
+			}
+		})
+	}
+}
+
 // rowKindAt is the single judgement that decides whether a message gets a row.
 // A message that another row already draws, or that draws nothing, must not
 // claim a slot: an empty slot still costs the transcript column its gap.

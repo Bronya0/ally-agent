@@ -3,7 +3,9 @@ package desktop
 
 import (
 	toolshared "ally-dev/internal/tools/shared"
+	"encoding/json"
 	"maps"
+	"strings"
 )
 
 // A saved observation keeps only what its historical card displays. Build the
@@ -19,13 +21,7 @@ func retainSnapshotToolSummary(m map[string]any) bool {
 	if name != "command" && name != "remote_run_command" && boolOf(m, "fastCompacted") {
 		return false // an explicit, bounded compaction excerpt is already a summary
 	}
-	if raw, ok := m["result"].(map[string]any); ok {
-		if data, ok := raw["data"].(map[string]any); ok {
-			copy := maps.Clone(raw)
-			copy["data"] = maps.Clone(data)
-			m["result"] = copy
-		}
-	}
+	detachToolResultEnvelope(m)
 	if name == "command" || name == "remote_run_command" {
 		retainCommandSummary(m)
 		if name == "remote_run_command" {
@@ -34,8 +30,86 @@ func retainSnapshotToolSummary(m map[string]any) bool {
 		delete(m, "content")
 		return true
 	}
-	result := toolResult(m)
-	summary := snapshotReadMetadata(result)
+	summary := readCardSummary(name, toolResult(m), true)
+	summary["resultOmitted"] = true
+	m["result"] = summary
+	delete(m, "body")
+	delete(m, "content")
+	if text := str(m, "error"); text != "" {
+		m["error"] = short(text, 300)
+	}
+	return true
+}
+
+// Finished create cards only show the last few lines; clicking opens the file
+// through the workspace editor. Retain that preview in UI arguments instead of
+// keeping another whole-file copy beside the backend's original tool call.
+func retainCreateDisplayPreview(m map[string]any) {
+	name := readGrepGroupName(m)
+	if (name != "create" && name != "remote_create_file") || boolOf(m, "createPreviewTrimmed") || str(m, "mcpServer") != "" || str(m, "mcpTool") != "" {
+		return
+	}
+	switch toolState(m) {
+	case "success", "error", "cancelled":
+	default:
+		return
+	}
+	var args map[string]any
+	if json.Unmarshal([]byte(str(m, "args")), &args) != nil {
+		return // partial or malformed arguments remain available to the old view
+	}
+	content := str(args, "content")
+	if len(content) <= 8<<10 {
+		return
+	}
+	start := max(1, strings.Count(strings.TrimRight(content, "\n"), "\n")+2-createPreviewLines)
+	args["content"] = tailLines(content, createPreviewLines)
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return
+	}
+	m["args"] = string(encoded)
+	m["createPreviewStartLine"], m["createPreviewTrimmed"] = start, true
+}
+
+// Unwrapping merges envelope metadata into data. A projection must detach that
+// map first: a backend event may still own the original evidence.
+func detachToolResultEnvelope(m map[string]any) {
+	if raw, ok := m["result"].(map[string]any); ok {
+		if data, ok := raw["data"].(map[string]any); ok {
+			copy := maps.Clone(raw)
+			copy["data"] = maps.Clone(data)
+			m["result"] = copy
+		}
+	}
+}
+
+// The read/search/list group only displays this metadata. Share its projection
+// with disk snapshots, keeping live UI errors complete and explicit compaction
+// excerpts intact. The backend's model history is outside this UI copy.
+func retainReadDisplaySummary(m map[string]any) {
+	if !isFoldableReadTool(m) || boolOf(m, "fastCompacted") || str(m, "mcpServer") != "" || str(m, "mcpTool") != "" {
+		return
+	}
+	if raw, exists := m["result"]; exists {
+		// Structured backend payloads are decoded by dispatchEvent before the
+		// ingestion fallback projects them. Do not guess at unknown wire types.
+		switch raw.(type) {
+		case string, map[string]any, nil:
+		default:
+			return
+		}
+	} else if str(m, "body") == "" {
+		return // an argument/status update must not invent an empty result
+	}
+	detachToolResultEnvelope(m)
+	m["result"] = readCardSummary(readGrepGroupName(m), toolResult(m), false)
+	delete(m, "body")
+	delete(m, "content")
+}
+
+func readCardSummary(name string, result map[string]any, forDisk bool) map[string]any {
+	summary := readCardMetadata(result, forDisk)
 	switch name {
 	case "read", "remote_read", "batch_read":
 		for _, key := range []string{"files", "missing"} {
@@ -43,7 +117,7 @@ func retainSnapshotToolSummary(m map[string]any) bool {
 				kept := make([]any, 0, len(files))
 				for _, raw := range files {
 					if file, ok := raw.(map[string]any); ok {
-						kept = append(kept, snapshotReadMetadata(file))
+						kept = append(kept, readCardMetadata(file, forDisk))
 					}
 				}
 				summary[key] = kept
@@ -62,17 +136,10 @@ func retainSnapshotToolSummary(m map[string]any) bool {
 			summary["count"] = count
 		}
 	}
-	summary["resultOmitted"] = true
-	m["result"] = summary
-	delete(m, "body")
-	delete(m, "content")
-	if text := str(m, "error"); text != "" {
-		m["error"] = short(text, 300)
-	}
-	return true
+	return summary
 }
 
-func snapshotReadMetadata(result map[string]any) map[string]any {
+func readCardMetadata(result map[string]any, forDisk bool) map[string]any {
 	kept := make(map[string]any)
 	for _, key := range []string{"ok", "cancelled", "errorCode", "path", "startLine", "endLine", "totalLines", "emptyRange", "count", "hits", "truncated", "durationMs"} {
 		switch value := result[key].(type) {
@@ -81,7 +148,10 @@ func snapshotReadMetadata(result map[string]any) map[string]any {
 		}
 	}
 	if text := str(result, "error"); text != "" {
-		kept["error"] = short(text, 300)
+		if forDisk {
+			text = short(text, 300)
+		}
+		kept["error"] = text
 	}
 	return kept
 }

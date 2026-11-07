@@ -120,6 +120,41 @@ func TestCreatePreviewStaysBoundedWhileHeaderOpensEditor(t *testing.T) {
 	}
 }
 
+func TestFinishedCreateReleasesLargeArgumentsAndKeepsPreviewNavigation(t *testing.T) {
+	conv := &conversation{ID: "large-create", Workspace: t.TempDir()}
+	file := &workspaceFile{Path: "new.txt", Editor: &editor.State{Buffer: editor.NewBuffer("created content")}}
+	a := &desktop{tabs: []*conversation{conv}, prefs: defaultPrefs(), workspaceFiles: map[string]*workspaceFile{workspaceKey(conv.Workspace): file}}
+	content := strings.Repeat("old line\n", 3000) + "last-1\nlast-2\nlast-3\nlast-4\nlast-5\nlast-6\n"
+	raw, _ := json.Marshal(map[string]any{"path": "new.txt", "content": content, "overwrite": true})
+	a.applyToolEvent(conv, "tool:start", map[string]any{"name": "create", "toolCallId": "call", "args": string(raw)})
+	if str(conv.Messages[0], "args") != string(raw) {
+		t.Fatal("streaming arguments changed before completion")
+	}
+	a.applyToolEvent(conv, "tool:result", map[string]any{"name": "create", "toolCallId": "call", "result": map[string]any{"path": "new.txt"}})
+	m := conv.Messages[0]
+	if len(str(m, "args")) > 1024 || !boolOf(parseToolArgs(str(m, "args")), "overwrite") {
+		t.Fatal("completed create retained the file body or lost other argument fields")
+	}
+	a.applyToolEvent(conv, "tool:update", map[string]any{"name": "create", "toolCallId": "call", "args": string(raw)})
+	if len(str(m, "args")) > 1024 {
+		t.Fatal("a late update restored the completed file body")
+	}
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		ui.Column(c).FillWidth().Children(func() { a.toolCard(c, conv, 0, m) })
+	}, 800, 600)
+	if !tt.HasText("last-1\nlast-2\nlast-3\nlast-4\nlast-5\nlast-6") || !tt.HasText("3001\n3002\n3003\n3004\n3005\n3006") {
+		t.Fatalf("trimmed create lost its tail or original line numbers: %v", tt.Texts())
+	}
+	if err := tt.Click("工具详情 call"); err != nil {
+		t.Fatal(err)
+	}
+	if a.activeFile() != file || len(conv.uiState().ToolOpen) != 0 {
+		t.Fatal("trimmed create lost its file editor action")
+	}
+}
+
 func TestMultiEditFileLinkOpensItsOwnPath(t *testing.T) {
 	conv := &conversation{ID: "multi-edit", Workspace: t.TempDir()}
 	file := &workspaceFile{Path: "second.go", Editor: &editor.State{Buffer: editor.NewBuffer("package second")}}

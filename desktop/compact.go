@@ -38,14 +38,14 @@ func compactStartNote(p map[string]any) string {
 	return "正在压缩对话上下文…"
 }
 
-// compactPreviewRow returns the row currently streaming the summary, if any.
-func compactPreviewRow(t *conversation) map[string]any {
+// compactPreviewIndex returns the row currently streaming the summary, if any.
+func compactPreviewIndex(t *conversation) int {
 	for i := len(t.Messages) - 1; i >= 0; i-- {
 		if boolOf(t.Messages[i], compactPreviewFlag) {
-			return t.Messages[i]
+			return i
 		}
 	}
-	return nil
+	return -1
 }
 
 // dropCompactPreview removes a half-written summary. A failed or cancelled
@@ -62,6 +62,8 @@ func dropCompactPreview(t *conversation) {
 	clear(t.Messages[len(kept):])
 	t.Messages = kept
 	t.resetTranscriptLookup()
+	t.markHistory()
+	t.groupChanges = nil
 	releaseStaleStream(t)
 }
 
@@ -75,17 +77,22 @@ func (a *desktop) compactDelta(t *conversation, content string, reasoningLen int
 		st.CompactThinking += reasoningLen
 	}
 	if content != "" {
-		invalidateChatSearch(t)
-		row := compactPreviewRow(t)
-		if row == nil {
-			row = map[string]any{"role": "assistant", "content": "", compactPreviewFlag: true}
+		index := compactPreviewIndex(t)
+		if index < 0 {
+			invalidateChatSearchTail(t)
+			row := map[string]any{"role": "assistant", "content": "", compactPreviewFlag: true}
 			t.Messages = append(t.Messages, row)
-		}
-		if before := str(row, "content"); before == "" {
-			row["content"] = content
-			t.markHistory()
+			index = len(t.Messages) - 1
+		} else if index == len(t.Messages)-1 {
+			invalidateChatSearchTail(t)
 		} else {
-			row["content"] = before + content
+			invalidateChatSearch(t)
+		}
+		row := t.Messages[index]
+		before := str(row, "content")
+		row["content"] = appendStreamChunk(st, index, before, content)
+		if before == "" {
+			t.markHistoryAt(index)
 		}
 		st.CompactThinking = 0
 	}
@@ -117,6 +124,7 @@ func replaceTranscript(t *conversation, summary string) {
 	t.markHistory()
 	st := t.uiState()
 	st.Stream = nil
+	t.groupChanges = nil
 	st.Round = map[int]*roundStat{}
 	st.RoundAt = map[int]int{}
 	st.PromptOpen = map[int]bool{}
