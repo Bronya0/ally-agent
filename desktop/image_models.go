@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -146,7 +147,7 @@ func (s *imageModelsState) replace(index int, next *backend.ImageModelConfig) er
 	}
 	if index >= 0 && index < len(s.config.Models) {
 		if next == nil {
-			s.config.Models = append(s.config.Models[:index], s.config.Models[index+1:]...)
+			s.config.Models = slices.Delete(s.config.Models, index, index+1)
 		} else {
 			s.config.Models[index] = *next
 		}

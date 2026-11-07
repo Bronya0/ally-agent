@@ -80,6 +80,7 @@ func applyCatalogModel(a *desktop, model modelCatalogModel) {
 // modelsPageBody is the model management surface: search/import/export/add,
 // two tabs, and provider-grouped card lists.
 func (a *desktop) modelsPageBody(c *ui.Context) {
+	var list *indexedMemo[chatModelListKey, chatModelList]
 	if a.modelTab == "" {
 		a.modelTab = "对话模型"
 	}
@@ -93,7 +94,8 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 		a.modelTabIdx = wantTab
 	}
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-		uikit.Input(c.Key("model-search"), &a.modelSearch).Placeholder("搜索").Label("搜索模型").Width(200)
+		search := uikit.Input(c.Key("model-search"), &a.modelSearch).Placeholder("搜索").Label("搜索模型").Width(200)
+		list = memoAt[indexedMemo[chatModelListKey, chatModelList]](search, "model-list")
 		ui.Spacer(c)
 		flat(c, "导入").OnClick(func() { a.importModels() })
 		flat(c, "导出").Disabled(len(a.config.Models) == 0 && (a.config.ImageGeneration == nil || len(a.config.ImageGeneration.Models) == 0) && len(a.config.VoiceModels) == 0).
@@ -131,11 +133,15 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 			a.openChatModelEditorIfNeeded()
 		}
 	}
-	var chatModels []backend.ModelConfig
+	var chatModels chatModelList
 	provider := ""
 	if a.modelTab == "对话模型" {
-		chatModels = a.filteredChatModels()
-		provider = a.chatModelProviderTabs(c, chatModels)
+		chatModels = list.get(len(a.config.Models), a.modelSearch,
+			func(i int) chatModelListKey { return chatModelListKeyFor(a.config.Models[i]) },
+			func() chatModelList { return buildChatModelList(a.config.Models, a.modelSearch) })
+		provider = a.chatModelProviderTabs(c, chatModels.providers)
+	} else {
+		*list = indexedMemo[chatModelListKey, chatModelList]{}
 	}
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(gapInline).Children(func() {
@@ -144,7 +150,7 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 			} else if a.modelTab == "图片模型" {
 				a.imageModelsSection(c)
 			} else {
-				a.chatModelsSection(c, chatModels, provider)
+				a.chatModelsSection(c, a.config.Models, chatModels.indices, provider)
 			}
 		})
 	})
@@ -165,19 +171,7 @@ func (a *desktop) openChatModelEditorIfNeeded() {
 	}
 }
 
-func (a *desktop) chatModelProviderTabs(c *ui.Context, models []backend.ModelConfig) string {
-	groups := map[string]bool{}
-	var order []string
-	for _, model := range models {
-		name := model.ProviderName
-		if name == "" {
-			name = customProviderName
-		}
-		if !groups[name] {
-			groups[name] = true
-			order = append(order, name)
-		}
-	}
+func (a *desktop) chatModelProviderTabs(c *ui.Context, order []string) string {
 	if len(order) == 0 {
 		return a.modelProvider
 	}
@@ -197,15 +191,16 @@ func (a *desktop) chatModelProviderTabs(c *ui.Context, models []backend.ModelCon
 	return order[providerIndex]
 }
 
-func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig, provider string) {
-	if len(models) == 0 {
+func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig, indices []int, provider string) {
+	if len(indices) == 0 {
 		emptyState(c, "没有匹配的模型", "点击“添加”创建第一个模型。", a.secondaryInk())
 		return
 	}
 
 	// The list is already sorted. Only the selected provider is drawn, so
 	// avoid copying every provider's models into groups on each frame.
-	for _, m := range models {
+	for _, index := range indices {
+		m := models[index]
 		name := m.ProviderName
 		if name == "" {
 			name = customProviderName
@@ -213,7 +208,6 @@ func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig,
 		if name != provider {
 			continue
 		}
-		m := m
 		rowCard(c, "chat-model-"+modelOption(m), func() {
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Wrap().Children(func() {
 				title := m.DisplayName
@@ -269,19 +263,41 @@ func apiFormatLabel(format string) string {
 	return "OpenAI Chat Completions"
 }
 
-func (a *desktop) filteredChatModels() []backend.ModelConfig {
-	query := strings.ToLower(strings.TrimSpace(a.modelSearch))
-	var out []backend.ModelConfig
-	for _, m := range a.config.Models {
+type chatModelListKey struct{ provider, display, model, base string }
+
+func chatModelListKeyFor(m backend.ModelConfig) chatModelListKey {
+	return chatModelListKey{m.ProviderName, m.DisplayName, m.Model, m.BaseURL}
+}
+
+type chatModelList struct {
+	indices   []int
+	providers []string
+}
+
+func buildChatModelList(models []backend.ModelConfig, search string) chatModelList {
+	query := strings.ToLower(strings.TrimSpace(search))
+	var out chatModelList
+	for i, m := range models {
 		if query != "" {
 			haystack := strings.ToLower(m.ProviderName + " " + m.DisplayName + " " + m.Model + " " + m.BaseURL)
 			if !strings.Contains(haystack, query) {
 				continue
 			}
 		}
-		out = append(out, m)
+		out.indices = append(out.indices, i)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Model < out[j].Model })
+	sort.SliceStable(out.indices, func(i, j int) bool { return models[out.indices[i]].Model < models[out.indices[j]].Model })
+	seen := map[string]bool{}
+	for _, i := range out.indices {
+		provider := models[i].ProviderName
+		if provider == "" {
+			provider = customProviderName
+		}
+		if !seen[provider] {
+			seen[provider] = true
+			out.providers = append(out.providers, provider)
+		}
+	}
 	return out
 }
 

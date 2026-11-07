@@ -515,6 +515,7 @@ func filterTasks(tasks []backend.ScheduledTask, id string) []backend.ScheduledTa
 			out = append(out, task)
 		}
 	}
+	clear(tasks[len(out):])
 	return out
 }
 

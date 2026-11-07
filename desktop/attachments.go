@@ -16,6 +16,7 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -613,7 +614,7 @@ func (a *desktop) pendingAttachmentRow(c *ui.Context, t *conversation) {
 				dangerIconAction(c, "attach-remove-"+att.ID, "移除 "+att.Name, "close", 20, func() {
 					for i, item := range t.PendingAttachments {
 						if item.ID == att.ID {
-							t.PendingAttachments = append(t.PendingAttachments[:i], t.PendingAttachments[i+1:]...)
+							t.PendingAttachments = slices.Delete(t.PendingAttachments, i, i+1)
 							delete(t.PendingAttachmentImages, att.ID)
 							break
 						}

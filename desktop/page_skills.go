@@ -44,11 +44,13 @@ var skillSources = []struct{ id, label string }{
 }
 
 func (a *desktop) skillsPageBody(c *ui.Context) {
+	var list *indexedMemo[skillListKey, skillList]
 	if a.skillsF.ToggleBusy == nil {
 		a.skillsF.ToggleBusy = map[string]bool{}
 	}
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-		uikit.Input(c.Key("skill-search"), &a.skillsF.Search).Placeholder("搜索").Label("搜索技能").Width(200)
+		search := uikit.Input(c.Key("skill-search"), &a.skillsF.Search).Placeholder("搜索").Label("搜索技能").Width(200)
+		list = memoAt[indexedMemo[skillListKey, skillList]](search, "skill-list")
 		ui.Spacer(c)
 		flat(c, "刷新").OnClick(func() { a.loadSkills(true) })
 		a.linkMenu(c, "skills-market", [][2]string{{"魔搭 ModelScope", "https://modelscope.cn"}, {"OpenAgentSkill", "https://openagentskill.com"}, {"skills.sh Trending", "https://skills.sh"}})
@@ -61,20 +63,12 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 		}
 	}
 	fieldNote(c, fmt.Sprintf("%d 个已启用 · %d 个可用", enabled, len(a.skills)), a.secondaryInk())
-	filtered := a.filteredSkills()
+	data := list.get(len(a.skills), a.skillsF.Search,
+		func(i int) skillListKey { return skillListKeyFor(a.skills[i]) },
+		func() skillList { return buildSkillList(a.skills, a.skillsF.Search) })
+	filtered := data.indices
 	if len(a.skills) > 0 {
-		counts := map[string]int{}
-		for _, s := range filtered {
-			counts[sourceKey(s.Source)]++
-		}
-		var labels []string
-		var ids []string
-		for _, src := range skillSources {
-			if counts[src.id] > 0 {
-				labels = append(labels, fmt.Sprintf("%s %d", src.label, counts[src.id]))
-				ids = append(ids, src.id)
-			}
-		}
+		labels, ids := data.labels, data.sources
 		if len(ids) > 0 {
 			index := 0
 			for i, id := range ids {
@@ -90,13 +84,7 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 				a.skillsF.sourceIDs = ids
 			}
 			active := ids[index]
-			var visible []backend.SkillDefinition
-			for _, s := range filtered {
-				if sourceKey(s.Source) == active {
-					visible = append(visible, s)
-				}
-			}
-			filtered = visible
+			filtered = data.groups[active]
 		}
 	}
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
@@ -117,9 +105,8 @@ func (a *desktop) skillsPageBody(c *ui.Context) {
 				}
 				return
 			}
-			sort.SliceStable(filtered, func(i, j int) bool { return filtered[i].Name < filtered[j].Name })
-			for _, s := range filtered {
-				s := s
+			for _, index := range filtered {
+				s := a.skills[index]
 				disabled := a.skillDisabled(s.Name)
 				enabled := !disabled
 				rowCard(c, "skill-"+s.Name, func() {
@@ -173,17 +160,40 @@ func sourceKey(source string) string {
 	return "other"
 }
 
-func (a *desktop) filteredSkills() []backend.SkillDefinition {
-	query := strings.ToLower(strings.TrimSpace(a.skillsF.Search))
-	var out []backend.SkillDefinition
-	for _, s := range a.skills {
+type skillListKey struct{ name, description, when, path, dir, source string }
+
+func skillListKeyFor(s backend.SkillDefinition) skillListKey {
+	return skillListKey{s.Name, s.Description, s.WhenToUse, s.Path, s.Dir, s.Source}
+}
+
+type skillList struct {
+	indices         []int
+	groups          map[string][]int
+	sources, labels []string
+}
+
+func buildSkillList(skills []backend.SkillDefinition, search string) skillList {
+	query := strings.ToLower(strings.TrimSpace(search))
+	out := skillList{groups: map[string][]int{}}
+	for i, s := range skills {
 		if query != "" {
 			haystack := strings.ToLower(s.Name + " " + s.Description + " " + s.WhenToUse + " " + s.Path + " " + s.Dir)
 			if !strings.Contains(haystack, query) {
 				continue
 			}
 		}
-		out = append(out, s)
+		out.indices = append(out.indices, i)
+	}
+	sort.SliceStable(out.indices, func(i, j int) bool { return skills[out.indices[i]].Name < skills[out.indices[j]].Name })
+	for _, i := range out.indices {
+		source := sourceKey(skills[i].Source)
+		out.groups[source] = append(out.groups[source], i)
+	}
+	for _, source := range skillSources {
+		if count := len(out.groups[source.id]); count > 0 {
+			out.sources = append(out.sources, source.id)
+			out.labels = append(out.labels, fmt.Sprintf("%s %d", source.label, count))
+		}
 	}
 	return out
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -578,7 +579,7 @@ func upsertScheduledTask(tasks []backend.ScheduledTask, task backend.ScheduledTa
 func removeScheduledTask(tasks []backend.ScheduledTask, id string) []backend.ScheduledTask {
 	for i := range tasks {
 		if tasks[i].ID == id {
-			return append(tasks[:i], tasks[i+1:]...)
+			return slices.Delete(tasks, i, i+1)
 		}
 	}
 	return tasks

@@ -27,6 +27,40 @@ func (m *memoOf[K, V]) get(key K, derive func(K) V) V {
 	return m.value
 }
 
+// indexedMemo keeps derived list data beside its widget. Compare each source
+// value, not a slice address or length: same-size edits must refresh the list.
+// keyAt lets callers compare just display/filter fields without copying full
+// configuration records on every frame. Derived indices read current records.
+type indexedMemo[K comparable, V any] struct {
+	keys  []K
+	query string
+	ready bool
+	value V
+}
+
+func (m *indexedMemo[K, V]) get(count int, query string, keyAt func(int) K, derive func() V) V {
+	changed := !m.ready || len(m.keys) != count
+	if !changed {
+		for i, key := range m.keys {
+			if key != keyAt(i) {
+				changed = true
+				break
+			}
+		}
+	}
+	if changed {
+		m.keys = make([]K, count)
+		for i := range m.keys {
+			m.keys[i] = keyAt(i)
+		}
+	}
+	if changed || m.query != query {
+		m.value = derive()
+		m.query, m.ready = query, true
+	}
+	return m.value
+}
+
 // memoAt attaches a memo to e under name, so it lives as long as e does.
 func memoAt[V any](e ui.Element, name string) *V {
 	return ui.Local(e, name, func() V {

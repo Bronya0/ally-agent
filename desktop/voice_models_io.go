@@ -156,6 +156,8 @@ func (a *desktop) commitVoiceModels(models []backend.VoiceModelConfig, success s
 			}
 			a.config = cfg
 			s.models = cloneVoiceModelConfigs(cfg.VoiceModels)
+			// Drop row text for deleted or replaced model records as well.
+			s.lines = nil
 			if closeForm {
 				s.formOpen = false
 			}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -241,7 +242,7 @@ func (a *desktop) closeWorkspaceTab(index int) {
 			}
 		}(t.Workspace)
 	}
-	a.tabs = append(a.tabs[:index], a.tabs[index+1:]...)
+	a.tabs = slices.Delete(a.tabs, index, index+1)
 	stillOpen := false
 	for _, tab := range a.tabs {
 		if sameWorkspace(tab.Workspace, t.Workspace) {
