@@ -600,6 +600,15 @@ func (a *desktop) deleteUserMessageDialog(c *ui.Context) {
 	if d == nil {
 		return
 	}
+	// All dismissal paths release the conversation the confirmation targeted.
+	defer func() {
+		if !d.Open && a.deletePrompt == d {
+			a.deletePrompt = nil
+		}
+	}()
+	if !d.Open {
+		return
+	}
 	modalCard(c, &d.Open, widthModalSmall, func() {
 		modalTitle(c, "删除该提问及之后？", "")
 		ui.Text(c, "将删除此提问及之后的所有对话，并同步清理模型上下文。此操作不可恢复。").

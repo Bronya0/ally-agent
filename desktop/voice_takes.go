@@ -6,6 +6,7 @@ package desktop
 // the user spoke it.
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,11 +72,13 @@ func (q *voiceTakeQueue) queueTake(take voiceTake) (dropped, start bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if len(q.pending) >= voiceTakeQueueLimit {
-		q.pending = q.pending[1:]
+		q.pending = slices.Delete(q.pending, 0, 1)
 		dropped = true
 	}
 	q.pending = append(q.pending, take)
-	sort.Slice(q.pending, func(i, j int) bool { return q.pending[i].seq < q.pending[j].seq })
+	if len(q.pending) > 1 {
+		sort.Slice(q.pending, func(i, j int) bool { return q.pending[i].seq < q.pending[j].seq })
+	}
 	start = !q.worker
 	q.worker = true
 	return dropped, start
@@ -91,7 +94,7 @@ func (q *voiceTakeQueue) next() (voiceTake, bool) {
 		return voiceTake{}, false
 	}
 	take := q.pending[0]
-	q.pending = q.pending[1:]
+	q.pending = slices.Delete(q.pending, 0, 1)
 	return take, true
 }
 

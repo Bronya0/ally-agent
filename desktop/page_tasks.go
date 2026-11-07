@@ -538,6 +538,13 @@ func (a *desktop) openTaskLog(task backend.ScheduledTask) {
 }
 
 func (a *desktop) taskLogDialog(c *ui.Context) {
+	// Escape and backdrop dismissal must release the log just like the button.
+	defer func() {
+		if !a.tasksF.LogOpen {
+			a.tasksF.LogTitle, a.tasksF.LogService, a.tasksF.LogMeta, a.tasksF.LogBody = "", "", "", ""
+			a.tasksF.LogComplete, a.tasksF.LogTruncated = false, false
+		}
+	}()
 	if !a.tasksF.LogOpen {
 		return
 	}

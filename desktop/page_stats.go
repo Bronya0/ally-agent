@@ -311,27 +311,89 @@ func (a *desktop) statsHeatmap(c *ui.Context) {
 	}).Basis(400).Grow(1).MinWidth(0)
 }
 
+type statsDonutRow struct {
+	name, legendTip, hoverTip, percent, value string
+}
+
+// The input is checked field by field by the heading's local memo. Derived
+// labels and shares belong only to this card, including after same-size edits.
+type statsDonutData struct {
+	total                int
+	totalLabel, totalTip string
+	slices               []chart.Slice
+	rows                 []statsDonutRow
+}
+
+func buildStatsDonut(stats []backend.TokenDimensionStat) statsDonutData {
+	var data statsDonutData
+	for _, item := range stats {
+		data.total += item.InputTokens + item.OutputTokens
+	}
+	if data.total == 0 || len(stats) == 0 {
+		return data
+	}
+	data.totalLabel = statsNumber(float64(data.total))
+	data.totalTip = statsExact(data.total) + " tokens"
+	values := make([]float64, len(stats))
+	data.rows = make([]statsDonutRow, len(stats))
+	for i, item := range stats {
+		value := item.InputTokens + item.OutputTokens
+		values[i] = float64(value)
+		name := item.Name
+		if name == "" {
+			name = item.FullName
+		}
+		fullName := item.FullName
+		if fullName == "" {
+			fullName = name
+		}
+		percent := fmt.Sprintf("%.1f%%", float64(value)*100/float64(data.total))
+		data.rows[i] = statsDonutRow{
+			name:      name,
+			legendTip: fmt.Sprintf("%s · 输入 %s · 输出 %s tokens", fullName, statsExact(item.InputTokens), statsExact(item.OutputTokens)),
+			hoverTip:  fmt.Sprintf("%s · 输入 %s · 输出 %s · %s", name, statsExact(item.InputTokens), statsExact(item.OutputTokens), percent),
+			percent:   percent,
+			value:     statsNumber(float64(value)),
+		}
+	}
+	data.slices = chart.Pie(values, 0.03)
+	return data
+}
+
+type statsDonutSectorKey struct {
+	cx, cy, outer float32
+	slice         chart.Slice
+}
+
+// A sector changes with its live center, share or hover radius. Keep one path
+// per slice so repainting does not rebuild its curves, without fixing geometry
+// to an earlier layout or retaining paths for past snapshots.
+type statsDonutSectorMemo = memoOf[statsDonutSectorKey, *ui.Path]
+
+func statsDonutSector(key statsDonutSectorKey) *ui.Path {
+	return chart.Sector(key.cx, key.cy, 47, key.outer, key.slice)
+}
+
 // statsDonut draws a ring with a legend: chart.Pie divides the circle, chart.Sector
 // gives each slice's path and chart.SliceAt says which slice is under the pointer,
 // so the ring is no longer painted as a fan of small quads.
 func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenDimensionStat) {
 	card(c, "donut-"+title, func() {
-		sectionTitle(c, title)
-		total := 0
-		for _, s := range stats {
-			total += s.InputTokens + s.OutputTokens
-		}
-		if total == 0 || len(stats) == 0 {
+		heading := sectionTitle(c.Key("donut-heading"), title)
+		data := memoAt[indexedMemo[backend.TokenDimensionStat, statsDonutData]](heading, "donut-data").get(len(stats), "",
+			func(i int) backend.TokenDimensionStat { return stats[i] },
+			func() statsDonutData { return buildStatsDonut(stats) })
+		if data.total == 0 || len(stats) == 0 {
 			fieldNote(c, "该区间暂无数据。", a.secondaryInk())
 			return
 		}
-		values := make([]float64, len(stats))
-		for i, item := range stats {
-			values[i] = float64(item.InputTokens + item.OutputTokens)
-		}
-		slices := chart.Pie(values, 0.03)
+		slices := data.slices
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Center).Children(func() {
 			box := ui.Box(c).Size(142, 142).Shrink(0).Center().Label(title + "环形图")
+			sectors := memoAt[[]statsDonutSectorMemo](box, "sectors")
+			if len(*sectors) != len(slices) {
+				*sectors = make([]statsDonutSectorMemo, len(slices))
+			}
 			hover := -1
 			if px, py, over := box.PointerPosition(); over {
 				bounds := box.Bounds()
@@ -346,41 +408,28 @@ func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenD
 					if i == hover {
 						outer = 67
 					}
-					p.FillPath(chart.Sector(cx, cy, 47, outer, slice), chartPalette[i%len(chartPalette)])
+					path := (*sectors)[i].get(statsDonutSectorKey{cx, cy, outer, slice}, statsDonutSector)
+					p.FillPath(path, chartPalette[i%len(chartPalette)])
 				}
 			})
 			box.Children(func() {
 				ui.Column(c).Center().Gap(2).PassThrough().Children(func() {
-					ui.Text(c, statsNumber(float64(total))).FontSize(fsHeading).Bold()
+					ui.Text(c, data.totalLabel).FontSize(fsHeading).Bold()
 					fieldNote(c, "tokens", a.secondaryInk())
 				})
 			})
 			if hover >= 0 {
-				item := stats[hover]
-				name := item.Name
-				if name == "" {
-					name = item.FullName
-				}
-				uikit.Tooltip(c, box, fmt.Sprintf("%s · 输入 %s · 输出 %s · %.1f%%", name, statsExact(item.InputTokens), statsExact(item.OutputTokens), float64(item.InputTokens+item.OutputTokens)*100/float64(total)))
+				uikit.Tooltip(c, box, data.rows[hover].hoverTip)
 			} else {
-				uikit.Tooltip(c, box, statsExact(total)+" tokens")
+				uikit.Tooltip(c, box, data.totalTip)
 			}
 			ui.Column(c).Grow(1).MinWidth(0).Gap(gapInline).Children(func() {
-				for i, item := range stats {
-					value := item.InputTokens + item.OutputTokens
-					name := item.Name
-					if name == "" {
-						name = item.FullName
-					}
-					fullName := item.FullName
-					if fullName == "" {
-						fullName = name
-					}
-					uikit.Tooltip(c, ui.Row(c.Key(fmt.Sprintf("stats-legend-%s-%d", title, i))).FillWidth().MinWidth(0).Gap(gapField).AlignItems(ui.Center), fmt.Sprintf("%s · 输入 %s · 输出 %s tokens", fullName, statsExact(item.InputTokens), statsExact(item.OutputTokens))).Children(func() {
+				for i, item := range data.rows {
+					uikit.Tooltip(c, ui.Row(c.Key(widgetKey(title, "stats-legend", i))).FillWidth().MinWidth(0).Gap(gapField).AlignItems(ui.Center), item.legendTip).Children(func() {
 						ui.Box(c).Size(8, 8).Shrink(0).Radius(2).Background(chartPalette[i%len(chartPalette)])
-						ui.Text(c, name).FontSize(fsTiny).SingleLine().Grow(1).MinWidth(0)
-						ui.Text(c, fmt.Sprintf("%.1f%%", float64(value)*100/float64(total))).FontSize(fsTiny).TextColor(a.secondaryInk()).Width(46).Shrink(0).TextAlign(ui.End).NoWrap()
-						ui.Text(c, statsNumber(float64(value))).Width(58).Shrink(0).TextAlign(ui.End).SingleLine().FontSize(fsTiny).TextColor(a.secondaryInk())
+						ui.Text(c, item.name).FontSize(fsTiny).SingleLine().Grow(1).MinWidth(0)
+						ui.Text(c, item.percent).FontSize(fsTiny).TextColor(a.secondaryInk()).Width(46).Shrink(0).TextAlign(ui.End).NoWrap()
+						ui.Text(c, item.value).Width(58).Shrink(0).TextAlign(ui.End).SingleLine().FontSize(fsTiny).TextColor(a.secondaryInk())
 					})
 				}
 			})
