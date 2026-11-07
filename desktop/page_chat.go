@@ -1074,12 +1074,13 @@ func (a *desktop) submitAsk(t *conversation) {
 }
 
 // welcomeKey names the transcript a welcome lookup was made for: the count, the
-// session, and the first row's role and its leading bytes (sliced, never copied).
+// session, and the first row's role and its leading bytes. Store those bytes
+// inline so this single cache slot cannot retain an entire closed transcript.
 type welcomeKey struct {
 	id      string
 	count   int
 	role    string
-	head    string
+	head    [32]byte
 	headLen int
 }
 
@@ -1090,10 +1091,7 @@ func welcomeKeyFor(t *conversation) welcomeKey {
 		key.role = str(first, "role")
 		content := str(first, "content")
 		key.headLen = len(content)
-		if len(content) > 32 {
-			content = content[:32]
-		}
-		key.head = content
+		copy(key.head[:], content)
 	}
 	return key
 }

@@ -5,6 +5,7 @@ import (
 	"ally-dev/desktop/uikit"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -866,7 +867,7 @@ func (a *desktop) imageModelTestDialog(c *ui.Context) {
 						if in.preview != nil {
 							ui.Image(c, in.preview).Size(88, 88).Fit(ui.Contain)
 						}
-						dangerButton(c, "删除").Disabled(t.busy).OnClick(func() { t.inputs = append(t.inputs[:i], t.inputs[i+1:]...) })
+						dangerButton(c, "删除").Disabled(t.busy).OnClick(func() { t.inputs = slices.Delete(t.inputs, i, i+1) })
 					})
 				}
 			})

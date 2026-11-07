@@ -59,6 +59,7 @@ func dropCompactPreview(t *conversation) {
 		}
 		kept = append(kept, m)
 	}
+	clear(t.Messages[len(kept):])
 	t.Messages = kept
 }
 

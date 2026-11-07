@@ -59,11 +59,11 @@ type highlightCacheEntry struct {
 	bytes      int
 }
 
-// The cache is bounded by the bytes it keeps rather than by one source's size:
-// a large preview used to stay out of it and be tokenized on every frame.
+// Admission bounds source bytes and a weighted span count, rather than just
+// one source's size. The weight is an estimate, not actual heap accounting.
 const (
 	highlightCacheBudget = 256 << 10
-	highlightSpanCost    = 48 // what one span costs beside its text
+	highlightSpanCost    = 48 // admission weight; ui.Span's actual size is larger
 	highlightCacheSize   = 32
 )
 
@@ -115,16 +115,19 @@ func buildCodeSpans(c *ui.Context, text, path string, base ui.Color) []ui.Span {
 	}
 	var spans []ui.Span
 	var state uint64
-	for n, line := range strings.Split(text, "\n") {
-		if n > 0 {
+	var tokens []editor.Token
+	first := true
+	for line := range strings.SplitSeq(text, "\n") {
+		if !first {
 			spans = append(spans, ui.Span{Text: "\n"})
 		}
-		tokens, next := language.Tokenizer.Tokenize(line, state, nil)
-		state = next
+		first = false
+		tokens, state = language.Tokenizer.Tokenize(line, state, tokens[:0])
+		lineFirst, runStart := len(spans), 0
 		start := 0
 		for _, token := range tokens {
 			end := token.End
-			if end < start || end > len(line) {
+			if end <= start || end > len(line) {
 				continue
 			}
 			color := base
@@ -140,11 +143,22 @@ func buildCodeSpans(c *ui.Context, text, path string, base ui.Color) []ui.Span {
 			case editor.TokenInvalid, editor.TokenDeleted:
 				color = c.Theme().Danger
 			}
-			spans = append(spans, ui.Span{Text: line[start:end], Color: color})
+			// Adjacent tokens with the same displayed style can share a span.
+			// Extend their source slice without joining or copying their text.
+			if len(spans) > lineFirst && spans[len(spans)-1].Color == color {
+				spans[len(spans)-1].Text = line[runStart:end]
+			} else {
+				runStart = start
+				spans = append(spans, ui.Span{Text: line[start:end], Color: color})
+			}
 			start = end
 		}
 		if start < len(line) {
-			spans = append(spans, ui.Span{Text: line[start:], Color: base})
+			if len(spans) > lineFirst && spans[len(spans)-1].Color == base {
+				spans[len(spans)-1].Text = line[runStart:]
+			} else {
+				spans = append(spans, ui.Span{Text: line[start:], Color: base})
+			}
 		}
 	}
 	return spans

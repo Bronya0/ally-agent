@@ -12,6 +12,7 @@ import (
 // view composes the window: header, mode rail and the active page. Every
 // sub-view is a method so a page can be read (and ported) on its own.
 func (a *desktop) view(c *ui.Context) {
+	clear(a.previewRequests)
 	a.previewRequests = a.previewRequests[:0]
 	defer a.schedulePreviewSync()
 	defer a.syncPluginHost()

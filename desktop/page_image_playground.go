@@ -193,6 +193,7 @@ func (a *desktop) runImageModelTest(s *imageModelsState, t *imageModelTest) {
 			}
 			t.results = append([]imageTestResult{{meta: result, preview: bm}}, t.results...)
 			if len(t.results) > 20 {
+				clear(t.results[20:])
 				t.results = t.results[:20]
 			}
 		})

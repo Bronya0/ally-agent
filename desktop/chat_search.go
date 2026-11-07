@@ -61,6 +61,7 @@ type chatSearch struct {
 	spanCache  map[chatSearchBlockKey][][2]int
 	codeCache  map[chatSearchCodeKey]chatSearchCode
 	cacheQuery string
+	queryKey   memoOf[chatSearchQueryOptions, string]
 	// lastQuery and lastCompute tell a new query, which is searched at once, from
 	// a transcript still streaming, which is re-searched at most this often.
 	lastQuery   string
@@ -161,6 +162,7 @@ func (a *desktop) closeChatSearch(t *conversation) {
 	s.frameDoc = nil
 	s.patternKey, s.pattern, s.patternErr = "", nil, nil
 	s.literal, s.literalPrefix, s.literalStarts, s.literalQuery = nil, nil, nil, ""
+	s.queryKey = memoOf[chatSearchQueryOptions, string]{}
 	a.chatSearchFocus = ""
 	// Both focus fields change in the frame the bar closes, and the engine walks
 	// them in map order: releasing the bar's field can clear the focus the composer
@@ -257,8 +259,15 @@ func chatSearchScanTail(t *conversation, s *chatSearch, last int) ([]chatSearchM
 	return matches, truncated
 }
 
+type chatSearchQueryOptions struct {
+	query                        string
+	matchCase, wholeWord, regexp bool
+}
+
 func chatSearchQueryKey(s *chatSearch) string {
-	return fmt.Sprintf("%s\x00%t\x00%t\x00%t", s.Query, s.MatchCase, s.WholeWord, s.Regexp)
+	return s.queryKey.get(chatSearchQueryOptions{s.Query, s.MatchCase, s.WholeWord, s.Regexp}, func(key chatSearchQueryOptions) string {
+		return fmt.Sprintf("%s\x00%t\x00%t\x00%t", key.query, key.matchCase, key.wholeWord, key.regexp)
+	})
 }
 
 // chatSearchCacheKey combines the query with the transcript revision, so edits
