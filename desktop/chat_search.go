@@ -154,8 +154,8 @@ func (a *desktop) closeChatSearch(t *conversation) {
 	s.Open = false
 	s.reveal = false
 	// The bar's per-frame caches describe a transcript that is no longer searched.
-	// The handles stay: they are pruned by the transcript's window every frame, and
-	// a handle handed back to the engine is never reclaimed before the window close.
+	// Row handles stay for this page and are recycled as it changes; the engine
+	// keeps each registered binding until window close.
 	s.blockBound = false
 	s.spanCache, s.byMessage, s.cache, s.cacheKey = nil, nil, nil, ""
 	s.codeCache = nil

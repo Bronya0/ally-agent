@@ -222,6 +222,7 @@ type chatUI struct {
 	Round                  map[int]*roundStat
 	PromptOpen             map[int]bool
 	PromptHandles          map[int]*ui.Handle
+	transcriptHandlePool   []*ui.Handle
 	PendingPrompt          bool
 	PendingPromptIdx       int
 	ToolOpen               map[string]bool

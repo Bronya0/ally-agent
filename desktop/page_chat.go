@@ -27,19 +27,20 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	defer func() {
 		st.windowBuilding = false
 		st.transcriptRows = nil
+		// The search hooks share this document only within the current build.
+		st.Search.frameDoc = nil
 	}()
 	refreshRoundPlacements(t, start, end)
 	releaseCommandDetailsOutsideWindow(t, start, end)
-	for idx := range st.PromptHandles {
-		if idx < start || idx >= end {
-			delete(st.PromptHandles, idx)
+	pruneTranscriptHandles(t, start, end)
+	for key := range st.Search.codeCache {
+		if key.Message < start || key.Message >= end {
+			delete(st.Search.codeCache, key)
 		}
 	}
-	if st.Search.handles != nil {
-		for idx := range st.Search.handles {
-			if idx < start || idx >= end {
-				delete(st.Search.handles, idx)
-			}
+	for key := range st.Search.spanCache {
+		if key.Message < start || key.Message >= end {
+			delete(st.Search.spanCache, key)
 		}
 	}
 	if st.PendingPrompt {
@@ -214,7 +215,7 @@ func (a *desktop) messageRow(c *ui.Context, t *conversation, i int, rows *transc
 		}
 		handle := st.PromptHandles[i]
 		if handle == nil {
-			handle = &ui.Handle{}
+			handle = takeTranscriptHandle(st)
 			st.PromptHandles[i] = handle
 		}
 		row.Bind(handle)
@@ -233,7 +234,7 @@ func (a *desktop) messageRow(c *ui.Context, t *conversation, i int, rows *transc
 			st.Search.handles[i] = st.PromptHandles[i]
 		} else {
 			if handle == nil {
-				handle = &ui.Handle{}
+				handle = takeTranscriptHandle(st)
 				st.Search.handles[i] = handle
 			}
 			row.Bind(handle)
@@ -296,7 +297,12 @@ func (a *desktop) markdownOptions(t *conversation, i int) *markdown.Options {
 		t.MDCodeBlock = map[int]func(*ui.Context, *markdown.CodeBlockView){}
 	}
 	if t.MD[i] == nil {
-		t.MD[i] = a.readingMarkdownOptions(fmt.Sprintf("%s:markdown:%d", t.ID, i))
+		t.MD[i] = a.readingMarkdownOptionsForSource(func() string {
+			if i < len(t.Messages) {
+				return str(t.Messages[i], "content")
+			}
+			return ""
+		}, fmt.Sprintf("%s:markdown:%d", t.ID, i))
 		t.MDCodeBlock[i] = t.MD[i].CodeBlock
 	}
 	if t.MD[i].Theme == nil {
@@ -647,6 +653,8 @@ func (a *desktop) confirmDeleteUserMessage(d *deletePromptState) {
 // the shortened transcript and collapse the history window.
 func resetTranscriptAfterDelete(t *conversation, index int) {
 	t.resetTranscriptLookup()
+	releaseStaleStream(t)
+	pruneTranscriptHandles(t, 0, index)
 	releaseCommandDetails(t)
 	rounds := t.uiState().Round
 	for k := range rounds {

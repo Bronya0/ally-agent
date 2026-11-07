@@ -62,6 +62,7 @@ func dropCompactPreview(t *conversation) {
 	clear(t.Messages[len(kept):])
 	t.Messages = kept
 	t.resetTranscriptLookup()
+	releaseStaleStream(t)
 }
 
 // compactDelta appends one summary fragment to the live preview row, so the
@@ -115,9 +116,11 @@ func replaceTranscript(t *conversation, summary string) {
 	// ownership/block-starts answer instead of reusing it.
 	t.markHistory()
 	st := t.uiState()
+	st.Stream = nil
 	st.Round = map[int]*roundStat{}
 	st.RoundAt = map[int]int{}
 	st.PromptOpen = map[int]bool{}
+	pruneTranscriptHandles(t, 0, 0)
 	st.PromptHandles = map[int]*ui.Handle{}
 	st.ToolOpen = map[string]bool{}
 	st.CommandDetails = nil
@@ -187,6 +190,7 @@ func compactToastText(before, after int) string {
 // exact original text plus its occurrence counted from the end, because a UI row
 // carries no call id and repeated answers are indistinguishable by text alone.
 func applyFastCompaction(t *conversation, result map[string]any) {
+	defer releaseStaleStream(t)
 	releaseCommandDetails(t)
 	edits := map[string]map[int]string{}
 	if raw, ok := result["assistantEdits"].([]any); ok {

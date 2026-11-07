@@ -53,6 +53,18 @@ func appendStreamChunk(st *chatUI, row int, before, delta string) string {
 	return acc.text.String()
 }
 
+// A history rewrite can retire the row while a run is still executing tools.
+// Drop the accumulator then, rather than retaining that old answer until done.
+func releaseStaleStream(t *conversation) {
+	if t.UI == nil || t.UI.Stream == nil {
+		return
+	}
+	acc := t.UI.Stream
+	if acc.row < 0 || acc.row >= len(t.Messages) || str(t.Messages[acc.row], "content") != acc.text.String() {
+		t.UI.Stream = nil
+	}
+}
+
 func (a *desktop) applyEvent(name string, p map[string]any) {
 	if a.closing && name != "service:update" {
 		return

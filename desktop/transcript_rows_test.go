@@ -2,9 +2,86 @@
 package desktop
 
 import (
+	"fmt"
 	"slices"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
+
+func TestTranscriptHandleReuseKeepsPageNavigationAndCompactionAligned(t *testing.T) {
+	conv := &conversation{ID: "pages"}
+	for i := 0; i < 300; i++ {
+		conv.Messages = append(conv.Messages,
+			map[string]any{"role": "user", "content": fmt.Sprintf("question-%d", i)},
+			map[string]any{"role": "assistant", "content": fmt.Sprintf("```go\nvar needle%d = 1\n```", i)},
+		)
+	}
+	a := &desktop{prefs: defaultPrefs(), tabs: []*conversation{conv}, page: "chat"}
+	a.prefs.HistoryPageSize = 20
+	st := conv.uiState()
+	st.Search.Open = true
+	st.Search.Query = "needle"
+	observeFirst, scrolledBeforeCommit := false, false
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		ui.Column(c).Fill().Children(func() { a.chatMessages(c, conv, 800) })
+		if observeFirst {
+			observeFirst = false
+			scrolledBeforeCommit = !st.PendingPrompt
+		}
+	}, 800, 600)
+	seen := map[*ui.Handle]bool{}
+	for page := 0; page < 30; page++ {
+		start := page * 20
+		st.VisibleStart, st.PendingPromptIdx, st.PendingPrompt = start+1, start, true
+		st.Follow = false
+		conv.Scroll.Y = 0
+		observeFirst = true
+		tt.Frame()
+		if scrolledBeforeCommit {
+			t.Fatal("recycled handle scrolled before its new row was committed")
+		}
+		tt.Frame()
+		if st.PendingPrompt {
+			t.Fatal("prompt navigation lost the new row's bounds")
+		}
+		for _, handles := range []map[int]*ui.Handle{st.PromptHandles, st.Search.handles} {
+			for index, handle := range handles {
+				if index < start || index >= start+20 {
+					t.Fatal("an older page still owns a row handle")
+				}
+				seen[handle] = true
+			}
+		}
+		if len(seen) > 20 {
+			t.Fatal("row bindings grew with the conversation instead of the page")
+		}
+		if st.Search.frameDoc != nil {
+			t.Fatal("the find bar retained a frame's Markdown document")
+		}
+		for key := range st.Search.codeCache {
+			if key.Message < start || key.Message >= start+20 {
+				t.Fatal("the find bar retained an older page's derived code")
+			}
+		}
+	}
+	replaceTranscript(conv, "compacted")
+	if len(st.PromptHandles) != 0 || len(st.Search.handles) != 0 || len(st.transcriptHandlePool) != 20 {
+		t.Fatal("compaction lost reusable handles or retained old row identities")
+	}
+	conv.Messages = append(conv.Messages, map[string]any{"role": "user", "content": "new question"})
+	tt.Frame()
+	if handle := st.PromptHandles[1]; handle == nil || !seen[handle] {
+		t.Fatal("the compacted conversation did not reuse a retired binding")
+	}
+	conv.Messages = conv.Messages[:1]
+	resetTranscriptAfterDelete(conv, 1)
+	if st.PromptHandles[1] != nil || st.Search.handles[1] != nil {
+		t.Fatal("deleting a prompt retained its navigation identity")
+	}
+}
 
 func TestToolEventsRefreshCachedRowOwnership(t *testing.T) {
 	for _, tc := range []struct {

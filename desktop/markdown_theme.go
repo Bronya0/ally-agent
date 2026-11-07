@@ -8,6 +8,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/egoist/mygo/ui/markdown/parser"
 )
 
 const readingFontSize float32 = 16
@@ -107,6 +108,12 @@ func readingSizes(body, code float64) (float32, float32) {
 // Reuse MyGo's entire code-block renderer (copy, syntax, scrolling and selection).
 // A nested native view gives fenced code its own size without shrinking inline code.
 func (a *desktop) readingMarkdownOptions(scope ...string) *markdown.Options {
+	return a.readingMarkdownOptionsForSource(nil, scope...)
+}
+
+// source, when supplied, must be the text passed to the outer Markdown view.
+// Completed code blocks then reuse their text while that source is unchanged.
+func (a *desktop) readingMarkdownOptionsForSource(source func() string, scope ...string) *markdown.Options {
 	options := &markdown.Options{Theme: &markdown.Theme{}, WrapCode: true}
 	previewScope := fmt.Sprintf("markdown:%p", options)
 	if len(scope) > 0 {
@@ -118,37 +125,48 @@ func (a *desktop) readingMarkdownOptions(scope ...string) *markdown.Options {
 		},
 	}
 	type cachedBlock struct {
-		code, source, language string
-		options                markdown.Options
-		theme                  markdown.Theme
+		input, source, language string
+		extensions              parser.Extensions
+		ready                   bool
+		fromSource              bool
+		options                 markdown.Options
+		theme                   markdown.Theme
 	}
-	blocks := map[int]*cachedBlock{}
 	options.CodeBlock = func(c *ui.Context, block *markdown.CodeBlockView) {
-		cached := blocks[block.Index]
-		if cached == nil {
-			if len(blocks) >= 32 {
-				blocks = map[int]*cachedBlock{}
-			}
-			cached = &cachedBlock{}
-			cached.options.Theme = &cached.theme
-			blocks[block.Index] = cached
+		holder := ui.Column(c.Key(fmt.Sprintf("reading-code-%d", block.Index))).FillWidth()
+		cached := memoAt[cachedBlock](holder, "reading-code")
+		input, code := "", ""
+		fromSource := source != nil && !block.Open
+		if fromSource {
+			input = source()
+		} else {
+			code = block.Code()
+			input = code
 		}
-		code := block.Code()
-		if cached.source == "" || cached.code != code || cached.language != block.Language {
-			cached.code, cached.language = code, block.Language
+		// Open blocks can still change as the parser reveals/heals their tail.
+		// Other viewers without a source key retain the existing Code() behavior.
+		if !cached.ready || cached.input != input || cached.fromSource != fromSource || cached.language != block.Language || cached.extensions != options.Extensions {
+			if fromSource {
+				code = block.Code()
+			}
+			cached.language, cached.extensions, cached.ready, cached.fromSource = block.Language, options.Extensions, true, fromSource
 			fence := "~~~"
 			for strings.Contains(code, fence) {
 				fence += "~"
 			}
 			cached.source = fence + block.Language + string(rune(10)) + code + string(rune(10)) + fence
 		}
+		cached.input = input
+		cached.options.Theme = &cached.theme
 		cached.theme = *options.Theme
 		_, codeSize := readingSizes(a.config.MessageFontSize, a.config.CodeFontSize)
 		cached.theme.CodeSize = codeSize / options.Theme.FontSize
 		cached.theme.CodeLineHeight = 1.5
 		cached.options.WrapCode = options.WrapCode
 		cached.options.ShareSelection = true
-		markdown.View(c.Key(fmt.Sprintf("reading-code-%d", block.Index)), cached.source, &cached.options).FillWidth()
+		holder.Children(func() {
+			markdown.View(c, cached.source, &cached.options).FillWidth()
+		})
 	}
 	return options
 }

@@ -3,6 +3,45 @@ package desktop
 
 import "github.com/egoist/mygo/ui"
 
+// MyGo keeps registered handle bindings until the window closes and visits
+// them each frame. Reuse the handles of rows leaving this page instead of
+// registering one for every prompt/search row in an all-day conversation.
+func pruneTranscriptHandles(t *conversation, start, end int) {
+	st := t.uiState()
+	for index, handle := range st.PromptHandles {
+		if index >= start && index < end {
+			continue
+		}
+		delete(st.PromptHandles, index)
+		// A searched prompt shares its handle with the prompt navigator.
+		if st.Search.handles[index] == handle {
+			delete(st.Search.handles, index)
+		}
+		if handle != nil {
+			st.transcriptHandlePool = append(st.transcriptHandlePool, handle)
+		}
+	}
+	for index, handle := range st.Search.handles {
+		if index >= start && index < end {
+			continue
+		}
+		delete(st.Search.handles, index)
+		if handle != nil {
+			st.transcriptHandlePool = append(st.transcriptHandlePool, handle)
+		}
+	}
+}
+
+func takeTranscriptHandle(st *chatUI) *ui.Handle {
+	if n := len(st.transcriptHandlePool); n > 0 {
+		handle := st.transcriptHandlePool[n-1]
+		st.transcriptHandlePool[n-1] = nil
+		st.transcriptHandlePool = st.transcriptHandlePool[:n-1]
+		return handle
+	}
+	return &ui.Handle{}
+}
+
 // rowKind is the one answer to "who draws message i". The transcript renderer,
 // the history pager and restored scroll offsets all ask it, so a message that
 // another row already shows can never claim a slot of its own: an empty slot
@@ -182,13 +221,19 @@ func (t *conversation) cachedTranscriptRows() *transcriptRows {
 // a row that draws. The grouping rule lives in foldsInto/startsBlock, so a page
 // never starts on a row another row already draws. One frame asks more than
 // once (the window, the older-page count) and every answer walks the whole
-// transcript, so the answer stays until the transcript changes. Callers read it
-// and never append to it.
+// transcript, so the answer stays until the transcript changes. The slice is
+// borrowed until the next history change; callers read it and never append.
 func (t *conversation) blockStarts() []int {
 	key := historyKey{rows: len(t.Messages), rev: t.historyRev}
 	return t.historyStarts.get(key, func(historyKey) []int {
 		rows := t.cachedTranscriptRows()
-		starts := make([]int, 0, len(t.Messages)+1)
+		// Reuse the index while a conversation grows. Folded tool records often
+		// outnumber visible blocks, so reserving one slot per message on every
+		// append wastes both live capacity and transient allocations.
+		starts := t.historyStarts.value[:0]
+		if cap(starts) == 0 || cap(starts) > 4*(len(t.Messages)+1)+256 {
+			starts = make([]int, 0, min(len(t.Messages)+1, 256))
+		}
 		for i := range t.Messages {
 			if rows.startsBlock(i) {
 				starts = append(starts, i)

@@ -7,6 +7,35 @@ import (
 	"testing"
 )
 
+func TestHistoryRewritesReleaseRetiredStreamingAnswers(t *testing.T) {
+	for _, operation := range []string{"replace", "fast", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			conv := &conversation{ID: "rewrite"}
+			body := appendStreamChunk(conv.uiState(), 0, "", strings.Repeat("old answer\n", 8000))
+			conv.Messages = []map[string]any{{"role": "assistant", "content": body}}
+			switch operation {
+			case "replace":
+				replaceTranscript(conv, "summary")
+			case "fast":
+				applyFastCompaction(conv, map[string]any{"assistantEdits": []any{map[string]any{"before": body, "fromEnd": 1, "after": "excerpt"}}})
+			case "delete":
+				conv.Messages = nil
+				resetTranscriptAfterDelete(conv, 0)
+			}
+			if conv.uiState().Stream != nil {
+				t.Fatal("rewritten history retained the retired answer buffer")
+			}
+			before := ""
+			if len(conv.Messages) > 0 {
+				before = str(conv.Messages[0], "content")
+			}
+			if got := appendStreamChunk(conv.uiState(), 0, before, " next"); got != before+" next" {
+				t.Fatal("streaming after a history rewrite reused the old answer")
+			}
+		})
+	}
+}
+
 func TestSnapshotOmitsTransientOutputsAndPreservesCardMetadata(t *testing.T) {
 	body := strings.Repeat("STALE_RESULT_BODY", 8000)
 	for _, tc := range []struct {

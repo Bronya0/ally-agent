@@ -93,3 +93,35 @@ func TestReadingTypographySeparatesInlineAndFencedCode(t *testing.T) {
 		t.Fatal("cached message did not follow palette change")
 	}
 }
+
+func TestReadingCodeRefreshesAfterEditsAndStreamingFenceCloses(t *testing.T) {
+	a := &desktop{prefs: defaultPrefs()}
+	conv := &conversation{ID: "code", Messages: []map[string]any{{"role": "assistant", "content": "```go\nvar first = 1\n```"}}}
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		ui.Column(c).Fill().Children(func() { a.assistantMessage(c, conv, 0, conv.Messages[0]) })
+	}, 800, 600)
+	for _, tc := range []struct{ source, want, absent string }{
+		{"```go\nvar first = 1\n```", "var first = 1", "var other = 2"},
+		{"```go\nvar other = 2\n```", "var other = 2", "var first = 1"},
+		{"```go\nvar tail =", "var tail =", "var other = 2"},
+		{"```go\nvar tail = 9\n```", "var tail = 9", "var other = 2"},
+		{"> ```go\n> var quote = 3\n> ```", "var quote = 3", "var tail = 9"},
+	} {
+		conv.Messages[0]["content"] = tc.source
+		for frame := 0; frame < 2; frame++ {
+			tt.Frame()
+			text := strings.Join(tt.Texts(), "\n")
+			if !strings.Contains(text, tc.want) || strings.Contains(text, tc.absent) {
+				t.Fatalf("code did not follow the current source: %q", text)
+			}
+		}
+	}
+	// A replacement summary reuses the row index and must release the old code.
+	replaceTranscript(conv, "summary without code")
+	tt.Frame()
+	if text := strings.Join(tt.Texts(), "\n"); !strings.Contains(text, "summary without code") || strings.Contains(text, "var quote = 3") {
+		t.Fatal("replaced message retained its old code view")
+	}
+}
