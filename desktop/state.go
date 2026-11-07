@@ -119,13 +119,17 @@ func readPrefs(path string) uiPrefs {
 
 // savePrefs writes an owned snapshot asynchronously. Failures are reported
 // without blocking the UI and retained for the quit/update save barrier.
-func (a *desktop) savePrefs(notice ...string) {
+func (a *desktop) savePrefs(notice ...string) <-chan error {
 	if a.prefsGeometryTimer != nil {
 		a.prefsGeometryTimer.Stop()
 		a.prefsGeometryTimer = nil
 	}
 	if a.core == nil {
-		return
+		return nil
+	}
+	if a.page == "settings" && !a.committingSettings {
+		a.prefsPending = true
+		return nil
 	}
 	p := a.prefs
 	p.RecentModels = append([]string(nil), p.RecentModels...)
@@ -134,6 +138,9 @@ func (a *desktop) savePrefs(notice ...string) {
 	previous := a.prefsSaveTail
 	done := make(chan struct{})
 	a.prefsSaveTail = done
+	a.prefsPending = false
+	result := make(chan error, 1)
+	path := a.prefsPath()
 	go func() {
 		defer close(done)
 		if previous != nil {
@@ -141,8 +148,8 @@ func (a *desktop) savePrefs(notice ...string) {
 		}
 		prefsMu.Lock()
 		defer prefsMu.Unlock()
-		path := a.prefsPath()
 		if path == "" {
+			result <- nil
 			return
 		}
 		data, err := json.MarshalIndent(p, "", "  ")
@@ -150,12 +157,17 @@ func (a *desktop) savePrefs(notice ...string) {
 			err = read.SafeWriteFile(path, data, 0o600)
 		}
 		a.writeFailures.record("prefs", err)
+		result <- err
 		if a.win != nil {
 			a.win.Update(func() {
+				if err != nil && a.prefsSaveTail == done {
+					a.prefsPending = true
+				}
 				a.prefsSaveResult(err, notice)
 			})
 		}
 	}()
+	return result
 }
 
 // Split controls report every drag frame. Save the final geometry after the
@@ -348,6 +360,7 @@ type settingsForm struct {
 
 	SessionHeaderConfirmOpen bool
 	SessionHeaderToDisable   string
+	BackgroundPath           *string
 }
 
 func (a *desktop) syncSettingsForm() {
@@ -389,9 +402,6 @@ func (a *desktop) syncSettingsForm() {
 	f.FontSub = clampView(a.configDraft.SubFontSize, 13)
 	f.FontAux = clampView(a.configDraft.AuxFontSize, 12)
 	f.BgOpacity = a.configDraft.BackgroundOpacity
-	if f.BgOpacity <= 0 {
-		f.BgOpacity = 0.15
-	}
 	f.Validation = map[string]bool{
 		"Python":     boolValue(a.configDraft.AutoValidationPython),
 		"Go":         boolValue(a.configDraft.AutoValidationGo),
@@ -406,6 +416,8 @@ func (a *desktop) syncSettingsForm() {
 	if f.Tab == "" {
 		f.Tab = "通用"
 	}
+	baseline := normalizeSettingsConfig(a.settingsConfigDraft()).Clone()
+	a.settingsBase = &baseline
 }
 
 func clampView(v, def float64) float64 {
@@ -442,9 +454,6 @@ func normalizeSettingsConfig(cfg backend.ConfigState) backend.ConfigState {
 	}
 	if cfg.CompactThresholdTokens <= 0 {
 		cfg.CompactThresholdTokens = backend.DefaultCompactThresholdTokens
-	}
-	if cfg.BackgroundOpacity <= 0 {
-		cfg.BackgroundOpacity = 0.15
 	}
 	body, code := readingSizes(cfg.MessageFontSize, cfg.CodeFontSize)
 	cfg.MessageFontSize, cfg.CodeFontSize = float64(body), float64(code)

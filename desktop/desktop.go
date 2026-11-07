@@ -108,6 +108,8 @@ type desktop struct {
 	writeFailures         windowWriteFailures
 	prefsSaveTail         chan struct{}
 	prefsGeometryTimer    *time.Timer
+	prefsPending          bool
+	committingSettings    bool
 	lastCompletionNotice  time.Time
 	completionNotices     map[string]bool
 	completionNoticeOrder []string
@@ -186,6 +188,10 @@ type desktop struct {
 	taskTab, taskScope, taskLog, taskLogTitle string
 	stats                                     backend.TokenStatsResult
 	configDraft                               backend.ConfigState
+	settingsBase                              *backend.ConfigState
+	settingsLoadSequence                      uint64
+	settingsSaveSequence                      uint64
+	settingsInFlight                          *settingsCommit
 	settingsTab                               string
 	settingsRetries, settingsConcurrency      float64
 	settingsAllowPrivate                      bool
@@ -406,6 +412,7 @@ func Run() {
 			plugins, pluginErr := a.core.ListPlugins()
 			a.win.Update(func() {
 				a.config = cfg
+				a.configDraft = cfg.Clone()
 				a.autostartValue = autostart
 				if autostartInitialized && !a.prefs.AutostartInitialized {
 					a.prefs.AutostartInitialized = true
@@ -551,9 +558,6 @@ func (a *desktop) current() *conversation {
 	return a.tabs[a.active]
 }
 func (a *desktop) newConversation(workspace string) {
-	if a.page == "settings" {
-		a.commitSettingsOnLeave()
-	}
 	if a.page == "models" {
 		a.cancelOAuthWhenLeaving()
 	}
@@ -573,6 +577,9 @@ func (a *desktop) newConversation(workspace string) {
 		return
 	}
 
+	if a.page == "settings" {
+		a.commitSettingsOnLeave()
+	}
 	t := a.freshConversation(workspace)
 	a.composerFocus = t.ID
 	a.tabs = append(a.tabs, t)
@@ -631,15 +638,15 @@ func (a *desktop) rememberSession(t *conversation) {
 }
 
 func (a *desktop) newSession() {
-	if a.page == "settings" {
-		a.commitSettingsOnLeave()
-	}
 	if a.page == "models" {
 		a.cancelOAuthWhenLeaving()
 	}
 	t := a.current()
 	if t == nil {
 		return
+	}
+	if a.page == "settings" {
+		a.commitSettingsOnLeave()
 	}
 	next := a.freshConversation(t.Workspace)
 	next.Model = t.Model
@@ -668,14 +675,14 @@ func (a *desktop) newSession() {
 }
 
 func (a *desktop) openWorkspace(workspace string) {
-	if a.page == "settings" {
-		a.commitSettingsOnLeave()
-	}
 	if a.page == "models" {
 		a.cancelOAuthWhenLeaving()
 	}
 	for i, t := range a.tabs {
 		if strings.EqualFold(t.Workspace, workspace) {
+			if a.page == "settings" {
+				a.commitSettingsOnLeave()
+			}
 			a.page = "chat"
 			a.activateTab(i)
 			a.refreshFiles()
@@ -1087,14 +1094,14 @@ func (a *desktop) persist(t *conversation) {
 	}()
 }
 func (a *desktop) openSession(id string) {
-	if a.page == "settings" {
-		a.commitSettingsOnLeave()
-	}
 	if a.page == "models" {
 		a.cancelOAuthWhenLeaving()
 	}
 	for i, t := range a.tabs {
 		if t.ID == id {
+			if a.page == "settings" {
+				a.commitSettingsOnLeave()
+			}
 			a.page = "chat"
 			a.activateTab(i)
 			a.refreshFiles()
@@ -1143,6 +1150,9 @@ func (a *desktop) openSession(id string) {
 }
 
 func (a *desktop) showSession(next *conversation) {
+	if a.page == "settings" {
+		a.commitSettingsOnLeave()
+	}
 	// A transcript restored from disk carries no offset, and a scroll container
 	// shows its start at 0. Park it at the newest message; a conversation the
 	// user left scrolled somewhere keeps that position.

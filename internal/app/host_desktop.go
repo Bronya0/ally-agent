@@ -85,7 +85,8 @@ func (a *App) SelectBackgroundImage() (string, error) {
 	}
 	return a.saveBackgroundImageFromFile(p)
 }
-func (a *App) SelectPrivateKeyFile() (string, error) { return a.selectFile("选择 SSH 私钥") }
+func (a *App) SelectBackgroundImagePath() (string, error) { return a.selectFile("选择背景图片") }
+func (a *App) SelectPrivateKeyFile() (string, error)      { return a.selectFile("选择 SSH 私钥") }
 
 // SelectJSONFile picks a configuration file for import. Filters keep the dialog
 // honest while still accepting the generic .json files users export.

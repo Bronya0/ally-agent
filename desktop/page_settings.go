@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"reflect"
 	"runtime"
 	"strings"
 
@@ -40,8 +39,8 @@ var compactThresholdModes = []uikit.RadioOption[string]{
 }
 
 // settingsPageBody is the inline settings surface: a left section rail and the
-// form for the active section. Values are saved when the user leaves the page
-// or presses the header button, mirroring the original "commit on leave".
+// form for the active section. Switching sections keeps the draft; only leaving
+// the entire settings page commits ordinary settings.
 func (a *desktop) settingsPageBody(c *ui.Context) {
 	if a.settings.Tab == "" {
 		a.settings.Tab = "通用"
@@ -85,16 +84,11 @@ func (a *desktop) settingsPageBody(c *ui.Context) {
 }
 
 func (a *desktop) selectSettingsSection(section string) {
-	if a.settings.Tab != section && a.settings.Tab != "" && a.settings.Tab != "关于" && a.settings.Tab != "安全围栏" && a.settings.Tab != "版本亮点" && a.settings.Tab != "完整配置" {
-		a.saveSettings()
-	}
 	a.settings.Tab = section
 	a.settingsTab = section
 	switch section {
 	case "API":
 		a.loadAPIService()
-	case "关于":
-		a.loadAutostart()
 	case "网络":
 		if a.configDraft.ProxyMode == "system" {
 			a.detectProxy()
@@ -138,46 +132,6 @@ func (a *desktop) settingsConfigDraft() backend.ConfigState {
 	cfg.AutoValidationYAML = boolPtr(a.settings.Validation["YAML"])
 	cfg.AutoValidationXML = boolPtr(a.settings.Validation["XML"])
 	return cfg
-}
-
-// settingsPendingEdits reports whether the page holds anything the backend does
-// not have yet. Both sides are normalized through the form's own defaults first,
-// so an untouched page with a sparse config file never looks edited. Fields that
-// live in prefs rather than the config are compared here too: 每页展示块数 is only
-// written by saveSettings, so ignoring it made a real edit disappear on leave.
-func (a *desktop) settingsPendingEdits() bool {
-	if normalizeHistoryPageSize(int(a.settings.HistoryPageSize)) != a.messageWindowSize() {
-		return true
-	}
-	return !reflect.DeepEqual(normalizeSettingsConfig(a.settingsConfigDraft()), normalizeSettingsConfig(a.config))
-}
-
-func (a *desktop) saveSettings(notice ...string) {
-	size := normalizeHistoryPageSize(int(a.settings.HistoryPageSize))
-	if size != a.messageWindowSize() {
-		a.prefs.HistoryPageSize = size
-		a.savePrefs()
-	}
-	cfg := a.settingsConfigDraft()
-	a.configDraft = cfg
-	if len(notice) == 0 {
-		notice = []string{""}
-	}
-	a.saveConfig(cfg, notice...)
-}
-
-// commitSettingsOnLeave is called when the rail switches away from settings.
-// Edits inside the page save silently, and leaving only writes and reports once
-// when the draft actually differs from the saved config: announcing a save that
-// changed nothing is noise every time the page is closed.
-func (a *desktop) commitSettingsOnLeave() {
-	if a.core == nil || a.win == nil {
-		return
-	}
-	if !a.settingsPendingEdits() {
-		return
-	}
-	a.saveSettings("设置已保存")
 }
 
 // ---- General -------------------------------------------------------------
@@ -268,21 +222,22 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				return ui.Slider(c.Key("bg-opacity"), &a.settings.BgOpacity, 0, 1).Label("背景图透明度").FillWidth()
 			})
 		})
-		a.settingsCard(c, "settings-fonts", "阅读字号", "范围 10–24px，保存后即时生效。", func() {
+		a.settingsCard(c, "settings-fonts", "阅读字号", "按文字类型限制范围，离开设置页面时保存。", func() {
 			ui.Row(c.Key("font-grid")).Wrap().Gap(gapPage).PaddingY(gapField).AlignItems(ui.Start).Children(func() {
 				for _, item := range []struct {
-					label string
-					value *float64
+					label  string
+					value  *float64
+					lo, hi float64
 				}{
-					{"消息正文", &a.settings.FontMessage},
-					{"代码块", &a.settings.FontCode},
-					{"工具卡", &a.settings.FontTool},
-					{"次级正文", &a.settings.FontSub},
-					{"辅助文字", &a.settings.FontAux},
+					{"消息正文", &a.settings.FontMessage, 12, 24},
+					{"代码块", &a.settings.FontCode, 12, 24},
+					{"工具卡", &a.settings.FontTool, 12, 24},
+					{"次级正文", &a.settings.FontSub, 11, 18},
+					{"辅助文字", &a.settings.FontAux, 10, 20},
 				} {
 					item := item
 					ui.Field(c.Key("font-"+item.label), item.label, func() {
-						uikit.NumberInput(c, "number", item.label, item.value, 10, 24, 0.5, a.secondaryInk()).FillWidth()
+						uikit.NumberInput(c, "number", item.label, item.value, item.lo, item.hi, 0.5, a.secondaryInk()).FillWidth()
 					}).Basis(settingsNumberWidth - gapPage*2).Grow(1).MaxWidth(settingsNumberWidth).MinWidth(0)
 				}
 			})
@@ -371,9 +326,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			})
 		})
 		a.settingsCard(c, "settings-startup", "启动", "", func() {
-			if sw := a.settingsSwitch(c, "autostart", "开机自启", "登录系统时自动启动 Ally，新用户默认开启。", &a.settings.Autostart); sw.Changed() {
-				a.setAutostart(a.settings.Autostart)
-			}
+			a.settingsSwitch(c, "autostart", "开机自启", "登录系统时自动启动 Ally，新用户默认开启。", &a.settings.Autostart)
 		})
 	}
 	a.sessionHeaderConfirmDialog(c)
@@ -555,7 +508,6 @@ func (a *desktop) settingsAdvanced(c *ui.Context) {
 				v := a.settings.Validation[lang.key]
 				if sw := a.settingsSwitch(c, "validation-"+lang.key, lang.label, lang.note, &v); sw.Changed() {
 					a.settings.Validation[lang.key] = v
-					a.saveSettings()
 				}
 			}
 		})
@@ -589,7 +541,6 @@ func (a *desktop) setModeVisible(id string, visible bool) {
 		hidden = append(hidden, id)
 	}
 	a.configDraft.HiddenModes = hidden
-	a.saveSettings()
 }
 
 // ---- Network -------------------------------------------------------------
@@ -1046,30 +997,6 @@ func (a *desktop) settingsRaw(c *ui.Context) {
 			})
 		})
 	})
-}
-
-// loadSettings refreshes the settings page: config draft, sandbox state,
-// API service state and the autostart flag.
-func (a *desktop) loadSettings() {
-	go func() {
-		cfg, err := a.core.GetConfig()
-		if err != nil {
-			a.win.Update(func() { a.notifyError(err.Error()) })
-			return
-		}
-		sandbox, _ := a.core.GetSandboxStatus()
-		api, _ := a.core.GetApiServiceState()
-		autostart, _ := a.core.GetAutostartEnabled()
-		a.win.Update(func() {
-			a.config = cfg
-			a.configDraft = cfg
-			a.sandboxState = sandbox
-			a.apiState = api
-			a.apiPort = float64(api.Port)
-			a.autostartValue = autostart
-			a.syncSettingsForm()
-		})
-	}()
 }
 
 func (a *desktop) settingsModule(c *ui.Context, key string, labels ...string) int {

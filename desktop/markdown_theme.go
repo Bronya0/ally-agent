@@ -95,11 +95,10 @@ func (a *desktop) readingColors() markdownColors {
 }
 
 func readingSizes(body, code float64) (float32, float32) {
-	// Upgrade the previous standard sizes while retaining other user choices.
-	if body == 0 || body == 15.5 {
+	if body == 0 {
 		body = float64(readingFontSize)
 	}
-	if code == 0 || code == 14 {
+	if code == 0 {
 		code = float64(readingCodeSize)
 	}
 	return float32(clampView(body, 16)), float32(clampView(code, 14.5))

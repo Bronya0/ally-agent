@@ -737,15 +737,26 @@ func (a *App) GetConfig() (ConfigState, error) {
 }
 
 func (a *App) SaveConfig(req ConfigState) error {
+	req = cloneConfig(req)
+	return a.saveSettingsConfig(func(current *ConfigState) error {
+		*current = settingsConfig(*current, req)
+		return nil
+	})
+}
+
+// saveSettingsConfig shares the config transaction and runtime updates between
+// full settings imports and a native page's changes against its opening state.
+func (a *App) saveSettingsConfig(update func(*ConfigState) error) error {
 	if err := a.ensureInitialized(); err != nil {
 		return err
 	}
-	req = cloneConfig(req)
 	var cfg ConfigState
 	var proxyChanged, allowPrivateChanged bool
 	if err := a.commitConfig(func(next *ConfigState) error {
 		before := *next
-		*next = settingsConfig(*next, req)
+		if err := update(next); err != nil {
+			return err
+		}
 		proxyChanged = normalizeProxyMode(before.ProxyMode) != next.ProxyMode || strings.TrimSpace(before.ProxyURL) != next.ProxyURL || strings.TrimSpace(before.ProxyNoProxy) != next.ProxyNoProxy
 		allowPrivateChanged = before.allowPrivateNetworkEnabled() != next.allowPrivateNetworkEnabled()
 		cfg = cloneConfig(*next)

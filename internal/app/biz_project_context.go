@@ -228,15 +228,39 @@ func buildCodeGraphPromptPart(workspace string) string {
 // dialog returns a path; separated so the heavy I/O lives in the
 // project-context module alongside other ~/.ally_agent file handling.
 func (a *App) saveBackgroundImageFromFile(srcPath string) (string, error) {
-	data, err := os.ReadFile(srcPath)
+	data, ext, err := readBackgroundImageFromFile(srcPath)
 	if err != nil {
-		return "", fmt.Errorf("read selected image failed: %w", err)
+		return "", err
+	}
+	filename := "background." + ext
+	dest := filepath.Join(appDataDir(), filename)
+	if err := os.WriteFile(dest, data, 0o600); err != nil {
+		return "", fmt.Errorf("write background image failed: %w", err)
+	}
+	purgeStaleBackgroundFiles(appDataDir(), filename)
+	if err := a.updateConfigAndPersist(func(cfg *ConfigState) {
+		cfg.BackgroundImage = filename
+	}); err != nil {
+		return "", err
+	}
+	return filename, nil
+}
+
+func readBackgroundImageFromFile(srcPath string) ([]byte, string, error) {
+	file, err := os.Open(srcPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("read selected image failed: %w", err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, backgroundImageMaxBytes+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("read selected image failed: %w", err)
 	}
 	if len(data) == 0 {
-		return "", errors.New("selected image is empty")
+		return nil, "", errors.New("selected image is empty")
 	}
 	if len(data) > backgroundImageMaxBytes {
-		return "", fmt.Errorf("image too large: %d bytes (max %d)", len(data), backgroundImageMaxBytes)
+		return nil, "", fmt.Errorf("image too large: %d bytes (max %d)", len(data), backgroundImageMaxBytes)
 	}
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(srcPath), "."))
 	mime := imageExtToMIME(ext)
@@ -248,24 +272,11 @@ func (a *App) saveBackgroundImageFromFile(srcPath string) (string, error) {
 		}
 		mime = http.DetectContentType(sniff)
 		if !strings.HasPrefix(mime, "image/") {
-			return "", fmt.Errorf("selected file is not an image (detected %s)", mime)
+			return nil, "", fmt.Errorf("selected file is not an image (detected %s)", mime)
 		}
 		ext = mimeToImageExt(mime)
 	}
-	filename := "background." + ext
-	dest := filepath.Join(appDataDir(), filename)
-	if err := os.WriteFile(dest, data, 0o600); err != nil {
-		return "", fmt.Errorf("write background image failed: %w", err)
-	}
-	// Remove any previously stored background with a different extension so
-	// the directory never accumulates stale variants.
-	purgeStaleBackgroundFiles(appDataDir(), filename)
-	if err := a.updateConfigAndPersist(func(cfg *ConfigState) {
-		cfg.BackgroundImage = filename
-	}); err != nil {
-		return "", err
-	}
-	return filename, nil
+	return data, ext, nil
 }
 
 // ClearBackgroundImage removes the stored background image file and clears

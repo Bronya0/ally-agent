@@ -76,7 +76,7 @@ func (a *desktop) pageContent(c *ui.Context, width float32) {
 	case a.page == "chat":
 		a.chatPage(c, width)
 	case a.page == "settings":
-		a.panelPage(c, "设置", "", nil, a.settingsPageBody)
+		a.panelPage(c, "设置", "离开设置页面时保存；API 设置需单独保存。", nil, a.settingsPageBody)
 	case a.page == "models":
 		a.panelPage(c, "模型", "按 Provider 管理对话模型与生图模型", nil, a.modelsPageBody)
 	case a.page == "mcp":
