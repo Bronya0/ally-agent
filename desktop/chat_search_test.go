@@ -115,8 +115,11 @@ func TestChatSearchScanBudgetIsVisible(t *testing.T) {
 	if got := len(a.chatSearchMatches(conv)); got != 0 {
 		t.Fatalf("matches after the scan budget = %d, want 0", got)
 	}
-	if status := a.chatSearchStatus(conv); !strings.Contains(status, "仅搜索前") {
-		t.Fatalf("status = %q, want a visible partial-search warning", status)
+	if got := a.chatSearchState(conv); got != chatSearchNoHit {
+		t.Fatalf("state = %v, want no hit", got)
+	}
+	if !conv.uiState().Search.scanTruncated {
+		t.Fatal("the budget cut the scan short without saying so")
 	}
 	conv.Messages[0]["content"] = "needle"
 	invalidateChatSearch(conv)
@@ -124,8 +127,8 @@ func TestChatSearchScanBudgetIsVisible(t *testing.T) {
 	if got := len(a.chatSearchMatches(conv)); got != 1 {
 		t.Fatalf("matches in a new, short transcript = %d, want 1", got)
 	}
-	if status := a.chatSearchStatus(conv); status != "1 of 1" {
-		t.Fatalf("status after invalidation = %q, want 1 of 1", status)
+	if conv.uiState().Search.scanTruncated {
+		t.Fatal("a short transcript reported a truncated scan")
 	}
 }
 
@@ -166,21 +169,83 @@ func TestChatSearchRestreamThrottleSurvivesInvalidation(t *testing.T) {
 	}
 }
 
-func TestChatSearchStatusWithoutQueryOrRegexp(t *testing.T) {
+// A reply that keeps growing changes only its last message, so the frames of one
+// stream rescan that message instead of the whole transcript, while the hits of
+// the earlier messages stay.
+func TestChatSearchTailGrowthRespectsBudgetAfterEmptyTail(t *testing.T) {
+	conv := searchTranscript(
+		searchMessage("user", strings.Repeat("x", chatSearchMaxBytes-16)),
+		searchMessage("assistant", ""),
+	)
+	a := &desktop{ready: true, page: "chat", tabs: []*conversation{conv}}
+	s := &conv.uiState().Search
+	s.Open, s.Query = true, "needle"
+	if got := len(a.chatSearchMatches(conv)); got != 0 {
+		t.Fatalf("initial matches = %d, want 0", got)
+	}
+	if s.scanPrefix != chatSearchMaxBytes-16 {
+		t.Fatalf("scan prefix = %d, want %d", s.scanPrefix, chatSearchMaxBytes-16)
+	}
+	conv.Messages[1]["content"] = strings.Repeat("y", 16) + "needle"
+	invalidateChatSearchTail(conv)
+	s.lastCompute = time.Now().Add(-chatSearchRestream)
+	if got := len(a.chatSearchMatches(conv)); got != 0 {
+		t.Fatalf("matches beyond the transcript byte budget = %d, want 0", got)
+	}
+	if !s.scanTruncated {
+		t.Fatal("tail growth beyond the remaining budget was not reported as truncated")
+	}
+}
+
+func TestChatSearchRescansOnlyTheGrowingTail(t *testing.T) {
+	conv := searchTranscript(
+		searchMessage("user", "needle one"),
+		searchMessage("assistant", "needle two"),
+	)
+	a := &desktop{ready: true, page: "chat", tabs: []*conversation{conv}}
+	s := &conv.uiState().Search
+	s.Open, s.Query = true, "needle"
+	if got := len(a.chatSearchMatches(conv)); got != 2 {
+		t.Fatalf("matches = %d, want 2", got)
+	}
+	if s.scanCount != 2 {
+		t.Fatalf("scan covered %d messages, want 2", s.scanCount)
+	}
+	// The stream grows the last message: only that one is read again.
+	conv.Messages[1]["content"] = "needle two needle three"
+	invalidateChatSearchTail(conv)
+	s.lastCompute = time.Now().Add(-chatSearchRestream)
+	matches := a.chatSearchMatches(conv)
+	if len(matches) != 3 {
+		t.Fatalf("matches after the tail grew = %d, want 3", len(matches))
+	}
+	if matches[0].Message != 0 {
+		t.Fatalf("the first message's hit was dropped: %+v", matches[0])
+	}
+	// A change that moves the shape of the transcript is rescanned whole.
+	conv.Messages = append(conv.Messages, searchMessage("user", "and needle four"))
+	invalidateChatSearch(conv)
+	s.lastCompute = time.Now().Add(-chatSearchRestream)
+	if got := len(a.chatSearchMatches(conv)); got != 4 {
+		t.Fatalf("matches after an append = %d, want 4", got)
+	}
+}
+
+func TestChatSearchStateWithoutQueryOrRegexp(t *testing.T) {
 	conv := searchTranscript(searchMessage("user", "hello"))
 	a := &desktop{ready: true, page: "chat", tabs: []*conversation{conv}}
 	st := conv.uiState()
 	st.Search = chatSearch{Open: true}
-	if status := a.chatSearchStatus(conv); status != "" {
-		t.Fatalf("status = %q, want nothing without a query", status)
+	if got := a.chatSearchState(conv); got != chatSearchIdle {
+		t.Fatalf("state = %v, want idle without a query", got)
 	}
 	st.Search = chatSearch{Open: true, Query: "zzz"}
-	if status := a.chatSearchStatus(conv); status != "无结果" {
-		t.Fatalf("status = %q, want 无结果", status)
+	if got := a.chatSearchState(conv); got != chatSearchNoHit {
+		t.Fatalf("state = %v, want no hit", got)
 	}
 	st.Search = chatSearch{Open: true, Query: "a(", Regexp: true}
-	if status := a.chatSearchStatus(conv); status != "正则有误" {
-		t.Fatalf("status = %q, want 正则有误", status)
+	if got := a.chatSearchState(conv); got != chatSearchBadPattern {
+		t.Fatalf("state = %v, want a bad pattern distinct from no hit", got)
 	}
 }
 

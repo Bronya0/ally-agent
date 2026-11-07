@@ -76,6 +76,14 @@ type chatSearch struct {
 	// scanTruncated means the synchronous scan hit its byte budget before the end
 	// of the transcript; the status must not present a partial search as complete.
 	scanTruncated bool
+	// scanCount, scanPrefix and scanBytes describe the scan behind cache: how many
+	// messages it covered, the bytes before the last of them, and the bytes in all.
+	// A reply that keeps growing edits only its last message, so the frames during
+	// one stream rescan that message instead of the whole transcript.
+	scanCount  int
+	scanPrefix int
+	scanBytes  int
+	tailOnly   bool
 	// frameDoc and frameDocMessage are the document and message the block hook
 	// was last asked about, so the code-block hook that runs right after it can
 	// address the block's lines without parsing the message again.
@@ -185,7 +193,7 @@ func (a *desktop) chatSearchMatches(t *conversation) []chatSearchMatch {
 	if s.cacheKey != "" && s.lastQuery == chatSearchQueryKey(s) && time.Since(s.lastCompute) < chatSearchRestream {
 		return s.cache
 	}
-	s.cache, s.scanTruncated = chatSearchComputeBounded(t, s)
+	s.cache, s.scanTruncated = a.chatSearchScan(t, s)
 	s.cacheKey = key
 	s.byMessage, s.spanCache = nil, nil
 	s.byMessage = make(map[int]bool, len(s.cache))
@@ -202,6 +210,40 @@ func (a *desktop) chatSearchMatches(t *conversation) []chatSearchMatch {
 // chatSearchRestream is how often a transcript that changed under an unchanged
 // query is searched again.
 const chatSearchRestream = 150 * time.Millisecond
+
+// chatSearchScan answers a query over the transcript. A stream that keeps growing
+// edits only the last message, so when nothing else changed the earlier hits are
+// kept and one message is read again; any other change rescans everything.
+func (a *desktop) chatSearchScan(t *conversation, s *chatSearch) ([]chatSearchMatch, bool) {
+	query := chatSearchQueryKey(s)
+	if s.tailOnly && s.cacheKey != "" && s.lastQuery == query && !s.scanTruncated &&
+		s.scanCount == len(t.Messages) && s.scanCount > 0 {
+		out, truncated := chatSearchScanTail(t, s, s.scanCount-1)
+		s.scanBytes = s.scanPrefix + len(str(t.Messages[s.scanCount-1], "content"))
+		s.tailOnly = false
+		return out, truncated
+	}
+	out, truncated, prefix, total := chatSearchScanAll(t, s)
+	s.scanCount, s.scanPrefix, s.scanBytes, s.tailOnly = len(t.Messages), prefix, total, false
+	return out, truncated
+}
+
+// chatSearchScanTail keeps the hits of the messages before index last, which the
+// stream did not touch, and reads that one message again.
+func chatSearchScanTail(t *conversation, s *chatSearch, last int) ([]chatSearchMatch, bool) {
+	out := make([]chatSearchMatch, 0, len(s.cache)+4)
+	for _, m := range s.cache {
+		if m.Message < last {
+			out = append(out, m)
+		}
+	}
+	budget := chatSearchMaxBytes - s.scanPrefix
+	if budget <= 0 {
+		return out, true
+	}
+	matches, truncated := chatSearchScanMessage(t.Messages[last], last, s, budget, out)
+	return matches, truncated
+}
 
 func chatSearchQueryKey(s *chatSearch) string {
 	return fmt.Sprintf("%s\x00%t\x00%t\x00%t", s.Query, s.MatchCase, s.WholeWord, s.Regexp)
@@ -224,6 +266,23 @@ func invalidateChatSearch(t *conversation) {
 	s.frameKey = ""
 	s.spanCache = nil
 	s.codeCache = nil
+	// The shape may have changed, so the next scan starts from the beginning.
+	s.scanCount, s.scanPrefix, s.scanBytes, s.tailOnly = 0, 0, 0, false
+}
+
+// invalidateChatSearchTail is invalidateChatSearch for a reply that only grew its
+// last message: the earlier hits stay valid, and the next scan reads one message
+// instead of the whole transcript every 150 ms of streaming.
+func invalidateChatSearchTail(t *conversation) {
+	if t == nil || t.UI == nil {
+		return
+	}
+	s := &t.UI.Search
+	s.transcriptRevision++
+	s.frameKey = ""
+	s.spanCache = nil
+	s.codeCache = nil
+	s.tailOnly = true
 }
 
 // chatSearchPattern compiles the query when the regexp toggle is on, and
@@ -252,50 +311,67 @@ func chatSearchCompute(t *conversation, s *chatSearch) []chatSearchMatch {
 	return matches
 }
 
-// chatSearchComputeBounded scans at most chatSearchMaxBytes on the UI thread and
-// reports when the result covers only a transcript prefix. It never splits a
-// message, so match offsets stay valid and a visible result is always complete
-// for its message; later messages may be outside the budget.
+// chatSearchComputeBounded is chatSearchScanAll without the byte accounting, for
+// callers that only want the hits.
 func chatSearchComputeBounded(t *conversation, s *chatSearch) ([]chatSearchMatch, bool) {
+	out, truncated, _, _ := chatSearchScanAll(t, s)
+	return out, truncated
+}
+
+// chatSearchScanAll scans at most chatSearchMaxBytes on the UI thread and reports
+// the bytes it read before the last message that held text and in total, so a
+// later tail scan can stay inside the same budget. It never splits a message's
+// offsets: a visible result is always complete for its message, and later
+// messages may be outside the budget.
+func chatSearchScanAll(t *conversation, s *chatSearch) (out []chatSearchMatch, truncated bool, prefix, total int) {
 	if strings.TrimSpace(s.Query) == "" {
-		return nil, false
+		return nil, false, 0, 0
 	}
-	re, err := s.chatSearchPattern()
-	if err != nil {
-		return nil, false
+	if _, err := s.chatSearchPattern(); err != nil {
+		return nil, false, 0, 0
 	}
-	var out []chatSearchMatch
-	scanned := 0
 	for i, m := range t.Messages {
-		text := str(m, "content")
-		if text == "" {
+		prefix = total
+		content := str(m, "content")
+		if content == "" {
 			continue
 		}
-		remaining := chatSearchMaxBytes - scanned
-		truncatedMessage := len(text) > remaining
-		if truncatedMessage {
-			// Search as much of this message as fits, but do not cut a UTF-8 rune
-			// or allow the byte budget to be exceeded.
-			text = text[:remaining]
-			for len(text) > 0 && !utf8.ValidString(text) {
-				text = text[:len(text)-1]
-			}
-		}
-		if len(text) == 0 {
-			return out, true
-		}
-		scanned += len(text)
-		for _, span := range chatSearchSpans(text, s, re, chatSearchMaxMatches-len(out)) {
-			out = append(out, chatSearchMatch{Message: i, Start: span[0], End: span[1]})
-			if len(out) >= chatSearchMaxMatches {
-				return out, false
-			}
-		}
-		if truncatedMessage {
-			return out, true
+		out, truncated = chatSearchScanMessage(m, i, s, chatSearchMaxBytes-total, out)
+		total = prefix + min(len(content), chatSearchMaxBytes-prefix)
+		if truncated || len(out) >= chatSearchMaxMatches {
+			return out, truncated, prefix, total
 		}
 	}
-	return out, false
+	return out, false, prefix, total
+}
+
+// chatSearchScanMessage appends the hits of one message to out, reading at most
+// budget bytes of it.
+func chatSearchScanMessage(m map[string]any, index int, s *chatSearch, budget int, out []chatSearchMatch) ([]chatSearchMatch, bool) {
+	text := str(m, "content")
+	re, err := s.chatSearchPattern()
+	if err != nil || text == "" || budget <= 0 {
+		return out, budget <= 0 && text != ""
+	}
+	truncated := len(text) > budget
+	if truncated {
+		// Search as much of this message as fits, but do not cut a UTF-8 rune
+		// or allow the byte budget to be exceeded.
+		text = text[:budget]
+		for len(text) > 0 && !utf8.ValidString(text) {
+			text = text[:len(text)-1]
+		}
+	}
+	if len(text) == 0 {
+		return out, true
+	}
+	for _, span := range chatSearchSpans(text, s, re, chatSearchMaxMatches-len(out)) {
+		out = append(out, chatSearchMatch{Message: index, Start: span[0], End: span[1]})
+		if len(out) >= chatSearchMaxMatches {
+			return out, false
+		}
+	}
+	return out, truncated
 }
 
 // chatSearchSpans finds the byte ranges of the query in one message. The offsets
@@ -387,15 +463,43 @@ func chatSearchWordRune(r rune) bool {
 	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
+// chatSearchState is what the bar has to say about a query, apart from the
+// wording it puts on it: tests assert this, so that rewording the label cannot
+// break them.
+type chatSearchState int
+
+const (
+	chatSearchIdle chatSearchState = iota
+	chatSearchBadPattern
+	chatSearchNoHit
+	chatSearchHasHits
+)
+
+// chatSearchState reports what the bar is about to say. It compiles the query and
+// searches the transcript, so the label and the highlight answer the same frame.
+func (a *desktop) chatSearchState(t *conversation) chatSearchState {
+	s := &t.uiState().Search
+	if strings.TrimSpace(s.Query) == "" {
+		return chatSearchIdle
+	}
+	if _, err := s.chatSearchPattern(); err != nil {
+		return chatSearchBadPattern
+	}
+	if len(a.chatSearchMatches(t)) == 0 {
+		return chatSearchNoHit
+	}
+	return chatSearchHasHits
+}
+
 // chatSearchStatus says what was found, as the editor's bar does: nothing
 // without a query, "正则有误" for an expression that is not one, and the
 // position of the current match otherwise.
 func (a *desktop) chatSearchStatus(t *conversation) string {
 	s := &t.uiState().Search
-	if strings.TrimSpace(s.Query) == "" {
+	switch a.chatSearchState(t) {
+	case chatSearchIdle:
 		return ""
-	}
-	if _, err := s.chatSearchPattern(); err != nil {
+	case chatSearchBadPattern:
 		return "正则有误"
 	}
 	matches := a.chatSearchMatches(t)

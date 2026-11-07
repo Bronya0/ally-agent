@@ -138,7 +138,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	case "run:stream", "run:delta":
 		content := str(p, "content")
 		if content != "" {
-			invalidateChatSearch(t)
+			invalidateChatSearchTail(t)
 			ui.ThinkingBytes = 0
 			n := len(t.Messages)
 			// A summary that replaced the transcript is not this run's answer: the

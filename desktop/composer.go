@@ -25,10 +25,11 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 	st := t.uiState()
 	p := a.currentPalette()
 	// A closed find bar hands the caret back here, once the engine no longer holds
-	// its field: both fields change in the closing frame, and the engine walks its
-	// focus bindings in map order, so granting the composer then can be undone by
-	// the bar's own release.
-	if a.focusBack != "" && ui.FocusedValue(c, &a.chatSearchFocus) == "" {
+	// its field and the window can take it: both fields change in the closing frame,
+	// and the engine walks its focus bindings in map order, so granting the composer
+	// then can be undone by the bar's own release. An inactive window reads every
+	// focus binding as empty, so it must not be taken as the bar having let go.
+	if a.focusBack != "" && c.WindowActive() && ui.FocusedValue(c, &a.chatSearchFocus) == "" {
 		a.focusBack, a.composerFocus = "", a.focusBack
 	}
 	ui.Column(c).Shrink(0).Padding(6, 20, 8).Gap(gapInline).Children(func() {
