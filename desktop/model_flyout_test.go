@@ -118,8 +118,9 @@ func TestModelGroupFlyoutStaysClosedWhilePointerRestsOnRow(t *testing.T) {
 	if tester.HasText("a1") {
 		t.Fatalf("Escape did not close the flyout under the pointer: %v", tester.Texts())
 	}
-	if st := conv.uiState(); st.ModelGroup != "" {
-		t.Fatalf("the group stayed set to %q", st.ModelGroup)
+	tester.Frame()
+	if !conv.uiState().ModelOpen || tester.HasText("a1") {
+		t.Fatal("the flyout reopened or closing it also closed the main menu")
 	}
 
 	// Leaving the row and coming back opens it again.
@@ -216,7 +217,8 @@ func TestModelGroupFlyoutClosesOverRecentModels(t *testing.T) {
 	if tester.HasText("b2") {
 		t.Fatalf("the beta flyout stayed open over the recents block: %v", tester.Texts())
 	}
-	if st := conv.uiState(); st.ModelGroup != "" {
-		t.Fatalf("the group stayed set to %q", st.ModelGroup)
+	tester.Frame()
+	if !conv.uiState().ModelOpen || tester.HasText("b2") {
+		t.Fatal("the submenu reopened over recent models or closed the main menu")
 	}
 }

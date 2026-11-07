@@ -30,11 +30,16 @@ func TestHistoryWorkspaceAlwaysCreatesNewTab(t *testing.T) {
 }
 
 func TestWorkspaceMenuOpensToLeftAndDistinguishesSameNames(t *testing.T) {
-	a := &desktop{workspaceMenuOpen: true, sessions: []backend.SessionIndexEntry{{Workspace: "C:/work/cam"}, {Workspace: "C:/other/cam"}, {Workspace: "C:/work/cam"}}}
+	a := &desktop{sessions: []backend.SessionIndexEntry{{Workspace: "C:/work/cam"}, {Workspace: "C:/other/cam"}, {Workspace: "C:/work/cam"}}}
 	tt := ui.NewTester(func(c *ui.Context) {
-		anchor := ui.ButtonBase(c.Key("add")).Absolute().Left(500).Top(10).Size(30, 30).Label("add")
-		a.workspaceMenu(c, "header", anchor)
+		ui.Box(c).Absolute().Left(500).Top(10).Children(func() {
+			a.workspaceHistoryMenu(c.Key("add"), func(b ui.Element) { b.Size(30, 30).Label("add") })
+		})
 	}, 600, 500)
+	if err := tt.Click("add"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
 	panel, ok := tt.Find("工作区历史菜单")
 	if !ok {
 		t.Fatal("missing menu")
@@ -51,7 +56,7 @@ func TestWorkspaceMenuOpensToLeftAndDistinguishesSameNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if a.workspaceMenuOpen || len(a.tabs) != 1 || a.tabs[0].Workspace != "C:/other/cam" {
+	if tt.HasText("临时工作区") || len(a.tabs) != 1 || a.tabs[0].Workspace != "C:/other/cam" {
 		t.Fatal("history selected wrong path or did not close")
 	}
 }
@@ -78,9 +83,6 @@ func TestWorkspaceMenuSwitchesEntryWithoutTwoPanels(t *testing.T) {
 		t.Fatalf("the plus beside the last tab: %v", err)
 	}
 	tt.Frame()
-	if a.workspaceMenuFrom != "tabs" || !a.workspaceMenuOpen {
-		t.Fatalf("the menu opened from %q, open=%v", a.workspaceMenuFrom, a.workspaceMenuOpen)
-	}
 	if _, ok := tt.Find("工作区历史菜单"); !ok {
 		t.Fatalf("no menu under the plus: %v", tt.Texts())
 	}
@@ -91,8 +93,14 @@ func TestWorkspaceMenuSwitchesEntryWithoutTwoPanels(t *testing.T) {
 		t.Fatalf("the header's add button: %v", err)
 	}
 	tt.Frame()
-	if a.workspaceMenuFrom != "header" || !a.workspaceMenuOpen {
-		t.Fatalf("the menu stayed with %q, open=%v", a.workspaceMenuFrom, a.workspaceMenuOpen)
+	count := 0
+	for _, text := range tt.Texts() {
+		if text == "工作区历史菜单" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("switching triggers left %d menus visible: %v", count, tt.Texts())
 	}
 	if _, ok := tt.Find("工作区历史菜单"); !ok {
 		t.Fatalf("no menu under the add button: %v", tt.Texts())

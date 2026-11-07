@@ -12,6 +12,31 @@ import (
 	"github.com/egoist/mygo/ui/markdown"
 )
 
+const skillSourcesHelpText = `技能扫描目录
+
+项目级（当前工作区）
+<工作区>/.agents/skills/
+<工作区>/.claude/skills/
+<工作区>/.codex/skills/
+
+用户级（~ 表示用户主目录）
+~/.agents/skills/
+~/.claude/skills/
+~/.codex/skills/
+
+内置技能随 Ally 发布，不来自上述目录。
+
+同名优先级：项目 > 用户 > 内置。
+同级优先级：.agents > .claude > .codex。
+目录结构：<技能名>/SKILL.md。
+新建只写 .agents/skills；另外两个目录只读兼容。`
+
+func (a *desktop) skillSourcesHelp(c *ui.Context) {
+	badge := ui.Box(c.Key("skills-source-help")).Size(22, 22).Shrink(0).Center().Focusable().Label("技能来源帮助")
+	badge.Children(func() { iconGlyph(c, "info", 15).TextColor(a.secondaryInk()) })
+	uikit.Tooltip(c, badge, skillSourcesHelpText)
+}
+
 var skillSources = []struct{ id, label string }{
 	{"builtin", "内置"},
 	{"project", "项目"},

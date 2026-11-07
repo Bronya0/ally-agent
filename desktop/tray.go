@@ -44,7 +44,7 @@ func (a *desktop) createSystemTray(icon []byte, template bool) error {
 		tray.OnClick(a.showMainWindow)
 		tray.OnRightClick(func() {
 			tray.SetMenu(menu)
-			tray.PopUpMenu()
+			popUpSystemTrayMenu(tray)
 			tray.SetMenu(nil)
 		})
 	}
@@ -83,13 +83,15 @@ func (a *desktop) showMainWindow() {
 func (a *desktop) mainWindowShown() {
 	a.mainWindowHidden = false
 	a.cancelMemoryTidy()
+	a.syncPluginHost()
 	a.restoreAttachmentImages(a.current())
 }
 
-// The main window keeps the live session and draft state while it is hidden,
-// but native previews and decoded transcript bitmaps can be rebuilt on demand.
+// Stop file media and release decoded bitmaps immediately. Native WebView slots
+// survive only until the existing hidden-window grace period expires.
 func (a *desktop) releaseHiddenWindowResources() {
-	a.releaseAllHTMLPreviews()
+	a.suspendFilePreview()
+	a.syncPluginHostVisibility(true)
 	seen := make(map[*conversation]struct{}, len(a.tabs)+len(a.openSessions))
 	release := func(t *conversation) {
 		if t == nil {

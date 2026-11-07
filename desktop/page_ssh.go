@@ -402,7 +402,7 @@ func (a *desktop) testSSHNode(node backend.SSHServerNode) {
 
 func (a *desktop) importSSH() {
 	go func() {
-		path, err := a.core.SelectJSONFile("导入 SSH 集群配置")
+		path, err := a.core.SelectJSONFile("导入 SSH 配置")
 		if err != nil || path == "" {
 			if err != nil {
 				a.fail(err)
@@ -514,14 +514,14 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 	workspace := a.sshF.AuthWorkspace
 	dialog := modalCard(c, &a.sshF.AuthOpen, widthModalWide, func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "SSH 集群授权").FontSize(fsDialogTitle).Bold()
+			ui.Text(c, "SSH 授权").FontSize(fsDialogTitle).Bold()
 			ui.Spacer(c)
-			flat(c, "管理集群").OnClick(func() {
+			flat(c, "管理 SSH").OnClick(func() {
 				a.commitSSHAuth(workspace)
 				a.sshF.AuthOpen = false
 				a.changePage("ssh")
 			})
-			iconAction(c, "ssh-auth-close", "关闭 SSH 集群授权", "close", 24, func() { a.commitSSHAuth(workspace); a.sshF.AuthOpen = false })
+			iconAction(c, "ssh-auth-close", "关闭 SSH 授权", "close", 24, func() { a.commitSSHAuth(workspace); a.sshF.AuthOpen = false })
 		})
 		fieldNote(c, "勾选的服务器允许当前工作区的会话使用；凭据由 Ally 管理，不会传给模型。", a.secondaryInk())
 		if !a.sshF.AuthReady {
@@ -627,7 +627,7 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 			})
 		})
 		if len(a.sshServers) == 0 {
-			emptyState(c, "暂无配置的 SSH 服务器", "先在 SSH 集群页添加服务器。", a.secondaryInk())
+			emptyState(c, "暂无配置的 SSH 服务器", "先在 SSH 页面添加服务器。", a.secondaryInk())
 		}
 
 	})

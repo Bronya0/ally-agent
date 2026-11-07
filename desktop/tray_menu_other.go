@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//go:build !windows
+
+package desktop
+
+import "github.com/egoist/mygo"
+
+func popUpSystemTrayMenu(tray *mygo.Tray) {
+	tray.PopUpMenu()
+}

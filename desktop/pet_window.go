@@ -36,45 +36,44 @@ type petRuntime struct {
 }
 
 func (a *desktop) petSettings(c *ui.Context) {
-	sectionTitle(c, "桌面宠物")
-	uikit.SwitchNative(c.Key("pet-enabled"), &a.prefs.Pet.Enabled).Label("显示桌面宠物").OnChange(func() {
-		a.setPetEnabled(a.prefs.Pet.Enabled)
-	})
-	fieldNote(c, "跟随欢迎页形象；拖动身体调整位置，单击头部摸摸头，右键打开菜单。", a.secondaryInk())
-	if !a.prefs.Pet.Enabled {
-		return
-	}
-	chatterEnabled := !a.prefs.Pet.MuteChatter
-	uikit.SwitchNative(c.Key("pet-chatter"), &chatterEnabled).Label("闲时说话").OnChange(func() {
-		a.setPetChatter(chatterEnabled)
-	})
-	fieldNote(c, "空闲时偶尔显示本地短句；右键可马上和宠物打招呼。", a.secondaryInk())
-	fieldLabel(c, "宠物大小")
-	uikit.OptionGroup(c.Key("pet-size")).Children(func() {
-		for _, option := range []struct {
-			size  int
-			label string
-		}{{140, "小"}, {180, "中"}, {230, "大"}} {
-			option := option
-			choiceButton(c, fmt.Sprintf("pet-size-%d", option.size), option.label, a.prefs.Pet.Size == option.size, c.Theme().Accent).OnClick(func() {
-				a.setPetSize(option.size)
+	a.settingsCard(c, "settings-pet", "桌面宠物", "跟随欢迎页形象；拖动身体调整位置，单击头部摸摸头，右键打开菜单。", func() {
+		a.settingsSwitch(c, "pet-enabled", "显示桌面宠物", "", &a.prefs.Pet.Enabled).OnChange(func() {
+			a.setPetEnabled(a.prefs.Pet.Enabled)
+		})
+		if !a.prefs.Pet.Enabled {
+			return
+		}
+		chatterEnabled := !a.prefs.Pet.MuteChatter
+		a.settingsSwitch(c, "pet-chatter", "闲时说话", "空闲时偶尔显示本地短句；右键可马上和宠物打招呼。", &chatterEnabled).OnChange(func() {
+			a.setPetChatter(chatterEnabled)
+		})
+		a.settingsRow(c, "pet-size-row", "宠物大小", "", settingsControlWidth, func() ui.Element {
+			return uikit.OptionGroup(c.Key("pet-size")).Children(func() {
+				for _, option := range []struct {
+					size  int
+					label string
+				}{{140, "小"}, {180, "中"}, {230, "大"}} {
+					option := option
+					choiceButton(c, fmt.Sprintf("pet-size-%d", option.size), option.label, a.prefs.Pet.Size == option.size, c.Theme().Accent).OnClick(func() {
+						a.setPetSize(option.size)
+					})
+				}
 			})
-		}
+		})
+		score := a.prefs.Pet.Affection[normalizedAvatarStyle(a.prefs.Avatar)].Points
+		stars := max(0, min(10, score/1000))
+		a.settingsRow(c, "pet-affection-row", "好感度", fmt.Sprintf("%.3f / 10 星 · 每天陪伴 +0.020，前三次摸头各 +0.005，前三个完成任务各 +0.010。", float64(score)/1000), settingsControlWidth, func() ui.Element {
+			// Keep the same glyph in both tones so filled and empty stars align.
+			return ui.Row(c).Gap(gapInline).Children(func() {
+				if stars > 0 {
+					ui.Text(c, strings.Repeat("★", stars)).FontSize(fsGlyph).TextColor(c.Theme().Accent)
+				}
+				if rest := 10 - stars; rest > 0 {
+					ui.Text(c, strings.Repeat("★", rest)).FontSize(fsGlyph).TextColor(a.secondaryInk())
+				}
+			})
+		})
 	})
-	score := a.prefs.Pet.Affection[normalizedAvatarStyle(a.prefs.Avatar)].Points
-	stars := max(0, min(10, score/1000))
-	// One glyph in two inks: ★ and ☆ carry different ink sizes at a single font
-	// size, so a half-filled row would read as two different star sizes instead
-	// of one rating.
-	ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
-		if stars > 0 {
-			ui.Text(c, strings.Repeat("★", stars)).FontSize(fsGlyph).TextColor(c.Theme().Accent)
-		}
-		if rest := 10 - stars; rest > 0 {
-			ui.Text(c, strings.Repeat("★", rest)).FontSize(fsGlyph).TextColor(a.secondaryInk())
-		}
-	})
-	fieldNote(c, fmt.Sprintf("好感度 %.3f / 10 星 · 每天陪伴 +0.020，前三次摸头各 +0.005，前三个完成任务各 +0.010。", float64(score)/1000), a.secondaryInk())
 }
 
 func (a *desktop) openPet() {

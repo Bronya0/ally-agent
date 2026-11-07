@@ -88,11 +88,14 @@ func disclosure(c *ui.Context, key any, label string, kind disclosureKind, icon 
 	if key != nil {
 		c = c.Key(key)
 	}
-	var b ui.Element
+	return disclosureOn(c, ui.ButtonBase(c), label, kind, icon)
+}
+
+func disclosureOn(c *ui.Context, b ui.Element, label string, kind disclosureKind, icon string) ui.Element {
 	if kind == disclosureCard {
-		b = uikit.Action(c, label, uikit.ActionOptions{Style: uikit.Quaternary, Small: true})
+		b = uikit.ActionOn(c, b, label, uikit.ActionOptions{Style: uikit.Quaternary, Small: true})
 	} else {
-		b = flat(c, label)
+		b, _ = uikit.ButtonOn(c, b, label, uikit.ButtonSecondary, false, nil, uikit.ActionOptions{})
 	}
 	return b.Children(func() { iconGlyph(c, icon, fsSmall).Shrink(0) })
 }
@@ -103,23 +106,6 @@ func flatKey(c *ui.Context, key any, s string) ui.Element {
 
 func ghost(c *ui.Context, s string) ui.Element {
 	return button(c, nil, s, btnGhost, false, "")
-}
-
-// Composer settings keep their muted ink during a run and on hover. MyGo dims
-// Disabled elements, so lock activation instead of dimming the current value.
-func composerSettingButton(c *ui.Context, text string, locked bool, activate func(), ink ...ui.Color) ui.Element {
-	b, textEl := composerFlatParts(c, text)
-	color := uikit.SecondaryInk(c, ink)
-	b.TextColor(color)
-	textEl.TextColor(color)
-	if locked {
-		b.Cursor(ui.CursorDefault)
-	}
-	return b.OnClick(func() {
-		if !locked {
-			activate()
-		}
-	})
 }
 
 func primary(c *ui.Context, s string) ui.Element {
@@ -237,6 +223,20 @@ func iconGlyph(c *ui.Context, name string, size float32) ui.Element {
 
 func card(c *ui.Context, key any, build func()) ui.Element {
 	return uikit.Card(c, key, padCard, radiusCard, build)
+}
+
+func (a *desktop) settingsCard(c *ui.Context, key any, title, note string, build func()) ui.Element {
+	return uikit.FormCard(c, key, title, note, build, a.secondaryInk()).MaxWidth(settingsMaxWidth)
+}
+
+func (a *desktop) settingsRow(c *ui.Context, key any, title, note string, width float32, build func() ui.Element) ui.Element {
+	return uikit.FormRow(c, key, title, note, width, build, a.secondaryInk())
+}
+
+func (a *desktop) settingsSwitch(c *ui.Context, key, title, note string, value *bool) ui.Element {
+	return a.settingsRow(c, key, title, note, 40, func() ui.Element {
+		return uikit.Switch(c.Key("switch"), value, title)
+	})
 }
 
 // rowCard is the hover-highlighted list row the original used for plugins,
@@ -743,91 +743,29 @@ func popoverPanel(c *ui.Context, anchor ui.Element, open *bool, width float32, b
 	})
 }
 
-// menuPopoverButton opens the app's own menu panel from a toolbar button: the
-// same chrome, rows and dismissal as every other app menu, instead of the
-// operating system's menu, which painted a foreign box with square rows beside
-// our controls. The open flag stays on the button itself (ui.Local), so a row
-// needs only a stable key and no new app state. Never pair it with OnClick: that
-// consumes the click before this can open the panel.
-func menuPopoverButton(c *ui.Context, button ui.Element, width float32, build func(dismiss func())) ui.Element {
-	open := ui.Local(button, "menu", func() bool { return false })
-	if button.Clicked() {
-		*open = !*open
-	}
-	popoverPanel(c, button, open, width, func() {
-		build(func() { *open = false })
-	})
-	return button
+// Menu triggers reuse the same action chrome as ordinary buttons; MyGo owns
+// their open state, keyboard navigation, selection and popup dismissal.
+func iconMenu(c *ui.Context, key, label, icon string, size, width float32, build func(ui.MenuParts), ink ...ui.Color) ui.Element {
+	return uikit.MenuButton(c.Key(key), nil, uikit.MenuOptions{Width: width}, func(b ui.Element) {
+		uikit.IconButtonOn(c, b, label, iconImage(icon), max(size, iconButtonMinHit), size*uikit.IconGlyphScale, uikit.IconQuiet, ink...)
+	}, build)
+}
+
+func disclosureMenu(c *ui.Context, key, label string, kind disclosureKind, width float32, locked bool, build func(ui.MenuParts)) ui.Element {
+	return uikit.MenuButton(c.Key(key), nil, uikit.MenuOptions{Width: width}, func(b ui.Element) {
+		disclosureOn(c, b, label, kind, "chevrondown").Disabled(locked)
+	}, build)
 }
 
 // popoverChrome styles a popover panel; cascading flyouts share it with popoverPanel.
 func popoverChrome(c *ui.Context, panel ui.Element, width float32) {
-	panel.Width(width).MaxWidthPercent(90).MaxHeight(420).Padding(5).Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(radiusCard)
+	uikit.MenuPanel(c, panel, uikit.MenuOptions{Width: width})
 }
 
+// Non-menu information panels keep their ordinary action, but share the
+// menu's visual row content instead of maintaining a second rendering path.
 func popoverItem(c *ui.Context, key, text, detail string, selected bool, action func(), ink ...ui.Color) {
-	popoverItemStyle(c, key, text, detail, selected, nil, action, ink...)
-}
-
-// popoverModelRecent keeps the provider suffix on the model's line, so recent
-// entries stay compact even when the menu grows taller. It reports whether the
-// pointer is on the row: the block belongs to no provider, so the model menu
-// closes a provider flyout the pointer left behind instead of keeping it open.
-func popoverModelRecent(c *ui.Context, key, name, provider string, selected bool, action func(), ink ...ui.Color) bool {
-	t := c.Theme()
-	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(gapInline, padCard).Justify(ui.Start).Radius(radiusSmall).Label(name + " " + provider).Cursor(ui.CursorPointer).OnClick(action)
-	hot := b.Hovered()
-	if selected {
-		b.Background(selectionFill(t.Accent))
-	} else if hot {
-		b.Background(t.SurfaceHover)
-	}
-	b.Children(func() {
-		ui.Row(c).FillWidth().Gap(gapField).AlignItems(ui.Center).Children(func() {
-			label := ui.Text(c, name).FontSize(fsBody).SingleLine().Grow(1)
-			if selected {
-				label.TextColor(t.Accent).FontWeight(600)
-			}
-			ui.Text(c, provider).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).SingleLine().Shrink(0)
-		})
-	})
-	return hot
-}
-
-func popoverItemColor(c *ui.Context, key, text, detail string, selected bool, color ui.Color, action func(), ink ...ui.Color) {
-	popoverItemStyle(c, key, text, detail, selected, &color, action, ink...)
-}
-
-// popoverItemDanger is the menu entry for a destructive action: same row as
-// every other item, danger-colored label, so menus delete alike everywhere.
-func popoverItemDanger(c *ui.Context, key, text string, action func()) {
-	popoverItemColor(c, key, text, "", false, c.Theme().Danger, action)
-}
-
-func popoverItemStyle(c *ui.Context, key, text, detail string, selected bool, color *ui.Color, action func(), ink ...ui.Color) {
-	t := c.Theme()
-	b := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(32).Padding(gapInline, padCard).Justify(ui.Start).Radius(radiusSmall).Label(text).Cursor(ui.CursorPointer).OnClick(action)
-	switch {
-	case selected:
-		b.Background(selectionFill(t.Accent))
-	case b.Hovered():
-		b.Background(t.SurfaceHover)
-	}
-	b.Children(func() {
-		ui.Column(c).FillWidth().Gap(2).Children(func() {
-			// Selection is tint + accent ink + weight, not a trailing check:
-			// the mark pulled the eye off the label it was confirming.
-			label := ui.Text(c, text).FontSize(fsBody).SingleLine()
-			if color != nil {
-				label.TextColor(*color)
-			} else if selected {
-				label.TextColor(t.Accent).FontWeight(600)
-			}
-			if detail != "" {
-				ui.Text(c, detail).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).SingleLine()
-			}
-		})
-	})
+	uikit.MenuItemOn(c, ui.ButtonBase(c.Key(key)), text, uikit.MenuItemOptions{Selected: selected, Subtitle: detail}, ink...).OnClick(action)
 }
 
 func windowAction(c *ui.Context, id, tip, icon string, background ui.Color, action func(), ink ...ui.Color) ui.Element {
@@ -849,16 +787,6 @@ func footerBadge(c *ui.Context, id, name, value string, color ui.Color, tip stri
 	return b
 }
 
-// closePopups clears every popup flag whose key starts with prefix, so opening
-// one row's menu closes the menu that was already open.
-func (a *desktop) closePopups(prefix string) {
-	for key, flag := range a.popupFlags {
-		if strings.HasPrefix(key, prefix) {
-			*flag = false
-		}
-	}
-}
-
 func (a *desktop) popupFlag(key string) *bool {
 	if a.popupFlags == nil {
 		a.popupFlags = map[string]*bool{}
@@ -870,13 +798,13 @@ func (a *desktop) popupFlag(key string) *bool {
 }
 
 func (a *desktop) linkMenu(c *ui.Context, key string, links [][2]string) {
-	open := a.popupFlag(key)
-	btn := disclosure(c, key+"-button", "市场", disclosureFlat, "chevrondown").OnClick(func() { *open = !*open })
 	services := c.Services()
-	popoverPanel(c, btn, open, 240, func() {
-		for i, entry := range links {
+	disclosureMenu(c, key+"-button", "市场", disclosureFlat, 240, false, func(m ui.MenuParts) {
+		for _, entry := range links {
 			entry := entry
-			popoverItem(c, fmt.Sprintf("%s-%d", key, i), entry[0], "", false, func() { *open = false; services.OpenURL(entry[1]) }, a.secondaryInk())
+			uikit.MenuItem(c, m, entry[1], entry[0], uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
+				services.OpenURL(entry[1])
+			})
 		}
 	})
 }

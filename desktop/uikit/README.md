@@ -1,6 +1,6 @@
 # Native UI kit
 
-Independent native MyGo v0.7.1 controls. Copy this directory into another Go
+Independent native MyGo v0.8.1 controls. Copy this directory into another Go
 project and update its import path; it depends only on MyGo's `ui` package.
 It contains no Ally state, filesystem access, goroutines, fonts or business logic.
 Use the host's `ui.Theme` to supply typography and semantic colors.
@@ -22,7 +22,10 @@ Exports. Form controls: Button, IconButton, Select, CompactSelect, editable Comb
 PasswordInput, NumberInput, TextField, TextArea, FieldLabel, FieldNote. Chrome: Card,
 RowCard, Divider, PageHeader, SectionHeader, EmptyState, BusyRow, Notice, InlineError,
 StatCard, KV, Tag, Label, Muted, SectionTitle, HoverRow, SelectableRow. Dialogs: DialogPanel,
-Popup, PopupTransition.
+Popup, PopupTransition. Menus: MenuButton, MenuOptions, MenuItem, MenuRow,
+MenuItemOn, MenuPanel; ActionOn, ButtonOn and IconButtonOn reuse existing button
+chrome on framework-owned triggers. CompactMenu keeps its toolbar interface while
+reusing MenuButton/MenuItem, including neutral selection, keyboard input and run locks.
 
 Button takes a ButtonVariant (secondary, primary, danger, ghost) and returns its label
 element too, for the few call sites whose label colour is not the button's own.
@@ -50,6 +53,16 @@ not animate layout dimensions. Popup uses the same transition and chrome.
 
 The Ally desktop's widgets.go is the compatibility layer for old call sites.
 New projects should import this package directly.
+
+`FormCard(c, key, title, note, build, ink...)` groups preferences with 20-DIP
+padding, a heading and native row dividers. Inside it, `FormRow(c, key, title,
+note, controlWidth, build, ink...)` separates the caption/help from the control
+and returns that control for `Changed`/`OnChange`. It wraps using the actual
+container width while preserving keyed control parents, focus and in-progress
+edits. Use `FormControlWidth` for selects, a compact slot for numbers/switches,
+and `FillWidth` only on controls that should stretch. Numeric controls keep
+MyGo's intrinsic inner layout; do not give their root a wider empty box merely
+to align the row. Labels focus or activate their associated native control.
 
 `Input`, `Area` and `InputChrome` share visible borders, hover and focus colors.
 For side-by-side fields, use fractional grid tracks and stretch the cell's
@@ -136,6 +149,16 @@ Use the standard inner layout; do not reimplement it to stretch the input.
 
 Tooltip 必须使用 `uikit.Tooltip(c, anchor, text)` 或侧栏的 `RightTooltip`，不要直接调用 Element.Tooltip 绕过公共动效。统一 180ms 淡入淡出，保留原生 600ms 悬停延迟、键盘焦点和点击／Esc 关闭行为；右侧菜单提示保持右侧定位。公共入口提前挂载原生 overlay 父容器，保证第一个提示也有入场动画、最后一个提示有退场动画。
 
+## 应用菜单
+
+- 普通操作、链接、工作区历史、附加目录、插件分组和 Git 仓库菜单统一走 `MenuButton`，内部使用 MyGo `MenuBase`；`MenuItem` 负责统一外观，框架负责键盘导航、选择后关闭、焦点归还和滚动。
+- 构造前用 `c.Key`；`open` 为 nil 时状态挂在控件局部，传入指针时可由宿主控制。不要再给菜单触发器挂 OnClick 手工切换开关，也不要给普通菜单项写关闭回调。触发器最终 Disabled 会关闭菜单，锁定外观可用 DimDisabled(false)。
+- 选中项保留淡底色与强调色字重，不画前置勾；悬停和键盘高亮用 SurfaceHover。副标题、尾部文本、图标与危险操作颜色在 `MenuItemOptions` 配置，次要文字显式接收宿主色，不借用占位色 TextMuted。
+- `MenuOptions` 保留固定宽度、窗口限宽、高度上限、At/Self 对齐和间距；`MenuRow` 给自绘的 Git 状态行等内容提供同一份外观。信息面板仍用 PopoverBase，但其外观可复用 MenuPanel/MenuItemOn，不把信息列表变成可选菜单项。
+- MyGo v0.8.1 的 MenuBase 子菜单在 Esc 后离开并回到同一点时漏掉重新展开；模型菜单暂用局部 `HoverMenus` 管悬停归属，子菜单继续使用 ContextMenuBase。仅这一处使用兼容层，不修改依赖。框架修复后，经同点重入、跨供应商、最近使用、键盘选择回归再换回 SubmenuItem/Submenu。
+- HoverMenus、Element、MenuParts 和 Context 仅在当前构建使用，不能跨帧保存。模型元数据与悬停状态挂在弹出内容上，关闭即随内容释放；不保存模型凭据。
+- 系统托盘、桌宠菜单以及组件自带菜单保持现有策略，不全局切换 SetMenuPresentation。
+
 ## 页面 Tabs：A / C 两套样式
 
 默认 `Tabs(c, &state.Tab, labels...)` 使用 **C 紧凑分段**，由 `DefaultTabStyle = TabSegmented` 集中决定。
@@ -170,7 +193,7 @@ Tooltip 身份绑定锚点自身的 Local 轻量标记，不用提示文字作�
 
 标题栏工作区标签无外部横向间隔，命中区填满 44 DIP 标题栏；活跃底色与悬停背景只改变绘制，不改变命中区和文字布局。关闭按钮继续固定槽位、悬停／聚焦显隐。
 
-深色 Tertiary 普通按钮文字采用 TextMuted 向 Text 混合 55%，中性底色使用正文色 8.5% 透明度，避免工具栏按钮像禁用态；浅色普通按钮保持原配色。Card 内 Quaternary 仍然静止透明。底部附加工作区菜单使用原生 PopoverBase，对齐触发器上边、菜单下边，并保留 6 DIP 间距，不使用跟随鼠标向下展开的系统菜单。
+深色 Tertiary 普通按钮文字采用 TextMuted 向 Text 混合 55%，中性底色使用正文色 8.5% 透明度，避免工具栏按钮像禁用态；浅色普通按钮保持原配色。Card 内 Quaternary 仍然静止透明。底部附加工作区菜单使用原生 MenuBase，对齐触发器上边、菜单下边，并保留 6 DIP 间距，不使用跟随鼠标向下展开的系统菜单。
 
 页面 C Tabs 的一级、二级选中态均跟随 Theme.Accent，统一使用 18% 主题色浅底和主题色文字；不能以中性 Surface/Text 覆盖一级选中态。深浅主题及切换强调色时都应即时更新，未选中项保持中性。
 

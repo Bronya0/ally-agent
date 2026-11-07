@@ -91,6 +91,7 @@ type desktop struct {
 	previewTimer          *time.Timer
 	previewGeneration     uint64
 	memoryTidyTimer       *time.Timer
+	memoryTidyGeneration  uint64
 	memoryTidyAt          time.Time
 	customAvatar          *ui.Bitmap
 	customAvatarAvailable bool
@@ -198,8 +199,6 @@ type desktop struct {
 	active                                              int
 	sessions                                            []backend.SessionIndexEntry
 	explorer                                            bool
-	workspaceMenuOpen                                   bool
-	workspaceMenuFrom                                   string // "header" or "tabs": the entry that opened the menu
 	startupError                                        string
 	files                                               []backend.FileEntry
 	workspaceFiles                                      map[string]*workspaceFile
@@ -313,10 +312,17 @@ func Run() {
 			a.scheduleMemoryTidy()
 		})
 		a.win.OnShow(a.mainWindowShown)
-		// Minimizing leaves previews and pixels in place, so only the heap is
-		// released here; restoring cancels a release the user would pay for.
-		a.win.OnMinimize(func() { a.scheduleMemoryTidy() })
-		a.win.OnRestore(a.cancelMemoryTidy)
+		// Stop media immediately, but keep the bounded WebView slots through the
+		// hidden-window grace period so a quick restore does not recreate them.
+		a.win.OnMinimize(func() {
+			a.suspendFilePreview()
+			a.syncPluginHostVisibility(true)
+			a.scheduleMemoryTidy()
+		})
+		a.win.OnRestore(func() {
+			a.cancelMemoryTidy()
+			a.syncPluginHostVisibility(a.mainWindowHidden)
+		})
 		a.pluginHost = pluginhost.New(a.core, a.win, func(message, kind string) {
 			if !a.closing {
 				a.queueNotice(message, kind)
@@ -385,6 +391,7 @@ func Run() {
 				a.win.Update(func() { a.startupError = "读取配置失败：" + err.Error() })
 				return
 			}
+			autostart, autostartInitialized, autostartErr := initializeAutostart(a.core, prefs.AutostartInitialized)
 			sessions, _ := a.core.ListSessionIndex()
 			workspace := startupWorkspace(sessions, cfg.Workspace)
 			skills, _ := a.core.ListSkills()
@@ -393,6 +400,14 @@ func Run() {
 			plugins, pluginErr := a.core.ListPlugins()
 			a.win.Update(func() {
 				a.config = cfg
+				a.autostartValue = autostart
+				if autostartInitialized && !a.prefs.AutostartInitialized {
+					a.prefs.AutostartInitialized = true
+					a.savePrefs()
+				}
+				if autostartErr != nil {
+					a.notifyError("初始化开机自启失败：" + autostartErr.Error())
+				}
 				a.syncNativeAppearance()
 				a.customAvatar = customAvatar
 				a.customAvatarAvailable = avatarErr == nil
@@ -502,6 +517,7 @@ func (a *desktop) finishShutdown() {
 }
 
 func (a *desktop) finishQuit() {
+	a.cancelMemoryTidy()
 	a.closeVoiceInput()
 	a.stopAutoAppearance()
 	a.stopUpdateChecks()
@@ -1338,6 +1354,9 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 			} else {
 				newFile.Editor = &editor.State{Buffer: buffer, Font: ui.Font{Family: monoFamily, Size: fsEditor}, Label: "文件编辑器", NoScrollPastEnd: true}
 			}
+			if expected != nil && expected.Path == path && kind.hasMarkupToggle() {
+				newFile.MarkupPreview = expected.MarkupPreview
+			}
 			if newFile.Document != nil {
 				// Keep parsed document previews to one open file at a time.
 				for key, old := range a.workspaceFiles {
@@ -1349,7 +1368,13 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 				}
 			}
 			if expected != nil {
-				a.releaseWorkspaceFile(root)
+				if newFile.PreviewPath != "" || newFile.PreviewHTML != "" || newFile.MarkupPreview && kind == workspaceFileHTML {
+					// beginLoad already retired the page. Keep its native slot for
+					// the next compatible preview, while dropping old file data.
+					releaseWorkspaceFileValue(expected)
+				} else {
+					a.releaseWorkspaceFile(root)
+				}
 			}
 			a.workspaceFiles[workspaceKey(root)] = newFile
 			if !kind.isPreviewOnly() {

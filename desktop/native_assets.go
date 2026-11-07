@@ -11,8 +11,14 @@ import (
 
 var originalRailIcons = func() map[string]*ui.SVG {
 	result := map[string]*ui.SVG{}
-	for _, name := range []string{"chat", "kb", "skills", "mcp", "models", "ssh", "tasks", "stats", "plugins", "settings", "history", "github"} {
-		data, err := resources.Assets.ReadFile("icons/antd/" + name + ".svg")
+	for _, name := range []string{"chat", "kb", "skills", "mcp", "models", "ssh", "tasks", "stats", "plugins", "settings", "history", "github", "folderopen"} {
+		directory := "antd"
+		switch name {
+		case "skills", "models", "tasks", "plugins", "folderopen":
+			// Keep icon names stable across the rail, headers and action buttons.
+			directory = "navigation"
+		}
+		data, err := resources.Assets.ReadFile("icons/" + directory + "/" + name + ".svg")
 		if err == nil {
 			if icon, err := ui.ParseSVG(data); err == nil {
 				result[name] = icon

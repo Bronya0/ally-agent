@@ -893,7 +893,7 @@ var builtinToolLabels = map[string]string{
 	"service": "后台服务", "wait": "等待", "ask": "提问", "suggest": "建议", "scheduled_task": "计划任务",
 	"http_request": "HTTP 请求", "web_fetch": "抓取网页", "remote_read": "远程读取", "remote_edit": "远程编辑",
 	"remote_create_file": "远程创建", "remote_delete_path": "远程删除", "remote_run_command": "远程命令",
-	"remote_transfer": "远程传输", "ssh_cluster": "SSH 集群", "calculate": "计算器", "render_html": "渲染 HTML",
+	"remote_transfer": "远程传输", "ssh_cluster": "SSH", "calculate": "计算器", "render_html": "渲染 HTML",
 	"plan": "计划", "subagent": "子代理", "skill": "技能",
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/google/uuid"
 	xhtml "golang.org/x/net/html"
 )
 
@@ -29,7 +30,7 @@ var errMarkupPreviewLimit = errors.New("预览内容超过大小上限")
 // file, reporting false for every other kind. It starts playback only for an
 // explicit user action or while continuing a playlist, so it also clears the
 // one-shot autoplay flag.
-func (a *desktop) newMediaPlayerDocument(file *workspaceFile) (string, bool) {
+func (a *desktop) newMediaPlayerDocument(file *workspaceFile, token string) (string, bool) {
 	kind := workspaceFileKindForPath(file.Path)
 	if !kind.hasMediaPlayer() {
 		return "", false
@@ -44,9 +45,10 @@ func (a *desktop) newMediaPlayerDocument(file *workspaceFile) (string, bool) {
 	}
 	a.media.ensureMode()
 	page := mediaPreviewHTML(filepath.Base(file.Path), source, kind)
-	script := strings.NewReplacer("SINGLE", fmt.Sprint(a.media.mode == mediaModeSingle), "ENHANCE", fmt.Sprint(a.media.enhance && kind == workspaceFileImage), "START", fmt.Sprint(a.media.autoplay)).Replace(workspaceMediaScript)
+	script := strings.NewReplacer("TOKEN", fmt.Sprintf("%q", token), "SINGLE", fmt.Sprint(a.media.mode == mediaModeSingle), "ENHANCE", fmt.Sprint(a.media.enhance && kind == workspaceFileImage), "START", fmt.Sprint(a.media.autoplay)).Replace(workspaceMediaScript)
+	// Keep the pending play intent until the new player confirms play or pause.
+	a.media.playing = a.media.autoplay
 	a.media.autoplay = false
-	a.media.playing = false
 	return strings.Replace(page, "</body>", script+"</body>", 1), true
 }
 
@@ -56,7 +58,9 @@ func mediaPreviewHTML(name, source string, kind workspaceFileKind) string {
 	if parsed, err := url.Parse(source); err == nil && parsed.Host != "" {
 		mediaSource = parsed.Scheme + "://" + parsed.Host
 	}
-	style := `html,body{margin:0;height:100%;background:#1b1b1b;color-scheme:dark}body{display:grid;place-items:center}video,img{width:100%;height:100%;object-fit:contain}svg{position:absolute;width:0;height:0}`
+	// Zero-minimum grid tracks keep intrinsic media dimensions from expanding
+	// the viewport; object-fit scales the full frame inside that bounded area.
+	style := `html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#1b1b1b;color-scheme:dark}body{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);place-items:center}video,img{display:block;width:100%;height:100%;min-width:0;min-height:0;object-fit:contain}svg{position:absolute;width:0;height:0}`
 	player := `<video controls playsinline preload="metadata" src="` + html.EscapeString(source) + `"></video>`
 	if kind == workspaceFileImage {
 		player = `<img alt="" src="` + html.EscapeString(source) + `">`
@@ -292,14 +296,26 @@ type pendingWorkspaceFileLoad struct {
 	cancel    context.CancelFunc
 }
 
+type workspacePreviewSurface interface {
+	Native() ui.NativeWebView
+	IsDestroyed() bool
+	Destroy()
+	Reset()
+	LoadHTML(string)
+	LoadFile(string) error
+}
+
 type mountedWorkspacePreview struct {
-	key     string
-	surface *nativePreview
+	key      string
+	surface  workspacePreviewSurface
+	autoplay bool
+	stale    bool
 }
 
 type scheduledWorkspacePreview struct {
-	key   string
-	timer *time.Timer
+	key      string
+	autoplay bool
+	timer    *time.Timer
 }
 
 // workspacePreviewLifecycle is the sole owner of file-preview resources.
@@ -313,7 +329,9 @@ type workspacePreviewLifecycle struct {
 }
 
 func (l *workspacePreviewLifecycle) beginLoad(workspace, path string) (context.Context, *pendingWorkspaceFileLoad) {
-	l.release()
+	l.cancelScheduled()
+	l.cancelLoad("")
+	l.suspendMounted(workspace)
 	ctx, cancel := context.WithCancel(context.Background())
 	load := &pendingWorkspaceFileLoad{
 		workspace: workspaceKey(workspace),
@@ -349,17 +367,19 @@ func (l *workspacePreviewLifecycle) loadingWorkspace(workspace string) bool {
 func (l *workspacePreviewLifecycle) schedule(
 	update func(func()),
 	key string,
+	autoplay bool,
 	visible func() bool,
-	create func() (*nativePreview, error),
+	create func() (workspacePreviewSurface, error),
+	load func(workspacePreviewSurface) error,
 	fail func(error),
 ) {
 	if l.scheduled != nil {
-		if l.scheduled.key == key {
+		if l.scheduled.key == key && l.scheduled.autoplay == autoplay {
 			return
 		}
 		l.cancelScheduled()
 	}
-	request := &scheduledWorkspacePreview{key: key}
+	request := &scheduledWorkspacePreview{key: key, autoplay: autoplay}
 	l.scheduled = request
 	request.timer = time.AfterFunc(16*time.Millisecond, func() {
 		update(func() {
@@ -370,23 +390,54 @@ func (l *workspacePreviewLifecycle) schedule(
 			if !visible() {
 				return
 			}
-			l.releaseMounted()
-			surface, err := create()
-			if err != nil {
+			if err := l.mount(request.key, request.autoplay, create, load); err != nil {
 				fail(err)
-				return
 			}
-			if surface == nil {
-				fail(errors.New("预览未创建 WebView"))
-				return
-			}
-			l.mounted = &mountedWorkspacePreview{key: request.key, surface: surface}
 		})
 	})
 }
 
-func (l *workspacePreviewLifecycle) mountedFor(key string) *nativePreview {
-	if l.mounted == nil || l.mounted.key != key || l.mounted.surface == nil || l.mounted.surface.IsDestroyed() {
+// Keep one surface for compatible files in one workspace, never an idle pool.
+func (l *workspacePreviewLifecycle) mount(key string, autoplay bool, create func() (workspacePreviewSurface, error), load func(workspacePreviewSurface) error) error {
+	if l.mountedFor(key) != nil && l.mounted.autoplay == autoplay {
+		return nil
+	}
+	if l.mounted != nil {
+		workspace, _, _ := strings.Cut(key, "\x00")
+		if l.mounted.autoplay != autoplay || !strings.HasPrefix(l.mounted.key, workspace+"\x00") || l.mounted.surface == nil || l.mounted.surface.IsDestroyed() {
+			l.releaseMounted()
+		}
+	}
+	var surface workspacePreviewSurface
+	if l.mounted != nil {
+		surface = l.mounted.surface
+		if !l.mounted.stale {
+			surface.Reset()
+		}
+	} else {
+		var err error
+		surface, err = create()
+		if err != nil {
+			if surface != nil {
+				surface.Destroy()
+			}
+			return err
+		}
+	}
+	if surface == nil {
+		return errors.New("预览未创建 WebView")
+	}
+	if err := load(surface); err != nil {
+		surface.Destroy()
+		l.mounted = nil
+		return err
+	}
+	l.mounted = &mountedWorkspacePreview{key: key, surface: surface, autoplay: autoplay}
+	return nil
+}
+
+func (l *workspacePreviewLifecycle) mountedFor(key string) workspacePreviewSurface {
+	if l.mounted == nil || l.mounted.stale || l.mounted.key != key || l.mounted.surface == nil || l.mounted.surface.IsDestroyed() {
 		return nil
 	}
 	return l.mounted.surface
@@ -406,6 +457,23 @@ func (l *workspacePreviewLifecycle) releaseMounted() {
 		l.mounted.surface.Destroy()
 	}
 	l.mounted = nil
+}
+
+// Stop the old page and drop its body/decoder while retaining the native slot.
+func (l *workspacePreviewLifecycle) suspendMounted(workspace string) {
+	if l.mounted == nil {
+		return
+	}
+	if !strings.HasPrefix(l.mounted.key, workspaceKey(workspace)+"\x00") {
+		l.releaseMounted()
+		return
+	}
+	if !l.mounted.stale {
+		l.mounted.stale = true
+		if l.mounted.surface != nil && !l.mounted.surface.IsDestroyed() {
+			l.mounted.surface.Reset()
+		}
+	}
 }
 
 func (l *workspacePreviewLifecycle) cancelScheduled() {
@@ -459,7 +527,7 @@ func (a *desktop) workspaceFilePreviewKey(file *workspaceFile) string {
 }
 
 func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile) {
-	if a.win == nil || a.closing || !a.explorer || a.filesF.InfoOpen || a.page != "chat" || file == nil || a.activeFile() != file {
+	if a.win == nil || a.closing || a.mainWindowHidden || a.win.IsMinimized() || !a.explorer || a.filesF.InfoOpen || a.page != "chat" || file == nil || file.PreviewError != "" || a.activeFile() != file {
 		return
 	}
 	// Markdown and Word previews draw in the window, so they never own a web view.
@@ -477,45 +545,70 @@ func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile) {
 	if a.workspacePreview.mountedFor(key) != nil {
 		return
 	}
-	a.workspacePreview.schedule(a.win.Update, key,
+	autoplay := previewAutoplayAllowed(workspaceFileKindForPath(file.Path).hasMediaPlayer())
+	a.workspacePreview.schedule(a.win.Update, key, autoplay,
 		func() bool {
-			return !a.closing && a.explorer && !a.filesF.InfoOpen && a.page == "chat" &&
+			return !a.closing && !a.mainWindowHidden && !a.win.IsMinimized() && a.explorer && !a.filesF.InfoOpen && a.page == "chat" &&
 				a.activeFile() == file &&
 				(file.PreviewPath != "" || file.PreviewHTML != "" || file.Document != nil || file.MarkupPreview)
 		},
-		func() (*nativePreview, error) {
+		func() (workspacePreviewSurface, error) { return a.newNativePreview(autoplay) },
+		func(surface workspacePreviewSurface) error {
 			document := file.PreviewHTML
 			if file.PreviewPath == "" && document == "" {
 				var err error
 				document, err = workspaceFilePreviewHTML(file)
 				if err != nil {
-					return nil, err
+					return err
 				}
-			}
-			surface, err := a.newNativePreview()
-			if err != nil {
-				return nil, err
 			}
 			switch {
 			case file.PreviewPath != "":
-				if page, ok := a.newMediaPlayerDocument(file); ok {
-					a.attachWorkspaceMedia(surface, file)
+				token := uuid.NewString()
+				if page, ok := a.newMediaPlayerDocument(file, token); ok {
+					native, ok := surface.(*nativePreview)
+					if !ok {
+						return errors.New("预览类型不支持媒体控制")
+					}
 					surface.LoadHTML(page)
-				} else if err = surface.LoadFile(file.PreviewPath); err != nil {
-					surface.Destroy()
-					return nil, err
+					a.attachWorkspaceMedia(native, file, token)
+				} else if err := surface.LoadFile(file.PreviewPath); err != nil {
+					return err
 				}
 			default:
 				surface.LoadHTML(document)
 			}
 			file.PreviewError = ""
-			return surface, nil
+			if native, ok := surface.(*nativePreview); ok {
+				a.watchWorkspacePreviewFailure(native, file, key)
+			}
+			return nil
 		},
 		func(err error) { file.PreviewError = err.Error() },
 	)
 }
+func (a *desktop) watchWorkspacePreviewFailure(surface *nativePreview, file *workspaceFile, key string) {
+	surface.onFailure = func(err error) {
+		mounted := a.workspacePreview.mounted
+		if a.closing || a.activeFile() != file || mounted == nil || mounted.key != key || mounted.surface != surface {
+			return
+		}
+		file.PreviewError = err.Error()
+		a.media.playing, a.media.autoplay = false, false
+	}
+}
+
 func (a *desktop) releaseFilePreview() {
 	a.workspacePreview.release()
+	a.media.playing, a.media.autoplay = false, false
+}
+
+func (a *desktop) suspendFilePreview() {
+	a.workspacePreview.cancelScheduled()
+	if tab := a.current(); tab != nil {
+		a.workspacePreview.suspendMounted(tab.Workspace)
+	}
+	a.media.playing, a.media.autoplay = false, false
 }
 
 func (a *desktop) workspaceFilePreviewView(c *ui.Context, file *workspaceFile) {

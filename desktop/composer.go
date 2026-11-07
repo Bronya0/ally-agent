@@ -873,299 +873,185 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 		label = "选择模型"
 	}
 	st := t.uiState()
-	btn := uikit.Tooltip(c, composerSettingButton(c.Key("composer-model"), short(strings.ReplaceAll(label, " / ", " · "), 34), t.Busy, func() {
-		st.ModelOpen = !st.ModelOpen
-		if st.ModelOpen {
-			st.ModelSearch = ""
-			// The menu opens as a plain list of providers; a group opens on hover.
-			st.ModelGroup = ""
-			st.FlyoutHot = false
-			st.FlyoutDismiss = ""
+	wasOpen := st.ModelOpen
+	uikit.MenuButton(c.Key("composer-model"), &st.ModelOpen, uikit.MenuOptions{Width: 340, MaxHeight: 520}, func(b ui.Element) {
+		b, text := uikit.ButtonOn(c, b, short(strings.ReplaceAll(label, " / ", " · "), 34), uikit.ButtonGhost, true, nil, uikit.ActionOptions{Disabled: t.Busy})
+		b.Padding(1, 6).MinWidth(0).Shrink(1).DimDisabled(false).TextColor(a.secondaryInk())
+		text.TextColor(a.secondaryInk())
+		if t.Busy {
+			b.Cursor(ui.CursorDefault)
+			uikit.Tooltip(c, b, "运行中锁定：本轮结束后切换才生效")
+		} else {
+			uikit.Tooltip(c, b, "切换模型")
 		}
-	}, a.secondaryInk()).SingleLine().MinWidth(0).Shrink(1), "切换模型")
-	if t.Busy {
-		uikit.Tooltip(c, btn, "运行中锁定：本轮结束后切换才生效")
-	}
-	ui.PopoverBase(c, btn, &st.ModelOpen, func(panel ui.Element) {
-		popoverChrome(c, panel, 340)
-		panel.MaxHeight(520)
-		ui.Column(c).FillWidth().Children(func() {
-			uikit.Input(c.Key("model-menu-search"), &st.ModelSearch).Placeholder("搜索模型或供应商").Label("搜索模型或供应商").FillWidth()
+		if st.ModelOpen && !wasOpen {
+			st.ModelSearch = ""
+		}
+	}, func(m ui.MenuParts) {
+		body := ui.Column(c).FillWidth()
+		hover := uikit.NewHoverMenus(body)
+		rows := map[string]ui.Element{}
+		body.Children(func() {
+			input := uikit.Input(c.Key("model-menu-search"), &st.ModelSearch).Placeholder("搜索模型或供应商").Label("搜索模型或供应商").FillWidth()
+			hover.ClearOnHover(input)
 			query := strings.ToLower(strings.TrimSpace(st.ModelSearch))
-			// The menu is rebuilt on every frame the pointer moves, so the option
-			// identity, the provider group, the lowered model name and the search
-			// haystack are worked out once per model here, not once per comparison or
-			// once per recently used entry.
 			models := a.config.Models
-			options := make([]string, len(models))
-			providerOf := make([]string, len(models))
-			lowerNames := make([]string, len(models))
-			haystacks := make([]string, len(models))
-			for i, model := range models {
-				options[i] = modelOption(model)
-				providerOf[i] = providerGroupName(model)
-				lowerNames[i] = strings.ToLower(model.Model)
-				if query != "" {
-					haystacks[i] = strings.ToLower(model.ProviderName + " " + model.DisplayName + " " + model.Model)
-				}
-			}
-			matches := func(i int) bool {
-				return query == "" || strings.Contains(haystacks[i], query)
-			}
-			ui.Scroll(c).MaxHeight(440).Children(func() {
-				ui.Column(c).Children(func() {
-					recent := append([]string(nil), a.prefs.RecentModels...)
-					if len(recent) == 0 && a.config.LastUsedModel != nil {
-						for _, model := range a.config.Models {
-							if sameModelIdentity(modelIdentity(model), *a.config.LastUsedModel) {
-								recent = append(recent, modelOption(model))
-								break
-							}
-						}
-					}
-					if len(recent) == 0 && t.Model != "" {
-						recent = append(recent, t.Model)
-					}
-					if len(recent) > 3 {
-						recent = recent[:3]
-					}
-					shownRecent := false
-					// recentHot tracks the pointer on the recents block, which is the one
-					// part of the menu that belongs to no provider.
-					recentHot := false
-					for _, identity := range recent {
-						for i := range models {
-							if options[i] != identity || !matches(i) {
-								continue
-							}
-							if !shownRecent {
-								head := ui.Text(c, "最近使用").FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(gapInline, padCard)
-								if head.Hovered() {
-									recentHot = true
-								}
-								shownRecent = true
-							}
-							model := models[i]
-							name := model.DisplayName
-							if name == "" {
-								name = model.Model
-							}
-							if popoverModelRecent(c, fmt.Sprintf("model-recent-%d", i), name, model.ProviderName, options[i] == t.Model, func() { st.ModelOpen = false; a.selectChatModel(t, model) }, a.secondaryInk()) {
-								recentHot = true
-							}
-						}
-					}
-					if shownRecent {
-						divider(c)
-					}
-					groups := map[string][]int{}
-					for i := range models {
-						if matches(i) {
-							provider := providerOf[i]
-							groups[provider] = append(groups[provider], i)
-						}
-					}
-					names := make([]string, 0, len(groups))
-					for name := range groups {
-						names = append(names, name)
-					}
-					// Groups reached recently come first, in the order they were used. A
-					// group with no entry in rank was never used: the alphabet only decides
-					// the order among those, never between a used and an unused one. The
-					// Tab's own model counts as the most recent.
-					rank := map[string]int{}
-					for pos, identity := range recent {
-						for i := range models {
-							if options[i] != identity {
-								continue
-							}
-							provider := providerOf[i]
-							if seen, ok := rank[provider]; !ok || pos < seen {
-								rank[provider] = pos
-							}
-						}
-					}
-					for i := range models {
-						if options[i] == t.Model {
-							rank[providerOf[i]] = -1
-							break
-						}
-					}
-					sort.Slice(names, func(i, j int) bool {
-						ri, iUsed := rank[names[i]]
-						rj, jUsed := rank[names[j]]
-						switch {
-						case iUsed && jUsed:
-							return ri < rj
-						case iUsed != jUsed:
-							return iUsed
-						default:
-							return strings.ToLower(names[i]) < strings.ToLower(names[j])
-						}
-					})
-					// The pointer opens a group's models beside it. One group at a time:
-					// every row only reports whether it is hovered, this loop picks the
-					// single group to attach a flyout to, and the flyout then holds it open
-					// while the pointer is on its way into the list.
-					providers := make([]string, 0, len(names))
-					rows := make([]ui.Element, 0, len(names))
-					hovered := ""
-					for _, provider := range names {
-						indices := groups[provider]
-						sort.SliceStable(indices, func(i, j int) bool {
-							return lowerNames[indices[i]] < lowerNames[indices[j]]
-						})
-						row, hot := a.modelGroupRow(c, t, provider, indices)
-						providers = append(providers, provider)
-						rows = append(rows, row)
-						if hot && hovered == "" {
-							hovered = provider
-						}
-					}
-					// Not on a row: the pointer may be heading into the flyout, resting on
-					// the menu, or gone. Carry the current group and let the check below
-					// decide whether it stays.
-					// Escape closed a flyout under the pointer: that row must not rebuild
-					// it on the next frame, or the key reads as doing nothing. The mark
-					// clears as soon as the pointer leaves the row, so hovering the group
-					// again opens it as always.
-					if st.FlyoutDismiss != "" {
-						if hovered == st.FlyoutDismiss {
-							hovered = ""
-						} else {
-							st.FlyoutDismiss = ""
-						}
-					}
-					open := hovered
-					sticky := false
-					switch {
-					case open != "":
-						// A row is hovered: its group opens.
-					case recentHot:
-						// The pointer is on the recents block, which belongs to no provider:
-						// drop the flyout instead of leaving it over the very models the
-						// pointer is reaching for.
-					case st.ModelGroup != "":
-						open = st.ModelGroup
-						sticky = true
-					}
-					st.FlyoutHot = false
-					opened := false
-					closed := false
-					for i, provider := range providers {
-						if provider != open {
-							continue
-						}
-						st.FlyoutHot, closed = a.modelGroupFlyout(c, t, providers[i], groups[provider], rows[i])
-						opened = true
+			catalog := memoAt[modelMenuCatalog](body, "model-catalog")
+			catalog.refresh(models)
+			entries := catalog.entries
+			matches := func(i int) bool { return query == "" || strings.Contains(entries[i].search, query) }
+			recent := a.prefs.RecentModels
+			if len(recent) == 0 && a.config.LastUsedModel != nil {
+				for i := range models {
+					if sameModelIdentity(entries[i].identity, *a.config.LastUsedModel) {
+						recent = []string{entries[i].option}
 						break
 					}
-					switch {
-					case !opened:
-						// The group is gone from the list, as after a search that no longer
-						// matches any of its models.
-						open = ""
-					case closed:
-						// Escape or a press outside the flyout closed it: drop the group, and
-						// keep its row from opening it again while the pointer rests there.
-						st.FlyoutHot = false
-						st.FlyoutDismiss = open
-						open = ""
-					case sticky && !st.FlyoutHot && !panel.Hovered():
-						// The pointer left both the menu and the flyout: drop the group.
-						open = ""
+				}
+			}
+			if len(recent) == 0 && t.Model != "" {
+				recent = []string{t.Model}
+			}
+			if len(recent) > 3 {
+				recent = recent[:3]
+			}
+			modelItem := func(parts ui.MenuParts, i int, key, trailing string) ui.Element {
+				model, entry := models[i], entries[i]
+				item := uikit.MenuItem(c, parts, key, entry.name, uikit.MenuItemOptions{Choice: true, Selected: entry.option == t.Model, Trailing: trailing}, a.secondaryInk())
+				if trailing != "" {
+					item.Label(entry.name + " " + trailing)
+				}
+				return item.OnClick(func() { st.ModelOpen = false; a.selectChatModel(t, model) })
+			}
+			shownRecent := false
+			for _, identity := range recent {
+				for i, entry := range entries {
+					if entry.option != identity || !matches(i) {
+						continue
 					}
-					st.ModelGroup = open
-					// One row reads as current: the one the pointer is on, or the one whose
-					// flyout it went into. The rows were drawn before this frame knew which,
-					// so the highlight lands here, once, instead of leaving the group the
-					// pointer just left lit beside the new one.
-					for i, provider := range providers {
-						if provider == open {
-							rows[i].Background(c.Theme().SurfaceHover)
-							break
+					if !shownRecent {
+						head := ui.Text(c, "最近使用").FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(gapInline, padCard)
+						hover.ClearOnHover(head)
+						shownRecent = true
+					}
+					hover.ClearOnHover(modelItem(m, i, "recent-"+entry.option, models[i].ProviderName))
+				}
+			}
+			if shownRecent {
+				divider(c)
+			}
+			groups := map[string][]int{}
+			rank := map[string]int{}
+			for i, entry := range entries {
+				if matches(i) {
+					groups[entry.provider] = append(groups[entry.provider], i)
+				}
+				for pos, identity := range recent {
+					if entry.option == identity {
+						if old, ok := rank[entry.provider]; !ok || pos < old {
+							rank[entry.provider] = pos
 						}
 					}
-					if len(groups) == 0 {
-						fieldNote(c, "没有匹配的模型", a.secondaryInk())
-					}
-				})
+				}
+			}
+			for _, entry := range entries {
+				if entry.option == t.Model {
+					rank[entry.provider] = -1
+					break
+				}
+			}
+			names := make([]string, 0, len(groups))
+			for name := range groups {
+				names = append(names, name)
+			}
+			sort.Slice(names, func(i, j int) bool {
+				ri, iUsed := rank[names[i]]
+				rj, jUsed := rank[names[j]]
+				if iUsed && jUsed {
+					return ri < rj
+				}
+				if iUsed != jUsed {
+					return iUsed
+				}
+				return strings.ToLower(names[i]) < strings.ToLower(names[j])
 			})
+			for _, provider := range names {
+				indices := groups[provider]
+				sort.SliceStable(indices, func(i, j int) bool { return entries[indices[i]].lowerModel < entries[indices[j]].lowerModel })
+				c.Key("provider-" + provider)
+				row := uikit.MenuRow(c, m.Item(), provider, false)
+				rows[provider] = row
+				hover.Item(c, provider, row)
+				hasActive := false
+				for _, i := range indices {
+					hasActive = hasActive || entries[i].option == t.Model
+				}
+				row.Children(func() {
+					name := ui.Text(c, provider).FontSize(fsSmall).SingleLine().Grow(1)
+					if hasActive {
+						name.TextColor(c.Theme().Accent)
+					}
+					ui.Text(c, fmt.Sprint(len(indices))).FontSize(fsTiny).TextColor(a.secondaryInk())
+					iconGlyph(c, "chevron", sizeCaretInline).TextColor(a.secondaryInk())
+				})
+				row.Gap(gapField)
+			}
+			if len(groups) == 0 {
+				fieldNote(c, "没有匹配的模型", a.secondaryInk())
+			}
 			divider(c)
-			popoverItem(c, "model-manage", "管理模型", "", false, func() { st.ModelOpen = false; a.changePage("models") }, a.secondaryInk())
+			manage := uikit.MenuItem(c, m, "manage", "管理模型", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.changePage("models") })
+			hover.ClearOnHover(manage)
+			hover.Popup(c, body, func(id string) ui.Element { return rows[id] }, uikit.MenuOptions{Width: 260, MaxHeight: 360}, func(provider string, child ui.MenuParts) {
+				for _, i := range groups[provider] {
+					modelItem(child, i, entries[i].option, "")
+				}
+			})
 		})
-	})
+	}).Shrink(1)
 }
 
-// providerGroupName is the menu's grouping key for one model: its provider, with
-// the unnamed entries folded into the custom group.
+// Cache only menu metadata, not credentials or model configs. Refresh compares
+// the fields that affect labels and identity, including the OAuth account.
+type modelMenuEntry struct {
+	identity                            backend.ModelIdentity
+	displayName, name, option, provider string
+	lowerModel, search                  string
+}
+
+type modelMenuCatalog struct{ entries []modelMenuEntry }
+
+func (catalog *modelMenuCatalog) refresh(models []backend.ModelConfig) {
+	changed := len(catalog.entries) != len(models)
+	if !changed {
+		for i, model := range models {
+			if catalog.entries[i].identity != modelIdentity(model) || catalog.entries[i].displayName != model.DisplayName {
+				changed = true
+				break
+			}
+		}
+	}
+	if !changed {
+		return
+	}
+	catalog.entries = make([]modelMenuEntry, len(models))
+	for i, model := range models {
+		name := model.DisplayName
+		if name == "" {
+			name = model.Model
+		}
+		catalog.entries[i] = modelMenuEntry{identity: modelIdentity(model), displayName: model.DisplayName, name: name,
+			option: modelOption(model), provider: providerGroupName(model), lowerModel: strings.ToLower(model.Model),
+			search: strings.ToLower(model.ProviderName + " " + model.DisplayName + " " + model.Model)}
+	}
+}
+
 func providerGroupName(model backend.ModelConfig) string {
 	provider := strings.TrimSpace(model.ProviderName)
 	if provider == "" {
 		provider = customProviderName
 	}
 	return provider
-}
-
-// modelGroupRow draws one provider in the model menu: its name, how many models
-// it holds, and a chevron. It reports whether the pointer is on the row, which
-// is what opens the flyout; the row itself builds no flyout, so a frame cannot
-// end up showing two. Its highlight is left to the caller, which alone knows
-// which group the frame settled on.
-func (a *desktop) modelGroupRow(c *ui.Context, t *conversation, provider string, indices []int) (ui.Element, bool) {
-	th := c.Theme()
-	row := ui.ButtonBase(c.Key("model-group-"+provider)).FillWidth().MinHeight(32).Padding(gapInline, padCard).Justify(ui.Start).Radius(radiusSmall).Cursor(ui.CursorPointer).Label(provider)
-	hovered := row.Hovered()
-	hasActive := false
-	for _, i := range indices {
-		if modelOption(a.config.Models[i]) == t.Model {
-			hasActive = true
-			break
-		}
-	}
-	row.Children(func() {
-		ui.Row(c).FillWidth().Gap(gapField).AlignItems(ui.Center).Children(func() {
-			name := ui.Text(c, provider).FontSize(fsSmall).SingleLine().Grow(1)
-			if hasActive {
-				name.TextColor(th.Accent)
-			}
-			ui.Text(c, fmt.Sprint(len(indices))).FontSize(fsTiny).TextColor(a.secondaryInk())
-			iconGlyph(c, "chevron", sizeCaretInline).TextColor(a.secondaryInk())
-		})
-	})
-	return row, hovered
-}
-
-// modelGroupFlyout lists one provider's models beside its row and reports whether
-// the pointer is inside it, which keeps it open on the next frame, and whether
-// this frame closed it (Escape, or a press outside it and its row), so the caller
-// can drop the group instead of rebuilding a flyout nobody asked for.
-func (a *desktop) modelGroupFlyout(c *ui.Context, t *conversation, provider string, indices []int, row ui.Element) (bool, bool) {
-	open := true
-	hot := false
-	ui.PopoverBase(c.Key("model-flyout-"+provider), row, &open, func(panel ui.Element) {
-		panel.AttachTo(row, ui.AnchorTopEnd, ui.AnchorTopStart).MarginStart(-6)
-		popoverChrome(c, panel, 260)
-		if panel.Hovered() {
-			hot = true
-		}
-		ui.Scroll(c).MaxHeight(360).Children(func() {
-			ui.Column(c).FillWidth().Children(func() {
-				for _, i := range indices {
-					model := a.config.Models[i]
-					name := model.DisplayName
-					if name == "" {
-						name = model.Model
-					}
-					popoverItem(c, fmt.Sprintf("model-choice-%d", i), name, "", modelOption(model) == t.Model, func() {
-						t.uiState().ModelOpen = false
-						a.selectChatModel(t, model)
-					}, a.secondaryInk())
-				}
-			})
-		})
-	})
-	return hot, !open
 }
 
 func (a *desktop) selectChatModel(t *conversation, model backend.ModelConfig) {
@@ -1367,47 +1253,39 @@ func (a *desktop) extraRootsButton(c *ui.Context, t *conversation) {
 	if count > 0 {
 		tip = fmt.Sprintf("附加目录（%d 个）：添加后允许写入其他工作区。", count)
 	}
-	color := p.muted
-	if count > 0 {
-		color = p.accent
-	}
-	btn := uikit.Tooltip(c, ui.ButtonBase(c.Key("composer-extra-roots")).Height(26).MinWidth(26).Padding(0, 3).Gap(2).
-		Radius(radiusSmall).AlignItems(ui.Center).Center().Label("附加目录"), tip).
-		TextColor(color).Cursor(ui.CursorPointer)
-	fill := ui.Transparent
-	if btn.Hovered() {
-		fill = p.hover
-		if count == 0 {
-			color = p.text
-		}
-	}
 	st := t.uiState()
-	if st.ExtraRootsOpen {
-		color = p.accent
-	}
-	color = fadeColor(btn, "icon-ink", color)
-	btn.Background(fadeColor(btn, "fill", fill)).TextColor(color)
-	btn.OnClick(func() { st.ExtraRootsOpen = !st.ExtraRootsOpen })
-	ui.PopoverBase(c.Key("extra-roots-menu"), btn, &st.ExtraRootsOpen, func(panel ui.Element) {
-		popoverChrome(c, panel, 300)
-		panel.Label("附加工作区菜单").AttachTo(btn, ui.AnchorTopLeft, ui.AnchorBottomLeft).Margin(0, 0, 6, 0).MaxHeightPercent(75).Transition(uikit.PopupTransition())
-		ui.Scroll(c.Key("roots")).FillWidth().MaxHeight(260).Children(func() {
-			if len(roots) == 0 {
-				muted(c, "尚未添加附加工作区", fsSmall, a.secondaryInk()).Padding(8, 10)
+	uikit.MenuButton(c.Key("composer-extra-roots"), &st.ExtraRootsOpen, uikit.MenuOptions{
+		Width: 300, MaxHeight: 320, MaxHeightPercent: 75, Label: "附加工作区菜单",
+		At: ui.AnchorTopLeft, Self: ui.AnchorBottomLeft, Gap: 6,
+	}, func(b ui.Element) {
+		b = uikit.Tooltip(c, b.Height(26).MinWidth(26).Padding(0, 3).Gap(2).Radius(radiusSmall).Center().Label("附加目录"), tip).Cursor(ui.CursorPointer)
+		color, fill := p.muted, ui.Transparent
+		if count > 0 || st.ExtraRootsOpen {
+			color = p.accent
+		}
+		if b.Hovered() {
+			fill = p.hover
+			if count == 0 && !st.ExtraRootsOpen {
+				color = p.text
 			}
-			for _, root := range roots {
-				root := root
-				popoverItem(c, root, "📁 "+filepath.Base(root), root+" · 点击移除", false, func() { st.ExtraRootsOpen = false; a.removeExtraRoot(t, root) }, a.secondaryInk())
+		}
+		color = fadeColor(b, "icon-ink", color)
+		b.Background(fadeColor(b, "fill", fill)).TextColor(color).Children(func() {
+			iconGlyph(c, "grid", 16).TextColor(color)
+			if count > 0 {
+				ui.Text(c, fmt.Sprint(count)).FontSize(fsTiny).TextColor(color)
 			}
 		})
-		divider(c)
-		popoverItem(c, "add-root", "＋ 添加目录", "", false, func() { st.ExtraRootsOpen = false; a.addExtraRoot(t) }, a.secondaryInk())
-	})
-	btn.Children(func() {
-		iconGlyph(c, "grid", 16).TextColor(color)
-		if count > 0 {
-			ui.Text(c, fmt.Sprint(count)).FontSize(fsTiny).TextColor(color)
+	}, func(m ui.MenuParts) {
+		if len(roots) == 0 {
+			muted(c, "尚未添加附加工作区", fsSmall, a.secondaryInk()).Padding(8, 10)
 		}
+		for _, root := range roots {
+			root := root
+			uikit.MenuItem(c, m, root, "📁 "+filepath.Base(root), uikit.MenuItemOptions{Subtitle: root + " · 点击移除"}, a.secondaryInk()).OnClick(func() { a.removeExtraRoot(t, root) })
+		}
+		divider(c)
+		uikit.MenuItem(c, m, "add-root", "＋ 添加目录", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.addExtraRoot(t) })
 	})
 }
 
@@ -1471,7 +1349,7 @@ func (a *desktop) sshChip(c *ui.Context, t *conversation) {
 		return
 	}
 	count := len(a.sshAllowed[t.Workspace])
-	footerBadge(c, "footer-ssh", "SSH", fmt.Sprint(count), ui.Hex("#3b9f70"), "SSH 集群授权", func() {
+	footerBadge(c, "footer-ssh", "SSH", fmt.Sprint(count), ui.Hex("#3b9f70"), "SSH 授权", func() {
 		a.sshF.AuthOpen = true
 		a.loadSSHAuth(t.Workspace)
 	}, a.secondaryInk())
@@ -1494,60 +1372,48 @@ func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 	if label == "" {
 		label = "git"
 	}
-	btn := uikit.Tooltip(c, ui.ButtonBase(c.Key("footer-git")).Height(22).Padding(1, 7).Radius(11).Background(c.Theme().Surface).Cursor(ui.CursorPointer), "查看 Git 改动")
-	btn.Children(func() {
-		ui.Row(c).Gap(gapTight).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, short(label, 22)).FontSize(fsTiny).TextColor(c.Theme().Accent).SingleLine()
-			for _, part := range []struct {
-				value  int
-				symbol string
-				color  ui.Color
-			}{{git.Ahead, "↑", a.secondaryInk()}, {git.Behind, "↓", a.secondaryInk()}, {git.Added, "+", c.Theme().Success}, {git.Modified, "~", c.Theme().Warning}, {git.Deleted, "-", c.Theme().Danger}} {
-				if part.value > 0 {
-					ui.Text(c, fmt.Sprintf("%s%d", part.symbol, part.value)).FontSize(fsTiny).TextColor(part.color).NoWrap()
-				}
-			}
-		})
-	})
-	open := a.popupFlag("git-repositories-" + t.ID)
-	btn.OnClick(func() {
-		if git.IsMultiRepo {
-			*open = !*open
-			return
-		}
-		a.filesF.GitOpen = true
-		a.filesF.GitRepo = ""
-		a.filesF.GitFile = -1
-		a.loadGitDiff(t, "")
-	})
-	if git.IsMultiRepo {
-		popoverPanel(c, btn, open, 320, func() {
-			ui.Scroll(c).MaxHeight(240).Children(func() {
-				ui.Column(c).Children(func() {
-					for i, repo := range git.Repos {
-						repo := repo
-						gitRepoPopoverItem(c, fmt.Sprintf("git-repo-%d", i), repo, func() {
-							*open = false
-							a.filesF.GitOpen = true
-							a.filesF.GitRepo = repo.Path
-							a.filesF.GitFile = -1
-							a.loadGitDiff(t, repo.Path)
-						}, a.secondaryInk())
+	trigger := func(b ui.Element) {
+		b = uikit.Tooltip(c, b.Height(22).Padding(1, 7).Radius(11).Background(c.Theme().Surface).Cursor(ui.CursorPointer), "查看 Git 改动")
+		b.Children(func() {
+			ui.Row(c).Gap(gapTight).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, short(label, 22)).FontSize(fsTiny).TextColor(c.Theme().Accent).SingleLine()
+				for _, part := range []struct {
+					value  int
+					symbol string
+					color  ui.Color
+				}{{git.Ahead, "↑", a.secondaryInk()}, {git.Behind, "↓", a.secondaryInk()}, {git.Added, "+", c.Theme().Success}, {git.Modified, "~", c.Theme().Warning}, {git.Deleted, "-", c.Theme().Danger}} {
+					if part.value > 0 {
+						ui.Text(c, fmt.Sprintf("%s%d", part.symbol, part.value)).FontSize(fsTiny).TextColor(part.color).NoWrap()
 					}
-				})
+				}
 			})
 		})
 	}
+	openRepo := func(path string) {
+		a.filesF.GitOpen = true
+		a.filesF.GitRepo = path
+		a.filesF.GitFile = -1
+		a.loadGitDiff(t, path)
+	}
+	if !git.IsMultiRepo {
+		b := ui.ButtonBase(c.Key("footer-git"))
+		trigger(b)
+		b.OnClick(func() { openRepo("") })
+		return
+	}
+	uikit.MenuButton(c.Key("footer-git-repositories"), nil, uikit.MenuOptions{Width: 320, MaxHeight: 260}, trigger, func(m ui.MenuParts) {
+		for _, repo := range git.Repos {
+			repo := repo
+			c.Key(repo.Path)
+			gitRepoMenuItem(c, m.Item(), repo, a.secondaryInk()).OnClick(func() { openRepo(repo.Path) })
+		}
+	})
 }
 
-func gitRepoPopoverItem(c *ui.Context, key string, repo backend.GitRepoItem, action func(), ink ...ui.Color) {
+func gitRepoMenuItem(c *ui.Context, item ui.Element, repo backend.GitRepoItem, ink ...ui.Color) ui.Element {
 	t := c.Theme()
 	label := repo.Name + "/" + repo.Branch
-	row := ui.ButtonBase(c.Key(key)).FillWidth().MinHeight(44).Padding(5, 10).
-		Justify(ui.Start).Radius(radiusSmall).Label(label).Cursor(ui.CursorPointer).OnClick(action)
-	if row.Hovered() {
-		row.Background(t.SurfaceHover)
-	}
+	row := uikit.MenuRow(c, item, label, false).MinHeight(44).Padding(5, 10)
 	row.Children(func() {
 		ui.Column(c).FillWidth().Gap(gapTight).Children(func() {
 			ui.Row(c).FillWidth().Gap(3).AlignItems(ui.Center).Children(func() {
@@ -1567,7 +1433,7 @@ func gitRepoPopoverItem(c *ui.Context, key string, repo backend.GitRepoItem, act
 			}
 		})
 	})
-	uikit.Tooltip(c, row, label)
+	return uikit.Tooltip(c, row, label)
 }
 
 func gitRepoStatusTag(c *ui.Context, key, symbol string, count int, tone uikit.Tone) {

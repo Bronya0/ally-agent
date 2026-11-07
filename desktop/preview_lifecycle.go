@@ -2,7 +2,11 @@
 package desktop
 
 import (
+	"context"
 	"fmt"
+	"net/url"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -32,6 +36,17 @@ type previewEntry struct {
 }
 
 type previewPool struct{ entries map[string]*previewEntry }
+
+func (e *previewEntry) matches(req previewRequest) bool {
+	if e == nil || e.request != req {
+		return false
+	}
+	if e.surface == nil || !e.surface.IsDestroyed() {
+		return true
+	}
+	_, err := e.surface.Status()
+	return err != nil // Failed realms stay failed until an explicit retry.
+}
 
 // Visible requests arrive in document order. Bound the set before reconciling,
 // so a fifth visible block cannot repeatedly evict/recreate another preview.
@@ -70,7 +85,7 @@ func (p *previewPool) matches(targets []previewRequest) bool {
 	}
 	for _, req := range targets {
 		entry := p.entries[req.Key]
-		if entry == nil || entry.request != req || (entry.surface != nil && entry.surface.IsDestroyed()) {
+		if !entry.matches(req) {
 			return false
 		}
 	}
@@ -97,7 +112,7 @@ func (p *previewPool) sync(targets []previewRequest, create func() (previewSurfa
 	}
 	for _, req := range targets {
 		entry := p.entries[req.Key]
-		if entry != nil && entry.request == req && (entry.surface == nil || !entry.surface.IsDestroyed()) {
+		if entry.matches(req) {
 			next[req.Key] = entry
 			continue
 		}
@@ -121,6 +136,19 @@ func (p *previewPool) sync(targets []previewRequest, create func() (previewSurfa
 		surface.Destroy()
 	}
 	p.entries = next
+}
+
+func (p *previewPool) retry(req previewRequest) {
+	entry := p.entries[req.Key]
+	if entry == nil || entry.request != req {
+		return
+	}
+	if entry.surface != nil && !entry.surface.IsDestroyed() {
+		entry.err = nil
+		entry.surface.Load(req)
+		return
+	}
+	delete(p.entries, req.Key)
 }
 
 func (p *previewPool) release(prefix string) {
@@ -155,52 +183,180 @@ func (s *previewLoadState) complete(token string) bool {
 	return true
 }
 
+// Keep native failure handling testable without creating an OS window.
+type previewBrowser interface {
+	EvalContext(context.Context, string) (any, error)
+	OnDidFailLoad(func(*mygo.LoadError)) func()
+	OnRenderProcessGone(func(string)) func()
+	LoadURL(string) error
+	Destroy()
+	IsDestroyed() bool
+}
+
+type nativePreviewBrowser struct{ *mygo.WebView }
+
+func (b nativePreviewBrowser) EvalContext(ctx context.Context, code string) (any, error) {
+	return b.Page().EvalContext(ctx, code)
+}
+func (b nativePreviewBrowser) OnDidFailLoad(fn func(*mygo.LoadError)) func() {
+	return b.Page().OnDidFailLoad(fn)
+}
+func (b nativePreviewBrowser) OnRenderProcessGone(fn func(string)) func() {
+	return b.Page().OnRenderProcessGone(fn)
+}
+func (b nativePreviewBrowser) LoadURL(raw string) error { return b.Page().LoadURL(raw) }
+
 type nativePreview struct {
 	view        *mygo.WebView
+	browser     previewBrowser
 	state       previewLoadState
 	timer       *time.Timer
 	update      func(func())
 	offTitle    func()
 	offMedia    func()
+	offFailure  []func()
+	probeCancel context.CancelFunc
+	onFailure   func(error)
 	documentURL string
+	mediaToken  string
 }
 
-func (p *nativePreview) Native() ui.NativeWebView   { return p.view }
-func (p *nativePreview) IsDestroyed() bool          { return p.view.IsDestroyed() }
-func (p *nativePreview) Status() (bool, error)      { return p.state.ready, p.state.err }
-func (p *nativePreview) LoadFile(path string) error { return p.view.Page().LoadFile(path) }
-func (p *nativePreview) LoadHTML(source string)     { p.view.Page().LoadHTML(source, "") }
-func (p *nativePreview) Destroy() {
+func (p *nativePreview) Native() ui.NativeWebView { return p.view }
+func (p *nativePreview) IsDestroyed() bool {
+	return p.browser == nil || p.browser.IsDestroyed()
+}
+func (p *nativePreview) Status() (bool, error) { return p.state.ready, p.state.err }
+func (p *nativePreview) LoadFile(path string) error {
+	p.retireContent()
+	p.state.begin()
+	if err := p.view.Page().LoadFile(path); err != nil {
+		return err
+	}
+	raw := (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(path), "/")}).String()
+	p.watchPage(raw, true)
+	return nil
+}
+func (p *nativePreview) LoadHTML(source string) {
+	p.retireContent()
+	p.state.begin()
+	p.view.Page().LoadHTML(source, "")
+	p.watchPage("about:blank", true)
+}
+
+func (p *nativePreview) watchPage(expectedURL string, readyOnProbe bool) {
+	generation, browser, update := p.state.generation, p.browser, p.update
+	p.offFailure = append(p.offFailure,
+		browser.OnDidFailLoad(func(err *mygo.LoadError) {
+			if err == nil || err.URL != "" && err.URL != expectedURL {
+				return
+			}
+			failure := fmt.Errorf("预览加载失败：%s", err.Description)
+			update(func() { p.failContent(generation, failure, false) })
+		}),
+		browser.OnRenderProcessGone(func(reason string) {
+			update(func() { p.failContent(generation, fmt.Errorf("预览进程已退出：%s，请重试", reason), true) })
+		}),
+	)
+	// Windows may fail to create its controller after NewWebView returned.
+	// A single bounded probe catches this; it is not a polling loop.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	p.probeCancel = cancel
+	go func() {
+		value, err := browser.EvalContext(ctx, "document.readyState")
+		canceled := ctx.Err() == context.Canceled
+		cancel()
+		if canceled {
+			return
+		}
+		update(func() {
+			if p.state.generation != generation || p.IsDestroyed() || p.state.err != nil {
+				return
+			}
+			p.probeCancel = nil
+			if err != nil || value == nil {
+				if err == nil {
+					err = fmt.Errorf("预览健康检查无响应")
+				}
+				p.failContent(generation, fmt.Errorf("预览不可用：%w，请重试", err), true)
+			} else if readyOnProbe {
+				p.state.ready = true
+			}
+		})
+	}()
+}
+
+func (p *nativePreview) failContent(generation uint64, err error, broken bool) {
+	if p.state.generation != generation || p.IsDestroyed() || p.state.err != nil {
+		return
+	}
+	failed := p.onFailure
+	if broken {
+		p.Destroy()
+	} else {
+		p.Reset() // Stop failed content while keeping a healthy native slot.
+	}
+	p.state.ready, p.state.err = false, err
+	if failed != nil {
+		failed(err)
+	}
+}
+func (p *nativePreview) retireContent() {
+	if p.probeCancel != nil {
+		p.probeCancel()
+		p.probeCancel = nil
+	}
+	for _, off := range p.offFailure {
+		off()
+	}
+	p.offFailure = nil
+	p.onFailure = nil
+	p.mediaToken = ""
 	if p.offMedia != nil {
 		p.offMedia()
 		p.offMedia = nil
 	}
 	p.state.generation++
+	p.state.ready, p.state.err = false, nil
 	if p.timer != nil {
 		p.timer.Stop()
 		p.timer = nil
 	}
+	releasePreviewDocument(p.documentURL)
+	p.documentURL = ""
+}
+
+func (p *nativePreview) Reset() {
+	p.retireContent()
+	if !p.IsDestroyed() {
+		// LoadURL also clears MyGo's remembered LoadHTML body, and navigation
+		// stops the old media, requests and decoder without rebuilding WebView.
+		_ = p.browser.LoadURL("about:blank")
+	}
+}
+
+func (p *nativePreview) Destroy() {
+	p.retireContent()
 	if p.offTitle != nil {
 		p.offTitle()
 		p.offTitle = nil
 	}
-	releasePreviewDocument(p.documentURL)
-	p.documentURL = ""
-	p.view.Destroy()
-}
-func (p *nativePreview) Load(req previewRequest) {
-	token := p.state.begin()
-	if p.timer != nil {
-		p.timer.Stop()
+	if p.browser != nil {
+		p.browser.Destroy()
+		p.browser = nil
 	}
+	p.view = nil
+}
+
+func (p *nativePreview) Load(req previewRequest) {
+	p.retireContent()
+	token := p.state.begin()
 	generation := p.state.generation
 	p.timer = time.AfterFunc(20*time.Second, func() {
 		p.update(func() {
 			if p.IsDestroyed() || p.state.generation != generation || p.state.ready {
 				return
 			}
-			p.state.err = fmt.Errorf("预览加载超时，请重试")
-			p.timer = nil
+			p.failContent(generation, fmt.Errorf("预览加载超时，请重试"), false)
 		})
 	})
 	document := ""
@@ -209,23 +365,36 @@ func (p *nativePreview) Load(req previewRequest) {
 	} else {
 		document = toolHTMLDocument(req.Source)
 	}
-	releasePreviewDocument(p.documentURL)
 	p.documentURL = storePreviewDocument(previewReadyDocument(document, token, req.Kind == "mermaid"))
-	p.view.Page().LoadURL(p.documentURL)
+	if err := p.browser.LoadURL(p.documentURL); err != nil {
+		p.failContent(generation, err, false)
+		return
+	}
+	p.watchPage(p.documentURL, false)
 }
 
 func (a *desktop) newPreviewSurface() (previewSurface, error) {
-	return a.newNativePreview()
+	return a.newNativePreview(false)
 }
 
-func (a *desktop) newNativePreview() (*nativePreview, error) {
-	view, err := a.win.NewWebView(mygo.WebViewOptions{BackgroundColor: "#1b1b1b", Page: mygo.PageOptions{PinchZoom: true, Untrusted: true}})
+func previewAutoplayAllowed(media bool) bool {
+	return media || runtime.GOOS == "windows"
+}
+
+func (a *desktop) newNativePreview(autoplay bool) (*nativePreview, error) {
+	page := mygo.PageOptions{PinchZoom: true, Untrusted: true}
+	// WebView2 freezes this policy at its first page, even if that page is
+	// not a media preview. Other platforms only allow it for media players.
+	if previewAutoplayAllowed(autoplay) {
+		page.Autoplay = mygo.AutoplayAllow
+	}
+	view, err := a.win.NewWebView(mygo.WebViewOptions{BackgroundColor: "#1b1b1b", Page: page})
 	if err != nil {
 		return nil, err
 	}
 	view.Page().OnWillNavigate(func(e *mygo.NavigateEvent) { e.PreventDefault() })
 	view.Page().SetWindowOpenHandler(func(mygo.WindowOpenRequest) *mygo.WindowOptions { return nil })
-	p := &nativePreview{view: view, update: a.win.Update}
+	p := &nativePreview{view: view, browser: nativePreviewBrowser{view}, update: a.win.Update}
 	p.offTitle = view.Page().OnPageTitleUpdated(func(e *mygo.TitleEvent) {
 		e.PreventDefault()
 		token := e.Title
@@ -240,7 +409,7 @@ func (a *desktop) newNativePreview() (*nativePreview, error) {
 }
 
 func (a *desktop) schedulePreviewSync() {
-	if a.win == nil || a.closing || a.previewTimer != nil {
+	if a.win == nil || a.closing || a.mainWindowHidden || a.win.IsMinimized() || a.previewTimer != nil {
 		return
 	}
 	if a.previews.matches(previewTargets(a.previewRequests)) {
@@ -255,6 +424,9 @@ func (a *desktop) schedulePreviewSync() {
 				return
 			}
 			a.previewTimer = nil
+			if a.mainWindowHidden || a.win.IsMinimized() {
+				return
+			}
 			a.previews.sync(previewTargets(a.previewRequests), a.newPreviewSurface)
 		})
 	})
@@ -278,8 +450,10 @@ func (a *desktop) previewView(c *ui.Context, req previewRequest) {
 		var loadErr error
 		if entry != nil && entry.request == req {
 			loadErr = entry.err
-			if entry.surface != nil && !entry.surface.IsDestroyed() {
+			if entry.surface != nil {
 				ready, loadErr = entry.surface.Status()
+			}
+			if entry.surface != nil && !entry.surface.IsDestroyed() {
 				if loadErr == nil {
 					// Keep the page mounted behind the opaque native cover so it
 					// can lay out at its final size before becoming visible.
@@ -289,12 +463,7 @@ func (a *desktop) previewView(c *ui.Context, req previewRequest) {
 		}
 		if loadErr != nil {
 			notice(c, "error", loadErr.Error(), a.secondaryInk())
-			flat(c, "重试预览").OnClick(func() {
-				if entry.surface != nil && !entry.surface.IsDestroyed() {
-					entry.surface.Destroy()
-				}
-				delete(a.previews.entries, req.Key)
-			})
+			flat(c, "重试预览").OnClick(func() { a.previews.retry(req) })
 		} else if !ready {
 			if box.InView() && previewDeferred(a.previewRequests, req.Key) {
 				ui.Text(c, "同屏最多加载 4 个预览，滚动后自动加载").FontSize(fsSmall).TextColor(a.secondaryInk())
@@ -319,6 +488,7 @@ func (a *desktop) releaseSessionHTMLPreviews(sessionID string) {
 			requests = append(requests, req)
 		}
 	}
+	clear(a.previewRequests[len(requests):])
 	a.previewRequests = requests
 }
 

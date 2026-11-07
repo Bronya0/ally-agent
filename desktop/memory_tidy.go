@@ -34,15 +34,28 @@ func (a *desktop) scheduleMemoryTidy() {
 		return
 	}
 	win := a.win
-	a.memoryTidyTimer = time.AfterFunc(memoryTidyDelay, func() { win.Update(a.tidyMemory) })
+	a.memoryTidyGeneration++
+	generation := a.memoryTidyGeneration
+	a.memoryTidyTimer = time.AfterFunc(memoryTidyDelay, func() {
+		win.Update(func() { a.runMemoryTidy(generation) })
+	})
 }
 
 // cancelMemoryTidy drops a pending tidy when the window comes back first.
 func (a *desktop) cancelMemoryTidy() {
+	// Stop cannot retract a callback already queued in Window.Update.
+	a.memoryTidyGeneration++
 	if a.memoryTidyTimer != nil {
 		a.memoryTidyTimer.Stop()
 		a.memoryTidyTimer = nil
 	}
+}
+
+func (a *desktop) runMemoryTidy(generation uint64) {
+	if generation != a.memoryTidyGeneration {
+		return
+	}
+	a.tidyMemory()
 }
 
 // tidyMemory runs on the UI thread, which only checks the window state: the
@@ -53,6 +66,10 @@ func (a *desktop) tidyMemory() {
 	if a.closing || a.win == nil || (!a.mainWindowHidden && !a.win.IsMinimized()) {
 		return
 	}
+	// Always release native previews after the grace period. The interval
+	// below throttles Go heap trimming, not WebView or decoder cleanup.
+	a.releaseAllHTMLPreviews()
+	a.releaseFilePreview()
 	if !a.memoryTidyAt.IsZero() && time.Since(a.memoryTidyAt) < memoryTidyInterval {
 		return
 	}

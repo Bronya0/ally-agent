@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/desktop/uikit"
 	"bytes"
 	"fmt"
 	"testing"
@@ -102,15 +103,25 @@ func TestReasoningSelectorUsesDrawnMenu(t *testing.T) {
 			if !ok || option.Y+option.H > trigger.Y || option.Y < 0 {
 				t.Fatalf("bottom menu did not fit above the trigger: option=%+v trigger=%+v", option, trigger)
 			}
-			// MyGo's drawn menu marks the current choice with a radio mark painted in
-			// the column left of the labels, not with a text glyph.
-			current, _ := tester.Find("low")
-			other, _ := tester.Find("high")
+			// Selection shares the quiet menu fill rather than a leading radio
+			// mark or a full-accent highlighted row. Sample clear space after text.
+			// The trigger also shows "low"; identify menu rows by role so the
+			// sample cannot accidentally hit the trigger's text instead.
+			current, currentFound := tester.AccessByRole(ui.RoleMenuItemRadio, "low")
+			other, otherFound := tester.AccessByRole(ui.RoleMenuItemRadio, "high")
+			if !currentFound || !otherFound || !current.Checked || other.Checked {
+				t.Fatal("menu did not expose the correct single-choice state")
+			}
 			img := tester.Image()
-			marked := img.RGBAAt(int(current.X)+16, int(current.Y+current.H/2))
-			plain := img.RGBAAt(int(other.X)+16, int(other.Y+other.H/2))
-			if marked == plain {
-				t.Fatalf("menu does not mark the current level: mark column %v", marked)
+			selected := img.RGBAAt(int(current.Bounds.X+current.Bounds.W-12), int(current.Bounds.Y+current.Bounds.H/2))
+			plain := img.RGBAAt(int(other.Bounds.X+other.Bounds.W-12), int(other.Bounds.Y+other.Bounds.H/2))
+			theme := a.theme()
+			want := uikit.SelectedFill(theme.Accent).Over(theme.Surface)
+			if selected.R != want.R || selected.G != want.G || selected.B != want.B {
+				t.Fatalf("selected level does not use the shared menu tint: got=%v want=%v", selected, want)
+			}
+			if plain.R != theme.Surface.R || plain.G != theme.Surface.G || plain.B != theme.Surface.B {
+				t.Fatalf("unselected level lost its neutral surface: %v", plain)
 			}
 			if err := tester.Click("max"); err != nil {
 				t.Fatal(err)
@@ -196,37 +207,6 @@ func TestReasoningSelectorKeyboardAndRunLock(t *testing.T) {
 	}
 }
 
-func TestComposerSettingButtonLocksPointerAndKeyboard(t *testing.T) {
-	locked, activations := false, 0
-	tester := ui.NewTester(func(c *ui.Context) {
-		c.DisableAnimations()
-		composerSettingButton(c.Key("setting"), "high ▾", locked, func() { activations++ })
-	}, 240, 96)
-	if err := tester.Click("high ▾"); err != nil {
-		t.Fatal(err)
-	}
-	if activations != 1 {
-		t.Fatal("the idle setting did not activate")
-	}
-	locked = true
-	tester.Frame()
-	if err := tester.Click("high ▾"); err != nil {
-		t.Fatal(err)
-	}
-	tester.Key(0, ui.KeyEnter)
-	tester.Key(0, ui.KeySpace)
-	if activations != 1 {
-		t.Fatal("the locked setting activated by pointer or keyboard")
-	}
-	locked = false
-	tester.Frame()
-	tester.Key(0, ui.KeyEnter)
-	tester.Key(0, ui.KeySpace)
-	if activations != 3 {
-		t.Fatalf("keyboard activation did not recover after unlocking: %d", activations)
-	}
-}
-
 func TestModelSelectorRemainsLockedDuringRun(t *testing.T) {
 	a := &desktop{}
 	conv := &conversation{Model: "provider / model", Busy: true}
@@ -238,8 +218,11 @@ func TestModelSelectorRemainsLockedDuringRun(t *testing.T) {
 	if err := tester.Click("provider · model"); err != nil {
 		t.Fatal(err)
 	}
+	tester.Key(0, ui.KeyEnter)
+	tester.Key(0, ui.KeySpace)
+	tester.Key(0, ui.KeyDown)
 	if conv.uiState().ModelOpen {
-		t.Fatal("the model menu opened during a run")
+		t.Fatal("the model menu opened by pointer or keyboard during a run")
 	}
 	conv.Busy = false
 	tester.Frame()

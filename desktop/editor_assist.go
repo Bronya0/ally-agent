@@ -427,6 +427,9 @@ func (a *desktop) installEditorAssist(root string, file *workspaceFile, buffer *
 func (a *desktop) releaseWorkspaceFile(root string) {
 	key := workspaceKey(root)
 	a.workspacePreview.releaseWorkspace(key)
+	if tab := a.current(); tab != nil && workspaceKey(tab.Workspace) == key {
+		a.media.playing, a.media.autoplay = false, false
+	}
 	file := a.workspaceFiles[key]
 	if file == nil {
 		return
@@ -457,7 +460,7 @@ func releaseWorkspaceFileValue(file *workspaceFile) {
 }
 
 func (a *desktop) releaseWorkspaceFiles() {
-	a.workspacePreview.release()
+	a.releaseFilePreview()
 	a.closeFileInfo()
 	for key, file := range a.workspaceFiles {
 		delete(a.workspaceFiles, key)

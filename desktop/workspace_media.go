@@ -15,6 +15,7 @@ import (
 
 // Playlist policies, shared by every media preview in this window.
 const (
+	mediaModeNone       = "不循环"
 	mediaModeSequential = "顺序循环"
 	mediaModeRandom     = "随机循环"
 	mediaModeSingle     = "单一循环"
@@ -24,9 +25,9 @@ const (
 // by workspaceMediaScript.
 const mediaTitlePrefix = "ally-media:"
 
-var mediaModes = []string{mediaModeSequential, mediaModeRandom, mediaModeSingle}
+var mediaModes = []string{mediaModeNone, mediaModeSequential, mediaModeRandom, mediaModeSingle}
 
-// Preferences are shared by previews for this window, never by hidden players.
+// Playback options live only in this desktop instance, never in persisted prefs.
 type workspaceMediaState struct {
 	mode     string
 	playing  bool
@@ -36,8 +37,23 @@ type workspaceMediaState struct {
 
 func (s *workspaceMediaState) ensureMode() {
 	if s.mode == "" {
-		s.mode = mediaModeSequential
+		s.mode = mediaModeNone
 	}
+}
+
+// continueAfterEnd preserves playback intent across a playlist transition.
+// Single-repeat stays in the current element; no-repeat stops at the end.
+func (s *workspaceMediaState) continueAfterEnd() bool {
+	s.ensureMode()
+	if s.mode == mediaModeNone {
+		s.playing, s.autoplay = false, false
+		return false
+	}
+	if !s.playing || s.mode == mediaModeSingle {
+		return false
+	}
+	s.autoplay = true
+	return true
 }
 
 func mediaNextIndex(index, count int, mode string, delta int) int {
@@ -92,11 +108,8 @@ func (a *desktop) stepWorkspaceMedia(file *workspaceFile, delta int, automatic b
 	if a.activeFile() != file {
 		return
 	}
-	if automatic && !a.media.playing {
+	if automatic && !a.media.continueAfterEnd() {
 		return
-	}
-	if automatic && a.media.mode == mediaModeSingle {
-		return // the element or the image timer repeats this file itself
 	}
 	previous, next := a.mediaNeighbours(file)
 	target := next
@@ -104,17 +117,24 @@ func (a *desktop) stepWorkspaceMedia(file *workspaceFile, delta int, automatic b
 		target = previous
 	}
 	if target == "" {
+		if automatic {
+			// A one-file playlist still repeats without creating a new preview.
+			a.media.autoplay = false
+			a.mediaCommand(file, "window.allyMedia?.play(true)")
+		}
 		return
 	}
-	a.media.autoplay = a.media.playing
+	a.media.autoplay = automatic || a.media.playing
 	a.openFile(target)
 }
 
 func (a *desktop) mediaCommand(file *workspaceFile, command string) {
-	surface := a.workspacePreview.mountedFor(a.workspaceFilePreviewKey(file))
-	if surface == nil {
+	surface, ok := a.workspacePreview.mountedFor(a.workspaceFilePreviewKey(file)).(*nativePreview)
+	if !ok || surface.mediaToken == "" {
 		return
 	}
+	// The async command may reach a reused view after another file loads.
+	command = fmt.Sprintf("if(window.allyMedia?.token===%q){%s}", surface.mediaToken, command)
 	page := surface.view.Page()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -157,19 +177,40 @@ func (a *desktop) syncMediaOptions(file *workspaceFile) {
 	a.mediaCommand(file, fmt.Sprintf("window.allyMedia?.configure(%t,%t)", a.media.mode == mediaModeSingle, a.media.enhance))
 }
 
-func (a *desktop) attachWorkspaceMedia(surface *nativePreview, file *workspaceFile) {
+func workspaceMediaAction(title, token string) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	rest, ok := strings.CutPrefix(title, mediaTitlePrefix+token+":")
+	if !ok {
+		return "", false
+	}
+	action, serial, ok := strings.Cut(rest, ":")
+	if !ok || serial == "" {
+		return "", false
+	}
+	switch action {
+	case "next", "previous", "ended", "play", "pause":
+		return action, true
+	default:
+		return "", false
+	}
+}
+
+func (a *desktop) attachWorkspaceMedia(surface *nativePreview, file *workspaceFile, token string) {
 	if surface.offMedia != nil {
 		surface.offMedia()
 	}
+	surface.mediaToken = token
 	surface.offMedia = surface.view.Page().OnPageTitleUpdated(func(e *mygo.TitleEvent) {
-		if !strings.HasPrefix(e.Title, mediaTitlePrefix) {
+		action, ok := workspaceMediaAction(e.Title, token)
+		if !ok {
 			return
 		}
-		action := strings.Split(e.Title, ":")[1]
 		a.win.Update(func() {
 			// The surface can report before the lifecycle mounts it, so only the
 			// active file decides whether the signal still belongs here.
-			if a.activeFile() != file {
+			if surface.IsDestroyed() || surface.mediaToken != token || a.activeFile() != file {
 				return
 			}
 			switch action {
@@ -192,11 +233,12 @@ func (a *desktop) attachWorkspaceMedia(surface *nativePreview, file *workspaceFi
 const workspaceMediaScript = `<script>
 (()=>{
 const m=document.querySelector('video,audio,img'); const image=m.tagName==='IMG';
+const token=TOKEN;
 let playing=false,timer=0,serial=0;
-const emit=a=>{document.title='ally-media:'+a+':'+(++serial)};
-const schedule=()=>{clearTimeout(timer);if(image&&playing)timer=setTimeout(()=>{if(!m.dataset.single)emit('ended');else schedule()},5000)};
+const emit=a=>{document.title='ally-media:'+token+':'+a+':'+(++serial)};
+const schedule=()=>{clearTimeout(timer);if(image&&playing)timer=setTimeout(()=>{if(m.dataset.single)schedule();else{playing=false;emit('ended')}},5000)};
 const play=on=>{if(image){playing=on;schedule();emit(on?'play':'pause')}else if(on){m.play().catch(()=>emit('pause'))}else m.pause()};
-window.allyMedia={play,configure:(single,enhance)=>{m.loop=single;m.dataset.single=single?'1':'';m.style.filter=enhance?'saturate(.94) brightness(1.025) url(#sharpen)':'';schedule()}};
+window.allyMedia={token,play,configure:(single,enhance)=>{m.loop=single;m.dataset.single=single?'1':'';m.style.filter=enhance?'saturate(.94) brightness(1.025) url(#sharpen)':'';schedule()}};
 if(!image){m.addEventListener('ended',()=>emit('ended'));m.addEventListener('play',()=>emit('play'));m.addEventListener('pause',()=>{if(!m.ended)emit('pause')})}
 document.addEventListener('keydown',e=>{if(e.altKey||e.ctrlKey||e.metaKey||e.repeat)return;if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();emit(e.key==='ArrowLeft'?'previous':'next')}else if(e.code==='Space'){e.preventDefault();play(image?!playing:m.paused)}},true);
 m.addEventListener('error',()=>{clearTimeout(timer);emit('pause')});

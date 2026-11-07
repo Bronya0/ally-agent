@@ -56,15 +56,12 @@ func (a *desktop) settingsPageBody(c *ui.Context) {
 			}
 		})
 		ui.Column(c).Grow(1).MinWidth(0).FillHeight().Justify(ui.Start).Children(func() {
-			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				ui.Spacer(c)
-				if a.settings.UpdateNote != "" {
-					fieldNote(c, a.settings.UpdateNote, a.secondaryInk())
-				}
-
-			})
+			if a.settings.UpdateNote != "" {
+				fieldNote(c, a.settings.UpdateNote, a.secondaryInk())
+			}
 			ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-				ui.Column(c).Padding(2, 0, 18).Gap(gapSection).Children(func() {
+				ui.Column(c).FillWidth().MaxWidth(settingsMaxWidth).MinWidth(0).AlignSelf(ui.Start).
+					Padding(2, 0, gapPage).Gap(gapPage).Children(func() {
 					switch a.settings.Tab {
 					case "通用":
 						a.settingsGeneral(c)
@@ -198,193 +195,172 @@ func settingsAction(c *ui.Context, label string, tone ...uikit.Tone) ui.Element 
 func (a *desktop) settingsGeneral(c *ui.Context) {
 	selected := a.settingsModule(c, "settingsGeneral", "外观", "提示词", "路径", "对话行为", "应用", "语音输入")
 
-	fieldNote(c, "每次对话都会附带给模型的偏好", a.secondaryInk())
 	if selected == 0 {
-		card(c, "settings-appearance", func() {
-			sectionTitle(c, "外观")
-			if segmentedInk(c, "appearance-mode", &a.settings.AppearanceMode, a.secondaryInk(), "深色", "浅色", "自动").Changed() {
+		a.settingsCard(c, "settings-appearance", "主题与配色", "背景保持中性，强调色用于高亮和选中态。", func() {
+			note := "选择深色、浅色，或按本地时间自动切换。"
+			if a.prefs.Appearance == "auto" {
+				note = "07:00–17:59 浅色，18:00–06:59 深色。"
+			}
+			if mode := a.settingsRow(c, "appearance-row", "外观模式", note, settingsControlWidth, func() ui.Element {
+				return segmentedInk(c, "appearance-mode", &a.settings.AppearanceMode, a.secondaryInk(), "深色", "浅色", "自动")
+			}); mode.Changed() {
 				a.selectAppearance([]string{"dark", "light", "auto"}[a.settings.AppearanceMode])
 			}
-			if a.prefs.Appearance == "auto" {
-				fieldNote(c, "按电脑本地时间自动切换：07:00–17:59 浅色，18:00–06:59 深色。", a.secondaryInk())
-			}
-			divider(c)
-			fieldLabel(c, "强调色")
-			uikit.OptionGroup(c).Children(func() {
-				// The retired 亮色 and 海洋 presets are not offered: a stored value of
-				// either still shows 蓝色 as selected and paints the blue accent.
-				for _, idx := range []int{paletteBlue, paletteAmber, paletteForest, paletteViolet} {
-					idx := idx
-					p := palettes[idx]
-					selected := a.prefs.Palette == idx || (idx == paletteBlue && (a.prefs.Palette == paletteLight || a.prefs.Palette == paletteOcean))
-					choiceSwatch(c, fmt.Sprintf("palette-%d", idx), p.name, selected, p.accent).OnClick(func() {
-						if a.prefs.Appearance == "" {
-							if a.currentPalette().dark {
-								a.prefs.Appearance = "dark"
-							} else {
-								a.prefs.Appearance = "light"
+			a.settingsRow(c, "accent-row", "强调色", "只改变高亮与选中态，不改变基础背景。", settingsControlWidth, func() ui.Element {
+				return uikit.OptionGroup(c.Key("accent-options")).Children(func() {
+					// Retired presets still resolve to blue without changing stored IDs.
+					for _, idx := range []int{paletteBlue, paletteAmber, paletteForest, paletteViolet} {
+						idx := idx
+						p := palettes[idx]
+						selected := a.prefs.Palette == idx || (idx == paletteBlue && (a.prefs.Palette == paletteLight || a.prefs.Palette == paletteOcean))
+						choiceSwatch(c, fmt.Sprintf("palette-%d", idx), p.name, selected, p.accent).OnClick(func() {
+							if a.prefs.Appearance == "" {
+								if a.currentPalette().dark {
+									a.prefs.Appearance = "dark"
+								} else {
+									a.prefs.Appearance = "light"
+								}
 							}
-						}
-						a.prefs.Palette = idx
-						a.syncNativeAppearance()
-						a.savePrefs()
-					})
-				}
+							a.prefs.Palette = idx
+							a.syncNativeAppearance()
+							a.savePrefs()
+						})
+					}
+				})
 			})
-			fieldNote(c, "强调色只改变高亮与选中态，背景保持中性。", a.secondaryInk())
-			divider(c)
-			sectionTitle(c, "欢迎页形象")
-			uikit.OptionGroup(c).Children(func() {
-				for _, style := range []struct{ id, label string }{{"eye", "大眼睛"}, {"whale", "大肥鱼"}, {"bot", "小机器人"}, {"gpt", "GPT 龙娘"}, {"claude", "Claude 橙花娘"}, {"deepseek", "DeepSeek 女仆"}, {"gemini", "Gemini 星猫娘"}, {"glm", "GLM 狐狸女仆"}, {"qwen", "千问千金"}} {
-					style := style
-					choiceButton(c, "avatar-"+style.id, style.label, a.prefs.Avatar == style.id, c.Theme().Accent).
-						OnClick(func() { a.selectAvatarStyle(style.id) })
-				}
-			})
-			ui.Row(c).Gap(gapField).Children(func() {
-				settingsAction(c, "上传自定义形象").Disabled(a.customAvatarBusy).OnClick(func() { a.chooseCustomAvatar() })
-				if a.customAvatarAvailable {
-					settingsAction(c, "使用自定义形象").Disabled(a.customAvatarBusy).OnClick(func() { a.selectAvatarStyle("custom") })
-					settingsAction(c, "删除自定义形象", uikit.Error).Disabled(a.customAvatarBusy).OnClick(func() { a.deleteCustomAvatar() })
-				}
-			})
-			fieldNote(c, "点击欢迎页头像可以切换樱花特效；桌宠未开启时也可以摸摸头。", a.secondaryInk())
-			divider(c)
-			a.petSettings(c)
 		})
-		card(c, "settings-background", func() {
-			sectionTitle(c, "对话背景图")
-			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				label := "选择图片"
-				if a.configDraft.BackgroundImage != "" {
-					label = "更换图片"
-				}
-				settingsAction(c, label).OnClick(func() { a.selectBackgroundImage() })
-				if a.configDraft.BackgroundImage != "" {
-					settingsAction(c, "清除背景图", uikit.Error).OnClick(func() { a.clearBackgroundImage() })
-				}
-				ui.Spacer(c)
-				state := "未设置背景图"
-				if a.configDraft.BackgroundImage != "" {
-					state = "已设置：" + a.configDraft.BackgroundImage
-				}
-				fieldNote(c, state, a.secondaryInk())
+		a.settingsCard(c, "settings-avatar", "欢迎页形象", "点击头像可以切换樱花特效；桌宠未开启时也可以摸摸头。", func() {
+			ui.Column(c).PaddingY(gapField).Gap(gapSection).Children(func() {
+				uikit.OptionGroup(c.Key("avatar-options")).Children(func() {
+					for _, style := range []struct{ id, label string }{{"eye", "大眼睛"}, {"whale", "大肥鱼"}, {"bot", "小机器人"}, {"gpt", "GPT 龙娘"}, {"claude", "Claude 橙花娘"}, {"deepseek", "DeepSeek 女仆"}, {"gemini", "Gemini 星猫娘"}, {"glm", "GLM 狐狸女仆"}, {"qwen", "千问千金"}} {
+						style := style
+						choiceButton(c, "avatar-"+style.id, style.label, a.prefs.Avatar == style.id, c.Theme().Accent).
+							OnClick(func() { a.selectAvatarStyle(style.id) })
+					}
+				})
+				ui.Row(c).Wrap().Gap(gapField).Children(func() {
+					settingsAction(c, "上传自定义形象").Disabled(a.customAvatarBusy).OnClick(func() { a.chooseCustomAvatar() })
+					if a.customAvatarAvailable {
+						settingsAction(c, "使用自定义形象").Disabled(a.customAvatarBusy).OnClick(func() { a.selectAvatarStyle("custom") })
+						settingsAction(c, "删除自定义形象", uikit.Error).Disabled(a.customAvatarBusy).OnClick(func() { a.deleteCustomAvatar() })
+					}
+				})
 			})
-			fieldNote(c, "淡色铺在对话区背景，建议不超过 12 MB。", a.secondaryInk())
-			ui.Slider(c.Key("bg-opacity"), &a.settings.BgOpacity, 0, 1).Label("背景图透明度")
-			fieldNote(c, fmt.Sprintf("当前 %.0f%%，越大越明显。", a.settings.BgOpacity*100), a.secondaryInk())
 		})
-		card(c, "settings-fonts", func() {
-			sectionTitle(c, "字号")
-			ui.Grid(c.Key("font-grid")).Columns(5).Gap(gapSection).Children(func() {
+		a.settingsCard(c, "settings-background", "对话背景图", "淡色铺在对话区背景，建议不超过 12 MB。", func() {
+			state := "未设置背景图"
+			if a.configDraft.BackgroundImage != "" {
+				state = "已设置：" + a.configDraft.BackgroundImage
+			}
+			a.settingsRow(c, "background-image-row", "背景图片", state, settingsControlWidth, func() ui.Element {
+				return ui.Row(c).Wrap().Gap(gapField).Children(func() {
+					name := "选择图片"
+					if a.configDraft.BackgroundImage != "" {
+						name = "更换图片"
+					}
+					settingsAction(c, name).OnClick(func() { a.selectBackgroundImage() })
+					if a.configDraft.BackgroundImage != "" {
+						settingsAction(c, "清除背景图", uikit.Error).OnClick(func() { a.clearBackgroundImage() })
+					}
+				})
+			})
+			a.settingsRow(c, "background-opacity-row", "背景图透明度", fmt.Sprintf("当前 %.0f%%，越大越明显。", a.settings.BgOpacity*100), settingsControlWidth, func() ui.Element {
+				return ui.Slider(c.Key("bg-opacity"), &a.settings.BgOpacity, 0, 1).Label("背景图透明度").FillWidth()
+			})
+		})
+		a.settingsCard(c, "settings-fonts", "阅读字号", "范围 10–24px，保存后即时生效。", func() {
+			ui.Row(c.Key("font-grid")).Wrap().Gap(gapPage).PaddingY(gapField).AlignItems(ui.Start).Children(func() {
 				for _, item := range []struct {
 					label string
 					value *float64
-					step  float64
 				}{
-					{"消息正文", &a.settings.FontMessage, 0.5},
-					{"代码块", &a.settings.FontCode, 0.5},
-					{"工具卡", &a.settings.FontTool, 0.5},
-					{"次级正文", &a.settings.FontSub, 0.5},
-					{"辅助文字", &a.settings.FontAux, 0.5},
+					{"消息正文", &a.settings.FontMessage},
+					{"代码块", &a.settings.FontCode},
+					{"工具卡", &a.settings.FontTool},
+					{"次级正文", &a.settings.FontSub},
+					{"辅助文字", &a.settings.FontAux},
 				} {
-					ui.Column(c).Gap(gapTight).Children(func() {
-						fieldLabel(c, item.label)
-						uikit.NumberInput(c, "font-"+item.label, item.label, item.value, 10, 24, item.step, a.secondaryInk()).FillWidth()
-					})
+					item := item
+					ui.Field(c.Key("font-"+item.label), item.label, func() {
+						uikit.NumberInput(c, "number", item.label, item.value, 10, 24, 0.5, a.secondaryInk()).FillWidth()
+					}).Basis(settingsNumberWidth - gapPage*2).Grow(1).MaxWidth(settingsNumberWidth).MinWidth(0)
 				}
 			})
-			fieldNote(c, "范围 10–24px，保存后即时生效。", a.secondaryInk())
 		})
+		a.petSettings(c)
 	}
 	if selected == 1 {
-		card(c, "settings-prompt", func() {
-			sectionTitle(c, "自定义提示词")
+		a.settingsCard(c, "settings-prompt", "自定义提示词", "会随每次对话一起发送给模型，例如语言、回复长度与编码偏好。", func() {
 			textArea(c, "custom-prompt", "自定义提示词", "例如：请用中文回答、保持回复简洁", &a.configDraft.CustomPrompt, 240)
-			fieldNote(c, "会随每次对话一起发送给模型。", a.secondaryInk())
 		})
 	}
 	if selected == 2 {
-		card(c, "settings-paths", func() {
-			sectionTitle(c, "路径")
+		a.settingsCard(c, "settings-paths", "运行环境与请求标识", "", func() {
 			if runtime.GOOS == "windows" {
-				fieldRow(c, "git-bash", "Git Bash 路径", &a.configDraft.GitBashPath, false)
-				fieldNote(c, "留空自动检测；也可手动指定，例如 C:\\Program Files\\Git\\bin\\bash.exe。", a.secondaryInk())
+				a.settingsRow(c, "git-bash-row", "Git Bash 路径", "留空自动检测；例如 C:\\Program Files\\Git\\bin\\bash.exe。", settingsControlWidth, func() ui.Element {
+					return textField(c, "git-bash", "留空自动检测", "Git Bash 路径", &a.configDraft.GitBashPath).FillWidth()
+				})
 			}
-			fieldLabel(c, "自定义 User-Agent")
-			uaPresets := []string{defaultUserAgentOption, "Codex CLI", "Claude Code", "OpenCode", "Pi"}
-			uikit.ComboboxField(c.Key("user-agent"), &a.configDraft.UserAgent, uaPresets, "User-Agent", uaPresets[0], a.secondaryInk()).FillWidth()
-			fieldNote(c, "仅用于模型 API 请求；http_request / web_fetch 不受影响。", a.secondaryInk())
+			a.settingsRow(c, "user-agent-row", "User-Agent", "可选预设或自定义；仅用于模型 API 请求，HTTP 工具不受影响。", settingsControlWidth, func() ui.Element {
+				uaPresets := []string{defaultUserAgentOption, "Codex CLI", "Claude Code", "OpenCode", "Pi"}
+				return uikit.ComboboxField(c.Key("user-agent"), &a.configDraft.UserAgent, uaPresets, "User-Agent", uaPresets[0], a.secondaryInk()).FillWidth()
+			})
 		})
 	}
 	if selected == 3 {
-		card(c, "settings-behavior", func() {
-			sectionTitle(c, "对话行为")
-			ui.Column(c).Gap(gapTight).Children(func() {
-				uikit.RightTooltip(c, ui.Text(c.Key("history-page-label"), "每页展示块数 ⓘ").FontSize(fsBody).AlignSelf(ui.Start), historyPageSizeHelp)
-				uikit.RightTooltip(c, numberField(c, "history-page-size", "每页展示块数", &a.settings.HistoryPageSize, 20, 200, 10), historyPageSizeHelp)
-				fieldNote(c, "默认 80，一般任务建议 80，长任务可设 100。范围 20–200；悬浮查看计算方式，保存后生效。", a.secondaryInk())
+		a.settingsCard(c, "settings-history", "历史显示", "只影响界面展示，不删除历史，也不改变模型上下文。", func() {
+			a.settingsRow(c, "history-page-row", "每页展示块数", "默认 80，长任务可设 100；范围 20–200。悬浮输入框查看计数方式，保存后生效。", settingsNumberWidth, func() ui.Element {
+				return uikit.RightTooltip(c, uikit.NumberInput(c, "history-page-size", "每页展示块数", &a.settings.HistoryPageSize, 20, 200, 10, a.secondaryInk()), historyPageSizeHelp)
 			})
-			ui.Grid(c.Key("settings-behavior-grid")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
-				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "LLM 请求重试次数")
-					numberField(c, "llm-retries", "LLM 请求重试次数", &a.settings.Retries, 0, 10, 1)
-					fieldNote(c, "0 表示使用默认值 6。", a.secondaryInk())
-				})
-				ui.Column(c).Gap(gapTight).Children(func() {
-					a.settingsCompactThreshold(c)
-				})
-				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "上下文自动压缩方式")
-					// 未设置就是后端的默认值：全文总结。存进去的仍是 "summary"，
-					// 界面上只显示中文标签，用户不改就不写回 draft。
-					stored := a.configDraft.AutoCompactMethod
-					method := stored
-					if method == "" {
-						method = "summary"
-					}
-					uikit.SelectField(c.Key("compact-method"), &method, autoCompactOptions, a.secondaryInk()).Label("压缩方式").FillWidth()
-					if method != stored && method != "" {
-						a.configDraft.AutoCompactMethod = method
-					}
-					fieldNote(c, "全文总结：调用模型生成摘要。本地裁剪：不调用模型，先清空旧工具调用的参数，此前的回复与工具结果只留首尾摘录，回复正文合计最多约 8k tokens；减不下来时自动回退到全文总结。修改对新任务生效。", a.secondaryInk())
-				})
-				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "压缩超时时间")
-					numberField(c, "compact-timeout", "压缩超时时间", &a.settings.CompactTimeout, 30, 3600, 30)
-					fieldNote(c, "等待摘要生成的最长时间，30–3600 秒，默认 180。", a.secondaryInk())
-				})
-				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "工具执行并发度")
-					numberField(c, "tool-concurrency", "工具执行并发度", &a.settings.Concurrency, 1, 16, 1)
-					fieldNote(c, "同时执行的工具数，默认 4。", a.secondaryInk())
-				})
+		})
+		a.settingsCard(c, "settings-execution", "请求与执行", "控制请求失败后的重试，以及同时运行的工具数量。", func() {
+			a.settingsRow(c, "llm-retries-row", "LLM 请求重试次数", "0 表示使用默认值 6；最多 10 次。", settingsNumberWidth, func() ui.Element {
+				return uikit.NumberInput(c, "llm-retries", "LLM 请求重试次数", &a.settings.Retries, 0, 10, 1, a.secondaryInk())
 			})
-			divider(c)
-			sectionTitle(c, "会话请求头")
-			if sw := switchRow(c, "send-session-id", "自动发送 session-id", "用于同一会话的后端路由与缓存复用，默认开启。", &a.settings.SendSessionID); sw.Changed() && !a.settings.SendSessionID {
+			a.settingsRow(c, "tool-concurrency-row", "工具执行并发度", "同时执行的工具数，范围 1–16，默认 4。", settingsNumberWidth, func() ui.Element {
+				return uikit.NumberInput(c, "tool-concurrency", "工具执行并发度", &a.settings.Concurrency, 1, 16, 1, a.secondaryInk())
+			})
+		})
+		a.settingsCard(c, "settings-context", "上下文管理", "在接近上下文上限时精简历史，为后续任务留出空间。", func() {
+			a.settingsRow(c, "compact-method-row", "上下文自动压缩方式", "全文总结调用模型；本地裁剪优先在本机精简。悬浮选择框查看详情，修改对新任务生效。", settingsControlWidth, func() ui.Element {
+				stored := a.configDraft.AutoCompactMethod
+				method := stored
+				if method == "" {
+					method = "summary"
+				}
+				control := uikit.SelectField(c.Key("compact-method"), &method, autoCompactOptions, a.secondaryInk()).Label("压缩方式").FillWidth()
+				if method != stored && method != "" {
+					a.configDraft.AutoCompactMethod = method
+				}
+				return uikit.Tooltip(c, control, "全文总结：调用模型生成摘要。本地裁剪：不调用模型，先清空旧工具调用的参数，此前的回复与工具结果只留首尾摘录，回复正文合计最多约 8k tokens；减不下来时自动回退到全文总结。")
+			})
+			a.settingsCompactThreshold(c)
+			a.settingsRow(c, "compact-timeout-row", "压缩超时时间", "等待摘要生成的最长时间；30–3600 秒，默认 180 秒。", settingsNumberWidth, func() ui.Element {
+				return uikit.NumberInput(c, "compact-timeout", "压缩超时时间", &a.settings.CompactTimeout, 30, 3600, 30, a.secondaryInk())
+			})
+		})
+		a.settingsCard(c, "settings-session-headers", "会话请求头", "保存后对后续任务生效；手动配置的同名请求头不受影响。", func() {
+			if sw := a.settingsSwitch(c, "send-session-id", "自动发送 session-id", "用于同一会话的后端路由与缓存复用，默认开启。", &a.settings.SendSessionID); sw.Changed() && !a.settings.SendSessionID {
 				a.settings.SendSessionID = true
 				a.settings.SessionHeaderToDisable = "session-id"
 				a.settings.SessionHeaderConfirmOpen = true
 			}
-			if sw := switchRow(c, "send-x-session-id", "自动发送 x-session-id", "与 session-id 使用同一会话标识，可独立关闭，默认开启。", &a.settings.SendXSessionID); sw.Changed() && !a.settings.SendXSessionID {
+			if sw := a.settingsSwitch(c, "send-x-session-id", "自动发送 x-session-id", "与 session-id 使用同一会话标识，可独立关闭，默认开启。", &a.settings.SendXSessionID); sw.Changed() && !a.settings.SendXSessionID {
 				a.settings.SendXSessionID = true
 				a.settings.SessionHeaderToDisable = "x-session-id"
 				a.settings.SessionHeaderConfirmOpen = true
 			}
-			fieldNote(c, "保存后对后续任务生效；手动配置的同名请求头不受影响。", a.secondaryInk())
 		})
 	}
 	if selected == 5 {
 		a.settingsVoiceInput(c)
 	}
 	if selected == 4 {
-		card(c, "settings-app", func() {
-			sectionTitle(c, "应用")
+		a.settingsCard(c, "settings-app", "应用更新", "检查新版本与查看更新日志。", func() {
 			if runtime.GOOS == "windows" {
-				switchRow(c, "auto-update", "自动更新", "有新版本时后台下载，完成提示重启。", &a.settings.AutoUpdate)
+				a.settingsSwitch(c, "auto-update", "自动更新", "有新版本时后台下载，完成提示重启。", &a.settings.AutoUpdate)
 			}
-			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Wrap().Gap(gapField).PaddingY(gapSection).Children(func() {
 				settingsAction(c, "检查更新").OnClick(func() {
 					a.settings.UpdateNote = "正在检查…"
 					a.checkUpdates(false)
@@ -392,12 +368,10 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				if strings.TrimSpace(a.upd.ReleaseBody) != "" {
 					settingsAction(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
 				}
-				ui.Spacer(c)
-				if a.settings.UpdateNote != "" {
-					fieldNote(c, a.settings.UpdateNote, a.secondaryInk())
-				}
 			})
-			if sw := switchRow(c, "autostart", "开机自启", "登录系统时自动启动 Ally。", &a.settings.Autostart); sw.Changed() {
+		})
+		a.settingsCard(c, "settings-startup", "启动", "", func() {
+			if sw := a.settingsSwitch(c, "autostart", "开机自启", "登录系统时自动启动 Ally，新用户默认开启。", &a.settings.Autostart); sw.Changed() {
 				a.setAutostart(a.settings.Autostart)
 			}
 		})
@@ -406,15 +380,20 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 }
 
 func (a *desktop) settingsCompactThreshold(c *ui.Context) {
-	fieldLabel(c, "上下文自动压缩阈值")
-	uikit.Radios(c.Key("compact-threshold-mode"), &a.settings.ThresholdMode, compactThresholdModes, false)
+	note := fmt.Sprintf("当前 %.0f%%；范围 20%%–95%%，默认 60%%。按模型上下文窗口的占用比例触发。", a.settings.Threshold*100)
 	if a.settings.ThresholdMode == backend.CompactThresholdModeTokens {
-		numberField(c, "compact-threshold-tokens", "压缩阈值（tokens）", &a.settings.ThresholdTokens, 1, backend.MaxCompactThresholdTokens, 1000)
-		fieldNote(c, "上下文 token 数超过此值时自动压缩，不随模型窗口变化。范围 1–10,000,000，默认 100,000 tokens。", a.secondaryInk())
-	} else {
-		ui.Slider(c.Key("compact-threshold"), &a.settings.Threshold, 0.2, 0.95).Label("压缩阈值")
-		fieldNote(c, fmt.Sprintf("当前 %.0f%%：上下文占模型窗口的比例超过此值时自动压缩，范围 20%%–95%%，默认 60%%。", a.settings.Threshold*100), a.secondaryInk())
+		note = "超过指定 token 数时触发，不随模型窗口变化。范围 1–10,000,000，默认 100,000 tokens。"
 	}
+	a.settingsRow(c, "compact-threshold-row", "上下文自动压缩阈值", note, settingsControlWidth, func() ui.Element {
+		return ui.Column(c.Key("compact-threshold-controls")).FillWidth().Gap(gapField).Children(func() {
+			uikit.Radios(c.Key("compact-threshold-mode"), &a.settings.ThresholdMode, compactThresholdModes, false)
+			if a.settings.ThresholdMode == backend.CompactThresholdModeTokens {
+				uikit.NumberInput(c, "compact-threshold-tokens", "压缩阈值（tokens）", &a.settings.ThresholdTokens, 1, backend.MaxCompactThresholdTokens, 1000, a.secondaryInk()).AlignSelf(ui.End)
+			} else {
+				ui.Slider(c.Key("compact-threshold"), &a.settings.Threshold, 0.2, 0.95).Label("压缩阈值").FillWidth()
+			}
+		})
+	})
 }
 
 func (a *desktop) sessionHeaderConfirmDialog(c *ui.Context) {
@@ -449,20 +428,12 @@ func (a *desktop) sessionHeaderConfirmDialog(c *ui.Context) {
 }
 
 func (a *desktop) settingsVoiceInput(c *ui.Context) {
-	// The recorder and the keyboard hook are Windows-only today. Offering a switch
-	// that fails the moment it is turned on is worse than saying so once.
 	if !voiceInputSupported() {
-		card(c, "settings-voice-input", func() {
-			sectionTitle(c, "语音输入")
-			fieldNote(c, "仅支持 Windows 桌面版", a.secondaryInk())
-		})
+		a.settingsCard(c, "settings-voice-input", "语音输入", "仅支持 Windows 桌面版", func() {})
 		return
 	}
-	card(c, "settings-voice-input", func() {
-		sectionTitle(c, "语音输入")
-		// Only ASR models can drive dictation. TTS models are stored and shown on the
-		// models page, but they must not appear as a choice here. Build the options in
-		// one pass: this runs on every frame while the settings page is open.
+	a.settingsCard(c, "settings-voice-input", "语音输入", "选择转写模型与麦克风，按住快捷键说话，松开后填入输入框。", func() {
+		// TTS models cannot drive dictation; preserve the ASR-only choices.
 		options := make([]uikit.Option, 0, len(a.config.VoiceModels))
 		for _, model := range a.config.VoiceModels {
 			if backend.VoiceKindOf(model.Kind) != backend.VoiceKindASR {
@@ -479,15 +450,15 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 		if !voiceModelIDExistsInOptions(options, selected) {
 			selected = options[0].Value
 		}
-		fieldLabel(c, "语音模型")
-		uikit.SelectField(c.Key("voice-input-model"), &selected, options, a.secondaryInk()).Label("语音模型").FillWidth().OnChange(func() {
-			if selected != stored {
-				a.prefs.VoiceModelID = selected
-				a.savePrefs()
-				a.configureVoiceInput()
-			}
+		a.settingsRow(c, "voice-model-row", "语音模型", "仅列出可用于听写的 ASR 模型。", settingsControlWidth, func() ui.Element {
+			return uikit.SelectField(c.Key("voice-input-model"), &selected, options, a.secondaryInk()).Label("语音模型").FillWidth().OnChange(func() {
+				if selected != stored {
+					a.prefs.VoiceModelID = selected
+					a.savePrefs()
+					a.configureVoiceInput()
+				}
+			})
 		})
-		fieldLabel(c, "输入设备")
 		deviceID := a.prefs.VoiceInputDeviceID
 		deviceOptions := []uikit.Option{{Value: "", Label: "系统默认设备"}}
 		foundDevice := deviceID == ""
@@ -498,37 +469,47 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 		if !foundDevice {
 			deviceOptions = append(deviceOptions, uikit.Option{Value: deviceID, Label: "已选设备不可用（请选择其他设备）"})
 		}
-		ui.Row(c.Key("voice-input-device-row")).Gap(gapField).AlignItems(ui.Center).Children(func() {
-			uikit.SelectField(c.Key("voice-input-device"), &deviceID, deviceOptions, a.secondaryInk()).Label("输入设备").FillWidth().Grow(1).OnChange(func() {
-				if deviceID != a.prefs.VoiceInputDeviceID {
-					a.selectVoiceInputDevice(deviceID)
+		a.settingsRow(c, "voice-device-row", "输入设备", "跟随系统默认，或固定一个麦克风。", settingsControlWidth, func() ui.Element {
+			return ui.Column(c).FillWidth().Gap(gapField).Children(func() {
+				ui.Row(c.Key("voice-input-device-row")).FillWidth().Gap(gapField).Children(func() {
+					uikit.SelectField(c.Key("voice-input-device"), &deviceID, deviceOptions, a.secondaryInk()).Label("输入设备").Grow(1).MinWidth(0).OnChange(func() {
+						if deviceID != a.prefs.VoiceInputDeviceID {
+							a.selectVoiceInputDevice(deviceID)
+						}
+					})
+					cardFlat(c, "刷新设备").OnClick(func() { a.refreshVoiceInputDevices() })
+					ui.Box(c).Size(14, 14).Shrink(0).Children(func() {
+						if a.voiceInputDevicesBusy {
+							ui.Spinner(c).Size(13, 13)
+						}
+					})
+				})
+				if a.voiceInputDevicesError != "" {
+					inlineError(c, "voice-input-device-error", a.voiceInputDevicesError)
 				}
 			})
-			cardFlat(c, "刷新设备").OnClick(func() { a.refreshVoiceInputDevices() })
-			if a.voiceInputDevicesBusy {
-				ui.Spinner(c).Size(13, 13)
-			}
 		})
-		if a.voiceInputDevicesError != "" {
-			inlineError(c, "voice-input-device-error", a.voiceInputDevicesError)
-		} else {
-			fieldNote(c, "跟随系统默认，或固定一个麦克风", a.secondaryInk())
-		}
 		hotkeyParts, hotkeyPlaceholder := a.hotkeyPartsFor(a.prefs.VoiceHotkey), ""
+		hotkeyNote := "直接按键，Esc 取消。"
 		if a.voiceHotkeyCapturing {
 			hotkeyParts = a.voiceHotkeyPreviewParts
 			hotkeyPlaceholder = "请按下快捷键组合…"
+			hotkeyNote = "正在录入：按下想要的组合，全部松开后生效；Esc 取消。"
 		}
-		// One row holds the bound keys, which modifier sides count and the change
-		// action: three separate rows pushed the rest of the card off screen.
-		ui.Row(c.Key("voice-hotkey-row")).Gap(gapField).AlignItems(ui.Center).Children(func() {
-			fieldLabel(c, "按住录音快捷键")
-			ui.Row(c.Key("voice-hotkey-keys-row")).Gap(gapInline).AlignItems(ui.Center).Children(func() {
-				a.hotkeyKeycaps(c, hotkeyParts, hotkeyPlaceholder)
+		a.settingsRow(c, "voice-hotkey-row", "按住录音快捷键", hotkeyNote, settingsControlWidth, func() ui.Element {
+			return ui.Row(c).Wrap().Gap(gapField).Children(func() {
+				ui.Row(c.Key("voice-hotkey-keys-row")).Gap(gapInline).Children(func() {
+					a.hotkeyKeycaps(c, hotkeyParts, hotkeyPlaceholder)
+				})
+				if a.voiceHotkeyCapturing {
+					cardFlat(c, "取消更换").OnClick(func() { a.finishVoiceHotkeyCapture("") })
+				} else {
+					cardFlat(c, "更换").OnClick(func() { a.beginVoiceHotkeyCapture() })
+				}
 			})
-			ui.Row(c.Key("voice-hotkey-row-spacer")).Grow(1)
-			ui.Row(c.Key("voice-modifier-sides")).Gap(gapInline).AlignItems(ui.Center).Children(func() {
-				fieldLabel(c, "修饰键")
+		})
+		a.settingsRow(c, "voice-modifier-sides", "修饰键", voiceModifierSidesNote(a.prefs.VoiceModifierLeft, a.prefs.VoiceModifierRight), settingsControlWidth, func() ui.Element {
+			return uikit.OptionGroup(c).Children(func() {
 				choiceButton(c, "voice-modifier-left", "左", a.prefs.VoiceModifierLeft, c.Theme().Accent).OnClick(func() {
 					a.setVoiceModifierSide(!a.prefs.VoiceModifierLeft, a.prefs.VoiceModifierRight)
 				})
@@ -536,19 +517,8 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 					a.setVoiceModifierSide(a.prefs.VoiceModifierLeft, !a.prefs.VoiceModifierRight)
 				})
 			})
-			if a.voiceHotkeyCapturing {
-				cardFlat(c, "取消更换").OnClick(func() { a.finishVoiceHotkeyCapture("") })
-			} else {
-				cardFlat(c, "更换").OnClick(func() { a.beginVoiceHotkeyCapture() })
-			}
 		})
-		if a.voiceHotkeyCapturing {
-			fieldNote(c, "正在录入：按下想要的组合，全部松开后生效；Esc 取消。", a.secondaryInk())
-		} else {
-			fieldNote(c, "直接按键，Esc 取消", a.secondaryInk())
-			fieldNote(c, voiceModifierSidesNote(a.prefs.VoiceModifierLeft, a.prefs.VoiceModifierRight), a.secondaryInk())
-		}
-		if sw := switchRow(c, "voice-input-enabled", "语音输入", "按住快捷键说话，松开后转写并填入输入框。", &a.prefs.VoiceInputEnabled); sw.Changed() {
+		if sw := a.settingsSwitch(c, "voice-input-enabled", "语音输入", "按住快捷键说话，松开后转写并填入输入框。", &a.prefs.VoiceInputEnabled); sw.Changed() {
 			if a.prefs.VoiceInputEnabled {
 				if !voiceModelIDExists(a.config.VoiceModels, selected) {
 					a.prefs.VoiceInputEnabled = false
@@ -569,9 +539,7 @@ func (a *desktop) settingsAdvanced(c *ui.Context) {
 	selected := a.settingsModule(c, "settingsAdvanced", "代码校验", "页面显隐")
 
 	if selected == 0 {
-		card(c, "settings-validation", func() {
-			sectionTitle(c, "自动代码校验")
-			fieldNote(c, "写入文件后做轻量语法检查，默认全部关闭。", a.secondaryInk())
+		a.settingsCard(c, "settings-validation", "自动代码校验", "写入文件后做轻量语法检查，默认全部关闭。", func() {
 			languages := []struct{ key, label, note string }{
 				{"Python", "Python", "对改动的 .py 执行语法检查（py_compile）。"},
 				{"Go", "Go", "对受影响包执行 go vet，不下载依赖。"},
@@ -585,7 +553,7 @@ func (a *desktop) settingsAdvanced(c *ui.Context) {
 			}
 			for _, lang := range languages {
 				v := a.settings.Validation[lang.key]
-				if sw := switchRow(c, "validation-"+lang.key, lang.label, lang.note, &v); sw.Changed() {
+				if sw := a.settingsSwitch(c, "validation-"+lang.key, lang.label, lang.note, &v); sw.Changed() {
 					a.settings.Validation[lang.key] = v
 					a.saveSettings()
 				}
@@ -593,16 +561,14 @@ func (a *desktop) settingsAdvanced(c *ui.Context) {
 		})
 	}
 	if selected == 1 {
-		card(c, "settings-visibility", func() {
-			sectionTitle(c, "页面显隐")
-			fieldNote(c, "隐藏后左侧菜单不再显示该入口；Agent 与设置始终保留。", a.secondaryInk())
+		a.settingsCard(c, "settings-visibility", "页面显隐", "隐藏后左侧菜单不再显示该入口；Agent 与设置始终保留。", func() {
 			for _, mode := range baseModes {
 				if mode.id == "chat" || mode.id == "plugins" {
 					continue
 				}
 				mode := mode
 				visible := !modeHiddenIn(a.configDraft.HiddenModes, mode.id)
-				if sw := switchRow(c, "visible-"+mode.id, mode.label, "", &visible); sw.Changed() {
+				if sw := a.settingsSwitch(c, "visible-"+mode.id, mode.label, "", &visible); sw.Changed() {
 					a.setModeVisible(mode.id, visible)
 				}
 			}
@@ -629,42 +595,46 @@ func (a *desktop) setModeVisible(id string, visible bool) {
 // ---- Network -------------------------------------------------------------
 
 func (a *desktop) settingsNetwork(c *ui.Context) {
-	card(c, "settings-proxy", func() {
-		sectionTitle(c, "网络代理")
-		fieldNote(c, "应用于模型、HTTP 工具、MCP、命令和后台服务。", a.secondaryInk())
-		if segmentedInk(c, "proxy-mode", &a.settings.ProxyModeIndex, a.secondaryInk(), "关闭代理", "跟随系统代理", "手动代理").Changed() {
+	a.settingsCard(c, "settings-proxy", "网络代理", "应用于模型、HTTP 工具、MCP、命令和后台服务。", func() {
+		if mode := a.settingsRow(c, "proxy-mode-row", "代理模式", "关闭代理、跟随系统，或手动填写地址。", settingsControlWidth, func() ui.Element {
+			return segmentedInk(c, "proxy-mode", &a.settings.ProxyModeIndex, a.secondaryInk(), "关闭代理", "跟随系统代理", "手动代理")
+		}); mode.Changed() {
 			a.configDraft.ProxyMode = []string{"off", "system", "manual"}[a.settings.ProxyModeIndex]
 			if a.configDraft.ProxyMode == "system" {
 				a.detectProxy()
 			}
 		}
 		if a.configDraft.ProxyMode == "manual" {
-			fieldRow(c, "proxy-url", "代理地址", &a.configDraft.ProxyURL, false)
-			if a.configDraft.ProxyURL != "" && !validProxyURL(a.configDraft.ProxyURL) {
-				inlineError(c, "proxy-error", "请输入有效的 HTTP、HTTPS 或 SOCKS5 代理地址；填写完整后自动生效。")
-			}
-			fieldNote(c, "例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891。", a.secondaryInk())
+			a.settingsRow(c, "proxy-url-row", "代理地址", "例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891。", settingsControlWidth, func() ui.Element {
+				return ui.Column(c).FillWidth().Gap(gapField).Children(func() {
+					textField(c, "proxy-url", "http://127.0.0.1:7890", "代理地址", &a.configDraft.ProxyURL).FillWidth()
+					if a.configDraft.ProxyURL != "" && !validProxyURL(a.configDraft.ProxyURL) {
+						inlineError(c, "proxy-error", "请输入有效的 HTTP、HTTPS 或 SOCKS5 代理地址；填写完整后自动生效。")
+					}
+				})
+			})
 		}
 		if a.configDraft.ProxyMode != "off" {
-			fieldRow(c, "proxy-no-proxy", "不使用代理的地址", &a.configDraft.ProxyNoProxy, false)
-			fieldNote(c, "例如 localhost,127.0.0.1,::1。", a.secondaryInk())
+			a.settingsRow(c, "proxy-no-proxy-row", "不使用代理的地址", "多个地址用逗号分隔，例如 localhost,127.0.0.1,::1。", settingsControlWidth, func() ui.Element {
+				return textField(c, "proxy-no-proxy", "localhost,127.0.0.1,::1", "不使用代理的地址", &a.configDraft.ProxyNoProxy).FillWidth()
+			})
 		}
-		notice(c, "warn", "代理可见连接元数据；代理不可用时不会回退直连。", a.secondaryInk())
-		ui.Row(c).Gap(gapField).Children(func() {
-			settingsAction(c, "检测系统代理").OnClick(func() { a.detectProxy() })
-			settingsAction(c, "测试连接").Disabled(a.configDraft.ProxyMode == "off").OnClick(func() { a.testProxy() })
-			if a.settings.ProxyBusy {
-				ui.Spinner(c).Size(13, 13)
-			}
-			ui.Spacer(c)
-			if a.settings.ProxyNote != "" {
-				fieldNote(c, a.settings.ProxyNote, a.secondaryInk())
-			}
+		ui.Column(c).PaddingY(gapSection).Gap(gapSection).Children(func() {
+			notice(c, "warn", "代理可见连接元数据；代理不可用时不会回退直连。", a.secondaryInk())
+			ui.Row(c).Wrap().Gap(gapField).Children(func() {
+				settingsAction(c, "检测系统代理").OnClick(func() { a.detectProxy() })
+				settingsAction(c, "测试连接").Disabled(a.configDraft.ProxyMode == "off").OnClick(func() { a.testProxy() })
+				ui.Box(c).Size(14, 14).Shrink(0).Children(func() {
+					if a.settings.ProxyBusy {
+						ui.Spinner(c).Size(13, 13)
+					}
+				})
+			})
+			fieldNote(c, a.settings.ProxyNote, a.secondaryInk())
 		})
 	})
 	if a.settings.Proxy.Enabled || a.settings.Proxy.Error != "" {
-		card(c, "settings-proxy-result", func() {
-			sectionTitle(c, "代理检测结果")
+		a.settingsCard(c, "settings-proxy-result", "代理检测结果", "", func() {
 			if a.settings.Proxy.Error != "" {
 				notice(c, "error", a.settings.Proxy.Error, a.secondaryInk())
 			}
@@ -678,10 +648,8 @@ func (a *desktop) settingsNetwork(c *ui.Context) {
 			}
 		})
 	}
-	card(c, "settings-private-network", func() {
-		sectionTitle(c, "内网访问")
-		switchRow(c, "allow-private", "允许访问内网地址", "允许 http_request、web_fetch 与 MCP 访问内网地址。", &a.settings.AllowPrivate)
-		fieldNote(c, "关闭后，这些工具与 MCP 的 HTTP/SSE 连接将拒绝 localhost 和内网地址。", a.secondaryInk())
+	a.settingsCard(c, "settings-private-network", "内网访问", "", func() {
+		a.settingsSwitch(c, "allow-private", "允许访问内网地址", "允许 HTTP 工具与 MCP 访问内网。关闭后，HTTP/SSE 连接将拒绝 localhost 和内网地址。", &a.settings.AllowPrivate)
 	})
 }
 
@@ -789,31 +757,34 @@ func (a *desktop) settingsFence(c *ui.Context) {
 // ---- API service ---------------------------------------------------------
 
 func (a *desktop) settingsAPI(c *ui.Context) {
-
-	{
-		card(c, "settings-api", func() {
-			sectionTitle(c, "API 服务")
-			fieldNote(c, "仅监听 127.0.0.1，供本机工具调用；请求需带 Bearer Token。", a.secondaryInk())
-			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-				enabled := a.settings.API.Enabled
-				uikit.SwitchNative(c.Key("api-enabled"), &enabled).Label("启用 API 服务").Disabled(a.settings.APIBusy).OnClick(func() { a.setAPIServiceEnabled(enabled) })
-				fieldLabel(c, "端口")
-				uikit.NumberInput(c, "api-port", "API 端口", &a.settings.APIPort, 1024, 65535, 1, a.secondaryInk()).Width(200).Disabled(a.settings.APIBusy)
-				fieldLabel(c, "Token")
-				uikit.Input(c.Key("api-token"), &a.settings.API.Token).Label("API Token").Width(240).Disabled(a.settings.APIBusy)
+	a.settingsCard(c, "settings-api", "API 服务", "仅监听 127.0.0.1，供本机工具调用；请求需带 Bearer Token。", func() {
+		enabled := a.settings.API.Enabled
+		a.settingsRow(c, "api-enabled", "启用 API 服务", "启动或停止本机 API 监听。", 40, func() ui.Element {
+			return uikit.Switch(c.Key("switch"), &enabled, "启用 API 服务").Disabled(a.settings.APIBusy).
+				OnClick(func() { a.setAPIServiceEnabled(enabled) })
+		})
+		a.settingsRow(c, "api-port-row", "API 端口", "范围 1024–65535；改动后需点击保存。", settingsNumberWidth, func() ui.Element {
+			return uikit.NumberInput(c, "api-port", "API 端口", &a.settings.APIPort, 1024, 65535, 1, a.secondaryInk()).Disabled(a.settings.APIBusy)
+		})
+		a.settingsRow(c, "api-token-row", "API Token", "请求头使用 Authorization: Bearer <Token>；留空保存会自动生成。", settingsControlWidth, func() ui.Element {
+			return ui.Row(c).FillWidth().Gap(gapField).Children(func() {
+				uikit.Input(c.Key("api-token"), &a.settings.API.Token).Label("API Token").Grow(1).MinWidth(0).Disabled(a.settings.APIBusy)
 				settingsAction(c, "复制").OnClick(func() {
 					c.WriteClipboard(a.settings.API.Token)
 					c.Toast("Token 已复制")
 				})
-				settingsAction(c, "重新生成").Disabled(a.settings.APIBusy).OnClick(func() { a.regenerateAPIToken() })
-				settingsAction(c, "保存").Disabled(a.settings.APIBusy).OnClick(func() { a.saveAPISettings() })
+			})
+		})
+		ui.Column(c).PaddingY(gapSection).Gap(gapSection).Children(func() {
+			ui.Row(c).Wrap().Gap(gapField).Children(func() {
+				settingsAction(c, "保存", uikit.Primary).Disabled(a.settings.APIBusy).OnClick(func() { a.saveAPISettings() })
+				settingsAction(c, "重新生成 Token").Disabled(a.settings.APIBusy).OnClick(func() { a.regenerateAPIToken() })
 				services := c.Services()
 				settingsAction(c, "接口文档").OnClick(func() {
 					services.OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/api.md")
 				})
 				settingsAction(c, "刷新").Disabled(a.settings.APIBusy).OnClick(func() { a.loadAPIService(true) })
 			})
-			fieldNote(c, "端口与 Token 改动后需点保存；Token 为空时后端会自动生成。", a.secondaryInk())
 			if a.settings.APINote != "" {
 				notice(c, "info", a.settings.APINote, a.secondaryInk())
 			}
@@ -821,29 +792,25 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 			if base == "" {
 				base = fmt.Sprintf("http://127.0.0.1:%d", int(a.settings.APIPort))
 			}
-			fieldNote(c, fmt.Sprintf("地址 %s，请求头加 Authorization: Bearer <Token>。", base), a.secondaryInk())
+			fieldNote(c, "服务地址："+base, a.secondaryInk())
 		})
-	}
-	{
-		card(c, "settings-api-endpoints", func() {
-			sectionTitle(c, "接口列表")
-			for _, ep := range apiEndpoints {
-				ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-					methodColor := c.Theme().Accent
-					switch ep[0] {
-					case "POST":
-						methodColor = c.Theme().Success
-					case "PUT":
-						methodColor = c.Theme().Warning
-					}
-					chip(c, ep[0], methodColor, c.Theme().Surface.Mix(methodColor, 0.12))
-					ui.Text(c, ep[1]).Font(monoFamily).FontSize(fsSmall)
-					ui.Spacer(c)
-					ui.Text(c, ep[2]).FontSize(fsTiny).TextColor(a.secondaryInk())
-				})
-			}
-		})
-	}
+	})
+	a.settingsCard(c, "settings-api-endpoints", "接口列表", "", func() {
+		for _, ep := range apiEndpoints {
+			ui.Row(c).Wrap().GapX(gapSection).GapY(gapTight).PaddingY(gapField).Children(func() {
+				methodColor := c.Theme().Accent
+				switch ep[0] {
+				case "POST":
+					methodColor = c.Theme().Success
+				case "PUT":
+					methodColor = c.Theme().Warning
+				}
+				chip(c, ep[0], methodColor, c.Theme().Surface.Mix(methodColor, 0.12)).Shrink(0)
+				ui.Text(c, ep[1]).Font(monoFamily).FontSize(fsSmall).Grow(1).MinWidth(0)
+				ui.Text(c, ep[2]).FontSize(fsTiny).TextColor(a.secondaryInk())
+			})
+		}
+	})
 }
 
 var apiEndpoints = [][3]string{

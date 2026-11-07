@@ -38,7 +38,7 @@ func TestSSHAuthLoadingCannotCommitOldDraft(t *testing.T) {
 	}
 	a.sshF.AuthReady = false
 	tt := ui.NewTester(func(c *ui.Context) { a.sshAuthDialog(c) }, 900, 700)
-	if err := tt.Click("关闭 SSH 集群授权"); err != nil {
+	if err := tt.Click("关闭 SSH 授权"); err != nil {
 		t.Fatal(err)
 	}
 	if a.sshF.AuthOpen || a.sshAuthTail != nil {

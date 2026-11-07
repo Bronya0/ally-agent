@@ -126,13 +126,17 @@ func uikitTone(tone iconTone) uikit.IconTone {
 // accent at rest (a washed-out tint disappeared next to the rest of the chrome)
 // before brightening under the pointer.
 func addButton(c *ui.Context, id, tip, name string, size float32, fn func()) ui.Element {
-	t := c.Theme()
-	b := uikit.Tooltip(c, ui.ButtonBase(c.Key(id)).Size(size, size).Center().Radius(radiusControl).
-		Label(tip), tip).Cursor(ui.CursorPointer)
-	// A nil fn leaves the click to Element.Menu, which opens the owner's own menu.
+	b := addButtonOn(c, ui.ButtonBase(c.Key(id)), tip, name, size)
 	if fn != nil {
 		b.OnClick(fn)
 	}
+	return b
+}
+
+func addButtonOn(c *ui.Context, trigger ui.Element, tip, name string, size float32) ui.Element {
+	t := c.Theme()
+	b := uikit.Tooltip(c, trigger.Size(size, size).Center().Radius(radiusControl).
+		Label(tip), tip).Cursor(ui.CursorPointer)
 	ink := t.Accent
 	switch {
 	case b.IsDisabled():

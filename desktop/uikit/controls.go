@@ -118,10 +118,9 @@ func SelectField(c *ui.Context, value *string, options []Option, ink ...ui.Color
 	return InputChrome(c, b)
 }
 
-// CompactMenu keeps the toolbar trigger quiet while its choices open as MyGo's
-// drawn menu: the same value and chevron, the current choice marked with the
-// theme's radio mark, and no menu at all while locked. Locked controls show the
-// same value and geometry but open nothing.
+// CompactMenu keeps the toolbar trigger quiet and delegates its choices to the
+// shared MenuButton/MenuItem components. Selection uses the same subtle fill
+// and accent ink as other menus. Locked controls keep their value and geometry.
 //
 // onChosen receives a newly picked value on the click that picked it, so a
 // caller can persist the choice; a nil callback leaves the value in memory.
@@ -131,34 +130,35 @@ func CompactMenu(c *ui.Context, value *string, options []string, locked bool, on
 	if label == "" && len(options) > 0 {
 		label = options[0]
 	}
-	b := ui.ButtonBase(c).Height(ButtonHeightSmall).Padding(1, 6).MinWidth(0).Shrink(1).Gap(7).
-		Radius(Radius).Background(ui.Transparent).TextColor(color).Cursor(ui.CursorPointer)
-	b.Children(func() {
-		ui.Text(c, label).FontSize(FontBody).SingleLine().Unselectable().TextColor(color)
-		ui.Icon(c, chevronDown).Size(13, 13).Shrink(0).TextColor(color)
-	})
-	if locked {
-		// Disabled would paint the whole trigger at half opacity, so the value
-		// would visibly change as a run starts. Without the menu the locked
-		// trigger opens nothing, and the menu it had open goes with the frame
-		// that stops building it.
-		b.Cursor(ui.CursorDefault)
-		return b
-	}
-	b.PopoverMenuButton(func(m *ui.Menu) {
+	var trigger ui.Element
+	MenuButton(c, nil, MenuOptions{Width: 180, MaxHeight: 320}, func(b ui.Element) {
+		trigger = b.Height(ButtonHeightSmall).Padding(1, 6).MinWidth(0).Shrink(1).Gap(7).
+			Radius(Radius).Background(ui.Transparent).TextColor(color).Cursor(ui.CursorPointer).
+			Disabled(locked).DimDisabled(false)
+		if locked {
+			b.Cursor(ui.CursorDefault)
+		}
+		b.Children(func() {
+			ui.Text(c, label).FontSize(FontBody).SingleLine().Unselectable().TextColor(color)
+			ui.Icon(c, chevronDown).Size(13, 13).Shrink(0).TextColor(color)
+		})
+	}, func(m ui.MenuParts) {
 		for _, option := range options {
-			if m.Item(option).Radio(*value == option).Chosen() {
+			option := option
+			MenuItem(c, m, option, option, MenuItemOptions{Choice: true, Selected: *value == option}, ink...).OnClick(func() {
 				if *value == option {
-					continue
+					return
 				}
 				*value = option
 				if onChosen != nil {
 					onChosen(option)
 				}
-			}
+			})
 		}
-	})
-	return b
+	}).Shrink(1)
+	// Preserve the public Element contract: Label/Tooltip/Bind apply to the
+	// actual control, not the layout wrapper that holds its local open flag.
+	return trigger
 }
 
 func selectPopup(c *ui.Context, sel ui.SelectParts[string], value *string, options []Option, ink ...ui.Color) ui.Element {
