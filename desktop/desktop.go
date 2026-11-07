@@ -4,6 +4,7 @@ package desktop
 import (
 	"ally-dev/desktop/pluginhost"
 	"ally-dev/internal/documentpreview"
+	toolshared "ally-dev/internal/tools/shared"
 	"ally-dev/resources"
 	"context"
 	"encoding/json"
@@ -902,18 +903,24 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 				continue
 			}
 			messageCopy := message
-			// Drop large command output before recursively copying it. This only
+			var detachedResult map[string]any
+			// Drop transient tool output before recursively copying it. This only
 			// mutates the shallow copy; the live transcript remains unchanged.
 			name := str(message, "name")
 			if name == "" {
 				name = str(message, "toolName")
 			}
-			if toolKind(name) == "command" {
+			if toolshared.OmitToolResultOnDisk(name) {
 				messageCopy = make(map[string]any, len(message))
 				for key, value := range message {
 					messageCopy[key] = value
 				}
-				retainLocalCommandSummary(messageCopy)
+				if retainSnapshotToolSummary(messageCopy) {
+					// The projection already owns its metadata maps and slices.
+					// Clone the remaining message fields only once.
+					detachedResult = messageCopy["result"].(map[string]any)
+					delete(messageCopy, "result")
+				}
 			}
 			clear(active)
 			cloned, err := cloneSnapshotJSONValue(messageCopy, 0, active)
@@ -924,6 +931,9 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 				break
 			}
 			msgs[i], _ = cloned.(map[string]any)
+			if detachedResult != nil {
+				msgs[i]["result"] = detachedResult
+			}
 		}
 	}
 	// Stored image references are durable; avoid copying large base64 payloads
@@ -1121,7 +1131,7 @@ func (a *desktop) openSession(id string) {
 				if str(message, "role") == "tool_call" || str(message, "toolCallId") != "" {
 					normalizeToolMessage(message)
 				}
-				retainLocalCommandSummary(message)
+				retainSnapshotToolSummary(message)
 				normalizeSubagentBlackboard(message)
 			}
 			restoreRoundStats(t)

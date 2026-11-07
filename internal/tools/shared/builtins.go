@@ -724,6 +724,17 @@ func NormalizeName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
+// OmitToolResultOnDisk identifies observations that quickly become stale.
+// The running conversation still keeps their original evidence. Persistence
+// keeps call identity/arguments and summaries, not a second copy of the output.
+func OmitToolResultOnDisk(name string) bool {
+	switch NormalizeName(name) {
+	case "read", "batch_read", "remote_read", "grep", "glob", "list", "list_files", "command", "bash", "remote_run_command":
+		return true
+	}
+	return false
+}
+
 // protectedToolNames is the set of local file/command tools that must never
 // leave the model's toolset: without read/edit/create/delete/command the
 // agent cannot inspect or change the workspace at all, so Settings never

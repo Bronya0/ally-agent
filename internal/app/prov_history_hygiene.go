@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 
+	toolshared "ally-dev/internal/tools/shared"
 	"ally-dev/internal/tools/toolcall"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -30,7 +31,8 @@ const (
 	// pairing, and the call arguments needed to re-run — stays intact so the
 	// restored history remains a valid protocol sequence.
 	historyProfileDisk
-	// Protected storage keeps tool evidence and reasoning, but omits image payloads.
+	// Protected storage keeps reasoning/native replay state, but omits images
+	// and raw observations from read/search/list/command tools like the disk profile.
 	historyProfileProtected
 )
 
@@ -94,6 +96,10 @@ func sanitizeHistoryMessagesFor(messages []openai.ChatCompletionMessage, profile
 // since identical assistant text cannot safely identify a turn after filtering.
 func sanitizeHistoryMessagesWithOrigins(messages []openai.ChatCompletionMessage, profile historyProfile) ([]openai.ChatCompletionMessage, []int) {
 	flattenImages := profile != historyProfileMemory
+	var transientCalls map[string][]bool
+	if profile == historyProfileProtected {
+		transientCalls = make(map[string][]bool)
+	}
 	filtered := make([]openai.ChatCompletionMessage, 0, len(messages))
 	var origins []int
 	for sourceIndex, original := range messages {
@@ -118,13 +124,6 @@ func sanitizeHistoryMessagesWithOrigins(messages []openai.ChatCompletionMessage,
 			// Anthropic signs it). A restarted process starts a new loop, so the
 			// old thoughts only cost bytes and input tokens.
 			m.ReasoningContent = ""
-			if m.Role == openai.ChatMessageRoleTool {
-				// Explicit fast compaction already reduced this result to a bounded
-				// excerpt. Keep that handoff even if protected storage is unavailable.
-				if !strings.HasPrefix(m.Content, fastCompactToolMarker) && !isGeneratedImageHistory(m.Content) {
-					m.Content = toolResultPlaceholder
-				}
-			}
 		}
 		if strings.TrimSpace(m.Content) == "" && len(m.MultiContent) == 0 && len(m.ToolCalls) == 0 && m.Role != openai.ChatMessageRoleTool {
 			continue
@@ -157,6 +156,33 @@ func sanitizeHistoryMessagesWithOrigins(messages []openai.ChatCompletionMessage,
 				kept = append(kept, call)
 			}
 			m.ToolCalls = kept
+		}
+		omitResult := profile == historyProfileDisk
+		if transientCalls != nil {
+			if m.Role != openai.ChatMessageRoleTool {
+				clear(transientCalls)
+			} else if queue := transientCalls[m.ToolCallID]; len(queue) > 0 {
+				// Match the pairing repair's declaration-order rule, including
+				// different tools sharing one ID in the same assistant turn.
+				omitResult = queue[0]
+				if len(queue) == 1 {
+					delete(transientCalls, m.ToolCallID)
+				} else {
+					transientCalls[m.ToolCallID] = queue[1:]
+				}
+			}
+		}
+		if m.Role == openai.ChatMessageRoleTool && omitResult {
+			// Explicit compaction excerpts and durable generated-image metadata
+			// remain useful after restart; raw read/command output does not.
+			if !strings.HasPrefix(m.Content, fastCompactToolMarker) && !isGeneratedImageHistory(m.Content) {
+				m.Content = toolResultPlaceholder
+			}
+		}
+		if transientCalls != nil && m.Role == openai.ChatMessageRoleAssistant {
+			for _, call := range m.ToolCalls {
+				transientCalls[call.ID] = append(transientCalls[call.ID], toolshared.OmitToolResultOnDisk(call.Function.Name))
+			}
 		}
 		filtered = append(filtered, m)
 		origins = append(origins, sourceIndex)

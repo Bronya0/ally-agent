@@ -41,12 +41,20 @@ func retainLocalCommandSummary(m map[string]any) {
 	if toolKind(name) != "command" {
 		return
 	}
+	retainCommandSummary(m)
+}
+
+func retainCommandSummary(m map[string]any) {
 	result := toolResult(m)
 	summary := map[string]any{}
 	for _, key := range []string{"ok", "exitCode", "timedOut", "promotedToService", "cancelled", "durationMs", "elapsedMs", "errorCode"} {
-		if value, ok := result[key]; ok {
+		switch value := result[key].(type) {
+		case string, bool, int, int64, float32, float64:
 			summary[key] = value
 		}
+	}
+	if text := str(result, "error"); text != "" {
+		summary["error"] = short(text, 300)
 	}
 	m["result"] = summary
 	delete(m, "body")

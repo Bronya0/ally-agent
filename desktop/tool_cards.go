@@ -191,7 +191,7 @@ func toolGroupReadSummary(result map[string]any) string {
 	return fmt.Sprintf("%d %s", readLines, unit)
 }
 
-func toolGroupGrepSummary(result map[string]any) string {
+func toolGroupGrepHits(result map[string]any) int {
 	hits := -1
 	if _, exists := result["hits"]; exists {
 		hits = int(num(result, "hits"))
@@ -207,10 +207,14 @@ func toolGroupGrepSummary(result map[string]any) string {
 			}
 		}
 	}
-	if hits < 0 {
-		return ""
+	return hits
+}
+
+func toolGroupGrepSummary(result map[string]any) string {
+	if hits := toolGroupGrepHits(result); hits >= 0 {
+		return fmt.Sprintf("%d hits", hits)
 	}
-	return fmt.Sprintf("%d hits", hits)
+	return ""
 }
 
 func toolGroupListSummary(result map[string]any) string {
@@ -1430,6 +1434,10 @@ func toolPreview(name string, args, result map[string]any, lines int) string {
 }
 
 func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name string, args, result map[string]any, m map[string]any) {
+	if boolOf(result, "resultOmitted") {
+		fieldNote(c, "历史结果正文未保存。", a.secondaryInk())
+		return
+	}
 	switch name {
 	case "edit", "remote_edit":
 		diff := str(result, "diff")

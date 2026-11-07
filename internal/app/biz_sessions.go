@@ -958,7 +958,8 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	// In-memory history keeps image MultiContent so subsequent runs in this
 	// process still see the images (stable prefix, prompt cache survives).
 	// The legacy disk profile remains text-only. A bounded, OS-protected
-	// provider payload can preserve full Responses context in the same file.
+	// provider payload preserves Responses replay and reasoning in the same
+	// file, while omitting raw read/search/list/command observations.
 	// SSH passwords stay in the history verbatim (no redaction): the live history
 	// is what the next request is built from, so masking a stored password here
 	// would make the model re-send the mask for the next host instead of the real

@@ -154,8 +154,10 @@ func (a *App) modelHistoryFromStorage(sessionID string, raw []byte, disk []opena
 	if json.Unmarshal(plain, &state) != nil || state.Version != 1 || state.Session != sessionID || state.DiskHash != modelHistoryHash(disk) {
 		return disk, nil
 	}
-	history := sanitizeHistoryMessages(state.History)
-	// The protected full model history must be the very history represented by
+	// Apply the current persistence policy to older protected snapshots too,
+	// so their raw observations cannot be resurrected into a restarted session.
+	history := sanitizeHistoryMessagesFor(state.History, historyProfileProtected)
+	// The protected model history must be the very history represented by
 	// this disk profile; no restored payload can substitute another session.
 	if modelHistoryHash(sanitizeHistoryMessagesForDisk(history)) != state.DiskHash {
 		return disk, nil
