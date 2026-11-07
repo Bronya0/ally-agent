@@ -28,6 +28,7 @@ type uiPrefs struct {
 	RailSessionsOpen   bool     `json:"railSessionsOpen"`
 	Avatar             string   `json:"avatar"`
 	RecentModels       []string `json:"recentModels"`
+	RecentWorkspaces   []string `json:"recentWorkspaces,omitempty"`
 	TreeWidth          float32  `json:"treeWidth"`
 	SeenReleaseNotes   string   `json:"seenReleaseNotes"`
 	DismissedUpdateTag string   `json:"dismissedUpdateTag"`
@@ -109,6 +110,10 @@ func readPrefs(path string) uiPrefs {
 		p.VoiceModifierLeft, p.VoiceModifierRight = true, true
 	}
 	p.Pet.normalize()
+	p.RecentWorkspaces = workspaceHistoryRoots(p.RecentWorkspaces, nil)
+	if len(p.RecentWorkspaces) > maxRecentWorkspaces {
+		p.RecentWorkspaces = p.RecentWorkspaces[:maxRecentWorkspaces]
+	}
 	return p
 }
 
@@ -124,6 +129,7 @@ func (a *desktop) savePrefs(notice ...string) {
 	}
 	p := a.prefs
 	p.RecentModels = append([]string(nil), p.RecentModels...)
+	p.RecentWorkspaces = append([]string(nil), p.RecentWorkspaces...)
 	p.Pet = p.Pet.clone()
 	previous := a.prefsSaveTail
 	done := make(chan struct{})

@@ -207,18 +207,19 @@ func (b nativePreviewBrowser) OnRenderProcessGone(fn func(string)) func() {
 func (b nativePreviewBrowser) LoadURL(raw string) error { return b.Page().LoadURL(raw) }
 
 type nativePreview struct {
-	view        *mygo.WebView
-	browser     previewBrowser
-	state       previewLoadState
-	timer       *time.Timer
-	update      func(func())
-	offTitle    func()
-	offMedia    func()
-	offFailure  []func()
-	probeCancel context.CancelFunc
-	onFailure   func(error)
-	documentURL string
-	mediaToken  string
+	view          *mygo.WebView
+	browser       previewBrowser
+	state         previewLoadState
+	timer         *time.Timer
+	update        func(func())
+	offTitle      func()
+	offMedia      func()
+	offFailure    []func()
+	probeCancel   context.CancelFunc
+	onFailure     func(error)
+	documentURL   string
+	mediaToken    string
+	imageDocument bool
 }
 
 func (p *nativePreview) Native() ui.NativeWebView { return p.view }
@@ -245,18 +246,7 @@ func (p *nativePreview) LoadHTML(source string) {
 
 func (p *nativePreview) watchPage(expectedURL string, readyOnProbe bool) {
 	generation, browser, update := p.state.generation, p.browser, p.update
-	p.offFailure = append(p.offFailure,
-		browser.OnDidFailLoad(func(err *mygo.LoadError) {
-			if err == nil || err.URL != "" && err.URL != expectedURL {
-				return
-			}
-			failure := fmt.Errorf("预览加载失败：%s", err.Description)
-			update(func() { p.failContent(generation, failure, false) })
-		}),
-		browser.OnRenderProcessGone(func(reason string) {
-			update(func() { p.failContent(generation, fmt.Errorf("预览进程已退出：%s，请重试", reason), true) })
-		}),
-	)
+	p.watchFailures(expectedURL)
 	// Windows may fail to create its controller after NewWebView returned.
 	// A single bounded probe catches this; it is not a polling loop.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -285,6 +275,22 @@ func (p *nativePreview) watchPage(expectedURL string, readyOnProbe bool) {
 	}()
 }
 
+func (p *nativePreview) watchFailures(expectedURL string) {
+	generation, browser, update := p.state.generation, p.browser, p.update
+	p.offFailure = append(p.offFailure,
+		browser.OnDidFailLoad(func(err *mygo.LoadError) {
+			if err == nil || err.URL != "" && err.URL != expectedURL {
+				return
+			}
+			failure := fmt.Errorf("预览加载失败：%s", err.Description)
+			update(func() { p.failContent(generation, failure, false) })
+		}),
+		browser.OnRenderProcessGone(func(reason string) {
+			update(func() { p.failContent(generation, fmt.Errorf("预览进程已退出：%s，请重试", reason), true) })
+		}),
+	)
+}
+
 func (p *nativePreview) failContent(generation uint64, err error, broken bool) {
 	if p.state.generation != generation || p.IsDestroyed() || p.state.err != nil {
 		return
@@ -311,6 +317,7 @@ func (p *nativePreview) retireContent() {
 	p.offFailure = nil
 	p.onFailure = nil
 	p.mediaToken = ""
+	p.imageDocument = false
 	if p.offMedia != nil {
 		p.offMedia()
 		p.offMedia = nil

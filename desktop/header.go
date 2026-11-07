@@ -112,7 +112,7 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 							a.cancelOAuthWhenLeaving()
 						}
 						if a.page != "chat" || idx != a.active {
-							a.releaseFilePreview()
+							a.hideFilePreview()
 						}
 						a.page = "chat"
 						a.activateTab(idx)
@@ -147,7 +147,7 @@ func (a *desktop) workspaceHistoryMenu(c *ui.Context, trigger func(ui.Element)) 
 		uikit.MenuItem(c, m, "add", "＋ 添加工作区", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(a.chooseWorkspace)
 		uikit.MenuItem(c, m, "temporary", "临时工作区", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.newConversation("") })
 		divider(c)
-		roots := a.sessionWorkspaceRoots()
+		roots := a.workspaceHistoryRoots()
 		for _, root := range roots {
 			root := root
 			item := uikit.MenuItem(c, m, root, filepath.Base(root), uikit.MenuItemOptions{Icon: iconImage("folderopen"), FontSize: fsSmall}, a.secondaryInk()).
@@ -257,6 +257,9 @@ func (a *desktop) closeWorkspaceTab(index int) {
 	}
 	if !stillOpen {
 		key := workspaceKey(t.Workspace)
+		a.releaseWorkspaceFileTree(t.Workspace)
+		a.workspacePreview.releaseWorkspace(key)
+		delete(a.mediaPlayback, key)
 		if file := a.workspaceFiles[key]; file != nil && !file.Saving && file.Editor != nil && !file.Editor.Buffer.Modified() {
 			a.releaseWorkspaceFile(t.Workspace)
 		}

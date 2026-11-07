@@ -21,9 +21,10 @@ func TestClosingActiveFileClearsPlaybackIntent(t *testing.T) {
 	root := t.TempDir()
 	file := &workspaceFile{Path: "one.mp4"}
 	a := &desktop{tabs: []*conversation{{Workspace: root}}, workspaceFiles: map[string]*workspaceFile{workspaceKey(root): file}}
-	a.media = workspaceMediaState{mode: mediaModeRandom, playing: true, autoplay: true}
+	a.media.mode = mediaModeRandom
+	a.workspaceMedia().playing, a.workspaceMedia().autoplay = true, true
 	a.releaseWorkspaceFile(root)
-	if a.media.playing || a.media.autoplay || a.media.mode != mediaModeRandom {
+	if len(a.mediaPlayback) != 0 || a.media.mode != mediaModeRandom {
 		t.Fatal("closing a file retained play intent or erased the app's mode selection")
 	}
 }

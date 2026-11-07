@@ -87,10 +87,9 @@ func (a *desktop) mainWindowShown() {
 	a.restoreAttachmentImages(a.current())
 }
 
-// Stop file media and release decoded bitmaps immediately. Native WebView slots
-// survive only until the existing hidden-window grace period expires.
+// Release attachment bitmaps, but retain preview pages for the next show.
 func (a *desktop) releaseHiddenWindowResources() {
-	a.suspendFilePreview()
+	a.hideFilePreview()
 	a.syncPluginHostVisibility(true)
 	seen := make(map[*conversation]struct{}, len(a.tabs)+len(a.openSessions))
 	release := func(t *conversation) {

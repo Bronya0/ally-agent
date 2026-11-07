@@ -74,7 +74,7 @@ func (a *desktop) pluginAction(work func() (string, error)) {
 					}
 				}
 				if !found {
-					a.releaseFilePreview()
+					a.hideFilePreview()
 					a.page = "plugins"
 				}
 			}

@@ -22,7 +22,7 @@ func TestStartupWorkspace(t *testing.T) {
 		{"first launch", nil, fallback},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := startupWorkspace(tc.sessions, fallback); got != tc.want {
+			if got := startupWorkspace(nil, tc.sessions, fallback); got != tc.want {
 				t.Fatalf("startupWorkspace = %q, want %q", got, tc.want)
 			}
 		})

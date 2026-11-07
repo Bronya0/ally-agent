@@ -91,7 +91,7 @@ func (a *desktop) setExplorerOpen(open bool) {
 		a.refreshFiles()
 	}
 	if !open {
-		a.releaseFilePreview()
+		a.releaseAllFilePreviews()
 	}
 }
 

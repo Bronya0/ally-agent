@@ -138,3 +138,4 @@
 2026-11-07 中危 preview-reuse 换页须换 token，事件和异步命令都校验；Reset 清旧正文，否则误操作新文件。@desktop/workspace_media.go
 2026-11-07 高危 plugin-retire 异步卸载须返回 Promise；旧存储写回与安装/删除共锁并验版本，否则覆盖新数据。@desktop/pluginhost
 2026-11-07 中危 timer-dispatch Stop 撤不回已排队的 UI 回调；须验 generation，否则旧回调清掉新计时器并提前释放。@desktop/memory_tidy.go
+2026-11-07 中危 chat-wheel 滚轮缓动首帧位置未变，按贴底恢复 Follow 会取消滚动；只在实际下移到底恢复。@desktop/page_chat.go

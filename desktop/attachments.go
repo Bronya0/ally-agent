@@ -436,13 +436,19 @@ func (a *desktop) activateTab(index int) {
 	previous := a.current()
 	next := a.tabs[index]
 	if previous != nil && previous != next {
+		a.hideFilePreview()
 		a.touchAttachmentImageCache(previous.ID)
 	}
 	a.active = index
+	a.rememberWorkspace(next.Workspace)
+	a.selectFileTree(next.Workspace)
 	a.ensureSSHWorkspaceLoaded(next.Workspace)
 	a.touchAttachmentImageCache(next.ID)
 	a.trimAttachmentImageCache()
 	a.restoreAttachmentImages(next)
+	if a.win != nil {
+		a.syncMediaOptions(a.activeFile())
+	}
 }
 
 func (a *desktop) restoreAttachmentImages(t *conversation) {

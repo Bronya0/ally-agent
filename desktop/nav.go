@@ -21,7 +21,7 @@ func (a *desktop) changePage(page string) {
 		if a.page == "chat" {
 			a.resetFileExplorer()
 		}
-		a.releaseFilePreview()
+		a.hideFilePreview()
 	}
 	if a.page == "settings" && page != "settings" {
 		// A pending chord capture must not outlive the settings page: while it

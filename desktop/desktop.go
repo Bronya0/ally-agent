@@ -149,6 +149,8 @@ type desktop struct {
 	fileRoot                                string
 	fileChildren                            map[string][]backend.FileEntry
 	fileLoading                             map[string]bool
+	fileScroll                              *ui.ScrollState
+	workspaceTrees                          map[string]*explorerTreeState
 	openSessions                            map[string]*conversation
 	attachmentImageCacheSessions            []string
 	attachmentImageJobSessions              map[*conversation]struct{}
@@ -196,6 +198,7 @@ type desktop struct {
 	workspaceFiles                                      map[string]*workspaceFile
 	workspacePreview                                    workspacePreviewLifecycle
 	media                                               workspaceMediaState
+	mediaPlayback                                       map[string]*workspaceMediaState
 	fileEpoch                                           int
 	modelTab                                            string
 	modelSaving                                         bool
@@ -234,12 +237,12 @@ type desktop struct {
 	mcpServersRev uint64
 	mcpStatusMemo memoOf[uint64, map[string]map[string]any]
 
-	// Derived from sessions. The rail, the composer's session menu and the
-	// workspace menus ask for them on every frame, so they are rebuilt only
-	// when the index itself is replaced (sessRev).
-	sessRev       uint64
-	wsRootsMemo   memoOf[uint64, []string]
-	wsSessionMemo memoOf[workspaceSessionKey, workspaceSessionList]
+	// Session and workspace menu data is rebuilt only when the session index
+	// or explicit workspace visits change, rather than on every frame.
+	sessRev            uint64
+	workspaceVisitsRev uint64
+	wsRootsMemo        memoOf[workspaceHistoryKey, []string]
+	wsSessionMemo      memoOf[workspaceSessionKey, workspaceSessionList]
 }
 
 // Run starts the native desktop host and its Agent runtime.
@@ -304,10 +307,9 @@ func Run() {
 			a.scheduleMemoryTidy()
 		})
 		a.win.OnShow(a.mainWindowShown)
-		// Stop media immediately, but keep the bounded WebView slots through the
-		// hidden-window grace period so a quick restore does not recreate them.
+		// Hiding or minimizing keeps preview pages and playback positions intact.
 		a.win.OnMinimize(func() {
-			a.suspendFilePreview()
+			a.hideFilePreview()
 			a.syncPluginHostVisibility(true)
 			a.scheduleMemoryTidy()
 		})
@@ -385,7 +387,7 @@ func Run() {
 			}
 			autostart, autostartInitialized, autostartErr := initializeAutostart(a.core, prefs.AutostartInitialized)
 			sessions, _ := a.core.ListSessionIndex()
-			workspace := startupWorkspace(sessions, cfg.Workspace)
+			workspace := startupWorkspace(prefs.RecentWorkspaces, sessions, cfg.Workspace)
 			skills, _ := a.core.ListSkills()
 			tools := a.core.ListTools()
 			servers := a.core.GetMcpServers()
@@ -1193,7 +1195,6 @@ func (a *desktop) openFile(path string) {
 	}
 	root := t.Workspace
 	if workspaceFileKindForPath(path) == workspaceFileProperties {
-		a.releaseFilePreview()
 		a.openFileInfo(path)
 		return
 	}
@@ -1357,8 +1358,8 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 			}
 			if expected != nil {
 				if newFile.PreviewPath != "" || newFile.PreviewHTML != "" || newFile.MarkupPreview && kind == workspaceFileHTML {
-					// beginLoad already retired the page. Keep its native slot for
-					// the next compatible preview, while dropping old file data.
+					// Keep the native slot (and an image's last frame) for the next
+					// compatible preview, while dropping old file data.
 					releaseWorkspaceFileValue(expected)
 				} else {
 					a.releaseWorkspaceFile(root)
@@ -1420,19 +1421,25 @@ func (a *desktop) confirmDiscardFile(root string, file *workspaceFile, action fu
 }
 
 func (a *desktop) closeFile() {
-	a.workspacePreview.cancelLoad("")
 	t := a.current()
-	file := a.activeFile()
-	if t == nil || file == nil {
+	if t == nil {
+		return
+	}
+	a.closeWorkspaceFile(t.Workspace)
+}
+
+func (a *desktop) closeWorkspaceFile(root string) {
+	a.workspacePreview.cancelLoad(root)
+	file := a.workspaceFiles[workspaceKey(root)]
+	if file == nil {
 		return
 	}
 	if file.Saving {
 		a.notify("文件正在保存，请稍后关闭")
 		return
 	}
-	root := t.Workspace
 	close := func() { a.releaseWorkspaceFile(root) }
-	if file.Editor.Buffer.Modified() {
+	if file.Editor != nil && file.Editor.Buffer != nil && file.Editor.Buffer.Modified() {
 		a.confirmDiscardFile(root, file, close)
 	} else {
 		close()

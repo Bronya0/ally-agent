@@ -55,7 +55,9 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 		st.Follow = false
 		st.FollowPending = false
 	}
-	if !st.Follow && t.Scroll.MaxY > 0 && t.Scroll.Y >= t.Scroll.MaxY-2 {
+	// A mouse wheel starts gliding on later frames. Being at the bottom
+	// before that first movement must not re-enable follow and cancel the glide.
+	if !st.Follow && t.Scroll.MaxY > 0 && t.Scroll.Y > st.LastScrollY && t.Scroll.Y >= t.Scroll.MaxY-2 {
 		st.Follow = true
 	}
 	if t.Scroll.Y < 1e8 {
@@ -80,6 +82,8 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 			if ev.Kind == ui.InputScroll && ev.DY < 0 {
 				st.Follow = false
 				st.FollowPending = false
+				// Layout may have advanced the pinned offset since the last render.
+				st.LastScrollY = t.Scroll.Y
 			}
 			return false
 		}).Children(func() {
@@ -125,16 +129,12 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 				})
 			})
 		}
-		if st.SessionsOpen || len(a.plans[t.ID]) > 0 {
+		if len(a.plans[t.ID]) > 0 {
 			// The transcript and the composer are capped and centred, so a panel pinned
 			// to the window edge never lines up with either. Same cap, same centre,
 			// same side inset as the composer box it sits directly above.
 			ui.Column(c).FillWidth().MaxWidth(chatMaxWidth).AlignSelf(ui.Center).Shrink(0).Padding(0, 20).Children(func() {
-				if st.SessionsOpen {
-					a.sessionsMenu(c, t)
-				} else {
-					a.planPanel(c, t)
-				}
+				a.planPanel(c, t)
 			})
 		}
 	})

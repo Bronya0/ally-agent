@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/egoist/mygo/ui"
 )
 
 type explorerSearch struct {
@@ -26,14 +28,15 @@ func (a *desktop) resetFileSearch() {
 		a.files = nil
 		a.fileOpen = nil
 		a.fileChildren = nil
+		a.fileScroll = nil
 	}
 	*s = explorerSearch{}
 	a.fileEpoch++
 	a.fileLoading = nil
 }
 
-// resetFileExplorer puts the panel back in its plain tree state, which closing
-// it, leaving the chat page or replacing the workspace all ask for.
+// Reset transient search/help state and invalidate pending reads. Workspace
+// tree ownership is handled separately by selectFileTree.
 func (a *desktop) resetFileExplorer() {
 	a.resetFileSearch()
 	a.filesF.HelpOpen = false
@@ -51,6 +54,10 @@ func (a *desktop) searchFiles(query string) {
 		return
 	}
 	s := &a.filesF.Search
+	a.rememberFileTree()
+	if s.Query == "" {
+		a.fileScroll = &ui.ScrollState{}
+	}
 	if s.Cancel != nil {
 		s.Cancel()
 	}

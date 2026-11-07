@@ -5,7 +5,6 @@ import (
 	"ally-dev/desktop/uikit"
 	"fmt"
 	"math"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -222,7 +221,7 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 		}
 		ui.Scroll(c.Key("workspace-items")).FillWidth().MaxHeight(180).MinHeight(0).Children(func() {
 			a.railWorkspaceRow(c, "", "临时工作区", "在系统临时目录创建沙箱，随标签页关闭自动删除")
-			roots := a.sessionWorkspaceRoots()
+			roots := a.workspaceHistoryRoots()
 			for _, root := range roots {
 				root := root
 				a.railWorkspaceRow(c, root, workspaceLabel(root), root)
@@ -275,14 +274,15 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 }
 
 // removeWorkspaceHistory deletes the persisted sessions recorded for one
-// workspace. The rail entry is derived from the session index, so hiding the
-// row would survive only until the next refresh and leave the files behind.
+// workspace and forgets its visit after successful deletion. A workspace opened
+// without a saved session only needs its visit removed.
 func (a *desktop) removeWorkspaceHistory(root string) {
 	if root == "" || a.closing || a.core == nil {
 		return
 	}
 	ids := a.workspaceSessionIDs(root)
 	if len(ids) == 0 {
+		a.forgetWorkspaceVisit(root)
 		return
 	}
 	var failures []string
@@ -301,6 +301,7 @@ func (a *desktop) removeWorkspaceHistory(root string) {
 			a.notifyError(fmt.Sprintf("已删除 %d 个会话，%d 个未能删除：%s", len(ids)-len(failures), len(failures), strings.Join(failures, "；")))
 			return
 		}
+		a.forgetWorkspaceVisit(root)
 		a.notifySuccess(fmt.Sprintf("已删除 %d 个会话", len(ids)))
 	})
 }
@@ -389,26 +390,6 @@ func sessionBusyID(a *desktop, id string) string {
 		return id
 	}
 	return ""
-}
-
-// sessionWorkspaceRoots is the distinct workspace list the rail and the header's
-// workspace menu both offer. It is derived from the whole session index, so it is
-// rebuilt when that index is replaced instead of on every frame.
-func (a *desktop) sessionWorkspaceRoots() []string {
-	return a.wsRootsMemo.get(a.sessRev, func(uint64) []string {
-		seen := make(map[string]bool, len(a.sessions))
-		var roots []string
-		for _, entry := range a.sessions {
-			root := entry.Workspace
-			key := strings.ToLower(root)
-			if root == "" || seen[key] || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
-				continue
-			}
-			seen[key] = true
-			roots = append(roots, root)
-		}
-		return roots
-	})
 }
 
 type workspaceSessionKey struct {

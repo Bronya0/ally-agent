@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"strings"
@@ -33,6 +34,30 @@ type workspaceMediaState struct {
 	playing  bool
 	enhance  bool
 	autoplay bool
+}
+
+// Playback belongs to the workspace; mode and enhancement remain window-wide.
+func (a *desktop) mediaForWorkspace(workspace string) *workspaceMediaState {
+	key := workspaceKey(workspace)
+	if a.mediaPlayback == nil {
+		a.mediaPlayback = make(map[string]*workspaceMediaState)
+	}
+	state := a.mediaPlayback[key]
+	if state == nil {
+		state = &workspaceMediaState{}
+		a.mediaPlayback[key] = state
+	}
+	a.media.ensureMode()
+	state.mode, state.enhance = a.media.mode, a.media.enhance
+	return state
+}
+
+func (a *desktop) workspaceMedia() *workspaceMediaState {
+	if tab := a.current(); tab != nil {
+		return a.mediaForWorkspace(tab.Workspace)
+	}
+	a.media.ensureMode()
+	return &a.media
 }
 
 func (s *workspaceMediaState) ensureMode() {
@@ -108,7 +133,8 @@ func (a *desktop) stepWorkspaceMedia(file *workspaceFile, delta int, automatic b
 	if a.activeFile() != file {
 		return
 	}
-	if automatic && !a.media.continueAfterEnd() {
+	media := a.workspaceMedia()
+	if automatic && !media.continueAfterEnd() {
 		return
 	}
 	previous, next := a.mediaNeighbours(file)
@@ -119,12 +145,12 @@ func (a *desktop) stepWorkspaceMedia(file *workspaceFile, delta int, automatic b
 	if target == "" {
 		if automatic {
 			// A one-file playlist still repeats without creating a new preview.
-			a.media.autoplay = false
+			media.autoplay = false
 			a.mediaCommand(file, "window.allyMedia?.play(true)")
 		}
 		return
 	}
-	a.media.autoplay = automatic || a.media.playing
+	media.autoplay = automatic || media.playing
 	a.openFile(target)
 }
 
@@ -147,7 +173,7 @@ func (a *desktop) workspaceMediaToolbar(c *ui.Context, file *workspaceFile) {
 	previous, next := a.mediaNeighbours(file)
 	uikit.Select(c.Key("media-mode"), &a.media.mode, mediaModes).Width(108).OnChange(func() { a.syncMediaOptions(file) })
 	label := "播放"
-	if a.media.playing {
+	if a.workspaceMedia().playing {
 		label = "暂停"
 	}
 	uikit.Tooltip(c, flat(c, label).OnClick(func() { a.toggleMediaPlayback(file) }), "空格：播放/暂停；← →：切换同目录同类型媒体；图片每 5 秒切换")
@@ -169,8 +195,9 @@ func (a *desktop) workspaceMediaShortcuts(c *ui.Context, file *workspaceFile) {
 }
 
 func (a *desktop) toggleMediaPlayback(file *workspaceFile) {
-	a.media.playing = !a.media.playing
-	a.mediaCommand(file, fmt.Sprintf("window.allyMedia?.play(%t)", a.media.playing))
+	media := a.workspaceMedia()
+	media.playing = !media.playing
+	a.mediaCommand(file, fmt.Sprintf("window.allyMedia?.play(%t)", media.playing))
 }
 
 func (a *desktop) syncMediaOptions(file *workspaceFile) {
@@ -202,43 +229,114 @@ func (a *desktop) attachWorkspaceMedia(surface *nativePreview, file *workspaceFi
 		surface.offMedia()
 	}
 	surface.mediaToken = token
+	key := a.workspaceFilePreviewKey(file)
 	surface.offMedia = surface.view.Page().OnPageTitleUpdated(func(e *mygo.TitleEvent) {
 		action, ok := workspaceMediaAction(e.Title, token)
 		if !ok {
 			return
 		}
 		a.win.Update(func() {
-			// The surface can report before the lifecycle mounts it, so only the
-			// active file decides whether the signal still belongs here.
-			if surface.IsDestroyed() || surface.mediaToken != token || a.activeFile() != file {
-				return
-			}
-			switch action {
-			case "next":
-				a.stepWorkspaceMedia(file, 1, false)
-			case "previous":
-				a.stepWorkspaceMedia(file, -1, false)
-			case "ended":
-				a.stepWorkspaceMedia(file, 1, true)
-			case "play":
-				a.media.playing = true
-			case "pause":
-				a.media.playing = false
-			}
+			a.handleWorkspaceMediaAction(surface, file, key, token, action)
 		})
 	})
+}
+
+func (a *desktop) handleWorkspaceMediaAction(surface *nativePreview, file *workspaceFile, key, token, action string) {
+	workspace, _, _ := strings.Cut(key, "\x00")
+	if surface.IsDestroyed() || surface.mediaToken != token || a.workspaceFiles[workspace] != file {
+		return
+	}
+	media := a.mediaForWorkspace(workspace)
+	if action == "play" {
+		media.playing = true
+		return
+	}
+	if action == "pause" {
+		media.playing = false
+		return
+	}
+	if a.activeFile() != file || a.page != "chat" || !a.explorer || a.mainWindowHidden || a.win != nil && a.win.IsMinimized() {
+		if action == "ended" {
+			media.playing, media.autoplay = false, false
+		}
+		return
+	}
+	switch action {
+	case "next":
+		a.stepWorkspaceMedia(file, 1, false)
+	case "previous":
+		a.stepWorkspaceMedia(file, -1, false)
+	case "ended":
+		a.stepWorkspaceMedia(file, 1, true)
+	}
+}
+
+// Replace only the decoded image node. No navigation, clearing or native-view
+// remount is involved; the old frame remains committed during the bounded load.
+func (p *nativePreview) replaceImage(options workspaceMediaOptions) {
+	p.retireContent()
+	p.state.begin()
+	p.state.ready, p.imageDocument = true, true
+	p.watchFailures("about:blank")
+	generation, browser, update := p.state.generation, p.browser, p.update
+	encoded, _ := json.Marshal(options)
+	code := fmt.Sprintf("window.allyMedia.replaceImage(%s,%d)", encoded, generation)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	p.probeCancel = cancel
+	go func() {
+		value, err := browser.EvalContext(ctx, code)
+		canceled := ctx.Err() == context.Canceled
+		cancel()
+		if canceled {
+			return
+		}
+		update(func() {
+			if p.IsDestroyed() || p.state.generation != generation || p.state.err != nil {
+				return
+			}
+			p.probeCancel = nil
+			if err != nil || value != true {
+				if err == nil {
+					err = fmt.Errorf("图片替换未完成")
+				}
+				p.failContent(generation, fmt.Errorf("图片预览加载失败：%w", err), false)
+			}
+		})
+	}()
 }
 
 // A fixed, dependency-free bridge. The page has no filesystem or host bindings.
 const workspaceMediaScript = `<script>
 (()=>{
-const m=document.querySelector('video,audio,img'); const image=m.tagName==='IMG';
-const token=TOKEN;
-let playing=false,timer=0,serial=0;
+let m=document.querySelector('video,audio,img'); const image=m.tagName==='IMG';
+let token=TOKEN;
+let playing=false,timer=0,serial=0,revision=0,pending=null,single=false,enhance=false;
 const emit=a=>{document.title='ally-media:'+token+':'+a+':'+(++serial)};
-const schedule=()=>{clearTimeout(timer);if(image&&playing)timer=setTimeout(()=>{if(m.dataset.single)schedule();else{playing=false;emit('ended')}},5000)};
+const schedule=()=>{clearTimeout(timer);if(image&&playing&&!pending)timer=setTimeout(()=>{if(m.dataset.single)schedule();else{playing=false;emit('ended')}},5000)};
 const play=on=>{if(image){playing=on;schedule();emit(on?'play':'pause')}else if(on){m.play().catch(()=>emit('pause'))}else m.pause()};
-window.allyMedia={token,play,configure:(single,enhance)=>{m.loop=single;m.dataset.single=single?'1':'';m.style.filter=enhance?'saturate(.94) brightness(1.025) url(#sharpen)':'';schedule()}};
+const configure=(s,e)=>{single=s;enhance=e;m.loop=s;m.dataset.single=s?'1':'';m.style.filter=e?'saturate(.94) brightness(1.025) url(#sharpen)':'';schedule()};
+const replaceImage=async(o,id)=>{
+ if(!image)throw new Error('当前页面不是图片预览');
+ if(id<=revision)return false;
+ revision=id;if(pending)pending.cancel();clearTimeout(timer);
+ token=o.token;window.allyMedia.token=token;playing=o.start;single=o.single;enhance=o.enhance;
+ const next=new Image();next.alt='';
+ const job={cancel:null};pending=job;
+ try{
+  const loaded=await new Promise((resolve,reject)=>{
+   let done=false;const finish=(error,ready)=>{if(done)return;done=true;clearTimeout(timeout);next.onload=next.onerror=null;if(!ready)next.removeAttribute('src');if(error)reject(error);else resolve(ready)};
+   const timeout=setTimeout(()=>finish(new Error('图片加载超时'),false),10000);
+   job.cancel=()=>finish(null,false);
+   next.onerror=()=>finish(new Error('图片无法解码'),false);
+   next.onload=async()=>{try{await next.decode();finish(null,true)}catch(error){finish(error,false)}};
+   next.src=o.source;
+  });
+  if(!loaded||revision!==id)return false;
+  configure(single,enhance);next.style.filter=m.style.filter;next.dataset.single=m.dataset.single;
+  m.replaceWith(next);m=next;pending=null;play(playing);return true;
+ }catch(error){if(pending===job){pending=null;playing=false;emit('pause')}throw error}
+};
+window.allyMedia={token,play,configure,replaceImage};
 if(!image){m.addEventListener('ended',()=>emit('ended'));m.addEventListener('play',()=>emit('play'));m.addEventListener('pause',()=>{if(!m.ended)emit('pause')})}
 document.addEventListener('keydown',e=>{if(e.altKey||e.ctrlKey||e.metaKey||e.repeat)return;if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();emit(e.key==='ArrowLeft'?'previous':'next')}else if(e.code==='Space'){e.preventDefault();play(image?!playing:m.paused)}},true);
 m.addEventListener('error',()=>{clearTimeout(timer);emit('pause')});

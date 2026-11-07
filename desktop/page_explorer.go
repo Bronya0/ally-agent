@@ -97,6 +97,9 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 }
 
 func (a *desktop) fileTree(c *ui.Context) {
+	if a.fileScroll == nil {
+		a.fileScroll = &ui.ScrollState{}
+	}
 	p := a.currentPalette()
 	ink := p.muted.Mix(p.text, 0.25)
 	width := a.prefs.TreeWidth
@@ -126,13 +129,13 @@ func (a *desktop) fileTree(c *ui.Context) {
 		// Put the fallback menu on the viewport: the content column can be
 		// shorter than it, even with FillHeight in a scrolling container.
 		// A row's own menu takes precedence over this ancestor's menu.
-		tree := ui.Scroll(c.Key("explorer-tree")).Grow(1).MinHeight(0).Focusable().Label("工作区文件列表")
+		tree := ui.Scroll(c.Key("explorer-tree-" + a.fileRoot)).TrackScroll(a.fileScroll).Grow(1).MinHeight(0).Focusable().Label("工作区文件列表")
 		tree.Children(func() {
 			area := ui.Column(c).Padding(3, 0).FillWidth()
 			if len(a.files) == 0 && a.filesF.Search.Query == "" {
 				area.Children(func() { fieldNote(c, "目录为空", a.secondaryInk()) })
 			}
-			area.Children(func() { ui.Tree(c.Key("workspace-tree"), func() { a.fileRows(c, a.files) }).FillWidth() })
+			area.Children(func() { ui.Tree(c.Key("workspace-tree-"+a.fileRoot), func() { a.fileRows(c, a.files) }).FillWidth() })
 		})
 		uikit.ContextMenu(tree, func(m *ui.Menu) {
 			if m.Item("新建文件").Chosen() {
@@ -411,12 +414,7 @@ func (a *desktop) submitFilePrompt() {
 			_, err := a.core.RenamePath(backend.RenamePathRequest{Workspace: root, Path: path, NewName: name})
 			if err == nil {
 				a.win.Update(func() {
-					// The open document would keep pointing at a path that no longer
-					// exists, so release it (asking first if it has edits).
-					if file := a.activeFile(); file != nil && strings.EqualFold(filepath.ToSlash(file.Path), filepath.ToSlash(path)) {
-						a.closeFile()
-					}
-					a.refreshFiles()
+					a.explorerPathChanged(root, path)
 					a.notify("已重命名")
 				})
 			}
@@ -439,7 +437,7 @@ func (a *desktop) submitFilePrompt() {
 			_, err = a.core.CreateFile(backend.CreateFileRequest{Workspace: workspace, Path: full})
 		}
 		if err == nil {
-			a.win.Update(func() { a.refreshFiles(); a.notify("已创建 " + full) })
+			a.win.Update(func() { a.refreshWorkspaceFiles(workspace); a.notify("已创建 " + full) })
 		}
 		return err
 	})
@@ -455,15 +453,28 @@ func (a *desktop) deleteFileEntry(entry backend.FileEntry) {
 		kind = "目录"
 	}
 	detail := "确定删除" + kind + "「" + entry.Name + "」吗？此操作不可恢复。"
+	workspace := t.Workspace
 	a.confirmAction("确认删除", detail, func() error {
-		return a.core.DeletePath(backend.DeletePathRequest{Workspace: t.Workspace, Paths: []string{entry.Path}, Recursive: entry.Dir})
+		return a.core.DeletePath(backend.DeletePathRequest{Workspace: workspace, Paths: []string{entry.Path}, Recursive: entry.Dir})
 	}, func() {
-		if file := a.activeFile(); file != nil && workspacePathContains(entry.Path, file.Path) {
-			a.closeFile()
-		}
-		a.refreshFiles()
+		a.explorerPathChanged(workspace, entry.Path)
 		a.notifySuccess("已删除" + kind + "「" + entry.Name + "」")
 	})
+}
+
+// Async file operations belong to their captured workspace even if another tab
+// is active when they finish. A renamed directory also invalidates descendants.
+func (a *desktop) explorerPathChanged(workspace, path string) {
+	if file := a.workspaceFiles[workspaceKey(workspace)]; file != nil && workspacePathContains(path, file.Path) {
+		a.closeWorkspaceFile(workspace)
+	}
+	a.refreshWorkspaceFiles(workspace)
+}
+
+func (a *desktop) refreshWorkspaceFiles(workspace string) {
+	if current := a.current(); current != nil && sameWorkspace(current.Workspace, workspace) {
+		a.refreshFiles()
+	}
 }
 
 // workspacePathContains reports whether child is the same workspace-relative
@@ -512,24 +523,12 @@ func (a *desktop) toggleFolder(path string) {
 // prepareFileTree retains visible rows and disclosure state during a refresh of
 // the same workspace. Collapsed listings are invalidated for their next open.
 func (a *desktop) prepareFileTree(root string) {
-	key := ""
-	if root != "" {
-		key = workspaceKey(root)
-	}
-	if key == "" || key != a.fileRoot {
-		a.resetFileExplorer()
-		a.releaseFilePreview()
-		a.files = nil
-		a.fileOpen = map[string]bool{}
-		a.fileChildren = map[string][]backend.FileEntry{}
-	} else {
-		for path := range a.fileChildren {
-			if !a.fileOpen[path] {
-				delete(a.fileChildren, path)
-			}
+	a.selectFileTree(root)
+	for path := range a.fileChildren {
+		if !a.fileOpen[path] {
+			delete(a.fileChildren, path)
 		}
 	}
-	a.fileRoot = key
 	a.fileLoading = map[string]bool{}
 }
 
@@ -721,10 +720,8 @@ func (a *desktop) openFileInfoWithNote(path, note string) {
 	if t == nil {
 		return
 	}
-	// A modal can cover an actively playing media preview. Destroy the native
-	// surface while the preview is not visible; the next render recreates it
-	// after the dialog closes if the same file is still selected.
-	a.releaseFilePreview()
+	// The modal covers the preview without retiring its page or playback position.
+	a.hideFilePreview()
 	a.closeFileInfo()
 	a.filesF.InfoOpen = true
 	a.filesF.InfoPath = path

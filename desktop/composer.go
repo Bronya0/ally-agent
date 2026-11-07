@@ -24,18 +24,13 @@ const composerHint = "输入消息，Enter 发送，Ctrl+Enter 换行，Esc 中�
 func (a *desktop) composer(c *ui.Context, t *conversation) {
 	st := t.uiState()
 	p := a.currentPalette()
-	ui.Column(c).Shrink(0).Padding(6, 20, 8).Gap(gapInline).Children(func() {
+	box := ui.Column(c.Key("composer")).Shrink(0).Padding(6, 20, 8).Gap(gapInline)
+	box.Children(func() {
 		if a.page == "kb" {
 			a.kbActionBar(c, t)
 		}
 		if st.Retry != nil {
 			a.retryBanner(c, st.Retry)
-		}
-		if st.CmdOpen {
-			a.commandMenu(c, t)
-		}
-		if st.Mention.Open {
-			a.mentionMenu(c, t)
 		}
 		if t.Busy || st.CompactBusy {
 			a.composerStatusRow(c, t)
@@ -74,6 +69,13 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 		}
 		a.composerInfoBar(c, t)
 	})
+	if st.CmdOpen {
+		a.commandMenu(c, t, box)
+	}
+	if st.Mention.Open {
+		a.mentionMenu(c, t, box)
+	}
+	a.sessionsMenu(c, t, box)
 }
 
 func (a *desktop) cancelConversation(t *conversation) {
@@ -260,6 +262,11 @@ func (a *desktop) composerKeys(c *ui.Context, t *conversation, input ui.Element)
 // draft. Both are closed while another menu owns the input.
 func (a *desktop) updateComposerMenus(t *conversation) {
 	st := t.uiState()
+	if st.SessionsOpen {
+		st.CmdOpen = false
+		st.Mention.Open = false
+		return
+	}
 	draft := t.Draft
 	trimmed := strings.TrimLeft(draft, " ")
 	if strings.HasPrefix(trimmed, "/") && !strings.Contains(trimmed, " ") {
@@ -443,7 +450,7 @@ func (a *desktop) runCommand(t *conversation, cmd *slashCommand) {
 	}
 }
 
-func (a *desktop) commandMenu(c *ui.Context, t *conversation) {
+func (a *desktop) commandMenu(c *ui.Context, t *conversation, anchor ui.Element) {
 	items := a.filteredCommands(t)
 	st := t.uiState()
 	builtin, skills := 0, 0
@@ -455,13 +462,14 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation) {
 		}
 	}
 	p := a.currentPalette()
-	overlayPanel(c, "cmd-menu", 0, 360, func() {
+	composerPopover(c.Key(t.ID+"-cmd-menu"), anchor, &st.CmdOpen, "指令面板", 360, func(panel ui.Element) {
+		selected := ui.Local(panel, "selected-row", func() string { return "" })
 		ui.Row(c).Padding(gapInline, padCard).Gap(gapField).Children(func() {
 			ui.Text(c, fmt.Sprintf("指令 %d · 技能 %d", builtin, skills)).FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
 			fieldNote(c, "↑↓ 选择 · Enter 执行 · Tab 补全", a.secondaryInk())
 		})
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+		ui.Scroll(c.Key("commands-list")).Label("指令列表").Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).Padding(0, 4, 4).Gap(1).Children(func() {
 				if len(items) == 0 {
 					fieldNote(c, "无匹配指令", a.secondaryInk())
@@ -470,6 +478,9 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation) {
 					i, item := i, item
 					row := ui.Row(c.Key(fmt.Sprintf("cmd-%s-%d", item.Label, i))).Height(26).Padding(0, 10).Gap(gapField).Radius(radiusSmall).AlignItems(ui.Center)
 					hoverRow(c, row, i == st.CmdIndex)
+					if i == st.CmdIndex {
+						revealPickerRow(row, selected, item.Label)
+					}
 					row.Children(func() {
 						ui.Text(c, "/"+item.Label).Font(monoFamily).FontSize(fsSmall).TextColor(p.accent)
 						ui.Text(c, short(item.Desc, 70)).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine()
@@ -484,15 +495,16 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation) {
 	})
 }
 
-func (a *desktop) mentionMenu(c *ui.Context, t *conversation) {
+func (a *desktop) mentionMenu(c *ui.Context, t *conversation, anchor ui.Element) {
 	st := t.uiState()
-	overlayPanel(c, "mention-menu", 0, 240, func() {
+	composerPopover(c.Key(t.ID+"-mention-menu"), anchor, &st.Mention.Open, "文件引用面板", 240, func(panel ui.Element) {
+		selected := ui.Local(panel, "selected-row", func() string { return "" })
 		ui.Row(c).Padding(gapInline, padCard).Children(func() {
 			ui.Text(c, "@ 文件和目录").FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
 			ui.Text(c, st.Mention.Meta).FontSize(fsTiny).TextColor(a.secondaryInk())
 		})
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+		ui.Scroll(c.Key("mentions-list")).Label("文件引用列表").Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).Padding(0, 4, 4).Gap(1).Children(func() {
 				if st.Mention.Loading && len(st.Mention.Entries) == 0 {
 					busyRow(c, "索引中…", a.secondaryInk())
@@ -507,6 +519,9 @@ func (a *desktop) mentionMenu(c *ui.Context, t *conversation) {
 					}
 					row := ui.Row(c.Key(fmt.Sprintf("mention-%d-%s", i, entry.Path))).Height(24).Padding(0, 10).Gap(gapField).Radius(radiusSmall).AlignItems(ui.Center)
 					hoverRow(c, row, i == st.Mention.Index)
+					if i == st.Mention.Index {
+						revealPickerRow(row, selected, entry.Path)
+					}
 					row.Children(func() {
 						ui.Text(c, mark).Font(monoFamily).FontSize(fsSmall).TextColor(a.secondaryInk())
 						ui.Text(c, entry.Path).Font(monoFamily).FontSize(fsSmall).SingleLine()
@@ -527,6 +542,8 @@ func (a *desktop) mentionMenu(c *ui.Context, t *conversation) {
 // list holds it, otherwise the newest one.
 func (a *desktop) openSessionsMenu(t *conversation) {
 	st := t.uiState()
+	st.CmdOpen = false
+	st.Mention.Open = false
 	st.SessionsOpen = true
 	st.SessionsIndex = 0
 	sessions, _ := a.workspaceSessions(t.Workspace)
@@ -556,21 +573,25 @@ func (a *desktop) chooseSession(id string) {
 	a.composerFocus = id
 }
 
-func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
+func (a *desktop) sessionsMenu(c *ui.Context, t *conversation, anchor ui.Element) {
 	st := t.uiState()
+	if !st.SessionsOpen {
+		return
+	}
 	sessions, total := a.workspaceSessions(t.Workspace)
 	// A background index refresh can shrink the list under an open panel; keeping
 	// the index in range keeps exactly one row selected.
 	st.SessionsIndex = max(0, min(st.SessionsIndex, len(sessions)-1))
 	p := a.currentPalette()
-	panel := overlayPanel(c, "sessions-menu", 0, 360, func() {
+	composerPopover(c.Key(t.ID+"-sessions-menu"), anchor, &st.SessionsOpen, "历史会话面板", 360, func(panel ui.Element) {
+		selection := ui.Local(panel, "selected-row", func() string { return "" })
 		ui.Row(c).Padding(gapInline, padCard).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, fmt.Sprintf("会话 (%d)", total)).FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
 			fieldNote(c, "↑↓ 选择 · Enter 打开", a.secondaryInk())
 			iconAction(c, "sess-close", "关闭", "close", 20, func() { st.SessionsOpen = false })
 		})
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+		ui.Scroll(c.Key("sessions-list")).Label("历史会话列表").Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).Padding(0, 4, 4).Gap(1).Children(func() {
 				if len(sessions) == 0 {
 					fieldNote(c, "当前工作区暂无历史会话", a.secondaryInk())
@@ -591,6 +612,9 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 					row := ui.Row(c.Key("sess-"+s.ID)).Height(28).Padding(0, padRow).Gap(gapField).Radius(radiusSmall).AlignItems(ui.Center)
 					row.Cursor(ui.CursorPointer)
 					hoverRow(c, row, selected)
+					if selected {
+						revealPickerRow(row, selection, s.ID)
+					}
 					row.Children(func() {
 						// The rail reserves its width on every row, so selecting a row cannot
 						// shift the columns beside it.
@@ -628,8 +652,13 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation) {
 			})
 		})
 	})
-	if panel.PressedOutside() {
-		st.SessionsOpen = false
+}
+
+// Reveal only a new selection: ordinary redraws must not undo manual scrolling.
+func revealPickerRow(row ui.Element, previous *string, identity string) {
+	if *previous != identity {
+		*previous = identity
+		row.ScrollIntoView()
 	}
 }
 

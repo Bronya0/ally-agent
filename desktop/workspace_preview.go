@@ -26,30 +26,40 @@ const maxDocumentPreviewHTML = 2 << 20
 
 var errMarkupPreviewLimit = errors.New("预览内容超过大小上限")
 
-// newMediaPlayerDocument builds the player page for an image, audio or video
-// file, reporting false for every other kind. It starts playback only for an
-// explicit user action or while continuing a playlist, so it also clears the
-// one-shot autoplay flag.
-func (a *desktop) newMediaPlayerDocument(file *workspaceFile, token string) (string, bool) {
+type workspaceMediaOptions struct {
+	Source  string `json:"source"`
+	Token   string `json:"token"`
+	Single  bool   `json:"single"`
+	Enhance bool   `json:"enhance"`
+	Start   bool   `json:"start"`
+}
+
+// Consume the one-shot playback intent for either navigation or an in-page swap.
+func (a *desktop) mediaPlayerOptions(file *workspaceFile, token string) (workspaceMediaOptions, bool) {
 	kind := workspaceFileKindForPath(file.Path)
 	if !kind.hasMediaPlayer() {
-		return "", false
+		return workspaceMediaOptions{}, false
 	}
 	tab := a.current()
 	if tab == nil || a.core == nil {
-		return "", false
+		return workspaceMediaOptions{}, false
 	}
 	source, err := a.core.GetWorkspaceMediaURL(backend.WorkspacePathRequest{Workspace: tab.Workspace, Path: file.Path})
 	if err != nil || strings.TrimSpace(source) == "" {
-		return "", false
+		return workspaceMediaOptions{}, false
 	}
-	a.media.ensureMode()
-	page := mediaPreviewHTML(filepath.Base(file.Path), source, kind)
-	script := strings.NewReplacer("TOKEN", fmt.Sprintf("%q", token), "SINGLE", fmt.Sprint(a.media.mode == mediaModeSingle), "ENHANCE", fmt.Sprint(a.media.enhance && kind == workspaceFileImage), "START", fmt.Sprint(a.media.autoplay)).Replace(workspaceMediaScript)
+	media := a.workspaceMedia()
+	options := workspaceMediaOptions{Source: source, Token: token, Single: media.mode == mediaModeSingle, Enhance: media.enhance && kind == workspaceFileImage, Start: media.autoplay}
 	// Keep the pending play intent until the new player confirms play or pause.
-	a.media.playing = a.media.autoplay
-	a.media.autoplay = false
-	return strings.Replace(page, "</body>", script+"</body>", 1), true
+	media.playing = media.autoplay
+	media.autoplay = false
+	return options, true
+}
+
+func mediaPlayerDocument(file *workspaceFile, options workspaceMediaOptions) string {
+	page := mediaPreviewHTML(filepath.Base(file.Path), options.Source, workspaceFileKindForPath(file.Path))
+	script := strings.NewReplacer("TOKEN", fmt.Sprintf("%q", options.Token), "SINGLE", fmt.Sprint(options.Single), "ENHANCE", fmt.Sprint(options.Enhance), "START", fmt.Sprint(options.Start)).Replace(workspaceMediaScript)
+	return strings.Replace(page, "</body>", script+"</body>", 1)
 }
 
 func mediaPreviewHTML(name, source string, kind workspaceFileKind) string {
@@ -306,10 +316,11 @@ type workspacePreviewSurface interface {
 }
 
 type mountedWorkspacePreview struct {
-	key      string
-	surface  workspacePreviewSurface
-	autoplay bool
-	stale    bool
+	key            string
+	surface        workspacePreviewSurface
+	autoplay       bool
+	stale          bool
+	retainingImage bool
 }
 
 type scheduledWorkspacePreview struct {
@@ -324,14 +335,14 @@ type scheduledWorkspacePreview struct {
 // publish their state changes through Window.Update.
 type workspacePreviewLifecycle struct {
 	pending   *pendingWorkspaceFileLoad
-	mounted   *mountedWorkspacePreview
+	mounted   map[string]*mountedWorkspacePreview
 	scheduled *scheduledWorkspacePreview
 }
 
 func (l *workspacePreviewLifecycle) beginLoad(workspace, path string) (context.Context, *pendingWorkspaceFileLoad) {
 	l.cancelScheduled()
 	l.cancelLoad("")
-	l.suspendMounted(workspace)
+	l.suspendMounted(workspace, path)
 	ctx, cancel := context.WithCancel(context.Background())
 	load := &pendingWorkspaceFileLoad{
 		workspace: workspaceKey(workspace),
@@ -397,21 +408,22 @@ func (l *workspacePreviewLifecycle) schedule(
 	})
 }
 
-// Keep one surface for compatible files in one workspace, never an idle pool.
+// Each open workspace owns one surface. Changing the visible workspace does
+// not retire another workspace's page or playback position.
 func (l *workspacePreviewLifecycle) mount(key string, autoplay bool, create func() (workspacePreviewSurface, error), load func(workspacePreviewSurface) error) error {
-	if l.mountedFor(key) != nil && l.mounted.autoplay == autoplay {
+	workspace, _, _ := strings.Cut(key, "\x00")
+	mounted := l.mounted[workspace]
+	if l.mountedFor(key) != nil && mounted.autoplay == autoplay {
 		return nil
 	}
-	if l.mounted != nil {
-		workspace, _, _ := strings.Cut(key, "\x00")
-		if l.mounted.autoplay != autoplay || !strings.HasPrefix(l.mounted.key, workspace+"\x00") || l.mounted.surface == nil || l.mounted.surface.IsDestroyed() {
-			l.releaseMounted()
-		}
+	if mounted != nil && (mounted.autoplay != autoplay || mounted.surface == nil || mounted.surface.IsDestroyed()) {
+		l.releaseMountedWorkspace(workspace)
+		mounted = nil
 	}
 	var surface workspacePreviewSurface
-	if l.mounted != nil {
-		surface = l.mounted.surface
-		if !l.mounted.stale {
+	if mounted != nil {
+		surface = mounted.surface
+		if !mounted.stale && l.retainedImageFor(key) == nil {
 			surface.Reset()
 		}
 	} else {
@@ -429,18 +441,46 @@ func (l *workspacePreviewLifecycle) mount(key string, autoplay bool, create func
 	}
 	if err := load(surface); err != nil {
 		surface.Destroy()
-		l.mounted = nil
+		delete(l.mounted, workspace)
 		return err
 	}
-	l.mounted = &mountedWorkspacePreview{key: key, surface: surface, autoplay: autoplay}
+	if l.mounted == nil {
+		l.mounted = make(map[string]*mountedWorkspacePreview)
+	}
+	l.mounted[workspace] = &mountedWorkspacePreview{key: key, surface: surface, autoplay: autoplay}
 	return nil
 }
 
-func (l *workspacePreviewLifecycle) mountedFor(key string) workspacePreviewSurface {
-	if l.mounted == nil || l.mounted.stale || l.mounted.key != key || l.mounted.surface == nil || l.mounted.surface.IsDestroyed() {
+func (l *workspacePreviewLifecycle) mountedEntryFor(key string) *mountedWorkspacePreview {
+	workspace, _, _ := strings.Cut(key, "\x00")
+	mounted := l.mounted[workspace]
+	if mounted == nil || mounted.stale || mounted.key != key {
 		return nil
 	}
-	return l.mounted.surface
+	return mounted
+}
+
+func (l *workspacePreviewLifecycle) mountedFor(key string) workspacePreviewSurface {
+	mounted := l.mountedEntryFor(key)
+	if mounted == nil || mounted.surface == nil || mounted.surface.IsDestroyed() {
+		return nil
+	}
+	return mounted.surface
+}
+
+// Keep the committed image visible while its replacement is loaded. This is
+// only a drawing fallback: mountedFor still rejects stale execution targets.
+func (l *workspacePreviewLifecycle) retainedImageFor(key string) workspacePreviewSurface {
+	workspace, path, _ := strings.Cut(key, "\x00")
+	mounted := l.mounted[workspace]
+	if mounted == nil || mounted.stale && !mounted.retainingImage || mounted.surface == nil || mounted.surface.IsDestroyed() {
+		return nil
+	}
+	_, previous, _ := strings.Cut(mounted.key, "\x00")
+	if workspaceFileKindForPath(path) != workspaceFileImage || workspaceFileKindForPath(previous) != workspaceFileImage {
+		return nil
+	}
+	return mounted.surface
 }
 
 func (l *workspacePreviewLifecycle) loadHTML(key, source string) {
@@ -450,29 +490,25 @@ func (l *workspacePreviewLifecycle) loadHTML(key, source string) {
 }
 
 func (l *workspacePreviewLifecycle) releaseMounted() {
-	if l.mounted == nil {
-		return
-	}
-	if l.mounted.surface != nil && !l.mounted.surface.IsDestroyed() {
-		l.mounted.surface.Destroy()
+	for workspace := range l.mounted {
+		l.releaseMountedWorkspace(workspace)
 	}
 	l.mounted = nil
 }
 
-// Stop the old page and drop its body/decoder while retaining the native slot.
-func (l *workspacePreviewLifecycle) suspendMounted(workspace string) {
-	if l.mounted == nil {
+// Images retain their last frame; other replacements stop the old decoder.
+func (l *workspacePreviewLifecycle) suspendMounted(workspace, path string) {
+	mounted := l.mounted[workspaceKey(workspace)]
+	if mounted == nil {
 		return
 	}
-	if !strings.HasPrefix(l.mounted.key, workspaceKey(workspace)+"\x00") {
-		l.releaseMounted()
+	retain := l.retainedImageFor(workspaceKey(workspace)+"\x00"+path) != nil
+	if mounted.stale && (!mounted.retainingImage || retain) {
 		return
 	}
-	if !l.mounted.stale {
-		l.mounted.stale = true
-		if l.mounted.surface != nil && !l.mounted.surface.IsDestroyed() {
-			l.mounted.surface.Reset()
-		}
+	mounted.stale, mounted.retainingImage = true, retain
+	if !retain && mounted.surface != nil && !mounted.surface.IsDestroyed() {
+		mounted.surface.Reset()
 	}
 }
 
@@ -488,9 +524,15 @@ func (l *workspacePreviewLifecycle) cancelScheduled() {
 }
 
 func (l *workspacePreviewLifecycle) releaseMountedWorkspace(workspace string) {
-	if l.mounted != nil && strings.HasPrefix(l.mounted.key, workspaceKey(workspace)+"\x00") {
-		l.releaseMounted()
+	key := workspaceKey(workspace)
+	mounted := l.mounted[key]
+	if mounted == nil {
+		return
 	}
+	if mounted.surface != nil && !mounted.surface.IsDestroyed() {
+		mounted.surface.Destroy()
+	}
+	delete(l.mounted, key)
 }
 
 func (l *workspacePreviewLifecycle) cancelScheduledWorkspace(workspace string) {
@@ -565,12 +607,17 @@ func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile) {
 			switch {
 			case file.PreviewPath != "":
 				token := uuid.NewString()
-				if page, ok := a.newMediaPlayerDocument(file, token); ok {
+				if options, ok := a.mediaPlayerOptions(file, token); ok {
 					native, ok := surface.(*nativePreview)
 					if !ok {
 						return errors.New("预览类型不支持媒体控制")
 					}
-					surface.LoadHTML(page)
+					if workspaceFileKindForPath(file.Path) == workspaceFileImage && native.imageDocument && native.state.ready {
+						native.replaceImage(options)
+					} else {
+						surface.LoadHTML(mediaPlayerDocument(file, options))
+						native.imageDocument = workspaceFileKindForPath(file.Path) == workspaceFileImage
+					}
 					a.attachWorkspaceMedia(native, file, token)
 				} else if err := surface.LoadFile(file.PreviewPath); err != nil {
 					return err
@@ -589,26 +636,34 @@ func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile) {
 }
 func (a *desktop) watchWorkspacePreviewFailure(surface *nativePreview, file *workspaceFile, key string) {
 	surface.onFailure = func(err error) {
-		mounted := a.workspacePreview.mounted
-		if a.closing || a.activeFile() != file || mounted == nil || mounted.key != key || mounted.surface != surface {
+		workspace, _, _ := strings.Cut(key, "\x00")
+		mounted := a.workspacePreview.mountedEntryFor(key)
+		if a.closing || a.workspaceFiles[workspace] != file || mounted == nil || mounted.surface != surface {
 			return
 		}
 		file.PreviewError = err.Error()
-		a.media.playing, a.media.autoplay = false, false
+		media := a.mediaForWorkspace(workspace)
+		media.playing, media.autoplay = false, false
 	}
 }
 
+// Explicitly closing a preview releases only the current workspace's surface.
 func (a *desktop) releaseFilePreview() {
-	a.workspacePreview.release()
-	a.media.playing, a.media.autoplay = false, false
+	if tab := a.current(); tab != nil {
+		a.workspacePreview.releaseWorkspace(tab.Workspace)
+		delete(a.mediaPlayback, workspaceKey(tab.Workspace))
+	}
 }
 
-func (a *desktop) suspendFilePreview() {
+func (a *desktop) releaseAllFilePreviews() {
+	a.workspacePreview.release()
+	a.mediaPlayback = nil
+}
+
+// Hidden pages keep their native surface and document. Only pending creation
+// is canceled; MyGo stops placing the view while its workspace is not visible.
+func (a *desktop) hideFilePreview() {
 	a.workspacePreview.cancelScheduled()
-	if tab := a.current(); tab != nil {
-		a.workspacePreview.suspendMounted(tab.Workspace)
-	}
-	a.media.playing, a.media.autoplay = false, false
 }
 
 func (a *desktop) workspaceFilePreviewView(c *ui.Context, file *workspaceFile) {
@@ -622,7 +677,11 @@ func (a *desktop) workspaceFilePreviewView(c *ui.Context, file *workspaceFile) {
 	}
 	a.requestWorkspaceFilePreview(file)
 	key := a.workspaceFilePreviewKey(file)
-	if surface := a.workspacePreview.mountedFor(key); surface != nil {
+	surface := a.workspacePreview.mountedFor(key)
+	if surface == nil {
+		surface = a.workspacePreview.retainedImageFor(key)
+	}
+	if surface != nil {
 		ui.WebView(c.Key("workspace-file-preview"), surface.Native()).Grow(1).MinHeight(0).Fill()
 		return
 	}
