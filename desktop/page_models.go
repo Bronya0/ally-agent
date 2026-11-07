@@ -197,20 +197,21 @@ func (a *desktop) chatModelProviderTabs(c *ui.Context, models []backend.ModelCon
 }
 
 func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig, provider string) {
-	groups := map[string][]backend.ModelConfig{}
-	for _, m := range models {
-		name := m.ProviderName
-		if name == "" {
-			name = customProviderName
-		}
-		groups[name] = append(groups[name], m)
-	}
 	if len(models) == 0 {
 		emptyState(c, "没有匹配的模型", "点击“添加”创建第一个模型。", a.secondaryInk())
 		return
 	}
 
-	for _, m := range groups[provider] {
+	// The list is already sorted. Only the selected provider is drawn, so
+	// avoid copying every provider's models into groups on each frame.
+	for _, m := range models {
+		name := m.ProviderName
+		if name == "" {
+			name = customProviderName
+		}
+		if name != provider {
+			continue
+		}
 		m := m
 		rowCard(c, "chat-model-"+modelOption(m), func() {
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Wrap().Children(func() {

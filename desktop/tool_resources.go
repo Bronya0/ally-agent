@@ -83,10 +83,18 @@ func codeSpansWithBase(c *ui.Context, text, path string, base ui.Color) []ui.Spa
 			return entry.spans
 		}
 	}
+	// A tail or snippet can share the backing string of a whole file/log. Own
+	// the bounded source before tokenizing: both the key and every span must
+	// release that original source when its conversation is released.
+	sourceBytes := len(text) + len(path)
+	if sourceBytes <= highlightCacheBudget {
+		text = strings.Clone(text)
+		path = strings.Clone(path)
+	}
 	spans := buildCodeSpans(c, text, path, base)
 	// A source that would take the whole budget is drawn but not kept, so one
 	// huge file cannot push every other preview out on each frame.
-	size := len(text) + len(spans)*highlightSpanCost
+	size := sourceBytes + len(spans)*highlightSpanCost
 	if size > highlightCacheBudget {
 		return spans
 	}

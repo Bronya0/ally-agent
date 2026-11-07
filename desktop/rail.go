@@ -425,7 +425,9 @@ func (a *desktop) workspaceSessions(workspace string) ([]backend.SessionIndexEnt
 		})
 		total := len(entries)
 		if len(entries) > 80 {
-			entries = entries[:80]
+			// Retain only the displayed prefix, not the full sorted backing
+			// array. The authoritative index still owns every session.
+			entries = append([]backend.SessionIndexEntry(nil), entries[:80]...)
 		}
 		return workspaceSessionList{entries: entries, total: total}
 	})
