@@ -60,7 +60,7 @@ Ally Native 是一款使用 Go 与 MyGo 绘制界面的桌面 AI 编程助手，
 3. 打开设置，配置模型服务、模型名称、API 地址和 API Key。
 4. 开始与 Ally 对话。
 
-Windows 发行包为 ZIP，解压后运行 `Ally.exe`。macOS 发行包为 DMG，应用使用免费的 ad-hoc 签名且未做公证；如果首次打开时被系统拦截，请在 Finder 中按住 Control 点击 `Ally.app`，再选择“打开”。Linux 提供 x64 和 ARM64 压缩包，当前需要手动下载和替换版本。
+Windows 发行包为 ZIP，解压后运行 `Ally.exe`。macOS 发行包为 DMG，将 `Ally.app` 拖入「应用程序」后打开。应用使用免费的 ad-hoc 签名且未做公证；如果首次打开时被系统拦截，确认下载来源可信后，在「系统设置 → 隐私与安全性」中选择「仍要打开」。Linux 提供 x64 和 ARM64 压缩包，当前需要手动下载和替换版本。
 
 Ally Native 沿用原版的 `~/.ally_agent` 配置和会话数据。常用快捷键：Enter 发送，Ctrl+Enter 换行，Esc 中断当前会话或工具调用。
 
