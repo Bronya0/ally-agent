@@ -19,10 +19,6 @@ Ally Agent 是一款轻量的原生桌面 AI 编程助手，使用 Go 与 [MyGo]
 
 ![代码认真写，大肥鱼认真陪](docs/imgs/companion.png)
 
-<p align="center">
-  <sub>社区同人素材，来源于 <a href="https://github.com/Small-tailqwq/dsh-deep-whale">dsh-deep-whale</a>，采用 CC BY-NC-SA 4.0；<a href="resources/avatar/whale/README.md">作者署名与素材说明</a>。</sub>
-</p>
-
 ![Ally Agent 实际运行演示（7.5 秒）](docs/imgs/preview-7.5s.gif)
 
 ## 主要功能
@@ -180,3 +176,5 @@ Ally 在部分实现细节上参考了下列项目与工程文章的做法，在
 - [Codex CLI](https://github.com/openai/codex) — Responses 协议的会话缓存键与用量字段处理
 - [pi](https://github.com/earendil-works/pi) — 编辑模糊匹配、上下文估算、思考档位能力判定、溢出恢复压缩
 - [OpenCode](https://github.com/sst/opencode) — 请求头与 User-Agent 等兼容性约定
+
+<sub>大肥鱼社区同人素材来源于 <a href="https://github.com/Small-tailqwq/dsh-deep-whale">dsh-deep-whale</a>，采用 CC BY-NC-SA 4.0；<a href="resources/avatar/whale/README.md">作者署名与素材说明</a>。</sub>
