@@ -203,6 +203,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				})
 			})
 		})
+		a.petSettings(c)
 		a.settingsCard(c, "settings-background", locales.Text("对话背景图"), locales.Text("淡色铺在对话区背景，建议不超过 12 MB。"), func() {
 			state := locales.Text("未设置背景图")
 			if a.configDraft.BackgroundImage != "" {
@@ -244,7 +245,6 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				}
 			})
 		})
-		a.petSettings(c)
 	}
 	if selected == 1 {
 		a.settingsCard(c, "settings-prompt", locales.Text("自定义提示词"), locales.Text("会随每次对话一起发送给模型，例如语言、回复长度与编码偏好。"), func() {
