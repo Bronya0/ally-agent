@@ -1,6 +1,6 @@
-# Ally Native
+# Ally Agent
 
-Ally Native 是一款轻量的原生桌面 AI 编程助手，使用 Go 与 [MyGo](https://github.com/egoist/mygo) 构建，支持 Windows、macOS 和 Linux。通过对话理解项目、修改代码、运行命令，也可以授权 SSH 节点，把工作交给远程主机。
+Ally Agent 是一款轻量的原生桌面 AI 编程助手，使用 Go 与 [MyGo](https://github.com/egoist/mygo) 构建，支持 Windows、macOS 和 Linux。通过对话理解项目、修改代码、运行命令，也可以授权 SSH 节点，把工作交给远程主机。
 
 **极低资源占用、多工作区并行开发、并行子代理、可选模型服务，还有一只陪你写代码的大肥鱼。**
 
@@ -23,7 +23,7 @@ Ally Native 是一款轻量的原生桌面 AI 编程助手，使用 Go 与 [MyGo
 
 前往 [Releases 页面](https://github.com/Bronya0/ally-agent/releases)下载 Windows、macOS 或 Linux 安装包。
 
-![Ally Native 实际运行演示（7.5 秒）](docs/imgs/preview-7.5s.gif)
+![Ally Agent 实际运行演示（7.5 秒）](docs/imgs/preview-7.5s.gif)
 
 ## 主要功能
 
@@ -70,7 +70,7 @@ Ally Native 是一款轻量的原生桌面 AI 编程助手，使用 Go 与 [MyGo
 
 Windows 发行包为 ZIP，解压后运行 `Ally.exe`。macOS 发行包为 DMG，将 `Ally.app` 拖入「应用程序」后打开。应用使用免费的 ad-hoc 签名且未做公证；如果首次打开时被系统拦截，确认下载来源可信后，在「系统设置 → 隐私与安全性」中选择「仍要打开」。Linux 提供 x64 和 ARM64 压缩包，当前需要手动下载和替换版本。
 
-Ally Native 沿用原版的 `~/.ally_agent` 配置和会话数据。常用快捷键：Enter 发送，Ctrl+Enter 换行，Esc 中断当前会话或工具调用。
+Ally Agent 沿用原版的 `~/.ally_agent` 配置和会话数据。常用快捷键：Enter 发送，Ctrl+Enter 换行，Esc 中断当前会话或工具调用。
 
 ## 大肥鱼陪你写代码
 
