@@ -2,7 +2,7 @@
 
 Ally Native 是一款轻量的原生桌面 AI 编程助手，使用 Go 与 [MyGo](https://github.com/egoist/mygo) 构建，支持 Windows、macOS 和 Linux。通过对话理解项目、修改代码、运行命令，也可以授权 SSH 节点，把工作交给远程主机。
 
-**多工作区、并行子代理、可选模型服务，还有一只陪你写代码的大肥鱼。**
+**极低资源占用、多工作区并行开发、并行子代理、可选模型服务，还有一只陪你写代码的大肥鱼。**
 
 <p align="center">
   <img src="resources/avatar/whale/delighted-320.webp" alt="Ally 的大肥鱼桌宠" width="200" height="200">
