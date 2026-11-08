@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#b6c9ea">
+  <title>Ally · 录屏背景</title>
+  <link rel="icon" href="assets/icon.png" type="image/png">
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --sky: #bed1ef;
+      --light: #fff4e3;
+      --bloom: #dac5e8;
+      --horizon: #f1e1e2;
+      --far-top: #c0c5e7;
+      --far-bottom: #a9b8dc;
+      --mid-top: #afc7e4;
+      --mid-bottom: #7b9ac8;
+      --near-top: #90b3d7;
+      --near-bottom: #6789b7;
+      --front-top: #87a7cf;
+      --front-bottom: #4c709f;
+      --edge: #e3edf6;
+      --mark: #345272;
+      --veil: .09;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+    body { background: var(--sky); }
+    body[data-scene="sage"] {
+      --sky: #dce7da;
+      --light: #fff7df;
+      --bloom: #e2cdb0;
+      --horizon: #edf0d4;
+      --far-top: #c1d5c0;
+      --far-bottom: #9bbbaf;
+      --mid-top: #aecbc1;
+      --mid-bottom: #78a6a0;
+      --near-top: #8ab6ab;
+      --near-bottom: #558e89;
+      --front-top: #78a89a;
+      --front-bottom: #3a726d;
+      --edge: #e9f0d5;
+      --mark: #34594d;
+      --veil: .08;
+    }
+    body[data-scene="night"] {
+      color-scheme: dark;
+      --sky: #18213b;
+      --light: #afb8e3;
+      --bloom: #695586;
+      --horizon: #597b9f;
+      --far-top: #48547b;
+      --far-bottom: #303958;
+      --mid-top: #37536f;
+      --mid-bottom: #203b52;
+      --near-top: #2c5765;
+      --near-bottom: #17384d;
+      --front-top: #284c60;
+      --front-bottom: #132b40;
+      --edge: #91bcc7;
+      --mark: #d6e4ed;
+      --veil: .05;
+    }
+    button, input { font: inherit; }
+    button { cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+    button:focus-visible, input:focus-visible { outline: 2px solid #abc6ff; outline-offset: 4px; }
+    [hidden] { display: none !important; }
+    .landscape { position: fixed; inset: 0; overflow: hidden; isolation: isolate; }
+    .sky { position: absolute; inset: 0; background: radial-gradient(ellipse at 76% 4%, var(--light) 0, transparent 46%), radial-gradient(ellipse at -3% 39%, var(--bloom) 0, transparent 61%), linear-gradient(180deg, var(--sky) 5%, var(--horizon) 77%, var(--mid-top)); }
+    .halo { position: absolute; width: 60vw; height: 60vw; min-width: 520px; min-height: 520px; border-radius: 50%; top: -30vw; right: -9vw; border: 1px solid #ffffff30; box-shadow: 0 0 0 40px #ffffff08, 0 0 0 105px #ffffff05; opacity: .65; }
+    .sun { position: absolute; top: 12%; right: 17%; width: clamp(80px, 8vw, 170px); aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #ffffffce, var(--light) 90%); box-shadow: 0 0 90px 30px #fff5e533; opacity: .62; }
+    body[data-scene="night"] .sun { width: clamp(65px, 6vw, 130px); top: 15%; right: 18%; opacity: .72; background: linear-gradient(135deg, #e1e8f3, #adb9d8); box-shadow: 0 0 65px 5px #cbd8ff1c; }
+    .ribbon { position: absolute; width: 115%; height: 37%; top: 27%; left: -7%; border-radius: 50%; background: linear-gradient(170deg, transparent 30%, #ffffff1a 47%, #ffffff0b 55%, transparent 70%); transform: rotate(-11deg); filter: blur(20px); }
+    .terrain { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .grain { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .055; mix-blend-mode: soft-light; pointer-events: none; }
+    .vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at 51% 36%, transparent 35%, #12344824); opacity: .45; pointer-events: none; }
+    .stars { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }
+    body[data-scene="night"] .stars { opacity: .7; }
+    .watermark { position: absolute; left: 5vw; bottom: 6vh; color: var(--mark); opacity: .72; user-select: none; }
+    .watermark strong { font-size: clamp(28px, 3vw, 52px); font-weight: 650; letter-spacing: -2px; }
+    .watermark span { display: block; margin-top: 6px; font: 10px/1.7 Consolas, monospace; letter-spacing: 3px; }
+    .controls { position: fixed; z-index: 2; left: 50%; bottom: 28px; transform: translateX(-50%); width: max-content; max-width: calc(100vw - 32px); padding: 17px 20px 14px; background: #162239e8; color: #e6ebf2; border: 1px solid #e6ebf220; border-radius: 18px; box-shadow: 0 12px 48px #0e20352b; backdrop-filter: blur(24px); }
+    .control-row { display: flex; align-items: center; gap: 22px; }
+    .control-title { font-size: 12px; font-weight: 550; color: #bdc9da; padding-right: 2px; }
+    .scenes { display: flex; gap: 6px; }
+    .scene-button { border: 1px solid transparent; border-radius: 8px; background: transparent; color: #c0cad8; padding: 8px 11px; display: inline-flex; gap: 7px; align-items: center; font-size: 12px; min-height: 36px; }
+    .scene-button:hover { background: #ffffff0d; }
+    .scene-button[aria-pressed="true"] { background: #ffffff10; border-color: #ffffff29; color: #edf2f8; }
+    .swatch { width: 14px; height: 14px; border-radius: 50%; box-shadow: inset 0 0 0 1px #ffffff26; }
+    .swatch-blue { background: linear-gradient(135deg, #f4dce4, #80a6d2); }
+    .swatch-sage { background: linear-gradient(135deg, #ede6bf, #72a69a); }
+    .swatch-night { background: linear-gradient(135deg, #6472a4, #204a5b); }
+    .divider { height: 22px; width: 1px; background: #ffffff1c; }
+    .watermark-toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: #c0cad8; cursor: pointer; white-space: nowrap; }
+    .watermark-toggle input { accent-color: #adc7e7; cursor: pointer; }
+    .actions { display: flex; gap: 8px; }
+    .action { border: 1px solid #ffffff25; background: #ffffff08; color: #e1e9f4; border-radius: 8px; padding: 8px 13px; font-size: 12px; white-space: nowrap; min-height: 36px; }
+    .action:hover { background: #ffffff16; }
+    .action-primary { color: #203149; background: #dbe7f5; border-color: #dbe7f5; }
+    .action-primary:hover { background: #edf3fa; }
+    .control-help { font-size: 10px; color: #abb9ce; text-align: center; margin: 12px 0 0; line-height: 1.8; letter-spacing: .15px; }
+    kbd { font: 10px Consolas, monospace; color: #d0dbee; padding: 1px 4px; border: 1px solid #ffffff23; border-radius: 3px; margin-inline: 2px; }
+    .toast { position: fixed; z-index: 3; bottom: 30px; left: 50%; transform: translateX(-50%); background: #162239dd; color: #d6e2f2; padding: 12px 19px; border: 1px solid #ffffff20; border-radius: 10px; font-size: 12px; text-align: center; max-width: calc(100vw - 32px); }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    @media (max-width: 740px) {
+      .controls { padding: 14px; bottom: 16px; }
+      .control-row { flex-wrap: wrap; justify-content: center; gap: 12px; }
+      .control-title, .divider { display: none; }
+      .control-help { margin-top: 11px; }
+      .scene-button { padding: 8px 10px; }
+      .watermark { bottom: 22vh; }
+      .sun { right: 12%; top: 16%; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+  </style>
+</head>
+<body data-scene="blue">
+  <main class="landscape" aria-label="用于 Ally 录屏的静态山峦背景">
+    <div class="sky" aria-hidden="true"></div>
+    <div class="halo" aria-hidden="true"></div>
+    <div class="sun" aria-hidden="true"></div>
+    <div class="ribbon" aria-hidden="true"></div>
+    <svg class="stars" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <g fill="#dce7f7"><circle cx="132" cy="132" r="1.2"/><circle cx="357" cy="84" r="1.4"/><circle cx="550" cy="185" r="1"/><circle cx="773" cy="76" r="1.5"/><circle cx="958" cy="214" r="1"/><circle cx="1152" cy="115" r="1.2"/><circle cx="1395" cy="57" r="1"/><circle cx="1742" cy="157" r="1.5"/><circle cx="1814" cy="301" r="1"/><circle cx="266" cy="330" r="1.1"/><circle cx="99" cy="478" r="1"/><circle cx="644" cy="299" r="1.2"/><circle cx="1637" cy="402" r="1"/><circle cx="1044" cy="366" r="1.3"/></g>
+    </svg>
+    <svg class="terrain" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="far" x1="0" y1="0" x2=".4" y2="1"><stop stop-color="var(--far-top)"/><stop offset="1" stop-color="var(--far-bottom)"/></linearGradient>
+        <linearGradient id="mid" x1=".3" y1="0" x2=".7" y2="1"><stop stop-color="var(--mid-top)"/><stop offset="1" stop-color="var(--mid-bottom)"/></linearGradient>
+        <linearGradient id="near" x1=".3" y1="0" x2=".55" y2="1"><stop stop-color="var(--near-top)"/><stop offset="1" stop-color="var(--near-bottom)"/></linearGradient>
+        <linearGradient id="front" x1=".35" y1="0" x2=".7" y2="1"><stop stop-color="var(--front-top)"/><stop offset="1" stop-color="var(--front-bottom)"/></linearGradient>
+        <linearGradient id="mist" x1="0" y1="0" x2="0" y2="1"><stop stop-color="var(--horizon)" stop-opacity="0"/><stop offset=".35" stop-color="var(--horizon)" stop-opacity=".5"/><stop offset="1" stop-color="var(--horizon)" stop-opacity="0"/></linearGradient>
+        <linearGradient id="edge" x1="0" y1="0" x2="1" y2="0"><stop stop-color="var(--edge)" stop-opacity="0"/><stop offset=".5" stop-color="var(--edge)" stop-opacity=".55"/><stop offset="1" stop-color="var(--edge)" stop-opacity="0"/></linearGradient>
+      </defs>
+      <path d="M-180 650C100 575 236 492 445 543S778 722 1044 628 1490 425 1685 481 1940 548 2110 432V1190H-180Z" fill="url(#far)"/>
+      <path d="M-180 719C91 629 290 696 543 736S988 622 1217 630 1630 793 2110 638V1190H-180Z" fill="url(#mid)"/>
+      <path d="M-180 649C120 581 344 832 641 829S1122 722 1390 754 1754 969 2110 711V1190H-180Z" fill="url(#near)"/>
+      <path d="M-180 920C162 834 319 948 638 997S1203 880 1420 887 1791 977 2110 885V1190H-180Z" fill="url(#front)"/>
+      <path d="M-180 649C120 581 344 832 641 829S1122 722 1390 754 1754 969 2110 711" fill="none" stroke="url(#edge)" stroke-width="1.5"/>
+      <path d="M-180 920C162 834 319 948 638 997S1203 880 1420 887 1791 977 2110 885" fill="none" stroke="url(#edge)" stroke-width="1.5"/>
+      <path d="M-180 920C162 834 319 948 638 997S1203 880 1420 887 1791 977 2110 885" transform="translate(0 12)" fill="none" stroke="url(#edge)" stroke-width=".65" opacity=".25"/>
+      <rect x="-180" y="445" width="2290" height="445" fill="url(#mist)" opacity=".28"/>
+      <rect x="-180" y="0" width="2290" height="1190" fill="var(--light)" opacity="var(--veil)"/>
+    </svg>
+    <svg class="grain" width="100%" height="100%" aria-hidden="true"><filter id="noise"><feTurbulence type="fractalNoise" baseFrequency=".75" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter><rect width="100%" height="100%" filter="url(#noise)"/></svg>
+    <div class="vignette" aria-hidden="true"></div>
+    <div class="watermark" id="watermark" hidden><strong>Ally</strong><span>A LITTLE ALLY. BIG IDEAS.</span></div>
+  </main>
+
+  <aside class="controls" id="controls" aria-label="录屏背景设置">
+    <div class="control-row">
+      <span class="control-title">录屏背景</span>
+      <div class="scenes" role="group" aria-label="背景配色">
+        <button class="scene-button" type="button" data-scene="blue" aria-pressed="true"><span class="swatch swatch-blue" aria-hidden="true"></span>雾蓝</button>
+        <button class="scene-button" type="button" data-scene="sage" aria-pressed="false"><span class="swatch swatch-sage" aria-hidden="true"></span>青屿</button>
+        <button class="scene-button" type="button" data-scene="night" aria-pressed="false"><span class="swatch swatch-night" aria-hidden="true"></span>夜航</button>
+      </div>
+      <span class="divider" aria-hidden="true"></span>
+      <label class="watermark-toggle"><input id="show-watermark" type="checkbox">Ally 水印</label>
+      <div class="actions">
+        <button class="action" id="hide-controls" type="button">隐藏面板</button>
+        <button class="action action-primary" id="fullscreen" type="button">全屏背景 ↗</button>
+      </div>
+    </div>
+    <p class="control-help">把 Ally 窗口放到背景前面即可录制。<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 切换配色 · <kbd>H</kbd> 隐藏 / 恢复面板 · <kbd>F</kbd> 全屏 · 双击空白处恢复</p>
+  </aside>
+  <div class="toast" id="toast" role="status" hidden></div>
+  <p class="sr-only" id="scene-status" role="status" aria-live="polite"></p>
+
+  <script>
+    (() => {
+      const sceneNames = { blue: '雾蓝', sage: '青屿', night: '夜航' };
+      const controls = document.getElementById('controls');
+      const buttons = document.querySelectorAll('.scene-button');
+      const watermark = document.getElementById('watermark');
+      const watermarkCheckbox = document.getElementById('show-watermark');
+      const toast = document.getElementById('toast');
+      const fullscreenButton = document.getElementById('fullscreen');
+      let toastTimer;
+      const setScene = scene => {
+        if (!Object.hasOwn(sceneNames, scene)) return;
+        document.body.dataset.scene = scene;
+        buttons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.scene === scene)));
+        document.getElementById('scene-status').textContent = `当前背景：${sceneNames[scene]}`;
+        document.querySelector('meta[name="theme-color"]').content = { blue: '#bed1ef', sage: '#dce7da', night: '#18213b' }[scene];
+        try { localStorage.setItem('ally-backdrop-scene', scene); } catch {}
+      };
+      const flash = message => {
+        clearTimeout(toastTimer);
+        toast.textContent = message;
+        toast.hidden = false;
+        toastTimer = setTimeout(() => { toast.hidden = true; }, 1800);
+      };
+      const hideControls = () => {
+        controls.hidden = true;
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        flash('按 H 或双击背景，恢复控制面板');
+      };
+      const showControls = () => {
+        controls.hidden = false;
+        clearTimeout(toastTimer);
+        toast.hidden = true;
+      };
+      const toggleFullscreen = async () => {
+        try {
+          if (document.fullscreenElement) await document.exitFullscreen();
+          else {
+            if (!document.documentElement.requestFullscreen) { flash('浏览器不支持页面全屏，可使用浏览器的全屏功能'); return; }
+            await document.documentElement.requestFullscreen();
+            hideControls();
+          }
+        } catch { flash('全屏未开启，请点击全屏按钮重试'); }
+      };
+      buttons.forEach(button => button.addEventListener('click', () => setScene(button.dataset.scene)));
+      watermarkCheckbox.addEventListener('change', () => { watermark.hidden = !watermarkCheckbox.checked; });
+      document.getElementById('hide-controls').addEventListener('click', hideControls);
+      fullscreenButton.addEventListener('click', toggleFullscreen);
+      document.querySelector('.landscape').addEventListener('dblclick', showControls);
+      document.addEventListener('fullscreenchange', () => {
+        fullscreenButton.textContent = document.fullscreenElement ? '退出全屏 ↙' : '全屏背景 ↗';
+        if (!document.fullscreenElement) showControls();
+      });
+      document.addEventListener('keydown', event => {
+        if (event.ctrlKey || event.metaKey || event.altKey || event.repeat || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName) || event.target.isContentEditable) return;
+        const key = event.key.toLowerCase();
+        if (key === 'h') { event.preventDefault(); controls.hidden ? showControls() : hideControls(); }
+        if (key === 'f') { event.preventDefault(); toggleFullscreen(); }
+        if (key === '1') setScene('blue');
+        if (key === '2') setScene('sage');
+        if (key === '3') setScene('night');
+      });
+      try { setScene(localStorage.getItem('ally-backdrop-scene') || 'blue'); } catch { setScene('blue'); }
+    })();
+  </script>
+</body>
+</html>

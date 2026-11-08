@@ -55,6 +55,7 @@ var markdownPalettes = []markdownColorPair{
 	{proseColors("#c5cdd2", "#8d9ca7", "#cee0e8", "#c9d9e1", "#b0cbd9", "#63b3d8", "#85bfd9", "#1d252b", "#2d3942"), proseColors("#2e3a41", "#687b85", "#264654", "#34505d", "#446b7a", "#4793b1", "#246b8e", "#edf4f7", "#d5e2e8")},
 	{proseColors("#c6cec8", "#8e9e94", "#d0e0d5", "#cbdacf", "#b3cbbb", "#6fbf8f", "#8ac9a2", "#1e2721", "#303d34"), proseColors("#303b33", "#6a7d6e", "#2c4935", "#38533f", "#4a6c54", "#6b9e79", "#346e47", "#eff5f0", "#d8e4da")},
 	{proseColors("#cdc9d5", "#9a91aa", "#ddd5ec", "#d5cde3", "#c6b9db", "#a68bea", "#bba2e6", "#25212d", "#393144"), proseColors("#38323f", "#7b6f88", "#49365c", "#514361", "#6b557f", "#9a7eb6", "#79529d", "#f4eff8", "#e1d8e9")},
+	{proseColors("#d7dedc", "#9aa6a3", "#d8e5da", "#ccdace", "#b8cfbc", "#9dbb9f", "#9dbb9f", "#212122", "#303031"), proseColors("#202d28", "#59665f", "#202d28", "#202d28", "#25624a", "#25624a", "#25624a", "#fcfcf9", "#dce2d8")},
 }
 
 func (a *desktop) readingColors() markdownColors {
@@ -71,7 +72,7 @@ func (a *desktop) readingColors() markdownColors {
 		colors.text = ui.Hex("#d7dedc")
 		colors.muted = ui.Hex("#9aa6a3")
 		colors.heading = ui.Hex("#e5e5e5")
-		seed := []string{"#8da5df", "#8da5df", "#e0a458", "#5b9cf6", "#57c98a", "#a78bfa"}[index]
+		seed := []string{"#8da5df", "#8da5df", "#e0a458", "#5b9cf6", "#57c98a", "#a78bfa", "#9dbb9f"}[index]
 		accent := ui.Hex(seed)
 		colors.strong = ui.Hex("#d4d4d4").Mix(accent, 0.35)
 		colors.code = accent.Mix(ui.Hex("#ffffff"), 0.28)
@@ -87,9 +88,15 @@ func (a *desktop) readingColors() markdownColors {
 		colors.muted = ui.Hex("#3a4154")
 		colors.heading = ui.Hex("#0f1219")
 		colors.strong = colors.heading
-		accent := []string{"#245fc2", "#245fc2", "#92530f", "#245fc2", "#217747", "#7042bd"}[index]
+		accent := []string{"#245fc2", "#245fc2", "#92530f", "#245fc2", "#217747", "#7042bd", "#25624a"}[index]
 		colors.code = ui.Hex(accent)
 		colors.link = colors.code
+		if index == paletteMeadow {
+			p := a.currentPalette()
+			colors.text, colors.muted = p.text, p.muted
+			colors.heading, colors.strong = p.text, p.text
+			colors.panel, colors.border = p.panel, p.line
+		}
 	}
 	return colors
 }

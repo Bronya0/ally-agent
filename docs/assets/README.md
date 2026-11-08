@@ -19,3 +19,8 @@ remain in [`resources/avatar/whale/`](../../resources/avatar/whale/).
 
 Product screenshots are reused directly from `docs/imgs/1.jpg` and
 `docs/imgs/2.jpg`.
+
+`docs/imgs/companion.png` is an export of the website's `#companion` card
+for the project README, including the whale artwork under the same
+CC BY-NC-SA 4.0 terms. `docs/imgs/preview-7.5s.gif` is a 7.5-second
+recording of Ally Native supplied by the project author.

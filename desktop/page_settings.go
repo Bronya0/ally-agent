@@ -150,7 +150,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 	selected := a.settingsModule(c, "settingsGeneral", "外观", "提示词", "路径", "对话行为", "应用", "语音输入")
 
 	if selected == 0 {
-		a.settingsCard(c, "settings-appearance", "主题与配色", "背景保持中性，强调色用于高亮和选中态。", func() {
+		a.settingsCard(c, "settings-appearance", "主题与配色", "选择外观模式与配色；青禾在浅色模式下使用官网同款配色。", func() {
 			note := "选择深色、浅色，或按本地时间自动切换。"
 			if a.prefs.Appearance == "auto" {
 				note = "07:00–17:59 浅色，18:00–06:59 深色。"
@@ -160,10 +160,10 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			}); mode.Changed() {
 				a.selectAppearance([]string{"dark", "light", "auto"}[a.settings.AppearanceMode])
 			}
-			a.settingsRow(c, "accent-row", "强调色", "只改变高亮与选中态，不改变基础背景。", settingsControlWidth, func() ui.Element {
+			a.settingsRow(c, "accent-row", "配色", "青禾搭配浅灰绿背景、纸白卡片与墨绿文字。", settingsControlWidth, func() ui.Element {
 				return uikit.OptionGroup(c.Key("accent-options")).Children(func() {
 					// Retired presets still resolve to blue without changing stored IDs.
-					for _, idx := range []int{paletteBlue, paletteAmber, paletteForest, paletteViolet} {
+					for _, idx := range []int{paletteBlue, paletteAmber, paletteForest, paletteViolet, paletteMeadow} {
 						idx := idx
 						p := palettes[idx]
 						selected := a.prefs.Palette == idx || (idx == paletteBlue && (a.prefs.Palette == paletteLight || a.prefs.Palette == paletteOcean))

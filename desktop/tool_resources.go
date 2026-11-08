@@ -598,7 +598,8 @@ func lineNumberColumn(key lineKey) string {
 }
 
 // Terminal heading and transcript have different roles, especially on light
-// surfaces. Keep the dark palette intact; avoid fading light output too far.
+// surfaces. Secondary ink already supplies the readable transcript tone;
+// fading it again would wash out the website's muted ink in the light preset.
 // secondary 是调用方的次要文字色：Theme.TextMuted 现在只作占位淡色。
 func commandLineInk(t *ui.Theme, secondary ...ui.Color) ui.Color {
 	if t.Dark {
@@ -607,8 +608,5 @@ func commandLineInk(t *ui.Theme, secondary ...ui.Color) ui.Color {
 	return t.Text.Mix(uikit.SecondaryInkOf(t, secondary...), 0.30)
 }
 func terminalOutputInk(t *ui.Theme, secondary ...ui.Color) ui.Color {
-	if t.Dark {
-		return uikit.SecondaryInkOf(t, secondary...)
-	}
-	return uikit.SecondaryInkOf(t, secondary...).Mix(t.Background, 0.12)
+	return uikit.SecondaryInkOf(t, secondary...)
 }

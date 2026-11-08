@@ -148,7 +148,8 @@ func colFaint() ui.Color  { return faint }
 func selectionFill(tone ui.Color) ui.Color { return uikit.SelectedFill(tone) }
 func selectionEdge(tone ui.Color) ui.Color { return uikit.SelectedStrokeColor(tone) }
 
-// palette is one appearance preset: a neutral surface pair plus an accent.
+// palette supplies an accent and optional light-mode surfaces. Existing accents
+// share the neutral bases; a complete light preset can override them together.
 //
 // The index into palettes is what native-ui.json stores as "palette", so an
 // entry may be retired but never deleted or reordered — an old value still has
@@ -164,6 +165,11 @@ type palette struct {
 	// chrome is the header's neutral base before its accent tint. The rail,
 	// explorer and active workspace tab share the main content background.
 	chrome ui.Color
+	// Complete presets can supply literal website colors instead of derived tints.
+	wordmark, accentHover, accentPressed, selection ui.Color
+	// light overrides the entire light surface set, without another preference
+	// or changing the existing appearance-mode switch.
+	light *palette
 }
 
 // chromeColor keeps both sidebars continuous with the main content surface.
@@ -205,15 +211,14 @@ const (
 	paletteOcean  = 3 // 海洋 — retired, remapped to paletteBlue
 	paletteForest = 4 // 森林
 	paletteViolet = 5 // 紫罗兰
+	paletteMeadow = 6 // 青禾 — the website's paper, ink and sage in light mode
 
 	// defaultPalette is the accent a profile without a saved choice starts on.
 	defaultPalette = paletteBlue
 )
 
-// The accents Settings → 外观 offers are paletteBlue, paletteAmber,
-// paletteForest and paletteViolet. paletteBlue doubles as the dark surface base
-// and paletteLight as the light one, so their bg/panel/line are in use even
-// when another entry supplies the accent.
+// paletteBlue and paletteLight supply the shared dark/light surface bases.
+// A preset with light surfaces replaces the light base as a complete set.
 var palettes = []palette{
 	// paletteBlue: dark base surface, and the default accent.
 	{name: "蓝色", dark: true, bg: ui.Hex("#1b1b1b"), panel: ui.Hex("#212122"), line: ui.Hex("#303031"), accent: ui.Hex("#8da5df"), accentText: ui.Hex("#15171d"), text: ui.Hex("#d4d4d4"), muted: ui.Hex("#909093"), hover: ui.Hex("#2b2b2e"), hint: ui.Hex("#5d5d62")},
@@ -228,6 +233,11 @@ var palettes = []palette{
 	{name: "森林", dark: true, bg: ui.Hex("#151a17"), panel: ui.Hex("#1a201c"), line: ui.Hex("#29362d"), accent: ui.Hex("#6fbf8f"), accentText: ui.Hex("#0e1511"), text: ui.Hex("#c4d2c8"), muted: ui.Hex("#889a8e"), hover: ui.Hex("#212b24"), hint: ui.Hex("#5a6960")},
 	// paletteViolet
 	{name: "紫罗兰", dark: true, bg: ui.Hex("#191722"), panel: ui.Hex("#1f1c29"), line: ui.Hex("#312c42"), accent: ui.Hex("#a68bea"), accentText: ui.Hex("#141019"), text: ui.Hex("#cfc8de"), muted: ui.Hex("#948aa8"), hover: ui.Hex("#292436"), hint: ui.Hex("#645c76")},
+	// paletteMeadow: literal tokens from docs/index.html, including card and button states.
+	{name: "青禾", dark: true, accent: ui.Hex("#9dbb9f"), light: &palette{
+		name: "青禾", bg: ui.Hex("#f6f7f2"), panel: ui.Hex("#fcfcf9"), line: ui.Hex("#dce2d8"), accent: ui.Hex("#25624a"), accentText: ui.Hex("#f2f5ef"), text: ui.Hex("#202d28"), muted: ui.Hex("#59665f"), hover: ui.Hex("#e6eddf"), hint: ui.Hex("#929a94"),
+		wordmark: ui.Hex("#202d28"), accentHover: ui.Hex("#1c4838"), accentPressed: ui.Hex("#163c2e"), selection: ui.Hex("#cfe1c4"),
+	}},
 }
 
 // lightAccents is the light-mode accent for the same indices. The dark pastels
@@ -240,6 +250,7 @@ var lightAccents = []ui.Color{
 	ui.Hex("#126f91"), // ocean
 	ui.Hex("#247649"), // forest
 	ui.Hex("#7850b8"), // violet
+	ui.Hex("#25624a"), // meadow
 }
 
 func (a *desktop) currentPalette() palette {
@@ -258,19 +269,25 @@ func (a *desktop) currentPalette() palette {
 		base = paletteLight
 	}
 	p := palettes[base]
+	if base == paletteLight && palettes[idx].light != nil {
+		p = *palettes[idx].light
+	}
+	p.name = palettes[idx].name
 	p.accent = palettes[idx].accent
 	if !p.dark {
 		// Light accents have their own saturated palette. Mixing a pastel dark
 		// accent with neutral text made every theme look grey-blue.
 		p.accent = lightAccents[idx]
 	}
-	p.accentText = palettes[base].accentText
 	return p
 }
 
 // wordmarkGradientColor approximates the original silver → accent → cool
 // silver → silver gradient at a point across the four-letter wordmark.
 func wordmarkGradientColor(p palette, at float32) ui.Color {
+	if p.wordmark.A != 0 {
+		return p.wordmark
+	}
 	silver := ui.Hex("#f8fafc")
 	coolSilver := ui.Hex("#d7dde8")
 	if !p.dark {
@@ -326,6 +343,12 @@ func (a *desktop) theme() *ui.Theme {
 		t.AccentHover = p.accent.Mix(p.text, 0.18)
 		t.AccentPressed = p.accent.Mix(p.text, 0.26)
 	}
+	if p.accentHover.A != 0 {
+		t.AccentHover = p.accentHover
+	}
+	if p.accentPressed.A != 0 {
+		t.AccentPressed = p.accentPressed
+	}
 	t.AccentText = p.accentText
 	t.Text = p.text
 	// TextMuted carries the placeholder tone: MyGo paints empty inputs in it.
@@ -342,6 +365,9 @@ func (a *desktop) theme() *ui.Theme {
 	}
 	t.Focus = p.accent
 	t.Selection = p.accent.Alpha(0.30)
+	if p.selection.A != 0 {
+		t.Selection = p.selection
+	}
 	t.Font = nativeFontFamily()
 	t.FontSize = 13
 	t.Radius = radiusControl
