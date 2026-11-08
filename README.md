@@ -4,12 +4,6 @@ Ally Agent 是一款轻量的原生桌面 AI 编程助手，使用 Go 与 [MyGo]
 
 **极低资源占用、多工作区并行开发、并行子代理、可选模型服务，还有一只陪你写代码的大肥鱼。**
 
-![代码认真写，大肥鱼认真陪](docs/imgs/companion.png)
-
-<p align="center">
-  <sub>社区同人素材，来源于 <a href="https://github.com/Small-tailqwq/dsh-deep-whale">dsh-deep-whale</a>，采用 CC BY-NC-SA 4.0；<a href="resources/avatar/whale/README.md">作者署名与素材说明</a>。</sub>
-</p>
-
 ⭐ 如果 Ally 帮到了你，欢迎在 GitHub 点个 Star，这是对项目最大的支持，谢谢！
 
 <p>
@@ -22,6 +16,12 @@ Ally Agent 是一款轻量的原生桌面 AI 编程助手，使用 Go 与 [MyGo]
 </p>
 
 前往 [Releases 页面](https://github.com/Bronya0/ally-agent/releases)下载 Windows、macOS 或 Linux 安装包。
+
+![代码认真写，大肥鱼认真陪](docs/imgs/companion.png)
+
+<p align="center">
+  <sub>社区同人素材，来源于 <a href="https://github.com/Small-tailqwq/dsh-deep-whale">dsh-deep-whale</a>，采用 CC BY-NC-SA 4.0；<a href="resources/avatar/whale/README.md">作者署名与素材说明</a>。</sub>
+</p>
 
 ![Ally Agent 实际运行演示（7.5 秒）](docs/imgs/preview-7.5s.gif)
 
