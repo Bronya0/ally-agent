@@ -4,6 +4,7 @@ package desktop
 import (
 	backend "ally-dev/internal/app"
 	"ally-dev/internal/tools/read"
+	"ally-dev/locales"
 	"context"
 	"encoding/json"
 	"os"
@@ -698,7 +699,7 @@ var _ = ui.Transparent
 
 func (a *desktop) prefsSaveResult(err error, notice []string) {
 	if err != nil {
-		a.notifyError("保存外观偏好失败：" + err.Error())
+		a.notifyError(locales.Text("保存外观偏好失败：") + err.Error())
 		return
 	}
 	if len(notice) > 0 {

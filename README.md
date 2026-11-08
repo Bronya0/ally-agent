@@ -1,3 +1,5 @@
+[简体中文](docs/README.zh-CN.md) · [English](docs/README.en.md) · [日本語](docs/README.ja.md) · [한국어](docs/README.ko.md)
+
 # Ally Agent
 
 Ally Agent 是一款轻量的原生桌面 AI 编程助手，使用 Go 与 [MyGo](https://github.com/egoist/mygo) 构建，支持 Windows、macOS 和 Linux。通过对话理解项目、修改代码、运行命令，也可以授权 SSH 节点，把工作交给远程主机。
@@ -55,7 +57,7 @@ Ally Agent 是一款轻量的原生桌面 AI 编程助手，使用 Go 与 [MyGo]
 - 欢迎页与桌宠提供大肥鱼、小机器人等内置形象，也可上传自己的图片。
 - Windows 与 macOS 支持自动下载更新并提示重启，Linux 提供版本检测与手动更新。
 - 可跟随 Windows 或 macOS 系统代理，也可手动配置 HTTP/HTTPS/SOCKS5 代理，统一应用到模型、HTTP 工具、MCP、命令和后台服务。
-- 提供中文和英文界面。
+- 支持中文、英语、日语和韩语界面；默认跟随系统语言，未匹配时回退英语，可在设置中即时切换。
 
 ## 开始使用
 

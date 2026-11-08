@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"encoding/json"
 	"github.com/egoist/mygo/ui"
 	"strings"
@@ -93,7 +94,7 @@ func (a *desktop) loadCommandDetail(t *conversation, index int, key string) {
 	st.CommandDetails[key] = detail
 	if a.core == nil || a.win == nil {
 		detail.Loading = false
-		detail.Error = "当前上下文暂不可用"
+		detail.Error = locales.Text("当前上下文暂不可用")
 		return
 	}
 	sessionID := t.ID
@@ -110,13 +111,13 @@ func (a *desktop) commandDetailView(c *ui.Context, t *conversation, index int, k
 	if detail == nil || detail.Loading {
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 			ui.Spinner(c).Size(12, 12)
-			ui.Text(c, "正在读取上下文结果…").FontSize(fsSmall).TextColor(a.secondaryInk())
+			ui.Text(c, locales.Text("正在读取上下文结果…")).FontSize(fsSmall).TextColor(a.secondaryInk())
 		})
 		return
 	}
 	if detail.Error != "" {
 		ui.Text(c, detail.Error).FontSize(fsSmall).TextColor(a.secondaryInk())
-		flat(c, "重试").OnClick(func() { delete(t.uiState().CommandDetails, key); a.loadCommandDetail(t, index, key) })
+		flat(c, locales.Text("重试")).OnClick(func() { delete(t.uiState().CommandDetails, key); a.loadCommandDetail(t, index, key) })
 		return
 	}
 	a.toolBody(c, t, index, "command", args, detail.Result, m)

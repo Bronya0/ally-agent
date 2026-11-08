@@ -3,6 +3,7 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -102,10 +103,10 @@ func normalizeImageModel(d backend.ImageModelConfig, keys []string, headers stri
 	d.BaseURL = strings.TrimRight(strings.TrimSpace(d.BaseURL), "/")
 	u, err := url.Parse(d.BaseURL)
 	if d.ProviderName == "" || d.Model == "" || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return d, fmt.Errorf("请填写供应商、模型 ID 和有效的 API 地址")
+		return d, fmt.Errorf("%s", locales.Text("请填写供应商、模型 ID 和有效的 API 地址"))
 	}
 	if d.Protocol != "openai-images" && d.Protocol != "xai-images" && d.Protocol != "minimax-images" {
-		return d, fmt.Errorf("请选择支持的图片协议")
+		return d, fmt.Errorf("%s", locales.Text("请选择支持的图片协议"))
 	}
 	d.APIKeys = nil
 	seen := map[string]bool{}
@@ -117,7 +118,7 @@ func normalizeImageModel(d backend.ImageModelConfig, keys []string, headers stri
 		}
 	}
 	if len(d.APIKeys) == 0 && requireKey {
-		return d, fmt.Errorf("请至少填写一个 API Key")
+		return d, fmt.Errorf("%s", locales.Text("请至少填写一个 API Key"))
 	}
 	d.APIKey = ""
 	if len(d.APIKeys) > 0 {
@@ -126,7 +127,7 @@ func normalizeImageModel(d backend.ImageModelConfig, keys []string, headers stri
 	d.CustomHeaders = nil
 	if strings.TrimSpace(headers) != "" {
 		if err := json.Unmarshal([]byte(headers), &d.CustomHeaders); err != nil || d.CustomHeaders == nil {
-			return d, fmt.Errorf("自定义请求头必须是字符串到字符串的 JSON 对象")
+			return d, fmt.Errorf("%s", locales.Text("自定义请求头必须是字符串到字符串的 JSON 对象"))
 		}
 	}
 	return d, nil
@@ -141,7 +142,7 @@ func (s *imageModelsState) replace(index int, next *backend.ImageModelConfig) er
 		key := imageIdentityKey(next.ProviderName, next.Model)
 		for i, m := range s.config.Models {
 			if i != index && imageIdentityKey(m.ProviderName, m.Model) == key {
-				return fmt.Errorf("该供应商下已有同名图片模型")
+				return fmt.Errorf("%s", locales.Text("该供应商下已有同名图片模型"))
 			}
 		}
 	}
@@ -212,7 +213,7 @@ func (a *desktop) applyImageConfig() {
 			a.config = cfg
 			s.config = cloneImages(cfg.ImageGeneration)
 			s.resetSelections()
-			a.notify("图片模型配置已保存")
+			a.notify(locales.Text("图片模型配置已保存"))
 		})
 	}()
 }

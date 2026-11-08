@@ -11,7 +11,7 @@ func TestFormRowUsesAvailableWidth(t *testing.T) {
 	for _, width := range []float32{900, 580, 360, 260} {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
 			value := "saved value"
-			tt := ui.NewTester(func(c *ui.Context) {
+			tt := chineseTester(func(c *ui.Context) {
 				ui.Column(c).Width(width).Children(func() {
 					FormCard(c, "card", "Preferences", "", func() {
 						FormRow(c, "field", "Editable", "A description that wraps instead of crowding the input.", FormControlWidth, func() ui.Element {
@@ -50,7 +50,7 @@ func TestFormRowUsesAvailableWidth(t *testing.T) {
 
 func TestFormRowKeepsFocusAndTextAcrossWrap(t *testing.T) {
 	width, value := float32(900), ""
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		ui.Column(c).Width(width).Children(func() {
 			FormCard(c, "card", "Preferences", "", func() {
 				FormRow(c, "field", "Editable", "", FormControlWidth, func() ui.Element {
@@ -79,7 +79,7 @@ func TestFormRowKeepsFocusAndTextAcrossWrap(t *testing.T) {
 
 func TestFormRowLabelTogglesOnlyItsSwitch(t *testing.T) {
 	first, second := false, true
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		FormCard(c, "card", "Preferences", "", func() {
 			FormRow(c, "first", "First switch", "", 40, func() ui.Element { return Switch(c, &first, "First switch") })
 			FormRow(c, "second", "Second switch", "", 40, func() ui.Element { return Switch(c, &second, "Second switch") })

@@ -2,11 +2,13 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"ally-dev/resources"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"strings"
 	"sync"
 	"time"
@@ -32,9 +34,10 @@ func mermaidDocument(source string, dark bool) string {
 		variables = `{darkMode:true,background:"#1b1b1b",primaryColor:"#263d63",primaryTextColor:"#e2e8f0",primaryBorderColor:"#7da7e0",secondaryColor:"#28564a",secondaryTextColor:"#e2e8f0",tertiaryColor:"#644b2c",tertiaryTextColor:"#e2e8f0",lineColor:"#9cacc4",textColor:"#e2e8f0",mainBkg:"#263d63",nodeBorder:"#7da7e0",clusterBkg:"#252d3a",clusterBorder:"#657c9d",edgeLabelBackground:"#252d3a",actorBkg:"#263d63",actorTextColor:"#e2e8f0",actorBorder:"#7da7e0",signalColor:"#b6c6df",signalTextColor:"#e2e8f0"}`
 	}
 	encoded, _ := json.Marshal(source)
-	return `<html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><style>html{color-scheme:` + map[bool]string{true: "dark", false: "light"}[dark] + `}body{margin:16px;background:` + bg + `;color:` + ink + `;font-family:'Microsoft YaHei',sans-serif}#diagram{display:flex;justify-content:center;min-height:120px}svg{max-width:100%;height:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><div id="diagram" role="img" aria-label="Mermaid 图表"></div><pre id="error" role="alert" hidden></pre><script>` + mermaidScript() + `</script><script>
+	errorText, _ := json.Marshal(locales.Text("图表渲染失败，请检查 Mermaid 语法：\n"))
+	return `<html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><style>html{color-scheme:` + map[bool]string{true: "dark", false: "light"}[dark] + `}body{margin:16px;background:` + bg + `;color:` + ink + `;font-family:'Microsoft YaHei',sans-serif}#diagram{display:flex;justify-content:center;min-height:120px}svg{max-width:100%;height:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body><div id="diagram" role="img" aria-label="` + html.EscapeString(locales.Text("Mermaid 图表")) + `"></div><pre id="error" role="alert" hidden></pre><script>` + mermaidScript() + `</script><script>
 mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'` + theme + `',themeVariables:` + variables + `,flowchart:{htmlLabels:false},suppressErrorRendering:true,maxTextSize:100000});
-(async()=>{try{const result=await mermaid.render('ally-diagram',` + string(encoded) + `);document.getElementById('diagram').innerHTML=result.svg;}catch(error){document.getElementById('diagram').remove();const out=document.getElementById('error');out.hidden=false;out.textContent='图表渲染失败，请检查 Mermaid 语法：\n'+String(error.message||error);}finally{window.__allyPreviewReady?.();}})();
+(async()=>{try{const result=await mermaid.render('ally-diagram',` + string(encoded) + `);document.getElementById('diagram').innerHTML=result.svg;}catch(error){document.getElementById('diagram').remove();const out=document.getElementById('error');out.hidden=false;out.textContent=` + string(errorText) + `+String(error.message||error);}finally{window.__allyPreviewReady?.();}})();
 </script></body></html>`
 }
 
@@ -50,9 +53,9 @@ func (a *desktop) mermaidView(c *ui.Context, block *markdown.CodeBlockView, scop
 		container.Children(func() {
 			ui.Text(c, "mermaid").FontSize(fsSmall).TextColor(a.secondaryInk())
 			ui.Spacer(c)
-			label := "查看源码"
+			label := locales.Text("查看源码")
 			if *source {
-				label = "查看图表"
+				label = locales.Text("查看图表")
 			}
 			flat(c, label).OnClick(func() { *source = !*source })
 			entry := a.previews.entries[key]
@@ -60,7 +63,7 @@ func (a *desktop) mermaidView(c *ui.Context, block *markdown.CodeBlockView, scop
 			if entry != nil && entry.request.Source == block.Code() && entry.request.Dark == a.currentPalette().dark && entry.surface != nil && !entry.surface.IsDestroyed() {
 				ready, _ = entry.surface.Status()
 			}
-			flat(c, "导出 SVG").Disabled(!ready).OnClick(func() { a.exportMermaidSVG(key) })
+			flat(c, locales.Text("导出 SVG")).Disabled(!ready).OnClick(func() { a.exportMermaidSVG(key) })
 			block.CopyButton(c)
 		})
 		if *source {
@@ -90,11 +93,11 @@ func (a *desktop) exportMermaidSVG(key string) {
 		}
 		svg, _ := value.(string)
 		if !strings.Contains(svg, "<svg") {
-			return errors.New("图表尚未渲染完成")
+			return errors.New(locales.Text("图表尚未渲染完成"))
 		}
 		path, err := a.core.ExportTextFile("diagram.svg", svg, "SVG", "*.svg")
 		if err == nil && path != "" {
-			a.win.Update(func() { a.notifySuccess("已导出：" + path) })
+			a.win.Update(func() { a.notifySuccess(locales.Text("已导出：") + path) })
 		}
 		return err
 	})

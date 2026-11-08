@@ -4,6 +4,7 @@ package desktop
 import (
 	"strings"
 
+	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -15,14 +16,17 @@ import (
 // differs per use (raw arguments, a log, a diff), so it stays generic instead of
 // each card growing its own copy of the compare-and-derive dance.
 type memoOf[K comparable, V any] struct {
-	ready bool
-	key   K
-	value V
+	ready  bool
+	key    K
+	value  V
+	locale string
 }
 
 func (m *memoOf[K, V]) get(key K, derive func(K) V) V {
-	if !m.ready || m.key != key {
+	locale := i18n.Locale()
+	if !m.ready || m.key != key || m.locale != locale {
 		m.key, m.value, m.ready = key, derive(key), true
+		m.locale = locale
 	}
 	return m.value
 }
@@ -32,13 +36,15 @@ func (m *memoOf[K, V]) get(key K, derive func(K) V) V {
 // keyAt lets callers compare just display/filter fields without copying full
 // configuration records on every frame. Derived indices read current records.
 type indexedMemo[K comparable, V any] struct {
-	keys  []K
-	query string
-	ready bool
-	value V
+	keys   []K
+	query  string
+	ready  bool
+	value  V
+	locale string
 }
 
 func (m *indexedMemo[K, V]) get(count int, query string, keyAt func(int) K, derive func() V) V {
+	locale := i18n.Locale()
 	changed := !m.ready || len(m.keys) != count
 	if !changed {
 		for i, key := range m.keys {
@@ -54,9 +60,10 @@ func (m *indexedMemo[K, V]) get(count int, query string, keyAt func(int) K, deri
 			m.keys[i] = keyAt(i)
 		}
 	}
-	if changed || m.query != query {
+	if changed || m.query != query || m.locale != locale {
 		m.value = derive()
 		m.query, m.ready = query, true
+		m.locale = locale
 	}
 	return m.value
 }

@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"fmt"
 	"regexp"
 	"strings"
@@ -574,24 +575,24 @@ func (a *desktop) chatSearchStatus(t *conversation) string {
 	case chatSearchIdle:
 		return ""
 	case chatSearchBadPattern:
-		return "正则有误"
+		return locales.Text("正则有误")
 	}
 	matches := a.chatSearchMatches(t)
 	if s.candidateTruncated {
 		if len(matches) == 0 {
-			return "未找到（正则候选过多，搜索已截断）"
+			return locales.Text("未找到（正则候选过多，搜索已截断）")
 		}
-		return fmt.Sprintf("%d of %d（正则候选过多，搜索已截断）", min(max(s.Current, 0), len(matches)-1)+1, len(matches))
+		return fmt.Sprintf(locales.Text("%d of %d（正则候选过多，搜索已截断）"), min(max(s.Current, 0), len(matches)-1)+1, len(matches))
 	}
 	if len(matches) == 0 {
 		if s.scanTruncated {
-			return fmt.Sprintf("未找到（仅搜索前 %d MiB）", chatSearchMaxBytes>>20)
+			return fmt.Sprintf(locales.Text("未找到（仅搜索前 %d MiB）"), chatSearchMaxBytes>>20)
 		}
-		return "无结果"
+		return locales.Text("无结果")
 	}
 	current := min(max(s.Current, 0), len(matches)-1) + 1
 	if s.scanTruncated {
-		return fmt.Sprintf("%d of %d（仅搜索前 %d MiB）", current, len(matches), chatSearchMaxBytes>>20)
+		return fmt.Sprintf(locales.Text("%d of %d（仅搜索前 %d MiB）"), current, len(matches), chatSearchMaxBytes>>20)
 	}
 	if len(matches) >= chatSearchMaxMatches {
 		// Say so rather than passing the cap off as the total.
@@ -604,14 +605,14 @@ func (a *desktop) chatSearchStatus(t *conversation) string {
 func (a *desktop) chatSearchBar(c *ui.Context, t *conversation) {
 	s := &t.uiState().Search
 	th := c.Theme()
-	bar := ui.Row(c.Key(t.ID+"-search-bar")).Label("对话查找").AlignItems(ui.Center).Gap(th.Space(1)).Wrap().
+	bar := ui.Row(c.Key(t.ID+"-search-bar")).Label(locales.Text("对话查找")).AlignItems(ui.Center).Gap(th.Space(1)).Wrap().
 		Padding(th.Space(1.5)).Background(th.Surface).Border(1, th.Border).Radius(th.Radius).
 		Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.18)).Shrink(0)
 	bar.Children(func() {
 		field := ui.TextInputBase(c.Key(t.ID+"-search-query"), &s.Query).
-			Width(th.Space(50)).MaxWidthPercent(100).MinWidth(80).Placeholder("在对话中查找").Padding(th.Space(1), th.Space(2)).
+			Width(th.Space(50)).MaxWidthPercent(100).MinWidth(80).Placeholder(locales.Text("在对话中查找")).Padding(th.Space(1), th.Space(2)).
 			Background(th.Background).Border(1, th.Border).Radius(th.Radius-2).FontSize(th.FontSize-1).
-			Label("在对话中查找").FocusBind(&a.chatSearchFocus, t.ID+"-search-query")
+			Label(locales.Text("在对话中查找")).FocusBind(&a.chatSearchFocus, t.ID+"-search-query")
 		field.OnTextKey(func(k ui.TextKey) bool {
 			switch k.Key {
 			case ui.KeyEscape:
@@ -645,14 +646,14 @@ func (a *desktop) chatSearchBar(c *ui.Context, t *conversation) {
 			}
 			b.Children(func() { ui.Text(c, label).FontSize(th.FontSize - 1) })
 		}
-		toggle(&s.MatchCase, "Aa", "区分大小写")
-		toggle(&s.WholeWord, "ab", "全词匹配")
-		toggle(&s.Regexp, ".*", "使用正则表达式")
+		toggle(&s.MatchCase, "Aa", locales.Text("区分大小写"))
+		toggle(&s.WholeWord, "ab", locales.Text("全词匹配"))
+		toggle(&s.Regexp, ".*", locales.Text("使用正则表达式"))
 		ui.Text(c, a.chatSearchStatus(t)).FontSize(th.FontSize - 2).TextColor(a.secondaryInk()).
 			FontFeatures("tnum").MinWidth(th.Space(16)).Role(ui.RoleStatus)
-		mutedIconAction(c, t.ID+"-search-prev", "上一个匹配", "arrowup", 24, func() { a.chatSearchStep(t, -1) }).Shrink(0)
-		mutedIconAction(c, t.ID+"-search-next", "下一个匹配", "arrowdown", 24, func() { a.chatSearchStep(t, 1) }).Shrink(0)
-		mutedIconAction(c, t.ID+"-search-close", "关闭查找（Esc）", "close", 24, func() { a.closeChatSearch(t) }).Shrink(0)
+		mutedIconAction(c, t.ID+"-search-prev", locales.Text("上一个匹配"), "arrowup", 24, func() { a.chatSearchStep(t, -1) }).Shrink(0)
+		mutedIconAction(c, t.ID+"-search-next", locales.Text("下一个匹配"), "arrowdown", 24, func() { a.chatSearchStep(t, 1) }).Shrink(0)
+		mutedIconAction(c, t.ID+"-search-close", locales.Text("关闭查找（Esc）"), "close", 24, func() { a.closeChatSearch(t) }).Shrink(0)
 	})
 }
 
@@ -1101,9 +1102,9 @@ func chatSearchCodePad(src, line string, at int) int {
 // chatSearchCodeLabel names a code block for a screen reader, as the renderer does.
 func chatSearchCodeLabel(language string) string {
 	if language == "" {
-		return "Code"
+		return locales.Text("代码")
 	}
-	return "Code, " + language
+	return locales.Text("代码") + ", " + language
 }
 
 // chatSearchBlockHasHit reports whether one of the message's hits starts in the

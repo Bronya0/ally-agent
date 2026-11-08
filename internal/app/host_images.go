@@ -2,6 +2,7 @@
 package app
 
 import (
+	"ally-dev/locales"
 	"github.com/egoist/mygo"
 	"os"
 	"path/filepath"
@@ -12,7 +13,7 @@ func (a *App) ExportGeneratedImage(ref string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	p, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Title: "保存原图", DefaultPath: generatedImageFilename(ref, meta.Mime)})
+	p, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Title: locales.Text("保存原图"), DefaultPath: generatedImageFilename(ref, meta.Mime)})
 	if err != nil || p == "" {
 		return p, err
 	}

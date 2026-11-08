@@ -3,6 +3,7 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -133,12 +134,12 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	case "run:start":
 		t.RunID = str(p, "runId")
 		t.Busy = true
-		t.Status = "正在连接模型…"
+		t.Status = locales.Text("正在连接模型…")
 		if t.CancelRequested && t.RunID != "" {
 			id := t.RunID
 			t.CancelRequested = false
 			a.job(func() error { return a.core.CancelRun(id) })
-			t.Status = "正在取消…"
+			t.Status = locales.Text("正在取消…")
 		}
 		ui.ThinkingBytes = 0
 		followLatest(t)
@@ -169,10 +170,10 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 				// block starts have to know without the transcript growing.
 				t.markHistoryAt(len(t.Messages) - 1)
 			}
-			t.Status = "正在回复…"
+			t.Status = locales.Text("正在回复…")
 		} else if n := int(num(p, "reasoningLen")); n > 0 {
 			ui.ThinkingBytes += n
-			t.Status = "正在思考…"
+			t.Status = locales.Text("正在思考…")
 		}
 		// Reasoning only changes the footer, not transcript geometry.
 		if content != "" && ui.Follow {
@@ -192,7 +193,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		ui.AskCustom = map[string]bool{}
 		ui.AskCustomTxt = map[string]string{}
 		ui.AskSubmitted = false
-		t.Status = "等待你的回答"
+		t.Status = locales.Text("等待你的回答")
 	case "ask:closed":
 		t.AskID = ""
 		t.Questions = nil
@@ -209,7 +210,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		if ui.Retry.Error == "" {
 			ui.Retry.Error = str(p, "reason")
 		}
-		t.Status = fmt.Sprintf("请求重试中（%d/%d）…", ui.Retry.Attempt, ui.Retry.MaxAttempts)
+		t.Status = fmt.Sprintf(locales.Text("请求重试中（%d/%d）…"), ui.Retry.Attempt, ui.Retry.MaxAttempts)
 	case "run:mcp-wait":
 		var names []string
 		for _, item := range list(p, "servers") {
@@ -222,9 +223,9 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			}
 		}
 		if len(names) > 0 {
-			t.Status = "正在等待 MCP：" + strings.Join(names, "、")
+			t.Status = locales.Text("正在等待 MCP：") + strings.Join(names, "、")
 		} else {
-			t.Status = "正在等待 MCP…"
+			t.Status = locales.Text("正在等待 MCP…")
 		}
 	case "run:compact":
 		// The automatic path announces its summary request before running it: this
@@ -263,7 +264,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		ui.CompactNote = ""
 		if msg := str(p, "error"); msg != "" {
 			if t == a.current() {
-				a.notify("上下文压缩失败：" + msg)
+				a.notify(locales.Text("上下文压缩失败：") + msg)
 			}
 			a.refreshSessionFooter(t)
 			return
@@ -279,7 +280,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		}
 	case "run:inject":
 		ui.ThinkingBytes = 0
-		t.Status = "已注入新消息，继续执行…"
+		t.Status = locales.Text("已注入新消息，继续执行…")
 	case "run:done", "run:error":
 		t.toolRev++
 		ui.ThinkingBytes = 0
@@ -294,11 +295,11 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		// keeping it would hold one extra copy of the whole answer per tab.
 		ui.Stream = nil
 		if name == "run:done" {
-			t.Status = "任务完成"
+			t.Status = locales.Text("任务完成")
 		} else {
 			msg := str(p, "error")
 			if msg == "" {
-				msg = "运行失败"
+				msg = locales.Text("运行失败")
 			}
 			t.Status = msg
 			appendRunError(t, msg)
@@ -450,7 +451,7 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 	}
 	toolName := str(p, "name")
 	if toolName != "" {
-		t.Status = "正在使用 " + toolName
+		t.Status = locales.Text("正在使用 ") + toolName
 	}
 	if t.uiState().Follow {
 		t.uiState().FollowPending = true
@@ -869,7 +870,7 @@ func (a *desktop) refreshSSH(manual ...bool) {
 			a.sshServers = servers
 			a.sshAllowed = allowed
 			if len(manual) > 0 && manual[0] {
-				a.notifySuccess("SSH 列表已刷新")
+				a.notifySuccess(locales.Text("SSH 列表已刷新"))
 			}
 		})
 	}()

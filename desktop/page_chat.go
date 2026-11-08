@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"fmt"
 	"math"
 	"slices"
@@ -88,7 +89,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 				a.chatSearchBar(c, t)
 			})
 		}
-		ui.Scroll(c.Key(t.ID + "-messages")).Label("聊天滚动区域").TrackScroll(&t.Scroll).Grow(1).MinHeight(0).HandleInput(func(ev ui.InputEvent) bool {
+		ui.Scroll(c.Key(t.ID + "-messages")).Label(locales.Text("聊天滚动区域")).TrackScroll(&t.Scroll).Grow(1).MinHeight(0).HandleInput(func(ev ui.InputEvent) bool {
 			if ev.Kind == ui.InputScroll && ev.DY < 0 {
 				st.Follow = false
 				st.FollowPending = false
@@ -109,15 +110,15 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 				}
 				if start > 0 {
 					olderCount := historyBlockIndex(t.blockStarts(), start)
-					transcriptAction(c, "history-older", fmt.Sprintf("更早消息（%d 块）", olderCount), "history").OnClick(func() {
+					transcriptAction(c, "history-older", fmt.Sprintf(locales.Text("更早消息（%d 块）"), olderCount), "history").OnClick(func() {
 						st.VisibleStart = previousHistoryPage(t, start, a.messageWindowSize()) + 1
 						st.Follow = false
 						t.Scroll.Y = 0
 					})
 				}
 				if end < len(t.Messages) {
-					transcriptAction(c, "history-newer", "更新消息").OnClick(func() { st.VisibleStart = end + 1; t.Scroll.Y = 0 })
-					transcriptAction(c, "history-latest", "回到最新").OnClick(func() { followLatest(t) })
+					transcriptAction(c, "history-newer", locales.Text("更新消息")).OnClick(func() { st.VisibleStart = end + 1; t.Scroll.Y = 0 })
+					transcriptAction(c, "history-latest", locales.Text("回到最新")).OnClick(func() { followLatest(t) })
 				}
 				for _, i := range st.visibleRows {
 					a.messageRow(c, t, i, rows)
@@ -131,10 +132,10 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 		if !st.Follow && t.Scroll.Y < t.Scroll.MaxY-40 {
 			ui.Box(c).Absolute().Right(18).Bottom(12).Children(func() {
 				ui.Column(c).Gap(gapTight).Children(func() {
-					iconAction(c, "chat-jump-up", "跳到上一条提问", "arrowup", 28, func() {
+					iconAction(c, "chat-jump-up", locales.Text("跳到上一条提问"), "arrowup", 28, func() {
 						a.jumpToPreviousPrompt(c, t)
 					})
-					iconAction(c, "chat-jump-down", "回到最新", "arrowdown", 28, func() {
+					iconAction(c, "chat-jump-down", locales.Text("回到最新"), "arrowdown", 28, func() {
 						followLatest(t)
 					})
 				})
@@ -333,13 +334,13 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 	content := str(m, "content")
 	p := a.currentPalette()
 	services := c.Services()
-	message := ui.Column(c.Key(widgetKey("user-bubble", t.ID, i))).Label("用户消息区域").AlignSelf(ui.End).AlignItems(ui.End).MaxWidthPercent(85).MinWidth(0).Gap(gapTight)
+	message := ui.Column(c.Key(widgetKey("user-bubble", t.ID, i))).Label(locales.Text("用户消息区域")).AlignSelf(ui.End).AlignItems(ui.End).MaxWidthPercent(85).MinWidth(0).Gap(gapTight)
 	message.Children(func() {
 		background := p.accent.Alpha(0.10)
 		if p.dark {
 			background = userBubbleDark
 		}
-		ui.Column(c.Key("bubble")).Label("用户消息").Selectable().MinWidth(0).Padding(10, 16).Radius(16).Background(background).Children(func() {
+		ui.Column(c.Key("bubble")).Label(locales.Text("用户消息")).Selectable().MinWidth(0).Padding(10, 16).Radius(16).Background(background).Children(func() {
 			ui.Column(c).MinWidth(0).Gap(gapInline).Children(func() {
 				if str(m, "skill") != "" || str(m, "skillArgs") != "" {
 					ui.Row(c).AlignItems(ui.Center).Gap(gapInline).Children(func() {
@@ -362,14 +363,14 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 		if show {
 			opacity = 1
 		}
-		actions := ui.Row(c.Key("actions")).Label("用户消息操作").Height(26).Gap(gapTight).Shrink(0)
+		actions := ui.Row(c.Key("actions")).Label(locales.Text("用户消息操作")).Height(26).Gap(gapTight).Shrink(0)
 		// IgnoreInput keeps an unseen button out of the pointer's way while a
 		// screen reader can still reach it, which Disabled takes away.
 		uikit.HoverFade(c, actions, opacity).Children(func() {
-			mutedIconAction(c, "copy", "复制提问", "copy", 26, func() {
+			mutedIconAction(c, "copy", locales.Text("复制提问"), "copy", 26, func() {
 				services.WriteClipboard(content)
 			}).IgnoreInput(!show).Shrink(0)
-			dangerIconAction(c, "delete", "删除该提问及之后", "trash", 26, func() {
+			dangerIconAction(c, "delete", locales.Text("删除该提问及之后"), "trash", 26, func() {
 				a.requestDeleteUserMessage(t, i)
 			}).IgnoreInput(!show).Disabled(t.Busy).Shrink(0)
 		})
@@ -406,9 +407,9 @@ func (a *desktop) collapsiblePrompt(c *ui.Context, t *conversation, i int, conte
 		options.ShareSelection = true
 		markdown.View(c, shown, options).FillWidth()
 		if long {
-			labelText := fmt.Sprintf("展开完整提问（%d 行，%d 字）", lines, runes)
+			labelText := fmt.Sprintf(locales.Text("展开完整提问（%d 行，%d 字）"), lines, runes)
 			if st.PromptOpen[i] {
-				labelText = "收起提问"
+				labelText = locales.Text("收起提问")
 			}
 			button(c, nil, labelText, btnSecondary, false, "chat").AlignSelf(ui.Start).OnClick(func() { st.PromptOpen[i] = !st.PromptOpen[i] })
 		}
@@ -496,7 +497,7 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 	}
 	row.Opacity(visible).IgnoreInput(!show)
 	row.Children(func() {
-		uikit.Tooltip(c, ui.Text(c, fmtDur(stat.DurationMS)).FontSize(fsSmall).TextColor(a.secondaryInk()), "本轮耗时")
+		uikit.Tooltip(c, ui.Text(c, fmtDur(stat.DurationMS)).FontSize(fsSmall).TextColor(a.secondaryInk()), locales.Text("本轮耗时"))
 		if hit := stat.CacheHit + stat.CacheMiss; hit > 0 {
 			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("cache %d%%", int(float64(stat.CacheHit)*100/float64(hit)))).FontSize(fsSmall).
 				TextColor(a.secondaryInk()), fmt.Sprintf("cache hit %d / miss %d", stat.CacheHit, stat.CacheMiss))
@@ -506,31 +507,31 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 				TextColor(a.secondaryInk()), fmt.Sprintf("input %d / output %d tokens", stat.InputTokens, stat.OutputTokens))
 		}
 		if modelSeconds > 0 && stat.OutputTokens > 0 {
-			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("%d token/s", int(float64(stat.OutputTokens)/modelSeconds))).FontSize(fsSmall).TextColor(a.secondaryInk()), "累计模型请求耗时内的平均输出速度，包含首 token 等待，不含工具执行时间")
+			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("%d token/s", int(float64(stat.OutputTokens)/modelSeconds))).FontSize(fsSmall).TextColor(a.secondaryInk()), locales.Text("累计模型请求耗时内的平均输出速度，包含首 token 等待，不含工具执行时间"))
 		}
 		services := c.Services()
-		iconMenu(c, widgetKey("export", "", i), "导出", "download", 22, 180, func(m ui.MenuParts) {
-			uikit.MenuItem(c, m, "answer", "导出回答", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
+		iconMenu(c, widgetKey("export", "", i), locales.Text("导出"), "download", 22, 180, func(m ui.MenuParts) {
+			uikit.MenuItem(c, m, "answer", locales.Text("导出回答"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
 				a.exportText("ally-response.md", str(t.Messages[i], "content"))
 			})
-			uikit.MenuItem(c, m, "session", "导出会话", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
+			uikit.MenuItem(c, m, "session", locales.Text("导出会话"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
 				a.exportText("ally-session.md", sessionMarkdown(t))
 			})
 		}, a.secondaryInk())
-		mutedIconAction(c, widgetKey("copy-summary", "", i), "复制总结", "copy", 22, func() {
+		mutedIconAction(c, widgetKey("copy-summary", "", i), locales.Text("复制总结"), "copy", 22, func() {
 			services.WriteClipboard(str(t.Messages[i], "content"))
-			c.Toast("已复制最终总结")
+			c.Toast(locales.Text("已复制最终总结"))
 		})
-		iconMenu(c, widgetKey("quick", "", i), "快捷消息", "wand", 22, 180, func(m ui.MenuParts) {
+		iconMenu(c, widgetKey("quick", "", i), locales.Text("快捷消息"), "wand", 22, 180, func(m ui.MenuParts) {
 			for _, item := range quickMessages {
 				item := item
-				uikit.MenuItem(c, m, item.label, item.label, uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
-					a.send(t, item.prompt)
+				uikit.MenuItem(c, m, item.label, locales.Text(item.label), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
+					a.send(t, locales.Text(item.prompt))
 				})
 			}
 		}, a.secondaryInk())
-		mutedIconAction(c, widgetKey("remember", "", i), "记住这次对话的长期记忆", "book", 22, func() {
-			a.send(t, projectMemoryPrompt+"\n\nLocal date for this memory update: "+time.Now().Format("2006-01-02")+".")
+		mutedIconAction(c, widgetKey("remember", "", i), locales.Text("记住这次对话的长期记忆"), "book", 22, func() {
+			a.send(t, locales.Text(projectMemoryPrompt)+"\n\nLocal date for this memory update: "+time.Now().Format("2006-01-02")+".")
 		})
 	})
 }
@@ -549,7 +550,7 @@ func (a *desktop) exportText(name, content string) {
 	a.job(func() error {
 		path, err := a.core.ExportTextFile(name, content, "Markdown", "*.md")
 		if err == nil && path != "" {
-			a.win.Update(func() { a.notify("已导出：" + path) })
+			a.win.Update(func() { a.notify(locales.Text("已导出：") + path) })
 		}
 		return err
 	})
@@ -566,7 +567,7 @@ func sessionMarkdown(t *conversation) string {
 		}
 		switch role {
 		case "user":
-			b.WriteString("## 你\n\n" + content + "\n\n")
+			b.WriteString(locales.Text("## 你\n\n") + content + "\n\n")
 		case "assistant":
 			b.WriteString("## Ally\n\n" + content + "\n\n")
 		}
@@ -609,12 +610,12 @@ func (a *desktop) deleteUserMessageDialog(c *ui.Context) {
 		return
 	}
 	modalCard(c, &d.Open, widthModalSmall, func() {
-		modalTitle(c, "删除该提问及之后？", "")
-		ui.Text(c, "将删除此提问及之后的所有对话，并同步清理模型上下文。此操作不可恢复。").
+		modalTitle(c, locales.Text("删除该提问及之后？"), "")
+		ui.Text(c, locales.Text("将删除此提问及之后的所有对话，并同步清理模型上下文。此操作不可恢复。")).
 			FontSize(fsSmall).TextColor(a.secondaryInk()).LineHeight(1.5).Selectable()
 		modalActions(c, func() {
-			flat(c, "取消").OnClick(func() { d.Open = false })
-			dangerButton(c, "删除").OnClick(func() { a.confirmDeleteUserMessage(d) })
+			flat(c, locales.Text("取消")).OnClick(func() { d.Open = false })
+			dangerButton(c, locales.Text("删除")).OnClick(func() { a.confirmDeleteUserMessage(d) })
 		})
 	})
 }
@@ -627,13 +628,15 @@ func (a *desktop) confirmDeleteUserMessage(d *deletePromptState) {
 	t := d.Conversation
 	index := d.MessageIndex
 	if t == nil || t.Busy || index < 0 || index >= len(t.Messages) || str(t.Messages[index], "content") != d.Content {
-		a.notify("对话已变化，请重新选择要删除的提问。")
+		a.notify(locales.Text("对话已变化，请重新选择要删除的提问。"))
 		return
 	}
 	request := backend.TruncateSessionHistoryRequest{SessionID: t.ID, UserMessageIndex: d.UserIndex, ExpectedContent: d.Content}
 	go func() {
 		if _, syncErr := a.core.TruncateSessionHistory(request); syncErr != nil {
-			a.win.Update(func() { a.notifyError("界面已删除，但模型上下文同步失败：" + syncErr.Error()) })
+			a.win.Update(func() {
+				a.notifyError(locales.Text("界面已删除，但模型上下文同步失败：") + syncErr.Error())
+			})
 		}
 		a.win.Update(func() {
 			if index <= len(t.Messages) {
@@ -672,27 +675,27 @@ func resetTranscriptAfterDelete(t *conversation, index int) {
 func (a *desktop) welcomeView(c *ui.Context, t *conversation) {
 	availableSkills := a.enabledSkillNames()
 	now := time.Now()
-	greeting := "上午好"
+	greeting := locales.Text("上午好")
 	switch {
 	case now.Hour() < 6:
-		greeting = "夜深了"
+		greeting = locales.Text("夜深了")
 	case now.Hour() < 12:
-		greeting = "上午好"
+		greeting = locales.Text("上午好")
 	case now.Hour() < 14:
-		greeting = "中午好"
+		greeting = locales.Text("中午好")
 	case now.Hour() < 18:
-		greeting = "下午好"
+		greeting = locales.Text("下午好")
 	default:
-		greeting = "晚上好"
+		greeting = locales.Text("晚上好")
 	}
 	ui.Column(c).Key("welcome").Padding(36, 0, 12).Gap(gapPage).Children(func() {
 		ui.Row(c).Gap(22).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Width(170).AlignItems(ui.Center).Gap(gapSection).Children(func() {
-				img := ui.Column(c.Key("welcome-avatar")).Size(150, 150).Center().Label("欢迎页头像")
+				img := ui.Column(c.Key("welcome-avatar")).Size(150, 150).Center().Label(locales.Text("欢迎页头像"))
 				img.Children(func() { a.avatarDrawing(c) })
-				hint := "点击头像：切换樱花特效"
+				hint := locales.Text("点击头像：切换樱花特效")
 				if !a.prefs.Pet.Enabled {
-					hint = "点击头像：摸摸头并切换樱花特效"
+					hint = locales.Text("点击头像：摸摸头并切换樱花特效")
 				}
 				uikit.Tooltip(c, img.Cursor(ui.CursorPointer), hint)
 				if img.Clicked() {
@@ -705,15 +708,15 @@ func (a *desktop) welcomeView(c *ui.Context, t *conversation) {
 			})
 			ui.Column(c).Grow(1).Border(1, surfaceBorder(c)).Radius(radiusCard).Children(func() {
 				rows := [][4]string{
-					{"工作区", workspaceLabel(t.Workspace), "Bash", a.config.GitBashPath},
-					{"模型", strings.ReplaceAll(t.Model, " / ", " · "), "MCP", a.mcpSummary},
-					{"技能", fmt.Sprintf("%d 个可用", len(availableSkills)), "工具", fmt.Sprintf("%d 个工具", a.toolCount)},
+					{locales.Text("工作区"), workspaceLabel(t.Workspace), "Bash", a.config.GitBashPath},
+					{locales.Text("模型"), strings.ReplaceAll(t.Model, " / ", " · "), "MCP", a.mcpSummary},
+					{locales.Text("技能"), fmt.Sprintf(locales.Text("%d 个可用"), len(availableSkills)), locales.Text("工具"), fmt.Sprintf(locales.Text("%d 个工具"), a.toolCount)},
 				}
 				if rows[0][3] == "" {
-					rows[0][3] = "自动检测"
+					rows[0][3] = locales.Text("自动检测")
 				}
 				if rows[1][3] == "" {
-					rows[1][3] = "无 MCP 服务"
+					rows[1][3] = locales.Text("无 MCP 服务")
 				}
 				for i, row := range rows {
 					ui.Row(c).Key(fmt.Sprintf("welcome-row-%d", i)).MinHeight(40).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).AlignItems(ui.Center).Children(func() {
@@ -758,19 +761,19 @@ func (a *desktop) welcomeView(c *ui.Context, t *conversation) {
 				}
 			})
 		})
-		ui.Text(c, fmt.Sprintf("今天是 %d月%d日 %s，现在是 %02d:%02d。%s，我们把注意力放回眼前，先解决最重要的一件事。",
-			now.Month(), now.Day(), []string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}[now.Weekday()], now.Hour(), now.Minute(), greeting)).
+		ui.Text(c, fmt.Sprintf(locales.Text("今天是 %d月%d日 %s，现在是 %02d:%02d。%s，我们把注意力放回眼前，先解决最重要的一件事。"),
+			now.Month(), now.Day(), []string{locales.Text("周日"), locales.Text("周一"), locales.Text("周二"), locales.Text("周三"), locales.Text("周四"), locales.Text("周五"), locales.Text("周六")}[now.Weekday()], now.Hour(), now.Minute(), greeting)).
 			FontSize(15).Bold().LineHeight(1.8)
 	})
 }
 
 func (a *desktop) welcomePopover(c *ui.Context, anchor ui.Element, open *bool, row, col int) {
 	popoverPanel(c, anchor, open, 320, func() {
-		title := "MCP 服务"
+		title := locales.Text("MCP 服务")
 		if row == 2 && col == 0 {
-			title = "可用技能"
+			title = locales.Text("可用技能")
 		} else if row == 2 {
-			title = "工具"
+			title = locales.Text("工具")
 		}
 		ui.Text(c, title).FontSize(fsSection).Bold().Padding(gapInline, padCard)
 		ui.Scroll(c).MaxHeight(260).Children(func() {
@@ -778,27 +781,27 @@ func (a *desktop) welcomePopover(c *ui.Context, anchor ui.Element, open *bool, r
 				switch {
 				case row == 1:
 					if len(a.mcpServers) == 0 {
-						fieldNote(c, "无 MCP 服务", a.secondaryInk())
+						fieldNote(c, locales.Text("无 MCP 服务"), a.secondaryInk())
 					}
 					for _, server := range a.mcpServers {
-						ui.Text(c, fmt.Sprintf("%s · %s · %d 个工具", str(server, "name"), mcpStatusText(str(server, "status")), int(num(server, "toolCount")))).FontSize(fsSmall).TextColor(a.secondaryInk())
+						ui.Text(c, fmt.Sprintf(locales.Text("%s · %s · %d 个工具"), str(server, "name"), mcpStatusText(str(server, "status")), int(num(server, "toolCount")))).FontSize(fsSmall).TextColor(a.secondaryInk())
 					}
 				case col == 0:
 					names := a.enabledSkillNames()
 					if len(names) == 0 {
-						fieldNote(c, "当前没有可用技能", a.secondaryInk())
+						fieldNote(c, locales.Text("当前没有可用技能"), a.secondaryInk())
 					}
 					for _, name := range names {
 						ui.Text(c, name).FontSize(fsSmall)
 					}
 				default:
 					if len(a.toolInventory) == 0 {
-						fieldNote(c, "暂无工具", a.secondaryInk())
+						fieldNote(c, locales.Text("暂无工具"), a.secondaryInk())
 					}
 					for _, tool := range a.toolInventory {
 						suffix := ""
 						if !tool.Enabled {
-							suffix = "（已停用）"
+							suffix = locales.Text("（已停用）")
 						}
 						ui.Text(c, tool.Name+suffix).FontSize(fsSmall)
 					}
@@ -806,11 +809,11 @@ func (a *desktop) welcomePopover(c *ui.Context, anchor ui.Element, open *bool, r
 			})
 		})
 		divider(c)
-		label, page := "管理 MCP 服务", "mcp"
+		label, page := locales.Text("管理 MCP 服务"), "mcp"
 		if row == 2 && col == 0 {
-			label, page = "管理技能", "skills"
+			label, page = locales.Text("管理技能"), "skills"
 		} else if row == 2 {
-			label = "管理内置工具"
+			label = locales.Text("管理内置工具")
 		}
 		popoverItem(c, fmt.Sprintf("welcome-manage-%d-%d", row, col), label, "", false, func() {
 			*open = false
@@ -842,15 +845,15 @@ func (a *desktop) enabledSkillNames() []string {
 func mcpStatusText(status string) string {
 	switch status {
 	case "connected":
-		return "已连接"
+		return locales.Text("已连接")
 	case "connecting":
-		return "连接中"
+		return locales.Text("连接中")
 	case "failed", "error":
-		return "连接失败"
+		return locales.Text("连接失败")
 	case "disabled":
-		return "已停用"
+		return locales.Text("已停用")
 	}
-	return "未连接"
+	return locales.Text("未连接")
 }
 
 // ---- Plan panel ----------------------------------------------------------
@@ -962,13 +965,13 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 		Background(p.panel).Radius(radiusCard).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(gapField).Children(func() {
 			statusDot(c, "warn")
-			ui.Text(c, "Ally 需要你的输入").Bold().FontSize(fsBody)
-			neutralChip(c, fmt.Sprintf("%d 个问题", len(t.Questions)))
+			ui.Text(c, locales.Text("Ally 需要你的输入")).Bold().FontSize(fsBody)
+			neutralChip(c, fmt.Sprintf(locales.Text("%d 个问题"), len(t.Questions)))
 			ui.Spacer(c)
-			fieldNote(c, fmt.Sprintf("%d/%d 已回答", answered, len(t.Questions)), a.secondaryInk())
+			fieldNote(c, fmt.Sprintf(locales.Text("%d/%d 已回答"), answered, len(t.Questions)), a.secondaryInk())
 		})
 		ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
-			iconAction(c, "ask-prev", "上一题", "chevron", 22, func() {
+			iconAction(c, "ask-prev", locales.Text("上一题"), "chevron", 22, func() {
 				if st.AskIndex > 0 {
 					st.AskIndex--
 				}
@@ -978,7 +981,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 				choiceButton(c, fmt.Sprintf("ask-tab-%d", n), fmt.Sprint(n+1), n == index, c.Theme().Accent).
 					OnClick(func() { st.AskIndex = n })
 			}
-			iconAction(c, "ask-next", "下一题", "chevron", 22, func() {
+			iconAction(c, "ask-next", locales.Text("下一题"), "chevron", 22, func() {
 				if st.AskIndex < len(t.Questions)-1 {
 					st.AskIndex++
 				}
@@ -1005,7 +1008,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 							st.AskSelected[q.ID] = toggleString(st.AskSelected[q.ID], opt.ID, checked)
 						}
 						if opt.Recommended {
-							accentChip(c, "推荐")
+							accentChip(c, locales.Text("推荐"))
 						}
 					})
 					if opt.Description != "" {
@@ -1023,19 +1026,19 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 				custom = !custom
 			}
 			customRow.Children(func() {
-				ui.Checkbox(c.Key("ask-custom-"+q.ID), &custom, "自定义回答")
+				ui.Checkbox(c.Key("ask-custom-"+q.ID), &custom, locales.Text("自定义回答"))
 			})
 			st.AskCustom[q.ID] = custom
 			if custom {
 				txt := st.AskCustomTxt[q.ID]
-				uikit.Area(c.Key("ask-custom-text-"+q.ID), &txt).Placeholder("输入你的回答").Height(70)
+				uikit.Area(c.Key("ask-custom-text-"+q.ID), &txt).Placeholder(locales.Text("输入你的回答")).Height(70)
 				st.AskCustomTxt[q.ID] = txt
 			}
 		})
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 			ui.Spacer(c)
 			disabled := answered < len(t.Questions) || st.AskSubmitted
-			primary(c, "提交回答").Disabled(disabled).OnClick(func() { a.submitAsk(t) })
+			primary(c, locales.Text("提交回答")).Disabled(disabled).OnClick(func() { a.submitAsk(t) })
 		})
 	})
 }
@@ -1251,5 +1254,5 @@ func userCancelledMessage(m map[string]any) bool {
 	return false
 }
 func cancelledResult(c *ui.Context, ink ...ui.Color) {
-	ui.Text(c, "用户已取消").FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink)).Selectable()
+	ui.Text(c, locales.Text("用户已取消")).FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink)).Selectable()
 }

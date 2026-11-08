@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"ally-dev/resources"
 	"encoding/json"
 	"log"
@@ -68,12 +69,12 @@ func (a *desktop) releaseNotesDialog(c *ui.Context) {
 		modalBackdrop(backdrop)
 		modalPanelChrome(c, panel, widthModalWide)
 		ui.Column(c).FillWidth().Gap(gapSection).Selectable().Children(func() {
-			modalTitle(c, "本次更新", "版本 "+a.upd.ReleaseVer+" · 新版本首次启动时显示一次")
-			ui.Scroll(c.Key("release-notes-scroll")).FillWidth().MinHeight(0).MaxHeight(min(560, h*0.62)).Label("版本亮点正文").Children(func() {
+			modalTitle(c, locales.Text("本次更新"), locales.Text("版本 ")+a.upd.ReleaseVer+locales.Text(" · 新版本首次启动时显示一次"))
+			ui.Scroll(c.Key("release-notes-scroll")).FillWidth().MinHeight(0).MaxHeight(min(560, h*0.62)).Label(locales.Text("版本亮点正文")).Children(func() {
 				a.releaseNotesMarkdown(c, &a.upd.ReleaseDialogMD, "release-notes-dialog-markdown")
 			})
 			modalActions(c, func() {
-				primary(c, "关闭").OnClick(a.closeReleaseNotes)
+				primary(c, locales.Text("关闭")).OnClick(a.closeReleaseNotes)
 			})
 		})
 	})

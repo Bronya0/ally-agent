@@ -9,6 +9,7 @@ package desktop
 // left showing a conversation the next request no longer contains.
 
 import (
+	"ally-dev/locales"
 	"fmt"
 	"maps"
 	"strings"
@@ -34,9 +35,9 @@ const (
 // user knows how much history is being rewritten while it runs.
 func compactStartNote(p map[string]any) string {
 	if messages := int(num(p, "messages")); messages > 0 {
-		return fmt.Sprintf("正在压缩对话上下文（%d 条消息，约 %s tokens）…", messages, fmtK(int(num(p, "tokensBefore"))))
+		return fmt.Sprintf(locales.Text("正在压缩对话上下文（%d 条消息，约 %s tokens）…"), messages, fmtK(int(num(p, "tokensBefore"))))
 	}
-	return "正在压缩对话上下文…"
+	return locales.Text("正在压缩对话上下文…")
 }
 
 // compactPreviewIndex returns the row currently streaming the summary, if any.
@@ -174,7 +175,7 @@ func fastCompactNote(result map[string]any) string {
 	if summaries, ok := result["toolSummaries"].(map[string]any); ok {
 		tools = len(summaries)
 	}
-	return fmt.Sprintf("已裁剪 %d 条旧回复、%d 条旧工具结果和 %d 条旧思考内容。保留最近 %d 轮工具调用及后续消息；不足时保留最近 %d 条回复。旧回复只留首尾摘录，总计最多约 8k tokens，超额清除更早正文。旧工具调用参数已清空。用户消息与最新计划保留，不调用模型。",
+	return fmt.Sprintf(locales.Text("已裁剪 %d 条旧回复、%d 条旧工具结果和 %d 条旧思考内容。保留最近 %d 轮工具调用及后续消息；不足时保留最近 %d 条回复。旧回复只留首尾摘录，总计最多约 8k tokens，超额清除更早正文。旧工具调用参数已清空。用户消息与最新计划保留，不调用模型。"),
 		int(num(result, "assistantCount")), tools, int(num(result, "reasoningCount")), keep, keep)
 }
 
@@ -184,13 +185,13 @@ func fastCompactNoop(result map[string]any) string {
 	if keep <= 0 {
 		keep = 4
 	}
-	return fmt.Sprintf("没有可快速压缩的旧内容（保留最近 %d 轮工具调用或回复）", keep)
+	return fmt.Sprintf(locales.Text("没有可快速压缩的旧内容（保留最近 %d 轮工具调用或回复）"), keep)
 }
 
 // compactToastText is the one compaction report both the manual and the
 // automatic path show, so the two never disagree about what just happened.
 func compactToastText(before, after int) string {
-	return fmt.Sprintf("上下文已压缩：%s → %s tokens", fmtK(before), fmtK(after))
+	return fmt.Sprintf(locales.Text("上下文已压缩：%s → %s tokens"), fmtK(before), fmtK(after))
 }
 
 // applyFastCompaction mirrors the local trim the backend just wrote to the
@@ -306,7 +307,7 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 func compactionToast(result map[string]any) string {
 	text := compactToastText(int(num(result, "tokensBefore")), int(num(result, "tokensAfter")))
 	if str(result, "tier") == "fast" {
-		text += "（本地估算）"
+		text += locales.Text("（本地估算）")
 	}
 	return text
 }

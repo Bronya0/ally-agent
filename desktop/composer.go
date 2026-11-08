@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -50,9 +51,9 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 			a.voiceStatusRow(c)
 		}
 		ui.Row(c.Key("composer-input-row")).Gap(gapField).AlignItems(ui.End).Children(func() {
-			input := ui.TextAreaBase(c.Key(t.ID+"-draft"), &t.Draft).Label("消息输入框").
+			input := ui.TextAreaBase(c.Key(t.ID+"-draft"), &t.Draft).Label(locales.Text("消息输入框")).
 				FocusBind(&a.composerFocus, t.ID).
-				Placeholder(composerHint).
+				Placeholder(locales.Text(composerHint)).
 				MinHeight(58).MaxHeight(576).Lines(1, 24).Padding(c.Theme().Space(1.5), c.Theme().Space(2.5)).FontSize(fsBody).TextColor(c.Theme().Text).MinWidth(0).Radius(radiusControl).
 				Background(p.bg).Disabled(a.closing || (a.page == "kb" && a.kbIndexMissing())).Grow(1)
 			border := c.Theme().Border
@@ -99,7 +100,7 @@ func (a *desktop) cancelConversation(t *conversation) {
 		return
 	}
 	if t.Busy {
-		t.Status = "正在取消…"
+		t.Status = locales.Text("正在取消…")
 		if t.RunID == "" {
 			t.CancelRequested = true
 		} else {
@@ -107,7 +108,7 @@ func (a *desktop) cancelConversation(t *conversation) {
 			a.job(func() error { return a.core.CancelRun(id) })
 		}
 	} else if st.CompactBusy {
-		st.CompactNote = "正在取消压缩…"
+		st.CompactNote = locales.Text("正在取消压缩…")
 		sid := t.ID
 		a.job(func() error { return a.core.CancelCompaction(sid) })
 	}
@@ -394,16 +395,20 @@ type slashCommand struct {
 
 func (a *desktop) builtinCommands(t *conversation) []slashCommand {
 	return []slashCommand{
-		{"new", "新建会话，清空上下文", "", func() { a.newSession() }},
-		{"skills", "查看可用技能", "", func() { a.changePage("skills") }},
-		{"sessions", "查看/切换历史会话", "", func() { a.openSessionsMenu(t) }},
-		{"init", "分析项目并生成 AGENTS.md", "", func() { a.send(t, "请分析这个项目，生成或更新 AGENTS.md。") }},
-		{"note", "保存长期记忆", "", func() { a.send(t, projectMemoryPrompt) }},
-		{"lesson", "总结易踩坑并更新 LESSONS.md", "", func() { a.send(t, "请总结这次对话里容易踩坑的地方，并更新 LESSONS.md。") }},
-		{"review", "审查当前改动", "", func() { a.send(t, "请审查当前工作区最近的改动，指出真实缺陷与回归风险。") }},
-		{"compact", "压缩上下文（调用模型总结）", "", func() { a.compact(t, false) }},
-		{"compact-fast", "本地裁剪上下文，不调模型", "", func() { a.compact(t, true) }},
-		{"push", "提交并推送", "", func() { a.send(t, "请检查改动并提交，然后推送到远端。") }},
+		{"new", locales.Text("新建会话，清空上下文"), "", func() { a.newSession() }},
+		{"skills", locales.Text("查看可用技能"), "", func() { a.changePage("skills") }},
+		{"sessions", locales.Text("查看/切换历史会话"), "", func() { a.openSessionsMenu(t) }},
+		{"init", locales.Text("分析项目并生成 AGENTS.md"), "", func() { a.send(t, locales.Text("请分析这个项目，生成或更新 AGENTS.md。")) }},
+		{"note", locales.Text("保存长期记忆"), "", func() { a.send(t, projectMemoryPrompt) }},
+		{"lesson", locales.Text("总结易踩坑并更新 LESSONS.md"), "", func() {
+			a.send(t, locales.Text("请总结这次对话里容易踩坑的地方，并更新 LESSONS.md。"))
+		}},
+		{"review", locales.Text("审查当前改动"), "", func() {
+			a.send(t, locales.Text("请审查当前工作区最近的改动，指出真实缺陷与回归风险。"))
+		}},
+		{"compact", locales.Text("压缩上下文（调用模型总结）"), "", func() { a.compact(t, false) }},
+		{"compact-fast", locales.Text("本地裁剪上下文，不调模型"), "", func() { a.compact(t, true) }},
+		{"push", locales.Text("提交并推送"), "", func() { a.send(t, locales.Text("请检查改动并提交，然后推送到远端。")) }},
 	}
 }
 
@@ -517,17 +522,17 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation, anchor ui.Element)
 		}
 	}
 	p := a.currentPalette()
-	composerPopover(c.Key(t.ID+"-cmd-menu"), anchor, &st.CmdOpen, "指令面板", 360, func(panel ui.Element) {
+	composerPopover(c.Key(t.ID+"-cmd-menu"), anchor, &st.CmdOpen, locales.Text("指令面板"), 360, func(panel ui.Element) {
 		selected := ui.Local(panel, "selected-row", func() string { return "" })
 		ui.Row(c).Padding(gapInline, padCard).Gap(gapField).Children(func() {
-			ui.Text(c, fmt.Sprintf("指令 %d · 技能 %d", builtin, skills)).FontSize(fsTiny).TextColor(a.secondaryInk())
+			ui.Text(c, fmt.Sprintf(locales.Text("指令 %d · 技能 %d"), builtin, skills)).FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
-			fieldNote(c, "↑↓ 选择 · Enter 执行 · Tab 补全", a.secondaryInk())
+			fieldNote(c, locales.Text("↑↓ 选择 · Enter 执行 · Tab 补全"), a.secondaryInk())
 		})
-		ui.Scroll(c.Key("commands-list")).Label("指令列表").Grow(1).MinHeight(0).Children(func() {
+		ui.Scroll(c.Key("commands-list")).Label(locales.Text("指令列表")).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).Padding(0, 4, 4).Gap(1).Children(func() {
 				if len(items) == 0 {
-					fieldNote(c, "无匹配指令", a.secondaryInk())
+					fieldNote(c, locales.Text("无匹配指令"), a.secondaryInk())
 				}
 				for i, item := range items {
 					i, item := i, item
@@ -552,19 +557,19 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation, anchor ui.Element)
 
 func (a *desktop) mentionMenu(c *ui.Context, t *conversation, anchor ui.Element) {
 	st := t.uiState()
-	composerPopover(c.Key(t.ID+"-mention-menu"), anchor, &st.Mention.Open, "文件引用面板", 240, func(panel ui.Element) {
+	composerPopover(c.Key(t.ID+"-mention-menu"), anchor, &st.Mention.Open, locales.Text("文件引用面板"), 240, func(panel ui.Element) {
 		selected := ui.Local(panel, "selected-row", func() string { return "" })
 		ui.Row(c).Padding(gapInline, padCard).Children(func() {
-			ui.Text(c, "@ 文件和目录").FontSize(fsTiny).TextColor(a.secondaryInk())
+			ui.Text(c, locales.Text("@ 文件和目录")).FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
 			ui.Text(c, st.Mention.Meta).FontSize(fsTiny).TextColor(a.secondaryInk())
 		})
-		ui.Scroll(c.Key("mentions-list")).Label("文件引用列表").Grow(1).MinHeight(0).Children(func() {
+		ui.Scroll(c.Key("mentions-list")).Label(locales.Text("文件引用列表")).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).Padding(0, 4, 4).Gap(1).Children(func() {
 				if st.Mention.Loading && len(st.Mention.Entries) == 0 {
-					busyRow(c, "索引中…", a.secondaryInk())
+					busyRow(c, locales.Text("索引中…"), a.secondaryInk())
 				} else if len(st.Mention.Entries) == 0 {
-					fieldNote(c, "没有匹配路径", a.secondaryInk())
+					fieldNote(c, locales.Text("没有匹配路径"), a.secondaryInk())
 				}
 				for i, entry := range st.Mention.Entries {
 					i, entry := i, entry
@@ -638,18 +643,18 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation, anchor ui.Element
 	// the index in range keeps exactly one row selected.
 	st.SessionsIndex = max(0, min(st.SessionsIndex, len(sessions)-1))
 	p := a.currentPalette()
-	composerPopover(c.Key(t.ID+"-sessions-menu"), anchor, &st.SessionsOpen, "历史会话面板", 360, func(panel ui.Element) {
+	composerPopover(c.Key(t.ID+"-sessions-menu"), anchor, &st.SessionsOpen, locales.Text("历史会话面板"), 360, func(panel ui.Element) {
 		selection := ui.Local(panel, "selected-row", func() string { return "" })
 		ui.Row(c).Padding(gapInline, padCard).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, fmt.Sprintf("会话 (%d)", total)).FontSize(fsTiny).TextColor(a.secondaryInk())
+			ui.Text(c, fmt.Sprintf(locales.Text("会话 (%d)"), total)).FontSize(fsTiny).TextColor(a.secondaryInk())
 			ui.Spacer(c)
-			fieldNote(c, "↑↓ 选择 · Enter 打开", a.secondaryInk())
-			iconAction(c, "sess-close", "关闭", "close", 20, func() { st.SessionsOpen = false })
+			fieldNote(c, locales.Text("↑↓ 选择 · Enter 打开"), a.secondaryInk())
+			iconAction(c, "sess-close", locales.Text("关闭"), "close", 20, func() { st.SessionsOpen = false })
 		})
-		ui.Scroll(c.Key("sessions-list")).Label("历史会话列表").Grow(1).MinHeight(0).Children(func() {
+		ui.Scroll(c.Key("sessions-list")).Label(locales.Text("历史会话列表")).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).Padding(0, 4, 4).Gap(1).Children(func() {
 				if len(sessions) == 0 {
-					fieldNote(c, "当前工作区暂无历史会话", a.secondaryInk())
+					fieldNote(c, locales.Text("当前工作区暂无历史会话"), a.secondaryInk())
 					other := 0
 					for _, s := range a.sessions {
 						if !sameWorkspace(s.Workspace, t.Workspace) {
@@ -657,7 +662,7 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation, anchor ui.Element
 						}
 					}
 					if other > 0 {
-						fieldNote(c, fmt.Sprintf("其他工作区还有 %d 个（切换工作区后可见）", other), a.secondaryInk())
+						fieldNote(c, fmt.Sprintf(locales.Text("其他工作区还有 %d 个（切换工作区后可见）"), other), a.secondaryInk())
 					}
 				}
 				for i, s := range sessions {
@@ -679,23 +684,23 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation, anchor ui.Element
 						}
 						ui.Text(c, fmt.Sprint(i+1)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk())
 						ui.Text(c, fmtTime(s.UpdatedAt)).FontSize(fsTiny).TextColor(a.secondaryInk())
-						ui.Text(c, fmt.Sprintf("%d条", s.MessageCount)).FontSize(fsTiny).TextColor(a.secondaryInk())
+						ui.Text(c, fmt.Sprintf(locales.Text("%d条"), s.MessageCount)).FontSize(fsTiny).TextColor(a.secondaryInk())
 						title := s.Title
 						if title == "" {
-							title = "会话"
+							title = locales.Text("会话")
 						}
 						label := ui.Text(c, short(title, 50)).FontSize(fsSmall).SingleLine()
 						if selected {
 							label.TextColor(p.accent).FontWeight(600)
 						}
 						if s.ID == t.ID {
-							accentChip(c, "当前")
+							accentChip(c, locales.Text("当前"))
 						}
 						if busy {
 							ui.Box(c).Size(5, 5).Radius(3).Background(p.accent)
 						}
 						ui.Spacer(c)
-						iconAction(c, "sess-del-"+s.ID, "删除会话", "close", 18, func() {
+						iconAction(c, "sess-del-"+s.ID, locales.Text("删除会话"), "close", 18, func() {
 							a.deleteSession(s.ID, title)
 						}).Disabled(busy)
 					})
@@ -729,7 +734,7 @@ func (a *desktop) composerStatusRow(c *ui.Context, t *conversation) {
 			ui.Spinner(c).Size(13, 13)
 			note := st.CompactNote
 			if note == "" {
-				note = "正在压缩对话上下文…"
+				note = locales.Text("正在压缩对话上下文…")
 			}
 			ui.Text(c, note).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine().MinWidth(0)
 			if count := compactThinkingTokens(st); count > 0 {
@@ -810,11 +815,11 @@ func (a *desktop) retryBanner(c *ui.Context, info *retryInfo) {
 	ui.Row(c).FillWidth().Padding(5, 10).Gap(gapField).Radius(radiusSmall).AlignItems(ui.Center).
 		Background(ui.RGBA(217, 164, 65, 0.10)).Children(func() {
 		iconGlyph(c, "refresh", 13).TextColor(c.Theme().Warning)
-		msg := fmt.Sprintf("重试中 %d/%d：%s", info.Attempt, info.MaxAttempts, info.Error)
+		msg := fmt.Sprintf(locales.Text("重试中 %d/%d：%s"), info.Attempt, info.MaxAttempts, info.Error)
 		uikit.Tooltip(c, ui.Text(c, short(msg, 120)).FontSize(fsTiny).TextColor(c.Theme().Warning).SingleLine(), msg)
 		ui.Spacer(c)
 		if info.TotalKeys > 1 {
-			ui.Text(c, fmt.Sprintf("第 %d/%d 个 Key 失败", info.KeyIndex+1, info.TotalKeys)).FontSize(fsTiny).TextColor(p.muted)
+			ui.Text(c, fmt.Sprintf(locales.Text("第 %d/%d 个 Key 失败"), info.KeyIndex+1, info.TotalKeys)).FontSize(fsTiny).TextColor(p.muted)
 		}
 	})
 }
@@ -822,15 +827,17 @@ func (a *desktop) retryBanner(c *ui.Context, info *retryInfo) {
 func (a *desktop) kbActionBar(c *ui.Context, t *conversation) {
 	running := t.Busy
 	if a.kbIndexMissing() {
-		composerFlat(c, "初始化知识库").Disabled(running).OnClick(func() { a.send(t, "请创建知识库根索引 index.md 与分类结构。") })
-		fieldNote(c, "请先初始化知识库", a.secondaryInk())
+		composerFlat(c, locales.Text("初始化知识库")).Disabled(running).OnClick(func() { a.send(t, locales.Text("请创建知识库根索引 index.md 与分类结构。")) })
+		fieldNote(c, locales.Text("请先初始化知识库"), a.secondaryInk())
 		return
 	}
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-		composerFlat(c, "资料入库").Disabled(running).OnClick(func() { a.send(t, "请把 sources/ 里新增的资料整理入库，并更新索引。") })
-		composerFlat(c, "整理索引").Disabled(running).OnClick(func() { a.send(t, "请检查并整理知识库索引，修正过期或重复的条目。") })
+		composerFlat(c, locales.Text("资料入库")).Disabled(running).OnClick(func() { a.send(t, locales.Text("请把 sources/ 里新增的资料整理入库，并更新索引。")) })
+		composerFlat(c, locales.Text("整理索引")).Disabled(running).OnClick(func() {
+			a.send(t, locales.Text("请检查并整理知识库索引，修正过期或重复的条目。"))
+		})
 		if running {
-			fieldNote(c, "知识库任务运行中…", a.secondaryInk())
+			fieldNote(c, locales.Text("知识库任务运行中…"), a.secondaryInk())
 		}
 	})
 }
@@ -856,15 +863,15 @@ func (a *desktop) kbIndexMissing() bool {
 func (a *desktop) composerInfoBar(c *ui.Context, t *conversation) {
 	p := a.currentPalette()
 	ui.Row(c).FillWidth().MinWidth(0).Gap(2).AlignItems(ui.Center).Children(func() {
-		addButton(c, "composer-new", "新建会话", "plus", 26, func() { a.newSession() })
-		iconAction(c, "composer-sessions", "查看和切换历史会话", "menu", 26, func() {
+		addButton(c, "composer-new", locales.Text("新建会话"), "plus", 26, func() { a.newSession() })
+		iconAction(c, "composer-sessions", locales.Text("查看和切换历史会话"), "menu", 26, func() {
 			a.toggleSessionsMenu(t)
 		}).KeepFocus().TextColor(p.muted)
 		a.modelSelector(c, t)
 		a.reasoningSelector(c, t)
 		a.workspaceButton(c, t)
 		a.extraRootsButton(c, t)
-		mutedIconAction(c, "composer-terminal", "在终端中打开工作区", "terminal", 26, func() {
+		mutedIconAction(c, "composer-terminal", locales.Text("在终端中打开工作区"), "terminal", 26, func() {
 			req := backend.WorkspacePathRequest{Workspace: t.Workspace}
 			a.job(func() error { return a.core.OpenWorkspaceTerminalAt(req) })
 		})
@@ -875,7 +882,7 @@ func (a *desktop) composerInfoBar(c *ui.Context, t *conversation) {
 				running++
 			}
 		}
-		footerBadge(c, "footer-services", "S", fmt.Sprint(running), ui.Hex("#6486d8"), fmt.Sprintf("后台服务 · 运行中 %d", running), func() {
+		footerBadge(c, "footer-services", "S", fmt.Sprint(running), ui.Hex("#6486d8"), fmt.Sprintf(locales.Text("后台服务 · 运行中 %d"), running), func() {
 			a.tasksF.Tab = 0
 			a.taskPopup = true
 			a.loadTaskCenter()
@@ -886,7 +893,7 @@ func (a *desktop) composerInfoBar(c *ui.Context, t *conversation) {
 				tasksRunning++
 			}
 		}
-		footerBadge(c, "footer-scheduled", "C", fmt.Sprint(tasksRunning), ui.Hex("#b49143"), fmt.Sprintf("定时任务 · 运行中 %d", tasksRunning), func() {
+		footerBadge(c, "footer-scheduled", "C", fmt.Sprint(tasksRunning), ui.Hex("#b49143"), fmt.Sprintf(locales.Text("定时任务 · 运行中 %d"), tasksRunning), func() {
 			a.tasksF.Tab = 1
 			a.taskPopup = true
 			a.loadTaskCenter()
@@ -900,7 +907,7 @@ func (a *desktop) composerInfoBar(c *ui.Context, t *conversation) {
 func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 	label := t.Model
 	if label == "" {
-		label = "选择模型"
+		label = locales.Text("选择模型")
 	}
 	st := t.uiState()
 	wasOpen := st.ModelOpen
@@ -910,9 +917,9 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 		text.TextColor(a.secondaryInk())
 		if t.Busy {
 			b.Cursor(ui.CursorDefault)
-			uikit.Tooltip(c, b, "运行中锁定：本轮结束后切换才生效")
+			uikit.Tooltip(c, b, locales.Text("运行中锁定：本轮结束后切换才生效"))
 		} else {
-			uikit.Tooltip(c, b, "切换模型")
+			uikit.Tooltip(c, b, locales.Text("切换模型"))
 		}
 		if st.ModelOpen && !wasOpen {
 			st.ModelSearch = ""
@@ -922,7 +929,7 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 		hover := uikit.NewHoverMenus(body)
 		rows := map[string]ui.Element{}
 		body.Children(func() {
-			input := uikit.Input(c.Key("model-menu-search"), &st.ModelSearch).Placeholder("搜索模型或供应商").Label("搜索模型或供应商").FillWidth()
+			input := uikit.Input(c.Key("model-menu-search"), &st.ModelSearch).Placeholder(locales.Text("搜索模型或供应商")).Label(locales.Text("搜索模型或供应商")).FillWidth()
 			hover.ClearOnHover(input)
 			query := strings.ToLower(strings.TrimSpace(st.ModelSearch))
 			models := a.config.Models
@@ -960,7 +967,7 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 						continue
 					}
 					if !shownRecent {
-						head := ui.Text(c, "最近使用").FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(gapInline, padCard)
+						head := ui.Text(c, locales.Text("最近使用")).FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(gapInline, padCard)
 						hover.ClearOnHover(head)
 						shownRecent = true
 					}
@@ -1027,10 +1034,10 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 				row.Gap(gapField)
 			}
 			if len(groups) == 0 {
-				fieldNote(c, "没有匹配的模型", a.secondaryInk())
+				fieldNote(c, locales.Text("没有匹配的模型"), a.secondaryInk())
 			}
 			divider(c)
-			manage := uikit.MenuItem(c, m, "manage", "管理模型", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.changePage("models") })
+			manage := uikit.MenuItem(c, m, "manage", locales.Text("管理模型"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.changePage("models") })
 			hover.ClearOnHover(manage)
 			hover.Popup(c, body, func(id string) ui.Element { return rows[id] }, uikit.MenuOptions{Width: 260, MaxHeight: 360}, func(provider string, child ui.MenuParts) {
 				for _, i := range groups[provider] {
@@ -1124,10 +1131,10 @@ func (a *desktop) reasoningSelector(c *ui.Context, t *conversation) {
 	}
 	btn := uikit.CompactMenu(c.Key("composer-reasoning"), &t.Reasoning, reasoningLevels, t.Busy, func(level string) {
 		a.rememberReasoning(t, level)
-	}).Label("思考强度")
-	tip := "思考强度（需模型支持，不支持的模型请保持 auto）"
+	}).Label(locales.Text("思考强度"))
+	tip := locales.Text("思考强度（需模型支持，不支持的模型请保持 auto）")
 	if t.Busy {
-		tip = "运行中锁定：本轮结束后切换才生效"
+		tip = locales.Text("运行中锁定：本轮结束后切换才生效")
 	}
 	uikit.Tooltip(c, btn, tip)
 }
@@ -1168,9 +1175,9 @@ func (a *desktop) rememberReasoning(t *conversation, level string) {
 				if t.Model == model {
 					t.Reasoning = persistedReasoning(fresh, model)
 				}
-				a.notify("这个模型已不在模型配置里，思考强度没改")
+				a.notify(locales.Text("这个模型已不在模型配置里，思考强度没改"))
 			case reasoningSaved:
-				a.notifySuccess("思考强度已改为 " + level)
+				a.notifySuccess(locales.Text("思考强度已改为 ") + level)
 			}
 		})
 	}()
@@ -1259,9 +1266,9 @@ func withModelReasoning(cfg backend.ConfigState, option, level string) (backend.
 // its own, the same 26px box and 16px glyph as the icons beside it, with the
 // workspace and its path in the tip. The name already shows in the header tab.
 func (a *desktop) workspaceButton(c *ui.Context, t *conversation) {
-	tip := "在文件管理器中打开工作区：" + t.Workspace
+	tip := locales.Text("在文件管理器中打开工作区：") + t.Workspace
 	if t.Workspace == "" {
-		tip = "尚未选择工作区"
+		tip = locales.Text("尚未选择工作区")
 	}
 	mutedIconAction(c, "composer-workspace", tip, "folderopen", 26, func() {
 		if t.Workspace != "" {
@@ -1279,16 +1286,16 @@ func (a *desktop) extraRootsButton(c *ui.Context, t *conversation) {
 	p := a.currentPalette()
 	roots := a.extraRoots[t.ID]
 	count := len(roots)
-	tip := "附加目录：会话级附加工作区，添加后允许写入其他工作区。"
+	tip := locales.Text("附加目录：会话级附加工作区，添加后允许写入其他工作区。")
 	if count > 0 {
-		tip = fmt.Sprintf("附加目录（%d 个）：添加后允许写入其他工作区。", count)
+		tip = fmt.Sprintf(locales.Text("附加目录（%d 个）：添加后允许写入其他工作区。"), count)
 	}
 	st := t.uiState()
 	uikit.MenuButton(c.Key("composer-extra-roots"), &st.ExtraRootsOpen, uikit.MenuOptions{
-		Width: 300, MaxHeight: 320, MaxHeightPercent: 75, Label: "附加工作区菜单",
+		Width: 300, MaxHeight: 320, MaxHeightPercent: 75, Label: locales.Text("附加工作区菜单"),
 		At: ui.AnchorTopLeft, Self: ui.AnchorBottomLeft, Gap: 6,
 	}, func(b ui.Element) {
-		b = uikit.Tooltip(c, b.Height(26).MinWidth(26).Padding(0, 3).Gap(2).Radius(radiusSmall).Center().Label("附加目录"), tip).Cursor(ui.CursorPointer)
+		b = uikit.Tooltip(c, b.Height(26).MinWidth(26).Padding(0, 3).Gap(2).Radius(radiusSmall).Center().Label(locales.Text("附加目录")), tip).Cursor(ui.CursorPointer)
 		color, fill := p.muted, ui.Transparent
 		if count > 0 || st.ExtraRootsOpen {
 			color = p.accent
@@ -1308,14 +1315,14 @@ func (a *desktop) extraRootsButton(c *ui.Context, t *conversation) {
 		})
 	}, func(m ui.MenuParts) {
 		if len(roots) == 0 {
-			muted(c, "尚未添加附加工作区", fsSmall, a.secondaryInk()).Padding(8, 10)
+			muted(c, locales.Text("尚未添加附加工作区"), fsSmall, a.secondaryInk()).Padding(8, 10)
 		}
 		for _, root := range roots {
 			root := root
-			uikit.MenuItem(c, m, root, "📁 "+filepath.Base(root), uikit.MenuItemOptions{Subtitle: root + " · 点击移除"}, a.secondaryInk()).OnClick(func() { a.removeExtraRoot(t, root) })
+			uikit.MenuItem(c, m, root, "📁 "+filepath.Base(root), uikit.MenuItemOptions{Subtitle: root + locales.Text(" · 点击移除")}, a.secondaryInk()).OnClick(func() { a.removeExtraRoot(t, root) })
 		}
 		divider(c)
-		uikit.MenuItem(c, m, "add-root", "＋ 添加目录", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.addExtraRoot(t) })
+		uikit.MenuItem(c, m, "add-root", locales.Text("＋ 添加目录"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.addExtraRoot(t) })
 	})
 }
 
@@ -1331,12 +1338,12 @@ func (a *desktop) addExtraRoot(t *conversation) {
 		}
 		a.win.Update(func() {
 			if sameWorkspace(p, t.Workspace) {
-				a.notify("该目录就是当前主工作区")
+				a.notify(locales.Text("该目录就是当前主工作区"))
 				return
 			}
 			for _, existing := range a.extraRoots[t.ID] {
 				if sameWorkspace(existing, p) {
-					a.notify("该目录已在附加工作区中")
+					a.notify(locales.Text("该目录已在附加工作区中"))
 					return
 				}
 			}
@@ -1379,7 +1386,7 @@ func (a *desktop) sshChip(c *ui.Context, t *conversation) {
 		return
 	}
 	count := len(a.sshAllowed[t.Workspace])
-	footerBadge(c, "footer-ssh", "SSH", fmt.Sprint(count), ui.Hex("#3b9f70"), "SSH 授权", func() {
+	footerBadge(c, "footer-ssh", "SSH", fmt.Sprint(count), ui.Hex("#3b9f70"), locales.Text("SSH 授权"), func() {
 		a.sshF.AuthOpen = true
 		a.loadSSHAuth(t.Workspace)
 	}, a.secondaryInk())
@@ -1403,7 +1410,7 @@ func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 		label = "git"
 	}
 	trigger := func(b ui.Element) {
-		b = uikit.Tooltip(c, b.Height(22).Padding(1, 7).Radius(11).Background(c.Theme().Surface).Cursor(ui.CursorPointer), "查看 Git 改动")
+		b = uikit.Tooltip(c, b.Height(22).Padding(1, 7).Radius(11).Background(c.Theme().Surface).Cursor(ui.CursorPointer), locales.Text("查看 Git 改动"))
 		b.Children(func() {
 			ui.Row(c).Gap(gapTight).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, short(label, 22)).FontSize(fsTiny).TextColor(c.Theme().Accent).SingleLine()
@@ -1545,7 +1552,7 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 	// The colour goes on the label itself: a TextColor on the button never reaches
 	// it, which is why the meter used to sit at one muted grey whatever the ratio.
 	labelEl.TextColor(fadeColor(labelEl, "context-tone", color))
-	btn = uikit.Tooltip(c, btn.SingleLine().Shrink(0).NoWrap(), "上下文占用（点击查看明细）")
+	btn = uikit.Tooltip(c, btn.SingleLine().Shrink(0).NoWrap(), locales.Text("上下文占用（点击查看明细）"))
 	if !st.FooterLoaded {
 		btn.OnClick(func() { a.refreshSessionFooter(t) })
 		return
@@ -1560,9 +1567,9 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 		// only hid the numbers it exists for. A short window still bounds it, and
 		// then the buttons below the list keep their room instead of spilling out.
 		panel.MaxHeightPercent(85)
-		panel.Column().Label("上下文占用明细").AttachTo(btn, ui.AnchorTopRight, ui.AnchorBottomRight).Left(-12)
+		panel.Column().Label(locales.Text("上下文占用明细")).AttachTo(btn, ui.AnchorTopRight, ui.AnchorBottomRight).Left(-12)
 		b := st.Breakdown
-		ui.Text(c, "上下文构成").FontSize(fsSection).Bold().Padding(gapInline, padCard)
+		ui.Text(c, locales.Text("上下文构成")).FontSize(fsSection).Bold().Padding(gapInline, padCard)
 		// Only a session with more sections than usual — a long memory index, one
 		// more instruction file — scrolls here.
 		ui.Scroll(c).MaxHeight(contextBreakdownHeight).Children(func() {
@@ -1570,47 +1577,47 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 				// The prompt's own sections are detail, and the message kinds below are
 				// the rows that actually grow, so the sections start folded behind the
 				// total they add up to.
-				contextPartFold(c, "system-prompt", "系统提示词", b.SystemPrompt, st.PromptPartsOpen, func() {
+				contextPartFold(c, "system-prompt", locales.Text("系统提示词"), b.SystemPrompt, st.PromptPartsOpen, func() {
 					st.PromptPartsOpen = !st.PromptPartsOpen
 				}, a.secondaryInk())
 				if st.PromptPartsOpen {
 					for _, part := range b.SystemPromptParts {
 						if part.Tokens > 0 {
-							contextPart(c, "  · "+part.Label, part.Tokens, a.secondaryInk())
+						contextPart(c, "  · "+locales.Text(part.Label), part.Tokens, a.secondaryInk())
 						}
 					}
 				}
-				contextPart(c, "工具 Schema", b.ToolSchemas, a.secondaryInk())
-				contextPart(c, "用户提问", b.UserMessages, a.secondaryInk())
-				contextPart(c, "AI 回复", b.AssistantMsgs, a.secondaryInk())
-				contextPart(c, "工具结果", b.ToolResults, a.secondaryInk())
+				contextPart(c, locales.Text("工具 Schema"), b.ToolSchemas, a.secondaryInk())
+				contextPart(c, locales.Text("用户提问"), b.UserMessages, a.secondaryInk())
+				contextPart(c, locales.Text("AI 回复"), b.AssistantMsgs, a.secondaryInk())
+				contextPart(c, locales.Text("工具结果"), b.ToolResults, a.secondaryInk())
 				if b.Reasoning > 0 {
-					contextPart(c, "思考内容", b.Reasoning, a.secondaryInk())
+					contextPart(c, locales.Text("思考内容"), b.Reasoning, a.secondaryInk())
 				}
-				ui.Text(c, fmt.Sprintf("累计输入 %s / 输出 %s", fmtK(st.Usage.InputTokens), fmtK(st.Usage.OutputTokens))).FontSize(fsTiny).TextColor(a.secondaryInk())
+				ui.Text(c, fmt.Sprintf(locales.Text("累计输入 %s / 输出 %s"), fmtK(st.Usage.InputTokens), fmtK(st.Usage.OutputTokens))).FontSize(fsTiny).TextColor(a.secondaryInk())
 			})
 		})
 		divider(c)
 		ui.Column(c).FillWidth().Shrink(0).Padding(4, 10, 6).Gap(gapField).Children(func() {
 			// Two rows of two buttons.
 			ui.Row(c).FillWidth().Shrink(0).Gap(gapField).Children(func() {
-				contextCompactButton(c, "context-compact", "压缩上下文", true, t.Busy || st.CompactBusy, "压缩对话上下文，用摘要替换历史消息", func() {
+				contextCompactButton(c, "context-compact", locales.Text("压缩上下文"), true, t.Busy || st.CompactBusy, locales.Text("压缩对话上下文，用摘要替换历史消息"), func() {
 					st.ContextOpen = false
 					a.compact(t, false)
 				}, a.secondaryInk())
-				contextCompactButton(c, "context-fast-compact", "压缩上下文(快速)", true, t.Busy || st.CompactBusy, "本地裁剪旧回复、工具结果与思考，保留最近内容，不调用模型", func() {
+				contextCompactButton(c, "context-fast-compact", locales.Text("压缩上下文(快速)"), true, t.Busy || st.CompactBusy, locales.Text("本地裁剪旧回复、工具结果与思考，保留最近内容，不调用模型"), func() {
 					st.ContextOpen = false
 					a.compact(t, true)
 				}, a.secondaryInk())
 			})
 			ui.Row(c).FillWidth().Shrink(0).Gap(gapField).Children(func() {
-				contextCompactButton(c, "context-lessons", "压缩教训", false, t.Busy, "压缩并总结项目经验教训", func() {
+				contextCompactButton(c, "context-lessons", locales.Text("压缩教训"), false, t.Busy, locales.Text("压缩并总结项目经验教训"), func() {
 					st.ContextOpen = false
-					a.send(t, "请压缩并总结这个项目的经验教训（LESSONS.md）。")
+					a.send(t, locales.Text("请压缩并总结这个项目的经验教训（LESSONS.md）。"))
 				}, a.secondaryInk())
-				contextCompactButton(c, "context-graph", "更新图谱", false, t.Busy, "更新 CODEGRAPH.md 导航", func() {
+				contextCompactButton(c, "context-graph", locales.Text("更新图谱"), false, t.Busy, locales.Text("更新 CODEGRAPH.md 导航"), func() {
 					st.ContextOpen = false
-					a.send(t, "请更新 CODEGRAPH.md，让导航与当前代码一致。")
+					a.send(t, locales.Text("请更新 CODEGRAPH.md，让导航与当前代码一致。"))
 				}, a.secondaryInk())
 			})
 		})
@@ -1699,9 +1706,9 @@ func (a *desktop) compact(t *conversation, fast bool) {
 	// frozen model of its own yet.
 	cfg := a.config
 	if fast {
-		st.CompactNote = "正在快速压缩旧回复、工具参数、工具结果与思考内容…"
+		st.CompactNote = locales.Text("正在快速压缩旧回复、工具参数、工具结果与思考内容…")
 	} else {
-		st.CompactNote = "正在压缩对话上下文…"
+		st.CompactNote = locales.Text("正在压缩对话上下文…")
 		if resolved, ok := a.chatConfig(t); ok {
 			cfg = resolved
 		}
@@ -1720,7 +1727,7 @@ func (a *desktop) compact(t *conversation, fast bool) {
 				st.CompactBusy = false
 				st.CompactThinking = 0
 				st.CompactNote = ""
-				a.notify("压缩失败：" + err.Error())
+				a.notify(locales.Text("压缩失败：") + err.Error())
 				a.refreshSessionFooter(t)
 				return
 			}
@@ -1757,7 +1764,7 @@ func (a *desktop) composerSendRow(c *ui.Context, t *conversation) {
 		ui.Spacer(c)
 		if t.AttachmentLoading {
 			ui.Spinner(c).Size(13, 13)
-			muted(c, "正在处理附件…", fsTiny, a.secondaryInk())
+			muted(c, locales.Text("正在处理附件…"), fsTiny, a.secondaryInk())
 		}
 	})
 }

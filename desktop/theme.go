@@ -8,6 +8,7 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"fmt"
 	"math"
 	"strconv"
@@ -573,9 +574,9 @@ func firstLine(s string) string {
 
 func yesNo(v bool) string {
 	if v {
-		return "是"
+		return locales.Text("是")
 	}
-	return "否"
+	return locales.Text("否")
 }
 
 func boolValue(p *bool) bool { return p != nil && *p }

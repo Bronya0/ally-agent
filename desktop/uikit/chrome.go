@@ -278,7 +278,7 @@ func ErrorText(c *ui.Context, message string) ui.Element {
 		TextColor(c.Theme().Danger).FillWidth().MinWidth(0).SingleLine().Selectable()
 	Tooltip(c, text, message)
 	ContextMenu(text, func(menu *ui.Menu) {
-		if menu.Item("复制错误全文").Chosen() {
+		if menu.Item(kitText(c, "复制错误全文")).Chosen() {
 			c.WriteClipboard(message)
 		}
 	})

@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -19,20 +20,20 @@ type voiceModelFile struct {
 
 func parseVoiceModelFile(data []byte) ([]backend.VoiceModelConfig, error) {
 	if len(data) > 2*1024*1024 {
-		return nil, fmt.Errorf("文件超过 2 MB")
+		return nil, fmt.Errorf("%s", locales.Text("文件超过 2 MB"))
 	}
 	var doc voiceModelFile
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("无法解析语音模型配置：%w", err)
+		return nil, fmt.Errorf(locales.Text("无法解析语音模型配置：%w"), err)
 	}
 	if doc.Kind != voiceModelFileKind || doc.Version != 1 || doc.Models == nil || len(doc.Models) > 200 {
-		return nil, fmt.Errorf("请选择 Ally 导出的语音模型配置文件")
+		return nil, fmt.Errorf("%s", locales.Text("请选择 Ally 导出的语音模型配置文件"))
 	}
 	seen := map[string]bool{}
 	for i := range doc.Models {
 		doc.Models[i].ID = strings.TrimSpace(doc.Models[i].ID)
 		if doc.Models[i].ID == "" || seen[doc.Models[i].ID] {
-			return nil, fmt.Errorf("语音模型 ID 必须填写且不能重复")
+			return nil, fmt.Errorf("%s", locales.Text("语音模型 ID 必须填写且不能重复"))
 		}
 		seen[doc.Models[i].ID] = true
 	}
@@ -41,7 +42,7 @@ func parseVoiceModelFile(data []byte) ([]backend.VoiceModelConfig, error) {
 	// model unimportable (authMode was forced to none instead of bearer).
 	doc.Models = backend.NormalizeVoiceModels(doc.Models)
 	if len(doc.Models) == 0 {
-		return nil, fmt.Errorf("导出的文件里没有可用的语音模型")
+		return nil, fmt.Errorf("%s", locales.Text("导出的文件里没有可用的语音模型"))
 	}
 	return doc.Models, nil
 }
@@ -52,7 +53,7 @@ func (a *desktop) importVoiceModels() {
 	}
 	a.ensureVoiceModels()
 	go func() {
-		path, err := a.core.SelectJSONFile("导入语音模型配置")
+		path, err := a.core.SelectJSONFile(locales.Text("导入语音模型配置"))
 		if err != nil || path == "" {
 			if err != nil {
 				a.fail(err)
@@ -94,7 +95,7 @@ func (a *desktop) importVoiceModels() {
 					updated++
 				}
 			}
-			a.commitVoiceModels(next, fmt.Sprintf("导入完成：新增 %d 个，更新 %d 个", added, updated), false, cloneVoiceModelConfigs(s.models))
+			a.commitVoiceModels(next, fmt.Sprintf(locales.Text("导入完成：新增 %d 个，更新 %d 个"), added, updated), false, cloneVoiceModelConfigs(s.models))
 		})
 	}()
 }

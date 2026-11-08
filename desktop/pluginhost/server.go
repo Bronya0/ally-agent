@@ -2,10 +2,12 @@
 package pluginhost
 
 import (
+	"ally-dev/locales"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/egoist/mygo/i18n"
 	"io/fs"
 	"net"
 	"net/http"
@@ -55,11 +57,11 @@ type page struct {
 func pluginRelativePath(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, `\`) || filepath.IsAbs(raw) || strings.Contains(raw, ":") {
-		return "", errors.New("host.files 只接受工作区内的相对路径")
+		return "", errors.New(locales.Text("host.files 只接受工作区内的相对路径"))
 	}
 	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == '/' || r == '\\' }) {
 		if part == ".." {
-			return "", errors.New("host.files 不接受上级目录引用")
+			return "", errors.New(locales.Text("host.files 不接受上级目录引用"))
 		}
 	}
 	return raw, nil
@@ -125,7 +127,7 @@ func (p *page) rpc(h *Host, w http.ResponseWriter, r *http.Request) {
 		}
 	case "ReadWorkspaceFileAt", "ListFiles", "GetWorkspaceFileInfoAt", "GetWorkspaceMediaURL", "OpenPathInFileManager":
 		if p.info.Permissions.Workspace != "read" || p.workspace == "" {
-			err = errors.New("插件没有工作区读取权限")
+			err = errors.New(locales.Text("插件没有工作区读取权限"))
 			break
 		}
 		var req backend.WorkspacePathRequest
@@ -241,7 +243,7 @@ func (h *Host) newServer(info backend.PluginInfo, workspace string, state Theme)
 		p.mu.Lock()
 		s := p.state
 		p.mu.Unlock()
-		cfg := map[string]any{"plugin": info, "token": p.token, "state": s, "env": map[string]string{"workspace": workspace, "locale": "zh-CN", "version": mygo.App.Version()}}
+		cfg := map[string]any{"plugin": info, "token": p.token, "state": s, "env": map[string]string{"workspace": workspace, "locale": i18n.Locale(), "version": mygo.App.Version()}}
 		data, _ := json.Marshal(cfg)
 		w.Header().Set("Content-Type", "text/javascript")
 		w.Header().Set("Cache-Control", "no-store")

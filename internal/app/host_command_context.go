@@ -2,6 +2,7 @@
 package app
 
 import (
+	"ally-dev/locales"
 	"errors"
 	"strings"
 
@@ -26,7 +27,7 @@ func (a *App) rememberCommandContext(sessionID, callID, content string) {
 // Never follow output/log paths or load the frontend snapshot's full payload.
 func (a *App) GetCommandContextResult(sessionID, callID string) (string, error) {
 	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(callID) == "" {
-		return "", errors.New("缺少会话或命令标识")
+		return "", errors.New(locales.Text("缺少会话或命令标识"))
 	}
 	if err := a.ensureInitialized(); err != nil {
 		return "", err
@@ -38,7 +39,7 @@ func (a *App) GetCommandContextResult(sessionID, callID string) (string, error) 
 		if found {
 			return content, nil
 		}
-		return "", errors.New("当前上下文中已无此命令结果")
+		return "", errors.New(locales.Text("当前上下文中已无此命令结果"))
 	}
 	history, loaded := a.histories[sessionID]
 	if loaded {
@@ -54,7 +55,7 @@ func (a *App) GetCommandContextResult(sessionID, callID string) (string, error) 
 			return content, nil
 		}
 	}
-	return "", errors.New("当前上下文中已无此命令结果")
+	return "", errors.New(locales.Text("当前上下文中已无此命令结果"))
 }
 
 func commandContextContent(history []openai.ChatCompletionMessage, callID string) (string, bool) {

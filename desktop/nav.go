@@ -3,6 +3,7 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"strings"
 )
 
@@ -114,7 +115,7 @@ func (a *desktop) saveConfig(cfg backend.ConfigState, notice ...string) {
 			if len(notice) > 0 {
 				a.notifySuccess(notice[0])
 			} else {
-				a.notifySuccess("设置已保存")
+				a.notifySuccess(locales.Text("设置已保存"))
 			}
 		})
 	}()

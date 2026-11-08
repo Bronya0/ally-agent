@@ -63,7 +63,7 @@ func option(c *ui.Context, item ui.Element, text string, selected bool, ink ...u
 	item.Children(func() {
 		label := text
 		if label == "" {
-			label = "自动"
+			label = kitText(c, "自动")
 		}
 		ink := t.Text
 		if selected {
@@ -107,7 +107,7 @@ func SelectField(c *ui.Context, value *string, options []Option, ink ...ui.Color
 			}
 		}
 		if label == "" {
-			label = "自动"
+			label = kitText(c, "自动")
 		}
 		ui.Text(c, label).FontSize(FontBody).SingleLine().Grow(1).MinWidth(0).Cursor(ui.CursorPointer)
 		ui.Box(c).Size(18, 18).Shrink(0).Center().Children(func() {
@@ -185,7 +185,7 @@ func ComboboxField(c *ui.Context, value *string, options []string, label, placeh
 		cb.Input.Height(ControlHeight).FillHeight().Grow(1).MinWidth(0).Padding(5, 10).
 			FontSize(FontBody).Border(0, ui.Transparent).Background(ui.Transparent).Radius(0).TextColor(c.Theme().Text).
 			Label(label).Placeholder(placeholder)
-		toggle := Tooltip(c, ui.Box(c).Size(32, ControlHeight).Shrink(0).Center().Cursor(ui.CursorPointer).Label("展开选项"), "选择或输入")
+		toggle := Tooltip(c, ui.Box(c).Size(32, ControlHeight).Shrink(0).Center().Cursor(ui.CursorPointer).Label(kitText(c, "展开选项")), kitText(c, "选择或输入"))
 		toggle.OnClick(func() {
 			cb.Input.Focus()
 			cb.SetOpen(true)
@@ -358,9 +358,9 @@ func passwordInputInk(c *ui.Context, key, label string, value *string, tone []ui
 		if !*visible {
 			input.Password()
 		}
-		action, icon := "显示 "+label, eyeIcon
+		action, icon := kitText(c, "显示 ")+label, eyeIcon
 		if *visible {
-			action, icon = "隐藏 "+label, eyeOffIcon
+			action, icon = kitText(c, "隐藏 ")+label, eyeOffIcon
 		}
 		button := Tooltip(c, ui.ButtonBase(c.Key("visibility")).Size(32, ControlHeight).Shrink(0).Center().Cursor(ui.CursorPointer).Label(action), action)
 		button.Children(func() { ui.Icon(c, icon).Size(15, 15).TextColor(ink) })

@@ -2,8 +2,10 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -58,7 +60,12 @@ func (a *desktop) mediaPlayerOptions(file *workspaceFile, token string) (workspa
 
 func mediaPlayerDocument(file *workspaceFile, options workspaceMediaOptions) string {
 	page := mediaPreviewHTML(filepath.Base(file.Path), options.Source, workspaceFileKindForPath(file.Path))
-	script := strings.NewReplacer("TOKEN", fmt.Sprintf("%q", options.Token), "SINGLE", fmt.Sprint(options.Single), "ENHANCE", fmt.Sprint(options.Enhance), "START", fmt.Sprint(options.Start)).Replace(workspaceMediaScript)
+	jsText := func(source string) string {
+		encoded, _ := json.Marshal(source)
+		return string(encoded)
+	}
+	script := strings.NewReplacer("TOKEN", jsText(options.Token), "SINGLE", fmt.Sprint(options.Single), "ENHANCE", fmt.Sprint(options.Enhance), "START", fmt.Sprint(options.Start),
+		"ERR_NOT_IMAGE", jsText(locales.Text("当前页面不是图片预览")), "ERR_IMAGE_TIMEOUT", jsText(locales.Text("图片加载超时")), "ERR_IMAGE_DECODE", jsText(locales.Text("图片无法解码"))).Replace(workspaceMediaScript)
 	return strings.Replace(page, "</body>", script+"</body>", 1)
 }
 
@@ -89,11 +96,11 @@ func emptyFileEditor() *editor.State {
 func documentPreviewNote(doc *documentpreview.Document) string {
 	switch {
 	case doc == nil || len(doc.Paragraphs) == 0:
-		return "没有可预览的正文，可用“系统打开”查看完整文档。"
+		return locales.Text("没有可预览的正文，可用“系统打开”查看完整文档。")
 	case doc.Truncated:
-		return "预览内容已截断，可用“系统打开”查看完整文档。"
+		return locales.Text("预览内容已截断，可用“系统打开”查看完整文档。")
 	default:
-		return "正文提取预览，不包含图片、页眉页脚和原版分页。"
+		return locales.Text("正文提取预览，不包含图片、页眉页脚和原版分页。")
 	}
 }
 
@@ -120,7 +127,7 @@ func (a *desktop) documentFilePreviewView(c *ui.Context, file *workspaceFile) {
 		})
 		if doc == nil || len(doc.Paragraphs) == 0 {
 			ui.Box(c).Grow(1).MinHeight(0).Center().Children(func() {
-				emptyState(c, "没有可预览的正文", "可用“系统打开”查看完整文档。", a.secondaryInk())
+				emptyState(c, locales.Text("没有可预览的正文"), locales.Text("可用“系统打开”查看完整文档。"), a.secondaryInk())
 			})
 			return
 		}
@@ -166,17 +173,17 @@ func (w *limitedPreviewBuffer) Write(p []byte) (int, error) {
 
 func htmlFilePreview(source string) (string, error) {
 	if len(source) > maxMarkupPreviewBytes {
-		return "", fmt.Errorf("HTML 预览超过 2 MB 限制")
+		return "", fmt.Errorf("%s", locales.Text("HTML 预览超过 2 MB 限制"))
 	}
 	// Parse before injecting policy: text search can mistake a comment or a
 	// script before <head> for the document head and let active content run first.
 	document, err := xhtml.Parse(strings.NewReader(source))
 	if err != nil {
-		return "", fmt.Errorf("解析 HTML 预览失败：%w", err)
+		return "", fmt.Errorf(locales.Text("解析 HTML 预览失败：%w"), err)
 	}
 	head := findHTMLHead(document)
 	if head == nil {
-		return "", fmt.Errorf("HTML 预览缺少 head 节点")
+		return "", fmt.Errorf("%s", locales.Text("HTML 预览缺少 head 节点"))
 	}
 	policy := "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'"
 	metas := []*xhtml.Node{
@@ -195,9 +202,9 @@ func htmlFilePreview(source string) (string, error) {
 	rendered := limitedPreviewBuffer{limit: maxDocumentPreviewHTML}
 	if err := xhtml.Render(&rendered, document); err != nil {
 		if errors.Is(err, errMarkupPreviewLimit) {
-			return "", fmt.Errorf("HTML 预览结果超过 2 MB 限制")
+			return "", fmt.Errorf("%s", locales.Text("HTML 预览结果超过 2 MB 限制"))
 		}
-		return "", fmt.Errorf("序列化 HTML 预览失败：%w", err)
+		return "", fmt.Errorf(locales.Text("序列化 HTML 预览失败：%w"), err)
 	}
 	return rendered.String(), nil
 }
@@ -218,7 +225,7 @@ func findHTMLHead(document *xhtml.Node) *xhtml.Node {
 
 func svgPreviewHTML(name, source string) (string, error) {
 	if len(source) > maxMarkupPreviewBytes {
-		return "", fmt.Errorf("SVG 预览超过 2 MB 限制")
+		return "", fmt.Errorf("%s", locales.Text("SVG 预览超过 2 MB 限制"))
 	}
 	return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none"><meta name="viewport" content="width=device-width,initial-scale=1"><title>` + html.EscapeString(filepath.Base(name)) + `</title><style>html,body{margin:0;min-height:100%;color-scheme:light dark;background:#fff}body{min-height:100vh;display:grid;place-items:center}svg{display:block;max-width:100%;max-height:100vh;width:auto;height:auto}@media(prefers-color-scheme:dark){html,body{background:#202020}}</style></head><body>` + source + `</body></html>`, nil
 }
@@ -236,22 +243,22 @@ func (a *desktop) toggleWorkspaceFileMarkupPreview(file *workspaceFile) {
 
 func workspaceFilePreviewHTML(file *workspaceFile) (string, error) {
 	if file == nil {
-		return "", fmt.Errorf("文件不存在")
+		return "", fmt.Errorf("%s", locales.Text("文件不存在"))
 	}
 	if file.PreviewHTML != "" {
 		return file.PreviewHTML, nil
 	}
 	if !file.MarkupPreview || file.Editor == nil || file.Editor.Buffer == nil {
-		return "", fmt.Errorf("文件没有 HTML 预览")
+		return "", fmt.Errorf("%s", locales.Text("文件没有 HTML 预览"))
 	}
 	if file.Editor.Buffer.Len() > maxMarkupPreviewBytes {
-		return "", fmt.Errorf("HTML 预览超过 2 MB 限制")
+		return "", fmt.Errorf("%s", locales.Text("HTML 预览超过 2 MB 限制"))
 	}
 	source := file.Editor.Buffer.String()
 	if ext := strings.ToLower(filepath.Ext(file.Path)); ext == ".html" || ext == ".htm" {
 		return htmlFilePreview(source)
 	}
-	return "", fmt.Errorf("此文件类型没有 WebView 预览")
+	return "", fmt.Errorf("%s", locales.Text("此文件类型没有 WebView 预览"))
 }
 
 func markdownPreviewSource(box ui.Element, file *workspaceFile) string {
@@ -285,7 +292,7 @@ func (a *desktop) markdownFilePreviewView(c *ui.Context, file *workspaceFile) {
 	source := markdownPreviewSource(scroll, file)
 	if len(source) > maxMarkupPreviewBytes {
 		ui.Box(c.Key("file-preview-markdown-limit")).Grow(1).MinHeight(0).Padding(padPage).Center().Children(func() {
-			fieldNote(c, "Markdown 预览超过 2 MB 限制，可用“系统打开”查看全文。", a.secondaryInk())
+			fieldNote(c, locales.Text("Markdown 预览超过 2 MB 限制，可用“系统打开”查看全文。"), a.secondaryInk())
 		})
 		return
 	}
@@ -437,7 +444,7 @@ func (l *workspacePreviewLifecycle) mount(key string, autoplay bool, create func
 		}
 	}
 	if surface == nil {
-		return errors.New("预览未创建 WebView")
+		return errors.New(locales.Text("预览未创建 WebView"))
 	}
 	if err := load(surface); err != nil {
 		surface.Destroy()
@@ -610,7 +617,7 @@ func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile) {
 				if options, ok := a.mediaPlayerOptions(file, token); ok {
 					native, ok := surface.(*nativePreview)
 					if !ok {
-						return errors.New("预览类型不支持媒体控制")
+						return errors.New(locales.Text("预览类型不支持媒体控制"))
 					}
 					if workspaceFileKindForPath(file.Path) == workspaceFileImage && native.imageDocument && native.state.ready {
 						native.replaceImage(options)
@@ -688,7 +695,7 @@ func (a *desktop) workspaceFilePreviewView(c *ui.Context, file *workspaceFile) {
 	ui.Box(c.Key("workspace-file-preview-loading")).Grow(1).MinHeight(0).Center().Children(func() {
 		ui.Column(c).AlignItems(ui.Center).Gap(gapField).Children(func() {
 			ui.Spinner(c.Key("workspace-file-preview-spinner")).Size(20, 20).TextColor(c.Theme().Accent)
-			ui.Text(c, "正在加载预览…").FontSize(fsSmall).TextColor(a.secondaryInk())
+			ui.Text(c, locales.Text("正在加载预览…")).FontSize(fsSmall).TextColor(a.secondaryInk())
 		})
 	})
 }

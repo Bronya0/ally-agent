@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"fmt"
 	"strings"
 
@@ -29,7 +30,7 @@ func (a *desktop) refreshPlugins(manual ...bool) {
 			a.plugins = plugins
 			a.pluginsRevision++
 			if len(manual) > 0 && manual[0] {
-				a.notifySuccess("插件列表已刷新")
+				a.notifySuccess(locales.Text("插件列表已刷新"))
 			}
 		})
 	}()
@@ -104,18 +105,18 @@ func (a *desktop) importPlugin(directory bool) {
 			return "", err
 		}
 		if !p.Valid {
-			return "已导入 " + pluginName(p) + "，但它不可用：" + p.LoadError, nil
+			return locales.Text("已导入 ") + pluginName(p) + locales.Text("，但它不可用：") + p.LoadError, nil
 		}
-		return "已导入插件 " + pluginName(p), nil
+		return locales.Text("已导入插件 ") + pluginName(p), nil
 	})
 }
 
 func (a *desktop) setPluginEnabled(p backend.PluginInfo, enabled bool) {
 	a.pluginAction(func() (string, error) {
 		err := a.core.SetPluginEnabled(p.ID, enabled)
-		label := "已禁用 "
+		label := locales.Text("已禁用 ")
 		if enabled {
-			label = "已启用 "
+			label = locales.Text("已启用 ")
 		}
 		return label + pluginName(p), err
 	})
@@ -127,7 +128,7 @@ func (a *desktop) exportPlugin(p backend.PluginInfo, includeData bool) {
 		if path == "" {
 			return "", err
 		}
-		return "已导出到 " + path, err
+		return locales.Text("已导出到 ") + path, err
 	})
 }
 
@@ -135,7 +136,7 @@ func (a *desktop) deletePlugin(p backend.PluginInfo, purge bool) {
 	a.pluginsF.DeleteOpen = false
 	a.pluginAction(func() (string, error) {
 		err := a.core.DeletePlugin(p.ID, purge)
-		return "已删除插件 " + pluginName(p), err
+		return locales.Text("已删除插件 ") + pluginName(p), err
 	})
 }
 
@@ -149,17 +150,17 @@ func pluginName(p backend.PluginInfo) string {
 func (a *desktop) pluginsPageBody(c *ui.Context) {
 	services := c.Services()
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-		fieldNote(c, fmt.Sprintf("%d 个已安装", len(a.plugins)), a.secondaryInk())
+		fieldNote(c, fmt.Sprintf(locales.Text("%d 个已安装"), len(a.plugins)), a.secondaryInk())
 		ui.Spacer(c)
-		uikit.Tooltip(c, flat(c, "开发教程"), "在浏览器打开插件开发文档").OnClick(func() {
+		uikit.Tooltip(c, flat(c, locales.Text("开发教程")), locales.Text("在浏览器打开插件开发文档")).OnClick(func() {
 			services.OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/plugin-system.md")
 		})
-		flat(c, "刷新").OnClick(func() { a.refreshPlugins(true) })
-		uikit.Tooltip(c, flat(c, "从目录安装"), "从本机任意位置的插件源码目录安装").OnClick(func() { a.importPlugin(true) })
-		uikit.Tooltip(c, primary(c, "添加"), "选择插件 zip 包").OnClick(func() { a.importPlugin(false) })
+		flat(c, locales.Text("刷新")).OnClick(func() { a.refreshPlugins(true) })
+		uikit.Tooltip(c, flat(c, locales.Text("从目录安装")), locales.Text("从本机任意位置的插件源码目录安装")).OnClick(func() { a.importPlugin(true) })
+		uikit.Tooltip(c, primary(c, locales.Text("添加")), locales.Text("选择插件 zip 包")).OnClick(func() { a.importPlugin(false) })
 	})
 	if a.pluginsF.Busy {
-		busyRow(c, "正在处理插件…", a.secondaryInk())
+		busyRow(c, locales.Text("正在处理插件…"), a.secondaryInk())
 	}
 	if len(a.plugins) == 0 {
 		a.pluginEmptyState(c)
@@ -176,15 +177,15 @@ func (a *desktop) pluginEmptyState(c *ui.Context) {
 	card(c, "plugin-empty", func() {
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(1).Gap(gapField).Children(func() {
-				accentChip(c, "插件系统 v1")
-				ui.Text(c, "把 Ally 变成你自己的控制台").FontSize(fsHeadline).Bold()
-				ui.Text(c, "三分钟定制自己想要的页面，比如公司 OA、BUG 管理页面、工时计划表等等。").FontSize(fsBody).TextColor(a.secondaryInk())
-				cardFlat(c, "开发教程").AlignSelf(ui.Start).OnClick(func() {
+				accentChip(c, locales.Text("插件系统 v1"))
+				ui.Text(c, locales.Text("把 Ally 变成你自己的控制台")).FontSize(fsHeadline).Bold()
+				ui.Text(c, locales.Text("三分钟定制自己想要的页面，比如公司 OA、BUG 管理页面、工时计划表等等。")).FontSize(fsBody).TextColor(a.secondaryInk())
+				cardFlat(c, locales.Text("开发教程")).AlignSelf(ui.Start).OnClick(func() {
 					c.Services().OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/plugin-system.md")
 				})
 			})
 			ui.Column(c).Width(240).Gap(gapTight).Children(func() {
-				fieldNote(c, "可用的宿主能力", a.secondaryInk())
+				fieldNote(c, locales.Text("可用的宿主能力"), a.secondaryInk())
 				for _, cap := range []string{"host.http", "host.store", "host.files", "host.ui.notify", "host.events", "host.ui.theme"} {
 					ui.Text(c, cap).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().Accent)
 				}
@@ -205,23 +206,23 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 			fieldNote(c, version, a.secondaryInk())
 			switch {
 			case !p.Valid:
-				statusBadge(c, "不可用", "error")
+				statusBadge(c, locales.Text("不可用"), "error")
 			case !p.Enabled:
-				statusBadge(c, "已禁用", "idle")
+				statusBadge(c, locales.Text("已禁用"), "idle")
 			}
 			ui.Spacer(c)
 			enabled := p.Enabled
 			uikit.SwitchNative(c.Key("plugin-switch-"+p.ID), &enabled).Disabled(a.pluginsF.Busy || !p.Valid).Label(name).OnClick(func() { a.setPluginEnabled(p, enabled) })
 			p := p
-			disclosureMenu(c, "plugin-export-button-"+p.ID, "导出", disclosureCard, 210, a.pluginsF.Busy, func(m ui.MenuParts) {
-				uikit.MenuItem(c, m, "package", "导出（只含包本体）", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
+			disclosureMenu(c, "plugin-export-button-"+p.ID, locales.Text("导出"), disclosureCard, 210, a.pluginsF.Busy, func(m ui.MenuParts) {
+				uikit.MenuItem(c, m, "package", locales.Text("导出（只含包本体）"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
 					a.exportPlugin(p, false)
 				})
-				uikit.MenuItem(c, m, "data", "导出（连插件数据一起）", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
+				uikit.MenuItem(c, m, "data", locales.Text("导出（连插件数据一起）"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
 					a.exportPlugin(p, true)
 				})
 			})
-			cardDanger(c, "删除").Disabled(a.pluginsF.Busy).OnClick(func() {
+			cardDanger(c, locales.Text("删除")).Disabled(a.pluginsF.Busy).OnClick(func() {
 				a.pluginsF.DeleteID = p.ID
 				a.pluginsF.Purge = false
 				a.pluginsF.DeleteOpen = true
@@ -230,20 +231,20 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 		if p.Description != "" {
 			uikit.Tooltip(c, ui.Text(c, p.Description).FontSize(fsSmall).TextColor(a.secondaryInk()).SingleLine(), p.Description)
 		} else {
-			fieldNote(c, "无描述", a.secondaryInk())
+			fieldNote(c, locales.Text("无描述"), a.secondaryInk())
 		}
 		if meta := pluginMeta(p); meta != "" {
 			fieldNote(c, meta, a.secondaryInk())
 		}
-		hosts := "无"
+		hosts := locales.Text("无")
 		if len(p.Permissions.HTTP) > 0 {
 			hosts = strings.Join(p.Permissions.HTTP, "、")
 		}
-		workspace := "无"
+		workspace := locales.Text("无")
 		if p.Permissions.Workspace == "read" {
-			workspace = "只读"
+			workspace = locales.Text("只读")
 		}
-		fieldNote(c, "权限：网络 "+hosts+" ｜ 工作区 "+workspace, a.secondaryInk())
+		fieldNote(c, locales.Text("权限：网络 ")+hosts+locales.Text(" ｜ 工作区 ")+workspace, a.secondaryInk())
 		uikit.Tooltip(c, ui.Text(c, p.Dir).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine(), p.Dir)
 		if p.LoadError != "" {
 			inlineError(c, "plugin-error-"+p.ID, p.LoadError)
@@ -254,13 +255,13 @@ func (a *desktop) pluginRow(c *ui.Context, p backend.PluginInfo) {
 func pluginMeta(p backend.PluginInfo) string {
 	var parts []string
 	if p.Author != "" {
-		parts = append(parts, "作者 "+p.Author)
+		parts = append(parts, locales.Text("作者 ")+p.Author)
 	}
 	if p.HasPackage {
-		parts = append(parts, "包 "+fmtBytes(p.PackageBytes))
+		parts = append(parts, locales.Text("包 ")+fmtBytes(p.PackageBytes))
 	}
 	if p.UpdatedAt != "" {
-		parts = append(parts, "安装于 "+p.UpdatedAt)
+		parts = append(parts, locales.Text("安装于 ")+p.UpdatedAt)
 	}
 	return strings.Join(parts, "  ·  ")
 }
@@ -277,12 +278,12 @@ func (a *desktop) pluginDeleteDialog(c *ui.Context) {
 		}
 	}
 	modalCard(c, &a.pluginsF.DeleteOpen, widthModalSmall, func() {
-		modalTitle(c, "删除插件 "+pluginName(target), "删除后侧栏入口会一并消失；重新导入同一个包即可恢复。")
-		ui.Checkbox(c.Key("plugin-purge"), &a.pluginsF.Purge, "同时删除插件自己保存的数据（账号、令牌等）")
-		fieldNote(c, "不勾选时，重装插件可继续使用原有数据。", a.secondaryInk())
+		modalTitle(c, locales.Text("删除插件 ")+pluginName(target), locales.Text("删除后侧栏入口会一并消失；重新导入同一个包即可恢复。"))
+		ui.Checkbox(c.Key("plugin-purge"), &a.pluginsF.Purge, locales.Text("同时删除插件自己保存的数据（账号、令牌等）"))
+		fieldNote(c, locales.Text("不勾选时，重装插件可继续使用原有数据。"), a.secondaryInk())
 		modalActions(c, func() {
-			flat(c, "取消").OnClick(func() { a.pluginsF.DeleteOpen = false })
-			dangerButton(c, "删除").Disabled(a.pluginsF.Busy).OnClick(func() { a.deletePlugin(target, a.pluginsF.Purge) })
+			flat(c, locales.Text("取消")).OnClick(func() { a.pluginsF.DeleteOpen = false })
+			dangerButton(c, locales.Text("删除")).Disabled(a.pluginsF.Busy).OnClick(func() { a.deletePlugin(target, a.pluginsF.Purge) })
 		})
 	})
 }
@@ -300,19 +301,19 @@ func (a *desktop) currentPlugin() *backend.PluginInfo {
 func (a *desktop) pluginPageBody(c *ui.Context) {
 	p := a.currentPlugin()
 	if p == nil {
-		emptyState(c, "插件不存在或已停用", "返回插件管理重新启用。", a.secondaryInk())
+		emptyState(c, locales.Text("插件不存在或已停用"), locales.Text("返回插件管理重新启用。"), a.secondaryInk())
 		return
 	}
 	ui.Column(c.Key("plugin-page-" + p.ID)).Fill().MinHeight(0).Children(func() {
 		ui.Row(c).Padding(8, 16).Gap(gapField).Children(func() {
 			ui.Text(c, pluginName(*p)).Bold()
 			ui.Spacer(c)
-			flat(c, "重新加载").OnClick(func() {
+			flat(c, locales.Text("重新加载")).OnClick(func() {
 				if a.pluginHost != nil {
 					a.pluginHost.Reload(p.ID)
 				}
 			})
-			flat(c, "插件管理").OnClick(func() { a.changePage("plugins") })
+			flat(c, locales.Text("插件管理")).OnClick(func() { a.changePage("plugins") })
 		})
 		if a.pluginHost == nil {
 			return
@@ -323,7 +324,7 @@ func (a *desktop) pluginPageBody(c *ui.Context) {
 		} else if view != nil {
 			ui.WebView(c.Key("plugin-surface-"+p.ID), view).Grow(1).FillWidth()
 		} else {
-			busyRow(c, "正在加载插件…", a.secondaryInk())
+			busyRow(c, locales.Text("正在加载插件…"), a.secondaryInk())
 		}
 	})
 }

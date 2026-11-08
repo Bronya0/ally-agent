@@ -19,6 +19,7 @@ func TestHeaderTabsPanWithoutChoosing(t *testing.T) {
 	}
 	a := &desktop{ready: true, page: "chat", active: 1, tabs: tabs}
 	tt := ui.NewTester(func(c *ui.Context) { c.SetTheme(a.theme()); a.headerBar(c) }, 500, 60)
+	tt.SetLocale("zh-Hans")
 	st := &a.tabStripOf("header-tabs").scroll
 	if st.MaxX <= 0 {
 		t.Fatalf("the header's tabs did not overflow: maxX=%v", st.MaxX)

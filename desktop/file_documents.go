@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"errors"
 	"os"
 	"path/filepath"
@@ -102,7 +103,7 @@ func (a *desktop) setExplorerOpen(open bool) {
 // the existing editor with an empty or broken preview.
 func (a *desktop) handleFileLoadError(root, path string, kind workspaceFileKind, expected *workspaceFile, err error) {
 	if errors.Is(err, os.ErrNotExist) {
-		a.notifyError("文件不存在，可能尚未创建或已被删除：" + path)
+		a.notifyError(locales.Text("文件不存在，可能尚未创建或已被删除：") + path)
 		return
 	}
 	if kind.hasWebViewPreview() {
@@ -113,13 +114,13 @@ func (a *desktop) handleFileLoadError(root, path string, kind workspaceFileKind,
 			a.workspaceFiles = map[string]*workspaceFile{}
 		}
 		a.workspaceFiles[workspaceKey(root)] = &workspaceFile{Path: path, PreviewError: err.Error(), Editor: emptyFileEditor()}
-		a.notifyError("文件预览失败：" + err.Error())
+		a.notifyError(locales.Text("文件预览失败：") + err.Error())
 		return
 	}
 	if note := backend.WorkspaceFilePreviewNote(err); note != "" {
 		a.openFileInfoWithNote(path, note)
 	} else {
-		a.notifyError("打开文件失败：" + err.Error())
+		a.notifyError(locales.Text("打开文件失败：") + err.Error())
 	}
 }
 

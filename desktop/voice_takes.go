@@ -6,6 +6,7 @@ package desktop
 // the user spoke it.
 
 import (
+	"ally-dev/locales"
 	"slices"
 	"sort"
 	"strconv"
@@ -104,7 +105,7 @@ func (a *desktop) enqueueVoiceTake(take voiceTake) {
 	dropped, start := a.voiceInput.takes.queueTake(take)
 	if dropped {
 		a.voiceInput.finishTake()
-		a.notify("已丢弃最早的一条录音（最多排队 " + strconv.Itoa(voiceTakeQueueLimit) + " 条）")
+		a.notify(locales.Text("已丢弃最早的一条录音（最多排队 ") + strconv.Itoa(voiceTakeQueueLimit) + locales.Text(" 条）"))
 	}
 	if start {
 		go a.runVoiceTakes()
@@ -128,10 +129,10 @@ func (a *desktop) runVoiceTakes() {
 func (a *desktop) publishVoiceTranscript(take voiceTake, text string, err error) {
 	a.voiceInput.finishTake()
 	if take.timeout {
-		a.notify("语音录音已达到 20 秒上限")
+		a.notify(locales.Text("语音录音已达到 20 秒上限"))
 	}
 	if err != nil {
-		a.notifyError("语音转写失败：" + err.Error())
+		a.notifyError(locales.Text("语音转写失败：") + err.Error())
 		return
 	}
 	if strings.TrimSpace(text) == "" {
@@ -141,7 +142,7 @@ func (a *desktop) publishVoiceTranscript(take voiceTake, text string, err error)
 	if target == nil || !conversationOpen(a.tabs, target) {
 		// The user closed the tab while the request was in flight: say so instead of
 		// letting the text vanish after the "正在转录" promise.
-		a.notify("目标会话已关闭，本次转写结果未插入")
+		a.notify(locales.Text("目标会话已关闭，本次转写结果未插入"))
 		return
 	}
 	target.Draft = appendVoiceTranscript(target.Draft, text)

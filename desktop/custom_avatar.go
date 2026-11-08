@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"bytes"
 	"errors"
 	"fmt"
@@ -20,18 +21,18 @@ const customAvatarDisplaySize = 512
 
 func decodeCustomAvatar(data []byte) (*ui.Bitmap, error) {
 	if len(data) == 0 || len(data) > customAvatarLimit {
-		return nil, fmt.Errorf("图片大小需小于 5 MiB")
+		return nil, fmt.Errorf("%s", locales.Text("图片大小需小于 5 MiB"))
 	}
 	info, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("无法读取图片：%w", err)
+		return nil, fmt.Errorf(locales.Text("无法读取图片：%w"), err)
 	}
 	if info.Width <= 0 || info.Height <= 0 || int64(info.Width)*int64(info.Height) > 16000000 {
-		return nil, fmt.Errorf("图片尺寸过大")
+		return nil, fmt.Errorf("%s", locales.Text("图片尺寸过大"))
 	}
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("无法读取图片：%w", err)
+		return nil, fmt.Errorf(locales.Text("无法读取图片：%w"), err)
 	}
 	// Resize first; orientation only rotates the bounded display image.
 	img = resizeImage(img, customAvatarDisplaySize)
@@ -62,7 +63,7 @@ func (a *desktop) chooseCustomAvatar() {
 	dir := a.core.AppDataDir()
 	go func() {
 		defer a.win.Update(func() { a.customAvatarBusy = false })
-		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "选择欢迎页形象", Filters: []mygo.FileFilter{{Name: "图片", Extensions: []string{"png", "jpg", "jpeg", "gif", "webp", "bmp"}}}})
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: locales.Text("选择欢迎页形象"), Filters: []mygo.FileFilter{{Name: locales.Text("图片"), Extensions: []string{"png", "jpg", "jpeg", "gif", "webp", "bmp"}}}})
 		if err != nil {
 			a.fail(err)
 			return

@@ -4,6 +4,7 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
 	"github.com/egoist/mygo/ui"
@@ -29,7 +30,7 @@ func toolCodeWindowHeight(c *ui.Context, key, text string, expanded bool, path s
 		ui.Box(c.Key(key)).FillWidth().MaxHeight(150).Clip().Background(c.Theme().Background).Radius(radiusSmall).Children(body)
 		return
 	}
-	scroll := ui.ScrollBoth(c.Key(key)).FillWidth().MinWidth(0).Shrink(0).Clip().Label("工具输出 " + key).Background(c.Theme().Background).Radius(radiusSmall)
+	scroll := ui.ScrollBoth(c.Key(key)).FillWidth().MinWidth(0).Shrink(0).Clip().Label(locales.Text("工具输出 ") + key).Background(c.Theme().Background).Radius(radiusSmall)
 	if maximum {
 		scroll.MaxHeight(height)
 	} else {
@@ -172,7 +173,7 @@ func toolFields(c *ui.Context, data map[string]any, keys []string, ink ...ui.Col
 		if valueText == "" {
 			continue
 		}
-		label := toolFieldLabels[k]
+		label := locales.Text(toolFieldLabels[k])
 		if label == "" {
 			label = k
 		}
@@ -188,7 +189,7 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 	items, isList := result[collection].([]any)
 	if kind == "service" {
 		if max := int(num(result, "maxActive")); max > 0 {
-			fieldNote(c, fmt.Sprintf("运行中 %d / %d", int(num(result, "activeCount")), max), a.secondaryInk())
+			fieldNote(c, fmt.Sprintf(locales.Text("运行中 %d / %d"), int(num(result, "activeCount")), max), a.secondaryInk())
 		}
 		if output, ok := result["output"].(string); ok {
 			if !open {
@@ -212,7 +213,7 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 		items = []any{item}
 	}
 	if len(items) == 0 {
-		fieldNote(c, "暂无记录", a.secondaryInk())
+		fieldNote(c, locales.Text("暂无记录"), a.secondaryInk())
 		return
 	}
 	// A stopped service keeps its full card only when the tool card is open:
@@ -271,7 +272,7 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 			})
 		}
 		if hidden > 0 {
-			fieldNote(c, fmt.Sprintf("另有 %d 个已停止的服务，展开卡片查看", hidden), a.secondaryInk())
+			fieldNote(c, fmt.Sprintf(locales.Text("另有 %d 个已停止的服务，展开卡片查看"), hidden), a.secondaryInk())
 		}
 	})
 }
@@ -430,7 +431,7 @@ func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
 	for i := 0; i < len(lines); {
 		l := lines[i]
 		if l.gap > 0 {
-			text := fmt.Sprintf("… %d 行未变更 …", l.gap)
+			text := fmt.Sprintf(locales.Text("… %d 行未变更 …"), l.gap)
 			rows = append(rows, splitDiffRow{left: text, right: text, leftOrder: i, rightOrder: i, leftPresent: true, rightPresent: true, gap: l.gap})
 			i++
 			continue

@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"fmt"
 	"strings"
 	"time"
@@ -36,23 +37,23 @@ type petRuntime struct {
 }
 
 func (a *desktop) petSettings(c *ui.Context) {
-	a.settingsCard(c, "settings-pet", "桌面宠物", "跟随欢迎页形象；拖动身体调整位置，单击头部摸摸头，右键打开菜单。", func() {
-		a.settingsSwitch(c, "pet-enabled", "显示桌面宠物", "", &a.prefs.Pet.Enabled).OnChange(func() {
+	a.settingsCard(c, "settings-pet", locales.Text("桌面宠物"), locales.Text("跟随欢迎页形象；拖动身体调整位置，单击头部摸摸头，右键打开菜单。"), func() {
+		a.settingsSwitch(c, "pet-enabled", locales.Text("显示桌面宠物"), "", &a.prefs.Pet.Enabled).OnChange(func() {
 			a.setPetEnabled(a.prefs.Pet.Enabled)
 		})
 		if !a.prefs.Pet.Enabled {
 			return
 		}
 		chatterEnabled := !a.prefs.Pet.MuteChatter
-		a.settingsSwitch(c, "pet-chatter", "闲时说话", "空闲时偶尔显示本地短句；右键可马上和宠物打招呼。", &chatterEnabled).OnChange(func() {
+		a.settingsSwitch(c, "pet-chatter", locales.Text("闲时说话"), locales.Text("空闲时偶尔显示本地短句；右键可马上和宠物打招呼。"), &chatterEnabled).OnChange(func() {
 			a.setPetChatter(chatterEnabled)
 		})
-		a.settingsRow(c, "pet-size-row", "宠物大小", "", settingsControlWidth, func() ui.Element {
+		a.settingsRow(c, "pet-size-row", locales.Text("宠物大小"), "", settingsControlWidth, func() ui.Element {
 			return uikit.OptionGroup(c.Key("pet-size")).Children(func() {
 				for _, option := range []struct {
 					size  int
 					label string
-				}{{140, "小"}, {180, "中"}, {230, "大"}} {
+				}{{140, locales.Text("小")}, {180, locales.Text("中")}, {230, locales.Text("大")}} {
 					option := option
 					choiceButton(c, fmt.Sprintf("pet-size-%d", option.size), option.label, a.prefs.Pet.Size == option.size, c.Theme().Accent).OnClick(func() {
 						a.setPetSize(option.size)
@@ -62,7 +63,7 @@ func (a *desktop) petSettings(c *ui.Context) {
 		})
 		score := a.prefs.Pet.Affection[normalizedAvatarStyle(a.prefs.Avatar)].Points
 		stars := max(0, min(10, score/1000))
-		a.settingsRow(c, "pet-affection-row", "好感度", fmt.Sprintf("%.3f / 10 星 · 每天陪伴 +0.020，前三次摸头各 +0.005，前三个完成任务各 +0.010。", float64(score)/1000), settingsControlWidth, func() ui.Element {
+		a.settingsRow(c, "pet-affection-row", locales.Text("好感度"), fmt.Sprintf(locales.Text("%.3f / 10 星 · 每天陪伴 +0.020，前三次摸头各 +0.005，前三个完成任务各 +0.010。"), float64(score)/1000), settingsControlWidth, func() ui.Element {
 			// Keep the same glyph in both tones so filled and empty stars align.
 			return ui.Row(c).Gap(gapInline).Children(func() {
 				if stars > 0 {
@@ -101,7 +102,7 @@ func (a *desktop) openPet() {
 	size := a.prefs.Pet.Size
 	x, y := petRestoredPosition(a.prefs.Pet, mygo.Screen.Displays(), mygo.Screen.PrimaryDisplay().WorkArea)
 	w := mygo.NewWindow(mygo.WindowOptions{
-		Title: "Ally 桌面宠物", Width: size, Height: size, X: x, Y: y,
+		Title: locales.Text("Ally 桌面宠物"), Width: size, Height: size, X: x, Y: y,
 		Frameless: true, Transparent: true, AlwaysOnTop: true, SkipTaskbar: true,
 		DisableResize: true, DisableMaximize: true, DisableMinimize: true, DisableFullScreen: true,
 		DisableShadow: true, Hidden: true, Content: ui.View(a.petView),
@@ -271,15 +272,15 @@ func (a *desktop) rewardPet(activity string, now time.Time) {
 func (a *desktop) petView(c *ui.Context) {
 	c.Root().Background(ui.Transparent)
 	reduceMotion := c.Preferences().ReduceMotion
-	pet := ui.Column(c.Key("pet-character")).Fill().Label("桌面宠物").Draw(func(p *ui.Painter, r ui.Rect) {
+	pet := ui.Column(c.Key("pet-character")).Fill().Label(locales.Text("桌面宠物")).Draw(func(p *ui.Painter, r ui.Rect) {
 		a.paintAvatar(p, r, reduceMotion, a.avatarAnimationEnabled(avatarOnPet))
 	})
 	pet.ContextMenu(a.petContextMenu)
 	pet.Children(func() {
 		ui.ButtonBase(c.Key("pet-head")).FillWidth().Grow(2).Basis(0).
-			Cursor(ui.CursorPointer).Label("摸摸宠物的头").OnClick(a.patPet)
+			Cursor(ui.CursorPointer).Label(locales.Text("摸摸宠物的头")).OnClick(a.patPet)
 		ui.Box(c.Key("pet-body")).FillWidth().Grow(3).Basis(0).
-			Cursor(ui.CursorGrab).Label("拖动宠物位置").DragWindow()
+			Cursor(ui.CursorGrab).Label(locales.Text("拖动宠物位置")).DragWindow()
 	})
 }
 
@@ -287,7 +288,7 @@ func (a *desktop) patPet() {
 	now := time.Now()
 	a.patAvatar(now)
 	a.rewardPet("pat", now)
-	lines := []string{"摸摸头收到啦，谢谢主人！", "嘿嘿，再陪我一会儿吧。", "被摸摸的感觉真好～", "有主人在，今天也很开心。"}
+	lines := []string{locales.Text("摸摸头收到啦，谢谢主人！"), locales.Text("嘿嘿，再陪我一会儿吧。"), locales.Text("被摸摸的感觉真好～"), locales.Text("有主人在，今天也很开心。")}
 	a.showPetBubble(lines[now.UnixNano()%int64(len(lines))], false)
 }
 

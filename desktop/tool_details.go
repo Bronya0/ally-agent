@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"fmt"
 	"strings"
 
@@ -52,7 +53,7 @@ func (a *desktop) attachToolImage(t *conversation, m map[string]any) {
 	}
 	id := str(m, "toolCallId") + "-image"
 	if len(messageAttachmentList(m)) == 0 {
-		m["attachments"] = []any{map[string]any{"id": id, "name": map[bool]string{true: "截图", false: "生成的图片"}[name == "screenshot"], "kind": "image", "generated": name != "screenshot", "imageRef": ref, "dataUrl": url, "type": str(data, "mime")}}
+		m["attachments"] = []any{map[string]any{"id": id, "name": map[bool]string{true: locales.Text("截图"), false: locales.Text("生成的图片")}[name == "screenshot"], "kind": "image", "generated": name != "screenshot", "imageRef": ref, "dataUrl": url, "type": str(data, "mime")}}
 		// A row that only carried a tool call now draws an image: it may open a
 		// history block where it did not before.
 		t.markHistory()
@@ -117,7 +118,7 @@ func toolDeleteTree(c *ui.Context, args, result map[string]any, ink ...ui.Color)
 		ui.Text(c, prefix+path+suffix).Font(monoFamily).FontSize(fsTool - 2).TextColor(color.Mix(c.Theme().Text, 0.3)).FillWidth().MinWidth(0).SingleLine().Selectable()
 	}
 	if count := int(num(result, "failedCount")); count > 0 {
-		notice(c, "error", fmt.Sprintf("%d 个路径删除失败", count), ink...)
+		notice(c, "error", fmt.Sprintf(locales.Text("%d 个路径删除失败"), count), ink...)
 	}
 }
 
@@ -137,7 +138,7 @@ func toolAskSummary(c *ui.Context, key string, args, result map[string]any) {
 								ui.Row(c).Gap(gapInline).Children(func() {
 									ui.Text(c, "✓ "+str(selection, "label")).FontSize(fsSmall).TextColor(c.Theme().Success)
 									if boolOf(selection, "recommended") {
-										accentChip(c, "推荐")
+										accentChip(c, locales.Text("推荐"))
 									}
 								})
 							}
@@ -183,7 +184,7 @@ var resourceStatusText = map[string]string{
 
 func resourceStatus(status string) string {
 	if text, ok := resourceStatusText[strings.ToLower(strings.TrimSpace(status))]; ok {
-		return text
+		return locales.Text(text)
 	}
 	return status
 }

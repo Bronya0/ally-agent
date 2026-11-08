@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -171,20 +172,20 @@ func (a *desktop) mediaCommand(file *workspaceFile, command string) {
 
 func (a *desktop) workspaceMediaToolbar(c *ui.Context, file *workspaceFile) {
 	previous, next := a.mediaNeighbours(file)
-	uikit.Select(c.Key("media-mode"), &a.media.mode, mediaModes).Width(108).OnChange(func() { a.syncMediaOptions(file) })
-	label := "播放"
+	localizedSelect(c.Key("media-mode"), &a.media.mode, mediaModes).Width(108).OnChange(func() { a.syncMediaOptions(file) })
+	label := locales.Text("播放")
 	if a.workspaceMedia().playing {
-		label = "暂停"
+		label = locales.Text("暂停")
 	}
-	uikit.Tooltip(c, flat(c, label).OnClick(func() { a.toggleMediaPlayback(file) }), "空格：播放/暂停；← →：切换同目录同类型媒体；图片每 5 秒切换")
-	flat(c, "上一个").Disabled(previous == "").OnClick(func() { a.stepWorkspaceMedia(file, -1, false) })
-	flat(c, "下一个").Disabled(next == "").OnClick(func() { a.stepWorkspaceMedia(file, 1, false) })
+	uikit.Tooltip(c, flat(c, label).OnClick(func() { a.toggleMediaPlayback(file) }), locales.Text("空格：播放/暂停；← →：切换同目录同类型媒体；图片每 5 秒切换"))
+	flat(c, locales.Text("上一个")).Disabled(previous == "").OnClick(func() { a.stepWorkspaceMedia(file, -1, false) })
+	flat(c, locales.Text("下一个")).Disabled(next == "").OnClick(func() { a.stepWorkspaceMedia(file, 1, false) })
 	if workspaceFileKindForPath(file.Path) == workspaceFileImage {
-		label := "画质增强：关"
+		label := locales.Text("画质增强：关")
 		if a.media.enhance {
-			label = "画质增强：开"
+			label = locales.Text("画质增强：开")
 		}
-		uikit.Tooltip(c, flat(c, label).OnClick(func() { a.media.enhance = !a.media.enhance; a.syncMediaOptions(file) }), "轻微减淡与锐化，仅影响预览")
+		uikit.Tooltip(c, flat(c, label).OnClick(func() { a.media.enhance = !a.media.enhance; a.syncMediaOptions(file) }), locales.Text("轻微减淡与锐化，仅影响预览"))
 	}
 }
 
@@ -297,9 +298,9 @@ func (p *nativePreview) replaceImage(options workspaceMediaOptions) {
 			p.probeCancel = nil
 			if err != nil || value != true {
 				if err == nil {
-					err = fmt.Errorf("图片替换未完成")
+					err = fmt.Errorf("%s", locales.Text("图片替换未完成"))
 				}
-				p.failContent(generation, fmt.Errorf("图片预览加载失败：%w", err), false)
+				p.failContent(generation, fmt.Errorf(locales.Text("图片预览加载失败：%w"), err), false)
 			}
 		})
 	}()
@@ -316,7 +317,7 @@ const schedule=()=>{clearTimeout(timer);if(image&&playing&&!pending)timer=setTim
 const play=on=>{if(image){playing=on;schedule();emit(on?'play':'pause')}else if(on){m.play().catch(()=>emit('pause'))}else m.pause()};
 const configure=(s,e)=>{single=s;enhance=e;m.loop=s;m.dataset.single=s?'1':'';m.style.filter=e?'saturate(.94) brightness(1.025) url(#sharpen)':'';schedule()};
 const replaceImage=async(o,id)=>{
- if(!image)throw new Error('当前页面不是图片预览');
+ if(!image)throw new Error(ERR_NOT_IMAGE);
  if(id<=revision)return false;
  revision=id;if(pending)pending.cancel();clearTimeout(timer);
  token=o.token;window.allyMedia.token=token;playing=o.start;single=o.single;enhance=o.enhance;
@@ -325,9 +326,9 @@ const replaceImage=async(o,id)=>{
  try{
   const loaded=await new Promise((resolve,reject)=>{
    let done=false;const finish=(error,ready)=>{if(done)return;done=true;clearTimeout(timeout);next.onload=next.onerror=null;if(!ready)next.removeAttribute('src');if(error)reject(error);else resolve(ready)};
-   const timeout=setTimeout(()=>finish(new Error('图片加载超时'),false),10000);
+   const timeout=setTimeout(()=>finish(new Error(ERR_IMAGE_TIMEOUT),false),10000);
    job.cancel=()=>finish(null,false);
-   next.onerror=()=>finish(new Error('图片无法解码'),false);
+   next.onerror=()=>finish(new Error(ERR_IMAGE_DECODE),false);
    next.onload=async()=>{try{await next.decode();finish(null,true)}catch(error){finish(error,false)}};
    next.src=o.source;
   });

@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"fmt"
 	"math"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"ally-dev/desktop/uikit"
 	backend "ally-dev/internal/app"
+	"github.com/egoist/mygo/i18n"
 )
 
 const voiceCaptureMaxDuration = 20 * time.Second
@@ -60,6 +62,7 @@ type voiceModelsState struct {
 	// presetOptions is built once: the dialog asks for the service list every
 	// frame, and the presets never change at runtime.
 	presetOptions []uikit.Option
+	presetLocale string
 }
 
 // voiceLevelRing keeps the last voiceWaveBars levels in a fixed array written by
@@ -97,7 +100,10 @@ const voiceWaveBars = 56
 func (a *desktop) ensureVoiceModels() {
 	if a.voiceModels == nil {
 		a.voiceModels = &voiceModelsState{models: cloneVoiceModelConfigs(a.config.VoiceModels), editing: -1}
+	}
+	if a.voiceModels.presetLocale != i18n.Locale() || a.voiceModels.presetOptions == nil {
 		a.voiceModels.presetOptions = voicePresetOptions()
+		a.voiceModels.presetLocale = i18n.Locale()
 	}
 }
 
@@ -107,7 +113,7 @@ func voicePresetOptions() []uikit.Option {
 	presets := backend.VoiceProviderPresets()
 	options := make([]uikit.Option, 0, len(presets))
 	for _, preset := range presets {
-		options = append(options, uikit.Option{Value: preset.ID, Label: preset.Label})
+		options = append(options, uikit.Option{Value: preset.ID, Label: locales.Text(preset.Label)})
 	}
 	return options
 }
@@ -163,18 +169,20 @@ func (s *voiceModelsState) open(index int) {
 type voiceRowLines struct {
 	provider, endpoint, model string
 	providerLine, modelLine   string
+	locale string
 }
 
 // rowLines returns the cached lines for one model, rebuilding them only when the
 // fields they were derived from changed.
 func (s *voiceModelsState) rowLines(m backend.VoiceModelConfig) voiceRowLines {
-	if cached, ok := s.lines[m.ID]; ok && cached.provider == m.Provider && cached.endpoint == m.Endpoint && cached.model == m.Model {
+	locale := i18n.Locale()
+	if cached, ok := s.lines[m.ID]; ok && cached.provider == m.Provider && cached.endpoint == m.Endpoint && cached.model == m.Model && cached.locale == locale {
 		return cached
 	}
-	line := voiceRowLines{provider: m.Provider, endpoint: m.Endpoint, model: m.Model}
+	line := voiceRowLines{provider: m.Provider, endpoint: m.Endpoint, model: m.Model, locale: locale}
 	line.providerLine = m.Provider + " · " + m.Endpoint
 	if m.Model != "" {
-		line.modelLine = "模型：" + m.Model
+		line.modelLine = locales.Text("模型：") + m.Model
 	}
 	if s.lines == nil {
 		s.lines = make(map[string]voiceRowLines, len(s.models))
@@ -335,25 +343,25 @@ func (a *desktop) fetchVoiceModelList() {
 		return
 	}
 	draft := s.requestDraft()
-	s.fetchBusy, s.fetchNote = true, "拉取中…"
+	s.fetchBusy, s.fetchNote = true, locales.Text("拉取中…")
 	go func() {
 		models, err := a.core.FetchVoiceModelList(draft, s.includeAllModels)
 		a.win.Update(func() {
 			s.fetchBusy = false
 			if err != nil {
-				s.fetchNote = "拉取模型列表失败：" + err.Error()
+				s.fetchNote = locales.Text("拉取模型列表失败：") + err.Error()
 				return
 			}
 			if len(models) == 0 {
-				s.fetchNote = "该服务没有列出语音模型（可能只暴露对话模型）；请手动填写模型名，或勾选「全部」看完整列表。"
+				s.fetchNote = locales.Text("该服务没有列出语音模型（可能只暴露对话模型）；请手动填写模型名，或勾选「全部」看完整列表。")
 				return
 			}
 			s.fetched = models
 			s.fetchEpoch++
 			if s.includeAllModels {
-				s.fetchNote = fmt.Sprintf("已获取全部 %d 个模型，也可以直接输入模型名。", len(models))
+				s.fetchNote = fmt.Sprintf(locales.Text("已获取全部 %d 个模型，也可以直接输入模型名。"), len(models))
 			} else {
-				s.fetchNote = fmt.Sprintf("已获取 %d 个语音模型；需要看全部模型请勾选「全部」。", len(models))
+				s.fetchNote = fmt.Sprintf(locales.Text("已获取 %d 个语音模型；需要看全部模型请勾选「全部」。"), len(models))
 			}
 		})
 	}()
@@ -367,7 +375,7 @@ func (a *desktop) saveVoiceModels() {
 	s.draft = s.requestDraft()
 	for i, existing := range s.models {
 		if i != s.editing && strings.EqualFold(strings.TrimSpace(existing.ID), strings.TrimSpace(s.draft.ID)) {
-			a.notifyError("语音模型配置 ID 已存在")
+			a.notifyError(locales.Text("语音模型配置 ID 已存在"))
 			return
 		}
 	}
@@ -377,7 +385,7 @@ func (a *desktop) saveVoiceModels() {
 	} else {
 		next = append(next, s.draft)
 	}
-	a.commitVoiceModels(next, "语音模型已保存", true, nil)
+	a.commitVoiceModels(next, locales.Text("语音模型已保存"), true, nil)
 }
 
 func (a *desktop) testVoiceEndpoint() {
@@ -390,14 +398,14 @@ func (a *desktop) testVoiceEndpoint() {
 		draft.ID = "voice-endpoint-check"
 	}
 	s.endpointBusy = true
-	s.endpointState, s.endpointChecked = "正在检查 Endpoint（不会上传录音）…", false
+	s.endpointState, s.endpointChecked = locales.Text("正在检查 Endpoint（不会上传录音）…"), false
 	shape := voiceEndpointShape(s.requestDraft())
 	go func() {
 		result, err := a.core.TestNativeVoiceEndpoint(draft)
 		a.win.Update(func() {
 			s.endpointBusy, s.endpointState = false, ""
 			if err != nil {
-				a.notifyError("Endpoint 检查失败：" + err.Error())
+				a.notifyError(locales.Text("Endpoint 检查失败：") + err.Error())
 				return
 			}
 			// The probe result is a one-line status, not page copy: report it as a
@@ -421,7 +429,7 @@ func voiceModelLabel(model backend.VoiceModelConfig) string {
 			return candidate
 		}
 	}
-	return "未命名模型"
+	return locales.Text("未命名模型")
 }
 
 func voiceModelIDExists(models []backend.VoiceModelConfig, id string) bool {
@@ -471,7 +479,7 @@ func (a *desktop) openVoiceRecorder() {
 	}
 	s.recorderOpen, s.transcript = true, ""
 	s.wave.reset()
-	s.recordState = "准备就绪。按下开始后允许麦克风访问，再说一句话。"
+	s.recordState = locales.Text("准备就绪。按下开始后允许麦克风访问，再说一句话。")
 }
 
 func (a *desktop) testVoiceModel() {
@@ -479,7 +487,7 @@ func (a *desktop) testVoiceModel() {
 	if s == nil || s.busy || s.testBusy || s.recording != nil || !a.endpointVerified(s) {
 		return
 	}
-	s.recordState = "正在请求麦克风权限…"
+	s.recordState = locales.Text("正在请求麦克风权限…")
 	s.testBusy = true
 	go func() {
 		recorder, err := startNativeAudioRecording()
@@ -489,7 +497,7 @@ func (a *desktop) testVoiceModel() {
 		a.win.Update(func() {
 			s.testBusy = false
 			if err != nil {
-				s.recordState = "录音启动失败：" + err.Error()
+				s.recordState = locales.Text("录音启动失败：") + err.Error()
 				return
 			}
 			if !s.formOpen || a.page != "models" || a.modelTab != "语音模型" {
@@ -499,7 +507,7 @@ func (a *desktop) testVoiceModel() {
 			s.recording = recorder
 			s.recordStartedAt = time.Now()
 			s.recordSeconds.Store(0)
-			s.recordState = "正在录音…"
+			s.recordState = locales.Text("正在录音…")
 			levelWatchStop := make(chan struct{})
 			s.levelWatchStop = levelWatchStop
 			go a.watchVoiceLevels(s, recorder, levelWatchStop)
@@ -528,7 +536,7 @@ func (a *desktop) stopVoiceRecording() {
 	}
 	s.testBusy = true
 	s.transcript = ""
-	s.recordState = "正在处理录音并请求语音模型…"
+	s.recordState = locales.Text("正在处理录音并请求语音模型…")
 	s.recordSeconds.Store(0)
 	draft := s.requestDraft()
 	go func() {
@@ -578,14 +586,14 @@ func (a *desktop) stopVoiceRecording() {
 		a.win.Update(func() {
 			s.testBusy = false
 			if err != nil {
-				s.recordState = "转写失败：" + err.Error()
+				s.recordState = locales.Text("转写失败：") + err.Error()
 				return
 			}
 			s.transcript = strings.TrimSpace(result)
 			if s.transcript == "" {
-				s.recordState = "请求成功，但模型没有识别出文字。"
+				s.recordState = locales.Text("请求成功，但模型没有识别出文字。")
 			} else {
-				s.recordState = "转写完成"
+				s.recordState = locales.Text("转写完成")
 			}
 		})
 	}()
@@ -664,12 +672,12 @@ func (a *desktop) deleteVoiceModel(index int) {
 	// Deleting has no background work to do before the UI may change, so run is empty
 	// and the list is edited in after, which confirmAction posts to the main thread.
 	// Editing s.models from run would race with the render loop reading it.
-	a.confirmAction("删除语音模型", label, func() error { return nil }, func() {
+	a.confirmAction(locales.Text("删除语音模型"), label, func() error { return nil }, func() {
 		if s.busy || index >= len(s.models) {
 			return
 		}
 		before := cloneVoiceModelConfigs(s.models)
 		s.models = append(s.models[:index], s.models[index+1:]...)
-		a.commitVoiceModels(s.models, "语音模型已删除", false, before)
+		a.commitVoiceModels(s.models, locales.Text("语音模型已删除"), false, before)
 	})
 }

@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -23,7 +24,7 @@ const historyPageSizeHelp = `按从最新往前的展示块计数，不按对话
 
 var settingsSections = []string{"通用", "高级", "网络", "安全围栏", "API", "版本亮点", "关于"}
 
-const defaultUserAgentOption = "AllyAgent（默认）"
+const defaultUserAgentOption = "AllyAgent"
 
 // autoCompactOptions keeps the stored values ("summary" / "recent") and changes
 // only what the user reads: a raw English value in the settings form is neither
@@ -147,27 +148,28 @@ func settingsAction(c *ui.Context, label string, tone ...uikit.Tone) ui.Element 
 }
 
 func (a *desktop) settingsGeneral(c *ui.Context) {
-	selected := a.settingsModule(c, "settingsGeneral", "外观", "提示词", "路径", "对话行为", "应用", "语音输入")
+	selected := a.settingsModule(c, "settingsGeneral", locales.Text("外观"), locales.Text("提示词"), locales.Text("路径"), locales.Text("对话行为"), locales.Text("应用"), locales.Text("语音输入"))
 
 	if selected == 0 {
-		a.settingsCard(c, "settings-appearance", "主题与配色", "选择外观模式与配色；青禾在浅色模式下使用官网同款配色。", func() {
-			note := "选择深色、浅色，或按本地时间自动切换。"
+		a.languageSetting(c)
+		a.settingsCard(c, "settings-appearance", locales.Text("主题与配色"), locales.Text("选择外观模式与配色；青禾在浅色模式下使用官网同款配色。"), func() {
+			note := locales.Text("选择深色、浅色，或按本地时间自动切换。")
 			if a.prefs.Appearance == "auto" {
-				note = "07:00–17:59 浅色，18:00–06:59 深色。"
+				note = locales.Text("07:00–17:59 浅色，18:00–06:59 深色。")
 			}
-			if mode := a.settingsRow(c, "appearance-row", "外观模式", note, settingsControlWidth, func() ui.Element {
-				return segmentedInk(c, "appearance-mode", &a.settings.AppearanceMode, a.secondaryInk(), "深色", "浅色", "自动")
+			if mode := a.settingsRow(c, "appearance-row", locales.Text("外观模式"), note, settingsControlWidth, func() ui.Element {
+				return segmentedInk(c, "appearance-mode", &a.settings.AppearanceMode, a.secondaryInk(), locales.Text("深色"), locales.Text("浅色"), locales.Text("自动"))
 			}); mode.Changed() {
 				a.selectAppearance([]string{"dark", "light", "auto"}[a.settings.AppearanceMode])
 			}
-			a.settingsRow(c, "accent-row", "配色", "青禾搭配浅灰绿背景、纸白卡片与墨绿文字。", settingsControlWidth, func() ui.Element {
+			a.settingsRow(c, "accent-row", locales.Text("配色"), locales.Text("青禾搭配浅灰绿背景、纸白卡片与墨绿文字。"), settingsControlWidth, func() ui.Element {
 				return uikit.OptionGroup(c.Key("accent-options")).Children(func() {
 					// Retired presets still resolve to blue without changing stored IDs.
 					for _, idx := range []int{paletteBlue, paletteAmber, paletteForest, paletteViolet, paletteMeadow} {
 						idx := idx
 						p := palettes[idx]
 						selected := a.prefs.Palette == idx || (idx == paletteBlue && (a.prefs.Palette == paletteLight || a.prefs.Palette == paletteOcean))
-						choiceSwatch(c, fmt.Sprintf("palette-%d", idx), p.name, selected, p.accent).OnClick(func() {
+						choiceSwatch(c, fmt.Sprintf("palette-%d", idx), locales.Text(p.name), selected, p.accent).OnClick(func() {
 							if a.prefs.Appearance == "" {
 								if a.currentPalette().dark {
 									a.prefs.Appearance = "dark"
@@ -183,60 +185,60 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				})
 			})
 		})
-		a.settingsCard(c, "settings-avatar", "欢迎页形象", "点击头像可以切换樱花特效；桌宠未开启时也可以摸摸头。", func() {
+		a.settingsCard(c, "settings-avatar", locales.Text("欢迎页形象"), locales.Text("点击头像可以切换樱花特效；桌宠未开启时也可以摸摸头。"), func() {
 			ui.Column(c).PaddingY(gapField).Gap(gapSection).Children(func() {
 				uikit.OptionGroup(c.Key("avatar-options")).Children(func() {
-					for _, style := range []struct{ id, label string }{{"eye", "大眼睛"}, {"whale", "大肥鱼"}, {"bot", "小机器人"}, {"gpt", "GPT 龙娘"}, {"claude", "Claude 橙花娘"}, {"deepseek", "DeepSeek 女仆"}, {"gemini", "Gemini 星猫娘"}, {"glm", "GLM 狐狸女仆"}, {"qwen", "千问千金"}} {
+					for _, style := range []struct{ id, label string }{{"eye", locales.Text("大眼睛")}, {"whale", locales.Text("大肥鱼")}, {"bot", locales.Text("小机器人")}, {"gpt", locales.Text("GPT 龙娘")}, {"claude", locales.Text("Claude 橙花娘")}, {"deepseek", locales.Text("DeepSeek 女仆")}, {"gemini", locales.Text("Gemini 星猫娘")}, {"glm", locales.Text("GLM 狐狸女仆")}, {"qwen", locales.Text("千问千金")}} {
 						style := style
 						choiceButton(c, "avatar-"+style.id, style.label, a.prefs.Avatar == style.id, c.Theme().Accent).
 							OnClick(func() { a.selectAvatarStyle(style.id) })
 					}
 				})
 				ui.Row(c).Wrap().Gap(gapField).Children(func() {
-					settingsAction(c, "上传自定义形象").Disabled(a.customAvatarBusy).OnClick(func() { a.chooseCustomAvatar() })
+					settingsAction(c, locales.Text("上传自定义形象")).Disabled(a.customAvatarBusy).OnClick(func() { a.chooseCustomAvatar() })
 					if a.customAvatarAvailable {
-						settingsAction(c, "使用自定义形象").Disabled(a.customAvatarBusy).OnClick(func() { a.selectAvatarStyle("custom") })
-						settingsAction(c, "删除自定义形象", uikit.Error).Disabled(a.customAvatarBusy).OnClick(func() { a.deleteCustomAvatar() })
+						settingsAction(c, locales.Text("使用自定义形象")).Disabled(a.customAvatarBusy).OnClick(func() { a.selectAvatarStyle("custom") })
+						settingsAction(c, locales.Text("删除自定义形象"), uikit.Error).Disabled(a.customAvatarBusy).OnClick(func() { a.deleteCustomAvatar() })
 					}
 				})
 			})
 		})
-		a.settingsCard(c, "settings-background", "对话背景图", "淡色铺在对话区背景，建议不超过 12 MB。", func() {
-			state := "未设置背景图"
+		a.settingsCard(c, "settings-background", locales.Text("对话背景图"), locales.Text("淡色铺在对话区背景，建议不超过 12 MB。"), func() {
+			state := locales.Text("未设置背景图")
 			if a.configDraft.BackgroundImage != "" {
-				state = "已设置：" + a.configDraft.BackgroundImage
+				state = locales.Text("已设置：") + a.configDraft.BackgroundImage
 			}
-			a.settingsRow(c, "background-image-row", "背景图片", state, settingsControlWidth, func() ui.Element {
+			a.settingsRow(c, "background-image-row", locales.Text("背景图片"), state, settingsControlWidth, func() ui.Element {
 				return ui.Row(c).Wrap().Gap(gapField).Children(func() {
-					name := "选择图片"
+					name := locales.Text("选择图片")
 					if a.configDraft.BackgroundImage != "" {
-						name = "更换图片"
+						name = locales.Text("更换图片")
 					}
 					settingsAction(c, name).OnClick(func() { a.selectBackgroundImage() })
 					if a.configDraft.BackgroundImage != "" {
-						settingsAction(c, "清除背景图", uikit.Error).OnClick(func() { a.clearBackgroundImage() })
+						settingsAction(c, locales.Text("清除背景图"), uikit.Error).OnClick(func() { a.clearBackgroundImage() })
 					}
 				})
 			})
-			a.settingsRow(c, "background-opacity-row", "背景图透明度", fmt.Sprintf("当前 %.0f%%，越大越明显。", a.settings.BgOpacity*100), settingsControlWidth, func() ui.Element {
-				return ui.Slider(c.Key("bg-opacity"), &a.settings.BgOpacity, 0, 1).Label("背景图透明度").FillWidth()
+			a.settingsRow(c, "background-opacity-row", locales.Text("背景图透明度"), fmt.Sprintf(locales.Text("当前 %.0f%%，越大越明显。"), a.settings.BgOpacity*100), settingsControlWidth, func() ui.Element {
+				return ui.Slider(c.Key("bg-opacity"), &a.settings.BgOpacity, 0, 1).Label(locales.Text("背景图透明度")).FillWidth()
 			})
 		})
-		a.settingsCard(c, "settings-fonts", "阅读字号", "按文字类型限制范围，离开设置页面时保存。", func() {
+		a.settingsCard(c, "settings-fonts", locales.Text("阅读字号"), locales.Text("按文字类型限制范围，离开设置页面时保存。"), func() {
 			ui.Row(c.Key("font-grid")).Wrap().Gap(gapPage).PaddingY(gapField).AlignItems(ui.Start).Children(func() {
-				for _, item := range []struct {
+				for index, item := range []struct {
 					label  string
 					value  *float64
 					lo, hi float64
 				}{
-					{"消息正文", &a.settings.FontMessage, 12, 24},
-					{"代码块", &a.settings.FontCode, 12, 24},
-					{"工具卡", &a.settings.FontTool, 12, 24},
-					{"次级正文", &a.settings.FontSub, 11, 18},
-					{"辅助文字", &a.settings.FontAux, 10, 20},
+					{locales.Text("消息正文"), &a.settings.FontMessage, 12, 24},
+					{locales.Text("代码块"), &a.settings.FontCode, 12, 24},
+					{locales.Text("工具卡"), &a.settings.FontTool, 12, 24},
+					{locales.Text("次级正文"), &a.settings.FontSub, 11, 18},
+					{locales.Text("辅助文字"), &a.settings.FontAux, 10, 20},
 				} {
 					item := item
-					ui.Field(c.Key("font-"+item.label), item.label, func() {
+					ui.Field(c.Key(index), item.label, func() {
 						uikit.NumberInput(c, "number", item.label, item.value, item.lo, item.hi, 0.5, a.secondaryInk()).FillWidth()
 					}).Basis(settingsNumberWidth - gapPage*2).Grow(1).MaxWidth(settingsNumberWidth).MinWidth(0)
 				}
@@ -245,62 +247,63 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 		a.petSettings(c)
 	}
 	if selected == 1 {
-		a.settingsCard(c, "settings-prompt", "自定义提示词", "会随每次对话一起发送给模型，例如语言、回复长度与编码偏好。", func() {
-			textArea(c, "custom-prompt", "自定义提示词", "例如：请用中文回答、保持回复简洁", &a.configDraft.CustomPrompt, 240)
+		a.settingsCard(c, "settings-prompt", locales.Text("自定义提示词"), locales.Text("会随每次对话一起发送给模型，例如语言、回复长度与编码偏好。"), func() {
+			textArea(c, "custom-prompt", locales.Text("自定义提示词"), locales.Text("例如：请用中文回答、保持回复简洁"), &a.configDraft.CustomPrompt, 240)
 		})
 	}
 	if selected == 2 {
-		a.settingsCard(c, "settings-paths", "运行环境与请求标识", "", func() {
+		a.settingsCard(c, "settings-paths", locales.Text("运行环境与请求标识"), "", func() {
 			if runtime.GOOS == "windows" {
-				a.settingsRow(c, "git-bash-row", "Git Bash 路径", "留空自动检测；例如 C:\\Program Files\\Git\\bin\\bash.exe。", settingsControlWidth, func() ui.Element {
-					return textField(c, "git-bash", "留空自动检测", "Git Bash 路径", &a.configDraft.GitBashPath).FillWidth()
+				a.settingsRow(c, "git-bash-row", locales.Text("Git Bash 路径"), locales.Text("留空自动检测；例如 C:\\Program Files\\Git\\bin\\bash.exe。"), settingsControlWidth, func() ui.Element {
+					return textField(c, "git-bash", locales.Text("留空自动检测"), locales.Text("Git Bash 路径"), &a.configDraft.GitBashPath).FillWidth()
 				})
 			}
-			a.settingsRow(c, "user-agent-row", "User-Agent", "可选预设或自定义；仅用于模型 API 请求，HTTP 工具不受影响。", settingsControlWidth, func() ui.Element {
+			a.settingsRow(c, "user-agent-row", "User-Agent", locales.Text("可选预设或自定义；仅用于模型 API 请求，HTTP 工具不受影响。"), settingsControlWidth, func() ui.Element {
 				uaPresets := []string{defaultUserAgentOption, "Codex CLI", "Claude Code", "OpenCode", "Pi"}
 				return uikit.ComboboxField(c.Key("user-agent"), &a.configDraft.UserAgent, uaPresets, "User-Agent", uaPresets[0], a.secondaryInk()).FillWidth()
 			})
 		})
 	}
 	if selected == 3 {
-		a.settingsCard(c, "settings-history", "历史显示", "只影响界面展示，不删除历史，也不改变模型上下文。", func() {
-			a.settingsRow(c, "history-page-row", "每页展示块数", "默认 80，长任务可设 100；范围 20–200。悬浮输入框查看计数方式，保存后生效。", settingsNumberWidth, func() ui.Element {
-				return uikit.RightTooltip(c, uikit.NumberInput(c, "history-page-size", "每页展示块数", &a.settings.HistoryPageSize, 20, 200, 10, a.secondaryInk()), historyPageSizeHelp)
+		a.settingsCard(c, "settings-history", locales.Text("历史显示"), locales.Text("只影响界面展示，不删除历史，也不改变模型上下文。"), func() {
+			a.settingsRow(c, "history-page-row", locales.Text("每页展示块数"), locales.Text("默认 80，长任务可设 100；范围 20–200。悬浮输入框查看计数方式，保存后生效。"), settingsNumberWidth, func() ui.Element {
+				return uikit.RightTooltip(c, uikit.NumberInput(c, "history-page-size", locales.Text("每页展示块数"), &a.settings.HistoryPageSize, 20, 200, 10, a.secondaryInk()), locales.Text(historyPageSizeHelp))
 			})
 		})
-		a.settingsCard(c, "settings-execution", "请求与执行", "控制请求失败后的重试，以及同时运行的工具数量。", func() {
-			a.settingsRow(c, "llm-retries-row", "LLM 请求重试次数", "0 表示使用默认值 6；最多 10 次。", settingsNumberWidth, func() ui.Element {
-				return uikit.NumberInput(c, "llm-retries", "LLM 请求重试次数", &a.settings.Retries, 0, 10, 1, a.secondaryInk())
+		a.settingsCard(c, "settings-execution", locales.Text("请求与执行"), locales.Text("控制请求失败后的重试，以及同时运行的工具数量。"), func() {
+			a.settingsRow(c, "llm-retries-row", locales.Text("LLM 请求重试次数"), locales.Text("0 表示使用默认值 6；最多 10 次。"), settingsNumberWidth, func() ui.Element {
+				return uikit.NumberInput(c, "llm-retries", locales.Text("LLM 请求重试次数"), &a.settings.Retries, 0, 10, 1, a.secondaryInk())
 			})
-			a.settingsRow(c, "tool-concurrency-row", "工具执行并发度", "同时执行的工具数，范围 1–16，默认 4。", settingsNumberWidth, func() ui.Element {
-				return uikit.NumberInput(c, "tool-concurrency", "工具执行并发度", &a.settings.Concurrency, 1, 16, 1, a.secondaryInk())
+			a.settingsRow(c, "tool-concurrency-row", locales.Text("工具执行并发度"), locales.Text("同时执行的工具数，范围 1–16，默认 4。"), settingsNumberWidth, func() ui.Element {
+				return uikit.NumberInput(c, "tool-concurrency", locales.Text("工具执行并发度"), &a.settings.Concurrency, 1, 16, 1, a.secondaryInk())
 			})
 		})
-		a.settingsCard(c, "settings-context", "上下文管理", "在接近上下文上限时精简历史，为后续任务留出空间。", func() {
-			a.settingsRow(c, "compact-method-row", "上下文自动压缩方式", "全文总结调用模型；本地裁剪优先在本机精简。悬浮选择框查看详情，修改对新任务生效。", settingsControlWidth, func() ui.Element {
+		a.settingsCard(c, "settings-context", locales.Text("上下文管理"), locales.Text("在接近上下文上限时精简历史，为后续任务留出空间。"), func() {
+			a.settingsRow(c, "compact-method-row", locales.Text("上下文自动压缩方式"), locales.Text("全文总结调用模型；本地裁剪优先在本机精简。悬浮选择框查看详情，修改对新任务生效。"), settingsControlWidth, func() ui.Element {
 				stored := a.configDraft.AutoCompactMethod
 				method := stored
 				if method == "" {
 					method = "summary"
 				}
-				control := uikit.SelectField(c.Key("compact-method"), &method, autoCompactOptions, a.secondaryInk()).Label("压缩方式").FillWidth()
+				options := []uikit.Option{{Value: "summary", Label: locales.Text(autoCompactOptions[0].Label)}, {Value: "recent", Label: locales.Text(autoCompactOptions[1].Label)}}
+				control := uikit.SelectField(c.Key("compact-method"), &method, options, a.secondaryInk()).Label(locales.Text("压缩方式")).FillWidth()
 				if method != stored && method != "" {
 					a.configDraft.AutoCompactMethod = method
 				}
-				return uikit.Tooltip(c, control, "全文总结：调用模型生成摘要。本地裁剪：不调用模型，先清空旧工具调用的参数，此前的回复与工具结果只留首尾摘录，回复正文合计最多约 8k tokens；减不下来时自动回退到全文总结。")
+				return uikit.Tooltip(c, control, locales.Text("全文总结：调用模型生成摘要。本地裁剪：不调用模型，先清空旧工具调用的参数，此前的回复与工具结果只留首尾摘录，回复正文合计最多约 8k tokens；减不下来时自动回退到全文总结。"))
 			})
 			a.settingsCompactThreshold(c)
-			a.settingsRow(c, "compact-timeout-row", "压缩超时时间", "等待摘要生成的最长时间；30–3600 秒，默认 180 秒。", settingsNumberWidth, func() ui.Element {
-				return uikit.NumberInput(c, "compact-timeout", "压缩超时时间", &a.settings.CompactTimeout, 30, 3600, 30, a.secondaryInk())
+			a.settingsRow(c, "compact-timeout-row", locales.Text("压缩超时时间"), locales.Text("等待摘要生成的最长时间；30–3600 秒，默认 180 秒。"), settingsNumberWidth, func() ui.Element {
+				return uikit.NumberInput(c, "compact-timeout", locales.Text("压缩超时时间"), &a.settings.CompactTimeout, 30, 3600, 30, a.secondaryInk())
 			})
 		})
-		a.settingsCard(c, "settings-session-headers", "会话请求头", "保存后对后续任务生效；手动配置的同名请求头不受影响。", func() {
-			if sw := a.settingsSwitch(c, "send-session-id", "自动发送 session-id", "用于同一会话的后端路由与缓存复用，默认开启。", &a.settings.SendSessionID); sw.Changed() && !a.settings.SendSessionID {
+		a.settingsCard(c, "settings-session-headers", locales.Text("会话请求头"), locales.Text("保存后对后续任务生效；手动配置的同名请求头不受影响。"), func() {
+			if sw := a.settingsSwitch(c, "send-session-id", locales.Text("自动发送 session-id"), locales.Text("用于同一会话的后端路由与缓存复用，默认开启。"), &a.settings.SendSessionID); sw.Changed() && !a.settings.SendSessionID {
 				a.settings.SendSessionID = true
 				a.settings.SessionHeaderToDisable = "session-id"
 				a.settings.SessionHeaderConfirmOpen = true
 			}
-			if sw := a.settingsSwitch(c, "send-x-session-id", "自动发送 x-session-id", "与 session-id 使用同一会话标识，可独立关闭，默认开启。", &a.settings.SendXSessionID); sw.Changed() && !a.settings.SendXSessionID {
+			if sw := a.settingsSwitch(c, "send-x-session-id", locales.Text("自动发送 x-session-id"), locales.Text("与 session-id 使用同一会话标识，可独立关闭，默认开启。"), &a.settings.SendXSessionID); sw.Changed() && !a.settings.SendXSessionID {
 				a.settings.SendXSessionID = true
 				a.settings.SessionHeaderToDisable = "x-session-id"
 				a.settings.SessionHeaderConfirmOpen = true
@@ -311,39 +314,40 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 		a.settingsVoiceInput(c)
 	}
 	if selected == 4 {
-		a.settingsCard(c, "settings-app", "应用更新", "检查新版本与查看更新日志。", func() {
+		a.settingsCard(c, "settings-app", locales.Text("应用更新"), locales.Text("检查新版本与查看更新日志。"), func() {
 			if runtime.GOOS == "windows" {
-				a.settingsSwitch(c, "auto-update", "自动更新", "有新版本时后台下载，完成提示重启。", &a.settings.AutoUpdate)
+				a.settingsSwitch(c, "auto-update", locales.Text("自动更新"), locales.Text("有新版本时后台下载，完成提示重启。"), &a.settings.AutoUpdate)
 			}
 			ui.Row(c).Wrap().Gap(gapField).PaddingY(gapSection).Children(func() {
-				settingsAction(c, "检查更新").OnClick(func() {
-					a.settings.UpdateNote = "正在检查…"
+				settingsAction(c, locales.Text("检查更新")).OnClick(func() {
+					a.settings.UpdateNote = locales.Text("正在检查…")
 					a.checkUpdates(false)
 				})
 				if strings.TrimSpace(a.upd.ReleaseBody) != "" {
-					settingsAction(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
+					settingsAction(c, locales.Text("查看更新日志")).OnClick(func() { a.settings.Tab = "版本亮点" })
 				}
 			})
 		})
-		a.settingsCard(c, "settings-startup", "启动", "", func() {
-			a.settingsSwitch(c, "autostart", "开机自启", "登录系统时自动启动 Ally，新用户默认开启。", &a.settings.Autostart)
+		a.settingsCard(c, "settings-startup", locales.Text("启动"), "", func() {
+			a.settingsSwitch(c, "autostart", locales.Text("开机自启"), locales.Text("登录系统时自动启动 Ally，新用户默认开启。"), &a.settings.Autostart)
 		})
 	}
 	a.sessionHeaderConfirmDialog(c)
 }
 
 func (a *desktop) settingsCompactThreshold(c *ui.Context) {
-	note := fmt.Sprintf("当前 %.0f%%；范围 20%%–95%%，默认 60%%。按模型上下文窗口的占用比例触发。", a.settings.Threshold*100)
+	note := fmt.Sprintf(locales.Text("当前 %.0f%%；范围 20%%–95%%，默认 60%%。按模型上下文窗口的占用比例触发。"), a.settings.Threshold*100)
 	if a.settings.ThresholdMode == backend.CompactThresholdModeTokens {
-		note = "超过指定 token 数时触发，不随模型窗口变化。范围 1–10,000,000，默认 100,000 tokens。"
+		note = locales.Text("超过指定 token 数时触发，不随模型窗口变化。范围 1–10,000,000，默认 100,000 tokens。")
 	}
-	a.settingsRow(c, "compact-threshold-row", "上下文自动压缩阈值", note, settingsControlWidth, func() ui.Element {
+	a.settingsRow(c, "compact-threshold-row", locales.Text("上下文自动压缩阈值"), note, settingsControlWidth, func() ui.Element {
 		return ui.Column(c.Key("compact-threshold-controls")).FillWidth().Gap(gapField).Children(func() {
-			uikit.Radios(c.Key("compact-threshold-mode"), &a.settings.ThresholdMode, compactThresholdModes, false)
+			modes := []uikit.RadioOption[string]{{Value: compactThresholdModes[0].Value, Label: locales.Text(compactThresholdModes[0].Label)}, {Value: compactThresholdModes[1].Value, Label: locales.Text(compactThresholdModes[1].Label)}}
+			uikit.Radios(c.Key("compact-threshold-mode"), &a.settings.ThresholdMode, modes, false)
 			if a.settings.ThresholdMode == backend.CompactThresholdModeTokens {
-				uikit.NumberInput(c, "compact-threshold-tokens", "压缩阈值（tokens）", &a.settings.ThresholdTokens, 1, backend.MaxCompactThresholdTokens, 1000, a.secondaryInk()).AlignSelf(ui.End)
+				uikit.NumberInput(c, "compact-threshold-tokens", locales.Text("压缩阈值（tokens）"), &a.settings.ThresholdTokens, 1, backend.MaxCompactThresholdTokens, 1000, a.secondaryInk()).AlignSelf(ui.End)
 			} else {
-				ui.Slider(c.Key("compact-threshold"), &a.settings.Threshold, 0.2, 0.95).Label("压缩阈值").FillWidth()
+				ui.Slider(c.Key("compact-threshold"), &a.settings.Threshold, 0.2, 0.95).Label(locales.Text("压缩阈值")).FillWidth()
 			}
 		})
 	})
@@ -359,12 +363,12 @@ func (a *desktop) sessionHeaderConfirmDialog(c *ui.Context) {
 		a.settings.SessionHeaderToDisable = ""
 	}
 	dialog := modalCard(c.Key("session-header-confirm"), &a.settings.SessionHeaderConfirmOpen, widthModalSmall, func() {
-		modalTitle(c, "关闭 "+header+" 请求头？", "")
-		ui.Text(c, "关闭后，OpenCode、GPT（ChatGPT）和 OpenRouter 等服务的会话路由可能受到影响，严重降低缓存命中率，并可能导致请求不稳定或可用性下降。实际影响取决于服务端实现，建议保持开启。").
+		modalTitle(c, locales.Text("关闭 ")+header+locales.Text(" 请求头？"), "")
+		ui.Text(c, locales.Text("关闭后，OpenCode、GPT（ChatGPT）和 OpenRouter 等服务的会话路由可能受到影响，严重降低缓存命中率，并可能导致请求不稳定或可用性下降。实际影响取决于服务端实现，建议保持开启。")).
 			FontSize(fsSmall).TextColor(a.secondaryInk()).LineHeight(1.5).Selectable()
 		modalActions(c, func() {
-			flat(c, "取消").OnClick(closeDialog)
-			primary(c, "继续关闭").OnClick(func() {
+			flat(c, locales.Text("取消")).OnClick(closeDialog)
+			primary(c, locales.Text("继续关闭")).OnClick(func() {
 				switch header {
 				case "session-id":
 					a.settings.SendSessionID = false
@@ -382,10 +386,10 @@ func (a *desktop) sessionHeaderConfirmDialog(c *ui.Context) {
 
 func (a *desktop) settingsVoiceInput(c *ui.Context) {
 	if !voiceInputSupported() {
-		a.settingsCard(c, "settings-voice-input", "语音输入", "仅支持 Windows 桌面版", func() {})
+		a.settingsCard(c, "settings-voice-input", locales.Text("语音输入"), locales.Text("仅支持 Windows 桌面版"), func() {})
 		return
 	}
-	a.settingsCard(c, "settings-voice-input", "语音输入", "选择转写模型与麦克风，按住快捷键说话，松开后填入输入框。", func() {
+	a.settingsCard(c, "settings-voice-input", locales.Text("语音输入"), locales.Text("选择转写模型与麦克风，按住快捷键说话，松开后填入输入框。"), func() {
 		// TTS models cannot drive dictation; preserve the ASR-only choices.
 		options := make([]uikit.Option, 0, len(a.config.VoiceModels))
 		for _, model := range a.config.VoiceModels {
@@ -395,7 +399,7 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 			options = append(options, uikit.Option{Value: model.ID, Label: voiceModelLabel(model)})
 		}
 		if len(options) == 0 {
-			fieldNote(c, "请先在模型页添加 ASR 模型", a.secondaryInk())
+			fieldNote(c, locales.Text("请先在模型页添加 ASR 模型"), a.secondaryInk())
 			return
 		}
 		selected := a.prefs.VoiceModelID
@@ -403,8 +407,8 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 		if !voiceModelIDExistsInOptions(options, selected) {
 			selected = options[0].Value
 		}
-		a.settingsRow(c, "voice-model-row", "语音模型", "仅列出可用于听写的 ASR 模型。", settingsControlWidth, func() ui.Element {
-			return uikit.SelectField(c.Key("voice-input-model"), &selected, options, a.secondaryInk()).Label("语音模型").FillWidth().OnChange(func() {
+		a.settingsRow(c, "voice-model-row", locales.Text("语音模型"), locales.Text("仅列出可用于听写的 ASR 模型。"), settingsControlWidth, func() ui.Element {
+			return uikit.SelectField(c.Key("voice-input-model"), &selected, options, a.secondaryInk()).Label(locales.Text("语音模型")).FillWidth().OnChange(func() {
 				if selected != stored {
 					a.prefs.VoiceModelID = selected
 					a.savePrefs()
@@ -413,24 +417,24 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 			})
 		})
 		deviceID := a.prefs.VoiceInputDeviceID
-		deviceOptions := []uikit.Option{{Value: "", Label: "系统默认设备"}}
+		deviceOptions := []uikit.Option{{Value: "", Label: locales.Text("系统默认设备")}}
 		foundDevice := deviceID == ""
 		for _, device := range a.voiceInputDevices {
 			deviceOptions = append(deviceOptions, uikit.Option{Value: device.ID, Label: device.Name})
 			foundDevice = foundDevice || device.ID == deviceID
 		}
 		if !foundDevice {
-			deviceOptions = append(deviceOptions, uikit.Option{Value: deviceID, Label: "已选设备不可用（请选择其他设备）"})
+			deviceOptions = append(deviceOptions, uikit.Option{Value: deviceID, Label: locales.Text("已选设备不可用（请选择其他设备）")})
 		}
-		a.settingsRow(c, "voice-device-row", "输入设备", "跟随系统默认，或固定一个麦克风。", settingsControlWidth, func() ui.Element {
+		a.settingsRow(c, "voice-device-row", locales.Text("输入设备"), locales.Text("跟随系统默认，或固定一个麦克风。"), settingsControlWidth, func() ui.Element {
 			return ui.Column(c).FillWidth().Gap(gapField).Children(func() {
 				ui.Row(c.Key("voice-input-device-row")).FillWidth().Gap(gapField).Children(func() {
-					uikit.SelectField(c.Key("voice-input-device"), &deviceID, deviceOptions, a.secondaryInk()).Label("输入设备").Grow(1).MinWidth(0).OnChange(func() {
+					uikit.SelectField(c.Key("voice-input-device"), &deviceID, deviceOptions, a.secondaryInk()).Label(locales.Text("输入设备")).Grow(1).MinWidth(0).OnChange(func() {
 						if deviceID != a.prefs.VoiceInputDeviceID {
 							a.selectVoiceInputDevice(deviceID)
 						}
 					})
-					cardFlat(c, "刷新设备").OnClick(func() { a.refreshVoiceInputDevices() })
+					cardFlat(c, locales.Text("刷新设备")).OnClick(func() { a.refreshVoiceInputDevices() })
 					ui.Box(c).Size(14, 14).Shrink(0).Children(func() {
 						if a.voiceInputDevicesBusy {
 							ui.Spinner(c).Size(13, 13)
@@ -443,39 +447,39 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 			})
 		})
 		hotkeyParts, hotkeyPlaceholder := a.hotkeyPartsFor(a.prefs.VoiceHotkey), ""
-		hotkeyNote := "直接按键，Esc 取消。"
+		hotkeyNote := locales.Text("直接按键，Esc 取消。")
 		if a.voiceHotkeyCapturing {
 			hotkeyParts = a.voiceHotkeyPreviewParts
-			hotkeyPlaceholder = "请按下快捷键组合…"
-			hotkeyNote = "正在录入：按下想要的组合，全部松开后生效；Esc 取消。"
+			hotkeyPlaceholder = locales.Text("请按下快捷键组合…")
+			hotkeyNote = locales.Text("正在录入：按下想要的组合，全部松开后生效；Esc 取消。")
 		}
-		a.settingsRow(c, "voice-hotkey-row", "按住录音快捷键", hotkeyNote, settingsControlWidth, func() ui.Element {
+		a.settingsRow(c, "voice-hotkey-row", locales.Text("按住录音快捷键"), hotkeyNote, settingsControlWidth, func() ui.Element {
 			return ui.Row(c).Wrap().Gap(gapField).Children(func() {
 				ui.Row(c.Key("voice-hotkey-keys-row")).Gap(gapInline).Children(func() {
 					a.hotkeyKeycaps(c, hotkeyParts, hotkeyPlaceholder)
 				})
 				if a.voiceHotkeyCapturing {
-					cardFlat(c, "取消更换").OnClick(func() { a.finishVoiceHotkeyCapture("") })
+					cardFlat(c, locales.Text("取消更换")).OnClick(func() { a.finishVoiceHotkeyCapture("") })
 				} else {
-					cardFlat(c, "更换").OnClick(func() { a.beginVoiceHotkeyCapture() })
+					cardFlat(c, locales.Text("更换")).OnClick(func() { a.beginVoiceHotkeyCapture() })
 				}
 			})
 		})
-		a.settingsRow(c, "voice-modifier-sides", "修饰键", voiceModifierSidesNote(a.prefs.VoiceModifierLeft, a.prefs.VoiceModifierRight), settingsControlWidth, func() ui.Element {
+		a.settingsRow(c, "voice-modifier-sides", locales.Text("修饰键"), voiceModifierSidesNote(a.prefs.VoiceModifierLeft, a.prefs.VoiceModifierRight), settingsControlWidth, func() ui.Element {
 			return uikit.OptionGroup(c).Children(func() {
-				choiceButton(c, "voice-modifier-left", "左", a.prefs.VoiceModifierLeft, c.Theme().Accent).OnClick(func() {
+				choiceButton(c, "voice-modifier-left", locales.Text("左"), a.prefs.VoiceModifierLeft, c.Theme().Accent).OnClick(func() {
 					a.setVoiceModifierSide(!a.prefs.VoiceModifierLeft, a.prefs.VoiceModifierRight)
 				})
-				choiceButton(c, "voice-modifier-right", "右", a.prefs.VoiceModifierRight, c.Theme().Accent).OnClick(func() {
+				choiceButton(c, "voice-modifier-right", locales.Text("右"), a.prefs.VoiceModifierRight, c.Theme().Accent).OnClick(func() {
 					a.setVoiceModifierSide(a.prefs.VoiceModifierLeft, !a.prefs.VoiceModifierRight)
 				})
 			})
 		})
-		if sw := a.settingsSwitch(c, "voice-input-enabled", "语音输入", "按住快捷键说话，松开后转写并填入输入框。", &a.prefs.VoiceInputEnabled); sw.Changed() {
+		if sw := a.settingsSwitch(c, "voice-input-enabled", locales.Text("语音输入"), locales.Text("按住快捷键说话，松开后转写并填入输入框。"), &a.prefs.VoiceInputEnabled); sw.Changed() {
 			if a.prefs.VoiceInputEnabled {
 				if !voiceModelIDExists(a.config.VoiceModels, selected) {
 					a.prefs.VoiceInputEnabled = false
-					a.notifyError("请先选择有效的语音模型")
+					a.notifyError(locales.Text("请先选择有效的语音模型"))
 					return
 				}
 				a.prefs.VoiceModelID = selected
@@ -489,20 +493,20 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 // ---- Advanced ------------------------------------------------------------
 
 func (a *desktop) settingsAdvanced(c *ui.Context) {
-	selected := a.settingsModule(c, "settingsAdvanced", "代码校验", "页面显隐")
+	selected := a.settingsModule(c, "settingsAdvanced", locales.Text("代码校验"), locales.Text("页面显隐"))
 
 	if selected == 0 {
-		a.settingsCard(c, "settings-validation", "自动代码校验", "写入文件后做轻量语法检查，默认全部关闭。", func() {
+		a.settingsCard(c, "settings-validation", locales.Text("自动代码校验"), locales.Text("写入文件后做轻量语法检查，默认全部关闭。"), func() {
 			languages := []struct{ key, label, note string }{
-				{"Python", "Python", "对改动的 .py 执行语法检查（py_compile）。"},
-				{"Go", "Go", "对受影响包执行 go vet，不下载依赖。"},
-				{"JavaScript", "JavaScript", "使用工作区依赖做语法检查。"},
-				{"TypeScript", "TypeScript / TSX", "使用工作区依赖做类型检查。"},
-				{"Vue", "Vue", "使用工作区依赖检查单文件组件。"},
-				{"Java", "Java", "使用工作区构建工具做编译检查。"},
-				{"JSON", "JSON", "解析 JSON 文件确认结构合法。"},
-				{"YAML", "YAML", "解析 YAML 文件确认结构合法。"},
-				{"XML", "XML", "解析 XML 文件确认结构合法。"},
+				{"Python", "Python", locales.Text("对改动的 .py 执行语法检查（py_compile）。")},
+				{"Go", "Go", locales.Text("对受影响包执行 go vet，不下载依赖。")},
+				{"JavaScript", "JavaScript", locales.Text("使用工作区依赖做语法检查。")},
+				{"TypeScript", "TypeScript / TSX", locales.Text("使用工作区依赖做类型检查。")},
+				{"Vue", "Vue", locales.Text("使用工作区依赖检查单文件组件。")},
+				{"Java", "Java", locales.Text("使用工作区构建工具做编译检查。")},
+				{"JSON", "JSON", locales.Text("解析 JSON 文件确认结构合法。")},
+				{"YAML", "YAML", locales.Text("解析 YAML 文件确认结构合法。")},
+				{"XML", "XML", locales.Text("解析 XML 文件确认结构合法。")},
 			}
 			for _, lang := range languages {
 				v := a.settings.Validation[lang.key]
@@ -513,7 +517,7 @@ func (a *desktop) settingsAdvanced(c *ui.Context) {
 		})
 	}
 	if selected == 1 {
-		a.settingsCard(c, "settings-visibility", "页面显隐", "隐藏后左侧菜单不再显示该入口；Agent 与设置始终保留。", func() {
+		a.settingsCard(c, "settings-visibility", locales.Text("页面显隐"), locales.Text("隐藏后左侧菜单不再显示该入口；Agent 与设置始终保留。"), func() {
 			for _, mode := range baseModes {
 				if mode.id == "chat" || mode.id == "plugins" {
 					continue
@@ -546,9 +550,9 @@ func (a *desktop) setModeVisible(id string, visible bool) {
 // ---- Network -------------------------------------------------------------
 
 func (a *desktop) settingsNetwork(c *ui.Context) {
-	a.settingsCard(c, "settings-proxy", "网络代理", "应用于模型、HTTP 工具、MCP、命令和后台服务。", func() {
-		if mode := a.settingsRow(c, "proxy-mode-row", "代理模式", "关闭代理、跟随系统，或手动填写地址。", settingsControlWidth, func() ui.Element {
-			return segmentedInk(c, "proxy-mode", &a.settings.ProxyModeIndex, a.secondaryInk(), "关闭代理", "跟随系统代理", "手动代理")
+	a.settingsCard(c, "settings-proxy", locales.Text("网络代理"), locales.Text("应用于模型、HTTP 工具、MCP、命令和后台服务。"), func() {
+		if mode := a.settingsRow(c, "proxy-mode-row", locales.Text("代理模式"), locales.Text("关闭代理、跟随系统，或手动填写地址。"), settingsControlWidth, func() ui.Element {
+			return segmentedInk(c, "proxy-mode", &a.settings.ProxyModeIndex, a.secondaryInk(), locales.Text("关闭代理"), locales.Text("跟随系统代理"), locales.Text("手动代理"))
 		}); mode.Changed() {
 			a.configDraft.ProxyMode = []string{"off", "system", "manual"}[a.settings.ProxyModeIndex]
 			if a.configDraft.ProxyMode == "system" {
@@ -556,24 +560,24 @@ func (a *desktop) settingsNetwork(c *ui.Context) {
 			}
 		}
 		if a.configDraft.ProxyMode == "manual" {
-			a.settingsRow(c, "proxy-url-row", "代理地址", "例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891。", settingsControlWidth, func() ui.Element {
+			a.settingsRow(c, "proxy-url-row", locales.Text("代理地址"), locales.Text("例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891。"), settingsControlWidth, func() ui.Element {
 				return ui.Column(c).FillWidth().Gap(gapField).Children(func() {
-					textField(c, "proxy-url", "http://127.0.0.1:7890", "代理地址", &a.configDraft.ProxyURL).FillWidth()
+					textField(c, "proxy-url", "http://127.0.0.1:7890", locales.Text("代理地址"), &a.configDraft.ProxyURL).FillWidth()
 					if a.configDraft.ProxyURL != "" && !validProxyURL(a.configDraft.ProxyURL) {
-						inlineError(c, "proxy-error", "请输入有效的 HTTP、HTTPS 或 SOCKS5 代理地址；填写完整后自动生效。")
+						inlineError(c, "proxy-error", locales.Text("请输入有效的 HTTP、HTTPS 或 SOCKS5 代理地址；填写完整后自动生效。"))
 					}
 				})
 			})
 		}
 		if a.configDraft.ProxyMode != "off" {
-			a.settingsRow(c, "proxy-no-proxy-row", "不使用代理的地址", "多个地址用逗号分隔，例如 localhost,127.0.0.1,::1。", settingsControlWidth, func() ui.Element {
-				return textField(c, "proxy-no-proxy", "localhost,127.0.0.1,::1", "不使用代理的地址", &a.configDraft.ProxyNoProxy).FillWidth()
+			a.settingsRow(c, "proxy-no-proxy-row", locales.Text("不使用代理的地址"), locales.Text("多个地址用逗号分隔，例如 localhost,127.0.0.1,::1。"), settingsControlWidth, func() ui.Element {
+				return textField(c, "proxy-no-proxy", "localhost,127.0.0.1,::1", locales.Text("不使用代理的地址"), &a.configDraft.ProxyNoProxy).FillWidth()
 			})
 		}
 		ui.Column(c).PaddingY(gapSection).Gap(gapSection).Children(func() {
 			ui.Row(c).Wrap().Gap(gapField).Children(func() {
-				settingsAction(c, "检测系统代理").OnClick(func() { a.detectProxy() })
-				settingsAction(c, "测试连接").Disabled(a.configDraft.ProxyMode == "off").OnClick(func() { a.testProxy() })
+				settingsAction(c, locales.Text("检测系统代理")).OnClick(func() { a.detectProxy() })
+				settingsAction(c, locales.Text("测试连接")).Disabled(a.configDraft.ProxyMode == "off").OnClick(func() { a.testProxy() })
 				ui.Box(c).Size(14, 14).Shrink(0).Children(func() {
 					if a.settings.ProxyBusy {
 						ui.Spinner(c).Size(13, 13)
@@ -584,22 +588,22 @@ func (a *desktop) settingsNetwork(c *ui.Context) {
 		})
 	})
 	if a.settings.Proxy.Enabled || a.settings.Proxy.Error != "" {
-		a.settingsCard(c, "settings-proxy-result", "代理检测结果", "", func() {
+		a.settingsCard(c, "settings-proxy-result", locales.Text("代理检测结果"), "", func() {
 			if a.settings.Proxy.Error != "" {
 				notice(c, "error", a.settings.Proxy.Error, a.secondaryInk())
 			}
-			kv(c, "来源", a.settings.Proxy.Source, a.secondaryInk())
+			kv(c, locales.Text("来源"), a.settings.Proxy.Source, a.secondaryInk())
 			kv(c, "HTTP", a.settings.Proxy.HTTPProxy, a.secondaryInk())
 			kv(c, "HTTPS", a.settings.Proxy.HTTPSProxy, a.secondaryInk())
 			kv(c, "NO_PROXY", a.settings.Proxy.NoProxy, a.secondaryInk())
 			if a.settings.Proxy.PACURL != "" {
 				kv(c, "PAC", a.settings.Proxy.PACURL, a.secondaryInk())
-				notice(c, "warn", "检测到 PAC 自动配置，但当前版本暂不执行 PAC 脚本。", a.secondaryInk())
+				notice(c, "warn", locales.Text("检测到 PAC 自动配置，但当前版本暂不执行 PAC 脚本。"), a.secondaryInk())
 			}
 		})
 	}
-	a.settingsCard(c, "settings-private-network", "内网访问", "", func() {
-		a.settingsSwitch(c, "allow-private", "允许访问内网地址", "允许 HTTP 工具与 MCP 访问内网。关闭后，HTTP/SSE 连接将拒绝 localhost 和内网地址。", &a.settings.AllowPrivate)
+	a.settingsCard(c, "settings-private-network", locales.Text("内网访问"), "", func() {
+		a.settingsSwitch(c, "allow-private", locales.Text("允许访问内网地址"), locales.Text("允许 HTTP 工具与 MCP 访问内网。关闭后，HTTP/SSE 连接将拒绝 localhost 和内网地址。"), &a.settings.AllowPrivate)
 	})
 }
 
@@ -625,7 +629,7 @@ func (a *desktop) detectProxy() {
 			if status.Error != "" {
 				a.settings.ProxyNote = status.Error
 			} else {
-				a.settings.ProxyNote = "系统代理：" + status.Source
+				a.settings.ProxyNote = locales.Text("系统代理：") + status.Source
 			}
 		})
 	}()
@@ -633,14 +637,14 @@ func (a *desktop) detectProxy() {
 
 func (a *desktop) testProxy() {
 	a.settings.ProxyBusy = true
-	a.settings.ProxyNote = "正在测试代理…"
+	a.settings.ProxyNote = locales.Text("正在测试代理…")
 	req := backend.ProxyTestRequest{Mode: a.configDraft.ProxyMode, URL: a.configDraft.ProxyURL, NoProxy: a.configDraft.ProxyNoProxy}
 	go func() {
 		result := a.core.TestProxy(req)
 		a.win.Update(func() {
 			a.settings.ProxyBusy = false
 			if result.OK {
-				note := fmt.Sprintf("连接成功 · HTTP %d", result.StatusCode)
+				note := fmt.Sprintf(locales.Text("连接成功 · HTTP %d"), result.StatusCode)
 				if dur := fmtDur(result.DurationMS); dur != "" {
 					note += " · " + dur
 				}
@@ -649,7 +653,7 @@ func (a *desktop) testProxy() {
 				}
 				a.settings.ProxyNote = note
 			} else {
-				a.settings.ProxyNote = "连接失败：" + result.Error
+				a.settings.ProxyNote = locales.Text("连接失败：") + result.Error
 			}
 		})
 	}()
@@ -679,24 +683,24 @@ func fenceRule(c *ui.Context, text string) {
 
 func (a *desktop) settingsFence(c *ui.Context) {
 	card(c, "settings-fence", func() {
-		sectionTitle(c, "安全围栏机制")
-		fieldNote(c, "命令与文件改动统一受以下规则约束，模型无法绕过。", a.secondaryInk())
+		sectionTitle(c, locales.Text("安全围栏机制"))
+		fieldNote(c, locales.Text("命令与文件改动统一受以下规则约束，模型无法绕过。"), a.secondaryInk())
 		rules := []string{
-			"删除命令一律拦下，改用 delete 工具。",
-			"写入 .git / .svn / .hg 一律拦下。",
-			"写入工作区之外已存在的目标一律拦下。",
-			"路径先展开 ~ 再解析符号链接，避免借链接越界。",
-			"mkfs、shutdown、reboot、dd 等破坏性命令一律拦下。",
-			"工作区 = 主工作区 + 会话附加工作区。",
-			"知识库 sources/ 目录对模型只读。",
-			"远端 SSH 写入需要三道检查并弹窗确认。",
-			"各平台使用同一套规则，不因系统不同而放宽。",
-			"写工具可写范围 = 工作区 + Ally 数据目录。",
-			"密钥与凭据位置禁止读取。",
-			"命令在超时或取消时终止整个进程组。",
-			"后台服务同样受工作区与代理设置约束。",
-			"插件 HTTP 只能访问清单声明的域名。",
-			"更新包在应用前校验摘要与来源。",
+			locales.Text("删除命令一律拦下，改用 delete 工具。"),
+			locales.Text("写入 .git / .svn / .hg 一律拦下。"),
+			locales.Text("写入工作区之外已存在的目标一律拦下。"),
+			locales.Text("路径先展开 ~ 再解析符号链接，避免借链接越界。"),
+			locales.Text("mkfs、shutdown、reboot、dd 等破坏性命令一律拦下。"),
+			locales.Text("工作区 = 主工作区 + 会话附加工作区。"),
+			locales.Text("知识库 sources/ 目录对模型只读。"),
+			locales.Text("远端 SSH 写入需要三道检查并弹窗确认。"),
+			locales.Text("各平台使用同一套规则，不因系统不同而放宽。"),
+			locales.Text("写工具可写范围 = 工作区 + Ally 数据目录。"),
+			locales.Text("密钥与凭据位置禁止读取。"),
+			locales.Text("命令在超时或取消时终止整个进程组。"),
+			locales.Text("后台服务同样受工作区与代理设置约束。"),
+			locales.Text("插件 HTTP 只能访问清单声明的域名。"),
+			locales.Text("更新包在应用前校验摘要与来源。"),
 		}
 		for _, rule := range rules {
 			fenceRule(c, rule)
@@ -707,33 +711,33 @@ func (a *desktop) settingsFence(c *ui.Context) {
 // ---- API service ---------------------------------------------------------
 
 func (a *desktop) settingsAPI(c *ui.Context) {
-	a.settingsCard(c, "settings-api", "API 服务", "仅监听 127.0.0.1，供本机工具调用；请求需带 Bearer Token。", func() {
+	a.settingsCard(c, "settings-api", locales.Text("API 服务"), locales.Text("仅监听 127.0.0.1，供本机工具调用；请求需带 Bearer Token。"), func() {
 		enabled := a.settings.API.Enabled
-		a.settingsRow(c, "api-enabled", "启用 API 服务", "启动或停止本机 API 监听。", 40, func() ui.Element {
-			return uikit.Switch(c.Key("switch"), &enabled, "启用 API 服务").Disabled(a.settings.APIBusy).
+		a.settingsRow(c, "api-enabled", locales.Text("启用 API 服务"), locales.Text("启动或停止本机 API 监听。"), 40, func() ui.Element {
+			return uikit.Switch(c.Key("switch"), &enabled, locales.Text("启用 API 服务")).Disabled(a.settings.APIBusy).
 				OnClick(func() { a.setAPIServiceEnabled(enabled) })
 		})
-		a.settingsRow(c, "api-port-row", "API 端口", "范围 1024–65535；改动后需点击保存。", settingsNumberWidth, func() ui.Element {
-			return uikit.NumberInput(c, "api-port", "API 端口", &a.settings.APIPort, 1024, 65535, 1, a.secondaryInk()).Disabled(a.settings.APIBusy)
+		a.settingsRow(c, "api-port-row", locales.Text("API 端口"), locales.Text("范围 1024–65535；改动后需点击保存。"), settingsNumberWidth, func() ui.Element {
+			return uikit.NumberInput(c, "api-port", locales.Text("API 端口"), &a.settings.APIPort, 1024, 65535, 1, a.secondaryInk()).Disabled(a.settings.APIBusy)
 		})
-		a.settingsRow(c, "api-token-row", "API Token", "请求头使用 Authorization: Bearer <Token>；留空保存会自动生成。", settingsControlWidth, func() ui.Element {
+		a.settingsRow(c, "api-token-row", "API Token", locales.Text("请求头使用 Authorization: Bearer <Token>；留空保存会自动生成。"), settingsControlWidth, func() ui.Element {
 			return ui.Row(c).FillWidth().Gap(gapField).Children(func() {
 				uikit.Input(c.Key("api-token"), &a.settings.API.Token).Label("API Token").Grow(1).MinWidth(0).Disabled(a.settings.APIBusy)
-				settingsAction(c, "复制").OnClick(func() {
+				settingsAction(c, locales.Text("复制")).OnClick(func() {
 					c.WriteClipboard(a.settings.API.Token)
-					c.Toast("Token 已复制")
+					c.Toast(locales.Text("Token 已复制"))
 				})
 			})
 		})
 		ui.Column(c).PaddingY(gapSection).Gap(gapSection).Children(func() {
 			ui.Row(c).Wrap().Gap(gapField).Children(func() {
-				settingsAction(c, "保存", uikit.Primary).Disabled(a.settings.APIBusy).OnClick(func() { a.saveAPISettings() })
-				settingsAction(c, "重新生成 Token").Disabled(a.settings.APIBusy).OnClick(func() { a.regenerateAPIToken() })
+				settingsAction(c, locales.Text("保存"), uikit.Primary).Disabled(a.settings.APIBusy).OnClick(func() { a.saveAPISettings() })
+				settingsAction(c, locales.Text("重新生成 Token")).Disabled(a.settings.APIBusy).OnClick(func() { a.regenerateAPIToken() })
 				services := c.Services()
-				settingsAction(c, "接口文档").OnClick(func() {
+				settingsAction(c, locales.Text("接口文档")).OnClick(func() {
 					services.OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/api.md")
 				})
-				settingsAction(c, "刷新").Disabled(a.settings.APIBusy).OnClick(func() { a.loadAPIService(true) })
+				settingsAction(c, locales.Text("刷新")).Disabled(a.settings.APIBusy).OnClick(func() { a.loadAPIService(true) })
 			})
 			if a.settings.APINote != "" {
 				notice(c, "info", a.settings.APINote, a.secondaryInk())
@@ -742,10 +746,10 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 			if base == "" {
 				base = fmt.Sprintf("http://127.0.0.1:%d", int(a.settings.APIPort))
 			}
-			fieldNote(c, "服务地址："+base, a.secondaryInk())
+			fieldNote(c, locales.Text("服务地址：")+base, a.secondaryInk())
 		})
 	})
-	a.settingsCard(c, "settings-api-endpoints", "接口列表", "", func() {
+	a.settingsCard(c, "settings-api-endpoints", locales.Text("接口列表"), "", func() {
 		for _, ep := range apiEndpoints {
 			ui.Row(c).Wrap().GapX(gapSection).GapY(gapTight).PaddingY(gapField).Children(func() {
 				methodColor := c.Theme().Accent
@@ -757,7 +761,7 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 				}
 				chip(c, ep[0], methodColor, c.Theme().Surface.Mix(methodColor, 0.12)).Shrink(0)
 				ui.Text(c, ep[1]).Font(monoFamily).FontSize(fsSmall).Grow(1).MinWidth(0)
-				ui.Text(c, ep[2]).FontSize(fsTiny).TextColor(a.secondaryInk())
+				ui.Text(c, locales.Text(ep[2])).FontSize(fsTiny).TextColor(a.secondaryInk())
 			})
 		}
 	})
@@ -811,7 +815,7 @@ func (a *desktop) loadAPIService(manual ...bool) {
 			a.settings.APIPort = float64(state.Port)
 			a.settings.APINote = ""
 			if len(manual) > 0 && manual[0] {
-				a.notifySuccess("API 状态已刷新")
+				a.notifySuccess(locales.Text("API 状态已刷新"))
 			}
 		})
 	}()
@@ -835,7 +839,7 @@ func (a *desktop) persistAPISettings(token string, regenerated bool) {
 	port := int(a.settings.APIPort)
 	if port < 1024 || port > 65535 {
 		a.settings.APIPort = float64(a.settings.API.Port)
-		a.settings.APINote = "端口需为 1024-65535 之间的整数"
+		a.settings.APINote = locales.Text("端口需为 1024-65535 之间的整数")
 		return
 	}
 	a.settings.APIBusy = true
@@ -857,10 +861,10 @@ func (a *desktop) persistAPISettings(token string, regenerated bool) {
 			a.settings.API = state
 			a.settings.APIPort = float64(state.Port)
 			if regenerated {
-				a.settings.APINote = "API Token 已重新生成并保存"
-				a.notifySuccess("已生成新 Token")
+				a.settings.APINote = locales.Text("API Token 已重新生成并保存")
+				a.notifySuccess(locales.Text("已生成新 Token"))
 			} else {
-				a.settings.APINote = "API 设置已保存"
+				a.settings.APINote = locales.Text("API 设置已保存")
 			}
 		})
 	}()
@@ -871,7 +875,7 @@ func (a *desktop) setAPIServiceEnabled(enabled bool) {
 		return
 	}
 	if a.settings.APIPort < 1024 || a.settings.APIPort > 65535 || strings.TrimSpace(a.settings.API.Token) == "" {
-		a.settings.APINote = "请先填写有效端口与 Token"
+		a.settings.APINote = locales.Text("请先填写有效端口与 Token")
 		return
 	}
 	previousEnabled := a.settings.API.Enabled
@@ -895,9 +899,9 @@ func (a *desktop) setAPIServiceEnabled(enabled bool) {
 			a.settings.API = state
 			a.settings.APIPort = float64(state.Port)
 			if state.Enabled {
-				a.settings.APINote = "API 服务已开启"
+				a.settings.APINote = locales.Text("API 服务已开启")
 			} else {
-				a.settings.APINote = "API 服务已关闭"
+				a.settings.APINote = locales.Text("API 服务已关闭")
 			}
 		})
 	}()
@@ -907,12 +911,12 @@ func (a *desktop) setAPIServiceEnabled(enabled bool) {
 
 func (a *desktop) settingsReleaseNotes(c *ui.Context) {
 	card(c, "settings-notes", func() {
-		sectionTitle(c, "版本亮点")
+		sectionTitle(c, locales.Text("版本亮点"))
 		if a.upd.ReleaseVer != "" {
-			fieldNote(c, "版本 "+a.upd.ReleaseVer, a.secondaryInk())
+			fieldNote(c, locales.Text("版本 ")+a.upd.ReleaseVer, a.secondaryInk())
 		}
 		if strings.TrimSpace(a.upd.ReleaseBody) == "" {
-			fieldNote(c, "此构建未内置更新日志。", a.secondaryInk())
+			fieldNote(c, locales.Text("此构建未内置更新日志。"), a.secondaryInk())
 			return
 		}
 		a.releaseNotesMarkdown(c, &a.upd.ReleaseSettingsMD, "release-notes-settings-markdown")
@@ -922,44 +926,44 @@ func (a *desktop) settingsReleaseNotes(c *ui.Context) {
 func (a *desktop) settingsAbout(c *ui.Context) {
 
 	card(c, "settings-memory-diagnostics", func() {
-		sectionTitle(c, "内存诊断")
-		fieldNote(c, "导出 Go 堆与分配调用栈、协程和回收前后内存数据；会短暂触发垃圾回收。也可在聊天页按 Ctrl+Shift+F12。建议在空闲时、内存增长后各导出一次。", a.secondaryInk())
-		settingsAction(c, "导出内存诊断").Disabled(a.memoryDiagnosticBusy).OnClick(a.exportMemoryDiagnostics)
+		sectionTitle(c, locales.Text("内存诊断"))
+		fieldNote(c, locales.Text("导出 Go 堆与分配调用栈、协程和回收前后内存数据；会短暂触发垃圾回收。也可在聊天页按 Ctrl+Shift+F12。建议在空闲时、内存增长后各导出一次。"), a.secondaryInk())
+		settingsAction(c, locales.Text("导出内存诊断")).Disabled(a.memoryDiagnosticBusy).OnClick(a.exportMemoryDiagnostics)
 	})
 
 	services := c.Services()
 	{
 		card(c, "settings-about", func() {
-			ui.Text(c, "关于 Ally").FontSize(fsHeading).Bold()
-			fieldNote(c, "自由、开源的桌面 AI 编程助手。", a.secondaryInk())
+			ui.Text(c, locales.Text("关于 Ally")).FontSize(fsHeading).Bold()
+			fieldNote(c, locales.Text("自由、开源的桌面 AI 编程助手。"), a.secondaryInk())
 			divider(c)
 			ui.Text(c, "GPLv3 only").FontSize(fsBody).Bold()
-			fieldNote(c, "你可以自由使用、研究、修改与分发本软件；衍生作品必须以同一许可开放源代码；本软件不提供任何担保。", a.secondaryInk())
+			fieldNote(c, locales.Text("你可以自由使用、研究、修改与分发本软件；衍生作品必须以同一许可开放源代码；本软件不提供任何担保。"), a.secondaryInk())
 			ui.Row(c).Gap(gapField).Wrap().Children(func() {
-				settingsAction(c, "查看源代码与许可证").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent") })
-				settingsAction(c, "提意见 / 反馈 Issue").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent/issues") })
+				settingsAction(c, locales.Text("查看源代码与许可证")).OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent") })
+				settingsAction(c, locales.Text("提意见 / 反馈 Issue")).OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent/issues") })
 			})
 		})
 	}
 	{
 		card(c, "settings-credits", func() {
-			sectionTitle(c, "欢迎页形象素材署名")
-			fieldNote(c, "欢迎页立绘沿用原项目素材，许可为 CC BY-NC-SA 4.0：署名、非商业、相同方式共享。", a.secondaryInk())
-			settingsAction(c, "查看素材来源").OnClick(func() {
+			sectionTitle(c, locales.Text("欢迎页形象素材署名"))
+			fieldNote(c, locales.Text("欢迎页立绘沿用原项目素材，许可为 CC BY-NC-SA 4.0：署名、非商业、相同方式共享。"), a.secondaryInk())
+			settingsAction(c, locales.Text("查看素材来源")).OnClick(func() {
 				services.OpenURL("https://github.com/Bronya0/ally-agent/blob/main/resources/avatar/NOTICE.txt")
 			})
 		})
 	}
 	{
 		card(c, "settings-update", func() {
-			sectionTitle(c, "更新")
+			sectionTitle(c, locales.Text("更新"))
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				settingsAction(c, "检查更新").OnClick(func() {
-					a.settings.UpdateNote = "正在检查…"
+				settingsAction(c, locales.Text("检查更新")).OnClick(func() {
+					a.settings.UpdateNote = locales.Text("正在检查…")
 					a.checkUpdates(false)
 				})
 				if strings.TrimSpace(a.upd.ReleaseBody) != "" {
-					settingsAction(c, "查看更新日志").OnClick(func() { a.settings.Tab = "版本亮点" })
+					settingsAction(c, locales.Text("查看更新日志")).OnClick(func() { a.settings.Tab = "版本亮点" })
 				}
 				ui.Spacer(c)
 				fieldNote(c, a.settings.UpdateNote, a.secondaryInk())
@@ -970,19 +974,19 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 
 func (a *desktop) settingsRaw(c *ui.Context) {
 	card(c, "settings-raw", func() {
-		sectionTitle(c, "完整配置 JSON")
-		fieldNote(c, "高级用法：直接编辑后端完整配置（包含密钥），保存后立即生效。", a.secondaryInk())
-		textArea(c, "raw-config", "配置 JSON", "{}", &a.settings.FullJSON, 420)
+		sectionTitle(c, locales.Text("完整配置 JSON"))
+		fieldNote(c, locales.Text("高级用法：直接编辑后端完整配置（包含密钥），保存后立即生效。"), a.secondaryInk())
+		textArea(c, "raw-config", locales.Text("配置 JSON"), "{}", &a.settings.FullJSON, 420)
 		ui.Row(c).Gap(gapField).Children(func() {
-			settingsAction(c, "保存 JSON", uikit.Primary).OnClick(func() {
+			settingsAction(c, locales.Text("保存 JSON"), uikit.Primary).OnClick(func() {
 				var cfg backend.ConfigState
 				if err := json.Unmarshal([]byte(a.settings.FullJSON), &cfg); err != nil {
-					a.notifyError("配置解析失败：" + err.Error())
+					a.notifyError(locales.Text("配置解析失败：") + err.Error())
 					return
 				}
 				a.saveConfig(cfg)
 			})
-			settingsAction(c, "从后端重新载入").OnClick(func() {
+			settingsAction(c, locales.Text("从后端重新载入")).OnClick(func() {
 				go func() {
 					cfg, err := a.core.GetConfig()
 					a.win.Update(func() {

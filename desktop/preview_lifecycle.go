@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"context"
 	"fmt"
 	"net/url"
@@ -265,9 +266,9 @@ func (p *nativePreview) watchPage(expectedURL string, readyOnProbe bool) {
 			p.probeCancel = nil
 			if err != nil || value == nil {
 				if err == nil {
-					err = fmt.Errorf("预览健康检查无响应")
+					err = fmt.Errorf("%s", locales.Text("预览健康检查无响应"))
 				}
-				p.failContent(generation, fmt.Errorf("预览不可用：%w，请重试", err), true)
+				p.failContent(generation, fmt.Errorf(locales.Text("预览不可用：%w，请重试"), err), true)
 			} else if readyOnProbe {
 				p.state.ready = true
 			}
@@ -282,11 +283,13 @@ func (p *nativePreview) watchFailures(expectedURL string) {
 			if err == nil || err.URL != "" && err.URL != expectedURL {
 				return
 			}
-			failure := fmt.Errorf("预览加载失败：%s", err.Description)
+			failure := fmt.Errorf(locales.Text("预览加载失败：%s"), err.Description)
 			update(func() { p.failContent(generation, failure, false) })
 		}),
 		browser.OnRenderProcessGone(func(reason string) {
-			update(func() { p.failContent(generation, fmt.Errorf("预览进程已退出：%s，请重试", reason), true) })
+			update(func() {
+				p.failContent(generation, fmt.Errorf(locales.Text("预览进程已退出：%s，请重试"), reason), true)
+			})
 		}),
 	)
 }
@@ -363,7 +366,7 @@ func (p *nativePreview) Load(req previewRequest) {
 			if p.IsDestroyed() || p.state.generation != generation || p.state.ready {
 				return
 			}
-			p.failContent(generation, fmt.Errorf("预览加载超时，请重试"), false)
+			p.failContent(generation, fmt.Errorf("%s", locales.Text("预览加载超时，请重试")), false)
 		})
 	})
 	document := ""
@@ -470,17 +473,17 @@ func (a *desktop) previewView(c *ui.Context, req previewRequest) {
 		}
 		if loadErr != nil {
 			notice(c, "error", loadErr.Error(), a.secondaryInk())
-			flat(c, "重试预览").OnClick(func() { a.previews.retry(req) })
+			flat(c, locales.Text("重试预览")).OnClick(func() { a.previews.retry(req) })
 		} else if !ready {
 			if box.InView() && previewDeferred(a.previewRequests, req.Key) {
-				ui.Text(c, "同屏最多加载 4 个预览，滚动后自动加载").FontSize(fsSmall).TextColor(a.secondaryInk())
+				ui.Text(c, locales.Text("同屏最多加载 4 个预览，滚动后自动加载")).FontSize(fsSmall).TextColor(a.secondaryInk())
 				return
 			}
 			ui.Column(c.Key("loading")).Absolute().Top(0).Left(0).Right(0).Bottom(0).
 				Center().Gap(gapField).Background(c.Theme().Surface).Radius(radiusSmall).Border(1, c.Theme().Border).
-				Label("正在加载图表预览").Children(func() {
+				Label(locales.Text("正在加载图表预览")).Children(func() {
 				ui.Spinner(c.Key("spinner")).Size(20, 20).TextColor(c.Theme().Accent)
-				ui.Text(c, "正在加载图表…").FontSize(fsSmall).TextColor(a.secondaryInk())
+				ui.Text(c, locales.Text("正在加载图表…")).FontSize(fsSmall).TextColor(a.secondaryInk())
 			})
 		}
 	})

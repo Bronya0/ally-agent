@@ -4,5 +4,6 @@
   "identifier": "io.github.bronya0.ally",
   "version": "0.1.0",
   "icon": "resources/icon.png",
-  "out": "dist"
+  "out": "dist",
+  "i18n": { "dir": "locales", "source": "en" }
 }

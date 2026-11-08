@@ -5,6 +5,7 @@ import (
 	"ally-dev/desktop/pluginhost"
 	"ally-dev/internal/documentpreview"
 	toolshared "ally-dev/internal/tools/shared"
+	"ally-dev/locales"
 	"ally-dev/resources"
 	"context"
 	"encoding/json"
@@ -296,7 +297,7 @@ func Run() {
 			a.versionLabel = "Ally Native · " + v
 		}
 		if buildTime != "" {
-			a.versionLabel += " · 构建于 " + strings.Replace(buildTime, "T", " ", 1)
+			a.versionLabel += locales.Text(" · 构建于 ") + strings.Replace(buildTime, "T", " ", 1)
 		}
 		a.refreshAutoAppearance(time.Now())
 		a.syncNativeAppearance()
@@ -395,12 +396,12 @@ func Run() {
 			avatarPoses := decodeAvatarStyle(avatarStyle)
 			err := a.core.StartNative(context.Background(), a.onEvent)
 			if err != nil {
-				a.win.Update(func() { a.startupError = "启动失败：" + err.Error() })
+				a.win.Update(func() { a.startupError = locales.Text("启动失败：") + err.Error() })
 				return
 			}
 			cfg, err := a.core.GetConfig()
 			if err != nil {
-				a.win.Update(func() { a.startupError = "读取配置失败：" + err.Error() })
+				a.win.Update(func() { a.startupError = locales.Text("读取配置失败：") + err.Error() })
 				return
 			}
 			autostart, autostartInitialized, autostartErr := initializeAutostart(a.core, prefs.AutostartInitialized)
@@ -419,7 +420,7 @@ func Run() {
 					a.savePrefs()
 				}
 				if autostartErr != nil {
-					a.notifyError("初始化开机自启失败：" + autostartErr.Error())
+					a.notifyError(locales.Text("初始化开机自启失败：") + autostartErr.Error())
 				}
 				a.syncNativeAppearance()
 				a.customAvatar = customAvatar
@@ -428,7 +429,7 @@ func Run() {
 				a.plugins = plugins
 				a.pluginsRevision++
 				if pluginErr != nil {
-					a.notifyError("插件列表加载失败：" + pluginErr.Error())
+					a.notifyError(locales.Text("插件列表加载失败：") + pluginErr.Error())
 				}
 				a.skills = skills
 				a.toolInventory = tools
@@ -470,7 +471,7 @@ func (a *desktop) shutdown() {
 		return
 	}
 	if a.upd.installing() && !a.upd.Applied {
-		a.notify("正在准备更新，请等待完成")
+		a.notify(locales.Text("正在准备更新，请等待完成"))
 		return
 	}
 	a.closing = true
@@ -494,12 +495,12 @@ func (a *desktop) prepareWindowClose(proceed, cancel func()) {
 	for _, file := range a.workspaceFiles {
 		if file.Saving {
 			cancel()
-			a.notify("文件正在保存，请稍后退出")
+			a.notify(locales.Text("文件正在保存，请稍后退出"))
 			return
 		}
 		if file.Editor != nil && file.Editor.Buffer.Modified() {
 			go func() {
-				result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: "未保存的文件", Message: "存在未保存的文件修改", Detail: "退出会放弃这些修改。", Buttons: []string{"取消", "放弃并退出"}, CancelButton: 0, DestructiveButtons: []int{1}})
+				result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: locales.Text("未保存的文件"), Message: locales.Text("存在未保存的文件修改"), Detail: locales.Text("退出会放弃这些修改。"), Buttons: []string{locales.Text("取消"), locales.Text("放弃并退出")}, CancelButton: 0, DestructiveButtons: []int{1}})
 				a.win.Update(func() {
 					if err != nil {
 						a.notifyError(err.Error())
@@ -522,7 +523,7 @@ func (a *desktop) finishShutdown() {
 	a.flushWindowWrites(func(err error) {
 		if err != nil {
 			a.closing = false
-			a.notifyError("保存失败，窗口保持打开：" + err.Error())
+			a.notifyError(locales.Text("保存失败，窗口保持打开：") + err.Error())
 			return
 		}
 		a.finishQuit()
@@ -591,7 +592,7 @@ func (a *desktop) newConversation(workspace string) {
 }
 
 func (a *desktop) freshConversation(workspace string) *conversation {
-	t := &conversation{ID: uuid.NewString(), Workspace: workspace, Title: "新对话", Created: time.Now().UnixMilli(), MD: map[int]*markdown.Options{}, Expanded: map[int]bool{}}
+	t := &conversation{ID: uuid.NewString(), Workspace: workspace, Title: locales.Text("新对话"), Created: time.Now().UnixMilli(), MD: map[int]*markdown.Options{}, Expanded: map[int]bool{}}
 	if a.config.LastUsedModel != nil {
 		for _, model := range a.config.Models {
 			if sameModelIdentity(modelIdentity(model), *a.config.LastUsedModel) {
@@ -667,7 +668,7 @@ func (a *desktop) newSession() {
 	} else {
 		a.activateTab(a.active)
 	}
-	a.notifySuccess("已新建会话")
+	a.notifySuccess(locales.Text("已新建会话"))
 	if a.win != nil {
 		a.refreshSessionFooter(next)
 		a.refreshGit(next)
@@ -706,6 +707,7 @@ func (a *desktop) notify(message string)        { a.queueNotice(message, "info")
 func (a *desktop) notifyError(message string)   { a.queueNotice(message, "error") }
 func (a *desktop) notifySuccess(message string) { a.queueNotice(message, "success") }
 func (a *desktop) queueNotice(message, kind string) {
+	message = locales.Text(message)
 	if message == "" {
 		return
 	}
@@ -779,17 +781,17 @@ func (a *desktop) inject(t *conversation, text string) bool {
 		return false
 	}
 	if t.RunID == "" {
-		a.notifyError("本轮正在启动，请稍后再追加")
+		a.notifyError(locales.Text("本轮正在启动，请稍后再追加"))
 		return false
 	}
 	attachments := append([]backend.AttachmentInput(nil), t.PendingAttachments...)
 	if err := a.core.InjectRunMessage(t.RunID, text, attachments...); err != nil {
-		a.notifyError("追加失败：" + err.Error())
+		a.notifyError(locales.Text("追加失败：") + err.Error())
 		return false
 	}
 	display := text
 	if display == "" && len(attachments) > 0 {
-		display = "附件：" + attachments[0].Name
+		display = locales.Text("附件：") + attachments[0].Name
 	}
 	displayAttachments := attachmentDisplayRows(attachments)
 	invalidateChatSearch(t)
@@ -797,7 +799,7 @@ func (a *desktop) inject(t *conversation, text string) bool {
 	commitPendingPreviews(t)
 	t.PendingAttachments = nil
 	t.Draft = ""
-	t.Status = "已追加，本轮继续执行…"
+	t.Status = locales.Text("已追加，本轮继续执行…")
 	followLatest(t)
 	a.persist(t)
 	return true
@@ -850,18 +852,18 @@ func (a *desktop) send(t *conversation, text string) bool {
 		return a.inject(t, text)
 	}
 	if t.Model == "" {
-		a.notifyError("请先在模型页面配置并选择模型")
+		a.notifyError(locales.Text("请先在模型页面配置并选择模型"))
 		return false
 	}
 	cfg, found := a.chatConfig(t)
 	if !found {
-		a.notifyError("所选模型已不存在，请重新选择")
+		a.notifyError(locales.Text("所选模型已不存在，请重新选择"))
 		return false
 	}
 	attachments := append([]backend.AttachmentInput(nil), t.PendingAttachments...)
 	display := text
 	if display == "" && len(attachments) > 0 {
-		display = "附件：" + attachments[0].Name
+		display = locales.Text("附件：") + attachments[0].Name
 	}
 	if len(t.Messages) == 0 {
 		t.Title = short(display, 36)
@@ -873,7 +875,7 @@ func (a *desktop) send(t *conversation, text string) bool {
 	t.PendingAttachments = nil
 	t.Busy = true
 	t.Draft = ""
-	t.Status = "正在连接模型…"
+	t.Status = locales.Text("正在连接模型…")
 	followLatest(t)
 	a.persist(t)
 	go func() {
@@ -1223,10 +1225,10 @@ func (a *desktop) refreshFiles(manual ...bool) {
 			}
 			a.applyFileTreeEntries("", r.Entries)
 			if len(manual) > 0 && manual[0] {
-				a.notifySuccess("资源树已刷新")
+				a.notifySuccess(locales.Text("资源树已刷新"))
 			}
 			if r.Truncated {
-				a.notify("文件过多，目录列表仅显示前 1000 项")
+				a.notify(locales.Text("文件过多，目录列表仅显示前 1000 项"))
 			}
 		})
 	}()
@@ -1253,7 +1255,7 @@ func (a *desktop) openFile(path string) {
 			return
 		}
 		if old.Saving {
-			a.notify("文件正在保存，请稍后打开其他文件")
+			a.notify(locales.Text("文件正在保存，请稍后打开其他文件"))
 			return
 		}
 		if old.Editor.Buffer.Modified() {
@@ -1362,13 +1364,13 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 				a.workspaceFiles = map[string]*workspaceFile{}
 			}
 			if newFile == nil {
-				a.notifyError("打开文件失败：未返回文件内容")
+				a.notifyError(locales.Text("打开文件失败：未返回文件内容"))
 				return
 			}
 			if kind.isPreviewOnly() {
 				newFile.Editor = emptyFileEditor()
 			} else {
-				newFile.Editor = &editor.State{Buffer: buffer, Font: ui.Font{Family: monoFamily, Size: fsEditor}, Label: "文件编辑器", NoScrollPastEnd: true}
+				newFile.Editor = &editor.State{Buffer: buffer, Font: ui.Font{Family: monoFamily, Size: fsEditor}, Label: locales.Text("文件编辑器"), NoScrollPastEnd: true}
 			}
 			if expected != nil && expected.Path == path && kind.hasMarkupToggle() {
 				newFile.MarkupPreview = expected.MarkupPreview
@@ -1404,7 +1406,7 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 				}(newFile, loadedText)
 			}
 			if expected != nil && expected.Path == path {
-				a.notifySuccess("文件已刷新")
+				a.notifySuccess(locales.Text("文件已刷新"))
 			}
 		})
 	}()
@@ -1418,15 +1420,15 @@ func (a *desktop) workspaceFileLoadStillCurrent(root string, expected *workspace
 		return true
 	}
 	if expected.Saving || expected.Editor == nil || expected.Editor.Buffer == nil {
-		a.notify("文件状态已变化，已取消加载")
+		a.notify(locales.Text("文件状态已变化，已取消加载"))
 		return false
 	}
 	if expected.Editor.Buffer.Version() != version {
-		a.notify("文件加载期间内容已变化，已取消替换")
+		a.notify(locales.Text("文件加载期间内容已变化，已取消替换"))
 		return false
 	}
 	if expected.Editor.Buffer.Modified() && !discardConfirmed {
-		a.notify("文件有未保存修改，已取消替换")
+		a.notify(locales.Text("文件有未保存修改，已取消替换"))
 		return false
 	}
 	return true
@@ -1434,7 +1436,7 @@ func (a *desktop) workspaceFileLoadStillCurrent(root string, expected *workspace
 
 func (a *desktop) confirmDiscardFile(root string, file *workspaceFile, action func()) {
 	go func() {
-		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: "未保存的文件", Message: "放弃对 " + file.Path + " 的修改？", Buttons: []string{"取消", "放弃修改"}, CancelButton: 0, DestructiveButtons: []int{1}})
+		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: locales.Text("未保存的文件"), Message: locales.Text("放弃对 ") + file.Path + locales.Text(" 的修改？"), Buttons: []string{locales.Text("取消"), locales.Text("放弃修改")}, CancelButton: 0, DestructiveButtons: []int{1}})
 		a.win.Update(func() {
 			if err != nil {
 				a.notifyError(err.Error())
@@ -1462,7 +1464,7 @@ func (a *desktop) closeWorkspaceFile(root string) {
 		return
 	}
 	if file.Saving {
-		a.notify("文件正在保存，请稍后关闭")
+		a.notify(locales.Text("文件正在保存，请稍后关闭"))
 		return
 	}
 	close := func() { a.releaseWorkspaceFile(root) }
@@ -1487,14 +1489,14 @@ func (a *desktop) saveFile() {
 		a.win.Update(func() {
 			file.Saving = false
 			if err != nil {
-				a.notifyError("保存失败：" + err.Error())
+				a.notifyError(locales.Text("保存失败：") + err.Error())
 				return
 			}
 			file.Version = result.Version
 			if file.Editor.Buffer.String() == text {
 				file.Editor.Buffer.MarkSaved()
 			}
-			a.notify("文件已保存")
+			a.notify(locales.Text("文件已保存"))
 		})
 	}()
 }

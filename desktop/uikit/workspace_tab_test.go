@@ -11,7 +11,7 @@ import (
 func TestWorkspaceTabSlotsStayFixed(t *testing.T) {
 	busy, active, canClose := false, true, true
 	closed, selected := 0, 0
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		ui.Column(c).Padding(10).Children(func() {
 			WorkspaceTab(c.Key("tab"), "apisec", "/coding/go/src/apisec", active, busy, canClose, nil, func() { selected++ }, func() { closed++ }, nil)
 		})
@@ -61,7 +61,7 @@ func TestWorkspaceTabSelectionDoesNotStretchHoverFill(t *testing.T) {
 			theme = ui.DarkTheme()
 		}
 		active := false
-		tt := ui.NewTester(func(c *ui.Context) {
+		tt := chineseTester(func(c *ui.Context) {
 			c.SetTheme(theme)
 			ui.Row(c).Fill().Background(theme.Surface.Mix(theme.Accent, 0.18)).Children(func() {
 				WorkspaceTab(c.Key("tab"), "workspace", "/w/workspace", active, false, true, nil,
@@ -89,7 +89,7 @@ func TestWorkspaceTabStatusAndPaddingActivate(t *testing.T) {
 	for _, busy := range []bool{false, true} {
 		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
 			selected := 0
-			tt := ui.NewTester(func(c *ui.Context) {
+			tt := chineseTester(func(c *ui.Context) {
 				ui.Column(c).Padding(10).Children(func() {
 					WorkspaceTab(c.Key("tab"), "apisec", "/w/apisec", false, busy, true, nil, func() { selected++ }, func() {}, nil).Label("workspace-tab")
 				})
@@ -116,7 +116,7 @@ func TestWorkspaceTabStatusAndPaddingActivate(t *testing.T) {
 }
 
 func TestWorkspaceTabsUseIntrinsicWidth(t *testing.T) {
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		ui.Row(c).Children(func() {
 			WorkspaceTab(c.Key("short"), "a", "/w/a", true, false, true, nil, func() {}, func() {}, nil).Label("short-tab")
 			WorkspaceTab(c.Key("long"), "ally-agent-workspace", "/w/ally-agent-workspace", false, false, true, nil, func() {}, func() {}, nil).Label("long-tab")

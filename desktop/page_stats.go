@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"fmt"
 	"math"
 	"time"
@@ -49,7 +50,7 @@ func (a *desktop) loadStats(manual ...bool) {
 				if stats.Error != "" {
 					a.notifyError(stats.Error)
 				} else {
-					a.notifySuccess("用量统计已刷新")
+					a.notifySuccess(locales.Text("用量统计已刷新"))
 				}
 			}
 		})
@@ -61,29 +62,29 @@ func (a *desktop) statsPageBody(c *ui.Context) {
 		notice(c, "error", a.stats.Error, a.secondaryInk())
 	}
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "k 千 / M 百万 / B 十亿 / T 万亿 · 悬停查看精确值").FontSize(fsSmall).TextColor(a.secondaryInk()).MinWidth(0).Shrink(1)
+		ui.Text(c, locales.Text("k 千 / M 百万 / B 十亿 / T 万亿 · 悬停查看精确值")).FontSize(fsSmall).TextColor(a.secondaryInk()).MinWidth(0).Shrink(1)
 		ui.Spacer(c)
-		flat(c, "刷新").OnClick(func() { a.loadStats(true) })
+		flat(c, locales.Text("刷新")).OnClick(func() { a.loadStats(true) })
 	})
 	empty := a.stats.SummaryMonth.TotalTokens == 0 && a.stats.Summary7Days.TotalTokens == 0 && a.stats.SummaryToday.TotalTokens == 0
 	if empty {
-		emptyState(c, "暂无用量数据", "开始对话后，这里会显示 token 用量与缓存命中率。", a.secondaryInk())
+		emptyState(c, locales.Text("暂无用量数据"), locales.Text("开始对话后，这里会显示 token 用量与缓存命中率。"), a.secondaryInk())
 		return
 	}
 	ui.Row(c.Key("stats-overview")).FillWidth().Wrap().AlignItems(ui.Stretch).Gap(gapSection).Children(func() {
-		a.statsSummaryCard(c, "今日", a.stats.SummaryToday)
-		a.statsSummaryCard(c, "近 7 日", a.stats.Summary7Days)
-		a.statsSummaryCard(c, "本月", a.stats.SummaryMonth)
+		a.statsSummaryCard(c, locales.Text("今日"), a.stats.SummaryToday)
+		a.statsSummaryCard(c, locales.Text("近 7 日"), a.stats.Summary7Days)
+		a.statsSummaryCard(c, locales.Text("本月"), a.stats.SummaryMonth)
 	})
 	ui.Row(c.Key("stats-daily-panels")).FillWidth().Wrap().AlignItems(ui.Stretch).Gap(gapSection).Children(func() {
 		a.statsBars(c)
 		a.statsHeatmap(c)
 	})
 	ui.Row(c.Key("stats-donuts")).FillWidth().Wrap().AlignItems(ui.Stretch).Gap(gapSection).Children(func() {
-		a.statsDonut(c, "模型 · 近 7 日", a.stats.ModelWeek)
-		a.statsDonut(c, "模型 · 本月", a.stats.ModelMonth)
-		a.statsDonut(c, "工作区 · 近 7 日", a.stats.WorkspaceWeek)
-		a.statsDonut(c, "工作区 · 本月", a.stats.WorkspaceMonth)
+		a.statsDonut(c, locales.Text("模型 · 近 7 日"), a.stats.ModelWeek)
+		a.statsDonut(c, locales.Text("模型 · 本月"), a.stats.ModelMonth)
+		a.statsDonut(c, locales.Text("工作区 · 近 7 日"), a.stats.WorkspaceWeek)
+		a.statsDonut(c, locales.Text("工作区 · 本月"), a.stats.WorkspaceMonth)
 	})
 }
 
@@ -92,7 +93,7 @@ func (a *desktop) statsSummaryCard(c *ui.Context, title string, summary backend.
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
 			ui.Text(c, title).FontSize(fsSmall).TextColor(a.secondaryInk())
 			ui.Spacer(c)
-			uikit.Tooltip(c, ui.Text(c, statsNumber(float64(summary.Requests))+" 次请求").FontSize(fsSmall).TextColor(a.secondaryInk()).NoWrap(), statsExact(summary.Requests)+" 次请求")
+			uikit.Tooltip(c, ui.Text(c, statsNumber(float64(summary.Requests))+locales.Text(" 次请求")).FontSize(fsSmall).TextColor(a.secondaryInk()).NoWrap(), statsExact(summary.Requests)+locales.Text(" 次请求"))
 		})
 		ui.Row(c).Gap(gapField).AlignItems(ui.Baseline).Children(func() {
 			statsTokens(c, summary.TotalTokens).FontSize(fsDisplay).Bold()
@@ -100,31 +101,31 @@ func (a *desktop) statsSummaryCard(c *ui.Context, title string, summary backend.
 		})
 		ui.Row(c).FillWidth().Gap(gapSection).Wrap().Children(func() {
 			ui.Row(c).Gap(gapTight).Children(func() {
-				fieldNote(c, "输入", a.secondaryInk())
+				fieldNote(c, locales.Text("输入"), a.secondaryInk())
 				statsTokens(c, summary.InputTokens).FontSize(fsSmall)
 			})
 			ui.Row(c).Gap(gapTight).Children(func() {
-				fieldNote(c, "输出", a.secondaryInk())
+				fieldNote(c, locales.Text("输出"), a.secondaryInk())
 				statsTokens(c, summary.OutputTokens).FontSize(fsSmall)
 			})
 		})
 		ui.Row(c).Gap(gapTight).Children(func() {
-			fieldNote(c, "单次平均", a.secondaryInk())
+			fieldNote(c, locales.Text("单次平均"), a.secondaryInk())
 			statsTokens(c, summary.AvgPerRequest).FontSize(fsSmall).TextColor(a.secondaryInk())
 		})
 		ui.Row(c).FillWidth().Children(func() {
-			fieldNote(c, "缓存命中", a.secondaryInk())
+			fieldNote(c, locales.Text("缓存命中"), a.secondaryInk())
 			ui.Spacer(c)
 			fieldNote(c, fmt.Sprintf("%.1f%%", summary.CacheHitRate*100), a.secondaryInk())
 		})
-		uikit.Tooltip(c, ui.Meter(c.Key("stats-cache-"+title), summary.CacheHitRate, 0, 1, nil).FillWidth().Height(4).Label(title+"缓存命中率"), "命中 "+statsExact(summary.CacheHitTokens)+" / 未命中 "+statsExact(summary.CacheMissTokens)+" tokens")
+		uikit.Tooltip(c, ui.Meter(c.Key("stats-cache-"+title), summary.CacheHitRate, 0, 1, nil).FillWidth().Height(4).Label(title+locales.Text("缓存命中率")), locales.Text("命中 ")+statsExact(summary.CacheHitTokens)+locales.Text(" / 未命中 ")+statsExact(summary.CacheMissTokens)+" tokens")
 		if summary.CacheWriteTokens > 0 {
 			ui.Row(c).Gap(gapTight).Children(func() {
-				fieldNote(c, "缓存写入", a.secondaryInk())
+				fieldNote(c, locales.Text("缓存写入"), a.secondaryInk())
 				statsTokens(c, summary.CacheWriteTokens).FontSize(fsSmall).TextColor(a.secondaryInk())
 			})
 		}
-	}).Basis(240).Grow(1).MinWidth(0).Label(title + "用量概览")
+	}).Basis(240).Grow(1).MinWidth(0).Label(title + locales.Text("用量概览"))
 }
 
 // statsBarsData is the 30-day chart's derived series. The page rebuilds the
@@ -152,7 +153,7 @@ func buildStatsBars(daily []backend.TokenDailyStat) statsBarsData {
 		if total := data.input[i] + data.output[i]; total > data.max {
 			data.max = total
 		}
-		data.tips[i] = fmt.Sprintf("%s · 输入 %s · 输出 %s · 合计 %s tokens", d.Date, statsExact(d.InputTokens), statsExact(d.OutputTokens), statsExact(d.InputTokens+d.OutputTokens))
+		data.tips[i] = fmt.Sprintf(locales.Text("%s · 输入 %s · 输出 %s · 合计 %s tokens"), d.Date, statsExact(d.InputTokens), statsExact(d.OutputTokens), statsExact(d.InputTokens+d.OutputTokens))
 	}
 	return data
 }
@@ -165,13 +166,13 @@ func (a *desktop) statsBars(c *ui.Context) {
 	daily := a.stats.Daily
 	card(c, "stats-bars", func() {
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-			sectionTitle(c, "近 30 天用量")
+			sectionTitle(c, locales.Text("近 30 天用量"))
 			ui.Spacer(c)
-			legendSwatch(c, "输入", chartPalette[0])
-			legendSwatch(c, "输出", chartPalette[1])
+			legendSwatch(c, locales.Text("输入"), chartPalette[0])
+			legendSwatch(c, locales.Text("输出"), chartPalette[1])
 		})
 		if len(daily) == 0 {
-			fieldNote(c, "近 30 天暂无数据。", a.secondaryInk())
+			fieldNote(c, locales.Text("近 30 天暂无数据。"), a.secondaryInk())
 			return
 		}
 		bars := a.statsChart
@@ -201,7 +202,7 @@ func (a *desktop) statsBars(c *ui.Context) {
 				uikit.Tooltip(c, chart.Rect(c, x.Band(i), y.Span(0, input[i])).Radius(2).Background(chartPalette[0]), tip)
 				uikit.Tooltip(c, chart.Rect(c, x.Band(i), y.Span(input[i], input[i]+output[i])).Radius(2).Background(chartPalette[1]), tip)
 			}
-		}).Label("近30天用量图").Height(200).Gap(gapInline)
+		}).Label(locales.Text("近30天用量图")).Height(200).Gap(gapInline)
 		ui.Row(c).FillWidth().Children(func() {
 			fieldNote(c, monthDay(daily[0].Date), a.secondaryInk())
 			ui.Spacer(c)
@@ -242,9 +243,9 @@ type heatmapKey struct {
 // statsHeatmap draws the current month as a 7-column weekday grid.
 func (a *desktop) statsHeatmap(c *ui.Context) {
 	card(c, "stats-heatmap", func() {
-		sectionTitle(c, "当月热力图")
+		sectionTitle(c, locales.Text("当月热力图"))
 		ui.Grid(c).Columns(7).Gap(gapTight).Children(func() {
-			for _, day := range []string{"一", "二", "三", "四", "五", "六", "日"} {
+			for _, day := range []string{locales.Text("一"), locales.Text("二"), locales.Text("三"), locales.Text("四"), locales.Text("五"), locales.Text("六"), locales.Text("日")} {
 				ui.Text(c, day).FontSize(fsTiny).TextAlign(ui.Center).TextColor(a.secondaryInk())
 			}
 		})
@@ -307,7 +308,7 @@ func (a *desktop) statsHeatmap(c *ui.Context) {
 				cell.Children(func() { ui.Text(c, data.label).FontSize(fsTiny).TextColor(c.Theme().Text) })
 			}
 		})
-		fieldNote(c, "色彩越明显，用量越高", a.secondaryInk())
+		fieldNote(c, locales.Text("色彩越明显，用量越高"), a.secondaryInk())
 	}).Basis(400).Grow(1).MinWidth(0)
 }
 
@@ -350,8 +351,8 @@ func buildStatsDonut(stats []backend.TokenDimensionStat) statsDonutData {
 		percent := fmt.Sprintf("%.1f%%", float64(value)*100/float64(data.total))
 		data.rows[i] = statsDonutRow{
 			name:      name,
-			legendTip: fmt.Sprintf("%s · 输入 %s · 输出 %s tokens", fullName, statsExact(item.InputTokens), statsExact(item.OutputTokens)),
-			hoverTip:  fmt.Sprintf("%s · 输入 %s · 输出 %s · %s", name, statsExact(item.InputTokens), statsExact(item.OutputTokens), percent),
+			legendTip: fmt.Sprintf(locales.Text("%s · 输入 %s · 输出 %s tokens"), fullName, statsExact(item.InputTokens), statsExact(item.OutputTokens)),
+			hoverTip:  fmt.Sprintf(locales.Text("%s · 输入 %s · 输出 %s · %s"), name, statsExact(item.InputTokens), statsExact(item.OutputTokens), percent),
 			percent:   percent,
 			value:     statsNumber(float64(value)),
 		}
@@ -384,12 +385,12 @@ func (a *desktop) statsDonut(c *ui.Context, title string, stats []backend.TokenD
 			func(i int) backend.TokenDimensionStat { return stats[i] },
 			func() statsDonutData { return buildStatsDonut(stats) })
 		if data.total == 0 || len(stats) == 0 {
-			fieldNote(c, "该区间暂无数据。", a.secondaryInk())
+			fieldNote(c, locales.Text("该区间暂无数据。"), a.secondaryInk())
 			return
 		}
 		slices := data.slices
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Center).Children(func() {
-			box := ui.Box(c).Size(142, 142).Shrink(0).Center().Label(title + "环形图")
+			box := ui.Box(c).Size(142, 142).Shrink(0).Center().Label(title + locales.Text("环形图"))
 			sectors := memoAt[[]statsDonutSectorMemo](box, "sectors")
 			if len(*sectors) != len(slices) {
 				*sectors = make([]statsDonutSectorMemo, len(slices))

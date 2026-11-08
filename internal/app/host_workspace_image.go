@@ -2,6 +2,7 @@
 package app
 
 import (
+	"ally-dev/locales"
 	"bytes"
 	"fmt"
 	_ "golang.org/x/image/bmp"
@@ -34,14 +35,14 @@ func (a *App) ReadNativeWorkspaceImage(req WorkspacePathRequest) ([]byte, error)
 		return nil, err
 	}
 	if len(data) > workspaceEditorMaxBytes {
-		return nil, fmt.Errorf("图片超过 16 MiB 预览限制")
+		return nil, fmt.Errorf("%s", locales.Text("图片超过 16 MiB 预览限制"))
 	}
 	config, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("无法读取图片：%w", err)
+		return nil, fmt.Errorf(locales.Text("无法读取图片：%w"), err)
 	}
 	if config.Width <= 0 || config.Height <= 0 || int64(config.Width)*int64(config.Height) > 40000000 {
-		return nil, fmt.Errorf("图片尺寸过大，无法预览")
+		return nil, fmt.Errorf("%s", locales.Text("图片尺寸过大，无法预览"))
 	}
 	return data, nil
 }

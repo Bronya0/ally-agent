@@ -4,6 +4,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"errors"
 	"runtime"
 	"sync"
@@ -212,7 +213,7 @@ func newVoiceHotkeyRequirement(hotkey voiceHotkey, left, right bool) (voiceHotke
 	for _, key := range hotkey.keys {
 		vk := voiceVirtualKey(key)
 		if vk == 0 {
-			return require, errors.New("快捷键包含不支持的按键")
+			return require, errors.New(locales.Text("快捷键包含不支持的按键"))
 		}
 		require.keyVKs = append(require.keyVKs, vk)
 	}
@@ -222,7 +223,7 @@ func newVoiceHotkeyRequirement(hotkey voiceHotkey, left, right bool) (voiceHotke
 		}
 		sides, ok := voiceModifierVKs[spec.mod]
 		if !ok {
-			return require, errors.New("快捷键包含不支持的修饰键")
+			return require, errors.New(locales.Text("快捷键包含不支持的修饰键"))
 		}
 		accepted := []uint32{sides[0]}
 		if left {
@@ -234,7 +235,7 @@ func newVoiceHotkeyRequirement(hotkey voiceHotkey, left, right bool) (voiceHotke
 		require.modVKs = append(require.modVKs, accepted)
 	}
 	if len(require.keyVKs) == 0 && len(require.modVKs) == 0 {
-		return require, errors.New("快捷键格式无效")
+		return require, errors.New(locales.Text("快捷键格式无效"))
 	}
 	return require, nil
 }
@@ -481,7 +482,7 @@ func voiceForegroundIsAlly() bool {
 func startNativeVoiceHotkey(value string, left, right bool, armed func() bool, onDown, onUp, onAbort func()) (func(), error) {
 	hotkey, ok := parseVoiceHotkey(value)
 	if !ok {
-		return nil, errors.New("快捷键格式无效")
+		return nil, errors.New(locales.Text("快捷键格式无效"))
 	}
 	require, err := newVoiceHotkeyRequirement(hotkey, left, right)
 	if err != nil {

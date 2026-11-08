@@ -3,14 +3,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package desktop
 
+import "ally-dev/locales"
 import "errors"
 
 func startNativeVoiceHotkey(string, bool, bool, func() bool, func(), func(), func()) (func(), error) {
-	return nil, errors.New("语音快捷键目前仅支持 Windows 桌面版")
+	return nil, errors.New(locales.Text("语音快捷键目前仅支持 Windows 桌面版"))
 }
 
 func startNativeHotkeyCapture(func([]string, string), func(string)) (func(), error) {
-	return nil, errors.New("语音快捷键目前仅支持 Windows 桌面版")
+	return nil, errors.New(locales.Text("语音快捷键目前仅支持 Windows 桌面版"))
 }
 
 func voiceHotkeyHookLive() bool { return false }
@@ -23,16 +24,16 @@ func voiceInputSupported() bool { return false }
 type unavailableAudioRecording struct{}
 
 func startNativeAudioRecording(...string) (nativeAudioRecording, error) {
-	return nil, errors.New("实时麦克风测试目前仅支持 Windows 桌面版")
+	return nil, errors.New(locales.Text("实时麦克风测试目前仅支持 Windows 桌面版"))
 }
 func listNativeAudioInputDevices() ([]voiceCaptureDevice, error) {
-	return nil, errors.New("语音输入设备选择目前仅支持 Windows 桌面版")
+	return nil, errors.New(locales.Text("语音输入设备选择目前仅支持 Windows 桌面版"))
 }
 func (*unavailableAudioRecording) Start() error {
-	return errors.New("实时麦克风测试目前仅支持 Windows 桌面版")
+	return errors.New(locales.Text("实时麦克风测试目前仅支持 Windows 桌面版"))
 }
 func (*unavailableAudioRecording) Stop() ([]byte, error) {
-	return nil, errors.New("实时麦克风测试目前仅支持 Windows 桌面版")
+	return nil, errors.New(locales.Text("实时麦克风测试目前仅支持 Windows 桌面版"))
 }
 func (*unavailableAudioRecording) Cancel() {}
 func (*unavailableAudioRecording) Levels() <-chan float32 {

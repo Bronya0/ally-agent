@@ -2,6 +2,7 @@
 package app
 
 import (
+	"ally-dev/locales"
 	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/read"
 	"bytes"
@@ -50,7 +51,7 @@ func (a *App) showMainWindow() {
 }
 func (a *App) ShowMainWindow() { a.showMainWindow() }
 func (a *App) SelectDirectory(current string) (string, error) {
-	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Title: "选择目录", DefaultPath: current, Directory: true})
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Title: locales.Text("选择目录"), DefaultPath: current, Directory: true})
 	if err != nil || len(paths) == 0 {
 		return "", err
 	}
@@ -66,7 +67,7 @@ func (a *App) SelectWorkspace() (string, error) {
 		return path, err
 	}
 	if pathutil.IsSystemRootPath(path) {
-		return "", errors.New("系统根目录不能用作工作区，请选择具体项目目录")
+		return "", errors.New(locales.Text("系统根目录不能用作工作区，请选择具体项目目录"))
 	}
 	return path, a.updateConfigAndPersist(func(c *ConfigState) { c.Workspace = path })
 }
@@ -79,14 +80,14 @@ func (a *App) selectFile(title string) (string, error) {
 	return paths[0], nil
 }
 func (a *App) SelectBackgroundImage() (string, error) {
-	p, e := a.selectFile("选择背景图片")
+	p, e := a.selectFile(locales.Text("选择背景图片"))
 	if e != nil || p == "" {
 		return p, e
 	}
 	return a.saveBackgroundImageFromFile(p)
 }
-func (a *App) SelectBackgroundImagePath() (string, error) { return a.selectFile("选择背景图片") }
-func (a *App) SelectPrivateKeyFile() (string, error)      { return a.selectFile("选择 SSH 私钥") }
+func (a *App) SelectBackgroundImagePath() (string, error) { return a.selectFile(locales.Text("选择背景图片")) }
+func (a *App) SelectPrivateKeyFile() (string, error)      { return a.selectFile(locales.Text("选择 SSH 私钥")) }
 
 // SelectJSONFile picks a configuration file for import. Filters keep the dialog
 // honest while still accepting the generic .json files users export.
@@ -107,11 +108,11 @@ func (a *App) ReadLocalTextFile(path string) (string, error) {
 		return "", err
 	}
 	if info.IsDir() {
-		return "", errors.New("请选择文件而不是目录")
+		return "", errors.New(locales.Text("请选择文件而不是目录"))
 	}
 	const max = 2 << 20
 	if info.Size() > max {
-		return "", errors.New("文件过大（上限 2MB）")
+		return "", errors.New(locales.Text("文件过大（上限 2MB）"))
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -123,7 +124,7 @@ func (a *App) ReadLocalTextFile(path string) (string, error) {
 		return "", err
 	}
 	if len(data) > max {
-		return "", errors.New("文件过大（上限 2MB）")
+		return "", errors.New(locales.Text("文件过大（上限 2MB）"))
 	}
 	data, err = read.DecodeTextBytes(data)
 	if err != nil {
@@ -155,13 +156,13 @@ func (a *App) ReadWorkspaceMedia(req WorkspacePathRequest) ([]byte, error) {
 	}
 	const max = 20 << 20
 	if info.Size() > max {
-		return nil, errors.New("图片过大，无法预览（上限 20MB）")
+		return nil, errors.New(locales.Text("图片过大，无法预览（上限 20MB）"))
 	}
 	return os.ReadFile(resolved)
 }
 
 func (a *App) ExportTextFile(name, content, filterName, pattern string) (string, error) {
-	p, e := mygo.Dialog.Save(mygo.SaveDialogOptions{Title: "导出文件", DefaultPath: name})
+	p, e := mygo.Dialog.Save(mygo.SaveDialogOptions{Title: locales.Text("导出文件"), DefaultPath: name})
 	if e != nil || p == "" {
 		return p, e
 	}

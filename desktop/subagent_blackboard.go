@@ -4,6 +4,7 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"fmt"
 	"sort"
 	"strconv"
@@ -14,7 +15,9 @@ import (
 
 const subagentBlackboardSemantics = "收：已进入模型上下文的唯一消息；发：发布成功，不表示对方已接收。"
 
-var subagentBlackboardRetention = fmt.Sprintf("序号仅在本轮有效；仅保留最近 %d 条，计数为累计值；正文为预览。", backend.MaxSubagentBlackboardEvents)
+func subagentBlackboardRetention() string {
+	return fmt.Sprintf(locales.Text("序号仅在本轮有效；仅保留最近 %d 条，计数为累计值；正文为预览。"), backend.MaxSubagentBlackboardEvents)
+}
 
 func subagentBlackboardEntry(raw map[string]any) map[string]any {
 	direction := str(raw, "direction")
@@ -28,35 +31,35 @@ func subagentBlackboardEntry(raw map[string]any) map[string]any {
 			entry[key] = value
 		}
 	}
-	label := "收到"
+	label := locales.Text("收到")
 	if direction == "sent" {
-		label = "发出"
+		label = locales.Text("发出")
 	}
 	kind := str(raw, "type")
 	switch kind {
 	case "finding":
-		kind = "发现"
+		kind = locales.Text("发现")
 	case "question":
-		kind = "提问"
+		kind = locales.Text("提问")
 	case "answer":
-		kind = "答复"
+		kind = locales.Text("答复")
 	case "decision":
-		kind = "决策"
+		kind = locales.Text("决策")
 	case "blocker":
-		kind = "阻碍"
+		kind = locales.Text("阻碍")
 	case "handoff":
-		kind = "交接"
+		kind = locales.Text("交接")
 	}
 	heading := label + " · #" + strconv.FormatInt(seq, 10)
 	if kind != "" {
 		heading += " · " + kind
 	}
 	if reply := int64(num(raw, "replyTo")); reply > 0 {
-		heading += " · 回复 #" + strconv.FormatInt(reply, 10)
+		heading += locales.Text(" · 回复 #") + strconv.FormatInt(reply, 10)
 	}
 	to := str(raw, "to")
 	if to == "*" {
-		to = "全体"
+		to = locales.Text("全体")
 	}
 	entry["_blackboardKey"] = direction + "-" + strconv.FormatInt(seq, 10)
 	entry["_blackboardHeading"] = heading
@@ -108,7 +111,7 @@ func updateSubagentBlackboardLabel(row map[string]any) {
 	sent, received := max(0, int(num(row, "blackboardSent"))), max(0, int(num(row, "blackboardReceived")))
 	row["blackboardSent"], row["blackboardReceived"] = sent, received
 	if entries, _ := row["blackboardEvents"].([]any); sent+received > 0 || len(entries) > 0 {
-		row["_blackboardLabel"] = fmt.Sprintf("黑板 · 收 %d / 发 %d", received, sent)
+		row["_blackboardLabel"] = fmt.Sprintf(locales.Text("黑板 · 收 %d / 发 %d"), received, sent)
 	} else {
 		delete(row, "_blackboardLabel")
 	}
@@ -176,7 +179,7 @@ func (a *desktop) subagentBlackboardButton(c *ui.Context, t *conversation, row m
 	id := str(row, "subId")
 	open := t.uiState().ToolOpen["sub-blackboard-"+id]
 	button, _ := buttonParts(c, "sub-blackboard-button-"+id, "", btnSecondary, true, "")
-	button.Label("子代理黑板 " + id).OnClick(func() { toggleSubagentDetail(t, id, true) }).Children(func() {
+	button.Label(locales.Text("子代理黑板 ") + id).OnClick(func() { toggleSubagentDetail(t, id, true) }).Children(func() {
 		ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, label).FontSize(uikit.ButtonFontSmall).TextColor(a.secondaryInk())
 			caret := "chevron"
@@ -186,7 +189,7 @@ func (a *desktop) subagentBlackboardButton(c *ui.Context, t *conversation, row m
 			iconGlyph(c, caret, sizeCaretInline).Shrink(0)
 		})
 	})
-	uikit.Tooltip(c, button, subagentBlackboardSemantics)
+	uikit.Tooltip(c, button, locales.Text(subagentBlackboardSemantics))
 }
 
 func (a *desktop) subagentBlackboardDetails(c *ui.Context, t *conversation, row map[string]any) {
@@ -200,9 +203,9 @@ func (a *desktop) subagentBlackboardDetails(c *ui.Context, t *conversation, row 
 			return
 		}
 		ui.Column(c).FillWidth().MinWidth(0).Gap(gapInline).Children(func() {
-			ui.Text(c, subagentBlackboardSemantics).FontSize(fsTiny).TextColor(a.secondaryInk())
-			ui.Text(c, subagentBlackboardRetention).FontSize(fsTiny).TextColor(a.secondaryInk())
-			ui.Scroll(c.Key("sub-blackboard-body-" + id)).FillWidth().MinWidth(0).MaxHeight(280).Shrink(0).Clip().Label("子代理黑板记录 " + id).Children(func() {
+			ui.Text(c, locales.Text(subagentBlackboardSemantics)).FontSize(fsTiny).TextColor(a.secondaryInk())
+			ui.Text(c, subagentBlackboardRetention()).FontSize(fsTiny).TextColor(a.secondaryInk())
+			ui.Scroll(c.Key("sub-blackboard-body-" + id)).FillWidth().MinWidth(0).MaxHeight(280).Shrink(0).Clip().Label(locales.Text("子代理黑板记录 ") + id).Children(func() {
 				ui.Column(c).FillWidth().MinWidth(0).Gap(gapInline).Children(func() {
 					entries, _ := row["blackboardEvents"].([]any)
 					for _, raw := range entries {
@@ -219,7 +222,7 @@ func (a *desktop) subagentBlackboardDetails(c *ui.Context, t *conversation, row 
 							ui.Text(c, str(entry, "_blackboardRoute")).FontSize(fsTiny).TextColor(a.secondaryInk())
 							ui.Text(c, str(entry, "body")).FontSize(fsSmall).LineHeight(1.5).Selectable()
 							if boolOf(entry, "truncated") {
-								ui.Text(c, "正文已截断，仅显示预览").FontSize(fsTiny).TextColor(a.secondaryInk())
+								ui.Text(c, locales.Text("正文已截断，仅显示预览")).FontSize(fsTiny).TextColor(a.secondaryInk())
 							}
 						})
 					}

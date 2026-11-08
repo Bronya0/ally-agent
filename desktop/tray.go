@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"bytes"
 	"log"
 	"runtime"
@@ -14,7 +15,7 @@ func (a *desktop) createSystemTray(icon []byte, template bool) error {
 		ID:             "ally-native-main",
 		Icon:           icon,
 		IconIsTemplate: template,
-		ToolTip:        "Ally Native · 点击打开",
+		ToolTip:        locales.Text("Ally Native · 点击打开"),
 	})
 	if err != nil {
 		return err
@@ -22,15 +23,22 @@ func (a *desktop) createSystemTray(icon []byte, template bool) error {
 	a.tray = tray
 
 	menu := mygo.NewMenu([]*mygo.MenuItem{
-		{Label: "打开主窗口", Click: func(*mygo.MenuItem, *mygo.Window) { a.showMainWindow() }},
-		{Label: "检查更新", Click: func(*mygo.MenuItem, *mygo.Window) {
+		{Label: locales.Text("打开主窗口"), Click: func(*mygo.MenuItem, *mygo.Window) { a.showMainWindow() }},
+		{Label: locales.Text("检查更新"), Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.showMainWindow()
 			if a.ready {
 				a.checkUpdates(false)
 			}
 		}},
 		mygo.Separator(),
-		{Label: "退出 Ally", Click: func(*mygo.MenuItem, *mygo.Window) { a.shutdown() }},
+		{Label: locales.Text("退出 Ally"), Click: func(*mygo.MenuItem, *mygo.Window) { a.shutdown() }},
+	})
+	items := menu.Items()
+	offLocale := mygo.App.OnLocaleChanged(func(string) {
+		tray.SetToolTip(locales.Text("Ally Native · 点击打开"))
+		items[0].SetLabel(locales.Text("打开主窗口"))
+		items[1].SetLabel(locales.Text("检查更新"))
+		items[3].SetLabel(locales.Text("退出 Ally"))
 	})
 
 	if runtime.GOOS == "linux" {
@@ -63,7 +71,7 @@ func (a *desktop) createSystemTray(icon []byte, template bool) error {
 		})
 		mygo.App.OnWillQuit(func(*mygo.QuitEvent) { off() })
 	}
-	mygo.App.OnWillQuit(func(*mygo.QuitEvent) { tray.Destroy() })
+	mygo.App.OnWillQuit(func(*mygo.QuitEvent) { offLocale(); tray.Destroy() })
 	return nil
 }
 

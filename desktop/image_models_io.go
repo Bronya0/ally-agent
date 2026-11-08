@@ -3,6 +3,7 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
 	"github.com/egoist/mygo"
@@ -20,13 +21,13 @@ type imageModelFile struct {
 func parseImageModelFile(data []byte) ([]backend.ImageModelConfig, error) {
 	var doc imageModelFile
 	if len(data) > 2*1024*1024 {
-		return nil, fmt.Errorf("文件超过 2 MB")
+		return nil, fmt.Errorf("%s", locales.Text("文件超过 2 MB"))
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("无法解析图片模型文件：%w", err)
+		return nil, fmt.Errorf(locales.Text("无法解析图片模型文件：%w"), err)
 	}
 	if doc.Kind != "ally-image-models" || doc.Version != 1 || doc.Models == nil || len(doc.Models) > 200 {
-		return nil, fmt.Errorf("请选择原版导出的图片模型文件")
+		return nil, fmt.Errorf("%s", locales.Text("请选择原版导出的图片模型文件"))
 	}
 	models := make([]backend.ImageModelConfig, 0, len(doc.Models))
 	for _, model := range doc.Models {
@@ -53,7 +54,7 @@ func (a *desktop) importImageModels(s *imageModelsState) {
 	}
 	s.busy = true
 	go func() {
-		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "导入图片模型", Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: locales.Text("导入图片模型"), Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
 		if err != nil || len(paths) == 0 {
 			a.win.Update(func() {
 				s.busy = false
@@ -109,7 +110,7 @@ func (a *desktop) exportImageModels(s *imageModelsState) {
 		models = []backend.ImageModelConfig{}
 	}
 	go func() {
-		path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: a.win, Title: "导出图片模型", DefaultPath: "ally-image-models.json", Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
+		path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: a.win, Title: locales.Text("导出图片模型"), DefaultPath: "ally-image-models.json", Filters: []mygo.FileFilter{{Name: "JSON", Extensions: []string{"json"}}}})
 		if err == nil && path != "" {
 			if !strings.HasSuffix(strings.ToLower(path), ".json") {
 				path += ".json"
@@ -126,7 +127,7 @@ func (a *desktop) exportImageModels(s *imageModelsState) {
 			if err != nil {
 				a.notify(err.Error())
 			} else if path != "" {
-				a.notifySuccess(fmt.Sprintf("已导出 %d 个图片模型", len(models)))
+				a.notifySuccess(fmt.Sprintf(locales.Text("已导出 %d 个图片模型"), len(models)))
 			}
 		})
 	}()

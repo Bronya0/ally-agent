@@ -3,6 +3,7 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"errors"
 	"reflect"
 )
@@ -151,7 +152,7 @@ func (a *desktop) saveSettings(notice ...string) {
 		a.win.Update(func() {
 			a.applySettingsSave(plan, result)
 			if err := result.err(); err != nil {
-				a.notifyError("保存设置失败：" + err.Error())
+				a.notifyError(locales.Text("保存设置失败：") + err.Error())
 				return
 			}
 			if len(notice) > 0 {
@@ -194,7 +195,7 @@ func (a *desktop) commitSettingsOnLeave() {
 		a.finishVoiceHotkeyCapture("")
 	}
 	if a.settingsPendingEdits() {
-		a.saveSettings("设置已保存")
+		a.saveSettings(locales.Text("设置已保存"))
 	}
 }
 

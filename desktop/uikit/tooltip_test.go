@@ -8,7 +8,7 @@ import (
 )
 
 func TestTooltipAppearsOnRight(t *testing.T) {
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		ui.Column(c).Padding(12).Children(func() {
 			b := ui.ButtonBase(c.Key("menu")).Size(34, 34).Label("menu")
 			RightTooltip(c, b, "插件提示")
@@ -32,7 +32,7 @@ func TestTooltipAppearsOnRight(t *testing.T) {
 }
 
 func TestTooltipFadesInAndOut(t *testing.T) {
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		c.SetTheme(ui.LightTheme())
 		ui.Column(c).Fill().Background(ui.Hex("#ffffff")).Padding(16).Children(func() {
 			b := ui.ButtonBase(c.Key("item")).Size(34, 34).Label("item")
@@ -71,7 +71,7 @@ func TestTooltipFadesInAndOut(t *testing.T) {
 
 func TestTooltipDoesNotStealHoverInShortWindow(t *testing.T) {
 	const text = "A long command tooltip that wraps across several lines. A long command tooltip that wraps across several lines. A long command tooltip that wraps across several lines."
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Selectable().Padding(20).Children(func() { b := ui.ButtonBase(c.Key("anchor")).Size(150, 24).Label("anchor"); Tooltip(c, b, text) })
 	}, 360, 85)
 	r, _ := tt.Find("anchor")
@@ -88,7 +88,7 @@ func TestTooltipDoesNotStealHoverInShortWindow(t *testing.T) {
 
 func TestTooltipContentChangeDoesNotRestartFade(t *testing.T) {
 	text := "AAAA"
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		c.SetTheme(ui.LightTheme())
 		ui.Column(c).Fill().Background(ui.Hex("#ffffff")).Padding(20).Children(func() {
 			anchor := ui.ButtonBase(c.Key("anchor")).Size(100, 24).Label("anchor")
@@ -109,7 +109,7 @@ func TestTooltipContentChangeDoesNotRestartFade(t *testing.T) {
 }
 
 func TestTooltipForIntrinsicLabelInWideColumn(t *testing.T) {
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Padding(80, 24).Children(func() {
 			RightTooltip(c, ui.Text(c.Key("label"), "展示块数 ⓘ").AlignSelf(ui.Start), "标题的计算方式说明")
 		})

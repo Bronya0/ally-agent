@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"context"
 	"errors"
 	"fmt"
@@ -56,7 +57,7 @@ func waitWindowWrites(ctx context.Context, tails []<-chan struct{}, failures *wi
 		select {
 		case <-tail:
 		case <-ctx.Done():
-			return fmt.Errorf("等待保存超时，尚未退出：%w", ctx.Err())
+			return fmt.Errorf(locales.Text("等待保存超时，尚未退出：%w"), ctx.Err())
 		}
 	}
 	return failures.take()

@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"strings"
 	"time"
 
@@ -76,25 +77,25 @@ func (a *desktop) pageContent(c *ui.Context, width float32) {
 	case a.page == "chat":
 		a.chatPage(c, width)
 	case a.page == "settings":
-		a.panelPage(c, "设置", "离开设置页面时保存；API 设置需单独保存。", nil, a.settingsPageBody)
+		a.panelPage(c, locales.Text("设置"), locales.Text("离开设置页面时保存；API 设置需单独保存。"), nil, a.settingsPageBody)
 	case a.page == "models":
-		a.panelPage(c, "模型", "按 Provider 管理对话模型与生图模型", nil, a.modelsPageBody)
+		a.panelPage(c, locales.Text("模型"), locales.Text("按 Provider 管理对话模型与生图模型"), nil, a.modelsPageBody)
 	case a.page == "mcp":
 		a.panelPage(c, "MCP", "", nil, a.mcpPageBody)
 	case a.page == "skills":
-		a.panelPage(c, "技能", "", func() { a.skillSourcesHelp(c) }, a.skillsPageBody)
+		a.panelPage(c, locales.Text("技能"), "", func() { a.skillSourcesHelp(c) }, a.skillsPageBody)
 	case a.page == "ssh":
-		a.panelPage(c, "SSH 授权",
-			"添加服务器后，在对话底部勾选授权，模型即可使用 Ally 的 SSH 工具；密钥等凭据由 Ally 管理，不会传给模型。",
+		a.panelPage(c, locales.Text("SSH 授权"),
+			locales.Text("添加服务器后，在对话底部勾选授权，模型即可使用 Ally 的 SSH 工具；密钥等凭据由 Ally 管理，不会传给模型。"),
 			nil, a.sshPageBody)
 	case a.page == "plugins":
-		a.panelPage(c, "插件", "", nil, a.pluginsPageBody)
+		a.panelPage(c, locales.Text("插件"), "", nil, a.pluginsPageBody)
 	case a.page == "tasks":
-		a.panelPage(c, "任务", "", nil, a.tasksPageBody)
+		a.panelPage(c, locales.Text("任务"), "", nil, a.tasksPageBody)
 	case a.page == "stats":
 		a.panelPage(c, "Token", "", nil, a.statsPageBody)
 	default:
-		emptyState(c, "页面不存在", a.page, a.secondaryInk())
+		emptyState(c, locales.Text("页面不存在"), a.page, a.secondaryInk())
 	}
 }
 
@@ -155,7 +156,7 @@ func (a *desktop) chatPage(c *ui.Context, width float32) {
 func (a *desktop) chatColumn(c *ui.Context, width float32) {
 	t := a.current()
 	if t == nil {
-		emptyState(c, "还没有会话", "选择或创建一个工作区开始对话", a.secondaryInk())
+		emptyState(c, locales.Text("还没有会话"), locales.Text("选择或创建一个工作区开始对话"), a.secondaryInk())
 		return
 	}
 	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
@@ -173,11 +174,11 @@ func (a *desktop) kbPage(c *ui.Context, width float32) {
 		ui.Column(c).Fill().Center().Children(func() {
 			card(c, "kb-empty", func() {
 				ui.Column(c).Width(460).Gap(gapSection).Children(func() {
-					ui.Text(c, "知识库").FontSize(fsPageTitle).Bold()
-					fieldNote(c, "选择一个知识库目录，Ally 会在其中维护 index.md 与分类结构；sources/ 子目录对模型只读。", a.secondaryInk())
+					ui.Text(c, locales.Text("知识库")).FontSize(fsPageTitle).Bold()
+					fieldNote(c, locales.Text("选择一个知识库目录，Ally 会在其中维护 index.md 与分类结构；sources/ 子目录对模型只读。"), a.secondaryInk())
 					ui.Row(c).Gap(gapField).Children(func() {
-						cardPrimary(c, "选择知识库目录").OnClick(func() { a.pickKBRoot() })
-						cardFlat(c, "打开设置").OnClick(func() { a.changePage("settings") })
+						cardPrimary(c, locales.Text("选择知识库目录")).OnClick(func() { a.pickKBRoot() })
+						cardFlat(c, locales.Text("打开设置")).OnClick(func() { a.changePage("settings") })
 					})
 				})
 			})
@@ -191,8 +192,8 @@ func (a *desktop) kbPage(c *ui.Context, width float32) {
 	}
 	ui.Column(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Padding(16, padPage, 4).Gap(2).Children(func() {
-			ui.Text(c, "知识库").FontSize(fsHeadline).Bold()
-			ui.Text(c, "整理资料、检索与维护知识索引。").FontSize(fsSmall).TextColor(a.secondaryInk())
+			ui.Text(c, locales.Text("知识库")).FontSize(fsHeadline).Bold()
+			ui.Text(c, locales.Text("整理资料、检索与维护知识索引。")).FontSize(fsSmall).TextColor(a.secondaryInk())
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
 				iconGlyph(c, "folderopen", 13)
 				uikit.Tooltip(c, ui.Text(c, a.config.KBRoot).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine(), a.config.KBRoot)

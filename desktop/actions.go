@@ -3,6 +3,7 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 
 	"github.com/egoist/mygo"
 )
@@ -11,12 +12,12 @@ import (
 // dialog. Everything that deletes user data goes through here so the wording
 // and the button order stay consistent.
 func (a *desktop) confirmAction(title, detail string, run func() error, after func()) {
-	confirmButton := "删除"
+	confirmButton := locales.Text("删除")
 	if title == "确认删除" {
-		confirmButton = "删除"
+		confirmButton = locales.Text("删除")
 	}
 	go func() {
-		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: title, Message: title, Detail: detail, Buttons: []string{"取消", confirmButton}, CancelButton: 0, DestructiveButtons: []int{1}})
+		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: title, Message: title, Detail: detail, Buttons: []string{locales.Text("取消"), confirmButton}, CancelButton: 0, DestructiveButtons: []int{1}})
 		if err != nil {
 			a.fail(err)
 			return
@@ -37,7 +38,7 @@ func (a *desktop) confirmAction(title, detail string, run func() error, after fu
 }
 
 func (a *desktop) deleteSession(id, label string) {
-	a.confirmAction("删除会话", label, func() error { return a.core.DeleteSession(id) }, func() {
+	a.confirmAction(locales.Text("删除会话"), label, func() error { return a.core.DeleteSession(id) }, func() {
 		a.forgetSessions([]string{id})
 		a.reloadSessions()
 	})
@@ -81,7 +82,7 @@ func (a *desktop) deleteModel(model backend.ModelConfig) {
 	id := modelIdentity(model)
 	label := modelOption(model)
 	var saved backend.ConfigState
-	a.confirmAction("删除模型", label, func() error {
+	a.confirmAction(locales.Text("删除模型"), label, func() error {
 		if err := a.core.DeleteNativeModel(id); err != nil {
 			return err
 		}
