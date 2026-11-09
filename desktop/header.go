@@ -117,11 +117,12 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 						a.refreshGit(tab)
 					}, func() { a.closeWorkspaceTab(idx) }, &s.gesture, a.secondaryInk()).FillHeight().Label(locales.Text("工作区标签 ") + tab.ID)
 				}
-				// The plus closes the strip, right where the tabs end: it asks for
-				// another workspace and opens the same history the header's add
-				// button does — one menu, built by whichever entry opened it.
-				a.workspaceHistoryMenu(c.Key("tabs-workspace-add"), func(b ui.Element) {
-					uikit.IconButtonOn(c, b.Disabled(!a.ready), locales.Text("打开工作区历史"), iconImage("plus"), 26, 26*uikit.IconGlyphScale, uikit.IconQuiet, a.secondaryInk())
+				// The plus closes the strip, right where the tabs end: it starts a
+				// workspace and offers only the ways to start one. The history stays
+				// under the header's button, so the two entries never list the same
+				// rows twice.
+				a.workspaceAddMenu(c.Key("tabs-workspace-add"), func(b ui.Element) {
+					uikit.IconButtonOn(c, b.Disabled(!a.ready), locales.Text("添加工作区"), iconImage("plus"), 26, 26*uikit.IconGlyphScale, uikit.IconQuiet, a.secondaryInk())
 				}).AlignSelf(ui.Center).MarginStart(4)
 			})
 		})
@@ -133,16 +134,27 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 // The sidebar keeps its separate switch-to-workspace behavior.
 func (a *desktop) openWorkspaceEntry(workspace string) { a.newConversation(workspace) }
 
-// Both workspace entries share the same menu builder. Their open flags belong
-// to the controls, not global desktop state; MenuBase handles outside presses.
+// The workspace entries stand at the two ends of the tab strip, so each panel
+// grows away from the edge its entry sits on: the plus ends the tabs and offers
+// the ways to start a workspace beside them, the header's button closes the right
+// cluster and lists what was open. That is how menus attached to a control behave
+// everywhere: the panel keeps the trigger's inner edge, so its rows stay under
+// the thing that opened them and the window edge never cuts a row. Each width is
+// set from what the panel holds — two short rows, or paths worth reading whole.
+const (
+	workspaceHistoryPanelWidth float32 = 300
+	workspaceAddPanelWidth     float32 = 180
+)
+
+// workspaceHistoryMenu lists the workspaces seen before under the header's
+// button. The add actions belong to the plus beside the tabs, so no two entries
+// show the same rows. Its open flag belongs to the control, not global desktop
+// state; MenuBase handles outside presses.
 func (a *desktop) workspaceHistoryMenu(c *ui.Context, trigger func(ui.Element)) ui.Element {
 	return uikit.MenuButton(c, nil, uikit.MenuOptions{
-		Width: 300, MaxHeightPercent: 85, Label: locales.Text("工作区历史菜单"),
+		Width: workspaceHistoryPanelWidth, MaxHeightPercent: 85, Label: locales.Text("工作区历史菜单"),
 		At: ui.AnchorBottomRight, Self: ui.AnchorTopRight, Gap: 6,
 	}, trigger, func(m ui.MenuParts) {
-		uikit.MenuItem(c, m, "add", locales.Text("＋ 添加工作区"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(a.chooseWorkspace)
-		uikit.MenuItem(c, m, "temporary", locales.Text("临时工作区"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.newConversation("") })
-		divider(c)
 		roots := a.workspaceHistoryRoots()
 		for _, root := range roots {
 			root := root
@@ -151,16 +163,36 @@ func (a *desktop) workspaceHistoryMenu(c *ui.Context, trigger func(ui.Element)) 
 			uikit.Tooltip(c, item, root).OnClick(func() { a.openWorkspaceEntry(root) })
 		}
 		if len(roots) == 0 {
-			muted(c, locales.Text("无历史记录"), fsSmall, a.secondaryInk()).Padding(padRow)
+			// The plus is the only way in from here, so say where it is.
+			ui.Column(c).Gap(2).Padding(padRow).Children(func() {
+				muted(c, locales.Text("无历史记录"), fsSmall, a.secondaryInk())
+				muted(c, locales.Text("点标签栏的 ＋ 添加工作区"), fsTiny, a.secondaryInk())
+			})
 		}
+	})
+}
+
+// workspaceAddMenu offers the two ways to start a workspace beside the plus that
+// ends the tab strip. Only those rows, so the panel stays narrow and never covers
+// the tabs it stands after.
+func (a *desktop) workspaceAddMenu(c *ui.Context, trigger func(ui.Element)) ui.Element {
+	return uikit.MenuButton(c, nil, uikit.MenuOptions{
+		Width: workspaceAddPanelWidth, Label: locales.Text("添加工作区菜单"),
+		At: ui.AnchorBottomLeft, Self: ui.AnchorTopLeft, Gap: 6,
+	}, trigger, func(m ui.MenuParts) {
+		uikit.MenuItem(c, m, "add", locales.Text("＋ 添加工作区"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(a.chooseWorkspace)
+		uikit.MenuItem(c, m, "temporary", locales.Text("临时工作区"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.newConversation("") })
 	})
 }
 
 // headerActions draws the workspace history, explorer and window actions.
 func (a *desktop) headerActions(c *ui.Context) {
 	p := a.currentPalette()
+	// The header keeps one workspace command, now listing what was open instead of
+	// adding it: the same bare accent stroke the add buttons wear, under the history
+	// mark.
 	a.workspaceHistoryMenu(c.Key("workspace-add"), func(b ui.Element) {
-		addButtonOn(c, b.Disabled(!a.ready), locales.Text("添加工作区"), "addfolder", 30)
+		addButtonOn(c, b.Disabled(!a.ready), locales.Text("工作区历史"), "history", 30)
 	})
 
 	pageOK := a.page == "chat" || strings.HasPrefix(a.page, "plugin:")

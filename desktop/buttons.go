@@ -118,13 +118,14 @@ func uikitTone(tone iconTone) uikit.IconTone {
 	return uikit.IconQuiet
 }
 
-// addButton is the app's one "add" affordance: the header's add-workspace, both
-// rail adds, the composer's new session and the explorer's new file all call it,
-// so "＋" looks the same anywhere. It is a bare glyph — no fill, edge, gradient or
-// lift — because a chip painted onto the chrome outweighs an "add" and reads as a
-// box around the icon; only the stroke carries the state, and it holds the full
-// accent at rest (a washed-out tint disappeared next to the rest of the chrome)
-// before brightening under the pointer.
+// addButton is the app's one "add" affordance: the composer's new session and
+// the explorer's new file call it, so "＋" looks the same anywhere. addButtonOn
+// also paints the header's workspace command, which keeps that treatment under the
+// history mark now that it lists workspaces instead of adding one. It is a bare
+// glyph — no fill, edge, gradient or lift — because a chip painted onto the chrome
+// outweighs an "add" and reads as a box around the icon; only the stroke carries
+// the state, and it holds the full accent at rest (a washed-out tint disappeared
+// next to the rest of the chrome) before brightening under the pointer.
 func addButton(c *ui.Context, id, tip, name string, size float32, fn func()) ui.Element {
 	b := addButtonOn(c, ui.ButtonBase(c.Key(id)), tip, name, size)
 	if fn != nil {

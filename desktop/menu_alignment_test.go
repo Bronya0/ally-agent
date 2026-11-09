@@ -35,7 +35,7 @@ func TestHeaderMenuIconsShareVerticalCenter(t *testing.T) {
 				c.DisableAnimations()
 				a.headerBar(c)
 			}, 900, 100)
-			requireVerticalCenters(t, tester, "最小化", "添加工作区", "打开工作区历史", "打开工作区文件浏览器", "打开 GitHub 项目主页")
+			requireVerticalCenters(t, tester, "最小化", "工作区历史", "添加工作区", "打开工作区文件浏览器", "打开 GitHub 项目主页")
 		})
 	}
 }
