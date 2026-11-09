@@ -20,6 +20,10 @@ import (
 const (
 	autoCompactMethodSummary = "summary"
 	autoCompactMethodRecent  = "recent"
+
+	// DefaultAutoCompactMethod is where an unset config lands, so the settings
+	// form marks the method the app actually uses.
+	DefaultAutoCompactMethod = autoCompactMethodRecent
 )
 
 func normalizeAutoCompactMethod(value string) string {

@@ -142,3 +142,4 @@
 2026-11-07 中危 timer-dispatch Stop 撤不回已排队的 UI 回调；须验 generation，否则旧回调清掉新计时器并提前释放。@desktop/memory_tidy.go
 2026-11-07 中危 chat-wheel 滚轮缓动首帧位置未变，按贴底恢复 Follow 会取消滚动；只在实际下移到底恢复。@desktop/page_chat.go
 2026-11-07 中危 compact-outcome 裁剪重建工具卡时硬写 success 会把失败或取消伪装成成功；复用状态判定并保留结果元数据。@desktop/compact.go
+2026-11-09 中危 ui-enum-alias 下拉选项写别名或原始值而非后端规范值：编辑已有配置时字段消失、界面露出内部串。选项与判断统一用后端导出的常量。@desktop

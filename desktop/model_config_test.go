@@ -2,6 +2,7 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"slices"
 	"testing"
 )
 
@@ -16,6 +17,28 @@ func TestModelEditorPreservesExplicitTokenParameter(t *testing.T) {
 		}
 		if got.TokenParam != param || got.MaxTokens != model.MaxTokens || got.ContextWindow != model.ContextWindow {
 			t.Fatalf("editing changed request parameters: %+v", got)
+		}
+	}
+}
+
+// The editor's options must cover every format the app stores and shows: a value
+// outside that list leaves the field reading as a raw identifier and hides the
+// settings that depend on the format.
+func TestModelEditorListsEveryStoredAPIFormat(t *testing.T) {
+	labels := make(map[string]string, len(apiFormats))
+	for _, format := range apiFormats {
+		label := apiFormatLabel(format)
+		if label == format {
+			t.Fatalf("%q has no display name", format)
+		}
+		if other, dup := labels[label]; dup {
+			t.Fatalf("%q and %q share the label %q", other, format, label)
+		}
+		labels[label] = format
+	}
+	for _, provider := range availableModelCatalog().Providers {
+		if !slices.Contains(apiFormats, provider.APIFormat) {
+			t.Fatalf("catalog provider %q uses %q, which the editor cannot show", provider.Name, provider.APIFormat)
 		}
 	}
 }

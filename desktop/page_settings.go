@@ -28,10 +28,11 @@ const defaultUserAgentOption = "AllyAgent"
 
 // autoCompactOptions keeps the stored values ("summary" / "recent") and changes
 // only what the user reads: a raw English value in the settings form is neither
-// self-explanatory nor honest about which one is the default.
+// self-explanatory nor honest about which one is the default. The default marked
+// here is the backend's DefaultAutoCompactMethod.
 var autoCompactOptions = []uikit.Option{
-	{Value: "summary", Label: "LLM 全文总结（默认）"},
-	{Value: "recent", Label: "本地裁剪（必要时回退总结）"},
+	{Value: "summary", Label: "LLM 全文总结"},
+	{Value: "recent", Label: "本地裁剪（默认，必要时回退总结）"},
 }
 
 var compactThresholdModes = []uikit.RadioOption[string]{
@@ -283,9 +284,12 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				stored := a.configDraft.AutoCompactMethod
 				method := stored
 				if method == "" {
-					method = "summary"
+					method = backend.DefaultAutoCompactMethod
 				}
-				options := []uikit.Option{{Value: "summary", Label: locales.Text(autoCompactOptions[0].Label)}, {Value: "recent", Label: locales.Text(autoCompactOptions[1].Label)}}
+				options := make([]uikit.Option, len(autoCompactOptions))
+				for i, option := range autoCompactOptions {
+					options[i] = uikit.Option{Value: option.Value, Label: locales.Text(option.Label)}
+				}
 				control := uikit.SelectField(c.Key("compact-method"), &method, options, a.secondaryInk()).Label(locales.Text("压缩方式")).FillWidth()
 				if method != stored && method != "" {
 					a.configDraft.AutoCompactMethod = method

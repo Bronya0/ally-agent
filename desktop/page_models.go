@@ -256,12 +256,25 @@ func dashZero(v int) string {
 
 func apiFormatLabel(format string) string {
 	switch format {
-	case "openai_responses":
+	case backend.APIFormatOpenAIResponses:
 		return "OpenAI Responses"
-	case "anthropic":
+	case backend.APIFormatAnthropicMessages:
 		return "Anthropic Messages"
 	}
 	return "OpenAI Chat Completions"
+}
+
+// apiFormats is the one list of interface formats: the editor's options, the
+// labels its cards show and the values it saves all come from here, so a stored
+// value is never an alias the option list cannot display.
+var apiFormats = []string{backend.APIFormatOpenAIChat, backend.APIFormatOpenAIResponses, backend.APIFormatAnthropicMessages}
+
+func apiFormatSelect(c *ui.Context, value *string, ink ...ui.Color) ui.Element {
+	items := make([]uikit.Option, len(apiFormats))
+	for i, format := range apiFormats {
+		items[i] = uikit.Option{Value: format, Label: apiFormatLabel(format)}
+	}
+	return uikit.SelectField(c, value, items, ink...)
 }
 
 type chatModelListKey struct{ provider, display, model, base string }
@@ -418,7 +431,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 				fieldRow(c, "provider-name", locales.Text("供应商名称"), &a.modelDraft.ProviderName, false)
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, locales.Text("接口格式"))
-					localizedSelect(c.Key("api-format"), &a.modelDraft.APIFormat, []string{"openai", "openai_responses", "anthropic"}, a.secondaryInk()).Label(locales.Text("接口格式")).FillWidth()
+					apiFormatSelect(c.Key("api-format"), &a.modelDraft.APIFormat, a.secondaryInk()).Label(locales.Text("接口格式")).FillWidth()
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "Model")
@@ -463,7 +476,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 					uikit.ComboboxField(c.Key("reasoning-tag"), &a.modelDraft.ReasoningTag, []string{"reasoning_content", "reasoning", "think", "thinking", "thought", "reason"}, locales.Text("推理标签"), "", a.secondaryInk()).FillWidth()
 				})
 			})
-			if a.modelDraft.APIFormat == "openai" {
+			if a.modelDraft.APIFormat == backend.APIFormatOpenAIChat {
 				fieldLabel(c, locales.Text("Token 参数"))
 				localizedSelect(c.Key("token-param"), &a.modelDraft.TokenParam, []string{"auto", "max_tokens", "max_completion_tokens"}, a.secondaryInk()).Label(locales.Text("Token 参数")).FillWidth()
 			}
@@ -540,9 +553,9 @@ func sameModelEndpoint(model, draft backend.ModelConfig) bool {
 
 func modelIDPlaceholder(format string) string {
 	switch format {
-	case "openai_responses":
+	case backend.APIFormatOpenAIResponses:
 		return "gpt-4.1-mini"
-	case "anthropic":
+	case backend.APIFormatAnthropicMessages:
 		return "claude-sonnet-5"
 	}
 	return "deepseek-v4-flash"
@@ -750,9 +763,15 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 		})
 		ui.Column(c).Gap(gapTight).Children(func() {
 			fieldLabel(c, locales.Text("生图协议"))
-			protocols := []string{"openai-images", "xai-images", "minimax-images"}
+			// Values stay the three the backend validates; the labels say which
+			// service each one talks to, as the model cards already do.
+			protocols := []uikit.Option{
+				{Value: "openai-images", Label: "OpenAI Images"},
+				{Value: "xai-images", Label: "xAI Images"},
+				{Value: "minimax-images", Label: "MiniMax Images"},
+			}
 			beforeProtocol := s.draft.Protocol
-			localizedSelect(c.Key("image-protocol"), &s.draft.Protocol, protocols, a.secondaryInk()).Label(locales.Text("生图协议")).FillWidth()
+			uikit.SelectField(c.Key("image-protocol"), &s.draft.Protocol, protocols, a.secondaryInk()).Label(locales.Text("生图协议")).FillWidth()
 			if s.draft.Protocol != beforeProtocol {
 				switch s.draft.Protocol {
 				case "openai-images":

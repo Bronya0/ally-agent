@@ -46,6 +46,35 @@ func (e mcpServerEntry) transportName() string {
 	return (backend.McpServerConfig{Transport: e.Transport, Command: e.Command, URL: e.URL}).TransportName()
 }
 
+// The editor's options are the values TransportName reports, so a stored
+// transport always matches an option and only the label reads differently.
+const (
+	mcpTransportStdio = "stdio"
+	mcpTransportSSE   = "sse"
+	mcpTransportHTTP  = "streamable-http"
+)
+
+// mcpTransport is the transport the open editor is on, inferred the way the
+// connection does.
+func (a *desktop) mcpTransport() string {
+	if name := (backend.McpServerConfig{Transport: a.mcpF.Transport}).TransportName(); name != "" {
+		return name
+	}
+	return mcpTransportStdio
+}
+
+func mcpTransportLabelFor(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case mcpTransportSSE:
+		return "SSE"
+	case "http", "rest", mcpTransportHTTP:
+		return "Streamable HTTP"
+	case "", mcpTransportStdio:
+		return "stdio"
+	}
+	return name
+}
+
 func (e *mcpServerEntry) UnmarshalJSON(data []byte) error {
 	type plain mcpServerEntry
 	var p plain
@@ -313,16 +342,11 @@ func mcpToolNames(status map[string]any) string {
 }
 
 func mcpTransportLabel(entry mcpServerEntry, status map[string]any) string {
-	if t := str(status, "transport"); t != "" {
-		return t
+	name := str(status, "transport")
+	if name == "" {
+		name = entry.transportName()
 	}
-	switch entry.transportName() {
-	case "sse":
-		return "sse"
-	case "streamable-http":
-		return "Streamable HTTP"
-	}
-	return "stdio"
+	return mcpTransportLabelFor(name)
 }
 
 func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEntry, docOf func() *mcpConfigDoc, status map[string]any) {
@@ -421,7 +445,7 @@ func (a *desktop) mcpEditorDialog(c *ui.Context) {
 		title = locales.Text("编辑 MCP 服务")
 	}
 	height := float32(550)
-	if a.mcpF.Transport != "stdio" {
+	if a.mcpTransport() != mcpTransportStdio {
 		height = 430
 	}
 	formDialog(c, &a.mcpF.EditorOpen, widthModal, height, title, "", func() {
@@ -429,20 +453,18 @@ func (a *desktop) mcpEditorDialog(c *ui.Context) {
 			fieldRow(c, "mcp-name", locales.Text("服务名称"), &a.mcpF.Name, false)
 			ui.Column(c).Gap(gapTight).Children(func() {
 				fieldLabel(c, locales.Text("传输方式"))
-				transports := []string{"stdio", "sse", "Streamable HTTP"}
-				current := a.mcpF.Transport
-				if current == "http" || current == "streamable-http" {
-					current = "Streamable HTTP"
+				current := a.mcpTransport()
+				transports := []uikit.Option{
+					{Value: mcpTransportStdio, Label: mcpTransportLabelFor(mcpTransportStdio)},
+					{Value: mcpTransportSSE, Label: mcpTransportLabelFor(mcpTransportSSE)},
+					{Value: mcpTransportHTTP, Label: mcpTransportLabelFor(mcpTransportHTTP)},
 				}
-				if current == "" {
-					current = "stdio"
-				}
-				if localizedSelect(c.Key("mcp-transport"), &current, transports, a.secondaryInk()).Label(locales.Text("传输方式")).FillWidth().Changed() {
+				if uikit.SelectField(c.Key("mcp-transport"), &current, transports, a.secondaryInk()).Label(locales.Text("传输方式")).FillWidth().Changed() {
 					a.mcpF.Transport = current
 				}
 			})
 		})
-		if a.mcpF.Transport == "stdio" {
+		if a.mcpTransport() == mcpTransportStdio {
 			fieldRow(c, "mcp-command", locales.Text("命令"), &a.mcpF.Command, false)
 			fieldLabel(c, locales.Text("参数"))
 			textArea(c, "mcp-args", locales.Text("参数"), `-y, @playwright/mcp`, &a.mcpF.Args, 90).FillWidth()
@@ -483,14 +505,9 @@ func (a *desktop) saveMCPEditor() {
 		entry = doc.Servers[a.mcpF.Editing]
 		delete(doc.Servers, a.mcpF.Editing)
 	}
-	transport := a.mcpF.Transport
-	switch transport {
-	case "Streamable HTTP":
-		transport = "http"
-	case "stdio":
-		transport = "stdio"
-	case "sse":
-		transport = "sse"
+	transport := a.mcpTransport()
+	if transport == mcpTransportHTTP {
+		transport = "http" // the spelling other MCP clients write
 	}
 	entry.Transport = transport
 	if transport == "stdio" {

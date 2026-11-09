@@ -27,7 +27,7 @@ func (a *desktop) voiceModelsSection(c *ui.Context) {
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Wrap().Children(func() {
 				ui.Text(c, voiceModelLabel(m)).FontSize(fsBody).Bold()
 				neutralChip(c, backend.VoiceKindLabel(m.Kind))
-				neutralChip(c, m.Deployment)
+				neutralChip(c, backend.VoiceDeploymentLabel(m.Deployment))
 				neutralChip(c, backend.VoiceProtocolLabel(m.Protocol))
 				ui.Spacer(c)
 				cardFlat(c, locales.Text("编辑")).Disabled(s.busy).OnClick(func() { s.open(idx) })

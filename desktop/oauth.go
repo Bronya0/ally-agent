@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	backend "ally-dev/internal/app"
 	"ally-dev/internal/chatgpt"
 	"ally-dev/locales"
 	"fmt"
@@ -59,7 +60,7 @@ func (a *desktop) changeModelAuth(value string) {
 	if value == "chatgpt_oauth" {
 		a.modelDraft.AuthType = value
 		a.modelDraft.ProviderName = "ChatGPT Official"
-		a.modelDraft.APIFormat = "openai_responses"
+		a.modelDraft.APIFormat = backend.APIFormatOpenAIResponses
 		a.modelDraft.BaseURL = "https://api.openai.com/v1"
 		a.modelDraft.ContextWindow = 512000
 		a.modelContextWindow = 512000
@@ -79,7 +80,7 @@ func (a *desktop) changeModelAuth(value string) {
 		if a.modelDraft.ProviderName == "ChatGPT Official" {
 			a.modelDraft.ProviderName = ""
 		}
-		a.modelDraft.APIFormat = "openai"
+		a.modelDraft.APIFormat = backend.APIFormatOpenAIChat
 		a.modelDraft.BaseURL = ""
 	}
 }

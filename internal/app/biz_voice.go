@@ -211,6 +211,15 @@ func VoiceKindLabel(kind string) string {
 	return "ASR · 语音识别"
 }
 
+// VoiceDeploymentLabel is the user-facing name of a deployment: the card shows
+// it beside the kind and protocol, so it must not read as a raw "local"/"api".
+func VoiceDeploymentLabel(deployment string) string {
+	if strings.EqualFold(strings.TrimSpace(deployment), "local") {
+		return "本地推理"
+	}
+	return "云端 API"
+}
+
 func validateVoiceModel(m VoiceModelConfig) error {
 	if strings.TrimSpace(m.ID) == "" {
 		return errors.New("语音模型配置 ID 不能为空")

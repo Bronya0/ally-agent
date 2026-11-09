@@ -103,7 +103,7 @@ func (a *desktop) editModel(index int) {
 			a.modelDraft.AuthType = "api_key"
 		}
 	} else {
-		a.modelDraft = backend.ModelConfig{AuthType: "api_key", ProviderName: customProviderName, APIFormat: "openai", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", MaxTokens: 131072, ContextWindow: 1000000}
+		a.modelDraft = backend.ModelConfig{AuthType: "api_key", ProviderName: customProviderName, APIFormat: backend.APIFormatOpenAIChat, BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", MaxTokens: 131072, ContextWindow: 1000000}
 	}
 	if a.modelDraft.TokenParam == "" {
 		a.modelDraft.TokenParam = "auto"
@@ -217,7 +217,7 @@ func (a *desktop) preparedModelDraft() (backend.ModelConfig, error) {
 			return m, fmt.Errorf("%s", locales.Text("请刷新并选择该账号可用的模型"))
 		}
 		m.ProviderName = "ChatGPT Official"
-		m.APIFormat = "openai_responses"
+		m.APIFormat = backend.APIFormatOpenAIResponses
 		m.BaseURL = "https://api.openai.com/v1"
 		m.APIKey = ""
 		m.APIKeys = nil
