@@ -433,7 +433,10 @@ func validatePythonFiles(ctx context.Context, root string, files []validationFil
 		paths = append(paths, file.abs)
 	}
 	args := append([]string{}, prefix...)
-	args = append(args, "-I", "-S", "-B", "-c", `import sys
+	// -X utf8 rather than PYTHONIOENCODING: -I ignores every PYTHON* variable, and
+	// without it the interpreter writes its own diagnostics in the console code
+	// page — GBK on a Chinese Windows — so they reach the model as mojibake.
+	args = append(args, "-X", "utf8", "-I", "-S", "-B", "-c", `import sys
 required = tuple(map(int, sys.argv[1].split('.')))
 if sys.version_info[:2] < required:
  print('Python %d.%d 低于项目要求 %s，已跳过' % (*sys.version_info[:2], sys.argv[1]))
