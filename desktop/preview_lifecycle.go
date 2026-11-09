@@ -383,22 +383,30 @@ func (p *nativePreview) Load(req previewRequest) {
 	p.watchPage(p.documentURL, false)
 }
 
+// The background shows through whatever a document leaves transparent. Tool
+// previews author dark documents that paint themselves; a workspace file preview
+// shows someone else's page, which expects the white canvas of a browser.
+const (
+	toolPreviewBackground = "#1b1b1b"
+	filePreviewBackground = "#ffffff"
+)
+
 func (a *desktop) newPreviewSurface() (previewSurface, error) {
-	return a.newNativePreview(false)
+	return a.newNativePreview(false, toolPreviewBackground)
 }
 
 func previewAutoplayAllowed(media bool) bool {
 	return media || runtime.GOOS == "windows"
 }
 
-func (a *desktop) newNativePreview(autoplay bool) (*nativePreview, error) {
+func (a *desktop) newNativePreview(autoplay bool, background string) (*nativePreview, error) {
 	page := mygo.PageOptions{PinchZoom: true, Untrusted: true}
 	// WebView2 freezes this policy at its first page, even if that page is
 	// not a media preview. Other platforms only allow it for media players.
 	if previewAutoplayAllowed(autoplay) {
 		page.Autoplay = mygo.AutoplayAllow
 	}
-	view, err := a.win.NewWebView(mygo.WebViewOptions{BackgroundColor: "#1b1b1b", Page: page})
+	view, err := a.win.NewWebView(mygo.WebViewOptions{BackgroundColor: background, Page: page})
 	if err != nil {
 		return nil, err
 	}

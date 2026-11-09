@@ -199,6 +199,13 @@ func htmlFilePreview(source string) (string, error) {
 			head.InsertBefore(meta, first)
 		}
 	}
+	// The app's dark appearance reaches the web view as prefers-color-scheme and
+	// a dark canvas, which repaints a document written for a browser: one that
+	// sets only its text colour ends up dark-on-dark. Hold the preview to the
+	// light scheme a browser gives it, unless the page asks for dark alone.
+	if !documentWantsDarkOnly(document) {
+		pinLightColorScheme(document)
+	}
 	rendered := limitedPreviewBuffer{limit: maxDocumentPreviewHTML}
 	if err := xhtml.Render(&rendered, document); err != nil {
 		if errors.Is(err, errMarkupPreviewLimit) {
@@ -209,18 +216,85 @@ func htmlFilePreview(source string) (string, error) {
 	return rendered.String(), nil
 }
 
-func findHTMLHead(document *xhtml.Node) *xhtml.Node {
+func findHTMLRoot(document *xhtml.Node) *xhtml.Node {
 	for node := document.FirstChild; node != nil; node = node.NextSibling {
-		if node.Type != xhtml.ElementNode || node.Data != "html" || node.Namespace != "" {
-			continue
-		}
-		for child := node.FirstChild; child != nil; child = child.NextSibling {
-			if child.Type == xhtml.ElementNode && child.Data == "head" && child.Namespace == "" {
-				return child
-			}
+		if node.Type == xhtml.ElementNode && node.Data == "html" && node.Namespace == "" {
+			return node
 		}
 	}
 	return nil
+}
+
+func findHTMLHead(document *xhtml.Node) *xhtml.Node {
+	root := findHTMLRoot(document)
+	if root == nil {
+		return nil
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == xhtml.ElementNode && child.Data == "head" && child.Namespace == "" {
+			return child
+		}
+	}
+	return nil
+}
+
+// pinLightColorScheme keeps the page on the light scheme: an inline style
+// outranks its own color-scheme rules, so the canvas and the default text colour
+// stay those of a browser in light appearance.
+func pinLightColorScheme(document *xhtml.Node) {
+	root := findHTMLRoot(document)
+	if root == nil {
+		return
+	}
+	const scheme = "color-scheme:light"
+	for i := range root.Attr {
+		if root.Attr[i].Key != "style" || root.Attr[i].Namespace != "" {
+			continue
+		}
+		if existing := strings.TrimSpace(root.Attr[i].Val); existing != "" {
+			root.Attr[i].Val = strings.TrimSuffix(existing, ";") + ";" + scheme
+		} else {
+			root.Attr[i].Val = scheme
+		}
+		return
+	}
+	root.Attr = append(root.Attr, xhtml.Attribute{Key: "style", Val: scheme})
+}
+
+// documentWantsDarkOnly reports whether the page declares the dark scheme and
+// nothing else: it paints its own dark canvas and keeps it.
+func documentWantsDarkOnly(document *xhtml.Node) bool {
+	head := findHTMLHead(document)
+	if head == nil {
+		return false
+	}
+	dark, light := false, false
+	for node := head.FirstChild; node != nil; node = node.NextSibling {
+		if node.Type != xhtml.ElementNode || node.Data != "meta" {
+			continue
+		}
+		name, content := "", ""
+		for _, attr := range node.Attr {
+			switch attr.Key {
+			case "name":
+				name = strings.ToLower(strings.TrimSpace(attr.Val))
+			case "content":
+				content = strings.ToLower(attr.Val)
+			}
+		}
+		if name != "color-scheme" {
+			continue
+		}
+		for _, token := range strings.FieldsFunc(content, func(r rune) bool { return r == ' ' || r == ',' }) {
+			switch token {
+			case "dark":
+				dark = true
+			case "light":
+				light = true
+			}
+		}
+	}
+	return dark && !light
 }
 
 func svgPreviewHTML(name, source string) (string, error) {
@@ -601,7 +675,9 @@ func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile) {
 				a.activeFile() == file &&
 				(file.PreviewPath != "" || file.PreviewHTML != "" || file.Document != nil || file.MarkupPreview)
 		},
-		func() (workspacePreviewSurface, error) { return a.newNativePreview(autoplay) },
+		func() (workspacePreviewSurface, error) {
+			return a.newNativePreview(autoplay, filePreviewBackground)
+		},
 		func(surface workspacePreviewSurface) error {
 			document := file.PreviewHTML
 			if file.PreviewPath == "" && document == "" {
