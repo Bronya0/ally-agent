@@ -196,7 +196,7 @@ func (a *desktop) headerActions(c *ui.Context) {
 			}
 		}, a.secondaryInk())
 		closeLabel := locales.Text("退出应用")
-		if a.tray != nil {
+		if a.closeHidesToTray() {
 			closeLabel = locales.Text("隐藏到系统托盘")
 		}
 		closeBtn := windowButton(c, "window-close", closeLabel, "close", p.headerColor(), true, func() { a.win.Close() }, a.secondaryInk())

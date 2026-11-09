@@ -766,6 +766,16 @@ func (msgs Messages) Ui97eb959cabba() string {
 	return Catalog.Format(msgs.locale, "ui_97eb959cabba", nil)
 }
 
+// Ui7454dba95bcb says "Closing the window"
+// in the language the app shows.
+func Ui7454dba95bcb() string { return In(i18n.Locale()).Ui7454dba95bcb() }
+
+// Ui7454dba95bcb says "Closing the window"
+// in the language of msgs.
+func (msgs Messages) Ui7454dba95bcb() string {
+	return Catalog.Format(msgs.locale, "ui_7454dba95bcb", nil)
+}
+
 // Ui3feb27ef0ec3 says "Ctrl+C copies the focused file, Ctrl+V pastes it into the focused directory (the file line is its parent directory)"
 // in the language the app shows.
 func Ui3feb27ef0ec3() string { return In(i18n.Locale()).Ui3feb27ef0ec3() }
@@ -824,6 +834,16 @@ func UiE190c572bccf() string { return In(i18n.Locale()).UiE190c572bccf() }
 // in the language of msgs.
 func (msgs Messages) UiE190c572bccf() string {
 	return Catalog.Format(msgs.locale, "ui_e190c572bccf", nil)
+}
+
+// Ui206ebd365104 says "Minimize to the system tray"
+// in the language the app shows.
+func Ui206ebd365104() string { return In(i18n.Locale()).Ui206ebd365104() }
+
+// Ui206ebd365104 says "Minimize to the system tray"
+// in the language of msgs.
+func (msgs Messages) Ui206ebd365104() string {
+	return Catalog.Format(msgs.locale, "ui_206ebd365104", nil)
 }
 
 // Ui3177d30c05df says "The Endpoint check will not upload the recording; after passing it, the microphone recording test can be started."
@@ -1206,6 +1226,26 @@ func (msgs Messages) Ui9b48013dbc72() string {
 	return Catalog.Format(msgs.locale, "ui_9b48013dbc72", nil)
 }
 
+// Ui8b8b2bd99229 says "The app keeps running in the background and a left click on the tray icon restores the window; turn this off and the …"
+// in the language the app shows.
+func Ui8b8b2bd99229() string { return In(i18n.Locale()).Ui8b8b2bd99229() }
+
+// Ui8b8b2bd99229 says "The app keeps running in the background and a left click on the tray icon restores the window; turn this off and the …"
+// in the language of msgs.
+func (msgs Messages) Ui8b8b2bd99229() string {
+	return Catalog.Format(msgs.locale, "ui_8b8b2bd99229", nil)
+}
+
+// UiF8bd2f597ff4 says "The system tray is unavailable here, so the close button always quits."
+// in the language the app shows.
+func UiF8bd2f597ff4() string { return In(i18n.Locale()).UiF8bd2f597ff4() }
+
+// UiF8bd2f597ff4 says "The system tray is unavailable here, so the close button always quits."
+// in the language of msgs.
+func (msgs Messages) UiF8bd2f597ff4() string {
+	return Catalog.Format(msgs.locale, "ui_f8bd2f597ff4", nil)
+}
+
 // UiD5f64e9e5d4c says "Token Parameters"
 // in the language the app shows.
 func UiD5f64e9e5d4c() string { return In(i18n.Locale()).UiD5f64e9e5d4c() }
@@ -1234,6 +1274,16 @@ func UiAddf3a5d55fd() string { return In(i18n.Locale()).UiAddf3a5d55fd() }
 // in the language of msgs.
 func (msgs Messages) UiAddf3a5d55fd() string {
 	return Catalog.Format(msgs.locale, "ui_addf3a5d55fd", nil)
+}
+
+// UiEe29b783df7d says "What the close button in the title bar does; while the app runs in the tray, clicking its icon reopens the window."
+// in the language the app shows.
+func UiEe29b783df7d() string { return In(i18n.Locale()).UiEe29b783df7d() }
+
+// UiEe29b783df7d says "What the close button in the title bar does; while the app runs in the tray, clicking its icon reopens the window."
+// in the language of msgs.
+func (msgs Messages) UiEe29b783df7d() string {
+	return Catalog.Format(msgs.locale, "ui_ee29b783df7d", nil)
 }
 
 // Ui95b75c44ddb6 says "append(s []T, values ...T) []T\nAppend elements to the slice and return the possibly expanded slice."
@@ -16204,4 +16254,34 @@ func UiE86ea3f280d9() string { return In(i18n.Locale()).UiE86ea3f280d9() }
 // in the language of msgs.
 func (msgs Messages) UiE86ea3f280d9() string {
 	return Catalog.Format(msgs.locale, "ui_e86ea3f280d9", nil)
+}
+
+// UiCf9fd2540c86 says "Workspace history"
+// in the language the app shows.
+func UiCf9fd2540c86() string { return In(i18n.Locale()).UiCf9fd2540c86() }
+
+// UiCf9fd2540c86 says "Workspace history"
+// in the language of msgs.
+func (msgs Messages) UiCf9fd2540c86() string {
+	return Catalog.Format(msgs.locale, "ui_cf9fd2540c86", nil)
+}
+
+// Ui312e056817c8 says "Add Workspace Menu"
+// in the language the app shows.
+func Ui312e056817c8() string { return In(i18n.Locale()).Ui312e056817c8() }
+
+// Ui312e056817c8 says "Add Workspace Menu"
+// in the language of msgs.
+func (msgs Messages) Ui312e056817c8() string {
+	return Catalog.Format(msgs.locale, "ui_312e056817c8", nil)
+}
+
+// UiB5d268c928a1 says "Use + in the tab strip to add a workspace"
+// in the language the app shows.
+func UiB5d268c928a1() string { return In(i18n.Locale()).UiB5d268c928a1() }
+
+// UiB5d268c928a1 says "Use + in the tab strip to add a workspace"
+// in the language of msgs.
+func (msgs Messages) UiB5d268c928a1() string {
+	return Catalog.Format(msgs.locale, "ui_b5d268c928a1", nil)
 }
