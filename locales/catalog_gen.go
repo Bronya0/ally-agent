@@ -15136,11 +15136,11 @@ func (msgs Messages) Ui9ad12a1ab4f6() string {
 	return Catalog.Format(msgs.locale, "ui_9ad12a1ab4f6", nil)
 }
 
-// UiE4fbf188b1b2 says "Choose appearance and colors; Native uses neutral tones, while Qinghe light matches the website."
+// UiE4fbf188b1b2 says "Choose appearance and accent colors; Qinghe light matches the website."
 // in the language the app shows.
 func UiE4fbf188b1b2() string { return In(i18n.Locale()).UiE4fbf188b1b2() }
 
-// UiE4fbf188b1b2 says "Choose appearance and colors; Native uses neutral tones, while Qinghe light matches the website."
+// UiE4fbf188b1b2 says "Choose appearance and accent colors; Qinghe light matches the website."
 // in the language of msgs.
 func (msgs Messages) UiE4fbf188b1b2() string {
 	return Catalog.Format(msgs.locale, "ui_e4fbf188b1b2", nil)
@@ -15626,11 +15626,11 @@ func (msgs Messages) UiPaletteNative() string {
 	return Catalog.Format(msgs.locale, "ui_palette_native", nil)
 }
 
-// Ui2e007fe83346 says "Native uses black, white and gray with blue links; Qinghe combines soft sage and dark green."
+// Ui2e007fe83346 says "Native uses a neutral accent on the same base colors as other accents; Qinghe light keeps its own palette."
 // in the language the app shows.
 func Ui2e007fe83346() string { return In(i18n.Locale()).Ui2e007fe83346() }
 
-// Ui2e007fe83346 says "Native uses black, white and gray with blue links; Qinghe combines soft sage and dark green."
+// Ui2e007fe83346 says "Native uses a neutral accent on the same base colors as other accents; Qinghe light keeps its own palette."
 // in the language of msgs.
 func (msgs Messages) Ui2e007fe83346() string {
 	return Catalog.Format(msgs.locale, "ui_2e007fe83346", nil)

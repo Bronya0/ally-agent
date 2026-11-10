@@ -55,62 +55,88 @@ func TestNativePaletteKeepsPersistedIDs(t *testing.T) {
 	}
 }
 
-func TestNativeReadingAndControlsShareNeutralTokens(t *testing.T) {
-	for _, tc := range []struct {
-		appearance, bg, panel, codeBG, text, heading, muted, hint, link, accent, accentText string
-		border                                                                              ui.Color
-	}{
-		{"dark", "#151517", "#1b1b1c", "#292929", "#e1e5ee", "#ebeef2", "#cfd3d6", "#adb2b8", "#679efe", "#e1e5ee", "#151517", ui.RGBA(255, 255, 255, 0.1)},
-		{"light", "#ffffff", "#f9fafb", "#f1f3f5", "#0f1115", "#0f1115", "#61666b", "#adb2b8", "#3964fe", "#0f1115", "#f9fafb", ui.RGBA(0, 0, 0, 0.1)},
-	} {
-		t.Run(tc.appearance, func(t *testing.T) {
+func TestNativeAccentSharesCommonControlTokens(t *testing.T) {
+	for _, mode := range []string{"dark", "light"} {
+		t.Run(mode, func(t *testing.T) {
 			a := &desktop{prefs: defaultPrefs()}
-			a.prefs.Palette, a.prefs.Appearance = paletteNative, tc.appearance
+			a.prefs.Palette, a.prefs.Appearance = paletteNative, mode
 			p, th := a.currentPalette(), a.theme()
-			options := a.readingMarkdownOptions()
+			for _, id := range []int{paletteBlue, paletteAmber, paletteForest, paletteViolet} {
+				reference := &desktop{prefs: a.prefs}
+				reference.prefs.Palette = id
+				want := reference.currentPalette()
+				// An accent choice may change its name and accent, not base tokens.
+				want.name, want.accent = p.name, p.accent
+				if p != want {
+					t.Fatalf("native overrides shared palette %d tokens: got %+v, want %+v", id, p, want)
+				}
+				base := reference.theme()
+				for name, pair := range map[string][2]ui.Color{
+					"background":  {th.Background, base.Background},
+					"surface":     {th.Surface, base.Surface},
+					"hover":       {th.SurfaceHover, base.SurfaceHover},
+					"pressed":     {th.SurfacePressed, base.SurfacePressed},
+					"text":        {th.Text, base.Text},
+					"placeholder": {th.TextMuted, base.TextMuted},
+					"border":      {th.Border, base.Border},
+					"scrollbar":   {th.Scrollbar, base.Scrollbar},
+					"accent text": {th.AccentText, base.AccentText},
+					"success":     {th.Success, base.Success},
+					"warning":     {th.Warning, base.Warning},
+					"danger":      {th.Danger, base.Danger},
+				} {
+					if pair[0] != pair[1] {
+						t.Errorf("%s differs from palette %d: %v != %v", name, id, pair[0], pair[1])
+					}
+				}
+				if p.headerColor() != want.headerColor() {
+					t.Fatal("native bypasses the shared header rule")
+				}
+				for _, at := range []float32{0.14, 0.43, 0.61, 0.84} {
+					if wordmarkGradientColor(p, at) != wordmarkGradientColor(want, at) {
+						t.Fatal("native bypasses the shared wordmark gradient")
+					}
+				}
+			}
+			if th.Accent != p.accent || th.Focus != p.accent || th.Selection != p.accent.Alpha(0.30) {
+				t.Fatal("native controls must use the shared accent rules")
+			}
+		})
+	}
+}
+
+func TestNativeReadingUsesSharedRules(t *testing.T) {
+	for _, mode := range []string{"dark", "light"} {
+		t.Run(mode, func(t *testing.T) {
+			a := &desktop{prefs: defaultPrefs()}
+			a.prefs.Palette, a.prefs.Appearance = paletteNative, mode
+			reference := &desktop{prefs: a.prefs}
+			reference.prefs.Palette = paletteBlue
+			options, base := a.readingMarkdownOptions(), reference.readingMarkdownOptions()
 			a.configureReadingMarkdown(options)
-			md := options.Theme
+			reference.configureReadingMarkdown(base)
+			md, want := options.Theme, base.Theme
 			for name, pair := range map[string][2]ui.Color{
-				"background":        {th.Background, ui.Hex(tc.bg)},
-				"surface":           {th.Surface, ui.Hex(tc.panel)},
-				"text":              {th.Text, ui.Hex(tc.text)},
-				"secondary":         {p.muted, ui.Hex(tc.muted)},
-				"placeholder":       {th.TextMuted, ui.Hex(tc.hint)},
-				"accent":            {th.Accent, ui.Hex(tc.accent)},
-				"accent text":       {th.AccentText, ui.Hex(tc.accentText)},
-				"markdown text":     {md.Text, th.Text},
-				"strong":            {md.Strong, th.Text},
-				"inline ink":        {md.Code, th.Text},
-				"inline background": {md.CodeBackground, ui.Hex(tc.codeBG)},
-				"code background":   {md.CodeBlockBackground, th.Surface},
-				"links":             {md.Link, ui.Hex(tc.link)},
-				"quote":             {md.QuoteText, p.muted},
-				"table border":      {md.TableBorder, tc.border},
-				"code border":       {md.CodeBlockBorder, tc.border},
-				"quote bar":         {md.QuoteBar, tc.border},
-				"rule":              {md.Rule, tc.border},
+				"text":              {md.Text, want.Text},
+				"secondary":         {md.Muted, want.Muted},
+				"inline background": {md.CodeBackground, want.CodeBackground},
+				"code background":   {md.CodeBlockBackground, want.CodeBlockBackground},
+				"code border":       {md.CodeBlockBorder, want.CodeBlockBorder},
+				"table background":  {md.TableHeader, want.TableHeader},
+				"table border":      {md.TableBorder, want.TableBorder},
+				"quote":             {md.QuoteText, want.QuoteText},
+				"quote bar":         {md.QuoteBar, want.QuoteBar},
+				"rule":              {md.Rule, want.Rule},
 			} {
 				if pair[0] != pair[1] {
-					t.Errorf("%s: %v != %v", name, pair[0], pair[1])
+					t.Errorf("%s lost the shared reading token: %v != %v", name, pair[0], pair[1])
 				}
 			}
-			for n, heading := range md.Headings {
-				if heading.Color != ui.Hex(tc.heading) {
-					t.Errorf("heading %d lost neutral ink: %v", n, heading.Color)
-				}
+			if md.Headings != want.Headings || md.CodeColors == nil {
+				t.Fatal("native must retain shared headings and code syntax")
 			}
-			if md.Link == th.Accent || md.CodeColors == nil {
-				t.Fatal("blue links must be separate from neutral controls, with code syntax retained")
-			}
-			// Check ink against its actual surface, not just the page background.
-			for _, pair := range [][2]ui.Color{{th.AccentText, th.Accent}, {th.Accent, p.headerColor()}, {th.AccentHover, p.headerColor()}, {md.Code, md.CodeBackground}, {md.Link, th.Background}, {md.QuoteText, th.Background}} {
-				x, y := colorLuminance(pair[0]), colorLuminance(pair[1])
-				if x < y {
-					x, y = y, x
-				}
-				if (x+.05)/(y+.05) < 4.5 {
-					t.Errorf("native ink has low contrast on its surface: %v on %v", pair[0], pair[1])
-				}
+			if md.Link == want.Link || md.Code == want.Code || md.CodeBackground.A != 0 {
+				t.Fatal("native must change reading accents without adding an inline background")
 			}
 		})
 	}
@@ -143,7 +169,7 @@ func TestNativeSettingsFirstChoiceAndAppearanceSwitch(t *testing.T) {
 			if err := tt.Click(locales.Text("浅色")); err != nil {
 				t.Fatal(err)
 			}
-			if a.prefs.Palette != paletteNative || a.currentPalette().dark || a.theme().Background != ui.Hex("#ffffff") {
+			if a.prefs.Palette != paletteNative || a.currentPalette().dark || a.theme().Background != palettes[paletteLight].bg {
 				t.Fatal("appearance switch lost the native palette")
 			}
 			a.prefs.Appearance = "auto"

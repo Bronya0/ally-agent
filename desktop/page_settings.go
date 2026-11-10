@@ -153,7 +153,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 
 	if selected == 0 {
 		a.languageSetting(c)
-		a.settingsCard(c, "settings-appearance", locales.Text("主题与配色"), locales.Text("选择外观模式与配色；原生使用黑白灰，青禾浅色沿用官网配色。"), func() {
+		a.settingsCard(c, "settings-appearance", locales.Text("主题与配色"), locales.Text("选择外观模式与强调色；青禾浅色沿用官网配色。"), func() {
 			note := locales.Text("选择深色、浅色，或按本地时间自动切换。")
 			if a.prefs.Appearance == "auto" {
 				note = locales.Text("07:00–17:59 浅色，18:00–06:59 深色。")
@@ -166,7 +166,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			if sw := a.settingsSwitch(c, "top-navigation", locales.Text("顶部菜单"), locales.Text("隐藏左侧导航栏，通过 Logo 旁的按钮打开菜单。"), &a.prefs.TopNavigation); sw.Changed() {
 				a.savePrefs()
 			}
-			a.settingsRow(c, "accent-row", locales.Text("配色"), locales.Text("原生以黑白灰为主、蓝色链接；青禾搭配浅灰绿与墨绿。"), settingsControlWidth, func() ui.Element {
+			a.settingsRow(c, "accent-row", locales.Text("配色"), locales.Text("原生使用中性强调色，与其他强调色共用基础配色；青禾浅色保留独立配色。"), settingsControlWidth, func() ui.Element {
 				return uikit.OptionGroup(c.Key("accent-options")).Children(func() {
 					// Retired presets still resolve to blue without changing stored IDs.
 					for _, idx := range paletteChoices {
