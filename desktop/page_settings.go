@@ -335,6 +335,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 		a.settingsCard(c, "settings-startup", locales.Text("启动"), "", func() {
 			a.settingsSwitch(c, "autostart", locales.Text("开机自启"), locales.Text("登录系统时自动启动 Ally，新用户默认开启。"), &a.settings.Autostart)
 		})
+		a.settingsCloseBehavior(c)
 	}
 	a.sessionHeaderConfirmDialog(c)
 }
@@ -386,6 +387,21 @@ func (a *desktop) sessionHeaderConfirmDialog(c *ui.Context) {
 	if dialog.Dismissed() || !a.settings.SessionHeaderConfirmOpen {
 		a.settings.SessionHeaderToDisable = ""
 	}
+}
+
+// settingsCloseBehavior is the close-button preference: the tray is how a hidden
+// window comes back, so with no tray the button always quits and the note says so
+// instead of offering a switch that cannot apply.
+func (a *desktop) settingsCloseBehavior(c *ui.Context) {
+	a.settingsCard(c, "settings-close", locales.Text("关闭窗口行为"), locales.Text("右上角关闭按钮的行为；程序在托盘中运行时，左键图标可重新打开窗口。"), func() {
+		note := locales.Text("关闭后程序仍在后台运行，左键托盘图标可恢复窗口；关闭此选项时关闭按钮直接退出程序。")
+		if a.tray == nil {
+			note = locales.Text("当前系统托盘不可用，关闭按钮始终退出程序。")
+		}
+		if sw := a.settingsSwitch(c, "close-to-tray", locales.Text("最小化到系统托盘"), note, &a.prefs.CloseToTray); sw.Changed() {
+			a.savePrefs()
+		}
+	})
 }
 
 func (a *desktop) settingsVoiceInput(c *ui.Context) {

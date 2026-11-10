@@ -1583,7 +1583,7 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 				if st.PromptPartsOpen {
 					for _, part := range b.SystemPromptParts {
 						if part.Tokens > 0 {
-						contextPart(c, "  · "+locales.Text(part.Label), part.Tokens, a.secondaryInk())
+							contextPart(c, "  · "+locales.Text(part.Label), part.Tokens, a.secondaryInk())
 						}
 					}
 				}

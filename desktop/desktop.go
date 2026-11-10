@@ -368,7 +368,7 @@ func Run() {
 		a.win.OnClose(func(e *mygo.CloseEvent) {
 			if !a.quitReady {
 				e.PreventDefault()
-				if a.tray != nil {
+				if a.closeHidesToTray() {
 					a.win.Hide()
 				} else {
 					a.shutdown()
@@ -466,6 +466,14 @@ func Run() {
 		log.Fatal(err)
 	}
 }
+
+// closeHidesToTray reports whether the window's close button parks the app in the
+// tray instead of quitting. With no tray there is nothing to restore the window
+// from, so the button quits; otherwise the preference decides.
+func (a *desktop) closeHidesToTray() bool {
+	return a.tray != nil && a.prefs.CloseToTray
+}
+
 func (a *desktop) shutdown() {
 	if a.closing {
 		return

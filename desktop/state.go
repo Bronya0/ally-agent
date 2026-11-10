@@ -38,6 +38,10 @@ type uiPrefs struct {
 	VoiceInputEnabled    bool   `json:"voiceInputEnabled,omitempty"`
 	VoiceModelID         string `json:"voiceModelId,omitempty"`
 	VoiceHotkey          string `json:"voiceHotkey,omitempty"`
+	// CloseToTray parks the window in the tray instead of quitting. It defaults
+	// on and is written out either way: `omitempty` would drop an explicit false
+	// and read back as the default, so turning it off could never stick.
+	CloseToTray bool `json:"closeToTray"`
 	// VoiceModifierLeft and VoiceModifierRight decide which physical sides of
 	// Ctrl/Alt/Shift/Win satisfy a hotkey modifier. Both are on by default, so a
 	// chord never has to pin a side.
@@ -48,7 +52,7 @@ type uiPrefs struct {
 }
 
 func defaultPrefs() uiPrefs {
-	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, VoiceHotkey: "Alt", VoiceModifierLeft: true, VoiceModifierRight: true, Pet: petPreferences{Enabled: true, Size: 180}}
+	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, VoiceHotkey: "Alt", VoiceModifierLeft: true, VoiceModifierRight: true, CloseToTray: true, Pet: petPreferences{Enabled: true, Size: 180}}
 }
 
 var prefsMu sync.Mutex

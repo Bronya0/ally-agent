@@ -62,7 +62,7 @@ type voiceModelsState struct {
 	// presetOptions is built once: the dialog asks for the service list every
 	// frame, and the presets never change at runtime.
 	presetOptions []uikit.Option
-	presetLocale string
+	presetLocale  string
 }
 
 // voiceLevelRing keeps the last voiceWaveBars levels in a fixed array written by
@@ -169,7 +169,7 @@ func (s *voiceModelsState) open(index int) {
 type voiceRowLines struct {
 	provider, endpoint, model string
 	providerLine, modelLine   string
-	locale string
+	locale                    string
 }
 
 // rowLines returns the cached lines for one model, rebuilding them only when the

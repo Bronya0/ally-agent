@@ -143,3 +143,42 @@ func TestPlanPanelHeightAccountsForWrappedTitles(t *testing.T) {
 		t.Fatalf("plan did not grow with wrapped text: %v", heights)
 	}
 }
+
+// A wide window must not widen the panel past the transcript and the composer it
+// sits between: drawn at the window's own width, it overhangs both and reads as a
+// stray bar across the chat. Capped like them, its rows start inside the composer's
+// left edge instead of the window's.
+func TestPlanPanelKeepsTheChatWidthInAWideWindow(t *testing.T) {
+	conv := &conversation{ID: "plan-wide", Workspace: "ws", Messages: []map[string]any{{"role": "assistant", "content": "answer"}}}
+	a := &desktop{
+		prefs:   defaultPrefs(),
+		tabs:    []*conversation{conv},
+		plans:   map[string][]backend.PlanStep{conv.ID: {{Title: "step 01", Status: "in_progress"}}},
+		planRev: map[string]int64{},
+	}
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		ui.Column(c).Fill().Children(func() { a.chatColumn(c, 2600) })
+	}, 2600, 900)
+	step, ok := tt.Find("step 01")
+	if !ok {
+		t.Fatalf("missing plan step: %v", tt.Texts())
+	}
+	input, ok := tt.Find("消息输入框")
+	if !ok {
+		t.Fatal("missing composer input")
+	}
+	if input.W > chatMaxWidth {
+		t.Fatalf("the composer itself is not capped: %v", input)
+	}
+	// The step sits inside the panel's padding, and the panel is narrower than the
+	// composer: anything at or left of the composer's edge means the panel took the
+	// window's width instead of the chat's.
+	if step.X <= input.X {
+		t.Fatalf("the plan row starts at %.1f, at or past the composer's edge %.1f: the panel is window-wide", step.X, input.X)
+	}
+	if step.X+step.W > input.X+input.W {
+		t.Fatalf("the plan row ends at %.1f, past the composer's right edge %.1f", step.X+step.W, input.X+input.W)
+	}
+}

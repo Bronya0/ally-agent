@@ -16205,3 +16205,53 @@ func UiE86ea3f280d9() string { return In(i18n.Locale()).UiE86ea3f280d9() }
 func (msgs Messages) UiE86ea3f280d9() string {
 	return Catalog.Format(msgs.locale, "ui_e86ea3f280d9", nil)
 }
+
+// Ui7454dba95bcb says "Closing the window"
+// in the language the app shows.
+func Ui7454dba95bcb() string { return In(i18n.Locale()).Ui7454dba95bcb() }
+
+// Ui7454dba95bcb says "Closing the window"
+// in the language of msgs.
+func (msgs Messages) Ui7454dba95bcb() string {
+	return Catalog.Format(msgs.locale, "ui_7454dba95bcb", nil)
+}
+
+// Ui206ebd365104 says "Minimize to the system tray"
+// in the language the app shows.
+func Ui206ebd365104() string { return In(i18n.Locale()).Ui206ebd365104() }
+
+// Ui206ebd365104 says "Minimize to the system tray"
+// in the language of msgs.
+func (msgs Messages) Ui206ebd365104() string {
+	return Catalog.Format(msgs.locale, "ui_206ebd365104", nil)
+}
+
+// Ui8b8b2bd99229 says "The app keeps running in the background and a left click on the tray icon restores the window; turn this off and the …"
+// in the language the app shows.
+func Ui8b8b2bd99229() string { return In(i18n.Locale()).Ui8b8b2bd99229() }
+
+// Ui8b8b2bd99229 says "The app keeps running in the background and a left click on the tray icon restores the window; turn this off and the …"
+// in the language of msgs.
+func (msgs Messages) Ui8b8b2bd99229() string {
+	return Catalog.Format(msgs.locale, "ui_8b8b2bd99229", nil)
+}
+
+// UiF8bd2f597ff4 says "The system tray is unavailable here, so the close button always quits."
+// in the language the app shows.
+func UiF8bd2f597ff4() string { return In(i18n.Locale()).UiF8bd2f597ff4() }
+
+// UiF8bd2f597ff4 says "The system tray is unavailable here, so the close button always quits."
+// in the language of msgs.
+func (msgs Messages) UiF8bd2f597ff4() string {
+	return Catalog.Format(msgs.locale, "ui_f8bd2f597ff4", nil)
+}
+
+// UiEe29b783df7d says "What the close button in the title bar does; while the app runs in the tray, clicking its icon reopens the window."
+// in the language the app shows.
+func UiEe29b783df7d() string { return In(i18n.Locale()).UiEe29b783df7d() }
+
+// UiEe29b783df7d says "What the close button in the title bar does; while the app runs in the tray, clicking its icon reopens the window."
+// in the language of msgs.
+func (msgs Messages) UiEe29b783df7d() string {
+	return Catalog.Format(msgs.locale, "ui_ee29b783df7d", nil)
+}
