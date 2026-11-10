@@ -23,12 +23,7 @@ type markdownColorPair struct{ dark, light markdownColors }
 
 func proseColors(text, muted, heading, strong, code, tint, link, panel, border string) markdownColors {
 	colors := markdownColors{text: ui.Hex(text), muted: ui.Hex(muted), heading: ui.Hex(heading), strong: ui.Hex(strong), code: ui.Hex(code), codeBG: ui.Hex(tint).Alpha(0.045), link: ui.Hex(link), panel: ui.Hex(panel), border: ui.Hex(border)}
-	colors.syntax = editor.DefaultTheme(&ui.Theme{Dark: colors.panel.R < 128, Background: colors.panel, Text: colors.text, TextMuted: colors.muted, Accent: colors.link, Border: colors.border})
-	colors.syntax.Tokens[editor.TokenKeyword].Color = colors.link
-	colors.syntax.Tokens[editor.TokenType].Color = colors.heading
-	colors.syntax.Tokens[editor.TokenFunction].Color = colors.strong
-	colors.syntax.Tokens[editor.TokenNumber].Color = colors.code
-	colors.syntax.Tokens[editor.TokenComment].Color = colors.muted
+	colors.syntax = readingSyntax(colors)
 	// Keep body text neutral and use the palette accent for reading emphasis.
 	colors.heading = colors.link
 	colors.code = colors.link
@@ -45,6 +40,24 @@ func proseColors(text, muted, heading, strong, code, tint, link, panel, border s
 	return colors
 }
 
+func readingSyntax(colors markdownColors) *editor.Theme {
+	syntax := editor.DefaultTheme(&ui.Theme{Dark: colors.panel.R < 128, Background: colors.panel, Text: colors.text, TextMuted: colors.muted, Accent: colors.link, Border: colors.border})
+	syntax.Tokens[editor.TokenKeyword].Color = colors.link
+	syntax.Tokens[editor.TokenType].Color = colors.heading
+	syntax.Tokens[editor.TokenFunction].Color = colors.strong
+	syntax.Tokens[editor.TokenNumber].Color = colors.code
+	syntax.Tokens[editor.TokenComment].Color = colors.muted
+	return syntax
+}
+
+// Native prose uses the same literal surfaces and ink as native controls. Keep
+// this out of the legacy accent-derived adjustments in proseColors/readingColors.
+func nativeReadingColors(p palette) markdownColors {
+	colors := markdownColors{text: p.text, muted: p.muted, heading: p.heading, strong: p.text, code: p.text, codeBG: p.codeBG, link: p.link, panel: p.panel, border: p.line}
+	colors.syntax = readingSyntax(colors)
+	return colors
+}
+
 // markdownPalettes holds the reading colours per palette index: the same value
 // native-ui.json stores as "palette", so it must stay the same length and order
 // as palettes.
@@ -56,6 +69,7 @@ var markdownPalettes = []markdownColorPair{
 	{proseColors("#c6cec8", "#8e9e94", "#d0e0d5", "#cbdacf", "#b3cbbb", "#6fbf8f", "#8ac9a2", "#1e2721", "#303d34"), proseColors("#303b33", "#6a7d6e", "#2c4935", "#38533f", "#4a6c54", "#6b9e79", "#346e47", "#eff5f0", "#d8e4da")},
 	{proseColors("#cdc9d5", "#9a91aa", "#ddd5ec", "#d5cde3", "#c6b9db", "#a68bea", "#bba2e6", "#25212d", "#393144"), proseColors("#38323f", "#7b6f88", "#49365c", "#514361", "#6b557f", "#9a7eb6", "#79529d", "#f4eff8", "#e1d8e9")},
 	{proseColors("#d7dedc", "#9aa6a3", "#d8e5da", "#ccdace", "#b8cfbc", "#9dbb9f", "#9dbb9f", "#212122", "#303031"), proseColors("#202d28", "#59665f", "#202d28", "#202d28", "#25624a", "#25624a", "#25624a", "#fcfcf9", "#dce2d8")},
+	{nativeReadingColors(palettes[paletteNative]), nativeReadingColors(*palettes[paletteNative].light)},
 }
 
 func (a *desktop) readingColors() markdownColors {
@@ -67,7 +81,14 @@ func (a *desktop) readingColors() markdownColors {
 		index = paletteBlue // Retired ocean preference follows blue.
 	}
 	colors := markdownPalettes[index].light
-	if a.currentPalette().dark {
+	dark := a.currentPalette().dark
+	if index == paletteNative {
+		if dark {
+			return markdownPalettes[index].dark
+		}
+		return colors
+	}
+	if dark {
 		colors = markdownPalettes[index].dark
 		colors.text = ui.Hex("#d7dedc")
 		colors.muted = ui.Hex("#9aa6a3")

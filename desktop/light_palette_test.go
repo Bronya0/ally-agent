@@ -20,7 +20,11 @@ func TestLightAccentsRemainColoredAndReadable(t *testing.T) {
 				hi = v
 			}
 		}
-		if hi-lo < 60 {
+		if index == paletteNative {
+			if hi-lo > 30 {
+				t.Errorf("native accent must stay neutral: %+v", p.accent)
+			}
+		} else if hi-lo < 60 {
 			t.Errorf("%s accent became grey: %+v", p.name, p.accent)
 		}
 		for _, bg := range []ui.Color{p.bg, p.panel} {

@@ -149,8 +149,8 @@ func colFaint() ui.Color  { return faint }
 func selectionFill(tone ui.Color) ui.Color { return uikit.SelectedFill(tone) }
 func selectionEdge(tone ui.Color) ui.Color { return uikit.SelectedStrokeColor(tone) }
 
-// palette supplies an accent and optional light-mode surfaces. Existing accents
-// share the neutral bases; a complete light preset can override them together.
+// palette supplies an accent and optional complete surfaces. Existing accents
+// share the neutral bases; complete presets can override them together.
 //
 // The index into palettes is what native-ui.json stores as "palette", so an
 // entry may be retired but never deleted or reordered — an old value still has
@@ -166,6 +166,9 @@ type palette struct {
 	// chrome is the header's neutral base before its accent tint. The rail,
 	// explorer and active workspace tab share the main content background.
 	chrome ui.Color
+	// Complete presets may keep the header and reading colors neutral while links
+	// remain identifiable without making every control blue.
+	header, heading, codeBG, link ui.Color
 	// Complete presets can supply literal website colors instead of derived tints.
 	wordmark, accentHover, accentPressed, selection ui.Color
 	// light overrides the entire light surface set, without another preference
@@ -179,6 +182,9 @@ func (p palette) chromeColor() ui.Color {
 }
 
 func (p palette) headerColor() ui.Color {
+	if p.header.A != 0 {
+		return p.header
+	}
 	if p.dark {
 		// One fixed neutral charcoal for every dark palette. Keep it distinct
 		// from the background-filled active workspace tab, and keep window
@@ -213,10 +219,14 @@ const (
 	paletteForest = 4 // 森林
 	paletteViolet = 5 // 紫罗兰
 	paletteMeadow = 6 // 青禾 — the website's paper, ink and sage in light mode
+	paletteNative = 7 // 原生 — neutral controls, surfaces and prose; blue links
 
 	// defaultPalette is the accent a profile without a saved choice starts on.
 	defaultPalette = paletteBlue
 )
+
+// paletteChoices is presentation order only; persisted palette IDs stay stable.
+var paletteChoices = [...]int{paletteNative, paletteBlue, paletteAmber, paletteForest, paletteViolet, paletteMeadow}
 
 // paletteBlue and paletteLight supply the shared dark/light surface bases.
 // A preset with light surfaces replaces the light base as a complete set.
@@ -239,6 +249,18 @@ var palettes = []palette{
 		name: "青禾", bg: ui.Hex("#f6f7f2"), panel: ui.Hex("#fcfcf9"), line: ui.Hex("#dce2d8"), accent: ui.Hex("#25624a"), accentText: ui.Hex("#f2f5ef"), text: ui.Hex("#202d28"), muted: ui.Hex("#59665f"), hover: ui.Hex("#e6eddf"), hint: ui.Hex("#929a94"),
 		wordmark: ui.Hex("#202d28"), accentHover: ui.Hex("#1c4838"), accentPressed: ui.Hex("#163c2e"), selection: ui.Hex("#cfe1c4"),
 	}},
+	// paletteNative uses the supplied DS neutral-bluish / deepseek color scales.
+	// Light primary/secondary/brand/border follow the supplied alias mappings.
+	// Dark ink and the brighter deepseek-400 link are local choices from those
+	// scales, not claimed to reproduce unprovided dark alias mappings. Controls
+	// stay monochrome, with links distinct from their neutral accent.
+	{name: "原生", dark: true, bg: ui.Hex("#151517"), panel: ui.Hex("#1b1b1c"), line: ui.RGBA(255, 255, 255, 0.1), accent: ui.Hex("#e1e5ee"), accentText: ui.Hex("#151517"), text: ui.Hex("#e1e5ee"), muted: ui.Hex("#cfd3d6"), hover: ui.Hex("#2c2c2e"), hint: ui.Hex("#adb2b8"),
+		header: ui.Hex("#353638"), heading: ui.Hex("#ebeef2"), codeBG: ui.Hex("#292929"), link: ui.Hex("#679efe"), wordmark: ui.Hex("#e1e5ee"), accentHover: ui.Hex("#cfd3d6"), accentPressed: ui.Hex("#adb2b8"),
+		light: &palette{
+			name: "原生", bg: ui.Hex("#ffffff"), panel: ui.Hex("#f9fafb"), line: ui.RGBA(0, 0, 0, 0.1), accent: ui.Hex("#0f1115"), accentText: ui.Hex("#f9fafb"), text: ui.Hex("#0f1115"), muted: ui.Hex("#61666b"), hover: ui.Hex("#f1f3f5"), hint: ui.Hex("#adb2b8"),
+			header: ui.Hex("#f9fafb"), heading: ui.Hex("#0f1115"), codeBG: ui.Hex("#f1f3f5"), link: ui.Hex("#3964fe"), wordmark: ui.Hex("#0f1115"), accentHover: ui.Hex("#353638"), accentPressed: ui.Hex("#43454a"),
+		},
+	},
 }
 
 // lightAccents is the light-mode accent for the same indices. The dark pastels
@@ -252,6 +274,7 @@ var lightAccents = []ui.Color{
 	ui.Hex("#247649"), // forest
 	ui.Hex("#7850b8"), // violet
 	ui.Hex("#25624a"), // meadow
+	ui.Hex("#0f1115"), // native: intentionally neutral
 }
 
 func (a *desktop) currentPalette() palette {
@@ -270,6 +293,9 @@ func (a *desktop) currentPalette() palette {
 		base = paletteLight
 	}
 	p := palettes[base]
+	if base == paletteBlue && idx == paletteNative {
+		p = palettes[idx]
+	}
 	if base == paletteLight && palettes[idx].light != nil {
 		p = *palettes[idx].light
 	}

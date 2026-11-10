@@ -15136,11 +15136,11 @@ func (msgs Messages) Ui9ad12a1ab4f6() string {
 	return Catalog.Format(msgs.locale, "ui_9ad12a1ab4f6", nil)
 }
 
-// UiE4fbf188b1b2 says "Select the appearance mode and color matching; Qinghe uses the same color matching as the official website in light c…"
+// UiE4fbf188b1b2 says "Choose appearance and colors; Native uses neutral tones, while Qinghe light matches the website."
 // in the language the app shows.
 func UiE4fbf188b1b2() string { return In(i18n.Locale()).UiE4fbf188b1b2() }
 
-// UiE4fbf188b1b2 says "Select the appearance mode and color matching; Qinghe uses the same color matching as the official website in light c…"
+// UiE4fbf188b1b2 says "Choose appearance and colors; Native uses neutral tones, while Qinghe light matches the website."
 // in the language of msgs.
 func (msgs Messages) UiE4fbf188b1b2() string {
 	return Catalog.Format(msgs.locale, "ui_e4fbf188b1b2", nil)
@@ -15616,11 +15616,21 @@ func (msgs Messages) UiC5ea2e8a9f07() string {
 	return Catalog.Format(msgs.locale, "ui_c5ea2e8a9f07", nil)
 }
 
-// Ui2e007fe83346 says "Qinghe is paired with a light gray-green background, white paper cards and dark green text."
+// UiPaletteNative says "Native"
+// in the language the app shows.
+func UiPaletteNative() string { return In(i18n.Locale()).UiPaletteNative() }
+
+// UiPaletteNative says "Native"
+// in the language of msgs.
+func (msgs Messages) UiPaletteNative() string {
+	return Catalog.Format(msgs.locale, "ui_palette_native", nil)
+}
+
+// Ui2e007fe83346 says "Native uses black, white and gray with blue links; Qinghe combines soft sage and dark green."
 // in the language the app shows.
 func Ui2e007fe83346() string { return In(i18n.Locale()).Ui2e007fe83346() }
 
-// Ui2e007fe83346 says "Qinghe is paired with a light gray-green background, white paper cards and dark green text."
+// Ui2e007fe83346 says "Native uses black, white and gray with blue links; Qinghe combines soft sage and dark green."
 // in the language of msgs.
 func (msgs Messages) Ui2e007fe83346() string {
 	return Catalog.Format(msgs.locale, "ui_2e007fe83346", nil)
