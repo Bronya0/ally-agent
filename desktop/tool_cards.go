@@ -917,6 +917,9 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		}
 		body.Padding(0, 0, 0, inset)
 		body.Children(func() {
+			if name == "ssh_cluster" && state == "running" && len(t.Questions) > 0 {
+				a.askComposer(c, t)
+			}
 			switch {
 			case state == "cancelled":
 				cancelledResult(c, a.secondaryInk())

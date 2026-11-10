@@ -836,7 +836,8 @@ func (a *App) TestSSHServer(node SSHServerNode) SSHTestResult {
 	if a.ctx != nil {
 		ctx = a.ctx
 	}
-	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	// Allow the transport's separate TCP and handshake budgets to run in full.
+	testCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
 	// 指纹记录与服务器不一致时同样是直接换记录再连一次（与远程工具口径一致，

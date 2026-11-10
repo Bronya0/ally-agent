@@ -58,10 +58,9 @@ func sharedEditRules() string {
 		"3. On source, version, or line-range errors (including `E_NO_MATCH` and `E_VERSION_MISMATCH`), rebuild from exact current text; never retry guessed text. A failed edit may attach a complete read-format snapshot with its current `version`: use it directly. If no snapshot is attached, or the needed source is missing/truncated, re-read the affected file/range first.\n"
 }
 
-// sharedRemoteAccessRules keeps remote access on the authorized SSH tool path
-// for both the main agent and sub-agents.
+// sharedRemoteAccessRules gives the main agent and sub-agents the same SSH fallback policy.
 func sharedRemoteAccessRules() string {
-	return "- Remote SSH access MUST use the built-in tools: `ssh_cluster` to discover or request authorization for hosts, and `remote_*` for remote commands, file operations, and transfers. Never use local `command`, `service`, shell wrappers, scripts, or alternative clients/libraries to connect via SSH (including ssh/scp/sftp/rsync over SSH), or nest SSH connections inside remote commands. If the required host is unavailable or unauthorized, use `ssh_cluster` to request access; if the tools cannot complete the operation, report the limitation instead of bypassing this boundary.\n"
+	return "- Prefer the built-in SSH tools: use `ssh_cluster` to discover or request authorization for hosts, and `remote_*` for remote commands, file operations, and transfers. If they fail or cannot perform the task, explain the limitation. Only if the user then explicitly requests a shell SSH alternative for the specific target and operation may you use `command` with an SSH client for that request; repeating the task alone is not authorization for this fallback. Do not silently bypass an unavailable or unauthorized host. Shell SSH does not inherit cluster workspace authorization or stored credentials: use only access the user explicitly authorizes, and do not read credential stores, expose passwords in commands or output, or bypass other safety rules.\n"
 }
 
 // sharedBatchStrategy returns the batch/parallel tool-call strategy shared by the main and sub-agent system prompts.
