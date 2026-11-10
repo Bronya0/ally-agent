@@ -31,21 +31,30 @@ func (a *desktop) headerBar(c *ui.Context) {
 	bar := c.TitleBar()
 	railWidth := widthRailCollapsed
 	railSpan := railWidth
-	if a.prefs.RailExpanded {
+	if a.prefs.RailExpanded && !a.prefs.TopNavigation {
 		railWidth = a.prefs.RailWidth
 		railSpan = railWidth + railDividerWidth
+	}
+	if a.prefs.TopNavigation {
+		railSpan = 80
 	}
 	minLeading := widthRailCollapsed
 	if bar.Left > 0 {
 		minLeading += headerTrafficLightGap
 	}
 	leading := max(minLeading, railSpan-bar.Left)
+	if a.prefs.TopNavigation {
+		leading = 80
+		if bar.Left > 0 {
+			leading += headerTrafficLightGap
+		}
+	}
 	// The wordmark starts on the icon column when the rail is open, and is centred
 	// in the 45 wide collapsed rail, where a left-aligned mark would read as
 	// crowded to one side. The few DIPs it moves there are worth the balance.
 	logoInset := float32(6) + railGutter
 	logoAlign := ui.Start
-	if !a.prefs.RailExpanded {
+	if !a.prefs.RailExpanded || a.prefs.TopNavigation {
 		logoInset, logoAlign = 0, ui.Center
 	}
 	logoInset = max(float32(0), logoInset-bar.Left)
@@ -63,8 +72,12 @@ func (a *desktop) headerBar(c *ui.Context) {
 	row.DragWindow().Children(func() {
 		// The leading header column shares the rail's live width, including
 		// its resize divider. Native traffic lights take precedence on macOS.
-		ui.Column(c.Key("header-rail")).Label(locales.Text("标题栏侧栏区")).Width(leading).Shrink(0).FillHeight().Padding(0, 0, 0, logoInset).Justify(ui.Center).AlignItems(ui.Start).Children(func() {
-			wordmark := ui.Column(c).Label(locales.Text("应用 Logo")).Width(min(float32(64), leading-logoInset)).FillHeight().Justify(ui.Center).AlignItems(logoAlign).Children(func() {
+		ui.Row(c.Key("header-rail")).Label(locales.Text("标题栏侧栏区")).Width(leading).Shrink(0).FillHeight().Padding(0, 0, 0, logoInset).AlignItems(ui.Center).Children(func() {
+			logoWidth := float32(64)
+			if a.prefs.TopNavigation {
+				logoWidth = 45
+			}
+			wordmark := ui.Column(c).Label(locales.Text("应用 Logo")).Width(min(logoWidth, leading-logoInset)).FillHeight().Justify(ui.Center).AlignItems(logoAlign).Children(func() {
 				colors := [4]ui.Color{
 					wordmarkGradientColor(p, 0.14),
 					wordmarkGradientColor(p, 0.43),
@@ -81,6 +94,9 @@ func (a *desktop) headerBar(c *ui.Context) {
 			uikit.Tooltip(c, wordmark.Cursor(ui.CursorPointer), locales.Text("点击 logo：切换樱花特效"))
 			if wordmark.Clicked() {
 				a.togglePetals()
+			}
+			if a.prefs.TopNavigation {
+				a.topNavigationMenu(c)
 			}
 		})
 		a.workspaceTabs(c)

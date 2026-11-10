@@ -23,6 +23,7 @@ type uiPrefs struct {
 	HistoryPageSize    int      `json:"historyPageSize"`
 	Appearance         string   `json:"appearance,omitempty"`
 	Palette            int      `json:"palette"`
+	TopNavigation      bool     `json:"topNavigation,omitempty"`
 	RailExpanded       bool     `json:"railExpanded"`
 	RailWidth          float32  `json:"railWidth"`
 	RailWorkspaceOpen  bool     `json:"railWorkspaceOpen"`

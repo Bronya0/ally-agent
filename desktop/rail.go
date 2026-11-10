@@ -491,3 +491,41 @@ func railHoverAction(c *ui.Context, row, button ui.Element, disabled bool) {
 	button.Shrink(0).Disabled(disabled || !show)
 	uikit.HoverFade(c, button, opacity)
 }
+
+var topNavigationIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M4 6.5h16M4 12h11M4 17.5h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`))
+
+// topNavigationMenu uses the same mode list and plugin index as the rail.
+// MenuBase owns dismissal, focus and the opening/closing transition.
+func (a *desktop) topNavigationMenu(c *ui.Context) {
+	uikit.MenuButton(c.Key("top-navigation-menu"), nil, uikit.MenuOptions{
+		Width: 190, MaxHeightPercent: 85, Label: locales.Text("导航菜单"),
+		At: ui.AnchorBottomLeft, Self: ui.AnchorTopLeft, Gap: 4,
+	}, func(b ui.Element) {
+		uikit.IconButtonOn(c, b.Disabled(!a.ready), locales.Text("导航菜单"), topNavigationIcon, 30, 18, uikit.IconQuiet, a.secondaryInk())
+	}, func(m ui.MenuParts) {
+		entry := func(id, label, icon string) {
+			uikit.MenuItem(c, m, "top-nav-"+id, label, uikit.MenuItemOptions{
+				Choice: true, Selected: a.page == id, Icon: iconImage(icon),
+			}, a.secondaryInk()).OnClick(func() { a.changePage(id) })
+		}
+		plugins := a.pluginModes()
+		for _, mode := range baseModes {
+			if mode.id == "plugins" {
+				for _, i := range plugins.top {
+					item := a.plugins[i]
+					entry(item.Mode, pluginTitle(item), "plugins")
+				}
+				for _, group := range plugins.groups {
+					for _, i := range group {
+						item := a.plugins[i]
+						entry(item.Mode, pluginTitle(item), "plugins")
+					}
+				}
+			}
+			if !a.modeHidden(mode.id) {
+				entry(mode.id, locales.Text(mode.label), mode.icon)
+			}
+		}
+		entry("settings", locales.Text("设置"), "settings")
+	})
+}

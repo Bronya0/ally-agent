@@ -163,6 +163,9 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 			}); mode.Changed() {
 				a.selectAppearance([]string{"dark", "light", "auto"}[a.settings.AppearanceMode])
 			}
+			if sw := a.settingsSwitch(c, "top-navigation", locales.Text("顶部菜单"), locales.Text("隐藏左侧导航栏，通过 Logo 旁的按钮打开菜单。"), &a.prefs.TopNavigation); sw.Changed() {
+				a.savePrefs()
+			}
 			a.settingsRow(c, "accent-row", locales.Text("配色"), locales.Text("青禾搭配浅灰绿背景、纸白卡片与墨绿文字。"), settingsControlWidth, func() ui.Element {
 				return uikit.OptionGroup(c.Key("accent-options")).Children(func() {
 					// Retired presets still resolve to blue without changing stored IDs.

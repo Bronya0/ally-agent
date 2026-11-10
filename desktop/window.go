@@ -38,7 +38,9 @@ func (a *desktop) view(c *ui.Context) {
 				a.pageContent(c, width)
 			})
 		}
-		if a.prefs.RailExpanded {
+		if a.prefs.TopNavigation {
+			content()
+		} else if a.prefs.RailExpanded {
 			ui.Split(c.Key("rail-split"), &a.prefs.RailWidth, func() { a.rail(c) }, content).
 				Grow(1).MinHeight(0).FillWidth().OnChange(func() {
 				a.prefs.RailWidth = max(160, min(360, a.prefs.RailWidth))

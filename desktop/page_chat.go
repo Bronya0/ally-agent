@@ -74,7 +74,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 		st.FollowPending = false
 	}
 	inlineInset := float32(28)
-	if a.prefs.RailExpanded {
+	if a.prefs.RailExpanded && !a.prefs.TopNavigation {
 		inlineInset = 44
 		if width <= 1000 {
 			inlineInset = 36
