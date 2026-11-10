@@ -257,30 +257,6 @@ func TestRenderHTMLRejectsBlankAndOversizedTitle(t *testing.T) {
 	}
 }
 
-// TestSSHClusterAddNamesEveryMissingField: the add branch needs host, username,
-// description and reason for an alias that is not registered yet, while the
-// schema can only require `alias` (the already-registered path ignores the other
-// four). Failing one field per round cost up to four wasted model turns, so the
-// rejection must name them together.
-func TestSSHClusterAddNamesEveryMissingField(t *testing.T) {
-	app := NewApp()
-	_, err := app.executeSSHClusterTool(context.Background(), "s-1", t.TempDir(), SSHClusterRequest{
-		Action: "add",
-		Alias:  "never-registered-node",
-	})
-	if err == nil {
-		t.Fatal("add without host/username/description/reason must fail")
-	}
-	if code := toolErrorCode(err); code != "E_BAD_SSH_CLUSTER" {
-		t.Fatalf("expected E_BAD_SSH_CLUSTER, got %q (%v)", code, err)
-	}
-	for _, field := range []string{"host", "username", "description", "reason"} {
-		if !strings.Contains(err.Error(), field) {
-			t.Fatalf("the rejection must name %s in the same round, got %q", field, err.Error())
-		}
-	}
-}
-
 // TestExecuteToolGatesEveryBuiltinTool is the guard against a schema that only
 // exists in the prompt: each declared tool must run its declaration at the
 // boundary, no matter which handler sits behind it. Undeclared arguments are

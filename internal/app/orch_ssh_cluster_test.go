@@ -14,158 +14,35 @@ import (
 	"time"
 )
 
-// waitForAskID polls app.pendingAsks until an ask request is registered.
-func waitForAskID(t *testing.T, app *App) string {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		app.askMu.Lock()
-		for id := range app.pendingAsks {
-			app.askMu.Unlock()
-			return id
-		}
-		app.askMu.Unlock()
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatal("timed out waiting for ask registration")
-	return ""
-}
-
-// TestSSHClusterToolListAndAddApproval tests:
-// 1. action=list returns authorized servers for the workspace.
-// 2. action=add triggers Approval Gate 1:
-//   - Rejection fails with E_APPROVAL_REJECTED.
-//   - Approval successfully registers and authorizes the server.
-func TestSSHClusterToolListAndAddApproval(t *testing.T) {
-	tempDir := t.TempDir()
-	t.Setenv("HOME", tempDir)
-	t.Setenv("USERPROFILE", tempDir)
+func TestSSHClusterListAndRemovedAdd(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 	app := NewApp()
-	app.configPath = filepath.Join(tempDir, "config.json")
-	ws := filepath.Join(tempDir, "test-workspace")
-	sessionID := "sess-cluster-test"
-
-	// 1. Initial list should be empty
-	ctx := context.WithValue(context.Background(), toolExecutionMetaContextKey{}, toolExecutionMeta{
-		sessionID: sessionID,
-	})
-	listRes, err := app.executeSSHClusterTool(ctx, sessionID, ws, SSHClusterRequest{Action: "list"})
-	if err != nil {
-		t.Fatalf("list failed: %v", err)
+	app.configPath = filepath.Join(dir, "config.json")
+	ws := filepath.Join(dir, "workspace")
+	if err := app.SaveSSHServer(SSHServerNode{Alias: "node", Host: "192.0.2.1", Username: "root", Description: "test"}); err != nil {
+		t.Fatal(err)
 	}
-	if listRes["count"].(int) != 0 {
-		t.Fatalf("expected 0 servers initially, got %v", listRes["count"])
+	result, err := app.executeSSHClusterTool(ws, SSHClusterRequest{Action: "list"})
+	if err != nil || result["count"] != 0 {
+		t.Fatalf("unapproved listing: %v, %v", result, err)
 	}
-
-	// 1b. action=add without description should fail immediately
-	_, errNoDesc := app.executeSSHClusterTool(ctx, sessionID, ws, SSHClusterRequest{
-		Action:   "add",
-		Alias:    "dev-api",
-		Host:     "192.168.1.50",
-		Port:     22,
-		Username: "root",
-		Reason:   "test server",
-	})
-	if errNoDesc == nil {
-		t.Fatal("expected error for action=add without description, got nil")
+	if err := app.AuthorizeServerForWorkspace(ws, "node"); err != nil {
+		t.Fatal(err)
 	}
-
-	// 2. Test action=add with REJECTION
-	type resultPair struct {
-		data map[string]any
-		err  error
+	result, err = app.executeSSHClusterTool(ws, SSHClusterRequest{Action: "list"})
+	if err != nil || result["count"] != 1 {
+		t.Fatalf("approved listing: %v, %v", result, err)
 	}
-	doneReject := make(chan resultPair, 1)
-	go func() {
-		res, err := app.executeSSHClusterTool(ctx, sessionID, ws, SSHClusterRequest{
-			Action:      "add",
-			Alias:       "dev-api",
-			Host:        "192.168.1.50",
-			Port:        22,
-			Username:    "root",
-			Description: "API dev server",
-			Reason:      "test server",
-		})
-		doneReject <- resultPair{res, err}
-	}()
-
-	askID1 := waitForAskID(t, app)
-	if err := app.SubmitAskResponse(AskSubmitRequest{
-		AskID:     askID1,
-		SessionID: sessionID,
-		Answers: []AskSubmittedAnswer{
-			{QuestionID: "approve_cluster_add", SelectedOptionIDs: []string{"reject"}},
-		},
-	}); err != nil {
-		t.Fatalf("SubmitAskResponse reject failed: %v", err)
+	if _, err := app.executeSSHClusterTool(ws, SSHClusterRequest{Action: "add"}); err == nil {
+		t.Fatal("removed add action was accepted")
 	}
-
-	resReject := <-doneReject
-	if resReject.err == nil {
-		t.Fatal("expected error on rejected server add, got nil")
-	}
-
-	// Server must NOT be registered
-	if _, ok := app.GetSSHServer("dev-api"); ok {
-		t.Fatal("dev-api should not be registered after rejection")
-	}
-
-	// 3. Test action=add with APPROVAL
-	doneApprove := make(chan resultPair, 1)
-	go func() {
-		res, err := app.executeSSHClusterTool(ctx, sessionID, ws, SSHClusterRequest{
-			Action:      "add",
-			Alias:       "dev-api",
-			Host:        "192.168.1.50",
-			Port:        22,
-			Username:    "root",
-			Description: "API dev server",
-			Reason:      "test server",
-		})
-		doneApprove <- resultPair{res, err}
-	}()
-
-	askID2 := waitForAskID(t, app)
-	if err := app.SubmitAskResponse(AskSubmitRequest{
-		AskID:     askID2,
-		SessionID: sessionID,
-		Answers: []AskSubmittedAnswer{
-			{QuestionID: "approve_cluster_add", SelectedOptionIDs: []string{"approve"}},
-		},
-	}); err != nil {
-		t.Fatalf("SubmitAskResponse approve failed: %v", err)
-	}
-
-	resApprove := <-doneApprove
-	if resApprove.err != nil {
-		t.Fatalf("expected success on approved server add, got: %v", resApprove.err)
-	}
-	if !resApprove.data["ok"].(bool) {
-		t.Fatalf("expected ok=true, got %v", resApprove.data)
-	}
-
-	// Server must be registered and authorized in workspace
-	if _, ok := app.GetSSHServer("dev-api"); !ok {
-		t.Fatal("dev-api should be registered in cluster after approval")
-	}
-	if !app.IsServerAuthorizedForWorkspace(ws, "dev-api") {
-		t.Fatal("dev-api should be authorized for workspace after approval")
-	}
-
-	// 4. Verify list now contains dev-api
-	listRes2, err := app.executeSSHClusterTool(ctx, sessionID, ws, SSHClusterRequest{Action: "list"})
-	if err != nil {
-		t.Fatalf("list failed: %v", err)
-	}
-	if listRes2["count"].(int) != 1 {
-		t.Fatalf("expected 1 server authorized, got %v", listRes2["count"])
+	if len(app.ListAllSSHServers()) != 1 || pendingAskCount(app) != 0 {
+		t.Fatal("removed add action changed the inventory or requested approval")
 	}
 }
 
-// TestRemoteTargetTabAuthorizationAndConnectionApproval tests:
-// 1. Calling remote target with unauthorized server alias fails with E_SERVER_UNAUTHORIZED.
-// 2. A workspace-authorized server alias connects without another session prompt.
-// 3. A direct, unregistered SSH target connects without a prompt.
 func TestRemoteTargetWorkspaceAuthorization(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Setenv("HOME", tempDir)
@@ -221,79 +98,6 @@ func TestRemoteTargetWorkspaceAuthorization(t *testing.T) {
 	}
 	if pendingAskCount(app) != 0 {
 		t.Fatal("remote target resolution created an approval prompt")
-	}
-}
-
-// TestSSHClusterAddExistingAliasOnlyAuthorizes 锁定“已登记别名绝不覆盖”：
-// add 命中已有节点时只走授权审批，节点本身（密码/密钥/端口/描述/风险级/来源）
-// 原样保留。这是 E_SERVER_UNAUTHORIZED 恢复提示指向的调用，一失手就把用户的
-// 凭据抹掉。
-func TestSSHClusterAddExistingAliasOnlyAuthorizes(t *testing.T) {
-	tempDir := t.TempDir()
-	t.Setenv("HOME", tempDir)
-	t.Setenv("USERPROFILE", tempDir)
-	app := NewApp()
-	app.configPath = filepath.Join(tempDir, "config.json")
-	ws := filepath.Join(tempDir, "ws")
-	sessionID := "sess-existing-alias"
-
-	if err := app.SaveSSHServer(SSHServerNode{
-		Alias:       "prod-web",
-		Host:        "10.0.0.7",
-		Port:        2222,
-		Username:    "deploy",
-		Password:    "keep-me",
-		KeyPath:     "/keys/id_prod.pem",
-		Description: "生产 Web 前端",
-		RiskLevel:   "high",
-		CreatedBy:   "user",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	ctx := context.WithValue(context.Background(), toolExecutionMetaContextKey{}, toolExecutionMeta{sessionID: sessionID})
-	type pair struct {
-		data map[string]any
-		err  error
-	}
-	done := make(chan pair, 1)
-	go func() {
-		res, err := app.executeSSHClusterTool(ctx, sessionID, ws, SSHClusterRequest{
-			Action:      "add",
-			Alias:       "prod-web",
-			Host:        "10.0.0.7",
-			Username:    "deploy",
-			Description: "model supplied description",
-			Reason:      "need access",
-		})
-		done <- pair{res, err}
-	}()
-
-	askID := waitForAskID(t, app)
-	if err := app.SubmitAskResponse(AskSubmitRequest{
-		AskID:     askID,
-		SessionID: sessionID,
-		Answers:   []AskSubmittedAnswer{{QuestionID: "approve_cluster_authorize", SelectedOptionIDs: []string{"approve"}}},
-	}); err != nil {
-		t.Fatalf("SubmitAskResponse approve failed: %v", err)
-	}
-	res := <-done
-	if res.err != nil {
-		t.Fatalf("authorizing an existing alias failed: %v", res.err)
-	}
-	if !app.IsServerAuthorizedForWorkspace(ws, "prod-web") {
-		t.Fatal("existing node must be authorized for the workspace after approval")
-	}
-
-	stored, ok := app.GetSSHServer("prod-web")
-	if !ok {
-		t.Fatal("node disappeared")
-	}
-	if stored.Password != "keep-me" || stored.KeyPath != "/keys/id_prod.pem" {
-		t.Fatalf("add must not touch stored credentials: %+v", stored)
-	}
-	if stored.Port != 2222 || stored.RiskLevel != "high" || stored.Description != "生产 Web 前端" || stored.CreatedBy != "user" {
-		t.Fatalf("add must not rewrite node identity fields: %+v", stored)
 	}
 }
 

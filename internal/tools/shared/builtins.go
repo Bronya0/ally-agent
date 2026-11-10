@@ -403,16 +403,10 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "action", "localPath", "remotePath"},
 		}),
-		functionTool("ssh_cluster", "Inspect or register SSH servers for the current workspace. Credentials are configured in the SSH cluster manager; this tool cannot store them. For a new alias, also provide host, username, description and reason. An existing alias only requests workspace authorization; other fields are ignored and the stored node or credentials are never overwritten.", map[string]any{
+		functionTool("ssh_cluster", "List SSH servers authorized for the current workspace. Add servers in the SSH cluster manager and authorize them in the workspace footer.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":      map[string]any{"type": "string", "enum": []string{"list", "add"}, "description": "list: Show authorized servers; add: register or authorize an alias."},
-				"alias":       map[string]any{"type": "string", "minLength": 1, "pattern": `^[a-zA-Z0-9_\-\.]+$`, "description": "Short friendly identifier, e.g. dev-api or staging-db. Required for add."},
-				"host":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Server IP address or hostname."},
-				"port":        map[string]any{"type": "integer", "minimum": 0, "maximum": 65535, "description": "SSH port; omit or send 0 for the default (22)."},
-				"username":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "SSH login user."},
-				"description": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Server role, environment, or purpose."},
-				"reason":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Why this server is needed."},
+				"action": map[string]any{"type": "string", "enum": []string{"list"}, "description": "List authorized servers."},
 			},
 			"required": []string{"action"},
 		}),
@@ -532,7 +526,7 @@ var builtinToolExamples = map[string]string{
 	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
 	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./..."}`,
 	"remote_transfer":    `upload: {"target":"my-dev:/srv/app","action":"upload","localPath":"dist","remotePath":"public","overwrite":true}; download: {"target":"my-dev:/srv/app","action":"download","remotePath":"logs","localPath":"debug_logs"}`,
-	"ssh_cluster":        `list: {"action":"list"}; add: {"action":"add","alias":"dev-node","host":"192.168.1.10","username":"root","description":"Development worker node","reason":"Deploy worker service"}`,
+	"ssh_cluster":        `{"action":"list"}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue"}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","tailLines":200}]}`,
 	"render_html":        `{"html":"<div id=\"chart\" style=\"width:100%;height:350px;\"></div><script>const c=echarts.init(document.getElementById('chart'),'dark');c.setOption({title:{text:'Metrics'},xAxis:{data:['Mon','Tue','Wed','Thu','Fri']},yAxis:{},series:[{type:'bar',data:[12,34,56,78,90]}]});</script>"}`,
