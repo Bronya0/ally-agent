@@ -386,7 +386,7 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 	}
 	beforeGroup := groupItem(m)
 	if m == nil {
-		invalidateChatSearch(t)
+		invalidateChatSearchAppend(t)
 		m = map[string]any{"role": "tool_call", "toolCallId": id}
 		t.Messages = append(t.Messages, m)
 		index = len(t.Messages) - 1
@@ -442,8 +442,10 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 	if name == "tool:result" {
 		a.attachToolImage(t, m)
 	}
-	retainLocalCommandSummary(m)
-	retainReadDisplaySummary(m)
+	if !retainMCPDisplaySummary(m) && !isMCPDisplayTool(m) {
+		retainLocalCommandSummary(m)
+		retainReadDisplaySummary(m)
+	}
 	retainCreateDisplayPreview(m)
 	if toolKind(str(m, "name")) == "command" && (name == "tool:result" || name == "tool:error") {
 		key := str(m, "toolCallId")

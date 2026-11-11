@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"fmt"
 	"testing"
 
 	backend "ally-dev/internal/app"
@@ -125,5 +126,25 @@ func TestModelMenuCatalogKeepsOAuthIdentitiesDistinct(t *testing.T) {
 	catalog.refresh(models)
 	if catalog.entries[0].identity.OAuthAccountID != "three" || catalog.entries[0].name != "changed" || catalog.entries[0].option != modelOption(models[0]) {
 		t.Fatal("menu metadata did not follow a same-size configuration edit")
+	}
+}
+
+func TestSelectChatModelKeepsFiveRecentModels(t *testing.T) {
+	a := &desktop{prefs: defaultPrefs()}
+	conv := &conversation{}
+	models := make([]backend.ModelConfig, maxRecentModels+2)
+	for i := range models {
+		models[i] = backend.ModelConfig{ProviderName: "provider", Model: fmt.Sprintf("model-%d", i)}
+		a.selectChatModel(conv, models[i])
+	}
+
+	if len(a.prefs.RecentModels) != maxRecentModels {
+		t.Fatalf("recent model count = %d, want %d: %v", len(a.prefs.RecentModels), maxRecentModels, a.prefs.RecentModels)
+	}
+	for i := range a.prefs.RecentModels {
+		want := modelOption(models[len(models)-1-i])
+		if got := a.prefs.RecentModels[i]; got != want {
+			t.Fatalf("recent model %d = %q, want %q", i, got, want)
+		}
 	}
 }

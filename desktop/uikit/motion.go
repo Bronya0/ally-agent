@@ -19,7 +19,7 @@ const (
 // Reveal keeps a stable clipping parent during closing, like MyGo's native
 // Collapsible panel, without creating another trigger or changing app state.
 func Reveal(c *ui.Context, open bool, build func()) ui.Element {
-	root := ui.Column(c).FillWidth().MinWidth(0).Shrink(0)
+	root := ui.Column(c).FillWidth().MinWidth(0).Shrink(0).IgnoreInput(!open).AccessHidden(!open)
 	target := float32(0)
 	if open {
 		target = 1
@@ -32,6 +32,47 @@ func Reveal(c *ui.Context, open bool, build func()) ui.Element {
 	root.Children(func() { inner = ui.Column(c).FillWidth().MinWidth(0).Shrink(0); inner.Children(build) })
 	if progress < 1 {
 		root.ClipY().Height(progress * inner.Bounds().H)
+	}
+	return root
+}
+
+type fadeRevealState struct {
+	open  bool
+	until time.Time
+}
+
+// FadeReveal keeps a large or flexible section's layout steady during its
+// fade. The pose only repaints; one frame at the end releases closed content.
+// The still-visible closing content cannot receive input or accessibility focus.
+func FadeReveal(c *ui.Context, open bool, build func()) ui.Element {
+	root := ui.Column(c).FillWidth().MinWidth(0).IgnoreInput(!open).AccessHidden(!open)
+	state := ui.Local(root, "fade-reveal", func() fadeRevealState { return fadeRevealState{open: open} })
+	if state.open != open {
+		state.open = open
+		state.until = time.Time{}
+		if !open && !StillMotion(c) {
+			state.until = c.Now().Add(DisclosureDuration)
+		}
+	}
+	if StillMotion(c) {
+		state.until = time.Time{}
+	}
+	if open || c.Now().Before(state.until) {
+		root.Children(build)
+	}
+	if !open && c.Now().Before(state.until) {
+		// Other timed work, or an earlier close followed by a quick reopen,
+		// can wake the view first; keep the final release scheduled.
+		c.After(state.until.Sub(c.Now()))
+	}
+	fade := float32(1)
+	if open {
+		fade = 0
+	}
+	if StillMotion(c) {
+		root.Opacity(1 - fade)
+	} else {
+		root.AnimatePose(ui.Pose{Fade: fade}, ui.Animation{Duration: DisclosureDuration})
 	}
 	return root
 }

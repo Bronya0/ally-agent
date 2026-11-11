@@ -774,7 +774,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	args := parsed.get(str(m, "args"), parseToolArgs)
 	summary := toolArgSummary(name, args)
 	purpose := toolPurpose(m, args)
-	isMCP := str(m, "mcpServer") != "" || str(m, "mcpTool") != "" || strings.HasPrefix(name, "mcp")
+	isMCP := isMCPDisplayTool(m)
 	if isMCP {
 		// A failed MCP call must not read as "Called": the state word comes from
 		// the same table the builtin cards use.

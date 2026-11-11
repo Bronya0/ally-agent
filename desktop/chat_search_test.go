@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -228,6 +229,29 @@ func TestChatSearchRescansOnlyTheGrowingTail(t *testing.T) {
 	s.lastCompute = time.Now().Add(-chatSearchRestream)
 	if got := len(a.chatSearchMatches(conv)); got != 4 {
 		t.Fatalf("matches after an append = %d, want 4", got)
+	}
+}
+
+func TestChatSearchToolAppendsKeepResultsAndBudget(t *testing.T) {
+	conv := searchTranscript(searchMessage("user", "needle"))
+	a := &desktop{}
+	s := &conv.uiState().Search
+	s.Query = "needle"
+	if len(a.chatSearchMatches(conv)) != 1 {
+		t.Fatal("initial match missing")
+	}
+	for i := 0; i < 3; i++ {
+		a.applyToolEvent(conv, "tool:start", map[string]any{"toolCallId": fmt.Sprintf("tool-%d", i), "name": "read"})
+	}
+	s.lastCompute = time.Now().Add(-chatSearchRestream)
+	if len(a.chatSearchMatches(conv)) != 1 || s.scanCount != len(conv.Messages) || s.scanPrefix != len("needle") {
+		t.Fatal("tool appends lost the search cache or its byte accounting")
+	}
+	conv.Messages = append(conv.Messages, searchMessage("assistant", "needle again"))
+	invalidateChatSearch(conv)
+	s.lastCompute = time.Now().Add(-chatSearchRestream)
+	if len(a.chatSearchMatches(conv)) != 2 {
+		t.Fatal("new searchable text was missed")
 	}
 }
 

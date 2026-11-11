@@ -93,6 +93,7 @@ type chatSearch struct {
 	scanPrefix int
 	scanBytes  int
 	tailOnly   bool
+	appendOnly bool
 	// frameDoc and frameDocMessage are the document and message the block hook
 	// was last asked about, so the code-block hook that runs right after it can
 	// address the block's lines without parsing the message again.
@@ -231,6 +232,25 @@ const chatSearchRestream = 150 * time.Millisecond
 // kept and one message is read again; any other change rescans everything.
 func (a *desktop) chatSearchScan(t *conversation, s *chatSearch) ([]chatSearchMatch, bool) {
 	query := chatSearchQueryKey(s)
+	if s.appendOnly && !s.tailOnly && s.cacheKey != "" && s.lastQuery == query && !s.scanTruncated &&
+		s.scanCount <= len(t.Messages) && len(s.cache) < chatSearchMaxMatches {
+		out := append([]chatSearchMatch(nil), s.cache...)
+		prefix, total, truncated := s.scanPrefix, s.scanBytes, false
+		for i := s.scanCount; i < len(t.Messages); i++ {
+			prefix = total
+			content := str(t.Messages[i], "content")
+			if content == "" {
+				continue
+			}
+			out, truncated = chatSearchScanMessage(t.Messages[i], i, s, chatSearchMaxBytes-total, out)
+			total = prefix + min(len(content), chatSearchMaxBytes-prefix)
+			if truncated || len(out) >= chatSearchMaxMatches {
+				break
+			}
+		}
+		s.scanCount, s.scanPrefix, s.scanBytes, s.appendOnly = len(t.Messages), prefix, total, false
+		return out, truncated
+	}
 	if s.tailOnly && s.cacheKey != "" && s.lastQuery == query && !s.scanTruncated &&
 		s.scanCount == len(t.Messages) && s.scanCount > 0 {
 		out, truncated := chatSearchScanTail(t, s, s.scanCount-1)
@@ -239,7 +259,7 @@ func (a *desktop) chatSearchScan(t *conversation, s *chatSearch) ([]chatSearchMa
 		return out, truncated
 	}
 	out, truncated, prefix, total := chatSearchScanAll(t, s)
-	s.scanCount, s.scanPrefix, s.scanBytes, s.tailOnly = len(t.Messages), prefix, total, false
+	s.scanCount, s.scanPrefix, s.scanBytes, s.tailOnly, s.appendOnly = len(t.Messages), prefix, total, false, false
 	return out, truncated
 }
 
@@ -289,7 +309,22 @@ func invalidateChatSearch(t *conversation) {
 	s.spanCache = nil
 	s.codeCache = nil
 	// The shape may have changed, so the next scan starts from the beginning.
-	s.scanCount, s.scanPrefix, s.scanBytes, s.tailOnly = 0, 0, 0, false
+	s.scanCount, s.scanPrefix, s.scanBytes, s.tailOnly, s.appendOnly = 0, 0, 0, false, false
+}
+
+// Tool records append without changing earlier searchable message content.
+func invalidateChatSearchAppend(t *conversation) {
+	if t == nil || t.UI == nil {
+		return
+	}
+	s := &t.UI.Search
+	if s.tailOnly || (s.scanCount != len(t.Messages) && !s.appendOnly) {
+		invalidateChatSearch(t)
+		return
+	}
+	s.transcriptRevision++
+	s.frameKey, s.spanCache, s.codeCache = "", nil, nil
+	s.appendOnly = true
 }
 
 // invalidateChatSearchTail is invalidateChatSearch for a reply that only grew its

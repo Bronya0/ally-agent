@@ -216,25 +216,26 @@ func (a *desktop) railGroupButton(c *ui.Context, expanded bool, head backend.Plu
 }
 
 func (a *desktop) railWorkspaces(c *ui.Context) {
-	ui.Column(c).Key("rail-workspaces").FillWidth().Shrink(1).MinHeight(24).Gap(3).Children(func() {
+	ui.Column(c).Key("rail-workspaces").FillWidth().Shrink(1).MinHeight(24).Children(func() {
 		a.railSectionHeader(c, "rail-ws", locales.Text("工作区"), "folderopen", a.prefs.RailWorkspaceOpen, locales.Text("添加工作区"), func() {
 			a.prefs.RailWorkspaceOpen = !a.prefs.RailWorkspaceOpen
 			a.savePrefs()
 		}, func() { a.chooseWorkspace() })
-		if !a.prefs.RailWorkspaceOpen {
-			return
-		}
-		ui.Scroll(c.Key("workspace-items")).FillWidth().MaxHeight(180).MinHeight(0).Children(func() {
-			a.railWorkspaceRow(c, "", locales.Text("临时工作区"), locales.Text("在系统临时目录创建沙箱，随标签页关闭自动删除"))
-			roots := a.workspaceHistoryRoots()
-			for _, root := range roots {
-				root := root
-				a.railWorkspaceRow(c, root, workspaceLabel(root), root)
-			}
-			if len(roots) == 0 {
-				ui.Text(c, locales.Text("无历史记录")).FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset())
-			}
-		})
+		uikit.Reveal(c.Key("rail-workspaces-reveal"), a.prefs.RailWorkspaceOpen, func() {
+			ui.Column(c).FillWidth().Padding(3, 0, 0).Children(func() {
+				ui.Scroll(c.Key("workspace-items")).FillWidth().MaxHeight(180).MinHeight(0).Children(func() {
+					a.railWorkspaceRow(c, "", locales.Text("临时工作区"), locales.Text("在系统临时目录创建沙箱，随标签页关闭自动删除"))
+					roots := a.workspaceHistoryRoots()
+					for _, root := range roots {
+						root := root
+						a.railWorkspaceRow(c, root, workspaceLabel(root), root)
+					}
+					if len(roots) == 0 {
+						ui.Text(c, locales.Text("无历史记录")).FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset())
+					}
+				})
+			})
+		}).Shrink(1)
 	})
 }
 
@@ -331,57 +332,56 @@ func (a *desktop) railSessions(c *ui.Context) {
 			a.prefs.RailSessionsOpen = !a.prefs.RailSessionsOpen
 			a.savePrefs()
 		}, func() { a.newSession() })
-		if !a.prefs.RailSessionsOpen {
-			return
-		}
-		t := a.current()
-		workspace := ""
-		if t != nil {
-			workspace = t.Workspace
-		}
-		entries, _ := a.workspaceSessions(workspace)
-		if len(entries) == 0 {
-			ui.Text(c, locales.Text("当前工作区暂无历史会话")).FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset())
-			return
-		}
-		ui.Scroll(c.Key("session-items")).FillWidth().Grow(1).MinHeight(0).Children(func() {
-			for _, entry := range entries {
-				entry := entry
-				busy := entry.ID == sessionBusyID(a, entry.ID)
-				active := t != nil && t.ID == entry.ID
-				row := ui.Row(c.Key("rail-sess-"+entry.ID)).Height(30).Radius(6).Padding(0, railContentInset()).AlignItems(ui.Center).Gap(gapInline)
-				fill := ui.Transparent
-				ink := a.secondaryInk()
-				if active {
-					fill = selectionFill(c.Theme().Accent)
-					ink = c.Theme().Accent
-				} else if row.Hovered() {
-					fill = p.hover
-				}
-				row.Background(fadeColor(row, "fill", fill))
-				title := entry.Title
-				if title == "" {
-					title = locales.Text("会话")
-				}
-				uikit.RightTooltip(c, row, fmt.Sprintf(locales.Text("%s\n%s · %d 条"), title, fmtTime(entry.UpdatedAt), entry.MessageCount))
-				row.Children(func() {
-					btn := ui.ButtonBase(c.Key("rail-sess-btn-" + entry.ID)).Grow(1).Height(28).Justify(ui.Start).Label(title).Cursor(ui.CursorPointer)
-					btn.OnClick(func() { a.openSession(entry.ID) })
-					btn.Children(func() {
-						ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-							ui.Text(c, title).FontSize(fsSmall).TextColor(ink).SingleLine()
-							if busy {
-								ui.Box(c).Size(5, 5).Radius(3).Background(p.accent)
-							}
-						})
-					})
-					b := dangerIconAction(c, "rail-sess-del-"+entry.ID, locales.Text("删除会话"), "close", 18, func() {
-						a.deleteSession(entry.ID, title)
-					})
-					railHoverAction(c, row, b, busy)
-				})
+		uikit.FadeReveal(c.Key("rail-sessions-content"), a.prefs.RailSessionsOpen, func() {
+			t := a.current()
+			workspace := ""
+			if t != nil {
+				workspace = t.Workspace
 			}
-		})
+			entries, _ := a.workspaceSessions(workspace)
+			if len(entries) == 0 {
+				ui.Text(c, locales.Text("当前工作区暂无历史会话")).FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset())
+				return
+			}
+			ui.Scroll(c.Key("session-items")).FillWidth().Grow(1).MinHeight(0).Children(func() {
+				for _, entry := range entries {
+					entry := entry
+					busy := entry.ID == sessionBusyID(a, entry.ID)
+					active := t != nil && t.ID == entry.ID
+					row := ui.Row(c.Key("rail-sess-"+entry.ID)).Height(30).Radius(6).Padding(0, railContentInset()).AlignItems(ui.Center).Gap(gapInline)
+					fill := ui.Transparent
+					ink := a.secondaryInk()
+					if active {
+						fill = selectionFill(c.Theme().Accent)
+						ink = c.Theme().Accent
+					} else if row.Hovered() {
+						fill = p.hover
+					}
+					row.Background(fadeColor(row, "fill", fill))
+					title := entry.Title
+					if title == "" {
+						title = locales.Text("会话")
+					}
+					uikit.RightTooltip(c, row, fmt.Sprintf(locales.Text("%s\n%s · %d 条"), title, fmtTime(entry.UpdatedAt), entry.MessageCount))
+					row.Children(func() {
+						btn := ui.ButtonBase(c.Key("rail-sess-btn-" + entry.ID)).Grow(1).Height(28).Justify(ui.Start).Label(title).Cursor(ui.CursorPointer)
+						btn.OnClick(func() { a.openSession(entry.ID) })
+						btn.Children(func() {
+							ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, title).FontSize(fsSmall).TextColor(ink).SingleLine()
+								if busy {
+									ui.Box(c).Size(5, 5).Radius(3).Background(p.accent)
+								}
+							})
+						})
+						b := dangerIconAction(c, "rail-sess-del-"+entry.ID, locales.Text("删除会话"), "close", 18, func() {
+							a.deleteSession(entry.ID, title)
+						})
+						railHoverAction(c, row, b, busy)
+					})
+				}
+			})
+		}).Grow(1).MinHeight(0).Shrink(1)
 	})
 }
 

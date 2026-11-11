@@ -6,7 +6,42 @@ import (
 	"encoding/json"
 	"maps"
 	"strings"
+	"unicode/utf8"
 )
+
+const createPreviewMaxBytes = 8 << 10
+
+func isMCPDisplayTool(m map[string]any) bool {
+	name := str(m, "name")
+	if name == "" {
+		name = str(m, "toolName")
+	}
+	return str(m, "mcpServer") != "" || str(m, "mcpTool") != "" || strings.HasPrefix(name, "mcp")
+}
+
+// MCP cards show only status and timing. The runtime keeps the complete result
+// in its own context; never mutate the event or the model's copy here.
+func retainMCPDisplaySummary(m map[string]any) bool {
+	if !isMCPDisplayTool(m) || boolOf(m, "fastCompacted") {
+		return false
+	}
+	if _, ok := m["result"]; !ok {
+		return false
+	}
+	detachToolResultEnvelope(m)
+	result := toolResult(m)
+	summary := readCardMetadata(result, false)
+	switch elapsed := result["elapsedMs"].(type) {
+	case int, int64, float32, float64:
+		summary["elapsedMs"] = elapsed
+	}
+	if userCancelledMessage(result) {
+		summary["cancelled"] = true
+	}
+	m["result"] = summary
+	delete(m, "body")
+	return true
+}
 
 // A saved observation keeps only what its historical card displays. Build the
 // projection before the deep clone, without touching live result maps; envelope
@@ -46,7 +81,7 @@ func retainSnapshotToolSummary(m map[string]any) bool {
 // keeping another whole-file copy beside the backend's original tool call.
 func retainCreateDisplayPreview(m map[string]any) {
 	name := readGrepGroupName(m)
-	if (name != "create" && name != "remote_create_file") || boolOf(m, "createPreviewTrimmed") || str(m, "mcpServer") != "" || str(m, "mcpTool") != "" {
+	if (name != "create" && name != "remote_create_file") || isMCPDisplayTool(m) {
 		return
 	}
 	switch toolState(m) {
@@ -59,11 +94,23 @@ func retainCreateDisplayPreview(m map[string]any) {
 		return // partial or malformed arguments remain available to the old view
 	}
 	content := str(args, "content")
-	if len(content) <= 8<<10 {
+	if len(content) <= createPreviewMaxBytes {
 		return
 	}
 	start := max(1, strings.Count(strings.TrimRight(content, "\n"), "\n")+2-createPreviewLines)
-	args["content"] = tailLines(content, createPreviewLines)
+	if boolOf(m, "createPreviewTrimmed") {
+		start += max(0, int(num(m, "createPreviewStartLine"))-1)
+	}
+	preview := tailLines(content, createPreviewLines)
+	if len(preview) > createPreviewMaxBytes {
+		cut := len(preview) - createPreviewMaxBytes + len("…")
+		for cut < len(preview) && !utf8.RuneStart(preview[cut]) {
+			cut++
+		}
+		start += strings.Count(preview[:cut], "\n")
+		preview = "…" + preview[cut:]
+	}
+	args["content"] = preview
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		return

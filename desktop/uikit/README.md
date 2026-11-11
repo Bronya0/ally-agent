@@ -123,6 +123,7 @@ Use the standard inner layout; do not reimplement it to stretch the input.
 - 显隐退出期间保留稳定父容器；退出快照不能接收点击或焦点。通知使用原生 ToastViewportBase 管理生命周期。
 - 尊重系统 Preferences.ReduceMotion，原生动画 API 自动立即完成，不强制播放。
 - 复杂代码编辑器、diff 和长列表保持滚动、输入即时响应，不强制对内容重排添加高度动画。
+- 长清单或占据剩余空间的滚动区可用 `FadeReveal`：用只重绘的淡入淡出代替逐帧高度重排，关闭时立即停止交互，动效结束后释放内容；减少动态效果时立即收起。
 - 验证至少覆盖过渡中间帧、最终状态、减少动态效果，以及加载期间按钮位置／尺寸不变。
 
 回归测试：`motion_test.go`、`message_animation_test.go`、宿主的 `skill_card_layout_test.go`。

@@ -19,6 +19,7 @@ import (
 // TextMuted, which this app now sets to the faint placeholder tone: an empty
 // box says where to type without competing with the conversation above it.
 const composerHint = "输入消息，Enter 发送，Ctrl+Enter 换行，Esc 中断，/ 选择指令，@ 引用文件"
+const maxRecentModels = 5
 
 // composer is the input area: menus, attachments, run status, the editor and
 // the info bar with model, reasoning, workspace and context controls.
@@ -949,8 +950,8 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 			if len(recent) == 0 && t.Model != "" {
 				recent = []string{t.Model}
 			}
-			if len(recent) > 3 {
-				recent = recent[:3]
+			if len(recent) > maxRecentModels {
+				recent = recent[:maxRecentModels]
 			}
 			modelItem := func(parts ui.MenuParts, i int, key, trailing string) ui.Element {
 				model, entry := models[i], entries[i]
@@ -1101,7 +1102,7 @@ func (a *desktop) selectChatModel(t *conversation, model backend.ModelConfig) {
 	a.config.LastUsedModel = &id
 	recent := []string{t.Model}
 	for _, old := range a.prefs.RecentModels {
-		if old != t.Model && len(recent) < 3 {
+		if old != t.Model && len(recent) < maxRecentModels {
 			recent = append(recent, old)
 		}
 	}
@@ -1578,16 +1579,20 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 				// The prompt's own sections are detail, and the message kinds below are
 				// the rows that actually grow, so the sections start folded behind the
 				// total they add up to.
-				contextPartFold(c, "system-prompt", locales.Text("系统提示词"), b.SystemPrompt, st.PromptPartsOpen, func() {
-					st.PromptPartsOpen = !st.PromptPartsOpen
-				}, a.secondaryInk())
-				if st.PromptPartsOpen {
-					for _, part := range b.SystemPromptParts {
-						if part.Tokens > 0 {
-							contextPart(c, "  · "+locales.Text(part.Label), part.Tokens, a.secondaryInk())
-						}
-					}
-				}
+				ui.Column(c.Key("context-prompt-group")).FillWidth().Children(func() {
+					contextPartFold(c, "system-prompt", locales.Text("系统提示词"), b.SystemPrompt, st.PromptPartsOpen, func() {
+						st.PromptPartsOpen = !st.PromptPartsOpen
+					}, a.secondaryInk())
+					uikit.Reveal(c.Key("context-prompt-parts"), st.PromptPartsOpen, func() {
+						ui.Column(c).FillWidth().Padding(gapInline, 0, 0).Gap(gapInline).Children(func() {
+							for _, part := range b.SystemPromptParts {
+								if part.Tokens > 0 {
+									contextPart(c, "  · "+locales.Text(part.Label), part.Tokens, a.secondaryInk())
+								}
+							}
+						})
+					})
+				})
 				contextPart(c, locales.Text("工具 Schema"), b.ToolSchemas, a.secondaryInk())
 				contextPart(c, locales.Text("用户提问"), b.UserMessages, a.secondaryInk())
 				contextPart(c, locales.Text("AI 回复"), b.AssistantMsgs, a.secondaryInk())

@@ -139,7 +139,7 @@ func (a *desktop) readingMarkdownOptionsForSource(source func() string, scope ..
 	type cachedBlock struct {
 		input, source, language string
 		extensions              parser.Extensions
-		ready                   bool
+		ready, open             bool
 		fromSource              bool
 		options                 markdown.Options
 		theme                   markdown.Theme
@@ -158,16 +158,26 @@ func (a *desktop) readingMarkdownOptionsForSource(source func() string, scope ..
 		// Main conversation views show their source immediately, including open
 		// fences. Other viewers retain Code() because they may reveal more of an
 		// unchanged source across frames through markdown.Stream.
-		if !cached.ready || cached.input != input || cached.fromSource != fromSource || cached.language != block.Language || cached.extensions != options.Extensions {
+		if !cached.ready || cached.input != input || cached.fromSource != fromSource || cached.language != block.Language || cached.extensions != options.Extensions || cached.open != block.Open {
 			if fromSource {
 				code = block.Code()
 			}
-			cached.language, cached.extensions, cached.ready, cached.fromSource = block.Language, options.Extensions, true, fromSource
+			cached.language, cached.extensions, cached.ready, cached.fromSource, cached.open = block.Language, options.Extensions, true, fromSource, block.Open
 			fence := "~~~"
 			for strings.Contains(code, fence) {
 				fence += "~"
 			}
-			cached.source = fence + block.Language + string(rune(10)) + code + string(rune(10)) + fence
+			// Lines adds a newline even to an incomplete last line. Remove that
+			// synthetic byte so subsequent tokens really append to the source.
+			if fromSource && block.Open && !strings.HasSuffix(input, "\n") {
+				code = strings.TrimSuffix(code, "\n")
+			}
+			cached.source = fence + block.Language + "\n" + code
+			// Keep a growing fence open so the nested Markdown parser and syntax
+			// highlighter can reuse the unchanged prefix on the next token.
+			if !fromSource || !block.Open {
+				cached.source += "\n" + fence
+			}
 		}
 		cached.input = input
 		cached.options.Theme = &cached.theme

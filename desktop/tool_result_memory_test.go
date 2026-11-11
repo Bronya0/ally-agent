@@ -5,7 +5,49 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
+
+func TestMCPDisplaySummaryKeepsBackendResultAndState(t *testing.T) {
+	for _, result := range []map[string]any{
+		{"ok": false, "error": "denied", "errorCode": "DENIED", "elapsedMs": 123, "content": strings.Repeat("x", 100000)},
+		{"reason": "user_cancelled", "content": strings.Repeat("x", 100000)},
+	} {
+		original := map[string]any{"name": "mcp__server__query", "toolCallId": "id", "result": map[string]any{"data": result}}
+		before, _ := json.Marshal(original)
+		projected := toolEventForDisplay("tool:result", original).(map[string]any)
+		a := &desktop{}
+		conv := &conversation{}
+		a.applyToolEvent(conv, "tool:result", projected)
+		got := conv.Messages[0]
+		if toolState(got) != toolState(map[string]any{"status": "success", "result": result}) || toolDuration(got, toolResult(got)) != toolDuration(nil, result) {
+			t.Fatal("MCP status or duration changed")
+		}
+		encoded, _ := json.Marshal(snapshot(conv))
+		if len(encoded) > 2048 {
+			t.Fatal("MCP body was retained in the UI snapshot")
+		}
+		after, _ := json.Marshal(original)
+		if string(before) != string(after) {
+			t.Fatal("MCP display projection mutated the runtime event")
+		}
+	}
+}
+
+func TestCreateDisplayPreviewBoundsLongUnicodeLines(t *testing.T) {
+	content := "header\n" + strings.Repeat("中文", 30000)
+	args, _ := json.Marshal(map[string]any{"path": "x.txt", "content": content})
+	m := map[string]any{"name": "create", "status": "success", "args": string(args)}
+	retainCreateDisplayPreview(m)
+	var got map[string]any
+	if err := json.Unmarshal([]byte(str(m, "args")), &got); err != nil {
+		t.Fatal(err)
+	}
+	preview := str(got, "content")
+	if len(preview) > createPreviewMaxBytes || !utf8.ValidString(preview) || !strings.HasSuffix(content, strings.TrimPrefix(preview, "…")) || num(m, "createPreviewStartLine") != 2 || str(got, "path") != "x.txt" {
+		t.Fatalf("invalid bounded preview: length=%d start=%v", len(preview), m["createPreviewStartLine"])
+	}
+}
 
 func TestHistoryRewritesReleaseRetiredStreamingAnswers(t *testing.T) {
 	for _, operation := range []string{"replace", "fast", "delete"} {

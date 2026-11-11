@@ -167,7 +167,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 				a.refreshFiles(true)
 			}
 		})
-		if a.filesF.HelpOpen {
+		uikit.Reveal(c.Key("explorer-help-reveal"), a.filesF.HelpOpen, func() {
 			ui.Column(c).Padding(8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(c.Theme().Border).Children(func() {
 				fieldNote(c, locales.Text("文件浏览器帮助"), a.secondaryInk())
 				for _, line := range []string{
@@ -184,7 +184,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 					fieldNote(c, "· "+line, a.secondaryInk())
 				}
 			})
-		}
+		})
 		ui.Row(c).Height(26).BorderWidth(1, 0, 0, 0).BorderColor(c.Theme().Border).Padding(0, padRow).Children(func() {
 			uikit.IconButton(c, "explorer-open", locales.Text("在文件管理器中打开工作区"), iconImage("folderopen"), 22, uikit.IconQuiet, func() {
 				if t := a.current(); t != nil {

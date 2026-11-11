@@ -754,7 +754,7 @@ func (a *desktop) welcomeView(c *ui.Context, t *conversation) {
 								}
 							})
 							if open != nil {
-								a.welcomePopover(c, cell, open, i, j)
+								a.welcomePopover(c, t, cell, open, i, j)
 							}
 						}
 					})
@@ -767,61 +767,86 @@ func (a *desktop) welcomeView(c *ui.Context, t *conversation) {
 	})
 }
 
-func (a *desktop) welcomePopover(c *ui.Context, anchor ui.Element, open *bool, row, col int) {
-	popoverPanel(c, anchor, open, 320, func() {
-		title := locales.Text("MCP 服务")
-		if row == 2 && col == 0 {
-			title = locales.Text("可用技能")
-		} else if row == 2 {
-			title = locales.Text("工具")
-		}
-		ui.Text(c, title).FontSize(fsSection).Bold().Padding(gapInline, padCard)
-		ui.Scroll(c).MaxHeight(260).Children(func() {
-			ui.Column(c).Gap(3).Padding(4, 10).Children(func() {
-				switch {
-				case row == 1:
-					if len(a.mcpServers) == 0 {
-						fieldNote(c, locales.Text("无 MCP 服务"), a.secondaryInk())
-					}
-					for _, server := range a.mcpServers {
-						ui.Text(c, fmt.Sprintf(locales.Text("%s · %s · %d 个工具"), str(server, "name"), mcpStatusText(str(server, "status")), int(num(server, "toolCount")))).FontSize(fsSmall).TextColor(a.secondaryInk())
-					}
-				case col == 0:
-					names := a.enabledSkillNames()
-					if len(names) == 0 {
-						fieldNote(c, locales.Text("当前没有可用技能"), a.secondaryInk())
-					}
-					for _, name := range names {
-						ui.Text(c, name).FontSize(fsSmall)
-					}
-				default:
-					if len(a.toolInventory) == 0 {
-						fieldNote(c, locales.Text("暂无工具"), a.secondaryInk())
-					}
-					for _, tool := range a.toolInventory {
-						suffix := ""
-						if !tool.Enabled {
-							suffix = locales.Text("（已停用）")
-						}
-						ui.Text(c, tool.Name+suffix).FontSize(fsSmall)
-					}
-				}
-			})
-		})
-		divider(c)
-		label, page := locales.Text("管理 MCP 服务"), "mcp"
-		if row == 2 && col == 0 {
-			label, page = locales.Text("管理技能"), "skills"
-		} else if row == 2 {
-			label = locales.Text("管理内置工具")
-		}
-		popoverItem(c, fmt.Sprintf("welcome-manage-%d-%d", row, col), label, "", false, func() {
+func (a *desktop) welcomePopover(c *ui.Context, t *conversation, anchor ui.Element, open *bool, row, col int) {
+	if !*open {
+		return
+	}
+	bounds := anchor.Bounds()
+	// The overlay trigger must not intercept clicks outside the transcript
+	// viewport when the user scrolls the table partially or fully out of view.
+	viewport := t.Scroll.Bounds(c)
+	if viewport.W > 0 && viewport.H > 0 {
+		left, top := max(bounds.X, viewport.X), max(bounds.Y, viewport.Y)
+		right, bottom := min(bounds.X+bounds.W, viewport.X+viewport.W), min(bounds.Y+bounds.H, viewport.Y+viewport.H)
+		if right <= left || bottom <= top {
 			*open = false
-			a.changePage(page)
-			if row == 2 && col == 1 {
-				a.mcpF.Tab = 1
+			return
+		}
+		bounds = ui.Rect{X: left, Y: top, W: right - left, H: bottom - top}
+	}
+	// TrackScroll requests the end with MaxFloat32 while following. A popover
+	// attached inside that scroll can be placed at the sentinel instead of the
+	// visible cell. Anchor the native popover to the cell's committed window
+	// bounds so it keeps native dismissal without changing transcript following.
+	ui.Overlay(c, func() {
+		trigger := ui.ButtonBase(c.Key(fmt.Sprintf("welcome-popup-anchor-%d-%d", row, col))).Absolute().
+			Left(bounds.X).Top(bounds.Y).Size(bounds.W, bounds.H).Cursor(ui.CursorPointer).Label(locales.Text("关闭信息面板"))
+		trigger.OnClick(func() { *open = false })
+		popoverPanel(c, trigger, open, 320, func() {
+			title := locales.Text("MCP 服务")
+			if row == 2 && col == 0 {
+				title = locales.Text("可用技能")
+			} else if row == 2 {
+				title = locales.Text("工具")
 			}
-		}, a.secondaryInk())
+			ui.Text(c, title).FontSize(fsSection).Bold().Padding(gapInline, padCard)
+			ui.Scroll(c).MaxHeight(260).Children(func() {
+				ui.Column(c).Gap(3).Padding(4, 10).Children(func() {
+					switch {
+					case row == 1:
+						if len(a.mcpServers) == 0 {
+							fieldNote(c, locales.Text("无 MCP 服务"), a.secondaryInk())
+						}
+						for _, server := range a.mcpServers {
+							ui.Text(c, fmt.Sprintf(locales.Text("%s · %s · %d 个工具"), str(server, "name"), mcpStatusText(str(server, "status")), int(num(server, "toolCount")))).FontSize(fsSmall).TextColor(a.secondaryInk())
+						}
+					case col == 0:
+						names := a.enabledSkillNames()
+						if len(names) == 0 {
+							fieldNote(c, locales.Text("当前没有可用技能"), a.secondaryInk())
+						}
+						for _, name := range names {
+							ui.Text(c, name).FontSize(fsSmall)
+						}
+					default:
+						if len(a.toolInventory) == 0 {
+							fieldNote(c, locales.Text("暂无工具"), a.secondaryInk())
+						}
+						for _, tool := range a.toolInventory {
+							suffix := ""
+							if !tool.Enabled {
+								suffix = locales.Text("（已停用）")
+							}
+							ui.Text(c, tool.Name+suffix).FontSize(fsSmall)
+						}
+					}
+				})
+			})
+			divider(c)
+			label, page := locales.Text("管理 MCP 服务"), "mcp"
+			if row == 2 && col == 0 {
+				label, page = locales.Text("管理技能"), "skills"
+			} else if row == 2 {
+				label = locales.Text("管理内置工具")
+			}
+			popoverItem(c, fmt.Sprintf("welcome-manage-%d-%d", row, col), label, "", false, func() {
+				*open = false
+				a.changePage(page)
+				if row == 2 && col == 1 {
+					a.mcpF.Tab = 1
+				}
+			}, a.secondaryInk())
+		})
 	})
 }
 

@@ -194,6 +194,25 @@ func TestHistoryAppendMatchesFullOwnershipRebuild(t *testing.T) {
 	check()
 }
 
+func TestAppendedSubagentParentOnlyRebuildsWhenItClaimsOldRows(t *testing.T) {
+	conv := &conversation{Messages: []map[string]any{{"role": "user", "content": "hello"}}}
+	before := conv.cachedTranscriptRows()
+	conv.Messages = append(conv.Messages,
+		map[string]any{"role": "tool_call", "name": "subagent", "toolCallId": "new"},
+		map[string]any{"role": "subagent", "parentToolCallId": "new"})
+	rows := conv.cachedTranscriptRows()
+	if rows != before || !slices.Equal(rows.childrenOf("new"), []int{2}) {
+		t.Fatal("new parent and child did not extend the existing index")
+	}
+	conv.Messages = append(conv.Messages, map[string]any{"role": "subagent", "subId": "late"})
+	rows = conv.cachedTranscriptRows()
+	conv.Messages = append(conv.Messages, map[string]any{"role": "tool_call", "name": "subagent", "toolCallId": "parent", "result": map[string]any{"agentId": "late"}})
+	got := conv.cachedTranscriptRows()
+	if got == rows || !slices.Equal(got.childrenOf("parent"), []int{3}) {
+		t.Fatal("late parent did not claim its existing child")
+	}
+}
+
 func TestRoundFootersFollowSuggestionsAcrossPartialPages(t *testing.T) {
 	conv := &conversation{Messages: []map[string]any{
 		{"role": "user", "content": "question"},

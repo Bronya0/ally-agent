@@ -497,12 +497,16 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 			if a.modelForm.AdvancedOpen {
 				advancedIcon = "chevrondown"
 			}
-			disclosure(c, nil, advancedLabel, disclosureFlat, advancedIcon).AlignSelf(ui.Start).OnClick(func() { a.modelForm.AdvancedOpen = !a.modelForm.AdvancedOpen })
-			if a.modelForm.AdvancedOpen {
-				fieldLabel(c, locales.Text("自定义请求头（JSON）"))
-				textArea(c, "custom-headers", locales.Text("自定义请求头"), `{"X-Header": "value"}`, &a.modelHeaders, 90)
-				fieldNote(c, locales.Text("随该模型每个 API 请求发送，可覆盖 Authorization / User-Agent；传输层头会被忽略。"), a.secondaryInk())
-			}
+			ui.Column(c.Key("model-advanced-group")).FillWidth().Children(func() {
+				disclosure(c, "model-advanced", advancedLabel, disclosureFlat, advancedIcon).AlignSelf(ui.Start).OnClick(func() { a.modelForm.AdvancedOpen = !a.modelForm.AdvancedOpen })
+				uikit.Reveal(c.Key("model-advanced-details"), a.modelForm.AdvancedOpen, func() {
+					ui.Column(c).FillWidth().Padding(16, 0, 0).Gap(16).Children(func() {
+						fieldLabel(c, locales.Text("自定义请求头（JSON）"))
+						textArea(c, "custom-headers", locales.Text("自定义请求头"), `{"X-Header": "value"}`, &a.modelHeaders, 90)
+						fieldNote(c, locales.Text("随该模型每个 API 请求发送，可覆盖 Authorization / User-Agent；传输层头会被忽略。"), a.secondaryInk())
+					})
+				})
+			})
 		}
 	}, func() {
 		flatBusy(c, locales.Text("测试连接"), a.modelForm.TestBusy, a.modelForm.TestBusy || a.modelSaving).OnClick(func() { a.testModelDraft() })
@@ -803,11 +807,15 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 		if s.advancedOpen {
 			advancedIcon = "chevrondown"
 		}
-		disclosure(c, nil, locales.Text("高级设置"), disclosureFlat, advancedIcon).AlignSelf(ui.Start).OnClick(func() { s.advancedOpen = !s.advancedOpen })
-		if s.advancedOpen {
-			fieldLabel(c, locales.Text("自定义请求头（JSON）"))
-			textArea(c, "image-headers", locales.Text("自定义请求头"), `{"X-Header": "value"}`, &s.headers, 80)
-		}
+		ui.Column(c.Key("image-advanced-group")).FillWidth().Children(func() {
+			disclosure(c, "image-advanced", locales.Text("高级设置"), disclosureFlat, advancedIcon).AlignSelf(ui.Start).OnClick(func() { s.advancedOpen = !s.advancedOpen })
+			uikit.Reveal(c.Key("image-advanced-details"), s.advancedOpen, func() {
+				ui.Column(c).FillWidth().Padding(16, 0, 0).Gap(16).Children(func() {
+					fieldLabel(c, locales.Text("自定义请求头（JSON）"))
+					textArea(c, "image-headers", locales.Text("自定义请求头"), `{"X-Header": "value"}`, &s.headers, 80)
+				})
+			})
+		})
 	}, func() {
 		flat(c, locales.Text("取消")).OnClick(func() { s.formOpen = false })
 		primary(c, locales.Text("保存")).Disabled(s.busy).OnClick(func() { a.saveImageModelDraft() })

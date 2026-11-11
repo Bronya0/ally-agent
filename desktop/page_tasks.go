@@ -167,27 +167,31 @@ func (a *desktop) servicesSection(c *ui.Context, workspace string) {
 			if detailsOpen {
 				detailsIcon = "chevrondown"
 			}
-			disclosure(c, locales.Text("card-action-详情-")+service.ID, locales.Text("详情"), disclosureCard, detailsIcon).AlignSelf(ui.Start).OnClick(func() {
-				if a.mcpF.ToolOpen == nil {
-					a.mcpF.ToolOpen = map[string]bool{}
-				}
-				a.mcpF.ToolOpen["service-"+service.ID] = !detailsOpen
+			ui.Column(c.Key("service-details-group-" + service.ID)).FillWidth().Children(func() {
+				disclosure(c, locales.Text("card-action-详情-")+service.ID, locales.Text("详情"), disclosureCard, detailsIcon).AlignSelf(ui.Start).OnClick(func() {
+					if a.mcpF.ToolOpen == nil {
+						a.mcpF.ToolOpen = map[string]bool{}
+					}
+					a.mcpF.ToolOpen["service-"+service.ID] = !detailsOpen
+				})
+				uikit.Reveal(c.Key("service-details-"+service.ID), detailsOpen, func() {
+					ui.Column(c).FillWidth().Padding(gapField, 0, 0).Gap(gapField).Children(func() {
+						kv(c, "ID", service.ID, a.secondaryInk())
+						kv(c, "PID", fmt.Sprint(service.PID), a.secondaryInk())
+						kv(c, locales.Text("工作目录"), service.Cwd, a.secondaryInk())
+						if service.Command != "" {
+							codeBlock(c, "service-cmd-"+service.ID, service.Command, 60, a.secondaryInk())
+						}
+						if service.Status == "running" {
+							kv(c, locales.Text("启动时间"), fmtTime(service.StartedAt), a.secondaryInk())
+						} else {
+							kv(c, locales.Text("退出码"), fmt.Sprint(service.ExitCode), a.secondaryInk())
+							kv(c, locales.Text("停止时间"), fmtTime(service.StoppedAt), a.secondaryInk())
+						}
+						kv(c, locales.Text("输出缓冲"), fmt.Sprintf(locales.Text("%s（保留最新部分）"), fmtBytes(service.OutputBytes)), a.secondaryInk())
+					})
+				})
 			})
-			if detailsOpen {
-				kv(c, "ID", service.ID, a.secondaryInk())
-				kv(c, "PID", fmt.Sprint(service.PID), a.secondaryInk())
-				kv(c, locales.Text("工作目录"), service.Cwd, a.secondaryInk())
-				if service.Command != "" {
-					codeBlock(c, "service-cmd-"+service.ID, service.Command, 60, a.secondaryInk())
-				}
-				if service.Status == "running" {
-					kv(c, locales.Text("启动时间"), fmtTime(service.StartedAt), a.secondaryInk())
-				} else {
-					kv(c, locales.Text("退出码"), fmt.Sprint(service.ExitCode), a.secondaryInk())
-					kv(c, locales.Text("停止时间"), fmtTime(service.StoppedAt), a.secondaryInk())
-				}
-				kv(c, locales.Text("输出缓冲"), fmt.Sprintf(locales.Text("%s（保留最新部分）"), fmtBytes(service.OutputBytes)), a.secondaryInk())
-			}
 			if service.OutputTail != "" {
 				holder := ui.Column(c.Key("service-tail-holder-" + service.ID))
 				preview := memoAt[textMemo](holder, "preview").get(service.OutputTail, func(s string) string { return tailLines(asciiStrip(s), 6) })

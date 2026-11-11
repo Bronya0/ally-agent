@@ -85,7 +85,7 @@
 - 优化前先区分“每帧”和“每请求”：`sendSel`/`metal.send` 属于每帧绘制，`marshalPatchedChatRequest`/`fingerprintHead` 属于每请求一次，两者量级不同，不能混算。
 - 每轮请求都经 `buildToolsForSession` → `cloneTools` 深拷贝工具清单，没有稳定缓存键；`schemautil.Map` 的返回值会被 responses 适配器写入 `strict`/`description`，因此不能返回共享的冻结清单。
 - `schemautil.deref` 的输入已是 `cloneMap` 的私有副本：无 `$ref` 时跳过 `resolveNode` 的二次重建，有 `$ref` 时必须重建并合并。
-- 性能改动用一次性 `-benchmem` 基准对比 `allocs/op` 与 `B/op`，跑完删除基准文件，不为性能改动留下测试文件。
+- 可复用性能/内存套件在 `tests/performance/`，仅执行 `python tests/performance/run.py`，固定运行一套完整测试，无快速版、筛选或对照选项（详见其 README）；源码保留，生成物放 `.tmp/performance/`，不进入普通测试或应用构建。额外的一次性性能探针跑完仍删除。
 
 ## 主流程回归入口
 

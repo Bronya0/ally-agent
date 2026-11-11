@@ -2,6 +2,8 @@
 
 记录截至 2026-11-07、mygo 分支 `b1d8e343` 的已落地优化与维护边界；重点场景是一个 tab 从早到晚持续对话和执行任务，每条要点独立一行，具体上限以实现中的常量为准。
 
+可重复执行的性能与存活内存套件见 [tests/performance/README.md](../tests/performance/README.md)，入口为 `python tests/performance/run.py`。覆盖超长会话、索引、搜索、工具结果、快照、离屏渲染和释放；固定运行一套完整测试，无模式或筛选选项；源码保留，统一报告和原始日志写入 `.tmp/performance/`。
+
 ## 渲染与缓存的基本边界
 
 - MyGo 每帧重建控件树，解析、切分、排序、格式化、JSON 编解码等派生工作应按数据变化执行，避免随帧重复执行；入口见 [tool_render_memo.go](../desktop/tool_render_memo.go)。
@@ -19,7 +21,7 @@
 - `transcriptLookup` 只保存 ID 和行号，删除、替换或压缩历史后必须 `resetTranscriptLookup`，不能让旧行号继续定位新消息。
 - 消息绘制归属、工具折叠和分页共同使用 `transcriptRows`，避免三个入口各自判断导致空白行、重复子代理或页首落在不可见消息上；入口见 [transcript_rows.go](../desktop/transcript_rows.go)。
 - 普通消息追加通过 `attachTail` 增量更新归属信息，已有父卡片 ID 和子代理 ID 映射只保留身份数据，不复制消息或结果。
-- 新增 subagent 父卡片时保留完整两遍重建，父卡片可能认领先到达的旧子消息，也可能覆盖旧 agent ID 映射，不能强行只处理新尾部。
+- 新增 subagent 父卡片时，依据旧消息的父 ID 和 agent ID 引用判断能否增量追加；可能认领旧子消息或覆盖已使用映射时仍完整两遍重建。
 - 已有行的工具类型或 subagent 结果中的 agent ID 变化时必须使归属索引失效，不能只依赖消息数量变化。
 - 历史块起点通过 `blockStarts` 增量追加，复用旧前缀并重新判断追加接缝，不在每次追加时重新扫描全部历史。
 - `historyBlocksKey` 同时包含行数、`historyRev` 和归属对象，只有归属对象存活且版本未变时才可复用分页前缀。
@@ -48,14 +50,14 @@
 - 工具结果在事件或历史加载入口规范化为 map，渲染读取已解码结构，不在卡片头和卡体重复 `json.Unmarshal`；缺失结果返回 nil，避免空 map 分配。
 - 可折叠 read / remote_read / batch_read / grep / list / list_files / glob 的 UI 消息只保留卡片所需路径、行范围、数量、状态和错误，不常驻整份读取或匹配正文。
 - read 系列的 live UI 投影保留完整的逐文件错误、missing 信息及范围信息，磁盘错误另按原有预算截断，两者不能混用。
-- UI 投影保留明确的 `fastCompacted` 摘录及 MCP 结果；无 result/body 的进度事件不凭空创建结果，未知结构化载荷交给既有解码入口处理。
+- UI 投影保留明确的 `fastCompacted` 摘录；MCP 卡片只显示状态和耗时，事件及历史 UI 副本保留这些摘要，运行上下文保留完整结果。无结果的进度事件不凭空创建结果。
 - 新鲜 live UI 元数据不标记 `resultOmitted`，该标记表示历史结果已省略，不能把正常工具结果显示成历史缺失。
 - 本地 command 的 UI 消息只保留退出码、状态、耗时等摘要，展开时通过现有模型上下文入口按需加载详情，不为每条命令常驻另一份输出。
 - 命令详情关闭、所在历史页离开、历史重写或会话释放时同步清理 `CommandDetails` 与展开状态，后续需要时重新按需加载。
 - 命令详情异步返回时核对 session ID、当前展开状态和同一 detail 对象，关闭后或替换后的迟到结果不能重新塞回缓存。
 - 已完成 success/error 工具收到迟到 `tool:update` 时在复制字段前返回，避免恢复已裁剪 create 正文或覆盖最终结果；入口见 [events.go](../desktop/events.go)。
 - create / remote_create_file 在完成、失败或取消后，对超过 8 KiB 的合法 args 内容只保留末尾 `createPreviewLines` 行，其他参数和文件路径保留，流式阶段保留原效果。
-- create 当前预览为最后 6 行，并保存裁剪前的起始行号；行数限制不等于字节上限，极长单行仍可能较大，不能把它描述成固定字节内存。
+- create 预览最多保留最后 6 行、8 KiB，并保存裁剪前的起始行号；截取不能拆开 UTF-8 字符。
 - 新 args 到达时清理旧 `createPreviewTrimmed` / `createPreviewStartLine` 标记，避免下一份内容沿用旧行号。
 - create / edit 工具行点击复用工作区文件打开入口，edit 下方 diff 的展开折叠独立保留，文件实际不存在时沿用已有错误处理，不伪造编辑器成功打开。
 - 快照先投影会省略的大正文、再深克隆，已完全分离的摘要可直接交给快照，避免先复制大数据再丢掉；入口见 [desktop.go](../desktop/desktop.go) 的 `snapshot`。
@@ -73,6 +75,7 @@
 - 完整替换历史时成套清理 Markdown、流式、工具组日志、回合统计、提示导航、工具展开和命令详情，不保留旧行号对应的派生状态。
 - 主对话 code block 按消息源、语言和扩展设置缓存代码、行号等派生内容，未闭合的大代码围栏在源不变时也不重复取 Code；入口见 [markdown_theme.go](../desktop/markdown_theme.go)。
 - 源文本缓存只用于主对话即时展示的 `markdown.View`，没有源 getter 的通用 viewer 保留 `Code()` 行为，避免破坏 `markdown.Stream` 随帧显露内容的语义。
+- 主对话未闭合代码块保持增量的内层 Markdown 源，去除解析器为不完整末行添加的换行，闭合后恢复完整代码块；避免每次更新重新高亮整段代码。
 - create 尾部、diff 行、命令预览和输出清理按来源字符串 memo，`tailLines` 从尾部扫描，不恢复成全文 Split 后再 Join；入口见 [tool_render_memo.go](../desktop/tool_render_memo.go)。
 - 代码高亮逐行使用 `strings.SplitSeq`，复用 tokenizer 的 token 切片，并合并同一行相邻同样式 span，减少临时行数组和 span 数量；入口见 [tool_resources.go](../desktop/tool_resources.go)。
 - 代码高亮共享缓存同时限制 32 项和约 256 KiB 的来源及 span 准入权重，超过预算的内容可绘制但不常驻，权重不是实际堆内存测量值。
@@ -82,6 +85,7 @@
 - 搜索同步扫描上限为 4 MiB、400 个命中及 8192 个正则候选，保留截断状态，不能把预算耗尽报告成完整无结果。
 - 搜索代码块高亮限制 64 KiB、200 个 span 和 1000 行，超限保留普通代码绘制与命中导航，避免一帧生成无界高亮控件。
 - 流式正文末尾变化使用 `invalidateChatSearchTail`，保留此前命中并约每 150 ms 重扫尾部，编辑旧行或历史形状变化使用完整失效。
+- 新工具记录只追加时复用已有搜索结果和字节预算，仅扫描新增尾部；旧文本改动、预算截断或命中上限继续完整重扫。
 - 压缩预览位于末尾时走尾部搜索失效，若用户注入后预览位于中间则走完整失效，不能误把中间改动当成末尾追加。
 - 搜索 span/code 缓存只保留当前历史页，关闭搜索、改变查询或重写消息时释放旧缓存，不随全天访问过的页面积累。
 - 搜索的 `frameDoc` 只在当前构建共享，帧结束即清空，不让最后解析的文档额外常驻。

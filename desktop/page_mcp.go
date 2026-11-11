@@ -21,6 +21,10 @@ type mcpSaveOptions struct {
 	onSuccess  func()
 }
 
+// Avoid rebuilding a very long checklist on every frame of a height animation.
+// Large lists use a paint-only fade while the existing page scroll remains instant.
+const mcpAnimatedChecklistLimit = 40
+
 // mcpNoteLine is a one-line note: tab-specific notes must not change height,
 // or the content below the tab strip shifts when the tab changes.
 func mcpNoteLine(c *ui.Context, s string, ink ...ui.Color) {
@@ -253,51 +257,60 @@ func (a *desktop) renderMCPServerList(c *ui.Context, data mcpListData) {
 			}
 		}
 		shown++
+		tools := list(status, "tools")
 		rowCard(c, "mcp-"+name, func() {
-			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-				statusDot(c, str(status, "status"))
-				ui.Text(c, name).FontSize(fsBody).Bold()
-				neutralChip(c, mcpTransportLabel(entry, status))
-				ui.Spacer(c)
-				tools := list(status, "tools")
-				enabledCount := 0
-				for _, item := range tools {
-					if m, ok := item.(map[string]any); ok && !boolOf(m, "disabled") {
-						enabledCount++
+			ui.Column(c.Key("mcp-body-" + name)).FillWidth().Children(func() {
+				ui.Column(c).FillWidth().Gap(gapInline).Children(func() {
+					ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
+						statusDot(c, str(status, "status"))
+						ui.Text(c, name).FontSize(fsBody).Bold()
+						neutralChip(c, mcpTransportLabel(entry, status))
+						ui.Spacer(c)
+						enabledCount := 0
+						for _, item := range tools {
+							if m, ok := item.(map[string]any); ok && !boolOf(m, "disabled") {
+								enabledCount++
+							}
+						}
+						if len(tools) > 0 {
+							label := fmt.Sprintf(locales.Text("工具 %d/%d"), enabledCount, len(tools))
+							btn := uikit.Tooltip(c, cardFlat(c, label), locales.Text("勾选的工具注入模型上下文，取消勾选即停用；对端新增工具默认启用；下一会话生效。"))
+							btn.OnClick(func() { a.mcpF.ToolOpen[name] = !a.mcpF.ToolOpen[name] })
+						} else if count := int(num(status, "toolCount")); count > 0 {
+							fieldNote(c, fmt.Sprintf(locales.Text("%d 个工具"), count), a.secondaryInk())
+						}
+						stateText := mcpStatusText(str(status, "status"))
+						uikit.Tooltip(c, ui.Text(c, stateText).FontSize(fsSmall).TextColor(toneColor(c, str(status, "status"), a.secondaryInk())), str(status, "error"))
+						enabled := entry.Enabled == nil || *entry.Enabled
+						uikit.SwitchNative(c.Key("mcp-enabled-"+name), &enabled).Label(locales.Text("启用 ") + name).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
+							entry.Enabled = boolPtr(enabled)
+							doc := editDoc()
+							doc.Servers[name] = entry
+							a.saveMCPDoc(doc)
+						})
+						cardFlat(c, locales.Text("编辑")).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.openMCPEditor(name) })
+						cardDanger(c, locales.Text("删除")).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
+							doc := editDoc()
+							delete(doc.Servers, name)
+							a.saveMCPDoc(doc)
+						})
+					})
+					if errText := str(status, "error"); errText != "" {
+						inlineError(c, "mcp-error-"+name, errText)
 					}
-				}
-				if len(tools) > 0 {
-					label := fmt.Sprintf(locales.Text("工具 %d/%d"), enabledCount, len(tools))
-					btn := uikit.Tooltip(c, cardFlat(c, label), locales.Text("勾选的工具注入模型上下文，取消勾选即停用；对端新增工具默认启用；下一会话生效。"))
-					btn.OnClick(func() { a.mcpF.ToolOpen[name] = !a.mcpF.ToolOpen[name] })
-				} else if count := int(num(status, "toolCount")); count > 0 {
-					fieldNote(c, fmt.Sprintf(locales.Text("%d 个工具"), count), a.secondaryInk())
-				}
-				stateText := mcpStatusText(str(status, "status"))
-				uikit.Tooltip(c, ui.Text(c, stateText).FontSize(fsSmall).TextColor(toneColor(c, str(status, "status"), a.secondaryInk())), str(status, "error"))
-				enabled := entry.Enabled == nil || *entry.Enabled
-				uikit.SwitchNative(c.Key("mcp-enabled-"+name), &enabled).Label(locales.Text("启用 ") + name).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
-					entry.Enabled = boolPtr(enabled)
-					doc := editDoc()
-					doc.Servers[name] = entry
-					a.saveMCPDoc(doc)
 				})
-				cardFlat(c, locales.Text("编辑")).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.openMCPEditor(name) })
-				cardDanger(c, locales.Text("删除")).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
-					doc := editDoc()
-					delete(doc.Servers, name)
-					a.saveMCPDoc(doc)
-				})
+				// The checklist takes a provider so a document is cloned only on edit.
+				checklist := func() {
+					ui.Column(c).FillWidth().Padding(gapInline, 0, 0).Children(func() {
+						a.mcpToolChecklist(c, name, entry, editDoc, status)
+					})
+				}
+				if len(tools) <= mcpAnimatedChecklistLimit {
+					uikit.Reveal(c.Key("mcp-tools-reveal-"+name), a.mcpF.ToolOpen[name], checklist)
+				} else {
+					uikit.FadeReveal(c.Key("mcp-tools-fade-"+name), a.mcpF.ToolOpen[name], checklist)
+				}
 			})
-			if errText := str(status, "error"); errText != "" {
-				inlineError(c, "mcp-error-"+name, errText)
-			}
-			if a.mcpF.ToolOpen[name] {
-				// The checklist writes into the document it is given, so it takes a
-				// provider instead of a copy: an open checklist repaints every frame,
-				// and the clone belongs to the click that changes something.
-				a.mcpToolChecklist(c, name, entry, editDoc, status)
-			}
 		})
 	}
 	if shown == 0 {

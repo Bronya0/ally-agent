@@ -97,3 +97,119 @@ func TestRevealAndReducedMotion(t *testing.T) {
 		}
 	}
 }
+
+func TestRevealClosingContentIsInertAndReleased(t *testing.T) {
+	open := true
+	clicks, builds := 0, 0
+	tt := chineseTester(func(c *ui.Context) {
+		ui.Column(c).Fill().Children(func() {
+			Reveal(c.Key("details"), open, func() {
+				builds++
+				ui.Button(c.Key("inner"), "inner").OnClick(func() { clicks++ })
+			})
+		})
+	}, 240, 160)
+	if err := tt.Click("inner"); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := tt.Find("inner")
+	open = false
+	tt.Frame()
+	if _, ok := tt.Access("inner"); ok {
+		t.Fatal("closing content remains accessible")
+	}
+	tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+	if clicks != 1 {
+		t.Fatal("closing content accepted a click")
+	}
+	tt.Advance(300 * time.Millisecond)
+	settledBuilds := builds
+	tt.Frame()
+	if builds != settledBuilds {
+		t.Fatal("collapsed content was rebuilt")
+	}
+	open = true
+	tt.Frame()
+	tt.Advance(300 * time.Millisecond)
+	if err := tt.Click("inner"); err != nil || clicks != 2 {
+		t.Fatalf("reopened content did not respond: clicks=%d err=%v", clicks, err)
+	}
+}
+
+func TestFadeRevealRepaintsAndReleasesContent(t *testing.T) {
+	for _, reduced := range []bool{false, true} {
+		open, builds, contentBuilds := false, 0, 0
+		tt := chineseTester(func(c *ui.Context) {
+			builds++
+			ui.Column(c).Fill().Background(ui.Hex("#ffffff")).Children(func() {
+				FadeReveal(c.Key("fade"), open, func() {
+					contentBuilds++
+					ui.Box(c).Size(100, 80).Background(ui.Hex("#000000"))
+					ui.Button(c.Key("action"), "action")
+				})
+			})
+		}, 240, 180)
+		tt.SetPreferences(ui.Preferences{ReduceMotion: reduced, TextScale: 1})
+		tt.Frame()
+		pixels := func() []byte { return append([]byte(nil), tt.Image().Pix...) }
+		empty := pixels()
+		open = true
+		tt.Frame()
+		before := builds
+		tt.Advance(100 * time.Millisecond)
+		mid := pixels()
+		tt.Advance(200 * time.Millisecond)
+		full := pixels()
+		if bytes.Equal(empty, full) || (reduced && !bytes.Equal(mid, full)) || (!reduced && (bytes.Equal(mid, full) || bytes.Equal(mid, empty))) {
+			t.Fatalf("reduced=%t: fade in did not settle correctly", reduced)
+		}
+		if builds > before+2 {
+			t.Fatalf("reduced=%t: fade rebuilt the view %d times", reduced, builds-before)
+		}
+		open = false
+		tt.Frame()
+		if _, ok := tt.Access("action"); ok {
+			t.Fatal("closing content is accessible")
+		}
+		tt.Advance(100 * time.Millisecond)
+		closing := pixels()
+		if !reduced && (bytes.Equal(closing, full) || bytes.Equal(closing, empty)) {
+			t.Fatal("fade out skipped its intermediate frame")
+		}
+		tt.Advance(200 * time.Millisecond)
+		if !bytes.Equal(pixels(), empty) {
+			t.Fatal("closed content remained visible")
+		}
+		settled := contentBuilds
+		tt.Frame()
+		if settled != contentBuilds {
+			t.Fatal("closed content was rebuilt")
+		}
+	}
+}
+
+func TestFadeRevealRapidToggleStillReleasesContent(t *testing.T) {
+	open, builds, frames := true, 0, 0
+	tt := chineseTester(func(c *ui.Context) {
+		frames++
+		FadeReveal(c.Key("fade"), open, func() { builds++; ui.Box(c).Size(40, 40) })
+	}, 80, 80)
+	open = false
+	tt.Frame()
+	tt.Advance(50 * time.Millisecond)
+	open = true
+	tt.Frame()
+	tt.Advance(50 * time.Millisecond)
+	open = false
+	tt.Frame()
+	before := frames
+	tt.Advance(300 * time.Millisecond)
+	if frames <= before {
+		t.Fatal("no frame released the content after rapid toggles")
+	}
+	settled := builds
+	tt.Frame()
+	if builds != settled {
+		t.Fatal("rapid toggles left closed content mounted")
+	}
+}

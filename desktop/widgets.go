@@ -741,6 +741,7 @@ func tokenCount(n int) string { return fmtK(n) }
 func popoverPanel(c *ui.Context, anchor ui.Element, open *bool, width float32, build func()) {
 	ui.PopoverBase(c, anchor, open, func(panel ui.Element) {
 		popoverChrome(c, panel, width)
+		panel.Column().Transition(uikit.PopupTransition())
 		ui.Column(c).FillWidth().Children(build)
 	})
 }

@@ -931,12 +931,12 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 			if name == "" {
 				name = str(message, "toolName")
 			}
-			if toolshared.OmitToolResultOnDisk(name) {
+			if toolshared.OmitToolResultOnDisk(name) || isMCPDisplayTool(message) {
 				messageCopy = make(map[string]any, len(message))
 				for key, value := range message {
 					messageCopy[key] = value
 				}
-				if retainSnapshotToolSummary(messageCopy) {
+				if retainMCPDisplaySummary(messageCopy) || (!isMCPDisplayTool(messageCopy) && retainSnapshotToolSummary(messageCopy)) {
 					// The projection already owns its metadata maps and slices.
 					// Clone the remaining message fields only once.
 					detachedResult = messageCopy["result"].(map[string]any)
@@ -944,7 +944,22 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 				}
 			}
 			clear(active)
-			cloned, err := cloneSnapshotJSONValue(messageCopy, 0, active)
+			var cloned any
+			var err error
+			if detachedResult != nil {
+				// messageCopy already owns its top-level map. Clone its remaining
+				// values in place rather than allocating a second map per tool.
+				active[snapshotCloneVisit{kind: reflect.Map, ptr: reflect.ValueOf(message).Pointer()}] = struct{}{}
+				for key, value := range messageCopy {
+					messageCopy[key], err = cloneSnapshotJSONValue(value, 1, active)
+					if err != nil {
+						break
+					}
+				}
+				cloned = messageCopy
+			} else {
+				cloned, err = cloneSnapshotJSONValue(messageCopy, 0, active)
+			}
 			if err != nil {
 				// Match the former failed Marshal/Unmarshal path: do not persist a
 				// partially cloned transcript.
@@ -1047,6 +1062,14 @@ func cloneSnapshotJSONValue(value any, depth int, active map[snapshotCloneVisit]
 		return sliceCopy, nil
 	case nil, bool, string:
 		return value, nil
+	case time.Time:
+		// MarshalText validates the same RFC3339 constraints as MarshalJSON,
+		// without a JSON encoder/decoder round-trip for every running tool.
+		text, err := value.MarshalText()
+		if err != nil {
+			return nil, err
+		}
+		return string(text), nil
 	case float64:
 		if math.IsNaN(value) || math.IsInf(value, 0) {
 			return nil, fmt.Errorf("session snapshot contains a non-finite number")
@@ -1152,7 +1175,9 @@ func (a *desktop) openSession(id string) {
 				if str(message, "role") == "tool_call" || str(message, "toolCallId") != "" {
 					normalizeToolMessage(message)
 				}
-				retainSnapshotToolSummary(message)
+				if !retainMCPDisplaySummary(message) && !isMCPDisplayTool(message) {
+					retainSnapshotToolSummary(message)
+				}
 				retainCreateDisplayPreview(message)
 				normalizeSubagentBlackboard(message)
 			}

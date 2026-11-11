@@ -73,6 +73,8 @@ type transcriptRows struct {
 	// rescanning old records. Only IDs/indices, never message or result maps.
 	cards              map[string]bool
 	agents             map[string]string
+	parentUses         map[string]bool
+	agentUses          map[string]bool
 	users, suggestions []int
 	welcome            bool
 	// children maps a sub-agent card's call id to the rows it draws, in
@@ -88,29 +90,45 @@ type transcriptRows struct {
 func newTranscriptRows(t *conversation) *transcriptRows {
 	r := &transcriptRows{t: t}
 	for _, m := range t.Messages {
-		if toolKind(str(m, "name")) != "subagent" {
-			continue
-		}
-		if id := str(m, "toolCallId"); id != "" {
-			if r.cards == nil {
-				r.cards = map[string]bool{}
-			}
-			r.cards[id] = true
-		}
-		if id := str(toolResult(m), "agentId"); id != "" {
-			if r.agents == nil {
-				r.agents = map[string]string{}
-			}
-			r.agents[id] = str(m, "toolCallId")
-		}
+		r.addParent(m)
 	}
 	r.attachTail(0)
 	return r
 }
 
+func (r *transcriptRows) addParent(m map[string]any) {
+	if toolKind(str(m, "name")) != "subagent" {
+		return
+	}
+	if id := str(m, "toolCallId"); id != "" {
+		if r.cards == nil {
+			r.cards = map[string]bool{}
+		}
+		r.cards[id] = true
+	}
+	if id := str(toolResult(m), "agentId"); id != "" {
+		if r.agents == nil {
+			r.agents = map[string]string{}
+		}
+		r.agents[id] = str(m, "toolCallId")
+	}
+}
+
 func (r *transcriptRows) attachTail(start int) {
 	for i := start; i < len(r.t.Messages); i++ {
 		m := r.t.Messages[i]
+		if id := str(m, "parentToolCallId"); id != "" {
+			if r.parentUses == nil {
+				r.parentUses = map[string]bool{}
+			}
+			r.parentUses[id] = true
+		}
+		if id := str(m, "subId"); id != "" {
+			if r.agentUses == nil {
+				r.agentUses = map[string]bool{}
+			}
+			r.agentUses[id] = true
+		}
 		if str(m, "role") == "user" {
 			r.users = append(r.users, i)
 		}
@@ -281,14 +299,19 @@ func (t *conversation) cachedTranscriptRows() *transcriptRows {
 		if previous.ready && previous.key.rev == key.rev && previous.key.rows < key.rows {
 			// A new parent may claim children that arrived first, or replace an
 			// agent-ID mapping. Keep the complete two-pass rule for that case.
-			newParent := false
+			needsRebuild := false
 			for _, m := range t.Messages[previous.key.rows:] {
 				if toolKind(str(m, "name")) == "subagent" {
-					newParent = true
-					break
+					if previous.value.parentUses[str(m, "toolCallId")] || previous.value.agentUses[str(toolResult(m), "agentId")] {
+						needsRebuild = true
+						break
+					}
 				}
 			}
-			if !newParent {
+			if !needsRebuild {
+				for _, m := range t.Messages[previous.key.rows:] {
+					previous.value.addParent(m)
+				}
 				previous.value.attachTail(previous.key.rows)
 				return previous.value
 			}
