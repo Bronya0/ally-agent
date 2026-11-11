@@ -424,7 +424,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read text files and images (jpg, png, gif, webp; bmp returns a text notice). Text is returned as bounded `<ally-file path=… version=…>` previews with 1-based line numbers; use the version for edit. Use tailLines for logs. Missing paths and directories have compact error receipts; other failures carry an error attribute. `truncated-lines` marks incomplete line tails; edit refuses lineRange over them, so use oldText instead.", map[string]any{
+		functionTool("read", "Read text files and images (jpg, png, gif, webp; bmp returns a text notice). Text is returned as bounded previews headed by `// read | path=… | version=…` with 1-based line numbers; use the version field for edit. Use tailLines for logs. Missing paths and directories have compact error receipts; other failures carry an error field. `truncated-lines` marks incomplete line tails; edit refuses lineRange over them, so use oldText instead.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -540,11 +540,11 @@ var builtinToolExamples = map[string]string{
 // (maxToolOutput, what the card and a spilled file hold) and this model-facing
 // budget. The schema quotes the second one, because that is the copy the model
 // reads, and points at the spilled file for the rest.
-var modelOutputNote = fmt.Sprintf("Output is a bounded preview: at most %d KiB reaches you, with the start and the end kept and the middle elided (a `reduced-from` attribute reports the real length). When the run spilled a full log, the result carries its path: read that file with the read or grep tool instead of rerunning side effects.", MaxModelToolOutput/1024)
+var modelOutputNote = fmt.Sprintf("Output is a bounded preview: at most %d KiB reaches you, with the start and the end kept and the middle elided (a `reduced-from` field reports the real length). When the run spilled a full log, the result carries its path: read that file with the read or grep tool instead of rerunning side effects.", MaxModelToolOutput/1024)
 
 func functionTool(name, description string, parameters map[string]any) openai.Tool {
 	if name == "read" || name == "remote_read" {
-		description += " Broad file previews share a 64 KiB batch budget with per-file continuations; explicit endLine ranges and tails keep the per-file budget. Files above 32 MiB support bounded UTF-8 tailLines reads only: read-only, no edit version or absolute line numbers. A self-closing reused receipt means this exact range is already in context; its version is current."
+		description += " Broad file previews share a 64 KiB batch budget with per-file continuations; explicit endLine ranges and tails keep the per-file budget. Files above 32 MiB support bounded UTF-8 tailLines reads only: read-only, no edit version or absolute line numbers. A header with the reused flag and no body means this exact range is already in context; its version is current."
 	}
 	properties, ok := parameters["properties"].(map[string]any)
 	if !ok {

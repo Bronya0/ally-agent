@@ -627,6 +627,7 @@ func (a *App) listServicesForTool(cfg ConfigState, includeFinished bool) (Servic
 // maxServiceReadTailBytes so a single read cannot overload the model context.
 type ServiceReadResult struct {
 	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
 	Output        string `json:"output"`
 	ReturnedBytes int    `json:"returnedBytes"`
 	BufferBytes   int64  `json:"bufferBytes"`
@@ -694,12 +695,14 @@ func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, erro
 	// 与读取之间有一次竞态窗口），所以入参是 returned 而不是缓冲全量。
 	service.mu.Lock()
 	status := service.info.Status
+	name := service.info.Name
 	service.markSandboxDeniedLocked(returned)
 	denied := service.info.SandboxDenied
 	deniedHint := service.info.DeniedWriteHint
 	service.mu.Unlock()
 	return ServiceReadResult{
 		ID:              id,
+		Name:            name,
 		Output:          returned,
 		ReturnedBytes:   len(returned),
 		BufferBytes:     bufferBytes,

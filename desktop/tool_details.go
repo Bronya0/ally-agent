@@ -243,3 +243,23 @@ func (a *desktop) scheduledTaskSummary(args, result map[string]any) string {
 	}
 	return action + " · " + name
 }
+
+func (a *desktop) serviceReadSummary(args, result map[string]any) string {
+	id := str(args, "id")
+	name := str(result, "name")
+	if name == "" {
+		for _, service := range a.services {
+			if service.ID == id {
+				name = service.Name
+				break
+			}
+		}
+	}
+	if name == "" {
+		name = id
+	}
+	if name == "" {
+		return "read"
+	}
+	return "read · " + name
+}

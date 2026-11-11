@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -838,7 +837,6 @@ func (a *App) streamModelTextWithUsage(ctx context.Context, cfg ConfigState, mod
 	if content == "" {
 		details := fmt.Sprintf("result.Content=%q, builder=%q, reasoning=%q, rBuilder=%q, stopReason=%q, toolCalls=%d",
 			result.Content, contentBuilder.String(), result.Reasoning, reasoningBuilder.String(), result.StopReason, len(result.ToolCalls))
-		log.Printf("[compaction] debug: empty summary! %s", details)
 		return "", nil, fmt.Errorf("compaction returned empty summary (%s)", details)
 	}
 	return content, result.Usage, nil

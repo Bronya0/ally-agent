@@ -271,12 +271,15 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 					{Value: "key", Label: locales.Text("私钥文件")},
 					{Value: "password", Label: locales.Text("密码")},
 				}
-				uikit.SelectField(c.Key("ssh-auth"), &d.AuthType, authOptions, a.secondaryInk()).Label(locales.Text("认证方式")).FillWidth()
+				if uikit.SelectField(c.Key("ssh-auth"), &d.AuthType, authOptions, a.secondaryInk()).Label(locales.Text("认证方式")).FillWidth().Changed() {
+					d.Password = ""
+					d.KeyPath = ""
+				}
 			})
 		})
 		switch d.AuthType {
 		case "agent":
-			fieldNote(c, locales.Text("使用本机 ~/.ssh/config、默认私钥或 SSH Agent，无需填写密码或私钥。"), a.secondaryInk())
+			fieldNote(c, locales.Text("使用本机默认私钥或 SSH Agent；不读取 ~/.ssh/config。"), a.secondaryInk())
 		case "key":
 			ui.Field(c.Key("field-ssh-key"), locales.Text("私钥路径"), func() {
 				ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {

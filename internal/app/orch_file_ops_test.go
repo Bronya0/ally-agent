@@ -343,33 +343,3 @@ func TestRemoteDeleteToolTakesPathsOnly(t *testing.T) {
 // TestDeleteAbsentSlotsRenderForModel locks the two model-facing shapes of「本来
 // 就不存在」：块里的 absent 属性与卡片标题用的短描述。顺手锁住块里是真换行 ——
 // 这些属性原本是用反引号里的 `\n` 拼的，模型看到的是字面反斜杠 n。
-func TestDeleteAbsentSlotsRenderForModel(t *testing.T) {
-	mixed := DeletePathsResult{
-		Paths: []DeleteResult{
-			{Path: "gone.txt", OK: true, Absent: true},
-			{Path: "kept.txt", OK: false, Error: "permission denied", ErrorCode: "E_IO"},
-		},
-		FailedCount: 1,
-		AbsentCount: 1,
-	}
-	block := renderDeleteResultForModel(mixed)
-	for _, want := range []string{
-		`<ally-deleted deleted="0" failed="1" absent="1">`,
-		`value="gone.txt" ok=true absent="true"`,
-		`value="kept.txt" ok=false`,
-		`error="permission denied"`,
-	} {
-		if !strings.Contains(block, want) {
-			t.Fatalf("the model block must contain %q, got %q", want, block)
-		}
-	}
-	if strings.Contains(block, `\n`) || !strings.Contains(block, "\n<path") {
-		t.Fatalf("every slot must start on a real new line, got %q", block)
-	}
-
-	// 全是空删时不给模型看「deleted」：这次调用什么都没删。
-	allAbsent := DeletePathsResult{Paths: []DeleteResult{{Path: "gone.txt", OK: true, Absent: true}}, AbsentCount: 1}
-	if got := toolResultSummary("delete", &toolResult{OK: true, Data: allAbsent}); got != "already absent" {
-		t.Fatalf("an all-absent delete must read as already absent, got %q", got)
-	}
-}

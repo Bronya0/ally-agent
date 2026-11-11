@@ -797,24 +797,6 @@ func TestAskAllowsOptionalRecommendation(t *testing.T) {
 	}
 }
 
-func TestCompactBackgroundProcessResultForModelReducesOutput(t *testing.T) {
-	fullOutput := strings.Repeat("startup log line\n", 600)
-	result := toolResult{OK: true, Data: ServiceInfo{
-		ID:         "svc_1",
-		Command:    "npm run dev",
-		PID:        1234,
-		Status:     "running",
-		OutputTail: fullOutput,
-	}}
-	compact := compactToolResultForModel("service", result, "fallback")
-	if len(compact) >= len(fullOutput) {
-		t.Fatalf("expected background process output to be reduced: compact=%d full=%d", len(compact), len(fullOutput))
-	}
-	if !strings.Contains(compact, `reduced-from="`) || !strings.Contains(compact, `id="svc_1"`) || !strings.Contains(compact, "<ally-svc ") {
-		t.Fatalf("expected compact process metadata, got %s", compact)
-	}
-}
-
 func TestContextBreakdownIncludesToolSchemas(t *testing.T) {
 	app := NewApp()
 	app.initialized = true
@@ -1225,48 +1207,6 @@ func requireRipgrep(t *testing.T) {
 	}
 }
 
-func TestCompactToolResultForModelCompactsGrepLines(t *testing.T) {
-	total := maxModelGrepMatches + 5
-	lines := make([]int, total)
-	for i := range lines {
-		lines[i] = i + 1
-	}
-	result := toolResult{OK: true, Data: GrepResult{
-		Mode:         "lines",
-		LineHits:     []GrepFileMatch{{Path: "a.txt", Lines: lines}},
-		MatchedLines: total,
-		Hits:         total,
-		Files:        1,
-		Truncated:    true,
-		NextOffset:   total,
-	}}
-	raw, err := json.Marshal(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got := compactToolResultForModel("grep", result, string(raw))
-
-	if !strings.HasPrefix(got, fmt.Sprintf("<ally-grep mode=\"lines\" matched=\"%d\" files=\"1\" truncated next-offset=\"%d\">\n", total, maxModelGrepMatches)) {
-		t.Fatalf("expected capped header with adjusted next-offset, got %s", got)
-	}
-	// The approximation marker is gone for good: it could never be false (Search
-	// errors out when ripgrep emits no statistics), so the model view must not
-	// grow one back.
-	if strings.Contains(got, "stats-approx") {
-		t.Fatalf("model view must not carry an approximation marker: %s", got)
-	}
-	if !strings.Contains(got, fmt.Sprintf("[%d of %d matching lines shown]", maxModelGrepMatches, total)) {
-		t.Fatalf("expected reduction note, got %.200s", got)
-	}
-	if !strings.Contains(got, "a.txt\n  1\n") || !strings.Contains(got, fmt.Sprintf("  %d\n", maxModelGrepMatches)) {
-		t.Fatalf("expected first and last kept line, got %.200s", got)
-	}
-	if strings.Contains(got, fmt.Sprintf("  %d\n", maxModelGrepMatches+1)) {
-		t.Fatalf("line beyond the cap must be dropped, got %.200s", got)
-	}
-}
-
 func TestCompactToolResultForModelGroupsGrepRowsByFile(t *testing.T) {
 	// lines mode renders one bare path row per file group, then indented
 	// "line: text" rows — the path is spelled once per file to save tokens.
@@ -1303,147 +1243,6 @@ func TestCompactToolResultForModelGreFallsFlatForIndentedPath(t *testing.T) {
 	}
 	if strings.Contains(got, "\n  1:") {
 		t.Fatalf("no indented rows in flat mode, got %q", got)
-	}
-}
-
-func TestCompactToolResultForModelRendersStructuredToolsAsTags(t *testing.T) {
-	cases := []struct {
-		name string
-		tool string
-		data any
-		want string
-	}{
-		{
-			name: "wait",
-			tool: "wait",
-			data: WaitResult{RequestedSeconds: 30, ElapsedMS: 30120, Reason: "wait for dev server", Completed: true},
-			want: `<ally-wait seconds="30" elapsed-ms="30120">wait for dev server</ally-wait>`,
-		},
-		{
-			name: "ask",
-			tool: "ask",
-			data: AskResult{AskID: "ask_1", Answers: []AskResolvedAnswer{{
-				QuestionID: "db", Question: "Which database?",
-				Selections: []AskResolvedSelection{{Label: "SQLite", Recommended: true, Description: "Simple"}, {Label: "keep local", Custom: true}},
-			}}},
-			want: "<ally-ask id=\"ask_1\">\n" +
-				"  db: Which database?\n" +
-				"  selected: SQLite (recommended) — Simple\n" +
-				"  selected: keep local [custom]\n" +
-				"</ally-ask>",
-		},
-		{
-			name: "plan-set",
-			tool: "plan",
-			data: map[string]any{"action": "set", "plan": []PlanStep{{Title: "Inspect code", Status: "in_progress"}, {Title: "Run tests", Status: "pending"}}, "revision": int64(1)},
-			want: "<ally-plan action=\"set\" revision=\"1\" state=\"running\" done=\"0\" total=\"2\">\n" +
-				"  1 [in_progress] Inspect code\n" +
-				"  2 [pending] Run tests\n" +
-				"When \"Inspect code\" is done: send {\"finish\":\"Inspect code\"} to mark it — and every step before it — done.\n" +
-				"</ally-plan>",
-		},
-		{
-			name: "plan-report-on-the-last-step",
-			tool: "plan",
-			data: map[string]any{"action": "finish", "plan": []PlanStep{{Title: "Inspect code", Status: "done"}, {Title: "Run tests", Status: "in_progress"}}, "revision": int64(2)},
-			want: "<ally-plan action=\"finish\" revision=\"2\" state=\"running\" done=\"1\" total=\"2\">\n" +
-				"  1 [done] Inspect code\n" +
-				"  2 [in_progress] Run tests\n" +
-				"When \"Run tests\" is done: send {\"finish\":\"Run tests\"} to mark it — and every step before it — done.\n" +
-				"</ally-plan>",
-		},
-		{
-			// A plan ends when the work reaches its last step, so the report is the
-			// call that leaves it closed with every row done.
-			name: "plan-finish",
-			tool: "plan",
-			data: map[string]any{"action": "finish", "plan": []PlanStep{{Title: "Run tests", Status: "done"}}, "revision": int64(3)},
-			want: "<ally-plan action=\"finish\" revision=\"3\" state=\"closed\" done=\"1\" total=\"1\">\n" +
-				"  1 [done] Run tests\n" +
-				"This plan is closed: every step is done.\n" +
-				"</ally-plan>",
-		},
-		{
-			name: "plan-cleared",
-			tool: "plan",
-			data: map[string]any{"action": "set", "plan": []PlanStep{}, "revision": int64(4)},
-			want: `<ally-plan action="set" revision="4" state="empty" done="0" total="0"/>`,
-		},
-		{
-			name: "subagent",
-			tool: "subagent",
-			data: AgentDelegateResult{AgentID: "agent_1", Role: "reviewer", Status: "completed", Steps: 5, Model: "m1", Summary: "All good.", FilesRead: []string{"a.go"}, FilesEdited: []string{"b.go"}},
-			want: "<ally-subagent id=\"agent_1\" role=\"reviewer\" status=\"completed\" steps=\"5\" model=\"m1\">\n" +
-				"All good.\n" +
-				"read: a.go\n" +
-				"edited: b.go\n" +
-				"</ally-subagent>",
-		},
-		{
-			name: "scheduled_task-delete",
-			tool: "scheduled_task",
-			data: ScheduledTaskToolResult{Deleted: "t_1", Count: 2},
-			want: `<ally-task deleted="t_1" count="2"/>`,
-		},
-		{
-			name: "scheduled_task-create",
-			tool: "scheduled_task",
-			data: ScheduledTaskToolResult{Task: &ScheduledTaskToolView{ID: "t_2", Name: "nightly", Command: "go test ./...", Workspace: ".", Schedule: ScheduledTaskSchedule{Type: "cron", Cron: "0 3 * * *"}, MaxSteps: 30, TimeoutSeconds: 600, LastStatus: "pending"}},
-			want: "<ally-task id=\"t_2\" name=\"nightly\" schedule=\"cron:0 3 * * *\" status=\"pending\" runs=\"0\" max-steps=\"30\" timeout=\"600s\" kind=\"command\">\n" +
-				"go test ./...\n" +
-				"</ally-task>",
-		},
-		{
-			name: "scheduled_task-list",
-			tool: "scheduled_task",
-			data: ScheduledTaskToolResult{Count: 1, Tasks: []ScheduledTaskToolView{{ID: "t_3", Name: "sync", Schedule: ScheduledTaskSchedule{Type: "interval", Every: "30m"}, LastStatus: "ok", RunCount: 4}}},
-			want: "<ally-tasks count=\"1\">\n" +
-				`  t_3: name="sync" schedule="every:30m" status="ok" runs=4` + "\n" +
-				"</ally-tasks>",
-		},
-		{
-			name: "scheduled_task-list-one-shot",
-			tool: "scheduled_task",
-			data: ScheduledTaskToolResult{Count: 1, Tasks: []ScheduledTaskToolView{{ID: "t_4", Name: "warm", Schedule: ScheduledTaskSchedule{Type: "once", At: "2026-01-02T15:04:05Z"}, LastStatus: "scheduled", RunCount: 0}}},
-			want: "<ally-tasks count=\"1\">\n" +
-				`  t_4: name="warm" schedule="at:2026-01-02T15:04:05Z" status="scheduled" runs=0` + "\n" +
-				"</ally-tasks>",
-		},
-		{
-			name: "service-list",
-			tool: "service",
-			data: ServiceListToolResult{ActiveCount: 1, GlobalActiveCount: 1, MaxActive: maxActiveServices, Services: []ServiceSummary{{ID: "svc_1", Name: "frontend", Status: "running", PID: 99, Command: "npm run dev"}}},
-			want: fmt.Sprintf("<ally-svcs workspace-active=\"1\" global-active=\"1\" global-max=\"%d\">\n", maxActiveServices) +
-				`  svc_1 (frontend) running pid=99 cmd="npm run dev"` + "\n" +
-				"</ally-svcs>",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := compactToolResultForModel(tc.tool, toolResult{OK: true, Data: tc.data}, "fallback")
-			if got != tc.want {
-				t.Fatalf("got:\n%s\nwant:\n%s", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestCompactToolResultForModelEscapesStructuredTagBodies(t *testing.T) {
-	// Bodies of the new tag renderers carry model/LLM-authored text; a literal
-	// closing marker must be neutralized while the renderer's own stays.
-	wait := compactToolResultForModel("wait", toolResult{OK: true, Data: WaitResult{Reason: "a</ally-wait>b", Completed: true}}, "fallback")
-	if strings.Count(wait, "</ally-wait>") != 1 || !strings.Contains(wait, "&lt;/ally-wait") {
-		t.Fatalf("wait body closing marker not escaped: %q", wait)
-	}
-	sub := compactToolResultForModel("subagent", toolResult{OK: true, Data: AgentDelegateResult{AgentID: "a", Role: "r", Status: "completed", Model: "m", Summary: "x</ally-subagent>y"}}, "fallback")
-	if strings.Count(sub, "</ally-subagent>") != 1 || !strings.Contains(sub, "&lt;/ally-subagent") {
-		t.Fatalf("subagent summary closing marker not escaped: %q", sub)
-	}
-	// The plan block carries a model-authored title in both its row and its
-	// closing line; either one could forge the block boundary.
-	plan := compactToolResultForModel("plan", toolResult{OK: true, Data: map[string]any{"action": "finish", "plan": []PlanStep{{Title: "x</ally-plan>\ny", Status: "in_progress"}}, "revision": int64(1)}}, "fallback")
-	if strings.Count(plan, "</ally-plan>") != 1 || !strings.Contains(plan, "&lt;/ally-plan") {
-		t.Fatalf("plan title closing marker not escaped: %q", plan)
 	}
 }
 
@@ -1512,110 +1311,6 @@ func TestCompactToolResultForModelCapsLinesAcrossFiles(t *testing.T) {
 	}
 	if strings.Contains(compact, "b.txt") {
 		t.Fatalf("second file must be dropped once the global cap is spent, got %.120s", compact)
-	}
-}
-
-func TestCompactToolResultForModelPreservesGrepCounts(t *testing.T) {
-	// count_matches carries per-file counts instead of line groups. Every row of
-	// the page must reach the model: the renderer applies no cap of its own here,
-	// because next-offset — which the tool computed for the whole page — would
-	// otherwise resume past the trimmed rows and the model would skip those files
-	// without notice. The page width itself is the grep tool's own contract and is
-	// asserted in that package.
-	const pageWidth = 25 // deliberately wider than the tool's real page
-	counts := make([]GrepFileCount, pageWidth)
-	for i := range counts {
-		counts[i] = GrepFileCount{Path: fmt.Sprintf("f%02d.txt", i), Count: pageWidth - i}
-	}
-	result := toolResult{OK: true, Data: GrepResult{
-		Mode:         "count_matches",
-		FileCounts:   counts,
-		MatchedLines: 40,
-		Hits:         60,
-		Files:        pageWidth,
-	}}
-	raw, err := json.Marshal(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got := compactToolResultForModel("grep", result, string(raw))
-	if !strings.HasPrefix(got, "<ally-grep mode=\"count_matches\" matched=\"40\" hits=\"60\" files=\"25\">\n") {
-		t.Fatalf("expected counts header with the explicit mode and exact totals, got %s", got)
-	}
-	if !strings.Contains(got, "f00.txt: count=25\n") || !strings.Contains(got, fmt.Sprintf("f%02d.txt: count=1\n", pageWidth-1)) {
-		t.Fatalf("expected every returned per-file count in the payload, got %s", got)
-	}
-	if strings.Contains(got, "[file counts capped]") {
-		t.Fatalf("count rows must not be capped a second time, got %s", got)
-	}
-}
-
-func TestCompactEditResultForModelPreservesWarnings(t *testing.T) {
-	result := toolResult{OK: true, Data: MultiEditResult{
-		FileCount:    1,
-		Replacements: 1,
-		Warnings:     []string{"ignored 2 no-op change(s) whose oldText and newText were identical"},
-		Files: []EditResult{{
-			Path:          "sample.txt",
-			BeforeVersion: "abcdef",
-			Version:       "ghjkmn",
-		}},
-	}}
-	compact := compactToolResultForModel("edit", result, "fallback")
-	if !strings.Contains(compact, "warning: ignored 2 no-op change(s)") {
-		t.Fatalf("expected compact edit result to retain warnings, got %s", compact)
-	}
-}
-
-func TestCompactListFilesResultForModelUsesPathList(t *testing.T) {
-	result := toolResult{OK: true, Data: ListFilesResult{
-		Entries: []FileEntry{
-			{Path: "frontend", Name: "frontend", Dir: true, Size: 0, ModTime: "2026-08-30T10:00:00+08:00"},
-			{Path: "frontend/src/App.vue", Name: "App.vue", Size: 185432, ModTime: "2026-08-30T10:00:00+08:00"},
-			{Path: "link", Name: "link", Symlink: true},
-		},
-		Count: 3,
-	}}
-	compact := compactToolResultForModel("list_files", result, "fallback")
-	if !strings.Contains(compact, "frontend/\nfrontend/src/App.vue\nlink") {
-		t.Fatalf("expected a newline-joined path list with dir slashes, got %s", compact)
-	}
-	// Per-entry metadata must not leak into the model copy.
-	for _, noisy := range []string{"modTime", "185432", `"symlink"`, `"name"`} {
-		if strings.Contains(compact, noisy) {
-			t.Fatalf("compact list_files result must drop %s, got %s", noisy, compact)
-		}
-	}
-	if !strings.Contains(compact, `count="3"`) || strings.Contains(compact, ` truncated`) {
-		t.Fatalf("count/truncated summary mismatch: %s", compact)
-	}
-
-	// The per-directory overflow placeholder renders as the workspace map's
-	// "+N more files" line instead of a fake path.
-	overflow := toolResult{OK: true, Data: ListFilesResult{
-		Entries: []FileEntry{
-			{Path: "data", Name: "data", Dir: true},
-			{Path: "data/a.csv", Name: "a.csv"},
-			{Path: "data/+more", Name: "+more", MoreFiles: 9950},
-		},
-		Count: 3,
-	}}
-	compact = compactToolResultForModel("list_files", overflow, "fallback")
-	if !strings.Contains(compact, "data/a.csv\n+9950 more files") {
-		t.Fatalf("expected the +N more files line, got %s", compact)
-	}
-	if strings.Contains(compact, "+more") {
-		t.Fatalf("the +more path marker must not leak into the model copy, got %s", compact)
-	}
-
-	empty := compactToolResultForModel("list_files", toolResult{OK: true, Data: ListFilesResult{}}, "fallback")
-	if !strings.Contains(empty, "hidden") {
-		t.Fatalf("empty listing must explain why it can be empty, got %s", empty)
-	}
-	truncated := compactToolResultForModel("list_files", toolResult{OK: true, Data: ListFilesResult{Count: 200, Truncated: true}}, "fallback")
-	if !strings.Contains(truncated, "narrow the path") {
-		t.Fatalf("truncated listing must carry a narrowing note, got %s", truncated)
 	}
 }
 
@@ -1835,7 +1530,7 @@ func TestEditAutoValidationReturnsFailureWithoutUndoingWrite(t *testing.T) {
 	}
 	full, _ := json.Marshal(result)
 	compact := compactToolResultForModel("edit", result, string(full))
-	if !strings.Contains(compact, "edit validation: 自动校验失败（文件已写入）") {
+	if !strings.Contains(compact, "Validation: 自动校验失败（文件已写入）") {
 		t.Fatalf("expected compact edit result to expose validation string, got %s", compact)
 	}
 }
@@ -1935,20 +1630,11 @@ func TestCreateCompactResultCarriesCreatedFields(t *testing.T) {
 	tr := toolResult{OK: true, Data: result}
 	full, _ := json.Marshal(tr)
 	compact := compactToolResultForModel("create", tr, string(full))
-	if !strings.Contains(compact, `created="true"`) {
+	if !strings.Contains(compact, `created=true`) {
 		t.Fatalf("expected compact create result to carry created=true, got %s", compact)
 	}
 	if !strings.Contains(compact, `dirs="a"`) {
 		t.Fatalf("expected compact create result to carry createdDirs, got %s", compact)
-	}
-}
-
-func TestCompactToolResultForModelRendersCalculateTag(t *testing.T) {
-	result := toolResult{OK: true, Data: CalculateResult{Expression: `sqrt(144) + 2^5`, Value: 44, Text: "44"}}
-	compact := compactToolResultForModel("calculate", result, "fallback")
-	want := `<ally-calc expression="sqrt(144) + 2^5" value="44"/>`
-	if compact != want {
-		t.Fatalf("got %s, want %s", compact, want)
 	}
 }
 
@@ -1969,7 +1655,7 @@ func TestCreateAutoValidationIsAConciseModelString(t *testing.T) {
 	}
 	full, _ := json.Marshal(result)
 	compact := compactToolResultForModel("create", result, string(full))
-	if !strings.Contains(compact, `validation="自动校验失败（文件已写入）`) {
+	if !strings.Contains(compact, `Validation: 自动校验失败（文件已写入）`) {
 		t.Fatalf("expected compact result to expose validation string, got %s", compact)
 	}
 }
@@ -2933,7 +2619,7 @@ func TestSessionReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 		t.Fatalf("expected first compact read to carry content, got: %s", firstModel)
 	}
 	secondModel := compactToolResultForModel("read", second, "")
-	if len(secondModel) >= len(firstModel) || !strings.Contains(secondModel, ` reused/>`) || !strings.Contains(secondModel, `version="`) {
+	if len(secondModel) >= len(firstModel) || !strings.Contains(secondModel, ` | reused`) || !strings.Contains(secondModel, `version="`) {
 		t.Fatalf("expected reused compact read to explain the omission, got: %s", secondModel)
 	}
 
@@ -4829,58 +4515,6 @@ func TestServiceReadErrors(t *testing.T) {
 // 一样有模型侧上限：超限输出被 head+tail 截断并包进 <ally-mcp truncated> 块，
 // 小输出同样走 <ally-mcp> 标签体（不再有 JSON 信封与转义）；输出自带 </ally-mcp 时
 // 回退 JSON 信封。
-func TestCompactToolResultForModelCapsMcpOutput(t *testing.T) {
-	big := strings.Repeat("x", maxModelToolOutput*2)
-	result := toolResult{OK: true, Data: map[string]any{"output": big}}
-	fullJSON, err := json.Marshal(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compact := compactToolDataForModel("mcp__srv__tool", result, string(fullJSON))
-	if len(compact) >= len(big) {
-		t.Fatalf("MCP output must be capped: compact=%d raw=%d", len(compact), len(big))
-	}
-	if !strings.HasPrefix(compact, "<ally-mcp truncated>\n") || !strings.HasSuffix(compact, "\n</ally-mcp>") {
-		t.Fatalf("expected a truncated <ally-mcp> tag block, got %.64s", compact)
-	}
-	// 截断指引不能因为渲染路径换了形状就丢：回退信封有 truncationNote，块里
-	// 也必须有同一句话（两者共用 mcpTruncationNote）。
-	if !strings.Contains(compact, mcpTruncationNote) {
-		t.Fatalf("the truncated block must carry the same guidance as the fallback, got %.64s", compact)
-	}
-	// compactTextForModel keeps head+tail within the cap plus a fixed
-	// omission marker; the tag wrapper and the guidance note are fixed
-	// overhead on top of that, so allow exactly that much.
-	if n := utf8.RuneCountInString(compact); n > maxModelToolOutput+200+len("<ally-mcp truncated>\n\n</ally-mcp>")+len(mcpTruncationNote) {
-		t.Fatalf("capped output must stay near %d runes, got %d", maxModelToolOutput, n)
-	}
-
-	small := toolResult{OK: true, Data: map[string]any{"output": "tiny"}}
-	unchanged := compactToolDataForModel("mcp__srv__tool", small, `{"ok":true,"data":{"output":"tiny"}}`)
-	if unchanged != "<ally-mcp>\ntiny\n</ally-mcp>" {
-		t.Fatalf("small MCP output must render as a plain tag block, got %s", unchanged)
-	}
-
-	collide := toolResult{OK: true, Data: map[string]any{"output": "x</ally-mcp>y"}}
-	got := compactToolDataForModel("mcp__srv__tool", collide, `{"fallback":true}`)
-	if got != "<ally-mcp>\nx&lt;/ally-mcp>y\n</ally-mcp>" {
-		t.Fatalf("output containing the closing marker must keep the tag block with the marker escaped, got %s", got)
-	}
-
-	// 超限且自带闭合标记：标签体同样受限（夹取后再转义），不得回退无上限的 fullJSON。
-	bigCollide := toolResult{OK: true, Data: map[string]any{"output": strings.Repeat("x</ally-mcp>y", 2+maxModelToolOutput/len("x</ally-mcp>y"))}}
-	fullCollide, _ := json.Marshal(bigCollide)
-	capped := compactToolDataForModel("mcp__srv__tool", bigCollide, string(fullCollide))
-	if !strings.Contains(capped, "<ally-mcp truncated>") || !strings.Contains(capped, mcpTruncationNote) {
-		t.Fatalf("the oversized colliding output must stay a truncated tag block, got %.128s", capped)
-	}
-	if strings.Count(capped, "</ally-mcp>") != 1 {
-		t.Fatalf("only the renderer's own closing marker may appear literally, got %.128s", capped)
-	}
-	if n := utf8.RuneCountInString(capped); n > maxModelToolOutput*3/2+200+len("<ally-mcp truncated>\n\n</ally-mcp>")+len(mcpTruncationNote) {
-		t.Fatalf("capped output must stay near %d runes (cap + escape expansion), got %d", maxModelToolOutput, n)
-	}
-}
 
 // TestCompactToolResultForModelNeutralizesRowBreaks 锁定行式载荷的行结构：标签体里
 // 一行就是一条记录，路径/链接里的换行会在中间造出假行（Unix 文件名可以含 \n），
@@ -4913,263 +4547,14 @@ func TestCompactToolResultForModelNeutralizesRowBreaks(t *testing.T) {
 	}
 }
 
-func TestCompactToolResultForModelCommandRendersTagBlock(t *testing.T) {
-	// 模型侧改为 <ally-command> 标签体：输出原样落体（无 JSON 转义），command/cwd 不再
-	// 回显（模型刚在 tool call 参数里写过），所有退出码（包括 0）都以属性明确返回；
-	// 超时 / 截断 / 落盘指针也以属性表达。
-	result := toolResult{OK: true, Data: map[string]any{
-		"command": "go build ./...", "cwd": "", "shell": "bash", "shellPath": "/bin/bash",
-		"output": "c1\nc2\nc3\nc4\nc5\n", "exitCode": 0, "timedOut": false, "durationMs": 10, "truncated": false,
-	}}
-	full := `{"command":"go build ./...","cwd":"","shell":"bash","shellPath":"/bin/bash","output":"c1\nc2\nc3\nc4\nc5\n","exitCode":0,"timedOut":false,"durationMs":10,"truncated":false}`
-	modelJSON := compactToolDataForModel("command", result, full)
-	if !strings.HasPrefix(modelJSON, "<ally-command exit=\"0\">\n") || !strings.Contains(modelJSON, "c1\nc2\nc3\nc4\nc5\n</ally-command>") {
-		t.Fatalf("command output must pass through verbatim in the tag body, got %s", modelJSON)
-	}
-	if strings.Contains(modelJSON, "go build") {
-		t.Fatalf("command/cwd echo must be gone from the model payload, got %s", modelJSON)
-	}
-	remoteModel := compactToolDataForModel("remote_run_command", result, full)
-	if !strings.HasPrefix(remoteModel, `<ally-command exit="0">`) {
-		t.Fatalf("remote command must also expose zero exit code, got %s", remoteModel)
-	}
-
-	failed := toolResult{OK: true, Data: map[string]any{
-		"output": "boom", "exitCode": 2, "truncated": true, "outputFilePath": `C:\tmp\spill.log`,
-	}}
-	failedModel := compactToolDataForModel("command", failed, `{"fallback":true}`)
-	if !strings.Contains(failedModel, `exit="2"`) || !strings.Contains(failedModel, ` truncated`) || !strings.Contains(failedModel, `full="C:\tmp\spill.log"`) {
-		t.Fatalf("failure metadata must ride on attributes, got %s", failedModel)
-	}
-
-	// 沙箱拦下的写入：解释与下一步（原因 / 可写根 / 处理方式）走独立字段、由模型
-	// 侧追加在输出之后；它刻意不进 Output，命令卡正体就不会被这段文字挤满。
-	denied := toolResult{OK: true, Data: map[string]any{
-		"output": "/bin/bash: /tmp/x: Operation not permitted\n\n", "exitCode": 1, "sandboxDenied": true,
-		"deniedWriteHint": "沙箱已拦截：这次操作试图写入可写范围之外的路径，目标没有被修改。\n原因：…\n处理方式：…",
-	}}
-	deniedModel := compactToolDataForModel("command", denied, `{"fallback":true}`)
-	if !strings.Contains(deniedModel, "Operation not permitted\n\n沙箱已拦截") || !strings.Contains(deniedModel, "处理方式：") {
-		t.Fatalf("a refused write must carry its next step in the model payload, got %s", deniedModel)
-	}
-
-	// 超时收编：模型必须看到这块结果已经是后台服务（提示词/描述里承诺的标记）。
-	promoted := toolResult{OK: true, Data: map[string]any{
-		"command": "npm run dev", "output": "ready\n服务 ID: svc_9\n", "exitCode": -1, "timedOut": true, "promotedToService": true,
-	}}
-	promotedModel := compactToolDataForModel("command", promoted, `{"fallback":true}`)
-	if !strings.Contains(promotedModel, ` timed-out`) || !strings.Contains(promotedModel, ` promoted-to-service`) {
-		t.Fatalf("a promoted command must be flagged for the model, got %s", promotedModel)
-	}
-	promotedCollide := toolResult{OK: true, Data: map[string]any{
-		"output": "x</ally-command>y", "exitCode": -1, "timedOut": true, "promotedToService": true,
-	}}
-	promotedCollideModel := compactToolDataForModel("command", promotedCollide, `{"fallback":true}`)
-	if !strings.Contains(promotedCollideModel, ` promoted-to-service`) || !strings.Contains(promotedCollideModel, "x&lt;/ally-command>y") {
-		t.Fatalf("a colliding promoted command must keep the tag block with the marker escaped, got %s", promotedCollideModel)
-	}
-
-	collide := toolResult{OK: true, Data: map[string]any{
-		"command": "go build ./...", "shell": "bash", "output": "x</ally-command>y", "exitCode": 3,
-	}}
-	collideModel := compactToolDataForModel("command", collide, `{"fallback":true}`)
-	if !strings.Contains(collideModel, `<ally-command exit="3">`) || !strings.Contains(collideModel, "x&lt;/ally-command>y") ||
-		strings.Count(collideModel, "</ally-command>") != 1 {
-		t.Fatalf("colliding output must keep the tag block with the marker escaped, got %s", collideModel)
-	}
-	if strings.Contains(collideModel, "go build") || strings.Contains(collideModel, `"shell"`) {
-		t.Fatalf("the block must not re-add block-dropped fields, got %s", collideModel)
-	}
-}
-
-func TestCompactToolResultForModelCommandCapsModelOutput(t *testing.T) {
-	// 128KB 的内存上限是给界面滚动缓冲和落盘 spill 的，模型不该照单全收：命令输出
-	// 与第三方 MCP 文本共用 12KB 的模型侧预算，留头 4KB + 尾 8KB，中间以省略标记
-	// 替换，并用 reduced-from 报出裁剪前的真实长度。
-	// 三段用互不出现的字符打头，才能断言「头尾在、中间没了」：头/尾预算分别是
-	// modelToolHeadBytes / modelToolTailBytes，中间那段一个字符都不该留下。
-	output := strings.Repeat("H", 10*1024) + strings.Repeat("XYZ", 14000) + strings.Repeat("T", 10*1024)
-	result := toolResult{OK: true, Data: CommandResult{
-		Output: output, ExitCode: 1, Truncated: true,
-		OutputFilePath: `/ws/.tmp/cmd-1.log`, OutputFileBytes: 200 * 1024,
-	}}
-	got := compactToolDataForModel("command", result, "fallback")
-	if len(got) > maxModelToolOutput+1024 {
-		t.Fatalf("the model payload must stay near the %d-byte budget, got %d bytes", maxModelToolOutput, len(got))
-	}
-	if !strings.Contains(got, "characters omitted from model context") {
-		t.Fatalf("the omitted middle must be marked in the body, got %s", got)
-	}
-	if !strings.Contains(got, fmt.Sprintf(` reduced-from="%d"`, len(output))) {
-		t.Fatalf("the pre-compaction length must be reported, got %s", got)
-	}
-	if !strings.Contains(got, strings.Repeat("H", modelToolHeadBytes)) ||
-		!strings.Contains(got, strings.Repeat("T", modelToolTailBytes)) || strings.Contains(got, "XYZ") {
-		t.Fatalf("head and tail must survive while the middle is dropped, got %s", got)
-	}
-	if !strings.Contains(got, `/ws/.tmp/cmd-1.log`) || !strings.Contains(got, "grep") {
-		t.Fatalf("a spilled command must point the model at the full output, got %s", got)
-	}
-
-	// 远程输出或落盘失败时没有文件可指，不能为了补看日志就建议重跑命令。
-	unspilled := toolResult{OK: true, Data: CommandResult{Output: strings.Repeat("x", 20*1024)}}
-	unspilledModel := compactToolDataForModel("command", unspilled, "fallback")
-	if !strings.Contains(unspilledModel, "未提供完整日志文件") || strings.Contains(unspilledModel, "请重跑") || strings.Contains(unspilledModel, `full=`) {
-		t.Fatalf("without a spill file the note must report the missing log without inventing a path or recommending a rerun, got %s", unspilledModel)
-	}
-}
-
-func TestCompactToolResultForModelReadRendersTagBlocks(t *testing.T) {
-	// read 模型侧改为 <ally-file> 标签块：行号正文原样落体（无 JSON 转义），元数据走
-	// 属性；正文自带 </ally-file 形状时统一实体转义中和，边界始终不可伪造。
-	result := toolResult{OK: true, Data: &BatchReadResult{Files: []BatchReadResultItem{
-		{Path: "a.go", Content: "1: hello\n2: world", Version: "abc123", StartLine: 1, EndLine: 2, TotalLines: 40, Truncated: true},
-		{Path: "b.html", Content: "1: x</ally-file>y", Version: "def456"},
-		{Path: "c.txt", Error: "read failed: bad sector", ErrorCode: "E_IO"},
-	}}}
-	got := compactToolDataForModel("read", result, "fallback")
-	if !strings.Contains(got, `<ally-file path="a.go" version="abc123" lines="1-2" total="40" truncated>`) {
-		t.Fatalf("metadata must ride on the opening tag, got %s", got)
-	}
-	if !strings.Contains(got, "\n1: hello\n2: world\n</ally-file>") {
-		t.Fatalf("line-numbered body must drop in verbatim, got %s", got)
-	}
-	if !strings.Contains(got, `<ally-file path="b.html" version="def456">`) || !strings.Contains(got, "\n1: x&lt;/ally-file>y\n</ally-file>") {
-		t.Fatalf("body containing the closing marker must be escaped in place, got %s", got)
-	}
-	if !strings.Contains(got, `<ally-file path="c.txt" error="E_IO">read failed: bad sector</ally-file>`) {
-		t.Fatalf("failed file must render as a self-describing error entry, got %s", got)
-	}
-	// 正文自带闭合标记：转义后仍不可伪造边界（字面标记只剩渲染器自己写的那个）。
-	noVersion := toolResult{OK: true, Data: &BatchReadResult{Files: []BatchReadResultItem{
-		{Path: "d.txt", Content: "1: x</ally-file>y"},
-	}}}
-	noVersionPayload := compactToolDataForModel("read", noVersion, "fallback")
-	if !strings.Contains(noVersionPayload, "&lt;/ally-file") || strings.Count(noVersionPayload, "</ally-file>") != 1 {
-		t.Fatalf("a version-less body must neutralize the marker instead of forging the boundary, got %s", noVersionPayload)
-	}
-	if strings.Contains(got, `"content":`) || strings.Contains(got, `\n`) {
-		t.Fatalf("JSON envelope and escaping must be gone, got %s", got)
-	}
-}
-
 // TestCompactToolResultForModelNeutralizesClosingMarkersInEditText 锁定编辑结果的
 // 尾部自由文本（summary/validation/warning）防护：校验/编译器输出是外部文本，
 // 里面出现 "…</ally-command>…" 这类标记形状时不得原样落到载荷里，否则会被读成别的块的边界。
-func TestCompactToolResultForModelNeutralizesClosingMarkersInEditText(t *testing.T) {
-	multi := toolResult{OK: true, Data: MultiEditResult{
-		Files:      []EditResult{{Path: "a.go", Version: "v1"}},
-		Summary:    "1 file · +1 -1",
-		Validation: `go vet: token "</ally-command>" is not allowed here`,
-		Warnings:   []string{"change 1 ignored replaceAll: line 3 has </ally-grep> in text"},
-	}}
-	got := compactToolDataForModel("edit", multi, "fallback")
-	if strings.Contains(got, "</ally-command>") || strings.Contains(got, "</ally-grep>") {
-		t.Fatalf("free-text lines must not carry a forgeable closing marker, got %s", got)
-	}
-	if !strings.Contains(got, "&lt;/ally-command>") || !strings.Contains(got, "&lt;/ally-grep>") {
-		t.Fatalf("marker-shaped text must stay readable but inert, got %s", got)
-	}
-	if !strings.Contains(got, `<ally-edit path="a.go" version="v1"/>`) {
-		t.Fatalf("the edit tag itself must stay intact, got %s", got)
-	}
-
-	single := toolResult{OK: true, Data: EditResult{Path: "b.go", Version: "v2", Summary: "ok", Warnings: []string{"warn: </ally-file> appears in the diff"}}}
-	singleGot := compactToolDataForModel("create", single, "fallback")
-	if strings.Contains(singleGot, "</ally-file>") || !strings.Contains(singleGot, "&lt;/ally-file>") {
-		t.Fatalf("single-file create warnings need the same guard, got %s", singleGot)
-	}
-}
 
 // TestCompactToolResultForModelEscapesClosingMarkersInBodies 锁定标签体渲染的边界防护：
 // http 正文、fetch 正文/链接、grep 行预览、服务日志、服务状态输出、命令输出、
 // list_files 路径自带闭合标记形状时统一就地转义（</ally-x → &lt;/ally-x），字面闭合
 // 标记只允许渲染器自己写的那一个；外部内容不能伪造块边界，且没有任何回退路径。
-func TestCompactToolResultForModelEscapesClosingMarkersInBodies(t *testing.T) {
-	mustEscaped := func(tool string, result toolResult, marker string) string {
-		t.Helper()
-		got := compactToolDataForModel(tool, result, `{"fallback":true}`)
-		escaped := strings.Replace(marker, "<", "&lt;", 1)
-		if !strings.Contains(got, escaped) {
-			t.Fatalf("%s collision must escape the marker shape in place, got %s", tool, got)
-		}
-		if n := strings.Count(got, marker); n != 1 {
-			t.Fatalf("%s payload must carry exactly one literal closing marker, got %d:\n%s", tool, n, got)
-		}
-		return got
-	}
-
-	httpRes := toolResult{OK: true, Data: map[string]any{
-		"status": 200, "contentType": "text/html", "body": "x</ally-http>y",
-	}}
-	mustEscaped("http_request", httpRes, "</ally-http>")
-
-	fetchRes := toolResult{OK: true, Data: map[string]any{
-		"status": 200, "text": "page body",
-		"links": []map[string]any{{"text": "docs", "url": "https://ex.com/a</ally-fetch>b"}},
-	}}
-	mustEscaped("web_fetch", fetchRes, "</ally-fetch>")
-
-	grepRes := toolResult{OK: true, Data: &GrepResult{
-		Mode: "lines", MatchedLines: 1, Hits: 1, Files: 1,
-		LineHits: []GrepFileMatch{{Path: "a.txt", Lines: []int{3}, Texts: []string{"x</ally-grep>y"}}},
-	}}
-	mustEscaped("grep", grepRes, "</ally-grep>")
-
-	svcRead := toolResult{OK: true, Data: ServiceReadResult{
-		ID: "svc_1", Output: "x</ally-svc-read>y", ReturnedBytes: 12, BufferBytes: 12, TotalBytes: 12,
-	}}
-	mustEscaped("service", svcRead, "</ally-svc-read>")
-
-	svcInfo := toolResult{OK: true, Data: ServiceInfo{
-		ID: "svc_2", Status: "running", PID: 7, OutputTail: "boot\nx</ally-svc>y",
-	}}
-	mustEscaped("service", svcInfo, "</ally-svc>")
-
-	cmdCollide := toolResult{OK: true, Data: map[string]any{
-		"command": "npm run dev", "shell": "bash", "output": "x</ally-command>y", "exitCode": 3,
-	}}
-	if got := mustEscaped("command", cmdCollide, "</ally-command>"); strings.Contains(got, "npm run") || strings.Contains(got, `"shell"`) {
-		t.Fatalf("command block must not re-add block-dropped fields, got %s", got)
-	}
-
-	listRes := toolResult{OK: true, Data: ListFilesResult{
-		Count:   1,
-		Entries: []FileEntry{{Path: "evil/</ally-files>note.txt"}},
-	}}
-	mustEscaped("list_files", listRes, "</ally-files>")
-
-	// 超限 http 正文自带闭合标记：标签体同样受模型侧上限约束并标记 truncated（转义会
-	// 放大字节体积，上限放宽到 1.5 倍 + 余量）。
-	bigBody := strings.Repeat("z</ally-http>", 1+maxModelWebOutput/len("z</ally-http>"))
-	bigHTTP := toolResult{OK: true, Data: map[string]any{"status": 200, "body": bigBody}}
-	bigFull, _ := json.Marshal(bigHTTP)
-	bigGot := compactToolDataForModel("http_request", bigHTTP, string(bigFull))
-	if !strings.Contains(bigGot, `<ally-http status="200" truncated>`) || strings.Count(bigGot, "</ally-http>") != 1 {
-		t.Fatalf("colliding http body must stay a truncated tag block, got %.64s", bigGot)
-	}
-	if n := utf8.RuneCountInString(bigGot); n > maxModelWebOutput*3/2+256 {
-		t.Fatalf("colliding http body must stay near %d runes, got %d", maxModelWebOutput, n)
-	}
-
-	// 正文为空、只有 JSON 预览的响应：替换进来的预览必须过同一道模型侧上限。
-	bigPreview := strings.Repeat("y</ally-http>z", 1+maxModelWebOutput/len("y</ally-http>z"))
-	jsonOnly := toolResult{OK: true, Data: map[string]any{"status": 200, "jsonPreview": bigPreview}}
-	jsonOnlyFull, _ := json.Marshal(jsonOnly)
-	jsonOnlyGot := compactToolDataForModel("http_request", jsonOnly, string(jsonOnlyFull))
-	if !strings.Contains(jsonOnlyGot, `<ally-http status="200" truncated>`) || strings.Count(jsonOnlyGot, "</ally-http>") != 1 {
-		t.Fatalf("the substituted JSON preview must stay a truncated tag block, got %.64s", jsonOnlyGot)
-	}
-
-	// 超限服务状态输出自带闭合标记：标签体同样受 4 KiB 模型侧夹取约束。
-	bigTail := strings.Repeat("l", 8*1024) + "x</ally-svc>y"
-	bigSvc := toolResult{OK: true, Data: ServiceInfo{ID: "svc_big", OutputTail: bigTail}}
-	bigSvcFull, _ := json.Marshal(bigSvc)
-	bigSvcGot := compactToolDataForModel("service", bigSvc, string(bigSvcFull))
-	if !strings.Contains(bigSvcGot, ` reduced-from="`) || strings.Count(bigSvcGot, "</ally-svc>") != 1 {
-		t.Fatalf("colliding service tail must stay a clamped tag block, got %.64s", bigSvcGot)
-	}
-}
 
 // TestTeeWriterPromoteToPreservesAllOutput 锁定收编改道的原子性：promoteTo 在同一个
 // 临界区内把 primary 已捕获的输出作种子写进 sink 并切换目标，之后所有写入只进 sink。

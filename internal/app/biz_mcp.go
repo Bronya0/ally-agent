@@ -8,6 +8,7 @@
 package app
 
 import (
+	"ally-dev/internal/tools/schemautil"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -2114,7 +2115,7 @@ func builtinToolsForConfig(cfg ConfigState) []openai.Tool {
 
 // buildToolsForConfig is the live set for stateless callers and new sessions.
 func (a *App) buildToolsForConfig(cfg ConfigState) []openai.Tool {
-	return a.buildToolsWithMcp(builtinToolsForConfig(cfg))
+	return withToolPurposes(a.buildToolsWithMcp(builtinToolsForConfig(cfg)))
 }
 
 type builtinToolAvailabilityKey struct{}
@@ -2123,11 +2124,19 @@ type builtinToolAvailabilityKey struct{}
 // runs. Later settings changes cannot change an existing conversation's tools.
 func withBuiltinToolAvailability(ctx context.Context, tools []openai.Tool) context.Context {
 	enabled := make(map[string]bool, len(tools))
+	purposes := make(map[string]string, len(tools))
 	for _, tool := range tools {
 		if tool.Function != nil {
-			enabled[normalizeToolName(tool.Function.Name)] = true
+			name := normalizeToolName(tool.Function.Name)
+			enabled[name] = true
+			if schema, ok := tool.Function.Parameters.(map[string]any); ok {
+				if field, ok := schema[schemautil.PurposeFieldKey].(string); ok {
+					purposes[name] = field
+				}
+			}
 		}
 	}
+	ctx = context.WithValue(ctx, toolPurposeContextKey{}, purposes)
 	return context.WithValue(ctx, builtinToolAvailabilityKey{}, enabled)
 }
 

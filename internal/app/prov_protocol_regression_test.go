@@ -586,6 +586,7 @@ func TestProtectedHistoryOmitsImagesAndTransientToolResults(t *testing.T) {
 		{Role: "tool", ToolCallID: call.ID, Content: "real private tool evidence"},
 	}
 	a.captureResponsesOutput(cfg, cfg.Model, history[:1], &modelStreamResult{StopReason: "stop", ToolCalls: []openai.ToolCall{call}, responsesOutput: []json.RawMessage{json.RawMessage(`{"type":"function_call","id":"fc_image","call_id":"call_image","name":"read","arguments":"{}"}`)}})
+	a.reasoningStash.recordToolStatus(openAIResponsesPromptCacheKey("protocol-session"), history[2], toolResult{OK: false})
 	disk := sanitizeHistoryMessagesForDisk(history)
 	raw, err := json.Marshal(a.modelHistoryForStorage("protocol-session", disk, history))
 	if err != nil {
@@ -597,6 +598,11 @@ func TestProtectedHistoryOmitsImagesAndTransientToolResults(t *testing.T) {
 	restored, publish := a.modelHistoryFromStorage("protocol-session", raw, disk)
 	if publish == nil || len(restored) != 3 || restored[2].Content != toolResultPlaceholder || restored[2].ToolCallID != call.ID {
 		t.Fatal("tool pairing/replay lost or transient output persisted")
+	}
+	a.reasoningStash.clearSession("protocol-session")
+	publish()
+	if !a.reasoningStash.toolStatuses(openAIResponsesPromptCacheKey("protocol-session"))[toolStatusIdentity(restored[2])] {
+		t.Fatal("tool failure status was lost alongside protected replay state")
 	}
 	if len(restored[0].MultiContent) != 0 || !strings.Contains(restored[0].Content, "image attachment(s) omitted") {
 		t.Fatal("image payload persisted")

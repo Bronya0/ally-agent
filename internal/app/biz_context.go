@@ -8,9 +8,11 @@
 package app
 
 import (
+	"ally-dev/internal/tools/schemautil"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"path/filepath"
 	goruntime "runtime"
@@ -278,6 +280,33 @@ var builtinToolSchemaTokens = sync.OnceValue(func() int {
 	return estimateTokensFromText(string(data))
 })
 
+// The common purpose property is part of the model-visible schema. Retain a
+// separate static estimate so legacy snapshots keep their original accounting.
+var builtinPurposeToolSchemaTokens = sync.OnceValue(func() int {
+	return estimateModelToolSchemas(withToolPurposes(chatTools()))
+})
+
+func estimateModelToolSchemas(tools []openai.Tool) int {
+	projected := make([]openai.Tool, len(tools))
+	copy(projected, tools)
+	for i := range projected {
+		if projected[i].Function == nil {
+			continue
+		}
+		schema, ok := projected[i].Function.Parameters.(map[string]any)
+		if !ok || schema[schemautil.PurposeFieldKey] == nil {
+			continue
+		}
+		fn := *projected[i].Function
+		params := maps.Clone(schema)
+		delete(params, schemautil.PurposeFieldKey)
+		fn.Parameters = params
+		projected[i].Function = &fn
+	}
+	data, _ := json.Marshal(projected)
+	return estimateTokensFromText(string(data))
+}
+
 // mcpToolSchemaTokens re-marshals the MCP tool schemas portion of `tools`.
 // `tools` is expected to be a slice returned by buildToolsWithMcp; only the
 // entries whose Function.Name starts with `mcp__` are counted, so the cached
@@ -308,8 +337,7 @@ func mcpToolSchemaTokens(tools []openai.Tool) int {
 	if len(mcpOnly) == 0 {
 		return 0
 	}
-	data, _ := json.Marshal(mcpOnly)
-	return estimateTokensFromText(string(data))
+	return estimateModelToolSchemas(mcpOnly)
 }
 
 func estimateToolSchemaTokens(tools []openai.Tool) int {
@@ -321,7 +349,7 @@ func estimateToolSchemaTokens(tools []openai.Tool) int {
 	// builtin slice must be re-marshaled to avoid over-counting the cached
 	// full-set tokens.
 	cachedBuiltinCount := len(chatTools())
-	builtinCount := 0
+	builtinCount, purposeCount := 0, 0
 	hasMcp := false
 	for _, t := range tools {
 		if t.Function != nil && isMcpToolFunctionName(t.Function.Name) {
@@ -329,9 +357,16 @@ func estimateToolSchemaTokens(tools []openai.Tool) int {
 			continue
 		}
 		builtinCount++
+		if t.Function != nil {
+			if schema, ok := t.Function.Parameters.(map[string]any); ok && schema[schemautil.PurposeFieldKey] != nil {
+				purposeCount++
+			}
+		}
 	}
 	var total int
-	if builtinCount == cachedBuiltinCount {
+	if builtinCount == cachedBuiltinCount && purposeCount == builtinCount {
+		total = builtinPurposeToolSchemaTokens()
+	} else if builtinCount == cachedBuiltinCount && purposeCount == 0 {
 		// Full builtin set — use the cached estimate.
 		total = builtinToolSchemaTokens()
 	} else if builtinCount > 0 {
@@ -342,8 +377,7 @@ func estimateToolSchemaTokens(tools []openai.Tool) int {
 				builtinOnly = append(builtinOnly, t)
 			}
 		}
-		data, _ := json.Marshal(builtinOnly)
-		total = estimateTokensFromText(string(data))
+		total = estimateModelToolSchemas(builtinOnly)
 	}
 	if hasMcp {
 		total += mcpToolSchemaTokens(tools)

@@ -144,8 +144,9 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 
 	if isRegistered {
 		rt.Host = nodeSSHHost(serverNode)
-		if serverNode.Port > 0 && serverNode.Port != 22 {
-			rt.Port = strconv.Itoa(serverNode.Port)
+		rt.Port = strconv.Itoa(serverNode.Port)
+		if serverNode.Port <= 0 {
+			rt.Port = "22"
 		}
 	}
 
@@ -158,10 +159,9 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 			fmt.Errorf("server %q is not authorized for current workspace tab; please authorize it in the workspace footer", serverKey))
 	}
 
-	// 工作区授权通过后才缓存节点凭据。
-	// 槽位由解析后的端点决定，invokeRemotePython 按同一端点读取凭据。
-	if isRegistered && (serverNode.Password != "" || serverNode.KeyPath != "") {
-		a.sshCredentials.store(sshCredentialKey(rt.Host, rt.Port), normalizeSSHAuthType(serverNode), serverNode.Password, serverNode.KeyPath)
+	// 工作区授权通过后将凭据绑定到本次解析结果，避免同端点节点互相覆盖。
+	if isRegistered {
+		rt.credential = &sshCredentialEntry{authType: normalizeSSHAuthType(serverNode), password: serverNode.Password, keyPath: serverNode.KeyPath}
 	}
 
 	return rt, nil
@@ -385,6 +385,9 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 		return err
 	}
 	entry, _ := a.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port))
+	if rt.credential != nil {
+		entry = *rt.credential
+	}
 	sshConfig := a.remoteSSHConfig(rt, entry)
 	if timeout <= 0 {
 		timeout = 60 * time.Second
@@ -1370,6 +1373,9 @@ func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, acti
 	remoteCmd := fmt.Sprintf(`sh -c 'boot="import base64, sys, zlib; code = zlib.decompress(base64.b64decode(sys.argv.pop(1))); exec(compile(code, \"<ally-transfer>\", \"exec\"))"; command -v python3 >/dev/null 2>&1 && exec python3 -u -c "$boot" "$@" ; command -v python2 >/dev/null 2>&1 && exec python2 -u -c "$boot" "$@" ; exec python -u -c "$boot" "$@"' -- %s %s`, b64Script, b64Payload)
 
 	entry, _ := a.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port))
+	if rt.credential != nil {
+		entry = *rt.credential
+	}
 	sshConfig := a.remoteSSHConfig(rt, entry)
 
 	var outcome struct {

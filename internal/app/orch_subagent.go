@@ -315,7 +315,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			toolIDs[i] = assistantMessage.ToolCalls[i].ID
 		}
 		messages = append(messages, assistantMessage)
-		toolConflicts := detectToolBatchConflicts(cfg, assistantMessage.ToolCalls)
+		toolConflicts := detectToolBatchConflicts(cfg, assistantMessage.ToolCalls, toolPurposeFields(ctx))
 
 		// Register all tool calls as running and emit start events
 		for i, call := range assistantMessage.ToolCalls {
@@ -328,7 +328,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 				run.ToolCalls = append([]SubToolEvent(nil), run.ToolCalls[len(run.ToolCalls)-maxSubagentToolCalls:]...)
 			}
 			a.subRunsMu.Unlock()
-			a.emit("sub:tool:start", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": cid, "name": name, "args": args})
+			a.emit("sub:tool:start", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": cid, "name": name, "args": args, "purposeField": toolPurposeFields(ctx)[normalizeToolName(name)]})
 		}
 
 		// Shared stage scheduler; model-facing outcomes remain in call order.
@@ -412,6 +412,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			messages = append(messages, openai.ChatCompletionMessage{
 				Role: openai.ChatMessageRoleTool, ToolCallID: o.callID, Content: o.modelJSON,
 			})
+			a.reasoningStash.recordToolStatus(reasoningReplayScope(cfg), messages[len(messages)-1], o.result)
 		}
 		// Inject images read by this sub-agent tool batch into multimodal model
 		// context, same contract as the main loop.

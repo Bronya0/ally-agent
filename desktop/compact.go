@@ -280,7 +280,8 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 		row := map[string]any{
 			"role": "tool_call", "name": str(m, "name"), "toolCallId": id,
 			"title": str(m, "title"), "status": state,
-			"body": summary, "result": outcome, "fastCompacted": true,
+			"purpose": toolPurpose(m, parseToolArgs(str(m, "args"))),
+			"body":    summary, "result": outcome, "fastCompacted": true,
 		}
 		for _, key := range []string{"error", "errorCode"} {
 			if value, ok := m[key]; ok {

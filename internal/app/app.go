@@ -1332,6 +1332,7 @@ type remoteTarget struct {
 	Host          string
 	Port          string
 	WorkspaceRoot string
+	credential    *sshCredentialEntry
 }
 
 type remoteRawFile struct {
@@ -2132,7 +2133,7 @@ func (a *App) stripSessionReasoning(sessionID string) {
 	a.mu.Unlock()
 
 	if a.reasoningStash != nil {
-		a.reasoningStash.clearSession(sessionID)
+		a.reasoningStash.clearReasoningScope(openAIResponsesPromptCacheKey(sessionID))
 	}
 
 	if len(cloned) > 0 {
@@ -2244,6 +2245,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	// from that exact list, including across in-run history compaction.
 	tools := a.buildToolsForSession(sessionID, cfg)
 	ctx = withBuiltinToolAvailability(ctx, tools)
+	toolEventMeta := func(name string) map[string]any { return a.toolEventMeta(ctx, name) }
 	toolSchemaTokens := estimateToolSchemaTokens(tools)
 	breakdownAcc := newLiveBreakdownAccumulator(messages)
 	// Read de-duplication is scoped to the session, not to this run: a file range
@@ -2389,7 +2391,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					emittedEvents = true
 					streamDeltas.flush()
 					toolCalls = cloneToolCalls(event.ToolCalls)
-					for _, toolEvent := range toolProgress.events(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
+					for _, toolEvent := range toolProgress.events(runID, sessionID, toolBatchID, toolCalls, toolEventMeta) {
 						a.emit(toolEvent.Name, toolEvent.Payload)
 					}
 				}
@@ -2413,7 +2415,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				sanitizedThisStep = true
 				if isAnthropicSignatureRejectionError(err) {
 					requestTrigger = "signature_recovery"
-					a.reasoningStash.clearSession(sessionID)
+					a.reasoningStash.clearReasoningScope(reasoningReplayScope(cfg))
 					messages = stripReasoningContent(messages)
 					requestMessages = messages
 					a.emit("run:retry", map[string]any{"runId": runID, "sessionId": sessionID, "attempt": 1, "maxAttempts": 1, "reason": "reasoning signature cleared after provider 400"})
@@ -2487,7 +2489,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		var toolExecutionArgs []string
 		toolCalls, toolExecutionArgs = prepareToolCallsForExecution(modelResp.ToolCalls)
 		if len(toolCalls) > 0 && toolProgress != nil {
-			for _, toolEvent := range toolProgress.forceEvents(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
+			for _, toolEvent := range toolProgress.forceEvents(runID, sessionID, toolBatchID, toolCalls, toolEventMeta) {
 				a.emit(toolEvent.Name, toolEvent.Payload)
 			}
 		}
@@ -2548,7 +2550,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		}
 
 		mintMissingToolCallIDs(runID, toolCalls)
-		for _, event := range toolProgress.forceEvents(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
+		for _, event := range toolProgress.forceEvents(runID, sessionID, toolBatchID, toolCalls, toolEventMeta) {
 			a.emit(event.Name, event.Payload)
 		}
 		messages = append(messages, openai.ChatCompletionMessage{
@@ -2580,7 +2582,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// paused would otherwise be judged against the old list and only take
 		// effect in the next run.
 		toolCfg := a.cfgWithLiveExtraRoots(sessionID, cfg)
-		toolConflicts := detectToolBatchConflicts(toolCfg, toolCalls)
+		toolConflicts := detectToolBatchConflicts(toolCfg, toolCalls, toolPurposeFields(ctx))
 		blackboardNames, toolConflicts := a.reserveBlackboardDelegates(ctx, toolCfg, toolCalls, toolConflicts)
 
 		// emitOutcome pushes a single tool's result/error to the frontend as
@@ -2648,6 +2650,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				ToolCallID: o.callID,
 				Content:    o.modelJSON,
 			})
+			a.reasoningStash.recordToolStatus(reasoningReplayScope(cfg), messages[len(messages)-1], o.result)
 		}
 		// Inject image files read by this tool batch into multimodal model
 		// context (read of a .png/.jpg/... returns a base64 DataURL). The
@@ -2767,6 +2770,8 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		return toolErrorResult(codedToolError("E_TRUNCATED_ARGS",
 			fmt.Errorf("tool arguments were truncated during streaming; please re-send the call with complete parameters (merge small changes, split large edits into separate calls)")))
 	}
+
+	args = prepareToolPurpose(ctx, name, args)
 
 	var data any
 	var err error

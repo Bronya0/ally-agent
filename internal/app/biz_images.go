@@ -23,11 +23,12 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-const generatedImageHistoryMarker = "Generated image: "
+const generatedImageHistoryMarker = "// image | ref="
 
 var imageRefPattern = regexp.MustCompile(`^[a-f0-9]{64}/[a-f0-9]{32}$`)
 
 func isGeneratedImageHistory(content string) bool {
+	content = normalizeGeneratedImageHistory(content)
 	if len(content) > 2048 || !strings.HasPrefix(content, generatedImageHistoryMarker+"image:") {
 		return false
 	}
@@ -372,7 +373,7 @@ func (a *App) restoreGeneratedImageAttachments(snapshot *SessionSnapshot, histor
 		if message.Role != openai.ChatMessageRoleTool || !isGeneratedImageHistory(message.Content) {
 			continue
 		}
-		ref := strings.Fields(strings.TrimPrefix(message.Content, generatedImageHistoryMarker))[0]
+		ref := strings.Fields(strings.TrimPrefix(normalizeGeneratedImageHistory(message.Content), generatedImageHistoryMarker))[0]
 		owner := owners[ref]
 		card := cards[message.ToolCallID]
 		if owner.message != nil && owner.message["role"] == "tool_call" {
@@ -417,4 +418,11 @@ func (a *App) restoreGeneratedImageAttachments(snapshot *SessionSnapshot, histor
 		card["attachments"] = append(attachments, attachment)
 		owners[ref] = imageOwner{card, attachment}
 	}
+}
+
+func normalizeGeneratedImageHistory(content string) string {
+	if strings.HasPrefix(content, "Generated image: ") {
+		return generatedImageHistoryMarker + strings.TrimPrefix(content, "Generated image: ")
+	}
+	return content
 }

@@ -256,7 +256,7 @@ func TestSubagentBudgetExhaustionNeverRunsDiscardedToolCalls(t *testing.T) {
 	if result.Status != "completed" || result.StopReason != "step_limit" || !strings.Contains(result.Summary, "report: budget was too small") {
 		t.Fatalf("result = %+v, want a report with the step limit explicitly marked", result)
 	}
-	if rendered := renderSubagentResultForModel(*result); !strings.Contains(rendered, `stopReason="step_limit"`) {
+	if rendered := renderSubagentResultForModel(*result); !strings.Contains(rendered, `stop-reason="step_limit"`) {
 		t.Fatalf("parent cannot see the stop reason: %s", rendered)
 	}
 	if _, statErr := os.Stat(filepath.Join(workspace, "marker.txt")); !os.IsNotExist(statErr) {

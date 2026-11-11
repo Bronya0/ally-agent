@@ -64,6 +64,19 @@ func (s *reasoningStash) retainFastCompactTail(sessionID string, history, compac
 		if !strings.HasPrefix(key, prefix) || entry.payload == nil {
 			continue
 		}
+		if entry.payload.toolResults != nil {
+			statuses := map[string]bool{}
+			for i, m := range compacted {
+				if m.Role != openai.ChatMessageRoleTool || i >= len(history) {
+					continue
+				}
+				if failed, ok := entry.payload.toolResults[toolStatusIdentity(history[i])]; ok {
+					statuses[toolStatusIdentity(m)] = failed
+				}
+			}
+			entry.payload = &sessionReasoningPayload{toolResults: statuses}
+			continue
+		}
 		next := &sessionReasoningPayload{responsesNative: map[string][]json.RawMessage{}}
 		for _, turn := range entry.payload.turns {
 			keep := len(turn.callIDs) > 0

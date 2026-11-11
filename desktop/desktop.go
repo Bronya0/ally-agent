@@ -169,6 +169,9 @@ type desktop struct {
 	openSessions                            map[string]*conversation
 	attachmentImageCacheSessions            []string
 	attachmentImageJobSessions              map[*conversation]struct{}
+	// imagePreview is the picture opened from a message, at most one at a time.
+	imagePreview           *imagePreview
+	imagePreviewDecodeSlot chan struct{}
 	// tabStrips keeps one scroll position and one press per tab strip, by id
 	// (see tabStrip): a strip's offset has to live in app state for the wheel to
 	// move it, and its press outlives a frame.

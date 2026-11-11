@@ -26,7 +26,7 @@ func TestLocalCommandGroupPreservesCardsOnExpansion(t *testing.T) {
 				}
 			})
 		}, 700, 700)
-		title := fmt.Sprintf("执行命令 %d 次", count)
+		title := "执行命令"
 		if !tt.HasText(title) || tt.HasText("OUTPUT-") {
 			t.Fatalf("group not collapsed: %v", tt.Texts())
 		}
@@ -66,7 +66,7 @@ func TestCommandGroupsStopAtRemoteAndProse(t *testing.T) {
 		}, 700, 600)
 		n := 0
 		for _, s := range tt.Texts() {
-			if s == "执行命令 1 次" {
+			if s == "执行命令" {
 				n++
 			}
 		}
@@ -95,22 +95,25 @@ func TestCommandGroupStaysCollapsedThroughoutExecution(t *testing.T) {
 	}, 700, 700)
 	check := func(title string) {
 		t.Helper()
-		if !tt.HasText(title) || tt.HasText("echo live") || tt.HasText("OUTPUT-") {
+		if (title != "" && !tt.HasText(title)) || (title == "" && tt.HasText(groupPurposeFallbacks[3])) || tt.HasText("echo live") || tt.HasText("OUTPUT-") {
 			t.Fatalf("command escaped its collapsed group: %v", tt.Texts())
 		}
 	}
-	check("执行命令 1 次")
+	check("")
 	for _, state := range []string{"running", "success", "error", "cancelled"} {
 		msg["status"] = state
 		tt.Frame()
-		check("执行命令 1 次")
+		if state == "running" {
+			check("")
+		} else {
+			check("执行命令")
+		}
 	}
 	conv.Messages = append(conv.Messages, groupCommand("next", "Bash", "running"))
 	tt.Frame()
-	check("执行命令 2 次")
-	// The header no longer prints an executing hint, so click the visible count
-	// instead: what this asserts is that a live group can be expanded.
-	if err := tt.Click("执行命令 2 次"); err != nil {
+	check("执行命令")
+	// A live group can be expanded through its visible fallback description.
+	if err := tt.Click("执行命令"); err != nil {
 		t.Fatal(err)
 	}
 	if !tt.HasText("echo next") {
@@ -199,7 +202,7 @@ func TestReadsAndCommandsShareOneGroup(t *testing.T) {
 			}
 		})
 	}, 700, 600)
-	if !tt.HasText("读取 1 次") || !tt.HasText("执行命令 1 次") {
+	if !tt.HasText("读取文件") || !tt.HasText("执行命令") {
 		t.Fatalf("mixed group header: %v", tt.Texts())
 	}
 	if tt.HasText("main.go") || tt.HasText("echo mixed-cmd") {

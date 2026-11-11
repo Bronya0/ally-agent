@@ -30,6 +30,9 @@ import (
 	"strings"
 )
 
+// PurposeFieldKey is host-only metadata, removed from provider declarations.
+const PurposeFieldKey = "x-ally-purpose-field"
+
 // Map normalizes an arbitrary tool-parameter value into a JSON-Schema object
 // that every provider accepts: local `$ref` pointers are inlined, missing or
 // contradictory property `type` fields are repaired, and a nil/undefined value
@@ -50,6 +53,7 @@ func Map(value any) map[string]any {
 		return map[string]any{"type": "object", "properties": map[string]any{}}
 	}
 	dereffed := deref(m)
+	delete(dereffed, PurposeFieldKey)
 	return normalizeTypes(dereffed)
 }
 

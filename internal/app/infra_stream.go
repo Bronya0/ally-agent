@@ -252,6 +252,11 @@ func (t *toolCallProgressTracker) eventsWithForce(runID, sessionID, batchID stri
 		// every delta. ID/Type/Name are short and stable, so they're inlined.
 		argsHash, argsLen := toolCallArgsHash(call.Function.Arguments)
 		state := call.ID + "\x00" + string(call.Type) + "\x00" + call.Function.Name + "\x00" + argsHash + "\x00" + strconv.Itoa(argsLen)
+		// Final arguments must be published even if the last streamed snapshot
+		// was already complete. Consumers use this boundary for stable headers.
+		if force {
+			state += "\x00final"
+		}
 		if t.lastState[idx] == state {
 			continue
 		}
@@ -282,6 +287,7 @@ func (t *toolCallProgressTracker) eventsWithForce(runID, sessionID, batchID stri
 			"name":          call.Function.Name,
 			"args":          call.Function.Arguments,
 			"streaming":     true,
+			"argsStreaming": !force,
 		}
 		if metaForName != nil && call.Function.Name != "" {
 			payload = mergeToolEventMeta(payload, metaForName(call.Function.Name))

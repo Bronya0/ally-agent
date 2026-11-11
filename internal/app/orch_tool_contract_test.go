@@ -36,7 +36,7 @@ func TestDisabledBuiltinFollowsInjectedTools(t *testing.T) {
 		{"child", child, false}, {"stateless", context.Background(), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			result := a.executeTool(tc.ctx, cfg, "s", "calculate", []byte(`{"expression":"1+1"}`))
+			result := a.executeTool(tc.ctx, cfg, "s", "calculate", []byte(`{"purpose":"计算表达式","expression":"1+1"}`))
 			if result.OK != tc.allowed {
 				t.Fatalf("allowed=%v result=%+v", tc.allowed, result)
 			}

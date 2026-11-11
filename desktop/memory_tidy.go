@@ -2,8 +2,6 @@
 package desktop
 
 import (
-	"log"
-	"runtime"
 	"runtime/debug"
 	"time"
 )
@@ -72,11 +70,5 @@ func (a *desktop) tidyMemory() {
 		return
 	}
 	a.memoryTidyAt = time.Now()
-	go func() {
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		debug.FreeOSMemory()
-		runtime.ReadMemStats(&after)
-		log.Printf("memory: heap %d MB -> %d MB after the window went away", before.HeapAlloc>>20, after.HeapAlloc>>20)
-	}()
+	go debug.FreeOSMemory()
 }

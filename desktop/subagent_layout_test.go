@@ -54,7 +54,7 @@ func TestSubagentRowsLeaveNoBlankBand(t *testing.T) {
 	if !ok {
 		t.Fatalf("last sub-agent card missing: %v", tt.Texts())
 	}
-	next, ok := tt.Find("读取 1 次")
+	next, ok := tt.Find("读取文件")
 	if !ok {
 		t.Fatalf("row after the sub-agents missing: %v", tt.Texts())
 	}

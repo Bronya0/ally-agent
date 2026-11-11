@@ -52,7 +52,7 @@ func (a *desktop) createSystemTray(icon []byte, template bool) error {
 		tray.OnClick(a.showMainWindow)
 		tray.OnRightClick(func() {
 			tray.SetMenu(menu)
-			popUpSystemTrayMenu(tray)
+			popUpSystemTrayMenu(tray, menu)
 			tray.SetMenu(nil)
 		})
 	}
@@ -98,6 +98,7 @@ func (a *desktop) mainWindowShown() {
 // Release attachment bitmaps, but retain preview pages for the next show.
 func (a *desktop) releaseHiddenWindowResources() {
 	a.hideFilePreview()
+	a.closeImagePreview()
 	a.syncPluginHostVisibility(true)
 	seen := make(map[*conversation]struct{}, len(a.tabs)+len(a.openSessions))
 	release := func(t *conversation) {

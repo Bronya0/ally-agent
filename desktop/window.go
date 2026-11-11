@@ -59,6 +59,7 @@ func (a *desktop) view(c *ui.Context) {
 	a.updateDialog(c)
 	a.releaseNotesDialog(c)
 	a.deleteUserMessageDialog(c)
+	a.imagePreviewDialog(c)
 	a.petalsOverlay(c)
 	uikit.Messages(c)
 }

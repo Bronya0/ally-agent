@@ -51,7 +51,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	replay := a.reasoningStash.get(reasoningReplayKey(cfg, model))
 	// The official endpoint validates replayed thinking signatures.
 	officialEndpoint := isOfficialAnthropicEndpoint(cfg)
-	system, anthropicMessages := buildAnthropicMessages(messages, replay, officialEndpoint)
+	system, anthropicMessages := buildAnthropicMessages(messages, replay, officialEndpoint, a.reasoningStash.toolStatuses(reasoningReplayScope(cfg)))
 	if len(anthropicMessages) == 0 || anthropicMessages[0].Role != anthropic.MessageParamRoleUser {
 		anthropicMessages = append([]anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("..."))}, anthropicMessages...)
 	}
@@ -702,7 +702,7 @@ func anthropicStopReasonError(reason string, hasOutput bool) error {
 	}
 }
 
-func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage, replay *sessionReasoningPayload, officialEndpoint bool) (string, []anthropic.MessageParam) {
+func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage, replay *sessionReasoningPayload, officialEndpoint bool, statuses ...map[string]bool) (string, []anthropic.MessageParam) {
 	systemParts := []string{}
 	out := []anthropic.MessageParam{}
 
@@ -787,7 +787,7 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage, repla
 					toolID = "tool_call"
 				}
 				toolID = toolcall.ForAnthropic(toolID)
-				blocks = append(blocks, anthropic.NewToolResultBlock(toolID, toolMsg.Content, anthropicToolResultIsError(toolMsg.Content)))
+				blocks = append(blocks, anthropic.NewToolResultBlock(toolID, toolMsg.Content, len(statuses) > 0 && statuses[0][toolStatusIdentity(toolMsg)]))
 				i++
 			}
 			i--
@@ -880,51 +880,6 @@ func setAnthropicBlockCacheControl(block anthropic.ContentBlockParamUnion, cc an
 		return false
 	}
 	return true
-}
-
-func anthropicToolResultIsError(content string) bool {
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
-		return false
-	}
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(trimmed), &obj); err == nil && obj != nil {
-		if okVal, exists := obj["ok"]; exists {
-			if b, isBool := okVal.(bool); isBool {
-				return !b
-			}
-		}
-		if isErr, exists := obj["isError"]; exists {
-			if b, isBool := isErr.(bool); isBool {
-				return b
-			}
-		}
-		if isErr, exists := obj["is_error"]; exists {
-			if b, isBool := isErr.(bool); isBool {
-				return b
-			}
-		}
-		if _, hasErr := obj["error"]; hasErr {
-			if okVal, hasOK := obj["ok"]; !hasOK || okVal == false {
-				return true
-			}
-		}
-		return false
-	}
-	lower := strings.ToLower(trimmed)
-	return strings.HasPrefix(lower, "error:") ||
-		strings.HasPrefix(lower, "mcp call failed:") ||
-		strings.HasPrefix(lower, "unknown tool:") ||
-		strings.HasPrefix(lower, "tool execution failed:") ||
-		strings.HasPrefix(lower, "failed:") ||
-		strings.HasPrefix(lower, "错误:") ||
-		strings.HasPrefix(lower, "错误：") ||
-		strings.HasPrefix(lower, "未知工具:") ||
-		strings.HasPrefix(lower, "未知工具：") ||
-		strings.HasPrefix(lower, "执行失败:") ||
-		strings.HasPrefix(lower, "执行失败：") ||
-		strings.HasPrefix(lower, "调用失败:") ||
-		strings.HasPrefix(lower, "调用失败：")
 }
 
 // anthropicOrderUserBlocks pins the Messages API rule that a message following

@@ -1560,6 +1560,7 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 	btn.OnClick(func() { st.ContextOpen = !st.ContextOpen })
 	ui.PopoverBase(c, btn, &st.ContextOpen, func(panel ui.Element) {
 		popoverChrome(c, panel, 300)
+		panel.Transition(uikit.PopupTransition())
 		// The breakdown is a short list — the prompt's total, the four kinds of
 		// message, the running tally — and the sections behind the fold still fit
 		// when a reader opens them, so the panel shows the whole thing at once. It

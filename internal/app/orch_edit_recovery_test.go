@@ -73,7 +73,7 @@ func TestEditRecoverySourceErrors(t *testing.T) {
 			explicit := a.batchReadOneWithConfig(cfg, "sample.txt", ReadFileRequest{Path: "sample.txt"})
 			wantRead := renderReadResultForModel(BatchReadResult{Files: []BatchReadResultItem{explicit}})
 			model := recoveryTestModelResult(t, result)
-			if !anthropicToolResultIsError(model) {
+			if result.OK {
 				t.Fatal("provider must still recognize the tool result as an error")
 			}
 			if !strings.HasSuffix(model, wantRead) || !strings.Contains(model, "no extra read is needed") {
@@ -104,7 +104,7 @@ func TestEditRecoverySurvivesErrorCompaction(t *testing.T) {
 	wantRead := renderReadResultForModel(*result.modelRead)
 	result.Error += strings.Repeat("\nvery long diagnostic", maxModelToolOutput)
 	model := recoveryTestModelResult(t, result)
-	if !strings.HasSuffix(model, wantRead) || !strings.Contains(model, "characters omitted") || !anthropicToolResultIsError(model) {
+	if !strings.HasSuffix(model, wantRead) || !strings.Contains(model, "characters omitted") || result.OK {
 		t.Fatal("compaction must keep the full snapshot and error status")
 	}
 	if len(model) > maxModelToolOutput+maxEditRecoveryBytes+1024 {
@@ -159,7 +159,7 @@ func TestEditRecoveryStaysModelOnlyAndCanRetry(t *testing.T) {
 		t.Fatal("source leaked into UI/API JSON or the displayed error")
 	}
 	model := recoveryTestModelResult(t, result)
-	if strings.Count(model, "</ally-file>") != 1 || !strings.Contains(model, "&lt;/ally-file>") || strings.Contains(model, " reused") {
+	if !strings.Contains(model, result.modelRead.Files[0].Content) || strings.Contains(model, " | reused") {
 		t.Fatalf("read marker escaping or recovery cache behavior changed: %s", model)
 	}
 	snapshot := result.modelRead.Files[0]

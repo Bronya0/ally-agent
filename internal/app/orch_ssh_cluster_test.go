@@ -169,8 +169,8 @@ func TestRemoteTargetEndpointSpellingUsesRegisteredNode(t *testing.T) {
 	if rt.Host != "deploy@10.0.0.7" || rt.Port != "2222" || rt.WorkspaceRoot != "/srv/www" {
 		t.Fatalf("unexpected resolved target: %+v", rt)
 	}
-	if entry, ok := app.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port)); !ok || entry.authType != sshAuthTypePassword || entry.password != "pw" {
-		t.Fatalf("resolving a registered node must cache its credential in the endpoint slot: ok=%v entry=%+v", ok, entry)
+	if rt.credential == nil || rt.credential.authType != sshAuthTypePassword || rt.credential.password != "pw" {
+		t.Fatal("resolved target must carry its own credential")
 	}
 }
 
@@ -301,3 +301,38 @@ func TestSSHCredentialPurgeHost(t *testing.T) {
 
 // TestNormalizeSSHCredentialKey 已被 TestSSHCredentialKey 取代（键现在由解析后的
 // 端点得出，不再从原始 target 字符串里取主机段）。
+
+func TestResolvedSSHCredentialsAreIsolated(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	a := NewApp()
+	a.configPath = filepath.Join(dir, "config.json")
+	ws := filepath.Join(dir, "workspace")
+	for _, n := range []SSHServerNode{
+		{Alias: "password-node", Host: "example.test", Username: "root", Port: 22, Description: "test", AuthType: "password", Password: "secret"},
+		{Alias: "agent-node", Host: "example.test", Username: "root", Port: 22, Description: "test", AuthType: "agent"},
+	} {
+		if err := a.SaveSSHServer(n); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.AuthorizeServerForWorkspace(ws, n.Alias); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := withToolWorkspace(context.Background(), ws)
+	password, err := a.resolveAndAuthorizeRemoteTarget(ctx, "password-node:/srv/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, err := a.resolveAndAuthorizeRemoteTarget(ctx, "ssh://agent-node:2222/srv/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.Port != "22" || agent.credential == nil || agent.credential.authType != sshAuthTypeAgent || agent.credential.password != "" {
+		t.Fatalf("incorrect agent target: %+v", agent)
+	}
+	if password.credential == nil || password.credential.password != "secret" {
+		t.Fatal("password credential was overwritten")
+	}
+}

@@ -326,7 +326,7 @@ func TestDesktopPastedImageCanBeEdited(t *testing.T) {
 			args, _ := json.Marshal(map[string]any{"prompt": "draw a front view", "images": []string{ref}})
 			return sseChatToolCallChunk("edit_pasted", "image_edit", string(args)) + sseChatFinishChunk("tool_calls") + sseDone
 		}
-		if !strings.Contains(request, "Generated image: image:") {
+		if !strings.Contains(request, generatedImageHistoryMarker+"image:") {
 			t.Error("editing did not return a saved image reference")
 		}
 		return sseChatChunk("done") + sseChatFinishChunk("stop") + sseDone

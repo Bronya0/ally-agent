@@ -27,8 +27,11 @@ var trayMenuThemeProcs = sync.OnceValues(func() (set, flush uintptr) {
 	return set, flush
 })
 
-func popUpSystemTrayMenu(tray *mygo.Tray) {
-	withSystemTrayMenuTheme(tray.PopUpMenu)
+func popUpSystemTrayMenu(_ *mygo.Tray, menu *mygo.Menu) {
+	// Tray.PopUpMenu anchors beyond the taskbar with an additional Win11 gap.
+	// A regular native popup follows the right-click position next to the icon;
+	// Windows still handles edge avoidance and its native menu interaction.
+	withSystemTrayMenuTheme(func() { menu.Popup(nil) })
 }
 
 // The native menu's nested loop runs on the UI thread. Do not change

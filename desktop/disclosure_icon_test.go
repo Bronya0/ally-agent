@@ -8,10 +8,10 @@ import (
 
 func TestTranscriptDisclosureIcons(t *testing.T) {
 	for _, tc := range []struct{ name, icon, title string }{
-		{"command", "terminal", "执行命令 1 次"},
-		{"read", "book", "读取 1 次"},
-		{"grep", "search", "搜索 1 次"},
-		{"list", "list", "罗列 1 次"},
+		{"command", "terminal", "执行命令"},
+		{"read", "book", "读取文件"},
+		{"grep", "search", "搜索内容"},
+		{"list", "list", "列出目录"},
 	} {
 		a := &desktop{}
 		msg := groupCommand("icon", tc.name, "success")
@@ -42,7 +42,7 @@ func TestTranscriptDisclosureIcons(t *testing.T) {
 func TestSuggestionsAlignWithReplyBody(t *testing.T) {
 	a := &desktop{}
 	conv := &conversation{ID: "suggest"}
-	msg := map[string]any{"name": "suggest", "toolCallId": "suggest", "status": "success", "result": map[string]any{"items": []any{"建议一", "建议二"}}}
+	msg := map[string]any{"name": "suggest", "toolCallId": "suggest", "status": "success", "purpose": "给出后续可选动作", "result": map[string]any{"items": []any{"建议一", "建议二"}}}
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(a.theme())
 		ui.Column(c).FillWidth().Padding(24).Children(func() {
@@ -57,5 +57,8 @@ func TestSuggestionsAlignWithReplyBody(t *testing.T) {
 	suggestion, ok := tt.Find("建议一")
 	if !ok || suggestion.X != reply.X {
 		t.Fatalf("suggestions indented from reply: %v vs %v", suggestion, reply)
+	}
+	if tt.HasText("给出后续可选动作") {
+		t.Fatal("suggestion metadata rendered a tool header")
 	}
 }

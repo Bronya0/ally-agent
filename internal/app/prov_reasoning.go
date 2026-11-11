@@ -113,6 +113,7 @@ func (t reasoningTurn) empty() bool {
 // provider prompt cache. Compaction clears the ledger with the old history.
 // Responses native items can also be restored from protected model history.
 type sessionReasoningPayload struct {
+	toolResults     map[string]bool
 	turns           []reasoningTurn
 	responsesNative map[string][]json.RawMessage
 }
@@ -384,6 +385,15 @@ func (s *reasoningStash) clearSession(sessionID string) {
 // instead. An empty scope is a no-op: those keys belong to stateless callers that
 // share the default bucket, not to whoever called clear.
 func (s *reasoningStash) clearScope(scope string) {
+	s.clearScopePayloads(scope, false)
+}
+
+// Model switches and signature recovery invalidate reasoning, not tool execution.
+func (s *reasoningStash) clearReasoningScope(scope string) {
+	s.clearScopePayloads(scope, true)
+}
+
+func (s *reasoningStash) clearScopePayloads(scope string, preserveToolStatus bool) {
 	if s == nil {
 		return
 	}
@@ -395,6 +405,9 @@ func (s *reasoningStash) clearScope(scope string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key := range s.entries {
+		if preserveToolStatus && key == toolStatusScope(scope) {
+			continue
+		}
 		if strings.HasPrefix(key, prefix) {
 			delete(s.entries, key)
 		}

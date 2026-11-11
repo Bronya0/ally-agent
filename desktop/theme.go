@@ -226,7 +226,7 @@ var paletteChoices = [...]int{paletteNative, paletteBlue, paletteAmber, paletteF
 // A preset with light surfaces replaces the light base as a complete set.
 var palettes = []palette{
 	// paletteBlue: dark base surface, and the default accent.
-	{name: "蓝色", dark: true, bg: ui.Hex("#1b1b1b"), panel: ui.Hex("#212122"), line: ui.Hex("#303031"), accent: ui.Hex("#8da5df"), accentText: ui.Hex("#15171d"), text: ui.Hex("#d4d4d4"), muted: ui.Hex("#909093"), hover: ui.Hex("#2b2b2e"), hint: ui.Hex("#5d5d62")},
+	{name: "蓝色", dark: true, bg: ui.Hex("#1b1b1b"), panel: ui.Hex("#212122"), line: ui.Hex("#303031"), accent: ui.Hex("#8da5df"), accentText: ui.Hex("#15171d"), text: ui.Hex("#cccccc"), muted: ui.Hex("#909093"), hover: ui.Hex("#2b2b2e"), hint: ui.Hex("#5d5d62")},
 	// paletteLight: light base surface; its accent is never used, lightAccents
 	// supplies it.
 	{name: "亮色", dark: false, bg: ui.Hex("#f5f6f8"), panel: ui.Hex("#ffffff"), line: ui.Hex("#d9dce3"), accent: ui.Hex("#4d6bd8"), accentText: ui.Hex("#ffffff"), text: ui.Hex("#24262d"), muted: ui.Hex("#535b68"), hover: ui.Hex("#eef0f5"), chrome: ui.Hex("#f9fafb"), hint: ui.Hex("#8b929e")},

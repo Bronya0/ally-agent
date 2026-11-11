@@ -5,6 +5,6 @@ package desktop
 
 import "github.com/egoist/mygo"
 
-func popUpSystemTrayMenu(tray *mygo.Tray) {
+func popUpSystemTrayMenu(tray *mygo.Tray, _ *mygo.Menu) {
 	tray.PopUpMenu()
 }

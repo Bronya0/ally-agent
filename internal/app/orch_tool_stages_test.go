@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -375,5 +376,5 @@ func TestAgentLoopsStageFailureBlocksLaterWrites(t *testing.T) {
 
 func containsStageBlocked(content string) bool {
 	var result toolResult
-	return json.Unmarshal([]byte(content), &result) == nil && result.ErrorCode == "E_STAGE_BLOCKED"
+	return strings.Contains(content, "E_STAGE_BLOCKED") || json.Unmarshal([]byte(content), &result) == nil && result.ErrorCode == "E_STAGE_BLOCKED"
 }

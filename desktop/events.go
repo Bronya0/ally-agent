@@ -405,7 +405,7 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 			t.markHistoryAt(index)
 		}
 	}()
-	for _, k := range []string{"name", "args", "result", "error", "errorCode", "durationMs", "mcpServer", "mcpTool"} {
+	for _, k := range []string{"name", "args", "result", "error", "errorCode", "durationMs", "mcpServer", "mcpTool", "purposeField", "argsStreaming"} {
 		if v, ok := p[k]; ok {
 			if k == "args" {
 				delete(m, "createPreviewTrimmed")
@@ -422,10 +422,12 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 		}
 	}
 	if name == "tool:result" {
+		delete(m, "argsStreaming")
 		m["status"] = "success"
 		m["body"] = p["result"]
 	}
 	if name == "tool:error" {
+		delete(m, "argsStreaming")
 		m["status"] = "error"
 		m["body"] = p["error"]
 	}
@@ -704,7 +706,7 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 			entry = map[string]any{"toolCallId": str(p, "toolCallId")}
 			tools = append(tools, entry)
 		}
-		for _, field := range []string{"name", "args", "summary", "error", "errorCode", "durationMs"} {
+		for _, field := range []string{"name", "args", "summary", "error", "errorCode", "durationMs", "purposeField"} {
 			if v, ok := p[field]; ok {
 				entry[field] = v
 			}

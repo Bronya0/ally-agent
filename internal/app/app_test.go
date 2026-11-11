@@ -116,6 +116,16 @@ func TestStartChatRejectsSystemRootWorkspace(t *testing.T) {
 
 // sseChatToolCallChunk 构造一个携带 tool_calls delta 的 OpenAI 兼容流式 chunk。
 func sseChatToolCallChunk(id, name, args string) string {
+	// Well-formed model fixtures include the common call metadata. Preserve
+	// malformed payloads and explicitly supplied purposes for negative cases.
+	if toolshared.IsBuiltinTool(name) {
+		var object map[string]json.RawMessage
+		if json.Unmarshal([]byte(args), &object) == nil && object != nil && object["purpose"] == nil {
+			object["purpose"], _ = json.Marshal("Exercise " + name)
+			encoded, _ := json.Marshal(object)
+			args = string(encoded)
+		}
+	}
 	return fmt.Sprintf(`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":%q,"type":"function","function":{"name":%q,"arguments":%q}}]},"finish_reason":null}]}`+"\n\n", id, name, args)
 }
 
@@ -1036,6 +1046,12 @@ func TestToolCallProgressTrackerEmitsStreamingUpdates(t *testing.T) {
 
 	if events = tracker.events("run-1", "session-1", "0:0", toolCalls, nil); len(events) != 0 {
 		t.Fatalf("expected no duplicate event without changes, got %#v", events)
+	}
+	if events = tracker.forceEvents("run-1", "session-1", "0:0", toolCalls, nil); len(events) != 1 || events[0].Payload["argsStreaming"] != false {
+		t.Fatalf("finalization boundary missing for unchanged arguments: %#v", events)
+	}
+	if events = tracker.forceEvents("run-1", "session-1", "0:0", toolCalls, nil); len(events) != 0 {
+		t.Fatalf("duplicate finalization boundary: %#v", events)
 	}
 }
 

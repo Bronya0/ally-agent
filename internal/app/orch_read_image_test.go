@@ -190,7 +190,7 @@ func TestCompactReadResultOmittedDataURLFromModel(t *testing.T) {
 	if strings.Contains(compact, "data:image") {
 		t.Fatalf("model-facing read result must not carry the base64 data URL: %s", compact)
 	}
-	if !strings.Contains(compact, "sent as image input") {
+	if !strings.Contains(compact, "image=sent-as-image-input-in-following-message") {
 		t.Fatalf("model-facing read result should note the image injection: %s", compact)
 	}
 }

@@ -1115,36 +1115,6 @@ func TestAnthropicToolCallIDPairingUsesSharedSanitizer(t *testing.T) {
 	}
 }
 
-func TestAnthropicToolResultIsError(t *testing.T) {
-	cases := []struct {
-		input string
-		want  bool
-	}{
-		{`{"ok":false}`, true},
-		{`{"ok":true}`, false},
-		{`{"isError":true}`, true},
-		{`{"is_error":true}`, true},
-		{`{"isError":false}`, false},
-		{`{"error":"failed to connect"}`, true},
-		{`{"error":"failed to connect","ok":true}`, false},
-		{`error: command exited status 1`, true},
-		{`MCP call failed: connection refused`, true},
-		{`unknown tool: foobar`, true},
-		{`错误: 找不到指定文件`, true},
-		{`错误：参数格式不正确`, true},
-		{`执行失败: 退出码 1`, true},
-		{`调用失败：连接超时`, true},
-		{`未知工具: my_tool`, true},
-		{`File written successfully`, false},
-	}
-	for _, tc := range cases {
-		got := anthropicToolResultIsError(tc.input)
-		if got != tc.want {
-			t.Errorf("anthropicToolResultIsError(%q) = %v, want %v", tc.input, got, tc.want)
-		}
-	}
-}
-
 func TestOpenAIResponsesMidTurnSystemAndDeduplication(t *testing.T) {
 	// 1. Mid-turn system message becomes developer input item
 	instructions, input := buildOpenAIResponsesInput([]legacyopenai.ChatCompletionMessage{

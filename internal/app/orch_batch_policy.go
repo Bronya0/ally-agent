@@ -99,7 +99,7 @@ func planBatchWriteSource(arguments string) bool {
 	return err == nil && action != planActionRead
 }
 
-func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]error {
+func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall, purposeFields ...map[string]string) map[int]error {
 	conflicts := detectWriteBatchConflicts(cfg, calls)
 	if len(calls) <= 1 {
 		return conflicts
@@ -175,6 +175,23 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 			continue
 		}
 		args := call.Function.Arguments
+		field := ""
+		if toolshared.IsBuiltinTool(normalizeToolName(call.Function.Name)) {
+			field = "purpose"
+		}
+		if len(purposeFields) > 0 {
+			if injected := purposeFields[0][normalizeToolName(call.Function.Name)]; injected != "" {
+				field = injected
+			}
+		}
+		if field != "" {
+			var object map[string]json.RawMessage
+			if json.Unmarshal([]byte(args), &object) == nil && object != nil {
+				delete(object, field)
+				encoded, _ := json.Marshal(object)
+				args = string(encoded)
+			}
+		}
 		if stage, err := toolCallStage(call); err == nil && toolshared.IsBuiltinTool(normalizeToolName(call.Function.Name)) {
 			// Omitted stage and explicit 0 are the same scheduling intent.
 			// This canonical copy is only a key; execution keeps the original JSON.

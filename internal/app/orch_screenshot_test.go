@@ -106,15 +106,15 @@ func TestScreenshotScaledMetadataMatchesImage(t *testing.T) {
 			t.Fatalf("metadata must describe actual pixels: result=%dx%d actual=%dx%d error=%v", r.Width, r.Height, config.Width, config.Height, err)
 		}
 		model := renderScreenshotResultForModel(r)
-		if !strings.Contains(model, `size="1568x882"`) || !r.Scaled {
+		if !strings.Contains(model, `size=1568x882`) || !r.Scaled {
 			t.Fatalf("model image size lost: %s", model)
 		}
-		if r.Source != "display" && !strings.Contains(model, `rect="-100,200 2560x1440"`) {
+		if r.Source != "display" && !strings.Contains(model, `rect=-100,200,2560,1440`) {
 			t.Fatalf("source region must keep its original coordinate dimensions: %s", model)
 		}
 	}
 	legacy := renderScreenshotResultForModel(ScreenshotResult{Source: "region", Width: 640, Height: 480})
-	if !strings.Contains(legacy, `rect="0,0 640x480"`) {
+	if !strings.Contains(legacy, `rect=0,0,640,480`) {
 		t.Fatalf("old screenshot metadata must remain readable: %s", legacy)
 	}
 }
@@ -241,7 +241,7 @@ func TestScreenshotCapturesPrimaryDisplay(t *testing.T) {
 	if strings.Contains(model, "base64,") {
 		t.Fatal("model-facing payload must strip the data URL")
 	}
-	if !strings.Contains(model, `<ally-screenshot source="display"`) {
+	if !strings.Contains(model, `// screenshot | source="display"`) {
 		t.Fatalf("model-facing payload missing tag block: %q", model)
 	}
 }

@@ -294,8 +294,9 @@ func (a *App) executeLocalEditToolCall(ctx context.Context, cfg ConfigState, cal
 	if err := ctx.Err(); err != nil {
 		return toolErrorResult(codedToolError("E_CANCELLED", err))
 	}
+	args := prepareToolPurpose(ctx, "edit", []byte(call.Function.Arguments))
 	var file FileTextEdits
-	err, warnings := decodeToolArguments("edit", []byte(call.Function.Arguments), &file)
+	err, warnings := decodeToolArguments("edit", args, &file)
 	if toolcall.IsTruncatedArguments(call.Function.Arguments) {
 		err = codedToolError("E_TRUNCATED_ARGS", errors.New("edit arguments were truncated; resend complete parameters"))
 	}

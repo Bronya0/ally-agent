@@ -803,10 +803,6 @@ func (a *App) TestSSHServer(node SSHServerNode) SSHTestResult {
 			return SSHTestResult{OK: false, Error: fmt.Sprintf("server %q not found", node.Alias)}
 		}
 		node = saved
-	} else if strings.TrimSpace(node.Alias) != "" && node.Password == "" {
-		if saved, ok := a.GetSSHServer(node.Alias); ok && saved.Password != "" {
-			node.Password = saved.Password
-		}
 	}
 
 	node = normalizeSSHServerNode(node)

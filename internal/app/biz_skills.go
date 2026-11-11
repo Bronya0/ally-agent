@@ -456,35 +456,13 @@ func buildSkillDirTree(dir, loadedPath string) string {
 	return "<!-- skill dir tree (up to two levels, use read to read any of these) -->\n" + strings.Join(lines, "\n")
 }
 
-// renderSkillLoadedBlock builds <skill-loaded name="..." source="..." dir="..." args="...">
+// renderSkillLoadedBlock keeps metadata on one line and preserves the skill body.
 func renderSkillLoadedBlock(skillName, source, dir, args, content string) string {
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("<skill-loaded name=\"%s\"", xmlEscape(skillName)))
-	if source != "" {
-		b.WriteString(fmt.Sprintf(" source=\"%s\"", xmlEscape(source)))
-	}
-	if dir != "" {
-		b.WriteString(fmt.Sprintf(" dir=\"%s\"", xmlEscape(dir)))
-	}
+	header := fmt.Sprintf("// skill | name=%q | source=%q | dir=%q", skillName, source, dir)
 	if args != "" {
-		b.WriteString(fmt.Sprintf(" args=\"%s\"", xmlEscape(args)))
+		header += fmt.Sprintf(" | args=%q", args)
 	}
-	b.WriteString(">\n")
-	b.WriteString(escapeClosingMarker(content, "</skill-loaded"))
-	if !strings.HasSuffix(content, "\n") {
-		b.WriteString("\n")
-	}
-	b.WriteString("</skill-loaded>")
-	return b.String()
-}
-
-func xmlEscape(s string) string {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	s = strings.ReplaceAll(s, "\"", "&quot;")
-	s = strings.ReplaceAll(s, "'", "&apos;")
-	return s
+	return modelResultBody(header, content)
 }
 
 func scanSkillDir(dir string, source string, skills *[]SkillDefinition, seen, seenDirs map[string]bool) {

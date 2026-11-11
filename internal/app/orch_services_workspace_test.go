@@ -133,7 +133,7 @@ func TestServiceStartAndCommandPromotionKeepWorkspaceOwner(t *testing.T) {
 				t.Fatal(err)
 			}
 			structured := renderServiceInfoResultForModel(svc)
-			if !strings.Contains(structured, `promoted="true" timeout-seconds="1"`) || !strings.Contains(renderServiceListResultForModel(list), "promoted=true timeout-seconds=1") {
+			if !strings.Contains(structured, `promoted=true timeout-seconds=1`) || !strings.Contains(renderServiceListResultForModel(list), "promoted=true timeout-seconds=1") {
 				t.Fatal("model results lost structured promotion metadata")
 			}
 			if !samePath(svc.Workspace, root) || !samePath(svc.Cwd, expectedCwd) {
@@ -169,7 +169,7 @@ func TestServiceListSeparatesWorkspaceAndGlobalCapacity(t *testing.T) {
 			t.Fatalf("capacity mixed workspace and global counts: %+v", result)
 		}
 		model := renderServiceListResultForModel(result)
-		if !strings.Contains(model, `workspace-active="1" global-active="3"`) || strings.Contains(model, "foreign") || strings.Contains(model, "unowned") {
+		if !strings.Contains(model, `workspace-active=1 | global-active=3`) || strings.Contains(model, "foreign") || strings.Contains(model, "unowned") {
 			t.Fatalf("scope or capacity ambiguous in model result: %s", model)
 		}
 	}
