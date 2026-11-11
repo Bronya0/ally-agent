@@ -417,6 +417,7 @@ type scheduledWorkspacePreview struct {
 type workspacePreviewLifecycle struct {
 	pending   *pendingWorkspaceFileLoad
 	mounted   map[string]*mountedWorkspacePreview
+	videos    map[string]*mountedWorkspacePreview
 	scheduled *scheduledWorkspacePreview
 }
 
@@ -492,7 +493,10 @@ func (l *workspacePreviewLifecycle) schedule(
 // Each open workspace owns one surface. Changing the visible workspace does
 // not retire another workspace's page or playback position.
 func (l *workspacePreviewLifecycle) mount(key string, autoplay bool, create func() (workspacePreviewSurface, error), load func(workspacePreviewSurface) error) error {
-	workspace, _, _ := strings.Cut(key, "\x00")
+	workspace, path, _ := strings.Cut(key, "\x00")
+	if workspaceFileKindForPath(path) == workspaceFileVideo {
+		return l.mountVideo(key, autoplay, create, load)
+	}
 	mounted := l.mounted[workspace]
 	if l.mountedFor(key) != nil && mounted.autoplay == autoplay {
 		return nil
@@ -532,9 +536,44 @@ func (l *workspacePreviewLifecycle) mount(key string, autoplay bool, create func
 	return nil
 }
 
+func (l *workspacePreviewLifecycle) mountVideo(key string, autoplay bool, create func() (workspacePreviewSurface, error), load func(workspacePreviewSurface) error) error {
+	workspace, _, _ := strings.Cut(key, "\x00")
+	entry := l.videos[workspace]
+	if entry != nil && !entry.stale && entry.key == key && entry.surface != nil && !entry.surface.IsDestroyed() {
+		return nil
+	}
+	if entry != nil && entry.surface != nil && !entry.surface.IsDestroyed() {
+		entry.surface.Destroy()
+	}
+	delete(l.videos, workspace)
+	surface, err := create()
+	if err != nil {
+		if surface != nil {
+			surface.Destroy()
+		}
+		return err
+	}
+	if surface == nil {
+		return errors.New("video preview not created")
+	}
+	if err := load(surface); err != nil {
+		surface.Destroy()
+		return err
+	}
+	if l.videos == nil {
+		l.videos = make(map[string]*mountedWorkspacePreview)
+	}
+	l.videos[workspace] = &mountedWorkspacePreview{key: key, surface: surface, autoplay: autoplay}
+	return nil
+}
+
 func (l *workspacePreviewLifecycle) mountedEntryFor(key string) *mountedWorkspacePreview {
 	workspace, _, _ := strings.Cut(key, "\x00")
 	mounted := l.mounted[workspace]
+	_, path, _ := strings.Cut(key, "\x00")
+	if workspaceFileKindForPath(path) == workspaceFileVideo {
+		mounted = l.videos[workspace]
+	}
 	if mounted == nil || mounted.stale || mounted.key != key {
 		return nil
 	}
@@ -574,11 +613,20 @@ func (l *workspacePreviewLifecycle) releaseMounted() {
 	for workspace := range l.mounted {
 		l.releaseMountedWorkspace(workspace)
 	}
-	l.mounted = nil
+	for workspace := range l.videos {
+		l.releaseMountedWorkspace(workspace)
+	}
+	l.mounted, l.videos = nil, nil
 }
 
 // Images retain their last frame; other replacements stop the old decoder.
 func (l *workspacePreviewLifecycle) suspendMounted(workspace, path string) {
+	if video := l.videos[workspaceKey(workspace)]; video != nil && !video.stale {
+		video.stale = true
+		if video.surface != nil && !video.surface.IsDestroyed() {
+			video.surface.Reset()
+		}
+	}
 	mounted := l.mounted[workspaceKey(workspace)]
 	if mounted == nil {
 		return
@@ -606,14 +654,13 @@ func (l *workspacePreviewLifecycle) cancelScheduled() {
 
 func (l *workspacePreviewLifecycle) releaseMountedWorkspace(workspace string) {
 	key := workspaceKey(workspace)
-	mounted := l.mounted[key]
-	if mounted == nil {
-		return
+	for _, entries := range []map[string]*mountedWorkspacePreview{l.mounted, l.videos} {
+		mounted := entries[key]
+		if mounted != nil && mounted.surface != nil && !mounted.surface.IsDestroyed() {
+			mounted.surface.Destroy()
+		}
+		delete(entries, key)
 	}
-	if mounted.surface != nil && !mounted.surface.IsDestroyed() {
-		mounted.surface.Destroy()
-	}
-	delete(l.mounted, key)
 }
 
 func (l *workspacePreviewLifecycle) cancelScheduledWorkspace(workspace string) {
@@ -676,9 +723,26 @@ func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile) {
 				(file.PreviewPath != "" || file.PreviewHTML != "" || file.Document != nil || file.MarkupPreview)
 		},
 		func() (workspacePreviewSurface, error) {
+			if workspaceFileKindForPath(file.Path) == workspaceFileVideo {
+				return &nativeVideoPreview{}, nil
+			}
 			return a.newNativePreview(autoplay, filePreviewBackground)
 		},
 		func(surface workspacePreviewSurface) error {
+			if videoSurface, ok := surface.(*nativeVideoPreview); ok {
+				if err := videoSurface.LoadFile(file.PreviewPath); err != nil {
+					return err
+				}
+				state := a.workspaceMedia()
+				videoSurface.player.SetLoop(a.media.mode == mediaModeSingle)
+				if !state.autoplay {
+					videoSurface.player.Pause()
+				}
+				state.playing, state.autoplay = state.autoplay, false
+				a.watchWorkspaceVideo(videoSurface, file, key)
+				file.PreviewError = ""
+				return nil
+			}
 			document := file.PreviewHTML
 			if file.PreviewPath == "" && document == "" {
 				var err error
@@ -765,6 +829,10 @@ func (a *desktop) workspaceFilePreviewView(c *ui.Context, file *workspaceFile) {
 		surface = a.workspacePreview.retainedImageFor(key)
 	}
 	if surface != nil {
+		if videoSurface, ok := surface.(*nativeVideoPreview); ok {
+			a.workspaceVideoView(c, file, videoSurface)
+			return
+		}
 		ui.WebView(c.Key("workspace-file-preview"), surface.Native()).Grow(1).MinHeight(0).Fill()
 		return
 	}

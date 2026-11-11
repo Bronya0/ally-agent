@@ -747,7 +747,8 @@ func chatSearchBlockSpans(doc *parser.Document, index, message int, s *chatSearc
 	// Do not replace formatted inline content with raw Markdown source. Plain
 	// prose and headings can be highlighted without exposing markup syntax.
 	for _, in := range doc.Inlines(index) {
-		if in.Kind != parser.Text && in.Kind != parser.SoftBreak && in.Kind != parser.LineBreak {
+		// Mentions and references render as literal text while Resolve is unset.
+		if in.Kind != parser.Text && in.Kind != parser.Mention && in.Kind != parser.Reference && in.Kind != parser.SoftBreak && in.Kind != parser.LineBreak {
 			return "", nil, 0, false
 		}
 	}

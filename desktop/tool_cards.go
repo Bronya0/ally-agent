@@ -944,11 +944,11 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					ui.Text(c, fmtDur(ms)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 				}
 			}
-			if purpose != "" {
-				ui.Text(c, "·").FontSize(fsTool).TextColor(a.secondaryInk()).Shrink(0)
-				a.toolPurposeText(c, key+"-purpose", purpose)
-			}
 		})
+		if purpose != "" && name != "suggest" {
+			text := ui.Text(c.Key(key+"-purpose"), short(purpose, 72)).FontSize(fsAux).TextColor(a.secondaryInk()).SingleLine().MinWidth(0).Shrink(1)
+			uikit.Tooltip(c, text, purpose)
+		}
 		if isMCP {
 			return
 		} // Result payloads stay in model context, outside the UI.

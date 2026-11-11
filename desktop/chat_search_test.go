@@ -311,6 +311,28 @@ func TestChatSearchHighlightsMatchedBlocks(t *testing.T) {
 	}
 }
 
+func TestChatSearchHighlightsMentionsAndReferences(t *testing.T) {
+	for _, query := range []string{"@alice", "#123", "needle"} {
+		t.Run(query, func(t *testing.T) {
+			src := "hello @alice, see #123 and needle"
+			doc := parser.Parse(src)
+			s := &chatSearch{Open: true, Query: query}
+			s.cache = chatSearchCompute(searchTranscript(searchMessage("assistant", src)), s)
+			for i := 0; i < doc.Len(); i++ {
+				text, spans, base, ok := chatSearchBlockSpans(doc, i, 0, s)
+				if !ok {
+					continue
+				}
+				if len(spans) != 1 || text[spans[0][0]:spans[0][1]] != query || base+spans[0][0] != strings.Index(src, query) {
+					t.Fatalf("highlight %q: text=%q spans=%v base=%d", query, text, spans, base)
+				}
+				return
+			}
+			t.Fatalf("no highlighted block for %q", query)
+		})
+	}
+}
+
 // List items and quotes hold paragraphs, so their text is marked too while the
 // list's own marker and indentation stay in place.
 func TestChatSearchHighlightsListAndQuoteText(t *testing.T) {

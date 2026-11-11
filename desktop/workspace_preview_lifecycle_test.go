@@ -71,7 +71,7 @@ func TestWorkspaceImageSwitchToOtherKindStopsRetainedPage(t *testing.T) {
 	life := workspacePreviewLifecycle{mounted: map[string]*mountedWorkspacePreview{workspaceKey(root): {key: first, surface: p, autoplay: true}}}
 	t.Cleanup(life.release)
 	life.beginLoad(root, "second.png")
-	life.beginLoad(root, "video.mp4")
+	life.beginLoad(root, "video.mp3")
 	if p.resets != 1 || p.body != "" || life.retainedImageFor(first) != nil {
 		t.Fatal("non-image selection retained an outdated image page")
 	}
@@ -85,7 +85,7 @@ func TestWorkspacePreviewReusesCompatibleFileKinds(t *testing.T) {
 		creates++
 		return &fakeWorkspacePreview{}, nil
 	}
-	for _, path := range []string{"one.mp4", "picture.jpg", "report.pdf", "page.html"} {
+	for _, path := range []string{"one.mp3", "picture.jpg", "report.pdf", "page.html"} {
 		_, pending := life.beginLoad(root, path)
 		life.finishLoad(pending)
 		policy := previewAutoplayAllowed(workspaceFileKindForPath(path).hasMediaPlayer())
@@ -113,7 +113,7 @@ func TestWorkspacePreviewReusesSwitchAndRefresh(t *testing.T) {
 		created = append(created, p)
 		return p, nil
 	}
-	body := "first.mp4"
+	body := "first.mp3"
 	load := func(p workspacePreviewSurface) error { p.LoadHTML(body); return nil }
 	first := workspacePreviewTestKey(root, body)
 	if err := life.mount(first, true, create, load); err != nil {
@@ -122,7 +122,7 @@ func TestWorkspacePreviewReusesSwitchAndRefresh(t *testing.T) {
 	if err := life.mount(first, true, create, load); err != nil || created[0].loads != 1 {
 		t.Fatal("unchanged file reloaded the page", err)
 	}
-	for _, path := range []string{"second.mp4", "second.mp4"} {
+	for _, path := range []string{"second.mp3", "second.mp3"} {
 		ctx, pending := life.beginLoad(root, path)
 		if len(created) != 1 || created[0].destroys != 0 || created[0].body != "" || life.mountedFor(first) != nil {
 			t.Fatal("switch did not retire content while retaining the native slot")
@@ -147,19 +147,19 @@ func TestWorkspacePreviewReusesSwitchAndRefresh(t *testing.T) {
 func TestWorkspacePreviewRapidSwitchKeepsLatestLoad(t *testing.T) {
 	root := t.TempDir()
 	p := &fakeWorkspacePreview{}
-	life := workspacePreviewLifecycle{mounted: map[string]*mountedWorkspacePreview{workspaceKey(root): {key: workspacePreviewTestKey(root, "first.mp4"), surface: p, autoplay: true}}}
-	firstCtx, first := life.beginLoad(root, "second.mp4")
-	_, second := life.beginLoad(root, "third.mp4")
+	life := workspacePreviewLifecycle{mounted: map[string]*mountedWorkspacePreview{workspaceKey(root): {key: workspacePreviewTestKey(root, "first.mp3"), surface: p, autoplay: true}}}
+	firstCtx, first := life.beginLoad(root, "second.mp3")
+	_, second := life.beginLoad(root, "third.mp3")
 	if firstCtx.Err() == nil || life.finishLoad(first) || !life.finishLoad(second) || p.resets != 1 || p.destroys != 0 {
 		t.Fatal("rapid selection retained a stale load or churned the native slot")
 	}
 	creates := 0
-	if err := life.mount(workspacePreviewTestKey(root, "third.mp4"), true,
+	if err := life.mount(workspacePreviewTestKey(root, "third.mp3"), true,
 		func() (workspacePreviewSurface, error) { creates++; return nil, nil },
-		func(surface workspacePreviewSurface) error { surface.LoadHTML("third.mp4"); return nil }); err != nil {
+		func(surface workspacePreviewSurface) error { surface.LoadHTML("third.mp3"); return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if creates != 0 || p.loads != 1 || p.body != "third.mp4" {
+	if creates != 0 || p.loads != 1 || p.body != "third.mp3" {
 		t.Fatal("latest file was not loaded into the retained slot")
 	}
 	life.release()
@@ -178,7 +178,7 @@ func TestWorkspacePreviewSeparatesWorkspacesAndPlaybackPolicy(t *testing.T) {
 	for _, tc := range []struct {
 		root, path string
 		autoplay   bool
-	}{{root, "one.mp4", true}, {other, "two.mp4", true}, {other, "page.html", false}} {
+	}{{root, "one.mp3", true}, {other, "two.mp3", true}, {other, "page.html", false}} {
 		if err := life.mount(workspacePreviewTestKey(tc.root, tc.path), tc.autoplay, create, load); err != nil {
 			t.Fatal(err)
 		}
@@ -199,9 +199,9 @@ func TestWorkspacePreviewSeparatesWorkspacesAndPlaybackPolicy(t *testing.T) {
 func TestWorkspacePreviewLoadFailureReleasesReusedSlot(t *testing.T) {
 	root := t.TempDir()
 	p := &fakeWorkspacePreview{}
-	life := workspacePreviewLifecycle{mounted: map[string]*mountedWorkspacePreview{workspaceKey(root): {key: workspacePreviewTestKey(root, "one.mp4"), surface: p, autoplay: true}}}
+	life := workspacePreviewLifecycle{mounted: map[string]*mountedWorkspacePreview{workspaceKey(root): {key: workspacePreviewTestKey(root, "one.mp3"), surface: p, autoplay: true}}}
 	failure := errors.New("invalid preview")
-	err := life.mount(workspacePreviewTestKey(root, "two.mp4"), true,
+	err := life.mount(workspacePreviewTestKey(root, "two.mp3"), true,
 		func() (workspacePreviewSurface, error) { t.Fatal("recreated compatible view"); return nil, nil },
 		func(workspacePreviewSurface) error { return failure })
 	if !errors.Is(err, failure) || p.destroys != 1 || len(life.mounted) != 0 {
@@ -215,7 +215,7 @@ func TestWorkspacePreviewQueuedCreationCannotReviveAfterRelease(t *testing.T) {
 		updates := make(chan func(), 1)
 		creates := 0
 		visible := true
-		life.schedule(func(fn func()) { updates <- fn }, "workspace\x00file.mp4", true,
+		life.schedule(func(fn func()) { updates <- fn }, "workspace\x00file.mp3", true,
 			func() bool { return visible },
 			func() (workspacePreviewSurface, error) { creates++; return &fakeWorkspacePreview{}, nil },
 			func(workspacePreviewSurface) error { return nil },
@@ -246,7 +246,7 @@ func TestHiddenWindowKeepsPreviewPagesUntilExplicitClose(t *testing.T) {
 	a := &desktop{tabs: []*conversation{{Workspace: root}}}
 	media := a.workspaceMedia()
 	media.playing, media.autoplay = true, true
-	key := workspacePreviewTestKey(root, "one.mp4")
+	key := workspacePreviewTestKey(root, "one.mp3")
 	a.workspacePreview.mounted = map[string]*mountedWorkspacePreview{workspaceKey(root): {key: key, surface: fileView, autoplay: true}}
 	a.previews.entries = map[string]*previewEntry{"chart": {request: previewRequest{Key: "chart"}, surface: chartView}}
 	for i := 0; i < 2; i++ {

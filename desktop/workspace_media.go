@@ -147,7 +147,11 @@ func (a *desktop) stepWorkspaceMedia(file *workspaceFile, delta int, automatic b
 		if automatic {
 			// A one-file playlist still repeats without creating a new preview.
 			media.autoplay = false
-			a.mediaCommand(file, "window.allyMedia?.play(true)")
+			if p := a.nativeVideoFor(file); p != nil && p.player != nil {
+				p.player.Play()
+			} else {
+				a.mediaCommand(file, "window.allyMedia?.play(true)")
+			}
 		}
 		return
 	}
@@ -198,10 +202,22 @@ func (a *desktop) workspaceMediaShortcuts(c *ui.Context, file *workspaceFile) {
 func (a *desktop) toggleMediaPlayback(file *workspaceFile) {
 	media := a.workspaceMedia()
 	media.playing = !media.playing
+	if p := a.nativeVideoFor(file); p != nil && p.player != nil {
+		if media.playing {
+			p.player.Play()
+		} else {
+			p.player.Pause()
+		}
+		return
+	}
 	a.mediaCommand(file, fmt.Sprintf("window.allyMedia?.play(%t)", media.playing))
 }
 
 func (a *desktop) syncMediaOptions(file *workspaceFile) {
+	if p := a.nativeVideoFor(file); p != nil && p.player != nil {
+		p.player.SetLoop(a.media.mode == mediaModeSingle)
+		return
+	}
 	a.mediaCommand(file, fmt.Sprintf("window.allyMedia?.configure(%t,%t)", a.media.mode == mediaModeSingle, a.media.enhance))
 }
 

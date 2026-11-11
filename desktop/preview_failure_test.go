@@ -230,7 +230,7 @@ func TestPreviewResetCancelsProbeAndDestroyIsIdempotent(t *testing.T) {
 
 func TestWorkspacePreviewFailurePublishesOnlyToCurrentFile(t *testing.T) {
 	root := t.TempDir()
-	file := &workspaceFile{Path: "one.mp4"}
+	file := &workspaceFile{Path: "one.mp3"}
 	b := &fakePreviewBrowser{}
 	p, _ := queuedPreview(t, b)
 	a := &desktop{tabs: []*conversation{{Workspace: root}}, workspaceFiles: map[string]*workspaceFile{workspaceKey(root): file}}
@@ -244,7 +244,7 @@ func TestWorkspacePreviewFailurePublishesOnlyToCurrentFile(t *testing.T) {
 	if file.PreviewError == "" || media.playing || media.autoplay {
 		t.Fatal("file failure remained blank/playing")
 	}
-	replacement := &workspaceFile{Path: "two.mp4"}
+	replacement := &workspaceFile{Path: "two.mp3"}
 	a.workspaceFiles[workspaceKey(root)] = replacement
 	file.PreviewError = ""
 	old(errors.New("late failure"))

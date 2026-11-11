@@ -6,7 +6,7 @@ import (
 )
 
 func TestExplorerPathChangeClosesOnlyOriginatingWorkspaceFile(t *testing.T) {
-	for _, path := range []string{"video.mp4", "."} {
+	for _, path := range []string{"video.mp3", "."} {
 		t.Run(path, func(t *testing.T) {
 			a, views := retainedPreviewDesktop(t)
 			root := a.tabs[0].Workspace
@@ -33,7 +33,7 @@ func TestWorkspacePreviewRetainsEachWorkspaceAndReusesMedia(t *testing.T) {
 		created = append(created, view)
 		return view, nil
 	}
-	paths := []string{"one.mp4", "two.jpg"}
+	paths := []string{"one.mp3", "two.jpg"}
 	for i, root := range roots {
 		_, pending := life.beginLoad(root, paths[i])
 		life.finishLoad(pending)
@@ -85,7 +85,7 @@ func retainedPreviewDesktop(t *testing.T) (*desktop, []*fakeWorkspacePreview) {
 	views := make([]*fakeWorkspacePreview, 2)
 	for i, root := range roots {
 		a.tabs = append(a.tabs, &conversation{ID: root, Workspace: root})
-		file := &workspaceFile{Path: "video.mp4", Editor: emptyFileEditor()}
+		file := &workspaceFile{Path: "video.mp3", Editor: emptyFileEditor()}
 		a.workspaceFiles[workspaceKey(root)] = file
 		views[i] = &fakeWorkspacePreview{body: root}
 		if err := a.workspacePreview.mount(workspacePreviewTestKey(root, file.Path), true,

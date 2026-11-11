@@ -146,7 +146,7 @@ func TestPurposeGroupDisclosesCallsBeforeFilesAndOutput(t *testing.T) {
 	}
 }
 
-func TestPurposeOnIndependentHeadersFitsAndSurvivesUpdates(t *testing.T) {
+func TestPurposeBelowIndependentHeadersFitsAndSurvivesUpdates(t *testing.T) {
 	for _, name := range []string{"edit", "create", "service", "remote_read", "http_request", "screenshot", "mcp__server__tool"} {
 		t.Run(name, func(t *testing.T) {
 			purpose := "确认工具目的在当前行内显示并保持完整内容可供查看"
@@ -160,8 +160,8 @@ func TestPurposeOnIndependentHeadersFitsAndSurvivesUpdates(t *testing.T) {
 				t.Fatal("header missing")
 			}
 			text, ok := tt.Find(purpose)
-			if !ok || text.W < 90 || text.Y < header.Y || text.Y+text.H > header.Y+header.H || text.X+text.W > header.X+header.W+1 {
-				t.Fatalf("purpose outside header: text=%v header=%v texts=%v", text, header, tt.Texts())
+			if !ok || text.W < 90 || text.Y < header.Y+header.H || text.X+text.W > header.X+header.W+1 {
+				t.Fatalf("purpose not below header: text=%v header=%v texts=%v", text, header, tt.Texts())
 			}
 		})
 	}
