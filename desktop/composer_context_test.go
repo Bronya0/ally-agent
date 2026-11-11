@@ -52,7 +52,7 @@ func TestContextBreakdownPanelShowsEveryRow(t *testing.T) {
 	}{
 		{"the title", "上下文构成"},
 		{"the first row", "系统提示词"},
-		{"the image count", "历史图片块"},
+		{"the image label", "历史图片块"},
 		{"the image value", "3 张"},
 		{"the buttons", "压缩上下文"},
 	}

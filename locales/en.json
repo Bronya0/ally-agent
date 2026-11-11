@@ -1812,5 +1812,6 @@
   "ui_206ebd365104": "Minimize to the system tray",
   "ui_8b8b2bd99229": "The app keeps running in the background and a left click on the tray icon restores the window; turn this off and the close button quits.",
   "ui_f8bd2f597ff4": "The system tray is unavailable here, so the close button always quits.",
-  "ui_ee29b783df7d": "What the close button in the title bar does; while the app runs in the tray, clicking its icon reopens the window."
+  "ui_ee29b783df7d": "What the close button in the title bar does; while the app runs in the tray, clicking its icon reopens the window.",
+  "ui_9c43c5f8ce19": "Historical image blocks"
 }

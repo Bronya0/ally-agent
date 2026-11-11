@@ -366,6 +366,8 @@ func finalizeContextBreakdownTotal(result *ContextBreakdown) {
 	}
 }
 
+const estimatedImageTokensPerBlock = 2000
+
 func estimateMessageBodyTokens(m openai.ChatCompletionMessage) int {
 	total := estimateTokensFromText(m.Content)
 	for _, part := range m.MultiContent {
@@ -373,15 +375,7 @@ func estimateMessageBodyTokens(m openai.ChatCompletionMessage) int {
 		case openai.ChatMessagePartTypeText:
 			total += estimateTokensFromText(part.Text)
 		case openai.ChatMessagePartTypeImageURL:
-			// Image parts are charged by pixel-derived provider pricing, not by
-			// base64 bytes: a 1568x1568 screenshot is roughly (1568*1568)/750 ≈ 3200
-			// tokens and a typical 1024x768 view lands near 1000-1300, so a fixed
-			// ~2000-token constant (validated in kimicode as MEDIA_TOKEN_ESTIMATE)
-			// is within ~2x of reality. The old 256 value undercounted 6-8x, which
-			// skewed the footer context percentage and delayed auto-compaction in
-			// image-heavy sessions. This is a hot path (called per message per
-			// step), so decoding images for exact dimensions is not an option.
-			total += 2000
+			total += estimatedImageTokensPerBlock
 		default:
 			total += estimateTokensFromText(part.Text)
 		}

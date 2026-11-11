@@ -78,6 +78,12 @@ func TestContextBreakdownCountsImageBlocksButNotTextPlaceholders(t *testing.T) {
 	if got.ImageBlocks != 2 {
 		t.Fatalf("ImageBlocks = %d, want 2", got.ImageBlocks)
 	}
+	if got.UserMessages != messageTokens(messages[0]) {
+		t.Fatalf("UserMessages = %d, want all text and image token estimates %d", got.UserMessages, messageTokens(messages[0]))
+	}
+	if got.Estimated != got.UserMessages {
+		t.Fatalf("estimated total must include image tokens exactly once: %#v", got)
+	}
 }
 
 func TestFinalizeContextBreakdownPrefersMeasurement(t *testing.T) {

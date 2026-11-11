@@ -1008,6 +1008,7 @@ var sourceKeys = map[string]string{
 	"当前上下文暂不可用":        "ui_9bbd42da1bba",
 	"市场":               "ui_9c1e8bd22488",
 	"思考强度":             "ui_9c41b3a9e12a",
+	"历史图片块":            "ui_9c43c5f8ce19",
 	"不使用代理的地址":         "ui_9c96d1d0b808",
 	"更新图谱":             "ui_9cac1adaaf5d",
 	"从「":               "ui_9cac78290c7c",

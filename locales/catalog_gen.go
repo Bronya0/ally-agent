@@ -16265,3 +16265,13 @@ func UiEe29b783df7d() string { return In(i18n.Locale()).UiEe29b783df7d() }
 func (msgs Messages) UiEe29b783df7d() string {
 	return Catalog.Format(msgs.locale, "ui_ee29b783df7d", nil)
 }
+
+// Ui9c43c5f8ce19 says "Historical image blocks"
+// in the language the app shows.
+func Ui9c43c5f8ce19() string { return In(i18n.Locale()).Ui9c43c5f8ce19() }
+
+// Ui9c43c5f8ce19 says "Historical image blocks"
+// in the language of msgs.
+func (msgs Messages) Ui9c43c5f8ce19() string {
+	return Catalog.Format(msgs.locale, "ui_9c43c5f8ce19", nil)
+}
