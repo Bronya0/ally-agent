@@ -14,6 +14,7 @@ const fastCompactAssistantTokenBudget = 8192
 const fastCompactToolMarker = "[Fast-compacted tool result; partial excerpt, not the full output. Do not repeat mutations.]\n"
 const fastCompactReasoningMarker = "[Earlier reasoning excerpt; incomplete]\n"
 const fastCompactAssistantMarker = "[Earlier assistant reply; partial excerpt]\n"
+const compactImagePlaceholder = "[Earlier image omitted during compaction]"
 
 type fastCompactCandidate struct {
 	history       []openai.ChatCompletionMessage
@@ -79,9 +80,47 @@ func fastCompactExcerpt(text string) string {
 	return string(runes[:fastCompactExcerptRunes*2/3]) + "\n[… omitted …]\n" + string(runes[len(runes)-fastCompactExcerptRunes/3:])
 }
 
+// compactOldImages replaces a percentage of the oldest image blocks with text
+// placeholders, preserving message order and surrounding text.
+func compactOldImages(messages []openai.ChatCompletionMessage, percent int) int {
+	imageCount := 0
+	for i := range messages {
+		for _, part := range messages[i].MultiContent {
+			if part.Type == openai.ChatMessagePartTypeImageURL {
+				imageCount++
+			}
+		}
+	}
+	if imageCount == 0 || percent <= 0 {
+		return 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	toReplace := imageCount * percent / 100
+	replaced := 0
+	for i := range messages {
+		parts := messages[i].MultiContent
+		if len(parts) == 0 || replaced >= toReplace {
+			continue
+		}
+		out := make([]openai.ChatMessagePart, 0, len(parts))
+		for _, part := range parts {
+			if part.Type == openai.ChatMessagePartTypeImageURL && replaced < toReplace {
+				part = openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: compactImagePlaceholder}
+				replaced++
+			}
+			out = append(out, part)
+		}
+		messages[i].MultiContent = out
+	}
+	return replaced
+}
+
 func (a *App) prepareFastCompactHistory(ctx context.Context, sessionID string, history []openai.ChatCompletionMessage, tokensBefore int) (*fastCompactCandidate, error) {
 	cutoff := fastCompactCutoff(history, defaultFastCompactKeepRecentRounds)
 	out := cloneChatMessages(history)
+	imageCount := compactOldImages(out, 80)
 	tools := map[string]string{}
 	reasoningCount := 0
 	toolArgumentsCount := 0
@@ -169,7 +208,7 @@ func (a *App) prepareFastCompactHistory(ctx context.Context, sessionID string, h
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	messageChange := len(tools) > 0 || reasoningCount > 0 || assistantCount > 0 || toolArgumentsCount > 0
+	messageChange := len(tools) > 0 || reasoningCount > 0 || assistantCount > 0 || toolArgumentsCount > 0 || imageCount > 0
 	tokensAfter := tokensBefore
 	if messageChange {
 		// Compare like with like: the provider's measured count cannot be
@@ -190,6 +229,7 @@ func (a *App) prepareFastCompactHistory(ctx context.Context, sessionID string, h
 			"toolSummaries":      tools,
 			"reasoningCount":     reasoningCount,
 			"toolArgumentsCount": toolArgumentsCount,
+			"imagesCompacted":    imageCount,
 			"assistantEdits":     assistantEdits,
 			"assistantCount":     assistantCount,
 			"tokensBefore":       tokensBefore,

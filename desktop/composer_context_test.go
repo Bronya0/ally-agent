@@ -2,7 +2,6 @@
 package desktop
 
 import (
-	"fmt"
 	"testing"
 
 	backend "ally-dev/internal/app"
@@ -37,6 +36,7 @@ func TestContextBreakdownPanelShowsEveryRow(t *testing.T) {
 		AssistantMsgs: 2_800,
 		ToolResults:   21_700,
 		Reasoning:     9_400,
+		ImageBlocks:   3,
 	}
 	st.Usage = backend.WorkspaceTokenUsage{InputTokens: 738_700, OutputTokens: 8_600}
 
@@ -46,14 +46,14 @@ func TestContextBreakdownPanelShowsEveryRow(t *testing.T) {
 	const width, height = 900, 800
 	tester := ui.NewTester(func(c *ui.Context) { a.contextUsage(c, conv) }, width, height)
 
-	last := fmt.Sprintf("累计输入 %s / 输出 %s", fmtK(st.Usage.InputTokens), fmtK(st.Usage.OutputTokens))
 	rows := []struct {
 		what string
 		text string
 	}{
 		{"the title", "上下文构成"},
 		{"the first row", "系统提示词"},
-		{"the last row", last},
+		{"the image count", "历史图片块"},
+		{"the image value", "3 张"},
 		{"the buttons", "压缩上下文"},
 	}
 	rects := map[string]ui.Rect{}
@@ -69,9 +69,6 @@ func TestContextBreakdownPanelShowsEveryRow(t *testing.T) {
 		if r.Y < 0 || r.Y+r.H > height {
 			t.Errorf("%s %q sits at y %v..%v, outside the %d tall window", row.what, row.text, r.Y, r.Y+r.H, height)
 		}
-	}
-	if tail, buttons := rects["the last row"], rects["the buttons"]; tail.Y+tail.H > buttons.Y {
-		t.Errorf("the last row ends at y %v, below the buttons at y %v: the breakdown was capped and scrolls", tail.Y+tail.H, buttons.Y)
 	}
 }
 

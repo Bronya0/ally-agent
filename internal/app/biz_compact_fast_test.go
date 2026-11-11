@@ -46,6 +46,44 @@ func fastCompactFixture() []openai.ChatCompletionMessage {
 	return append(h, openai.ChatCompletionMessage{Role: "assistant", Content: "final answer", ReasoningContent: "recent thinking"})
 }
 
+func TestFastCompactReplacesOldestEightyPercentOfImages(t *testing.T) {
+	images := func(label string) openai.ChatMessagePart {
+		return openai.ChatMessagePart{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: "data:image/png;base64," + label}}
+	}
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, MultiContent: []openai.ChatMessagePart{{Type: openai.ChatMessagePartTypeText, Text: "first"}, images("1"), images("2")}},
+		{Role: openai.ChatMessageRoleUser, MultiContent: []openai.ChatMessagePart{{Type: openai.ChatMessagePartTypeText, Text: "second"}, images("3"), images("4"), images("5")}},
+	}
+	original := cloneChatMessages(history)
+	got := compactOldImages(history, 80)
+	if got != 4 {
+		t.Fatalf("compacted %d images, want 4", got)
+	}
+	remaining := 0
+	placeholders := 0
+	for _, message := range history {
+		for _, part := range message.MultiContent {
+			switch part.Type {
+			case openai.ChatMessagePartTypeImageURL:
+				remaining++
+			case openai.ChatMessagePartTypeText:
+				if part.Text == compactImagePlaceholder {
+					placeholders++
+				}
+			}
+		}
+	}
+	if remaining != 1 || placeholders != 4 || history[0].MultiContent[0].Text != "first" || history[1].MultiContent[0].Text != "second" {
+		t.Fatalf("unexpected compacted image history: remaining=%d placeholders=%d", remaining, placeholders)
+	}
+	if original[0].MultiContent[1].Type != openai.ChatMessagePartTypeImageURL {
+		t.Fatal("input history was mutated")
+	}
+	if got := compactOldImages(history, 80); got != 0 {
+		t.Fatalf("repeated compaction replaced %d more images", got)
+	}
+}
+
 func TestFastCompactPreservesTailAndIsIdempotent(t *testing.T) {
 	t.Parallel()
 	a := newApiTestApp(t)

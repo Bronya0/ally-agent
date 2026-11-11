@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -208,7 +209,10 @@ func TestCompactSessionConfigModelPrecedence(t *testing.T) {
 // at the (now deleted) micro-compaction tier, which rewrote the middle of the
 // history in place and broke the provider prompt cache from that point on.
 func TestCompactSessionManualAlwaysRunsTheSummaryTier(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var requestBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBody = string(body)
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, sseChatChunk("## 已完成工作\n- 压缩前的历史"))
 		fmt.Fprint(w, sseChatFinishChunk("stop"))
@@ -242,8 +246,12 @@ func TestCompactSessionManualAlwaysRunsTheSummaryTier(t *testing.T) {
 
 	// The todo list of the plan tool only lives in its tool result: the rewrite
 	// must carry it over verbatim instead of trusting the prose summary.
+	imageParts := []openai.ChatMessagePart{{Type: openai.ChatMessagePartTypeText, Text: "go"}}
+	for i := 0; i < 5; i++ {
+		imageParts = append(imageParts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: fmt.Sprintf("data:image/png;base64,image-%d", i)}})
+	}
 	history := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleUser, Content: "go"},
+		{Role: openai.ChatMessageRoleUser, MultiContent: imageParts},
 		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "p1", Function: openai.FunctionCall{Name: "plan", Arguments: `{"steps":[]}`}}}},
 		{Role: openai.ChatMessageRoleTool, ToolCallID: "p1", Content: "Todos:\n- [ ] 收尾前端"},
 	}
@@ -252,6 +260,9 @@ func TestCompactSessionManualAlwaysRunsTheSummaryTier(t *testing.T) {
 	result, err := app.CompactSession(sessionID, "", overlay)
 	if err != nil {
 		t.Fatalf("CompactSession() error = %v", err)
+	}
+	if strings.Count(requestBody, "data:image/png;base64,image-") != 4 || strings.Contains(requestBody, "data:image/png;base64,image-0") || !strings.Contains(requestBody, compactImagePlaceholder) {
+		t.Fatalf("summary request should replace the oldest 20%% image block and retain the rest; body=%s", requestBody)
 	}
 	if result["tier"] != "summary" {
 		t.Fatalf("tier = %v, want summary (one LLM tier only)", result["tier"])

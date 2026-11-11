@@ -1421,9 +1421,7 @@ func gitStatsText(git backend.GitStatus) string {
 }
 
 // contextBreakdownHeight is how tall the context breakdown may get. Its rows are
-// a fixed set and the panel opens upwards, so the room is there: thirteen rows
-// (every instruction file a project can have) measure about 300, and this leaves
-// a handful more before anything scrolls.
+// a fixed set and the panel opens upwards, leaving room for all token categories.
 const contextBreakdownHeight float32 = 420
 
 func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
@@ -1498,6 +1496,7 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 				}
 				contextPart(c, "工具 Schema", b.ToolSchemas, a.secondaryInk())
 				contextPart(c, "用户提问", b.UserMessages, a.secondaryInk())
+				contextCountPart(c, "历史图片块", b.ImageBlocks, "张", a.secondaryInk())
 				contextPart(c, "AI 回复", b.AssistantMsgs, a.secondaryInk())
 				contextPart(c, "工具结果", b.ToolResults, a.secondaryInk())
 				if b.Reasoning > 0 {
@@ -1567,6 +1566,14 @@ func contextPart(c *ui.Context, name string, tokens int, ink ...ui.Color) {
 		ui.Text(c, name).FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink))
 		ui.Spacer(c)
 		ui.Text(c, fmtK(tokens)).FontSize(fsSmall)
+	})
+}
+
+func contextCountPart(c *ui.Context, name string, count int, unit string, ink ...ui.Color) {
+	ui.Row(c).FillWidth().Children(func() {
+		ui.Text(c, name).FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink))
+		ui.Spacer(c)
+		ui.Text(c, fmt.Sprintf("%d %s", count, unit)).FontSize(fsSmall)
 	})
 }
 

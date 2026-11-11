@@ -439,8 +439,11 @@ func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, in
 		return nil, errors.New("no messages to compact")
 	}
 
-	// Summarize all existing history cleanly into a single summary.
-	messagesToSummarize := history
+	// Summarize a private copy so failed compaction leaves persisted history
+	// untouched. Replace the oldest 20% of image blocks in the summary request
+	// to reduce image count while preserving most visual context.
+	messagesToSummarize := cloneChatMessages(history)
+	compactOldImages(messagesToSummarize, 20)
 	// Build a continuation-focused handoff: preserve effective requirements and
 	// actionable state without carrying forward the investigation transcript.
 	compactPrompt := `The conversation context is getting long and is being compacted. Write a concise, structured handoff that lets the next assistant continue the work from its current state after the conversation history is replaced.

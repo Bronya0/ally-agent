@@ -130,6 +130,7 @@ type ContextBreakdown struct {
 	AssistantMsgs     int                    `json:"assistantMsgs"`
 	ToolResults       int                    `json:"toolResults"`
 	Reasoning         int                    `json:"reasoning"`
+	ImageBlocks       int                    `json:"imageBlocks"`
 	// MeasuredTokens is the provider-reported size (prompt + completion) of the
 	// session's most recent request, covering the request prefix and the first
 	// MeasuredMessages conversation messages. Zero means no measurement is
@@ -658,6 +659,7 @@ func (a *App) getContextBreakdown(sessionID string, workspaceHint string) Contex
 	}
 	result.UserMessages = live.UserMessages
 	result.AssistantMsgs = live.AssistantMsgs
+	result.ImageBlocks = live.ImageBlocks
 	result.ToolResults = live.ToolResults
 	result.Reasoning = live.Reasoning
 	result.MeasuredTokens = live.MeasuredTokens
@@ -733,6 +735,11 @@ func addBreakdownMessage(result *ContextBreakdown, message openai.ChatCompletion
 		return
 	}
 	tokens := messageTokens(message)
+	for _, part := range message.MultiContent {
+		if part.Type == openai.ChatMessagePartTypeImageURL {
+			result.ImageBlocks++
+		}
+	}
 	switch message.Role {
 	case openai.ChatMessageRoleUser:
 		result.UserMessages += tokens

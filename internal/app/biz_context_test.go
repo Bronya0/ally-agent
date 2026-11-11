@@ -64,6 +64,22 @@ func TestResolveContextAnchorDiscardsRewrittenConversation(t *testing.T) {
 // TestFinalizeContextBreakdownPrefersMeasurement locks the total rule: the
 // category sum is the fallback, and a provider measurement replaces the estimate
 // for everything it covered.
+func TestContextBreakdownCountsImageBlocksButNotTextPlaceholders(t *testing.T) {
+	messages := []openai.ChatCompletionMessage{{
+		Role: openai.ChatMessageRoleUser,
+		MultiContent: []openai.ChatMessagePart{
+			{Type: openai.ChatMessagePartTypeText, Text: "look at these"},
+			{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: "data:image/png;base64,a"}},
+			{Type: openai.ChatMessagePartTypeText, Text: "[Earlier image omitted during compaction]"},
+			{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: "data:image/png;base64,b"}},
+		},
+	}}
+	got := computeLiveBreakdown(messages)
+	if got.ImageBlocks != 2 {
+		t.Fatalf("ImageBlocks = %d, want 2", got.ImageBlocks)
+	}
+}
+
 func TestFinalizeContextBreakdownPrefersMeasurement(t *testing.T) {
 	breakdown := ContextBreakdown{SystemPrompt: 100, ToolSchemas: 50, UserMessages: 10}
 	finalizeContextBreakdownTotal(&breakdown)
