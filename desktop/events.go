@@ -3,9 +3,11 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -50,6 +52,18 @@ func appendStreamChunk(st *chatUI, row int, before, delta string) string {
 	}
 	acc.text.WriteString(delta)
 	return acc.text.String()
+}
+
+// A history rewrite can retire the row while a run is still executing tools.
+// Drop the accumulator then, rather than retaining that old answer until done.
+func releaseStaleStream(t *conversation) {
+	if t.UI == nil || t.UI.Stream == nil {
+		return
+	}
+	acc := t.UI.Stream
+	if acc.row < 0 || acc.row >= len(t.Messages) || str(t.Messages[acc.row], "content") != acc.text.String() {
+		t.UI.Stream = nil
+	}
 }
 
 func (a *desktop) applyEvent(name string, p map[string]any) {
@@ -120,12 +134,12 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	case "run:start":
 		t.RunID = str(p, "runId")
 		t.Busy = true
-		t.Status = "正在连接模型…"
+		t.Status = locales.Text("正在连接模型…")
 		if t.CancelRequested && t.RunID != "" {
 			id := t.RunID
 			t.CancelRequested = false
 			a.job(func() error { return a.core.CancelRun(id) })
-			t.Status = "正在取消…"
+			t.Status = locales.Text("正在取消…")
 		}
 		ui.ThinkingBytes = 0
 		followLatest(t)
@@ -138,6 +152,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	case "run:stream", "run:delta":
 		content := str(p, "content")
 		if content != "" {
+			invalidateChatSearchTail(t)
 			ui.ThinkingBytes = 0
 			n := len(t.Messages)
 			// A summary that replaced the transcript is not this run's answer: the
@@ -153,12 +168,12 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			if before == "" {
 				// A row that starts drawing may open a history block: the cached
 				// block starts have to know without the transcript growing.
-				t.markHistory()
+				t.markHistoryAt(len(t.Messages) - 1)
 			}
-			t.Status = "正在回复…"
+			t.Status = locales.Text("正在回复…")
 		} else if n := int(num(p, "reasoningLen")); n > 0 {
 			ui.ThinkingBytes += n
-			t.Status = "正在思考…"
+			t.Status = locales.Text("正在思考…")
 		}
 		// Reasoning only changes the footer, not transcript geometry.
 		if content != "" && ui.Follow {
@@ -178,7 +193,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		ui.AskCustom = map[string]bool{}
 		ui.AskCustomTxt = map[string]string{}
 		ui.AskSubmitted = false
-		t.Status = "等待你的回答"
+		t.Status = locales.Text("等待你的回答")
 	case "ask:closed":
 		t.AskID = ""
 		t.Questions = nil
@@ -195,7 +210,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		if ui.Retry.Error == "" {
 			ui.Retry.Error = str(p, "reason")
 		}
-		t.Status = fmt.Sprintf("请求重试中（%d/%d）…", ui.Retry.Attempt, ui.Retry.MaxAttempts)
+		t.Status = fmt.Sprintf(locales.Text("请求重试中（%d/%d）…"), ui.Retry.Attempt, ui.Retry.MaxAttempts)
 	case "run:mcp-wait":
 		var names []string
 		for _, item := range list(p, "servers") {
@@ -208,9 +223,9 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			}
 		}
 		if len(names) > 0 {
-			t.Status = "正在等待 MCP：" + strings.Join(names, "、")
+			t.Status = locales.Text("正在等待 MCP：") + strings.Join(names, "、")
 		} else {
-			t.Status = "正在等待 MCP…"
+			t.Status = locales.Text("正在等待 MCP…")
 		}
 	case "run:compact":
 		// The automatic path announces its summary request before running it: this
@@ -249,7 +264,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		ui.CompactNote = ""
 		if msg := str(p, "error"); msg != "" {
 			if t == a.current() {
-				a.notify("上下文压缩失败：" + msg)
+				a.notify(locales.Text("上下文压缩失败：") + msg)
 			}
 			a.refreshSessionFooter(t)
 			return
@@ -265,20 +280,12 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		}
 	case "run:inject":
 		ui.ThinkingBytes = 0
-		t.Status = "已注入新消息，继续执行…"
+		t.Status = locales.Text("已注入新消息，继续执行…")
 	case "run:done", "run:error":
+		t.toolRev++
 		ui.ThinkingBytes = 0
 		ui.PlanCollapsed = true
-		for _, call := range t.Messages {
-			if str(call, "role") == "tool_call" && toolState(call) == "running" {
-				call["status"] = "success"
-				call["toolState"] = "tool:result"
-				if name == "run:error" {
-					call["status"] = "error"
-					call["error"] = str(p, "error")
-				}
-			}
-		}
+		settleRunningToolMessages(t, name == "run:error", str(p, "error"))
 		t.Busy = false
 		t.RunID = ""
 		t.CancelRequested = false
@@ -288,11 +295,11 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		// keeping it would hold one extra copy of the whole answer per tab.
 		ui.Stream = nil
 		if name == "run:done" {
-			t.Status = "任务完成"
+			t.Status = locales.Text("任务完成")
 		} else {
 			msg := str(p, "error")
 			if msg == "" {
-				msg = "运行失败"
+				msg = locales.Text("运行失败")
 			}
 			t.Status = msg
 			appendRunError(t, msg)
@@ -323,10 +330,25 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	}
 }
 
+func settleRunningToolMessages(t *conversation, failed bool, reason string) {
+	for index, call := range t.Messages {
+		if str(call, "role") != "tool_call" || toolState(call) != "running" {
+			continue
+		}
+		before := groupItem(call)
+		call["status"], call["toolState"] = "success", "tool:result"
+		if failed {
+			call["status"], call["error"] = "error", reason
+		}
+		recordToolGroupChange(t, index, before, call)
+	}
+}
+
 func appendRunError(t *conversation, msg string) {
 	if hasErrorTail(t.Messages, msg) {
 		return
 	}
+	invalidateChatSearch(t)
 	t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": msg, "error": true})
 	if st := t.uiState(); st.Follow {
 		st.FollowPending = true
@@ -352,17 +374,22 @@ func lastContentIndex(messages []map[string]any) int {
 }
 
 func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any) {
+	t.toolRev++
 	id := str(p, "toolCallId")
 	var m map[string]any
-	for i := len(t.Messages) - 1; i >= 0; i-- {
-		if id != "" && str(t.Messages[i], "toolCallId") == id {
-			m = t.Messages[i]
-			break
-		}
+	index := t.toolCallIndex(id)
+	if index >= 0 {
+		m = t.Messages[index]
 	}
+	if name == "tool:update" && m != nil && (str(m, "status") == "success" || str(m, "status") == "error") {
+		return // a delayed progress event must not overwrite completed arguments/results
+	}
+	beforeGroup := groupItem(m)
 	if m == nil {
+		invalidateChatSearch(t)
 		m = map[string]any{"role": "tool_call", "toolCallId": id}
 		t.Messages = append(t.Messages, m)
+		index = len(t.Messages) - 1
 	}
 	// Ownership also depends on the tool kind and a sub-agent result's ID,
 	// both of which can arrive after this row has already been rendered.
@@ -372,18 +399,20 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 		beforeAgent = str(toolResult(m), "agentId")
 	}
 	defer func() {
+		recordToolGroupChange(t, index, beforeGroup, m)
 		afterKind := toolKind(str(m, "name"))
 		if beforeKind != afterKind || ((beforeKind == "subagent" || afterKind == "subagent") && beforeAgent != str(toolResult(m), "agentId")) {
-			t.markHistory()
+			t.markHistoryAt(index)
 		}
 	}()
 	for _, k := range []string{"name", "args", "result", "error", "errorCode", "durationMs", "mcpServer", "mcpTool"} {
 		if v, ok := p[k]; ok {
+			if k == "args" {
+				delete(m, "createPreviewTrimmed")
+				delete(m, "createPreviewStartLine")
+			}
 			m[k] = v
 		}
-	}
-	if name == "tool:update" && (str(m, "status") == "success" || str(m, "status") == "error") {
-		return
 	}
 	t.uiState().ThinkingBytes = 0
 	m["toolState"] = name
@@ -412,15 +441,17 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 		a.attachToolImage(t, m)
 	}
 	retainLocalCommandSummary(m)
+	retainReadDisplaySummary(m)
+	retainCreateDisplayPreview(m)
 	if toolKind(str(m, "name")) == "command" && (name == "tool:result" || name == "tool:error") {
 		key := str(m, "toolCallId")
 		if t.uiState().ToolOpen[key] {
-			a.loadCommandDetail(t, key)
+			a.loadCommandDetail(t, index, key)
 		}
 	}
 	toolName := str(p, "name")
 	if toolName != "" {
-		t.Status = "正在使用 " + toolName
+		t.Status = locales.Text("正在使用 ") + toolName
 	}
 	if t.uiState().Follow {
 		t.uiState().FollowPending = true
@@ -575,7 +606,7 @@ func upsertScheduledTask(tasks []backend.ScheduledTask, task backend.ScheduledTa
 func removeScheduledTask(tasks []backend.ScheduledTask, id string) []backend.ScheduledTask {
 	for i := range tasks {
 		if tasks[i].ID == id {
-			return append(tasks[:i], tasks[i+1:]...)
+			return slices.Delete(tasks, i, i+1)
 		}
 	}
 	return tasks
@@ -600,11 +631,8 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 	// A sub-agent row is a message so it keeps its chronological place among
 	// the parent's tool cards; the event stream keeps that row up to date.
 	var row map[string]any
-	for i := len(t.Messages) - 1; i >= 0; i-- {
-		if str(t.Messages[i], "role") == "subagent" && str(t.Messages[i], "subId") == id {
-			row = t.Messages[i]
-			break
-		}
+	if i := t.subagentIndex(id); i >= 0 {
+		row = t.Messages[i]
 	}
 	if name == "sub:blackboard" {
 		if row != nil {
@@ -613,6 +641,7 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 		return
 	}
 	if row == nil {
+		invalidateChatSearch(t)
 		row = map[string]any{"role": "subagent", "subId": id, "parentToolCallId": str(p, "toolCallId")}
 		t.Messages = append(t.Messages, row)
 		// Nudge the reader only when a new sub-agent row appears.
@@ -696,20 +725,19 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 					if run == nil || run.SessionID != sid {
 						continue
 					}
-					for _, msg := range t.Messages {
-						if str(msg, "role") == "subagent" && str(msg, "subId") == run.ID {
-							msg["steps"] = run.Steps
-							msg["summary"] = run.Summary
-							msg["error"] = run.Error
-							msg["stopReason"] = run.StopReason
-							msg["inputTokens"] = run.InputTokens
-							msg["outputTokens"] = run.OutputTokens
-							msg["contextTokens"] = run.ContextTokens
-							msg["cacheHitTokens"] = run.CacheHitTokens
-							msg["cacheMissTokens"] = run.CacheMissTokens
-							msg["status"] = strings.ToLower(run.Status)
-							mergeSubagentBlackboardRun(msg, run)
-						}
+					if i := t.subagentIndex(run.ID); i >= 0 {
+						msg := t.Messages[i]
+						msg["steps"] = run.Steps
+						msg["summary"] = run.Summary
+						msg["error"] = run.Error
+						msg["stopReason"] = run.StopReason
+						msg["inputTokens"] = run.InputTokens
+						msg["outputTokens"] = run.OutputTokens
+						msg["contextTokens"] = run.ContextTokens
+						msg["cacheHitTokens"] = run.CacheHitTokens
+						msg["cacheMissTokens"] = run.CacheMissTokens
+						msg["status"] = strings.ToLower(run.Status)
+						mergeSubagentBlackboardRun(msg, run)
 					}
 				}
 			})
@@ -842,7 +870,7 @@ func (a *desktop) refreshSSH(manual ...bool) {
 			a.sshServers = servers
 			a.sshAllowed = allowed
 			if len(manual) > 0 && manual[0] {
-				a.notifySuccess("SSH 列表已刷新")
+				a.notifySuccess(locales.Text("SSH 列表已刷新"))
 			}
 		})
 	}()

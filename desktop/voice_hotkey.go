@@ -6,6 +6,7 @@ package desktop
 // audio or the transcription queue, so it can be read (and tested) on its own.
 
 import (
+	"ally-dev/locales"
 	"fmt"
 	"strings"
 	"time"
@@ -298,13 +299,13 @@ func (a *desktop) setVoiceModifierSide(left, right bool) {
 func voiceModifierSidesNote(left, right bool) string {
 	switch {
 	case left && right:
-		return "左 / 右都生效"
+		return locales.Text("左 / 右都生效")
 	case left:
-		return "只认左侧"
+		return locales.Text("只认左侧")
 	case right:
-		return "只认右侧"
+		return locales.Text("只认右侧")
 	}
-	return "至少选一侧"
+	return locales.Text("至少选一侧")
 }
 
 func (a *desktop) setVoiceHotkey(value string) {
@@ -343,7 +344,7 @@ func (a *desktop) beginVoiceHotkeyCapture() {
 	})
 	if err != nil {
 		a.voiceHotkeyCapturing = false
-		a.notifyError("无法开始录制快捷键：" + err.Error())
+		a.notifyError(locales.Text("无法开始录制快捷键：") + err.Error())
 		if a.prefs.VoiceInputEnabled {
 			a.installVoiceHotkey()
 		}
@@ -377,7 +378,7 @@ func (a *desktop) finishVoiceHotkeyCapture(value string) {
 	}
 	if strings.TrimSpace(value) == "" {
 		if label != "" {
-			a.notifyError(label + " 需要搭配至少一个修饰键（Ctrl/Alt/Shift/Win）才能不漏键")
+			a.notifyError(label + locales.Text(" 需要搭配至少一个修饰键（Ctrl/Alt/Shift/Win）才能不漏键"))
 		}
 		if a.prefs.VoiceInputEnabled {
 			a.installVoiceHotkey()

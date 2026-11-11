@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"errors"
 	"fmt"
 	"math"
@@ -92,7 +93,7 @@ func (a *desktop) configureVoiceInput() {
 			// recorder); the disabled branch above no longer runs for this call.
 			a.disposeVoiceInput()
 		}
-		a.notifyError("请先添加语音识别（ASR）模型，再启用语音输入")
+		a.notifyError(locales.Text("请先添加语音识别（ASR）模型，再启用语音输入"))
 		return
 	}
 	if !voiceModelIDExists(asrModels, a.prefs.VoiceModelID) {
@@ -142,7 +143,7 @@ func (a *desktop) configureVoiceInput() {
 				}
 				a.prefs.VoiceInputEnabled = false
 				a.savePrefs()
-				a.notifyError("语音录音预热失败：" + err.Error())
+				a.notifyError(locales.Text("语音录音预热失败：") + err.Error())
 				return
 			}
 			a.voiceInput.prepared = recorder
@@ -208,7 +209,7 @@ func (a *desktop) refreshVoiceInputDevices() {
 			a.savePrefs()
 			a.resetVoiceInputDeviceSession()
 			if a.prefs.VoiceInputEnabled {
-				a.notify("所选麦克风不可用，已切换到系统默认输入设备")
+				a.notify(locales.Text("所选麦克风不可用，已切换到系统默认输入设备"))
 				a.configureVoiceInput()
 			}
 		})
@@ -222,7 +223,7 @@ func (a *desktop) fallBackToDefaultVoiceDevice() {
 	a.prefs.VoiceInputDeviceID = ""
 	a.voiceInput.preparedDeviceID = ""
 	a.savePrefs()
-	a.notify("所选麦克风不可用，已切换到系统默认输入设备")
+	a.notify(locales.Text("所选麦克风不可用，已切换到系统默认输入设备"))
 	a.configureVoiceInput()
 }
 
@@ -268,7 +269,7 @@ func (a *desktop) resetVoiceInputDeviceSession() {
 	if a.voiceInput.active != nil {
 		// Switching the microphone mid-take used to discard the words silently; say
 		// so, because the user was talking.
-		a.notify("已切换麦克风，本次录音已丢弃")
+		a.notify(locales.Text("已切换麦克风，本次录音已丢弃"))
 	}
 	a.voiceInput.active, a.voiceInput.prepared = nil, nil
 	a.voiceInput.preparedDeviceID = ""
@@ -327,7 +328,7 @@ func (a *desktop) beginVoiceInput(t *conversation) {
 					return
 				}
 				a.voiceInput.pressed = false
-				a.notifyError("启动麦克风失败：" + err.Error())
+				a.notifyError(locales.Text("启动麦克风失败：") + err.Error())
 				a.configureVoiceInput()
 				return
 			}
@@ -448,7 +449,7 @@ func (a *desktop) finishVoiceInput(timeout bool) {
 		// would add a second toast ("请先添加 ASR 模型") for the same event.
 		go r.Cancel()
 		a.syncVoiceRecordable()
-		a.notifyError("所选语音模型已不可用，请在设置中重新选择")
+		a.notifyError(locales.Text("所选语音模型已不可用，请在设置中重新选择"))
 		return
 	}
 	model := voiceModelByID(a.config.VoiceModels, a.prefs.VoiceModelID)
@@ -476,7 +477,7 @@ func (a *desktop) finishVoiceInput(timeout bool) {
 			}
 			if err != nil {
 				a.voiceInput.finishTake()
-				a.notifyError("语音转写失败：" + err.Error())
+				a.notifyError(locales.Text("语音转写失败：") + err.Error())
 				return
 			}
 			if voiceClipTooShort(wav) || !voiceClipHasSignal(wav) {
@@ -537,7 +538,7 @@ func (a *desktop) installVoiceHotkey() {
 		})
 	})
 	if err != nil {
-		a.notifyError("语音快捷键启动失败：" + err.Error())
+		a.notifyError(locales.Text("语音快捷键启动失败：") + err.Error())
 		return
 	}
 	a.voiceInput.stopHotkey = stop
@@ -611,23 +612,23 @@ func (a *desktop) voiceStatusRow(c *ui.Context) {
 		ui.Row(c.Key("voice-input-live-status")).Gap(gapField).AlignItems(ui.Center).Children(func() {
 			switch {
 			case recording:
-				ui.Text(c, "录音中").FontSize(fsTiny).TextColor(accent)
+				ui.Text(c, locales.Text("录音中")).FontSize(fsTiny).TextColor(accent)
 				a.voiceLevelMeter(c, accent)
 				if outstanding > 0 {
-					fieldNote(c, fmt.Sprintf("稍后转录 %d 条", outstanding), a.secondaryInk())
+					fieldNote(c, fmt.Sprintf(locales.Text("稍后转录 %d 条"), outstanding), a.secondaryInk())
 				} else {
-					fieldNote(c, "松开快捷键结束", a.secondaryInk())
+					fieldNote(c, locales.Text("松开快捷键结束"), a.secondaryInk())
 				}
 			case outstanding > 0:
 				ui.Spinner(c).Size(13, 13)
-				text := "正在转录…"
+				text := locales.Text("正在转录…")
 				if outstanding > 1 {
-					text = fmt.Sprintf("正在转录…（还有 %d 条排队）", outstanding-1)
+					text = fmt.Sprintf(locales.Text("正在转录…（还有 %d 条排队）"), outstanding-1)
 				}
 				ui.Text(c, text).FontSize(fsTiny).TextColor(accent)
 			default:
 				ui.Spinner(c).Size(13, 13)
-				ui.Text(c, "语音输入正在初始化…").FontSize(fsTiny).TextColor(accent)
+				ui.Text(c, locales.Text("语音输入正在初始化…")).FontSize(fsTiny).TextColor(accent)
 			}
 		})
 	})

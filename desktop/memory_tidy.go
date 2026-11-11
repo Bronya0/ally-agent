@@ -66,10 +66,8 @@ func (a *desktop) tidyMemory() {
 	if a.closing || a.win == nil || (!a.mainWindowHidden && !a.win.IsMinimized()) {
 		return
 	}
-	// Always release native previews after the grace period. The interval
-	// below throttles Go heap trimming, not WebView or decoder cleanup.
-	a.releaseAllHTMLPreviews()
-	a.releaseFilePreview()
+	// Trim only Go's unused heap. Open preview pages remain alive across hiding
+	// and minimizing; their owners release them on explicit close.
 	if !a.memoryTidyAt.IsZero() && time.Since(a.memoryTidyAt) < memoryTidyInterval {
 		return
 	}

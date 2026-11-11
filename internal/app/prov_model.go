@@ -2224,6 +2224,12 @@ const (
 	apiFormatOpenAIChat        = "openai_chat"
 	apiFormatOpenAIResponses   = "openai_responses"
 	apiFormatAnthropicMessages = "anthropic_messages"
+
+	// The desktop lists the stored values as select options, so what it shows
+	// and writes must be these, not one of the aliases normalizeAPIFormat takes.
+	APIFormatOpenAIChat        = apiFormatOpenAIChat
+	APIFormatOpenAIResponses   = apiFormatOpenAIResponses
+	APIFormatAnthropicMessages = apiFormatAnthropicMessages
 	// openAIOfficialAPIBaseURL is the single source of truth for the official
 	// OpenAI endpoint: both adapters gate their OpenAI-only request fields on it
 	// (see isOfficialOpenAIEndpoint).

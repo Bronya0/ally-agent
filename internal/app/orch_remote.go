@@ -155,7 +155,7 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 	// in another workspace.
 	if isRegistered && workspace != "" && !a.IsServerAuthorizedForWorkspace(workspace, serverNode.ID) {
 		return remoteTarget{}, codedToolError("E_SERVER_UNAUTHORIZED",
-			fmt.Errorf("server %q is not authorized for current workspace tab; please authorize it in the tab footer or request access via ssh_cluster", serverKey))
+			fmt.Errorf("server %q is not authorized for current workspace tab; please authorize it in the workspace footer", serverKey))
 	}
 
 	// 工作区授权通过后才缓存节点凭据。

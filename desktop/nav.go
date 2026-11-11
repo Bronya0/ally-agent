@@ -3,6 +3,7 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"strings"
 )
 
@@ -21,15 +22,9 @@ func (a *desktop) changePage(page string) {
 		if a.page == "chat" {
 			a.resetFileExplorer()
 		}
-		a.releaseFilePreview()
+		a.hideFilePreview()
 	}
 	if a.page == "settings" && page != "settings" {
-		// A pending chord capture must not outlive the settings page: while it
-		// listens it owns the only keyboard hook, so the shortcut would look
-		// unbound until its timeout fired.
-		if a.voiceHotkeyCapturing {
-			a.finishVoiceHotkeyCapture("")
-		}
 		a.commitSettingsOnLeave()
 	}
 	if a.page == "models" && page != "models" {
@@ -38,6 +33,9 @@ func (a *desktop) changePage(page string) {
 	}
 	a.page = page
 	a.pageEpoch++
+	if page == "settings" {
+		a.beginSettings()
+	}
 	if page == "settings" && voiceInputSupported() && !a.voiceInputDevicesScanned {
 		// The scan is a COM enumeration, so it waits until someone opens the page that
 		// shows the device list instead of running on every start.
@@ -117,7 +115,7 @@ func (a *desktop) saveConfig(cfg backend.ConfigState, notice ...string) {
 			if len(notice) > 0 {
 				a.notifySuccess(notice[0])
 			} else {
-				a.notifySuccess("设置已保存")
+				a.notifySuccess(locales.Text("设置已保存"))
 			}
 		})
 	}()

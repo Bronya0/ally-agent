@@ -9,7 +9,7 @@ import (
 
 func TestErrorTextCanCopyFullDiagnostic(t *testing.T) {
 	message := "网络错误：详细信息\n" + strings.Repeat("诊断内容 ", 60)
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		ui.Column(c).Fill().Children(func() { ErrorText(c.Key("error"), message) })
 	}, 320, 150)
 	tt.RightClickAt(30, 10)

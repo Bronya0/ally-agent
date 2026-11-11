@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -311,7 +312,7 @@ func (a *desktop) configureEditorAssist(root string, file *workspaceFile) {
 		if name == "" {
 			return
 		}
-		text := "标识符 · " + filepath.Base(file.Path) + ":" + strconv.Itoa(snapshot.LineOf(start)+1)
+		text := locales.Text("标识符 · ") + filepath.Base(file.Path) + ":" + strconv.Itoa(snapshot.LineOf(start)+1)
 		if strings.EqualFold(filepath.Ext(file.Path), ".go") {
 			if idx := a.editorAssistForSnapshot(file, snapshot); idx != nil {
 				if symbol, ok := idx.symbols[name]; ok {
@@ -394,7 +395,7 @@ var goBuiltinHoverText = map[string]string{
 	"recover": "recover() any\n在 deferred 函数中捕获当前 goroutine 的 panic。",
 }
 
-func goBuiltinHover(name string) string { return goBuiltinHoverText[name] }
+func goBuiltinHover(name string) string { return locales.Text(goBuiltinHoverText[name]) }
 
 func (a *desktop) editorAssistForSnapshot(file *workspaceFile, snapshot editor.Snapshot) *editorAssistIndex {
 	if file.Assist != nil && file.Assist.version == snapshot.Version() {
@@ -427,9 +428,7 @@ func (a *desktop) installEditorAssist(root string, file *workspaceFile, buffer *
 func (a *desktop) releaseWorkspaceFile(root string) {
 	key := workspaceKey(root)
 	a.workspacePreview.releaseWorkspace(key)
-	if tab := a.current(); tab != nil && workspaceKey(tab.Workspace) == key {
-		a.media.playing, a.media.autoplay = false, false
-	}
+	delete(a.mediaPlayback, key)
 	file := a.workspaceFiles[key]
 	if file == nil {
 		return
@@ -460,7 +459,7 @@ func releaseWorkspaceFileValue(file *workspaceFile) {
 }
 
 func (a *desktop) releaseWorkspaceFiles() {
-	a.releaseFilePreview()
+	a.releaseAllFilePreviews()
 	a.closeFileInfo()
 	for key, file := range a.workspaceFiles {
 		delete(a.workspaceFiles, key)

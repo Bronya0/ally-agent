@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -22,16 +23,16 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 		a.sshF.TestBusy = map[string]bool{}
 	}
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-		uikit.Input(c.Key("ssh-search"), &a.sshF.Search).Placeholder("搜索").Label("搜索 SSH 服务器").Width(200)
+		uikit.Input(c.Key("ssh-search"), &a.sshF.Search).Placeholder(locales.Text("搜索")).Label(locales.Text("搜索 SSH 服务器")).Width(200)
 		ui.Spacer(c)
-		flat(c, "导入").OnClick(func() { a.importSSH() })
-		uikit.Tooltip(c, flat(c, "导出").Disabled(len(a.sshServers) == 0), "导出文件含密码等凭据明文，请妥善保管").OnClick(func() { a.exportSSH() })
-		flat(c, "刷新").OnClick(func() { a.refreshSSH(true) })
-		primary(c, "添加").OnClick(func() { a.openSSHEditor("", "") })
+		flat(c, locales.Text("导入")).OnClick(func() { a.importSSH() })
+		uikit.Tooltip(c, flat(c, locales.Text("导出")).Disabled(len(a.sshServers) == 0), locales.Text("导出文件含密码等凭据明文，请妥善保管")).OnClick(func() { a.exportSSH() })
+		flat(c, locales.Text("刷新")).OnClick(func() { a.refreshSSH(true) })
+		primary(c, locales.Text("添加")).OnClick(func() { a.openSSHEditor("", "") })
 	})
 	groups := a.sshGroups()
 	if len(a.sshServers) == 0 {
-		emptyState(c, "暂无配置的 SSH 服务器", "点击“添加”录入第一台服务器。", a.secondaryInk())
+		emptyState(c, locales.Text("暂无配置的 SSH 服务器"), locales.Text("点击“添加”录入第一台服务器。"), a.secondaryInk())
 		a.sshEditorDialog(c)
 		return
 	}
@@ -45,7 +46,7 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 		if index >= len(groups) {
 			index = 0
 		}
-		if a.scrollTabs(c, "ssh-groups", &index, groups...) {
+		if a.scrollTabs(c, "ssh-groups", &index, sshGroupLabels(groups)...) {
 			a.sshF.Group = index
 			a.sshF.GroupName = groups[index]
 		}
@@ -88,14 +89,14 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 							neutralChip(c, node.Alias)
 						}
 						if node.Status == "pending_approval" {
-							statusBadge(c, "待审批", "warn")
+							statusBadge(c, locales.Text("待审批"), "warn")
 						}
 						ui.Spacer(c)
-						cardFlatBusy(c, "测试", a.sshF.TestBusy[node.ID]).OnClick(func() { a.testSSHNode(node) })
-						cardFlat(c, "复制").OnClick(func() { a.openSSHClone(node) })
-						cardFlat(c, "编辑").OnClick(func() { a.openSSHEditor(node.ID, node.Group) })
-						cardDanger(c, "删除").OnClick(func() {
-							a.confirmAction("删除服务器", node.Alias, func() error { return a.core.DeleteSSHServer(node.ID) }, func() { a.refreshSSH() })
+						cardFlatBusy(c, locales.Text("测试"), a.sshF.TestBusy[node.ID]).OnClick(func() { a.testSSHNode(node) })
+						cardFlat(c, locales.Text("复制")).OnClick(func() { a.openSSHClone(node) })
+						cardFlat(c, locales.Text("编辑")).OnClick(func() { a.openSSHEditor(node.ID, node.Group) })
+						cardDanger(c, locales.Text("删除")).OnClick(func() {
+							a.confirmAction(locales.Text("删除服务器"), node.Alias, func() error { return a.core.DeleteSSHServer(node.ID) }, func() { a.refreshSSH() })
 						})
 					})
 					if node.Description != "" {
@@ -107,9 +108,9 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 				// shown counts search hits, so it cannot say whether the group holds
 				// any server: an empty 未分组 tab used to report a search that never ran.
 				if query != "" {
-					emptyState(c, "无匹配结果", "", a.secondaryInk())
+					emptyState(c, locales.Text("无匹配结果"), "", a.secondaryInk())
 				} else {
-					emptyState(c, "这个分组还没有服务器", "在“添加”里把服务器归到这个分组。", a.secondaryInk())
+					emptyState(c, locales.Text("这个分组还没有服务器"), locales.Text("在“添加”里把服务器归到这个分组。"), a.secondaryInk())
 				}
 			}
 		})
@@ -139,6 +140,16 @@ func sshGroupInput(group string) string {
 		return sshUngrouped
 	}
 	return group
+}
+
+func sshGroupLabels(groups []string) []string {
+	labels := append([]string(nil), groups...)
+	for i, group := range groups {
+		if group == sshUngrouped {
+			labels[i] = locales.Text(sshUngrouped)
+		}
+	}
+	return labels
 }
 
 func sshPortInput(port int) float64 {
@@ -212,11 +223,11 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 		return
 	}
 	d := &a.sshF.Draft
-	title := "添加 SSH 服务器"
+	title := locales.Text("添加 SSH 服务器")
 	if a.sshF.CloneMode {
-		title = "复制 SSH 服务器"
+		title = locales.Text("复制 SSH 服务器")
 	} else if a.sshF.EditingID != "" {
-		title = "编辑 SSH 服务器"
+		title = locales.Text("编辑 SSH 服务器")
 	}
 	height := float32(600)
 	if d.AuthType == "password" {
@@ -225,45 +236,52 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 		height = 700
 	}
 	formDialog(c, &a.sshF.EditorOpen, 560, height, title, "", func() {
-		fieldRow(c, "ssh-alias", "昵称", &d.Alias, false)
+		fieldRow(c, "ssh-alias", locales.Text("昵称"), &d.Alias, false)
 		if a.sshF.CloneMode {
 			source := a.sshF.CloneSource
 			if source == "" {
-				source = "原服务器配置"
+				source = locales.Text("原服务器配置")
 			}
-			fieldNote(c, "从「"+source+"」复制；保存后会创建新的服务器配置。", a.secondaryInk())
+			fieldNote(c, locales.Text("从「")+source+locales.Text("」复制；保存后会创建新的服务器配置。"), a.secondaryInk())
 		}
-		fieldLabel(c, "分组")
-		uikit.ComboboxField(c.Key("ssh-group"), &a.sshF.GroupInput, a.sshGroups(), "分组", "选择或输入分组", a.secondaryInk()).FillWidth()
+		fieldLabel(c, locales.Text("分组"))
+		groupInput := a.sshF.GroupInput
+		if groupInput == sshUngrouped {
+			groupInput = locales.Text(sshUngrouped)
+		}
+		if uikit.ComboboxField(c.Key("ssh-group"), &groupInput, sshGroupLabels(a.sshGroups()), locales.Text("分组"), locales.Text("选择或输入分组"), a.secondaryInk()).FillWidth().Changed() {
+			if groupInput == locales.Text(sshUngrouped) {
+				groupInput = sshUngrouped
+			}
+			a.sshF.GroupInput = groupInput
+		}
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
-			ui.Column(c).Grow(2).Basis(0).Children(func() { fieldRow(c, "ssh-host", "主机", &d.Host, false) })
+			ui.Column(c).Grow(2).Basis(0).Children(func() { fieldRow(c, "ssh-host", locales.Text("主机"), &d.Host, false) })
 			ui.Column(c).Grow(1).Basis(0).Gap(gapTight).Children(func() {
-				fieldLabel(c, "端口")
-				ui.NumberInput(c.Key("ssh-port"), &a.sshF.Port, 1, 65535, 1).Label("端口")
+				fieldLabel(c, locales.Text("端口"))
+				ui.NumberInput(c.Key("ssh-port"), &a.sshF.Port, 1, 65535, 1).Label(locales.Text("端口"))
 			})
 		})
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
-			ui.Column(c).Grow(1).Basis(0).Children(func() { fieldRow(c, "ssh-user", "用户名", &d.Username, false) })
+			ui.Column(c).Grow(1).Basis(0).Children(func() { fieldRow(c, "ssh-user", locales.Text("用户名"), &d.Username, false) })
 			ui.Column(c).Grow(1).Basis(0).Gap(gapTight).Children(func() {
-				fieldLabel(c, "认证方式")
-				authOptions := []string{"本机免密", "私钥文件", "密码"}
-				current := map[string]string{"agent": "本机免密", "key": "私钥文件", "password": "密码"}[d.AuthType]
-				if current == "" {
-					current = "密码"
+				fieldLabel(c, locales.Text("认证方式"))
+				authOptions := []uikit.Option{
+					{Value: "agent", Label: locales.Text("本机免密")},
+					{Value: "key", Label: locales.Text("私钥文件")},
+					{Value: "password", Label: locales.Text("密码")},
 				}
-				if uikit.Select(c.Key("ssh-auth"), &current, authOptions, a.secondaryInk()).Label("认证方式").FillWidth().Changed() {
-					d.AuthType = map[string]string{"本机免密": "agent", "私钥文件": "key", "密码": "password"}[current]
-				}
+				uikit.SelectField(c.Key("ssh-auth"), &d.AuthType, authOptions, a.secondaryInk()).Label(locales.Text("认证方式")).FillWidth()
 			})
 		})
 		switch d.AuthType {
 		case "agent":
-			fieldNote(c, "使用本机 ~/.ssh/config、默认私钥或 SSH Agent，无需填写密码或私钥。", a.secondaryInk())
+			fieldNote(c, locales.Text("使用本机 ~/.ssh/config、默认私钥或 SSH Agent，无需填写密码或私钥。"), a.secondaryInk())
 		case "key":
-			ui.Field(c.Key("field-ssh-key"), "私钥路径", func() {
+			ui.Field(c.Key("field-ssh-key"), locales.Text("私钥路径"), func() {
 				ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-					uikit.Input(c, &d.KeyPath).FillWidth().MinWidth(0).Placeholder(fieldExample("ssh-key", "私钥路径")).FontSize(fsBody)
-					flat(c, "选择文件").Shrink(0).OnClick(func() {
+					uikit.Input(c, &d.KeyPath).FillWidth().MinWidth(0).Placeholder(fieldExample("ssh-key", locales.Text("私钥路径"))).FontSize(fsBody)
+					flat(c, locales.Text("选择文件")).Shrink(0).OnClick(func() {
 						go func() {
 							p, err := a.core.SelectPrivateKeyFile()
 							if err != nil {
@@ -277,21 +295,21 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 					})
 				})
 			}).JustifySelf(ui.Stretch).AlignSelf(ui.Stretch).MinWidth(0).Shrink(0)
-			fieldRow(c, "ssh-passphrase", "私钥口令（可选）", &d.Password, true)
-			fieldNote(c, "明文保存在本机配置目录，请勿共享该文件。", a.secondaryInk())
+			fieldRow(c, "ssh-passphrase", locales.Text("私钥口令（可选）"), &d.Password, true)
+			fieldNote(c, locales.Text("明文保存在本机配置目录，请勿共享该文件。"), a.secondaryInk())
 		case "password":
-			fieldRow(c, "ssh-password", "密码", &d.Password, true)
-			fieldNote(c, "明文保存在本机配置目录，请勿共享该文件。", a.secondaryInk())
+			fieldRow(c, "ssh-password", locales.Text("密码"), &d.Password, true)
+			fieldNote(c, locales.Text("明文保存在本机配置目录，请勿共享该文件。"), a.secondaryInk())
 		}
-		fieldLabel(c, "用途描述")
-		textArea(c, "ssh-desc", "用途描述", "例如：测试环境 Redis 节点，负责商品缓存", &d.Description, 60)
-		fieldLabel(c, "风险等级")
+		fieldLabel(c, locales.Text("用途描述"))
+		textArea(c, "ssh-desc", locales.Text("用途描述"), locales.Text("例如：测试环境 Redis 节点，负责商品缓存"), &d.Description, 60)
+		fieldLabel(c, locales.Text("风险等级"))
 		risk := 0
 		if d.RiskLevel == "high" {
 			risk = 1
 		}
 		ui.Row(c).Gap(gapField).Children(func() {
-			for n, title := range []string{"常规", "生产（高危保护）"} {
+			for n, title := range []string{locales.Text("常规"), locales.Text("生产（高危保护）")} {
 				n := n
 				tone := c.Theme().Success
 				if n == 1 {
@@ -302,8 +320,8 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 			}
 		})
 	}, func() {
-		flat(c, "取消").OnClick(func() { a.sshF.EditorOpen = false; a.sshF.CloneMode = false; a.sshF.CloneSource = "" })
-		primaryBusy(c, "保存", a.sshF.Busy, a.sshF.Busy).OnClick(func() { a.saveSSHNode() })
+		flat(c, locales.Text("取消")).OnClick(func() { a.sshF.EditorOpen = false; a.sshF.CloneMode = false; a.sshF.CloneSource = "" })
+		primaryBusy(c, locales.Text("保存"), a.sshF.Busy, a.sshF.Busy).OnClick(func() { a.saveSSHNode() })
 	}, func() {
 		a.sshF.CloneMode = false
 		a.sshF.CloneSource = ""
@@ -321,7 +339,7 @@ func (a *desktop) saveSSHNode() {
 		d.Group = ""
 	}
 	if d.Alias == "" {
-		a.notify("昵称必填")
+		a.notify(locales.Text("昵称必填"))
 		return
 	}
 	for _, node := range a.sshServers {
@@ -329,33 +347,33 @@ func (a *desktop) saveSSHNode() {
 			continue
 		}
 		if node.ID != a.sshF.EditingID {
-			a.notify("该昵称已被其他服务器使用")
+			a.notify(locales.Text("该昵称已被其他服务器使用"))
 			return
 		}
 	}
 	if d.Host == "" {
-		a.notify("主机必填")
+		a.notify(locales.Text("主机必填"))
 		return
 	}
 	if d.Username == "" {
-		a.notify("用户名必填")
+		a.notify(locales.Text("用户名必填"))
 		return
 	}
 	if d.Description == "" {
-		a.notify("用途描述必填")
+		a.notify(locales.Text("用途描述必填"))
 		return
 	}
 	if d.AuthType == "password" && d.Password == "" {
-		a.notify("请填写密码，或改用其它认证方式")
+		a.notify(locales.Text("请填写密码，或改用其它认证方式"))
 		return
 	}
 	if d.AuthType == "key" && d.KeyPath == "" {
-		a.notify("请填写私钥路径")
+		a.notify(locales.Text("请填写私钥路径"))
 		return
 	}
 	port := a.sshF.Port
 	if math.IsNaN(port) || math.IsInf(port, 0) || port < 1 || port > 65535 || port != math.Trunc(port) {
-		a.notify("端口必须是 1 至 65535 的整数")
+		a.notify(locales.Text("端口必须是 1 至 65535 的整数"))
 		return
 	}
 	d.Port = int(port)
@@ -376,7 +394,7 @@ func (a *desktop) saveSSHNode() {
 			a.sshF.CloneMode = false
 			a.sshF.CloneSource = ""
 			a.sshServers = servers
-			a.notifySuccess("服务器配置已保存")
+			a.notifySuccess(locales.Text("服务器配置已保存"))
 		})
 	}()
 }
@@ -388,13 +406,13 @@ func (a *desktop) testSSHNode(node backend.SSHServerNode) {
 		a.win.Update(func() {
 			delete(a.sshF.TestBusy, node.ID)
 			if result.OK {
-				note := "SSH 连通性测试通过"
+				note := locales.Text("SSH 连通性测试通过")
 				if dur := fmtDur(result.DurationMS); dur != "" {
 					note += "（" + dur + "）"
 				}
 				a.notify(note)
 			} else {
-				a.notifyError("SSH 连通性测试失败：" + result.Error)
+				a.notifyError(locales.Text("SSH 连通性测试失败：") + result.Error)
 			}
 		})
 	}()
@@ -402,7 +420,7 @@ func (a *desktop) testSSHNode(node backend.SSHServerNode) {
 
 func (a *desktop) importSSH() {
 	go func() {
-		path, err := a.core.SelectJSONFile("导入 SSH 配置")
+		path, err := a.core.SelectJSONFile(locales.Text("导入 SSH 配置"))
 		if err != nil || path == "" {
 			if err != nil {
 				a.fail(err)
@@ -418,16 +436,16 @@ func (a *desktop) importSSH() {
 			Nodes []backend.SSHServerNode `json:"nodes"`
 		}
 		if err := json.Unmarshal([]byte(data), &payload); err != nil || len(payload.Nodes) == 0 {
-			a.win.Update(func() { a.notify("文件格式不正确，需要包含 nodes 数组的 JSON") })
+			a.win.Update(func() { a.notify(locales.Text("文件格式不正确，需要包含 nodes 数组的 JSON")) })
 			return
 		}
 		added, updated, failures := importSSHNodes(a.core, payload.Nodes)
 		servers := a.core.ListAllSSHServers()
 		a.win.Update(func() {
 			a.sshServers = servers
-			message := fmt.Sprintf("导入完成：新增 %d，更新 %d", added, updated)
+			message := fmt.Sprintf(locales.Text("导入完成：新增 %d，更新 %d"), added, updated)
 			if len(failures) > 0 {
-				a.notifyError(message + fmt.Sprintf("，失败 %d：", len(failures)) + strings.Join(failures, "；"))
+				a.notifyError(message + fmt.Sprintf(locales.Text("，失败 %d："), len(failures)) + strings.Join(failures, "；"))
 			} else {
 				a.notifySuccess(message)
 			}
@@ -514,25 +532,25 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 	workspace := a.sshF.AuthWorkspace
 	dialog := modalCard(c, &a.sshF.AuthOpen, widthModalWide, func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "SSH 授权").FontSize(fsDialogTitle).Bold()
+			ui.Text(c, locales.Text("SSH 授权")).FontSize(fsDialogTitle).Bold()
 			ui.Spacer(c)
-			flat(c, "管理 SSH").OnClick(func() {
+			flat(c, locales.Text("管理 SSH")).OnClick(func() {
 				a.commitSSHAuth(workspace)
 				a.sshF.AuthOpen = false
 				a.changePage("ssh")
 			})
-			iconAction(c, "ssh-auth-close", "关闭 SSH 授权", "close", 24, func() { a.commitSSHAuth(workspace); a.sshF.AuthOpen = false })
+			iconAction(c, "ssh-auth-close", locales.Text("关闭 SSH 授权"), "close", 24, func() { a.commitSSHAuth(workspace); a.sshF.AuthOpen = false })
 		})
-		fieldNote(c, "勾选的服务器允许当前工作区的会话使用；凭据由 Ally 管理，不会传给模型。", a.secondaryInk())
+		fieldNote(c, locales.Text("勾选的服务器允许当前工作区的会话使用；凭据由 Ally 管理，不会传给模型。"), a.secondaryInk())
 		if !a.sshF.AuthReady {
-			busyRow(c, "正在读取工作区授权…", a.secondaryInk())
+			busyRow(c, locales.Text("正在读取工作区授权…"), a.secondaryInk())
 			return
 		}
 		query := strings.ToLower(strings.TrimSpace(a.sshF.AuthSearch))
 		onlyAllowed := a.sshF.AuthOnlyAllowed
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-			uikit.Input(c.Key("ssh-auth-search"), &a.sshF.AuthSearch).Placeholder("搜索").Label("搜索服务器").Width(200)
-			ui.Checkbox(c.Key("ssh-auth-only"), &a.sshF.AuthOnlyAllowed, "只看已授权")
+			uikit.Input(c.Key("ssh-auth-search"), &a.sshF.AuthSearch).Placeholder(locales.Text("搜索")).Label(locales.Text("搜索服务器")).Width(200)
+			ui.Checkbox(c.Key("ssh-auth-only"), &a.sshF.AuthOnlyAllowed, locales.Text("只看已授权"))
 		})
 		allowedCount := 0
 		for _, v := range a.sshF.AuthDraft {
@@ -540,7 +558,7 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 				allowedCount++
 			}
 		}
-		fieldNote(c, fmt.Sprintf("已授权 %d 台", allowedCount), a.secondaryInk())
+		fieldNote(c, fmt.Sprintf(locales.Text("已授权 %d 台"), allowedCount), a.secondaryInk())
 		groups := []string{}
 		seen := map[string]bool{}
 		for _, node := range a.sshServers {
@@ -627,7 +645,7 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 			})
 		})
 		if len(a.sshServers) == 0 {
-			emptyState(c, "暂无配置的 SSH 服务器", "先在 SSH 页面添加服务器。", a.secondaryInk())
+			emptyState(c, locales.Text("暂无配置的 SSH 服务器"), locales.Text("先在 SSH 页面添加服务器。"), a.secondaryInk())
 		}
 
 	})
@@ -658,7 +676,7 @@ func (a *desktop) commitSSHAuth(workspace string) {
 				a.notifyError(err.Error())
 				return
 			}
-			a.notify("当前工作区授权已更新")
+			a.notify(locales.Text("当前工作区授权已更新"))
 		})
 	}()
 }
@@ -684,9 +702,9 @@ func (a *desktop) queueSSHAuthSave(workspace string, ids []string) <-chan error 
 }
 
 func sshRiskBadge(c *ui.Context, level string) ui.Element {
-	label, tone := "低风险", uikit.Success
+	label, tone := locales.Text("低风险"), uikit.Success
 	if level == "high" {
-		label, tone = "高风险", uikit.Error
+		label, tone = locales.Text("高风险"), uikit.Error
 	}
 	return uikit.ColorTag(c, label, uikit.TagOptions{Tone: tone, Compact: true, Round: true, Borderless: true})
 }

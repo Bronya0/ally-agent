@@ -2,6 +2,7 @@
 package app
 
 import (
+	"ally-dev/locales"
 	"fmt"
 	"strings"
 )
@@ -30,12 +31,12 @@ func (a *App) SaveNativeModel(model ModelConfig, previous *ModelIdentity) error 
 		if previous != nil {
 			index = nativeModelIndex(cfg.Models, *previous)
 			if index < 0 {
-				return fmt.Errorf("模型已被修改或删除，请刷新后重试")
+				return fmt.Errorf("%s", locales.Text("模型已被修改或删除，请刷新后重试"))
 			}
 		}
 		duplicate := nativeModelIndex(cfg.Models, id)
 		if duplicate >= 0 && duplicate != index {
-			return fmt.Errorf("该模型和账号已存在")
+			return fmt.Errorf("%s", locales.Text("该模型和账号已存在"))
 		}
 		if index >= 0 {
 			cfg.Models[index] = copyModel
@@ -55,7 +56,7 @@ func (a *App) DeleteNativeModel(id ModelIdentity) error {
 	return a.commitConfig(func(cfg *ConfigState) error {
 		index := nativeModelIndex(cfg.Models, id)
 		if index < 0 {
-			return fmt.Errorf("模型已不存在，请刷新列表")
+			return fmt.Errorf("%s", locales.Text("模型已不存在，请刷新列表"))
 		}
 		cfg.Models = append(cfg.Models[:index], cfg.Models[index+1:]...)
 		if cfg.LastUsedModel != nil && nativeSameModel(*cfg.LastUsedModel, id) {
@@ -71,7 +72,7 @@ func (a *App) SelectNativeModel(id ModelIdentity) error {
 	return a.commitConfig(func(cfg *ConfigState) error {
 		index := nativeModelIndex(cfg.Models, id)
 		if index < 0 {
-			return fmt.Errorf("模型已不存在，请刷新列表")
+			return fmt.Errorf("%s", locales.Text("模型已不存在，请刷新列表"))
 		}
 		actual := identityOfModel(cfg.Models[index])
 		cfg.LastUsedModel = &actual

@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/internal/diagnostics"
+	"ally-dev/locales"
 	"path/filepath"
 )
 
@@ -49,10 +50,10 @@ func (a *desktop) exportMemoryDiagnostics() {
 		a.win.Update(func() {
 			a.memoryDiagnosticBusy = false
 			if err != nil {
-				a.notifyError("内存诊断失败：" + err.Error())
+				a.notifyError(locales.Text("内存诊断失败：") + err.Error())
 				return
 			}
-			a.notifySuccess("内存诊断已导出：" + dir)
+			a.notifySuccess(locales.Text("内存诊断已导出：") + dir)
 			a.job(func() error { return a.core.OpenPathInFileManager(dir) })
 		})
 	}()

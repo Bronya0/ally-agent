@@ -9,7 +9,7 @@ import (
 
 func TestMessagesFadeInAndOut(t *testing.T) {
 	show, close := false, false
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		c.SetTheme(ui.LightTheme())
 		ui.Box(c).Fill().Background(ui.Hex("#ffffff"))
 		if show {

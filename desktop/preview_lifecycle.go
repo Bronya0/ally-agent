@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"context"
 	"fmt"
 	"net/url"
@@ -207,18 +208,19 @@ func (b nativePreviewBrowser) OnRenderProcessGone(fn func(string)) func() {
 func (b nativePreviewBrowser) LoadURL(raw string) error { return b.Page().LoadURL(raw) }
 
 type nativePreview struct {
-	view        *mygo.WebView
-	browser     previewBrowser
-	state       previewLoadState
-	timer       *time.Timer
-	update      func(func())
-	offTitle    func()
-	offMedia    func()
-	offFailure  []func()
-	probeCancel context.CancelFunc
-	onFailure   func(error)
-	documentURL string
-	mediaToken  string
+	view          *mygo.WebView
+	browser       previewBrowser
+	state         previewLoadState
+	timer         *time.Timer
+	update        func(func())
+	offTitle      func()
+	offMedia      func()
+	offFailure    []func()
+	probeCancel   context.CancelFunc
+	onFailure     func(error)
+	documentURL   string
+	mediaToken    string
+	imageDocument bool
 }
 
 func (p *nativePreview) Native() ui.NativeWebView { return p.view }
@@ -245,18 +247,7 @@ func (p *nativePreview) LoadHTML(source string) {
 
 func (p *nativePreview) watchPage(expectedURL string, readyOnProbe bool) {
 	generation, browser, update := p.state.generation, p.browser, p.update
-	p.offFailure = append(p.offFailure,
-		browser.OnDidFailLoad(func(err *mygo.LoadError) {
-			if err == nil || err.URL != "" && err.URL != expectedURL {
-				return
-			}
-			failure := fmt.Errorf("预览加载失败：%s", err.Description)
-			update(func() { p.failContent(generation, failure, false) })
-		}),
-		browser.OnRenderProcessGone(func(reason string) {
-			update(func() { p.failContent(generation, fmt.Errorf("预览进程已退出：%s，请重试", reason), true) })
-		}),
-	)
+	p.watchFailures(expectedURL)
 	// Windows may fail to create its controller after NewWebView returned.
 	// A single bounded probe catches this; it is not a polling loop.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -275,14 +266,32 @@ func (p *nativePreview) watchPage(expectedURL string, readyOnProbe bool) {
 			p.probeCancel = nil
 			if err != nil || value == nil {
 				if err == nil {
-					err = fmt.Errorf("预览健康检查无响应")
+					err = fmt.Errorf("%s", locales.Text("预览健康检查无响应"))
 				}
-				p.failContent(generation, fmt.Errorf("预览不可用：%w，请重试", err), true)
+				p.failContent(generation, fmt.Errorf(locales.Text("预览不可用：%w，请重试"), err), true)
 			} else if readyOnProbe {
 				p.state.ready = true
 			}
 		})
 	}()
+}
+
+func (p *nativePreview) watchFailures(expectedURL string) {
+	generation, browser, update := p.state.generation, p.browser, p.update
+	p.offFailure = append(p.offFailure,
+		browser.OnDidFailLoad(func(err *mygo.LoadError) {
+			if err == nil || err.URL != "" && err.URL != expectedURL {
+				return
+			}
+			failure := fmt.Errorf(locales.Text("预览加载失败：%s"), err.Description)
+			update(func() { p.failContent(generation, failure, false) })
+		}),
+		browser.OnRenderProcessGone(func(reason string) {
+			update(func() {
+				p.failContent(generation, fmt.Errorf(locales.Text("预览进程已退出：%s，请重试"), reason), true)
+			})
+		}),
+	)
 }
 
 func (p *nativePreview) failContent(generation uint64, err error, broken bool) {
@@ -311,6 +320,7 @@ func (p *nativePreview) retireContent() {
 	p.offFailure = nil
 	p.onFailure = nil
 	p.mediaToken = ""
+	p.imageDocument = false
 	if p.offMedia != nil {
 		p.offMedia()
 		p.offMedia = nil
@@ -356,7 +366,7 @@ func (p *nativePreview) Load(req previewRequest) {
 			if p.IsDestroyed() || p.state.generation != generation || p.state.ready {
 				return
 			}
-			p.failContent(generation, fmt.Errorf("预览加载超时，请重试"), false)
+			p.failContent(generation, fmt.Errorf("%s", locales.Text("预览加载超时，请重试")), false)
 		})
 	})
 	document := ""
@@ -373,22 +383,30 @@ func (p *nativePreview) Load(req previewRequest) {
 	p.watchPage(p.documentURL, false)
 }
 
+// The background shows through whatever a document leaves transparent. Tool
+// previews author dark documents that paint themselves; a workspace file preview
+// shows someone else's page, which expects the white canvas of a browser.
+const (
+	toolPreviewBackground = "#1b1b1b"
+	filePreviewBackground = "#ffffff"
+)
+
 func (a *desktop) newPreviewSurface() (previewSurface, error) {
-	return a.newNativePreview(false)
+	return a.newNativePreview(false, toolPreviewBackground)
 }
 
 func previewAutoplayAllowed(media bool) bool {
 	return media || runtime.GOOS == "windows"
 }
 
-func (a *desktop) newNativePreview(autoplay bool) (*nativePreview, error) {
+func (a *desktop) newNativePreview(autoplay bool, background string) (*nativePreview, error) {
 	page := mygo.PageOptions{PinchZoom: true, Untrusted: true}
 	// WebView2 freezes this policy at its first page, even if that page is
 	// not a media preview. Other platforms only allow it for media players.
 	if previewAutoplayAllowed(autoplay) {
 		page.Autoplay = mygo.AutoplayAllow
 	}
-	view, err := a.win.NewWebView(mygo.WebViewOptions{BackgroundColor: "#1b1b1b", Page: page})
+	view, err := a.win.NewWebView(mygo.WebViewOptions{BackgroundColor: background, Page: page})
 	if err != nil {
 		return nil, err
 	}
@@ -463,17 +481,17 @@ func (a *desktop) previewView(c *ui.Context, req previewRequest) {
 		}
 		if loadErr != nil {
 			notice(c, "error", loadErr.Error(), a.secondaryInk())
-			flat(c, "重试预览").OnClick(func() { a.previews.retry(req) })
+			flat(c, locales.Text("重试预览")).OnClick(func() { a.previews.retry(req) })
 		} else if !ready {
 			if box.InView() && previewDeferred(a.previewRequests, req.Key) {
-				ui.Text(c, "同屏最多加载 4 个预览，滚动后自动加载").FontSize(fsSmall).TextColor(a.secondaryInk())
+				ui.Text(c, locales.Text("同屏最多加载 4 个预览，滚动后自动加载")).FontSize(fsSmall).TextColor(a.secondaryInk())
 				return
 			}
 			ui.Column(c.Key("loading")).Absolute().Top(0).Left(0).Right(0).Bottom(0).
 				Center().Gap(gapField).Background(c.Theme().Surface).Radius(radiusSmall).Border(1, c.Theme().Border).
-				Label("正在加载图表预览").Children(func() {
+				Label(locales.Text("正在加载图表预览")).Children(func() {
 				ui.Spinner(c.Key("spinner")).Size(20, 20).TextColor(c.Theme().Accent)
-				ui.Text(c, "正在加载图表…").FontSize(fsSmall).TextColor(a.secondaryInk())
+				ui.Text(c, locales.Text("正在加载图表…")).FontSize(fsSmall).TextColor(a.secondaryInk())
 			})
 		}
 	})

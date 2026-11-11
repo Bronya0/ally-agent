@@ -1,7 +1,8 @@
 # Ally Native
 
 - 根目录 `main.go` 仅保留入口；原生页面、状态和组件在根目录 `desktop/`，页面文件使用 `page_*.go`。共享样式和组件分别收口在 `theme.go` 与 `widgets.go`。
-- 原生界面仅使用 github.com/egoist/mygo/ui；禁止创建 HTML/JS 前端或引入 Wails。经用户授权，render_html 与 Mermaid 图表预览可使用受控 WebView；仅在可见时按需创建，统一限量复用，离开预览后销毁。
+- 原生界面仅使用 github.com/egoist/mygo/ui；禁止创建 HTML/JS 前端或引入 Wails。经用户授权，render_html 与 Mermaid 图表预览可使用受控 WebView；仅在可见时按需创建，统一限量复用。
+- 文件预览每个打开的工作区最多持有一个 WebView，同工作区切图片/视频复用；切工作区、切页面、隐藏/最小化不销毁或清空页面。关闭预览、资源管理器或工作区最后一个 tab 时销毁；退出统一释放，损坏实例可重建。播放状态按工作区隔离。
 - Agent 模块路径保持 ally-dev。`desktop/` 是上层宿主，可依赖 `internal/app`；工具及纯逻辑包不可反向依赖 app/desktop。app 内非 host_* 文件保持宿主中立，桌面宿主适配放 internal/app/host_*.go。
 - 优先复用 MyGo 标准组件；需要定制外观时使用对应的 Base/Parts API，并在 `desktop/uikit` 统一微调样式。不要重复实现已有的选择、键盘导航、焦点、浮层和滚动行为。
 - UI 状态只在主线程修改。后台结果经 Window.Update 发布；不得保存 Element 或把 Context 带入后台。动态控件构造前使用 c.Key。
@@ -74,6 +75,7 @@
 
 ## 渲染期与性能
 
+- 长会话、工具卡片、搜索、预览和资源释放的已落地优化与维护边界见 [原生界面内存与渲染优化记录](docs/native-performance.md)；修改或新增相关功能前对照，保持增量更新、缓存失效和资源生命周期规则。
 - MyGo 每帧重建整棵控件树：渲染函数里每多做一次解析、切分或 Marshal，都会被帧数乘一遍。派生数据挂控件局部状态（`ui.Local` + 结构体 memo）复用，不做全局无界缓存。
 - 工具参数统一走 `toolArgsMemo`。同一条消息在一帧内会被卡片头和卡体各取一次，第二次必须命中；新增读取点前先确认宿主控件。
 - 工具结果在事件入口规范化为 map，渲染期只读结构体，不要再 `json.Unmarshal` 结果字符串。

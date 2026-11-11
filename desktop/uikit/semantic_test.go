@@ -7,7 +7,7 @@ import (
 
 func TestSemanticControls(t *testing.T) {
 	selected, on, clicks := 0, false, 0
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		ui.Column(c).Gap(12).Children(func() {
 			Action(c.Key("action"), "运行", ActionOptions{Tone: Primary, Style: Secondary}).OnClick(func() { clicks++ })
 			Action(c.Key("disabled"), "禁用", ActionOptions{Disabled: true}).OnClick(func() { clicks++ })
@@ -36,7 +36,7 @@ func TestSemanticControls(t *testing.T) {
 
 func TestRadioKeyboardAndSwitchLock(t *testing.T) {
 	selected, on := 0, false
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		ui.Column(c).Children(func() {
 			Radios(c.Key("radio"), &selected, []RadioOption[int]{{0, "One", false}, {1, "Two", true}, {2, "Three", false}}, false)
 			SwitchWithOptions(c.Key("lock"), &on, "Locked", SwitchOptions{Loading: true})
@@ -62,7 +62,7 @@ func TestRadioKeyboardAndSwitchLock(t *testing.T) {
 func TestActionDefaultsToContentWidth(t *testing.T) {
 	var compact, full ui.Handle
 	var compactWidth, fullWidth float32
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		ui.Column(c).FillWidth().Children(func() {
 			Action(c.Key("compact"), "导出内存诊断", ActionOptions{}).Bind(&compact)
 			Action(c.Key("full"), "显式铺满", ActionOptions{}).FillWidth().Bind(&full)

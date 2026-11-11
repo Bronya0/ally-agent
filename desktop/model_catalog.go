@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	_ "embed"
 	"encoding/json"
 	"strings"
@@ -60,7 +61,7 @@ func catalogProviderOptions() []string {
 		}
 		options = append(options, label)
 	}
-	return append(options, "自定义配置")
+	return append(options, locales.Text("自定义配置"))
 }
 
 func catalogProviderLabel(p modelCatalogProvider) string {

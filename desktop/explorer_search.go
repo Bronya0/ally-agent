@@ -2,10 +2,13 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"context"
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/egoist/mygo/ui"
 )
 
 type explorerSearch struct {
@@ -26,14 +29,15 @@ func (a *desktop) resetFileSearch() {
 		a.files = nil
 		a.fileOpen = nil
 		a.fileChildren = nil
+		a.fileScroll = nil
 	}
 	*s = explorerSearch{}
 	a.fileEpoch++
 	a.fileLoading = nil
 }
 
-// resetFileExplorer puts the panel back in its plain tree state, which closing
-// it, leaving the chat page or replacing the workspace all ask for.
+// Reset transient search/help state and invalidate pending reads. Workspace
+// tree ownership is handled separately by selectFileTree.
 func (a *desktop) resetFileExplorer() {
 	a.resetFileSearch()
 	a.filesF.HelpOpen = false
@@ -51,6 +55,10 @@ func (a *desktop) searchFiles(query string) {
 		return
 	}
 	s := &a.filesF.Search
+	a.rememberFileTree()
+	if s.Query == "" {
+		a.fileScroll = &ui.ScrollState{}
+	}
 	if s.Cancel != nil {
 		s.Cancel()
 	}
@@ -75,12 +83,12 @@ func (a *desktop) searchFiles(query string) {
 			s := &a.filesF.Search
 			s.Cancel, s.Busy = nil, false
 			a.files, a.fileChildren, a.fileOpen = entries, children, opened
-			s.Note = fmt.Sprintf("找到 %d 个文件", len(result.Entries))
+			s.Note = fmt.Sprintf(locales.Text("找到 %d 个文件"), len(result.Entries))
 			if result.Truncated {
-				s.Note += "（结果受限，请缩小范围）"
+				s.Note += locales.Text("（结果受限，请缩小范围）")
 			}
 			if err != nil {
-				s.Note = "搜索未完成：" + err.Error()
+				s.Note = locales.Text("搜索未完成：") + err.Error()
 			}
 		})
 	}()

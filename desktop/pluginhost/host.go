@@ -4,6 +4,7 @@
 package pluginhost
 
 import (
+	"ally-dev/locales"
 	"context"
 	"errors"
 	"reflect"
@@ -99,7 +100,7 @@ func (h *Host) Page(id string) (*mygo.WebView, error) {
 			return p.view, nil
 		}
 		h.schedule()
-		return nil, errors.New("插件页面已失效，请重新加载")
+		return nil, errors.New(locales.Text("插件页面已失效，请重新加载"))
 	}
 	if h.failureRevision.id == id && h.failure != "" {
 		return nil, errors.New(h.failure)
@@ -195,8 +196,8 @@ func (h *Host) watchPage(p *page) {
 	}
 	fail := func(err error) { h.post(func() { h.failPage(p, err) }) }
 	p.off = append(p.off,
-		p.surface.OnDidFailLoad(func(err *mygo.LoadError) { fail(errors.New("页面加载失败：" + err.Error())) }),
-		p.surface.OnRenderProcessGone(func(reason string) { fail(errors.New("页面进程已退出：" + reason)) }),
+		p.surface.OnDidFailLoad(func(err *mygo.LoadError) { fail(errors.New(locales.Text("页面加载失败：") + err.Error())) }),
+		p.surface.OnRenderProcessGone(func(reason string) { fail(errors.New(locales.Text("页面进程已退出：") + reason)) }),
 	)
 	// WebView2 can fail after NewWebView returns without a load-failure event.
 	// Probe asynchronously, with a hard bound, and never mutate UI state here.
@@ -211,7 +212,7 @@ func (h *Host) watchPage(p *page) {
 		if err != nil {
 			fail(err)
 		} else if value == nil {
-			fail(errors.New("页面健康检查无响应"))
+			fail(errors.New(locales.Text("页面健康检查无响应")))
 		}
 	}()
 }
@@ -222,7 +223,7 @@ func (h *Host) failPage(p *page, err error) {
 	if h.closed || !live || h.pages[p.info.ID] != p {
 		return
 	}
-	h.failureRevision, h.failure = revisionOf(p.info), "插件页面失效："+err.Error()
+	h.failureRevision, h.failure = revisionOf(p.info), locales.Text("插件页面失效：")+err.Error()
 	h.destroyPage(p)
 	delete(h.pages, p.info.ID)
 }
@@ -313,7 +314,7 @@ func (h *Host) sync(input Input) {
 	}
 	for id, p := range h.pages {
 		if p.surface != nil && p.surface.IsDestroyed() {
-			h.failPage(p, errors.New("页面已销毁"))
+			h.failPage(p, errors.New(locales.Text("页面已销毁")))
 			continue
 		}
 		valid := false
@@ -381,7 +382,7 @@ func (h *Host) sync(input Input) {
 	}
 	p, err := create(*current, workspace, state)
 	if err != nil {
-		h.failureRevision, h.failure = revisionOf(*current), "插件页面创建失败："+err.Error()
+		h.failureRevision, h.failure = revisionOf(*current), locales.Text("插件页面创建失败：")+err.Error()
 		return
 	}
 	p.used = h.tick

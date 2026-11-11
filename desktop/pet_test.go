@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -217,7 +218,7 @@ func TestPetTaskEventsAndDeduplication(t *testing.T) {
 	if len(a.pet.working) != 0 || a.prefs.Pet.Affection["whale"].Points != 30 {
 		t.Fatalf("completion not processed once without a tab: %+v", a.prefs.Pet.Affection)
 	}
-	if got := a.petCompletionText("run:done", map[string]any{"durationMs": 12000, "workspace": "/work/ally-agent"}); got != "工作区「ally-agent」完成，用时 12s。" {
+	if got := a.petCompletionText("run:done", map[string]any{"durationMs": 12000, "workspace": "/work/ally-agent"}); !strings.Contains(got, "ally-agent") || !strings.Contains(got, "12s") {
 		t.Fatalf("completion must name the workspace: %q", got)
 	}
 	a.applyEvent("run:error", map[string]any{"runId": "failed"})

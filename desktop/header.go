@@ -2,9 +2,11 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,28 +31,31 @@ func (a *desktop) headerBar(c *ui.Context) {
 	bar := c.TitleBar()
 	railWidth := widthRailCollapsed
 	railSpan := railWidth
-	if a.prefs.RailExpanded {
+	if a.prefs.RailExpanded && !a.prefs.TopNavigation {
 		railWidth = a.prefs.RailWidth
 		railSpan = railWidth + railDividerWidth
+	}
+	if a.prefs.TopNavigation {
+		railSpan = 80
 	}
 	minLeading := widthRailCollapsed
 	if bar.Left > 0 {
 		minLeading += headerTrafficLightGap
 	}
 	leading := max(minLeading, railSpan-bar.Left)
-	logoInset := railPadH
-	logoRightInset := float32(0)
-	logoFontSize := float32(20)
+	if a.prefs.TopNavigation {
+		leading = 80
+		if bar.Left > 0 {
+			leading += headerTrafficLightGap
+		}
+	}
+	// The wordmark starts on the icon column when the rail is open, and is centred
+	// in the 45 wide collapsed rail, where a left-aligned mark would read as
+	// crowded to one side. The few DIPs it moves there are worth the balance.
+	logoInset := float32(6) + railGutter
 	logoAlign := ui.Start
-	if a.prefs.RailExpanded {
-		logoInset = 6 + railInsetForWidth(a.prefs.RailWidth)
-	} else {
-		// The collapsed rail is only 44px wide. Reserve even space around a
-		// slightly smaller wordmark so it does not feel pressed against the edge.
-		logoInset = 6
-		logoRightInset = 6
-		logoFontSize = 18
-		logoAlign = ui.Center
+	if !a.prefs.RailExpanded || a.prefs.TopNavigation {
+		logoInset, logoAlign = 0, ui.Center
 	}
 	logoInset = max(float32(0), logoInset-bar.Left)
 	if bar.Left > 0 {
@@ -67,8 +72,12 @@ func (a *desktop) headerBar(c *ui.Context) {
 	row.DragWindow().Children(func() {
 		// The leading header column shares the rail's live width, including
 		// its resize divider. Native traffic lights take precedence on macOS.
-		ui.Column(c.Key("header-rail")).Label("标题栏侧栏区").Width(leading).Shrink(0).FillHeight().Padding(0, logoRightInset, 0, logoInset).Justify(ui.Center).AlignItems(ui.Start).Children(func() {
-			wordmark := ui.Column(c).Label("应用 Logo").Width(min(float32(64), leading-logoInset-logoRightInset)).FillHeight().Justify(ui.Center).AlignItems(logoAlign).Children(func() {
+		ui.Row(c.Key("header-rail")).Label(locales.Text("标题栏侧栏区")).Width(leading).Shrink(0).FillHeight().Padding(0, 0, 0, logoInset).AlignItems(ui.Center).Children(func() {
+			logoWidth := float32(64)
+			if a.prefs.TopNavigation {
+				logoWidth = 45
+			}
+			wordmark := ui.Column(c).Label(locales.Text("应用 Logo")).Width(min(logoWidth, leading-logoInset)).FillHeight().Justify(ui.Center).AlignItems(logoAlign).Children(func() {
 				colors := [4]ui.Color{
 					wordmarkGradientColor(p, 0.14),
 					wordmarkGradientColor(p, 0.43),
@@ -82,9 +91,12 @@ func (a *desktop) headerBar(c *ui.Context) {
 					ui.Span{Text: "y", Color: colors[3]},
 				).FontSize(logoFontSize).FontWeight(700).LetterSpacing(-0.4)
 			})
-			uikit.Tooltip(c, wordmark.Cursor(ui.CursorPointer), "点击 logo：切换樱花特效")
+			uikit.Tooltip(c, wordmark.Cursor(ui.CursorPointer), locales.Text("点击 logo：切换樱花特效"))
 			if wordmark.Clicked() {
 				a.togglePetals()
+			}
+			if a.prefs.TopNavigation {
+				a.topNavigationMenu(c)
 			}
 		})
 		a.workspaceTabs(c)
@@ -112,20 +124,20 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 							a.cancelOAuthWhenLeaving()
 						}
 						if a.page != "chat" || idx != a.active {
-							a.releaseFilePreview()
+							a.hideFilePreview()
 						}
 						a.page = "chat"
 						a.activateTab(idx)
 						a.refreshFiles()
 						a.refreshSessionFooter(tab)
 						a.refreshGit(tab)
-					}, func() { a.closeWorkspaceTab(idx) }, &s.gesture, a.secondaryInk()).FillHeight().Label("工作区标签 " + tab.ID)
+					}, func() { a.closeWorkspaceTab(idx) }, &s.gesture, a.secondaryInk()).FillHeight().Label(locales.Text("工作区标签 ") + tab.ID)
 				}
 				// The plus closes the strip, right where the tabs end: it asks for
 				// another workspace and opens the same history the header's add
 				// button does — one menu, built by whichever entry opened it.
 				a.workspaceHistoryMenu(c.Key("tabs-workspace-add"), func(b ui.Element) {
-					uikit.IconButtonOn(c, b.Disabled(!a.ready), "打开工作区历史", iconImage("plus"), 26, 26*uikit.IconGlyphScale, uikit.IconQuiet, a.secondaryInk())
+					uikit.IconButtonOn(c, b.Disabled(!a.ready), locales.Text("打开工作区历史"), iconImage("plus"), 26, 26*uikit.IconGlyphScale, uikit.IconQuiet, a.secondaryInk())
 				}).AlignSelf(ui.Center).MarginStart(4)
 			})
 		})
@@ -141,21 +153,21 @@ func (a *desktop) openWorkspaceEntry(workspace string) { a.newConversation(works
 // to the controls, not global desktop state; MenuBase handles outside presses.
 func (a *desktop) workspaceHistoryMenu(c *ui.Context, trigger func(ui.Element)) ui.Element {
 	return uikit.MenuButton(c, nil, uikit.MenuOptions{
-		Width: 300, MaxHeightPercent: 85, Label: "工作区历史菜单",
+		Width: 300, MaxHeightPercent: 85, Label: locales.Text("工作区历史菜单"),
 		At: ui.AnchorBottomRight, Self: ui.AnchorTopRight, Gap: 6,
 	}, trigger, func(m ui.MenuParts) {
-		uikit.MenuItem(c, m, "add", "＋ 添加工作区", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(a.chooseWorkspace)
-		uikit.MenuItem(c, m, "temporary", "临时工作区", uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.newConversation("") })
+		uikit.MenuItem(c, m, "add", locales.Text("＋ 添加工作区"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(a.chooseWorkspace)
+		uikit.MenuItem(c, m, "temporary", locales.Text("临时工作区"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.newConversation("") })
 		divider(c)
-		roots := a.sessionWorkspaceRoots()
+		roots := a.workspaceHistoryRoots()
 		for _, root := range roots {
 			root := root
 			item := uikit.MenuItem(c, m, root, filepath.Base(root), uikit.MenuItemOptions{Icon: iconImage("folderopen"), FontSize: fsSmall}, a.secondaryInk()).
-				Label("打开工作区 "+root).Height(32).Padding(0, 9)
+				Label(locales.Text("打开工作区 ")+root).Height(32).Padding(0, 9)
 			uikit.Tooltip(c, item, root).OnClick(func() { a.openWorkspaceEntry(root) })
 		}
 		if len(roots) == 0 {
-			muted(c, "无历史记录", fsSmall, a.secondaryInk()).Padding(padRow)
+			muted(c, locales.Text("无历史记录"), fsSmall, a.secondaryInk()).Padding(padRow)
 		}
 	})
 }
@@ -164,7 +176,7 @@ func (a *desktop) workspaceHistoryMenu(c *ui.Context, trigger func(ui.Element)) 
 func (a *desktop) headerActions(c *ui.Context) {
 	p := a.currentPalette()
 	a.workspaceHistoryMenu(c.Key("workspace-add"), func(b ui.Element) {
-		addButtonOn(c, b.Disabled(!a.ready), "添加工作区", "addfolder", 30)
+		addButtonOn(c, b.Disabled(!a.ready), locales.Text("添加工作区"), "addfolder", 30)
 	})
 
 	pageOK := a.page == "chat" || strings.HasPrefix(a.page, "plugin:")
@@ -175,15 +187,15 @@ func (a *desktop) headerActions(c *ui.Context) {
 	if a.explorer {
 		tone = iconAccentOn
 	}
-	explorer := iconButtonSized(c, "files-toggle", "打开工作区文件浏览器", "folderopen", 30, tone, func() { a.setExplorerOpen(!a.explorer) })
+	explorer := iconButtonSized(c, "files-toggle", locales.Text("打开工作区文件浏览器"), "folderopen", 30, tone, func() { a.setExplorerOpen(!a.explorer) })
 	explorer.Disabled(!pageOK)
 
 	services := c.Services()
 	if a.upd.Tag != "" && a.upd.Tag != a.prefs.DismissedUpdateTag {
-		tip := "发现新版本 " + a.upd.Tag + "，点击自动更新"
+		tip := locales.Text("发现新版本 ") + a.upd.Tag + locales.Text("，点击自动更新")
 		uikit.Tooltip(c, uikit.Action(c.Key("update-badge"), tip, uikit.ActionOptions{Tone: uikit.Success, Style: uikit.Secondary, Circle: true, Icon: iconImage("download")}).Size(30, 30).OnClick(func() { a.startUpdate() }), tip)
 	} else {
-		iconButton(c, "github", "打开 GitHub 项目主页", "github", func() {
+		iconButton(c, "github", locales.Text("打开 GitHub 项目主页"), "github", func() {
 			services.OpenURL("https://github.com/Bronya0/ally-agent")
 		}).TextColor(p.muted)
 	}
@@ -191,17 +203,17 @@ func (a *desktop) headerActions(c *ui.Context) {
 	// The header draws these itself unless the system already shows them:
 	// macOS keeps its traffic lights, and its title bar room is never zero.
 	if bar := c.TitleBar(); a.win != nil && bar.Height == 0 && bar.Left == 0 && bar.Right == 0 {
-		windowAction(c, "window-min", "最小化", "min", p.headerColor(), func() { a.win.Minimize() }, a.secondaryInk())
-		windowAction(c, "window-max", "最大化", "max", p.headerColor(), func() {
+		windowAction(c, "window-min", locales.Text("最小化"), "min", p.headerColor(), func() { a.win.Minimize() }, a.secondaryInk())
+		windowAction(c, "window-max", locales.Text("最大化"), "max", p.headerColor(), func() {
 			if a.win.IsMaximized() {
 				a.win.Unmaximize()
 			} else {
 				a.win.Maximize()
 			}
 		}, a.secondaryInk())
-		closeLabel := "退出应用"
-		if a.tray != nil {
-			closeLabel = "隐藏到系统托盘"
+		closeLabel := locales.Text("退出应用")
+		if a.closeHidesToTray() {
+			closeLabel = locales.Text("隐藏到系统托盘")
 		}
 		closeBtn := windowButton(c, "window-close", closeLabel, "close", p.headerColor(), true, func() { a.win.Close() }, a.secondaryInk())
 		_ = closeBtn
@@ -210,11 +222,11 @@ func (a *desktop) headerActions(c *ui.Context) {
 
 func workspaceLabel(root string) string {
 	if root == "" {
-		return "未选择工作区"
+		return locales.Text("未选择工作区")
 	}
 	base := filepath.Base(root)
 	if strings.HasPrefix(base, "ally-temp-") {
-		return "临时"
+		return locales.Text("临时")
 	}
 	return base
 }
@@ -223,7 +235,7 @@ func workspaceLabel(root string) string {
 // segment, so the tooltip carries the workspace's full path.
 func workspaceTip(root string) string {
 	if root == "" {
-		return "未选择工作区"
+		return locales.Text("未选择工作区")
 	}
 	return root
 }
@@ -247,7 +259,7 @@ func (a *desktop) closeWorkspaceTab(index int) {
 			}
 		}(t.Workspace)
 	}
-	a.tabs = append(a.tabs[:index], a.tabs[index+1:]...)
+	a.tabs = slices.Delete(a.tabs, index, index+1)
 	stillOpen := false
 	for _, tab := range a.tabs {
 		if sameWorkspace(tab.Workspace, t.Workspace) {
@@ -257,6 +269,9 @@ func (a *desktop) closeWorkspaceTab(index int) {
 	}
 	if !stillOpen {
 		key := workspaceKey(t.Workspace)
+		a.releaseWorkspaceFileTree(t.Workspace)
+		a.workspacePreview.releaseWorkspace(key)
+		delete(a.mediaPlayback, key)
 		if file := a.workspaceFiles[key]; file != nil && !file.Saving && file.Editor != nil && !file.Editor.Buffer.Modified() {
 			a.releaseWorkspaceFile(t.Workspace)
 		}
@@ -297,9 +312,9 @@ func (a *desktop) updateDialog(c *ui.Context) {
 	modalCard(c, &a.upd.Open, 460, func() {
 		ui.Column(c).Gap(gapSection).Children(func() {
 			ui.Row(c).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "软件更新").FontSize(fsDialogTitle).Bold()
+				ui.Text(c, locales.Text("软件更新")).FontSize(fsDialogTitle).Bold()
 				ui.Spacer(c)
-				iconAction(c, "update-close", "关闭", "close", 24, func() {
+				iconAction(c, "update-close", locales.Text("关闭"), "close", 24, func() {
 					if !a.upd.installing() {
 						a.upd.Open = false
 					}
@@ -312,19 +327,19 @@ func (a *desktop) updateDialog(c *ui.Context) {
 			}
 			switch a.upd.State {
 			case "checking":
-				busyRow(c, "正在检查更新…", a.secondaryInk())
+				busyRow(c, locales.Text("正在检查更新…"), a.secondaryInk())
 			case "downloading", "extracting":
-				ui.Text(c, map[string]string{"downloading": "正在下载更新…", "extracting": "正在解压更新…"}[a.upd.State])
-				ui.Text(c, "版本 "+a.upd.Tag).FontSize(fsCaption).TextColor(p.muted)
+				ui.Text(c, map[string]string{"downloading": locales.Text("正在下载更新…"), "extracting": locales.Text("正在解压更新…")}[a.upd.State])
+				ui.Text(c, locales.Text("版本 ")+a.upd.Tag).FontSize(fsCaption).TextColor(p.muted)
 				value := a.upd.Progress / 100
 				if value < 0 || value > 1 {
 					value = -1
 				}
-				ui.Progress(c, value).Label("更新进度")
+				ui.Progress(c, value).Label(locales.Text("更新进度"))
 				ui.Row(c).Children(func() {
 					label := fmt.Sprintf("%.0f%%", a.upd.Progress)
 					if a.upd.Progress < 0 {
-						label = "已下载 " + fmtBytes(a.upd.BytesNow)
+						label = locales.Text("已下载 ") + fmtBytes(a.upd.BytesNow)
 					}
 					ui.Text(c, label).FontSize(fsCaption).TextColor(p.muted)
 					ui.Spacer(c)
@@ -333,62 +348,62 @@ func (a *desktop) updateDialog(c *ui.Context) {
 					}
 				})
 			case "available":
-				ui.Text(c, "发现新版本 "+a.upd.Tag)
+				ui.Text(c, locales.Text("发现新版本 ")+a.upd.Tag)
 				if !a.upd.CanAuto {
-					fieldNote(c, "当前平台请下载压缩包后手动更新。", a.secondaryInk())
+					fieldNote(c, locales.Text("当前平台请下载压缩包后手动更新。"), a.secondaryInk())
 				}
 			case "ready":
-				ui.Text(c, "新版本 "+a.upd.Tag+" 已下载完成")
+				ui.Text(c, locales.Text("新版本 ")+a.upd.Tag+locales.Text(" 已下载完成"))
 				fieldNote(c, updateReadyNote(runtime.GOOS), a.secondaryInk())
 			case "preparing":
-				busyRow(c, "正在保存会话与设置…", a.secondaryInk())
+				busyRow(c, locales.Text("正在保存会话与设置…"), a.secondaryInk())
 			case "applying":
-				busyRow(c, "正在应用更新…", a.secondaryInk())
+				busyRow(c, locales.Text("正在应用更新…"), a.secondaryInk())
 			case "restarting":
-				label := "正在重启 Ally…"
+				label := locales.Text("正在重启 Ally…")
 				if runtime.GOOS == "windows" {
-					label = "更新已安装，正在退出；请重新打开 Ally。"
+					label = locales.Text("更新已安装，正在退出；请重新打开 Ally。")
 				}
 				busyRow(c, label, a.secondaryInk())
 			case "error":
-				ui.Text(c, "更新失败").TextColor(c.Theme().Danger)
+				ui.Text(c, locales.Text("更新失败")).TextColor(c.Theme().Danger)
 				ui.Text(c, a.upd.Error).FontSize(fsTiny).Selectable().TextColor(c.Theme().Danger)
 			case "latest":
-				ui.Text(c, "已是最新版本").TextColor(c.Theme().Success)
+				ui.Text(c, locales.Text("已是最新版本")).TextColor(c.Theme().Success)
 			}
 			if a.upd.Note != "" && a.upd.State != "error" {
 				fieldNote(c, a.upd.Note, a.secondaryInk())
 			}
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 				services := c.Services()
-				flat(c, "发行说明").OnClick(func() {
+				flat(c, locales.Text("发行说明")).OnClick(func() {
 					services.OpenURL("https://github.com/Bronya0/ally-agent/releases")
 				})
-				flat(c, "项目主页").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent") })
+				flat(c, locales.Text("项目主页")).OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent") })
 				ui.Spacer(c)
 				switch {
 				case a.upd.Busy:
 					if a.upd.State == "downloading" || a.upd.State == "extracting" {
-						flat(c, "取消下载").Disabled(a.upd.Cancelling).OnClick(func() {
+						flat(c, locales.Text("取消下载")).Disabled(a.upd.Cancelling).OnClick(func() {
 							if a.core.CancelUpdate() {
 								a.upd.Cancelling = true
 							}
 						})
 					}
 				case a.upd.State == "available":
-					flat(c, "稍后").OnClick(func() { a.upd.Open = false })
+					flat(c, locales.Text("稍后")).OnClick(func() { a.upd.Open = false })
 					if a.upd.CanAuto {
-						primary(c, "下载更新").OnClick(func() { a.startUpdate() })
+						primary(c, locales.Text("下载更新")).OnClick(func() { a.startUpdate() })
 					} else {
-						primary(c, "前往下载").OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent/releases/tag/" + a.upd.Tag) })
+						primary(c, locales.Text("前往下载")).OnClick(func() { services.OpenURL("https://github.com/Bronya0/ally-agent/releases/tag/" + a.upd.Tag) })
 					}
 				case a.upd.State == "ready":
-					flat(c, "跳过此版本").OnClick(a.skipUpdate)
-					flat(c, "稍后").OnClick(func() { a.upd.Open = false })
+					flat(c, locales.Text("跳过此版本")).OnClick(a.skipUpdate)
+					flat(c, locales.Text("稍后")).OnClick(func() { a.upd.Open = false })
 					primary(c, updateApplyLabel(runtime.GOOS)).OnClick(a.applyUpdate)
 				case a.upd.State == "error":
-					flat(c, fmt.Sprint("关闭")).OnClick(func() { a.upd.Open = false })
-					primary(c, "重试").OnClick(func() {
+					flat(c, fmt.Sprint(locales.Text("关闭"))).OnClick(func() { a.upd.Open = false })
+					primary(c, locales.Text("重试")).OnClick(func() {
 						if a.upd.Applied || a.upd.RetryApply {
 							a.applyUpdate()
 						} else {
@@ -397,7 +412,7 @@ func (a *desktop) updateDialog(c *ui.Context) {
 					})
 				default:
 					if a.upd.State == "latest" {
-						flat(c, "关闭").OnClick(func() { a.upd.Open = false })
+						flat(c, locales.Text("关闭")).OnClick(func() { a.upd.Open = false })
 					}
 				}
 			})

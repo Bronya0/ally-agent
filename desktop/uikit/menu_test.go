@@ -20,7 +20,7 @@ func TestContextMenuFitsLabelsAndShortcuts(t *testing.T) {
 			const label = "复制完整路径与文件名称"
 			var labelWidth, shortcutWidth float32
 			chosen := false
-			tt := ui.NewTester(func(c *ui.Context) {
+			tt := chineseTester(func(c *ui.Context) {
 				theme := ui.LightTheme()
 				theme.FontSize = size
 				c.SetTheme(theme)

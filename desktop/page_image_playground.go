@@ -3,6 +3,7 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"bytes"
 	"encoding/base64"
 	"fmt"
@@ -45,7 +46,7 @@ const imageTestMaxBytes = 20 * 1024 * 1024
 
 func readImageTestInputs(paths []string, existingCount, existingBytes int) ([]preparedTestInput, error) {
 	if len(paths)+existingCount > 5 {
-		return nil, fmt.Errorf("最多添加 5 张图片")
+		return nil, fmt.Errorf("%s", locales.Text("最多添加 5 张图片"))
 	}
 	out := make([]preparedTestInput, 0, len(paths))
 	total := existingBytes
@@ -61,7 +62,7 @@ func readImageTestInputs(paths []string, existingCount, existingBytes int) ([]pr
 		}
 		if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > int64(imageTestMaxBytes-total) {
 			_ = f.Close()
-			return nil, fmt.Errorf("图片合计不得超过 20 MiB")
+			return nil, fmt.Errorf("%s", locales.Text("图片合计不得超过 20 MiB"))
 		}
 		data, err := io.ReadAll(io.LimitReader(f, int64(imageTestMaxBytes-total)+1))
 		_ = f.Close()
@@ -70,11 +71,11 @@ func readImageTestInputs(paths []string, existingCount, existingBytes int) ([]pr
 		}
 		total += len(data)
 		if total > imageTestMaxBytes {
-			return nil, fmt.Errorf("图片合计不得超过 20 MiB")
+			return nil, fmt.Errorf("%s", locales.Text("图片合计不得超过 20 MiB"))
 		}
 		cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 		if err != nil {
-			return nil, fmt.Errorf("图片无法读取或尺寸过大")
+			return nil, fmt.Errorf("%s", locales.Text("图片无法读取或尺寸过大"))
 		}
 		if err := oversizedImageError(cfg, format); err != nil {
 			return nil, err
@@ -88,7 +89,7 @@ func readImageTestInputs(paths []string, existingCount, existingBytes int) ([]pr
 		case "webp":
 			typ = "image/webp"
 		default:
-			return nil, fmt.Errorf("仅支持 PNG、JPEG 或 WebP")
+			return nil, fmt.Errorf("%s", locales.Text("仅支持 PNG、JPEG 或 WebP"))
 		}
 		img, _, err := image.Decode(bytes.NewReader(data))
 		if err != nil {
@@ -108,7 +109,7 @@ func (a *desktop) chooseImageTestInputs(s *imageModelsState, t *imageModelTest) 
 		total += input.size
 	}
 	go func() {
-		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "选择参考图片", Multiple: true, Filters: []mygo.FileFilter{{Name: "图片", Extensions: []string{"png", "jpg", "jpeg", "webp"}}}})
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: locales.Text("选择参考图片"), Multiple: true, Filters: []mygo.FileFilter{{Name: locales.Text("图片"), Extensions: []string{"png", "jpg", "jpeg", "webp"}}}})
 		var prepared []preparedTestInput
 		if err == nil && len(paths) > 0 {
 			prepared, err = readImageTestInputs(paths, count, total)
@@ -136,7 +137,7 @@ func (a *desktop) runImageModelTest(s *imageModelsState, t *imageModelTest) {
 	}
 	prompt := strings.TrimSpace(t.prompt)
 	if prompt == "" || utf8.RuneCountInString(prompt) > 16000 {
-		t.err = "提示词不能为空，且不能超过 16000 字"
+		t.err = locales.Text("提示词不能为空，且不能超过 16000 字")
 		return
 	}
 	images := make([]string, len(t.inputs))
@@ -193,6 +194,7 @@ func (a *desktop) runImageModelTest(s *imageModelsState, t *imageModelTest) {
 			}
 			t.results = append([]imageTestResult{{meta: result, preview: bm}}, t.results...)
 			if len(t.results) > 20 {
+				clear(t.results[20:])
 				t.results = t.results[:20]
 			}
 		})

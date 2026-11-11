@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,10 +33,10 @@ type toolDescriptor struct {
 var toolTable = map[string]toolDescriptor{
 	"read":               {"Reading", "Read", "Read failed", false, false},
 	"remote_read":        {"Remote Reading", "Remote Read", "Remote read failed", false, false},
-	"edit":               {"Editing", "Edited", "Edit failed", true, false},
-	"remote_edit":        {"Remote Editing", "Remote Edited", "Remote edit failed", true, false},
-	"create":             {"Creating", "Created", "Create failed", true, false},
-	"remote_create_file": {"Remote Creating", "Remote Created", "Remote create failed", true, false},
+	"edit":               {"Editing", "Edited", "Edit failed", false, false},
+	"remote_edit":        {"Remote Editing", "Remote Edited", "Remote edit failed", false, false},
+	"create":             {"Creating", "Created", "Create failed", false, false},
+	"remote_create_file": {"Remote Creating", "Remote Created", "Remote create failed", false, false},
 	"delete":             {"Deleting", "Deleted", "Delete failed", true, false},
 	"remote_delete_path": {"Remote Deleting", "Remote Deleted", "Remote delete failed", true, false},
 	"command":            {"Running", "Ran", "Command failed", true, true},
@@ -191,7 +192,7 @@ func toolGroupReadSummary(result map[string]any) string {
 	return fmt.Sprintf("%d %s", readLines, unit)
 }
 
-func toolGroupGrepSummary(result map[string]any) string {
+func toolGroupGrepHits(result map[string]any) int {
 	hits := -1
 	if _, exists := result["hits"]; exists {
 		hits = int(num(result, "hits"))
@@ -207,10 +208,14 @@ func toolGroupGrepSummary(result map[string]any) string {
 			}
 		}
 	}
-	if hits < 0 {
-		return ""
+	return hits
+}
+
+func toolGroupGrepSummary(result map[string]any) string {
+	if hits := toolGroupGrepHits(result); hits >= 0 {
+		return fmt.Sprintf("%d hits", hits)
 	}
-	return fmt.Sprintf("%d hits", hits)
+	return ""
 }
 
 func toolGroupListSummary(result map[string]any) string {
@@ -221,9 +226,9 @@ func toolGroupListSummary(result map[string]any) string {
 			count = len(list(result, "matches"))
 		}
 	}
-	parts := []string{fmt.Sprintf("%v 项", count)}
+	parts := []string{fmt.Sprintf(locales.Text("%v 项"), count)}
 	if boolOf(result, "truncated") {
-		parts = append(parts, "已截断")
+		parts = append(parts, locales.Text("已截断"))
 	}
 	return strings.Join(parts, "，")
 }
@@ -240,6 +245,144 @@ func toolGroupResultSummary(name string, result map[string]any) string {
 	return ""
 }
 
+type toolGroupSummaryKey struct {
+	historyKey
+	toolRev          uint64
+	index, windowEnd int
+}
+
+type toolGroupSummary struct {
+	end, reads, greps, lists, commands, trimmed int
+	status, lastStatus                          string
+	running, queued                             int
+	changeRev                                   uint64
+}
+
+// A bounded journal lets visible group headers apply changed scalar counts.
+// It never retains arguments, outputs or message maps. A frame that misses
+// the entire journal simply rebuilds its summary from the transcript.
+const toolGroupChangeLimit = 64
+
+type toolGroupItem struct {
+	kind, state     string
+	folded, trimmed bool
+}
+
+type toolGroupChange struct {
+	index         int
+	before, after toolGroupItem
+}
+
+type toolGroupChanges struct {
+	rev     uint64
+	entries [toolGroupChangeLimit]toolGroupChange
+}
+
+func groupItem(m map[string]any) toolGroupItem {
+	if !isFoldableToolGroupItem(m) {
+		return toolGroupItem{}
+	}
+	return toolGroupItem{readGrepGroupName(m), toolState(m), true, boolOf(m, "fastCompacted")}
+}
+
+func recordToolGroupChange(t *conversation, index int, before toolGroupItem, m map[string]any) {
+	after := groupItem(m)
+	if before == after {
+		return
+	}
+	if t.groupChanges == nil {
+		t.groupChanges = &toolGroupChanges{}
+	}
+	log := t.groupChanges
+	log.rev++
+	log.entries[log.rev%toolGroupChangeLimit] = toolGroupChange{index, before, after}
+}
+
+func (s *toolGroupSummary) count(item toolGroupItem, delta int) {
+	if !item.folded {
+		return
+	}
+	if item.trimmed {
+		s.trimmed += delta
+	}
+	switch item.state {
+	case "running":
+		s.running += delta
+	case "pending":
+		s.queued += delta
+	}
+	switch item.kind {
+	case "grep":
+		s.greps += delta
+	case "list", "glob":
+		s.lists += delta
+	case "command":
+		s.commands += delta
+	default:
+		s.reads += delta
+	}
+}
+
+func (s *toolGroupSummary) finish(t *conversation) {
+	s.status = s.lastStatus
+	if s.running > 0 {
+		s.status = "running"
+	} else if s.queued > 0 {
+		s.status = "pending"
+	}
+	if t.groupChanges != nil {
+		s.changeRev = t.groupChanges.rev
+	}
+}
+
+func appendToolGroupSummary(s *toolGroupSummary, t *conversation, windowEnd int) {
+	for s.end < windowEnd && isFoldableToolGroupItem(t.Messages[s.end]) {
+		item := groupItem(t.Messages[s.end])
+		s.count(item, 1)
+		s.lastStatus = item.state
+		s.end++
+	}
+	s.finish(t)
+}
+
+func summarizeToolGroup(t *conversation, index, windowEnd int) toolGroupSummary {
+	s := toolGroupSummary{end: index, lastStatus: "pending"}
+	appendToolGroupSummary(&s, t, windowEnd)
+	return s
+}
+
+func cachedToolGroupSummary(memo *memoOf[toolGroupSummaryKey, toolGroupSummary], t *conversation, key toolGroupSummaryKey) toolGroupSummary {
+	return memo.get(key, func(toolGroupSummaryKey) toolGroupSummary {
+		s := memo.value
+		previous := memo.key
+		if !memo.ready || previous.rev != key.rev || previous.index != key.index || previous.windowEnd > key.windowEnd || previous.rows > key.rows {
+			return summarizeToolGroup(t, key.index, key.windowEnd)
+		}
+		if log := t.groupChanges; log != nil {
+			if s.changeRev > log.rev || log.rev-s.changeRev > toolGroupChangeLimit {
+				return summarizeToolGroup(t, key.index, key.windowEnd)
+			}
+			for rev := s.changeRev + 1; rev <= log.rev; rev++ {
+				change := log.entries[rev%toolGroupChangeLimit]
+				if change.index < key.index || change.index >= s.end {
+					continue
+				}
+				s.count(change.before, -1)
+				s.count(change.after, 1)
+				if change.index == s.end-1 {
+					s.lastStatus = change.after.state
+				}
+			}
+		}
+		if s.end == previous.windowEnd {
+			appendToolGroupSummary(&s, t, key.windowEnd)
+		} else {
+			s.finish(t)
+		}
+		return s
+	})
+}
+
 // toolActivityGroupCard draws one card for a consecutive run of read, grep,
 // list and command calls. The head message decides the wording; entries load
 // their output only when opened. a11yLabel prefixes the hidden control label
@@ -249,10 +392,10 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 		return
 	}
 	headIsCommand := isFoldableCommand(t.Messages[index])
-	a11yLabel := "读取分组 "
+	a11yLabel := locales.Text("读取分组 ")
 	groupType := "readgroup"
 	if headIsCommand {
-		groupType, a11yLabel = "commandgroup", "命令分组 "
+		groupType, a11yLabel = "commandgroup", locales.Text("命令分组 ")
 	}
 	key := fmt.Sprintf("%s-%s-%d", t.ID, groupType, index)
 	open := t.uiState().ToolOpen[key]
@@ -270,53 +413,24 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	}
 
 	_, windowEnd := a.chatMessageWindow(t)
-	end := index
-	reads, greps, lists, commands := 0, 0, 0, 0
-	trimmed := 0
-	anyRunning, anyQueued := false, false
-	lastState := "pending"
-	for i := index; i < windowEnd && isFoldableToolGroupItem(t.Messages[i]); i++ {
-		end = i + 1
-		m := t.Messages[i]
-		if boolOf(m, "fastCompacted") {
-			trimmed++
-		}
-		state := toolState(m)
-		lastState = state
-		switch state {
-		case "running":
-			anyRunning = true
-		case "pending":
-			anyQueued = true
-		}
-		name := readGrepGroupName(m)
-		switch name {
-		case "grep":
-			greps++
-		case "list", "glob":
-			lists++
-		case "command":
-			commands++
-		default:
-			reads++
-		}
-	}
+	// This widget keeps scalar header metadata, including while collapsed.
+	// Events retire/update tool states through toolRev; topology and compaction
+	// changes use historyRev. No row arguments or output are retained here.
+	summaryMemo := memoAt[memoOf[toolGroupSummaryKey, toolGroupSummary]](container, "summary")
+	summary := cachedToolGroupSummary(summaryMemo, t, toolGroupSummaryKey{historyKey{len(t.Messages), t.historyRev}, t.toolRev, index, windowEnd})
+	end := summary.end
+	reads, greps, lists, commands, trimmed := summary.reads, summary.greps, summary.lists, summary.commands, summary.trimmed
 	if end == index {
 		return
 	}
 	hasReadTools := reads+greps+lists > 0
 	if commands > 0 && hasReadTools {
-		a11yLabel = "工具分组 "
+		a11yLabel = locales.Text("工具分组 ")
 	}
 	// A group's mark follows its calls: it breathes while any call runs, waits
 	// grey while one is still queued, and otherwise keeps the last result. None
 	// of that is repeated in words beside the counts.
-	groupStatus := lastState
-	if anyRunning {
-		groupStatus = "running"
-	} else if anyQueued {
-		groupStatus = "pending"
-	}
+	groupStatus := summary.status
 	rowLabel := a11yLabel + key
 
 	visibleEnd := end
@@ -326,6 +440,13 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	// A collapsed group draws no rows, so only allocate them when it is open.
 	var entries []toolGroupEntry
 	if open {
+		if count := visibleEnd - index; len(*entryArgs) > count {
+			// "Show less" drops hidden parsed arguments and their backing slots,
+			// not just the output widgets. The surviving rows keep their memos.
+			kept := make([]argsMemo, count)
+			copy(kept, *entryArgs)
+			*entryArgs = kept
+		}
 		entries = make([]toolGroupEntry, 0, visibleEnd-index)
 		for i := index; i < visibleEnd; i++ {
 			m := t.Messages[i]
@@ -390,7 +511,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 			separator := false
 			if reads > 0 {
 				disclosureIcon(c, "book", a.currentPalette().accent)
-				ui.Text(c, fmt.Sprintf("读取 %d 次", reads)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+				ui.Text(c, fmt.Sprintf(locales.Text("读取 %d 次"), reads)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
 				separator = true
 			}
 			if greps > 0 {
@@ -398,7 +519,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 					ui.Text(c, "，").FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
 				}
 				disclosureIcon(c, "search", a.currentPalette().accent)
-				ui.Text(c, fmt.Sprintf("搜索 %d 次", greps)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+				ui.Text(c, fmt.Sprintf(locales.Text("搜索 %d 次"), greps)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
 				separator = true
 			}
 			if lists > 0 {
@@ -406,7 +527,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 					ui.Text(c, "，").FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
 				}
 				disclosureIcon(c, "list", a.currentPalette().accent)
-				ui.Text(c, fmt.Sprintf("罗列 %d 次", lists)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+				ui.Text(c, fmt.Sprintf(locales.Text("罗列 %d 次"), lists)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
 				separator = true
 			}
 			if commands > 0 {
@@ -414,12 +535,12 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 					ui.Text(c, "，").FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
 				}
 				disclosureIcon(c, "terminal", a.currentPalette().accent)
-				ui.Text(c, fmt.Sprintf("执行命令 %d 次", commands)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
+				ui.Text(c, fmt.Sprintf(locales.Text("执行命令 %d 次"), commands)).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine()
 			}
 			if trimmed == end-index {
 				// Nothing in this run kept its body, so opening it shows excerpts; the
 				// chip keeps the report the trimmed cards used to carry one by one.
-				neutralChip(c, fastCompactChip)
+				neutralChip(c, locales.Text(fastCompactChip))
 			}
 			caret := "chevron"
 			if open {
@@ -487,7 +608,15 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 				transcriptAction(c, key+"-more", fmt.Sprintf("Show more (%d)", remaining)).OnClick(func() { *extra += 100 })
 			}
 			if *extra > 0 {
-				transcriptAction(c, key+"-less", "Show less").OnClick(func() { *extra = 0 })
+				transcriptAction(c, key+"-less", "Show less").OnClick(func() {
+					*extra = 0
+					for child, detail := range t.uiState().CommandDetails {
+						if detail != nil && detail.Index >= index+100 && detail.Index < end {
+							delete(t.uiState().CommandDetails, child)
+							delete(t.uiState().ToolOpen, child)
+						}
+					}
+				})
 			}
 		})
 	})
@@ -497,7 +626,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 // replaced by a local trim, and keeps the excerpt it was replaced with on hover:
 // the group row no longer draws that body anywhere else.
 func toolGroupCompactedChip(c *ui.Context, m map[string]any) {
-	chip := neutralChip(c, fastCompactChip)
+	chip := neutralChip(c, locales.Text(fastCompactChip))
 	if body := str(m, "body"); body != "" {
 		uikit.Tooltip(c, chip, body)
 	}
@@ -521,9 +650,9 @@ func (a *desktop) toolGroupCommandEntry(c *ui.Context, t *conversation, entry to
 	}
 	command := entry.title
 	if command == "" {
-		command = "命令"
+		command = locales.Text("命令")
 	}
-	button := ui.ButtonBase(c.Key(key+"-group-row")).FillWidth().MinWidth(0).Height(24).Padding(1, 8, 1, 16).Gap(gapInline).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label("命令结果 " + key + " " + verb + " " + short(command, 120))
+	button := ui.ButtonBase(c.Key(key+"-group-row")).FillWidth().MinWidth(0).Height(24).Padding(1, 8, 1, 16).Gap(gapInline).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(locales.Text("命令结果 ") + key + " " + verb + " " + short(command, 120))
 	// Same cache as toolCard: an expanded group redraws every frame, so the
 	// arguments must not be decoded again on each one.
 	args := memoAt[argsMemo](button, "parsed-args").get(str(m, "args"), parseToolArgs)
@@ -542,10 +671,10 @@ func (a *desktop) toolGroupCommandEntry(c *ui.Context, t *conversation, entry to
 				resultParts = append(resultParts, fmt.Sprintf("exit %v", code))
 			}
 			if boolOf(result, "timedOut") {
-				resultParts = append(resultParts, "超时")
+				resultParts = append(resultParts, locales.Text("超时"))
 			}
 			if boolOf(result, "promotedToService") {
-				resultParts = append(resultParts, "已转后台服务")
+				resultParts = append(resultParts, locales.Text("已转后台服务"))
 			}
 			if ms := toolDuration(m, result); ms > 0 {
 				resultParts = append(resultParts, fmtDur(ms))
@@ -566,7 +695,7 @@ func (a *desktop) toolGroupCommandEntry(c *ui.Context, t *conversation, entry to
 		if open {
 			delete(t.uiState().CommandDetails, key)
 		} else if state != "pending" && state != "running" {
-			a.loadCommandDetail(t, key)
+			a.loadCommandDetail(t, entry.index, key)
 		}
 	}
 	if open {
@@ -628,6 +757,16 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		desc.showTiming = false
 	}
 	result := toolResult(m)
+	filePath := ""
+	if (name == "edit" || name == "create") && !isMCP {
+		filePath = toolFilePath(args, result)
+		if summary == "" {
+			summary = filePath
+			if files := list(args, "files"); len(files) > 1 {
+				summary = fmt.Sprintf("%d files", len(files))
+			}
+		}
+	}
 	if name == "scheduled_task" {
 		summary = a.scheduledTaskSummary(args, result)
 	}
@@ -639,14 +778,18 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	if key == "" {
 		key = fmt.Sprintf("%s-%d", t.ID, index)
 	}
-	open := t.uiState().ToolOpen[key]
+	open := expandable && t.uiState().ToolOpen[key]
 	p := a.currentPalette()
 	// Tool rows mirror main's .rich-tool-card: transparent, borderless, with a
 	// hanging status icon; the row itself carries the 6px rhythm below.
 	container.Children(func() {
-		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(gapTight).AlignItems(ui.Center).Justify(ui.Start).Label("工具详情 " + key)
-		if expandable {
+		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(gapTight).AlignItems(ui.Center).Justify(ui.Start).Label(locales.Text("工具详情 ") + key)
+		if expandable || filePath != "" {
 			row.Cursor(ui.CursorPointer)
+		}
+		if filePath != "" {
+			uikit.Tooltip(c, row, locales.Text("在编辑器打开 ")+filePath)
+			row.OnClick(func() { a.openToolFile(t, filePath) })
 		}
 		row.Hidden(name == "suggest").Children(func() {
 			if name != "subagent" {
@@ -673,7 +816,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				}
 			}
 			if isMCP {
-				label := map[string]string{"success": "成功", "error": "失败", "running": "运行中", "pending": "等待中", "cancelled": "已取消"}[state]
+				label := map[string]string{"success": locales.Text("成功"), "error": locales.Text("失败"), "running": locales.Text("运行中"), "pending": locales.Text("等待中"), "cancelled": locales.Text("已取消")}[state]
 				ui.Text(c, label).FontSize(fsAux).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 			}
 			if name == "screenshot" || name == "image_generate" || name == "image_edit" {
@@ -691,10 +834,10 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					ui.Text(c, fmt.Sprintf("exit %v", code)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 				}
 				if boolOf(result, "timedOut") {
-					neutralChip(c, "超时")
+					neutralChip(c, locales.Text("超时"))
 				}
 				if boolOf(result, "promotedToService") {
-					neutralChip(c, "已转后台服务")
+					neutralChip(c, locales.Text("已转后台服务"))
 				}
 				if ms := toolDuration(m, result); ms > 0 || state == "success" || state == "error" || state == "cancelled" {
 					ui.Text(c, fmtDur(ms)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
@@ -706,7 +849,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					if remaining < 0 {
 						remaining = 0
 					}
-					neutralChip(c, fmt.Sprintf("剩余 %ds", remaining))
+					neutralChip(c, fmt.Sprintf(locales.Text("剩余 %ds"), remaining))
 					c.After(time.Second)
 				}
 			}
@@ -738,7 +881,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				}
 			}
 			if boolOf(m, "fastCompacted") {
-				neutralChip(c, fastCompactChip)
+				neutralChip(c, locales.Text(fastCompactChip))
 			}
 			// A command's duration already sits next to its exit status.
 			if desc.showTiming && name != "command" && name != "remote_run_command" {
@@ -756,7 +899,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				if open {
 					delete(t.uiState().CommandDetails, key)
 				} else if state != "pending" && state != "running" {
-					a.loadCommandDetail(t, key)
+					a.loadCommandDetail(t, index, key)
 				}
 			}
 		}
@@ -783,7 +926,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					errText = str(m, "error")
 				}
 				if boolOf(result, "cancelled") {
-					errText = "已取消"
+					errText = locales.Text("已取消")
 				}
 				if reason := str(result, "error"); reason != "" {
 					errText = reason
@@ -797,9 +940,14 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				for n, item := range list(result, "files") {
 					if file, ok := item.(map[string]any); ok {
 						if len(list(result, "files")) > 1 {
-							ui.Text(c, str(file, "path")).FontSize(fsSmall).TextColor(a.secondaryInk())
+							path := str(file, "path")
+							if name == "edit" && path != "" {
+								transcriptAction(c, fmt.Sprintf("%s-file-%d-open", key, n), path).OnClick(func() { a.openToolFile(t, path) })
+							} else {
+								ui.Text(c, path).FontSize(fsSmall).TextColor(a.secondaryInk())
+							}
 						}
-						a.diffBlock(c, fmt.Sprintf("%s-file-%d", key, n), str(file, "diff"), !open)
+						a.diffBlock(c, fmt.Sprintf("%s-file-%d", key, n), str(file, "diff"), true)
 					}
 				}
 			case name == "delete" || name == "remote_delete_path":
@@ -812,27 +960,27 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					notice(c, "error", reason, a.secondaryInk())
 				}
 			case (name == "edit" || name == "remote_edit") && str(result, "diff") != "":
-				a.diffBlock(c, key+"-diff", str(result, "diff"), !open)
+				a.diffBlock(c, key+"-diff", str(result, "diff"), true)
 			case name == "create" || name == "remote_create_file":
 				content := str(args, "content")
-				startLine := 1
 				if content == "" {
 					content = str(result, "content")
 				}
-				if !open {
-					preview := memoAt[createPreviewMemo](body, "create-preview").get(content, func(content string) createPreview {
-						return createPreview{
-							startLine: max(1, strings.Count(strings.TrimSuffix(content, "\n"), "\n")+1-5),
-							content:   tailLines(content, 6),
-						}
-					})
-					content, startLine = preview.content, preview.startLine
+				preview := memoAt[createPreviewMemo](body, "create-preview").get(content, func(content string) createPreview {
+					return createPreview{
+						startLine: max(1, strings.Count(strings.TrimRight(content, "\n"), "\n")+2-createPreviewLines),
+						content:   tailLines(content, createPreviewLines),
+					}
+				})
+				if start := int(num(m, "createPreviewStartLine")); boolOf(m, "createPreviewTrimmed") && start > 0 {
+					preview.startLine = start
 				}
+				content = preview.content
 				if content != "" {
 					// One shape from the first streamed line to the result: a fixed-height
 					// box while the file was still arriving left a short card taller than its
 					// finished form, and finishing pulled everything below it up.
-					toolSourceWindow(c, key+"-source", content, str(args, "path"), open, startLine, a.secondaryInk())
+					toolSourceWindow(c, key+"-source", content, str(args, "path"), preview.startLine, a.secondaryInk())
 				}
 			case name == "suggest":
 				ui.Row(c).Wrap().Gap(gapInline).Children(func() {
@@ -858,7 +1006,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					// 工具还没回，没有结果就没有可载入的页面；把已经到达的 HTML 尾部显示
 					// 出来，让人看见页面在长，而不是只看到一个等着点的空按钮。
 					if strings.TrimSpace(html) == "" {
-						ui.Text(c, "正在生成页面…").FontSize(fsSmall).TextColor(a.secondaryInk())
+						ui.Text(c, locales.Text("正在生成页面…")).FontSize(fsSmall).TextColor(a.secondaryInk())
 					} else {
 						toolCodeWindow(c, key+"-html-stream", tailLines(html, 18), true, "preview.html", a.secondaryInk())
 					}
@@ -866,8 +1014,8 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				}
 				a.toolHTMLView(c, t, m, args)
 				ui.Row(c).Gap(gapField).Children(func() {
-					flat(c, "导出 HTML").OnClick(func() { a.exportHTML("preview.html", html) })
-					flat(c, "在浏览器打开").OnClick(func() { a.openHTMLPreview(html) })
+					flat(c, locales.Text("导出 HTML")).OnClick(func() { a.exportHTML("preview.html", html) })
+					flat(c, locales.Text("在浏览器打开")).OnClick(func() { a.openHTMLPreview(html) })
 				})
 				if open {
 					toolCodeWindow(c, key+"-html-source", html, true, "preview.html", a.secondaryInk())
@@ -963,13 +1111,13 @@ const toolStatusDot = 6
 func toolStatusLabel(state string) string {
 	switch state {
 	case "success":
-		return "已完成"
+		return locales.Text("已完成")
 	case "error":
-		return "失败"
+		return locales.Text("失败")
 	case "running":
-		return "运行中"
+		return locales.Text("运行中")
 	}
-	return "等待中"
+	return locales.Text("等待中")
 }
 
 func toolStatusIcon(c *ui.Context, state string) {
@@ -1169,7 +1317,7 @@ func toolResult(m map[string]any) map[string]any {
 		}
 		return map[string]any{"_text": body}
 	}
-	return map[string]any{}
+	return nil
 }
 
 // The runtime wraps every tool payload in {ok, data}; keep the envelope
@@ -1314,21 +1462,21 @@ func toolChips(name, state string, args, result map[string]any) []string {
 		}
 	case "ask":
 		if qs := list(result, "questions"); len(qs) > 0 {
-			chips = append(chips, fmt.Sprintf("%d 个问题", len(qs)))
+			chips = append(chips, fmt.Sprintf(locales.Text("%d 个问题"), len(qs)))
 		}
 	case "subagent":
 		if steps := int(num(result, "steps")); steps > 0 {
-			chips = append(chips, fmt.Sprintf("%d 步", steps))
+			chips = append(chips, fmt.Sprintf(locales.Text("%d 步"), steps))
 		}
 	}
 	if trunc, _ := result["truncated"].(bool); trunc {
 		if name == "screenshot" {
 			// A window enumeration limit is not a truncated screenshot or text.
 			if total := int(num(result, "total")); total > len(list(result, "windows")) {
-				chips = append(chips, fmt.Sprintf("%d / %d 个窗口", len(list(result, "windows")), total))
+				chips = append(chips, fmt.Sprintf(locales.Text("%d / %d 个窗口"), len(list(result, "windows")), total))
 			}
 		} else {
-			chips = append(chips, "已截断")
+			chips = append(chips, locales.Text("已截断"))
 		}
 	}
 	return chips
@@ -1380,6 +1528,10 @@ func toolPreview(name string, args, result map[string]any, lines int) string {
 }
 
 func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name string, args, result map[string]any, m map[string]any) {
+	if boolOf(result, "resultOmitted") {
+		fieldNote(c, locales.Text("历史结果正文未保存。"), a.secondaryInk())
+		return
+	}
 	switch name {
 	case "edit", "remote_edit":
 		diff := str(result, "diff")
@@ -1400,7 +1552,7 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 		holder.Children(func() {
 			output := memo.get(commandKey(result), func(key commandOutputKey) string { return stripBlankLines(commandOutputFromKey(key)) })
 			if output == "" {
-				output = "(没有输出)"
+				output = locales.Text("(没有输出)")
 			}
 			toolCodeWindow(c, fmt.Sprintf("tool-out-%d", index), output, true, "", a.secondaryInk())
 		})
@@ -1415,10 +1567,10 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 		}
 		codeBlock(c, fmt.Sprintf("tool-html-%d", index), html, 150, a.secondaryInk())
 		ui.Row(c).Gap(gapField).Children(func() {
-			flat(c, "导出 HTML").OnClick(func() {
+			flat(c, locales.Text("导出 HTML")).OnClick(func() {
 				a.exportHTML(fmt.Sprintf("render-%d.html", index), html)
 			})
-			flat(c, "在浏览器打开").OnClick(func() { a.openHTMLPreview(html) })
+			flat(c, locales.Text("在浏览器打开")).OnClick(func() { a.openHTMLPreview(html) })
 		})
 	case "delete", "remote_delete_path":
 		for _, item := range list(result, "results") {
@@ -1433,16 +1585,16 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 				ui.Text(c, "├─").Font(monoFamily).FontSize(fsSmall).TextColor(a.secondaryInk())
 				ui.Text(c, path).Font(monoFamily).FontSize(fsSmall)
 				if absent {
-					neutralChip(c, "本就不存在")
+					neutralChip(c, locales.Text("本就不存在"))
 				} else if okFlag {
-					chip(c, "已删除", c.Theme().Success, ui.RGBA(78, 200, 126, 0.12))
+					chip(c, locales.Text("已删除"), c.Theme().Success, ui.RGBA(78, 200, 126, 0.12))
 				} else {
 					uikit.ErrorText(c, str(row, "error")).Grow(1)
 				}
 			})
 		}
 	case "remote_transfer":
-		for _, pair := range [][2]string{{"方向", str(result, "direction")}, {"来源", str(result, "source")}, {"目标", str(result, "target")}, {"文件数", fmt.Sprint(int(num(result, "files")))}, {"目录数", fmt.Sprint(int(num(result, "dirs")))}} {
+		for _, pair := range [][2]string{{locales.Text("方向"), str(result, "direction")}, {locales.Text("来源"), str(result, "source")}, {locales.Text("目标"), str(result, "target")}, {locales.Text("文件数"), fmt.Sprint(int(num(result, "files")))}, {locales.Text("目录数"), fmt.Sprint(int(num(result, "dirs")))}} {
 			if pair[1] != "" && pair[1] != "0" {
 				kv(c, pair[0], pair[1], a.secondaryInk())
 			}
@@ -1458,7 +1610,7 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 	default:
 		text := resultText(result)
 		if text == "" {
-			fieldNote(c, "没有可显示的内容。", a.secondaryInk())
+			fieldNote(c, locales.Text("没有可显示的内容。"), a.secondaryInk())
 			return
 		}
 		codeBlock(c, fmt.Sprintf("tool-body-%d", index), text, 150, a.secondaryInk())
@@ -1593,7 +1745,7 @@ func (a *desktop) exportHTML(name, html string) {
 	a.job(func() error {
 		path, err := a.core.ExportTextFile(name, html, "HTML", "*.html")
 		if err == nil && path != "" {
-			a.win.Update(func() { a.notify("已导出：" + path) })
+			a.win.Update(func() { a.notify(locales.Text("已导出：") + path) })
 		}
 		return err
 	})
@@ -1627,10 +1779,10 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 	}
 	role := str(m, "subagentRole")
 	if role == "" {
-		role = "子代理"
+		role = locales.Text("子代理")
 	}
 	tone := toneColor(c, status, a.secondaryInk())
-	label := map[string]string{"running": "运行中", "success": "已完成", "partial": "步数已耗尽", "error": "失败", "pending": "等待中"}[status]
+	label := map[string]string{"running": locales.Text("运行中"), "success": locales.Text("已完成"), "partial": locales.Text("步数已耗尽"), "error": locales.Text("失败"), "pending": locales.Text("等待中")}[status]
 	if label == "" {
 		label = status
 	}
@@ -1698,18 +1850,18 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 			}
 			ui.Row(c).Gap(gapInline).Wrap().AlignItems(ui.Center).Children(func() {
 				if steps := int(num(m, "steps")); steps > 0 {
-					label := fmt.Sprintf("%d 步", steps)
+					label := fmt.Sprintf(locales.Text("%d 步"), steps)
 					if limit := int(num(m, "maxSteps")); limit > 0 {
-						label = fmt.Sprintf("%d/%d 步", steps, limit)
+						label = fmt.Sprintf(locales.Text("%d/%d 步"), steps, limit)
 					}
 					neutralChip(c, label)
 				}
 				if ctxTokens := int(num(m, "contextTokens")); ctxTokens > 0 {
-					neutralChip(c, "上下文 "+fmtK(ctxTokens))
+					neutralChip(c, locales.Text("上下文 ")+fmtK(ctxTokens))
 				}
 				hit, miss := int(num(m, "cacheHitTokens")), int(num(m, "cacheMissTokens"))
 				if hit+miss > 0 {
-					neutralChip(c, fmt.Sprintf("缓存 %d%%", hit*100/(hit+miss)))
+					neutralChip(c, fmt.Sprintf(locales.Text("缓存 %d%%"), hit*100/(hit+miss)))
 				}
 				in, out := int(num(m, "inputTokens")), int(num(m, "outputTokens"))
 				if in+out > 0 {
@@ -1721,11 +1873,11 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 				a.subagentBlackboardButton(c, t, m)
 				open := t.uiState().ToolOpen["sub-"+subID]
 				reportButton, _ := buttonParts(c, "sub-report-"+subID, "", btnSecondary, true, "")
-				reportButton.Label("子代理报告 " + subID).Disabled(!hasReport).OnClick(func() { toggleSubagentDetail(t, subID, false) })
+				reportButton.Label(locales.Text("子代理报告 ") + subID).Disabled(!hasReport).OnClick(func() { toggleSubagentDetail(t, subID, false) })
 				reportButton.Children(func() {
 					ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
 						disclosureIcon(c, "file", a.secondaryInk())
-						ui.Text(c, "报告").FontSize(uikit.ButtonFontSmall)
+						ui.Text(c, locales.Text("报告")).FontSize(uikit.ButtonFontSmall)
 						caret := "chevron"
 						if open {
 							caret = "chevrondown"
@@ -1787,7 +1939,7 @@ func tailLines(s string, n int) string {
 func shortBlock(s string, n int) string {
 	r := []rune(s)
 	if len(r) > n {
-		return string(r[:n]) + "\n…（内容已截断）"
+		return string(r[:n]) + locales.Text("\n…（内容已截断）")
 	}
 	return s
 }

@@ -126,8 +126,8 @@ func TestResponsesNativeReplayAndProtectedRestart(t *testing.T) {
 	b.historiesDir = a.historiesDir
 	b.modelHistoryCodec = &modelHistoryCodec{protector: protector}
 	restored, _, _ := b.sessionHistorySnapshot(sid)
-	if restored[2].Content != "private-tool-result-sentinel" {
-		t.Fatal("model tool evidence lost on restart")
+	if restored[2].Content != toolResultPlaceholder {
+		t.Fatal("restart resurrected transient tool output")
 	}
 	_, input := buildOpenAIResponsesInput(restored, b.reasoningStash.get(reasoningReplayKey(cfg, cfg.Model)))
 	encoded, _ := json.Marshal(input)
@@ -569,7 +569,7 @@ func TestResponsesCallIDsIndependentOfNativeReplay(t *testing.T) {
 	}
 }
 
-func TestProtectedHistoryOmitsImagesButKeepsToolEvidence(t *testing.T) {
+func TestProtectedHistoryOmitsImagesAndTransientToolResults(t *testing.T) {
 	t.Parallel()
 	a := newApiTestApp(t)
 	block, _ := aes.NewCipher(make([]byte, 32))
@@ -595,14 +595,142 @@ func TestProtectedHistoryOmitsImagesButKeepsToolEvidence(t *testing.T) {
 		t.Fatal("image caused protected history fallback")
 	}
 	restored, publish := a.modelHistoryFromStorage("protocol-session", raw, disk)
-	if publish == nil || len(restored) != 3 || restored[2].Content != history[2].Content {
-		t.Fatal("tool evidence or replay lost")
+	if publish == nil || len(restored) != 3 || restored[2].Content != toolResultPlaceholder || restored[2].ToolCallID != call.ID {
+		t.Fatal("tool pairing/replay lost or transient output persisted")
 	}
 	if len(restored[0].MultiContent) != 0 || !strings.Contains(restored[0].Content, "image attachment(s) omitted") {
 		t.Fatal("image payload persisted")
 	}
 	if history[0].MultiContent[1].ImageURL.URL == "" {
 		t.Fatal("in-memory image was modified")
+	}
+}
+
+func TestProtectedRestartFiltersLegacyObservationsWithoutLosingPairing(t *testing.T) {
+	t.Parallel()
+	a := newApiTestApp(t)
+	block, _ := aes.NewCipher(make([]byte, 32))
+	gcm, _ := cipher.NewGCM(block)
+	protector := oauthTestProtector{gcm}
+	a.modelHistoryCodec = &modelHistoryCodec{protector: protector}
+	names := []string{"read", "remote_read", "batch_read", "grep", "Glob", "list_files", "Bash", "command", "remote_run_command", "edit", "plan", "mcp__example"}
+	history := []openai.ChatCompletionMessage{{Role: "user", Content: "task"}}
+	for i, name := range names {
+		id := fmt.Sprint("call-", i)
+		history = append(history, openai.ChatCompletionMessage{Role: "assistant", ReasoningContent: "reasoning", ToolCalls: []openai.ToolCall{{ID: id, Type: "function", Function: openai.FunctionCall{Name: name, Arguments: `{"path":"main.go"}`}}}}, openai.ChatCompletionMessage{Role: "tool", ToolCallID: id, Content: fmt.Sprint("raw-observation-", i)})
+	}
+	// A reused call ID must be classified at its own chronological call, not
+	// by a later call's tool name elsewhere in the same saved history.
+	history = append(history, openai.ChatCompletionMessage{Role: "assistant", ToolCalls: []openai.ToolCall{{ID: "call-0", Type: "function", Function: openai.FunctionCall{Name: "plan", Arguments: "{}"}}}}, openai.ChatCompletionMessage{Role: "tool", ToolCallID: "call-0", Content: "latest plan"})
+	disk := sanitizeHistoryMessagesForDisk(history)
+	// Simulate the previous protected format, which still stored raw results.
+	state := protectedModelState{Version: 1, Session: "legacy", DiskHash: modelHistoryHash(disk), History: history}
+	plain, _ := json.Marshal(state)
+	sealed, err := protector.Seal(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(disk)
+	var rows []map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &rows)
+	rows[0][protectedModelStateField], _ = json.Marshal(sealed)
+	raw, _ = json.Marshal(rows)
+	restored, publish := a.modelHistoryFromStorage("legacy", raw, disk)
+	if publish == nil || len(restored) != len(history) {
+		t.Fatal("protected state rejected or message structure changed")
+	}
+	for i, name := range names {
+		call, result := restored[i*2+1], restored[i*2+2]
+		if len(call.ToolCalls) != 1 || call.ToolCalls[0].ID != result.ToolCallID || call.ToolCalls[0].Function.Arguments != history[i*2+1].ToolCalls[0].Function.Arguments || call.ReasoningContent != "reasoning" {
+			t.Fatal("tool pairing, arguments or reasoning lost")
+		}
+		want := history[i*2+2].Content
+		if i < 9 {
+			want = toolResultPlaceholder
+		}
+		if result.Content != want {
+			t.Fatalf("%s result=%q", name, result.Content)
+		}
+		if history[i*2+2].Content == toolResultPlaceholder {
+			t.Fatal("in-memory evidence modified")
+		}
+	}
+	if restored[len(restored)-1].Content != "latest plan" {
+		t.Fatal("later non-transient result lost")
+	}
+	// Each protocol keeps one non-empty result for every retained call.
+	chatJSON, err := json.Marshal(openai.ChatCompletionRequest{Model: "test", Messages: restored})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chat struct {
+		Messages []openai.ChatCompletionMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(chatJSON, &chat); err != nil {
+		t.Fatal(err)
+	}
+	results := 0
+	for _, m := range chat.Messages {
+		if m.Role == "tool" && m.ToolCallID != "" && m.Content != "" {
+			results++
+		}
+	}
+	if results != len(names)+1 {
+		t.Fatalf("Chat result pairing changed: %d", results)
+	}
+	_, input := buildOpenAIResponsesInput(restored, nil)
+	results = 0
+	for _, raw := range input {
+		if item, ok := raw.(openai.ResponseFunctionCallOutput); ok && item.Type == "function_call_output" && item.CallID != "" && item.Output != "" {
+			results++
+		}
+	}
+	if results != len(names)+1 {
+		t.Fatalf("Responses result pairing changed: %d", results)
+	}
+	_, anthropicMessages := buildAnthropicMessages(restored, nil, false)
+	results = 0
+	for _, m := range anthropicMessages {
+		for _, block := range m.Content {
+			if block.OfToolResult != nil && block.OfToolResult.ToolUseID != "" && len(block.OfToolResult.Content) > 0 {
+				results++
+			}
+		}
+	}
+	if results != len(names)+1 {
+		t.Fatalf("Anthropic result pairing changed: %d", results)
+	}
+}
+
+func TestProtectedHistoryClassifiesRepeatedIDsByDeclarationOrder(t *testing.T) {
+	t.Parallel()
+	for _, names := range [][]string{{"read", "plan"}, {"plan", "read"}} {
+		history := []openai.ChatCompletionMessage{{Role: "user", Content: "task"}, {Role: "assistant", ToolCalls: []openai.ToolCall{
+			{ID: "same", Type: "function", Function: openai.FunctionCall{Name: names[0], Arguments: "{}"}},
+			{ID: "same", Type: "function", Function: openai.FunctionCall{Name: names[1], Arguments: "{}"}},
+		}}, {Role: "tool", ToolCallID: "same", Content: "first result"}, {Role: "tool", ToolCallID: "same", Content: "second result"}}
+		protected := sanitizeHistoryMessagesFor(history, historyProfileProtected)
+		if len(protected) != len(history) || len(protected[1].ToolCalls) != 2 {
+			t.Fatal("paired repeated IDs changed")
+		}
+		for i, name := range names {
+			want := history[i+2].Content
+			if name == "read" {
+				want = toolResultPlaceholder
+			}
+			if protected[i+2].Content != want {
+				t.Fatalf("%v result %d misclassified: %q", names, i, protected[i+2].Content)
+			}
+		}
+	}
+	// Filtered empty messages do not close the preceding tool turn during
+	// pairing repair, and must not erase its persistence classification either.
+	history := []openai.ChatCompletionMessage{{Role: "user", Content: "task"}, {Role: "assistant", ToolCalls: []openai.ToolCall{
+		{ID: "read", Type: "function", Function: openai.FunctionCall{Name: "read", Arguments: "{}"}},
+	}}, {Role: "assistant"}, {Role: "user"}, {Role: "tool", ToolCallID: "read", Content: "raw result"}}
+	protected := sanitizeHistoryMessagesFor(history, historyProfileProtected)
+	if len(protected) != 3 || protected[2].Content != toolResultPlaceholder {
+		t.Fatal("filtered empty messages lost the read result classification")
 	}
 }
 

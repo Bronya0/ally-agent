@@ -128,6 +128,8 @@
 
 [memory-tidy] 2026-11-04 中危 别在每帧或固定定时器里调 FreeOSMemory：STW 加缺页抖动，只在隐藏/最小化去抖后调。@desktop/memory_tidy.go
 
+[md-options-maps] 2026-11-06 高危 给会话加并列 map 只随 MD 初始化就写：新建会话已建 MD，nil map 写入首帧 panic 崩进程。@desktop/page_chat.go
+
 2026-11-05 高危 blackboard-history 收信只进请求副本就 Ack，下一步丢协作约束；历史与确认须一起提交。@internal/app/orch_blackboard.go
 2026-11-05 高危 blackboard-report 消息标签剥离后报告为空仍标完成，父代理就拿到空结论；完成须有报告。@internal/app/orch_subagent.go
 2026-11-05 高危 blackboard-lexer 行作用域状态(反引号/注释/伪标签)跨行续用会静默吞掉后续消息；无闭合标记即复位。@internal/blackboard/protocol.go
@@ -138,3 +140,6 @@
 2026-11-07 中危 preview-reuse 换页须换 token，事件和异步命令都校验；Reset 清旧正文，否则误操作新文件。@desktop/workspace_media.go
 2026-11-07 高危 plugin-retire 异步卸载须返回 Promise；旧存储写回与安装/删除共锁并验版本，否则覆盖新数据。@desktop/pluginhost
 2026-11-07 中危 timer-dispatch Stop 撤不回已排队的 UI 回调；须验 generation，否则旧回调清掉新计时器并提前释放。@desktop/memory_tidy.go
+2026-11-07 中危 chat-wheel 滚轮缓动首帧位置未变，按贴底恢复 Follow 会取消滚动；只在实际下移到底恢复。@desktop/page_chat.go
+2026-11-07 中危 compact-outcome 裁剪重建工具卡时硬写 success 会把失败或取消伪装成成功；复用状态判定并保留结果元数据。@desktop/compact.go
+2026-11-09 中危 ui-enum-alias 下拉选项写别名或原始值而非后端规范值：编辑已有配置时字段消失、界面露出内部串。选项与判断统一用后端导出的常量。@desktop

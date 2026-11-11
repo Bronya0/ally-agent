@@ -9,7 +9,7 @@ import (
 func TestMenuButtonLockClosesAnOpenMenu(t *testing.T) {
 	open, locked := true, false
 	calls := 0
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		c.DisableAnimations()
 		MenuButton(c.Key("locked"), &open, MenuOptions{Width: 200}, func(b ui.Element) {
 			b.Label("trigger").Size(60, 28).Disabled(locked).DimDisabled(false)

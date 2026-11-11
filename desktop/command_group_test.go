@@ -131,6 +131,55 @@ func mixedReadTool(id, path string) map[string]any {
 	}
 }
 
+func TestToolGroupCountsFollowBatchedResultsAndWindowChanges(t *testing.T) {
+	conv := &conversation{ID: "counts", Messages: []map[string]any{
+		groupCommand("first", "command", "running"),
+		mixedReadTool("read", "main.go"),
+		groupCommand("last", "command", "pending"),
+		{"role": "assistant", "content": "separator"},
+		groupCommand("other", "command", "running"),
+	}}
+	a := &desktop{tabs: []*conversation{conv}}
+	memos := map[int]*memoOf[toolGroupSummaryKey, toolGroupSummary]{0: {}, 4: {}}
+	check := func(index, end int) {
+		t.Helper()
+		_ = conv.blockStarts()
+		key := toolGroupSummaryKey{historyKey{len(conv.Messages), conv.historyRev}, conv.toolRev, index, end}
+		got := cachedToolGroupSummary(memos[index], conv, key)
+		want := summarizeToolGroup(conv, index, end)
+		if got != want {
+			t.Fatalf("group %d: counts/status %+v, full rebuild %+v", index, got, want)
+		}
+	}
+	check(0, 5)
+	check(4, 5)
+	for _, payload := range []map[string]any{
+		{"toolCallId": "first", "name": "command", "result": map[string]any{"ok": true}},
+		{"toolCallId": "last", "name": "command", "result": map[string]any{"ok": false}},
+		{"toolCallId": "other", "name": "command", "result": map[string]any{"cancelled": true}},
+	} {
+		a.applyToolEvent(conv, "tool:result", payload)
+	}
+	check(0, 5)
+	check(4, 5)
+	// A frame can miss more changes than the bounded journal holds.
+	for i := 0; i < toolGroupChangeLimit+2; i++ {
+		a.applyToolEvent(conv, "tool:result", map[string]any{"toolCallId": "first", "name": "command", "result": map[string]any{"ok": i%2 == 0}})
+	}
+	check(0, 5)
+	check(4, 5)
+	a.applyToolEvent(conv, "tool:start", map[string]any{"toolCallId": "appended", "name": "read"})
+	check(4, 6)
+	a.applyToolEvent(conv, "tool:result", map[string]any{"toolCallId": "read", "name": "grep", "result": map[string]any{"hits": 2}})
+	check(0, 5)
+	check(0, 2)
+	check(0, 5) // shrink and then grow the page's range
+	// Terminal cleanup changes running calls even without individual results.
+	conv.toolRev++
+	settleRunningToolMessages(conv, false, "")
+	check(4, 6)
+}
+
 // Reads and commands used to fold into separate cards. One batch of work now
 // stays one group, whichever tool it starts with, and collapsing it must still
 // release the commands it expanded.

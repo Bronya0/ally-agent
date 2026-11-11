@@ -32,11 +32,12 @@ import (
 )
 
 var (
-	ErrAuthentication = errors.New("SSH authentication failed")
-	ErrHostKeyChanged = errors.New("SSH host key changed")
-	ErrPrivateKey     = errors.New("SSH private key error")
-	ErrOutputTooLarge = errors.New("SSH command output exceeded the capture limit")
-	knownHostsWriteMu sync.Mutex
+	ErrAuthentication       = errors.New("SSH authentication failed")
+	ErrInteractiveChallenge = errors.New("服务器要求的交互式认证不受支持（例如验证码、多项问题或无法识别的密码提示）")
+	ErrHostKeyChanged       = errors.New("SSH host key changed")
+	ErrPrivateKey           = errors.New("SSH private key error")
+	ErrOutputTooLarge       = errors.New("SSH command output exceeded the capture limit")
+	knownHostsWriteMu       sync.Mutex
 
 	// dialTimeout 只覆盖 TCP 建连（含主机名解析）。
 	dialTimeout = 10 * time.Second
@@ -461,6 +462,15 @@ func authMethods(ctx context.Context, cfg Config) ([]ssh.AuthMethod, func(), err
 			return nil, closeAgent, errors.New("password authentication requires only a non-empty account password")
 		}
 		methods = append(methods, ssh.Password(cfg.Password))
+		methods = append(methods, ssh.KeyboardInteractive(func(_ string, _ string, questions []string, echos []bool) ([]string, error) {
+			if len(questions) == 0 && len(echos) == 0 {
+				return []string{}, nil
+			}
+			if len(questions) != 1 || len(echos) != 1 || echos[0] || !strings.Contains(strings.ToLower(questions[0]), "password") {
+				return nil, ErrInteractiveChallenge
+			}
+			return []string{cfg.Password}, nil
+		}))
 	case AuthModeAgent:
 		if cfg.KeyPath != "" || cfg.KeyPassphrase != "" || cfg.Password != "" {
 			return nil, closeAgent, errors.New("agent authentication does not accept a private key or password")

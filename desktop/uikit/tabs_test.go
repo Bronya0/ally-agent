@@ -10,7 +10,7 @@ func TestTabStylesNavigationAndStableLayout(t *testing.T) {
 	for _, style := range []TabStyle{TabLine, TabSegmented} {
 		for _, secondary := range []bool{false, true} {
 			selected, changes := 0, 0
-			tt := ui.NewTester(func(c *ui.Context) {
+			tt := chineseTester(func(c *ui.Context) {
 				ui.Column(c).Children(func() {
 					if TabsWithOptions(c.Key("tabs"), &selected, TabOptions{Style: style, Secondary: secondary}, "First", "Second", "Third").Changed() {
 						changes++
@@ -45,7 +45,7 @@ func TestSegmentedTabsFollowAccentAtBothLevels(t *testing.T) {
 		for _, secondary := range []bool{false, true} {
 			accent := ui.Hex("#365dcc")
 			selected := 0
-			tt := ui.NewTester(func(c *ui.Context) {
+			tt := chineseTester(func(c *ui.Context) {
 				theme := ui.LightTheme()
 				if dark {
 					theme = ui.DarkTheme()

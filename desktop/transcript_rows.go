@@ -1,7 +1,50 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package desktop
 
-import "github.com/egoist/mygo/ui"
+import (
+	"slices"
+
+	"github.com/egoist/mygo/ui"
+)
+
+// MyGo keeps registered handle bindings until the window closes and visits
+// them each frame. Reuse the handles of rows leaving this page instead of
+// registering one for every prompt/search row in an all-day conversation.
+func pruneTranscriptHandles(t *conversation, start, end int) {
+	st := t.uiState()
+	for index, handle := range st.PromptHandles {
+		if index >= start && index < end {
+			continue
+		}
+		delete(st.PromptHandles, index)
+		// A searched prompt shares its handle with the prompt navigator.
+		if st.Search.handles[index] == handle {
+			delete(st.Search.handles, index)
+		}
+		if handle != nil {
+			st.transcriptHandlePool = append(st.transcriptHandlePool, handle)
+		}
+	}
+	for index, handle := range st.Search.handles {
+		if index >= start && index < end {
+			continue
+		}
+		delete(st.Search.handles, index)
+		if handle != nil {
+			st.transcriptHandlePool = append(st.transcriptHandlePool, handle)
+		}
+	}
+}
+
+func takeTranscriptHandle(st *chatUI) *ui.Handle {
+	if n := len(st.transcriptHandlePool); n > 0 {
+		handle := st.transcriptHandlePool[n-1]
+		st.transcriptHandlePool[n-1] = nil
+		st.transcriptHandlePool = st.transcriptHandlePool[:n-1]
+		return handle
+	}
+	return &ui.Handle{}
+}
 
 // rowKind is the one answer to "who draws message i". The transcript renderer,
 // the history pager and restored scroll offsets all ask it, so a message that
@@ -26,6 +69,12 @@ const (
 // frame does not rescan the list per row.
 type transcriptRows struct {
 	t *conversation
+	// Parent identities are retained so an appended child can be attached without
+	// rescanning old records. Only IDs/indices, never message or result maps.
+	cards              map[string]bool
+	agents             map[string]string
+	users, suggestions []int
+	welcome            bool
 	// children maps a sub-agent card's call id to the rows it draws, in
 	// transcript order.
 	children map[string][]int
@@ -38,26 +87,42 @@ type transcriptRows struct {
 // result reports its agent id.
 func newTranscriptRows(t *conversation) *transcriptRows {
 	r := &transcriptRows{t: t}
-	cards := map[string]bool{}
-	agents := map[string]string{}
 	for _, m := range t.Messages {
 		if toolKind(str(m, "name")) != "subagent" {
 			continue
 		}
 		if id := str(m, "toolCallId"); id != "" {
-			cards[id] = true
+			if r.cards == nil {
+				r.cards = map[string]bool{}
+			}
+			r.cards[id] = true
 		}
 		if id := str(toolResult(m), "agentId"); id != "" {
-			agents[id] = str(m, "toolCallId")
+			if r.agents == nil {
+				r.agents = map[string]string{}
+			}
+			r.agents[id] = str(m, "toolCallId")
 		}
 	}
-	if len(cards) == 0 && len(agents) == 0 {
-		return r
-	}
-	for i, m := range t.Messages {
+	r.attachTail(0)
+	return r
+}
+
+func (r *transcriptRows) attachTail(start int) {
+	for i := start; i < len(r.t.Messages); i++ {
+		m := r.t.Messages[i]
+		if str(m, "role") == "user" {
+			r.users = append(r.users, i)
+		}
+		if toolKind(str(m, "name")) == "suggest" {
+			r.suggestions = append(r.suggestions, i)
+		}
+		if _, ok := m["welcome"]; ok {
+			r.welcome = true
+		}
 		parent := str(m, "parentToolCallId")
-		if !cards[parent] {
-			parent = agents[str(m, "subId")]
+		if !r.cards[parent] {
+			parent = r.agents[str(m, "subId")]
 		}
 		if parent == "" {
 			continue
@@ -68,7 +133,30 @@ func newTranscriptRows(t *conversation) *transcriptRows {
 		r.children[parent] = append(r.children[parent], i)
 		r.nested[i] = true
 	}
-	return r
+}
+
+func (r *transcriptRows) roundStart(index int) int {
+	n, found := slices.BinarySearch(r.users, index)
+	if found {
+		return index
+	}
+	if n > 0 {
+		return r.users[n-1]
+	}
+	return 0
+}
+
+func (r *transcriptRows) roundStatsIndex(index int) int {
+	next, _ := slices.BinarySearch(r.users, index+1)
+	end := len(r.t.Messages)
+	if next < len(r.users) {
+		end = r.users[next]
+	}
+	n, _ := slices.BinarySearch(r.suggestions, end)
+	if n > 0 && r.suggestions[n-1] > index {
+		return r.suggestions[n-1]
+	}
+	return index
 }
 
 // childrenOf lists, in transcript order, the rows the card for callID draws.
@@ -164,16 +252,47 @@ type historyKey struct {
 	rev  uint64
 }
 
+// The owner changes when a new parent can claim earlier child rows. An append
+// may reuse the block prefix only when its ownership view also survived.
+type historyBlocksKey struct {
+	historyKey
+	owner *transcriptRows
+}
+
 // markHistory records that a row changed in place, so the block starts cached
 // for the transcript are worked out again on the next frame.
 func (t *conversation) markHistory() { t.historyRev++ }
 
+// A new, unindexed row is already covered by the length key. An in-place
+// change to an indexed row still invalidates both complete views.
+func (t *conversation) markHistoryAt(index int) {
+	if (t.historyRows.ready && index < t.historyRows.key.rows) || (t.historyStarts.ready && index < t.historyStarts.key.rows) {
+		t.markHistory()
+	}
+}
+
 // cachedTranscriptRows answers "who draws what" for the current transcript.
-// It shares blockStarts' revision key: both walk the whole message list, and a
-// frame asks for both (the window and the cards' children lookup).
+// It shares blockStarts' revision key. Appends extend both views; ownership
+// changes still rebuild the complete transcript before publishing page bounds.
 func (t *conversation) cachedTranscriptRows() *transcriptRows {
 	key := historyKey{rows: len(t.Messages), rev: t.historyRev}
 	return t.historyRows.get(key, func(historyKey) *transcriptRows {
+		previous := &t.historyRows
+		if previous.ready && previous.key.rev == key.rev && previous.key.rows < key.rows {
+			// A new parent may claim children that arrived first, or replace an
+			// agent-ID mapping. Keep the complete two-pass rule for that case.
+			newParent := false
+			for _, m := range t.Messages[previous.key.rows:] {
+				if toolKind(str(m, "name")) == "subagent" {
+					newParent = true
+					break
+				}
+			}
+			if !newParent {
+				previous.value.attachTail(previous.key.rows)
+				return previous.value
+			}
+		}
 		return newTranscriptRows(t)
 	})
 }
@@ -181,15 +300,29 @@ func (t *conversation) cachedTranscriptRows() *transcriptRows {
 // blockStarts answers which rows open a history block: a page may only begin on
 // a row that draws. The grouping rule lives in foldsInto/startsBlock, so a page
 // never starts on a row another row already draws. One frame asks more than
-// once (the window, the older-page count) and every answer walks the whole
-// transcript, so the answer stays until the transcript changes. Callers read it
-// and never append to it.
+// once (the window, the older-page count), so the answer stays until the
+// transcript changes and ordinary appends reuse its prefix. The slice is
+// borrowed until the next history change; callers read it and never append.
 func (t *conversation) blockStarts() []int {
-	key := historyKey{rows: len(t.Messages), rev: t.historyRev}
-	return t.historyStarts.get(key, func(historyKey) []int {
-		rows := t.cachedTranscriptRows()
-		starts := make([]int, 0, len(t.Messages)+1)
-		for i := range t.Messages {
+	rows := t.cachedTranscriptRows()
+	key := historyBlocksKey{historyKey{rows: len(t.Messages), rev: t.historyRev}, rows}
+	return t.historyStarts.get(key, func(historyBlocksKey) []int {
+		// Reuse the index while a conversation grows. Folded tool records often
+		// outnumber visible blocks, so reserving one slot per message on every
+		// append wastes both live capacity and transient allocations.
+		starts := t.historyStarts.value[:0]
+		from := 0
+		previous := &t.historyStarts
+		if previous.ready && previous.key.rev == key.rev && previous.key.owner == rows && previous.key.rows < key.rows {
+			// Remove the previous end sentinel, then judge only the appended
+			// records. foldsInto still reads the preceding record at the seam.
+			starts = previous.value[:len(previous.value)-1]
+			from = previous.key.rows
+		}
+		if cap(starts) == 0 || cap(starts) > 4*(len(t.Messages)+1)+256 {
+			starts = make([]int, 0, min(len(t.Messages)+1, 256))
+		}
+		for i := from; i < len(t.Messages); i++ {
 			if rows.startsBlock(i) {
 				starts = append(starts, i)
 			}

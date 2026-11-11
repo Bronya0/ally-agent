@@ -4,6 +4,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"errors"
 	"fmt"
 	"runtime"
@@ -99,7 +100,7 @@ func startNativeAudioRecording(deviceIDs ...string) (nativeAudioRecording, error
 	}
 	r := &windowsAudioRecording{stop: make(chan struct{}, 1), begin: make(chan struct{}, 1), cancel: make(chan struct{}), done: make(chan struct{}), started: make(chan error, 1), result: make(chan captureResult, 1), levels: make(chan float32, 1), deviceID: deviceID, stopTimeout: 8 * time.Second, cancelTimeout: 2 * time.Second}
 	if !acquireVoiceCaptureSlot(r, 2*time.Second) {
-		return nil, errors.New("此前的录音设备会话仍未退出，无法安全启动新会话；若持续发生，请重启应用")
+		return nil, errors.New(locales.Text("此前的录音设备会话仍未退出，无法安全启动新会话；若持续发生，请重启应用"))
 	}
 	ready := make(chan error, 1)
 	go r.capture(ready)
@@ -111,14 +112,14 @@ func startNativeAudioRecording(deviceIDs ...string) (nativeAudioRecording, error
 		return r, nil
 	case <-time.After(8 * time.Second):
 		go r.Cancel()
-		return nil, errors.New("初始化录音设备超时，会话正在退出")
+		return nil, errors.New(locales.Text("初始化录音设备超时，会话正在退出"))
 	}
 }
 
 func (r *windowsAudioRecording) Start() error {
 	select {
 	case <-r.done:
-		return errors.New("录音设备会话已关闭")
+		return errors.New(locales.Text("录音设备会话已关闭"))
 	case r.begin <- struct{}{}:
 	}
 	select {
@@ -129,7 +130,7 @@ func (r *windowsAudioRecording) Start() error {
 		case err := <-r.started:
 			return err
 		default:
-			return errors.New("录音设备会话已关闭")
+			return errors.New(locales.Text("录音设备会话已关闭"))
 		}
 	}
 }
@@ -142,7 +143,7 @@ func (r *windowsAudioRecording) Stop() ([]byte, error) {
 	// A second Stop after the take was collected must not wait on a channel that
 	// will never fire again, so the request is consumed once.
 	if !r.beginStop() {
-		return nil, errors.New("本次录音已经结束")
+		return nil, errors.New(locales.Text("本次录音已经结束"))
 	}
 	select {
 	case result := <-r.result:
@@ -151,14 +152,14 @@ func (r *windowsAudioRecording) Stop() ([]byte, error) {
 		if result, ok := r.takeResult(); ok {
 			return result.wav, result.err
 		}
-		return nil, errors.New("录音设备会话已关闭")
+		return nil, errors.New(locales.Text("录音设备会话已关闭"))
 	case <-time.After(r.stopTimeout):
 		// Retire the session: the capture thread may still deliver this take's result
 		// later, and a reused session would then hand that stale audio to the next
 		// Stop as if it were new. A retired session is recreated on the next press.
 		r.setReusable(false)
 		go r.Cancel()
-		return nil, errors.New("录音设备无响应，本次录音已放弃")
+		return nil, errors.New(locales.Text("录音设备无响应，本次录音已放弃"))
 	}
 }
 
@@ -363,7 +364,7 @@ func (r *windowsAudioRecording) capture(ready chan<- error) {
 		}
 		switch {
 		case collector.Len() == 0:
-			result.err = errors.New("没有录到音频，请检查麦克风权限和输入设备")
+			result.err = errors.New(locales.Text("没有录到音频，请检查麦克风权限和输入设备"))
 		default:
 			result.wav, result.err = encodeVoiceWAV(collector.Bytes(), pcmFormat)
 		}
@@ -555,11 +556,11 @@ func initializeVoiceCaptureClient(client *wca.IAudioClient) (capturePCMFormat, f
 // captureFormatOf describes the mix format the engine reported.
 func captureFormatOf(format *wca.WAVEFORMATEX) (capturePCMFormat, error) {
 	if format.NSamplesPerSec == 0 || format.NChannels == 0 || format.NBlockAlign == 0 {
-		return capturePCMFormat{}, errors.New("麦克风返回了无效音频格式")
+		return capturePCMFormat{}, errors.New(locales.Text("麦克风返回了无效音频格式"))
 	}
 	floating := isFloatWaveFormat(format)
 	if !floating && format.WFormatTag != 1 && format.WFormatTag != 0xfffe {
-		return capturePCMFormat{}, fmt.Errorf("不支持麦克风音频格式 %d", format.WFormatTag)
+		return capturePCMFormat{}, fmt.Errorf(locales.Text("不支持麦克风音频格式 %d"), format.WFormatTag)
 	}
 	out := capturePCMFormat{
 		SampleRate:     format.NSamplesPerSec,

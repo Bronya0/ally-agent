@@ -4,6 +4,7 @@ package desktop
 import (
 	"strings"
 
+	"github.com/egoist/mygo/i18n"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -15,14 +16,54 @@ import (
 // differs per use (raw arguments, a log, a diff), so it stays generic instead of
 // each card growing its own copy of the compare-and-derive dance.
 type memoOf[K comparable, V any] struct {
-	ready bool
-	key   K
-	value V
+	ready  bool
+	key    K
+	value  V
+	locale string
 }
 
 func (m *memoOf[K, V]) get(key K, derive func(K) V) V {
-	if !m.ready || m.key != key {
+	locale := i18n.Locale()
+	if !m.ready || m.key != key || m.locale != locale {
 		m.key, m.value, m.ready = key, derive(key), true
+		m.locale = locale
+	}
+	return m.value
+}
+
+// indexedMemo keeps derived list data beside its widget. Compare each source
+// value, not a slice address or length: same-size edits must refresh the list.
+// keyAt lets callers compare just display/filter fields without copying full
+// configuration records on every frame. Derived indices read current records.
+type indexedMemo[K comparable, V any] struct {
+	keys   []K
+	query  string
+	ready  bool
+	value  V
+	locale string
+}
+
+func (m *indexedMemo[K, V]) get(count int, query string, keyAt func(int) K, derive func() V) V {
+	locale := i18n.Locale()
+	changed := !m.ready || len(m.keys) != count
+	if !changed {
+		for i, key := range m.keys {
+			if key != keyAt(i) {
+				changed = true
+				break
+			}
+		}
+	}
+	if changed {
+		m.keys = make([]K, count)
+		for i := range m.keys {
+			m.keys[i] = keyAt(i)
+		}
+	}
+	if changed || m.query != query || m.locale != locale {
+		m.value = derive()
+		m.query, m.ready = query, true
+		m.locale = locale
 	}
 	return m.value
 }
@@ -44,7 +85,9 @@ type (
 	lineMemo        = memoOf[lineKey, string]
 )
 
-// createPreview holds the collapsed create card's tail and first line number.
+const createPreviewLines = 6
+
+// createPreview holds the create card's fixed tail and first line number.
 // The source text can be a whole file, so counting its lines on every frame is
 // avoided until the content changes.
 type createPreview struct {

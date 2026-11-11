@@ -394,8 +394,8 @@ func TestFastCompactSurvivesProtectedRestartAndDiskFallback(t *testing.T) {
 		t.Fatal("retained tail must be protected even without Responses replay")
 	}
 	loaded, _ := a.modelHistoryFromStorage("restart", raw, disk)
-	if !reflect.DeepEqual(loaded, after) {
-		t.Fatal("restart lost compacted excerpts or retained recent results/reasoning")
+	if !reflect.DeepEqual(loaded, sanitizeHistoryMessagesFor(after, historyProfileProtected)) {
+		t.Fatal("restart lost compacted excerpts/reasoning or retained raw observations")
 	}
 }
 

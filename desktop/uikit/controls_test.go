@@ -10,7 +10,7 @@ import (
 func TestSelectAndTabs(t *testing.T) {
 	value := "API Key"
 	tab := 0
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		c.SetTheme(ui.DarkTheme())
 		ui.Column(c).Children(func() {
 			Select(c.Key("select"), &value, []string{"API Key", "OAuth"}).Label("Authentication")
@@ -44,7 +44,7 @@ func TestSegmentedSelection(t *testing.T) {
 	for _, light := range []bool{false, true} {
 		t.Run(fmt.Sprint("light=", light), func(t *testing.T) {
 			selected, changes := 0, 0
-			tt := ui.NewTester(func(c *ui.Context) {
+			tt := chineseTester(func(c *ui.Context) {
 				theme := ui.DarkTheme()
 				if light {
 					theme = ui.LightTheme()
@@ -86,7 +86,7 @@ func TestSegmentedSelection(t *testing.T) {
 
 func TestFormFieldsHaveGap(t *testing.T) {
 	left, right := "", ""
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		ui.Grid(c).FillWidth().ColumnTracks(ui.Fr(1), ui.Fr(1)).Gap(14).Children(func() {
 			ui.Column(c).JustifySelf(ui.Stretch).Children(func() { Input(c.Key("left"), &left).FillWidth().Label("left-field") })
 			ui.Column(c).JustifySelf(ui.Stretch).Children(func() { Input(c.Key("right"), &right).FillWidth().Label("right-field") })
@@ -108,7 +108,7 @@ func TestFormFieldsHaveGap(t *testing.T) {
 
 func TestNumberInputNativeEditingAndSteps(t *testing.T) {
 	value := 8192.0
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		c.SetTheme(ui.DarkTheme())
 		ui.Column(c).Width(300).Children(func() { NumberInput(c, "number", "Max Tokens", &value, 0, 10000000, 1).FillWidth() })
 	}, 360, 120)
@@ -157,7 +157,7 @@ func TestNumberInputNativeEditingAndSteps(t *testing.T) {
 
 func TestPasswordInputVisibilityToggle(t *testing.T) {
 	secret := "secret-value"
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		c.SetTheme(ui.DarkTheme())
 		ui.Column(c).Width(300).Children(func() { PasswordInput(c, "password", "API Key 1", &secret).FillWidth() })
 	}, 360, 120)
@@ -193,7 +193,7 @@ func TestPasswordInputVisibilityToggle(t *testing.T) {
 
 func TestPasswordInputReopenStartsHidden(t *testing.T) {
 	secret, open := "secret", true
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		if open {
 			PasswordInput(c, "secret", "密钥", &secret).Width(200)
 		}

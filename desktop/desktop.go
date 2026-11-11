@@ -4,6 +4,8 @@ package desktop
 import (
 	"ally-dev/desktop/pluginhost"
 	"ally-dev/internal/documentpreview"
+	toolshared "ally-dev/internal/tools/shared"
+	"ally-dev/locales"
 	"ally-dev/resources"
 	"context"
 	"encoding/json"
@@ -50,13 +52,19 @@ type conversation struct {
 	Answers                                           []string
 	Selected                                          []string
 	MD                                                map[int]*markdown.Options
-	Expanded                                          map[int]bool
-	UI                                                *chatUI
+	// MDCodeBlock keeps the reading theme's own code-block hook per message: the
+	// find bar wraps it while it is open, and this is what it is restored to.
+	MDCodeBlock map[int]func(*ui.Context, *markdown.CodeBlockView)
+	Expanded    map[int]bool
+	UI          *chatUI
 	// historyStarts holds the transcript's block starts for historyRev, so a
 	// frame asks once per change instead of once per row. See blockStarts.
-	historyStarts memoOf[historyKey, []int]
+	historyStarts memoOf[historyBlocksKey, []int]
 	historyRows   memoOf[historyKey, *transcriptRows]
 	historyRev    uint64
+	toolRev       uint64
+	groupChanges  *toolGroupChanges
+	messageLookup transcriptLookup
 }
 
 type workspaceFile struct {
@@ -74,37 +82,44 @@ type workspaceFile struct {
 	MD *markdown.Options
 }
 type desktop struct {
-	memoryDiagnosticBusy                    bool
-	pluginHost                              *pluginhost.Host
-	pluginThemePalette                      pluginhost.Palette
-	pluginTheme                             pluginhost.Theme
-	pluginThemeReady                        bool
-	pluginSyncKey                           pluginHostSyncKey
-	pluginSyncReady                         bool
-	pluginsRevision                         uint64
-	pluginIndex                             memoOf[uint64, pluginModeIndex]
-	previews                                previewPool
-	previewRequests                         []previewRequest
-	previewTimer                            *time.Timer
-	previewGeneration                       uint64
-	memoryTidyTimer                         *time.Timer
-	memoryTidyGeneration                    uint64
-	memoryTidyAt                            time.Time
-	customAvatar                            *ui.Bitmap
-	customAvatarAvailable                   bool
-	customAvatarBusy                        bool
-	avatarStyle                             string
-	avatarPoses                             map[string]*ui.Bitmap
-	avatarLoadID                            uint64
-	pet                                     petRuntime
-	configSaveTail                          chan struct{}
-	writeFailures                           windowWriteFailures
-	prefsSaveTail                           chan struct{}
-	prefsGeometryTimer                      *time.Timer
-	lastCompletionNotice                    time.Time
-	completionNotices                       map[string]bool
-	completionNoticeOrder                   []string
-	composerFocus                           string
+	memoryDiagnosticBusy  bool
+	pluginHost            *pluginhost.Host
+	pluginThemePalette    pluginhost.Palette
+	pluginTheme           pluginhost.Theme
+	pluginThemeReady      bool
+	pluginSyncKey         pluginHostSyncKey
+	pluginSyncReady       bool
+	pluginsRevision       uint64
+	pluginIndex           memoOf[uint64, pluginModeIndex]
+	previews              previewPool
+	previewRequests       []previewRequest
+	previewTimer          *time.Timer
+	previewGeneration     uint64
+	memoryTidyTimer       *time.Timer
+	memoryTidyGeneration  uint64
+	memoryTidyAt          time.Time
+	customAvatar          *ui.Bitmap
+	customAvatarAvailable bool
+	customAvatarBusy      bool
+	avatarStyle           string
+	avatarPoses           map[string]*ui.Bitmap
+	avatarLoadID          uint64
+	pet                   petRuntime
+	configSaveTail        chan struct{}
+	writeFailures         windowWriteFailures
+	prefsSaveTail         chan struct{}
+	prefsGeometryTimer    *time.Timer
+	prefsPending          bool
+	committingSettings    bool
+	lastCompletionNotice  time.Time
+	completionNotices     map[string]bool
+	completionNoticeOrder []string
+	composerFocus         string
+	chatSearchFocus       string
+	// focusBack is a conversation waiting for the caret after the find bar closed.
+	// The bar and the composer both change focus in that frame, and the engine
+	// visits its focus bindings in map order, so the composer asks one frame later.
+	focusBack                               string
 	welcomeMCP, welcomeSkills, welcomeTools bool
 	popupFlags                              map[string]*bool
 	notifications                           []ui.Toast
@@ -149,6 +164,8 @@ type desktop struct {
 	fileRoot                                string
 	fileChildren                            map[string][]backend.FileEntry
 	fileLoading                             map[string]bool
+	fileScroll                              *ui.ScrollState
+	workspaceTrees                          map[string]*explorerTreeState
 	openSessions                            map[string]*conversation
 	attachmentImageCacheSessions            []string
 	attachmentImageJobSessions              map[*conversation]struct{}
@@ -172,6 +189,10 @@ type desktop struct {
 	taskTab, taskScope, taskLog, taskLogTitle string
 	stats                                     backend.TokenStatsResult
 	configDraft                               backend.ConfigState
+	settingsBase                              *backend.ConfigState
+	settingsLoadSequence                      uint64
+	settingsSaveSequence                      uint64
+	settingsInFlight                          *settingsCommit
 	settingsTab                               string
 	settingsRetries, settingsConcurrency      float64
 	settingsAllowPrivate                      bool
@@ -196,6 +217,7 @@ type desktop struct {
 	workspaceFiles                                      map[string]*workspaceFile
 	workspacePreview                                    workspacePreviewLifecycle
 	media                                               workspaceMediaState
+	mediaPlayback                                       map[string]*workspaceMediaState
 	fileEpoch                                           int
 	modelTab                                            string
 	modelSaving                                         bool
@@ -234,12 +256,12 @@ type desktop struct {
 	mcpServersRev uint64
 	mcpStatusMemo memoOf[uint64, map[string]map[string]any]
 
-	// Derived from sessions. The rail, the composer's session menu and the
-	// workspace menus ask for them on every frame, so they are rebuilt only
-	// when the index itself is replaced (sessRev).
-	sessRev       uint64
-	wsRootsMemo   memoOf[uint64, []string]
-	wsSessionMemo memoOf[workspaceSessionKey, workspaceSessionList]
+	// Session and workspace menu data is rebuilt only when the session index
+	// or explicit workspace visits change, rather than on every frame.
+	sessRev            uint64
+	workspaceVisitsRev uint64
+	wsRootsMemo        memoOf[workspaceHistoryKey, []string]
+	wsSessionMemo      memoOf[workspaceSessionKey, workspaceSessionList]
 }
 
 // Run starts the native desktop host and its Agent runtime.
@@ -275,7 +297,7 @@ func Run() {
 			a.versionLabel = "Ally Native · " + v
 		}
 		if buildTime != "" {
-			a.versionLabel += " · 构建于 " + strings.Replace(buildTime, "T", " ", 1)
+			a.versionLabel += locales.Text(" · 构建于 ") + strings.Replace(buildTime, "T", " ", 1)
 		}
 		a.refreshAutoAppearance(time.Now())
 		a.syncNativeAppearance()
@@ -304,10 +326,9 @@ func Run() {
 			a.scheduleMemoryTidy()
 		})
 		a.win.OnShow(a.mainWindowShown)
-		// Stop media immediately, but keep the bounded WebView slots through the
-		// hidden-window grace period so a quick restore does not recreate them.
+		// Hiding or minimizing keeps preview pages and playback positions intact.
 		a.win.OnMinimize(func() {
-			a.suspendFilePreview()
+			a.hideFilePreview()
 			a.syncPluginHostVisibility(true)
 			a.scheduleMemoryTidy()
 		})
@@ -347,7 +368,7 @@ func Run() {
 		a.win.OnClose(func(e *mygo.CloseEvent) {
 			if !a.quitReady {
 				e.PreventDefault()
-				if a.tray != nil {
+				if a.closeHidesToTray() {
 					a.win.Hide()
 				} else {
 					a.shutdown()
@@ -375,30 +396,31 @@ func Run() {
 			avatarPoses := decodeAvatarStyle(avatarStyle)
 			err := a.core.StartNative(context.Background(), a.onEvent)
 			if err != nil {
-				a.win.Update(func() { a.startupError = "启动失败：" + err.Error() })
+				a.win.Update(func() { a.startupError = locales.Text("启动失败：") + err.Error() })
 				return
 			}
 			cfg, err := a.core.GetConfig()
 			if err != nil {
-				a.win.Update(func() { a.startupError = "读取配置失败：" + err.Error() })
+				a.win.Update(func() { a.startupError = locales.Text("读取配置失败：") + err.Error() })
 				return
 			}
 			autostart, autostartInitialized, autostartErr := initializeAutostart(a.core, prefs.AutostartInitialized)
 			sessions, _ := a.core.ListSessionIndex()
-			workspace := startupWorkspace(sessions, cfg.Workspace)
+			workspace := startupWorkspace(prefs.RecentWorkspaces, sessions, cfg.Workspace)
 			skills, _ := a.core.ListSkills()
 			tools := a.core.ListTools()
 			servers := a.core.GetMcpServers()
 			plugins, pluginErr := a.core.ListPlugins()
 			a.win.Update(func() {
 				a.config = cfg
+				a.configDraft = cfg.Clone()
 				a.autostartValue = autostart
 				if autostartInitialized && !a.prefs.AutostartInitialized {
 					a.prefs.AutostartInitialized = true
 					a.savePrefs()
 				}
 				if autostartErr != nil {
-					a.notifyError("初始化开机自启失败：" + autostartErr.Error())
+					a.notifyError(locales.Text("初始化开机自启失败：") + autostartErr.Error())
 				}
 				a.syncNativeAppearance()
 				a.customAvatar = customAvatar
@@ -407,7 +429,7 @@ func Run() {
 				a.plugins = plugins
 				a.pluginsRevision++
 				if pluginErr != nil {
-					a.notifyError("插件列表加载失败：" + pluginErr.Error())
+					a.notifyError(locales.Text("插件列表加载失败：") + pluginErr.Error())
 				}
 				a.skills = skills
 				a.toolInventory = tools
@@ -444,12 +466,20 @@ func Run() {
 		log.Fatal(err)
 	}
 }
+
+// closeHidesToTray reports whether the window's close button parks the app in the
+// tray instead of quitting. With no tray there is nothing to restore the window
+// from, so the button quits; otherwise the preference decides.
+func (a *desktop) closeHidesToTray() bool {
+	return a.tray != nil && a.prefs.CloseToTray
+}
+
 func (a *desktop) shutdown() {
 	if a.closing {
 		return
 	}
 	if a.upd.installing() && !a.upd.Applied {
-		a.notify("正在准备更新，请等待完成")
+		a.notify(locales.Text("正在准备更新，请等待完成"))
 		return
 	}
 	a.closing = true
@@ -473,12 +503,12 @@ func (a *desktop) prepareWindowClose(proceed, cancel func()) {
 	for _, file := range a.workspaceFiles {
 		if file.Saving {
 			cancel()
-			a.notify("文件正在保存，请稍后退出")
+			a.notify(locales.Text("文件正在保存，请稍后退出"))
 			return
 		}
 		if file.Editor != nil && file.Editor.Buffer.Modified() {
 			go func() {
-				result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: "未保存的文件", Message: "存在未保存的文件修改", Detail: "退出会放弃这些修改。", Buttons: []string{"取消", "放弃并退出"}, CancelButton: 0, DestructiveButtons: []int{1}})
+				result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: locales.Text("未保存的文件"), Message: locales.Text("存在未保存的文件修改"), Detail: locales.Text("退出会放弃这些修改。"), Buttons: []string{locales.Text("取消"), locales.Text("放弃并退出")}, CancelButton: 0, DestructiveButtons: []int{1}})
 				a.win.Update(func() {
 					if err != nil {
 						a.notifyError(err.Error())
@@ -501,7 +531,7 @@ func (a *desktop) finishShutdown() {
 	a.flushWindowWrites(func(err error) {
 		if err != nil {
 			a.closing = false
-			a.notifyError("保存失败，窗口保持打开：" + err.Error())
+			a.notifyError(locales.Text("保存失败，窗口保持打开：") + err.Error())
 			return
 		}
 		a.finishQuit()
@@ -537,9 +567,6 @@ func (a *desktop) current() *conversation {
 	return a.tabs[a.active]
 }
 func (a *desktop) newConversation(workspace string) {
-	if a.page == "settings" {
-		a.commitSettingsOnLeave()
-	}
 	if a.page == "models" {
 		a.cancelOAuthWhenLeaving()
 	}
@@ -559,6 +586,9 @@ func (a *desktop) newConversation(workspace string) {
 		return
 	}
 
+	if a.page == "settings" {
+		a.commitSettingsOnLeave()
+	}
 	t := a.freshConversation(workspace)
 	a.composerFocus = t.ID
 	a.tabs = append(a.tabs, t)
@@ -570,7 +600,7 @@ func (a *desktop) newConversation(workspace string) {
 }
 
 func (a *desktop) freshConversation(workspace string) *conversation {
-	t := &conversation{ID: uuid.NewString(), Workspace: workspace, Title: "新对话", Created: time.Now().UnixMilli(), MD: map[int]*markdown.Options{}, Expanded: map[int]bool{}}
+	t := &conversation{ID: uuid.NewString(), Workspace: workspace, Title: locales.Text("新对话"), Created: time.Now().UnixMilli(), MD: map[int]*markdown.Options{}, Expanded: map[int]bool{}}
 	if a.config.LastUsedModel != nil {
 		for _, model := range a.config.Models {
 			if sameModelIdentity(modelIdentity(model), *a.config.LastUsedModel) {
@@ -602,6 +632,7 @@ func (a *desktop) rememberSession(t *conversation) {
 	}
 	if !t.Busy && len(t.PendingAttachments) == 0 {
 		t.MD = nil
+		t.MDCodeBlock = nil
 		a.releaseAttachmentImages(t)
 		a.forgetAttachmentImageCache(t.ID)
 	}
@@ -616,15 +647,15 @@ func (a *desktop) rememberSession(t *conversation) {
 }
 
 func (a *desktop) newSession() {
-	if a.page == "settings" {
-		a.commitSettingsOnLeave()
-	}
 	if a.page == "models" {
 		a.cancelOAuthWhenLeaving()
 	}
 	t := a.current()
 	if t == nil {
 		return
+	}
+	if a.page == "settings" {
+		a.commitSettingsOnLeave()
 	}
 	next := a.freshConversation(t.Workspace)
 	next.Model = t.Model
@@ -645,7 +676,7 @@ func (a *desktop) newSession() {
 	} else {
 		a.activateTab(a.active)
 	}
-	a.notifySuccess("已新建会话")
+	a.notifySuccess(locales.Text("已新建会话"))
 	if a.win != nil {
 		a.refreshSessionFooter(next)
 		a.refreshGit(next)
@@ -653,14 +684,14 @@ func (a *desktop) newSession() {
 }
 
 func (a *desktop) openWorkspace(workspace string) {
-	if a.page == "settings" {
-		a.commitSettingsOnLeave()
-	}
 	if a.page == "models" {
 		a.cancelOAuthWhenLeaving()
 	}
 	for i, t := range a.tabs {
 		if strings.EqualFold(t.Workspace, workspace) {
+			if a.page == "settings" {
+				a.commitSettingsOnLeave()
+			}
 			a.page = "chat"
 			a.activateTab(i)
 			a.refreshFiles()
@@ -684,6 +715,7 @@ func (a *desktop) notify(message string)        { a.queueNotice(message, "info")
 func (a *desktop) notifyError(message string)   { a.queueNotice(message, "error") }
 func (a *desktop) notifySuccess(message string) { a.queueNotice(message, "success") }
 func (a *desktop) queueNotice(message, kind string) {
+	message = locales.Text(message)
 	if message == "" {
 		return
 	}
@@ -757,24 +789,25 @@ func (a *desktop) inject(t *conversation, text string) bool {
 		return false
 	}
 	if t.RunID == "" {
-		a.notifyError("本轮正在启动，请稍后再追加")
+		a.notifyError(locales.Text("本轮正在启动，请稍后再追加"))
 		return false
 	}
 	attachments := append([]backend.AttachmentInput(nil), t.PendingAttachments...)
 	if err := a.core.InjectRunMessage(t.RunID, text, attachments...); err != nil {
-		a.notifyError("追加失败：" + err.Error())
+		a.notifyError(locales.Text("追加失败：") + err.Error())
 		return false
 	}
 	display := text
 	if display == "" && len(attachments) > 0 {
-		display = "附件：" + attachments[0].Name
+		display = locales.Text("附件：") + attachments[0].Name
 	}
 	displayAttachments := attachmentDisplayRows(attachments)
+	invalidateChatSearch(t)
 	t.Messages = append(t.Messages, map[string]any{"role": "user", "content": display, "attachments": displayAttachments})
 	commitPendingPreviews(t)
 	t.PendingAttachments = nil
 	t.Draft = ""
-	t.Status = "已追加，本轮继续执行…"
+	t.Status = locales.Text("已追加，本轮继续执行…")
 	followLatest(t)
 	a.persist(t)
 	return true
@@ -827,29 +860,30 @@ func (a *desktop) send(t *conversation, text string) bool {
 		return a.inject(t, text)
 	}
 	if t.Model == "" {
-		a.notifyError("请先在模型页面配置并选择模型")
+		a.notifyError(locales.Text("请先在模型页面配置并选择模型"))
 		return false
 	}
 	cfg, found := a.chatConfig(t)
 	if !found {
-		a.notifyError("所选模型已不存在，请重新选择")
+		a.notifyError(locales.Text("所选模型已不存在，请重新选择"))
 		return false
 	}
 	attachments := append([]backend.AttachmentInput(nil), t.PendingAttachments...)
 	display := text
 	if display == "" && len(attachments) > 0 {
-		display = "附件：" + attachments[0].Name
+		display = locales.Text("附件：") + attachments[0].Name
 	}
 	if len(t.Messages) == 0 {
 		t.Title = short(display, 36)
 	}
 	displayAttachments := attachmentDisplayRows(attachments)
+	invalidateChatSearch(t)
 	t.Messages = append(t.Messages, map[string]any{"role": "user", "content": display, "attachments": displayAttachments})
 	commitPendingPreviews(t)
 	t.PendingAttachments = nil
 	t.Busy = true
 	t.Draft = ""
-	t.Status = "正在连接模型…"
+	t.Status = locales.Text("正在连接模型…")
 	followLatest(t)
 	a.persist(t)
 	go func() {
@@ -859,6 +893,7 @@ func (a *desktop) send(t *conversation, text string) bool {
 				t.Busy = false
 				t.Status = err.Error()
 				a.notifyError(err.Error())
+				invalidateChatSearch(t)
 				t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": err.Error(), "error": true})
 				a.persist(t)
 			} else if t.Busy {
@@ -885,13 +920,26 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 			if message == nil {
 				continue
 			}
-			messageCopy := make(map[string]any, len(message))
-			for key, value := range message {
-				messageCopy[key] = value
-			}
-			// Drop large command output before recursively copying it. This only
+			messageCopy := message
+			var detachedResult map[string]any
+			// Drop transient tool output before recursively copying it. This only
 			// mutates the shallow copy; the live transcript remains unchanged.
-			retainLocalCommandSummary(messageCopy)
+			name := str(message, "name")
+			if name == "" {
+				name = str(message, "toolName")
+			}
+			if toolshared.OmitToolResultOnDisk(name) {
+				messageCopy = make(map[string]any, len(message))
+				for key, value := range message {
+					messageCopy[key] = value
+				}
+				if retainSnapshotToolSummary(messageCopy) {
+					// The projection already owns its metadata maps and slices.
+					// Clone the remaining message fields only once.
+					detachedResult = messageCopy["result"].(map[string]any)
+					delete(messageCopy, "result")
+				}
+			}
 			clear(active)
 			cloned, err := cloneSnapshotJSONValue(messageCopy, 0, active)
 			if err != nil {
@@ -901,6 +949,9 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 				break
 			}
 			msgs[i], _ = cloned.(map[string]any)
+			if detachedResult != nil {
+				msgs[i]["result"] = detachedResult
+			}
 		}
 	}
 	// Stored image references are durable; avoid copying large base64 payloads
@@ -1053,14 +1104,14 @@ func (a *desktop) persist(t *conversation) {
 	}()
 }
 func (a *desktop) openSession(id string) {
-	if a.page == "settings" {
-		a.commitSettingsOnLeave()
-	}
 	if a.page == "models" {
 		a.cancelOAuthWhenLeaving()
 	}
 	for i, t := range a.tabs {
 		if t.ID == id {
+			if a.page == "settings" {
+				a.commitSettingsOnLeave()
+			}
 			a.page = "chat"
 			a.activateTab(i)
 			a.refreshFiles()
@@ -1098,7 +1149,8 @@ func (a *desktop) openSession(id string) {
 				if str(message, "role") == "tool_call" || str(message, "toolCallId") != "" {
 					normalizeToolMessage(message)
 				}
-				retainLocalCommandSummary(message)
+				retainSnapshotToolSummary(message)
+				retainCreateDisplayPreview(message)
 				normalizeSubagentBlackboard(message)
 			}
 			restoreRoundStats(t)
@@ -1108,6 +1160,9 @@ func (a *desktop) openSession(id string) {
 }
 
 func (a *desktop) showSession(next *conversation) {
+	if a.page == "settings" {
+		a.commitSettingsOnLeave()
+	}
 	// A transcript restored from disk carries no offset, and a scroll container
 	// shows its start at 0. Park it at the newest message; a conversation the
 	// user left scrolled somewhere keeps that position.
@@ -1178,10 +1233,10 @@ func (a *desktop) refreshFiles(manual ...bool) {
 			}
 			a.applyFileTreeEntries("", r.Entries)
 			if len(manual) > 0 && manual[0] {
-				a.notifySuccess("资源树已刷新")
+				a.notifySuccess(locales.Text("资源树已刷新"))
 			}
 			if r.Truncated {
-				a.notify("文件过多，目录列表仅显示前 1000 项")
+				a.notify(locales.Text("文件过多，目录列表仅显示前 1000 项"))
 			}
 		})
 	}()
@@ -1193,7 +1248,6 @@ func (a *desktop) openFile(path string) {
 	}
 	root := t.Workspace
 	if workspaceFileKindForPath(path) == workspaceFileProperties {
-		a.releaseFilePreview()
 		a.openFileInfo(path)
 		return
 	}
@@ -1209,7 +1263,7 @@ func (a *desktop) openFile(path string) {
 			return
 		}
 		if old.Saving {
-			a.notify("文件正在保存，请稍后打开其他文件")
+			a.notify(locales.Text("文件正在保存，请稍后打开其他文件"))
 			return
 		}
 		if old.Editor.Buffer.Modified() {
@@ -1311,36 +1365,20 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 				return
 			}
 			if previewErr != nil {
-				if kind.hasWebViewPreview() {
-					if expected != nil {
-						a.releaseWorkspaceFile(root)
-					}
-					if a.workspaceFiles == nil {
-						a.workspaceFiles = map[string]*workspaceFile{}
-					}
-					newFile = &workspaceFile{Path: path, PreviewError: previewErr.Error(), Editor: emptyFileEditor()}
-					a.workspaceFiles[workspaceKey(root)] = newFile
-					a.notifyError("文件预览失败：" + previewErr.Error())
-					return
-				}
-				if note := backend.WorkspaceFilePreviewNote(previewErr); note != "" {
-					a.openFileInfoWithNote(path, note)
-				} else {
-					a.notifyError("打开文件失败：" + previewErr.Error())
-				}
+				a.handleFileLoadError(root, path, kind, expected, previewErr)
 				return
 			}
 			if a.workspaceFiles == nil {
 				a.workspaceFiles = map[string]*workspaceFile{}
 			}
 			if newFile == nil {
-				a.notifyError("打开文件失败：未返回文件内容")
+				a.notifyError(locales.Text("打开文件失败：未返回文件内容"))
 				return
 			}
 			if kind.isPreviewOnly() {
 				newFile.Editor = emptyFileEditor()
 			} else {
-				newFile.Editor = &editor.State{Buffer: buffer, Font: ui.Font{Family: monoFamily, Size: fsEditor}, Label: "文件编辑器", NoScrollPastEnd: true}
+				newFile.Editor = &editor.State{Buffer: buffer, Font: ui.Font{Family: monoFamily, Size: fsEditor}, Label: locales.Text("文件编辑器"), NoScrollPastEnd: true}
 			}
 			if expected != nil && expected.Path == path && kind.hasMarkupToggle() {
 				newFile.MarkupPreview = expected.MarkupPreview
@@ -1357,8 +1395,8 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 			}
 			if expected != nil {
 				if newFile.PreviewPath != "" || newFile.PreviewHTML != "" || newFile.MarkupPreview && kind == workspaceFileHTML {
-					// beginLoad already retired the page. Keep its native slot for
-					// the next compatible preview, while dropping old file data.
+					// Keep the native slot (and an image's last frame) for the next
+					// compatible preview, while dropping old file data.
 					releaseWorkspaceFileValue(expected)
 				} else {
 					a.releaseWorkspaceFile(root)
@@ -1376,7 +1414,7 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 				}(newFile, loadedText)
 			}
 			if expected != nil && expected.Path == path {
-				a.notifySuccess("文件已刷新")
+				a.notifySuccess(locales.Text("文件已刷新"))
 			}
 		})
 	}()
@@ -1390,15 +1428,15 @@ func (a *desktop) workspaceFileLoadStillCurrent(root string, expected *workspace
 		return true
 	}
 	if expected.Saving || expected.Editor == nil || expected.Editor.Buffer == nil {
-		a.notify("文件状态已变化，已取消加载")
+		a.notify(locales.Text("文件状态已变化，已取消加载"))
 		return false
 	}
 	if expected.Editor.Buffer.Version() != version {
-		a.notify("文件加载期间内容已变化，已取消替换")
+		a.notify(locales.Text("文件加载期间内容已变化，已取消替换"))
 		return false
 	}
 	if expected.Editor.Buffer.Modified() && !discardConfirmed {
-		a.notify("文件有未保存修改，已取消替换")
+		a.notify(locales.Text("文件有未保存修改，已取消替换"))
 		return false
 	}
 	return true
@@ -1406,7 +1444,7 @@ func (a *desktop) workspaceFileLoadStillCurrent(root string, expected *workspace
 
 func (a *desktop) confirmDiscardFile(root string, file *workspaceFile, action func()) {
 	go func() {
-		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: "未保存的文件", Message: "放弃对 " + file.Path + " 的修改？", Buttons: []string{"取消", "放弃修改"}, CancelButton: 0, DestructiveButtons: []int{1}})
+		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: locales.Text("未保存的文件"), Message: locales.Text("放弃对 ") + file.Path + locales.Text(" 的修改？"), Buttons: []string{locales.Text("取消"), locales.Text("放弃修改")}, CancelButton: 0, DestructiveButtons: []int{1}})
 		a.win.Update(func() {
 			if err != nil {
 				a.notifyError(err.Error())
@@ -1420,19 +1458,25 @@ func (a *desktop) confirmDiscardFile(root string, file *workspaceFile, action fu
 }
 
 func (a *desktop) closeFile() {
-	a.workspacePreview.cancelLoad("")
 	t := a.current()
-	file := a.activeFile()
-	if t == nil || file == nil {
+	if t == nil {
+		return
+	}
+	a.closeWorkspaceFile(t.Workspace)
+}
+
+func (a *desktop) closeWorkspaceFile(root string) {
+	a.workspacePreview.cancelLoad(root)
+	file := a.workspaceFiles[workspaceKey(root)]
+	if file == nil {
 		return
 	}
 	if file.Saving {
-		a.notify("文件正在保存，请稍后关闭")
+		a.notify(locales.Text("文件正在保存，请稍后关闭"))
 		return
 	}
-	root := t.Workspace
 	close := func() { a.releaseWorkspaceFile(root) }
-	if file.Editor.Buffer.Modified() {
+	if file.Editor != nil && file.Editor.Buffer != nil && file.Editor.Buffer.Modified() {
 		a.confirmDiscardFile(root, file, close)
 	} else {
 		close()
@@ -1453,14 +1497,14 @@ func (a *desktop) saveFile() {
 		a.win.Update(func() {
 			file.Saving = false
 			if err != nil {
-				a.notifyError("保存失败：" + err.Error())
+				a.notifyError(locales.Text("保存失败：") + err.Error())
 				return
 			}
 			file.Version = result.Version
 			if file.Editor.Buffer.String() == text {
 				file.Editor.Buffer.MarkSaved()
 			}
-			a.notify("文件已保存")
+			a.notify(locales.Text("文件已保存"))
 		})
 	}()
 }

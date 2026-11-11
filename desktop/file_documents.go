@@ -2,6 +2,9 @@
 package desktop
 
 import (
+	"ally-dev/locales"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -91,7 +94,33 @@ func (a *desktop) setExplorerOpen(open bool) {
 		a.refreshFiles()
 	}
 	if !open {
-		a.releaseFilePreview()
+		a.releaseAllFilePreviews()
+	}
+}
+
+// Called only after a current load completes on the UI thread. A tool can be
+// clicked before its file is created or after deletion; neither case replaces
+// the existing editor with an empty or broken preview.
+func (a *desktop) handleFileLoadError(root, path string, kind workspaceFileKind, expected *workspaceFile, err error) {
+	if errors.Is(err, os.ErrNotExist) {
+		a.notifyError(locales.Text("文件不存在，可能尚未创建或已被删除：") + path)
+		return
+	}
+	if kind.hasWebViewPreview() {
+		if expected != nil {
+			a.releaseWorkspaceFile(root)
+		}
+		if a.workspaceFiles == nil {
+			a.workspaceFiles = map[string]*workspaceFile{}
+		}
+		a.workspaceFiles[workspaceKey(root)] = &workspaceFile{Path: path, PreviewError: err.Error(), Editor: emptyFileEditor()}
+		a.notifyError(locales.Text("文件预览失败：") + err.Error())
+		return
+	}
+	if note := backend.WorkspaceFilePreviewNote(err); note != "" {
+		a.openFileInfoWithNote(path, note)
+	} else {
+		a.notifyError(locales.Text("打开文件失败：") + err.Error())
 	}
 }
 

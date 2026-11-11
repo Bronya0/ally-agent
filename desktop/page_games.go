@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -49,20 +50,20 @@ func (a *desktop) resetGame(kind int) {
 	case gameGomoku:
 		g.Board = make([]int, gomokuSize*gomokuSize)
 		g.LastIndex = -1
-		g.Status = "你先手（黑）"
+		g.Status = locales.Text("你先手（黑）")
 	case gameGo:
 		g.Board = make([]int, goSize*goSize)
 		g.LastIndex = -1
 		g.Ko = -1
-		g.Status = "你先手（黑）"
+		g.Status = locales.Text("你先手（黑）")
 	case gameXiangqi:
 		g.XQ = xiangqiStart()
 		g.LastIndex = -1
-		g.Status = "你先手（红）"
+		g.Status = locales.Text("你先手（红）")
 	case gameDoudizhu:
 		g.Phase = ddzPhaseDeal
 		g.Landlord = -1
-		g.Status = "发牌"
+		g.Status = locales.Text("发牌")
 	}
 }
 
@@ -74,9 +75,9 @@ func (a *desktop) gamesPageBody(c *ui.Context) {
 			if !g.Started && !g.Finished {
 				card(c, "game-idle", func() {
 					ui.Column(c).Gap(gapField).Padding(12).Children(func() {
-						sectionTitle(c, gameMeta[g.Kind].label)
-						fieldNote(c, "选好模型与棋牌后点左侧「开始对局」。棋盘文字会发给模型，模型只回一个坐标。", a.secondaryInk())
-						fieldNote(c, "战绩统计只在本次打开期间累计。", a.secondaryInk())
+						sectionTitle(c, locales.Text(gameMeta[g.Kind].label))
+						fieldNote(c, locales.Text("选好模型与棋牌后点左侧「开始对局」。棋盘文字会发给模型，模型只回一个坐标。"), a.secondaryInk())
+						fieldNote(c, locales.Text("战绩统计只在本次打开期间累计。"), a.secondaryInk())
 					})
 				})
 				notice(c, "info", g.Status, a.secondaryInk())
@@ -108,50 +109,50 @@ func (a *desktop) gameSidebar(c *ui.Context) {
 	g := &a.gameF
 	ui.Column(c).Width(260).Gap(gapSection).Children(func() {
 		card(c, "game-model", func() {
-			sectionTitle(c, "执子模型")
+			sectionTitle(c, locales.Text("执子模型"))
 			models := []string{}
 			for _, m := range a.config.Models {
 				models = append(models, modelOption(m))
 			}
 			if len(models) == 0 {
-				fieldNote(c, "尚未配置模型。", a.secondaryInk())
+				fieldNote(c, locales.Text("尚未配置模型。"), a.secondaryInk())
 			}
-			uikit.Select(c.Key("game-model-a"), &g.ModelA, models, a.secondaryInk()).Label("模型 A").FillWidth().Disabled(g.Thinking)
-			uikit.Select(c.Key("game-effort-a"), &g.EffortA, reasoningLevels, a.secondaryInk()).Label("思考强度").FillWidth().Disabled(g.Thinking)
-			cardFlat(c, map[bool]string{true: "改回与模型对弈", false: "切换双模型对弈（AI vs AI）"}[g.VsAI]).Disabled(g.Thinking).OnClick(func() {
+			uikit.Select(c.Key("game-model-a"), &g.ModelA, models, a.secondaryInk()).Label(locales.Text("模型 A")).FillWidth().Disabled(g.Thinking)
+			localizedSelect(c.Key("game-effort-a"), &g.EffortA, reasoningLevels, a.secondaryInk()).Label(locales.Text("思考强度")).FillWidth().Disabled(g.Thinking)
+			cardFlat(c, map[bool]string{true: locales.Text("改回与模型对弈"), false: locales.Text("切换双模型对弈（AI vs AI）")}[g.VsAI]).Disabled(g.Thinking).OnClick(func() {
 				g.VsAI = !g.VsAI
 				a.resetGame(g.Kind)
 			})
 			if g.VsAI {
-				uikit.Select(c.Key("game-model-b"), &g.ModelB, models, a.secondaryInk()).Label("模型 B").FillWidth().Disabled(g.Thinking)
-				uikit.Select(c.Key("game-effort-b"), &g.EffortB, reasoningLevels, a.secondaryInk()).Label("模型 B 思考强度").FillWidth().Disabled(g.Thinking)
+				uikit.Select(c.Key("game-model-b"), &g.ModelB, models, a.secondaryInk()).Label(locales.Text("模型 B")).FillWidth().Disabled(g.Thinking)
+				localizedSelect(c.Key("game-effort-b"), &g.EffortB, reasoningLevels, a.secondaryInk()).Label(locales.Text("模型 B 思考强度")).FillWidth().Disabled(g.Thinking)
 			}
 			if g.Calls > 0 {
-				fieldNote(c, fmt.Sprintf("合计 输入 %s · 输出 %s", fmtK(g.InTokens), fmtK(g.OutTokens)), a.secondaryInk())
-				fieldNote(c, fmt.Sprintf("本局 %d 次调用 · 累计 %s tokens", g.Calls, fmtK(g.InTokens+g.OutTokens)), a.secondaryInk())
+				fieldNote(c, fmt.Sprintf(locales.Text("合计 输入 %s · 输出 %s"), fmtK(g.InTokens), fmtK(g.OutTokens)), a.secondaryInk())
+				fieldNote(c, fmt.Sprintf(locales.Text("本局 %d 次调用 · 累计 %s tokens"), g.Calls, fmtK(g.InTokens+g.OutTokens)), a.secondaryInk())
 			}
-			label := "开始对局"
+			label := locales.Text("开始对局")
 			if g.Started {
-				label = "重新开始"
+				label = locales.Text("重新开始")
 			}
 			if g.Thinking {
-				label = "思考中…"
+				label = locales.Text("思考中…")
 			}
 			cardPrimary(c, label).Disabled(len(a.config.Models) == 0 || g.Thinking || g.ModelA == "" || (g.VsAI && g.ModelB == "")).OnClick(func() { a.startGame() })
 			if g.Thinking {
-				cardDanger(c, "停止").OnClick(func() {
+				cardDanger(c, locales.Text("停止")).OnClick(func() {
 					a.core.GameAIActionCancel()
 					g.RequestSeq++
 					g.Thinking = false
-					g.Status = "已停止"
+					g.Status = locales.Text("已停止")
 				})
 			}
 		})
 		card(c, "game-pick", func() {
-			sectionTitle(c, "棋牌")
+			sectionTitle(c, locales.Text("棋牌"))
 			for i, meta := range gameMeta {
 				i, meta := i, meta
-				choiceButton(c, fmt.Sprintf("game-kind-%d", i), meta.label, g.Kind == i, c.Theme().Accent).
+				choiceButton(c, fmt.Sprintf("game-kind-%d", i), locales.Text(meta.label), g.Kind == i, c.Theme().Accent).
 					Disabled(g.Thinking).OnClick(func() {
 					a.resetGame(i)
 					g.Started = false
@@ -162,15 +163,15 @@ func (a *desktop) gameSidebar(c *ui.Context) {
 				players = 3
 			}
 			if g.VsAI {
-				fieldNote(c, fmt.Sprintf("两个模型轮流执子对弈，你观战（%d 人局）。", players), a.secondaryInk())
+				fieldNote(c, fmt.Sprintf(locales.Text("两个模型轮流执子对弈，你观战（%d 人局）。"), players), a.secondaryInk())
 			} else {
-				fieldNote(c, fmt.Sprintf("%d 人局 · 你执先手，其余座位由模型接管。", players), a.secondaryInk())
+				fieldNote(c, fmt.Sprintf(locales.Text("%d 人局 · 你执先手，其余座位由模型接管。"), players), a.secondaryInk())
 			}
 			if g.Kind == gameGo {
-				cardFlat(c, "停一手").Disabled(!g.Started || g.Thinking || g.Winner >= 0 || g.VsAI || g.Turn != 0).OnClick(func() { a.gamePass() })
+				cardFlat(c, locales.Text("停一手")).Disabled(!g.Started || g.Thinking || g.Winner >= 0 || g.VsAI || g.Turn != 0).OnClick(func() { a.gamePass() })
 			}
 			if g.Kind == gameDoudizhu && g.Phase == ddzPhaseDeal {
-				cardFlat(c, "发牌").Disabled(g.Thinking || g.ModelA == "" || (g.VsAI && g.ModelB == "")).OnClick(func() { a.startGame() })
+				cardFlat(c, locales.Text("发牌")).Disabled(g.Thinking || g.ModelA == "" || (g.VsAI && g.ModelB == "")).OnClick(func() { a.startGame() })
 			}
 		})
 	})
@@ -189,7 +190,7 @@ func (a *desktop) startGame() {
 		return
 	}
 	if g.VsAI {
-		g.Status = "模型 A 思考中…"
+		g.Status = locales.Text("模型 A 思考中…")
 		a.gameAIMove()
 		return
 	}
@@ -208,7 +209,7 @@ func (a *desktop) gameGridBoard(c *ui.Context) {
 		cell = 24
 	}
 	ui.Row(c).Children(func() {
-		ui.Grid(c.Key("board-grid")).Label("棋盘").Columns(size).Gap(1).Children(func() {
+		ui.Grid(c.Key("board-grid")).Label(locales.Text("棋盘")).Columns(size).Gap(1).Children(func() {
 			for y := 0; y < size; y++ {
 				for x := 0; x < size; x++ {
 					index := y*size + x
@@ -268,7 +269,7 @@ func (a *desktop) gameXiangqiBoard(c *ui.Context) {
 				}
 			})
 			if y == 4 {
-				ui.Row(c).Height(14).Center().Children(func() { fieldNote(c, "楚河　　汉界", a.secondaryInk()) })
+				ui.Row(c).Height(14).Center().Children(func() { fieldNote(c, locales.Text("楚河　　汉界"), a.secondaryInk()) })
 			}
 		}
 	})
@@ -290,28 +291,28 @@ func xiangqiGlyph(piece string) string {
 func (a *desktop) gameDoudizhu(c *ui.Context) {
 	g := &a.gameF
 	if g.Phase == ddzPhaseDeal {
-		emptyState(c, "点击“发牌”开始一局", "", a.secondaryInk())
+		emptyState(c, locales.Text("点击“发牌”开始一局"), "", a.secondaryInk())
 		return
 	}
 	ui.Column(c).Gap(gapSection).Children(func() {
 		ui.Row(c).Gap(gapSection).Wrap().Children(func() {
 			if g.Landlord >= 0 {
-				accentChip(c, fmt.Sprintf("地主：座位 %d", g.Landlord+1))
-				neutralChip(c, fmt.Sprintf("底牌：%s", cardList(g.Bottom)))
+				accentChip(c, fmt.Sprintf(locales.Text("地主：座位 %d"), g.Landlord+1))
+				neutralChip(c, fmt.Sprintf(locales.Text("底牌：%s"), cardList(g.Bottom)))
 			}
 			for seat := 0; seat < 3; seat++ {
-				label := fmt.Sprintf("座位 %d", seat+1)
+				label := fmt.Sprintf(locales.Text("座位 %d"), seat+1)
 				if seat == 0 && !g.VsAI {
-					label += "（你）"
+					label += locales.Text("（你）")
 				}
 				count := len(g.Hands[seat])
-				ui.Text(c, fmt.Sprintf("%s · %d 张", label, count)).FontSize(fsSmall).TextColor(a.secondaryInk())
+				ui.Text(c, fmt.Sprintf(locales.Text("%s · %d 张"), label, count)).FontSize(fsSmall).TextColor(a.secondaryInk())
 			}
 		})
 		if g.Phase == ddzPhaseBid {
 			ui.Row(c).Gap(gapField).Children(func() {
-				primary(c, "叫地主").Disabled(!g.Started || g.VsAI || g.Turn != 0 || g.Thinking).OnClick(func() { a.ddzBid(0, true) })
-				flat(c, "不叫").Disabled(!g.Started || g.VsAI || g.Turn != 0 || g.Thinking).OnClick(func() { a.ddzBid(0, false) })
+				primary(c, locales.Text("叫地主")).Disabled(!g.Started || g.VsAI || g.Turn != 0 || g.Thinking).OnClick(func() { a.ddzBid(0, true) })
+				flat(c, locales.Text("不叫")).Disabled(!g.Started || g.VsAI || g.Turn != 0 || g.Thinking).OnClick(func() { a.ddzBid(0, false) })
 			})
 		}
 		if g.Phase == ddzPhasePlay {
@@ -334,12 +335,12 @@ func (a *desktop) gameDoudizhu(c *ui.Context) {
 				}
 			})
 			ui.Row(c).Gap(gapField).Children(func() {
-				primary(c, "出牌").Disabled(!g.Started || g.VsAI || g.Turn != 0 || g.Thinking || len(g.SelectedCards) == 0).OnClick(func() { a.ddzPlay(0, g.SelectedCards) })
-				flat(c, "不要").Disabled(!g.Started || g.VsAI || g.Turn != 0 || g.Thinking || len(g.LastCards) == 0).OnClick(func() { a.ddzPass(0) })
-				flat(c, "清空选择").Disabled(!g.Started || g.VsAI).OnClick(func() { g.SelectedCards = nil })
+				primary(c, locales.Text("出牌")).Disabled(!g.Started || g.VsAI || g.Turn != 0 || g.Thinking || len(g.SelectedCards) == 0).OnClick(func() { a.ddzPlay(0, g.SelectedCards) })
+				flat(c, locales.Text("不要")).Disabled(!g.Started || g.VsAI || g.Turn != 0 || g.Thinking || len(g.LastCards) == 0).OnClick(func() { a.ddzPass(0) })
+				flat(c, locales.Text("清空选择")).Disabled(!g.Started || g.VsAI).OnClick(func() { g.SelectedCards = nil })
 			})
 			if len(g.LastCards) > 0 {
-				fieldNote(c, fmt.Sprintf("上一手（座位 %d）：%s", g.LastPlayer+1, cardList(g.LastCards)), a.secondaryInk())
+				fieldNote(c, fmt.Sprintf(locales.Text("上一手（座位 %d）：%s"), g.LastPlayer+1, cardList(g.LastCards)), a.secondaryInk())
 			}
 		}
 	})
@@ -376,7 +377,7 @@ func containsInt(items []int, v int) bool {
 }
 
 func cardName(value int) string {
-	names := map[int]string{11: "J", 12: "Q", 13: "K", 14: "A", 15: "2", 16: "小王", 17: "大王"}
+	names := map[int]string{11: "J", 12: "Q", 13: "K", 14: "A", 15: "2", 16: locales.Text("小王"), 17: locales.Text("大王")}
 	if name, ok := names[value]; ok {
 		return name
 	}
@@ -430,20 +431,20 @@ func (a *desktop) afterGameMove() {
 		a.gameAIMove()
 		return
 	}
-	g.Status = "轮到你"
+	g.Status = locales.Text("轮到你")
 }
 
 func (a *desktop) gameFinished() {
 	g := &a.gameF
 	switch {
 	case g.Winner < 0:
-		g.Status = "和棋"
+		g.Status = locales.Text("和棋")
 	case g.VsAI:
-		g.Status = fmt.Sprintf("座位 %d（%s）获胜", g.Winner+1, map[bool]string{true: "模型 B", false: "模型 A"}[g.Winner%2 == 1])
+		g.Status = fmt.Sprintf(locales.Text("座位 %d（%s）获胜"), g.Winner+1, map[bool]string{true: locales.Text("模型 B"), false: locales.Text("模型 A")}[g.Winner%2 == 1])
 	case g.Winner == 0:
-		g.Status = "你赢了 🎉"
+		g.Status = locales.Text("你赢了 🎉")
 	default:
-		g.Status = "模型赢了"
+		g.Status = locales.Text("模型赢了")
 	}
 	g.Started = false
 	g.Finished = true
@@ -487,13 +488,13 @@ func (a *desktop) gameAIMove() {
 	}
 	cfg, ok := a.gameModelConfig(model)
 	if !ok {
-		g.Status = "请选择可用模型"
+		g.Status = locales.Text("请选择可用模型")
 		return
 	}
 	cfg.ReasoningEffort = effort
 	g.Thinking = true
 	g.RequestSeq++
-	g.Status = fmt.Sprintf("座位 %d 思考中…", seat+1)
+	g.Status = fmt.Sprintf(locales.Text("座位 %d 思考中…"), seat+1)
 	system, user := a.gamePrompt(seat)
 	a.gameAIRequest(seat, cfg, system, user, 0, g.RequestSeq)
 }
@@ -505,7 +506,7 @@ func (a *desktop) gameAIRequest(seat int, cfg backend.ModelConfig, system, user 
 	g := &a.gameF
 	if round >= 3 {
 		g.Thinking = false
-		g.Status = "模型没有给出合法走法"
+		g.Status = locales.Text("模型没有给出合法走法")
 		return
 	}
 	go func() {
@@ -516,12 +517,12 @@ func (a *desktop) gameAIRequest(seat int, cfg backend.ModelConfig, system, user 
 			}
 			if err != nil {
 				g.Thinking = false
-				g.Status = "模型请求失败：" + err.Error()
+				g.Status = locales.Text("模型请求失败：") + err.Error()
 				return
 			}
 			action, perr := parseFirstJSON(result.Reply)
 			if perr != nil {
-				a.gameAIRequest(seat, cfg, system+"\n请只输出一个 JSON 对象，不要包含其它文字。", user, round+1, seq)
+				a.gameAIRequest(seat, cfg, system+locales.Text("\n请只输出一个 JSON 对象，不要包含其它文字。"), user, round+1, seq)
 				return
 			}
 			if g.Kind == gameDoudizhu && g.Phase == ddzPhaseBid {
@@ -541,7 +542,7 @@ func (a *desktop) gameAIRequest(seat int, cfg backend.ModelConfig, system, user 
 				err = a.applyGameAction(seat, action)
 			}
 			if err != nil {
-				a.gameAIRequest(seat, cfg, system+"\n上一次走法不合法："+err.Error()+"。请重新给出合法走法，只输出一个 JSON 对象。", user, round+1, seq)
+				a.gameAIRequest(seat, cfg, system+locales.Text("\n上一次走法不合法：")+err.Error()+locales.Text("。请重新给出合法走法，只输出一个 JSON 对象。"), user, round+1, seq)
 				return
 			}
 			g.Calls++
@@ -557,7 +558,7 @@ func (a *desktop) gameAIRequest(seat int, cfg backend.ModelConfig, system, user 
 				return
 			}
 			if !g.VsAI && g.Turn == 0 {
-				g.Status = "轮到你"
+				g.Status = locales.Text("轮到你")
 				return
 			}
 			a.gameAIMove()
@@ -580,7 +581,7 @@ func normalizeGameAIAction(kind int, action map[string]any) error {
 	for key, limit := range limits {
 		v, ok := action[key].(float64)
 		if !ok || v < 1 || v > float64(limit) || math.Trunc(v) != v {
-			return fmt.Errorf("坐标 %s 必须是 1-%d 的整数", key, limit)
+			return fmt.Errorf(locales.Text("坐标 %s 必须是 1-%d 的整数"), key, limit)
 		}
 	}
 	for key := range limits {
@@ -601,7 +602,7 @@ func (a *desktop) gameModelConfig(label string) (backend.ModelConfig, bool) {
 func parseFirstJSON(reply string) (map[string]any, error) {
 	start := strings.Index(reply, "{")
 	if start < 0 {
-		return nil, fmt.Errorf("没有 JSON")
+		return nil, fmt.Errorf("%s", locales.Text("没有 JSON"))
 	}
 	depth := 0
 	for i := start; i < len(reply); i++ {
@@ -619,7 +620,7 @@ func parseFirstJSON(reply string) (map[string]any, error) {
 			}
 		}
 	}
-	return nil, fmt.Errorf("JSON 未闭合")
+	return nil, fmt.Errorf("%s", locales.Text("JSON 未闭合"))
 }
 
 // ---- Rules ---------------------------------------------------------------
@@ -627,7 +628,7 @@ func parseFirstJSON(reply string) (map[string]any, error) {
 func (a *desktop) applyGameAction(player int, action map[string]any) error {
 	g := &a.gameF
 	if g.Winner >= 0 {
-		return fmt.Errorf("对局已经结束")
+		return fmt.Errorf("%s", locales.Text("对局已经结束"))
 	}
 	switch g.Kind {
 	case gameGomoku:
@@ -639,20 +640,20 @@ func (a *desktop) applyGameAction(player int, action map[string]any) error {
 	case gameDoudizhu:
 		return g.applyDoudizhu(player, action)
 	}
-	return fmt.Errorf("未知棋种")
+	return fmt.Errorf("%s", locales.Text("未知棋种"))
 }
 
 func (g *gameUI) applyGomoku(player int, action map[string]any) error {
 	if player != g.Turn || str(action, "type") != "place" {
-		return fmt.Errorf("还没轮到该座位")
+		return fmt.Errorf("%s", locales.Text("还没轮到该座位"))
 	}
 	x, y := int(num(action, "x")), int(num(action, "y"))
 	if x < 0 || y < 0 || x >= gomokuSize || y >= gomokuSize {
-		return fmt.Errorf("落子位置无效")
+		return fmt.Errorf("%s", locales.Text("落子位置无效"))
 	}
 	index := y*gomokuSize + x
 	if g.Board[index] != 0 {
-		return fmt.Errorf("该位置已有棋子")
+		return fmt.Errorf("%s", locales.Text("该位置已有棋子"))
 	}
 	g.Board[index] = player + 1
 	g.Turn = 1 - player
@@ -726,7 +727,7 @@ func goGroup(board []int, start int) (stones []int, liberties map[int]bool) {
 
 func (g *gameUI) applyGo(player int, action map[string]any) error {
 	if player != g.Turn {
-		return fmt.Errorf("还没轮到该座位")
+		return fmt.Errorf("%s", locales.Text("还没轮到该座位"))
 	}
 	if str(action, "type") == "pass" {
 		g.Turn = 1 - player
@@ -745,15 +746,15 @@ func (g *gameUI) applyGo(player int, action map[string]any) error {
 		return nil
 	}
 	if str(action, "type") != "place" {
-		return fmt.Errorf("操作无效")
+		return fmt.Errorf("%s", locales.Text("操作无效"))
 	}
 	x, y := int(num(action, "x")), int(num(action, "y"))
 	if x < 0 || y < 0 || x >= goSize || y >= goSize {
-		return fmt.Errorf("落子位置无效")
+		return fmt.Errorf("%s", locales.Text("落子位置无效"))
 	}
 	index := y*goSize + x
 	if g.Board[index] != 0 || g.Ko == index {
-		return fmt.Errorf("该位置不能落子")
+		return fmt.Errorf("%s", locales.Text("该位置不能落子"))
 	}
 	next := append([]int(nil), g.Board...)
 	next[index] = player + 1
@@ -773,7 +774,7 @@ func (g *gameUI) applyGo(player int, action map[string]any) error {
 	}
 	own, liberties := goGroup(next, index)
 	if len(liberties) == 0 {
-		return fmt.Errorf("不能自杀")
+		return fmt.Errorf("%s", locales.Text("不能自杀"))
 	}
 	if len(captured) == 1 && len(own) == 1 {
 		for stone := range captured {
@@ -851,25 +852,25 @@ func isRedPiece(piece string) bool { return strings.HasPrefix(piece, "r") }
 
 func (g *gameUI) applyXiangqi(player int, action map[string]any) error {
 	if player != g.Turn || str(action, "type") != "move" {
-		return fmt.Errorf("还没轮到该座位")
+		return fmt.Errorf("%s", locales.Text("还没轮到该座位"))
 	}
 	fx, fy := int(num(action, "fromX")), int(num(action, "fromY"))
 	tx, ty := int(num(action, "toX")), int(num(action, "toY"))
 	if fx < 0 || fy < 0 || tx < 0 || ty < 0 || fx > 8 || tx > 8 || fy > 9 || ty > 9 {
-		return fmt.Errorf("坐标无效")
+		return fmt.Errorf("%s", locales.Text("坐标无效"))
 	}
 	piece := g.XQ[fy][fx]
 	if piece == "" || isRedPiece(piece) != (player == 0) {
-		return fmt.Errorf("该位置没有你的棋子")
+		return fmt.Errorf("%s", locales.Text("该位置没有你的棋子"))
 	}
 	if !xiangqiMoveOK(g.XQ, fx, fy, tx, ty, piece) {
-		return fmt.Errorf("走法不合法")
+		return fmt.Errorf("%s", locales.Text("走法不合法"))
 	}
 	next := g.XQ
 	next[ty][tx] = piece
 	next[fy][fx] = ""
 	if xiangqiInCheck(next, player == 0) {
-		return fmt.Errorf("不能送将或将帅照面")
+		return fmt.Errorf("%s", locales.Text("不能送将或将帅照面"))
 	}
 	g.XQ = next
 	g.Turn = 1 - player
@@ -1090,7 +1091,7 @@ func (a *desktop) ddzDeal() {
 	g.Winner = -1
 	g.Started = true
 	g.Thinking = false
-	g.Status = "叫地主：轮到你"
+	g.Status = locales.Text("叫地主：轮到你")
 }
 
 func makeDeck() []int {
@@ -1122,12 +1123,12 @@ func (a *desktop) ddzBid(player int, call bool) {
 		g.Hands[player] = sortCards(append(g.Hands[player], g.Bottom...))
 		g.Phase = ddzPhasePlay
 		g.Turn = player
-		g.Status = fmt.Sprintf("座位 %d 是地主，出牌", player+1)
+		g.Status = fmt.Sprintf(locales.Text("座位 %d 是地主，出牌"), player+1)
 		a.ddzAIIfNeeded()
 		return
 	}
 	g.Turn = (player + 1) % 3
-	g.Status = fmt.Sprintf("座位 %d 决定中…", g.Turn+1)
+	g.Status = fmt.Sprintf(locales.Text("座位 %d 决定中…"), g.Turn+1)
 	a.ddzAIIfNeeded()
 }
 
@@ -1138,9 +1139,9 @@ func (a *desktop) ddzAIIfNeeded() {
 	}
 	if g.Turn == 0 && !g.VsAI {
 		if g.Phase == ddzPhaseBid {
-			g.Status = "叫地主：轮到你"
+			g.Status = locales.Text("叫地主：轮到你")
 		} else {
-			g.Status = "轮到你出牌"
+			g.Status = locales.Text("轮到你出牌")
 		}
 		return
 	}
@@ -1181,10 +1182,10 @@ func jsonCards(cards []int) []any {
 func (g *gameUI) applyDoudizhu(player int, action map[string]any) error {
 	switch g.Phase {
 	case ddzPhaseDeal:
-		return fmt.Errorf("等待房主发牌")
+		return fmt.Errorf("%s", locales.Text("等待房主发牌"))
 	case ddzPhaseBid:
 		if player != g.Turn || str(action, "type") != "bid" {
-			return fmt.Errorf("叫地主操作无效")
+			return fmt.Errorf("%s", locales.Text("叫地主操作无效"))
 		}
 		value := int(num(action, "value"))
 		g.Turn = (player + 1) % 3
@@ -1202,11 +1203,11 @@ func (g *gameUI) applyDoudizhu(player int, action map[string]any) error {
 		return nil
 	}
 	if player != g.Turn {
-		return fmt.Errorf("还没轮到该座位")
+		return fmt.Errorf("%s", locales.Text("还没轮到该座位"))
 	}
 	if str(action, "type") == "pass" {
 		if len(g.LastCards) == 0 {
-			return fmt.Errorf("第一手不能过")
+			return fmt.Errorf("%s", locales.Text("第一手不能过"))
 		}
 		g.DDZPasses++
 		g.Turn = (player + 1) % 3
@@ -1217,14 +1218,14 @@ func (g *gameUI) applyDoudizhu(player int, action map[string]any) error {
 		return nil
 	}
 	if str(action, "type") != "play" {
-		return fmt.Errorf("出牌不合法")
+		return fmt.Errorf("%s", locales.Text("出牌不合法"))
 	}
 	var cards []int
 	for _, item := range list(action, "cards") {
 		cards = append(cards, int(num(map[string]any{"v": item}, "v")))
 	}
 	if !validCards(cards, g.Hands[player]) || !beatsCards(cards, g.LastCards) {
-		return fmt.Errorf("出牌不合法")
+		return fmt.Errorf("%s", locales.Text("出牌不合法"))
 	}
 	g.Hands[player] = removeCards(g.Hands[player], cards)
 	g.LastCards = append([]int(nil), cards...)

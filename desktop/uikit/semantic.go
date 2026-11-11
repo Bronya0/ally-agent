@@ -208,7 +208,7 @@ func colorTag(c *ui.Context, label string, o TagOptions, ink, fill, edge ui.Colo
 		}
 		ui.Text(c, label).FontSize(font).TextColor(ink).SingleLine()
 		if o.OnClose != nil {
-			ui.ButtonBase(c.Key("close")).Size(16, 16).Label("移除 " + label).Cursor(ui.CursorPointer).OnClick(o.OnClose).Children(func() { ui.Text(c, "×").TextColor(ink) })
+			ui.ButtonBase(c.Key("close")).Size(16, 16).Label(kitText(c, "移除 ") + label).Cursor(ui.CursorPointer).OnClick(o.OnClose).Children(func() { ui.Text(c, "×").TextColor(ink) })
 		}
 	})
 }

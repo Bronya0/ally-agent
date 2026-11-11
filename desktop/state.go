@@ -4,6 +4,7 @@ package desktop
 import (
 	backend "ally-dev/internal/app"
 	"ally-dev/internal/tools/read"
+	"ally-dev/locales"
 	"context"
 	"encoding/json"
 	"os"
@@ -22,12 +23,14 @@ type uiPrefs struct {
 	HistoryPageSize    int      `json:"historyPageSize"`
 	Appearance         string   `json:"appearance,omitempty"`
 	Palette            int      `json:"palette"`
+	TopNavigation      bool     `json:"topNavigation,omitempty"`
 	RailExpanded       bool     `json:"railExpanded"`
 	RailWidth          float32  `json:"railWidth"`
 	RailWorkspaceOpen  bool     `json:"railWorkspaceOpen"`
 	RailSessionsOpen   bool     `json:"railSessionsOpen"`
 	Avatar             string   `json:"avatar"`
 	RecentModels       []string `json:"recentModels"`
+	RecentWorkspaces   []string `json:"recentWorkspaces,omitempty"`
 	TreeWidth          float32  `json:"treeWidth"`
 	SeenReleaseNotes   string   `json:"seenReleaseNotes"`
 	DismissedUpdateTag string   `json:"dismissedUpdateTag"`
@@ -36,6 +39,10 @@ type uiPrefs struct {
 	VoiceInputEnabled    bool   `json:"voiceInputEnabled,omitempty"`
 	VoiceModelID         string `json:"voiceModelId,omitempty"`
 	VoiceHotkey          string `json:"voiceHotkey,omitempty"`
+	// CloseToTray parks the window in the tray instead of quitting. It defaults
+	// on and is written out either way: `omitempty` would drop an explicit false
+	// and read back as the default, so turning it off could never stick.
+	CloseToTray bool `json:"closeToTray"`
 	// VoiceModifierLeft and VoiceModifierRight decide which physical sides of
 	// Ctrl/Alt/Shift/Win satisfy a hotkey modifier. Both are on by default, so a
 	// chord never has to pin a side.
@@ -46,7 +53,7 @@ type uiPrefs struct {
 }
 
 func defaultPrefs() uiPrefs {
-	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, VoiceHotkey: "Alt", VoiceModifierLeft: true, VoiceModifierRight: true, Pet: petPreferences{Enabled: true, Size: 180}}
+	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, VoiceHotkey: "Alt", VoiceModifierLeft: true, VoiceModifierRight: true, CloseToTray: true, Pet: petPreferences{Enabled: true, Size: 180}}
 }
 
 var prefsMu sync.Mutex
@@ -109,25 +116,37 @@ func readPrefs(path string) uiPrefs {
 		p.VoiceModifierLeft, p.VoiceModifierRight = true, true
 	}
 	p.Pet.normalize()
+	p.RecentWorkspaces = workspaceHistoryRoots(p.RecentWorkspaces, nil)
+	if len(p.RecentWorkspaces) > maxRecentWorkspaces {
+		p.RecentWorkspaces = p.RecentWorkspaces[:maxRecentWorkspaces]
+	}
 	return p
 }
 
 // savePrefs writes an owned snapshot asynchronously. Failures are reported
 // without blocking the UI and retained for the quit/update save barrier.
-func (a *desktop) savePrefs(notice ...string) {
+func (a *desktop) savePrefs(notice ...string) <-chan error {
 	if a.prefsGeometryTimer != nil {
 		a.prefsGeometryTimer.Stop()
 		a.prefsGeometryTimer = nil
 	}
 	if a.core == nil {
-		return
+		return nil
+	}
+	if a.page == "settings" && !a.committingSettings {
+		a.prefsPending = true
+		return nil
 	}
 	p := a.prefs
 	p.RecentModels = append([]string(nil), p.RecentModels...)
+	p.RecentWorkspaces = append([]string(nil), p.RecentWorkspaces...)
 	p.Pet = p.Pet.clone()
 	previous := a.prefsSaveTail
 	done := make(chan struct{})
 	a.prefsSaveTail = done
+	a.prefsPending = false
+	result := make(chan error, 1)
+	path := a.prefsPath()
 	go func() {
 		defer close(done)
 		if previous != nil {
@@ -135,8 +154,8 @@ func (a *desktop) savePrefs(notice ...string) {
 		}
 		prefsMu.Lock()
 		defer prefsMu.Unlock()
-		path := a.prefsPath()
 		if path == "" {
+			result <- nil
 			return
 		}
 		data, err := json.MarshalIndent(p, "", "  ")
@@ -144,12 +163,17 @@ func (a *desktop) savePrefs(notice ...string) {
 			err = read.SafeWriteFile(path, data, 0o600)
 		}
 		a.writeFailures.record("prefs", err)
+		result <- err
 		if a.win != nil {
 			a.win.Update(func() {
+				if err != nil && a.prefsSaveTail == done {
+					a.prefsPending = true
+				}
 				a.prefsSaveResult(err, notice)
 			})
 		}
 	}()
+	return result
 }
 
 // Split controls report every drag frame. Save the final geometry after the
@@ -210,9 +234,14 @@ type mentionState struct {
 // conversation.Messages; this only remembers what the reader expanded.
 type chatUI struct {
 	RoundAt                map[int]int
+	roundPlacementKey      roundPlacementKey
+	roundPlacementReady    bool
+	roundIndices           memoOf[roundIndexKey, []int]
+	visibleRows            []int
 	Round                  map[int]*roundStat
 	PromptOpen             map[int]bool
 	PromptHandles          map[int]*ui.Handle
+	transcriptHandlePool   []*ui.Handle
 	PendingPrompt          bool
 	PendingPromptIdx       int
 	ToolOpen               map[string]bool
@@ -245,6 +274,7 @@ type chatUI struct {
 	CompactNote            string
 	CompactBusy            bool
 	CompactThinking        int
+	Search                 chatSearch
 	DraftCaret             int
 	RestoreCaret           bool
 	Follow                 bool
@@ -336,6 +366,7 @@ type settingsForm struct {
 
 	SessionHeaderConfirmOpen bool
 	SessionHeaderToDisable   string
+	BackgroundPath           *string
 }
 
 func (a *desktop) syncSettingsForm() {
@@ -377,9 +408,6 @@ func (a *desktop) syncSettingsForm() {
 	f.FontSub = clampView(a.configDraft.SubFontSize, 13)
 	f.FontAux = clampView(a.configDraft.AuxFontSize, 12)
 	f.BgOpacity = a.configDraft.BackgroundOpacity
-	if f.BgOpacity <= 0 {
-		f.BgOpacity = 0.15
-	}
 	f.Validation = map[string]bool{
 		"Python":     boolValue(a.configDraft.AutoValidationPython),
 		"Go":         boolValue(a.configDraft.AutoValidationGo),
@@ -394,6 +422,8 @@ func (a *desktop) syncSettingsForm() {
 	if f.Tab == "" {
 		f.Tab = "通用"
 	}
+	baseline := normalizeSettingsConfig(a.settingsConfigDraft()).Clone()
+	a.settingsBase = &baseline
 }
 
 func clampView(v, def float64) float64 {
@@ -430,9 +460,6 @@ func normalizeSettingsConfig(cfg backend.ConfigState) backend.ConfigState {
 	}
 	if cfg.CompactThresholdTokens <= 0 {
 		cfg.CompactThresholdTokens = backend.DefaultCompactThresholdTokens
-	}
-	if cfg.BackgroundOpacity <= 0 {
-		cfg.BackgroundOpacity = 0.15
 	}
 	body, code := readingSizes(cfg.MessageFontSize, cfg.CodeFontSize)
 	cfg.MessageFontSize, cfg.CodeFontSize = float64(body), float64(code)
@@ -677,7 +704,7 @@ var _ = ui.Transparent
 
 func (a *desktop) prefsSaveResult(err error, notice []string) {
 	if err != nil {
-		a.notifyError("保存外观偏好失败：" + err.Error())
+		a.notifyError(locales.Text("保存外观偏好失败：") + err.Error())
 		return
 	}
 	if len(notice) > 0 {

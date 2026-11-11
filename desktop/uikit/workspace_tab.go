@@ -66,12 +66,12 @@ func WorkspaceTab(c *ui.Context, label, tip string, active, busy, canClose bool,
 		}
 		if busy {
 			// The path keeps its own line: a prefixed path wraps unreadably.
-			hover = "运行中\n" + hover
+			hover = kitText(c, "运行中\n") + hover
 		}
 		Tooltip(c, row, hover)
 		// 20 的叉点不中：命中区补到 22，画出来的叉仍是 20 * IconGlyphScale，
 		// 固定槽位只宽 2 DIP。
-		end := IconButtonSized(c, "close", "关闭标签", closeIcon, 22, 20*IconGlyphScale, IconQuiet, close, SecondaryInkOf(t, secondary...)).Shrink(0).Disabled(!canClose || busy)
+		end := IconButtonSized(c, "close", kitText(c, "关闭标签"), closeIcon, 22, 20*IconGlyphScale, IconQuiet, close, SecondaryInkOf(t, secondary...)).Shrink(0).Disabled(!canClose || busy)
 		opacity := float32(0)
 		if canClose && showClose {
 			opacity = 1

@@ -3,6 +3,7 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"fmt"
 	"strings"
 	"time"
@@ -99,14 +100,14 @@ func (a *desktop) petCompletionText(event string, p map[string]any) string {
 			name = str(task, "id")
 		}
 		if name = petShortTitle(name); name != "" {
-			result := "已完成"
+			result := locales.Text("已完成")
 			if event == "scheduled:run_error" {
-				result = "出错"
+				result = locales.Text("出错")
 				if str(task, "lastStatus") == "cancelled" {
-					result = "已取消"
+					result = locales.Text("已取消")
 				}
 			}
-			label = "定时任务「" + name + "」" + result
+			label = locales.Text("定时任务「") + name + "」" + result
 		}
 		start, end := int64(num(task, "lastRunAt")), int64(num(task, "updatedAt"))
 		if start > 0 && end >= start {
@@ -118,12 +119,19 @@ func (a *desktop) petCompletionText(event string, p map[string]any) string {
 		// 名字比会话标题更能说明这些活发生在哪个项目里。
 		if ws := strings.TrimSpace(str(p, "workspace")); ws != "" {
 			if name := petShortTitle(workspaceLabel(ws)); name != "" {
-				label = "工作区「" + name + "」" + strings.TrimPrefix(label, "任务")
+				result := locales.Text("已完成")
+				if event == "run:error" {
+					result = locales.Text("出错")
+					if str(p, "status") == "cancelled" {
+						result = locales.Text("已取消")
+					}
+				}
+				label = locales.Text("工作区「") + name + "」" + result
 			}
 		}
 	}
 	if elapsed := backend.FormatDurationMS(ms); elapsed != "" {
-		label += "，用时 " + elapsed
+		label += locales.Text("，用时 ") + elapsed
 	}
 	return label + "。"
 }
@@ -161,7 +169,7 @@ func (a *desktop) showPetBubble(message string, important bool) {
 	}
 	if a.pet.bubble == nil {
 		w := mygo.NewWindow(mygo.WindowOptions{
-			Title: "Ally 宠物消息", Width: width, Height: height,
+			Title: locales.Text("Ally 宠物消息"), Width: width, Height: height,
 			Frameless: true, Transparent: true, AlwaysOnTop: true, SkipTaskbar: true,
 			DisableResize: true, DisableMaximize: true, DisableMinimize: true, DisableFullScreen: true,
 			DisableShadow: true, Hidden: true, Content: ui.View(a.petBubbleView),
@@ -193,7 +201,7 @@ func (a *desktop) showPetBubble(message string, important bool) {
 				if a.pet.bubbleOverflow > 0 {
 					count := a.pet.bubbleOverflow
 					a.pet.bubbleOverflow = 0
-					a.showPetBubble(fmt.Sprintf("还有 %d 项任务结束了，请查看对话或任务页面。", count), true)
+					a.showPetBubble(fmt.Sprintf(locales.Text("还有 %d 项任务结束了，请查看对话或任务页面。"), count), true)
 					return
 				}
 				a.pet.bubble.Hide()
@@ -295,7 +303,7 @@ func (a *desktop) sayPetChatter(now time.Time, manual bool) {
 	if manual {
 		a.pet.lastActivity = now
 	}
-	line := petChatterLines[a.pet.chatterIndex%len(petChatterLines)]
+	line := locales.Text(petChatterLines[a.pet.chatterIndex%len(petChatterLines)])
 	a.pet.chatterIndex++
 	a.showPetBubble(line, manual)
 }

@@ -3,8 +3,10 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -12,7 +14,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-const customProviderPreset = "自定义配置"
+const customProviderPreset = "Custom"
 
 type modelNumberPreset struct {
 	label string
@@ -42,7 +44,7 @@ func modelNumberCombobox(c *ui.Context, id, label string, input *string, value *
 	for _, preset := range presets {
 		options = append(options, preset.label)
 	}
-	uikit.ComboboxField(c.Key(id), input, options, label, "输入数字或选择常用值", ink).FillWidth()
+	uikit.ComboboxField(c.Key(id), input, options, label, locales.Text("输入数字或选择常用值"), ink).FillWidth()
 	parsed, err := parseModelNumberInput(*input, max, label)
 	if err != nil {
 		return err
@@ -79,6 +81,7 @@ func applyCatalogModel(a *desktop, model modelCatalogModel) {
 // modelsPageBody is the model management surface: search/import/export/add,
 // two tabs, and provider-grouped card lists.
 func (a *desktop) modelsPageBody(c *ui.Context) {
+	var list *indexedMemo[chatModelListKey, chatModelList]
 	if a.modelTab == "" {
 		a.modelTab = "对话模型"
 	}
@@ -92,12 +95,13 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 		a.modelTabIdx = wantTab
 	}
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-		uikit.Input(c.Key("model-search"), &a.modelSearch).Placeholder("搜索").Label("搜索模型").Width(200)
+		search := uikit.Input(c.Key("model-search"), &a.modelSearch).Placeholder(locales.Text("搜索")).Label(locales.Text("搜索模型")).Width(200)
+		list = memoAt[indexedMemo[chatModelListKey, chatModelList]](search, "model-list")
 		ui.Spacer(c)
-		flat(c, "导入").OnClick(func() { a.importModels() })
-		flat(c, "导出").Disabled(len(a.config.Models) == 0 && (a.config.ImageGeneration == nil || len(a.config.ImageGeneration.Models) == 0) && len(a.config.VoiceModels) == 0).
+		flat(c, locales.Text("导入")).OnClick(func() { a.importModels() })
+		flat(c, locales.Text("导出")).Disabled(len(a.config.Models) == 0 && (a.config.ImageGeneration == nil || len(a.config.ImageGeneration.Models) == 0) && len(a.config.VoiceModels) == 0).
 			OnClick(func() { a.exportModels() })
-		primary(c, "添加").OnClick(func() {
+		primary(c, locales.Text("添加")).OnClick(func() {
 			if a.modelTab == "语音模型" {
 				a.ensureVoiceModels()
 				a.voiceModels.open(-1)
@@ -113,7 +117,7 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 		})
 	})
 	tabIndex := &a.modelTabIdx
-	if a.scrollTabs(c, "models-tabs", tabIndex, "对话模型", "图片模型", "语音模型") {
+	if a.scrollTabs(c, "models-tabs", tabIndex, locales.Text("对话模型"), locales.Text("图片模型"), locales.Text("语音模型")) {
 		if a.modelTab == "语音模型" && *tabIndex != 2 {
 			a.cancelVoiceRecording()
 		}
@@ -130,11 +134,15 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 			a.openChatModelEditorIfNeeded()
 		}
 	}
-	var chatModels []backend.ModelConfig
+	var chatModels chatModelList
 	provider := ""
 	if a.modelTab == "对话模型" {
-		chatModels = a.filteredChatModels()
-		provider = a.chatModelProviderTabs(c, chatModels)
+		chatModels = list.get(len(a.config.Models), a.modelSearch,
+			func(i int) chatModelListKey { return chatModelListKeyFor(a.config.Models[i]) },
+			func() chatModelList { return buildChatModelList(a.config.Models, a.modelSearch) })
+		provider = a.chatModelProviderTabs(c, chatModels.providers)
+	} else {
+		*list = indexedMemo[chatModelListKey, chatModelList]{}
 	}
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(gapInline).Children(func() {
@@ -143,7 +151,7 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 			} else if a.modelTab == "图片模型" {
 				a.imageModelsSection(c)
 			} else {
-				a.chatModelsSection(c, chatModels, provider)
+				a.chatModelsSection(c, a.config.Models, chatModels.indices, provider)
 			}
 		})
 	})
@@ -164,19 +172,7 @@ func (a *desktop) openChatModelEditorIfNeeded() {
 	}
 }
 
-func (a *desktop) chatModelProviderTabs(c *ui.Context, models []backend.ModelConfig) string {
-	groups := map[string]bool{}
-	var order []string
-	for _, model := range models {
-		name := model.ProviderName
-		if name == "" {
-			name = customProviderName
-		}
-		if !groups[name] {
-			groups[name] = true
-			order = append(order, name)
-		}
-	}
+func (a *desktop) chatModelProviderTabs(c *ui.Context, order []string) string {
 	if len(order) == 0 {
 		return a.modelProvider
 	}
@@ -196,22 +192,23 @@ func (a *desktop) chatModelProviderTabs(c *ui.Context, models []backend.ModelCon
 	return order[providerIndex]
 }
 
-func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig, provider string) {
-	groups := map[string][]backend.ModelConfig{}
-	for _, m := range models {
+func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig, indices []int, provider string) {
+	if len(indices) == 0 {
+		emptyState(c, locales.Text("没有匹配的模型"), locales.Text("点击“添加”创建第一个模型。"), a.secondaryInk())
+		return
+	}
+
+	// The list is already sorted. Only the selected provider is drawn, so
+	// avoid copying every provider's models into groups on each frame.
+	for _, index := range indices {
+		m := models[index]
 		name := m.ProviderName
 		if name == "" {
 			name = customProviderName
 		}
-		groups[name] = append(groups[name], m)
-	}
-	if len(models) == 0 {
-		emptyState(c, "没有匹配的模型", "点击“添加”创建第一个模型。", a.secondaryInk())
-		return
-	}
-
-	for _, m := range groups[provider] {
-		m := m
+		if name != provider {
+			continue
+		}
 		rowCard(c, "chat-model-"+modelOption(m), func() {
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Wrap().Children(func() {
 				title := m.DisplayName
@@ -219,7 +216,7 @@ func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig,
 					title = m.Model
 				}
 				if title == "" {
-					title = "未选择模型"
+					title = locales.Text("未选择模型")
 				}
 				ui.Text(c, title).FontSize(fsBody).Bold()
 				neutralChip(c, apiFormatLabel(m.APIFormat))
@@ -227,7 +224,7 @@ func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig,
 					neutralChip(c, m.Model)
 				}
 				ui.Spacer(c)
-				cardFlat(c, "编辑").Disabled(a.modelSaving).OnClick(func() {
+				cardFlat(c, locales.Text("编辑")).Disabled(a.modelSaving).OnClick(func() {
 					for i, item := range a.config.Models {
 						if sameModelIdentity(modelIdentity(item), modelIdentity(m)) {
 							a.editModel(i)
@@ -236,14 +233,14 @@ func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig,
 					}
 					a.modelForm.Open = true
 				})
-				cardDanger(c, "删除").Disabled(a.modelSaving).OnClick(func() { a.deleteModel(m) })
+				cardDanger(c, locales.Text("删除")).Disabled(a.modelSaving).OnClick(func() { a.deleteModel(m) })
 			})
 			ui.Row(c).Gap(gapSection).Children(func() {
 				fieldNote(c, fmt.Sprintf("max %s · context %s", dashZero(m.MaxTokens), dashZero(m.ContextWindow)), a.secondaryInk())
 			})
 			base := m.BaseURL
 			if base == "" {
-				base = "未配置 Base URL"
+				base = locales.Text("未配置 Base URL")
 			}
 			fieldNote(c, base, a.secondaryInk())
 		})
@@ -259,27 +256,62 @@ func dashZero(v int) string {
 
 func apiFormatLabel(format string) string {
 	switch format {
-	case "openai_responses":
+	case backend.APIFormatOpenAIResponses:
 		return "OpenAI Responses"
-	case "anthropic":
+	case backend.APIFormatAnthropicMessages:
 		return "Anthropic Messages"
 	}
 	return "OpenAI Chat Completions"
 }
 
-func (a *desktop) filteredChatModels() []backend.ModelConfig {
-	query := strings.ToLower(strings.TrimSpace(a.modelSearch))
-	var out []backend.ModelConfig
-	for _, m := range a.config.Models {
+// apiFormats is the one list of interface formats: the editor's options, the
+// labels its cards show and the values it saves all come from here, so a stored
+// value is never an alias the option list cannot display.
+var apiFormats = []string{backend.APIFormatOpenAIChat, backend.APIFormatOpenAIResponses, backend.APIFormatAnthropicMessages}
+
+func apiFormatSelect(c *ui.Context, value *string, ink ...ui.Color) ui.Element {
+	items := make([]uikit.Option, len(apiFormats))
+	for i, format := range apiFormats {
+		items[i] = uikit.Option{Value: format, Label: apiFormatLabel(format)}
+	}
+	return uikit.SelectField(c, value, items, ink...)
+}
+
+type chatModelListKey struct{ provider, display, model, base string }
+
+func chatModelListKeyFor(m backend.ModelConfig) chatModelListKey {
+	return chatModelListKey{m.ProviderName, m.DisplayName, m.Model, m.BaseURL}
+}
+
+type chatModelList struct {
+	indices   []int
+	providers []string
+}
+
+func buildChatModelList(models []backend.ModelConfig, search string) chatModelList {
+	query := strings.ToLower(strings.TrimSpace(search))
+	var out chatModelList
+	for i, m := range models {
 		if query != "" {
 			haystack := strings.ToLower(m.ProviderName + " " + m.DisplayName + " " + m.Model + " " + m.BaseURL)
 			if !strings.Contains(haystack, query) {
 				continue
 			}
 		}
-		out = append(out, m)
+		out.indices = append(out.indices, i)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Model < out[j].Model })
+	sort.SliceStable(out.indices, func(i, j int) bool { return models[out.indices[i]].Model < models[out.indices[j]].Model })
+	seen := map[string]bool{}
+	for _, i := range out.indices {
+		provider := models[i].ProviderName
+		if provider == "" {
+			provider = customProviderName
+		}
+		if !seen[provider] {
+			seen[provider] = true
+			out.providers = append(out.providers, provider)
+		}
+	}
 	return out
 }
 
@@ -293,22 +325,16 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 	if a.modelDraft.AuthType == "" {
 		a.modelDraft.AuthType = "api_key"
 	}
-	title := "编辑模型"
+	title := locales.Text("编辑模型")
 	if a.modelEdit < 0 {
-		title = "添加模型"
+		title = locales.Text("添加模型")
 	}
 	formDialog(c, &a.modelForm.Open, widthModal, 740, title, "", func() {
-		fieldLabel(c, "认证方式")
-		auth := "API Key 认证"
-		if a.modelDraft.AuthType == "chatgpt_oauth" {
-			auth = "ChatGPT 登录"
-		}
-		if uikit.Select(c.Key("model-auth"), &auth, []string{"API Key 认证", "ChatGPT 登录"}, a.secondaryInk()).Label("认证方式").FillWidth().Changed() {
-			if auth == "ChatGPT 登录" {
-				a.changeModelAuth("chatgpt_oauth")
-			} else {
-				a.changeModelAuth("api_key")
-			}
+		fieldLabel(c, locales.Text("认证方式"))
+		auth := a.modelDraft.AuthType
+		authOptions := []uikit.Option{{Value: "api_key", Label: locales.Text("API Key 认证")}, {Value: "chatgpt_oauth", Label: locales.Text("ChatGPT 登录")}}
+		if uikit.SelectField(c.Key("model-auth"), &auth, authOptions, a.secondaryInk()).Label(locales.Text("认证方式")).FillWidth().Changed() {
+			a.changeModelAuth(auth)
 		}
 		if a.modelDraft.AuthType == "chatgpt_oauth" {
 			a.oauthPanel(c)
@@ -323,12 +349,12 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 			}
 			ui.Grid(c.Key("oauth-model-fields")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "供应商名称")
-					uikit.Input(c.Key("oauth-provider"), &a.modelDraft.ProviderName).Label("供应商名称").FillWidth().Disabled(true)
+					fieldLabel(c, locales.Text("供应商名称"))
+					uikit.Input(c.Key("oauth-provider"), &a.modelDraft.ProviderName).Label(locales.Text("供应商名称")).FillWidth().Disabled(true)
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "ChatGPT 模型")
-					if uikit.Select(c.Key("oauth-model"), &a.modelDraft.Model, options, a.secondaryInk()).Label("ChatGPT 模型").FillWidth().Disabled(a.modelSaving).Changed() {
+					fieldLabel(c, locales.Text("ChatGPT 模型"))
+					if uikit.Select(c.Key("oauth-model"), &a.modelDraft.Model, options, a.secondaryInk()).Label(locales.Text("ChatGPT 模型")).FillWidth().Disabled(a.modelSaving).Changed() {
 						if a.oauth != nil {
 							for _, m := range a.oauth.models {
 								if m.Slug == a.modelDraft.Model {
@@ -340,24 +366,24 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 					}
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "思考强度")
-					uikit.Select(c.Key("oauth-reasoning"), &a.modelDraft.ReasoningEffort, reasoningLevels, a.secondaryInk()).Label("思考强度").FillWidth()
+					fieldLabel(c, locales.Text("思考强度"))
+					localizedSelect(c.Key("oauth-reasoning"), &a.modelDraft.ReasoningEffort, reasoningLevels, a.secondaryInk()).Label(locales.Text("思考强度")).FillWidth()
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "上下文窗口")
-					if err := modelNumberCombobox(c, "oauth-context-window", "上下文窗口", &a.modelForm.ContextInput, &a.modelContextWindow, modelContextWindowPresets, 10_000_000, a.secondaryInk()); err != nil {
+					fieldLabel(c, locales.Text("上下文窗口"))
+					if err := modelNumberCombobox(c, "oauth-context-window", locales.Text("上下文窗口"), &a.modelForm.ContextInput, &a.modelContextWindow, modelContextWindowPresets, 10_000_000, a.secondaryInk()); err != nil {
 						inlineError(c, "oauth-context-window-error", err.Error())
 					}
 				})
 			})
 		} else {
-			fieldLabel(c, "供应商快速配置")
+			fieldLabel(c, locales.Text("供应商快速配置"))
 			names := catalogProviderOptions()
 			chosen := a.modelProviderPreset
 			if chosen == "" {
 				chosen = customProviderPreset
 			}
-			uikit.ComboboxField(c.Key("model-provider-preset"), &chosen, names, "供应商快速配置", "", a.secondaryInk()).FillWidth()
+			uikit.ComboboxField(c.Key("model-provider-preset"), &chosen, names, locales.Text("供应商快速配置"), "", a.secondaryInk()).FillWidth()
 			if chosen != a.modelProviderPreset {
 				a.invalidateModelFetch()
 				a.modelProviderPreset = chosen
@@ -384,10 +410,10 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 				}
 				chosenModel := a.modelProviderModel
 				ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-					uikit.ComboboxField(c.Key("model-provider-model"), &chosenModel, modelOptions, "供应商模型", "", a.secondaryInk()).Grow(1)
+					uikit.ComboboxField(c.Key("model-provider-model"), &chosenModel, modelOptions, locales.Text("供应商模型"), "", a.secondaryInk()).Grow(1)
 					if provider.Doc != "" {
 						services := c.Services()
-						flat(c, "查看供应商文档").OnClick(func() { services.OpenURL(provider.Doc) })
+						flat(c, locales.Text("查看供应商文档")).OnClick(func() { services.OpenURL(provider.Doc) })
 					}
 				})
 				if chosenModel != a.modelProviderModel {
@@ -399,13 +425,13 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 						a.modelDraft.DisplayName = ""
 					}
 				}
-				fieldNote(c, fmt.Sprintf("已从内置目录填入 %s 的接口地址、格式和模型参数；API Key 仍需自行填写。", provider.Name), a.secondaryInk())
+				fieldNote(c, fmt.Sprintf(locales.Text("已从内置目录填入 %s 的接口地址、格式和模型参数；API Key 仍需自行填写。"), provider.Name), a.secondaryInk())
 			}
 			ui.Grid(c.Key("model-main-fields")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
-				fieldRow(c, "provider-name", "供应商名称", &a.modelDraft.ProviderName, false)
+				fieldRow(c, "provider-name", locales.Text("供应商名称"), &a.modelDraft.ProviderName, false)
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "接口格式")
-					uikit.Select(c.Key("api-format"), &a.modelDraft.APIFormat, []string{"openai", "openai_responses", "anthropic"}, a.secondaryInk()).Label("接口格式").FillWidth()
+					fieldLabel(c, locales.Text("接口格式"))
+					apiFormatSelect(c.Key("api-format"), &a.modelDraft.APIFormat, a.secondaryInk()).Label(locales.Text("接口格式")).FillWidth()
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "Model")
@@ -414,7 +440,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 						// searchable field that lists the models fetched from the provider
 						// and still accepts a hand-typed id.
 						uikit.ComboboxField(c.Key("model-id"), &a.modelDraft.Model, a.modelDraftOptions(), "Model ID", modelIDPlaceholder(a.modelDraft.APIFormat), a.secondaryInk()).Grow(1)
-						flatBusy(c, "拉取模型", a.modelForm.FetchBusy, a.modelForm.FetchBusy || a.modelSaving).OnClick(func() { a.fetchModelList() })
+						flatBusy(c, locales.Text("拉取模型"), a.modelForm.FetchBusy, a.modelForm.FetchBusy || a.modelSaving).OnClick(func() { a.fetchModelList() })
 					})
 					if a.modelForm.FetchNote != "" {
 						inlineError(c, "model-fetch-note", a.modelForm.FetchNote)
@@ -429,15 +455,15 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 					ui.Text(c, fmt.Sprint(i+1)).FontSize(fsTiny).TextColor(a.secondaryInk()).Width(14)
 					uikit.PasswordInputInk(c, "password", fmt.Sprintf("API Key %d", i+1), &a.modelKeys[i], a.secondaryInk()).Grow(1)
 					if len(a.modelKeys) > 1 {
-						dangerIconAction(c, "remove-key-"+fmt.Sprint(i), "移除密钥", "close", 22, func() {
+						dangerIconAction(c, "remove-key-"+fmt.Sprint(i), locales.Text("移除密钥"), "close", 22, func() {
 							a.modelKeys = append(a.modelKeys[:i], a.modelKeys[i+1:]...)
 							a.modelForm.KeyEpoch++
 						})
 					}
 				})
 			}
-			flat(c, "＋ 添加 Key").OnClick(func() { a.modelKeys = append(a.modelKeys, "") })
-			fieldNote(c, "可留空（本地推理无需鉴权）。多个 Key 按顺序故障切换，只在尚未开始输出时切换。", a.secondaryInk())
+			flat(c, locales.Text("＋ 添加 Key")).OnClick(func() { a.modelKeys = append(a.modelKeys, "") })
+			fieldNote(c, locales.Text("可留空（本地推理无需鉴权）。多个 Key 按顺序故障切换，只在尚未开始输出时切换。"), a.secondaryInk())
 			ui.Grid(c.Key("model-parameters")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, "Max Tokens")
@@ -446,45 +472,45 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 					}
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "推理标签")
-					uikit.ComboboxField(c.Key("reasoning-tag"), &a.modelDraft.ReasoningTag, []string{"reasoning_content", "reasoning", "think", "thinking", "thought", "reason"}, "推理标签", "", a.secondaryInk()).FillWidth()
+					fieldLabel(c, locales.Text("推理标签"))
+					uikit.ComboboxField(c.Key("reasoning-tag"), &a.modelDraft.ReasoningTag, []string{"reasoning_content", "reasoning", "think", "thinking", "thought", "reason"}, locales.Text("推理标签"), "", a.secondaryInk()).FillWidth()
 				})
 			})
-			if a.modelDraft.APIFormat == "openai" {
-				fieldLabel(c, "Token 参数")
-				uikit.Select(c.Key("token-param"), &a.modelDraft.TokenParam, []string{"auto", "max_tokens", "max_completion_tokens"}, a.secondaryInk()).Label("Token 参数").FillWidth()
+			if a.modelDraft.APIFormat == backend.APIFormatOpenAIChat {
+				fieldLabel(c, locales.Text("Token 参数"))
+				localizedSelect(c.Key("token-param"), &a.modelDraft.TokenParam, []string{"auto", "max_tokens", "max_completion_tokens"}, a.secondaryInk()).Label(locales.Text("Token 参数")).FillWidth()
 			}
 			ui.Grid(c.Key("model-effort-context")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "思考强度")
-					uikit.Select(c.Key("reasoning-effort"), &a.modelDraft.ReasoningEffort, reasoningLevels, a.secondaryInk()).Label("思考强度").FillWidth()
+					fieldLabel(c, locales.Text("思考强度"))
+					localizedSelect(c.Key("reasoning-effort"), &a.modelDraft.ReasoningEffort, reasoningLevels, a.secondaryInk()).Label(locales.Text("思考强度")).FillWidth()
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "上下文窗口")
-					if err := modelNumberCombobox(c, "context-window", "上下文窗口", &a.modelForm.ContextInput, &a.modelContextWindow, modelContextWindowPresets, 10_000_000, a.secondaryInk()); err != nil {
+					fieldLabel(c, locales.Text("上下文窗口"))
+					if err := modelNumberCombobox(c, "context-window", locales.Text("上下文窗口"), &a.modelForm.ContextInput, &a.modelContextWindow, modelContextWindowPresets, 10_000_000, a.secondaryInk()); err != nil {
 						inlineError(c, "context-window-error", err.Error())
 					}
 				})
 			})
-			advancedLabel := "高级设置"
+			advancedLabel := locales.Text("高级设置")
 			advancedIcon := "chevron"
 			if a.modelForm.AdvancedOpen {
 				advancedIcon = "chevrondown"
 			}
 			disclosure(c, nil, advancedLabel, disclosureFlat, advancedIcon).AlignSelf(ui.Start).OnClick(func() { a.modelForm.AdvancedOpen = !a.modelForm.AdvancedOpen })
 			if a.modelForm.AdvancedOpen {
-				fieldLabel(c, "自定义请求头（JSON）")
-				textArea(c, "custom-headers", "自定义请求头", `{"X-Header": "value"}`, &a.modelHeaders, 90)
-				fieldNote(c, "随该模型每个 API 请求发送，可覆盖 Authorization / User-Agent；传输层头会被忽略。", a.secondaryInk())
+				fieldLabel(c, locales.Text("自定义请求头（JSON）"))
+				textArea(c, "custom-headers", locales.Text("自定义请求头"), `{"X-Header": "value"}`, &a.modelHeaders, 90)
+				fieldNote(c, locales.Text("随该模型每个 API 请求发送，可覆盖 Authorization / User-Agent；传输层头会被忽略。"), a.secondaryInk())
 			}
 		}
 	}, func() {
-		flatBusy(c, "测试连接", a.modelForm.TestBusy, a.modelForm.TestBusy || a.modelSaving).OnClick(func() { a.testModelDraft() })
-		flat(c, "取消").OnClick(func() {
+		flatBusy(c, locales.Text("测试连接"), a.modelForm.TestBusy, a.modelForm.TestBusy || a.modelSaving).OnClick(func() { a.testModelDraft() })
+		flat(c, locales.Text("取消")).OnClick(func() {
 			a.modelForm.Open = false
 			a.cancelOAuthWhenLeaving()
 		})
-		primaryBusy(c, map[bool]string{true: "添加", false: "保存修改"}[a.modelEdit < 0], a.modelSaving, a.modelSaving || a.modelForm.TestBusy).OnClick(func() { a.saveModelDraft() })
+		primaryBusy(c, map[bool]string{true: locales.Text("添加"), false: locales.Text("保存修改")}[a.modelEdit < 0], a.modelSaving, a.modelSaving || a.modelForm.TestBusy).OnClick(func() { a.saveModelDraft() })
 	}, a.cancelOAuthWhenLeaving)
 }
 
@@ -527,9 +553,9 @@ func sameModelEndpoint(model, draft backend.ModelConfig) bool {
 
 func modelIDPlaceholder(format string) string {
 	switch format {
-	case "openai_responses":
+	case backend.APIFormatOpenAIResponses:
 		return "gpt-4.1-mini"
-	case "anthropic":
+	case backend.APIFormatAnthropicMessages:
 		return "claude-sonnet-5"
 	}
 	return "deepseek-v4-flash"
@@ -546,12 +572,12 @@ func (a *desktop) fetchModelList() {
 	headers := map[string]string{}
 	if strings.TrimSpace(a.modelHeaders) != "" {
 		if err := json.Unmarshal([]byte(a.modelHeaders), &headers); err != nil {
-			a.modelForm.FetchNote = "拉取模型列表失败：自定义请求头必须是 JSON 对象"
+			a.modelForm.FetchNote = locales.Text("拉取模型列表失败：自定义请求头必须是 JSON 对象")
 			return
 		}
 	}
 	a.modelForm.FetchBusy = true
-	a.modelForm.FetchNote = "拉取中…"
+	a.modelForm.FetchNote = locales.Text("拉取中…")
 	a.modelForm.FetchSeq++
 	seq := a.modelForm.FetchSeq
 	base, format, auth, provider := a.modelDraft.BaseURL, a.modelDraft.APIFormat, a.modelDraft.AuthType, a.modelDraft.ProviderName
@@ -572,14 +598,14 @@ func (a *desktop) fetchModelList() {
 				return
 			}
 			if err != nil {
-				a.modelForm.FetchNote = "拉取模型列表失败：" + err.Error()
+				a.modelForm.FetchNote = locales.Text("拉取模型列表失败：") + err.Error()
 				return
 			}
 			if len(models) == 0 {
-				a.modelForm.FetchNote = "接口未返回任何模型"
+				a.modelForm.FetchNote = locales.Text("接口未返回任何模型")
 				return
 			}
-			a.modelForm.FetchNote = fmt.Sprintf("已获取 %d 个模型，可在 Model 下拉中选择。", len(models))
+			a.modelForm.FetchNote = fmt.Sprintf(locales.Text("已获取 %d 个模型，可在 Model 下拉中选择。"), len(models))
 			a.modelForm.Fetched = models
 		})
 	}()
@@ -607,9 +633,9 @@ func (a *desktop) testModelDraft() {
 		a.win.Update(func() {
 			a.modelForm.TestBusy = false
 			if err != nil {
-				a.notifyError("连接失败：" + err.Error())
+				a.notifyError(locales.Text("连接失败：") + err.Error())
 			} else {
-				a.notifySuccess("连接成功")
+				a.notifySuccess(locales.Text("连接成功"))
 			}
 		})
 		return err
@@ -628,33 +654,33 @@ func (a *desktop) imageModelsSection(c *ui.Context) {
 	}
 	card(c, "image-defaults", func() {
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-			if uikit.SwitchNative(c.Key("image-enabled"), &s.config.Enabled).Disabled(s.busy).Label("使用生图工具").Changed() {
+			if uikit.SwitchNative(c.Key("image-enabled"), &s.config.Enabled).Disabled(s.busy).Label(locales.Text("使用生图工具")).Changed() {
 				a.applyImageConfig()
 			}
-			ui.Text(c, "使用生图工具").FontSize(fsSmall)
+			ui.Text(c, locales.Text("使用生图工具")).FontSize(fsSmall)
 			ui.Spacer(c)
-			fieldLabel(c, "默认生图模型")
-			if uikit.Select(c.Key("image-generate"), &s.generate, s.options(false), a.secondaryInk()).Label("默认生图模型").Width(220).Disabled(s.busy).Changed() {
+			fieldLabel(c, locales.Text("默认生图模型"))
+			if imageModelSelect(c.Key("image-generate"), &s.generate, s.options(false), a.secondaryInk()).Label(locales.Text("默认生图模型")).Width(220).Disabled(s.busy).Changed() {
 				s.chooseDefault(s.generate, false)
 				a.applyImageConfig()
 			}
-			fieldLabel(c, "默认编辑模型")
-			if uikit.Select(c.Key("image-edit"), &s.edit, s.options(true), a.secondaryInk()).Label("默认编辑模型").Width(220).Disabled(s.busy).Changed() {
+			fieldLabel(c, locales.Text("默认编辑模型"))
+			if imageModelSelect(c.Key("image-edit"), &s.edit, s.options(true), a.secondaryInk()).Label(locales.Text("默认编辑模型")).Width(220).Disabled(s.busy).Changed() {
 				s.chooseDefault(s.edit, true)
 				a.applyImageConfig()
 			}
-			cardFlat(c, "测试").Disabled(s.busy || s.config.GenerateModel == nil).OnClick(func() {
+			cardFlat(c, locales.Text("测试")).Disabled(s.busy || s.config.GenerateModel == nil).OnClick(func() {
 				if s.config.GenerateModel != nil {
 					s.test = &imageModelTest{model: *s.config.GenerateModel}
 					s.testOpen = true
 				}
 			})
 		})
-		fieldNote(c, "供所有会话共用，原图与每次编辑结果保存在本地。MiniMax 仅支持文生图；工具列表变更在新会话生效。", a.secondaryInk())
+		fieldNote(c, locales.Text("供所有会话共用，原图与每次编辑结果保存在本地。MiniMax 仅支持文生图；工具列表变更在新会话生效。"), a.secondaryInk())
 	})
 	models := a.filteredImageModels(s)
 	if len(models) == 0 {
-		emptyState(c, "尚未配置生图模型", "点击“添加”创建第一个生图模型。", a.secondaryInk())
+		emptyState(c, locales.Text("尚未配置生图模型"), locales.Text("点击“添加”创建第一个生图模型。"), a.secondaryInk())
 	} else {
 		for _, m := range models {
 			m := m
@@ -663,13 +689,13 @@ func (a *desktop) imageModelsSection(c *ui.Context) {
 					ui.Text(c, m.Model).FontSize(fsBody).Bold()
 					neutralChip(c, imageProtocolLabel(m.Protocol))
 					if imageLabel(s.config.GenerateModel) == modelLabel(m.ProviderName, m.Model) {
-						accentChip(c, "默认生图模型")
+						accentChip(c, locales.Text("默认生图模型"))
 					}
 					if imageLabel(s.config.EditModel) == modelLabel(m.ProviderName, m.Model) {
-						accentChip(c, "默认编辑模型")
+						accentChip(c, locales.Text("默认编辑模型"))
 					}
 					ui.Spacer(c)
-					cardFlat(c, "编辑").Disabled(s.busy).OnClick(func() {
+					cardFlat(c, locales.Text("编辑")).Disabled(s.busy).OnClick(func() {
 						for i, item := range s.config.Models {
 							if imageIdentityKey(item.ProviderName, item.Model) == imageIdentityKey(m.ProviderName, m.Model) {
 								s.openForm(i)
@@ -677,11 +703,11 @@ func (a *desktop) imageModelsSection(c *ui.Context) {
 							}
 						}
 					})
-					cardFlat(c, "测试").Disabled(s.busy).OnClick(func() {
+					cardFlat(c, locales.Text("测试")).Disabled(s.busy).OnClick(func() {
 						s.test = &imageModelTest{model: *imageIdentity(m)}
 						s.testOpen = true
 					})
-					cardDanger(c, "删除").Disabled(s.busy).OnClick(func() {
+					cardDanger(c, locales.Text("删除")).Disabled(s.busy).OnClick(func() {
 						a.deleteImageModel(m)
 					})
 				})
@@ -721,12 +747,12 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 	if s == nil || !s.formOpen {
 		return
 	}
-	title := "编辑生图模型"
+	title := locales.Text("编辑生图模型")
 	if s.editing < 0 {
-		title = "添加生图模型"
+		title = locales.Text("添加生图模型")
 	}
 	formDialog(c, &s.formOpen, widthModal, 620, title, "", func() {
-		fieldRow(c, "image-provider", "供应商名称", &s.draft.ProviderName, false)
+		fieldRow(c, "image-provider", locales.Text("供应商名称"), &s.draft.ProviderName, false)
 		ui.Column(c).Gap(gapTight).Children(func() {
 			fieldLabel(c, "Model")
 			before := s.draft.Model
@@ -736,10 +762,16 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 			}
 		})
 		ui.Column(c).Gap(gapTight).Children(func() {
-			fieldLabel(c, "生图协议")
-			protocols := []string{"openai-images", "xai-images", "minimax-images"}
+			fieldLabel(c, locales.Text("生图协议"))
+			// Values stay the three the backend validates; the labels say which
+			// service each one talks to, as the model cards already do.
+			protocols := []uikit.Option{
+				{Value: "openai-images", Label: "OpenAI Images"},
+				{Value: "xai-images", Label: "xAI Images"},
+				{Value: "minimax-images", Label: "MiniMax Images"},
+			}
 			beforeProtocol := s.draft.Protocol
-			uikit.Select(c.Key("image-protocol"), &s.draft.Protocol, protocols, a.secondaryInk()).Label("生图协议").FillWidth()
+			uikit.SelectField(c.Key("image-protocol"), &s.draft.Protocol, protocols, a.secondaryInk()).Label(locales.Text("生图协议")).FillWidth()
 			if s.draft.Protocol != beforeProtocol {
 				switch s.draft.Protocol {
 				case "openai-images":
@@ -757,28 +789,28 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 			i := i
 			ui.Row(c.Key(fmt.Sprintf("image-key-%d-%d", s.keyEpoch, i))).Gap(gapTight).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, fmt.Sprint(i+1)).FontSize(fsTiny).TextColor(a.secondaryInk()).Width(14)
-				uikit.PasswordInputInk(c, "password", fmt.Sprintf("图片 API Key %d", i+1), &s.draftKeys[i], a.secondaryInk()).Grow(1)
+				uikit.PasswordInputInk(c, "password", fmt.Sprintf(locales.Text("图片 API Key %d"), i+1), &s.draftKeys[i], a.secondaryInk()).Grow(1)
 				if len(s.draftKeys) > 1 {
-					dangerIconAction(c, "image-remove-key-"+fmt.Sprint(i), "移除密钥", "close", 22, func() {
+					dangerIconAction(c, "image-remove-key-"+fmt.Sprint(i), locales.Text("移除密钥"), "close", 22, func() {
 						s.draftKeys = append(s.draftKeys[:i], s.draftKeys[i+1:]...)
 						s.keyEpoch++
 					})
 				}
 			})
 		}
-		flat(c, "＋ 添加 Key").OnClick(func() { s.draftKeys = append(s.draftKeys, "") })
+		flat(c, locales.Text("＋ 添加 Key")).OnClick(func() { s.draftKeys = append(s.draftKeys, "") })
 		advancedIcon := "chevron"
 		if s.advancedOpen {
 			advancedIcon = "chevrondown"
 		}
-		disclosure(c, nil, "高级设置", disclosureFlat, advancedIcon).AlignSelf(ui.Start).OnClick(func() { s.advancedOpen = !s.advancedOpen })
+		disclosure(c, nil, locales.Text("高级设置"), disclosureFlat, advancedIcon).AlignSelf(ui.Start).OnClick(func() { s.advancedOpen = !s.advancedOpen })
 		if s.advancedOpen {
-			fieldLabel(c, "自定义请求头（JSON）")
-			textArea(c, "image-headers", "自定义请求头", `{"X-Header": "value"}`, &s.headers, 80)
+			fieldLabel(c, locales.Text("自定义请求头（JSON）"))
+			textArea(c, "image-headers", locales.Text("自定义请求头"), `{"X-Header": "value"}`, &s.headers, 80)
 		}
 	}, func() {
-		flat(c, "取消").OnClick(func() { s.formOpen = false })
-		primary(c, "保存").Disabled(s.busy).OnClick(func() { a.saveImageModelDraft() })
+		flat(c, locales.Text("取消")).OnClick(func() { s.formOpen = false })
+		primary(c, locales.Text("保存")).Disabled(s.busy).OnClick(func() { a.saveImageModelDraft() })
 	})
 }
 
@@ -821,7 +853,7 @@ func (a *desktop) deleteImageModel(m backend.ImageModelConfig) {
 	if index < 0 {
 		return
 	}
-	a.confirmAction("删除图片模型", modelLabel(m.ProviderName, m.Model), func() error { return nil }, func() {
+	a.confirmAction(locales.Text("删除图片模型"), modelLabel(m.ProviderName, m.Model), func() error { return nil }, func() {
 		_ = s.replace(index, nil)
 		s.formOpen = false
 		a.applyImageConfig()
@@ -839,8 +871,8 @@ func (a *desktop) imageModelTestDialog(c *ui.Context) {
 	}
 	t := s.test
 	dialog := modalCard(c, &s.testOpen, widthModalWide, func() {
-		modalTitle(c, "测试", modelLabel(t.model.ProviderName, t.model.Model))
-		textArea(c, "test-prompt", "提示词", "描述要生成或编辑的图片…", &t.prompt, 100)
+		modalTitle(c, locales.Text("测试"), modelLabel(t.model.ProviderName, t.model.Model))
+		textArea(c, "test-prompt", locales.Text("提示词"), locales.Text("描述要生成或编辑的图片…"), &t.prompt, 100)
 		canEdit := false
 		for _, m := range s.config.Models {
 			if imageIdentityKey(m.ProviderName, m.Model) == imageIdentityKey(t.model.ProviderName, t.model.Model) {
@@ -849,12 +881,12 @@ func (a *desktop) imageModelTestDialog(c *ui.Context) {
 			}
 		}
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-			flat(c, "添加参考图").Disabled(t.busy || !canEdit || len(t.inputs) >= 5).OnClick(func() { a.chooseImageTestInputs(s, t) })
-			uikit.Select(c.Key("test-ratio"), &t.ratio, []string{"", "1:1", "3:2", "2:3"}, a.secondaryInk()).Label("比例").Width(120).Disabled(t.busy)
+			flat(c, locales.Text("添加参考图")).Disabled(t.busy || !canEdit || len(t.inputs) >= 5).OnClick(func() { a.chooseImageTestInputs(s, t) })
+			localizedSelect(c.Key("test-ratio"), &t.ratio, []string{"", "1:1", "3:2", "2:3"}, a.secondaryInk()).Label(locales.Text("比例")).Width(120).Disabled(t.busy)
 			if canEdit {
-				fieldNote(c, "有参考图时使用图生图。最多 5 张 PNG/JPEG/WebP，合计 20 MiB。", a.secondaryInk())
+				fieldNote(c, locales.Text("有参考图时使用图生图。最多 5 张 PNG/JPEG/WebP，合计 20 MiB。"), a.secondaryInk())
 			} else {
-				fieldNote(c, "此模型仅支持文生图。", a.secondaryInk())
+				fieldNote(c, locales.Text("此模型仅支持文生图。"), a.secondaryInk())
 			}
 		})
 		if len(t.inputs) > 0 {
@@ -865,18 +897,18 @@ func (a *desktop) imageModelTestDialog(c *ui.Context) {
 						if in.preview != nil {
 							ui.Image(c, in.preview).Size(88, 88).Fit(ui.Contain)
 						}
-						dangerButton(c, "删除").Disabled(t.busy).OnClick(func() { t.inputs = append(t.inputs[:i], t.inputs[i+1:]...) })
+						dangerButton(c, locales.Text("删除")).Disabled(t.busy).OnClick(func() { t.inputs = slices.Delete(t.inputs, i, i+1) })
 					})
 				}
 			})
 		}
 		inlineError(c, "test-err", t.err)
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-			fieldNote(c, "仅显示本次打开期间的结果，原图自动保存在本地。", a.secondaryInk())
+			fieldNote(c, locales.Text("仅显示本次打开期间的结果，原图自动保存在本地。"), a.secondaryInk())
 			ui.Spacer(c)
-			label := "文生图"
+			label := locales.Text("文生图")
 			if len(t.inputs) > 0 {
-				label = "图生图"
+				label = locales.Text("图生图")
 			}
 			primaryBusy(c, label, t.busy, t.busy || strings.TrimSpace(t.prompt) == "").OnClick(func() { a.runImageModelTest(s, t) })
 		})
@@ -889,11 +921,11 @@ func (a *desktop) imageModelTestDialog(c *ui.Context) {
 					ui.Image(c, result.preview).Size(260, 260).Fit(ui.Contain).Radius(radiusSmall)
 				}
 				ref := result.meta.Ref
-				cardFlat(c, "下载原图").OnClick(func() {
+				cardFlat(c, locales.Text("下载原图")).OnClick(func() {
 					a.job(func() error {
 						path, err := a.core.ExportGeneratedImage(ref)
 						if err == nil && path != "" {
-							a.win.Update(func() { a.notify("已导出：" + path) })
+							a.win.Update(func() { a.notify(locales.Text("已导出：") + path) })
 						}
 						return err
 					})
@@ -915,7 +947,7 @@ func (a *desktop) importModels() {
 	}
 	image := a.modelTab == "图片模型"
 	go func() {
-		path, err := a.core.SelectJSONFile("导入模型配置")
+		path, err := a.core.SelectJSONFile(locales.Text("导入模型配置"))
 		if err != nil || path == "" {
 			if err != nil {
 				a.fail(err)
@@ -934,18 +966,20 @@ func (a *desktop) importModels() {
 			ImageEdit     *backend.ModelIdentity `json:"editModel"`
 		}
 		if err := json.Unmarshal([]byte(data), &payload); err != nil {
-			a.win.Update(func() { a.notify("无法导入，请选择有效的模型配置文件。") })
+			a.win.Update(func() { a.notify(locales.Text("无法导入，请选择有效的模型配置文件。")) })
 			return
 		}
 		if image {
 			if payload.Kind != "" && payload.Kind != "ally-image-models" {
-				a.win.Update(func() { a.notify("这是对话模型配置文件，请切换到「对话模型」分类导入。") })
+				a.win.Update(func() {
+					a.notify(locales.Text("这是对话模型配置文件，请切换到「对话模型」分类导入。"))
+				})
 				return
 			}
 			var models []backend.ImageModelConfig
 			raw, _ := json.Marshal(payload.Models)
 			if err := json.Unmarshal(raw, &models); err != nil {
-				a.win.Update(func() { a.notify("无法导入，请选择有效的 Ally 生图模型配置文件。") })
+				a.win.Update(func() { a.notify(locales.Text("无法导入，请选择有效的 Ally 生图模型配置文件。")) })
 				return
 			}
 			a.win.Update(func() {
@@ -967,18 +1001,20 @@ func (a *desktop) importModels() {
 					}
 				}
 				a.applyImageConfig()
-				a.notifySuccess(fmt.Sprintf("导入完成：新增 %d 个，更新 %d 个", added, updated))
+				a.notifySuccess(fmt.Sprintf(locales.Text("导入完成：新增 %d 个，更新 %d 个"), added, updated))
 			})
 			return
 		}
 		if payload.Kind != "" && payload.Kind != "ally-chat-models" {
-			a.win.Update(func() { a.notify("这是生图模型配置文件，请切换到「图片模型」分类导入。") })
+			a.win.Update(func() {
+				a.notify(locales.Text("这是生图模型配置文件，请切换到「图片模型」分类导入。"))
+			})
 			return
 		}
 		var models []backend.ModelConfig
 		raw, _ := json.Marshal(payload.Models)
 		if err := json.Unmarshal(raw, &models); err != nil {
-			a.win.Update(func() { a.notify("无法导入，请选择有效的 Ally 对话模型配置文件。") })
+			a.win.Update(func() { a.notify(locales.Text("无法导入，请选择有效的 Ally 对话模型配置文件。")) })
 			return
 		}
 		a.win.Update(func() {
@@ -999,7 +1035,7 @@ func (a *desktop) importModels() {
 					added++
 				}
 			}
-			a.saveConfig(cfg, fmt.Sprintf("导入完成：新增 %d 个，更新 %d 个", added, updated))
+			a.saveConfig(cfg, fmt.Sprintf(locales.Text("导入完成：新增 %d 个，更新 %d 个"), added, updated))
 		})
 	}()
 }

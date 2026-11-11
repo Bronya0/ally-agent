@@ -4,10 +4,14 @@ package app
 import (
 	"errors"
 	"maps"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
 )
+
+// Clone returns an owned configuration snapshot for a host's queued writes.
+func (cfg ConfigState) Clone() ConfigState { return cloneConfig(cfg) }
 
 // cloneConfig owns mutable values; runtime service dependencies remain shared.
 func cloneConfig(cfg ConfigState) ConfigState {
@@ -200,9 +204,7 @@ func settingsConfig(base, req ConfigState) ConfigState {
 	if req.ToolConcurrency != 0 {
 		cfg.ToolConcurrency = req.ToolConcurrency
 	}
-	if req.LLMRetries != 0 {
-		cfg.LLMRetries = req.LLMRetries
-	}
+	cfg.LLMRetries = req.LLMRetries
 	if req.CompactThreshold != 0 {
 		cfg.CompactThreshold = req.CompactThreshold
 	}
@@ -242,4 +244,20 @@ func settingsConfig(base, req ConfigState) ConfigState {
 		}
 	}
 	return normalizeStoredConfig(cfg)
+}
+
+// Apply only edits made since the page was opened. Unchanged fields retain
+// the latest committed value, including registries modified by other pages.
+func settingsConfigChanges(current, baseline, draft ConfigState) ConfigState {
+	baseline = normalizeStoredConfig(cloneConfig(baseline))
+	edited := settingsConfig(baseline, draft)
+	result := cloneConfig(current)
+	before, after := reflect.ValueOf(baseline), reflect.ValueOf(edited)
+	dest := reflect.ValueOf(&result).Elem()
+	for i := 0; i < dest.NumField(); i++ {
+		if dest.Field(i).CanSet() && !reflect.DeepEqual(before.Field(i).Interface(), after.Field(i).Interface()) {
+			dest.Field(i).Set(after.Field(i))
+		}
+	}
+	return result
 }

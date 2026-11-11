@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"ally-dev/locales"
 	"fmt"
 	"runtime"
 	"time"
@@ -76,26 +77,26 @@ func completionTitle(event string, payload map[string]any) string {
 		if name == "" {
 			name = str(task, "id")
 		}
-		result := "已完成"
+		result := locales.Text("已完成")
 		if event == "scheduled:run_error" {
-			result = "出错"
+			result = locales.Text("出错")
 			if str(task, "lastStatus") == "cancelled" {
-				result = "已取消"
+				result = locales.Text("已取消")
 			}
 		}
 		if name == "" {
-			return "定时任务" + result
+			return locales.Text("定时任务") + result
 		}
-		return "定时任务「" + name + "」" + result
+		return locales.Text("定时任务「") + name + "」" + result
 	}
 	switch event {
 	case "run:done":
-		return "任务完成"
+		return locales.Text("任务完成")
 	case "run:error":
 		if str(payload, "status") == "cancelled" {
-			return "任务已取消"
+			return locales.Text("任务已取消")
 		}
-		return "任务出错"
+		return locales.Text("任务出错")
 	default:
 		return ""
 	}

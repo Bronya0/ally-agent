@@ -2960,7 +2960,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var req SSHClusterRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			data, err = a.executeSSHClusterTool(ctx, sessionID, cfg.Workspace, req)
+			data, err = a.executeSSHClusterTool(cfg.Workspace, req)
 		}
 	case "remote_read":
 		var req RemoteReadFileRequest

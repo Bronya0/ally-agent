@@ -32,22 +32,33 @@ func surfacePanel(c *ui.Context, key any, padding, radius float32, build func())
 	return e.Children(build)
 }
 
-// overlayPanel is the floating picker used by the composer and the model menu:
-// same material as a card, plus the shadow and max height an overlay needs. It
-// keeps the keyboard focus in the composer, whose input drives these pickers, so
-// pressing a row or the button that opened it leaves the arrow keys working.
-func overlayPanel(c *ui.Context, key any, width, height float32, build func()) ui.Element {
-	e := ui.Column(c.Key(key)).FillWidth().Gap(gapTight).Radius(radiusCard).Clip()
-	if width > 0 {
-		e.Width(width)
-	}
-	if height > 0 {
-		e.Height(height)
-	}
-	paintSurface(e, surfaceFill(c), surfaceBorder(c))
-	e.Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.28))
-	e.KeepFocus()
-	return e.Children(build)
+// Composer pickers share native dismissal and float above the input without
+// changing transcript layout. The whole composer anchor includes its trigger.
+func composerPopover(c *ui.Context, anchor ui.Element, open *bool, label string, height float32, build func(ui.Element)) {
+	ui.PopoverBase(c, anchor, open, func(panel ui.Element) {
+		width := chatMaxWidth - 40
+		bounds := anchor.Bounds()
+		if bounds.W > 40 {
+			width = min(width, bounds.W-40)
+		}
+		popoverChrome(c, panel, width)
+		panel.Column().Label(label).Padding(0).Gap(gapTight).Height(height).MaxHeightPercent(85).Clip().KeepFocus().
+			AttachTo(anchor, ui.AnchorTopLeft, ui.AnchorBottomLeft).Left(20).Margin(0, 0, 6, 0).
+			Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.28)).Transition(uikit.PopupTransition())
+		// The header stays fixed while the list scrolls within available space.
+		if bounds.Y >= 110 {
+			panel.MaxHeight(bounds.Y - 10)
+		} else {
+			_, windowHeight := c.Size()
+			below := windowHeight - bounds.Y - bounds.H - 10
+			if below >= 110 {
+				panel.AttachTo(anchor, ui.AnchorBottomLeft, ui.AnchorTopLeft).Margin(6, 0, 0, 0).MaxHeight(below)
+			} else {
+				panel.AttachTo(anchor, ui.AnchorBottomLeft, ui.AnchorBottomLeft).Margin(0)
+			}
+		}
+		build(panel)
+	})
 }
 
 // hoverRow paints the shared hover / selected tint on a row that already lays

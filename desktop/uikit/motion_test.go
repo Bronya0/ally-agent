@@ -8,7 +8,7 @@ import (
 )
 
 func TestActionHoverFadesWithoutMoving(t *testing.T) {
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		c.SetTheme(ui.LightTheme())
 		ui.Column(c).Fill().Padding(20).Background(ui.Hex("#ffffff")).Children(func() { Action(c.Key("action"), "测试", ActionOptions{Style: Quaternary}) })
 	}, 240, 120)
@@ -33,7 +33,7 @@ func TestActionHoverFadesWithoutMoving(t *testing.T) {
 // when the desktop asks for less motion.
 func TestHoverFadeSettles(t *testing.T) {
 	for _, reduced := range []bool{false, true} {
-		tt := ui.NewTester(func(c *ui.Context) {
+		tt := chineseTester(func(c *ui.Context) {
 			c.SetTheme(ui.LightTheme())
 			ui.Column(c).Fill().Padding(20).Background(ui.Hex("#ffffff")).Children(func() {
 				row := ui.Row(c.Key("row")).Size(80, 40).Label("悬停行")
@@ -70,7 +70,7 @@ func TestHoverFadeSettles(t *testing.T) {
 func TestRevealAndReducedMotion(t *testing.T) {
 	for _, reduced := range []bool{false, true} {
 		open := true
-		tt := ui.NewTester(func(c *ui.Context) {
+		tt := chineseTester(func(c *ui.Context) {
 			ui.Column(c).Fill().Children(func() {
 				Reveal(c.Key("details"), open, func() { ui.Box(c).Height(80).FillWidth() })
 				ui.Text(c, "后续内容").Label("following")

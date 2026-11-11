@@ -3,9 +3,9 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"fmt"
 	"math"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -16,6 +16,10 @@ import (
 type modeItem struct {
 	id, label, icon string
 }
+
+// railModeGap is the distance between two rail entries, shared by both states:
+// with one row pitch the entries keep their heights when the rail collapses.
+const railModeGap float32 = 3
 
 var baseModes = []modeItem{
 	{"chat", "Agent", "chat"},
@@ -81,12 +85,12 @@ func (a *desktop) pluginModes() pluginModeIndex {
 func (a *desktop) rail(c *ui.Context) {
 	p := a.currentPalette()
 	if !a.prefs.RailExpanded {
-		rail := ui.Column(c).Width(widthRailCollapsed).Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, railPadH).Gap(gapTight).AlignItems(ui.Center)
+		rail := ui.Column(c).Width(widthRailCollapsed).Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, railPadH).Gap(railModeGap).AlignItems(ui.Center)
 		rail.Children(func() {
 			ui.Scroll(c).Key("rail-modes").FillWidth().Grow(1).MinHeight(0).Children(func() {
-				ui.Column(c).FillWidth().Gap(gapTight).Children(func() { a.railModes(c, false) })
+				ui.Column(c).FillWidth().AlignItems(ui.Center).Gap(railModeGap).Children(func() { a.railModes(c, false) })
 			})
-			railToggleButton(c, "rail-open", "展开侧边栏（显示菜单名）", "expand", func() {
+			railToggleButton(c, "rail-open", locales.Text("展开侧边栏（显示菜单名）"), "expand", func() {
 				a.prefs.RailExpanded = true
 				a.savePrefs()
 			}, a.secondaryInk()).TextColor(p.muted)
@@ -97,11 +101,11 @@ func (a *desktop) rail(c *ui.Context) {
 }
 
 func (a *desktop) railBody(c *ui.Context, width *float32) {
-	*ui.Local(c.Root(), "rail-content-width", func() float32 { return 200 }) = *width
 	p := a.currentPalette()
-	// Split panes are boxes: the rail must explicitly take the pane's height
-	// before the middle section can grow and keep the toggle at the bottom.
-	rail := ui.Column(c).Width(*width).FillHeight().Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(6).Gap(3)
+	// The vertical padding matches the collapsed rail's 4, and the gap their shared
+	// railModeGap: one row pitch in both states keeps the entries at the same
+	// heights, so collapsing does not scroll them.
+	rail := ui.Column(c).Width(*width).FillHeight().Shrink(0).Background(p.chromeColor()).BorderWidth(0, 1, 0, 0).BorderColor(p.line).Padding(4, 6).Gap(railModeGap)
 	rail.Children(func() {
 		a.railModes(c, true)
 		ui.Column(c).Grow(1).MinHeight(0).Gap(gapInline).Children(func() {
@@ -109,7 +113,7 @@ func (a *desktop) railBody(c *ui.Context, width *float32) {
 			a.railSessions(c)
 		})
 		ui.Row(c).Shrink(0).Gap(gapTight).AlignItems(ui.Center).Children(func() {
-			railToggleButton(c, "rail-close", "收起侧边栏", "collapse", func() {
+			railToggleButton(c, "rail-close", locales.Text("收起侧边栏"), "collapse", func() {
 				a.prefs.RailExpanded = false
 				a.savePrefs()
 			}, a.secondaryInk()).TextColor(p.muted)
@@ -152,11 +156,11 @@ func (a *desktop) railModes(c *ui.Context, expanded bool) {
 		if mode.id == "chat" && strings.HasPrefix(a.page, "plugin:") {
 			active = false
 		}
-		a.railModeButton(c, expanded, mode.id, mode.label, mode.icon, active)
+		a.railModeButton(c, expanded, mode.id, locales.Text(mode.label), mode.icon, active)
 	}
 	// The settings entry is always last and never hidden.
 	active := a.page == "settings"
-	a.railModeButton(c, expanded, "settings", "设置", "settings", active)
+	a.railModeButton(c, expanded, "settings", locales.Text("设置"), "settings", active)
 }
 
 func pluginTitle(p backend.PluginInfo) string {
@@ -176,7 +180,7 @@ func (a *desktop) railModeButton(c *ui.Context, expanded bool, id, label, iconNa
 		row.Children(func() {
 			railNavigationButton(c, "nav-"+id, label, iconName, expanded, active, nil, a.secondaryInk()).Grow(1).MinWidth(0).Padding(0, 28, 0, 0).OnClick(func() { a.changePage(id) })
 			ui.Box(c.Key("agent-new-slot")).Absolute().Right(4).Top(3).Size(26, 26).Children(func() {
-				b := iconAction(c, "agent-new-session", "新建会话", "plus", 26, func() { a.newSession() })
+				b := iconAction(c, "agent-new-session", locales.Text("新建会话"), "plus", 26, func() { a.newSession() })
 				opacity := float32(0)
 				if show {
 					opacity = 1
@@ -213,7 +217,7 @@ func (a *desktop) railGroupButton(c *ui.Context, expanded bool, head backend.Plu
 
 func (a *desktop) railWorkspaces(c *ui.Context) {
 	ui.Column(c).Key("rail-workspaces").FillWidth().Shrink(1).MinHeight(24).Gap(3).Children(func() {
-		a.railSectionHeader(c, "rail-ws", "工作区", "folderopen", a.prefs.RailWorkspaceOpen, "添加工作区", func() {
+		a.railSectionHeader(c, "rail-ws", locales.Text("工作区"), "folderopen", a.prefs.RailWorkspaceOpen, locales.Text("添加工作区"), func() {
 			a.prefs.RailWorkspaceOpen = !a.prefs.RailWorkspaceOpen
 			a.savePrefs()
 		}, func() { a.chooseWorkspace() })
@@ -221,14 +225,14 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 			return
 		}
 		ui.Scroll(c.Key("workspace-items")).FillWidth().MaxHeight(180).MinHeight(0).Children(func() {
-			a.railWorkspaceRow(c, "", "临时工作区", "在系统临时目录创建沙箱，随标签页关闭自动删除")
-			roots := a.sessionWorkspaceRoots()
+			a.railWorkspaceRow(c, "", locales.Text("临时工作区"), locales.Text("在系统临时目录创建沙箱，随标签页关闭自动删除"))
+			roots := a.workspaceHistoryRoots()
 			for _, root := range roots {
 				root := root
 				a.railWorkspaceRow(c, root, workspaceLabel(root), root)
 			}
 			if len(roots) == 0 {
-				ui.Text(c, "无历史记录").FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset(c))
+				ui.Text(c, locales.Text("无历史记录")).FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset())
 			}
 		})
 	})
@@ -244,7 +248,7 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 	if t := a.current(); t != nil && strings.EqualFold(t.Workspace, root) {
 		active = true
 	}
-	row := ui.Row(c.Key("rail-ws-"+root)).Height(26).Radius(6).Padding(0, railContentInset(c)).Gap(gapInline).AlignItems(ui.Center)
+	row := ui.Row(c.Key("rail-ws-"+root)).Height(26).Radius(6).Padding(0, railContentInset()).Gap(gapInline).AlignItems(ui.Center)
 	fill := ui.Transparent
 	ink := a.secondaryInk()
 	if active {
@@ -266,7 +270,7 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 		})
 		btn.Children(func() { ui.Text(c, label).FontSize(fsSmall).TextColor(ink).SingleLine() })
 		if root != "" {
-			b := dangerIconAction(c, "rail-ws-del-"+root, workspaceDeleteHint, "close", 18, func() {
+			b := dangerIconAction(c, "rail-ws-del-"+root, locales.Text(workspaceDeleteHint), "close", 18, func() {
 				a.removeWorkspaceHistory(root)
 			})
 			railHoverAction(c, row, b, false)
@@ -275,18 +279,19 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 }
 
 // removeWorkspaceHistory deletes the persisted sessions recorded for one
-// workspace. The rail entry is derived from the session index, so hiding the
-// row would survive only until the next refresh and leave the files behind.
+// workspace and forgets its visit after successful deletion. A workspace opened
+// without a saved session only needs its visit removed.
 func (a *desktop) removeWorkspaceHistory(root string) {
 	if root == "" || a.closing || a.core == nil {
 		return
 	}
 	ids := a.workspaceSessionIDs(root)
 	if len(ids) == 0 {
+		a.forgetWorkspaceVisit(root)
 		return
 	}
 	var failures []string
-	a.confirmAction("删除历史记录", fmt.Sprintf("%s 的 %d 个会话将被永久删除，无法恢复。正在运行或压缩中的会话会跳过。", workspaceLabel(root), len(ids)), func() error {
+	a.confirmAction(locales.Text("删除历史记录"), fmt.Sprintf(locales.Text("%s 的 %d 个会话将被永久删除，无法恢复。正在运行或压缩中的会话会跳过。"), workspaceLabel(root), len(ids)), func() error {
 		failures = failures[:0]
 		for _, id := range ids {
 			if err := a.core.DeleteSession(id); err != nil {
@@ -298,10 +303,11 @@ func (a *desktop) removeWorkspaceHistory(root string) {
 		a.forgetSessions(ids)
 		a.reloadSessions()
 		if len(failures) > 0 {
-			a.notifyError(fmt.Sprintf("已删除 %d 个会话，%d 个未能删除：%s", len(ids)-len(failures), len(failures), strings.Join(failures, "；")))
+			a.notifyError(fmt.Sprintf(locales.Text("已删除 %d 个会话，%d 个未能删除：%s"), len(ids)-len(failures), len(failures), strings.Join(failures, "；")))
 			return
 		}
-		a.notifySuccess(fmt.Sprintf("已删除 %d 个会话", len(ids)))
+		a.forgetWorkspaceVisit(root)
+		a.notifySuccess(fmt.Sprintf(locales.Text("已删除 %d 个会话"), len(ids)))
 	})
 }
 
@@ -321,7 +327,7 @@ func (a *desktop) workspaceSessionIDs(root string) []string {
 func (a *desktop) railSessions(c *ui.Context) {
 	p := a.currentPalette()
 	ui.Column(c).Key("rail-sessions").FillWidth().Grow(1).MinHeight(24).Gap(3).Children(func() {
-		a.railSectionHeader(c, "rail-sess", "历史会话", "history", a.prefs.RailSessionsOpen, "新建会话", func() {
+		a.railSectionHeader(c, "rail-sess", locales.Text("历史会话"), "history", a.prefs.RailSessionsOpen, locales.Text("新建会话"), func() {
 			a.prefs.RailSessionsOpen = !a.prefs.RailSessionsOpen
 			a.savePrefs()
 		}, func() { a.newSession() })
@@ -335,7 +341,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 		}
 		entries, _ := a.workspaceSessions(workspace)
 		if len(entries) == 0 {
-			ui.Text(c, "当前工作区暂无历史会话").FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset(c))
+			ui.Text(c, locales.Text("当前工作区暂无历史会话")).FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset())
 			return
 		}
 		ui.Scroll(c.Key("session-items")).FillWidth().Grow(1).MinHeight(0).Children(func() {
@@ -343,7 +349,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 				entry := entry
 				busy := entry.ID == sessionBusyID(a, entry.ID)
 				active := t != nil && t.ID == entry.ID
-				row := ui.Row(c.Key("rail-sess-"+entry.ID)).Height(30).Radius(6).Padding(0, railContentInset(c)).AlignItems(ui.Center).Gap(gapInline)
+				row := ui.Row(c.Key("rail-sess-"+entry.ID)).Height(30).Radius(6).Padding(0, railContentInset()).AlignItems(ui.Center).Gap(gapInline)
 				fill := ui.Transparent
 				ink := a.secondaryInk()
 				if active {
@@ -355,9 +361,9 @@ func (a *desktop) railSessions(c *ui.Context) {
 				row.Background(fadeColor(row, "fill", fill))
 				title := entry.Title
 				if title == "" {
-					title = "会话"
+					title = locales.Text("会话")
 				}
-				uikit.RightTooltip(c, row, fmt.Sprintf("%s\n%s · %d 条", title, fmtTime(entry.UpdatedAt), entry.MessageCount))
+				uikit.RightTooltip(c, row, fmt.Sprintf(locales.Text("%s\n%s · %d 条"), title, fmtTime(entry.UpdatedAt), entry.MessageCount))
 				row.Children(func() {
 					btn := ui.ButtonBase(c.Key("rail-sess-btn-" + entry.ID)).Grow(1).Height(28).Justify(ui.Start).Label(title).Cursor(ui.CursorPointer)
 					btn.OnClick(func() { a.openSession(entry.ID) })
@@ -369,7 +375,7 @@ func (a *desktop) railSessions(c *ui.Context) {
 							}
 						})
 					})
-					b := dangerIconAction(c, "rail-sess-del-"+entry.ID, "删除会话", "close", 18, func() {
+					b := dangerIconAction(c, "rail-sess-del-"+entry.ID, locales.Text("删除会话"), "close", 18, func() {
 						a.deleteSession(entry.ID, title)
 					})
 					railHoverAction(c, row, b, busy)
@@ -389,26 +395,6 @@ func sessionBusyID(a *desktop, id string) string {
 		return id
 	}
 	return ""
-}
-
-// sessionWorkspaceRoots is the distinct workspace list the rail and the header's
-// workspace menu both offer. It is derived from the whole session index, so it is
-// rebuilt when that index is replaced instead of on every frame.
-func (a *desktop) sessionWorkspaceRoots() []string {
-	return a.wsRootsMemo.get(a.sessRev, func(uint64) []string {
-		seen := make(map[string]bool, len(a.sessions))
-		var roots []string
-		for _, entry := range a.sessions {
-			root := entry.Workspace
-			key := strings.ToLower(root)
-			if root == "" || seen[key] || strings.HasPrefix(filepath.Base(root), "ally-temp-") {
-				continue
-			}
-			seen[key] = true
-			roots = append(roots, root)
-		}
-		return roots
-	})
 }
 
 type workspaceSessionKey struct {
@@ -440,7 +426,9 @@ func (a *desktop) workspaceSessions(workspace string) ([]backend.SessionIndexEnt
 		})
 		total := len(entries)
 		if len(entries) > 80 {
-			entries = entries[:80]
+			// Retain only the displayed prefix, not the full sorted backing
+			// array. The authoritative index still owns every session.
+			entries = append([]backend.SessionIndexEntry(nil), entries[:80]...)
 		}
 		return workspaceSessionList{entries: entries, total: total}
 	})
@@ -502,4 +490,42 @@ func railHoverAction(c *ui.Context, row, button ui.Element, disabled bool) {
 	}
 	button.Shrink(0).Disabled(disabled || !show)
 	uikit.HoverFade(c, button, opacity)
+}
+
+var topNavigationIcon = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M4 6.5h16M4 12h11M4 17.5h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`))
+
+// topNavigationMenu uses the same mode list and plugin index as the rail.
+// MenuBase owns dismissal, focus and the opening/closing transition.
+func (a *desktop) topNavigationMenu(c *ui.Context) {
+	uikit.MenuButton(c.Key("top-navigation-menu"), nil, uikit.MenuOptions{
+		Width: 190, MaxHeightPercent: 85, Label: locales.Text("导航菜单"),
+		At: ui.AnchorBottomLeft, Self: ui.AnchorTopLeft, Gap: 4,
+	}, func(b ui.Element) {
+		uikit.IconButtonOn(c, b.Disabled(!a.ready), locales.Text("导航菜单"), topNavigationIcon, 30, 18, uikit.IconQuiet, a.secondaryInk())
+	}, func(m ui.MenuParts) {
+		entry := func(id, label, icon string) {
+			uikit.MenuItem(c, m, "top-nav-"+id, label, uikit.MenuItemOptions{
+				Choice: true, Selected: a.page == id, Icon: iconImage(icon),
+			}, a.secondaryInk()).OnClick(func() { a.changePage(id) })
+		}
+		plugins := a.pluginModes()
+		for _, mode := range baseModes {
+			if mode.id == "plugins" {
+				for _, i := range plugins.top {
+					item := a.plugins[i]
+					entry(item.Mode, pluginTitle(item), "plugins")
+				}
+				for _, group := range plugins.groups {
+					for _, i := range group {
+						item := a.plugins[i]
+						entry(item.Mode, pluginTitle(item), "plugins")
+					}
+				}
+			}
+			if !a.modeHidden(mode.id) {
+				entry(mode.id, locales.Text(mode.label), mode.icon)
+			}
+		}
+		entry("settings", locales.Text("设置"), "settings")
+	})
 }

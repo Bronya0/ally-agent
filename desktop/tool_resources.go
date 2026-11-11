@@ -4,6 +4,7 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	backend "ally-dev/internal/app"
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
 	"github.com/egoist/mygo/ui"
@@ -29,7 +30,7 @@ func toolCodeWindowHeight(c *ui.Context, key, text string, expanded bool, path s
 		ui.Box(c.Key(key)).FillWidth().MaxHeight(150).Clip().Background(c.Theme().Background).Radius(radiusSmall).Children(body)
 		return
 	}
-	scroll := ui.ScrollBoth(c.Key(key)).FillWidth().MinWidth(0).Shrink(0).Clip().Label("工具输出 " + key).Background(c.Theme().Background).Radius(radiusSmall)
+	scroll := ui.ScrollBoth(c.Key(key)).FillWidth().MinWidth(0).Shrink(0).Clip().Label(locales.Text("工具输出 ") + key).Background(c.Theme().Background).Radius(radiusSmall)
 	if maximum {
 		scroll.MaxHeight(height)
 	} else {
@@ -59,11 +60,11 @@ type highlightCacheEntry struct {
 	bytes      int
 }
 
-// The cache is bounded by the bytes it keeps rather than by one source's size:
-// a large preview used to stay out of it and be tokenized on every frame.
+// Admission bounds source bytes and a weighted span count, rather than just
+// one source's size. The weight is an estimate, not actual heap accounting.
 const (
 	highlightCacheBudget = 256 << 10
-	highlightSpanCost    = 48 // what one span costs beside its text
+	highlightSpanCost    = 48 // admission weight; ui.Span's actual size is larger
 	highlightCacheSize   = 32
 )
 
@@ -83,10 +84,18 @@ func codeSpansWithBase(c *ui.Context, text, path string, base ui.Color) []ui.Spa
 			return entry.spans
 		}
 	}
+	// A tail or snippet can share the backing string of a whole file/log. Own
+	// the bounded source before tokenizing: both the key and every span must
+	// release that original source when its conversation is released.
+	sourceBytes := len(text) + len(path)
+	if sourceBytes <= highlightCacheBudget {
+		text = strings.Clone(text)
+		path = strings.Clone(path)
+	}
 	spans := buildCodeSpans(c, text, path, base)
 	// A source that would take the whole budget is drawn but not kept, so one
 	// huge file cannot push every other preview out on each frame.
-	size := len(text) + len(spans)*highlightSpanCost
+	size := sourceBytes + len(spans)*highlightSpanCost
 	if size > highlightCacheBudget {
 		return spans
 	}
@@ -107,16 +116,19 @@ func buildCodeSpans(c *ui.Context, text, path string, base ui.Color) []ui.Span {
 	}
 	var spans []ui.Span
 	var state uint64
-	for n, line := range strings.Split(text, "\n") {
-		if n > 0 {
+	var tokens []editor.Token
+	first := true
+	for line := range strings.SplitSeq(text, "\n") {
+		if !first {
 			spans = append(spans, ui.Span{Text: "\n"})
 		}
-		tokens, next := language.Tokenizer.Tokenize(line, state, nil)
-		state = next
+		first = false
+		tokens, state = language.Tokenizer.Tokenize(line, state, tokens[:0])
+		lineFirst, runStart := len(spans), 0
 		start := 0
 		for _, token := range tokens {
 			end := token.End
-			if end < start || end > len(line) {
+			if end <= start || end > len(line) {
 				continue
 			}
 			color := base
@@ -132,11 +144,22 @@ func buildCodeSpans(c *ui.Context, text, path string, base ui.Color) []ui.Span {
 			case editor.TokenInvalid, editor.TokenDeleted:
 				color = c.Theme().Danger
 			}
-			spans = append(spans, ui.Span{Text: line[start:end], Color: color})
+			// Adjacent tokens with the same displayed style can share a span.
+			// Extend their source slice without joining or copying their text.
+			if len(spans) > lineFirst && spans[len(spans)-1].Color == color {
+				spans[len(spans)-1].Text = line[runStart:end]
+			} else {
+				runStart = start
+				spans = append(spans, ui.Span{Text: line[start:end], Color: color})
+			}
 			start = end
 		}
 		if start < len(line) {
-			spans = append(spans, ui.Span{Text: line[start:], Color: base})
+			if len(spans) > lineFirst && spans[len(spans)-1].Color == base {
+				spans[len(spans)-1].Text = line[runStart:]
+			} else {
+				spans = append(spans, ui.Span{Text: line[start:], Color: base})
+			}
 		}
 	}
 	return spans
@@ -150,7 +173,7 @@ func toolFields(c *ui.Context, data map[string]any, keys []string, ink ...ui.Col
 		if valueText == "" {
 			continue
 		}
-		label := toolFieldLabels[k]
+		label := locales.Text(toolFieldLabels[k])
 		if label == "" {
 			label = k
 		}
@@ -166,7 +189,7 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 	items, isList := result[collection].([]any)
 	if kind == "service" {
 		if max := int(num(result, "maxActive")); max > 0 {
-			fieldNote(c, fmt.Sprintf("运行中 %d / %d", int(num(result, "activeCount")), max), a.secondaryInk())
+			fieldNote(c, fmt.Sprintf(locales.Text("运行中 %d / %d"), int(num(result, "activeCount")), max), a.secondaryInk())
 		}
 		if output, ok := result["output"].(string); ok {
 			if !open {
@@ -190,7 +213,7 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 		items = []any{item}
 	}
 	if len(items) == 0 {
-		fieldNote(c, "暂无记录", a.secondaryInk())
+		fieldNote(c, locales.Text("暂无记录"), a.secondaryInk())
 		return
 	}
 	// A stopped service keeps its full card only when the tool card is open:
@@ -249,7 +272,7 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 			})
 		}
 		if hidden > 0 {
-			fieldNote(c, fmt.Sprintf("另有 %d 个已停止的服务，展开卡片查看", hidden), a.secondaryInk())
+			fieldNote(c, fmt.Sprintf(locales.Text("另有 %d 个已停止的服务，展开卡片查看"), hidden), a.secondaryInk())
 		}
 	})
 }
@@ -408,7 +431,7 @@ func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
 	for i := 0; i < len(lines); {
 		l := lines[i]
 		if l.gap > 0 {
-			text := fmt.Sprintf("… %d 行未变更 …", l.gap)
+			text := fmt.Sprintf(locales.Text("… %d 行未变更 …"), l.gap)
 			rows = append(rows, splitDiffRow{left: text, right: text, leftOrder: i, rightOrder: i, leftPresent: true, rightPresent: true, gap: l.gap})
 			i++
 			continue
@@ -548,11 +571,7 @@ func diffLine(c *ui.Context, text string, changed bool, number int, ink ...ui.Co
 	})
 }
 
-func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, start int, ink ...ui.Color) {
-	height := float32(150)
-	if expanded {
-		height = 300
-	}
+func toolSourceWindow(c *ui.Context, key, text, path string, start int, ink ...ui.Color) {
 	body := func() {
 		row := ui.Row(c).AlignItems(ui.Start).Padding(2, 8, 4, 0).Gap(gapSection)
 		gutter := memoAt[lineMemo](row, "line-numbers")
@@ -561,11 +580,7 @@ func toolSourceWindow(c *ui.Context, key, text, path string, expanded bool, star
 			ui.RichText(c, codeSpans(c, text, path, ink...)...).Font(monoFamily).FontSize(readingCodeSize).FixedLineHeight(20).Selectable().NoWrap()
 		})
 	}
-	if expanded {
-		ui.ScrollBoth(c.Key(key)).FillWidth().Height(height).Shrink(0).Clip().Children(body)
-	} else {
-		ui.Box(c.Key(key)).FillWidth().MaxHeight(height).Clip().Children(body)
-	}
+	ui.Box(c.Key(key)).FillWidth().MaxHeight(150).Clip().Children(body)
 }
 
 // lineNumberColumn builds the number column of a source window: every line of
@@ -584,7 +599,8 @@ func lineNumberColumn(key lineKey) string {
 }
 
 // Terminal heading and transcript have different roles, especially on light
-// surfaces. Keep the dark palette intact; avoid fading light output too far.
+// surfaces. Secondary ink already supplies the readable transcript tone;
+// fading it again would wash out the website's muted ink in the light preset.
 // secondary 是调用方的次要文字色：Theme.TextMuted 现在只作占位淡色。
 func commandLineInk(t *ui.Theme, secondary ...ui.Color) ui.Color {
 	if t.Dark {
@@ -593,8 +609,5 @@ func commandLineInk(t *ui.Theme, secondary ...ui.Color) ui.Color {
 	return t.Text.Mix(uikit.SecondaryInkOf(t, secondary...), 0.30)
 }
 func terminalOutputInk(t *ui.Theme, secondary ...ui.Color) ui.Color {
-	if t.Dark {
-		return uikit.SecondaryInkOf(t, secondary...)
-	}
-	return uikit.SecondaryInkOf(t, secondary...).Mix(t.Background, 0.12)
+	return uikit.SecondaryInkOf(t, secondary...)
 }

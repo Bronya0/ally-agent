@@ -10,7 +10,7 @@ func TestMenuButtonKeyboardSkipsDisabledAndRestoresFocus(t *testing.T) {
 	var open bool
 	var trigger ui.Handle
 	chosen := 0
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		c.DisableAnimations()
 		ui.Column(c).Fill().Padding(12).Children(func() {
 			MenuButton(c.Key("actions"), &open, MenuOptions{Width: 200}, func(b ui.Element) {
@@ -47,7 +47,7 @@ func TestMenuButtonExternalOpenAndStableItemIdentity(t *testing.T) {
 	open := true
 	order := []string{"alpha", "beta"}
 	chosen := ""
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		c.DisableAnimations()
 		MenuButton(c.Key("items"), &open, MenuOptions{Width: 200}, func(b ui.Element) { b.Label("items").Size(60, 28) }, func(m ui.MenuParts) {
 			for _, id := range order {
@@ -79,7 +79,7 @@ func TestMenuButtonExternalOpenAndStableItemIdentity(t *testing.T) {
 func TestMenuButtonPlacementKeepsGapAndFitsWindow(t *testing.T) {
 	for _, width := range []float32{280, 700} {
 		open := true
-		tt := ui.NewTester(func(c *ui.Context) {
+		tt := chineseTester(func(c *ui.Context) {
 			c.DisableAnimations()
 			ui.Box(c).Absolute().Left(width - 40).Bottom(20).Children(func() {
 				MenuButton(c.Key("above"), &open, MenuOptions{Width: 300, At: ui.AnchorTopRight, Self: ui.AnchorBottomRight, Gap: 6, Label: "popup"}, func(b ui.Element) {
@@ -100,7 +100,7 @@ func TestMenuButtonPlacementKeepsGapAndFitsWindow(t *testing.T) {
 func TestHoverMenusKeyboardChoosesChildAndClosesOnlyChild(t *testing.T) {
 	open := true
 	chosen := 0
-	tt := ui.NewTester(func(c *ui.Context) {
+	tt := chineseTester(func(c *ui.Context) {
 		c.DisableAnimations()
 		MenuButton(c.Key("groups"), &open, MenuOptions{Width: 200}, func(b ui.Element) { b.Size(50, 28).Label("groups") }, func(m ui.MenuParts) {
 			body := ui.Column(c).FillWidth()

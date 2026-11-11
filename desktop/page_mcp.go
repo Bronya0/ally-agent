@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -43,6 +44,35 @@ type mcpServerEntry struct {
 
 func (e mcpServerEntry) transportName() string {
 	return (backend.McpServerConfig{Transport: e.Transport, Command: e.Command, URL: e.URL}).TransportName()
+}
+
+// The editor's options are the values TransportName reports, so a stored
+// transport always matches an option and only the label reads differently.
+const (
+	mcpTransportStdio = "stdio"
+	mcpTransportSSE   = "sse"
+	mcpTransportHTTP  = "streamable-http"
+)
+
+// mcpTransport is the transport the open editor is on, inferred the way the
+// connection does.
+func (a *desktop) mcpTransport() string {
+	if name := (backend.McpServerConfig{Transport: a.mcpF.Transport}).TransportName(); name != "" {
+		return name
+	}
+	return mcpTransportStdio
+}
+
+func mcpTransportLabelFor(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case mcpTransportSSE:
+		return "SSE"
+	case "http", "rest", mcpTransportHTTP:
+		return "Streamable HTTP"
+	case "", mcpTransportStdio:
+		return "stdio"
+	}
+	return name
 }
 
 func (e *mcpServerEntry) UnmarshalJSON(data []byte) error {
@@ -153,26 +183,26 @@ func (a *desktop) mcpPageBody(c *ui.Context) {
 		a.mcpF.ToolOpen = map[string]bool{}
 	}
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
-		uikit.Input(c.Key("mcp-search"), &a.mcpF.Search).Placeholder("搜索").Label("搜索 MCP").Width(200)
+		uikit.Input(c.Key("mcp-search"), &a.mcpF.Search).Placeholder(locales.Text("搜索")).Label(locales.Text("搜索 MCP")).Width(200)
 		ui.Spacer(c)
-		flat(c, "导入").Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.importMCP() })
-		flat(c, "导出").Disabled(len(a.mcpServerNames) == 0).OnClick(func() { a.exportMCP() })
-		flat(c, "刷新").Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.refreshMCPAll(true) })
-		a.linkMenu(c, "mcp-market", [][2]string{{"魔搭 ModelScope", "https://modelscope.cn/mcp"}, {"火山引擎 Volcengine", "https://www.volcengine.com/mcp"}, {"Glama", "https://glama.ai/mcp/servers"}, {"PulseMCP", "https://www.pulsemcp.com"}})
-		primary(c, "添加").Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.openMCPEditor("") })
+		flat(c, locales.Text("导入")).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.importMCP() })
+		flat(c, locales.Text("导出")).Disabled(len(a.mcpServerNames) == 0).OnClick(func() { a.exportMCP() })
+		flat(c, locales.Text("刷新")).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.refreshMCPAll(true) })
+		a.linkMenu(c, "mcp-market", [][2]string{{locales.Text("魔搭 ModelScope"), "https://modelscope.cn/mcp"}, {locales.Text("火山引擎 Volcengine"), "https://www.volcengine.com/mcp"}, {"Glama", "https://glama.ai/mcp/servers"}, {"PulseMCP", "https://www.pulsemcp.com"}})
+		primary(c, locales.Text("添加")).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.openMCPEditor("") })
 	})
 	// tabs 必须排在随 tab 变化的说明文字之前：说明行数不同会把 tab 栏顶上顶下，
 	// 用户刚点的 tab 会跑走（"变形"）。tab 栏位置固定，只让下方内容变化。
-	if a.scrollTabs(c, "mcp-tabs", &a.mcpF.Tab, "MCP 服务器", "Ally 内置工具") {
+	if a.scrollTabs(c, "mcp-tabs", &a.mcpF.Tab, locales.Text("MCP 服务器"), locales.Text("Ally 内置工具")) {
 		if a.mcpF.Tab == 1 && !a.mcpF.Busy && !a.mcpF.ImportBusy {
 			a.refreshMCPInventory()
 		}
 	}
 	// 两个 tab 的说明都固定为一行，切换时说明区高度不变，下方内容不会跳。
 	if a.mcpF.Tab == 0 {
-		mcpNoteLine(c, "支持 stdio / SSE / Streamable HTTP；只有连接成功的工具会注入 AI，改动自动保存并重连。", a.secondaryInk())
+		mcpNoteLine(c, locales.Text("支持 stdio / SSE / Streamable HTTP；只有连接成功的工具会注入 AI，改动自动保存并重连。"), a.secondaryInk())
 	} else {
-		mcpNoteLine(c, "停用后新会话不再注入该工具；已有会话保持冻结，MCP 服务不受影响。", a.secondaryInk())
+		mcpNoteLine(c, locales.Text("停用后新会话不再注入该工具；已有会话保持冻结，MCP 服务不受影响。"), a.secondaryInk())
 	}
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Column(c).Gap(gapInline).Children(func() {
@@ -194,7 +224,7 @@ func (a *desktop) mcpServerList(c *ui.Context) {
 
 func (a *desktop) renderMCPServerList(c *ui.Context, data mcpListData) {
 	if data.err != nil {
-		notice(c, "error", "读取 MCP 配置失败："+data.err.Error(), a.secondaryInk())
+		notice(c, "error", locales.Text("读取 MCP 配置失败：")+data.err.Error(), a.secondaryInk())
 		return
 	}
 	// Event handlers edit a shallow copy; the memoized source stays immutable.
@@ -237,23 +267,23 @@ func (a *desktop) renderMCPServerList(c *ui.Context, data mcpListData) {
 					}
 				}
 				if len(tools) > 0 {
-					label := fmt.Sprintf("工具 %d/%d", enabledCount, len(tools))
-					btn := uikit.Tooltip(c, cardFlat(c, label), "勾选的工具注入模型上下文，取消勾选即停用；对端新增工具默认启用；下一会话生效。")
+					label := fmt.Sprintf(locales.Text("工具 %d/%d"), enabledCount, len(tools))
+					btn := uikit.Tooltip(c, cardFlat(c, label), locales.Text("勾选的工具注入模型上下文，取消勾选即停用；对端新增工具默认启用；下一会话生效。"))
 					btn.OnClick(func() { a.mcpF.ToolOpen[name] = !a.mcpF.ToolOpen[name] })
 				} else if count := int(num(status, "toolCount")); count > 0 {
-					fieldNote(c, fmt.Sprintf("%d 个工具", count), a.secondaryInk())
+					fieldNote(c, fmt.Sprintf(locales.Text("%d 个工具"), count), a.secondaryInk())
 				}
 				stateText := mcpStatusText(str(status, "status"))
 				uikit.Tooltip(c, ui.Text(c, stateText).FontSize(fsSmall).TextColor(toneColor(c, str(status, "status"), a.secondaryInk())), str(status, "error"))
 				enabled := entry.Enabled == nil || *entry.Enabled
-				uikit.SwitchNative(c.Key("mcp-enabled-"+name), &enabled).Label("启用 " + name).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
+				uikit.SwitchNative(c.Key("mcp-enabled-"+name), &enabled).Label(locales.Text("启用 ") + name).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
 					entry.Enabled = boolPtr(enabled)
 					doc := editDoc()
 					doc.Servers[name] = entry
 					a.saveMCPDoc(doc)
 				})
-				cardFlat(c, "编辑").Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.openMCPEditor(name) })
-				cardDanger(c, "删除").Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
+				cardFlat(c, locales.Text("编辑")).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.openMCPEditor(name) })
+				cardDanger(c, locales.Text("删除")).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
 					doc := editDoc()
 					delete(doc.Servers, name)
 					a.saveMCPDoc(doc)
@@ -272,9 +302,9 @@ func (a *desktop) renderMCPServerList(c *ui.Context, data mcpListData) {
 	}
 	if shown == 0 {
 		if len(names) == 0 {
-			emptyState(c, "暂无 MCP 服务", "点击“添加”创建第一个服务。", a.secondaryInk())
+			emptyState(c, locales.Text("暂无 MCP 服务"), locales.Text("点击“添加”创建第一个服务。"), a.secondaryInk())
 		} else {
-			emptyState(c, "无匹配结果", "", a.secondaryInk())
+			emptyState(c, locales.Text("无匹配结果"), "", a.secondaryInk())
 		}
 	}
 }
@@ -312,21 +342,16 @@ func mcpToolNames(status map[string]any) string {
 }
 
 func mcpTransportLabel(entry mcpServerEntry, status map[string]any) string {
-	if t := str(status, "transport"); t != "" {
-		return t
+	name := str(status, "transport")
+	if name == "" {
+		name = entry.transportName()
 	}
-	switch entry.transportName() {
-	case "sse":
-		return "sse"
-	case "streamable-http":
-		return "Streamable HTTP"
-	}
-	return "stdio"
+	return mcpTransportLabelFor(name)
 }
 
 func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEntry, docOf func() *mcpConfigDoc, status map[string]any) {
 	ui.Column(c).Key("mcp-tools-"+name).FillWidth().Padding(8, 10).Gap(2).Background(c.Theme().Background).Radius(radiusSmall).Children(func() {
-		fieldNote(c, "勾选的工具注入模型上下文，取消勾选即停用；对端新增工具默认启用；下一会话生效，不触发重连。", a.secondaryInk())
+		fieldNote(c, locales.Text("勾选的工具注入模型上下文，取消勾选即停用；对端新增工具默认启用；下一会话生效，不触发重连。"), a.secondaryInk())
 		for _, item := range list(status, "tools") {
 			m, ok := item.(map[string]any)
 			if !ok {
@@ -367,7 +392,7 @@ func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEn
 			})
 		}
 		if len(list(status, "tools")) == 0 {
-			fieldNote(c, "连接成功后这里会列出该服务发现的工具。", a.secondaryInk())
+			fieldNote(c, locales.Text("连接成功后这里会列出该服务发现的工具。"), a.secondaryInk())
 		}
 	})
 }
@@ -375,7 +400,7 @@ func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEn
 func (a *desktop) openMCPEditor(name string) {
 	doc, err := parseMCPConfig(a.mcpText)
 	if err != nil {
-		a.notifyError("读取 MCP 配置失败：" + err.Error())
+		a.notifyError(locales.Text("读取 MCP 配置失败：") + err.Error())
 		return
 	}
 	a.mcpF.EditorOpen = true
@@ -415,66 +440,64 @@ func (a *desktop) mcpEditorDialog(c *ui.Context) {
 	if !a.mcpF.EditorOpen {
 		return
 	}
-	title := "添加 MCP 服务"
+	title := locales.Text("添加 MCP 服务")
 	if a.mcpF.Editing != "" {
-		title = "编辑 MCP 服务"
+		title = locales.Text("编辑 MCP 服务")
 	}
 	height := float32(550)
-	if a.mcpF.Transport != "stdio" {
+	if a.mcpTransport() != mcpTransportStdio {
 		height = 430
 	}
 	formDialog(c, &a.mcpF.EditorOpen, widthModal, height, title, "", func() {
 		ui.Grid(c.Key("mcp-header-fields")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
-			fieldRow(c, "mcp-name", "服务名称", &a.mcpF.Name, false)
+			fieldRow(c, "mcp-name", locales.Text("服务名称"), &a.mcpF.Name, false)
 			ui.Column(c).Gap(gapTight).Children(func() {
-				fieldLabel(c, "传输方式")
-				transports := []string{"stdio", "sse", "Streamable HTTP"}
-				current := a.mcpF.Transport
-				if current == "http" || current == "streamable-http" {
-					current = "Streamable HTTP"
+				fieldLabel(c, locales.Text("传输方式"))
+				current := a.mcpTransport()
+				transports := []uikit.Option{
+					{Value: mcpTransportStdio, Label: mcpTransportLabelFor(mcpTransportStdio)},
+					{Value: mcpTransportSSE, Label: mcpTransportLabelFor(mcpTransportSSE)},
+					{Value: mcpTransportHTTP, Label: mcpTransportLabelFor(mcpTransportHTTP)},
 				}
-				if current == "" {
-					current = "stdio"
-				}
-				if uikit.Select(c.Key("mcp-transport"), &current, transports, a.secondaryInk()).Label("传输方式").FillWidth().Changed() {
+				if uikit.SelectField(c.Key("mcp-transport"), &current, transports, a.secondaryInk()).Label(locales.Text("传输方式")).FillWidth().Changed() {
 					a.mcpF.Transport = current
 				}
 			})
 		})
-		if a.mcpF.Transport == "stdio" {
-			fieldRow(c, "mcp-command", "命令", &a.mcpF.Command, false)
-			fieldLabel(c, "参数")
-			textArea(c, "mcp-args", "参数", `-y, @playwright/mcp`, &a.mcpF.Args, 90).FillWidth()
-			fieldNote(c, "推荐 JSON 字符串数组，可完整保留空格和逗号；也兼容简单的逗号或空格分隔输入。", a.secondaryInk())
-			fieldLabel(c, "环境变量")
-			textArea(c, "mcp-env", "环境变量", `{"API_KEY": "your-api-key"}`, &a.mcpF.Env, 70)
-			fieldNote(c, "JSON 对象，也支持每行 KEY=value。", a.secondaryInk())
+		if a.mcpTransport() == mcpTransportStdio {
+			fieldRow(c, "mcp-command", locales.Text("命令"), &a.mcpF.Command, false)
+			fieldLabel(c, locales.Text("参数"))
+			textArea(c, "mcp-args", locales.Text("参数"), `-y, @playwright/mcp`, &a.mcpF.Args, 90).FillWidth()
+			fieldNote(c, locales.Text("推荐 JSON 字符串数组，可完整保留空格和逗号；也兼容简单的逗号或空格分隔输入。"), a.secondaryInk())
+			fieldLabel(c, locales.Text("环境变量"))
+			textArea(c, "mcp-env", locales.Text("环境变量"), `{"API_KEY": "your-api-key"}`, &a.mcpF.Env, 70)
+			fieldNote(c, locales.Text("JSON 对象，也支持每行 KEY=value。"), a.secondaryInk())
 		} else {
 			fieldRow(c, "mcp-url", "URL", &a.mcpF.URL, false)
-			fieldNote(c, "例如 http://127.0.0.1:9121/mcp（SSE 通常为 /sse）。", a.secondaryInk())
-			fieldLabel(c, "请求头")
-			textArea(c, "mcp-headers", "请求头", `{"Authorization": "Bearer your-token"}`, &a.mcpF.Headers, 70)
-			fieldNote(c, "JSON 对象，也支持每行 Key:Value。", a.secondaryInk())
+			fieldNote(c, locales.Text("例如 http://127.0.0.1:9121/mcp（SSE 通常为 /sse）。"), a.secondaryInk())
+			fieldLabel(c, locales.Text("请求头"))
+			textArea(c, "mcp-headers", locales.Text("请求头"), `{"Authorization": "Bearer your-token"}`, &a.mcpF.Headers, 70)
+			fieldNote(c, locales.Text("JSON 对象，也支持每行 Key:Value。"), a.secondaryInk())
 		}
 	}, func() {
-		flat(c, "取消").OnClick(func() { a.mcpF.EditorOpen = false })
-		primary(c, "保存").Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.saveMCPEditor() })
+		flat(c, locales.Text("取消")).OnClick(func() { a.mcpF.EditorOpen = false })
+		primary(c, locales.Text("保存")).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() { a.saveMCPEditor() })
 	})
 }
 
 func (a *desktop) saveMCPEditor() {
 	name := strings.TrimSpace(a.mcpF.Name)
 	if name == "" {
-		a.notify("请填写服务名称")
+		a.notify(locales.Text("请填写服务名称"))
 		return
 	}
 	doc, err := parseMCPConfig(a.mcpText)
 	if err != nil {
-		a.notifyError("读取 MCP 配置失败：" + err.Error())
+		a.notifyError(locales.Text("读取 MCP 配置失败：") + err.Error())
 		return
 	}
 	if _, exists := doc.Servers[name]; exists && a.mcpF.Editing != name {
-		a.notifyError("已存在同名 MCP 服务，请使用其他名称")
+		a.notifyError(locales.Text("已存在同名 MCP 服务，请使用其他名称"))
 		return
 	}
 	entry := doc.Servers[name]
@@ -482,27 +505,22 @@ func (a *desktop) saveMCPEditor() {
 		entry = doc.Servers[a.mcpF.Editing]
 		delete(doc.Servers, a.mcpF.Editing)
 	}
-	transport := a.mcpF.Transport
-	switch transport {
-	case "Streamable HTTP":
-		transport = "http"
-	case "stdio":
-		transport = "stdio"
-	case "sse":
-		transport = "sse"
+	transport := a.mcpTransport()
+	if transport == mcpTransportHTTP {
+		transport = "http" // the spelling other MCP clients write
 	}
 	entry.Transport = transport
 	if transport == "stdio" {
 		args, err := splitArgs(a.mcpF.Args)
 		if err != nil {
-			a.notifyError("参数必须是 JSON 字符串数组：" + err.Error())
+			a.notifyError(locales.Text("参数必须是 JSON 字符串数组：") + err.Error())
 			return
 		}
 		entry.Command = strings.TrimSpace(a.mcpF.Command)
 		entry.Args = args
 		entry.Env, err = parsePairs(a.mcpF.Env, "=")
 		if err != nil {
-			a.notifyError("环境变量必须是 JSON 字符串对象：" + err.Error())
+			a.notifyError(locales.Text("环境变量必须是 JSON 字符串对象：") + err.Error())
 			return
 		}
 		entry.URL = ""
@@ -511,7 +529,7 @@ func (a *desktop) saveMCPEditor() {
 		entry.URL = strings.TrimSpace(a.mcpF.URL)
 		entry.Headers, err = parsePairs(a.mcpF.Headers, ":")
 		if err != nil {
-			a.notifyError("请求头必须是 JSON 字符串对象：" + err.Error())
+			a.notifyError(locales.Text("请求头必须是 JSON 字符串对象：") + err.Error())
 			return
 		}
 		entry.Command = ""
@@ -632,7 +650,7 @@ func (a *desktop) saveMCPDoc(doc *mcpConfigDoc, options ...mcpSaveOptions) {
 			}
 			a.mcpF.Busy = false
 			if err != nil {
-				a.notifyError("保存 MCP 配置失败：" + err.Error())
+				a.notifyError(locales.Text("保存 MCP 配置失败：") + err.Error())
 				a.refreshMCPAll()
 				return
 			}
@@ -644,7 +662,7 @@ func (a *desktop) saveMCPDoc(doc *mcpConfigDoc, options ...mcpSaveOptions) {
 			if opt.onSuccess != nil {
 				opt.onSuccess()
 			}
-			a.notifySuccess("MCP 配置已保存")
+			a.notifySuccess(locales.Text("MCP 配置已保存"))
 		})
 	}()
 }
@@ -675,7 +693,7 @@ func (a *desktop) refreshMCPAll(manual ...bool) {
 				return
 			}
 			if err != nil {
-				a.notifyError("读取 MCP 配置失败：" + err.Error())
+				a.notifyError(locales.Text("读取 MCP 配置失败：") + err.Error())
 				return
 			}
 			a.mcpText = raw
@@ -684,7 +702,7 @@ func (a *desktop) refreshMCPAll(manual ...bool) {
 			a.mcpSummary = mcpSummary(servers)
 			a.refreshMCPInventory()
 			if len(manual) > 0 && manual[0] {
-				a.notifySuccess("MCP 列表已刷新")
+				a.notifySuccess(locales.Text("MCP 列表已刷新"))
 			}
 		})
 	}()
@@ -720,11 +738,11 @@ func (a *desktop) importMCP() {
 		if err != nil {
 			a.win.Update(func() {
 				a.mcpF.ImportBusy = false
-				a.notifyError("读取 MCP 配置失败：" + err.Error())
+				a.notifyError(locales.Text("读取 MCP 配置失败：") + err.Error())
 			})
 			return
 		}
-		path, err := a.core.SelectJSONFile("导入 MCP 配置")
+		path, err := a.core.SelectJSONFile(locales.Text("导入 MCP 配置"))
 		if err != nil || path == "" {
 			a.win.Update(func() {
 				a.mcpF.ImportBusy = false
@@ -746,7 +764,7 @@ func (a *desktop) importMCP() {
 		if err != nil {
 			a.win.Update(func() {
 				a.mcpF.ImportBusy = false
-				a.notify("无法导入：MCP 配置不是有效的 JSON")
+				a.notify(locales.Text("无法导入：MCP 配置不是有效的 JSON"))
 			})
 			return
 		}
@@ -863,13 +881,13 @@ func (a *desktop) builtinToolsGrid(c *ui.Context) {
 				ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Children(func() {
 					neutralChip(c, tool.Name)
 					if tool.Protected {
-						fieldNote(c, "核心工具，不可停用", a.secondaryInk())
+						fieldNote(c, locales.Text("核心工具，不可停用"), a.secondaryInk())
 					}
 				})
 			})
 		}
 		if len(core) > 0 {
-			fieldNote(c, "核心工具始终可用。", a.secondaryInk())
+			fieldNote(c, locales.Text("核心工具始终可用。"), a.secondaryInk())
 			ui.Grid(c.Key("builtin-core")).Columns(3).Gap(gapField).Children(func() {
 				for _, tool := range core {
 					render(tool)
@@ -882,7 +900,7 @@ func (a *desktop) builtinToolsGrid(c *ui.Context) {
 			}
 		})
 		if len(core)+len(rest) == 0 {
-			emptyState(c, "没有匹配的工具", "", a.secondaryInk())
+			emptyState(c, locales.Text("没有匹配的工具"), "", a.secondaryInk())
 		}
 	})
 }
@@ -899,7 +917,7 @@ var builtinToolLabels = map[string]string{
 
 func builtinToolLabel(name string) string {
 	if label, ok := builtinToolLabels[name]; ok {
-		return label
+		return locales.Text(label)
 	}
 	return name
 }
@@ -911,7 +929,7 @@ func (a *desktop) toggleBuiltinTool(tool backend.ToolDefinitionSummary) {
 	// Turning an image tool on without a usable picture model would fail on the
 	// first call, so say so instead of saving the switch.
 	if !tool.Enabled && tool.AvailabilityReason != "" {
-		a.notify(tool.AvailabilityReason)
+		a.notify(locales.Text(tool.AvailabilityReason))
 		return
 	}
 	a.mcpF.Busy = true
@@ -942,7 +960,7 @@ func (a *desktop) toggleBuiltinTool(tool backend.ToolDefinitionSummary) {
 			}
 			a.config = cfg
 			a.refreshMCPInventory()
-			a.notifySuccess("工具设置已保存，新会话生效")
+			a.notifySuccess(locales.Text("工具设置已保存，新会话生效"))
 		})
 	}()
 }

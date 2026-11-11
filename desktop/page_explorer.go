@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	"ally-dev/locales"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -50,13 +51,13 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 				a.workspaceMediaToolbar(c, file)
 			}
 			if kind.hasMarkupToggle() {
-				label := "预览"
+				label := locales.Text("预览")
 				if file.MarkupPreview {
-					label = "编辑源码"
+					label = locales.Text("编辑源码")
 				}
 				flat(c, label).OnClick(func() { a.toggleWorkspaceFileMarkupPreview(file) })
 			}
-			flat(c, "刷新").Disabled(file.Saving).OnClick(func() {
+			flat(c, locales.Text("刷新")).Disabled(file.Saving).OnClick(func() {
 				if t := a.current(); t != nil {
 					root := t.Workspace
 					reload := func(discardConfirmed bool) { a.loadFileReplacing(root, file.Path, file, discardConfirmed) }
@@ -67,21 +68,21 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 					}
 				}
 			})
-			label := "保存"
+			label := locales.Text("保存")
 			if file.Saving {
-				label = "保存中…"
+				label = locales.Text("保存中…")
 			}
 			flat(c, label).Disabled(kind.isPreviewOnly() || file.Saving || !file.Editor.Buffer.Modified()).OnClick(func() { a.saveFile() })
-			flat(c, "系统打开").OnClick(func() { a.openSystemFile(file.Path) })
-			iconAction(c, "editor-close", "关闭编辑器", "close", 24, func() { a.closeFile() })
+			flat(c, locales.Text("系统打开")).OnClick(func() { a.openSystemFile(file.Path) })
+			iconAction(c, "editor-close", locales.Text("关闭编辑器"), "close", 24, func() { a.closeFile() })
 		})
 		if file.PreviewError != "" {
 			ui.Box(c).Grow(1).MinHeight(0).Padding(padPage).Center().Children(func() {
 				ui.Column(c).FillWidth().MaxWidth(560).AlignSelf(ui.Center).Gap(gapSection).Children(func() {
-					ui.Text(c, "无法预览此文件").FontSize(fsPageTitle).Bold().TextAlign(ui.Center).FillWidth()
+					ui.Text(c, locales.Text("无法预览此文件")).FontSize(fsPageTitle).Bold().TextAlign(ui.Center).FillWidth()
 					fieldNote(c, file.PreviewError, a.secondaryInk())
 					ui.Row(c).Justify(ui.Center).Children(func() {
-						flat(c, "用系统应用打开").OnClick(func() { a.openSystemFile(file.Path) })
+						flat(c, locales.Text("用系统应用打开")).OnClick(func() { a.openSystemFile(file.Path) })
 					})
 				})
 			})
@@ -97,6 +98,9 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 }
 
 func (a *desktop) fileTree(c *ui.Context) {
+	if a.fileScroll == nil {
+		a.fileScroll = &ui.ScrollState{}
+	}
 	p := a.currentPalette()
 	ink := p.muted.Mix(p.text, 0.25)
 	width := a.prefs.TreeWidth
@@ -112,85 +116,85 @@ func (a *desktop) fileTree(c *ui.Context) {
 		c.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, "") })
 		ui.Row(c).Height(34).Padding(0, padRow).Gap(3).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
 			search := uikit.InputChrome(c, ui.SearchField(c.Key("explorer-search"), &a.filesF.Search.Input)).
-				Placeholder("").Label("搜索工作区文件").Height(26).Padding(0, 6).FontSize(fsSmall).Grow(1).
+				Placeholder("").Label(locales.Text("搜索工作区文件")).Height(26).Padding(0, 6).FontSize(fsSmall).Grow(1).
 				OnSubmit(func() { a.searchFiles(a.filesF.Search.Input) })
-			uikit.Tooltip(c, search, "输入文件名后回车搜索，清空后回车还原")
-			uikit.IconButton(c, "explorer-refresh", "刷新", iconImage("refresh"), 22, uikit.IconQuiet, func() { a.searchFiles(a.filesF.Search.Input) }, ink)
-			uikit.IconButton(c, "explorer-close", "关闭文件栏", iconImage("close"), 22, uikit.IconQuiet, func() { a.setExplorerOpen(false) }, ink)
+			uikit.Tooltip(c, search, locales.Text("输入文件名后回车搜索，清空后回车还原"))
+			uikit.IconButton(c, "explorer-refresh", locales.Text("刷新"), iconImage("refresh"), 22, uikit.IconQuiet, func() { a.searchFiles(a.filesF.Search.Input) }, ink)
+			uikit.IconButton(c, "explorer-close", locales.Text("关闭文件栏"), iconImage("close"), 22, uikit.IconQuiet, func() { a.setExplorerOpen(false) }, ink)
 		})
 		if a.filesF.Search.Busy {
-			fieldNote(c, "正在搜索…", a.secondaryInk())
+			fieldNote(c, locales.Text("正在搜索…"), a.secondaryInk())
 		} else if a.filesF.Search.Note != "" {
 			fieldNote(c, a.filesF.Search.Note, a.secondaryInk())
 		}
 		// Put the fallback menu on the viewport: the content column can be
 		// shorter than it, even with FillHeight in a scrolling container.
 		// A row's own menu takes precedence over this ancestor's menu.
-		tree := ui.Scroll(c.Key("explorer-tree")).Grow(1).MinHeight(0).Focusable().Label("工作区文件列表")
+		tree := ui.Scroll(c.Key("explorer-tree-" + a.fileRoot)).TrackScroll(a.fileScroll).Grow(1).MinHeight(0).Focusable().Label(locales.Text("工作区文件列表"))
 		tree.Children(func() {
 			area := ui.Column(c).Padding(3, 0).FillWidth()
 			if len(a.files) == 0 && a.filesF.Search.Query == "" {
-				area.Children(func() { fieldNote(c, "目录为空", a.secondaryInk()) })
+				area.Children(func() { fieldNote(c, locales.Text("目录为空"), a.secondaryInk()) })
 			}
-			area.Children(func() { ui.Tree(c.Key("workspace-tree"), func() { a.fileRows(c, a.files) }).FillWidth() })
+			area.Children(func() { ui.Tree(c.Key("workspace-tree-"+a.fileRoot), func() { a.fileRows(c, a.files) }).FillWidth() })
 		})
 		uikit.ContextMenu(tree, func(m *ui.Menu) {
-			if m.Item("新建文件").Chosen() {
+			if m.Item(locales.Text("新建文件")).Chosen() {
 				a.openFilePrompt(false, "")
 			}
-			if m.Item("新建目录").Chosen() {
+			if m.Item(locales.Text("新建目录")).Chosen() {
 				a.openFilePrompt(true, "")
 			}
-			if m.Item("打开目录").Chosen() {
+			if m.Item(locales.Text("打开目录")).Chosen() {
 				a.openInManager("")
 			}
-			if m.Item("复制绝对路径").Chosen() {
+			if m.Item(locales.Text("复制绝对路径")).Chosen() {
 				if t := a.current(); t != nil && t.Workspace != "" {
 					full, err := filepath.Abs(t.Workspace)
 					if err != nil {
-						a.notifyError("复制工作区路径失败：" + err.Error())
+						a.notifyError(locales.Text("复制工作区路径失败：") + err.Error())
 					} else {
 						services.WriteClipboard(full)
 					}
 				}
 			}
 			m.Separator()
-			if m.Item("粘贴文件").Chosen() {
+			if m.Item(locales.Text("粘贴文件")).Chosen() {
 				a.pasteFiles(services, "")
 			}
 			m.Separator()
-			if m.Item("刷新").Chosen() {
+			if m.Item(locales.Text("刷新")).Chosen() {
 				a.refreshFiles(true)
 			}
 		})
 		if a.filesF.HelpOpen {
 			ui.Column(c).Padding(8, 10).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(c.Theme().Border).Children(func() {
-				fieldNote(c, "文件浏览器帮助", a.secondaryInk())
+				fieldNote(c, locales.Text("文件浏览器帮助"), a.secondaryInk())
 				for _, line := range []string{
-					"输入文件名后回车搜索；清空后回车还原目录树",
-					"单击文件打开，单击目录展开",
-					"右键文件：复制文件 / 复制路径 / 重命名 / 删除 / 属性",
-					"右键空白处：复制工作区绝对路径 / 粘贴文件；同名文件自动另存副本",
-					"右键目录：粘贴文件；同名文件自动另存副本",
-					"Ctrl+C 复制聚焦文件，Ctrl+V 粘贴到聚焦目录（文件行则为其父目录）",
-					"Ctrl+S 保存当前文件（带版本校验）",
-					"Ctrl+Space 补全，悬停查看符号信息，F12 / ⌘或Ctrl+点击跳转 Go 定义",
-					"Markdown 可切换预览，图片直接预览",
+					locales.Text("输入文件名后回车搜索；清空后回车还原目录树"),
+					locales.Text("单击文件打开，单击目录展开"),
+					locales.Text("右键文件：复制文件 / 复制路径 / 重命名 / 删除 / 属性"),
+					locales.Text("右键空白处：复制工作区绝对路径 / 粘贴文件；同名文件自动另存副本"),
+					locales.Text("右键目录：粘贴文件；同名文件自动另存副本"),
+					locales.Text("Ctrl+C 复制聚焦文件，Ctrl+V 粘贴到聚焦目录（文件行则为其父目录）"),
+					locales.Text("Ctrl+S 保存当前文件（带版本校验）"),
+					locales.Text("Ctrl+Space 补全，悬停查看符号信息，F12 / ⌘或Ctrl+点击跳转 Go 定义"),
+					locales.Text("Markdown 可切换预览，图片直接预览"),
 				} {
 					fieldNote(c, "· "+line, a.secondaryInk())
 				}
 			})
 		}
 		ui.Row(c).Height(26).BorderWidth(1, 0, 0, 0).BorderColor(c.Theme().Border).Padding(0, padRow).Children(func() {
-			uikit.IconButton(c, "explorer-open", "在文件管理器中打开工作区", iconImage("folderopen"), 22, uikit.IconQuiet, func() {
+			uikit.IconButton(c, "explorer-open", locales.Text("在文件管理器中打开工作区"), iconImage("folderopen"), 22, uikit.IconQuiet, func() {
 				if t := a.current(); t != nil {
 					p := t.Workspace
 					a.job(func() error { return a.core.OpenPathInFileManager(p) })
 				}
 			}, ink)
 			ui.Spacer(c)
-			uikit.IconButton(c, "explorer-help", "文件浏览器帮助", iconImage("info"), 22, uikit.IconQuiet, func() { a.filesF.HelpOpen = !a.filesF.HelpOpen }, ink)
-			addButton(c, "explorer-new-file", "新建文件", "plus", 22, func() { a.openFilePrompt(false, "") })
+			uikit.IconButton(c, "explorer-help", locales.Text("文件浏览器帮助"), iconImage("info"), 22, uikit.IconQuiet, func() { a.filesF.HelpOpen = !a.filesF.HelpOpen }, ink)
+			addButton(c, "explorer-new-file", locales.Text("新建文件"), "plus", 22, func() { a.openFilePrompt(false, "") })
 		})
 	})
 	a.filePromptDialog(c)
@@ -272,14 +276,14 @@ func (a *desktop) fileRowsWithState(c *ui.Context, entries []backend.FileEntry, 
 		// The shared menu keeps row-specific actions ahead of the viewport's.
 		uikit.ContextMenu(row, func(m *ui.Menu) {
 			if entry.Dir {
-				if m.Item("新建文件").Chosen() {
+				if m.Item(locales.Text("新建文件")).Chosen() {
 					a.openFilePrompt(false, path)
 				}
-				if m.Item("新建目录").Chosen() {
+				if m.Item(locales.Text("新建目录")).Chosen() {
 					a.openFilePrompt(true, path)
 				}
 			}
-			if m.Item("打开目录").Chosen() {
+			if m.Item(locales.Text("打开目录")).Chosen() {
 				if entry.Dir {
 					a.openInManager(path)
 				} else {
@@ -288,11 +292,11 @@ func (a *desktop) fileRowsWithState(c *ui.Context, entries []backend.FileEntry, 
 			}
 			m.Separator()
 			if !entry.Dir {
-				if m.Item("复制文件").Chosen() {
+				if m.Item(locales.Text("复制文件")).Chosen() {
 					a.copyExplorerFile(services, path)
 				}
 			}
-			if m.Item("粘贴文件").Chosen() {
+			if m.Item(locales.Text("粘贴文件")).Chosen() {
 				target := path
 				if !entry.Dir {
 					target = fileParent(path)
@@ -300,29 +304,29 @@ func (a *desktop) fileRowsWithState(c *ui.Context, entries []backend.FileEntry, 
 				a.pasteFiles(services, target)
 			}
 			m.Separator()
-			if m.Item("复制相对路径").Chosen() {
+			if m.Item(locales.Text("复制相对路径")).Chosen() {
 				services.WriteClipboard(path)
 			}
-			if m.Item("复制完整路径").Chosen() {
+			if m.Item(locales.Text("复制完整路径")).Chosen() {
 				full := path
 				if t := a.current(); t != nil {
 					full = filepath.Join(t.Workspace, filepath.FromSlash(path))
 				}
 				services.WriteClipboard(full)
 			}
-			if m.Item("属性").Chosen() {
+			if m.Item(locales.Text("属性")).Chosen() {
 				a.openFileInfo(entry.Path)
 			}
 			m.Separator()
-			if m.Item("重命名").Chosen() {
+			if m.Item(locales.Text("重命名")).Chosen() {
 				a.openRenamePrompt(path)
 			}
-			if m.Item("删除").Chosen() {
+			if m.Item(locales.Text("删除")).Chosen() {
 				a.deleteFileEntry(entry)
 			}
 			if entry.Dir {
 				// Mirror the Vue explorer: a directory row can refresh just itself.
-				if m.Item("刷新").Chosen() {
+				if m.Item(locales.Text("刷新")).Chosen() {
 					a.refreshFolder(path)
 				}
 			}
@@ -363,21 +367,28 @@ func (a *desktop) filePromptDialog(c *ui.Context) {
 	if !a.filesF.NewOpen {
 		return
 	}
-	title := "新建文件"
+	title := locales.Text("新建文件")
 	if a.filesF.Rename {
-		title = "重命名"
+		title = locales.Text("重命名")
 	} else if a.filesF.NewDir {
-		title = "新建目录"
+		title = locales.Text("新建目录")
 	}
 	modalCard(c, &a.filesF.NewOpen, widthModalSmall, func() {
-		modalTitle(c, title, "名称不含路径分隔符。")
+		modalTitle(c, title, locales.Text("名称不含路径分隔符。"))
 		value := a.filesF.NewName
-		uikit.Input(c.Key("file-prompt-name"), &value).Label(title).FillWidth().AutoFocus()
+		name := uikit.Input(c.Key("file-prompt-name"), &value).Label(locales.Text("文件名称")).FillWidth().AutoFocus()
+		// Enter in the name field submits, as a desktop dialog does: the button is
+		// not the only way to confirm. The field's own value is the newest one at
+		// that point, so it is copied into the dialog state before submitting.
+		name.OnSubmit(func() {
+			a.filesF.NewName = value
+			a.submitFilePrompt()
+		})
 		a.filesF.NewName = value
 		inlineError(c, "file-prompt-error", a.filesF.PromptErr)
 		modalActions(c, func() {
-			flat(c, "取消").OnClick(func() { a.filesF.NewOpen = false })
-			primary(c, map[bool]string{true: "保存", false: "创建"}[a.filesF.Rename]).OnClick(func() { a.submitFilePrompt() })
+			flat(c, locales.Text("取消")).OnClick(func() { a.filesF.NewOpen = false })
+			primary(c, map[bool]string{true: locales.Text("保存"), false: locales.Text("创建")}[a.filesF.Rename]).OnClick(func() { a.submitFilePrompt() })
 		})
 	})
 }
@@ -389,7 +400,7 @@ func (a *desktop) submitFilePrompt() {
 	}
 	name := strings.TrimSpace(a.filesF.NewName)
 	if name == "" || strings.ContainsAny(name, `/\`) {
-		a.filesF.PromptErr = "名称无效，请输入不含路径的名称"
+		a.filesF.PromptErr = locales.Text("名称无效，请输入不含路径的名称")
 		return
 	}
 	workspace := t.Workspace
@@ -411,13 +422,8 @@ func (a *desktop) submitFilePrompt() {
 			_, err := a.core.RenamePath(backend.RenamePathRequest{Workspace: root, Path: path, NewName: name})
 			if err == nil {
 				a.win.Update(func() {
-					// The open document would keep pointing at a path that no longer
-					// exists, so release it (asking first if it has edits).
-					if file := a.activeFile(); file != nil && strings.EqualFold(filepath.ToSlash(file.Path), filepath.ToSlash(path)) {
-						a.closeFile()
-					}
-					a.refreshFiles()
-					a.notify("已重命名")
+					a.explorerPathChanged(root, path)
+					a.notify(locales.Text("已重命名"))
 				})
 			}
 			return err
@@ -439,7 +445,7 @@ func (a *desktop) submitFilePrompt() {
 			_, err = a.core.CreateFile(backend.CreateFileRequest{Workspace: workspace, Path: full})
 		}
 		if err == nil {
-			a.win.Update(func() { a.refreshFiles(); a.notify("已创建 " + full) })
+			a.win.Update(func() { a.refreshWorkspaceFiles(workspace); a.notify(locales.Text("已创建 ") + full) })
 		}
 		return err
 	})
@@ -450,20 +456,33 @@ func (a *desktop) deleteFileEntry(entry backend.FileEntry) {
 	if t == nil {
 		return
 	}
-	kind := "文件"
+	kind := locales.Text("文件")
 	if entry.Dir {
-		kind = "目录"
+		kind = locales.Text("目录")
 	}
-	detail := "确定删除" + kind + "「" + entry.Name + "」吗？此操作不可恢复。"
-	a.confirmAction("确认删除", detail, func() error {
-		return a.core.DeletePath(backend.DeletePathRequest{Workspace: t.Workspace, Paths: []string{entry.Path}, Recursive: entry.Dir})
+	detail := locales.Text("确定删除") + kind + "「" + entry.Name + locales.Text("」吗？此操作不可恢复。")
+	workspace := t.Workspace
+	a.confirmAction(locales.Text("确认删除"), detail, func() error {
+		return a.core.DeletePath(backend.DeletePathRequest{Workspace: workspace, Paths: []string{entry.Path}, Recursive: entry.Dir})
 	}, func() {
-		if file := a.activeFile(); file != nil && workspacePathContains(entry.Path, file.Path) {
-			a.closeFile()
-		}
-		a.refreshFiles()
-		a.notifySuccess("已删除" + kind + "「" + entry.Name + "」")
+		a.explorerPathChanged(workspace, entry.Path)
+		a.notifySuccess(locales.Text("已删除") + kind + "「" + entry.Name + "」")
 	})
+}
+
+// Async file operations belong to their captured workspace even if another tab
+// is active when they finish. A renamed directory also invalidates descendants.
+func (a *desktop) explorerPathChanged(workspace, path string) {
+	if file := a.workspaceFiles[workspaceKey(workspace)]; file != nil && workspacePathContains(path, file.Path) {
+		a.closeWorkspaceFile(workspace)
+	}
+	a.refreshWorkspaceFiles(workspace)
+}
+
+func (a *desktop) refreshWorkspaceFiles(workspace string) {
+	if current := a.current(); current != nil && sameWorkspace(current.Workspace, workspace) {
+		a.refreshFiles()
+	}
 }
 
 // workspacePathContains reports whether child is the same workspace-relative
@@ -512,24 +531,12 @@ func (a *desktop) toggleFolder(path string) {
 // prepareFileTree retains visible rows and disclosure state during a refresh of
 // the same workspace. Collapsed listings are invalidated for their next open.
 func (a *desktop) prepareFileTree(root string) {
-	key := ""
-	if root != "" {
-		key = workspaceKey(root)
-	}
-	if key == "" || key != a.fileRoot {
-		a.resetFileExplorer()
-		a.releaseFilePreview()
-		a.files = nil
-		a.fileOpen = map[string]bool{}
-		a.fileChildren = map[string][]backend.FileEntry{}
-	} else {
-		for path := range a.fileChildren {
-			if !a.fileOpen[path] {
-				delete(a.fileChildren, path)
-			}
+	a.selectFileTree(root)
+	for path := range a.fileChildren {
+		if !a.fileOpen[path] {
+			delete(a.fileChildren, path)
 		}
 	}
-	a.fileRoot = key
 	a.fileLoading = map[string]bool{}
 }
 
@@ -636,10 +643,10 @@ func (a *desktop) loadFolderChildren(path string, manual ...bool) {
 			}
 			a.applyFileTreeEntries(path, result.Entries)
 			if len(manual) > 0 && manual[0] {
-				a.notifySuccess("目录已刷新")
+				a.notifySuccess(locales.Text("目录已刷新"))
 			}
 			if result.Truncated {
-				a.notify("目录过大，仅显示前 1000 项")
+				a.notify(locales.Text("目录过大，仅显示前 1000 项"))
 			}
 		})
 	}()
@@ -654,11 +661,11 @@ func (a *desktop) copyExplorerFile(services ui.Services, path string) {
 	}
 	data, err := transfer.FileData(filepath.Join(t.Workspace, filepath.FromSlash(path)))
 	if err != nil {
-		a.notifyError("复制文件失败：" + err.Error())
+		a.notifyError(locales.Text("复制文件失败：") + err.Error())
 		return
 	}
 	services.WriteClipboardData(data)
-	a.notifySuccess("文件已复制")
+	a.notifySuccess(locales.Text("文件已复制"))
 }
 
 // pasteFiles captures the clipboard and destination on the UI thread. The
@@ -670,11 +677,11 @@ func (a *desktop) pasteFiles(services ui.Services, target string) {
 	}
 	sources, err := services.ReadClipboardData(transfer.FileList, transfer.URIList).Files()
 	if err != nil && !errors.Is(err, transfer.ErrFormat) {
-		a.notifyError("读取剪贴板失败：" + err.Error())
+		a.notifyError(locales.Text("读取剪贴板失败：") + err.Error())
 		return
 	}
 	if len(sources) == 0 {
-		a.notify("剪贴板中没有文件")
+		a.notify(locales.Text("剪贴板中没有文件"))
 		return
 	}
 	if a.core == nil {
@@ -693,11 +700,11 @@ func (a *desktop) pasteFiles(services ui.Services, target string) {
 				return
 			}
 			if len(result.Failed) > 0 {
-				a.notifyError(fmt.Sprintf("已复制 %d 个文件，%d 项失败", len(result.Copied), len(result.Failed)))
+				a.notifyError(fmt.Sprintf(locales.Text("已复制 %d 个文件，%d 项失败"), len(result.Copied), len(result.Failed)))
 			} else if len(result.Copied) == 0 {
-				a.notify("剪贴板中没有可复制的文件（不支持目录）")
+				a.notify(locales.Text("剪贴板中没有可复制的文件（不支持目录）"))
 			} else {
-				a.notifySuccess(fmt.Sprintf("已粘贴 %d 个文件", len(result.Copied)))
+				a.notifySuccess(fmt.Sprintf(locales.Text("已粘贴 %d 个文件"), len(result.Copied)))
 			}
 			if current := a.current(); current != nil && workspaceKey(current.Workspace) == workspaceKey(req.Workspace) {
 				if req.TargetDir == "" {
@@ -721,10 +728,8 @@ func (a *desktop) openFileInfoWithNote(path, note string) {
 	if t == nil {
 		return
 	}
-	// A modal can cover an actively playing media preview. Destroy the native
-	// surface while the preview is not visible; the next render recreates it
-	// after the dialog closes if the same file is still selected.
-	a.releaseFilePreview()
+	// The modal covers the preview without retiring its page or playback position.
+	a.hideFilePreview()
 	a.closeFileInfo()
 	a.filesF.InfoOpen = true
 	a.filesF.InfoPath = path
@@ -784,66 +789,66 @@ func (a *desktop) fileInfoDialog(c *ui.Context) {
 	info := a.filesF.Info
 	dialog := modalCard(c, &a.filesF.InfoOpen, 640, func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "文件信息").FontSize(fsDialogTitle).Bold()
+			ui.Text(c, locales.Text("文件信息")).FontSize(fsDialogTitle).Bold()
 			ui.Spacer(c)
-			iconAction(c, "file-info-close", "关闭属性", "close", 24, a.closeFileInfo)
+			iconAction(c, "file-info-close", locales.Text("关闭属性"), "close", 24, a.closeFileInfo)
 		})
 		fieldNote(c, a.filesF.InfoPath, a.secondaryInk())
 		if a.filesF.InfoNote != "" {
 			fieldNote(c, a.filesF.InfoNote, a.secondaryInk())
 		}
 		if a.filesF.InfoBusy {
-			busyRow(c, "正在读取文件信息…", a.secondaryInk())
+			busyRow(c, locales.Text("正在读取文件信息…"), a.secondaryInk())
 			return
 		}
 		if a.filesF.InfoError != "" {
-			notice(c, "error", "读取文件信息失败："+a.filesF.InfoError, a.secondaryInk())
+			notice(c, "error", locales.Text("读取文件信息失败：")+a.filesF.InfoError, a.secondaryInk())
 			return
 		}
-		a.fileInfoSection(c, "基本信息", [][2]string{
-			{"相对路径", info.Path},
-			{"完整路径", info.Absolute},
-			{"大小", fmt.Sprintf("%s (%d B)", fmtBytes(info.Size), info.Size)},
-			{"类型", strings.TrimPrefix(info.Extension, ".")},
+		a.fileInfoSection(c, locales.Text("基本信息"), [][2]string{
+			{locales.Text("相对路径"), info.Path},
+			{locales.Text("完整路径"), info.Absolute},
+			{locales.Text("大小"), fmt.Sprintf("%s (%d B)", fmtBytes(info.Size), info.Size)},
+			{locales.Text("类型"), strings.TrimPrefix(info.Extension, ".")},
 		})
-		a.fileInfoSection(c, "时间", [][2]string{
-			{"修改时间", info.ModTime},
-			{"创建时间", info.BirthTime},
+		a.fileInfoSection(c, locales.Text("时间"), [][2]string{
+			{locales.Text("修改时间"), info.ModTime},
+			{locales.Text("创建时间"), info.BirthTime},
 		})
 		if info.IsDir && a.filesF.InfoDetails {
-			a.fileInfoSection(c, "目录统计", [][2]string{
-				{"子目录数", fmt.Sprint(info.DirCount)},
-				{"文件数", fmt.Sprint(info.FileCount)},
-				{"总大小", fmtBytes(info.TotalSize)},
+			a.fileInfoSection(c, locales.Text("目录统计"), [][2]string{
+				{locales.Text("子目录数"), fmt.Sprint(info.DirCount)},
+				{locales.Text("文件数"), fmt.Sprint(info.FileCount)},
+				{locales.Text("总大小"), fmtBytes(info.TotalSize)},
 			})
 		}
 		if info.SHA256 != "" {
-			a.fileInfoSection(c, "校验和", [][2]string{
+			a.fileInfoSection(c, locales.Text("校验和"), [][2]string{
 				{"MD5", info.MD5},
 				{"SHA-256", info.SHA256},
 				{"CRC32", info.CRC32},
 			})
 		}
-		a.fileInfoSection(c, "存储与权限", [][2]string{
-			{"权限", info.Mode},
-			{"占用空间", fmtBytes(info.AllocSize)},
-			{"块数", fmt.Sprint(info.Blocks)},
-			{"块大小", fmtBytes(info.BlockSize)},
-			{"链接目标", info.LinkTarget},
+		a.fileInfoSection(c, locales.Text("存储与权限"), [][2]string{
+			{locales.Text("权限"), info.Mode},
+			{locales.Text("占用空间"), fmtBytes(info.AllocSize)},
+			{locales.Text("块数"), fmt.Sprint(info.Blocks)},
+			{locales.Text("块大小"), fmtBytes(info.BlockSize)},
+			{locales.Text("链接目标"), info.LinkTarget},
 		})
 		modalActions(c, func() {
 			if !a.filesF.InfoDetails {
-				label := "计算校验和"
+				label := locales.Text("计算校验和")
 				if info.IsDir {
-					label = "统计目录"
+					label = locales.Text("统计目录")
 				}
 				flat(c, label).OnClick(func() { a.loadFileInfo(true) })
 			}
 			if !info.IsDir {
 				req := backend.WorkspacePathRequest{Workspace: a.filesF.InfoWorkspace, Path: a.filesF.InfoPath}
-				flat(c, "系统应用打开").OnClick(func() { a.job(func() error { return a.core.OpenWorkspaceFile(req) }) })
+				flat(c, locales.Text("系统应用打开")).OnClick(func() { a.job(func() error { return a.core.OpenWorkspaceFile(req) }) })
 			}
-			flat(c, "关闭").OnClick(a.closeFileInfo)
+			flat(c, locales.Text("关闭")).OnClick(a.closeFileInfo)
 		})
 	})
 	if dialog.Dismissed() {
@@ -863,9 +868,9 @@ func (a *desktop) fileInfoSection(c *ui.Context, title string, rows [][2]string)
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Width(96).Children(func() { fieldLabel(c, row[0]) })
 				uikit.Tooltip(c, ui.Text(c, row[1]).Font(monoFamily).FontSize(fsTiny).Selectable().Grow(1).SingleLine(), row[1])
-				iconAction(c, "copy-"+title+row[0], "复制", "copy", 18, func() {
+				iconAction(c, "copy-"+title+row[0], locales.Text("复制"), "copy", 18, func() {
 					c.WriteClipboard(row[1])
-					c.Toast("已复制")
+					c.Toast(locales.Text("已复制"))
 				})
 			})
 		}
@@ -890,7 +895,7 @@ func (a *desktop) loadGitDiff(t *conversation, repo string, manual ...bool) {
 				if result.Error != "" {
 					a.notifyError(result.Error)
 				} else {
-					a.notifySuccess("Git 改动已刷新")
+					a.notifySuccess(locales.Text("Git 改动已刷新"))
 				}
 			}
 		})
@@ -910,22 +915,22 @@ func (a *desktop) gitDiffDialog(c *ui.Context) {
 			t := a.current()
 			data := a.filesF.GitData
 			ui.Row(c).AlignItems(ui.Center).Gap(gapField).Wrap().Children(func() {
-				ui.Text(c, "Git 改动").FontSize(fsDialogTitle).Bold()
+				ui.Text(c, locales.Text("Git 改动")).FontSize(fsDialogTitle).Bold()
 				if data.Branch != "" {
 					neutralChip(c, data.Branch)
 				}
 				if data.Truncated {
-					statusBadge(c, "已截断", "warn")
+					statusBadge(c, locales.Text("已截断"), "warn")
 				}
 				ui.Spacer(c)
-				flat(c, "刷新").Disabled(a.filesF.GitBusy).OnClick(func() { a.loadGitDiff(t, a.filesF.GitRepo, true) })
-				iconAction(c, "git-diff-close", "关闭", "close", 24, func() {
+				flat(c, locales.Text("刷新")).Disabled(a.filesF.GitBusy).OnClick(func() { a.loadGitDiff(t, a.filesF.GitRepo, true) })
+				iconAction(c, "git-diff-close", locales.Text("关闭"), "close", 24, func() {
 					a.core.CancelGitDiff()
 					a.filesF.GitOpen = false
 				})
 			})
 			if a.filesF.GitBusy {
-				busyRow(c, "正在加载 diff…", a.secondaryInk())
+				busyRow(c, locales.Text("正在加载 diff…"), a.secondaryInk())
 				return
 			}
 			if data.Error != "" {
@@ -933,11 +938,11 @@ func (a *desktop) gitDiffDialog(c *ui.Context) {
 				return
 			}
 			if !data.IsRepo {
-				emptyState(c, "当前目录不是 Git 仓库", "", a.secondaryInk())
+				emptyState(c, locales.Text("当前目录不是 Git 仓库"), "", a.secondaryInk())
 				return
 			}
 			if len(data.Files) == 0 {
-				emptyState(c, "当前没有 Git 改动", "", a.secondaryInk())
+				emptyState(c, locales.Text("当前没有 Git 改动"), "", a.secondaryInk())
 				return
 			}
 			ui.Row(c).Grow(1).MinHeight(0).Gap(gapSection).AlignItems(ui.Stretch).Children(func() {
@@ -949,21 +954,21 @@ func (a *desktop) gitDiffDialog(c *ui.Context) {
 				ui.Scroll(c).Grow(1).MinWidth(0).Children(func() {
 					ui.Column(c).Gap(gapInline).Children(func() {
 						if a.filesF.GitFile < 0 || a.filesF.GitFile >= len(data.Files) {
-							fieldNote(c, "选择一个文件查看 diff。", a.secondaryInk())
+							fieldNote(c, locales.Text("选择一个文件查看 diff。"), a.secondaryInk())
 							return
 						}
 						file := data.Files[a.filesF.GitFile]
 						ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 							ui.Text(c, file.Path).Font(monoFamily).FontSize(fsSmall).Grow(1).SingleLine()
 							if file.Binary {
-								statusBadge(c, "二进制", "warn")
+								statusBadge(c, locales.Text("二进制"), "warn")
 							}
 							if file.Truncated {
-								statusBadge(c, "已截断", "warn")
+								statusBadge(c, locales.Text("已截断"), "warn")
 							}
 						})
 						if file.Diff == "" {
-							fieldNote(c, "无文本 diff。", a.secondaryInk())
+							fieldNote(c, locales.Text("无文本 diff。"), a.secondaryInk())
 							return
 						}
 						gitUnifiedDiff(c, file.Diff, a.secondaryInk())

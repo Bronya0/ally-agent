@@ -3,7 +3,9 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
+	backend "ally-dev/internal/app"
 	"ally-dev/internal/chatgpt"
+	"ally-dev/locales"
 	"fmt"
 	"github.com/egoist/mygo/ui"
 )
@@ -47,7 +49,7 @@ func (a *desktop) cancelOAuthWhenLeaving() {
 			a.core.CancelChatGPTLogin()
 		}
 		o.busy = false
-		o.notice = "登录已取消"
+		o.notice = locales.Text("登录已取消")
 	}
 }
 
@@ -58,7 +60,7 @@ func (a *desktop) changeModelAuth(value string) {
 	if value == "chatgpt_oauth" {
 		a.modelDraft.AuthType = value
 		a.modelDraft.ProviderName = "ChatGPT Official"
-		a.modelDraft.APIFormat = "openai_responses"
+		a.modelDraft.APIFormat = backend.APIFormatOpenAIResponses
 		a.modelDraft.BaseURL = "https://api.openai.com/v1"
 		a.modelDraft.ContextWindow = 512000
 		a.modelContextWindow = 512000
@@ -78,7 +80,7 @@ func (a *desktop) changeModelAuth(value string) {
 		if a.modelDraft.ProviderName == "ChatGPT Official" {
 			a.modelDraft.ProviderName = ""
 		}
-		a.modelDraft.APIFormat = "openai"
+		a.modelDraft.APIFormat = backend.APIFormatOpenAIChat
 		a.modelDraft.BaseURL = ""
 	}
 }
@@ -181,7 +183,7 @@ func (a *desktop) fetchOAuthModels(id string) {
 			}
 			o.models = models
 			if len(models) == 0 {
-				o.notice = "该账号没有返回可用模型"
+				o.notice = locales.Text("该账号没有返回可用模型")
 			} else {
 				o.notice = ""
 			}
@@ -198,7 +200,7 @@ func (a *desktop) loginOAuth(id string, enablePlan bool) {
 	o.busy = true
 	o.loading = false
 	o.models = nil
-	o.notice = "请在浏览器完成授权…"
+	o.notice = locales.Text("请在浏览器完成授权…")
 	go func() {
 		account, err := a.core.LoginChatGPT(id, enablePlan)
 		var accounts []chatgpt.Account
@@ -222,10 +224,10 @@ func (a *desktop) loginOAuth(id string, enablePlan bool) {
 			}
 			a.modelDraft.OAuthAccountID = account.ID
 			if account.PlanEnabled {
-				o.notice = "登录成功，正在获取模型"
+				o.notice = locales.Text("登录成功，正在获取模型")
 				a.fetchOAuthModels(account.ID)
 			} else {
-				o.notice = "已登录；如需使用套餐调用，请点击“启用套餐调用”并完成授权"
+				o.notice = locales.Text("已登录；如需使用套餐调用，请点击“启用套餐调用”并完成授权")
 			}
 		})
 	}()
@@ -260,9 +262,9 @@ func (a *desktop) logoutOAuth() {
 				return
 			}
 			o.accounts = accounts
-			o.notice = "账号已退出"
+			o.notice = locales.Text("账号已退出")
 			if !result.RemoteRevoked {
-				o.notice = "本地账号已退出，远程授权未撤销"
+				o.notice = locales.Text("本地账号已退出，远程授权未撤销")
 			}
 			for _, account := range accounts {
 				if account.ID == id {
@@ -285,12 +287,12 @@ func (a *desktop) oauthPanel(c *ui.Context) {
 	}
 	ui.Column(c).Padding(12).Gap(gapField).Border(1, surfaceBorder(c)).Radius(6).Children(func() {
 		ui.Text(c, "ChatGPT").Bold()
-		ui.Text(c, "使用 ChatGPT 套餐与额度。登录后在模型管理中添加模型。").FontSize(fsTiny).TextColor(a.secondaryInk())
+		ui.Text(c, locales.Text("使用 ChatGPT 套餐与额度。登录后在模型管理中添加模型。")).FontSize(fsTiny).TextColor(a.secondaryInk())
 		options := make([]string, 0, len(o.accounts))
 		for _, account := range o.accounts {
 			options = append(options, accountLabel(account))
 		}
-		if uikit.Select(c, &o.accountLabel, options, a.secondaryInk()).Label("ChatGPT 账号").FillWidth().Disabled(o.busy || o.loggingOut).Changed() {
+		if uikit.Select(c, &o.accountLabel, options, a.secondaryInk()).Label(locales.Text("ChatGPT 账号")).FillWidth().Disabled(o.busy || o.loggingOut).Changed() {
 			a.selectOAuthAccount(o.accountLabel)
 		}
 		var current *chatgpt.Account
@@ -301,39 +303,39 @@ func (a *desktop) oauthPanel(c *ui.Context) {
 			}
 		}
 		if current != nil {
-			state := "未登录"
+			state := locales.Text("未登录")
 			if current.SignedIn {
-				state = "已登录，未授权套餐调用"
+				state = locales.Text("已登录，未授权套餐调用")
 				if current.PlanEnabled {
-					state = "已授权套餐调用"
+					state = locales.Text("已授权套餐调用")
 				}
 			}
 			ui.Text(c, fmt.Sprintf("%s · %s", accountLabel(*current), state)).FontSize(fsCaption).TextColor(a.secondaryInk())
 		}
 		ui.Row(c).Gap(gapInline).Wrap().Children(func() {
-			primary(c, "使用 ChatGPT 登录").Disabled(o.busy || o.loggingOut).OnClick(func() { a.loginOAuth("", false) })
+			primary(c, locales.Text("使用 ChatGPT 登录")).Disabled(o.busy || o.loggingOut).OnClick(func() { a.loginOAuth("", false) })
 			if o.busy {
-				flat(c, "取消登录").OnClick(func() { a.core.CancelChatGPTLogin() })
+				flat(c, locales.Text("取消登录")).OnClick(func() { a.core.CancelChatGPTLogin() })
 			}
 			if current != nil {
-				label := "重新登录"
+				label := locales.Text("重新登录")
 				plan := false
 				if !current.PlanEnabled {
-					label = "启用套餐调用"
+					label = locales.Text("启用套餐调用")
 					plan = true
 				}
 				id := current.ID
 				flat(c, label).Disabled(o.busy || o.loggingOut).OnClick(func() { a.loginOAuth(id, plan) })
 				if current.SignedIn {
-					flat(c, "退出账号").Disabled(o.busy || o.loggingOut).OnClick(a.logoutOAuth)
+					flat(c, locales.Text("退出账号")).Disabled(o.busy || o.loggingOut).OnClick(a.logoutOAuth)
 				}
-				flat(c, "刷新模型").Disabled(o.busy || o.loading || o.loggingOut || !current.PlanEnabled).OnClick(func() { a.fetchOAuthModels(id) })
+				flat(c, locales.Text("刷新模型")).Disabled(o.busy || o.loading || o.loggingOut || !current.PlanEnabled).OnClick(func() { a.fetchOAuthModels(id) })
 			}
 			services := c.Services()
-			flat(c, "查看套餐用量").OnClick(func() { services.OpenURL("https://chatgpt.com/settings/usage") })
+			flat(c, locales.Text("查看套餐用量")).OnClick(func() { services.OpenURL("https://chatgpt.com/settings/usage") })
 		})
 		if o.loading || o.busy {
-			ui.Text(c, "正在处理…").FontSize(fsCaption).TextColor(a.secondaryInk())
+			ui.Text(c, locales.Text("正在处理…")).FontSize(fsCaption).TextColor(a.secondaryInk())
 		}
 		if o.notice != "" {
 			ui.Text(c, o.notice).FontSize(fsCaption).TextColor(a.secondaryInk()).MaxLines(4)

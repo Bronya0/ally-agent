@@ -3,25 +3,13 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
-	"path/filepath"
-	"strings"
 )
 
-// startupWorkspace mirrors the sidebar's history workspace list: session
-// entries arrive newest first, and the first non-temporary workspace wins.
-func startupWorkspace(sessions []backend.SessionIndexEntry, fallback string) string {
-	seen := make(map[string]bool, len(sessions))
-	for _, session := range sessions {
-		path := session.Workspace
-		if path == "" || strings.HasPrefix(filepath.Base(path), "ally-temp-") {
-			continue
-		}
-		key := strings.ToLower(filepath.Clean(path))
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		return path
+// startupWorkspace uses the same history as both workspace menus, including a
+// recent workspace that has never had a saved conversation.
+func startupWorkspace(recent []string, sessions []backend.SessionIndexEntry, fallback string) string {
+	if roots := workspaceHistoryRoots(recent, sessions); len(roots) > 0 {
+		return roots[0]
 	}
 	return fallback
 }
