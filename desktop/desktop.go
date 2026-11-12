@@ -65,6 +65,10 @@ type conversation struct {
 	toolRev       uint64
 	groupChanges  *toolGroupChanges
 	messageLookup transcriptLookup
+	// rowKeys memoizes the identity strings a frame builds for this
+	// conversation's rows: each depends only on its prefix and index, and a
+	// frame builds one per visible row, every frame.
+	rowKeys map[rowKey]string
 }
 
 type workspaceFile struct {

@@ -209,7 +209,7 @@ func (a *desktop) messageRow(c *ui.Context, t *conversation, i int, rows *transc
 	}
 	role := str(m, "role")
 	st := t.uiState()
-	row := ui.Column(c.Key(widgetKey("message", t.ID, i))).FillWidth().MinWidth(0).Gap(10)
+	row := ui.Column(c.Key(t.transcriptKey("message", i))).FillWidth().MinWidth(0).Gap(10)
 	if role == "user" {
 		if st.PromptHandles == nil {
 			st.PromptHandles = map[int]*ui.Handle{}
@@ -334,7 +334,7 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 	content := str(m, "content")
 	p := a.currentPalette()
 	services := c.Services()
-	message := ui.Column(c.Key(widgetKey("user-bubble", t.ID, i))).Label(locales.Text("用户消息区域")).AlignSelf(ui.End).AlignItems(ui.End).MaxWidthPercent(85).MinWidth(0).Gap(gapTight)
+	message := ui.Column(c.Key(t.transcriptKey("user-bubble", i))).Label(locales.Text("用户消息区域")).AlignSelf(ui.End).AlignItems(ui.End).MaxWidthPercent(85).MinWidth(0).Gap(gapTight)
 	message.Children(func() {
 		background := p.accent.Alpha(0.10)
 		if p.dark {
@@ -389,7 +389,7 @@ func lastUserIndex(messages []map[string]any) int {
 // collapsiblePrompt keeps very long questions readable: the first lines show,
 // the rest expands on demand.
 func (a *desktop) collapsiblePrompt(c *ui.Context, t *conversation, i int, content string) {
-	v := ui.Column(c).Key(widgetKey("prompt", t.ID, i)).Gap(gapInline)
+	v := ui.Column(c).Key(t.transcriptKey("prompt", i)).Gap(gapInline)
 	// The counts and the collapsed preview change only with the content, so a
 	// pasted log is cut, split and joined once per message instead of on every
 	// frame the bubble is visible.
@@ -469,7 +469,7 @@ func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[
 		notice(c, "error", content, a.secondaryInk())
 		return
 	}
-	markdown.View(c.Key(widgetKey("md", t.ID, i)), content, a.markdownOptions(t, i)).FillWidth()
+	markdown.View(c.Key(t.transcriptKey("md", i)), content, a.markdownOptions(t, i)).FillWidth()
 	if suggestions, ok := m["suggestions"].([]any); ok && len(suggestions) > 0 {
 		ui.Row(c).Gap(gapInline).Wrap().Children(func() {
 			for n, s := range suggestions {
@@ -484,7 +484,7 @@ func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[
 
 func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *roundStat, show bool) {
 	modelSeconds := float64(stat.ModelDurationMS) / 1000
-	row := ui.Row(c.Key(widgetKey("round-stats", t.ID, i))).FillWidth().Height(heightRow + 2).Gap(gapInline + 1).AlignItems(ui.Center)
+	row := ui.Row(c.Key(t.transcriptKey("round-stats", i))).FillWidth().Height(heightRow + 2).Gap(gapInline + 1).AlignItems(ui.Center)
 	// The controls fade in with the message row but never go inert. Removing
 	// them instead took away the button a panel is anchored to, and the panel
 	// lives in the window's overlay: it vanished the moment the pointer moved
@@ -514,7 +514,7 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("%d token/s", int(float64(stat.OutputTokens)/modelSeconds))).FontSize(fsSmall).TextColor(a.secondaryInk()), locales.Text("累计模型请求耗时内的平均输出速度，包含首 token 等待，不含工具执行时间"))
 		}
 		services := c.Services()
-		iconMenu(c, widgetKey("export", "", i), locales.Text("导出"), "download", 22, 180, func(m ui.MenuParts) {
+		iconMenu(c, t.roundKey("export", i), locales.Text("导出"), "download", 22, 180, func(m ui.MenuParts) {
 			uikit.MenuItem(c, m, "answer", locales.Text("导出回答"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
 				a.exportText("ally-response.md", str(t.Messages[i], "content"))
 			})
@@ -522,11 +522,11 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 				a.exportText("ally-session.md", sessionMarkdown(t))
 			})
 		}, a.secondaryInk())
-		mutedIconAction(c, widgetKey("copy-summary", "", i), locales.Text("复制总结"), "copy", 22, func() {
+		mutedIconAction(c, t.roundKey("copy-summary", i), locales.Text("复制总结"), "copy", 22, func() {
 			services.WriteClipboard(str(t.Messages[i], "content"))
 			c.Toast(locales.Text("已复制最终总结"))
 		})
-		iconMenu(c, widgetKey("quick", "", i), locales.Text("快捷消息"), "list", 22, 180, func(m ui.MenuParts) {
+		iconMenu(c, t.roundKey("quick", i), locales.Text("快捷消息"), "list", 22, 180, func(m ui.MenuParts) {
 			for _, item := range quickMessages {
 				item := item
 				uikit.MenuItem(c, m, item.label, locales.Text(item.label), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
@@ -534,7 +534,7 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 				})
 			}
 		}, a.secondaryInk())
-		mutedIconAction(c, widgetKey("remember", "", i), locales.Text("记住这次对话的长期记忆"), "book", 22, func() {
+		mutedIconAction(c, t.roundKey("remember", i), locales.Text("记住这次对话的长期记忆"), "book", 22, func() {
 			a.send(t, locales.Text(projectMemoryPrompt)+"\n\nLocal date for this memory update: "+time.Now().Format("2006-01-02")+".")
 		})
 	})

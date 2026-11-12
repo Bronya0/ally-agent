@@ -8,6 +8,7 @@
 package app
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -112,12 +113,35 @@ func fingerprintHead(messages []openai.ChatCompletionMessage, tools []openai.Too
 		writeFramedHash(head, []byte(messages[i].Role))
 		writeFramedHash(head, []byte(messages[i].Content))
 	}
-	if raw, err := json.Marshal(tools); err == nil {
-		writeFramedHash(head, raw)
-	} else {
-		writeFramedHash(head, []byte("tools-unhashable"))
-	}
+	hashTools(head, tools)
 	return headCount, hex.EncodeToString(head.Sum(nil))
+}
+
+// toolJSONWriter encodes the tool list into its own buffer, kept for the next
+// request: the head fingerprint runs once per request and the encoded list is
+// the same size every time, so steady state allocates no byte slice for it.
+type toolJSONWriter struct {
+	buf *bytes.Buffer
+	enc *json.Encoder
+}
+
+var toolJSONPool = sync.Pool{New: func() any {
+	buf := new(bytes.Buffer)
+	return &toolJSONWriter{buf: buf, enc: json.NewEncoder(buf)}
+}}
+
+// hashTools writes the tool list as json.Marshal would write it, framed, out of
+// a pooled buffer instead of a fresh slice per request.
+func hashTools(h hash.Hash, tools []openai.Tool) {
+	w := toolJSONPool.Get().(*toolJSONWriter)
+	defer toolJSONPool.Put(w)
+	w.buf.Reset()
+	// Encoder writes json.Marshal's bytes plus a trailing newline.
+	if err := w.enc.Encode(tools); err != nil {
+		writeFramedHash(h, []byte("tools-unhashable"))
+		return
+	}
+	writeFramedHash(h, bytes.TrimSuffix(w.buf.Bytes(), []byte{'\n'}))
 }
 
 // writeFramedHash 写入"8 字节长度 + 内容"：拼接必须有边界，否则 ["ab"]["c"] 与

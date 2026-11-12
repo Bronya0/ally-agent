@@ -1594,28 +1594,28 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 	case "edit", "remote_edit":
 		diff := str(result, "diff")
 		if diff != "" {
-			a.diffBlock(c, fmt.Sprintf("tool-diff-%d", index), diff, true)
+			a.diffBlock(c, t.roundKey("tool-diff", index), diff, true)
 			return
 		}
 		if block := str(result, "changedLinesBlock"); block != "" {
-			codeBlock(c, fmt.Sprintf("tool-changed-%d", index), block, 150, a.secondaryInk())
+			codeBlock(c, t.roundKey("tool-changed", index), block, 150, a.secondaryInk())
 			return
 		}
-		codeBlock(c, fmt.Sprintf("tool-edit-%d", index), resultText(result), 150, a.secondaryInk())
+		codeBlock(c, t.roundKey("tool-edit", index), resultText(result), 150, a.secondaryInk())
 	case "command", "remote_run_command":
 		// The transcript is the whole log: joining and stripping it again on every
 		// frame copied the entire output, the biggest text a card holds.
-		holder := ui.Column(c.Key(fmt.Sprintf("tool-out-holder-%d", index)))
+		holder := ui.Column(c.Key(t.roundKey("tool-out-holder", index)))
 		memo := memoAt[memoOf[commandOutputKey, string]](holder, "output")
 		holder.Children(func() {
 			output := memo.get(commandKey(result), func(key commandOutputKey) string { return stripBlankLines(commandOutputFromKey(key)) })
 			if output == "" {
 				output = locales.Text("(没有输出)")
 			}
-			toolCodeWindow(c, fmt.Sprintf("tool-out-%d", index), output, true, "", a.secondaryInk())
+			toolCodeWindow(c, t.roundKey("tool-out", index), output, true, "", a.secondaryInk())
 		})
 	case "create", "remote_create_file":
-		codeBlock(c, fmt.Sprintf("tool-create-%d", index), resultText(result), 150, a.secondaryInk())
+		codeBlock(c, t.roundKey("tool-create", index), resultText(result), 150, a.secondaryInk())
 	case "list":
 		a.toolListBody(c, index, result)
 	case "render_html":
@@ -1623,7 +1623,7 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 		if html == "" {
 			html = str(result, "source")
 		}
-		codeBlock(c, fmt.Sprintf("tool-html-%d", index), html, 150, a.secondaryInk())
+		codeBlock(c, t.roundKey("tool-html", index), html, 150, a.secondaryInk())
 		ui.Row(c).Gap(gapField).Children(func() {
 			flat(c, locales.Text("导出 HTML")).OnClick(func() {
 				a.exportHTML(fmt.Sprintf("render-%d.html", index), html)
@@ -1671,7 +1671,7 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 			fieldNote(c, locales.Text("没有可显示的内容。"), a.secondaryInk())
 			return
 		}
-		codeBlock(c, fmt.Sprintf("tool-body-%d", index), text, 150, a.secondaryInk())
+		codeBlock(c, t.roundKey("tool-body", index), text, 150, a.secondaryInk())
 	}
 }
 

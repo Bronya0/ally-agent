@@ -54,6 +54,50 @@ func widgetKey(prefix, id string, n int) string {
 	return b.String()
 }
 
+// rowKey names one cached row identity: the prefix, the row, and whether the
+// conversation id is part of it.
+type rowKey struct {
+	prefix string
+	index  int
+	withID bool
+}
+
+// rowKeyCacheLimit bounds what a conversation keeps of row identities: a long
+// transcript visited page by page would otherwise hold one set of strings for
+// every message ever shown. Past it the cache starts over.
+const rowKeyCacheLimit = 2048
+
+func (t *conversation) keepRowKey(key rowKey, value string) {
+	if t.rowKeys == nil || len(t.rowKeys) >= rowKeyCacheLimit {
+		t.rowKeys = make(map[rowKey]string, 16)
+	}
+	t.rowKeys[key] = value
+}
+
+// transcriptKey is widgetKey(prefix, t.ID, i), built once per row instead of
+// once per frame. UI thread only.
+func (t *conversation) transcriptKey(prefix string, i int) string {
+	key := rowKey{prefix: prefix, index: i, withID: true}
+	if cached, ok := t.rowKeys[key]; ok {
+		return cached
+	}
+	built := widgetKey(prefix, t.ID, i)
+	t.keepRowKey(key, built)
+	return built
+}
+
+// roundKey is widgetKey(prefix, "", i): the keys a round's controls carry,
+// which do not name the conversation. UI thread only.
+func (t *conversation) roundKey(prefix string, i int) string {
+	key := rowKey{prefix: prefix, index: i}
+	if cached, ok := t.rowKeys[key]; ok {
+		return cached
+	}
+	built := widgetKey(prefix, "", i)
+	t.keepRowKey(key, built)
+	return built
+}
+
 func sectionTitle(c *ui.Context, s string) ui.Element {
 	return uikit.SectionTitle(c, s)
 }
