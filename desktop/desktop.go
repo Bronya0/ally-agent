@@ -95,9 +95,7 @@ type desktop struct {
 	previewRequests       []previewRequest
 	previewTimer          *time.Timer
 	previewGeneration     uint64
-	memoryTidyTimer       *time.Timer
-	memoryTidyGeneration  uint64
-	memoryTidyAt          time.Time
+	memoryReleasedAt      time.Time
 	customAvatar          *ui.Bitmap
 	customAvatarAvailable bool
 	customAvatarBusy      bool
@@ -327,17 +325,16 @@ func Run() {
 		a.win.OnHide(func() {
 			a.mainWindowHidden = true
 			a.releaseHiddenWindowResources()
-			a.scheduleMemoryTidy()
+			a.releaseMemory()
 		})
 		a.win.OnShow(a.mainWindowShown)
 		// Hiding or minimizing keeps preview pages and playback positions intact.
 		a.win.OnMinimize(func() {
 			a.hideFilePreview()
 			a.syncPluginHostVisibility(true)
-			a.scheduleMemoryTidy()
+			a.releaseMemory()
 		})
 		a.win.OnRestore(func() {
-			a.cancelMemoryTidy()
 			a.syncPluginHostVisibility(a.mainWindowHidden)
 		})
 		a.pluginHost = pluginhost.New(a.core, a.win, func(message, kind string) {
@@ -512,7 +509,6 @@ func (a *desktop) shutdown() {
 	}
 	a.closing = true
 	a.closeVoiceInput()
-	a.cancelMemoryTidy()
 	if a.upd.Applied && a.upd.State == "restarting" {
 		// The updater already flushed after ApplyUpdate stopped all runs.
 		a.finishQuit()
@@ -567,7 +563,6 @@ func (a *desktop) finishShutdown() {
 }
 
 func (a *desktop) finishQuit() {
-	a.cancelMemoryTidy()
 	a.closeVoiceInput()
 	a.stopAutoAppearance()
 	a.stopUpdateChecks()
@@ -625,6 +620,7 @@ func (a *desktop) newConversation(workspace string) {
 	a.refreshFiles()
 	a.refreshSessionFooter(t)
 	a.refreshGit(t)
+	a.releaseMemory()
 }
 
 func (a *desktop) freshConversation(workspace string) *conversation {
@@ -709,6 +705,7 @@ func (a *desktop) newSession() {
 		a.refreshSessionFooter(next)
 		a.refreshGit(next)
 	}
+	a.releaseMemory()
 }
 
 func (a *desktop) openWorkspace(workspace string) {

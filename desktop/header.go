@@ -300,6 +300,7 @@ func (a *desktop) closeWorkspaceTab(index int) {
 			a.refreshGit(t)
 		}
 	}
+	a.releaseMemory()
 }
 
 // updateDialog mirrors the original card modal: progress, state text, and the

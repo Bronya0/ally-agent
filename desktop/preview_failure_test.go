@@ -253,25 +253,6 @@ func TestWorkspacePreviewFailurePublishesOnlyToCurrentFile(t *testing.T) {
 	}
 }
 
-func TestMemoryTidyRetiredCallbackKeepsReplacementTimer(t *testing.T) {
-	a := &desktop{memoryTidyGeneration: 1, memoryTidyTimer: time.NewTimer(time.Hour)}
-	old := a.memoryTidyGeneration
-	a.cancelMemoryTidy()
-	a.memoryTidyGeneration++
-	replacement := time.NewTimer(time.Hour)
-	defer replacement.Stop()
-	a.memoryTidyTimer = replacement
-	a.runMemoryTidy(old)
-	if a.memoryTidyTimer != replacement {
-		t.Fatal("stale tidy removed new timer")
-	}
-	a.cancelMemoryTidy()
-	a.runMemoryTidy(old)
-	if a.memoryTidyTimer != nil {
-		t.Fatal("canceled callback resurrected a timer")
-	}
-}
-
 func TestPluginSyncIncludesWindowVisibility(t *testing.T) {
 	a := &desktop{prefs: defaultPrefs(), pluginHost: pluginhost.New(nil, nil, nil), plugins: []backend.PluginInfo{{ID: "test", Mode: "plugin:test", Enabled: true, Valid: true}}, page: "plugin:test"}
 	defer a.pluginHost.Close()

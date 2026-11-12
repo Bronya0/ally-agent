@@ -14,61 +14,26 @@ import (
 // counted, so the process still shows more than this.
 const memorySoftLimit = 320 << 20
 
-const (
-	// memoryTidyDelay lets the window stay out of sight first, so reopening it
-	// does not touch pages this release just returned.
-	memoryTidyDelay = 5 * time.Second
-	// memoryTidyInterval spaces repeated tray toggles: each release costs a
-	// collection and then soft faults when the pages are handed back.
-	memoryTidyInterval = 2 * time.Minute
-)
-
 func applyMemorySoftLimit() { debug.SetMemoryLimit(memorySoftLimit) }
 
-// scheduleMemoryTidy collects and releases once the window has been hidden or
-// minimized for memoryTidyDelay. Call it on the UI thread.
-func (a *desktop) scheduleMemoryTidy() {
-	if a.win == nil || a.closing || a.memoryTidyTimer != nil {
-		return
-	}
-	win := a.win
-	a.memoryTidyGeneration++
-	generation := a.memoryTidyGeneration
-	a.memoryTidyTimer = time.AfterFunc(memoryTidyDelay, func() {
-		win.Update(func() { a.runMemoryTidy(generation) })
-	})
-}
+// memoryReleaseInterval spaces repeated releases: each one stops the world and
+// then hands back pages a visible window would touch again right away.
+const memoryReleaseInterval = time.Minute
 
-// cancelMemoryTidy drops a pending tidy when the window comes back first.
-func (a *desktop) cancelMemoryTidy() {
-	// Stop cannot retract a callback already queued in Window.Update.
-	a.memoryTidyGeneration++
-	if a.memoryTidyTimer != nil {
-		a.memoryTidyTimer.Stop()
-		a.memoryTidyTimer = nil
-	}
-}
-
-func (a *desktop) runMemoryTidy(generation uint64) {
-	if generation != a.memoryTidyGeneration {
+// releaseMemory hands unused Go heap back to the OS. Hiding, minimizing,
+// closing or opening a tab, and starting a new session all call it, and their
+// previews and bitmaps are released first so the release sees that garbage.
+// The callers are user actions that can come in bursts, so at most one release
+// runs per memoryReleaseInterval.
+func (a *desktop) releaseMemory() {
+	if a.closing {
 		return
 	}
-	a.tidyMemory()
-}
-
-// tidyMemory runs on the UI thread, which only checks the window state: the
-// release itself stops the world for a few milliseconds and belongs off it.
-// A window the user can see never pays for this.
-func (a *desktop) tidyMemory() {
-	a.memoryTidyTimer = nil
-	if a.closing || a.win == nil || (!a.mainWindowHidden && !a.win.IsMinimized()) {
+	now := time.Now()
+	if !a.memoryReleasedAt.IsZero() && now.Sub(a.memoryReleasedAt) < memoryReleaseInterval {
 		return
 	}
-	// Trim only Go's unused heap. Open preview pages remain alive across hiding
-	// and minimizing; their owners release them on explicit close.
-	if !a.memoryTidyAt.IsZero() && time.Since(a.memoryTidyAt) < memoryTidyInterval {
-		return
-	}
-	a.memoryTidyAt = time.Now()
+	a.memoryReleasedAt = now
+	// Off the UI thread: the release stops the world for a few milliseconds.
 	go debug.FreeOSMemory()
 }

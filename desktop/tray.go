@@ -117,7 +117,6 @@ func (a *desktop) showMainWindow() {
 
 func (a *desktop) mainWindowShown() {
 	a.mainWindowHidden = false
-	a.cancelMemoryTidy()
 	a.syncPluginHost()
 	a.restoreAttachmentImages(a.current())
 }
