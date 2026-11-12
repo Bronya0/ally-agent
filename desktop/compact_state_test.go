@@ -6,6 +6,27 @@ import (
 	"testing"
 )
 
+func TestFastCompactionPreservesBodiesAndRetainedDuplicateID(t *testing.T) {
+	old := map[string]any{"role": "tool_call", "name": "command", "toolCallId": "reused", "status": "error", "args": `{"purpose":"old","command":"old command"}`, "result": map[string]any{"exitCode": 1, "output": "old output"}}
+	recent := map[string]any{"role": "tool_call", "name": "command", "toolCallId": "reused", "status": "success", "args": `{"purpose":"recent","command":"recent command"}`, "result": map[string]any{"exitCode": 0, "output": "recent output"}}
+	conv := &conversation{ID: "duplicate", Messages: []map[string]any{
+		{"role": "user", "content": "requirements"},
+		{"role": "assistant", "content": "complete answer"}, old, recent,
+	}}
+	before, _ := json.Marshal(recent)
+	applyFastCompaction(conv, map[string]any{
+		"toolSummaries": map[string]any{"reused": "legacy summary"},
+		"toolRecords":   []any{map[string]any{"id": "reused", "fromEnd": 2, "content": "old header", "purpose": "old purpose"}},
+	})
+	after, _ := json.Marshal(conv.Messages[3])
+	if string(before) != string(after) || str(conv.Messages[1], "content") != "complete answer" || str(conv.Messages[0], "content") != "requirements" {
+		t.Fatal("compaction changed the retained task or message bodies")
+	}
+	if str(conv.Messages[2], "body") != "old header" || str(conv.Messages[2], "purpose") != "old purpose" || toolState(conv.Messages[2]) != "error" || conv.Messages[2]["args"] != nil {
+		t.Fatal("old tool card was not compacted with its purpose/outcome")
+	}
+}
+
 func TestFastCompactionPreservesToolOutcomes(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

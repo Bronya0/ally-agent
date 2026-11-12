@@ -175,7 +175,7 @@ func newHostKeyTestCall(t *testing.T, sessionID string) *hostKeyTestCall {
 	}
 	return &hostKeyTestCall{
 		app:       app,
-		target:    remoteTarget{Raw: "127.0.0.1:" + server.port, Host: "127.0.0.1", Port: server.port, WorkspaceRoot: "/srv/app"},
+		target:    remoteTarget{Raw: "127.0.0.1:" + server.port, Host: "127.0.0.1", Port: server.port, LegacyRoot: "/srv/app"},
 		ctx:       ctx,
 		sessionID: sessionID,
 		recorded:  recordedSigner,

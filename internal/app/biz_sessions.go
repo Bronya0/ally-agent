@@ -345,6 +345,7 @@ func (a *App) SaveSession(snapshot SessionSnapshot) error {
 		return errors.New("session storage is not initialized")
 	}
 
+	snapshot = a.sessionSnapshotForStorage(snapshot)
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
 		return err
@@ -803,6 +804,20 @@ func legacySessionSnapshot(sessionID string, history []openai.ChatCompletionMess
 		if message.Role == openai.ChatMessageRoleSystem {
 			continue
 		}
+		if entries, ok := decodeFastCompactHistory(message); ok {
+			for _, entry := range entries {
+				if entry.Role == openai.ChatMessageRoleUser || entry.Role == openai.ChatMessageRoleAssistant {
+					messages = append(messages, map[string]any{"role": entry.Role, "content": entry.Content, "done": true})
+				} else if entry.Role == "tool_call" {
+					messages = append(messages, map[string]any{
+						"role": "tool_call", "name": entry.Name, "toolCallId": entry.ToolCallID,
+						"purpose": entry.Purpose, "status": entry.Status, "body": entry.Content,
+						"result": map[string]any{"_text": entry.Content}, "fastCompacted": true,
+					})
+				}
+			}
+			continue
+		}
 		content := message.Content
 		if content == "" && len(message.MultiContent) > 0 {
 			content = textFromMultiContent(message.MultiContent)
@@ -964,7 +979,7 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	// is what the next request is built from, so masking a stored password here
 	// would make the model re-send the mask for the next host instead of the real
 	// credential.
-	inMemory := sanitizeHistoryMessages(messages)
+	inMemory, origins := sanitizeHistoryMessagesWithOrigins(messages, historyProfileMemory)
 	if countToolMessages(inMemory) < countToolMessages(messages) {
 		// The repair pass dropped tool results (dangling or duplicated calls), so
 		// the payloads they carried left the model's history: the read cache must
@@ -977,7 +992,13 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	breakdown := computeLiveBreakdown(inMemory)
 	a.finalizeSessionBreakdown(sessionID, &breakdown, inMemory)
 	a.mu.Lock()
-	a.historyCacheStateLocked(sessionID).revision++
+	state := a.historyCacheStateLocked(sessionID)
+	if state.task != nil {
+		boundary := *state.task
+		boundary.Start += leadingSystemCount(messages)
+		state.task = projectHistoryTask(resolveHistoryTask(&boundary, messages), messages, inMemory, origins)
+	}
+	state.revision++
 	a.histories[sessionID] = cloneChatMessages(inMemory)
 	a.liveBreakdown[sessionID] = breakdown
 	a.mu.Unlock()
@@ -1070,6 +1091,7 @@ func writeCompressedHistoryPayload(diskPath string, payload any) error {
 // A per-session load ticket and revision. Release drops the ticket, so an
 // older disk load cannot resurrect a released/deleted session.
 type historyCacheState struct {
+	task              *historyTaskBoundary
 	revision          uint64
 	loading           chan struct{}
 	breakdown         *ContextBreakdown
@@ -1249,39 +1271,13 @@ func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, er
 	// drops, so the user-turn ordinal is not a reliable locator. With content
 	// we find the LAST user turn containing it — that is the one the user is
 	// hovering (the most recent occurrence).
-	targetIndex := -1
 	expected := strings.TrimSpace(req.ExpectedContent)
-	expectedLen := len(expected)
-	if expectedLen > 0 {
-		for i, m := range messages {
-			if m.Role != openai.ChatMessageRoleUser {
-				continue
-			}
-			content := strings.TrimSpace(textFromMessage(m))
-			if strings.Contains(content, expected) {
-				targetIndex = i
-			}
-		}
-		if targetIndex < 0 {
+	targetIndex, entryIndex := locateHistoryUser(messages, req.UserMessageIndex, expected)
+	if targetIndex < 0 {
+		if expected != "" {
 			return 0, fmt.Errorf("no user message contains expected content")
 		}
-	} else {
-		// Fallback: locate by ordinal among user turns.
-		userSeen := 0
-		for i, m := range messages {
-			if m.Role != openai.ChatMessageRoleUser {
-				continue
-			}
-			if userSeen != req.UserMessageIndex {
-				userSeen++
-				continue
-			}
-			targetIndex = i
-			break
-		}
-		if targetIndex < 0 {
-			return 0, fmt.Errorf("user message index %d not found in history", req.UserMessageIndex)
-		}
+		return 0, fmt.Errorf("user message index %d not found in history", req.UserMessageIndex)
 	}
 
 	// Keep everything strictly before the target user turn. No rewinding is
@@ -1294,7 +1290,12 @@ func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, er
 	// when the target was the second user turn — which happens whenever the user
 	// message was queued while a run was working or the run was interrupted
 	// between a tool result and the next user turn.
-	truncated := repairDanglingToolCalls(messages[:targetIndex])
+	truncated := cloneChatMessages(messages[:targetIndex])
+	if entryIndex > 0 {
+		entries, _ := decodeFastCompactHistory(messages[targetIndex])
+		truncated = append(truncated, encodeFastCompactHistory(entries[:entryIndex]))
+	}
+	truncated = repairDanglingToolCalls(truncated)
 
 	// The discarded turns may have left provider reasoning artifacts (thinking
 	// signatures, encrypted reasoning) in the replay stash; they no longer belong

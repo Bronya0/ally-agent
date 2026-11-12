@@ -50,7 +50,7 @@ func TestCreateDisplayPreviewBoundsLongUnicodeLines(t *testing.T) {
 }
 
 func TestHistoryRewritesReleaseRetiredStreamingAnswers(t *testing.T) {
-	for _, operation := range []string{"replace", "fast", "delete"} {
+	for _, operation := range []string{"replace", "delete"} {
 		t.Run(operation, func(t *testing.T) {
 			conv := &conversation{ID: "rewrite"}
 			body := appendStreamChunk(conv.uiState(), 0, "", strings.Repeat("old answer\n", 8000))
@@ -58,8 +58,6 @@ func TestHistoryRewritesReleaseRetiredStreamingAnswers(t *testing.T) {
 			switch operation {
 			case "replace":
 				replaceTranscript(conv, "summary")
-			case "fast":
-				applyFastCompaction(conv, map[string]any{"assistantEdits": []any{map[string]any{"before": body, "fromEnd": 1, "after": "excerpt"}}})
 			case "delete":
 				conv.Messages = nil
 				resetTranscriptAfterDelete(conv, 0)

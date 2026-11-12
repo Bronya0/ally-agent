@@ -108,36 +108,23 @@ def is_subpath(child, parent):
     except (ValueError, OSError):
         return False
 
-def as_posix_rel(root, path):
-    return os.path.relpath(path, root).replace("\\", "/")
+def as_posix_path(path):
+    return path.replace("\\", "/")
 
-def safe_join_paths(root, rel):
-    # 与 safe_join 同一套判定，但把两个形态都交出来：lexical 是工作区内的字面
-    # 路径（删除/写入实际作用的那个），resolved 是符号链接解析后的真实路径
-    # （用于越界与保护判定）。两者在这里一次算出，调用方不会各自解析一遍。
-    rel = "" if rel is None else to_os_text(rel)
-    if "\x00" in rel:
+def remote_path_paths(raw):
+    # Absolute remote paths are independent of the local workspace and target.
+    # Keep both forms: deletion unlinks the requested link, protection checks
+    # also inspect its destination on the remote filesystem.
+    raw = to_os_text(raw or "")
+    if "\x00" in raw:
         raise ValueError("path contains NUL byte")
-    if rel == "" or rel == ".":
-        return root, root
-    p = rel.replace("\\", "/")
-    if p.startswith("/"):
-        raise ValueError("remote path must be relative to workspaceRoot (got '%s')" % to_unicode(rel))
-    parts = [part for part in p.split("/") if part and part != "."]
-    if any(part == ".." for part in p.split("/")):
-        raise ValueError("remote path must not contain '..' (got '%s')" % to_unicode(rel))
-    lexical = os.path.normpath(os.path.join(root, *parts)) if parts else root
-    if not is_subpath(lexical, root):
-        # 与下一条分开报：这条是词法拼接之后就落到根外（根给错了，或路径拼错），
-        # 下一条是词法在根内、解析符号链接后才发现逃了出去，两者的下一步不同。
-        raise ValueError("remote path is outside workspaceRoot after normalization: '%s' (workspaceRoot '%s')" % (to_unicode(rel), to_unicode(root)))
-    resolved = os.path.realpath(lexical)
-    if not is_subpath(resolved, root):
-        raise ValueError("remote path escapes workspaceRoot via symlink: '%s' (resolved to '%s', workspaceRoot '%s')" % (to_unicode(rel), to_unicode(resolved), to_unicode(root)))
-    return lexical, resolved
+    if not raw or not os.path.isabs(raw):
+        raise ValueError("remote path must be absolute")
+    lexical = os.path.normpath(raw)
+    return lexical, os.path.realpath(lexical)
 
-def safe_join(root, rel):
-    return safe_join_paths(root, rel)[1]
+def remote_path(raw):
+    return remote_path_paths(raw)[1]
 
 def contains_vcs(path):
     parts = path.replace("\\", "/").split("/")
@@ -207,8 +194,8 @@ def is_protected_delete_path(path):
 def iso_mtime(st):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime))
 
-def read_raw_file(root, rel, max_bytes, remaining_bytes=None, tail_lines=0):
-    path = safe_join(root, rel)
+def read_raw_file(rel, max_bytes, remaining_bytes=None, tail_lines=0):
+    path = remote_path(rel)
     try:
         st = os.stat(path)
     except (OSError, IOError) as exc:
@@ -248,7 +235,7 @@ def read_raw_file(root, rel, max_bytes, remaining_bytes=None, tail_lines=0):
     if hasattr(b64, "decode"):
         b64 = b64.decode("ascii")
     return {
-        "path": as_posix_rel(root, path),
+        "path": as_posix_path(path),
         "dataBase64": to_os_text(b64),
         "size": st.st_size if is_tail else len(data),
         "tail": is_tail,
@@ -257,21 +244,21 @@ def read_raw_file(root, rel, max_bytes, remaining_bytes=None, tail_lines=0):
         "modTime": iso_mtime(st),
     }
 
-def op_read(root, payload):
-    return read_raw_file(root, payload.get("path", ""), int(payload.get("maxBytes") or 2097152), tail_lines=int(payload.get("tailLines") or 0))
+def op_read(payload):
+    return read_raw_file(payload.get("path", ""), int(payload.get("maxBytes") or 2097152), tail_lines=int(payload.get("tailLines") or 0))
 
-def op_stat(root, payload):
+def op_stat(payload):
     # 只回元数据：read_raw_file 对超限文件与目录直接报错，拿不到“是否存在”，
     # 而覆盖审批与 created 报告都必须建立在真实的存在性上。
-    path = safe_join(root, payload.get("path", ""))
+    path = remote_path(payload.get("path", ""))
     try:
         st = os.stat(path)
     except (OSError, IOError) as exc:
         if getattr(exc, "errno", None) not in (errno.ENOENT, errno.ENOTDIR):
             raise
-        return {"path": as_posix_rel(root, path), "exists": False, "isDir": False, "size": 0}
+        return {"path": as_posix_path(path), "exists": False, "isDir": False, "size": 0}
     return {
-        "path": as_posix_rel(root, path),
+        "path": as_posix_path(path),
         "exists": True,
         "isDir": bool(stat_mod.S_ISDIR(st.st_mode)),
         "size": st.st_size,
@@ -279,7 +266,7 @@ def op_stat(root, payload):
         "modTime": iso_mtime(st),
     }
 
-def op_read_batch(root, payload):
+def op_read_batch(payload):
     # 单会话批量读：逐文件独立 try（单文件失败只污染自己的结果槽，与
     # 本地批量 read 的隔离契约一致）；总字节预算装不下时把余下路径排进
     # remaining，交给 Go 侧再起一轮会话。首文件必收（files 为空时无条
@@ -292,7 +279,7 @@ def op_read_batch(root, payload):
     for rel in payload.get("paths") or []:
         item = {"path": rel, "ok": False}
         try:
-            data = read_raw_file(root, rel, max_bytes, total_bytes - used if used else None, int((payload.get("tails") or {}).get(rel) or 0))
+            data = read_raw_file(rel, max_bytes, total_bytes - used if used else None, int((payload.get("tails") or {}).get(rel) or 0))
         except Exception as exc:
             item["error"] = to_unicode(exc)
             files.append(item)
@@ -306,8 +293,8 @@ def op_read_batch(root, payload):
         files.append(item)
     return {"files": files, "remaining": remaining}
 
-def op_write(root, payload):
-    lexical, resolved = safe_join_paths(root, payload.get("path", ""))
+def op_write(payload):
+    lexical, resolved = remote_path_paths(payload.get("path", ""))
     # 版本控制元数据在远端同样是禁区：Go 侧已按字面路径判过一遍，但工作区内的
     # 符号链接能把干净的字面路径接到 .git 上（把 .git 链成 gh 之后写
     # gh/hooks/pre-commit），只有远端的事实解析才看得见，所以两个形态各判一次。
@@ -341,11 +328,11 @@ def op_write(root, payload):
     parent = os.path.dirname(path)
     created_dirs = []
     if mkdirs:
-        # 统计实际缺失的父目录链（外层→内层，相对 root），供调用方展示；
+        # 统计实际缺失的父目录链（外层→内层，绝对路径），供调用方展示；
         # 必须在 mkdir 之前探测，mkdir 失败时整个 op 报错、列表无意义。
         cur = parent
         while cur and not os.path.exists(cur):
-            created_dirs.append(as_posix_rel(root, cur))
+            created_dirs.append(as_posix_path(cur))
             next_cur = os.path.dirname(cur)
             if next_cur == cur:
                 break
@@ -433,17 +420,17 @@ def op_write(root, payload):
                 pass
     st = os.stat(path)
     return {
-        "path": as_posix_rel(root, path),
+        "path": as_posix_path(path),
         "size": st.st_size,
         "mode": st.st_mode & 0o7777,
         "modTime": iso_mtime(st),
         "createdDirs": created_dirs,
     }
 
-def check_delete_path(root, rel, recursive):
+def check_delete_path(rel, recursive):
     # 单条路径删除的全部判定，不执行任何东西。单路径与批量共用这一份：批量在
-    # 动手之前逐条跑完，任一条不通过就整批不删。Go 侧已判过路径形态（相对性、
-    # 越界、工作区根、VCS 元数据名），这里判只有远端才知道的事实：是否目录、
+    # 动手之前逐条跑完，任一条不通过就整批不删。Go 侧已判过绝对路径、
+    # 文件系统根、VCS 元数据名，这里判只有远端才知道的事实：是否目录、
     # 是否系统敏感目标；存在性只记录不拒绝（见下）。
     #
     # 两套路径各管一头：保护判定用 resolved（符号链接指向 .git 或系统目录也
@@ -451,10 +438,8 @@ def check_delete_path(root, rel, recursive):
     # 东西，与本地 delete 一致（旧实现按解析后的路径删，实测会把链接指向的
     # 文件/目录抹掉）。
     # 错误文案带上路径：批量里不点名的话，模型不知道是哪一条被拒。
-    lexical, resolved = safe_join_paths(root, rel)
-    if lexical == root:
-        raise ValueError("E_DELETE_BLOCKED: refusing to delete remote workspace root")
-    if contains_vcs(resolved):
+    lexical, resolved = remote_path_paths(rel)
+    if contains_vcs(lexical) or contains_vcs(resolved):
         raise ValueError("E_DELETE_BLOCKED: refusing to delete path containing VCS metadata (requested '%s', resolved to '%s')" % (to_unicode(rel), to_unicode(resolved)))
     protected, reason = is_protected_delete_path(resolved)
     if protected:
@@ -479,7 +464,7 @@ def execute_delete_path(prepared):
         os.unlink(prepared["lexical"])
     return {"resolvedPath": prepared["resolved"]}
 
-def op_delete_batch(root, payload):
+def op_delete_batch(payload):
     # 两遍：先全部判定（任一条不通过则整批一条都不删），再逐条执行（单条失败
     # 只污染自己的结果槽，与批量读的隔离契约一致）。判定阶段顺手把解析好的
     # 路径带下去，执行阶段不再重新解析，删除目标不会被第二个进程换掉。
@@ -488,7 +473,7 @@ def op_delete_batch(root, payload):
     recursive = bool(payload.get("recursive"))
     prepared = []
     for rel in payload.get("paths") or []:
-        prepared.append((rel, check_delete_path(root, rel, recursive)))
+        prepared.append((rel, check_delete_path(rel, recursive)))
     results = []
     for rel, item in prepared:
         if item.get("missing"):
@@ -503,46 +488,19 @@ def op_delete_batch(root, payload):
             results.append({"path": rel, "ok": False, "error": to_unicode(exc)})
     return {"paths": results}
 
-def check_write_targets(root, cwd, targets):
-    # 镜像本地 command 的 E_PATH_OUTSIDE 策略：Go 侧已把字面写入目标
-    # （重定向 + 变更命令）解析出来，这里只做远端文件系统事实检查。
-    # 动态目标（变量/glob/命令替换）在 Go 侧已被过滤，不会到达这里。
-    if not targets:
-        return
-    root_str = to_os_text(root)
-    cwd_str = to_os_text(cwd)
-    for t in targets:
-        if not t or t.startswith("&"):
+def check_write_targets(cwd, targets):
+    # Only VCS metadata protection remains here. A directory selected by the
+    # model is not an access boundary, and existing paths may be updated.
+    for raw in targets or []:
+        p = os.path.expanduser(to_os_text(raw))
+        if not p:
             continue
-        p = to_os_text(t)
         if not os.path.isabs(p):
-            p = os.path.join(cwd_str, p)
-        p = os.path.normpath(p)
-        if p == os.devnull:
-            continue
-        lexical = p
-        resolved = os.path.realpath(p)
-        try:
-            lex_inside = is_subpath(lexical, root_str)
-            res_inside = is_subpath(resolved, root_str)
-        except (ValueError, OSError):
-            lex_inside = False
-            res_inside = False
-        if lex_inside and not res_inside:
-            # 词法在工作区内但解析后逃到工作区外（symlink 父目录）：
-            # 与本地 inspectCommandMutationTarget 一致，无条件拦截，
-            # 无论目标文件是否已存在。
-            raise ValueError("E_PATH_OUTSIDE: remote command was not executed. The write target is inside workspaceRoot lexically but resolves outside it through a symlink. This is blocked even when the destination does not exist. Target: %s; resolved target: %s; workspaceRoot: %s. Use a real path inside workspaceRoot, such as .tmp/output.txt, instead of this escaping symlink." % (p, resolved, root_str))
-        # 解析后落在版本控制元数据里同样拒绝：.git 被链成 gh 之后的
-        # gh/hooks/pre-commit 字面干净（Go 侧按字面判过一遍），解析后才露出 .git
-        # ——与本地 command 用解析后路径再判一次是同一个手法。
+            p = os.path.join(cwd, p)
+        lexical, resolved = remote_path_paths(p)
         for candidate in (lexical, resolved):
             if contains_vcs(candidate):
-                raise ValueError("E_PROTECTED_PATH: remote command was not executed. The write target is inside version-control metadata: %s (resolved target: %s). Creating or modifying .git/.svn/.hg metadata is blocked whether or not the destination exists. Choose a non-metadata output path inside workspaceRoot." % (p, resolved))
-        if res_inside:
-            continue
-        if os.path.lexists(p):
-            raise ValueError("E_PATH_OUTSIDE: remote command was not executed. The write target ALREADY EXISTS outside workspaceRoot: %s (resolved target: %s; workspaceRoot: %s). Overwriting, appending, moving, changing permissions, or otherwise modifying an existing outside file or directory is blocked. This is not a blanket ban on outside paths: reading them, writing to /dev/null, and creating a genuinely new outside path are allowed, subject to the other safety rules. /tmp has no overwrite exemption. Use an output path inside workspaceRoot (for example .tmp/output.txt; create its parent first) or a unique unused temporary path. Do not retry this existing target or hide it behind variables or symlinks." % (p, resolved, root_str))
+                raise ValueError("E_PROTECTED_PATH: refusing to write version-control metadata: %s" % to_unicode(p))
 
 def append_command_output(out, chunk, limit):
     # Keep the real beginning and end within the existing capture budget.
@@ -553,8 +511,8 @@ def append_command_output(out, chunk, limit):
     del out[head:len(out) - (limit - head)]
     return True
 
-def open_command_log(root):
-    directory = safe_join(root, ".tmp/command-logs")
+def open_command_log():
+    directory = os.path.join(os.path.expanduser("~"), ".ally_agent", "command-logs")
     if not os.path.exists(directory):
         try: os.makedirs(directory)
         except OSError:
@@ -591,15 +549,15 @@ def open_command_log(root):
     fd, name = tempfile.mkstemp(prefix="ally-run-", suffix=".part", dir=directory)
     return os.fdopen(fd, "wb"), name
 
-def op_run(root, payload):
+def op_run(payload):
     import select, signal, subprocess
     command = to_os_text(payload.get("command") or "")
     if not command.strip():
         raise ValueError("command is required")
-    cwd = safe_join(root, payload.get("cwd", ""))
-    check_write_targets(root, cwd, payload.get("targets") or [])
+    cwd = remote_path(payload.get("cwd") or os.path.expanduser("~"))
+    check_write_targets(cwd, payload.get("targets") or [])
     if not os.path.isdir(cwd):
-        raise ValueError("cwd is not a directory on the remote host: %s (cwd is resolved inside the target workspace path)" % to_unicode(cwd))
+        raise ValueError("cwd is not a directory on the remote host: %s" % to_unicode(cwd))
     timeout = int(payload.get("timeoutSeconds") or 120)
     if timeout < 1:
         timeout = 1
@@ -674,7 +632,7 @@ def op_run(root, payload):
         if not log_error[0]:
             try:
                 if log_file[0] is None and total_output[0] + len(chunk) > model_limit:
-                    log_file[0], log_path[0] = open_command_log(root)
+                    log_file[0], log_path[0] = open_command_log()
                     prefix = bytes(out)
                     log_file[0].write(prefix)
                     log_bytes[0] = len(prefix)
@@ -817,7 +775,7 @@ def op_run(root, payload):
         "timedOut": timed_out,
         "durationMs": duration,
         "truncated": truncated,
-        "outputFilePath": as_posix_rel(root, log_path[0]) if log_path[0] else "",
+        "outputFilePath": as_posix_path(log_path[0]) if log_path[0] else "",
         "outputFileBytes": log_bytes[0],
         "outputFileIncomplete": bool(log_error[0]),
         "outputWarning": ("Full remote output could not be retained: " + log_error[0][:512] + ". Do not repeat side effects to recover logs.") if log_error[0] else "",
@@ -839,12 +797,12 @@ def get_raw_stdout():
         msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
     return sys.stdout
 
-def do_upload(root, payload):
+def do_upload(payload):
     import tarfile
     rel = payload.get("remotePath", "")
-    lexical, resolved = safe_join_paths(root, rel)
-    if lexical == root:
-        raise ValueError("refusing to upload directly to workspace root without subpath")
+    lexical, resolved = remote_path_paths(rel)
+    if resolved == os.path.dirname(resolved):
+        raise ValueError("refusing transfer directly targeting the filesystem root")
     if contains_vcs(resolved) or contains_vcs(lexical):
         raise ValueError("E_PROTECTED_PATH: refusing to write VCS metadata: " + to_unicode(rel))
 
@@ -881,12 +839,14 @@ def do_upload(root, payload):
 
         # Reject parent symlinks, including ones created by earlier archive entries.
         parent = os.path.dirname(target_path)
-        while parent != root and is_subpath(parent, root):
+        while is_subpath(parent, dest_parent):
             if os.path.islink(parent):
                 raise ValueError("Tar-Slip violation: symlink parent: " + to_unicode(parent))
+            if parent == dest_parent:
+                break
             parent = os.path.dirname(parent)
-        if not is_subpath(os.path.realpath(os.path.dirname(target_path)), root):
-            raise ValueError("Tar-Slip violation: parent escapes workspaceRoot: " + to_unicode(m_name))
+        if not is_subpath(os.path.realpath(os.path.dirname(target_path)), dest_parent):
+            raise ValueError("Tar-Slip violation: parent escapes transfer destination: " + to_unicode(m_name))
         if not overwrite and os.path.lexists(target_path) and not (member.isdir() and os.path.isdir(target_path) and not os.path.islink(target_path)):
             raise ValueError("remote destination already exists: " + to_unicode(m_name))
 
@@ -944,8 +904,8 @@ def do_upload(root, payload):
         elif member.issym():
             link_target = member.linkname.replace("\\", "/")
             full_link = os.path.realpath(os.path.join(os.path.dirname(target_path), link_target))
-            if link_target.startswith("/") or not is_subpath(full_link, root):
-                raise ValueError("Tar-Slip violation: symlink escapes workspaceRoot: " + to_unicode(m_name))
+            if link_target.startswith("/") or not is_subpath(full_link, resolved):
+                raise ValueError("Tar-Slip violation: symlink escapes transfer destination: " + to_unicode(m_name))
             if contains_vcs(link_target) or contains_vcs(full_link):
                 raise ValueError("E_PROTECTED_PATH: refusing symlink to VCS metadata: " + to_unicode(m_name))
             if not os.path.exists(os.path.dirname(target_path)):
@@ -969,10 +929,12 @@ def do_upload(root, payload):
 
     ok({"totalBytes": total_bytes, "fileCount": file_count, "dirCount": dir_count})
 
-def do_download(root, payload):
+def do_download(payload):
     import tarfile
     rel = payload.get("remotePath", "")
-    lexical, resolved = safe_join_paths(root, rel)
+    lexical, resolved = remote_path_paths(rel)
+    if resolved == os.path.dirname(resolved):
+        raise ValueError("refusing transfer directly targeting the filesystem root")
     if not os.path.lexists(resolved):
         raise ValueError("remote path does not exist: " + to_unicode(rel))
     if contains_vcs(resolved) or contains_vcs(lexical):
@@ -1042,32 +1004,20 @@ try:
     if TRANSFER_MODE:
         MARKER = "ALLY_REMOTE_TRANSFER_JSON:"
     payload = decode_payload()
-    raw_root = os.path.expanduser(to_os_text(payload["workspaceRoot"]))
-    # 三种拒绝各说各的，并点明这个值的来源：它来自调用方传进来的 target 路径，
-    # 不是服务器状态。不点明来源与下一步，模型会以为远端异常而在同一路径上反复重试。
-    if not os.path.exists(raw_root):
-        raise ValueError("workspaceRoot does not exist on this host: %s (this path comes from the target argument, not from the server; use a directory that exists on the remote host, or ask the user which one to use)" % raw_root)
-    root = os.path.realpath(raw_root)
-    if not os.path.isdir(root):
-        raise ValueError("workspaceRoot is not a directory on this host: %s (the target path must be a directory; this resolved to a file or a special file)" % root)
-    if root == "/":
-        raise ValueError("workspaceRoot must not be the filesystem root: give the target an absolute non-root directory such as /srv/app")
     if TRANSFER_MODE:
         action = payload.get("action", "")
         if action == "upload":
-            do_upload(root, payload)
+            do_upload(payload)
         elif action == "download":
-            do_download(root, payload)
+            do_download(payload)
         else:
             raise ValueError("unknown transfer action: " + to_unicode(action))
     op = payload.get("op")
     handler = OPS.get(op)
     if handler is not None:
-        ok(handler(root, payload))
+        ok(handler(payload))
     elif op == "_check_write_targets":
-        # 测试专用内部 op：只做写目标越界检查，不执行命令。
-        # cwd 同样走 safe_join，保证与 op_run 的相对路径解析一致。
-        check_write_targets(root, safe_join(root, payload.get("cwd", "")), payload.get("targets") or [])
+        check_write_targets(remote_path(payload.get("cwd") or os.path.expanduser("~")), payload.get("targets") or [])
         ok({"checked": True})
     elif op == "_check_protected":
         # 测试专用内部 op：直接暴露删除保护判定，便于本地单测。

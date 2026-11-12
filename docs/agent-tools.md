@@ -129,7 +129,7 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 3. 写入目标在工作区外**且已存在** → `E_PATH_OUTSIDE`（允许读、允许写 `/dev/null`、允许创建新路径；并解析符号链接，拦截「经工作区内软链逃逸到外面」的写法）；
 4. 高危模式（`MatchRiskPattern`）→ `E_COMMAND_BLOCKED`。
 
-远端命令跑第 1、2、4 道：第 1 道同样由 Go 侧 `ContainsExplicitDeleteCommand` 拦；第 2 道用 `remoteCommandVCSMetadataTarget` 判字面写目标（按远端 cwd 解析相对路径，解析后那半在 helper 的 `check_write_targets` 里复判）；第 4 道是 `validateRemoteCommandSafety`。第 3 道（越界写）本地靠 Go 侧问本机文件系统，远端改为 helper 在动手前用远端事实判（`check_write_targets` → `E_PATH_OUTSIDE`）——两端都不套对方的路径语义。
+远端命令保留第 1、2、4 道：`ContainsExplicitDeleteCommand` 拦裸删除，`remoteCommandVCSMetadataTarget` 与 helper 的 `check_write_targets` 检查 VCS 写目标，`validateRemoteCommandSafety` 检查高危语义。远端不再设置项目目录边界，也不再检查“目录外已有目标”。`target` 只选服务器，文件工具与传输使用绝对路径；命令每次在登录用户家目录启动独立 shell，通过 `cd /绝对目录 && 命令` 切目录。静态写目标分析复用 `LiteralWriteTargetsWithCD`，解析常见 cd 序列，真实软链接由远端 helper 复判。旧会话的 `host:/目录` 与 cwd 只保留路径解析兼容，主代理和子代理共用的新提示词说明此契约。
 
 **操作系统级沙箱**（macOS Seatbelt / Linux bubblewrap）与上面四道不互斥：围栏拦的是「看得出意图的写入」，沙箱拦的是「命令自己拼出来、围栏看不出来的越界写」——命令被包在 shell 外面，怎么拼都绕不过去，脚本里的语言无关也一样（Python/Node 都是 shell 的子进程，内核级沙箱随 fork/exec 继承）。
 

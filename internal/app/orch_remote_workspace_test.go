@@ -32,14 +32,14 @@ func TestRemoteTargetAuthorizationUsesRequestWorkspace(t *testing.T) {
 	}
 
 	ctx := withToolWorkspace(context.Background(), ws)
-	if _, err := app.resolveAndAuthorizeRemoteTarget(ctx, "my-srv:/var/www"); toolErrorCode(err) != "E_SERVER_UNAUTHORIZED" {
+	if _, err := app.resolveAndAuthorizeRemoteTarget(ctx, "my-srv"); toolErrorCode(err) != "E_SERVER_UNAUTHORIZED" {
 		t.Fatalf("expected E_SERVER_UNAUTHORIZED for the task workspace, got %v", err)
 	}
 
 	app.AuthorizeServerForWorkspace(ws, "my-srv")
 	connectCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	defer cancel()
-	rt, err := app.resolveAndAuthorizeRemoteTarget(connectCtx, "my-srv:/var/www")
+	rt, err := app.resolveAndAuthorizeRemoteTarget(connectCtx, "my-srv")
 	if err != nil {
 		t.Fatalf("expected the authorized node to resolve: %v", err)
 	}

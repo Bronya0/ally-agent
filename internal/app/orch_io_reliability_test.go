@@ -205,7 +205,7 @@ func TestLargeLogTailLocalAndRemoteShareReadOnlyContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script, err := buildRemoteScript(map[string]any{"op": "read", "workspaceRoot": a.config.Workspace, "path": "big.log", "maxBytes": maxReadFileBytes, "tailLines": 10})
+	script, err := buildRemoteScript(map[string]any{"op": "read", "path": remoteFixturePath(a.config.Workspace, "big.log"), "maxBytes": maxReadFileBytes, "tailLines": 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestRemoteWriteChecksRawSnapshotBeforeCommit(t *testing.T) {
 		if err := os.WriteFile(p, current, 0600); err != nil {
 			t.Fatal(err)
 		}
-		script, err := buildRemoteScript(map[string]any{"op": "write", "workspaceRoot": a.config.Workspace, "path": "sample.txt", "overwrite": true, "expectedSHA256": read.HashBytes(before), "dataBase64": base64.StdEncoding.EncodeToString(after)})
+		script, err := buildRemoteScript(map[string]any{"op": "write", "path": remoteFixturePath(a.config.Workspace, "sample.txt"), "overwrite": true, "expectedSHA256": read.HashBytes(before), "dataBase64": base64.StdEncoding.EncodeToString(after)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -340,7 +340,7 @@ func TestRemoteCommandSavesRecoverableLog(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		command = "echo BEGIN & (for /L %i in (1,1,1400) do @echo " + strings.Repeat("x", 100) + ") & echo FINAL_ERROR"
 	}
-	script, err := buildRemoteScript(map[string]any{"op": "run", "workspaceRoot": a.config.Workspace, "command": command, "maxOutput": maxToolOutput, "timeoutSeconds": 10, "modelOutputBytes": maxModelToolOutput})
+	script, err := buildRemoteScript(map[string]any{"op": "run", "command": command, "maxOutput": maxToolOutput, "timeoutSeconds": 10, "modelOutputBytes": maxModelToolOutput, "cwd": a.config.Workspace})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestRemoteCommandSavesRecoverableLog(t *testing.T) {
 	if r.ExitCode != 0 || r.OutputFilePath == "" || r.OutputFileIncomplete {
 		t.Fatalf("no usable full log: %#v", r)
 	}
-	log, err := os.ReadFile(filepath.Join(a.config.Workspace, filepath.FromSlash(r.OutputFilePath)))
+	log, err := os.ReadFile(filepath.FromSlash(r.OutputFilePath))
 	if err != nil {
 		t.Fatal(err)
 	}

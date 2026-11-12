@@ -9,10 +9,95 @@ package command
 
 import (
 	"bytes"
+	"path"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// LiteralWriteTargetsWithCD resolves targets in simple POSIX command sequences
+// against explicit cd operands. Paths remain relative to the initial directory
+// when it is unknown (as on a remote host). No local filesystem or home lookup
+// is used to resolve remote paths. Complex control flow keeps the existing
+// best-effort literal analysis rather than trying to execute the shell.
+func LiteralWriteTargetsWithCD(commandLine string) []WriteTarget {
+	file, err := parseShellFile(commandLine)
+	if err != nil {
+		return LiteralWriteTargets(commandLine)
+	}
+	var result []WriteTarget
+	appendTargets := func(node syntax.Node, cwd string) {
+		var source bytes.Buffer
+		if err := syntax.NewPrinter().Print(&source, node); err != nil {
+			return
+		}
+		for _, target := range LiteralWriteTargets(source.String()) {
+			if cwd != "" && !path.IsAbs(target.Path) && !strings.HasPrefix(target.Path, "~") {
+				target.Path = path.Join(cwd, target.Path)
+			}
+			result = append(result, target)
+		}
+	}
+	var visit func(*syntax.Stmt, string) string
+	visit = func(stmt *syntax.Stmt, cwd string) string {
+		switch cmd := stmt.Cmd.(type) {
+		case *syntax.BinaryCmd:
+			if cmd.Op == syntax.AndStmt {
+				for _, redir := range stmt.Redirs {
+					appendTargets(&syntax.Stmt{Redirs: []*syntax.Redirect{redir}}, cwd)
+				}
+				return visit(cmd.Y, visit(cmd.X, cwd))
+			}
+		case *syntax.Subshell:
+			for _, redir := range stmt.Redirs {
+				appendTargets(&syntax.Stmt{Redirs: []*syntax.Redirect{redir}}, cwd)
+			}
+			inner := cwd
+			for _, child := range cmd.Stmts {
+				inner = visit(child, inner)
+			}
+			return cwd
+		case *syntax.Block:
+			for _, redir := range stmt.Redirs {
+				appendTargets(&syntax.Stmt{Redirs: []*syntax.Redirect{redir}}, cwd)
+			}
+			for _, child := range cmd.Stmts {
+				cwd = visit(child, cwd)
+			}
+			return cwd
+		}
+		appendTargets(stmt, cwd)
+		if call, ok := stmt.Cmd.(*syntax.CallExpr); ok && len(call.Args) > 0 && shellWordValue(call.Args[0]) == "cd" {
+			args := call.Args[1:]
+			if len(args) > 0 && shellWordValue(args[0]) == "--" {
+				args = args[1:]
+			}
+			if len(args) == 0 {
+				return "~"
+			}
+			if len(args) == 1 {
+				dir := shellWordValue(args[0])
+				if dir != "" && dir != "-" && !strings.ContainsAny(dir, "$%*?[]{}"+"`") {
+					if path.IsAbs(dir) || strings.HasPrefix(dir, "~") {
+						return dir
+					}
+					return path.Join(cwd, dir)
+				}
+			}
+			return ""
+		}
+		return cwd
+	}
+	cwd := ""
+	for _, stmt := range file.Stmts {
+		if stmt.Background {
+			visit(stmt, cwd)
+		} else {
+			cwd = visit(stmt, cwd)
+		}
+	}
+	return result
+}
 
 // astInvocations is the primary shell-analysis path. The legacy scanner remains
 // only as a compatibility fallback for command lines the parser cannot accept

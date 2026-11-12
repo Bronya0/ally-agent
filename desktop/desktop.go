@@ -830,8 +830,9 @@ func (a *desktop) inject(t *conversation, text string) bool {
 	displayAttachments := attachmentDisplayRows(attachments)
 	invalidateChatSearch(t)
 	t.Messages = append(t.Messages, map[string]any{"role": "user", "content": display, "attachments": displayAttachments})
-	commitPendingPreviews(t)
 	t.PendingAttachments = nil
+	t.PendingAttachmentImages = nil
+	a.loadSentAttachmentImages(t, attachments)
 	t.Draft = ""
 	t.Status = locales.Text("已追加，本轮继续执行…")
 	followLatest(t)
@@ -905,8 +906,9 @@ func (a *desktop) send(t *conversation, text string) bool {
 	displayAttachments := attachmentDisplayRows(attachments)
 	invalidateChatSearch(t)
 	t.Messages = append(t.Messages, map[string]any{"role": "user", "content": display, "attachments": displayAttachments})
-	commitPendingPreviews(t)
 	t.PendingAttachments = nil
+	t.PendingAttachmentImages = nil
+	a.loadSentAttachmentImages(t, attachments)
 	t.Busy = true
 	t.Draft = ""
 	t.Status = locales.Text("正在连接模型…")

@@ -114,6 +114,7 @@ func (t reasoningTurn) empty() bool {
 // Responses native items can also be restored from protected model history.
 type sessionReasoningPayload struct {
 	toolResults     map[string]bool
+	toolMetadata    map[string]toolHistoryMetadata
 	turns           []reasoningTurn
 	responsesNative map[string][]json.RawMessage
 }

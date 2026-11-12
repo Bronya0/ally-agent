@@ -22,10 +22,8 @@ const (
 	// UI-only state (never persisted to the model history) and it is what tells a
 	// preview apart from a real answer when the compaction ends.
 	compactPreviewFlag = "compactPreview"
-	// fastCompactChip labels a tool card whose result was replaced by an excerpt.
-	fastCompactChip = "已快速压缩" // fastCompactReasoningMarker is the backend's suffix for an old turn whose
-	// thinking was folded into its answer text; it is never shown as answer text.
-	fastCompactReasoningMarker = "[Earlier reasoning excerpt; incomplete]\n"
+	// fastCompactChip labels a tool card reduced to purpose/result metadata.
+	fastCompactChip = "已快速压缩"
 	// transcriptSummaryFlag marks the single row a full-summary compaction left in
 	// place of the conversation, so the next stream delta does not grow into it.
 	transcriptSummaryFlag = "transcriptSummary"
@@ -167,25 +165,18 @@ func (a *desktop) applyCompactionResult(t *conversation, result map[string]any) 
 // fastCompactNote renders the local-trim report: what was trimmed, what was
 // kept, and that no model was called.
 func fastCompactNote(result map[string]any) string {
-	keep := int(num(result, "keepRecent"))
-	if keep <= 0 {
-		keep = 4
-	}
 	tools := 0
-	if summaries, ok := result["toolSummaries"].(map[string]any); ok {
+	if records, ok := result["toolRecords"].([]any); ok {
+		tools = len(records)
+	} else if summaries, ok := result["toolSummaries"].(map[string]any); ok {
 		tools = len(summaries)
 	}
-	return fmt.Sprintf(locales.Text("已裁剪 %d 条旧回复、%d 条旧工具结果和 %d 条旧思考内容。保留最近 %d 轮工具调用及后续消息；不足时保留最近 %d 条回复。旧回复只留首尾摘录，总计最多约 8k tokens，超额清除更早正文。旧工具调用参数已清空。用户消息与最新计划保留，不调用模型。"),
-		int(num(result, "assistantCount")), tools, int(num(result, "reasoningCount")), keep, keep)
+	return fmt.Sprintf(locales.Text("已将 %d 条旧工具记录压缩为目的与结果元信息，移除旧推理。用户消息、助手回复正文与最新计划保留；最近一轮完整任务（含子代理报告）保持不变。不调用模型。"), tools)
 }
 
-// fastCompactNoop is the "nothing to trim" report of a manual local trim.
+// fastCompactNoop reports that only the retained task or compacted records remain.
 func fastCompactNoop(result map[string]any) string {
-	keep := int(num(result, "keepRecent"))
-	if keep <= 0 {
-		keep = 4
-	}
-	return fmt.Sprintf(locales.Text("没有可快速压缩的旧内容（保留最近 %d 轮工具调用或回复）"), keep)
+	return locales.Text("没有可快速压缩的旧内容（保留最近一轮完整任务）")
 }
 
 // compactToastText is the one compaction report both the manual and the
@@ -194,69 +185,30 @@ func compactToastText(before, after int) string {
 	return fmt.Sprintf(locales.Text("上下文已压缩：%s → %s tokens"), fmtK(before), fmtK(after))
 }
 
-// applyFastCompaction mirrors the local trim the backend just wrote to the
-// history. Tool cards whose result was replaced show the excerpt, and shortened
-// answers keep their position with the shorter text. Answers are matched by
-// exact original text plus its occurrence counted from the end, because a UI row
-// carries no call id and repeated answers are indistinguishable by text alone.
+// applyFastCompaction keeps the visible user/assistant transcript and replaces
+// only old tool cards with their purpose and producer-owned result metadata.
 func applyFastCompaction(t *conversation, result map[string]any) {
 	defer releaseStaleStream(t)
 	releaseCommandDetails(t)
-	edits := map[string]map[int]string{}
-	if raw, ok := result["assistantEdits"].([]any); ok {
-		for _, item := range raw {
-			edit, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			before := str(edit, "before")
-			if before == "" {
-				continue
-			}
-			if edits[before] == nil {
-				edits[before] = map[int]string{}
-			}
-			edits[before][int(num(edit, "fromEnd"))] = str(edit, "after")
-		}
-	}
-	occurrences := map[string]int{}
-	shortened := map[int]string{}
-	for i := len(t.Messages) - 1; i >= 0; i-- {
-		m := t.Messages[i]
-		if str(m, "role") != "assistant" || m["error"] != nil || m["welcome"] != nil || boolOf(m, "transientTurn") {
-			continue
-		}
-		content := str(m, "content")
-		before := content
-		if strings.HasPrefix(content, fastCompactReasoningMarker) {
-			before = ""
-		} else if cut, _, found := strings.Cut(content, "\n\n"+fastCompactReasoningMarker); found {
-			before = cut
-		}
-		matches := edits[before]
-		if matches == nil {
-			continue
-		}
-		occurrences[before]++
-		if after, ok := matches[occurrences[before]]; ok {
-			shortened[i] = after
-		}
-	}
 	invalidateChatSearch(t)
-	for i, after := range shortened {
-		t.Messages[i]["content"] = after
-		t.Messages[i]["fastCompacted"] = true
-	}
-	// Shortening an answer can change its block kind, so the memoized rows are
-	// invalidated before the early return below skips the tool-card rewrite.
-	if len(shortened) > 0 {
-		t.markHistory()
-	}
 	summaries, _ := result["toolSummaries"].(map[string]any)
-	if summaries == nil {
+	records, exact := result["toolRecords"].([]any)
+	edits := map[string]map[int]map[string]any{}
+	for _, raw := range records {
+		if record, ok := raw.(map[string]any); ok {
+			id := str(record, "id")
+			if edits[id] == nil {
+				edits[id] = map[int]map[string]any{}
+			}
+			edits[id][int(num(record, "fromEnd"))] = record
+		}
+	}
+	if summaries == nil && !exact {
 		return
 	}
-	for i, m := range t.Messages {
+	occurrences := map[string]int{}
+	for i := len(t.Messages) - 1; i >= 0; i-- {
+		m := t.Messages[i]
 		if str(m, "role") != "tool_call" {
 			continue
 		}
@@ -264,9 +216,18 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 		if id == "" {
 			continue
 		}
-		summary, ok := summaries[id].(string)
-		if !ok || summary == "" {
+		occurrences[id]++
+		summary, _ := summaries[id].(string)
+		purpose := ""
+		if exact {
+			record := edits[id][occurrences[id]]
+			summary, purpose = str(record, "content"), str(record, "purpose")
+		}
+		if summary == "" {
 			continue
+		}
+		if !exact {
+			purpose = toolPurpose(m, parseToolArgs(str(m, "args")))
 		}
 		// Unwrapping an envelope can merge metadata into its nested data map.
 		// Detach it before reading the outcome so the original evidence is unchanged.
@@ -280,7 +241,7 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 		row := map[string]any{
 			"role": "tool_call", "name": str(m, "name"), "toolCallId": id,
 			"title": str(m, "title"), "status": state,
-			"purpose": toolPurpose(m, parseToolArgs(str(m, "args"))),
+			"purpose": purpose,
 			"body":    summary, "result": outcome, "fastCompacted": true,
 		}
 		for _, key := range []string{"error", "errorCode"} {

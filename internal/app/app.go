@@ -1292,8 +1292,8 @@ type RemoteReadFileRequest struct {
 
 // RemoteEditRequest is the flat model-facing remote_edit request: exactly one
 // file per call, path/version/changes at the top level under the SSH target —
-// the same shape local edit uses, prefixed with `target`. Multi-file changes
-// are parallel remote_edit calls in one model response.
+// the same shape local edit uses, with an SSH server `target` and absolute path.
+// Multi-file changes are parallel remote_edit calls in one model response.
 type RemoteEditRequest struct {
 	Target  string       `json:"target"`
 	Path    string       `json:"path"`
@@ -1322,17 +1322,17 @@ type RemoteDeletePathRequest struct {
 type RemoteRunCommandRequest struct {
 	Target  string `json:"target"`
 	Command string `json:"command"`
-	Cwd     string `json:"cwd,omitempty"`
+	Cwd     string `json:"cwd,omitempty"` // Compatibility for older session tool snapshots.
 	Timeout int    `json:"timeout,omitempty"`
 	Shell   string `json:"shell,omitempty"`
 }
 
 type remoteTarget struct {
-	Raw           string
-	Host          string
-	Port          string
-	WorkspaceRoot string
-	credential    *sshCredentialEntry
+	Raw        string
+	Host       string
+	Port       string
+	LegacyRoot string // Compatibility base for targets from older session snapshots; never a fence.
+	credential *sshCredentialEntry
 }
 
 type remoteRawFile struct {
@@ -2233,6 +2233,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		}
 	}
 	messages = a.buildMessages(req, cfg, a.listCachedSkillsForConfig(cfg))
+	a.beginHistoryTask(sessionID, messages)
 	if err := a.waitForSessionMcp(ctx, runID, sessionID); err != nil {
 		kind := "error"
 		if ctx.Err() != nil {
@@ -2650,7 +2651,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				ToolCallID: o.callID,
 				Content:    o.modelJSON,
 			})
-			a.reasoningStash.recordToolStatus(reasoningReplayScope(cfg), messages[len(messages)-1], o.result)
+			call := toolCalls[o.index]
+			meta := toolHistoryMetadataFor(call, toolPurposeFields(ctx)[normalizeToolName(call.Function.Name)], o.result, o.modelJSON)
+			a.reasoningStash.recordToolStatus(reasoningReplayScope(cfg), messages[len(messages)-1], o.result, meta)
 		}
 		// Inject image files read by this tool batch into multimodal model
 		// context (read of a .png/.jpg/... returns a base64 DataURL). The

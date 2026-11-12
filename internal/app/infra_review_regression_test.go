@@ -122,7 +122,7 @@ func TestRemoteCommandPreservesLiteralReplacementCharacters(t *testing.T) {
 	if err := os.WriteFile(emitter, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	script, err := buildRemoteScript(map[string]any{"op": "run", "workspaceRoot": root, "cwd": ".", "command": fmt.Sprintf(`"%s" "%s"`, py, emitter), "maxOutput": 30, "timeoutSeconds": 10})
+	script, err := buildRemoteScript(map[string]any{"op": "run", "cwd": remoteFixturePath(root, "."), "command": fmt.Sprintf(`"%s" "%s"`, py, emitter), "maxOutput": 30, "timeoutSeconds": 10})
 	if err != nil {
 		t.Fatal(err)
 	}

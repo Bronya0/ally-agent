@@ -3,6 +3,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -52,8 +53,10 @@ type storedModelHistoryMessage struct {
 }
 
 type modelHistoryMetadata struct {
-	ProtectedState []byte          `json:"ally_model_state_v1,omitempty"`
-	ToolStatuses   map[string]bool `json:"ally_tool_status_v1,omitempty"`
+	ProtectedState []byte                         `json:"ally_model_state_v1,omitempty"`
+	ToolStatuses   map[string]bool                `json:"ally_tool_status_v1,omitempty"`
+	ToolMetadata   map[string]toolHistoryMetadata `json:"ally_tool_metadata_v1,omitempty"`
+	Task           *historyTaskBoundary           `json:"ally_task_v1,omitempty"`
 }
 
 func (m storedModelHistoryMessage) MarshalJSON() ([]byte, error) {
@@ -74,20 +77,36 @@ func (a *App) modelHistoryForStorage(sessionID string, disk, history []openai.Ch
 	if len(disk) == 0 {
 		return disk
 	}
-	sealed := a.protectedModelHistoryForStorage(sessionID, disk, history)
-	statuses := a.toolStatusesForStorage(sessionID, history)
-	if len(sealed) == 0 && len(statuses) == 0 {
+	task := a.historyTaskFor(sessionID, history)
+	replayOffset := 0
+	if candidate, err := a.projectFastCompactHistory(context.Background(), sessionID, history); err == nil && candidate.messageChange {
+		for _, m := range history[:candidate.cutoff] {
+			if m.Role == openai.ChatMessageRoleAssistant {
+				replayOffset++
+			}
+		}
+		history = candidate.history
+		disk = sanitizeHistoryMessagesForDisk(history)
+		if task != nil {
+			task.Start = candidate.tailStart
+		}
+	}
+	sealed := a.protectedModelHistoryForStorage(sessionID, disk, history, replayOffset)
+	statuses, metadata := a.toolHistoryForStorage(sessionID, history)
+	projected, origins := sanitizeHistoryMessagesWithOrigins(history, historyProfileDisk)
+	task = projectHistoryTask(task, history, projected, origins)
+	if len(sealed) == 0 && len(statuses) == 0 && len(metadata) == 0 && task == nil {
 		return disk
 	}
 	rows := make([]any, len(disk))
 	for i := range disk {
 		rows[i] = &disk[i]
 	}
-	rows[0] = storedModelHistoryMessage{disk[0], modelHistoryMetadata{ProtectedState: sealed, ToolStatuses: statuses}}
+	rows[0] = storedModelHistoryMessage{disk[0], modelHistoryMetadata{ProtectedState: sealed, ToolStatuses: statuses, ToolMetadata: metadata, Task: task}}
 	return rows
 }
 
-func (a *App) protectedModelHistoryForStorage(sessionID string, disk, history []openai.ChatCompletionMessage) []byte {
+func (a *App) protectedModelHistoryForStorage(sessionID string, disk, history []openai.ChatCompletionMessage, replayOffset int) []byte {
 	if len(disk) == 0 || a.modelHistoryCodec == nil || a.reasoningStash == nil {
 		return nil
 	}
@@ -112,7 +131,7 @@ func (a *App) protectedModelHistoryForStorage(sessionID string, disk, history []
 		}
 		sourceIndex := origins[i]
 		if responsesMessageKey(0, original[sourceIndex]) == responsesMessageKey(0, m) {
-			valid[responsesMessageKey(sourceOrdinals[sourceIndex], original[sourceIndex])] = responsesMessageKey(ordinal, m)
+			valid[responsesMessageKey(sourceOrdinals[sourceIndex]+replayOffset, original[sourceIndex])] = responsesMessageKey(ordinal, m)
 		}
 		ordinal++
 	}
@@ -139,7 +158,7 @@ func (a *App) protectedModelHistoryForStorage(sessionID string, disk, history []
 	// the same bounded, protected payload; never introduce a plaintext fallback.
 	fastCompacted := false
 	for _, m := range history {
-		if strings.HasPrefix(m.Content, fastCompactToolMarker) || strings.HasPrefix(m.Content, fastCompactAssistantMarker) || strings.Contains(m.Content, fastCompactReasoningMarker) {
+		if isFastCompactHistory(m) || strings.HasPrefix(m.Content, fastCompactToolMarker) || strings.HasPrefix(m.Content, fastCompactAssistantMarker) || strings.Contains(m.Content, fastCompactReasoningMarker) {
 			fastCompacted = true
 			break
 		}

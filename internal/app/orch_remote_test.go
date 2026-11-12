@@ -88,10 +88,9 @@ func TestBuildRemoteScriptInjectsProtectionAndPayload(t *testing.T) {
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	script, err := buildRemoteScript(map[string]any{
-		"op":            "_check_write_targets",
-		"workspaceRoot": root,
-		"cwd":           ".",
-		"targets":       []string{},
+		"op":      "_check_write_targets",
+		"cwd":     remoteFixturePath(root, "."),
+		"targets": []string{},
 	})
 	if err != nil {
 		t.Fatalf("buildRemoteScript: %v", err)
@@ -102,6 +101,9 @@ func TestBuildRemoteScriptInjectsProtectionAndPayload(t *testing.T) {
 		}
 	}
 	cmd := exec.Command(py, "-")
+	home := t.TempDir()
+
+	cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
 	cmd.Stdin = strings.NewReader(script)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -115,9 +117,14 @@ func TestBuildRemoteScriptInjectsProtectionAndPayload(t *testing.T) {
 // runRemoteHelperScript 用本地解释器执行注入 payload 后的 helper 脚本，
 // 返回 marker 后的 JSON 解码结果。远程 helper 无法直接跑远端，这里镜像
 // 执行以锁定判定契约（只触碰 t.TempDir()，不做任何真实系统路径删除）。
-func runRemoteHelperScript(t *testing.T, py, script string) (remotePythonResponse, error) {
+func runRemoteHelperScript(t *testing.T, py, script string, homes ...string) (remotePythonResponse, error) {
 	t.Helper()
 	cmd := exec.Command(py, "-")
+	home := t.TempDir()
+	if len(homes) > 0 {
+		home = homes[0]
+	}
+	cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
 	cmd.Stdin = strings.NewReader(script)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -138,45 +145,30 @@ func runRemoteHelperScript(t *testing.T, py, script string) (remotePythonRespons
 	return resp, nil
 }
 
-// TestValidateRemoteWorkspacePathRebase 锁定远端路径校验的重定基契约：
-// root 内的绝对路径（含 root 本身）等价于其相对拼写，root 外绝对路径拒绝。
-// 动机：cwd="/tmp" 且 target root 也是 /tmp 时，旧实现按“绝对路径一律拒绝”
-// 处理，同义拼写被误伤；语义边界只应是 root 内外，而非拼与不拼。
-func TestValidateRemoteWorkspacePathRebase(t *testing.T) {
-	cases := []struct {
-		name      string
-		p         string
-		root      string
-		allowRoot bool
-		want      string
-		wantErr   string
+// Absolute paths are independent of the legacy target directory. Relative
+// paths are accepted only as compatibility for old session snapshots.
+func TestValidateRemotePath(t *testing.T) {
+	for _, tc := range []struct {
+		path, legacy, want string
+		allowRoot          bool
 	}{
-		{"root itself absolute", "/srv/app", "/srv/app", true, ".", ""},
-		{"root itself absolute no allowRoot", "/srv/app", "/srv/app", false, "", "path is required"},
-		{"inside root rebased", "/srv/app/src/main.go", "/srv/app", false, "src/main.go", ""},
-		{"empty means root", "", "/srv/app", true, ".", ""},
-		{"relative passthrough", "src/main.go", "/srv/app", false, "src/main.go", ""},
-		{"outside root rejected", "/etc/passwd", "/srv/app", true, "", "outside the remote workspaceRoot"},
-		{"sibling prefix not root", "/srv/appdata/x", "/srv/app", true, "", "outside the remote workspaceRoot"},
-		{"trailing slash root normalized", "/srv/app/", "/srv/app", true, ".", ""},
-		{"dot-dot still rejected", "/srv/app/../etc", "/srv/app", true, "", "must not contain"},
+		{"/srv/app/main.go", "", "/srv/app/main.go", false},
+		{"/etc/nginx/nginx.conf", "/srv/app", "/etc/nginx/nginx.conf", false},
+		{"/srv/app/../other/file", "", "/srv/other/file", false},
+		{"src/main.go", "/srv/app", "/srv/app/src/main.go", false},
+		{"../other/file", "/srv/app", "/srv/other/file", false},
+		{".", "/srv/app", "/srv/app", false},
+		{"/", "", "/", true},
+	} {
+		got, err := validateRemotePath(tc.path, tc.legacy, tc.allowRoot)
+		if err != nil || got != tc.want {
+			t.Fatalf("path=%q legacy=%q: got %q %v, want %q", tc.path, tc.legacy, got, err, tc.want)
+		}
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := validateRemoteWorkspacePath(tc.p, tc.root, tc.allowRoot)
-			if tc.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("path %q root %q: expected error containing %q, got %q (clean=%q)", tc.p, tc.root, tc.wantErr, err, got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("path %q root %q: unexpected error: %v", tc.p, tc.root, err)
-			}
-			if got != tc.want {
-				t.Fatalf("path %q root %q: expected %q, got %q", tc.p, tc.root, tc.want, got)
-			}
-		})
+	for _, p := range []string{"", ".", "relative/file", "/", "/tmp/bad" + string(rune(0))} {
+		if got, err := validateRemotePath(p, "", false); err == nil {
+			t.Fatalf("invalid path %q accepted as %q", p, got)
+		}
 	}
 }
 
@@ -218,9 +210,8 @@ func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			script, err := buildRemoteScript(map[string]any{
-				"op":            "_check_protected",
-				"workspaceRoot": root,
-				"path":          tc.path,
+				"op":   "_check_protected",
+				"path": remoteFixturePath(root, tc.path),
 			})
 			if err != nil {
 				t.Fatalf("buildRemoteScript: %v", err)
@@ -276,10 +267,9 @@ func TestRemoteHelperDeleteRefusalNamesRuleAndPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	script, err := buildRemoteScript(map[string]any{
-		"op":            "delete_batch",
-		"workspaceRoot": root,
-		"paths":         []string{"proj/.git"},
-		"recursive":     true,
+		"op":        "delete_batch",
+		"paths":     remoteFixturePaths(root, []string{"proj/.git"}),
+		"recursive": true,
 	})
 	if err != nil {
 		t.Fatalf("buildRemoteScript: %v", err)
@@ -294,26 +284,6 @@ func TestRemoteHelperDeleteRefusalNamesRuleAndPath(t *testing.T) {
 	for _, want := range []string{"E_DELETE_BLOCKED:", "VCS metadata", "proj/.git"} {
 		if !strings.Contains(resp.Error, want) {
 			t.Fatalf("refusal %q must mention %q", resp.Error, want)
-		}
-	}
-}
-
-// TestRemoteScriptsShareTheSamePathRefusals 锁定两份内嵌 helper（主脚本与传输脚本）
-// 的路径拒绝措辞一致：它们各存一份 safe_join_paths，措辞漂移会让同一原因在两条
-// 通道上给出不同解释（LESSONS：这对孪生副本一直没有对照用例）。
-func TestRemoteScriptsShareTheSamePathRefusals(t *testing.T) {
-	shared := []string{
-		"remote path must be relative to workspaceRoot",
-		"remote path must not contain '..'",
-		"remote path is outside workspaceRoot after normalization",
-		"remote path escapes workspaceRoot via symlink",
-	}
-	for _, phrase := range shared {
-		if !strings.Contains(remotePythonScript, phrase) {
-			t.Errorf("remote helper lost the shared refusal %q", phrase)
-		}
-		if !strings.Contains(remoteTransferPythonScript, phrase) {
-			t.Errorf("remote transfer helper drifted from the shared refusal %q", phrase)
 		}
 	}
 }
@@ -345,9 +315,8 @@ func TestRemoteHelperStatOp(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			script, err := buildRemoteScript(map[string]any{
-				"op":            "stat",
-				"workspaceRoot": root,
-				"path":          tc.path,
+				"op":   "stat",
+				"path": remoteFixturePath(root, tc.path),
 			})
 			if err != nil {
 				t.Fatalf("buildRemoteScript: %v", err)
@@ -390,7 +359,7 @@ func TestRemoteHelperStatErrors(t *testing.T) {
 		{"EACCES", false}, {"EIO", false}, {"ELOOP", false},
 	} {
 		t.Run(tc.errno, func(t *testing.T) {
-			script, err := buildRemoteScript(map[string]any{"op": "stat", "workspaceRoot": root, "path": "probe"})
+			script, err := buildRemoteScript(map[string]any{"op": "stat", "path": remoteFixturePath(root, "probe")})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -442,7 +411,7 @@ func TestRemoteHelperWriteDefaultPerm0644(t *testing.T) {
 	}
 
 	// 新建文件 → 0644
-	resp := run(map[string]any{"op": "write", "workspaceRoot": root, "path": "new.txt", "dataBase64": base64.StdEncoding.EncodeToString([]byte("hello")), "overwrite": false, "mkdirs": true})
+	resp := run(map[string]any{"op": "write", "path": remoteFixturePath(root, "new.txt"), "dataBase64": base64.StdEncoding.EncodeToString([]byte("hello")), "overwrite": false, "mkdirs": true})
 	if !resp.OK {
 		t.Fatalf("write new file failed: %s", resp.Error)
 	}
@@ -458,7 +427,7 @@ func TestRemoteHelperWriteDefaultPerm0644(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "secret.txt"), []byte("s"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	resp = run(map[string]any{"op": "write", "workspaceRoot": root, "path": "secret.txt", "dataBase64": base64.StdEncoding.EncodeToString([]byte("s2")), "overwrite": true, "mkdirs": false})
+	resp = run(map[string]any{"op": "write", "path": remoteFixturePath(root, "secret.txt"), "dataBase64": base64.StdEncoding.EncodeToString([]byte("s2")), "overwrite": true, "mkdirs": false})
 	if !resp.OK {
 		t.Fatalf("overwrite failed: %s", resp.Error)
 	}
@@ -511,8 +480,8 @@ func TestRemoteVCSMetadataGuards(t *testing.T) {
 	}
 
 	// 写入入口在真正发起 ssh 之前就拒（与本地写路径同一个错误码，模型侧可据此恢复）。
-	a := NewApp()
-	_, err := a.remoteWriteRaw(context.Background(), remoteTarget{Host: "example.invalid", WorkspaceRoot: "/srv/app"}, ".git/hooks/pre-commit", []byte("x"), true, true)
+	a := newIsolatedToolTestApp(t)
+	_, err := a.remoteWriteRaw(context.Background(), remoteTarget{Host: "example.invalid", LegacyRoot: "/srv/app"}, ".git/hooks/pre-commit", []byte("x"), true, true)
 	if code := toolErrorCode(err); code != "E_PROTECTED_PATH" {
 		t.Fatalf("remote write into .git must be refused before any ssh session, got %q (%v)", code, err)
 	}
@@ -546,12 +515,11 @@ func TestRemoteHelperRefusesVCSMetadataWrites(t *testing.T) {
 	}
 	write := func(rel string) map[string]any {
 		return map[string]any{
-			"op":            "write",
-			"workspaceRoot": root,
-			"path":          rel,
-			"dataBase64":    base64.StdEncoding.EncodeToString([]byte("x\n")),
-			"overwrite":     true,
-			"mkdirs":        true,
+			"op":         "write",
+			"path":       remoteFixturePath(root, rel),
+			"dataBase64": base64.StdEncoding.EncodeToString([]byte("x\n")),
+			"overwrite":  true,
+			"mkdirs":     true,
 		}
 	}
 
@@ -575,10 +543,9 @@ func TestRemoteHelperRefusesVCSMetadataWrites(t *testing.T) {
 
 	// 命令写目标：字面干净、解析后落进 .git 的目标由 helper 拒。
 	resp = run(map[string]any{
-		"op":            "_check_write_targets",
-		"workspaceRoot": root,
-		"cwd":           ".",
-		"targets":       []string{"gh/hooks/pre-commit"},
+		"op":      "_check_write_targets",
+		"cwd":     remoteFixturePath(root, "."),
+		"targets": []string{"gh/hooks/pre-commit"},
 	})
 	if resp.OK || !strings.Contains(resp.Error, "E_PROTECTED_PATH") {
 		t.Fatalf("write target through the .git alias must be refused, got ok=%v error=%q", resp.OK, resp.Error)
@@ -603,11 +570,10 @@ func TestRemoteHelperReadBatchOp(t *testing.T) {
 	// budget: totalBytes=5 → a(3) 进末尾，b(3) 溢出进 remaining（不产生占位槽，
 	// Go 侧由 remaining 下一轮会话回填）。
 	payload := map[string]any{
-		"op":            "read_batch",
-		"workspaceRoot": root,
-		"paths":         []string{"a.txt", "missing.txt", "sub", "b.txt"},
-		"maxBytes":      1024,
-		"totalBytes":    5,
+		"op":         "read_batch",
+		"paths":      remoteFixturePaths(root, []string{"a.txt", "missing.txt", "sub", "b.txt"}),
+		"maxBytes":   1024,
+		"totalBytes": 5,
 	}
 	script, err := buildRemoteScript(payload)
 	if err != nil {
@@ -649,7 +615,7 @@ func TestRemoteHelperReadBatchOp(t *testing.T) {
 	if data.Files[2].OK || data.Files[2].Error == "" {
 		t.Fatalf("directory target should carry per-file error, got %+v", data.Files[2])
 	}
-	if len(data.Remaining) != 1 || data.Remaining[0] != "b.txt" {
+	if len(data.Remaining) != 1 || data.Remaining[0] != remoteFixturePath(root, "b.txt") {
 		t.Fatalf("remaining = %v, want [b.txt]", data.Remaining)
 	}
 }
@@ -662,8 +628,8 @@ func TestRemoteHelperReadBatchErrorDoesNotConsumeBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	script, err := buildRemoteScript(map[string]any{
-		"op": "read_batch", "workspaceRoot": root,
-		"paths": []string{"missing.txt", "large.txt"}, "maxBytes": 1024, "totalBytes": 5,
+		"op":    "read_batch",
+		"paths": remoteFixturePaths(root, []string{"missing.txt", "large.txt"}), "maxBytes": 1024, "totalBytes": 5,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -691,7 +657,7 @@ func TestRemoteHelperReadRefusesFIFO(t *testing.T) {
 	}
 	py := pickRemoteHelperPython(t)
 	script, err := buildRemoteScript(map[string]any{
-		"op": "read", "workspaceRoot": t.TempDir(), "path": "pipe",
+		"op": "read", "path": remoteFixturePath(t.TempDir(), "pipe"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -760,12 +726,11 @@ func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
 	relPath := "中文目录/说明.txt"
 	content := "你好，世界\nhello\n"
 	resp := run(map[string]any{
-		"op":            "write",
-		"workspaceRoot": root,
-		"path":          relPath,
-		"dataBase64":    base64.StdEncoding.EncodeToString([]byte(content)),
-		"overwrite":     true,
-		"mkdirs":        true,
+		"op":         "write",
+		"path":       remoteFixturePath(root, relPath),
+		"dataBase64": base64.StdEncoding.EncodeToString([]byte(content)),
+		"overwrite":  true,
+		"mkdirs":     true,
 	})
 	var written struct {
 		Path string `json:"path"`
@@ -773,7 +738,7 @@ func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(resp.Data, &written); err != nil {
 		t.Fatalf("decode write data: %v", err)
 	}
-	if written.Path != relPath {
+	if written.Path != remoteFixturePath(root, relPath) {
 		t.Fatalf("write returned path %q, want %q", written.Path, relPath)
 	}
 	if onDisk, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relPath))); err != nil || string(onDisk) != content {
@@ -781,11 +746,10 @@ func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
 	}
 
 	resp = run(map[string]any{
-		"op":            "read_batch",
-		"workspaceRoot": root,
-		"paths":         []string{relPath},
-		"maxBytes":      1 << 20,
-		"totalBytes":    1 << 20,
+		"op":         "read_batch",
+		"paths":      remoteFixturePaths(root, []string{relPath}),
+		"maxBytes":   1 << 20,
+		"totalBytes": 1 << 20,
 	})
 	var batch struct {
 		Files []struct {
@@ -803,7 +767,7 @@ func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
 	if len(batch.Files) != 1 || !batch.Files[0].OK {
 		t.Fatalf("read_batch should read %s, got %+v", relPath, batch.Files)
 	}
-	if batch.Files[0].Path != relPath {
+	if batch.Files[0].Path != remoteFixturePath(root, relPath) {
 		t.Fatalf("read_batch path = %q, want %q (the path is echoed back through JSON)", batch.Files[0].Path, relPath)
 	}
 	raw, err := base64.StdEncoding.DecodeString(batch.Files[0].Data.DataBase64)
@@ -817,10 +781,9 @@ func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
 	// 命令字面写入目标里的非 ASCII 路径同样要能过边界（targets 由 Go 侧从
 	// 命令文本里解析出来，与 run op 走同一条 to_os_text 通道）。
 	resp = run(map[string]any{
-		"op":            "_check_write_targets",
-		"workspaceRoot": root,
-		"cwd":           "中文目录",
-		"targets":       []string{"新建输出.txt"},
+		"op":      "_check_write_targets",
+		"cwd":     remoteFixturePath(root, "中文目录"),
+		"targets": []string{"新建输出.txt"},
 	})
 	var checked struct {
 		Checked bool `json:"checked"`
@@ -842,12 +805,11 @@ func TestRemoteHelperWriteFchmodFallback(t *testing.T) {
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	script, err := buildRemoteScript(map[string]any{
-		"op":            "write",
-		"workspaceRoot": root,
-		"path":          "new.txt",
-		"dataBase64":    base64.StdEncoding.EncodeToString([]byte("hello")),
-		"overwrite":     true,
-		"mkdirs":        true,
+		"op":         "write",
+		"path":       remoteFixturePath(root, "new.txt"),
+		"dataBase64": base64.StdEncoding.EncodeToString([]byte("hello")),
+		"overwrite":  true,
+		"mkdirs":     true,
 	})
 	if err != nil {
 		t.Fatalf("buildRemoteScript: %v", err)
@@ -916,8 +878,7 @@ func TestRemoteHelperRunCommandShells(t *testing.T) {
 
 	got := execCommand(map[string]any{
 		"op":             "run",
-		"workspaceRoot":  root,
-		"cwd":            ".",
+		"cwd":            remoteFixturePath(root, "."),
 		"command":        "echo ally-run-ok",
 		"timeoutSeconds": 30,
 		"maxOutput":      1 << 16,
@@ -943,8 +904,7 @@ func TestRemoteHelperRunCommandShells(t *testing.T) {
 	}
 	got = execCommand(map[string]any{
 		"op":             "run",
-		"workspaceRoot":  root,
-		"cwd":            "中文目录",
+		"cwd":            remoteFixturePath(root, "中文目录"),
 		"command":        `printf '%s\n' "你好，世界"`,
 		"timeoutSeconds": 30,
 		"maxOutput":      1 << 16,
@@ -1015,24 +975,24 @@ func TestRemoteScriptHasCancelKill(t *testing.T) {
 // 现逐槽位独立填充，批量会话重构后曾退化为只认首个槽位。通过注入假
 // 会话函数避免真实 ssh，专测 Go 侧分派/回填逻辑。
 func TestRemoteReadFileDuplicatePathSlots(t *testing.T) {
-	a := NewApp()
+	a := newIsolatedToolTestApp(t)
 	a.remoteReadBatchFn = func(ctx context.Context, rt remoteTarget, paths []string) ([]remoteReadBatchItem, []string, error) {
-		if len(paths) != 1 || paths[0] != "a.txt" {
+		if len(paths) != 1 || paths[0] != "/srv/app/a.txt" {
 			t.Fatalf("expected deduped pending [a.txt], got %v", paths)
 		}
 		var it remoteReadBatchItem
-		it.Path = "a.txt"
+		it.Path = "/srv/app/a.txt"
 		it.OK = true
-		it.Data.Path = "a.txt"
+		it.Data.Path = "/srv/app/a.txt"
 		it.Data.DataBase64 = base64.StdEncoding.EncodeToString([]byte("l1\nl2\nl3\n"))
 		it.Data.Size = 12
 		return []remoteReadBatchItem{it}, nil, nil
 	}
 	result, err := a.remoteReadFile(context.Background(), RemoteReadFileRequest{
-		Target: "user@host:/srv/app",
+		Target: "user@host",
 		Files: []BatchReadFileRequest{
-			{Path: "a.txt"},
-			{Path: "a.txt", StartLine: 2, EndLine: 2},
+			{Path: "/srv/app/a.txt"},
+			{Path: "/srv/app/a.txt", StartLine: 2, EndLine: 2},
 			{Path: "../escape"},
 		},
 	})
@@ -1061,12 +1021,9 @@ type remoteDeleteSlotForTest struct {
 	Error  string `json:"error"`
 }
 
-// TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace 用真实 helper 脚本跑完整
-// delete_batch op（只操作 t.TempDir()）：普通文件允许删、一级目录拒绝、二级目录
-// 必须 recursive 后允许删除、工作区根与逃逸路径拒绝、不存在的路径报 absent 槽
-// （不是错误）。批量语义单独锁一条：列表里只要有一条不允许，整批一条都不删 ——
-// 全部判定先于任何删除。
-func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
+// TestRemoteHelperDeleteBatchAbsolutePaths covers isolated batch outcomes and
+// independent deletion protection using only temporary files.
+func TestRemoteHelperDeleteBatchAbsolutePaths(t *testing.T) {
 	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
@@ -1098,7 +1055,7 @@ func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
 	}
 	deleteBatch := func(paths []string, recursive bool) remotePythonResponse {
 		t.Helper()
-		return run(map[string]any{"op": "delete_batch", "workspaceRoot": root, "paths": paths, "recursive": recursive})
+		return run(map[string]any{"op": "delete_batch", "paths": remoteFixturePaths(root, paths), "recursive": recursive})
 	}
 	slots := func(resp remotePythonResponse) []remoteDeleteSlotForTest {
 		t.Helper()
@@ -1128,7 +1085,7 @@ func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
 	if !resp.OK {
 		t.Fatalf("delete plain file failed: %s", resp.Error)
 	}
-	if got := slots(resp); len(got) != 1 || !got[0].OK || got[0].Path != "app.py" {
+	if got := slots(resp); len(got) != 1 || !got[0].OK || got[0].Path != remoteFixturePath(root, "app.py") {
 		t.Fatalf("expected one successful slot for app.py, got %#v", got)
 	}
 	mustBeGone("app.py")
@@ -1148,7 +1105,7 @@ func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
 		t.Fatalf("a missing path must not fail the batch: %s", resp.Error)
 	}
 	missing := slots(resp)
-	if len(missing) != 2 || !missing[0].OK || missing[0].Absent || !missing[1].OK || !missing[1].Absent || missing[1].Path != "missing.txt" {
+	if len(missing) != 2 || !missing[0].OK || missing[0].Absent || !missing[1].OK || !missing[1].Absent || missing[1].Path != remoteFixturePath(root, "missing.txt") {
 		t.Fatalf("expected one deleted slot and one absent slot, got %#v", missing)
 	}
 	mustBeGone("sub/nested.txt")
@@ -1171,23 +1128,32 @@ func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
 	if !resp.OK {
 		t.Fatalf("batch delete failed: %s", resp.Error)
 	}
-	if got := slots(resp); len(got) != 2 || !got[0].OK || !got[1].OK || got[0].Path != "a.txt" || got[1].Path != "b.txt" {
+	if got := slots(resp); len(got) != 2 || !got[0].OK || !got[1].OK || got[0].Path != remoteFixturePath(root, "a.txt") || got[1].Path != remoteFixturePath(root, "b.txt") {
 		t.Fatalf("expected two successful slots in request order, got %#v", got)
 	}
 	mustBeGone("a.txt")
 	mustBeGone("b.txt")
 
-	// 7) 工作区根本身拒绝
-	resp = deleteBatch([]string{"."}, false)
-	if resp.OK || !strings.Contains(resp.Error, "refusing to delete remote workspace root") {
-		t.Fatalf("workspace root delete should be refused, got ok=%v error=%s", resp.OK, resp.Error)
+	// Filesystem roots remain protected, regardless of selected server.
+	filesystemRoot := filepath.VolumeName(root) + string(filepath.Separator)
+	resp = deleteBatch([]string{filesystemRoot}, true)
+	if resp.OK {
+		t.Fatal("filesystem root deletion must be refused")
 	}
 
-	// 8) 逃逸路径拒绝
-	resp = deleteBatch([]string{"../outside.txt"}, false)
-	if resp.OK || !strings.Contains(resp.Error, "..") {
-		t.Fatalf("escape path should be refused, got ok=%v error=%s", resp.OK, resp.Error)
+	// Another directory is an ordinary absolute path, not a workspace escape.
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	resp = deleteBatch([]string{outside}, false)
+	if !resp.OK {
+		t.Fatalf("cross-directory deletion failed: %s", resp.Error)
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatalf("outside file remains: %v", err)
+	}
+
 }
 
 // TestRemoteHelperDeleteBatchKeepsSymlinkTarget 锁定远端删除对符号链接的处理：链接
@@ -1215,10 +1181,9 @@ func TestRemoteHelperDeleteBatchKeepsSymlinkTarget(t *testing.T) {
 	deleteBatch := func(paths []string, recursive bool) remotePythonResponse {
 		t.Helper()
 		script, err := buildRemoteScript(map[string]any{
-			"op":            "delete_batch",
-			"workspaceRoot": root,
-			"paths":         paths,
-			"recursive":     recursive,
+			"op":        "delete_batch",
+			"paths":     remoteFixturePaths(root, paths),
+			"recursive": recursive,
 		})
 		if err != nil {
 			t.Fatalf("buildRemoteScript: %v", err)
@@ -1276,7 +1241,7 @@ func TestRemoteHelperDeleteBatchKeepsSymlinkTarget(t *testing.T) {
 // 路径（单文件走 remoteReadRawOne，没有注入点），而缓存比对在包装层，两条
 // 返回路径共用同一份实现。
 func TestRemoteReadReusesSessionCache(t *testing.T) {
-	a := NewApp()
+	a := newIsolatedToolTestApp(t)
 	payload := []byte("l1\nl2\nl3\n")
 	a.remoteReadBatchFn = func(ctx context.Context, rt remoteTarget, paths []string) ([]remoteReadBatchItem, []string, error) {
 		items := make([]remoteReadBatchItem, 0, len(paths))

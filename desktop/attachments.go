@@ -195,7 +195,7 @@ func prepareImageData(result preparedAttachment, data []byte) preparedAttachment
 		result.input.Error = locales.Text("无法读取图片：") + err.Error()
 		return result
 	}
-	result.preview = resizeImage(img, 256)
+	result.preview = resizeImage(img, attachmentChipEdge)
 	switch format {
 	case "jpeg":
 		typ = "image/jpeg"
@@ -405,18 +405,16 @@ func (a *desktop) finishAttachments(t *conversation, prepared []preparedAttachme
 	}
 }
 
-// commitPendingPreviews moves the previews of just-sent attachments into the
-// transcript image cache, where message tiles read them. Unsent previews live
-// outside that LRU-managed cache, so evicting history bitmaps never drops the
-// thumbnail of an attachment that is still waiting to be sent.
-func commitPendingPreviews(t *conversation) {
-	if len(t.PendingAttachmentImages) > 0 {
-		ensureAttachmentMaps(t)
-		for id, bm := range t.PendingAttachmentImages {
-			t.AttachmentImages[id] = bm
+// loadSentAttachmentImages loads the transcript's own copy of the pictures a
+// just-sent message carries. The composer's chips are 256px copies for a 36×32
+// slot and go with the message, so a tile never draws one and an open preview is
+// never left with it.
+func (a *desktop) loadSentAttachmentImages(t *conversation, inputs []backend.AttachmentInput) {
+	for _, input := range inputs {
+		if input.Kind == "image" {
+			a.loadAttachmentImage(t, input.ID, input.ImageRef, input.DataURL)
 		}
 	}
-	t.PendingAttachmentImages = nil
 }
 
 func ensureAttachmentMaps(t *conversation) {
@@ -669,13 +667,17 @@ const (
 	attachmentLoneH  float32 = 340
 	attachmentThumbW float32 = 220
 	attachmentThumbH float32 = 150
-	// attachmentThumbEdge is the longer edge of the copy the transcript keeps.
-	// Only an open preview decodes a larger one.
+	// attachmentChipEdge is the longer edge of the copy the composer draws in its
+	// 36×32 pending chip. It is never the message's copy: a tile or an open preview
+	// loading it would show a 256px picture.
+	attachmentChipEdge = 256
+	// attachmentThumbEdge is the longer edge of the copy a message keeps; only an
+	// open preview decodes a larger one.
 	attachmentThumbEdge = 1024
 )
 
 // fitBox scales w×h into maxW×maxH keeping the ratio, and never scales up: a small
-// clipboard image stays small instead of filling the transcript.
+// picture paints at its own size, in the transcript and in a full-window preview.
 func fitBox(w, h, maxW, maxH float32) (float32, float32) {
 	if w <= 0 || h <= 0 {
 		return maxW, maxH

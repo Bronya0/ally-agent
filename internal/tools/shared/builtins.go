@@ -344,61 +344,60 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"url"},
 		}),
-		functionTool("remote_read", "Read one or more text files on a remote SSH workspace (same contract as read: bounded line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). Prefer targeted startLine/endLine ranges or tailLines for logs; follow the startLine continuation hint when truncated. Pass needed files in the files array to read in parallel.", map[string]any{
+		functionTool("remote_read", "Read one or more text files by absolute path on a remote SSH server (same contract as read: bounded line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). Prefer targeted startLine/endLine ranges or tailLines for logs; follow the startLine continuation hint when truncated. Pass needed files in the files array to read in parallel.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target": sshTargetSchema(),
-				"files":  batchReadFilesSchema(),
+				"files":  batchReadFilesSchema("Absolute remote file path, e.g. /srv/app/main.go."),
 			},
 			"required": []string{"target", "files"},
 		}),
-		functionTool("remote_edit", "Edit one file on a remote SSH workspace, using the same changes contract as edit: prefer short exact unique oldText, use lineRange only immediately after reading that range, and put all changes to one file in one call. Send parallel calls for multiple files. target selects an SSH host and absolute non-root workspace (e.g. dev:/srv/app); path is relative to it. Use the current version from remote_read or the preceding successful remote_edit; never guess it. changes must be a JSON array, not a quoted string. Writes preserve the source encoding and recheck its full hash on the host before committing. Each remote file commits independently; re-read on conflicts.", map[string]any{
+		functionTool("remote_edit", "Edit one file by absolute path on a remote SSH server, using the same changes contract as edit: prefer short exact unique oldText, use lineRange only immediately after reading that range, and put all changes to one file in one call. Send parallel calls for multiple files. target selects only the SSH server (e.g. dev); path is absolute (e.g. /srv/app/main.go). Use the current version from remote_read or the preceding successful remote_edit; never guess it. changes must be a JSON array, not a quoted string. Writes preserve the source encoding and recheck its full hash on the host before committing. Each remote file commits independently; re-read on conflicts.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  sshTargetSchema(),
-				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Relative path of the single file to edit in this call. Absolute paths under the workspace root are also accepted and rebased (the root itself is not)."},
+				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute remote path of the single file to edit, e.g. /srv/app/main.go."},
 				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required current 6-char version from the latest remote_read or preceding successful remote_edit; never guess it. Use the new version returned after every successful edit."},
 				"changes": editChangesSchema("remote_read"),
 			},
 			"required": []string{"target", "path", "version", "changes"},
 		}),
-		functionTool("remote_create_file", "Create a UTF-8 file and missing parents on a remote SSH workspace. Directories are refused.", map[string]any{
+		functionTool("remote_create_file", "Create a UTF-8 file and missing parents by absolute path on a remote SSH server. Directories are refused.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    sshTargetSchema(),
-				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Remote path of the file to create, relative to the SSH workspace root; absolute paths under that root are accepted and rebased."},
+				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute remote path of the file to create, e.g. /srv/app/config.json."},
 				"content":   map[string]any{"type": "string", "description": "Full UTF-8 text of the new file (may be empty), written as-is."},
 				"overwrite": map[string]any{"type": "boolean", "description": "Set true to replace an existing file. No additional confirmation is shown."},
 			},
 			"required": []string{"target", "path", "content"},
 		}),
-		functionTool("remote_delete_path", "Delete one or more files or directories in a remote SSH workspace. Refuses the workspace root, VCS metadata, and the protected system locations listed below; directories require recursive=true. Strictly prohibited from deleting filesystem roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs). Use remote deletion cautiously; it is destructive. Prefer this over remote_run_command deletion."+deleteBatchNote(), map[string]any{
+		functionTool("remote_delete_path", "Delete one or more absolute file or directory paths on a remote SSH server. Refuses filesystem roots, VCS metadata, and the protected system locations listed below; directories require recursive=true. Strictly prohibited from deleting filesystem roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs). Use remote deletion cautiously; it is destructive. Prefer this over remote_run_command deletion."+deleteBatchNote(), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    sshTargetSchema(),
-				"paths":     deletePathsSchema("Remote path to delete, relative to the SSH workspace root; absolute paths under that root are accepted and rebased."),
+				"paths":     deletePathsSchema("Absolute remote path to delete, e.g. /srv/app/build."),
 				"recursive": map[string]any{"type": "boolean", "description": "Required for deleting directories; applies to every path in the call. System level 1/2 directories are always blocked."},
 			},
 			"required": []string{"target", "paths"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace. Use remote_delete_path for unmanaged deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Outside-path reads and creation of new paths are allowed; modifying an existing outside file or directory is refused, including under /tmp. Writes through workspace symlinks that escape the workspace and writes to VCS metadata remain blocked. Use workspace .tmp/ or a unique unused temporary path for output. A timeout kills the process group. Output keeps its real head and tail. A full log path is returned when the preview is reduced; inspect it with remote_read on the same target, or filter it with a read-only remote command. Partial logs are explicitly marked; never rerun side effects merely to recover output.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH server. Each call starts a fresh shell in the remote login user's home directory; use cd /absolute/path && command when needed. A cd does not persist between calls. Use remote_delete_path for unmanaged deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. There is no remote workspace directory boundary. Writes to VCS metadata remain blocked. A timeout kills the process group. Output keeps its real head and tail. A full log path is returned when the preview is reduced; inspect it with remote_read on the same target, or filter it with a read-only remote command. Partial logs are explicitly marked; never rerun side effects merely to recover output.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  sshTargetSchema(),
 				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run on the remote host."},
 				"shell":   map[string]any{"type": "string", "enum": []string{"/bin/bash", "/bin/sh", "/usr/bin/bash", "/usr/bin/sh", "/bin/zsh", "/usr/bin/zsh", ""}, "description": "Optional absolute path of the remote shell; an empty string means the helper chooses one itself. Omit to let the remote helper choose one (bash, then sh; cmd.exe on Windows)."},
-				"cwd":     map[string]any{"type": "string", "description": "Working directory inside the remote workspace. Relative to the workspace root; an absolute path equal to or under the root is also accepted and rebased. Empty means workspace root."},
 				"timeout": commandTimeoutSchema(),
 			},
 			"required": []string{"target", "command"},
 		}),
-		functionTool("remote_transfer", "Transfer files or directories between local and remote workspaces using bounded-memory binary streaming. Workspace fences are enforced; .git is protected. File modes, permissions, and directory structure are preserved.", map[string]any{
+		functionTool("remote_transfer", "Transfer files or directories between the local workspace and absolute paths on a remote SSH server using bounded-memory binary streaming. The local workspace fence and archive extraction boundary are enforced; .git is protected. File modes, permissions, and directory structure are preserved.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":     sshTargetSchema(),
 				"action":     map[string]any{"type": "string", "enum": []string{"upload", "download"}, "description": "Transfer direction: 'upload' (local to remote) or 'download' (remote to local)."},
 				"localPath":  map[string]any{"type": "string", "minLength": 1, "description": "Workspace-relative local file or directory path."},
-				"remotePath": map[string]any{"type": "string", "minLength": 1, "description": "Remote workspace-relative destination or source file/directory path."},
+				"remotePath": map[string]any{"type": "string", "minLength": 1, "description": "Absolute remote destination or source file/directory path, e.g. /srv/app/dist."},
 				"overwrite":  map[string]any{"type": "boolean", "description": "Allow overwriting an existing destination file or directory without an additional confirmation prompt."},
 			},
 			"required": []string{"target", "action", "localPath", "remotePath"},
@@ -427,7 +426,7 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("read", "Read text files and images (jpg, png, gif, webp; bmp returns a text notice). Text is returned as bounded previews headed by `// read | path=… | version=…` with 1-based line numbers; use the version field for edit. Use tailLines for logs. Missing paths and directories have compact error receipts; other failures carry an error field. `truncated-lines` marks incomplete line tails; edit refuses lineRange over them, so use oldText instead.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"files": batchReadFilesSchema(),
+				"files": batchReadFilesSchema("File path to read."),
 			},
 			"required": []string{"files"},
 		}),
@@ -522,10 +521,10 @@ var builtinToolExamples = map[string]string{
 	"command":            `{"command":"go test ./...","cwd":".","timeout":120}`,
 	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm run dev","cwd":"frontend"}; restart: {"action":"restart","id":"svc_..."}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
 	"ask":                `{"questions":[{"question":"Which database should we use?","options":[{"label":"SQLite","description":"Simple local storage.","recommended":true},{"label":"PostgreSQL","description":"Production database."}]}]}`,
-	"remote_read":        `{"target":"my-dev:/srv/app","files":[{"path":"main.go"}]}`,
-	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
-	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./..."}`,
-	"remote_transfer":    `upload: {"target":"my-dev:/srv/app","action":"upload","localPath":"dist","remotePath":"public","overwrite":true}; download: {"target":"my-dev:/srv/app","action":"download","remotePath":"logs","localPath":"debug_logs"}`,
+	"remote_read":        `{"target":"my-dev","files":[{"path":"/srv/app/main.go"}]}`,
+	"remote_edit":        `{"target":"my-dev","path":"/srv/app/main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
+	"remote_run_command": `{"target":"my-dev","command":"cd /srv/app && go test ./..."}`,
+	"remote_transfer":    `upload: {"target":"my-dev","action":"upload","localPath":"dist","remotePath":"/srv/app/public","overwrite":true}; download: {"target":"my-dev","action":"download","remotePath":"/var/log/app","localPath":"debug_logs"}`,
 	"ssh_cluster":        `{"action":"list"}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue"}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","tailLines":200}]}`,
@@ -573,7 +572,7 @@ func RawFunction(name, description string, parameters map[string]any) openai.Too
 	}
 }
 
-func batchReadFilesSchema() map[string]any {
+func batchReadFilesSchema(pathDescription string) map[string]any {
 	return map[string]any{
 		"type":     "array",
 		"minItems": 1,
@@ -581,7 +580,7 @@ func batchReadFilesSchema() map[string]any {
 		"items": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "File path to read."},
+				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": pathDescription},
 				"startLine": map[string]any{"type": "integer", "minimum": 0, "description": "Optional 1-based first line to read; omit or send 0 to start at the beginning."},
 				"endLine":   map[string]any{"type": "integer", "minimum": 0, "description": "Optional inclusive last line; omit or send 0 to request through the end of the file, subject to output limits. A value below startLine is normalized into an ascending range instead of being rejected."},
 				"tailLines": map[string]any{"type": "integer", "minimum": 0, "maximum": MaxReadRangeLines, "description": "Optional: read only the last N lines (e.g. the end of a log); omit or send 0 to disable tail reading and use the normal line range. Do not combine a positive value with nonzero startLine or endLine. All reads remain subject to output limits."},
@@ -597,11 +596,10 @@ func batchReadFilesSchema() map[string]any {
 // effective value (strings.TrimSpace(change.LineRange) != "", tools/edit/apply.go).
 const editLineRangeOptionalPattern = `^(?:\s*|[1-9][0-9]*(?:-[1-9][0-9]*)?)$`
 
-// sshTargetSchema is the `target` argument every remote_* tool takes: the alias
-// plus the absolute workspace path on that host. One declaration keeps the five
-// remote tools from spelling the same pattern two different ways.
+// sshTargetSchema selects only the server. Remote file paths are separate
+// absolute paths; commands choose their directory explicitly with cd.
 func sshTargetSchema() map[string]any {
-	return map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Explicit SSH target plus an absolute, non-root workspace path, e.g. my-dev:/srv/app. The workspace path / is rejected."}
+	return map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "SSH server alias from ssh_cluster (e.g. my-dev), or an explicit endpoint [user@]host[:port] / ssh://user@host:port. Do not append a directory; file paths are separate absolute paths."}
 }
 
 // commandTimeoutSchema bounds the shell tools' timeout (command,

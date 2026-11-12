@@ -32,271 +32,460 @@ func TestFastCompactLeavesLessThanHalf(t *testing.T) {
 }
 
 func fastCompactFixture() []openai.ChatCompletionMessage {
-	h := []openai.ChatCompletionMessage{{Role: "user", Content: "keep my requirements"}}
+	var history []openai.ChatCompletionMessage
 	for i := 0; i < 6; i++ {
-		calls := []openai.ToolCall{{ID: fmt.Sprintf("call-%d", i), Type: "function", Function: openai.FunctionCall{Name: "read", Arguments: `{}`}}}
-		if i == 2 { // The first retained round has parallel results: keep both.
-			calls = append(calls, openai.ToolCall{ID: "parallel", Type: "function", Function: openai.FunctionCall{Name: "read", Arguments: `{}`}})
-		}
-		h = append(h, openai.ChatCompletionMessage{Role: "assistant", Content: fmt.Sprintf("answer-%d", i), ReasoningContent: strings.Repeat("思考依据", 600), ToolCalls: calls})
-		for _, call := range calls {
-			h = append(h, openai.ChatCompletionMessage{Role: "tool", ToolCallID: call.ID, Content: "BEGIN " + strings.Repeat("文件内容", 900) + " END"})
-		}
+		id := fmt.Sprintf("call-%d", i)
+		history = append(history,
+			openai.ChatCompletionMessage{Role: "user", Content: fmt.Sprintf("requirements-%d", i)},
+			openai.ChatCompletionMessage{Role: "assistant", Content: fmt.Sprintf("answer-%d", i), ReasoningContent: strings.Repeat("old reasoning ", 600), ToolCalls: []openai.ToolCall{{ID: id, Type: "function", Function: openai.FunctionCall{Name: "read", Arguments: `{"purpose":"查看入口","files":[{"path":"main.go"}]}`}}}},
+			openai.ChatCompletionMessage{Role: "tool", ToolCallID: id, Content: "// read | path=\"main.go\"\n\n" + strings.Repeat("file body ", 2000)},
+			openai.ChatCompletionMessage{Role: "assistant", Content: fmt.Sprintf("final-%d", i), ReasoningContent: "final reasoning"},
+		)
 	}
-	return append(h, openai.ChatCompletionMessage{Role: "assistant", Content: "final answer", ReasoningContent: "recent thinking"})
+	return history
 }
 
-func TestFastCompactPreservesTailAndIsIdempotent(t *testing.T) {
-	t.Parallel()
+func TestFastCompactPreservesTaskAndBodies(t *testing.T) {
 	a := newApiTestApp(t)
-	a.modelHistoryCodec = nil // no OS credentials/storage in unit tests
+	a.modelHistoryCodec = nil
 	history := fastCompactFixture()
 	const sid = "fast"
 	a.saveHistory(sid, history)
 	cache := a.sessionReadCacheFor(sid)
 	seedSessionReadCacheForTest(cache, "k", "hash")
 	a.recordContextAnchor(sid, history, &modelUsage{PromptTokens: 50000})
-	result, err := a.FastCompactSession(sid) // no model or credentials configured
-	if err != nil {
-		t.Fatal(err)
-	}
-	after := a.loadSessionHistoryCopy(sid)
-	cutoff := fastCompactCutoff(history, 4)
-	if !reflect.DeepEqual(after[cutoff:], history[cutoff:]) {
-		t.Fatal("recent complete tool rounds and following messages changed")
-	}
-	if len(after) != len(history) || !reflect.DeepEqual(after[0], history[0]) {
-		t.Fatal("message order/count or user requirements changed")
-	}
-	if result["reasoningCount"] != 2 || len(result["toolSummaries"].(map[string]string)) != 2 {
-		t.Fatalf("unexpected compact counts: %v", result)
-	}
-	for _, m := range after[:cutoff] {
-		if !utf8.ValidString(m.Content) || m.ReasoningContent != "" {
-			t.Fatal("invalid UTF-8 or old reasoning remained")
-		}
-	}
-	if len(cache.entries) != 0 || a.contextAnchorFor(sid).tokens != 0 {
-		t.Fatal("read cache or measured context survived rewrite")
-	}
-	if result["tokensAfter"].(int) >= result["tokensBefore"].(int) {
-		t.Fatal("context did not shrink")
-	}
-	second, err := a.FastCompactSession(sid)
-	if err != nil || second["changed"] != false || !reflect.DeepEqual(a.loadSessionHistoryCopy(sid), after) {
-		t.Fatalf("repeated compaction must be a no-op: %v %v", second, err)
-	}
-}
-
-func TestFastCompactKeepsLatestPlanAndSmallResults(t *testing.T) {
-	t.Parallel()
-	a := newApiTestApp(t)
-	a.modelHistoryCodec = nil
-	history := fastCompactFixture()
-	history[1].ToolCalls[0].Function.Name = planToolName
-	history[4].Content = "OK"
-	a.saveHistory("plan", history)
-	if _, err := a.FastCompactSession("plan"); err != nil {
-		t.Fatal(err)
-	}
-	after := a.loadSessionHistoryCopy("plan")
-	if after[2].Content != history[2].Content || after[4].Content != "OK" {
-		t.Fatal("latest plan or small result was replaced")
-	}
-}
-
-func TestFastCompactDoesNotGrowSmallHistory(t *testing.T) {
-	t.Parallel()
-	a := newApiTestApp(t)
-	h := fastCompactFixture()
-	for i := range h {
-		if h[i].Role == "assistant" {
-			h[i].ReasoningContent = "x"
-		}
-		if h[i].Role == "tool" {
-			h[i].Content = "OK"
-		}
-	}
-	a.saveHistory("small", h)
-	result, err := a.FastCompactSession("small")
-	if err != nil || result["changed"] != false || !reflect.DeepEqual(a.loadSessionHistoryCopy("small"), h) {
-		t.Fatalf("small messages must not grow due to excerpt markers: %v %v", result, err)
-	}
-}
-
-func TestFastCompactClearsOnlyOldArgumentsIncludingNativeReplay(t *testing.T) {
-	t.Parallel()
-	a := newApiTestApp(t)
-	a.modelHistoryCodec = nil
-	history := fastCompactFixture()
-	for i := range history {
-		m := &history[i]
-		m.ReasoningContent = ""
-		if m.Role == "tool" {
-			m.Content = "OK"
-		}
-		for j := range m.ToolCalls {
-			m.ToolCalls[j].Function.Arguments = `{"text":"` + strings.Repeat("old code ", 1000) + `"}`
-		}
-	}
-	// Include parallel old calls and a plan: results and identities must survive.
-	history[1].ToolCalls = append(history[1].ToolCalls, openai.ToolCall{ID: "old-parallel", Type: "function", Function: openai.FunctionCall{Name: planToolName, Arguments: `{"steps":[]}`}})
-	history = append(history[:3:3], append([]openai.ChatCompletionMessage{{Role: "tool", ToolCallID: "old-parallel", Content: "latest plan"}}, history[3:]...)...)
-	const sid = "arguments"
-	a.saveHistory(sid, history)
-	cfg := ConfigState{Model: "m", APIFormat: apiFormatOpenAIResponses, responsesPromptCacheKey: openAIResponsesPromptCacheKey(sid)}
-	key := reasoningReplayKey(cfg, "m")
-	raw, _ := json.Marshal(map[string]any{"type": "function_call", "id": "fc_old", "call_id": "call-0", "name": "read", "arguments": history[1].ToolCalls[0].Function.Arguments})
-	a.reasoningStash.appendResponses(key, responsesMessageKey(0, history[1]), []json.RawMessage{raw})
-	a.recordContextAnchor(sid, history, &modelUsage{PromptTokens: 50000})
 	result, err := a.FastCompactSession(sid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	after := a.loadSessionHistoryCopy(sid)
-	cutoff := fastCompactCutoff(history, 4)
-	want := cloneChatMessages(history)
-	for i := 0; i < cutoff; i++ {
-		for j := range want[i].ToolCalls {
-			want[i].ToolCalls[j].Function.Arguments = "{}"
+	if len(after) != 5 || !reflect.DeepEqual(after[1:], history[len(history)-4:]) {
+		t.Fatal("the most recent complete task changed")
+	}
+	entries, ok := decodeFastCompactHistory(after[0])
+	if !ok || len(entries) != 20 {
+		t.Fatal("historical speakers or tools were lost")
+	}
+	for i := 0; i < 5; i++ {
+		if entries[i*4].Content != history[i*4].Content || entries[i*4+1].Content != history[i*4+1].Content || entries[i*4+3].Content != history[i*4+3].Content {
+			t.Fatal("user/assistant body was changed")
+		}
+		entry := entries[i*4+2]
+		if entry.Role != "tool_call" || entry.Purpose == "" || strings.Contains(entry.Content, "file body") {
+			t.Fatal("tool body survived or purpose was lost")
 		}
 	}
-	if result["changed"] != true || result["toolArgumentsCount"] != 3 || !reflect.DeepEqual(after, want) {
-		t.Fatalf("argument-only compaction lost results, identity or recent history: %v", result)
+	encoded, _ := json.Marshal(after[:1])
+	if strings.Contains(string(encoded), "old reasoning") || !utf8.Valid(encoded) {
+		t.Fatal("old reasoning survived or UTF-8 broke")
 	}
-	if a.contextAnchorFor(sid).tokens != 0 || result["tokensAfter"].(int) >= result["tokensBefore"].(int) {
-		t.Fatal("argument-only changes must invalidate measurements and reduce context")
+	if len(cache.entries) != 0 || a.contextAnchorFor(sid).tokens != 0 {
+		t.Fatal("rewrite retained stale caches")
 	}
-	output := a.reasoningStash.get(key).nativeResponses(0, after[1])
-	var call struct{ ID, CallID, Name, Arguments string }
-	var fields map[string]string
-	if len(output) != 1 || json.Unmarshal(output[0], &fields) != nil {
-		t.Fatal("native function call lost")
-	}
-	if json.Unmarshal(output[0], &call) != nil || call.Arguments != "{}" || fields["id"] != "fc_old" || fields["call_id"] != "call-0" || fields["name"] != "read" {
-		t.Fatal("native replay retained old arguments or lost call identity")
-	}
-	if !strings.Contains(string(raw), "old code") || history[1].ToolCalls[0].Function.Arguments == "{}" {
-		t.Fatal("original snapshots were mutated")
+	if intFromAny(result["tokensAfter"]) >= intFromAny(result["tokensBefore"]) {
+		t.Fatal("fixture must shrink")
 	}
 	second, err := a.FastCompactSession(sid)
-	if err != nil || second["changed"] != false || !reflect.DeepEqual(after, a.loadSessionHistoryCopy(sid)) {
-		t.Fatalf("argument compaction must be idempotent: %v %v", second, err)
+	if err != nil || second["changed"] != false || !reflect.DeepEqual(a.loadSessionHistoryCopy(sid), after) {
+		t.Fatalf("not idempotent: %v %v", second, err)
+	}
+	snapshot := legacySessionSnapshot(sid, after)
+	if len(snapshot.Messages) != 23 || snapshot.Messages[0]["content"] != history[0].Content || snapshot.Messages[2]["role"] != "tool_call" {
+		t.Fatal("legacy recovery displayed the generated record as a user question")
 	}
 }
 
-func TestFastCompactBoundsOldAnswersWithoutToolCalls(t *testing.T) {
-	t.Parallel()
+func TestFastCompactTaskProvenanceSurvivesInjectedInputsAndRestart(t *testing.T) {
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = nil
-	var history []openai.ChatCompletionMessage
-	for i := 0; i < 80; i++ {
+	const sid = "task"
+	previous := fastCompactFixture()[:20]
+	a.saveHistory(sid, previous)
+	current := append(cloneChatMessages(previous), openai.ChatCompletionMessage{Role: "user", Content: "current task"})
+	a.beginHistoryTask(sid, current)
+	// A queued user input after a text reply still belongs to the same run.
+	current = append(current,
+		openai.ChatCompletionMessage{Role: "assistant", Content: "intermediate reply"},
+		openai.ChatCompletionMessage{Role: "user", Content: "also handle whitespace"},
+		openai.ChatCompletionMessage{Role: "assistant", Content: "continuing", ReasoningContent: "current reasoning"},
+	)
+	a.saveHistory(sid, current)
+	disk := sanitizeHistoryMessagesForDisk(current)
+	raw, err := json.Marshal(a.modelHistoryForStorage(sid, disk, current))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := newApiTestApp(t)
+	b.modelHistoryCodec = nil
+	if err := json.Unmarshal(raw, &disk); err != nil {
+		t.Fatal(err)
+	}
+	loaded, publish := b.modelHistoryFromStorage(sid, raw, disk)
+	b.mu.Lock()
+	if publish != nil {
+		publish()
+	}
+	b.mu.Unlock()
+	b.saveHistory(sid, loaded)
+	candidate, err := b.prepareFastCompactHistory(context.Background(), sid, loaded, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.cutoff != 1 || !reflect.DeepEqual(candidate.history[candidate.tailStart:], loaded[1:]) {
+		t.Fatal("injected input moved the main task boundary")
+	}
+	// Repairing an earlier empty assistant must rebase, rather than forget, it.
+	withEmpty := append([]openai.ChatCompletionMessage{{Role: "assistant"}}, current...)
+	b.mu.Lock()
+	b.historyCacheStateLocked(sid).task = &historyTaskBoundary{Start: len(previous), Key: historyTaskKey(current[len(previous)])}
+	b.mu.Unlock()
+	// A stale index is relocated by the original input, never used to cut the chain.
+	b.saveHistory(sid, withEmpty)
+	if boundary := b.historyTaskFor(sid, b.loadSessionHistoryCopy(sid)); boundary == nil || boundary.Start != len(previous) {
+		t.Fatal("task provenance was lost during repair")
+	}
+}
+
+func TestFastCompactDoesNotCutSingleTaskOrImageInputs(t *testing.T) {
+	a := newApiTestApp(t)
+	history := []openai.ChatCompletionMessage{{Role: "user", Content: "one task"}}
+	for i := 0; i < 12; i++ {
+		call := openai.ToolCall{ID: fmt.Sprint(i), Type: "function", Function: openai.FunctionCall{Name: "read", Arguments: `{}`}}
+		history = append(history, openai.ChatCompletionMessage{Role: "assistant", ToolCalls: []openai.ToolCall{call}}, openai.ChatCompletionMessage{Role: "tool", ToolCallID: call.ID, Content: strings.Repeat("data", 1000)})
+	}
+	if image := readImageInjectionMessage([]readImageCandidate{{Path: "test.png", DataURL: "data:image/png;base64,AAAA"}}); image != nil {
+		history = append(history, *image)
+	}
+	a.saveHistory("one", history)
+	result, err := a.FastCompactSession("one")
+	if err != nil || result["changed"] != false || !reflect.DeepEqual(a.loadSessionHistoryCopy("one"), history) {
+		t.Fatal("a single long task was partially compacted")
+	}
+}
+
+func TestFastCompactDoesNotGrowPlainHistory(t *testing.T) {
+	a := newApiTestApp(t)
+	history := []openai.ChatCompletionMessage{
+		{Role: "user", Content: "hi"}, {Role: "assistant", Content: "hello"},
+		{Role: "user", Content: "next"}, {Role: "assistant", Content: "ok"},
+	}
+	a.saveHistory("plain", history)
+	result, err := a.FastCompactSession("plain")
+	if err != nil || result["changed"] != false || !reflect.DeepEqual(history, a.loadSessionHistoryCopy("plain")) {
+		t.Fatal("local compaction grew a short text exchange")
+	}
+}
+
+func TestFastCompactDropsOpaqueOldReasoningWithoutVisibleSummary(t *testing.T) {
+	a := newApiTestApp(t)
+	a.modelHistoryCodec = nil
+	history := []openai.ChatCompletionMessage{{Role: "user", Content: "first"}, {Role: "assistant", Content: "done"}, {Role: "user", Content: "next"}, {Role: "assistant", Content: "ok"}}
+	cfg := ConfigState{Model: "m", APIFormat: apiFormatOpenAIResponses, responsesPromptCacheKey: openAIResponsesPromptCacheKey("opaque")}
+	key := reasoningReplayKey(cfg, "m")
+	a.reasoningStash.appendResponses(key, responsesMessageKey(0, history[1]), []json.RawMessage{json.RawMessage(`{"type":"reasoning","id":"rs_old","encrypted_content":"opaque","summary":[]}`), json.RawMessage(`{"type":"message","id":"msg_old"}`)})
+	a.reasoningStash.appendResponses(key, responsesMessageKey(1, history[3]), []json.RawMessage{json.RawMessage(`{"type":"message","id":"msg_recent"}`)})
+	a.saveHistory("opaque", history)
+	result, err := a.FastCompactSession("opaque")
+	if err != nil || result["changed"] != true {
+		t.Fatal("invisible old reasoning was not compacted")
+	}
+	after := a.loadSessionHistoryCopy("opaque")
+	payload := a.reasoningStash.get(key)
+	if len(payload.responsesNative) != 1 || len(payload.nativeResponses(0, after[2])) != 1 {
+		t.Fatal("opaque old reasoning survived or recent replay was lost")
+	}
+}
+
+func TestFastCompactPreservesLatestPlanAndRepeatedCallRecords(t *testing.T) {
+	a := newApiTestApp(t)
+	a.modelHistoryCodec = nil
+	const plan = "// plan | revision=2\n\n[ ] finish verification"
+	history := []openai.ChatCompletionMessage{
+		{Role: "user", Content: "old task"},
+		{Role: "assistant", ReasoningContent: strings.Repeat("reasoning ", 1000), ToolCalls: []openai.ToolCall{
+			{ID: "same", Type: "function", Function: openai.FunctionCall{Name: "read", Arguments: `{"purpose":"first purpose"}`}},
+			{ID: "same", Type: "function", Function: openai.FunctionCall{Name: "read", Arguments: `{"purpose":"second purpose"}`}},
+			{ID: "plan", Type: "function", Function: openai.FunctionCall{Name: planToolName, Arguments: `{}`}},
+		}},
+		{Role: "tool", ToolCallID: "same", Content: "first body"},
+		{Role: "tool", ToolCallID: "same", Content: "second body"},
+		{Role: "tool", ToolCallID: "plan", Content: plan},
+		{Role: "assistant", Content: "old answer"},
+		{Role: "user", Content: "current task"},
+	}
+	a.saveHistory("plan-and-ids", history)
+	if _, err := a.FastCompactSession("plan-and-ids"); err != nil {
+		t.Fatal(err)
+	}
+	entries, ok := decodeFastCompactHistory(a.loadSessionHistoryCopy("plan-and-ids")[0])
+	if !ok || len(entries) != 5 || entries[1].Purpose != "first purpose" || entries[2].Purpose != "second purpose" || !strings.Contains(entries[3].Content, plan) {
+		t.Fatal("duplicate call records or latest plan were lost")
+	}
+}
+
+func TestFastCompactRetainsOnlyTaskReplayAcrossProtocols(t *testing.T) {
+	a := newApiTestApp(t)
+	a.modelHistoryCodec = nil
+	history := fastCompactFixture()
+	const sid = "replay"
+	for _, format := range []string{apiFormatOpenAIChat, apiFormatOpenAIResponses, apiFormatAnthropicMessages} {
+		cfg := ConfigState{Model: "m", APIFormat: format, responsesPromptCacheKey: openAIResponsesPromptCacheKey(sid)}
+		key := reasoningReplayKey(cfg, "m")
+		a.reasoningStash.appendTurn(key, reasoningTurn{callIDs: []string{"call-0"}, chatDetails: json.RawMessage(`[{}]`)})
+		a.reasoningStash.appendTurn(key, reasoningTurn{callIDs: []string{"call-5"}, chatDetails: json.RawMessage(`[{}]`)})
+		a.reasoningStash.appendResponses(key, responsesMessageKey(0, history[1]), []json.RawMessage{json.RawMessage(`{"type":"message","id":"msg_old"}`)})
+		a.reasoningStash.appendResponses(key, responsesMessageKey(10, history[21]), []json.RawMessage{json.RawMessage(`{"type":"message","id":"msg_current"}`)})
+	}
+	other := ConfigState{Model: "m", responsesPromptCacheKey: openAIResponsesPromptCacheKey("other")}
+	a.reasoningStash.appendTurn(reasoningReplayKey(other, "m"), reasoningTurn{callIDs: []string{"other"}, chatDetails: json.RawMessage(`[{}]`)})
+	a.saveHistory(sid, history)
+	if _, err := a.FastCompactSession(sid); err != nil {
+		t.Fatal(err)
+	}
+	after := a.loadSessionHistoryCopy(sid)
+	for _, format := range []string{apiFormatOpenAIChat, apiFormatOpenAIResponses, apiFormatAnthropicMessages} {
+		cfg := ConfigState{Model: "m", APIFormat: format, responsesPromptCacheKey: openAIResponsesPromptCacheKey(sid)}
+		p := a.reasoningStash.get(reasoningReplayKey(cfg, "m"))
+		if len(p.turns) != 1 || p.turns[0].callIDs[0] != "call-5" || len(p.responsesNative) != 1 || len(p.nativeResponses(0, after[2])) != 1 {
+			t.Fatal("replay tail was lost or old items survived")
+		}
+	}
+	if len(a.reasoningStash.get(reasoningReplayKey(other, "m")).turns) != 1 {
+		t.Fatal("other session was changed")
+	}
+}
+
+func TestFastCompactMetadataAndProtectedRestart(t *testing.T) {
+	a := newApiTestApp(t)
+	block, err := aes.NewCipher(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.modelHistoryCodec = &modelHistoryCodec{protector: oauthTestProtector{gcm}}
+	history := fastCompactFixture()
+	call := history[1].ToolCalls[0]
+	call.Function.Name = "mcp__s__inspect"
+	call.Function.Arguments = fmt.Sprintf(`{"purpose":"server business","_purpose":"真正的调用目的","payload":%q}`, strings.Repeat("old argument body ", 2000))
+	history[1].ToolCalls[0] = call
+	meta := toolHistoryMetadata{Purpose: toolHistoryPurpose(call, "_purpose"), Headers: "// mcp | status=ok"}
+	a.reasoningStash.recordToolStatus(openAIResponsesPromptCacheKey("restart"), history[2], toolResult{OK: true}, meta)
+	a.saveHistory("restart", history)
+	disk := sanitizeHistoryMessagesForDisk(history)
+	raw, err := json.Marshal(a.modelHistoryForStorage("restart", disk, history))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &disk); err != nil {
+		t.Fatal(err)
+	}
+	loaded, publish := a.modelHistoryFromStorage("restart", raw, disk)
+	if publish != nil {
+		publish()
+	}
+	a.saveHistory("restart", loaded)
+	if _, err := a.FastCompactSession("restart"); err != nil {
+		t.Fatal(err)
+	}
+	after := a.loadSessionHistoryCopy("restart")
+	entries, ok := decodeFastCompactHistory(after[0])
+	if !ok || entries[2].Purpose != meta.Purpose || entries[2].Status != "success" || strings.Contains(entries[2].Content, "server business") {
+		t.Fatal("MCP purpose mapping/status did not survive restart")
+	}
+	disk = sanitizeHistoryMessagesForDisk(after)
+	raw, err = json.Marshal(a.modelHistoryForStorage("restart", disk, after))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, _ = a.modelHistoryFromStorage("restart", raw, disk)
+	if !reflect.DeepEqual(loaded, sanitizeHistoryMessagesFor(after, historyProfileProtected)) {
+		t.Fatal("protected restart resurrected old state or lost records")
+	}
+	if !reflect.DeepEqual(disk[0], after[0]) {
+		t.Fatal("plain disk fallback lost the historical record")
+	}
+}
+
+func TestAutoCompactRecentPreservesCurrentReportsAndFrozenPrefix(t *testing.T) {
+	a := newApiTestApp(t)
+	a.modelHistoryCodec = nil
+	const sid = "auto"
+	history := fastCompactFixture()
+	previous := history[:20]
+	a.saveHistory(sid, previous)
+	a.beginHistoryTask(sid, history)
+	// Multiple completed delegates are still unread by the parent. Their full
+	// reports and call pairing must remain available after automatic compaction.
+	history = append(history, openai.ChatCompletionMessage{Role: "user", Content: "queued followup"})
+	for i := 0; i < 3; i++ {
+		id := fmt.Sprintf("delegate-%d", i)
 		history = append(history,
-			openai.ChatCompletionMessage{Role: "user", Content: fmt.Sprintf("requirement-%d", i)},
-			openai.ChatCompletionMessage{Role: "assistant", Content: fmt.Sprintf("answer-%d ", i) + strings.Repeat("已确认结论", 2000)},
+			openai.ChatCompletionMessage{Role: "assistant", ToolCalls: []openai.ToolCall{{ID: id, Type: "function", Function: openai.FunctionCall{Name: "subagent", Arguments: `{"task":"inspect"}`}}}},
+			openai.ChatCompletionMessage{Role: "tool", ToolCallID: id, Content: "// subagent | status=completed\n\n" + fmt.Sprintf("essential report %d", i)},
 		)
 	}
-	a.saveHistory("answers", history)
-	result, err := a.FastCompactSession("answers")
-	if err != nil {
-		t.Fatal(err)
+	prefix := []openai.ChatCompletionMessage{{Role: "system", Content: "frozen rules"}, {Role: "system", Content: "frozen map"}}
+	request := append(cloneChatMessages(prefix), history...)
+	compacted, payload, err := a.compactRunHistory(context.Background(), ConfigState{AutoCompactMethod: "recent"}, sid, compactReasonThreshold, ChatRequest{Message: history[20].Content}, request, 50000)
+	if err != nil || payload["tier"] != "fast" {
+		t.Fatalf("local compaction failed: %v %v", payload, err)
 	}
-	after := a.loadSessionHistoryCopy("answers")
-	var users, answers []openai.ChatCompletionMessage
-	for _, m := range after {
-		if m.Role == "user" {
-			users = append(users, m)
-		} else if m.Role == "assistant" {
-			answers = append(answers, m)
-		}
-	}
-	if len(users) != 80 || len(answers) >= 80 || len(answers) <= 4 {
-		t.Fatal("expected all requirements, a bounded excerpt window, and four full recent answers")
-	}
-	for i, m := range users {
-		if m.Content != fmt.Sprintf("requirement-%d", i) {
-			t.Fatal("user requirements changed")
-		}
-	}
-	oldTokens := 0
-	for _, m := range answers[:len(answers)-4] {
-		oldTokens += estimateTokensFromText(m.Content)
-		if !strings.HasPrefix(m.Content, fastCompactAssistantMarker) || !utf8.ValidString(m.Content) {
-			t.Fatal("old answers must be labelled UTF-8 excerpts")
-		}
-	}
-	if oldTokens > fastCompactAssistantTokenBudget || !reflect.DeepEqual(after[len(after)-8:], history[len(history)-8:]) {
-		t.Fatal("old answer budget exceeded or recent conversation changed")
-	}
-	if result["assistantCount"] != 76 || len(result["assistantEdits"].([]fastCompactAssistantEdit)) != 76 {
-		t.Fatal("answer edits did not cover all old answers")
-	}
-	second, err := a.FastCompactSession("answers")
-	if err != nil || second["changed"] != false || !reflect.DeepEqual(after, a.loadSessionHistoryCopy("answers")) {
-		t.Fatalf("repeated answer compaction must be a no-op: %v %v", second, err)
+	if !reflect.DeepEqual(compacted[:2], prefix) || !reflect.DeepEqual(compacted[3:], history[20:]) {
+		t.Fatal("frozen prefix/current task/reports changed")
 	}
 }
 
-func TestFastCompactAnswerEditsDistinguishRepeatedRecentText(t *testing.T) {
-	t.Parallel()
+func TestFastCompactRequestAdaptersKeepOnlyCurrentProtocolCalls(t *testing.T) {
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = nil
-	text := strings.Repeat("same answer ", 1000)
-	var history []openai.ChatCompletionMessage
-	for i := 0; i < 6; i++ {
-		history = append(history, openai.ChatCompletionMessage{Role: "user", Content: "question"}, openai.ChatCompletionMessage{Role: "assistant", Content: text})
+	history := fastCompactFixture()
+	a.saveHistory("wire", history)
+	if _, err := a.FastCompactSession("wire"); err != nil {
+		t.Fatal(err)
 	}
-	a.saveHistory("repeated", history)
-	result, err := a.FastCompactSession("repeated")
+	after := a.loadSessionHistoryCopy("wire")
+	// A Chat request has only the current task's native assistant/tool pair.
+	chat := marshalResponsesRequest(t, openai.ChatCompletionRequest{Model: "test", Messages: after})
+	var calls, outputs int
+	for _, raw := range chat["messages"].([]any) {
+		message := raw.(map[string]any)
+		if message["role"] == "assistant" {
+			if message["reasoning_content"] == nil {
+				t.Fatal("current Chat reasoning was dropped")
+			}
+			if toolCalls, ok := message["tool_calls"].([]any); ok {
+				calls += len(toolCalls)
+			}
+		}
+		if message["role"] == "tool" {
+			outputs++
+		}
+	}
+	if calls != 1 || outputs != 1 {
+		t.Fatal("Chat request retained old protocol calls")
+	}
+	// Responses must produce exactly the same current call/result identities.
+	_, input := buildOpenAIResponsesInput(after, nil)
+	calls, outputs = 0, 0
+	for _, raw := range input {
+		item := marshalResponsesRequest(t, raw)
+		switch item["type"] {
+		case "function_call":
+			calls++
+			if item["call_id"] != "call-5" {
+				t.Fatal("old Responses call survived")
+			}
+		case "function_call_output":
+			outputs++
+			if item["call_id"] != "call-5" {
+				t.Fatal("orphan Responses result")
+			}
+		}
+	}
+	if calls != 1 || outputs != 1 {
+		t.Fatal("Responses pairing changed")
+	}
+	_, anthropic := buildAnthropicMessages(after, nil, true)
+	raw, err := json.Marshal(anthropic)
 	if err != nil {
 		t.Fatal(err)
 	}
-	edits := result["assistantEdits"].([]fastCompactAssistantEdit)
-	if len(edits) != 2 || edits[0].FromEnd != 5 || edits[1].FromEnd != 6 || edits[0].Before != text {
-		t.Fatal("repeated text edits must identify old occurrences, not recent ones")
+	var messages []struct {
+		Content []struct {
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			ToolUseID string `json:"tool_use_id"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &messages); err != nil {
+		t.Fatal(err)
+	}
+	calls, outputs = 0, 0
+	for _, m := range messages {
+		for _, block := range m.Content {
+			if block.Type == "tool_use" {
+				calls++
+				if block.ID != "call-5" {
+					t.Fatal("old Anthropic call survived")
+				}
+			}
+			if block.Type == "tool_result" {
+				outputs++
+				if block.ToolUseID != "call-5" {
+					t.Fatal("orphan Anthropic result")
+				}
+			}
+		}
+	}
+	if calls != 1 || outputs != 1 {
+		t.Fatal("Anthropic pairing changed")
 	}
 }
 
-func TestFastCompactNativeAnswersRewriteAndReindexRetainedTail(t *testing.T) {
-	t.Parallel()
+func TestFastCompactDeletionAddressesOriginalQuestions(t *testing.T) {
+	for _, byContent := range []bool{false, true} {
+		a := newApiTestApp(t)
+		a.modelHistoryCodec = nil
+		history := fastCompactFixture()
+		history[8].Content = "用户要求包含引号\"以及\n换行"
+		a.saveHistory("delete", history)
+		if _, err := a.FastCompactSession("delete"); err != nil {
+			t.Fatal(err)
+		}
+		req := TruncateSessionHistoryRequest{SessionID: "delete", UserMessageIndex: 2}
+		if byContent {
+			req.ExpectedContent = history[8].Content
+		}
+		if _, err := a.TruncateSessionHistory(req); err != nil {
+			t.Fatal(err)
+		}
+		snapshot := legacySessionSnapshot("delete", a.loadSessionHistoryCopy("delete"))
+		if len(snapshot.Messages) != 8 || snapshot.Messages[0]["content"] != history[0].Content || snapshot.Messages[7]["content"] != history[7].Content {
+			t.Fatal("deleting an old question removed the wrong transcript range")
+		}
+	}
+}
+
+func TestAutoCompactRejectsCandidateWithoutMutatingOriginal(t *testing.T) {
 	a := newApiTestApp(t)
 	a.modelHistoryCodec = nil
-	var history []openai.ChatCompletionMessage
-	for i := 0; i < 80; i++ {
-		history = append(history, openai.ChatCompletionMessage{Role: "assistant", Content: fmt.Sprintf("answer-%d ", i) + strings.Repeat("结论", 2000)})
+	a.stats = nil
+	history := fastCompactFixture()[:4]
+	history[0].Content = strings.Repeat("requirements ", 12000)
+	history = append(history, openai.ChatCompletionMessage{Role: "user", Content: "next task"})
+	a.saveHistory("fallback", history)
+	candidate, err := a.prepareFastCompactHistory(context.Background(), "fallback", history, 0)
+	if err != nil || !candidate.messageChange || fastCompactLeavesLessThanHalf(intFromAny(candidate.result["tokensBefore"]), intFromAny(candidate.result["tokensAfter"])) {
+		t.Fatal("fixture must produce an insufficient candidate")
 	}
-	a.saveHistory("native-answers", history)
-	cfg := ConfigState{Model: "m", APIFormat: apiFormatOpenAIResponses, responsesPromptCacheKey: openAIResponsesPromptCacheKey("native-answers")}
-	key := reasoningReplayKey(cfg, "m")
-	for _, i := range []int{0, 75, 79} {
-		message, _ := json.Marshal(map[string]any{"type": "message", "id": fmt.Sprintf("msg_%d", i), "role": "assistant", "phase": "final_answer", "content": []map[string]any{{"type": "output_text", "text": history[i].Content}}})
-		a.reasoningStash.appendResponses(key, responsesMessageKey(i, history[i]), []json.RawMessage{message})
-	}
-	if _, err := a.FastCompactSession("native-answers"); err != nil {
-		t.Fatal(err)
-	}
-	after := a.loadSessionHistoryCopy("native-answers")
-	payload := a.reasoningStash.get(key)
-	if len(payload.responsesNative) != 2 || len(after) >= len(history) {
-		t.Fatal("omitted answers retained native output or history was not bounded")
-	}
-	for _, offset := range []int{4, 0} {
-		i := len(after) - 1 - offset
-		output := payload.nativeResponses(i, after[i])
-		if len(output) != 1 || !responsesOutputReplayable(output) {
-			t.Fatal("retained native output was not reindexed after old answers were removed")
+	var received []openai.ChatCompletionMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []openai.ChatCompletionMessage `json:"messages"`
 		}
-		var message struct {
-			Phase   string
-			Content []struct{ Text string }
-		}
-		if err := json.Unmarshal(output[0], &message); err != nil || message.Phase != "final_answer" || len(message.Content) != 1 || message.Content[0].Text != after[i].Content {
-			t.Fatal("native output bypassed answer truncation or lost its phase")
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		received = req.Messages
+		http.Error(w, "summary rejected", http.StatusBadRequest)
+	}))
+	defer server.Close()
+	cfg := ConfigState{AutoCompactMethod: "recent", Model: "test", APIKey: "key", BaseURL: server.URL, APIFormat: apiFormatOpenAIChat}
+	_, _, err = a.compactRunHistory(context.Background(), cfg, "fallback", compactReasonThreshold, ChatRequest{}, history, 50000)
+	if err == nil || !reflect.DeepEqual(a.loadSessionHistoryCopy("fallback"), history) {
+		t.Fatal("failed summary committed the rejected local candidate")
+	}
+	if len(received) == 0 {
+		t.Fatal("summary fallback was not attempted")
+	}
+	// The summary consumes the original tool body, not the local metadata record.
+	for _, m := range received {
+		if strings.Contains(m.Content, "file body") {
+			return
 		}
 	}
-	if result, err := a.FastCompactSession("native-answers"); err != nil || result["changed"] != false {
-		t.Fatal("native answer rewrite must be idempotent")
-	}
+	t.Fatal("summary did not receive the original tool evidence")
 }
 
 func TestFastCompactGuardsAndCancellation(t *testing.T) {
@@ -324,100 +513,6 @@ func TestFastCompactGuardsAndCancellation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(a.loadSessionHistoryCopy("cancel"), h) || a.compactSessionRunning("cancel") {
 		t.Fatal("cancelled compaction changed history or left session busy")
-	}
-}
-
-func TestFastCompactSurvivesProtectedRestartAndDiskFallback(t *testing.T) {
-	t.Parallel()
-	a := newApiTestApp(t)
-	block, err := aes.NewCipher(make([]byte, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.modelHistoryCodec = &modelHistoryCodec{protector: oauthTestProtector{gcm}}
-	a.saveHistory("restart", fastCompactFixture())
-	if _, err := a.FastCompactSession("restart"); err != nil {
-		t.Fatal(err)
-	}
-	after := a.loadSessionHistoryCopy("restart")
-	disk := sanitizeHistoryMessagesForDisk(after)
-	if disk[2].Content != after[2].Content || !strings.HasPrefix(disk[2].Content, fastCompactToolMarker) {
-		t.Fatal("disk fallback dropped the bounded tool excerpt")
-	}
-	raw, err := json.Marshal(a.modelHistoryForStorage("restart", disk, after))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(raw), protectedModelStateField) {
-		t.Fatal("retained tail must be protected even without Responses replay")
-	}
-	loaded, _ := a.modelHistoryFromStorage("restart", raw, disk)
-	if !reflect.DeepEqual(loaded, sanitizeHistoryMessagesFor(after, historyProfileProtected)) {
-		t.Fatal("restart lost compacted excerpts/reasoning or retained raw observations")
-	}
-}
-
-func TestFastCompactRetainsOnlyTailReplayAcrossProtocols(t *testing.T) {
-	h := fastCompactFixture()
-	s := newReasoningStash()
-	for _, format := range []string{apiFormatOpenAIChat, apiFormatOpenAIResponses, apiFormatAnthropicMessages} {
-		cfg := ConfigState{Model: "m", APIFormat: format, responsesPromptCacheKey: openAIResponsesPromptCacheKey("s")}
-		key := reasoningReplayKey(cfg, "m")
-		s.appendTurn(key, reasoningTurn{callIDs: []string{"call-0"}, chatDetails: json.RawMessage(`[{}]`)})
-		s.appendTurn(key, reasoningTurn{callIDs: []string{"call-2", "parallel"}, chatDetails: json.RawMessage(`[{}]`)})
-		s.appendResponses(key, responsesMessageKey(0, h[1]), []json.RawMessage{json.RawMessage(`{"type":"reasoning"}`)})
-		cutoff := fastCompactCutoff(h, 4)
-		s.appendResponses(key, responsesMessageKey(2, h[cutoff]), []json.RawMessage{json.RawMessage(`{"type":"message","id":"msg_recent"}`)})
-	}
-	other := ConfigState{Model: "m", responsesPromptCacheKey: openAIResponsesPromptCacheKey("other")}
-	s.appendTurn(reasoningReplayKey(other, "m"), reasoningTurn{callIDs: []string{"other"}, chatDetails: json.RawMessage(`[{}]`)})
-	if !s.retainFastCompactTail("s", h, h, fastCompactCutoff(h, 4)) {
-		t.Fatal("expected old replay to be removed")
-	}
-	for _, format := range []string{apiFormatOpenAIChat, apiFormatOpenAIResponses, apiFormatAnthropicMessages} {
-		cfg := ConfigState{Model: "m", APIFormat: format, responsesPromptCacheKey: openAIResponsesPromptCacheKey("s")}
-		p := s.get(reasoningReplayKey(cfg, "m"))
-		if len(p.turns) != 1 || p.turns[0].callIDs[0] != "call-2" || len(p.responsesNative) != 1 {
-			t.Fatal("recent replay lost or old replay survived")
-		}
-	}
-	if len(s.get(reasoningReplayKey(other, "m")).turns) != 1 {
-		t.Fatal("another session's replay was modified")
-	}
-}
-
-func TestFastCompactNativeResponsesPreservesPhaseAndCalls(t *testing.T) {
-	output := []json.RawMessage{
-		json.RawMessage(`{"type":"reasoning","id":"rs_old","encrypted_content":"old-secret"}`),
-		json.RawMessage(`{"type":"message","id":"msg_old","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"original answer","annotations":[]}]}`),
-		json.RawMessage(`{"type":"function_call","id":"fc_old","call_id":"call-old","name":"read","arguments":"{}"}`),
-	}
-	clean, changed := compactNativeResponses(output, "bounded reasoning excerpt", nil)
-	if !changed || len(clean) != 3 || string(clean[1]) != string(output[1]) || string(clean[2]) != string(output[2]) {
-		t.Fatal("native compaction changed tool identity or retained reasoning")
-	}
-	var message struct {
-		Content string
-	}
-	if err := json.Unmarshal(clean[0], &message); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(clean[0]), "old-secret") || message.Content != "bounded reasoning excerpt" {
-		t.Fatal("old opaque reasoning survived or excerpt was lost")
-	}
-	if !responsesOutputReplayable(clean) {
-		t.Fatal("compacted native input is not replayable")
-	}
-	if string(output[0]) != `{"type":"reasoning","id":"rs_old","encrypted_content":"old-secret"}` {
-		t.Fatal("copy-on-write snapshot was mutated")
-	}
-	_, repeated := compactNativeResponses(clean, "", nil)
-	if repeated {
-		t.Fatal("already compacted native history must be idempotent")
 	}
 }
 
@@ -468,53 +563,6 @@ func TestAutoCompactMethodConfigDefaultsAndPersistence(t *testing.T) {
 	}
 }
 
-func TestAutoCompactRecentPreservesRequestWithoutLLM(t *testing.T) {
-	t.Parallel()
-	a := newApiTestApp(t)
-	a.modelHistoryCodec = nil
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, sseChatChunk("fallback summary"), sseChatFinishChunk("stop"), sseDone)
-	}))
-	defer server.Close()
-	cfg := ConfigState{AutoCompactMethod: "recent", Model: "test", APIKey: "key", BaseURL: server.URL, APIFormat: apiFormatOpenAIChat}
-	prefix := []openai.ChatCompletionMessage{{Role: "system", Content: "frozen rules"}, {Role: "system", Content: "frozen workspace map"}}
-	history := append(cloneChatMessages(prefix), fastCompactFixture()...)
-	cutoff := fastCompactCutoff(history[len(prefix):], defaultFastCompactKeepRecentRounds)
-	for i := len(prefix); i < len(prefix)+cutoff; i++ {
-		switch history[i].Role {
-		case openai.ChatMessageRoleAssistant:
-			history[i].ReasoningContent = strings.Repeat("旧思考依据", 12000)
-		case openai.ChatMessageRoleTool:
-			history[i].Content = "BEGIN " + strings.Repeat("旧工具结果", 12000) + " END"
-		}
-	}
-	history = append(history, openai.ChatCompletionMessage{Role: "user", Content: "current question"}, openai.ChatCompletionMessage{Role: "user", Content: "injected followup"})
-	a.compactFailures["recent-run"] = maxConsecutiveCompactFailures
-	compacted, payload, err := a.compactRunHistory(context.Background(), cfg, "recent-run", compactReasonThreshold, ChatRequest{Message: "current question"}, history, 50000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if requests.Load() != 0 || payload["tier"] != "fast" || payload["sessionId"] != "recent-run" {
-		t.Fatal("recent threshold compaction called the model or lost its event metadata")
-	}
-	if len(compacted) != len(history) || !reflect.DeepEqual(compacted[:len(prefix)], prefix) {
-		t.Fatal("local compaction changed the frozen prefix or duplicated the user turn")
-	}
-	if !reflect.DeepEqual(compacted[len(compacted)-2:], history[len(history)-2:]) {
-		t.Fatal("current and injected user messages must be preserved once, in order")
-	}
-	if a.compactFailureCount("recent-run") != 0 {
-		t.Fatal("a successful local compaction must clear previous summary failures")
-	}
-	_, payload, err = a.compactRunHistory(context.Background(), cfg, "recent-run", compactReasonThreshold, ChatRequest{}, compacted, 40000)
-	if err != nil || payload["summary"] != "fallback summary" || requests.Load() != 1 || a.compactFailureCount("recent-run") != 0 {
-		t.Fatalf("unchanged automatic fast compaction must fall back to a summary: %v %v", payload, err)
-	}
-}
-
 func TestAutoCompactRecentFallbackFailureCircuit(t *testing.T) {
 	t.Parallel()
 	a := newApiTestApp(t)
@@ -549,75 +597,6 @@ func TestAutoCompactRecentFallbackFailureCircuit(t *testing.T) {
 	}
 }
 
-func TestAutoCompactRecentFallsBackWhenRewriteSavesNoMessageTokens(t *testing.T) {
-	t.Parallel()
-	a := newApiTestApp(t)
-	a.modelHistoryCodec = nil
-	a.stats = nil
-	history := fastCompactFixture()
-	for i := range history {
-		history[i].ReasoningContent = ""
-		if history[i].Role == "tool" {
-			history[i].Content = "OK"
-		}
-	}
-	const sid = "replay-only"
-	a.saveHistory(sid, history)
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, sseChatChunk("space-saving summary"), sseChatFinishChunk("stop"), sseDone)
-	}))
-	defer server.Close()
-	cfg := ConfigState{AutoCompactMethod: "recent", Model: "test", APIKey: "key", BaseURL: server.URL, APIFormat: apiFormatOpenAIChat, responsesPromptCacheKey: openAIResponsesPromptCacheKey(sid)}
-	// Removing an old replay ledger changes state, but leaves message estimates unchanged.
-	a.reasoningStash.appendTurn(reasoningReplayKey(cfg, cfg.Model), reasoningTurn{callIDs: []string{"call-0"}, chatDetails: json.RawMessage(`[{}]`)})
-	_, payload, err := a.compactRunHistory(context.Background(), cfg, sid, compactReasonThreshold, ChatRequest{}, history, 50000)
-	if err != nil || requests.Load() != 1 || payload["summary"] != "space-saving summary" {
-		t.Fatalf("a state-only rewrite must fall back to a summary: %v %v", payload, err)
-	}
-}
-
-func TestAutoCompactRecentDiscardsInsufficientCandidateOnSummaryFailure(t *testing.T) {
-	t.Parallel()
-	a := newApiTestApp(t)
-	a.modelHistoryCodec = nil
-	a.stats = nil
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		http.Error(w, "summary rejected", http.StatusBadRequest)
-	}))
-	defer server.Close()
-	cfg := ConfigState{AutoCompactMethod: "recent", Model: "test", APIKey: "key", BaseURL: server.URL, APIFormat: apiFormatOpenAIChat}
-	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: strings.Repeat("keep requirements ", 5000)}}
-	for i := 0; i < 6; i++ {
-		id := fmt.Sprintf("call-%d", i)
-		history = append(history,
-			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: id, Type: "function", Function: openai.FunctionCall{Name: "read", Arguments: `{"x":1}`}}}},
-			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: id, Content: "OK"},
-		)
-	}
-	history = append(history, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: "done"})
-	const sid = "insufficient-fast-candidate"
-	a.saveHistory(sid, history)
-	candidate, err := a.prepareFastCompactHistory(context.Background(), sid, history, 50000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !candidate.messageChange || fastCompactLeavesLessThanHalf(intFromAny(candidate.result["tokensBefore"]), intFromAny(candidate.result["tokensAfter"])) {
-		t.Fatal("fixture must produce a real fast rewrite that saves less than half")
-	}
-	_, _, err = a.compactRunHistory(context.Background(), cfg, sid, compactReasonThreshold, ChatRequest{}, history, 50000)
-	if err == nil || requests.Load() != 1 {
-		t.Fatalf("insufficient fast savings must fall back to the summary model: err=%v requests=%d", err, requests.Load())
-	}
-	if !reflect.DeepEqual(a.loadSessionHistoryCopy(sid), history) {
-		t.Fatal("a rejected fast candidate must not alter history when summary fallback fails")
-	}
-}
-
 func TestAutoCompactRecentOverflowStillUsesSummary(t *testing.T) {
 	t.Parallel()
 	a := newApiTestApp(t)
@@ -636,35 +615,5 @@ func TestAutoCompactRecentOverflowStillUsesSummary(t *testing.T) {
 	}
 	if requests.Load() != 1 || payload["summary"] != "overflow summary" || len(a.loadSessionHistoryCopy("overflow-recent")) != 1 {
 		t.Fatal("overflow must use the full summary recovery even when recent mode is selected")
-	}
-}
-
-func TestFastCompactRebuildsLiveCountersWithComparableTotals(t *testing.T) {
-	a := newApiTestApp(t)
-	a.modelHistoryCodec = nil
-	history := fastCompactFixture()
-	const sid = "live-compact-counts"
-	a.saveHistory(sid, history)
-	a.recordContextAnchor(sid, history, &modelUsage{PromptTokens: 1})
-	a.mu.Lock()
-	if a.liveBreakdown == nil {
-		a.liveBreakdown = map[string]ContextBreakdown{}
-	}
-	a.liveBreakdown[sid] = ContextBreakdown{ToolResults: 999999, Total: 999999}
-	a.mu.Unlock()
-	result, err := a.FastCompactSession(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result["changed"] != true {
-		t.Fatal("fixture must shrink")
-	}
-	before, after := intFromAny(result["tokensBefore"]), intFromAny(result["tokensAfter"])
-	if after >= before {
-		t.Fatalf("incomparable counts: %d -> %d", before, after)
-	}
-	got := a.getContextBreakdown(sid, "")
-	if got.Total != after || got.MeasuredTokens != 0 {
-		t.Fatalf("stale live breakdown: %+v, want %d", got, after)
 	}
 }

@@ -4,6 +4,8 @@ package desktop
 import (
 	"testing"
 
+	"ally-dev/locales"
+
 	"github.com/egoist/mygo/ui"
 )
 
@@ -59,5 +61,30 @@ func TestRoundStatsMenuStaysOpenUnderThePointer(t *testing.T) {
 	tester.Frame()
 	if tester.HasText("导出回答") {
 		t.Fatal("Escape did not close the panel")
+	}
+}
+
+// A round whose message row draws nothing yet (no first token, so no row to take
+// a hover from) must still answer the pointer: its footer used to be left inert.
+func TestRoundStatsMenuAnswersWithoutAHoveredRow(t *testing.T) {
+	a := &desktop{}
+	conv := &conversation{ID: "conv"}
+	stat := &roundStat{DurationMS: 1500, OutputTokens: 120, Done: true}
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		ui.Column(c).Fill().Padding(10).Children(func() {
+			a.roundStatsRow(c, conv, 0, stat, false)
+		})
+	}, 420, 300)
+	tester.Frame()
+	tester.Move(80, 12)
+	tester.Frame()
+	if err := tester.Click(locales.Text("快捷消息")); err != nil {
+		t.Fatal(err)
+	}
+	tester.Frame()
+	if !tester.HasText(locales.Text("保持代码整洁")) {
+		t.Fatalf("the footer stayed inert: %v", tester.Texts())
 	}
 }

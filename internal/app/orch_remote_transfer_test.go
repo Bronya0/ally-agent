@@ -116,10 +116,9 @@ func TestRemoteTransferUploadFileAndDirectory(t *testing.T) {
 	}
 
 	stderr, err := runPythonTransferBridge(t, py, map[string]any{
-		"action":        "upload",
-		"workspaceRoot": remoteRoot,
-		"remotePath":    "sub/target.txt",
-		"overwrite":     false,
+		"action":     "upload",
+		"remotePath": remoteFixturePath(remoteRoot, "sub/target.txt"),
+		"overwrite":  false,
 	}, &packBuf, nil)
 	if err != nil {
 		t.Fatalf("runPythonTransferBridge upload failed: %v, stderr: %s", err, string(stderr))
@@ -159,10 +158,9 @@ func TestRemoteTransferUploadFileAndDirectory(t *testing.T) {
 	}
 
 	stderr, err = runPythonTransferBridge(t, py, map[string]any{
-		"action":        "upload",
-		"workspaceRoot": remoteRoot,
-		"remotePath":    "remotedir",
-		"overwrite":     false,
+		"action":     "upload",
+		"remotePath": remoteFixturePath(remoteRoot, "remotedir"),
+		"overwrite":  false,
 	}, &packBuf, nil)
 	if err != nil {
 		t.Fatalf("upload dir failed: %v, stderr: %s", err, string(stderr))
@@ -202,10 +200,9 @@ func TestRemoteTransferDownloadFileAndDirectory(t *testing.T) {
 	// 2. Download directory stream
 	var downloadStream bytes.Buffer
 	stderr, err := runPythonTransferBridge(t, py, map[string]any{
-		"action":        "download",
-		"workspaceRoot": remoteRoot,
-		"remotePath":    "pkg",
-		"arcRootName":   "localpkg",
+		"action":      "download",
+		"remotePath":  remoteFixturePath(remoteRoot, "pkg"),
+		"arcRootName": "localpkg",
 	}, nil, &downloadStream)
 	if err != nil {
 		t.Fatalf("download failed: %v, stderr: %s", err, string(stderr))
@@ -254,10 +251,9 @@ func TestRemoteTransferUploadOverwriteDefense(t *testing.T) {
 
 	// Attempt upload with overwrite=false should fail
 	stderr, err := runPythonTransferBridge(t, py, map[string]any{
-		"action":        "upload",
-		"workspaceRoot": remoteRoot,
-		"remotePath":    "exists.txt",
-		"overwrite":     false,
+		"action":     "upload",
+		"remotePath": remoteFixturePath(remoteRoot, "exists.txt"),
+		"overwrite":  false,
 	}, &packBuf, nil)
 
 	if err == nil {
@@ -286,10 +282,9 @@ func TestRemoteTransferSecurityFences(t *testing.T) {
 	_, _ = streamarchive.PackWithFilter(testLocal, "hook", &packBuf, nil)
 
 	stderr, err := runPythonTransferBridge(t, py, map[string]any{
-		"action":        "upload",
-		"workspaceRoot": remoteRoot,
-		"remotePath":    ".git/hooks/pre-commit",
-		"overwrite":     true,
+		"action":     "upload",
+		"remotePath": remoteFixturePath(remoteRoot, ".git/hooks/pre-commit"),
+		"overwrite":  true,
 	}, &packBuf, nil)
 	if err == nil {
 		t.Fatalf("expected error when targeting VCS path, but succeeded")
@@ -298,19 +293,18 @@ func TestRemoteTransferSecurityFences(t *testing.T) {
 		t.Fatalf("expected E_PROTECTED_PATH in stderr, got: %s", string(stderr))
 	}
 
-	// 2. Refuse uploading directly to workspace root
+	// 2. Refuse uploading directly to filesystem root
 	packBuf.Reset()
 	_, _ = streamarchive.PackWithFilter(testLocal, "new.txt", &packBuf, nil)
 	stderr, err = runPythonTransferBridge(t, py, map[string]any{
-		"action":        "upload",
-		"workspaceRoot": remoteRoot,
-		"remotePath":    "",
+		"action":     "upload",
+		"remotePath": filepath.VolumeName(remoteRoot) + string(filepath.Separator),
 	}, &packBuf, nil)
 	if err == nil {
-		t.Fatalf("expected error when targeting workspace root without subpath, but succeeded")
+		t.Fatalf("expected error when targeting filesystem root, but succeeded")
 	}
-	if !strings.Contains(string(stderr), "refusing to upload directly to workspace root") {
-		t.Fatalf("expected refusing to upload directly to workspace root, got: %s", string(stderr))
+	if !strings.Contains(string(stderr), "filesystem root") {
+		t.Fatalf("expected refusal to upload directly to filesystem root, got: %s", string(stderr))
 	}
 }
 
@@ -346,26 +340,26 @@ func TestRemoteTransferExecuteValidation(t *testing.T) {
 		t.Fatalf("expected E_BAD_ARGS for missing target, got %v", err)
 	}
 
-	// 3. Remote path escapes remote workspace
+	// 3. New server-only targets require an absolute remote path
 	_, err = a.executeRemoteTransfer(ctx, RemoteTransferRequest{
 		Action:     "upload",
-		Target:     "user@remote.example.com:/srv/app",
+		Target:     "user@remote.example.com",
 		LocalPath:  "local.txt",
-		RemotePath: "/etc/passwd",
+		RemotePath: "relative.txt",
 	})
 	if err == nil {
-		t.Fatalf("expected error for remote path /etc/passwd outside /srv/app, got nil")
+		t.Fatalf("expected error for a relative remote path, got nil")
 	}
 
-	// 4. Remote path targeting root directly
+	// 4. Remote path targeting filesystem root directly
 	_, err = a.executeRemoteTransfer(ctx, RemoteTransferRequest{
 		Action:     "upload",
-		Target:     "user@remote.example.com:/srv/app",
+		Target:     "user@remote.example.com",
 		LocalPath:  "local.txt",
-		RemotePath: "/srv/app",
+		RemotePath: "/",
 	})
-	if err == nil || !strings.Contains(err.Error(), "path is required") {
-		t.Fatalf("expected 'path is required' for remote root without subpath, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "filesystem root") {
+		t.Fatalf("expected filesystem root refusal, got %v", err)
 	}
 
 	// 5. Remote path VCS metadata
@@ -563,7 +557,7 @@ func TestRemoteTransferUploadArchiveFences(t *testing.T) {
 			_ = tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Size: 4, Mode: 0o644})
 			_, _ = tw.Write([]byte("evil"))
 			_ = tw.Close()
-			stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "upload", "workspaceRoot": root, "remotePath": "dest", "overwrite": true}, &buf, nil)
+			stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "upload", "remotePath": remoteFixturePath(root, "dest"), "overwrite": true}, &buf, nil)
 			if err == nil {
 				t.Fatalf("accepted malicious archive %q: %s", name, stderr)
 			}
@@ -589,7 +583,7 @@ func TestRemoteTransferUploadExistingSymlinkParent(t *testing.T) {
 	_ = tw.WriteHeader(&tar.Header{Name: "dest/link/evil.txt", Typeflag: tar.TypeReg, Size: 4, Mode: 0o644})
 	_, _ = tw.Write([]byte("evil"))
 	_ = tw.Close()
-	stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "upload", "workspaceRoot": root, "remotePath": "dest", "overwrite": true}, &buf, nil)
+	stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "upload", "remotePath": remoteFixturePath(root, "dest"), "overwrite": true}, &buf, nil)
 	if err == nil {
 		t.Fatalf("accepted symlink escape: %s", stderr)
 	}
@@ -613,7 +607,7 @@ func TestRemoteTransferDownloadHardlinks(t *testing.T) {
 		t.Skipf("hardlinks unavailable: %v", err)
 	}
 	var buf bytes.Buffer
-	stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "download", "workspaceRoot": root, "remotePath": "pkg", "arcRootName": "pkg"}, nil, &buf)
+	stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "download", "remotePath": remoteFixturePath(root, "pkg"), "arcRootName": "pkg"}, nil, &buf)
 	if err != nil {
 		t.Fatalf("download: %v %s", err, stderr)
 	}
@@ -646,7 +640,7 @@ func TestRemoteTransferDownloadReadErrorIsFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "pkg", "unreadable.txt"), []byte("data"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	payload, _ := json.Marshal(map[string]any{"action": "download", "workspaceRoot": root, "remotePath": "pkg"})
+	payload, _ := json.Marshal(map[string]any{"action": "download", "remotePath": remoteFixturePath(root, "pkg")})
 	// Deterministically simulate a file becoming unreadable between walk and add,
 	// including when the test process is an administrator/root.
 	// The composed source is a stream of its own, so it must declare its
@@ -707,7 +701,7 @@ func TestRemoteTransferUploadTruncatedReplacementPreservesDestination(t *testing
 		tw := tar.NewWriter(&buf)
 		_ = tw.WriteHeader(&tar.Header{Name: "target", Typeflag: tar.TypeReg, Size: 4096, Mode: 0o644})
 		_, _ = tw.Write([]byte("partial"))
-		stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "upload", "workspaceRoot": root, "remotePath": "target", "overwrite": true}, &buf, nil)
+		stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "upload", "remotePath": remoteFixturePath(root, "target"), "overwrite": true}, &buf, nil)
 		if err == nil {
 			t.Fatalf("accepted truncated stream: %s", stderr)
 		}
@@ -748,7 +742,7 @@ func TestRemoteTransferUploadReadOnlyDirectory(t *testing.T) {
 		_ = os.Chmod(filepath.Join(root, "target", "child"), 0o700)
 	})
 	stderr, err := runPythonTransferBridge(t, py, map[string]any{
-		"action": "upload", "workspaceRoot": root, "remotePath": "target",
+		"action": "upload", "remotePath": remoteFixturePath(root, "target"),
 	}, &buf, nil)
 	if err != nil {
 		t.Fatalf("read-only directory upload failed: %v: %s", err, stderr)
@@ -777,7 +771,7 @@ func TestRemoteTransferUploadDuplicateEntryDoesNotClobber(t *testing.T) {
 		_, _ = tw.Write([]byte(content))
 	}
 	_ = tw.Close()
-	stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "upload", "workspaceRoot": root, "remotePath": "target", "overwrite": false}, &buf, nil)
+	stderr, err := runPythonTransferBridge(t, py, map[string]any{"action": "upload", "remotePath": remoteFixturePath(root, "target"), "overwrite": false}, &buf, nil)
 	if err == nil {
 		t.Fatalf("accepted duplicate entry with overwrite disabled: %s", stderr)
 	}

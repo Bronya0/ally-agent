@@ -144,3 +144,4 @@
 2026-11-07 中危 compact-outcome 裁剪重建工具卡时硬写 success 会把失败或取消伪装成成功；复用状态判定并保留结果元数据。@desktop/compact.go
 2026-11-09 中危 ui-enum-alias 下拉选项写别名或原始值而非后端规范值：编辑已有配置时字段消失、界面露出内部串。选项与判断统一用后端导出的常量。@desktop
 2026-11-11 中危 stdlib log.Printf 不进 error-*.log（GUI 无 stderr），排障易误判有记录；诊断走 logAppError。@internal/app/infra_log.go
+2026-11-12 中危 preview-copy-size 待发图只有 256px 芯片，预览拿缓存尺寸判断清晰度就永不补解码；按源解码，别放大。@desktop/image_preview.go

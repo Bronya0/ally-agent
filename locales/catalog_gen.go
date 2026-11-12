@@ -3006,11 +3006,11 @@ func (msgs Messages) UiE336f7d53f32() string {
 	return Catalog.Format(msgs.locale, "ui_e336f7d53f32", nil)
 }
 
-// Ui5000beb98f9c says "Full text summary: Call the model to generate a summary. Local cropping: Do not call the model, first clear the param…"
+// Ui5000beb98f9c says "Full summary calls the model. Local trimming preserves the latest complete task, user messages and assistant replies;…"
 // in the language the app shows.
 func Ui5000beb98f9c() string { return In(i18n.Locale()).Ui5000beb98f9c() }
 
-// Ui5000beb98f9c says "Full text summary: Call the model to generate a summary. Local cropping: Do not call the model, first clear the param…"
+// Ui5000beb98f9c says "Full summary calls the model. Local trimming preserves the latest complete task, user messages and assistant replies;…"
 // in the language of msgs.
 func (msgs Messages) Ui5000beb98f9c() string {
 	return Catalog.Format(msgs.locale, "ui_5000beb98f9c", nil)
@@ -6916,11 +6916,11 @@ func (msgs Messages) Ui01270680bc23() string {
 	return Catalog.Format(msgs.locale, "ui_01270680bc23", nil)
 }
 
-// UiE83b8ab29369 says "%[1]d old replies, %[2]d old tool results, and %[3]d old thoughts have been cropped. Keep the most recent %[4]d round…"
+// UiE83b8ab29369 says "Compressed %d older tool records to purpose and result metadata and removed old reasoning. User messages, assistant r…"
 // in the language the app shows.
 func UiE83b8ab29369() string { return In(i18n.Locale()).UiE83b8ab29369() }
 
-// UiE83b8ab29369 says "%[1]d old replies, %[2]d old tool results, and %[3]d old thoughts have been cropped. Keep the most recent %[4]d round…"
+// UiE83b8ab29369 says "Compressed %d older tool records to purpose and result metadata and removed old reasoning. User messages, assistant r…"
 // in the language of msgs.
 func (msgs Messages) UiE83b8ab29369() string {
 	return Catalog.Format(msgs.locale, "ui_e83b8ab29369", nil)
@@ -9916,11 +9916,11 @@ func (msgs Messages) UiDac73efe793d() string {
 	return Catalog.Format(msgs.locale, "ui_dac73efe793d", nil)
 }
 
-// Ui45972fa75102 says "Locally crop old replies, tool results and thoughts, retain recent content, and do not call models"
+// Ui45972fa75102 says "Preserve the latest complete task; older tools keep only purpose and result metadata. Remove old reasoning without ca…"
 // in the language the app shows.
 func Ui45972fa75102() string { return In(i18n.Locale()).Ui45972fa75102() }
 
-// Ui45972fa75102 says "Locally crop old replies, tool results and thoughts, retain recent content, and do not call models"
+// Ui45972fa75102 says "Preserve the latest complete task; older tools keep only purpose and result metadata. Remove old reasoning without ca…"
 // in the language of msgs.
 func (msgs Messages) Ui45972fa75102() string {
 	return Catalog.Format(msgs.locale, "ui_45972fa75102", nil)
@@ -10846,11 +10846,11 @@ func (msgs Messages) Ui7ee05857ee3c() string {
 	return Catalog.Format(msgs.locale, "ui_7ee05857ee3c", nil)
 }
 
-// UiE58d374b3b22 says "Quickly compressing old replies, tool parameters, tool results and thinking content..."
+// UiE58d374b3b22 says "Trimming older tool records and reasoning while preserving the latest complete task…"
 // in the language the app shows.
 func UiE58d374b3b22() string { return In(i18n.Locale()).UiE58d374b3b22() }
 
-// UiE58d374b3b22 says "Quickly compressing old replies, tool parameters, tool results and thinking content..."
+// UiE58d374b3b22 says "Trimming older tool records and reasoning while preserving the latest complete task…"
 // in the language of msgs.
 func (msgs Messages) UiE58d374b3b22() string {
 	return Catalog.Format(msgs.locale, "ui_e58d374b3b22", nil)
@@ -11226,11 +11226,11 @@ func (msgs Messages) UiE0ea2738ad5d() string {
 	return Catalog.Format(msgs.locale, "ui_e0ea2738ad5d", nil)
 }
 
-// UiCdfedd9e4b24 says "No old content to quickly compress (keep recent %[1]d wheel tool calls or replies)"
+// UiCdfedd9e4b24 says "No older content to compact (the latest complete task is preserved)."
 // in the language the app shows.
 func UiCdfedd9e4b24() string { return In(i18n.Locale()).UiCdfedd9e4b24() }
 
-// UiCdfedd9e4b24 says "No old content to quickly compress (keep recent %[1]d wheel tool calls or replies)"
+// UiCdfedd9e4b24 says "No older content to compact (the latest complete task is preserved)."
 // in the language of msgs.
 func (msgs Messages) UiCdfedd9e4b24() string {
 	return Catalog.Format(msgs.locale, "ui_cdfedd9e4b24", nil)
@@ -16264,4 +16264,24 @@ func UiEe29b783df7d() string { return In(i18n.Locale()).UiEe29b783df7d() }
 // in the language of msgs.
 func (msgs Messages) UiEe29b783df7d() string {
 	return Catalog.Format(msgs.locale, "ui_ee29b783df7d", nil)
+}
+
+// UiBedf40f1b245 says "Keep the code tidy"
+// in the language the app shows.
+func UiBedf40f1b245() string { return In(i18n.Locale()).UiBedf40f1b245() }
+
+// UiBedf40f1b245 says "Keep the code tidy"
+// in the language of msgs.
+func (msgs Messages) UiBedf40f1b245() string {
+	return Catalog.Format(msgs.locale, "ui_bedf40f1b245", nil)
+}
+
+// Ui642481fdcde2 says "Please tidy up this round's changes: remove debug leftovers, dead code and redundant comments, and keep naming and st…"
+// in the language the app shows.
+func Ui642481fdcde2() string { return In(i18n.Locale()).Ui642481fdcde2() }
+
+// Ui642481fdcde2 says "Please tidy up this round's changes: remove debug leftovers, dead code and redundant comments, and keep naming and st…"
+// in the language of msgs.
+func (msgs Messages) Ui642481fdcde2() string {
+	return Catalog.Format(msgs.locale, "ui_642481fdcde2", nil)
 }

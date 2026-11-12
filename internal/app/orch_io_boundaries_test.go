@@ -148,7 +148,7 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 			// A cancelled transport ensures even a regression cannot contact a host.
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			_, err = a.remoteEditOne(ctx, remoteTarget{Host: "example.invalid", WorkspaceRoot: "/srv/app"}, req, remoteRawFile{Path: req.Path, Data: decoded, RawData: tc.original, Size: int64(len(tc.original))})
+			_, err = a.remoteEditOne(ctx, remoteTarget{Host: "example.invalid", LegacyRoot: "/srv/app"}, req, remoteRawFile{Path: req.Path, Data: decoded, RawData: tc.original, Size: int64(len(tc.original))})
 			if toolErrorCode(err) != "E_EDIT_ENCODING" {
 				t.Fatalf("remote edit bypassed shared encoding gate: %v", err)
 			}
@@ -172,7 +172,7 @@ func TestRemoteCommandLogQuotaIncludesActiveReservations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := newIsolatedToolTestApp(t)
 			py := pickRemoteHelperPython(t)
-			dir := filepath.Join(a.config.Workspace, ".tmp", "command-logs")
+			dir := filepath.Join(a.config.Workspace, ".ally_agent", "command-logs")
 			if err := os.MkdirAll(dir, 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -192,14 +192,14 @@ func TestRemoteCommandLogQuotaIncludesActiveReservations(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			script, err := buildRemoteScript(map[string]any{"op": "stat", "workspaceRoot": a.config.Workspace, "path": "."})
+			script, err := buildRemoteScript(map[string]any{"op": "stat", "path": remoteFixturePath(a.config.Workspace, ".")})
 			if err != nil {
 				t.Fatal(err)
 			}
-			probe := "def quota_probe(root, payload):\n    handle, path = open_command_log(root)\n    handle.close()\n    return {'path': as_posix_rel(root, path)}\n\n"
+			probe := "def quota_probe(payload):\n    handle, path = open_command_log()\n    handle.close()\n    return {'path': as_posix_path(path)}\n\n"
 			script = strings.Replace(script, "OPS = {", probe+"OPS = {", 1)
 			script = strings.Replace(script, "\"stat\": op_stat,", "\"stat\": quota_probe,", 1)
-			resp, err := runRemoteHelperScript(t, py, script)
+			resp, err := runRemoteHelperScript(t, py, script, a.config.Workspace)
 			if err != nil || resp.OK != tc.allowed {
 				t.Fatalf("quota decision: ok=%v error=%s transport=%v", resp.OK, resp.Error, err)
 			}

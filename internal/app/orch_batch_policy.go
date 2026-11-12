@@ -375,9 +375,17 @@ func dedupeMutationTargets(targets []fileMutationTarget) []fileMutationTarget {
 
 // remoteMutationKey 是远端变更目标的唯一键：批次写冲突判定与一次远端删除调用
 // 内部的重复/包含归一（planDeleteExecution）共用它，所以两个判据认的是同一个身份。
-func remoteMutationKey(target, relPath string) string {
-	cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(relPath), "\\", "/"))
-	return "remote:" + strings.TrimSpace(target) + ":" + cleanPath
+func remoteMutationKey(target, remotePath string) string {
+	server := strings.TrimSpace(target)
+	cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(remotePath), "\\", "/"))
+	if rt, err := parseRemoteTarget(server); err == nil {
+		// Legacy and new calls that name the same server/path must conflict.
+		server = sshCredentialKey(rt.Host, rt.Port)
+		if absolute, err := validateRemotePath(remotePath, rt.LegacyRoot, true); err == nil {
+			cleanPath = absolute
+		}
+	}
+	return "remote:" + server + ":" + cleanPath
 }
 
 // mutationArgumentPaths 枚举「这次调用会动哪些路径」，供上面的写冲突判定使用：

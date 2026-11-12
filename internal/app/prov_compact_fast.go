@@ -8,52 +8,91 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// Retain exact reasoning payloads for the untouched tail only. Clearing the
-// entire ledger would lose recent signed/encrypted reasoning; leaving it intact
-// would silently replay the old thoughts the user just asked us to compact.
-// Snapshots are replaced copy-on-write, matching appendTurn/appendResponses.
+// Opaque/signed reasoning is not included in the plain-message token estimate.
+// Removing it can be useful even when wrapping short visible replies costs a
+// few extra estimated tokens. Plain text alone still must not grow on compact.
+func (s *reasoningStash) hasOldCompactReasoning(sessionID string, history []openai.ChatCompletionMessage, cutoff int) bool {
+	if s == nil {
+		return false
+	}
+	keys := map[string]bool{}
+	callIDs := map[string]bool{}
+	ordinal := 0
+	for _, m := range history[:cutoff] {
+		if m.Role != openai.ChatMessageRoleAssistant {
+			continue
+		}
+		keys[responsesMessageKey(ordinal, m)] = true
+		ordinal++
+		for _, call := range m.ToolCalls {
+			callIDs[call.ID] = true
+		}
+	}
+	prefix := reasoningStashScope(openAIResponsesPromptCacheKey(sessionID)) + "\x1f"
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, entry := range s.entries {
+		if !strings.HasPrefix(key, prefix) || entry.payload == nil {
+			continue
+		}
+		for _, turn := range entry.payload.turns {
+			for _, id := range turn.callIDs {
+				if callIDs[id] {
+					return true
+				}
+			}
+		}
+		for messageKey, output := range entry.payload.responsesNative {
+			if !keys[messageKey] {
+				continue
+			}
+			for _, raw := range output {
+				var item struct{ Type string }
+				if json.Unmarshal(raw, &item) == nil && item.Type == "reasoning" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// Old native items are removed as a unit with their protocol calls. Only the
+// untouched task can replay signed/encrypted data. Rebase its assistant ordinal
+// after the old assistants became user-role historical reference records.
 func (s *reasoningStash) retainFastCompactTail(sessionID string, history, compacted []openai.ChatCompletionMessage, cutoff int) bool {
 	if s == nil || cutoff <= 0 {
 		return false
 	}
+	tailStart := len(compacted) - (len(history) - cutoff)
+	if tailStart < 0 {
+		return false
+	}
 	callIDs := map[string]bool{}
 	nativeKeys := map[string]string{}
-	type nativeRewrite struct {
-		key, excerpt string
-		replacement  *string
+	statusesKeys := map[string]string{}
+	oldOrdinal, newOrdinal := 0, 0
+	for _, m := range compacted[:tailStart] {
+		if m.Role == openai.ChatMessageRoleAssistant {
+			newOrdinal++
+		}
 	}
-	rewrites := map[string]nativeRewrite{}
-	ordinal := 0
-	retainedOrdinal := 0
 	for i, m := range history {
-		if m.Role != openai.ChatMessageRoleAssistant {
-			continue
-		}
-		kept := strings.TrimSpace(compacted[i].Content) != "" || len(compacted[i].MultiContent) > 0 || len(compacted[i].ToolCalls) > 0
 		if i >= cutoff {
-			for _, call := range m.ToolCalls {
-				callIDs[call.ID] = true
-			}
-			nativeKeys[responsesMessageKey(ordinal, m)] = responsesMessageKey(retainedOrdinal, compacted[i])
-		} else if kept {
-			excerpt := ""
-			if m.ReasoningContent != compacted[i].ReasoningContent {
-				if start := strings.LastIndex(compacted[i].Content, fastCompactReasoningMarker); start >= 0 {
-					excerpt = compacted[i].Content[start:]
+			next := compacted[tailStart+i-cutoff]
+			if m.Role == openai.ChatMessageRoleAssistant {
+				for _, call := range m.ToolCalls {
+					callIDs[call.ID] = true
 				}
+				nativeKeys[responsesMessageKey(oldOrdinal, m)] = responsesMessageKey(newOrdinal, next)
+				newOrdinal++
 			}
-			rewrite := nativeRewrite{key: responsesMessageKey(retainedOrdinal, compacted[i]), excerpt: excerpt}
-			if fastCompactAnswerText(m.Content) != fastCompactAnswerText(compacted[i].Content) {
-				// Native Responses output must not replay the original long answer
-				// after its ordinary projection has been shortened.
-				replacement := compacted[i].Content
-				rewrite.replacement, rewrite.excerpt = &replacement, ""
+			if m.Role == openai.ChatMessageRoleTool {
+				statusesKeys[toolStatusIdentity(m)] = toolStatusIdentity(next)
 			}
-			rewrites[responsesMessageKey(ordinal, m)] = rewrite
 		}
-		ordinal++
-		if kept {
-			retainedOrdinal++
+		if m.Role == openai.ChatMessageRoleAssistant {
+			oldOrdinal++
 		}
 	}
 	prefix := reasoningStashScope(openAIResponsesPromptCacheKey(sessionID)) + "\x1f"
@@ -64,21 +103,22 @@ func (s *reasoningStash) retainFastCompactTail(sessionID string, history, compac
 		if !strings.HasPrefix(key, prefix) || entry.payload == nil {
 			continue
 		}
-		if entry.payload.toolResults != nil {
-			statuses := map[string]bool{}
-			for i, m := range compacted {
-				if m.Role != openai.ChatMessageRoleTool || i >= len(history) {
-					continue
+		previous := entry.payload
+		next := &sessionReasoningPayload{}
+		if previous.toolResults != nil {
+			next.toolResults = map[string]bool{}
+			next.toolMetadata = map[string]toolHistoryMetadata{}
+			for source, dest := range statusesKeys {
+				if failed, ok := previous.toolResults[source]; ok {
+					next.toolResults[dest] = failed
 				}
-				if failed, ok := entry.payload.toolResults[toolStatusIdentity(history[i])]; ok {
-					statuses[toolStatusIdentity(m)] = failed
+				if meta, ok := previous.toolMetadata[source]; ok {
+					next.toolMetadata[dest] = meta
 				}
 			}
-			entry.payload = &sessionReasoningPayload{toolResults: statuses}
-			continue
+			changed = changed || len(next.toolResults) != len(previous.toolResults)
 		}
-		next := &sessionReasoningPayload{responsesNative: map[string][]json.RawMessage{}}
-		for _, turn := range entry.payload.turns {
+		for _, turn := range previous.turns {
 			keep := len(turn.callIDs) > 0
 			for _, id := range turn.callIDs {
 				keep = keep && callIDs[id]
@@ -89,18 +129,13 @@ func (s *reasoningStash) retainFastCompactTail(sessionID string, history, compac
 				changed = true
 			}
 		}
-		for messageKey, output := range entry.payload.responsesNative {
-			if nextKey, ok := nativeKeys[messageKey]; ok {
-				next.responsesNative[nextKey] = output
-				changed = changed || nextKey != messageKey
-			} else if rewrite, ok := rewrites[messageKey]; ok {
-				// Preserve native answer ordering/phase and function-call identity.
-				// Shortened answer text replaces native message content too.
-				clean, removed := compactNativeResponses(output, rewrite.excerpt, rewrite.replacement)
-				if len(clean) > 0 {
-					next.responsesNative[rewrite.key] = clean
-				}
-				changed = changed || removed || rewrite.key != messageKey
+		if len(previous.responsesNative) > 0 {
+			next.responsesNative = map[string][]json.RawMessage{}
+		}
+		for messageKey, output := range previous.responsesNative {
+			if dest, ok := nativeKeys[messageKey]; ok {
+				next.responsesNative[dest] = output
+				changed = changed || dest != messageKey
 			} else {
 				changed = true
 			}
@@ -108,56 +143,4 @@ func (s *reasoningStash) retainFastCompactTail(sessionID string, history, compac
 		entry.payload = next
 	}
 	return changed
-}
-
-func compactNativeResponses(output []json.RawMessage, excerpt string, replacement *string) ([]json.RawMessage, bool) {
-	var clean []json.RawMessage
-	removed := false
-	replaced := false
-	if excerpt != "" {
-		text, _ := json.Marshal(map[string]any{"type": "message", "role": "assistant", "content": excerpt})
-		clean = append(clean, text)
-	}
-	for _, raw := range output {
-		var item struct{ Type string }
-		if json.Unmarshal(raw, &item) != nil {
-			// Unusable replay must fall back to the visible history.
-			return nil, true
-		}
-		if item.Type == "reasoning" {
-			removed = true
-			continue
-		}
-		if item.Type == "function_call" {
-			var call map[string]json.RawMessage
-			if json.Unmarshal(raw, &call) != nil {
-				return nil, true
-			}
-			if string(call["arguments"]) != `"{}"` {
-				call["arguments"] = json.RawMessage(`"{}"`)
-				raw, _ = json.Marshal(call)
-				removed = true
-			}
-		}
-		if item.Type == "message" && replacement != nil {
-			removed = true
-			if replaced || *replacement == "" {
-				continue
-			}
-			var message map[string]json.RawMessage
-			if json.Unmarshal(raw, &message) != nil {
-				return nil, true
-			}
-			message["content"], _ = json.Marshal([]map[string]any{{"type": "output_text", "text": *replacement, "annotations": []any{}}})
-			raw, _ = json.Marshal(message)
-			replaced = true
-		}
-		clean = append(clean, raw)
-	}
-	if replacement != nil && *replacement != "" && !replaced {
-		text, _ := json.Marshal(map[string]any{"type": "message", "role": "assistant", "content": *replacement})
-		clean = append([]json.RawMessage{text}, clean...)
-		removed = true
-	}
-	return clean, removed || excerpt != ""
 }

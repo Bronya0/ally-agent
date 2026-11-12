@@ -7,7 +7,9 @@ import (
 	"ally-dev/locales"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"github.com/egoist/mygo"
 	"io"
 	"os"
@@ -175,6 +177,37 @@ func (a *App) ExportTextFile(name, content, filterName, pattern string) (string,
 	}
 	return p, os.WriteFile(p, []byte(content), 0600)
 }
+
+// OpenHTMLPreview hands model-generated HTML to the system browser through a
+// throwaway file under the workspace's .tmp/preview. It never opens a save
+// dialog: that dialog belongs to export, and asking for a path here made "open"
+// read as one more export.
+func (a *App) OpenHTMLPreview(workspace, html string) error {
+	if err := a.ensureInitialized(); err != nil {
+		return err
+	}
+	dir := filepath.Join(os.TempDir(), "ally-preview")
+	if workspace = strings.TrimSpace(workspace); workspace != "" {
+		dir = filepath.Join(workspace, ".tmp", "preview")
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	path, err := writeHTMLPreview(dir, html)
+	if err != nil {
+		return err
+	}
+	return mygo.Shell.OpenPath(path)
+}
+
+// writeHTMLPreview keeps one file per distinct document, so reopening the same
+// preview does not scatter copies across the preview directory.
+func writeHTMLPreview(dir, html string) (string, error) {
+	sum := sha256.Sum256([]byte(html))
+	path := filepath.Join(dir, fmt.Sprintf("ally-preview-%x.html", sum[:6]))
+	return path, os.WriteFile(path, []byte(html), 0600)
+}
+
 func (a *App) OpenWorkspaceInFileManager() error {
 	if err := a.ensureInitialized(); err != nil {
 		return err

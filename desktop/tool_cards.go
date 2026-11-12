@@ -853,9 +853,6 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				if name == "command" || name == "remote_run_command" {
 					text := short(summary, 120)
 					label := ui.RichText(c.Key(key+"-summary"), codeSpansWithBase(c, text, "command.sh", commandLineInk(c.Theme(), a.secondaryInk()))...).FontSize(fsTool).SingleLine().MinWidth(0).Shrink(1)
-					if purpose != "" {
-						label.MaxWidthPercent(40)
-					}
 					uikit.Tooltip(c, label, summary)
 				} else {
 					text := "(" + short(summary, 120) + ")"
@@ -864,9 +861,6 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 						color = color.Mix(c.Theme().Text, 0.4)
 					}
 					label := ui.Text(c.Key(key+"-summary"), text).FontSize(fsTool).TextColor(color).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
-					if purpose != "" {
-						label.MaxWidthPercent(40)
-					}
 					uikit.Tooltip(c, label, summary)
 				}
 			}
@@ -944,11 +938,16 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					ui.Text(c, fmtDur(ms)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 				}
 			}
+			if purpose != "" {
+				// The facts stay on the left; the reason hangs at the row's right edge,
+				// where it can be skipped without breaking the sentence before it.
+				ui.Box(c).Grow(1).MinWidth(12)
+				// The reason keeps its full sentence; the target is what gets clipped.
+				label := ui.Text(c.Key(key+"-purpose"), short(purpose, 72)).FontSize(fsAux).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(0)
+				label.MaxWidthPercent(45)
+				uikit.Tooltip(c, label, purpose)
+			}
 		})
-		if purpose != "" && name != "suggest" {
-			text := ui.Text(c.Key(key+"-purpose"), short(purpose, 72)).FontSize(fsAux).TextColor(a.secondaryInk()).SingleLine().MinWidth(0).Shrink(1)
-			uikit.Tooltip(c, text, purpose)
-		}
 		if isMCP {
 			return
 		} // Result payloads stay in model context, outside the UI.
@@ -1074,7 +1073,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				a.toolHTMLView(c, t, m, args)
 				ui.Row(c).Gap(gapField).Children(func() {
 					flat(c, locales.Text("导出 HTML")).OnClick(func() { a.exportHTML("preview.html", html) })
-					flat(c, locales.Text("在浏览器打开")).OnClick(func() { a.openHTMLPreview(html) })
+					flat(c, locales.Text("在浏览器打开")).OnClick(func() { a.openHTMLPreview(t.Workspace, html) })
 				})
 				if open {
 					toolCodeWindow(c, key+"-html-source", html, true, "preview.html", a.secondaryInk())
@@ -1629,7 +1628,7 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 			flat(c, locales.Text("导出 HTML")).OnClick(func() {
 				a.exportHTML(fmt.Sprintf("render-%d.html", index), html)
 			})
-			flat(c, locales.Text("在浏览器打开")).OnClick(func() { a.openHTMLPreview(html) })
+			flat(c, locales.Text("在浏览器打开")).OnClick(func() { a.openHTMLPreview(t.Workspace, html) })
 		})
 	case "delete", "remote_delete_path":
 		for _, item := range list(result, "results") {
@@ -1810,13 +1809,8 @@ func (a *desktop) exportHTML(name, html string) {
 	})
 }
 
-func (a *desktop) openHTMLPreview(html string) {
-	path, err := a.core.ExportTextFile("ally-preview.html", html, "HTML", "*.html")
-	if err != nil {
-		a.fail(err)
-		return
-	}
-	a.job(func() error { return a.core.OpenPathInFileManager(path) })
+func (a *desktop) openHTMLPreview(workspace, html string) {
+	a.job(func() error { return a.core.OpenHTMLPreview(workspace, html) })
 }
 
 // ---- Sub-agent rows ------------------------------------------------------

@@ -330,7 +330,8 @@ func isCompactSkip(err error) bool {
 
 // compactRunHistory selects the threshold strategy and rebuilds the request.
 // A full summary replaces the current user turn, so only that strategy needs
-// to reappend it. Local compaction keeps the entire request's message sequence.
+// to reappend it. Local compaction preserves the current task and replaces only
+// earlier protocol turns with user-role reference records.
 //
 // reason labels the compact:start / run:compacted event pair so the UI can tell
 // a threshold compaction from the context-overflow recovery.
@@ -393,6 +394,7 @@ func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID,
 	if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
 		messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
 	}
+	a.beginHistoryTask(sessionID, messages)
 	payload := map[string]any{
 		"sessionId":    sessionID,
 		"tokensBefore": intFromAny(result["tokensBefore"]),

@@ -485,17 +485,21 @@ func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[
 func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *roundStat, show bool) {
 	modelSeconds := float64(stat.ModelDurationMS) / 1000
 	row := ui.Row(c.Key(widgetKey("round-stats", t.ID, i))).FillWidth().Height(heightRow + 2).Gap(gapInline + 1).AlignItems(ui.Center)
-	// The controls stay in the view, faded and inert, while the row is not
-	// hovered. Removing them instead took away the button a panel is anchored
-	// to, and the panel lives in the window's overlay: it vanished the moment
-	// the pointer moved onto it, so its entries could never be chosen.
-	// IgnoreInput leaves them in the tree for that anchor and reachable by a
-	// screen reader, while an unseen row stays out of the pointer's way.
+	// The controls fade in with the message row but never go inert. Removing
+	// them instead took away the button a panel is anchored to, and the panel
+	// lives in the window's overlay: it vanished the moment the pointer moved
+	// onto it, so its entries could never be chosen. An inert row also left the
+	// footer of a round with nothing drawn above it, such as one that has not
+	// written its first token yet, unreachable; the row answers the pointer on
+	// its own so no click ever falls on dead controls.
+	if row.Hovered() {
+		show = true
+	}
 	visible := float32(0)
 	if show {
 		visible = 1
 	}
-	row.Opacity(visible).IgnoreInput(!show)
+	row.Opacity(visible)
 	row.Children(func() {
 		uikit.Tooltip(c, ui.Text(c, fmtDur(stat.DurationMS)).FontSize(fsSmall).TextColor(a.secondaryInk()), locales.Text("本轮耗时"))
 		if hit := stat.CacheHit + stat.CacheMiss; hit > 0 {
@@ -522,7 +526,7 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 			services.WriteClipboard(str(t.Messages[i], "content"))
 			c.Toast(locales.Text("已复制最终总结"))
 		})
-		iconMenu(c, widgetKey("quick", "", i), locales.Text("快捷消息"), "wand", 22, 180, func(m ui.MenuParts) {
+		iconMenu(c, widgetKey("quick", "", i), locales.Text("快捷消息"), "list", 22, 180, func(m ui.MenuParts) {
 			for _, item := range quickMessages {
 				item := item
 				uikit.MenuItem(c, m, item.label, locales.Text(item.label), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
@@ -541,6 +545,7 @@ var quickMessages = []struct{ label, prompt string }{
 	{"说人话", "请说人话：去掉套话和术语，直接讲结论和原因。"},
 	{"提交并推送", "请检查改动并提交，然后推送到远端。"},
 	{"代码审查", "请审查当前工作区最近的改动，指出真实缺陷与回归风险。"},
+	{"保持代码整洁", "请把这轮改动收拾整洁：删掉调试残留、死代码和多余注释，统一命名与结构，不要顺手改无关代码。"},
 	{"记录教训", "请总结这一轮里容易踩坑的地方，并更新 LESSONS.md。"},
 }
 

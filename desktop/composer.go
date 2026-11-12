@@ -1611,7 +1611,7 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 					st.ContextOpen = false
 					a.compact(t, false)
 				}, a.secondaryInk())
-				contextCompactButton(c, "context-fast-compact", locales.Text("压缩上下文(快速)"), true, t.Busy || st.CompactBusy, locales.Text("本地裁剪旧回复、工具结果与思考，保留最近内容，不调用模型"), func() {
+				contextCompactButton(c, "context-fast-compact", locales.Text("压缩上下文(快速)"), true, t.Busy || st.CompactBusy, locales.Text("保留最近一轮完整任务，旧工具只留目的与结果元信息，移除旧推理，不调用模型"), func() {
 					st.ContextOpen = false
 					a.compact(t, true)
 				}, a.secondaryInk())
@@ -1712,7 +1712,7 @@ func (a *desktop) compact(t *conversation, fast bool) {
 	// frozen model of its own yet.
 	cfg := a.config
 	if fast {
-		st.CompactNote = locales.Text("正在快速压缩旧回复、工具参数、工具结果与思考内容…")
+		st.CompactNote = locales.Text("正在整理旧工具记录与推理，保留最近一轮完整任务…")
 	} else {
 		st.CompactNote = locales.Text("正在压缩对话上下文…")
 		if resolved, ok := a.chatConfig(t); ok {

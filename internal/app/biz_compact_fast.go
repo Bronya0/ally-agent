@@ -3,62 +3,99 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
 )
 
-const defaultFastCompactKeepRecentRounds = 4
-const fastCompactExcerptRunes = 384
-const fastCompactAssistantTokenBudget = 8192
+// These legacy markers are still recognized when loading older histories.
 const fastCompactToolMarker = "[Fast-compacted tool result; partial excerpt, not the full output. Do not repeat mutations.]\n"
 const fastCompactReasoningMarker = "[Earlier reasoning excerpt; incomplete]\n"
 const fastCompactAssistantMarker = "[Earlier assistant reply; partial excerpt]\n"
+const fastCompactHistoryMarker = "[历史对话（已压缩）]\n"
+const fastCompactRecordMarker = "[工具执行记录（已压缩）]\n"
+
+// The record is ordinary user-role reference text on the wire. Keeping its
+// original speakers in JSON also lets snapshot recovery rebuild real UI rows,
+// without displaying an application-generated record as a new user question.
+type fastCompactEntry struct {
+	Role       string `json:"role"`
+	Content    string `json:"content"`
+	Name       string `json:"name,omitempty"`
+	ToolCallID string `json:"toolCallId,omitempty"`
+	Purpose    string `json:"purpose,omitempty"`
+	Status     string `json:"status,omitempty"`
+}
 
 type fastCompactCandidate struct {
 	history       []openai.ChatCompletionMessage
 	cutoff        int
+	tailStart     int
 	messageChange bool
 	result        map[string]any
 }
 
-type fastCompactAssistantEdit struct {
-	Before  string `json:"before"`
-	After   string `json:"after"`
-	FromEnd int    `json:"fromEnd"`
+func isFastCompactHistory(m openai.ChatCompletionMessage) bool {
+	return m.Role == openai.ChatMessageRoleUser && strings.HasPrefix(m.Content, fastCompactHistoryMarker)
 }
 
-// fastCompactCutoff retains complete assistant/tool batches, even when one batch
-// has parallel calls. Counting individual results could split a signed turn.
-func fastCompactCutoff(history []openai.ChatCompletionMessage, keep int) int {
-	if keep <= 0 {
-		return 0
+func decodeFastCompactHistory(m openai.ChatCompletionMessage) ([]fastCompactEntry, bool) {
+	if !isFastCompactHistory(m) {
+		return nil, false
 	}
+	var entries []fastCompactEntry
+	if json.Unmarshal([]byte(strings.TrimPrefix(m.Content, fastCompactHistoryMarker)), &entries) != nil {
+		return nil, false
+	}
+	return entries, true
+}
+
+func encodeFastCompactHistory(entries []fastCompactEntry) openai.ChatCompletionMessage {
+	data, _ := json.Marshal(entries) // Entries contain only strings.
+	return openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fastCompactHistoryMarker + string(data)}
+}
+
+// User deletion addresses the visible transcript, including original questions
+// inside a compacted reference record. Never match assistant/tool text there as
+// if it were the user's question, or count the wrapper as another user input.
+func locateHistoryUser(messages []openai.ChatCompletionMessage, ordinal int, expected string) (messageIndex, entryIndex int) {
+	messageIndex, entryIndex = -1, -1
 	seen := 0
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role == openai.ChatMessageRoleAssistant && len(history[i].ToolCalls) > 0 {
-			seen++
-			if seen == keep {
-				return i
+	match := func(content string) bool {
+		if expected != "" {
+			return strings.Contains(strings.TrimSpace(content), expected)
+		}
+		return seen == ordinal
+	}
+	for i, m := range messages {
+		if entries, ok := decodeFastCompactHistory(m); ok {
+			for j, entry := range entries {
+				if entry.Role != openai.ChatMessageRoleUser {
+					continue
+				}
+				if match(entry.Content) {
+					messageIndex, entryIndex = i, j
+					if expected == "" {
+						return
+					}
+				}
+				seen++
 			}
+		} else if m.Role == openai.ChatMessageRoleUser {
+			if match(textFromMessage(m)) {
+				messageIndex, entryIndex = i, -1
+				if expected == "" {
+					return
+				}
+			}
+			seen++
 		}
 	}
-	// A conversation without enough tool batches still accumulates long answers.
-	// Fall back to its latest complete, non-tool assistant replies.
-	seen = 0
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role == openai.ChatMessageRoleAssistant && len(history[i].ToolCalls) == 0 && strings.TrimSpace(history[i].Content) != "" {
-			seen++
-			if seen == keep {
-				return i
-			}
-		}
-	}
-	return 0
+	return
 }
 
-// Earlier fast compactions stored reasoning excerpts inside ordinary text;
-// those suffixes were never shown as answer text in the UI.
 func fastCompactAnswerText(content string) string {
 	if before, _, found := strings.Cut(content, "\n\n"+fastCompactReasoningMarker); found {
 		return before
@@ -69,23 +106,43 @@ func fastCompactAnswerText(content string) string {
 	return content
 }
 
-// An excerpt is deterministic and labelled as incomplete; it is not an LLM
-// summary and must not claim that omitted evidence was checked or succeeded.
-func fastCompactExcerpt(text string) string {
-	runes := []rune(strings.TrimSpace(text))
-	if len(runes) <= fastCompactExcerptRunes {
-		return string(runes)
+func (a *App) prepareFastCompactHistory(ctx context.Context, sessionID string, history []openai.ChatCompletionMessage, tokensBefore int) (*fastCompactCandidate, error) {
+	candidate, err := a.projectFastCompactHistory(ctx, sessionID, history)
+	if err != nil {
+		return nil, err
 	}
-	return string(runes[:fastCompactExcerptRunes*2/3]) + "\n[… omitted …]\n" + string(runes[len(runes)-fastCompactExcerptRunes/3:])
+	before, after := computeLiveBreakdown(history), computeLiveBreakdown(candidate.history)
+	if after.Total >= before.Total && !a.reasoningStash.hasOldCompactReasoning(sessionID, history, candidate.cutoff) {
+		candidate.history = cloneChatMessages(history)
+		candidate.tailStart = candidate.cutoff
+		candidate.messageChange = false
+		candidate.result["changed"] = false
+		candidate.result["toolSummaries"] = map[string]any{}
+		candidate.result["toolRecords"] = []any{}
+		after = before
+	}
+	prefix := a.getContextBreakdown(sessionID, "")
+	candidate.result["tokensBefore"] = prefix.SystemPrompt + prefix.ToolSchemas + before.Total
+	candidate.result["tokensAfter"] = prefix.SystemPrompt + prefix.ToolSchemas + after.Total
+	return candidate, nil
 }
 
-func (a *App) prepareFastCompactHistory(ctx context.Context, sessionID string, history []openai.ChatCompletionMessage, tokensBefore int) (*fastCompactCandidate, error) {
-	cutoff := fastCompactCutoff(history, defaultFastCompactKeepRecentRounds)
-	out := cloneChatMessages(history)
-	tools := map[string]string{}
-	reasoningCount := 0
-	toolArgumentsCount := 0
-	// Keep the latest structured plan even if it lies before the retained tail.
+// Pure projection shared by explicit compaction and persistence. It does not
+// publish history, clear replay/read caches, or refresh session prompt snapshots.
+func (a *App) projectFastCompactHistory(ctx context.Context, sessionID string, history []openai.ChatCompletionMessage) (*fastCompactCandidate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cutoff := inferHistoryTaskStart(history)
+	if boundary := a.historyTaskFor(sessionID, history); boundary != nil {
+		cutoff = boundary.Start
+	}
+	metadata := a.reasoningStash.toolHistoryMetadata(openAIResponsesPromptCacheKey(sessionID))
+	statuses := a.reasoningStash.toolStatuses(openAIResponsesPromptCacheKey(sessionID))
+	tools := map[string]any{}
+	toolEntries := map[int]fastCompactEntry{}
+	calls := map[string][]openai.ToolCall{}
+	reasoningCount, assistantCount, argumentCount := 0, 0, 0
 	latestPlanID := ""
 	for _, m := range history {
 		for _, call := range m.ToolCalls {
@@ -94,125 +151,143 @@ func (a *App) prepareFastCompactHistory(ctx context.Context, sessionID string, h
 			}
 		}
 	}
-	for i := 0; i < cutoff; i++ {
-		m := &out[i]
-		// Keep call/result pairing, but discard old input bodies (including code).
-		// An empty JSON object remains valid on every tool-call wire protocol.
-		for j := range m.ToolCalls {
-			if m.ToolCalls[j].Function.Arguments != "{}" {
-				m.ToolCalls[j].Function.Arguments = "{}"
-				toolArgumentsCount++
-			}
+	out := make([]openai.ChatCompletionMessage, 0, len(history))
+	var entries []fastCompactEntry
+	flush := func() {
+		if len(entries) == 0 {
+			return
 		}
-		if m.Role == openai.ChatMessageRoleTool && m.ToolCallID != latestPlanID && m.Content != toolResultPlaceholder && !strings.HasPrefix(m.Content, fastCompactToolMarker) {
-			short := fastCompactToolMarker + fastCompactExcerpt(m.Content)
-			// Never grow an already small result, including UTF-8-heavy output.
-			if estimateTokensFromText(short) < estimateTokensFromText(m.Content) {
-				m.Content = short
-				tools[m.ToolCallID] = short
-			}
-		}
-		if m.Role == openai.ChatMessageRoleAssistant && m.ReasoningContent != "" {
-			// Signed thinking may never be edited and replayed as if it were the
-			// original. Move the local excerpt into ordinary assistant text and
-			// discard this old turn's protocol artifacts below.
-			excerpt := fastCompactReasoningMarker + fastCompactExcerpt(m.ReasoningContent)
-			content := strings.TrimSpace(m.Content + "\n\n" + excerpt)
-			if estimateTokensFromText(content) < estimateTokensFromText(m.Content)+reasoningTokens(*m) {
-				m.Content = content
-				m.ReasoningContent = ""
-				reasoningCount++
-			}
-		}
-		if m.Role == openai.ChatMessageRoleAssistant && m.Content != "" && !strings.HasPrefix(m.Content, fastCompactAssistantMarker) {
-			short := fastCompactAssistantMarker + fastCompactExcerpt(m.Content)
-			if estimateTokensFromText(short) < estimateTokensFromText(m.Content) {
-				m.Content = short
-			}
-		}
+		out = append(out, encodeFastCompactHistory(entries))
+		entries = nil
 	}
-	// Per-message excerpts alone still grow with conversation length. Keep the
-	// newest old answer text within one budget; empty bodies are removed by the
-	// ordinary history sanitizer, while tool calls keep their identity/order.
-	remaining := fastCompactAssistantTokenBudget
-	for i := cutoff - 1; i >= 0; i-- {
-		m := &out[i]
-		if m.Role != openai.ChatMessageRoleAssistant {
+	for i, m := range history[:cutoff] {
+		if i%64 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		if isFastCompactHistory(m) {
+			flush()
+			out = append(out, m)
 			continue
 		}
-		cost := estimateTokensFromText(m.Content)
-		if cost > remaining {
-			m.Content = ""
-			m.ReasoningContent = ""
-		} else {
-			remaining -= cost
+		switch m.Role {
+		case openai.ChatMessageRoleUser, openai.ChatMessageRoleAssistant:
+			content := messageText(m)
+			if m.Role == openai.ChatMessageRoleAssistant {
+				content = fastCompactAnswerText(content)
+				assistantCount++
+				if m.ReasoningContent != "" {
+					reasoningCount++
+				}
+			}
+			if content != "" {
+				entries = append(entries, fastCompactEntry{Role: m.Role, Content: content})
+			}
+			for _, call := range m.ToolCalls {
+				calls[call.ID] = append(calls[call.ID], call)
+				argumentCount++
+			}
+		case openai.ChatMessageRoleTool:
+			pending := calls[m.ToolCallID]
+			if len(pending) == 0 {
+				continue
+			} // Normal hygiene owns malformed/orphaned tool messages.
+			call := pending[0]
+			calls[m.ToolCallID] = pending[1:]
+			if len(pending) == 1 {
+				delete(calls, m.ToolCallID)
+			}
+			meta := metadata[toolStatusIdentity(m)]
+			if meta.Purpose == "" {
+				meta.Purpose = toolHistoryPurpose(call, "")
+			}
+			status := "unknown"
+			if failed, known := statuses[toolStatusIdentity(m)]; known {
+				status = "success"
+				if failed {
+					status = "error"
+				}
+			}
+			if meta.Status != "" {
+				status = meta.Status
+			}
+			if meta.Headers == "" {
+				// Legacy records have no producer provenance. Keep a known formatted
+				// first header only; never scan a body for more header-looking lines.
+				header := firstToolHistoryLine(m.Content)
+				if strings.HasPrefix(header, "// "+normalizeToolName(call.Function.Name)+" |") {
+					meta.Headers = boundedToolHistoryHeaders([]string{header})
+				}
+			}
+			if meta.Headers == "" {
+				meta.Headers = fmt.Sprintf("// %s | status=%s", normalizeToolName(call.Function.Name), status)
+			}
+			content := fastCompactRecordMarker
+			if meta.Purpose != "" {
+				content += "目的：" + meta.Purpose + "\n"
+			}
+			content += meta.Headers
+			if m.ToolCallID == latestPlanID && m.Content != toolResultPlaceholder {
+				content += "\n\n" + m.Content // Latest structured plan is durable task state.
+			}
+			entry := fastCompactEntry{Role: "tool_call", Content: content, Name: call.Function.Name, ToolCallID: call.ID, Purpose: meta.Purpose, Status: status}
+			entries = append(entries, entry)
+			toolEntries[i] = entry
+			tools[call.ID] = content
 		}
 	}
-	assistantCount := 0
-	assistantEdits := []fastCompactAssistantEdit{}
+	flush()
+	tailStart := len(out)
+	out = append(out, cloneChatMessages(history[cutoff:])...)
+	changed := cutoff > 0 && (assistantCount > 0 || argumentCount > 0)
+	// A user-only prefix has no tool/prompt state to compact. Preserve it verbatim.
+	if !changed {
+		out = cloneChatMessages(history)
+		tailStart = cutoff
+	}
+	// Match UI cards by occurrence as well as ID. Legacy providers could reuse
+	// an ID, including in the retained task, so an ID-only edit can hit it too.
+	toolRecords := []any{}
 	occurrences := map[string]int{}
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role != openai.ChatMessageRoleAssistant {
-			continue
-		}
-		before := fastCompactAnswerText(history[i].Content)
-		if before != "" {
-			occurrences[before]++
-		}
-		if i < cutoff && history[i].Content != out[i].Content {
-			assistantCount++
-			if before != "" {
-				assistantEdits = append(assistantEdits, fastCompactAssistantEdit{Before: before, After: out[i].Content, FromEnd: occurrences[before]})
+	if changed {
+		for i := len(history) - 1; i >= 0; i-- {
+			m := history[i]
+			if m.Role != openai.ChatMessageRoleTool {
+				continue
+			}
+			occurrences[m.ToolCallID]++
+			if entry, ok := toolEntries[i]; ok {
+				toolRecords = append(toolRecords, map[string]any{"id": m.ToolCallID, "fromEnd": occurrences[m.ToolCallID], "content": entry.Content, "purpose": entry.Purpose})
 			}
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	messageChange := len(tools) > 0 || reasoningCount > 0 || assistantCount > 0 || toolArgumentsCount > 0
-	tokensAfter := tokensBefore
-	if messageChange {
-		// Compare like with like: the provider's measured count cannot be
-		// compared with a local estimate after a history rewrite.
-		prefix := a.getContextBreakdown(sessionID, "")
-		before := computeLiveBreakdown(history)
-		after := computeLiveBreakdown(out)
-		tokensBefore = prefix.SystemPrompt + prefix.ToolSchemas + before.Total
-		tokensAfter = prefix.SystemPrompt + prefix.ToolSchemas + after.Total
-	}
-	return &fastCompactCandidate{
-		history:       out,
-		cutoff:        cutoff,
-		messageChange: messageChange,
-		result: map[string]any{
-			"tier": "fast", "changed": messageChange,
-			"keepRecent":         defaultFastCompactKeepRecentRounds,
-			"toolSummaries":      tools,
-			"reasoningCount":     reasoningCount,
-			"toolArgumentsCount": toolArgumentsCount,
-			"assistantEdits":     assistantEdits,
-			"assistantCount":     assistantCount,
-			"tokensBefore":       tokensBefore,
-			"tokensAfter":        tokensAfter,
-		},
-	}, nil
+	return &fastCompactCandidate{history: out, cutoff: cutoff, tailStart: tailStart, messageChange: changed, result: map[string]any{
+		"tier": "fast", "changed": changed, "keepRecent": 1,
+		"toolSummaries": tools, "toolRecords": toolRecords, "reasoningCount": reasoningCount,
+		"toolArgumentsCount": argumentCount, "assistantCount": assistantCount,
+	}}, ctx.Err()
 }
 
 // commitFastCompactHistory applies a candidate only after its caller accepts
 // the rewrite. Automatic compaction can discard an insufficient candidate and
 // summarize the untouched history instead.
 func (a *App) commitFastCompactHistory(sessionID string, history []openai.ChatCompletionMessage, candidate *fastCompactCandidate) map[string]any {
-	replayChanged := a.reasoningStash.retainFastCompactTail(sessionID, history, candidate.history, candidate.cutoff)
-	changed := candidate.messageChange || replayChanged
-	result := candidate.result
-	result["changed"] = changed
-	if !changed {
-		return result
+	if !candidate.messageChange {
+		return candidate.result
 	}
+	a.reasoningStash.retainFastCompactTail(sessionID, history, candidate.history, candidate.cutoff)
+	result := candidate.result
 	// Rewrites must invalidate measurement anchors even when the message
 	// count stays unchanged. Read-cache hits must stop hiding old files too.
 	a.clearContextAnchor(sessionID)
 	a.invalidateSessionReadCache(sessionID)
+	if candidate.tailStart < len(candidate.history) {
+		m := candidate.history[candidate.tailStart]
+		a.mu.Lock()
+		a.historyCacheStateLocked(sessionID).task = &historyTaskBoundary{Start: candidate.tailStart, Key: historyTaskKey(m)}
+		a.mu.Unlock()
+	}
 	a.saveHistory(sessionID, candidate.history)
 	// Save recalculates the same live message categories for a running session.
 	after := computeLiveBreakdown(candidate.history)

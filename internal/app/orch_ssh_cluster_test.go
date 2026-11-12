@@ -86,14 +86,14 @@ func TestRemoteTargetWorkspaceAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected workspace-authorized alias to connect without an ask: %v", err)
 	}
-	if rt.Host != "ubuntu@192.168.1.88" || rt.WorkspaceRoot != "/var/www" {
+	if rt.Host != "ubuntu@192.168.1.88" || rt.LegacyRoot != "/var/www" {
 		t.Fatalf("unexpected resolved target: %+v", rt)
 	}
 	rt, err = app.resolveAndAuthorizeRemoteTarget(ctx, "192.168.1.99:/var/www")
 	if err != nil {
 		t.Fatalf("direct endpoint should not request approval: %v", err)
 	}
-	if rt.Host != "192.168.1.99" || rt.WorkspaceRoot != "/var/www" {
+	if rt.Host != "192.168.1.99" || rt.LegacyRoot != "/var/www" {
 		t.Fatalf("unexpected direct target: %+v", rt)
 	}
 	if pendingAskCount(app) != 0 {
@@ -157,16 +157,16 @@ func TestRemoteTargetEndpointSpellingUsesRegisteredNode(t *testing.T) {
 	ctx := context.WithValue(context.Background(), toolExecutionMetaContextKey{}, toolExecutionMeta{sessionID: sessionID})
 
 	// 未授权时按白名单拒绝（而不是降级成“陌生主机、弹一次连接确认”）。
-	if _, err := app.resolveAndAuthorizeRemoteTarget(ctx, "ssh://deploy@10.0.0.7:2222/srv/www"); err == nil {
+	if _, err := app.resolveAndAuthorizeRemoteTarget(ctx, "ssh://deploy@10.0.0.7:2222"); err == nil {
 		t.Fatal("an unauthorized registered node must be rejected when addressed by endpoint")
 	}
 
 	app.AuthorizeServerForWorkspace(ws, "prod-web")
-	rt, err := app.resolveAndAuthorizeRemoteTarget(ctx, "ssh://deploy@10.0.0.7:2222/srv/www")
+	rt, err := app.resolveAndAuthorizeRemoteTarget(ctx, "ssh://deploy@10.0.0.7:2222")
 	if err != nil {
 		t.Fatalf("authorized endpoint spelling must resolve without another ask: %v", err)
 	}
-	if rt.Host != "deploy@10.0.0.7" || rt.Port != "2222" || rt.WorkspaceRoot != "/srv/www" {
+	if rt.Host != "deploy@10.0.0.7" || rt.Port != "2222" || rt.LegacyRoot != "" {
 		t.Fatalf("unexpected resolved target: %+v", rt)
 	}
 	if rt.credential == nil || rt.credential.authType != sshAuthTypePassword || rt.credential.password != "pw" {

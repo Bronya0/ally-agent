@@ -305,7 +305,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 				if method != stored && method != "" {
 					a.configDraft.AutoCompactMethod = method
 				}
-				return uikit.Tooltip(c, control, locales.Text("全文总结：调用模型生成摘要。本地裁剪：不调用模型，先清空旧工具调用的参数，此前的回复与工具结果只留首尾摘录，回复正文合计最多约 8k tokens；减不下来时自动回退到全文总结。"))
+				return uikit.Tooltip(c, control, locales.Text("全文总结：调用模型生成摘要。本地裁剪：保留最近一轮完整任务，旧工具只留目的与结果元信息，移除旧推理，保留用户消息和助手回复正文；减不下来时自动回退到全文总结。"))
 			})
 			a.settingsCompactThreshold(c)
 			a.settingsRow(c, "compact-timeout-row", locales.Text("压缩超时时间"), locales.Text("等待摘要生成的最长时间；30–3600 秒，默认 180 秒。"), settingsNumberWidth, func() ui.Element {

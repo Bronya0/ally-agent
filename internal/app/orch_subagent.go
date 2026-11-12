@@ -706,7 +706,6 @@ func subagentSystemPrompt(role string) string {
 		"- Be concise. The parent agent only sees your final summary.\n" +
 		"- Report findings and evidence, files changed, verification, and anything incomplete or blocked. Do not imply an unfinished task is complete.\n" +
 		"- Use `wait` only for a concrete short delay after asynchronous work has started. When it shares a response with other calls, it runs last, after they finished.\n" +
-		"- For remote work, every remote tool call must include an explicit target such as host:/absolute/workspace.\n" +
 		"- " + platformNote + ". Use command syntax appropriate for this platform."
 }
 

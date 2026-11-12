@@ -146,7 +146,7 @@ func TestPurposeGroupDisclosesCallsBeforeFilesAndOutput(t *testing.T) {
 	}
 }
 
-func TestPurposeBelowIndependentHeadersFitsAndSurvivesUpdates(t *testing.T) {
+func TestPurposeSitsInlineInIndependentHeaders(t *testing.T) {
 	for _, name := range []string{"edit", "create", "service", "remote_read", "http_request", "screenshot", "mcp__server__tool"} {
 		t.Run(name, func(t *testing.T) {
 			purpose := "确认工具目的在当前行内显示并保持完整内容可供查看"
@@ -154,16 +154,29 @@ func TestPurposeBelowIndependentHeadersFitsAndSurvivesUpdates(t *testing.T) {
 			msg := map[string]any{"name": name, "toolCallId": "header", "purposeField": "purpose", "args": string(args), "status": "success"}
 			a := &desktop{}
 			tt := compactToolView(a, msg)
-			tt.SetSize(480, 500)
-			header, ok := tt.Find("工具详情 header")
-			if !ok {
-				t.Fatal("header missing")
-			}
-			text, ok := tt.Find(purpose)
-			if !ok || text.W < 90 || text.Y < header.Y+header.H || text.X+text.W > header.X+header.W+1 {
-				t.Fatalf("purpose not below header: text=%v header=%v texts=%v", text, header, tt.Texts())
+			for _, width := range []int{900, 480} {
+				tt.SetSize(width, 500)
+				tt.Frame()
+				header, ok := tt.Find("工具详情 header")
+				if !ok {
+					t.Fatal("header missing")
+				}
+				text, ok := tt.Find(purpose)
+				if !ok || text.W < 90 || text.Y < header.Y-1 || text.Y+text.H > header.Y+header.H+1 || text.X < header.X || text.X+text.W > header.X+header.W+1 {
+					t.Fatalf("purpose is not on the header row at %d: text=%v header=%v texts=%v", width, text, header, tt.Texts())
+				}
 			}
 		})
+	}
+	// The facts stay left; the reason sits at the row's right edge.
+	editArgs, _ := json.Marshal(map[string]any{"purpose": "补上标题行说明", "path": "desktop/tool_cards.go"})
+	tt := compactToolView(&desktop{}, map[string]any{"name": "edit", "toolCallId": "order", "status": "success", "args": string(editArgs)})
+	header, hasHeader := tt.Find("工具详情 order")
+	verb, hasVerb := tt.Find("Edited")
+	reason, hasReason := tt.Find("补上标题行说明")
+	target, hasTarget := tt.Find("(desktop/tool_cards.go)")
+	if !hasHeader || !hasVerb || !hasReason || !hasTarget || !(verb.X < target.X && target.X < reason.X) || reason.X+reason.W < header.X+header.W-40 {
+		t.Fatalf("facts stay left and the reason keeps the right edge: %v %v %v %v", verb, target, reason, header)
 	}
 	a := &desktop{}
 	conv := &conversation{ID: "events"}
