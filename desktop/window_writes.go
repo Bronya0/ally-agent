@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-const windowWriteTimeout = 15 * time.Second
+const (
+	windowWriteTimeout     = 15 * time.Second
+	sessionEndWriteTimeout = 3 * time.Second
+)
 
 // Workers report errors before closing their ordered queue tail. A successful
 // retry replaces the failure for that resource; consumed errors cannot poison
@@ -66,6 +69,28 @@ func waitWindowWrites(ctx context.Context, tails []<-chan struct{}, failures *wi
 // Capture snapshots/tails on the UI thread, wait only in a worker, and publish
 // the outcome back to the UI. Both quit and update use this barrier.
 func (a *desktop) flushWindowWrites(done func(error)) {
+	tails := a.captureWindowWrites()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), windowWriteTimeout)
+		defer cancel()
+		err := waitWindowWrites(ctx, tails, &a.writeFailures)
+		a.win.Update(func() { done(err) })
+	}()
+}
+
+// flushWindowWritesNow runs the same barrier on the calling thread. The OS
+// ending the session gives the process no time for a worker afterwards, so the
+// quit listener must see the writes finish before it returns.
+func (a *desktop) flushWindowWritesNow(timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return waitWindowWrites(ctx, a.captureWindowWrites(), &a.writeFailures)
+}
+
+// captureWindowWrites queues what an exit must keep and returns the tails to
+// wait for. Call it on the UI thread: it reads the tabs' drafts and the
+// settings form.
+func (a *desktop) captureWindowWrites() []<-chan struct{} {
 	previousPrefs := a.prefsSaveTail
 	if a.settingsBase != nil && a.settingsPendingEdits() {
 		a.commitSettingsOnLeave()
@@ -91,11 +116,5 @@ func (a *desktop) flushWindowWrites(done func(error)) {
 	for _, t := range a.openSessions {
 		store(t)
 	}
-	tails := []<-chan struct{}{a.configSaveTail, a.persistTail, a.prefsSaveTail, a.sshAuthTail}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), windowWriteTimeout)
-		defer cancel()
-		err := waitWindowWrites(ctx, tails, &a.writeFailures)
-		a.win.Update(func() { done(err) })
-	}()
+	return []<-chan struct{}{a.configSaveTail, a.persistTail, a.prefsSaveTail, a.sshAuthTail}
 }

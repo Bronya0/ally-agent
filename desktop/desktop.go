@@ -345,6 +345,17 @@ func Run() {
 			}
 		})
 		mygo.App.OnDidBecomeActive(mygo.ClearNotifications)
+		// Clicking the Dock icon reopens the app. The close button hides the window
+		// rather than quitting, so without this the icon does nothing and the tray
+		// is the only way back. hasVisibleWindows counts the pet window too, so
+		// decide on the main window itself: a minimized window stays visible and
+		// AppKit's default brings it back.
+		mygo.App.OnActivate(func(bool) {
+			if a.win == nil || a.win.IsVisible() {
+				return
+			}
+			a.showMainWindow()
+		})
 		// Match the retained title-bar pixel and suppress the DWM outline before
 		// showing the window, so its first visible frame already has the right colors.
 		configureWindowFrame(a.win, a.currentPalette().headerColor())
@@ -379,10 +390,22 @@ func Run() {
 			}
 		})
 		mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
-			if !a.quitReady {
-				e.PreventDefault()
-				a.shutdown()
+			if a.quitReady {
+				return
 			}
+			if e.SessionEnding {
+				// Logout, restart and shutdown end the process as soon as this
+				// listener returns, so the barrier cannot wait in a worker: write
+				// the drafts, settings and preferences here. closing also keeps
+				// the window handlers from starting a quit the session cannot run.
+				a.closing = true
+				if err := a.flushWindowWritesNow(sessionEndWriteTimeout); err != nil {
+					log.Printf("session end flush: %v", err)
+				}
+				return
+			}
+			e.PreventDefault()
+			a.shutdown()
 		})
 		prefs := a.prefs
 		go func() {
