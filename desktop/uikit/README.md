@@ -158,7 +158,31 @@ Tooltip 必须使用 `uikit.Tooltip(c, anchor, text)` 或侧栏的 `RightTooltip
 - `MenuOptions` 保留固定宽度、窗口限宽、高度上限、At/Self 对齐和间距；`MenuRow` 给自绘的 Git 状态行等内容提供同一份外观。信息面板仍用 PopoverBase，但其外观可复用 MenuPanel/MenuItemOn，不把信息列表变成可选菜单项。
 - MyGo v0.8.1 的 MenuBase 子菜单在 Esc 后离开并回到同一点时漏掉重新展开；模型菜单暂用局部 `HoverMenus` 管悬停归属，子菜单继续使用 ContextMenuBase。仅这一处使用兼容层，不修改依赖。框架修复后，经同点重入、跨供应商、最近使用、键盘选择回归再换回 SubmenuItem/Submenu。
 - HoverMenus、Element、MenuParts 和 Context 仅在当前构建使用，不能跨帧保存。模型元数据与悬停状态挂在弹出内容上，关闭即随内容释放；不保存模型凭据。
-- 系统托盘、桌宠菜单以及组件自带菜单保持现有策略，不全局切换 SetMenuPresentation。
+- Windows/macOS 托盘右键菜单用 `TrayMenu` + 按需 `NewFlyout` 自绘，保持中性浅色外观；Windows 以本次右键的鼠标位置为锚点，优先对齐菜单面板左下角（不含阴影），在鼠标所在显示器边缘翻边或避让；FitContent/DPI 尺寸变化后保持同一锚点。macOS 仍按托盘图标居中弹出并由平台避让。基础尺寸为 140 DIP 宽、28 DIP 行高、12 DIP 字号和 16 DIP 图标；显示 DPI 由平台缩放，系统大字体仍参与文字测量与 FitContent。圆角、边框、阴影只画一层，复用 ContextMenuBase 的导航与关闭。Linux AppIndicator 保留可靠系统菜单入口。左键仍唤回主窗口，不全局切换 SetMenuPresentation；桌宠菜单及组件自带菜单不变。
+
+## 可复用托盘菜单
+
+`TrayMenu` 只负责菜单外观和交互，不创建托盘或窗口，也不绑定业务动作。复制本目录到其他项目后，可这样放进透明 Flyout 的 `ui.View`：
+
+```go
+entries := []uikit.TrayMenuEntry{
+    {Key: "open", Label: "Open", Icon: openIcon},
+    {Key: "quit", Label: "Quit", Icon: quitIcon, SeparatorBefore: true},
+}
+width, height := uikit.TrayMenuInitialSize(len(entries), 1)
+// 用 width、height 创建 FitContent、Focusable 的 mygo.NewFlyout；
+// open 和窗口引用属于宿主，下面的代码在该窗口的 ui.View 内执行。
+c.SetTheme(uikit.TrayMenuTheme(fontFamily).WithPreferences(c.Preferences()))
+c.Root().Background(ui.Transparent)
+choice := uikit.TrayMenu(c.Key("tray-menu"), &open, "Application menu", entries)
+// choice >= 0 是所选 entries 下标，-1 表示没有选择。
+// 当选择或 !open 时，通过窗口 Update 延后销毁窗口并执行动作；
+// 用窗口身份和 pending 标记防止旧回调影响新窗口或重复执行。
+```
+
+最大宽度默认 `480 DIP`（不含阴影），可在最后传入 `uikit.TrayMenuOptions{MaxWidth: 640}` 调整；零值或非有限数使用默认值，正数最小为 `140 DIP`。实际宽度仍受窗口和屏幕空间限制，超长文字会省略。
+
+每项的 `Key` 必须稳定且唯一；`Icon` 可为空，`Disabled` 禁止选择，`SeparatorBefore` 在非首项前画分隔线。`TrayMenuInitialSize` 的第二个参数是实际分隔线数；真实尺寸按文字和系统字体缩放测量，Flyout 应启用 `FitContent`。菜单名由调用方提供给辅助技术。宿主负责平台定位、焦点和关闭生命周期；Windows 定位、macOS 托盘锚点及 Linux 系统菜单回退的完整接法可参考 `desktop/tray_menu*.go` 和 `desktop/tray.go`。自绘外观不等于跨平台实机验证。
 
 ## 页面 Tabs：A / C 两套样式
 

@@ -4,6 +4,7 @@ package desktop
 import (
 	"ally-dev/locales"
 	"bytes"
+	"fmt"
 	"log"
 	"runtime"
 
@@ -22,40 +23,34 @@ func (a *desktop) createSystemTray(icon []byte, template bool) error {
 	}
 	a.tray = tray
 
-	menu := mygo.NewMenu([]*mygo.MenuItem{
-		{Label: locales.Text("打开主窗口"), Click: func(*mygo.MenuItem, *mygo.Window) { a.showMainWindow() }},
-		{Label: locales.Text("检查更新"), Click: func(*mygo.MenuItem, *mygo.Window) {
-			a.showMainWindow()
-			if a.ready {
-				a.checkUpdates(false)
-			}
-		}},
-		mygo.Separator(),
-		{Label: locales.Text("退出 Ally"), Click: func(*mygo.MenuItem, *mygo.Window) { a.shutdown() }},
-	})
-	items := menu.Items()
-	offLocale := mygo.App.OnLocaleChanged(func(string) {
-		tray.SetToolTip(locales.Text("Ally Native · 点击打开"))
-		items[0].SetLabel(locales.Text("打开主窗口"))
-		items[1].SetLabel(locales.Text("检查更新"))
-		items[3].SetLabel(locales.Text("退出 Ally"))
-	})
-
+	var items []*mygo.MenuItem
+	var offClick, offRightClick func()
 	if runtime.GOOS == "linux" {
-		// AppIndicator exposes a menu on activation rather than a primary-click
-		// callback. Its first item restores the same main window as other OSes.
+		// AppIndicator does not reliably deliver icon clicks or an anchor. Keep
+		// its system-menu fallback; Windows/macOS never attach a native menu.
+		menu, err := newSystemTrayMenu(a.showMainWindow, a.checkTrayUpdates, a.shutdown)
+		if err != nil {
+			a.tray = nil
+			tray.Destroy()
+			return err
+		}
+		items = menu.Items()
 		tray.SetMenu(menu)
 	} else {
-		// Keep the primary click dedicated to restoring the main window. Show a
-		// native menu only for a secondary click, then remove it so it cannot
-		// consume the next primary click on macOS.
-		tray.OnClick(a.showMainWindow)
-		tray.OnRightClick(func() {
-			tray.SetMenu(menu)
-			popUpSystemTrayMenu(tray, menu)
-			tray.SetMenu(nil)
-		})
+		offClick = tray.OnClick(a.showMainWindow)
+		offRightClick = tray.OnRightClick(a.toggleTrayMenu)
 	}
+	offLocale := mygo.App.OnLocaleChanged(func(string) {
+		tray.SetToolTip(locales.Text("Ally Native · 点击打开"))
+		if len(items) != 0 {
+			items[0].SetLabel(locales.Text("打开主窗口"))
+			items[1].SetLabel(locales.Text("检查更新"))
+			items[3].SetLabel(locales.Text("退出 Ally"))
+		}
+		if menu := a.trayMenu; menu != nil && menu.win != nil {
+			menu.win.Invalidate()
+		}
+	})
 	if runtime.GOOS == "windows" {
 		off := mygo.Screen.OnDisplaysChanged(func() {
 			next, template, err := systemTrayIcon()
@@ -71,11 +66,43 @@ func (a *desktop) createSystemTray(icon []byte, template bool) error {
 		})
 		mygo.App.OnWillQuit(func(*mygo.QuitEvent) { off() })
 	}
-	mygo.App.OnWillQuit(func(*mygo.QuitEvent) { offLocale(); tray.Destroy() })
+	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		offLocale()
+		if offClick != nil {
+			offClick()
+			offRightClick()
+		}
+		a.closeTrayMenu()
+		tray.SetMenu(nil)
+		tray.Destroy()
+		if a.tray == tray {
+			a.tray = nil
+		}
+	})
 	return nil
 }
 
+// newSystemTrayMenu is the Linux AppIndicator fallback. Template icons use the
+// same line artwork as the self-drawn menu and follow the panel's text color.
+func newSystemTrayMenu(openMainWindow, checkUpdates, quit func()) (*mygo.Menu, error) {
+	var menuIcons [3]*mygo.MenuIcon
+	for i, name := range []string{"home", "refresh", "power"} {
+		icon, err := mygo.NewMenuIconSVG(iconImage(name), true)
+		if err != nil {
+			return nil, fmt.Errorf("system tray menu icon %q: %w", name, err)
+		}
+		menuIcons[i] = icon
+	}
+	return mygo.NewMenu([]*mygo.MenuItem{
+		{Label: locales.Text("打开主窗口"), Icon: menuIcons[0], Click: func(*mygo.MenuItem, *mygo.Window) { openMainWindow() }},
+		{Label: locales.Text("检查更新"), Icon: menuIcons[1], Click: func(*mygo.MenuItem, *mygo.Window) { checkUpdates() }},
+		mygo.Separator(),
+		{Label: locales.Text("退出 Ally"), Icon: menuIcons[2], Click: func(*mygo.MenuItem, *mygo.Window) { quit() }},
+	}), nil
+}
+
 func (a *desktop) showMainWindow() {
+	a.closeTrayMenu()
 	if a.win == nil || a.closing || a.quitReady {
 		return
 	}

@@ -207,6 +207,7 @@ type desktop struct {
 	core                                                *backend.App
 	win                                                 *mygo.Window
 	tray                                                *mygo.Tray
+	trayMenu                                            *trayMenuState
 	ready, closing, quitReady                           bool
 	mainWindowHidden                                    bool
 	page, filter                                        string
@@ -501,6 +502,7 @@ func (a *desktop) closeHidesToTray() bool {
 }
 
 func (a *desktop) shutdown() {
+	a.closeTrayMenu()
 	if a.closing {
 		return
 	}
