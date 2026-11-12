@@ -84,8 +84,14 @@ func TestChatScrollAfterStreamingGrowth(t *testing.T) {
 			beforeGrowth := conv.Scroll.Y
 			conv.Messages[len(conv.Messages)-1]["content"] = strings.Repeat("streamed words ", 200)
 			tt.Frame()
-			if !conv.uiState().Follow || conv.Scroll.Y <= beforeGrowth || conv.Scroll.Y < conv.Scroll.MaxY-2 {
-				t.Fatalf("streaming growth did not stay pinned: y=%v before=%v max=%v", conv.Scroll.Y, beforeGrowth, conv.Scroll.MaxY)
+			if !conv.uiState().Follow || conv.Scroll.Y <= beforeGrowth {
+				t.Fatalf("streaming growth did not stay followed: y=%v before=%v max=%v", conv.Scroll.Y, beforeGrowth, conv.Scroll.MaxY)
+			}
+			// The follow glides to the end over the spring rather than jumping in
+			// the frame that grew: let it arrive before measuring where it is.
+			tt.Advance(600 * time.Millisecond)
+			if conv.Scroll.Y < conv.Scroll.MaxY-2 {
+				t.Fatalf("streaming growth did not stay pinned: y=%v max=%v", conv.Scroll.Y, conv.Scroll.MaxY)
 			}
 			beforeScroll := conv.Scroll.Y
 			scroll := tt.Wheel

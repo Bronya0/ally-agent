@@ -107,6 +107,14 @@ func (t *conversation) rowOfMessage(i int) int {
 	return at - 1
 }
 
+// holdTranscriptPlace keeps the row a fold was clicked in under the pointer.
+// While a reply streams the list follows its end, so a row that grows would
+// carry what was clicked up the screen; the list holds its place for that one
+// layout and follows again once the end shows.
+func (a *desktop) holdTranscriptPlace() {
+	a.holdPlace = true
+}
+
 // followLatest parks a transcript at its newest message: a restored history, or
 // one replaced by a summary, would otherwise keep the place it had.
 func followLatest(t *conversation) {

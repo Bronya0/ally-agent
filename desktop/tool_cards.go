@@ -588,6 +588,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 		})
 		if row.Clicked() {
 			t.uiState().ToolOpen[key] = !open
+			a.holdTranscriptPlace()
 			if open {
 				for i := index; i < end; i++ {
 					child := toolCardKey(t, i, t.Messages[i])
@@ -629,10 +630,14 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 				})
 			})
 			if remaining := end - visibleEnd; remaining > 0 {
-				transcriptAction(c, key+"-more", fmt.Sprintf("Show more (%d)", remaining)).OnClick(func() { *extra += 100 })
+				transcriptAction(c, key+"-more", fmt.Sprintf("Show more (%d)", remaining)).OnClick(func() {
+					*extra += 100
+					a.holdTranscriptPlace()
+				})
 			}
 			if *extra > 0 {
 				transcriptAction(c, key+"-less", "Show less").OnClick(func() {
+					a.holdTranscriptPlace()
 					*extra = 0
 					for i := index + 100; i < end; i++ {
 						child := toolCardKey(t, i, t.Messages[i])
@@ -665,6 +670,7 @@ func (a *desktop) toolGroupCommandEntry(c *ui.Context, t *conversation, entry to
 	open := t.uiState().ToolOpen[key+"-purpose"]
 	a.toolPurposeDisclosure(c, key+"-purpose", prefix, entry.name, entry.purpose, entry.state, open).OnClick(func() {
 		t.uiState().ToolOpen[key+"-purpose"] = !open
+		a.holdTranscriptPlace()
 		if open {
 			delete(t.uiState().ToolOpen, key)
 			delete(t.uiState().CommandDetails, key)
@@ -735,6 +741,7 @@ func (a *desktop) toolGroupCommandDetail(c *ui.Context, t *conversation, entry t
 	})
 	if button.Clicked() {
 		t.uiState().ToolOpen[key] = !open
+		a.holdTranscriptPlace()
 		if open {
 			delete(t.uiState().CommandDetails, key)
 		} else if state != "pending" && state != "running" {
@@ -953,6 +960,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		} // Result payloads stay in model context, outside the UI.
 		if expandable && row.Clicked() {
 			t.uiState().ToolOpen[key] = !open
+			a.holdTranscriptPlace()
 			if name == "command" {
 				if open {
 					delete(t.uiState().CommandDetails, key)
@@ -1723,10 +1731,16 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 		}
 	})
 	if len(visible) < len(lines) {
-		transcriptAction(c, key+"-more", fmt.Sprintf("Show more %d rows", len(lines)-len(visible))).OnClick(func() { memo.extra += 120 })
+		transcriptAction(c, key+"-more", fmt.Sprintf("Show more %d rows", len(lines)-len(visible))).OnClick(func() {
+			memo.extra += 120
+			a.holdTranscriptPlace()
+		})
 	}
 	if memo.extra > 0 {
-		transcriptAction(c, key+"-less", "Show less").OnClick(func() { memo.extra = 0 })
+		transcriptAction(c, key+"-less", "Show less").OnClick(func() {
+			memo.extra = 0
+			a.holdTranscriptPlace()
+		})
 	}
 }
 
@@ -1926,7 +1940,10 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 				a.subagentBlackboardButton(c, t, m)
 				open := t.uiState().ToolOpen["sub-"+subID]
 				reportButton, _ := buttonParts(c, "sub-report-"+subID, "", btnSecondary, true, "")
-				reportButton.Label(locales.Text("子代理报告 ") + subID).Disabled(!hasReport).OnClick(func() { toggleSubagentDetail(t, subID, false) })
+				reportButton.Label(locales.Text("子代理报告 ") + subID).Disabled(!hasReport).OnClick(func() {
+					toggleSubagentDetail(t, subID, false)
+					a.holdTranscriptPlace()
+				})
 				reportButton.Children(func() {
 					ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
 						disclosureIcon(c, "file", a.secondaryInk())

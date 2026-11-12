@@ -268,6 +268,11 @@ type desktop struct {
 	workspaceVisitsRev uint64
 	wsRootsMemo        memoOf[workspaceHistoryKey, []string]
 	wsSessionMemo      memoOf[workspaceSessionKey, workspaceSessionList]
+
+	// holdPlace asks the transcript list to keep its place for one layout: a
+	// fold clicked in a row changes its height, and following the end would
+	// otherwise carry the row clicked up the screen.
+	holdPlace bool
 }
 
 // Run starts the native desktop host and its Agent runtime.

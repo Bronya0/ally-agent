@@ -56,6 +56,16 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 		st.Follow, st.FollowPending = true, false
 	}
 	st.List.FollowEnd = st.Follow
+	// A reply follows its end by gliding, as chat apps scroll their streams.
+	st.List.FollowAnimation = &ui.Smooth
+	if a.holdPlace {
+		// A fold in a row changed its height: keep the place clicked for this
+		// layout. Reading a fold is looking at that row, so the transcript stops
+		// following its end as a manual scroll would, and the jump back shows.
+		st.List.HoldPlace()
+		st.Follow, st.FollowPending = false, false
+		a.holdPlace = false
+	}
 	// From here the frame builds the rows in view: the messages they cover are
 	// what the next frame prunes the caches to, so the range starts empty.
 	st.built = builtRange{}
@@ -379,7 +389,10 @@ func (a *desktop) collapsiblePrompt(c *ui.Context, t *conversation, i int, conte
 			if st.PromptOpen[i] {
 				labelText = locales.Text("收起提问")
 			}
-			button(c, nil, labelText, btnSecondary, false, "chat").AlignSelf(ui.Start).OnClick(func() { st.PromptOpen[i] = !st.PromptOpen[i] })
+			button(c, nil, labelText, btnSecondary, false, "chat").AlignSelf(ui.Start).OnClick(func() {
+				st.PromptOpen[i] = !st.PromptOpen[i]
+				a.holdTranscriptPlace()
+			})
 		}
 	})
 }

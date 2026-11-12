@@ -119,6 +119,8 @@
 - 预览失败保留失败状态直到显式重试，异步加载和替换核对实例及 generation，不能每帧自动重建或发布过期结果。
 - 历史会话与底部选择面板使用原生浮层覆盖正文，再次点击入口关闭，不把面板放进正常布局挤压聊天区域；入口见 [composer.go](../desktop/composer.go)。
 - 聊天滚动容器占满正文，只有内容在内部限宽居中，避免大窗口滚动条跑到页面中间；入口见 [page_chat.go](../desktop/page_chat.go)。
+- 回复流式增长时列表用 `FollowAnimation = &ui.Smooth` 滑到新位置，只在“正在跟随 + 内容长高”时生效，程序滚动（`ScrollTo` / `ScrollToEnd`）和减少动效设置下直接到位；往上滚仍立刻停止跟随，回到底部恢复，`回到最新` 瞬间到位。
+- 折叠展开（工具卡 Show more、diff 展开、提问展开、子代理报告）先 `holdTranscriptPlace()`，由 `chatMessages` 在下一次布局调 `HoldPlace()` 并同步把 `st.Follow` 置 false：被点击那一行不动，代价是展开后不再跟随末尾并露出“回到最新”；入口见 [page_chat.go](../desktop/page_chat.go) 与 [chat_rows.go](../desktop/chat_rows.go)。
 - 最近工作区由访问记录维护并按最近访问展示，当前最多记录 100 个；不能用字母排序或扫描结果冒充最近访问；入口见 [workspace_history.go](../desktop/workspace_history.go)。
 
 ## 常驻引用、列表与其他页面
