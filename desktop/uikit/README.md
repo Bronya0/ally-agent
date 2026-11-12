@@ -212,7 +212,7 @@ uikit.TabsWithOptions(c.Key("provider"), &state.Provider,
 
 `WorkspaceTab` 默认高 44 DIP，顶部留 6 DIP；活跃项使用 Theme.Background，与正文、左侧菜单、右侧资源管理器严格共用底色，顶部两角保留圆角，左右两侧平直并填满自身宽度、与下方衔接，底部不再外扩成弧脚，取消强调色下划线。非活跃项融入淡主题色标题栏，悬停显示圆角背景，右侧显示短分隔线。状态点和关闭按钮始终占据固定槽位，活跃项的关闭按钮常显，非活跃项在悬停或键盘焦点进入时显示；运行中的标签不可关闭。标题字重固定、底边始终预留空间，切换时文字不移动。标题只保留工作区目录名，悬停时 Tooltip 给出完整路径（运行中的标签在路径上一行标「运行中」），同名目录不会认错。页面内 Tabs 继续使用 C 紧凑分段，互不影响。
 
-Tooltip 身份绑定锚点自身的 Local 轻量标记，不用提示文字作为 identity；文字更新不得重播入场动画。提示正文 Unselectable + PassThrough，不抢锚点悬停。Painter.AnimationFrameRate 用于思考等持续装饰动画，不用 Context.Invalidate/Loop 反复重建整页。纯 reasoning token 事件只更新底部计数，不能设置 transcript FollowPending；只有可见正文增长才请求跟随滚动。
+Tooltip 身份绑定锚点自身的 Local 轻量标记，不用提示文字作为 identity；文字更新不得重播入场动画。提示正文 Unselectable + PassThrough，不抢锚点悬停。Painter.AnimationFrameRate 用于思考等持续装饰动画，不用 Context.Invalidate/Loop 反复重建整页。纯 reasoning token 事件只更新底部计数，不碰正文位置；跟随由听众滚轮意图和列表末尾决定。
 
 工作区标签宽度按名称自然测量（最小 64、最大 220 DIP），不等分剩余空间；只给溢出名称截断，短名称不占固定 100 DIP。顶栏历史菜单每次新建会话／标签，不复用已打开的同路径标签；历史项身份按完整路径区分，同名目录用 Tooltip 展示路径。菜单右边缘对齐触发按钮并向左展开，历史列表滚动，取消旧系统菜单 16 项截断。
 

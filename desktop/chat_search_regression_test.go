@@ -135,11 +135,14 @@ func TestChatSearchOldCodeHooksArePrunedWithMarkdown(t *testing.T) {
 	conv := &conversation{ID: "find", Workspace: t.TempDir(), Messages: restoredHistory(120)}
 	a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}}
 	a.markdownOptions(conv, 0)
-	ui.NewTester(func(c *ui.Context) {
+	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(a.theme())
 		c.DisableAnimations()
 		a.chatMessages(c, conv, 900)
 	}, 900, 600)
+	// The frame builds the rows in view; the next one prunes what they left.
+	tt.Frame()
+	tt.Frame()
 	if conv.MD[0] != nil || conv.MDCodeBlock[0] != nil {
 		t.Fatal("off-screen Markdown retained its code renderer and captured caches")
 	}

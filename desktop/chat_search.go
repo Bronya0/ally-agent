@@ -1167,7 +1167,7 @@ func (a *desktop) chatSearchCurrent(t *conversation) (chatSearchMatch, bool) {
 // chatSearchReveal scrolls the frame's current match into view, once the row
 // that holds it has bounds from the last frame. A jump is one scroll: the bar waits
 // for the layout it needs, bounded, and then scrolls to the best anchor it has.
-func (a *desktop) chatSearchReveal(c *ui.Context, t *conversation, start, end int) {
+func (a *desktop) chatSearchReveal(c *ui.Context, t *conversation) {
 	st := t.uiState()
 	s := &st.Search
 	if !s.Open || !s.reveal {
@@ -1179,17 +1179,17 @@ func (a *desktop) chatSearchReveal(c *ui.Context, t *conversation, start, end in
 		return
 	}
 	target := matches[min(max(s.Current, 0), len(matches)-1)]
-	if target.Message < start || target.Message >= end {
-		// The message is outside the window: open the page around it and let the
-		// next frame scroll to the row this one builds. This wait has its own
-		// budget, so opening the page never eats the one the anchor needs.
+	if !st.built.holds(target.Message) {
+		// The list has not built this row: scroll to it and let the next frame
+		// lay out the block that holds the hit. This wait has its own budget, so
+		// reaching the row never eats the one the anchor needs.
 		if !a.awaitChatSearchFrame(c, &s.waitedWindow) {
 			a.endChatSearchJump(s)
 			return
 		}
-		st.VisibleStart = max(0, target.Message-min(40, a.messageWindowSize()/2)) + 1
-		st.Follow, st.FollowPending = false, false
-		t.Scroll.Y = 0
+		if row := t.rowOfMessage(target.Message); row >= 0 {
+			st.List.ScrollTo(row, ui.Start)
+		}
 		return
 	}
 	viewport := t.Scroll.Bounds(c)
@@ -1239,7 +1239,7 @@ func (a *desktop) endChatSearchJump(s *chatSearch) {
 // scrollChatSearch moves the transcript by delta, leaving the hit just below the
 // top edge, and ends the jump.
 func (a *desktop) scrollChatSearch(t *conversation, st *chatUI, delta float32) {
-	st.Follow, st.FollowPending = false, false
+	st.Follow = false
 	t.Scroll.Y = max(float32(0), t.Scroll.Y+delta)
 	a.endChatSearchJump(&st.Search)
 }

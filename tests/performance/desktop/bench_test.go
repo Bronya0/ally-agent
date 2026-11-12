@@ -142,7 +142,7 @@ func BenchmarkPerformanceRenderStablePage(b *testing.B) {
 	for _, n := range performanceSizes(b) {
 		b.Run(fmt.Sprint(n), func(b *testing.B) {
 			conv := performanceTranscript(n, 96)
-			tt := performanceChatTester(conv, 80)
+			tt := performanceChatTester(conv)
 			tt.Frame()
 			b.ReportAllocs()
 			b.ResetTimer()

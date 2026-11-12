@@ -96,9 +96,6 @@ func (a *desktop) compactDelta(t *conversation, content string, reasoningLen int
 		}
 		st.CompactThinking = 0
 	}
-	if content != "" && st.Follow {
-		st.FollowPending = true
-	}
 }
 
 // compactThinkingTokens is the estimated token count behind the thinking label,

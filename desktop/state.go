@@ -20,7 +20,6 @@ import (
 // rail geometry, section folding and the welcome-page avatar. It lives next to
 // the agent data so both builds share the same machine.
 type uiPrefs struct {
-	HistoryPageSize    int      `json:"historyPageSize"`
 	Appearance         string   `json:"appearance,omitempty"`
 	Palette            int      `json:"palette"`
 	TopNavigation      bool     `json:"topNavigation,omitempty"`
@@ -53,7 +52,7 @@ type uiPrefs struct {
 }
 
 func defaultPrefs() uiPrefs {
-	return uiPrefs{HistoryPageSize: 80, Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, VoiceHotkey: "Alt", VoiceModifierLeft: true, VoiceModifierRight: true, CloseToTray: true, Pet: petPreferences{Enabled: true, Size: 180}}
+	return uiPrefs{Appearance: "dark", Palette: defaultPalette, RailWidth: 220, RailWorkspaceOpen: true, RailSessionsOpen: true, Avatar: "whale", TreeWidth: 270, VoiceHotkey: "Alt", VoiceModifierLeft: true, VoiceModifierRight: true, CloseToTray: true, Pet: petPreferences{Enabled: true, Size: 180}}
 }
 
 var prefsMu sync.Mutex
@@ -100,7 +99,6 @@ func readPrefs(path string) uiPrefs {
 	if p.TreeWidth < 150 || p.TreeWidth > 600 {
 		p.TreeWidth = 270
 	}
-	p.HistoryPageSize = normalizeHistoryPageSize(p.HistoryPageSize)
 	if p.Avatar == "" {
 		p.Avatar = "whale"
 	}
@@ -233,59 +231,61 @@ type mentionState struct {
 // chatUI is per-conversation, non-persisted UI state. Message content stays in
 // conversation.Messages; this only remembers what the reader expanded.
 type chatUI struct {
-	RoundAt                map[int]int
-	roundPlacementKey      roundPlacementKey
-	roundPlacementReady    bool
-	roundIndices           memoOf[roundIndexKey, []int]
-	visibleRows            []int
-	Round                  map[int]*roundStat
-	PromptOpen             map[int]bool
-	PromptHandles          map[int]*ui.Handle
-	transcriptHandlePool   []*ui.Handle
-	PendingPrompt          bool
-	PendingPromptIdx       int
-	ToolOpen               map[string]bool
-	CommandDetails         map[string]*commandDetail
-	GroupOpen              map[string]bool
-	AskIndex               int
-	AskSelected            map[string][]string
-	AskCustom              map[string]bool
-	AskCustomTxt           map[string]string
-	AskSubmitted           bool
-	PlanCollapsed          bool
-	CmdOpen                bool
-	CmdIndex               int
-	Mention                mentionState
-	SessionsOpen           bool
-	SessionsIndex          int
-	ModelOpen              bool
-	ModelSearch            string
-	ContextOpen            bool
-	PromptPartsOpen        bool // the prompt's sections are detail: folded until the parent row is clicked
-	ExtraRootsOpen         bool
-	Retry                  *retryInfo
-	Git                    backend.GitStatus
-	GitLoaded              bool
-	Usage                  backend.WorkspaceTokenUsage
-	Breakdown              backend.ContextBreakdown
-	FooterLoaded           bool
-	FooterBusy             bool
-	FooterPending          bool
-	CompactNote            string
-	CompactBusy            bool
-	CompactThinking        int
-	Search                 chatSearch
-	DraftCaret             int
-	RestoreCaret           bool
-	Follow                 bool
-	FollowPending          bool
-	LastScrollY            float32
-	HistoryIndex           int
-	HistoryDraft           string
-	WorkspaceHistory       []string
-	VisibleStart           int
-	windowStart, windowEnd int
-	windowBuilding         bool
+	RoundAt              map[int]int
+	roundIndices         memoOf[roundIndexKey, []int]
+	chatRowsMemo         memoOf[chatRowsKey, []chatRow]
+	Round                map[int]*roundStat
+	PromptOpen           map[int]bool
+	PromptHandles        map[int]*ui.Handle
+	transcriptHandlePool []*ui.Handle
+	PendingPrompt        bool
+	PendingPromptIdx     int
+	ToolOpen             map[string]bool
+	CommandDetails       map[string]*commandDetail
+	GroupOpen            map[string]bool
+	AskIndex             int
+	AskSelected          map[string][]string
+	AskCustom            map[string]bool
+	AskCustomTxt         map[string]string
+	AskSubmitted         bool
+	PlanCollapsed        bool
+	CmdOpen              bool
+	CmdIndex             int
+	Mention              mentionState
+	SessionsOpen         bool
+	SessionsIndex        int
+	ModelOpen            bool
+	ModelSearch          string
+	ContextOpen          bool
+	PromptPartsOpen      bool // the prompt's sections are detail: folded until the parent row is clicked
+	ExtraRootsOpen       bool
+	Retry                *retryInfo
+	Git                  backend.GitStatus
+	GitLoaded            bool
+	Usage                backend.WorkspaceTokenUsage
+	Breakdown            backend.ContextBreakdown
+	FooterLoaded         bool
+	FooterBusy           bool
+	FooterPending        bool
+	CompactNote          string
+	CompactBusy          bool
+	CompactThinking      int
+	Search               chatSearch
+	DraftCaret           int
+	RestoreCaret         bool
+	Follow               bool
+	FollowPending        bool
+	LastScrollY          float32
+	HistoryIndex         int
+	HistoryDraft         string
+	WorkspaceHistory     []string
+	// List is the transcript's list: it builds only the rows in view and owns
+	// where they are scrolled.
+	List ui.ListState
+	// built is the range of messages the last frame drew. Caches keyed by
+	// message are pruned to it, so a long conversation does not keep a parsed
+	// copy of every row it once showed.
+	built builtRange
 	// transcriptRows is the frame's ownership view. The transcript sets it for
 	// the duration of one render so a card does not rebuild it per child.
 	transcriptRows *transcriptRows
@@ -314,6 +314,10 @@ func newChatUI() chatUI {
 		AskCustomTxt:  map[string]string{},
 		Follow:        true,
 		HistoryIndex:  -1,
+		// The transcript follows its own end: the list keeps the newest
+		// message in view as the conversation grows, and stops when the
+		// reader scrolls up.
+		List: ui.ListState{FollowEnd: true},
 	}
 }
 
@@ -328,7 +332,6 @@ func (t *conversation) uiState() *chatUI {
 // settingsForm holds numeric mirrors for the settings tab controls. Config
 // keeps the persisted values; these exist because NumberInput binds float64.
 type settingsForm struct {
-	HistoryPageSize float64
 	AppearanceMode  int
 	ProxyModeIndex  int
 	Modules         map[string]int
@@ -371,7 +374,6 @@ type settingsForm struct {
 
 func (a *desktop) syncSettingsForm() {
 	f := &a.settings
-	f.HistoryPageSize = float64(a.messageWindowSize())
 	f.AppearanceMode = 0
 	if !a.currentPalette().dark {
 		f.AppearanceMode = 1

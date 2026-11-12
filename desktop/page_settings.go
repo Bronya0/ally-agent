@@ -14,14 +14,6 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-const historyPageSizeHelp = `按从最新往前的展示块计数，不按对话轮数或工具调用次数。
-• 每条用户消息、助手回复各算 1 块。
-• 连续的读取/搜索/目录工具合为 1 块；连续本地命令也合为 1 块。其他工具各算 1 块。
-• 分组展开后仍算 1 块，组内先展示 100 项；大 diff 另有限制，可继续展开。
-例如：提问 + 回复 + 连续 10 次读取 + 回复，共 4 块。
-默认 80 块，适合一般任务；长任务想多看历史可设 100。数值越大，界面通常占用越多内存。
-超出的历史可翻页查看，不删除消息、不改变模型上下文，也不是精确的内存限额。`
-
 var settingsSections = []string{"通用", "高级", "网络", "安全围栏", "API", "版本亮点", "关于"}
 
 const defaultUserAgentOption = "AllyAgent"
@@ -277,11 +269,6 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 		})
 	}
 	if selected == 3 {
-		a.settingsCard(c, "settings-history", locales.Text("历史显示"), locales.Text("只影响界面展示，不删除历史，也不改变模型上下文。"), func() {
-			a.settingsRow(c, "history-page-row", locales.Text("每页展示块数"), locales.Text("默认 80，长任务可设 100；范围 20–200。悬浮输入框查看计数方式，保存后生效。"), settingsNumberWidth, func() ui.Element {
-				return uikit.RightTooltip(c, uikit.NumberInput(c, "history-page-size", locales.Text("每页展示块数"), &a.settings.HistoryPageSize, 20, 200, 10, a.secondaryInk()), locales.Text(historyPageSizeHelp))
-			})
-		})
 		a.settingsCard(c, "settings-execution", locales.Text("请求与执行"), locales.Text("控制请求失败后的重试，以及同时运行的工具数量。"), func() {
 			a.settingsRow(c, "llm-retries-row", locales.Text("LLM 请求重试次数"), locales.Text("0 表示使用默认值 6；最多 10 次。"), settingsNumberWidth, func() ui.Element {
 				return uikit.NumberInput(c, "llm-retries", locales.Text("LLM 请求重试次数"), &a.settings.Retries, 0, 10, 1, a.secondaryInk())

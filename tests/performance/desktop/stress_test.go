@@ -32,7 +32,7 @@ func performanceCheckOwnership(t *testing.T, conv *conversation) {
 	}
 	want = append(want, len(conv.Messages))
 	if !slices.Equal(conv.blockStarts(), want) {
-		t.Fatalf("pagination disagrees with ownership at %d records", len(conv.Messages))
+		t.Fatalf("block starts disagree with ownership at %d records", len(conv.Messages))
 	}
 }
 
@@ -121,24 +121,54 @@ func TestPerformanceSearchStress(t *testing.T) {
 	}
 }
 
-func TestPerformanceRenderPageCaches(t *testing.T) {
+// TestPerformanceRenderScrollCaches scrolls a long transcript to stops all over
+// it: the list builds the rows in view, so parsed text, code search spans and
+// navigation handles must stay inside the built range and its margin.
+func TestPerformanceRenderScrollCaches(t *testing.T) {
 	cfg := performanceOptions(t)
-	rows := slices.Max(cfg.Sizes)
-	conv := performanceTranscript(rows, 96)
-	tt := performanceChatTester(conv, 80)
+	records := slices.Max(cfg.Sizes)
+	conv := performanceTranscript(records, 96)
+	tt := performanceChatTester(conv)
 	st := conv.uiState()
 	st.Search.Open, st.Search.Query = true, "needle_marker"
-	starts := slices.Clone(conv.blockStarts())
+	rows := len(conv.chatRows())
 	seen := map[*ui.Handle]bool{}
+	window := 0
 	var warmed runtime.MemStats
-	for page := 0; page < cfg.Pages; page++ {
-		block := (page * 337) % (len(starts) - 81)
-		st.VisibleStart, st.Follow = starts[block]+1, false
-		conv.Scroll.Y = 0
-		tt.Frame()
-		tt.Frame()
-		if len(conv.MD) > 80 || len(conv.MDCodeBlock) > 80 || len(st.visibleRows) > 80 {
-			t.Fatalf("page %d kept off-page derived data", page)
+	for stop := 0; stop < cfg.Stops; stop++ {
+		// A prime step spreads the stops over the whole transcript, and the
+		// welcome card is never a stop: it holds no message to bound.
+		st.List.ScrollTo(1+(stop*337)%(rows-1), ui.Start)
+		// Pruning reads the range the frame before built, so a jump settles over a
+		// frame or two; the caches must match where it comes to rest.
+		previous := builtRange{}
+		for attempt := 0; attempt < 4; attempt++ {
+			tt.Frame()
+			if st.built == previous {
+				break
+			}
+			previous = st.built
+		}
+		if !st.built.ready {
+			t.Fatalf("stop %d built no rows", stop)
+		}
+		lo, hi := st.built.lo-chatBuildMargin, st.built.hi+chatBuildMargin+1
+		window = hi - lo
+		if built := st.built.hi - st.built.lo + 1; built > len(conv.chatRows()) {
+			t.Fatalf("stop %d built %d of %d rows", stop, built, len(conv.chatRows()))
+		}
+		if len(conv.MD) > hi-lo || len(conv.MDCodeBlock) > hi-lo {
+			t.Fatalf("stop %d kept parsed text beyond its window: %d/%d", stop, len(conv.MD), hi-lo)
+		}
+		for i := range conv.MD {
+			if i < lo || i >= hi {
+				t.Fatalf("stop %d kept the Markdown of message %d", stop, i)
+			}
+		}
+		for key := range st.Search.codeCache {
+			if key.Message < lo || key.Message >= hi {
+				t.Fatalf("stop %d kept the code search cache of message %d", stop, key.Message)
+			}
 		}
 		for _, handles := range []map[int]*ui.Handle{st.PromptHandles, st.Search.handles} {
 			for _, h := range handles {
@@ -148,29 +178,20 @@ func TestPerformanceRenderPageCaches(t *testing.T) {
 		for _, h := range st.transcriptHandlePool {
 			seen[h] = true
 		}
-		if len(seen) > 80 {
-			t.Fatalf("navigation accumulated %d distinct handles", len(seen))
-		}
-		for i := range conv.MD {
-			if i < st.windowStart || i >= st.windowEnd {
-				t.Fatal("off-page Markdown retained")
-			}
-		}
-		for key := range st.Search.codeCache {
-			if key.Message < st.windowStart || key.Message >= st.windowEnd {
-				t.Fatal("off-page code search cache retained")
-			}
+		// Each message in the window may hold a prompt handle and a search handle:
+		// anything past that is navigation that leaked across stops.
+		if limit := 2 * (hi - lo); len(seen) > limit {
+			t.Fatalf("navigation accumulated %d distinct handles for a %d-message window", len(seen), hi-lo)
 		}
 		if st.Search.frameDoc != nil {
 			t.Fatal("parser document survived the frame")
 		}
-		if page == cfg.Pages/4-1 {
+		if stop == cfg.Stops/4-1 {
 			warmed = performanceHeap()
 		}
 	}
 	live := performanceHeap()
-	performanceMetric(t, "page_churn", map[string]any{"records": rows, "pages": cfg.Pages, "page_size": 80, "unique_handles": len(seen), "markdown_options": len(conv.MD), "warm_heap_bytes": warmed.HeapAlloc, "live_heap_bytes": live.HeapAlloc, "growth_bytes": int64(live.HeapAlloc) - int64(warmed.HeapAlloc)})
-	starts = nil
+	performanceMetric(t, "scroll_churn", map[string]any{"records": records, "stops": cfg.Stops, "build_margin": chatBuildMargin, "window_messages": window, "unique_handles": len(seen), "markdown_options": len(conv.MD), "warm_heap_bytes": warmed.HeapAlloc, "live_heap_bytes": live.HeapAlloc, "growth_bytes": int64(live.HeapAlloc) - int64(warmed.HeapAlloc)})
 	replaceTranscript(conv, "small summary")
 	tt.Frame()
 	tt.Frame()

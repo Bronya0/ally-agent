@@ -6,7 +6,6 @@ import (
 	"ally-dev/locales"
 	"fmt"
 	"math"
-	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -21,58 +20,45 @@ import (
 func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	st := t.uiState()
 	a.beginChatSearchFrame(t)
-	start, end := historyMessageWindow(t, a.messageWindowSize())
-	rows := t.cachedTranscriptRows()
-	st.windowStart, st.windowEnd, st.windowBuilding = start, end, true
-	st.transcriptRows = rows
+	pruneTranscriptOutsideView(t, st)
+	// The welcome card's popovers live in the card: once the list scrolls it out
+	// of view they have no anchor, so they close with it instead of reopening
+	// when it comes back.
+	if st.built.ready && !st.built.welcome {
+		a.welcomeMCP, a.welcomeSkills, a.welcomeTools = false, false, false
+	}
+	rows := t.chatRows()
+	st.transcriptRows = t.cachedTranscriptRows()
 	defer func() {
-		st.windowBuilding = false
 		st.transcriptRows = nil
 		// The search hooks share this document only within the current build.
 		st.Search.frameDoc = nil
 	}()
-	refreshRoundPlacements(t, start, end)
-	releaseCommandDetailsOutsideWindow(t, start, end)
-	pruneTranscriptHandles(t, start, end)
-	for key := range st.Search.codeCache {
-		if key.Message < start || key.Message >= end {
-			delete(st.Search.codeCache, key)
-		}
-	}
-	for key := range st.Search.spanCache {
-		if key.Message < start || key.Message >= end {
-			delete(st.Search.spanCache, key)
-		}
-	}
 	if st.PendingPrompt {
-		if handle := st.PromptHandles[st.PendingPromptIdx]; handle != nil {
-			question := handle.Bounds(c)
-			viewport := t.Scroll.Bounds(c)
-			if question.H > 0 && viewport.H > 0 {
-				t.Scroll.Y = max(float32(0), t.Scroll.Y+question.Y-viewport.Y-12)
-				st.PendingPrompt = false
-			}
+		if row := t.rowOfMessage(st.PendingPromptIdx); row >= 0 {
+			st.Follow, st.FollowPending = false, false
+			st.List.ScrollTo(row, ui.Start)
+			st.PendingPrompt = false
 		}
 	}
-	a.chatSearchReveal(c, t, start, end)
+	a.chatSearchReveal(c, t)
+	// The reader scrolled up: the transcript stops following its end and keeps
+	// where it is. The input handler reports a wheel at once, as its step may
+	// arrive frames later; this catches the scroll bar and the keys too.
 	if t.Scroll.Y < 1e8 && t.Scroll.Y < st.LastScrollY-2 && t.Scroll.Y < t.Scroll.MaxY-2 {
-		st.Follow = false
-		st.FollowPending = false
-	}
-	// A mouse wheel starts gliding on later frames. Being at the bottom
-	// before that first movement must not re-enable follow and cancel the glide.
-	if !st.Follow && t.Scroll.MaxY > 0 && t.Scroll.Y > st.LastScrollY && t.Scroll.Y >= t.Scroll.MaxY-2 {
-		st.Follow = true
+		st.Follow, st.FollowPending = false, false
 	}
 	if t.Scroll.Y < 1e8 {
 		st.LastScrollY = t.Scroll.Y
 	}
-	// Keep the end pinned through later layouts too: Markdown wrapping and
-	// composer height can change after the initial restore has scrolled.
-	if st.Follow {
-		t.Scroll.Y = math.MaxFloat32
-		st.FollowPending = false
+	// Following resumes once a downward scroll reaches the newest message.
+	if st.FollowPending && t.Scroll.Y >= t.Scroll.MaxY-2 {
+		st.Follow, st.FollowPending = true, false
 	}
+	st.List.FollowEnd = st.Follow
+	// From here the frame builds the rows in view: the messages they cover are
+	// what the next frame prunes the caches to, so the range starts empty.
+	st.built = builtRange{}
 	inlineInset := float32(28)
 	if a.prefs.RailExpanded && !a.prefs.TopNavigation {
 		inlineInset = 44
@@ -89,46 +75,21 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 				a.chatSearchBar(c, t)
 			})
 		}
-		ui.Scroll(c.Key(t.ID + "-messages")).Label(locales.Text("聊天滚动区域")).TrackScroll(&t.Scroll).Grow(1).MinHeight(0).HandleInput(func(ev ui.InputEvent) bool {
-			if ev.Kind == ui.InputScroll && ev.DY < 0 {
-				st.Follow = false
-				st.FollowPending = false
-				// Layout may have advanced the pinned offset since the last render.
-				st.LastScrollY = t.Scroll.Y
+		ui.List(c.Key(t.ID+"-messages"), &st.List, len(rows), func(i int) {
+			a.chatRowView(c, t, rows[i])
+		}).Label(locales.Text("聊天滚动区域")).TrackScroll(&t.Scroll).HandleInput(func(ev ui.InputEvent) bool {
+			if ev.Kind == ui.InputScroll && ev.DY != 0 {
+				// A wheel's offset arrives frames after the notch, so the intent is
+				// kept here rather than read from where the list happens to be.
+				if ev.DY < 0 {
+					st.Follow, st.FollowPending = false, false
+				} else if !st.Follow {
+					st.FollowPending = true
+				}
 			}
 			return false
-		}).Children(func() {
-			ui.Column(c).FillWidth().MaxWidth(chatMaxWidth).AlignSelf(ui.Center).Padding(18, inlineInset, 14).Gap(10).Children(func() {
-				if len(t.Messages) == 0 || !hasWelcomeMessage(t) {
-					a.welcomeView(c, t)
-				}
-				for idx := range t.MD {
-					if idx < start || idx >= end {
-						delete(t.MD, idx)
-						delete(t.MDCodeBlock, idx)
-					}
-				}
-				if start > 0 {
-					olderCount := historyBlockIndex(t.blockStarts(), start)
-					transcriptAction(c, "history-older", fmt.Sprintf(locales.Text("更早消息（%d 块）"), olderCount), "history").OnClick(func() {
-						st.VisibleStart = previousHistoryPage(t, start, a.messageWindowSize()) + 1
-						st.Follow = false
-						t.Scroll.Y = 0
-					})
-				}
-				if end < len(t.Messages) {
-					transcriptAction(c, "history-newer", locales.Text("更新消息")).OnClick(func() { st.VisibleStart = end + 1; t.Scroll.Y = 0 })
-					transcriptAction(c, "history-latest", locales.Text("回到最新")).OnClick(func() { followLatest(t) })
-				}
-				for _, i := range st.visibleRows {
-					a.messageRow(c, t, i, rows)
-				}
-				if st.PendingPrompt {
-					c.After(16 * time.Millisecond)
-				}
-				ui.Box(c).Height(4)
-			})
-		})
+		}).Grow(1).MinHeight(0).
+			Padding(18, inlineInset, 14).Gap(10)
 		if !st.Follow && t.Scroll.Y < t.Scroll.MaxY-40 {
 			ui.Box(c).Absolute().Right(18).Bottom(12).Children(func() {
 				ui.Column(c).Gap(gapTight).Children(func() {
@@ -152,15 +113,17 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	})
 }
 
+// jumpToPreviousPrompt scrolls to the prompt above the one in view, or to the
+// last one before the rows the list built.
 func (a *desktop) jumpToPreviousPrompt(c *ui.Context, t *conversation) {
 	st := t.uiState()
 	viewport := t.Scroll.Bounds(c)
 	if viewport.H <= 0 {
 		return
 	}
-	targetIndex := -1
+	target := -1
 	targetY := float32(-math.MaxFloat32)
-	for idx, handle := range st.PromptHandles {
+	for index, handle := range st.PromptHandles {
 		if handle == nil {
 			continue
 		}
@@ -169,38 +132,43 @@ func (a *desktop) jumpToPreviousPrompt(c *ui.Context, t *conversation) {
 			continue
 		}
 		if bounds.Y > targetY {
-			targetIndex, targetY = idx, bounds.Y
+			target, targetY = index, bounds.Y
 		}
 	}
-	if targetIndex >= 0 {
+	if target < 0 {
+		// Nothing above is drawn: the rows the list has yet to build hold the
+		// previous prompt, and scrolling to its row builds it.
+		for i := st.built.lo - 1; i >= 0; i-- {
+			if str(t.Messages[i], "role") == "user" {
+				target = i
+				break
+			}
+		}
+	}
+	if row := t.rowOfMessage(target); row >= 0 {
 		st.Follow = false
-		st.FollowPending = false
-		t.Scroll.Y = max(float32(0), t.Scroll.Y+targetY-viewport.Y-12)
-		return
+		st.List.ScrollTo(row, ui.Start)
 	}
-	start, _ := a.chatMessageWindow(t)
-	for i := start - 1; i >= 0; i-- {
-		if str(t.Messages[i], "role") == "user" {
-			targetIndex = i
-			break
+}
+
+// chatRowView draws one row of the transcript list: the welcome card, or a
+// message with the statistics of the round it ends. The list spaces, scrolls
+// and recycles the rows, so a row is only capped and centred like the composer.
+func (a *desktop) chatRowView(c *ui.Context, t *conversation, row chatRow) {
+	st := t.uiState()
+	st.built.cover(row)
+	ui.Column(c).FillWidth().MaxWidth(chatMaxWidth).AlignSelf(ui.Center).Children(func() {
+		if row.message == welcomeRow {
+			a.welcomeView(c, t)
+			return
 		}
-	}
-	if targetIndex < 0 {
-		return
-	}
-	st.Follow = false
-	st.FollowPending = false
-	st.LastScrollY = 0
-	st.VisibleStart = max(0, targetIndex-min(80, a.messageWindowSize()/2)) + 1
-	st.PendingPromptIdx = targetIndex
-	st.PendingPrompt = true
-	t.Scroll.Y = 0
+		a.messageRow(c, t, row.message, t.cachedTranscriptRows())
+	})
 }
 
 func (a *desktop) messageRow(c *ui.Context, t *conversation, i int, rows *transcriptRows) {
 	m := t.Messages[i]
-	start, _ := a.chatMessageWindow(t)
-	kind := rows.kindAt(i, start)
+	kind := rows.kindAt(i)
 	if kind == rowSkipped {
 		// Nothing draws here: rowKindAt decided it, and the container stays
 		// unbuilt because an empty one still costs the column its gap.
@@ -1137,129 +1105,9 @@ func hasLaterSuggestion(t *conversation, index int) bool {
 	return false
 }
 
-type roundPlacementKey struct {
-	historyKey
-	start, end, rounds int
-}
-
 type roundIndexKey struct {
 	rev   uint64
 	count int
-}
-
-// Completed statistics have a fixed message index. Only appended/rewritten
-// rows (not another frame of the same stream) can move them onto a suggestion.
-// Keep just this page's placements; a day's Round map remains the source.
-func refreshRoundPlacements(t *conversation, start, end int) {
-	st := t.uiState()
-	key := roundPlacementKey{historyKey{len(t.Messages), t.historyRev}, start, end, len(st.Round)}
-	if st.roundPlacementReady && st.roundPlacementKey == key {
-		return
-	}
-	if st.RoundAt == nil {
-		st.RoundAt = make(map[int]int)
-	} else {
-		clear(st.RoundAt)
-	}
-	// A page may begin between an answer and its suggestions. Include that
-	// preceding partial round without walking all earlier rounds.
-	rows := t.cachedTranscriptRows()
-	lower := rows.roundStart(start)
-	// Tool events append many folded records between completed rounds. Scan
-	// the statistics' indices, not every record in those growing tool runs.
-	indices := st.roundIndices.get(roundIndexKey{t.historyRev, len(st.Round)}, func(roundIndexKey) []int {
-		indices := st.roundIndices.value[:0]
-		if cap(indices) > 4*len(st.Round)+256 {
-			indices = nil
-		}
-		for idx := range st.Round {
-			indices = append(indices, idx)
-		}
-		slices.Sort(indices)
-		return indices
-	})
-	first, _ := slices.BinarySearch(indices, lower)
-	for _, idx := range indices[first:] {
-		if idx >= end {
-			break
-		}
-		if stat := st.Round[idx]; stat != nil && stat.Done {
-			if target := rows.roundStatsIndex(idx); target >= start && target < end {
-				st.RoundAt[target] = idx
-			}
-		}
-	}
-	// Block starts already omit grouped followers and nested children. Merge
-	// the few footer-only rows before rendering, instead of visiting thousands
-	// of folded tool records just to decide that they draw nothing each frame.
-	st.visibleRows = st.visibleRows[:0]
-	starts := t.blockStarts()
-	for n := historyBlockIndex(starts, start); n < len(starts) && starts[n] < end; n++ {
-		st.visibleRows = append(st.visibleRows, starts[n])
-	}
-	for idx := range st.RoundAt {
-		st.visibleRows = append(st.visibleRows, idx)
-	}
-	slices.Sort(st.visibleRows)
-	st.visibleRows = slices.Compact(st.visibleRows)
-	st.roundPlacementKey, st.roundPlacementReady = key, true
-}
-
-func normalizeHistoryPageSize(size int) int {
-	if size < 20 || size > 200 {
-		return 80
-	}
-	return size
-}
-func (a *desktop) messageWindowSize() int { return normalizeHistoryPageSize(a.prefs.HistoryPageSize) }
-func (a *desktop) chatMessageWindow(t *conversation) (int, int) {
-	st := t.uiState()
-	if st.windowBuilding {
-		return st.windowStart, st.windowEnd
-	}
-	return historyMessageWindow(t, a.messageWindowSize())
-}
-
-// historyMessageWindow returns the rows of the history page showing: the last
-// `size` blocks of the transcript, or the page a restored offset points into.
-// The block starts come from blockStarts, which owns the grouping rule.
-func historyMessageWindow(t *conversation, size int) (int, int) {
-	size = normalizeHistoryPageSize(size)
-	starts := t.blockStarts()
-	blocks := len(starts) - 1
-	first := max(0, blocks-size)
-	if t.uiState().VisibleStart > 0 {
-		first = historyBlockIndex(starts, min(len(t.Messages), t.uiState().VisibleStart-1))
-	}
-	return starts[first], starts[min(blocks, first+size)]
-}
-func historyBlockIndex(starts []int, index int) int {
-	// Upper bound keeps a restored index inside a tool group on its header.
-	lo, hi := 0, len(starts)
-	for lo < hi {
-		mid := (lo + hi) / 2
-		if starts[mid] <= index {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	return max(0, lo-1)
-}
-func previousHistoryPage(t *conversation, start, size int) int {
-	starts := t.blockStarts()
-	return starts[max(0, historyBlockIndex(starts, start)-normalizeHistoryPageSize(size))]
-}
-
-// followLatest parks a transcript at its newest message. A scroll container
-// shows its start at offset 0, so a history restored from disk — or replaced by
-// a summary — would otherwise open on its oldest message.
-func followLatest(t *conversation) {
-	st := t.uiState()
-	st.VisibleStart = 0
-	st.LastScrollY = 0
-	st.Follow = true
-	st.FollowPending = true
 }
 
 // Recognize explicit cancellation markers and legacy persisted cancellation text,

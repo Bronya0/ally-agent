@@ -153,17 +153,6 @@ func (r *transcriptRows) attachTail(start int) {
 	}
 }
 
-func (r *transcriptRows) roundStart(index int) int {
-	n, found := slices.BinarySearch(r.users, index)
-	if found {
-		return index
-	}
-	if n > 0 {
-		return r.users[n-1]
-	}
-	return 0
-}
-
 func (r *transcriptRows) roundStatsIndex(index int) int {
 	next, _ := slices.BinarySearch(r.users, index+1)
 	end := len(r.t.Messages)
@@ -208,10 +197,9 @@ func (r *transcriptRows) foldsInto(i int) bool {
 	return isFoldableToolGroupItem(prev) && isFoldableToolGroupItem(m)
 }
 
-// kindAt reports how message i appears in the window that starts at start: a
-// run whose head sits before the window keeps its group card on its first
-// visible member.
-func (r *transcriptRows) kindAt(i, start int) rowKind {
+// kindAt reports how message i appears: a run of folded tool calls keeps one
+// group card, on its head, so every other member of the run draws nothing.
+func (r *transcriptRows) kindAt(i int) rowKind {
 	m := r.t.Messages[i]
 	if r.nested[i] {
 		return rowSkipped
@@ -229,7 +217,7 @@ func (r *transcriptRows) kindAt(i, start int) rowKind {
 	case role == "user", role == "notice", role == "subagent":
 		return rowPlain
 	case isToolRecord(m):
-		if i > start && r.foldsInto(i) {
+		if r.foldsInto(i) {
 			return rowSkipped
 		}
 		switch {
@@ -246,10 +234,10 @@ func (r *transcriptRows) kindAt(i, start int) rowKind {
 	return rowPlain
 }
 
-// startsBlock reports whether message i opens a history block. A page boundary
-// may only land on a row that actually draws.
+// startsBlock reports whether message i opens a history block: only a row that
+// actually draws starts one.
 func (r *transcriptRows) startsBlock(i int) bool {
-	return i == 0 || (!r.foldsInto(i) && r.kindAt(i, i-1) != rowSkipped)
+	return r.kindAt(i) != rowSkipped
 }
 
 // roundStatsIfAny keeps a round's statistics when its row is skipped: the

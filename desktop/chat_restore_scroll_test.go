@@ -16,19 +16,14 @@ func restoredHistory(n int) []map[string]any {
 	return messages
 }
 
-// A history loaded from disk carries no scroll offset, and a scroll container
-// shows its start at 0: restoring a session has to land on the newest message
-// instead of the oldest one.
+// A history loaded from disk carries no scroll position, so restoring a session
+// has to land on the newest message instead of the oldest one.
 func TestRestoredSessionOpensAtNewestMessage(t *testing.T) {
 	a := &desktop{}
 	a.prefs.Appearance = "dark"
 	conv := &conversation{ID: "restore", Workspace: "ws", Messages: restoredHistory(60)}
 	a.showSession(conv)
 	a.tabs, a.active = []*conversation{conv}, 0
-	st := conv.uiState()
-	if !st.Follow || !st.FollowPending || st.VisibleStart != 0 {
-		t.Fatalf("restored conversation does not follow its newest message: follow=%v pending=%v start=%d", st.Follow, st.FollowPending, st.VisibleStart)
-	}
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(a.theme())
 		a.chatMessages(c, conv, 900)
@@ -38,23 +33,8 @@ func TestRestoredSessionOpensAtNewestMessage(t *testing.T) {
 	if conv.Scroll.MaxY <= 0 {
 		t.Fatalf("history did not overflow the viewport: maxY=%v", conv.Scroll.MaxY)
 	}
-	if conv.Scroll.Y < conv.Scroll.MaxY-2 {
+	if !conv.uiState().List.AtEnd() || conv.Scroll.Y < conv.Scroll.MaxY-2 {
 		t.Fatalf("restored transcript opened at %v of %v", conv.Scroll.Y, conv.Scroll.MaxY)
-	}
-}
-
-// Restoring a conversation the user left scrolled up must keep that place: only
-// a transcript without any position gets pinned to its end.
-func TestRestoredSessionKeepsPositionTheUserLeft(t *testing.T) {
-	a := &desktop{}
-	conv := &conversation{ID: "kept", Workspace: "ws", Messages: restoredHistory(60)}
-	conv.Scroll.Y = 120
-	st := conv.uiState()
-	st.Follow = false
-	st.VisibleStart = 5
-	a.showSession(conv)
-	if st.FollowPending || conv.Scroll.Y != 120 || st.VisibleStart != 5 {
-		t.Fatalf("restore moved a scrolled transcript: y=%v pending=%v start=%d", conv.Scroll.Y, st.FollowPending, st.VisibleStart)
 	}
 }
 
@@ -75,8 +55,8 @@ func TestRestoredSessionFollowsBottomAfterLayoutChanges(t *testing.T) {
 	}, 900, 700)
 	assertBottom := func() {
 		t.Helper()
-		if conv.Scroll.MaxY <= 0 || conv.Scroll.Y < conv.Scroll.MaxY-2 || !conv.uiState().Follow {
-			t.Fatalf("restored transcript left the bottom after layout: y=%v maxY=%v follow=%v", conv.Scroll.Y, conv.Scroll.MaxY, conv.uiState().Follow)
+		if conv.Scroll.MaxY <= 0 || conv.Scroll.Y < conv.Scroll.MaxY-2 || !conv.uiState().List.AtEnd() {
+			t.Fatalf("restored transcript left the bottom after layout: y=%v maxY=%v", conv.Scroll.Y, conv.Scroll.MaxY)
 		}
 	}
 	tt.Frame()
@@ -101,15 +81,17 @@ func TestRestoredSessionFollowsThroughNonOverflowingLayout(t *testing.T) {
 		a.chatMessages(c, conv, 900)
 	}, 900, 200)
 	tt.SetSize(900, 1600)
-	if conv.Scroll.MaxY != 0 || !conv.uiState().Follow {
-		t.Fatalf("fitting the transcript stopped following: maxY=%v follow=%v", conv.Scroll.MaxY, conv.uiState().Follow)
+	if conv.Scroll.MaxY != 0 || !conv.uiState().List.AtEnd() {
+		t.Fatalf("fitting the transcript stopped following: maxY=%v", conv.Scroll.MaxY)
 	}
 	tt.SetSize(900, 200)
-	if conv.Scroll.MaxY <= 0 || conv.Scroll.Y < conv.Scroll.MaxY-2 || !conv.uiState().Follow {
-		t.Fatalf("shrinking the viewport lost the bottom: y=%v maxY=%v follow=%v", conv.Scroll.Y, conv.Scroll.MaxY, conv.uiState().Follow)
+	if conv.Scroll.MaxY <= 0 || conv.Scroll.Y < conv.Scroll.MaxY-2 || !conv.uiState().List.AtEnd() {
+		t.Fatalf("shrinking the viewport lost the bottom: y=%v maxY=%v", conv.Scroll.Y, conv.Scroll.MaxY)
 	}
 }
 
+// Resizing rewraps the rows, which moves the offset of the same message. What
+// must not move is the row the reader is at.
 func TestRestoredSessionDoesNotFollowAfterReaderScrollsUp(t *testing.T) {
 	a := &desktop{}
 	conv := &conversation{ID: "restore-reader", Workspace: "ws", Messages: restoredHistory(60)}
@@ -120,17 +102,20 @@ func TestRestoredSessionDoesNotFollowAfterReaderScrollsUp(t *testing.T) {
 		a.chatMessages(c, conv, width)
 	}, 900, 400)
 	tt.Scroll(450, 200, 0, -150)
-	before := conv.Scroll.Y
-	if conv.uiState().Follow || before >= conv.Scroll.MaxY-2 {
+	tt.Frame()
+	before, _ := conv.uiState().List.Visible()
+	if conv.uiState().List.AtEnd() {
 		t.Fatal("scrolling up did not stop following the transcript")
 	}
 	tt.SetSize(600, 300)
-	if conv.uiState().Follow || conv.Scroll.Y != before {
-		t.Fatalf("layout stole the reader's scroll position: y=%v want=%v follow=%v", conv.Scroll.Y, before, conv.uiState().Follow)
+	tt.Frame()
+	after, _ := conv.uiState().List.Visible()
+	if conv.uiState().List.AtEnd() || after != before {
+		t.Fatalf("layout stole the reader's place: row=%d want=%d", after, before)
 	}
 	followLatest(conv)
 	tt.Frame()
-	if !conv.uiState().Follow || conv.Scroll.Y < conv.Scroll.MaxY-2 {
+	if !conv.uiState().List.AtEnd() || conv.Scroll.Y < conv.Scroll.MaxY-2 {
 		t.Fatalf("jumping back to latest did not resume following: y=%v maxY=%v", conv.Scroll.Y, conv.Scroll.MaxY)
 	}
 }

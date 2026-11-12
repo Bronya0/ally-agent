@@ -1757,8 +1757,8 @@ func (a *desktop) finishCompact(t *conversation, result map[string]any, fast boo
 		a.applyCompactionResult(t, result)
 		a.notify(compactionToast(result))
 	}
-	st.Follow = true
-	st.FollowPending = true
+	// A compaction replaces the transcript: open it on what it left.
+	followLatest(t)
 	a.persist(t)
 	a.refreshSessionFooter(t)
 }

@@ -88,8 +88,8 @@ func TestVoiceModelsOfKindFiltersCategory(t *testing.T) {
 	}
 }
 
-// 每页展示块数 lives in prefs, not ConfigState. Leaving the settings page used to
-// compare only the config, so a changed page size was silently dropped.
+// 偏好 lives in prefs, not ConfigState. Leaving the settings page used to
+// compare only the config, so a changed preference was silently dropped.
 func TestSettingsPendingEditsSeesPrefsFields(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -99,14 +99,14 @@ func TestSettingsPendingEditsSeesPrefsFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &desktop{core: core, config: saved, configDraft: saved, prefs: defaultPrefs()}
+	a := &desktop{page: "settings", core: core, config: saved, configDraft: saved, prefs: defaultPrefs()}
 	a.syncSettingsForm()
 	if a.settingsPendingEdits() {
 		t.Fatal("an untouched page must not report edits")
 	}
-	a.settings.HistoryPageSize = float64(a.messageWindowSize() + 10)
+	a.selectAppearance("light")
 	if !a.settingsPendingEdits() {
-		t.Fatal("a changed page size must count as a pending edit")
+		t.Fatal("a changed preference must count as a pending edit")
 	}
 }
 

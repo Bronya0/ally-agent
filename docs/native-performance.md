@@ -15,23 +15,24 @@
 - 渲染期不读写磁盘、不发网络请求、不启动无条件后台任务，加载由已有事件或显式用户操作触发。
 - 优化时分清每帧、每事件和每请求开销，`sendSel` / `metal.send` 的绘制开销不能与每请求一次的 Marshal、工具清单克隆混算。
 
-## 主对话索引、分页与工具组
+## 主对话虚拟列表、索引与工具组
 
 - 工具调用与子代理事件通过 `transcriptLookup` 的 ID → 行号索引定位，普通追加只索引新尾部，避免每次事件倒扫全天消息；入口见 [transcript_lookup.go](../desktop/transcript_lookup.go)。
 - `transcriptLookup` 只保存 ID 和行号，删除、替换或压缩历史后必须 `resetTranscriptLookup`，不能让旧行号继续定位新消息。
-- 消息绘制归属、工具折叠和分页共同使用 `transcriptRows`，避免三个入口各自判断导致空白行、重复子代理或页首落在不可见消息上；入口见 [transcript_rows.go](../desktop/transcript_rows.go)。
+- 消息绘制归属、工具折叠和虚拟列表共同使用 `transcriptRows`，避免三个入口各自判断导致空白行或重复子代理；入口见 [transcript_rows.go](../desktop/transcript_rows.go)。
 - 普通消息追加通过 `attachTail` 增量更新归属信息，已有父卡片 ID 和子代理 ID 映射只保留身份数据，不复制消息或结果。
 - 新增 subagent 父卡片时，依据旧消息的父 ID 和 agent ID 引用判断能否增量追加；可能认领旧子消息或覆盖已使用映射时仍完整两遍重建。
 - 已有行的工具类型或 subagent 结果中的 agent ID 变化时必须使归属索引失效，不能只依赖消息数量变化。
 - 历史块起点通过 `blockStarts` 增量追加，复用旧前缀并重新判断追加接缝，不在每次追加时重新扫描全部历史。
-- `historyBlocksKey` 同时包含行数、`historyRev` 和归属对象，只有归属对象存活且版本未变时才可复用分页前缀。
+- `historyBlocksKey` 同时包含行数、`historyRev` 和归属对象，只有归属对象存活且版本未变时才可复用块起点前缀。
 - 历史起点切片复用容量但不按全部消息数预留，历史大幅缩短时淘汰过大容量，避免大量折叠工具记录撑大常驻数组。
 - 已索引的空 assistant 收到首个 token 时用 `markHistoryAt` 失效，尚未索引的新行由长度键覆盖，避免流式首 token 无条件重建旧历史。
 - 删除或丢弃压缩预览时显式增加 `historyRev`，即使下一帧前又追加到原消息数量也不能命中过期索引。
 - 欢迎消息存在性随归属索引增量维护，避免追加一条工具消息就重新扫描整段历史，也不保留跨会话的全局欢迎缓存。
-- `chatMessages` 只遍历当前页实际绘制的 `visibleRows`，不逐条访问大工具组中已经折叠、被其他卡片绘制的消息；入口见 [page_chat.go](../desktop/page_chat.go)。
-- 当前页的回合统计位置按历史版本、窗口范围和回合数缓存，正文持续流式变化时不反复重建相同的 footer 位置。
-- 回合位置使用排序后的真实统计索引，以及 user / suggest 索引的二分查找，不扫描两次提问之间成千上万条工具记录。
+- 正文用 `ui.List` 虚拟化：`chatRows` 给出一个回合块、回合统计行和欢迎卡组成的行序列，列表只建视口内外的几行，一帧的成本随屏幕而不是随历史长度增长；入口见 [chat_rows.go](../desktop/chat_rows.go)。
+- 行号与消息号分开：`rowOfMessage` 负责跳转、搜索揭示和统计定位，折叠进其他行的消息落到它所属的块上，不能直接用消息下标当列表行。
+- `st.built` 记录上一帧建出的消息范围和欢迎卡，且必须在搜索揭示与提示跳转读过它之后才重置，否则它们永远以为行还没建。
+- 回合统计位置按整段历史一次性放置（`placeRoundStats`），按历史版本与回合数缓存；流式变化不重建，新增 suggest 后移动统计位置，删除或压缩后清理旧位置。
 - 分页落在回答和 suggest 之间时保留前一回合的统计，新增 suggest 后移动统计位置，删除或压缩后清理旧位置。
 - 工具组头部计数和状态保存标量摘要，稳定帧直接复用，工具事件更新使用 `toolRev`，历史拓扑或裁剪使用 `historyRev`；入口见 [tool_cards.go](../desktop/tool_cards.go)。
 - 工具组通过最多 64 条的 `toolGroupChanges` 日志增量应用状态与计数变化，日志只保存前后类型、状态、折叠标记、裁剪标记和行号。
@@ -99,9 +100,9 @@
 - 流式正文末尾变化使用 `invalidateChatSearchTail`，保留此前命中并约每 150 ms 重扫尾部，编辑旧行或历史形状变化使用完整失效。
 - 新工具记录只追加时复用已有搜索结果和字节预算，仅扫描新增尾部；旧文本改动、预算截断或命中上限继续完整重扫。
 - 压缩预览位于末尾时走尾部搜索失效，若用户注入后预览位于中间则走完整失效，不能误把中间改动当成末尾追加。
-- 搜索 span/code 缓存只保留当前历史页，关闭搜索、改变查询或重写消息时释放旧缓存，不随全天访问过的页面积累。
+- 搜索 span/code 缓存只保留列表建出的行，关闭搜索、改变查询或重写消息时释放旧缓存，不随整天访问过的行积累。
 - 搜索的 `frameDoc` 只在当前构建共享，帧结束即清空，不让最后解析的文档额外常驻。
-- MyGo 会把已注册 Handle 绑定保留到窗口关闭，提示导航和搜索行复用离开当前页的 Handle，不能每次翻页都新注册一批；入口见 [transcript_rows.go](../desktop/transcript_rows.go)。
+- MyGo 会把已注册 Handle 绑定保留到窗口关闭，提示导航和搜索行复用离开视口的 Handle，不能每跳一段都新注册一批；入口见 [transcript_rows.go](../desktop/transcript_rows.go)。
 - 同一提示行的搜索和提问导航共用 Handle，回收时去重并清理旧映射，避免复用后滚动到另一条消息。
 
 ## 工作区、文件预览与界面状态
@@ -123,7 +124,7 @@
 ## 常驻引用、列表与其他页面
 
 - 未活跃且可重新加载的会话释放 Markdown 和附件图片派生缓存，`rememberSession` 只额外保留最近一个可丢弃历史对象，运行中任务、草稿和待处理附件不丢弃；入口见 [desktop.go](../desktop/desktop.go)。
-- 离开历史页释放页外 Markdown options 与 code hook，避免访问过的每条消息都长期保存控件配置；入口见 [page_chat.go](../desktop/page_chat.go)。
+- 正文的 Markdown options、code hook、Handle 和搜索派生缓存按上一帧建出的行修剪，离开视口的消息释放控件配置；入口见 [chat_rows.go](../desktop/chat_rows.go)。
 - 关闭 tab、删除附件、模型、任务或队列元素时使用 `slices.Delete` 或显式清空尾槽，避免缩短切片后底层数组仍保留已删除大对象。
 - 对话删除确认、任务日志弹窗等的按钮、Escape 和背景关闭路径均清理目标对象或大正文，不能只在“关闭”按钮里释放；入口见 [page_chat.go](../desktop/page_chat.go) 与 [page_tasks.go](../desktop/page_tasks.go)。
 - 图片生成结果丢弃时释放旧预览图引用，语音模型重新加载时清理旧展示行；入口见 [page_image_playground.go](../desktop/page_image_playground.go) 与 [voice_models_io.go](../desktop/voice_models_io.go)。
@@ -150,6 +151,6 @@
 - 主对话回归入口为 [transcript_rows_test.go](../desktop/transcript_rows_test.go)、[command_group_test.go](../desktop/command_group_test.go)、[tool_result_memory_test.go](../desktop/tool_result_memory_test.go)、[tool_render_memo_test.go](../desktop/tool_render_memo_test.go)、[markdown_theme_test.go](../desktop/markdown_theme_test.go) 和 [chat_search_test.go](../desktop/chat_search_test.go)。
 - 预览与工作区回归入口为 [workspace_preview_retention_test.go](../desktop/workspace_preview_retention_test.go)、[workspace_preview_lifecycle_test.go](../desktop/workspace_preview_lifecycle_test.go)、[preview_failure_test.go](../desktop/preview_failure_test.go)、[explorer_state_test.go](../desktop/explorer_state_test.go) 和 [workspace_history_test.go](../desktop/workspace_history_test.go)。
 - 后端落盘和协议回归入口为 [prov_protocol_regression_test.go](../internal/app/prov_protocol_regression_test.go)，须确认调用配对、显式压缩摘录、旧受保护历史恢复及运行中原始证据都保留正确行为。
-- 新功能至少核对稳定帧、追加、就地修改、折叠/展开、翻页、删除后同数量补回、压缩成功/失败、切 tab、迟到回调和关闭路径中受影响的情况。
+- 新功能至少核对稳定帧、追加、就地修改、折叠/展开、滚动与跳转、删除后同数量补回、压缩成功/失败、切 tab、迟到回调和关闭路径中受影响的情况。
 - 代码变更先跑对应行为回归，再执行 `CGO_ENABLED=0 go test -p 1 ./...`、`go tool mygo vet .` 和 `python scripts/build.py dev`，测试文件操作使用 `t.TempDir`，全套不设置全局 `ALLY_DATA_DIR`。
 - 当前未发现同范围内其他有明确收益且能低风险实施的瓶颈；模型所需的运行上下文、原生文字布局和绘制仍有必要成本，后续优化以测量证据为依据，不承诺理论上零优化空间。

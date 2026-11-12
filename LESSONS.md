@@ -68,7 +68,7 @@
 
 [render-small-allocations] 2026-10-30 中危 字段名表收口静态表，字段值每帧只格式化一次；累计分配不等于存活堆。@desktop/tool_resources.go
 
-[history-window] 2026-10-30 中危 页大小存 native-ui.json，默认 80、范围 20–200；分页、工具分组与跳转共用同一窗口值。@desktop/page_chat.go
+[chat-built-range] 2026-11-13 中危 帧内先重置 st.built 再让搜索揭示/提示跳转读它，它们永远当行没建，跳转卡死。@desktop/page_chat.go
 
 [tooltip-anchor-width] 2026-10-30 中危 Column 里 Text 可被拉成整行，Tooltip 按锚点定位会飘到页面中央；说明标签用 AlignSelf(Start)。@desktop/page_settings.go
 

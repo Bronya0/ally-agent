@@ -46,7 +46,7 @@ func TestSettingsLayoutSeparatesGroupsAndAlignsNumbers(t *testing.T) {
 			tt := settingsLayoutTester(a, width, 1800)
 			tt.Frame()
 			var previous ui.Rect
-			for _, name := range []string{"历史显示", "请求与执行", "上下文管理", "会话请求头"} {
+			for _, name := range []string{"请求与执行", "上下文管理", "会话请求头"} {
 				r := settingsControlBounds(t, tt, ui.RoleGroup, name)
 				if r.W > settingsMaxWidth+1 || r.X+r.W > float32(width)-padPage+1 {
 					t.Fatalf("group exceeds readable page width: %+v", r)
@@ -57,7 +57,7 @@ func TestSettingsLayoutSeparatesGroupsAndAlignsNumbers(t *testing.T) {
 				previous = r
 			}
 			var right float32
-			for _, name := range []string{"每页展示块数", "LLM 请求重试次数", "工具执行并发度", "压缩超时时间"} {
+			for _, name := range []string{"LLM 请求重试次数", "工具执行并发度", "压缩超时时间"} {
 				r := settingsControlBounds(t, tt, ui.RoleGroup, name)
 				if r.W > settingsNumberWidth+1 || r.X+r.W > float32(width)-padPage+1 {
 					t.Fatalf("number control stretched or overflowed: %q %+v", name, r)

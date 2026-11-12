@@ -54,23 +54,24 @@ func TestCommandTooltipStableDuringThinking(t *testing.T) {
 	}
 }
 
-func TestReasoningDeltaDoesNotRequestTranscriptScroll(t *testing.T) {
+// Reasoning only changes the footer: it adds no message, so the transcript has
+// nothing new to show and nothing to scroll.
+func TestReasoningDeltaLeavesTheTranscriptAlone(t *testing.T) {
 	conv := &conversation{ID: "reasoning", Busy: true, Messages: []map[string]any{{"role": "user", "content": "test"}}}
 	a := &desktop{tabs: []*conversation{conv}}
 	st := conv.uiState()
-	st.Follow = true
 	for i := 0; i < 100; i++ {
 		a.applyEvent("run:delta", map[string]any{"sessionId": conv.ID, "reasoningLen": 4})
-		if st.FollowPending {
-			t.Fatal("reasoning-only delta requested scrolling")
+		if len(conv.Messages) != 1 {
+			t.Fatal("reasoning-only delta changed the transcript")
 		}
 	}
-	if st.ThinkingBytes != 400 || len(conv.Messages) != 1 {
-		t.Fatal("reasoning update altered transcript")
+	if st.ThinkingBytes != 400 {
+		t.Fatalf("thinking count = %d", st.ThinkingBytes)
 	}
 	a.applyEvent("run:delta", map[string]any{"sessionId": conv.ID, "content": "answer"})
-	if !st.FollowPending {
-		t.Fatal("new visible content must still follow the transcript")
+	if len(conv.Messages) != 2 || str(conv.Messages[1], "content") != "answer" {
+		t.Fatal("visible content did not reach the transcript")
 	}
 	if st.ThinkingBytes != 0 {
 		t.Fatal("answer retained the previous thinking count")

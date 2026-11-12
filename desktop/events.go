@@ -175,10 +175,6 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			ui.ThinkingBytes += n
 			t.Status = locales.Text("正在思考…")
 		}
-		// Reasoning only changes the footer, not transcript geometry.
-		if content != "" && ui.Follow {
-			t.uiState().FollowPending = true
-		}
 	case "tool:start", "tool:update", "tool:result", "tool:error":
 		a.applyToolEvent(t, name, p)
 	case "ask:ready":
@@ -350,9 +346,6 @@ func appendRunError(t *conversation, msg string) {
 	}
 	invalidateChatSearch(t)
 	t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": msg, "error": true})
-	if st := t.uiState(); st.Follow {
-		st.FollowPending = true
-	}
 }
 
 func hasErrorTail(messages []map[string]any, msg string) bool {
@@ -456,9 +449,6 @@ func (a *desktop) applyToolEvent(t *conversation, name string, p map[string]any)
 	toolName := str(p, "name")
 	if toolName != "" {
 		t.Status = locales.Text("正在使用 ") + toolName
-	}
-	if t.uiState().Follow {
-		t.uiState().FollowPending = true
 	}
 	if name == "tool:result" || name == "tool:error" {
 		// A tool result is the biggest single jump in what the next request will
@@ -648,10 +638,6 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 		invalidateChatSearch(t)
 		row = map[string]any{"role": "subagent", "subId": id, "parentToolCallId": str(p, "toolCallId")}
 		t.Messages = append(t.Messages, row)
-		// Nudge the reader only when a new sub-agent row appears.
-		if t.uiState().Follow {
-			t.uiState().FollowPending = true
-		}
 	}
 	if _, hasCounts := p["blackboardSent"]; hasCounts {
 		applySubagentBlackboard(row, p)

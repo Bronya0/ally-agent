@@ -52,8 +52,7 @@ func (a *desktop) settingsPendingEdits() bool {
 	if submitted := a.settingsInFlight; submitted != nil {
 		autostart = submitted.autostartValue
 	}
-	return a.prefsPending || a.settings.Autostart != autostart ||
-		normalizeHistoryPageSize(int(a.settings.HistoryPageSize)) != a.messageWindowSize() || a.settingsConfigPending()
+	return a.prefsPending || a.settings.Autostart != autostart || a.settingsConfigPending()
 }
 
 // Take one final snapshot on the main thread; typing and changing controls do
@@ -72,11 +71,6 @@ func (a *desktop) prepareSettingsCommit() settingsCommit {
 	}
 	if a.settings.Autostart != a.autostartValue || a.settingsInFlight != nil && a.settings.Autostart != a.settingsInFlight.autostartValue {
 		plan.autostart = boolPtr(a.settings.Autostart)
-	}
-	size := normalizeHistoryPageSize(int(a.settings.HistoryPageSize))
-	if size != a.messageWindowSize() {
-		a.prefs.HistoryPageSize = size
-		a.prefsPending = true
 	}
 	a.configDraft = plan.request.Draft.Clone()
 	return plan

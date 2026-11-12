@@ -419,7 +419,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 		*entryArgs = nil
 	}
 
-	_, windowEnd := a.chatMessageWindow(t)
+	windowEnd := len(t.Messages)
 	// This widget keeps scalar header metadata, including while collapsed.
 	// Events retire/update tool states through toolRev; topology and compaction
 	// changes use historyRev. Headers memoize only latest description strings;

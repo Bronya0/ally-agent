@@ -70,13 +70,16 @@ func TestWelcomeTablePopoversRespondToClicks(t *testing.T) {
 
 func TestWelcomePopoverTracksTranscriptScroll(t *testing.T) {
 	conv := &conversation{ID: "welcome-scroll", Messages: restoredHistory(16)}
-	conv.uiState().Follow = false
 	a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}, mcpSummary: "mcp-trigger"}
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(a.theme())
 		width, _ := c.Size()
 		ui.Column(c).Fill().Children(func() { a.chatColumn(c, width) })
 	}, 1280, 850)
+	// The welcome card opens the transcript: the list builds only the rows in
+	// view, so scrolling to it is what draws it.
+	conv.uiState().List.ScrollTo(0, ui.Start)
+	tt.Frame()
 	if err := tt.Click("mcp-trigger"); err != nil {
 		t.Fatal(err)
 	}
@@ -84,6 +87,7 @@ func TestWelcomePopoverTracksTranscriptScroll(t *testing.T) {
 	anchorBefore, _ := tt.Find("mcp-trigger")
 	popupBefore, _ := tt.Find("管理 MCP 服务")
 	tt.Scroll(400, 400, 0, 40)
+	tt.Frame()
 	anchorAfter, _ := tt.Find("mcp-trigger")
 	popupAfter, _ := tt.Find("管理 MCP 服务")
 	if anchorAfter.Y >= anchorBefore.Y {
@@ -92,10 +96,10 @@ func TestWelcomePopoverTracksTranscriptScroll(t *testing.T) {
 	if math.Abs(float64((popupAfter.Y-popupBefore.Y)-(anchorAfter.Y-anchorBefore.Y))) > 2 {
 		t.Fatalf("popup did not follow the cell: anchor=%v -> %v, popup=%v -> %v", anchorBefore, anchorAfter, popupBefore, popupAfter)
 	}
-	tt.Scroll(400, 400, 0, 500)
-	tt.Frame()
+	tt.Scroll(400, 400, 0, 5000)
+	tt.Advance(50 * time.Millisecond)
 	if a.welcomeMCP {
-		t.Fatal("popup stayed open after the table left the transcript viewport")
+		t.Fatal("popup stayed open after the welcome card left the transcript viewport")
 	}
 }
 

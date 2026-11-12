@@ -20,7 +20,7 @@ type performanceConfig struct {
 	Sizes              []int `json:"sizes"`
 	StressRows         int   `json:"stress_rows"`
 	SearchRows         int   `json:"search_rows"`
-	Pages              int   `json:"pages"`
+	Stops              int   `json:"stops"`
 	PayloadCount       int   `json:"payload_count"`
 	PayloadBytes       int   `json:"payload_bytes"`
 	Cycles             int   `json:"cycles"`
@@ -34,7 +34,7 @@ type performanceConfig struct {
 func performanceOptions(_ testing.TB) performanceConfig {
 	return performanceConfig{
 		Sizes: []int{1000, 10000, 100000}, StressRows: 30000, SearchRows: 100000,
-		Pages: 160, PayloadCount: 128, PayloadBytes: 1 << 20, Cycles: 12,
+		Stops: 160, PayloadCount: 128, PayloadBytes: 1 << 20, Cycles: 12,
 		OwnershipBatches: 80, CodeSizes: []int{32 << 10, 256 << 10, 1 << 20},
 		SnapshotQueueRows: 10000, SnapshotQueueCount: 8,
 	}
@@ -88,9 +88,10 @@ func performanceMetric(tb testing.TB, scenario string, values map[string]any) {
 	tb.Logf("PERF_METRIC %s", encoded)
 }
 
-func performanceChatTester(conv *conversation, pageSize int) *ui.Tester {
+// performanceChatTester draws the transcript the way the desktop does: the list
+// builds the rows in view, so the fixture must not page it.
+func performanceChatTester(conv *conversation) *ui.Tester {
 	a := &desktop{prefs: defaultPrefs(), page: "chat", tabs: []*conversation{conv}}
-	a.prefs.HistoryPageSize = pageSize
 	conv.uiState().Follow = false
 	return ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(a.theme())

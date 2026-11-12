@@ -63,7 +63,6 @@ func TestSettingsPageStagesControlsAndCommitsFinalValues(t *testing.T) {
 	}
 	a.configDraft.CustomPrompt = "final prompt"
 	a.settings.BgOpacity = 0
-	a.settings.HistoryPageSize = 120
 	a.selectAppearance("light")
 	a.setPetSize(220)
 	a.selectSettingsSection("高级")
@@ -123,7 +122,7 @@ func TestSettingsPageStagesControlsAndCommitsFinalValues(t *testing.T) {
 		t.Fatalf("final control values did not reach disk: %+v", disk)
 	}
 	prefs := readPrefs(a.prefsPath())
-	if prefs.Appearance != "light" || prefs.Pet.Size != 220 || prefs.HistoryPageSize != 120 || len(host.autostart.sets) != 1 || !host.autostart.enabled {
+	if prefs.Appearance != "light" || prefs.Pet.Size != 220 || len(host.autostart.sets) != 1 || !host.autostart.enabled {
 		t.Fatal("preference or autostart edit did not commit")
 	}
 	if a.settingsPendingEdits() {
@@ -131,7 +130,7 @@ func TestSettingsPageStagesControlsAndCommitsFinalValues(t *testing.T) {
 	}
 	// The next visit must show the committed zero and final values.
 	a.beginSettings()
-	if a.settings.Retries != 0 || a.settings.BgOpacity != 0 || a.settings.HistoryPageSize != 120 || !a.settings.Validation["Go"] {
+	if a.settings.Retries != 0 || a.settings.BgOpacity != 0 || !a.settings.Validation["Go"] {
 		t.Fatal("reopening settings lost committed values")
 	}
 }
