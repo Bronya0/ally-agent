@@ -746,7 +746,7 @@ func TestCancelRunKeepsSessionRegisteredUntilRunExits(t *testing.T) {
 		defer close(runExited)
 		<-ctx.Done()
 		<-runCanExit
-		app.finishRun(runID)
+		app.releaseRun(runID)
 	}()
 
 	if err := app.CancelRun(runID); err != nil {

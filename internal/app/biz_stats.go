@@ -27,7 +27,8 @@ import (
 //   - Recording is fire-and-forget: recordTokenStats uses a bounded,
 //     non-blocking queue and only a brief lifecycle lock on the chat hot path.
 //   - Persistence is done by a single background goroutine (started in
-//     Startup) that flushes dirty day files every few seconds and on exit.
+//     Startup): a finished run asks it to flush, and a ten minute tick bounds
+//     what a crash can lose while one run is still working.
 //   - Aggregation for GetTokenStats is computed on demand from an in-memory
 //     snapshot, so opening the stats modal performs no disk IO.
 //   - Day files live in ~/.ally_agent/stats/<date>.json, are retained for
@@ -36,7 +37,7 @@ import (
 const (
 	statsSubDir               = "stats"
 	statsRetentionDays        = 90
-	statsFlushInterval        = 5 * time.Second
+	statsFlushInterval        = 10 * time.Minute
 	statsQueueSize            = 2048
 	statsMaxRecordsPerDay     = 10000
 	statsMaxTotalRecords      = 20000
@@ -82,6 +83,7 @@ type statsRecorder struct {
 	days          map[string][]statsRecord // date ("2006-01-02") -> records
 	dirtyDays     map[string]bool
 	queue         chan statsRecord
+	flushCh       chan struct{}
 	startOnce     sync.Once
 	stopOnce      sync.Once
 	cancel        context.CancelFunc
@@ -96,6 +98,7 @@ func newStatsRecorder(storageDir string) *statsRecorder {
 		days:       map[string][]statsRecord{},
 		dirtyDays:  map[string]bool{},
 		queue:      make(chan statsRecord, statsQueueSize),
+		flushCh:    make(chan struct{}, 1),
 		done:       make(chan struct{}),
 		storageDir: storageDir,
 	}
@@ -243,6 +246,10 @@ func (s *statsRecorder) run(ctx context.Context) {
 		select {
 		case r := <-s.queue:
 			s.appendRecord(r)
+		case <-s.flushCh:
+			// A run just finished: take its last sample before writing.
+			s.drainQueue()
+			s.flush()
 		case <-ctx.Done():
 			for {
 				select {
@@ -270,6 +277,19 @@ func (s *statsRecorder) drainQueue() {
 		default:
 			return
 		}
+	}
+}
+
+// flushNow asks the recorder to write dirty day files as soon as it can. A
+// finished run only signals: copying, encoding and replacing the file stay on
+// the recorder goroutine. Repeated signals coalesce into one pending write.
+func (s *statsRecorder) flushNow() {
+	if s == nil {
+		return
+	}
+	select {
+	case s.flushCh <- struct{}{}:
+	default:
 	}
 }
 

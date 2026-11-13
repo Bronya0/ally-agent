@@ -346,4 +346,3 @@ func TestMcpSSEConnectionOutlivesStartupBudgetAndCaller(t *testing.T) {
 		t.Fatalf("startup context leaked into transport lifetime: %v / %+v", err, response)
 	}
 }
-

@@ -90,9 +90,9 @@ func TestInjectRunMessageAfterFinishRun(t *testing.T) {
 	app.runInputs[runID] = make(chan runInput, 2)
 	app.mu.Unlock()
 
-	app.finishRun(runID)
+	app.releaseRun(runID)
 	if err := app.InjectRunMessage(runID, "x"); err == nil {
-		t.Fatal("InjectRunMessage(after finishRun) error = nil, want error")
+		t.Fatal("InjectRunMessage(after releaseRun) error = nil, want error")
 	}
 }
 
@@ -175,7 +175,7 @@ func TestAppendPendingRunInputsAfterFinishRun(t *testing.T) {
 	app.runs[runID] = cancel
 	app.runInputs[runID] = make(chan runInput, runInputBufferSize)
 	app.mu.Unlock()
-	app.finishRun(runID)
+	app.releaseRun(runID)
 
 	base := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "keep"}}
 	out, injected, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, base)

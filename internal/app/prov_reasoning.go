@@ -531,6 +531,10 @@ var (
 	jsonEmptyString = jsonStringValue("")
 	// jsonBoolFalse is the explicit false written for `store`.
 	jsonBoolFalse = json.RawMessage("false")
+	// A cleared tool_calls field serializes to one of these; compared as bytes so
+	// the check never copies the call arguments. See chatMessageHasToolCalls.
+	jsonNullBytes       = []byte("null")
+	jsonEmptyArrayBytes = []byte("[]")
 	// jsonThinkingDisabled is the stop-thinking field written for the "off" level.
 	// It is DeepSeek's documented spelling for the OpenAI wire — their sample passes
 	// `{"thinking": {"type": "disabled"}}` through extra_body, because the OpenAI
@@ -1124,8 +1128,8 @@ func chatMessageHasToolCalls(m map[string]json.RawMessage) bool {
 	if !ok {
 		return false
 	}
-	trimmed := strings.TrimSpace(string(raw))
-	return trimmed != "" && trimmed != "null" && trimmed != "[]"
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, jsonNullBytes) && !bytes.Equal(trimmed, jsonEmptyArrayBytes)
 }
 
 func chatMessageHasReasoningKey(m map[string]json.RawMessage) bool {

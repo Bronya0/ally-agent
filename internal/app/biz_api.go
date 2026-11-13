@@ -826,8 +826,9 @@ func (a *App) apiHandleCancelSession(w http.ResponseWriter, r *http.Request) {
 // apiHandleSessionResult reads the backend checkpoint, never a stale UI snapshot.
 func (a *App) apiHandleSessionResult(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
-	// Observe idle before loading history: finishRun removes the live run only
-	// after its final history/index writes, so done cannot carry an older read.
+	// Observe idle before loading history: releaseRun removes the live run only
+	// after finishRun's final history/index writes, so done cannot carry an older
+	// read.
 	snapshot, state, ok := a.apiStableSessionSnapshot(w, sessionID)
 	if !ok {
 		return

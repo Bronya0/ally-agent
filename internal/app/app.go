@@ -1844,13 +1844,37 @@ func (a *App) CancelRun(runID string) error {
 	return nil
 }
 
-func (a *App) finishRun(runID string) {
+// finishRun is the single end-of-run exit, called once from runChat's deferred
+// cleanup. It saves the interrupted history checkpoint before the run stops
+// being visible, reconciles the session index and context breakdown, releases
+// the run's registrations, and writes the run's usage sample.
+func (a *App) finishRun(runID, sessionID string, messages []openai.ChatCompletionMessage, interrupted, syncIndex bool) {
+	if interrupted && len(sanitizeHistoryMessages(messages)) > 0 {
+		a.saveHistory(sessionID, messages)
+	}
+	a.restoreSavedHistoryBreakdown(sessionID)
+	if syncIndex {
+		if err := a.syncSessionIndexFromHistory(sessionID); err != nil {
+			a.logAppError("session index sync failed", "sessionId", sessionID, "error", err.Error())
+		}
+	}
+	a.mu.Lock()
+	delete(a.liveCommandContext, sessionID)
+	a.mu.Unlock()
+	a.releaseRun(runID)
+	// The usage sample belongs to this run: write it now instead of waiting for
+	// a timer to rewrite the day file while nothing new happened.
+	a.stats.flushNow()
+}
+
+// releaseRun drops the run's live registrations. The input queue is dropped,
+// not closed: closing a channel while a concurrent InjectRunMessage is sending
+// would panic, and dropping the only reference lets the channel (plus any
+// queued messages) be GC'd with the run.
+func (a *App) releaseRun(runID string) {
 	a.mu.Lock()
 	delete(a.runs, runID)
 	delete(a.runSessions, runID)
-	// The queue is dropped, not closed: closing a channel while a concurrent
-	// InjectRunMessage is sending would panic, and dropping the only reference
-	// lets the channel (plus any queued messages) be GC'd with the run.
 	delete(a.runInputs, runID)
 	a.mu.Unlock()
 }
@@ -2203,19 +2227,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	}
 	defer func() {
 		closeBlackboard() // The synchronous tool/child execution barrier has drained.
-		if !success && len(sanitizeHistoryMessages(messages)) > 0 {
-			a.saveHistory(req.SessionID, messages)
-		}
-		a.restoreSavedHistoryBreakdown(sessionID)
-		if req.syncSessionIndex {
-			if err := a.syncSessionIndexFromHistory(sessionID); err != nil {
-				a.logAppError("session index sync failed", "sessionId", sessionID, "error", err.Error())
-			}
-		}
-		a.mu.Lock()
-		delete(a.liveCommandContext, sessionID)
-		a.mu.Unlock()
-		a.finishRun(runID)
+		// Every end-of-run step lives in finishRun: nothing else may run after
+		// it, so an interrupted run cannot leave the session half-written.
+		a.finishRun(runID, sessionID, messages, !success, req.syncSessionIndex)
 	}()
 	// Panic 兜底：runChat 在独立 goroutine 里运行，逃逸的 panic 会直接击穿
 	// 整个桌面进程。这里把它转换成常规 run:error 结束路径。注册在上面的清理

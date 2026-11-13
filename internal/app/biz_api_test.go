@@ -717,7 +717,7 @@ func TestApiBusySessionAndQuestions(t *testing.T) {
 	if len(app.pendingAsks["ask"].answers) != 1 {
 		t.Fatal("answer not delivered")
 	}
-	app.finishRun("run")
+	app.releaseRun("run")
 	app.compactingSessions[sid] = struct{}{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
