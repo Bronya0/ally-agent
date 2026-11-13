@@ -36,7 +36,11 @@ func TestFooterPrefixPreviewFreezeAndRefresh(t *testing.T) {
 	app.sessionSystemPromptParts(sid, app.config, nil)
 	app.sessionWorkspaceMap(sid, app.config)
 	app.buildToolsForSession(sid, app.config)
+	app.sessionToolsets[sid] = append(app.sessionToolsets[sid], rawFunctionTool("mcp__fixture__lookup", "fixture lookup", map[string]any{"type": "object"}))
 	frozen := app.getContextBreakdown(sid, root)
+	if frozen.MCPToolSchemas <= 0 || frozen.MCPToolSchemas >= frozen.ToolSchemas {
+		t.Fatalf("MCP schemas were not separated from the frozen toolset: %+v", frozen)
+	}
 	if _, ok := app.frozenPrefixStats[sid]; !ok {
 		t.Fatal("frozen prefix estimate was not cached")
 	}
@@ -45,6 +49,9 @@ func TestFooterPrefixPreviewFreezeAndRefresh(t *testing.T) {
 	}
 	if got := app.getContextBreakdown(sid, root); got.SystemPrompt != frozen.SystemPrompt {
 		t.Fatal("frozen prompt changed after a disk edit")
+	}
+	if got := app.getContextBreakdown(sid, root); got.MCPToolSchemas != frozen.MCPToolSchemas {
+		t.Fatal("frozen MCP estimate changed without refreshing the session")
 	}
 	_, parts := app.sessionPrefixBreakdown(sid, app.config, nil)
 	parts[0].Tokens = -1
@@ -57,6 +64,9 @@ func TestFooterPrefixPreviewFreezeAndRefresh(t *testing.T) {
 	}
 	if got := app.getContextBreakdown(sid, root); got.SystemPrompt == frozen.SystemPrompt {
 		t.Fatal("refreshed preview did not include the new project rule")
+	}
+	if got := app.getContextBreakdown(sid, root); got.MCPToolSchemas != 0 {
+		t.Fatal("refreshed preview retained MCP schemas from the old snapshot")
 	}
 	if err := app.ReleaseSession(sid); err != nil {
 		t.Fatal(err)

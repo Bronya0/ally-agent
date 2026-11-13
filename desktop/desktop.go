@@ -86,6 +86,8 @@ type workspaceFile struct {
 	MD *markdown.Options
 }
 type desktop struct {
+	contextToolsOpen      bool
+	builtinToolSearch     string
 	memoryDiagnosticBusy  bool
 	pluginHost            *pluginhost.Host
 	pluginThemePalette    pluginhost.Palette

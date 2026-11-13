@@ -304,9 +304,10 @@ func TestCatalogModelCanBeClearedAndReplacedWithCustomID(t *testing.T) {
 	}
 }
 
-func TestMCPSearchShowsEmptyState(t *testing.T) {
+func TestServerAndToolSearchShowEmptyState(t *testing.T) {
 	a := &desktop{mcpText: `{"mcpServers":{"server":{"command":"node"}}}`, toolInventory: []backend.ToolDefinitionSummary{{Name: "read", Protected: true}}}
 	a.mcpF.Search = "not-a-match"
+	a.builtinToolSearch = "not-a-match"
 	for _, tc := range []struct {
 		name string
 		draw func(*ui.Context)

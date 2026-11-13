@@ -371,9 +371,11 @@ type settingsForm struct {
 	FullJSON        string
 	NewToken        bool
 
-	SessionHeaderConfirmOpen bool
-	SessionHeaderToDisable   string
-	BackgroundPath           *string
+	SessionHeaderConfirmOpen  bool
+	SessionHeaderToDisable    string
+	ContextLoadingConfirmOpen bool
+	ContextLoadingToDisable   string
+	BackgroundPath            *string
 }
 
 func (a *desktop) syncSettingsForm() {
@@ -501,7 +503,6 @@ type modelForm struct {
 
 // mcpForm is the MCP page + server editor state.
 type mcpForm struct {
-	Tab          int
 	Search       string
 	Busy         bool
 	Revision     uint64

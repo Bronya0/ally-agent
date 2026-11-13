@@ -494,6 +494,27 @@ func fmtK(n int) string {
 	return strconv.Itoa(n)
 }
 
+// tokenUnits renders a token estimate in thousands: 28 → "0.0k", 816 → "0.8k",
+// 26_045 → "26k". The estimate is rough, so one decimal below 1k is as fine as
+// the panel needs, and everything above it stays whole.
+func tokenUnits(n int) string {
+	switch {
+	case n >= 999_500_000: // rounds up to one gigatoken
+		return "1G"
+	case n >= 999_500: // rounds up to one megatoken
+		return strconv.Itoa((n+500_000)/1_000_000) + "M"
+	case n >= 1_000:
+		return strconv.Itoa((n+500)/1_000) + "k"
+	case n <= 0:
+		return "0k"
+	}
+	text := fmt.Sprintf("%.1f", float64(n)/1_000)
+	if text == "1.0" { // 999 rounds up to a whole thousand
+		return "1k"
+	}
+	return text + "k"
+}
+
 func trimZero(v float64) string {
 	if v >= 100 {
 		return fmt.Sprintf("%.0f", v)

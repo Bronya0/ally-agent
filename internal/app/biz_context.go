@@ -128,6 +128,7 @@ type ContextBreakdown struct {
 	SystemPrompt      int                    `json:"systemPrompt"`
 	SystemPromptParts []ContextBreakdownPart `json:"systemPromptParts,omitempty"`
 	ToolSchemas       int                    `json:"toolSchemas"`
+	MCPToolSchemas    int                    `json:"mcpToolSchemas"` // Included in ToolSchemas.
 	UserMessages      int                    `json:"userMessages"`
 	AssistantMsgs     int                    `json:"assistantMsgs"`
 	ToolResults       int                    `json:"toolResults"`
@@ -341,8 +342,14 @@ func mcpToolSchemaTokens(tools []openai.Tool) int {
 }
 
 func estimateToolSchemaTokens(tools []openai.Tool) int {
+	total, _ := estimateToolSchemaTokenParts(tools)
+	return total
+}
+
+// estimateToolSchemaTokenParts returns the total and its MCP portion together.
+func estimateToolSchemaTokenParts(tools []openai.Tool) (int, int) {
 	if len(tools) == 0 {
-		return 0
+		return 0, 0
 	}
 	// Split into builtin (non-mcp__) and mcp portions. The builtin portion
 	// uses the cache only when it is the full chatTools() set — a filtered
@@ -379,10 +386,11 @@ func estimateToolSchemaTokens(tools []openai.Tool) int {
 		}
 		total = estimateModelToolSchemas(builtinOnly)
 	}
+	mcp := 0
 	if hasMcp {
-		total += mcpToolSchemaTokens(tools)
+		mcp = mcpToolSchemaTokens(tools)
 	}
-	return total
+	return total + mcp, mcp
 }
 
 // finalizeContextBreakdownTotal recomputes the category sum and the
@@ -545,6 +553,10 @@ func (a *App) lookupSessionWorkspaceOverride(sessionID string) (sessionWorkspace
 // will freeze. Read-only by design — footer polling must not pin the
 // session's map bytes ahead of the first real request.
 func (a *App) peekSessionWorkspaceMap(sessionID string, cfg ConfigState) string {
+	cfg = a.contextSettingsForSession(sessionID, cfg, false)
+	if !cfg.ContextEnabled("workspace_map") {
+		return ""
+	}
 	if strings.TrimSpace(sessionID) == "" {
 		return a.workspaceMapContext(cfg)
 	}
@@ -570,6 +582,7 @@ func (a *App) peekSessionWorkspaceMap(sessionID string, cfg ConfigState) string 
 // breakdown only covers the conversation. Both therefore agree on what the
 // request carries before the first provider measurement arrives.
 func (a *App) sessionPrefixBreakdown(sessionID string, cfg ConfigState, allSkills []SkillDefinition) (int, []ContextBreakdownPart) {
+	cfg = a.contextSettingsForSession(sessionID, cfg, false)
 	if cached, ok := a.frozenPrefixTokenStats(sessionID); ok {
 		return cached.system, append([]ContextBreakdownPart(nil), cached.parts...)
 	}
@@ -612,6 +625,7 @@ type frozenPrefixStats struct {
 	system       int
 	parts        []ContextBreakdownPart
 	tools        int
+	mcpTools     int
 }
 
 func sameSliceSource[T any](a, b []T) bool {
@@ -643,7 +657,7 @@ func (a *App) frozenPrefixTokenStats(sessionID string) (frozenPrefixStats, bool)
 		next.system += tokens
 		next.parts = append(next.parts, ContextBreakdownPart{Label: workspaceMapPartLabel, Tokens: tokens})
 	}
-	next.tools = estimateToolSchemaTokens(toolset)
+	next.tools, next.mcpTools = estimateToolSchemaTokenParts(toolset)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	currentPrompt, p := a.sessionSystemPrompts[sessionID]
@@ -659,11 +673,11 @@ func (a *App) frozenPrefixTokenStats(sessionID string) (frozenPrefixStats, bool)
 	return next, true
 }
 
-func (a *App) sessionToolSchemaTokens(sessionID string, cfg ConfigState) int {
+func (a *App) sessionToolSchemaTokens(sessionID string, cfg ConfigState) (int, int) {
 	if cached, ok := a.frozenPrefixTokenStats(sessionID); ok {
-		return cached.tools
+		return cached.tools, cached.mcpTools
 	}
-	return estimateToolSchemaTokens(a.sessionToolsetForBreakdown(sessionID, cfg))
+	return estimateToolSchemaTokenParts(a.sessionToolsetForBreakdown(sessionID, cfg))
 }
 
 // getContextBreakdown computes token estimates from the real session state.
@@ -677,10 +691,11 @@ func (a *App) getContextBreakdown(sessionID string, workspaceHint string) Contex
 		result.SystemPrompt = cached.system
 		result.SystemPromptParts = append([]ContextBreakdownPart(nil), cached.parts...)
 		result.ToolSchemas = cached.tools
+		result.MCPToolSchemas = cached.mcpTools
 	} else {
-		cfg := a.sessionContextConfig(sessionID, workspaceHint)
+		cfg := a.contextSettingsForSession(sessionID, a.sessionContextConfig(sessionID, workspaceHint), false)
 		result.SystemPrompt, result.SystemPromptParts = a.sessionPrefixBreakdown(sessionID, cfg, nil)
-		result.ToolSchemas = a.sessionToolSchemaTokens(sessionID, cfg)
+		result.ToolSchemas, result.MCPToolSchemas = a.sessionToolSchemaTokens(sessionID, cfg)
 	}
 
 	// Check if live breakdown is available (covers tool calls + tool results not in a.histories)
@@ -794,7 +809,7 @@ func computeLiveBreakdown(msgs []openai.ChatCompletionMessage) ContextBreakdown 
 // maps them to localized text (ComposerInfoBar's contextPartLabel), so both
 // sides name the same sections.
 const (
-	workspaceMapPartLabel = "工作区文件结构"
+	workspaceMapPartLabel = "工作区结构"
 	// No section carries this one any more: every plan update is a history
 	// message, never a prefix part. It stays as the name the frontend label map and
 	// the tests that assert its absence refer to.
@@ -1374,8 +1389,12 @@ func (a *App) sessionSystemPrompt(sessionID string, cfg ConfigState, allSkills [
 // request path joins them into the single system message). See
 // sessionSystemPrompts on App for the rationale.
 func (a *App) sessionSystemPromptParts(sessionID string, cfg ConfigState, allSkills []SkillDefinition) []systemPromptPart {
+	cfg = a.contextSettingsForSession(sessionID, cfg, true)
+	if !cfg.ContextEnabled("skills") {
+		allSkills = nil
+	}
 	if strings.TrimSpace(sessionID) == "" {
-		return a.buildSystemPromptParts(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
+		return a.buildSystemPromptParts(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot, cfg.DisabledContext)
 	}
 	a.mu.Lock()
 	if frozen, ok := a.sessionSystemPrompts[sessionID]; ok {
@@ -1384,7 +1403,7 @@ func (a *App) sessionSystemPromptParts(sessionID string, cfg ConfigState, allSki
 	}
 	a.mu.Unlock()
 
-	parts := a.buildSystemPromptParts(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
+	parts := a.buildSystemPromptParts(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot, cfg.DisabledContext)
 	if len(parts) == 0 {
 		return nil
 	}
@@ -1438,6 +1457,7 @@ func (a *App) refreshSessionPromptPrefix(sessionID string) {
 // (peek semantics — footer polling must not pin the session's prompt bytes
 // ahead of the first real request).
 func (a *App) systemPromptPartsForBreakdown(sessionID string, cfg ConfigState, skills []SkillDefinition) []systemPromptPart {
+	cfg = a.contextSettingsForSession(sessionID, cfg, false)
 	if strings.TrimSpace(sessionID) != "" {
 		a.mu.Lock()
 		frozen, ok := a.sessionSystemPrompts[sessionID]
@@ -1446,7 +1466,7 @@ func (a *App) systemPromptPartsForBreakdown(sessionID string, cfg ConfigState, s
 			return frozen
 		}
 	}
-	return a.buildSystemPromptParts(skills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
+	return a.buildSystemPromptParts(skills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot, cfg.DisabledContext)
 }
 
 func (a *App) loadSessionHistoryCopy(sessionID string) []openai.ChatCompletionMessage {

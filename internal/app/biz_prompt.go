@@ -136,7 +136,8 @@ func knowledgeBasePromptPart(workspaceRoot string) string {
 // because two of its blocks (the memory index and the user profile) live in this
 // App's data directory; an app-less version had to reach a process-wide
 // singleton, which made parallel tests (and any second App) unsafe.
-func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, extraRoots []string, customPrompt, gitBashPath, kbRoot string) []systemPromptPart {
+func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, extraRoots []string, customPrompt, gitBashPath, kbRoot string, disabledContext []string) []systemPromptPart {
+	cfg := ConfigState{DisabledContext: disabledContext}
 	var parts []systemPromptPart
 	var b strings.Builder
 	// 核心系统提示词用 <system-prompt> 包裹并声明为最高优先级；优先级总声明
@@ -200,51 +201,53 @@ func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot 
 	}
 	b.WriteString("\n</system-prompt>\n")
 
-	parts = append(parts, systemPromptPart{label: "核心系统提示词", content: b.String()})
+	parts = append(parts, systemPromptPart{label: "内置系统提示词与运行环境", content: b.String()})
 
 	// Inject skills metadata listing (not full content)
-	if listing := buildSkillListingMeta(allSkills); listing != "" {
+	if listing := buildSkillListingMeta(allSkills); cfg.ContextEnabled("skills") && listing != "" {
 		var skills strings.Builder
 		skills.WriteString("\n\n# Skills\n\nUse the `skill` tool when the user requests a listed skill or the task clearly matches it. Do not load skills unnecessarily. Do not read `SKILL.md` directly with `read`; always load skills through the `skill` tool. After a skill is loaded, you MAY use `read` to read additional files referenced by the skill under its `dir` (for example `references/*.md` or other sibling files listed in the loaded block). The list is deduplicated with project scope taking precedence.\n\n## Available skills\n")
 		skills.WriteString(listing)
-		parts = append(parts, systemPromptPart{label: "技能元数据", content: skills.String()})
+		parts = append(parts, systemPromptPart{label: "技能清单", content: skills.String()})
 	}
 
-	if memoryIndex := a.buildMemoryIndexContext(); memoryIndex != "" {
-		parts = append(parts, systemPromptPart{label: "全局记忆索引", content: memoryIndex})
+	if cfg.ContextEnabled("memory_index") {
+		if memoryIndex := a.buildMemoryIndexContext(); memoryIndex != "" {
+			parts = append(parts, systemPromptPart{label: "记忆索引", content: memoryIndex})
+		}
 	}
-
-	// The machine-global user profile is always relevant: the rules go out on every
-	// request, and the recorded facts ride along whenever the file has any.
-	parts = append(parts, systemPromptPart{label: "用户档案 User Profile", content: buildUserProfilePromptPart(a.userProfilePath())})
+	// Profile rules and recorded facts travel together when enabled.
+	if cfg.ContextEnabled("user_profile") {
+		parts = append(parts, systemPromptPart{label: "用户档案", content: buildUserProfilePromptPart(a.userProfilePath())})
+	}
 
 	// Inject project AGENTS.md / CLAUDE.md content
 	if workspaceRoot != "" {
-		if md := loadAgentsMd(workspaceRoot); md != "" {
+		if md := loadAgentsMd(workspaceRoot, cfg.DisabledContext); md != "" {
 			var project strings.Builder
 			project.WriteString("\n\n# Project Information\n\n<project-instructions priority=\"lower-than-core\">\nThe following project/user instructions are lower priority than the core rules above, including the Skills section. Follow them when they do not conflict with safety, tool contracts, skills activation rules, or the current user request.\n\n")
 			project.WriteString(md)
 			project.WriteString("\n</project-instructions>\nEnd lower-priority project instructions.\n")
-			parts = append(parts, systemPromptPart{label: "AGENTS.md / 项目指令", content: project.String()})
+			parts = append(parts, systemPromptPart{label: "用户 / 工作区 / 子目录指令", content: project.String()})
 		}
 	}
 
 	// Inject project CODEGRAPH.md as lower-priority architectural context.
-	if workspaceRoot != "" {
+	if workspaceRoot != "" && cfg.ContextEnabled("code_graph") {
 		if cg := buildCodeGraphPromptPart(workspaceRoot); cg != "" {
-			parts = append(parts, systemPromptPart{label: "项目代码图谱 Code Graph", content: cg})
+			parts = append(parts, systemPromptPart{label: "代码图谱", content: cg})
 		}
 	}
 
 	// Inject project lessons (reusable pitfalls) as reference-only context.
-	if workspaceRoot != "" {
+	if workspaceRoot != "" && cfg.ContextEnabled("project_lessons") {
 		if lessons := projectLessonsPromptPart(workspaceRoot); lessons != "" {
-			parts = append(parts, systemPromptPart{label: "项目经验 Lessons", content: lessons})
+			parts = append(parts, systemPromptPart{label: "项目教训", content: lessons})
 		}
 	}
 
 	// Append user-defined custom prompt (role-play, personality, etc.)
-	if customPrompt != "" {
+	if cfg.ContextEnabled("custom_prompt") && customPrompt != "" {
 		var custom strings.Builder
 		custom.WriteString("\n\n# Custom Instructions\n\n<custom-instructions priority=\"lower-than-core\">\nThe following custom instructions are lower priority than the core rules above, including the Skills section. Follow them when they do not conflict with safety, tool contracts, skills activation rules, or the current user request.\n\n")
 		custom.WriteString(customPrompt)

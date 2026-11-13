@@ -857,13 +857,16 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				verbColor = c.Theme().Danger
 			}
 			if name == "remote_run_command" {
-				ui.Text(c.Key(key+"-ssh"), "SSH").FontSize(fsTool).TextColor(verbColor).Shrink(0).NoWrap()
+				// The host is an address, not an action: keep it quiet and a step
+				// smaller than the verb and the command beside it.
+				sshInk := a.secondaryInk()
+				ui.Text(c.Key(key+"-ssh"), "SSH").FontSize(fsTool - 2).TextColor(sshInk).Shrink(0).NoWrap()
 				alias := str(args, "alias")
 				if alias == "" {
 					alias = str(args, "target") // Historical calls use the old parameter.
 				}
 				if alias != "" {
-					label := ui.Text(c.Key(key+"-ssh-alias"), short(alias, 32)).FontSize(fsTool).TextColor(verbColor).LineHeight(1.4).SingleLine().MinWidth(0).MaxWidthPercent(24).Shrink(0)
+					label := ui.Text(c.Key(key+"-ssh-alias"), short(alias, 32)).FontSize(fsTool - 2).TextColor(sshInk).LineHeight(1.4).SingleLine().MinWidth(0).MaxWidthPercent(24).Shrink(0)
 					uikit.Tooltip(c, label, alias)
 				}
 			}

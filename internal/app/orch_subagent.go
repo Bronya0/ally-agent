@@ -714,7 +714,11 @@ func (a *App) buildSubagentEnv(cfg ConfigState) string {
 	var b strings.Builder
 	b.WriteString("Workspace: " + cfg.Workspace + "\n")
 
-	entries, err := a.listFilesWithConfig(cfg, ListFilesRequest{MaxDepth: 2, Limit: 60, ModelFacing: true})
+	var entries ListFilesResult
+	var err error
+	if cfg.ContextEnabled("workspace_map") {
+		entries, err = a.listFilesWithConfig(cfg, ListFilesRequest{MaxDepth: 2, Limit: 60, ModelFacing: true})
+	}
 	if err == nil && len(entries.Entries) > 0 {
 		b.WriteString("\n## Project files\n")
 		for _, e := range entries.Entries {
@@ -725,7 +729,7 @@ func (a *App) buildSubagentEnv(cfg ConfigState) string {
 			b.WriteString(e.Path + tag + "\n")
 		}
 	}
-	if lessons := projectLessonsPromptPart(cfg.Workspace); lessons != "" {
+	if lessons := optionalContext(cfg, "project_lessons", func() string { return projectLessonsPromptPart(cfg.Workspace) }); lessons != "" {
 		b.WriteString(lessons)
 	}
 	return b.String()
@@ -737,13 +741,13 @@ func (a *App) buildSubagentEnv(cfg ConfigState) string {
 func (a *App) buildSubagentInstructionContext(cfg ConfigState, withProjectMap bool) string {
 	var b strings.Builder
 	if cfg.Workspace != "" {
-		if md := loadAgentsMd(cfg.Workspace); strings.TrimSpace(md) != "" {
+		if md := loadAgentsMd(cfg.Workspace, cfg.DisabledContext); strings.TrimSpace(md) != "" {
 			b.WriteString("## Lower-priority project instructions\n")
 			b.WriteString("Follow these project instructions when they do not conflict with the sub-agent system rules or the delegated task.\n\n")
 			b.WriteString(md)
 			b.WriteString("\n")
 		}
-		if withProjectMap {
+		if withProjectMap && cfg.ContextEnabled("code_graph") {
 			if cg := buildCodeGraphPromptPart(cfg.Workspace); cg != "" {
 				if b.Len() > 0 {
 					b.WriteString("\n")
@@ -755,7 +759,7 @@ func (a *App) buildSubagentInstructionContext(cfg ConfigState, withProjectMap bo
 			}
 		}
 	}
-	if custom := strings.TrimSpace(cfg.CustomPrompt); custom != "" {
+	if custom := strings.TrimSpace(cfg.CustomPrompt); cfg.ContextEnabled("custom_prompt") && custom != "" {
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}

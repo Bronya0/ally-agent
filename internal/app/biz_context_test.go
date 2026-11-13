@@ -65,7 +65,7 @@ func TestResolveContextAnchorDiscardsRewrittenConversation(t *testing.T) {
 // category sum is the fallback, and a provider measurement replaces the estimate
 // for everything it covered.
 func TestFinalizeContextBreakdownPrefersMeasurement(t *testing.T) {
-	breakdown := ContextBreakdown{SystemPrompt: 100, ToolSchemas: 50, UserMessages: 10}
+	breakdown := ContextBreakdown{SystemPrompt: 100, ToolSchemas: 50, MCPToolSchemas: 20, UserMessages: 10}
 	finalizeContextBreakdownTotal(&breakdown)
 	if breakdown.Estimated != 160 || breakdown.Total != 160 {
 		t.Fatalf("estimated = %d, total = %d, want 160/160", breakdown.Estimated, breakdown.Total)
@@ -288,5 +288,54 @@ func TestAppendUserMessageWithAttachmentsReportsOverCapImageText(t *testing.T) {
 	}
 	if !strings.Contains(content, "carried text") {
 		t.Fatalf("the attachment text must still be appended, got %q", content)
+	}
+}
+
+func TestContextLoadingChoicesSurviveRefreshAndRelease(t *testing.T) {
+	app := newIsolatedChatTestApp(t)
+	cfg := app.config.Clone()
+	for _, option := range ContextLoadingOptions() {
+		cfg.DisabledContext = append(cfg.DisabledContext, option.ID)
+	}
+	cfg.DisabledTools = []string{"grep"}
+	const sid = "loading-choices"
+	messages := app.buildSystemContextMessages(sid, cfg, nil)
+	if len(messages) != 1 {
+		t.Fatalf("disabled sources still injected %d messages", len(messages))
+	}
+	old := app.buildToolsForSession(sid, cfg)
+	for _, tool := range old {
+		if tool.Function != nil && tool.Function.Name == "grep" {
+			t.Fatal("disabled tool was injected")
+		}
+	}
+	live := cfg.Clone()
+	live.DisabledContext, live.DisabledTools = []string{}, []string{}
+	app.refreshSessionPromptPrefix(sid)
+	if got := app.buildSystemContextMessages(sid, live, nil); len(got) != 1 {
+		t.Fatal("refresh changed the session's loading choices")
+	}
+	for _, tool := range app.buildToolsForSession(sid, live) {
+		if tool.Function != nil && tool.Function.Name == "grep" {
+			t.Fatal("refresh changed the session's tool choices")
+		}
+	}
+	if got := app.buildSystemContextMessages("new-loading-session", live, nil); len(got) == 0 || len(got[0].Content) <= len(messages[0].Content) {
+		t.Fatal("new session did not use the current loading choices")
+	}
+	if cfg := app.contextSettingsForSession("", live, true); !cfg.ContextEnabled("user_profile") {
+		t.Fatal("stateless request inherited old choices")
+	}
+	if err := app.ReleaseSession(sid); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := app.sessionContextSettings[sid]; exists {
+		t.Fatal("release retained loading choices")
+	}
+	// All defaults are enabled, including after an old config is loaded.
+	for _, option := range ContextLoadingOptions() {
+		if !(ConfigState{}).ContextEnabled(option.ID) {
+			t.Fatal("legacy configuration disabled a source")
+		}
 	}
 }

@@ -158,7 +158,11 @@ func (a *desktop) saveSettings(notice ...string) {
 
 func (a *desktop) applySettingsSave(plan settingsCommit, result settingsSaveResult) {
 	if result.config != nil {
+		toolsChanged := !reflect.DeepEqual(a.config.DisabledTools, result.config.DisabledTools)
 		a.config = *result.config
+		if toolsChanged {
+			a.refreshMCPInventory()
+		}
 	}
 	if result.configErr == nil && result.autostartErr == nil && plan.autostart != nil {
 		a.autostartValue = *plan.autostart
@@ -194,6 +198,9 @@ func (a *desktop) commitSettingsOnLeave() {
 }
 
 func (a *desktop) beginSettings() {
+	a.contextToolsOpen = false
+	a.settings.ContextLoadingConfirmOpen = false
+	a.settings.ContextLoadingToDisable = ""
 	a.settingsLoadSequence++
 	if a.settingsInFlight == nil && (a.settingsBase == nil || !a.settingsPendingEdits()) {
 		a.configDraft = a.config
@@ -221,6 +228,7 @@ func (a *desktop) loadSettings() {
 			if !a.applySettingsLoad(sequence, previous, cfg, autostart) {
 				return
 			}
+			a.refreshMCPInventory()
 			a.sandboxState = sandbox
 			a.apiState = api
 			a.apiPort = float64(api.Port)

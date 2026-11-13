@@ -330,7 +330,7 @@ func TestSettingsFormScalarMirrorsReachConfig(t *testing.T) {
 	separate := map[string]bool{
 		"HistoryPageSize": true, "AppearanceMode": true, "ProxyModeIndex": true, "Autostart": true,
 		"UpdateBusy": true, "ProxyBusy": true, "APIPort": true, "APIBusy": true, "APIRevision": true,
-		"NewToken": true, "SessionHeaderConfirmOpen": true,
+		"NewToken": true, "SessionHeaderConfirmOpen": true, "ContextLoadingConfirmOpen": true,
 	}
 	formType := reflect.TypeOf(settingsForm{})
 	for i := 0; i < formType.NumField(); i++ {

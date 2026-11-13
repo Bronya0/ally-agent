@@ -844,13 +844,13 @@ func (a *desktop) welcomePopover(c *ui.Context, t *conversation, anchor ui.Eleme
 			if row == 2 && col == 0 {
 				label, page = locales.Text("管理技能"), "skills"
 			} else if row == 2 {
-				label = locales.Text("管理内置工具")
+				label, page = locales.Text("管理内置工具"), "settings"
 			}
 			popoverItem(c, fmt.Sprintf("welcome-manage-%d-%d", row, col), label, "", false, func() {
 				*open = false
 				a.changePage(page)
 				if row == 2 && col == 1 {
-					a.mcpF.Tab = 1
+					a.focusBuiltinToolsSettings()
 				}
 			}, a.secondaryInk())
 		})

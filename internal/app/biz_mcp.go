@@ -2161,6 +2161,7 @@ func builtinToolDisabled(ctx context.Context, cfg ConfigState, name string) bool
 // for the rationale). Stateless callers (sub-agents, scheduled tasks) use
 // buildToolsForConfig instead and always see the live set.
 func (a *App) buildToolsForSession(sessionID string, cfg ConfigState) []openai.Tool {
+	cfg = a.contextSettingsForSession(sessionID, cfg, true)
 	if strings.TrimSpace(sessionID) == "" {
 		return a.buildToolsForConfig(cfg)
 	}
@@ -2186,6 +2187,7 @@ func (a *App) buildToolsForSession(sessionID string, cfg ConfigState) []openai.T
 // that (peek semantics — footer polling must not pin the session's toolset
 // ahead of the first real request).
 func (a *App) sessionToolsetForBreakdown(sessionID string, cfg ConfigState) []openai.Tool {
+	cfg = a.contextSettingsForSession(sessionID, cfg, false)
 	if strings.TrimSpace(sessionID) != "" {
 		a.mu.Lock()
 		frozen, ok := a.sessionToolsets[sessionID]

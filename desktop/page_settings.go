@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"runtime"
+	"slices"
 	"strings"
 
 	backend "ally-dev/internal/app"
@@ -15,6 +16,22 @@ import (
 )
 
 var settingsSections = []string{"通用", "高级", "网络", "安全围栏", "API", "版本亮点", "关于"}
+
+// settingsGeneralSections 是「通用」分区标签的源文案。下标只在这里决定：
+// 欢迎页按名称定位「上下文加载」，增删分区不会让入口指错页面。
+var settingsGeneralSections = []string{"外观", "提示词", "路径", "对话行为", "应用", "语音输入", "上下文加载"}
+
+func settingsGeneralSection(label string) int { return slices.Index(settingsGeneralSections, label) }
+
+// localizedLabels translates fixed labels once per list build, so the page's
+// own loop does not repeat a lookup per label.
+func localizedLabels(sources []string) []string {
+	labels := make([]string, len(sources))
+	for i, source := range sources {
+		labels[i] = locales.Text(source)
+	}
+	return labels
+}
 
 const defaultUserAgentOption = "AllyAgent"
 
@@ -52,14 +69,14 @@ func (a *desktop) settingsPageBody(c *ui.Context) {
 			if a.settings.UpdateNote != "" {
 				fieldNote(c, a.settings.UpdateNote, a.secondaryInk())
 			}
-			ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-				ui.Column(c).FillWidth().MaxWidth(settingsMaxWidth).MinWidth(0).AlignSelf(ui.Start).
-					Padding(2, 0, gapPage).Gap(gapPage).Children(func() {
+			switch a.settings.Tab {
+			case "通用":
+				a.settingsGeneral(c)
+			case "高级":
+				a.settingsAdvanced(c)
+			default:
+				a.settingsContent(c, func() {
 					switch a.settings.Tab {
-					case "通用":
-						a.settingsGeneral(c)
-					case "高级":
-						a.settingsAdvanced(c)
 					case "网络":
 						a.settingsNetwork(c)
 					case "安全围栏":
@@ -72,8 +89,16 @@ func (a *desktop) settingsPageBody(c *ui.Context) {
 						a.settingsAbout(c)
 					}
 				})
-			})
+			}
 		})
+	})
+}
+
+// Only the form scrolls; section tabs stay above this viewport.
+func (a *desktop) settingsContent(c *ui.Context, build func()) {
+	ui.Scroll(c.Key("settings-content-" + a.settings.Tab)).Grow(1).MinHeight(0).Children(func() {
+		ui.Column(c).FillWidth().MaxWidth(settingsMaxWidth).MinWidth(0).AlignSelf(ui.Start).
+			Padding(2, 0, gapPage).Gap(gapPage).Children(build)
 	})
 }
 
@@ -141,8 +166,17 @@ func settingsAction(c *ui.Context, label string, tone ...uikit.Tone) ui.Element 
 }
 
 func (a *desktop) settingsGeneral(c *ui.Context) {
-	selected := a.settingsModule(c, "settingsGeneral", locales.Text("外观"), locales.Text("提示词"), locales.Text("路径"), locales.Text("对话行为"), locales.Text("应用"), locales.Text("语音输入"))
+	selected := a.settingsModule(c, "settingsGeneral", localizedLabels(settingsGeneralSections)...)
 
+	a.settingsContent(c, func() { a.settingsGeneralContent(c, selected) })
+	a.sessionHeaderConfirmDialog(c)
+	a.contextLoadingConfirmDialog(c)
+}
+
+func (a *desktop) settingsGeneralContent(c *ui.Context, selected int) {
+	if selected == settingsGeneralSection("上下文加载") {
+		a.settingsContextLoading(c)
+	}
 	if selected == 0 {
 		a.languageSetting(c)
 		a.settingsCard(c, "settings-appearance", locales.Text("主题与配色"), locales.Text("选择外观模式与强调色；青禾浅色沿用官网配色。"), func() {
@@ -335,7 +369,6 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 		})
 		a.settingsCloseBehavior(c)
 	}
-	a.sessionHeaderConfirmDialog(c)
 }
 
 func (a *desktop) settingsCompactThreshold(c *ui.Context) {
@@ -513,6 +546,10 @@ func (a *desktop) settingsVoiceInput(c *ui.Context) {
 func (a *desktop) settingsAdvanced(c *ui.Context) {
 	selected := a.settingsModule(c, "settingsAdvanced", locales.Text("代码校验"), locales.Text("页面显隐"))
 
+	a.settingsContent(c, func() { a.settingsAdvancedContent(c, selected) })
+}
+
+func (a *desktop) settingsAdvancedContent(c *ui.Context, selected int) {
 	if selected == 0 {
 		a.settingsCard(c, "settings-validation", locales.Text("自动代码校验"), locales.Text("写入文件后做轻量语法检查，默认全部关闭。"), func() {
 			languages := []struct{ key, label, note string }{
@@ -1026,8 +1063,10 @@ func (a *desktop) settingsModule(c *ui.Context, key string, labels ...string) in
 		a.settings.Modules = map[string]int{}
 	}
 	index := a.settings.Modules[key]
-	if a.scrollTabs(c, "settings-"+key, &index, labels...) {
-		a.settings.Modules[key] = index
-	}
+	ui.Column(c.Key("settings-tabs-"+key)).FillWidth().MaxWidth(settingsMaxWidth).Shrink(0).Padding(2, 0, gapPage).Children(func() {
+		if a.scrollTabs(c, "settings-"+key, &index, labels...) {
+			a.settings.Modules[key] = index
+		}
+	})
 	return index
 }

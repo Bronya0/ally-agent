@@ -1512,10 +1512,7 @@ func gitStatsText(git backend.GitStatus) string {
 	return " " + strings.Join(parts, " ")
 }
 
-// contextBreakdownHeight is how tall the context breakdown may get. Its rows are
-// a fixed set and the panel opens upwards, so the room is there: thirteen rows
-// (every instruction file a project can have) measure about 300, and this leaves
-// a handful more before anything scrolls.
+// Leave room for both schema rows and expanded prompt parts before scrolling.
 const contextBreakdownHeight float32 = 420
 
 func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
@@ -1560,7 +1557,7 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 	}
 	btn.OnClick(func() { st.ContextOpen = !st.ContextOpen })
 	ui.PopoverBase(c, btn, &st.ContextOpen, func(panel ui.Element) {
-		popoverChrome(c, panel, 300)
+		uikit.MenuPanel(c, panel, uikit.MenuOptions{Width: 300, MaxHeight: contextBreakdownHeight + 120})
 		panel.Transition(uikit.PopupTransition())
 		// The breakdown is a short list — the prompt's total, the four kinds of
 		// message, the running tally — and the sections behind the fold still fit
@@ -1580,7 +1577,7 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 				// the rows that actually grow, so the sections start folded behind the
 				// total they add up to.
 				ui.Column(c.Key("context-prompt-group")).FillWidth().Children(func() {
-					contextPartFold(c, "system-prompt", locales.Text("系统提示词"), b.SystemPrompt, st.PromptPartsOpen, func() {
+					contextPartFold(c, "system-prompt", locales.Text("预加载上下文"), b.SystemPrompt, st.PromptPartsOpen, func() {
 						st.PromptPartsOpen = !st.PromptPartsOpen
 					}, a.secondaryInk())
 					uikit.Reveal(c.Key("context-prompt-parts"), st.PromptPartsOpen, func() {
@@ -1593,14 +1590,15 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 						})
 					})
 				})
-				contextPart(c, locales.Text("工具 Schema"), b.ToolSchemas, a.secondaryInk())
+				contextPart(c, locales.Text("工具 Schema · 内置"), b.ToolSchemas-b.MCPToolSchemas, a.secondaryInk())
+				contextPart(c, locales.Text("工具 Schema · MCP"), b.MCPToolSchemas, a.secondaryInk())
 				contextPart(c, locales.Text("用户提问"), b.UserMessages, a.secondaryInk())
 				contextPart(c, locales.Text("AI 回复"), b.AssistantMsgs, a.secondaryInk())
 				contextPart(c, locales.Text("工具结果"), b.ToolResults, a.secondaryInk())
 				if b.Reasoning > 0 {
 					contextPart(c, locales.Text("思考内容"), b.Reasoning, a.secondaryInk())
 				}
-				ui.Text(c, fmt.Sprintf(locales.Text("累计输入 %s / 输出 %s"), fmtK(st.Usage.InputTokens), fmtK(st.Usage.OutputTokens))).FontSize(fsTiny).TextColor(a.secondaryInk())
+				ui.Text(c, fmt.Sprintf(locales.Text("累计输入 %s / 输出 %s"), tokenUnits(st.Usage.InputTokens), tokenUnits(st.Usage.OutputTokens))).FontSize(fsTiny).TextColor(a.secondaryInk())
 			})
 		})
 		divider(c)
@@ -1663,7 +1661,7 @@ func contextPart(c *ui.Context, name string, tokens int, ink ...ui.Color) {
 	ui.Row(c).FillWidth().Children(func() {
 		ui.Text(c, name).FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink))
 		ui.Spacer(c)
-		ui.Text(c, fmtK(tokens)).FontSize(fsSmall)
+		ui.Text(c, tokenUnits(tokens)).FontSize(fsSmall)
 	})
 }
 
@@ -1694,7 +1692,7 @@ func contextPartFold(c *ui.Context, key, name string, tokens int, open bool, tog
 		ui.Row(c).FillWidth().Gap(gapInline).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, name).FontSize(fsSmall).TextColor(mut).SingleLine()
 			ui.Spacer(c)
-			ui.Text(c, fmtK(tokens)).FontSize(fsSmall)
+			ui.Text(c, tokenUnits(tokens)).FontSize(fsSmall)
 			iconGlyph(c, icon, sizeCaretInline).TextColor(mut).Shrink(0)
 		})
 	})

@@ -175,8 +175,9 @@ type skillListCacheEntry struct {
 
 // App is the Wails-bound application module.
 type App struct {
-	runtime  runtimeLifecycle
-	stopping bool // guarded by mu; rejects work during graceful shutdown
+	sessionContextSettings map[string]contextSettingsSnapshot
+	runtime                runtimeLifecycle
+	stopping               bool // guarded by mu; rejects work during graceful shutdown
 
 	chatGPT *chatgpt.Manager // guarded by mu; initialized lazily, no credential IO at startup
 	ctx     context.Context
@@ -625,13 +626,14 @@ type ConfigState struct {
 	LastUsedModel  *ModelIdentity `json:"lastUsedModel,omitempty"`
 	DisabledSkills []string       `json:"disabledSkills,omitempty"`
 	// DisabledTools lists built-in tools the user turned off in Settings →
-	// Advanced → Built-in tools. Disabled names are dropped from the tool
+	// General → Context loading. Disabled names are dropped from the tool
 	// schemas injected for NEW sessions (sessionToolsets freezes a session's
 	// set at its first request, so existing sessions keep what they were
 	// frozen with); MCP tools are never covered by this list. The local
 	// read/edit/create/delete/command core is protected: the Settings UI
 	// offers no switch and the filter/sanitizers refuse those names.
-	DisabledTools []string `json:"disabledTools,omitempty"`
+	DisabledTools   []string `json:"disabledTools,omitempty"`
+	DisabledContext []string `json:"disabledContext,omitempty"`
 	// DisabledPlugins 是用户在插件页关掉的插件 id。被禁用的插件从侧栏消失且不可
 	// 进入（页面可见性判定与隐藏页面同源）。清洗收口在 persistableConfig，所以
 	// 每条落盘路径共用同一条规则；加载侧直接读配置，不另设内存镜像。
@@ -1963,6 +1965,7 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.liveBreakdown, sessionID)
 	delete(a.sessionWorkspaceMaps, sessionID)
 	delete(a.sessionSystemPrompts, sessionID)
+	delete(a.sessionContextSettings, sessionID)
 	delete(a.sessionSkills, sessionID)
 	delete(a.sessionToolsets, sessionID)
 	delete(a.sessionWorkspaces, sessionID)
@@ -2146,6 +2149,7 @@ func (a *App) stripSessionReasoning(sessionID string) {
 }
 
 func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg ConfigState) {
+	cfg = a.contextSettingsForSession(req.SessionID, cfg, true)
 	ctx, closeBlackboard := newRunBlackboard(ctx)
 	ctx = withModelRunUsage(ctx)
 	ctx, finishPerf := beginPerfRun(ctx, runID)
@@ -2247,7 +2251,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	tools := a.buildToolsForSession(sessionID, cfg)
 	ctx = withBuiltinToolAvailability(ctx, tools)
 	toolEventMeta := func(name string) map[string]any { return a.toolEventMeta(ctx, name) }
-	toolSchemaTokens := estimateToolSchemaTokens(tools)
+	toolSchemaTokens, mcpSchemaTokens := estimateToolSchemaTokenParts(tools)
 	breakdownAcc := newLiveBreakdownAccumulator(messages)
 	// Read de-duplication is scoped to the session, not to this run: a file range
 	// the conversation already carries is omitted instead of re-sent, until a
@@ -2262,6 +2266,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		}
 		b := breakdownAcc.update(msgs)
 		b.ToolSchemas = toolSchemaTokens
+		b.MCPToolSchemas = mcpSchemaTokens
 		b.SystemPrompt, _ = a.sessionPrefixBreakdown(sessionID, cfg, nil)
 		a.finalizeSessionBreakdown(sessionID, &b, msgs)
 		a.mu.Lock()

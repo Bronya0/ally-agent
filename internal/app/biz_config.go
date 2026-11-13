@@ -431,6 +431,9 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.DisabledTools != nil {
 		base.DisabledTools = toolshared.SanitizeDisabledTools(overlay.DisabledTools)
 	}
+	if overlay.DisabledContext != nil {
+		base.DisabledContext = cloneStringSlice(overlay.DisabledContext)
+	}
 	// DisabledPlugins：non-nil overlay 整体替换（含空切片表示“插件全部启用”）；
 	// nil 表示字段没携带，保留 base——否则一次旧前端保存就会把禁用名单洗掉。
 	if overlay.DisabledPlugins != nil {

@@ -86,7 +86,11 @@ type agentFile struct {
 // 逐个探测，前一个不存在才找下一个，只取第一个命中的文件）。
 // 根目录文件之后按序拼接一级子目录的 AGENTS.md，每份带目录标题隔离。
 // 每个文件各自按 maxAgentsMdPromptBytes 截断头部，其余部分只留一条指向 `read` 的提示。
-func loadAgentsMd(workspace string) string {
+func loadAgentsMd(workspace string, disabled ...[]string) string {
+	cfg := ConfigState{}
+	if len(disabled) > 0 {
+		cfg.DisabledContext = disabled[0]
+	}
 	if workspace == "" {
 		return ""
 	}
@@ -126,7 +130,7 @@ func loadAgentsMd(workspace string) string {
 	}
 
 	// ── User-level: ~/.agents/AGENTS.md (fallback agents.md) ──
-	if homeDir, err := os.UserHomeDir(); err == nil {
+	if homeDir, err := os.UserHomeDir(); err == nil && cfg.ContextEnabled("user_instructions") {
 		agentsDir := filepath.Join(homeDir, ".agents")
 		for _, name := range []string{"AGENTS.md", "agents.md"} {
 			if tryRead(filepath.Join(agentsDir, name)) {
@@ -136,34 +140,36 @@ func loadAgentsMd(workspace string) string {
 	}
 
 	// ── Workspace-level: AGENTS.md → CLAUDE.md → agents.md → claude.md ──
-	for _, name := range []string{"AGENTS.md", "CLAUDE.md", "agents.md", "claude.md"} {
-		if tryRead(filepath.Join(workspace, name)) {
-			break
+	if cfg.ContextEnabled("project_instructions") {
+		for _, name := range []string{"AGENTS.md", "CLAUDE.md", "agents.md", "claude.md"} {
+			if tryRead(filepath.Join(workspace, name)) {
+				break
+			}
 		}
 	}
-
 	// ── First-level subdirectories: append each <subdir>/AGENTS.md after the
 	// root file. Detection is direct path construction — one ReadDir plus one
 	// open per subdirectory; a missing file fails fast and is skipped. Only
 	// plain directories are probed (dot-dirs and symlinks are skipped), and
 	// each hit is labeled with its directory so module rules stay isolated.
-	if entries, err := os.ReadDir(workspace); err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-				continue
+	if cfg.ContextEnabled("subdirectory_instructions") {
+		if entries, err := os.ReadDir(workspace); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+					continue
+				}
+				path, err := filepath.Abs(filepath.Join(workspace, entry.Name(), "AGENTS.md"))
+				if err != nil {
+					continue
+				}
+				content, err := readAgentsMd(path)
+				if err != nil {
+					continue
+				}
+				collect(path, content, fmt.Sprintf("### AGENTS.md under directory `%s/`\n\n", entry.Name()))
 			}
-			path, err := filepath.Abs(filepath.Join(workspace, entry.Name(), "AGENTS.md"))
-			if err != nil {
-				continue
-			}
-			content, err := readAgentsMd(path)
-			if err != nil {
-				continue
-			}
-			collect(path, content, fmt.Sprintf("### AGENTS.md under directory `%s/`\n\n", entry.Name()))
 		}
 	}
-
 	if len(files) == 0 {
 		return ""
 	}

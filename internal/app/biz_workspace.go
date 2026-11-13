@@ -306,6 +306,18 @@ const workspaceMapSnapshotNote = "Snapshot frozen at this session's first reques
 // prompt-side view is frozen. Requests without a session id fall back to the
 // live map.
 func (a *App) sessionWorkspaceMap(sessionID string, cfg ConfigState) string {
+	cfg = a.contextSettingsForSession(sessionID, cfg, true)
+	if !cfg.ContextEnabled("workspace_map") {
+		if sessionID != "" {
+			a.mu.Lock()
+			if a.sessionWorkspaceMaps == nil {
+				a.sessionWorkspaceMaps = map[string]string{}
+			}
+			a.sessionWorkspaceMaps[sessionID] = ""
+			a.mu.Unlock()
+		}
+		return ""
+	}
 	if strings.TrimSpace(sessionID) == "" {
 		return a.workspaceMapContext(cfg)
 	}

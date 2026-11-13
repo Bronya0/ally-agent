@@ -880,7 +880,7 @@ func TestContextBreakdownUsesSessionWorkspace(t *testing.T) {
 	bd := app.getContextBreakdown(sessionID, "")
 	foundB := false
 	for _, part := range bd.SystemPromptParts {
-		if part.Label == "AGENTS.md / 项目指令" && part.Tokens > 0 {
+		if part.Label == "用户 / 工作区 / 子目录指令" && part.Tokens > 0 {
 			foundB = true
 		}
 	}

@@ -28,6 +28,7 @@ func cloneConfig(cfg ConfigState) ConfigState {
 	}
 	cfg.DisabledSkills = slices.Clone(cfg.DisabledSkills)
 	cfg.DisabledTools = slices.Clone(cfg.DisabledTools)
+	cfg.DisabledContext = slices.Clone(cfg.DisabledContext)
 	cfg.DisabledPlugins = slices.Clone(cfg.DisabledPlugins)
 	cfg.HiddenModes = slices.Clone(cfg.HiddenModes)
 	cfg.SkippedUpdates = slices.Clone(cfg.SkippedUpdates)
@@ -158,6 +159,9 @@ func settingsConfig(base, req ConfigState) ConfigState {
 	}
 	if req.DisabledTools != nil {
 		cfg.DisabledTools = req.DisabledTools
+	}
+	if req.DisabledContext != nil {
+		cfg.DisabledContext = req.DisabledContext
 	}
 	if req.DisabledPlugins != nil {
 		cfg.DisabledPlugins = req.DisabledPlugins

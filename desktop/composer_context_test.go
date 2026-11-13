@@ -25,10 +25,10 @@ func TestContextBreakdownPanelShowsEveryRow(t *testing.T) {
 		Total:        738_700,
 		SystemPrompt: 2_600,
 		SystemPromptParts: []backend.ContextBreakdownPart{
-			{Label: "全局记忆索引", Tokens: 973},
-			{Label: "用户档案 User Profile", Tokens: 816},
-			{Label: "AGENTS.md / 项目指令", Tokens: 44_300},
-			{Label: "项目经验 Lessons", Tokens: 2_500},
+			{Label: "记忆索引", Tokens: 973},
+			{Label: "用户档案", Tokens: 816},
+			{Label: "用户 / 工作区 / 子目录指令", Tokens: 44_300},
+			{Label: "项目教训", Tokens: 2_500},
 			{Label: "自定义提示词", Tokens: 2_900},
 			{Label: "工作区文件结构", Tokens: 3_500},
 		},
@@ -46,13 +46,13 @@ func TestContextBreakdownPanelShowsEveryRow(t *testing.T) {
 	const width, height = 900, 800
 	tester := ui.NewTester(func(c *ui.Context) { a.contextUsage(c, conv) }, width, height)
 
-	last := fmt.Sprintf("累计输入 %s / 输出 %s", fmtK(st.Usage.InputTokens), fmtK(st.Usage.OutputTokens))
+	last := fmt.Sprintf("累计输入 %s / 输出 %s", tokenUnits(st.Usage.InputTokens), tokenUnits(st.Usage.OutputTokens))
 	rows := []struct {
 		what string
 		text string
 	}{
 		{"the title", "上下文构成"},
-		{"the first row", "系统提示词"},
+		{"the first row", "预加载上下文"},
 		{"the last row", last},
 		{"the buttons", "压缩上下文"},
 	}
@@ -86,8 +86,8 @@ func TestContextBreakdownFoldsSystemPromptParts(t *testing.T) {
 	st.Breakdown = backend.ContextBreakdown{
 		SystemPrompt: 4_900,
 		SystemPromptParts: []backend.ContextBreakdownPart{
-			{Label: "核心系统提示词", Tokens: 2_900},
-			{Label: "项目经验 Lessons", Tokens: 383},
+			{Label: "内置系统提示词与运行环境", Tokens: 2_900},
+			{Label: "项目教训", Tokens: 383},
 		},
 		ToolSchemas: 18_700,
 	}
@@ -102,51 +102,51 @@ func TestContextBreakdownFoldsSystemPromptParts(t *testing.T) {
 	if st.PromptPartsOpen {
 		t.Fatal("the prompt's sections start folded")
 	}
-	if tester.HasText("核心系统提示词") {
+	if tester.HasText("内置系统提示词与运行环境") {
 		t.Fatalf("the folded row still lists its sections: %v", tester.Texts())
 	}
-	folded, ok := tester.Find("系统提示词")
+	folded, ok := tester.Find("预加载上下文")
 	if !ok || folded.W == 0 || folded.H == 0 {
 		t.Fatalf("the folded row is missing or has no room: %+v", folded)
 	}
 	// The total rides on the same line rather than on a row of its own: folding a
 	// group must not cost the reader the number it stands for.
-	total, ok := tester.Find(fmtK(st.Breakdown.SystemPrompt))
+	total, ok := tester.Find(tokenUnits(st.Breakdown.SystemPrompt))
 	if !ok || total.Y+total.H <= folded.Y || total.Y >= folded.Y+folded.H {
 		t.Fatalf("the folded row lost its total: %+v beside a row at y %v..%v", total, folded.Y, folded.Y+folded.H)
 	}
 	// The chevron takes the trailing edge, after the value, so this one number stops
 	// short of the column the rows below share instead of pushing them out of line.
-	if plain, ok := tester.Find(fmtK(st.Breakdown.ToolSchemas)); !ok {
+	if plain, ok := tester.Find(tokenUnits(st.Breakdown.ToolSchemas)); !ok {
 		t.Fatalf("the rows below lost their numbers: %v", tester.Texts())
 	} else if total.X+total.W >= plain.X+plain.W-10 {
 		t.Fatalf("the chevron is not trailing: the total ends at %v, the column at %v", total.X+total.W, plain.X+plain.W)
 	}
 
-	if err := tester.Click("系统提示词"); err != nil {
+	if err := tester.Click("预加载上下文"); err != nil {
 		t.Fatal(err)
 	}
 	if !st.PromptPartsOpen {
 		t.Fatal("the click did not open the prompt's sections")
 	}
-	if !tester.HasText("核心系统提示词") {
+	if !tester.HasText("内置系统提示词与运行环境") {
 		t.Fatalf("the sections stayed hidden: %v", tester.Texts())
 	}
 	if !st.ContextOpen {
 		t.Fatal("opening the sections closed the panel")
 	}
 
-	if err := tester.Click("系统提示词"); err != nil {
+	if err := tester.Click("预加载上下文"); err != nil {
 		t.Fatal(err)
 	}
-	if st.PromptPartsOpen || tester.HasText("核心系统提示词") {
+	if st.PromptPartsOpen || tester.HasText("内置系统提示词与运行环境") {
 		t.Fatal("the second click did not fold the sections again")
 	}
 
 	// The row is a button, not a caption: once it holds the focus, Space opens it the
 	// same way a click does.
 	tester.Key(0, ui.KeySpace)
-	if !st.PromptPartsOpen || !tester.HasText("核心系统提示词") {
+	if !st.PromptPartsOpen || !tester.HasText("内置系统提示词与运行环境") {
 		t.Fatal("the focused row ignored the keyboard")
 	}
 }

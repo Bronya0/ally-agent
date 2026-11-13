@@ -566,16 +566,6 @@ func (msgs Messages) Ui12f48e4a62e1() string {
 	return Catalog.Format(msgs.locale, "ui_12f48e4a62e1", nil)
 }
 
-// Ui01436d4f5b0e says "AGENTS.md / Project Instructions"
-// in the language the app shows.
-func Ui01436d4f5b0e() string { return In(i18n.Locale()).Ui01436d4f5b0e() }
-
-// Ui01436d4f5b0e says "AGENTS.md / Project Instructions"
-// in the language of msgs.
-func (msgs Messages) Ui01436d4f5b0e() string {
-	return Catalog.Format(msgs.locale, "ui_01436d4f5b0e", nil)
-}
-
 // Ui16a2008008a3 says "AI Reply"
 // in the language the app shows.
 func Ui16a2008008a3() string { return In(i18n.Locale()).Ui16a2008008a3() }
@@ -2984,16 +2974,6 @@ func Ui08b602275aee() string { return In(i18n.Locale()).Ui08b602275aee() }
 // in the language of msgs.
 func (msgs Messages) Ui08b602275aee() string {
 	return Catalog.Format(msgs.locale, "ui_08b602275aee", nil)
-}
-
-// UiD3678c046a73 says "Global memory index"
-// in the language the app shows.
-func UiD3678c046a73() string { return In(i18n.Locale()).UiD3678c046a73() }
-
-// UiD3678c046a73 says "Global memory index"
-// in the language of msgs.
-func (msgs Messages) UiD3678c046a73() string {
-	return Catalog.Format(msgs.locale, "ui_d3678c046a73", nil)
 }
 
 // UiE336f7d53f32 says "The full text summarizes the calling model; local cropping is prioritized and streamlined on the local machine. Hover…"
@@ -6386,16 +6366,6 @@ func (msgs Messages) UiEf7fdec835eb() string {
 	return Catalog.Format(msgs.locale, "ui_ef7fdec835eb", nil)
 }
 
-// Ui401cb12ed701 says "Tool Schema"
-// in the language the app shows.
-func Ui401cb12ed701() string { return In(i18n.Locale()).Ui401cb12ed701() }
-
-// Ui401cb12ed701 says "Tool Schema"
-// in the language of msgs.
-func (msgs Messages) Ui401cb12ed701() string {
-	return Catalog.Format(msgs.locale, "ui_401cb12ed701", nil)
-}
-
 // UiCc13d9ad6e35 says "Tool Grouping "
 // in the language the app shows.
 func UiCc13d9ad6e35() string { return In(i18n.Locale()).UiCc13d9ad6e35() }
@@ -7874,16 +7844,6 @@ func Ui04b1771449dd() string { return In(i18n.Locale()).Ui04b1771449dd() }
 // in the language of msgs.
 func (msgs Messages) Ui04b1771449dd() string {
 	return Catalog.Format(msgs.locale, "ui_04b1771449dd", nil)
-}
-
-// UiE713bc360635 says "Skill metadata"
-// in the language the app shows.
-func UiE713bc360635() string { return In(i18n.Locale()).UiE713bc360635() }
-
-// UiE713bc360635 says "Skill metadata"
-// in the language of msgs.
-func (msgs Messages) UiE713bc360635() string {
-	return Catalog.Format(msgs.locale, "ui_e713bc360635", nil)
 }
 
 // Ui45e40d8788ff says "Skill content is empty"
@@ -10286,16 +10246,6 @@ func (msgs Messages) Ui63eb129438ed() string {
 	return Catalog.Format(msgs.locale, "ui_63eb129438ed", nil)
 }
 
-// UiF2f839f80696 says "Core system prompt words"
-// in the language the app shows.
-func UiF2f839f80696() string { return In(i18n.Locale()).UiF2f839f80696() }
-
-// UiF2f839f80696 says "Core system prompt words"
-// in the language of msgs.
-func (msgs Messages) UiF2f839f80696() string {
-	return Catalog.Format(msgs.locale, "ui_f2f839f80696", nil)
-}
-
 // Ui5f7482df88a3 says "Desktop pet"
 // in the language the app shows.
 func Ui5f7482df88a3() string { return In(i18n.Locale()).Ui5f7482df88a3() }
@@ -11836,16 +11786,6 @@ func (msgs Messages) UiFd0c05044c0c() string {
 	return Catalog.Format(msgs.locale, "ui_fd0c05044c0c", nil)
 }
 
-// Ui0068d151b468 says "User Profile User Profile"
-// in the language the app shows.
-func Ui0068d151b468() string { return In(i18n.Locale()).Ui0068d151b468() }
-
-// Ui0068d151b468 says "User Profile User Profile"
-// in the language of msgs.
-func (msgs Messages) Ui0068d151b468() string {
-	return Catalog.Format(msgs.locale, "ui_0068d151b468", nil)
-}
-
 // UiA7dfeaf0c12c says "User messages"
 // in the language the app shows.
 func UiA7dfeaf0c12c() string { return In(i18n.Locale()).UiA7dfeaf0c12c() }
@@ -12594,16 +12534,6 @@ func Ui54d80b9be246() string { return In(i18n.Locale()).Ui54d80b9be246() }
 // in the language of msgs.
 func (msgs Messages) Ui54d80b9be246() string {
 	return Catalog.Format(msgs.locale, "ui_54d80b9be246", nil)
-}
-
-// Ui0894b78b866e says "System prompt"
-// in the language the app shows.
-func Ui0894b78b866e() string { return In(i18n.Locale()).Ui0894b78b866e() }
-
-// Ui0894b78b866e says "System prompt"
-// in the language of msgs.
-func (msgs Messages) Ui0894b78b866e() string {
-	return Catalog.Format(msgs.locale, "ui_0894b78b866e", nil)
 }
 
 // Ui88bad40fbeba says "The system root directory cannot be used as a workspace, please select a specific project directory"
@@ -15736,16 +15666,6 @@ func (msgs Messages) Ui0cadb49096a3() string {
 	return Catalog.Format(msgs.locale, "ui_0cadb49096a3", nil)
 }
 
-// Ui85c7f93403f1 says "Project Code Graph Code Graph"
-// in the language the app shows.
-func Ui85c7f93403f1() string { return In(i18n.Locale()).Ui85c7f93403f1() }
-
-// Ui85c7f93403f1 says "Project Code Graph Code Graph"
-// in the language of msgs.
-func (msgs Messages) Ui85c7f93403f1() string {
-	return Catalog.Format(msgs.locale, "ui_85c7f93403f1", nil)
-}
-
 // Ui390f7ad24019 says "Project level"
 // in the language the app shows.
 func Ui390f7ad24019() string { return In(i18n.Locale()).Ui390f7ad24019() }
@@ -15754,16 +15674,6 @@ func Ui390f7ad24019() string { return In(i18n.Locale()).Ui390f7ad24019() }
 // in the language of msgs.
 func (msgs Messages) Ui390f7ad24019() string {
 	return Catalog.Format(msgs.locale, "ui_390f7ad24019", nil)
-}
-
-// Ui7b45c57897b3 says "Project Experience Lessons"
-// in the language the app shows.
-func Ui7b45c57897b3() string { return In(i18n.Locale()).Ui7b45c57897b3() }
-
-// Ui7b45c57897b3 says "Project Experience Lessons"
-// in the language of msgs.
-func (msgs Messages) Ui7b45c57897b3() string {
-	return Catalog.Format(msgs.locale, "ui_7b45c57897b3", nil)
 }
 
 // Ui9cc739c7c20f says "Repeat all"
@@ -16284,4 +16194,344 @@ func Ui642481fdcde2() string { return In(i18n.Locale()).Ui642481fdcde2() }
 // in the language of msgs.
 func (msgs Messages) Ui642481fdcde2() string {
 	return Catalog.Format(msgs.locale, "ui_642481fdcde2", nil)
+}
+
+// UiF5b32cd1b31c says "Context loading"
+// in the language the app shows.
+func UiF5b32cd1b31c() string { return In(i18n.Locale()).UiF5b32cd1b31c() }
+
+// UiF5b32cd1b31c says "Context loading"
+// in the language of msgs.
+func (msgs Messages) UiF5b32cd1b31c() string {
+	return Catalog.Format(msgs.locale, "ui_f5b32cd1b31c", nil)
+}
+
+// Ui82a7a88893b1 says "On by default. Saved when you leave Settings; applies to new sessions only. Turning an automatic source off does not …"
+// in the language the app shows.
+func Ui82a7a88893b1() string { return In(i18n.Locale()).Ui82a7a88893b1() }
+
+// Ui82a7a88893b1 says "On by default. Saved when you leave Settings; applies to new sessions only. Turning an automatic source off does not …"
+// in the language of msgs.
+func (msgs Messages) Ui82a7a88893b1() string {
+	return Catalog.Format(msgs.locale, "ui_82a7a88893b1", nil)
+}
+
+// Ui22108be21ef4 says "The built-in system rules and platform environment always load. MCP tools are managed by the servers and tool switche…"
+// in the language the app shows.
+func Ui22108be21ef4() string { return In(i18n.Locale()).Ui22108be21ef4() }
+
+// Ui22108be21ef4 says "The built-in system rules and platform environment always load. MCP tools are managed by the servers and tool switche…"
+// in the language of msgs.
+func (msgs Messages) Ui22108be21ef4() string {
+	return Catalog.Format(msgs.locale, "ui_22108be21ef4", nil)
+}
+
+// UiA566ee8c0e8c says "Built-in tool schemas"
+// in the language the app shows.
+func UiA566ee8c0e8c() string { return In(i18n.Locale()).UiA566ee8c0e8c() }
+
+// UiA566ee8c0e8c says "Built-in tool schemas"
+// in the language of msgs.
+func (msgs Messages) UiA566ee8c0e8c() string {
+	return Catalog.Format(msgs.locale, "ui_a566ee8c0e8c", nil)
+}
+
+// Ui064fc30658fd says "Each tool has its own switch, applied to new sessions; the core file and command tools always stay available."
+// in the language the app shows.
+func Ui064fc30658fd() string { return In(i18n.Locale()).Ui064fc30658fd() }
+
+// Ui064fc30658fd says "Each tool has its own switch, applied to new sessions; the core file and command tools always stay available."
+// in the language of msgs.
+func (msgs Messages) Ui064fc30658fd() string {
+	return Catalog.Format(msgs.locale, "ui_064fc30658fd", nil)
+}
+
+// Ui01450bb11d92 says "Built-in tool switches"
+// in the language the app shows.
+func Ui01450bb11d92() string { return In(i18n.Locale()).Ui01450bb11d92() }
+
+// Ui01450bb11d92 says "Built-in tool switches"
+// in the language of msgs.
+func (msgs Messages) Ui01450bb11d92() string {
+	return Catalog.Format(msgs.locale, "ui_01450bb11d92", nil)
+}
+
+// Ui3524e0300912 says "Preloaded context"
+// in the language the app shows.
+func Ui3524e0300912() string { return In(i18n.Locale()).Ui3524e0300912() }
+
+// Ui3524e0300912 says "Preloaded context"
+// in the language of msgs.
+func (msgs Messages) Ui3524e0300912() string {
+	return Catalog.Format(msgs.locale, "ui_3524e0300912", nil)
+}
+
+// Ui0d80d2dcbbea says "Tool Schema · Built-in"
+// in the language the app shows.
+func Ui0d80d2dcbbea() string { return In(i18n.Locale()).Ui0d80d2dcbbea() }
+
+// Ui0d80d2dcbbea says "Tool Schema · Built-in"
+// in the language of msgs.
+func (msgs Messages) Ui0d80d2dcbbea() string {
+	return Catalog.Format(msgs.locale, "ui_0d80d2dcbbea", nil)
+}
+
+// Ui35b369ca203e says "Tool Schema · MCP"
+// in the language the app shows.
+func Ui35b369ca203e() string { return In(i18n.Locale()).Ui35b369ca203e() }
+
+// Ui35b369ca203e says "Tool Schema · MCP"
+// in the language of msgs.
+func (msgs Messages) Ui35b369ca203e() string {
+	return Catalog.Format(msgs.locale, "ui_35b369ca203e", nil)
+}
+
+// Ui161eae47d936 says "Built-in system prompt and runtime environment"
+// in the language the app shows.
+func Ui161eae47d936() string { return In(i18n.Locale()).Ui161eae47d936() }
+
+// Ui161eae47d936 says "Built-in system prompt and runtime environment"
+// in the language of msgs.
+func (msgs Messages) Ui161eae47d936() string {
+	return Catalog.Format(msgs.locale, "ui_161eae47d936", nil)
+}
+
+// Ui6c3b38c96491 says "User / workspace / subdirectory instructions"
+// in the language the app shows.
+func Ui6c3b38c96491() string { return In(i18n.Locale()).Ui6c3b38c96491() }
+
+// Ui6c3b38c96491 says "User / workspace / subdirectory instructions"
+// in the language of msgs.
+func (msgs Messages) Ui6c3b38c96491() string {
+	return Catalog.Format(msgs.locale, "ui_6c3b38c96491", nil)
+}
+
+// Ui6d3c5314fc07 says "User profile"
+// in the language the app shows.
+func Ui6d3c5314fc07() string { return In(i18n.Locale()).Ui6d3c5314fc07() }
+
+// Ui6d3c5314fc07 says "User profile"
+// in the language of msgs.
+func (msgs Messages) Ui6d3c5314fc07() string {
+	return Catalog.Format(msgs.locale, "ui_6d3c5314fc07", nil)
+}
+
+// Ui7e34747ac01f says "Memory index"
+// in the language the app shows.
+func Ui7e34747ac01f() string { return In(i18n.Locale()).Ui7e34747ac01f() }
+
+// Ui7e34747ac01f says "Memory index"
+// in the language of msgs.
+func (msgs Messages) Ui7e34747ac01f() string {
+	return Catalog.Format(msgs.locale, "ui_7e34747ac01f", nil)
+}
+
+// Ui74dd39840264 says "Project lessons"
+// in the language the app shows.
+func Ui74dd39840264() string { return In(i18n.Locale()).Ui74dd39840264() }
+
+// Ui74dd39840264 says "Project lessons"
+// in the language of msgs.
+func (msgs Messages) Ui74dd39840264() string {
+	return Catalog.Format(msgs.locale, "ui_74dd39840264", nil)
+}
+
+// Ui91b63415d251 says "Code graph"
+// in the language the app shows.
+func Ui91b63415d251() string { return In(i18n.Locale()).Ui91b63415d251() }
+
+// Ui91b63415d251 says "Code graph"
+// in the language of msgs.
+func (msgs Messages) Ui91b63415d251() string {
+	return Catalog.Format(msgs.locale, "ui_91b63415d251", nil)
+}
+
+// Ui35a7c0c04f3b says "Skill listing"
+// in the language the app shows.
+func Ui35a7c0c04f3b() string { return In(i18n.Locale()).Ui35a7c0c04f3b() }
+
+// Ui35a7c0c04f3b says "Skill listing"
+// in the language of msgs.
+func (msgs Messages) Ui35a7c0c04f3b() string {
+	return Catalog.Format(msgs.locale, "ui_35a7c0c04f3b", nil)
+}
+
+// Ui6a0d6197d57f says "User-level instructions"
+// in the language the app shows.
+func Ui6a0d6197d57f() string { return In(i18n.Locale()).Ui6a0d6197d57f() }
+
+// Ui6a0d6197d57f says "User-level instructions"
+// in the language of msgs.
+func (msgs Messages) Ui6a0d6197d57f() string {
+	return Catalog.Format(msgs.locale, "ui_6a0d6197d57f", nil)
+}
+
+// Ui55c287abe8b0 says "Loads ~/.agents/AGENTS.md."
+// in the language the app shows.
+func Ui55c287abe8b0() string { return In(i18n.Locale()).Ui55c287abe8b0() }
+
+// Ui55c287abe8b0 says "Loads ~/.agents/AGENTS.md."
+// in the language of msgs.
+func (msgs Messages) Ui55c287abe8b0() string {
+	return Catalog.Format(msgs.locale, "ui_55c287abe8b0", nil)
+}
+
+// Ui2b39e2215dcd says "Workspace root instructions"
+// in the language the app shows.
+func Ui2b39e2215dcd() string { return In(i18n.Locale()).Ui2b39e2215dcd() }
+
+// Ui2b39e2215dcd says "Workspace root instructions"
+// in the language of msgs.
+func (msgs Messages) Ui2b39e2215dcd() string {
+	return Catalog.Format(msgs.locale, "ui_2b39e2215dcd", nil)
+}
+
+// Ui139d8091ba24 says "Loads the root AGENTS.md, falling back to CLAUDE.md."
+// in the language the app shows.
+func Ui139d8091ba24() string { return In(i18n.Locale()).Ui139d8091ba24() }
+
+// Ui139d8091ba24 says "Loads the root AGENTS.md, falling back to CLAUDE.md."
+// in the language of msgs.
+func (msgs Messages) Ui139d8091ba24() string {
+	return Catalog.Format(msgs.locale, "ui_139d8091ba24", nil)
+}
+
+// Ui6f8578af0463 says "Subdirectory instructions"
+// in the language the app shows.
+func Ui6f8578af0463() string { return In(i18n.Locale()).Ui6f8578af0463() }
+
+// Ui6f8578af0463 says "Subdirectory instructions"
+// in the language of msgs.
+func (msgs Messages) Ui6f8578af0463() string {
+	return Catalog.Format(msgs.locale, "ui_6f8578af0463", nil)
+}
+
+// UiFe62b7d2c194 says "Loads AGENTS.md from first-level, non-hidden subdirectories."
+// in the language the app shows.
+func UiFe62b7d2c194() string { return In(i18n.Locale()).UiFe62b7d2c194() }
+
+// UiFe62b7d2c194 says "Loads AGENTS.md from first-level, non-hidden subdirectories."
+// in the language of msgs.
+func (msgs Messages) UiFe62b7d2c194() string {
+	return Catalog.Format(msgs.locale, "ui_fe62b7d2c194", nil)
+}
+
+// UiD6a8e731d9fe says "Loads cross-project preferences from USER.md."
+// in the language the app shows.
+func UiD6a8e731d9fe() string { return In(i18n.Locale()).UiD6a8e731d9fe() }
+
+// UiD6a8e731d9fe says "Loads cross-project preferences from USER.md."
+// in the language of msgs.
+func (msgs Messages) UiD6a8e731d9fe() string {
+	return Catalog.Format(msgs.locale, "ui_d6a8e731d9fe", nil)
+}
+
+// Ui9fb0efec3d92 says "Loads memory paths and descriptions; bodies are still read on demand."
+// in the language the app shows.
+func Ui9fb0efec3d92() string { return In(i18n.Locale()).Ui9fb0efec3d92() }
+
+// Ui9fb0efec3d92 says "Loads memory paths and descriptions; bodies are still read on demand."
+// in the language of msgs.
+func (msgs Messages) Ui9fb0efec3d92() string {
+	return Catalog.Format(msgs.locale, "ui_9fb0efec3d92", nil)
+}
+
+// UiC027a88ed131 says "Loads recent lessons from LESSONS.md."
+// in the language the app shows.
+func UiC027a88ed131() string { return In(i18n.Locale()).UiC027a88ed131() }
+
+// UiC027a88ed131 says "Loads recent lessons from LESSONS.md."
+// in the language of msgs.
+func (msgs Messages) UiC027a88ed131() string {
+	return Catalog.Format(msgs.locale, "ui_c027a88ed131", nil)
+}
+
+// UiD180747b980a says "Loads project navigation from CODEGRAPH.md."
+// in the language the app shows.
+func UiD180747b980a() string { return In(i18n.Locale()).UiD180747b980a() }
+
+// UiD180747b980a says "Loads project navigation from CODEGRAPH.md."
+// in the language of msgs.
+func (msgs Messages) UiD180747b980a() string {
+	return Catalog.Format(msgs.locale, "ui_d180747b980a", nil)
+}
+
+// UiA7e3eddc5bf6 says "Loads the custom prompt from Settings."
+// in the language the app shows.
+func UiA7e3eddc5bf6() string { return In(i18n.Locale()).UiA7e3eddc5bf6() }
+
+// UiA7e3eddc5bf6 says "Loads the custom prompt from Settings."
+// in the language of msgs.
+func (msgs Messages) UiA7e3eddc5bf6() string {
+	return Catalog.Format(msgs.locale, "ui_a7e3eddc5bf6", nil)
+}
+
+// Ui4fb47346640a says "Loads metadata for enabled skills; bodies load on demand."
+// in the language the app shows.
+func Ui4fb47346640a() string { return In(i18n.Locale()).Ui4fb47346640a() }
+
+// Ui4fb47346640a says "Loads metadata for enabled skills; bodies load on demand."
+// in the language of msgs.
+func (msgs Messages) Ui4fb47346640a() string {
+	return Catalog.Format(msgs.locale, "ui_4fb47346640a", nil)
+}
+
+// Ui4ccf58316761 says "Workspace structure"
+// in the language the app shows.
+func Ui4ccf58316761() string { return In(i18n.Locale()).Ui4ccf58316761() }
+
+// Ui4ccf58316761 says "Workspace structure"
+// in the language of msgs.
+func (msgs Messages) Ui4ccf58316761() string {
+	return Catalog.Format(msgs.locale, "ui_4ccf58316761", nil)
+}
+
+// Ui27af972b8ace says "Loads directories, file sizes and detected stacks, without file contents."
+// in the language the app shows.
+func Ui27af972b8ace() string { return In(i18n.Locale()).Ui27af972b8ace() }
+
+// Ui27af972b8ace says "Loads directories, file sizes and detected stacks, without file contents."
+// in the language of msgs.
+func (msgs Messages) Ui27af972b8ace() string {
+	return Catalog.Format(msgs.locale, "ui_27af972b8ace", nil)
+}
+
+// Ui0bb8334dea47 says "Supports stdio / SSE / Streamable HTTP; server settings save automatically, and tool switches only affect new sessions."
+// in the language the app shows.
+func Ui0bb8334dea47() string { return In(i18n.Locale()).Ui0bb8334dea47() }
+
+// Ui0bb8334dea47 says "Supports stdio / SSE / Streamable HTTP; server settings save automatically, and tool switches only affect new sessions."
+// in the language of msgs.
+func (msgs Messages) Ui0bb8334dea47() string {
+	return Catalog.Format(msgs.locale, "ui_0bb8334dea47", nil)
+}
+
+// Ui470a1c8b86c5 says "Turn off \"%[1]s\"?"
+// in the language the app shows.
+func Ui470a1c8b86c5() string { return In(i18n.Locale()).Ui470a1c8b86c5() }
+
+// Ui470a1c8b86c5 says "Turn off \"%[1]s\"?"
+// in the language of msgs.
+func (msgs Messages) Ui470a1c8b86c5() string {
+	return Catalog.Format(msgs.locale, "ui_470a1c8b86c5", nil)
+}
+
+// Ui8b32ac380877 says "This applies to new sessions only; existing conversations keep what they started with. Those sessions lose this autom…"
+// in the language the app shows.
+func Ui8b32ac380877() string { return In(i18n.Locale()).Ui8b32ac380877() }
+
+// Ui8b32ac380877 says "This applies to new sessions only; existing conversations keep what they started with. Those sessions lose this autom…"
+// in the language of msgs.
+func (msgs Messages) Ui8b32ac380877() string {
+	return Catalog.Format(msgs.locale, "ui_8b32ac380877", nil)
+}
+
+// Ui5e7c85092474 says "Turn off anyway"
+// in the language the app shows.
+func Ui5e7c85092474() string { return In(i18n.Locale()).Ui5e7c85092474() }
+
+// Ui5e7c85092474 says "Turn off anyway"
+// in the language of msgs.
+func (msgs Messages) Ui5e7c85092474() string {
+	return Catalog.Format(msgs.locale, "ui_5e7c85092474", nil)
 }

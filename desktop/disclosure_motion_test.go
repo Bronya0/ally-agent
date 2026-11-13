@@ -83,8 +83,8 @@ func TestContextPromptPartsAnimate(t *testing.T) {
 		tt.SetPreferences(ui.Preferences{ReduceMotion: reduced, TextScale: 1})
 		tt.Advance(300 * time.Millisecond)
 		distance := func() float32 {
-			first, ok1 := tt.Find("系统提示词")
-			next, ok2 := tt.Find("工具 Schema")
+			first, ok1 := tt.Find("预加载上下文")
+			next, ok2 := tt.Find("工具 Schema · 内置")
 			if !ok1 || !ok2 {
 				t.Fatal("context rows missing")
 			}
