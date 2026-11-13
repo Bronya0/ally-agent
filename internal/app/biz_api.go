@@ -35,6 +35,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -412,7 +413,7 @@ func apiWriteError(w http.ResponseWriter, status int, message string) {
 	apiWriteJSON(w, status, map[string]any{"ok": false, "error": message})
 }
 
-func apiDecodeBody(r *http.Request, target any) error {
+func apiDecodeBody(r *http.Request, target any, readable ...string) error {
 	decoder := json.NewDecoder(r.Body)
 	var raw json.RawMessage
 	if err := decoder.Decode(&raw); err != nil {
@@ -423,6 +424,9 @@ func apiDecodeBody(r *http.Request, target any) error {
 	}
 	if len(raw) == 0 || raw[0] != '{' {
 		return errors.New("invalid JSON body: expected an object")
+	}
+	if err := apiValidateBodyFields(raw, reflect.TypeOf(target), readable...); err != nil {
+		return fmt.Errorf("invalid JSON body: %w", err)
 	}
 	if err := json.Unmarshal(raw, target); err != nil {
 		return fmt.Errorf("invalid JSON body: %w", err)
@@ -902,7 +906,7 @@ func (a *App) apiHandlePutMcpConfig(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Config *string `json:"config"`
 	}
-	if err := apiDecodeBody(r, &body); err != nil {
+	if err := apiDecodeBody(r, &body, "servers"); err != nil {
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}

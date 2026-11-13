@@ -585,6 +585,24 @@ func TestPointIntoExcludedDir(t *testing.T) {
 	}
 }
 
+// 指名到单个文件时目录排除根本没生效，报一长串目录名会让模型以为搜过整棵子树。
+func TestSingleFileSearchReportsNoDirectorySkips(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "main.go")
+	if err := os.WriteFile(file, []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, note := range searchSkipNotices(Request{Path: file}, file) {
+		if strings.HasPrefix(note, "directories:") || note == "hidden_entries" {
+			t.Fatalf("single-file search reported a directory skip: %q", note)
+		}
+	}
+	dirNotes := searchSkipNotices(Request{Path: root}, root)
+	if !strings.Contains(strings.Join(dirNotes, ","), "hidden_entries") {
+		t.Fatalf("directory search must still report hidden_entries, got %v", dirNotes)
+	}
+}
+
 func TestParseEndEvent(t *testing.T) {
 	root := t.TempDir()
 	abs := filepath.Join(root, "a.txt")

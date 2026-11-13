@@ -98,6 +98,67 @@ func runPythonTransferBridge(t *testing.T, py string, payload map[string]any, st
 	return stderr.Bytes(), runErr
 }
 
+func TestRemoteTransferFailedSymlinkPreservesDestination(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	dir := filepath.Join(root, "target")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "file")
+	if err := os.WriteFile(target, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	if err := tw.WriteHeader(&tar.Header{Name: "target/file", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("x", 8192)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stderr, _ := runPythonTransferBridge(t, py, map[string]any{
+		"action": "upload", "remotePath": remoteFixturePath(root, "target"), "overwrite": true,
+	}, &archive, nil)
+	var outcome map[string]any
+	if err := decodeRemoteTransferMarker(stderr, &outcome); err == nil {
+		t.Fatal("expected oversized symlink creation to fail")
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "original" {
+		t.Fatalf("failed symlink replacement damaged original: %q, %v", got, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("unexpected temporary files: %v, %v", entries, err)
+	}
+	if err := os.Symlink("other", filepath.Join(dir, "probe")); err != nil {
+		return // Preservation must also work when Windows denies symlink creation.
+	}
+	if err := os.Remove(filepath.Join(dir, "probe")); err != nil {
+		t.Fatal(err)
+	}
+	archive.Reset()
+	tw = tar.NewWriter(&archive)
+	if err := tw.WriteHeader(&tar.Header{Name: "target/file", Typeflag: tar.TypeSymlink, Linkname: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stderr, err = runPythonTransferBridge(t, py, map[string]any{
+		"action": "upload", "remotePath": remoteFixturePath(root, "target"), "overwrite": true,
+	}, &archive, nil)
+	if err != nil {
+		t.Fatalf("valid link upload failed: %v: %s", err, stderr)
+	}
+	if err := decodeRemoteTransferMarker(stderr, &outcome); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.Readlink(target); err != nil || got != "other" {
+		t.Fatalf("replacement link = %q, %v", got, err)
+	}
+}
+
 func TestRemoteTransferUploadFileAndDirectory(t *testing.T) {
 	t.Parallel()
 	py := pickRemoteHelperPython(t)
@@ -248,13 +309,14 @@ func TestRemoteTransferUploadOverwriteDefense(t *testing.T) {
 	testLocal := filepath.Join(t.TempDir(), "new.txt")
 	_ = os.WriteFile(testLocal, []byte("new content"), 0o644)
 	_, _ = streamarchive.PackWithFilter(testLocal, "exists.txt", &packBuf, nil)
+	archive := packBuf.Bytes()
 
 	// Attempt upload with overwrite=false should fail
 	stderr, err := runPythonTransferBridge(t, py, map[string]any{
 		"action":     "upload",
 		"remotePath": remoteFixturePath(remoteRoot, "exists.txt"),
 		"overwrite":  false,
-	}, &packBuf, nil)
+	}, bytes.NewReader(archive), nil)
 
 	if err == nil {
 		t.Fatalf("expected error when overwrite=false on existing destination, but succeeded")
@@ -267,6 +329,88 @@ func TestRemoteTransferUploadOverwriteDefense(t *testing.T) {
 	orig, _ := os.ReadFile(destFile)
 	if string(orig) != "original" {
 		t.Fatalf("original file was modified: %s", string(orig))
+	}
+	stderr, err = runPythonTransferBridge(t, py, map[string]any{
+		"action": "upload", "remotePath": remoteFixturePath(remoteRoot, "exists.txt"), "overwrite": true,
+	}, bytes.NewReader(archive), nil)
+	if err != nil {
+		t.Fatalf("file overwrite failed: %v: %s", err, stderr)
+	}
+	if err := decodeRemoteTransferMarker(stderr, nil); err != nil {
+		t.Fatal(err)
+	}
+	if content, err := os.ReadFile(destFile); err != nil || string(content) != "new content" {
+		t.Fatalf("file overwrite content = %q, %v", content, err)
+	}
+}
+
+func TestRemoteTransferUploadOverwritePreservesDirectories(t *testing.T) {
+	t.Parallel()
+	py := pickRemoteHelperPython(t)
+	for _, entry := range []string{"target", "target/nested"} {
+		t.Run(entry, func(t *testing.T) {
+			root := t.TempDir()
+			metadata := filepath.Join(root, filepath.FromSlash(entry), ".git", "config")
+			if err := os.MkdirAll(filepath.Dir(metadata), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(metadata, []byte("original"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var buf bytes.Buffer
+			tw := tar.NewWriter(&buf)
+			if err := tw.WriteHeader(&tar.Header{Name: entry, Typeflag: tar.TypeReg, Mode: 0o644, Size: 3}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tw.Write([]byte("new")); err != nil {
+				t.Fatal(err)
+			}
+			if err := tw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			stderr, err := runPythonTransferBridge(t, py, map[string]any{
+				"action": "upload", "remotePath": remoteFixturePath(root, "target"), "overwrite": true,
+			}, &buf, nil)
+			if err == nil {
+				t.Fatalf("accepted replacing directory with file: %s", stderr)
+			}
+			if data, err := os.ReadFile(metadata); err != nil || string(data) != "original" {
+				t.Fatalf("existing directory contents changed: %q, %v", data, err)
+			}
+		})
+	}
+}
+
+func TestRemoteTransferDirectoryPreservesConflictingFile(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	for _, entry := range []string{"target", "target/nested"} {
+		t.Run(entry, func(t *testing.T) {
+			root := t.TempDir()
+			target := filepath.Join(root, filepath.FromSlash(entry))
+			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(target, []byte("original"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var archive bytes.Buffer
+			tw := tar.NewWriter(&archive)
+			if err := tw.WriteHeader(&tar.Header{Name: entry, Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
+				t.Fatal(err)
+			}
+			if err := tw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			stderr, _ := runPythonTransferBridge(t, py, map[string]any{
+				"action": "upload", "remotePath": remoteFixturePath(root, "target"), "overwrite": true,
+			}, &archive, nil)
+			if err := decodeRemoteTransferMarker(stderr, nil); err == nil {
+				t.Fatal("accepted replacing a file with a directory")
+			}
+			if got, err := os.ReadFile(target); err != nil || string(got) != "original" {
+				t.Fatalf("existing file damaged: %q, %v", got, err)
+			}
+		})
 	}
 }
 

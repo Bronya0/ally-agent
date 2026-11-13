@@ -81,6 +81,7 @@ func TestPromotedServiceName(t *testing.T) {
 		{"python manage.py runserver 0.0.0.0:8000", "python manage.py"},
 		{"  Vite  dev  ", "vite dev"},
 		{"go run .", "go run"},
+		{"sleep 6; echo done", "sleep 6"},
 		{"sleep", "sleep"},
 		{"", ""},
 		{"   ", ""},

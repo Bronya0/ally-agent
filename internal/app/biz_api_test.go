@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -426,6 +427,42 @@ func TestApiMcpConfigRejectsEmptyPayload(t *testing.T) {
 	}
 	if string(got) != original {
 		t.Fatalf("mcp.json must survive an empty PUT, got %q", got)
+	}
+}
+
+func TestApiMcpConfigRoundTripIgnoresServerStatus(t *testing.T) {
+	handler, app, token := newApiTestHandler(t)
+	app.ctx = context.Background()
+	t.Cleanup(func() {
+		if manager := app.activeMcpManager(); manager != nil {
+			manager.Shutdown()
+		}
+	})
+	const original = `{"mcpServers":{"keep":{"command":"unused","disabled":true,"disabledTools":["one"],"extra":"preserved"}}}`
+	if err := app.SaveMcpConfig(original); err != nil {
+		t.Fatal(err)
+	}
+	rec, payload := apiRequest(t, handler, "GET", "/api/v1/mcp", token, "")
+	data := apiRequireOK(t, rec, payload)
+	body, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, payload = apiRequest(t, handler, "PUT", "/api/v1/mcp/config", token, string(body))
+	apiRequireOK(t, rec, payload)
+	config, err := app.GetMcpConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got, want any
+	if err := json.Unmarshal([]byte(config), &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(original), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("MCP round trip changed configuration: %s", config)
 	}
 }
 

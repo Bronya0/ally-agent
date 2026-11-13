@@ -51,6 +51,50 @@ func pickRemoteHelperPython(t *testing.T) string {
 	return ""
 }
 
+func TestRemoteHelperLegacyReplaceFailurePreservesOriginal(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	target := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(target, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script, err := buildRemoteScript(map[string]any{
+		"op": "write", "path": remoteFixturePath(root, "file.txt"),
+		"dataBase64": base64.StdEncoding.EncodeToString([]byte("replacement")), "overwrite": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Emulate legacy Windows rename semantics without source-text injection:
+	// rename cannot replace an existing file, but succeeds after it is deleted.
+	prelude := `import base64, errno, hashlib, json, os, stat, sys, tempfile, time
+original_rename = os.rename
+def legacy_rename(source, target):
+    if os.path.lexists(target):
+        raise OSError(errno.EACCES, 'cannot replace an existing file')
+    return original_rename(source, target)
+if hasattr(os, 'replace'):
+    del os.replace
+os.rename = legacy_rename
+os.name = 'nt'
+`
+	wrapped := prelude + "exec(compile(base64.b64decode('" + base64.StdEncoding.EncodeToString([]byte(script)) + "'), '<ally-test>', 'exec'))\n"
+	resp, err := runRemoteHelperScript(t, py, wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK {
+		t.Fatal("unsafe legacy replacement must fail")
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "original" {
+		t.Fatalf("failed replacement damaged original: %q, %v", got, err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("unexpected temporary files: %v, %v", entries, err)
+	}
+}
+
 // TestRemoteScriptTransportInvariants 锁定 payload 传输与删除拦截的关键不变量：
 // 普通模式 payload 走 stdin 占位符，传输模式才读 argv；删除判定 Python 无正则。
 func TestRemoteScriptTransportInvariants(t *testing.T) {

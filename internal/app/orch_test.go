@@ -974,6 +974,10 @@ func TestGrepFilesSearchResults(t *testing.T) {
 			if len(got.LineHits) != 1 || got.LineHits[0].Path != ".github/workflows/ci.yml" || len(got.LineHits[0].Lines) != 1 || got.LineHits[0].Lines[0] != 1 {
 				t.Fatalf("unexpected lines-mode match %#v", got.LineHits)
 			}
+			// 遍历目录时隐藏条目会被跳过，必须报出来，否则 matched=0 会被当成「真的没有」。
+			if !strings.Contains(strings.Join(got.Skipped, ","), "hidden_entries") {
+				t.Fatalf("a directory search must report skipped hidden entries, got %#v", got.Skipped)
+			}
 		}},
 		{name: "default mode returns line groups", files: map[string]string{
 			"a.txt": "needle\n", "b.txt": "needle\n",
@@ -1085,8 +1089,11 @@ func TestGrepFilesSearchResults(t *testing.T) {
 			if len(got.LineHits) != 1 || got.LineHits[0].Path != "dist/pkg/source.go" {
 				t.Fatalf("unexpected explicit-path lines result %#v", got.LineHits)
 			}
-			if len(got.Skipped) != 0 {
-				t.Fatalf("explicit path search must not report broad skip policies, got %#v", got.Skipped)
+			// 隐藏条目就算指名目录也依旧被跳过，这是遍历本身的性质，不属于「大范围策略」。
+			for _, note := range got.Skipped {
+				if note == "files_over_10MB" || strings.HasPrefix(note, "directories:") {
+					t.Fatalf("explicit path search must not report broad skip policies, got %#v", got.Skipped)
+				}
 			}
 		}},
 		{name: "checked-in build output stays searchable, dependency trees do not", files: map[string]string{
@@ -1129,8 +1136,10 @@ func TestGrepFilesSearchResults(t *testing.T) {
 			if got.MatchedLines != 1 || len(got.LineHits) != 1 {
 				t.Fatalf("pointing into node_modules must keep it searchable, got %#v", got)
 			}
-			if len(got.Skipped) != 0 {
-				t.Fatalf("pointing into node_modules must not report directory exclusions, got %#v", got.Skipped)
+			for _, note := range got.Skipped {
+				if strings.HasPrefix(note, "directories:") {
+					t.Fatalf("pointing into node_modules must not report directory exclusions, got %#v", got.Skipped)
+				}
 			}
 		}},
 		{name: "explicit path searches large files", files: map[string]string{

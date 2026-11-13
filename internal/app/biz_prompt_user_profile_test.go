@@ -36,7 +36,7 @@ func TestUserProfileRulesSurviveAnEmptyProfile(t *testing.T) {
 		{"frontmatter only", writeUserProfileFile(t, "---\ndescription: nothing here\n---\n\n")},
 	} {
 		got := buildUserProfilePromptPart(tc.path)
-		if !strings.Contains(got, userProfileDisplayPath) {
+		if !strings.Contains(got, "`"+filepath.ToSlash(tc.path)+"`") {
 			t.Fatalf("%s: the rules must still name the file to edit, got %q", tc.name, got)
 		}
 		if strings.Contains(got, "<user-profile") {
@@ -59,7 +59,7 @@ func TestUserProfilePromptPartInjectsBodyWithoutFrontmatter(t *testing.T) {
 	if strings.Contains(got, "description:") {
 		t.Fatalf("the frontmatter must not be injected, got %q", got)
 	}
-	if !strings.Contains(got, userProfileDisplayPath) {
+	if !strings.Contains(got, "`"+filepath.ToSlash(path)+"`") {
 		t.Fatalf("the rules must name the file the model is supposed to edit, got %q", got)
 	}
 }

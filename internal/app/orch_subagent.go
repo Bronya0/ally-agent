@@ -683,6 +683,7 @@ func subagentSystemPrompt(role string) string {
 
 	return roleLine + "You are an Ally sub-agent. Complete the delegated task using available tools, then return a concise summary.\n\n" +
 		"# Tool Use\n\n" +
+		"Use only tools declared for this run; guidance about other tools does not make them available.\n\n" +
 		sharedRemoteAccessRules() +
 		"Prefer dedicated tools over shell commands: `grep` for search, `read` for file content, `edit`/`create`/`delete` for file changes, `list_files` for directory listings.\n\n" +
 		sharedBatchStrategy() +
@@ -694,8 +695,9 @@ func subagentSystemPrompt(role string) string {
 		sharedSafetyBoundaries() +
 		"- Do not ask the user questions — the user cannot see you.\n" +
 		"- Do not call `subagent` — nested delegation is not supported.\n" +
-		"- MCP tools are available when connected. Use them when they materially help the delegated task, and treat their results like any other tool output.\n" +
-		"- Do not write global memories. The parent agent owns durable memory decisions.\n" +
+		"- Use declared MCP tools when they materially help the delegated task; treat their results like other tool output.\n" +
+		"- Do not write the global user profile or memories. Report durable facts to the parent agent instead.\n" +
+		"- If user input or authorization is missing, report the blocker to the parent agent.\n" +
 		"- Use network tools only when the delegated task explicitly requires external information.\n" +
 		"- When creating intermediate artifacts (scripts, drafts, test fixtures) that are not final deliverables, place them under a `.tmp/` directory within the workspace.\n\n" +
 		"# Agent Blackboard\n\n" +
@@ -705,7 +707,7 @@ func subagentSystemPrompt(role string) string {
 		"# Output\n\n" +
 		"- Be concise. The parent agent only sees your final summary.\n" +
 		"- Report findings and evidence, files changed, verification, and anything incomplete or blocked. Do not imply an unfinished task is complete.\n" +
-		"- Use `wait` only for a concrete short delay after asynchronous work has started. When it shares a response with other calls, it runs last, after they finished.\n" +
+		"- Use `wait` only for active asynchronous work or an expected external condition. Assign a later stage to wait after other calls; then check the condition.\n" +
 		"- " + platformNote + ". Use command syntax appropriate for this platform."
 }
 

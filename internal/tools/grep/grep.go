@@ -278,7 +278,7 @@ func Search(ctx context.Context, rgPath, root, searchRoot string, req Request) (
 		NextOffset:      nextOffset,
 		Offset:          max(0, req.Offset),
 		OffsetExhausted: offsetExhausted,
-		Skipped:         searchSkipNotices(req),
+		Skipped:         searchSkipNotices(req, searchRoot),
 		Warnings:        warnings,
 	}
 	if mode == OutputModeCountMatches {
@@ -432,7 +432,7 @@ func grepThreads() int {
 	return cores
 }
 
-func searchSkipNotices(req Request) []string {
+func searchSkipNotices(req Request, searchRoot string) []string {
 	skipped := []string{}
 	if strings.TrimSpace(req.Path) == "" {
 		// 这两条描述的是整棵工作区搜索的策略，指名目标的搜索不适用。
@@ -441,8 +441,19 @@ func searchSkipNotices(req Request) []string {
 			skipped = append(skipped, "ignored_by_ignore_files")
 		}
 	}
-	// 目录排除按实际有没有生效来报：指进依赖目录里面时它没生效，就不能说跳过了。
-	if !req.PathInsideExcludedDir {
+	// rg 只在遍历目录时跳过点开头的条目；指名到文件本身时它照搜，所以这里按
+	// 「搜索根是不是目录」来报。不报的话，隐藏文件里的命中会变成一句干巴巴的
+	// matched="0"，看上去像搜过了没有。
+	isDir := false
+	if info, err := os.Stat(searchRoot); err == nil {
+		isDir = info.IsDir()
+	}
+	if isDir {
+		skipped = append(skipped, "hidden_entries")
+	}
+	// 目录排除按实际有没有生效来报：指进依赖目录里面时它没生效，就不能说跳过了；
+	// 指名到单个文件时根本不遍历目录，同样不算跳过，否则每次搜单文件都白带一长串名单。
+	if isDir && !req.PathInsideExcludedDir {
 		skipped = append(skipped, "directories:"+strings.Join(ExcludedDirs(), ","))
 	}
 	return skipped

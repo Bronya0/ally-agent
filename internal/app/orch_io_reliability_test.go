@@ -237,8 +237,9 @@ func TestMissingReadBlocksDependentStageAndCancellationIsBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if toolStageSucceeded(toolResult{OK: true, Data: r}) || !strings.Contains(renderReadResultForModel(*r), "E_PATH_NOT_FOUND") {
-		t.Fatal("missing input reported successful")
+	rendered := renderReadResultForModel(*r)
+	if toolStageSucceeded(toolResult{OK: true, Data: r}) || !strings.Contains(rendered, "E_PATH_NOT_FOUND") || !strings.Contains(rendered, "list_files") {
+		t.Fatalf("missing input lost its next step: %q", rendered)
 	}
 	for i := 0; i < cap(a.fileReadSlots); i++ {
 		a.fileReadSlots <- struct{}{}

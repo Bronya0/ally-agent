@@ -208,10 +208,6 @@ func (a *App) MemoriesDir() string {
 // the memory index; see buildUserProfilePromptPart.
 const userProfileFileName = "USER.md"
 
-// userProfileDisplayPath is how the prompt names that file. Deriving both from
-// one constant keeps the reader and the prompt text from drifting apart.
-const userProfileDisplayPath = "~/.ally_agent/" + userProfileFileName
-
 // userProfilePath resolves the profile file under this App's data directory.
 func (a *App) userProfilePath() string {
 	return filepath.Join(a.AppDataDir(), userProfileFileName)

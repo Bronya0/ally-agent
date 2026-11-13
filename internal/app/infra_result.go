@@ -485,7 +485,13 @@ func renderScheduledTaskRow(t ScheduledTaskToolView) string {
 		row += fmt.Sprintf(" max-steps=%d", t.MaxSteps)
 	}
 	if t.TimeoutSeconds > 0 {
-		row += fmt.Sprintf(" timeout=%ds", t.TimeoutSeconds)
+		// command 型任务在运行时被钳到命令工具的 600s 上限：这里报记录里的
+		// 3600s，模型会以为命令还能跑一小时。
+		limit := t.TimeoutSeconds
+		if t.Command != "" && limit > scheduledCommandTimeoutSeconds {
+			limit = scheduledCommandTimeoutSeconds
+		}
+		row += fmt.Sprintf(" timeout=%ds", limit)
 	}
 	return neutralizeRowBreaks(row)
 }
@@ -885,13 +891,29 @@ func renderWebFetchResultForModel(r WebFetchResult) string {
 	return header + "\n\n" + body
 }
 
+// remoteAliasSegment names the SSH host a remote result came from. Remote and
+// local tools share these renderers, so without it a transcript of a batch that
+// touched several servers cannot say which one produced which result.
+func remoteAliasSegment(alias string) string {
+	alias = strings.TrimSpace(alias)
+	if alias == "" {
+		return ""
+	}
+	return " | alias=" + strconv.Quote(alias)
+}
+
 func renderReadResultForModel(r BatchReadResult) string {
+	alias := remoteAliasSegment(r.RemoteAlias)
 	var blocks []string
 	for _, f := range r.Missing {
-		blocks = append(blocks, "// read | path="+strconv.Quote(f.Path)+" | error="+strconv.Quote(f.ErrorCode))
+		block := "// read" + alias + " | path=" + strconv.Quote(f.Path) + " | error=" + strconv.Quote(f.ErrorCode)
+		if hint := missingReadPathHint(f.ErrorCode, r.RemoteAlias); hint != "" {
+			block += "\n\n" + hint
+		}
+		blocks = append(blocks, block)
 	}
 	for _, f := range r.Files {
-		header := "// read | path=" + strconv.Quote(f.Path)
+		header := "// read" + alias + " | path=" + strconv.Quote(f.Path)
 		if f.Error != "" {
 			code := f.ErrorCode
 			if code == "" {
@@ -929,9 +951,32 @@ func renderReadResultForModel(r BatchReadResult) string {
 		blocks = append(blocks, header+"\n\n"+f.Content)
 	}
 	if len(blocks) == 0 {
-		return "// read | files=0"
+		return "// read" + alias + " | files=0"
 	}
 	return strings.Join(blocks, "\n\n")
+}
+
+// missingReadPathHint gives the two codes filtered out of files[] a next step.
+// They are the expected misses (a mistyped path, a directory passed as a file),
+// so the model only ever sees the bare code; without a hint it retries the very
+// call that just failed.
+func missingReadPathHint(code, remoteAlias string) string {
+	if strings.TrimSpace(remoteAlias) != "" {
+		switch code {
+		case "E_IS_DIRECTORY":
+			return "path is a remote directory; use remote_run_command with the same alias and ls on its absolute path to inspect its entries"
+		case "E_PATH_NOT_FOUND":
+			return "remote path does not exist; use remote_run_command with the same alias and ls on its absolute parent directory to check the name"
+		}
+		return ""
+	}
+	switch code {
+	case "E_IS_DIRECTORY":
+		return "path is a directory; use list_files to inspect its entries"
+	case "E_PATH_NOT_FOUND":
+		return "path does not exist; check the name with list_files on the parent directory, or pass an empty path for the workspace root"
+	}
+	return ""
 }
 
 func formatTruncatedLines(lines []int, omitted bool) string {
@@ -947,7 +992,7 @@ func formatTruncatedLines(lines []int, omitted bool) string {
 
 func renderCommandResultForModel(r CommandResult) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "// command | exit=%d | duration=%dms", r.ExitCode, r.DurationMS)
+	fmt.Fprintf(&b, "// command%s | exit=%d | duration=%dms", remoteAliasSegment(r.RemoteAlias), r.ExitCode, r.DurationMS)
 	if r.TimedOut {
 		b.WriteString(" | timed-out")
 	}
@@ -1020,7 +1065,7 @@ func renderListFilesResultForModel(r ListFilesResult) string {
 		rows = append(rows, path)
 	}
 	if r.Count == 0 {
-		rows = append(rows, "No visible entries.")
+		rows = append(rows, "No visible entries (empty, or only hidden/gitignored entries).")
 	}
 	if r.Truncated {
 		rows = append(rows, "Entry limit reached; narrow the path to see the rest.")
@@ -1028,12 +1073,13 @@ func renderListFilesResultForModel(r ListFilesResult) string {
 	return modelResultBody(header, strings.Join(rows, "\n"))
 }
 
-const editNoRereadNote = "The edits above are current in your context; do not reread solely to confirm the write. Reread before a later line-number edit if the required lines are no longer known or may have changed."
+const editNoRereadNote = "The file now matches your changes; do not reread solely to confirm the write. Reread before a later line-number edit if the required lines are no longer known or may have changed."
 
 func renderMultiEditResultForModel(r MultiEditResult) string {
+	alias := remoteAliasSegment(r.RemoteAlias)
 	var blocks []string
 	for _, f := range r.Files {
-		blocks = append(blocks, "// edit | path="+strconv.Quote(f.Path)+" | version="+strconv.Quote(f.Version))
+		blocks = append(blocks, "// edit"+alias+" | path="+strconv.Quote(f.Path)+" | version="+strconv.Quote(f.Version))
 	}
 	body := r.Summary
 	if r.Validation != "" {
@@ -1043,7 +1089,7 @@ func renderMultiEditResultForModel(r MultiEditResult) string {
 		body += "\nWarning: " + w
 	}
 	if len(blocks) == 0 {
-		blocks = append(blocks, "// edit | files=0")
+		blocks = append(blocks, "// edit"+alias+" | files=0")
 	}
 	if len(r.Files) > 0 {
 		body += "\n" + editNoRereadNote
@@ -1052,7 +1098,7 @@ func renderMultiEditResultForModel(r MultiEditResult) string {
 }
 
 func renderEditResultForModel(name string, r EditResult) string {
-	header := "// " + name + " | path=" + strconv.Quote(r.Path) + " | version=" + strconv.Quote(r.Version)
+	header := "// " + name + remoteAliasSegment(r.RemoteAlias) + " | path=" + strconv.Quote(r.Path) + " | version=" + strconv.Quote(r.Version)
 	if r.Created != nil {
 		header += fmt.Sprintf(" | created=%t", *r.Created)
 	}
@@ -1073,7 +1119,7 @@ func renderEditResultForModel(name string, r EditResult) string {
 }
 
 func renderDeleteResultForModel(r DeletePathsResult) string {
-	header := fmt.Sprintf("// delete | deleted=%d | failed=%d | absent=%d", r.DeletedCount, r.FailedCount, r.AbsentCount)
+	header := fmt.Sprintf("// delete%s | deleted=%d | failed=%d | absent=%d", remoteAliasSegment(r.RemoteAlias), r.DeletedCount, r.FailedCount, r.AbsentCount)
 	var rows []string
 	for _, p := range r.Paths {
 		state := "OK"

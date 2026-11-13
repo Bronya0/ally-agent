@@ -75,14 +75,15 @@ func (a *App) apiHandleSaveSSHServer(w http.ResponseWriter, r *http.Request) {
 		apiWriteError(w, http.StatusBadRequest, "server must be a JSON object")
 		return
 	}
-	// hasPassword/hasKey are read-only view flags a listed node carries. summary
-	// is deliberately not accepted: a nested copy would look editable and change
-	// nothing, so it fails loudly instead.
-	if err := apiValidateFieldNames(fields, SSHServerNode{}, "hasPassword", "hasKey"); err != nil {
+	if err := apiValidateFieldNames(fields, SSHServerNode{}, "hasPassword", "hasKey", "summary"); err != nil {
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	for _, value := range fields {
+	for name, value := range fields {
+		switch name {
+		case "hasPassword", "hasKey", "summary":
+			continue // Read-only metadata from a listed node is ignored.
+		}
 		if strings.TrimSpace(string(value)) == "null" {
 			apiWriteError(w, http.StatusBadRequest, "server fields cannot be null; use an empty string to clear credentials")
 			return

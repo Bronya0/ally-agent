@@ -364,6 +364,7 @@ type settingsForm struct {
 	ProxyNote       string
 	ProxyBusy       bool
 	API             backend.ApiServiceState
+	APIBaseline     *backend.ApiServiceState
 	APIPort         float64
 	APIBusy         bool
 	APIRevision     uint64

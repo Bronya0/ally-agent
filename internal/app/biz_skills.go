@@ -396,7 +396,7 @@ func (a *App) handleSkillToolCall(cfg ConfigState, sessionID, skillName, skillAr
 			}, nil
 		}
 	}
-	return nil, fmt.Errorf("skill %q is disabled or not found in the current skill listing", skillName)
+	return nil, fmt.Errorf("skill %q is disabled or not found in the current skill listing; check the exact name in the Available skills section of the system prompt, and that the skill is enabled", skillName)
 }
 
 const (

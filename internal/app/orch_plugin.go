@@ -569,12 +569,9 @@ func (a *App) writePluginExport(id, dir string, includeData bool, dest string) e
 			data = stored
 		}
 	}
-	file, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	return plugin.WritePackage(file, dir, data)
+	return writePluginExportFile(dest, func(w io.Writer) error {
+		return plugin.WritePackage(w, dir, data)
+	})
 }
 
 // DeletePlugin 删掉插件目录（连同上一版本备份）；purgeData 决定是否连插件数据一起删。
@@ -819,14 +816,32 @@ func copyFile(src, dst string) error {
 			return errors.New("目标就是源文件本身，不能就地覆盖")
 		}
 	}
+	return writePluginExportFile(dst, func(w io.Writer) error {
+		_, err := io.Copy(w, source)
+		return err
+	})
+}
+
+// Publish only a fully written export, retaining the old destination on failure.
+func writePluginExportFile(dst string, write func(io.Writer) error) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
-	target, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	target, err := os.CreateTemp(filepath.Dir(dst), ".ally-export-*")
 	if err != nil {
 		return err
 	}
+	temp := target.Name()
+	defer os.Remove(temp)
 	defer target.Close()
-	_, err = io.Copy(target, source)
-	return err
+	if err := write(target); err != nil {
+		return err
+	}
+	if err := target.Sync(); err != nil {
+		return err
+	}
+	if err := target.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temp, dst)
 }

@@ -344,3 +344,120 @@ func TestListFilesMarksSymlinks(t *testing.T) {
 		t.Fatalf("link-file must be Symlink=true, got %+v", linkFile)
 	}
 }
+
+// TestListFilesListsInsideIgnoredDirectory 验证工具契约：把 path 指到被
+// .gitignore 忽略的目录里面（提示词让模型把中间产物放 .tmp/，正是这种情形）
+// 时列举出里面的内容，而不是一张空表；工作区根列举仍然整棵跳过该目录。
+func TestListFilesListsInsideIgnoredDirectory(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".tmp/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".tmp", "scratch"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".tmp", "scratch", "note.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := newIsolatedTestApp(t)
+	cfg := ConfigState{Workspace: root}
+
+	atRoot, err := app.listFilesWithConfig(cfg, ListFilesRequest{ModelFacing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range atRoot.Entries {
+		if strings.HasPrefix(e.Path, ".tmp") {
+			t.Fatalf("workspace root listing must still prune the ignored subtree, got %q", e.Path)
+		}
+	}
+
+	inside, err := app.listFilesWithConfig(cfg, ListFilesRequest{ModelFacing: true, Path: ".tmp/scratch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, e := range inside.Entries {
+		paths = append(paths, e.Path)
+	}
+	if !strings.Contains(strings.Join(paths, "\n"), "note.md") {
+		t.Fatalf("listing an ignored directory must show its contents, got %v", paths)
+	}
+}
+
+// TestListFilesFollowsSymlinkedDirectoryRoot 验证把 path 指到符号链接目录时
+// 列出链接目标的内容：WalkDir 对根只做 Lstat，不修的话一个有内容的目录会静默
+// 返回空表。Windows 上创建符号链接需要特权，跳过。
+func TestListFilesFollowsSymlinkedDirectoryRoot(t *testing.T) {
+	t.Parallel()
+	if goruntime.GOOS == "windows" {
+		t.Skip("creating symlinks on Windows requires elevated privileges")
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "real", "inner.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "real", "private.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("link/private.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	app := newIsolatedTestApp(t)
+	cfg := ConfigState{Workspace: root}
+
+	got, err := app.listFilesWithConfig(cfg, ListFilesRequest{Path: "link", ModelFacing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, e := range got.Entries {
+		paths = append(paths, e.Path)
+	}
+	if !strings.Contains(strings.Join(paths, "\n"), "link/inner.txt") {
+		t.Fatalf("a symlinked directory root must list its target's contents under the named path, got %v", paths)
+	}
+	if len(paths) != 1 {
+		t.Fatalf("listing must apply ignore rules to the named path, got %v", paths)
+	}
+}
+
+func TestListFilesChecksSymlinkTargetScope(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("creating symlinks on Windows requires elevated privileges")
+	}
+	root, home, temp := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	// Keep the fake home outside os.TempDir's traversal exception.
+	t.Setenv("TMPDIR", temp)
+	if err := os.WriteFile(filepath.Join(home, "personal.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(home, filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(home), filepath.Join(root, "parent")); err != nil {
+		t.Fatal(err)
+	}
+	app := newIsolatedTestApp(t)
+	cfg := ConfigState{Workspace: root}
+	for _, path := range []string{home, "alias", filepath.Join("parent", filepath.Base(home))} {
+		_, err := app.listFilesWithConfig(cfg, ListFilesRequest{Path: path, ModelFacing: true})
+		if toolErrorCode(err) != "E_SEARCH_ROOT_BLOCKED" {
+			t.Fatalf("listing %q must block the home traversal, got %v", path, err)
+		}
+	}
+	// A workspace selected through a symlink retains its own traversal scope.
+	got, err := app.listFilesWithConfig(ConfigState{Workspace: filepath.Join(root, "alias")}, ListFilesRequest{ModelFacing: true})
+	if err != nil || len(got.Entries) != 1 || got.Entries[0].Name != "personal.txt" {
+		t.Fatalf("symlinked workspace must remain listable: %+v, %v", got, err)
+	}
+}

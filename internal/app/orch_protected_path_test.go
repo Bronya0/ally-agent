@@ -320,6 +320,38 @@ func TestRemoveAllWithinBaseRefusesEscape(t *testing.T) {
 	}
 }
 
+func TestRemoveAllWithinBaseRefusesSymlinkEscape(t *testing.T) {
+	base := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, "keep")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(target, "data")
+	if err := os.WriteFile(keep, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := removeAllWithinBase(base, filepath.Join(link, "keep")); err == nil {
+		t.Fatal("accepted recursive deletion through an escaping parent symlink")
+	}
+	if got, err := os.ReadFile(keep); err != nil || string(got) != "original" {
+		t.Fatalf("outside data damaged: %q, %v", got, err)
+	}
+	if err := removeAllWithinBase(base, link); err != nil {
+		t.Fatalf("removing the link itself should succeed: %v", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("link still exists: %v", err)
+	}
+	if got, err := os.ReadFile(keep); err != nil || string(got) != "original" {
+		t.Fatalf("removing link damaged target: %q, %v", got, err)
+	}
+}
+
 // TestDeleteRefusesAllyDataSubtree: ~/.ally_agent stays a write whitelist, but a
 // recursive delete inside it wiped every saved session, memory, or staged update
 // in one tool call. Single files stay deletable (the memory tool drops individual

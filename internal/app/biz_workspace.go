@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -76,14 +77,35 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 	}
 	info, err := os.Stat(start)
 	if err != nil {
+		// 裸 stat 错误只报 「no such file or directory」，模型拿不到路径拼错
+		// 还是文件被移走，也不知道下一步该看哪里；这类错误和其余工具一样
+		// 要给编码与处理方式。
+		if errors.Is(err, os.ErrNotExist) {
+			return ListFilesResult{}, codedToolError("E_PATH_NOT_FOUND", fmt.Errorf("path does not exist: %s; list the parent directory to check the name, or pass an empty path for the workspace root", req.Path))
+		}
 		return ListFilesResult{}, err
 	}
 	if !info.IsDir() {
 		return ListFilesResult{}, codedToolError("E_BAD_PATH", fmt.Errorf("not a directory: %s", req.Path))
 	}
+	// WalkDir does not follow a symlinked root. Resolve both paths before
+	// checking the traversal scope, including links in parent directories.
+	walkStart, err := filepath.EvalSymlinks(start)
+	if err != nil {
+		return ListFilesResult{}, err
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return ListFilesResult{}, err
+	}
 	inRoot := insideRoot(root, start)
-	if !inRoot {
-		if blocked, reason := isDangerousSearchRoot(start); blocked {
+	for _, scope := range []struct {
+		root, start string
+	}{{root, start}, {realRoot, walkStart}} {
+		if insideRoot(scope.root, scope.start) {
+			continue
+		}
+		if blocked, reason := isDangerousSearchRoot(scope.start); blocked {
 			return ListFilesResult{}, codedToolError("E_SEARCH_ROOT_BLOCKED", fmt.Errorf("%s\n\nThis listing has been blocked for safety. Specify a narrower project subdirectory or explicit file path.", reason))
 		}
 	}
@@ -94,6 +116,14 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 	var ignoreMatcher gitignore.Matcher
 	if !req.IncludeIgnored && inRoot {
 		ignoreMatcher = loadRootGitignoreRules(root)
+		// Pointing the listing explicitly inside an ignored subtree (the .tmp/
+		// the prompt sends artifacts to is the common case) means "show me what
+		// is in there": keep walking it, exactly as grep does for an explicitly
+		// named hidden directory. Without this the walk descends, discards every
+		// descendant as ignored, and reports a misleading empty listing.
+		if ignoredListingRoot(ignoreMatcher, root, start) {
+			ignoreMatcher = nil
+		}
 	}
 
 	maxDepth := req.MaxDepth
@@ -133,11 +163,15 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 		dirPlaceholders = map[string]int{}
 	}
 	truncated := false
-	err = filepath.WalkDir(start, func(path string, d fs.DirEntry, walkErr error) error {
+	// Display and ignore matching stay anchored at the caller's named path.
+	displayFor := func(relWalk string) string {
+		return grep.DisplayPathForRoot(root, filepath.Join(start, relWalk))
+	}
+	err = filepath.WalkDir(walkStart, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
 		}
-		if path == start {
+		if path == walkStart {
 			return nil
 		}
 		name := d.Name()
@@ -161,8 +195,9 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 		if !req.IncludeIgnored && d.IsDir() && isHeavyDir(name) {
 			return filepath.SkipDir
 		}
+		rel, _ := filepath.Rel(walkStart, path)
 		if ignoreMatcher != nil {
-			relToRoot, _ := filepath.Rel(root, path)
+			relToRoot, _ := filepath.Rel(root, filepath.Join(start, rel))
 			if matchGitignoreRules(ignoreMatcher, relToRoot, d.IsDir()) {
 				if d.IsDir() {
 					return filepath.SkipDir
@@ -171,7 +206,6 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 			}
 		}
 
-		rel, _ := filepath.Rel(start, path)
 		depth := pathDepth(rel)
 		if depth > maxDepth {
 			if d.IsDir() {
@@ -190,7 +224,7 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 					entries[idx].MoreFiles++
 					return nil
 				}
-				displayPath := grep.DisplayPathForRoot(root, path)
+				displayPath := displayFor(rel)
 				// parent = display dir; empty means the workspace root. (The
 				// WalkDir callback parameter shadows the path package here.)
 				parent := ""
@@ -223,7 +257,7 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 		if err != nil {
 			return nil
 		}
-		displayPath := grep.DisplayPathForRoot(root, path)
+		displayPath := displayFor(rel)
 		entries = append(entries, FileEntry{
 			Path:    displayPath,
 			Name:    name,
@@ -1404,6 +1438,27 @@ func loadRootGitignoreRules(root string) gitignore.Matcher {
 		return nil
 	}
 	return gitignore.NewMatcher(patterns)
+}
+
+// ignoredListingRoot reports whether start, or one of the directories between
+// root and start, is excluded by the workspace ignore rules. A listing pointed
+// inside such a subtree is an explicit request for its contents, so the caller
+// drops the matcher instead of pruning everything it walks.
+func ignoredListingRoot(matcher gitignore.Matcher, root, start string) bool {
+	if matcher == nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, start)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for i := range parts {
+		if matchGitignoreRules(matcher, strings.Join(parts[:i+1], "/"), true) {
+			return true
+		}
+	}
+	return false
 }
 
 func matchGitignoreRules(matcher gitignore.Matcher, relPath string, isDir bool) bool {

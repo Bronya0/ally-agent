@@ -17,6 +17,52 @@ import (
 	"testing"
 )
 
+func TestStreamArchiveFailedSymlinkPreservesDestination(t *testing.T) {
+	dest := t.TempDir()
+	target := filepath.Join(dest, "target")
+	if err := os.WriteFile(target, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	if err := tw.WriteHeader(&tar.Header{Name: "target", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("x", 8192)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UnpackTarget(&archive, target, true); err == nil {
+		t.Fatal("expected oversized symlink creation to fail")
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "original" {
+		t.Fatalf("failed symlink replacement damaged original: %q, %v", got, err)
+	}
+	entries, err := os.ReadDir(dest)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("unexpected temporary files: %v, %v", entries, err)
+	}
+	if err := os.Symlink("other", filepath.Join(dest, "probe")); err != nil {
+		return // The failure-preservation check above also applies without link privileges.
+	}
+	if err := os.Remove(filepath.Join(dest, "probe")); err != nil {
+		t.Fatal(err)
+	}
+	archive.Reset()
+	tw = tar.NewWriter(&archive)
+	if err := tw.WriteHeader(&tar.Header{Name: "target", Typeflag: tar.TypeSymlink, Linkname: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UnpackTarget(&archive, target, true); err != nil {
+		t.Fatalf("valid link replacement failed: %v", err)
+	}
+	if got, err := os.Readlink(target); err != nil || got != "other" {
+		t.Fatalf("replacement link = %q, %v", got, err)
+	}
+}
+
 func TestStreamArchivePackAndUnpack(t *testing.T) {
 	tempDir := t.TempDir()
 	srcDir := filepath.Join(tempDir, "src")
@@ -181,7 +227,7 @@ func TestStreamArchiveOverwrite(t *testing.T) {
 		t.Fatalf("unexpected content after overwrite: %s, %v", string(content), err)
 	}
 
-	// 4. Overwrite file with directory
+	// 4. A directory transfer must not delete an existing file to make room.
 	var dirBuf bytes.Buffer
 	dirTw := tar.NewWriter(&dirBuf)
 	dirHdr := &tar.Header{
@@ -201,22 +247,60 @@ func TestStreamArchiveOverwrite(t *testing.T) {
 	_ = dirTw.Close()
 
 	_, err = UnpackTarget(bytes.NewReader(dirBuf.Bytes()), filepath.Join(destDir, "target.txt"), true)
-	if err != nil {
-		t.Fatalf("overwrite file with directory failed: %v", err)
+	if err == nil {
+		t.Fatal("accepted replacing a file with a directory")
+	}
+	if got, err := os.ReadFile(filepath.Join(destDir, "target.txt")); err != nil || string(got) != "new content" {
+		t.Fatalf("existing file damaged: %q, %v", got, err)
+	}
+	// Prepare a fresh directory for the inverse conflict.
+	if err := os.Remove(filepath.Join(destDir, "target.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UnpackTarget(bytes.NewReader(dirBuf.Bytes()), filepath.Join(destDir, "target.txt"), true); err != nil {
+		t.Fatal(err)
+	}
+
+	// 5. A file must never replace an existing directory, even with overwrite.
+	_, err = UnpackTarget(bytes.NewReader(tarBytes), filepath.Join(destDir, "target.txt"), true)
+	if err == nil {
+		t.Fatal("accepted replacing a directory with a file")
 	}
 	fi, err := os.Stat(filepath.Join(destDir, "target.txt"))
 	if err != nil || !fi.IsDir() {
-		t.Fatalf("expected target.txt to be a directory now: %v", err)
+		t.Fatalf("existing directory was replaced: %v", err)
 	}
+	if content, err := os.ReadFile(filepath.Join(destDir, "target.txt", "child.txt")); err != nil || string(content) != "child" {
+		t.Fatalf("existing directory contents changed: %q, %v", content, err)
+	}
+}
 
-	// 5. Overwrite directory with file
-	_, err = UnpackTarget(bytes.NewReader(tarBytes), filepath.Join(destDir, "target.txt"), true)
-	if err != nil {
-		t.Fatalf("overwrite directory with file failed: %v", err)
+func TestStreamArchiveOverwritePreservesNestedDirectory(t *testing.T) {
+	dest := t.TempDir()
+	target := filepath.Join(dest, "target")
+	metadata := filepath.Join(target, "nested", ".git", "config")
+	if err := os.MkdirAll(filepath.Dir(metadata), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	fi, err = os.Stat(filepath.Join(destDir, "target.txt"))
-	if err != nil || fi.IsDir() {
-		t.Fatalf("expected target.txt to be a file now: %v", err)
+	if err := os.WriteFile(metadata, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{Name: "target/nested", Typeflag: tar.TypeReg, Mode: 0o644, Size: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UnpackTarget(&buf, target, true); err == nil {
+		t.Fatal("accepted replacing a nested directory with a file")
+	}
+	if data, err := os.ReadFile(metadata); err != nil || string(data) != "original" {
+		t.Fatalf("existing directory contents changed: %q, %v", data, err)
 	}
 }
 

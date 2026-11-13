@@ -65,6 +65,28 @@ func TestAPIContextSettingsPreserveChoicesAndValidateInput(t *testing.T) {
 	}
 }
 
+func TestAPIContextSettingsRoundTripIgnoresOptions(t *testing.T) {
+	a := newIsolatedChatTestApp(t)
+	h := a.apiMux()
+	rec, payload := apiRequest(t, h, "GET", "/api/v1/context/settings", "", "")
+	settings := apiRequireOK(t, rec, payload)
+	settings["customPrompt"] = "round trip"
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, payload = apiRequest(t, h, "PUT", "/api/v1/context/settings", "", string(encoded))
+	apiRequireOK(t, rec, payload)
+	cfg, err := a.getConfig()
+	if err != nil || !cfg.ContextEnabled("skills") || len(cfg.DisabledTools) != 0 || cfg.CustomPrompt != "round trip" {
+		t.Fatalf("context round trip failed: %v", err)
+	}
+	rec, _ = apiRequest(t, h, "PUT", "/api/v1/context/settings", "", `{"options":[]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatal("read-only metadata counted as an editable setting")
+	}
+}
+
 func TestAPIHeadlessSkillsUseRuntimeWorkspaceAndRefresh(t *testing.T) {
 	redirectAppStateDir(t)
 	a := newIsolatedChatTestApp(t)

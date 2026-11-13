@@ -158,7 +158,7 @@ func (a *App) checkServiceWorkspace(cfg ConfigState, id string) error {
 			return nil
 		}
 	}
-	return codedToolError("E_SERVICE_NOT_FOUND", fmt.Errorf("service not found in the current workspace: %w", errServiceNotFound))
+	return codedToolError("E_SERVICE_NOT_FOUND", fmt.Errorf("no service with id %q in the current workspace; call service with action=list to see the ids that exist: %w", id, errServiceNotFound))
 }
 
 func (a *App) startServiceWithConfig(parent context.Context, cfg ConfigState, req StartServiceRequest) (ServiceInfo, error) {
@@ -505,7 +505,7 @@ func (a *App) restartServiceWithConfig(parent context.Context, cfg ConfigState, 
 		}
 		if !serviceBelongsToWorkspace(original.Workspace, workspace) {
 			service.stopMu.Unlock()
-			return ServiceInfo{}, codedToolError("E_SERVICE_NOT_FOUND", fmt.Errorf("service not found in the current workspace: %w", errServiceNotFound))
+			return ServiceInfo{}, codedToolError("E_SERVICE_NOT_FOUND", fmt.Errorf("no service with id %q in the current workspace; call service with action=list to see the ids that exist: %w", id, errServiceNotFound))
 		}
 
 		if _, err := a.stopServiceLocked(id, service); err != nil {

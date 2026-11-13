@@ -149,3 +149,5 @@
 2026-11-13 中危 follow-resume 只认滚轮意图：拖滚动条不恢复，流式增长又让滚轮永远到不了新底部；按实际下移或滚轮当时看到的底部恢复并补滚。@desktop/page_chat.go
 2026-11-13 中危 outline-children Outline 每帧问所有可见行的 children，在里读盘会预读未展开的目录；按 Open 集合驱动。@desktop/page_explorer.go
 2026-11-13 中危 outline-style Outline 行自带上下边距、8px 左距和 accent 选中填充；自绘缩进与箭头并用面板色盖住，否则整棵树变样。@desktop/page_explorer.go
+2026-11-13 中危 gui-path 访达启动的 App 只有 launchd PATH；新增工具链探测须走 lookupValidationTool，否则永远静默跳过。@orch_validation.go
+2026-11-14 中危 tool-error 报错只报目标、不给处理方式，模型就原地重试同一个调用；错误文案带编码+可执行下一步。@internal/app

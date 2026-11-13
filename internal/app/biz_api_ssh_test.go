@@ -341,7 +341,7 @@ func TestAPISSHRejectsUnknownFields(t *testing.T) {
 	before := apiSSHTestNode(t, a, "dev")
 	for _, patch := range []map[string]any{
 		{"id": before.ID, "summery": map[string]any{"host": "other.invalid"}},
-		{"id": before.ID, "summary": map[string]any{"host": "other.invalid"}},
+		{"id": before.ID, "Summary": map[string]any{"host": "other.invalid"}},
 	} {
 		rec, _ := apiRequest(t, h, "POST", "/api/v1/ssh/servers", token, apiSSHTestJSON(t, patch))
 		if rec.Code != http.StatusBadRequest {
@@ -357,6 +357,28 @@ func TestAPISSHRejectsUnknownFields(t *testing.T) {
 	apiRequireOK(t, rec, payload)
 	if got := apiSSHTestNode(t, a, "dev"); got.Description != "updated purpose" {
 		t.Fatal("readable view fields blocked the edit")
+	}
+}
+
+func TestAPISSHListedNodeRoundTripPreservesCredentials(t *testing.T) {
+	h, a, token := newAPISSHTestHandler(t)
+	if err := a.SaveSSHServer(SSHServerNode{Alias: "dev", Host: "example.invalid", Username: "deploy",
+		Description: "test", AuthType: "password", Password: "saved-password"}); err != nil {
+		t.Fatal(err)
+	}
+	before := apiSSHTestNode(t, a, "dev")
+	rec, payload := apiRequest(t, h, "GET", "/api/v1/ssh/servers", token, "")
+	listed := apiRequireOK(t, rec, payload)["servers"].([]any)[0].(map[string]any)
+	listed["group"] = "ops"
+	listed["summary"].(map[string]any)["host"] = "ignored.invalid"
+	rec, payload = apiRequest(t, h, "POST", "/api/v1/ssh/servers", token, apiSSHTestJSON(t, listed))
+	apiRequireOK(t, rec, payload)
+	before.Group = "ops"
+	got := apiSSHTestNode(t, a, "dev")
+	// Saving updates this timestamp; two writes can fall in different milliseconds.
+	before.UpdatedAtMS = got.UpdatedAtMS
+	if !reflect.DeepEqual(got, before) {
+		t.Fatal("listed node round trip changed omitted fields or credentials")
 	}
 }
 

@@ -995,6 +995,8 @@ type DeleteResult struct {
 // （路径不合法、越界、重复、包含、超过条数上限）时不返回结果而是直接报错——那时
 // 一条路径也没动；能返回结果就意味着执行阶段已经逐条进行过了。
 type DeletePathsResult struct {
+	// RemoteAlias is set only by remote_delete_path.
+	RemoteAlias  string         `json:"remoteAlias,omitempty"`
 	Paths        []DeleteResult `json:"paths"`
 	DeletedCount int            `json:"deletedCount"`
 	FailedCount  int            `json:"failedCount"`
@@ -1180,6 +1182,10 @@ type ServiceOutputResult struct {
 }
 
 type CommandResult struct {
+	// RemoteAlias names the SSH host this result came from; empty for a local
+	// command. Remote and local commands share one renderer, so this is the
+	// only thing that lets a later replay say which machine produced the output.
+	RemoteAlias          string `json:"remoteAlias,omitempty"`
 	Command              string `json:"command"`
 	Cwd                  string `json:"cwd"`
 	Shell                string `json:"shell"`
@@ -1398,6 +1404,8 @@ type GitDiffResult struct {
 }
 
 type EditResult struct {
+	// RemoteAlias is set only by the remote file tools.
+	RemoteAlias       string   `json:"remoteAlias,omitempty"`
 	Path              string   `json:"path"`
 	BeforeSHA256      string   `json:"beforeSha256"`
 	AfterSHA256       string   `json:"afterSha256"`
@@ -1448,6 +1456,8 @@ type TextChange struct {
 }
 
 type MultiEditResult struct {
+	// RemoteAlias is set only by remote_edit.
+	RemoteAlias  string       `json:"remoteAlias,omitempty"`
 	Files        []EditResult `json:"files"`
 	FileCount    int          `json:"fileCount"`
 	Replacements int          `json:"-"`
@@ -1524,8 +1534,10 @@ type BatchReadResultItem struct {
 }
 
 type BatchReadResult struct {
-	Files   []BatchReadResultItem `json:"files"`
-	Missing []ReadPathStatus      `json:"missing,omitempty"`
+	// RemoteAlias is set only by remote_read.
+	RemoteAlias string                `json:"remoteAlias,omitempty"`
+	Files       []BatchReadResultItem `json:"files"`
+	Missing     []ReadPathStatus      `json:"missing,omitempty"`
 }
 
 type ReadPathStatus struct {
@@ -3046,7 +3058,9 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var req RemoteReadFileRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			data, err = a.remoteReadFileCached(ctx, req)
+			res, rerr := a.remoteReadFileCached(ctx, req)
+			res.RemoteAlias = strings.TrimSpace(req.Alias)
+			data, err = res, rerr
 		}
 	case "remote_edit":
 		// Flat single-file request: target + the same path/version/changes as
@@ -3058,25 +3072,33 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			err = validateModelEditToolRequest([]FileTextEdits{req.file()})
 		}
 		if err == nil {
-			data, err = a.remoteEdit(ctx, req)
+			res, rerr := a.remoteEdit(ctx, req)
+			res.RemoteAlias = strings.TrimSpace(req.Alias)
+			data, err = res, rerr
 		}
 	case "remote_create_file":
 		var req RemoteCreateFileRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			data, err = a.remoteCreateFile(ctx, req)
+			res, rerr := a.remoteCreateFile(ctx, req)
+			res.RemoteAlias = strings.TrimSpace(req.Alias)
+			data, err = res, rerr
 		}
 	case "remote_delete_path":
 		var req RemoteDeletePathRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			data, err = a.remoteDeletePath(ctx, req)
+			res, rerr := a.remoteDeletePath(ctx, req)
+			res.RemoteAlias = strings.TrimSpace(req.Alias)
+			data, err = res, rerr
 		}
 	case "remote_run_command":
 		var req RemoteRunCommandRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			data, err = a.remoteRunCommand(ctx, req)
+			res, rerr := a.remoteRunCommand(ctx, req)
+			res.RemoteAlias = strings.TrimSpace(req.Alias)
+			data, err = res, rerr
 		}
 	case "remote_transfer":
 		var req RemoteTransferRequest

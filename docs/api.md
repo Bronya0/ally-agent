@@ -304,7 +304,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 |------|------|------|------|
 | `config` | string | 是 | `mcp.json` 完整原文（JSON 字符串，顶层结构 `{"mcpServers": {...}}`） |
 
-保存后自动执行增量 reconcile：只重连新增/删除/变更的服务器，未动的保持连接。响应 `data`：`{ "applied": true }`；JSON 非法返回 400。
+保存后自动执行增量 reconcile：只重连新增/删除/变更的服务器，未动的保持连接。`GET /mcp` 返回的只读 `servers` 可以原样回传，保存时忽略。响应 `data`：`{ "applied": true }`；JSON 非法返回 400。
 
 ---
 
@@ -405,7 +405,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 ### `PUT /api/v1/context/settings` — 修改上下文设置
 
 请求可选字段：`disabledContext: string[]`、`disabledTools: string[]`、`customPrompt: string`，至少提供一个。
-未提供字段保留；显式 `[]` 清空禁用项，空字符串清空自定义提示词，`null` 和未知字段/名称返回 400。
+未提供字段保留；显式 `[]` 清空禁用项，空字符串清空自定义提示词，`null` 和未知字段/名称返回 400。GET 返回的只读 `options` 可以原样回传，保存时忽略，不计入至少一个可编辑字段的要求。
 核心文件与命令工具不能被禁用，复用现有规范化规则。
 选择对新会话生效，现有会话保持首次请求的选择，压缩重建也沿用该选择；快照在内存中，释放后清理。
 
@@ -450,7 +450,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 认证模式为 `agent` / `key` / `password`，端口 0 或省略表示默认 22。配置字段名需使用规范大小写，如 `authType`；错误大小写返回 400。
 编辑时未提供的凭据保留，空字符串显式清空；切换认证模式会清理旧模式凭据，私钥口令不会转作登录密码。
 响应为脱敏节点；ID 不存在返回 404，并发编辑冲突返回 409，未知字段返回 400。
-`GET` 列表里的 `summary` 是只读嵌套视图，回传会被 400 拒绝（修改请用平铺字段）；`hasPassword`、`hasKey` 两个指示字段可以原样回传。
+`GET` 列表里的 `summary`、`hasPassword`、`hasKey` 是只读字段，可以原样回传，保存时忽略；修改地址、端口等配置请用平铺字段。
 审批状态与创建者由服务端保管，请求里带 `status`、`createdBy` 不会生效。
 
 ### `DELETE /api/v1/ssh/servers/{id}` — 删除节点

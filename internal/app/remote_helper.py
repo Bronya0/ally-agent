@@ -386,17 +386,7 @@ def op_write(payload):
             f.flush()
             os.fsync(f.fileno())
         check_expected()
-        if hasattr(os, "replace"):
-            os.replace(tmp, path)
-        else:
-            if os.name == "nt":
-                try:
-                    os.rename(tmp, path)
-                except OSError:
-                    os.remove(path)
-                    os.rename(tmp, path)
-            else:
-                os.rename(tmp, path)
+        replace_file(tmp, path)
         replaced = True
     finally:
         if fd >= 0:
@@ -797,6 +787,14 @@ def get_raw_stdout():
         msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
     return sys.stdout
 
+def replace_file(source, target):
+    # Old Windows Python cannot atomically overwrite via rename. Fail safely
+    # there instead of deleting the original before an operation that may fail.
+    if hasattr(os, "replace"):
+        os.replace(source, target)
+    else:
+        os.rename(source, target)
+
 def do_upload(payload):
     import tarfile
     rel = payload.get("remotePath", "")
@@ -852,7 +850,7 @@ def do_upload(payload):
 
         if member.isdir():
             if os.path.lexists(target_path) and (os.path.islink(target_path) or not os.path.isdir(target_path)):
-                os.unlink(target_path)
+                raise ValueError("cannot replace a file or symlink with a directory: " + to_unicode(m_name))
             created_mode = None
             if not os.path.exists(target_path):
                 created_mode = (member.mode & 0o777 & ~0o022) or 0o755
@@ -862,6 +860,8 @@ def do_upload(payload):
             dir_metadata.append((target_path, member.mtime, created_mode))
             dir_count += 1
         elif member.isreg():
+            if os.path.isdir(target_path) and not os.path.islink(target_path):
+                raise ValueError("cannot replace a directory with a file: " + to_unicode(m_name) + "; choose a file path inside the directory")
             p_dir = os.path.dirname(target_path)
             if not os.path.exists(p_dir):
                 os.makedirs(p_dir)
@@ -885,15 +885,9 @@ def do_upload(payload):
                     os.link(tmp_path, target_path)
                     os.unlink(tmp_path)
                 else:
-                    if os.path.isdir(target_path) and not os.path.islink(target_path):
-                        import shutil
-                        shutil.rmtree(target_path)
-                    if hasattr(os, "replace"):
-                        os.replace(tmp_path, target_path)
-                    else:
-                        if os.name == "nt" and os.path.lexists(target_path):
-                            os.remove(target_path)
-                        os.rename(tmp_path, target_path)
+                    # Rename rejects directories created after the initial check.
+                    # Never delete a directory to publish a regular file.
+                    replace_file(tmp_path, target_path)
                 if member.mtime > 0:
                     os.utime(target_path, (member.mtime, member.mtime))
                 file_count += 1
@@ -910,9 +904,20 @@ def do_upload(payload):
                 raise ValueError("E_PROTECTED_PATH: refusing symlink to VCS metadata: " + to_unicode(m_name))
             if not os.path.exists(os.path.dirname(target_path)):
                 os.makedirs(os.path.dirname(target_path))
-            if os.path.lexists(target_path):
-                os.unlink(target_path)
-            os.symlink(member.linkname, target_path)
+            if not overwrite:
+                os.symlink(member.linkname, target_path)
+            else:
+                # Creating a symlink can fail even when replacing a file is
+                # permitted (notably on Windows). Keep the original until ready.
+                fd, tmp_path = tempfile.mkstemp(prefix=".ally-link-", dir=os.path.dirname(target_path))
+                os.close(fd)
+                os.unlink(tmp_path)
+                try:
+                    os.symlink(member.linkname, tmp_path)
+                    replace_file(tmp_path, target_path)
+                finally:
+                    if os.path.lexists(tmp_path):
+                        os.unlink(tmp_path)
         else:
             raise ValueError("unsupported tar entry type: " + to_unicode(m_name))
 

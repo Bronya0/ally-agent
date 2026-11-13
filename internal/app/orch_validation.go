@@ -457,7 +457,7 @@ for p in sys.argv[2:]:
 }
 
 func validateJavaScriptFiles(ctx context.Context, files []validationFile) validationReport {
-	program, err := exec.LookPath("node")
+	program, err := lookupValidationTool("node")
 	if err != nil {
 		return validationReport{label: "JavaScript 语法", skipped: true, detail: "未找到 node"}
 	}
@@ -493,7 +493,7 @@ for (const file of process.argv.slice(1)) {
 }
 
 func validateGoFiles(ctx context.Context, root string, files []validationFile) validationReport {
-	goProgram, err := exec.LookPath("go")
+	goProgram, err := lookupValidationTool("go")
 	if err != nil {
 		return validationReport{label: "Go vet", skipped: true, detail: "未找到 go"}
 	}
@@ -619,7 +619,7 @@ func filterGoVetOutput(output string, relPaths map[string]struct{}) string {
 }
 
 func validateTypeScriptFiles(ctx context.Context, root string, tsFiles, vueFiles []validationFile) []validationReport {
-	node, err := exec.LookPath("node")
+	node, err := lookupValidationTool("node")
 	if err != nil {
 		return []validationReport{{label: "Vue/TypeScript 语法", skipped: true, detail: "未找到 node"}}
 	}
@@ -731,7 +731,7 @@ func findNodeValidationModule(dir, root, module string) string {
 }
 
 func validateJavaFiles(ctx context.Context, files []validationFile) validationReport {
-	program, err := exec.LookPath("javac")
+	program, err := lookupValidationTool("javac")
 	if err != nil {
 		return validationReport{label: "Java 语法", skipped: true, detail: "未找到 javac"}
 	}
@@ -890,6 +890,32 @@ func nearestFile(dir, root, name string) string {
 	}
 }
 
+// lookupValidationTool resolves a toolchain binary the way command subprocesses
+// do: the app's own PATH first, then the entries the user's login shell adds.
+// A Finder-launched app inherits the bare launchd PATH, so plain exec.LookPath
+// misses go or an nvm-installed node and edit-time validation silently skips
+// with "未找到 go" on every edit in a Go project.
+func lookupValidationTool(name string) (string, error) {
+	if path, err := exec.LookPath(name); err == nil {
+		return path, nil
+	}
+	pathValue, ok := environmentValue(commandBaseEnv(), "PATH")
+	if !ok || pathValue == "" {
+		return "", exec.ErrNotFound
+	}
+	for _, dir := range filepath.SplitList(pathValue) {
+		// Skip relative and empty entries: their meaning depends on the cwd.
+		if dir == "" || !filepath.IsAbs(dir) {
+			continue
+		}
+		candidate := filepath.Join(dir, name)
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+			return candidate, nil
+		}
+	}
+	return "", exec.ErrNotFound
+}
+
 func runValidationCommand(ctx context.Context, dir, program string, args ...string) (string, error) {
 	buf := &limitedBuffer{limit: autoValidationOutputBytes}
 	cmd := exec.CommandContext(ctx, program, args...)
@@ -918,8 +944,14 @@ func validationCommandEnv() []string {
 		"JAVA_TOOL_OPTIONS": true, "JDK_JAVA_OPTIONS": true, "JDK_JAVAC_OPTIONS": true, "_JAVA_OPTIONS": true,
 		"GOFLAGS": true, "GOTOOLCHAIN": true, "GOPROXY": true, "GOSUMDB": true, "GOENV": true,
 	}
-	env := make([]string, 0, len(os.Environ())+4)
-	for _, entry := range os.Environ() {
+	base := os.Environ()
+	// Use the same PATH as lookupValidationTool so toolchain shims can find
+	// their helpers, while retaining the current environment and filtering it.
+	if path, ok := environmentValue(commandBaseEnv(), "PATH"); ok {
+		base = replaceEnvironmentValue(base, "PATH", path)
+	}
+	env := make([]string, 0, len(base)+4)
+	for _, entry := range base {
 		key, _, _ := strings.Cut(entry, "=")
 		if !blocked[strings.ToUpper(key)] {
 			env = append(env, entry)

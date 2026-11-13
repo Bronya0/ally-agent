@@ -299,7 +299,21 @@ func removeAllWithinBase(base, target string) error {
 	if !insideRoot(baseClean, targetClean) {
 		return fmt.Errorf("refusing to remove %q: it is outside %q", filepath.ToSlash(targetClean), filepath.ToSlash(baseClean))
 	}
-	return os.RemoveAll(targetClean)
+	rel, err := filepath.Rel(baseClean, targetClean)
+	if err != nil {
+		return err
+	}
+	// A lexical descendant can still escape through an intermediate symlink.
+	// Keep traversal confined by the OS, including concurrent link replacements.
+	root, err := os.OpenRoot(baseClean)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.RemoveAll(rel)
 }
 
 // removeTempTree deletes a tree this process created directly under the system

@@ -73,13 +73,13 @@ func ReadRawTextFile(path string) ([]byte, os.FileInfo, error) {
 		return nil, nil, err
 	}
 	if info.IsDir() {
-		return nil, nil, toolerrors.New("E_IS_DIRECTORY", errors.New("path is a directory"))
+		return nil, nil, toolerrors.New("E_IS_DIRECTORY", errors.New("path is a directory; use list_files to inspect its entries"))
 	}
 	if !info.Mode().IsRegular() {
 		return nil, nil, toolerrors.New("E_NOT_REGULAR_FILE", errors.New("path is not a regular file"))
 	}
 	if info.Size() > MaxReadBytes {
-		return nil, nil, toolerrors.Newf("E_FILE_TOO_LARGE", "file is too large: %d bytes", info.Size())
+		return nil, nil, toolerrors.Newf("E_FILE_TOO_LARGE", "file is too large: %d bytes (max %d); use tailLines to read the end of a file this size", info.Size(), MaxReadBytes)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, MaxReadBytes+1))
 	if err != nil {
@@ -220,7 +220,7 @@ func DecodeTextBytes(data []byte) ([]byte, error) {
 	if le, be, hasNUL := probeUTF16(data); le || be {
 		return decodeUTF16(data, le)
 	} else if hasNUL {
-		return nil, toolerrors.New("E_BINARY_FILE", errors.New("binary file is not supported"))
+		return nil, toolerrors.New("E_BINARY_FILE", errors.New("binary file is not supported; read handles text and images (jpg, png, gif, webp) only — use command (file, xxd) for other binaries"))
 	}
 	if !utf8.Valid(data) {
 		return nil, toolerrors.New("E_NOT_UTF8", errors.New("file is not valid UTF-8"))

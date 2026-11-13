@@ -582,7 +582,8 @@ func isDangerousSearchRoot(absPath string) (bool, string) {
 	// 4. Home directories — too broad
 	if homeDir, err := os.UserHomeDir(); err == nil {
 		cleanHome := filepath.Clean(homeDir)
-		if abs == cleanHome {
+		realHome, _ := filepath.EvalSymlinks(cleanHome)
+		if abs == cleanHome || abs == realHome {
 			return true, fmt.Sprintf("refusing to search from home directory %q; this would scan personal files. Specify a project subdirectory", abs)
 		}
 	}

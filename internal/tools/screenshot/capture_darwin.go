@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"os"
@@ -35,7 +36,10 @@ import (
 func listWindows(ctx context.Context) ([]Window, error) {
 	script := `ObjC.import('CoreGraphics');
 const list = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID);
-const wins = ObjC.deepUnwrap(list) || [];
+// CGWindowListCopyWindowInfo 返回 CFArrayRef，JXA 把它桥接成不透明 Ref：
+// 直接 deepUnwrap 得到的是 {}，后面的 for...of 抛 "{} is not iterable"（窗口
+// 枚举以前就是这么坏的）。先 castRefToObject 转成 NSArray，才能拿到真数组。
+const wins = ObjC.deepUnwrap(ObjC.castRefToObject(list)) || [];
 const out = [];
 for (const w of wins) {
   if (w.kCGWindowLayer !== 0) continue;
@@ -47,7 +51,10 @@ for (const w of wins) {
 JSON.stringify(out);`
 	out, err := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", script).Output()
 	if err != nil {
-		return nil, fmt.Errorf("%w: window enumeration failed: %v", ErrCaptureUnsupported, err)
+		// 枚举失败不等于“没有图形会话”：JXA 桥自身报错也会走到这里，而真因
+		// 只写在 stderr 里（exec.Output 丢弃它）。保留 stderr，别让模型对用户
+		// 误报成无头环境。
+		return nil, fmt.Errorf("%w: window enumeration failed: %v%s", ErrCaptureFailed, err, execStderrSuffix(err))
 	}
 	var windows []Window
 	if err := json.Unmarshal(out, &windows); err != nil {
@@ -95,7 +102,7 @@ func screencapture(ctx context.Context, args []string) (image.Image, error) {
 	path := dir + "/capture.png"
 	cmd := exec.CommandContext(ctx, "screencapture", append([]string{"-x", "-t", "png"}, append(args, path)...)...)
 	if out, cmdErr := cmd.CombinedOutput(); cmdErr != nil {
-		return nil, fmt.Errorf("%w: screencapture: %v: %s", ErrCaptureFailed, cmdErr, tailBytes(out))
+		return nil, fmt.Errorf("%w: screencapture: %v: %s%s", ErrCaptureFailed, cmdErr, tailBytes(out), screenRecordingHint(string(out)))
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -120,4 +127,28 @@ func activateWindow(ctx context.Context, win Window) error {
 		strings.ReplaceAll(win.Process, `"`, ``))
 	_ = exec.CommandContext(ctx, "osascript", "-e", script).Run()
 	return nil
+}
+
+// execStderrSuffix keeps a failed helper's stderr in the model-facing message.
+// exec.Output discards it, and on macOS that stderr is the only thing that
+// tells a broken JXA enumeration apart from a session without a display.
+func execStderrSuffix(err error) string {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return ""
+	}
+	if stderr := tailBytes(exitErr.Stderr); stderr != "" {
+		return ": " + stderr
+	}
+	return ""
+}
+
+// screenRecordingHint suggests checking permissions without claiming that
+// every image-creation failure is caused by permissions.
+func screenRecordingHint(output string) string {
+	// Both display and window captures may require Screen Recording permission.
+	if !strings.Contains(output, "could not create image from ") {
+		return ""
+	}
+	return " (check Ally's Screen Recording permission under System Settings → Privacy & Security → Screen Recording)"
 }

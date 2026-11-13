@@ -6,12 +6,42 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
 	openai "github.com/sashabaranov/go-openai"
 )
+
+func TestValidationFallbackToolCanRunHelpers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX toolchain shim fixture")
+	}
+	_ = commandBaseEnv()
+	bin := t.TempDir()
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("NODE_OPTIONS", "--require=unwanted-preload")
+	for name, source := range map[string]string{
+		"ally-validation-probe":  "#!/bin/sh\nexec ally-validation-helper\n",
+		"ally-validation-helper": "#!/bin/sh\nprintf '%s|%s' \"$NODE_OPTIONS\" \"$GOTOOLCHAIN\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(source), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original := commandEnvironmentState.env
+	commandEnvironmentState.env = replaceEnvironmentValue(original, "PATH", "/usr/bin:/bin:"+bin)
+	t.Cleanup(func() { commandEnvironmentState.env = original })
+	program, err := lookupValidationTool("ally-validation-probe")
+	if err != nil || program != filepath.Join(bin, "ally-validation-probe") {
+		t.Fatalf("fallback lookup = %q, %v", program, err)
+	}
+	output, err := runValidationCommand(context.Background(), bin, program)
+	if err != nil || output != "|local" {
+		t.Fatalf("shim must find its helper with a filtered environment: output=%q, err=%v", output, err)
+	}
+}
 
 // validationSandbox returns a private workspace for one validation case. Process
 // isolation (HOME, TEMP, GOCACHE, GOMODCACHE, GOWORK) is established once in

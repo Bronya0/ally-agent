@@ -251,12 +251,7 @@ func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (S
 		case tar.TypeDir:
 			if existing, err := root.Lstat(targetPath); err == nil {
 				if !existing.IsDir() {
-					if !overwrite {
-						return stats, fmt.Errorf("path already exists as a file: %s", rel)
-					}
-					if err := root.Remove(targetPath); err != nil {
-						return stats, fmt.Errorf("remove existing file for directory %s: %w", targetPath, err)
-					}
+					return stats, fmt.Errorf("cannot replace a file or symlink with a directory: %s", rel)
 				}
 			}
 			mode := header.FileInfo().Mode().Perm() &^ 0o022
@@ -276,7 +271,10 @@ func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (S
 			}
 
 			// Existence check
-			if _, err := root.Lstat(targetPath); err == nil {
+			if existing, err := root.Lstat(targetPath); err == nil {
+				if existing.IsDir() {
+					return stats, fmt.Errorf("cannot replace a directory with a file: %s; choose a file path inside the directory", rel)
+				}
 				if !overwrite {
 					return stats, fmt.Errorf("file already exists: %s", rel)
 				}
@@ -312,12 +310,8 @@ func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (S
 				}
 				_ = root.Remove(tmpPath)
 			} else {
-				if existing, err := root.Lstat(targetPath); err == nil && existing.IsDir() {
-					if err := root.RemoveAll(targetPath); err != nil {
-						_ = root.Remove(tmpPath)
-						return stats, err
-					}
-				}
+				// Rename rejects directories that appeared after the initial check.
+				// Never remove a directory to make a file replacement succeed.
 				if err := root.Rename(tmpPath, targetPath); err != nil {
 					_ = root.Remove(tmpPath)
 					return stats, fmt.Errorf("atomic rename to %s: %w", targetPath, err)
@@ -343,14 +337,23 @@ func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (S
 			if err := root.MkdirAll(parent, 0o755); err != nil {
 				return stats, err
 			}
-			if _, err := root.Lstat(targetPath); err == nil {
-				if !overwrite {
-					return stats, fmt.Errorf("file already exists: %s", rel)
+			if !overwrite {
+				// Symlink itself is an atomic no-clobber creation.
+				if err := root.Symlink(header.Linkname, targetPath); err != nil {
+					return stats, fmt.Errorf("create symlink %s: %w", targetPath, err)
 				}
-				_ = root.Remove(targetPath)
-			}
-			if err := root.Symlink(header.Linkname, targetPath); err != nil {
-				return stats, fmt.Errorf("create symlink %s: %w", targetPath, err)
+			} else {
+				// Prepare the link before replacing anything: creation may fail
+				// because of permissions, unsupported filesystems or bad targets.
+				tmpPath := filepath.Join(parent, fmt.Sprintf(".ally-link-%d-%d", os.Getpid(), time.Now().UnixNano()))
+				if err := root.Symlink(header.Linkname, tmpPath); err != nil {
+					return stats, fmt.Errorf("create symlink %s: %w", targetPath, err)
+				}
+				err := root.Rename(tmpPath, targetPath)
+				_ = root.Remove(tmpPath)
+				if err != nil {
+					return stats, fmt.Errorf("replace symlink %s: %w", targetPath, err)
+				}
 			}
 
 		default:

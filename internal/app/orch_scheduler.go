@@ -37,9 +37,12 @@ const (
 	defaultScheduledTaskSteps   = scheduler.DefaultSteps
 	maxScheduledTaskSteps       = scheduler.MaxSteps
 	defaultScheduledTaskTimeout = scheduler.DefaultTimeout
-	maxScheduledTasks           = scheduler.MaxTasks
-	scheduledTaskSummaryLimit   = scheduler.SummaryLimit
-	scheduledTaskErrorTextLimit = 8 * 1024
+	// scheduledCommandTimeoutSeconds 是命令工具自身的上限：command 型任务在运行时
+	// 被钳到这个数，所以给模型看的行必须报同一个数，不能报记录里的 3600s。
+	scheduledCommandTimeoutSeconds = 600
+	maxScheduledTasks              = scheduler.MaxTasks
+	scheduledTaskSummaryLimit      = scheduler.SummaryLimit
+	scheduledTaskErrorTextLimit    = 8 * 1024
 )
 
 type ScheduledTaskSchedule struct {
@@ -771,8 +774,8 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 func (m *scheduledTaskManager) runCommandTask(task ScheduledTask, ctx context.Context, cfg ConfigState) {
 	// command 工具自身的上限是 600s；更长的任务超时只约束外层 ctx。
 	timeout := task.TimeoutSeconds
-	if timeout <= 0 || timeout > 600 {
-		timeout = 600
+	if timeout <= 0 || timeout > scheduledCommandTimeoutSeconds {
+		timeout = scheduledCommandTimeoutSeconds
 	}
 	result, runErr := m.app.runCommandWithConfig(ctx, cfg, CommandRequest{
 		Command: task.Command,

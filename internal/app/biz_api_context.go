@@ -96,7 +96,7 @@ func (a *App) apiHandleContextSettings(w http.ResponseWriter, r *http.Request) {
 	for _, option := range ContextLoadingOptions() {
 		options = append(options, map[string]any{"id": option.ID, "label": option.Label, "description": option.Description, "enabled": cfg.ContextEnabled(option.ID)})
 	}
-	apiWriteOK(w, map[string]any{"options": options, "disabledContext": cfg.DisabledContext, "disabledTools": cfg.DisabledTools, "customPrompt": cfg.CustomPrompt})
+	apiWriteOK(w, map[string]any{"options": options, "disabledContext": append([]string{}, cfg.DisabledContext...), "disabledTools": append([]string{}, cfg.DisabledTools...), "customPrompt": cfg.CustomPrompt})
 }
 
 func (a *App) apiHandlePutContextSettings(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +105,7 @@ func (a *App) apiHandlePutContextSettings(w http.ResponseWriter, r *http.Request
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	delete(body, "options") // Read-only metadata from GET is safe to round-trip.
 	if len(body) == 0 {
 		apiWriteError(w, http.StatusBadRequest, "provide at least one context setting")
 		return

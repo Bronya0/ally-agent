@@ -437,6 +437,9 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 			strings.Contains(msg, "python: command not found") || strings.Contains(msg, "python: not found") {
 			return fmt.Errorf("remote host %s has no python3/python2/python in PATH; remote_* tools need a python interpreter on the remote side (install python3, python2 or python, or add it to PATH): %s", rt.Host, msg)
 		}
+		if strings.Contains(msg, "no such host") {
+			return fmt.Errorf("ssh %s failed: %s; check the hostname and DNS; if %q was meant to be a server nickname, use ssh_cluster to check the exact alias", rt.Host, msg, rt.Raw)
+		}
 		return fmt.Errorf("ssh %s failed: %s", rt.Host, msg)
 	}
 	// 远程命令的输出会被原样嵌在 ok() 的 JSON output 字段里，如果命令

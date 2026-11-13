@@ -76,7 +76,7 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 			return EditResult{}, codedToolError("E_TARGET_IS_DIRECTORY", fmt.Errorf("path is a directory: %s", req.Path))
 		}
 		if !req.Overwrite {
-			return EditResult{}, codedToolError("E_EXISTS", fmt.Errorf("file already exists: %s", req.Path))
+			return EditResult{}, codedToolError("E_EXISTS", fmt.Errorf("file already exists: %s; read it and use edit with its current version to change it", req.Path))
 		}
 		before, _, err = readTextFile(path)
 		if err != nil {
@@ -1430,10 +1430,18 @@ func symlinkWriteError(p string) error {
 	return codedToolError("E_SYMLINK_PATH", fmt.Errorf("安全围栏已拦截：不允许通过符号链接写入。\n原因：%s 是符号链接；写工具不跟随链接，以免改动链接指向的目标（它可能落在允许范围之外）。\n处理方式：改为直接写链接指向的真实路径；要替换链接本身，请先删除它再建文件。命令行写入按真实路径判定——解析后仍在允许范围内时命令行可以做到，所以改用命令行也是一种办法。", p))
 }
 
+// outsideBoundaryError 是「路径落在所有可写根之外」的模型可见解释。pathutil 的
+// 原始错误只报哪个路径越界，而核心提示词要求模型在 E_PATH_OUTSIDE 上读解释和
+// 目标：只给目标，模型只会换一个同样越界的路径重试。措辞与命令围栏同形——
+// 检测到的目标、原因、处理方式、可写范围。
+func outsideBoundaryError(roots []string, p string, cause error) error {
+	return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：路径不在工作区、会话附加根目录或 ~/.ally_agent 内。\n检测到的目标：%s\n原因：%v\n处理方式：改用工作区内的相对路径；确实要写这个目录，请用户在会话级附加工作区里加入它（只对本次会话有效），或先用工作区 .tmp/ 下的路径。\n可写范围：\n%s", p, cause, formatAllowedRoots(roots)))
+}
+
 func resolveWritableFilePath(roots []string, p string) (string, error) {
 	abs, err := resolveBoundaryPath(roots, p)
 	if err != nil {
-		return "", codedToolError("E_PATH_OUTSIDE", err)
+		return "", outsideBoundaryError(roots, p, err)
 	}
 	if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return "", symlinkWriteError(p)
@@ -1507,7 +1515,7 @@ func resolveDeletablePath(roots []string, p string) (string, error) {
 func resolveCommandCwd(roots []string, p string) (string, error) {
 	abs, err := resolveBoundaryPath(roots, p)
 	if err != nil {
-		return "", codedToolError("E_PATH_OUTSIDE", err)
+		return "", outsideBoundaryError(roots, p, err)
 	}
 	resolved, err := filepath.EvalSymlinks(abs)
 	if err != nil {

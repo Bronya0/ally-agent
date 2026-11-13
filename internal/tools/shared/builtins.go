@@ -165,7 +165,7 @@ func chatToolsUncached() []openai.Tool {
 				"aspect_ratio": map[string]any{"type": "string", "enum": []string{"1:1", "3:2", "2:3"}},
 			}, "required": []string{"prompt", "images"},
 		}),
-		functionTool("list_files", "Inspect directory structure. Lists up to 3 levels deep and 200 entries, with directories ending in '/'. Dotfiles, gitignored paths, VCS internals and heavy dependency/build directories are omitted. At most 50 direct files per directory are shown; '+N more files' marks omitted siblings. Narrow the path for depth/global truncation; narrowing to the same directory cannot reveal omitted siblings. An absent entry does not prove a path does not exist.", map[string]any{
+		functionTool("list_files", "Inspect directory structure, up to 3 levels and 200 entries. Directories end in '/'. Hidden, gitignored, VCS and heavy dependency/build entries are omitted; explicit paths can inspect inside omitted directories. At most 50 direct files per directory are shown; '+N more files' marks omitted siblings. Narrow the path for depth/global truncation, or use command to list direct entries. An absent entry does not prove a path does not exist.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{"type": "string", "description": "Workspace-relative directory path, or explicit absolute path for read-only listing. Empty means workspace root."},
@@ -179,7 +179,7 @@ func chatToolsUncached() []openai.Tool {
 		// model calls the tool — unique windowTitle match, mutually exclusive
 		// targets, negative region coordinates, downscaling, the privacy
 		// guard — are all still here.
-		functionTool("screenshot", "Capture a screen/window image, or list visible windows with action=list. Default capture uses the primary display; region uses virtual-screen coordinates (negative values allowed). Prefer windowId from list. windowId, windowTitle and region are mutually exclusive. Window capture excludes covering windows; display/region capture shows what is visible. focus=true restores and raises a window. Images are downscaled. Capture only when the user asks to see the screen or a UI element.", map[string]any{
+		functionTool("screenshot", "Capture a screen/window image, or list visible windows with action=list. Default capture uses the primary display; region uses virtual-screen coordinates (negative values allowed). Prefer windowId from list. windowId, windowTitle and region are mutually exclusive. Window capture excludes covering windows; display/region capture shows what is visible. focus=true restores and raises a window. Images are downscaled. Diagnose failures from their error details; a failure code alone does not identify a permission problem. Capture only when the user asks to see the screen or a UI element.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":      map[string]any{"type": "string", "enum": []string{"capture", "list"}, "description": "capture (default) or list (return visible windows instead)."},
@@ -201,17 +201,17 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("edit", "Edit one workspace file using the current version from read or the preceding successful edit; never guess a version or source text. Prefer short exact unique oldText. Use lineRange only for whole-line changes immediately after reading that range, and re-read before using line numbers after any edit. Put all changes to this file in one call. On source/version/range errors, use an attached complete snapshot or re-read the needed range.", map[string]any{
+		functionTool("edit", "Edit one workspace file using the current version from read, create, or the preceding successful edit; never guess a version or source text. Prefer short exact unique oldText. Use lineRange only for whole-line changes immediately after reading that range, and re-read before using line numbers after any edit. Put all changes to this file in one call. On source/version/range errors, use an attached complete snapshot or re-read the needed range.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the single file to edit in this call."},
-				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-character current version from the latest read or preceding successful edit of this file. Never guess it; use the new version returned after every successful edit. Comparison is case-insensitive."},
+				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-character current version from the latest read, create, or preceding successful edit of this file. Never guess it; use the new version returned after every successful edit. Comparison is case-insensitive."},
 				// Same declaration as remote_edit; only the read tool it names differs.
 				"changes": editChangesSchema("read"),
 			},
 			"required": []string{"path", "version", "changes"},
 		}),
-		functionTool("create", "Create a UTF-8 file and missing parent directories. Directories, symlinks and existing non-text files are refused.", map[string]any{
+		functionTool("create", "Create a UTF-8 file and missing parent directories. Directories and symlinks are refused. Existing files require overwrite=true and must be readable text; prefer edit to modify them. Returns the new version for a subsequent edit.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative file path."},
@@ -223,7 +223,7 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("delete", "Delete files or directories in the workspace. Strictly prohibited from deleting drive roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*, C:\\Windows, C:\\Users/*), VCS metadata (.git), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs)."+deleteBatchNote(), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"paths":     deletePathsSchema("Workspace-relative or authorized path to delete."),
+				"paths":     deletePathsSchema("Workspace-relative or authorized path to delete. Paths outside the workspace are refused."),
 				"recursive": map[string]any{"type": "boolean", "description": "Required when deleting a directory; applies to every path in the call."},
 			},
 			"required": []string{"paths"},
@@ -231,7 +231,7 @@ func chatToolsUncached() []openai.Tool {
 		// The non-blank pattern on the command argument is a blank-command guard
 		// only: Go's `.` never crosses a newline, so a multi-line command passes as
 		// soon as any one line carries a non-space character.
-		functionTool("command", "Run a shell command or related shell sequence with cwd inside the workspace. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. "+ContentSearchGuidance+" Read-only outside inspection and new outside paths are allowed; modifying existing outside paths is refused. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. "+modelOutputNote+" A timeout promotes the still-running process to a background service: use service read/stop/restart with its returned id, never start a duplicate. Commands that touch the same files or bind the same port need distinct stages.", map[string]any{
+		functionTool("command", "Run a shell command or related shell sequence with cwd in a writable workspace root. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. "+ContentSearchGuidance+" Keep project outputs in the workspace or active session extra roots; other filesystem access follows runtime restrictions. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. "+modelOutputNote+" If the result reports promotion to a background service, use service read/stop/restart with its returned id; never duplicate an active process. Commands that touch the same files or bind the same port need distinct stages.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run."},
@@ -240,7 +240,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("service", "Manage background processes owned by the current workspace. Sessions and sub-agents in the same workspace share services; operations cannot access other workspaces. The active service limit is global, and model calls require a workspace. stop immediately force-kills the owned process tree. restart stops the service and starts the same command again, returning a new service ID; the old record remains available for logs.", map[string]any{
+		functionTool("service", "Manage background processes owned by the current workspace. Sessions and sub-agents in the same workspace share services; operations cannot access other workspaces. The active service limit is global, and model calls require a workspace. stop immediately force-kills the owned process tree with no graceful shutdown. restart stops the service and starts the same command again, returning a new service ID; the old record remains available for logs.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"includeFinished": map[string]any{"type": "boolean", "description": "For action=list: include finished services (default false)."},
@@ -252,7 +252,7 @@ func chatToolsUncached() []openai.Tool {
 				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start or action=restart. Required with action=stop, action=restart, and action=read."},
 				"graceSeconds": map[string]any{
 					"type": "integer", "minimum": 0, "maximum": MaxServiceStopGraceSeconds,
-					"description": fmt.Sprintf("Deprecated compatibility field (legacy default %d, maximum %d); ignored.", DefaultServiceStopGraceSeconds, MaxServiceStopGraceSeconds),
+					"description": fmt.Sprintf("Deprecated compatibility field, ignored: stop force-kills immediately (legacy default %d, maximum %d).", DefaultServiceStopGraceSeconds, MaxServiceStopGraceSeconds),
 				},
 				"tailBytes": map[string]any{
 					"type": "integer", "minimum": 0, "maximum": MaxServiceReadTailBytes,
@@ -398,7 +398,7 @@ func chatToolsUncached() []openai.Tool {
 				"action":     map[string]any{"type": "string", "enum": []string{"upload", "download"}, "description": "Transfer direction: 'upload' (local to remote) or 'download' (remote to local)."},
 				"localPath":  map[string]any{"type": "string", "minLength": 1, "description": "Workspace-relative local file or directory path."},
 				"remotePath": map[string]any{"type": "string", "minLength": 1, "description": "Absolute remote destination or source file/directory path, e.g. /srv/app/dist."},
-				"overwrite":  map[string]any{"type": "boolean", "description": "Allow overwriting an existing destination file or directory without an additional confirmation prompt."},
+				"overwrite":  map[string]any{"type": "boolean", "description": "Allow overwriting existing destinations without an additional confirmation prompt. Files and directories cannot replace each other; specify a file path inside a destination directory."},
 			},
 			"required": []string{"alias", "action", "localPath", "remotePath"},
 		}),
@@ -409,12 +409,12 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("grep", "Search UTF-8 content for specific matches, log filtering, or counts. Default lines mode groups matches by file with line numbers and previews capped at 500 characters. Totals are exact within the searched scope. Hidden files are skipped during traversal; dependency/build directories are excluded unless the path points inside them. Empty path also skips files over 10 MB.", map[string]any{
+		functionTool("grep", "Search UTF-8 content for matches, log filtering, or counts. Default lines mode groups matches by file with line numbers and previews capped at 500 characters. Totals cover only the searched scope. Traversal is limited to 20 levels and skips hidden entries; pass a hidden directory or file as path to search it. Traversal respects ignore rules unless includeIgnored=true. Dependency/build directories are excluded unless path points inside them. Empty path also skips files over 10 MB.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Rust regex pattern; look-around and backreferences are unsupported. Escape regex metacharacters when matching literal text."},
 				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches", ""}, "description": "lines (default, also for an empty string) returns matching lines with capped text previews. count_matches returns occurrence counts for only the top 100 files by count, 20 files per page; pagination cannot retrieve files beyond that top 100."},
-				"path":           map[string]any{"type": "string", "description": "File or directory, relative to the workspace root or absolute. Empty means workspace root."},
+				"path":           map[string]any{"type": "string", "description": "File or directory, relative to the workspace root or absolute. Empty means workspace root. Point it at a hidden directory such as .github to search inside it."},
 				"glob":           map[string]any{"type": "string", "description": "Optional glob filter, e.g. *.go or frontend/**/*.vue."},
 				"maxMatches":     map[string]any{"type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum returned matching lines in lines mode (default 200). Exact totals still cover the entire search."},
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false. Does not enable hidden-directory traversal or remove dependency/build directory exclusions."},
@@ -423,7 +423,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read text files and images (jpg, png, gif, webp; bmp returns a text notice). Text is returned as bounded previews headed by `// read | path=… | version=…` with 1-based line numbers; use the version field for edit. Use tailLines for logs. Missing paths and directories have compact error receipts; other failures carry an error field. `truncated-lines` marks incomplete line tails; edit refuses lineRange over them, so use oldText instead.", map[string]any{
+		functionTool("read", "Read text files and images (jpg, png, gif, webp; bmp returns a text notice). Text is returned as bounded previews headed by `// read | path=… | version=…` with 1-based line numbers; use the version field for edit. Use tailLines for logs. Missing paths and directories return compact errors with a next step; other failures carry an error field. `truncated-lines` marks incomplete line tails; edit refuses lineRange over them, so use oldText instead.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema("File path to read."),

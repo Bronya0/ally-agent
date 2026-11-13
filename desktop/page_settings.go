@@ -834,6 +834,7 @@ func (a *desktop) loadAPIService(manual ...bool) {
 	}
 	a.settings.APIRevision++
 	revision := a.settings.APIRevision
+	token, port := a.settings.API.Token, a.settings.APIPort
 	go func() {
 		state, err := a.core.GetApiServiceState()
 		a.win.Update(func() {
@@ -847,14 +848,33 @@ func (a *desktop) loadAPIService(manual ...bool) {
 				}
 				return
 			}
-			a.settings.API = state
-			a.settings.APIPort = float64(state.Port)
+			a.applyAPIState(state, token, port)
 			a.settings.APINote = ""
 			if len(manual) > 0 && manual[0] {
 				a.notifySuccess(locales.Text("API 状态已刷新"))
 			}
 		})
 	}()
+}
+
+// Refresh service status without discarding fields edited before or during the
+// request. The baseline tracks the last values obtained from the service.
+func (a *desktop) applyAPIState(state backend.ApiServiceState, requestedToken string, requestedPort float64) {
+	token, port := a.settings.API.Token, a.settings.APIPort
+	keepToken, keepPort := token != requestedToken, port != requestedPort
+	if base := a.settings.APIBaseline; base != nil {
+		keepToken = keepToken || token != base.Token
+		keepPort = keepPort || port != float64(base.Port)
+	}
+	a.settings.API = state
+	a.settings.APIPort = float64(state.Port)
+	a.settings.APIBaseline = &state
+	if keepToken {
+		a.settings.API.Token = token
+	}
+	if keepPort {
+		a.settings.APIPort = port
+	}
 }
 
 func (a *desktop) saveAPISettings() {
@@ -896,6 +916,7 @@ func (a *desktop) persistAPISettings(token string, regenerated bool) {
 			}
 			a.settings.API = state
 			a.settings.APIPort = float64(state.Port)
+			a.settings.APIBaseline = &state
 			if regenerated {
 				a.settings.APINote = locales.Text("API Token 已重新生成并保存")
 				a.notifySuccess(locales.Text("已生成新 Token"))
@@ -910,11 +931,8 @@ func (a *desktop) setAPIServiceEnabled(enabled bool) {
 	if a.settings.APIBusy {
 		return
 	}
-	if a.settings.APIPort < 1024 || a.settings.APIPort > 65535 || strings.TrimSpace(a.settings.API.Token) == "" {
-		a.settings.APINote = locales.Text("请先填写有效端口与 Token")
-		return
-	}
 	previousEnabled := a.settings.API.Enabled
+	token, port := a.settings.API.Token, a.settings.APIPort
 	a.settings.APIBusy = true
 	a.settings.API.Enabled = enabled
 	a.settings.APIRevision++
@@ -932,8 +950,7 @@ func (a *desktop) setAPIServiceEnabled(enabled bool) {
 				a.notifyError(err.Error())
 				return
 			}
-			a.settings.API = state
-			a.settings.APIPort = float64(state.Port)
+			a.applyAPIState(state, token, port)
 			if state.Enabled {
 				a.settings.APINote = locales.Text("API 服务已开启")
 			} else {

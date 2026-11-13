@@ -158,5 +158,11 @@ func PromotedServiceName(command string) string {
 	if len(fields) == 1 {
 		return fields[0]
 	}
-	return fields[0] + " " + fields[1]
+	// 超时命令常带 shell 连接符（`sleep 6; go test`），第二个 token 若只剩
+	// `6;` 这种残尾，显示成服务名没有意义，直接砍掉。
+	second := strings.TrimRight(fields[1], ";&|<>")
+	if second == "" {
+		return fields[0]
+	}
+	return fields[0] + " " + second
 }
