@@ -275,6 +275,12 @@ func TestExecuteToolGatesEveryBuiltinTool(t *testing.T) {
 			continue
 		}
 		name := tool.Function.Name
+		// 截图工具没有必填参数，缺参时仍会真的抓屏：在 macOS 上这会弹系统
+		// 录屏权限请求并抓到用户屏幕。它的参数门禁由 orch_screenshot_test.go
+		// 覆盖，这里不再跑真实抓屏。
+		if name == "screenshot" {
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
 			res := app.executeTool(context.Background(), cfg, "s-1", name, []byte(`{"allyUnknownArgument":1}`))
 			if res.OK {

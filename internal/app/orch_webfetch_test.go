@@ -117,6 +117,10 @@ func TestWebFetchExtractionErrorKeepsHTTPStatus(t *testing.T) {
 	defer server.Close()
 
 	app := newIsolatedTestApp(t)
+	// 同一主机连续请求有 1 秒限速（产品行为）；这里每个请求前清掉记录，
+	// 否则这个测试会为了三次断言真的等两秒。
+	resetHost := func() { clear(app.httpLastHost) }
+	resetHost()
 	_, err := app.webFetchToolWithConfig(context.Background(), webFetchTestConfig(), WebFetchRequest{URL: server.URL})
 	if err == nil {
 		t.Fatal("expected readable extraction error")
@@ -129,6 +133,7 @@ func TestWebFetchExtractionErrorKeepsHTTPStatus(t *testing.T) {
 		t.Fatalf("extraction error must retain HTTP status, got %v", err)
 	}
 
+	resetHost()
 	got, err := app.webFetchToolWithConfig(context.Background(), webFetchTestConfig(), WebFetchRequest{URL: server.URL, Format: "raw"})
 	if err != nil {
 		t.Fatalf("raw mode should return the empty response with status: %v", err)
@@ -137,6 +142,7 @@ func TestWebFetchExtractionErrorKeepsHTTPStatus(t *testing.T) {
 		t.Fatalf("raw mode status = %d, want %d", got.Status, http.StatusNotFound)
 	}
 
+	resetHost()
 	requestResult, err := app.httpRequestToolWithConfig(context.Background(), webFetchTestConfig(), HTTPRequestToolRequest{URL: server.URL})
 	if err != nil {
 		t.Fatalf("http_request should return the response status: %v", err)

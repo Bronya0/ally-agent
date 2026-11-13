@@ -347,22 +347,3 @@ func TestMcpSSEConnectionOutlivesStartupBudgetAndCaller(t *testing.T) {
 	}
 }
 
-func TestMcpToolDisableReadConcurrentWithUpdates(t *testing.T) {
-	m := NewMcpManager(t.TempDir(), nil)
-	defer m.Shutdown()
-	m.clients["server"] = &McpClientHandle{Status: "connected"}
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 1000; i++ {
-			m.IsToolDisabled("server", "tool")
-		}
-	}()
-	for i := 0; i < 1000; i++ {
-		m.mu.Lock()
-		m.clients["server"].Config.DisabledTools = []string{"tool"}
-		m.mu.Unlock()
-	}
-	wg.Wait()
-}

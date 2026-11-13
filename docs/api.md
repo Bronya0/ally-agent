@@ -4,7 +4,19 @@ Ally 提供一组本地 HTTP API，供 Ally 插件、脚本、IDE 与自动化�
 
 无窗口部署、启动参数及同端口 SSE / 轮询事件接口见 [无头运行](headless.md)。
 
+通过 `ally-native --headless --port 47821` 启动时，API 始终开启，并在监听成功后打印地址；无头参数不会改写桌面 API 开关。
+
 桌面模式服务首次默认关闭，由 **设置 → API** 页开启；端口、Token 与开关保存到 `~/.ally_agent/api.json`，重启 Ally 自动恢复已启用的服务。默认端口 `47821`，仅监听 `127.0.0.1`。端口冲突等启动失败会记录日志，设置页显示实际未运行状态；正常退出不会清除启用偏好。
+
+## 接口范围
+
+桌面 API 与无头模式复用同一份业务路由。接口设置页从实际路由清单读取，
+不再另行维护路径。API 层负责鉴权、JSON 解码、错误状态和脱敏；模型事务、
+技能扫描、SSH 授权、任务调度及服务进程仍由既有业务入口实现。
+
+所有需要解析请求体的业务操作使用 JSON 对象；`null`、数组和多份连续 JSON 返回 400。
+更新接口区分未提供和显式空集合，避免用脱敏 GET 响应覆盖掉凭据。
+字段名按文档书写；大小写不符或文档未列出的字段返回 400，不会被静默忽略。
 
 ## 基础信息
 
@@ -23,10 +35,15 @@ HTTP 状态码语义：
 | 400 | 参数缺失/非法，或模型配置不完整（如未配置模型、API Key） |
 | 401 | 鉴权失败（token 缺失或错误） |
 | 404 | 资源不存在（会话/skill/服务不存在） |
-| 409 | 冲突（会话运行 / 压缩中，或注入队列满；运行中发送附件 / 切模型也返回 409） |
+| 409 | 冲突（会话运行 / 压缩中，或注入队列满；运行中切模型也返回 409；读取时会话并发变化可返回 409，客户端重试） |
 | 500 | 服务端内部错误 |
 | 503 | 服务正在关闭或尚未初始化 |
 | 502 / 504 | 单次 AI 调用失败 / 超过 120 秒 |
+
+### `GET /api/v1/health` — 健康检查
+
+需要 Bearer 鉴权。运行正常返回 `{ "ok":true, "data":{ "service":"ally-api", "status":"ok" } }`；
+应用正在退出时返回 503，不会继续接受新的业务操作。
 
 ## 认证
 
@@ -43,6 +60,8 @@ curl 示例：
 ```bash
 curl -H "Authorization: Bearer <token>" http://127.0.0.1:47821/api/v1/health
 ```
+
+生成图片等产物地址（`/generated-images/...`）也要带同一个 Bearer Token：浏览器直接打开会返回 401，请用带 `Authorization` 的请求下载。
 
 PowerShell 示例：
 
@@ -111,9 +130,10 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `title` | string | 否 | 缺省用工作区目录名 |
-| `workspace` | string | 否 | 缺省用当前应用配置的工作区 |
+| `workspace` | string | 否 | 缺省用当前运行工作区（包括无头 --workspace） |
+| `extraRoots` | string[] | 否 | 会话附加工作区，发送时与主工作区一起生效 |
 
-响应 `data`：`{ "id": "...", "title": "...", "workspace": "...", "createdAt": 1756500000000 }`
+响应 `data`：`{ "id": "...", "title": "...", "workspace": "...", "extraRoots": [], "createdAt": 1756500000000 }`
 
 ### `GET /api/v1/sessions/{id}` — 查询会话状态
 
@@ -171,8 +191,8 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `message` | string | 是* | 消息文本；运行中的会话只接受纯文本 |
-| `attachments` | array | 否 | 仅空闲时接收；每项 `{name,type?,size?,kind?,dataUrl?,text?,filePath?}`，kind 为 image/text/file，图片使用 data URL |
+| `message` | string | 是* | 消息文本；运行中排队追加 |
+| `attachments` | array | 否 | 空闲和运行中均接收；每项 `{name,type?,size?,kind?,dataUrl?,text?,filePath?}`，kind 为 image/text/file，图片使用 data URL |
 | `modelIndex` | int | 否 | 本回合使用 `GET /models` 的指定条目；缺省用最近使用模型，不更改全局模型选择；运行中携带此字段返回 409 |
 
 *带 `attachments` 时 `message` 可为空；否则必填。
@@ -182,7 +202,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 - 会话空闲 → 直接开始新回合（首次发送与继续是同一条持久化历史路径），返回 `{"runId":"...","queued":false}`
 - 会话运行中 → 排队追加到当前 run，下一步边界注入模型上下文，返回 `{"runId":"...","queued":true}`
 
-新回合的工作区与附加根目录取自该会话，不随用户当前打开的工作区变化。运行中带附件会返回 409，避免静默丢失；压缩中不能启动新回合。会话必须先创建，不存在返回 404。
+新回合的工作区与附加根目录取自该会话，不随用户当前打开的工作区变化。运行中可同时追加文本与附件，在下一步边界注入；压缩中不能启动新回合。会话必须先创建，不存在返回 404。
 
 错误：400 配置不完整（未配置模型/API Key/工作区）或消息为空；409 运行中排队失败（队列满）。
 
@@ -218,6 +238,11 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 ## 模型
 
+### `DELETE /api/v1/models/{index}` — 删除模型
+
+按模型列表的索引删除条目。删除最近使用模型时清理该选择；不影响正在运行请求已获得的配置。
+索引非法或越界返回 400。响应 `data.deleted` 为被删除的索引。
+
 ### `GET /api/v1/models` — 查询模型列表与最近使用模型
 
 响应 `data`：
@@ -235,7 +260,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `index` | int | 否 | 提供时按下标**整体更新**该条目；缺省为**追加**新条目 |
+| `index` | int | 否 | 提供时按下标**更新所提供的字段**；缺省为**追加**新条目 |
 | `model` | object | 是 | 模型配置，字段见下 |
 
 `model` 对象字段（对应 `ModelConfig`）：
@@ -252,11 +277,11 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 | `reasoningTag` / `reasoningEffort` / `tokenParam` | string | 否 | 推理内容标签 / 思考强度（`auto`/`off`/`low`/`medium`/`high`/`xhigh`/`max`；`off` 表示关闭思考，`auto` 交给供应商决定）/ token 参数风格 |
 | `customHeaders` | object | 否 | 自定义请求头（`{"X-Api-Version": "2023-06-01"}`），随该模型每个 API 请求发送；可覆盖 Authorization/User-Agent，Host/Content-Length 等传输层头部会被丢弃，最多 32 条 |
 
-注意：更新是**整体替换**该下标的条目——没传的字段会被清空，改单条时请把原条目字段一并传回。响应 `data`：`{ "index": 2 }`。
+更新按字段合并：未提供的字段（含密钥与自定义请求头）保留。显式空字符串或空集合可清空；提供 `apiKey` 会替换原密钥池，提供 `apiKeys` 会替换单密钥。保留显式 `max_tokens` / `max_completion_tokens` / `auto` 选择，不因编辑自动改写。配置字段名按文档大小写书写（如 `apiKey`，不能写成 `APIKey`）；错误大小写返回 400，避免密钥合并歧义；`GET` 返回的只读字段（`index`、`hasApiKey`、`apiKeyCount`、`customHeaderNames`）可以原样回传、写回时忽略，其余未知字段返回 400。重复的供应商、模型 ID、OAuth 账号身份返回 409。响应 `data`：`{ "index": 2 }`。
 
 ### `POST /api/v1/models/activate` — 设置最近使用模型
 
-请求体：`{ "index": 2 }`（`models[]` 的下标）。它记下的是模型的**身份**（providerName + model id）：config.json 里只存 `models[]` 与这个身份，模型字段在每次生效时按身份展开；界面切换模型/发送时写回的是同一个身份（两边谁后写谁生效）。本地 HTTP API 会话没有 Tab 上下文，下一回合就用它；界面上每个 Tab 的模型不受影响。越界返回 400。
+请求体：`{ "index": 2 }`（`models[]` 的下标）。它记下的是模型的**身份**（providerName + model id + OAuth 账号）：config.json 里只存 `models[]` 与这个身份，模型字段在每次生效时按身份展开；界面切换模型/发送时写回的是同一个身份（两边谁后写谁生效）。本地 HTTP API 会话没有 Tab 上下文，下一回合就用它；界面上每个 Tab 的模型不受影响。越界返回 400。
 
 ---
 
@@ -317,6 +342,21 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 ## 后台服务 / 计划任务
 
+### `POST /api/v1/services` — 启动后台服务
+
+请求：`{ "name":"dev", "description":"项目开发服务", "command":"npm run dev", "cwd":".", "workspace":"/srv/project" }`。
+`description`、`command` 必填，`workspace` 缺省使用当前运行工作区；复用原有命令检查和路径边界。
+服务属于应用运行时，HTTP 请求结束或客户端断开不会结束它。响应为现有 `ServiceInfo`。
+
+### `GET /api/v1/services/{id}` — 查询单个后台服务
+
+响应为现有 `ServiceInfo`；不存在返回 404。
+
+### `POST /api/v1/services/{id}/restart` — 重启后台服务
+
+请求体可省略，或传 `{ "workspace":"/srv/project" }`。缺省沿用原服务工作区。
+复用既有停止、进程树回收和启动流程，返回新服务的信息（包括新的 ID）；不存在返回 404。
+
 ### `GET /api/v1/services` — 查询后台服务
 
 响应 `data.services[]`：`{ id, name, command, cwd, pid, status, startedAt, stoppedAt, exitCode, outputTail, outputBytes, error }`。
@@ -329,14 +369,109 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 请求体可省略。立即强制停止该服务所属的整个进程树，并等待退出确认；失败返回错误，不会假报已停止。旧参数 `graceSeconds` 仅为兼容保留，已忽略。不存在返回 404。
 
+### `POST /api/v1/tasks` — 创建计划任务
+
+请求：`{ "name":"daily", "instruction":"检查项目", "schedule":"24h", "workspace":"/srv/project", "modelIndex":0 }`。
+`name`、`schedule` 必填；`instruction` 和 `command` 必须且只能提供一个。
+命令任务示例：`{ "name":"build", "command":"go test ./...", "schedule":"24h" }`。
+调度表达式沿用内置工具：时长、一次性 RFC3339 时间或 cron（支持范围由现有解析器决定）。
+工作区缺省沿用当前运行工作区，模型缺省使用最近使用模型；LLM 任务需要已配置的模型及凭据，并记录创建时的模型身份。
+返回持久化后的任务，复用任务中心的状态事件、运行限制和持久化入口。
+
+### `GET /api/v1/tasks/{id}` — 查询单个计划任务
+
+返回任务记录；不存在返回 404。调度器未初始化或退出中返回 503。
+
 ### `GET /api/v1/tasks` — 查询计划任务
 
-响应 `data.tasks[]`：`{ id, name, instruction, workspace, schedule, permissionMode, maxSteps, timeoutSeconds, nextRunAt, lastRunAt, lastStatus, lastSummary, lastError, running, ... }`。计划任务持久化在配置目录，重新启动 Ally 后继续运行。
+响应 `data.tasks[]`：`{ id, name, instruction, workspace, schedule, maxSteps, timeoutSeconds, nextRunAt, lastRunAt, lastStatus, lastSummary, lastError, running, ... }`。计划任务持久化在配置目录，重新启动 Ally 后继续运行。
 
 ### `DELETE /api/v1/tasks/{id}` — 删除计划任务
 
-无请求参数。响应 `data`：`{ "deleted": true }`。
+无请求参数。响应 `data`：`{ "deleted": true }`。任务不存在返回 404。
 
 ### ChatGPT OAuth 模型
 
 模型管理中的 `chatgpt_oauth` 条目可参与现有模型索引选择和 Agent 调用，使用 Ally 桌面端已经授权的账号。普通配置只包含账号注册引用，不包含 OAuth Token；本地 API 不提供登录、刷新或读取 Token 的端点，原有本地服务鉴权保持不变。OAuth 失败不会使用条目里的 API Key 或其他模型支付请求。账号登录、退出和刷新模型目录均在桌面设置完成，见 [ChatGPT Auth 对接实现](chatgpt-auth.md)。
+
+
+## 上下文与统计
+
+### `GET /api/v1/context/settings` — 查询自动加载选择
+
+返回 `options[]`（`id`、`label`、`description`、`enabled`）、`disabledContext`、`disabledTools`、`customPrompt`。
+不返回模型密钥、SSH 凭据或完整系统提示词。
+
+### `PUT /api/v1/context/settings` — 修改上下文设置
+
+请求可选字段：`disabledContext: string[]`、`disabledTools: string[]`、`customPrompt: string`，至少提供一个。
+未提供字段保留；显式 `[]` 清空禁用项，空字符串清空自定义提示词，`null` 和未知字段/名称返回 400。
+核心文件与命令工具不能被禁用，复用现有规范化规则。
+选择对新会话生效，现有会话保持首次请求的选择，压缩重建也沿用该选择；快照在内存中，释放后清理。
+
+### `GET /api/v1/sessions/{id}/context` — 查询会话上下文统计
+
+返回现有 `ContextBreakdown`，含总量、系统提示词、工具、消息、测量值和分类估算；查询不提前冻结配置。
+不存在返回 404。
+
+### `POST /api/v1/sessions/{id}/compact/fast` — 本地快速压缩
+
+无需请求体，复用本地快速压缩，不调用模型；运行或压缩中返回 409，不存在返回 404。
+成功压缩后按既有生命周期重建提示词前缀。
+
+### `GET /api/v1/stats/tokens` — 查询 Token 统计
+
+返回现有统计汇总、每日和工作区统计；统计模块未初始化返回 503。
+
+## 技能刷新与 MCP 重连
+
+### `POST /api/v1/skills/refresh` — 强制刷新技能
+
+绕过扫描 TTL，返回与 `GET /skills` 相同的技能与启用状态结构。
+无头模式的技能读取、刷新和启停均以 `--workspace` 的运行工作区为准，不改写持久化工作区。
+
+### `POST /api/v1/mcp/reconnect` — 手动重连 MCP
+
+复用既有重启入口，成功返回 `{ "reconnected":true }`。只有显式调用才强制重连；
+普通 MCP 配置保存仍按增删改进行 reconcile，工具黑名单勾选不重启未变化连接。
+
+## SSH 节点与工作区授权
+
+### `GET /api/v1/ssh/servers` — 查询节点
+
+可选 `?workspace=/srv/project`。返回 `servers[]`、`workspace` 和稳定节点 ID 的 `allowed[]`。
+节点返回 `id`、`alias`、`authType`、`hasPassword`、`hasKey`、`group`、`summary`；
+`summary` 为地址、端口、用户名、用途、风险及状态。不返回密码、私钥内容或私钥路径。
+
+### `POST /api/v1/ssh/servers` — 新建或更新节点
+
+直接传节点字段：`id?`、`alias`、`host`、`port?`、`username`、`description`、`authType`、`password?`、`keyPath?`、`group?`、`riskLevel?`。
+有 ID 时按稳定 ID 编辑；没有 ID 时兼容按别名 upsert。新建需提供别名、地址、用户名和用途。
+认证模式为 `agent` / `key` / `password`，端口 0 或省略表示默认 22。配置字段名需使用规范大小写，如 `authType`；错误大小写返回 400。
+编辑时未提供的凭据保留，空字符串显式清空；切换认证模式会清理旧模式凭据，私钥口令不会转作登录密码。
+响应为脱敏节点；ID 不存在返回 404，并发编辑冲突返回 409，未知字段返回 400。
+`GET` 列表里的 `summary` 是只读嵌套视图，回传会被 400 拒绝（修改请用平铺字段）；`hasPassword`、`hasKey` 两个指示字段可以原样回传。
+审批状态与创建者由服务端保管，请求里带 `status`、`createdBy` 不会生效。
+
+### `DELETE /api/v1/ssh/servers/{id}` — 删除节点
+
+只接受稳定 ID；复用既有删除与凭据缓存清理，不存在返回 404。
+
+### `GET /api/v1/ssh/authorizations?workspace=...` — 查询工作区授权
+
+工作区必须是绝对路径，返回 `{ "workspace":"...", "allowed":["ssh_..."] }`。
+
+### `PUT /api/v1/ssh/authorizations?workspace=...` — 替换工作区授权
+
+请求 `{ "allowed":["节点ID或别名"] }`，保存和返回统一为稳定 ID。
+显式 `[]` 撤销全部；缺字段、`null`、未知节点或无效工作区返回 400，不会清空旧授权。
+改别名不影响授权，删除节点清理其授权；复用桌面和远端工具使用的同一存储。
+
+## 状态读取与接口边界
+
+会话状态和结果读取会验证运行身份及历史版本，避免把上一轮状态与下一轮结果混用。
+并发持续变化时可能返回 409，客户端应重新读取。快速压缩的历史记录按原角色展开，
+`/result` 可读取其中保留的最近回复；运行中仍以已提交的检查点为准，实时过程使用事件流。
+
+新增 API 不另建配置、任务或授权状态。桌面弹窗、托盘、剪贴板、OAuth 浏览器登录等界面专用功能
+不转为服务器 API；无头专用的事件流与进程关闭接口见 [无头运行](headless.md)。

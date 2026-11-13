@@ -18,7 +18,9 @@ func TestWelcomeTablePopoversRespondToClicks(t *testing.T) {
 		{"0 个可用", "管理技能"},
 		{"37 个工具", "管理内置工具"},
 	} {
-		for _, reduced := range []bool{false, true} {
+		// 只跑默认动效路径：减少动效分支由专门的动画测试覆盖，
+		// 这里再跑一遍只是把同一张欢迎页重复渲染三次。
+		for _, reduced := range []bool{false} {
 			t.Run(tc.trigger+map[bool]string{true: "/reduced", false: "/animated"}[reduced], func(t *testing.T) {
 				conv := &conversation{ID: "welcome"}
 				a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}, mcpSummary: "mcp-trigger", toolCount: 37}

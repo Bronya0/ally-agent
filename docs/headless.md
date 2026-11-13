@@ -1,40 +1,40 @@
 # Ally 无头运行
 
-无头模式使用 Wails v3 的 `server` 构建，共用桌面端的 Agent、工具、模型适配、
-会话、MCP 和调度实现。无头产物不创建窗口，不构建或嵌入前端，也不启动桌面通知。
-
-## 构建
-
-三平台均可在对应 Go 构建环境中执行：
+桌面与无头模式共用同一个程序，无需单独下载服务器版本。默认启动窗口；
+传入 `--headless`（放在哪个位置都识别，习惯上写在第一个），直接启动 Agent、API、MCP 和调度服务，
+不初始化 MyGo 图形环境，不创建窗口、托盘或桌面通知；Linux 无需 X11 / Wayland。
 
 ```bash
-wails3 task build:server
+# 默认桌面模式
+./ally-native
+
+# 无头模式：API 强制开启，不受设置页中的 API 开关影响
+./ally-native --headless
+
+# 查看无头参数
+./ally-native --headless --help
 ```
 
-产物在 `bin/Ally-server`（Windows 为 `.exe`）。也可直接构建：
+使用正常发布产物即可，也可以构建同一入口：
 
 ```bash
-CGO_ENABLED=0 go build -tags server,production -trimpath -o bin/Ally-server .
+CGO_ENABLED=0 go build -trimpath -o ally-native .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o ally-native-linux-amd64 .
 ```
 
-交叉构建示例：
-
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags server,production -o bin/Ally-server-linux-amd64 .
-CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags server,production -o bin/Ally-server-darwin-arm64 .
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags server,production -o bin/Ally-server.exe .
-```
+macOS 安装包可从终端运行 `/Applications/Ally.app/Contents/MacOS/Ally --headless`；
+应用安装在其他位置时替换对应路径。
 
 ## 启动参数
 
 ```bash
-./Ally-server --host 127.0.0.1 --port 47821   --data-dir /srv/ally/data --workspace /srv/projects/demo   --token-file /srv/ally/token
+./ally-native --headless --host 127.0.0.1 --port 47821   --data-dir /srv/ally/data --workspace /srv/projects/demo   --token-file /srv/ally/token
 ```
 
 Windows 示例（参数含空格时加引号）：
 
 ```text
-Ally-server.exe --port 47821 --data-dir "D:\AllyData" --workspace "D:\projects\demo" --token-file "D:\AllyData\token"
+ally-native.exe --headless --port 47821 --data-dir "D:\AllyData" --workspace "D:\projects\demo" --token-file "D:\AllyData\token"
 ```
 
 也可传 `--config server.json`：
@@ -49,8 +49,8 @@ Ally-server.exe --port 47821 --data-dir "D:\AllyData" --workspace "D:\projects\d
 }
 ```
 
-- 监听参数优先级：命令行 > 指定的 JSON 文件 > `WAILS_SERVER_HOST` /
-  `WAILS_SERVER_PORT` 环境变量 > 默认值（127.0.0.1:47821）。
+- 监听参数优先级：命令行 > 指定的 JSON 文件 > `ALLY_SERVER_HOST` /
+  `ALLY_SERVER_PORT` 环境变量（兼容旧 `WAILS_SERVER_HOST` / `WAILS_SERVER_PORT`） > 默认值（127.0.0.1:47821）。
 - `--workspace` 可省略：保留已有配置的工作区；创建会话时可以指定各自的服务器工作区。
 - 数据目录默认 `~/.ally_agent`，也可用 `ALLY_DATA_DIR`；`--data-dir` 优先。
 - 认证可用 `--token` / JSON 的 `token`，或 `--token-file` / `tokenFile`，
@@ -65,11 +65,23 @@ Ally-server.exe --port 47821 --data-dir "D:\AllyData" --workspace "D:\projects\d
 - 远程部署可显式监听 `0.0.0.0`；跨不可信网络时用 HTTPS 反向代理或 SSH 隧道。
   所有业务和事件接口要求 `Authorization: Bearer <token>`。
 
-无头入口不提供完整网页界面或 App 的桌面 bindings。Wails 仍注册框架路由
-（如 `/health`、`/wails/custom.js`、`/wails/stream/ws`），这些路由不受业务 Token
-中间件覆盖；未注册 Agent 业务 bindings，也不向框架事件通道发送业务事件。
-Wails 自带的 `/health` 是不含业务数据的基础存活检查；业务健康接口是鉴权的
-`/api/v1/health`。
+监听成功后输出 API 和事件地址，例如：
+
+```text
+Ally headless API listening: http://127.0.0.1:47821/api/v1
+Events: http://127.0.0.1:47821/api/v1/events (Bearer authentication required)
+API token file: /home/ally/.ally_agent/api.json (token field)
+```
+
+使用 `--token-file` 时输出该文件路径；使用 `--token` 时不回显密钥。
+监听 `0.0.0.0` / `::` 时，远程客户端应把输出地址中的通配主机替换为服务器 IP 或域名。
+例如 `--host 0.0.0.0 --port 49000` 对应客户端地址 `http://服务器IP:49000/api/v1`。
+
+无头入口不提供网页界面或桌面 bindings。API、同端口事件流和生成图片资源
+均使用 Bearer 鉴权；没有旧 Wails 的框架路由。
+Windows 发布的同一个 GUI exe 会尝试附着调用终端以输出地址，不会另开控制台窗口。
+PowerShell 中建议使用 `& .\ally-native.exe --headless | Out-Host` 等待程序并查看输出；
+部署为服务时可重定向 stdout / stderr，并通过鉴权的关闭接口停止。
 
 ## 下任务、查看过程和结果
 
@@ -133,6 +145,8 @@ data: {"name":"run:start","payload":{"sessionId":"...","runId":"..."},"seq":12,"
 - 慢客户端的订阅队列溢出时发送 `stream:reset` 并结束连接，不能静默当成完整过程。
 - 事件流有 15 秒心跳；断线不取消任务。浏览器原生 EventSource 不能直接设置
   Bearer header，可用支持流式读取的 fetch 客户端。
+- 消息和事件里出现的产物地址（`/generated-images/...`）同样要带 Bearer，
+  浏览器直接打开会 401；用带 Token 的请求下载。
 - 该协议也兼容已有的独立网络事件服务 `/events`、`/poll`；桌面环境变量
   `ALLY_NETWORK_EVENTS` 行为保留，无头不另外开启该监听器。
 

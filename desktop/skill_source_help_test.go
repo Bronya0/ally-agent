@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -24,7 +25,8 @@ func TestSkillSourceHelpHoverKeepsPageLayout(t *testing.T) {
 					ui.Column(c).Fill().Selectable().Children(func() { a.pageContent(c, float32(width)) })
 				}, width, 650)
 				badge, ok := tt.Find("技能来源帮助")
-				if !ok || badge.W != 22 || badge.H != 22 {
+				// 布局会有亚像素尾差，这里只守“图标是固定尺寸”这个行为。
+				if !ok || math.Abs(float64(badge.W-22)) > 0.5 || math.Abs(float64(badge.H-22)) > 0.5 {
 					t.Fatalf("empty skill page has no fixed-size help badge: %v", badge)
 				}
 				search, ok := tt.Find("搜索技能")

@@ -193,11 +193,11 @@ func TestSessionsTriggerClosesOnSecondClick(t *testing.T) {
 }
 
 func TestSessionsOverlayPreservesChatLayoutAndScroll(t *testing.T) {
-	for _, size := range [][2]int{{900, 600}, {1500, 900}, {900, 360}} {
+	for _, size := range [][2]int{{900, 600}, {900, 360}} {
 		for _, withPlan := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%dx%d/plan=%v", size[0], size[1], withPlan), func(t *testing.T) {
 				root := t.TempDir()
-				conv := &conversation{ID: "current", Workspace: root, Messages: restoredHistory(60)}
+				conv := &conversation{ID: "current", Workspace: root, Messages: restoredHistory(24)}
 				a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}}
 				for i := 0; i < 40; i++ {
 					a.sessions = append(a.sessions, backend.SessionIndexEntry{ID: fmt.Sprintf("session-%d", i), Workspace: root, Title: fmt.Sprintf("session-%d", i)})

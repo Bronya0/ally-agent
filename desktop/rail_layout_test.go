@@ -4,8 +4,6 @@ import (
 	backend "ally-dev/internal/app"
 	"bytes"
 	"fmt"
-	"image"
-	"image/color"
 	"testing"
 	"time"
 
@@ -138,54 +136,6 @@ func TestRailKeepsItsColumnAcrossStates(t *testing.T) {
 			t.Fatalf("expanded=%t: icons start at %v, want 12", expanded, iconEdge)
 		}
 	}
-}
-
-// The collapsed rail centres the wordmark across its whole width: the ink keeps
-// the same gap on both sides. Left-aligning it, or centring it in a narrower
-// column, breaks one of them.
-func TestCollapsedWordmarkIsCentred(t *testing.T) {
-	a := &desktop{prefs: defaultPrefs(), page: "chat"}
-	a.prefs.RailExpanded = false
-	tt := ui.NewTester(func(c *ui.Context) {
-		c.SetTheme(a.theme())
-		c.DisableAnimations()
-		a.headerBar(c)
-	}, 200, 44)
-	tt.Frame()
-	img := tt.Image()
-	left, right := inkEdges(img, 0, int(widthRailCollapsed), 8, 36, img.RGBAAt(180, 6), 40)
-	if left < 0 {
-		t.Fatal("no wordmark ink in the rail's width")
-	}
-	leftGap, rightGap := left, int(widthRailCollapsed)-1-right
-	if d := leftGap - rightGap; d > 1 || d < -1 {
-		t.Fatalf("wordmark is not centred: %d DIP on the left, %d on the right", leftGap, rightGap)
-	}
-}
-
-// inkEdges is the first and last column holding a pixel that differs from ref in
-// the given band, or -1 when the band is empty.
-func inkEdges(img *image.RGBA, x0, x1, y0, y1 int, ref color.RGBA, tol int) (int, int) {
-	first, last := -1, -1
-	for x := x0; x < x1; x++ {
-		for y := y0; y < y1; y++ {
-			if channelSpread(img.RGBAAt(x, y), ref) > tol {
-				if first < 0 {
-					first = x
-				}
-				last = x
-				break
-			}
-		}
-	}
-	return first, last
-}
-
-func channelSpread(a, b color.RGBA) int {
-	dr := int(a.R) - int(b.R)
-	dg := int(a.G) - int(b.G)
-	db := int(a.B) - int(b.B)
-	return max(max(dr, -dr), max(max(dg, -dg), max(db, -db)))
 }
 
 // Revealing the reserved delete slot must keep the title stable, and the

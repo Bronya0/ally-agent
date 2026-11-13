@@ -660,19 +660,25 @@ func TestRemoteHelperReadRefusesFIFO(t *testing.T) {
 		t.Skip("FIFO is a POSIX file type")
 	}
 	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	// 用系统 mkfifo 建真实 FIFO：原来注入脚本内部逻辑的写法依赖一个早已不存在
+	// 的锚点，实际只测了“路径不存在”，永远测不到 S_ISREG 那一关。
+	pipe := filepath.Join(root, "pipe")
+	if out, err := exec.Command("mkfifo", pipe).CombinedOutput(); err != nil {
+		t.Skipf("mkfifo unavailable: %v %s", err, out)
+	}
 	script, err := buildRemoteScript(map[string]any{
-		"op": "read", "path": remoteFixturePath(t.TempDir(), "pipe"),
+		"op": "read", "path": remoteFixturePath(root, "pipe"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	script = strings.Replace(script, "root = os.path.realpath(raw_root)", "root = os.path.realpath(raw_root)\n    os.mkfifo(os.path.join(root, 'pipe'))", 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, py, "-")
 	cmd.Stdin = strings.NewReader(script)
 	out, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "not a regular file") {
+	if err != nil || !strings.Contains(string(out), "E_NOT_REGULAR_FILE") {
 		t.Fatalf("FIFO read should fail immediately: %v: %s", err, out)
 	}
 }
@@ -711,6 +717,15 @@ func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
 	t.Parallel()
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
+	// helper 在远端把路径解析成真实路径；macOS 的临时目录是 /var/... 的符号
+	// 链接，比较前统一到同一形态，否则本机永远差一个 /private 前缀。
+	remoteAbs := func(name string) string {
+		resolved, err := filepath.EvalSymlinks(filepath.FromSlash(remoteFixturePath(root, name)))
+		if err != nil {
+			t.Fatalf("resolve %s: %v", name, err)
+		}
+		return filepath.ToSlash(resolved)
+	}
 	run := func(payload map[string]any) remotePythonResponse {
 		t.Helper()
 		script, err := buildRemoteScript(payload)
@@ -742,7 +757,7 @@ func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(resp.Data, &written); err != nil {
 		t.Fatalf("decode write data: %v", err)
 	}
-	if written.Path != remoteFixturePath(root, relPath) {
+	if written.Path != remoteAbs(relPath) {
 		t.Fatalf("write returned path %q, want %q", written.Path, relPath)
 	}
 	if onDisk, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relPath))); err != nil || string(onDisk) != content {
@@ -771,6 +786,7 @@ func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
 	if len(batch.Files) != 1 || !batch.Files[0].OK {
 		t.Fatalf("read_batch should read %s, got %+v", relPath, batch.Files)
 	}
+	// read_batch 回显请求里的路径（不解析符号链接），与 write 返回的真实路径不同。
 	if batch.Files[0].Path != remoteFixturePath(root, relPath) {
 		t.Fatalf("read_batch path = %q, want %q (the path is echoed back through JSON)", batch.Files[0].Path, relPath)
 	}
@@ -786,7 +802,7 @@ func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
 	// 命令文本里解析出来，与 run op 走同一条 to_os_text 通道）。
 	resp = run(map[string]any{
 		"op":      "_check_write_targets",
-		"cwd":     remoteFixturePath(root, "中文目录"),
+		"cwd":     remoteAbs("中文目录"),
 		"targets": []string{"新建输出.txt"},
 	})
 	var checked struct {

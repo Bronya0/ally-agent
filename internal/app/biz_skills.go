@@ -66,7 +66,7 @@ func (a *App) ListSkills() ([]SkillDefinition, error) {
 	if err != nil {
 		return nil, err
 	}
-	return a.listSkillsForConfig(cfg)
+	return a.listSkillsForConfig(a.runtimeConfig(cfg))
 }
 
 func (a *App) listSkillsForConfig(cfg ConfigState) ([]SkillDefinition, error) {

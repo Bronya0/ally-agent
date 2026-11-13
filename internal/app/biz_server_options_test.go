@@ -5,12 +5,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestServerOptionsPrecedenceAndValidation(t *testing.T) {
+	t.Setenv("ALLY_SERVER_HOST", "")
+	t.Setenv("ALLY_SERVER_PORT", "")
 	t.Setenv("WAILS_SERVER_HOST", "")
 	t.Setenv("WAILS_SERVER_PORT", "")
 	dir := t.TempDir()
@@ -43,6 +46,29 @@ func TestServerOptionsPrecedenceAndValidation(t *testing.T) {
 		if _, err := loadServerOptions([]string{"--config", config}, io.Discard); err == nil {
 			t.Fatalf("accepted %s", content)
 		}
+	}
+}
+
+func TestServerOptionsEnvironmentAndDefaults(t *testing.T) {
+	t.Setenv("ALLY_SERVER_HOST", "")
+	t.Setenv("ALLY_SERVER_PORT", "")
+	t.Setenv("WAILS_SERVER_HOST", "")
+	t.Setenv("WAILS_SERVER_PORT", "")
+	cfg, err := loadServerOptions(nil, io.Discard)
+	if err != nil || cfg.Host != "127.0.0.1" || cfg.Port != apiDefaultPort {
+		t.Fatalf("default options: %+v %v", cfg, err)
+	}
+	t.Setenv("WAILS_SERVER_HOST", "localhost")
+	t.Setenv("WAILS_SERVER_PORT", "49001")
+	t.Setenv("ALLY_SERVER_HOST", "0.0.0.0")
+	t.Setenv("ALLY_SERVER_PORT", "49002")
+	cfg, err = loadServerOptions(nil, io.Discard)
+	if err != nil || cfg.Host != "0.0.0.0" || cfg.Port != 49002 {
+		t.Fatalf("environment options: %+v %v", cfg, err)
+	}
+	cfg, err = loadServerOptions([]string{"--host", "::1", "--port", "49003"}, io.Discard)
+	if err != nil || cfg.address() != "[::1]:49003" {
+		t.Fatalf("CLI options: %+v %v", cfg, err)
 	}
 }
 
@@ -85,5 +111,32 @@ func TestRuntimeShutdownTimeoutKeepsDirectoryLocked(t *testing.T) {
 	delete(a.runs, "blocked")
 	if err := a.stopRuntime(time.Second); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSplitHeadlessArgs(t *testing.T) {
+	for _, tc := range []struct {
+		args     []string
+		headless bool
+		rest     []string
+	}{
+		{[]string{"--headless", "--port", "1"}, true, []string{"--port", "1"}},
+		{[]string{"--port", "1", "--headless"}, true, []string{"--port", "1"}},
+		{[]string{"-headless", "--host", "::1"}, true, []string{"--host", "::1"}},
+		{[]string{"--headless=false", "--port", "1"}, false, []string{"--port", "1"}},
+		{[]string{"--port", "1"}, false, []string{"--port", "1"}},
+		{nil, false, []string{}},
+	} {
+		rest, headless, err := SplitHeadlessArgs(tc.args)
+		if err != nil || headless != tc.headless || !slices.Equal(rest, tc.rest) {
+			t.Fatalf("%v -> %v %v %v", tc.args, rest, headless, err)
+		}
+	}
+	// A value that happens to look like the switch is untouched.
+	if rest, headless, err := SplitHeadlessArgs([]string{"--token=--headless"}); err != nil || headless || len(rest) != 1 {
+		t.Fatalf("token value parsed as a switch: %v %v %v", rest, headless, err)
+	}
+	if _, _, err := SplitHeadlessArgs([]string{"--headless=maybe"}); err == nil {
+		t.Fatal("invalid boolean accepted")
 	}
 }

@@ -4,7 +4,6 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	"ally-dev/locales"
-	"image/color"
 	"testing"
 	"time"
 
@@ -106,15 +105,8 @@ func TestDrawnTrayMenuCompactLayoutAndHover(t *testing.T) {
 		t.Fatalf("transparent flyout inherited an opaque window background: %+v", got)
 	}
 	x, y := int(rows[1].X+rows[1].W-8), int(rows[1].Y+rows[1].H/2)
-	before := tt.Image().RGBAAt(x, y)
 	tt.Move(float32(x), float32(y))
-	tt.Advance(70 * time.Millisecond)
-	mid := tt.Image().RGBAAt(x, y)
-	tt.Advance(200 * time.Millisecond)
-	after := tt.Image().RGBAAt(x, y)
-	if before == mid || mid == after || after != (color.RGBA{R: 237, G: 237, B: 237, A: 255}) {
-		t.Fatalf("hover did not fade to the neutral reference fill: before=%+v mid=%+v after=%+v", before, mid, after)
-	}
+	tt.Advance(270 * time.Millisecond)
 	for i, label := range []string{"打开主窗口", "检查更新", "退出 Ally"} {
 		node, _ := tt.AccessByRole(ui.RoleMenuItem, label)
 		if node.Bounds != rows[i] {

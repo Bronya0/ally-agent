@@ -233,25 +233,36 @@ func (a *App) startServiceWithConfigLocked(parent context.Context, cfg ConfigSta
 	cmd.Env = commandEnvironment(cfg)
 
 	buf := newRollingBuffer(serviceOutputLimit)
-	stdout, err := cmd.StdoutPipe()
+	// Own the reader ends: exec.Cmd.Wait closes StdoutPipe/StderrPipe before
+	// our copy goroutines necessarily drain a short-lived process's output.
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		cancel()
 		return ServiceInfo{}, err
 	}
-	stderr, err := cmd.StderrPipe()
+	defer stdoutWriter.Close()
+	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
+		_ = stdout.Close()
 		cancel()
 		return ServiceInfo{}, err
 	}
+	defer stderrWriter.Close()
+	closeReaders := func() { _ = stdout.Close(); _ = stderr.Close() }
+	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
 	if err := startTrackedCommand(cmd); err != nil {
+		closeReaders()
 		cancel()
 		return ServiceInfo{}, err
 	}
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
 	stopTree, err := serviceProcessStop(cmd.Process.Pid)
 	if err != nil {
 		cancel()
 		unregisterProcessJob(cmd.Process.Pid)
 		_ = cmd.Wait()
+		closeReaders()
 		return ServiceInfo{}, err
 	}
 
@@ -289,7 +300,12 @@ func (a *App) startServiceWithConfigLocked(parent context.Context, cfg ConfigSta
 		waitErr := cmd.Wait()
 		// Close the job before draining pipes: descendants may hold them open.
 		unregisterProcessJob(cmd.Process.Pid)
+		// A descendant outside the managed job can keep a pipe open. Preserve
+		// already-written output without waiting indefinitely for that EOF.
+		drainTimer := time.AfterFunc(time.Second, closeReaders)
 		copyWG.Wait()
+		drainTimer.Stop()
+		closeReaders()
 		// 所有管道已收尾。
 		service.mu.Lock()
 		service.updateOutputInfoLocked()

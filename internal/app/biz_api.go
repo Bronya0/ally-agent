@@ -383,44 +383,15 @@ func (a *App) apiMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	// Keep artifact URLs identical across the desktop host and authenticated API.
 	mux.Handle("/generated-images/", GeneratedImageMiddleware(a)(http.NotFoundHandler()))
-	mux.HandleFunc("GET /api/v1/health", a.apiHandleHealth)
-	mux.HandleFunc("POST /api/v1/ai/complete", a.apiHandleAIComplete)
-
-	mux.HandleFunc("GET /api/v1/sessions", a.apiHandleListSessions)
-	mux.HandleFunc("POST /api/v1/sessions", a.apiHandleCreateSession)
-	mux.HandleFunc("GET /api/v1/sessions/{id}", a.apiHandleSessionStatus)
-	mux.HandleFunc("GET /api/v1/sessions/{id}/result", a.apiHandleSessionResult)
-	mux.HandleFunc("GET /api/v1/sessions/{id}/messages", a.apiHandleSessionMessages)
-	mux.HandleFunc("GET /api/v1/sessions/{id}/todos", a.apiHandleSessionPlan)
-	mux.HandleFunc("GET /api/v1/sessions/{id}/questions", a.apiHandleSessionQuestions)
-	mux.HandleFunc("POST /api/v1/sessions/{id}/answers", a.apiHandleSessionAnswers)
-	mux.HandleFunc("POST /api/v1/sessions/{id}/messages", a.apiHandleSendMessage)
-	mux.HandleFunc("POST /api/v1/sessions/{id}/cancel", a.apiHandleCancelSession)
-	mux.HandleFunc("POST /api/v1/sessions/{id}/compact", a.apiHandleCompactSession)
-	mux.HandleFunc("DELETE /api/v1/sessions/{id}", a.apiHandleDeleteSession)
-
-	mux.HandleFunc("GET /api/v1/models", a.apiHandleListModels)
-	mux.HandleFunc("POST /api/v1/models", a.apiHandleSaveModel)
-	mux.HandleFunc("POST /api/v1/models/activate", a.apiHandleActivateModel)
-
-	mux.HandleFunc("GET /api/v1/mcp", a.apiHandleGetMcp)
-	mux.HandleFunc("PUT /api/v1/mcp/config", a.apiHandlePutMcpConfig)
-
-	mux.HandleFunc("GET /api/v1/skills", a.apiHandleListSkills)
-	mux.HandleFunc("GET /api/v1/skills/{name}", a.apiHandleGetSkill)
-	mux.HandleFunc("POST /api/v1/skills/{name}/enable", a.apiHandleEnableSkill)
-	mux.HandleFunc("POST /api/v1/skills/{name}/disable", a.apiHandleDisableSkill)
-
-	mux.HandleFunc("GET /api/v1/tools", a.apiHandleListTools)
-	mux.HandleFunc("GET /api/v1/subagents", a.apiHandleListSubagents)
-	mux.HandleFunc("GET /api/v1/workspace", a.apiHandleGetWorkspace)
-
-	mux.HandleFunc("GET /api/v1/services", a.apiHandleListServices)
-	mux.HandleFunc("GET /api/v1/services/{id}/output", a.apiHandleServiceOutput)
-	mux.HandleFunc("POST /api/v1/services/{id}/stop", a.apiHandleStopService)
-
-	mux.HandleFunc("GET /api/v1/tasks", a.apiHandleListTasks)
-	mux.HandleFunc("DELETE /api/v1/tasks/{id}", a.apiHandleDeleteTask)
+	for _, route := range apiRoutes {
+		route := route
+		mux.HandleFunc(route.method+" "+route.path, func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := a.apiRuntimeContext(w); !ok {
+				return
+			}
+			route.handle(a, w, r)
+		})
+	}
 
 	return mux
 }
@@ -443,11 +414,18 @@ func apiWriteError(w http.ResponseWriter, status int, message string) {
 
 func apiDecodeBody(r *http.Request, target any) error {
 	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(target); err != nil {
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
 		return fmt.Errorf("invalid JSON body: %w", err)
 	}
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return errors.New("invalid JSON body: expected exactly one JSON value")
+	}
+	if len(raw) == 0 || raw[0] != '{' {
+		return errors.New("invalid JSON body: expected an object")
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return fmt.Errorf("invalid JSON body: %w", err)
 	}
 	return nil
 }
@@ -581,6 +559,10 @@ func (a *App) apiLoadSession(w http.ResponseWriter, sessionID string) (SessionSn
 			if message.Role == openai.ChatMessageRoleSystem {
 				continue
 			}
+			if _, packed := decodeFastCompactHistory(message); packed {
+				snapshot.Messages = append(snapshot.Messages, legacySessionSnapshot(sessionID, []openai.ChatCompletionMessage{message}).Messages...)
+				continue
+			}
 			content := message.Content
 			if content == "" && len(message.MultiContent) > 0 {
 				content = textFromMultiContent(message.MultiContent)
@@ -665,8 +647,9 @@ func (a *App) apiHandleListSessions(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) apiHandleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title     string `json:"title"`
-		Workspace string `json:"workspace"`
+		Title      string   `json:"title"`
+		Workspace  string   `json:"workspace"`
+		ExtraRoots []string `json:"extraRoots"`
 	}
 	// 空请求体也允许：全部字段走默认值。
 	if err := apiDecodeOptionalBody(r, &body); err != nil {
@@ -686,21 +669,23 @@ func (a *App) apiHandleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UnixMilli()
 	entry := SessionIndexEntry{
-		ID:        newID(),
-		Title:     body.Title,
-		Workspace: strings.TrimSpace(body.Workspace),
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:         newID(),
+		Title:      body.Title,
+		Workspace:  strings.TrimSpace(body.Workspace),
+		ExtraRoots: normalizeExtraRoots(body.ExtraRoots),
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 	if err := a.SaveSessionIndex(entry); err != nil {
 		apiWriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	apiWriteOK(w, map[string]any{
-		"id":        entry.ID,
-		"title":     entry.Title,
-		"workspace": entry.Workspace,
-		"createdAt": entry.CreatedAt,
+		"id":         entry.ID,
+		"title":      entry.Title,
+		"workspace":  entry.Workspace,
+		"extraRoots": entry.ExtraRoots,
+		"createdAt":  entry.CreatedAt,
 	})
 }
 
@@ -718,21 +703,22 @@ func workspaceBaseLabel(workspace string) string {
 
 func (a *App) apiHandleSessionStatus(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
-	runID, running, queued, outcome, compacting := a.apiSessionState(sessionID)
-	snapshot, ok := a.apiLoadSession(w, sessionID)
+	snapshot, state, ok := a.apiStableSessionSnapshot(w, sessionID)
 	if !ok {
 		return
 	}
+	runID, running, queued, outcome, compacting := state.runID, state.runID != "", state.queued, state.outcome, state.compacting
 	// API 会话不带 Tab 模型 overlay，下一回合用的就是配置里展开出来的
 	// "最近使用模型"（见 ConfigState.LastUsedModel）。
 	cfg := a.effectiveConfigSafe()
 	if running {
-		cfg = a.sessionModelConfigFor(sessionID).apply(cfg)
+		cfg.Model, cfg.ProviderName = state.model, state.provider
 	}
 	apiWriteOK(w, map[string]any{
 		"id":             snapshot.ID,
 		"title":          snapshot.Title,
 		"workspace":      snapshot.Workspace,
+		"extraRoots":     snapshot.ExtraRoots,
 		"createdAt":      snapshot.CreatedAt,
 		"updatedAt":      snapshot.UpdatedAt,
 		"messageCount":   len(snapshot.Messages),
@@ -842,11 +828,11 @@ func (a *App) apiHandleSessionResult(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 	// Observe idle before loading history: finishRun removes the live run only
 	// after its final history/index writes, so done cannot carry an older read.
-	runID, running, _, outcome, compacting := a.apiSessionState(sessionID)
-	snapshot, ok := a.apiLoadSession(w, sessionID)
+	snapshot, state, ok := a.apiStableSessionSnapshot(w, sessionID)
 	if !ok {
 		return
 	}
+	runID, running, outcome, compacting := state.runID, state.runID != "", state.outcome, state.compacting
 	if outcome.UpdatedAt > snapshot.UpdatedAt {
 		snapshot.UpdatedAt = outcome.UpdatedAt
 	}
@@ -889,127 +875,6 @@ func (a *App) apiHandleSessionResult(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── 模型 ──
-
-// apiModelSummary 是模型条目的脱敏视图：绝不回传 apiKey / apiKeys 明文。
-func apiModelSummary(index int, model ModelConfig) map[string]any {
-	return map[string]any{
-		"index":           index,
-		"providerName":    model.ProviderName,
-		"apiFormat":       model.APIFormat,
-		"baseUrl":         model.BaseURL,
-		"model":           model.Model,
-		"maxTokens":       model.MaxTokens,
-		"contextWindow":   model.ContextWindow,
-		"reasoningTag":    model.ReasoningTag,
-		"reasoningEffort": model.ReasoningEffort,
-		"tokenParam":      model.TokenParam,
-		// 自定义头可能携带网关凭据：只回传键名，永不回传值。
-		"customHeaderNames": customHeaderNames(model.CustomHeaders),
-		"hasApiKey":         model.APIKey != "" || len(model.APIKeys) > 0,
-		"apiKeyCount":       len(resolveKeyPool(ConfigState{APIKey: model.APIKey, APIKeys: model.APIKeys})),
-	}
-}
-
-func (a *App) apiHandleListModels(w http.ResponseWriter, r *http.Request) {
-	cfg, err := a.getConfig()
-	if err != nil {
-		apiWriteError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	models := make([]map[string]any, 0, len(cfg.Models))
-	for index, model := range cfg.Models {
-		models = append(models, apiModelSummary(index, model))
-	}
-	// active 是"下一回合将使用的模型"：API 会话没有 Tab 模型 overlay，就用配置里
-	// 的最近使用模型展开出来的结果（界面上的每个 Tab 各自有自己的模型，与它无关）。
-	active := expandLastUsedModel(cfg)
-	apiWriteOK(w, map[string]any{
-		"active": map[string]any{
-			"providerName":      active.ProviderName,
-			"apiFormat":         active.APIFormat,
-			"baseUrl":           active.BaseURL,
-			"model":             active.Model,
-			"reasoningTag":      active.ReasoningTag,
-			"reasoningEffort":   active.ReasoningEffort,
-			"customHeaderNames": customHeaderNames(active.CustomHeaders),
-		},
-		"models": models,
-		"count":  len(models),
-	})
-}
-
-func (a *App) apiHandleSaveModel(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Index *int        `json:"index"` // nil = 新建；提供 = 按下标更新
-		Model ModelConfig `json:"model"`
-	}
-	if err := apiDecodeBody(r, &body); err != nil {
-		apiWriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	body.Model.Model = strings.TrimSpace(body.Model.Model)
-	if body.Model.Model == "" {
-		apiWriteError(w, http.StatusBadRequest, "model is required")
-		return
-	}
-	body.Model.ProviderName = strings.TrimSpace(body.Model.ProviderName)
-	body.Model.BaseURL = strings.TrimSpace(body.Model.BaseURL)
-	body.Model.APIFormat = normalizeAPIFormat(body.Model.APIFormat)
-	body.Model.CustomHeaders = normalizeCustomHeaders(body.Model.CustomHeaders)
-
-	index := -1
-	invalidIndex := false
-	err := a.commitConfig(func(cfg *ConfigState) error {
-		models := cfg.Models
-		if body.Index != nil {
-			index = *body.Index
-			if index < 0 || index >= len(models) {
-				invalidIndex = true
-				return fmt.Errorf("model index out of range: %d", index)
-			}
-			inUse := cfg.LastUsedModel != nil && modelIndexByIdentity(models, *cfg.LastUsedModel) == index
-			models[index] = body.Model
-			if inUse {
-				identity := identityOfModel(body.Model)
-				cfg.LastUsedModel = &identity
-			}
-		} else {
-			index = len(models)
-			models = append(models, body.Model)
-		}
-		cfg.Models = models
-		return nil
-	})
-	if err != nil {
-		status := http.StatusInternalServerError
-		if invalidIndex {
-			status = http.StatusBadRequest
-		}
-		apiWriteError(w, status, err.Error())
-		return
-	}
-
-	apiWriteOK(w, map[string]any{"index": index})
-}
-
-func (a *App) apiHandleActivateModel(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Index *int `json:"index"`
-	}
-	if err := apiDecodeBody(r, &body); err != nil {
-		apiWriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if body.Index == nil {
-		apiWriteError(w, http.StatusBadRequest, "index is required")
-		return
-	}
-	if err := a.SwitchModel(*body.Index); err != nil {
-		apiWriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	apiWriteOK(w, map[string]any{"activated": *body.Index})
-}
 
 // ── MCP ──
 
@@ -1058,17 +923,21 @@ func (a *App) apiHandlePutMcpConfig(w http.ResponseWriter, r *http.Request) {
 // ── Skills ──
 
 func (a *App) apiHandleListSkills(w http.ResponseWriter, r *http.Request) {
-	skills, err := a.ListSkills()
+	state, err := a.GetSkillState()
 	if err != nil {
 		apiWriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	a.apiWriteSkills(w, state)
+}
+
+func (a *App) apiWriteSkills(w http.ResponseWriter, state SkillState) {
 	enabled := make(map[string]struct{})
-	for _, name := range a.GetActiveSkills() {
+	for _, name := range state.Active {
 		enabled[name] = struct{}{}
 	}
-	out := make([]map[string]any, 0, len(skills))
-	for _, skill := range skills {
+	out := make([]map[string]any, 0, len(state.Skills))
+	for _, skill := range state.Skills {
 		_, isEnabled := enabled[skill.Name]
 		out = append(out, map[string]any{
 			"name":        skill.Name,
@@ -1127,7 +996,7 @@ func (a *App) apiHandleGetSkill(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	content, err := a.GetSkill(skill.Name)
+	content, err := readSkillContent(skill)
 	if err != nil {
 		apiWriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1332,7 +1201,11 @@ func (a *App) apiHandleListTasks(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) apiHandleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	if err := a.DeleteScheduledTask(r.PathValue("id")); err != nil {
-		apiWriteError(w, http.StatusBadRequest, err.Error())
+		status := http.StatusBadRequest
+		if toolErrorCode(err) == "E_SCHEDULED_TASK_NOT_FOUND" {
+			status = http.StatusNotFound
+		}
+		apiWriteError(w, status, err.Error())
 		return
 	}
 	apiWriteOK(w, map[string]any{"deleted": true})

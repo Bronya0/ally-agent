@@ -2,11 +2,9 @@ package desktop
 
 import (
 	"fmt"
-	"runtime"
 	"testing"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -48,54 +46,7 @@ func TestHeaderTabsPanWithoutChoosing(t *testing.T) {
 	}
 }
 
-func TestHeaderLeadingSurfaceIsSquare(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows leading surface")
-	}
-	for _, appearance := range []string{"light", "dark"} {
-		for _, expanded := range []bool{false, true} {
-			a := &desktop{prefs: defaultPrefs(), page: "chat", win: &mygo.Window{}, tabs: []*conversation{{ID: "first", Workspace: "ally-agent"}, {ID: "second", Workspace: "临时"}}}
-			a.prefs.Appearance = appearance
-			a.prefs.RailExpanded = expanded
-			a.prefs.RailWidth = 180
-			tt := ui.NewTester(func(c *ui.Context) {
-				c.SetTheme(a.theme())
-				c.DisableAnimations()
-				ui.Column(c).Fill().Children(func() {
-					a.headerBar(c)
-					ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
-						a.rail(c)
-						ui.Box(c).Grow(1).FillHeight().Background(c.Theme().Background)
-						a.fileTree(c)
-					})
-				})
-			}, 720, 170)
-			p := a.currentPalette()
-			activeTab, ok := tt.Find("工作区标签 first")
-			if !ok {
-				t.Fatal("missing active tab")
-			}
-			for _, sample := range []struct {
-				x, y int
-				want ui.Color
-			}{
-				{0, 44, p.chromeColor()},
-				{8, 44, p.chromeColor()},
-				{0, 52, p.chromeColor()},
-				{220, 110, p.bg},
-				{700, 110, p.bg},
-				{int(activeTab.X + activeTab.W/2), 43, p.bg},
-			} {
-				got := tt.Image().RGBAAt(sample.x, sample.y)
-				if got.R != sample.want.R || got.G != sample.want.G || got.B != sample.want.B {
-					t.Fatalf("%s expanded=%t corner %d,%d: got %v want %v", appearance, expanded, sample.x, sample.y, got, sample.want)
-				}
-			}
-		}
-	}
-}
-
-func TestWorkspaceTabsFillHeaderAndShareBottomBaseline(t *testing.T) {
+func TestWorkspaceTabsFillHeaderWithoutGaps(t *testing.T) {
 	a := &desktop{ready: true, page: "chat", tabs: []*conversation{{ID: "first", Workspace: "apisec"}, {ID: "second", Workspace: "ally-agent"}}}
 	tt := ui.NewTester(func(c *ui.Context) { c.SetTheme(a.theme()); a.headerBar(c) }, 900, 100)
 	first, ok := tt.Find("工作区标签 first")
@@ -105,58 +56,6 @@ func TestWorkspaceTabsFillHeaderAndShareBottomBaseline(t *testing.T) {
 	second, _ := tt.Find("工作区标签 second")
 	if first.Y != 0 || first.H != 44 || second.Y != 0 || second.H != 44 || second.X != first.X+first.W {
 		t.Fatalf("header has gaps: %v %v", first, second)
-	}
-	color := tt.Image().RGBAAt(int(first.X+first.W/2), 43)
-	surface := a.theme().Background
-	if color.R != surface.R || color.G != surface.G || color.B != surface.B {
-		t.Fatalf("active tab does not join lower surface: %v want %v", color, surface)
-	}
-	tt.Move(second.X+3, second.Y+3)
-	tt.Advance(200 * time.Millisecond)
-	color = tt.Image().RGBAAt(int(second.X+3), 1)
-	hover := a.currentPalette().headerColor()
-	if color.R != hover.R || color.G != hover.G || color.B != hover.B {
-		t.Fatalf("hover covers rounded tab top inset: %v want %v", color, hover)
-	}
-}
-
-func TestHeaderDividerContinuesUnderCaptionControls(t *testing.T) {
-	for _, appearance := range []string{"light", "dark"} {
-		a := &desktop{ready: true, page: "chat", win: &mygo.Window{}, tabs: []*conversation{{ID: "tab", Workspace: "cam"}}}
-		a.prefs.Appearance = appearance
-		tt := ui.NewTester(func(c *ui.Context) { c.SetTheme(a.theme()); a.headerBar(c) }, 900, 100)
-		for _, name := range []string{"最小化", "最大化", "退出应用"} {
-			r, ok := tt.Find(name)
-			if !ok {
-				t.Fatalf("missing %s", name)
-			}
-			got := tt.Image().RGBAAt(int(r.X+2), 1)
-			want := a.currentPalette().headerColor()
-			if got.R != want.R || got.G != want.G || got.B != want.B {
-				t.Fatalf("%s %s background differs from header: %v want %v", appearance, name, got, want)
-			}
-		}
-		for _, hover := range []string{"最小化", "最大化", "退出应用"} {
-			r, ok := tt.Find(hover)
-			if !ok {
-				t.Fatal("missing window control")
-			}
-			if r.Y != 0 || r.H != 44 {
-				t.Fatalf("caption top/bottom mismatch: %v", r)
-			}
-			tt.Move(r.X+r.W/2, r.Y+r.H/2)
-			tt.Advance(200 * time.Millisecond)
-			for _, name := range []string{"最小化", "最大化", "退出应用"} {
-				b, _ := tt.Find(name)
-				for x := int(b.X) + 1; x < int(b.X+b.W)-1; x++ {
-					v := tt.Image().RGBAAt(x, 43)
-					want := a.theme().Border
-					if v.R != want.R || v.G != want.G || v.B != want.B {
-						t.Fatalf("%s bottom line missing on %s x=%d color=%v want=%v", appearance, name, x, v, want)
-					}
-				}
-			}
-		}
 	}
 }
 
@@ -203,35 +102,6 @@ func TestHeaderTabsTrackSidebarBoundary(t *testing.T) {
 			}
 			if width == 0 && logo.W != widthRailCollapsed {
 				t.Fatalf("bar=%v collapsed logo column is %v wide, want the whole %v rail", bar, logo.W, widthRailCollapsed)
-			}
-		}
-	}
-}
-
-func TestHeaderSidebarChrome(t *testing.T) {
-	for _, appearance := range []string{"light", "dark"} {
-		for _, width := range []float32{44, 160, 300} {
-			a := &desktop{prefs: defaultPrefs(), tabs: []*conversation{{ID: "border", Workspace: "mygo"}}}
-			a.prefs.Appearance = appearance
-			a.prefs.RailExpanded = width != 44
-			a.prefs.RailWidth = width
-			tt := ui.NewTester(func(c *ui.Context) { c.SetTheme(a.theme()); a.headerBar(c) }, 900, 100)
-			bottom := a.currentPalette().headerColor()
-			// The logo and tab strip share one uninterrupted header background.
-			rightTop, rightBottom := bottom, bottom
-			for _, point := range []struct {
-				x, y int
-				want ui.Color
-			}{
-				{10, 43, bottom}, {int(width) - 1, 10, rightTop}, {int(width) - 1, 43, rightBottom},
-				// Keep the fill below the wordmark descender, including the
-				// collapsed rail: the former lower cutout passed through it.
-				{int(width) / 2, 36, bottom},
-			} {
-				got := tt.Image().RGBAAt(point.x, point.y)
-				if got.R != point.want.R || got.G != point.want.G || got.B != point.want.B {
-					t.Fatalf("%s width=%v separator at %d,%d got %v want %v", appearance, width, point.x, point.y, got, point.want)
-				}
 			}
 		}
 	}

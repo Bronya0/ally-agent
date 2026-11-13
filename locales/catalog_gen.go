@@ -16535,3 +16535,413 @@ func Ui5e7c85092474() string { return In(i18n.Locale()).Ui5e7c85092474() }
 func (msgs Messages) Ui5e7c85092474() string {
 	return Catalog.Format(msgs.locale, "ui_5e7c85092474", nil)
 }
+
+// UiC0168f40c2ea says "Headless mode"
+// in the language the app shows.
+func UiC0168f40c2ea() string { return In(i18n.Locale()).UiC0168f40c2ea() }
+
+// UiC0168f40c2ea says "Headless mode"
+// in the language of msgs.
+func (msgs Messages) UiC0168f40c2ea() string {
+	return Catalog.Format(msgs.locale, "ui_c0168f40c2ea", nil)
+}
+
+// UiCfeba4e6f179 says "The same program opens a window by default. Put --headless first to run on a server without a desktop."
+// in the language the app shows.
+func UiCfeba4e6f179() string { return In(i18n.Locale()).UiCfeba4e6f179() }
+
+// UiCfeba4e6f179 says "The same program opens a window by default. Put --headless first to run on a server without a desktop."
+// in the language of msgs.
+func (msgs Messages) UiCfeba4e6f179() string {
+	return Catalog.Format(msgs.locale, "ui_cfeba4e6f179", nil)
+}
+
+// UiF1c04f162615 says "Headless mode always enables the API, regardless of the desktop API toggle, without changing desktop settings."
+// in the language the app shows.
+func UiF1c04f162615() string { return In(i18n.Locale()).UiF1c04f162615() }
+
+// UiF1c04f162615 says "Headless mode always enables the API, regardless of the desktop API toggle, without changing desktop settings."
+// in the language of msgs.
+func (msgs Messages) UiF1c04f162615() string {
+	return Catalog.Format(msgs.locale, "ui_f1c04f162615", nil)
+}
+
+// Ui6bc9b6e4a431 says "Replace the program path with your installation path. On Windows, use Out-Host to wait and view output without openin…"
+// in the language the app shows.
+func Ui6bc9b6e4a431() string { return In(i18n.Locale()).Ui6bc9b6e4a431() }
+
+// Ui6bc9b6e4a431 says "Replace the program path with your installation path. On Windows, use Out-Host to wait and view output without openin…"
+// in the language of msgs.
+func (msgs Messages) Ui6bc9b6e4a431() string {
+	return Catalog.Format(msgs.locale, "ui_6bc9b6e4a431", nil)
+}
+
+// Ui62a65d22f2b4 says "Ports and remote connections"
+// in the language the app shows.
+func Ui62a65d22f2b4() string { return In(i18n.Locale()).Ui62a65d22f2b4() }
+
+// Ui62a65d22f2b4 says "Ports and remote connections"
+// in the language of msgs.
+func (msgs Messages) Ui62a65d22f2b4() string {
+	return Catalog.Format(msgs.locale, "ui_62a65d22f2b4", nil)
+}
+
+// UiBdc3266345a9 says "Listens on 127.0.0.1:47821 by default. Use --port and --host to change the port and listen address. Exits if the port…"
+// in the language the app shows.
+func UiBdc3266345a9() string { return In(i18n.Locale()).UiBdc3266345a9() }
+
+// UiBdc3266345a9 says "Listens on 127.0.0.1:47821 by default. Use --port and --host to change the port and listen address. Exits if the port…"
+// in the language of msgs.
+func (msgs Messages) UiBdc3266345a9() string {
+	return Catalog.Format(msgs.locale, "ui_bdc3266345a9", nil)
+}
+
+// Ui3c80948faf5e says "Linux server example"
+// in the language the app shows.
+func Ui3c80948faf5e() string { return In(i18n.Locale()).Ui3c80948faf5e() }
+
+// Ui3c80948faf5e says "Linux server example"
+// in the language of msgs.
+func (msgs Messages) Ui3c80948faf5e() string {
+	return Catalog.Format(msgs.locale, "ui_3c80948faf5e", nil)
+}
+
+// Ui4e9c3266aa4e says "Once listening, the terminal prints API and event stream URLs. Remote clients must replace 0.0.0.0 or :: with the ser…"
+// in the language the app shows.
+func Ui4e9c3266aa4e() string { return In(i18n.Locale()).Ui4e9c3266aa4e() }
+
+// Ui4e9c3266aa4e says "Once listening, the terminal prints API and event stream URLs. Remote clients must replace 0.0.0.0 or :: with the ser…"
+// in the language of msgs.
+func (msgs Messages) Ui4e9c3266aa4e() string {
+	return Catalog.Format(msgs.locale, "ui_4e9c3266aa4e", nil)
+}
+
+// Ui20c4ffa8dca1 says "--workspace is optional; --data-dir selects the data directory. Desktop and headless instances cannot share a data di…"
+// in the language the app shows.
+func Ui20c4ffa8dca1() string { return In(i18n.Locale()).Ui20c4ffa8dca1() }
+
+// Ui20c4ffa8dca1 says "--workspace is optional; --data-dir selects the data directory. Desktop and headless instances cannot share a data di…"
+// in the language of msgs.
+func (msgs Messages) Ui20c4ffa8dca1() string {
+	return Catalog.Format(msgs.locale, "ui_20c4ffa8dca1", nil)
+}
+
+// UiFd05bb8aa4cc says "Token and client connections"
+// in the language the app shows.
+func UiFd05bb8aa4cc() string { return In(i18n.Locale()).UiFd05bb8aa4cc() }
+
+// UiFd05bb8aa4cc says "Token and client connections"
+// in the language of msgs.
+func (msgs Messages) UiFd05bb8aa4cc() string {
+	return Catalog.Format(msgs.locale, "ui_fd05bb8aa4cc", nil)
+}
+
+// UiFdf06d272311 says "All API and event endpoints require Authorization: Bearer <Token>. For remote access, use an HTTPS reverse proxy or S…"
+// in the language the app shows.
+func UiFdf06d272311() string { return In(i18n.Locale()).UiFdf06d272311() }
+
+// UiFdf06d272311 says "All API and event endpoints require Authorization: Bearer <Token>. For remote access, use an HTTPS reverse proxy or S…"
+// in the language of msgs.
+func (msgs Messages) UiFdf06d272311() string {
+	return Catalog.Format(msgs.locale, "ui_fdf06d272311", nil)
+}
+
+// UiB07dd6214406 says "If no token is specified, uses the token in api.json in the data directory, generating and saving one on first use. T…"
+// in the language the app shows.
+func UiB07dd6214406() string { return In(i18n.Locale()).UiB07dd6214406() }
+
+// UiB07dd6214406 says "If no token is specified, uses the token in api.json in the data directory, generating and saving one on first use. T…"
+// in the language of msgs.
+func (msgs Messages) UiB07dd6214406() string {
+	return Catalog.Format(msgs.locale, "ui_b07dd6214406", nil)
+}
+
+// Ui00f84ce07772 says "--token-file reads a plain text token file; --token accepts a token directly. Custom ports and tokens do not overwrit…"
+// in the language the app shows.
+func Ui00f84ce07772() string { return In(i18n.Locale()).Ui00f84ce07772() }
+
+// Ui00f84ce07772 says "--token-file reads a plain text token file; --token accepts a token directly. Custom ports and tokens do not overwrit…"
+// in the language of msgs.
+func (msgs Messages) Ui00f84ce07772() string {
+	return Catalog.Format(msgs.locale, "ui_00f84ce07772", nil)
+}
+
+// UiF01773c64512 says "Test the connection (replace token and URL)"
+// in the language the app shows.
+func UiF01773c64512() string { return In(i18n.Locale()).UiF01773c64512() }
+
+// UiF01773c64512 says "Test the connection (replace token and URL)"
+// in the language of msgs.
+func (msgs Messages) UiF01773c64512() string {
+	return Catalog.Format(msgs.locale, "ui_f01773c64512", nil)
+}
+
+// Ui30ba2de6813c says "Configure a model through the API before first use. Use the same API to create sessions, send messages and retrieve r…"
+// in the language the app shows.
+func Ui30ba2de6813c() string { return In(i18n.Locale()).Ui30ba2de6813c() }
+
+// Ui30ba2de6813c says "Configure a model through the API before first use. Use the same API to create sessions, send messages and retrieve r…"
+// in the language of msgs.
+func (msgs Messages) Ui30ba2de6813c() string {
+	return Catalog.Format(msgs.locale, "ui_30ba2de6813c", nil)
+}
+
+// Ui1031952cfc4c says "Shutdown and recovery"
+// in the language the app shows.
+func Ui1031952cfc4c() string { return In(i18n.Locale()).Ui1031952cfc4c() }
+
+// Ui1031952cfc4c says "Shutdown and recovery"
+// in the language of msgs.
+func (msgs Messages) Ui1031952cfc4c() string {
+	return Catalog.Format(msgs.locale, "ui_1031952cfc4c", nil)
+}
+
+// UiFaf2b31cceaf says "Ctrl+C or SIGTERM on Linux/macOS stops accepting work, cancels runs and waits for sessions to save. Avoid forcibly ki…"
+// in the language the app shows.
+func UiFaf2b31cceaf() string { return In(i18n.Locale()).UiFaf2b31cceaf() }
+
+// UiFaf2b31cceaf says "Ctrl+C or SIGTERM on Linux/macOS stops accepting work, cancels runs and waits for sessions to save. Avoid forcibly ki…"
+// in the language of msgs.
+func (msgs Messages) UiFaf2b31cceaf() string {
+	return Catalog.Format(msgs.locale, "ui_faf2b31cceaf", nil)
+}
+
+// UiC2a5d0196c4d says "Shut down via API (replace token and URL)"
+// in the language the app shows.
+func UiC2a5d0196c4d() string { return In(i18n.Locale()).UiC2a5d0196c4d() }
+
+// UiC2a5d0196c4d says "Shut down via API (replace token and URL)"
+// in the language of msgs.
+func (msgs Messages) UiC2a5d0196c4d() string {
+	return Catalog.Format(msgs.locale, "ui_c2a5d0196c4d", nil)
+}
+
+// Ui4fac8eedcd9e says "History and configuration persist across restarts. Interrupted chat tasks are not replayed automatically. Headless mo…"
+// in the language the app shows.
+func Ui4fac8eedcd9e() string { return In(i18n.Locale()).Ui4fac8eedcd9e() }
+
+// Ui4fac8eedcd9e says "History and configuration persist across restarts. Interrupted chat tasks are not replayed automatically. Headless mo…"
+// in the language of msgs.
+func (msgs Messages) Ui4fac8eedcd9e() string {
+	return Catalog.Format(msgs.locale, "ui_4fac8eedcd9e", nil)
+}
+
+// Ui3db48ab99778 says "Show all startup options"
+// in the language the app shows.
+func Ui3db48ab99778() string { return In(i18n.Locale()).Ui3db48ab99778() }
+
+// Ui3db48ab99778 says "Show all startup options"
+// in the language of msgs.
+func (msgs Messages) Ui3db48ab99778() string {
+	return Catalog.Format(msgs.locale, "ui_3db48ab99778", nil)
+}
+
+// UiEa5e72963290 says "Session status"
+// in the language the app shows.
+func UiEa5e72963290() string { return In(i18n.Locale()).UiEa5e72963290() }
+
+// UiEa5e72963290 says "Session status"
+// in the language of msgs.
+func (msgs Messages) UiEa5e72963290() string {
+	return Catalog.Format(msgs.locale, "ui_ea5e72963290", nil)
+}
+
+// Ui40759665c9a1 says "Task result"
+// in the language the app shows.
+func Ui40759665c9a1() string { return In(i18n.Locale()).Ui40759665c9a1() }
+
+// Ui40759665c9a1 says "Task result"
+// in the language of msgs.
+func (msgs Messages) Ui40759665c9a1() string {
+	return Catalog.Format(msgs.locale, "ui_40759665c9a1", nil)
+}
+
+// Ui41b4a78a1e6b says "Session plan"
+// in the language the app shows.
+func Ui41b4a78a1e6b() string { return In(i18n.Locale()).Ui41b4a78a1e6b() }
+
+// Ui41b4a78a1e6b says "Session plan"
+// in the language of msgs.
+func (msgs Messages) Ui41b4a78a1e6b() string {
+	return Catalog.Format(msgs.locale, "ui_41b4a78a1e6b", nil)
+}
+
+// Ui90f68b00f019 says "Pending questions"
+// in the language the app shows.
+func Ui90f68b00f019() string { return In(i18n.Locale()).Ui90f68b00f019() }
+
+// Ui90f68b00f019 says "Pending questions"
+// in the language of msgs.
+func (msgs Messages) Ui90f68b00f019() string {
+	return Catalog.Format(msgs.locale, "ui_90f68b00f019", nil)
+}
+
+// UiE0ccb9e99ae1 says "Answer questions"
+// in the language the app shows.
+func UiE0ccb9e99ae1() string { return In(i18n.Locale()).UiE0ccb9e99ae1() }
+
+// UiE0ccb9e99ae1 says "Answer questions"
+// in the language of msgs.
+func (msgs Messages) UiE0ccb9e99ae1() string {
+	return Catalog.Format(msgs.locale, "ui_e0ccb9e99ae1", nil)
+}
+
+// UiF22f14e910e3 says "Fast compaction"
+// in the language the app shows.
+func UiF22f14e910e3() string { return In(i18n.Locale()).UiF22f14e910e3() }
+
+// UiF22f14e910e3 says "Fast compaction"
+// in the language of msgs.
+func (msgs Messages) UiF22f14e910e3() string {
+	return Catalog.Format(msgs.locale, "ui_f22f14e910e3", nil)
+}
+
+// Ui06d7b2e31d30 says "Context usage"
+// in the language the app shows.
+func Ui06d7b2e31d30() string { return In(i18n.Locale()).Ui06d7b2e31d30() }
+
+// Ui06d7b2e31d30 says "Context usage"
+// in the language of msgs.
+func (msgs Messages) Ui06d7b2e31d30() string {
+	return Catalog.Format(msgs.locale, "ui_06d7b2e31d30", nil)
+}
+
+// Ui68891ab35cab says "Reconnect"
+// in the language the app shows.
+func Ui68891ab35cab() string { return In(i18n.Locale()).Ui68891ab35cab() }
+
+// Ui68891ab35cab says "Reconnect"
+// in the language of msgs.
+func (msgs Messages) Ui68891ab35cab() string {
+	return Catalog.Format(msgs.locale, "ui_68891ab35cab", nil)
+}
+
+// UiB3e7383cb255 says "Skill content"
+// in the language the app shows.
+func UiB3e7383cb255() string { return In(i18n.Locale()).UiB3e7383cb255() }
+
+// UiB3e7383cb255 says "Skill content"
+// in the language of msgs.
+func (msgs Messages) UiB3e7383cb255() string {
+	return Catalog.Format(msgs.locale, "ui_b3e7383cb255", nil)
+}
+
+// Ui9b9488132f45 says "Disable skill"
+// in the language the app shows.
+func Ui9b9488132f45() string { return In(i18n.Locale()).Ui9b9488132f45() }
+
+// Ui9b9488132f45 says "Disable skill"
+// in the language of msgs.
+func (msgs Messages) Ui9b9488132f45() string {
+	return Catalog.Format(msgs.locale, "ui_9b9488132f45", nil)
+}
+
+// UiC8550237ba70 says "Save settings"
+// in the language the app shows.
+func UiC8550237ba70() string { return In(i18n.Locale()).UiC8550237ba70() }
+
+// UiC8550237ba70 says "Save settings"
+// in the language of msgs.
+func (msgs Messages) UiC8550237ba70() string {
+	return Catalog.Format(msgs.locale, "ui_c8550237ba70", nil)
+}
+
+// Ui3989fb69a52a says "Token statistics"
+// in the language the app shows.
+func Ui3989fb69a52a() string { return In(i18n.Locale()).Ui3989fb69a52a() }
+
+// Ui3989fb69a52a says "Token statistics"
+// in the language of msgs.
+func (msgs Messages) Ui3989fb69a52a() string {
+	return Catalog.Format(msgs.locale, "ui_3989fb69a52a", nil)
+}
+
+// Ui56e68c23c863 says "SSH servers"
+// in the language the app shows.
+func Ui56e68c23c863() string { return In(i18n.Locale()).Ui56e68c23c863() }
+
+// Ui56e68c23c863 says "SSH servers"
+// in the language of msgs.
+func (msgs Messages) Ui56e68c23c863() string {
+	return Catalog.Format(msgs.locale, "ui_56e68c23c863", nil)
+}
+
+// Ui5cd0696d4bb9 says "Save server"
+// in the language the app shows.
+func Ui5cd0696d4bb9() string { return In(i18n.Locale()).Ui5cd0696d4bb9() }
+
+// Ui5cd0696d4bb9 says "Save server"
+// in the language of msgs.
+func (msgs Messages) Ui5cd0696d4bb9() string {
+	return Catalog.Format(msgs.locale, "ui_5cd0696d4bb9", nil)
+}
+
+// Ui1ac280036582 says "Workspace authorization"
+// in the language the app shows.
+func Ui1ac280036582() string { return In(i18n.Locale()).Ui1ac280036582() }
+
+// Ui1ac280036582 says "Workspace authorization"
+// in the language of msgs.
+func (msgs Messages) Ui1ac280036582() string {
+	return Catalog.Format(msgs.locale, "ui_1ac280036582", nil)
+}
+
+// Ui18b7312022cd says "Start service"
+// in the language the app shows.
+func Ui18b7312022cd() string { return In(i18n.Locale()).Ui18b7312022cd() }
+
+// Ui18b7312022cd says "Start service"
+// in the language of msgs.
+func (msgs Messages) Ui18b7312022cd() string {
+	return Catalog.Format(msgs.locale, "ui_18b7312022cd", nil)
+}
+
+// Ui46705301c2d5 says "Service details"
+// in the language the app shows.
+func Ui46705301c2d5() string { return In(i18n.Locale()).Ui46705301c2d5() }
+
+// Ui46705301c2d5 says "Service details"
+// in the language of msgs.
+func (msgs Messages) Ui46705301c2d5() string {
+	return Catalog.Format(msgs.locale, "ui_46705301c2d5", nil)
+}
+
+// Ui0a723dbbf6a9 says "Restart service"
+// in the language the app shows.
+func Ui0a723dbbf6a9() string { return In(i18n.Locale()).Ui0a723dbbf6a9() }
+
+// Ui0a723dbbf6a9 says "Restart service"
+// in the language of msgs.
+func (msgs Messages) Ui0a723dbbf6a9() string {
+	return Catalog.Format(msgs.locale, "ui_0a723dbbf6a9", nil)
+}
+
+// UiD3416e367c51 says "Service output"
+// in the language the app shows.
+func UiD3416e367c51() string { return In(i18n.Locale()).UiD3416e367c51() }
+
+// UiD3416e367c51 says "Service output"
+// in the language of msgs.
+func (msgs Messages) UiD3416e367c51() string {
+	return Catalog.Format(msgs.locale, "ui_d3416e367c51", nil)
+}
+
+// UiD2ff17f44817 says "Create task"
+// in the language the app shows.
+func UiD2ff17f44817() string { return In(i18n.Locale()).UiD2ff17f44817() }
+
+// UiD2ff17f44817 says "Create task"
+// in the language of msgs.
+func (msgs Messages) UiD2ff17f44817() string {
+	return Catalog.Format(msgs.locale, "ui_d2ff17f44817", nil)
+}
+
+// Ui56b3909705f3 says "Task details"
+// in the language the app shows.
+func Ui56b3909705f3() string { return In(i18n.Locale()).Ui56b3909705f3() }
+
+// Ui56b3909705f3 says "Task details"
+// in the language of msgs.
+func (msgs Messages) Ui56b3909705f3() string {
+	return Catalog.Format(msgs.locale, "ui_56b3909705f3", nil)
+}

@@ -598,8 +598,10 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 		}
 	}
 
-	waitErr := cmd.Wait()
+	// Drain stderr before Wait: Wait closes the pipe and can drop the bytes that
+	// explain the failure, turning "regex parse error" into a bare "exit status 2".
 	errWG.Wait()
+	waitErr := cmd.Wait()
 	if parseErr != nil {
 		return nil, nil, 0, nil, false, false, nil, parseErr
 	}

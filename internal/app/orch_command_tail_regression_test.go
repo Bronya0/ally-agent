@@ -80,7 +80,10 @@ func TestCommandPromotionFailureRetainsOutput(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(a.config.Workspace, "captured-output.txt"), []byte(output+"\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			command := "cat captured-output.txt; touch command-ready; sleep 30"
+			// sleep 只要比 1s 超时长一点：超时后进程树被杀，但脚本里残留的
+			// 子进程会一直抱着管道，写 30s 会让每个子用例真的等满，整套测试
+			// 多花一分钟。
+			command := "cat captured-output.txt; touch command-ready; sleep 5"
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			timeout := make(chan time.Time, 1)

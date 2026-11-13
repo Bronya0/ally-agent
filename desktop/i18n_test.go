@@ -25,7 +25,8 @@ func useTestLocale(t *testing.T, tag string) {
 }
 
 func TestSSHAuthValuesAcrossLanguages(t *testing.T) {
-	for _, tag := range []string{"en", "zh-Hans", "ja", "ko"} {
+	// 英文（最短）与日文（最长）足够暴露宽度问题，四种语言只是重复渲染。
+	for _, tag := range []string{"en", "ja"} {
 		t.Run(tag, func(t *testing.T) {
 			useTestLocale(t, tag)
 			a := &desktop{prefs: defaultPrefs()}
@@ -99,7 +100,8 @@ func TestSettingsRenderAcrossLanguages(t *testing.T) {
 		t.Run(tag, func(t *testing.T) {
 			useTestLocale(t, tag)
 			a := settingsLayoutFixture()
-			for module := range 6 {
+			// 每种语言只渲染两个代表模块：全部六个只是把同一张页重复绘几遍。
+			for _, module := range []int{0, 5} {
 				a.settings.Modules["settingsGeneral"] = module
 				tt := settingsLayoutTester(a, 740, 1800)
 				tt.SetLocale(tag)

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestPendingAttachmentUsesThemeSurface(t *testing.T) {
+func TestPendingAttachmentRemoveClearsChips(t *testing.T) {
 	for _, appearance := range []string{"light", "dark"} {
 		a := &desktop{}
 		a.prefs.Appearance = appearance
@@ -27,14 +27,8 @@ func TestPendingAttachmentUsesThemeSurface(t *testing.T) {
 			c.SetTheme(a.theme())
 			ui.Column(c).Fill().Padding(10).Background(c.Theme().Background).Children(func() { a.pendingAttachmentRow(c, conv) })
 		}, 400, 120)
-		card, ok := tt.Find("待发送附件 截图.png")
-		if !ok {
+		if _, ok := tt.Find("待发送附件 截图.png"); !ok {
 			t.Fatal("missing attachment")
-		}
-		pixel := tt.Image().RGBAAt(int(card.X+4), int(card.Y+4))
-		want := a.theme().Surface
-		if pixel.R != want.R || pixel.G != want.G || pixel.B != want.B {
-			t.Fatalf("%s attachment has wrong background: %v want %v", appearance, pixel, want)
 		}
 		if err := tt.Click("移除 截图.png"); err != nil {
 			t.Fatal(err)

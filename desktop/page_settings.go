@@ -15,7 +15,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-var settingsSections = []string{"通用", "高级", "网络", "安全围栏", "API", "版本亮点", "关于"}
+var settingsSections = []string{"通用", "高级", "网络", "安全围栏", "API", "无头模式", "版本亮点", "关于"}
 
 // settingsGeneralSections 是「通用」分区标签的源文案。下标只在这里决定：
 // 欢迎页按名称定位「上下文加载」，增删分区不会让入口指错页面。
@@ -83,6 +83,8 @@ func (a *desktop) settingsPageBody(c *ui.Context) {
 						a.settingsFence(c)
 					case "API":
 						a.settingsAPI(c)
+					case "无头模式":
+						a.settingsHeadless(c)
 					case "版本亮点":
 						a.settingsReleaseNotes(c)
 					case "关于":
@@ -813,6 +815,8 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 					methodColor = c.Theme().Success
 				case "PUT":
 					methodColor = c.Theme().Warning
+				case "DELETE":
+					methodColor = c.Theme().Danger
 				}
 				chip(c, ep[0], methodColor, c.Theme().Surface.Mix(methodColor, 0.12)).Shrink(0)
 				ui.Text(c, ep[1]).Font(monoFamily).FontSize(fsSmall).Grow(1).MinWidth(0)
@@ -822,30 +826,7 @@ func (a *desktop) settingsAPI(c *ui.Context) {
 	})
 }
 
-var apiEndpoints = [][3]string{
-	{"GET", "/api/v1/health", "健康检查"},
-	{"POST", "/api/v1/ai/complete", "直接调用模型补全"},
-	{"GET", "/api/v1/sessions", "会话列表"},
-	{"POST", "/api/v1/sessions", "创建会话"},
-	{"GET", "/api/v1/sessions/{id}/messages", "读取会话消息"},
-	{"POST", "/api/v1/sessions/{id}/send", "发送消息"},
-	{"POST", "/api/v1/sessions/{id}/cancel", "取消运行"},
-	{"POST", "/api/v1/sessions/{id}/compact", "压缩上下文"},
-	{"GET", "/api/v1/models", "模型列表"},
-	{"POST", "/api/v1/models", "保存模型"},
-	{"POST", "/api/v1/models/activate", "切换模型"},
-	{"GET", "/api/v1/mcp", "MCP 状态"},
-	{"PUT", "/api/v1/mcp/config", "保存 MCP 配置"},
-	{"GET", "/api/v1/skills", "技能列表"},
-	{"POST", "/api/v1/skills/{name}/activate", "启用技能"},
-	{"GET", "/api/v1/tools", "工具清单"},
-	{"GET", "/api/v1/subagents", "子代理运行记录"},
-	{"GET", "/api/v1/workspace", "工作区信息"},
-	{"GET", "/api/v1/services", "后台服务"},
-	{"POST", "/api/v1/services/{id}/stop", "停止服务"},
-	{"GET", "/api/v1/tasks", "定时任务"},
-	{"DELETE", "/api/v1/tasks/{id}", "删除任务"},
-}
+var apiEndpoints = backend.APIEndpoints()
 
 func (a *desktop) loadAPIService(manual ...bool) {
 	if a.settings.APIBusy {

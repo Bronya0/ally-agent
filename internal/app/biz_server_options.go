@@ -25,22 +25,61 @@ type ServerConfig struct {
 	DataDir   string `json:"dataDir"`
 }
 
+// SplitHeadlessArgs decides the run mode before flag parsing: headless must not
+// initialize the graphics environment, so this switch cannot wait for flag
+// values. Listener options are still parsed by loadServerOptions.
+func SplitHeadlessArgs(args []string) (rest []string, headless bool, err error) {
+	rest = make([]string, 0, len(args))
+	for _, arg := range args {
+		name, value, hasValue := strings.Cut(arg, "=")
+		if name != "--headless" && name != "-headless" {
+			rest = append(rest, arg)
+			continue
+		}
+		if !hasValue {
+			headless = true
+			continue
+		}
+		parsed, parseErr := strconv.ParseBool(value)
+		if parseErr != nil {
+			return nil, false, fmt.Errorf("--headless: %w", parseErr)
+		}
+		headless = parsed
+	}
+	return rest, headless, nil
+}
+
 func loadServerOptions(args []string, output io.Writer) (ServerConfig, error) {
 	cfg := ServerConfig{Host: "127.0.0.1", Port: apiDefaultPort}
-	if host := os.Getenv("WAILS_SERVER_HOST"); host != "" {
+	host := os.Getenv("ALLY_SERVER_HOST")
+	if host == "" {
+		host = os.Getenv("WAILS_SERVER_HOST")
+	}
+	if host != "" {
 		cfg.Host = host
 	}
-	if port := os.Getenv("WAILS_SERVER_PORT"); port != "" {
+	portKey := "ALLY_SERVER_PORT"
+	port := os.Getenv(portKey)
+	if port == "" {
+		portKey = "WAILS_SERVER_PORT"
+		port = os.Getenv(portKey)
+	}
+	if port != "" {
 		n, err := strconv.Atoi(port)
 		if err != nil {
-			return cfg, fmt.Errorf("WAILS_SERVER_PORT: %w", err)
+			return cfg, fmt.Errorf("%s: %w", portKey, err)
 		}
 		cfg.Port = n
 	}
 
-	fs := flag.NewFlagSet("ally-server", flag.ContinueOnError)
+	fs := flag.NewFlagSet("ally-native --headless", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.Usage = func() { fs.SetOutput(output); fs.PrintDefaults() }
+	fs.Usage = func() {
+		fmt.Fprintln(output, "Usage: ally-native --headless [options]")
+		fmt.Fprintln(output, "API is always enabled in headless mode; Bearer authentication is required.")
+		fs.SetOutput(output)
+		fs.PrintDefaults()
+	}
 	var configPath string
 	fs.StringVar(&configPath, "config", "", "Optional server JSON configuration file")
 	fs.StringVar(&cfg.Host, "host", cfg.Host, "HTTP listen host")

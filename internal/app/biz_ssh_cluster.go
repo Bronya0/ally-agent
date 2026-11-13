@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -440,19 +441,30 @@ func (a *App) SaveSSHServerForWorkspace(node SSHServerNode, workspace string) er
 	return a.saveSSHServer(node, normWS)
 }
 
-func (a *App) saveSSHServer(node SSHServerNode, authorizeWorkspace string) error {
+var errSSHServerChanged = errors.New("SSH server changed; reload the server list and retry")
+
+// An omitted expected argument preserves legacy upserts. An explicit nil
+// expects a create; a nonnil snapshot expects exactly that stored node.
+func (a *App) saveSSHServer(node SSHServerNode, authorizeWorkspace string, expected ...*SSHServerNode) error {
+	_, err := a.saveSSHServerSnapshot(node, authorizeWorkspace, expected...)
+	return err
+}
+
+// saveSSHServerSnapshot returns the committed value captured by storage, even
+// if another caller changes or deletes the node before this function returns.
+func (a *App) saveSSHServerSnapshot(node SSHServerNode, authorizeWorkspace string, expected ...*SSHServerNode) (SSHServerNode, error) {
 	alias := strings.ToLower(strings.TrimSpace(node.Alias))
 	if alias == "" {
-		return errors.New("server alias is required")
+		return SSHServerNode{}, errors.New("server alias is required")
 	}
 	if strings.TrimSpace(node.Host) == "" {
-		return errors.New("server host is required")
+		return SSHServerNode{}, errors.New("server host is required")
 	}
 	if strings.TrimSpace(node.Username) == "" {
-		return errors.New("server username is required")
+		return SSHServerNode{}, errors.New("server username is required")
 	}
 	if strings.TrimSpace(node.Description) == "" {
-		return errors.New("server description is required")
+		return SSHServerNode{}, errors.New("server description is required")
 	}
 	node.Description = strings.TrimSpace(node.Description)
 	node.Alias = strings.TrimSpace(node.Alias)
@@ -460,17 +472,23 @@ func (a *App) saveSSHServer(node SSHServerNode, authorizeWorkspace string) error
 	if node.Port <= 0 {
 		node.Port = 22
 	}
-	if err := a.storeSSHServerLocked(alias, node, authorizeWorkspace); err != nil {
-		return err
+	saved, err := a.storeSSHServerSnapshotLocked(alias, node, authorizeWorkspace, expected...)
+	if err != nil {
+		return SSHServerNode{}, err
 	}
 	a.emitSSHClustersChanged()
-	return nil
+	return saved, nil
 }
 
 // storeSSHServerLocked 落盘一份节点和可选的工作区授权，并失效被它改掉的凭据槽位。
 // authorizeWorkspace 非空时只允许创建新别名，避免审批期间的并发新增被模型 upsert 覆盖。
 // 调用方不得持有锁。
-func (a *App) storeSSHServerLocked(alias string, node SSHServerNode, authorizeWorkspace string) error {
+func (a *App) storeSSHServerLocked(alias string, node SSHServerNode, authorizeWorkspace string, expected ...*SSHServerNode) error {
+	_, err := a.storeSSHServerSnapshotLocked(alias, node, authorizeWorkspace, expected...)
+	return err
+}
+
+func (a *App) storeSSHServerSnapshotLocked(alias string, node SSHServerNode, authorizeWorkspace string, expected ...*SSHServerNode) (SSHServerNode, error) {
 	a.sshClustersMu.Lock()
 	defer a.sshClustersMu.Unlock()
 	if a.sshClusters == nil {
@@ -479,18 +497,28 @@ func (a *App) storeSSHServerLocked(alias string, node SSHServerNode, authorizeWo
 	node.ID = strings.TrimSpace(node.ID)
 	previous, updating := a.sshClusters[node.ID]
 	if node.ID != "" && !updating {
-		return errors.New("server no longer exists; reload the server list")
+		if len(expected) > 0 {
+			return SSHServerNode{}, errSSHServerChanged
+		}
+		return SSHServerNode{}, errors.New("server no longer exists; reload the server list")
 	}
 	if sameAlias, exists := a.sshServerByAliasLocked(alias); exists {
 		if authorizeWorkspace != "" {
-			return fmt.Errorf("server alias %q is already in use; reload the server list", node.Alias)
+			return SSHServerNode{}, fmt.Errorf("server alias %q is already in use; reload the server list", node.Alias)
 		}
 		if node.ID != "" && node.ID != sameAlias.ID {
-			return fmt.Errorf("server alias %q is already in use", node.Alias)
+			return SSHServerNode{}, fmt.Errorf("server alias %q is already in use", node.Alias)
 		}
 		// Legacy callers and imports upsert by alias without changing identity.
 		previous, updating = sameAlias, true
 		node.ID = sameAlias.ID
+	}
+	if len(expected) > 0 {
+		snapshot := expected[0]
+		if (snapshot == nil && updating) ||
+			(snapshot != nil && (!updating || !reflect.DeepEqual(previous, *snapshot))) {
+			return SSHServerNode{}, errSSHServerChanged
+		}
 	}
 	if node.ID == "" {
 		for {
@@ -555,14 +583,14 @@ func (a *App) storeSSHServerLocked(alias string, node SSHServerNode, authorizeWo
 			}
 			a.sshWorkspaceAllowedMu.Unlock()
 		}
-		return err
+		return SSHServerNode{}, err
 	}
 	// Invalidate both endpoints, including when the nickname was changed.
 	if updating {
 		a.sshCredentials.purgeHost(nodeSSHHost(previous))
 	}
 	a.sshCredentials.purgeHost(nodeSSHHost(node))
-	return nil
+	return node, nil
 }
 
 // emitSSHClustersChanged 通知 UI 集群清单/工作区授权变了（模型也能改这份清单），
