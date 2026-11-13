@@ -1844,14 +1844,20 @@ func (a *App) CancelRun(runID string) error {
 	return nil
 }
 
-// runEnd is how a run finished. A return branch only records it: finishRun owns
-// every end-of-run step, so no branch can leave the session half-written by
-// forgetting one.
-type runEnd struct {
-	event   string         // "run:done" or "run:error"
+// runOutcome is how a run finished. A return branch only records it; finishRun
+// is the one place that saves, syncs, reports and releases.
+type runOutcome struct {
 	kind    string         // "done", "cancelled" or "error"
 	message string         // error text; empty on success
 	extra   map[string]any // extra event fields such as stopReason
+}
+
+// event names the end event this outcome emits.
+func (o runOutcome) event() string {
+	if o.kind == "done" {
+		return "run:done"
+	}
+	return "run:error"
 }
 
 // runFinish is what finishRun needs beyond the run's final history and outcome.
@@ -1864,52 +1870,88 @@ type runFinish struct {
 	syncIndex bool
 }
 
-// finishRun is the single end-of-run exit, called once from runChat's deferred
-// cleanup. It saves the final history, reconciles the session index and context
-// breakdown, records the outcome, emits the end event, releases the run, and
-// writes the run's usage sample — in that order.
-func (a *App) finishRun(f runFinish, messages []openai.ChatCompletionMessage, end runEnd) {
-	if end.kind == "done" || len(sanitizeHistoryMessages(messages)) > 0 {
+// finishRun is the single end-of-run exit: one line per step, in the order the
+// steps depend on each other. Independent steps run concurrently.
+func (a *App) finishRun(f runFinish, messages []openai.ChatCompletionMessage, outcome runOutcome) {
+	// History: the final version on success, the checkpoint save otherwise.
+	if outcome.kind == "done" || len(sanitizeHistoryMessages(messages)) > 0 {
 		a.saveHistory(f.sessionID, messages)
 	}
-	a.restoreSavedHistoryBreakdown(f.sessionID)
-	if f.syncIndex {
-		if err := a.syncSessionIndexFromHistory(f.sessionID); err != nil {
-			a.logAppError("session index sync failed", "sessionId", f.sessionID, "error", err.Error())
-		}
-	}
-	// The event carries its own copy of the outcome fields; nothing else may run
-	// between saving the history and announcing it is done.
-	a.invalidateGitStatus(f.workspace)
-	payload := make(map[string]any, len(end.extra)+6)
-	for key, value := range end.extra {
-		payload[key] = value
-	}
-	payload["runId"] = f.runID
-	payload["status"] = end.kind
-	payload["sessionId"] = f.sessionID
-	payload["workspace"] = f.workspace
-	payload["durationMs"] = time.Since(f.started).Milliseconds()
-	if end.message != "" {
-		payload["error"] = end.message
-	}
-	publishRunModelUsage(f.ctx, payload)
-	a.mu.Lock()
-	if a.sessionRunOutcomes == nil {
-		a.sessionRunOutcomes = map[string]sessionRunOutcome{}
-	}
-	a.sessionRunOutcomes[f.sessionID] = sessionRunOutcome{
-		RunID: f.runID, Status: end.kind, Error: end.message, UpdatedAt: time.Now().UnixMilli(),
-	}
-	a.mu.Unlock()
-	a.emit(end.event, payload)
-	a.mu.Lock()
-	delete(a.liveCommandContext, f.sessionID)
-	a.mu.Unlock()
+	// These three read the saved history and touch different state: run them
+	// together instead of one after another.
+	parallel(
+		func() { a.restoreSavedHistoryBreakdown(f.sessionID) },     // context breakdown
+		func() { a.syncRunSessionIndex(f.sessionID, f.syncIndex) }, // session index
+		func() { a.invalidateGitStatus(f.workspace) },              // Git status cache
+	)
+	// These stay in order: record the result, announce it, then free the run.
+	a.recordRunOutcome(f.runID, f.sessionID, outcome)
+	a.emitRunEnd(f, outcome)
+	a.clearLiveCommandContext(f.sessionID)
 	a.releaseRun(f.runID)
 	// The usage sample belongs to this run: write it now instead of waiting for
 	// a timer to rewrite the day file while nothing new happened.
 	a.stats.flushNow()
+}
+
+// syncRunSessionIndex refreshes the index only for runs without a UI writer.
+func (a *App) syncRunSessionIndex(sessionID string, needed bool) {
+	if !needed {
+		return
+	}
+	if err := a.syncSessionIndexFromHistory(sessionID); err != nil {
+		a.logAppError("session index sync failed", "sessionId", sessionID, "error", err.Error())
+	}
+}
+
+// recordRunOutcome keeps the result that /result and status queries read.
+func (a *App) recordRunOutcome(runID, sessionID string, outcome runOutcome) {
+	a.mu.Lock()
+	if a.sessionRunOutcomes == nil {
+		a.sessionRunOutcomes = map[string]sessionRunOutcome{}
+	}
+	a.sessionRunOutcomes[sessionID] = sessionRunOutcome{
+		RunID: runID, Status: outcome.kind, Error: outcome.message, UpdatedAt: time.Now().UnixMilli(),
+	}
+	a.mu.Unlock()
+}
+
+// clearLiveCommandContext drops the command context the next run rebuilds.
+func (a *App) clearLiveCommandContext(sessionID string) {
+	a.mu.Lock()
+	delete(a.liveCommandContext, sessionID)
+	a.mu.Unlock()
+}
+
+// emitRunEnd sends run:done or run:error with this run's duration and usage.
+func (a *App) emitRunEnd(f runFinish, outcome runOutcome) {
+	payload := make(map[string]any, len(outcome.extra)+6)
+	for key, value := range outcome.extra {
+		payload[key] = value
+	}
+	payload["runId"] = f.runID
+	payload["status"] = outcome.kind
+	payload["sessionId"] = f.sessionID
+	payload["workspace"] = f.workspace
+	payload["durationMs"] = time.Since(f.started).Milliseconds()
+	if outcome.message != "" {
+		payload["error"] = outcome.message
+	}
+	publishRunModelUsage(f.ctx, payload)
+	a.emit(outcome.event(), payload)
+}
+
+// parallel runs independent end-of-run steps and waits for all of them.
+func parallel(tasks ...func()) {
+	var wg sync.WaitGroup
+	wg.Add(len(tasks))
+	for _, task := range tasks {
+		go func() {
+			defer wg.Done()
+			task()
+		}()
+	}
+	wg.Wait()
 }
 
 // releaseRun drops the run's live registrations. The input queue is dropped,
@@ -2228,12 +2270,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	// Knowledge-base runs mark their sources/ subtree read-only for every
 	// tool call in this run; sub-agents inherit the policy via ctx.
 	ctx = withKBDenyRoots(ctx, kbDenyRootsForConfig(cfg))
-	// end records how this run finished (see runEnd). Interrupted runs
+	// end records how this run finished (see runOutcome). Interrupted runs
 	// (ESC/cancel, provider errors, stop reasons, step limits) fall through to
 	// the same checkpoint save, so work completed before the interruption
 	// survives into the next request.
 	var messages []openai.ChatCompletionMessage
-	end := runEnd{event: "run:error", kind: "error"}
+	end := runOutcome{kind: "error"}
 	startTime := time.Now()
 	// End-of-run plan check: planUnreportedWork is set by a batch that did work
 	// (a file mutation or a command) while the plan did not move, and cleared by
@@ -2265,7 +2307,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	defer func() {
 		if r := recover(); r != nil {
 			a.logAppError("runChat panicked", "runId", runID, "panic", fmt.Sprintf("%v", r), "stack", string(debug.Stack()))
-			end = runEnd{event: "run:error", kind: "error", message: fmt.Sprintf("agent 内部错误: %v", r)}
+			end = runOutcome{kind: "error", message: fmt.Sprintf("agent 内部错误: %v", r)}
 		}
 	}()
 
@@ -2273,7 +2315,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 
 	if cfg.ImageGeneration != nil && cfg.ImageGeneration.Enabled {
 		if err := a.persistRunImageAttachments(&req, runID); err != nil {
-			end = runEnd{event: "run:error", kind: "error", message: err.Error()}
+			end = runOutcome{kind: "error", message: err.Error()}
 			return
 		}
 	}
@@ -2284,7 +2326,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		if ctx.Err() != nil {
 			kind = "cancelled"
 		}
-		end = runEnd{event: "run:error", kind: kind, message: err.Error()}
+		end = runOutcome{kind: kind, message: err.Error()}
 		return
 	}
 	// This run sends the same immutable tool list on every step. Count it once
@@ -2324,7 +2366,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// 记录用户主动取消标记，让下一轮模型能区分"用户中断"与
 			// provider 报错等其他原因导致的未完成回合。
 			messages = append(messages, cancelledTurnMarker())
-			end = runEnd{event: "run:error", kind: "cancelled", message: "已取消"}
+			end = runOutcome{kind: "cancelled", message: "已取消"}
 			return
 		default:
 		} // Inject user messages queued while this run was working: they wait
@@ -2335,7 +2377,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		var inputErr error
 		messages, injected, inputErr = a.appendPendingRunInputs(runID, sessionID, cfg, messages)
 		if inputErr != nil {
-			end = runEnd{event: "run:error", kind: "error", message: inputErr.Error()}
+			end = runOutcome{kind: "error", message: inputErr.Error()}
 			return
 		}
 		if injected {
@@ -2455,7 +2497,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 			if errors.Is(err, context.Canceled) {
 				messages = append(messages, cancelledTurnMarker())
-				end = runEnd{event: "run:error", kind: "cancelled", message: "已取消"}
+				end = runOutcome{kind: "cancelled", message: "已取消"}
 				return
 			}
 			if isProvider400Error(err) && !sanitizedThisStep {
@@ -2490,7 +2532,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				requestTrigger = "overflow_recovery"
 				newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonOverflow, req, messages, usedTokens)
 				if compactErr != nil {
-					end = runEnd{event: "run:error", kind: "error", message: fmt.Sprintf("%v；上下文超出模型窗口且压缩失败(%v)，请删除部分历史或改用窗口更大的模型后重试", err, compactErr)}
+					end = runOutcome{kind: "error", message: fmt.Sprintf("%v；上下文超出模型窗口且压缩失败(%v)，请删除部分历史或改用窗口更大的模型后重试", err, compactErr)}
 					return
 				}
 				messages = newMessages
@@ -2506,7 +2548,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			if turnAttempt >= maxTurnRetries || !retryModelTurn(err, emittedEvents) {
 				// 上游模型服务的报错带来源标记，界面据此提示"这是服务方返回的错误"，
 				// 与 Ally 自身的报错区分开(见 upstreamError)。
-				end = runEnd{event: "run:error", kind: "error", message: err.Error()}
+				end = runOutcome{kind: "error", message: err.Error()}
 				if isUpstreamError(err) {
 					end.extra = map[string]any{"errorSource": upstreamErrorSource}
 				}
@@ -2522,7 +2564,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			})
 			if waitErr := a.waitLLMRetry(ctx, wait); waitErr != nil {
 				messages = append(messages, cancelledTurnMarker())
-				end = runEnd{event: "run:error", kind: "cancelled", message: "已取消"}
+				end = runOutcome{kind: "cancelled", message: "已取消"}
 				return
 			}
 		}
@@ -2555,7 +2597,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				})
 				a.recordContextAnchor(sessionID, messages, modelResp.Usage)
 			}
-			end = runEnd{event: "run:error", kind: "error", message: stopErr.Error(), extra: map[string]any{"stopReason": modelResp.StopReason}}
+			end = runOutcome{kind: "error", message: stopErr.Error(), extra: map[string]any{"stopReason": modelResp.StopReason}}
 			return
 		}
 		if len(toolCalls) == 0 {
@@ -2571,7 +2613,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			var inputErr error
 			messages, injected, inputErr = a.appendPendingRunInputs(runID, sessionID, cfg, messages)
 			if inputErr != nil {
-				end = runEnd{event: "run:error", kind: "error", message: inputErr.Error()}
+				end = runOutcome{kind: "error", message: inputErr.Error()}
 				return
 			}
 			if injected {
@@ -2590,7 +2632,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				}
 			}
 			// finishRun saves this history, then emits run:done.
-			end = runEnd{event: "run:done", kind: "done"}
+			end = runOutcome{kind: "done"}
 			return
 		}
 
@@ -2724,7 +2766,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			var inputErr error
 			messages, injected, inputErr = a.appendPendingRunInputs(runID, sessionID, cfg, messages)
 			if inputErr != nil {
-				end = runEnd{event: "run:error", kind: "error", message: inputErr.Error()}
+				end = runOutcome{kind: "error", message: inputErr.Error()}
 				return
 			}
 			if injected {
@@ -2732,11 +2774,11 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				continue
 			}
 			// finishRun saves this history, then emits run:done.
-			end = runEnd{event: "run:done", kind: "done"}
+			end = runOutcome{kind: "done"}
 			return
 		}
 	}
-	end = runEnd{event: "run:error", kind: "error", message: "达到最大 agent 步数，已停止"}
+	end = runOutcome{kind: "error", message: "达到最大 agent 步数，已停止"}
 	return
 }
 
