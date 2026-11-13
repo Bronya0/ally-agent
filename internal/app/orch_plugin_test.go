@@ -97,12 +97,13 @@ func TestValidateHTTPTargetAccessFallsBackForToolRequests(t *testing.T) {
 // 重定向后的目标也要复判白名单：首包放行 → 302 到别的主机是白名单最容易被绕的路。
 // 这里用一个只做跳转的本机服务钉住它（服务本身就是 127.0.0.1，命中声明）。
 func TestPluginHTTPRedirectTargetIsRechecked(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "http://not-declared.invalid/next", http.StatusFound)
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	_, err := app.doHTTPRequest(context.Background(), ConfigState{}, HTTPRequestToolRequest{
 		URL:          server.URL,
 		AllowedHosts: []string{"127.0.0.1"},

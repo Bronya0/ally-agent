@@ -20,6 +20,7 @@ import (
 )
 
 func TestRepeatedImageCallsDoNotCarryState(t *testing.T) {
+	t.Parallel()
 	for _, protocol := range []string{"openai-images", "xai-images"} {
 		for _, manual := range []bool{false, true} {
 			name := protocol + "/tool"
@@ -80,6 +81,7 @@ func TestRepeatedImageCallsDoNotCarryState(t *testing.T) {
 }
 
 func TestImageModelManualGenerationAndEditing(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedChatTestApp(t)
 	original := imageTestPNG(t)
 	var calls atomic.Int32
@@ -163,6 +165,7 @@ func TestImageModelManualGenerationAndEditing(t *testing.T) {
 }
 
 func TestImageModelManualValidationBeforeStorageOrBilling(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedChatTestApp(t)
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.WriteHeader(500) }))

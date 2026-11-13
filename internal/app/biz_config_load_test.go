@@ -400,6 +400,7 @@ func TestGitHubTokenSurvivesReloadAndMerge(t *testing.T) {
 // 两个写入方（局部保存的 saveConfig 与整份保存的 SaveConfig）共用 convergeLastUsedModel，
 // 只在一边清理就等于没清理。
 func TestSaveConfigConvergesDanglingLastUsedModel(t *testing.T) {
+	t.Parallel()
 	cases := map[string][]ModelConfig{
 		// 删掉那条模型
 		"deleted": {{ProviderName: "Relay", Model: "other"}},
@@ -408,7 +409,7 @@ func TestSaveConfigConvergesDanglingLastUsedModel(t *testing.T) {
 	}
 	for name, remaining := range cases {
 		t.Run(name, func(t *testing.T) {
-			app := NewApp()
+			app := newIsolatedTestApp(t)
 			app.initialized = true
 			path := filepath.Join(t.TempDir(), "config.json")
 			app.configPath = path

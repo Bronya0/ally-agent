@@ -146,6 +146,7 @@ func TestRemoteCommandDirectoryDoesNotPersist(t *testing.T) {
 }
 
 func TestRemoteServerOnlyFileValidationPrecedesConnection(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedToolTestApp(t)
 	_, err := a.remoteWriteRaw(context.Background(), remoteTarget{Host: "example.invalid"}, "relative.txt", []byte("data"), true, false)
 	if err == nil || !strings.Contains(err.Error(), "absolute") {

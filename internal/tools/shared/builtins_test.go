@@ -336,18 +336,18 @@ func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 	}{
 		{"read pads tailLines with 0", "read", `{"files":[{"path":"a.go","startLine":5,"endLine":20,"tailLines":0}]}`, false, "", ""},
 		{"edit accepts a single line", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"12","newText":"x"}]}`, false, "", ""},
-		{"remote_edit accepts a single line", "remote_edit", `{"target":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"lineRange":"12","newText":"x"}]}`, false, "", ""},
+		{"remote_edit accepts a single line", "remote_edit", `{"alias":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"lineRange":"12","newText":"x"}]}`, false, "", ""},
 		{"edit pads oldText with an empty string", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","oldText":""}]}`, false, "", ""},
 		{"edit pads lineRange with an empty string", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":""}]}`, false, "", ""},
 		{"edit pads lineRange with blanks", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":"  "}]}`, false, "", ""},
 		{"edit supplies both sources but a malformed range", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","lineRange":"abcdef","newText":"x"}]}`, true, "must match the pattern", ""},
 		{"edit replaces nothing", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"abcdef","newText":"x"}]}`, true, "must match the pattern", ""},
-		{"remote_edit pads oldText with an empty string", "remote_edit", `{"target":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","oldText":""}]}`, false, "", ""},
-		{"remote_edit pads lineRange with an empty string", "remote_edit", `{"target":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":""}]}`, false, "", ""},
+		{"remote_edit pads oldText with an empty string", "remote_edit", `{"alias":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","oldText":""}]}`, false, "", ""},
+		{"remote_edit pads lineRange with an empty string", "remote_edit", `{"alias":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":""}]}`, false, "", ""},
 		{"http_request pads body with an empty string", "http_request", `{"url":"https://example.test","body":"","json":{"a":1}}`, false, "", ""},
 		{"web_fetch pads format with an empty string", "web_fetch", `{"url":"https://example.test/","format":""}`, false, "", ""},
 		{"grep pads outputMode with an empty string", "grep", `{"pattern":"x","outputMode":""}`, false, "", ""},
-		{"remote_run_command pads shell with an empty string", "remote_run_command", `{"target":"t:/w","command":"ls","shell":""}`, false, "", ""},
+		{"remote_run_command pads shell with an empty string", "remote_run_command", `{"alias":"t:/w","command":"ls","shell":""}`, false, "", ""},
 		{"web_fetch rejects an unknown format", "web_fetch", `{"url":"https://example.test/","format":"markdown"}`, true, "must be one of", ""},
 		// The local delete takes paths only: a list of entries is the one way to name
 		// a target, and the gate refuses the path key outright.
@@ -356,10 +356,10 @@ func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 		{"delete refuses the path key", "delete", `{"path":"a.txt"}`, true, `unsupported parameter "path"`, ""},
 		{"delete refuses a call without paths", "delete", `{"recursive":true}`, true, `missing required parameter "paths"`, ""},
 		{"delete is above the path limit", "delete", tooManyPaths, true, fmt.Sprintf("at most %d items", DeletePathListLimit), ""},
-		{"remote_delete_path takes a path list", "remote_delete_path", `{"target":"t:/w","paths":["a.txt","b.txt"]}`, false, "", ""},
-		{"remote_delete_path pads recursive with null", "remote_delete_path", `{"target":"t:/w","paths":["a.txt"],"recursive":null}`, false, "", ""},
-		{"remote_delete_path refuses the path key", "remote_delete_path", `{"target":"t:/w","path":"a.txt"}`, true, `unsupported parameter "path"`, ""},
-		{"remote_delete_path refuses a call without paths", "remote_delete_path", `{"target":"t:/w"}`, true, `missing required parameter "paths"`, ""},
+		{"remote_delete_path takes a path list", "remote_delete_path", `{"alias":"t:/w","paths":["a.txt","b.txt"]}`, false, "", ""},
+		{"remote_delete_path pads recursive with null", "remote_delete_path", `{"alias":"t:/w","paths":["a.txt"],"recursive":null}`, false, "", ""},
+		{"remote_delete_path refuses the path key", "remote_delete_path", `{"alias":"t:/w","path":"a.txt"}`, true, `unsupported parameter "path"`, ""},
+		{"remote_delete_path refuses a call without paths", "remote_delete_path", `{"alias":"t:/w"}`, true, `missing required parameter "paths"`, ""},
 	}
 	for _, tc := range cases {
 		schema, _ := builtinSchemaForTest(t, tc.tool)

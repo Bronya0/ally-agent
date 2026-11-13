@@ -25,6 +25,7 @@ import (
 // the running card ("Creating"/"Editing") is visible during argument
 // streaming — not only after tool:result lands.
 func TestOpenAIChatStreamEmitsToolStartDuringStreaming(t *testing.T) {
+	t.Parallel()
 	const argsPayload = `{"path":"/tmp/demo.txt","content":"line1\nline2\nline3\n"}`
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +54,7 @@ func TestOpenAIChatStreamEmitsToolStartDuringStreaming(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewApp()
+	a := newIsolatedTestApp(t)
 	cfg := ConfigState{
 		APIFormat: apiFormatOpenAIChat,
 		BaseURL:   server.URL,

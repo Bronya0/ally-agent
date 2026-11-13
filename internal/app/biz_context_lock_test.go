@@ -32,7 +32,8 @@ func contextLockTools() []openai.Tool {
 // 追加放行、改历史消息报 tail（不定位到第几条）、改头部报 head、变短报 removed、
 // 换模型重开基线、工具清单变化算头部变化，而只改顶层请求参数的配置切换一概不算。
 func TestContextLockReportsDriftAndAcceptsAppends(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Model: "model-a", APIFormat: apiFormatOpenAIChat}
 	tools := contextLockTools()
 	messages := contextLockMessages()
@@ -100,7 +101,8 @@ func TestContextLockReportsDriftAndAcceptsAppends(t *testing.T) {
 // TestContextLockScopesByLane 锁定泳道隔离：另一条泳道的第一次请求不该被主对话的
 // 基线判成漂移（子代理/压缩的前缀本来就是另一份）。
 func TestContextLockScopesByLane(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Model: "model-a", APIFormat: apiFormatOpenAIChat}
 	messages := contextLockMessages()
 
@@ -131,7 +133,8 @@ func TestContextLockFramingStaysUnambiguous(t *testing.T) {
 // TestContextLockDropsBaselineOnHistoryRewrite 锁定与读缓存同生同灭：历史被改写后
 // 基线必须消失，下一次请求重新记基线，而不是把合法改写报成漂移。
 func TestContextLockDropsBaselineOnHistoryRewrite(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Model: "model-a", APIFormat: apiFormatOpenAIChat}
 	messages := contextLockMessages()
 
@@ -155,7 +158,8 @@ func TestContextLockDropsBaselineOnHistoryRewrite(t *testing.T) {
 // TestContextLockReportsDriftToFrontend 锁定漂移会同时报给前端：只提示、不拦请求，
 // 所以事件里带全定位信息，靠前端决定怎么显示（App.vue 的 context:drift）。
 func TestContextLockReportsDriftToFrontend(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	sink := &captureEventSink{}
 	app.events = sink
 	cfg := ConfigState{Model: "model-a", APIFormat: apiFormatOpenAIChat}

@@ -47,8 +47,9 @@ func encodedToolArgs(t *testing.T, v any) []byte {
 // create into .git/hooks runs on the next git command, and an edit of
 // .git/config can redirect hooks or the pager.
 func TestToolWritesRefuseVCSMetadata(t *testing.T) {
+	t.Parallel()
 	dir, cfg := protectedWorkspace(t)
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	ctx := t.Context()
 
 	res := app.executeTool(ctx, cfg, "s-1", "create", encodedToolArgs(t, CreateFileRequest{
@@ -104,8 +105,9 @@ func TestToolWritesRefuseVCSMetadata(t *testing.T) {
 // TestWorkspaceWritesNearVCSMetadataStayAllowed: the guard must not swallow
 // ordinary dot-directories that merely start with ".git".
 func TestWorkspaceWritesNearVCSMetadataStayAllowed(t *testing.T) {
+	t.Parallel()
 	dir, cfg := protectedWorkspace(t)
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 
 	res := app.executeTool(t.Context(), cfg, "s-1", "create", encodedToolArgs(t, CreateFileRequest{
 		Path:    ".github/workflows/build.yml",
@@ -125,11 +127,12 @@ func TestWorkspaceWritesNearVCSMetadataStayAllowed(t *testing.T) {
 // command. The write, delete, and command paths must all judge the resolved
 // path as well as the literal one.
 func TestSymlinkedVCSMetadataAliasIsRefused(t *testing.T) {
+	t.Parallel()
 	dir, cfg := protectedWorkspace(t)
 	if err := os.Symlink(".git", filepath.Join(dir, "gh")); err != nil {
 		t.Skipf("symlinks are unavailable on this host: %v", err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	ctx := t.Context()
 
 	res := app.executeTool(ctx, cfg, "s-1", "create", encodedToolArgs(t, CreateFileRequest{
@@ -196,6 +199,7 @@ func TestTildeWriteTargetsStayInsideTheFence(t *testing.T) {
 // create/delete resolved the real path, so a symlinked directory inside the
 // workspace carried the write to its target outside the workspace.
 func TestEditRefusesSymlinkedDirectoryEscape(t *testing.T) {
+	t.Parallel()
 	outside := t.TempDir()
 	target := filepath.Join(outside, "authorized_keys")
 	if err := os.WriteFile(target, []byte("original\n"), 0o600); err != nil {
@@ -205,7 +209,7 @@ func TestEditRefusesSymlinkedDirectoryEscape(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(ws, "link")); err != nil {
 		t.Skipf("symlinks are unavailable on this host: %v", err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: ws}
 
 	res := app.executeTool(t.Context(), cfg, "s-1", "edit", encodedToolArgs(t, FileTextEdits{
@@ -232,6 +236,7 @@ func TestEditRefusesSymlinkedDirectoryEscape(t *testing.T) {
 // os.ReadFile, so one read call on a huge "image" (only the first bytes have to
 // look like one) pulled the whole file into memory before discarding it.
 func TestReadOversizedImageDoesNotBufferTheFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "huge.png")
 	file, err := os.Create(path)
@@ -250,7 +255,7 @@ func TestReadOversizedImageDoesNotBufferTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := NewApp().readFileWithConfig(ConfigState{Workspace: dir}, ReadFileRequest{Path: "huge.png"})
+	result, err := newIsolatedTestApp(t).readFileWithConfig(ConfigState{Workspace: dir}, ReadFileRequest{Path: "huge.png"})
 	if err != nil {
 		t.Fatalf("readFileWithConfig() error = %v", err)
 	}

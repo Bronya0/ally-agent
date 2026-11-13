@@ -209,6 +209,7 @@ func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			script, err := buildRemoteScript(map[string]any{
 				"op":   "_check_protected",
 				"path": remoteFixturePath(root, tc.path),
@@ -314,6 +315,7 @@ func TestRemoteHelperStatOp(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			script, err := buildRemoteScript(map[string]any{
 				"op":   "stat",
 				"path": remoteFixturePath(root, tc.path),
@@ -359,6 +361,7 @@ func TestRemoteHelperStatErrors(t *testing.T) {
 		{"EACCES", false}, {"EIO", false}, {"ELOOP", false},
 	} {
 		t.Run(tc.errno, func(t *testing.T) {
+			t.Parallel()
 			script, err := buildRemoteScript(map[string]any{"op": "stat", "path": remoteFixturePath(root, "probe")})
 			if err != nil {
 				t.Fatal(err)
@@ -444,6 +447,7 @@ func TestRemoteHelperWriteDefaultPerm0644(t *testing.T) {
 // 写路径/删除路径共用 pathutil.VCSMetadataReason 一份规则，命令侧按远端 cwd 解析
 // 相对目标；动态目标（变量/命令替换）不猜，交给 helper 用远端事实判。
 func TestRemoteVCSMetadataGuards(t *testing.T) {
+	t.Parallel()
 	writable := []string{"src/main.go", ".gitignore", "docs/.github/workflows/ci.yml", "app/git/config"}
 	for _, p := range writable {
 		if err := remoteVCSMetadataWrite(p); err != nil {
@@ -975,6 +979,7 @@ func TestRemoteScriptHasCancelKill(t *testing.T) {
 // 现逐槽位独立填充，批量会话重构后曾退化为只认首个槽位。通过注入假
 // 会话函数避免真实 ssh，专测 Go 侧分派/回填逻辑。
 func TestRemoteReadFileDuplicatePathSlots(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedToolTestApp(t)
 	a.remoteReadBatchFn = func(ctx context.Context, rt remoteTarget, paths []string) ([]remoteReadBatchItem, []string, error) {
 		if len(paths) != 1 || paths[0] != "/srv/app/a.txt" {
@@ -989,7 +994,7 @@ func TestRemoteReadFileDuplicatePathSlots(t *testing.T) {
 		return []remoteReadBatchItem{it}, nil, nil
 	}
 	result, err := a.remoteReadFile(context.Background(), RemoteReadFileRequest{
-		Target: "user@host",
+		Alias: "user@host",
 		Files: []BatchReadFileRequest{
 			{Path: "/srv/app/a.txt"},
 			{Path: "/srv/app/a.txt", StartLine: 2, EndLine: 2},
@@ -1241,6 +1246,7 @@ func TestRemoteHelperDeleteBatchKeepsSymlinkTarget(t *testing.T) {
 // 路径（单文件走 remoteReadRawOne，没有注入点），而缓存比对在包装层，两条
 // 返回路径共用同一份实现。
 func TestRemoteReadReusesSessionCache(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedToolTestApp(t)
 	payload := []byte("l1\nl2\nl3\n")
 	a.remoteReadBatchFn = func(ctx context.Context, rt remoteTarget, paths []string) ([]remoteReadBatchItem, []string, error) {
@@ -1258,8 +1264,8 @@ func TestRemoteReadReusesSessionCache(t *testing.T) {
 	}
 	ctx := context.WithValue(context.Background(), sessionReadCacheContextKey{}, newSessionReadCache())
 	req := RemoteReadFileRequest{
-		Target: "user@host:/srv/app",
-		Files:  []BatchReadFileRequest{{Path: "a.txt"}, {Path: "b.txt"}},
+		Alias: "user@host:/srv/app",
+		Files: []BatchReadFileRequest{{Path: "a.txt"}, {Path: "b.txt"}},
 	}
 
 	first, err := a.remoteReadFileCached(ctx, req)
@@ -1299,8 +1305,8 @@ func TestRemoteReadReusesSessionCache(t *testing.T) {
 
 	// 区间不同 = 键不同：先重投，再读同一区间才命中。
 	rangeReq := RemoteReadFileRequest{
-		Target: "user@host:/srv/app",
-		Files:  []BatchReadFileRequest{{Path: "a.txt", StartLine: 2, EndLine: 2}, {Path: "b.txt", StartLine: 2, EndLine: 2}},
+		Alias: "user@host:/srv/app",
+		Files: []BatchReadFileRequest{{Path: "a.txt", StartLine: 2, EndLine: 2}, {Path: "b.txt", StartLine: 2, EndLine: 2}},
 	}
 	fourth, err := a.remoteReadFileCached(ctx, rangeReq)
 	if err != nil {

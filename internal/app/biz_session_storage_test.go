@@ -11,7 +11,8 @@ import (
 )
 
 func TestSessionStorageProjectsDiskWithoutChangingLiveHistoryOrReplay(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	block, err := aes.NewCipher(make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +60,7 @@ func TestSessionStorageProjectsDiskWithoutChangingLiveHistoryOrReplay(t *testing
 			t.Fatalf("old private payload survived: %s", secret)
 		}
 	}
-	b := newApiTestApp(t)
+	b := newIsolatedChatTestApp(t)
 	b.historiesDir, b.modelHistoryCodec = a.historiesDir, a.modelHistoryCodec
 	restored := b.loadSessionHistoryCopy(sid)
 	if len(restored) != 5 || !isFastCompactHistory(restored[0]) || restored[2].ToolCalls[0].ID != "call-5" {
@@ -72,7 +73,8 @@ func TestSessionStorageProjectsDiskWithoutChangingLiveHistoryOrReplay(t *testing
 }
 
 func TestSessionSnapshotStorageOnlyTrimsOldToolRows(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	a.modelHistoryCodec = nil
 	a.saveHistory("snapshot", fastCompactFixture())
 	snapshot := SessionSnapshot{ID: "snapshot", Draft: "unsent draft", Messages: []map[string]any{

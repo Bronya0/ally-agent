@@ -14,6 +14,7 @@ import (
 )
 
 func TestGeneratedImageOriginalFilenames(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedChatTestApp(t)
 	var jpg bytes.Buffer
 	if err := jpeg.Encode(&jpg, image.NewRGBA(image.Rect(0, 0, 3, 2)), nil); err != nil {
@@ -56,6 +57,7 @@ func TestGeneratedImageOriginalFilenames(t *testing.T) {
 }
 
 func TestGeneratedImageLegacyMigration(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"normal", "cancelled", "collision"} {
 		t.Run(mode, func(t *testing.T) {
 			a := newIsolatedChatTestApp(t)

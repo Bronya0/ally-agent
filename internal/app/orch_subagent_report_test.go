@@ -109,6 +109,7 @@ func subagentReportTool(name string) openai.Tool {
 // 本轮最大的那次请求全价击穿缓存）；工具调用一律不执行，只用一句提示再问；
 // 直到模型给出正文，或问满 maxForcedReportTurns 次。
 func TestForceSubagentFinalReportKeepsToolsAndRetriesDiscardedCalls(t *testing.T) {
+	t.Parallel()
 	workspace := t.TempDir()
 	harness := newSubagentReportHarness(t,
 		subagentToolCallReply("create", `{"path":"marker.txt","content":"x"}`),
@@ -116,7 +117,7 @@ func TestForceSubagentFinalReportKeepsToolsAndRetriesDiscardedCalls(t *testing.T
 		subagentTextReply("report: nothing was written"),
 	)
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	app.stats = nil
 	cfg := subagentReportBaseConfig(harness.server.URL, workspace)
 	tools := []openai.Tool{subagentReportTool("create")}
@@ -172,9 +173,10 @@ func TestForceSubagentFinalReportKeepsToolsAndRetriesDiscardedCalls(t *testing.T
 // TestForceSubagentFinalReportRetriesAnEmptyAnswer 钉住「空回答也不算报告」：
 // 没有工具调用但一个字都没写，同样再问一次，而不是把空摘要交给父代理。
 func TestForceSubagentFinalReportRetriesAnEmptyAnswer(t *testing.T) {
+	t.Parallel()
 	harness := newSubagentReportHarness(t, subagentTextReply(""), subagentTextReply("report: done"))
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	app.stats = nil
 	cfg := subagentReportBaseConfig(harness.server.URL, t.TempDir())
 	tools := []openai.Tool{subagentReportTool("read")}
@@ -199,6 +201,7 @@ func TestForceSubagentFinalReportRetriesAnEmptyAnswer(t *testing.T) {
 // TestForceSubagentFinalReportGivesUpAfterBoundedTurns 钉住次数上限：一直只调
 // 工具时最多问 maxForcedReportTurns 次，随后以专门错误收场，绝不无限重问。
 func TestForceSubagentFinalReportGivesUpAfterBoundedTurns(t *testing.T) {
+	t.Parallel()
 	harness := newSubagentReportHarness(t,
 		subagentToolCallReply("read", `{"files":[{"path":"a.txt"}]}`),
 		subagentToolCallReply("read", `{"files":[{"path":"a.txt"}]}`),
@@ -206,7 +209,7 @@ func TestForceSubagentFinalReportGivesUpAfterBoundedTurns(t *testing.T) {
 		subagentToolCallReply("read", `{"files":[{"path":"a.txt"}]}`),
 	)
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	app.stats = nil
 	cfg := subagentReportBaseConfig(harness.server.URL, t.TempDir())
 	tools := []openai.Tool{subagentReportTool("read")}
@@ -277,7 +280,8 @@ func TestSubagentBudgetExhaustionNeverRunsDiscardedToolCalls(t *testing.T) {
 // 子代理当下占多大上下文。上下文取最近一轮的 prompt tokens（服务商报的那个数），某一轮
 // 漏报时保留上一次的值，而不是掉回 0 让徽标消失。
 func TestRecordSubagentUsageKeepsTheLatestContext(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.stats = nil
 	workspace := t.TempDir()
 	run := &SubagentRun{ID: "sub-ctx"}
@@ -313,7 +317,8 @@ func TestRecordSubagentUsageKeepsTheLatestContext(t *testing.T) {
 // TestRecordSubagentUsageAccumulatesCacheSplit：卡片上的命中率来自服务商上报的缓存
 // 拆分，必须整轮累加——只留最后一轮会让命中率只反映最后一步，看着比实际好或差。
 func TestRecordSubagentUsageAccumulatesCacheSplit(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.stats = nil
 	workspace := t.TempDir()
 	run := &SubagentRun{ID: "sub-cache"}

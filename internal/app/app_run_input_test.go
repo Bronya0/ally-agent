@@ -16,7 +16,8 @@ import (
 )
 
 func TestInjectRunAttachments(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.runInputs["run"] = make(chan runInput, runInputBufferSize)
 	attachments := []AttachmentInput{
 		{Name: "note.txt", Kind: "text", Text: "attachment marker"},
@@ -42,21 +43,24 @@ func TestInjectRunAttachments(t *testing.T) {
 }
 
 func TestInjectRunMessageRequiresText(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	if err := app.InjectRunMessage("run-1", "   "); err == nil {
 		t.Fatal("InjectRunMessage(blank) error = nil, want error")
 	}
 }
 
 func TestInjectRunMessageUnknownRun(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	if err := app.InjectRunMessage("run-missing", "hello"); err == nil {
 		t.Fatal("InjectRunMessage(unknown run) error = nil, want error")
 	}
 }
 
 func TestInjectRunMessageQueueFull(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	runID := "run-full"
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -79,7 +83,8 @@ func TestInjectRunMessageQueueFull(t *testing.T) {
 }
 
 func TestInjectRunMessageAfterFinishRun(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	runID := "run-finished"
 	app.mu.Lock()
 	app.runInputs[runID] = make(chan runInput, 2)
@@ -92,7 +97,8 @@ func TestInjectRunMessageAfterFinishRun(t *testing.T) {
 }
 
 func TestAppendPendingRunInputsEmpty(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	runID := "run-empty"
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -116,7 +122,8 @@ func TestAppendPendingRunInputsEmpty(t *testing.T) {
 }
 
 func TestAppendPendingRunInputsOrder(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	runID := "run-order"
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -158,7 +165,8 @@ func TestAppendPendingRunInputsOrder(t *testing.T) {
 }
 
 func TestAppendPendingRunInputsAfterFinishRun(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	runID := "run-gone"
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()

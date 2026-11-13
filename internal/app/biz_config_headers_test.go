@@ -89,6 +89,7 @@ func TestMergeConfigCustomHeaders(t *testing.T) {
 // Authorization（网关自定义鉴权场景）。go-openai 客户端走 modelHTTPClient
 // 的 modelHeadersTransport，与生产路径一致。
 func TestModelRequestCarriesCustomHeaders(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var sawAuth, sawRelay, sawVersion bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +105,7 @@ func TestModelRequestCarriesCustomHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	result, err := app.streamModelResponse(
 		context.Background(),
@@ -175,7 +176,8 @@ func TestResponsesSSEStreamCarriesCustomHeaders(t *testing.T) {
 // TestSwitchModelExpandsCustomHeaders 验证"最近使用模型"展开时带上条目自定义头：
 // 顶层镜像不再是持久化字段，而是展开时算出来的。
 func TestSwitchModelExpandsCustomHeaders(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.configPath = t.TempDir() + "/config.json"
 	app.config = ConfigState{
@@ -204,6 +206,7 @@ func TestSwitchModelExpandsCustomHeaders(t *testing.T) {
 }
 
 func TestFetchModelListCarriesCustomHeaders(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var sawHeader bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -215,7 +218,7 @@ func TestFetchModelListCarriesCustomHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	models, err := app.FetchModelList(server.URL, "k", map[string]string{"X-Gate": "open"})
 	if err != nil {

@@ -181,6 +181,7 @@ func TestImageOriginalAndEditSurviveRestart(t *testing.T) {
 }
 
 func TestImageHistoryRecoversMissingSnapshotAttachments(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedChatTestApp(t)
 	stored, err := a.saveGeneratedImage(imageTestPNG(t), GeneratedImage{SessionID: "image-session"})
 	if err != nil {
@@ -196,7 +197,7 @@ func TestImageHistoryRecoversMissingSnapshotAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A fresh instance must recover from disk, not the in-memory history cache.
-	restarted := NewApp()
+	restarted := newIsolatedTestApp(t)
 	restarted.initialized = true
 	restarted.dataDir, restarted.sessionsDir, restarted.historiesDir = a.dataDir, a.sessionsDir, a.historiesDir
 	snapshot, err := restarted.LoadSession("image-session")
@@ -225,6 +226,7 @@ func TestImageHistoryRecoversMissingSnapshotAttachments(t *testing.T) {
 }
 
 func TestImageHistoryMovesLegacyAssistantImagesToTheirTools(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedChatTestApp(t)
 	const sessionID = "legacy-image-tools"
 	history := []openai.ChatCompletionMessage{}
@@ -262,6 +264,7 @@ func TestImageHistoryMovesLegacyAssistantImagesToTheirTools(t *testing.T) {
 }
 
 func TestImageUploadReferencesPreserveSources(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedChatTestApp(t)
 	data := imageTestPNG(t)
 	original := []AttachmentInput{{ID: "upload", Type: "image/png", DataURL: generatedImageDataURL(data, "image/png")}}
@@ -286,6 +289,7 @@ func TestImageUploadReferencesPreserveSources(t *testing.T) {
 }
 
 func TestDesktopPastedImageCanBeEdited(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedChatTestApp(t)
 	a.stats = nil
 	recorder := &compactRecorder{done: make(chan struct{})}

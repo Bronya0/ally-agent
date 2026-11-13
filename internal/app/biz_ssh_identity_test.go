@@ -87,7 +87,7 @@ func TestSSHIdentityLegacySelectionSurvivesRenameAndReload(t *testing.T) {
 	assertSelection(a, "ws1", node.ID)
 	assertSelection(a, "ws2", node.ID, other.ID)
 	// Migration must be durable without requiring a later edit or selection.
-	b := NewApp()
+	b := newAppState(a.AppDataDir())
 	b.configPath = a.configPath
 	if err := b.loadSSHClusters(); err != nil {
 		t.Fatal(err)

@@ -186,10 +186,11 @@ func TestSessionWorkspaceMapFrozenPerSession(t *testing.T) {
 }
 
 func TestBuildMessagesInjectsWorkspaceMapAsHiddenSystemContext(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeTestFile(t, root, "go.mod", "module example\n")
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 	messages := app.buildMessages(ChatRequest{SessionID: "s1", Message: "hello"}, cfg, nil)
 
@@ -213,7 +214,8 @@ func TestBuildMessagesInjectsWorkspaceMapAsHiddenSystemContext(t *testing.T) {
 }
 
 func TestSaveHistoryPreservesCompactToolActivityForLaterTurns(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	messages := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleSystem, Content: "system prompt"},
 		{Role: openai.ChatMessageRoleUser, Content: "项目里ally出现了几次"},

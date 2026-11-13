@@ -20,7 +20,11 @@ func TestExplorerSearchTreeAndReset(t *testing.T) {
 			root := t.TempDir()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			a := &desktop{explorer: true, fileRoot: workspaceKey(root), files: files, fileChildren: children, fileOpen: opened}
+			a := &desktop{explorer: true, fileRoot: workspaceKey(root), files: files, fileChildren: children}
+			for path := range opened {
+				a.fileOutline.Open.Add(path)
+			}
+			a.reindexFileTree()
 			a.filesF.Search = explorerSearch{Input: "one", Query: "one", Busy: true, Cancel: cancel, Note: "old"}
 			a.filesF.HelpOpen = true
 			epoch := a.fileEpoch
@@ -33,7 +37,7 @@ func TestExplorerSearchTreeAndReset(t *testing.T) {
 			case "clear":
 				a.searchFiles("")
 			}
-			if ctx.Err() == nil || a.fileEpoch <= epoch || a.filesF.Search.Input != "" || a.filesF.Search.Query != "" || a.filesF.Search.Busy || a.filesF.Search.Note != "" || len(a.files) != 0 || len(a.fileChildren) != 0 || len(a.fileOpen) != 0 {
+			if ctx.Err() == nil || a.fileEpoch <= epoch || a.filesF.Search.Input != "" || a.filesF.Search.Query != "" || a.filesF.Search.Busy || a.filesF.Search.Note != "" || len(a.files) != 0 || len(a.fileChildren) != 0 || a.fileOutline.Open.Len() != 0 {
 				t.Fatalf("search survived %s: %+v", action, a.filesF.Search)
 			}
 		})
@@ -42,6 +46,7 @@ func TestExplorerSearchTreeAndReset(t *testing.T) {
 
 func TestExplorerSearchTypingAndPanelReopen(t *testing.T) {
 	a := &desktop{explorer: true, prefs: defaultPrefs(), files: []backend.FileEntry{{Path: "normal.txt", Name: "normal.txt"}}}
+	a.reindexFileTree()
 	tt := ui.NewTester(func(c *ui.Context) {
 		if a.explorer {
 			a.fileTree(c)

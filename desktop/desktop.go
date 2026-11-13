@@ -162,7 +162,12 @@ type desktop struct {
 	pluginDelete                            *backend.PluginInfo
 	pluginDeleteOpen, pluginPurge           bool
 	pluginGroupOpen                         map[string]bool
-	fileOpen                                map[string]bool
+	fileOutline                             ui.OutlineState[string]
+	fileOutlineReady                        bool
+	fileFocus                               int
+	fileChoice                              string
+	fileChoiceRows                          int
+	fileIndex                               explorerIndex
 	fileRoot                                string
 	fileChildren                            map[string][]backend.FileEntry
 	fileLoading                             map[string]bool
@@ -267,7 +272,18 @@ type desktop struct {
 	sessRev            uint64
 	workspaceVisitsRev uint64
 	wsRootsMemo        memoOf[workspaceHistoryKey, []string]
-	wsSessionMemo      memoOf[workspaceSessionKey, workspaceSessionList]
+	wsSessionMemo      memoOf[workspaceSessionKey, []backend.SessionIndexEntry]
+	// The session rail draws the rows in view through a list, so their place
+	// survives sessions coming and going. Another workspace's sessions replace
+	// them as a whole, and the list starts afresh.
+	railList      ui.ListState
+	railListRoot  string
+	railListQuery string
+	// The rail's two sections filter in place. Each query lives here so it
+	// survives rebuilt rows, and the scan of the sessions runs once per query.
+	railWSSearch   railSearchState
+	railSessSearch railSearchState
+	railSessFilter memoOf[railSessionFilterKey, []backend.SessionIndexEntry]
 
 	// holdPlace asks the transcript list to keep its place for one layout: a
 	// fold clicked in a row changes its height, and following the end would

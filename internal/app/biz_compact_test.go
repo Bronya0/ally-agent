@@ -208,6 +208,7 @@ func TestCompactSessionConfigModelPrecedence(t *testing.T) {
 // at the (now deleted) micro-compaction tier, which rewrote the middle of the
 // history in place and broke the provider prompt cache from that point on.
 func TestCompactSessionManualAlwaysRunsTheSummaryTier(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, sseChatChunk("## 已完成工作\n- 压缩前的历史"))
@@ -216,7 +217,7 @@ func TestCompactSessionManualAlwaysRunsTheSummaryTier(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.stats = nil // skip token-stat persistence
 	app.config = defaultConfigState()
@@ -314,6 +315,7 @@ func TestLatestPlanSnapshot(t *testing.T) {
 // the history either — and overflow recovery must stay available while the
 // breaker is open, because that is what rearms it.
 func TestCompactRunHistoryBreakerStopsRepeatFailures(t *testing.T) {
+	t.Parallel()
 	var requests int32
 	var truncated atomic.Bool
 	truncated.Store(true)
@@ -331,7 +333,7 @@ func TestCompactRunHistoryBreakerStopsRepeatFailures(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.stats = nil // skip token-stat persistence
 	app.events = &compactEventRecorder{}

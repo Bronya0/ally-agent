@@ -36,7 +36,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	}()
 	if st.PendingPrompt {
 		if row := t.rowOfMessage(st.PendingPromptIdx); row >= 0 {
-			st.Follow, st.FollowPending = false, false
+			st.Follow, st.FollowPending, st.FollowBottom = false, false, 0
 			st.List.ScrollTo(row, ui.Start)
 			st.PendingPrompt = false
 		}
@@ -44,16 +44,35 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	a.chatSearchReveal(c, t)
 	// The reader scrolled up: the transcript stops following its end and keeps
 	// where it is. The input handler reports a wheel at once, as its step may
-	// arrive frames later; this catches the scroll bar and the keys too.
-	if t.Scroll.Y < 1e8 && t.Scroll.Y < st.LastScrollY-2 && t.Scroll.Y < t.Scroll.MaxY-2 {
-		st.Follow, st.FollowPending = false, false
+	// arrive frames later; this catches the scroll bar and the keys too. A
+	// layout that shrank above the reader lowers the offset just as well, so a
+	// place the content no longer reaches is not a scroll either.
+	shrank := st.LastScrollY > t.Scroll.MaxY+2
+	// AtEnd includes the list's follow animation. Layout corrections while it
+	// follows can lower Y even as new tool rows increase MaxY; that is not input.
+	if !shrank && !st.List.AtEnd() && t.Scroll.Y < 1e8 && t.Scroll.Y < st.LastScrollY-2 && t.Scroll.Y < t.Scroll.MaxY-2 {
+		st.Follow, st.FollowPending, st.FollowBottom = false, false, 0
 	}
+	// Following resumes once the reader comes back down to the newest message.
+	// The wheel reports its intent at once, before its offset moves; the scroll
+	// bar and the keys only show up as a position that moved down a frame
+	// later, so both count. The step is more than a pixel: a wheel's snap to the
+	// end leaves the offset read by the next build a fraction below where the
+	// last layout put it, and that must not count as coming back down.
+	scrolledDown := t.Scroll.Y < 1e8 && t.Scroll.Y > st.LastScrollY+1
 	if t.Scroll.Y < 1e8 {
 		st.LastScrollY = t.Scroll.Y
 	}
-	// Following resumes once a downward scroll reaches the newest message.
-	if st.FollowPending && t.Scroll.Y >= t.Scroll.MaxY-2 {
-		st.Follow, st.FollowPending = true, false
+	// The wheel asked for the end it saw; the scroll bar and the keys only
+	// show up as a position that moved down to the end there is now.
+	requested := st.FollowPending && st.FollowBottom > 0 && t.Scroll.Y >= min(st.FollowBottom, t.Scroll.MaxY)-2
+	if requested || (scrolledDown && t.Scroll.Y >= t.Scroll.MaxY-2) {
+		st.Follow, st.FollowPending, st.FollowBottom = true, false, 0
+		if requested && t.Scroll.Y < t.Scroll.MaxY-2 {
+			// The answer grew while the wheel glided: catch up with the end it
+			// has now, not only with the end the wheel was heading for.
+			st.List.ScrollToEnd()
+		}
 	}
 	st.List.FollowEnd = st.Follow
 	// A reply follows its end by gliding, as chat apps scroll their streams.
@@ -92,9 +111,11 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 				// A wheel's offset arrives frames after the notch, so the intent is
 				// kept here rather than read from where the list happens to be.
 				if ev.DY < 0 {
-					st.Follow, st.FollowPending = false, false
+					st.Follow, st.FollowPending, st.FollowBottom = false, false, 0
 				} else if !st.Follow {
-					st.FollowPending = true
+					// The end as it is now, not wherever it grows to before the
+					// wheel's glide arrives.
+					st.FollowPending, st.FollowBottom = true, t.Scroll.MaxY
 				}
 			}
 			return false

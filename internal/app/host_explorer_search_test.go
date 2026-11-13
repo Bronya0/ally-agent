@@ -12,13 +12,10 @@ import (
 )
 
 func TestExplorerFilenameSearch(t *testing.T) {
+	t.Parallel()
 	if _, err := grep.Find(); err != nil {
 		t.Skip("rg unavailable")
 	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("ALLY_DATA_DIR", t.TempDir())
 	root := t.TempDir()
 	files := []string{"nested/中文 Needle.go", ".hidden/needle.txt", "ignored/needle.json", "needle-dir/other.txt", "unrelated.txt", ".gitignore", "dist", "src/vendor-source/kept.txt"}
 	for _, dir := range grep.ExcludedDirs() {
@@ -38,7 +35,7 @@ func TestExplorerFilenameSearch(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	a := NewApp()
+	a := newIsolatedTestApp(t)
 	result, err := a.SearchExplorerFiles(context.Background(), root, "NEEDLE")
 	if err != nil || result.Truncated || len(result.Entries) != 3 {
 		t.Fatalf("search: %+v %v", result, err)

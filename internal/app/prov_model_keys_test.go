@@ -158,7 +158,8 @@ func TestShouldFailoverKey(t *testing.T) {
 // makes the next request fall through to the next key, and an expired cooldown
 // lets the primary key take over again.
 func TestKeyCooldownSelection(t *testing.T) {
-	a := NewApp()
+	t.Parallel()
+	a := newIsolatedTestApp(t)
 	keys := []string{"k1", "k2", "k3"}
 	cfg := ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: defaultBaseURL}
 
@@ -212,7 +213,8 @@ func TestKeyCooldownSelection(t *testing.T) {
 // TestKeyCooldownIsolation ensures cooldown state is scoped per endpoint, so
 // switching base URLs never leaks cooldown state.
 func TestKeyCooldownIsolation(t *testing.T) {
-	a := NewApp()
+	t.Parallel()
+	a := newIsolatedTestApp(t)
 	cfgA := ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: "https://a.example.com"}
 	cfgB := ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: "https://b.example.com"}
 	keys := []string{"k1", "k2"}
@@ -233,7 +235,8 @@ func TestKeyCooldownIsolation(t *testing.T) {
 // errors, so an endpoint-wide 5xx storm does not freeze the whole pool for a
 // minute.
 func TestKeyCooldownDurations(t *testing.T) {
-	a := NewApp()
+	t.Parallel()
+	a := newIsolatedTestApp(t)
 	cfg := ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: defaultBaseURL}
 
 	a.recordKeyFailure(cfg, "auth-bad", keyAuthCooldownDuration)

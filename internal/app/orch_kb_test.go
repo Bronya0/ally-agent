@@ -209,6 +209,7 @@ func TestKBConfigMergeAndClear(t *testing.T) {
 }
 
 func TestKBPromptPartInjection(t *testing.T) {
+	t.Parallel()
 	app := newIsolatedToolTestApp(t)
 	kbRoot := t.TempDir()
 	other := t.TempDir()

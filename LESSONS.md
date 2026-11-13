@@ -146,3 +146,6 @@
 2026-11-11 中危 stdlib log.Printf 不进 error-*.log（GUI 无 stderr），排障易误判有记录；诊断走 logAppError。@internal/app/infra_log.go
 2026-11-12 中危 preview-copy-size 待发图只有 256px 芯片，预览拿缓存尺寸判断清晰度就永不补解码；按源解码，别放大。@desktop/image_preview.go
 2026-11-13 中危 hold-place 折叠保持位置要量元素真实 Y，滚动偏移变化不代表内容移动；st.Follow 须同步置 false。@desktop/page_chat.go
+2026-11-13 中危 follow-resume 只认滚轮意图：拖滚动条不恢复，流式增长又让滚轮永远到不了新底部；按实际下移或滚轮当时看到的底部恢复并补滚。@desktop/page_chat.go
+2026-11-13 中危 outline-children Outline 每帧问所有可见行的 children，在里读盘会预读未展开的目录；按 Open 集合驱动。@desktop/page_explorer.go
+2026-11-13 中危 outline-style Outline 行自带上下边距、8px 左距和 accent 选中填充；自绘缩进与箭头并用面板色盖住，否则整棵树变样。@desktop/page_explorer.go

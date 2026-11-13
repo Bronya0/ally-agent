@@ -31,6 +31,7 @@ const sseDone = "data: [DONE]\n\n"
 // 返回 401,请求切换到第二个 key 成功;失败 key 进入冷却;retry 事件携带
 // key 序号与池大小;请求顺序为 bad-key → good-key。
 func TestStreamModelResponseMultiKeyFailover(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	order := []string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +50,7 @@ func TestStreamModelResponseMultiKeyFailover(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := newModelTestApp()
+	a := newModelTestApp(t)
 	cfg := ConfigState{
 		APIFormat: apiFormatOpenAIChat,
 		BaseURL:   server.URL,
@@ -92,6 +93,7 @@ func TestStreamModelResponseMultiKeyFailover(t *testing.T) {
 // TestStreamModelResponseMultiKeySkipsCoolingKey 验证已冷却的主 key 被跳过,
 // 请求直接使用下一个可用 key(不会重复命中失败 key)。
 func TestStreamModelResponseMultiKeySkipsCoolingKey(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	order := []string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +108,7 @@ func TestStreamModelResponseMultiKeySkipsCoolingKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := newModelTestApp()
+	a := newModelTestApp(t)
 	cfg := ConfigState{
 		APIFormat: apiFormatOpenAIChat,
 		BaseURL:   server.URL,
@@ -131,6 +133,7 @@ func TestStreamModelResponseMultiKeySkipsCoolingKey(t *testing.T) {
 // (回归:错误分类曾把限流 429 误判为配额失效,冷却 30 分钟内所有请求
 // 立刻失败,只能重启恢复)。
 func TestStreamModelResponseAllCoolingProbesAndSucceeds(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	order := []string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +148,7 @@ func TestStreamModelResponseAllCoolingProbesAndSucceeds(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := newModelTestApp()
+	a := newModelTestApp(t)
 	cfg := ConfigState{
 		APIFormat: apiFormatOpenAIChat,
 		BaseURL:   server.URL,
@@ -173,6 +176,7 @@ func TestStreamModelResponseAllCoolingProbesAndSucceeds(t *testing.T) {
 // 探测仍失败时,返回真实的服务端错误(而非泛化的 "all API keys are cooling
 // down"),且探测有界:每次调用只发一次请求。
 func TestStreamModelResponseAllCoolingProbeReturnsRealError(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -183,7 +187,7 @@ func TestStreamModelResponseAllCoolingProbeReturnsRealError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := newModelTestApp()
+	a := newModelTestApp(t)
 	cfg := ConfigState{
 		APIFormat: apiFormatOpenAIChat,
 		BaseURL:   server.URL,
@@ -214,6 +218,7 @@ func TestStreamModelResponseAllCoolingProbeReturnsRealError(t *testing.T) {
 // key(避免重复输出):第一个 key 发出一个 delta 后连接出错,请求直接失败,
 // 不会用第二个 key 重试。
 func TestStreamModelResponseNoSwitchAfterEmit(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	order := []string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +234,7 @@ func TestStreamModelResponseNoSwitchAfterEmit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := newModelTestApp()
+	a := newModelTestApp(t)
 	cfg := ConfigState{
 		APIFormat: apiFormatOpenAIChat,
 		BaseURL:   server.URL,
@@ -260,6 +265,7 @@ func TestStreamModelResponseNoSwitchAfterEmit(t *testing.T) {
 // TestStreamModelResponseSingleKeyNoFailover 验证单 key 路径完全不触发切换:
 // 401 直接失败,不发 retry 事件,请求只发生一次(与旧行为一致)。
 func TestStreamModelResponseSingleKeyNoFailover(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	order := []string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -271,7 +277,7 @@ func TestStreamModelResponseSingleKeyNoFailover(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := newModelTestApp()
+	a := newModelTestApp(t)
 	cfg := ConfigState{
 		APIFormat:  apiFormatOpenAIChat,
 		BaseURL:    server.URL,
@@ -306,6 +312,7 @@ func TestStreamModelResponseSingleKeyNoFailover(t *testing.T) {
 // declares the field — see reasoningEffortFamilies — because an endpoint rejects
 // an effort its model does not accept.
 func TestStreamOpenAIChatPreservesMaxReasoningEffort(t *testing.T) {
+	t.Parallel()
 	var request map[string]any
 	var decodeErr error
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -317,7 +324,7 @@ func TestStreamOpenAIChatPreservesMaxReasoningEffort(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := newModelTestApp()
+	a := newModelTestApp(t)
 	cfg := ConfigState{
 		APIFormat:       apiFormatOpenAIChat,
 		BaseURL:         server.URL,

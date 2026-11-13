@@ -8,7 +8,7 @@
 - UI 状态只在主线程修改。后台结果经 Window.Update 发布；不得保存 Element 或把 Context 带入后台。动态控件构造前使用 c.Key。
 - 不在视图渲染期间读写磁盘、执行网络请求或启动无条件后台任务。素材通过 resources 包嵌入。
 - 所有测试读写在 t.TempDir，读取用户目录的测试同时隔离 HOME 和 USERPROFILE。运行全套测试时不要设置全局 ALLY_DATA_DIR，测试自己管理它。
-- 构建：python scripts/build.py dev（本机 Windows exe / macOS app；双击 scripts/build.bat / build.command）；全平台交叉构建和 macOS DMG：在 macOS 上设置稳定版 BUILD_TAG 后运行 bash scripts/build-all.sh（如 BUILD_TAG=v1.28.0 bash scripts/build-all.sh）；测试：CGO_ENABLED=0 go test -p 1 ./...；UI 检查：go tool mygo vet .。
+- 构建：python scripts/build.py dev（本机 Windows exe / macOS app；双击 scripts/build.bat / build.command）；全平台交叉构建和 macOS DMG：在 macOS 上设置稳定版 BUILD_TAG 后运行 bash scripts/build-all.sh（如 BUILD_TAG=v1.28.0 bash scripts/build-all.sh）；测试：python scripts/test.py；UI 检查：go tool mygo vet .；界面规模与交互按需检查：python tests/explorer/run.py。
 - Windows 构建产物固定为 dist/ally-native.exe，不添加版本、日期或 fixed 等后缀；覆盖失败时处理文件占用，不得改名绕过。
 - migration/legacy-host 保留旧 Wails 专用实现/测试作为迁移参考，不参与构建。dist 和 .tmp 为生成及本地调试目录，不提交。
 - 提交作者使用 ally agent <ally@agent.dev>；本实现推送 mygo 分支，不修改 main。
@@ -53,7 +53,7 @@
 
 ## SSH
 
-- `remote_*` 的 `target` 只选择服务器；远端文件及传输路径使用绝对路径，不设远端项目工作区边界。命令每次在登录用户家目录启动独立 shell，按需写 `cd /绝对路径 && 命令`，不跨调用保存目录。旧 `host:/目录` 和 cwd 只兼容已有会话的路径解析，不恢复目录围栏。保留登记节点的本地工作区授权、独立删除/VCS 保护，以及传输的本地围栏与解包目标边界。
+- `remote_*` 的 `alias` 原样使用 `ssh_cluster` 返回的唯一昵称，只选择服务器；旧会话的 `target` 在工具入口兼容；远端文件及传输路径使用绝对路径，不设远端项目工作区边界。命令每次在登录用户家目录启动独立 shell，按需写 `cd /绝对路径 && 命令`，不跨调用保存目录。旧 `host:/目录` 和 cwd 只兼容已有会话的路径解析，不恢复目录围栏。保留登记节点的本地工作区授权、独立删除/VCS 保护，以及传输的本地围栏与解包目标边界。
 - 服务器支持本机免密、私钥文件、密码三种认证。认证模式决定凭据含义：私钥口令只解密私钥，不能回用为账号密码；切换到免密时不残留界面隐藏的密码/私钥字段。编辑、删除节点时清理相应凭据缓存。
 - 模型通过 `ssh_cluster` 获取授权节点摘要，再选择节点使用 `remote_*` 工具；摘要可以包含别名、地址、端口、用户名、用途描述、风险和状态，不包含密码、私钥内容或私钥路径。不要把 UI/持久化用的完整节点结构直接返回模型。
 - 提示词约定应覆盖：先 list 再选节点；列表中没有所需节点时提醒用户在底部添加/勾选授权，或走现有申请授权流程。授权按工作区保存，服务器用稳定 ID 识别，别名修改不能造成授权丢失或串到其他节点。
@@ -87,6 +87,7 @@
 - 每轮请求都经 `buildToolsForSession` → `cloneTools` 深拷贝工具清单，没有稳定缓存键；`schemautil.Map` 的返回值会被 responses 适配器写入 `strict`/`description`，因此不能返回共享的冻结清单。
 - `schemautil.deref` 的输入已是 `cloneMap` 的私有副本：无 `$ref` 时跳过 `resolveNode` 的二次重建，有 `$ref` 时必须重建并合并。
 - 可复用性能/内存套件在 `tests/performance/`，仅执行 `python tests/performance/run.py`，固定运行一套完整测试，无快速版、筛选或对照选项（详见其 README）；源码保留，生成物放 `.tmp/performance/`，不进入普通测试或应用构建。额外的一次性性能探针跑完仍删除。
+- 界面规模与交互的较重检查在 `tests/explorer/`，用 `python tests/explorer/run.py` 按需运行（`ally_explorer` build tag 加 overlay 挂到 desktop 包，不进入普通测试或应用构建）；断言分配次数与构建行数，耗时只记录不断言。
 
 ## 主流程回归入口
 
@@ -101,3 +102,4 @@
 ## 测试边界
 
 - 禁止为提示词、工具描述、界面文案编写“必须包含某句话”的断言测试：文案会持续改写，这类测试只会制造无意义红灯，同类的 `TestSystemPromptCarriesTheStandingRules`、`TestPromptExecutionEfficiency` 已删除。要守的是行为：提示词引用的工具名必须真实注册、子代理不宣传它拿不到的工具、截断后仍是合法 UTF-8、预算不超上限。
+- 严禁为文案、标题、展示字段、截断和简单样式调整等低影响 UI 改动新增复杂布局测试，包括 ui.NewTester 多状态/多窗口尺寸穷举、像素或坐标/宽度断言、截图探针及其生成脚本。此类改动采用最小必要检查，不得默认跑全套测试，也不得并行启动全套测试与 UI 检查造成资源争抢；只有用户明确要求此类测试时才例外。

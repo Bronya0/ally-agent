@@ -8,7 +8,8 @@ import (
 )
 
 func TestTruncateSessionHistoryBasic(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.historiesDir = t.TempDir()
 
@@ -50,7 +51,8 @@ func TestTruncateSessionHistoryBasic(t *testing.T) {
 }
 
 func TestTruncateSessionHistoryContentMismatch(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.historiesDir = t.TempDir()
 
@@ -72,7 +74,8 @@ func TestTruncateSessionHistoryContentMismatch(t *testing.T) {
 }
 
 func TestTruncateSessionHistoryBacksUpToolTurn(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.historiesDir = t.TempDir()
 
@@ -116,7 +119,8 @@ func TestTruncateSessionHistoryBacksUpToolTurn(t *testing.T) {
 // deleting "second question" also dropped the first question's whole round, and
 // emptied the history outright when that round was the first one.
 func TestTruncateSessionHistoryKeepsRoundBeforeAToolResult(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.historiesDir = t.TempDir()
 

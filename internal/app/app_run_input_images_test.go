@@ -187,6 +187,7 @@ func TestAppendPendingRunImagesUseRunConfigAndShareSources(t *testing.T) {
 }
 
 func TestAppendPendingRunImageSaveFailurePreservesInputs(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedChatTestApp(t)
 	// A regular file in place of the image directory deterministically fails saves.
 	if err := os.WriteFile(a.imagesDir(), []byte("not a directory"), 0600); err != nil {

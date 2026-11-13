@@ -12,7 +12,8 @@ import (
 )
 
 func TestBuildToolsForConfigHonorsDisabledTools(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: t.TempDir(), DisabledTools: []string{"wait", "calculate", "read"}}
 	tools := app.buildToolsForConfig(cfg)
 	names := map[string]bool{}
@@ -35,7 +36,8 @@ func TestBuildToolsForConfigHonorsDisabledTools(t *testing.T) {
 }
 
 func TestBuildToolsForSessionFreezesDisabledTools(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	off := ConfigState{Workspace: t.TempDir(), DisabledTools: []string{"wait"}}
 	on := ConfigState{Workspace: t.TempDir()}
 

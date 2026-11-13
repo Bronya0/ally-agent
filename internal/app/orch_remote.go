@@ -69,10 +69,38 @@ type remotePythonResponse struct {
 	Error string          `json:"error,omitempty"`
 }
 
+// normalizeRemoteArguments is the sole compatibility boundary for old tool calls.
+// New declarations expose only alias; old session snapshots may still send target.
+func normalizeRemoteArguments(name string, raw []byte) ([]byte, error) {
+	switch name {
+	case "remote_read", "remote_edit", "remote_create_file", "remote_delete_path", "remote_run_command", "remote_transfer":
+	default:
+		return raw, nil
+	}
+	var args map[string]json.RawMessage
+	if json.Unmarshal(raw, &args) != nil {
+		return raw, nil // The caller reports malformed JSON.
+	}
+	legacy, ok := args["target"]
+	if !ok {
+		return raw, nil
+	}
+	if alias, exists := args["alias"]; exists {
+		var current, previous string
+		if json.Unmarshal(alias, &current) != nil || json.Unmarshal(legacy, &previous) != nil || current != previous {
+			return nil, errors.New("alias and legacy target must not select different servers; pass alias only")
+		}
+	} else {
+		args["alias"] = legacy
+	}
+	delete(args, "target")
+	return json.Marshal(args)
+}
+
 func parseRemoteTarget(raw string) (remoteTarget, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return remoteTarget{}, errors.New("target is required")
+		return remoteTarget{}, errors.New("alias is required")
 	}
 	endpoint := raw
 	legacyRoot := ""
@@ -127,21 +155,23 @@ func parseRemoteTarget(raw string) (remoteTarget, error) {
 // In interactive agent sessions (sessionID != ""), it enforces Tab-level isolation
 // without per-operation confirmation prompts.
 func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (remoteTarget, error) {
-	rt, err := parseRemoteTarget(raw)
-	if err != nil {
-		return remoteTarget{}, err
+	// Nicknames are opaque values, not URLs: resolve them before parsing the
+	// legacy endpoint syntax so spaces, Chinese, and punctuation remain valid.
+	serverNode, isRegistered := a.GetSSHServer(raw)
+	rt := remoteTarget{Raw: raw}
+	if !isRegistered {
+		var err error
+		rt, err = parseRemoteTarget(raw)
+		if err != nil {
+			return remoteTarget{}, err
+		}
+		serverNode, isRegistered = a.GetSSHServer(rt.Host)
 	}
 
-	// 已登记节点有两种写法：别名，或真实端点（user@host[:port]）——用户给模型的
-	// 多半是后者。两者是同一个身份：认到节点就照它的人名/端口/凭据走，并沿用它的
-	// 工作区白名单；只认别名会让已授权、已存密码的节点换个写法又变成陌生主机。
-	serverKey := strings.ToLower(strings.TrimSpace(rt.Host))
-	serverNode, isRegistered := a.GetSSHServer(serverKey)
+	// Preserve endpoint matching for existing sessions and direct callers;
+	// registered endpoints still use the node's credentials and grants.
 	if !isRegistered {
 		serverNode, isRegistered = a.findSSHServerByEndpoint(rt.Host, rt.Port)
-		if isRegistered {
-			serverKey = strings.ToLower(strings.TrimSpace(serverNode.Alias))
-		}
 	}
 
 	// 本轮请求的工作区决定隔离范围：聊天、子代理和计划任务都会在执行入口
@@ -171,7 +201,7 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 	// in another workspace.
 	if isRegistered && workspace != "" && !a.IsServerAuthorizedForWorkspace(workspace, serverNode.ID) {
 		return remoteTarget{}, codedToolError("E_SERVER_UNAUTHORIZED",
-			fmt.Errorf("server %q is not authorized for current workspace tab; please authorize it in the workspace footer", serverKey))
+			fmt.Errorf("server %q is not authorized for current workspace tab; please authorize it in the workspace footer", serverNode.Alias))
 	}
 
 	// 工作区授权通过后将凭据绑定到本次解析结果，避免同端点节点互相覆盖。
@@ -574,8 +604,8 @@ func (a *App) remoteWriteRawExpected(ctx context.Context, rt remoteTarget, relPa
 }
 
 func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (BatchReadResult, error) {
-	if strings.TrimSpace(req.Target) == "" {
-		return BatchReadResult{}, errors.New("target is required")
+	if strings.TrimSpace(req.Alias) == "" {
+		return BatchReadResult{}, errors.New("alias is required")
 	}
 	fileRequests := req.Files
 	if len(fileRequests) == 0 && strings.TrimSpace(req.Path) != "" {
@@ -598,7 +628,7 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 			return BatchReadResult{}, err
 		}
 	}
-	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
+	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Alias)
 	if err != nil {
 		return BatchReadResult{}, err
 	}
@@ -776,14 +806,14 @@ func buildRemoteReadResultItem(rawFile remoteRawFile, f BatchReadFileRequest) (B
 // version, applies the whole batch in memory, and writes once, so the file is
 // either fully updated or untouched.
 func (a *App) remoteEdit(ctx context.Context, req RemoteEditRequest) (MultiEditResult, error) {
-	if strings.TrimSpace(req.Target) == "" {
-		return MultiEditResult{}, errors.New("target is required")
+	if strings.TrimSpace(req.Alias) == "" {
+		return MultiEditResult{}, errors.New("alias is required")
 	}
 	file := req.file()
 	if err := validateModelEditToolRequest([]FileTextEdits{file}); err != nil {
 		return MultiEditResult{}, err
 	}
-	rt, original, err := a.remoteReadRaw(ctx, req.Target, file.Path)
+	rt, original, err := a.remoteReadRaw(ctx, req.Alias, file.Path)
 	if err != nil {
 		return MultiEditResult{}, err
 	}
@@ -886,7 +916,7 @@ func (a *App) remoteStatPath(ctx context.Context, rt remoteTarget, relPath strin
 }
 
 func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest) (EditResult, error) {
-	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
+	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Alias)
 	if err != nil {
 		return EditResult{}, err
 	}
@@ -909,7 +939,7 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	beforeVersion := ""
 	// Best-effort read supplies the diff and version; stat determines existence.
 	if stat.Exists {
-		if _, existing, readErr := a.remoteReadRaw(ctx, req.Target, cleanPath); readErr == nil {
+		if _, existing, readErr := a.remoteReadRaw(ctx, req.Alias, cleanPath); readErr == nil {
 			before = existing.Data
 			beforeHash, beforeVersion = hashBytesAndVersion(existing.Data)
 		}
@@ -941,7 +971,7 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 // 执行阶段仍是逐条隔离：单条失败只写自己的结果槽；本来就不存在的路径报 absent
 // 槽（既不成功也不失败），同批其它路径照删。
 func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest) (DeletePathsResult, error) {
-	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
+	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Alias)
 	if err != nil {
 		return DeletePathsResult{}, err
 	}
@@ -966,7 +996,7 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 			}
 		}
 		clean = append(clean, cleanPath)
-		targets = append(targets, fileMutationTarget{remoteMutationKey(req.Target, cleanPath), cleanPath})
+		targets = append(targets, fileMutationTarget{remoteMutationKey(req.Alias, cleanPath), cleanPath})
 	}
 	// 重复与包含不再整批拒：只把代表项发给 helper（同一身份删一次），并按计划顺序送——
 	// 深的先删，父目录与它里面的路径同时列出时两条都能真删掉，而不是让结果取决于顺序。
@@ -1029,7 +1059,7 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 	if err := validateRemoteCommandSafety(req.Command); err != nil {
 		return CommandResult{}, err
 	}
-	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
+	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Alias)
 	if err != nil {
 		return CommandResult{}, err
 	}
@@ -1091,7 +1121,7 @@ const remoteTransferMarker = "ALLY_REMOTE_TRANSFER_JSON:"
 var remoteTransferPythonScript = strings.Replace(strings.Replace(remotePythonScript, "TRANSFER_MODE = False", "TRANSFER_MODE = True", 1), "__DELETE_SENSITIVE_TARGETS__", "[]", 1)
 
 type RemoteTransferRequest struct {
-	Target     string `json:"target"`
+	Alias      string `json:"alias"`
 	Action     string `json:"action"` // "upload" or "download"
 	LocalPath  string `json:"localPath"`
 	RemotePath string `json:"remotePath"`
@@ -1101,7 +1131,7 @@ type RemoteTransferRequest struct {
 type RemoteTransferResult struct {
 	OK         bool   `json:"ok"`
 	Action     string `json:"action"`
-	Target     string `json:"target"`
+	Alias      string `json:"alias"`
 	LocalPath  string `json:"localPath"`
 	RemotePath string `json:"remotePath"`
 	TotalBytes int64  `json:"totalBytes"`
@@ -1184,8 +1214,8 @@ func (a *App) executeRemoteTransfer(ctx context.Context, req RemoteTransferReque
 	if action != "upload" && action != "download" {
 		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", fmt.Errorf("action must be 'upload' or 'download', got %q", req.Action))
 	}
-	if strings.TrimSpace(req.Target) == "" {
-		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", errors.New("target is required"))
+	if strings.TrimSpace(req.Alias) == "" {
+		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", errors.New("alias is required"))
 	}
 	if strings.TrimSpace(req.LocalPath) == "" {
 		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", errors.New("localPath is required"))
@@ -1195,7 +1225,7 @@ func (a *App) executeRemoteTransfer(ctx context.Context, req RemoteTransferReque
 	}
 
 	// 1. Resolve target, workspace authorization and credentials
-	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
+	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Alias)
 	if err != nil {
 		return RemoteTransferResult{}, err
 	}
@@ -1294,7 +1324,7 @@ func (a *App) executeRemoteTransfer(ctx context.Context, req RemoteTransferReque
 	}
 
 	result.Action = action
-	result.Target = req.Target
+	result.Alias = req.Alias
 	result.LocalPath = localClean
 	result.RemotePath = cleanRemotePath
 	result.OK = true

@@ -806,6 +806,11 @@ func trackFileFromToolResult(name string, args string, result *toolResult, files
 	if result == nil || !result.OK {
 		return
 	}
+	raw, err := normalizeRemoteArguments(name, []byte(args))
+	if err != nil {
+		return
+	}
+	args = string(raw)
 	addPath := func(list *[]string, seen map[string]bool, p string) {
 		if p == "" || seen[p] {
 			return
@@ -816,7 +821,7 @@ func trackFileFromToolResult(name string, args string, result *toolResult, files
 	switch name {
 	case "read", "remote_read":
 		var target struct {
-			Target string `json:"target"`
+			Alias string `json:"alias"`
 		}
 		if name == "remote_read" {
 			_ = json.Unmarshal([]byte(args), &target)
@@ -826,8 +831,8 @@ func trackFileFromToolResult(name string, args string, result *toolResult, files
 			for _, file := range read.Files {
 				if file.Error == "" {
 					path := file.Path
-					if target.Target != "" {
-						path = target.Target + " :: " + path
+					if target.Alias != "" {
+						path = target.Alias + " :: " + path
 					}
 					addPath(filesRead, seenReads, path)
 				}
@@ -840,11 +845,11 @@ func trackFileFromToolResult(name string, args string, result *toolResult, files
 		}
 	case "remote_edit", "remote_create_file":
 		var req struct {
-			Target string `json:"target"`
-			Path   string `json:"path"`
+			Alias string `json:"alias"`
+			Path  string `json:"path"`
 		}
-		if json.Unmarshal([]byte(args), &req) == nil && req.Target != "" && req.Path != "" {
-			addPath(filesEdited, seenEdits, req.Target+" :: "+req.Path)
+		if json.Unmarshal([]byte(args), &req) == nil && req.Alias != "" && req.Path != "" {
+			addPath(filesEdited, seenEdits, req.Alias+" :: "+req.Path)
 		}
 	case "create", "replace_exact", "replace_lines":
 		var req struct {

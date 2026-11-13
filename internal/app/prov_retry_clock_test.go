@@ -12,8 +12,9 @@ import (
 
 // Model protocol tests exercise retries against local servers without spending
 // wall time on backoff. Delay calculation and the real timer remain tested.
-func newModelTestApp() *App {
-	a := NewApp()
+func newModelTestApp(t *testing.T) *App {
+	t.Helper()
+	a := newAppState(t.TempDir())
 	a.retryWait = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 	return a
 }

@@ -118,3 +118,36 @@ func TestChatScrollAfterStreamingGrowth(t *testing.T) {
 		})
 	}
 }
+
+// Reaching the newest message without the wheel, as a drag of the scroll bar
+// does, resumes following too: its offset moves with no event to report it.
+func TestChatScrollBarToBottomResumesFollow(t *testing.T) {
+	conv, tt := newChatScrollTester(t)
+	tt.Wheel(450, 200, 0, -240)
+	tt.Advance(300 * time.Millisecond)
+	if conv.uiState().Follow {
+		t.Fatal("scrolling up did not stop following")
+	}
+	conv.Scroll.Y = conv.Scroll.MaxY
+	tt.Frame()
+	if !conv.uiState().Follow || conv.Scroll.Y < conv.Scroll.MaxY-2 {
+		t.Fatalf("reaching the bottom did not resume following: y=%v max=%v", conv.Scroll.Y, conv.Scroll.MaxY)
+	}
+}
+
+// An answer that grows while the wheel glides back leaves the end it was
+// heading for above the newest content: the wheel still has to resume
+// following, and catch up with the end the answer has by then.
+func TestChatWheelBackResumesWhenTheAnswerGrew(t *testing.T) {
+	conv, tt := newChatScrollTester(t)
+	tt.Wheel(450, 200, 0, -240)
+	tt.Advance(300 * time.Millisecond)
+	tt.Wheel(450, 200, 0, 240)
+	last := conv.Messages[len(conv.Messages)-1]
+	last["content"] = str(last, "content") + strings.Repeat(" streamed words", 40)
+	tt.Frame()
+	tt.Advance(800 * time.Millisecond)
+	if !conv.uiState().Follow || conv.Scroll.Y < conv.Scroll.MaxY-2 {
+		t.Fatalf("coming back did not follow the grown answer: follow=%v y=%v max=%v", conv.uiState().Follow, conv.Scroll.Y, conv.Scroll.MaxY)
+	}
+}

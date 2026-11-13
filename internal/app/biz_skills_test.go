@@ -1000,6 +1000,7 @@ func TestSkillValidYAMLRetainsAliasesAndQuotedMultiline(t *testing.T) {
 // 带脚本的内置技能加载时必须报出数据目录里的真实路径：模型靠它 read 并运行
 // 脚本。只有 SKILL.md 的技能不报目录，免得模型拿到一个打不开的别名。
 func TestBuiltinSkillLoadDir(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedChatTestApp(t)
 	// 直接问内置清单：用户目录里装过同名技能时，ListSkills 会按 user > builtin
 	// 的优先级把内置那份藏掉，这个测试关心的不是优先级。

@@ -18,7 +18,7 @@ import (
 func TestToolExecutionRefreshesLiveExtraRoots(t *testing.T) {
 	isolateSandboxHome(t)
 	pinBoundaryOwnership(t, false)
-	a := NewApp()
+	a := newIsolatedTestApp(t)
 	workspace, extra := t.TempDir(), t.TempDir()
 	stale := ConfigState{Workspace: workspace}
 	target := filepath.Join(extra, "notes.txt")
@@ -61,7 +61,7 @@ func TestLiveExtraRootsReachTheFence(t *testing.T) {
 	pinBoundaryOwnership(t, false)
 	workspace := t.TempDir()
 	extra := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	if app.sessionExtraRoots == nil {
 		t.Fatal("NewApp must initialize sessionExtraRoots")
 	}
@@ -127,7 +127,8 @@ func TestNormalizeExtraRootsIsOneForm(t *testing.T) {
 
 // 空会话 id 不是合法上报目标：它会让记录落进一个谁也读不到的键。
 func TestSetSessionExtraRootsRequiresSessionID(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	if err := app.SetSessionExtraRoots("  ", []string{t.TempDir()}); err == nil {
 		t.Fatal("an empty session id must be refused")
 	}

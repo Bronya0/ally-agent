@@ -58,6 +58,7 @@ func TestNormalizeJSONBodyArg(t *testing.T) {
 }
 
 func TestExecuteToolHTTPRequestJSONBodyDoubleEncodedString(t *testing.T) {
+	t.Parallel()
 	var gotBody string
 	var gotContentType string
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +70,7 @@ func TestExecuteToolHTTPRequestJSONBodyDoubleEncodedString(t *testing.T) {
 	}))
 	defer target.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	// allowPrivateNetwork 是配置级开关，请求侧只能收紧不能放宽：把私网许可放在
 	// config 上，模型参数不再需要（也拿不到）这个字段。
 	args := fmt.Sprintf(`{"method":"POST","url":%q,"json":"{\"title\":\"x\",\"n\":1}"}`, target.URL+"/echo")
@@ -90,12 +91,13 @@ func TestExecuteToolHTTPRequestJSONBodyDoubleEncodedString(t *testing.T) {
 // key is dropped before the handler runs, so a request is decided by the
 // configured policy and never by what the model asked for.
 func TestHTTPRequestCannotWidenAllowPrivateNetwork(t *testing.T) {
+	t.Parallel()
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer target.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	args := fmt.Sprintf(`{"url":%q,"allowPrivateNetwork":true}`, target.URL)
 	result := app.executeTool(context.Background(), ConfigState{}, "session-1", "http_request", []byte(args))
 	if result.OK {
@@ -107,6 +109,7 @@ func TestHTTPRequestCannotWidenAllowPrivateNetwork(t *testing.T) {
 }
 
 func TestHTTPRequestJSONBodyRawBytesForwardedExactly(t *testing.T) {
+	t.Parallel()
 	var gotBody string
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -115,7 +118,7 @@ func TestHTTPRequestJSONBodyRawBytesForwardedExactly(t *testing.T) {
 	}))
 	defer target.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	req := HTTPRequestToolRequest{
 		Method: "POST",
 		URL:    target.URL + "/echo",
@@ -130,6 +133,7 @@ func TestHTTPRequestJSONBodyRawBytesForwardedExactly(t *testing.T) {
 }
 
 func TestHTTPRequestRedirectStripsSensitiveHeadersAcrossOrigins(t *testing.T) {
+	t.Parallel()
 	received := make(chan http.Header, 1)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received <- r.Header.Clone()
@@ -143,7 +147,7 @@ func TestHTTPRequestRedirectStripsSensitiveHeadersAcrossOrigins(t *testing.T) {
 	}))
 	defer source.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	_, err := app.httpRequestToolWithConfig(context.Background(), app.effectiveConfigSafe(), HTTPRequestToolRequest{
 		URL: source.URL + "/redirect",
 		Headers: map[string]string{
@@ -173,6 +177,7 @@ func TestHTTPRequestRedirectStripsSensitiveHeadersAcrossOrigins(t *testing.T) {
 }
 
 func TestHTTPRequestRedirectPreservesSensitiveHeadersOnSameOrigin(t *testing.T) {
+	t.Parallel()
 	received := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -188,7 +193,7 @@ func TestHTTPRequestRedirectPreservesSensitiveHeadersOnSameOrigin(t *testing.T) 
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	_, err := app.httpRequestToolWithConfig(context.Background(), app.effectiveConfigSafe(), HTTPRequestToolRequest{
 		URL: server.URL + "/redirect",
 		Headers: map[string]string{
@@ -210,13 +215,14 @@ func TestHTTPRequestRedirectPreservesSensitiveHeadersOnSameOrigin(t *testing.T) 
 }
 
 func TestHTTPRequestParsesJSONResponse(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_, _ = w.Write([]byte(`{"ok":true,"items":[1,2]}`))
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	got, err := app.httpRequestToolWithConfig(context.Background(), app.effectiveConfigSafe(), HTTPRequestToolRequest{
 		URL: server.URL,
 	})
@@ -298,7 +304,7 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("remote_edit schema properties missing: %#v", remoteParams)
 	}
-	for _, name := range []string{"target", "path", "version", "changes"} {
+	for _, name := range []string{"alias", "path", "version", "changes"} {
 		if _, exists := remoteProperties[name]; !exists {
 			t.Fatalf("remote_edit schema missing %s", name)
 		}
@@ -312,7 +318,7 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected remote_edit required type %T", remoteParams["required"])
 	}
-	wantRemoteRequired := map[string]bool{"target": true, "path": true, "version": true, "changes": true}
+	wantRemoteRequired := map[string]bool{"alias": true, "path": true, "version": true, "changes": true}
 	if len(remoteRequired) != len(wantRemoteRequired) {
 		t.Fatalf("unexpected remote_edit required fields: %#v", remoteRequired)
 	}
@@ -798,7 +804,8 @@ func TestAskAllowsOptionalRecommendation(t *testing.T) {
 }
 
 func TestContextBreakdownIncludesToolSchemas(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.config = ConfigState{}
 	normal := app.getContextBreakdown("session-1", "")
@@ -812,8 +819,9 @@ func TestContextBreakdownIncludesToolSchemas(t *testing.T) {
 // contains only the stable system prompt and workspace map, without transient plan snapshots
 // polluting the prefix and breaking KV cache.
 func TestContextBreakdownCountsPlanSnapshotAndFrozenMap(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.config = ConfigState{Workspace: root}
 
@@ -847,13 +855,14 @@ func TestContextBreakdownCountsPlanSnapshotAndFrozenMap(t *testing.T) {
 // resolution: a session whose index entry records workspace B must be counted
 // against B's AGENTS.md, not the active config workspace A.
 func TestContextBreakdownUsesSessionWorkspace(t *testing.T) {
+	t.Parallel()
 	workspaceA := t.TempDir()
 	workspaceB := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspaceB, "AGENTS.md"), []byte("Workspace B rule: count me.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.sessionsDir = t.TempDir()
 	app.config = ConfigState{Workspace: workspaceA}
@@ -1180,6 +1189,7 @@ func TestGrepFilesSearchResults(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			requireRipgrep(t)
 			root := t.TempDir()
 			for name, body := range tc.files {
@@ -1448,10 +1458,11 @@ func TestPlanBatchValidationMergesSharedUnits(t *testing.T) {
 }
 
 func TestExecuteToolEditValidationFollowsBatchPlan(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	original := []byte("{\"ok\":true}\n")
 	writeToolTestFile(t, root, "config.json", string(original))
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	enabled := true
 	cfg := ConfigState{Workspace: root, AutoValidationJSON: &enabled}
 	args, err := json.Marshal(FileTextEdits{
@@ -1499,6 +1510,7 @@ func TestExecuteToolEditValidationFollowsBatchPlan(t *testing.T) {
 }
 
 func TestEditAutoValidationReturnsFailureWithoutUndoingWrite(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	original := []byte("{\"ok\":true}\n")
 	writeToolTestFile(t, root, "config.json", string(original))
@@ -1511,7 +1523,7 @@ func TestEditAutoValidationReturnsFailureWithoutUndoingWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	enabled := true
 	result := app.executeTool(context.Background(), ConfigState{Workspace: root, AutoValidationJSON: &enabled}, "", "edit", payload)
 	if !result.OK {
@@ -1536,8 +1548,9 @@ func TestEditAutoValidationReturnsFailureWithoutUndoingWrite(t *testing.T) {
 }
 
 func TestCreateFileCreatesParentAutomatically(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 
 	result, err := app.createFileWithConfig(ConfigState{Workspace: root}, CreateFileRequest{
 		Path:    "nested/file.txt",
@@ -1559,8 +1572,9 @@ func TestCreateFileCreatesParentAutomatically(t *testing.T) {
 }
 
 func TestCreateFileReportsCreatedAndCreatedDirs(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 
 	// New file with missing parents: created=true, dirs reported outermost first.
@@ -1617,8 +1631,9 @@ func TestCreateFileReportsCreatedAndCreatedDirs(t *testing.T) {
 // TestCreateCompactResultCarriesCreatedFields verifies the model-facing
 // compact result keeps the new create fields.
 func TestCreateCompactResultCarriesCreatedFields(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 
 	result, err := app.createFileWithConfig(ConfigState{Workspace: root}, CreateFileRequest{
 		Path:    "a/b.txt",
@@ -1639,8 +1654,9 @@ func TestCreateCompactResultCarriesCreatedFields(t *testing.T) {
 }
 
 func TestCreateAutoValidationIsAConciseModelString(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	enabled := true
 	result := app.executeTool(context.Background(), ConfigState{Workspace: root, AutoValidationJSON: &enabled}, "", "create", []byte(`{"path":"bad.json","content":"{\"broken\":","overwrite":false}`))
 	if !result.OK {
@@ -1661,8 +1677,9 @@ func TestCreateAutoValidationIsAConciseModelString(t *testing.T) {
 }
 
 func TestCreateAutoValidationPassesJSON(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	enabled := true
 	result := app.executeTool(context.Background(), ConfigState{Workspace: root, AutoValidationJSON: &enabled}, "", "create", []byte(`{"path":"good.json","content":"{\"ok\":true}","overwrite":false}`))
 	if !result.OK {
@@ -1675,9 +1692,10 @@ func TestCreateAutoValidationPassesJSON(t *testing.T) {
 }
 
 func TestAutoValidationCanBeDisabledPerLanguage(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	disabled := false
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	result := app.executeTool(context.Background(), ConfigState{
 		Workspace:          root,
 		AutoValidationJSON: &disabled,
@@ -1733,12 +1751,6 @@ func TestAutoValidationChecksChangedFiles(t *testing.T) {
 		{name: "javascript syntax", needCmd: "node", toggle: "javascript",
 			files:    map[string]string{"broken.js": "const = 1;\n"},
 			wantFail: true, wantText: []string{"broken.js"}},
-		{name: "go vet", needCmd: "go", toggle: "go",
-			files: map[string]string{
-				"go.mod":  "module example.com/validation\n\ngo 1.23\n",
-				"main.go": "package main\n\nfunc main() { missing() }\n",
-			},
-			wantFail: true, wantText: []string{"Go vet"}},
 		{name: "java dependency errors are not our problem", needCmd: "javac", toggle: "java",
 			files: map[string]string{
 				"Dep.java": "import nonexistent.pkg.Thing;\n\npublic class Dep {\n    Thing t;\n}\n",
@@ -1853,13 +1865,14 @@ func TestValidationSkipReportMapsTimeoutAndCancel(t *testing.T) {
 }
 
 func TestCreateFileRefusesNonTextOverwrite(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	path := filepath.Join(root, "binary.dat")
 	original := []byte{'a', 0, 'b'}
 	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 
 	_, err := app.createFileWithConfig(ConfigState{Workspace: root}, CreateFileRequest{
 		Path:      "binary.dat",
@@ -1882,6 +1895,7 @@ func TestCreateFileRefusesNonTextOverwrite(t *testing.T) {
 }
 
 func TestDeletePathRemovesFinalSymlinkOnly(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges on many Windows environments")
 	}
@@ -1895,7 +1909,7 @@ func TestDeletePathRemovesFinalSymlinkOnly(t *testing.T) {
 	if err := os.Symlink(outsideFile, link); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 
 	result, err := app.deletePathsWithConfig(ConfigState{Workspace: root}, []string{"link.txt"}, false)
 	if err != nil {
@@ -1917,6 +1931,7 @@ func TestDeletePathRemovesFinalSymlinkOnly(t *testing.T) {
 }
 
 func TestCreateFileRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges on many Windows environments")
 	}
@@ -1925,7 +1940,7 @@ func TestCreateFileRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 
 	// 本用例断言围栏在位：判据归内核时越界由内核拒，见 orch_sandbox_test.go。
 	pinBoundaryOwnership(t, false)
@@ -1945,8 +1960,9 @@ func TestCreateFileRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
 }
 
 func TestRenamePathRenamesFileAndDirectory(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 	if _, err := app.createFileWithConfig(cfg, CreateFileRequest{Path: "docs/guide.md", Content: "hello\n"}); err != nil {
 		t.Fatal(err)
@@ -1981,8 +1997,9 @@ func TestRenamePathRenamesFileAndDirectory(t *testing.T) {
 }
 
 func TestRenamePathSameNameIsNoOp(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 	if _, err := app.createFileWithConfig(cfg, CreateFileRequest{Path: "a.txt", Content: "a\n"}); err != nil {
 		t.Fatal(err)
@@ -2003,8 +2020,9 @@ func TestRenamePathSameNameIsNoOp(t *testing.T) {
 // 只改大小写：Windows/macOS 上 Lstat 到的目标就是源文件本身，不能被“目标已存在”
 // 挡掉，否则文件名大小写永远改不了。
 func TestRenamePathChangesCaseOnly(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 	if _, err := app.createFileWithConfig(cfg, CreateFileRequest{Path: "notes.txt", Content: "x\n"}); err != nil {
 		t.Fatal(err)
@@ -2043,8 +2061,9 @@ func TestRenamePathChangesCaseOnly(t *testing.T) {
 }
 
 func TestRenamePathRefusesExistingTarget(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 	for _, name := range []string{"a.txt", "b.txt"} {
 		if _, err := app.createFileWithConfig(cfg, CreateFileRequest{Path: name, Content: name}); err != nil {
@@ -2068,8 +2087,9 @@ func TestRenamePathRefusesExistingTarget(t *testing.T) {
 }
 
 func TestRenamePathRejectsBadNamesAndTargets(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 	if _, err := app.createFileWithConfig(cfg, CreateFileRequest{Path: "a.txt", Content: "a\n"}); err != nil {
 		t.Fatal(err)
@@ -2113,6 +2133,7 @@ func TestRenamePathRejectsBadNamesAndTargets(t *testing.T) {
 }
 
 func TestRenamePathRenamesSymlinkItself(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges on many Windows environments")
 	}
@@ -2125,7 +2146,7 @@ func TestRenamePathRenamesSymlinkItself(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(root, "link.txt")); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 
 	renamed, err := app.renamePathWithConfig(ConfigState{Workspace: root}, RenamePathRequest{Path: "link.txt", NewName: "alias.txt"})
 	if err != nil {
@@ -2147,6 +2168,7 @@ func TestRenamePathRenamesSymlinkItself(t *testing.T) {
 }
 
 func TestRenamePathRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges on many Windows environments")
 	}
@@ -2158,7 +2180,7 @@ func TestRenamePathRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 
 	// 本用例断言围栏在位：判据归内核时越界由内核拒。
 	pinBoundaryOwnership(t, false)
@@ -2444,13 +2466,14 @@ func TestWebFetchModelContextKeepsDefaultSizedPage(t *testing.T) {
 }
 
 func TestWebFetchDefaultSourceLimitReadsPastLegacyHTTPCap(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = io.WriteString(w, "<html><body><script>"+strings.Repeat("x", 300*1024)+"</script><p>visible tail marker</p></body></html>")
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	got, err := app.webFetchToolWithConfig(context.Background(), ConfigState{AllowPrivateNetwork: boolPtr(true)}, WebFetchRequest{URL: server.URL, MaxChars: 1000})
 	if err != nil {
 		t.Fatal(err)
@@ -2541,6 +2564,7 @@ func TestRunCommandWithGitBashResolvesWindowsToolchainAndShellExpansion(t *testi
 }
 
 func TestRunCommandRejectsCwdSymlinkOutsideWorkspace(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges on many Windows environments")
 	}
@@ -2549,7 +2573,7 @@ func TestRunCommandRejectsCwdSymlinkOutsideWorkspace(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 
 	// 本用例断言围栏在位：判据归内核时越界 cwd 交给内核（可读即能跑）。
 	pinBoundaryOwnership(t, false)
@@ -2578,9 +2602,10 @@ func writeToolTestFile(t *testing.T, root, rel, content string) {
 }
 
 func TestSessionReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeToolTestFile(t, dir, "sample.txt", "one\ntwo\n")
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cache := newSessionReadCache()
 	ctx := context.WithValue(context.Background(), sessionReadCacheContextKey{}, cache)
 	args := []byte(`{"files":[{"path":"sample.txt"}]}`)
@@ -2702,7 +2727,8 @@ func TestSessionReadCacheEvictsEntriesUnderPressure(t *testing.T) {
 }
 
 func TestBatchReadMixedWithMissingFilesDoesNotCorruptCacheKeys(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	dir := t.TempDir()
 	app.config.Workspace = dir
 
@@ -2746,6 +2772,7 @@ func TestBatchReadMixedWithMissingFilesDoesNotCorruptCacheKeys(t *testing.T) {
 // coded E_DOCUMENT_UNSUPPORTED error that points at the anydoc skill instead
 // of being parsed (or failing as a generic binary file).
 func TestReadRejectsOfficeDocumentsWithAnydocGuidance(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// Content is irrelevant; the extension decides the rejection.
 	for _, name := range []string{"spec.docx", "deck.pptx", "book.xlsx", "scan.pdf"} {
@@ -2753,7 +2780,7 @@ func TestReadRejectsOfficeDocumentsWithAnydocGuidance(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 
 	result, err := app.batchReadFilesWithConfig(cfg, BatchReadRequest{
@@ -2781,11 +2808,12 @@ func TestReadRejectsOfficeDocumentsWithAnydocGuidance(t *testing.T) {
 }
 
 func TestBatchReadKeepsSamePathWithDifferentEffectiveRanges(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("one\ntwo\nthree\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 
 	result, err := app.batchReadFilesWithConfig(cfg, BatchReadRequest{
@@ -2879,13 +2907,14 @@ func TestReadPreviewBoundsVeryLongUnicodeLine(t *testing.T) {
 }
 
 func TestBatchReadSupportsNegativeTailRange(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	content := "one\ntwo\nthree\nfour\nfive"
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	result, err := app.batchReadFilesWithConfig(ConfigState{Workspace: dir}, BatchReadRequest{
 		Files: []BatchReadFileRequest{{Path: "sample.txt", StartLine: -2}},
 	})
@@ -2973,6 +3002,7 @@ func TestReadPreviewTruncatesLongLinesAndBoundsTruncatedLineMetadata(t *testing.
 }
 
 func TestBatchReadSilentlyFiltersMissingPathsAndDirectories(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "valid.txt"), []byte("ok\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -2983,7 +3013,7 @@ func TestBatchReadSilentlyFiltersMissingPathsAndDirectories(t *testing.T) {
 		}
 	}
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	result, err := app.batchReadFilesWithConfig(ConfigState{Workspace: dir}, BatchReadRequest{
 		Files: []BatchReadFileRequest{
 			{Path: "missing.txt"},
@@ -3010,12 +3040,13 @@ func TestBatchReadSilentlyFiltersMissingPathsAndDirectories(t *testing.T) {
 }
 
 func TestBatchReadKeepsMeaningfulReadErrors(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "binary.dat"), []byte{'a', 0, 'b'}, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	result, err := app.batchReadFilesWithConfig(ConfigState{Workspace: dir}, BatchReadRequest{
 		Files: []BatchReadFileRequest{{Path: "missing.txt"}, {Path: "binary.dat"}},
 	})
@@ -3028,12 +3059,13 @@ func TestBatchReadKeepsMeaningfulReadErrors(t *testing.T) {
 }
 
 func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\ngamma\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 
 	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(`{"path": "sample.txt", "version": "000000000000",
@@ -3056,12 +3088,13 @@ func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
 }
 
 func TestExecuteToolIgnoresUnknownArguments(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\ngamma\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 
 	// A stray key never reaches the handler, so the call runs and the key is
@@ -3107,12 +3140,13 @@ func TestExecuteToolIgnoresUnknownArguments(t *testing.T) {
 }
 
 func TestExecuteToolAppliesMultipleBatchTextChanges(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\ngamma\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 
 	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt",
@@ -3134,13 +3168,14 @@ func TestExecuteToolAppliesMultipleBatchTextChanges(t *testing.T) {
 }
 
 func TestExecuteToolAppliesOriginalSnapshotLineRangesWithoutOffsetDrift(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("one\ntwo\nthree\nfour\nfive\nsix\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"lineRange":"2","newText":"TWO\ninserted"},{"lineRange":"5-5","newText":"FIVE"}]}`, hashVersion(original))
-	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
+	result := newIsolatedTestApp(t).executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
 	if !result.OK {
 		t.Fatalf("line-range edit failed: %#v", result)
 	}
@@ -3157,6 +3192,7 @@ func TestExecuteToolAppliesOriginalSnapshotLineRangesWithoutOffsetDrift(t *testi
 // A change naming two sources, or pairing replaceAll with lineRange, is refused
 // before anything is written: the runtime must never pick a source silently.
 func TestExecuteToolRejectsChangeWithTwoSourcesOrReplaceAllBesideLineRange(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"two sources":                 `{"oldText":"alpha","lineRange":"2-2","newText":"ALPHA"}`,
 		"replaceAll beside lineRange": `{"lineRange":"2-2","newText":"ALPHA","replaceAll":true}`,
@@ -3169,7 +3205,7 @@ func TestExecuteToolRejectsChangeWithTwoSourcesOrReplaceAllBesideLineRange(t *te
 				t.Fatal(err)
 			}
 			args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[%s]}`, hashVersion(original), change)
-			result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
+			result := newIsolatedTestApp(t).executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
 			if result.OK {
 				t.Fatalf("the call must be refused, got %#v", result)
 			}
@@ -3192,6 +3228,7 @@ func TestExecuteToolRejectsChangeWithTwoSourcesOrReplaceAllBesideLineRange(t *te
 }
 
 func TestExecuteToolEditsParallelCallsPerFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	a, b := []byte("alpha\n"), []byte("beta\n")
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), a, 0o600); err != nil {
@@ -3205,7 +3242,7 @@ func TestExecuteToolEditsParallelCallsPerFile(t *testing.T) {
 		{Function: openai.FunctionCall{Name: "edit", Arguments: fmt.Sprintf(`{"path":"a.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]}`, hashVersion(a))}},
 		{Function: openai.FunctionCall{Name: "edit", Arguments: fmt.Sprintf(`{"path":"b.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}`, hashVersion(b))}},
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	for i, call := range calls {
 		result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(call.Function.Arguments))
 		if !result.OK {
@@ -3224,6 +3261,7 @@ func TestExecuteToolEditsParallelCallsPerFile(t *testing.T) {
 }
 
 func TestExecuteToolEditRollsBackEarlierFilesWhenCommitFails(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "sub")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
@@ -3265,7 +3303,7 @@ func TestExecuteToolEditRollsBackEarlierFilesWhenCommitFails(t *testing.T) {
 	// on the second file must roll the first file's committed write back.
 	// Model-facing calls always carry one file, so this enters through the
 	// executor directly with a multi-file plan.
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 	files := []FileTextEdits{
 		{Path: "a.txt", Version: hashVersion(a), Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}}},
@@ -3296,13 +3334,14 @@ func TestExecuteToolEditRollsBackEarlierFilesWhenCommitFails(t *testing.T) {
 }
 
 func TestExecuteToolEditRejectsLegacyNestedFilesForm(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\ngamma\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	version := hashVersion(original)
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 
 	// The flat single-file shape is the only accepted form; nested
@@ -3332,12 +3371,13 @@ func TestExecuteToolEditRejectsLegacyNestedFilesForm(t *testing.T) {
 }
 
 func TestExecuteToolRequiresVersionForEdit(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(`{"path": "sample.txt", "changes": [{"oldText": "beta", "newText": "BETA"}]}`))
 	if result.OK || !strings.Contains(result.Error, "version") {
 		t.Fatalf("expected the missing version to be named, got %#v", result)
@@ -3352,12 +3392,13 @@ func TestExecuteToolRequiresVersionForEdit(t *testing.T) {
 }
 
 func TestExecuteToolEditHandlesUniqueSingleLineSubstring(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte(`{"enabled":false,"name":"ally"}`)
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "config.json",
 		"version": %q,
 		"changes": [{"oldText": "false", "newText": "true"}]}`, hashVersion(original))))
@@ -3374,12 +3415,13 @@ func TestExecuteToolEditHandlesUniqueSingleLineSubstring(t *testing.T) {
 }
 
 func TestExecuteToolEditRejectsMultipleMatches(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("foo foo")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt",
 		"version": %q,
 		"changes": [{"oldText": "foo", "newText": "bar"}]}`, hashVersion(original))))
@@ -3407,12 +3449,13 @@ func TestExecuteToolEditRejectsMultipleMatches(t *testing.T) {
 }
 
 func TestExecuteToolEditReplacesAllMatchesWhenRequested(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("foo foo\nfoo\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt", "version": %q,
+	result := newIsolatedTestApp(t).executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt", "version": %q,
 		"changes": [{"oldText": "foo", "newText": "bar", "replaceAll": true}]}`, hashVersion(original))))
 	if !result.OK {
 		t.Fatalf("replaceAll edit failed: %#v", result)
@@ -3431,12 +3474,13 @@ func TestExecuteToolEditReplacesAllMatchesWhenRequested(t *testing.T) {
 }
 
 func TestExecuteToolEditRejectsOverlappingChangesInBatch(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("abcdef")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt",
 		"version": %q,
 		"changes": [
@@ -3924,6 +3968,7 @@ func TestDetectToolBatchConflictsDedupNormalized(t *testing.T) {
 // planLocalEditBatch is the single normalization boundary consumed by both
 // detectWriteBatchConflicts and the executor.
 func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
@@ -3959,7 +4004,7 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 		t.Fatalf("conflict detector and executor plan disagree: targets=%#v plan=%#v", targets, plan.Targets)
 	}
 
-	result := NewApp().executeTool(context.Background(), cfg, "session-1", "edit", args)
+	result := newIsolatedTestApp(t).executeTool(context.Background(), cfg, "session-1", "edit", args)
 	if !result.OK {
 		t.Fatalf("shared edit plan execution failed: %#v", result)
 	}
@@ -3973,12 +4018,13 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 }
 
 func TestExecuteToolEditRejectsTruncatedArguments(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\ngamma\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 	version := strings.ToUpper(hashVersion(original))
 
@@ -4031,7 +4077,8 @@ func TestPrepareToolCallsForExecutionRewritesInvalidJSONToMarker(t *testing.T) {
 }
 
 func TestExecuteToolEditDoesNotMislabelSchemaErrorAsTruncation(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "edit", []byte(
 		`{"path":"sample.txt","version":"abc123","changes":[{"oldString":"alpha","newString":"ALPHA"}]}`,
 	))

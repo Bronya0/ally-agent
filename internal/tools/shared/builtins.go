@@ -347,62 +347,62 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("remote_read", "Read one or more text files by absolute path on a remote SSH server (same contract as read: bounded line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). Prefer targeted startLine/endLine ranges or tailLines for logs; follow the startLine continuation hint when truncated. Pass needed files in the files array to read in parallel.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target": sshTargetSchema(),
-				"files":  batchReadFilesSchema("Absolute remote file path, e.g. /srv/app/main.go."),
+				"alias": sshAliasSchema(),
+				"files": batchReadFilesSchema("Absolute remote file path, e.g. /srv/app/main.go."),
 			},
-			"required": []string{"target", "files"},
+			"required": []string{"alias", "files"},
 		}),
-		functionTool("remote_edit", "Edit one file by absolute path on a remote SSH server, using the same changes contract as edit: prefer short exact unique oldText, use lineRange only immediately after reading that range, and put all changes to one file in one call. Send parallel calls for multiple files. target selects only the SSH server (e.g. dev); path is absolute (e.g. /srv/app/main.go). Use the current version from remote_read or the preceding successful remote_edit; never guess it. changes must be a JSON array, not a quoted string. Writes preserve the source encoding and recheck its full hash on the host before committing. Each remote file commits independently; re-read on conflicts.", map[string]any{
+		functionTool("remote_edit", "Edit one file by absolute path on a remote SSH server, using the same changes contract as edit: prefer short exact unique oldText, use lineRange only immediately after reading that range, and put all changes to one file in one call. Send parallel calls for multiple files. alias selects only the SSH server (e.g. dev); path is absolute (e.g. /srv/app/main.go). Use the current version from remote_read or the preceding successful remote_edit; never guess it. changes must be a JSON array, not a quoted string. Writes preserve the source encoding and recheck its full hash on the host before committing. Each remote file commits independently; re-read on conflicts.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":  sshTargetSchema(),
+				"alias":   sshAliasSchema(),
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute remote path of the single file to edit, e.g. /srv/app/main.go."},
 				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required current 6-char version from the latest remote_read or preceding successful remote_edit; never guess it. Use the new version returned after every successful edit."},
 				"changes": editChangesSchema("remote_read"),
 			},
-			"required": []string{"target", "path", "version", "changes"},
+			"required": []string{"alias", "path", "version", "changes"},
 		}),
 		functionTool("remote_create_file", "Create a UTF-8 file and missing parents by absolute path on a remote SSH server. Directories are refused.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":    sshTargetSchema(),
+				"alias":     sshAliasSchema(),
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute remote path of the file to create, e.g. /srv/app/config.json."},
 				"content":   map[string]any{"type": "string", "description": "Full UTF-8 text of the new file (may be empty), written as-is."},
 				"overwrite": map[string]any{"type": "boolean", "description": "Set true to replace an existing file. No additional confirmation is shown."},
 			},
-			"required": []string{"target", "path", "content"},
+			"required": []string{"alias", "path", "content"},
 		}),
 		functionTool("remote_delete_path", "Delete one or more absolute file or directory paths on a remote SSH server. Refuses filesystem roots, VCS metadata, and the protected system locations listed below; directories require recursive=true. Strictly prohibited from deleting filesystem roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs). Use remote deletion cautiously; it is destructive. Prefer this over remote_run_command deletion."+deleteBatchNote(), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":    sshTargetSchema(),
+				"alias":     sshAliasSchema(),
 				"paths":     deletePathsSchema("Absolute remote path to delete, e.g. /srv/app/build."),
 				"recursive": map[string]any{"type": "boolean", "description": "Required for deleting directories; applies to every path in the call. System level 1/2 directories are always blocked."},
 			},
-			"required": []string{"target", "paths"},
+			"required": []string{"alias", "paths"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH server. Each call starts a fresh shell in the remote login user's home directory; use cd /absolute/path && command when needed. A cd does not persist between calls. Use remote_delete_path for unmanaged deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. There is no remote workspace directory boundary. Writes to VCS metadata remain blocked. A timeout kills the process group. Output keeps its real head and tail. A full log path is returned when the preview is reduced; inspect it with remote_read on the same target, or filter it with a read-only remote command. Partial logs are explicitly marked; never rerun side effects merely to recover output.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH server. Each call starts a fresh shell in the remote login user's home directory; use cd /absolute/path && command when needed. A cd does not persist between calls. Use remote_delete_path for unmanaged deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. There is no remote workspace directory boundary. Writes to VCS metadata remain blocked. A timeout kills the process group. Output keeps its real head and tail. A full log path is returned when the preview is reduced; inspect it with remote_read on the same alias, or filter it with a read-only remote command. Partial logs are explicitly marked; never rerun side effects merely to recover output.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":  sshTargetSchema(),
+				"alias":   sshAliasSchema(),
 				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run on the remote host."},
 				"shell":   map[string]any{"type": "string", "enum": []string{"/bin/bash", "/bin/sh", "/usr/bin/bash", "/usr/bin/sh", "/bin/zsh", "/usr/bin/zsh", ""}, "description": "Optional absolute path of the remote shell; an empty string means the helper chooses one itself. Omit to let the remote helper choose one (bash, then sh; cmd.exe on Windows)."},
 				"timeout": commandTimeoutSchema(),
 			},
-			"required": []string{"target", "command"},
+			"required": []string{"alias", "command"},
 		}),
 		functionTool("remote_transfer", "Transfer files or directories between the local workspace and absolute paths on a remote SSH server using bounded-memory binary streaming. The local workspace fence and archive extraction boundary are enforced; .git is protected. File modes, permissions, and directory structure are preserved.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":     sshTargetSchema(),
+				"alias":      sshAliasSchema(),
 				"action":     map[string]any{"type": "string", "enum": []string{"upload", "download"}, "description": "Transfer direction: 'upload' (local to remote) or 'download' (remote to local)."},
 				"localPath":  map[string]any{"type": "string", "minLength": 1, "description": "Workspace-relative local file or directory path."},
 				"remotePath": map[string]any{"type": "string", "minLength": 1, "description": "Absolute remote destination or source file/directory path, e.g. /srv/app/dist."},
 				"overwrite":  map[string]any{"type": "boolean", "description": "Allow overwriting an existing destination file or directory without an additional confirmation prompt."},
 			},
-			"required": []string{"target", "action", "localPath", "remotePath"},
+			"required": []string{"alias", "action", "localPath", "remotePath"},
 		}),
-		functionTool("ssh_cluster", "List SSH servers authorized for the current workspace. Add servers in the SSH cluster manager and authorize them in the workspace footer.", map[string]any{
+		functionTool("ssh_cluster", "List SSH servers authorized for the current workspace. For every remote_* call, pass the chosen server's alias unchanged in the alias parameter. Add servers in the SSH cluster manager and authorize them in the workspace footer.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action": map[string]any{"type": "string", "enum": []string{"list"}, "description": "List authorized servers."},
@@ -521,10 +521,10 @@ var builtinToolExamples = map[string]string{
 	"command":            `{"command":"go test ./...","cwd":".","timeout":120}`,
 	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm run dev","cwd":"frontend"}; restart: {"action":"restart","id":"svc_..."}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
 	"ask":                `{"questions":[{"question":"Which database should we use?","options":[{"label":"SQLite","description":"Simple local storage.","recommended":true},{"label":"PostgreSQL","description":"Production database."}]}]}`,
-	"remote_read":        `{"target":"my-dev","files":[{"path":"/srv/app/main.go"}]}`,
-	"remote_edit":        `{"target":"my-dev","path":"/srv/app/main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
-	"remote_run_command": `{"target":"my-dev","command":"cd /srv/app && go test ./..."}`,
-	"remote_transfer":    `upload: {"target":"my-dev","action":"upload","localPath":"dist","remotePath":"/srv/app/public","overwrite":true}; download: {"target":"my-dev","action":"download","remotePath":"/var/log/app","localPath":"debug_logs"}`,
+	"remote_read":        `{"alias":"my-dev","files":[{"path":"/srv/app/main.go"}]}`,
+	"remote_edit":        `{"alias":"my-dev","path":"/srv/app/main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
+	"remote_run_command": `{"alias":"my-dev","command":"cd /srv/app && go test ./..."}`,
+	"remote_transfer":    `upload: {"alias":"my-dev","action":"upload","localPath":"dist","remotePath":"/srv/app/public","overwrite":true}; download: {"alias":"my-dev","action":"download","remotePath":"/var/log/app","localPath":"debug_logs"}`,
 	"ssh_cluster":        `{"action":"list"}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue"}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","tailLines":200}]}`,
@@ -596,10 +596,10 @@ func batchReadFilesSchema(pathDescription string) map[string]any {
 // effective value (strings.TrimSpace(change.LineRange) != "", tools/edit/apply.go).
 const editLineRangeOptionalPattern = `^(?:\s*|[1-9][0-9]*(?:-[1-9][0-9]*)?)$`
 
-// sshTargetSchema selects only the server. Remote file paths are separate
+// sshAliasSchema selects only the server. Remote file paths are separate
 // absolute paths; commands choose their directory explicitly with cd.
-func sshTargetSchema() map[string]any {
-	return map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "SSH server alias from ssh_cluster (e.g. my-dev), or an explicit endpoint [user@]host[:port] / ssh://user@host:port. Do not append a directory; file paths are separate absolute paths."}
+func sshAliasSchema() map[string]any {
+	return map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Required on every call: copy the chosen server's alias exactly from ssh_cluster (e.g. my-dev). No server selection is inherited from previous calls. Do not construct it from host, username, or port. Do not append a directory; file paths are separate absolute paths."}
 }
 
 // commandTimeoutSchema bounds the shell tools' timeout (command,

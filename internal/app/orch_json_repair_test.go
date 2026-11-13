@@ -97,7 +97,8 @@ func TestRepairToolArgJSONLeavesPlainStringsAlone(t *testing.T) {
 }
 
 func TestExecuteToolReadRepairsStringEncodedFiles(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("alpha\nbeta\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -118,7 +119,8 @@ func TestExecuteToolReadRepairsStringEncodedFiles(t *testing.T) {
 }
 
 func TestExecuteToolEditRepairsNestedStringEncodedChanges(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("alpha\nbeta\n"), 0o600); err != nil {
 		t.Fatal(err)

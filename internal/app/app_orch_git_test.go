@@ -77,7 +77,7 @@ func TestComputeMultiRepoGitStatusEmptyOrNonRepo(t *testing.T) {
 // A worktree container can also be a detached worktree itself. Its ignored
 // branch directories must remain browsable and independently selectable in Git.
 func TestGitParentRepoIncludesIgnoredLinkedWorktrees(t *testing.T) {
-	redirectAppStateDir(t)
+	t.Parallel()
 	root := t.TempDir()
 	write := func(path, text string) {
 		t.Helper()
@@ -100,7 +100,7 @@ func TestGitParentRepoIncludesIgnoredLinkedWorktrees(t *testing.T) {
 		write(filepath.Join(root, branch, "tracked.txt"), "after "+branch+"\n")
 	}
 	write(filepath.Join(root, "parent-local.txt"), "parent change\n")
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	status := computeGitStatusWithContext(ctx, root, app.discoverGitRepos)

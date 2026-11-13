@@ -21,6 +21,7 @@ import (
 )
 
 func TestFastCompactLeavesLessThanHalf(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		before, after int
 		want          bool
@@ -46,7 +47,8 @@ func fastCompactFixture() []openai.ChatCompletionMessage {
 }
 
 func TestFastCompactPreservesTaskAndBodies(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	a.modelHistoryCodec = nil
 	history := fastCompactFixture()
 	const sid = "fast"
@@ -96,7 +98,8 @@ func TestFastCompactPreservesTaskAndBodies(t *testing.T) {
 }
 
 func TestFastCompactTaskProvenanceSurvivesInjectedInputsAndRestart(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	a.modelHistoryCodec = nil
 	const sid = "task"
 	previous := fastCompactFixture()[:20]
@@ -115,7 +118,7 @@ func TestFastCompactTaskProvenanceSurvivesInjectedInputsAndRestart(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := newApiTestApp(t)
+	b := newIsolatedChatTestApp(t)
 	b.modelHistoryCodec = nil
 	if err := json.Unmarshal(raw, &disk); err != nil {
 		t.Fatal(err)
@@ -147,7 +150,8 @@ func TestFastCompactTaskProvenanceSurvivesInjectedInputsAndRestart(t *testing.T)
 }
 
 func TestFastCompactDoesNotCutSingleTaskOrImageInputs(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	history := []openai.ChatCompletionMessage{{Role: "user", Content: "one task"}}
 	for i := 0; i < 12; i++ {
 		call := openai.ToolCall{ID: fmt.Sprint(i), Type: "function", Function: openai.FunctionCall{Name: "read", Arguments: `{}`}}
@@ -164,7 +168,8 @@ func TestFastCompactDoesNotCutSingleTaskOrImageInputs(t *testing.T) {
 }
 
 func TestFastCompactDoesNotGrowPlainHistory(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	history := []openai.ChatCompletionMessage{
 		{Role: "user", Content: "hi"}, {Role: "assistant", Content: "hello"},
 		{Role: "user", Content: "next"}, {Role: "assistant", Content: "ok"},
@@ -177,7 +182,8 @@ func TestFastCompactDoesNotGrowPlainHistory(t *testing.T) {
 }
 
 func TestFastCompactDropsOpaqueOldReasoningWithoutVisibleSummary(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	a.modelHistoryCodec = nil
 	history := []openai.ChatCompletionMessage{{Role: "user", Content: "first"}, {Role: "assistant", Content: "done"}, {Role: "user", Content: "next"}, {Role: "assistant", Content: "ok"}}
 	cfg := ConfigState{Model: "m", APIFormat: apiFormatOpenAIResponses, responsesPromptCacheKey: openAIResponsesPromptCacheKey("opaque")}
@@ -197,7 +203,8 @@ func TestFastCompactDropsOpaqueOldReasoningWithoutVisibleSummary(t *testing.T) {
 }
 
 func TestFastCompactPreservesLatestPlanAndRepeatedCallRecords(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	a.modelHistoryCodec = nil
 	const plan = "// plan | revision=2\n\n[ ] finish verification"
 	history := []openai.ChatCompletionMessage{
@@ -224,7 +231,8 @@ func TestFastCompactPreservesLatestPlanAndRepeatedCallRecords(t *testing.T) {
 }
 
 func TestFastCompactRetainsOnlyTaskReplayAcrossProtocols(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	a.modelHistoryCodec = nil
 	history := fastCompactFixture()
 	const sid = "replay"
@@ -256,7 +264,8 @@ func TestFastCompactRetainsOnlyTaskReplayAcrossProtocols(t *testing.T) {
 }
 
 func TestFastCompactMetadataAndProtectedRestart(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	block, err := aes.NewCipher(make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +319,8 @@ func TestFastCompactMetadataAndProtectedRestart(t *testing.T) {
 }
 
 func TestAutoCompactRecentPreservesCurrentReportsAndFrozenPrefix(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	a.modelHistoryCodec = nil
 	const sid = "auto"
 	history := fastCompactFixture()
@@ -339,7 +349,8 @@ func TestAutoCompactRecentPreservesCurrentReportsAndFrozenPrefix(t *testing.T) {
 }
 
 func TestFastCompactRequestAdaptersKeepOnlyCurrentProtocolCalls(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	a.modelHistoryCodec = nil
 	history := fastCompactFixture()
 	a.saveHistory("wire", history)
@@ -426,8 +437,9 @@ func TestFastCompactRequestAdaptersKeepOnlyCurrentProtocolCalls(t *testing.T) {
 }
 
 func TestFastCompactDeletionAddressesOriginalQuestions(t *testing.T) {
+	t.Parallel()
 	for _, byContent := range []bool{false, true} {
-		a := newApiTestApp(t)
+		a := newIsolatedChatTestApp(t)
 		a.modelHistoryCodec = nil
 		history := fastCompactFixture()
 		history[8].Content = "用户要求包含引号\"以及\n换行"
@@ -450,7 +462,8 @@ func TestFastCompactDeletionAddressesOriginalQuestions(t *testing.T) {
 }
 
 func TestAutoCompactRejectsCandidateWithoutMutatingOriginal(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	a.modelHistoryCodec = nil
 	a.stats = nil
 	history := fastCompactFixture()[:4]
@@ -490,7 +503,7 @@ func TestAutoCompactRejectsCandidateWithoutMutatingOriginal(t *testing.T) {
 
 func TestFastCompactGuardsAndCancellation(t *testing.T) {
 	t.Parallel()
-	a := newApiTestApp(t)
+	a := newIsolatedChatTestApp(t)
 	a.runSessions["run"] = "running"
 	if _, err := a.FastCompactSession("running"); !errors.Is(err, errSessionRunning) {
 		t.Fatalf("active run error: %v", err)
@@ -518,7 +531,7 @@ func TestFastCompactGuardsAndCancellation(t *testing.T) {
 
 func TestAutoCompactMethodConfigDefaultsAndPersistence(t *testing.T) {
 	t.Parallel()
-	a := newApiTestApp(t)
+	a := newIsolatedChatTestApp(t)
 	if a.config.AutoCompactMethod != autoCompactMethodRecent {
 		t.Fatal("default must be local trimming")
 	}
@@ -565,7 +578,7 @@ func TestAutoCompactMethodConfigDefaultsAndPersistence(t *testing.T) {
 
 func TestAutoCompactRecentFallbackFailureCircuit(t *testing.T) {
 	t.Parallel()
-	a := newApiTestApp(t)
+	a := newIsolatedChatTestApp(t)
 	a.modelHistoryCodec = nil
 	a.stats = nil
 	var requests atomic.Int32
@@ -599,7 +612,7 @@ func TestAutoCompactRecentFallbackFailureCircuit(t *testing.T) {
 
 func TestAutoCompactRecentOverflowStillUsesSummary(t *testing.T) {
 	t.Parallel()
-	a := newApiTestApp(t)
+	a := newIsolatedChatTestApp(t)
 	a.stats = nil
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

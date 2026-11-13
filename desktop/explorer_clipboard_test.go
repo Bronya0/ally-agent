@@ -20,10 +20,18 @@ func TestExplorerCopyFileClipboard(t *testing.T) {
 			"folder": {{Name: "中文 file.txt", Path: "folder/中文 file.txt"}},
 		},
 	}
+	a.reindexFileTree()
 	tt := ui.NewTester(func(c *ui.Context) { ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() { a.fileTree(c) }) }, 300, 500)
+	tt.Frame()
+	// The pointer rests on the row before the click, as it does for a user.
+	if folder, ok := tt.Find("folder"); ok {
+		tt.Move(folder.X+folder.W/2, folder.Y+folder.H/2)
+		tt.Frame()
+	}
 	if err := tt.Click("folder"); err != nil {
 		t.Fatal(err)
 	}
+	tt.Frame()
 	tt.Key(0, ui.KeyDown)
 	tt.Key(ui.Cmd, ui.KeyC)
 	want := filepath.Join(root, "folder", "中文 file.txt")
@@ -85,6 +93,7 @@ func TestExplorerPasteFileDestinations(t *testing.T) {
 				core: core, tabs: []*conversation{{Workspace: root}},
 				files: []backend.FileEntry{{Name: "target", Path: "target", Dir: true}},
 			}
+			a.reindexFileTree()
 			tt := ui.NewTester(func(c *ui.Context) { ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() { a.fileTree(c) }) }, 300, 500)
 			data, err := transfer.FileData(source, directory)
 			if err != nil {
@@ -111,11 +120,11 @@ func TestExplorerPasteFileDestinations(t *testing.T) {
 				tt.Key(ui.Cmd, ui.KeyV)
 			case "folder-keyboard":
 				target = "target"
-				// Keyboard navigation focuses the folder without starting a read.
+				// The arrows move the tree's row onto the folder without reading it.
 				tt.ClickAt(100, 400)
-				tt.Key(0, ui.KeyTab)
-				if !tt.Focused("target") {
-					t.Fatal("folder did not receive focus")
+				tt.Key(0, ui.KeyDown)
+				if a.fileChosenPath() != "target" {
+					t.Fatal("the folder did not receive the keyboard")
 				}
 				tt.Key(ui.Cmd, ui.KeyV)
 			}

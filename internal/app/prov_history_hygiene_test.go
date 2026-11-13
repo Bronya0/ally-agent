@@ -263,7 +263,8 @@ func TestIsCrossModelSwitch(t *testing.T) {
 }
 
 func TestStripSessionReasoning(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.config.Workspace = t.TempDir()
 	sessionID := "test-session-strip"
 
@@ -315,6 +316,7 @@ func TestStripSessionReasoning(t *testing.T) {
 // keeps it off the network (a real endpoint would make it slow and dependent on
 // this machine's connectivity).
 func TestStartChatCrossModelSwitchStripsReasoning(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var bodies []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -330,7 +332,7 @@ func TestStartChatCrossModelSwitchStripsReasoning(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	ws := t.TempDir()
 	app.config.Workspace = ws
 	app.initialized = true

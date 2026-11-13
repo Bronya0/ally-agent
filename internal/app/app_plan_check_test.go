@@ -63,7 +63,7 @@ func (s *planCheckServer) requestBody(round int) string {
 // two-step plan already in place, and waits for the terminal event.
 func runPlanCheckSession(t *testing.T, baseURL, sessionID, workspace string) (*App, *compactRecorder) {
 	t.Helper()
-	app := NewApp()
+	app := newModelTestApp(t)
 	app.initialized = true // skip the disk bootstrap
 	app.stats = nil        // skip token-stat persistence
 	recorder := &compactRecorder{done: make(chan struct{})}
@@ -100,6 +100,7 @@ func runPlanCheckSession(t *testing.T, baseURL, sessionID, workspace string) (*A
 // plan check rests on: work is a file mutation or a command, and everything that
 // only reads leaves the plan where it is.
 func TestToolDidPlanWorkClassifiesByName(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{
 		"edit", "Create", "delete",
 		"remote_edit", "remote_create_file", "remote_delete_path",
@@ -120,7 +121,8 @@ func TestToolDidPlanWorkClassifiesByName(t *testing.T) {
 // still claims unfinished work, and stays silent for an empty plan and one whose
 // every step is done — both have nothing to reconcile.
 func TestPlanCheckMarkerSpeaksOnlyWhenThePlanLags(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newModelTestApp(t)
 	if _, ok := app.planCheckMarker("s-1"); ok {
 		t.Fatal("an empty plan has nothing to reconcile")
 	}
@@ -151,6 +153,7 @@ func TestPlanCheckMarkerSpeaksOnlyWhenThePlanLags(t *testing.T) {
 // and never reports where the plan got to. One host message, once per run, asks
 // for the report — the model is the only party that knows which steps it passed.
 func TestRunChatAsksForAPlanReportWhenWorkOutranThePlan(t *testing.T) {
+	t.Parallel()
 	server := &planCheckServer{}
 	server.script = func(round int, request string) string {
 		switch round {
@@ -216,6 +219,7 @@ func TestRunChatAsksForAPlanReportWhenWorkOutranThePlan(t *testing.T) {
 // question has nothing the plan could be behind, so it must not pay a round for
 // the check.
 func TestRunChatSkipsThePlanCheckWhenTheRunDidNoWork(t *testing.T) {
+	t.Parallel()
 	server := &planCheckServer{}
 	server.script = func(round int, request string) string {
 		if strings.Contains(request, "ally-plan-check") {
@@ -242,6 +246,7 @@ func TestRunChatSkipsThePlanCheckWhenTheRunDidNoWork(t *testing.T) {
 // progress and does work in the same response has already answered the question,
 // so the run must end without the extra round.
 func TestRunChatSkipsThePlanCheckWhenTheBatchMovedThePlan(t *testing.T) {
+	t.Parallel()
 	server := &planCheckServer{}
 	server.script = func(round int, request string) string {
 		if strings.Contains(request, "ally-plan-check") {

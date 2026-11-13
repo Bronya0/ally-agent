@@ -321,7 +321,7 @@ func TestRemoteTransferExecuteValidation(t *testing.T) {
 	// 1. Invalid action
 	_, err := a.executeRemoteTransfer(ctx, RemoteTransferRequest{
 		Action:     "sync",
-		Target:     "user@remote.example.com:/srv/app",
+		Alias:      "user@remote.example.com:/srv/app",
 		LocalPath:  "local.txt",
 		RemotePath: "remote.txt",
 	})
@@ -332,7 +332,7 @@ func TestRemoteTransferExecuteValidation(t *testing.T) {
 	// 2. Missing target
 	_, err = a.executeRemoteTransfer(ctx, RemoteTransferRequest{
 		Action:     "upload",
-		Target:     "",
+		Alias:      "",
 		LocalPath:  "local.txt",
 		RemotePath: "remote.txt",
 	})
@@ -343,7 +343,7 @@ func TestRemoteTransferExecuteValidation(t *testing.T) {
 	// 3. New server-only targets require an absolute remote path
 	_, err = a.executeRemoteTransfer(ctx, RemoteTransferRequest{
 		Action:     "upload",
-		Target:     "user@remote.example.com",
+		Alias:      "user@remote.example.com",
 		LocalPath:  "local.txt",
 		RemotePath: "relative.txt",
 	})
@@ -354,7 +354,7 @@ func TestRemoteTransferExecuteValidation(t *testing.T) {
 	// 4. Remote path targeting filesystem root directly
 	_, err = a.executeRemoteTransfer(ctx, RemoteTransferRequest{
 		Action:     "upload",
-		Target:     "user@remote.example.com",
+		Alias:      "user@remote.example.com",
 		LocalPath:  "local.txt",
 		RemotePath: "/",
 	})
@@ -365,7 +365,7 @@ func TestRemoteTransferExecuteValidation(t *testing.T) {
 	// 5. Remote path VCS metadata
 	_, err = a.executeRemoteTransfer(ctx, RemoteTransferRequest{
 		Action:     "upload",
-		Target:     "user@remote.example.com:/srv/app",
+		Alias:      "user@remote.example.com:/srv/app",
 		LocalPath:  "local.txt",
 		RemotePath: ".git/hooks/post-commit",
 	})
@@ -376,7 +376,7 @@ func TestRemoteTransferExecuteValidation(t *testing.T) {
 	// 6. Local path escapes local workspace
 	_, err = a.executeRemoteTransfer(ctx, RemoteTransferRequest{
 		Action:     "upload",
-		Target:     "user@remote.example.com:/srv/app",
+		Alias:      "user@remote.example.com:/srv/app",
 		LocalPath:  "../../outside.txt",
 		RemotePath: "dest.txt",
 	})
@@ -387,7 +387,7 @@ func TestRemoteTransferExecuteValidation(t *testing.T) {
 	// 7. Local path targeting workspace root directly
 	_, err = a.executeRemoteTransfer(ctx, RemoteTransferRequest{
 		Action:     "upload",
-		Target:     "user@remote.example.com:/srv/app",
+		Alias:      "user@remote.example.com:/srv/app",
 		LocalPath:  ".",
 		RemotePath: "dest.txt",
 	})
@@ -398,7 +398,7 @@ func TestRemoteTransferExecuteValidation(t *testing.T) {
 	// 8. Local path targeting VCS metadata
 	_, err = a.executeRemoteTransfer(ctx, RemoteTransferRequest{
 		Action:     "upload",
-		Target:     "user@remote.example.com:/srv/app",
+		Alias:      "user@remote.example.com:/srv/app",
 		LocalPath:  ".git/config",
 		RemotePath: "dest.txt",
 	})
@@ -409,7 +409,7 @@ func TestRemoteTransferExecuteValidation(t *testing.T) {
 	// 9. Upload non-existent local file
 	_, err = a.executeRemoteTransfer(ctx, RemoteTransferRequest{
 		Action:     "upload",
-		Target:     "user@remote.example.com:/srv/app",
+		Alias:      "user@remote.example.com:/srv/app",
 		LocalPath:  "not_found.txt",
 		RemotePath: "dest.txt",
 	})
@@ -426,7 +426,7 @@ func TestRemoteTransferExecuteValidation(t *testing.T) {
 	defer cancel()
 	_, err = a.executeRemoteTransfer(ctxFast, RemoteTransferRequest{
 		Action:     "upload",
-		Target:     "user@remote.example.com:/srv/app",
+		Alias:      "user@remote.example.com:/srv/app",
 		LocalPath:  validLocalFile,
 		RemotePath: "dest.txt",
 	})
@@ -537,7 +537,7 @@ func TestRemoteTransferUploadSensitiveDirectoryBlocked(t *testing.T) {
 	// Uploading the .ssh directory itself must be blocked
 	_, err := a.executeRemoteTransfer(context.Background(), RemoteTransferRequest{
 		Action:     "upload",
-		Target:     "user@remote.example.com:/srv/app",
+		Alias:      "user@remote.example.com:/srv/app",
 		LocalPath:  ".ssh",
 		RemotePath: "backup_ssh",
 	})

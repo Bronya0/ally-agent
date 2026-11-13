@@ -274,9 +274,15 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		}
 		return modelFallbackResult(name, result.Data, fullJSON)
 	case "remote_transfer":
-		var r RemoteTransferResult
+		var r struct {
+			RemoteTransferResult
+			LegacyTarget string `json:"target"`
+		}
 		if decodeToolData(result.Data, &r) {
-			return modelResultBody(fmt.Sprintf("// remote_transfer | action=%q | target=%q | local=%q | remote=%q | bytes=%d | files=%d | dirs=%d", r.Action, r.Target, r.LocalPath, r.RemotePath, r.TotalBytes, r.FileCount, r.DirCount), r.Summary)
+			if r.Alias == "" {
+				r.Alias = r.LegacyTarget
+			}
+			return modelResultBody(fmt.Sprintf("// remote_transfer | action=%q | alias=%q | local=%q | remote=%q | bytes=%d | files=%d | dirs=%d", r.Action, r.Alias, r.LocalPath, r.RemotePath, r.TotalBytes, r.FileCount, r.DirCount), r.Summary)
 		}
 		return modelFallbackResult(name, result.Data, fullJSON)
 	case "read", "remote_read":
@@ -984,7 +990,7 @@ func renderCommandResultForModel(r CommandResult) string {
 
 func commandModelReducedNote(outputFilePath string) string {
 	if outputFilePath != "" {
-		return "[中间段已从模型上下文省略；完整输出在 " + outputFilePath + "（见首行 full 字段）。本地用 read/grep，远端用同一 target 的 remote_read 或只读命令检索；日志过大时用 tailLines，不要整读]"
+		return "[中间段已从模型上下文省略；完整输出在 " + outputFilePath + "（见首行 full 字段）。本地用 read/grep，远端用同一 alias 的 remote_read 或只读命令检索；日志过大时用 tailLines，不要整读]"
 	}
 	return "[中间段已从模型上下文省略，未提供完整日志文件；不要仅为查看输出重复执行有副作用的命令]"
 }

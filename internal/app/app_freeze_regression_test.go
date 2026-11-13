@@ -173,7 +173,8 @@ func TestSessionWorkspaceMapFreezeSurvivesMapDrift(t *testing.T) {
 // dropped: the history rewrite already broke the provider cache there, so the next
 // request rebuilds them from disk.
 func TestRefreshSessionPromptPrefixDropsEveryFrozenSnapshot(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	const sessionID = "s-refresh"
 	app.mu.Lock()
@@ -209,12 +210,13 @@ func TestRefreshSessionPromptPrefixDropsEveryFrozenSnapshot(t *testing.T) {
 // Without it a session keeps the AGENTS.md it started with for its whole life,
 // which is exactly what a long (compacted) conversation needs least.
 func TestRefreshSessionPromptPrefixRebuildsFromDisk(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	agentsPath := filepath.Join(root, "AGENTS.md")
 	if err := os.WriteFile(agentsPath, []byte("workspace rule v1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	cfg := ConfigState{Workspace: root}
 	const sessionID = "s-refresh-disk"

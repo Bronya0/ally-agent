@@ -3,6 +3,7 @@ package desktop
 import (
 	backend "ally-dev/internal/app"
 	"bytes"
+	"fmt"
 	"image"
 	"image/color"
 	"testing"
@@ -263,5 +264,34 @@ func TestExpandedRailToggleStaysAtBottom(t *testing.T) {
 				t.Fatalf("height=%d sectionsOpen=%t: toggle is not at bottom: %v", height, sectionsOpen, button)
 			}
 		}
+	}
+}
+
+// The session rail draws the rows in view only: a long history must not rebuild
+// every row on every frame, nor push the collapse button off the rail.
+func TestRailSessionsBuildRowsInView(t *testing.T) {
+	a := &desktop{prefs: defaultPrefs(), page: "chat", tabs: []*conversation{{ID: "s0", Workspace: "/work/alpha"}}}
+	a.prefs.RailExpanded, a.prefs.RailSessionsOpen = true, true
+	for i := range 80 {
+		a.sessions = append(a.sessions, backend.SessionIndexEntry{ID: fmt.Sprint("s", i), Title: fmt.Sprint("session ", i), Workspace: "/work/alpha", UpdatedAt: 1700000000, MessageCount: 3})
+	}
+	a.sessRev = 1
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		ui.Column(c).Fill().Children(func() {
+			ui.Box(c).Height(heightHeader).Shrink(0)
+			ui.Split(c, &a.prefs.RailWidth, func() { a.rail(c) }, func() { ui.Column(c).Fill() }).Grow(1).MinHeight(0).FillWidth()
+		})
+	}, 1000, 850)
+	button, ok := tt.Find("收起侧边栏")
+	if !ok || button.Y+button.H != 850-4 {
+		t.Fatalf("sessions pushed the toggle off the rail: %v", button)
+	}
+	if !tt.HasText("session 0") {
+		t.Fatal("the newest session was not built")
+	}
+	if tt.HasText("session 79") {
+		t.Fatal("a session below the fold was built: the rail draws every row again")
 	}
 }

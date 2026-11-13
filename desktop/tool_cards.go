@@ -40,7 +40,7 @@ var toolTable = map[string]toolDescriptor{
 	"delete":             {"Deleting", "Deleted", "Delete failed", true, false},
 	"remote_delete_path": {"Remote Deleting", "Remote Deleted", "Remote delete failed", true, false},
 	"command":            {"Running", "Ran", "Command failed", true, true},
-	"remote_run_command": {"Remote Running", "Remote Ran", "Remote command failed", true, true},
+	"remote_run_command": {"Running", "Ran", "Failed", true, true},
 	"grep":               {"Grepping", "Grep", "Grep failed", false, false},
 	"list":               {"Listing", "Listed", "List failed", true, false},
 	"glob":               {"Matching", "Matched", "Match failed", true, false},
@@ -776,6 +776,9 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	case "error":
 		verb = desc.failedVerb
 	}
+	if name == "remote_run_command" && state == "cancelled" {
+		verb = "Cancelled"
+	}
 	container := ui.Column(c.Key("tool-" + toolCardKey(t, index, m))).FillWidth().MinWidth(0).Gap(2)
 	parsed := memoAt[argsMemo](container, "parsed-args")
 	args := parsed.get(str(m, "args"), parseToolArgs)
@@ -852,6 +855,17 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			verbColor := p.accent
 			if state == "error" || name == "delete" || name == "remote_delete_path" {
 				verbColor = c.Theme().Danger
+			}
+			if name == "remote_run_command" {
+				ui.Text(c.Key(key+"-ssh"), "SSH").FontSize(fsTool).TextColor(verbColor).Shrink(0).NoWrap()
+				alias := str(args, "alias")
+				if alias == "" {
+					alias = str(args, "target") // Historical calls use the old parameter.
+				}
+				if alias != "" {
+					label := ui.Text(c.Key(key+"-ssh-alias"), short(alias, 32)).FontSize(fsTool).TextColor(verbColor).LineHeight(1.4).SingleLine().MinWidth(0).MaxWidthPercent(24).Shrink(0)
+					uikit.Tooltip(c, label, alias)
+				}
 			}
 			if verb != "" {
 				ui.Text(c, verb).FontSize(fsTool).TextColor(verbColor).Shrink(0).LineHeight(1.4).NoWrap()
@@ -952,6 +966,11 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				// The reason keeps its full sentence; the target is what gets clipped.
 				label := ui.Text(c.Key(key+"-purpose"), short(purpose, 72)).FontSize(fsAux).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(0)
 				label.MaxWidthPercent(45)
+				if name == "remote_run_command" {
+					// The server, command, and purpose each truncate independently;
+					// keep the status and result metadata visible in narrow windows.
+					label.MaxWidthPercent(30).Shrink(1)
+				}
 				uikit.Tooltip(c, label, purpose)
 			}
 		})
@@ -1063,7 +1082,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			case name == "service" || name == "scheduled_task" || name == "ssh_cluster":
 				a.toolResourceCards(c, key, name, result, open)
 			case name == "remote_transfer":
-				toolFields(c, result, []string{"action", "target", "localPath", "remotePath", "fileCount", "dirCount", "totalBytes"}, a.secondaryInk())
+				toolFields(c, result, []string{"action", "alias", "target", "localPath", "remotePath", "fileCount", "dirCount", "totalBytes"}, a.secondaryInk())
 			case name == "http_request" || name == "web_fetch":
 				// Network tool summaries stay on the header line.
 			case name == "render_html":
@@ -1723,7 +1742,11 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 	visible := lines[:min(len(lines), limit)]
 	outer.Children(func() {
 		for _, line := range visible {
-			if line.gap > 0 || strings.HasPrefix(line.text, "@@") || strings.HasPrefix(line.text, "---") || strings.HasPrefix(line.text, "+++") {
+			if line.gap > 0 {
+				diffGap(c, line.gap)
+				continue
+			}
+			if strings.HasPrefix(line.text, "@@") || strings.HasPrefix(line.text, "---") || strings.HasPrefix(line.text, "+++") {
 				ui.Text(c, line.text).FillWidth().Padding(3, 8).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).Selectable()
 				continue
 			}
@@ -1744,6 +1767,14 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 	}
 }
 
+func diffGap(c *ui.Context, rows int) {
+	label := fmt.Sprintf(locales.Text("… %d 行未变更 …"), rows)
+	ui.Box(c).FillWidth().Height(10).Shrink(0).Unselectable().Role(ui.RoleText).Label(label).
+		Draw(func(p *ui.Painter, r ui.Rect) {
+			p.Fill(ui.Rect{X: r.X + 8, Y: r.Y + r.H/2, W: max(float32(0), r.W-16), H: 1}, p.Theme().Border, 0)
+		})
+}
+
 // diffVisibleLine is one rendered diff row, or a collapsed gap of unchanged
 // rows summarized by its count.
 type diffVisibleLine struct {
@@ -1752,11 +1783,11 @@ type diffVisibleLine struct {
 }
 
 // diffVisibleLines mirrors main's DiffView clustering: changed rows show with 3
-// context lines around them and the gaps between windows collapse into
-// "… N 行未变更 …" markers. File headers (---/+++) and hunk headers (@@) are
-// always kept so the gaps between windows stay separated; the card then drops
-// the headers themselves. limit trims a diff that has no changes at all;
-// limit <= 0 keeps every row.
+// context lines around them and the gaps between windows collapse into one row
+// that stands for the rows left out. File headers (---/+++) and hunk headers
+// (@@) are always kept so the gaps between windows stay separated; the card
+// then drops the headers themselves. limit trims a diff that has no changes at
+// all; limit <= 0 keeps every row.
 func diffVisibleLines(lines []string, limit int, full bool) []diffVisibleLine {
 	if full || (limit > 0 && len(lines) <= limit) {
 		out := make([]diffVisibleLine, 0, len(lines))

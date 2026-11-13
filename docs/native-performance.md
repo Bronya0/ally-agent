@@ -108,6 +108,8 @@
 ## 工作区、文件预览与界面状态
 
 - 文件树按打开的工作区保留目录展开、已加载子目录和滚动状态，切 tab 回来恢复原状态，搜索结果不覆盖普通目录树；入口见 [explorer_state.go](../desktop/explorer_state.go)。
+- 文件树用 `ui.Outline` 只建可见行，`children` 只查已加载的路径，展开目录的读取由 `Open` 集合的变化触发：Outline 每帧问所有可见行（含未展开的目录），在 `children` 里读盘会预读整屏目录；入口见 [page_explorer.go](../desktop/page_explorer.go) 的 `loadOpenedFileDirs`。
+- 路径归一化和“路径到条目”的索引在目录列表到达时建一次，行渲染只查表；目录列表写入 `files` / `fileChildren` 时必须调用 `reindexFileTree`。
 - 关闭工作区最后一个 tab 时释放目录树并清理当前别名引用，防止关闭后又把旧树写回缓存；迟到加载结果继续使用既有 epoch 检查。
 - 文件预览每个打开的工作区最多保留一个 WebView，同工作区图片或视频切换复用实例，切工作区、页面、隐藏或最小化保留已有页面和播放状态；入口见 [workspace_preview.go](../desktop/workspace_preview.go)。
 - 关闭预览、关闭资源管理器或关闭工作区最后一个 tab 时销毁对应文件预览，退出统一释放，损坏实例可重建，不用频繁创建销毁掩盖内存问题。
@@ -154,5 +156,5 @@
 - 预览与工作区回归入口为 [workspace_preview_retention_test.go](../desktop/workspace_preview_retention_test.go)、[workspace_preview_lifecycle_test.go](../desktop/workspace_preview_lifecycle_test.go)、[preview_failure_test.go](../desktop/preview_failure_test.go)、[explorer_state_test.go](../desktop/explorer_state_test.go) 和 [workspace_history_test.go](../desktop/workspace_history_test.go)。
 - 后端落盘和协议回归入口为 [prov_protocol_regression_test.go](../internal/app/prov_protocol_regression_test.go)，须确认调用配对、显式压缩摘录、旧受保护历史恢复及运行中原始证据都保留正确行为。
 - 新功能至少核对稳定帧、追加、就地修改、折叠/展开、滚动与跳转、删除后同数量补回、压缩成功/失败、切 tab、迟到回调和关闭路径中受影响的情况。
-- 代码变更先跑对应行为回归，再执行 `CGO_ENABLED=0 go test -p 1 ./...`、`go tool mygo vet .` 和 `python scripts/build.py dev`，测试文件操作使用 `t.TempDir`，全套不设置全局 `ALLY_DATA_DIR`。
+- 代码变更先跑对应行为回归，再执行 `python scripts/test.py`、`go tool mygo vet .` 和 `python scripts/build.py dev`，测试文件操作使用 `t.TempDir`，全套不设置全局 `ALLY_DATA_DIR`。
 - 当前未发现同范围内其他有明确收益且能低风险实施的瓶颈；模型所需的运行上下文、原生文字布局和绘制仍有必要成本，后续优化以测量证据为依据，不承诺理论上零优化空间。

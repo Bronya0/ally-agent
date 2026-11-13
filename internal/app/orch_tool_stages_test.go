@@ -284,6 +284,7 @@ func TestStageLocalWriteConflicts(t *testing.T) {
 }
 
 func TestSubagentStepLimitBlocksDependentStage(t *testing.T) {
+	t.Parallel()
 	for _, limited := range []bool{false, true} {
 		t.Run(fmt.Sprintf("limited=%v", limited), func(t *testing.T) {
 			a := newIsolatedTestApp(t)

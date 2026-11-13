@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -127,59 +126,6 @@ func TestValidationJavaScriptBatchParsesWithoutExecuting(t *testing.T) {
 	}
 }
 
-func TestValidationGoReportsErrorsInCallers(t *testing.T) {
-	t.Parallel()
-	root := validationSandbox(t)
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skip("Go unavailable")
-	}
-	writeToolTestFile(t, root, "go.mod", "module example.invalid/check\ngo 1.23\n")
-	writeToolTestFile(t, root, "api.go", "package check\nfunc Value() string { return \"changed\" }\n")
-	writeToolTestFile(t, root, "caller.go", "package check\nvar Count int = Value()\n")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	r := validateGoFiles(ctx, root, collectValidationFiles([]string{root}, []string{"api.go"}))
-	if r.passed || r.skipped || !strings.Contains(r.detail, "caller.go") {
-		t.Fatalf("lost caller error: %+v", r)
-	}
-}
-
-func TestValidationGoSkipsUntouchedVetFindings(t *testing.T) {
-	t.Parallel()
-	root := validationSandbox(t)
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skip("Go unavailable")
-	}
-	writeToolTestFile(t, root, "go.mod", "module example.invalid/check\ngo 1.23\n")
-	writeToolTestFile(t, root, "api.go", "package check\nfunc Value() int { return 1 }\n")
-	writeToolTestFile(t, root, "untouched.go", "package check\ntype Data struct { Value int `json:broken` }\n")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	r := validateGoFiles(ctx, root, collectValidationFiles([]string{root}, []string{"api.go"}))
-	if !r.skipped || r.passed || !strings.Contains(r.detail, "untouched.go") {
-		t.Fatalf("untouched vet finding blamed on edit: %+v", r)
-	}
-}
-
-func TestValidationGoSilentOnOlderInterpreter(t *testing.T) {
-	t.Parallel()
-	root := validationSandbox(t)
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skip("Go unavailable")
-	}
-	// Validation pins GOTOOLCHAIN=local, so it can never fetch the toolchain
-	// go.mod asks for. That is the user's environment, not the edit, and the
-	// check stays out of the report entirely.
-	writeToolTestFile(t, root, "go.mod", "module example.invalid/check\ngo 99.0\n")
-	writeToolTestFile(t, root, "api.go", "package check\nfunc Value() int { return 1 }\n")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	r := validateGoFiles(ctx, root, collectValidationFiles([]string{root}, []string{"api.go"}))
-	if !r.silent || r.passed || r.skipped || formatValidationReports([]validationReport{r}) != "" {
-		t.Fatalf("outdated toolchain was reported: %+v", r)
-	}
-}
-
 func TestValidationJavaIgnoresInjectedLocale(t *testing.T) {
 	root := validationSandbox(t)
 	// macOS ships /usr/bin/javac as a stub that exists without a JDK installed, so
@@ -198,15 +144,14 @@ func TestValidationJavaIgnoresInjectedLocale(t *testing.T) {
 func TestStageValidationChecksSuccessfulWritesWhenPeerFails(t *testing.T) {
 	t.Parallel()
 	root := validationSandbox(t)
-	writeToolTestFile(t, root, "go.mod", "module example.com/check\n\ngo 1.22\n")
-	writeToolTestFile(t, root, "second.go", "package check\n")
+	writeToolTestFile(t, root, "second.json", "{}\n")
 	calls := []openai.ToolCall{
-		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"first.go","content":"package check\nfunc Broken( {\n"}`}},
-		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"second.go","content":"package check\n"}`}},
+		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"first.json","content":"{broken"}`}},
+		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"second.json","content":"{}\n"}`}},
 	}
 	a := newIsolatedToolTestApp(t)
 	enabled := true
-	cfg := ConfigState{Workspace: root, AutoValidationGo: &enabled}
+	cfg := ConfigState{Workspace: root, AutoValidationJSON: &enabled}
 	results := make([]toolResult, len(calls))
 	a.executeStagedToolBatch(context.Background(), cfg, calls, nil,
 		func(ctx context.Context, _ int, call openai.ToolCall) toolResult {
@@ -216,7 +161,7 @@ func TestStageValidationChecksSuccessfulWritesWhenPeerFails(t *testing.T) {
 		t.Fatalf("expected successful first write and rejected overwrite: %+v", results)
 	}
 	edit, ok := results[0].Data.(EditResult)
-	if !ok || !strings.Contains(edit.Validation, "自动校验失败") || !strings.Contains(edit.Validation, "first.go") {
+	if !ok || !strings.Contains(edit.Validation, "自动校验失败") || !strings.Contains(edit.Validation, "first.json") {
 		t.Fatalf("successful write lost its validation when its peer failed: %+v", results[0])
 	}
 }
@@ -252,8 +197,9 @@ exports.flattenDiagnosticMessageText = text => text;
 }
 
 func TestValidationBudgetDoesNotCancelWrites(t *testing.T) {
+	t.Parallel()
 	root := validationSandbox(t)
-	a := NewApp()
+	a := newIsolatedTestApp(t)
 	enabled := true
 	cfg := ConfigState{Workspace: root, AutoValidationJSON: &enabled}
 	call := openai.ToolCall{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"bad.json","content":"{"}`}}

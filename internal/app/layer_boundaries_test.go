@@ -28,6 +28,7 @@ import (
 )
 
 func TestLayerBoundaries(t *testing.T) {
+	t.Parallel()
 	const (
 		appImport     = "ally-dev/internal/app"
 		desktopImport = "ally-dev/desktop"

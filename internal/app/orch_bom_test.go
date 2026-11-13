@@ -20,7 +20,8 @@ import (
 // BOM-less text, the file on disk must keep its BOM after the edit, and the
 // version returned by edit must equal the next read's version (no drift).
 func TestBOMEndToEndReadEditPreservesBOM(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	dir := t.TempDir()
 	rel := "sample.txt"
 	original := "\uFEFFalpha\nbeta\n"
@@ -87,7 +88,8 @@ func TestBOMEndToEndReadEditPreservesBOM(t *testing.T) {
 // guard still works for BOM files: editing with a version computed from
 // BOM-less bytes must fail.
 func TestBOMEndToEndEditFailsWithStaleVersion(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	dir := t.TempDir()
 	rel := "sample.txt"
 	if err := os.WriteFile(filepath.Join(dir, rel), []byte("\uFEFFalpha\nbeta\n"), 0o600); err != nil {

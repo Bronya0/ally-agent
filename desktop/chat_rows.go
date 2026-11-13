@@ -119,7 +119,7 @@ func (a *desktop) holdTranscriptPlace() {
 // one replaced by a summary, would otherwise keep the place it had.
 func followLatest(t *conversation) {
 	st := t.uiState()
-	st.Follow, st.FollowPending = true, false
+	st.Follow, st.FollowPending, st.FollowBottom = true, false, 0
 	st.List.FollowEnd = true
 	st.List.ScrollToEnd()
 }

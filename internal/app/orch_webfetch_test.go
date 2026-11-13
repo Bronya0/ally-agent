@@ -17,6 +17,7 @@ func webFetchTestConfig() ConfigState {
 
 // readable 模式：结构化文章页应提取出干净正文，且不含导航噪声。
 func TestWebFetchReadableExtractsArticle(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(`<!DOCTYPE html><html><head><title>测试文章 | 示例站</title></head><body>
@@ -30,7 +31,7 @@ func TestWebFetchReadableExtractsArticle(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	got, err := app.webFetchToolWithConfig(context.Background(), webFetchTestConfig(), WebFetchRequest{URL: server.URL})
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +50,7 @@ func TestWebFetchReadableExtractsArticle(t *testing.T) {
 // readable 模式：非文章页（纯导航）不会失败——v2 的 readerable 判定宽松，
 // 会把整页文本当内容返回。记录该行为，防止误以为它会拒绝导航页。
 func TestWebFetchReadableNonArticleFallsBackToPageText(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(`<html><head><title>导航站</title></head><body>
@@ -56,7 +58,7 @@ func TestWebFetchReadableNonArticleFallsBackToPageText(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	// 非文章页（纯导航）Readability 不会报错，而是返回近似全页的文本；
 	// 断言降级产物：title 正确、正文为链接锚文本、links 完整。
 	got, err := app.webFetchToolWithConfig(context.Background(), webFetchTestConfig(), WebFetchRequest{URL: server.URL})
@@ -76,6 +78,7 @@ func TestWebFetchReadableNonArticleFallsBackToPageText(t *testing.T) {
 
 // raw 模式：返回解码后的源码（含 script 内容），HTML 页仍带 <title> 和链接。
 func TestWebFetchRawReturnsSourceWithMeta(t *testing.T) {
+	t.Parallel()
 	const scriptBody = "var marker = 'script-content-marker';"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -84,7 +87,7 @@ func TestWebFetchRawReturnsSourceWithMeta(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	got, err := app.webFetchToolWithConfig(context.Background(), webFetchTestConfig(), WebFetchRequest{URL: server.URL, Format: "raw"})
 	if err != nil {
 		t.Fatal(err)
@@ -106,13 +109,14 @@ func TestWebFetchRawReturnsSourceWithMeta(t *testing.T) {
 }
 
 func TestWebFetchExtractionErrorKeepsHTTPStatus(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	_, err := app.webFetchToolWithConfig(context.Background(), webFetchTestConfig(), WebFetchRequest{URL: server.URL})
 	if err == nil {
 		t.Fatal("expected readable extraction error")
@@ -144,13 +148,14 @@ func TestWebFetchExtractionErrorKeepsHTTPStatus(t *testing.T) {
 
 // raw 对纯文本响应同样生效，且不报错。
 func TestWebFetchRawPlainText(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("plain text content\nline two\n"))
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	got, err := app.webFetchToolWithConfig(context.Background(), webFetchTestConfig(), WebFetchRequest{URL: server.URL, Format: "raw"})
 	if err != nil {
 		t.Fatal(err)
@@ -162,13 +167,14 @@ func TestWebFetchRawPlainText(t *testing.T) {
 
 // format 归一化：大小写/空白容忍，非法值报 E_HTTP_BAD_FORMAT。
 func TestWebFetchFormatValidation(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok"))
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	if _, err := app.webFetchToolWithConfig(context.Background(), webFetchTestConfig(), WebFetchRequest{URL: server.URL, Format: " RAW "}); err != nil {
 		t.Fatalf("RAW should be accepted after normalization: %v", err)
 	}
@@ -184,13 +190,14 @@ func TestWebFetchFormatValidation(t *testing.T) {
 
 // maxChars 截断对 raw 同样生效。
 func TestWebFetchRawRespectsMaxChars(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte(strings.Repeat("a", 5000)))
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	got, err := app.webFetchToolWithConfig(context.Background(), webFetchTestConfig(), WebFetchRequest{URL: server.URL, Format: "raw", MaxChars: 100})
 	if err != nil {
 		t.Fatal(err)
@@ -202,13 +209,14 @@ func TestWebFetchRawRespectsMaxChars(t *testing.T) {
 
 // 二进制响应在 raw 模式下仍拒绝。
 func TestWebFetchRawRejectsBinary(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write([]byte{0x00, 0x01, 0xFF, 0xD8})
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	_, err := app.webFetchToolWithConfig(context.Background(), webFetchTestConfig(), WebFetchRequest{URL: server.URL, Format: "raw"})
 	if err == nil {
 		t.Fatal("expected binary rejection in raw mode")

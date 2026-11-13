@@ -130,15 +130,47 @@ func (a *desktop) fileTree(c *ui.Context) {
 		// Put the fallback menu on the viewport: the content column can be
 		// shorter than it, even with FillHeight in a scrolling container.
 		// A row's own menu takes precedence over this ancestor's menu.
-		tree := ui.Scroll(c.Key("explorer-tree-" + a.fileRoot)).TrackScroll(a.fileScroll).Grow(1).MinHeight(0).Focusable().Label(locales.Text("工作区文件列表"))
-		tree.Children(func() {
-			area := ui.Column(c).Padding(3, 0).FillWidth()
-			if len(a.files) == 0 && a.filesF.Search.Query == "" {
-				area.Children(func() { fieldNote(c, locales.Text("目录为空"), a.secondaryInk()) })
+		a.loadOpenedFileDirs()
+		// The zero OutlineState chooses its first row; a tree starts on none.
+		if !a.fileOutlineReady {
+			a.fileOutlineReady = true
+			a.fileFocus = -1
+		}
+		a.fileOutline.List.Selected = &a.fileFocus
+		a.syncFileRowChoice()
+		if a.fileOutline.Prefix == nil {
+			// A row draws its own indentation, arrow and tint, as the tree did:
+			// an Outline's rows would otherwise pad them and fill the chosen one
+			// with the accent color.
+			a.fileOutline.Prefix = func(ui.OutlineRow) {}
+		}
+		a.fileOutline.List.Label = func(row int) string {
+			if row < 0 || row >= a.fileOutline.Rows() {
+				return ""
 			}
-			area.Children(func() { ui.Tree(c.Key("workspace-tree-"+a.fileRoot), func() { a.fileRows(c, a.files) }).FillWidth() })
+			return a.fileIndex.nodes[a.fileOutline.Item(row)].name
+		}
+		// Outline owns the scroll place and the keyboard, so a frame builds
+		// only the rows in view instead of every expanded entry, and the tree
+		// costs the same at any size.
+		area := ui.Column(c.Key("explorer-tree-"+a.fileRoot)).Grow(1).MinHeight(0).FillWidth().Padding(3, 0)
+		var tree ui.Element
+		area.Children(func() {
+			if len(a.files) == 0 && a.filesF.Search.Query == "" {
+				fieldNote(c, locales.Text("目录为空"), a.secondaryInk())
+			}
+			tree = ui.Outline(c, &a.fileOutline, a.fileIndex.roots, a.fileTreeKids, func(path string) {
+				a.fileTreeRow(c, path, p)
+			}).FillWidth().Grow(1).MinHeight(0).TrackScroll(a.fileScroll).Focusable().Label(locales.Text("工作区文件列表"))
 		})
-		uikit.ContextMenu(tree, func(m *ui.Menu) {
+		// Enter opens the row the tree is on, as a double click would, and the
+		// shortcuts act on it: the row content cannot take either itself.
+		if tree.Submitted() {
+			a.activateFileRow(a.fileChosenPath())
+		}
+		tree.OnShortcut(ui.Cmd, ui.KeyC, func() { a.copyFileChosen(services) })
+		tree.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteBesideFileChosen(services) })
+		uikit.ContextMenu(area, func(m *ui.Menu) {
 			if m.Item(locales.Text("新建文件")).Chosen() {
 				a.openFilePrompt(false, "")
 			}
@@ -201,137 +233,291 @@ func (a *desktop) fileTree(c *ui.Context) {
 	a.fileInfoDialog(c)
 }
 
-func (a *desktop) fileRows(c *ui.Context, entries []backend.FileEntry) {
-	// The active file and palette cannot change while one view pass builds;
-	// resolving them once keeps filepath.Clean and ToLower out of the per-row
-	// path. The recursive helper carries the resolved values down the tree.
+// fileTreeEntry is one row of the explorer tree: the entry a listing gave, plus
+// the identity the tree keys it by, normalized once as the listing arrives so
+// no frame rewrites a path.
+type fileTreeEntry struct {
+	entry backend.FileEntry
+	path  string
+	name  string
+	// depth is how deep the path sits: its separators, which is where the
+	// outline indents it to.
+	depth int
+}
+
+func newFileTreeEntry(entry backend.FileEntry) fileTreeEntry {
+	path := strings.ReplaceAll(entry.Path, "\\", "/")
+	name := entry.Name
+	if name == "" {
+		name = filepath.Base(path)
+	}
+	if entry.Symlink {
+		name += " →"
+	}
+	return fileTreeEntry{entry: entry, path: path, name: name, depth: strings.Count(path, "/")}
+}
+
+// explorerIndex is what the tree asks for without touching a listing: the paths
+// Outline lists at the top and under each directory, and each path's row. It is
+// rebuilt when a listing arrives, never in a frame.
+type explorerIndex struct {
+	roots []string
+	kids  map[string][]string
+	nodes map[string]fileTreeEntry
+}
+
+// emptyFileKids keeps the arrow of a directory whose listing is still on its
+// way: Outline shows one for every item whose children are not nil.
+var emptyFileKids = []string{}
+
+// syncFileRowChoice puts the tree's chosen row on the file the editor shows,
+// so the row a shortcut or Enter acts on is the file being read. A row the user
+// moved to with the keys stays there until another file opens, and a file
+// inside a collapsed directory is looked for again once the rows change.
+func (a *desktop) syncFileRowChoice() {
 	activePath := ""
 	if file := a.activeFile(); file != nil {
 		activePath = file.Path
 	}
-	a.fileRowsWithState(c, entries, activePath, a.currentPalette().dark)
+	if a.filesF.InfoOpen {
+		activePath = a.filesF.InfoPath
+	}
+	if activePath == "" {
+		return
+	}
+	if activePath == a.fileChoice && (a.fileFocus >= 0 || a.fileChoiceRows == a.fileOutline.Rows()) {
+		return
+	}
+	a.fileChoice, a.fileChoiceRows = activePath, a.fileOutline.Rows()
+	for row := 0; row < a.fileOutline.Rows(); row++ {
+		if a.fileOutline.Item(row) == activePath {
+			a.fileOutline.List.Choose(row)
+			return
+		}
+	}
 }
 
-func (a *desktop) fileRowsWithState(c *ui.Context, entries []backend.FileEntry, activePath string, dark bool) {
-	services := c.Services()
-	if a.fileOpen == nil {
-		a.fileOpen = map[string]bool{}
+// fileChosenPath is the row the tree is on, empty when it is on none.
+func (a *desktop) fileChosenPath() string {
+	if a.fileFocus < 0 || a.fileFocus >= a.fileOutline.Rows() {
+		return ""
 	}
-	for _, entry := range entries {
-		entry := entry
-		path := strings.ReplaceAll(entry.Path, "\\", "/")
-		name := entry.Name
-		if name == "" {
-			name = filepath.Base(path)
+	return a.fileOutline.Item(a.fileFocus)
+}
+
+// activateFileRow does what a click on a row does: a file opens, a directory
+// expands or collapses.
+func (a *desktop) activateFileRow(path string) {
+	node, ok := a.fileIndex.nodes[path]
+	if !ok {
+		return
+	}
+	if node.entry.Dir {
+		a.toggleFolder(path)
+		return
+	}
+	a.openFile(node.entry.Path)
+}
+
+// copyFileChosen copies the file the tree is on, or the file the editor shows
+// when the tree has no row of its own.
+func (a *desktop) copyFileChosen(services ui.Services) {
+	if path := a.fileChosenPath(); path != "" {
+		if node, ok := a.fileIndex.nodes[path]; ok && !node.entry.Dir {
+			a.copyExplorerFile(services, path)
 		}
-		if entry.Symlink {
-			name += " →"
+		return
+	}
+	if file := a.activeFile(); file != nil {
+		a.copyExplorerFile(services, file.Path)
+	}
+}
+
+// pasteBesideFileChosen pastes into the directory the tree is on, or beside the
+// file it is on, and into the workspace root with no row chosen.
+func (a *desktop) pasteBesideFileChosen(services ui.Services) {
+	path := a.fileChosenPath()
+	if path == "" {
+		a.pasteFiles(services, "")
+		return
+	}
+	if node, ok := a.fileIndex.nodes[path]; ok && node.entry.Dir {
+		a.pasteFiles(services, path)
+		return
+	}
+	a.pasteFiles(services, fileParent(path))
+}
+
+// reindexFileTree rebuilds the derived view of the listings. Listings land a
+// few times per user action, so this stays out of the frame; every writer of
+// files or fileChildren calls it.
+func (a *desktop) reindexFileTree() {
+	index := explorerIndex{
+		roots: make([]string, 0, len(a.files)),
+		kids:  make(map[string][]string, len(a.fileChildren)),
+		nodes: make(map[string]fileTreeEntry, len(a.files)),
+	}
+	for _, entry := range a.files {
+		node := newFileTreeEntry(entry)
+		index.roots = append(index.roots, node.path)
+		index.nodes[node.path] = node
+	}
+	for parent, entries := range a.fileChildren {
+		paths := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			node := newFileTreeEntry(entry)
+			paths = append(paths, node.path)
+			index.nodes[node.path] = node
 		}
-		open := a.fileOpen[path]
-		var children func()
-		var expanded *bool
-		if entry.Dir {
-			expanded = &open
-			children = func() { a.fileRowsWithState(c, a.fileChildren[path], activePath, dark) }
+		index.kids[parent] = paths
+	}
+	a.fileIndex = index
+}
+
+// fileTreeKids is Outline's children function: a directory's listed paths, or
+// an empty list for one whose listing is still on its way, so its arrow stays.
+// Files have none. It never reads disk: loadOpenedFileDirs starts the reads.
+func (a *desktop) fileTreeKids(path string) []string {
+	if kids, loaded := a.fileIndex.kids[path]; loaded {
+		return kids
+	}
+	if node, ok := a.fileIndex.nodes[path]; ok && node.entry.Dir {
+		return emptyFileKids
+	}
+	return nil
+}
+
+// loadOpenedFileDirs lists the expanded directories that have no listing yet.
+// Outline asks children for every row in view, expanded or not, so a read there
+// would list every directory on screen; the expansion set decides instead.
+func (a *desktop) loadOpenedFileDirs() {
+	if a.fileOutline.Open.Len() == 0 {
+		return
+	}
+	for path := range a.fileOutline.Open.All() {
+		if _, loaded := a.fileIndex.kids[path]; loaded {
+			continue
 		}
-		row := ui.TreeItem(c.Key("file-"+path), name, expanded, children).
-			Height(23).FontSize(fsSmall).Label(entry.Name)
-		if dark {
-			row.TextColor(ui.Hex("#cccccc"))
+		if !a.fileBranchOpen(path) {
+			continue
 		}
-		selected := activePath != "" && activePath == entry.Path
-		if a.filesF.InfoOpen {
-			selected = a.filesF.InfoPath == entry.Path
-		}
-		uikit.TreeSelection(c, row, selected)
-		if strings.HasPrefix(entry.Name, ".") {
-			row.Opacity(0.55)
-		}
-		uikit.Tooltip(c, row, path)
-		// Only an actual arrow/key expansion starts a lazy directory read.
-		// MyGo owns focus, keyboard navigation and the disclosure control.
-		if open != a.fileOpen[path] {
-			a.fileOpen[path] = open
-			if open {
-				a.loadFolderChildren(path)
-			}
-		}
-		// Only the callbacks below need the paste target. Deriving it here ran
-		// filepath.Dir for every row on every frame.
-		if entry.Dir {
-			row.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, path) })
-		} else {
-			row.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, fileParent(path)) })
-		}
-		if !entry.Dir {
-			row.OnShortcut(ui.Cmd, ui.KeyC, func() { a.copyExplorerFile(services, path) })
-		}
-		row.OnClick(func() {
-			if entry.Dir {
-				a.toggleFolder(path)
-			} else {
-				a.openFile(entry.Path)
-			}
+		a.loadFolderChildren(path)
+	}
+}
+
+// fileTreeRow draws one row: the indent, the arrow, the name, what a click
+// does, the tooltip and the menu. It draws the indent and the arrow itself so
+// the row keeps the tree's look: 23 pixels high, four plus sixteen a level, a
+// 16 pixel arrow, a 2 pixel gap, and the quiet tint of a chosen row across the
+// width, on the panel color rather than the list's accent fill.
+func (a *desktop) fileTreeRow(c *ui.Context, path string, p palette) {
+	node, ok := a.fileIndex.nodes[path]
+	if !ok {
+		return
+	}
+	entry, services, t := node.entry, c.Services(), c.Theme()
+	open := entry.Dir && a.fileOutline.Open.Has(path)
+	selected := a.fileChosenPath() == path
+	ink := t.Text
+	if p.dark && !selected {
+		ink = ui.Hex("#cccccc")
+	}
+	row := ui.Row(c).FillWidth().Height(23).Gap(t.Space(0.5)).AlignItems(ui.Center).
+		PaddingStart(t.Space(1 + 4*float32(node.depth))).PaddingEnd(t.Space(2)).Radius(t.Radius)
+	if selected {
+		// The list fills the chosen row with the accent; the panel color under
+		// the tree's own tint hides it, so the row keeps the look it had.
+		base, tint := p.bg, selectionFill(t.Accent)
+		row.Draw(func(painter *ui.Painter, r ui.Rect) {
+			painter.Fill(r, base, 0)
+			painter.Fill(r, tint, t.Radius)
 		})
-		// The shared menu keeps row-specific actions ahead of the viewport's.
-		uikit.ContextMenu(row, func(m *ui.Menu) {
-			if entry.Dir {
-				if m.Item(locales.Text("新建文件")).Chosen() {
-					a.openFilePrompt(false, path)
-				}
-				if m.Item(locales.Text("新建目录")).Chosen() {
-					a.openFilePrompt(true, path)
-				}
-			}
-			if m.Item(locales.Text("打开目录")).Chosen() {
-				if entry.Dir {
-					a.openInManager(path)
+	}
+	if strings.HasPrefix(entry.Name, ".") {
+		row.Opacity(0.55)
+	}
+	uikit.Tooltip(c, row, path)
+	// The arrow keeps the muted ink of every other row: the chosen row is
+	// only tinted, so there is no accent for the accent text to sit on.
+	arrowInk := t.TextMuted
+	row.Children(func() {
+		arrow := ui.Box(c).Size(t.Space(4), t.Space(4)).Shrink(0)
+		if entry.Dir {
+			arrow.Draw(func(painter *ui.Painter, r ui.Rect) {
+				var chevron ui.Path
+				if open {
+					chevron.MoveTo(r.X+r.W/4, r.Y+r.H*3/8).LineTo(r.X+r.W/2, r.Y+r.H*5/8).LineTo(r.X+r.W*3/4, r.Y+r.H*3/8)
 				} else {
-					a.openInManager(fileParent(path))
+					chevron.MoveTo(r.X+r.W*3/8, r.Y+r.H/4).LineTo(r.X+r.W*5/8, r.Y+r.H/2).LineTo(r.X+r.W*3/8, r.Y+r.H*3/4)
 				}
-			}
-			m.Separator()
-			if !entry.Dir {
-				if m.Item(locales.Text("复制文件")).Chosen() {
-					a.copyExplorerFile(services, path)
-				}
-			}
-			if m.Item(locales.Text("粘贴文件")).Chosen() {
-				target := path
-				if !entry.Dir {
-					target = fileParent(path)
-				}
-				a.pasteFiles(services, target)
-			}
-			m.Separator()
-			if m.Item(locales.Text("复制相对路径")).Chosen() {
-				services.WriteClipboard(path)
-			}
-			if m.Item(locales.Text("复制完整路径")).Chosen() {
-				full := path
-				if t := a.current(); t != nil {
-					full = filepath.Join(t.Workspace, filepath.FromSlash(path))
-				}
-				services.WriteClipboard(full)
-			}
-			if m.Item(locales.Text("属性")).Chosen() {
-				a.openFileInfo(entry.Path)
-			}
-			m.Separator()
-			if m.Item(locales.Text("重命名")).Chosen() {
-				a.openRenamePrompt(path)
-			}
-			if m.Item(locales.Text("删除")).Chosen() {
-				a.deleteFileEntry(entry)
-			}
-			if entry.Dir {
-				// Mirror the Vue explorer: a directory row can refresh just itself.
-				if m.Item(locales.Text("刷新")).Chosen() {
-					a.refreshFolder(path)
-				}
-			}
-		})
+				painter.StrokePath(&chevron, 1.5, arrowInk)
+			})
+		}
+		ui.Text(c, node.name).FontSize(fsSmall).SingleLine().TextColor(ink)
+	})
+	// The list chooses the row on a click, so the content asks whether it was
+	// clicked rather than taking the click the choice needs.
+	if row.RowClicked() {
+		a.activateFileRow(path)
 	}
+	// The shared menu keeps row-specific actions ahead of the viewport's.
+	uikit.ContextMenu(row, func(m *ui.Menu) {
+		if entry.Dir {
+			if m.Item(locales.Text("新建文件")).Chosen() {
+				a.openFilePrompt(false, path)
+			}
+			if m.Item(locales.Text("新建目录")).Chosen() {
+				a.openFilePrompt(true, path)
+			}
+		}
+		if m.Item(locales.Text("打开目录")).Chosen() {
+			if entry.Dir {
+				a.openInManager(path)
+			} else {
+				a.openInManager(fileParent(path))
+			}
+		}
+		m.Separator()
+		if !entry.Dir {
+			if m.Item(locales.Text("复制文件")).Chosen() {
+				a.copyExplorerFile(services, path)
+			}
+		}
+		if m.Item(locales.Text("粘贴文件")).Chosen() {
+			target := path
+			if !entry.Dir {
+				target = fileParent(path)
+			}
+			a.pasteFiles(services, target)
+		}
+		m.Separator()
+		if m.Item(locales.Text("复制相对路径")).Chosen() {
+			services.WriteClipboard(path)
+		}
+		if m.Item(locales.Text("复制完整路径")).Chosen() {
+			full := path
+			if t := a.current(); t != nil {
+				full = filepath.Join(t.Workspace, filepath.FromSlash(path))
+			}
+			services.WriteClipboard(full)
+		}
+		if m.Item(locales.Text("属性")).Chosen() {
+			a.openFileInfo(entry.Path)
+		}
+		m.Separator()
+		if m.Item(locales.Text("重命名")).Chosen() {
+			a.openRenamePrompt(path)
+		}
+		if m.Item(locales.Text("删除")).Chosen() {
+			a.deleteFileEntry(entry)
+		}
+		if entry.Dir {
+			// Mirror the Vue explorer: a directory row can refresh just itself.
+			if m.Item(locales.Text("刷新")).Chosen() {
+				a.refreshFolder(path)
+			}
+		}
+	})
 }
 
 func (a *desktop) openInManager(path string) {
@@ -515,14 +701,12 @@ func workspacePathContains(parent, child string) bool {
 }
 
 func (a *desktop) toggleFolder(path string) {
-	if a.fileOpen == nil {
-		a.fileOpen = map[string]bool{}
-	}
-	a.fileOpen[path] = !a.fileOpen[path]
-	if !a.fileOpen[path] {
+	if a.fileOutline.Open.Has(path) {
+		a.fileOutline.Open.Remove(path)
 		return
 	}
-	if _, loaded := a.fileChildren[path]; loaded {
+	a.fileOutline.Open.Add(path)
+	if _, loaded := a.fileIndex.kids[path]; loaded {
 		return
 	}
 	a.loadFolderChildren(path)
@@ -533,11 +717,12 @@ func (a *desktop) toggleFolder(path string) {
 func (a *desktop) prepareFileTree(root string) {
 	a.selectFileTree(root)
 	for path := range a.fileChildren {
-		if !a.fileOpen[path] {
+		if !a.fileOutline.Open.Has(path) {
 			delete(a.fileChildren, path)
 		}
 	}
 	a.fileLoading = map[string]bool{}
+	a.reindexFileTree()
 }
 
 // applyFileTreeEntries refreshes expanded descendants lazily, using the current
@@ -553,13 +738,13 @@ func (a *desktop) applyFileTreeEntries(parent string, entries []backend.FileEntr
 			dirs[strings.ReplaceAll(entry.Path, "\\", "/")] = true
 		}
 	}
-	for path := range a.fileOpen {
+	for path := range a.fileOutline.Open.All() {
 		if !strings.HasPrefix(path, prefix) {
 			continue
 		}
 		child, _, _ := strings.Cut(strings.TrimPrefix(path, prefix), "/")
 		if !dirs[prefix+child] {
-			delete(a.fileOpen, path)
+			a.fileOutline.Open.Remove(path)
 			delete(a.fileChildren, path)
 			delete(a.fileLoading, path)
 		}
@@ -572,6 +757,7 @@ func (a *desktop) applyFileTreeEntries(parent string, entries []backend.FileEntr
 		}
 		a.fileChildren[parent] = entries
 	}
+	a.reindexFileTree()
 	for path := range dirs {
 		if a.fileBranchOpen(path) {
 			a.loadFolderChildren(path)
@@ -583,7 +769,7 @@ func (a *desktop) applyFileTreeEntries(parent string, entries []backend.FileEntr
 // not cause background reads, including when an older parent read completes.
 func (a *desktop) fileBranchOpen(path string) bool {
 	for {
-		if !a.fileOpen[path] {
+		if !a.fileOutline.Open.Has(path) {
 			return false
 		}
 		index := strings.LastIndexByte(path, '/')
@@ -605,14 +791,12 @@ func (a *desktop) refreshFolder(path string) {
 		a.refreshFiles()
 		return
 	}
-	if a.fileOpen == nil {
-		a.fileOpen = map[string]bool{}
-	}
 	if a.fileChildren == nil {
 		a.fileChildren = map[string][]backend.FileEntry{}
 	}
-	a.fileOpen[path] = true
+	a.fileOutline.Open.Add(path)
 	delete(a.fileChildren, path)
+	a.reindexFileTree()
 	a.loadFolderChildren(path, true)
 }
 
@@ -638,6 +822,9 @@ func (a *desktop) loadFolderChildren(path string, manual ...bool) {
 			}
 			delete(a.fileLoading, path)
 			if err != nil {
+				// Stop frame-driven retries. Reopening the directory or refreshing
+				// explicitly starts another read.
+				a.fileOutline.Open.Remove(path)
 				a.notifyError(err.Error())
 				return
 			}

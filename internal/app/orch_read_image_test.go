@@ -196,7 +196,8 @@ func TestCompactReadResultOmittedDataURLFromModel(t *testing.T) {
 }
 
 func TestReusedReadResultClearsDataURL(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	dir := t.TempDir()
 	pngPath := filepath.Join(dir, "a.png")
 	if err := os.WriteFile(pngPath, []byte("\x89PNG\r\n\x1a\npayload"), 0o600); err != nil {
@@ -229,7 +230,8 @@ func TestReusedReadResultClearsDataURL(t *testing.T) {
 // hashed the text alone would call a replaced image — same name, same byte size —
 // unchanged and silently keep the new picture out of the request.
 func TestChangedImageWithIdenticalNoticeIsNotReused(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	dir := t.TempDir()
 	pngPath := filepath.Join(dir, "a.png")
 	first := []byte("\x89PNG\r\n\x1a\nAAAA")
@@ -267,7 +269,8 @@ func TestChangedImageWithIdenticalNoticeIsNotReused(t *testing.T) {
 }
 
 func TestReadImageThroughExecuteTool(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	dir := t.TempDir()
 	// Minimal PNG magic header is enough for detection; the tool only reads
 	// bytes, it does not decode the image.

@@ -37,7 +37,7 @@ func nativeReply(output []json.RawMessage) string {
 
 func TestResponsesNativeReplayAndProtectedRestart(t *testing.T) {
 	t.Parallel()
-	a := newApiTestApp(t)
+	a := newIsolatedChatTestApp(t)
 	block, _ := aes.NewCipher(make([]byte, 32))
 	gcm, _ := cipher.NewGCM(block)
 	protector := oauthTestProtector{gcm}
@@ -122,7 +122,7 @@ func TestResponsesNativeReplayAndProtectedRestart(t *testing.T) {
 	if json.Unmarshal(raw, &legacy) != nil || legacy[2].Content != toolResultPlaceholder {
 		t.Fatal("legacy history compatibility lost")
 	}
-	b := newApiTestApp(t)
+	b := newIsolatedChatTestApp(t)
 	b.historiesDir = a.historiesDir
 	b.modelHistoryCodec = &modelHistoryCodec{protector: protector}
 	restored, _, _ := b.sessionHistorySnapshot(sid)
@@ -168,6 +168,7 @@ func TestResponsesNativeReplayAndProtectedRestart(t *testing.T) {
 }
 
 func TestResponsesTerminalDoesNotWaitForConnection(t *testing.T) {
+	t.Parallel()
 	for _, auth := range []string{"", authChatGPTOAuth} {
 		t.Run(auth, func(t *testing.T) {
 			reader, writer := io.Pipe()
@@ -199,7 +200,7 @@ func TestSubagentDoesNotMultiplyAdapterRetries(t *testing.T) {
 	t.Parallel()
 	for _, format := range []string{apiFormatOpenAIChat, apiFormatOpenAIResponses} {
 		t.Run(format, func(t *testing.T) {
-			a := newApiTestApp(t)
+			a := newIsolatedChatTestApp(t)
 			var count atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				count.Add(1)
@@ -231,6 +232,7 @@ func (tr protocolTailTransport) RoundTrip(req *http.Request) (*http.Response, er
 }
 
 func TestChatKeepsTrailingUsageAndCompletedTransportErrors(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, tail string
 		err        error
@@ -264,6 +266,7 @@ func TestChatKeepsTrailingUsageAndCompletedTransportErrors(t *testing.T) {
 }
 
 func TestRetryModelTurnOnlyOwnsInterruptedOrEmptyResponses(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		err           error
 		emitted, want bool
@@ -281,6 +284,7 @@ func TestRetryModelTurnOnlyOwnsInterruptedOrEmptyResponses(t *testing.T) {
 }
 
 func TestChatRemembersExplicitStreamOptionsRejection(t *testing.T) {
+	t.Parallel()
 	var requests, rejected atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -312,6 +316,7 @@ func TestChatRemembersExplicitStreamOptionsRejection(t *testing.T) {
 }
 
 func TestResponsesRepeatedAnswersKeepTheirOwnPhase(t *testing.T) {
+	t.Parallel()
 	cfg := protocolConfig("https://mock.invalid/v1", apiFormatOpenAIResponses)
 	a := &App{reasoningStash: newReasoningStash()}
 	var history []openai.ChatCompletionMessage
@@ -331,6 +336,7 @@ func TestResponsesRepeatedAnswersKeepTheirOwnPhase(t *testing.T) {
 }
 
 func TestRunUsageIncludesNestedAndFailedTerminalRequests(t *testing.T) {
+	t.Parallel()
 	ctx := withModelRunUsage(context.Background())
 	child := withModelRunUsage(ctx)
 	if ctx.Value(modelRunUsageKey{}) != child.Value(modelRunUsageKey{}) {
@@ -357,6 +363,7 @@ func TestRunUsageIncludesNestedAndFailedTerminalRequests(t *testing.T) {
 }
 
 func TestChatCacheMissIncludesCompletelyUncachedRequests(t *testing.T) {
+	t.Parallel()
 	var records []statsRecord
 	for _, hit := range []int{80, 0} {
 		usage := modelUsageFromLegacy(&openai.Usage{
@@ -374,7 +381,7 @@ func TestAnthropicFailedAttemptsKeepUsage(t *testing.T) {
 	t.Parallel()
 	for _, retry := range []bool{false, true} {
 		t.Run(fmt.Sprint("retry=", retry), func(t *testing.T) {
-			a := newApiTestApp(t)
+			a := newIsolatedChatTestApp(t)
 			var requests atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				attempt := requests.Add(1)
@@ -420,6 +427,7 @@ func TestAnthropicFailedAttemptsKeepUsage(t *testing.T) {
 }
 
 func TestResponsesIncompleteIsNotACompleteNativeTurn(t *testing.T) {
+	t.Parallel()
 	cfg := protocolConfig("https://mock.invalid/v1", apiFormatOpenAIResponses)
 	a := &App{reasoningStash: newReasoningStash()}
 	r, _, err := a.consumeOpenAIResponsesStream(cfg, buildOpenAIResponsesRequest(cfg, cfg.Model, nil, nil, nil), auditStream(`data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":10,"output_tokens":20}}}`+"\n\n", true), nil)
@@ -443,7 +451,7 @@ func (unavailableHistoryProtector) Open([]byte) ([]byte, error) {
 
 func TestProtectedHistoryFailureFallsBackWithoutPlaintextState(t *testing.T) {
 	t.Parallel()
-	a := newApiTestApp(t)
+	a := newIsolatedChatTestApp(t)
 	a.modelHistoryCodec = &modelHistoryCodec{protector: unavailableHistoryProtector{}}
 	cfg := protocolConfig("https://mock.invalid/v1", apiFormatOpenAIResponses)
 	history := []openai.ChatCompletionMessage{{Role: "user", Content: "task"}, {Role: "assistant", Content: "done"}}
@@ -463,6 +471,7 @@ func TestProtectedHistoryFailureFallsBackWithoutPlaintextState(t *testing.T) {
 }
 
 func TestResponsesOutputCaptureOrdersCompletionEventsAndHandlesReusedIndex(t *testing.T) {
+	t.Parallel()
 	var capture responsesOutputCapture
 	for _, raw := range []string{
 		`{"output_index":2,"item":{"type":"function_call","id":"fc_1","call_id":"one"}}`,
@@ -487,6 +496,7 @@ func TestResponsesOutputCaptureOrdersCompletionEventsAndHandlesReusedIndex(t *te
 }
 
 func TestResponsesInterruptedBeforeTerminalCannotBecomeReplayState(t *testing.T) {
+	t.Parallel()
 	cfg := protocolConfig("https://mock.invalid/v1", apiFormatOpenAIResponses)
 	a := &App{reasoningStash: newReasoningStash()}
 	r, _, err := a.consumeOpenAIResponsesStream(cfg, buildOpenAIResponsesRequest(cfg, cfg.Model, nil, nil, nil), auditStream(`data: {"type":"response.output_text.delta","delta":"unfinished"}`+"\n\n", true), nil)
@@ -507,7 +517,7 @@ func TestResponsesCallIDsIndependentOfNativeReplay(t *testing.T) {
 		{"legacy-ledger", "response.completed", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := newApiTestApp(t)
+			a := newIsolatedChatTestApp(t)
 			items := []json.RawMessage{
 				json.RawMessage(`{"type":"reasoning","id":"rs_duplicate","encrypted_content":"opaque","summary":[]}`),
 				json.RawMessage(`{"type":"function_call","id":"fc_a","call_id":"shared","name":"read","arguments":"{}"}`),
@@ -571,7 +581,7 @@ func TestResponsesCallIDsIndependentOfNativeReplay(t *testing.T) {
 
 func TestProtectedHistoryOmitsImagesAndTransientToolResults(t *testing.T) {
 	t.Parallel()
-	a := newApiTestApp(t)
+	a := newIsolatedChatTestApp(t)
 	block, _ := aes.NewCipher(make([]byte, 32))
 	gcm, _ := cipher.NewGCM(block)
 	a.modelHistoryCodec = &modelHistoryCodec{protector: oauthTestProtector{gcm}}
@@ -614,7 +624,7 @@ func TestProtectedHistoryOmitsImagesAndTransientToolResults(t *testing.T) {
 
 func TestProtectedRestartFiltersLegacyObservationsWithoutLosingPairing(t *testing.T) {
 	t.Parallel()
-	a := newApiTestApp(t)
+	a := newIsolatedChatTestApp(t)
 	block, _ := aes.NewCipher(make([]byte, 32))
 	gcm, _ := cipher.NewGCM(block)
 	protector := oauthTestProtector{gcm}
@@ -742,7 +752,7 @@ func TestProtectedHistoryClassifiesRepeatedIDsByDeclarationOrder(t *testing.T) {
 
 func TestResponsesSparseOutputIndexesDoNotDuplicateCalls(t *testing.T) {
 	t.Parallel()
-	a := newApiTestApp(t)
+	a := newIsolatedChatTestApp(t)
 	cfg := protocolConfig("https://mock.invalid", apiFormatOpenAIResponses)
 	wire := ""
 	for _, event := range []string{
@@ -778,7 +788,7 @@ func TestProtectedReplayRebasesOnlyUnchangedTurns(t *testing.T) {
 		{"truncated-arguments", openai.ChatCompletionMessage{Role: "assistant", Content: "same", ToolCalls: []openai.ToolCall{call("read", `{"path":`)}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := newApiTestApp(t)
+			a := newIsolatedChatTestApp(t)
 			block, _ := aes.NewCipher(make([]byte, 32))
 			gcm, _ := cipher.NewGCM(block)
 			protector := oauthTestProtector{gcm}
@@ -812,7 +822,7 @@ func TestProtectedReplayRebasesOnlyUnchangedTurns(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			b := newApiTestApp(t)
+			b := newIsolatedChatTestApp(t)
 			b.modelHistoryCodec = &modelHistoryCodec{protector: protector}
 			restored, publish := b.modelHistoryFromStorage("protocol-session", raw, disk)
 			if publish == nil {

@@ -270,6 +270,11 @@ type fileMutationTarget struct{ key, display string }
 // one path, one target (see dedupeMutationTargets).
 func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutationTarget {
 	name = normalizeToolName(name)
+	raw, err := normalizeRemoteArguments(name, []byte(arguments))
+	if err != nil {
+		return nil
+	}
+	arguments = string(raw)
 	if name == "edit" {
 		// The flat model-facing request carries exactly one file; conflict
 		// detection and execution share the same plan boundary.
@@ -285,7 +290,7 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 	}
 	if name == "remote_transfer" {
 		var transArgs struct {
-			Target     string `json:"target"`
+			Alias      string `json:"alias"`
 			Action     string `json:"action"`
 			LocalPath  string `json:"localPath"`
 			RemotePath string `json:"remotePath"`
@@ -296,7 +301,7 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 		action := strings.ToLower(strings.TrimSpace(transArgs.Action))
 		switch action {
 		case "upload":
-			target := strings.TrimSpace(transArgs.Target)
+			target := strings.TrimSpace(transArgs.Alias)
 			cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(transArgs.RemotePath), "\\", "/"))
 			if cleanPath != "" && cleanPath != "." {
 				return []fileMutationTarget{{
@@ -319,9 +324,9 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 	// lists two overlapping paths is normalised inside the call itself, see
 	// planDeleteExecution).
 	var args struct {
-		Target string   `json:"target"`
-		Path   string   `json:"path"`
-		Paths  []string `json:"paths"`
+		Alias string   `json:"alias"`
+		Path  string   `json:"path"`
+		Paths []string `json:"paths"`
 	}
 	if json.Unmarshal([]byte(arguments), &args) != nil {
 		return nil
@@ -338,7 +343,7 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 	}
 	targets := make([]fileMutationTarget, 0, len(paths))
 	if strings.HasPrefix(name, "remote_") {
-		target := strings.TrimSpace(args.Target)
+		target := strings.TrimSpace(args.Alias)
 		for _, p := range paths {
 			cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(p), "\\", "/"))
 			targets = append(targets, fileMutationTarget{remoteMutationKey(target, cleanPath), target + " · " + cleanPath})

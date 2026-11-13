@@ -32,6 +32,7 @@ import (
 // reject the request with 400 ("The reasoning_content in the thinking mode
 // must be passed back to the API").
 func TestRunChatReplaysReasoningContentOnToolTurn(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var bodies []string
 	var requests atomic.Int32
@@ -57,7 +58,7 @@ func TestRunChatReplaysReasoningContentOnToolTurn(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newModelTestApp(t)
 	app.initialized = true
 	app.stats = nil
 	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
@@ -103,6 +104,7 @@ func TestRunChatReplaysReasoningContentOnToolTurn(t *testing.T) {
 // present (reasoning_content:"") — go-openai's omitempty would otherwise
 // drop it and DeepSeek V4 rejects the request (karminski's 59% repro).
 func TestRunChatKeepsEmptyReasoningFieldWithExplicitEffort(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var bodies []string
 	var requests atomic.Int32
@@ -129,7 +131,7 @@ func TestRunChatKeepsEmptyReasoningFieldWithExplicitEffort(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newModelTestApp(t)
 	app.initialized = true
 	app.stats = nil
 	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
@@ -175,6 +177,7 @@ func TestRunChatKeepsEmptyReasoningFieldWithExplicitEffort(t *testing.T) {
 // validate, and a history restored from disk has nothing else to send. Nothing
 // is invented beyond the placeholder.
 func TestRunChatBackfillsEmptyReasoningPlaceholder(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var bodies []string
 	var requests atomic.Int32
@@ -199,7 +202,7 @@ func TestRunChatBackfillsEmptyReasoningPlaceholder(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newModelTestApp(t)
 	app.initialized = true
 	app.stats = nil
 	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
@@ -239,6 +242,7 @@ func TestRunChatBackfillsEmptyReasoningPlaceholder(t *testing.T) {
 // ── Anthropic: end-to-end thinking replay through streamAnthropicMessages ──
 
 func TestAnthropicStreamReplaysThinkingBlocks(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var bodies []string
 	var requests atomic.Int32
@@ -280,7 +284,7 @@ func TestAnthropicStreamReplaysThinkingBlocks(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newModelTestApp(t)
 	app.initialized = true
 	app.stats = nil
 	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
@@ -333,6 +337,7 @@ func TestAnthropicStreamReplaysThinkingBlocks(t *testing.T) {
 // ── Responses: end-to-end reasoning item replay ─────────────────────────────
 
 func TestResponsesStreamReplaysReasoningItems(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var bodies []string
 	var requests atomic.Int32
@@ -364,7 +369,7 @@ func TestResponsesStreamReplaysReasoningItems(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newModelTestApp(t)
 	app.initialized = true
 	app.stats = nil
 	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
@@ -479,6 +484,7 @@ func assistantToolCallHasReasoningField(t *testing.T, body, callID string) bool 
 // ── Unit: replay activation & empty-field patch ─────────────────────────────
 
 func TestPatchReasoningContentFields(t *testing.T) {
+	t.Parallel()
 	// Message 0: user message
 	// Message 1: historical assistant (gains the empty placeholder too: the
 	//            provider validates the field per assistant message)
@@ -539,6 +545,7 @@ func TestPatchReasoningContentFields(t *testing.T) {
 // otherwise DeepSeek answers 400 with "the reasoning_content in the thinking mode
 // must be passed back to the API".
 func TestPatchReasoningContentFieldsCoversRestoredHistory(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"m","messages":[` +
 		`{"role":"user","content":"q1"},` +
 		`{"role":"assistant","content":"","tool_calls":[{"id":"c1"}]},` +
@@ -577,6 +584,7 @@ func TestPatchReasoningContentFieldsCoversRestoredHistory(t *testing.T) {
 // spelling is a top-level parameter, so the message prefix stays untouched, it is
 // written once, and it never overwrites a field the caller already set.
 func TestPatchChatRequestFieldsAddsStopThinkingField(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		spelling  reasoningStopThinking
@@ -646,6 +654,7 @@ func TestPatchChatRequestFieldsAddsStopThinkingField(t *testing.T) {
 // field on every assistant message. The dialect follows the configured one, and
 // asking the provider to stop thinking opts out of the field entirely.
 func TestChatReasoningBackfillKey(t *testing.T) {
+	t.Parallel()
 	if got := chatReasoningBackfillKey(ConfigState{BaseURL: openAIOfficialAPIBaseURL}); got != "" {
 		t.Fatalf("official OpenAI endpoint: key = %q, want empty", got)
 	}
@@ -678,6 +687,7 @@ func TestChatReasoningBackfillKey(t *testing.T) {
 // ── Anthropic: thinking block + signature replay ────────────────────────────
 
 func TestAnthropicThinkingBlockParams(t *testing.T) {
+	t.Parallel()
 	blocks := []anthropicThinkingBlock{
 		{Thinking: "step one", Signature: "sig_1"},
 		{Data: "redacted-bytes"},
@@ -717,6 +727,7 @@ func TestAnthropicThinkingBlockParams(t *testing.T) {
 // the prefix bytes change and the provider prompt cache is lost from that
 // message onward, re-billing the recent tool output on every agent step.
 func TestBuildAnthropicMessagesReplaysThinkingPerTurn(t *testing.T) {
+	t.Parallel()
 	replay := &sessionReasoningPayload{turns: []reasoningTurn{
 		{callIDs: []string{"t1"}, anthropic: []anthropicThinkingBlock{{Thinking: "step one", Signature: "sig_1"}}},
 		{callIDs: []string{"t2"}, anthropic: []anthropicThinkingBlock{{Thinking: "step two", Signature: "sig_2"}}},
@@ -773,6 +784,7 @@ func TestBuildAnthropicMessagesReplaysThinkingPerTurn(t *testing.T) {
 // item stays right before its own turn's function_call outputs in every later
 // request, so the input prefix never sheds replay decorations.
 func TestBuildOpenAIResponsesInputReplaysReasoningPerTurn(t *testing.T) {
+	t.Parallel()
 	replay := &sessionReasoningPayload{turns: []reasoningTurn{
 		{
 			callIDs:        []string{"call_1"},
@@ -823,6 +835,7 @@ func TestBuildOpenAIResponsesInputReplaysReasoningPerTurn(t *testing.T) {
 // much reasoning text the history still holds), while a turn that replays and an
 // assistant message without tool calls are not.
 func TestResponsesReplaySkipsNamesTheUncoveredTurn(t *testing.T) {
+	t.Parallel()
 	replay := &sessionReasoningPayload{turns: []reasoningTurn{{
 		callIDs:        []string{"call_1"},
 		responses:      []responsesReasoningItem{{ID: "rs_1", EncryptedContent: "enc"}},
@@ -861,6 +874,7 @@ func TestResponsesReplaySkipsNamesTheUncoveredTurn(t *testing.T) {
 // documented field survives capture -> carrier -> request. pi stores the whole
 // item as JSON for exactly that reason (openai-responses-shared.ts:222/689-690).
 func TestResponsesReasoningItemKeepsEveryField(t *testing.T) {
+	t.Parallel()
 	var item responsesOutputItem
 	if err := json.Unmarshal([]byte(`{"type":"reasoning","id":"rs_9","status":"completed","encrypted_content":"enc-9","summary":[{"type":"summary_text","text":"part one"},{"type":"summary_text","text":"part two"}],"content":[{"type":"reasoning_text","text":"raw chain"}]}`), &item); err != nil {
 		t.Fatalf("unmarshal reasoning item: %v", err)
@@ -898,6 +912,7 @@ func TestResponsesReasoningItemKeepsEveryField(t *testing.T) {
 // sent back. Dropping it keeps the request valid — the follower function_call
 // carries its own id, and only a reasoning item requires its follower.
 func TestResponsesReasoningItemWithoutUsableIDDropped(t *testing.T) {
+	t.Parallel()
 	var item responsesOutputItem
 	if err := json.Unmarshal([]byte(`{"type":"reasoning","id":"","summary":[]}`), &item); err != nil {
 		t.Fatalf("unmarshal reasoning item: %v", err)
@@ -911,6 +926,7 @@ func TestResponsesReasoningItemWithoutUsableIDDropped(t *testing.T) {
 // signatures and encrypted reasoning are only valid for the model that emitted
 // them, so a model switch must start a fresh payload.
 func TestReasoningReplayKeyScopesModelAndProtocol(t *testing.T) {
+	t.Parallel()
 	base := ConfigState{APIFormat: apiFormatOpenAIResponses, Model: "gpt-5.6", responsesPromptCacheKey: "sess"}
 	same := ConfigState{APIFormat: apiFormatOpenAIResponses, Model: "GPT-5.6", responsesPromptCacheKey: "sess"}
 	if reasoningReplayKey(base, base.Model) != reasoningReplayKey(same, same.Model) {
@@ -933,6 +949,7 @@ func TestReasoningReplayKeyScopesModelAndProtocol(t *testing.T) {
 // tool result used to drop the key entirely (kimi-code emits content: null for
 // the same reason). The captured reasoning_details ride on the same message.
 func TestPatchChatRequestFieldsAddsContent(t *testing.T) {
+	t.Parallel()
 	body, err := json.Marshal(map[string]any{
 		"model": "m",
 		"messages": []map[string]any{
@@ -994,6 +1011,7 @@ func TestPatchChatRequestFieldsAddsContent(t *testing.T) {
 // turn's own assistant message in every request, so a patched two-turn body
 // keeps the first turn's messages byte-identical to the one-turn body.
 func TestPatchChatRequestFieldsDetailsPerTurn(t *testing.T) {
+	t.Parallel()
 	marshal := func(v any) []byte {
 		t.Helper()
 		raw, err := json.Marshal(v)
@@ -1046,6 +1064,7 @@ func TestPatchChatRequestFieldsDetailsPerTurn(t *testing.T) {
 // assistant turn whose call ids it was captured with, so a stale or foreign
 // payload cannot be glued to an unrelated message.
 func TestBuildAnthropicMessagesThinkingRequiresMatchingTurn(t *testing.T) {
+	t.Parallel()
 	replay := &sessionReasoningPayload{turns: []reasoningTurn{
 		{callIDs: []string{"other"}, anthropic: []anthropicThinkingBlock{{Thinking: "step one", Signature: "sig_1"}}},
 	}}
@@ -1075,6 +1094,7 @@ func TestBuildAnthropicMessagesThinkingRequiresMatchingTurn(t *testing.T) {
 // map is a normal state, so a new entry may only drop the coldest one — never the
 // live payload of another session or of a concurrent tool loop.
 func TestReasoningStashEvictionKeepsOtherEntries(t *testing.T) {
+	t.Parallel()
 	stash := newReasoningStash()
 	turn := func() reasoningTurn {
 		return reasoningTurn{callIDs: []string{"c"}, chatDetails: json.RawMessage("[]")}
@@ -1110,6 +1130,7 @@ func TestReasoningStashEvictionKeepsOtherEntries(t *testing.T) {
 // this cleanup a silent no-op that kept dead turns' signatures replayed onto
 // later turns and left their entries occupying the LRU.
 func TestReasoningStashClearSession(t *testing.T) {
+	t.Parallel()
 	scope := func(sessionID string) string { return openAIResponsesPromptCacheKey(sessionID) }
 	key := func(sessionID, format, model string) string {
 		return reasoningReplayKey(ConfigState{
@@ -1144,6 +1165,7 @@ func TestReasoningStashClearSession(t *testing.T) {
 // payload stored for one model must not be readable for another, and the key must
 // follow the model that actually issues the request.
 func TestReasoningReplayKeyIsolatesStoredPayloads(t *testing.T) {
+	t.Parallel()
 	stash := newReasoningStash()
 	cfgA := ConfigState{APIFormat: apiFormatOpenAIResponses, Model: "gpt-5.6", responsesPromptCacheKey: "sess"}
 	keyA := reasoningReplayKey(cfgA, cfgA.Model)
@@ -1168,6 +1190,7 @@ func TestReasoningReplayKeyIsolatesStoredPayloads(t *testing.T) {
 // turns accumulate within one key, a re-captured turn replaces its entry
 // instead of stacking, and an empty or unidentified turn is ignored.
 func TestReasoningStashAppendTurnAccumulates(t *testing.T) {
+	t.Parallel()
 	stash := newReasoningStash()
 	stash.appendTurn("k", reasoningTurn{callIDs: []string{"c1"}, anthropic: []anthropicThinkingBlock{{Thinking: "one", Signature: "s1"}}})
 	stash.appendTurn("k", reasoningTurn{callIDs: []string{"c2"}, anthropic: []anthropicThinkingBlock{{Thinking: "two", Signature: "s2"}}})
@@ -1193,6 +1216,7 @@ func TestReasoningStashAppendTurnAccumulates(t *testing.T) {
 // pi supports too (openai-completions.ts:280 lists reasoning,
 // reasoning_content, reasoning_text).
 func TestParseStreamReasoningSupportsReasoningText(t *testing.T) {
+	t.Parallel()
 	text, details := parseStreamReasoning([]byte(`{"choices":[{"delta":{"reasoning_text":"thinking..."}}]}`))
 	if text != "thinking..." {
 		t.Fatalf("reasoning_text must be parsed, got %q", text)
@@ -1224,6 +1248,7 @@ func TestParseStreamReasoningSupportsReasoningText(t *testing.T) {
 // request none of the transport's rules can touch may skip the body rewrite.
 // Every global field and every tool-bearing message must stay on the old path.
 func TestChatRequestRewriteNeededConservative(t *testing.T) {
+	t.Parallel()
 	plain := legacyopenai.ChatCompletionRequest{
 		Messages: []legacyopenai.ChatCompletionMessage{
 			{Role: legacyopenai.ChatMessageRoleUser, Content: "hello"},
@@ -1273,6 +1298,7 @@ func TestChatRequestRewriteNeededConservative(t *testing.T) {
 // keeps its SDK-provided replayable body, and still gets the SSE [DONE]
 // watcher that distinguishes a completed stream from a cut connection.
 func TestChatRequestRewriteTransportSkipsBodyCopy(t *testing.T) {
+	t.Parallel()
 	const payload = `{"model":"gpt-test","messages":[{"role":"user","content":"hello"}],"stream":true}`
 	capture := &rewriteCaptureTransport{}
 	watcher := &sseDoneWatcher{}

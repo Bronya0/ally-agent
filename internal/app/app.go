@@ -1282,8 +1282,8 @@ type WebFetchResult struct {
 }
 
 type RemoteReadFileRequest struct {
-	Target string                 `json:"target"`
-	Files  []BatchReadFileRequest `json:"files"`
+	Alias string                 `json:"alias"`
+	Files []BatchReadFileRequest `json:"files"`
 	// Compatibility fields for legacy single-file reads
 	Path      string `json:"path,omitempty"`
 	StartLine int    `json:"startLine,omitempty"`
@@ -1291,11 +1291,11 @@ type RemoteReadFileRequest struct {
 }
 
 // RemoteEditRequest is the flat model-facing remote_edit request: exactly one
-// file per call, path/version/changes at the top level under the SSH target —
-// the same shape local edit uses, with an SSH server `target` and absolute path.
+// file per call, path/version/changes at the top level under the SSH alias —
+// the same shape local edit uses, with an SSH server `alias` and absolute path.
 // Multi-file changes are parallel remote_edit calls in one model response.
 type RemoteEditRequest struct {
-	Target  string       `json:"target"`
+	Alias   string       `json:"alias"`
 	Path    string       `json:"path"`
 	Version string       `json:"version"`
 	Changes []TextChange `json:"changes"`
@@ -1306,7 +1306,7 @@ func (req RemoteEditRequest) file() FileTextEdits {
 }
 
 type RemoteCreateFileRequest struct {
-	Target    string `json:"target"`
+	Alias     string `json:"alias"`
 	Path      string `json:"path"`
 	Content   string `json:"content"`
 	Overwrite bool   `json:"overwrite"`
@@ -1314,13 +1314,13 @@ type RemoteCreateFileRequest struct {
 }
 
 type RemoteDeletePathRequest struct {
-	Target    string   `json:"target"`
+	Alias     string   `json:"alias"`
 	Paths     []string `json:"paths"`
 	Recursive bool     `json:"recursive"`
 }
 
 type RemoteRunCommandRequest struct {
-	Target  string `json:"target"`
+	Alias   string `json:"alias"`
 	Command string `json:"command"`
 	Cwd     string `json:"cwd,omitempty"` // Compatibility for older session tool snapshots.
 	Timeout int    `json:"timeout,omitempty"`
@@ -3871,6 +3871,11 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 	rawArgs := args
 	if len(bytes.TrimSpace(rawArgs)) == 0 {
 		rawArgs = []byte("{}")
+	}
+	var normalizeErr error
+	rawArgs, normalizeErr = normalizeRemoteArguments(name, rawArgs)
+	if normalizeErr != nil {
+		return codedToolError("E_BAD_ARGS", normalizeErr), nil
 	}
 	// Parse the raw JSON to a map to detect extra keys.
 	var rawMap map[string]json.RawMessage

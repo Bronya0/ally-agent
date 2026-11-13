@@ -219,19 +219,39 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 	ui.Column(c).Key("rail-workspaces").FillWidth().Shrink(1).MinHeight(24).Children(func() {
 		a.railSectionHeader(c, "rail-ws", locales.Text("工作区"), "folderopen", a.prefs.RailWorkspaceOpen, locales.Text("添加工作区"), func() {
 			a.prefs.RailWorkspaceOpen = !a.prefs.RailWorkspaceOpen
+			if !a.prefs.RailWorkspaceOpen {
+				a.railWSSearch = railSearchState{}
+			}
 			a.savePrefs()
-		}, func() { a.chooseWorkspace() })
+		}, func() { a.chooseWorkspace() }, a.railWSSearch.open, func() {
+			a.railWSSearch = railSearchToggle(a.railWSSearch)
+			if a.railWSSearch.open && !a.prefs.RailWorkspaceOpen {
+				a.prefs.RailWorkspaceOpen = true
+				a.savePrefs()
+			}
+		})
 		uikit.Reveal(c.Key("rail-workspaces-reveal"), a.prefs.RailWorkspaceOpen, func() {
 			ui.Column(c).FillWidth().Padding(3, 0, 0).Children(func() {
+				a.railSearchField(c, "rail-ws-search", locales.Text("工作区"), &a.railWSSearch)
+				query := strings.TrimSpace(a.railWSSearch.query)
 				ui.Scroll(c.Key("workspace-items")).FillWidth().MaxHeight(180).MinHeight(0).Children(func() {
-					a.railWorkspaceRow(c, "", locales.Text("临时工作区"), locales.Text("在系统临时目录创建沙箱，随标签页关闭自动删除"))
-					roots := a.workspaceHistoryRoots()
-					for _, root := range roots {
+					shown := 0
+					temporary := locales.Text("临时工作区")
+					if query == "" || strings.Contains(strings.ToLower(temporary), strings.ToLower(query)) {
+						a.railWorkspaceRow(c, "", temporary, locales.Text("在系统临时目录创建沙箱，随标签页关闭自动删除"))
+						shown++
+					}
+					for _, root := range railWorkspacesMatching(a.workspaceHistoryRoots(), query) {
 						root := root
 						a.railWorkspaceRow(c, root, workspaceLabel(root), root)
+						shown++
 					}
-					if len(roots) == 0 {
-						ui.Text(c, locales.Text("无历史记录")).FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset())
+					if shown == 0 {
+						note := locales.Text("无历史记录")
+						if query != "" {
+							note = locales.Text("无匹配结果")
+						}
+						ui.Text(c, note).FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset())
 					}
 				})
 			})
@@ -330,58 +350,86 @@ func (a *desktop) railSessions(c *ui.Context) {
 	ui.Column(c).Key("rail-sessions").FillWidth().Grow(1).MinHeight(24).Gap(3).Children(func() {
 		a.railSectionHeader(c, "rail-sess", locales.Text("历史会话"), "history", a.prefs.RailSessionsOpen, locales.Text("新建会话"), func() {
 			a.prefs.RailSessionsOpen = !a.prefs.RailSessionsOpen
+			if !a.prefs.RailSessionsOpen {
+				a.railSessSearch = railSearchState{}
+			}
 			a.savePrefs()
-		}, func() { a.newSession() })
+		}, func() { a.newSession() }, a.railSessSearch.open, func() {
+			a.railSessSearch = railSearchToggle(a.railSessSearch)
+			if a.railSessSearch.open && !a.prefs.RailSessionsOpen {
+				a.prefs.RailSessionsOpen = true
+				a.savePrefs()
+			}
+		})
 		uikit.FadeReveal(c.Key("rail-sessions-content"), a.prefs.RailSessionsOpen, func() {
+			a.railSearchField(c, "rail-sess-search", locales.Text("历史会话"), &a.railSessSearch)
 			t := a.current()
 			workspace := ""
 			if t != nil {
 				workspace = t.Workspace
 			}
-			entries, _ := a.workspaceSessions(workspace)
+			all := a.workspaceSessionEntries(workspace)
+			entries := a.railSessionsMatching(workspace, all)
 			if len(entries) == 0 {
-				ui.Text(c, locales.Text("当前工作区暂无历史会话")).FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset())
+				note := locales.Text("当前工作区暂无历史会话")
+				if strings.TrimSpace(a.railSessSearch.query) != "" {
+					note = locales.Text("无匹配结果")
+				}
+				ui.Text(c, note).FontSize(fsSmall).TextColor(a.secondaryInk()).Padding(0, railContentInset())
 				return
 			}
-			ui.Scroll(c.Key("session-items")).FillWidth().Grow(1).MinHeight(0).Children(func() {
-				for _, entry := range entries {
-					entry := entry
-					busy := entry.ID == sessionBusyID(a, entry.ID)
-					active := t != nil && t.ID == entry.ID
-					row := ui.Row(c.Key("rail-sess-"+entry.ID)).Height(30).Radius(6).Padding(0, railContentInset()).AlignItems(ui.Center).Gap(gapInline)
-					fill := ui.Transparent
-					ink := a.secondaryInk()
-					if active {
-						fill = selectionFill(c.Theme().Accent)
-						ink = c.Theme().Accent
-					} else if row.Hovered() {
-						fill = p.hover
-					}
-					row.Background(fadeColor(row, "fill", fill))
-					title := entry.Title
-					if title == "" {
-						title = locales.Text("会话")
-					}
-					uikit.RightTooltip(c, row, fmt.Sprintf(locales.Text("%s\n%s · %d 条"), title, fmtTime(entry.UpdatedAt), entry.MessageCount))
-					row.Children(func() {
-						btn := ui.ButtonBase(c.Key("rail-sess-btn-" + entry.ID)).Grow(1).Height(28).Justify(ui.Start).Label(title).Cursor(ui.CursorPointer)
-						btn.OnClick(func() { a.openSession(entry.ID) })
-						btn.Children(func() {
-							ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-								ui.Text(c, title).FontSize(fsSmall).TextColor(ink).SingleLine()
-								if busy {
-									ui.Box(c).Size(5, 5).Radius(3).Background(p.accent)
-								}
-							})
-						})
-						b := dangerIconAction(c, "rail-sess-del-"+entry.ID, locales.Text("删除会话"), "close", 18, func() {
-							a.deleteSession(entry.ID, title)
-						})
-						railHoverAction(c, row, b, busy)
-					})
+			// Another workspace's sessions, or another query, replace these rows
+			// as a whole: start the list afresh at its top.
+			root := workspaceKey(workspace)
+			query := strings.TrimSpace(a.railSessSearch.query)
+			if a.railListRoot != root || a.railListQuery != query {
+				a.railListRoot, a.railListQuery, a.railList = root, query, ui.ListState{}
+			}
+			a.railList.Key = func(row int) any { return entries[row].ID }
+			// The list builds the rows in view only: the rail's cost follows the
+			// window, not the number of sessions kept.
+			ui.List(c.Key("session-items"), &a.railList, len(entries), func(i int) {
+				a.railSessionRow(c, t, entries[i], p)
+			}).FillWidth().Grow(1).MinHeight(0).Label(locales.Text("历史会话"))
+		}).Grow(1).MinHeight(0).Shrink(1)
+	})
+}
+
+// railSessionRow draws one session of the rail. p is the palette the caller
+// already resolved, so a row pays no lookup of its own.
+func (a *desktop) railSessionRow(c *ui.Context, t *conversation, entry backend.SessionIndexEntry, p palette) {
+	busy := entry.ID == sessionBusyID(a, entry.ID)
+	active := t != nil && t.ID == entry.ID
+	row := ui.Row(c).Height(30).Radius(6).Padding(0, railContentInset()).AlignItems(ui.Center).Gap(gapInline)
+	fill := ui.Transparent
+	ink := a.secondaryInk()
+	if active {
+		fill = selectionFill(c.Theme().Accent)
+		ink = c.Theme().Accent
+	} else if row.Hovered() {
+		fill = p.hover
+	}
+	row.Background(fadeColor(row, "fill", fill))
+	title := entry.Title
+	if title == "" {
+		title = locales.Text("会话")
+	}
+	uikit.RightTooltip(c, row, fmt.Sprintf(locales.Text("%s\n%s · %d 条"), title, fmtTime(entry.UpdatedAt), entry.MessageCount))
+	row.Children(func() {
+		btn := ui.ButtonBase(c.Key("rail-sess-btn-" + entry.ID)).Grow(1).Height(28).Justify(ui.Start).Label(title).Cursor(ui.CursorPointer)
+		btn.OnClick(func() { a.openSession(entry.ID) })
+		btn.Children(func() {
+			ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, title).FontSize(fsSmall).TextColor(ink).SingleLine()
+				if busy {
+					ui.Box(c).Size(5, 5).Radius(3).Background(p.accent)
 				}
 			})
-		}).Grow(1).MinHeight(0).Shrink(1)
+		})
+		b := dangerIconAction(c, "rail-sess-del-"+entry.ID, locales.Text("删除会话"), "close", 18, func() {
+			a.deleteSession(entry.ID, title)
+		})
+		railHoverAction(c, row, b, busy)
 	})
 }
 
@@ -402,19 +450,10 @@ type workspaceSessionKey struct {
 	workspace string
 }
 
-// workspaceSessionList is the bounded list the rail and the pickers draw plus
-// the number of sessions that exist: the header must say how many there are, not
-// how many of them fit on screen.
-type workspaceSessionList struct {
-	entries []backend.SessionIndexEntry
-	total   int
-}
-
-// workspaceSessions is a per-frame read for the rail, the composer's session
-// menu and the workspace menus: the scan, the copy and the sort run once per
-// replacement of the session index instead of once per frame.
-func (a *desktop) workspaceSessions(workspace string) ([]backend.SessionIndexEntry, int) {
-	list := a.wsSessionMemo.get(workspaceSessionKey{a.sessRev, workspace}, func(key workspaceSessionKey) workspaceSessionList {
+// workspaceSessionEntries shares the full sorted index with search and menus.
+// Filtering and sorting run only when the workspace or session index changes.
+func (a *desktop) workspaceSessionEntries(workspace string) []backend.SessionIndexEntry {
+	return a.wsSessionMemo.get(workspaceSessionKey{a.sessRev, workspace}, func(key workspaceSessionKey) []backend.SessionIndexEntry {
 		var entries []backend.SessionIndexEntry
 		for _, entry := range a.sessions {
 			if key.workspace == "" || strings.EqualFold(entry.Workspace, key.workspace) {
@@ -424,15 +463,14 @@ func (a *desktop) workspaceSessions(workspace string) ([]backend.SessionIndexEnt
 		sort.SliceStable(entries, func(i, j int) bool {
 			return entries[i].UpdatedAt > entries[j].UpdatedAt
 		})
-		total := len(entries)
-		if len(entries) > 80 {
-			// Retain only the displayed prefix, not the full sorted backing
-			// array. The authoritative index still owns every session.
-			entries = append([]backend.SessionIndexEntry(nil), entries[:80]...)
-		}
-		return workspaceSessionList{entries: entries, total: total}
+		return entries
 	})
-	return list.entries, list.total
+}
+
+// Pickers keep their short list; the rail searches and virtualizes the full index.
+func (a *desktop) workspaceSessions(workspace string) ([]backend.SessionIndexEntry, int) {
+	entries := a.workspaceSessionEntries(workspace)
+	return entries[:min(len(entries), 80)], len(entries)
 }
 
 // petalsOverlay draws a light decorative layer after the original welcome
@@ -468,7 +506,7 @@ func (a *desktop) petalsOverlay(c *ui.Context) {
 
 // Section headers reuse the navigation layout and ink. The add action is a
 // sibling, so it never toggles the section when pressed.
-func (a *desktop) railSectionHeader(c *ui.Context, id, label, icon string, open bool, tip string, toggle, add func()) {
+func (a *desktop) railSectionHeader(c *ui.Context, id, label, icon string, open bool, tip string, toggle, add func(), searchOpen bool, search func()) {
 	ui.Row(c.Key(id + "-header")).FillWidth().Height(heightRailItem).Children(func() {
 		navItem(c, id+"-toggle", label, icon, true, false, func() {
 			arrow := "chevron"
@@ -477,7 +515,89 @@ func (a *desktop) railSectionHeader(c *ui.Context, id, label, icon string, open 
 			}
 			iconGlyph(c, arrow, sizeCaretInline).Shrink(0).TextColor(a.secondaryInk())
 		}, a.secondaryInk()).Grow(1).MinWidth(0).OnClick(toggle)
+		tone := uikit.IconQuiet
+		if searchOpen {
+			tone = uikit.IconAccentOn
+		}
+		uikit.IconButtonSized(c, id+"-search", locales.Text("搜索")+" · "+label, iconImage("search"), 22, 20*uikit.IconGlyphScale, tone, search, a.secondaryInk()).Shrink(0)
 		uikit.IconButtonSized(c, id+"-add", tip, iconImage("plus"), 22, 20*uikit.IconGlyphScale, uikit.IconQuiet, add, a.secondaryInk()).Shrink(0)
+	})
+}
+
+// railSearchState is one section's filter: whether its box shows, what was
+// typed, and whether the box still needs the keyboard focus.
+type railSearchState struct {
+	open  bool
+	query string
+	focus bool
+}
+
+// railSearchToggle opens a closed filter and asks for its focus, or closes it
+// and forgets the query, so rows cannot stay filtered with no box in sight.
+func railSearchToggle(s railSearchState) railSearchState {
+	if s.open {
+		return railSearchState{}
+	}
+	return railSearchState{open: true, focus: true}
+}
+
+// railSearchField reveals one section's filter box. The keyboard is asked for
+// on the frame the box appears only: asking every frame would keep the field
+// from ever losing it.
+func (a *desktop) railSearchField(c *ui.Context, id, label string, s *railSearchState) {
+	if !s.open {
+		return
+	}
+	field := uikit.InputChrome(c, ui.SearchField(c.Key(id), &s.query)).
+		Height(24).Padding(0, 6).FontSize(fsSmall).FillWidth().Shrink(0).Label(label)
+	if s.focus {
+		field.Focus()
+		s.focus = false
+	}
+	field.Margin(0, 0, 3, 0)
+}
+
+// railWorkspacesMatching keeps the roots whose label or path holds query.
+func railWorkspacesMatching(roots []string, query string) []string {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return roots
+	}
+	out := make([]string, 0, len(roots))
+	for _, root := range roots {
+		if strings.Contains(strings.ToLower(workspaceLabel(root)), query) || strings.Contains(strings.ToLower(root), query) {
+			out = append(out, root)
+		}
+	}
+	return out
+}
+
+// railSessionFilterKey is a query and the rows it filters: the scan runs once
+// per change of either, not on every frame.
+type railSessionFilterKey struct {
+	revision  uint64
+	workspace string
+	query     string
+}
+
+// railSessionsMatching keeps the sessions whose title holds the section's query.
+func (a *desktop) railSessionsMatching(workspace string, entries []backend.SessionIndexEntry) []backend.SessionIndexEntry {
+	query := strings.ToLower(strings.TrimSpace(a.railSessSearch.query))
+	if query == "" {
+		return entries
+	}
+	return a.railSessFilter.get(railSessionFilterKey{a.sessRev, workspace, query}, func(railSessionFilterKey) []backend.SessionIndexEntry {
+		out := make([]backend.SessionIndexEntry, 0, len(entries))
+		for _, entry := range entries {
+			title := entry.Title
+			if title == "" {
+				title = locales.Text("会话")
+			}
+			if strings.Contains(strings.ToLower(title), query) {
+				out = append(out, entry)
+			}
+		}
+		return out
 	})
 }
 

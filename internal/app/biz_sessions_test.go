@@ -24,7 +24,7 @@ import (
 
 func TestStartupSessionIndexDoesNotScanOrphanedSnapshots(t *testing.T) {
 	t.Parallel()
-	app := newApiTestApp(t)
+	app := newIsolatedChatTestApp(t)
 	snapshot := SessionSnapshot{ID: "orphan", Title: "Recovered", Messages: []map[string]any{{"role": "user", "content": "recover me"}}}
 	if err := writeCompressedJSONAtomic(app.sessionSnapshotPath(snapshot.ID), mustJSON(snapshot)); err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestSessionIndexRepairRejectsConcurrentEditsAndDeletes(t *testing.T) {
 	t.Parallel()
 	for _, action := range []string{"rename", "delete"} {
 		t.Run(action, func(t *testing.T) {
-			app := newApiTestApp(t)
+			app := newIsolatedChatTestApp(t)
 			snapshot := SessionSnapshot{ID: "session", Title: "Original", Workspace: app.config.Workspace,
 				Messages: []map[string]any{{"role": "user", "content": "hello"}}}
 			if err := app.SaveSession(snapshot); err != nil {
@@ -97,7 +97,7 @@ func TestSessionIndexRepairRejectsConcurrentEditsAndDeletes(t *testing.T) {
 
 func TestSessionRepairCancellationDoesNotWriteIndex(t *testing.T) {
 	t.Parallel()
-	app := newApiTestApp(t)
+	app := newIsolatedChatTestApp(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := app.repairSessionIndex(ctx); !errors.Is(err, context.Canceled) {
@@ -109,7 +109,8 @@ func TestSessionRepairCancellationDoesNotWriteIndex(t *testing.T) {
 }
 
 func TestSessionFilesUseIndexAndOnDemandSnapshot(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.sessionsDir = t.TempDir()
 	app.historiesDir = t.TempDir()
@@ -186,7 +187,8 @@ func TestSessionFilesUseIndexAndOnDemandSnapshot(t *testing.T) {
 }
 
 func TestListSessionsRecoversSnapshotWhenIndexIsMissing(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.sessionsDir = t.TempDir()
 	app.historiesDir = t.TempDir()
@@ -212,7 +214,8 @@ func TestListSessionsRecoversSnapshotWhenIndexIsMissing(t *testing.T) {
 }
 
 func TestHistoryLoadRepairsTruncatedToolCallArguments(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.sessionsDir = t.TempDir()
 	app.historiesDir = t.TempDir()
@@ -252,7 +255,8 @@ func TestHistoryLoadRepairsTruncatedToolCallArguments(t *testing.T) {
 }
 
 func TestHistoryLoadCollapsesRepeatedToolCallNames(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.sessionsDir = t.TempDir()
 	app.historiesDir = t.TempDir()
@@ -296,7 +300,8 @@ func TestHistoryLoadCollapsesRepeatedToolCallNames(t *testing.T) {
 }
 
 func TestHistoryLoadDropsUnknownToolCallNames(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.sessionsDir = t.TempDir()
 	app.historiesDir = t.TempDir()
@@ -341,7 +346,8 @@ func TestHistoryLoadDropsUnknownToolCallNames(t *testing.T) {
 }
 
 func TestHistoryLoadDropsTruncatedArgsMarker(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.sessionsDir = t.TempDir()
 	app.historiesDir = t.TempDir()
@@ -386,7 +392,8 @@ func TestHistoryLoadDropsTruncatedArgsMarker(t *testing.T) {
 }
 
 func TestHistoryLoadRepairsDanglingToolCalls(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.sessionsDir = t.TempDir()
 	app.historiesDir = t.TempDir()
@@ -442,7 +449,8 @@ func TestHistoryLoadRepairsDanglingToolCalls(t *testing.T) {
 }
 
 func TestSessionIndexUnreadableDegradesToEmpty(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	app.initialized = true
 	app.sessionsDir = t.TempDir()
 	app.historiesDir = t.TempDir()
@@ -495,6 +503,7 @@ func TestSessionIndexUnreadableDegradesToEmpty(t *testing.T) {
 }
 
 func TestNormalizeSessionIndexEntryClampsFirstPrompt(t *testing.T) {
+	t.Parallel()
 	longPrompt := strings.Repeat("很长的提问字符", 200) // > maxSessionIndexFirstPromptChars runes
 	entry := normalizeSessionIndexEntry(SessionIndexEntry{
 		ID:          "prompt-clamp",
@@ -530,6 +539,7 @@ func mustJSON(value any) []byte {
 // reasoning text and the tool output, while the in-memory profile keeps both
 // verbatim (a running session replays it as-is).
 func TestDiskProfileDropsReasoningAndToolOutput(t *testing.T) {
+	t.Parallel()
 	bigOutput := strings.Repeat("file contents ", 400)
 	// Tool arguments must stay valid JSON: anything else is treated as a
 	// truncated call and stripped by the repair pass.
@@ -575,6 +585,7 @@ func TestDiskProfileDropsReasoningAndToolOutput(t *testing.T) {
 // TestDiskProfileKeepsToolPairing: dropping tool output must not orphan the tool
 // call, otherwise the restored history would be repaired by deleting the call.
 func TestDiskProfileKeepsToolPairing(t *testing.T) {
+	t.Parallel()
 	commandArgs := string(mustJSON(map[string]string{"command": "echo hi"}))
 	messages := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleUser, Content: "run"},

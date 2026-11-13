@@ -20,7 +20,7 @@ func mcpServersOf(t *testing.T, raw string) map[string]map[string]any {
 
 func TestMergeMcpConfigKeepsConcurrentEntriesAndTopLevelKeys(t *testing.T) {
 	t.Parallel()
-	app := newApiTestApp(t)
+	app := newIsolatedChatTestApp(t)
 	if err := app.SaveMcpConfig(`{"mcpServers":{"a":{"command":"node","args":["a.js"]},"b":{"command":"node"}},"vendor":{"keep":1}}`); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestMergeMcpConfigKeepsConcurrentEntriesAndTopLevelKeys(t *testing.T) {
 
 func TestMergeMcpConfigRejectsSameServerConflictWithoutWriting(t *testing.T) {
 	t.Parallel()
-	app := newApiTestApp(t)
+	app := newIsolatedChatTestApp(t)
 	if err := app.SaveMcpConfig(`{"mcpServers":{"a":{"command":"node"}}}`); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestMergeMcpConfigRejectsSameServerConflictWithoutWriting(t *testing.T) {
 
 func TestMergeMcpConfigDeleteKeepsConcurrentlyAddedServer(t *testing.T) {
 	t.Parallel()
-	app := newApiTestApp(t)
+	app := newIsolatedChatTestApp(t)
 	if err := app.SaveMcpConfig(`{"mcpServers":{"a":{"command":"node"},"b":{"command":"node"}}}`); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestMergeMcpConfigDeleteKeepsConcurrentlyAddedServer(t *testing.T) {
 
 func TestSaveMcpConfigIfUnchangedRejectsStaleSnapshot(t *testing.T) {
 	t.Parallel()
-	app := newApiTestApp(t)
+	app := newIsolatedChatTestApp(t)
 	if err := app.SaveMcpConfig(`{"mcpServers":{"keep":{"command":"node"}}}`); err != nil {
 		t.Fatal(err)
 	}

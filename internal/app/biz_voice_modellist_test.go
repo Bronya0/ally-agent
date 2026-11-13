@@ -112,6 +112,7 @@ func TestRankVoiceModelsPutsSpeechFirst(t *testing.T) {
 // the speech-to-text filter, the bearer header and the ordering are all checked
 // against a stub endpoint.
 func TestFetchVoiceModelListAsksForSpeechModels(t *testing.T) {
+	t.Parallel()
 	var gotPath, gotQuery, gotAuth string
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +123,7 @@ func TestFetchVoiceModelListAsksForSpeechModels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	models, err := app.FetchVoiceModelList(VoiceModelConfig{
 		Endpoint: server.URL + "/v1/audio/transcriptions",
 		AuthMode: "bearer", APIKey: "test-key",
@@ -150,6 +151,7 @@ func TestFetchVoiceModelListAsksForSpeechModels(t *testing.T) {
 // A provider that rejects the capability filter must still work: the request
 // falls back to the audio modality and then to local keyword filtering.
 func TestFetchVoiceModelListFallsBackWhenFilterUnsupported(t *testing.T) {
+	t.Parallel()
 	var queries []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		queries = append(queries, r.URL.RawQuery)
@@ -165,7 +167,7 @@ func TestFetchVoiceModelListFallsBackWhenFilterUnsupported(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	models, err := app.FetchVoiceModelList(VoiceModelConfig{
 		Endpoint: server.URL + "/v1/audio/transcriptions", AuthMode: "none",
 	}, false)
@@ -183,6 +185,7 @@ func TestFetchVoiceModelListFallsBackWhenFilterUnsupported(t *testing.T) {
 // A missing /models route must cost one request, not three: the same 404 would come
 // back every time, and a local server often has no list endpoint at all.
 func TestFetchVoiceModelListStopsWhenTheRouteIsMissing(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -190,7 +193,7 @@ func TestFetchVoiceModelListStopsWhenTheRouteIsMissing(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	if _, err := app.FetchVoiceModelList(VoiceModelConfig{
 		Endpoint: server.URL + "/v1/audio/transcriptions", AuthMode: "none",
 	}, false); err == nil {
@@ -205,6 +208,7 @@ func TestFetchVoiceModelListStopsWhenTheRouteIsMissing(t *testing.T) {
 // gateways including DashScope) still must not fill the voice picker with chat
 // models, so the answer is filtered locally.
 func TestFetchVoiceModelListFiltersIgnoredServerAnswer(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -212,7 +216,7 @@ func TestFetchVoiceModelListFiltersIgnoredServerAnswer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	models, err := app.FetchVoiceModelList(VoiceModelConfig{
 		Endpoint: server.URL + "/compatible-mode/v1/audio/transcriptions", AuthMode: "none",
 	}, false)
@@ -230,6 +234,7 @@ func TestFetchVoiceModelListFiltersIgnoredServerAnswer(t *testing.T) {
 // When nothing speech-like is advertised, the picker stays empty instead of
 // offering a chat catalogue; the dialog asks for a hand-typed id or 「全部」.
 func TestFetchVoiceModelListReturnsEmptyWithoutSpeechModels(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -237,7 +242,7 @@ func TestFetchVoiceModelListReturnsEmptyWithoutSpeechModels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	models, err := app.FetchVoiceModelList(VoiceModelConfig{
 		Endpoint: server.URL + "/compatible-mode/v1/audio/transcriptions", AuthMode: "none",
 	}, false)
@@ -271,6 +276,7 @@ func TestVoiceModelListHintExplainsFailures(t *testing.T) {
 }
 
 func TestFetchVoiceModelListIncludeAllSkipsFilters(t *testing.T) {
+	t.Parallel()
 	var query string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query = r.URL.RawQuery
@@ -278,7 +284,7 @@ func TestFetchVoiceModelListIncludeAllSkipsFilters(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	models, err := app.FetchVoiceModelList(VoiceModelConfig{
 		Endpoint: server.URL + "/v1/audio/transcriptions", AuthMode: "none",
 	}, true)
@@ -294,6 +300,7 @@ func TestFetchVoiceModelListIncludeAllSkipsFilters(t *testing.T) {
 }
 
 func TestFetchVoiceModelListSendsHeaderAuth(t *testing.T) {
+	t.Parallel()
 	var gotToken string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotToken = r.Header.Get("X-Token")
@@ -301,7 +308,7 @@ func TestFetchVoiceModelListSendsHeaderAuth(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	if _, err := app.FetchVoiceModelList(VoiceModelConfig{
 		Endpoint: server.URL + "/v1/audio/transcriptions",
 		AuthMode: "header", AuthHeader: "X-Token", AuthPrefix: "Token ", APIKey: "abc",

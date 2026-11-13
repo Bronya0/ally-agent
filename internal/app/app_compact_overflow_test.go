@@ -174,7 +174,7 @@ func runOverflowSession(t *testing.T, baseURL, sessionID string) (*App, *compact
 // the run is in flight.
 func runOverflowSessionInWorkspace(t *testing.T, baseURL, sessionID, workspace string) (*App, *compactRecorder) {
 	t.Helper()
-	app := NewApp()
+	app := newModelTestApp(t)
 	app.initialized = true // skip the disk bootstrap
 	app.stats = nil        // skip token-stat persistence
 	recorder := &compactRecorder{done: make(chan struct{})}
@@ -215,6 +215,7 @@ func runOverflowSessionInWorkspace(t *testing.T, baseURL, sessionID, workspace s
 // (ignoring the auto-compaction threshold) and retry the request, like pi's
 // overflow recovery.
 func TestRunChatRecoversFromContextTooLong(t *testing.T) {
+	t.Parallel()
 	server := &overflowServer{}
 	httpServer := httptest.NewServer(server.handler())
 	defer httpServer.Close()
@@ -243,6 +244,7 @@ func TestRunChatRecoversFromContextTooLong(t *testing.T) {
 // free. An AGENTS.md edit landing mid-run must therefore reach the very retry that
 // follows the compaction instead of waiting for a new session.
 func TestOverflowCompactionRefreshesFrozenPrompt(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	agentsPath := filepath.Join(root, "AGENTS.md")
 	if err := os.WriteFile(agentsPath, []byte("workspace rule v1"), 0o644); err != nil {
@@ -274,6 +276,7 @@ func TestOverflowCompactionRefreshesFrozenPrompt(t *testing.T) {
 // sends the same over-window history to the same model), the user has to be told
 // that deleting history is the way out instead of getting the bare provider error.
 func TestRunChatReportsFailedOverflowCompaction(t *testing.T) {
+	t.Parallel()
 	server := &overflowServer{failSummary: true}
 	httpServer := httptest.NewServer(server.handler())
 	defer httpServer.Close()

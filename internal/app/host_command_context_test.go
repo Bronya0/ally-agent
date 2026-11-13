@@ -18,6 +18,7 @@ func commandContextHistory(content string) []openai.ChatCompletionMessage {
 }
 
 func TestCommandContextReturnsModelProjectionNotOutputFile(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedChatTestApp(t)
 	fullPath := filepath.Join(t.TempDir(), "output.log")
 	full := strings.Repeat("FULL_OUTPUT_NOT_IN_CONTEXT\n", 10000)
@@ -47,6 +48,7 @@ func TestCommandContextReturnsModelProjectionNotOutputFile(t *testing.T) {
 }
 
 func TestCommandContextLiveProjectionTracksCompaction(t *testing.T) {
+	t.Parallel()
 	a := newIsolatedChatTestApp(t)
 	a.saveHistory("live", commandContextHistory("OLD_SAVED_CONTEXT"))
 	a.syncCommandContext("live", commandContextHistory("CURRENT_CONTEXT"))

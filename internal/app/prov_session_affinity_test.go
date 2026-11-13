@@ -10,7 +10,8 @@ import (
 )
 
 func TestSessionAffinityWireCustomHeadersOverrideDefaults(t *testing.T) {
-	a := newApiTestApp(t)
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
 	states := []struct {
 		name                          string
 		sessionID, xSessionID         *bool

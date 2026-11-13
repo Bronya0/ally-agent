@@ -618,6 +618,7 @@ func TestApiSettingsPersistenceAndListenerLifecycle(t *testing.T) {
 	}
 
 	req, _ := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", port), nil)
+	req.Close = true
 	req.Header.Set("Authorization", "Bearer tok-lifecycle")
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
@@ -630,6 +631,7 @@ func TestApiSettingsPersistenceAndListenerLifecycle(t *testing.T) {
 
 	// 错误 token 被拒。
 	badReq, _ := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", port), nil)
+	badReq.Close = true
 	badResp, err := (&http.Client{Timeout: 5 * time.Second}).Do(badReq)
 	if err != nil {
 		t.Fatal(err)
@@ -650,10 +652,13 @@ func TestApiSettingsPersistenceAndListenerLifecycle(t *testing.T) {
 		t.Fatal("disabled choice must persist")
 	}
 	app.restoreApiService()
-	_, err = (&http.Client{Timeout: 2 * time.Second}).Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", port))
-	if err == nil {
-		t.Fatal("listener still accepting after stop")
+	// Binding the port proves shutdown released it without waiting for Windows'
+	// refused-connection retries to expire.
+	rebound, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("listener did not release its port after stop: %v", err)
 	}
+	rebound.Close()
 }
 
 func TestApiValidationAndMissingSessions(t *testing.T) {

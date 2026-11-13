@@ -52,12 +52,13 @@ func TestDisabledBuiltinFollowsInjectedTools(t *testing.T) {
 // replacing the matched text with nothing. An explicit empty string is still the
 // documented way to delete, and must keep working.
 func TestEditRejectsChangeWithoutNewText(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 	ctx := context.Background()
 	path := filepath.Join(dir, "sample.txt")
@@ -92,7 +93,8 @@ func TestEditRejectsChangeWithoutNewText(t *testing.T) {
 // extras ignored). It used to lose every chip and show the user a raw argument
 // error over a character count the model cannot get right.
 func TestSuggestItemsAreRepairedNotRejected(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: t.TempDir()}
 	ctx := context.Background()
 
@@ -229,7 +231,8 @@ func TestDisplayClippingRunsAfterTypeRepair(t *testing.T) {
 // promises the runtime ignored: a blank snippet rendered an empty card, and an
 // over-long title reached the UI unfiltered.
 func TestRenderHTMLRejectsBlankAndOversizedTitle(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: t.TempDir()}
 	ctx := context.Background()
 
@@ -264,7 +267,8 @@ func TestRenderHTMLRejectsBlankAndOversizedTitle(t *testing.T) {
 // parameter or a warning that names the stray key. A tool that accepted the key
 // without naming it would mean the gate never ran for it.
 func TestExecuteToolGatesEveryBuiltinTool(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: t.TempDir()}
 	for _, tool := range toolshared.Builtins() {
 		if tool.Function == nil {
@@ -356,7 +360,8 @@ func TestServiceTuningStaysInsideTheDeclaredBounds(t *testing.T) {
 // (todos, and the `next` parameter that the report replaced) are pinned below as
 // gone on purpose, so no compat layer creeps back.
 func TestPlanToolVocabularyPassesTheGate(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: t.TempDir()}
 	ctx := context.Background()
 

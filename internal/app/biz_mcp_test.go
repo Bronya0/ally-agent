@@ -534,7 +534,8 @@ func TestMcpServerConfigEqualIgnoresDisabledTools(t *testing.T) {
 // MCP 工具不入参数闸门（没有内置声明可校验），所以一个拼错或多传的参数只能
 // 靠这条警告露面；声明里没有 properties 的工具则保持安静，否则每个参数都会被点名。
 func TestMcpUnknownArgWarningsNamesUndeclaredArguments(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	manager := NewMcpManager(t.TempDir(), nil)
 	manager.clients = map[string]*McpClientHandle{
 		"fs": {

@@ -27,8 +27,9 @@ func (a *desktop) resetFileSearch() {
 	if s.Query != "" {
 		a.fileRoot = ""
 		a.files = nil
-		a.fileOpen = nil
 		a.fileChildren = nil
+		a.resetFileOutline()
+		a.fileIndex = explorerIndex{}
 		a.fileScroll = nil
 	}
 	*s = explorerSearch{}
@@ -67,7 +68,9 @@ func (a *desktop) searchFiles(query string) {
 	a.fileEpoch++
 	epoch, root := a.fileEpoch, t.Workspace
 	a.fileRoot = workspaceKey(root)
-	a.files, a.fileChildren, a.fileOpen = nil, nil, nil
+	a.files, a.fileChildren = nil, nil
+	a.resetFileOutline()
+	a.fileIndex = explorerIndex{}
 	a.fileLoading = nil
 	go func() {
 		defer cancel()
@@ -82,7 +85,12 @@ func (a *desktop) searchFiles(query string) {
 			}
 			s := &a.filesF.Search
 			s.Cancel, s.Busy = nil, false
-			a.files, a.fileChildren, a.fileOpen = entries, children, opened
+			a.files, a.fileChildren = entries, children
+			a.resetFileOutline()
+			for path := range opened {
+				a.fileOutline.Open.Add(path)
+			}
+			a.reindexFileTree()
 			s.Note = fmt.Sprintf(locales.Text("找到 %d 个文件"), len(result.Entries))
 			if result.Truncated {
 				s.Note += locales.Text("（结果受限，请缩小范围）")

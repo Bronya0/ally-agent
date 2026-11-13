@@ -173,8 +173,9 @@ func TestPlanDeleteExecutionDedupesAndOrdersDeepestFirst(t *testing.T) {
 // slot without failing the rest, and the gate holds the model to the declared
 // shape (paths only, at least one, at most N entries).
 func TestLocalDeleteToolTakesPathsOnly(t *testing.T) {
+	t.Parallel()
 	dir, cfg := deleteTestWorkspace(t)
-	app := NewApp()
+	app := newIsolatedTestApp(t)
 	ctx := t.Context()
 
 	res := app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{"a.txt", "b.txt"}}))
@@ -317,7 +318,8 @@ func TestDeletePathsFailureSummaryNamesEveryFailedPath(t *testing.T) {
 // shape. Only gate-level rejections are exercised: they are decided before the
 // SSH target is resolved, so no server is needed.
 func TestRemoteDeleteToolTakesPathsOnly(t *testing.T) {
-	app := NewApp()
+	t.Parallel()
+	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: t.TempDir()}
 	ctx := t.Context()
 
@@ -331,7 +333,7 @@ func TestRemoteDeleteToolTakesPathsOnly(t *testing.T) {
 	}{
 		{name: "missing paths", args: encodedToolArgs(t, map[string]any{"target": "dev:/srv/app"})},
 		{name: "path key", args: []byte(`{"target":"dev:/srv/app","path":"a.txt"}`)},
-		{name: "above the limit", args: encodedToolArgs(t, RemoteDeletePathRequest{Target: "dev:/srv/app", Paths: tooMany})},
+		{name: "above the limit", args: encodedToolArgs(t, RemoteDeletePathRequest{Alias: "dev:/srv/app", Paths: tooMany})},
 	} {
 		res := app.executeTool(ctx, cfg, "s-1", "remote_delete_path", tc.args)
 		if res.OK || res.ErrorCode != "E_BAD_ARGS" {

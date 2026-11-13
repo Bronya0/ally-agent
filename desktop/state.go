@@ -275,10 +275,14 @@ type chatUI struct {
 	RestoreCaret         bool
 	Follow               bool
 	FollowPending        bool
-	LastScrollY          float32
-	HistoryIndex         int
-	HistoryDraft         string
-	WorkspaceHistory     []string
+	// FollowBottom is the end a wheel asked to come back to. An answer that
+	// grows on the way moves the end further down; waiting for the new one
+	// would never arrive.
+	FollowBottom     float32
+	LastScrollY      float32
+	HistoryIndex     int
+	HistoryDraft     string
+	WorkspaceHistory []string
 	// List is the transcript's list: it builds only the rows in view and owns
 	// where they are scrolled.
 	List ui.ListState
