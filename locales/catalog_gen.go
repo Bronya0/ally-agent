@@ -11496,14 +11496,14 @@ func (msgs Messages) Ui8c7cb5faf7e6() string {
 	return Catalog.Format(msgs.locale, "ui_8c7cb5faf7e6", nil)
 }
 
-// Ui353a263539c7 says "Click on the logo: switch cherry blossom effects"
+// Ui2deb927a8316 says "Click the logo to return to the Agent page"
 // in the language the app shows.
-func Ui353a263539c7() string { return In(i18n.Locale()).Ui353a263539c7() }
+func Ui2deb927a8316() string { return In(i18n.Locale()).Ui2deb927a8316() }
 
-// Ui353a263539c7 says "Click on the logo: switch cherry blossom effects"
+// Ui2deb927a8316 says "Click the logo to return to the Agent page"
 // in the language of msgs.
-func (msgs Messages) Ui353a263539c7() string {
-	return Catalog.Format(msgs.locale, "ui_353a263539c7", nil)
+func (msgs Messages) Ui2deb927a8316() string {
+	return Catalog.Format(msgs.locale, "ui_2deb927a8316", nil)
 }
 
 // Ui682e1446bf61 says "Click \"Deal\" to start a round"

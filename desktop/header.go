@@ -91,9 +91,11 @@ func (a *desktop) headerBar(c *ui.Context) {
 					ui.Span{Text: "y", Color: colors[3]},
 				).FontSize(logoFontSize).FontWeight(700).LetterSpacing(-0.4)
 			})
-			uikit.Tooltip(c, wordmark.Cursor(ui.CursorPointer), locales.Text("点击 logo：切换樱花特效"))
+			// The wordmark is the app's home entry, matching the first rail item:
+			// it returns to the Agent page from wherever the user is.
+			uikit.Tooltip(c, wordmark.Cursor(ui.CursorPointer), locales.Text("点击 logo：回到 Agent 页面"))
 			if wordmark.Clicked() {
-				a.togglePetals()
+				a.changePage("chat")
 			}
 			if a.prefs.TopNavigation {
 				a.topNavigationMenu(c)
