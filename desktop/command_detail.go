@@ -15,7 +15,7 @@ func toolEventForDisplay(name string, payload any) any {
 		return payload
 	}
 	message, ok := payload.(map[string]any)
-	if !ok || (!isMCPDisplayTool(message) && toolKind(str(message, "name")) != "command" && !isFoldableReadTool(message)) {
+	if !ok || (!isMCPDisplayTool(message) && toolKind(str(message, "name")) != "command" && !isReadDisplayTool(message)) {
 		return payload
 	}
 	copy := make(map[string]any, len(message))

@@ -111,14 +111,61 @@ func toolDeleteTree(c *ui.Context, args, result map[string]any, ink ...ui.Color)
 			// Not what the tool writes: format it rather than hide it.
 			path = fmt.Sprint(raw)
 		}
-		prefix := "├─ "
-		if n == len(rows)-1 {
-			prefix = "└─ "
-		}
-		ui.Text(c, prefix+path+suffix).Font(monoFamily).FontSize(fsTool - 2).TextColor(color.Mix(c.Theme().Text, 0.3)).FillWidth().MinWidth(0).SingleLine().Selectable()
+		toolPathTreeRow(c, n, len(rows), path+suffix, color)
 	}
 	if count := int(num(result, "failedCount")); count > 0 {
 		notice(c, "error", fmt.Sprintf(locales.Text("%d 个路径删除失败"), count), ink...)
+	}
+}
+
+func toolPathTreeRow(c *ui.Context, index, count int, text string, color ui.Color) {
+	prefix := "├─ "
+	if index == count-1 {
+		prefix = "└─ "
+	}
+	ui.Text(c, prefix+text).Font(monoFamily).FontSize(fsTool - 2).TextColor(color.Mix(c.Theme().Text, 0.3)).FillWidth().MinWidth(0).SingleLine().Selectable()
+}
+
+func toolReadTree(c *ui.Context, args, result map[string]any, ink ui.Color) {
+	files, missing := list(result, "files"), list(result, "missing")
+	if len(files)+len(missing) == 0 {
+		files = list(args, "files")
+	}
+	count := len(files) + len(missing)
+	if count == 0 {
+		// Older calls and summaries may describe a single file directly.
+		path := toolFilePath(args, result)
+		if path != "" {
+			text := path
+			if summary := toolGroupReadSummary(result); summary != "" {
+				text += " · " + summary
+			}
+			toolPathTreeRow(c, 0, 1, text, ink)
+		}
+		return
+	}
+	for n := 0; n < count; n++ {
+		var raw any
+		if n < len(files) {
+			raw = files[n]
+		} else {
+			raw = missing[n-len(files)]
+		}
+		file, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		text, color := str(file, "path"), ink
+		if reason := str(file, "error"); reason != "" {
+			text += " · " + reason
+			color = c.Theme().Danger
+		} else if n >= len(files) {
+			text += " · " + str(file, "errorCode")
+			color = c.Theme().Danger
+		} else if summary := toolGroupReadSummary(file); summary != "" {
+			text += " · " + summary
+		}
+		toolPathTreeRow(c, n, count, text, color)
 	}
 }
 

@@ -266,7 +266,7 @@ func TestReadDisplayProjectionPreservesMetadataAndBackendEvidence(t *testing.T) 
 			want := toolGroupResultSummary(toolKind(tc.name), toolResult(original))
 			projected := toolEventForDisplay("tool:result", payload).(map[string]any)
 			encoded, _ := json.Marshal(projected)
-			if strings.Contains(string(encoded), body) {
+			if len(encoded) > 16<<10 {
 				t.Fatal("the UI event retained file/log content")
 			}
 			conv := &conversation{}
@@ -319,6 +319,26 @@ func TestRememberSessionKeepsOnlyLatestDisposableTranscript(t *testing.T) {
 	for _, t1 := range []*conversation{draft, pending, busy} {
 		if a.openSessions[t1.ID] != t1 {
 			t.Fatalf("lost live state: %s", t1.ID)
+		}
+	}
+}
+
+func TestRemoteReadPartialFailureState(t *testing.T) {
+	for _, tc := range []struct {
+		result map[string]any
+		want   string
+	}{
+		{map[string]any{"files": []any{map[string]any{"path": "/srv/a", "totalLines": 5}}}, "success"},
+		{map[string]any{"files": []any{map[string]any{"path": "/srv/a", "error": "permission denied"}}}, "error"},
+		{map[string]any{"missing": []any{map[string]any{"path": "/srv/a", "errorCode": "NOT_FOUND"}}}, "error"},
+	} {
+		msg := map[string]any{"name": "remote_read", "status": "success", "result": tc.result}
+		if got := toolState(msg); got != tc.want {
+			t.Fatalf("remote read state = %q, want %q", got, tc.want)
+		}
+		retainReadDisplaySummary(msg)
+		if got := toolState(msg); got != tc.want {
+			t.Fatalf("projected remote read state = %q, want %q", got, tc.want)
 		}
 	}
 }

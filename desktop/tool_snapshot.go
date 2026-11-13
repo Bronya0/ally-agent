@@ -131,11 +131,16 @@ func detachToolResultEnvelope(m map[string]any) {
 	}
 }
 
-// The read/search/list group only displays this metadata. Share its projection
+// Display projection applies even when a read card is shown independently.
+func isReadDisplayTool(m map[string]any) bool {
+	return isFoldableReadTool(m) || readGrepGroupName(m) == "remote_read"
+}
+
+// Read/search/list cards only display this metadata. Share their projection
 // with disk snapshots, keeping live UI errors complete and explicit compaction
 // excerpts intact. The backend's model history is outside this UI copy.
 func retainReadDisplaySummary(m map[string]any) {
-	if !isFoldableReadTool(m) || boolOf(m, "fastCompacted") || str(m, "mcpServer") != "" || str(m, "mcpTool") != "" {
+	if !isReadDisplayTool(m) || boolOf(m, "fastCompacted") || str(m, "mcpServer") != "" || str(m, "mcpTool") != "" {
 		return
 	}
 	if raw, exists := m["result"]; exists {

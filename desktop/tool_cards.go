@@ -32,13 +32,13 @@ type toolDescriptor struct {
 // read/grep/list row writes its own Chinese counts and never reads this table.
 var toolTable = map[string]toolDescriptor{
 	"read":               {"Reading", "Read", "Read failed", false, false},
-	"remote_read":        {"Remote Reading", "Remote Read", "Remote read failed", false, false},
+	"remote_read":        {"Reading", "Read", "Read failed", false, false},
 	"edit":               {"Editing", "Edited", "Edit failed", false, false},
-	"remote_edit":        {"Remote Editing", "Remote Edited", "Remote edit failed", false, false},
+	"remote_edit":        {"Editing", "Edited", "Edit failed", false, false},
 	"create":             {"Creating", "Created", "Create failed", false, false},
-	"remote_create_file": {"Remote Creating", "Remote Created", "Remote create failed", false, false},
+	"remote_create_file": {"Creating", "Created", "Create failed", false, false},
 	"delete":             {"Deleting", "Deleted", "Delete failed", true, false},
-	"remote_delete_path": {"Remote Deleting", "Remote Deleted", "Remote delete failed", true, false},
+	"remote_delete_path": {"Deleting", "Deleted", "Delete failed", true, false},
 	"command":            {"Running", "Ran", "Command failed", true, true},
 	"remote_run_command": {"Running", "Ran", "Failed", true, true},
 	"grep":               {"Grepping", "Grep", "Grep failed", false, false},
@@ -51,16 +51,32 @@ var toolTable = map[string]toolDescriptor{
 	"skill":              {"Loading skill", "Loaded skill", "Skill failed", false, false},
 	"ask":                {"Asking", "Asked", "Ask failed", true, false},
 	"subagent":           {"Delegating", "Subagent", "Delegation failed", true, true},
-	"ssh_cluster":        {"Checking SSH", "SSH cluster", "SSH check failed", true, false},
+	"ssh_cluster":        {"Checking", "Servers", "Check failed", true, false},
 	"service":            {"Managing service", "Service", "Service failed", true, false},
 	"scheduled_task":     {"Scheduling", "Scheduled", "Scheduling failed", true, true},
-	"remote_transfer":    {"Remote Transferring", "Remote Transferred", "Remote transfer failed", true, true},
+	"remote_transfer":    {"Transferring", "Transferred", "Transfer failed", true, true},
 	"screenshot":         {"Taking screenshot", "Screenshot", "Screenshot failed", true, false},
 	"render_html":        {"Rendering", "Rendered", "Render failed", true, true},
 	"suggest":            {"Suggesting", "Suggested", "Suggestion failed", true, false},
 	"wait":               {"Waiting", "Waited", "Wait failed", false, true},
 	"image_generate":     {"Generating image", "Generated image", "Image generation failed", true, true},
 	"image_edit":         {"Editing image", "Edited image", "Image edit failed", true, true},
+}
+
+// Keep the server identity consistent across independent SSH cards.
+func isSSHTool(name string) bool {
+	switch name {
+	case "remote_read", "remote_edit", "remote_create_file", "remote_delete_path", "remote_run_command", "remote_transfer", "ssh_cluster":
+		return true
+	}
+	return false
+}
+
+func toolSSHAlias(args map[string]any) string {
+	if alias := str(args, "alias"); alias != "" {
+		return alias
+	}
+	return str(args, "target") // Historical calls use the old parameter.
 }
 
 func toolKind(name string) string {
@@ -114,6 +130,16 @@ func toolState(m map[string]any) string {
 		if value, exists := result["ok"]; exists && value == false {
 			return "error"
 		}
+		if readGrepGroupName(m) == "remote_read" && !isMCPDisplayTool(m) {
+			if len(list(result, "missing")) > 0 {
+				return "error"
+			}
+			for _, raw := range list(result, "files") {
+				if file, ok := raw.(map[string]any); ok && str(file, "error") != "" {
+					return "error"
+				}
+			}
+		}
 		return "success"
 	case state == "tool:start" || state == "tool:update" || status == "running":
 		return "running"
@@ -133,7 +159,7 @@ func isFoldableReadTool(m map[string]any) bool {
 		name = str(m, "toolName")
 	}
 	switch toolKind(name) {
-	case "read", "remote_read", "batch_read", "grep", "list", "glob":
+	case "read", "batch_read", "grep", "list", "glob":
 		return true
 	}
 	return false
@@ -783,6 +809,9 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	parsed := memoAt[argsMemo](container, "parsed-args")
 	args := parsed.get(str(m, "args"), parseToolArgs)
 	summary := toolArgSummary(name, args)
+	if name == "remote_read" && summary == "" && boolOf(m, "fastCompacted") {
+		summary = str(m, "title")
+	}
 	purpose := toolPurpose(m, args)
 	isMCP := isMCPDisplayTool(m)
 	if isMCP {
@@ -856,19 +885,8 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			if state == "error" || name == "delete" || name == "remote_delete_path" {
 				verbColor = c.Theme().Danger
 			}
-			if name == "remote_run_command" {
-				// The host is an address, not an action: keep it quiet and a step
-				// smaller than the verb and the command beside it.
-				sshInk := a.secondaryInk()
-				ui.Text(c.Key(key+"-ssh"), "SSH").FontSize(fsTool - 2).TextColor(sshInk).Shrink(0).NoWrap()
-				alias := str(args, "alias")
-				if alias == "" {
-					alias = str(args, "target") // Historical calls use the old parameter.
-				}
-				if alias != "" {
-					label := ui.Text(c.Key(key+"-ssh-alias"), short(alias, 32)).FontSize(fsTool - 2).TextColor(sshInk).LineHeight(1.4).SingleLine().MinWidth(0).MaxWidthPercent(24).Shrink(0)
-					uikit.Tooltip(c, label, alias)
-				}
+			if isSSHTool(name) && !isMCP {
+				ui.Text(c.Key(key+"-ssh"), "SSH").FontSize(fsTool).TextColor(verbColor).Shrink(0).LineHeight(1.4).NoWrap()
 			}
 			if verb != "" {
 				ui.Text(c, verb).FontSize(fsTool).TextColor(verbColor).Shrink(0).LineHeight(1.4).NoWrap()
@@ -886,6 +904,13 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					}
 					label := ui.Text(c.Key(key+"-summary"), text).FontSize(fsTool).TextColor(color).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
 					uikit.Tooltip(c, label, summary)
+				}
+			}
+			if isSSHTool(name) && !isMCP {
+				if alias := toolSSHAlias(args); alias != "" {
+					ui.Text(c, "·").FontSize(fsTool - 2).TextColor(a.secondaryInk()).LineHeight(1.4).Shrink(0).NoWrap()
+					label := ui.Text(c.Key(key+"-ssh-alias"), short(alias, 32)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).MaxWidthPercent(24).Shrink(0)
+					uikit.Tooltip(c, label, alias)
 				}
 			}
 			if isMCP {
@@ -954,7 +979,11 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				}
 			}
 			if boolOf(m, "fastCompacted") {
-				neutralChip(c, locales.Text(fastCompactChip))
+				if name == "remote_read" {
+					toolGroupCompactedChip(c, m)
+				} else {
+					neutralChip(c, locales.Text(fastCompactChip))
+				}
 			}
 			// A command's duration already sits next to its exit status.
 			if desc.showTiming && name != "command" && name != "remote_run_command" {
@@ -1008,7 +1037,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			switch {
 			case state == "cancelled":
 				cancelledResult(c, a.secondaryInk())
-			case state == "error" && name != "delete" && name != "remote_delete_path":
+			case state == "error" && name != "delete" && name != "remote_delete_path" && name != "remote_read":
 				errText := str(m, "body")
 				if errText == "" {
 					errText = str(m, "error")
@@ -1037,6 +1066,18 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 						}
 						a.diffBlock(c, fmt.Sprintf("%s-file-%d", key, n), str(file, "diff"), true)
 					}
+				}
+			case name == "remote_read":
+				toolReadTree(c, args, result, a.secondaryInk())
+				if state == "error" {
+					reason := str(result, "error")
+					if reason == "" {
+						reason = str(m, "error")
+					}
+					if reason == "" {
+						reason = str(m, "body")
+					}
+					notice(c, "error", reason, a.secondaryInk())
 				}
 			case name == "delete" || name == "remote_delete_path":
 				toolDeleteTree(c, args, result, a.secondaryInk())
@@ -1314,6 +1355,16 @@ func toolArgSummary(name string, args map[string]any) string {
 	case "edit", "create", "read", "delete", "remote_read", "remote_edit", "remote_create_file", "remote_delete_path":
 		if p := pick("path", "file_path", "file"); p != "" {
 			return p
+		}
+		if name == "remote_read" {
+			files := list(args, "files")
+			if len(files) == 1 {
+				if file, ok := files[0].(map[string]any); ok {
+					return str(file, "path")
+				}
+			} else if len(files) > 1 {
+				return fmt.Sprintf("%d files", len(files))
+			}
 		}
 		if paths, ok := args["paths"].([]any); ok && len(paths) > 0 {
 			return fmt.Sprintf("%d paths", len(paths))

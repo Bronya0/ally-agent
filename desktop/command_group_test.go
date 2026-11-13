@@ -233,3 +233,15 @@ func TestReadsAndCommandsShareOneGroup(t *testing.T) {
 		t.Fatal("collapsing the group left its command open")
 	}
 }
+
+func TestSSHToolsRemainIndependent(t *testing.T) {
+	for _, name := range []string{"remote_read", "remote_edit", "remote_create_file", "remote_delete_path", "remote_run_command", "remote_transfer", "ssh_cluster"} {
+		msg := map[string]any{"role": "tool_call", "name": name, "toolCallId": name, "status": "running"}
+		if isFoldableToolGroupItem(msg) {
+			t.Fatalf("%s joined a collapsed tool group", name)
+		}
+	}
+	if !isFoldableToolGroupItem(map[string]any{"role": "tool_call", "name": "read", "toolCallId": "local"}) {
+		t.Fatal("local reads stopped joining tool groups")
+	}
+}
