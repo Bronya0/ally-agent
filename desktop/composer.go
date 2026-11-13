@@ -42,9 +42,14 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 		if st.Retry != nil {
 			a.retryBanner(c, st.Retry)
 		}
-		if t.Busy || st.CompactBusy {
-			a.composerStatusRow(c, t)
-		}
+		// Keep the slot alive while closing so run completion does not enlarge
+		// the transcript in one frame. Include its gap in the reveal; cancel
+		// the parent's gap so the closed slot leaves no extra space.
+		uikit.Reveal(c.Key(t.ID+"-composer-status"), t.Busy || st.CompactBusy, func() {
+			ui.Column(c).FillWidth().Padding(0, 0, gapInline).Children(func() {
+				a.composerStatusRow(c, t)
+			})
+		}).Margin(0, 0, -gapInline)
 		if len(t.PendingAttachments) > 0 {
 			a.pendingAttachmentRow(c, t)
 		}
@@ -1451,24 +1456,17 @@ func (a *desktop) gitButton(c *ui.Context, t *conversation) {
 func gitRepoMenuItem(c *ui.Context, item ui.Element, repo backend.GitRepoItem, ink ...ui.Color) ui.Element {
 	t := c.Theme()
 	label := repo.Name + "/" + repo.Branch
-	row := uikit.MenuRow(c, item, label, false).MinHeight(44).Padding(5, 10)
+	row := uikit.MenuRow(c, item, label, false).Padding(5, 10)
 	row.Children(func() {
-		ui.Column(c).FillWidth().Gap(gapTight).Children(func() {
-			ui.Row(c).FillWidth().Gap(3).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, short(repo.Name, 22)).FontSize(fsBody).TextColor(t.Text).SingleLine().Shrink(1).MinWidth(0)
-				ui.Text(c, "/").FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Shrink(0)
-				ui.Text(c, short(repo.Branch, 18)).FontSize(fsSmall).TextColor(t.Accent).SingleLine().Shrink(0)
-				ui.Spacer(c)
-			})
-			if repo.Ahead > 0 || repo.Behind > 0 || repo.Added > 0 || repo.Modified > 0 || repo.Deleted > 0 {
-				ui.Row(c).Gap(gapTight).AlignItems(ui.Center).Children(func() {
-					gitRepoStatusTag(c, "ahead", "↑", repo.Ahead, uikit.Info)
-					gitRepoStatusTag(c, "behind", "↓", repo.Behind, uikit.Warning)
-					gitRepoStatusTag(c, "added", "+", repo.Added, uikit.Success)
-					gitRepoStatusTag(c, "modified", "~", repo.Modified, uikit.Warning)
-					gitRepoStatusTag(c, "deleted", "−", repo.Deleted, uikit.Error)
-				})
-			}
+		ui.Row(c).FillWidth().Gap(gapTight).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, short(repo.Name, 22)).FontSize(fsBody).TextColor(t.Text).SingleLine().Shrink(1).MinWidth(0)
+			gitRepoStatusTag(c, "ahead", "↑", repo.Ahead, uikit.Info)
+			gitRepoStatusTag(c, "behind", "↓", repo.Behind, uikit.Warning)
+			gitRepoStatusTag(c, "added", "+", repo.Added, uikit.Success)
+			gitRepoStatusTag(c, "modified", "~", repo.Modified, uikit.Warning)
+			gitRepoStatusTag(c, "deleted", "−", repo.Deleted, uikit.Error)
+			ui.Spacer(c)
+			ui.Text(c, short(repo.Branch, 18)).FontSize(fsSmall).TextColor(t.Accent).SingleLine().Shrink(1).MinWidth(0)
 		})
 	})
 	return uikit.Tooltip(c, row, label)

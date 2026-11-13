@@ -132,6 +132,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 
 	switch name {
 	case "run:start":
+		wasStarting := t.Busy
 		t.RunID = str(p, "runId")
 		t.Busy = true
 		t.Status = locales.Text("正在连接模型…")
@@ -142,7 +143,11 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 			t.Status = locales.Text("正在取消…")
 		}
 		ui.ThinkingBytes = 0
-		followLatest(t)
+		// send already requested the end. Preserve any manual scroll made
+		// before this asynchronous acknowledgement reached the window.
+		if !wasStarting {
+			followLatest(t)
+		}
 		ui.CompactNote = ""
 	case "run:attachment":
 		a.recordAttachmentReference(t, p)

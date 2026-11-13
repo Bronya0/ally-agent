@@ -151,3 +151,57 @@ func TestChatWheelBackResumesWhenTheAnswerGrew(t *testing.T) {
 		t.Fatalf("coming back did not follow the grown answer: follow=%v y=%v max=%v", conv.uiState().Follow, conv.Scroll.Y, conv.Scroll.MaxY)
 	}
 }
+
+// Sending already follows the end. A delayed start acknowledgement must not
+// override a reader who scrolled up while that request was starting.
+func TestChatDelayedRunStartPreservesReaderScroll(t *testing.T) {
+	conv, tt := newChatScrollTester(t)
+	conv.Busy = true
+	tt.Wheel(450, 200, 0, -240)
+	tt.Advance(300 * time.Millisecond)
+	position := conv.Scroll.Y
+	a := &desktop{tabs: []*conversation{conv}}
+	a.applyEvent("run:start", map[string]any{"sessionId": conv.ID, "runId": "delayed"})
+	tt.Frame()
+	tt.Advance(600 * time.Millisecond)
+	if conv.uiState().Follow || conv.Scroll.Y != position {
+		t.Fatalf("start acknowledgement stole reader position: follow=%v y=%v want=%v", conv.uiState().Follow, conv.Scroll.Y, position)
+	}
+}
+
+// The way back to the newest message shows as soon as following stops, rather
+// than once the reader is 40 DIPs off the end: a trackpad nudge, or a jump the
+// list took in one frame with no wheel to report it, as a click in the scroll
+// bar's track is, would otherwise stop following with no button and no sign
+// that it had.
+func TestChatLeavingTheEndShowsTheWayBack(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		leave func(*conversation, *ui.Tester)
+	}{
+		{name: "trackpad-nudge", leave: func(_ *conversation, tt *ui.Tester) { tt.Scroll(450, 200, 0, -12) }},
+		{name: "scroll-bar-jump", leave: func(conv *conversation, tt *ui.Tester) {
+			conv.Scroll.Y = conv.Scroll.MaxY - 300
+			tt.Frame()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conv, tt := newChatScrollTester(t)
+			tc.leave(conv, tt)
+			tt.Advance(200 * time.Millisecond)
+			if conv.Scroll.Y >= conv.Scroll.MaxY-2 {
+				t.Fatalf("the reader did not leave the end: y=%v max=%v", conv.Scroll.Y, conv.Scroll.MaxY)
+			}
+			if !tt.HasText("回到最新") {
+				t.Fatal("leaving the end left the reader no way back")
+			}
+			if err := tt.Click("回到最新"); err != nil {
+				t.Fatalf("clicking back to latest: %v", err)
+			}
+			tt.Advance(600 * time.Millisecond)
+			if !conv.uiState().Follow || conv.Scroll.Y < conv.Scroll.MaxY-2 {
+				t.Fatalf("coming back did not follow: y=%v max=%v", conv.Scroll.Y, conv.Scroll.MaxY)
+			}
+		})
+	}
+}

@@ -121,7 +121,14 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 			return false
 		}).Grow(1).MinHeight(0).
 			Padding(18, inlineInset, 14).Gap(10)
-		if !st.Follow && t.Scroll.Y < t.Scroll.MaxY-40 {
+		// The way back shows as soon as the transcript stops following it: a
+		// trackpad's nudge leaves the end by a few DIPs, and waiting for 40 left
+		// the reader with no button at all. The list's own end covers the jump
+		// that reached it without a wheel to report it, as a click in the scroll
+		// bar's track is one frame there; following a stream keeps the list at
+		// its end while the glide lags behind the content, so the end decides
+		// only when the app still believes it follows.
+		if (!st.Follow || !st.List.AtEnd()) && t.Scroll.Y < t.Scroll.MaxY-2 {
 			ui.Box(c).Absolute().Right(18).Bottom(12).Children(func() {
 				ui.Column(c).Gap(gapTight).Children(func() {
 					iconAction(c, "chat-jump-up", locales.Text("跳到上一条提问"), "arrowup", 28, func() {

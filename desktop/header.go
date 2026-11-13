@@ -193,7 +193,7 @@ func (a *desktop) headerActions(c *ui.Context) {
 	services := c.Services()
 	if a.upd.Tag != "" && a.upd.Tag != a.prefs.DismissedUpdateTag {
 		tip := locales.Text("发现新版本 ") + a.upd.Tag + locales.Text("，点击自动更新")
-		uikit.Tooltip(c, uikit.Action(c.Key("update-badge"), tip, uikit.ActionOptions{Tone: uikit.Success, Style: uikit.Secondary, Circle: true, Icon: iconImage("download")}).Size(30, 30).OnClick(func() { a.startUpdate() }), tip)
+		uikit.Tooltip(c, uikit.Action(c.Key("update-badge"), tip, uikit.ActionOptions{Tone: uikit.Success, Style: uikit.Secondary, Circle: true, Icon: iconImage("download")}).Size(30, 30).AlignSelf(ui.Center).OnClick(func() { a.startUpdate() }), tip)
 	} else {
 		iconButton(c, "github", locales.Text("打开 GitHub 项目主页"), "github", func() {
 			services.OpenURL("https://github.com/Bronya0/ally-agent")
