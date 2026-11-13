@@ -19,6 +19,7 @@ import (
 	"path"
 	"path/filepath"
 	goruntime "runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -575,7 +576,7 @@ func (a *App) workspacePathIndex(root string, force bool) (*workspacePathIndex, 
 				if _, ok := a.workspaceCaches.pathBuilds[key]; !ok {
 					waitCh := make(chan struct{})
 					a.workspaceCaches.pathBuilds[key] = waitCh
-					go a.rebuildWorkspacePathIndex(root, key, waitCh)
+					GoSafe("workspace path index", func() { a.rebuildWorkspacePathIndex(root, key, waitCh) })
 				}
 			}
 			a.workspaceCaches.pathMu.Unlock()
@@ -602,11 +603,21 @@ func (a *App) workspacePathIndex(root string, force bool) (*workspacePathIndex, 
 }
 
 func (a *App) rebuildWorkspacePathIndex(root, key string, waitCh chan struct{}) {
-	index, err := a.buildWorkspacePathIndex(root)
-	a.workspaceCaches.pathMu.Lock()
-	a.finishWorkspacePathIndexBuildLocked(key, index, err)
-	close(waitCh)
-	a.workspaceCaches.pathMu.Unlock()
+	var index *workspacePathIndex
+	var err error
+	// 无论成败都要关闭 waitCh：并发调用方靠它判断“这次构建结束”，
+	// panic 时若跳过关闭，等待方会永久阻塞。
+	defer func() {
+		if r := recover(); r != nil {
+			logBackgroundPanic("workspace path index", r, debug.Stack())
+			index, err = nil, fmt.Errorf("path index build failed: %v", r)
+		}
+		a.workspaceCaches.pathMu.Lock()
+		a.finishWorkspacePathIndexBuildLocked(key, index, err)
+		close(waitCh)
+		a.workspaceCaches.pathMu.Unlock()
+	}()
+	index, err = a.buildWorkspacePathIndex(root)
 }
 
 func (a *App) finishWorkspacePathIndexBuildLocked(key string, index *workspacePathIndex, err error) {

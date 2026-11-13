@@ -86,7 +86,7 @@ func (a *desktop) downloadUpdate(silent bool) {
 	a.upd.Progress, a.upd.BytesNow, a.upd.BytesTotal = 0, 0, 0
 	a.upd.Busy, a.upd.Silent, a.upd.Cancelling = true, silent, false
 	a.upd.RetryApply = false
-	go func() {
+	backend.GoSafe("update download", func() {
 		result := a.core.DownloadUpdate(tag)
 		a.win.Update(func() {
 			a.upd.Busy = false
@@ -100,7 +100,14 @@ func (a *desktop) downloadUpdate(silent bool) {
 			}
 			a.upd.State, a.upd.Progress, a.upd.Open = "ready", 100, true
 		})
-	}()
+	}, func() {
+		a.win.Update(func() {
+			a.upd.Busy = false
+			if a.upd.State == "downloading" {
+				a.upd.State = "idle"
+			}
+		})
+	})
 }
 
 func (a *desktop) updateFailed(message string) {
@@ -143,7 +150,7 @@ func (a *desktop) applyUpdate() {
 			}
 			tag := a.upd.Tag // captured on the UI thread, never read by a worker
 			a.upd.State = "applying"
-			go func() {
+			backend.GoSafe("update apply", func() {
 				result := a.core.ApplyUpdate(tag)
 				a.win.Update(func() {
 					if !result.OK {
@@ -161,7 +168,12 @@ func (a *desktop) applyUpdate() {
 						a.quitAfterUpdate()
 					})
 				})
-			}()
+			}, func() {
+				a.win.Update(func() {
+					a.upd.State = "ready"
+					a.upd.Busy = false
+				})
+			})
 		})
 	}
 	if a.upd.Applied {
@@ -184,7 +196,7 @@ func (a *desktop) skipUpdate() {
 	}
 	tag := a.upd.Tag
 	a.upd.Busy, a.upd.Silent = true, false
-	go func() {
+	backend.GoSafe("update skip", func() {
 		result := a.core.SkipUpdate(tag)
 		a.win.Update(func() {
 			a.upd.Busy = false
@@ -196,7 +208,9 @@ func (a *desktop) skipUpdate() {
 			a.savePrefs()
 			a.upd.State, a.upd.Open = "available", false
 		})
-	}()
+	}, func() {
+		a.win.Update(func() { a.upd.Busy = false })
+	})
 }
 
 func (a *desktop) checkUpdates(silent bool) {
@@ -211,7 +225,7 @@ func (a *desktop) checkUpdates(silent bool) {
 	if !silent {
 		a.upd.State, a.upd.Open = "checking", true
 	}
-	go func() {
+	backend.GoSafe("update check", func() {
 		result := a.core.CheckForUpdates()
 		a.win.Update(func() {
 			a.upd.CheckBusy, a.settings.UpdateBusy = false, false
@@ -222,7 +236,11 @@ func (a *desktop) checkUpdates(silent bool) {
 				a.downloadUpdate(silent)
 			}
 		})
-	}()
+	}, func() {
+		a.win.Update(func() {
+			a.upd.CheckBusy, a.settings.UpdateBusy = false, false
+		})
+	})
 }
 
 // A single decision path for startup, periodic checks and the manual button.

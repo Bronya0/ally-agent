@@ -370,6 +370,7 @@ func (a *App) batchReadFilesWithContext(ctx context.Context, cfg ConfigState, re
 		go func(idx int, path string, fileReq ReadFileRequest) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			defer recoverTask("batch read")
 			results[idx] = a.batchReadOneWithContext(ctx, cfg, path, fileReq)
 		}(i, p.path, p.req)
 	}

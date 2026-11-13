@@ -710,7 +710,7 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 	if (name == "sub:done" || name == "sub:error") && a.core != nil && a.win != nil {
 		// The backend keeps the full report; pull it once so the expanded card
 		// shows the same text the Vue version did.
-		go func() {
+		backend.GoSafe("subagent run refresh", func() {
 			runs := a.core.GetSubagents()
 			a.win.Update(func() {
 				if !a.hasSubagentConversation(t, sid) {
@@ -736,7 +736,7 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 					}
 				}
 			})
-		}()
+		})
 	}
 }
 
@@ -756,7 +756,7 @@ func (a *desktop) refreshSessionFooter(t *conversation) {
 	}
 	ui.FooterBusy = true
 	sid, workspace := t.ID, t.Workspace
-	go func() {
+	backend.GoSafe("session footer refresh", func() {
 		breakdown := a.core.GetContextBreakdown(sid, workspace)
 		usage := a.core.GetWorkspaceTokenUsage(workspace)
 		a.win.Update(func() {
@@ -772,7 +772,9 @@ func (a *desktop) refreshSessionFooter(t *conversation) {
 				a.refreshSessionFooter(t)
 			}
 		})
-	}()
+	}, func() {
+		a.win.Update(func() { ui.FooterBusy = false })
+	})
 }
 
 func (a *desktop) refreshGit(t *conversation) {
@@ -781,7 +783,7 @@ func (a *desktop) refreshGit(t *conversation) {
 	}
 	workspace := t.Workspace
 	ui := t.uiState()
-	go func() {
+	backend.GoSafe("git status refresh", func() {
 		status := a.core.GetGitStatus(workspace)
 		a.win.Update(func() {
 			if !sameWorkspace(t.Workspace, workspace) {
@@ -790,7 +792,7 @@ func (a *desktop) refreshGit(t *conversation) {
 			ui.Git = status
 			ui.GitLoaded = true
 		})
-	}()
+	})
 }
 
 func (a *desktop) applyUpdateEvent(name string, p map[string]any) {
@@ -842,7 +844,7 @@ func (a *desktop) refreshSSH(manual ...bool) {
 	for _, tab := range a.tabs {
 		workspaces[tab.Workspace] = true
 	}
-	go func() {
+	backend.GoSafe("ssh servers refresh", func() {
 		if tail != nil {
 			<-tail
 		}
@@ -868,7 +870,7 @@ func (a *desktop) refreshSSH(manual ...bool) {
 				a.notifySuccess(locales.Text("SSH 列表已刷新"))
 			}
 		})
-	}()
+	})
 }
 
 // ensureSSHWorkspaceLoaded keeps the footer authorization count accurate as
@@ -889,7 +891,7 @@ func (a *desktop) ensureSSHWorkspaceLoaded(workspace string) {
 	}
 	a.sshRefreshPending[workspace] = true
 	seq, tail := a.sshRefreshSeq, a.sshAuthTail
-	go func() {
+	backend.GoSafe("ssh workspace refresh", func() {
 		if tail != nil {
 			<-tail
 		}
@@ -907,5 +909,7 @@ func (a *desktop) ensureSSHWorkspaceLoaded(workspace string) {
 			}
 			a.sshAllowed[workspace] = allowed
 		})
-	}()
+	}, func() {
+		a.win.Update(func() { delete(a.sshRefreshPending, workspace) })
+	})
 }

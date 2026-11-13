@@ -197,11 +197,11 @@ func (s *statsRecorder) start(parent context.Context) {
 	s.startOnce.Do(func() {
 		ctx, cancel := context.WithCancel(parent)
 		s.cancel = cancel
-		go func() {
+		GoSafe("stats recorder", func() {
 			defer close(s.done)
 			s.load()
 			s.run(ctx)
-		}()
+		})
 	})
 }
 

@@ -1878,8 +1878,8 @@ func (a *App) finishRun(f runFinish, messages []openai.ChatCompletionMessage, ou
 		a.saveHistory(f.sessionID, messages)
 	}
 	// These three read the saved history and touch different state: run them
-	// together instead of one after another.
-	parallel(
+	// together instead of one after another. A failing step is logged, not fatal.
+	runParallel("run finish",
 		func() { a.restoreSavedHistoryBreakdown(f.sessionID) },     // context breakdown
 		func() { a.syncRunSessionIndex(f.sessionID, f.syncIndex) }, // session index
 		func() { a.invalidateGitStatus(f.workspace) },              // Git status cache
@@ -1939,19 +1939,6 @@ func (a *App) emitRunEnd(f runFinish, outcome runOutcome) {
 	}
 	publishRunModelUsage(f.ctx, payload)
 	a.emit(outcome.event(), payload)
-}
-
-// parallel runs independent end-of-run steps and waits for all of them.
-func parallel(tasks ...func()) {
-	var wg sync.WaitGroup
-	wg.Add(len(tasks))
-	for _, task := range tasks {
-		go func() {
-			defer wg.Done()
-			task()
-		}()
-	}
-	wg.Wait()
 }
 
 // releaseRun drops the run's live registrations. The input queue is dropped,

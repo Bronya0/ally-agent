@@ -485,11 +485,11 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 	// 摘除、读路径不再触达，迟几秒 Close 不影响正确性；stdio 进程另有
 	// KILL_ON_JOB_CLOSE 兜底，退出时不会被这批后台 Close 拖住。
 	if len(closing) > 0 {
-		go func() {
+		GoSafe("mcp close stale clients", func() {
 			for _, staleClient := range closing {
 				m.closeClient(staleClient)
 			}
-		}()
+		})
 	}
 	if len(stale) > 0 {
 		m.notifyChange()
@@ -512,7 +512,7 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 			m.registerDisabledServer(name, cfg)
 			continue
 		}
-		go m.connectOne(ctx, name, cfg)
+		GoSafe("mcp connect "+name, func() { m.connectOne(ctx, name, cfg) }, func() { m.markConnectPanicked(name) })
 	}
 	return len(touched), nil
 }
@@ -1071,7 +1071,24 @@ func (m *McpManager) markToolsListDirty(serverName string, token *mcpConnToken) 
 	slot.running = true
 	refresh := m.toolRefresher
 	m.refreshMu.Unlock()
-	go m.runToolRefresh(serverName, slot, refresh)
+	GoSafe("mcp tool refresh "+serverName, func() { m.runToolRefresh(serverName, slot, refresh) }, func() {
+		m.refreshMu.Lock()
+		slot.running = false
+		m.refreshMu.Unlock()
+	})
+}
+
+// markConnectPanicked releases a dial that crashed before it could settle: the
+// panel must not sit on "connecting" forever, and the next call has to be able
+// to dial again.
+func (m *McpManager) markConnectPanicked(name string) {
+	m.mu.Lock()
+	if handle, ok := m.clients[name]; ok && handle.Status == "connecting" {
+		handle.Status = "failed"
+		handle.Error = "connection setup failed unexpectedly"
+	}
+	m.mu.Unlock()
+	m.notifyChange()
 }
 
 // runToolRefresh 是一轮"防抖 + 不丢"的刷新循环：refresh 收到的是最新一次通知

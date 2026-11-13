@@ -10,7 +10,6 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-
 func luma(r, g, b uint8) float64 {
 	return 0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)
 }

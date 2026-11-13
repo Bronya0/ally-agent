@@ -38,4 +38,3 @@ func TestCloseToTraySwitchWritesThePreference(t *testing.T) {
 		t.Fatalf("the switch did not turn hiding back on: %+v", a.prefs)
 	}
 }
-

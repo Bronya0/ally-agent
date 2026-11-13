@@ -61,18 +61,16 @@ func (a *desktop) changePage(page string) {
 		return
 	}
 	epoch := a.pageEpoch
-	go func() {
-		a.win.Update(func() {
-			if a.pageEpoch != epoch {
-				return
-			}
-			a.refreshPage(page)
-		})
-	}()
+	a.win.Update(func() {
+		if a.pageEpoch != epoch {
+			return
+		}
+		a.refreshPage(page)
+	})
 }
 
 // refreshPage reloads the current page's data. It is called from the update
-// callback or from a goroutine that only publishes, never from the view.
+// callback, never from the view.
 func (a *desktop) refreshPage(page string) {
 	switch page {
 	case "settings":
