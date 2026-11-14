@@ -166,6 +166,8 @@ type palette struct {
 	// chrome is the header's neutral base before its accent tint. The rail,
 	// explorer and active workspace tab share the main content background.
 	chrome ui.Color
+	// header, when set, replaces the derived header tint in light mode.
+	header ui.Color
 	// Complete presets can supply literal website colors instead of derived tints.
 	wordmark, accentHover, accentPressed, selection ui.Color
 	// light overrides the entire light surface set, without another preference
@@ -184,6 +186,9 @@ func (p palette) headerColor() ui.Color {
 		// from the background-filled active workspace tab, and keep window
 		// controls on the same surface.
 		return ui.Hex("#353535")
+	}
+	if p.header.A != 0 {
+		return p.header
 	}
 	base := p.chrome
 	if base.A == 0 {
@@ -213,14 +218,17 @@ const (
 	paletteForest = 4 // 森林
 	paletteViolet = 5 // 紫罗兰
 	paletteMeadow = 6 // 青禾 — the website's paper, ink and sage in light mode
-	paletteNative = 7 // 原生 — neutral accent on the shared dark/light surfaces
+	paletteNative = 7 // 原生
+	paletteTeal   = 8
+	paletteRose   = 9
+	paletteIndigo = 10
 
 	// defaultPalette is the accent a profile without a saved choice starts on.
 	defaultPalette = paletteBlue
 )
 
 // paletteChoices is presentation order only; persisted palette IDs stay stable.
-var paletteChoices = [...]int{paletteNative, paletteBlue, paletteAmber, paletteForest, paletteViolet, paletteMeadow}
+var paletteChoices = [...]int{paletteNative, paletteBlue, paletteAmber, paletteForest, paletteViolet, paletteTeal, paletteRose, paletteIndigo}
 
 // paletteBlue and paletteLight supply the shared dark/light surface bases.
 // A preset with light surfaces replaces the light base as a complete set.
@@ -238,13 +246,12 @@ var palettes = []palette{
 	{name: "森林", dark: true, bg: ui.Hex("#151a17"), panel: ui.Hex("#1a201c"), line: ui.Hex("#29362d"), accent: ui.Hex("#6fbf8f"), accentText: ui.Hex("#0e1511"), text: ui.Hex("#c4d2c8"), muted: ui.Hex("#889a8e"), hover: ui.Hex("#212b24"), hint: ui.Hex("#5a6960")},
 	// paletteViolet
 	{name: "紫罗兰", dark: true, bg: ui.Hex("#191722"), panel: ui.Hex("#1f1c29"), line: ui.Hex("#312c42"), accent: ui.Hex("#a68bea"), accentText: ui.Hex("#141019"), text: ui.Hex("#cfc8de"), muted: ui.Hex("#948aa8"), hover: ui.Hex("#292436"), hint: ui.Hex("#645c76")},
-	// paletteMeadow: literal tokens from docs/index.html, including card and button states.
-	{name: "青禾", dark: true, accent: ui.Hex("#9dbb9f"), light: &palette{
-		name: "青禾", bg: ui.Hex("#f6f7f2"), panel: ui.Hex("#fcfcf9"), line: ui.Hex("#dce2d8"), accent: ui.Hex("#25624a"), accentText: ui.Hex("#f2f5ef"), text: ui.Hex("#202d28"), muted: ui.Hex("#59665f"), hover: ui.Hex("#e6eddf"), hint: ui.Hex("#929a94"),
-		wordmark: ui.Hex("#202d28"), accentHover: ui.Hex("#1c4838"), accentPressed: ui.Hex("#163c2e"), selection: ui.Hex("#cfe1c4"),
-	}},
-	// paletteNative changes only the accent, like blue, amber, forest and violet.
-	{name: "原生", dark: true, accent: ui.Hex("#e1e5ee")},
+	// Retired ID remains reserved for existing preference files.
+	{name: "青禾", dark: true, accent: ui.Hex("#9dbb9f")},
+	{name: "原生", dark: true, accent: ui.Hex("#a8bdd2"), header: ui.Hex("#e5ebf2")},
+	{name: "青瓷", dark: true, accent: ui.Hex("#72bbb5")},
+	{name: "玫瑰", dark: true, accent: ui.Hex("#d69a9f")},
+	{name: "靛蓝", dark: true, accent: ui.Hex("#a8a9e0")},
 }
 
 // lightAccents is the light-mode accent for the same indices. The dark pastels
@@ -258,7 +265,10 @@ var lightAccents = []ui.Color{
 	ui.Hex("#247649"), // forest
 	ui.Hex("#7850b8"), // violet
 	ui.Hex("#25624a"), // meadow
-	ui.Hex("#0f1115"), // native: intentionally neutral
+	ui.Hex("#536d87"), // native
+	ui.Hex("#176e69"), // teal
+	ui.Hex("#a24753"), // rose
+	ui.Hex("#5557a0"), // indigo
 }
 
 func (a *desktop) currentPalette() palette {
@@ -266,7 +276,7 @@ func (a *desktop) currentPalette() palette {
 	if idx < 0 || idx >= len(palettes) {
 		idx = defaultPalette
 	}
-	if idx == paletteOcean {
+	if idx == paletteOcean || idx == paletteMeadow {
 		// Retired: an old choice lands on the blue accent instead of a colour
 		// the settings page can no longer show as selected.
 		idx = paletteBlue
@@ -282,6 +292,9 @@ func (a *desktop) currentPalette() palette {
 	}
 	p.name = palettes[idx].name
 	p.accent = palettes[idx].accent
+	if palettes[idx].header.A != 0 {
+		p.header = palettes[idx].header
+	}
 	if !p.dark {
 		// Light accents have their own saturated palette. Mixing a pastel dark
 		// accent with neutral text made every theme look grey-blue.

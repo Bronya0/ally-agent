@@ -18,7 +18,7 @@ pip install python-docx
 pip install pywin32          # PDF 转换需要
 ```
 
-PDF 转换需本机安装 **WPS Office**（通过 COM 接口 `Kwps.Application` 调用）。
+脚本的 `--pdf` 仅适用于安装了 WPS Office 和 pywin32 的 Windows（通过 COM 接口 `Kwps.Application` 调用）。macOS/Linux 不支持此路径；先生成 DOCX，再按环境使用可用的文档转换工具。安装依赖前先检查环境，并遵循用户已有授权。
 
 ## 参数
 

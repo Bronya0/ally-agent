@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,42 @@ func apiRequest(t *testing.T, handler http.Handler, method, path, token string, 
 	req := httptest.NewRequest(method, path, reader)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	// Model mutations require the identity from the current list, as real clients do.
+	index := -1
+	if method == "DELETE" && strings.HasPrefix(path, "/api/v1/models/") {
+		index, _ = strconv.Atoi(strings.TrimPrefix(path, "/api/v1/models/"))
+	} else if method == "POST" {
+		var input struct {
+			Index      *int `json:"index"`
+			ModelIndex *int `json:"modelIndex"`
+		}
+		if json.Unmarshal([]byte(body), &input) == nil {
+			if (path == "/api/v1/models" || path == "/api/v1/models/activate") && input.Index != nil {
+				index = *input.Index
+			}
+			if input.ModelIndex != nil {
+				index = *input.ModelIndex
+			}
+		}
+	}
+	if index >= 0 {
+		listReq := httptest.NewRequest("GET", "/api/v1/models", nil)
+		if token != "" {
+			listReq.Header.Set("Authorization", "Bearer "+token)
+		}
+		listRec := httptest.NewRecorder()
+		handler.ServeHTTP(listRec, listReq)
+		var list struct {
+			Data struct {
+				Models []struct {
+					Identity string `json:"identity"`
+				} `json:"models"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(listRec.Body.Bytes(), &list) == nil && index < len(list.Data.Models) {
+			req.Header.Set("X-Model-Identity", list.Data.Models[index].Identity)
+		}
 	}
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -610,23 +647,29 @@ func TestApiSettingsPersistenceAndListenerLifecycle(t *testing.T) {
 		t.Fatalf("unexpected normalized settings: %+v", state)
 	}
 
-	// 真实 listener 生命周期：先借 127.0.0.1:0 拿一个空闲高位端口。
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("cannot probe a free port: %v", err)
-	}
-	port := probe.Addr().(*net.TCPAddr).Port
-	probe.Close()
-	if port < 1024 {
-		t.Skipf("probed port %d is privileged", port)
-	}
-
-	if _, err := app.SaveApiSettings(ApiSettingsRequest{Port: port, Token: "tok-lifecycle"}); err != nil {
-		t.Fatal(err)
-	}
-	state, err = app.SetApiServiceEnabled(true)
-	if err != nil {
-		t.Fatal(err)
+	// 真实 listener 生命周期：先借 127.0.0.1:0 拿一个空闲高位端口。包并行时，
+	// 刚释放的端口可能被别的测试立刻抢走，抢不到就换一个重试，不停等也不放宽断言。
+	var port int
+	for attempt := 0; ; attempt++ {
+		probe, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Skipf("cannot probe a free port: %v", err)
+		}
+		port = probe.Addr().(*net.TCPAddr).Port
+		probe.Close()
+		if port < 1024 {
+			t.Skipf("probed port %d is privileged", port)
+		}
+		if _, err := app.SaveApiSettings(ApiSettingsRequest{Port: port, Token: "tok-lifecycle"}); err != nil {
+			t.Fatal(err)
+		}
+		state, err = app.SetApiServiceEnabled(true)
+		if err == nil {
+			break
+		}
+		if attempt == 4 {
+			t.Fatalf("could not bind a probed port: %v", err)
+		}
 	}
 	if !state.Enabled {
 		t.Fatalf("expected enabled after start: %+v", state)

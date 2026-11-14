@@ -236,11 +236,13 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 响应 `data`：`{ "reply": "生成文本", "promptTokens": 12, "completionTokens": 3, "totalTokens": 15 }`。用量来自供应商回报，未回报时为 0。配置不完整返回 400，模型请求失败返回 502，超时返回 504。该接口不是 OpenAI 兼容转发端点；需要 Agent / 多轮历史时使用会话接口。
 
+显式传入 `modelIndex` 的聊天、单次调用和定时任务请求，也必须在 `X-Model-Identity` 请求头传入 `GET /models` 返回的对应 `identity`；缺失或不匹配返回 409。
+
 ## 模型
 
 ### `DELETE /api/v1/models/{index}` — 删除模型
 
-按模型列表的索引删除条目。删除最近使用模型时清理该选择；不影响正在运行请求已获得的配置。
+按模型列表的索引删除条目。请求头 `X-Model-Identity` 必须填写最近一次 `GET /models` 中该条目的 `identity`；不匹配或缺失返回 409。删除最近使用模型时清理该选择；不影响正在运行请求已获得的配置。
 索引非法或越界返回 400。响应 `data.deleted` 为被删除的索引。
 
 ### `GET /api/v1/models` — 查询模型列表与最近使用模型
@@ -250,9 +252,11 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 | 字段 | 说明 |
 |------|------|
 | `active` | 最近使用模型：`{providerName, apiFormat, baseUrl, model, reasoningTag, reasoningEffort, customHeaderNames}`，即本地 HTTP API 会话（不带 Tab 模型 overlay）下一回合使用的模型；界面上每个 Tab 各自有自己的模型，与它无关。一条模型都没配置时各字段为空串 |
-| `models[]` | 已配置的模型条目（下标即 `index`，供更新/激活用） |
+| `models[]` | 已配置的模型条目（下标即 `index`，供更新/激活用；`identity` 校验并发修改） |
 | `models[].hasApiKey` / `apiKeyCount` | 密钥配置状态（**响应永不回传密钥明文**） |
 | `models[].customHeaderNames` | 该条目自定义请求头的键名列表（**只回传键名，永不回传值**，值可能携带网关凭据） |
+
+`identity` 是该条目**当前内容的指纹**（不含密钥本身）：任何字段被改过它都会变，旧 `identity` 一律返回 409。这是有意的破坏性变更：调用方要先 `GET /models` 取最新 `identity` 再写请求头。不带 `modelIndex` 的请求不受影响。
 
 ### `POST /api/v1/models` — 新建或更新模型配置
 
@@ -260,7 +264,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `index` | int | 否 | 提供时按下标**更新所提供的字段**；缺省为**追加**新条目 |
+| `index` | int | 否 | 提供时按下标**更新所提供的字段**，请求头须带 `X-Model-Identity`；缺省为**追加**新条目 |
 | `model` | object | 是 | 模型配置，字段见下 |
 
 `model` 对象字段（对应 `ModelConfig`）：
@@ -280,6 +284,8 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 更新按字段合并：未提供的字段（含密钥与自定义请求头）保留。显式空字符串或空集合可清空；提供 `apiKey` 会替换原密钥池，提供 `apiKeys` 会替换单密钥。保留显式 `max_tokens` / `max_completion_tokens` / `auto` 选择，不因编辑自动改写。配置字段名按文档大小写书写（如 `apiKey`，不能写成 `APIKey`）；错误大小写返回 400，避免密钥合并歧义；`GET` 返回的只读字段（`index`、`hasApiKey`、`apiKeyCount`、`customHeaderNames`）可以原样回传、写回时忽略，其余未知字段返回 400。重复的供应商、模型 ID、OAuth 账号身份返回 409。响应 `data`：`{ "index": 2 }`。
 
 ### `POST /api/v1/models/activate` — 设置最近使用模型
+
+请求头 `X-Model-Identity` 必须填写对应模型的 `identity`；缺失或不匹配返回 409。
 
 请求体：`{ "index": 2 }`（`models[]` 的下标）。它记下的是模型的**身份**（providerName + model id + OAuth 账号）：config.json 里只存 `models[]` 与这个身份，模型字段在每次生效时按身份展开；界面切换模型/发送时写回的是同一个身份（两边谁后写谁生效）。本地 HTTP API 会话没有 Tab 上下文，下一回合就用它；界面上每个 Tab 的模型不受影响。越界返回 400。
 

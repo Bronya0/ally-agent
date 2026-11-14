@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--jobs", type=int, default=2,
-                        help="CPU and in-package test parallelism (default: 2)")
+    parser.add_argument("--jobs", type=int, default=4,
+                        help="CPU, package and in-package test parallelism (default: 4)")
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("--jobs must be at least 1")
@@ -20,7 +20,7 @@ def main():
     env.setdefault("GOMEMLIMIT", "512MiB")
     started = time.perf_counter()
     result = subprocess.call(
-        ["go", "test", "-p", "1", "-parallel", str(args.jobs), "-count=1",
+        ["go", "test", "-p", str(args.jobs), "-parallel", str(args.jobs), "-count=1",
          "-timeout=60s", "./..."], cwd=ROOT, env=env,
     )
     print(f"Full Go tests: {time.perf_counter() - started:.2f}s", flush=True)

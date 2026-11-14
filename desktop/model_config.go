@@ -94,10 +94,15 @@ func (a *desktop) editModel(index int) {
 	a.invalidateModelFetch()
 	a.modelForm.AdvancedOpen = false
 	a.modelPrevious = nil
+	a.modelBaseline = nil
 	a.modelProviderPreset = customProviderPreset
 	a.modelProviderModel = ""
 	if index >= 0 && index < len(a.config.Models) {
 		a.modelDraft = a.config.Models[index]
+		rawBaseline, _ := json.Marshal(a.modelDraft)
+		var baseline backend.ModelConfig
+		_ = json.Unmarshal(rawBaseline, &baseline)
+		a.modelBaseline = &baseline
 		a.modelPrevious = modelIdentityPtr(a.modelDraft)
 		if a.modelDraft.AuthType == "" {
 			a.modelDraft.AuthType = "api_key"
@@ -246,6 +251,7 @@ func (a *desktop) saveModelDraft() {
 		v := *previous
 		old = &v
 	}
+	baseline := a.modelBaseline
 	first := a.config.LastUsedModel == nil
 	target := a.current()
 	a.modelSaving = true
@@ -253,7 +259,7 @@ func (a *desktop) saveModelDraft() {
 	go func() {
 		defer close(done)
 		waitConfigWrite(prevWrite)
-		err := a.core.SaveNativeModel(m, old)
+		err := a.core.SaveNativeModelIfUnchanged(m, baseline)
 		var cfg backend.ConfigState
 		if err == nil {
 			cfg, err = a.core.GetConfig()

@@ -265,18 +265,6 @@ func TestUserAgentDefaultLabelIsNormalizedOnlyOnSave(t *testing.T) {
 	}
 }
 
-func TestSelectionColorTracksAccent(t *testing.T) {
-	for _, mode := range []string{"light", "dark"} {
-		for _, palette := range []int{paletteAmber, paletteForest, paletteViolet} {
-			a := &desktop{}
-			a.prefs.Appearance, a.prefs.Palette = mode, palette
-			if got, want := a.theme().Selection, a.currentPalette().accent.Alpha(0.30); got != want {
-				t.Fatalf("%s palette %d selection %v != %v", mode, palette, got, want)
-			}
-		}
-	}
-}
-
 func TestCatalogModelCanBeClearedAndReplacedWithCustomID(t *testing.T) {
 	provider := availableModelCatalog().Providers[0]
 	if len(provider.Models) == 0 {

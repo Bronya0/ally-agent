@@ -1041,3 +1041,17 @@ func TestBuiltinSkillLoadDir(t *testing.T) {
 		t.Fatalf("a skill with only SKILL.md reported dir=%q err=%v", dir, err)
 	}
 }
+
+func TestWriteNewSkillFileDoesNotReplaceExisting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "SKILL.md")
+	if err := writeNewSkillFile(path, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNewSkillFile(path, []byte("second")); err == nil {
+		t.Fatal("existing skill was replaced")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "first" {
+		t.Fatalf("skill content %q: %v", data, err)
+	}
+}

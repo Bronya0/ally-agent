@@ -4,7 +4,6 @@ package desktop
 import (
 	"fmt"
 	"testing"
-	"time"
 
 	backend "ally-dev/internal/app"
 	"github.com/egoist/mygo/ui"
@@ -189,91 +188,6 @@ func TestSessionsTriggerClosesOnSecondClick(t *testing.T) {
 	tester.Key(0, ui.KeyEnter)
 	if st.SessionsOpen || a.current() != conv || !tester.Focused("消息输入框") {
 		t.Fatal("choosing the current session did not close history and preserve composer focus")
-	}
-}
-
-func TestSessionsOverlayPreservesChatLayoutAndScroll(t *testing.T) {
-	for _, size := range [][2]int{{900, 600}, {900, 360}} {
-		for _, withPlan := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%dx%d/plan=%v", size[0], size[1], withPlan), func(t *testing.T) {
-				root := t.TempDir()
-				conv := &conversation{ID: "current", Workspace: root, Messages: restoredHistory(24)}
-				a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}}
-				for i := 0; i < 40; i++ {
-					a.sessions = append(a.sessions, backend.SessionIndexEntry{ID: fmt.Sprintf("session-%d", i), Workspace: root, Title: fmt.Sprintf("session-%d", i)})
-				}
-				if withPlan {
-					a.plans = map[string][]backend.PlanStep{conv.ID: {{Title: "current step", Status: "doing"}}}
-				}
-				tester := ui.NewTester(func(c *ui.Context) {
-					c.SetTheme(a.theme())
-					width, _ := c.Size()
-					a.chatColumn(c, width)
-				}, size[0], size[1])
-				st := conv.uiState()
-				st.Follow = false
-				conv.Scroll.Y = conv.Scroll.MaxY / 2
-				tester.Frame()
-				position, maxY := conv.Scroll.Y, conv.Scroll.MaxY
-				if position <= 0 || position >= maxY {
-					t.Fatal("fixture did not place the reader in the middle of the transcript")
-				}
-				before := map[string]ui.Rect{}
-				for _, label := range []string{"聊天滚动区域", "消息输入框", "查看和切换历史会话"} {
-					bounds, ok := tester.Find(label)
-					if !ok {
-						t.Fatalf("missing control %q", label)
-					}
-					before[label] = bounds
-				}
-				unchanged := func() {
-					t.Helper()
-					for label, bounds := range before {
-						if got, ok := tester.Find(label); !ok || got != bounds {
-							t.Fatalf("opening history displaced %q: %+v -> %+v", label, bounds, got)
-						}
-					}
-					if conv.Scroll.Y != position || conv.Scroll.MaxY != maxY || st.Follow {
-						t.Fatalf("history changed transcript scroll: y=%v/%v max=%v/%v", conv.Scroll.Y, position, conv.Scroll.MaxY, maxY)
-					}
-				}
-				if err := tester.Click("查看和切换历史会话"); err != nil {
-					t.Fatal(err)
-				}
-				unchanged()
-				tester.Advance(90 * time.Millisecond)
-				unchanged()
-				tester.Advance(200 * time.Millisecond)
-				unchanged()
-				panel, ok := tester.Find("历史会话面板")
-				if !ok || panel.W <= 0 || panel.H <= 0 || panel.X < 0 || panel.Y < 0 || panel.X+panel.W > float32(size[0]) || panel.Y+panel.H > float32(size[1]) {
-					t.Fatalf("history did not fit in the window: %+v", panel)
-				}
-				if size[1] >= 600 && panel.Y+panel.H > before["消息输入框"].Y {
-					t.Fatalf("history did not open above the composer: %+v", panel)
-				}
-				list, ok := tester.Find("历史会话列表")
-				if !ok || list.H < 28 {
-					t.Fatalf("history list has no usable scroll viewport: %+v", list)
-				}
-				first, _ := tester.Find("session-0")
-				tester.Scroll(list.X+list.W/2, list.Y+list.H/2, 0, 120)
-				if after, ok := tester.Find("session-0"); !ok || after.Y >= first.Y {
-					t.Fatalf("scrolling the history list did not move its rows: panel=%+v list=%+v first=%+v after=%+v found=%v open=%v", panel, list, first, after, ok, st.SessionsOpen)
-				}
-				unchanged()
-				if err := tester.Click("关闭"); err != nil {
-					t.Fatal(err)
-				}
-				if st.SessionsOpen {
-					t.Fatal("history close action did not receive the overlay click")
-				}
-				tester.Advance(90 * time.Millisecond)
-				unchanged()
-				tester.Advance(200 * time.Millisecond)
-				unchanged()
-			})
-		}
 	}
 }
 

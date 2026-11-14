@@ -271,9 +271,18 @@ var protectedLocations = []protectedLocation{
 	{path: "/usr/local/bin", remove: true},
 	{path: "/usr/local/sbin", remove: true},
 	{path: "/var/local/libs", remove: true},
+	{path: "/var/lib/dpkg", remove: true},
+	{path: "/var/lib/rpm", remove: true},
+	{path: "/var/lib/systemd", remove: true},
 
 	// 3. 核心敏感凭据与认证配置（精确保护关键文件，避免一刀切整树封死 /etc）
 	{path: "/etc/shadow", remove: true},
+	{path: "/etc/gshadow", remove: true},
+	{path: "/etc/subuid", remove: true},
+	{path: "/etc/subgid", remove: true},
+	{path: "/etc/default", remove: true},
+	{path: "/etc/systemd", remove: true},
+	{path: "/etc/networkmanager", remove: true},
 	{path: "/etc/sudoers", remove: true},
 	{path: "/etc/passwd", remove: true},
 	{path: "/etc/group", remove: true},

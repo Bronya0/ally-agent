@@ -800,6 +800,9 @@ func TestSearchCountMatchesPaginationTerminates(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if len(result.Warnings) == 0 {
+			t.Fatal("count result must report that matching files were omitted")
+		}
 		if result.NextOffset == 0 {
 			if offset > 0 && !result.OffsetExhausted && len(result.FileCounts) == 0 {
 				t.Fatalf("an empty page must either advance or report exhaustion: %#v", result)

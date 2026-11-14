@@ -658,6 +658,9 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	var resultCounts []FileCount
 	if mode == OutputModeCountMatches {
 		sortedCounts = fileCounts.Items()
+		if stats.FilesWithMatches > len(sortedCounts) {
+			warnings = append(warnings, fmt.Sprintf("Only the top %d matching files are available; narrow the search path to inspect the rest.", len(sortedCounts)))
+		}
 		start := req.Offset
 		if start < 0 {
 			start = 0

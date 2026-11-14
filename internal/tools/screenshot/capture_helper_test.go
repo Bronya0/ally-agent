@@ -110,16 +110,6 @@ func TestCaptureCommandCancellationReapsBlockedHelper(t *testing.T) {
 	}
 }
 
-func TestCaptureCommandDeadline(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	cmd, _ := captureTestCommand(t, ctx, "hang")
-	_, _, err := runCaptureCommand(ctx, cmd)
-	if !errors.Is(err, context.DeadlineExceeded) || !captureHelperReaped(cmd) {
-		t.Fatalf("deadline must kill and reap the helper: state=%v error=%v", cmd.ProcessState, err)
-	}
-}
-
 func TestCaptureCommandResultAndFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -4,6 +4,7 @@ package app
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"strings"
@@ -231,5 +232,47 @@ func TestAPIModelsRejectAlternateCasingAndUnknownFields(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAPIModelRejectsStaleIdentity(t *testing.T) {
+	a := newIsolatedChatTestApp(t)
+	a.config.Models = []ModelConfig{{ProviderName: "p", Model: "one"}, {ProviderName: "p", Model: "two"}}
+	handler := apiModelsTestHandler(a)
+	stale := modelIdentityToken(a.config.Models[0])
+	a.config.Models = a.config.Models[1:]
+	for _, tc := range []struct{ method, path, body string }{
+		{"DELETE", "/api/v1/models/0", ""},
+		{"POST", "/api/v1/models", `{"index":0,"model":{"displayName":"wrong"}}`},
+		{"POST", "/api/v1/models/activate", `{"index":0}`},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		req.Header.Set("X-Model-Identity", stale)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("%s %s: %d %s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+	if len(a.config.Models) != 1 || a.config.Models[0].Model != "two" || a.config.Models[0].DisplayName != "" || a.config.LastUsedModel != nil {
+		t.Fatal("stale request changed configuration")
+	}
+}
+
+func TestAPIModelConfigRejectsStaleIdentity(t *testing.T) {
+	a := newIsolatedChatTestApp(t)
+	a.config.Models = []ModelConfig{{ProviderName: "p", Model: "first"}, {ProviderName: "p", Model: "second"}}
+	old := modelIdentityToken(a.config.Models[0])
+	a.config.Models = a.config.Models[1:]
+	index := 0
+	req := httptest.NewRequest("POST", "/", nil)
+	req.Header.Set("X-Model-Identity", old)
+	if _, err := a.apiModelConfig(req, &index); toolErrorCode(err) != "E_MODEL_IDENTITY" {
+		t.Fatalf("stale model identity accepted: %v", err)
+	}
+	req.Header.Set("X-Model-Identity", modelIdentityToken(a.config.Models[0]))
+	cfg, err := a.apiModelConfig(req, &index)
+	if err != nil || cfg.Model != "second" {
+		t.Fatalf("current model not selected: %s %v", cfg.Model, err)
 	}
 }

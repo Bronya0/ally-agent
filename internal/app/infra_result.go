@@ -917,10 +917,10 @@ func renderReadResultForModel(r BatchReadResult) string {
 		if !f.Editable && f.Version == "" {
 			header += " | editable=false"
 		}
-		if !f.Reused && f.StartLine > 0 && f.EndLine > 0 {
+		if f.StartLine > 0 && f.EndLine > 0 {
 			header += fmt.Sprintf(" | lines=%d-%d", f.StartLine, f.EndLine)
 		}
-		if !f.Reused && f.TotalLines > 0 {
+		if f.TotalLines > 0 {
 			header += fmt.Sprintf(" | total=%d", f.TotalLines)
 		}
 		if f.Truncated {
@@ -1044,7 +1044,11 @@ func renderListFilesResultForModel(r ListFilesResult) string {
 	var rows []string
 	for _, e := range r.Entries {
 		if e.MoreFiles > 0 {
-			rows = append(rows, fmt.Sprintf("+%d more files", e.MoreFiles))
+			parent := strings.TrimSuffix(e.Path, "+more")
+			if parent == "" {
+				parent = "./"
+			}
+			rows = append(rows, fmt.Sprintf("%s+%d more files", neutralizeRowBreaks(parent), e.MoreFiles))
 			continue
 		}
 		path := neutralizeRowBreaks(e.Path)
@@ -1143,8 +1147,9 @@ func renderServiceReadResultForModel(r ServiceReadResult) string {
 	if reduced {
 		header += " | tail-only"
 	}
-	if r.FromByte > 0 {
-		header += fmt.Sprintf(" | from-byte=%d", r.FromByte)
+	fromByte := r.FromByte + len(r.Output) - len(output)
+	if fromByte > 0 {
+		header += fmt.Sprintf(" | from-byte=%d", fromByte)
 	}
 	if r.DeniedWriteHint != "" {
 		output += "\n\n" + r.DeniedWriteHint

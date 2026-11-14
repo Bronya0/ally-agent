@@ -15,7 +15,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-var settingsSections = []string{"通用", "高级", "网络", "安全围栏", "API", "无头模式", "版本亮点", "关于"}
+var settingsSections = []string{"通用", "高级", "网络", "API", "无头模式", "安全围栏", "版本亮点", "支持开源", "关于"}
 
 // settingsGeneralSections 是「通用」分区标签的源文案。下标只在这里决定：
 // 欢迎页按名称定位「上下文加载」，增删分区不会让入口指错页面。
@@ -61,7 +61,15 @@ func (a *desktop) settingsPageBody(c *ui.Context) {
 		ui.Column(c).Width(140).Shrink(0).Gap(3).Justify(ui.Start).Children(func() {
 			for _, section := range settingsSections {
 				section := section
-				selectionRow(c, "settings-"+section, section, a.settings.Tab == section, a.secondaryInk()).
+				label := section
+				if section == "安全围栏" {
+					label = "安全"
+				} else if section == "版本亮点" {
+					label = "版本"
+				} else if section == "支持开源" {
+					label = locales.Text(label) + " ☕"
+				}
+				selectionRow(c, "settings-"+section, label, a.settings.Tab == section, a.secondaryInk()).
 					OnClick(func() { a.selectSettingsSection(section) })
 			}
 		})
@@ -87,6 +95,8 @@ func (a *desktop) settingsPageBody(c *ui.Context) {
 						a.settingsHeadless(c)
 					case "版本亮点":
 						a.settingsReleaseNotes(c)
+					case "支持开源":
+						a.settingsDonate(c)
 					case "关于":
 						a.settingsAbout(c)
 					}
@@ -114,6 +124,9 @@ func (a *desktop) selectSettingsSection(section string) {
 		if a.configDraft.ProxyMode == "system" {
 			a.detectProxy()
 		}
+	case "支持开源":
+		// Decoded on the click, never while drawing the page.
+		loadSupportImages()
 	}
 }
 
@@ -181,7 +194,7 @@ func (a *desktop) settingsGeneralContent(c *ui.Context, selected int) {
 	}
 	if selected == 0 {
 		a.languageSetting(c)
-		a.settingsCard(c, "settings-appearance", locales.Text("主题与配色"), locales.Text("选择外观模式与强调色；青禾浅色沿用官网配色。"), func() {
+		a.settingsCard(c, "settings-appearance", locales.Text("主题与配色"), locales.Text("选择深色、浅色，或按本地时间自动切换。"), func() {
 			note := locales.Text("选择深色、浅色，或按本地时间自动切换。")
 			if a.prefs.Appearance == "auto" {
 				note = locales.Text("07:00–17:59 浅色，18:00–06:59 深色。")
@@ -191,10 +204,19 @@ func (a *desktop) settingsGeneralContent(c *ui.Context, selected int) {
 			}); mode.Changed() {
 				a.selectAppearance([]string{"dark", "light", "auto"}[a.settings.AppearanceMode])
 			}
-			if sw := a.settingsSwitch(c, "top-navigation", locales.Text("顶部菜单"), locales.Text("隐藏左侧导航栏，通过 Logo 旁的按钮打开菜单。"), &a.prefs.TopNavigation); sw.Changed() {
+			// Both layouts are positions, not an on/off state: show which one is
+			// active instead of a switch whose "off" label is invisible.
+			navMode := 0
+			if a.prefs.TopNavigation {
+				navMode = 1
+			}
+			if row := a.settingsRow(c, "navigation-row", locales.Text("导航栏"), locales.Text("侧边栏常驻左侧；顶部菜单隐藏左侧栏，用 Logo 旁的按钮打开菜单。"), settingsControlWidth, func() ui.Element {
+				return segmentedInk(c, "navigation-mode", &navMode, a.secondaryInk(), locales.Text("侧边栏"), locales.Text("顶部菜单"))
+			}); row.Changed() {
+				a.prefs.TopNavigation = navMode == 1
 				a.savePrefs()
 			}
-			a.settingsRow(c, "accent-row", locales.Text("配色"), locales.Text("原生使用中性强调色，与其他强调色共用基础配色；青禾浅色保留独立配色。"), settingsControlWidth, func() ui.Element {
+			a.settingsRow(c, "accent-row", locales.Text("配色"), locales.Text("选择你喜欢的配色。"), settingsControlWidth, func() ui.Element {
 				return uikit.OptionGroup(c.Key("accent-options")).Children(func() {
 					// Retired presets still resolve to blue without changing stored IDs.
 					for _, idx := range paletteChoices {
@@ -204,7 +226,7 @@ func (a *desktop) settingsGeneralContent(c *ui.Context, selected int) {
 						if !a.currentPalette().dark {
 							swatch = lightAccents[idx]
 						}
-						selected := a.prefs.Palette == idx || (idx == paletteBlue && (a.prefs.Palette == paletteLight || a.prefs.Palette == paletteOcean))
+						selected := a.prefs.Palette == idx || (idx == paletteBlue && (a.prefs.Palette == paletteLight || a.prefs.Palette == paletteOcean || a.prefs.Palette == paletteMeadow))
 						choiceSwatch(c, fmt.Sprintf("palette-%d", idx), locales.Text(p.name), selected, swatch).OnClick(func() {
 							if a.prefs.Appearance == "" {
 								if a.currentPalette().dark {
@@ -970,6 +992,31 @@ func (a *desktop) settingsReleaseNotes(c *ui.Context) {
 			return
 		}
 		a.releaseNotesMarkdown(c, &a.upd.ReleaseSettingsMD, "release-notes-settings-markdown")
+	})
+}
+
+func (a *desktop) settingsDonate(c *ui.Context) {
+	card(c, "settings-support-star", func() {
+		sectionTitle(c, locales.Text("在 GitHub 点个 Star"))
+		fieldNote(c, locales.Text("喜欢 Ally 的话，欢迎点个 Star，让更多人发现它。谢谢你！"), a.secondaryInk())
+		if githubStarIllustration != nil {
+			ui.Image(c, githubStarIllustration).Width(720).Height(232).MaxWidthPercent(100).Fit(ui.Contain)
+		}
+		ui.Row(c).Gap(gapField).Wrap().Children(func() {
+			settingsAction(c, locales.Text("前往 GitHub 点 Star")).OnClick(func() {
+				c.Services().OpenURL("https://github.com/Bronya0/ally-agent")
+			})
+			settingsAction(c, locales.Text("提出建议")).OnClick(func() {
+				c.Services().OpenURL("https://github.com/Bronya0/ally-agent/issues")
+			})
+		})
+	})
+	card(c, "settings-donate", func() {
+		sectionTitle(c, locales.Text("微信支付"))
+		fieldNote(c, locales.Text("如果你愿意，也可以请开发者喝个下午茶，支持 Ally 继续成长。每一份心意都很珍贵，谢谢你！"), a.secondaryInk())
+		if wechatPayQR != nil {
+			ui.Image(c, wechatPayQR).Size(240, 235).MaxWidthPercent(100).Fit(ui.Contain)
+		}
 	})
 }
 

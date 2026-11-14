@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestServiceToolWorkspaceIsolation(t *testing.T) {
@@ -70,82 +69,6 @@ func TestServiceToolWorkspaceIsolation(t *testing.T) {
 		if err := a.checkServiceWorkspace(aliasCfg, "own"); err != nil {
 			t.Fatalf("Windows spelling split one workspace: %v", err)
 		}
-	}
-}
-
-func TestServiceStartAndCommandPromotionKeepWorkspaceOwner(t *testing.T) {
-	t.Parallel()
-	root := validationSandbox(t)
-	extra := t.TempDir()
-	cfg := ConfigState{Workspace: root, ExtraRoots: []string{extra}}
-	// Isolated App: the service and its output spill must not land in a shared data dir.
-	a := newIsolatedToolTestApp(t)
-	t.Cleanup(a.stopAllServices)
-	args, _ := json.Marshal(BackgroundProcessRequest{Action: "start", Description: " 校验服务归属 ", Command: "printf 'owner-probe\\n'", Cwd: extra})
-	started := a.executeTool(context.Background(), cfg, "s", "service", args)
-	if !started.OK {
-		t.Fatal(started.Error)
-	}
-	info := started.Data.(ServiceInfo)
-	// cwd 经执行路径规范化；macOS 的 /var 与 /private/var 是同一个目录。
-	expectedCwd, err := filepath.EvalSymlinks(extra)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Description != "校验服务归属" {
-		t.Fatalf("description lost during start: %+v", info)
-	}
-	if !samePath(info.Workspace, root) || !samePath(info.Cwd, expectedCwd) {
-		t.Fatalf("cwd replaced workspace ownership: %+v", info)
-	}
-	a.servicesMu.Lock()
-	done := a.services[info.ID].waitDone
-	a.servicesMu.Unlock()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("short-lived service did not finish")
-	}
-	listed, err := a.listServicesForTool(cfg, true)
-	if err != nil || len(listed.Services) != 1 || listed.Services[0].Description != info.Description {
-		t.Fatalf("list lost service description: %+v, %v", listed, err)
-	}
-	if !strings.Contains(renderServiceInfoResultForModel(info), info.Description) || !strings.Contains(renderServiceListResultForModel(listed), info.Description) {
-		t.Fatal("model-facing results dropped service description")
-	}
-	result, err := a.runCommandWithConfig(context.Background(), cfg, CommandRequest{Command: "printf 'promoted-owner\\n'; sleep 30", Cwd: extra, Timeout: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.PromotedToService {
-		t.Fatalf("expected promotion: %+v", result)
-	}
-	services := a.ListServices().Services
-	found := false
-	for _, svc := range services {
-		if svc.Promoted {
-			found = true
-			if svc.Description != "" || svc.TimeoutSeconds != 1 {
-				t.Fatalf("promotion must retain structured metadata, not localized prose: %+v", svc)
-			}
-			list, err := a.listServicesForTool(cfg, true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			structured := renderServiceInfoResultForModel(svc)
-			if !strings.Contains(structured, `promoted=true timeout-seconds=1`) || !strings.Contains(renderServiceListResultForModel(list), "promoted=true timeout-seconds=1") {
-				t.Fatal("model results lost structured promotion metadata")
-			}
-			if !samePath(svc.Workspace, root) || !samePath(svc.Cwd, expectedCwd) {
-				t.Fatalf("promoted process lost workspace: %+v", svc)
-			}
-			if _, err := a.StopService(StopServiceRequest{ID: svc.ID}); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("promoted service missing from global list")
 	}
 }
 

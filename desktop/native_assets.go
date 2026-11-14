@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"fmt"
+	"sync"
 
 	"ally-dev/resources"
 
@@ -27,6 +28,34 @@ var originalRailIcons = func() map[string]*ui.SVG {
 	}
 	return result
 }()
+
+// The support artwork is decoded the first time the settings page needs it, so
+// a session that never opens that tab carries no extra bitmap.
+var (
+	supportOnce                         sync.Once
+	githubStarIllustration, wechatPayQR *ui.Bitmap
+)
+
+func loadSupportImages() {
+	supportOnce.Do(func() {
+		githubStarIllustration = decodeEmbeddedBitmap("support/github-star.png")
+		wechatPayQR = decodeEmbeddedBitmap("support/wechat-pay.jpg")
+	})
+}
+
+// decodeEmbeddedBitmap decodes artwork from the embedded assets; a missing or
+// broken file just leaves the picture out instead of failing the page.
+func decodeEmbeddedBitmap(name string) *ui.Bitmap {
+	data, err := resources.Assets.ReadFile(name)
+	if err != nil {
+		return nil
+	}
+	image, err := ui.DecodeBitmap(data)
+	if err != nil {
+		return nil
+	}
+	return image
+}
 
 // Only the selected character is decoded; the compressed embedded artwork
 // remains available for a later selection without retaining every bitmap.

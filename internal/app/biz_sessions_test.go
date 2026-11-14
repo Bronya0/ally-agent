@@ -640,15 +640,25 @@ func TestHistorySyncUpdatesPreviouslyMaterializedSnapshot(t *testing.T) {
 	a := newIsolatedChatTestApp(t)
 	const id = "headless-follow-up"
 	history := []openai.ChatCompletionMessage{{Role: "user", Content: "first"}, {Role: "assistant", Content: "answer one"}}
-	for _, answer := range []string{"answer one", "answer two"} {
-		history[1].Content = answer
-		a.saveHistory(id, history)
-		if err := a.syncSessionIndexFromHistory(id); err != nil {
-			t.Fatal(err)
-		}
-		snapshot, err := a.LoadSession(id)
-		if err != nil || len(snapshot.Messages) != 2 || snapshot.Messages[1]["content"] != answer {
-			t.Fatalf("snapshot did not track completed history: %+v, %v", snapshot, err)
-		}
+	a.saveHistory(id, history)
+	if err := a.syncSessionIndexFromHistory(id); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := a.LoadSession(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Messages = append(snapshot.Messages, map[string]any{"role": "tool_call", "name": "read", "result": "original"})
+	if err := a.SaveSession(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	history = append(history, openai.ChatCompletionMessage{Role: "user", Content: "next"}, openai.ChatCompletionMessage{Role: "assistant", Content: "answer two"})
+	a.saveHistory(id, history)
+	if err := a.syncSessionIndexFromHistory(id); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = a.LoadSession(id)
+	if err != nil || len(snapshot.Messages) != 5 || snapshot.Messages[2]["name"] != "read" || snapshot.Messages[4]["content"] != "answer two" {
+		t.Fatalf("history sync lost existing records or new messages: %+v, %v", snapshot, err)
 	}
 }

@@ -239,6 +239,7 @@ type desktop struct {
 	modelAuthChoice                                     string
 	modelMaxTokens, modelContextWindow                  float64
 	modelPrevious                                       *backend.ModelIdentity
+	modelBaseline                                       *backend.ModelConfig
 	oauth                                               *oauthState
 	imageModels                                         *imageModelsState
 	voiceModels                                         *voiceModelsState

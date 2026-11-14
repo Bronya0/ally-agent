@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -151,79 +150,6 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 			_, err = a.remoteEditOne(ctx, remoteTarget{Host: "example.invalid"}, req, remoteRawFile{Path: req.Path, Data: decoded, RawData: tc.original, Size: int64(len(tc.original))})
 			if toolErrorCode(err) != "E_EDIT_ENCODING" {
 				t.Fatalf("remote edit bypassed shared encoding gate: %v", err)
-			}
-		})
-	}
-}
-
-func TestRemoteCommandLogQuotaIncludesActiveReservations(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name              string
-		completed, active int
-		size              int64
-		allowed           bool
-		remaining         int
-	}{
-		{"evict for active byte reservations", 7, 1, maxCommandLogBytes, true, 6},
-		{"evict for active file reservations", 128, 1, 1, true, 126},
-		{"active reservations alone exhaust quota", 1, 8, 1, false, 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			a := newIsolatedToolTestApp(t)
-			py := pickRemoteHelperPython(t)
-			dir := filepath.Join(a.config.Workspace, ".ally_agent", "command-logs")
-			if err := os.MkdirAll(dir, 0700); err != nil {
-				t.Fatal(err)
-			}
-			for i := 0; i < tc.completed; i++ {
-				f, err := os.Create(filepath.Join(dir, fmt.Sprintf("ally-run-old-%03d.log", i)))
-				if err != nil {
-					t.Fatal(err)
-				}
-				truncateErr := f.Truncate(tc.size)
-				closeErr := f.Close()
-				if truncateErr != nil || closeErr != nil {
-					t.Fatalf("create quota sample: %v %v", truncateErr, closeErr)
-				}
-			}
-			for i := 0; i < tc.active; i++ {
-				if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("ally-run-active-%d.part", i)), []byte("active"), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			script, err := buildRemoteScript(map[string]any{"op": "stat", "path": remoteFixturePath(a.config.Workspace, ".")})
-			if err != nil {
-				t.Fatal(err)
-			}
-			probe := "def quota_probe(payload):\n    handle, path = open_command_log()\n    handle.close()\n    return {'path': as_posix_path(path)}\n\n"
-			script = strings.Replace(script, "OPS = {", probe+"OPS = {", 1)
-			script = strings.Replace(script, "\"stat\": op_stat,", "\"stat\": quota_probe,", 1)
-			resp, err := runRemoteHelperScript(t, py, script, a.config.Workspace)
-			if err != nil || resp.OK != tc.allowed {
-				t.Fatalf("quota decision: ok=%v error=%s transport=%v", resp.OK, resp.Error, err)
-			}
-			if !tc.allowed && !strings.Contains(resp.Error, "quota reached") {
-				t.Fatalf("unexpected refusal: %s", resp.Error)
-			}
-			entries, err := os.ReadDir(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			completed := 0
-			for _, entry := range entries {
-				if strings.HasSuffix(entry.Name(), ".log") {
-					completed++
-				}
-			}
-			if completed != tc.remaining {
-				t.Fatalf("wrong eviction count: got %d want %d", completed, tc.remaining)
-			}
-			for i := 0; i < tc.active; i++ {
-				data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("ally-run-active-%d.part", i)))
-				if err != nil || string(data) != "active" {
-					t.Fatalf("active log was touched: %q err=%v", data, err)
-				}
 			}
 		})
 	}

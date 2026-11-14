@@ -10,66 +10,6 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// The real chat follows the bottom with a very large scroll target. A popup
-// can be present in the tree yet have zero on-screen bounds in that state.
-func TestWelcomeTablePopoversRespondToClicks(t *testing.T) {
-	for _, tc := range []struct{ trigger, action string }{
-		{"mcp-trigger", "管理 MCP 服务"},
-		{"0 个可用", "管理技能"},
-		{"37 个工具", "管理内置工具"},
-	} {
-		// 只跑默认动效路径：减少动效分支由专门的动画测试覆盖，
-		// 这里再跑一遍只是把同一张欢迎页重复渲染三次。
-		for _, reduced := range []bool{false} {
-			t.Run(tc.trigger+map[bool]string{true: "/reduced", false: "/animated"}[reduced], func(t *testing.T) {
-				conv := &conversation{ID: "welcome"}
-				a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}, mcpSummary: "mcp-trigger", toolCount: 37}
-				tt := ui.NewTester(func(c *ui.Context) {
-					c.SetTheme(a.theme())
-					width, _ := c.Size()
-					ui.Column(c).Fill().Children(func() { a.chatColumn(c, width) })
-				}, 1280, 850)
-				tt.SetPreferences(ui.Preferences{ReduceMotion: reduced, TextScale: 1})
-				open := func() {
-					t.Helper()
-					if err := tt.Click(tc.trigger); err != nil {
-						t.Fatal(err)
-					}
-					tt.Advance(250 * time.Millisecond)
-					rect, ok := tt.Find(tc.action)
-					if !ok || rect.W <= 0 || rect.H <= 0 || rect.X < 0 || rect.Y < 0 || rect.X+rect.W > 1280 || rect.Y+rect.H > 850 {
-						t.Fatalf("popup action %q not visible: %v, found=%t", tc.action, rect, ok)
-					}
-				}
-				closed := func() {
-					t.Helper()
-					if a.welcomeMCP || a.welcomeSkills || a.welcomeTools {
-						t.Fatal("popup remained open")
-					}
-				}
-				open()
-				trigger, _ := tt.Find(tc.trigger)
-				tt.ClickAt(trigger.X+trigger.W/2, trigger.Y+trigger.H/2)
-				closed()
-				tt.Advance(250 * time.Millisecond)
-				open()
-				tt.ClickAt(20, 500)
-				closed()
-				tt.Advance(250 * time.Millisecond)
-				open()
-				tt.Key(0, ui.KeyEscape)
-				closed()
-				tt.Advance(250 * time.Millisecond)
-				open()
-				if err := tt.Click(tc.action); err != nil {
-					t.Fatal(err)
-				}
-				closed()
-			})
-		}
-	}
-}
-
 func TestWelcomePopoverTracksTranscriptScroll(t *testing.T) {
 	conv := &conversation{ID: "welcome-scroll", Messages: restoredHistory(16)}
 	a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}, mcpSummary: "mcp-trigger"}

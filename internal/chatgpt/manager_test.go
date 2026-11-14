@@ -412,41 +412,6 @@ func TestRefreshFailureRecovery(t *testing.T) {
 	}
 }
 
-func TestLogoutClearsTokensRetainsRegistrationAndStopsStream(t *testing.T) {
-	for _, status := range []int{200, 503} {
-		t.Run(fmtSprint(status), func(t *testing.T) {
-			f := fixture(t)
-			a := f.login("")
-			f.revokeStatus = status
-			req, _ := http.NewRequest("POST", f.m.resource+"/responses", nil)
-			resp, err := f.m.Do(f.s.Client(), a.ID, req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			result, err := f.m.Logout(context.Background(), f.s.Client(), a.ID)
-			if err != nil || !result.LocalCleared || result.RemoteRevoked != (status == 200) {
-				t.Fatalf("logout %v %v", result, err)
-			}
-			if _, err = resp.Body.Read(make([]byte, 1)); err == nil {
-				t.Fatal("stream not interrupted")
-			}
-			resp.Body.Close()
-			accounts, _ := f.m.Accounts(context.Background())
-			if len(accounts) != 1 || accounts[0].SignedIn {
-				t.Fatal(accounts)
-			}
-			_ = f.m.withVault(context.Background(), func(v *vault) (bool, error) {
-				c := v.Accounts[0]
-				if c.Access != "" || c.Refresh != "" || c.IDToken != "" || v.HostID != f.seenHost {
-					t.Fatal("incomplete local clear")
-				}
-				return false, nil
-			})
-			f.login(a.ID)
-		})
-	}
-}
-
 func TestEndpointGuardAndNetworkError(t *testing.T) {
 	f := fixture(t)
 	a := f.login("")

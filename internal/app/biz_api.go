@@ -450,7 +450,7 @@ func (a *App) apiHandleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // apiModelConfig resolves only configured models; credentials never cross the API.
-func (a *App) apiModelConfig(index *int) (ConfigState, error) {
+func (a *App) apiModelConfig(r *http.Request, index *int) (ConfigState, error) {
 	cfg, err := a.getConfig()
 	if err != nil {
 		return ConfigState{}, err
@@ -460,6 +460,9 @@ func (a *App) apiModelConfig(index *int) (ConfigState, error) {
 	}
 	if *index < 0 || *index >= len(cfg.Models) {
 		return ConfigState{}, fmt.Errorf("model index out of range: %d", *index)
+	}
+	if err := checkModelIdentity(r, cfg.Models[*index]); err != nil {
+		return ConfigState{}, codedToolError("E_MODEL_IDENTITY", err)
 	}
 	stripModelFields(&cfg)
 	applyModelEntry(&cfg, cfg.Models[*index])
@@ -486,9 +489,13 @@ func (a *App) apiHandleAIComplete(w http.ResponseWriter, r *http.Request) {
 		apiWriteError(w, http.StatusBadRequest, "prompt or system exceeds 64 KiB")
 		return
 	}
-	cfg, err := a.apiModelConfig(body.ModelIndex)
+	cfg, err := a.apiModelConfig(r, body.ModelIndex)
 	if err != nil {
-		apiWriteError(w, http.StatusBadRequest, err.Error())
+		status := http.StatusBadRequest
+		if toolErrorCode(err) == "E_MODEL_IDENTITY" {
+			status = http.StatusConflict
+		}
+		apiWriteError(w, status, err.Error())
 		return
 	}
 	if strings.TrimSpace(cfg.Model) == "" || !hasModelCredential(cfg) {
@@ -776,9 +783,13 @@ func (a *App) apiHandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		apiWriteError(w, http.StatusBadRequest, "message is required")
 		return
 	}
-	cfg, err := a.apiModelConfig(body.ModelIndex)
+	cfg, err := a.apiModelConfig(r, body.ModelIndex)
 	if err != nil {
-		apiWriteError(w, http.StatusBadRequest, err.Error())
+		status := http.StatusBadRequest
+		if toolErrorCode(err) == "E_MODEL_IDENTITY" {
+			status = http.StatusConflict
+		}
+		apiWriteError(w, status, err.Error())
 		return
 	}
 	cfg.Workspace = snapshot.Workspace

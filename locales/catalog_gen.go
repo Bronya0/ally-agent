@@ -36,6 +36,236 @@ type Messages struct{ locale string }
 // source language.
 func In(locale string) Messages { return Messages{locale} }
 
+// UiNavPosition says "Navigation"
+// in the language the app shows.
+func UiNavPosition() string { return In(i18n.Locale()).UiNavPosition() }
+
+// UiNavPosition says "Navigation"
+// in the language of msgs.
+func (msgs Messages) UiNavPosition() string {
+	return Catalog.Format(msgs.locale, "ui_nav_position", nil)
+}
+
+// UiNavNote says "The sidebar stays on the left; the top menu hides it and opens the menu from the button beside the logo."
+// in the language the app shows.
+func UiNavNote() string { return In(i18n.Locale()).UiNavNote() }
+
+// UiNavNote says "The sidebar stays on the left; the top menu hides it and opens the menu from the button beside the logo."
+// in the language of msgs.
+func (msgs Messages) UiNavNote() string {
+	return Catalog.Format(msgs.locale, "ui_nav_note", nil)
+}
+
+// UiNavSidebar says "Sidebar"
+// in the language the app shows.
+func UiNavSidebar() string { return In(i18n.Locale()).UiNavSidebar() }
+
+// UiNavSidebar says "Sidebar"
+// in the language of msgs.
+func (msgs Messages) UiNavSidebar() string {
+	return Catalog.Format(msgs.locale, "ui_nav_sidebar", nil)
+}
+
+// UiNavTopMenu says "Top menu"
+// in the language the app shows.
+func UiNavTopMenu() string { return In(i18n.Locale()).UiNavTopMenu() }
+
+// UiNavTopMenu says "Top menu"
+// in the language of msgs.
+func (msgs Messages) UiNavTopMenu() string {
+	return Catalog.Format(msgs.locale, "ui_nav_top_menu", nil)
+}
+
+// UiHeadlessStart says "Start headless mode"
+// in the language the app shows.
+func UiHeadlessStart() string { return In(i18n.Locale()).UiHeadlessStart() }
+
+// UiHeadlessStart says "Start headless mode"
+// in the language of msgs.
+func (msgs Messages) UiHeadlessStart() string {
+	return Catalog.Format(msgs.locale, "ui_headless_start", nil)
+}
+
+// UiHeadlessIntro says "Headless mode runs without a window and enables the API without changing desktop API settings. Run in a terminal:"
+// in the language the app shows.
+func UiHeadlessIntro() string { return In(i18n.Locale()).UiHeadlessIntro() }
+
+// UiHeadlessIntro says "Headless mode runs without a window and enables the API without changing desktop API settings. Run in a terminal:"
+// in the language of msgs.
+func (msgs Messages) UiHeadlessIntro() string {
+	return Catalog.Format(msgs.locale, "ui_headless_intro", nil)
+}
+
+// UiHeadlessConnect says "Connection and configuration"
+// in the language the app shows.
+func UiHeadlessConnect() string { return In(i18n.Locale()).UiHeadlessConnect() }
+
+// UiHeadlessConnect says "Connection and configuration"
+// in the language of msgs.
+func (msgs Messages) UiHeadlessConnect() string {
+	return Catalog.Format(msgs.locale, "ui_headless_connect", nil)
+}
+
+// UiHeadlessListen says "The default address is 127.0.0.1:47821. Use --host and --port to change it; the program exits if the port is occupied."
+// in the language the app shows.
+func UiHeadlessListen() string { return In(i18n.Locale()).UiHeadlessListen() }
+
+// UiHeadlessListen says "The default address is 127.0.0.1:47821. Use --host and --port to change it; the program exits if the port is occupied."
+// in the language of msgs.
+func (msgs Messages) UiHeadlessListen() string {
+	return Catalog.Format(msgs.locale, "ui_headless_listen", nil)
+}
+
+// UiHeadlessData says "The default data directory is ~/.ally_agent; use --data-dir to change it. Desktop and headless instances cannot use t…"
+// in the language the app shows.
+func UiHeadlessData() string { return In(i18n.Locale()).UiHeadlessData() }
+
+// UiHeadlessData says "The default data directory is ~/.ally_agent; use --data-dir to change it. Desktop and headless instances cannot use t…"
+// in the language of msgs.
+func (msgs Messages) UiHeadlessData() string {
+	return Catalog.Format(msgs.locale, "ui_headless_data", nil)
+}
+
+// UiHeadlessWorkspace says "Use --workspace to set a default workspace, or choose one when creating a session. Configure and select a model befor…"
+// in the language the app shows.
+func UiHeadlessWorkspace() string { return In(i18n.Locale()).UiHeadlessWorkspace() }
+
+// UiHeadlessWorkspace says "Use --workspace to set a default workspace, or choose one when creating a session. Configure and select a model befor…"
+// in the language of msgs.
+func (msgs Messages) UiHeadlessWorkspace() string {
+	return Catalog.Format(msgs.locale, "ui_headless_workspace", nil)
+}
+
+// UiHeadlessAddresses says "API and event addresses are printed in the terminal. For remote access, replace 0.0.0.0 with the server IP or domain.…"
+// in the language the app shows.
+func UiHeadlessAddresses() string { return In(i18n.Locale()).UiHeadlessAddresses() }
+
+// UiHeadlessAddresses says "API and event addresses are printed in the terminal. For remote access, replace 0.0.0.0 with the server IP or domain.…"
+// in the language of msgs.
+func (msgs Messages) UiHeadlessAddresses() string {
+	return Catalog.Format(msgs.locale, "ui_headless_addresses", nil)
+}
+
+// UiSupportFeedback says "Share feedback"
+// in the language the app shows.
+func UiSupportFeedback() string { return In(i18n.Locale()).UiSupportFeedback() }
+
+// UiSupportFeedback says "Share feedback"
+// in the language of msgs.
+func (msgs Messages) UiSupportFeedback() string {
+	return Catalog.Format(msgs.locale, "ui_support_feedback", nil)
+}
+
+// UiSettingsSecurity says "Security"
+// in the language the app shows.
+func UiSettingsSecurity() string { return In(i18n.Locale()).UiSettingsSecurity() }
+
+// UiSettingsSecurity says "Security"
+// in the language of msgs.
+func (msgs Messages) UiSettingsSecurity() string {
+	return Catalog.Format(msgs.locale, "ui_settings_security", nil)
+}
+
+// UiSettingsVersion says "Version"
+// in the language the app shows.
+func UiSettingsVersion() string { return In(i18n.Locale()).UiSettingsVersion() }
+
+// UiSettingsVersion says "Version"
+// in the language of msgs.
+func (msgs Messages) UiSettingsVersion() string {
+	return Catalog.Format(msgs.locale, "ui_settings_version", nil)
+}
+
+// UiSupportOpenSource says "Support"
+// in the language the app shows.
+func UiSupportOpenSource() string { return In(i18n.Locale()).UiSupportOpenSource() }
+
+// UiSupportOpenSource says "Support"
+// in the language of msgs.
+func (msgs Messages) UiSupportOpenSource() string {
+	return Catalog.Format(msgs.locale, "ui_support_open_source", nil)
+}
+
+// UiSupportStarTitle says "Star on GitHub"
+// in the language the app shows.
+func UiSupportStarTitle() string { return In(i18n.Locale()).UiSupportStarTitle() }
+
+// UiSupportStarTitle says "Star on GitHub"
+// in the language of msgs.
+func (msgs Messages) UiSupportStarTitle() string {
+	return Catalog.Format(msgs.locale, "ui_support_star_title", nil)
+}
+
+// UiSupportStarDescription says "Enjoying Ally? Give it a Star so more people can discover it. Thank you!"
+// in the language the app shows.
+func UiSupportStarDescription() string { return In(i18n.Locale()).UiSupportStarDescription() }
+
+// UiSupportStarDescription says "Enjoying Ally? Give it a Star so more people can discover it. Thank you!"
+// in the language of msgs.
+func (msgs Messages) UiSupportStarDescription() string {
+	return Catalog.Format(msgs.locale, "ui_support_star_description", nil)
+}
+
+// UiSupportStarAction says "Star on GitHub"
+// in the language the app shows.
+func UiSupportStarAction() string { return In(i18n.Locale()).UiSupportStarAction() }
+
+// UiSupportStarAction says "Star on GitHub"
+// in the language of msgs.
+func (msgs Messages) UiSupportStarAction() string {
+	return Catalog.Format(msgs.locale, "ui_support_star_action", nil)
+}
+
+// UiDonate says "Donate"
+// in the language the app shows.
+func UiDonate() string { return In(i18n.Locale()).UiDonate() }
+
+// UiDonate says "Donate"
+// in the language of msgs.
+func (msgs Messages) UiDonate() string {
+	return Catalog.Format(msgs.locale, "ui_donate", nil)
+}
+
+// UiDonateTitle says "Support Ally"
+// in the language the app shows.
+func UiDonateTitle() string { return In(i18n.Locale()).UiDonateTitle() }
+
+// UiDonateTitle says "Support Ally"
+// in the language of msgs.
+func (msgs Messages) UiDonateTitle() string {
+	return Catalog.Format(msgs.locale, "ui_donate_title", nil)
+}
+
+// UiDonateDescription says "If you like, you can treat the developer to afternoon tea and help Ally keep growing. Every bit of support means a lo…"
+// in the language the app shows.
+func UiDonateDescription() string { return In(i18n.Locale()).UiDonateDescription() }
+
+// UiDonateDescription says "If you like, you can treat the developer to afternoon tea and help Ally keep growing. Every bit of support means a lo…"
+// in the language of msgs.
+func (msgs Messages) UiDonateDescription() string {
+	return Catalog.Format(msgs.locale, "ui_donate_description", nil)
+}
+
+// UiDonateWechat says "WeChat Pay"
+// in the language the app shows.
+func UiDonateWechat() string { return In(i18n.Locale()).UiDonateWechat() }
+
+// UiDonateWechat says "WeChat Pay"
+// in the language of msgs.
+func (msgs Messages) UiDonateWechat() string {
+	return Catalog.Format(msgs.locale, "ui_donate_wechat", nil)
+}
+
+// UiDonateUnavailable says "The payment QR code is currently unavailable."
+// in the language the app shows.
+func UiDonateUnavailable() string { return In(i18n.Locale()).UiDonateUnavailable() }
+
+// UiDonateUnavailable says "The payment QR code is currently unavailable."
+// in the language of msgs.
+func (msgs Messages) UiDonateUnavailable() string {
+	return Catalog.Format(msgs.locale, "ui_donate_unavailable", nil)
+}
+
 // UiEeb91398e9ba says "\n…(Content truncated)"
 // in the language the app shows.
 func UiEeb91398e9ba() string { return In(i18n.Locale()).UiEeb91398e9ba() }
@@ -3484,16 +3714,6 @@ func Ui15dac77bf3ad() string { return In(i18n.Locale()).Ui15dac77bf3ad() }
 // in the language of msgs.
 func (msgs Messages) Ui15dac77bf3ad() string {
 	return Catalog.Format(msgs.locale, "ui_15dac77bf3ad", nil)
-}
-
-// Ui212f53a57916 says "Initialize knowledge base"
-// in the language the app shows.
-func Ui212f53a57916() string { return In(i18n.Locale()).Ui212f53a57916() }
-
-// Ui212f53a57916 says "Initialize knowledge base"
-// in the language of msgs.
-func (msgs Messages) Ui212f53a57916() string {
-	return Catalog.Format(msgs.locale, "ui_212f53a57916", nil)
 }
 
 // Ui2f9daa828907 says "Delete"
@@ -8196,11 +8416,11 @@ func (msgs Messages) Ui1452deafc6d9() string {
 	return Catalog.Format(msgs.locale, "ui_1452deafc6d9", nil)
 }
 
-// UiFface19a7683 says "Recommend JSON string array, which can completely retain spaces and commas; it is also compatible with simple comma o…"
+// UiFface19a7683 says "Enter a JSON string array to preserve spaces and commas in arguments. Leave blank for no arguments."
 // in the language the app shows.
 func UiFface19a7683() string { return In(i18n.Locale()).UiFface19a7683() }
 
-// UiFface19a7683 says "Recommend JSON string array, which can completely retain spaces and commas; it is also compatible with simple comma o…"
+// UiFface19a7683 says "Enter a JSON string array to preserve spaces and commas in arguments. Leave blank for no arguments."
 // in the language of msgs.
 func (msgs Messages) UiFface19a7683() string {
 	return Catalog.Format(msgs.locale, "ui_fface19a7683", nil)
@@ -12116,36 +12336,6 @@ func (msgs Messages) UiCae04331b977() string {
 	return Catalog.Format(msgs.locale, "ui_cae04331b977", nil)
 }
 
-// Ui975b35f9c2b1 says "Knowledge Base"
-// in the language the app shows.
-func Ui975b35f9c2b1() string { return In(i18n.Locale()).Ui975b35f9c2b1() }
-
-// Ui975b35f9c2b1 says "Knowledge Base"
-// in the language of msgs.
-func (msgs Messages) Ui975b35f9c2b1() string {
-	return Catalog.Format(msgs.locale, "ui_975b35f9c2b1", nil)
-}
-
-// Ui24fbf559e517 says "The knowledge base sources/ directory is read-only for models."
-// in the language the app shows.
-func Ui24fbf559e517() string { return In(i18n.Locale()).Ui24fbf559e517() }
-
-// Ui24fbf559e517 says "The knowledge base sources/ directory is read-only for models."
-// in the language of msgs.
-func (msgs Messages) Ui24fbf559e517() string {
-	return Catalog.Format(msgs.locale, "ui_24fbf559e517", nil)
-}
-
-// UiFa7f4232df29 says "Knowledge base task is running..."
-// in the language the app shows.
-func UiFa7f4232df29() string { return In(i18n.Locale()).UiFa7f4232df29() }
-
-// UiFa7f4232df29 says "Knowledge base task is running..."
-// in the language of msgs.
-func (msgs Messages) UiFa7f4232df29() string {
-	return Catalog.Format(msgs.locale, "ui_fa7f4232df29", nil)
-}
-
 // UiDabf99db899e says "Silicon-based flow (OpenAI format)"
 // in the language the app shows.
 func UiDabf99db899e() string { return In(i18n.Locale()).UiDabf99db899e() }
@@ -13616,16 +13806,6 @@ func (msgs Messages) Ui4262c45dc797() string {
 	return Catalog.Format(msgs.locale, "ui_4262c45dc797", nil)
 }
 
-// Ui8f50aacb9611 says "Please initialize the knowledge base first"
-// in the language the app shows.
-func Ui8f50aacb9611() string { return In(i18n.Locale()).Ui8f50aacb9611() }
-
-// Ui8f50aacb9611 says "Please initialize the knowledge base first"
-// in the language of msgs.
-func (msgs Messages) Ui8f50aacb9611() string {
-	return Catalog.Format(msgs.locale, "ui_8f50aacb9611", nil)
-}
-
 // Ui955f83c2f4f5 says "Please send or remove the attachment to be sent before installing the update"
 // in the language the app shows.
 func Ui955f83c2f4f5() string { return In(i18n.Locale()).Ui955f83c2f4f5() }
@@ -13704,16 +13884,6 @@ func Ui7100c28334f0() string { return In(i18n.Locale()).Ui7100c28334f0() }
 // in the language of msgs.
 func (msgs Messages) Ui7100c28334f0() string {
 	return Catalog.Format(msgs.locale, "ui_7100c28334f0", nil)
-}
-
-// Ui8136dad0631e says "Please create the knowledge base root index index.md and classification structure."
-// in the language the app shows.
-func Ui8136dad0631e() string { return In(i18n.Locale()).Ui8136dad0631e() }
-
-// Ui8136dad0631e says "Please create the knowledge base root index index.md and classification structure."
-// in the language of msgs.
-func (msgs Messages) Ui8136dad0631e() string {
-	return Catalog.Format(msgs.locale, "ui_8136dad0631e", nil)
 }
 
 // Ui2d801d6f0f84 says "Please refresh and select the models available for this account"
@@ -13884,16 +14054,6 @@ func Ui62b14278dee7() string { return In(i18n.Locale()).Ui62b14278dee7() }
 // in the language of msgs.
 func (msgs Messages) Ui62b14278dee7() string {
 	return Catalog.Format(msgs.locale, "ui_62b14278dee7", nil)
-}
-
-// UiE383ed960956 says "Please check and organize the knowledge base index and correct outdated or duplicate entries."
-// in the language the app shows.
-func UiE383ed960956() string { return In(i18n.Locale()).UiE383ed960956() }
-
-// UiE383ed960956 says "Please check and organize the knowledge base index and correct outdated or duplicate entries."
-// in the language of msgs.
-func (msgs Messages) UiE383ed960956() string {
-	return Catalog.Format(msgs.locale, "ui_e383ed960956", nil)
 }
 
 // UiF7ec303f7625 says "Please check the changes and submit them, then push them to the remote end."
@@ -15036,16 +15196,6 @@ func (msgs Messages) UiE545f9cf0922() string {
 	return Catalog.Format(msgs.locale, "ui_e545f9cf0922", nil)
 }
 
-// UiC6e39812ac34 says "Select a knowledge base directory, where Ally will maintain index.md and classification structure; the sources/ subdi…"
-// in the language the app shows.
-func UiC6e39812ac34() string { return In(i18n.Locale()).UiC6e39812ac34() }
-
-// UiC6e39812ac34 says "Select a knowledge base directory, where Ally will maintain index.md and classification structure; the sources/ subdi…"
-// in the language of msgs.
-func (msgs Messages) UiC6e39812ac34() string {
-	return Catalog.Format(msgs.locale, "ui_c6e39812ac34", nil)
-}
-
 // Ui59117c420e34 says "Select reference picture"
 // in the language the app shows.
 func Ui59117c420e34() string { return In(i18n.Locale()).Ui59117c420e34() }
@@ -15174,16 +15324,6 @@ func UiE5fe24ca742f() string { return In(i18n.Locale()).UiE5fe24ca742f() }
 // in the language of msgs.
 func (msgs Messages) UiE5fe24ca742f() string {
 	return Catalog.Format(msgs.locale, "ui_e5fe24ca742f", nil)
-}
-
-// UiF2b1b8ab99b2 says "Select knowledge base directory"
-// in the language the app shows.
-func UiF2b1b8ab99b2() string { return In(i18n.Locale()).UiF2b1b8ab99b2() }
-
-// UiF2b1b8ab99b2 says "Select knowledge base directory"
-// in the language of msgs.
-func (msgs Messages) UiF2b1b8ab99b2() string {
-	return Catalog.Format(msgs.locale, "ui_f2b1b8ab99b2", nil)
 }
 
 // Ui1a250edaa622 says "Select background image"
@@ -15544,6 +15684,46 @@ func UiC5ea2e8a9f07() string { return In(i18n.Locale()).UiC5ea2e8a9f07() }
 // in the language of msgs.
 func (msgs Messages) UiC5ea2e8a9f07() string {
 	return Catalog.Format(msgs.locale, "ui_c5ea2e8a9f07", nil)
+}
+
+// UiPaletteTeal says "Celadon"
+// in the language the app shows.
+func UiPaletteTeal() string { return In(i18n.Locale()).UiPaletteTeal() }
+
+// UiPaletteTeal says "Celadon"
+// in the language of msgs.
+func (msgs Messages) UiPaletteTeal() string {
+	return Catalog.Format(msgs.locale, "ui_palette_teal", nil)
+}
+
+// UiPaletteRose says "Rose"
+// in the language the app shows.
+func UiPaletteRose() string { return In(i18n.Locale()).UiPaletteRose() }
+
+// UiPaletteRose says "Rose"
+// in the language of msgs.
+func (msgs Messages) UiPaletteRose() string {
+	return Catalog.Format(msgs.locale, "ui_palette_rose", nil)
+}
+
+// UiPaletteIndigo says "Indigo"
+// in the language the app shows.
+func UiPaletteIndigo() string { return In(i18n.Locale()).UiPaletteIndigo() }
+
+// UiPaletteIndigo says "Indigo"
+// in the language of msgs.
+func (msgs Messages) UiPaletteIndigo() string {
+	return Catalog.Format(msgs.locale, "ui_palette_indigo", nil)
+}
+
+// UiPaletteChoose says "Choose a color palette."
+// in the language the app shows.
+func UiPaletteChoose() string { return In(i18n.Locale()).UiPaletteChoose() }
+
+// UiPaletteChoose says "Choose a color palette."
+// in the language of msgs.
+func (msgs Messages) UiPaletteChoose() string {
+	return Catalog.Format(msgs.locale, "ui_palette_choose", nil)
 }
 
 // UiPaletteNative says "Native"

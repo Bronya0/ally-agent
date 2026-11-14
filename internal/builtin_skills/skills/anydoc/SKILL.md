@@ -7,11 +7,11 @@ whenToUse: 用户要求把办公文档转换为 Markdown，或需要读取 .docx
 
 # AnyDoc Skill
 
-通过 anydoc CLI 把办公文档转成干净的 GitHub-Flavored Markdown。所有命令都经 `command` 工具执行，cwd 为当前 workspace，使用 bash 语法（Windows 上是 Git Bash）。CLI 参数以 `anydoc --help` 为准，版本可能变化，不要凭记忆猜参数；本 skill 只补充 help 不会说明的 Ally 集成约定。
+通过 anydoc CLI 把办公文档转成干净的 GitHub-Flavored Markdown。所有命令都经 `command` 工具执行，cwd 为当前 workspace，示例使用 bash；Windows 无 Git Bash 时 Ally 可回退 PowerShell，应按实际 shell 调整。CLI 参数以 `anydoc --help` 为准，版本可能变化，不要凭记忆猜参数；本 skill 只补充 help 不会说明的 Ally 集成约定。
 
 ## 1. 运行方式（无需安装）
 
-anydoc 经 `npx` 按需运行，需要 **Node 20+**（不装全局包、不弹安装确认；首次运行 npx 自动下载平台二进制，之后走缓存）：
+anydoc 经 `npx` 按需运行，需要 **Node 20+**（不装全局包；首次运行可能联网下载，之后走缓存）：
 
 ```bash
 npx -y @firecrawl/anydoc report.docx              # Markdown 输出到 stdout
@@ -40,7 +40,7 @@ npx -y @firecrawl/anydoc - --format csv < d.csv   # 从 stdin 读
 - **路径**：传给 anydoc 的文件路径用 forward slash。Windows 绝对路径在 Git Bash 里写成 `/c/Users/...` 或 `"C:/Users/..."`；workspace 相对路径直接用。
 - **格式检测看内容不看扩展名**：默认不传 `--format`，让内容检测生效（扩展名标错的文件通常也能转对）。仅当检测无法工作时显式传入：stdin 读入的 CSV（无内容签名、无扩展名可依）；文件缺失或标错扩展名且转换报错时，补 `--format <规范名>` 重试一次。
 - **默认输出文件（本地文档）**：用户未指定正式输出路径、仅需转换后供 Ally 阅读时，输出到源文件同目录，文件名使用 `.<源文件名去掉最终扩展名>_ally_convert.md`。例如 `docs/report.v2.pdf` 转为 `docs/.report.v2_ally_convert.md`；只去掉最后一个扩展名。该文件是 Ally 生成的阅读缓存，不视为正式交付物。
-- **避免覆盖**：如果同目录已有同名转换文件，默认不要覆盖，先告知用户或改用明确的新输出路径；只有用户明确要求重新转换并允许覆盖时才覆盖。
+- **避免覆盖**：如果同目录已有同名转换文件，默认不要覆盖，先告知用户或改用明确的新输出路径；根据用户已表达的意图判断是否覆盖；不确定时使用新的输出路径。
 - **大文件**：优先使用上述同目录转换文件（或用户指定的 `-o` 路径）落盘，再用 `read` 工具分段读取，不要把全部输出流进上下文。
 - **网络输入**：可用管道 `curl -s <url> | npx -y @firecrawl/anydoc -` 直接转换远端文档；网络输入没有源文件同目录时，使用用户指定的 `-o` 路径，或按临时文件规则保存到 workspace 的 `.tmp/anydoc/`。
 - **与内置 read 的关系**：Ally 的 `read` 工具只支持纯文本和图片，不解析办公/PDF 文档——`read` 遇到这类文件会返回 `E_DOCUMENT_UNSUPPORTED` 并指向本 skill。读文档 = 先用本 skill 转 `.md` 落盘，再 `read` 转换产物。

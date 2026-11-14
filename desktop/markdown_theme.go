@@ -62,6 +62,29 @@ var markdownPalettes = []markdownColorPair{
 	{proseColors("#cdc9d5", "#9a91aa", "#ddd5ec", "#d5cde3", "#c6b9db", "#a68bea", "#bba2e6", "#25212d", "#393144"), proseColors("#38323f", "#7b6f88", "#49365c", "#514361", "#6b557f", "#9a7eb6", "#79529d", "#f4eff8", "#e1d8e9")},
 	{proseColors("#d7dedc", "#9aa6a3", "#d8e5da", "#ccdace", "#b8cfbc", "#9dbb9f", "#9dbb9f", "#212122", "#303031"), proseColors("#202d28", "#59665f", "#202d28", "#202d28", "#25624a", "#25624a", "#25624a", "#fcfcf9", "#dce2d8")},
 	{proseColors("#c9cbd0", "#9498a1", "#d7deed", "#d0d7e5", "#bac8df", "#e1e5ee", "#e1e5ee", "#202228", "#30343e"), proseColors("#303642", "#6b7482", "#26354e", "#34435d", "#485d7c", "#0f1115", "#0f1115", "#eff2f7", "#d9dfea")},
+	{proseColors("#cccccc", "#969da7", "#d7dedc", "#d4d4d4", "#72bbb5", "#72bbb5", "#72bbb5", "#212122", "#303031"), proseColors("#343a43", "#68717e", "#252a37", "#252a37", "#176e69", "#176e69", "#176e69", "#ffffff", "#d9dce3")},
+	{proseColors("#cccccc", "#969da7", "#d7dedc", "#d4d4d4", "#d69a9f", "#d69a9f", "#d69a9f", "#212122", "#303031"), proseColors("#343a43", "#68717e", "#252a37", "#252a37", "#a24753", "#a24753", "#a24753", "#ffffff", "#d9dce3")},
+	{proseColors("#cccccc", "#969da7", "#d7dedc", "#d4d4d4", "#a8a9e0", "#a8a9e0", "#a8a9e0", "#212122", "#303031"), proseColors("#343a43", "#68717e", "#252a37", "#252a37", "#5557a0", "#5557a0", "#5557a0", "#ffffff", "#d9dce3")},
+}
+
+// readingDarkSeeds and readingLightSeeds are what reading emphasis derives its
+// accent from, in markdownPalettes order: pastels for dark surfaces, saturated
+// inks for light ones.
+var (
+	readingDarkSeeds  = []string{"#8da5df", "#8da5df", "#e0a458", "#5b9cf6", "#57c98a", "#a78bfa", "#9dbb9f", "#a8bdd2", "#72bbb5", "#d69a9f", "#a8a9e0"}
+	readingLightSeeds = []string{"#245fc2", "#245fc2", "#92530f", "#245fc2", "#217747", "#7042bd", "#25624a", "#536d87", "#176e69", "#a24753", "#5557a0"}
+)
+
+// readingSeed keeps a seed table that fell behind the palette tables from
+// panicking the render path.
+func readingSeed(seeds []string, index int) string {
+	if index >= 0 && index < len(seeds) {
+		return seeds[index]
+	}
+	if len(seeds) > defaultPalette {
+		return seeds[defaultPalette]
+	}
+	return "#8da5df"
 }
 
 func (a *desktop) readingColors() markdownColors {
@@ -69,8 +92,8 @@ func (a *desktop) readingColors() markdownColors {
 	if index < 0 || index >= len(markdownPalettes) {
 		index = defaultPalette
 	}
-	if index == paletteOcean {
-		index = paletteBlue // Retired ocean preference follows blue.
+	if index == paletteOcean || index == paletteMeadow {
+		index = paletteBlue // Retired preferences follow blue.
 	}
 	colors := markdownPalettes[index].light
 	if a.currentPalette().dark {
@@ -78,11 +101,15 @@ func (a *desktop) readingColors() markdownColors {
 		colors.text = ui.Hex("#d7dedc")
 		colors.muted = ui.Hex("#9aa6a3")
 		colors.heading = ui.Hex("#e5e5e5")
-		seed := []string{"#8da5df", "#8da5df", "#e0a458", "#5b9cf6", "#57c98a", "#a78bfa", "#9dbb9f", "#e1e5ee"}[index]
+		seed := readingSeed(readingDarkSeeds, index)
 		accent := ui.Hex(seed)
 		colors.strong = ui.Hex("#d4d4d4").Mix(accent, 0.35)
 		colors.code = accent.Mix(ui.Hex("#ffffff"), 0.28)
 		colors.link = accent.Mix(ui.Hex("#ffffff"), 0.18)
+		if index == paletteNative {
+			colors.heading = ui.Hex("#b8c9db")
+			colors.strong = ui.Hex("#e0e3e8")
+		}
 		if index == paletteAmber {
 			colors.heading = ui.Hex("#d7dedc")
 			colors.strong = ui.Hex("#c4b894")
@@ -94,15 +121,9 @@ func (a *desktop) readingColors() markdownColors {
 		colors.muted = ui.Hex("#3a4154")
 		colors.heading = ui.Hex("#0f1219")
 		colors.strong = colors.heading
-		accent := []string{"#245fc2", "#245fc2", "#92530f", "#245fc2", "#217747", "#7042bd", "#25624a", "#0f1115"}[index]
+		accent := readingSeed(readingLightSeeds, index)
 		colors.code = ui.Hex(accent)
 		colors.link = colors.code
-		if index == paletteMeadow {
-			p := a.currentPalette()
-			colors.text, colors.muted = p.text, p.muted
-			colors.heading, colors.strong = p.text, p.text
-			colors.panel, colors.border = p.panel, p.line
-		}
 	}
 	return colors
 }

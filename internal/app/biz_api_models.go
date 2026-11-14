@@ -2,6 +2,8 @@
 package app
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,11 +11,37 @@ import (
 	"strings"
 )
 
+// modelIdentityToken is an opaque precondition for index-based mutations. It
+// covers the whole entry except credentials, so any edit made elsewhere — not
+// just a rename — invalidates a token taken before it.
+func modelIdentityToken(model ModelConfig) string {
+	model = normalizeModelEntry(model)
+	model.APIKey, model.APIKeys = "", nil
+	raw, err := json.Marshal(model)
+	if err != nil {
+		raw = []byte(fmt.Sprintf("%v", model))
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func checkModelIdentity(r *http.Request, model ModelConfig) error {
+	supplied := strings.TrimSpace(r.Header.Get("X-Model-Identity"))
+	if supplied == "" {
+		return fmt.Errorf("X-Model-Identity is required; use the identity from GET /models")
+	}
+	if supplied != modelIdentityToken(model) {
+		return fmt.Errorf("model identity changed; refresh the model list")
+	}
+	return nil
+}
+
 // apiModelSummary 是模型条目的脱敏视图：绝不回传 apiKey / apiKeys 明文。
 func apiModelSummary(index int, model ModelConfig) map[string]any {
 	model = normalizeModelEntry(model)
 	return map[string]any{
 		"index":           index,
+		"identity":        modelIdentityToken(model),
 		"authType":        model.AuthType,
 		"oauthAccountId":  model.OAuthAccountID,
 		"displayName":     model.DisplayName,
@@ -86,6 +114,10 @@ func (a *App) apiHandleSaveModel(w http.ResponseWriter, r *http.Request) {
 				status = http.StatusBadRequest
 				return fmt.Errorf("model index out of range: %d", index)
 			}
+			if err := checkModelIdentity(r, cfg.Models[index]); err != nil {
+				status = http.StatusConflict
+				return err
+			}
 			base = cfg.Models[index]
 			inUse = cfg.LastUsedModel != nil && modelIndexByIdentity(cfg.Models, *cfg.LastUsedModel) == index
 		}
@@ -123,7 +155,7 @@ func (a *App) apiHandleSaveModel(w http.ResponseWriter, r *http.Request) {
 
 // GET /models adds these read-only keys, so a client editing a listed entry
 // sends them back. They stay readable and are ignored by the decoder.
-var apiModelReadOnlyFields = []string{"index", "customHeaderNames", "hasApiKey", "apiKeyCount"}
+var apiModelReadOnlyFields = []string{"index", "identity", "customHeaderNames", "hasApiKey", "apiKeyCount"}
 
 // Merge JSON fields instead of maintaining a second ModelConfig field table.
 // Decode into a fresh value so explicit null/empty collections can clear fields.
@@ -182,6 +214,10 @@ func (a *App) apiHandleDeleteModel(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusBadRequest
 			return fmt.Errorf("model index out of range: %d", index)
 		}
+		if err := checkModelIdentity(r, cfg.Models[index]); err != nil {
+			status = http.StatusConflict
+			return err
+		}
 		inUse := cfg.LastUsedModel != nil && modelIndexByIdentity(cfg.Models, *cfg.LastUsedModel) == index
 		cfg.Models = append(cfg.Models[:index], cfg.Models[index+1:]...)
 		if inUse {
@@ -208,8 +244,20 @@ func (a *App) apiHandleActivateModel(w http.ResponseWriter, r *http.Request) {
 		apiWriteError(w, http.StatusBadRequest, "index is required")
 		return
 	}
-	if err := a.SwitchModel(*body.Index); err != nil {
-		apiWriteError(w, http.StatusBadRequest, err.Error())
+	status := http.StatusBadRequest
+	if err := a.commitConfig(func(cfg *ConfigState) error {
+		if *body.Index < 0 || *body.Index >= len(cfg.Models) {
+			return fmt.Errorf("model index out of range: %d", *body.Index)
+		}
+		if err := checkModelIdentity(r, cfg.Models[*body.Index]); err != nil {
+			status = http.StatusConflict
+			return err
+		}
+		id := identityOfModel(cfg.Models[*body.Index])
+		cfg.LastUsedModel = &id
+		return nil
+	}); err != nil {
+		apiWriteError(w, status, err.Error())
 		return
 	}
 	apiWriteOK(w, map[string]any{"activated": *body.Index})

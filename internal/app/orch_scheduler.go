@@ -477,20 +477,19 @@ func (m *scheduledTaskManager) delete(id string) error {
 		m.mu.Unlock()
 		return codedToolError("E_SCHEDULED_TASK_NOT_FOUND", fmt.Errorf("scheduled task not found: %s", id))
 	}
+	delete(m.tasks, id)
+	if err := m.persistLocked(); err != nil {
+		m.tasks[id] = task
+		m.mu.Unlock()
+		return err
+	}
 	m.unregisterLocked(id)
 	if cancel := m.cancels[id]; cancel != nil {
 		cancel()
 		delete(m.cancels, id)
 	}
-	delete(m.tasks, id)
-	err := m.persistLocked()
-	if err == nil {
-		m.queueEventLocked("scheduled:update", map[string]any{"deleted": id})
-	}
+	m.queueEventLocked("scheduled:update", map[string]any{"deleted": id})
 	m.mu.Unlock()
-	if err != nil {
-		return err
-	}
 	m.flushEvents()
 	return nil
 }

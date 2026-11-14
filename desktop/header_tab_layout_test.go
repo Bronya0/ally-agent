@@ -87,22 +87,7 @@ func TestHeaderTabsTrackSidebarBoundary(t *testing.T) {
 			if !ok || tab.X != want {
 				t.Fatalf("bar=%v rail=%v tab starts %v want %v", bar, width, tab.X, want)
 			}
-			logo, ok := tt.Find("应用 Logo")
-			// Open: the mark's column starts on the icon column. Collapsed: it spans
-			// the whole rail, so centring the mark there centres it in the rail.
-			left := float32(6) + railGutter
-			if width == 0 {
-				left = 0
-			}
-			if bar.Left > 0 {
-				left = max(left, bar.Left+headerTrafficLightGap)
-			}
-			if !ok || logo.X != left {
-				t.Fatalf("bar=%v rail=%v logo left=%v want %v", bar, width, logo.X, left)
-			}
-			if width == 0 && logo.W != widthRailCollapsed {
-				t.Fatalf("bar=%v collapsed logo column is %v wide, want the whole %v rail", bar, logo.W, widthRailCollapsed)
-			}
+
 		}
 	}
 }

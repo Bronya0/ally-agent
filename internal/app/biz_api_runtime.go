@@ -55,9 +55,13 @@ func (a *App) apiHandleCreateTask(w http.ResponseWriter, r *http.Request) {
 		apiWriteError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	cfg, err := a.apiModelConfig(body.ModelIndex)
+	cfg, err := a.apiModelConfig(r, body.ModelIndex)
 	if err != nil {
-		apiWriteError(w, http.StatusBadRequest, err.Error())
+		status := http.StatusBadRequest
+		if toolErrorCode(err) == "E_MODEL_IDENTITY" {
+			status = http.StatusConflict
+		}
+		apiWriteError(w, status, err.Error())
 		return
 	}
 	cfg = a.runtimeConfig(cfg)

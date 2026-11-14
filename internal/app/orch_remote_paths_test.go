@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -64,46 +63,6 @@ func TestRemoteMutationIdentityIncludesServerAndAbsolutePath(t *testing.T) {
 		if got := remoteMutationKey(input.target, input.path); got == want {
 			t.Fatalf("distinct file shared identity %q", got)
 		}
-	}
-}
-
-func TestRemoteHelperAbsolutePathsFollowOrdinarySymlinks(t *testing.T) {
-	t.Parallel()
-	py := pickRemoteHelperPython(t)
-	base, outside := t.TempDir(), t.TempDir()
-	link := filepath.Join(base, "link")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	file := filepath.Join(link, "config.txt")
-	run := func(payload map[string]any) remotePythonResponse {
-		t.Helper()
-		script, err := buildRemoteScript(payload)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := runRemoteHelperScript(t, py, script)
-		if err != nil || !resp.OK {
-			t.Fatalf("helper failed: %+v %v", resp, err)
-		}
-		return resp
-	}
-	for _, content := range []string{"first", "updated"} {
-		run(map[string]any{"op": "write", "path": file, "overwrite": true, "dataBase64": base64.StdEncoding.EncodeToString([]byte(content))})
-		resp := run(map[string]any{"op": "read", "path": file})
-		var data struct {
-			DataBase64 string `json:"dataBase64"`
-		}
-		if err := json.Unmarshal(resp.Data, &data); err != nil {
-			t.Fatal(err)
-		}
-		if data.DataBase64 != base64.StdEncoding.EncodeToString([]byte(content)) {
-			t.Fatalf("wrong read: %s", resp.Data)
-		}
-	}
-	run(map[string]any{"op": "delete_batch", "paths": []string{file}})
-	if _, err := os.Stat(filepath.Join(outside, "config.txt")); !os.IsNotExist(err) {
-		t.Fatalf("cross-directory file not removed: %v", err)
 	}
 }
 

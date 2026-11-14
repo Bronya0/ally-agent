@@ -58,8 +58,8 @@ func (a *desktop) headerBar(c *ui.Context) {
 		logoInset, logoAlign = 0, ui.Center
 	}
 	logoInset = max(float32(0), logoInset-bar.Left)
-	if bar.Left > 0 {
-		logoInset = max(headerTrafficLightGap, logoInset)
+	if bar.Left > 0 && !a.prefs.TopNavigation {
+		logoInset, logoAlign = 0, ui.Center
 	}
 	tabsStart := bar.Left + leading
 	row := ui.Row(c).Height(max(headerBarHeight, bar.Height)).Shrink(0).Background(p.headerColor()).
@@ -74,6 +74,9 @@ func (a *desktop) headerBar(c *ui.Context) {
 		// its resize divider. Native traffic lights take precedence on macOS.
 		ui.Row(c.Key("header-rail")).Label(locales.Text("标题栏侧栏区")).Width(leading).Shrink(0).FillHeight().Padding(0, 0, 0, logoInset).AlignItems(ui.Center).Children(func() {
 			logoWidth := float32(64)
+			if bar.Left > 0 && !a.prefs.TopNavigation {
+				logoWidth = leading
+			}
 			if a.prefs.TopNavigation {
 				logoWidth = 45
 			}

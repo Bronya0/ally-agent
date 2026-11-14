@@ -53,7 +53,7 @@ Download a Windows, macOS or Linux package from [GitHub Releases](https://github
 ### Native desktop experience
 
 - Go and [MyGo](https://github.com/egoist/mygo) draw the main UI and regular pages natively. Plugins and HTML, Mermaid and media previews use controlled WebViews on demand.
-- Dark, light and time-based automatic appearance, with several palettes. The Qinghe light theme matches the website's pale gray-green background, paper-white cards and dark green accents. Adjust reading font sizes and chat background opacity.
+- Dark, light and time-based automatic appearance, with several palettes. Adjust reading font sizes and chat background opacity.
 - Built-in welcome avatars and desktop pets, including Big Whale and a small robot, with support for custom images.
 - Automatic update downloads and restart prompts on Windows and macOS; version checks and manual updates on Linux.
 - Use the Windows or macOS system proxy, or configure HTTP/HTTPS/SOCKS5 manually. Proxy settings apply to models, HTTP tools, MCP, commands and background services.

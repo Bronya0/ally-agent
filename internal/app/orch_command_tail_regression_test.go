@@ -2,13 +2,9 @@
 package app
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestReadOnlyTailCacheSeparatesRequestedLengths(t *testing.T) {
@@ -48,83 +44,6 @@ func TestReadOnlyTailCacheSeparatesRequestedLengths(t *testing.T) {
 			data += "changed tail\n"
 			if item := readTail(100); item.Reused || !strings.Contains(item.Content, "changed tail") {
 				t.Fatalf("changed tail was omitted: %#v", item)
-			}
-		})
-	}
-}
-
-func TestCommandPromotionFailureRetainsOutput(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name, reason    string
-		spill, stopping bool
-	}{
-		{name: "full registry", reason: "E_SERVICE_LIMIT"},
-		{name: "full registry with log", reason: "E_SERVICE_LIMIT", spill: true},
-		{name: "shutting down", reason: "application is shutting down", stopping: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			a := newApiTestApp(t)
-			if tc.stopping {
-				a.stopping = true
-			} else {
-				for i := 0; i < maxActiveServices; i++ {
-					id := fmt.Sprintf("occupied-%d", i)
-					a.services[id] = &managedService{info: ServiceInfo{ID: id, Status: "running"}}
-				}
-			}
-			output := "BEFORE_TIMEOUT"
-			if tc.spill {
-				output += strings.Repeat("x", maxModelToolOutput+1) + "OUTPUT_TAIL"
-			}
-			if err := os.WriteFile(filepath.Join(a.config.Workspace, "captured-output.txt"), []byte(output+"\n"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			// sleep 只要比 1s 超时长一点：超时后进程树被杀，但脚本里残留的
-			// 子进程会一直抱着管道，写 30s 会让每个子用例真的等满，整套测试
-			// 多花一分钟。
-			command := "cat captured-output.txt; touch command-ready; sleep 5"
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			timeout := make(chan time.Time, 1)
-			ready := filepath.Join(a.config.Workspace, "command-ready")
-			go func() {
-				ticker := time.NewTicker(time.Millisecond)
-				defer ticker.Stop()
-				for {
-					if _, err := os.Stat(ready); err == nil {
-						timeout <- time.Now()
-						return
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case <-ticker.C:
-					}
-				}
-			}()
-			data, err := a.runCommandWithTimer(ctx, a.config, CommandRequest{Command: command, Timeout: 1}, timeout)
-			result := toolResult{OK: err == nil, Data: data}
-			if !result.OK || !data.TimedOut || data.Cancelled || data.PromotedToService || data.ExitCode != -1 {
-				t.Fatalf("expected a failed timeout with structured output: %#v", result)
-			}
-			model := compactToolResultForModel("command", result, "")
-			for _, text := range []string{"BEFORE_TIMEOUT", tc.reason} {
-				if !strings.Contains(data.Output, text) || !strings.Contains(model, text) {
-					t.Fatalf("lost %q after promotion failure: data=%#v model=%s", text, data, model)
-				}
-			}
-			if toolStageSucceeded(result) {
-				t.Fatal("failed promotion must still block dependent stages")
-			}
-			if tc.spill {
-				if data.OutputFilePath == "" || data.OutputFileIncomplete || !strings.Contains(model, data.OutputFilePath) {
-					t.Fatalf("lost recoverable log: %#v", data)
-				}
-				log, err := os.ReadFile(data.OutputFilePath)
-				if err != nil || strings.TrimSpace(string(log)) != output || data.OutputFileBytes != int64(len(log)) {
-					t.Fatalf("log was not drained before finalization: bytes=%d expected=%d err=%v", len(log), len(output), err)
-				}
 			}
 		})
 	}

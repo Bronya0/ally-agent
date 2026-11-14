@@ -202,3 +202,32 @@ func seedSettingsNumbers(v reflect.Value) {
 		v.SetFloat(37)
 	}
 }
+
+func TestNativeModelRejectsStaleEdit(t *testing.T) {
+	a := configTransactionApp(t)
+	if err := a.SaveNativeModel(ModelConfig{ProviderName: "test", Model: "one", ReasoningEffort: "low"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := a.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := cfg.Models[0]
+	updated := baseline
+	updated.ReasoningEffort = "high"
+	if err := a.SaveNativeModelIfUnchanged(updated, &baseline); err != nil {
+		t.Fatal(err)
+	}
+	stale := baseline
+	stale.DisplayName = "stale"
+	if err := a.SaveNativeModelIfUnchanged(stale, &baseline); err == nil {
+		t.Fatal("stale edit was accepted")
+	}
+	cfg, err = a.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Models[0].ReasoningEffort != "high" || cfg.Models[0].DisplayName == "stale" {
+		t.Fatalf("concurrent update lost: %+v", cfg.Models[0])
+	}
+}

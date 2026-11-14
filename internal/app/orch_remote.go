@@ -1201,7 +1201,11 @@ func (a *App) executeRemoteTransfer(ctx context.Context, req RemoteTransferReque
 	// 5. Execute raw stream transfer via Python Bridge
 	result, err := a.runRemoteTransferStream(ctx, rt, action, workspace, localAbs, cleanRemotePath, req.Overwrite)
 	if err != nil {
-		return RemoteTransferResult{}, err
+		destination := localClean
+		if action == "upload" {
+			destination = req.Alias + ":" + cleanRemotePath
+		}
+		return RemoteTransferResult{}, fmt.Errorf("transfer failed: %w; destination %q may have been partially modified, including overwritten files; inspect it before retrying", err, destination)
 	}
 
 	result.Action = action

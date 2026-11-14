@@ -755,11 +755,50 @@ func (a *App) SaveSkill(draft SkillDraft) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", fmt.Errorf("failed to create skill directory: %w", err)
 	}
-	if err := writeAtomicBytes(path, fileContent, 0o644); err != nil {
+	if err := writeNewSkillFile(path, fileContent); err != nil {
 		return "", fmt.Errorf("failed to write skill: %w", err)
 	}
 	a.clearSkillListCache()
 	return path, nil
+}
+
+// writeNewSkillFile publishes complete bytes without replacing an existing file.
+// A hard link is atomic; a filesystem without them falls back to an exclusive
+// create, which still refuses to overwrite.
+func writeNewSkillFile(path string, data []byte) error {
+	err := linkNewFile(path, data)
+	if err == nil || errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		os.Remove(path)
+		return err
+	}
+	return f.Close()
+}
+
+// linkNewFile writes the bytes to a temporary sibling and links it into place.
+func linkNewFile(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".skill-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if err = f.Chmod(0o644); err == nil {
+		_, err = f.Write(data)
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Link(f.Name(), path)
 }
 
 // skillWriteRoot resolves the directory a new skill is written into. An empty
