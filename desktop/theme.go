@@ -37,6 +37,7 @@ func fadeColor(e ui.Element, key string, target ui.Color) ui.Color {
 
 const (
 	chatMaxWidth         float32 = 1120
+	chatContentMaxWidth  float32 = chatMaxWidth - 40
 	settingsMaxWidth     float32 = 1040
 	settingsControlWidth         = uikit.FormControlWidth
 	settingsNumberWidth  float32 = 200

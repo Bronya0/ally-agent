@@ -215,7 +215,7 @@ func (a *desktop) jumpToPreviousPrompt(c *ui.Context, t *conversation) {
 func (a *desktop) chatRowView(c *ui.Context, t *conversation, row chatRow) {
 	st := t.uiState()
 	st.built.cover(row)
-	ui.Column(c).FillWidth().MaxWidth(chatMaxWidth).AlignSelf(ui.Center).Children(func() {
+	ui.Column(c).FillWidth().MaxWidth(chatContentMaxWidth).AlignSelf(ui.Center).Children(func() {
 		if row.message == welcomeRow {
 			a.welcomeView(c, t)
 			return
