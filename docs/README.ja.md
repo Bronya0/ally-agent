@@ -19,8 +19,6 @@ Ally Agent は、Go と [MyGo](https://github.com/egoist/mygo) で作られた�
 
 [GitHub Releases](https://github.com/Bronya0/ally-agent/releases) から Windows、macOS、Linux 向けパッケージをダウンロードできます。
 
-![コードを書くあなたのそばに、大きなクジラ。](imgs/companion.png)
-
 ![Ally Agent の実行デモ（7.5 秒）](imgs/preview-7.5s.gif)
 
 ## 主な機能
