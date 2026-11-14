@@ -109,7 +109,7 @@ func TestDeleteStatsSkipTargetsTheKernelWillRefuse(t *testing.T) {
 	outside := t.TempDir()
 	t.Setenv("TMPDIR", t.TempDir())
 	roots := []string{workspace}
-	spec := fileMutationSpec(ConfigState{Workspace: workspace}, roots)
+	spec := fileMutationSpec(roots)
 
 	inside := filepath.Join(workspace, "notes")
 	if err := os.MkdirAll(inside, 0o755); err != nil {
@@ -136,7 +136,6 @@ func TestSandboxSpecCarriesRootsDenyRootsAndCredentialMask(t *testing.T) {
 	home := isolateSandboxHome(t)
 	spec := sandboxSpec(
 		[]string{"/w/space"},
-		[]string{"/w/space/sources"},
 	)
 
 	if !spec.Enforce() {
@@ -144,10 +143,6 @@ func TestSandboxSpecCarriesRootsDenyRootsAndCredentialMask(t *testing.T) {
 	}
 	if len(spec.WriteRoots) != 1 || spec.WriteRoots[0] != "/w/space" {
 		t.Fatalf("write roots = %v", spec.WriteRoots)
-	}
-	// 知识库的 sources/ 可读不可写：这条保护只能从策略传下去。
-	if len(spec.DenyWriteRoots) != 1 || spec.DenyWriteRoots[0] != "/w/space/sources" {
-		t.Fatalf("deny-write roots = %v", spec.DenyWriteRoots)
 	}
 	// 模型驱动 shell 不该读到 API key 与 SSH 凭据：配置目录要被遮蔽掉。
 	want := filepath.Join(home, ".ally_agent")
@@ -459,7 +454,7 @@ func TestSandboxStatusForFollowsHostCapability(t *testing.T) {
 	}
 }
 
-// 沙箱真正包住命令时，围栏只保留内核看不见的两道：VCS 元数据与高危语义。词法
+// 沙箱真正包住命令时，围栏只保留内核看不见的高危语义。词法
 // 猜测的三道（工作区外写入、KB 禁写、删除强制走 delete）让位给内核——它们的
 // 误报正是猜测的代价。本测试验证留下的、放走的各归其位。
 func TestConfinedCommandSafetyKeepsKernelBlindSpots(t *testing.T) {
@@ -474,10 +469,6 @@ func TestConfinedCommandSafetyKeepsKernelBlindSpots(t *testing.T) {
 	// 工作区外写入放行：词法判断“目标已存在且在区外”正是误报大户，内核拦得更准。
 	if err := confinedFence(t, "echo hi > /etc/hosts", workspace, []string{workspace}); err != nil {
 		t.Fatalf("a confined outside write must be left to the kernel: %v", err)
-	}
-	// VCS 元数据仍然拦截：.git 在写根之内（git 自己要写），内核管不了它。
-	if code := toolErrorCode(confinedFence(t, "echo x > .git/hooks/pre-commit", workspace, []string{workspace})); code != "E_PROTECTED_PATH" {
-		t.Fatalf("a confined VCS-metadata write must stay blocked, got %v", code)
 	}
 	// 高危语义仍然拦截：fork 炸弹不碰文件系统，写过滤器看不见它。
 	if code := toolErrorCode(confinedFence(t, ":(){ :|:& };:", workspace, []string{workspace})); code != "E_COMMAND_BLOCKED" {
@@ -510,7 +501,7 @@ func TestConfinedCommandSafetyKeepsWorkspaceRootDelete(t *testing.T) {
 }
 
 // 全链路验证围栏让位：沙箱 enforce 下 rm 命令直接执行成功；越界写由内核拒绝且
-// 模型能读到能照做的提示；VCS 元数据写仍然被围栏拦下。
+// 模型能读到能照做的提示。
 func TestCommandFenceStandsDownUnderConfinement(t *testing.T) {
 	requireConfinement(t)
 	isolateSandboxHome(t)
@@ -570,18 +561,11 @@ func TestCommandFenceStandsDownUnderConfinement(t *testing.T) {
 		t.Fatalf("the refused write must leave the target untouched, got %q %v", data, readErr)
 	}
 
-	// VCS 元数据：内核的盲区，围栏照拦。
-	if err := os.MkdirAll(filepath.Join(workspace, ".git", "hooks"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.runCommandWithConfig(ctx, cfg, CommandRequest{Command: "echo x > .git/hooks/pre-commit"}); toolErrorCode(err) != "E_PROTECTED_PATH" {
-		t.Fatalf("a confined VCS-metadata write must stay blocked, got %v (%s)", err, toolErrorCode(err))
-	}
 }
 
 // spec 必须跟随宿主解析出的档位：强制平台 enforce，其余平台根本没有可打开它的开关。
 func TestFileMutationSpecFollowsTheResolvedMode(t *testing.T) {
-	spec := fileMutationSpec(ConfigState{}, []string{t.TempDir()})
+	spec := fileMutationSpec([]string{t.TempDir()})
 	if spec.Enforce() != (sandbox.ResolvedMode() == sandbox.ModeEnforce) {
 		t.Fatalf("the spec must follow the resolved mode, got %v", spec.Mode)
 	}
@@ -593,7 +577,7 @@ func TestFileMutationSpecFollowsTheResolvedMode(t *testing.T) {
 func TestFileMutationSpecAddsDataDirAndSkipsMasks(t *testing.T) {
 	isolateSandboxHome(t)
 	workspace := t.TempDir()
-	spec := fileMutationSpec(ConfigState{}, []string{workspace})
+	spec := fileMutationSpec([]string{workspace})
 	if !spec.Enforce() {
 		t.Skip("no backend on this platform")
 	}
@@ -675,9 +659,8 @@ func TestConfinedMutationRefusedOutsideRoots(t *testing.T) {
 	outside := t.TempDir()
 	t.Setenv("TMPDIR", t.TempDir())
 
-	cfg := ConfigState{Workspace: workspace}
 	roots := []string{workspace}
-	spec := fileMutationSpec(cfg, roots)
+	spec := fileMutationSpec(roots)
 	outsideFile := filepath.Join(outside, "escaped.txt")
 
 	err := sandboxedWriteFile(spec, roots, outsideFile, []byte("pwn"), 0o644)
@@ -723,9 +706,8 @@ func TestConfinedMutationAllowsAllyDataDir(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 
 	workspace := t.TempDir()
-	cfg := ConfigState{Workspace: workspace}
 	roots := []string{workspace}
-	spec := fileMutationSpec(cfg, roots)
+	spec := fileMutationSpec(roots)
 
 	note := filepath.Join(memories, "note.md")
 	if err := sandboxedWriteNewFile(spec, roots, note, []byte("memory"), 0o644); err != nil {
@@ -817,7 +799,7 @@ func TestStagingRefusalCarriesTheSameExplanation(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 
 	roots := []string{workspace}
-	spec := fileMutationSpec(ConfigState{Workspace: workspace}, roots)
+	spec := fileMutationSpec(roots)
 
 	outsideBlocked := filepath.Join(outside, "readonly")
 	createReadOnlyDir(t, outsideBlocked)

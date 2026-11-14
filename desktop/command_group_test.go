@@ -179,7 +179,7 @@ func TestToolGroupCountsFollowBatchedResultsAndWindowChanges(t *testing.T) {
 	check(0, 5) // shrink and then grow the page's range
 	// Terminal cleanup changes running calls even without individual results.
 	conv.toolRev++
-	settleRunningToolMessages(conv, false, "")
+	settleRunningToolMessages(conv, "done", "")
 	check(4, 6)
 }
 

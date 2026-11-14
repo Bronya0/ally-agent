@@ -162,7 +162,7 @@ func TestRuntimeAPIUsesApplicationContext(t *testing.T) {
 	a := newIsolatedChatTestApp(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a.ctx = withKBDenyRoots(ctx, []string{t.TempDir()})
+	a.ctx = context.WithValue(ctx, struct{}{}, "runtime context")
 	got, ok := a.apiRuntimeContext(httptest.NewRecorder())
 	if !ok || got != a.ctx {
 		t.Fatal("runtime mutation lost application context and its policy values")

@@ -28,7 +28,7 @@ func TestSSHClusterListAndRemovedAdd(t *testing.T) {
 	if err != nil || result["count"] != 0 {
 		t.Fatalf("unapproved listing: %v, %v", result, err)
 	}
-	if err := app.AuthorizeServerForWorkspace(ws, "node"); err != nil {
+	if err := app.AuthorizeServerForWorkspace(ws, apiSSHTestNode(t, app, "node").ID); err != nil {
 		t.Fatal(err)
 	}
 	result, err = app.executeSSHClusterTool(ws, SSHClusterRequest{Action: "list"})
@@ -73,27 +73,27 @@ func TestRemoteTargetWorkspaceAuthorization(t *testing.T) {
 	})
 
 	// Without workspace authorization, resolving the alias must fail.
-	_, err := app.resolveAndAuthorizeRemoteTarget(ctx, "my-srv:/var/www")
+	_, err := app.resolveAndAuthorizeRemoteTarget(ctx, "my-srv")
 	if err == nil {
 		t.Fatal("expected E_SERVER_UNAUTHORIZED for un-whitelisted server")
 	}
 
 	// Workspace authorization is sufficient for a registered alias; no second ask.
-	app.AuthorizeServerForWorkspace(ws, "my-srv")
+	app.AuthorizeServerForWorkspace(ws, apiSSHTestNode(t, app, "my-srv").ID)
 	connectCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
-	rt, err := app.resolveAndAuthorizeRemoteTarget(connectCtx, "my-srv:/var/www")
+	rt, err := app.resolveAndAuthorizeRemoteTarget(connectCtx, "my-srv")
 	cancel()
 	if err != nil {
 		t.Fatalf("expected workspace-authorized alias to connect without an ask: %v", err)
 	}
-	if rt.Host != "ubuntu@192.168.1.88" || rt.LegacyRoot != "/var/www" {
+	if rt.Host != "ubuntu@192.168.1.88" {
 		t.Fatalf("unexpected resolved target: %+v", rt)
 	}
-	rt, err = app.resolveAndAuthorizeRemoteTarget(ctx, "192.168.1.99:/var/www")
+	rt, err = app.resolveAndAuthorizeRemoteTarget(ctx, "192.168.1.99")
 	if err != nil {
 		t.Fatalf("direct endpoint should not request approval: %v", err)
 	}
-	if rt.Host != "192.168.1.99" || rt.LegacyRoot != "/var/www" {
+	if rt.Host != "192.168.1.99" {
 		t.Fatalf("unexpected direct target: %+v", rt)
 	}
 	if pendingAskCount(app) != 0 {
@@ -148,7 +148,7 @@ func TestRemoteTargetEndpointSpellingUsesRegisteredNode(t *testing.T) {
 	ws := filepath.Join(tempDir, "ws")
 	sessionID := "sess-endpoint-spelling"
 
-	if err := app.SaveSSHServer(SSHServerNode{Alias: "prod-web", Host: "10.0.0.7", Port: 2222, Username: "deploy", Password: "pw", Description: "web"}); err != nil {
+	if err := app.SaveSSHServer(SSHServerNode{AuthType: sshAuthTypePassword, Alias: "prod-web", Host: "10.0.0.7", Port: 2222, Username: "deploy", Password: "pw", Description: "web"}); err != nil {
 		t.Fatal(err)
 	}
 	app.mu.Lock()
@@ -161,12 +161,12 @@ func TestRemoteTargetEndpointSpellingUsesRegisteredNode(t *testing.T) {
 		t.Fatal("an unauthorized registered node must be rejected when addressed by endpoint")
 	}
 
-	app.AuthorizeServerForWorkspace(ws, "prod-web")
+	app.AuthorizeServerForWorkspace(ws, apiSSHTestNode(t, app, "prod-web").ID)
 	rt, err := app.resolveAndAuthorizeRemoteTarget(ctx, "ssh://deploy@10.0.0.7:2222")
 	if err != nil {
 		t.Fatalf("authorized endpoint spelling must resolve without another ask: %v", err)
 	}
-	if rt.Host != "deploy@10.0.0.7" || rt.Port != "2222" || rt.LegacyRoot != "" {
+	if rt.Host != "deploy@10.0.0.7" || rt.Port != "2222" {
 		t.Fatalf("unexpected resolved target: %+v", rt)
 	}
 	if rt.credential == nil || rt.credential.authType != sshAuthTypePassword || rt.credential.password != "pw" {
@@ -184,7 +184,7 @@ func TestSSHClustersPurgeCredentialOnNodeChange(t *testing.T) {
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
 
-	node := SSHServerNode{Alias: "n1", Host: "10.1.1.1", Username: "root", Password: "secret", Description: "d"}
+	node := SSHServerNode{AuthType: sshAuthTypePassword, Alias: "n1", Host: "10.1.1.1", Username: "root", Password: "secret", Description: "d"}
 	if err := app.SaveSSHServer(node); err != nil {
 		t.Fatal(err)
 	}
@@ -195,6 +195,7 @@ func TestSSHClustersPurgeCredentialOnNodeChange(t *testing.T) {
 		t.Fatal("precondition: credential should be cached")
 	}
 
+	node.ID = apiSSHTestNode(t, app, "n1").ID
 	node.Password = ""
 	if err := app.SaveSSHServer(node); err != nil {
 		t.Fatal(err)
@@ -204,7 +205,7 @@ func TestSSHClustersPurgeCredentialOnNodeChange(t *testing.T) {
 	}
 
 	app.sshCredentials.store(key, sshAuthTypePassword, "secret", "")
-	if err := app.DeleteSSHServer("n1"); err != nil {
+	if err := app.DeleteSSHServer(apiSSHTestNode(t, app, "n1").ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := app.sshCredentials.lookup(key); ok {
@@ -316,16 +317,16 @@ func TestResolvedSSHCredentialsAreIsolated(t *testing.T) {
 		if err := a.SaveSSHServer(n); err != nil {
 			t.Fatal(err)
 		}
-		if err := a.AuthorizeServerForWorkspace(ws, n.Alias); err != nil {
+		if err := a.AuthorizeServerForWorkspace(ws, apiSSHTestNode(t, a, n.Alias).ID); err != nil {
 			t.Fatal(err)
 		}
 	}
 	ctx := withToolWorkspace(context.Background(), ws)
-	password, err := a.resolveAndAuthorizeRemoteTarget(ctx, "password-node:/srv/test")
+	password, err := a.resolveAndAuthorizeRemoteTarget(ctx, "password-node")
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent, err := a.resolveAndAuthorizeRemoteTarget(ctx, "ssh://agent-node:2222/srv/test")
+	agent, err := a.resolveAndAuthorizeRemoteTarget(ctx, "ssh://agent-node:2222")
 	if err != nil {
 		t.Fatal(err)
 	}

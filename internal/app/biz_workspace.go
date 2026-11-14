@@ -110,9 +110,9 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 		}
 	}
 	// includeIgnored=false skips gitignored paths (workspace .gitignore rules)
-	// plus a small hardcoded fallback list (see isHeavyDir). Gitignore rules
+	// plus the shared dependency/build directory exclusions. Gitignore rules
 	// only apply inside the workspace; out-of-root listings use the hardcoded
-	// list alone. Mirrors how Trae's LS hides node_modules/.git automatically.
+	// list alone.
 	var ignoreMatcher gitignore.Matcher
 	if !req.IncludeIgnored && inRoot {
 		ignoreMatcher = loadRootGitignoreRules(root)
@@ -125,6 +125,8 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 			ignoreMatcher = nil
 		}
 	}
+
+	includeDependencies := req.IncludeIgnored || grep.PointIntoExcludedDir(root, start)
 
 	maxDepth := req.MaxDepth
 	if maxDepth <= 0 {
@@ -175,24 +177,13 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 			return nil
 		}
 		name := d.Name()
-		// VCS internals are always pruned for model-facing listings — .git noise
-		// easily dominates the entry limit. Model-facing listings also arrive with
-		// hidden/ignored switched off (see the top of this function), so this is the
-		// second line of defense, not the only one. The UI explorer
-		// (ModelFacing=false) still shows them.
-		if req.ModelFacing && isVCSDirName(name) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
 		if !req.IncludeHidden && strings.HasPrefix(name, ".") {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !req.IncludeIgnored && d.IsDir() && isHeavyDir(name) {
+		if !includeDependencies && d.IsDir() && grep.IsExcludedDir(name) {
 			return filepath.SkipDir
 		}
 		rel, _ := filepath.Rel(walkStart, path)
@@ -896,14 +887,8 @@ func workspacePathIndexIgnoredDirs() []string {
 	return grep.ExcludedDirs()
 }
 
-// workspaceMapIgnoredDirs 是 Workspace Map 的 rg 排除目录列表：在共享重目录之外追加
-// 5 条地图特有的生态项，防止依赖库吃光 320 条配额。其中 go/pkg/mod、packages/*/dist、
-// *.egg-info 是路径/通配写法，只有 rg 认得；另外 2 条（.pnpm-store、jars）是普通目录名，
-// walkdir 那侧表达得了但当前没加，所以两条路仍差这 5 条，详见 isWorkspaceMapHeavyDir。
-func workspaceMapIgnoredDirs() []string {
-	dirs := grep.ExcludedDirs()
-	return append(dirs, ".pnpm-store", "go/pkg/mod", "jars", "packages/*/dist", "*.egg-info")
-}
+// workspaceMapIgnoredDirs shares the search directory policy.
+func workspaceMapIgnoredDirs() []string { return grep.ExcludedDirs() }
 
 func buildWorkspaceMapContext(root string) string {
 	result := buildWorkspaceMap(root, workspaceMapDepth, workspaceMapLimit)
@@ -1017,14 +1002,10 @@ func buildWorkspaceMapWithRg(root string, maxDepth, limit int) (workspaceMapBuil
 	runCtx, cancel := context.WithTimeout(context.Background(), workspaceMapScanTimeout)
 	defer cancel()
 
-	// --sort path 保证确定性（rg 并行遍历默认顺序不定，决定哪些条目存活于
-	// 320 截断/折叠）。.env 敏感文件不在 rg 参数层排除：rg 的 -g 包含模式
-	// 会变成白名单（只输出匹配文件），所以交给消费端 isWorkspaceMapSensitiveFile
-	// 过滤，与 walkdir 回退路径语义完全一致（.env/.env.* 排除，模板保留）。
+	// --sort path keeps bounded listings deterministic. Only paths and sizes are collected.
 	args := []string{"--files", "--hidden", "--no-require-git", "--sort", "path",
-		"--max-filesize", fmt.Sprintf("%d", workspaceMapMaxFileSize),
-		"--iglob", "!.git", "--iglob", "!.git/**"}
-	for _, dir := range workspaceMapIgnoredDirs() {
+		"--max-filesize", fmt.Sprintf("%d", workspaceMapMaxFileSize)}
+	for _, dir := range append(workspaceMapIgnoredDirs(), ".git", ".svn", ".hg") {
 		args = append(args, "--iglob", "!"+dir+"/**", "--iglob", "!**/"+dir+"/**")
 	}
 	cmd := exec.CommandContext(runCtx, rgPath, args...)
@@ -1095,12 +1076,6 @@ func parentDir(rel string) string {
 func buildWorkspaceMapAdd(result *workspaceMapBuildResult, budget *workspaceMapDirBudgets, root, rel string, maxDepth, limit int) bool {
 	rel = strings.Trim(strings.TrimSpace(filepath.ToSlash(rel)), "/")
 	if rel == "" || rel == "." {
-		return true
-	}
-	// 敏感文件过滤（.env/.env.*，保留 example/sample/template）：与 walkdir
-	// 回退路径共用 isWorkspaceMapSensitiveFile，保证两条路径语义一致。
-	if isWorkspaceMapSensitiveFile(path.Base(rel), false) {
-		result.SkippedIgnored++
 		return true
 	}
 	// 全局硬停前置：即使后续都是折叠递增（不新增条目），也必须停。
@@ -1240,13 +1215,9 @@ func buildWorkspaceMapWalkDir(root string, maxDepth, limit int) workspaceMapBuil
 		}
 		relSlash := filepath.ToSlash(rel)
 
-		if d.IsDir() && isWorkspaceMapHeavyDir(name) {
+		if d.IsDir() && (isWorkspaceMapHeavyDir(name) || name == ".git" || name == ".svn" || name == ".hg") {
 			result.SkippedHeavy++
 			return filepath.SkipDir
-		}
-		if isWorkspaceMapSensitiveFile(name, d.IsDir()) {
-			result.SkippedIgnored++
-			return nil
 		}
 		if matchGitignoreRules(rules, relSlash, d.IsDir()) {
 			result.SkippedIgnored++
@@ -1364,58 +1335,7 @@ func pathDepth(rel string) int {
 	return strings.Count(rel, string(os.PathSeparator)) + 1
 }
 
-// 名单刻意保持极小：只兜底「任何项目都不该让模型看到」的目录。
-// 其余忽略语义交给工作区 .gitignore（见 listFilesWithConfig），
-// 与 Trae LS 的行为一致。文件浏览器通过 includeIgnored=true 保留全部内容。
-func isHeavyDir(name string) bool {
-	switch strings.ToLower(name) {
-	case "__pycache__", "node_modules":
-		return true
-	default:
-		return false
-	}
-}
-
-// isVCSDirName centralizes VCS-internal directory names. They are never
-// useful in model-facing list_files output and are pruned unconditionally
-// there (see listFilesWithConfig), while the UI explorer keeps them visible.
-func isVCSDirName(name string) bool {
-	switch name {
-	case ".git", ".svn", ".hg":
-		return true
-	default:
-		return false
-	}
-}
-
-// isWorkspaceMapHeavyDir 是 rg 排除清单在 walkdir 回退路径上的对应物，直接从共享清单
-// 派生。名字里的 WorkspaceMap 是历史遗留：路径索引的 walkdir 回退也在用它。
-//
-// 它只认共享清单里的纯目录名，所以与 rg 那条路并不完全一致：workspaceMapIgnoredDirs
-// 追加的那 5 条在这里都拦不住（3 条是路径/通配写法，walkdir 表达不了；2 条只是没加）。
-func isWorkspaceMapHeavyDir(name string) bool {
-	return heavyDirNames[strings.ToLower(name)]
-}
-
-// heavyDirNames 由共享重目录清单派生，进程内只构建一次。
-var heavyDirNames = func() map[string]bool {
-	names := make(map[string]bool, 32)
-	for _, dir := range grep.ExcludedDirs() {
-		names[strings.ToLower(dir)] = true
-	}
-	return names
-}()
-
-func isWorkspaceMapSensitiveFile(name string, isDir bool) bool {
-	if isDir {
-		return false
-	}
-	lower := strings.ToLower(name)
-	if lower == ".env" || strings.HasPrefix(lower, ".env.") {
-		return !strings.Contains(lower, "example") && !strings.Contains(lower, "sample") && !strings.Contains(lower, "template")
-	}
-	return false
-}
+func isWorkspaceMapHeavyDir(name string) bool { return grep.IsExcludedDir(name) }
 
 func loadRootGitignoreRules(root string) gitignore.Matcher {
 	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))

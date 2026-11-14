@@ -36,9 +36,6 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 	}
 	box := ui.Column(c.Key("composer")).Shrink(0).Padding(6, 20, 8).Gap(gapInline)
 	box.Children(func() {
-		if a.page == "kb" {
-			a.kbActionBar(c, t)
-		}
 		if st.Retry != nil {
 			a.retryBanner(c, st.Retry)
 		}
@@ -61,7 +58,7 @@ func (a *desktop) composer(c *ui.Context, t *conversation) {
 				FocusBind(&a.composerFocus, t.ID).
 				Placeholder(locales.Text(composerHint)).
 				MinHeight(58).MaxHeight(576).Lines(1, 24).Padding(c.Theme().Space(1.5), c.Theme().Space(2.5)).FontSize(fsBody).TextColor(c.Theme().Text).MinWidth(0).Radius(radiusControl).
-				Background(p.bg).Disabled(a.closing || (a.page == "kb" && a.kbIndexMissing())).Grow(1)
+				Background(p.bg).Disabled(a.closing).Grow(1)
 			border := c.Theme().Border
 			if input.Focused() || input.FocusWithin() {
 				border = border.Mix(p.accent, 0.35)
@@ -828,42 +825,6 @@ func (a *desktop) retryBanner(c *ui.Context, info *retryInfo) {
 			ui.Text(c, fmt.Sprintf(locales.Text("第 %d/%d 个 Key 失败"), info.KeyIndex+1, info.TotalKeys)).FontSize(fsTiny).TextColor(p.muted)
 		}
 	})
-}
-
-func (a *desktop) kbActionBar(c *ui.Context, t *conversation) {
-	running := t.Busy
-	if a.kbIndexMissing() {
-		composerFlat(c, locales.Text("初始化知识库")).Disabled(running).OnClick(func() { a.send(t, locales.Text("请创建知识库根索引 index.md 与分类结构。")) })
-		fieldNote(c, locales.Text("请先初始化知识库"), a.secondaryInk())
-		return
-	}
-	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-		composerFlat(c, locales.Text("资料入库")).Disabled(running).OnClick(func() { a.send(t, locales.Text("请把 sources/ 里新增的资料整理入库，并更新索引。")) })
-		composerFlat(c, locales.Text("整理索引")).Disabled(running).OnClick(func() {
-			a.send(t, locales.Text("请检查并整理知识库索引，修正过期或重复的条目。"))
-		})
-		if running {
-			fieldNote(c, locales.Text("知识库任务运行中…"), a.secondaryInk())
-		}
-	})
-}
-
-// kbIndexMissing reports whether the configured KB root has no index.md.
-// The explorer listing is the cheap signal; an empty listing falls back to
-// false so the input is never disabled for an unknown state.
-func (a *desktop) kbIndexMissing() bool {
-	if strings.TrimSpace(a.config.KBRoot) == "" {
-		return true
-	}
-	if len(a.files) == 0 {
-		return false
-	}
-	for _, entry := range a.files {
-		if strings.EqualFold(entry.Name, "index.md") {
-			return false
-		}
-	}
-	return true
 }
 
 func (a *desktop) composerInfoBar(c *ui.Context, t *conversation) {

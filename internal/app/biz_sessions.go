@@ -313,20 +313,47 @@ func (a *App) LoadSession(sessionID string) (SessionSnapshot, error) {
 			break
 		}
 	}
+	snapshot = normalizeSessionSnapshot(snapshot, sessionID)
+	snapshot.HasSnapshot = true
+	if err := a.saveSessionLocked(snapshot); err != nil {
+		snapshot.HasSnapshot = false
+	}
 	return snapshot, nil
 }
 
-// syncSessionIndexFromHistory refreshes metadata for runs without a UI writer.
+// syncSessionIndexFromHistory refreshes the snapshot and index without a UI writer.
 func (a *App) syncSessionIndexFromHistory(sessionID string) error {
 	snapshot, err := a.LoadSession(sessionID)
 	if err != nil {
 		return err
 	}
 	history := a.loadSessionHistoryCopy(sessionID)
-	snapshot.Messages = legacySessionSnapshot(sessionID, history).Messages
+	snapshot.Messages = mergeSessionHistoryMessages(snapshot.Messages, legacySessionSnapshot(sessionID, history).Messages)
 	snapshot.ContextTokens = estimateTokensFromMessages(history)
 	snapshot.UpdatedAt = time.Now().UnixMilli()
-	return a.SaveSessionIndex(sessionIndexEntryFromSnapshot(snapshot))
+	return a.SaveSession(snapshot)
+}
+
+// mergeSessionHistoryMessages keeps the richer UI rows and appends history rows
+// after the last shared conversational message. Tool rows and attachments stay
+// attached to the original snapshot.
+func mergeSessionHistoryMessages(existing, history []map[string]any) []map[string]any {
+	if len(existing) == 0 {
+		return history
+	}
+	for i := len(existing) - 1; i >= 0; i-- {
+		role, _ := existing[i]["role"].(string)
+		content, _ := existing[i]["content"].(string)
+		if (role != "user" && role != "assistant") || content == "" {
+			continue
+		}
+		for j := len(history) - 1; j >= 0; j-- {
+			if history[j]["role"] == role && history[j]["content"] == content {
+				return append(existing, history[j+1:]...)
+			}
+		}
+	}
+	return append(existing, history...)
 }
 
 // SaveSession writes one complete UI snapshot and updates the local index.
@@ -345,6 +372,13 @@ func (a *App) SaveSession(snapshot SessionSnapshot) error {
 		return errors.New("session storage is not initialized")
 	}
 
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	return a.saveSessionLocked(snapshot)
+}
+
+// saveSessionLocked persists a normalized snapshot while sessionMu is held.
+func (a *App) saveSessionLocked(snapshot SessionSnapshot) error {
 	snapshot = a.sessionSnapshotForStorage(snapshot)
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
@@ -354,8 +388,6 @@ func (a *App) SaveSession(snapshot SessionSnapshot) error {
 		return fmt.Errorf("session snapshot exceeds %d bytes", maxSessionSnapshotJSONBytes)
 	}
 
-	a.sessionMu.Lock()
-	defer a.sessionMu.Unlock()
 	if err := writeCompressedJSONAtomic(a.sessionSnapshotPath(snapshot.ID), encoded); err != nil {
 		return err
 	}

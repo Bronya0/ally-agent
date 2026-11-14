@@ -11,7 +11,7 @@ import (
 
 var originalRailIcons = func() map[string]*ui.SVG {
 	result := map[string]*ui.SVG{}
-	for _, name := range []string{"chat", "kb", "skills", "mcp", "models", "ssh", "tasks", "stats", "plugins", "settings", "history", "github", "folderopen"} {
+	for _, name := range []string{"chat", "skills", "mcp", "models", "ssh", "tasks", "stats", "plugins", "settings", "history", "github", "folderopen"} {
 		directory := "antd"
 		switch name {
 		case "skills", "models", "tasks", "plugins", "folderopen":
@@ -28,17 +28,9 @@ var originalRailIcons = func() map[string]*ui.SVG {
 	return result
 }()
 
-func normalizedAvatarStyle(style string) string {
-	if style == "image" {
-		return "glm"
-	}
-	return style
-}
-
 // Only the selected character is decoded; the compressed embedded artwork
 // remains available for a later selection without retaining every bitmap.
 func decodeAvatarStyle(style string) map[string]*ui.Bitmap {
-	style = normalizedAvatarStyle(style)
 	result := map[string]*ui.Bitmap{}
 	if style == "eye" || style == "custom" {
 		return result
@@ -91,7 +83,7 @@ func (a *desktop) selectAvatarStyle(style string) {
 	a.avatarLoadID++
 	id := a.avatarLoadID
 	releaseAvatarPoses(a.avatarPoses)
-	a.avatarStyle, a.avatarPoses = normalizedAvatarStyle(style), nil
+	a.avatarStyle, a.avatarPoses = style, nil
 	a.resetAvatarMotion()
 	if style == "custom" && a.customAvatar == nil && a.win != nil {
 		go func() {

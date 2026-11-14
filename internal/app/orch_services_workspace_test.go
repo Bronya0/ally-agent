@@ -139,7 +139,7 @@ func TestServiceStartAndCommandPromotionKeepWorkspaceOwner(t *testing.T) {
 			if !samePath(svc.Workspace, root) || !samePath(svc.Cwd, expectedCwd) {
 				t.Fatalf("promoted process lost workspace: %+v", svc)
 			}
-			if _, err := a.StopService(StopServiceRequest{ID: svc.ID, GraceSeconds: 1}); err != nil {
+			if _, err := a.StopService(StopServiceRequest{ID: svc.ID}); err != nil {
 				t.Fatal(err)
 			}
 		}

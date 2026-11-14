@@ -1151,8 +1151,7 @@ type roundIndexKey struct {
 	count int
 }
 
-// Recognize explicit cancellation markers and legacy persisted cancellation text,
-// without treating errors which merely mention cancellation as a user action.
+// Rendering reads explicit cancellation markers.
 func userCancelledMessage(m map[string]any) bool {
 	for _, key := range []string{"status", "stopReason", "reason"} {
 		switch strings.ToLower(strings.TrimSpace(str(m, key))) {
@@ -1160,15 +1159,8 @@ func userCancelledMessage(m map[string]any) bool {
 			return true
 		}
 	}
-	if boolOf(m, "cancelled") || boolOf(m, "canceled") {
+	if boolOf(m, "cancelled") || boolOf(m, "canceled") || str(m, "errorCode") == "E_CANCELLED" {
 		return true
-	}
-	for _, key := range []string{"content", "error"} {
-		text := strings.TrimSpace(str(m, key))
-		if text == "已取消" || text == "用户已取消" || text == "用户取消" ||
-			strings.EqualFold(text, "cancelled by user") || strings.EqualFold(text, "canceled by user") {
-			return true
-		}
 	}
 	return false
 }

@@ -24,6 +24,12 @@ func TestInitialAppearanceAndAvatar(t *testing.T) {
 	if saved.Appearance != "light" || saved.Palette != 5 || saved.Avatar != "bot" {
 		t.Fatalf("saved choice overwritten: %+v", saved)
 	}
+	if err := os.WriteFile(path, []byte(`{"avatar":"image"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPrefs(path).Avatar; got != "glm" {
+		t.Fatalf("old avatar was not converted at load: %q", got)
+	}
 	if err := os.WriteFile(path, []byte(`{"avatar":""}`), 0600); err != nil {
 		t.Fatal(err)
 	}

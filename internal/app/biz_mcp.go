@@ -1623,11 +1623,7 @@ func (m *McpManager) CallToolByFunctionName(ctx context.Context, functionName st
 	ref, ok := m.toolLookup[functionName]
 	m.mu.RUnlock()
 	if !ok {
-		serverName, toolName, ok := parseLegacyMcpFunctionName(functionName)
-		if !ok {
-			return "", fmt.Errorf("MCP tool function %s not found", functionName)
-		}
-		ref = mcpToolRef{ServerName: serverName, ToolName: toolName}
+		return "", fmt.Errorf("MCP tool function %s not found", functionName)
 	}
 	return m.CallTool(ctx, ref.ServerName, ref.ToolName, args)
 }
@@ -1636,14 +1632,7 @@ func (m *McpManager) DescribeFunctionTool(functionName string) (mcpToolRef, bool
 	m.mu.RLock()
 	ref, ok := m.toolLookup[functionName]
 	m.mu.RUnlock()
-	if ok {
-		return ref, true
-	}
-	serverName, toolName, ok := parseLegacyMcpFunctionName(functionName)
-	if !ok {
-		return mcpToolRef{}, false
-	}
-	return mcpToolRef{ServerName: serverName, ToolName: toolName}, true
+	return ref, ok
 }
 
 // exitingNow 报告进程是否已经进入退出流程。
@@ -1884,14 +1873,6 @@ func safeMcpFunctionPart(value string) string {
 	}
 	sum := sha256.Sum256([]byte(value))
 	return base + "_" + hex.EncodeToString(sum[:])[:6]
-}
-
-func parseLegacyMcpFunctionName(name string) (string, string, bool) {
-	parts := strings.SplitN(name, "__", 3)
-	if len(parts) != 3 || parts[0] != "mcp" || parts[1] == "" || parts[2] == "" {
-		return "", "", false
-	}
-	return parts[1], parts[2], true
 }
 
 const (

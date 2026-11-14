@@ -126,10 +126,6 @@ def remote_path_paths(raw):
 def remote_path(raw):
     return remote_path_paths(raw)[1]
 
-def contains_vcs(path):
-    parts = path.replace("\\", "/").split("/")
-    return any(part in (".git", ".svn", ".hg") for part in parts)
-
 def is_protected_delete_path(path):
     # 与本地 isDangerousDeletePath 统一保持两套规则：
     # 机制 1：系统全盘视角下，禁止删除根目录、第 1 级和第 2 级骨干目录；
@@ -295,12 +291,6 @@ def op_read_batch(payload):
 
 def op_write(payload):
     lexical, resolved = remote_path_paths(payload.get("path", ""))
-    # 版本控制元数据在远端同样是禁区：Go 侧已按字面路径判过一遍，但工作区内的
-    # 符号链接能把干净的字面路径接到 .git 上（把 .git 链成 gh 之后写
-    # gh/hooks/pre-commit），只有远端的事实解析才看得见，所以两个形态各判一次。
-    for candidate in (lexical, resolved):
-        if contains_vcs(candidate):
-            raise ValueError("E_PROTECTED_PATH: refusing to write version-control metadata: %s" % to_unicode(payload.get("path", "")))
     path = resolved
     expected = payload.get("expectedSHA256") or ""
     def check_expected():
@@ -420,17 +410,15 @@ def op_write(payload):
 def check_delete_path(rel, recursive):
     # 单条路径删除的全部判定，不执行任何东西。单路径与批量共用这一份：批量在
     # 动手之前逐条跑完，任一条不通过就整批不删。Go 侧已判过绝对路径、
-    # 文件系统根、VCS 元数据名，这里判只有远端才知道的事实：是否目录、
+    # 文件系统根，这里判只有远端才知道的事实：是否目录、
     # 是否系统敏感目标；存在性只记录不拒绝（见下）。
     #
-    # 两套路径各管一头：保护判定用 resolved（符号链接指向 .git 或系统目录也
+    # 两套路径各管一头：保护判定用 resolved（符号链接指向系统目录也
     # 要拦住），实际删除用 lexical —— 删符号链接删的是链接本身，不是它指向的
     # 东西，与本地 delete 一致（旧实现按解析后的路径删，实测会把链接指向的
     # 文件/目录抹掉）。
     # 错误文案带上路径：批量里不点名的话，模型不知道是哪一条被拒。
     lexical, resolved = remote_path_paths(rel)
-    if contains_vcs(lexical) or contains_vcs(resolved):
-        raise ValueError("E_DELETE_BLOCKED: refusing to delete path containing VCS metadata (requested '%s', resolved to '%s')" % (to_unicode(rel), to_unicode(resolved)))
     protected, reason = is_protected_delete_path(resolved)
     if protected:
         # 一条拒绝要说清三件事：撞的是哪条规则、调用方请求的是哪个路径、它实际解析到
@@ -477,20 +465,6 @@ def op_delete_batch(payload):
         except Exception as exc:
             results.append({"path": rel, "ok": False, "error": to_unicode(exc)})
     return {"paths": results}
-
-def check_write_targets(cwd, targets):
-    # Only VCS metadata protection remains here. A directory selected by the
-    # model is not an access boundary, and existing paths may be updated.
-    for raw in targets or []:
-        p = os.path.expanduser(to_os_text(raw))
-        if not p:
-            continue
-        if not os.path.isabs(p):
-            p = os.path.join(cwd, p)
-        lexical, resolved = remote_path_paths(p)
-        for candidate in (lexical, resolved):
-            if contains_vcs(candidate):
-                raise ValueError("E_PROTECTED_PATH: refusing to write version-control metadata: %s" % to_unicode(p))
 
 def append_command_output(out, chunk, limit):
     # Keep the real beginning and end within the existing capture budget.
@@ -545,7 +519,6 @@ def op_run(payload):
     if not command.strip():
         raise ValueError("command is required")
     cwd = remote_path(payload.get("cwd") or os.path.expanduser("~"))
-    check_write_targets(cwd, payload.get("targets") or [])
     if not os.path.isdir(cwd):
         raise ValueError("cwd is not a directory on the remote host: %s" % to_unicode(cwd))
     timeout = int(payload.get("timeoutSeconds") or 120)
@@ -801,8 +774,6 @@ def do_upload(payload):
     lexical, resolved = remote_path_paths(rel)
     if resolved == os.path.dirname(resolved):
         raise ValueError("refusing transfer directly targeting the filesystem root")
-    if contains_vcs(resolved) or contains_vcs(lexical):
-        raise ValueError("E_PROTECTED_PATH: refusing to write VCS metadata: " + to_unicode(rel))
 
     overwrite = bool(payload.get("overwrite"))
     if not overwrite and os.path.lexists(resolved):
@@ -823,17 +794,21 @@ def do_upload(payload):
     dir_count = 0
     dir_metadata = []
 
+    arc_root = payload.get("arcRootName") or os.path.basename(lexical)
     for member in tar:
         # tarfile otherwise retains every header even in streaming mode (Python 2/3).
         tar.members[:] = []
         m_name = member.name.replace("\\", "/")
         if not m_name or m_name.startswith("/") or ".." in m_name.split("/"):
             raise ValueError("Tar-Slip violation: illegal entry: " + to_unicode(m_name))
-        target_path = os.path.normpath(os.path.join(dest_parent, m_name))
+        # Archive names use the requested basename, while the destination may
+        # resolve through a symlink to a differently named file or directory.
+        if m_name != arc_root and not m_name.startswith(arc_root + "/"):
+            raise ValueError("Tar-Slip violation: entry escapes transfer destination: " + to_unicode(m_name))
+        suffix = m_name[len(arc_root):].lstrip("/")
+        target_path = os.path.normpath(os.path.join(resolved, suffix)) if suffix else resolved
         if not is_subpath(target_path, resolved):
             raise ValueError("Tar-Slip violation: entry escapes transfer destination: " + to_unicode(m_name))
-        if contains_vcs(m_name):
-            raise ValueError("E_PROTECTED_PATH: refusing VCS metadata: " + to_unicode(m_name))
 
         # Reject parent symlinks, including ones created by earlier archive entries.
         parent = os.path.dirname(target_path)
@@ -900,8 +875,6 @@ def do_upload(payload):
             full_link = os.path.realpath(os.path.join(os.path.dirname(target_path), link_target))
             if link_target.startswith("/") or not is_subpath(full_link, resolved):
                 raise ValueError("Tar-Slip violation: symlink escapes transfer destination: " + to_unicode(m_name))
-            if contains_vcs(link_target) or contains_vcs(full_link):
-                raise ValueError("E_PROTECTED_PATH: refusing symlink to VCS metadata: " + to_unicode(m_name))
             if not os.path.exists(os.path.dirname(target_path)):
                 os.makedirs(os.path.dirname(target_path))
             if not overwrite:
@@ -942,8 +915,6 @@ def do_download(payload):
         raise ValueError("refusing transfer directly targeting the filesystem root")
     if not os.path.lexists(resolved):
         raise ValueError("remote path does not exist: " + to_unicode(rel))
-    if contains_vcs(resolved) or contains_vcs(lexical):
-        raise ValueError("E_PROTECTED_PATH: refusing to read VCS metadata: " + to_unicode(rel))
 
     arc_root_name = payload.get("arcRootName") or os.path.basename(resolved)
     raw_out = get_raw_stdout()
@@ -966,7 +937,6 @@ def do_download(payload):
 
     if os.path.isdir(resolved):
         for dirpath, dirnames, filenames in os.walk(resolved, onerror=walk_error):
-            dirnames[:] = [d for d in dirnames if not contains_vcs(d)]
             rel_dir = os.path.relpath(dirpath, resolved).replace("\\", "/")
             arc_dir = arc_root_name if rel_dir == "." else arc_root_name + "/" + rel_dir
             add_entry(dirpath, arc_dir)
@@ -977,8 +947,6 @@ def do_download(payload):
                     add_entry(dpath, arc_dir + "/" + dname)
                     dirnames.remove(dname)
             for fname in filenames:
-                if contains_vcs(fname):
-                    continue
                 fpath = os.path.join(dirpath, fname)
                 st = add_entry(fpath, arc_dir + "/" + fname)
                 if stat_mod.S_ISREG(st.st_mode):
@@ -995,7 +963,7 @@ def do_download(payload):
     ok({"totalBytes": total_bytes, "fileCount": file_count, "dirCount": dir_count})
 
 # op 名 → 实现：唯一的分发表，新增一个 op 只在这里加一行（实现本身仍是 op_* 函数）。
-# 两个测试专用 op（_check_*）形状与其余不同，留在下面的分支里。
+# 测试专用 _check_protected 留在下面的分支里。
 OPS = {
     "read": op_read,
     "read_batch": op_read_batch,
@@ -1021,9 +989,6 @@ try:
     handler = OPS.get(op)
     if handler is not None:
         ok(handler(payload))
-    elif op == "_check_write_targets":
-        check_write_targets(remote_path(payload.get("cwd") or os.path.expanduser("~")), payload.get("targets") or [])
-        ok({"checked": True})
     elif op == "_check_protected":
         # 测试专用内部 op：直接暴露删除保护判定，便于本地单测。
         protected, reason = is_protected_delete_path(to_os_text(payload["path"]))

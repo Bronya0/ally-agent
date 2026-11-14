@@ -207,7 +207,6 @@ func TestEditRecoveryRejectsUnsafeOrIncompleteSources(t *testing.T) {
 		{"binary", "sample.bin", []byte{0, 1, 2, 3, 4}, "E_BINARY_FILE", TextChange{}},
 		{"invalid UTF8", "sample.txt", []byte{0xff, 0xff, 0xff}, "E_NOT_UTF8", TextChange{}},
 		{"document extension", "sample.pdf", []byte("text pretending to be a PDF"), "E_VERSION_MISMATCH", TextChange{}},
-		{"VCS metadata", ".git/config", []byte("protected source"), "E_PROTECTED_PATH", TextChange{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := newApiTestApp(t)

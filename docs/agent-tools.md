@@ -67,7 +67,7 @@ name = normalizeToolName(name)                     // ② 小写 + 别名/弃用
 if toolcall.IsTruncatedArguments(string(args)) {   // ③ 流式截断参数一律不执行
     return toolErrorResult(codedToolError("E_TRUNCATED_ARGS", ...)) }
 switch name {
-case "list_files": ...  /* 26 个工具分支（含弃用别名 document_read / agent_delegate） */
+case "list_files": ...  /* 工具分支以实际注册清单为准 */
 case "skill": ...
 default:
     if strings.HasPrefix(name, "mcp__") { ... }    // ④ MCP 按前缀路由，不是白名单
@@ -113,25 +113,23 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 | 关注点 | 收口位置 |
 |---|---|
 | 工作区写串行 | `withFileOpsLock`（`app.go:2369`）；用 defer 解锁，因为 executeTool 会把 panic 转成错误，手写 Unlock 会在那条路径上永久卡死 |
-| 知识库只读 | `kbDenyCheckPaths` / `kbDenyCheckCommand`；run 开始时把策略挂到 ctx，子代理继承 |
 | 编辑后验证 | `attachValidation` + `validateChangedFilesForCall`（`orch_validation.go:170`）；批次里由 `planBatchValidation`（`orch_validation.go:189`）摊到「最后一次触碰该目录的变更」上，避免每个 edit 都跑一遍 `go vet` / `tsc` |
-| 命令安全围栏 | `checkCommandSafetyAtCwd`（`orch_fence.go:100`）：**唯一入口**，围栏自己问「谁管边界」（`kernelOwnsBoundary`），沙箱接不接都走这里；受保护位置是一张表（`protectedLocations`：每项带 `remove` / `scan` 两列，删除守卫只登记深度规则兜不住的目标，搜索守卫没有深度概念、逐个点名一级系统树；`removableProtectedTargets()` 同时喂远端 helper），`isDangerousDeletePath` / `isDangerousSearchRoot` 各取一列，与两形态路径复判（`vcsMetadataMutationHit`）同在 `orch_fence.go` |
+| 命令安全围栏 | `checkCommandSafetyAtCwd`（`orch_fence.go:100`）：**唯一入口**，围栏自己问「谁管边界」（`kernelOwnsBoundary`），沙箱接不接都走这里；受保护位置是一张表（`protectedLocations`：每项带 `remove` / `scan` 两列，删除守卫只登记深度规则兜不住的目标，搜索守卫没有深度概念、逐个点名一级系统树；`removableProtectedTargets()` 同时喂远端 helper），`isDangerousDeletePath` / `isDangerousSearchRoot` 各取一列，同在 `orch_fence.go` |
 | 密钥/凭据禁读（三平台） | `pathutil.SensitiveReadReason`（`internal/tools/pathutil`）：`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.kube`、`~/.docker/config.json`、`~/.netrc`、`~/.git-credentials`、`~/.npmrc`、`~/.pypirc`、`~/.config/{gcloud,gh,glab-cli}`、平台钥匙串、Ally 自己的 `config/api/mcp/ssh_clusters.json`。三条入口共用同一份判定：命令围栏（`firstSensitiveReadTarget` + `command.DisclosingPathOperands`，只算「可能把内容交回来」的操作数：`ssh -i KEY`、`chmod 600 KEY`、`ls ~/.ssh` 这类只是用密钥不算读，照常放行；`cat ~/.ssh/id_rsa` 仍拦）、`read`、`grep`；`memories/` 与 `USER.md` 照旧可读 |
 | 命令沙箱（OS 级；**当前未接入**） | `sandboxSpec` / `wrapSandboxedCommand` / `annotateSandboxDeniedWrite` / `kernelOwnsBoundary`（`orch_sandbox.go`）；写工具的落盘同样包在内核里（同在 `orch_sandbox.go`）；策略与 profile 在 `internal/sandbox`（纯算法，不依赖 App）。command 与 service 两条执行路径共用。接入开关是 `internal/sandbox` 的 `attached`（`ResolvedMode` / `ModeForced` / `Attached` 同源）：关着时三个平台都只走安全围栏，profile / 策略 / 诊断 / 探测原样保留；要接回来只需改这一个常量 + 把 `GetSandboxStatus` 那条设置页链路接回 |
-| 边界归属（越界写由谁拒） | `kernelOwnsBoundary`（`orch_sandbox.go`）：唯一的判据，问的是「沙箱此刻是否真在围」（`sandbox.ResolvedMode` + `sandbox.Available`），**不问平台**。内核接管时写 / 删 / cwd 三个解析器（`resolveBoundaryPath` + `resolveWritableFilePath` / `resolveDeletablePath` / `resolveCommandCwd`）只归一化、越界留给内核拒（报 `E_SANDBOX_WRITE_DENIED`）；内核不在时围栏全强度顶上（报 `E_PATH_OUTSIDE`）。`.git` 元数据、高危命令语义、delete 的工作区根 / dangerous / recursive 保护、软链接拒绝四类始终留在 Go 侧——内核看不见它们 |
-| 路径保护 | `pathutil`：`CanonicalPath` / `VCSMetadataReason`，本地写 / 删 / 命令与远端写（`remoteVCSMetadataWrite`）/ 命令（`remoteCommandVCSMetadataTarget`）共用同一份；远端只判得了字面路径那半，解析后（软链接到 `.git`）由 helper 用远端事实复判 |
+| 边界归属（越界写由谁拒） | `kernelOwnsBoundary`（`orch_sandbox.go`）：唯一的判据，问的是「沙箱此刻是否真在围」（`sandbox.ResolvedMode` + `sandbox.Available`），**不问平台**。内核接管时写 / 删 / cwd 三个解析器（`resolveBoundaryPath` + `resolveWritableFilePath` / `resolveDeletablePath` / `resolveCommandCwd`）只归一化、越界留给内核拒（报 `E_SANDBOX_WRITE_DENIED`）；内核不在时围栏全强度顶上（报 `E_PATH_OUTSIDE`）。高危命令语义、delete 的工作区根 / dangerous / recursive 保护始终留在 Go 侧——内核看不见它们 |
+| 路径保护 | `pathutil`：`CanonicalPath` 统一路径形态；本地、SSH 工具与传输不对 `.git/.svn/.hg` 做特殊限制或跳过 |
 | 删除多路径 | `resolveDeletePathList` / `planDeleteExecution` / `applyDeletePlanSlots`（`orch_file_ops.go`）：`paths` 先归一成一条候选列表，再按「去重 + 深的先删」排出执行计划（同一路径的两种写法只执行一次；父子同时列出时深的先删，两条都真删掉），结果按请求槽位摊回去；本地与远端共用这一份。单条路径的落盘判定仍各自留在自己的信任域（本地问本机文件系统，远端只能在 SSH 另一头问）。「本来就不存在」两端一致：不是失败、不拦同批其它路径，只报 `DeleteResult.Absent`（本地 `resolveDeleteTarget`，远端 `check_delete_path` 的 `missing` 标记） |
 
-命令围栏的四道检查都是「拒绝并解释」，不是「尝试纠正」：
+命令围栏的三道检查都是「拒绝并解释」，不是「尝试纠正」：
 
 1. 显式删除命令 → 拦截，要求改用 `delete` 工具（delete 工具自带工作区边界与递归范围检查）；
-2. 写入目标落在 `.git` / `.svn` / `.hg` 元数据内 → `E_PROTECTED_PATH`（`> .git/hooks/pre-commit` 会在下次 git 命令时执行代码）；
-3. 写入目标在工作区外**且已存在** → `E_PATH_OUTSIDE`（允许读、允许写 `/dev/null`、允许创建新路径；并解析符号链接，拦截「经工作区内软链逃逸到外面」的写法）；
-4. 高危模式（`MatchRiskPattern`）→ `E_COMMAND_BLOCKED`。
+2. 写入目标在工作区外**且已存在** → `E_PATH_OUTSIDE`（允许读、允许写 `/dev/null`、允许创建新路径；并解析符号链接，拦截「经工作区内软链逃逸到外面」的写法）；
+3. 高危模式（`MatchRiskPattern`）→ `E_COMMAND_BLOCKED`。
 
-远端命令保留第 1、2、4 道：`ContainsExplicitDeleteCommand` 拦裸删除，`remoteCommandVCSMetadataTarget` 与 helper 的 `check_write_targets` 检查 VCS 写目标，`validateRemoteCommandSafety` 检查高危语义。远端不再设置项目目录边界，也不再检查“目录外已有目标”。`alias` 原样使用 `ssh_cluster` 返回的唯一昵称，每次调用必传，只选服务器（旧会话的 `target` 在入口兼容），文件工具与传输使用绝对路径；命令每次在登录用户家目录启动独立 shell，通过 `cd /绝对目录 && 命令` 切目录。静态写目标分析复用 `LiteralWriteTargetsWithCD`，解析常见 cd 序列，真实软链接由远端 helper 复判。旧会话的 `host:/目录` 与 cwd 只保留路径解析兼容，主代理和子代理共用的新提示词说明此契约。
+远端命令保留第 1、3 道：`ContainsExplicitDeleteCommand` 拦裸删除，`validateRemoteCommandSafety` 检查高危语义；不对 VCS 元数据做特殊检查。远端不再设置项目目录边界，也不再检查“目录外已有目标”。`alias` 原样使用 `ssh_cluster` 返回的唯一昵称，每次调用必传，只选服务器，文件工具与传输使用绝对路径；命令每次在登录用户家目录启动独立 shell，通过 `cd /绝对目录 && 命令` 切目录。远端命令不再提取写目标来检查 VCS。不兼容旧 `target`、带目录端点和远端 `cwd`；读取统一使用 `files`。主代理和子代理共用的新提示词说明此契约。
 
-**操作系统级沙箱**（macOS Seatbelt / Linux bubblewrap）与上面四道不互斥：围栏拦的是「看得出意图的写入」，沙箱拦的是「命令自己拼出来、围栏看不出来的越界写」——命令被包在 shell 外面，怎么拼都绕不过去，脚本里的语言无关也一样（Python/Node 都是 shell 的子进程，内核级沙箱随 fork/exec 继承）。
+**操作系统级沙箱**（macOS Seatbelt / Linux bubblewrap）与上面三道不互斥：围栏拦的是「看得出意图的写入」，沙箱拦的是「命令自己拼出来、围栏看不出来的越界写」——命令被包在 shell 外面，怎么拼都绕不过去，脚本里的语言无关也一样（Python/Node 都是 shell 的子进程，内核级沙箱随 fork/exec 继承）。
 
 macOS 上沙箱**强制开启且没有开关**：档位是宿主的属性（`sandbox.ResolvedMode`），不是用户设置；设置 → 沙箱 页只显示本机状态与安全围栏机制。策略的其余部分也是写死的：写根 = 本次运行的 `roots` + 工具链缓存 + 临时目录，`sources/` 在写根内重新禁写，Ally 自己的数据目录（模型 key / SSH 凭据 / 会话历史）从命令视野里遮蔽，出网保持开放（包管理器与构建需要）。
 
@@ -203,7 +201,7 @@ type toolResult struct {                       // infra_result.go:19
 ## 八、可复用的设计原则
 
 1. **双视图**：给人看的（保真）与给模型看的（省 token、可读）分开生成，别共用一份 JSON。
-2. **规则下沉、编排只绑定**：跨路径共享的判定（工具名归一、id 归一、截断标记、路径保护）放进 `internal/tools/*` 纯函数包，`orch_*` 只负责接 App 状态（锁、工作区、KB 策略）。改一处即全局生效。
+2. **规则下沉、编排只绑定**：跨路径共享的判定（工具名归一、id 归一、截断标记、路径保护）放进 `internal/tools/*` 纯函数包，`orch_*` 只负责接 App 状态（锁、工作区、授权）。改一处即全局生效。
 3. **护栏式拒绝 + 可操作文案**：安全判定一律「拒绝 + 解释原因 + 告诉模型该改用哪个工具」。
 4. **把模型输出当不可信输入**：工具参数可能被截断、可能双重编码；命令与路径要过静态分析围栏。
 5. **冻结与共享只读**：schema 缓存、session 工具集都是「建一次、只读共享」，既省开销又保住请求前缀稳定。

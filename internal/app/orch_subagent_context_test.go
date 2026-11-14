@@ -63,13 +63,13 @@ func TestSubagentTracksRemoteFilesByTarget(t *testing.T) {
 	var reads, edits []string
 	seenReads, seenEdits := map[string]bool{}, map[string]bool{}
 	result := toolResult{OK: true, Data: BatchReadResult{Files: []BatchReadResultItem{{Path: "a.go"}, {Path: "missing.go", Error: "missing"}}}}
-	for _, host := range []string{"one:/work", "two:/work"} {
-		args := `{"target":"` + host + `","path":"a.go"}`
+	for _, host := range []string{"one", "two"} {
+		args := `{"alias":"` + host + `","path":"a.go"}`
 		trackFileFromToolResult("remote_read", args, &result, &reads, &edits, seenReads, seenEdits)
 		trackFileFromToolResult("remote_edit", args, &result, &reads, &edits, seenReads, seenEdits)
 		trackFileFromToolResult("remote_create_file", args, &result, &reads, &edits, seenReads, seenEdits)
 	}
-	want := []string{"one:/work :: a.go", "two:/work :: a.go"}
+	want := []string{"one :: a.go", "two :: a.go"}
 	if !reflect.DeepEqual(reads, want) || !reflect.DeepEqual(edits, want) {
 		t.Fatalf("reads=%v edits=%v", reads, edits)
 	}

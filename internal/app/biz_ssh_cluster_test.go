@@ -8,6 +8,7 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,7 +28,13 @@ func TestSSHClusterServerOrderSurvivesDeleteAndReload(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := a.SetWorkspaceAllowedServers(ws, aliases); err != nil {
+	if err := a.SetWorkspaceAllowedServers(ws, func() []string {
+		var ids []string
+		for _, name := range aliases {
+			ids = append(ids, apiSSHTestNode(t, a, name).ID)
+		}
+		return ids
+	}()); err != nil {
 		t.Fatal(err)
 	}
 	check := func(instance *App, want string) {
@@ -49,7 +56,7 @@ func TestSSHClusterServerOrderSurvivesDeleteAndReload(t *testing.T) {
 		}
 	}
 	check(a, "alpha,Beta,node-10,node-2,zeta")
-	if err := a.DeleteSSHServer("node-10"); err != nil {
+	if err := a.DeleteSSHServer(apiSSHTestNode(t, a, "node-10").ID); err != nil {
 		t.Fatal(err)
 	}
 	check(a, "alpha,Beta,node-2,zeta")
@@ -73,7 +80,7 @@ func TestSSHClusterPersistenceAndScoping(t *testing.T) {
 	app.configPath = filepath.Join(tempDir, "config.json")
 
 	// 1. Add servers
-	s1 := SSHServerNode{
+	s1 := SSHServerNode{AuthType: sshAuthTypeKey,
 		Alias:       "dev-api",
 		Host:        "192.168.1.101",
 		Port:        22,
@@ -82,7 +89,7 @@ func TestSSHClusterPersistenceAndScoping(t *testing.T) {
 		KeyPath:     "/keys/id_rsa",
 		Description: "Dev API server",
 	}
-	s2 := SSHServerNode{
+	s2 := SSHServerNode{AuthType: sshAuthTypePassword,
 		Alias:       "prod-db",
 		Host:        "10.0.0.50",
 		Port:        3306,
@@ -126,16 +133,16 @@ func TestSSHClusterPersistenceAndScoping(t *testing.T) {
 	if len(summaries) != 0 {
 		t.Fatalf("expected 0 servers authorized for ws1 by default, got %d", len(summaries))
 	}
-	if app2.IsServerAuthorizedForWorkspace(ws1, "dev-api") {
+	if app2.IsServerAuthorizedForWorkspace(ws1, apiSSHTestNode(t, app2, "dev-api").ID) {
 		t.Fatal("dev-api should not be authorized for ws1 before grant")
 	}
 
 	// 4. Authorize dev-api for ws1
-	app2.AuthorizeServerForWorkspace(ws1, "dev-api")
-	if !app2.IsServerAuthorizedForWorkspace(ws1, "dev-api") {
+	app2.AuthorizeServerForWorkspace(ws1, apiSSHTestNode(t, app2, "dev-api").ID)
+	if !app2.IsServerAuthorizedForWorkspace(ws1, apiSSHTestNode(t, app2, "dev-api").ID) {
 		t.Fatal("dev-api should be authorized for ws1 after grant")
 	}
-	if app2.IsServerAuthorizedForWorkspace(ws1, "prod-db") {
+	if app2.IsServerAuthorizedForWorkspace(ws1, apiSSHTestNode(t, app2, "prod-db").ID) {
 		t.Fatal("prod-db should remain unauthorized for ws1")
 	}
 
@@ -155,15 +162,15 @@ func TestSSHClusterPersistenceAndScoping(t *testing.T) {
 	if err := app3.loadSSHClusters(); err != nil {
 		t.Fatalf("loadSSHClusters app3 failed: %v", err)
 	}
-	if !app3.IsServerAuthorizedForWorkspace(ws1, "dev-api") {
+	if !app3.IsServerAuthorizedForWorkspace(ws1, apiSSHTestNode(t, app3, "dev-api").ID) {
 		t.Fatal("dev-api should remain authorized for ws1 after reload")
 	}
-	if app3.IsServerAuthorizedForWorkspace(ws1, "prod-db") {
+	if app3.IsServerAuthorizedForWorkspace(ws1, apiSSHTestNode(t, app3, "prod-db").ID) {
 		t.Fatal("prod-db should remain unauthorized for ws1 after reload")
 	}
 
 	// 6. Delete server
-	if err := app2.DeleteSSHServer("dev-api"); err != nil {
+	if err := app2.DeleteSSHServer(apiSSHTestNode(t, app2, "dev-api").ID); err != nil {
 		t.Fatalf("DeleteSSHServer failed: %v", err)
 	}
 	if _, ok := app2.GetSSHServer("dev-api"); ok {
@@ -184,11 +191,11 @@ func TestSSHClusterDeleteRevokesWorkspaceGrants(t *testing.T) {
 	}
 	workspaces := []string{filepath.Join(dir, "ws1"), filepath.Join(dir, "ws2")}
 	for _, ws := range workspaces {
-		if err := a.SetWorkspaceAllowedServers(ws, []string{"keep", "remove"}); err != nil {
+		if err := a.SetWorkspaceAllowedServers(ws, []string{apiSSHTestNode(t, a, "keep").ID, apiSSHTestNode(t, a, "remove").ID}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := a.DeleteSSHServer(" REMOVE "); err != nil {
+	if err := a.DeleteSSHServer(apiSSHTestNode(t, a, " REMOVE ").ID); err != nil {
 		t.Fatal(err)
 	}
 	// Recreating the same alias must not resurrect its previous grants.
@@ -207,7 +214,7 @@ func TestSSHClusterDeleteRevokesWorkspaceGrants(t *testing.T) {
 			if len(allowed) != 1 || allowed[0] != keep.ID {
 				t.Fatalf("allowed IDs = %v, want [%s]", allowed, keep.ID)
 			}
-			if instance.IsServerAuthorizedForWorkspace(ws, "remove") {
+			if instance.IsServerAuthorizedForWorkspace(ws, apiSSHTestNode(t, instance, "remove").ID) {
 				t.Fatal("replacement node inherited a deleted node's grant")
 			}
 			if got := instance.ListAuthorizedSSHServers(ws); len(got) != 1 || got[0].Alias != "keep" {
@@ -239,11 +246,15 @@ func TestSSHClusterIgnoresMissingWorkspaceGrants(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "set":
-				if err := a.SetWorkspaceAllowedServers(ws, []string{" KEEP ", "missing"}); err != nil {
+				keep := apiSSHTestNode(t, a, "keep")
+				if err := a.SetWorkspaceAllowedServers(ws, []string{keep.ID}); err != nil {
 					t.Fatal(err)
 				}
+				if err := a.SetWorkspaceAllowedServers(ws, []string{keep.ID, "missing"}); err == nil {
+					t.Fatal("unknown ID accepted")
+				}
 			case "authorize":
-				a.AuthorizeServerForWorkspace(ws, " KEEP ")
+				a.AuthorizeServerForWorkspace(ws, apiSSHTestNode(t, a, " KEEP ").ID)
 				a.AuthorizeServerForWorkspace(ws, "missing")
 			case "stale memory":
 				keep, _ := a.GetSSHServer("keep")
@@ -272,8 +283,7 @@ func TestNormalizeSSHAuthType(t *testing.T) {
 	}{
 		{"explicit key uses passphrase semantics", SSHServerNode{AuthType: sshAuthTypeKey, Password: "key-passphrase", KeyPath: "id_ed25519"}, sshAuthTypeKey},
 		{"explicit password stays password", SSHServerNode{AuthType: sshAuthTypePassword, Password: "account-password"}, sshAuthTypePassword},
-		{"legacy key inferred", SSHServerNode{Password: "key-passphrase", KeyPath: "id_ed25519"}, sshAuthTypeKey},
-		{"legacy password inferred", SSHServerNode{Password: "account-password"}, sshAuthTypePassword},
+
 		{"empty credentials use agent", SSHServerNode{}, sshAuthTypeAgent},
 	}
 	for _, tc := range cases {
@@ -289,12 +299,36 @@ func TestNormalizeSSHAuthType(t *testing.T) {
 	t.Setenv("USERPROFILE", tempDir)
 	app := NewApp()
 	app.configPath = filepath.Join(tempDir, "config.json")
-	if err := app.SaveSSHServer(SSHServerNode{Alias: "legacy", Host: "127.0.0.1", Username: "user", Password: "pw", Description: "test"}); err != nil {
-		t.Fatalf("SaveSSHServer: %v", err)
+	legacy := []byte(`{"version":2,"servers":[{"id":"ssh_old_password","alias":"legacy","host":"127.0.0.1","username":"user","password":"pw","description":"test"},{"id":"ssh_old_key","alias":"key","host":"127.0.0.1","username":"user","keyPath":"id_test","password":"passphrase","description":"test"}]}`)
+	if err := os.WriteFile(app.sshClustersFilePath(), legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.loadSSHClusters(); err != nil {
+		t.Fatal(err)
 	}
 	stored, ok := app.GetSSHServer("legacy")
-	if !ok || stored.AuthType != sshAuthTypePassword {
-		t.Fatalf("saved node authType = %q, ok=%v; want password mode", stored.AuthType, ok)
+	key, _ := app.GetSSHServer("key")
+	if !ok || stored.AuthType != sshAuthTypePassword || stored.Password != "pw" || key.AuthType != sshAuthTypeKey || key.Password != "passphrase" {
+		t.Fatal("legacy credentials changed during migration")
+	}
+	disk, err := os.ReadFile(app.sshClustersFilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rewritten sshClusterStore
+	if err := json.Unmarshal(disk, &rewritten); err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range rewritten.Servers {
+		if node.AuthType == "" {
+			t.Fatal("authentication mode was not persisted")
+		}
+	}
+	if err := app.SaveSSHServer(SSHServerNode{Alias: "new", Host: "127.0.0.1", Username: "user", Description: "test", Password: "pw"}); err == nil {
+		t.Fatal("new credentials must declare authType")
+	}
+	if len(app.ListAllSSHServers()) != 2 {
+		t.Fatal("invalid credentials changed stored nodes")
 	}
 
 	agentNode := normalizeSSHServerNode(SSHServerNode{AuthType: sshAuthTypeAgent, Password: "stale-secret", KeyPath: "stale-key"})
@@ -373,7 +407,7 @@ func TestTestSSHServerValidationAndLookup(t *testing.T) {
 	}
 
 	// 2. Unknown alias
-	res = app.TestSSHServer(SSHServerNode{Alias: "unknown-alias"})
+	res = app.TestSSHServer(SSHServerNode{ID: "unknown-id"})
 	if res.OK || !strings.Contains(res.Error, "not found") {
 		t.Fatalf("expected 'not found' error, got %q", res.Error)
 	}
@@ -391,7 +425,7 @@ func TestTestSSHServerValidationAndLookup(t *testing.T) {
 		t.Fatalf("SaveSSHServer: %v", err)
 	}
 
-	res = app.TestSSHServer(SSHServerNode{Alias: "local-closed"})
+	res = app.TestSSHServer(SSHServerNode{ID: apiSSHTestNode(t, app, "local-closed").ID})
 	if res.OK {
 		t.Fatalf("expected connection failure for closed port, got ok=true")
 	}

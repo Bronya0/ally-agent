@@ -11,13 +11,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
 
-// protectedWorkspace builds a workspace that already contains VCS metadata, so a
-// rejection proves the guard fired rather than a missing-file error.
+// protectedWorkspace builds a workspace with repository metadata.
 func protectedWorkspace(t *testing.T) (string, ConfigState) {
 	t.Helper()
 	dir := t.TempDir()
@@ -42,66 +40,6 @@ func encodedToolArgs(t *testing.T, v any) []byte {
 	return encoded
 }
 
-// TestToolWritesRefuseVCSMetadata: the system prompt promises to never delete or
-// overwrite any path containing .git, but only the delete path checked it. A
-// create into .git/hooks runs on the next git command, and an edit of
-// .git/config can redirect hooks or the pager.
-func TestToolWritesRefuseVCSMetadata(t *testing.T) {
-	t.Parallel()
-	dir, cfg := protectedWorkspace(t)
-	app := newIsolatedTestApp(t)
-	ctx := t.Context()
-
-	res := app.executeTool(ctx, cfg, "s-1", "create", encodedToolArgs(t, CreateFileRequest{
-		Path:      ".git/hooks/post-commit",
-		Content:   "#!/bin/sh\necho pwned\n",
-		Overwrite: true,
-	}))
-	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
-		t.Fatalf("create into .git must be refused, got ok=%v err=%v", res.OK, res.Error)
-	}
-
-	res = app.executeTool(ctx, cfg, "s-1", "edit", encodedToolArgs(t, FileTextEdits{
-		Path:    ".git/config",
-		Version: hashVersion([]byte("[core]\n")),
-		Changes: []TextChange{{OldText: "[core]", NewText: "[core]\n\thooksPath = /tmp/evil"}},
-	}))
-	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
-		t.Fatalf("edit inside .git must be refused, got ok=%v err=%v", res.OK, res.Error)
-	}
-
-	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{".git"}, Recursive: true}))
-	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
-		t.Fatalf("delete of .git must be refused, got ok=%v err=%v", res.OK, res.Error)
-	}
-
-	// A shell redirect is the same escape through another door: the target is
-	// inside the workspace, so the outside-write check does not cover it.
-	res = app.executeTool(ctx, cfg, "s-1", "command", encodedToolArgs(t, CommandRequest{Command: "echo pwned > .git/hooks/post-commit"}))
-	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
-		t.Fatalf("a redirect into .git must be refused, got ok=%v err=%v", res.OK, res.Error)
-	}
-
-	if _, err := os.Stat(filepath.Join(dir, ".git", "hooks", "post-commit")); err == nil {
-		t.Fatal("a hook file was written into .git")
-	}
-	if got, err := os.ReadFile(filepath.Join(dir, ".git", "config")); err != nil || string(got) != "[core]\n" {
-		t.Fatalf(".git/config was modified: %q (err=%v)", got, err)
-	}
-
-	if runtime.GOOS == "windows" {
-		// Win32 drops trailing dots while filepath.Clean keeps them, so ".git."
-		// named the real directory and slipped past the literal name comparison.
-		res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{".git."}, Recursive: true}))
-		if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
-			t.Fatalf("the trailing-dot alias of .git must be refused, got ok=%v err=%v", res.OK, res.Error)
-		}
-		if _, err := os.Stat(filepath.Join(dir, ".git", "config")); err != nil {
-			t.Fatalf(".git must survive the aliased delete: %v", err)
-		}
-	}
-}
-
 // TestWorkspaceWritesNearVCSMetadataStayAllowed: the guard must not swallow
 // ordinary dot-directories that merely start with ".git".
 func TestWorkspaceWritesNearVCSMetadataStayAllowed(t *testing.T) {
@@ -118,47 +56,6 @@ func TestWorkspaceWritesNearVCSMetadataStayAllowed(t *testing.T) {
 	}
 	if _, err := os.ReadFile(filepath.Join(dir, ".github", "workflows", "build.yml")); err != nil {
 		t.Fatalf("the file was not written: %v", err)
-	}
-}
-
-// TestSymlinkedVCSMetadataAliasIsRefused: the VCS judgement was lexical, so a
-// workspace symlink pointing at .git carried the write straight into it —
-// `ln -s .git gh` then `create gh/hooks/post-commit` runs on the next git
-// command. The write, delete, and command paths must all judge the resolved
-// path as well as the literal one.
-func TestSymlinkedVCSMetadataAliasIsRefused(t *testing.T) {
-	t.Parallel()
-	dir, cfg := protectedWorkspace(t)
-	if err := os.Symlink(".git", filepath.Join(dir, "gh")); err != nil {
-		t.Skipf("symlinks are unavailable on this host: %v", err)
-	}
-	app := newIsolatedTestApp(t)
-	ctx := t.Context()
-
-	res := app.executeTool(ctx, cfg, "s-1", "create", encodedToolArgs(t, CreateFileRequest{
-		Path:      "gh/hooks/post-commit",
-		Content:   "#!/bin/sh\necho pwned\n",
-		Overwrite: true,
-	}))
-	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
-		t.Fatalf("create through a symlink alias of .git must be refused, got ok=%v err=%v", res.OK, res.Error)
-	}
-
-	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{"gh/hooks"}, Recursive: true}))
-	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
-		t.Fatalf("delete through a symlink alias of .git must be refused, got ok=%v err=%v", res.OK, res.Error)
-	}
-
-	res = app.executeTool(ctx, cfg, "s-1", "command", encodedToolArgs(t, CommandRequest{Command: "echo pwned > gh/hooks/post-commit"}))
-	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
-		t.Fatalf("a redirect through a symlink alias of .git must be refused, got ok=%v err=%v", res.OK, res.Error)
-	}
-
-	if _, err := os.Stat(filepath.Join(dir, ".git", "hooks", "post-commit")); err == nil {
-		t.Fatal("a hook file was written into .git through the symlink")
-	}
-	if info, err := os.Stat(filepath.Join(dir, ".git", "hooks")); err != nil || !info.IsDir() {
-		t.Fatalf(".git/hooks must survive the aliased delete: %v", err)
 	}
 }
 
@@ -531,5 +428,100 @@ func TestCommandFenceRefusesTheDataDirectorySecrets(t *testing.T) {
 	// 文件级判据的已知边界：通配符指到目录本身，没点到清单上的名字。
 	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat ~/.ally_agent/*", Cwd: workspace}, roots, workspace); err != nil {
 		t.Fatalf("a wildcard names no listed file, so the file-level rule lets it through: %v", err)
+	}
+}
+
+func TestLocalToolsRepositoryMetadataLifecycle(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{".git", ".svn", ".hg"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := ConfigState{Workspace: dir}
+			a := newIsolatedTestApp(t)
+			check := func(tool string, args any) {
+				t.Helper()
+				res := a.executeTool(t.Context(), cfg, "metadata", tool, encodedToolArgs(t, args))
+				if !res.OK {
+					t.Fatalf("%s: %s", tool, res.Error)
+				}
+			}
+			file := name + "/config"
+			check("create", CreateFileRequest{Path: file, Content: "original\n"})
+			check("edit", FileTextEdits{Path: file, Version: hashVersion([]byte("original\n")), Changes: []TextChange{{OldText: "original", NewText: "edited"}}})
+			if data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(file))); err != nil || string(data) != "edited\n" {
+				t.Fatalf("edit=%q, %v", data, err)
+			}
+			if err := checkCommandSafetyAtCwd(CommandRequest{Command: "echo updated > " + file}, []string{dir}, dir); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := a.renamePathWithConfig(cfg, RenamePathRequest{Path: name, NewName: "metadata"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := a.renamePathWithConfig(cfg, RenamePathRequest{Path: "metadata", NewName: name}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := a.deletePathsWithConfig(cfg, []string{name}, true); err == nil {
+				t.Fatal("expected version control directory deletion to be blocked")
+			}
+			if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+				t.Fatalf("directory must remain: %v", err)
+			}
+		})
+	}
+}
+
+func TestWorkspaceFileSymlinkEditsItsTarget(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	target := filepath.Join(root, "target.txt")
+	link := filepath.Join(root, "alias.txt")
+	if err := os.WriteFile(target, []byte("old\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target.txt", link); err != nil {
+		t.Skip(err)
+	}
+	a := newIsolatedTestApp(t)
+	cfg := ConfigState{Workspace: root}
+	result := a.executeTool(t.Context(), cfg, "links", "edit", encodedToolArgs(t, FileTextEdits{Path: "alias.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{OldText: "old", NewText: "edited"}}}))
+	if !result.OK {
+		t.Fatal(result.Error)
+	}
+	result = a.executeTool(t.Context(), cfg, "links", "create", encodedToolArgs(t, CreateFileRequest{Path: "alias.txt", Overwrite: true, Content: "replaced\n"}))
+	if !result.OK {
+		t.Fatal(result.Error)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "replaced\n" {
+		t.Fatalf("target=%q %v", data, err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link replaced: %v %v", info, err)
+	}
+}
+
+func TestCreateThroughSymlinkKeepsCredentialsPrivate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	key := filepath.Join(home, ".ssh", "id_test")
+	if err := os.MkdirAll(filepath.Dir(key), 0700); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "credential-must-not-appear-in-diff"
+	if err := os.WriteFile(key, []byte(secret), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(key, filepath.Join(home, "alias")); err != nil {
+		t.Skip(err)
+	}
+	a := newIsolatedTestApp(t)
+	for _, path := range []string{"alias", ".ssh/id_test"} {
+		result := a.executeTool(t.Context(), ConfigState{Workspace: home}, "credentials", "create", encodedToolArgs(t, CreateFileRequest{Path: path, Overwrite: true, Content: "replacement"}))
+		if result.OK || result.ErrorCode != "E_PROTECTED_PATH" || strings.Contains(result.Error, secret) {
+			t.Fatalf("credential overwrite returned %+v", result)
+		}
+	}
+	if data, err := os.ReadFile(key); err != nil || string(data) != secret {
+		t.Fatalf("credential changed: %v", err)
 	}
 }

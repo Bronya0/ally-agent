@@ -217,33 +217,6 @@ func ComboboxField(c *ui.Context, value *string, options []string, label, placeh
 	return root
 }
 
-// TabRadius is the radius of one tab in a strip. The underline follows it, which
-// is why the line draws in at both ends instead of running edge to edge.
-const TabRadius float32 = 6
-
-// TabInk is the label colour of one tab: the text colour when chosen, a shade
-// darker than it otherwise. Weight, not colour, marks the chosen tab, so the
-// accent appears once in the strip rather than twice. secondary 传调用方的次要
-// 文字色（Theme.TextMuted 是占位淡色）。
-func TabInk(t *ui.Theme, active bool, secondary ...ui.Color) ui.Color {
-	if active {
-		return t.Text
-	}
-	return SecondaryInkOf(t, secondary...).Mix(t.Text, 0.22)
-}
-
-// TabUnderline is the legacy workspace-header treatment. Page navigation uses
-// TabsWithOptions in tabs.go; its straight underline never inherits this radius.
-func TabUnderline(e ui.Element, active bool, radius float32, t *ui.Theme) ui.Element {
-	e.Radius(radius).BorderWidth(0, 0, 2, 0)
-	if active {
-		e.BorderColor(t.Accent)
-	} else {
-		e.BorderColor(ui.Transparent)
-	}
-	return e
-}
-
 // OptionGroup is the compact neutral track shared by groups of choices.
 func OptionGroup(c *ui.Context) ui.Element {
 	return ui.Row(c).AlignSelf(ui.Start).MaxWidthPercent(100).Wrap().Padding(3).Gap(3).

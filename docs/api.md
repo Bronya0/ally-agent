@@ -274,7 +274,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 | `apiKey` | string | 否 | 密钥；多 key 用 `apiKeys` 数组（首个优先） |
 | `apiKeys` | string[] | 否 | 密钥池 |
 | `maxTokens` / `contextWindow` | int | 否 | 输出上限 / 上下文窗口 |
-| `reasoningTag` / `reasoningEffort` / `tokenParam` | string | 否 | 推理内容标签 / 思考强度（`auto`/`off`/`low`/`medium`/`high`/`xhigh`/`max`；`off` 表示关闭思考，`auto` 交给供应商决定）/ token 参数风格 |
+| `reasoningTag` / `reasoningEffort` / `tokenParam` | string | 否 | 推理内容标签 / 思考强度（`auto`/`off`/`low`/`medium`/`high`/`xhigh`/`max`；`off` 表示关闭思考，`auto` 交给供应商决定）/ token 参数风格（`auto`/`max_tokens`/`max_completion_tokens`） |
 | `customHeaders` | object | 否 | 自定义请求头（`{"X-Api-Version": "2023-06-01"}`），随该模型每个 API 请求发送；可覆盖 Authorization/User-Agent，Host/Content-Length 等传输层头部会被丢弃，最多 32 条 |
 
 更新按字段合并：未提供的字段（含密钥与自定义请求头）保留。显式空字符串或空集合可清空；提供 `apiKey` 会替换原密钥池，提供 `apiKeys` 会替换单密钥。保留显式 `max_tokens` / `max_completion_tokens` / `auto` 选择，不因编辑自动改写。配置字段名按文档大小写书写（如 `apiKey`，不能写成 `APIKey`）；错误大小写返回 400，避免密钥合并歧义；`GET` 返回的只读字段（`index`、`hasApiKey`、`apiKeyCount`、`customHeaderNames`）可以原样回传、写回时忽略，其余未知字段返回 400。重复的供应商、模型 ID、OAuth 账号身份返回 409。响应 `data`：`{ "index": 2 }`。
@@ -367,7 +367,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 ### `POST /api/v1/services/{id}/stop` — 停止后台服务
 
-请求体可省略。立即强制停止该服务所属的整个进程树，并等待退出确认；失败返回错误，不会假报已停止。旧参数 `graceSeconds` 仅为兼容保留，已忽略。不存在返回 404。
+请求体可省略。立即强制停止该服务所属的整个进程树，并等待退出确认；失败返回错误，不会假报已停止。请求体不接受参数，旧 `graceSeconds` 已移除。不存在返回 404。
 
 ### `POST /api/v1/tasks` — 创建计划任务
 
@@ -446,7 +446,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 ### `POST /api/v1/ssh/servers` — 新建或更新节点
 
 直接传节点字段：`id?`、`alias`、`host`、`port?`、`username`、`description`、`authType`、`password?`、`keyPath?`、`group?`、`riskLevel?`。
-有 ID 时按稳定 ID 编辑；没有 ID 时兼容按别名 upsert。新建需提供别名、地址、用户名和用途。
+有 ID 时按稳定 ID 编辑；没有 ID 时创建新节点，同名节点不能隐式覆盖。新建需提供别名、地址、用户名和用途。
 认证模式为 `agent` / `key` / `password`，端口 0 或省略表示默认 22。配置字段名需使用规范大小写，如 `authType`；错误大小写返回 400。
 编辑时未提供的凭据保留，空字符串显式清空；切换认证模式会清理旧模式凭据，私钥口令不会转作登录密码。
 响应为脱敏节点；ID 不存在返回 404，并发编辑冲突返回 409，未知字段返回 400。
@@ -463,7 +463,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 ### `PUT /api/v1/ssh/authorizations?workspace=...` — 替换工作区授权
 
-请求 `{ "allowed":["节点ID或别名"] }`，保存和返回统一为稳定 ID。
+请求 `{ "allowed":["节点ID"] }`，授权管理只接受稳定 ID。
 显式 `[]` 撤销全部；缺字段、`null`、未知节点或无效工作区返回 400，不会清空旧授权。
 改别名不影响授权，删除节点清理其授权；复用桌面和远端工具使用的同一存储。
 

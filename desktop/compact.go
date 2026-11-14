@@ -230,6 +230,7 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 		// Detach it before reading the outcome so the original evidence is unchanged.
 		source := maps.Clone(m)
 		detachToolResultEnvelope(source)
+		normalizeToolMessage(source)
 		state := toolState(source)
 		outcome := toolOutcomeSummary(toolResult(source))
 		outcome["_text"] = summary

@@ -29,6 +29,7 @@ func retainMCPDisplaySummary(m map[string]any) bool {
 		return false
 	}
 	detachToolResultEnvelope(m)
+	normalizeToolMessage(m)
 	result := toolResult(m)
 	summary := readCardMetadata(result, false)
 	switch elapsed := result["elapsedMs"].(type) {
@@ -57,6 +58,7 @@ func retainSnapshotToolSummary(m map[string]any) bool {
 		return false // an explicit, bounded compaction excerpt is already a summary
 	}
 	detachToolResultEnvelope(m)
+	normalizeToolMessage(m)
 	if name == "command" || name == "remote_run_command" {
 		retainCommandSummary(m)
 		if name == "remote_run_command" {
@@ -155,6 +157,7 @@ func retainReadDisplaySummary(m map[string]any) {
 		return // an argument/status update must not invent an empty result
 	}
 	detachToolResultEnvelope(m)
+	normalizeToolMessage(m)
 	m["result"] = readCardSummary(readGrepGroupName(m), toolResult(m), false)
 	delete(m, "body")
 	delete(m, "content")
@@ -206,4 +209,34 @@ func readCardMetadata(result map[string]any, forDisk bool) map[string]any {
 		kept["error"] = text
 	}
 	return kept
+}
+
+// normalizeLoadedCancellation upgrades legacy display rows once when opening a session.
+func normalizeLoadedCancellation(m map[string]any) {
+	if str(m, "role") == "user" || str(m, "role") == "system" {
+		return
+	}
+	normalize := func(row map[string]any) {
+		if userCancelledMessage(row) {
+			row["status"] = "cancelled"
+			return
+		}
+		if str(row, "status") != "" {
+			return
+		}
+		for _, key := range []string{"content", "error"} {
+			text := strings.TrimSpace(str(row, key))
+			if text == "已取消" || text == "用户已取消" || text == "用户取消" ||
+				strings.EqualFold(text, "cancelled by user") || strings.EqualFold(text, "canceled by user") {
+				row["status"] = "cancelled"
+				return
+			}
+		}
+	}
+	if m["error"] != nil || str(m, "role") == "tool_call" {
+		normalize(m)
+	}
+	if result := toolResult(m); result != nil {
+		normalize(result)
+	}
 }

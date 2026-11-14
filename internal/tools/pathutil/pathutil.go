@@ -164,12 +164,6 @@ func SamePath(a, b string) bool {
 	return a == b
 }
 
-// vcsMetadataDirNames are the version-control metadata directories that no tool
-// may create, overwrite, or delete: writing .git/hooks executes code on the
-// next git command, and overwriting .git/index or a ref corrupts the
-// repository.
-var vcsMetadataDirNames = []string{".git", ".svn", ".hg"}
-
 // IsSystemRootPath reports whether path denotes a filesystem root: "/" on
 // macOS and Linux, a drive root (C:\) or a UNC share root (\\server\share) on
 // Windows. A root used as the workspace makes every boundary check trivially
@@ -253,23 +247,6 @@ func trimWindowsAlias(name string) string {
 		return name
 	}
 	return trimmed
-}
-
-// VCSMetadataReason reports whether p is, or lies inside, version-control
-// metadata. It is the single judgement shared by the write-path guards
-// (create/edit/editor save/saveTo/move), the delete guard, and the command
-// target guard, so a new entry point cannot silently omit it and the delete and
-// write sides can not drift apart.
-func VCSMetadataReason(p string) (bool, string) {
-	canonical := CanonicalPath(p)
-	for _, part := range strings.Split(filepath.ToSlash(canonical), "/") {
-		for _, name := range vcsMetadataDirNames {
-			if strings.EqualFold(part, name) {
-				return true, fmt.Sprintf("path %q is inside version control metadata (%s); refusing to create, modify, or delete it", filepath.ToSlash(p), name)
-			}
-		}
-	}
-	return false, ""
 }
 
 // sensitivePath is one credential store: a file or a directory where private

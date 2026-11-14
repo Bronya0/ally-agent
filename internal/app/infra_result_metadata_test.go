@@ -36,3 +36,12 @@ func TestServiceResultsOnlyReportNonzeroExitCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestUnknownServiceResultPreservesOriginalFields(t *testing.T) {
+	data := map[string]any{"services": []any{map[string]any{"id": "running-service"}}, "custom": "keep this"}
+	got := compactToolDataForModel("service", toolResult{OK: true, Data: data}, "")
+	_, body, _ := strings.Cut(got, "\n\n")
+	if body != `{"custom":"keep this","services":[{"id":"running-service"}]}` {
+		t.Fatalf("service result was guessed into another shape: %q", got)
+	}
+}

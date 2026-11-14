@@ -61,7 +61,7 @@ func (a *desktop) petSettings(c *ui.Context) {
 				}
 			})
 		})
-		score := a.prefs.Pet.Affection[normalizedAvatarStyle(a.prefs.Avatar)].Points
+		score := a.prefs.Pet.Affection[a.prefs.Avatar].Points
 		stars := max(0, min(10, score/1000))
 		a.settingsRow(c, "pet-affection-row", locales.Text("好感度"), fmt.Sprintf(locales.Text("%.3f / 10 星 · 每天陪伴 +0.020，前三次摸头各 +0.005，前三个完成任务各 +0.010。"), float64(score)/1000), settingsControlWidth, func() ui.Element {
 			// Keep the same glyph in both tones so filled and empty stars align.
@@ -264,7 +264,7 @@ func (a *desktop) invalidateAvatar() {
 }
 
 func (a *desktop) rewardPet(activity string, now time.Time) {
-	if a.prefs.Pet.reward(normalizedAvatarStyle(a.prefs.Avatar), activity, now) {
+	if a.prefs.Pet.reward(a.prefs.Avatar, activity, now) {
 		a.savePrefs()
 	}
 }

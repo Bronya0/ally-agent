@@ -29,22 +29,19 @@ func remoteFixturePaths(directory string, names []string) []string {
 }
 
 func TestParseRemoteServerTargets(t *testing.T) {
-	for _, tc := range []struct{ input, host, port, legacy string }{
-		{"dev", "dev", "", ""},
-		{"deploy@example.com", "deploy@example.com", "", ""},
-		{"deploy@example.com:2222", "deploy@example.com", "2222", ""},
-		{"ssh://deploy@example.com:2222", "deploy@example.com", "2222", ""},
-		{"ssh://deploy@[2001:db8::1]:2222", "deploy@2001:db8::1", "2222", ""},
-		{"dev:/srv/app", "dev", "", "/srv/app"},
-		{"dev:/", "dev", "", "/"},
-		{"ssh://deploy@example.com:2222/srv/app", "deploy@example.com", "2222", "/srv/app"},
+	for _, tc := range []struct{ input, host, port string }{
+		{"dev", "dev", ""},
+		{"deploy@example.com", "deploy@example.com", ""},
+		{"deploy@example.com:2222", "deploy@example.com", "2222"},
+		{"ssh://deploy@example.com:2222", "deploy@example.com", "2222"},
+		{"ssh://deploy@[2001:db8::1]:2222", "deploy@2001:db8::1", "2222"},
 	} {
 		rt, err := parseRemoteTarget(tc.input)
-		if err != nil || rt.Host != tc.host || rt.Port != tc.port || rt.LegacyRoot != tc.legacy {
+		if err != nil || rt.Host != tc.host || rt.Port != tc.port {
 			t.Fatalf("target %q: %+v %v", tc.input, rt, err)
 		}
 	}
-	for _, input := range []string{"", "dev/relative", "ssh://", "ssh://host:0", "host:65536", "host:", "ssh://host:abc", "http://host", "ssh://user:secret@host", "ssh://host?query", "ssh://host#fragment"} {
+	for _, input := range []string{"dev:/srv/app", "dev:/", "ssh://host/srv/app", "", "dev/relative", "ssh://", "ssh://host:0", "host:65536", "host:", "ssh://host:abc", "http://host", "ssh://user:secret@host", "ssh://host?query", "ssh://host#fragment"} {
 		if rt, err := parseRemoteTarget(input); err == nil {
 			t.Fatalf("invalid target %q accepted: %+v", input, rt)
 		}
@@ -54,8 +51,7 @@ func TestParseRemoteServerTargets(t *testing.T) {
 func TestRemoteMutationIdentityIncludesServerAndAbsolutePath(t *testing.T) {
 	want := remoteMutationKey("dev", "/srv/app/main.go")
 	for _, input := range []struct{ target, path string }{
-		{"dev:/srv/app", "main.go"},
-		{"DEV:/srv/app", "/srv/app/main.go"},
+		{"DEV", "/srv/app/main.go"},
 		{"ssh://dev:22", "/srv/app/./main.go"},
 	} {
 		if got := remoteMutationKey(input.target, input.path); got != want {
@@ -151,9 +147,5 @@ func TestRemoteServerOnlyFileValidationPrecedesConnection(t *testing.T) {
 	_, err := a.remoteWriteRaw(context.Background(), remoteTarget{Host: "example.invalid"}, "relative.txt", []byte("data"), true, false)
 	if err == nil || !strings.Contains(err.Error(), "absolute") {
 		t.Fatalf("relative path reached transport: %v", err)
-	}
-	_, err = a.remoteWriteRaw(context.Background(), remoteTarget{Host: "example.invalid"}, "/srv/app/.git/config", []byte("data"), true, false)
-	if toolErrorCode(err) != "E_PROTECTED_PATH" {
-		t.Fatalf("VCS path reached transport: %v", err)
 	}
 }

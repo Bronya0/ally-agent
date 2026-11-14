@@ -72,10 +72,8 @@ func TestSystemPromptToolReferencesExist(t *testing.T) {
 	redirectAppStateDir(t)
 	app := NewApp()
 	registry := builtinToolNames(t)
-	kbRoot := t.TempDir()
 	prompts := map[string]string{
-		"main":      joinSystemPromptParts(app.buildSystemPromptParts(nil, "", nil, "", "", "", nil)),
-		"main-kb":   joinSystemPromptParts(app.buildSystemPromptParts(nil, kbRoot, nil, "", "", kbRoot, nil)),
+		"main":      joinSystemPromptParts(app.buildSystemPromptParts(nil, "", nil, "", "", nil)),
 		"sub-agent": subagentSystemPrompt(""),
 	}
 	unknown := map[string]bool{}

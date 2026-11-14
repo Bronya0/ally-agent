@@ -132,9 +132,7 @@ func TestBuildRemoteScriptInjectsProtectionAndPayload(t *testing.T) {
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	script, err := buildRemoteScript(map[string]any{
-		"op":      "_check_write_targets",
-		"cwd":     remoteFixturePath(root, "."),
-		"targets": []string{},
+		"op": "stat", "path": remoteFixturePath(root, "."),
 	})
 	if err != nil {
 		t.Fatalf("buildRemoteScript: %v", err)
@@ -189,29 +187,19 @@ func runRemoteHelperScript(t *testing.T, py, script string, homes ...string) (re
 	return resp, nil
 }
 
-// Absolute paths are independent of the legacy target directory. Relative
-// paths are accepted only as compatibility for old session snapshots.
 func TestValidateRemotePath(t *testing.T) {
 	for _, tc := range []struct {
-		path, legacy, want string
-		allowRoot          bool
-	}{
-		{"/srv/app/main.go", "", "/srv/app/main.go", false},
-		{"/etc/nginx/nginx.conf", "/srv/app", "/etc/nginx/nginx.conf", false},
-		{"/srv/app/../other/file", "", "/srv/other/file", false},
-		{"src/main.go", "/srv/app", "/srv/app/src/main.go", false},
-		{"../other/file", "/srv/app", "/srv/other/file", false},
-		{".", "/srv/app", "/srv/app", false},
-		{"/", "", "/", true},
-	} {
-		got, err := validateRemotePath(tc.path, tc.legacy, tc.allowRoot)
+		p, want string
+		root    bool
+	}{{"/srv/app/main.go", "/srv/app/main.go", false}, {"/etc/nginx/nginx.conf", "/etc/nginx/nginx.conf", false}, {"/srv/app/../other/file", "/srv/other/file", false}, {"/", "/", true}} {
+		got, err := validateRemotePath(tc.p, tc.root)
 		if err != nil || got != tc.want {
-			t.Fatalf("path=%q legacy=%q: got %q %v, want %q", tc.path, tc.legacy, got, err, tc.want)
+			t.Fatalf("%s: %s, %v", tc.p, got, err)
 		}
 	}
-	for _, p := range []string{"", ".", "relative/file", "/", "/tmp/bad" + string(rune(0))} {
-		if got, err := validateRemotePath(p, "", false); err == nil {
-			t.Fatalf("invalid path %q accepted as %q", p, got)
+	for _, p := range []string{"", ".", "relative/file", "../other/file", "/", "/tmp/bad\x00"} {
+		if got, err := validateRemotePath(p, false); err == nil {
+			t.Fatalf("accepted %q as %q", p, got)
 		}
 	}
 }
@@ -298,38 +286,6 @@ func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
 				t.Fatalf("path %s: expected one of %q, got reason %q", tc.path, tc.reasons, data.Reason)
 			}
 		})
-	}
-}
-
-// TestRemoteHelperDeleteRefusalNamesRuleAndPath 锁定模型看到的删除拒绝文案形状：
-// 一句拒绝要说清是哪条规则、调用方请求的是哪个路径、它解析到了哪里，并带上与本地
-// 同一枚 E_DELETE_BLOCKED 码，不能退回一句笼统的「系统敏感路径」。
-func TestRemoteHelperDeleteRefusalNamesRuleAndPath(t *testing.T) {
-	t.Parallel()
-	py := pickRemoteHelperPython(t)
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "proj", ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	script, err := buildRemoteScript(map[string]any{
-		"op":        "delete_batch",
-		"paths":     remoteFixturePaths(root, []string{"proj/.git"}),
-		"recursive": true,
-	})
-	if err != nil {
-		t.Fatalf("buildRemoteScript: %v", err)
-	}
-	resp, err := runRemoteHelperScript(t, py, script)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.OK {
-		t.Fatal("deleting VCS metadata must be refused before anything is removed")
-	}
-	for _, want := range []string{"E_DELETE_BLOCKED:", "VCS metadata", "proj/.git"} {
-		if !strings.Contains(resp.Error, want) {
-			t.Fatalf("refusal %q must mention %q", resp.Error, want)
-		}
 	}
 }
 
@@ -484,119 +440,6 @@ func TestRemoteHelperWriteDefaultPerm0644(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("overwritten file perm = %o, want preserved 0600", perm)
-	}
-}
-
-// TestRemoteVCSMetadataGuards 锁定远端写入与远端命令的版本控制元数据判定：与本地
-// 写路径/删除路径共用 pathutil.VCSMetadataReason 一份规则，命令侧按远端 cwd 解析
-// 相对目标；动态目标（变量/命令替换）不猜，交给 helper 用远端事实判。
-func TestRemoteVCSMetadataGuards(t *testing.T) {
-	t.Parallel()
-	writable := []string{"src/main.go", ".gitignore", "docs/.github/workflows/ci.yml", "app/git/config"}
-	for _, p := range writable {
-		if err := remoteVCSMetadataWrite(p); err != nil {
-			t.Fatalf("path %q must stay writable on the remote host, got %v", p, err)
-		}
-	}
-	protected := []string{".git/config", ".git/hooks/pre-commit", "app/.git/index", ".svn/entries", ".hg/hgrc"}
-	for _, p := range protected {
-		if code := toolErrorCode(remoteVCSMetadataWrite(p)); code != "E_PROTECTED_PATH" {
-			t.Fatalf("path %q: want E_PROTECTED_PATH, got %q", p, code)
-		}
-	}
-
-	cases := []struct {
-		name    string
-		command string
-		cwd     string
-		want    bool
-	}{
-		{"redirection into hooks", "echo x > .git/hooks/pre-commit", "/srv/app", true},
-		{"absolute target", "cat > /srv/app/.git/config", "/srv/app", true},
-		{"relative to the command cwd", "cat > .git/refs/heads/main", "/srv/app/sub", true},
-		{"ordinary build command", "go test ./...", "/srv/app", false},
-		{"file merely named like metadata", "echo x > .gitignore", "/srv/app", false},
-		{"dynamic target is not guessed", "echo x > $OUT", "/srv/app", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := remoteCommandVCSMetadataTarget(tc.command, tc.cwd)
-			if tc.want != (got != "") {
-				t.Fatalf("command %q (cwd %s): target = %q, want detected=%v", tc.command, tc.cwd, got, tc.want)
-			}
-		})
-	}
-
-	// 写入入口在真正发起 ssh 之前就拒（与本地写路径同一个错误码，模型侧可据此恢复）。
-	a := newIsolatedToolTestApp(t)
-	_, err := a.remoteWriteRaw(context.Background(), remoteTarget{Host: "example.invalid", LegacyRoot: "/srv/app"}, ".git/hooks/pre-commit", []byte("x"), true, true)
-	if code := toolErrorCode(err); code != "E_PROTECTED_PATH" {
-		t.Fatalf("remote write into .git must be refused before any ssh session, got %q (%v)", code, err)
-	}
-}
-
-// TestRemoteHelperRefusesVCSMetadataWrites 用真实 helper 脚本（只操作 t.TempDir()）
-// 锁定远端事实那一层：字面路径里的 .git 由 Go 侧拒，helper 还要拒「解析后才落进
-// .git」的写入——把 .git 链成工作区里的另一个名字（gh），字面路径完全干净；命令的
-// 写目标同属这一层，Go 侧看不见。
-func TestRemoteHelperRefusesVCSMetadataWrites(t *testing.T) {
-	t.Parallel()
-	py := pickRemoteHelperPython(t)
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".git", "hooks"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(root, ".git"), filepath.Join(root, "gh")); err != nil {
-		t.Skipf("symlinks unavailable in this environment: %v", err)
-	}
-	run := func(payload map[string]any) remotePythonResponse {
-		t.Helper()
-		script, err := buildRemoteScript(payload)
-		if err != nil {
-			t.Fatalf("buildRemoteScript: %v", err)
-		}
-		resp, err := runRemoteHelperScript(t, py, script)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return resp
-	}
-	write := func(rel string) map[string]any {
-		return map[string]any{
-			"op":         "write",
-			"path":       remoteFixturePath(root, rel),
-			"dataBase64": base64.StdEncoding.EncodeToString([]byte("x\n")),
-			"overwrite":  true,
-			"mkdirs":     true,
-		}
-	}
-
-	for _, rel := range []string{".git/config", ".git/hooks/pre-commit", "gh/hooks/pre-commit"} {
-		resp := run(write(rel))
-		if resp.OK {
-			t.Fatalf("write to %s must be refused by the helper", rel)
-		}
-		if !strings.Contains(resp.Error, "E_PROTECTED_PATH") {
-			t.Fatalf("write to %s: error = %q, want E_PROTECTED_PATH", rel, resp.Error)
-		}
-	}
-	// 对照：仓库里被跟踪的普通文件仍然可写（.gitignore 不是元数据）。
-	resp := run(write(".gitignore"))
-	if !resp.OK {
-		t.Fatalf("writing .gitignore must stay allowed: %s", resp.Error)
-	}
-	if _, err := os.Stat(filepath.Join(root, ".gitignore")); err != nil {
-		t.Fatalf(".gitignore was not written: %v", err)
-	}
-
-	// 命令写目标：字面干净、解析后落进 .git 的目标由 helper 拒。
-	resp = run(map[string]any{
-		"op":      "_check_write_targets",
-		"cwd":     remoteFixturePath(root, "."),
-		"targets": []string{"gh/hooks/pre-commit"},
-	})
-	if resp.OK || !strings.Contains(resp.Error, "E_PROTECTED_PATH") {
-		t.Fatalf("write target through the .git alias must be refused, got ok=%v error=%q", resp.OK, resp.Error)
 	}
 }
 
@@ -842,22 +685,6 @@ func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
 		t.Fatalf("read content = %q, want %q", raw, content)
 	}
 
-	// 命令字面写入目标里的非 ASCII 路径同样要能过边界（targets 由 Go 侧从
-	// 命令文本里解析出来，与 run op 走同一条 to_os_text 通道）。
-	resp = run(map[string]any{
-		"op":      "_check_write_targets",
-		"cwd":     remoteAbs("中文目录"),
-		"targets": []string{"新建输出.txt"},
-	})
-	var checked struct {
-		Checked bool `json:"checked"`
-	}
-	if err := json.Unmarshal(resp.Data, &checked); err != nil {
-		t.Fatalf("decode check data: %v", err)
-	}
-	if !checked.Checked {
-		t.Fatalf("write-target check for a non-ASCII in-workspace path must pass, data=%s", resp.Data)
-	}
 }
 
 // TestRemoteHelperWriteFchmodFallback 锁定 os.fchmod 缺失时的降级路径（Windows
@@ -1324,8 +1151,8 @@ func TestRemoteReadReusesSessionCache(t *testing.T) {
 	}
 	ctx := context.WithValue(context.Background(), sessionReadCacheContextKey{}, newSessionReadCache())
 	req := RemoteReadFileRequest{
-		Alias: "user@host:/srv/app",
-		Files: []BatchReadFileRequest{{Path: "a.txt"}, {Path: "b.txt"}},
+		Alias: "user@host",
+		Files: []BatchReadFileRequest{{Path: "/srv/app/a.txt"}, {Path: "/srv/app/b.txt"}},
 	}
 
 	first, err := a.remoteReadFileCached(ctx, req)
@@ -1365,8 +1192,8 @@ func TestRemoteReadReusesSessionCache(t *testing.T) {
 
 	// 区间不同 = 键不同：先重投，再读同一区间才命中。
 	rangeReq := RemoteReadFileRequest{
-		Alias: "user@host:/srv/app",
-		Files: []BatchReadFileRequest{{Path: "a.txt", StartLine: 2, EndLine: 2}, {Path: "b.txt", StartLine: 2, EndLine: 2}},
+		Alias: "user@host",
+		Files: []BatchReadFileRequest{{Path: "/srv/app/a.txt", StartLine: 2, EndLine: 2}, {Path: "/srv/app/b.txt", StartLine: 2, EndLine: 2}},
 	}
 	fourth, err := a.remoteReadFileCached(ctx, rangeReq)
 	if err != nil {
@@ -1395,7 +1222,7 @@ func TestRemoteReadResultItemCarriesRangeForCacheKey(t *testing.T) {
 	data := []byte("l1\nl2\nl3\n")
 	item, err := buildRemoteReadResultItem(
 		remoteRawFile{Path: "a.txt", Data: data, Size: int64(len(data))},
-		BatchReadFileRequest{Path: "a.txt", StartLine: 2, EndLine: 2},
+		BatchReadFileRequest{Path: "/srv/app/a.txt", StartLine: 2, EndLine: 2},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1412,5 +1239,53 @@ func TestRemoteReadResultItemCarriesRangeForCacheKey(t *testing.T) {
 	}
 	if tail.Req.StartLine != -2 {
 		t.Fatalf("tailLines must fold into a negative startLine for the key, got %d", tail.Req.StartLine)
+	}
+}
+
+func TestRemoteHelperRepositoryMetadataLifecycle(t *testing.T) {
+	t.Parallel()
+	py := pickRemoteHelperPython(t)
+	for _, name := range []string{".git", ".svn", ".hg"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			run := func(payload map[string]any) remotePythonResponse {
+				t.Helper()
+				script, err := buildRemoteScript(payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp, err := runRemoteHelperScript(t, py, script)
+				if err != nil || !resp.OK {
+					t.Fatalf("helper: %+v, %v", resp, err)
+				}
+				return resp
+			}
+			remote := remoteFixturePath(root, name+"/config")
+			run(map[string]any{"op": "write", "path": remote, "dataBase64": base64.StdEncoding.EncodeToString([]byte("metadata")), "mkdirs": true})
+			response := run(map[string]any{"op": "read", "path": remote})
+			var read struct {
+				DataBase64 string `json:"dataBase64"`
+			}
+			if err := json.Unmarshal(response.Data, &read); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := base64.StdEncoding.DecodeString(read.DataBase64); err != nil || string(got) != "metadata" {
+				t.Fatalf("read=%q, %v", got, err)
+			}
+			if name == ".git" {
+				response = run(map[string]any{"op": "run", "cwd": remoteFixturePath(root, "."), "command": "echo updated > .git/config"})
+				var result CommandResult
+				if err := json.Unmarshal(response.Data, &result); err != nil || result.ExitCode != 0 {
+					t.Fatalf("command=%+v, %v", result, err)
+				}
+				if data, err := os.ReadFile(filepath.Join(root, name, "config")); err != nil || strings.TrimSpace(string(data)) != "updated" {
+					t.Fatalf("command write=%q, %v", data, err)
+				}
+			}
+			run(map[string]any{"op": "delete_batch", "paths": remoteFixturePaths(root, []string{name}), "recursive": true})
+			if _, err := os.Stat(filepath.Join(root, name)); !os.IsNotExist(err) {
+				t.Fatalf("metadata not deleted: %v", err)
+			}
+		})
 	}
 }

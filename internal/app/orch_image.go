@@ -61,9 +61,6 @@ func (a *App) imageWithModel(ctx context.Context, cfg ConfigState, sessionID str
 			var path string
 			path, err = resolveReadFilePath(cfg, source)
 			if err == nil {
-				err = kbDenyCheckPaths(ctx, cfg, source)
-			}
-			if err == nil {
 				var f *os.File
 				f, err = os.Open(path)
 				if err == nil {

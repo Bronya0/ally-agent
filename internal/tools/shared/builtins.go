@@ -59,17 +59,10 @@ const (
 	// package may import, so the declared maximum cannot drift from what the
 	// runtimes enforce.
 	MaxDelegateStepBudget = 1000
-	// Legacy grace bounds are retained only for request compatibility. Stops now
-	// immediately kill the owned tree. Previously a graceful stop waited before
-	// force killing the process tree, and one read returns
-	// DefaultServiceReadTailBytes of recent output; both are capped here because
-	// the service schema declares the same numbers, and the runtime clamps in
-	// orch_services.go read them from this block.
-	DefaultServiceStopGraceSeconds = 3
-	MaxServiceStopGraceSeconds     = 30
-	DefaultServiceReadTailBytes    = 8 * 1024
-	MaxServiceReadTailBytes        = 32 * 1024
-	MaxServiceDescriptionChars     = 500
+
+	DefaultServiceReadTailBytes = 8 * 1024
+	MaxServiceReadTailBytes     = 32 * 1024
+	MaxServiceDescriptionChars  = 500
 	// HTTP response-size bounds. internal/app's maxHTTPBodyBytes /
 	// defaultHTTPMaxBody / defaultWebFetchBody and web_fetch's character bounds
 	// read these same constants, so a declared range can never drift from what
@@ -165,7 +158,7 @@ func chatToolsUncached() []openai.Tool {
 				"aspect_ratio": map[string]any{"type": "string", "enum": []string{"1:1", "3:2", "2:3"}},
 			}, "required": []string{"prompt", "images"},
 		}),
-		functionTool("list_files", "Inspect directory structure, up to 3 levels and 200 entries. Directories end in '/'. Hidden, gitignored, VCS and heavy dependency/build entries are omitted; explicit paths can inspect inside omitted directories. At most 50 direct files per directory are shown; '+N more files' marks omitted siblings. Narrow the path for depth/global truncation, or use command to list direct entries. An absent entry does not prove a path does not exist.", map[string]any{
+		functionTool("list_files", "Inspect directory structure, up to 3 levels and 200 entries. Directories end in '/'. Hidden, gitignored and heavy dependency/build entries are omitted; explicit paths can inspect inside omitted directories. At most 50 direct files per directory are shown; '+N more files' marks omitted siblings. Narrow the path for depth/global truncation, or use command to list direct entries. An absent entry does not prove a path does not exist.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path": map[string]any{"type": "string", "description": "Workspace-relative directory path, or explicit absolute path for read-only listing. Empty means workspace root."},
@@ -220,7 +213,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path", "content"},
 		}),
-		functionTool("delete", "Delete files or directories in the workspace. Strictly prohibited from deleting drive roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*, C:\\Windows, C:\\Users/*), VCS metadata (.git), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs)."+deleteBatchNote(), map[string]any{
+		functionTool("delete", "Delete files or directories in the workspace. Strictly prohibited from deleting drive roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*, C:\\Windows, C:\\Users/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs)."+deleteBatchNote(), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"paths":     deletePathsSchema("Workspace-relative or authorized path to delete. Paths outside the workspace are refused."),
@@ -250,10 +243,6 @@ func chatToolsUncached() []openai.Tool {
 				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
 				"cwd":             map[string]any{"type": "string", "description": "Workspace-relative working directory. Empty means workspace root. Used only with action=start."},
 				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start or action=restart. Required with action=stop, action=restart, and action=read."},
-				"graceSeconds": map[string]any{
-					"type": "integer", "minimum": 0, "maximum": MaxServiceStopGraceSeconds,
-					"description": fmt.Sprintf("Deprecated compatibility field, ignored: stop force-kills immediately (legacy default %d, maximum %d).", DefaultServiceStopGraceSeconds, MaxServiceStopGraceSeconds),
-				},
 				"tailBytes": map[string]any{
 					"type": "integer", "minimum": 0, "maximum": MaxServiceReadTailBytes,
 					"description": fmt.Sprintf("Bytes of the most recent output to return (default %d, max %d; omit or send 0 for the default, larger requests are clamped). Used only with action=read; the body that reaches you is still capped at the last 8 KiB, and a `reduced-from` longer than that tells you it was cut.", DefaultServiceReadTailBytes, MaxServiceReadTailBytes),
@@ -372,7 +361,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"alias", "path", "content"},
 		}),
-		functionTool("remote_delete_path", "Delete one or more absolute file or directory paths on a remote SSH server. Refuses filesystem roots, VCS metadata, and the protected system locations listed below; directories require recursive=true. Strictly prohibited from deleting filesystem roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs). Use remote deletion cautiously; it is destructive. Prefer this over remote_run_command deletion."+deleteBatchNote(), map[string]any{
+		functionTool("remote_delete_path", "Delete one or more absolute file or directory paths on a remote SSH server. Refuses filesystem roots and the protected system locations listed below; directories require recursive=true. Strictly prohibited from deleting filesystem roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs). Use remote deletion cautiously; it is destructive. Prefer this over remote_run_command deletion."+deleteBatchNote(), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"alias":     sshAliasSchema(),
@@ -381,7 +370,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"alias", "paths"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH server. Each call starts a fresh shell in the remote login user's home directory; use cd /absolute/path && command when needed. A cd does not persist between calls. Use remote_delete_path for unmanaged deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. There is no remote workspace directory boundary. Writes to VCS metadata remain blocked. A timeout kills the process group. Output keeps its real head and tail. A full log path is returned when the preview is reduced; inspect it with remote_read on the same alias, or filter it with a read-only remote command. Partial logs are explicitly marked; never rerun side effects merely to recover output.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH server. Each call starts a fresh shell in the remote login user's home directory; use cd /absolute/path && command when needed. A cd does not persist between calls. Use remote_delete_path for unmanaged deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. There is no remote workspace directory boundary. A timeout kills the process group. Output keeps its real head and tail. A full log path is returned when the preview is reduced; inspect it with remote_read on the same alias, or filter it with a read-only remote command. Partial logs are explicitly marked; never rerun side effects merely to recover output.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"alias":   sshAliasSchema(),
@@ -391,7 +380,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"alias", "command"},
 		}),
-		functionTool("remote_transfer", "Transfer files or directories between the local workspace and absolute paths on a remote SSH server using bounded-memory binary streaming. The local workspace fence and archive extraction boundary are enforced; .git is protected. File modes, permissions, and directory structure are preserved.", map[string]any{
+		functionTool("remote_transfer", "Transfer files or directories between the local workspace and absolute paths on a remote SSH server using bounded-memory binary streaming. The local workspace fence and archive extraction boundary are enforced. File modes, permissions, and directory structure are preserved.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"alias":      sshAliasSchema(),
@@ -417,7 +406,7 @@ func chatToolsUncached() []openai.Tool {
 				"path":           map[string]any{"type": "string", "description": "File or directory, relative to the workspace root or absolute. Empty means workspace root. Point it at a hidden directory such as .github to search inside it."},
 				"glob":           map[string]any{"type": "string", "description": "Optional glob filter, e.g. *.go or frontend/**/*.vue."},
 				"maxMatches":     map[string]any{"type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum returned matching lines in lines mode (default 200). Exact totals still cover the entire search."},
-				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false. Does not enable hidden-directory traversal or remove dependency/build directory exclusions."},
+				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false. Also includes dependency/build directories; hidden-directory traversal still requires an explicit path."},
 				"caseSensitive":  map[string]any{"type": "boolean", "description": "Match case exactly. Default false (case-insensitive)."},
 				"offset":         map[string]any{"type": "integer", "minimum": 0, "description": "Skip first N matching lines/files for pagination."},
 			},
@@ -746,9 +735,7 @@ func IsProtectedTool(name string) bool {
 }
 
 // IsBuiltinTool reports whether name is a built-in tool's canonical name.
-// Legacy aliases (e.g. document_read) normalize like their canonical name,
-// which is what BuiltinSchema keys on, so a disabled-tools entry never needs
-// the alias spelling.
+// Only names with a declared schema are builtins.
 func IsBuiltinTool(name string) bool {
 	_, ok := BuiltinSchema(name)
 	return ok

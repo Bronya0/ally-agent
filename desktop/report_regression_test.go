@@ -51,8 +51,8 @@ func TestStreamedAnswerOpensHistoryBlock(t *testing.T) {
 // The same error is announced once, whether or not the reader is at the end.
 func TestRunErrorAppendsOnce(t *testing.T) {
 	conv := &conversation{}
-	appendRunError(conv, "多行\n错误")
-	appendRunError(conv, "多行\n错误")
+	appendRunError(conv, "多行\n错误", "error")
+	appendRunError(conv, "多行\n错误", "error")
 	if len(conv.Messages) != 1 {
 		t.Fatalf("messages = %v", conv.Messages)
 	}

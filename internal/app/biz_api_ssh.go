@@ -193,13 +193,12 @@ func (a *App) apiHandlePutSSHAuthorizations(w http.ResponseWriter, r *http.Reque
 		apiWriteError(w, http.StatusBadRequest, "allowed must be an explicit array; use [] to clear")
 		return
 	}
-	// The backend tolerates stale references for legacy callers. The API rejects
-	// them before replacing grants, while still letting the backend canonicalize.
+	// Authorization updates accept stable IDs only.
 	servers := a.ListAllSSHServers()
 	for _, ref := range body.Allowed {
 		found := false
 		for _, node := range servers {
-			if strings.TrimSpace(ref) == node.ID || strings.EqualFold(strings.TrimSpace(ref), node.Alias) {
+			if strings.TrimSpace(ref) == node.ID {
 				found = true
 				break
 			}

@@ -578,17 +578,12 @@ type ConfigState struct {
 	APIKeys []string `json:"apiKeys,omitempty"`
 	Model   string   `json:"model,omitempty"`
 	// Workspace 不是模型字段：它同时是设置项与运行时的请求上下文。
-	Workspace  string   `json:"workspace"`
-	ExtraRoots []string `json:"extraRoots,omitempty"`
-	// KBRoot is the user-configured knowledge-base root directory. When a run
-	// resolves its workspace to this path (SamePath), the session runs in
-	// knowledge-base mode: the KB system-prompt part is injected and the
-	// sources/ subdirectory becomes read-only for model tools.
-	KBRoot        string `json:"kbRoot,omitempty"`
-	MaxTokens     int    `json:"maxTokens,omitempty"`
-	ContextWindow int    `json:"contextWindow,omitempty"`
-	TokenParam    string `json:"tokenParam,omitempty"`
-	CustomPrompt  string `json:"customPrompt"`
+	Workspace     string   `json:"workspace"`
+	ExtraRoots    []string `json:"extraRoots,omitempty"`
+	MaxTokens     int      `json:"maxTokens,omitempty"`
+	ContextWindow int      `json:"contextWindow,omitempty"`
+	TokenParam    string   `json:"tokenParam,omitempty"`
+	CustomPrompt  string   `json:"customPrompt"`
 	// AllowPrivateNetwork is a pointer only so the load path can tell an explicit
 	// false (the user turned the SSRF guard off) from a field a legacy config.json
 	// never carried; nil means "never set" and must not open the guard (see
@@ -821,11 +816,8 @@ type ListFilesRequest struct {
 	Limit          int    `json:"limit"`
 	IncludeHidden  bool   `json:"includeHidden"`
 	IncludeIgnored bool   `json:"includeIgnored"`
-	// ModelFacing marks requests originating from the model's list_files
-	// tool call; the UI explorer leaves it false. Model-facing listings
-	// always skip VCS internals (.git/.svn/.hg) even when includeHidden or
-	// includeIgnored are set — they are pure noise for the model. json:"-"
-	// keeps the model from forging it via extra JSON fields.
+	// ModelFacing selects model-facing limits and hidden/ignored defaults.
+	// The UI explorer leaves it false. It cannot be set through tool JSON.
 	ModelFacing bool `json:"-"`
 }
 
@@ -858,7 +850,7 @@ type ListFilesResult struct {
 
 type WorkspacePathSearchRequest struct {
 	// Workspace pins the search root. UI workspace explorers pass the active
-	// Tab's path so a knowledge-base Tab searches the KB root, not the chat
+	// Tab's path so background browsing does not search the active chat
 	// workspace. An empty value preserves the legacy active-config behavior.
 	Workspace string `json:"workspace,omitempty"`
 	Query     string `json:"query"`
@@ -1020,8 +1012,6 @@ type StartServiceRequest struct {
 
 type StopServiceRequest struct {
 	ID string `json:"id"`
-	// Deprecated: accepted for compatibility, ignored. Stop immediately kills the owned tree.
-	GraceSeconds int `json:"graceSeconds,omitempty"`
 }
 
 type BackgroundProcessRequest struct {
@@ -1033,7 +1023,6 @@ type BackgroundProcessRequest struct {
 	Cwd             string `json:"cwd,omitempty"`
 	ID              string `json:"id,omitempty"`
 	TailBytes       int    `json:"tailBytes,omitempty"`
-	GraceSeconds    int    `json:"graceSeconds,omitempty"`
 }
 
 // ServiceReadRequest is the model-facing read payload for the service tool.
@@ -1292,10 +1281,6 @@ type WebFetchResult struct {
 type RemoteReadFileRequest struct {
 	Alias string                 `json:"alias"`
 	Files []BatchReadFileRequest `json:"files"`
-	// Compatibility fields for legacy single-file reads
-	Path      string `json:"path,omitempty"`
-	StartLine int    `json:"startLine,omitempty"`
-	EndLine   int    `json:"endLine,omitempty"`
 }
 
 // RemoteEditRequest is the flat model-facing remote_edit request: exactly one
@@ -1330,7 +1315,6 @@ type RemoteDeletePathRequest struct {
 type RemoteRunCommandRequest struct {
 	Alias   string `json:"alias"`
 	Command string `json:"command"`
-	Cwd     string `json:"cwd,omitempty"` // Compatibility for older session tool snapshots.
 	Timeout int    `json:"timeout,omitempty"`
 	Shell   string `json:"shell,omitempty"`
 }
@@ -1339,7 +1323,6 @@ type remoteTarget struct {
 	Raw        string
 	Host       string
 	Port       string
-	LegacyRoot string // Compatibility base for targets from older session snapshots; never a fence.
 	credential *sshCredentialEntry
 }
 
@@ -1483,15 +1466,9 @@ type SkillDefinition struct {
 	embeddedContent string
 }
 
-// BatchReadRequest is the model-facing read payload. A line range belongs to one
-// entry (BatchReadFileRequest); there is deliberately no request-level range: the
-// read schema never declared one, so the argument gate refuses it, and the
-// per-entry fallback that used to apply it was therefore unreachable. Path/Paths
-// are the legacy single-file forms kept for old callers; they carry no range.
+// BatchReadRequest carries per-file paths and optional line ranges.
 type BatchReadRequest struct {
-	Path  string                 `json:"path,omitempty"`
-	Paths []string               `json:"paths,omitempty"`
-	Files []BatchReadFileRequest `json:"files,omitempty"`
+	Files []BatchReadFileRequest `json:"files"`
 }
 
 type BatchReadFileRequest struct {
@@ -1705,6 +1682,18 @@ func (a *App) ensureInitialized() error {
 		var loaded ConfigState
 		if loaded, err = readConfigFile(loadPath); err == nil {
 			a.config = loadedConfig(loaded)
+			tokenParamsMigrated := false
+			for i, model := range loaded.Models {
+				if model.TokenParam != a.config.Models[i].TokenParam {
+					tokenParamsMigrated = true
+					break
+				}
+			}
+			if tokenParamsMigrated || loaded.Model != "" || loaded.APIKey != "" || len(loaded.APIKeys) > 0 {
+				if err := persistConfigFile(a.configPath, a.config); err != nil {
+					return fmt.Errorf("migrate model configuration: %w", err)
+				}
+			}
 		} else {
 			// 内容坏掉的配置不能留在原地：这次用了默认值，之后任意一次保存都会把
 			// 默认值写回同一个文件，用户的原设置就永久消失了。改名保留 + 记一行
@@ -2268,7 +2257,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	cfg.responsesPromptCacheKey = openAIResponsesPromptCacheKey(sessionID)
 	// Knowledge-base runs mark their sources/ subtree read-only for every
 	// tool call in this run; sub-agents inherit the policy via ctx.
-	ctx = withKBDenyRoots(ctx, kbDenyRootsForConfig(cfg))
 	// end records how this run finished (see runOutcome). Interrupted runs
 	// (ESC/cancel, provider errors, stop reasons, step limits) fall through to
 	// the same checkpoint save, so work completed before the interruption
@@ -2901,9 +2889,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			err = validateModelEditToolRequest([]FileTextEdits{req})
 		}
 		if err == nil {
-			err = kbDenyCheckPaths(ctx, cfg, req.Path)
-		}
-		if err == nil {
 			data, err = a.editFilesWithContext(ctx, cfg, []FileTextEdits{req})
 			if err == nil {
 				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, []string{req.Path}))
@@ -2914,9 +2899,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	case "create":
 		var req CreateFileRequest
 		err, argWarnings = decodeJSON(&req)
-		if err == nil {
-			err = kbDenyCheckPaths(ctx, cfg, req.Path)
-		}
 		if err == nil {
 			a.withFileOpsLock(func() { data, err = a.createFileWithConfig(cfg, req) })
 			if err == nil {
@@ -2931,9 +2913,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var deletePaths []string
 		if err == nil {
 			deletePaths, err = resolveDeletePathList(req.Paths)
-		}
-		if err == nil {
-			err = kbDenyCheckPaths(ctx, cfg, deletePaths...)
 		}
 		if err == nil {
 			a.withFileOpsLock(func() { data, err = a.deletePathsWithConfig(cfg, deletePaths, req.Recursive) })
@@ -2958,18 +2937,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			switch strings.ToLower(strings.TrimSpace(req.Action)) {
 			case "start":
-				// 沙箱生效时 KB 禁写由内核 DenyWriteRoots 兜底，字面检查只在
-				// 围栏全量生效（沙箱关闭/降级）时执行。检查的结果必须落到 err
-				// 上：只把它当条件判断会让拦截退化成「成功 + 空结果」，模型读
-				// 到的是一次什么都没发生的成功启动。
-				var denyErr error
-				if !kernelOwnsBoundary() {
-					denyErr = kbDenyCheckCommand(ctx, cfg, req.Command)
-				}
-				if denyErr != nil {
-					err = denyErr
-					break
-				}
 				data, err = a.startServiceWithConfig(ctx, cfg, StartServiceRequest{
 					Name:        req.Name,
 					Description: req.Description,
@@ -2978,7 +2945,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				})
 			case "stop":
 				if err = a.checkServiceWorkspace(cfg, req.ID); err == nil {
-					data, err = a.stopService(StopServiceRequest{ID: req.ID, GraceSeconds: req.GraceSeconds})
+					data, err = a.stopService(StopServiceRequest{ID: req.ID})
 				}
 			case "restart":
 				data, err = a.restartServiceWithConfig(ctx, cfg, req.ID)
@@ -3035,9 +3002,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			if repaired {
 				argWarnings = append(argWarnings, "参数 json 应为 JSON 对象/数组，却收到了带引号的字符串，已自动修复并照常执行；后续调用请直接传 JSON 对象，不要序列化成字符串。")
 			}
-		}
-		if err == nil {
-			err = kbDenyCheckPaths(ctx, cfg, req.SaveTo)
 		}
 		if err == nil {
 			data, err = a.httpRequestToolWithConfig(ctx, cfg, req)
@@ -3123,9 +3087,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			}
 		}
 
-	case "document_read": // legacy name; documents now require the anydoc skill
-		err = codedToolError("E_DOCUMENT_UNSUPPORTED",
-			errors.New("document_read was removed; office/PDF documents are no longer read directly. Convert to Markdown with the anydoc skill first, then use read on the converted .md file"))
 	case "calculate":
 		var reqCalc CalculateRequest
 		err, argWarnings = decodeJSON(&reqCalc)
@@ -3155,7 +3116,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				}
 			}
 		}
-	case "subagent", "agent_delegate":
+	case "subagent":
 		var adReq AgentDelegateRequest
 		err, argWarnings = decodeJSON(&adReq)
 		if err == nil {
@@ -3965,11 +3926,6 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 	rawArgs := args
 	if len(bytes.TrimSpace(rawArgs)) == 0 {
 		rawArgs = []byte("{}")
-	}
-	var normalizeErr error
-	rawArgs, normalizeErr = normalizeRemoteArguments(name, rawArgs)
-	if normalizeErr != nil {
-		return codedToolError("E_BAD_ARGS", normalizeErr), nil
 	}
 	// Parse the raw JSON to a map to detect extra keys.
 	var rawMap map[string]json.RawMessage

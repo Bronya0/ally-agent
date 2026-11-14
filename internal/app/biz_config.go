@@ -355,9 +355,6 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.Workspace != "" {
 		base.Workspace = overlay.Workspace
 	}
-	if overlay.KBRoot != "" {
-		base.KBRoot = overlay.KBRoot
-	}
 	// ExtraRoots 是会话级配置：overlay 非-nil 时整体替换（包括空切片表示"无附加"）。
 	// 不写入 ~/.ally_agent/config.json，因为 a.config.ExtraRoots 始终为 nil（仅在
 	// 每次 StartChat 时通过 effectiveConfig 透传到 cfg）。

@@ -117,28 +117,6 @@ func TestWritableDirsDeduplicatesAndDropsFiles(t *testing.T) {
 	}
 }
 
-func TestDenyWritePathsOnlySurviveInsideWriteRoots(t *testing.T) {
-	root := t.TempDir()
-	sources := mustMkdir(t, filepath.Join(root, "sources"))
-	child := mustMkdir(t, filepath.Join(sources, "sub"))
-	outside := t.TempDir()
-	missing := filepath.Join(root, "missing")
-
-	got, problems := denyWritePaths([]string{sources, outside, child, missing}, []string{root})
-
-	if len(got) != 1 {
-		t.Fatalf("want exactly the sources root, got %+v", got)
-	}
-	if resolved, _, _ := classifyPath(sources); got[0].path != resolved || !got[0].dir {
-		t.Fatalf("got %+v, want %s as a directory", got, resolved)
-	}
-	// 写根之外的目标本来就不可写，不算保护丢失；不存在的目标则要出声——它什么
-	// 都没保护到，不说就只能靠用户自己发现拼错了。
-	if len(problems) != 1 || !problemMentions(problems, missing) {
-		t.Fatalf("want exactly the missing target reported, got %v", problems)
-	}
-}
-
 // 写根永远赢：遮蔽一个命令可写的目录会把权限规则变成坏掉的沙箱。
 func TestReadMasksWriteRootsWin(t *testing.T) {
 	root := t.TempDir()
@@ -212,24 +190,6 @@ func TestReadMasksIsOrderIndependent(t *testing.T) {
 	}
 	if len(parentFirst) != 1 || parentFirst[0].path != resolved {
 		t.Fatalf("parent-first input must keep only %s, got %+v", resolved, parentFirst)
-	}
-}
-
-// 禁止写要能点名一个文件：只支持目录会把"保护这个文件"静默丢掉。
-func TestDenyWritePathsAcceptsSingleFile(t *testing.T) {
-	root := t.TempDir()
-	file := filepath.Join(root, "sources.txt")
-	if err := os.WriteFile(file, []byte("secret\n"), 0o600); err != nil {
-		t.Fatalf("write %s: %v", file, err)
-	}
-
-	got, problems := denyWritePaths([]string{file}, []string{root})
-
-	if len(got) != 1 || got[0].dir {
-		t.Fatalf("want one file entry, got %+v", got)
-	}
-	if len(problems) != 0 {
-		t.Fatalf("a file target inside the workspace is applied, not reported: %v", problems)
 	}
 }
 

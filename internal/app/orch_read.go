@@ -196,12 +196,9 @@ type pendingReadItem struct {
 }
 
 func collectPendingBatchReads(req BatchReadRequest) ([]pendingReadItem, error) {
-	pathCount := len(req.Paths) + len(req.Files)
-	if strings.TrimSpace(req.Path) != "" {
-		pathCount++
-	}
+	pathCount := len(req.Files)
 	if pathCount == 0 {
-		return nil, errors.New("read requires at least one path or file")
+		return nil, errors.New("read requires at least one file in files")
 	}
 	if pathCount > 20 {
 		return nil, errors.New("too many files; max 20 per batch")
@@ -230,20 +227,6 @@ func collectPendingBatchReads(req BatchReadRequest) ([]pendingReadItem, error) {
 	}
 
 	pending := make([]pendingReadItem, 0, pathCount)
-	// Legacy single-file forms: no request-level range exists (see
-	// BatchReadRequest), so these entries read with the preview defaults.
-	if strings.TrimSpace(req.Path) != "" {
-		fileReq := ReadFileRequest{Path: req.Path}
-		if addIfNotSeen(readKey(req.Path, fileReq)) {
-			pending = append(pending, pendingReadItem{path: req.Path, req: fileReq})
-		}
-	}
-	for _, p := range req.Paths {
-		fileReq := ReadFileRequest{Path: p}
-		if addIfNotSeen(readKey(p, fileReq)) {
-			pending = append(pending, pendingReadItem{path: p, req: fileReq})
-		}
-	}
 	for _, file := range req.Files {
 		startLine, rangeErr := resolveReadStartLine(file.StartLine, file.EndLine, file.TailLines)
 		if rangeErr != nil {

@@ -2445,12 +2445,10 @@ func reasoningOffTravelsAsEffort(cfg ConfigState, apiFormat string) bool {
 }
 
 func normalizeTokenParam(value string) string {
-	v := strings.ToLower(strings.TrimSpace(value))
-	v = separatorToUnderscoreReplacer.Replace(v)
-	switch v {
-	case tokenParamMaxCompletionTokens, "max_completion_token", "completion_tokens", "completion":
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case tokenParamMaxCompletionTokens:
 		return tokenParamMaxCompletionTokens
-	case tokenParamMaxTokens, "max_token", "tokens", "legacy":
+	case tokenParamMaxTokens:
 		return tokenParamMaxTokens
 	default:
 		return tokenParamAuto

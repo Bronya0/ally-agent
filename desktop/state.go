@@ -99,6 +99,9 @@ func readPrefs(path string) uiPrefs {
 	if p.TreeWidth < 150 || p.TreeWidth > 600 {
 		p.TreeWidth = 270
 	}
+	if p.Avatar == "image" {
+		p.Avatar = "glm"
+	}
 	if p.Avatar == "" {
 		p.Avatar = "whale"
 	}

@@ -402,7 +402,6 @@ var (
 
 var iconPaths = map[string]string{
 	"chat":        `<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12.5h5"/>`,
-	"kb":          `<path d="M13 2 5 14h5l-1 8 9-13h-5z"/>`,
 	"skills":      `<path d="m9 15-2 2a4 4 0 0 1-5-5l4-4a4 4 0 0 1 5 0m2 1 2-2a4 4 0 0 1 5 5l-4 4a4 4 0 0 1-5 0M8 16l8-8"/>`,
 	"mcp":         `<rect x="4" y="3" width="16" height="16" rx="2"/><path d="M4 15h16M8 7v3m8-3v3M8 22h8"/>`,
 	"models":      `<rect x="8" y="2" width="8" height="5" rx="1"/><path d="M12 7v5M4 12h16M4 12v4m8-4v4m8-4v4"/><rect x="1" y="16" width="6" height="5" rx="1"/><rect x="9" y="16" width="6" height="5" rx="1"/><rect x="17" y="16" width="6" height="5" rx="1"/>`,

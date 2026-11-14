@@ -19,34 +19,30 @@ import (
 )
 
 // policyPath is one path the policy treats by kind: bubblewrap can only mount a
-// tmpfs over a directory and a read-only bind over a file, and Seatbelt needs a
-// literal rule for a single file.
+// tmpfs over a directory and a read-only bind over a file.
 type policyPath struct {
 	path string
 	dir  bool
 }
 
 // policyPlan is the whole decision for one confined launch: what may be
-// written, what is re-denied inside that, what is hidden from view, and the
-// protections the caller asked for that will not apply. It is computed once, so
+// written, what is hidden from view, and requested protections that will not
+// apply. It is computed once, so
 // the profile that runs and the diagnostics that explain it cannot drift.
 type policyPlan struct {
-	writable  []string
-	denyWrite []policyPath
-	masks     []policyPath
-	problems  []string
+	writable []string
+	masks    []policyPath
+	problems []string
 }
 
 // buildPlan resolves a spec into this platform's policy.
 func buildPlan(spec Spec) policyPlan {
 	writable, problems := writableDirs(spec, platformWriteExtras...)
-	denyWrite, denyProblems := denyWritePaths(spec.DenyWriteRoots, spec.WriteRoots)
 	masks, maskProblems := readMasks(spec.ForbidReadRoots, spec.WriteRoots)
 	return policyPlan{
-		writable:  writable,
-		denyWrite: denyWrite,
-		masks:     masks,
-		problems:  append(append(problems, denyProblems...), maskProblems...),
+		writable: writable,
+		masks:    masks,
+		problems: append(problems, maskProblems...),
 	}
 }
 
@@ -221,46 +217,12 @@ func classifyPath(path string) (resolved string, isDir bool, ok bool) {
 	return abs, info.IsDir(), true
 }
 
-// denyWritePaths returns the re-deny targets that survive, with the requested
-// ones that will not apply. Only paths inside a write root are kept (a deny
-// outside the writable surface is already denied by the profile), and a child
-// of a denied parent is dropped because bubblewrap cannot mount over a
-// directory that a parent mask emptied. A target that does not exist is
-// reported: it protects nothing, and saying so is the only way a typo surfaces.
-func denyWritePaths(deny, writes []string) ([]policyPath, []string) {
-	var problems []string
-	writeRoots := canonicalDirs(writes)
-	candidates := make([]policyPath, 0, len(deny))
-	seen := make(map[string]bool, len(deny))
-	for _, p := range deny {
-		trimmed := strings.TrimSpace(p)
-		if trimmed == "" {
-			problems = append(problems, "禁止写清单里的空条目已忽略")
-			continue
-		}
-		resolved, isDir, ok := classifyPath(trimmed)
-		if !ok {
-			problems = append(problems, fmt.Sprintf("禁止写目标 %s 不存在或无法解析，该保护未生效", filepath.ToSlash(trimmed)))
-			continue
-		}
-		if seen[resolved] {
-			continue
-		}
-		seen[resolved] = true
-		if !insideAny(resolved, writeRoots) {
-			continue
-		}
-		candidates = append(candidates, policyPath{path: resolved, dir: isDir})
-	}
-	return outermostPaths(candidates), problems
-}
-
 // readMasks returns the forbid-read targets to mask, with the requested ones
 // that will not apply. Write roots always win: a mask that sits inside a write
 // root, or that contains one, is dropped — masking the workspace a command may
 // write in would turn a permission rule into a broken sandbox — but a dropped
 // mask is reported, because the caller believes that path is hidden. Children
-// of a masked parent are dropped like in denyWritePaths, so the result does not
+// of a masked parent are dropped, so the result does not
 // depend on the caller's input order.
 func readMasks(forbid, writes []string) ([]policyPath, []string) {
 	var problems []string

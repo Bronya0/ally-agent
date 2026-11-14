@@ -322,7 +322,7 @@ func TestRemoteReadRejectsNonAdvancingBatch(t *testing.T) {
 		attempts++
 		return nil, paths, nil
 	}
-	r, err := a.remoteReadFile(context.Background(), RemoteReadFileRequest{Alias: "example.invalid:/srv/app", Files: []BatchReadFileRequest{{Path: "a.txt"}, {Path: "b.txt"}}})
+	r, err := a.remoteReadFile(context.Background(), RemoteReadFileRequest{Alias: "example.invalid", Files: []BatchReadFileRequest{{Path: "/srv/app/a.txt"}, {Path: "/srv/app/b.txt"}}})
 	if err != nil || attempts != 1 || len(r.Files) != 2 {
 		t.Fatalf("non-advancing batch retried: calls=%d result=%#v err=%v", attempts, r, err)
 	}

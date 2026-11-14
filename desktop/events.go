@@ -286,7 +286,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		t.toolRev++
 		ui.ThinkingBytes = 0
 		ui.PlanCollapsed = true
-		settleRunningToolMessages(t, name == "run:error", str(p, "error"))
+		settleRunningToolMessages(t, str(p, "status"), str(p, "error"))
 		t.Busy = false
 		t.RunID = ""
 		t.CancelRequested = false
@@ -303,7 +303,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 				msg = locales.Text("运行失败")
 			}
 			t.Status = msg
-			appendRunError(t, msg)
+			appendRunError(t, msg, str(p, "status"))
 		}
 		idx := lastContentIndex(t.Messages)
 		if idx >= 0 {
@@ -331,26 +331,26 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	}
 }
 
-func settleRunningToolMessages(t *conversation, failed bool, reason string) {
+func settleRunningToolMessages(t *conversation, status, reason string) {
 	for index, call := range t.Messages {
 		if str(call, "role") != "tool_call" || toolState(call) != "running" {
 			continue
 		}
 		before := groupItem(call)
 		call["status"], call["toolState"] = "success", "tool:result"
-		if failed {
-			call["status"], call["error"] = "error", reason
+		if status == "error" || status == "cancelled" {
+			call["status"], call["error"] = status, reason
 		}
 		recordToolGroupChange(t, index, before, call)
 	}
 }
 
-func appendRunError(t *conversation, msg string) {
+func appendRunError(t *conversation, msg, status string) {
 	if hasErrorTail(t.Messages, msg) {
 		return
 	}
 	invalidateChatSearch(t)
-	t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": msg, "error": true})
+	t.Messages = append(t.Messages, map[string]any{"role": "assistant", "content": msg, "error": true, "status": status})
 }
 
 func hasErrorTail(messages []map[string]any, msg string) bool {

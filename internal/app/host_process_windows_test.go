@@ -179,7 +179,7 @@ func TestServiceForcedStopFailureRemainsRetryable(t *testing.T) {
 		t.Fatal("live service was queued for eviction")
 	}
 	svc.stopTree = func() error { close(svc.waitDone); return nil }
-	info, err := a.StopService(StopServiceRequest{ID: "retry", GraceSeconds: 30})
+	info, err := a.StopService(StopServiceRequest{ID: "retry"})
 	if err != nil || info.Status != "stopped" || info.Error != "" {
 		t.Fatalf("retry: %+v %v", info, err)
 	}
@@ -231,7 +231,7 @@ func TestServiceTreeShutdownAndNaturalParentExit(t *testing.T) {
 			start := time.Now()
 			switch mode {
 			case "explicit":
-				info, err = a.StopService(StopServiceRequest{ID: info.ID, GraceSeconds: 30})
+				info, err = a.StopService(StopServiceRequest{ID: info.ID})
 				if err != nil || info.Status != "stopped" {
 					t.Fatalf("stop: %+v %v", info, err)
 				}

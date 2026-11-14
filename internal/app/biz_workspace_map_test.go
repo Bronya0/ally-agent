@@ -59,30 +59,24 @@ func TestWorkspaceMapRootPlaceholderIndent(t *testing.T) {
 	}
 }
 
-// TestWorkspaceMapExcludesSensitiveEnv 验证 .env/.env.* 敏感文件被排除，
-// .env.example/.sample/.template 模板保留（与原 isWorkspaceMapSensitiveFile
-// 语义一致，rg 路径和 walkdir 回退都应满足）。
-func TestWorkspaceMapExcludesSensitiveEnv(t *testing.T) {
+// The automatically injected tree exposes paths and sizes, never file bodies.
+func TestWorkspaceMapEnvFilesAreOrdinaryPaths(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	for _, name := range []string{".env", ".env.local", ".env.production", ".env.example", ".env.sample", ".env.template"} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte("SECRET=1"), 0o644); err != nil {
+	names := []string{".env", ".env.local", ".env.production", ".env.example"}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("SECRET=never-inject-this"), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	ctx := buildWorkspaceMapContext(root)
-	for _, secret := range []string{".env.local", ".env.production"} {
-		if strings.Contains(ctx, secret) {
-			t.Fatalf("sensitive %s must be excluded, got:\n%s", secret, ctx)
+	output := buildWorkspaceMapContext(root)
+	for _, name := range names {
+		if !strings.Contains(output, name) {
+			t.Fatalf("missing file path %s", name)
 		}
 	}
-	if strings.Contains(ctx, "\n- .env ") {
-		t.Fatalf("sensitive .env must be excluded, got:\n%s", ctx)
-	}
-	for _, keep := range []string{".env.example", ".env.sample", ".env.template"} {
-		if !strings.Contains(ctx, keep) {
-			t.Fatalf("template %s must be kept, got:\n%s", keep, ctx)
-		}
+	if strings.Contains(output, "SECRET=never-inject-this") {
+		t.Fatal("tree exposed file contents")
 	}
 }
 
@@ -144,10 +138,7 @@ func TestListFilesSkipsIgnoredByDefault(t *testing.T) {
 	}
 }
 
-// TestListFilesModelFacingAlwaysPrunesVCSDirs 验证模型侧调用即使显式传
-// includeHidden+includeIgnored 也永远剪掉 .git（对模型纯噪声且挤占条目
-// 限额），而 UI 文件浏览器（ModelFacing=false）仍能看到 .git。
-func TestListFilesModelFacingAlwaysPrunesVCSDirs(t *testing.T) {
+func TestListFilesMetadataUsesHiddenDirectoryRules(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	for _, dir := range []string{".git/hooks", ".git/objects", "src"} {
@@ -164,7 +155,7 @@ func TestListFilesModelFacingAlwaysPrunesVCSDirs(t *testing.T) {
 	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: root}
 
-	modelView, err := app.listFilesWithConfig(cfg, ListFilesRequest{IncludeHidden: true, IncludeIgnored: true, ModelFacing: true})
+	modelView, err := app.listFilesWithConfig(cfg, ListFilesRequest{Path: ".git", IncludeHidden: true, IncludeIgnored: true, ModelFacing: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,11 +163,8 @@ func TestListFilesModelFacingAlwaysPrunesVCSDirs(t *testing.T) {
 	for _, e := range modelView.Entries {
 		joined += e.Path + "\n"
 	}
-	if strings.Contains(joined, ".git") {
-		t.Fatalf("model-facing listing must prune .git even with includeHidden/includeIgnored, got:\n%s", joined)
-	}
-	if !strings.Contains(joined, "src") || !strings.Contains(joined, "main.js") {
-		t.Fatalf("regular files must stay visible, got:\n%s", joined)
+	if !strings.Contains(joined, ".git/config") {
+		t.Fatalf("metadata must be visible with includeHidden/includeIgnored, got:\n%s", joined)
 	}
 
 	explorerView, err := app.listFilesWithConfig(cfg, ListFilesRequest{IncludeHidden: true, IncludeIgnored: true})

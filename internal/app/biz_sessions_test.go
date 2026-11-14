@@ -604,3 +604,51 @@ func TestDiskProfileKeepsToolPairing(t *testing.T) {
 		t.Fatalf("pairing broken by the disk profile: %+v", disk)
 	}
 }
+
+func TestLegacyHistoryIsMaterializedAsSnapshotOnce(t *testing.T) {
+	t.Parallel()
+	a := newIsolatedTestApp(t)
+	if err := a.ensureInitialized(); err != nil {
+		t.Fatal(err)
+	}
+	const id = "legacy-migrate-on-read"
+	history := []openai.ChatCompletionMessage{{Role: "user", Content: "keep my question"}, {Role: "assistant", Content: "keep my answer"}}
+	path := a.historyDiskPaths(id)[0]
+	if err := writeCompressedHistoryPayload(path, history); err != nil {
+		t.Fatal(err)
+	}
+	first, err := a.LoadSession(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk, err := readCompressedSessionSnapshot(a.sessionSnapshotPath(id))
+	if err != nil || !disk.HasSnapshot || len(disk.Messages) != 2 {
+		t.Fatalf("snapshot not saved: %+v %v", disk, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	reopened := newAppState(a.AppDataDir())
+	second, err := reopened.LoadSession(id)
+	if err != nil || !second.HasSnapshot || len(second.Messages) != len(first.Messages) || second.Messages[1]["content"] != "keep my answer" {
+		t.Fatalf("reopened legacy session: %+v %v", second, err)
+	}
+}
+
+func TestHistorySyncUpdatesPreviouslyMaterializedSnapshot(t *testing.T) {
+	t.Parallel()
+	a := newIsolatedChatTestApp(t)
+	const id = "headless-follow-up"
+	history := []openai.ChatCompletionMessage{{Role: "user", Content: "first"}, {Role: "assistant", Content: "answer one"}}
+	for _, answer := range []string{"answer one", "answer two"} {
+		history[1].Content = answer
+		a.saveHistory(id, history)
+		if err := a.syncSessionIndexFromHistory(id); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := a.LoadSession(id)
+		if err != nil || len(snapshot.Messages) != 2 || snapshot.Messages[1]["content"] != answer {
+			t.Fatalf("snapshot did not track completed history: %+v, %v", snapshot, err)
+		}
+	}
+}

@@ -1174,16 +1174,13 @@ func (a *App) apiHandleServiceOutput(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiHandleStopService(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		GraceSeconds int `json:"graceSeconds"`
-	}
+	var body struct{}
 	if err := apiDecodeOptionalBody(r, &body); err != nil {
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	info, err := a.StopService(StopServiceRequest{
-		ID:           r.PathValue("id"),
-		GraceSeconds: body.GraceSeconds,
+		ID: r.PathValue("id"),
 	})
 	if err != nil {
 		if errors.Is(err, errServiceNotFound) {

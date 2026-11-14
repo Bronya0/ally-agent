@@ -12,7 +12,7 @@ package sandbox
 //
 // Mount order is the policy: bubblewrap applies mounts in argument order and the
 // later mount wins, so the read-only host tree comes first, the writable binds
-// next, and the re-deny / mask mounts last. The result mirrors the macOS
+// next, and the mask mounts last. The result mirrors the macOS
 // profile: read almost everywhere, write only under the writable roots, and an
 // optional network namespace that removes egress entirely.
 //
@@ -22,7 +22,7 @@ package sandbox
 // host's /dev and /proc layout, and `--die-with-parent` kills the sandboxed
 // process when the runner is killed — without it, cancelling a run would leave
 // the command running.
-func bwrapArgs(writable []string, denyWrite, masks []policyPath, network bool) []string {
+func bwrapArgs(writable []string, masks []policyPath, network bool) []string {
 	args := []string{
 		"--die-with-parent",
 		// A pid namespace keeps the command from listing, signalling or reading
@@ -38,11 +38,6 @@ func bwrapArgs(writable []string, denyWrite, masks []policyPath, network bool) [
 	}
 	for _, dir := range writable {
 		args = append(args, "--bind", dir, dir)
-	}
-	for _, entry := range denyWrite {
-		// --ro-bind takes a single file as readily as a tree, so re-denying one
-		// file needs no special case here.
-		args = append(args, "--ro-bind", entry.path, entry.path)
 	}
 	for _, mask := range masks {
 		if mask.dir {

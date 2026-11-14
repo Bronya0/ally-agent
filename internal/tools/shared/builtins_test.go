@@ -245,8 +245,7 @@ func patternsCompile(schema map[string]any) error {
 	return nil
 }
 
-// TestServiceSchemaExposesTheStopAndReadTuning pins the two parameters the
-// runtime accepts for compatibility, and ensures the model is told stops force-kill.
+// TestServiceSchemaExposesTheStopAndReadTuning checks read limits.
 func TestServiceSchemaExposesTheStopAndReadTuning(t *testing.T) {
 	params, description := builtinSchemaForTest(t, "service")
 	if !strings.Contains(description, "immediately force-kills") {
@@ -254,13 +253,6 @@ func TestServiceSchemaExposesTheStopAndReadTuning(t *testing.T) {
 	}
 	properties := schemaObjectForTest(t, params["properties"])
 
-	grace := schemaObjectForTest(t, properties["graceSeconds"])
-	if !strings.Contains(grace["description"].(string), "ignored") {
-		t.Fatal("legacy grace parameter must be documented as ignored")
-	}
-	if grace["maximum"] != MaxServiceStopGraceSeconds || grace["minimum"] != 0 {
-		t.Fatalf("service graceSeconds bounds = %#v, want 0..%d so an omitted or 0 value means the default", grace, MaxServiceStopGraceSeconds)
-	}
 	tail := schemaObjectForTest(t, properties["tailBytes"])
 	if tail["maximum"] != MaxServiceReadTailBytes || tail["minimum"] != 0 {
 		t.Fatalf("service tailBytes bounds = %#v, want 0..%d", tail, MaxServiceReadTailBytes)

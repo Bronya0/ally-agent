@@ -12,9 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -26,28 +26,34 @@ type Stats struct {
 	DirCount   int   `json:"dirCount"`
 }
 
-// isVCSPath checks if any component in the posix relative path is VCS metadata.
-func isVCSPath(relPosix string) bool {
-	for _, part := range strings.Split(relPosix, "/") {
-		if runtime.GOOS == "windows" {
-			// Windows resolves VCS directory names case-insensitively.
-			part = strings.ToLower(part)
-		}
-		if part == ".git" || part == ".svn" || part == ".hg" {
-			return true
-		}
-	}
-	return false
-}
-
 // PathFilter checks whether a file or directory path is allowed to be packed.
 // An error halts packing immediately with that error.
 type PathFilter func(absPath string, isDir bool) error
 
 // PackWithFilter streams a local file or directory with an optional per-entry path filter.
 func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter) (Stats, error) {
+	root, err := os.OpenRoot(filepath.Dir(srcPath))
+	if err != nil {
+		return Stats{}, err
+	}
+	defer root.Close()
+	return PackRoot(root, filepath.Base(srcPath), arcRootName, w, filter)
+}
+
+// PackRoot packs a workspace-relative source using a bounded directory handle.
+func PackRoot(root *os.Root, srcPath, arcRootName string, w io.Writer, filter PathFilter) (Stats, error) {
+	srcPath = filepath.ToSlash(srcPath)
+	if !fs.ValidPath(srcPath) {
+		return Stats{}, fmt.Errorf("invalid source path: %s", srcPath)
+	}
+	absoluteFilter := filter
+	if filter != nil {
+		filter = func(current string, isDir bool) error {
+			return absoluteFilter(filepath.Join(root.Name(), filepath.FromSlash(current)), isDir)
+		}
+	}
 	var stats Stats
-	fi, err := os.Lstat(srcPath)
+	fi, err := root.Lstat(srcPath)
 	if err != nil {
 		return stats, err
 	}
@@ -74,7 +80,7 @@ func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter)
 		}
 		linkTarget := ""
 		if fi.Mode()&os.ModeSymlink != 0 {
-			link, err := os.Readlink(srcPath)
+			link, err := root.Readlink(srcPath)
 			if err != nil {
 				return stats, fmt.Errorf("read symlink %s: %w", srcPath, err)
 			}
@@ -90,7 +96,7 @@ func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter)
 			return stats, fmt.Errorf("write tar header: %w", err)
 		}
 		if fi.Mode().IsRegular() {
-			f, err := os.Open(srcPath)
+			f, err := root.Open(srcPath)
 			if err != nil {
 				return stats, fmt.Errorf("open source file: %w", err)
 			}
@@ -107,22 +113,20 @@ func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter)
 	}
 
 	// Directory tree pack
-	srcClean := filepath.Clean(srcPath)
-	err = filepath.Walk(srcClean, func(current string, info os.FileInfo, walkErr error) error {
+	srcClean := filepath.ToSlash(filepath.Clean(srcPath))
+	err = fs.WalkDir(root.FS(), srcClean, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
 		}
 		rel, err := filepath.Rel(srcClean, current)
 		if err != nil {
 			return err
 		}
 		relPosix := filepath.ToSlash(rel)
-		if isVCSPath(relPosix) {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
 		if filter != nil {
 			if err := filter(current, info.IsDir()); err != nil {
 				return err
@@ -135,7 +139,7 @@ func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter)
 		}
 		linkTarget := ""
 		if info.Mode()&os.ModeSymlink != 0 {
-			link, err := os.Readlink(current)
+			link, err := root.Readlink(current)
 			if err != nil {
 				return err
 			}
@@ -154,7 +158,7 @@ func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter)
 		}
 
 		if info.Mode().IsRegular() {
-			f, err := os.Open(current)
+			f, err := root.Open(current)
 			if err != nil {
 				return fmt.Errorf("open file %s: %w", current, err)
 			}
@@ -179,14 +183,9 @@ func PackWithFilter(srcPath, arcRootName string, w io.Writer, filter PathFilter)
 // UnpackTarget confines every entry to the requested file or directory, so a
 // remote archive cannot modify siblings of the destination.
 func UnpackTarget(r io.Reader, target string, overwrite bool) (Stats, error) {
-	return unpack(r, filepath.Dir(target), overwrite, filepath.Base(target))
-}
-
-func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (Stats, error) {
-	var stats Stats
-	destClean := filepath.Clean(destDir)
+	destClean := filepath.Dir(target)
 	if err := os.MkdirAll(destClean, 0o755); err != nil {
-		return stats, fmt.Errorf("create destination directory: %w", err)
+		return Stats{}, fmt.Errorf("create destination directory: %w", err)
 	}
 
 	// All filesystem operations are relative to a directory handle. Unlike a
@@ -194,10 +193,23 @@ func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (S
 	// and concurrent symlink replacements.
 	root, err := os.OpenRoot(destClean)
 	if err != nil {
-		return stats, fmt.Errorf("open destination root: %w", err)
+		return Stats{}, fmt.Errorf("open destination root: %w", err)
 	}
 	defer root.Close()
 
+	return UnpackRoot(r, root, filepath.Base(target), overwrite)
+}
+
+// UnpackRoot confines archive writes to a workspace-relative target. The archive
+// root is its basename; ancestors are always accessed through the workspace root.
+func UnpackRoot(r io.Reader, root *os.Root, target string, overwrite bool) (Stats, error) {
+	var stats Stats
+	target = filepath.Clean(target)
+	if !fs.ValidPath(filepath.ToSlash(target)) || target == "." {
+		return stats, fmt.Errorf("invalid target path: %s", target)
+	}
+	destClean := filepath.Dir(target)
+	expectedRoot := filepath.Base(target)
 	tr := tar.NewReader(r)
 	buf := make([]byte, 64*1024)
 
@@ -205,8 +217,16 @@ func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (S
 	type dirModTime struct {
 		path  string
 		mtime time.Time
+		mode  os.FileMode
 	}
 	var dirTimes []dirModTime
+	defer func() {
+		for i := len(dirTimes) - 1; i >= 0; i-- {
+			if dirTimes[i].mode != 0 {
+				_ = root.Chmod(dirTimes[i].path, dirTimes[i].mode)
+			}
+		}
+	}()
 
 	for {
 		header, err := tr.Next()
@@ -224,9 +244,6 @@ func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (S
 		if expectedRoot != "" && name != expectedRoot && !strings.HasPrefix(name, expectedRoot+"/") {
 			return stats, fmt.Errorf("Tar-Slip violation: entry outside transfer destination: %s", header.Name)
 		}
-		if isVCSPath(name) {
-			return stats, fmt.Errorf("refusing to unpack version-control metadata: %s", name)
-		}
 
 		targetPath := filepath.Join(destClean, filepath.FromSlash(name))
 		rel, err := filepath.Rel(destClean, targetPath)
@@ -236,6 +253,7 @@ func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (S
 
 		// Never traverse a symlink supplied by the archive or already present in
 		// the destination, even when it points to another location inside root.
+		name = filepath.Join(destClean, name)
 		for parent := filepath.Dir(name); parent != "."; parent = filepath.Dir(parent) {
 			info, err := root.Lstat(parent)
 			if err != nil && !os.IsNotExist(err) {
@@ -249,7 +267,12 @@ func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (S
 		targetPath = name
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if existing, err := root.Lstat(targetPath); err == nil {
+			created := false
+			if existing, err := root.Lstat(targetPath); os.IsNotExist(err) {
+				created = true
+			} else if err != nil {
+				return stats, err
+			} else {
 				if !existing.IsDir() {
 					return stats, fmt.Errorf("cannot replace a file or symlink with a directory: %s", rel)
 				}
@@ -258,10 +281,14 @@ func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (S
 			if mode == 0 {
 				mode = 0o755
 			}
-			if err := root.MkdirAll(targetPath, mode); err != nil {
+			if err := root.MkdirAll(targetPath, mode|0o700); err != nil {
 				return stats, fmt.Errorf("create directory %s: %w", targetPath, err)
 			}
-			dirTimes = append(dirTimes, dirModTime{path: targetPath, mtime: header.ModTime})
+			restoreMode := os.FileMode(0)
+			if created {
+				restoreMode = mode
+			}
+			dirTimes = append(dirTimes, dirModTime{path: targetPath, mtime: header.ModTime, mode: restoreMode})
 			stats.DirCount++
 
 		case tar.TypeReg, tar.TypeRegA:
@@ -326,12 +353,15 @@ func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (S
 
 		case tar.TypeSymlink:
 			linkTarget := filepath.Clean(header.Linkname)
-			slashTarget := filepath.ToSlash(linkTarget)
-			if filepath.IsAbs(linkTarget) || slashTarget == ".." || strings.HasPrefix(slashTarget, "../") || filepath.VolumeName(linkTarget) != "" {
-				return stats, fmt.Errorf("refusing symlink pointing outside archive: %s -> %s", header.Name, header.Linkname)
+			resolvedLink := filepath.Clean(filepath.Join(filepath.Dir(targetPath), linkTarget))
+			transferRoot := filepath.Join(destClean, expectedRoot)
+			linkBoundary := transferRoot
+			if targetPath == transferRoot {
+				linkBoundary = destClean
 			}
-			if isVCSPath(slashTarget) {
-				return stats, fmt.Errorf("refusing symlink pointing to VCS metadata: %s -> %s", header.Name, header.Linkname)
+			linkRel, linkErr := filepath.Rel(linkBoundary, resolvedLink)
+			if filepath.IsAbs(linkTarget) || filepath.VolumeName(linkTarget) != "" || linkErr != nil || linkRel == ".." || strings.HasPrefix(linkRel, ".."+string(filepath.Separator)) {
+				return stats, fmt.Errorf("refusing symlink pointing outside archive: %s -> %s", header.Name, header.Linkname)
 			}
 			parent := filepath.Dir(targetPath)
 			if err := root.MkdirAll(parent, 0o755); err != nil {
@@ -364,6 +394,12 @@ func unpack(r io.Reader, destDir string, overwrite bool, expectedRoot string) (S
 	// Restore directory modtimes in reverse order (deepest directories first)
 	for i := len(dirTimes) - 1; i >= 0; i-- {
 		dt := dirTimes[i]
+		if dt.mode != 0 {
+			if err := root.Chmod(dt.path, dt.mode); err != nil {
+				return stats, fmt.Errorf("restore directory permissions %s: %w", dt.path, err)
+			}
+		}
+		dirTimes[i].mode = 0
 		if dt.mtime.Unix() > 0 {
 			_ = root.Chtimes(dt.path, dt.mtime, dt.mtime)
 		}

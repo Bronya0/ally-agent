@@ -18,20 +18,20 @@ func TestMCPEditorPreservesArguments(t *testing.T) {
 		}
 		a := &desktop{mcpText: string(raw)}
 		a.openMCPEditor("srv")
-		got, err := splitArgs(a.mcpF.Args)
+		got, err := parseMCPArgs(a.mcpF.Args)
 		if err != nil || !reflect.DeepEqual(got, args) {
 			t.Fatalf("arguments changed: %q -> %q, err=%v", args, got, err)
 		}
 	}
-	for _, raw := range []string{`["unfinished"`, `[1]`} {
-		if _, err := splitArgs(raw); err == nil {
+	for _, raw := range []string{`["unfinished"`, `[1]`, `[null]`, `null`, `"-y"`, "-y, @playwright/mcp", "-y @playwright/mcp"} {
+		if _, err := parseMCPArgs(raw); err == nil {
 			t.Fatalf("invalid JSON args accepted: %s", raw)
 		}
 	}
-	for _, raw := range []string{"-y, @playwright/mcp", "-y @playwright/mcp"} {
-		got, err := splitArgs(raw)
-		if err != nil || !reflect.DeepEqual(got, []string{"-y", "@playwright/mcp"}) {
-			t.Fatalf("simple args compatibility lost: %q, %v", got, err)
+	for _, raw := range []string{"", "  ", "[]"} {
+		got, err := parseMCPArgs(raw)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("empty args = %q, %v", got, err)
 		}
 	}
 }

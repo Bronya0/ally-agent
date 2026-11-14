@@ -76,10 +76,6 @@ type Spec struct {
 	// (see writableDirs) so builds and package managers keep working without
 	// broad writes.
 	WriteRoots []string
-	// DenyWriteRoots are re-denied inside the write roots (the knowledge-base
-	// sources/ subtree is readable but read-only). Paths outside every write
-	// root are dropped: they are already unwritable.
-	DenyWriteRoots []string
 	// ForbidReadRoots are paths masked out of the command's view even though the
 	// rest of the host stays readable — this is what keeps Ally's own credential
 	// store (model API keys, SSH secrets) out of a model-driven shell. A path
@@ -121,13 +117,6 @@ func AllowsWrite(spec Spec, resolved string) bool {
 	target := filepath.Clean(resolved)
 	if !insideAny(target, plan.writable) {
 		return false
-	}
-	// 可写根之内还可以被重新禁写（知识库 sources/ 就是可读不可写的）：
-	// 那一层同样是内核在拒，判定不能漏。
-	for _, denied := range plan.denyWrite {
-		if isWithin(target, denied.path, true) {
-			return false
-		}
 	}
 	return true
 }

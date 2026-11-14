@@ -263,6 +263,7 @@ func TestReadDisplayProjectionPreservesMetadataAndBackendEvidence(t *testing.T) 
 			// Capture the original header summary on detached JSON maps.
 			var original map[string]any
 			_ = json.Unmarshal(before, &original)
+			normalizeToolMessage(original)
 			want := toolGroupResultSummary(toolKind(tc.name), toolResult(original))
 			projected := toolEventForDisplay("tool:result", payload).(map[string]any)
 			encoded, _ := json.Marshal(projected)

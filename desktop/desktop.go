@@ -443,7 +443,7 @@ func Run() {
 			if prefs.Avatar == "custom" {
 				customAvatar = a.loadCustomAvatar()
 			}
-			avatarStyle := normalizedAvatarStyle(prefs.Avatar)
+			avatarStyle := prefs.Avatar
 			avatarPoses := decodeAvatarStyle(avatarStyle)
 			err := a.core.StartNative(context.Background(), a.onEvent)
 			if err != nil {
@@ -1226,6 +1226,7 @@ func (a *desktop) openSession(id string) {
 				if str(message, "role") == "tool_call" || str(message, "toolCallId") != "" {
 					normalizeToolMessage(message)
 				}
+				normalizeLoadedCancellation(message)
 				if !retainMCPDisplaySummary(message) && !isMCPDisplayTool(message) {
 					retainSnapshotToolSummary(message)
 				}

@@ -132,7 +132,7 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 	if err != nil {
 		return MultiEditResult{}, err
 	}
-	spec := fileMutationSpec(cfg, roots)
+	spec := fileMutationSpec(roots)
 	prepared := make([]preparedFileEdit, 0, len(plan.Files))
 	for i, filePlan := range plan.Files {
 		file := filePlan.Edit
@@ -302,9 +302,6 @@ func (a *App) executeLocalEditToolCall(ctx context.Context, cfg ConfigState, cal
 	}
 	if err == nil {
 		err = validateModelEditToolRequest([]FileTextEdits{file})
-	}
-	if err == nil {
-		err = kbDenyCheckPaths(ctx, cfg, file.Path)
 	}
 	if err != nil {
 		return toolErrorResult(err)

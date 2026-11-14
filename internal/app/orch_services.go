@@ -220,13 +220,12 @@ func (a *App) startServiceWithConfigLocked(parent context.Context, cfg ConfigSta
 
 	id := "svc_" + newID()
 	// 生命周期与工具调用的那次 ctx 脱钩：后台服务要在这一轮对话结束之后继续跑，
-	// 而它又需要 ctx 里的值（kbDenyRoots 从 parent 上读知识库禁写根），所以脱掉
-	// 的只是取消链，不是带的值。取消只由 StopService / 应用退出走 cancel。
+	// 保留上下文中的运行信息，取消只由 StopService / 应用退出走 cancel。
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	shell := commandShell(req.Command, cfg.GitBashPath)
 	// service 与 command 走同一套沙箱策略：只接一条会让 dev server 成为绕开沙箱的
 	// 口子。
-	spec := sandboxSpec(roots, kbDenyRoots(parent))
+	spec := sandboxSpec(roots)
 	argv := wrapSandboxedCommand(spec, append([]string{shell.path}, shell.args...))
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = cwd
@@ -815,7 +814,7 @@ func (s *managedService) markSandboxDeniedLocked(output string) {
 	// 服务记录只留下可写根，没有留下那次运行的完整策略：用可写根重建一个，只用于
 	// 核验「这条路径真的不可写吗」。缺 KB 禁写根只会让我们少报一条路径，绝不会把
 	// 可写的位置说成被拒 —— 偏差只在保守方向。
-	s.info.DeniedWriteHint = sandbox.WriteDeniedHint(s.writeRoots, sandboxDeniedWriteTargets(sandboxSpec(s.writeRoots, nil), output)...)
+	s.info.DeniedWriteHint = sandbox.WriteDeniedHint(s.writeRoots, sandboxDeniedWriteTargets(sandboxSpec(s.writeRoots), output)...)
 }
 
 func (s *managedService) outputSnapshot() (string, int64, bool) {

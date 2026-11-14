@@ -60,7 +60,7 @@ func (a *App) reserveBlackboardDelegates(ctx context.Context, cfg ConfigState, c
 	var names map[int]string
 	for i, call := range calls {
 		name := normalizeToolName(call.Function.Name)
-		if (name != "subagent" && name != "agent_delegate") || conflicts[i] != nil || builtinToolDisabled(ctx, cfg, name) {
+		if name != "subagent" || conflicts[i] != nil || builtinToolDisabled(ctx, cfg, name) {
 			continue
 		}
 		var req AgentDelegateRequest

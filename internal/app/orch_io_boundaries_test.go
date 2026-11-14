@@ -148,7 +148,7 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 			// A cancelled transport ensures even a regression cannot contact a host.
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			_, err = a.remoteEditOne(ctx, remoteTarget{Host: "example.invalid", LegacyRoot: "/srv/app"}, req, remoteRawFile{Path: req.Path, Data: decoded, RawData: tc.original, Size: int64(len(tc.original))})
+			_, err = a.remoteEditOne(ctx, remoteTarget{Host: "example.invalid"}, req, remoteRawFile{Path: req.Path, Data: decoded, RawData: tc.original, Size: int64(len(tc.original))})
 			if toolErrorCode(err) != "E_EDIT_ENCODING" {
 				t.Fatalf("remote edit bypassed shared encoding gate: %v", err)
 			}

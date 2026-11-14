@@ -207,7 +207,7 @@ func TestReusedReadResultClearsDataURL(t *testing.T) {
 	cache := newSessionReadCache()
 
 	// First read
-	res1, err := cache.read(app, cfg, BatchReadRequest{Path: pngPath})
+	res1, err := cache.read(app, cfg, BatchReadRequest{Files: []BatchReadFileRequest{{Path: pngPath}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestReusedReadResultClearsDataURL(t *testing.T) {
 	}
 
 	// Second read (same content) -> reused, DataURL cleared
-	res2, err := cache.read(app, cfg, BatchReadRequest{Path: pngPath})
+	res2, err := cache.read(app, cfg, BatchReadRequest{Files: []BatchReadFileRequest{{Path: pngPath}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestChangedImageWithIdenticalNoticeIsNotReused(t *testing.T) {
 	cfg := ConfigState{Workspace: dir}
 	cache := newSessionReadCache()
 
-	res1, err := cache.read(app, cfg, BatchReadRequest{Path: pngPath})
+	res1, err := cache.read(app, cfg, BatchReadRequest{Files: []BatchReadFileRequest{{Path: pngPath}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestChangedImageWithIdenticalNoticeIsNotReused(t *testing.T) {
 	if err := os.WriteFile(pngPath, second, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	res2, err := cache.read(app, cfg, BatchReadRequest{Path: pngPath})
+	res2, err := cache.read(app, cfg, BatchReadRequest{Files: []BatchReadFileRequest{{Path: pngPath}}})
 	if err != nil {
 		t.Fatal(err)
 	}

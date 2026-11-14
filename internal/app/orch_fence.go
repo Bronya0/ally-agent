@@ -65,10 +65,9 @@ func evalExistingPrefixOrSelf(p string) string {
 // the filesystem boundary — asked once, below, through the single judgement
 // (kernelOwnsBoundary).
 //
-// Three checks are kernel-blind and always on: high-risk command semantics
+// Two checks are kernel-blind and always on: high-risk command semantics
 // (curl|sh, privilege escalation) are not filesystem shapes any write filter can
-// see; .git metadata sits inside the writable root, because git itself must write
-// it; and deleting a whole workspace is legal to a boundary whose writable surface
+// see; and deleting a whole workspace is legal to a boundary whose writable surface
 // is exactly those roots.
 //
 // Two are lexical guesses about where a write lands, and only the fence owns them
@@ -88,10 +87,7 @@ func checkCommandSafetyAtCwd(req CommandRequest, roots []string, workingDir stri
 			return codedToolError("E_DELETE_BLOCKED", fmt.Errorf("安全围栏已拦截：不允许删除工作区根目录。\n原因：删掉工作区根等于删掉整个项目，而 delete 工具明确拒绝同一个目标，所以这一档必须由围栏自己说。\n检测到的目标：%s\n处理方式：要删工作区里的具体条目请用 delete 工具（它逐条检查目标与递归范围）；确实要清空整个工作区，请手动在终端执行。", root))
 		}
 	} else if command.ContainsExplicitDeleteCommand(cmd) && !command.IsAllowedDeleteContext(cmd) {
-		return codedToolError("E_COMMAND_BLOCKED", errors.New("安全围栏已拦截：command 不允许直接执行文件删除命令。\n原因：shell 删除命令可能绕过工作区边界、系统目录和 .git 保护。\n处理方式：请改用 delete 工具，由专用工具检查目标路径和递归范围。"))
-	}
-	if risk := firstVCSMetadataMutationTarget(cmd, workingDir); risk != nil {
-		return codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：命令目标是版本控制元数据内的路径。\n原因：创建、覆盖或删除 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码；目标在工作区内，所以「工作区外写入」那道检查不会拦它。\n检测到的目标：%s\n处理方式：版本控制状态请手动在终端变更。", risk.Path))
+		return codedToolError("E_COMMAND_BLOCKED", errors.New("安全围栏已拦截：command 不允许直接执行文件删除命令。\n原因：shell 删除命令可能绕过工作区边界、系统目录保护。\n处理方式：请改用 delete 工具，由专用工具检查目标路径和递归范围。"))
 	}
 	// 密钥/凭据位置一律禁读：这一道不分边界归属，围栏自己管还是内核管都要拦。
 	if path, reason := firstSensitiveReadTarget(cmd, workingDir); path != "" {
@@ -99,59 +95,11 @@ func checkCommandSafetyAtCwd(req CommandRequest, roots []string, workingDir stri
 	}
 	if !kernelOwns {
 		if risk := firstExistingOutsideMutationTarget(cmd, roots, workingDir); risk != nil {
-			return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径（仍须满足其他围栏规则；工作区内符号链接逃逸和版本控制元数据写入不在此例外内）。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录；临时目录没有覆盖豁免。\n处理方式：使用工作区内的 .tmp/ 输出路径（先创建父目录），或换用尚不存在的唯一临时路径；不要通过变量或符号链接绕过本次拒绝。\n执行状态：本次命令尚未执行。\n可写范围：\n%s", risk.Reason, risk.Path, formatAllowedRoots(roots)))
+			return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径（仍须满足其他围栏规则；工作区内符号链接逃逸不在此例外内）。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录；临时目录没有覆盖豁免。\n处理方式：使用工作区内的 .tmp/ 输出路径（先创建父目录），或换用尚不存在的唯一临时路径；不要通过变量或符号链接绕过本次拒绝。\n执行状态：本次命令尚未执行。\n可写范围：\n%s", risk.Reason, risk.Path, formatAllowedRoots(roots)))
 		}
 	}
 	if risk := command.MatchRiskPattern(cmd); risk != nil {
 		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。", risk.Reason))
-	}
-	return nil
-}
-
-// vcsMetadataMutationHit reports the form that makes a mutation target version
-// control metadata — the path as written, or the path it resolves to — together
-// with the reason to show; an empty reason means the target is allowed.
-//
-// Judging both forms in one place is the point: a symlink inside the workspace
-// can point at .git (`ln -s .git gh` plus a write to `gh/hooks/pre-commit`), and
-// the written form alone cannot show it. Every local entrance — write, delete,
-// command target — comes through this function, so a new entrance cannot quietly
-// skip the resolved form, which used to be a repository-corruption hole.
-// resolved is what the caller already resolved for its containment check: the
-// target itself for a write, and the parent when a symlink's *link* is what gets
-// deleted. Remote entrances stay lexical on purpose — nothing resolves locally on
-// the far side, so the helper re-checks with remote facts (contains_vcs).
-//
-// Callers that only refuse use the reason (it names the path themselves); the one
-// that explains the refusal shows hit, because “written path resolves into .git”
-// is the part the model needs to see.
-func vcsMetadataMutationHit(abs, resolved string) (hit string, reason string) {
-	if blocked, reason := pathutil.VCSMetadataReason(abs); blocked {
-		return abs, reason
-	}
-	if samePath(resolved, abs) {
-		return "", ""
-	}
-	if blocked, reason := pathutil.VCSMetadataReason(resolved); blocked {
-		return resolved, reason
-	}
-	return "", ""
-}
-
-// firstVCSMetadataMutationTarget blocks commands whose statically resolvable
-// operands touch version-control metadata. Targets inside the workspace pass the
-// outside-write check by design, and .git used to have a delete guard only, so
-// `> .git/hooks/pre-commit` (code execution on the next git command) and
-// `> .git/index` (repository corruption) were both accepted.
-func firstVCSMetadataMutationTarget(commandLine string, workingDir string) *outsideMutationRisk {
-	for _, target := range command.LiteralWriteTargets(commandLine) {
-		path, ok := command.ResolveCommandLiteralPath(target.Path, workingDir)
-		if !ok {
-			continue
-		}
-		if hit, _ := vcsMetadataMutationHit(path, evalExistingPrefixOrSelf(path)); hit != "" {
-			return &outsideMutationRisk{Path: filepath.ToSlash(hit)}
-		}
 	}
 	return nil
 }
@@ -474,15 +422,10 @@ func isLikelyDirectory(abs string) bool {
 }
 
 // isDangerousDeletePath returns (blocked, reason). Blocks paths that are
-// OS-protected locations, home roots, VCS metadata, workspace root, and any
+// OS-protected locations, home roots, workspace root, and any
 // directory inside the Ally data directory.
 func isDangerousDeletePath(absPath string) (bool, string) {
 	abs := filepath.Clean(absPath)
-
-	// 1. VCS metadata — never delete .git or similar, nor anything below it.
-	if blocked, reason := pathutil.VCSMetadataReason(abs); blocked {
-		return true, reason
-	}
 
 	// 2. Ally Agent data directory：目录本身永不可删；其子树只允许「单文件」
 	// 删除（记忆笔记、缓存文件），目录一律禁止——delete 工具对目录本就强制

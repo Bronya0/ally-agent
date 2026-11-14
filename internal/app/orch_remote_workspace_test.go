@@ -36,7 +36,7 @@ func TestRemoteTargetAuthorizationUsesRequestWorkspace(t *testing.T) {
 		t.Fatalf("expected E_SERVER_UNAUTHORIZED for the task workspace, got %v", err)
 	}
 
-	app.AuthorizeServerForWorkspace(ws, "my-srv")
+	app.AuthorizeServerForWorkspace(ws, apiSSHTestNode(t, app, "my-srv").ID)
 	connectCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	defer cancel()
 	rt, err := app.resolveAndAuthorizeRemoteTarget(connectCtx, "my-srv")

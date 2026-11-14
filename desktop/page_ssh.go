@@ -463,6 +463,7 @@ type sshImportStore interface {
 
 func importSSHNodes(store sshImportStore, nodes []backend.SSHServerNode) (added, updated int, failures []string) {
 	for _, node := range nodes {
+		node = backend.NormalizeSSHImportNode(node)
 		existing := false
 		// IDs identify nodes on this installation, not in the exported file.
 		node.ID = ""

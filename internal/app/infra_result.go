@@ -274,14 +274,8 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		}
 		return modelFallbackResult(name, result.Data, fullJSON)
 	case "remote_transfer":
-		var r struct {
-			RemoteTransferResult
-			LegacyTarget string `json:"target"`
-		}
+		var r RemoteTransferResult
 		if decodeToolData(result.Data, &r) {
-			if r.Alias == "" {
-				r.Alias = r.LegacyTarget
-			}
 			return modelResultBody(fmt.Sprintf("// remote_transfer | action=%q | alias=%q | local=%q | remote=%q | bytes=%d | files=%d | dirs=%d", r.Action, r.Alias, r.LocalPath, r.RemotePath, r.TotalBytes, r.FileCount, r.DirCount), r.Summary)
 		}
 		return modelFallbackResult(name, result.Data, fullJSON)
@@ -342,12 +336,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		case ServiceInfo:
 			return renderServiceInfoResultForModel(typed)
 		}
-		// Fallback for any unexpected shape: try legacy ServiceInfo decode.
-		var r ServiceInfo
-		if !decodeToolData(result.Data, &r) {
-			return modelFallbackResult(name, result.Data, fullJSON)
-		}
-		return renderServiceInfoResultForModel(r)
+		return modelFallbackResult(name, result.Data, fullJSON)
 	case "delete", "remote_delete_path":
 		var r DeletePathsResult
 		if !decodeToolData(result.Data, &r) {
@@ -406,7 +395,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			return modelFallbackResult(name, result.Data, fullJSON)
 		}
 		return renderPlanResultForModel(r.Action, r.Plan, r.Revision)
-	case "subagent", "agent_delegate":
+	case "subagent":
 		var r AgentDelegateResult
 		if !decodeToolData(result.Data, &r) {
 			return modelFallbackResult(name, result.Data, fullJSON)

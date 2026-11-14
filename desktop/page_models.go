@@ -1025,6 +1025,10 @@ func (a *desktop) importModels() {
 			a.win.Update(func() { a.notify(locales.Text("无法导入，请选择有效的 Ally 对话模型配置文件。")) })
 			return
 		}
+		for i := range models {
+			models[i] = backend.NormalizeImportedModel(models[i])
+		}
+
 		a.win.Update(func() {
 			cfg := a.config
 			added, updated := 0, 0

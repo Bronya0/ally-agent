@@ -462,8 +462,8 @@ func (a *desktop) mcpEditorDialog(c *ui.Context) {
 		if a.mcpTransport() == mcpTransportStdio {
 			fieldRow(c, "mcp-command", locales.Text("命令"), &a.mcpF.Command, false)
 			fieldLabel(c, locales.Text("参数"))
-			textArea(c, "mcp-args", locales.Text("参数"), `-y, @playwright/mcp`, &a.mcpF.Args, 90).FillWidth()
-			fieldNote(c, locales.Text("推荐 JSON 字符串数组，可完整保留空格和逗号；也兼容简单的逗号或空格分隔输入。"), a.secondaryInk())
+			textArea(c, "mcp-args", locales.Text("参数"), `["-y", "@playwright/mcp"]`, &a.mcpF.Args, 90).FillWidth()
+			fieldNote(c, locales.Text("填写 JSON 字符串数组，保留参数中的空格和逗号；无参数可留空。"), a.secondaryInk())
 			fieldLabel(c, locales.Text("环境变量"))
 			textArea(c, "mcp-env", locales.Text("环境变量"), `{"API_KEY": "your-api-key"}`, &a.mcpF.Env, 70)
 			fieldNote(c, locales.Text("JSON 对象，也支持每行 KEY=value。"), a.secondaryInk())
@@ -506,7 +506,7 @@ func (a *desktop) saveMCPEditor() {
 	}
 	entry.Transport = transport
 	if transport == "stdio" {
-		args, err := splitArgs(a.mcpF.Args)
+		args, err := parseMCPArgs(a.mcpF.Args)
 		if err != nil {
 			a.notifyError(locales.Text("参数必须是 JSON 字符串数组：") + err.Error())
 			return
@@ -543,29 +543,27 @@ func formatArgs(args []string) string {
 	return string(data)
 }
 
-func splitArgs(raw string) ([]string, error) {
+func parseMCPArgs(raw string) ([]string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, nil
 	}
-	if strings.HasPrefix(raw, "[") {
-		var args []string
-		if err := json.Unmarshal([]byte(raw), &args); err != nil {
-			return nil, err
+	var values []any
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, err
+	}
+	if values == nil {
+		return nil, fmt.Errorf("expected a JSON string array")
+	}
+	args := make([]string, len(values))
+	for i, value := range values {
+		text, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("argument %d must be a string", i+1)
 		}
-		return args, nil
+		args[i] = text
 	}
-	parts := strings.Split(raw, ",")
-	if len(parts) == 1 {
-		parts = strings.Fields(raw)
-	}
-	var out []string
-	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out, nil
+	return args, nil
 }
 
 func parsePairs(raw, sep string) (map[string]string, error) {

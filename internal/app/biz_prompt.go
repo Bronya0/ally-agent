@@ -97,7 +97,7 @@ func sharedCodingGuidelines() string {
 func sharedSafetyBoundaries() string {
 	return "- Keep project writes inside the primary workspace or active session extra roots. Use absolute paths for extra roots; runtime extra-root updates replace earlier root lists. Use supplied profile and memory paths for global records. Other local access follows runtime restrictions; do not work around a refusal. Remote tools use absolute paths and have no workspace directory boundary.\n" +
 		"- Never recursively walk or search ~, /, C:\\, system directories, or broad home directories. Anchor recursion to a project subdirectory.\n" +
-		"- Never delete or overwrite: filesystem roots, drive roots, /etc, /var, /usr, /home/*, C:\\Windows, C:\\Users/*, the workspace root or its direct subdirectories, /dev, /proc, /sys, /etc/shadow, /var/local/libs, or any path containing .git.\n" +
+		"- Never delete or overwrite: filesystem roots, drive roots, /etc, /var, /usr, /home/*, C:\\Windows, C:\\Users/*, the workspace root or its direct subdirectories, /dev, /proc, /sys, /etc/shadow, /var/local/libs, or other protected system targets.\n" +
 		"- Shell arguments are code. JSON escaping is not shell escaping. Quote for the shell. Pass multiline text through a file or structured parameter. Never expand secrets.\n" +
 		"- Check wildcards and variable paths before a batch command.\n" +
 		"- Do not use `rm`, `rmdir`, `unlink`, or `del`. Use `delete` locally and `remote_delete_path` remotely.\n" +
@@ -108,39 +108,11 @@ func sharedSafetyBoundaries() string {
 
 }
 
-// knowledgeBasePromptPart returns the operational contract injected into the
-// core system prompt when a session runs on the configured knowledge-base
-// root: the directory layout, the retrieval strategy, and the maintenance
-// rules. The sources/ read-only boundary stated here is enforced by the
-// kbDeny* checks in orch_kb.go — the prompt explains the rule, the executor
-// guarantees it.
-func knowledgeBasePromptPart(workspaceRoot string) string {
-	root := "(the knowledge base root)"
-	if workspaceRoot != "" {
-		root = "`" + filepath.ToSlash(filepath.Clean(workspaceRoot)) + "`"
-	}
-	return "# Knowledge Base Mode\n\n" +
-		"This session operates on a personal knowledge base rooted at " + root + ". It follows this contract:\n\n" +
-		"- `index.md` — the root index: one line per category directory (plus a one-sentence scope note) and direct pointers to frequently used entries. Keep it under ~200 lines; it is the entry point of every retrieval.\n" +
-		"- `<category>/` and optional `<category>/<topic>/` — knowledge entries as Markdown files, at most two directory levels.\n" +
-		"- `<category>/_index.md` — the per-directory entry list. One line per entry: relative path + one-sentence description. Every entry created, moved, renamed, or deleted should be reflected here in the same task.\n" +
-		"- `sources/` — original source documents. Read-only for you: do not create, edit, delete, or write anything under `sources/` through any tool (the backend rejects such writes). Distill what you need into entries outside `sources/` and reference the source path instead.\n" +
-		"- Entry frontmatter (YAML): `title`, `aliases` (synonyms so grep hits paraphrased queries), `tags`, `source` (a `sources/` path or external URL), `date`.\n\n" +
-		"Retrieval strategy:\n" +
-		"1. Read `index.md` first to locate the category, then that directory's `_index.md`, then `read` the specific entries.\n" +
-		"2. When the index is not enough, `grep` across the KB root instead of browsing directories; batch independent keyword searches as parallel grep calls.\n" +
-		"3. Always cite the entry path(s) — and the source path(s) when available — in your answer.\n\n" +
-		"Maintenance rules (adding or updating material):\n" +
-		"- Dedupe first: grep the title/aliases/source before creating an entry; update the existing entry instead of duplicating it.\n" +
-		"- After changing entries, update the enclosing `_index.md` and the root `index.md` in the same task.\n" +
-		"- Never modify originals under `sources/`; keep provenance by pointing the entry's `source` frontmatter at them.\n\n"
-}
-
 // buildSystemPromptParts assembles the prompt for one request. It is app-scoped
 // because two of its blocks (the memory index and the user profile) live in this
 // App's data directory; an app-less version had to reach a process-wide
 // singleton, which made parallel tests (and any second App) unsafe.
-func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, extraRoots []string, customPrompt, gitBashPath, kbRoot string, disabledContext []string) []systemPromptPart {
+func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, extraRoots []string, customPrompt, gitBashPath string, disabledContext []string) []systemPromptPart {
 	cfg := ConfigState{DisabledContext: disabledContext}
 	var parts []systemPromptPart
 	var b strings.Builder
@@ -189,9 +161,6 @@ func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot 
 		"- When in doubt about whether a path is safe, stop and ask the user.\n\n" +
 		"# Temporary Files\n\n" +
 		"Place intermediate artifacts (scripts, drafts, test fixtures, build outputs) under `.tmp/` in the current workspace; create it if missing. Final deliverables and user-requested output files go in their intended workspace location.\n\n")
-	if isKnowledgeBaseWorkspace(workspaceRoot, kbRoot) {
-		b.WriteString(knowledgeBasePromptPart(workspaceRoot))
-	}
 	if len(extraRoots) > 0 {
 		var er strings.Builder
 		er.WriteString("# Session Extra Roots\n\n")
@@ -199,7 +168,7 @@ func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot 
 		for _, root := range extraRoots {
 			er.WriteString("- " + filepath.ToSlash(filepath.Clean(root)) + "\n")
 		}
-		er.WriteString("\nThese roots follow the same safety rules as the primary workspace (refuse to delete any root itself, VCS metadata, system paths). Relative paths still resolve to the primary workspace only.\n\n")
+		er.WriteString("\nThese roots follow the same safety rules as the primary workspace (refuse to delete any root itself, system paths). Relative paths still resolve to the primary workspace only.\n\n")
 		b.WriteString(er.String())
 	}
 	b.WriteString("\n</system-prompt>\n")

@@ -139,7 +139,7 @@ func TestLocalEditBatchDistinctFailuresDoNotShareDiagnostics(t *testing.T) {
 
 func TestLocalEditBatchErrorOwnershipWithoutRecovery(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []string{"large-stale", "missing", "protected"} {
+	for _, kind := range []string{"large-stale", "missing"} {
 		t.Run(kind, func(t *testing.T) {
 			a := newIsolatedToolTestApp(t)
 			peer := FileTextEdits{Path: "peer.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{OldText: "old", NewText: "new"}}}
@@ -153,9 +153,6 @@ func TestLocalEditBatchErrorOwnershipWithoutRecovery(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(a.config.Workspace, bad.Path), []byte(strings.Repeat("old\n", maxEditRecoveryBytes)), 0600); err != nil {
 					t.Fatal(err)
 				}
-			} else if kind == "protected" {
-				bad.Path = ".git/config"
-				wantCode = "E_PROTECTED_PATH"
 			}
 			var calls []openai.ToolCall
 			for _, file := range []FileTextEdits{peer, bad} {

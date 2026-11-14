@@ -744,13 +744,10 @@ func (a *desktop) settingsFence(c *ui.Context) {
 		fieldNote(c, locales.Text("命令与文件改动统一受以下规则约束，模型无法绕过。"), a.secondaryInk())
 		rules := []string{
 			locales.Text("删除命令一律拦下，改用 delete 工具。"),
-			locales.Text("写入 .git / .svn / .hg 一律拦下。"),
 			locales.Text("写入工作区之外已存在的目标一律拦下。"),
 			locales.Text("路径先展开 ~ 再解析符号链接，避免借链接越界。"),
 			locales.Text("mkfs、shutdown、reboot、dd 等破坏性命令一律拦下。"),
 			locales.Text("工作区 = 主工作区 + 会话附加工作区。"),
-			locales.Text("知识库 sources/ 目录对模型只读。"),
-			locales.Text("远端 SSH 写入需要三道检查并弹窗确认。"),
 			locales.Text("各平台使用同一套规则，不因系统不同而放宽。"),
 			locales.Text("写工具可写范围 = 工作区 + Ally 数据目录。"),
 			locales.Text("密钥与凭据位置禁止读取。"),

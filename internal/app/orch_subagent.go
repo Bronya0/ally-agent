@@ -780,7 +780,6 @@ func (a *App) buildSubagentInstructionContext(cfg ConfigState, withProjectMap bo
 // any of these outside an explicit prohibition line.
 var subagentBlockedTools = map[string]bool{
 	"subagent":       true,
-	"agent_delegate": true,
 	"plan":           true,
 	"skill":          true,
 	"scheduled_task": true,
@@ -812,11 +811,6 @@ func trackFileFromToolResult(name string, args string, result *toolResult, files
 	if result == nil || !result.OK {
 		return
 	}
-	raw, err := normalizeRemoteArguments(name, []byte(args))
-	if err != nil {
-		return
-	}
-	args = string(raw)
 	addPath := func(list *[]string, seen map[string]bool, p string) {
 		if p == "" || seen[p] {
 			return

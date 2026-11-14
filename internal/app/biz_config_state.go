@@ -71,7 +71,6 @@ func normalizeStoredConfig(cfg ConfigState) ConfigState {
 	cfg.ProxyNoProxy = strings.TrimSpace(cfg.ProxyNoProxy)
 	cfg.UserAgent = strings.TrimSpace(cfg.UserAgent)
 	cfg.GitHubToken = strings.TrimSpace(cfg.GitHubToken)
-	cfg.KBRoot = strings.TrimSpace(cfg.KBRoot)
 	cfg.BackgroundOpacity = clampBackgroundOpacity(cfg.BackgroundOpacity)
 	cfg.AutoCompactMethod = normalizeAutoCompactMethod(cfg.AutoCompactMethod)
 	cfg.CompactThreshold = clampCompactThreshold(cfg.CompactThreshold)
@@ -94,11 +93,29 @@ func normalizeStoredConfig(cfg ConfigState) ConfigState {
 // Called only on owned model entries by stored and request normalization.
 func normalizeModelEntry(model ModelConfig) ModelConfig {
 	model.APIFormat = normalizeAPIFormat(model.APIFormat)
+	model.TokenParam = normalizeTokenParam(model.TokenParam)
 	model.ReasoningTag = normalizeReasoningTag(model.ReasoningTag)
 	model.ReasoningEffort = normalizeReasoningEffort(model.ReasoningEffort)
 	model.CustomHeaders = normalizeCustomHeaders(model.CustomHeaders)
 	syncModelAPIKeyFields(&model)
 	return model
+}
+
+// NormalizeImportedModel converts old file values before normal configuration handling.
+func NormalizeImportedModel(model ModelConfig) ModelConfig {
+	model.TokenParam = importedTokenParam(model.TokenParam)
+	return normalizeModelEntry(model)
+}
+
+func importedTokenParam(value string) string {
+	switch separatorToUnderscoreReplacer.Replace(strings.ToLower(strings.TrimSpace(value))) {
+	case "max_completion_token", "completion_tokens", "completion", tokenParamMaxCompletionTokens:
+		return tokenParamMaxCompletionTokens
+	case "max_token", "tokens", "legacy", tokenParamMaxTokens:
+		return tokenParamMaxTokens
+	default:
+		return tokenParamAuto
+	}
 }
 
 func validateStoredConfig(cfg ConfigState) error {
@@ -111,7 +128,12 @@ func validateStoredConfig(cfg ConfigState) error {
 // readConfigFile decodes onto defaults, distinguishing absent legacy fields
 // from explicit JSON zero, false, and empty values.
 func loadedConfig(loaded ConfigState) ConfigState {
-	cfg := cloneConfig(loaded)
+	loaded = cloneConfig(loaded)
+	loaded.TokenParam = importedTokenParam(loaded.TokenParam)
+	for i := range loaded.Models {
+		loaded.Models[i] = NormalizeImportedModel(loaded.Models[i])
+	}
+	cfg := loaded
 	if cfg.LastUsedModel != nil {
 		cfg.LastUsedModel = normalizeModelIdentity(cfg.Models, *cfg.LastUsedModel)
 	}
@@ -135,7 +157,6 @@ func settingsConfig(base, req ConfigState) ConfigState {
 	}
 	cfg.CustomPrompt = req.CustomPrompt
 	cfg.GitHubToken = req.GitHubToken
-	cfg.KBRoot = req.KBRoot
 	cfg.GitBashPath = req.GitBashPath
 	cfg.ProxyMode = req.ProxyMode
 	cfg.ProxyURL = req.ProxyURL

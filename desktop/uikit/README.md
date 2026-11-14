@@ -43,7 +43,7 @@ uses the same popup with a quiet 28-DIP toolbar trigger; its locked argument pre
 opening or changing the value without dimming or moving the trigger. Tabs set
 pointer cursors on each interactive item and label.
 
-TabUnderline、TabInk、TabRadius 保留为旧接口；当前工作区标签使用 WorkspaceTab，页面内 Tabs 使用 tabs.go 的两套独立样式。
+工作区标签使用 WorkspaceTab，页面内 Tabs 使用 tabs.go 的两套独立样式。
 
 Values and focus belong to the host. Set `c.Key` before constructing dynamic
 controls. Never retain returned Elements/Parts between build passes. Attach

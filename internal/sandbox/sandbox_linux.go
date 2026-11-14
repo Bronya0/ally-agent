@@ -112,7 +112,7 @@ func Wrap(spec Spec, argv []string) ([]string, bool) {
 	// see EnsureWritableDirsOnce.
 	EnsureWritableDirsOnce()
 	plan := buildPlan(spec)
-	args := bwrapArgs(plan.writable, plan.denyWrite, plan.masks, spec.Network)
+	args := bwrapArgs(plan.writable, plan.masks, spec.Network)
 	// `--` ends bubblewrap's own options, so a command can never be mistaken for
 	// one of them.
 	args = append(args, "--", resolveProgram(argv[0]))

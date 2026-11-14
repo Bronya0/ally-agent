@@ -330,25 +330,15 @@ func TestServiceStartRequiresDescription(t *testing.T) {
 	}
 }
 
-// TestServiceTuningStaysInsideTheDeclaredBounds: graceSeconds and tailBytes are
-// the two knobs the runtime always honoured but the schema never declared. They
-// must accept a value in range (reaching the service lookup) and refuse one
-// above the clamp, so the declared maximum is what the model is held to.
 func TestServiceTuningStaysInsideTheDeclaredBounds(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: t.TempDir()}
 	ctx := context.Background()
 
-	accepted := app.executeTool(ctx, cfg, "s-1", "service", []byte(`{"action":"stop","id":"svc_missing","graceSeconds":10}`))
-	if accepted.ErrorCode == "E_BAD_ARGS" {
-		t.Fatalf("a graceful-stop window inside the bound must reach the service lookup, got %q", accepted.Error)
+	var stop BackgroundProcessRequest
+	if err, warnings := decodeToolArguments("service", []byte(`{"action":"stop","id":"svc_missing","graceSeconds":10}`), &stop); err != nil || len(warnings) == 0 || stop.ID != "svc_missing" {
+		t.Fatalf("obsolete stop field: %+v %v %v", stop, err, warnings)
 	}
-
-	tooLong := app.executeTool(ctx, cfg, "s-1", "service", []byte(`{"action":"stop","id":"svc_missing","graceSeconds":31}`))
-	if tooLong.ErrorCode != "E_BAD_ARGS" || !strings.Contains(tooLong.Error, fmt.Sprintf("%d", toolshared.MaxServiceStopGraceSeconds)) {
-		t.Fatalf("a grace window above the clamp must be refused by name, got ok=%v code=%q err=%q", tooLong.OK, tooLong.ErrorCode, tooLong.Error)
-	}
-
 	acceptedRead := app.executeTool(ctx, cfg, "s-1", "service", []byte(`{"action":"read","id":"svc_missing","tailBytes":16384}`))
 	if acceptedRead.ErrorCode == "E_BAD_ARGS" {
 		t.Fatalf("a larger tail inside the bound must reach the service lookup, got %q", acceptedRead.Error)
@@ -453,5 +443,24 @@ func TestSubagentStepBudgetIsHeldToTheDeclaredMaximum(t *testing.T) {
 		[]byte(`{"task":"noop","role":"tester","maxSteps":1001}`))
 	if res.OK || res.ErrorCode != "E_BAD_ARGS" || !strings.Contains(res.Error, "1000") {
 		t.Fatalf("maxSteps above the declared cap must be refused, got ok=%v code=%q err=%q", res.OK, res.ErrorCode, res.Error)
+	}
+}
+
+func TestRemovedReadAndCommandFieldsFollowUnknownFieldRules(t *testing.T) {
+	for _, tc := range []struct {
+		name, args string
+		request    any
+	}{
+		{"read", `{"files":[{"path":"a.txt"}],"path":"other.txt","paths":["another.txt"]}`, &BatchReadRequest{}},
+		{"remote_read", `{"alias":"dev","files":[{"path":"/srv/a"}],"path":"/srv/b","startLine":1,"endLine":2}`, &RemoteReadFileRequest{}},
+		{"remote_run_command", `{"alias":"dev","command":"pwd","cwd":"/srv"}`, &RemoteRunCommandRequest{}},
+	} {
+		err, warnings := decodeToolArguments(tc.name, []byte(tc.args), tc.request)
+		if err != nil || len(warnings) == 0 {
+			t.Fatalf("%s: err=%v warnings=%v", tc.name, err, warnings)
+		}
+	}
+	if err, _ := decodeToolArguments("read", []byte(`{"path":"a.txt"}`), &BatchReadRequest{}); toolErrorCode(err) != "E_BAD_ARGS" {
+		t.Fatalf("old read form accepted: %v", err)
 	}
 }

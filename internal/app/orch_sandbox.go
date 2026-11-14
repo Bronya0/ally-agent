@@ -30,7 +30,7 @@ import (
 	"ally-dev/internal/sandbox"
 )
 
-// 命令沙箱的编排层：把本机档位、本次运行的工作区与知识库禁写面拼成一次启动策略，
+// 命令沙箱的编排层：把本机档位、本次运行的工作区拼成一次启动策略，
 // 再把"沙箱没能包上"与"沙箱拦下了这次写入"两种结果翻译成模型能照做的说法。
 // 策略与 profile 生成本身在 internal/sandbox（纯算法，不依赖 App 状态）。沙箱没有
 // 任何可配项：档位是宿主的属性，策略其余部分写死在这里。
@@ -38,15 +38,12 @@ import (
 // sandboxSpec resolves the confinement policy for one local command or service.
 // Nothing here is configurable: the mode is the host's own policy
 // (sandbox.ResolvedMode) and the rest is fixed — the write roots of this run, the
-// knowledge-base sources/ subtree re-denied inside them, Ally's own data
-// directory masked out of the command's view, and the network left open because
-// package managers and builds need it. denyRoots is the KB sources/ subtree:
-// readable, never writable.
-func sandboxSpec(roots, denyRoots []string) sandbox.Spec {
+// Ally's own data directory masked out of the command's view, and the network left open because
+// package managers and builds need it.
+func sandboxSpec(roots []string) sandbox.Spec {
 	return sandbox.Spec{
 		Mode:            sandbox.ResolvedMode(),
 		WriteRoots:      roots,
-		DenyWriteRoots:  denyRoots,
 		ForbidReadRoots: sandboxForbiddenReadRoots(),
 		Network:         true,
 	}
@@ -362,16 +359,16 @@ const fileMutationTimeout = 120 * time.Second
 // differences above: the Ally data directory joins the write roots, and the
 // forbid-read masks do not apply. The mode decides whether anything is confined
 // at all: ModeOff leaves every caller on its unconfined path.
-func fileMutationSpec(cfg ConfigState, roots []string) sandbox.Spec {
+func fileMutationSpec(roots []string) sandbox.Spec {
 	writeRoots := make([]string, 0, len(roots)+1)
 	writeRoots = append(writeRoots, roots...)
 	if dir := strings.TrimSpace(appDataDir()); dir != "" {
 		writeRoots = append(writeRoots, dir)
 	}
 	return sandbox.Spec{
-		Mode:           sandbox.ResolvedMode(),
-		WriteRoots:     writeRoots,
-		DenyWriteRoots: kbDenyRootsForConfig(cfg),
+		Mode:       sandbox.ResolvedMode(),
+		WriteRoots: writeRoots,
+
 		Network:        false,
 		OnlyWriteRoots: true,
 	}

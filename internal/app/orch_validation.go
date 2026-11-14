@@ -332,7 +332,7 @@ func collectValidationFiles(roots []string, paths []string) []validationFile {
 func isGeneratedValidationPath(path string) bool {
 	for _, part := range strings.Split(filepath.ToSlash(filepath.Clean(path)), "/") {
 		switch strings.ToLower(part) {
-		case ".git", "node_modules", "vendor", "dist", "build", "coverage", "out", "target":
+		case "node_modules", "vendor", "dist", "build", "coverage", "out", "target":
 			return true
 		}
 	}

@@ -16,7 +16,7 @@ import (
 	toolshared "ally-dev/internal/tools/shared"
 )
 
-func TestRemoteAliasContractAndLegacyCalls(t *testing.T) {
+func TestRemoteAliasContractRejectsLegacyCalls(t *testing.T) {
 	cases := []struct {
 		name    string
 		body    string
@@ -42,7 +42,7 @@ func TestRemoteAliasContractAndLegacyCalls(t *testing.T) {
 			if _, exists := props["alias"]; !exists {
 				t.Fatal("schema missing alias")
 			}
-			for _, key := range []string{"alias", "target"} {
+			for _, key := range []string{"alias"} {
 				req := tc.request()
 				raw := []byte(`{"` + key + `":"生产 / 分析:一",` + tc.body + `}`)
 				if err, warnings := decodeToolArguments(tc.name, raw, req); err != nil || len(warnings) != 0 {
@@ -55,19 +55,17 @@ func TestRemoteAliasContractAndLegacyCalls(t *testing.T) {
 					t.Fatalf("lost server selection: %s", encoded)
 				}
 			}
-			for _, prefix := range []string{"", `"alias":null,`, `"alias":"",`, `"alias":"dev","target":"prod",`} {
+			if err, warnings := decodeToolArguments(tc.name, []byte(`{"alias":"dev","target":"prod",`+tc.body+`}`), tc.request()); err != nil || len(warnings) == 0 {
+				t.Fatalf("obsolete field did not follow unknown-field handling: %v %v", err, warnings)
+			}
+			for _, prefix := range []string{"", `"alias":null,`, `"alias":"",`, `"target":"dev",`} {
 				if err, _ := decodeToolArguments(tc.name, []byte(`{`+prefix+tc.body+`}`), tc.request()); err == nil {
 					t.Fatalf("accepted missing or conflicting server: %s", prefix)
 				}
 			}
 		})
 	}
-	// A similarly named parameter on an MCP tool must remain untouched.
-	raw := []byte(`{"target":"dev"}`)
-	got, err := normalizeRemoteArguments("mcp__remote_run_command", raw)
-	if err != nil || string(got) != string(raw) {
-		t.Fatalf("changed MCP arguments: %s %v", got, err)
-	}
+
 }
 
 func TestRemoteAliasMutationIdentity(t *testing.T) {
@@ -78,10 +76,9 @@ func TestRemoteAliasMutationIdentity(t *testing.T) {
 		{"remote_transfer", `"action":"upload","remotePath":"/srv/a"`},
 	} {
 		current := fileMutationTargets(ConfigState{}, tc.name, `{"alias":"dev",`+tc.body+`}`)
-		legacy := fileMutationTargets(ConfigState{}, tc.name, `{"target":"dev",`+tc.body+`}`)
 		other := fileMutationTargets(ConfigState{}, tc.name, `{"alias":"prod",`+tc.body+`}`)
-		if len(current) != 1 || !reflect.DeepEqual(current, legacy) || reflect.DeepEqual(current, other) {
-			t.Fatalf("%s: current=%v legacy=%v other=%v", tc.name, current, legacy, other)
+		if len(current) != 1 || reflect.DeepEqual(current, other) {
+			t.Fatalf("%s: current=%v other=%v", tc.name, current, other)
 		}
 	}
 }
@@ -106,7 +103,7 @@ func TestRemoteAliasResolvesOpaqueNicknameAndAuthorization(t *testing.T) {
 }
 
 func TestRemoteAliasSubagentFileSummary(t *testing.T) {
-	for _, key := range []string{"alias", "target"} {
+	for _, key := range []string{"alias"} {
 		var reads, edits []string
 		seenReads, seenEdits := map[string]bool{}, map[string]bool{}
 		args := `{"` + key + `":"dev","path":"/srv/a"}`

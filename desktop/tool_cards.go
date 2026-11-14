@@ -91,8 +91,6 @@ func toolKind(name string) string {
 		return "skill"
 	case "replace_exact", "replace_lines":
 		return "edit"
-	case "agent_delegate":
-		return "subagent"
 	case "start_service", "stop_service", "list_services":
 		return "service"
 	}
@@ -1416,7 +1414,8 @@ func toolArgSummary(name string, args map[string]any) string {
 func normalizeToolMessage(m map[string]any) {
 	raw, ok := m["result"].(string)
 	if !ok {
-		if _, exists := m["result"].(map[string]any); exists {
+		if result, exists := m["result"].(map[string]any); exists {
+			m["result"] = unwrapToolResult(result)
 			return
 		}
 		raw, ok = m["body"].(string)
@@ -1428,35 +1427,17 @@ func normalizeToolMessage(m map[string]any) {
 	if json.Unmarshal([]byte(raw), &decoded) != nil || decoded == nil {
 		decoded = map[string]any{"_text": raw}
 	}
-	m["result"] = decoded
+	m["result"] = unwrapToolResult(decoded)
 	// Result events used to retain the same wire string in body as well.
 	if body, ok := m["body"].(string); ok && body == raw && str(m, "toolState") != "tool:error" {
 		delete(m, "body")
 	}
 }
 
-// toolResult also accepts legacy wire values; live/history ingestion normalizes
-// them once, so drawing reads maps without decoding JSON.
-
+// toolResult only reads values normalized at live/history ingestion.
 func toolResult(m map[string]any) map[string]any {
-	switch raw := m["result"].(type) {
-	case string:
-		var out map[string]any
-		if json.Unmarshal([]byte(raw), &out) == nil {
-			return unwrapToolResult(out)
-		}
-		return map[string]any{"_text": raw}
-	case map[string]any:
-		return unwrapToolResult(raw)
-	}
-	if body, ok := m["body"].(string); ok && body != "" {
-		var out map[string]any
-		if json.Unmarshal([]byte(body), &out) == nil {
-			return unwrapToolResult(out)
-		}
-		return map[string]any{"_text": body}
-	}
-	return nil
+	result, _ := m["result"].(map[string]any)
+	return result
 }
 
 // The runtime wraps every tool payload in {ok, data}; keep the envelope

@@ -29,7 +29,7 @@ func (a *desktop) beginAvatarTransition(now time.Time) {
 }
 
 func (a *desktop) avatarBlinkEnd() int64 {
-	if normalizedAvatarStyle(a.prefs.Avatar) == "whale" {
+	if a.prefs.Avatar == "whale" {
 		return 6820
 	}
 	return 6700
@@ -96,7 +96,7 @@ func (a *desktop) paintAvatar(p *ui.Painter, r ui.Rect, reduced, animated bool) 
 				angle, dy = float32(wave*1.5), float32(-math.Abs(wave)*2)
 			}
 			p.AnimationFrameRate(15)
-		} else if normalizedAvatarStyle(a.prefs.Avatar) == "whale" && pose == "stretch" {
+		} else if a.prefs.Avatar == "whale" && pose == "stretch" {
 			// A subtle anchored stretch keeps the flat artwork lively without
 			// moving the layout or distorting the face abruptly.
 			progress := float64(phaseMS-12500) / 2000
@@ -144,7 +144,7 @@ func (a *desktop) paintAvatar(p *ui.Painter, r ui.Rect, reduced, animated bool) 
 		p.After(a.pet.poseUntil.Sub(now))
 	}
 	p.Transform(ui.Scaling(scaleX, scaleY).Then(ui.Rotation(angle)).Then(ui.Translation(0, dy)), r.X+r.W/2, r.Y+r.H*0.9, func() {
-		if target, ok := src.(*ui.Bitmap); normalizedAvatarStyle(a.prefs.Avatar) == "whale" && ok && target != nil && a.avatarPoses["idle"] != nil {
+		if target, ok := src.(*ui.Bitmap); a.prefs.Avatar == "whale" && ok && target != nil && a.avatarPoses["idle"] != nil {
 			// The generated expressions have small differences in their hair and
 			// outline. Keep the original artwork fixed and blend just the face,
 			// so an expression never makes the whole silhouette jump.
@@ -199,7 +199,7 @@ func paintWhaleFace(p *ui.Painter, target *ui.Bitmap, box ui.Rect, opacity float
 // New whale expressions share a square canvas with the idle art. Fade only
 // their changes, so the short blink and other pose changes do not pop.
 func (a *desktop) whalePoseBlend(now time.Time, pose string, reduced bool) (ui.ImageSource, float32, bool) {
-	if normalizedAvatarStyle(a.prefs.Avatar) != "whale" || reduced {
+	if a.prefs.Avatar != "whale" || reduced {
 		return nil, 0, false
 	}
 	if pose == "idle-blink" {

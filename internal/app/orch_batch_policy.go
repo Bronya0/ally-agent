@@ -270,11 +270,6 @@ type fileMutationTarget struct{ key, display string }
 // one path, one target (see dedupeMutationTargets).
 func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutationTarget {
 	name = normalizeToolName(name)
-	raw, err := normalizeRemoteArguments(name, []byte(arguments))
-	if err != nil {
-		return nil
-	}
-	arguments = string(raw)
 	if name == "edit" {
 		// The flat model-facing request carries exactly one file; conflict
 		// detection and execution share the same plan boundary.
@@ -384,9 +379,9 @@ func remoteMutationKey(target, remotePath string) string {
 	server := strings.TrimSpace(target)
 	cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(remotePath), "\\", "/"))
 	if rt, err := parseRemoteTarget(server); err == nil {
-		// Legacy and new calls that name the same server/path must conflict.
+		// Equivalent server endpoints and absolute paths must conflict.
 		server = sshCredentialKey(rt.Host, rt.Port)
-		if absolute, err := validateRemotePath(remotePath, rt.LegacyRoot, true); err == nil {
+		if absolute, err := validateRemotePath(remotePath, true); err == nil {
 			cleanPath = absolute
 		}
 	}

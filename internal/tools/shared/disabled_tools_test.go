@@ -93,10 +93,5 @@ func TestBuiltinDeclarationsCoverEveryName(t *testing.T) {
 	if len(seen) == 0 {
 		t.Fatal("no builtin tool names")
 	}
-	// Legacy aliases (document_read and friends) normalize onto their
-	// canonical name's schema; the alias spelling itself is not a canonical
-	// entry and must not survive sanitization.
-	if IsBuiltinTool("document_read") {
-		t.Fatal("legacy alias must not be treated as a canonical builtin name")
-	}
+
 }

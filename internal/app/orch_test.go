@@ -1059,10 +1059,10 @@ func TestGrepFilesSearchResults(t *testing.T) {
 				t.Fatalf("expected ignored file to be included, got %#v", includeIgnored)
 			}
 		}},
-		{name: "heavy directories are always excluded", files: map[string]string{
+		{name: "heavy directories use explicit override", files: map[string]string{
 			"src/main.go": "ally\n", "frontend/dist/app.js": "ally\n", "node_modules/pkg/index.js": "ally\n",
 		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
-			got, err := search(GrepRequest{Pattern: "ally", OutputMode: grep.OutputModeLines, IncludeIgnored: true})
+			got, err := search(GrepRequest{Pattern: "ally", OutputMode: grep.OutputModeLines})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1075,6 +1075,11 @@ func TestGrepFilesSearchResults(t *testing.T) {
 			if len(got.Skipped) == 0 {
 				t.Fatalf("workspace-wide grep must report its skip policy, got %#v", got)
 			}
+			all, err := search(GrepRequest{Pattern: "ally", IncludeIgnored: true})
+			if err != nil || all.Files != 3 {
+				t.Fatalf("explicit directory override: %+v %v", all, err)
+			}
+
 		}},
 		{name: "explicit path overrides broad exclusions", files: map[string]string{
 			"dist/pkg/source.go": "needle\n",
@@ -2121,8 +2126,6 @@ func TestRenamePathRejectsBadNamesAndTargets(t *testing.T) {
 		{"源路径穿越", RenamePathRequest{Path: "../a.txt", NewName: "x.txt"}, "E_BAD_PATH"},
 		{"源为绝对路径", RenamePathRequest{Path: "/etc/passwd", NewName: "x.txt"}, "E_BAD_PATH"},
 		{"源不存在", RenamePathRequest{Path: "missing.txt", NewName: "x.txt"}, "E_PATH_NOT_FOUND"},
-		{"新名字是 VCS 元数据", RenamePathRequest{Path: "hooked.txt", NewName: ".git"}, "E_PROTECTED_PATH"},
-		{"源是 VCS 元数据", RenamePathRequest{Path: ".git", NewName: "gitdata"}, "E_PROTECTED_PATH"},
 	}
 	for _, tc := range cases {
 		_, err := app.renamePathWithConfig(cfg, tc.req)

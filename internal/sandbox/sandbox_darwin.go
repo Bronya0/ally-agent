@@ -122,7 +122,7 @@ func Wrap(spec Spec, argv []string) ([]string, bool) {
 	// see EnsureWritableDirsOnce.
 	EnsureWritableDirsOnce()
 	plan := buildPlan(spec)
-	profile := seatbeltProfile(plan.writable, plan.denyWrite, plan.masks, spec.Network)
+	profile := seatbeltProfile(plan.writable, plan.masks, spec.Network)
 	return append([]string{seatbeltExecutable, "-p", profile, resolveProgram(argv[0])}, argv[1:]...), true
 }
 

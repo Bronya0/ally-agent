@@ -1572,3 +1572,14 @@ func TestMcpToolResultTextStructuredOnlyServerIsNotEmpty(t *testing.T) {
 		t.Fatalf("structured-only result = %q", got)
 	}
 }
+
+func TestMCPFunctionNamesRequireRegisteredLookup(t *testing.T) {
+	m := &McpManager{toolLookup: map[string]mcpToolRef{"mcp__opaque": {ServerName: "server__name", ToolName: "tool__name"}}}
+	if _, ok := m.DescribeFunctionTool("mcp__server__tool"); ok {
+		t.Fatal("unregistered legacy name accepted")
+	}
+	ref, ok := m.DescribeFunctionTool("mcp__opaque")
+	if !ok || ref.ServerName != "server__name" || ref.ToolName != "tool__name" {
+		t.Fatalf("registered lookup lost original names: %+v", ref)
+	}
+}

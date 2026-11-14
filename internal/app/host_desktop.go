@@ -73,7 +73,6 @@ func (a *App) SelectWorkspace() (string, error) {
 	}
 	return path, a.updateConfigAndPersist(func(c *ConfigState) { c.Workspace = path })
 }
-func (a *App) SelectKnowledgeBaseRoot() (string, error) { return a.SelectDirectory("") }
 func (a *App) selectFile(title string) (string, error) {
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Title: title})
 	if err != nil || len(paths) == 0 {

@@ -91,7 +91,7 @@ func TestResolveDeletePathListTakesPathsOnly(t *testing.T) {
 // gone by the time it is reached.
 func TestPlanDeleteExecutionDedupesAndOrdersDeepestFirst(t *testing.T) {
 	remote := func(rel string) fileMutationTarget {
-		return fileMutationTarget{remoteMutationKey("dev:/srv/app", rel), rel}
+		return fileMutationTarget{remoteMutationKey("dev", rel), rel}
 	}
 	local := func(abs string) fileMutationTarget {
 		return fileMutationTarget{localMutationKey(abs), abs}
@@ -331,9 +331,9 @@ func TestRemoteDeleteToolTakesPathsOnly(t *testing.T) {
 		name string
 		args []byte
 	}{
-		{name: "missing paths", args: encodedToolArgs(t, map[string]any{"target": "dev:/srv/app"})},
-		{name: "path key", args: []byte(`{"target":"dev:/srv/app","path":"a.txt"}`)},
-		{name: "above the limit", args: encodedToolArgs(t, RemoteDeletePathRequest{Alias: "dev:/srv/app", Paths: tooMany})},
+		{name: "missing paths", args: encodedToolArgs(t, map[string]any{"target": "dev"})},
+		{name: "path key", args: []byte(`{"target":"dev","path":"a.txt"}`)},
+		{name: "above the limit", args: encodedToolArgs(t, RemoteDeletePathRequest{Alias: "dev", Paths: tooMany})},
 	} {
 		res := app.executeTool(ctx, cfg, "s-1", "remote_delete_path", tc.args)
 		if res.OK || res.ErrorCode != "E_BAD_ARGS" {

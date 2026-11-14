@@ -22,7 +22,7 @@ func (a *desktop) petContextMenu(m *ui.Menu) {
 	}
 	if m.Item(locales.Text("查看好感度")).Chosen() {
 		a.petMenuAction(func() {
-			score := a.prefs.Pet.Affection[normalizedAvatarStyle(a.prefs.Avatar)].Points
+			score := a.prefs.Pet.Affection[a.prefs.Avatar].Points
 			a.showPetBubble(fmt.Sprintf(locales.Text("我们的好感度是 %.3f / 10 星。"), float64(score)/1000), true)
 		})
 	}

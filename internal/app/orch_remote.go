@@ -69,50 +69,15 @@ type remotePythonResponse struct {
 	Error string          `json:"error,omitempty"`
 }
 
-// normalizeRemoteArguments is the sole compatibility boundary for old tool calls.
-// New declarations expose only alias; old session snapshots may still send target.
-func normalizeRemoteArguments(name string, raw []byte) ([]byte, error) {
-	switch name {
-	case "remote_read", "remote_edit", "remote_create_file", "remote_delete_path", "remote_run_command", "remote_transfer":
-	default:
-		return raw, nil
-	}
-	var args map[string]json.RawMessage
-	if json.Unmarshal(raw, &args) != nil {
-		return raw, nil // The caller reports malformed JSON.
-	}
-	legacy, ok := args["target"]
-	if !ok {
-		return raw, nil
-	}
-	if alias, exists := args["alias"]; exists {
-		var current, previous string
-		if json.Unmarshal(alias, &current) != nil || json.Unmarshal(legacy, &previous) != nil || current != previous {
-			return nil, errors.New("alias and legacy target must not select different servers; pass alias only")
-		}
-	} else {
-		args["alias"] = legacy
-	}
-	delete(args, "target")
-	return json.Marshal(args)
-}
-
 func parseRemoteTarget(raw string) (remoteTarget, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return remoteTarget{}, errors.New("alias is required")
 	}
 	endpoint := raw
-	legacyRoot := ""
 	if !strings.HasPrefix(endpoint, "ssh://") {
 		if strings.Contains(endpoint, "://") {
 			return remoteTarget{}, errors.New("target URL must use ssh://")
-		}
-		// Old session snapshots may still send host:/directory and relative paths.
-		// Keep their path base, but never use it as an access boundary.
-		if idx := strings.Index(endpoint, ":/"); idx >= 0 {
-			legacyRoot = endpoint[idx+1:]
-			endpoint = endpoint[:idx]
 		}
 		if strings.Contains(endpoint, "/") {
 			return remoteTarget{}, errors.New("target selects only an SSH server; pass file paths separately")
@@ -127,13 +92,7 @@ func parseRemoteTarget(raw string) (remoteTarget, error) {
 		return remoteTarget{}, errors.New("target must select an SSH server alias or [user@]host[:port]")
 	}
 	if u.Path != "" {
-		legacyRoot = u.Path
-	}
-	if legacyRoot != "" {
-		if !path.IsAbs(legacyRoot) || strings.ContainsRune(legacyRoot, 0) {
-			return remoteTarget{}, errors.New("legacy target path must be absolute")
-		}
-		legacyRoot = path.Clean(legacyRoot)
+		return remoteTarget{}, errors.New("alias selects only an SSH server; pass absolute file paths separately")
 	}
 	if u.Port() != "" {
 		port, err := strconv.Atoi(u.Port())
@@ -148,7 +107,7 @@ func parseRemoteTarget(raw string) (remoteTarget, error) {
 		}
 		host = u.User.Username() + "@" + host
 	}
-	return remoteTarget{Raw: raw, Host: host, Port: u.Port(), LegacyRoot: legacyRoot}, nil
+	return remoteTarget{Raw: raw, Host: host, Port: u.Port()}, nil
 }
 
 // resolveAndAuthorizeRemoteTarget parses raw and resolves any cluster alias.
@@ -156,7 +115,7 @@ func parseRemoteTarget(raw string) (remoteTarget, error) {
 // without per-operation confirmation prompts.
 func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (remoteTarget, error) {
 	// Nicknames are opaque values, not URLs: resolve them before parsing the
-	// legacy endpoint syntax so spaces, Chinese, and punctuation remain valid.
+	// endpoint syntax so spaces, Chinese, and punctuation remain valid.
 	serverNode, isRegistered := a.GetSSHServer(raw)
 	rt := remoteTarget{Raw: raw}
 	if !isRegistered {
@@ -212,18 +171,14 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 	return rt, nil
 }
 
-// validateRemotePath accepts absolute Linux paths. A legacy target's directory
-// only resolves relative paths from existing sessions; it does not fence access.
-func validateRemotePath(p, legacyRoot string, allowRoot bool) (string, error) {
+// validateRemotePath accepts only absolute remote paths.
+func validateRemotePath(p string, allowRoot bool) (string, error) {
 	p = strings.TrimSpace(filepath.ToSlash(p))
 	if p == "" {
 		return "", errors.New("path is required")
 	}
 	if strings.ContainsRune(p, 0) {
 		return "", errors.New("path contains NUL byte")
-	}
-	if !path.IsAbs(p) && legacyRoot != "" {
-		p = path.Join(legacyRoot, p)
 	}
 	if !path.IsAbs(p) {
 		return "", errors.New("remote path must be absolute, e.g. /srv/app/main.go")
@@ -280,47 +235,6 @@ func remoteHelperError(resp remotePythonResponse) error {
 		return codedToolError(code, errors.New(strings.TrimSpace(msg)))
 	}
 	return errors.New(resp.Error)
-}
-
-// remoteWriteTargets 复用 command 的字面写目标提取并解析简单 cd 序列，
-// 交给远端 Python helper 检查真实路径是否命中 VCS 保护。
-func remoteWriteTargets(commandLine string) []string {
-	all := command.LiteralWriteTargetsWithCD(commandLine)
-	targets := make([]string, 0, len(all))
-	for _, t := range all {
-		targets = append(targets, t.Path)
-	}
-	return targets
-}
-
-// remoteVCSMetadataWrite 拒绝把版本控制元数据当写目标的远端路径。规则与本地写
-// 路径、删除路径、命令目标同源（pathutil.VCSMetadataReason），新增一个远端写入口
-// 只要过这一关就不会漏。这一层只能判字面路径：真实路径要在 SSH 另一头解析，工作
-// 区内的符号链接能把干净的字面路径接到 .git 上（`ln -s .git gh` 之后写
-// `gh/hooks/pre-commit`），那一步由 helper 用远端事实复判（op_write 的
-// contains_vcs）。
-func remoteVCSMetadataWrite(cleanPath string) error {
-	if blocked, reason := pathutil.VCSMetadataReason(cleanPath); blocked {
-		return codedToolError("E_PROTECTED_PATH", errors.New(reason))
-	}
-	return nil
-}
-
-// remoteCommandVCSMetadataTarget 报出远端命令行里第一个落在版本控制元数据内的字面
-// 写入目标，workingDir 用来解析相对目标（远端命令的 cwd）。与本地
-// firstVCSMetadataMutationTarget 的差别只有一处：本地还会用 evalExistingPrefix 把
-// 符号链接解析后复判，远端解析不了，那一步留给 helper 的 check_write_targets。
-func remoteCommandVCSMetadataTarget(commandLine, workingDir string) string {
-	for _, target := range command.LiteralWriteTargetsWithCD(commandLine) {
-		p := target.Path
-		if workingDir != "" && !path.IsAbs(p) {
-			p = path.Join(workingDir, p)
-		}
-		if blocked, _ := pathutil.VCSMetadataReason(p); blocked {
-			return filepath.ToSlash(p)
-		}
-	}
-	return ""
 }
 
 // toolSessionID 取出工具调用所属的会话 ID；后台任务与子代理调用可能没有会话。
@@ -553,7 +467,7 @@ func (a *App) remoteReadRawOne(ctx context.Context, rt remoteTarget, relPath str
 }
 
 func (a *App) remoteReadRawRange(ctx context.Context, rt remoteTarget, relPath string, tailLines int) (remoteTarget, remoteRawFile, error) {
-	cleanPath, err := validateRemotePath(relPath, rt.LegacyRoot, false)
+	cleanPath, err := validateRemotePath(relPath, false)
 	if err != nil {
 		return remoteTarget{}, remoteRawFile{}, err
 	}
@@ -581,13 +495,8 @@ func (a *App) remoteWriteRaw(ctx context.Context, rt remoteTarget, relPath strin
 }
 
 func (a *App) remoteWriteRawExpected(ctx context.Context, rt remoteTarget, relPath string, data []byte, overwrite, mkdirs bool, expectedHash string) ([]string, error) {
-	cleanPath, err := validateRemotePath(relPath, rt.LegacyRoot, false)
+	cleanPath, err := validateRemotePath(relPath, false)
 	if err != nil {
-		return nil, err
-	}
-	// 远端写入（create / edit）与本地同一条围栏：.git/hooks 里的文件会在下次 git
-	// 命令时执行，覆盖 .git/index 或 ref 会损坏仓库。
-	if err := remoteVCSMetadataWrite(cleanPath); err != nil {
 		return nil, err
 	}
 	var outcome struct {
@@ -611,15 +520,6 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 		return BatchReadResult{}, errors.New("alias is required")
 	}
 	fileRequests := req.Files
-	if len(fileRequests) == 0 && strings.TrimSpace(req.Path) != "" {
-		fileRequests = []BatchReadFileRequest{
-			{
-				Path:      req.Path,
-				StartLine: req.StartLine,
-				EndLine:   req.EndLine,
-			},
-		}
-	}
 	if len(fileRequests) == 0 {
 		return BatchReadResult{}, errors.New("remote_read requires at least one file in files")
 	}
@@ -661,7 +561,7 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 	pending := make([]string, 0, len(fileRequests))
 	tails := map[string]int{}
 	for i, f := range fileRequests {
-		clean, err := validateRemotePath(f.Path, rt.LegacyRoot, false)
+		clean, err := validateRemotePath(f.Path, false)
 		if err != nil {
 			results[i] = BatchReadResultItem{Path: f.Path, Error: err.Error()}
 			continue
@@ -923,7 +823,7 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	if err != nil {
 		return EditResult{}, err
 	}
-	cleanPath, err := validateRemotePath(req.Path, rt.LegacyRoot, false)
+	cleanPath, err := validateRemotePath(req.Path, false)
 	if err != nil {
 		return EditResult{}, err
 	}
@@ -967,7 +867,7 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 }
 
 // remoteDeletePath 删除远端一次调用里的全部路径，与本地 delete 同一套语义：
-// Go 侧先判绝对路径、文件系统根与 VCS 元数据，并把这一串路径归一成
+// Go 侧先判绝对路径与文件系统根，并把这一串路径归一成
 // 「去重 + 深的先删」的执行计划（planDeleteExecution）；只有远端才知道的事实
 // （是否目录、是否系统敏感目标）由
 // helper 在动手之前逐条判完——任一条不通过，整批一条都不删。
@@ -986,17 +886,15 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 	targets := make([]fileMutationTarget, 0, len(candidates))
 	for _, candidate := range candidates {
 		// Keep filesystem-root deletion refusal explicit.
-		cleanPath, err := validateRemotePath(candidate, rt.LegacyRoot, true)
+		cleanPath, err := validateRemotePath(candidate, true)
 		if err != nil {
 			return DeletePathsResult{}, err
 		}
+		if isVCSDeleteName(path.Base(cleanPath)) {
+			return DeletePathsResult{}, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete version control directory"))
+		}
 		if cleanPath == "/" {
 			return DeletePathsResult{}, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete remote filesystem root"))
-		}
-		for _, part := range strings.Split(cleanPath, "/") {
-			if part == ".git" || part == ".svn" || part == ".hg" {
-				return DeletePathsResult{}, codedToolError("E_DELETE_BLOCKED", fmt.Errorf("refusing to delete VCS metadata (%s in %s)", part, cleanPath))
-			}
 		}
 		clean = append(clean, cleanPath)
 		targets = append(targets, fileMutationTarget{remoteMutationKey(req.Alias, cleanPath), cleanPath})
@@ -1066,22 +964,6 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 	if err != nil {
 		return CommandResult{}, err
 	}
-	// New calls use explicit `cd ... && ...` in the command. Honor cwd and the
-	// old target directory only for existing snapshots; no directory boundary.
-	cwd := strings.TrimSpace(req.Cwd)
-	if cwd == "" {
-		cwd = rt.LegacyRoot
-	}
-	if cwd != "" {
-		cwd, err = validateRemotePath(cwd, rt.LegacyRoot, true)
-		if err != nil {
-			return CommandResult{}, err
-		}
-	}
-	// Lexical VCS targets can be rejected here; the helper resolves real paths.
-	if risk := remoteCommandVCSMetadataTarget(req.Command, cwd); risk != "" {
-		return CommandResult{}, codedToolError("E_PROTECTED_PATH", fmt.Errorf("refusing to write version-control metadata: %s", risk))
-	}
 
 	timeout := req.Timeout
 	if timeout <= 0 {
@@ -1103,17 +985,13 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 			return CommandResult{}, codedToolError("E_BAD_SHELL", fmt.Errorf("unsupported shell %q: only bash, sh, zsh are allowed", shell))
 		}
 	}
-	// Remote facts are needed only for independent VCS protection.
-	writeTargets := remoteWriteTargets(req.Command)
 	var result CommandResult
 	err = a.invokeRemotePython(ctx, rt, remotePayload("run", map[string]any{
 		"command":          req.Command,
-		"cwd":              cwd,
 		"timeoutSeconds":   timeout,
 		"shell":            shell,
 		"maxOutput":        maxToolOutput,
 		"modelOutputBytes": maxModelToolOutput,
-		"targets":          writeTargets,
 	}), time.Duration(timeout+20)*time.Second, &result)
 	return result, err
 }
@@ -1234,12 +1112,8 @@ func (a *App) executeRemoteTransfer(ctx context.Context, req RemoteTransferReque
 	}
 
 	// 2. Validate the absolute remote path; no remote workspace boundary.
-	cleanRemotePath, err := validateRemotePath(req.RemotePath, rt.LegacyRoot, false)
+	cleanRemotePath, err := validateRemotePath(req.RemotePath, false)
 	if err != nil {
-		return RemoteTransferResult{}, err
-	}
-	// VCS metadata check for remote path
-	if err := remoteVCSMetadataWrite(cleanRemotePath); err != nil {
 		return RemoteTransferResult{}, err
 	}
 
@@ -1278,8 +1152,12 @@ func (a *App) executeRemoteTransfer(ctx context.Context, req RemoteTransferReque
 	if localClean == "." {
 		return RemoteTransferResult{}, codedToolError("E_PATH_OUTSIDE", errors.New("refusing transfer directly targeting local workspace root without subpath"))
 	}
-	if blocked, reason := pathutil.VCSMetadataReason(localAbs); blocked {
-		return RemoteTransferResult{}, codedToolError("E_PROTECTED_PATH", errors.New(reason))
+
+	// Resolve existing ancestors before opening the workspace handle. Keep the
+	// leaf name so uploads still preserve symlinks instead of dereferencing them.
+	workspace, localAbs, err = resolveLocalTransferPath(workspace, localAbs)
+	if err != nil {
+		return RemoteTransferResult{}, err
 	}
 
 	// 4. Action-specific validation
@@ -1321,7 +1199,7 @@ func (a *App) executeRemoteTransfer(ctx context.Context, req RemoteTransferReque
 	}
 
 	// 5. Execute raw stream transfer via Python Bridge
-	result, err := a.runRemoteTransferStream(ctx, rt, action, localAbs, cleanRemotePath, req.Overwrite)
+	result, err := a.runRemoteTransferStream(ctx, rt, action, workspace, localAbs, cleanRemotePath, req.Overwrite)
 	if err != nil {
 		return RemoteTransferResult{}, err
 	}
@@ -1355,7 +1233,41 @@ func getRemoteTransferCompressedScript() string {
 	return remoteTransferCompressedScriptOnce.encoded
 }
 
-func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, action, localAbs, cleanRemotePath string, overwrite bool) (RemoteTransferResult, error) {
+// resolveLocalTransferPath checks both lexical and resolved forms, including
+// missing destinations beneath an existing symlinked parent.
+func resolveLocalTransferPath(workspace, localAbs string) (string, string, error) {
+	root, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return "", "", err
+	}
+	parent, err := evalExistingPrefix(filepath.Dir(localAbs))
+	if err != nil {
+		return "", "", err
+	}
+	if !pathutil.InsideRoot(root, parent) {
+		return "", "", codedToolError("E_PATH_OUTSIDE", errors.New("local transfer parent resolves outside workspace"))
+	}
+	// Do not dereference the leaf: atomic download replacement must also work
+	// for dangling symlinks, and uploads serialize the link rather than its data.
+	parentRel, err := filepath.Rel(root, parent)
+	if err != nil {
+		return "", "", err
+	}
+	// Retain the workspace spelling for credential fences (for example a HOME
+	// beneath /var on macOS); the relative path no longer traverses user links.
+	return workspace, filepath.Join(workspace, parentRel, filepath.Base(localAbs)), nil
+}
+
+func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, action, workspace, localAbs, cleanRemotePath string, overwrite bool) (RemoteTransferResult, error) {
+	root, err := os.OpenRoot(workspace)
+	if err != nil {
+		return RemoteTransferResult{}, err
+	}
+	defer root.Close()
+	localRel, err := filepath.Rel(workspace, localAbs)
+	if err != nil {
+		return RemoteTransferResult{}, err
+	}
 	arcRootName := path.Base(cleanRemotePath)
 	if action == "download" {
 		arcRootName = filepath.Base(localAbs)
@@ -1402,7 +1314,7 @@ func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, acti
 					}
 					packErrCh <- pErr
 				}()
-				packed, pErr = streamarchive.PackWithFilter(localAbs, arcRootName, pw, func(current string, isDir bool) error {
+				packed, pErr = streamarchive.PackRoot(root, localRel, arcRootName, pw, func(current string, isDir bool) error {
 					if blocked, reason := blockedSensitiveRead(current); blocked {
 						return codedToolError("E_PROTECTED_PATH", fmt.Errorf("upload rejected: %s", reason))
 					}
@@ -1460,7 +1372,7 @@ func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, acti
 					}
 					unpackCh <- uRes
 				}()
-				uRes.stats, uRes.err = streamarchive.UnpackTarget(pr, localAbs, overwrite)
+				uRes.stats, uRes.err = streamarchive.UnpackRoot(pr, root, localRel, overwrite)
 				if uRes.err == nil {
 					_, _ = io.Copy(io.Discard, pr)
 				}

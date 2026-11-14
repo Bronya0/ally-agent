@@ -153,7 +153,7 @@ func TestAPISSHAuthorizationIdentityAndDeletion(t *testing.T) {
 	node := apiSSHTestNode(t, a, "dev")
 	workspace := t.TempDir()
 	path := "/api/v1/ssh/authorizations?workspace=" + url.QueryEscape(workspace)
-	rec, payload := apiRequest(t, h, "PUT", path, token, `{"allowed":[" DEV "]}`)
+	rec, payload := apiRequest(t, h, "PUT", path, token, apiSSHTestJSON(t, map[string]any{"allowed": []string{node.ID}}))
 	data := apiRequireOK(t, rec, payload)
 	if !reflect.DeepEqual(data["allowed"], []any{node.ID}) {
 		t.Fatalf("alias was not canonicalized: %v", data)
@@ -161,7 +161,7 @@ func TestAPISSHAuthorizationIdentityAndDeletion(t *testing.T) {
 	rec, payload = apiRequest(t, h, "POST", "/api/v1/ssh/servers", token,
 		apiSSHTestJSON(t, map[string]any{"id": node.ID, "alias": "renamed"}))
 	apiRequireOK(t, rec, payload)
-	if !a.IsServerAuthorizedForWorkspace(workspace, "renamed") {
+	if !a.IsServerAuthorizedForWorkspace(workspace, apiSSHTestNode(t, a, "renamed").ID) {
 		t.Fatal("alias edit lost stable ID authorization")
 	}
 	for _, body := range []string{`{}`, `null`, `{"allowed":null}`, `{"allowed":[null]}`, `{"allowed":[""]}`,
@@ -323,14 +323,14 @@ func TestAPISSHExpectedSnapshotCreateAndLegacyUpsert(t *testing.T) {
 	if err := a.saveSSHServer(patch, "", &snapshot); err != nil {
 		t.Fatalf("matching snapshot rejected: %v", err)
 	}
-	// Callers omitting the optional argument keep legacy alias-based upserts.
-	node.Description = "legacy upsert"
-	if err := a.SaveSSHServer(node); err != nil {
-		t.Fatalf("legacy upsert failed: %v", err)
+	if err := a.SaveSSHServer(node); err == nil {
+		t.Fatal("alias-only update accepted")
 	}
-	if got := apiSSHTestNode(t, a, "dev"); got.ID != snapshot.ID || got.Description != node.Description {
-		t.Fatal("legacy upsert behavior changed")
+	current := apiSSHTestNode(t, a, "dev")
+	if current.Description != "matching snapshot" || current.ID != snapshot.ID {
+		t.Fatal("rejected alias update changed saved node")
 	}
+
 }
 
 func TestAPISSHRejectsUnknownFields(t *testing.T) {

@@ -194,7 +194,7 @@ func TestConfigDiskRoundTripPreservesExplicitValues(t *testing.T) {
 	a := configTransactionApp(t)
 	cfg, _ := a.GetConfig()
 	cfg.BackgroundOpacity = 0
-	cfg.CustomPrompt, cfg.GitHubToken, cfg.KBRoot = "", "", ""
+	cfg.CustomPrompt, cfg.GitHubToken = "", ""
 	cfg.AutoUpdate, cfg.AllowPrivateNetwork = boolPtr(false), boolPtr(false)
 	cfg.SendSessionIDHeader, cfg.SendXSessionIDHeader = boolPtr(false), boolPtr(false)
 	cfg.Models = []ModelConfig{}

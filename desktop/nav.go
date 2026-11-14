@@ -14,8 +14,8 @@ func (a *desktop) changePage(page string) {
 	if !a.ready {
 		return
 	}
-	// These pages are intentionally not connected to navigation yet.
-	if page == "kb" || page == "games" {
+	// Games are intentionally not connected to navigation yet.
+	if page == "games" {
 		return
 	}
 	if page != "chat" {
