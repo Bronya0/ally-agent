@@ -185,6 +185,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	case "ask:ready":
 		ui.ThinkingBytes = 0
 		t.AskID = str(p, "askId")
+		t.AskCallID = str(p, "toolCallId")
 		b, _ := json.Marshal(p["questions"])
 		_ = json.Unmarshal(b, &t.Questions)
 		t.Answers = make([]string, len(t.Questions))
@@ -197,6 +198,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		t.Status = locales.Text("等待你的回答")
 	case "ask:closed":
 		t.AskID = ""
+		t.AskCallID = ""
 		t.Questions = nil
 		ui.AskSubmitted = false
 	case "run:retry":
@@ -291,6 +293,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		t.RunID = ""
 		t.CancelRequested = false
 		t.AskID = ""
+		t.AskCallID = ""
 		ui.CompactBusy = false
 		// Release the streaming builder: its buffer aliases the row's content, so
 		// keeping it would hold one extra copy of the whole answer per tab.

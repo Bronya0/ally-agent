@@ -48,10 +48,14 @@ type conversation struct {
 	AttachmentImageJobs                               int
 	AttachmentImagesNeedReload                        bool
 	AskID                                             string
-	Questions                                         []backend.AskQuestion
-	Answers                                           []string
-	Selected                                          []string
-	MD                                                map[int]*markdown.Options
+	// AskCallID ties the open ask to the tool call that asked it: the call reaches
+	// the transcript while it is still streaming, before ask:ready fires, so the
+	// card must not fall back to whatever questions the previous ask left behind.
+	AskCallID string
+	Questions []backend.AskQuestion
+	Answers   []string
+	Selected  []string
+	MD        map[int]*markdown.Options
 	// MDCodeBlock keeps the reading theme's own code-block hook per message: the
 	// find bar wraps it while it is open, and this is what it is restored to.
 	MDCodeBlock map[int]func(*ui.Context, *markdown.CodeBlockView)

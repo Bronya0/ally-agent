@@ -19,6 +19,16 @@ import (
 // panel and the floating jump-to-bottom controls.
 func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	st := t.uiState()
+	if st.ChatLayoutSeen && st.ChatWithExplorer != a.explorer {
+		// The explorer changes the list's parent. Its old pixel offset is not
+		// valid at the new width; let the list restore its own row anchor.
+		t.Scroll.Y = 0
+		st.LastScrollY = 0
+		if st.Follow {
+			st.List.ScrollToEnd()
+		}
+	}
+	st.ChatLayoutSeen, st.ChatWithExplorer = true, a.explorer
 	a.beginChatSearchFrame(t)
 	pruneTranscriptOutsideView(t, st)
 	// The welcome card's popovers live in the card: once the list scrolls it out
@@ -993,6 +1003,9 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 		index = 0
 	}
 	q := t.Questions[index]
+	// 控件状态按 key 存，而问题 id 是后端补的（每次都叫 q1、q2），所以 key 里必须
+	// 带上本次提问：新提问换一套新控件，等价于重新初始化。
+	wkey := "ask-" + t.AskID + ":" + q.ID
 	answered := 0
 	for _, question := range t.Questions {
 		if len(st.AskSelected[question.ID]) > 0 || (st.AskCustom[question.ID] && strings.TrimSpace(st.AskCustomTxt[question.ID]) != "") {
@@ -1017,7 +1030,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 			}).Disabled(index == 0)
 			for n := range t.Questions {
 				n := n
-				choiceButton(c, fmt.Sprintf("ask-tab-%d", n), fmt.Sprint(n+1), n == index, c.Theme().Accent).
+				choiceButton(c, fmt.Sprintf("ask-tab-%s-%d", t.AskID, n), fmt.Sprint(n+1), n == index, c.Theme().Accent).
 					OnClick(func() { st.AskIndex = n })
 			}
 			iconAction(c, "ask-next", locales.Text("下一题"), "chevron", 22, func() {
@@ -1031,7 +1044,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 			for _, opt := range q.Options {
 				opt := opt
 				checked := containsString(st.AskSelected[q.ID], opt.ID)
-				card := ui.Column(c.Key("ask-option-card-"+q.ID+"-"+opt.ID)).FillWidth().Padding(8, 10).Gap(gapTight).
+				card := ui.Column(c.Key("ask-option-card-"+wkey+"-"+opt.ID)).FillWidth().Padding(8, 10).Gap(gapTight).
 					Radius(radiusSmall).Border(1, surfaceBorder(c)).Cursor(ui.CursorPointer)
 				if card.Hovered() {
 					card.Background(c.Theme().SurfaceHover)
@@ -1042,7 +1055,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 				}
 				card.Children(func() {
 					ui.Row(c).AlignItems(ui.Center).Gap(gapInline).Children(func() {
-						box := ui.Checkbox(c.Key("ask-opt-"+q.ID+"-"+opt.ID), &checked, opt.Label)
+						box := ui.Checkbox(c.Key("ask-opt-"+wkey+"-"+opt.ID), &checked, opt.Label)
 						if box.Changed() {
 							st.AskSelected[q.ID] = toggleString(st.AskSelected[q.ID], opt.ID, checked)
 						}
@@ -1056,7 +1069,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 				})
 			}
 			custom := st.AskCustom[q.ID]
-			customRow := ui.Row(c.Key("ask-custom-row-"+q.ID)).FillWidth().MinHeight(32).Padding(4, 8).
+			customRow := ui.Row(c.Key("ask-custom-row-"+wkey)).FillWidth().MinHeight(32).Padding(4, 8).
 				AlignItems(ui.Center).Radius(radiusSmall).Cursor(ui.CursorPointer)
 			if customRow.Hovered() {
 				customRow.Background(c.Theme().SurfaceHover)
@@ -1065,12 +1078,12 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 				custom = !custom
 			}
 			customRow.Children(func() {
-				ui.Checkbox(c.Key("ask-custom-"+q.ID), &custom, locales.Text("自定义回答"))
+				ui.Checkbox(c.Key("ask-custom-"+wkey), &custom, locales.Text("自定义回答"))
 			})
 			st.AskCustom[q.ID] = custom
 			if custom {
 				txt := st.AskCustomTxt[q.ID]
-				uikit.Area(c.Key("ask-custom-text-"+q.ID), &txt).Placeholder(locales.Text("输入你的回答")).Height(70)
+				uikit.Area(c.Key("ask-custom-text-"+wkey), &txt).Placeholder(locales.Text("输入你的回答")).Height(70)
 				st.AskCustomTxt[q.ID] = txt
 			}
 		})

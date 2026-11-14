@@ -283,6 +283,8 @@ type chatUI struct {
 	// would never arrive.
 	FollowBottom     float32
 	LastScrollY      float32
+	ChatLayoutSeen   bool
+	ChatWithExplorer bool
 	HistoryIndex     int
 	HistoryDraft     string
 	WorkspaceHistory []string

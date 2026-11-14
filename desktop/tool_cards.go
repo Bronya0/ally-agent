@@ -1151,8 +1151,15 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			case name == "image_generate" || name == "image_edit" || name == "screenshot":
 				// Metadata belongs to the title; captured/generated images remain below.
 			case name == "ask":
-				if state == "running" && len(t.Questions) > 0 {
-					a.askComposer(c, t)
+				// 工具调用在模型刚开始输出时就进了正文，ask:ready 要等它真正执行才到；
+				// 这段空档里 t.Questions 还是上一次的问题，照着画就会先闪出一张旧卡
+				// （旧选项、旧文字），过一会儿才换成新的。只允许当前提问所属的那张卡画。
+				owner := t.AskID != "" && len(t.Questions) > 0 &&
+					(t.AskCallID == "" || str(m, "toolCallId") == t.AskCallID)
+				if state == "running" {
+					if owner {
+						a.askComposer(c, t)
+					}
 				} else {
 					toolAskSummary(c, key, args, result)
 				}
