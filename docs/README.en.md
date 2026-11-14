@@ -19,8 +19,6 @@ Ally Agent is a lightweight native desktop AI coding assistant built with Go and
 
 Download a Windows, macOS or Linux package from [GitHub Releases](https://github.com/Bronya0/ally-agent/releases).
 
-![You write the code. Big Whale keeps you company.](imgs/companion.png)
-
 ![Ally Agent in action — 7.5-second demo](imgs/preview-7.5s.gif)
 
 ## Features
