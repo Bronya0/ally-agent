@@ -549,7 +549,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	container.Children(func() {
 		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(gapTight).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(rowLabel)
 		row.Children(func() {
-			ui.Box(c).Absolute().Left(-20).Top(0).Width(16).HeightPercent(100).Center().Children(func() {
+			ui.Box(c).Absolute().Left(-16).Top(0).Width(16).HeightPercent(100).Center().Children(func() {
 				toolStatusIcon(c, groupStatus)
 			})
 			shown := 0
@@ -877,7 +877,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		}
 		row.Hidden(name == "suggest").Children(func() {
 			if name != "subagent" {
-				ui.Box(c).Absolute().Left(-20).Top(0).Width(16).HeightPercent(100).Center().Children(func() { toolStatusIcon(c, state) })
+				ui.Box(c).Absolute().Left(-16).Top(0).Width(16).HeightPercent(100).Center().Children(func() { toolStatusIcon(c, state) })
 			}
 			verbColor := p.accent
 			if state == "error" || name == "delete" || name == "remote_delete_path" {
