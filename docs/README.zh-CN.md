@@ -19,8 +19,6 @@ Ally Agent 是一款轻量的原生桌面 AI 编程助手，使用 Go 与 [MyGo]
 
 前往 [Releases 页面](https://github.com/Bronya0/ally-agent/releases)下载 Windows、macOS 或 Linux 安装包。
 
-![代码认真写，大肥鱼认真陪](imgs/companion.png)
-
 ![Ally Agent 实际运行演示（7.5 秒）](imgs/preview-7.5s.gif)
 
 ## 主要功能
