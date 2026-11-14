@@ -1489,7 +1489,7 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 	}
 	label := "…"
 	if st.FooterLoaded || used > 0 {
-		label = fmt.Sprintf("%s (%s/%s)", pctOf(used, window), fmtK(used), fmtK(window))
+		label = fmt.Sprintf("%s %s", pctOf(used, window), fmtK(used))
 	}
 	color := ui.Hex("#69a982")
 	if !c.Theme().Dark {

@@ -431,7 +431,7 @@ func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
 	for i := 0; i < len(lines); {
 		l := lines[i]
 		if l.gap > 0 {
-			text := fmt.Sprintf(locales.Text("… %d 行未变更 …"), l.gap)
+			text := diffGapText(l.gap)
 			rows = append(rows, splitDiffRow{left: text, right: text, leftOrder: i, rightOrder: i, leftPresent: true, rightPresent: true, gap: l.gap})
 			i++
 			continue
@@ -556,6 +556,14 @@ func diffColors(t *ui.Theme, changed, removed bool) (ui.Color, ui.Color) {
 		return ui.RGBA(220, 38, 38, 0.09), ui.Hex("#a33a3a")
 	}
 	return ui.RGBA(22, 163, 74, 0.10), ui.Hex("#14683c")
+}
+
+// diffGapText labels the row that stands in for skipped unchanged lines.
+func diffGapText(rows int) string {
+	if rows == 1 {
+		return "1 unchanged line"
+	}
+	return fmt.Sprintf("%d unchanged lines", rows)
 }
 
 func diffLine(c *ui.Context, text string, changed bool, number int, ink ...ui.Color) {

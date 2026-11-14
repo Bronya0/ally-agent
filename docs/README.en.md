@@ -4,7 +4,7 @@
 
 Ally Agent is a lightweight native desktop AI coding assistant built with Go and [MyGo](https://github.com/egoist/mygo), for Windows, macOS and Linux. Ask it to understand a project, edit code and run commands, or authorize an SSH node to work on a remote host.
 
-**Low resource usage, parallel workspaces and subagents, your choice of model providers, and a Big Whale to keep you company while you code.**
+**Low resource usage, parallel workspaces and subagents, headless mode with a local HTTP API, your choice of model providers, and a Big Whale to keep you company while you code.**
 
 ⭐ If Ally helps you, a Star on GitHub is a great way to support the project. Thank you!
 

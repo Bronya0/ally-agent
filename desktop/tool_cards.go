@@ -1785,7 +1785,7 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 	outer.Children(func() {
 		for _, line := range visible {
 			if line.gap > 0 {
-				diffGap(c, line.gap)
+				diffGap(c, line.text, line.gap)
 				continue
 			}
 			if strings.HasPrefix(line.text, "@@") || strings.HasPrefix(line.text, "---") || strings.HasPrefix(line.text, "+++") {
@@ -1809,12 +1809,21 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 	}
 }
 
-func diffGap(c *ui.Context, rows int) {
-	label := fmt.Sprintf(locales.Text("… %d 行未变更 …"), rows)
-	ui.Box(c).FillWidth().Height(10).Shrink(0).Unselectable().Role(ui.RoleText).Label(label).
-		Draw(func(p *ui.Painter, r ui.Rect) {
-			p.Fill(ui.Rect{X: r.X + 8, Y: r.Y + r.H/2, W: max(float32(0), r.W-16), H: 1}, p.Theme().Border, 0)
-		})
+// diffGap draws the row that stands in for skipped unchanged lines. It keeps the
+// number gutter and the text column of a diff line, so the label lines up with the
+// rows above and below instead of floating on its own.
+func diffGap(c *ui.Context, label string, rows int) {
+	if label == "" {
+		label = diffGapText(rows)
+	}
+	ui.Row(c).FillWidth().MinWidth(0).Shrink(0).MinHeight(22).Padding(1, 8).AlignItems(ui.Center).
+		Unselectable().Children(func() {
+		// 淡到不抢注意力：省行只是告诉读者中间还有内容，不是一行代码。
+		ink := c.Theme().TextMuted
+		ui.Text(c, "···").Width(42).Shrink(0).Font(monoFamily).FontSize(fsMicro).TextColor(ink).
+			Unselectable()
+		ui.Text(c, label).Font(monoFamily).FontSize(fsMicro).TextColor(ink).Grow(1).MinWidth(0)
+	})
 }
 
 // diffVisibleLine is one rendered diff row, or a collapsed gap of unchanged
@@ -1838,7 +1847,7 @@ func diffVisibleLines(lines []string, limit int, full bool) []diffVisibleLine {
 		}
 		return out
 	}
-	const context = 3
+	const context = 5
 	keep := make([]bool, len(lines))
 	changed := 0
 	for i, l := range lines {

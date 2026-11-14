@@ -18,17 +18,8 @@ import (
 // chatMessages is the conversation viewport: history, welcome card, plan
 // panel and the floating jump-to-bottom controls.
 func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
+	a.syncChatLayout(t)
 	st := t.uiState()
-	if st.ChatLayoutSeen && st.ChatWithExplorer != a.explorer {
-		// The explorer changes the list's parent. Its old pixel offset is not
-		// valid at the new width; let the list restore its own row anchor.
-		t.Scroll.Y = 0
-		st.LastScrollY = 0
-		if st.Follow {
-			st.List.ScrollToEnd()
-		}
-	}
-	st.ChatLayoutSeen, st.ChatWithExplorer = true, a.explorer
 	a.beginChatSearchFrame(t)
 	pruneTranscriptOutsideView(t, st)
 	// The welcome card's popovers live in the card: once the list scrolls it out
@@ -98,13 +89,6 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	// From here the frame builds the rows in view: the messages they cover are
 	// what the next frame prunes the caches to, so the range starts empty.
 	st.built = builtRange{}
-	inlineInset := float32(28)
-	if a.prefs.RailExpanded && !a.prefs.TopNavigation {
-		inlineInset = 44
-		if width <= 1000 {
-			inlineInset = 36
-		}
-	}
 
 	ui.Column(c).Grow(1).MinHeight(0).FillWidth().Children(func() {
 		if st.Search.Open {
@@ -130,7 +114,9 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 			}
 			return false
 		}).Grow(1).MinHeight(0).
-			Padding(18, inlineInset, 14).Gap(10)
+			// Same side inset as the composer box below, so the transcript and the
+			// input line up instead of the body showing a wider column.
+			Padding(18, 20, 14).Gap(10)
 		// The way back shows as soon as the transcript stops following it: a
 		// trackpad's nudge leaves the end by a few DIPs, and waiting for 40 left
 		// the reader with no button at all. The list's own end covers the jump
@@ -159,6 +145,30 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 			})
 		}
 	})
+}
+
+// syncChatLayout keeps the transcript's row anchor when a shell toggle moves
+// it into a different parent. The tracked pixel offset belongs to the old
+// viewport and must not be adopted by the new one.
+func (a *desktop) syncChatLayout(t *conversation) {
+	st := t.uiState()
+	withRail := a.prefs.RailExpanded && !a.prefs.TopNavigation
+	withFile := a.explorer && a.activeFile() != nil
+	if st.ChatLayoutSeen && (st.ChatWithExplorer != a.explorer || st.ChatWithRail != withRail || st.ChatTopNavigation != a.prefs.TopNavigation || st.ChatWithFile != withFile) {
+		// Explorer and rail toggles move the transcript to a different parent.
+		// Its old pixel offset is not valid there; let the list restore its row
+		// anchor, or keep following the end if it was already there.
+		t.Scroll.Y = 0
+		st.LastScrollY = 0
+		if st.Follow {
+			st.List.ScrollToEnd()
+		}
+	}
+	st.ChatLayoutSeen = true
+	st.ChatWithExplorer = a.explorer
+	st.ChatWithRail = withRail
+	st.ChatTopNavigation = a.prefs.TopNavigation
+	st.ChatWithFile = withFile
 }
 
 // jumpToPreviousPrompt scrolls to the prompt above the one in view, or to the

@@ -128,6 +128,9 @@ func (a *desktop) panelPage(c *ui.Context, title, subtitle string, headerActions
 
 // chatPage hosts the conversation column plus the optional explorer.
 func (a *desktop) chatPage(c *ui.Context, width float32) {
+	if t := a.current(); t != nil {
+		a.syncChatLayout(t)
+	}
 	chat := func() { a.chatColumn(c, width) }
 	if !a.explorer || a.current() == nil {
 		chat()
