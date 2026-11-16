@@ -315,9 +315,9 @@ func TestAgentLoopsStageFailureBlocksLaterWrites(t *testing.T) {
 		t.Run(fmt.Sprintf("child=%v", child), func(t *testing.T) {
 			redirectAppStateDir(t)
 			workspace := t.TempDir()
-			reply := sseChatToolCallChunk("kept", "create", `{"path":"kept.txt","content":"kept","stage":0}`) +
+			reply := sseChatToolCallChunk("kept", "create", `{"path":"kept.txt","content":"kept","overwrite":false,"stage":0}`) +
 				sseChatToolCallChunk("failed", "calculate", `{"expression":"1+","stage":0}`) +
-				sseChatToolCallChunk("skipped", "create", `{"path":"skipped.txt","content":"must not exist","stage":1}`) +
+				sseChatToolCallChunk("skipped", "create", `{"path":"skipped.txt","content":"must not exist","overwrite":false,"stage":1}`) +
 				sseChatFinishChunk("tool_calls") + sseDone
 			harness := newSubagentReportHarness(t, reply, subagentTextReply("Finished."))
 			a := NewApp()

@@ -20,6 +20,34 @@ import (
 	toolshared "ally-dev/internal/tools/shared"
 )
 
+func TestCreateRequiresExplicitOverwrite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		base string
+	}{
+		{"create", `"path":"a.txt","content":"x"`},
+		{"remote_create_file", `"alias":"host","path":"/a.txt","content":"x"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, c := range []struct {
+				field string
+				ok    bool
+			}{{"", false}, {`,"overwrite":null`, false}, {`,"overwrite":false`, true}, {`,"overwrite":true`, true}} {
+				var req any
+				if tc.name == "create" {
+					req = &CreateFileRequest{}
+				} else {
+					req = &RemoteCreateFileRequest{}
+				}
+				err, _ := decodeToolArguments(tc.name, []byte("{"+tc.base+c.field+"}"), req)
+				if (err == nil) != c.ok {
+					t.Fatalf("overwrite field %q: error=%v, want success=%v", c.field, err, c.ok)
+				}
+			}
+		})
+	}
+}
+
 func TestDisabledBuiltinFollowsInjectedTools(t *testing.T) {
 	a := &App{}
 	cfg := ConfigState{}

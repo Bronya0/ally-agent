@@ -209,9 +209,9 @@ func chatToolsUncached() []openai.Tool {
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative file path."},
 				"content":   map[string]any{"type": "string", "description": "Full UTF-8 text of the new file (may be empty). It is written as-is, so add a trailing newline yourself when you want one."},
-				"overwrite": map[string]any{"type": "boolean", "description": "Allow replacing an existing text file; default false."},
+				"overwrite": map[string]any{"type": "boolean", "description": "Whether to replace an existing text file."},
 			},
-			"required": []string{"path", "content"},
+			"required": []string{"path", "content", "overwrite"},
 		}),
 		functionTool("delete", "Delete files or directories in the workspace. Strictly prohibited from deleting drive roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*, C:\\Windows, C:\\Users/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs)."+deleteBatchNote(), map[string]any{
 			"type": "object",
@@ -359,7 +359,7 @@ func chatToolsUncached() []openai.Tool {
 				"content":   map[string]any{"type": "string", "description": "Full UTF-8 text of the new file (may be empty), written as-is."},
 				"overwrite": map[string]any{"type": "boolean", "description": "Set true to replace an existing file. No additional confirmation is shown."},
 			},
-			"required": []string{"alias", "path", "content"},
+			"required": []string{"alias", "path", "content", "overwrite"},
 		}),
 		functionTool("remote_delete_path", "Delete one or more absolute file or directory paths on a remote SSH server. Refuses filesystem roots and the protected system locations listed below; directories require recursive=true. Strictly prohibited from deleting filesystem roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs). Use remote deletion cautiously; it is destructive. Prefer this over remote_run_command deletion."+deleteBatchNote(), map[string]any{
 			"type": "object",

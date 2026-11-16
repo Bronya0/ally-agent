@@ -159,7 +159,7 @@ func TestRunChatAsksForAPlanReportWhenWorkOutranThePlan(t *testing.T) {
 		switch round {
 		case 1:
 			// Work, without touching the plan.
-			return sseChatToolCallChunk("call_1", "create", `{"path":"note.txt","content":"work"}`) +
+			return sseChatToolCallChunk("call_1", "create", `{"path":"note.txt","content":"work","overwrite":false}`) +
 				sseChatFinishChunk("tool_calls") + sseDone
 		case 2:
 			// The model stops calling tools: this is where the check fires, so
@@ -253,7 +253,7 @@ func TestRunChatSkipsThePlanCheckWhenTheBatchMovedThePlan(t *testing.T) {
 			t.Errorf("a run whose batch moved the plan must not be asked about it")
 		}
 		if round == 1 {
-			return sseChatToolCallChunk("call_1", "create", `{"path":"note.txt","content":"work"}`) +
+			return sseChatToolCallChunk("call_1", "create", `{"path":"note.txt","content":"work","overwrite":false}`) +
 				sseChatToolCallChunk("call_2", "plan", `{"finish":"改造入口"}`) +
 				sseChatFinishChunk("tool_calls") + sseDone
 		}

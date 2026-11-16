@@ -1072,7 +1072,7 @@ func renderMultiEditResultForModel(r MultiEditResult) string {
 	alias := remoteAliasSegment(r.RemoteAlias)
 	var blocks []string
 	for _, f := range r.Files {
-		blocks = append(blocks, "// edit"+alias+" | path="+strconv.Quote(f.Path)+" | version="+strconv.Quote(f.Version))
+		blocks = append(blocks, "// edit"+alias+" | path="+strconv.Quote(f.Path)+" | new version="+strconv.Quote(f.Version))
 	}
 	body := r.Summary
 	if r.Validation != "" {

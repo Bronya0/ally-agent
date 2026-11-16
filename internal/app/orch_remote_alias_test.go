@@ -24,7 +24,7 @@ func TestRemoteAliasContractRejectsLegacyCalls(t *testing.T) {
 	}{
 		{"remote_read", `"files":[{"path":"/srv/a"}]`, func() any { return &RemoteReadFileRequest{} }},
 		{"remote_edit", `"path":"/srv/a","version":"abc123","changes":[{"oldText":"a","newText":"b"}]`, func() any { return &RemoteEditRequest{} }},
-		{"remote_create_file", `"path":"/srv/a","content":"a"`, func() any { return &RemoteCreateFileRequest{} }},
+		{"remote_create_file", `"path":"/srv/a","content":"a","overwrite":false`, func() any { return &RemoteCreateFileRequest{} }},
 		{"remote_delete_path", `"paths":["/srv/a"]`, func() any { return &RemoteDeletePathRequest{} }},
 		{"remote_run_command", `"command":"pwd"`, func() any { return &RemoteRunCommandRequest{} }},
 		{"remote_transfer", `"action":"upload","localPath":"a","remotePath":"/srv/a"`, func() any { return &RemoteTransferRequest{} }},

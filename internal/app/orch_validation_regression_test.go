@@ -176,8 +176,8 @@ func TestStageValidationChecksSuccessfulWritesWhenPeerFails(t *testing.T) {
 	root := validationSandbox(t)
 	writeToolTestFile(t, root, "second.json", "{}\n")
 	calls := []openai.ToolCall{
-		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"first.json","content":"{broken"}`}},
-		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"second.json","content":"{}\n"}`}},
+		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"first.json","content":"{broken","overwrite":false}`}},
+		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"second.json","content":"{}\n","overwrite":false}`}},
 	}
 	a := newIsolatedToolTestApp(t)
 	enabled := true
@@ -232,7 +232,7 @@ func TestValidationBudgetDoesNotCancelWrites(t *testing.T) {
 	a := newIsolatedTestApp(t)
 	enabled := true
 	cfg := ConfigState{Workspace: root, AutoValidationJSON: &enabled}
-	call := openai.ToolCall{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"bad.json","content":"{"}`}}
+	call := openai.ToolCall{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"bad.json","content":"{","overwrite":false}`}}
 	ctx := context.WithValue(context.Background(), batchValidationBudgetContextKey{}, &batchValidationBudget{})
 	r := a.executeTool(ctx, cfg, "", call.Function.Name, []byte(call.Function.Arguments))
 	if !r.OK {

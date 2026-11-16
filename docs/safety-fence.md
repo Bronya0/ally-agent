@@ -68,7 +68,8 @@ flowchart TB
 | 目标 | 结果 | 原因 |
 |---|---|---|
 | `src/x.go` 新建 | 允许 | |
-| `src/x.go` 已存在、create 未给 overwrite | 拒 `E_EXISTS` | |
+| create 未给 overwrite | 拒 `E_BAD_ARGS` | 必须明确指定是否覆盖 |
+| `src/x.go` 已存在、create 设置 `overwrite: false` | 拒 `E_EXISTS` | |
 | `src/x.png` 覆盖非文本文件 | 拒 `E_TEXT_OVERWRITE` | |
 | edit 用旧 version | 拒 `E_VERSION_MISMATCH` | 要重新 read |
 | `.git/hooks/pre-commit` | 允许 | 按普通文件处理 |

@@ -51,7 +51,7 @@ func priorityOrderDeclaration() string {
 // sharedEditRules returns the core file-editing rules shared by the main and sub-agent system prompts.
 func sharedEditRules() string {
 	return "1. `edit` needs a `version`. Get it from `read`, `create`, or the last edit on that file. Never guess source text or invent a version. Never copy `N: ` prefixes. Do not patch files through the shell.\n" +
-		"   - After an edit, use the new version from that result. Reuse a version only while its snapshot is current. Read again if an outside process changed the file, or if the edit reports a version conflict.\n" +
+		"   - After an edit, use the result's `new version` as the next edit's `version`. Reuse a version only while its snapshot is current. Read again if an outside process changed the file, or if the edit reports a version conflict.\n" +
 		"2. `oldText` must be short, unique, and copied exactly. Never use a compressed, truncated, or missing excerpt. Read that range again with `read` (or `remote_read` remotely) unless it is already in this conversation. Use `lineRange` only for whole lines from a fresh read. After an edit, read again before using line numbers.\n" +
 		"   - Put all changes to one file in one `edit` call: one snapshot, so line numbers cannot drift. Each call is atomic. Edits to different files in one stage are independent. One failed edit does not cancel the others. Check each result and the current file state before retrying a failed edit. Keep very large replacements in their own round.\n" +
 		"3. On `E_NO_MATCH`, `E_VERSION_MISMATCH`, or a line-range error, rebuild from the exact current text. Use the attached snapshot if there is one. Otherwise read the affected range. Never retry guessed text.\n"
