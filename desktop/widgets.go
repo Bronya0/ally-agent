@@ -405,9 +405,29 @@ func tabsBarInk(c *ui.Context, ink ui.Color, selected *int, labels ...string) ui
 
 // tabStrip is one scrollable strip of tabs: where it shows them, and the
 // press dragging it.
+type tabPosition struct {
+	id       string
+	x, width float32
+}
+
+type tabReorderMotion struct {
+	offset    float32
+	startedAt time.Time
+	armed     bool
+}
+
 type tabStrip struct {
-	scroll  ui.ScrollState
-	gesture uikit.TabGesture
+	scroll            ui.ScrollState
+	gesture           uikit.TabGesture
+	reorderFrom       string
+	reorderTarget     string
+	reorderIndex      int
+	reorderIndexValid bool
+	pressID           string
+	pressDX           float32
+	pressDY           float32
+	positions         []tabPosition
+	reorderMotions    map[string]tabReorderMotion
 }
 
 // tabWheelStep scales a wheel's notches along a strip: a notch moves a page

@@ -22,6 +22,72 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+func TestRenameSessionPersistsIndexAndSnapshot(t *testing.T) {
+	t.Parallel()
+	app := newIsolatedChatTestApp(t)
+	original := SessionSnapshot{ID: "rename-me", Title: "Original", Workspace: app.config.Workspace, Messages: []map[string]any{{"role": "user", "content": "keep this"}}}
+	if err := app.SaveSession(original); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.RenameSession(original.ID, "  New   title "); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := app.ListSessionIndex()
+	if err != nil || len(entries) != 1 || entries[0].Title != "New title" {
+		t.Fatalf("index title not renamed: %+v, %v", entries, err)
+	}
+	loaded, err := app.LoadSession(original.ID)
+	if err != nil || loaded.Title != "New title" || len(loaded.Messages) != 1 || loaded.Messages[0]["content"] != "keep this" {
+		t.Fatalf("snapshot rename damaged session: %+v, %v", loaded, err)
+	}
+	if _, err := app.repairSessionIndex(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = app.ListSessionIndex()
+	if err != nil || len(entries) != 1 || entries[0].Title != "New title" {
+		t.Fatalf("repair reverted rename: %+v, %v", entries, err)
+	}
+	if err := app.RenameSession(original.ID, "   "); err == nil {
+		t.Fatal("empty title was accepted")
+	}
+	if err := app.RenameSession("missing", "Title"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing session error = %v", err)
+	}
+}
+
+func TestCommitSessionRenameRollsBackOnIndexWriteFailure(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "session.json.gz")
+	indexPath := filepath.Join(dir, "index.json")
+	oldJSON := []byte(`{"id":"session-1","title":"Before"}`)
+	newJSON := []byte(`{"id":"session-1","title":"After"}`)
+	if err := writeCompressedJSONAtomic(snapshotPath, oldJSON); err != nil {
+		t.Fatal(err)
+	}
+	oldSnapshot, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldIndex := []byte("[{\"id\":\"session-1\",\"title\":\"Before\"}]")
+	if err := os.WriteFile(indexPath, oldIndex, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeErr := errors.New("simulated index write failure")
+	err = commitSessionRename(snapshotPath, newJSON, oldSnapshot, true, indexPath, oldIndex, true, func() error { return writeErr })
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("commit error = %v", err)
+	}
+	afterSnapshot, err := os.ReadFile(snapshotPath)
+	if err != nil || !bytes.Equal(oldSnapshot, afterSnapshot) {
+		t.Fatalf("snapshot was not rolled back: %v", err)
+	}
+	afterIndex, err := os.ReadFile(indexPath)
+	if err != nil || !bytes.Equal(oldIndex, afterIndex) {
+		t.Fatalf("index changed after failed commit: %v", err)
+	}
+}
+
 func TestStartupSessionIndexDoesNotScanOrphanedSnapshots(t *testing.T) {
 	t.Parallel()
 	app := newIsolatedChatTestApp(t)

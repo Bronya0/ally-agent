@@ -2496,6 +2496,36 @@ func (msgs Messages) UiA63280253f17() string {
 	return Catalog.Format(msgs.locale, "ui_a63280253f17", nil)
 }
 
+// UiSessionRenameTitle says "Rename session"
+// in the language the app shows.
+func UiSessionRenameTitle() string { return In(i18n.Locale()).UiSessionRenameTitle() }
+
+// UiSessionRenameTitle says "Rename session"
+// in the language of msgs.
+func (msgs Messages) UiSessionRenameTitle() string {
+	return Catalog.Format(msgs.locale, "ui_session_rename_title", nil)
+}
+
+// UiSessionRenameHint says "Choose a descriptive name for this session."
+// in the language the app shows.
+func UiSessionRenameHint() string { return In(i18n.Locale()).UiSessionRenameHint() }
+
+// UiSessionRenameHint says "Choose a descriptive name for this session."
+// in the language of msgs.
+func (msgs Messages) UiSessionRenameHint() string {
+	return Catalog.Format(msgs.locale, "ui_session_rename_hint", nil)
+}
+
+// UiSessionRenameName says "Session name"
+// in the language the app shows.
+func UiSessionRenameName() string { return In(i18n.Locale()).UiSessionRenameName() }
+
+// UiSessionRenameName says "Session name"
+// in the language of msgs.
+func (msgs Messages) UiSessionRenameName() string {
+	return Catalog.Format(msgs.locale, "ui_session_rename_name", nil)
+}
+
 // UiEb756d567884 says "Session (%[1]d)"
 // in the language the app shows.
 func UiEb756d567884() string { return In(i18n.Locale()).UiEb756d567884() }

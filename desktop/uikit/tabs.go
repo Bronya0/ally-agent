@@ -27,7 +27,7 @@ type TabOptions struct {
 
 // tabPanSlop is how far a press moves before it pans the strip instead of
 // choosing a tab, as MyGo's dragStart: a click that shakes still clicks.
-const tabPanSlop = 4
+const tabPanSlop = 10
 
 // TabGesture is the press on a tab strip: how far it moved since the last
 // frame, and whether it moved far enough to pan the strip rather than
