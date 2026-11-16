@@ -3516,9 +3516,11 @@ func TestWindowsDeleteSafetyAllowsOrdinaryCDriveWorkspacePaths(t *testing.T) {
 		t.Skip("windows path safety")
 	}
 
-	allowed, reason := isDangerousDeletePath(`C:\Users\alice\project\temp.txt`)
-	if allowed {
-		t.Fatalf("expected ordinary C: workspace path to be allowed, got %q", reason)
+	for _, path := range []string{`C:\Users\alice\project\temp.txt`, `C:\Users\alice\project\.git\config`} {
+		blocked, reason := isDangerousDeletePath(path)
+		if blocked {
+			t.Fatalf("expected %s to be allowed, got %q", path, reason)
+		}
 	}
 
 	for _, path := range []string{
@@ -3526,7 +3528,6 @@ func TestWindowsDeleteSafetyAllowsOrdinaryCDriveWorkspacePaths(t *testing.T) {
 		`C:\Windows\System32\kernel32.dll`,
 		`C:\Program Files\App`,
 		`C:\Users\alice`,
-		`C:\Users\alice\project\.git\config`,
 	} {
 		blocked, reason := isDangerousDeletePath(path)
 		if !blocked {

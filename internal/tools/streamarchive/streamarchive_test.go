@@ -590,6 +590,12 @@ func TestStreamArchiveInternalParentSymlink(t *testing.T) {
 		valid bool
 	}{{"../data", true}, {"../../outside", false}} {
 		t.Run(tc.link, func(t *testing.T) {
+			if tc.valid {
+				probe := filepath.Join(t.TempDir(), "probe")
+				if err := os.Symlink("target", probe); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+			}
 			var archive bytes.Buffer
 			tw := tar.NewWriter(&archive)
 			_ = tw.WriteHeader(&tar.Header{Name: "pkg/data", Typeflag: tar.TypeReg, Mode: 0600, Size: 4})
