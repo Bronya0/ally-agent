@@ -703,6 +703,9 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation, anchor ui.Element
 							ui.Box(c).Size(5, 5).Radius(3).Background(p.accent)
 						}
 						ui.Spacer(c)
+						iconAction(c, "sess-rename-"+s.ID, locales.Text("重命名会话"), "edit", 18, func() {
+							a.openSessionRename(s.ID, title)
+						}).Disabled(busy)
 						iconAction(c, "sess-del-"+s.ID, locales.Text("删除会话"), "close", 18, func() {
 							a.deleteSession(s.ID, title)
 						}).Disabled(busy)

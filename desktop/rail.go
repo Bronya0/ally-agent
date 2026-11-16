@@ -426,6 +426,10 @@ func (a *desktop) railSessionRow(c *ui.Context, t *conversation, entry backend.S
 				}
 			})
 		})
+		rename := iconAction(c, "rail-sess-rename-"+entry.ID, locales.Text("重命名会话"), "edit", 18, func() {
+			a.openSessionRename(entry.ID, title)
+		})
+		railHoverAction(c, row, rename, busy)
 		b := dangerIconAction(c, "rail-sess-del-"+entry.ID, locales.Text("删除会话"), "close", 18, func() {
 			a.deleteSession(entry.ID, title)
 		})

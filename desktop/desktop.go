@@ -267,6 +267,7 @@ type desktop struct {
 	sshRefreshSeq                                       uint64
 	sshRefreshPending                                   map[string]bool
 	deletePrompt                                        *deletePromptState
+	sessionRename                                       sessionRenameState
 
 	// mcpServersRev is the revision of the status list below. The list is replaced
 	// as a whole on every update, so bumping it with the replacement is enough for

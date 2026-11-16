@@ -401,6 +401,93 @@ func (a *App) saveSessionLocked(snapshot SessionSnapshot) error {
 	return a.writeSessionIndexLocked(entries)
 }
 
+// RenameSession updates both the compact index and any persisted snapshot so
+// index repair cannot restore the previous title.
+func (a *App) RenameSession(sessionID, title string) error {
+	if err := a.ensureInitialized(); err != nil {
+		return err
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	title = strings.Join(strings.Fields(title), " ")
+	if sessionID == "" {
+		return errors.New("session id is required")
+	}
+	if title == "" {
+		return errors.New("session title is required")
+	}
+	title = normalizeSessionIndexTitle(title)
+	if a.sessionsDir == "" {
+		return errors.New("session storage is not initialized")
+	}
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	entries, err := a.readSessionIndexLocked()
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range entries {
+		if entries[i].ID == sessionID {
+			entries[i].Title = title
+			found = true
+			break
+		}
+	}
+	if !found {
+		return os.ErrNotExist
+	}
+	path := a.sessionSnapshotPath(sessionID)
+	var oldSnapshot, newSnapshot []byte
+	hasSnapshot := false
+	if oldSnapshot, err = os.ReadFile(path); err == nil {
+		hasSnapshot = true
+		snapshot, readErr := readCompressedSessionSnapshot(path)
+		if readErr != nil {
+			return readErr
+		}
+		snapshot.Title = title
+		newSnapshot, err = json.Marshal(snapshot)
+		if err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	indexPath := a.sessionIndexPath()
+	oldIndex, indexErr := os.ReadFile(indexPath)
+	hasIndex := indexErr == nil
+	if indexErr != nil && !errors.Is(indexErr, os.ErrNotExist) {
+		return indexErr
+	}
+	return commitSessionRename(path, newSnapshot, oldSnapshot, hasSnapshot, indexPath, oldIndex, hasIndex, func() error {
+		return a.writeSessionIndexLocked(entries)
+	})
+}
+
+func commitSessionRename(snapshotPath string, newSnapshot, oldSnapshot []byte, hasSnapshot bool, indexPath string, oldIndex []byte, hasIndex bool, writeIndex func() error) error {
+	if hasSnapshot {
+		if err := writeCompressedJSONAtomic(snapshotPath, newSnapshot); err != nil {
+			return err
+		}
+	}
+	if err := writeIndex(); err != nil {
+		rollbackSessionRenameFiles(snapshotPath, oldSnapshot, hasSnapshot, indexPath, oldIndex, hasIndex)
+		return fmt.Errorf("save renamed session index: %w", err)
+	}
+	return nil
+}
+
+func rollbackSessionRenameFiles(snapshotPath string, oldSnapshot []byte, hasSnapshot bool, indexPath string, oldIndex []byte, hasIndex bool) {
+	if hasSnapshot {
+		_ = writeAtomicBytes(snapshotPath, oldSnapshot, 0o600)
+	}
+	if hasIndex {
+		_ = writeAtomicBytes(indexPath, oldIndex, 0o600)
+	} else {
+		_ = os.Remove(indexPath)
+	}
+}
+
 // SaveSessionIndex updates only one small metadata record. It is used for
 // workspace/title/mode changes without rewriting a large conversation file.
 func (a *App) SaveSessionIndex(entry SessionIndexEntry) error {
