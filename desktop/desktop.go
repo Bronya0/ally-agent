@@ -1259,18 +1259,16 @@ func (a *desktop) showSession(next *conversation) {
 		a.cancelOAuthWhenLeaving()
 	}
 	for i, t := range a.tabs {
-		if strings.EqualFold(t.Workspace, next.Workspace) && !t.Busy {
-			a.rememberSession(t)
-			if next.Model == "" {
-				next.Model = t.Model
-			}
-			a.tabs[i] = next
+		if t.ID == next.ID {
 			a.page = "chat"
 			a.activateTab(i)
 			a.refreshFiles()
-			a.refreshSessionFooter(next)
-			a.refreshGit(next)
+			a.refreshSessionFooter(t)
+			a.refreshGit(t)
 			return
+		}
+		if next.Model == "" && strings.EqualFold(t.Workspace, next.Workspace) {
+			next.Model = t.Model
 		}
 	}
 	a.tabs = append(a.tabs, next)

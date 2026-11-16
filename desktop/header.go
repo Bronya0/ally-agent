@@ -112,14 +112,22 @@ func (a *desktop) headerBar(c *ui.Context) {
 // workspaceTabs draws open workspaces and their history-menu entry.
 func (a *desktop) workspaceTabs(c *ui.Context) {
 	s := a.tabStripOf("header-tabs")
+	positions := s.positions[:0]
+	released := false
+	dragPointerX := float32(0)
+	dragPointerValid := false
+	motionDeferred := false
+	if s.reorderFrom == "" && s.gesture.Released {
+		s.gesture.Panning, s.gesture.Released = false, false
+	}
 	ui.Box(c).Grow(1).MinWidth(0).FillHeight().Clip().Children(func() {
 		tabScroller(c, s).FillWidth().FillHeight().Children(func() {
 			ui.Row(c).FillHeight().AlignItems(ui.Stretch).Gap(0).Padding(0).Children(func() {
 				for i, t := range a.tabs {
 					idx, tab := i, t
-					uikit.WorkspaceTab(c.Key("wtab-"+tab.ID), workspaceLabel(tab.Workspace), workspaceTip(tab.Workspace), idx == a.active, tab.Busy, len(a.tabs) > 1, iconImage("close"), func() {
+					e := uikit.WorkspaceTab(c.Key("wtab-"+tab.ID), sessionTabLabel(tab), sessionTabTip(tab), idx == a.active, tab.Busy, len(a.tabs) > 1 && s.reorderFrom == "", iconImage("close"), func() {
 						if s.gesture.Panning {
-							// The press panned the strip: it chose nothing.
+							// A pan or a reorder drag never activates its release tab.
 							return
 						}
 						if a.page == "settings" {
@@ -137,6 +145,77 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 						a.refreshSessionFooter(tab)
 						a.refreshGit(tab)
 					}, func() { a.closeWorkspaceTab(idx) }, &s.gesture, a.secondaryInk()).FillHeight().Label(locales.Text("工作区标签 ") + tab.ID)
+					if s.reorderFrom == "" && s.pressID == "" && e.Pressed() {
+						if _, _, over := e.PointerPosition(); over {
+							s.pressID = tab.ID
+							s.pressDX, s.pressDY = 0, 0
+						}
+					}
+					bounds := e.Bounds()
+					layoutX := bounds.X
+					positions = append(positions, tabPosition{id: tab.ID, x: layoutX, width: bounds.W})
+					if s.reorderFrom != "" && (s.reorderTarget == tab.ID || (s.reorderTarget == tabDropAtEnd && idx == len(a.tabs)-1)) {
+						accent := c.Theme().Accent
+						e.Draw(func(p *ui.Painter, r ui.Rect) {
+							x := r.X - 2
+							if s.reorderTarget == tabDropAtEnd {
+								x = r.X + r.W - 2
+							}
+							p.Fill(ui.Rect{X: x, Y: r.Y + 5, W: 4, H: r.H - 10}, accent, 2)
+						})
+					}
+					if motion, ok := s.reorderMotions[tab.ID]; ok {
+						if c.Preferences().ReduceMotion {
+							delete(s.reorderMotions, tab.ID)
+						} else if c.Instant() {
+							// Pointer-release updates may be built as instant frames. Wait
+							// one refresh so that they cannot collapse this requested motion.
+							if !motionDeferred {
+								c.After(16 * time.Millisecond)
+								motionDeferred = true
+							}
+						} else if !motion.armed {
+							motion.armed = true
+							s.reorderMotions[tab.ID] = motion
+							c.Invalidate()
+							e = e.AnimatePose(ui.Pose{X: motion.offset}, ui.Animation{Duration: uikit.TabReorderDuration, Ease: ui.EaseOut})
+						} else {
+							e = e.AnimatePose(ui.Pose{}, ui.Animation{Duration: uikit.TabReorderDuration, Ease: ui.EaseOut})
+							if motion.startedAt.IsZero() {
+								motion.startedAt = c.Now()
+								s.reorderMotions[tab.ID] = motion
+							} else if c.Now().Sub(motion.startedAt) >= uikit.TabReorderDuration {
+								delete(s.reorderMotions, tab.ID)
+							}
+						}
+					}
+					dx, dy, dragging := e.Dragged()
+					if dragging && s.pressID == tab.ID {
+						s.pressDX += dx
+						s.pressDY += dy
+					}
+					if dragging && s.reorderFrom == "" && s.pressID == tab.ID {
+						absX, absY := s.pressDX, s.pressDY
+						if absX < 0 {
+							absX = -absX
+						}
+						if absY < 0 {
+							absY = -absY
+						}
+						if absX >= tabReorderDragSlop && absX > absY {
+							s.reorderFrom = tab.ID
+							s.gesture.Panning = true
+						}
+					}
+					if tab.ID == s.reorderFrom {
+						pointerX, _, _ := e.PointerPosition()
+						dragPointerX = layoutX + pointerX
+						dragPointerValid = true
+						_, _, released = e.DragEnded()
+					}
+					if s.reorderFrom == "" && s.pressID == tab.ID && !e.Pressed() {
+						s.pressID = ""
+					}
 				}
 				// The plus closes the strip, right where the tabs end: it asks for
 				// another workspace and opens the same history the header's add
@@ -147,7 +226,158 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 			})
 		})
 	})
+	if s.reorderFrom != "" && s.gesture.Released {
+		released = true
+	}
+	s.positions = positions
+	draggedID := s.reorderFrom
+	insertionIndex := -1
+	if dragPointerValid && draggedID != "" {
+		insertionIndex = conversationTabInsertionIndex(a.tabs, s.positions, draggedID, dragPointerX, tabReorderHysteresis)
+		if insertionIndex >= 0 {
+			s.reorderTarget = conversationTabDropTarget(a.tabs, draggedID, insertionIndex)
+			s.reorderIndex, s.reorderIndexValid = insertionIndex, true
+		}
+	}
+	if released {
+		if s.reorderIndexValid {
+			a.active, s.reorderMotions, _ = moveOpenConversationTabToIndex(
+				a.tabs, s.positions, a.active, draggedID, s.reorderIndex,
+			)
+		}
+		s.pressID, s.pressDX, s.pressDY = "", 0, 0
+		s.reorderTarget, s.reorderIndex, s.reorderIndexValid = "", 0, false
+		if c.Preferences().ReduceMotion {
+			s.reorderMotions = nil
+		}
+		s.reorderFrom = ""
+	}
 	s.pan()
+}
+
+const tabReorderHysteresis float32 = 8
+const tabReorderDragSlop float32 = 10
+const tabDropAtEnd = "\x00end"
+
+func conversationTabDropTarget(tabs []*conversation, draggedID string, destination int) string {
+	from := -1
+	for i, tab := range tabs {
+		if tab != nil && tab.ID == draggedID {
+			from = i
+			break
+		}
+	}
+	if from < 0 {
+		return ""
+	}
+	if destination == from {
+		return draggedID
+	}
+	if destination < from {
+		return tabs[destination].ID
+	}
+	if destination+1 < len(tabs) {
+		return tabs[destination+1].ID
+	}
+	return tabDropAtEnd
+}
+
+func conversationTabInsertionIndex(tabs []*conversation, positions []tabPosition, draggedID string, pointerX, hysteresis float32) int {
+	if len(tabs) < 2 || len(positions) != len(tabs) {
+		return -1
+	}
+	from := -1
+	for i, tab := range tabs {
+		if tab != nil && tab.ID == draggedID {
+			from = i
+			break
+		}
+	}
+	if from < 0 {
+		return -1
+	}
+	current := from
+	newIndex := 0
+	x := positions[0].x
+	virtualIndex := 0
+	leftBarrier, rightBarrier := float32(-1<<30), float32(1<<30)
+	for i, tab := range tabs {
+		if tab.ID == draggedID {
+			continue
+		}
+		mid := x + positions[i].width/2
+		if virtualIndex == current-1 {
+			leftBarrier = mid
+		}
+		if virtualIndex == current {
+			rightBarrier = mid
+		}
+		if pointerX >= mid {
+			newIndex++
+		}
+		virtualIndex++
+		x += positions[i].width
+	}
+	if newIndex > current && pointerX < rightBarrier+hysteresis {
+		newIndex = current
+	} else if newIndex < current && pointerX > leftBarrier-hysteresis {
+		newIndex = current
+	}
+	return newIndex
+}
+
+func moveOpenConversationTabToIndex(tabs []*conversation, positions []tabPosition, active int, fromID string, destination int) (int, map[string]tabReorderMotion, bool) {
+	if len(tabs) < 2 || len(positions) != len(tabs) {
+		return active, nil, false
+	}
+	from := -1
+	for i, tab := range tabs {
+		if tab != nil && tab.ID == fromID {
+			from = i
+			break
+		}
+	}
+	if from < 0 || destination < 0 || destination >= len(tabs) || from == destination {
+		return active, nil, false
+	}
+	byID := make(map[string]tabPosition, len(positions))
+	for i, tab := range tabs {
+		if tab != nil {
+			byID[tab.ID] = positions[i]
+		}
+	}
+	dragged := tabs[from]
+	if from < destination {
+		copy(tabs[from:destination], tabs[from+1:destination+1])
+	} else {
+		copy(tabs[destination+1:from+1], tabs[destination:from])
+	}
+	tabs[destination] = dragged
+	if active == from {
+		active = destination
+	} else {
+		if from < active {
+			active--
+		}
+		if destination <= active {
+			active++
+		}
+	}
+	newX := positions[0].x
+	motions := make(map[string]tabReorderMotion, len(tabs)-1)
+	for _, tab := range tabs {
+		old := byID[tab.ID]
+		if tab.ID != fromID {
+			if delta := old.x - newX; delta > 0.5 || delta < -0.5 {
+				motions[tab.ID] = tabReorderMotion{offset: delta}
+			}
+		}
+		newX += old.width
+	}
+	if len(motions) == 0 {
+		motions = nil
+	}
+	return active, motions, true
 }
 
 // Header history always creates a fresh tab, matching main's onHistorySelect.
@@ -236,8 +466,26 @@ func workspaceLabel(root string) string {
 	return base
 }
 
-// workspaceTip is what a tab's hover reveals: the label keeps only the last
-// segment, so the tooltip carries the workspace's full path.
+// sessionTabLabel is the primary tab identity; workspaceTip supplies its location on hover.
+func sessionTabLabel(tab *conversation) string {
+	if tab == nil || strings.TrimSpace(tab.Title) == "" {
+		return locales.Text("会话")
+	}
+	return short(strings.TrimSpace(tab.Title), 36)
+}
+
+func sessionTabTip(tab *conversation) string {
+	if tab == nil {
+		return workspaceTip("")
+	}
+	workspace := workspaceTip(tab.Workspace)
+	title := strings.TrimSpace(tab.Title)
+	if title == "" || title == sessionTabLabel(tab) {
+		return workspace
+	}
+	return short(title, 72) + "\n" + workspace
+}
+
 func workspaceTip(root string) string {
 	if root == "" {
 		return locales.Text("未选择工作区")
