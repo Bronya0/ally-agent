@@ -50,8 +50,9 @@ func (a *desktop) workspaceHistoryRoots() []string {
 
 // rememberWorkspace runs at the shared tab activation entry, covering folder
 // selection, history, restored sessions and switches back to an existing tab.
+// A workspace whose history was deleted stays out while a tab still shows it.
 func (a *desktop) rememberWorkspace(root string) {
-	if a.closing || !historyWorkspace(root) {
+	if a.closing || !historyWorkspace(root) || a.workspaceHidden(root) {
 		return
 	}
 	recent := a.prefs.RecentWorkspaces
@@ -82,4 +83,27 @@ func (a *desktop) forgetWorkspaceVisit(root string) {
 	a.prefs.RecentWorkspaces = roots
 	a.workspaceVisitsRev++
 	a.savePrefs()
+}
+
+// hideWorkspaceVisit forgets the visit and marks the workspace so the tab still
+// showing it cannot record the visit again. Without the mark, activating that tab
+// put the entry straight back: deleting the history of the workspace in use
+// looked like it had done nothing.
+func (a *desktop) hideWorkspaceVisit(root string) {
+	if key := workspaceKey(root); key != "" {
+		if a.hiddenWorkspaces == nil {
+			a.hiddenWorkspaces = map[string]bool{}
+		}
+		a.hiddenWorkspaces[key] = true
+	}
+	a.forgetWorkspaceVisit(root)
+}
+
+// showWorkspaceVisit drops that mark when the user adds the workspace again.
+func (a *desktop) showWorkspaceVisit(root string) {
+	delete(a.hiddenWorkspaces, workspaceKey(root))
+}
+
+func (a *desktop) workspaceHidden(root string) bool {
+	return a.hiddenWorkspaces[workspaceKey(root)]
 }

@@ -3,6 +3,7 @@ package desktop
 import (
 	backend "ally-dev/internal/app"
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -100,8 +101,10 @@ func TestWorkspaceVisitsPersistWithoutConversationAndCanBeForgotten(t *testing.T
 	if len(a.sessions) != 0 || startupWorkspace(reloaded.RecentWorkspaces, nil, "fallback") != first {
 		t.Fatal("empty workspace could not be restored without conversation records")
 	}
-	// The existing rail delete entry must also work for a history-only workspace.
-	a.removeWorkspaceHistory(first)
+	// Removing a history-only workspace goes through the confirmation dialog, which
+	// cannot run here, so the step it guards is exercised on its own: the visit is
+	// forgotten, the cache is invalidated and the removal survives a restart.
+	a.hideWorkspaceVisit(first)
 	if !reflect.DeepEqual(a.workspaceHistoryRoots(), []string{second}) {
 		t.Fatal("forgetting a workspace did not invalidate the history cache")
 	}
@@ -125,5 +128,71 @@ func TestWorkspaceVisitsAreBoundedAndExcludeTemporary(t *testing.T) {
 	a.rememberWorkspace("")
 	if a.workspaceVisitsRev != revision {
 		t.Fatal("temporary workspace was recorded in permanent history")
+	}
+}
+
+// A session the backend refuses to delete is running or compacting. Forgetting it
+// anyway blanked a tab whose transcript still exists on disk, and the run's later
+// events had no tab left to report into.
+func TestWorkspaceRemovalKeepsSessionsItCouldNotDelete(t *testing.T) {
+	root := `C:\work\cam`
+	running := &conversation{ID: "running", Workspace: root, Messages: []map[string]any{{"role": "user", "content": "还在跑"}}}
+	saved := &conversation{ID: "saved", Workspace: root, Messages: []map[string]any{{"role": "user", "content": "旧的"}}}
+	a := &desktop{
+		tabs:         []*conversation{running, saved},
+		openSessions: map[string]*conversation{"running": running, "saved": saved},
+	}
+
+	deleted, failures := a.deleteWorkspaceSessions([]string{"running", "saved"}, func(id string) error {
+		if id == "running" {
+			return errors.New("session is running")
+		}
+		return nil
+	})
+	if !reflect.DeepEqual(deleted, []string{"saved"}) || len(failures) != 1 {
+		t.Fatalf("deleted=%v failures=%v", deleted, failures)
+	}
+
+	a.applyWorkspaceRemoval(root, deleted, failures)
+
+	if a.tabs[0] != running || len(a.tabs[0].Messages) != 1 {
+		t.Fatal("a session that could not be deleted lost its tab")
+	}
+	if a.openSessions["running"] == nil {
+		t.Fatal("a session that could not be deleted left the open set")
+	}
+	if a.tabs[1].ID == "saved" || len(a.tabs[1].Messages) != 0 {
+		t.Fatal("the deleted session kept its transcript")
+	}
+	// The workspace still holds a session, so its entry has to stay.
+	if a.workspaceHidden(root) {
+		t.Fatal("a partly deleted workspace was dropped from the history")
+	}
+}
+
+// Deleting the history of the workspace in use has to stick: activating its tab
+// records the visit again, which used to put the entry straight back.
+func TestDeletedWorkspaceStaysOutWhileItsTabIsOpen(t *testing.T) {
+	a := &desktop{core: backend.NewApp(), prefs: defaultPrefs()}
+	t.Setenv("ALLY_DATA_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	root := t.TempDir()
+	a.newConversation(root)
+	if got := a.workspaceHistoryRoots(); len(got) != 1 {
+		t.Fatalf("opening a workspace recorded %v, want one entry", got)
+	}
+
+	a.hideWorkspaceVisit(root)
+	a.activateTab(a.active)
+	if got := a.workspaceHistoryRoots(); len(got) != 0 {
+		t.Fatalf("the deleted workspace came back as %v", got)
+	}
+
+	// Adding it again is what brings it back.
+	a.showWorkspaceVisit(root)
+	a.activateTab(a.active)
+	if got := a.workspaceHistoryRoots(); len(got) != 1 {
+		t.Fatalf("adding the workspace again left %v", got)
 	}
 }

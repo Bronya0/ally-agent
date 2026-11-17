@@ -1901,5 +1901,6 @@
   "ui_0a723dbbf6a9": "Restart service",
   "ui_d3416e367c51": "Service output",
   "ui_d2ff17f44817": "Create task",
-  "ui_56b3909705f3": "Task details"
+  "ui_56b3909705f3": "Task details",
+  "ui_7304e809e016": "%s will be removed from the history. This workspace has no saved conversations."
 }

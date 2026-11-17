@@ -10,14 +10,12 @@ import (
 
 // confirmAction runs a destructive operation after a native confirmation
 // dialog. Everything that deletes user data goes through here so the wording
-// and the button order stay consistent.
+// and the button order stay consistent. The title is the dialog's main
+// instruction; the caption keeps the system's own name, because passing the same
+// text there showed one sentence twice on Windows.
 func (a *desktop) confirmAction(title, detail string, run func() error, after func()) {
-	confirmButton := locales.Text("删除")
-	if title == "确认删除" {
-		confirmButton = locales.Text("删除")
-	}
 	go func() {
-		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: title, Message: title, Detail: detail, Buttons: []string{locales.Text("取消"), confirmButton}, CancelButton: 0, DestructiveButtons: []int{1}})
+		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Message: title, Detail: detail, Buttons: []string{locales.Text("取消"), locales.Text("删除")}, CancelButton: 0, DestructiveButtons: []int{1}})
 		if err != nil {
 			a.fail(err)
 			return
@@ -68,6 +66,11 @@ func (a *desktop) forgetSessions(ids []string) {
 
 // reloadSessions refreshes the index the rail and the workspace menu read.
 func (a *desktop) reloadSessions() {
+	if a.core == nil || a.win == nil {
+		// No backend and no window to report through: headless fixtures and the
+		// window's first frames.
+		return
+	}
 	go func() {
 		list, err := a.core.ListSessionIndex()
 		if err != nil {

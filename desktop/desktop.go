@@ -281,6 +281,11 @@ type desktop struct {
 	workspaceVisitsRev uint64
 	wsRootsMemo        memoOf[workspaceHistoryKey, []string]
 	wsSessionMemo      memoOf[workspaceSessionKey, []backend.SessionIndexEntry]
+	// hiddenWorkspaces keeps a deleted workspace out of the history while a tab
+	// still shows it: activating that tab re-registers the visit, so deleting the
+	// history of the workspace in use looked like it had not worked. Adding the
+	// workspace again clears the mark, and it lives no longer than the window.
+	hiddenWorkspaces map[string]bool
 	// The session rail draws the rows in view through a list, so their place
 	// survives sessions coming and going. Another workspace's sessions replace
 	// them as a whole, and the list starts afresh.
@@ -657,7 +662,7 @@ func (a *desktop) newConversation(workspace string) {
 }
 
 func (a *desktop) freshConversation(workspace string) *conversation {
-	t := &conversation{ID: uuid.NewString(), Workspace: workspace, Title: locales.Text("新对话"), Created: time.Now().UnixMilli(), MD: map[int]*markdown.Options{}, Expanded: map[int]bool{}}
+	t := &conversation{ID: uuid.NewString(), Workspace: workspace, Title: sessionTabTitle(workspace), Created: time.Now().UnixMilli(), MD: map[int]*markdown.Options{}, Expanded: map[int]bool{}}
 	if a.config.LastUsedModel != nil {
 		for _, model := range a.config.Models {
 			if sameModelIdentity(modelIdentity(model), *a.config.LastUsedModel) {
@@ -677,6 +682,17 @@ func (a *desktop) freshConversation(workspace string) *conversation {
 	}
 	a.loadWorkspaceInputHistory(t)
 	return t
+}
+
+// sessionTabTitle names a new tab after its workspace, the name the backend
+// already gives a session it creates. Every blank conversation read "新对话", so
+// a tab strip over several projects was a row of identical labels; the workspace
+// is the only thing that tells them apart before the first message names it.
+func sessionTabTitle(workspace string) string {
+	if strings.TrimSpace(workspace) == "" {
+		return locales.Text("新对话")
+	}
+	return workspaceLabel(workspace)
 }
 
 func (a *desktop) rememberSession(t *conversation) {
@@ -831,7 +847,7 @@ func (a *desktop) chooseWorkspace() {
 			return
 		}
 		if p != "" {
-			a.win.Update(func() { a.config.Workspace = p; a.newConversation(p) })
+			a.win.Update(func() { a.showWorkspaceVisit(p); a.config.Workspace = p; a.newConversation(p) })
 		}
 	}()
 }
