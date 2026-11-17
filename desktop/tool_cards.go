@@ -1784,10 +1784,6 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 	visible := lines[:min(len(lines), limit)]
 	outer.Children(func() {
 		for _, line := range visible {
-			if line.gap > 0 {
-				diffGap(c, line.text, line.gap)
-				continue
-			}
 			if strings.HasPrefix(line.text, "@@") || strings.HasPrefix(line.text, "---") || strings.HasPrefix(line.text, "+++") {
 				ui.Text(c, line.text).FillWidth().Padding(3, 8).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).Selectable()
 				continue
@@ -1809,23 +1805,6 @@ func (a *desktop) diffBlock(c *ui.Context, key, diff string, compact bool) {
 	}
 }
 
-// diffGap draws the row that stands in for skipped unchanged lines. It keeps the
-// number gutter and the text column of a diff line, so the label lines up with the
-// rows above and below instead of floating on its own.
-func diffGap(c *ui.Context, label string, rows int) {
-	if label == "" {
-		label = diffGapText(rows)
-	}
-	ui.Row(c).FillWidth().MinWidth(0).Shrink(0).MinHeight(22).Padding(1, 8).AlignItems(ui.Center).
-		Unselectable().Children(func() {
-		// 淡到不抢注意力：省行只是告诉读者中间还有内容，不是一行代码。
-		ink := c.Theme().TextMuted
-		ui.Text(c, "···").Width(42).Shrink(0).Font(monoFamily).FontSize(fsMicro).TextColor(ink).
-			Unselectable()
-		ui.Text(c, label).Font(monoFamily).FontSize(fsMicro).TextColor(ink).Grow(1).MinWidth(0)
-	})
-}
-
 // diffVisibleLine is one rendered diff row, or a collapsed gap of unchanged
 // rows summarized by its count.
 type diffVisibleLine struct {
@@ -1843,7 +1822,7 @@ func diffVisibleLines(lines []string, limit int, full bool) []diffVisibleLine {
 	if full || (limit > 0 && len(lines) <= limit) {
 		out := make([]diffVisibleLine, 0, len(lines))
 		for _, l := range lines {
-			out = append(out, diffVisibleLine{text: l})
+			out = append(out, diffVisibleLine{text: l, gap: foldedDiffLineCount(l)})
 		}
 		return out
 	}
@@ -1871,7 +1850,7 @@ func diffVisibleLines(lines []string, limit int, full bool) []diffVisibleLine {
 		}
 		out := make([]diffVisibleLine, 0, n)
 		for i := 0; i < n; i++ {
-			out = append(out, diffVisibleLine{text: lines[i]})
+			out = append(out, diffVisibleLine{text: lines[i], gap: foldedDiffLineCount(lines[i])})
 		}
 		return out
 	}
@@ -1885,11 +1864,15 @@ func diffVisibleLines(lines []string, limit int, full bool) []diffVisibleLine {
 	}
 	for i, l := range lines {
 		if !keep[i] {
-			gap++
+			if folded := foldedDiffLineCount(l); folded > 0 {
+				gap += folded
+			} else {
+				gap++
+			}
 			continue
 		}
 		flush()
-		out = append(out, diffVisibleLine{text: l})
+		out = append(out, diffVisibleLine{text: l, gap: foldedDiffLineCount(l)})
 	}
 	flush()
 	return out

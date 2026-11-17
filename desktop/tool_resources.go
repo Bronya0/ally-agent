@@ -421,6 +421,19 @@ func isHunkHeader(text string) bool {
 	return strings.HasPrefix(text, "@@ -") && strings.Contains(text, " +")
 }
 
+// foldedDiffLineCount recognizes the edit preview's omitted context marker.
+func foldedDiffLineCount(line string) int {
+	const prefix, suffix = " … ", " unchanged lines …"
+	if !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, suffix) {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(line, prefix), suffix))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
 func splitDiffRows(lines []diffVisibleLine) []splitDiffRow {
 	// Tabs are expanded once while deriving the memoized display rows, rather
 	// than in every code line on every frame.
@@ -511,7 +524,6 @@ func singleColumnDiffRows(rows []splitDiffRow) []diffDisplayLine {
 	visible := make([]diffDisplayLine, 0, len(rows)*2)
 	for _, row := range rows {
 		if row.gap > 0 {
-			visible = append(visible, diffDisplayLine{text: row.left, order: row.leftOrder, gap: row.gap})
 			continue
 		}
 		// The hunk header is dropped here rather than while splitting, because

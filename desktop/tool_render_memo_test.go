@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"ally-dev/internal/tools/edit"
+
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 )
@@ -175,5 +177,33 @@ func TestMultiEditFileLinkOpensItsOwnPath(t *testing.T) {
 	}
 	if !a.explorer || a.activeFile() != file || ctx.Err() == nil || len(conv.uiState().ToolOpen) != 0 {
 		t.Fatal("file link did not choose its own editor or cancelled the wrong load")
+	}
+}
+
+func TestDiffShowsRealLineNumbersAcrossOmittedContext(t *testing.T) {
+	var old []string
+	for i := 1; i <= 100; i++ {
+		old = append(old, fmt.Sprintf("line %d", i))
+	}
+	updated := append([]string{}, old[:2]...)
+	updated = append(updated, "inserted")
+	updated = append(updated, old[2:]...)
+	updated[90] = "changed"
+	diff, _, _ := edit.GenerateEditDiffPreviewWithCounts(strings.Join(old, "\n"), strings.Join(updated, "\n"), 1<<20)
+	rows := new(diffMemo).display(diff)
+	want := map[string]int{"+inserted": 3, "-line 90": 90, "+changed": 91}
+	for _, row := range rows {
+		if strings.Contains(row.text, "unchanged lines") {
+			t.Fatalf("omitted context is displayed as code: %+v", row)
+		}
+		if number, ok := want[row.text]; ok {
+			if row.number != number {
+				t.Fatalf("%q has line number %d, want %d", row.text, row.number, number)
+			}
+			delete(want, row.text)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing diff rows: %v", want)
 	}
 }
