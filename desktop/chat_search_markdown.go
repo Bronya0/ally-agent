@@ -21,23 +21,42 @@ type chatSearchMarkdownRun struct {
 }
 
 type chatSearchMarkdownBlock struct {
-	start, end   int
-	visibleStart int
-	text         string
-	runs         []chatSearchMarkdownRun
+	start, end           int
+	visibleStart         int
+	text                 string
+	runs                 []chatSearchMarkdownRun
+	codeBlock, tableCell bool
+	tableTail            bool
 }
 
 type chatSearchMarkdown struct {
-	text   string
-	blocks []chatSearchMarkdownBlock
+	text       string
+	blocks     []chatSearchMarkdownBlock
+	incomplete bool
 }
 
 // chatSearchMarkdownText projects only text that the regular Markdown renderer
-// shows as text in paragraphs/headings. Blocks with images, HTML, math or
+// shows in paragraphs, headings, table cells and code blocks. Blocks with images, HTML, math or
 // footnote references are left to the native renderer rather than flattened.
 // Code fences remain handled by the existing code-block path.
 func chatSearchMarkdownText(src string) chatSearchMarkdown {
 	doc := parser.Parse(src)
+	tableSearchable := make(map[int]bool)
+	for i := 1; i < doc.Len(); i++ {
+		if doc.Block(i).Kind != parser.Table {
+			continue
+		}
+		searchable := true
+		for row := i + 1; row < doc.Block(i).Next && searchable; row = doc.Block(row).Next {
+			for cell := row + 1; cell < doc.Block(row).Next; cell = doc.Block(cell).Next {
+				if _, ok := chatSearchMarkdownInlineBlock(doc, cell); !ok {
+					searchable = false
+					break
+				}
+			}
+		}
+		tableSearchable[i] = searchable
+	}
 	out := chatSearchMarkdown{}
 	for i := 1; i < doc.Len(); i++ {
 		b := doc.Block(i)
@@ -46,9 +65,33 @@ func chatSearchMarkdownText(src string) chatSearchMarkdown {
 		switch b.Kind {
 		case parser.Paragraph, parser.Heading:
 			block, ok = chatSearchMarkdownInlineBlock(doc, i)
+			if !ok {
+				out.incomplete = true
+			}
+		case parser.TableCell:
+			row := b.Parent
+			if row < 0 || row >= doc.Len() {
+				continue
+			}
+			table := doc.Block(row).Parent
+			if !tableSearchable[table] {
+				out.incomplete = true
+				continue
+			}
+			block, ok = chatSearchMarkdownInlineBlock(doc, i)
+			if ok {
+				block.tableCell = true
+				block.tableTail = chatSearchMarkdownTableAtTail(doc, table)
+			}
 		case parser.CodeBlock:
 			block, ok = chatSearchMarkdownCodeBlock(doc, i)
+			if !ok {
+				out.incomplete = true
+			}
 		default:
+			if b.Kind == parser.HTMLBlock || b.Kind == parser.MathBlock {
+				out.incomplete = true
+			}
 			continue
 		}
 		if !ok || block.text == "" {
@@ -64,8 +107,22 @@ func chatSearchMarkdownText(src string) chatSearchMarkdown {
 	return out
 }
 
+func chatSearchMarkdownTableAtTail(doc *parser.Document, index int) bool {
+	block := doc.Block(index)
+	tail := doc.Source()[block.End:]
+	if strings.Trim(tail, " |\t\r\n") != "" {
+		return false
+	}
+	breaks := strings.Count(tail, "\n") + strings.Count(tail, "\r") - strings.Count(tail, "\r\n")
+	return breaks < 2
+}
+
 func chatSearchMarkdownCodeBlock(doc *parser.Document, index int) (chatSearchMarkdownBlock, bool) {
-	block := chatSearchMarkdownBlock{start: doc.Block(index).Start, end: doc.Block(index).End}
+	b := doc.Block(index)
+	if b.End-b.Start > chatSearchCodeMaxBytes || doc.LineCount(index) > chatSearchCodeMaxLines {
+		return chatSearchMarkdownBlock{}, false
+	}
+	block := chatSearchMarkdownBlock{start: b.Start, end: b.End, codeBlock: true}
 	var text strings.Builder
 	for lineIndex := 0; lineIndex < doc.LineCount(index); lineIndex++ {
 		line, sourceStart := doc.Line(index, lineIndex)

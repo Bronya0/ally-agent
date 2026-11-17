@@ -8,6 +8,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/egoist/mygo/ui/markdown/parser"
 )
 
 func TestChatSearchMarkdownProjectionUsesVisibleInlineText(t *testing.T) {
@@ -167,6 +168,116 @@ func TestChatSearchHighlightPreservesLinkInteraction(t *testing.T) {
 	if got := tester.OpenedURLs(); !slices.Equal(got, []string{"https://go.dev"}) {
 		t.Fatalf("search-highlighted link opened %q, want https://go.dev", got)
 	}
+}
+
+func TestChatSearchMarkdownProjectionIncludesTableCells(t *testing.T) {
+	src := "| Name | Value |\n| --- | --- |\n| **needle** | [needle label](https://hidden.invalid) |\n"
+	projection := chatSearchMarkdownText(src)
+	if got := strings.Count(projection.text, "needle"); got != 2 {
+		t.Fatalf("table projection contains %d needle occurrences, want 2: %q", got, projection.text)
+	}
+	conv := searchTranscript(searchMessage("assistant", src))
+	s := &chatSearch{Query: "needle", MatchCase: true}
+	matches := chatSearchCompute(conv, s)
+	s.cache = matches
+	if len(matches) != 2 {
+		t.Fatalf("table search matches = %+v, want header/body cells", matches)
+	}
+	for _, match := range matches {
+		if got := src[match.Start:match.End]; got != "needle" {
+			t.Errorf("match maps to %q, want visible cell text", got)
+		}
+	}
+	doc := parser.Parse(src)
+	highlighted := 0
+	for i := 0; i < doc.Len(); i++ {
+		if doc.Block(i).Kind != parser.TableCell {
+			continue
+		}
+		text, spans, base, ok := chatSearchBlockSpans(doc, i, 0, s)
+		if !ok {
+			continue
+		}
+		highlighted++
+		if len(spans) != 1 || text[spans[0][0]:spans[0][1]] != "needle" || src[base+spans[0][0]:base+spans[0][1]] != "needle" {
+			t.Errorf("table cell %d highlight = %q spans=%v base=%d", i, text, spans, base)
+		}
+	}
+	if highlighted != 2 {
+		t.Fatalf("highlighted table cells = %d, want 2", highlighted)
+	}
+}
+
+func TestChatSearchOmitsMatchesThatCannotBeHighlighted(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+	}{
+		{"mixed-table", "| value | image |\n| --- | --- |\n| needle | ![alt](image.png) |\n"},
+		{"oversized-code", "```\n" + strings.Repeat("needle\n", chatSearchCodeMaxLines+1) + "```\n"},
+		{"oversized-code-bytes", "```\n" + strings.Repeat("x", chatSearchCodeMaxBytes) + " needle\n```\n"},
+		{"too-many-code-hits", "```\n" + strings.Repeat("needle\n", chatSearchCodeMaxSpans+1) + "```\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &chatSearch{Query: "needle", MatchCase: true}
+			matches, incomplete := chatSearchComputeBounded(searchTranscript(searchMessage("assistant", tc.content)), s)
+			if len(matches) != 0 || incomplete || !s.highlightSkipped {
+				t.Fatalf("matches=%+v incomplete=%v highlightSkipped=%v; unhighlightable results must be omitted and reported distinctly", matches, incomplete, s.highlightSkipped)
+			}
+		})
+	}
+}
+
+func TestChatSearchDoesNotCountTruncatedTableOrCodeTail(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, prefix string
+	}{
+		{"table", "| A |\n| --- |\n| needle |\n" + strings.Repeat("tail", 32), "| A |\n| --- |\n| needle |\n"},
+		{"code", "```go\nneedle\n" + strings.Repeat("tail\n", 32) + "```\n", "```go\nneedle\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.HasPrefix(tc.content, tc.prefix) {
+				t.Fatal("bad fixture prefix")
+			}
+			msg := searchMessage("assistant", tc.content)
+			s := &chatSearch{Query: "needle", MatchCase: true}
+			matches, incomplete := chatSearchScanMessage(msg, 0, s, len(tc.prefix), nil)
+			if len(matches) != 0 || !incomplete {
+				t.Fatalf("matches=%+v incomplete=%v; truncated tail should not contribute unhighlightable hits", matches, incomplete)
+			}
+		})
+	}
+}
+
+func TestChatSearchHighlightsAndRevealsTableCellMatches(t *testing.T) {
+	content := "| Name | Value |\n| --- | --- |\n| alpha | **needle target** |\n| beta | [needle link](https://go.dev) |\n"
+	conv := &conversation{ID: "search-table", Workspace: t.TempDir(), Messages: []map[string]any{searchMessage("assistant", content)}}
+	a := &desktop{ready: true, page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}}
+	s := &conv.uiState().Search
+	s.Open, s.Query = true, "needle"
+	matches := a.chatSearchMatches(conv)
+	if len(matches) != 2 {
+		t.Fatalf("table matches = %+v, want two cells", matches)
+	}
+	options := a.markdownOptions(conv, 0)
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		markdown.View(c, content, options)
+	}, 700, 300)
+	tester.Frame()
+	if s.blockMatch != matches[0] || !s.blockBound {
+		t.Fatalf("table hit anchor = %+v bound=%v, want first match %+v", s.blockMatch, s.blockBound, matches[0])
+	}
+	a.chatSearchStep(conv, 1)
+	tester.Frame()
+	if s.blockMatch != matches[1] || !s.blockBound {
+		t.Fatalf("next table hit anchor = %+v bound=%v, want second match %+v", s.blockMatch, s.blockBound, matches[1])
+	}
+	texts := strings.Join(tester.Texts(), " ")
+	if !strings.Contains(texts, "needle target") || !strings.Contains(texts, "needle link") {
+		t.Fatalf("table content missing from rendered text: %q", texts)
+	}
+
 }
 
 func TestChatSearchMarkdownProjectionMapsSoftBreak(t *testing.T) {

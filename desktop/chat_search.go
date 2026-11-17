@@ -83,7 +83,8 @@ type chatSearch struct {
 	cacheKey             string
 	// scanTruncated means the synchronous scan hit its byte budget before the end
 	// of the transcript; the status must not present a partial search as complete.
-	scanTruncated bool
+	scanTruncated    bool
+	highlightSkipped bool
 	// candidateTruncated distinguishes regexp candidate exhaustion from bytes.
 	candidateTruncated bool
 	// scanCount, scanPrefix and scanBytes describe the scan behind cache: how many
@@ -170,6 +171,7 @@ func (a *desktop) closeChatSearch(t *conversation) {
 	s.spanCache, s.byMessage, s.cache, s.cacheKey = nil, nil, nil, ""
 	s.codeCache = nil
 	s.markdownCache = nil
+	s.highlightSkipped = false
 	s.frameDoc = nil
 	s.patternKey, s.pattern, s.patternErr = "", nil, nil
 	s.literal, s.literalPrefix, s.literalStarts, s.literalQuery = nil, nil, nil, ""
@@ -424,7 +426,7 @@ func chatSearchComputeBounded(t *conversation, s *chatSearch) ([]chatSearchMatch
 // offsets: a visible result is always complete for its message, and later
 // messages may be outside the budget.
 func chatSearchScanAll(t *conversation, s *chatSearch) (out []chatSearchMatch, truncated bool, prefix, total int) {
-	s.candidateTruncated = false
+	s.candidateTruncated, s.highlightSkipped = false, false
 	if strings.TrimSpace(s.Query) == "" {
 		return nil, false, 0, 0
 	}
@@ -483,12 +485,41 @@ func chatSearchScanMessage(m map[string]any, index int, s *chatSearch, budget in
 	projection := entry.projection
 	spans, limited := chatSearchSpansBounded(projection.text, s, re, chatSearchMaxMatches-len(out))
 	s.candidateTruncated = limited
+	s.highlightSkipped = s.highlightSkipped || projection.incomplete
+	mapped := make([]chatSearchMatch, 0, len(spans))
+	codeHits := make(map[int]int)
 	for _, span := range spans {
 		start, end, ok := chatSearchMarkdownSourceRange(projection, span[0], span[1])
 		if !ok {
 			continue
 		}
-		out = append(out, chatSearchMatch{Message: index, Start: start, End: end})
+		match := chatSearchMatch{Message: index, Start: start, End: end}
+		mapped = append(mapped, match)
+		for blockIndex, block := range projection.blocks {
+			if !hasCodeSearchRun(block) || block.start >= end || block.end <= start {
+				continue
+			}
+			codeHits[blockIndex]++
+		}
+	}
+	for _, match := range mapped {
+		highlightable := true
+		for blockIndex, block := range projection.blocks {
+			intersects := block.start < match.End && block.end > match.Start
+			if hasCodeSearchRun(block) && intersects && codeHits[blockIndex] > chatSearchCodeMaxSpans {
+				highlightable = false
+				break
+			}
+			if truncated && intersects && ((block.codeBlock && block.end >= len(source)-2) || (block.tableCell && block.tableTail)) {
+				highlightable = false
+				break
+			}
+		}
+		if !highlightable {
+			s.highlightSkipped = true
+			continue
+		}
+		out = append(out, match)
 		if len(out) >= chatSearchMaxMatches {
 			return out, false
 		}
@@ -652,27 +683,33 @@ func (a *desktop) chatSearchStatus(t *conversation) string {
 		return locales.Text("正则有误")
 	}
 	matches := a.chatSearchMatches(t)
+	withSkipped := func(status string) string {
+		if s.highlightSkipped {
+			return status + "（" + locales.Text("已跳过") + "）"
+		}
+		return status
+	}
 	if s.candidateTruncated {
 		if len(matches) == 0 {
-			return locales.Text("未找到（正则候选过多，搜索已截断）")
+			return withSkipped(locales.Text("未找到（正则候选过多，搜索已截断）"))
 		}
-		return fmt.Sprintf(locales.Text("%d of %d（正则候选过多，搜索已截断）"), min(max(s.Current, 0), len(matches)-1)+1, len(matches))
+		return withSkipped(fmt.Sprintf(locales.Text("%d of %d（正则候选过多，搜索已截断）"), min(max(s.Current, 0), len(matches)-1)+1, len(matches)))
 	}
 	if len(matches) == 0 {
 		if s.scanTruncated {
-			return fmt.Sprintf(locales.Text("未找到（仅搜索前 %d MiB）"), chatSearchMaxBytes>>20)
+			return withSkipped(fmt.Sprintf(locales.Text("未找到（仅搜索前 %d MiB）"), chatSearchMaxBytes>>20))
 		}
-		return locales.Text("无结果")
+		return withSkipped(locales.Text("无结果"))
 	}
 	current := min(max(s.Current, 0), len(matches)-1) + 1
 	if s.scanTruncated {
-		return fmt.Sprintf(locales.Text("%d of %d（仅搜索前 %d MiB）"), current, len(matches), chatSearchMaxBytes>>20)
+		return withSkipped(fmt.Sprintf(locales.Text("%d of %d（仅搜索前 %d MiB）"), current, len(matches), chatSearchMaxBytes>>20))
 	}
 	if len(matches) >= chatSearchMaxMatches {
 		// Say so rather than passing the cap off as the total.
-		return fmt.Sprintf("%d of %d+", current, len(matches))
+		return withSkipped(fmt.Sprintf("%d of %d+", current, len(matches)))
 	}
-	return fmt.Sprintf("%d of %d", current, len(matches))
+	return withSkipped(fmt.Sprintf("%d of %d", current, len(matches)))
 }
 
 // chatSearchBar draws the bar above the transcript.
@@ -766,6 +803,9 @@ func (a *desktop) chatSearchBlock(t *conversation, message int) func(c *ui.Conte
 		// The code-block hook of this message runs right after this one, so it can
 		// take the block's lines from the document instead of parsing again.
 		s.frameDoc, s.frameDocMessage = doc, message
+		if doc.Block(index).Kind == parser.Table {
+			return a.chatSearchTable(c, t, message, doc, index)
+		}
 		text, spans, sources, runs, base, ok := chatSearchBlockProjection(doc, index, message, s)
 		if !ok {
 			return false
@@ -775,12 +815,9 @@ func (a *desktop) chatSearchBlock(t *conversation, message int) func(c *ui.Conte
 	}
 }
 
-// chatSearchBlockSpans reports the text of a block the bar draws itself, where the
-// matched runs are in it, and where that text starts in the message, so a run can
-// be told apart from the one the bar points at. Only prose qualifies here: a code
-// block is drawn by its own hook (see chatSearchCodeHook), and a table cell keeps
-// the renderer's drawing, since the table builds its cells without asking the
-// hook. A match in either is found and scrolled to; a table cell is not marked.
+// chatSearchBlockSpans reports the visible text and matched runs of a paragraph,
+// heading or table cell, with the source offset needed to identify the current
+// match. Code blocks use their own line-based projection.
 func chatSearchBlockSpans(doc *parser.Document, index, message int, s *chatSearch) (string, [][2]int, int, bool) {
 	text, spans, _, _, base, ok := chatSearchBlockProjection(doc, index, message, s)
 	return text, spans, base, ok
@@ -788,30 +825,42 @@ func chatSearchBlockSpans(doc *parser.Document, index, message int, s *chatSearc
 
 func chatSearchBlockProjection(doc *parser.Document, index, message int, s *chatSearch) (string, [][2]int, []int, []chatSearchMarkdownRun, int, bool) {
 	block := doc.Block(index)
-	if block == nil || (block.Kind != parser.Paragraph && block.Kind != parser.Heading) {
+	if block == nil || (block.Kind != parser.Paragraph && block.Kind != parser.Heading && block.Kind != parser.TableCell) {
 		return "", nil, nil, nil, 0, false
 	}
-	var projection chatSearchMarkdownBlock
-	found := false
+	projection, found := chatSearchBlockProjectionFor(doc, index, message, s)
+	if !found || projection.text == "" {
+		return "", nil, nil, nil, 0, false
+	}
+	spans, sources := chatSearchMarkdownBlockSpans(projection, message, s.cache)
+	if len(spans) == 0 {
+		return "", nil, nil, nil, 0, false
+	}
+	base := sources[0] - spans[0][0]
+	return projection.text, spans, sources, projection.runs, base, true
+}
+
+func chatSearchBlockProjectionFor(doc *parser.Document, index, message int, s *chatSearch) (chatSearchMarkdownBlock, bool) {
+	block := doc.Block(index)
 	if entry, ok := s.markdownCache[message]; ok {
 		for _, candidate := range entry.projection.blocks {
 			if candidate.start == block.Start && candidate.end == block.End {
-				projection, found = candidate, true
-				break
+				return candidate, true
 			}
 		}
 	}
 	// Direct unit callers may supply matches without passing through the scan.
-	// The live transcript path reuses the source-keyed projection cache.
-	if !found {
-		projection, found = chatSearchMarkdownInlineBlock(doc, index)
-	}
-	if !found || projection.text == "" {
-		return "", nil, nil, nil, 0, false
-	}
+	return chatSearchMarkdownInlineBlock(doc, index)
+}
+
+func hasCodeSearchRun(block chatSearchMarkdownBlock) bool {
+	return block.codeBlock
+}
+
+func chatSearchMarkdownBlockSpans(projection chatSearchMarkdownBlock, message int, matches []chatSearchMatch) ([][2]int, []int) {
 	var spans [][2]int
 	var sources []int
-	for _, hit := range s.cache {
+	for _, hit := range matches {
 		if hit.Message != message {
 			continue
 		}
@@ -836,11 +885,7 @@ func chatSearchBlockProjection(doc *parser.Document, index, message int, s *chat
 			sources = append(sources, hit.Start)
 		}
 	}
-	if len(spans) == 0 {
-		return "", nil, nil, nil, 0, false
-	}
-	base := sources[0] - spans[0][0]
-	return projection.text, spans, sources, projection.runs, base, true
+	return spans, sources
 }
 
 // chatSearchBlockKey names one block of one message; chatSearchCodeKey adds the
@@ -902,9 +947,16 @@ func (s *chatSearch) syncCacheQuery() {
 // block that measured differently would shift the transcript the moment the bar
 // opened, and the scroll that follows would look like a second, rigid jump.
 func (a *desktop) chatSearchMark(c *ui.Context, t *conversation, message int, block *parser.Block, text string, spans [][2]int, sources []int, runs []chatSearchMarkdownRun, base int) {
+	a.chatSearchMarkWeight(c, t, message, block, text, spans, sources, runs, base, 0)
+}
+
+func (a *desktop) chatSearchMarkWeight(c *ui.Context, t *conversation, message int, block *parser.Block, text string, spans [][2]int, sources []int, runs []chatSearchMarkdownRun, base, weightOverride int) {
 	p := a.currentPalette()
 	current, hasCurrent := a.chatSearchCurrent(t)
 	size, weight, ink := a.chatSearchTextStyle(block)
+	if weightOverride > 0 {
+		weight = weightOverride
+	}
 	if hasCurrent && current.Message != message {
 		hasCurrent = false
 	}
@@ -976,6 +1028,9 @@ func (a *desktop) chatSearchMark(c *ui.Context, t *conversation, message int, bl
 		s.blockFrac = float32(pointedAt) / float32(len(text))
 	}
 	view.Bind(s.blockHandle)
+	if block != nil && block.Kind == parser.TableCell && s.reveal {
+		view.ScrollIntoView()
+	}
 }
 
 func (a *desktop) chatSearchLink(c *ui.Context, t *conversation, message int, dest string, pending bool, children func()) {
