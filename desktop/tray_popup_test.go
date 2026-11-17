@@ -188,17 +188,13 @@ func TestDrawnTrayMenuFitsTranslatedLabelsAndLargerText(t *testing.T) {
 	}
 }
 
-func TestStaleTrayMenuCannotQueueAgainstANewPopup(t *testing.T) {
-	old := &trayMenuState{open: true}
-	current := &trayMenuState{open: true}
-	a := &desktop{trayMenu: current}
-	a.finishTrayMenu(old, 2)
-	if old.pending || a.trayMenu != current || !current.open {
-		t.Fatal("stale popup callback affected its replacement")
+func renderTrayMenu(c *ui.Context, open *bool) int {
+	c.SetTheme(uikit.TrayMenuTheme(nativeFontFamily()).WithPreferences(c.Preferences()))
+	c.Root().Background(ui.Transparent)
+	items := (&desktop{}).trayMenuItems()
+	entries := make([]uikit.TrayMenuEntry, len(items))
+	for i, item := range items {
+		entries[i] = uikit.TrayMenuEntry{Key: item.Key, Label: item.Label, Icon: item.Icon, Disabled: item.Disabled, SeparatorBefore: item.SeparatorBefore}
 	}
-	a.closeTrayMenu()
-	if a.trayMenu != nil || current.open {
-		t.Fatal("closing the menu did not clear its state")
-	}
-	a.closeTrayMenu() // repeated dismissal is harmless
+	return uikit.TrayMenu(c.Key("tray-menu"), open, "Ally", entries)
 }

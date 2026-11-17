@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //go:build windows
 
-package desktop
+package uikit
 
 import (
-	"ally-dev/desktop/uikit"
 	"image"
 	"unsafe"
 
 	"github.com/egoist/mygo"
+	"golang.org/x/sys/windows"
 )
 
 var (
+	user32                       = windows.NewLazySystemDLL("user32.dll")
+	procGetDpiForWindow          = user32.NewProc("GetDpiForWindow")
 	procTrayMenuGetCursorPos     = user32.NewProc("GetCursorPos")
 	procTrayMenuGetWindowRect    = user32.NewProc("GetWindowRect")
 	procTrayMenuMonitorFromPoint = user32.NewProc("MonitorFromPoint")
@@ -29,7 +31,7 @@ type trayMenuMonitorInfo struct {
 
 // Capture once in the tray callback, before creating/laying out the flyout.
 // Later pointer movement must not move the open menu or its FitContent anchor.
-func captureTrayMenuPosition() func(*mygo.Window) {
+func capturePosition() func(*mygo.Window) {
 	var at trayMenuPoint
 	if r, ok := callProc(procTrayMenuGetCursorPos, uintptr(unsafe.Pointer(&at))); !ok || r == 0 {
 		return nil // retain the platform icon anchor if coordinates are unavailable
@@ -37,6 +39,14 @@ func captureTrayMenuPosition() func(*mygo.Window) {
 	return func(win *mygo.Window) {
 		bindTrayMenuPosition(win, image.Pt(int(at.X), int(at.Y)))
 	}
+}
+
+func callProc(p *windows.LazyProc, args ...uintptr) (uintptr, bool) {
+	if err := p.Find(); err != nil {
+		return 0, false
+	}
+	r, _, _ := p.Call(args...)
+	return r, true
 }
 
 // Keep MyGo's tray flyout lifecycle, but override its icon-based placement.
@@ -68,7 +78,7 @@ func bindTrayMenuPosition(win *mygo.Window, at image.Point) {
 		if d, ok := callProc(procGetDpiForWindow, hwnd); ok && d >= 48 && d <= 960 {
 			dpi = int(d)
 		}
-		inset := (int(uikit.TrayMenuShadowInset)*dpi + 48) / 96
+		inset := (int(TrayMenuShadowInset)*dpi + 48) / 96
 		// A tray click is over the taskbar, outside rcWork. Use the monitor
 		// bounds so the panel can actually touch that click, as a context menu.
 		bounds := image.Rect(int(info.Monitor.Left), int(info.Monitor.Top), int(info.Monitor.Right), int(info.Monitor.Bottom))

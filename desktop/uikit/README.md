@@ -1,7 +1,10 @@
 # Native UI kit
 
-Independent native MyGo controls, currently used with MyGo v0.9.2. Copy this directory into another Go
-project and update its import path; it depends only on MyGo's `ui` package.
+Independent native MyGo controls, currently used with MyGo v0.9.2. Copy the
+package into another Go project and import it using that project's module path.
+It depends on MyGo and, on Windows, `golang.org/x/sys/windows`; it does not
+import Ally packages. The gallery is a repository-specific example and its
+imports must be adjusted if copied to another module.
 It contains no Ally state, filesystem access, goroutines, fonts or business logic.
 Use the host's `ui.Theme` to supply typography and semantic colors.
 Built-in palettes are available through `BuiltinThemes()` and
@@ -9,9 +12,9 @@ Built-in palettes are available through `BuiltinThemes()` and
 surface, text, placeholder and accent colors for hosts that compose their own
 theme. Each call to `BuiltinTheme` returns an independent `*ui.Theme`.
 
-Run `go run ./desktop/uikit/gallery` from the Ally repository to inspect the
+Run `go run ./desktop/uikit/_gallery` from the Ally repository to inspect the
 standalone gallery in light and dark themes. On Windows, build a GUI executable
-with `go build -ldflags="-H=windowsgui" -o dist/uikit-gallery.exe ./desktop/uikit/gallery`.
+with `go build -ldflags="-H=windowsgui" -o dist/uikit-gallery.exe ./desktop/uikit/_gallery`.
 The left column shows MyGo controls and the right column shows uikit examples.
 The gallery's theme selector offers the Ally accent colors and a warm khaki
 palette in both light and dark appearance. It changes both columns together
@@ -20,7 +23,7 @@ Matched sections share a scrolling page but keep independent input state. At
 the bottom, native layout primitives without kit wrappers appear only on the
 left. The gallery is a development tool and is not part of the main application.
 Its version-specific component inventory and demonstration gaps are listed in
-[gallery/COVERAGE.md](gallery/COVERAGE.md).
+[_gallery/COVERAGE.md](_gallery/COVERAGE.md).
 
 ```go
 import "ally-dev/desktop/uikit"
@@ -226,27 +229,27 @@ Tooltip 必须使用 `uikit.Tooltip(c, anchor, text)` 或侧栏的 `RightTooltip
 
 ## 可复用托盘菜单
 
-`TrayMenu` 只负责菜单外观和交互，不创建托盘或窗口，也不绑定业务动作。复制本目录到其他项目后，可这样放进透明 Flyout 的 `ui.View`：
+uikit 提供托盘和菜单的完整默认行为。MyGo 就绪后创建，应用退出时关闭：
 
 ```go
-entries := []uikit.TrayMenuEntry{
-    {Key: "open", Label: "Open", Icon: openIcon},
-    {Key: "quit", Label: "Quit", Icon: quitIcon, SeparatorBefore: true},
-}
-width, height := uikit.TrayMenuInitialSize(len(entries), 1)
-// 用 width、height 创建 FitContent、Focusable 的 mygo.NewFlyout；
-// open 和窗口引用属于宿主，下面的代码在该窗口的 ui.View 内执行。
-c.SetTheme(uikit.TrayMenuTheme(fontFamily).WithPreferences(c.Preferences()))
-c.Root().Background(ui.Transparent)
-choice := uikit.TrayMenu(c.Key("tray-menu"), &open, "Application menu", entries)
-// choice >= 0 是所选 entries 下标，-1 表示没有选择。
-// 当选择或 !open 时，通过窗口 Update 延后销毁窗口并执行动作；
-// 用窗口身份和 pending 标记防止旧回调影响新窗口或重复执行。
+import "ally-dev/desktop/uikit" // 在其他项目中改为该项目的 uikit 导入路径
+
+mygo.App.WhenReady(func() {
+    tray, err := uikit.NewTray(uikit.TrayOptions{
+        ID: "my-app", Tooltip: "My app",
+        Items: []uikit.TrayItem{
+            {Label: "Open", OnClick: showWindow},
+            {Label: "Quit", SeparatorBefore: true, OnClick: mygo.App.Quit},
+        },
+    })
+    if err != nil { log.Print(err); return }
+    mygo.App.OnWillQuit(func(*mygo.QuitEvent) { tray.Close() })
+})
 ```
 
-最大宽度默认 `480 DIP`（不含阴影），可在最后传入 `uikit.TrayMenuOptions{MaxWidth: 640}` 调整；零值或非有限数使用默认值，正数最小为 `140 DIP`。实际宽度仍受窗口和屏幕空间限制，超长文字会省略。
+默认使用内置模板图标、中性浅色菜单和最大 `480 DIP` 宽度。Windows 菜单锚定右键位置并处理多屏、DPI 和边缘避让；macOS 使用托盘图标锚点；Linux 使用系统菜单。默认左键和右键打开菜单；设置 `OnClick` 可替换左键动作（Linux 的系统托盘菜单由桌面管理）。`Icon` 和 `IconIsTemplate` 可替换托盘图标，菜单项可设 `Icon`、`Disabled`、`SeparatorBefore` 和 `OnClick`。未设 `Key` 时用 `Label` 作身份；动态改名或有同名项目时应提供稳定且唯一的 `Key`。
 
-每项的 `Key` 必须稳定且唯一；`Icon` 可为空，`Disabled` 禁止选择，`SeparatorBefore` 在非首项前画分隔线。`TrayMenuInitialSize` 的第二个参数是实际分隔线数；真实尺寸按文字和系统字体缩放测量，Flyout 应启用 `FitContent`。菜单名由调用方提供给辅助技术。宿主负责平台定位、焦点和关闭生命周期；Windows 定位、macOS 托盘锚点及 Linux 系统菜单回退的完整接法可参考 `desktop/tray_menu*.go` 和 `desktop/tray.go`。自绘外观不等于跨平台实机验证。
+`Options.Theme` 可返回自定义 `*ui.Theme`，`Font`、`MaxWidth` 可调整字体和宽度；原生辅助功能偏好仍会应用。`Placement` / `Gap` 控制 MyGo 托盘锚点，Windows 默认点击锚点可通过 `CapturePosition` 自定义；要使用 MyGo 锚点可传入 `func() func(*mygo.Window) { return nil }`。`SetItems`、`SetTooltip`、`SetIcon` 可更新内容；`CloseMenu` 只关闭菜单，`Close` 幂等释放托盘和事件。所有方法及回调在 UI 主线程调用，宿主仍负责在退出时调用 `Close`。Linux 系统菜单的分组可用 `NativeSeparatorBefore` 单独覆盖。`TrayMenu` 仍可作为只负责绘制的低层组件使用。
 
 ## 页面 Tabs：A / C 两套样式
 

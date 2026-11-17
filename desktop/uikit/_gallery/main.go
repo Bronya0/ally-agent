@@ -1,5 +1,5 @@
 // The gallery is a development tool for checking the native kit in a window.
-// Run it with go run ./desktop/uikit/gallery.
+// Run it with go run ./desktop/uikit/_gallery.
 package main
 
 import (

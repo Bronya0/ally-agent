@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //go:build windows
 
-package desktop
+package uikit
 
 import (
-	"ally-dev/desktop/uikit"
 	"image"
 	"testing"
 )
 
 func TestTrayMenuPositionAnchorsVisiblePanelAtEachDPI(t *testing.T) {
-	width, height := uikit.TrayMenuInitialSize(3, 2)
+	width, height := TrayMenuInitialSize(3, 2)
 	at := image.Pt(600, 500)
 	bounds := image.Rect(0, 0, 1920, 1080)
 	for _, dpi := range []int{96, 120, 144, 168, 192} {
 		size := image.Pt((width*dpi+48)/96, (height*dpi+48)/96)
-		inset := (int(uikit.TrayMenuShadowInset)*dpi + 48) / 96
+		inset := (int(TrayMenuShadowInset)*dpi + 48) / 96
 		origin := trayMenuPosition(at, size, bounds, inset)
 		if corner := origin.Add(image.Pt(inset, size.Y-inset)); corner != at {
 			t.Fatalf("DPI %d anchors the shadow rather than the visible panel: corner=%v click=%v", dpi, corner, at)

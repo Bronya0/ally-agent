@@ -3,6 +3,7 @@ package desktop
 
 import (
 	"ally-dev/desktop/pluginhost"
+	"ally-dev/desktop/uikit"
 	"ally-dev/internal/documentpreview"
 	toolshared "ally-dev/internal/tools/shared"
 	"ally-dev/locales"
@@ -219,8 +220,7 @@ type desktop struct {
 
 	core                                                *backend.App
 	win                                                 *mygo.Window
-	tray                                                *mygo.Tray
-	trayMenu                                            *trayMenuState
+	tray                                                *uikit.TrayHost
 	ready, closing, quitReady                           bool
 	mainWindowHidden                                    bool
 	page, filter                                        string
@@ -532,7 +532,9 @@ func (a *desktop) closeHidesToTray() bool {
 }
 
 func (a *desktop) shutdown() {
-	a.closeTrayMenu()
+	if a.tray != nil {
+		a.tray.CloseMenu()
+	}
 	if a.closing {
 		return
 	}

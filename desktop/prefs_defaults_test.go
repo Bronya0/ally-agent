@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"ally-dev/desktop/uikit"
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -165,10 +164,10 @@ func TestCloseButtonQuitsWithoutATrayOrAnOptOut(t *testing.T) {
 	}
 	saved := defaultPrefs()
 	saved.CloseToTray = false
-	if (&desktop{prefs: saved, tray: &mygo.Tray{}}).closeHidesToTray() {
+	if (&desktop{prefs: saved, tray: &uikit.TrayHost{}}).closeHidesToTray() {
 		t.Fatal("the opt-out must quit even with a tray")
 	}
-	if !(&desktop{prefs: defaultPrefs(), tray: &mygo.Tray{}}).closeHidesToTray() {
+	if !(&desktop{prefs: defaultPrefs(), tray: &uikit.TrayHost{}}).closeHidesToTray() {
 		t.Fatal("tray plus the default preference must hide")
 	}
 }
