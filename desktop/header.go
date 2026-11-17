@@ -589,7 +589,7 @@ func (a *desktop) updateDialog(c *ui.Context) {
 				if value < 0 || value > 1 {
 					value = -1
 				}
-				ui.Progress(c, value).Label(locales.Text("更新进度"))
+				uikit.Progress(c, value).Label(locales.Text("更新进度"))
 				ui.Row(c).Children(func() {
 					label := fmt.Sprintf("%.0f%%", a.upd.Progress)
 					if a.upd.Progress < 0 {

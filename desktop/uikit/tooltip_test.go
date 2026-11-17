@@ -7,6 +7,23 @@ import (
 	"time"
 )
 
+func TestRightTooltipReturnsInteractiveAnchor(t *testing.T) {
+	for _, tip := range []string{"", "提示"} {
+		t.Run(tip, func(t *testing.T) {
+			clicked := 0
+			tt := chineseTester(func(c *ui.Context) {
+				RightTooltip(c, ui.ButtonBase(c.Key("anchor")).Label("按钮").Size(80, 32), tip).OnClick(func() { clicked++ })
+			}, 240, 120)
+			if err := tt.Click("按钮"); err != nil {
+				t.Fatal(err)
+			}
+			if clicked != 1 {
+				t.Fatalf("clicked %d times", clicked)
+			}
+		})
+	}
+}
+
 func TestTooltipAppearsOnRight(t *testing.T) {
 	tt := chineseTester(func(c *ui.Context) {
 		ui.Column(c).Padding(12).Children(func() {

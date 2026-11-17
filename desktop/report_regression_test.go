@@ -10,6 +10,26 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+func TestAskCustomAnswerRemainsEditable(t *testing.T) {
+	conv := &conversation{AskID: "request", Questions: []backend.AskQuestion{{ID: "q1", Question: "选择", Options: []backend.AskOption{{ID: "a", Label: "选项"}}}}}
+	a := &desktop{}
+	tt := ui.NewTester(func(c *ui.Context) { c.SetTheme(a.theme()); a.askComposer(c, conv) }, 800, 500)
+	if err := tt.Click("自定义回答"); err != nil {
+		t.Fatal(err)
+	}
+	if !conv.uiState().AskCustom["q1"] {
+		t.Fatal("custom answer not enabled")
+	}
+	if err := tt.Click("输入你的回答"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("hello")
+	tt.Key(0, ui.KeyBackspace)
+	if got := conv.uiState().AskCustomTxt["q1"]; got != "hell" {
+		t.Fatalf("custom answer = %q", got)
+	}
+}
+
 // A new run takes the reader to the newest message, even from far up the
 // history: what it streams lands at the end.
 func TestNewRunLeavesOlderHistoryPage(t *testing.T) {

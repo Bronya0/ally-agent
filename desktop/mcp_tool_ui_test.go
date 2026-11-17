@@ -7,6 +7,23 @@ import (
 	"testing"
 )
 
+func TestMCPTransportSelectionUpdatesDraft(t *testing.T) {
+	a := &desktop{}
+	a.openMCPEditor("")
+	tt := ui.NewTester(func(c *ui.Context) { c.SetTheme(a.theme()); a.mcpEditorDialog(c) }, 900, 900)
+	control, ok := tt.AccessByRole(ui.RolePopUpButton, "传输方式")
+	if !ok {
+		t.Fatal("missing transport selector")
+	}
+	tt.ClickAt(control.Bounds.X+control.Bounds.W/2, control.Bounds.Y+control.Bounds.H/2)
+	if err := tt.Click("SSE"); err != nil {
+		t.Fatal(err)
+	}
+	if a.mcpTransport() != mcpTransportSSE {
+		t.Fatalf("transport = %q", a.mcpTransport())
+	}
+}
+
 func TestMCPEditorPreservesArguments(t *testing.T) {
 	for _, args := range [][]string{
 		{"C:/Program Files/mcp/server.js"},

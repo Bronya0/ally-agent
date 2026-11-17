@@ -2,9 +2,78 @@ package uikit
 
 import (
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
+
+func TestMenuButtonWorksDuringAnimatedOpening(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		t.Run(map[bool]string{false: "light", true: "dark"}[dark], func(t *testing.T) {
+			var open bool
+			chosen := 0
+			tt := chineseTester(func(c *ui.Context) {
+				if dark {
+					c.SetTheme(ui.DarkTheme())
+				} else {
+					c.SetTheme(ui.LightTheme())
+				}
+				ui.Column(c).Padding(20).Children(func() {
+					MenuButton(c.Key("animated"), &open, MenuOptions{Width: 180}, func(b ui.Element) {
+						b.Label("打开菜单").Size(100, 32).Children(func() { ui.Text(c, "打开菜单") })
+					}, func(m ui.MenuParts) {
+						MenuItem(c, m, "item", "执行操作", MenuItemOptions{}).OnClick(func() { chosen++ })
+					})
+				})
+			}, 400, 300)
+			if err := tt.Click("打开菜单"); err != nil {
+				t.Fatal(err)
+			}
+			if !open {
+				t.Fatal("animated menu did not open")
+			}
+			tt.Advance(OverlayDuration / 2)
+			if err := tt.Click("执行操作"); err != nil {
+				t.Fatal(err)
+			}
+			if chosen != 1 || open {
+				t.Fatalf("choice during opening: chosen=%d open=%v", chosen, open)
+			}
+			tt.Advance(OverlayDuration + time.Millisecond)
+			if err := tt.Click("打开菜单"); err != nil {
+				t.Fatal(err)
+			}
+			tt.Key(0, ui.KeyHome)
+			tt.Key(0, ui.KeyEnter)
+			if chosen != 2 || open {
+				t.Fatalf("keyboard choice: chosen=%d open=%v", chosen, open)
+			}
+		})
+	}
+}
+
+func TestMenuButtonWithReducedMotion(t *testing.T) {
+	var open bool
+	chosen := false
+	tt := chineseTester(func(c *ui.Context) {
+		MenuButton(c.Key("menu"), &open, MenuOptions{Width: 180}, func(b ui.Element) {
+			b.Label("打开").Size(80, 30)
+		}, func(m ui.MenuParts) {
+			MenuItem(c, m, "choice", "选项", MenuItemOptions{}).OnClick(func() { chosen = true })
+		})
+	}, 300, 200)
+	tt.SetPreferences(ui.Preferences{ReduceMotion: true, TextScale: 1})
+	tt.Frame()
+	if err := tt.Click("打开"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("选项"); err != nil {
+		t.Fatal(err)
+	}
+	if !chosen || open {
+		t.Fatalf("reduced-motion menu: chosen=%v open=%v", chosen, open)
+	}
+}
 
 func TestMenuButtonKeyboardSkipsDisabledAndRestoresFocus(t *testing.T) {
 	var open bool

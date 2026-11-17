@@ -1,9 +1,13 @@
 # Native UI kit
 
-Independent native MyGo v0.8.1 controls. Copy this directory into another Go
+Independent native MyGo controls, currently used with MyGo v0.9.2. Copy this directory into another Go
 project and update its import path; it depends only on MyGo's `ui` package.
 It contains no Ally state, filesystem access, goroutines, fonts or business logic.
 Use the host's `ui.Theme` to supply typography and semantic colors.
+
+Run `go run ./cmd/uikit-gallery` from the Ally repository to inspect common
+controls, validation, menus and notifications in light and dark themes. The
+gallery is a development tool and is not part of the main application.
 
 ```go
 import "ally-dev/desktop/uikit"
@@ -11,15 +15,18 @@ import "ally-dev/desktop/uikit"
 func view(c *ui.Context) {
     uikit.Select(c.Key("auth"), &state.Auth, []string{"API Key", "OAuth"}).Label("Authentication")
     uikit.Tabs(c.Key("tabs"), &state.Tab, "General", "Advanced")
-    uikit.Card(c.Key("account")).Children(func() {
+    uikit.Card(c, "account", uikit.PadCard, uikit.RadiusCard, func() {
         uikit.FieldLabel(c, "Name")
         uikit.TextField(c.Key("name"), &state.Name, "Example account")
+    })
+    uikit.ComboboxField(c.Key("group"), state.Group, groups, "Group", "Select or type", func(value string) {
+        state.Group = value
     })
 }
 ```
 
-Exports. Form controls: Button, IconButton, Select, CompactSelect, editable Combobox, Tabs, Segmented,
-PasswordInput, NumberInput, TextField, TextArea, FieldLabel, FieldNote. Chrome: Card,
+Exports. Form controls: Button, IconButton, Select, CompactMenu, editable ComboboxField, Tabs, Segmented,
+Checkbox, CheckboxState, Slider, SearchField, PasswordInput, NumberInput, TextField, TextArea, FieldLabel, FieldNote. Chrome: Card,
 RowCard, Divider, PageHeader, SectionHeader, EmptyState, BusyRow, Notice, InlineError,
 StatCard, KV, Tag, Label, Muted, SectionTitle, HoverRow, SelectableRow. Dialogs: DialogPanel,
 Popup, PopupTransition. Menus: MenuButton, MenuOptions, MenuItem, MenuRow,
@@ -45,7 +52,9 @@ pointer cursors on each interactive item and label.
 
 工作区标签使用 WorkspaceTab，页面内 Tabs 使用 tabs.go 的两套独立样式。
 
-Values and focus belong to the host. Set `c.Key` before constructing dynamic
+Values and focus belong to the host. Editable comboboxes report both typing and
+selection through their value callback; supply the updated value on the next frame.
+Set `c.Key` before constructing dynamic
 controls. Never retain returned Elements/Parts between build passes. Attach
 `Changed`/`OnClick` as with MyGo controls. Use `DialogPanel` inside DialogBase;
 its transition animates entry and removal, respects reduced motion, and does
@@ -65,6 +74,9 @@ MyGo's intrinsic inner layout; do not give their root a wider empty box merely
 to align the row. Labels focus or activate their associated native control.
 
 `Input`, `Area` and `InputChrome` share visible borders, hover and focus colors.
+`InputStatus`, `AreaStatus`, `ComboboxFieldStatus` and `InputChromeStatus` accept
+normal, warning or error borders in either theme. Validation remains with the
+caller, which supplies the explanatory text and clears the status after correction.
 For side-by-side fields, use fractional grid tracks and stretch the cell's
 Column with `JustifySelf(ui.Stretch)`; put `FillWidth` on the control inside
 that cell. A percentage width directly on a grid child can resolve against
@@ -76,11 +88,36 @@ Combobox use `SelectBase` / `ComboboxBase`; Tabs use `TabsBase`; input fields us
 MyGo text inputs. This package styles their parts and preserves their native
 keyboard navigation, focus, popup dismissal and value binding. Use MyGo's
 Scroll / ScrollHorizontal for overflow rather than implementing wheel handling.
+`SelectField` supports per-option `Disabled`; editable comboboxes show an empty
+result hint while still allowing a custom value. Popup entry/exit motion stays on
+the framework-owned panel, with pointer and keyboard activation tested during entry.
 
 PasswordInput combines a native text input and a visibility button. NumberInput
 is a thin wrapper around MyGo v0.7.3's standard NumberInput: numeric editing,
 stepping, range validation, keyboard input and accessibility belong to MyGo.
 Use the standard inner layout; do not reimplement it to stretch the input.
+
+Checkbox and CheckboxState retain MyGo's selection and mixed-state semantics
+with kit typography. Slider and Progress retain MyGo's native drawing, keyboard
+input and accessibility; SearchField applies the shared input chrome.
+
+`extra_controls.go` provides kit entry points for the remaining common input,
+navigation, feedback and data controls, including Autocomplete, TokenField,
+date/time inputs, Calendar, ColorPicker, RangeSlider, Rating, Breadcrumbs,
+Sidebar, Accordion, FindBar, List, GridView, Table, Tree and OutlineTable.
+Autocomplete and TokenField receive input chrome; other adapters use kit
+typography where appropriate and otherwise retain MyGo's theme-driven native
+look. These are not all individually restyled to match Naive UI. Lists and
+tables keep MyGo virtualization, and overlays retain their native focus and
+keyboard behavior.
+
+`content_controls.go` exposes Markdown/streaming Markdown, code editor, diff
+viewer, rich-text editor and chart plot. The host owns their persistent state,
+options and resource lifetimes. These adapters preserve MyGo's theme and native
+behavior rather than replacing editor rendering. Image, icon, link, buffered text
+inputs, video, modal and popover adapters are in `extra_controls.go`; WebView is
+only a host for an existing view and does not change Ally's preview restrictions.
+Basic layout primitives and `Base` parts remain directly available from `ui`.
 
 
 ## Naive 风格公共组件
@@ -94,6 +131,7 @@ Use the standard inner layout; do not reimplement it to stretch the input.
 - `Radios(c, &state.Value, []RadioOption[T]{...}, buttons)`：原生单选组；buttons 为 true 时采用按钮选项外观。支持选项禁用及方向键。
 - `Switch(c, &state.Enabled, "名称")`：原生开关，支持链式 Disabled、Tooltip、OnChange。
 - `Message(c, Success, "保存成功", 0)`：原生悬浮信息；返回 ID，可用 c.CloseToast 关闭。更复杂的加载、更新或操作提示使用 c.AddToast(ui.Toast{ID: ..., Type: "loading", Timeout: -1})。Type 支持 info/success/warning/error/loading。
+- `Notification(c, NotificationOptions{Title: "连接成功", Description: "服务器已连接", Tone: Success})`：窗口内通知卡片，支持操作、关闭和自动消失；负数 Timeout 保持显示。与 Message 共用一个 `Messages` 视口。
 - `Messages(c)`：每个窗口调用一次，负责悬浮提示的统一外观；超时、暂停和无障碍由 MyGo 管理。
 
 语义颜色统一由 ToneColor 提供，Primary 跟随用户强调色，其他语义色分别适配深浅主题。未配置颜色时使用 Default。尺寸单位为 DIP；仅样式保存在此包，不保存跨帧 Element 或 Context。

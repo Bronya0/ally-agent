@@ -1065,10 +1065,10 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 				}
 				card.Children(func() {
 					ui.Row(c).AlignItems(ui.Center).Gap(gapInline).Children(func() {
-						box := ui.Checkbox(c.Key("ask-opt-"+wkey+"-"+opt.ID), &checked, opt.Label)
-						if box.Changed() {
+						box := uikit.Checkbox(c.Key("ask-opt-"+wkey+"-"+opt.ID), &checked, opt.Label)
+						box.OnChange(func() {
 							st.AskSelected[q.ID] = toggleString(st.AskSelected[q.ID], opt.ID, checked)
-						}
+						})
 						if opt.Recommended {
 							accentChip(c, locales.Text("推荐"))
 						}
@@ -1088,13 +1088,13 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 				custom = !custom
 			}
 			customRow.Children(func() {
-				ui.Checkbox(c.Key("ask-custom-"+wkey), &custom, locales.Text("自定义回答"))
+				uikit.Checkbox(c.Key("ask-custom-"+wkey), &custom, locales.Text("自定义回答")).OnChange(func() { st.AskCustom[q.ID] = custom })
 			})
 			st.AskCustom[q.ID] = custom
 			if custom {
 				txt := st.AskCustomTxt[q.ID]
-				uikit.Area(c.Key("ask-custom-text-"+wkey), &txt).Placeholder(locales.Text("输入你的回答")).Height(70)
-				st.AskCustomTxt[q.ID] = txt
+				uikit.Area(c.Key("ask-custom-text-"+wkey), &txt).Label(locales.Text("输入你的回答")).Placeholder(locales.Text("输入你的回答")).Height(70).
+					OnChange(func() { st.AskCustomTxt[q.ID] = txt })
 			}
 		})
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {

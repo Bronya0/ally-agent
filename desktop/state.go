@@ -568,6 +568,8 @@ type sshForm struct {
 	Draft           backend.SSHServerNode
 	Port            float64
 	Busy            bool
+	EditorTestBusy  bool
+	EditorTestSeq   uint64
 	TestBusy        map[string]bool
 	DeleteID        string
 	DeleteOpen      bool

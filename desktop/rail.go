@@ -552,7 +552,7 @@ func (a *desktop) railSearchField(c *ui.Context, id, label string, s *railSearch
 	if !s.open {
 		return
 	}
-	field := uikit.InputChrome(c, ui.SearchField(c.Key(id), &s.query)).
+	field := uikit.SearchField(c.Key(id), &s.query).
 		Height(24).Padding(0, 6).FontSize(fsSmall).FillWidth().Shrink(0).Label(label)
 	if s.focus {
 		field.Focus()

@@ -115,7 +115,7 @@ func (a *desktop) fileTree(c *ui.Context) {
 		services := c.Services()
 		c.OnShortcut(ui.Cmd, ui.KeyV, func() { a.pasteFiles(services, "") })
 		ui.Row(c).Height(34).Padding(0, padRow).Gap(3).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
-			search := uikit.InputChrome(c, ui.SearchField(c.Key("explorer-search"), &a.filesF.Search.Input)).
+			search := uikit.SearchField(c.Key("explorer-search"), &a.filesF.Search.Input).
 				Placeholder("").Label(locales.Text("搜索工作区文件")).Height(26).Padding(0, 6).FontSize(fsSmall).Grow(1).
 				OnSubmit(func() { a.searchFiles(a.filesF.Search.Input) })
 			uikit.Tooltip(c, search, locales.Text("输入文件名后回车搜索，清空后回车还原"))
@@ -561,16 +561,11 @@ func (a *desktop) filePromptDialog(c *ui.Context) {
 	}
 	modalCard(c, &a.filesF.NewOpen, widthModalSmall, func() {
 		modalTitle(c, title, locales.Text("名称不含路径分隔符。"))
-		value := a.filesF.NewName
-		name := uikit.Input(c.Key("file-prompt-name"), &value).Label(locales.Text("文件名称")).FillWidth().AutoFocus()
+		name := uikit.Input(c.Key("file-prompt-name"), &a.filesF.NewName).Label(locales.Text("文件名称")).FillWidth().AutoFocus()
 		// Enter in the name field submits, as a desktop dialog does: the button is
 		// not the only way to confirm. The field's own value is the newest one at
 		// that point, so it is copied into the dialog state before submitting.
-		name.OnSubmit(func() {
-			a.filesF.NewName = value
-			a.submitFilePrompt()
-		})
-		a.filesF.NewName = value
+		name.OnSubmit(a.submitFilePrompt)
 		inlineError(c, "file-prompt-error", a.filesF.PromptErr)
 		modalActions(c, func() {
 			flat(c, locales.Text("取消")).OnClick(func() { a.filesF.NewOpen = false })

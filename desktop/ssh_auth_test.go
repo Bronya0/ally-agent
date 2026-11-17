@@ -2,11 +2,25 @@ package desktop
 
 import (
 	backend "ally-dev/internal/app"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 )
+
+func TestSSHTestDraftUsesEditedConnection(t *testing.T) {
+	draft := backend.SSHServerNode{ID: "saved", Host: "new-host", Username: "new-user", AuthType: "password", Password: "new-secret", Port: 22}
+	got, ok := sshTestDraft(draft, 2222)
+	if !ok || got.ID != "" || got.Host != draft.Host || got.Username != draft.Username || got.Password != draft.Password || got.Port != 2222 {
+		t.Fatalf("wrong test connection: %+v", got)
+	}
+	for _, port := range []float64{0, 65536, 22.5, math.NaN()} {
+		if _, ok := sshTestDraft(draft, port); ok {
+			t.Fatalf("accepted invalid port %v", port)
+		}
+	}
+}
 
 func TestSSHAuthCanonicalID(t *testing.T) {
 	a := &desktop{sshServers: []backend.SSHServerNode{{ID: "node-id", Alias: "dev", Host: "example.invalid", Username: "user", Port: 22}}}

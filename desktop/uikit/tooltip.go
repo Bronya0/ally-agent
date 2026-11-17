@@ -10,7 +10,8 @@ func Tooltip(c *ui.Context, anchor ui.Element, text string) ui.Element {
 	return anchor
 }
 func RightTooltip(c *ui.Context, anchor ui.Element, text string) ui.Element {
-	return tooltip(c, anchor, text, true)
+	tooltip(c, anchor, text, true)
+	return anchor
 }
 func tooltip(c *ui.Context, anchor ui.Element, text string, right bool) ui.Element {
 	if text == "" {

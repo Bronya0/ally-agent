@@ -376,7 +376,7 @@ func switchRow(c *ui.Context, id, name, note string, value *bool) ui.Element {
 
 func checkRow(c *ui.Context, id, name, note string, value *bool) {
 	ui.Column(c.Key("check-" + id)).Gap(2).Children(func() {
-		ui.Checkbox(c, value, name)
+		uikit.Checkbox(c, value, name)
 		fieldNote(c, note)
 	})
 }
@@ -721,7 +721,7 @@ func progressBar(c *ui.Context, id, name string, value float64) {
 	if v < 0 || v > 1 {
 		v = -1
 	}
-	ui.Progress(c.Key(id), v).Label(name)
+	uikit.Progress(c.Key(id), v).Label(name)
 }
 
 func statCard(c *ui.Context, id, title, big, detail string, ink ...ui.Color) {

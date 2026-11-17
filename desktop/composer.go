@@ -883,7 +883,7 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 	wasOpen := st.ModelOpen
 	uikit.MenuButton(c.Key("composer-model"), &st.ModelOpen, uikit.MenuOptions{Width: 340, MaxHeight: 520}, func(b ui.Element) {
 		b, text := uikit.ButtonOn(c, b, short(strings.ReplaceAll(label, " / ", " · "), 34), uikit.ButtonGhost, true, nil, uikit.ActionOptions{Disabled: t.Busy})
-		b.Padding(1, 6).MinWidth(0).Shrink(1).DimDisabled(false).TextColor(a.secondaryInk())
+		b.Padding(1, 6).MinWidth(0).Shrink(1).DimDisabled(false).TextColor(a.secondaryInk()).Background(ui.Transparent)
 		text.TextColor(a.secondaryInk())
 		if t.Busy {
 			b.Cursor(ui.CursorDefault)

@@ -279,7 +279,7 @@ func (a *desktop) pluginDeleteDialog(c *ui.Context) {
 	}
 	modalCard(c, &a.pluginsF.DeleteOpen, widthModalSmall, func() {
 		modalTitle(c, locales.Text("删除插件 ")+pluginName(target), locales.Text("删除后侧栏入口会一并消失；重新导入同一个包即可恢复。"))
-		ui.Checkbox(c.Key("plugin-purge"), &a.pluginsF.Purge, locales.Text("同时删除插件自己保存的数据（账号、令牌等）"))
+		uikit.Checkbox(c.Key("plugin-purge"), &a.pluginsF.Purge, locales.Text("同时删除插件自己保存的数据（账号、令牌等）"))
 		fieldNote(c, locales.Text("不勾选时，重装插件可继续使用原有数据。"), a.secondaryInk())
 		modalActions(c, func() {
 			flat(c, locales.Text("取消")).OnClick(func() { a.pluginsF.DeleteOpen = false })

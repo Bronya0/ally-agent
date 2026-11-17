@@ -70,12 +70,9 @@ func ButtonOn(c *ui.Context, trigger ui.Element, label string, variant ButtonVar
 		o.Style = Secondary
 		o.Tone = Error
 	case ButtonGhost:
-		o.Style = Tertiary
+		o.Style = Quaternary
 	}
 	b, text := actionPartsOn(c, trigger, label, o)
-	if variant == ButtonGhost {
-		b.Background(ui.Transparent).Border(0, ui.Transparent)
-	}
 	return b, text
 }
 

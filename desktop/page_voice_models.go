@@ -116,7 +116,7 @@ func (a *desktop) voiceModelsDialog(c *ui.Context) {
 		if protocol.Uses(backend.VoiceFieldModel) {
 			ui.Column(c).Gap(gapTight).Children(func() {
 				ui.Row(c.Key("voice-model-row")).Gap(gapField).AlignItems(ui.End).Children(func() {
-					uikit.ComboboxField(c.Key("voice-model"), &s.draft.Model, s.modelOptions(), locales.Text("模型名"), locales.Text("拉取或手填模型名"), a.secondaryInk()).Grow(1)
+					uikit.ComboboxField(c.Key("voice-model"), s.draft.Model, s.modelOptions(), locales.Text("模型名"), locales.Text("拉取或手填模型名"), func(value string) { s.draft.Model = value }, a.secondaryInk()).Grow(1)
 					choiceButton(c, "voice-model-all", locales.Text("全部"), s.includeAllModels, c.Theme().Accent).OnClick(func() { s.includeAllModels = !s.includeAllModels })
 					flatBusy(c, locales.Text("拉取模型"), s.fetchBusy, s.fetchBusy || s.busy).OnClick(func() { a.fetchVoiceModelList() })
 				})
