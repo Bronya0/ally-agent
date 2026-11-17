@@ -97,6 +97,11 @@ func Select(c *ui.Context, value *string, options []string, ink ...ui.Color) ui.
 
 // SelectField is a select with per-option labels.
 func SelectField(c *ui.Context, value *string, options []Option, ink ...ui.Color) ui.Element {
+	return SelectFieldStatus(c, value, options, FieldNormal, ink...)
+}
+
+// SelectFieldStatus preserves the native selection behavior with validation chrome.
+func SelectFieldStatus(c *ui.Context, value *string, options []Option, status FieldStatus, ink ...ui.Color) ui.Element {
 	sel := ui.SelectBase(c, value)
 	b := sel.Trigger.Height(ControlHeight).Padding(4, 10).Gap(GapField).AlignItems(ui.Center).Radius(Radius).Border(1, hairline(c.Theme())).Background(c.Theme().SurfaceHover).Cursor(ui.CursorPointer)
 	b.Children(func() {
@@ -116,7 +121,7 @@ func SelectField(c *ui.Context, value *string, options []Option, ink ...ui.Color
 		})
 	})
 	selectPopup(c, sel, value, options, ink...)
-	return InputChrome(c, b)
+	return InputChromeStatus(c, b, status)
 }
 
 // CompactMenu keeps the toolbar trigger quiet and delegates its choices to the
@@ -238,7 +243,7 @@ func OptionChrome(c *ui.Context, e ui.Element, selected bool, tone ui.Color, sec
 	t := c.Theme()
 	fill, ink := ui.Transparent, SecondaryInkOf(t, secondary...)
 	if selected {
-		fill, ink = SelectedFill(tone), tone.Mix(t.Text, 0.20)
+		fill, ink = SelectedFill(tone), accentText(t, tone)
 	} else if e.Hovered() {
 		fill, ink = t.SurfaceHover, t.Text
 	}
@@ -330,7 +335,11 @@ func InputChromeStatus(c *ui.Context, e ui.Element, status FieldStatus) ui.Eleme
 		border = c.Theme().Danger
 	}
 	border = e.AnimateColor("chrome-border", border, ui.Animation{Duration: chromeFade, Ease: ui.EaseInOut})
-	return e.MinWidth(0).Border(1, border).Background(fade(e, "chrome-fill", background)).Radius(Radius).FontSize(FontBody).TextColor(c.Theme().Text)
+	// Styled MyGo inputs apply their own hover/focus border after construction.
+	// Paint the kit border last so those styles cannot hide validation states;
+	// the native control still owns focus, editing and accessibility.
+	return e.MinWidth(0).Border(1, border).Background(fade(e, "chrome-fill", background)).Radius(Radius).FontSize(FontBody).TextColor(c.Theme().Text).
+		DrawOver(func(p *ui.Painter, r ui.Rect) { p.Stroke(r, border, Radius, 1) })
 }
 func Input(c *ui.Context, value *string) ui.Element {
 	return InputStatus(c, value, FieldNormal)
@@ -345,17 +354,22 @@ func AreaStatus(c *ui.Context, value *string, status FieldStatus) ui.Element {
 
 // PasswordInput keeps the text in MyGo's input, with visibility local to this control.
 func PasswordInput(c *ui.Context, key, label string, value *string, placeholder ...string) ui.Element {
-	return passwordInputInk(c, key, label, value, nil, placeholder...)
+	return passwordInputInk(c, key, label, value, FieldNormal, nil, placeholder...)
+}
+
+// PasswordInputStatus applies validation chrome while preserving visibility state.
+func PasswordInputStatus(c *ui.Context, key, label string, value *string, status FieldStatus, placeholder ...string) ui.Element {
+	return passwordInputInk(c, key, label, value, status, nil, placeholder...)
 }
 
 // PasswordInputInk is PasswordInput with the caller's secondary-text tone.
 func PasswordInputInk(c *ui.Context, key, label string, value *string, ink ui.Color, placeholder ...string) ui.Element {
-	return passwordInputInk(c, key, label, value, []ui.Color{ink}, placeholder...)
+	return passwordInputInk(c, key, label, value, FieldNormal, []ui.Color{ink}, placeholder...)
 }
 
-func passwordInputInk(c *ui.Context, key, label string, value *string, tone []ui.Color, placeholder ...string) ui.Element {
+func passwordInputInk(c *ui.Context, key, label string, value *string, status FieldStatus, tone []ui.Color, placeholder ...string) ui.Element {
 	ink := SecondaryInk(c, tone)
-	root := InputChrome(c, ui.Row(c.Key(key)).Height(ControlHeight).AlignItems(ui.Center).Gap(0))
+	root := InputChromeStatus(c, ui.Row(c.Key(key)).Height(ControlHeight).AlignItems(ui.Center).Gap(0), status)
 	visible := ui.Local(root, "visible", func() bool { return false })
 	root.Children(func() {
 		input := ui.TextInputBase(c.Key("input"), value).Grow(1).MinWidth(0).FillHeight().Padding(5, 10).

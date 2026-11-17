@@ -36,6 +36,47 @@ func TestWorkspaceHistoryMergesVisitsAndLegacySessions(t *testing.T) {
 	}
 }
 
+func TestRailWorkspaceClickAlwaysAddsTab(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "project")
+	other := filepath.Join(t.TempDir(), "other")
+	a := &desktop{prefs: defaultPrefs(), page: "chat", tabs: []*conversation{
+		{ID: "first", Workspace: root}, {ID: "second", Workspace: other},
+	}, active: 1}
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Column(c).Width(240).Children(func() { a.railWorkspaceRow(c, root, "project", root) })
+	}, 300, 100)
+	for i := 0; i < 2; i++ {
+		if err := tt.Click("project"); err != nil {
+			t.Fatal(err)
+		}
+		if len(a.tabs) != 3+i || a.active != len(a.tabs)-1 || a.current().Workspace != root {
+			t.Fatalf("click %d did not add a workspace tab: tabs=%d active=%d", i, len(a.tabs), a.active)
+		}
+		if a.tabs[0].ID != "first" || a.tabs[1].ID != "second" || a.current().ID == a.tabs[0].ID {
+			t.Fatal("opening a workspace changed existing tab order or reused a session")
+		}
+	}
+}
+
+func TestRailWorkspaceOrderDoesNotFollowVisits(t *testing.T) {
+	root := t.TempDir()
+	alpha, zeta := filepath.Join(root, "alpha"), filepath.Join(root, "zeta")
+	a := &desktop{prefs: defaultPrefs(), tabs: []*conversation{{ID: "a", Workspace: alpha}, {ID: "z", Workspace: zeta}}}
+	a.activateTab(0)
+	a.activateTab(1)
+	want := []string{alpha, zeta}
+	if got := railWorkspacesMatching(a.workspaceHistoryRoots(), ""); !reflect.DeepEqual(got, want) {
+		t.Fatalf("initial order=%v, want %v", got, want)
+	}
+	a.activateTab(0)
+	if got := railWorkspacesMatching(a.workspaceHistoryRoots(), ""); !reflect.DeepEqual(got, want) {
+		t.Fatalf("switching workspace reordered rows: %v", got)
+	}
+	if got := railWorkspacesMatching(a.workspaceHistoryRoots(), "ZET"); !reflect.DeepEqual(got, []string{zeta}) {
+		t.Fatalf("filtered rows=%v", got)
+	}
+}
+
 func TestWorkspaceMenuIncludesEmptyOpenedWorkspaceAndUpdatesOrder(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 	a := &desktop{prefs: defaultPrefs()}

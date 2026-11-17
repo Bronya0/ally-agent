@@ -48,6 +48,56 @@ func TestTooltipAppearsOnRight(t *testing.T) {
 	}
 }
 
+func TestTooltipPlacement(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		placement TooltipPlacement
+		isOnSide  func(ui.Rect, ui.Rect) bool
+	}{
+		{"top", TooltipTop, func(a, b ui.Rect) bool { return b.Y+b.H <= a.Y }},
+		{"bottom", TooltipBottom, func(a, b ui.Rect) bool { return b.Y >= a.Y+a.H }},
+		{"left", TooltipLeft, func(a, b ui.Rect) bool { return b.X+b.W <= a.X }},
+		{"right", TooltipRight, func(a, b ui.Rect) bool { return b.X >= a.X+a.W }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tt := chineseTester(func(c *ui.Context) {
+				ui.Column(c).Fill().Center().Children(func() {
+					anchor := ui.ButtonBase(c.Key("anchor")).Size(80, 34).Label("anchor")
+					TooltipWithPlacement(c, anchor, "提示", tc.placement)
+				})
+			}, 400, 260)
+			anchor, ok := tt.Find("anchor")
+			if !ok {
+				t.Fatal("anchor missing")
+			}
+			tt.Move(anchor.X+anchor.W/2, anchor.Y+anchor.H/2)
+			tt.Advance(time.Second)
+			tip, ok := tt.Find("提示")
+			if !ok || !tc.isOnSide(anchor, tip) {
+				t.Fatalf("tooltip not on %s: anchor=%+v tip=%+v", tc.name, anchor, tip)
+			}
+		})
+	}
+}
+
+func TestTooltipPlacementFlipsAtWindowEdge(t *testing.T) {
+	tt := chineseTester(func(c *ui.Context) {
+		ui.Row(c).Fill().AlignItems(ui.Center).Justify(ui.End).Padding(10).Children(func() {
+			TooltipWithPlacement(c, ui.ButtonBase(c.Key("anchor")).Size(60, 34).Label("anchor"), "提示", TooltipRight)
+		})
+	}, 240, 150)
+	anchor, ok := tt.Find("anchor")
+	if !ok {
+		t.Fatal("anchor missing")
+	}
+	tt.Move(anchor.X+anchor.W/2, anchor.Y+anchor.H/2)
+	tt.Advance(time.Second)
+	tip, ok := tt.Find("提示")
+	if !ok || tip.X+tip.W > anchor.X {
+		t.Fatalf("tooltip did not flip left: anchor=%+v tip=%+v", anchor, tip)
+	}
+}
+
 func TestTooltipFadesInAndOut(t *testing.T) {
 	tt := chineseTester(func(c *ui.Context) {
 		c.SetTheme(ui.LightTheme())

@@ -254,7 +254,7 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 			ui.Column(c).Grow(2).Basis(0).Children(func() { fieldRow(c, "ssh-host", locales.Text("主机"), &d.Host, false) })
 			ui.Column(c).Grow(1).Basis(0).Gap(gapTight).Children(func() {
 				fieldLabel(c, locales.Text("端口"))
-				ui.NumberInput(c.Key("ssh-port"), &a.sshF.Port, 1, 65535, 1).Label(locales.Text("端口"))
+				uikit.NumberInput(c, "ssh-port", locales.Text("端口"), &a.sshF.Port, 1, 65535, 1)
 			})
 		})
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {

@@ -133,6 +133,9 @@ func actionPartsOn(c *ui.Context, b ui.Element, label string, o ActionOptions) (
 			fill = ink.Alpha(0.24)
 		}
 	}
+	if o.Tone == Primary {
+		ink = accentText(c.Theme(), ink)
+	}
 	ink = fade(b, "action-ink", ink)
 	b.Height(h).Padding(0, 14).Gap(7).Radius(r).Border(1, edge).Background(fade(b, "action-fill", fill)).TextColor(ink)
 	if o.Circle {
@@ -188,6 +191,8 @@ func ColorTag(c *ui.Context, label string, o TagOptions) ui.Element {
 	if o.Tone == Default {
 		fill = c.Theme().Text.Alpha(0.04)
 		edge = c.Theme().Border
+	} else if o.Tone == Primary {
+		ink = accentText(c.Theme(), ink)
 	}
 	return colorTag(c, label, o, ink, fill, edge, h, r)
 }

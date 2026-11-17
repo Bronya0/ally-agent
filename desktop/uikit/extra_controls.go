@@ -10,7 +10,12 @@ import (
 // focus, accessibility and virtualized rows. Only common typography or chrome
 // is added here; callers can still apply their own sizes and labels.
 func Autocomplete(c *ui.Context, value *string, suggestions []string) ui.Element {
-	return InputChrome(c, ui.Autocomplete(c, value, suggestions)).Height(ControlHeight)
+	return AutocompleteStatus(c, value, suggestions, FieldNormal)
+}
+
+// AutocompleteStatus applies the shared validation state to autocomplete.
+func AutocompleteStatus(c *ui.Context, value *string, suggestions []string, status FieldStatus) ui.Element {
+	return InputChromeStatus(c, ui.Autocomplete(c, value, suggestions), status).Height(ControlHeight)
 }
 
 func DecimalInput(c *ui.Context, value *string, lo, hi, step string) ui.Element {
@@ -26,7 +31,13 @@ func TimeInput(c *ui.Context, value *time.Time) ui.Element {
 }
 
 func TokenField(c *ui.Context, values *[]string, suggestions []string) ui.Element {
-	return InputChrome(c, ui.TokenField(c, values, suggestions))
+	return TokenFieldStatus(c, values, suggestions, FieldNormal)
+}
+
+// TokenFieldStatus applies the shared validation state without constraining
+// the field's height as its tokens wrap.
+func TokenFieldStatus(c *ui.Context, values *[]string, suggestions []string, status FieldStatus) ui.Element {
+	return InputChromeStatus(c, ui.TokenField(c, values, suggestions), status)
 }
 
 func EditableText(c *ui.Context, value *string) ui.Element {
@@ -121,10 +132,16 @@ func Video(c *ui.Context, player *ui.VideoPlayer) ui.Element { return ui.Video(c
 func WebView(c *ui.Context, view ui.NativeWebView) ui.Element   { return ui.WebView(c, view) }
 func NativeView(c *ui.Context, view ui.PlatformView) ui.Element { return ui.NativeView(c, view) }
 func TextInputBuffer(c *ui.Context, value *ui.TextBuffer) ui.Element {
-	return InputChrome(c, ui.TextInputBuffer(c, value)).Height(ControlHeight)
+	return TextInputBufferStatus(c, value, FieldNormal)
+}
+func TextInputBufferStatus(c *ui.Context, value *ui.TextBuffer, status FieldStatus) ui.Element {
+	return InputChromeStatus(c, ui.TextInputBuffer(c, value), status).Height(ControlHeight)
 }
 func TextAreaBuffer(c *ui.Context, value *ui.TextBuffer) ui.Element {
-	return InputChrome(c, ui.TextAreaBuffer(c, value))
+	return TextAreaBufferStatus(c, value, FieldNormal)
+}
+func TextAreaBufferStatus(c *ui.Context, value *ui.TextBuffer, status FieldStatus) ui.Element {
+	return InputChromeStatus(c, ui.TextAreaBuffer(c, value), status)
 }
 func Modal(c *ui.Context, open *bool, build func()) ui.Element { return ui.Modal(c, open, build) }
 func Popover(c *ui.Context, anchor ui.Element, open *bool, build func()) ui.Element {

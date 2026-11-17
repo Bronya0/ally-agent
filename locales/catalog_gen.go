@@ -15766,6 +15766,16 @@ func (msgs Messages) UiPaletteNative() string {
 	return Catalog.Format(msgs.locale, "ui_palette_native", nil)
 }
 
+// UiPaletteKhaki says "Warm Khaki"
+// in the language the app shows.
+func UiPaletteKhaki() string { return In(i18n.Locale()).UiPaletteKhaki() }
+
+// UiPaletteKhaki says "Warm Khaki"
+// in the language of msgs.
+func (msgs Messages) UiPaletteKhaki() string {
+	return Catalog.Format(msgs.locale, "ui_palette_khaki", nil)
+}
+
 // Ui2e007fe83346 says "Native uses a neutral accent on the same base colors as other accents; Qinghe light keeps its own palette."
 // in the language the app shows.
 func Ui2e007fe83346() string { return In(i18n.Locale()).Ui2e007fe83346() }

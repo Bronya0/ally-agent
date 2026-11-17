@@ -39,3 +39,24 @@ func TestTabStylesNavigationAndStableLayout(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeTabsSelectionAndKeyboard(t *testing.T) {
+	selected, changes := 0, 0
+	tt := chineseTester(func(c *ui.Context) {
+		if TabsWithOptions(c.Key("tabs"), &selected, TabOptions{Style: TabNative}, "First", "Second", "Third").Changed() {
+			changes++
+		}
+	}, 420, 100)
+	if err := tt.Click("Second"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if selected != 1 || changes != 1 {
+		t.Fatalf("click: selected=%d changes=%d", selected, changes)
+	}
+	tt.Key(0, ui.KeyRight)
+	tt.Frame()
+	if selected != 2 || changes != 2 {
+		t.Fatalf("keyboard: selected=%d changes=%d", selected, changes)
+	}
+}

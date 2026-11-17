@@ -15,7 +15,13 @@ func CheckboxState(c *ui.Context, state *ui.CheckState, label string) ui.Element
 // SearchField shares the input border, focus and theme treatment while keeping
 // the native search control's keyboard, clearing and submit behavior.
 func SearchField(c *ui.Context, value *string) ui.Element {
-	return InputChrome(c, ui.SearchField(c, value)).Height(ControlHeight)
+	return SearchFieldStatus(c, value, FieldNormal)
+}
+
+// SearchFieldStatus adds the same validation treatment as InputStatus while
+// leaving search, clear and submit behavior to MyGo.
+func SearchFieldStatus(c *ui.Context, value *string, status FieldStatus) ui.Element {
+	return InputChromeStatus(c, ui.SearchField(c, value), status).Height(ControlHeight)
 }
 
 // Slider and Progress use native drawing and accessibility; callers retain

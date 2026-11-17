@@ -234,14 +234,19 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 			ui.Column(c).FillWidth().Padding(3, 0, 0).Children(func() {
 				a.railSearchField(c, "rail-ws-search", locales.Text("工作区"), &a.railWSSearch)
 				query := strings.TrimSpace(a.railWSSearch.query)
-				ui.Scroll(c.Key("workspace-items")).FillWidth().MaxHeight(180).MinHeight(0).Children(func() {
+				scroll := ui.Scroll(c.Key("workspace-items")).FillWidth().MaxHeight(180).MinHeight(0)
+				key := railWorkspaceFilterKey{a.sessRev, a.workspaceVisitsRev, query}
+				roots := memoAt[memoOf[railWorkspaceFilterKey, []string]](scroll, "workspace-rows").get(key, func(railWorkspaceFilterKey) []string {
+					return railWorkspacesMatching(a.workspaceHistoryRoots(), query)
+				})
+				scroll.Children(func() {
 					shown := 0
 					temporary := locales.Text("临时工作区")
 					if query == "" || strings.Contains(strings.ToLower(temporary), strings.ToLower(query)) {
 						a.railWorkspaceRow(c, "", temporary, locales.Text("在系统临时目录创建沙箱，随标签页关闭自动删除"))
 						shown++
 					}
-					for _, root := range railWorkspacesMatching(a.workspaceHistoryRoots(), query) {
+					for _, root := range roots {
 						root := root
 						a.railWorkspaceRow(c, root, workspaceLabel(root), root)
 						shown++
@@ -283,11 +288,7 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 	row.Children(func() {
 		btn := ui.ButtonBase(c.Key("rail-ws-btn-" + root)).Grow(1).Height(24).Justify(ui.Start).Label(label).Cursor(ui.CursorPointer)
 		btn.OnClick(func() {
-			if root == "" {
-				a.newConversation("")
-				return
-			}
-			a.openWorkspace(root)
+			a.openWorkspaceEntry(root)
 		})
 		btn.Children(func() { ui.Text(c, label).FontSize(fsSmall).TextColor(ink).SingleLine() })
 		if root != "" {
@@ -561,18 +562,27 @@ func (a *desktop) railSearchField(c *ui.Context, id, label string, s *railSearch
 	field.Margin(0, 0, 3, 0)
 }
 
-// railWorkspacesMatching keeps the roots whose label or path holds query.
+type railWorkspaceFilterKey struct {
+	sessions, visits uint64
+	query            string
+}
+
+// railWorkspacesMatching keeps a stable name/path order independent of visits.
 func railWorkspacesMatching(roots []string, query string) []string {
 	query = strings.ToLower(strings.TrimSpace(query))
-	if query == "" {
-		return roots
-	}
 	out := make([]string, 0, len(roots))
 	for _, root := range roots {
 		if strings.Contains(strings.ToLower(workspaceLabel(root)), query) || strings.Contains(strings.ToLower(root), query) {
 			out = append(out, root)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		left, right := strings.ToLower(workspaceLabel(out[i])), strings.ToLower(workspaceLabel(out[j]))
+		if left != right {
+			return left < right
+		}
+		return workspaceKey(out[i]) < workspaceKey(out[j])
+	})
 	return out
 }
 

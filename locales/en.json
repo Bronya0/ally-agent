@@ -1573,6 +1573,7 @@
   "ui_palette_indigo": "Indigo",
   "ui_palette_choose": "Choose a color palette.",
   "ui_palette_native": "Native",
+  "ui_palette_khaki": "Warm Khaki",
   "ui_2e007fe83346": "Native uses a neutral accent on the same base colors as other accents; Qinghe light keeps its own palette.",
   "ui_1491279e6bbb": "Non-real-time",
   "ui_7ef85f88be36": "The audio file field name cannot be empty",

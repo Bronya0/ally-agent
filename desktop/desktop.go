@@ -741,25 +741,6 @@ func (a *desktop) newSession() {
 	a.releaseMemory()
 }
 
-func (a *desktop) openWorkspace(workspace string) {
-	if a.page == "models" {
-		a.cancelOAuthWhenLeaving()
-	}
-	for i, t := range a.tabs {
-		if strings.EqualFold(t.Workspace, workspace) {
-			if a.page == "settings" {
-				a.commitSettingsOnLeave()
-			}
-			a.page = "chat"
-			a.activateTab(i)
-			a.refreshFiles()
-			a.refreshSessionFooter(t)
-			a.refreshGit(t)
-			return
-		}
-	}
-	a.newConversation(workspace)
-}
 func modelLabel(p, m string) string {
 	if p == "" {
 		return m

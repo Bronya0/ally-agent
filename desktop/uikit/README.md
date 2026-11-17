@@ -4,10 +4,23 @@ Independent native MyGo controls, currently used with MyGo v0.9.2. Copy this dir
 project and update its import path; it depends only on MyGo's `ui` package.
 It contains no Ally state, filesystem access, goroutines, fonts or business logic.
 Use the host's `ui.Theme` to supply typography and semantic colors.
+Built-in palettes are available through `BuiltinThemes()` and
+`BuiltinTheme(ThemeBlue, dark)`. `BuiltinThemeColors` exposes the corresponding
+surface, text, placeholder and accent colors for hosts that compose their own
+theme. Each call to `BuiltinTheme` returns an independent `*ui.Theme`.
 
-Run `go run ./cmd/uikit-gallery` from the Ally repository to inspect common
-controls, validation, menus and notifications in light and dark themes. The
-gallery is a development tool and is not part of the main application.
+Run `go run ./desktop/uikit/gallery` from the Ally repository to inspect the
+standalone gallery in light and dark themes. On Windows, build a GUI executable
+with `go build -ldflags="-H=windowsgui" -o dist/uikit-gallery.exe ./desktop/uikit/gallery`.
+The left column shows MyGo controls and the right column shows uikit examples.
+The gallery's theme selector offers the Ally accent colors and a warm khaki
+palette in both light and dark appearance. It changes both columns together
+and does not save app preferences.
+Matched sections share a scrolling page but keep independent input state. At
+the bottom, native layout primitives without kit wrappers appear only on the
+left. The gallery is a development tool and is not part of the main application.
+Its version-specific component inventory and demonstration gaps are listed in
+[gallery/COVERAGE.md](gallery/COVERAGE.md).
 
 ```go
 import "ally-dev/desktop/uikit"
@@ -77,6 +90,17 @@ to align the row. Labels focus or activate their associated native control.
 `InputStatus`, `AreaStatus`, `ComboboxFieldStatus` and `InputChromeStatus` accept
 normal, warning or error borders in either theme. Validation remains with the
 caller, which supplies the explanatory text and clears the status after correction.
+`SearchFieldStatus`, `AutocompleteStatus` and `TokenFieldStatus` provide the same
+validation states for their respective controls; their shorter counterparts use
+`FieldNormal`. Token fields retain their natural height when tokens wrap.
+`SelectFieldStatus`, `PasswordInputStatus`, `TextInputBufferStatus` and
+`TextAreaBufferStatus` expose the same validation treatment for those controls.
+
+For new Naive-style interfaces, prefer `Action`, `ColorTag`, `Radios`, `Switch`,
+`SelectField` and the input helpers above. `Button` and `Radio` remain available
+for existing call sites and lower-level composition. The native adapters in
+`extra_controls.go` are convenience entry points, not a promise of Naive-style
+variants or validation states for every MyGo widget.
 For side-by-side fields, use fractional grid tracks and stretch the cell's
 Column with `JustifySelf(ui.Stretch)`; put `FillWidth` on the control inside
 that cell. A percentage width directly on a grid child can resolve against
@@ -188,6 +212,8 @@ Basic layout primitives and `Base` parts remain directly available from `ui`.
 
 Tooltip 必须使用 `uikit.Tooltip(c, anchor, text)` 或侧栏的 `RightTooltip`，不要直接调用 Element.Tooltip 绕过公共动效。统一 180ms 淡入淡出，保留原生 600ms 悬停延迟、键盘焦点和点击／Esc 关闭行为；右侧菜单提示保持右侧定位。公共入口提前挂载原生 overlay 父容器，保证第一个提示也有入场动画、最后一个提示有退场动画。
 
+需要指定方向时，使用 `TooltipWithPlacement(c, anchor, text, TooltipBottom)`；可选 `TooltipTop`、`TooltipBottom`、`TooltipLeft`、`TooltipRight`。方向为优先位置，空间不足时由 MyGo 自动避让。`Tooltip` 和 `RightTooltip` 分别保持原有上方、右侧行为。
+
 ## 应用菜单
 
 - 普通操作、链接、工作区历史、附加目录、插件分组和 Git 仓库菜单统一走 `MenuButton`，内部使用 MyGo `MenuBase`；`MenuItem` 负责统一外观，框架负责键盘导航、选择后关闭、焦点归还和滚动。
@@ -225,6 +251,11 @@ choice := uikit.TrayMenu(c.Key("tray-menu"), &open, "Application menu", entries)
 ## 页面 Tabs：A / C 两套样式
 
 默认 `Tabs(c, &state.Tab, labels...)` 使用 **C 紧凑分段**，由 `DefaultTabStyle = TabSegmented` 集中决定。
+
+`TabsWithOptions(c, &state.Tab, TabOptions{Style: TabNative}, labels...)` 使用
+MyGo 原生 Tabs 的外观、主题、键盘与焦点行为。原生组件不暴露各标签，
+因此不支持 `TabOptions.Gesture` 的拖动平移；`Secondary` 和 `TabsSecondary`
+的次要文字色也不改变原生样式。需要拖动平移时使用另外两种样式。
 
 ```go
 // A：笔直细线一级导航；二级只以文字色强调。
