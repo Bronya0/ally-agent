@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 	"github.com/egoist/mygo/ui/markdown"
 	"github.com/egoist/mygo/ui/markdown/parser"
 )
@@ -99,6 +100,8 @@ type chatSearch struct {
 	// address the block's lines without parsing the message again.
 	frameDoc        *parser.Document
 	frameDocMessage int
+	// markdownCache keeps bounded parser projections for messages already scanned.
+	markdownCache map[int]chatSearchMarkdownCacheEntry
 }
 
 // chatSearchMatch is one hit: the message it is in and the byte range of the
@@ -106,6 +109,11 @@ type chatSearch struct {
 type chatSearchMatch struct {
 	Message    int
 	Start, End int
+}
+
+type chatSearchMarkdownCacheEntry struct {
+	source     string
+	projection chatSearchMarkdown
 }
 
 // chatSearchMaxMatches and chatSearchMaxBytes bound a query's synchronous scan.
@@ -144,7 +152,7 @@ func (a *desktop) openChatSearch(t *conversation) {
 	// The composer has to look unfocused now, or closing the bar could not give its
 	// focus back: the engine re-focuses a bound field when its value changes.
 	a.composerFocus, a.focusBack = "", ""
-	st.Search.reveal, st.Search.waited = true, 0
+	scheduleChatSearchReveal(&st.Search)
 }
 
 func (a *desktop) closeChatSearch(t *conversation) {
@@ -154,13 +162,14 @@ func (a *desktop) closeChatSearch(t *conversation) {
 	st := t.uiState()
 	s := &st.Search
 	s.Open = false
-	s.reveal = false
+	s.reveal, s.waited, s.waitedWindow = false, 0, 0
 	// The bar's per-frame caches describe a transcript that is no longer searched.
 	// Row handles stay for this page and are recycled as it changes; the engine
 	// keeps each registered binding until window close.
 	s.blockBound = false
 	s.spanCache, s.byMessage, s.cache, s.cacheKey = nil, nil, nil, ""
 	s.codeCache = nil
+	s.markdownCache = nil
 	s.frameDoc = nil
 	s.patternKey, s.pattern, s.patternErr = "", nil, nil
 	s.literal, s.literalPrefix, s.literalStarts, s.literalQuery = nil, nil, nil, ""
@@ -188,7 +197,11 @@ func (a *desktop) chatSearchStep(t *conversation, delta int) {
 	} else {
 		s.Current = (s.Current + delta + len(matches)) % len(matches)
 	}
-	s.reveal, s.waited = true, 0
+	scheduleChatSearchReveal(s)
+}
+
+func scheduleChatSearchReveal(s *chatSearch) {
+	s.reveal, s.waited, s.waitedWindow = true, 0, 0
 }
 
 // chatSearchMatches returns the hits of the bar's query, memoised by the query
@@ -238,6 +251,9 @@ func (a *desktop) chatSearchScan(t *conversation, s *chatSearch) ([]chatSearchMa
 		prefix, total, truncated := s.scanPrefix, s.scanBytes, false
 		for i := s.scanCount; i < len(t.Messages); i++ {
 			prefix = total
+			if isToolRecord(t.Messages[i]) {
+				continue
+			}
 			content := str(t.Messages[i], "content")
 			if content == "" {
 				continue
@@ -308,6 +324,7 @@ func invalidateChatSearch(t *conversation) {
 	s.frameKey = ""
 	s.spanCache = nil
 	s.codeCache = nil
+	s.markdownCache = nil
 	// The shape may have changed, so the next scan starts from the beginning.
 	s.scanCount, s.scanPrefix, s.scanBytes, s.tailOnly, s.appendOnly = 0, 0, 0, false, false
 }
@@ -339,6 +356,9 @@ func invalidateChatSearchTail(t *conversation) {
 	s.frameKey = ""
 	s.spanCache = nil
 	s.codeCache = nil
+	if s.markdownCache != nil && len(t.Messages) > 0 {
+		delete(s.markdownCache, len(t.Messages)-1)
+	}
 	s.tailOnly = true
 }
 
@@ -413,6 +433,9 @@ func chatSearchScanAll(t *conversation, s *chatSearch) (out []chatSearchMatch, t
 	}
 	for i, m := range t.Messages {
 		prefix = total
+		if isToolRecord(m) {
+			continue
+		}
 		content := str(m, "content")
 		if content == "" {
 			continue
@@ -429,27 +452,43 @@ func chatSearchScanAll(t *conversation, s *chatSearch) (out []chatSearchMatch, t
 // chatSearchScanMessage appends the hits of one message to out, reading at most
 // budget bytes of it.
 func chatSearchScanMessage(m map[string]any, index int, s *chatSearch, budget int, out []chatSearchMatch) ([]chatSearchMatch, bool) {
-	text := str(m, "content")
-	re, err := s.chatSearchPattern()
-	if err != nil || text == "" || budget <= 0 {
-		return out, budget <= 0 && text != ""
+	if isToolRecord(m) {
+		return out, false
 	}
-	truncated := len(text) > budget
+	source := str(m, "content")
+	re, err := s.chatSearchPattern()
+	if err != nil || source == "" || budget <= 0 {
+		return out, budget <= 0 && source != ""
+	}
+	truncated := len(source) > budget
 	if truncated {
-		// Search as much of this message as fits, but do not cut a UTF-8 rune
-		// or allow the byte budget to be exceeded.
-		text = text[:budget]
-		for len(text) > 0 && !utf8.ValidString(text) {
-			text = text[:len(text)-1]
+		// Parsing only the source that fits keeps both parser work and search work
+		// inside the transcript-wide byte budget.
+		source = source[:budget]
+		for len(source) > 0 && !utf8.ValidString(source) {
+			source = source[:len(source)-1]
 		}
 	}
-	if len(text) == 0 {
+	if len(source) == 0 {
 		return out, true
 	}
-	spans, limited := chatSearchSpansBounded(text, s, re, chatSearchMaxMatches-len(out))
+	entry, cached := s.markdownCache[index]
+	if !cached || entry.source != source {
+		entry = chatSearchMarkdownCacheEntry{source: source, projection: chatSearchMarkdownText(source)}
+		if s.markdownCache == nil {
+			s.markdownCache = make(map[int]chatSearchMarkdownCacheEntry)
+		}
+		s.markdownCache[index] = entry
+	}
+	projection := entry.projection
+	spans, limited := chatSearchSpansBounded(projection.text, s, re, chatSearchMaxMatches-len(out))
 	s.candidateTruncated = limited
 	for _, span := range spans {
-		out = append(out, chatSearchMatch{Message: index, Start: span[0], End: span[1]})
+		start, end, ok := chatSearchMarkdownSourceRange(projection, span[0], span[1])
+		if !ok {
+			continue
+		}
+		out = append(out, chatSearchMatch{Message: index, Start: start, End: end})
 		if len(out) >= chatSearchMaxMatches {
 			return out, false
 		}
@@ -664,8 +703,9 @@ func (a *desktop) chatSearchBar(c *ui.Context, t *conversation) {
 			return false
 		})
 		if field.Changed() {
-			s.Current, s.waited = 0, 0
-			s.reveal = true
+			s.Current = 0
+			s.frameKey = ""
+			scheduleChatSearchReveal(s)
 		}
 		toggle := func(on *bool, label, tip string) {
 			b := ui.ToggleBase(c, on).Cursor(ui.CursorPointer).Padding(th.Space(0.5), th.Space(1.5)).Radius(th.Radius - 2).Label(tip).Tooltip(tip).KeepFocus().MinWidth(0)
@@ -680,6 +720,11 @@ func (a *desktop) chatSearchBar(c *ui.Context, t *conversation) {
 				b.TextColor(a.secondaryInk())
 			}
 			b.Children(func() { ui.Text(c, label).FontSize(th.FontSize - 1) })
+			if b.Changed() {
+				s.Current = 0
+				s.frameKey = ""
+				scheduleChatSearchReveal(s)
+			}
 		}
 		toggle(&s.MatchCase, "Aa", locales.Text("区分大小写"))
 		toggle(&s.WholeWord, "ab", locales.Text("全词匹配"))
@@ -711,24 +756,21 @@ func (a *desktop) beginChatSearchFrame(t *conversation) {
 	}
 }
 
-// chatSearchBlock replaces the paragraph and heading blocks that hold a hit with
-// their text, matched runs carrying a background. The hook also reaches the
-// paragraphs of list items and quotes, which keep their markers and indentation
-// because only plain text is replaced. Formatted inline content keeps the
-// renderer's layout. Custom blocks have no Markdown line-map entry, so copying
-// a selection in them uses MyGo's plain-text fallback; copying the whole
-// document still uses its original source.
+// chatSearchBlock overlays search backgrounds on the visible inline runs of
+// paragraph and heading blocks. List markers and quote indentation remain in the
+// native renderer; inline emphasis, code and links are rebuilt as rich text/link
+// children. Blocks containing unsupported inline objects are left untouched.
 func (a *desktop) chatSearchBlock(t *conversation, message int) func(c *ui.Context, doc *parser.Document, index int) bool {
 	return func(c *ui.Context, doc *parser.Document, index int) bool {
 		s := &t.uiState().Search
 		// The code-block hook of this message runs right after this one, so it can
 		// take the block's lines from the document instead of parsing again.
 		s.frameDoc, s.frameDocMessage = doc, message
-		text, spans, base, ok := chatSearchBlockSpans(doc, index, message, s)
+		text, spans, sources, runs, base, ok := chatSearchBlockProjection(doc, index, message, s)
 		if !ok {
 			return false
 		}
-		a.chatSearchMark(c, t, message, doc.Block(index), text, spans, base)
+		a.chatSearchMark(c, t, message, doc.Block(index), text, spans, sources, runs, base)
 		return true
 	}
 }
@@ -740,40 +782,65 @@ func (a *desktop) chatSearchBlock(t *conversation, message int) func(c *ui.Conte
 // the renderer's drawing, since the table builds its cells without asking the
 // hook. A match in either is found and scrolled to; a table cell is not marked.
 func chatSearchBlockSpans(doc *parser.Document, index, message int, s *chatSearch) (string, [][2]int, int, bool) {
+	text, spans, _, _, base, ok := chatSearchBlockProjection(doc, index, message, s)
+	return text, spans, base, ok
+}
+
+func chatSearchBlockProjection(doc *parser.Document, index, message int, s *chatSearch) (string, [][2]int, []int, []chatSearchMarkdownRun, int, bool) {
 	block := doc.Block(index)
 	if block == nil || (block.Kind != parser.Paragraph && block.Kind != parser.Heading) {
-		return "", nil, 0, false
+		return "", nil, nil, nil, 0, false
 	}
-	// Do not replace formatted inline content with raw Markdown source. Plain
-	// prose and headings can be highlighted without exposing markup syntax.
-	for _, in := range doc.Inlines(index) {
-		// Mentions and references render as literal text while Resolve is unset.
-		if in.Kind != parser.Text && in.Kind != parser.Mention && in.Kind != parser.Reference && in.Kind != parser.SoftBreak && in.Kind != parser.LineBreak {
-			return "", nil, 0, false
-		}
-	}
-	src := doc.Source()
-	if block.Start < 0 || block.End > len(src) || block.Start >= block.End {
-		return "", nil, 0, false
-	}
-	raw := src[block.Start:block.End]
-	if block.Kind == parser.Heading {
-		// Heading markers are syntax, not visible text; keep the byte offset
-		// aligned with the source so the selected hit is still identified.
-		at := 0
-		for at < len(raw) && raw[at] == '#' {
-			at++
-		}
-		if at > 0 && at < len(raw) && (raw[at] == ' ' || raw[at] == '\t') {
-			for at < len(raw) && (raw[at] == ' ' || raw[at] == '\t') {
-				at++
+	var projection chatSearchMarkdownBlock
+	found := false
+	if entry, ok := s.markdownCache[message]; ok {
+		for _, candidate := range entry.projection.blocks {
+			if candidate.start == block.Start && candidate.end == block.End {
+				projection, found = candidate, true
+				break
 			}
-			raw = raw[at:]
-			blockStartOffset := block.Start + at
-			return chatSearchBlockText(raw, message, blockStartOffset, block.End, s)
 		}
 	}
-	return chatSearchBlockText(raw, message, block.Start, block.End, s)
+	// Direct unit callers may supply matches without passing through the scan.
+	// The live transcript path reuses the source-keyed projection cache.
+	if !found {
+		projection, found = chatSearchMarkdownInlineBlock(doc, index)
+	}
+	if !found || projection.text == "" {
+		return "", nil, nil, nil, 0, false
+	}
+	var spans [][2]int
+	var sources []int
+	for _, hit := range s.cache {
+		if hit.Message != message {
+			continue
+		}
+		visibleStart, visibleEnd := -1, -1
+		for _, run := range projection.runs {
+			if run.sourceStart >= hit.End || run.sourceEnd <= hit.Start {
+				continue
+			}
+			left, right := max(hit.Start, run.sourceStart), min(hit.End, run.sourceEnd)
+			vs, ve := run.visibleStart, run.visibleEnd
+			if run.visibleEnd-run.visibleStart == run.sourceEnd-run.sourceStart {
+				vs += left - run.sourceStart
+				ve = run.visibleStart + right - run.sourceStart
+			}
+			if visibleStart < 0 || vs < visibleStart {
+				visibleStart = vs
+			}
+			visibleEnd = max(visibleEnd, ve)
+		}
+		if visibleStart >= 0 && visibleEnd > visibleStart {
+			spans = append(spans, [2]int{visibleStart, visibleEnd})
+			sources = append(sources, hit.Start)
+		}
+	}
+	if len(spans) == 0 {
+		return "", nil, nil, nil, 0, false
+	}
+	base := sources[0] - spans[0][0]
+	return projection.text, spans, sources, projection.runs, base, true
 }
 
 // chatSearchBlockKey names one block of one message; chatSearchCodeKey adds the
@@ -834,51 +901,71 @@ func (s *chatSearch) syncCacheQuery() {
 // The text takes the Markdown theme's own font, size, line height and colour: a
 // block that measured differently would shift the transcript the moment the bar
 // opened, and the scroll that follows would look like a second, rigid jump.
-func (a *desktop) chatSearchMark(c *ui.Context, t *conversation, message int, block *parser.Block, text string, spans [][2]int, base int) {
+func (a *desktop) chatSearchMark(c *ui.Context, t *conversation, message int, block *parser.Block, text string, spans [][2]int, sources []int, runs []chatSearchMarkdownRun, base int) {
 	p := a.currentPalette()
 	current, hasCurrent := a.chatSearchCurrent(t)
 	size, weight, ink := a.chatSearchTextStyle(block)
 	if hasCurrent && current.Message != message {
 		hasCurrent = false
 	}
-	// The pointed run carries the accent solid, the others a tint of it, so the
-	// current hit reads at a glance without VS Code's two yellows.
-	pointed := -1
-	parts := make([]ui.Span, 0, len(spans)*2+1)
-	at := 0
-	for i, span := range spans {
-		if span[0] < at || span[1] > len(text) {
-			continue
+	colors := a.readingColors()
+	codeFont, codeSize := nativeFontFamily(), size
+	if messageOptions := t.MD[message]; messageOptions != nil && messageOptions.Theme != nil {
+		if messageOptions.Theme.CodeFont != "" {
+			codeFont = messageOptions.Theme.CodeFont
 		}
-		if span[0] > at {
-			parts = append(parts, ui.Span{Text: text[at:span[0]]})
-		}
-		run := ui.Span{Text: text[span[0]:span[1]], Background: p.accent.Alpha(0.38), Radius: 3}
-		if hasCurrent && current.Start == base+span[0] {
-			run.Background, run.Color = p.accent, c.Theme().Background
-			pointed = i
-		}
-		parts = append(parts, run)
-		at = span[1]
+		codeSize = messageOptions.Theme.FontSize * messageOptions.Theme.CodeSize
 	}
-	if at < len(text) {
-		parts = append(parts, ui.Span{Text: text[at:]})
-	}
-	view := ui.RichText(c, parts...).FillWidth().Font(nativeFontFamily()).FontSize(size).
+	pointed, pointedAt := -1, 0
+	view := ui.RichText(c).FillWidth().Font(nativeFontFamily()).FontSize(size).
 		LineHeight(readingLineHeight).TextColor(ink)
 	if weight > 0 {
 		view.FontWeight(weight)
 	}
 	if block != nil && block.Kind == parser.Heading {
-		// The replaced block stays a heading for a screen reader, as the renderer's
-		// own element is.
 		view.Role(ui.RoleHeading).Level(min(max(block.Level, 1), 6))
 	}
+	view.Children(func() {
+		for _, mapped := range runs {
+			start, end := mapped.visibleStart, mapped.visibleEnd
+			if start < 0 || end > len(text) || start >= end {
+				continue
+			}
+			parts := make([]ui.Span, 0, 4)
+			at := start
+			for i, hit := range spans {
+				left, right := max(start, hit[0]), min(end, hit[1])
+				if left >= right {
+					continue
+				}
+				if left > at {
+					parts = append(parts, chatSearchStyledSpan(text[at:left], mapped, colors, codeFont, codeSize, ui.Span{}))
+				}
+				mark := ui.Span{Background: p.accent.Alpha(0.38)}
+				if hasCurrent && i < len(sources) && current.Start == sources[i] {
+					mark.Background, mark.Color = p.accent, c.Theme().Background
+					pointed, pointedAt = i, left
+				}
+				parts = append(parts, chatSearchStyledSpan(text[left:right], mapped, colors, codeFont, codeSize, mark))
+				at = right
+			}
+			if at < end {
+				parts = append(parts, chatSearchStyledSpan(text[at:end], mapped, colors, codeFont, codeSize, ui.Span{}))
+			}
+			if len(parts) == 0 {
+				continue
+			}
+			if mapped.link {
+				a.chatSearchLink(c, t, message, mapped.linkDest, mapped.linkPending, func() { ui.RichText(c, parts...) })
+			} else {
+				ui.RichText(c, parts...)
+			}
+		}
+	})
 	if pointed < 0 {
 		return
 	}
-	// Anchor the block the pointed run is in, and remember how far into its text
-	// the run sits: the scroll reaches the line without a per-line layout.
+	// Anchor the block that actually contains the selected visible run.
 	s := &t.uiState().Search
 	if s.blockHandle == nil {
 		s.blockHandle = &ui.Handle{}
@@ -886,9 +973,52 @@ func (a *desktop) chatSearchMark(c *ui.Context, t *conversation, message int, bl
 	s.blockMatch, s.blockBound = current, true
 	s.blockFrac = 0
 	if len(text) > 0 {
-		s.blockFrac = float32(spans[pointed][0]) / float32(len(text))
+		s.blockFrac = float32(pointedAt) / float32(len(text))
 	}
 	view.Bind(s.blockHandle)
+}
+
+func (a *desktop) chatSearchLink(c *ui.Context, t *conversation, message int, dest string, pending bool, children func()) {
+	link := ui.Link(c, "", "")
+	if pending {
+		// A destination still being written is not clickable in the native renderer.
+	} else if strings.HasPrefix(dest, "#") {
+		if link.Clicked() && t.MD[message] != nil {
+			t.MD[message].Anchor = dest
+			t.MD[message].AnchorVersion++
+		}
+	} else if !strings.ContainsAny(dest, "\\\x00") && !strings.HasPrefix(dest, "//") {
+		if i := strings.IndexAny(dest, ":/?#"); i < 0 || dest[i] != ':' {
+			if c.Router() != nil {
+				link = ui.Link(c, "", dest)
+			}
+		} else if ui.SafeToOpen(dest) {
+			link = ui.Link(c, "", dest)
+		}
+	}
+	link.TextColor(a.readingColors().link).Children(children)
+}
+
+func chatSearchStyledSpan(text string, mapped chatSearchMarkdownRun, colors markdownColors, codeFont string, codeSize float32, mark ui.Span) ui.Span {
+	span := ui.Span{Text: text, Weight: 0}
+	if mapped.bold {
+		span.Weight, span.Color = 600, colors.strong
+	}
+	span.Italic, span.Strikethrough = mapped.italic, mapped.strike
+	if mapped.code {
+		span.Font, span.Size, span.Color = codeFont, codeSize, colors.code
+		span.Background = colors.codeBG
+	}
+	if mapped.link {
+		span.Color, span.Underline = colors.link, true
+	}
+	if mark.Background.A > 0 {
+		span.Background, span.Radius = mark.Background, mark.Radius
+		if mark.Color.A > 0 {
+			span.Color = mark.Color
+		}
+	}
+	return span
 }
 
 // chatSearchTextStyle mirrors the reading theme, so a replaced block measures as
@@ -916,9 +1046,9 @@ func (a *desktop) chatSearchTextStyle(block *parser.Block) (size float32, weight
 // block — and every block once the bar closes — keeps the renderer's own syntax
 // colouring, copy button and wrapping. fallback is what the theme installed.
 //
-// The drawn block carries no syntax colouring and has no Markdown line-map
-// entry. Selection copying uses MyGo's plain-text fallback; closing the bar
-// restores the native renderer's colouring and line map.
+// Hit blocks retain token colours and the copy control. Their custom text runs
+// do not have the native code view's per-line Markdown selection map; closing the
+// search restores the full native code renderer.
 func (a *desktop) chatSearchCodeHook(t *conversation, message int, fallback func(*ui.Context, *markdown.CodeBlockView)) func(*ui.Context, *markdown.CodeBlockView) {
 	return func(c *ui.Context, block *markdown.CodeBlockView) {
 		if a.chatSearchCodeMark(c, t, message, block) {
@@ -957,6 +1087,15 @@ func (a *desktop) chatSearchCodeMark(c *ui.Context, t *conversation, message int
 	box := ui.Column(c).Background(colors.panel).Border(1, colors.border).
 		Radius(c.Theme().Radius + 2).AlignSelf(ui.Stretch).Clip()
 	box.Role(ui.RoleGroup).Label(chatSearchCodeLabel(block.Language))
+	var tokenizer editor.Tokenizer
+	if language := editor.LanguageNamed(block.Language); language != nil && block.Language != "" {
+		tokenizer = language.Tokenizer
+	}
+	var tokenState uint64
+	var plainToken []editor.Token
+	if tokenizer == nil {
+		plainToken = make([]editor.Token, 1)
+	}
 	box.Children(func() {
 		head := ui.Row(c).AlignItems(ui.Center).Padding(pad*0.35, pad*0.4, 0, pad)
 		head.Children(func() {
@@ -969,24 +1108,53 @@ func (a *desktop) chatSearchCodeMark(c *ui.Context, t *conversation, message int
 		ui.Column(c).Padding(pad*0.25, pad, pad, pad).Children(func() {
 			for i, line := range lines {
 				parts := make([]ui.Span, 0, len(spans[i])*2+1)
+				tokens := []editor.Token(nil)
+				if tokenizer != nil {
+					tokens, tokenState = tokenizer.Tokenize(line, tokenState, tokens)
+				} else if len(line) > 0 {
+					// Unlabelled/plain code blocks have no syntax tokenizer, but they
+					// still need a text token so search spans get overlaid.
+					plainToken[0] = editor.Token{End: len(line), Kind: editor.TokenText}
+					tokens = plainToken
+				}
 				at, pointedAt := 0, -1
-				for _, span := range spans[i] {
-					if span[0] < at || span[1] > len(line) {
+				appendSyntax := func(text string, color ui.Color, weight int, italic bool) {
+					if text != "" {
+						parts = append(parts, ui.Span{Text: text, Color: color, Weight: weight, Italic: italic})
+					}
+				}
+				for _, token := range tokens {
+					end := min(token.End, len(line))
+					if end <= at {
 						continue
 					}
-					if span[0] > at {
-						parts = append(parts, ui.Span{Text: line[at:span[0]]})
+					style := colors.syntax.Tokens[token.Kind]
+					color := colors.syntax.TokenColor(token.Kind)
+					weight := 0
+					if style.Bold {
+						weight = 600
 					}
-					run := ui.Span{Text: line[span[0]:span[1]], Background: p.accent.Alpha(0.38), Radius: 3}
-					if hasCurrent && current.Start == starts[i]+span[0] {
-						run.Background, run.Color = p.accent, c.Theme().Background
-						pointedAt = span[0]
+					italic := style.Italic
+					tokenAt := at
+					for _, span := range spans[i] {
+						left, right := max(tokenAt, span[0]), min(end, span[1])
+						if left >= right {
+							continue
+						}
+						appendSyntax(line[tokenAt:left], color, weight, italic)
+						run := ui.Span{Text: line[left:right], Background: p.accent.Alpha(0.38), Weight: weight, Italic: italic}
+						if hasCurrent && current.Start == starts[i]+left {
+							run.Background, run.Color = p.accent, c.Theme().Background
+							pointedAt = left
+						}
+						parts = append(parts, run)
+						tokenAt = right
 					}
-					parts = append(parts, run)
-					at = span[1]
+					appendSyntax(line[tokenAt:end], color, weight, italic)
+					at = end
 				}
 				if at < len(line) {
-					parts = append(parts, ui.Span{Text: line[at:]})
+					appendSyntax(line[at:], colors.text, 0, false)
 				}
 				if len(parts) == 0 {
 					// A blank line still holds the row: the block keeps its height.

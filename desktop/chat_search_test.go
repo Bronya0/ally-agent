@@ -74,6 +74,63 @@ func TestChatSearchRegularExpression(t *testing.T) {
 	}
 }
 
+func TestChatSearchOptionChangesResetAndRevealTheCurrentHit(t *testing.T) {
+	conv := searchTranscript(searchMessage("assistant", "needle and NEEDLE"))
+	a := &desktop{ready: true, page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}}
+	st := conv.uiState()
+	st.Search = chatSearch{Open: true, Query: "needle", Current: 1, waited: 2, waitedWindow: 2}
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		a.chatSearchBar(c, conv)
+	}, 900, 200)
+	tester.Frame()
+	if err := tester.Click("区分大小写"); err != nil {
+		t.Fatal(err)
+	}
+	if !st.Search.MatchCase || st.Search.Current != 0 || !st.Search.reveal || st.Search.waited != 0 || st.Search.waitedWindow != 0 {
+		t.Fatalf("case toggle did not reset and reveal the first filtered hit: %+v", st.Search)
+	}
+	if got := a.chatSearchStatus(conv); got != "1 of 1" {
+		t.Fatalf("status after changing options = %q, want freshly filtered 1 of 1", got)
+	}
+	st.Search.reveal, st.Search.waitedWindow = false, 2
+	if err := tester.Click("全词匹配"); err != nil {
+		t.Fatal(err)
+	}
+	if !st.Search.WholeWord || !st.Search.reveal || st.Search.waitedWindow != 0 {
+		t.Fatalf("whole-word toggle did not request a fresh jump: %+v", st.Search)
+	}
+}
+
+func TestChatSearchQueryChangeRefreshesSameFrameResults(t *testing.T) {
+	conv := searchTranscript(searchMessage("assistant", "needle and NEEDLE"))
+	a := &desktop{ready: true, page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}}
+	s := &conv.uiState().Search
+	s.Open, s.Query = true, "needle"
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		a.beginChatSearchFrame(conv)
+		a.chatSearchBar(c, conv)
+	}, 900, 200)
+	tester.Frame()
+	if got := a.chatSearchStatus(conv); got != "1 of 2" {
+		t.Fatalf("initial status = %q, want 1 of 2", got)
+	}
+	if err := tester.Click("在对话中查找"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Key(ui.Cmd, ui.KeyA)
+	tester.Type("notthere")
+	if s.Query != "notthere" {
+		t.Fatalf("query = %q, want replacement text", s.Query)
+	}
+	if got := a.chatSearchStatus(conv); got != "无结果" {
+		t.Fatalf("status after query change = %q, want freshly computed no result; frameKey=%q cacheKey=%q lastQuery=%q queryKey=%q matches=%+v", got, s.frameKey, s.cacheKey, s.lastQuery, chatSearchQueryKey(s), s.cache)
+	}
+}
+
 // Enter and the arrows walk the hits and wrap around; the memo keeps a second
 // frame from rescanning the transcript.
 func TestChatSearchStepsWrapAndMemoise(t *testing.T) {
@@ -303,11 +360,22 @@ func TestChatSearchHighlightsMatchedBlocks(t *testing.T) {
 	if _, _, _, ok := chatSearchBlockSpans(doc, 0, 0, s); ok {
 		t.Fatal("a paragraph without the query must keep the renderer's layout")
 	}
-	formatted := parser.Parse("**needle** in bold")
+	formattedSource := "**needle** in bold"
+	formatted := parser.Parse(formattedSource)
+	s.cache = chatSearchCompute(searchTranscript(searchMessage("assistant", formattedSource)), s)
+	foundFormatted := false
 	for i := 0; i < formatted.Len(); i++ {
-		if _, _, _, ok := chatSearchBlockSpans(formatted, i, 0, s); ok {
-			t.Fatal("formatted Markdown must keep the renderer's layout rather than expose source syntax")
+		text, spans, base, ok := chatSearchBlockSpans(formatted, i, 0, s)
+		if !ok {
+			continue
 		}
+		foundFormatted = true
+		if text != "needle in bold" || len(spans) != 1 || text[spans[0][0]:spans[0][1]] != "needle" || base+spans[0][0] != strings.Index(formattedSource, "needle") {
+			t.Fatalf("formatted block = %q spans=%v base=%d", text, spans, base)
+		}
+	}
+	if !foundFormatted {
+		t.Fatal("visible formatted text was not highlighted")
 	}
 }
 
@@ -602,8 +670,75 @@ func TestChatSearchCodeLinesReportsRunsAndOffsets(t *testing.T) {
 	}
 }
 
+func TestChatSearchCodeHighlightsInvalidateWhenQueryChanges(t *testing.T) {
+	src := "```python\none, two = succ(0), succ(succ(0))\nreturn a if b == 0 else succ(plus(a, b - 1))\n```\n"
+	conv := searchTranscript(searchMessage("assistant", src))
+	a := &desktop{ready: true, page: "chat", tabs: []*conversation{conv}}
+	s := &conv.uiState().Search
+	s.Open, s.Query = true, "succ(succ(0))"
+	if got := a.chatSearchMatches(conv); len(got) != 1 {
+		t.Fatalf("first query matches=%+v, want one", got)
+	}
+	doc := parser.Parse(src)
+	index := -1
+	for i := 1; i < doc.Len(); i++ {
+		if doc.Block(i).Kind == parser.CodeBlock {
+			index = i
+			break
+		}
+	}
+	s.frameDoc, s.frameDocMessage = doc, 0
+	lines, _, oldSpans, ok := chatSearchCodeLines(s, 0, &markdown.CodeBlockView{Index: index})
+	if !ok || len(oldSpans) != 2 || len(oldSpans[0]) != 1 || lines[0][oldSpans[0][0][0]:oldSpans[0][0][1]] != "succ(succ(0))" {
+		t.Fatalf("first-query code spans=%v lines=%q ok=%v", oldSpans, lines, ok)
+	}
+	s.Query, s.frameKey = "succ(plus(a, b - 1))", ""
+	if got := a.chatSearchMatches(conv); len(got) != 1 {
+		t.Fatalf("second query matches=%+v, want one", got)
+	}
+	lines, _, newSpans, ok := chatSearchCodeLines(s, 0, &markdown.CodeBlockView{Index: index})
+	if !ok || len(newSpans) != 2 || len(newSpans[1]) != 1 || lines[1][newSpans[1][0][0]:newSpans[1][0][1]] != "succ(plus(a, b - 1))" {
+		t.Fatalf("second-query code spans=%v lines=%q ok=%v", newSpans, lines, ok)
+	}
+}
+
 // A line the parser padded for a tab it consumed must still report its source
 // offset, or the run the bar points at is looked for in the wrong place.
+func TestChatSearchCodeLineHighlightsEveryOccurrence(t *testing.T) {
+	src := "```python\n# 1 + 1 = 2; 1 + 1 = 2\n```\n"
+	doc := parser.Parse(src)
+	conv := searchTranscript(searchMessage("assistant", src))
+	s := &conv.uiState().Search
+	s.Open, s.Query = true, "1 + 1 = 2"
+	s.frameDoc, s.frameDocMessage = doc, 0
+	s.cache = chatSearchCompute(conv, s)
+	if len(s.cache) != 2 {
+		t.Fatalf("search matches = %+v, want two source matches", s.cache)
+	}
+	index := -1
+	for i := 1; i < doc.Len(); i++ {
+		if doc.Block(i).Kind == parser.CodeBlock {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		t.Fatal("code block was not parsed")
+	}
+	lines, starts, spans, ok := chatSearchCodeLines(s, 0, &markdown.CodeBlockView{Index: index})
+	if !ok || len(lines) != 1 || len(spans[0]) != 2 {
+		t.Fatalf("lines=%q starts=%v spans=%v ok=%v; want two highlighted occurrences", lines, starts, spans, ok)
+	}
+	for i, span := range spans[0] {
+		if got := lines[0][span[0]:span[1]]; got != s.Query {
+			t.Errorf("span %d covers %q, want %q", i, got, s.Query)
+		}
+		if got := src[starts[0]+span[0] : starts[0]+span[1]]; got != s.Query {
+			t.Errorf("span %d maps to source %q, want %q", i, got, s.Query)
+		}
+	}
+}
+
 func TestChatSearchCodePadCountsOnlyPadding(t *testing.T) {
 	src := "```\n\tif x {\n```\n"
 	at := strings.Index(src, "if x {\n")
