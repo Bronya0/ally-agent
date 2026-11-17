@@ -153,3 +153,4 @@
 2026-11-14 中危 tool-error 报错只报目标、不给处理方式，模型就原地重试同一个调用；错误文案带编码+可执行下一步。@internal/app
 2026-11-14 中危 ask-key 问题 id 由后端补成 q1/q2，两次提问重复；控件 key 与表单状态只用问题 id 就继承上次勾选和文字，须带 askID。@desktop/page_chat.go
 2026-11-14 中危 explorer-toggle 文件树开关换了滚动列表的父级，旧像素偏移失效；须重置 Y 并按跟随回底。@desktop/page_chat.go
+2026-11-16 中危 no-node 本机无 node/npm；node 类 CLI 用 HBuilderX 自带 plugins/node/node 兜底。@scripts
