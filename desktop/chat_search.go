@@ -666,6 +666,7 @@ func (a *desktop) chatSearchBar(c *ui.Context, t *conversation) {
 		if field.Changed() {
 			s.Current, s.waited = 0, 0
 			s.reveal = true
+			s.frameKey = ""
 		}
 		toggle := func(on *bool, label, tip string) {
 			b := ui.ToggleBase(c, on).Cursor(ui.CursorPointer).Padding(th.Space(0.5), th.Space(1.5)).Radius(th.Radius - 2).Label(tip).Tooltip(tip).KeepFocus().MinWidth(0)
@@ -689,7 +690,56 @@ func (a *desktop) chatSearchBar(c *ui.Context, t *conversation) {
 		mutedIconAction(c, t.ID+"-search-prev", locales.Text("上一个匹配"), "arrowup", 24, func() { a.chatSearchStep(t, -1) }).Shrink(0)
 		mutedIconAction(c, t.ID+"-search-next", locales.Text("下一个匹配"), "arrowdown", 24, func() { a.chatSearchStep(t, 1) }).Shrink(0)
 		mutedIconAction(c, t.ID+"-search-close", locales.Text("关闭查找（Esc）"), "close", 24, func() { a.closeChatSearch(t) }).Shrink(0)
+		if hit, ok := a.chatSearchCurrent(t); ok && hit.Message >= 0 && hit.Message < len(t.Messages) {
+			before, match, after := chatSearchExcerpt(str(t.Messages[hit.Message], "content"), hit.Start, hit.End)
+			if match != "" {
+				ui.RichText(c, ui.Span{Text: before}, ui.Span{Text: match, Background: th.Accent, Color: th.Background, Radius: 3}, ui.Span{Text: after}).
+					FontSize(th.FontSize - 2).TextColor(a.secondaryInk()).MaxWidthPercent(100)
+			}
+		}
 	})
+}
+
+// chatSearchExcerpt reads only a bounded amount around a hit, including for a
+// very large regexp match. Offsets may be stale while a message is streaming.
+func chatSearchExcerpt(text string, start, end int) (string, string, string) {
+	if start < 0 || end <= start || end > len(text) || !utf8.RuneStart(text[start]) || (end < len(text) && !utf8.RuneStart(text[end])) {
+		return "", "", ""
+	}
+	left := start
+	for n := 0; n < 20 && left > 0; n++ {
+		_, size := utf8.DecodeLastRuneInString(text[:left])
+		left -= size
+	}
+	middle := start
+	for n := 0; n < 48 && middle < end; n++ {
+		_, size := utf8.DecodeRuneInString(text[middle:end])
+		middle += size
+	}
+	right := end
+	for n := 0; n < 20 && right < len(text); n++ {
+		_, size := utf8.DecodeRuneInString(text[right:])
+		right += size
+	}
+	clean := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			if unicode.IsSpace(r) {
+				return ' '
+			}
+			return r
+		}, s)
+	}
+	before, match, after := clean(text[left:start]), clean(text[start:middle]), clean(text[end:right])
+	if left > 0 {
+		before = "…" + before
+	}
+	if middle < end {
+		match += "…"
+	}
+	if right < len(text) {
+		after += "…"
+	}
+	return before, match, after
 }
 
 // chatSearchMessageMatch reports whether a message holds a hit, so a message

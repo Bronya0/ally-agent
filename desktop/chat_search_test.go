@@ -21,6 +21,23 @@ func searchMessage(role, content string) map[string]any {
 	return map[string]any{"role": role, "content": content}
 }
 
+func TestChatSearchExcerpt(t *testing.T) {
+	text := strings.Repeat("前", 25) + "**关键字**\n" + strings.Repeat("后", 25)
+	start := strings.Index(text, "关键字")
+	before, match, after := chatSearchExcerpt(text, start, start+len("关键字"))
+	if before != "…"+strings.Repeat("前", 18)+"**" || match != "关键字" || after != "** "+strings.Repeat("后", 17)+"…" {
+		t.Fatalf("unexpected excerpt: %q %q %q", before, match, after)
+	}
+	if _, match, _ := chatSearchExcerpt(text, start+1, start+len("关键字")); match != "" {
+		t.Fatal("stale offset inside UTF-8 rune must be ignored")
+	}
+	long := strings.Repeat("字", 100)
+	_, match, _ = chatSearchExcerpt(long, 0, len(long))
+	if match != strings.Repeat("字", 48)+"…" {
+		t.Fatalf("long match was not bounded: %q", match)
+	}
+}
+
 // The bar searches the questions and the answers alike, in the order they
 // appear, so its arrows walk the transcript.
 func TestChatSearchFindsPromptsAndAnswers(t *testing.T) {
