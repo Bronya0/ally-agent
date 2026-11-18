@@ -171,6 +171,37 @@ def verify_archive(archive, goos, arch=None):
     print('Verified:', archive, flush=True)
 
 
+def place_build(source, target):
+    """Move a built file onto its fixed name, keeping a running build usable.
+
+    Windows refuses to overwrite a running executable but allows renaming it,
+    so the previous build is left as <name>~ and the new one takes the fixed
+    name; naming the build after a version instead would hide which file runs.
+    """
+    try:
+        os.replace(source, target)
+        return None
+    except PermissionError:
+        if not os.path.exists(target):
+            raise
+    aside = str(target) + '~'
+    try:
+        os.replace(target, aside)
+    except PermissionError:
+        aside = str(target) + '~' + str(os.getpid())
+        os.replace(target, aside)
+    try:
+        os.replace(source, target)
+    except OSError:
+        # Keep the previous build at its fixed name when the swap itself fails.
+        try:
+            os.replace(aside, target)
+        except OSError:
+            pass
+        raise
+    return aside
+
+
 def windows(config, exe_only=False, build_time=''):
     for arch in ((host_arch(),) if exe_only else ('amd64', 'arm64')):
         if build_time:
@@ -186,14 +217,13 @@ def windows_arch(config, arch, exe_only=False, build_time=''):
         compile_binary(config, 'windows', arch, exe, build_time)
         ripgrep('windows', arch, stage / 'tools/rg.exe')
         if exe_only:
-            # Never rename around an in-use fixed executable. os.replace fails clearly.
-            try:
-                os.replace(exe, DIST / 'ally-native.exe')
-            except PermissionError as error:
-                raise RuntimeError('dist/ally-native.exe is in use. Close Ally and rerun scripts/build.bat.') from error
+            target = DIST / 'ally-native.exe'
+            aside = place_build(exe, target)
             (DIST / 'tools').mkdir(exist_ok=True)
-            shutil.copy2(stage / 'tools/rg.exe', DIST / 'tools/rg.exe')
-            print('Built:', DIST / 'ally-native.exe')
+            place_build(stage / 'tools/rg.exe', DIST / 'tools/rg.exe')
+            print('Built:', target, flush=True)
+            if aside:
+                print('The previous build was running; it still is as:', aside, flush=True)
             return
         legal_files(stage)
         archive = RELEASE / ('Ally-' + release_tag(config) + '-windows-' + ('x64' if arch == 'amd64' else arch) + '.zip')
