@@ -261,7 +261,7 @@ func TestAnthropicStreamReplaysThinkingBlocks(t *testing.T) {
 		}
 		event("message_start", `{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10,"output_tokens":1}}}`)
 		if n == 1 {
-			event("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`)
+			event("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"开始。","signature":""}}`)
 			event("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"先思考一下。"}}`)
 			// Signature deltas arrive in chunks, and relays re-send the whole value in
 			// every delta. Both shapes must end up as one verbatim signature; appending
@@ -329,7 +329,7 @@ func TestAnthropicStreamReplaysThinkingBlocks(t *testing.T) {
 	if strings.Contains(second, "sig_abcsig_abc") || strings.Contains(second, `"signature":"sig_abcabc"`) {
 		t.Fatalf("a cumulative signature re-send must not be appended to the accumulated value: %s", second)
 	}
-	if !strings.Contains(second, `"thinking":"先思考一下。"`) {
+	if !strings.Contains(second, `"thinking":"开始。先思考一下。"`) {
 		t.Fatal("second Anthropic request must replay the thinking text")
 	}
 }

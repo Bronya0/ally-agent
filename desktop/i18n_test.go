@@ -4,6 +4,7 @@ package desktop
 import (
 	backend "ally-dev/internal/app"
 	"ally-dev/locales"
+	"fmt"
 	"os"
 	"testing"
 
@@ -14,8 +15,23 @@ import (
 // Existing behavioral fixtures describe the Chinese UI. Pin their language so
 // tests are independent of the developer's system and saved app language.
 func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "ally-desktop-test-home-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	for _, key := range []string{"HOME", "USERPROFILE"} {
+		if err := os.Setenv(key, home); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			_ = os.RemoveAll(home)
+			os.Exit(1)
+		}
+	}
+	_ = os.Unsetenv("ALLY_DATA_DIR")
 	i18n.SetLocaleFunc(func() string { return "zh-Hans" })
-	os.Exit(m.Run())
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
 }
 
 func useTestLocale(t *testing.T, tag string) {

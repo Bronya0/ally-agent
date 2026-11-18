@@ -60,6 +60,60 @@ func TestConfigConcurrentMutationsKeepEveryChange(t *testing.T) {
 	}
 }
 
+func TestNativeModelUpdatesUseLatestConfig(t *testing.T) {
+	a := configTransactionApp(t)
+	id := ModelIdentity{ProviderName: "provider", Model: "one"}
+	if err := a.SaveNativeModel(ModelConfig{ProviderName: id.ProviderName, Model: id.Model}, nil); err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- a.commitConfig(func(cfg *ConfigState) error {
+			cfg.Models = append(cfg.Models, ModelConfig{ProviderName: "provider", Model: "two"})
+			cfg.UserAgent = "concurrent"
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+	reasoningDone := make(chan error, 1)
+	go func() {
+		found, changed, err := a.SetNativeModelReasoning(id, "high")
+		if err == nil && (!found || !changed) {
+			err = fmt.Errorf("reasoning was not updated")
+		}
+		reasoningDone <- err
+	}()
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-reasoningDone; err != nil {
+		t.Fatal(err)
+	}
+	added, updated, err := a.ImportNativeModels([]ModelConfig{{ProviderName: "provider", Model: "three"}})
+	if err != nil || added != 1 || updated != 0 {
+		t.Fatalf("import: %d/%d, %v", added, updated, err)
+	}
+	cfg, err := a.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Models) != 3 || cfg.Models[0].ReasoningEffort != "high" || cfg.UserAgent != "concurrent" {
+		t.Fatalf("lost a config update: %+v", cfg)
+	}
+	found, changed, err := a.SetNativeModelReasoning(id, "high")
+	if err != nil || !found || changed {
+		t.Fatalf("unchanged: %v %v %v", found, changed, err)
+	}
+	found, changed, err = a.SetNativeModelReasoning(ModelIdentity{Model: "missing"}, "high")
+	if err != nil || found || changed {
+		t.Fatalf("missing: %v %v %v", found, changed, err)
+	}
+}
+
 func TestConfigFailedWriteDoesNotPublish(t *testing.T) {
 	a := configTransactionApp(t)
 	if err := a.setDisabledSkills([]string{"original"}); err != nil {

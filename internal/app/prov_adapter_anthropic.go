@@ -141,7 +141,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 					}
 				case "thinking":
 					blockThinkingIdx[ev.Index] = len(thinkingBlocks)
-					thinkingBlocks = append(thinkingBlocks, anthropicThinkingBlock{Signature: block.Signature})
+					thinkingBlocks = append(thinkingBlocks, anthropicThinkingBlock{Thinking: block.Thinking, Signature: block.Signature})
 					if block.Thinking != "" {
 						reasoning.WriteString(block.Thinking)
 						emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: block.Thinking})

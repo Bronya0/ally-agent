@@ -297,3 +297,66 @@ func TestRemoteHostKeyChangeWithoutSessionAlsoUpdatesRecord(t *testing.T) {
 		t.Errorf("call without a session did not record the new fingerprint: %s", record)
 	}
 }
+func TestRemoteCallsReuseSSHConnection(t *testing.T) {
+	signer := hostKeyTestSigner(t)
+	server := startHostKeyTestServer(t, signer)
+	address := net.JoinHostPort("127.0.0.1", server.port)
+	app := hostKeyTestApp(t, signer.PublicKey(), address)
+	t.Cleanup(app.sshPool.Close)
+	app.sshCredentials.store(sshCredentialKey("127.0.0.1", server.port), sshAuthTypePassword, "pw", "")
+	rt := remoteTarget{Host: "127.0.0.1", Port: server.port}
+	for i := 0; i < 2; i++ {
+		var out map[string]any
+		err := app.invokeRemotePython(context.Background(), rt, map[string]any{"op": "read"}, 10*time.Second, &out)
+		if err == nil || !strings.Contains(err.Error(), "remote helper returned no JSON result") {
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+	if got := server.connections.Load(); got != 1 {
+		t.Fatalf("connections = %d, want 1", got)
+	}
+}
+func TestSSHNodeTestAndRemoteUseSamePassword(t *testing.T) {
+	signer := hostKeyTestSigner(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	cfg := &ssh.ServerConfig{PasswordCallback: func(_ ssh.ConnMetadata, pw []byte) (*ssh.Permissions, error) {
+		if string(pw) != "valid-password" {
+			return nil, errors.New("invalid password")
+		}
+		return nil, nil
+	}}
+	cfg.AddHostKey(signer)
+	go func() {
+		for {
+			c, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go serveHostKeyTestConnection(c, cfg)
+		}
+	}()
+	port := listener.Addr().(*net.TCPAddr).Port
+	app := hostKeyTestApp(t, signer.PublicKey(), listener.Addr().String())
+	t.Cleanup(app.sshPool.Close)
+	node := SSHServerNode{Alias: "47", Host: "127.0.0.1", Port: port, Username: "root", AuthType: "password", Password: "valid-password", Description: "test"}
+	if err := app.SaveSSHServer(node); err != nil {
+		t.Fatal(err)
+	}
+	node, _ = app.GetSSHServer("47")
+	if result := app.TestSSHServer(node); !result.OK {
+		t.Fatalf("node test failed: %s", result.Error)
+	}
+	rt, err := app.resolveAndAuthorizeRemoteTarget(context.Background(), "47")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	err = app.invokeRemotePython(context.Background(), rt, map[string]any{"op": "read"}, 10*time.Second, &out)
+	if err == nil || !strings.Contains(err.Error(), "remote helper returned no JSON result") {
+		t.Fatalf("remote tool did not reach server with same password: %v", err)
+	}
+}

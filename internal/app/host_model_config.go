@@ -3,10 +3,64 @@ package app
 
 import (
 	"ally-dev/locales"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 )
+
+var errNativeModelUnchanged = errors.New("model unchanged")
+
+// SetNativeModelReasoning applies the change to the latest committed model.
+func (a *App) SetNativeModelReasoning(id ModelIdentity, level string) (bool, bool, error) {
+	if err := a.ensureInitialized(); err != nil {
+		return false, false, err
+	}
+	found := false
+	err := a.commitConfig(func(cfg *ConfigState) error {
+		index := nativeModelIndex(cfg.Models, id)
+		if index < 0 {
+			return errNativeModelUnchanged
+		}
+		found = true
+		stored := cfg.Models[index].ReasoningEffort
+		if stored == "" {
+			stored = "auto"
+		}
+		if stored == level {
+			return errNativeModelUnchanged
+		}
+		cfg.Models[index].ReasoningEffort = level
+		return nil
+	})
+	if errors.Is(err, errNativeModelUnchanged) {
+		return found, false, nil
+	}
+	return found, err == nil, err
+}
+
+// ImportNativeModels merges each imported identity into the latest registry.
+func (a *App) ImportNativeModels(models []ModelConfig) (int, int, error) {
+	if err := a.ensureInitialized(); err != nil {
+		return 0, 0, err
+	}
+	models = cloneConfig(ConfigState{Models: models}).Models
+	added, updated := 0, 0
+	err := a.commitConfig(func(cfg *ConfigState) error {
+		for _, model := range models {
+			index := nativeModelIndex(cfg.Models, identityOfModel(model))
+			if index < 0 {
+				cfg.Models = append(cfg.Models, model)
+				added++
+			} else {
+				cfg.Models[index] = model
+				updated++
+			}
+		}
+		return nil
+	})
+	return added, updated, err
+}
 
 func nativeSameModel(a, b ModelIdentity) bool {
 	return strings.EqualFold(strings.TrimSpace(a.ProviderName), strings.TrimSpace(b.ProviderName)) && strings.EqualFold(strings.TrimSpace(a.Model), strings.TrimSpace(b.Model)) && a.OAuthAccountID == b.OAuthAccountID

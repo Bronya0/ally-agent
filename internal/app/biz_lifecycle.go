@@ -169,6 +169,9 @@ func (a *App) stopRuntime(timeout time.Duration) error {
 	if manager := a.activeMcpManager(); manager != nil {
 		manager.AbandonForExit()
 	}
+	if a.sshPool != nil {
+		a.sshPool.Close()
+	}
 	if a.runtime.cancel != nil {
 		a.runtime.cancel()
 	}

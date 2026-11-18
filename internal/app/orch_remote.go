@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -21,6 +22,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -165,6 +167,16 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 
 	// 工作区授权通过后将凭据绑定到本次解析结果，避免同端点节点互相覆盖。
 	if isRegistered {
+		// Pair the node snapshot and its pool generation under the configuration lock.
+		a.sshClustersMu.RLock()
+		current, exists := a.sshClusters[serverNode.ID]
+		if !exists || !reflect.DeepEqual(current, serverNode) {
+			a.sshClustersMu.RUnlock()
+			return remoteTarget{}, errors.New("SSH node changed; retry the operation")
+		}
+		rt.poolKey = "node:" + serverNode.ID
+		rt.poolVersion = a.sshPool.Version(rt.poolKey)
+		a.sshClustersMu.RUnlock()
 		rt.credential = &sshCredentialEntry{authType: normalizeSSHAuthType(serverNode), password: serverNode.Password, keyPath: serverNode.KeyPath}
 	}
 
@@ -268,14 +280,19 @@ var errRemoteScriptTimeout = errors.New("remote ssh timed out")
 
 // runRemoteScriptOnce 执行一次远端 Python helper 调用。超时预算按单次调用计算：
 // 指纹记录被替换后的重试要重新拿到完整预算，不能共用上一次已经耗掉的额度。
-func runRemoteScriptOnce(ctx context.Context, sshConfig sshclient.Config, script string, timeout time.Duration) (sshclient.Result, error) {
+func (a *App) runRemoteScriptOnce(ctx context.Context, rt remoteTarget, sshConfig sshclient.Config, script string, timeout time.Duration) (sshclient.Result, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	const remotePythonCommand = "sh -c 'command -v python3 >/dev/null 2>&1 && exec python3 - ; command -v python2 >/dev/null 2>&1 && exec python2 - ; exec python -'"
-	result, err := sshclient.Run(runCtx, sshConfig, remotePythonCommand, strings.NewReader(script))
+	key, version := a.remotePoolIdentity(rt, sshConfig)
+	result, err := a.sshPool.Run(runCtx, key, version, sshConfig, remotePythonCommand, strings.NewReader(script))
 	if runCtx.Err() == context.DeadlineExceeded {
-		return result, fmt.Errorf("%w after %s", errRemoteScriptTimeout, timeout)
+		timeoutErr := fmt.Errorf("%w after %s", errRemoteScriptTimeout, timeout)
+		if errors.Is(err, sshclient.ErrResultUnknown) {
+			return result, errors.Join(timeoutErr, sshclient.ErrResultUnknown)
+		}
+		return result, timeoutErr
 	}
 	return result, err
 }
@@ -313,7 +330,7 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 	// 指纹不一致由 refreshHostKeyAndRetry 直接换记录并重连，这里拿到的要么是成功结果，
 	// 要么是分类上报的失败。
 	result, err := refreshHostKeyAndRetry(func() (sshclient.Result, error) {
-		return runRemoteScriptOnce(ctx, sshConfig, script, timeout)
+		return a.runRemoteScriptOnce(ctx, rt, sshConfig, script, timeout)
 	})
 	stdout := result.Stdout
 	stderr := result.Stderr
@@ -328,6 +345,9 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 	}
 	if errors.Is(err, sshclient.ErrOutputTooLarge) {
 		return fmt.Errorf("ssh %s failed: remote helper output exceeded the capture limit: %w", rt.Host, err)
+	}
+	if errors.Is(err, sshclient.ErrResultUnknown) {
+		return fmt.Errorf("ssh %s: %w", rt.Host, err)
 	}
 	if errors.Is(err, context.Canceled) {
 		return err
@@ -1296,6 +1316,7 @@ func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, acti
 		entry = *rt.credential
 	}
 	sshConfig := a.remoteSSHConfig(rt, entry)
+	poolKey, poolVersion := a.remotePoolIdentity(rt, sshConfig)
 
 	var outcome struct {
 		TotalBytes int64 `json:"totalBytes"`
@@ -1326,7 +1347,7 @@ func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, acti
 				})
 			}()
 
-			stderr, err := sshclient.RunStream(ctx, sshConfig, remoteCmd, pr, nil)
+			stderr, err := a.sshPool.RunStream(ctx, poolKey, poolVersion, sshConfig, remoteCmd, pr, nil)
 			if err != nil {
 				_ = pr.CloseWithError(err)
 			} else {
@@ -1382,7 +1403,7 @@ func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, acti
 				}
 			}()
 
-			stderr, err := sshclient.RunStream(ctx, sshConfig, remoteCmd, nil, pw)
+			stderr, err := a.sshPool.RunStream(ctx, poolKey, poolVersion, sshConfig, remoteCmd, nil, pw)
 			if err != nil {
 				_ = pw.CloseWithError(err)
 			} else {
@@ -1422,4 +1443,16 @@ func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, acti
 		FileCount:  outcome.FileCount,
 		DirCount:   outcome.DirCount,
 	}, nil
+}
+
+// Direct endpoints have no stable node identity; hash their effective configuration
+// so credentials never appear in pool keys or leak across authentication modes.
+func (a *App) remotePoolIdentity(rt remoteTarget, cfg sshclient.Config) (string, uint64) {
+	if rt.poolKey != "" {
+		return rt.poolKey, rt.poolVersion
+	}
+	raw, _ := json.Marshal(cfg)
+	digest := sha256.Sum256(raw)
+	key := fmt.Sprintf("direct:%x", digest)
+	return key, a.sshPool.Version(key)
 }

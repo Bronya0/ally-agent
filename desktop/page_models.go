@@ -1027,24 +1027,25 @@ func (a *desktop) importModels() {
 		}
 
 		a.win.Update(func() {
-			cfg := a.config
-			added, updated := 0, 0
-			for _, m := range models {
-				replaced := false
-				for i := range cfg.Models {
-					if sameModelIdentity(modelIdentity(cfg.Models[i]), modelIdentity(m)) {
-						cfg.Models[i] = m
-						replaced = true
-						updated++
-						break
+			previous, done := a.configWriteSlot()
+			go func() {
+				defer close(done)
+				waitConfigWrite(previous)
+				added, updated, err := a.core.ImportNativeModels(models)
+				a.writeFailures.record("config", err)
+				var fresh backend.ConfigState
+				if err == nil {
+					fresh, err = a.core.GetConfig()
+				}
+				a.win.Update(func() {
+					if err != nil {
+						a.notifyError(err.Error())
+						return
 					}
-				}
-				if !replaced {
-					cfg.Models = append(cfg.Models, m)
-					added++
-				}
-			}
-			a.saveConfig(cfg, fmt.Sprintf(locales.Text("导入完成：新增 %d 个，更新 %d 个"), added, updated))
+					a.config = fresh
+					a.notifySuccess(fmt.Sprintf(locales.Text("导入完成：新增 %d 个，更新 %d 个"), added, updated))
+				})
+			}()
 		})
 	}()
 }

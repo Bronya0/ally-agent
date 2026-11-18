@@ -31,6 +31,7 @@ import (
 	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/schemautil"
 	toolshared "ally-dev/internal/tools/shared"
+	"ally-dev/internal/tools/sshclient"
 	"ally-dev/internal/tools/toolcall"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -318,6 +319,7 @@ type App struct {
 	// in the SSH cluster manager) when a remote tool targets a registered alias;
 	// keys are lowercase user@host[:port]. See orch_ssh_cluster.go.
 	sshCredentials *sshCredentialCache
+	sshPool        *sshclient.Pool
 
 	// sshKnownHostsPath 覆盖 SSH 主机指纹记录文件的位置；为空时用系统默认的
 	// ~/.ssh/known_hosts。存在的意义是让测试能在临时目录里跑完整的
@@ -478,6 +480,7 @@ func newAppState(dataDir string) *App {
 		sessionToolsets:      map[string][]openai.Tool{},
 		pendingAsks:          map[string]*pendingAsk{},
 		sshCredentials:       newSSHCredentialCache(),
+		sshPool:              sshclient.NewPool(),
 		sshClusters:          map[string]SSHServerNode{},
 		sshWorkspaceAllowed:  map[string]map[string]bool{},
 		subRuns:              map[string]*SubagentRun{},
@@ -1320,10 +1323,12 @@ type RemoteRunCommandRequest struct {
 }
 
 type remoteTarget struct {
-	Raw        string
-	Host       string
-	Port       string
-	credential *sshCredentialEntry
+	poolKey     string
+	poolVersion uint64
+	Raw         string
+	Host        string
+	Port        string
+	credential  *sshCredentialEntry
 }
 
 type remoteRawFile struct {

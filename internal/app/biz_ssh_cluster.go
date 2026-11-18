@@ -600,6 +600,10 @@ func (a *App) storeSSHServerSnapshotLocked(alias string, node SSHServerNode, aut
 		}
 		return SSHServerNode{}, err
 	}
+	// A successful edit invalidates old authenticated transports.
+	if updating {
+		a.sshPool.Invalidate("node:" + previous.ID)
+	}
 	// Invalidate both endpoints, including when the nickname was changed.
 	if updating {
 		a.sshCredentials.purgeHost(nodeSSHHost(previous))
@@ -668,6 +672,7 @@ func (a *App) deleteSSHServerLocked(ref string) error {
 		return err
 	}
 	a.sshCredentials.purgeHost(nodeSSHHost(previous))
+	a.sshPool.Invalidate("node:" + previous.ID)
 	return nil
 }
 

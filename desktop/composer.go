@@ -1169,19 +1169,28 @@ func (a *desktop) writeReasoning(model, level string) (backend.ConfigState, reas
 	if err != nil {
 		return backend.ConfigState{}, reasoningSaved, err
 	}
-	next, changed := withModelReasoning(cfg, model, level)
-	if !changed {
-		// withModelReasoning also reports nothing to change for a model that is
-		// gone; telling the two apart keeps a stale Tab from looking saved.
-		if _, found := modelReasoning(cfg, model); !found {
-			return cfg, reasoningMissing, nil
+	var id *backend.ModelIdentity
+	for _, entry := range cfg.Models {
+		if modelOption(entry) == model {
+			value := modelIdentity(entry)
+			id = &value
+			break
 		}
-		return cfg, reasoningUnchanged, nil
 	}
-	if err := a.core.SaveConfig(next); err != nil {
+	if id == nil {
+		return cfg, reasoningMissing, nil
+	}
+	found, changed, err := a.core.SetNativeModelReasoning(*id, level)
+	if err != nil {
 		return backend.ConfigState{}, reasoningSaved, err
 	}
 	fresh, err := a.core.GetConfig()
+	if !found {
+		return fresh, reasoningMissing, err
+	}
+	if !changed {
+		return fresh, reasoningUnchanged, err
+	}
 	return fresh, reasoningSaved, err
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -17,6 +18,9 @@ import (
 func TestWorkspaceHistoryMergesVisitsAndLegacySessions(t *testing.T) {
 	root := t.TempDir()
 	visited := filepath.Join(root, "visited")
+	if err := os.Mkdir(visited, 0700); err != nil {
+		t.Fatal(err)
+	}
 	newerSession := filepath.Join(root, "newer-session")
 	legacy := filepath.Join(root, "legacy")
 	temporary := filepath.Join(root, "ally-temp-test")
@@ -238,10 +242,17 @@ func TestWorkspaceRemovalKeepsSessionsItCouldNotDelete(t *testing.T) {
 // Deleting the history of the workspace in use has to stick: activating its tab
 // records the visit again, which used to put the entry straight back.
 func TestDeletedWorkspaceStaysOutWhileItsTabIsOpen(t *testing.T) {
-	a := &desktop{core: backend.NewApp(), prefs: defaultPrefs()}
 	t.Setenv("ALLY_DATA_DIR", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
+	a := &desktop{core: backend.NewApp(), prefs: defaultPrefs()}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := waitWindowWrites(ctx, []<-chan struct{}{a.prefsSaveTail}, &a.writeFailures); err != nil {
+			t.Error(err)
+		}
+	})
 	root := t.TempDir()
 	a.newConversation(root)
 	if got := a.workspaceHistoryRoots(); len(got) != 1 {
