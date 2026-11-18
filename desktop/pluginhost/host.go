@@ -96,8 +96,11 @@ func (h *Host) schedule() {
 }
 func (h *Host) Page(id string) (*mygo.WebView, error) {
 	if p := h.pages[id]; p != nil && p.surface != nil {
-		if !p.surface.IsDestroyed() {
+		if !p.surface.IsDestroyed() && p.ready {
 			return p.view, nil
+		}
+		if !p.surface.IsDestroyed() {
+			return nil, nil
 		}
 		h.schedule()
 		return nil, errors.New(locales.Text("插件页面已失效，请重新加载"))
@@ -106,6 +109,12 @@ func (h *Host) Page(id string) (*mygo.WebView, error) {
 		return nil, errors.New(h.failure)
 	}
 	return nil, nil
+}
+
+func (h *Host) markPageReady(p *page) {
+	if !h.closed && h.pages[p.info.ID] == p {
+		p.ready = true
+	}
 }
 func (h *Host) Reload(id string) {
 	if h.closed {
@@ -199,6 +208,12 @@ func (h *Host) watchPage(p *page) {
 		p.surface.OnDidFailLoad(func(err *mygo.LoadError) { fail(errors.New(locales.Text("页面加载失败：") + err.Error())) }),
 		p.surface.OnRenderProcessGone(func(reason string) { fail(errors.New(locales.Text("页面进程已退出：") + reason)) }),
 	)
+	// A plugin may never resolve mount. Reveal it eventually so that its own
+	// loading or error UI stays usable; cancellation prevents stale callbacks.
+	timer := time.AfterFunc(5*time.Second, func() {
+		h.post(func() { h.markPageReady(p) })
+	})
+	p.off = append(p.off, func() { timer.Stop() })
 	// WebView2 can fail after NewWebView returns without a load-failure event.
 	// Probe asynchronously, with a hard bound, and never mutate UI state here.
 	surface, lifetime := p.surface, p.ctx

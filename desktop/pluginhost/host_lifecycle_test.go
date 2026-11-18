@@ -4,6 +4,7 @@ package pluginhost
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,43 @@ import (
 	backend "ally-dev/internal/app"
 	"github.com/egoist/mygo"
 )
+
+func TestPluginReadySignalRequiresCurrentPage(t *testing.T) {
+	h, info, workspace, queue := queuedPluginHost(t)
+	p := fakeServerPage(t, h, info, workspace, &fakePluginSurface{})
+	h.pages = map[string]*page{info.ID: p}
+	send := func(token string) int {
+		req, _ := http.NewRequest(http.MethodPost, p.url+"/ready", nil)
+		req.Header.Set("Origin", p.url)
+		req.Header.Set("X-Ally-Plugin", token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := send("wrong"); code != http.StatusForbidden {
+		t.Fatalf("invalid token: %d", code)
+	}
+	if p.ready {
+		t.Fatal("page became ready without authorization")
+	}
+	if code := send(p.token); code != http.StatusNoContent {
+		t.Fatalf("ready: %d", code)
+	}
+	pumpPluginUI(t, queue, func() bool { return p.ready })
+	p.ready = false
+	delete(h.pages, info.ID)
+	if code := send(p.token); code != http.StatusNoContent {
+		t.Fatalf("late ready: %d", code)
+	}
+	(<-queue)()
+	if p.ready {
+		t.Fatal("retired page became ready")
+	}
+	p.closeResources()
+}
 
 type fakePluginSurface struct {
 	eval                   func(context.Context, string) (any, error)

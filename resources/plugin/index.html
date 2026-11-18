@@ -21,4 +21,5 @@ mounting=mountPlugin(pluginConfig.plugin,document.getElementById('plugin'),plugi
 try {const next=await mounting;
 if(!disposed){handle=next;lastActive=active;handle.setActive(active);}}
 catch(e){if(!disposed)document.getElementById('plugin').textContent=String(e.message||e);}
+if(!disposed)fetch('/ready',{method:'POST',headers:{'X-Ally-Plugin':pluginConfig.token}}).catch(()=>{});
 </script></body></html>

@@ -52,6 +52,7 @@ type page struct {
 	changed      chan struct{}
 	closed       bool
 	used         uint64
+	ready        bool // UI thread only
 }
 
 func pluginRelativePath(raw string) (string, error) {
@@ -239,6 +240,14 @@ func (h *Host) newServer(info backend.PluginInfo, workspace string, state Theme)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/rpc", func(w http.ResponseWriter, r *http.Request) { p.rpc(h, w, r) })
 	mux.HandleFunc("/events", p.serveEvents)
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("X-Ally-Plugin") != p.token || r.Header.Get("Origin") != p.url {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		h.post(func() { h.markPageReady(p) })
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("/config.js", func(w http.ResponseWriter, r *http.Request) {
 		p.mu.Lock()
 		s := p.state
