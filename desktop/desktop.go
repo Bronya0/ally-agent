@@ -1203,7 +1203,7 @@ func (a *desktop) openSession(id string) {
 		}
 		// Only replace a cleaned temporary workspace. Never silently route a
 		// missing project to a different directory.
-		if info, statErr := os.Stat(s.Workspace); (s.Workspace == "" || strings.HasPrefix(filepath.Base(s.Workspace), "ally-temp-")) && (statErr != nil || !info.IsDir()) {
+		if info, statErr := os.Stat(s.Workspace); (s.Workspace == "" || tempWorkspace(s.Workspace)) && (statErr != nil || !info.IsDir()) {
 			root, tempErr := a.core.CreateTempWorkspace()
 			if tempErr != nil {
 				a.fail(tempErr)
