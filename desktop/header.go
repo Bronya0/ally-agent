@@ -380,8 +380,8 @@ func moveOpenConversationTabToIndex(tabs []*conversation, positions []tabPositio
 	return active, motions, true
 }
 
-// Header history always creates a fresh tab, matching main's onHistorySelect.
-// The sidebar keeps its separate switch-to-workspace behavior.
+// openWorkspaceEntry opens a workspace every entry point shares: the header
+// menu and the rail's workspace rows both land on this one function.
 func (a *desktop) openWorkspaceEntry(workspace string) { a.newConversation(workspace) }
 
 // Both workspace entries share the same menu builder. Their open flags belong
