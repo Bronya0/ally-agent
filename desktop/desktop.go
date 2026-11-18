@@ -281,6 +281,11 @@ type desktop struct {
 	workspaceVisitsRev uint64
 	wsRootsMemo        memoOf[workspaceHistoryKey, []string]
 	wsSessionMemo      memoOf[workspaceSessionKey, []backend.SessionIndexEntry]
+	// hiddenWorkspaces keeps a deleted workspace out of the history while a tab
+	// still shows it: activating that tab re-registers the visit, so deleting the
+	// history of the workspace in use looked like it had not worked. Adding the
+	// workspace again clears the mark, and it lives no longer than the window.
+	hiddenWorkspaces map[string]bool
 	// The session rail draws the rows in view through a list, so their place
 	// survives sessions coming and going. Another workspace's sessions replace
 	// them as a whole, and the list starts afresh.
@@ -814,7 +819,7 @@ func (a *desktop) chooseWorkspace() {
 			return
 		}
 		if p != "" {
-			a.win.Update(func() { a.config.Workspace = p; a.newConversation(p) })
+			a.win.Update(func() { a.showWorkspaceVisit(p); a.config.Workspace = p; a.newConversation(p) })
 		}
 	}()
 }
@@ -1241,6 +1246,7 @@ func (a *desktop) showSession(next *conversation) {
 	if a.page == "models" {
 		a.cancelOAuthWhenLeaving()
 	}
+	reuse := -1
 	for i, t := range a.tabs {
 		if t.ID == next.ID {
 			a.page = "chat"
@@ -1250,9 +1256,29 @@ func (a *desktop) showSession(next *conversation) {
 			a.refreshGit(t)
 			return
 		}
-		if next.Model == "" && strings.EqualFold(t.Workspace, next.Workspace) {
+		if !sameWorkspace(t.Workspace, next.Workspace) {
+			continue
+		}
+		if next.Model == "" {
 			next.Model = t.Model
 		}
+		if i == a.active && blankTab(t) {
+			reuse = i
+		}
+	}
+	// A saved session takes over the blank tab of its own workspace: a
+	// conversation with nothing sent yet has nothing to keep, and leaving it
+	// beside the session it opened made one project read as two workspaces.
+	if reuse >= 0 {
+		a.discardBlankTab(a.tabs[reuse])
+		a.hideFilePreview()
+		a.tabs[reuse] = next
+		a.page = "chat"
+		a.activateTab(reuse)
+		a.refreshFiles()
+		a.refreshSessionFooter(next)
+		a.refreshGit(next)
+		return
 	}
 	a.tabs = append(a.tabs, next)
 	a.page = "chat"
@@ -1260,6 +1286,31 @@ func (a *desktop) showSession(next *conversation) {
 	a.refreshFiles()
 	a.refreshSessionFooter(next)
 	a.refreshGit(next)
+}
+
+// blankTab reports a conversation that holds nothing yet: no message, no draft,
+// no attachment waiting to be sent and no work in flight. Its tab can carry the
+// session the user opens in its place.
+func blankTab(t *conversation) bool {
+	if t.Busy || t.uiState().CompactBusy || t.AttachmentLoading {
+		return false
+	}
+	if len(t.Messages) > 0 || t.Draft != "" {
+		return false
+	}
+	return len(t.PendingAttachments) == 0 && len(t.PendingAttachmentImages) == 0
+}
+
+// discardBlankTab releases what the replaced conversation still holds; the tab
+// itself stays and shows the session loaded into it.
+func (a *desktop) discardBlankTab(t *conversation) {
+	if a.openSessions[t.ID] == t {
+		delete(a.openSessions, t.ID)
+	}
+	releaseCommandDetails(t)
+	a.releaseSessionHTMLPreviews(t.ID)
+	a.releaseAttachmentImages(t)
+	a.forgetAttachmentImageCache(t.ID)
 }
 
 // onEvent is wired to the backend event sink; the dispatcher lives in

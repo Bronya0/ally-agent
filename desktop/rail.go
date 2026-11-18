@@ -309,28 +309,49 @@ func (a *desktop) removeWorkspaceHistory(root string) {
 	}
 	ids := a.workspaceSessionIDs(root)
 	if len(ids) == 0 {
-		a.forgetWorkspaceVisit(root)
+		// Nothing saved to delete, but the entry is still the record of having
+		// worked there, so it goes through the same confirmation.
+		a.confirmAction(locales.Text("删除历史记录"), fmt.Sprintf(locales.Text("将从历史中移除 %s。该工作区没有已保存的会话。"), workspaceLabel(root)), func() error {
+			return nil
+		}, func() {
+			a.hideWorkspaceVisit(root)
+		})
 		return
 	}
-	var failures []string
+	var deleted, failures []string
 	a.confirmAction(locales.Text("删除历史记录"), fmt.Sprintf(locales.Text("%s 的 %d 个会话将被永久删除，无法恢复。正在运行或压缩中的会话会跳过。"), workspaceLabel(root), len(ids)), func() error {
-		failures = failures[:0]
-		for _, id := range ids {
-			if err := a.core.DeleteSession(id); err != nil {
-				failures = append(failures, err.Error())
-			}
-		}
+		deleted, failures = a.deleteWorkspaceSessions(ids, a.core.DeleteSession)
 		return nil
 	}, func() {
-		a.forgetSessions(ids)
-		a.reloadSessions()
-		if len(failures) > 0 {
-			a.notifyError(fmt.Sprintf(locales.Text("已删除 %d 个会话，%d 个未能删除：%s"), len(ids)-len(failures), len(failures), strings.Join(failures, "；")))
-			return
-		}
-		a.forgetWorkspaceVisit(root)
-		a.notifySuccess(fmt.Sprintf(locales.Text("已删除 %d 个会话"), len(ids)))
+		a.applyWorkspaceRemoval(root, deleted, failures)
 	})
+}
+
+// deleteWorkspaceSessions removes what the backend accepts and reports both
+// lists. A running or compacting session is refused there, and the caller must
+// keep it: counting it as deleted blanked a tab whose transcript still exists.
+func (a *desktop) deleteWorkspaceSessions(ids []string, remove func(string) error) (deleted, failures []string) {
+	for _, id := range ids {
+		if err := remove(id); err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		deleted = append(deleted, id)
+	}
+	return deleted, failures
+}
+
+// applyWorkspaceRemoval forgets only the sessions that were deleted, and the
+// workspace entry itself once none of its sessions are left.
+func (a *desktop) applyWorkspaceRemoval(root string, deleted, failures []string) {
+	a.forgetSessions(deleted)
+	a.reloadSessions()
+	if len(failures) > 0 {
+		a.queueNotice(fmt.Sprintf(locales.Text("已删除 %d 个会话，%d 个未能删除：%s"), len(deleted), len(failures), strings.Join(failures, "；")), "error")
+		return
+	}
+	a.hideWorkspaceVisit(root)
+	a.queueNotice(fmt.Sprintf(locales.Text("已删除 %d 个会话"), len(deleted)), "success")
 }
 
 // workspaceSessionIDs lists every session recorded under root. It walks the

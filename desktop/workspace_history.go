@@ -44,14 +44,23 @@ func workspaceHistoryRoots(recent []string, sessions []backend.SessionIndexEntry
 
 func (a *desktop) workspaceHistoryRoots() []string {
 	return a.wsRootsMemo.get(workspaceHistoryKey{a.sessRev, a.workspaceVisitsRev}, func(workspaceHistoryKey) []string {
-		return workspaceHistoryRoots(a.prefs.RecentWorkspaces, a.sessions)
+		roots := workspaceHistoryRoots(a.prefs.RecentWorkspaces, a.sessions)
+		visible := roots[:0]
+		for _, root := range roots {
+			if !a.workspaceHidden(root) {
+				visible = append(visible, root)
+			}
+		}
+		clear(roots[len(visible):])
+		return visible
 	})
 }
 
 // rememberWorkspace runs at the shared tab activation entry, covering folder
 // selection, history, restored sessions and switches back to an existing tab.
+// A workspace whose history was deleted stays out while a tab still shows it.
 func (a *desktop) rememberWorkspace(root string) {
-	if a.closing || !historyWorkspace(root) {
+	if a.closing || !historyWorkspace(root) || a.workspaceHidden(root) {
 		return
 	}
 	recent := a.prefs.RecentWorkspaces
@@ -82,4 +91,34 @@ func (a *desktop) forgetWorkspaceVisit(root string) {
 	a.prefs.RecentWorkspaces = roots
 	a.workspaceVisitsRev++
 	a.savePrefs()
+}
+
+// hideWorkspaceVisit forgets the visit and marks the workspace so the tab still
+// showing it cannot record the visit again. Without the mark, activating that tab
+// put the entry straight back: deleting the history of the workspace in use
+// looked like it had done nothing.
+func (a *desktop) hideWorkspaceVisit(root string) {
+	if key := workspaceKey(root); key != "" {
+		if a.hiddenWorkspaces == nil {
+			a.hiddenWorkspaces = map[string]bool{}
+		}
+		if !a.hiddenWorkspaces[key] {
+			a.hiddenWorkspaces[key] = true
+			a.workspaceVisitsRev++
+		}
+	}
+	a.forgetWorkspaceVisit(root)
+}
+
+// showWorkspaceVisit drops that mark when the user adds the workspace again.
+func (a *desktop) showWorkspaceVisit(root string) {
+	key := workspaceKey(root)
+	if a.hiddenWorkspaces[key] {
+		delete(a.hiddenWorkspaces, key)
+		a.workspaceVisitsRev++
+	}
+}
+
+func (a *desktop) workspaceHidden(root string) bool {
+	return a.hiddenWorkspaces[workspaceKey(root)]
 }

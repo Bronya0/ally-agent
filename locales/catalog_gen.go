@@ -17165,3 +17165,13 @@ func Ui56b3909705f3() string { return In(i18n.Locale()).Ui56b3909705f3() }
 func (msgs Messages) Ui56b3909705f3() string {
 	return Catalog.Format(msgs.locale, "ui_56b3909705f3", nil)
 }
+
+// Ui7304e809e016 says "%s will be removed from the history. This workspace has no saved conversations."
+// in the language the app shows.
+func Ui7304e809e016() string { return In(i18n.Locale()).Ui7304e809e016() }
+
+// Ui7304e809e016 says "%s will be removed from the history. This workspace has no saved conversations."
+// in the language of msgs.
+func (msgs Messages) Ui7304e809e016() string {
+	return Catalog.Format(msgs.locale, "ui_7304e809e016", nil)
+}

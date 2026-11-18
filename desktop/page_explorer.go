@@ -34,6 +34,13 @@ func normalizeExplorerPath(path string) string {
 	return strings.TrimPrefix(path, "./")
 }
 
+// editorShown reports whether the file panel shows the code editor rather than a
+// preview. Only then does the editor own the find shortcut: every preview kind
+// draws its own view and the editor's bar would be built behind it.
+func editorShown(file *workspaceFile) bool {
+	return file != nil && file.PreviewPath == "" && file.PreviewHTML == "" && file.Document == nil && !file.MarkupPreview
+}
+
 func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 	kind := workspaceFileKindForPath(file.Path)
 	ui.Column(c).Grow(1).MinWidth(0).BorderWidth(0, 0, 0, 1).BorderColor(c.Theme().Border).Children(func() {
@@ -88,7 +95,7 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 			})
 			return
 		}
-		if file.PreviewPath != "" || file.PreviewHTML != "" || file.Document != nil || file.MarkupPreview {
+		if !editorShown(file) {
 			a.workspaceFilePreviewView(c, file)
 			return
 		}
