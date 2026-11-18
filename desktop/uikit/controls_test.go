@@ -40,6 +40,89 @@ func TestSelectAndTabs(t *testing.T) {
 	}
 }
 
+func TestNativeControlsKeepInputBehavior(t *testing.T) {
+	checked, query, level := false, "", float64(0.5)
+	tt := chineseTester(func(c *ui.Context) {
+		ui.Column(c).Gap(8).Children(func() {
+			Checkbox(c.Key("check"), &checked, "启用")
+			SearchField(c.Key("search"), &query).Label("查找").Width(200)
+			Slider(c.Key("slider"), &level, 0, 1).Label("强度").Width(200)
+			Progress(c.Key("progress"), level).Label("进度").Width(200)
+		})
+	}, 360, 250)
+	if err := tt.Click("启用"); err != nil {
+		t.Fatal(err)
+	}
+	if !checked {
+		t.Fatal("checkbox did not change")
+	}
+	if err := tt.Click("查找"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("hello")
+	if query != "hello" {
+		t.Fatalf("search = %q", query)
+	}
+	if err := tt.Click("强度"); err != nil {
+		t.Fatal(err)
+	}
+	old := level
+	tt.Key(0, ui.KeyRight)
+	if level <= old {
+		t.Fatalf("slider keyboard did not increase: %v -> %v", old, level)
+	}
+	if _, ok := tt.AccessByRole(ui.RoleProgress, "进度"); !ok {
+		t.Fatal("progress accessibility role missing")
+	}
+}
+
+func TestAutocompletePreservesTypingAndSelection(t *testing.T) {
+	value := ""
+	tt := chineseTester(func(c *ui.Context) {
+		Autocomplete(c.Key("autocomplete"), &value, []string{"Alpha", "Beta"}).Label("补全").Width(200)
+	}, 350, 250)
+	if err := tt.Click("补全"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("Be")
+	if value != "Be" {
+		t.Fatalf("typed value = %q", value)
+	}
+	if err := tt.Click("Beta"); err != nil {
+		t.Fatal(err)
+	}
+	if value != "Beta" {
+		t.Fatalf("selected value = %q", value)
+	}
+}
+
+func TestSelectSkipsDisabledOption(t *testing.T) {
+	value := "first"
+	tt := chineseTester(func(c *ui.Context) {
+		SelectField(c.Key("choice"), &value, []Option{{Value: "first", Label: "第一项"}, {Value: "locked", Label: "不可选", Disabled: true}, {Value: "last", Label: "最后一项"}}).Label("选择")
+	}, 360, 300)
+	if err := tt.Click("选择"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("不可选"); err != nil {
+		t.Fatal(err)
+	}
+	if value != "first" {
+		t.Fatalf("disabled option selected: %q", value)
+	}
+	if !tt.HasText("最后一项") {
+		if err := tt.Click("选择"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tt.Click("最后一项"); err != nil {
+		t.Fatal(err)
+	}
+	if value != "last" {
+		t.Fatalf("selection = %q", value)
+	}
+}
+
 func TestSegmentedSelection(t *testing.T) {
 	for _, light := range []bool{false, true} {
 		t.Run(fmt.Sprint("light=", light), func(t *testing.T) {
@@ -152,6 +235,37 @@ func TestNumberInputNativeEditingAndSteps(t *testing.T) {
 	tt.Frame()
 	if value != 12345 {
 		t.Fatalf("typed value: %v", value)
+	}
+}
+
+func TestComboboxFieldEditsAndSelects(t *testing.T) {
+	value := "33"
+	tt := chineseTester(func(c *ui.Context) {
+		ComboboxField(c.Key("group"), value, []string{"33", "运维"}, "分组", "", func(next string) { value = next }).Width(260)
+	}, 360, 200)
+	if err := tt.Click("分组"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("自定义")
+	if value != "自定义" {
+		t.Fatalf("typed = %q", value)
+	}
+	if !tt.HasText("无匹配选项") {
+		t.Fatal("missing empty result feedback")
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Key(0, ui.KeyBackspace)
+	if value != "" {
+		t.Fatalf("cleared = %q", value)
+	}
+	tt.Key(0, ui.KeyDown)
+	if err := tt.Click("运维"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if value != "运维" {
+		t.Fatalf("selected = %q", value)
 	}
 }
 

@@ -62,6 +62,15 @@ func FaintInk(t *ui.Theme) ui.Color {
 	return ui.Hex("#8b929e")
 }
 
+// accentText keeps text legible on tinted surfaces in either appearance while
+// the unmodified accent remains available for fills and graphical indicators.
+func accentText(t *ui.Theme, accent ui.Color) ui.Color {
+	if t.Dark {
+		return accent.Mix(t.Text, 0.45)
+	}
+	return accent.Mix(t.Text, 0.25)
+}
+
 // fade 让颜色变化吃掉一段时间，避免悬停时硬切。元素必须带 c.Key：动画状态
 // 挂在节点上，每帧重建又不带键的节点什么也平滑不了。
 func fade(e ui.Element, key string, target ui.Color) ui.Color {

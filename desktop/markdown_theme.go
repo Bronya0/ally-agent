@@ -65,14 +65,15 @@ var markdownPalettes = []markdownColorPair{
 	{proseColors("#cccccc", "#969da7", "#d7dedc", "#d4d4d4", "#72bbb5", "#72bbb5", "#72bbb5", "#212122", "#303031"), proseColors("#343a43", "#68717e", "#252a37", "#252a37", "#176e69", "#176e69", "#176e69", "#ffffff", "#d9dce3")},
 	{proseColors("#cccccc", "#969da7", "#d7dedc", "#d4d4d4", "#d69a9f", "#d69a9f", "#d69a9f", "#212122", "#303031"), proseColors("#343a43", "#68717e", "#252a37", "#252a37", "#a24753", "#a24753", "#a24753", "#ffffff", "#d9dce3")},
 	{proseColors("#cccccc", "#969da7", "#d7dedc", "#d4d4d4", "#a8a9e0", "#a8a9e0", "#a8a9e0", "#212122", "#303031"), proseColors("#343a43", "#68717e", "#252a37", "#252a37", "#5557a0", "#5557a0", "#5557a0", "#ffffff", "#d9dce3")},
+	{proseColors("#e8e2d8", "#ada497", "#e8e2d8", "#e8e2d8", "#c2a276", "#c2a276", "#c2a276", "#26231f", "#474137"), proseColors("#302d28", "#6e675d", "#302d28", "#302d28", "#80643e", "#80643e", "#80643e", "#fffdfa", "#ded7ca")},
 }
 
 // readingDarkSeeds and readingLightSeeds are what reading emphasis derives its
 // accent from, in markdownPalettes order: pastels for dark surfaces, saturated
 // inks for light ones.
 var (
-	readingDarkSeeds  = []string{"#8da5df", "#8da5df", "#e0a458", "#5b9cf6", "#57c98a", "#a78bfa", "#9dbb9f", "#a8bdd2", "#72bbb5", "#d69a9f", "#a8a9e0"}
-	readingLightSeeds = []string{"#245fc2", "#245fc2", "#92530f", "#245fc2", "#217747", "#7042bd", "#25624a", "#536d87", "#176e69", "#a24753", "#5557a0"}
+	readingDarkSeeds  = []string{"#8da5df", "#8da5df", "#e0a458", "#5b9cf6", "#57c98a", "#a78bfa", "#9dbb9f", "#a8bdd2", "#72bbb5", "#d69a9f", "#a8a9e0", "#c2a276"}
+	readingLightSeeds = []string{"#245fc2", "#245fc2", "#92530f", "#245fc2", "#217747", "#7042bd", "#25624a", "#536d87", "#176e69", "#a24753", "#5557a0", "#80643e"}
 )
 
 // readingSeed keeps a seed table that fell behind the palette tables from

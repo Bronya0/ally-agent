@@ -28,10 +28,8 @@ func (a *desktop) sessionRenameDialog(c *ui.Context) {
 	}
 	modalCard(c.Key("session-rename"), &s.Open, widthModalSmall, func() {
 		modalTitle(c, locales.Text("重命名会话"), locales.Text("为这个会话设置一个容易识别的名称。"))
-		value := s.Title
-		field := uikit.Input(c.Key("session-rename-title"), &value).Label(locales.Text("会话名称")).FillWidth().AutoFocus().Disabled(s.Busy)
-		field.OnSubmit(func() { s.Title = value; a.submitSessionRename() })
-		s.Title = value
+		field := uikit.Input(c.Key("session-rename-title"), &s.Title).Label(locales.Text("会话名称")).FillWidth().AutoFocus().Disabled(s.Busy)
+		field.OnSubmit(a.submitSessionRename)
 		inlineError(c, "session-rename-error", s.Error)
 		modalActions(c, func() {
 			flat(c, locales.Text("取消")).Disabled(s.Busy).OnClick(func() { s.Open = false })

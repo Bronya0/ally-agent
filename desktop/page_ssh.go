@@ -136,8 +136,8 @@ func (a *desktop) sshGroups() []string {
 }
 
 func sshGroupInput(group string) string {
-	if strings.TrimSpace(group) == "" {
-		return sshUngrouped
+	if strings.TrimSpace(group) == "" || group == sshUngrouped {
+		return locales.Text(sshUngrouped)
 	}
 	return group
 }
@@ -160,6 +160,8 @@ func sshPortInput(port int) float64 {
 }
 
 func (a *desktop) openSSHEditor(id, group string) {
+	a.sshF.EditorTestSeq++
+	a.sshF.EditorTestBusy = false
 	a.sshF.EditorOpen = true
 	a.sshF.CloneMode = false
 	a.sshF.CloneSource = ""
@@ -181,6 +183,8 @@ func (a *desktop) openSSHEditor(id, group string) {
 }
 
 func (a *desktop) openSSHClone(source backend.SSHServerNode) {
+	a.sshF.EditorTestSeq++
+	a.sshF.EditorTestBusy = false
 	clone := source
 	clone.ID = ""
 	clone.Alias = nextSSHCloneAlias(source.Alias, a.sshServers)
@@ -245,21 +249,12 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 			fieldNote(c, locales.Text("从「")+source+locales.Text("」复制；保存后会创建新的服务器配置。"), a.secondaryInk())
 		}
 		fieldLabel(c, locales.Text("分组"))
-		groupInput := a.sshF.GroupInput
-		if groupInput == sshUngrouped {
-			groupInput = locales.Text(sshUngrouped)
-		}
-		if uikit.ComboboxField(c.Key("ssh-group"), &groupInput, sshGroupLabels(a.sshGroups()), locales.Text("分组"), locales.Text("选择或输入分组"), a.secondaryInk()).FillWidth().Changed() {
-			if groupInput == locales.Text(sshUngrouped) {
-				groupInput = sshUngrouped
-			}
-			a.sshF.GroupInput = groupInput
-		}
+		uikit.ComboboxField(c.Key("ssh-group"), a.sshF.GroupInput, sshGroupLabels(a.sshGroups()), locales.Text("分组"), locales.Text("选择或输入分组"), func(value string) { a.sshF.GroupInput = value }, a.secondaryInk()).FillWidth()
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(2).Basis(0).Children(func() { fieldRow(c, "ssh-host", locales.Text("主机"), &d.Host, false) })
 			ui.Column(c).Grow(1).Basis(0).Gap(gapTight).Children(func() {
 				fieldLabel(c, locales.Text("端口"))
-				ui.NumberInput(c.Key("ssh-port"), &a.sshF.Port, 1, 65535, 1).Label(locales.Text("端口"))
+				uikit.NumberInput(c, "ssh-port", locales.Text("端口"), &a.sshF.Port, 1, 65535, 1)
 			})
 		})
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
@@ -323,6 +318,7 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 			}
 		})
 	}, func() {
+		flatBusy(c, locales.Text("测试"), a.sshF.EditorTestBusy, a.sshF.EditorTestBusy || a.sshF.Busy).OnClick(a.testSSHForm)
 		flat(c, locales.Text("取消")).OnClick(func() { a.sshF.EditorOpen = false; a.sshF.CloneMode = false; a.sshF.CloneSource = "" })
 		primaryBusy(c, locales.Text("保存"), a.sshF.Busy, a.sshF.Busy).OnClick(func() { a.saveSSHNode() })
 	}, func() {
@@ -338,7 +334,7 @@ func (a *desktop) saveSSHNode() {
 	d.Username = strings.TrimSpace(d.Username)
 	d.Description = strings.TrimSpace(d.Description)
 	d.Group = strings.TrimSpace(a.sshF.GroupInput)
-	if d.Group == sshUngrouped {
+	if d.Group == sshUngrouped || d.Group == locales.Text(sshUngrouped) {
 		d.Group = ""
 	}
 	if d.Alias == "" {
@@ -408,17 +404,54 @@ func (a *desktop) testSSHNode(node backend.SSHServerNode) {
 		result := a.core.TestSSHServer(node)
 		a.win.Update(func() {
 			delete(a.sshF.TestBusy, node.ID)
-			if result.OK {
-				note := locales.Text("SSH 连通性测试通过")
-				if dur := fmtDur(result.DurationMS); dur != "" {
-					note += "（" + dur + "）"
-				}
-				a.notify(note)
-			} else {
-				a.notifyError(locales.Text("SSH 连通性测试失败：") + result.Error)
+			a.notifySSHTestResult(result)
+		})
+	}()
+}
+
+func (a *desktop) testSSHForm() {
+	node, ok := sshTestDraft(a.sshF.Draft, a.sshF.Port)
+	if !ok {
+		a.notifyError(locales.Text("端口必须是 1 至 65535 的整数"))
+		return
+	}
+	seq := a.sshF.EditorTestSeq
+	a.sshF.EditorTestBusy = true
+	go func() {
+		result := a.core.TestSSHServer(node)
+		a.win.Update(func() {
+			if a.sshF.EditorTestSeq != seq {
+				return
+			}
+			a.sshF.EditorTestBusy = false
+			if a.sshF.EditorOpen {
+				a.notifySSHTestResult(result)
 			}
 		})
 	}()
+}
+
+func sshTestDraft(node backend.SSHServerNode, port float64) (backend.SSHServerNode, bool) {
+	if math.IsNaN(port) || math.IsInf(port, 0) || port < 1 || port > 65535 || port != math.Trunc(port) {
+		return backend.SSHServerNode{}, false
+	}
+	// An empty host must be validated as entered, rather than looking up the
+	// saved node by ID in TestSSHServer.
+	node.ID = ""
+	node.Port = int(port)
+	return node, true
+}
+
+func (a *desktop) notifySSHTestResult(result backend.SSHTestResult) {
+	if result.OK {
+		note := locales.Text("SSH 连通性测试通过")
+		if dur := fmtDur(result.DurationMS); dur != "" {
+			note += "（" + dur + "）"
+		}
+		a.notify(note)
+	} else {
+		a.notifyError(locales.Text("SSH 连通性测试失败：") + result.Error)
+	}
 }
 
 func (a *desktop) importSSH() {
@@ -554,7 +587,7 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 		onlyAllowed := a.sshF.AuthOnlyAllowed
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 			uikit.Input(c.Key("ssh-auth-search"), &a.sshF.AuthSearch).Placeholder(locales.Text("搜索")).Label(locales.Text("搜索服务器")).Width(200)
-			ui.Checkbox(c.Key("ssh-auth-only"), &a.sshF.AuthOnlyAllowed, locales.Text("只看已授权"))
+			uikit.Checkbox(c.Key("ssh-auth-only"), &a.sshF.AuthOnlyAllowed, locales.Text("只看已授权"))
 		})
 		allowedCount := 0
 		for _, v := range a.sshF.AuthDraft {
@@ -634,7 +667,7 @@ func (a *desktop) sshAuthDialog(c *ui.Context) {
 					// the row also gets the pointer cursor like every rail row.
 					row.Cursor(ui.CursorPointer)
 					row.Children(func() {
-						ui.Checkbox(c.Key("ssh-auth-check-"+node.ID), &checked, "").OnClick(func() {
+						uikit.Checkbox(c.Key("ssh-auth-check-"+node.ID), &checked, "").OnClick(func() {
 							a.sshF.AuthDraft[node.ID] = !a.sshF.AuthDraft[node.ID]
 						})
 						ui.Text(c, node.Alias).FontSize(fsSmall).Width(140).SingleLine()

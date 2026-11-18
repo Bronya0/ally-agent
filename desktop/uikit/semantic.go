@@ -63,8 +63,8 @@ type ActionOptions struct {
 	Tone                                    Tone
 	Style                                   ActionStyle
 	Small, Round, Circle, Disabled, Loading bool
-	// LoadingOverlay replaces the visible label/icon with a centered spinner
-	// while preserving their layout size and the button's width.
+	// LoadingOverlay is retained for callers; loading always preserves the
+	// button's layout and centers the spinner.
 	LoadingOverlay bool
 	Selected       bool
 	Icon           *ui.SVG
@@ -133,6 +133,9 @@ func actionPartsOn(c *ui.Context, b ui.Element, label string, o ActionOptions) (
 			fill = ink.Alpha(0.24)
 		}
 	}
+	if o.Tone == Primary {
+		ink = accentText(c.Theme(), ink)
+	}
 	ink = fade(b, "action-ink", ink)
 	b.Height(h).Padding(0, 14).Gap(7).Radius(r).Border(1, edge).Background(fade(b, "action-fill", fill)).TextColor(ink)
 	if o.Circle {
@@ -140,7 +143,7 @@ func actionPartsOn(c *ui.Context, b ui.Element, label string, o ActionOptions) (
 	}
 	var text ui.Element
 	b.Children(func() {
-		if o.Loading && o.LoadingOverlay {
+		if o.Loading {
 			if o.Icon != nil {
 				ui.Icon(c, o.Icon).Size(16, 16).TextColor(ink).Opacity(0)
 			}
@@ -152,9 +155,7 @@ func actionPartsOn(c *ui.Context, b ui.Element, label string, o ActionOptions) (
 			})
 			return
 		}
-		if o.Loading {
-			ui.Spinner(c).Size(14, 14).TextColor(ink)
-		} else if o.Icon != nil {
+		if o.Icon != nil {
 			ui.Icon(c, o.Icon).Size(16, 16).TextColor(ink)
 		}
 		if label != "" && !o.Circle {
@@ -190,6 +191,8 @@ func ColorTag(c *ui.Context, label string, o TagOptions) ui.Element {
 	if o.Tone == Default {
 		fill = c.Theme().Text.Alpha(0.04)
 		edge = c.Theme().Border
+	} else if o.Tone == Primary {
+		ink = accentText(c.Theme(), ink)
 	}
 	return colorTag(c, label, o, ink, fill, edge, h, r)
 }
@@ -222,9 +225,9 @@ type RadioOption[T comparable] struct {
 
 func Radios[T comparable](c *ui.Context, selected *T, options []RadioOption[T], buttons bool) ui.Element {
 	group := ui.RadioGroup(c, func() {
-		for i, o := range options {
+		for _, o := range options {
 			active := *selected == o.Value
-			b := ui.RadioBase(c.Key(i), selected, o.Value).Disabled(o.Disabled).Label(o.Label).Cursor(ui.CursorPointer).AlignItems(ui.Center)
+			b := ui.RadioBase(c.Key(o.Value), selected, o.Value).Disabled(o.Disabled).Label(o.Label).Cursor(ui.CursorPointer).AlignItems(ui.Center)
 			ink := c.Theme().Text
 			if buttons {
 				edge := c.Theme().Border
@@ -290,12 +293,32 @@ func Switch(c *ui.Context, on *bool, label string) ui.Element {
 	return SwitchWithOptions(c, on, label, SwitchOptions{})
 }
 func Message(c *ui.Context, tone Tone, text string, timeout time.Duration) string {
+	return c.AddToast(ui.Toast{Title: text, Type: toastTone(tone), Timeout: timeout})
+}
+
+func toastTone(tone Tone) string {
 	kinds := []string{"info", "info", "info", "success", "warning", "error"}
-	kind := "info"
 	if int(tone) < len(kinds) {
-		kind = kinds[tone]
+		return kinds[tone]
 	}
-	return c.AddToast(ui.Toast{Title: text, Type: kind, Timeout: timeout})
+	return "info"
+}
+
+// NotificationOptions describes a window-local notification. A negative
+// Timeout keeps it visible until dismissal; zero uses MyGo's default.
+type NotificationOptions struct {
+	ID, Title, Description string
+	Tone                   Tone
+	Timeout                time.Duration
+	Action                 string
+	OnAction, OnClose      func()
+}
+
+type notificationCard struct{}
+
+// Notification shares the window's native toast manager with Message.
+func Notification(c *ui.Context, o NotificationOptions) string {
+	return c.AddToast(ui.Toast{ID: o.ID, Title: o.Title, Description: o.Description, Type: toastTone(o.Tone), Timeout: o.Timeout, Action: o.Action, OnAction: o.OnAction, OnClose: o.OnClose, Data: notificationCard{}})
 }
 
 // Messages installs one native toast viewport per window. MyGo owns timeouts,
@@ -319,6 +342,10 @@ func Messages(c *ui.Context) ui.Element {
 				mark = "!"
 			}
 			toast := ui.ToastBase(c, item)
+			if _, ok := item.Data.(notificationCard); ok {
+				notificationView(c, toast, item, tone, mark, w)
+				continue
+			}
 			toast.Root.Transition(messageTransition()).Row().AlignSelf(ui.Center).MaxWidth(max(float32(100), w-32)).Padding(12, 18).Gap(10).AlignItems(ui.Center).Radius(4).Background(c.Theme().Surface).Shadow(0, 4, 18, 0, ui.RGBA(0, 0, 0, 0.18))
 			toast.Root.Children(func() {
 				if item.Type == "loading" {
@@ -331,6 +358,31 @@ func Messages(c *ui.Context) ui.Element {
 					toast.ActionButton().Children(func() { ui.Text(c, item.Action).TextColor(c.Theme().Accent) })
 				}
 			})
+		}
+	})
+}
+
+func notificationView(c *ui.Context, toast ui.ToastParts, item ui.Toast, tone Tone, mark string, width float32) {
+	toast.Root.Transition(messageTransition()).Column().AlignSelf(ui.End).Width(340).MaxWidth(max(float32(100), width-32)).
+		Padding(14, 16).Gap(8).Radius(RadiusCard).Background(c.Theme().Surface).Border(1, c.Theme().Border).
+		Shadow(0, 4, 18, 0, ui.RGBA(0, 0, 0, 0.18))
+	toast.Root.Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Box(c).Size(18, 18).Shrink(0).Radius(9).Center().Background(ToneColor(c, tone)).Children(func() {
+				ui.Text(c, mark).FontSize(FontTiny).TextColor(c.Theme().Background)
+			})
+			ui.Text(c, item.Title).FontSize(FontBody).FontWeight(600).Grow(1).MinWidth(0)
+			close := toast.CloseButton().Label(kitText(c, "关闭通知")).Size(24, 24).Center().Radius(RadiusSmall).Cursor(ui.CursorPointer)
+			if close.Hovered() {
+				close.Background(c.Theme().SurfaceHover)
+			}
+			close.Children(func() { ui.Text(c, "×").FontSize(FontGlyph).TextColor(SecondaryInk(c, nil)) })
+		})
+		if item.Description != "" {
+			ui.Text(c, item.Description).FontSize(FontSmall).TextColor(SecondaryInk(c, nil)).LineHeight(1.5).FillWidth()
+		}
+		if item.Action != "" {
+			ActionOn(c, toast.ActionButton(), item.Action, ActionOptions{Tone: Primary, Style: Quaternary, Small: true}).AlignSelf(ui.End)
 		}
 	})
 }

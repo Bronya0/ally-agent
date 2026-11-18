@@ -363,7 +363,7 @@ func (a *desktop) mcpToolChecklist(c *ui.Context, name string, entry mcpServerEn
 			enabled := !disabled
 			enabledPtr := &enabled
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				ui.Checkbox(c.Key("mcp-tool-"+name+"-"+toolName), enabledPtr, toolName).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
+				uikit.Checkbox(c.Key("mcp-tool-"+name+"-"+toolName), enabledPtr, toolName).Disabled(a.mcpF.Busy || a.mcpF.ImportBusy).OnClick(func() {
 					doc := docOf()
 					entry = doc.Servers[name]
 					set := map[string]bool{}

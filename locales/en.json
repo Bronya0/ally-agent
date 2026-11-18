@@ -1573,6 +1573,7 @@
   "ui_palette_indigo": "Indigo",
   "ui_palette_choose": "Choose a color palette.",
   "ui_palette_native": "Native",
+  "ui_palette_khaki": "Warm Khaki",
   "ui_2e007fe83346": "Native uses a neutral accent on the same base colors as other accents; Qinghe light keeps its own palette.",
   "ui_1491279e6bbb": "Non-real-time",
   "ui_7ef85f88be36": "The audio file field name cannot be empty",
@@ -1901,5 +1902,6 @@
   "ui_0a723dbbf6a9": "Restart service",
   "ui_d3416e367c51": "Service output",
   "ui_d2ff17f44817": "Create task",
-  "ui_56b3909705f3": "Task details"
+  "ui_56b3909705f3": "Task details",
+  "ui_7304e809e016": "%s will be removed from the history. This workspace has no saved conversations."
 }

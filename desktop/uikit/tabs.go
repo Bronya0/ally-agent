@@ -6,22 +6,25 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// TabStyle selects the two approved navigation treatments.
+// TabStyle selects a navigation treatment.
 type TabStyle uint8
 
 const (
 	TabLine      TabStyle = iota // A: straight underline; secondary level is text only.
 	TabSegmented                 // C: compact track; secondary level uses soft independent fills.
+	TabNative                    // MyGo's theme-driven native tabs.
 )
 const DefaultTabStyle = TabSegmented
 
 type TabOptions struct {
-	Style     TabStyle
+	Style TabStyle
+	// Secondary affects the kit-drawn styles; TabNative uses the native appearance.
 	Secondary bool
 	// Gesture, if set, collects the press on a tab, so the strip around the
 	// tabs can pan with it: MyGo's wheel and press only know the axes an
 	// element scrolls, and a strip overflowing sideways has to be dragged
-	// by its owner.
+	// by its owner. TabNative does not expose individual tabs and does not
+	// support this gesture; use a kit-drawn style for drag-to-pan strips.
 	Gesture *TabGesture
 }
 
@@ -84,6 +87,9 @@ func TabsWithOptions(c *ui.Context, selected *int, o TabOptions, labels ...strin
 }
 
 func tabsWithInk(c *ui.Context, selected *int, o TabOptions, secondary ui.Color, labels ...string) ui.Element {
+	if o.Style == TabNative {
+		return ui.Tabs(c, selected, labels...)
+	}
 	parts := ui.TabsBase(c, selected, len(labels))
 	t := c.Theme()
 	track := parts.List.AlignSelf(ui.Start).Shrink(0)
@@ -106,7 +112,7 @@ func tabsWithInk(c *ui.Context, selected *int, o TabOptions, secondary ui.Color,
 				tab.Radius(4)
 				if active {
 					fill = SelectedFill(t.Accent)
-					ink = t.Accent
+					ink = accentText(t, t.Accent)
 				}
 				if !active && tab.Hovered() {
 					fill = t.SurfaceHover
@@ -120,7 +126,7 @@ func tabsWithInk(c *ui.Context, selected *int, o TabOptions, secondary ui.Color,
 					tab.BorderWidth(0, 0, 2, 0)
 				}
 				if active {
-					ink = t.Accent
+					ink = accentText(t, t.Accent)
 					if !o.Secondary {
 						edge = t.Accent
 					}

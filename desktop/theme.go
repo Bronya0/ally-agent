@@ -150,8 +150,8 @@ func colFaint() ui.Color  { return faint }
 func selectionFill(tone ui.Color) ui.Color { return uikit.SelectedFill(tone) }
 func selectionEdge(tone ui.Color) ui.Color { return uikit.SelectedStrokeColor(tone) }
 
-// palette supplies an accent and optional light-mode surfaces. Existing accents
-// share the neutral bases; a complete light preset can override them together.
+// palette keeps app-specific chrome and persisted palette metadata. Shared
+// surfaces and accents are supplied by uikit's built-in themes.
 //
 // The index into palettes is what native-ui.json stores as "palette", so an
 // entry may be retired but never deleted or reordered — an old value still has
@@ -171,9 +171,6 @@ type palette struct {
 	header ui.Color
 	// Complete presets can supply literal website colors instead of derived tints.
 	wordmark, accentHover, accentPressed, selection ui.Color
-	// light overrides the entire light surface set, without another preference
-	// or changing the existing appearance-mode switch.
-	light *palette
 }
 
 // chromeColor keeps both sidebars continuous with the main content surface.
@@ -223,53 +220,70 @@ const (
 	paletteTeal   = 8
 	paletteRose   = 9
 	paletteIndigo = 10
+	paletteKhaki  = 11
 
 	// defaultPalette is the accent a profile without a saved choice starts on.
 	defaultPalette = paletteBlue
 )
 
 // paletteChoices is presentation order only; persisted palette IDs stay stable.
-var paletteChoices = [...]int{paletteNative, paletteBlue, paletteAmber, paletteForest, paletteViolet, paletteTeal, paletteRose, paletteIndigo}
+var paletteChoices = [...]int{paletteNative, paletteBlue, paletteAmber, paletteForest, paletteViolet, paletteTeal, paletteRose, paletteIndigo, paletteKhaki}
 
-// paletteBlue and paletteLight supply the shared dark/light surface bases.
-// A preset with light surfaces replaces the light base as a complete set.
+// Stored palette numbers remain stable; uikit IDs identify their shared colors.
+var paletteThemeIDs = [...]uikit.ThemeID{
+	paletteBlue: uikit.ThemeBlue, paletteLight: uikit.ThemeBlue,
+	paletteAmber: uikit.ThemeAmber, paletteForest: uikit.ThemeForest,
+	paletteViolet: uikit.ThemeViolet, paletteNative: uikit.ThemeNative,
+	paletteTeal: uikit.ThemeTeal, paletteRose: uikit.ThemeRose,
+	paletteIndigo: uikit.ThemeIndigo, paletteKhaki: uikit.ThemeKhaki,
+}
+
+func builtinAccent(id uikit.ThemeID, dark bool) ui.Color {
+	return uikit.BuiltinThemeColors(id, dark).Accent
+}
+
+var khakiChrome = ui.Hex("#faf8f4")
+
+// paletteBlue and paletteLight select the dark/light app-specific bases.
 var palettes = []palette{
 	// paletteBlue: dark base surface, and the default accent.
-	{name: "蓝色", dark: true, bg: ui.Hex("#1b1b1b"), panel: ui.Hex("#212122"), line: ui.Hex("#303031"), accent: ui.Hex("#8da5df"), accentText: ui.Hex("#15171d"), text: ui.Hex("#cccccc"), muted: ui.Hex("#909093"), hover: ui.Hex("#2b2b2e"), hint: ui.Hex("#5d5d62")},
+	{name: "蓝色", dark: true, accent: builtinAccent(uikit.ThemeBlue, true)},
 	// paletteLight: light base surface; its accent is never used, lightAccents
 	// supplies it.
-	{name: "亮色", dark: false, bg: ui.Hex("#f5f6f8"), panel: ui.Hex("#ffffff"), line: ui.Hex("#d9dce3"), accent: ui.Hex("#4d6bd8"), accentText: ui.Hex("#ffffff"), text: ui.Hex("#24262d"), muted: ui.Hex("#535b68"), hover: ui.Hex("#eef0f5"), chrome: ui.Hex("#f9fafb"), hint: ui.Hex("#8b929e")},
+	{name: "亮色", dark: false, accent: ui.Hex("#4d6bd8"), chrome: ui.Hex("#f9fafb")},
 	// paletteAmber
-	{name: "琥珀", dark: true, bg: ui.Hex("#1c1a17"), panel: ui.Hex("#232019"), line: ui.Hex("#363128"), accent: ui.Hex("#e0a458"), accentText: ui.Hex("#1a1712"), text: ui.Hex("#d7d2c8"), muted: ui.Hex("#9b9488"), hover: ui.Hex("#2c2820"), hint: ui.Hex("#6b655b")},
+	{name: "琥珀", dark: true, accent: builtinAccent(uikit.ThemeAmber, true)},
 	// paletteOcean: retired, kept so old preference files still decode.
 	{name: "海洋", dark: true, bg: ui.Hex("#151a1f"), panel: ui.Hex("#1a2027"), line: ui.Hex("#28323c"), accent: ui.Hex("#63b3d8"), accentText: ui.Hex("#0d1418"), text: ui.Hex("#c6d0d8"), muted: ui.Hex("#8896a2"), hover: ui.Hex("#222b34"), hint: ui.Hex("#5c686f")},
 	// paletteForest
-	{name: "森林", dark: true, bg: ui.Hex("#151a17"), panel: ui.Hex("#1a201c"), line: ui.Hex("#29362d"), accent: ui.Hex("#6fbf8f"), accentText: ui.Hex("#0e1511"), text: ui.Hex("#c4d2c8"), muted: ui.Hex("#889a8e"), hover: ui.Hex("#212b24"), hint: ui.Hex("#5a6960")},
+	{name: "森林", dark: true, accent: builtinAccent(uikit.ThemeForest, true)},
 	// paletteViolet
-	{name: "紫罗兰", dark: true, bg: ui.Hex("#191722"), panel: ui.Hex("#1f1c29"), line: ui.Hex("#312c42"), accent: ui.Hex("#a68bea"), accentText: ui.Hex("#141019"), text: ui.Hex("#cfc8de"), muted: ui.Hex("#948aa8"), hover: ui.Hex("#292436"), hint: ui.Hex("#645c76")},
+	{name: "紫罗兰", dark: true, accent: builtinAccent(uikit.ThemeViolet, true)},
 	// Retired ID remains reserved for existing preference files.
 	{name: "青禾", dark: true, accent: ui.Hex("#9dbb9f")},
-	{name: "原生", dark: true, accent: ui.Hex("#a8bdd2"), header: ui.Hex("#e5ebf2")},
-	{name: "青瓷", dark: true, accent: ui.Hex("#72bbb5")},
-	{name: "玫瑰", dark: true, accent: ui.Hex("#d69a9f")},
-	{name: "靛蓝", dark: true, accent: ui.Hex("#a8a9e0")},
+	{name: "原生", dark: true, accent: builtinAccent(uikit.ThemeNative, true), header: ui.Hex("#e5ebf2")},
+	{name: "青瓷", dark: true, accent: builtinAccent(uikit.ThemeTeal, true)},
+	{name: "玫瑰", dark: true, accent: builtinAccent(uikit.ThemeRose, true)},
+	{name: "靛蓝", dark: true, accent: builtinAccent(uikit.ThemeIndigo, true)},
+	{name: "暖灰卡其", dark: true, accent: builtinAccent(uikit.ThemeKhaki, true)},
 }
 
 // lightAccents is the light-mode accent for the same indices. The dark pastels
 // read as washed-out grey-blue on a white surface, so each one has a saturated
 // counterpart. paletteLight owns the one in its row.
 var lightAccents = []ui.Color{
-	ui.Hex("#365dcc"), // blue
-	ui.Hex("#365dcc"), // the 亮色 preset's own accent
-	ui.Hex("#9b6218"), // amber, unchanged
+	builtinAccent(uikit.ThemeBlue, false), // blue
+	builtinAccent(uikit.ThemeBlue, false), // legacy light
+	builtinAccent(uikit.ThemeAmber, false),
 	ui.Hex("#126f91"), // ocean
-	ui.Hex("#247649"), // forest
-	ui.Hex("#7850b8"), // violet
+	builtinAccent(uikit.ThemeForest, false),
+	builtinAccent(uikit.ThemeViolet, false),
 	ui.Hex("#25624a"), // meadow
-	ui.Hex("#536d87"), // native
-	ui.Hex("#176e69"), // teal
-	ui.Hex("#a24753"), // rose
-	ui.Hex("#5557a0"), // indigo
+	builtinAccent(uikit.ThemeNative, false),
+	builtinAccent(uikit.ThemeTeal, false),
+	builtinAccent(uikit.ThemeRose, false),
+	builtinAccent(uikit.ThemeIndigo, false),
+	builtinAccent(uikit.ThemeKhaki, false),
 }
 
 func (a *desktop) currentPalette() palette {
@@ -288,9 +302,6 @@ func (a *desktop) currentPalette() palette {
 		base = paletteLight
 	}
 	p := palettes[base]
-	if base == paletteLight && palettes[idx].light != nil {
-		p = *palettes[idx].light
-	}
 	p.name = palettes[idx].name
 	p.accent = palettes[idx].accent
 	if palettes[idx].header.A != 0 {
@@ -300,6 +311,15 @@ func (a *desktop) currentPalette() palette {
 		// Light accents have their own saturated palette. Mixing a pastel dark
 		// accent with neutral text made every theme look grey-blue.
 		p.accent = lightAccents[idx]
+	}
+	if id := paletteThemeIDs[idx]; id != "" {
+		colors := uikit.BuiltinThemeColors(id, p.dark)
+		p.bg, p.panel, p.hover, p.line = colors.Background, colors.Surface, colors.Hover, colors.Border
+		p.text, p.muted, p.hint = colors.Text, colors.Secondary, colors.Placeholder
+		p.accent, p.accentText = colors.Accent, colors.AccentText
+		if idx == paletteKhaki && !p.dark {
+			p.chrome = khakiChrome
+		}
 	}
 	return p
 }

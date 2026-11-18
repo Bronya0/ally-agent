@@ -77,7 +77,7 @@ func MenuRow(c *ui.Context, item ui.Element, label string, selected bool) ui.Ele
 	}
 	return item.FillWidth().MinHeight(32).Padding(GapInline, PadCard).
 		Justify(ui.Start).AlignItems(ui.Center).Radius(RadiusSmall).
-		Label(label).Cursor(ui.CursorPointer).Background(fill)
+		Label(label).Cursor(ui.CursorPointer).Background(fade(item, "menu-row-fill", fill))
 }
 
 type MenuItemOptions struct {

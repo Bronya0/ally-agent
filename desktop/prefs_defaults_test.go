@@ -7,8 +7,51 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/egoist/mygo"
+	"ally-dev/desktop/uikit"
+	"github.com/egoist/mygo/ui"
 )
+
+func TestKhakiPalettePersistsAndFollowsAppearance(t *testing.T) {
+	a := settingsSaveFixture(t)
+	a.page = "chat"
+	a.prefs.Palette = paletteKhaki
+	a.prefs.Appearance = "light"
+	if err := <-a.savePrefs(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := &desktop{prefs: readPrefs(a.prefsPath())}
+	light := reloaded.currentPalette()
+	if reloaded.prefs.Palette != paletteKhaki || light.dark || light.bg != ui.Hex("#f5f2ec") || light.accent != ui.Hex("#80643e") {
+		t.Fatalf("light palette did not survive reload: %+v", light)
+	}
+	if reloaded.readingColors().link != ui.Hex("#80643e") {
+		t.Fatal("reading links did not use the khaki palette")
+	}
+	reloaded.prefs.Appearance = "dark"
+	dark := reloaded.currentPalette()
+	if !dark.dark || dark.bg != ui.Hex("#1c1a17") || dark.accent != ui.Hex("#c2a276") {
+		t.Fatalf("dark palette was not selected: %+v", dark)
+	}
+	reloaded.prefs.Palette = paletteBlue
+	if reloaded.currentPalette().accent != palettes[paletteBlue].accent {
+		t.Fatal("existing blue palette changed identity")
+	}
+}
+
+func TestAppPalettesUseBuiltinColors(t *testing.T) {
+	a := &desktop{prefs: defaultPrefs()}
+	for _, idx := range paletteChoices {
+		a.prefs.Palette = idx
+		for _, mode := range []string{"light", "dark"} {
+			a.prefs.Appearance = mode
+			p := a.currentPalette()
+			c := uikit.BuiltinThemeColors(paletteThemeIDs[idx], mode == "dark")
+			if p.bg != c.Background || p.panel != c.Surface || p.accent != c.Accent || p.text != c.Text {
+				t.Fatalf("palette %d %s differs from uikit", idx, mode)
+			}
+		}
+	}
+}
 
 func TestInitialAppearanceAndAvatar(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "native-ui.json")
@@ -121,10 +164,10 @@ func TestCloseButtonQuitsWithoutATrayOrAnOptOut(t *testing.T) {
 	}
 	saved := defaultPrefs()
 	saved.CloseToTray = false
-	if (&desktop{prefs: saved, tray: &mygo.Tray{}}).closeHidesToTray() {
+	if (&desktop{prefs: saved, tray: &uikit.TrayHost{}}).closeHidesToTray() {
 		t.Fatal("the opt-out must quit even with a tray")
 	}
-	if !(&desktop{prefs: defaultPrefs(), tray: &mygo.Tray{}}).closeHidesToTray() {
+	if !(&desktop{prefs: defaultPrefs(), tray: &uikit.TrayHost{}}).closeHidesToTray() {
 		t.Fatal("tray plus the default preference must hide")
 	}
 }

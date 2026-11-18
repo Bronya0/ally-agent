@@ -2,10 +2,11 @@ package desktop
 
 import (
 	"fmt"
-	"strings"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"ally-dev/locales"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -76,11 +77,11 @@ func TestHeaderTabsDragInsertsAndKeepsActiveConversation(t *testing.T) {
 		a.headerBar(c)
 	}, 1000, 60)
 	tt.SetLocale("zh-Hans")
-	from, ok := tt.Find("session-0")
+	from, ok := tt.Find("workspace-0")
 	if !ok {
 		t.Fatalf("missing drag source: %v", tt.Texts())
 	}
-	to, ok := tt.Find("session-2")
+	to, ok := tt.Find("workspace-2")
 	if !ok {
 		t.Fatalf("missing drop target: %v", tt.Texts())
 	}
@@ -150,7 +151,7 @@ func TestHeaderTabReorderClearsAfterReleaseOutsideTabs(t *testing.T) {
 		{ID: "last", Title: "last", Workspace: "workspace-3"},
 	}}
 	tt := ui.NewTester(func(c *ui.Context) { c.SetTheme(a.theme()); a.headerBar(c) }, 900, 60)
-	source, ok := tt.Find("first")
+	source, ok := tt.Find("workspace-1")
 	if !ok {
 		t.Fatal("missing source tab")
 	}
@@ -271,7 +272,7 @@ func TestMoveOpenConversationTabShiftsTargetAndFollowingTabs(t *testing.T) {
 func TestHeaderTabClickDoesNotReorderTabs(t *testing.T) {
 	a := &desktop{ready: true, page: "chat", active: 0, tabs: []*conversation{{ID: "first", Workspace: "one", Title: "first session"}, {ID: "second", Workspace: "two", Title: "second session"}}}
 	tt := ui.NewTester(func(c *ui.Context) { c.SetTheme(a.theme()); a.headerBar(c) }, 900, 60)
-	tab, ok := tt.Find("second session")
+	tab, ok := tt.Find("two")
 	if !ok {
 		t.Fatal("missing second tab")
 	}
@@ -287,21 +288,20 @@ func TestHeaderTabClickDoesNotReorderTabs(t *testing.T) {
 }
 
 func TestSessionTabLabelAndWorkspaceTip(t *testing.T) {
-	title := strings.Repeat("默认名称", 12)
-	if got, want := sessionTabLabel(&conversation{Title: title}), short(title, 36); got != want {
-		t.Fatalf("session tab label=%q, want truncated session title %q", got, want)
+	workspace := filepath.Join("projects", "alpha")
+	tab := &conversation{Title: "Custom title", Workspace: workspace}
+	if got := sessionTabLabel(tab); got != "alpha" {
+		t.Fatalf("workspace tab label=%q, want directory name", got)
 	}
-	if got, want := sessionTabTip(&conversation{Title: title, Workspace: "C:/work/alpha"}), short(title, 72)+"\nC:/work/alpha"; got != want {
-		t.Fatalf("long-title tooltip=%q, want full title and workspace %q", got, want)
+	if got := sessionTabTip(tab); got != workspace {
+		t.Fatalf("workspace tooltip=%q, want %q", got, workspace)
 	}
-	if got := sessionTabLabel(&conversation{Title: "Custom title"}); got != "Custom title" {
-		t.Fatalf("session tab label=%q, want custom title", got)
+	temp := &conversation{Title: "新对话", Workspace: filepath.Join(t.TempDir(), "ally-temp-123")}
+	if got := sessionTabLabel(temp); got != locales.Text("临时工作区") {
+		t.Fatalf("temporary workspace label=%q", got)
 	}
-	if got := sessionTabTip(&conversation{Title: "Custom title", Workspace: "C:/work/alpha"}); got != "C:/work/alpha" {
-		t.Fatalf("short-title tooltip=%q, want workspace path", got)
-	}
-	if got := sessionTabLabel(&conversation{}); got == "" || strings.Contains(got, "workspace") {
-		t.Fatalf("empty session title fallback=%q", got)
+	if got := sessionTabTip(temp); got != temp.Workspace {
+		t.Fatalf("temporary workspace tooltip=%q", got)
 	}
 }
 

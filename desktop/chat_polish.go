@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 )
 
 func toolWarning(c *ui.Context, text string, ink ...ui.Color) {
@@ -141,12 +142,18 @@ func (a *desktop) globalShortcuts(c *ui.Context) {
 		a.newConversation(root)
 	})
 	c.OnShortcut(ui.Cmd, ui.KeyW, func() { a.closeWorkspaceTab(a.active) })
-	// Find in the transcript, as Ctrl+F finds in an editor. It opens only on the
-	// chat page: the code editor binds its own find bar.
+	// Find in the transcript, as Ctrl+F finds in an editor. While the file panel
+	// shows an editor, that editor owns the key: its bar is built over the code,
+	// where the transcript search would open behind the document unseen.
 	c.OnShortcut(ui.Cmd, ui.KeyF, func() {
-		if a.page == "chat" {
-			a.openChatSearch(a.current())
+		if a.page != "chat" {
+			return
 		}
+		if f := a.activeFile(); a.explorer && editorShown(f) && f.Editor != nil {
+			f.Editor.Run(editor.Find)
+			return
+		}
+		a.openChatSearch(a.current())
 	})
 	// Escape closes the find bar, and cancels the run otherwise. It has to be one
 	// registration: the window keeps only the first handler of a chord, so a

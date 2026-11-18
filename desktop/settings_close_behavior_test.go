@@ -4,13 +4,13 @@ package desktop
 import (
 	"testing"
 
-	"github.com/egoist/mygo"
+	"ally-dev/desktop/uikit"
 	"github.com/egoist/mygo/ui"
 )
 
 // The switch changes the close behavior in both directions.
 func TestCloseToTraySwitchWritesThePreference(t *testing.T) {
-	a := &desktop{prefs: defaultPrefs(), tray: &mygo.Tray{}}
+	a := &desktop{prefs: defaultPrefs(), tray: &uikit.TrayHost{}}
 	if !a.prefs.CloseToTray {
 		t.Fatal("the switch must start from the default, which hides")
 	}

@@ -55,6 +55,35 @@ func TestSSHAuthValuesAcrossLanguages(t *testing.T) {
 	}
 }
 
+func TestSSHGroupEditorTypingAndSelection(t *testing.T) {
+	a := &desktop{prefs: defaultPrefs(), sshServers: []backend.SSHServerNode{{ID: "one", Group: "33"}, {ID: "two", Group: "运维"}}}
+	a.openSSHEditor("one", "33")
+	tt := ui.NewTester(func(c *ui.Context) { c.SetTheme(a.theme()); a.sshEditorDialog(c) }, 900, 1000)
+	input, ok := tt.AccessByRole(ui.RoleComboBox, "分组")
+	if !ok {
+		t.Fatal("missing group input")
+	}
+	tt.ClickAt(input.Bounds.X+input.Bounds.W/2, input.Bounds.Y+input.Bounds.H/2)
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("自定义")
+	if a.sshF.GroupInput != "自定义" {
+		t.Fatalf("typed group = %q", a.sshF.GroupInput)
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Key(0, ui.KeyBackspace)
+	if a.sshF.GroupInput != "" {
+		t.Fatalf("cleared group = %q", a.sshF.GroupInput)
+	}
+	tt.Key(0, ui.KeyDown)
+	tt.Frame()
+	if err := tt.Click("运维"); err != nil {
+		t.Fatal(err)
+	}
+	if a.sshF.GroupInput != "运维" {
+		t.Fatalf("selected group = %q", a.sshF.GroupInput)
+	}
+}
+
 func TestLanguageChangePreservesModelDraft(t *testing.T) {
 	a := &desktop{config: backend.ConfigState{Models: []backend.ModelConfig{{ProviderName: "自定义名字", Model: "my-model", BaseURL: "https://example.invalid/v1", TokenParam: "max_completion_tokens", MaxTokens: 8192, ContextWindow: 128000}}}}
 	a.editModel(0)

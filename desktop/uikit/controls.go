@@ -81,8 +81,9 @@ func option(c *ui.Context, item ui.Element, text string, selected bool, ink ...u
 // Label is what the user reads. They stay separate so a config value such as
 // "recent" never leaks into the UI as if it were a label.
 type Option struct {
-	Value string
-	Label string
+	Value    string
+	Label    string
+	Disabled bool
 }
 
 // Select is a select whose options read exactly as their values.
@@ -96,6 +97,11 @@ func Select(c *ui.Context, value *string, options []string, ink ...ui.Color) ui.
 
 // SelectField is a select with per-option labels.
 func SelectField(c *ui.Context, value *string, options []Option, ink ...ui.Color) ui.Element {
+	return SelectFieldStatus(c, value, options, FieldNormal, ink...)
+}
+
+// SelectFieldStatus preserves the native selection behavior with validation chrome.
+func SelectFieldStatus(c *ui.Context, value *string, options []Option, status FieldStatus, ink ...ui.Color) ui.Element {
 	sel := ui.SelectBase(c, value)
 	b := sel.Trigger.Height(ControlHeight).Padding(4, 10).Gap(GapField).AlignItems(ui.Center).Radius(Radius).Border(1, hairline(c.Theme())).Background(c.Theme().SurfaceHover).Cursor(ui.CursorPointer)
 	b.Children(func() {
@@ -115,7 +121,7 @@ func SelectField(c *ui.Context, value *string, options []Option, ink ...ui.Color
 		})
 	})
 	selectPopup(c, sel, value, options, ink...)
-	return InputChrome(c, b)
+	return InputChromeStatus(c, b, status)
 }
 
 // CompactMenu keeps the toolbar trigger quiet and delegates its choices to the
@@ -166,25 +172,28 @@ func selectPopup(c *ui.Context, sel ui.SelectParts[string], value *string, optio
 		Popup(c, panel)
 		ui.Scroll(c).MaxHeight(300).Children(func() {
 			for _, item := range options {
-				option(c, sel.Item(item.Value), item.Label, item.Value == *value, SecondaryInk(c, ink))
+				option(c, sel.Item(item.Value).Disabled(item.Disabled), item.Label, item.Value == *value, SecondaryInk(c, ink))
 			}
 		})
 	})
 }
 
-func Combobox(c *ui.Context, value *string, options []string, ink ...ui.Color) ui.Element {
-	return ComboboxField(c, value, options, "", "", ink...)
+// ComboboxField reports both text edits and option selections through changed.
+// The caller owns the value and supplies it again on the next frame.
+func ComboboxField(c *ui.Context, value string, options []string, label, placeholder string, changed func(string), ink ...ui.Color) ui.Element {
+	return ComboboxFieldStatus(c, value, options, label, placeholder, FieldNormal, changed, ink...)
 }
 
-func ComboboxField(c *ui.Context, value *string, options []string, label, placeholder string, ink ...ui.Color) ui.Element {
+func ComboboxFieldStatus(c *ui.Context, value string, options []string, label, placeholder string, status FieldStatus, changed func(string), ink ...ui.Color) ui.Element {
 	var cb ui.ComboboxParts
 	root := ui.Row(c).FillWidth().Height(ControlHeight).AlignItems(ui.Center).Gap(0)
-	root = InputChrome(c, root)
+	root = InputChromeStatus(c, root, status)
 	root.Children(func() {
-		cb = ui.ComboboxBase(c, value)
+		cb = ui.ComboboxBase(c, &value)
 		cb.Input.Height(ControlHeight).FillHeight().Grow(1).MinWidth(0).Padding(5, 10).
 			FontSize(FontBody).Border(0, ui.Transparent).Background(ui.Transparent).Radius(0).TextColor(c.Theme().Text).
 			Label(label).Placeholder(placeholder)
+		cb.Input.OnChange(func() { changed(value) })
 		toggle := Tooltip(c, ui.Box(c).Size(32, ControlHeight).Shrink(0).Center().Cursor(ui.CursorPointer).Label(kitText(c, "展开选项")), kitText(c, "选择或输入"))
 		toggle.OnClick(func() {
 			cb.Input.Focus()
@@ -200,19 +209,24 @@ func ComboboxField(c *ui.Context, value *string, options []string, label, placeh
 		// instead of once per row.
 		query := ""
 		if cb.Filtering() {
-			query = strings.ToLower(*value)
+			query = strings.ToLower(value)
 		}
 		ui.Scroll(c).MaxHeight(300).Children(func() {
+			shown := 0
 			for _, text := range options {
 				if query == "" || strings.Contains(strings.ToLower(text), query) {
-					option(c, cb.Item(text), text, text == *value, SecondaryInk(c, ink))
+					option(c, cb.Item(text), text, text == value, SecondaryInk(c, ink))
+					shown++
 				}
+			}
+			if shown == 0 {
+				ui.Text(c, kitText(c, "无匹配选项")).Padding(8, 10).FontSize(FontSmall).TextColor(SecondaryInk(c, ink)).Unselectable()
 			}
 		})
 	})
 	if text, ok := cb.Chosen(); ok {
-		*value = text
-		cb.Input.SetChanged()
+		value = text
+		changed(text)
 	}
 	return root
 }
@@ -229,7 +243,7 @@ func OptionChrome(c *ui.Context, e ui.Element, selected bool, tone ui.Color, sec
 	t := c.Theme()
 	fill, ink := ui.Transparent, SecondaryInkOf(t, secondary...)
 	if selected {
-		fill, ink = SelectedFill(tone), tone.Mix(t.Text, 0.20)
+		fill, ink = SelectedFill(tone), accentText(t, tone)
 	} else if e.Hovered() {
 		fill, ink = t.SurfaceHover, t.Text
 	}
@@ -290,37 +304,72 @@ func DialogPanel(c *ui.Context, panel ui.Element, width float32) {
 		Background(c.Theme().Surface).Border(1, hairline(c.Theme())).Radius(8).Shadow(0, 10, 30, 0, ui.RGBA(0, 0, 0, 0.25)).Transition(PopupTransition())
 }
 
+// FieldStatus is a visual validation state. The caller owns validation and
+// should provide an explanatory message alongside the control.
+type FieldStatus uint8
+
+const (
+	FieldNormal FieldStatus = iota
+	FieldWarning
+	FieldError
+)
+
 // InputChrome gives every form control a visible boundary and focus state.
 func InputChrome(c *ui.Context, e ui.Element) ui.Element {
+	return InputChromeStatus(c, e, FieldNormal)
+}
+
+func InputChromeStatus(c *ui.Context, e ui.Element, status FieldStatus) ui.Element {
 	border := hairline(c.Theme())
 	background := c.Theme().SurfaceHover
-	if e.Hovered() {
+	if e.Hovered() && !e.IsDisabled() {
 		border = c.Theme().Border.Mix(c.Theme().Text, chromeHoverMix)
 	}
 	if e.FocusWithin() || e.Focused() {
 		border = c.Theme().Accent
 	}
+	switch status {
+	case FieldWarning:
+		border = WarningInk(c.Theme())
+	case FieldError:
+		border = c.Theme().Danger
+	}
 	border = e.AnimateColor("chrome-border", border, ui.Animation{Duration: chromeFade, Ease: ui.EaseInOut})
-	return e.MinWidth(0).Border(1, border).Background(fade(e, "chrome-fill", background)).Radius(Radius).FontSize(FontBody).TextColor(c.Theme().Text)
+	// Styled MyGo inputs apply their own hover/focus border after construction.
+	// Paint the kit border last so those styles cannot hide validation states;
+	// the native control still owns focus, editing and accessibility.
+	return e.MinWidth(0).Border(1, border).Background(fade(e, "chrome-fill", background)).Radius(Radius).FontSize(FontBody).TextColor(c.Theme().Text).
+		DrawOver(func(p *ui.Painter, r ui.Rect) { p.Stroke(r, border, Radius, 1) })
 }
 func Input(c *ui.Context, value *string) ui.Element {
-	return InputChrome(c, ui.TextInput(c, value)).Height(ControlHeight)
+	return InputStatus(c, value, FieldNormal)
 }
-func Area(c *ui.Context, value *string) ui.Element { return InputChrome(c, ui.TextArea(c, value)) }
+func InputStatus(c *ui.Context, value *string, status FieldStatus) ui.Element {
+	return InputChromeStatus(c, ui.TextInput(c, value), status).Height(ControlHeight)
+}
+func Area(c *ui.Context, value *string) ui.Element { return AreaStatus(c, value, FieldNormal) }
+func AreaStatus(c *ui.Context, value *string, status FieldStatus) ui.Element {
+	return InputChromeStatus(c, ui.TextArea(c, value), status)
+}
 
 // PasswordInput keeps the text in MyGo's input, with visibility local to this control.
 func PasswordInput(c *ui.Context, key, label string, value *string, placeholder ...string) ui.Element {
-	return passwordInputInk(c, key, label, value, nil, placeholder...)
+	return passwordInputInk(c, key, label, value, FieldNormal, nil, placeholder...)
+}
+
+// PasswordInputStatus applies validation chrome while preserving visibility state.
+func PasswordInputStatus(c *ui.Context, key, label string, value *string, status FieldStatus, placeholder ...string) ui.Element {
+	return passwordInputInk(c, key, label, value, status, nil, placeholder...)
 }
 
 // PasswordInputInk is PasswordInput with the caller's secondary-text tone.
 func PasswordInputInk(c *ui.Context, key, label string, value *string, ink ui.Color, placeholder ...string) ui.Element {
-	return passwordInputInk(c, key, label, value, []ui.Color{ink}, placeholder...)
+	return passwordInputInk(c, key, label, value, FieldNormal, []ui.Color{ink}, placeholder...)
 }
 
-func passwordInputInk(c *ui.Context, key, label string, value *string, tone []ui.Color, placeholder ...string) ui.Element {
+func passwordInputInk(c *ui.Context, key, label string, value *string, status FieldStatus, tone []ui.Color, placeholder ...string) ui.Element {
 	ink := SecondaryInk(c, tone)
-	root := InputChrome(c, ui.Row(c.Key(key)).Height(ControlHeight).AlignItems(ui.Center).Gap(0))
+	root := InputChromeStatus(c, ui.Row(c.Key(key)).Height(ControlHeight).AlignItems(ui.Center).Gap(0), status)
 	visible := ui.Local(root, "visible", func() bool { return false })
 	root.Children(func() {
 		input := ui.TextInputBase(c.Key("input"), value).Grow(1).MinWidth(0).FillHeight().Padding(5, 10).

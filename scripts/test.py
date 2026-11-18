@@ -23,6 +23,14 @@ def main():
         ["go", "test", "-p", str(args.jobs), "-parallel", str(args.jobs), "-count=1",
          "-timeout=60s", "./..."], cwd=ROOT, env=env,
     )
+    if result == 0:
+        # Go ignores underscore-prefixed example directories during ./...;
+        # exercise the gallery explicitly without imposing its host import on
+        # projects that copy uikit.
+        result = subprocess.call(
+            ["go", "test", "-p", str(args.jobs), "-parallel", str(args.jobs), "-count=1",
+             "-timeout=60s", "./desktop/uikit/_gallery"], cwd=ROOT, env=env,
+        )
     print(f"Full Go tests: {time.perf_counter() - started:.2f}s", flush=True)
     return result
 

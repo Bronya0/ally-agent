@@ -19,6 +19,7 @@ func (a *desktop) notifyRunCompletion(event string, payload map[string]any) {
 	if title == "" || a.win == nil || !a.acceptCompletionNotice(event, payload, mygo.App.IsActive(), time.Now()) {
 		return
 	}
+	mygo.App.Dock.Bounce(false)
 	opts := mygo.NotificationOptions{Title: "Ally", Body: title}
 	if runtime.GOOS == "windows" {
 		// A balloon otherwise enlarges the 16–32px tray icon for its main image.

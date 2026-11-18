@@ -234,14 +234,19 @@ func (a *desktop) railWorkspaces(c *ui.Context) {
 			ui.Column(c).FillWidth().Padding(3, 0, 0).Children(func() {
 				a.railSearchField(c, "rail-ws-search", locales.Text("工作区"), &a.railWSSearch)
 				query := strings.TrimSpace(a.railWSSearch.query)
-				ui.Scroll(c.Key("workspace-items")).FillWidth().MaxHeight(180).MinHeight(0).Children(func() {
+				scroll := ui.Scroll(c.Key("workspace-items")).FillWidth().MaxHeight(180).MinHeight(0)
+				key := railWorkspaceFilterKey{a.sessRev, a.workspaceVisitsRev, query}
+				roots := memoAt[memoOf[railWorkspaceFilterKey, []string]](scroll, "workspace-rows").get(key, func(railWorkspaceFilterKey) []string {
+					return railWorkspacesMatching(a.workspaceHistoryRoots(), query)
+				})
+				scroll.Children(func() {
 					shown := 0
 					temporary := locales.Text("临时工作区")
 					if query == "" || strings.Contains(strings.ToLower(temporary), strings.ToLower(query)) {
 						a.railWorkspaceRow(c, "", temporary, locales.Text("在系统临时目录创建沙箱，随标签页关闭自动删除"))
 						shown++
 					}
-					for _, root := range railWorkspacesMatching(a.workspaceHistoryRoots(), query) {
+					for _, root := range roots {
 						root := root
 						a.railWorkspaceRow(c, root, workspaceLabel(root), root)
 						shown++
@@ -283,11 +288,7 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 	row.Children(func() {
 		btn := ui.ButtonBase(c.Key("rail-ws-btn-" + root)).Grow(1).Height(24).Justify(ui.Start).Label(label).Cursor(ui.CursorPointer)
 		btn.OnClick(func() {
-			if root == "" {
-				a.newConversation("")
-				return
-			}
-			a.openWorkspace(root)
+			a.openWorkspaceEntry(root)
 		})
 		btn.Children(func() { ui.Text(c, label).FontSize(fsSmall).TextColor(ink).SingleLine() })
 		if root != "" {
@@ -308,28 +309,49 @@ func (a *desktop) removeWorkspaceHistory(root string) {
 	}
 	ids := a.workspaceSessionIDs(root)
 	if len(ids) == 0 {
-		a.forgetWorkspaceVisit(root)
+		// Nothing saved to delete, but the entry is still the record of having
+		// worked there, so it goes through the same confirmation.
+		a.confirmAction(locales.Text("删除历史记录"), fmt.Sprintf(locales.Text("将从历史中移除 %s。该工作区没有已保存的会话。"), workspaceLabel(root)), func() error {
+			return nil
+		}, func() {
+			a.hideWorkspaceVisit(root)
+		})
 		return
 	}
-	var failures []string
+	var deleted, failures []string
 	a.confirmAction(locales.Text("删除历史记录"), fmt.Sprintf(locales.Text("%s 的 %d 个会话将被永久删除，无法恢复。正在运行或压缩中的会话会跳过。"), workspaceLabel(root), len(ids)), func() error {
-		failures = failures[:0]
-		for _, id := range ids {
-			if err := a.core.DeleteSession(id); err != nil {
-				failures = append(failures, err.Error())
-			}
-		}
+		deleted, failures = a.deleteWorkspaceSessions(ids, a.core.DeleteSession)
 		return nil
 	}, func() {
-		a.forgetSessions(ids)
-		a.reloadSessions()
-		if len(failures) > 0 {
-			a.notifyError(fmt.Sprintf(locales.Text("已删除 %d 个会话，%d 个未能删除：%s"), len(ids)-len(failures), len(failures), strings.Join(failures, "；")))
-			return
-		}
-		a.forgetWorkspaceVisit(root)
-		a.notifySuccess(fmt.Sprintf(locales.Text("已删除 %d 个会话"), len(ids)))
+		a.applyWorkspaceRemoval(root, deleted, failures)
 	})
+}
+
+// deleteWorkspaceSessions removes what the backend accepts and reports both
+// lists. A running or compacting session is refused there, and the caller must
+// keep it: counting it as deleted blanked a tab whose transcript still exists.
+func (a *desktop) deleteWorkspaceSessions(ids []string, remove func(string) error) (deleted, failures []string) {
+	for _, id := range ids {
+		if err := remove(id); err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		deleted = append(deleted, id)
+	}
+	return deleted, failures
+}
+
+// applyWorkspaceRemoval forgets only the sessions that were deleted, and the
+// workspace entry itself once none of its sessions are left.
+func (a *desktop) applyWorkspaceRemoval(root string, deleted, failures []string) {
+	a.forgetSessions(deleted)
+	a.reloadSessions()
+	if len(failures) > 0 {
+		a.queueNotice(fmt.Sprintf(locales.Text("已删除 %d 个会话，%d 个未能删除：%s"), len(deleted), len(failures), strings.Join(failures, "；")), "error")
+		return
+	}
+	a.hideWorkspaceVisit(root)
+	a.queueNotice(fmt.Sprintf(locales.Text("已删除 %d 个会话"), len(deleted)), "success")
 }
 
 // workspaceSessionIDs lists every session recorded under root. It walks the
@@ -552,7 +574,7 @@ func (a *desktop) railSearchField(c *ui.Context, id, label string, s *railSearch
 	if !s.open {
 		return
 	}
-	field := uikit.InputChrome(c, ui.SearchField(c.Key(id), &s.query)).
+	field := uikit.SearchField(c.Key(id), &s.query).
 		Height(24).Padding(0, 6).FontSize(fsSmall).FillWidth().Shrink(0).Label(label)
 	if s.focus {
 		field.Focus()
@@ -561,18 +583,27 @@ func (a *desktop) railSearchField(c *ui.Context, id, label string, s *railSearch
 	field.Margin(0, 0, 3, 0)
 }
 
-// railWorkspacesMatching keeps the roots whose label or path holds query.
+type railWorkspaceFilterKey struct {
+	sessions, visits uint64
+	query            string
+}
+
+// railWorkspacesMatching keeps a stable name/path order independent of visits.
 func railWorkspacesMatching(roots []string, query string) []string {
 	query = strings.ToLower(strings.TrimSpace(query))
-	if query == "" {
-		return roots
-	}
 	out := make([]string, 0, len(roots))
 	for _, root := range roots {
 		if strings.Contains(strings.ToLower(workspaceLabel(root)), query) || strings.Contains(strings.ToLower(root), query) {
 			out = append(out, root)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		left, right := strings.ToLower(workspaceLabel(out[i])), strings.ToLower(workspaceLabel(out[j]))
+		if left != right {
+			return left < right
+		}
+		return workspaceKey(out[i]) < workspaceKey(out[j])
+	})
 	return out
 }
 

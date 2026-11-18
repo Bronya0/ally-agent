@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"ally-dev/desktop/uikit"
 	"ally-dev/locales"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/video"
@@ -111,7 +112,7 @@ func (a *desktop) workspaceVideoView(c *ui.Context, file *workspaceFile, p *nati
 			ui.Text(c, videoTime(player.Position())).FontSize(fsSmall).TextColor(ui.RGB(220, 220, 220)).NoWrap()
 			duration := player.Duration()
 			position := player.Position().Seconds()
-			slider := ui.Slider(c.Key("video-position"), &position, 0, max(duration.Seconds(), 0.001)).Grow(1).MinWidth(40).Disabled(duration <= 0)
+			slider := uikit.Slider(c.Key("video-position"), &position, 0, max(duration.Seconds(), 0.001)).Grow(1).MinWidth(40).Disabled(duration <= 0)
 			if slider.Changed() {
 				player.Seek(time.Duration(position * float64(time.Second)))
 			}
@@ -122,7 +123,7 @@ func (a *desktop) workspaceVideoView(c *ui.Context, file *workspaceFile, p *nati
 			}
 			flat(c, label).OnClick(func() { player.SetMuted(!player.Muted()) })
 			volume := player.Volume()
-			if ui.Slider(c.Key("video-volume"), &volume, 0, 1).Width(80).Changed() {
+			if uikit.Slider(c.Key("video-volume"), &volume, 0, 1).Width(80).Changed() {
 				player.SetVolume(volume)
 			}
 		})

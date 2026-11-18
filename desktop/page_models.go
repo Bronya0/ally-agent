@@ -44,7 +44,11 @@ func modelNumberCombobox(c *ui.Context, id, label string, input *string, value *
 	for _, preset := range presets {
 		options = append(options, preset.label)
 	}
-	uikit.ComboboxField(c.Key(id), input, options, label, locales.Text("输入数字或选择常用值"), ink).FillWidth()
+	status := uikit.FieldNormal
+	if _, err := parseModelNumberInput(*input, max, label); err != nil {
+		status = uikit.FieldError
+	}
+	uikit.ComboboxFieldStatus(c.Key(id), *input, options, label, locales.Text("输入数字或选择常用值"), status, func(value string) { *input = value }, ink).FillWidth()
 	parsed, err := parseModelNumberInput(*input, max, label)
 	if err != nil {
 		return err
@@ -379,14 +383,9 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 		} else {
 			fieldLabel(c, locales.Text("供应商快速配置"))
 			names := catalogProviderOptions()
-			chosen := a.modelProviderPreset
-			if chosen == "" {
-				chosen = customProviderPreset
-			}
-			uikit.ComboboxField(c.Key("model-provider-preset"), &chosen, names, locales.Text("供应商快速配置"), "", a.secondaryInk()).FillWidth()
-			if chosen != a.modelProviderPreset {
-				a.invalidateModelFetch()
+			uikit.ComboboxField(c.Key("model-provider-preset"), a.modelProviderPreset, names, locales.Text("供应商快速配置"), "", func(chosen string) {
 				a.modelProviderPreset = chosen
+				a.invalidateModelFetch()
 				if provider := findCatalogProviderByName(chosen); provider != nil {
 					a.modelDraft.ProviderName = provider.Name
 					a.modelDraft.BaseURL = provider.BaseURL
@@ -402,29 +401,27 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 				} else {
 					a.modelProviderModel = ""
 				}
-			}
+			}, a.secondaryInk()).FillWidth()
 			if provider := findCatalogProviderByName(a.modelProviderPreset); provider != nil {
 				modelOptions := make([]string, 0, len(provider.Models))
 				for _, model := range provider.Models {
 					modelOptions = append(modelOptions, catalogModelLabel(model))
 				}
-				chosenModel := a.modelProviderModel
 				ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-					uikit.ComboboxField(c.Key("model-provider-model"), &chosenModel, modelOptions, locales.Text("供应商模型"), "", a.secondaryInk()).Grow(1)
+					uikit.ComboboxField(c.Key("model-provider-model"), a.modelProviderModel, modelOptions, locales.Text("供应商模型"), "", func(chosenModel string) {
+						a.modelProviderModel = chosenModel
+						if model := findCatalogModel(provider, chosenModel); model != nil {
+							applyCatalogModel(a, *model)
+						} else {
+							a.modelDraft.Model = chosenModel
+							a.modelDraft.DisplayName = ""
+						}
+					}, a.secondaryInk()).Grow(1)
 					if provider.Doc != "" {
 						services := c.Services()
 						flat(c, locales.Text("查看供应商文档")).OnClick(func() { services.OpenURL(provider.Doc) })
 					}
 				})
-				if chosenModel != a.modelProviderModel {
-					a.modelProviderModel = chosenModel
-					if model := findCatalogModel(provider, chosenModel); model != nil {
-						applyCatalogModel(a, *model)
-					} else {
-						a.modelDraft.Model = chosenModel
-						a.modelDraft.DisplayName = ""
-					}
-				}
 				fieldNote(c, fmt.Sprintf(locales.Text("已从内置目录填入 %s 的接口地址、格式和模型参数；API Key 仍需自行填写。"), provider.Name), a.secondaryInk())
 			}
 			ui.Grid(c.Key("model-main-fields")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
@@ -439,7 +436,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 						// Mirrors the Vue editor's Model n-select (filterable + tag): one
 						// searchable field that lists the models fetched from the provider
 						// and still accepts a hand-typed id.
-						uikit.ComboboxField(c.Key("model-id"), &a.modelDraft.Model, a.modelDraftOptions(), "Model ID", modelIDPlaceholder(a.modelDraft.APIFormat), a.secondaryInk()).Grow(1)
+						uikit.ComboboxField(c.Key("model-id"), a.modelDraft.Model, a.modelDraftOptions(), "Model ID", modelIDPlaceholder(a.modelDraft.APIFormat), func(value string) { a.modelDraft.Model = value }, a.secondaryInk()).Grow(1)
 						flatBusy(c, locales.Text("拉取模型"), a.modelForm.FetchBusy, a.modelForm.FetchBusy || a.modelSaving).OnClick(func() { a.fetchModelList() })
 					})
 					if a.modelForm.FetchNote != "" {
@@ -473,7 +470,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
 					fieldLabel(c, locales.Text("推理标签"))
-					uikit.ComboboxField(c.Key("reasoning-tag"), &a.modelDraft.ReasoningTag, []string{"reasoning_content", "reasoning", "think", "thinking", "thought", "reason"}, locales.Text("推理标签"), "", a.secondaryInk()).FillWidth()
+					uikit.ComboboxField(c.Key("reasoning-tag"), a.modelDraft.ReasoningTag, []string{"reasoning_content", "reasoning", "think", "thinking", "thought", "reason"}, locales.Text("推理标签"), "", func(value string) { a.modelDraft.ReasoningTag = value }, a.secondaryInk()).FillWidth()
 				})
 			})
 			if a.modelDraft.APIFormat == backend.APIFormatOpenAIChat {

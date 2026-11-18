@@ -284,7 +284,7 @@ func (a *desktop) settingsGeneralContent(c *ui.Context, selected int) {
 				})
 			})
 			a.settingsRow(c, "background-opacity-row", locales.Text("背景图透明度"), fmt.Sprintf(locales.Text("当前 %.0f%%，越大越明显。"), a.settings.BgOpacity*100), settingsControlWidth, func() ui.Element {
-				return ui.Slider(c.Key("bg-opacity"), &a.settings.BgOpacity, 0, 1).Label(locales.Text("背景图透明度")).FillWidth()
+				return uikit.Slider(c.Key("bg-opacity"), &a.settings.BgOpacity, 0, 1).Label(locales.Text("背景图透明度")).FillWidth()
 			})
 		})
 		a.settingsCard(c, "settings-fonts", locales.Text("阅读字号"), locales.Text("按文字类型限制范围，离开设置页面时保存。"), func() {
@@ -322,7 +322,7 @@ func (a *desktop) settingsGeneralContent(c *ui.Context, selected int) {
 			}
 			a.settingsRow(c, "user-agent-row", "User-Agent", locales.Text("可选预设或自定义；仅用于模型 API 请求，HTTP 工具不受影响。"), settingsControlWidth, func() ui.Element {
 				uaPresets := []string{defaultUserAgentOption, "Codex CLI", "Claude Code", "OpenCode", "Pi"}
-				return uikit.ComboboxField(c.Key("user-agent"), &a.configDraft.UserAgent, uaPresets, "User-Agent", uaPresets[0], a.secondaryInk()).FillWidth()
+				return uikit.ComboboxField(c.Key("user-agent"), a.configDraft.UserAgent, uaPresets, "User-Agent", uaPresets[0], func(value string) { a.configDraft.UserAgent = value }, a.secondaryInk()).FillWidth()
 			})
 		})
 	}
@@ -407,7 +407,7 @@ func (a *desktop) settingsCompactThreshold(c *ui.Context) {
 			if a.settings.ThresholdMode == backend.CompactThresholdModeTokens {
 				uikit.NumberInput(c, "compact-threshold-tokens", locales.Text("压缩阈值（tokens）"), &a.settings.ThresholdTokens, 1, backend.MaxCompactThresholdTokens, 1000, a.secondaryInk()).AlignSelf(ui.End)
 			} else {
-				ui.Slider(c.Key("compact-threshold"), &a.settings.Threshold, 0.2, 0.95).Label(locales.Text("压缩阈值")).FillWidth()
+				uikit.Slider(c.Key("compact-threshold"), &a.settings.Threshold, 0.2, 0.95).Label(locales.Text("压缩阈值")).FillWidth()
 			}
 		})
 	})

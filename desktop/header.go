@@ -466,24 +466,23 @@ func workspaceLabel(root string) string {
 	return base
 }
 
-// sessionTabLabel is the primary tab identity; workspaceTip supplies its location on hover.
+// sessionTabLabel identifies the workspace; conversation titles stay in the
+// session list and can change independently of the title bar.
 func sessionTabLabel(tab *conversation) string {
-	if tab == nil || strings.TrimSpace(tab.Title) == "" {
-		return locales.Text("会话")
+	if tab == nil {
+		return workspaceLabel("")
 	}
-	return short(strings.TrimSpace(tab.Title), 36)
+	if strings.HasPrefix(filepath.Base(tab.Workspace), "ally-temp-") {
+		return locales.Text("临时工作区")
+	}
+	return workspaceLabel(tab.Workspace)
 }
 
 func sessionTabTip(tab *conversation) string {
 	if tab == nil {
 		return workspaceTip("")
 	}
-	workspace := workspaceTip(tab.Workspace)
-	title := strings.TrimSpace(tab.Title)
-	if title == "" || title == sessionTabLabel(tab) {
-		return workspace
-	}
-	return short(title, 72) + "\n" + workspace
+	return workspaceTip(tab.Workspace)
 }
 
 func workspaceTip(root string) string {
@@ -589,7 +588,7 @@ func (a *desktop) updateDialog(c *ui.Context) {
 				if value < 0 || value > 1 {
 					value = -1
 				}
-				ui.Progress(c, value).Label(locales.Text("更新进度"))
+				uikit.Progress(c, value).Label(locales.Text("更新进度"))
 				ui.Row(c).Children(func() {
 					label := fmt.Sprintf("%.0f%%", a.upd.Progress)
 					if a.upd.Progress < 0 {
