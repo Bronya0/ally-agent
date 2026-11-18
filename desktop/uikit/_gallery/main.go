@@ -234,7 +234,7 @@ func (g *gallery) view(c *ui.Context) {
 						})
 						uikit.Notice(c, uikit.NoticeInfo, "普通提示")
 						uikit.InlineError(c, "example-error", "错误信息示例")
-						uikit.KV(c, "版本", "MyGo v0.9.2")
+						uikit.KV(c, "版本", "MyGo v0.10.0")
 						uikit.Divider(c)
 						uikit.EmptyState(c, "暂无数据", "这里展示空状态。")
 						uikit.BusyRow(c, "正在加载")

@@ -1,6 +1,6 @@
 # Native UI kit
 
-Independent native MyGo controls, currently used with MyGo v0.9.2. Copy the
+Independent native MyGo controls, currently used with MyGo v0.10.0. Copy the
 package into another Go project and import it using that project's module path.
 It depends on MyGo and, on Windows, `golang.org/x/sys/windows`; it does not
 import Ally packages. The gallery is a repository-specific example and its
