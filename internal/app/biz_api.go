@@ -373,7 +373,11 @@ func apiAuthWithToken(next http.Handler, getToken func() string) http.Handler {
 			apiWriteError(w, http.StatusUnauthorized, "invalid or missing bearer token")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
+		limit := int64(4 << 20)
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/") && strings.HasSuffix(r.URL.Path, "/answers") {
+			limit = 56 << 20
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
 }

@@ -10,6 +10,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1067,6 +1068,7 @@ type AskSubmittedAnswer struct {
 	QuestionID        string   `json:"questionId"`
 	SelectedOptionIDs []string `json:"selectedOptionIds"`
 	CustomText        string   `json:"customText,omitempty"`
+	Images            []string `json:"images,omitempty"`
 }
 
 type AskSubmitRequest struct {
@@ -1087,6 +1089,8 @@ type AskResolvedAnswer struct {
 	QuestionID string                 `json:"questionId"`
 	Question   string                 `json:"question"`
 	Selections []AskResolvedSelection `json:"selections"`
+	ImageCount int                    `json:"imageCount,omitempty"`
+	Images     []string               `json:"-"`
 }
 
 type AskResult struct {
@@ -3507,6 +3511,7 @@ func resolveAskSubmission(askID string, req AskRequest, submitted []AskSubmitted
 		answersByQuestion[answer.QuestionID] = answer
 	}
 	result := AskResult{AskID: askID, Answers: make([]AskResolvedAnswer, 0, len(req.Questions))}
+	totalImages := 0
 	for _, question := range req.Questions {
 		submittedAnswer, ok := answersByQuestion[question.ID]
 		if !ok {
@@ -3517,6 +3522,20 @@ func resolveAskSubmission(askID string, req AskRequest, submitted []AskSubmitted
 			options[option.ID] = option
 		}
 		resolved := AskResolvedAnswer{QuestionID: question.ID, Question: question.Question}
+		totalImages += len(submittedAnswer.Images)
+		if totalImages > 8 {
+			return AskResult{}, codedToolError("E_BAD_ASK_ANSWER", errors.New("at most 8 images are allowed"))
+		}
+		for _, image := range submittedAnswer.Images {
+			if !validImageDataURL(image) || attachmentImageDataURLBytes(image) > maxAttachmentImageBytes {
+				return AskResult{}, codedToolError("E_BAD_ASK_ANSWER", errors.New("invalid or oversized image"))
+			}
+			if _, err := base64.StdEncoding.DecodeString(strings.SplitN(image, ",", 2)[1]); err != nil {
+				return AskResult{}, codedToolError("E_BAD_ASK_ANSWER", errors.New("invalid image encoding"))
+			}
+			resolved.Images = append(resolved.Images, image)
+		}
+		resolved.ImageCount = len(resolved.Images)
 		selected := map[string]bool{}
 		for _, optionID := range submittedAnswer.SelectedOptionIDs {
 			if selected[optionID] {
@@ -3534,7 +3553,7 @@ func resolveAskSubmission(askID string, req AskRequest, submitted []AskSubmitted
 		if custom := strings.TrimSpace(submittedAnswer.CustomText); custom != "" {
 			resolved.Selections = append(resolved.Selections, AskResolvedSelection{Label: custom, Custom: true})
 		}
-		if len(resolved.Selections) == 0 {
+		if len(resolved.Selections) == 0 && len(resolved.Images) == 0 {
 			return AskResult{}, codedToolError("E_BAD_ASK_ANSWER", fmt.Errorf("question %s requires at least one selected or custom answer", question.ID))
 		}
 		result.Answers = append(result.Answers, resolved)

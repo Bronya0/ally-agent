@@ -13,6 +13,7 @@ import (
 	backend "ally-dev/internal/app"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
+	"github.com/google/uuid"
 )
 
 // chatMessages is the conversation viewport: history, welcome card, plan
@@ -1018,7 +1019,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 	wkey := "ask-" + t.AskID + ":" + q.ID
 	answered := 0
 	for _, question := range t.Questions {
-		if len(st.AskSelected[question.ID]) > 0 || (st.AskCustom[question.ID] && strings.TrimSpace(st.AskCustomTxt[question.ID]) != "") {
+		if len(st.AskSelected[question.ID]) > 0 || (st.AskCustom[question.ID] && (strings.TrimSpace(st.AskCustomTxt[question.ID]) != "" || len(st.AskImages[question.ID]) > 0)) {
 			answered++
 		}
 	}
@@ -1093,13 +1094,34 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 			st.AskCustom[q.ID] = custom
 			if custom {
 				txt := st.AskCustomTxt[q.ID]
-				uikit.Area(c.Key("ask-custom-text-"+wkey), &txt).Label(locales.Text("输入你的回答")).Placeholder(locales.Text("输入你的回答")).Height(70).
+				input := uikit.Area(c.Key("ask-custom-text-"+wkey), &txt).Label(locales.Text("输入你的回答")).Placeholder(locales.Text("输入你的回答，可粘贴图片")).Height(70).
 					OnChange(func() { st.AskCustomTxt[q.ID] = txt })
+				paste := func() bool { return a.pasteAskImage(c, t, q.ID) }
+				input.OnPaste(func(string) bool { return paste() })
+				input.OnTextKey(func(k ui.TextKey) bool {
+					return k.Key == ui.KeyV && k.Mods == ui.Cmd && paste()
+				})
+				ui.Row(c).Gap(gapInline).Wrap().Children(func() {
+					for i, item := range st.AskImages[q.ID] {
+						i, item := i, item
+						ui.Row(c.Key(item.input.ID)).AlignItems(ui.Center).Gap(gapInline).Children(func() {
+							if bitmap := st.AskImageBitmaps[item.input.ID]; bitmap != nil {
+								ui.Image(c, bitmap).Size(36, 32).Shrink(0).Fit(ui.Contain)
+							}
+							ui.Text(c, fmt.Sprintf(locales.Text("图片 %d"), i+1)).FontSize(fsSmall)
+							dangerIconAction(c, "ask-remove-"+item.input.ID, locales.Text("移除图片"), "close", 20, func() {
+								images := st.AskImages[q.ID]
+								st.AskImages[q.ID] = append(images[:i], images[i+1:]...)
+								delete(st.AskImageBitmaps, item.input.ID)
+							})
+						})
+					}
+				})
 			}
 		})
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 			ui.Spacer(c)
-			disabled := answered < len(t.Questions) || st.AskSubmitted
+			disabled := answered < len(t.Questions) || st.AskSubmitted || st.AskImageLoading > 0
 			primary(c, locales.Text("提交回答")).Disabled(disabled).OnClick(func() { a.submitAsk(t) })
 		})
 	})
@@ -1137,6 +1159,9 @@ func (a *desktop) submitAsk(t *conversation) {
 		answer := backend.AskSubmittedAnswer{QuestionID: q.ID}
 		if st.AskCustom[q.ID] {
 			answer.CustomText = strings.TrimSpace(st.AskCustomTxt[q.ID])
+			for _, image := range st.AskImages[q.ID] {
+				answer.Images = append(answer.Images, image.input.DataURL)
+			}
 		}
 		answer.SelectedOptionIDs = append(answer.SelectedOptionIDs, st.AskSelected[q.ID]...)
 		req.Answers = append(req.Answers, answer)
@@ -1149,6 +1174,46 @@ func (a *desktop) submitAsk(t *conversation) {
 		}
 		return err
 	})
+}
+
+func (a *desktop) pasteAskImage(c *ui.Context, t *conversation, questionID string) bool {
+	data := clipboardImage(c)
+	if len(data) == 0 {
+		return false
+	}
+	st := t.uiState()
+	count := st.AskImageLoading
+	for _, images := range st.AskImages {
+		count += len(images)
+	}
+	if count >= maxAttachments {
+		a.notify(locales.Text("每条消息最多添加 8 个附件"))
+		return true
+	}
+	st.AskImageLoading++
+	askID := t.AskID
+	go func() {
+		input := backend.AttachmentInput{ID: uuid.NewString(), Name: locales.Text("剪贴板图片.png"), Type: "image/png", Kind: "image", Size: int64(len(data))}
+		prepared := prepareImageData(preparedAttachment{input: input}, data)
+		a.win.Update(func() {
+			if t.AskID != askID || a.closing {
+				return
+			}
+			st.AskImageLoading--
+			if prepared.input.Error != "" {
+				a.notify(prepared.input.Error)
+				return
+			}
+			st.AskImages[questionID] = append(st.AskImages[questionID], prepared)
+			if st.AskImageBitmaps == nil {
+				st.AskImageBitmaps = map[string]*ui.Bitmap{}
+			}
+			if prepared.preview != nil {
+				st.AskImageBitmaps[prepared.input.ID] = ui.NewBitmap(prepared.preview)
+			}
+		})
+	}()
+	return true
 }
 
 // Welcome detection shares the append-aware transcript index.

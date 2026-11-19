@@ -194,12 +194,18 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		ui.AskSelected = map[string][]string{}
 		ui.AskCustom = map[string]bool{}
 		ui.AskCustomTxt = map[string]string{}
+		ui.AskImages = map[string][]preparedAttachment{}
+		ui.AskImageBitmaps = nil
+		ui.AskImageLoading = 0
 		ui.AskSubmitted = false
 		t.Status = locales.Text("等待你的回答")
 	case "ask:closed":
 		t.AskID = ""
 		t.AskCallID = ""
 		t.Questions = nil
+		ui.AskImages = map[string][]preparedAttachment{}
+		ui.AskImageBitmaps = nil
+		ui.AskImageLoading = 0
 		ui.AskSubmitted = false
 	case "run:retry":
 		ui.ThinkingBytes = 0
@@ -294,6 +300,9 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		t.CancelRequested = false
 		t.AskID = ""
 		t.AskCallID = ""
+		ui.AskImages = map[string][]preparedAttachment{}
+		ui.AskImageBitmaps = nil
+		ui.AskImageLoading = 0
 		ui.CompactBusy = false
 		// Release the streaming builder: its buffer aliases the row's content, so
 		// keeping it would hold one extra copy of the whole answer per tab.

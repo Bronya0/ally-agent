@@ -203,6 +203,9 @@ func toolAskSummary(c *ui.Context, key string, args, result map[string]any) {
 						if text := str(answer, "customText"); text != "" {
 							ui.Text(c, text).FontSize(fsSmall).Selectable()
 						}
+						if count := int(num(answer, "imageCount")); count > 0 {
+							ui.Text(c, fmt.Sprintf(locales.Text("%d 张图片"), count)).FontSize(fsSmall)
+						}
 					}
 				}
 			})

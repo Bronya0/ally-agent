@@ -669,7 +669,7 @@ func readImageInjectionMessage(results []readImageCandidate) *openai.ChatComplet
 	if len(parts) == 0 {
 		return nil
 	}
-	lead := imageInjectionMarker + "The following image file(s) were read by the tool call(s) above and are provided as image input:\n" + strings.Join(names, "\n")
+	lead := imageInjectionMarker + "The following images are provided by the tool calls above in this order:\n" + strings.Join(names, "\n")
 	parts = append([]openai.ChatMessagePart{{Type: openai.ChatMessagePartTypeText, Text: lead}}, parts...)
 	return &openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, MultiContent: parts}
 }
@@ -689,6 +689,18 @@ func collectReadImages(name string, result *toolResult) []readImageCandidate {
 		return nil
 	}
 	switch name {
+	case "ask":
+		r, ok := result.Data.(AskResult)
+		if !ok {
+			return nil
+		}
+		var out []readImageCandidate
+		for _, answer := range r.Answers {
+			for i, image := range answer.Images {
+				out = append(out, readImageCandidate{Path: fmt.Sprintf("Answer to %s (%s), image %d", answer.QuestionID, answer.Question, i+1), DataURL: image})
+			}
+		}
+		return out
 	case "read":
 		var r BatchReadResult
 		if !decodeToolData(result.Data, &r) {
