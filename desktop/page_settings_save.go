@@ -159,7 +159,11 @@ func (a *desktop) saveSettings(notice ...string) {
 func (a *desktop) applySettingsSave(plan settingsCommit, result settingsSaveResult) {
 	if result.config != nil {
 		toolsChanged := !reflect.DeepEqual(a.config.DisabledTools, result.config.DisabledTools)
+		proxyChanged := a.config.ProxyMode != result.config.ProxyMode
 		a.config = *result.config
+		if proxyChanged {
+			a.refreshNativeTray()
+		}
 		if toolsChanged {
 			a.refreshMCPInventory()
 		}
@@ -173,6 +177,12 @@ func (a *desktop) applySettingsSave(plan settingsCommit, result settingsSaveResu
 	a.settingsInFlight = nil
 	if result.configErr == nil {
 		baseline := plan.request.Draft
+		// A queued tray action may have changed the proxy while this form
+		// saved other fields. Rebase the mode and preserve any newer edit.
+		if a.configDraft.ProxyMode == baseline.ProxyMode {
+			a.setProxyModeDraft(a.config.ProxyMode)
+		}
+		baseline.ProxyMode = a.config.ProxyMode
 		if path := plan.request.BackgroundPath; path != nil && result.config != nil {
 			baseline.BackgroundImage = result.config.BackgroundImage
 			if current := a.settings.BackgroundPath; current != nil && *current == *path {

@@ -128,6 +128,7 @@
 ## 常驻引用、列表与其他页面
 
 - 未活跃且可重新加载的会话释放 Markdown 和附件图片派生缓存，`rememberSession` 只额外保留最近一个可丢弃历史对象，运行中任务、草稿和待处理附件不丢弃；入口见 [desktop.go](../desktop/desktop.go)。
+- 附件放大预览限制最长边 2400 像素，后台解码后直接持有缩放位图，不做 PNG 编码再解码；预览关闭后丢弃位图，聊天缩略图仍使用可重建的编码缓存。
 - 正文的 Markdown options、code hook、Handle 和搜索派生缓存按上一帧建出的行修剪，离开视口的消息释放控件配置；入口见 [chat_rows.go](../desktop/chat_rows.go)。
 - 关闭 tab、删除附件、模型、任务或队列元素时使用 `slices.Delete` 或显式清空尾槽，避免缩短切片后底层数组仍保留已删除大对象。
 - 对话删除确认、任务日志弹窗等的按钮、Escape 和背景关闭路径均清理目标对象或大正文，不能只在“关闭”按钮里释放；入口见 [page_chat.go](../desktop/page_chat.go) 与 [page_tasks.go](../desktop/page_tasks.go)。

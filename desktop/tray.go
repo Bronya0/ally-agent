@@ -20,6 +20,8 @@ func (a *desktop) createSystemTray(icon []byte, template bool) error {
 		MenuLabel:      "Ally",
 		Font:           nativeFontFamily(),
 		Items:          a.trayMenuItems(),
+		ItemsForOpen:   a.trayMenuItems,
+		MaxWidth:       300,
 		OnClick:        a.showMainWindow,
 		CanOpen:        func() bool { return !a.closing && !a.quitReady },
 	})
@@ -57,6 +59,16 @@ func (a *desktop) createSystemTray(icon []byte, template bool) error {
 		}
 	})
 	return nil
+}
+
+// Linux's native indicator does not report menu opening. Refresh it only on
+// tab, run and proxy changes. The custom flyout takes its snapshot on opening.
+func (a *desktop) refreshNativeTray() {
+	if runtime.GOOS == "linux" && a.tray != nil && !a.closing && !a.quitReady {
+		if err := a.tray.SetItems(a.trayMenuItems()); err != nil {
+			log.Printf("tray menu refresh failed: %v", err)
+		}
+	}
 }
 
 func (a *desktop) showMainWindow() {

@@ -132,7 +132,11 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 
 	switch name {
 	case "run:start":
+		t.trayOutcome = ""
 		wasStarting := t.Busy
+		if !wasStarting {
+			defer a.refreshNativeTray()
+		}
 		t.RunID = str(p, "runId")
 		t.Busy = true
 		t.Status = locales.Text("正在连接模型…")
@@ -290,6 +294,15 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		ui.ThinkingBytes = 0
 		t.Status = locales.Text("已注入新消息，继续执行…")
 	case "run:done", "run:error":
+		defer a.refreshNativeTray()
+		t.trayOutcome = str(p, "status")
+		if t.trayOutcome == "" {
+			if name == "run:done" {
+				t.trayOutcome = "done"
+			} else {
+				t.trayOutcome = "error"
+			}
+		}
 		t.toolRev++
 		ui.ThinkingBytes = 0
 		ui.PlanCollapsed = true

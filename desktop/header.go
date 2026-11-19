@@ -534,6 +534,7 @@ func (a *desktop) detachWorkspaceTab(index int) string {
 	}
 	a.rememberSession(t)
 	a.tabs = slices.Delete(a.tabs, index, index+1)
+	a.refreshNativeTray()
 	stillOpen := false
 	for _, tab := range a.tabs {
 		if sameWorkspace(tab.Workspace, t.Workspace) {

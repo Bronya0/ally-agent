@@ -18,7 +18,7 @@ func TestNativeMenuActionsAndSeparators(t *testing.T) {
 		{Key: "second", Label: "Update", SeparatorBefore: true, NativeSeparatorBefore: &noSeparator, OnClick: func() { calls[1]++ }},
 		{Key: "disabled", Label: "Disabled", Disabled: true, SeparatorBefore: true},
 	}
-	menu, err := nativeMenu(items)
+	menu, err := nativeMenu(items, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,6 +53,35 @@ func TestItemsValidateAndCopyOptions(t *testing.T) {
 	flag = false
 	if !*items[0].NativeSeparatorBefore {
 		t.Fatal("caller changed the stored separator")
+	}
+}
+
+func TestTraySubmenuRetainsActionsAndSelection(t *testing.T) {
+	called := false
+	items, err := prepareItems([]TrayItem{{Key: "proxy", Label: "Proxy", Children: []TrayItem{
+		{Key: "system", Label: "System", Checkable: true, Checked: true, OnClick: func() { called = true }},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action := trayAction(items, 1); action == nil {
+		t.Fatal("missing child action")
+	} else {
+		action()
+	}
+	if !called {
+		t.Fatal("child action was not called")
+	}
+	menu, err := nativeMenu(items, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := menu.Items()[0]
+	if parent.Type != mygo.MenuItemSubmenu || len(parent.Submenu) != 1 || !parent.Submenu[0].Checked {
+		t.Fatal("native submenu lost its selected child")
+	}
+	if _, err := prepareItems([]TrayItem{{Key: "x", Children: []TrayItem{{Key: "x"}}}}); err == nil {
+		t.Fatal("duplicate child key accepted")
 	}
 }
 

@@ -1675,6 +1675,7 @@ func (a *desktop) compact(t *conversation, fast bool) {
 		return
 	}
 	st.CompactBusy = true
+	a.refreshNativeTray()
 	st.CompactThinking = 0
 	// The summarising model is the Tab's, exactly as a chat request would use it:
 	// the backend cannot read Tab state, and a session restored from disk has no
@@ -1700,6 +1701,7 @@ func (a *desktop) compact(t *conversation, fast bool) {
 		a.win.Update(func() {
 			if err != nil {
 				st.CompactBusy = false
+				a.refreshNativeTray()
 				st.CompactThinking = 0
 				st.CompactNote = ""
 				a.notify(locales.Text("压缩失败：") + err.Error())
@@ -1715,6 +1717,7 @@ func (a *desktop) compact(t *conversation, fast bool) {
 // Both tiers end here, so the toast and the context footer never disagree with
 // what the history now contains.
 func (a *desktop) finishCompact(t *conversation, result map[string]any, fast bool) {
+	defer a.refreshNativeTray()
 	st := t.uiState()
 	st.CompactBusy = false
 	st.CompactThinking = 0

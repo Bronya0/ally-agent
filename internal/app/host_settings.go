@@ -2,11 +2,31 @@
 package app
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/google/uuid"
 )
+
+var ErrManualProxyNotConfigured = errors.New("manual proxy URL is not configured")
+
+// SetNativeProxyMode changes only the proxy mode using the settings transaction.
+func (a *App) SetNativeProxyMode(mode string) error {
+	switch mode {
+	case proxyModeOff, proxyModeSystem, proxyModeManual:
+	default:
+		return fmt.Errorf("invalid proxy mode: %q", mode)
+	}
+	return a.saveSettingsConfig(func(current *ConfigState) error {
+		if mode == proxyModeManual && normalizeProxyURL(current.ProxyURL, "http") == "" {
+			return ErrManualProxyNotConfigured
+		}
+		current.ProxyMode = mode
+		return nil
+	})
+}
 
 type NativeSettingsRequest struct {
 	Base, Draft ConfigState

@@ -17,12 +17,16 @@ import (
 // when labels can change or the menu can contain duplicate labels.
 type TrayItem struct {
 	Key, Label                string
+	AccessibilityLabel        string
 	Icon                      *ui.SVG
+	StatusColor               ui.Color
+	Checkable, Checked        bool
 	Disabled, SeparatorBefore bool
 	// NativeSeparatorBefore overrides SeparatorBefore for the Linux system menu.
 	// Nil uses SeparatorBefore, including when no override is needed.
 	NativeSeparatorBefore *bool
 	OnClick               func()
+	Children              []TrayItem
 }
 
 // TrayOptions supplies tray content and optional presentation overrides.
@@ -36,9 +40,11 @@ type TrayOptions struct {
 	Items                    []TrayItem
 	OnClick                  func()
 	// CanOpen can veto opening while the host is shutting down.
-	CanOpen  func() bool
-	Theme    func(*ui.Context) *ui.Theme
-	MaxWidth float32
+	CanOpen func() bool
+	// ItemsForOpen snapshots dynamic content immediately before opening a flyout.
+	ItemsForOpen func() []TrayItem
+	Theme        func(*ui.Context) *ui.Theme
+	MaxWidth     float32
 	// Placement and Gap control MyGo's tray anchor. On Windows, use a
 	// CapturePosition returning nil to opt out of the default click anchor.
 	Placement *mygo.Placement
@@ -59,6 +65,7 @@ type TrayHost struct {
 	native             *mygo.Tray
 	options            TrayOptions
 	baseTheme          *ui.Theme
+	nativeIcons        map[*ui.SVG]*mygo.MenuIcon
 	items              []TrayItem
 	entries            []TrayMenuEntry
 	popup              *trayPopupState
@@ -89,7 +96,8 @@ func NewTray(o TrayOptions) (*TrayHost, error) {
 	t := &TrayHost{options: o, baseTheme: TrayMenuTheme(o.Font), items: items, entries: menuEntries(items)}
 	var menu *mygo.Menu
 	if runtime.GOOS == "linux" {
-		menu, err = nativeMenu(items)
+		t.nativeIcons = make(map[*ui.SVG]*mygo.MenuIcon)
+		menu, err = nativeMenu(items, t.nativeIcons)
 		if err != nil {
 			return nil, err
 		}
@@ -99,6 +107,7 @@ func NewTray(o TrayOptions) (*TrayHost, error) {
 		return nil, err
 	}
 	t.options.Icon = nil
+	t.options.Items = nil
 	if runtime.GOOS != "linux" {
 		onClick := o.OnClick
 		if onClick == nil {
@@ -140,7 +149,7 @@ func (t *TrayHost) SetItems(items []TrayItem) error {
 		return err
 	}
 	if runtime.GOOS == "linux" {
-		menu, err := nativeMenu(items)
+		menu, err := nativeMenu(items, t.nativeIcons)
 		if err != nil {
 			return err
 		}
@@ -155,8 +164,11 @@ func (t *TrayHost) SetItems(items []TrayItem) error {
 }
 
 func prepareItems(items []TrayItem) ([]TrayItem, error) {
+	return prepareTrayItems(items, make(map[string]bool))
+}
+
+func prepareTrayItems(items []TrayItem, keys map[string]bool) ([]TrayItem, error) {
 	copyItems := append([]TrayItem(nil), items...)
-	keys := make(map[string]bool, len(copyItems))
 	for i, item := range copyItems {
 		if item.Key == "" {
 			item.Key = item.Label
@@ -166,6 +178,13 @@ func prepareItems(items []TrayItem) ([]TrayItem, error) {
 			return nil, fmt.Errorf("tray menu keys or labels must be nonempty and unique: %q", item.Key)
 		}
 		keys[item.Key] = true
+		if len(item.Children) > 0 {
+			children, err := prepareTrayItems(item.Children, keys)
+			if err != nil {
+				return nil, err
+			}
+			copyItems[i].Children = children
+		}
 		if item.NativeSeparatorBefore != nil {
 			v := *item.NativeSeparatorBefore
 			copyItems[i].NativeSeparatorBefore = &v
@@ -175,14 +194,26 @@ func prepareItems(items []TrayItem) ([]TrayItem, error) {
 }
 
 func menuEntries(items []TrayItem) []TrayMenuEntry {
+	if len(items) == 0 {
+		return nil
+	}
 	entries := make([]TrayMenuEntry, len(items))
 	for i, item := range items {
-		entries[i] = TrayMenuEntry{Key: item.Key, Label: item.Label, Icon: item.Icon, Disabled: item.Disabled, SeparatorBefore: item.SeparatorBefore}
+		entries[i] = TrayMenuEntry{Key: item.Key, Label: item.Label, AccessibilityLabel: item.AccessibilityLabel, Icon: item.Icon, StatusColor: item.StatusColor, Checkable: item.Checkable, Checked: item.Checked, Disabled: item.Disabled, SeparatorBefore: item.SeparatorBefore}
+		entries[i].Children = menuEntries(item.Children)
 	}
 	return entries
 }
 
-func nativeMenu(items []TrayItem) (*mygo.Menu, error) {
+func nativeMenu(items []TrayItem, icons map[*ui.SVG]*mygo.MenuIcon) (*mygo.Menu, error) {
+	entries, err := nativeMenuItems(items, icons)
+	if err != nil {
+		return nil, err
+	}
+	return mygo.NewMenu(entries), nil
+}
+
+func nativeMenuItems(items []TrayItem, icons map[*ui.SVG]*mygo.MenuIcon) ([]*mygo.MenuItem, error) {
 	entries := make([]*mygo.MenuItem, 0, len(items)*2)
 	for i, item := range items {
 		separator := item.SeparatorBefore
@@ -193,21 +224,43 @@ func nativeMenu(items []TrayItem) (*mygo.Menu, error) {
 			entries = append(entries, mygo.Separator())
 		}
 		var icon *mygo.MenuIcon
-		if item.Icon != nil {
-			var err error
-			icon, err = mygo.NewMenuIconSVG(item.Icon, true)
-			if err != nil {
-				return nil, fmt.Errorf("tray menu icon %q: %w", item.Key, err)
+		if item.Icon != nil && !item.Checkable {
+			icon = icons[item.Icon]
+			if icon == nil {
+				var err error
+				icon, err = mygo.NewMenuIconSVG(item.Icon, true)
+				if err != nil {
+					return nil, fmt.Errorf("tray menu icon %q: %w", item.Key, err)
+				}
+				if icons != nil && len(icons) < 32 {
+					icons[item.Icon] = icon
+				}
 			}
 		}
-		action := item.OnClick
-		entries = append(entries, &mygo.MenuItem{ID: item.Key, Label: item.Label, Icon: icon, Disabled: item.Disabled, Click: func(*mygo.MenuItem, *mygo.Window) {
-			if action != nil {
+		var children []*mygo.MenuItem
+		if len(item.Children) > 0 {
+			var err error
+			children, err = nativeMenuItems(item.Children, icons)
+			if err != nil {
+				return nil, err
+			}
+		}
+		kind := mygo.MenuItemNormal
+		if len(children) > 0 {
+			kind = mygo.MenuItemSubmenu
+		}
+		if item.Checkable {
+			kind = mygo.MenuItemRadio
+		}
+		var click func(*mygo.MenuItem, *mygo.Window)
+		if action := item.OnClick; action != nil && !item.Disabled {
+			click = func(*mygo.MenuItem, *mygo.Window) {
 				action()
 			}
-		}})
+		}
+		entries = append(entries, &mygo.MenuItem{ID: item.Key, Label: item.Label, Type: kind, Submenu: children, Checked: item.Checked, Icon: icon, Disabled: item.Disabled, Click: click})
 	}
-	return mygo.NewMenu(entries), nil
+	return entries, nil
 }
 
 // SetIcon and SetTooltip update the native tray without recreating it.
@@ -231,6 +284,11 @@ func (t *TrayHost) ToggleMenu() {
 	if t.popup != nil {
 		t.CloseMenu()
 		return
+	}
+	if t.options.ItemsForOpen != nil {
+		if err := t.SetItems(t.options.ItemsForOpen()); err != nil {
+			return
+		}
 	}
 	capture := t.options.CapturePosition
 	if capture == nil {
@@ -261,8 +319,8 @@ func (t *TrayHost) ToggleMenu() {
 			c.SetTheme(theme.WithPreferences(c.Preferences()))
 			c.Root().Background(ui.Transparent)
 			choice := TrayMenu(c.Key("tray-menu"), &p.open, t.options.MenuLabel, t.entries, TrayMenuOptions{MaxWidth: t.options.MaxWidth})
-			if choice >= 0 && choice < len(t.items) {
-				t.finish(p, t.items[choice].OnClick)
+			if choice >= 0 {
+				t.finish(p, trayAction(t.items, choice))
 			} else if !p.open {
 				t.finish(p, nil)
 			}
@@ -277,6 +335,23 @@ func (t *TrayHost) ToggleMenu() {
 		position(p.win)
 	}
 	p.win.Show()
+}
+
+func trayAction(items []TrayItem, choice int) func() {
+	if choice < 0 {
+		return nil
+	}
+	if choice < len(items) {
+		return items[choice].OnClick
+	}
+	choice -= len(items)
+	for _, item := range items {
+		if choice < len(item.Children) {
+			return item.Children[choice].OnClick
+		}
+		choice -= len(item.Children)
+	}
+	return nil
 }
 
 func (t *TrayHost) finish(p *trayPopupState, action func()) {
@@ -315,6 +390,7 @@ func (t *TrayHost) Close() {
 	}
 	t.closed = true
 	t.CloseMenu()
+	t.nativeIcons = nil
 	if t.offClick != nil {
 		t.offClick()
 	}

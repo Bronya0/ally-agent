@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/gif"
 	"image/jpeg"
 	"image/png"
@@ -244,6 +245,10 @@ func opaqueOnWhite(src image.Image, edge int) image.Image {
 }
 
 func resizeImage(src image.Image, limit int) image.Image {
+	return resizeImageWithScaler(src, limit, draw.CatmullRom)
+}
+
+func resizeImageWithScaler(src image.Image, limit int, scaler draw.Scaler) image.Image {
 	b := src.Bounds()
 	w, h := b.Dx(), b.Dy()
 	if w <= limit && h <= limit {
@@ -257,7 +262,7 @@ func resizeImage(src image.Image, limit int) image.Image {
 		h = limit
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	draw.CatmullRom.Scale(dst, dst.Bounds(), src, b, draw.Over, nil)
+	scaler.Scale(dst, dst.Bounds(), src, b, draw.Over, nil)
 	return dst
 }
 
@@ -277,8 +282,13 @@ func oversizedImageError(cfg image.Config, format string) error {
 		return fmt.Errorf("%s", locales.Text("图片尺寸无效"))
 	}
 	bytesPerPixel := int64(4)
-	if format == "jpeg" {
+	if format == "jpeg" && cfg.ColorModel != color.CMYKModel {
 		bytesPerPixel = 2
+	}
+	switch cfg.ColorModel {
+	case color.Gray16Model, color.RGBA64Model, color.NRGBA64Model:
+		// A PNG transparency chunk can expand Gray16 to NRGBA64.
+		bytesPerPixel = 8
 	}
 	pixels := int64(cfg.Width) * int64(cfg.Height)
 	limit := int64(decodeBudgetBytes) / bytesPerPixel
@@ -923,6 +933,18 @@ func (a *desktop) completeAttachmentImage(t *conversation, id string, version ui
 // have shown and decode them again from that data if a renderer asks, which
 // costs a fraction of the pixels.
 func (a *desktop) decodeAttachmentBitmap(ref, dataURL string, limit int) (*ui.Bitmap, error) {
+	img, err := a.decodeAttachmentImage(ref, dataURL)
+	if err != nil {
+		return nil, err
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, resizeImage(img, limit)); err != nil {
+		return nil, err
+	}
+	return ui.DecodeBitmap(encoded.Bytes())
+}
+
+func (a *desktop) decodeAttachmentImage(ref, dataURL string) (image.Image, error) {
 	var data []byte
 	var err error
 	switch {
@@ -932,7 +954,15 @@ func (a *desktop) decodeAttachmentBitmap(ref, dataURL string, limit int) (*ui.Bi
 		data, err = a.core.ReadNativeGeneratedImage(ref)
 	default:
 		if comma := strings.IndexByte(dataURL, ','); comma >= 0 && strings.HasPrefix(dataURL, "data:image/") {
-			data, err = base64.StdEncoding.DecodeString(dataURL[comma+1:])
+			encoded := dataURL[comma+1:]
+			if len(encoded) > base64.StdEncoding.EncodedLen(maxOriginalImageBytes) {
+				// Legacy data URLs can contain line breaks. Limit decoded bytes
+				// without allocating from the encoded length.
+				reader := base64.NewDecoder(base64.StdEncoding, strings.NewReader(encoded))
+				data, err = io.ReadAll(io.LimitReader(reader, maxOriginalImageBytes+1))
+			} else {
+				data, err = base64.StdEncoding.DecodeString(encoded)
+			}
 		} else {
 			return nil, fmt.Errorf("%s", locales.Text("图片预览来源无效"))
 		}
@@ -951,14 +981,7 @@ func (a *desktop) decodeAttachmentBitmap(ref, dataURL string, limit int) (*ui.Bi
 		return nil, err
 	}
 	img, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	var encoded bytes.Buffer
-	if err := png.Encode(&encoded, resizeImage(img, limit)); err != nil {
-		return nil, err
-	}
-	return ui.DecodeBitmap(encoded.Bytes())
+	return img, err
 }
 
 // attachmentPixelReleaseDelay gives a preview the frames that paint it before

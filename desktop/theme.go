@@ -448,6 +448,7 @@ var iconPaths = map[string]string{
 	"games":       `<path d="M6 4l12 16M18 4L6 20M4 8l4-4m8 0 4 4M4 16l4 4m8 0 4-4"/>`,
 	"plugins":     `<path d="M10 3h4v3a2 2 0 1 0 4 0h3v4h-3a2 2 0 1 0 0 4h3v4h-4a2 2 0 1 0-4 0H6v-4a2 2 0 1 0 0-4H3V6h4a2 2 0 1 0 3-3z"/>`,
 	"settings":    `<path d="m9 3 1-1h4l1 1 1 3 3 1 1 4-1 2-1 3v3l-3 2-3-1h-3l-3 1-3-2v-3l-1-3-1-2 1-4 3-1z"/><circle cx="12" cy="11" r="4"/>`,
+	"network":     `<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-3 3-4 6-4 9s1 6 4 9M12 3c3 3 4 6 4 9s-1 6-4 9"/>`,
 	"folder":      `<path d="M3 6h7l2 2h9v11H3z"/>`,
 	"folderopen":  `<path d="M3 6h7l2 2h9l-2 11H3zM3 6V4h7l2 2h7v2"/>`,
 	"addfolder":   `<path d="M3 6h7l2 2h9v5M3 6V4h7l2 2h7v2M3 6v13h8m7-5v8m-4-4h8"/>`,

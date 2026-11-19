@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	trayMenuMinWidth  float32 = 140
-	trayMenuMaxWidth  float32 = 480
-	trayMenuRowHeight float32 = 28
+	trayMenuMinWidth   float32 = 140
+	trayMenuChildWidth float32 = 160
+	trayMenuMaxWidth   float32 = 480
+	trayMenuRowHeight  float32 = 28
 	// TrayMenuShadowInset is the transparent margin around the panel, in DIPs.
 	TrayMenuShadowInset float32 = 8
 	trayMenuPadY        float32 = 3
@@ -25,10 +26,14 @@ const (
 // TrayMenuEntry contains presentation data only. Key must be stable and unique
 // among entries. The host dispatches the selected action after the window build.
 type TrayMenuEntry struct {
-	Key, Label      string
-	Icon            *ui.SVG
-	SeparatorBefore bool
-	Disabled        bool
+	Key, Label         string
+	AccessibilityLabel string
+	Icon               *ui.SVG
+	StatusColor        ui.Color
+	Checkable, Checked bool
+	SeparatorBefore    bool
+	Disabled           bool
+	Children           []TrayMenuEntry
 }
 
 // TrayMenuOptions configures the menu surface. MaxWidth is in DIPs and excludes
@@ -91,12 +96,20 @@ func TrayMenu(c *ui.Context, open *bool, label string, entries []TrayMenuEntry, 
 			height++
 		}
 	}
-	root.Size(width+2*TrayMenuShadowInset, height+2*TrayMenuShadowInset).Shrink(0)
+	var childWidth float32
+	childHeight := float32(0)
+	for _, entry := range entries {
+		if len(entry.Children) > 0 {
+			childWidth = trayMenuChildWidth
+			childHeight = max(childHeight, 2*(trayMenuPadY+trayMenuBorder)+float32(min(len(entry.Children), 8))*memo.row)
+		}
+	}
+	root.Size(width+childWidth+2*TrayMenuShadowInset, max(height, childHeight)+2*TrayMenuShadowInset).Shrink(0)
 	var anchor ui.Element
 	root.Children(func() {
 		// AttachTo counts presses on its target as inside the popup. A point
 		// anchor leaves the shadow margin outside rather than trapping clicks.
-		anchor = ui.Box(c.Key("anchor")).Absolute().Left(TrayMenuShadowInset).Top(TrayMenuShadowInset).Size(0, 0)
+		anchor = ui.Box(c.Key("anchor")).Absolute().Left(TrayMenuShadowInset+childWidth).Top(TrayMenuShadowInset+max(0, childHeight-height)).Size(0, 0)
 	})
 	m := ui.ContextMenuBase(c, anchor, open)
 	choice := -1
@@ -107,36 +120,84 @@ func TrayMenu(c *ui.Context, open *bool, label string, entries []TrayMenuEntry, 
 			Padding(trayMenuPadY, 0).Background(c.Theme().Surface).
 			Border(trayMenuBorder, c.Theme().Border).Radius(trayMenuRadius).
 			Shadow(0, 2, 6, 0, ui.RGBA(0, 0, 0, 0.10)).Label(label).Scrollbars(false)
+		childOffset := len(entries)
 		for i, entry := range entries {
+			startChild := childOffset
+			childOffset += len(entry.Children)
 			if i > 0 && entry.SeparatorBefore {
 				ui.Divider(c).Height(1).Shrink(0)
 			}
 			ui.Column(c.Key(entry.Key)).FillWidth().Shrink(0).PaddingX(trayMenuRowInset).Children(func() {
-				row := m.Item().FillWidth().Height(memo.row).Shrink(0).Padding(0, trayMenuRowPad).
-					Gap(trayMenuIconGap).Radius(RadiusSmall).Label(entry.Label).Disabled(entry.Disabled)
-				fill := ui.Transparent
-				if !entry.Disabled {
-					if row.Highlighted() || row.Hovered() {
-						fill = c.Theme().SurfaceHover
+				if len(entry.Children) == 0 {
+					if trayMenuRow(c, m, entry, memo.row).Clicked() && !entry.Disabled {
+						choice = i
 					}
-					if row.Pressed() {
-						fill = c.Theme().SurfacePressed
-					}
+					return
 				}
-				row.Background(fade(row, "tray-hover", fill)).TextColor(c.Theme().Text)
-				row.Children(func() {
-					if entry.Icon != nil {
-						ui.Icon(c, entry.Icon).Size(trayMenuIconSize, trayMenuIconSize).Shrink(0)
+				row := trayMenuRow(c, m, entry, memo.row)
+				m.Submenu(row, func(sub ui.Element) {
+					sub.Width(childWidth).MaxHeight(max(1, h-2*TrayMenuShadowInset)).Padding(trayMenuPadY, 0).Background(c.Theme().Surface).
+						Border(trayMenuBorder, c.Theme().Border).Radius(trayMenuRadius).
+						Shadow(0, 2, 6, 0, ui.RGBA(0, 0, 0, 0.10))
+					for j, child := range entry.Children {
+						ui.Column(c.Key(child.Key)).FillWidth().Shrink(0).PaddingX(trayMenuRowInset).Children(func() {
+							if trayMenuRow(c, m, child, memo.row).Clicked() && !child.Disabled {
+								choice = startChild + j
+							}
+						})
 					}
-					ui.Text(c, entry.Label).FontSize(c.Theme().FontSize).SingleLine().MinWidth(0)
 				})
-				if row.Clicked() {
-					choice = i
-				}
 			})
 		}
 	})
 	return choice
+}
+
+func trayMenuRow(c *ui.Context, menu ui.MenuParts, entry TrayMenuEntry, height float32) ui.Element {
+	var row ui.Element
+	hasChildren := len(entry.Children) > 0
+	switch {
+	case hasChildren:
+		row = menu.SubmenuItem()
+	case entry.Checkable:
+		row = menu.RadioItem(entry.Checked)
+	default:
+		row = menu.Item()
+	}
+	label := entry.AccessibilityLabel
+	if label == "" {
+		label = entry.Label
+	}
+	row.FillWidth().Height(height).Shrink(0).Padding(0, trayMenuRowPad).
+		Gap(trayMenuIconGap).Radius(RadiusSmall).Label(label).Disabled(entry.Disabled)
+	theme := c.Theme()
+	fill := ui.Transparent
+	if !entry.Disabled {
+		if row.Highlighted() || row.Hovered() {
+			fill = theme.SurfaceHover
+		}
+		if row.Pressed() {
+			fill = theme.SurfacePressed
+		}
+	}
+	row.Background(fade(row, "tray-hover", fill)).TextColor(theme.Text).Children(func() {
+		switch {
+		case entry.StatusColor.A > 0:
+			ui.Box(c).Size(trayMenuIconSize, trayMenuIconSize).Shrink(0).Center().Children(func() {
+				ui.Box(c).Size(10, 10).Shrink(0).Radius(5).Background(entry.StatusColor)
+			})
+		case entry.Checkable && !entry.Checked:
+			ui.Box(c).Size(trayMenuIconSize, trayMenuIconSize).Shrink(0)
+		case entry.Icon != nil:
+			ui.Icon(c, entry.Icon).Size(trayMenuIconSize, trayMenuIconSize).Shrink(0)
+		}
+		text := ui.Text(c, entry.Label).FontSize(theme.FontSize).SingleLine().MinWidth(0)
+		if hasChildren {
+			text.Grow(1)
+			ui.Text(c, "›").FontSize(theme.FontSize + 3).Shrink(0)
+		}
+	})
+	return row
 }
 
 // Cache actual text measurements by the labels and font, not rune counts. This
@@ -160,7 +221,11 @@ func (m *trayMenuMeasure) measure(c *ui.Context, entries []TrayMenuEntry) {
 	m.width, m.row = trayMenuMinWidth, trayMenuRowHeight
 	for _, entry := range entries {
 		w, h := c.MeasureText(0, ui.Span{Text: entry.Label, Size: t.FontSize, Font: t.Font})
-		m.width = max(m.width, float32(math.Ceil(float64(w)))+2*(trayMenuBorder+trayMenuRowInset+trayMenuRowPad)+trayMenuIconSize+trayMenuIconGap)
+		width := float32(math.Ceil(float64(w))) + 2*(trayMenuBorder+trayMenuRowInset+trayMenuRowPad) + trayMenuIconSize + trayMenuIconGap
+		if len(entry.Children) > 0 {
+			width += trayMenuIconGap + t.FontSize
+		}
+		m.width = max(m.width, width)
 		m.row = max(m.row, float32(math.Ceil(float64(h)))+2*trayMenuTextPadY)
 		m.labels = append(m.labels, entry.Label)
 	}

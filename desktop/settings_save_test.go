@@ -291,6 +291,24 @@ func TestSettingsReentryCanRevertAnInFlightCommit(t *testing.T) {
 	}
 }
 
+func TestSettingsSaveRebasesProxyChangedByTray(t *testing.T) {
+	a := settingsSaveFixture(t)
+	a.settings.Retries = 5
+	plan := a.prepareSettingsCommit()
+	a.settingsInFlight = &plan
+	if err := a.core.SetNativeProxyMode("system"); err != nil {
+		t.Fatal(err)
+	}
+	result := plan.persist(&settingsTestHost{App: a.core})
+	if err := result.err(); err != nil {
+		t.Fatal(err)
+	}
+	a.applySettingsSave(plan, result)
+	if a.configDraft.ProxyMode != "system" || a.settings.ProxyModeIndex != 1 || a.config.LLMRetries != 5 || a.settingsPendingEdits() {
+		t.Fatal("settings save did not merge the tray proxy selection with the form edit")
+	}
+}
+
 func TestSettingsNextCommitRetriesEditsAfterEarlierFailure(t *testing.T) {
 	a := settingsSaveFixture(t)
 	a.settings.Retries = 5

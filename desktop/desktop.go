@@ -37,6 +37,7 @@ type conversation struct {
 	ContextTokens                                     int
 	Messages                                          []map[string]any
 	Busy                                              bool
+	trayOutcome                                       string
 	CancelRequested                                   bool
 	Created                                           int64
 	SnapshotQueued                                    bool
@@ -653,8 +654,12 @@ func (a *desktop) newConversation(workspace string) {
 		a.commitSettingsOnLeave()
 	}
 	t := a.freshConversation(workspace)
+	if len(a.tabs) > 0 {
+		a.core.RetryFailedMcpServers()
+	}
 	a.composerFocus = t.ID
 	a.tabs = append(a.tabs, t)
+	a.refreshNativeTray()
 	a.page = "chat"
 	a.activateTab(len(a.tabs) - 1)
 	a.refreshFiles()
@@ -722,6 +727,7 @@ func (a *desktop) newSession() {
 		a.commitSettingsOnLeave()
 	}
 	next := a.freshConversation(t.Workspace)
+	a.core.RetryFailedMcpServers()
 	next.Model = t.Model
 	next.Reasoning = t.Reasoning
 	a.composerFocus = next.ID
@@ -734,6 +740,7 @@ func (a *desktop) newSession() {
 		a.rememberSession(t)
 		a.tabs[a.active] = next
 	}
+	a.refreshNativeTray()
 	a.page = "chat"
 	if keepInTabs {
 		a.activateTab(len(a.tabs) - 1)
@@ -930,6 +937,8 @@ func (a *desktop) send(t *conversation, text string) bool {
 	t.PendingAttachmentImages = nil
 	a.loadSentAttachmentImages(t, attachments)
 	t.Busy = true
+	t.trayOutcome = ""
+	a.refreshNativeTray()
 	t.Draft = ""
 	t.Status = locales.Text("正在连接模型…")
 	followLatest(t)
@@ -939,6 +948,8 @@ func (a *desktop) send(t *conversation, text string) bool {
 		a.win.Update(func() {
 			if err != nil {
 				t.Busy = false
+				t.trayOutcome = "error"
+				a.refreshNativeTray()
 				t.Status = err.Error()
 				a.notifyError(err.Error())
 				invalidateChatSearch(t)
@@ -1273,6 +1284,7 @@ func (a *desktop) showSession(next *conversation) {
 		a.discardBlankTab(a.tabs[reuse])
 		a.hideFilePreview()
 		a.tabs[reuse] = next
+		a.refreshNativeTray()
 		a.page = "chat"
 		a.activateTab(reuse)
 		a.refreshFiles()
@@ -1281,6 +1293,8 @@ func (a *desktop) showSession(next *conversation) {
 		return
 	}
 	a.tabs = append(a.tabs, next)
+	a.core.RetryFailedMcpServers()
+	a.refreshNativeTray()
 	a.page = "chat"
 	a.activateTab(len(a.tabs) - 1)
 	a.refreshFiles()

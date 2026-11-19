@@ -9,7 +9,7 @@ import (
 	"github.com/egoist/mygo"
 )
 
-const updateCheckInterval = 2 * time.Hour
+const updateCheckInterval = 6 * time.Hour
 
 func updateApplyLabel(goos string) string {
 	if goos == "windows" {

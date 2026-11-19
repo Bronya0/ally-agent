@@ -2,11 +2,38 @@
 package app
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func TestSetNativeProxyModePreservesSettingsAndValidatesManual(t *testing.T) {
+	a := configTransactionApp(t)
+	if err := a.updateConfigAndPersist(func(cfg *ConfigState) { cfg.CustomPrompt = "keep" }); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetNativeProxyMode("system"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetNativeProxyMode("manual"); !errors.Is(err, ErrManualProxyNotConfigured) {
+		t.Fatalf("manual without address: %v", err)
+	}
+	if err := a.updateConfigAndPersist(func(cfg *ConfigState) { cfg.ProxyURL = "http://127.0.0.1:7890" }); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetNativeProxyMode("manual"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readConfigFile(a.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProxyMode != "manual" || cfg.ProxyURL != "http://127.0.0.1:7890" || cfg.CustomPrompt != "keep" {
+		t.Fatalf("unexpected saved settings: %+v", cfg)
+	}
+}
 
 func TestNativeSettingsPreserveConcurrentConfigChanges(t *testing.T) {
 	a := configTransactionApp(t)

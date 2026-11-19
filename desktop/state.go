@@ -390,6 +390,17 @@ type settingsForm struct {
 	BackgroundPath            *string
 }
 
+func (a *desktop) setProxyModeDraft(mode string) {
+	a.configDraft.ProxyMode = mode
+	a.settings.ProxyModeIndex = 0
+	switch mode {
+	case "system":
+		a.settings.ProxyModeIndex = 1
+	case "manual":
+		a.settings.ProxyModeIndex = 2
+	}
+}
+
 func (a *desktop) syncSettingsForm() {
 	f := &a.settings
 	f.AppearanceMode = 0
@@ -399,13 +410,7 @@ func (a *desktop) syncSettingsForm() {
 	if a.prefs.Appearance == "auto" {
 		f.AppearanceMode = 2
 	}
-	f.ProxyModeIndex = 0
-	switch a.configDraft.ProxyMode {
-	case "system":
-		f.ProxyModeIndex = 1
-	case "manual":
-		f.ProxyModeIndex = 2
-	}
+	a.setProxyModeDraft(a.configDraft.ProxyMode)
 	f.Tab = a.settingsTab
 	f.Retries = float64(a.configDraft.LLMRetries)
 	f.Concurrency = float64(a.configDraft.ToolConcurrency)

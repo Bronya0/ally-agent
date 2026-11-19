@@ -695,6 +695,7 @@ func (a *App) apiHandleCreateSession(w http.ResponseWriter, r *http.Request) {
 		apiWriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	a.RetryFailedMcpServers()
 	apiWriteOK(w, map[string]any{
 		"id":         entry.ID,
 		"title":      entry.Title,

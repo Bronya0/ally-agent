@@ -3,11 +3,11 @@ package desktop
 
 import (
 	"fmt"
-	"time"
 
 	"ally-dev/locales"
 
 	"github.com/egoist/mygo/ui"
+	"golang.org/x/image/draw"
 )
 
 const (
@@ -16,12 +16,8 @@ const (
 	imagePreviewMargin float32 = 24
 	// imagePreviewHeader is the row above the picture: name, pixel size, close.
 	imagePreviewHeader float32 = 28
-	// imagePreviewMaxEdge caps the copy the preview decodes for itself. At 2400
-	// the RGBA pixels are about 23 MB, and they are held only while it is open.
+	// imagePreviewMaxEdge bounds the preview's retained RGBA pixels.
 	imagePreviewMaxEdge = 2400
-	// imagePreviewReleaseDelay gives the closing frames time to paint before the
-	// CPU pixels of a preview-only bitmap go, as attachmentPixelReleaseDelay does.
-	imagePreviewReleaseDelay = 500 * time.Millisecond
 )
 
 // imagePreview is the full-window viewer a message picture opens into. One
@@ -37,11 +33,6 @@ type imagePreview struct {
 	// bitmap is the copy this preview decoded for itself. Nothing else draws it,
 	// so closing releases its pixels.
 	bitmap *ui.Bitmap
-	// ref and dataURL are where that copy is decoded from.
-	ref, dataURL string
-	// token invalidates a decode that finishes after the preview closed or moved
-	// on to another picture.
-	token  uint64
 	cancel chan struct{}
 	// sizeLabel is the pixel size shown beside the name, rebuilt only when it
 	// changes: the panel renders it every frame.
@@ -60,8 +51,7 @@ func (p *imagePreview) setSize(w, h int) {
 	p.sizeLabel = fmt.Sprintf("%s %d×%d", locales.Text("预览尺寸"), w, h)
 }
 
-// openImagePreview shows a message picture over the window. A thumbnail still
-// decoding is asked for here, and the panel fills in as soon as it lands.
+// openImagePreview shows a message picture over the window.
 func (a *desktop) openImagePreview(t *conversation, att map[string]any) {
 	if a.win == nil || t == nil || !attachmentHasImage(att) {
 		return
@@ -71,16 +61,12 @@ func (a *desktop) openImagePreview(t *conversation, att map[string]any) {
 	if p.name == "" {
 		p.name = locales.Text("图片")
 	}
-	p.ref, p.dataURL = str(att, "imageRef"), str(att, "dataUrl")
-	// The transcript's copy paints the panel meanwhile, so a picture whose tile is
-	// still loading is asked for here too.
+	// Reuse a cached thumbnail while the preview decodes its own copy.
 	if bm := t.AttachmentImages[p.id]; bm != nil {
 		p.setSize(bm.Size())
-	} else {
-		a.loadAttachmentImage(t, p.id, p.ref, p.dataURL)
 	}
 	a.imagePreview = p
-	a.decodePreviewCopy(p)
+	a.decodePreviewCopy(p, str(att, "imageRef"), str(att, "dataUrl"))
 }
 
 // decodePreviewCopy decodes the copy the panel shows, at up to
@@ -88,32 +74,30 @@ func (a *desktop) openImagePreview(t *conversation, att map[string]any) {
 // whether it is worth decoding: that copy is whatever the cache holds, as small
 // as the composer's 256px chip, so its size says nothing about the detail the
 // source still has. One decode per preview, and closing releases it.
-func (a *desktop) decodePreviewCopy(p *imagePreview) {
-	if a.core == nil || a.win == nil || !p.Open || (p.ref == "" && p.dataURL == "") {
+func (a *desktop) decodePreviewCopy(p *imagePreview, ref, dataURL string) {
+	if a.core == nil || (ref == "" && dataURL == "") {
 		return
 	}
-	p.token++
-	token := p.token
 	if a.imagePreviewDecodeSlot == nil {
 		a.imagePreviewDecodeSlot = make(chan struct{}, 1)
 	}
 	slot, cancel := a.imagePreviewDecodeSlot, p.cancel
 	win := a.win
-	ref, dataURL := p.ref, p.dataURL
 	go func() {
 		if !acquireImagePreviewDecode(slot, cancel) {
 			return
 		}
-		defer func() { <-slot }()
-		bitmap, err := a.decodeAttachmentBitmap(ref, dataURL, imagePreviewMaxEdge)
+		bitmap, err := a.decodeImagePreviewBitmap(ref, dataURL, imagePreviewMaxEdge)
+		select {
+		case <-cancel:
+			<-slot
+			return
+		default:
+		}
 		win.Update(func() {
-			// A closed or replaced preview must not keep the decode it asked for:
-			// releasing the pixels is what makes closing a picture cost nothing.
-			if bitmap != nil && (a.closing || a.imagePreview != p || p.token != token || !p.Open) {
-				bitmap.ReleasePixels()
-				return
-			}
-			if a.closing || a.imagePreview != p || p.token != token {
+			defer func() { <-slot }()
+			// A closed or replaced preview must not keep the decoded bitmap.
+			if a.closing || a.imagePreview != p || !p.Open {
 				return
 			}
 			if err != nil {
@@ -125,6 +109,14 @@ func (a *desktop) decodePreviewCopy(p *imagePreview) {
 			p.setSize(bitmap.Size())
 		})
 	}()
+}
+
+func (a *desktop) decodeImagePreviewBitmap(ref, dataURL string, limit int) (*ui.Bitmap, error) {
+	img, err := a.decodeAttachmentImage(ref, dataURL)
+	if err != nil {
+		return nil, err
+	}
+	return ui.NewBitmap(resizeImageWithScaler(img, limit, draw.ApproxBiLinear)), nil
 }
 
 // A cancelled waiter must not keep a slot, even when cancellation races with
@@ -153,20 +145,12 @@ func (a *desktop) closeImagePreview() {
 	}
 	a.imagePreview = nil
 	p.Open = false
-	p.token++
 	if p.cancel != nil {
 		close(p.cancel)
 		p.cancel = nil
 	}
-	bitmap := p.bitmap
+	// MyGo retains the painted scene for the exit transition.
 	p.bitmap = nil
-	if bitmap == nil || a.win == nil {
-		return
-	}
-	win := a.win
-	time.AfterFunc(imagePreviewReleaseDelay, func() {
-		win.Update(func() { bitmap.ReleasePixels() })
-	})
 }
 
 // imagePreviewDialog draws the viewer. It closes itself when the picture it

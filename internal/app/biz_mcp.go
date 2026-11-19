@@ -117,12 +117,14 @@ func (t *mcpConnToken) lostCause() (string, bool) {
 }
 
 type McpClientHandle struct {
-	ServerName string
-	Config     McpServerConfig
-	Client     *client.Client
-	ToolDefs   []McpDiscoveredTool
-	Status     string // "connected", "connecting", "failed", "disabled"
-	Error      string
+	retryQueued  bool // coalesces tab/session triggers while this failed handle waits to dial
+	passiveRetry bool // discovery can proceed while this handle connects
+	ServerName   string
+	Config       McpServerConfig
+	Client       *client.Client
+	ToolDefs     []McpDiscoveredTool
+	Status       string // "connected", "connecting", "failed", "disabled"
+	Error        string
 	// token 是当前 Client 的连接身份，见 mcpConnToken。
 	token *mcpConnToken
 }
@@ -131,10 +133,9 @@ type McpClientHandle struct {
 //
 // 连接是易耗品，不是要守护的资产。远程 MCP 的长连流随时会被对端回收（服务端/
 // 网关/代理的空闲超时、会话过期后直接 RST，mcp-go 的 SSE 传输连干净的 EOF 都
-// 触发断连且无内部重连），"用久了就断"是常态而非故障。Ally 因此不做保活、
-// 不做后台重连、也不做连接重试：心跳换不来什么（重连+握手只要几百毫秒），却添
-// 一套常驻状态机。连接动作只在三处发生——启动、配置变更、调用时发现没有可用
-// 连接；每次只试一次，成不成如实记账（失败是面板上的一行字，不是待办）。
+// 触发断连且无内部重连），"用久了就断"是常态而非故障。Ally 不做保活或定时
+// 重试；启动、配置变更、调用时发现断连，以及新建 tab 或会话时可触发一次连接。
+// 新建时的重试在后台进行，不等待它来构建会话工具清单。
 //
 // 与"重试"配套的那条纪律：请求**发出过**之后再断的调用绝不重放（服务端可能
 // 已经执行了工具，重放等于把副作用做第二遍），只修连接并把判断权交回模型；
@@ -245,6 +246,41 @@ func NewMcpManager(workDir string, listener func()) *McpManager {
 	return m
 }
 
+// RetryFailedMcpServers starts one non-blocking attempt for each failed server.
+// Concurrent user actions coalesce while an attempt is in flight.
+func (a *App) RetryFailedMcpServers() {
+	if a == nil {
+		return
+	}
+	m := a.activeMcpManager()
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	var pending []*McpClientHandle
+	for _, handle := range m.clients {
+		if handle.Status == "failed" && !handle.retryQueued {
+			handle.retryQueued = true
+			pending = append(pending, handle)
+		}
+	}
+	m.mu.Unlock()
+	for _, handle := range pending {
+		GoSafe("mcp event retry "+handle.ServerName, func() {
+			defer func() {
+				m.mu.Lock()
+				handle.retryQueued = false
+				m.mu.Unlock()
+			}()
+			m.dialServer(m.lifetimeCtx, handle.ServerName, McpServerConfig{}, handle)
+		})
+	}
+}
+
 func mcpUserConfigPath() string {
 	return filepath.Join(appDataDir(), "mcp.json")
 }
@@ -302,32 +338,6 @@ func (m *McpManager) loadConfigs() (map[string]McpServerConfig, error) {
 	m.configSnapshot = merged
 	m.mu.Unlock()
 	return merged, nil
-}
-
-// dialConfigSuperseded 报告本次拨号携带的配置已被更新的加载结果取代。生产路径
-// 上 connectOne 的 cfg 总来自某次 LoadConfigs（StartAll / ReconcileConfigs），
-// configSnapshot 就是其中最新的一份：两者对不上，说明拿到拨号锁之前又发生过
-// 一次保存/重载，这次拨号已经过期。snapshot 为 nil（从未加载过，直连拨号的
-// 测试路径）时无从对账，放行。
-func (m *McpManager) dialConfigSuperseded(name string, cfg McpServerConfig) bool {
-	m.mu.RLock()
-	snapshot := m.configSnapshot
-	m.mu.RUnlock()
-	if snapshot == nil {
-		return false
-	}
-	current, ok := snapshot[name]
-	if !ok {
-		return true
-	}
-	return !mcpServerConfigEqual(current, cfg)
-}
-
-// isClosed 报告 manager 是否已被 Shutdown。
-func (m *McpManager) isClosed() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.closed
 }
 
 // registerDisabledServer 只登记一条 "disabled" 记录，不拨号不建客户端：状态
@@ -512,79 +522,71 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 			m.registerDisabledServer(name, cfg)
 			continue
 		}
-		GoSafe("mcp connect "+name, func() { m.connectOne(ctx, name, cfg) }, func() { m.markConnectPanicked(name) })
+		GoSafe("mcp connect "+name, func() { m.connectOne(ctx, name, cfg) })
 	}
 	return len(touched), nil
 }
 
 func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerConfig) {
+	m.dialServer(ctx, name, cfg, nil)
+}
+
+func (m *McpManager) dialServer(ctx context.Context, name string, cfg McpServerConfig, retryFrom *McpClientHandle) {
 	// 拨号互斥与重连共用：同名服务端任何时刻只允许一次拨号在飞，否则并发拨号
 	// 会互相覆盖记录，输的那次连出来的子进程再也没人 Close（常驻孤儿）。
 	unlock := m.lockServerDial(name)
 	defer unlock()
 
-	// 拨号前对账：cfg 是某次 ReconcileConfigs / StartAll 快照里的配置，从快照
-	// 到拿到拨号锁之间用户可能又保存了新配置，而那次保存的拨号可能排在本拨号
-	// 之后才拿锁。旧配置若照常连接并提交，会把用户刚保存的新配置整个顶掉，直到
-	// 下次保存——盘是唯一事实源，已被取代的拨号就地放弃，由携带新配置的那次
-	// 拨号完成连接。
-	if m.dialConfigSuperseded(name, cfg) {
-		return
-	}
-	// manager 已被 Shutdown（重启换新 manager）：继续拨号没有意义，连接提交进
-	// 无人引用的旧 manager 只会悬空。
-	if m.isClosed() {
-		return
-	}
-
-	// 拿到拨号锁后核对现状：两次并发的 ReconcileConfigs（面板快速连点保存）会为
-	// 同一台刚变动的服务端各排一次拨号，赢的那次提交连接后，输的那次若照常
-	// 覆盖 handle，会把刚建好的连接整个换掉、其 client 永远无人 Close。配置相同
-	// 的已连接/拨号在飞直接放弃（按需重连排的那次也走这里）。配置不同的不能
-	// 放弃：旧配置的拨号可能在对账之后才把 handle 登记
-	// 回来（对账拦的是"配置已被更新的加载结果取代"的拨号，拦不住这条——盘上
-	// 已是新配置、新配置的拨号正排在锁后面），这里走整体换记录路径把新配置连上。
-	m.mu.RLock()
-	existing, ok := m.clients[name]
-	status := ""
-	var existingCfg McpServerConfig
-	var existingToolDefs []McpDiscoveredTool
-	var existingClient *client.Client
-	var existingToken *mcpConnToken
-	if ok {
-		status = existing.Status
-		// Config/ToolDefs 必须在锁内拷出、出锁后再比对：ReconcileConfigs 会
-		// 持写锁原地替换 handle.Config.DisabledTools，refreshServerTools 会
-		// 持写锁整体换 handle.ToolDefs，锁外裸读这两个字段（结构体与 slice
-		// header）就是与它们的数据竞争——status 先拷再出锁是同一课。Client
-		// 的写者都持拨号锁（本函数已持有，天然互斥），一并收进快照只为让
-		// "读 handle"只有一种写法。
-		existingCfg = existing.Config
-		existingToolDefs = existing.ToolDefs
-		existingClient = existing.Client
-		existingToken = existing.token
-	}
-	m.mu.RUnlock()
-	if ok && (status == "connected" || status == "connecting") && mcpServerConfigEqual(existingCfg, cfg) {
-		return
-	}
-
-	handle := &McpClientHandle{ServerName: name, Config: cfg, Status: "connecting"}
-	var staleClient *client.Client
-	if ok {
-		// 整体换记录：旧记录按设计留着上一次断连的 client（handleConnectionLost
-		// 不关，见其注释），换记录时必须由这里替它 Close，否则 socket 与传输
-		// goroutine 悬空。ToolDefs 则要继承：注入跟配置走、不跟连接状态走，换
-		// 记录不能让注入视图在本次连接建立期间出现空洞、漂移会话的请求前缀。
-		handle.ToolDefs = existingToolDefs
-		staleClient = existingClient
-	}
+	// Check the latest config and publish the new handle under the same lock.
+	// A queued passive retry only applies to the failed handle that triggered it.
 	m.mu.Lock()
+	existing := m.clients[name]
+	if m.closed || (retryFrom != nil && (existing != retryFrom || retryFrom.Status != "failed")) {
+		m.mu.Unlock()
+		return
+	}
+	if retryFrom != nil {
+		cfg = retryFrom.Config
+	}
+	if m.configSnapshot != nil {
+		current, configured := m.configSnapshot[name]
+		if !configured || !mcpServerConfigEqual(current, cfg) {
+			m.mu.Unlock()
+			return
+		}
+		// Tool filters do not affect the dial. Use the latest selection even
+		// when it changed after this attempt was queued.
+		cfg = current
+	}
+	if existing != nil && (existing.Status == "connected" || existing.Status == "connecting") && mcpServerConfigEqual(existing.Config, cfg) {
+		m.mu.Unlock()
+		return
+	}
+	handle := &McpClientHandle{ServerName: name, Config: cfg, Status: "connecting", passiveRetry: retryFrom != nil}
+	var staleClient *client.Client
+	var staleToken *mcpConnToken
+	if existing != nil {
+		// Keep the prior tool definitions visible while replacing the transport.
+		handle.ToolDefs = existing.ToolDefs
+		staleClient, staleToken = existing.Client, existing.token
+	}
 	m.clients[name] = handle
 	m.mu.Unlock()
+	defer func() {
+		if failure := recover(); failure != nil {
+			m.mu.Lock()
+			if handle.Status == "connecting" {
+				handle.Status = "failed"
+				handle.Error = "connection setup failed unexpectedly"
+			}
+			m.mu.Unlock()
+			m.notifyChange()
+			panic(failure)
+		}
+	}()
 	m.notifyChange()
 	if staleClient != nil {
-		existingToken.stop()
+		staleToken.stop()
 		m.closeClient(staleClient)
 	}
 
@@ -1078,19 +1080,6 @@ func (m *McpManager) markToolsListDirty(serverName string, token *mcpConnToken) 
 	})
 }
 
-// markConnectPanicked releases a dial that crashed before it could settle: the
-// panel must not sit on "connecting" forever, and the next call has to be able
-// to dial again.
-func (m *McpManager) markConnectPanicked(name string) {
-	m.mu.Lock()
-	if handle, ok := m.clients[name]; ok && handle.Status == "connecting" {
-		handle.Status = "failed"
-		handle.Error = "connection setup failed unexpectedly"
-	}
-	m.mu.Unlock()
-	m.notifyChange()
-}
-
 // runToolRefresh 是一轮"防抖 + 不丢"的刷新循环：refresh 收到的是最新一次通知
 // 的连接身份，连接被换掉时 refreshServerTools 会自行放弃。
 func (m *McpManager) runToolRefresh(serverName string, slot *mcpToolRefreshSlot, refresh func(string, *mcpConnToken)) {
@@ -1506,6 +1495,7 @@ func (m *McpManager) reconnectServer(ctx context.Context, serverName string, fai
 	oldClient := handle.Client
 	oldToken := handle.token
 	handle.Status = "connecting"
+	handle.passiveRetry = false
 	handle.Error = "reconnecting after invalid session"
 	handle.Client = nil
 	m.mu.Unlock()
@@ -1976,13 +1966,13 @@ func (m *McpManager) waitForDiscovery(ctx context.Context, progress func([]strin
 			if cfg.Enabled != nil && !*cfg.Enabled {
 				continue
 			}
-			if handle := m.clients[name]; handle == nil || handle.Status == "connecting" {
+			if handle := m.clients[name]; handle == nil || (handle.Status == "connecting" && !handle.passiveRetry) {
 				pending = append(pending, name)
 			}
 		}
 		// Also covers direct dials and reconnects not originating in LoadConfigs.
 		for name, handle := range m.clients {
-			if _, configured := m.configSnapshot[name]; !configured && handle.Status == "connecting" {
+			if _, configured := m.configSnapshot[name]; !configured && handle.Status == "connecting" && !handle.passiveRetry {
 				pending = append(pending, name)
 			}
 		}
