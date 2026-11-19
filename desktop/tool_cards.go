@@ -34,20 +34,20 @@ var toolTable = map[string]toolDescriptor{
 	"remote_run_command": {"Command", true, true},
 	"grep":               {"Grep", false, false},
 	"list":               {"List", true, false},
-	"glob":               {"Glob", true, false},
-	"http_request":       {"Request", true, true},
+	"fetch":              {"Fetch", true, true},
+	"http_request":       {"Fetch", true, true},
 	"web_fetch":          {"Web Fetch", true, true},
 	"calculate":          {"Calculate", false, false},
 	"plan":               {"Plan", false, false},
 	"skill":              {"Load Skill", false, false},
-	"ask":                {"Question", true, false},
+	"ask":                {"Ask", true, false},
 	"subagent":           {"Subagent", true, false},
-	"ssh_cluster":        {"Servers", true, false},
+	"ssh_cluster":        {"Cluster List", true, false},
 	"service":            {"Service", true, false},
-	"scheduled_task":     {"Scheduled Tasks", true, true},
+	"scheduled_task":     {"Scheduled Task", true, true},
 	"remote_transfer":    {"Transfer", true, true},
 	"screenshot":         {"Screenshot", true, false},
-	"render_html":        {"Preview", true, true},
+	"render_html":        {"Render", true, true},
 	"suggest":            {"Suggestions", true, false},
 	"wait":               {"Wait", false, true},
 	"image_generate":     {"Image Generation", true, true},
@@ -74,8 +74,6 @@ func toolKind(name string) string {
 	switch name {
 	case "list_files":
 		return "list"
-	case "Glob":
-		return "glob"
 	case "Bash":
 		return "command"
 	case "Skill":
@@ -99,7 +97,7 @@ func describeTool(name string) toolDescriptor {
 	if strings.HasPrefix(name, "mcp__") {
 		return toolDescriptor{"MCP Tool", true, true}
 	}
-	return toolDescriptor{"Tool", true, false}
+	return toolDescriptor{name, true, false}
 }
 
 func toolState(m map[string]any) string {
@@ -148,7 +146,7 @@ func isFoldableReadTool(m map[string]any) bool {
 		name = str(m, "toolName")
 	}
 	switch toolKind(name) {
-	case "read", "batch_read", "grep", "list", "glob":
+	case "read", "batch_read", "grep", "list":
 		return true
 	}
 	return false
@@ -256,7 +254,7 @@ func toolGroupResultSummary(name string, result map[string]any) string {
 		return toolGroupReadSummary(result)
 	case "grep":
 		return toolGroupGrepSummary(result)
-	case "list", "glob":
+	case "list":
 		return toolGroupListSummary(result)
 	}
 	return ""
@@ -332,7 +330,7 @@ func (s *toolGroupSummary) count(item toolGroupItem, delta int) {
 	switch item.kind {
 	case "grep":
 		s.greps += delta
-	case "list", "glob":
+	case "list":
 		s.lists += delta
 	case "command":
 		s.commands += delta
@@ -497,8 +495,6 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 				entry.verb = "Grep"
 			case "list":
 				entry.verb = "List"
-			case "glob":
-				entry.verb = "Glob"
 			default:
 				entry.verb = "Read"
 			}
@@ -538,7 +534,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	}
 
 	container.Children(func() {
-		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(gapTight).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(rowLabel)
+		row := ui.ButtonBase(c.Key(key + "-header")).FillWidth().Height(24).Gap(gapTight).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(rowLabel)
 		row.Children(func() {
 			ui.Box(c).Absolute().Left(-16).Top(0).Width(16).HeightPercent(100).Center().Children(func() {
 				toolStatusIcon(c, groupStatus)
@@ -575,7 +571,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 						}
 						purpose = locales.Text(groupPurposeFallbacks[category])
 					}
-					return groupPurposeLabel{purpose, short(purpose, 32)}
+					return groupPurposeLabel{purpose}
 				})
 				if shown > 0 {
 					// Together with the row's two 4px gaps, this separates
@@ -586,7 +582,7 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 				ui.Row(c.Key(fmt.Sprintf("latest-%d", category))).MinWidth(0).Shrink(1).Gap(gapTight).AlignItems(ui.Center).Children(func() {
 					disclosureIcon(c, groupToolIcons[category], a.currentPalette().accent)
 					if label.full != "" {
-						uikit.Tooltip(c, ui.Text(c, label.short).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1), label.full)
+						uikit.Tooltip(c, ui.Text(c, label.full).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1), label.full)
 					}
 				})
 			}
@@ -788,20 +784,25 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		summary = str(m, "title")
 	}
 	purpose := toolPurpose(m, args)
-	serviceAction := ""
-	if name == "service" {
-		switch str(args, "action") {
-		case "start":
-			serviceAction = "Start"
-		case "stop":
-			serviceAction = "Stop"
-		case "restart":
-			serviceAction = "Restart"
+	action := str(args, "action")
+	if name == "service" || name == "scheduled_task" || name == "screenshot" {
+		if name == "screenshot" && action == "" {
+			action = "capture"
 		}
-		if serviceAction != "" {
+		switch action {
+		case "start", "stop", "restart", "read", "list", "create", "delete", "capture":
+			operation += " " + strings.ToUpper(action[:1]) + action[1:]
+		}
+		if name == "service" {
 			summary = str(args, "name")
 			if summary == "" {
 				summary = str(args, "id")
+			}
+		}
+		if name == "screenshot" {
+			summary = str(args, "windowTitle")
+			if summary == "" && args["windowId"] != nil {
+				summary = fmt.Sprint(args["windowId"])
 			}
 		}
 	}
@@ -811,7 +812,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		if operation == "" {
 			operation = name
 		}
-		summary = ""
+		summary = str(m, "args")
 	} else {
 		switch name {
 		case "subagent":
@@ -839,10 +840,16 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		}
 	}
 	if name == "scheduled_task" {
-		summary = a.scheduledTaskSummary(args, result)
+		summary = strings.TrimPrefix(a.scheduledTaskSummary(args, result), action+" · ")
+		if summary == action {
+			summary = ""
+		}
 	}
 	if name == "service" && str(args, "action") == "read" {
-		summary = a.serviceReadSummary(args, result)
+		summary = strings.TrimPrefix(a.serviceReadSummary(args, result), "read · ")
+		if summary == "read" {
+			summary = ""
+		}
 	}
 	expandable := desc.expandable && !isMCP && name != "screenshot" && name != "image_generate" && name != "image_edit"
 	if isMCP {
@@ -857,7 +864,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	// Tool rows mirror main's .rich-tool-card: transparent, borderless, with a
 	// hanging status icon; the row itself carries the 6px rhythm below.
 	container.Children(func() {
-		row := ui.ButtonBase(c.Key(key+"-header")).FillWidth().Height(24).Padding(0, 8, 0, 0).Gap(gapTight).AlignItems(ui.Center).Justify(ui.Start).MinWidth(0).Label(locales.Text("工具详情 ") + key)
+		row := ui.ButtonBase(c.Key(key + "-header")).FillWidth().Height(24).Gap(gapTight).AlignItems(ui.Center).Justify(ui.Start).MinWidth(0).Label(locales.Text("工具详情 ") + key)
 		if expandable || filePath != "" {
 			row.Cursor(ui.CursorPointer)
 		}
@@ -874,7 +881,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			}
 			if isMCP {
 				ui.Text(c, "MCP").FontSize(fsTool).TextColor(p.accent).Shrink(0).LineHeight(1.4).NoWrap()
-				label := ui.Text(c.Key(key+"-mcp-tool"), short(operation, 120)).FontSize(fsTool).TextColor(p.accent).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
+				label := ui.Text(c.Key(key+"-mcp-tool"), operation).FontSize(fsTool).TextColor(p.accent).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
 				uikit.Tooltip(c, label, operation)
 			} else {
 				color := p.accent
@@ -882,31 +889,61 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					color = c.Theme().Danger
 				}
 				ui.Text(c, operation).FontSize(fsTool).TextColor(color).Shrink(0).LineHeight(1.4).NoWrap()
-				if serviceAction != "" {
-					ui.Text(c, serviceAction).FontSize(fsTool).TextColor(p.accent).Shrink(0).LineHeight(1.4).NoWrap()
-				}
 			}
 			if summary != "" {
 				if name == "command" || name == "remote_run_command" {
 					text := short(summary, 120)
 					label := ui.RichText(c.Key(key+"-summary"), codeSpansWithBase(c, text, "command.sh", commandLineInk(c.Theme(), a.secondaryInk()))...).FontSize(fsTool).SingleLine().MinWidth(0).Shrink(1)
 					uikit.Tooltip(c, label, summary)
+				} else if isMCP {
+					ui.Row(c.Key(key + "-mcp-summary")).MinWidth(0).Shrink(1).AlignItems(ui.Center).Children(func() {
+						color := a.secondaryInk()
+						ui.Text(c, "(").FontSize(fsTool).TextColor(color).Shrink(0)
+						label := ui.Text(c.Key(key+"-summary"), summary).FontSize(fsTool).TextColor(color).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
+						uikit.Tooltip(c, label, summary)
+						ui.Text(c, ")").FontSize(fsTool).TextColor(color).Shrink(0)
+					})
 				} else {
-					text := short(summary, 120)
-					if (name != "delete" && name != "remote_delete_path") || len(list(args, "paths")) == 0 {
-						text = "(" + text + ")"
+					text := summary
+					var parts []string
+					if name == "remote_transfer" {
+						local, remote := str(args, "localPath"), str(args, "remotePath")
+						if str(args, "action") == "download" {
+							local, remote = remote, local
+						}
+						if local != "" && remote != "" {
+							parts = []string{local, remote}
+						}
 					}
-					color := a.secondaryInk()
-					if name == "edit" || name == "create" || name == "delete" || name == "remote_edit" || name == "remote_create_file" || name == "remote_delete_path" {
-						color = color.Mix(c.Theme().Text, 0.4)
+					if len(parts) == 2 {
+						ui.Row(c.Key(key + "-transfer-summary")).MinWidth(0).Shrink(1).AlignItems(ui.Center).Children(func() {
+							color := a.secondaryInk()
+							ui.Text(c, "(").FontSize(fsTool).TextColor(color).Shrink(0)
+							for i, part := range parts {
+								if i > 0 {
+									ui.Text(c, " → ").FontSize(fsTool).TextColor(color).Shrink(0)
+								}
+								label := ui.Text(c, part).FontSize(fsTool).TextColor(color).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
+								uikit.Tooltip(c, label, part)
+							}
+							ui.Text(c, ")").FontSize(fsTool).TextColor(color).Shrink(0)
+						})
+					} else {
+						if (name != "delete" && name != "remote_delete_path") || len(list(args, "paths")) == 0 {
+							text = "(" + text + ")"
+						}
+						color := a.secondaryInk()
+						if name == "edit" || name == "create" || name == "delete" || name == "remote_edit" || name == "remote_create_file" || name == "remote_delete_path" {
+							color = color.Mix(c.Theme().Text, 0.4)
+						}
+						label := ui.Text(c.Key(key+"-summary"), text).FontSize(fsTool).TextColor(color).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
+						uikit.Tooltip(c, label, summary)
 					}
-					label := ui.Text(c.Key(key+"-summary"), text).FontSize(fsTool).TextColor(color).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
-					uikit.Tooltip(c, label, summary)
 				}
 			}
 			if isSSHTool(name) && name != "ssh_cluster" && !isMCP {
 				if alias := toolSSHAlias(args); alias != "" {
-					label := ui.Text(c.Key(key+"-ssh-alias"), short(alias, 32)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).MaxWidthPercent(24).Shrink(0)
+					label := ui.Text(c.Key(key+"-ssh-alias"), alias).FontSize(fsTool - 2).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).MaxWidthPercent(24).Shrink(0)
 					uikit.Tooltip(c, label, alias)
 				}
 			}
@@ -944,7 +981,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					c.After(time.Second)
 				}
 			}
-			if name == "http_request" || name == "web_fetch" {
+			if name == "fetch" || name == "http_request" || name == "web_fetch" {
 				if status := int(num(result, "status")); status > 0 {
 					ui.Text(c, fmt.Sprintf("%d", status)).FontSize(fsAux).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 				}
@@ -989,7 +1026,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				// where it can be skipped without breaking the sentence before it.
 				ui.Box(c).Grow(1).MinWidth(12)
 				// The reason keeps its full sentence; the target is what gets clipped.
-				label := ui.Text(c.Key(key+"-purpose"), short(purpose, 72)).FontSize(fsAux).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(0)
+				label := ui.Text(c.Key(key+"-purpose"), purpose).FontSize(fsAux).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(0)
 				label.MaxWidthPercent(45)
 				if name == "remote_run_command" {
 					// The server, command, and purpose each truncate independently;
@@ -1120,7 +1157,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				a.toolResourceCards(c, key, name, result, open)
 			case name == "remote_transfer":
 				toolFields(c, result, []string{"action", "alias", "target", "localPath", "remotePath", "fileCount", "dirCount", "totalBytes"}, a.secondaryInk())
-			case name == "http_request" || name == "web_fetch":
+			case name == "fetch" || name == "http_request" || name == "web_fetch":
 				// Network tool summaries stay on the header line.
 			case name == "render_html":
 				html := str(args, "html")
@@ -1360,12 +1397,17 @@ func toolArgSummary(name string, args map[string]any) string {
 		}
 	case "grep":
 		return pick("pattern")
-	case "glob":
-		return pick("pattern")
 	case "list":
 		return pick("path")
-	case "http_request", "web_fetch":
-		return pick("url")
+	case "fetch", "http_request", "web_fetch":
+		method := strings.ToUpper(str(args, "method"))
+		if method == "" {
+			method = "GET"
+		}
+		if url := pick("url"); url != "" {
+			return method + " " + url
+		}
+		return method
 	case "calculate":
 		return pick("expression")
 	case "plan":
@@ -1382,10 +1424,14 @@ func toolArgSummary(name string, args map[string]any) string {
 	case "subagent":
 		return pick("description", "task", "prompt")
 	case "remote_transfer":
+		local, remote := str(args, "localPath"), str(args, "remotePath")
 		if str(args, "action") == "download" {
-			return pick("remotePath")
+			local, remote = remote, local
 		}
-		return pick("localPath")
+		if local != "" && remote != "" {
+			return local + " → " + remote
+		}
+		return local + remote
 	case "service":
 		return pick("action", "name", "id")
 	case "scheduled_task":
@@ -1554,7 +1600,7 @@ func commandPreviewText(output string, lines int) string {
 
 func toolChips(name, state string, args, result map[string]any) []string {
 	var chips []string
-	if name == "read" || name == "batch_read" || name == "grep" || name == "list" || name == "glob" {
+	if name == "read" || name == "batch_read" || name == "grep" || name == "list" {
 		return nil
 	}
 	switch name {

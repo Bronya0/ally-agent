@@ -2147,7 +2147,8 @@ func builtinToolDisabled(ctx context.Context, cfg ConfigState, name string) bool
 		return false
 	}
 	for _, disabled := range cfg.DisabledTools {
-		if normalizeToolName(disabled) == name {
+		disabledName := normalizeToolName(disabled)
+		if disabledName == name || ((name == "fetch" || name == "http_request" || name == "web_fetch") && (disabledName == "fetch" || disabledName == "http_request" || disabledName == "web_fetch")) {
 			return true
 		}
 	}

@@ -367,7 +367,7 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 		if p.dark {
 			background = userBubbleDark
 		}
-		ui.Column(c.Key("bubble")).Label(locales.Text("用户消息")).Selectable().MinWidth(0).Padding(10, 16).Radius(16).Background(background).Children(func() {
+		ui.Column(c.Key("bubble")).Label(locales.Text("用户消息")).Selectable().MinWidth(0).MaxWidthPercent(100).Padding(10, 16).Radius(16).Background(background).Children(func() {
 			ui.Column(c).MinWidth(0).Gap(gapInline).Children(func() {
 				if str(m, "skill") != "" || str(m, "skillArgs") != "" {
 					ui.Row(c).AlignItems(ui.Center).Gap(gapInline).Children(func() {

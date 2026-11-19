@@ -182,7 +182,7 @@ func readCardSummary(name string, result map[string]any, forDisk bool) map[strin
 		if hits := toolGroupGrepHits(result); hits >= 0 {
 			summary["hits"] = hits
 		}
-	case "list", "glob":
+	case "list":
 		if _, exists := summary["count"]; !exists {
 			count := len(list(result, "entries"))
 			if count == 0 {

@@ -9,7 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-func TestGroupHeaderUsesLatestDescriptionsAndClipsWithinWindow(t *testing.T) {
+func TestGroupHeaderUsesLatestDescriptions(t *testing.T) {
 	a := &desktop{}
 	longPurpose := strings.Repeat("检查文件末尾内容", 12)
 	makeCall := func(id, name, purpose string) map[string]any {
@@ -29,26 +29,12 @@ func TestGroupHeaderUsesLatestDescriptionsAndClipsWithinWindow(t *testing.T) {
 		c.DisableAnimations()
 		ui.Column(c).FillWidth().Padding(24).Children(func() { a.toolActivityGroupCard(c, conv, 0) })
 	}, 900, 500)
-	if tt.HasText("较早的读取说明") || tt.HasText(longPurpose) || !tt.HasText(short(longPurpose, 32)) {
-		t.Fatalf("header did not use latest bounded description: %v", tt.Texts())
-	}
-	for _, width := range []int{900, 420} {
-		tt.SetSize(width, 500)
-		tt.Frame()
-		header, ok := tt.Find("工具分组 latest-readgroup-0")
-		if !ok {
-			t.Fatal("missing group header")
-		}
-		for _, text := range []string{short(longPurpose, 32), "定位调用入口", "查看目录结构", "测试项目"} {
-			box, ok := tt.Find(text)
-			if !ok || box.X < header.X || box.X+box.W > header.X+header.W+1 {
-				t.Fatalf("description outside header: %q %v header=%v", text, box, header)
-			}
-		}
+	if tt.HasText("较早的读取说明") || !tt.HasText(longPurpose) {
+		t.Fatalf("header did not use latest description: %v", tt.Texts())
 	}
 	conv.Messages[4]["purpose"] = "更新后的读取说明"
 	tt.Frame()
-	if !tt.HasText("更新后的读取说明") || tt.HasText(short(longPurpose, 32)) {
+	if !tt.HasText("更新后的读取说明") || tt.HasText(longPurpose) {
 		t.Fatal("description update retained an old header")
 	}
 	conv.Messages = append(conv.Messages, makeCall("last", "command", "执行最后验证"))

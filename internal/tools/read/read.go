@@ -73,7 +73,7 @@ func ReadRawTextFile(path string) ([]byte, os.FileInfo, error) {
 		return nil, nil, err
 	}
 	if info.IsDir() {
-		return nil, nil, toolerrors.New("E_IS_DIRECTORY", errors.New("path is a directory; use list_files to inspect its entries"))
+		return nil, nil, toolerrors.New("E_IS_DIRECTORY", errors.New("path is a directory; use command to inspect its entries"))
 	}
 	if !info.Mode().IsRegular() {
 		return nil, nil, toolerrors.New("E_NOT_REGULAR_FILE", errors.New("path is not a regular file"))

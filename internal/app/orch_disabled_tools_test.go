@@ -30,7 +30,7 @@ func TestBuildToolsForConfigHonorsDisabledTools(t *testing.T) {
 			t.Fatalf("protected tool %q must survive", want)
 		}
 	}
-	if !names["list_files"] {
+	if !names["fetch"] {
 		t.Fatal("non-disabled tools must stay")
 	}
 }

@@ -80,7 +80,7 @@ func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
 		t.Fatalf("ssh_cluster schema must not declare oneOf; got %#v", sshParams["oneOf"])
 	}
 
-	for _, name := range []string{"http_request", "web_fetch"} {
+	for _, name := range []string{"fetch"} {
 		params, _ := builtinSchemaForTest(t, name)
 		properties := schemaObjectForTest(t, params["properties"])
 		urlSchema := schemaObjectForTest(t, properties["url"])
@@ -295,11 +295,11 @@ func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 		{"edit replaces nothing", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"abcdef","newText":"x"}]}`, true, "must match the pattern", ""},
 		{"remote_edit pads oldText with an empty string", "remote_edit", `{"alias":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","oldText":""}]}`, false, "", ""},
 		{"remote_edit pads lineRange with an empty string", "remote_edit", `{"alias":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":""}]}`, false, "", ""},
-		{"http_request pads body with an empty string", "http_request", `{"url":"https://example.test","body":"","json":{"a":1}}`, false, "", ""},
-		{"web_fetch pads format with an empty string", "web_fetch", `{"url":"https://example.test/","format":""}`, false, "", ""},
+		{"http_request pads body with an empty string", "fetch", `{"url":"https://example.test","body":"","json":{"a":1}}`, false, "", ""},
+		{"fetch pads format with an empty string", "fetch", `{"url":"https://example.test/","responseFormat":""}`, false, "", ""},
 		{"grep pads outputMode with an empty string", "grep", `{"pattern":"x","outputMode":""}`, false, "", ""},
 		{"remote_run_command pads shell with an empty string", "remote_run_command", `{"alias":"t:/w","command":"ls","shell":""}`, false, "", ""},
-		{"web_fetch rejects an unknown format", "web_fetch", `{"url":"https://example.test/","format":"markdown"}`, true, "must be one of", ""},
+		{"fetch rejects an unknown format", "fetch", `{"url":"https://example.test/","responseFormat":"markdown"}`, true, "must be one of", ""},
 		// The local delete takes paths only: a list of entries is the one way to name
 		// a target, and the gate refuses the path key outright.
 		{"delete takes a path list", "delete", `{"paths":["a.txt","b.txt"]}`, false, "", ""},
@@ -395,17 +395,36 @@ func TestWireSchemasDeclareObjectShape(t *testing.T) {
 // cap, or pick a remote shell at all.
 func TestBuiltinSchemasExposeTheRuntimeParameters(t *testing.T) {
 	for _, tc := range []struct{ tool, param string }{
-		{"web_fetch", "headers"},
-		{"web_fetch", "maxChars"},
-		{"web_fetch", "maxBytes"},
-		{"http_request", "maxBytes"},
-		{"http_request", "followRedirects"},
+		{"fetch", "headers"},
+		{"fetch", "maxChars"},
+		{"fetch", "responseFormat"},
+		{"fetch", "maxBytes"},
+		{"fetch", "followRedirects"},
 		{"remote_run_command", "shell"},
 	} {
 		params, _ := builtinSchemaForTest(t, tc.tool)
 		properties := schemaObjectForTest(t, params["properties"])
 		if _, ok := properties[tc.param]; !ok {
 			t.Fatalf("%s must declare %q: the runtime honors it, so an undeclared key is rejected by the argument gate", tc.tool, tc.param)
+		}
+	}
+}
+
+func TestFetchInventoryAndLegacyDisabledMigration(t *testing.T) {
+	for _, tool := range Builtins() {
+		if tool.Function != nil && tool.Function.Name == "web_fetch" {
+			t.Fatal("legacy tool must not be injected")
+		}
+	}
+	for _, legacy := range []string{"web_fetch", "http_request"} {
+		disabled := SanitizeDisabledTools([]string{legacy})
+		if len(disabled) != 1 || disabled[0] != "fetch" {
+			t.Fatalf("%s migration: %v", legacy, disabled)
+		}
+		for _, tool := range FilterTools(Builtins(), []string{legacy}) {
+			if tool.Function != nil && tool.Function.Name == "fetch" {
+				t.Fatalf("%s disabled setting exposed merged tool", legacy)
+			}
 		}
 	}
 }

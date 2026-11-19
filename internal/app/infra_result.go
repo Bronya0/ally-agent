@@ -349,7 +349,10 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			return modelFallbackResult(name, result.Data, fullJSON)
 		}
 		return renderGrepResultForModel(r)
-	case "http_request":
+	case "fetch", "http_request":
+		if r, ok := result.Data.(WebFetchResult); ok {
+			return renderWebFetchResultForModel(r)
+		}
 		var r HTTPRequestToolResult
 		if !decodeToolData(result.Data, &r) {
 			return modelFallbackResult(name, result.Data, fullJSON)
@@ -825,7 +828,7 @@ func renderHTTPResultForModel(r HTTPRequestToolResult) string {
 		}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "// http_request | status=%d | duration=%dms", r.Status, r.DurationMS)
+	fmt.Fprintf(&b, "// fetch | status=%d | duration=%dms", r.Status, r.DurationMS)
 	if r.FinalURL != "" && r.FinalURL != r.URL {
 		b.WriteString(" | final-url=" + strconv.Quote(r.FinalURL))
 	}
@@ -867,7 +870,7 @@ func renderHTTPResultForModel(r HTTPRequestToolResult) string {
 
 func renderWebFetchResultForModel(r WebFetchResult) string {
 	body, reduced := compactTextForModel(r.Text, compactTextSpec{limit: maxModelWebOutput})
-	header := fmt.Sprintf("// web_fetch | status=%d | duration=%dms", r.Status, r.DurationMS)
+	header := fmt.Sprintf("// fetch | status=%d | duration=%dms", r.Status, r.DurationMS)
 	if r.Title != "" {
 		header += " | title=" + strconv.Quote(r.Title)
 	}
@@ -964,9 +967,9 @@ func missingReadPathHint(code, remoteAlias string) string {
 	}
 	switch code {
 	case "E_IS_DIRECTORY":
-		return "path is a directory; use list_files to inspect its entries"
+		return "path is a directory; use command to inspect its entries"
 	case "E_PATH_NOT_FOUND":
-		return "path does not exist; check the name with list_files on the parent directory, or pass an empty path for the workspace root"
+		return "path does not exist; use command to inspect the parent directory"
 	}
 	return ""
 }

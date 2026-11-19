@@ -65,7 +65,7 @@ func TestCommandDetailUsesContextAndDropsLateResponse(t *testing.T) {
 
 func TestLocalReadSearchListChipsAreEmpty(t *testing.T) {
 	result := map[string]any{"totalLines": 100, "count": 50, "nextStartLine": 11, "matches": []any{"hit"}, "truncated": true}
-	for _, kind := range []string{"read", "batch_read", "grep", "list", "glob"} {
+	for _, kind := range []string{"read", "batch_read", "grep", "list"} {
 		if chips := toolChips(kind, "success", nil, result); len(chips) != 0 {
 			t.Fatalf("%s retained badges: %v", kind, chips)
 		}

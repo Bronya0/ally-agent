@@ -448,7 +448,7 @@ func buildSkillDirTree(dir, loadedPath string) string {
 	}
 	walk(dir, "", 0)
 	if truncated {
-		lines = append(lines, "[Directory listing truncated; use list_files on a subdirectory for more.]")
+		lines = append(lines, "[Directory listing truncated; use command to inspect a subdirectory for more.]")
 	}
 	if len(lines) == 0 {
 		return ""

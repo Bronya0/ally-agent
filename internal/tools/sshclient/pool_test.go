@@ -70,9 +70,14 @@ func TestPoolCancelDoesNotCloseOtherSession(t *testing.T) {
 		if ready {
 			break
 		}
-		<-ch
+		select {
+		case <-ch:
+		case err := <-done:
+			t.Fatalf("first session ended before admission: %v", err)
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	reader2, writer2 := io.Pipe()
 	defer writer2.Close()
 	cancelled := make(chan error, 1)
@@ -86,7 +91,13 @@ func TestPoolCancelDoesNotCloseOtherSession(t *testing.T) {
 		if ready {
 			break
 		}
-		<-ch
+		select {
+		case <-ch:
+		case err := <-done:
+			t.Fatalf("first session ended before second admission: %v", err)
+		case err := <-cancelled:
+			t.Fatalf("second session ended before admission: %v", err)
+		}
 	}
 	cancel()
 	_ = reader2.Close()
@@ -122,7 +133,11 @@ func TestPoolInvalidationDuringDial(t *testing.T) {
 		_, err := p.Run(context.Background(), "node", 0, cfg, "cat", strings.NewReader("old"))
 		done <- err
 	}()
-	<-started
+	select {
+	case <-started:
+	case err := <-done:
+		t.Fatalf("dial ended before authentication: %v", err)
+	}
 	p.Invalidate("node")
 	if err := <-done; err == nil {
 		t.Fatal("in-flight connection survived invalidation")
@@ -176,8 +191,13 @@ func TestPoolCanceledUnansweredOpenIsRetiredAndClosed(t *testing.T) {
 	defer p.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	defer cancel()
 	go func() { _, err := p.Run(ctx, "node", 0, cfg, "cat", nil); done <- err }()
-	<-opened
+	select {
+	case <-opened:
+	case err := <-done:
+		t.Fatalf("session ended before channel open: %v", err)
+	}
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled open: %v", err)
@@ -252,8 +272,13 @@ func TestPoolCancelUnansweredExecDoesNotReplay(t *testing.T) {
 	defer p.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	defer cancel()
 	go func() { _, err := p.Run(ctx, "node", 0, cfg, "side-effect", nil); done <- err }()
-	<-started
+	select {
+	case <-started:
+	case err := <-done:
+		t.Fatalf("session ended before exec: %v", err)
+	}
 	cancel()
 	select {
 	case err := <-done:

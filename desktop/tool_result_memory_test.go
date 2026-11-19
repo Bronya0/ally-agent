@@ -107,7 +107,6 @@ func TestSnapshotOmitsTransientOutputsAndPreservesCardMetadata(t *testing.T) {
 		{"batch_read", map[string]any{"files": []any{map[string]any{"path": "main.go", "totalLines": 40, "content": body}}}},
 		{"grep", map[string]any{"matches": []any{map[string]any{"path": "main.go", "lines": []any{map[string]any{"text": body}, map[string]any{"text": body}}}}}},
 		{"list_files", map[string]any{"entries": []any{map[string]any{"path": body}}, "truncated": true}},
-		{"Glob", map[string]any{"matches": []any{body}, "truncated": true}},
 		{"remote_run_command", map[string]any{"output": body, "stdout": body, "exitCode": 2, "durationMs": 12}},
 		{"command", map[string]any{"output": body, "stderr": body, "exitCode": 2, "durationMs": 12}},
 		{"Bash", map[string]any{"stdout": body, "exitCode": 2}},
@@ -255,7 +254,6 @@ func TestReadDisplayProjectionPreservesMetadataAndBackendEvidence(t *testing.T) 
 		{"remote_read", map[string]any{"path": "main.go", "startLine": 1, "endLine": 40, "content": body}},
 		{"grep", map[string]any{"matches": []any{map[string]any{"path": "main.go", "lines": []any{map[string]any{"text": body}}}}}},
 		{"list_files", map[string]any{"entries": []any{map[string]any{"path": body}}, "truncated": true}},
-		{"Glob", map[string]any{"matches": []any{body}, "truncated": true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			payload := map[string]any{"name": tc.name, "toolCallId": "call", "result": map[string]any{"ok": true, "data": tc.data}}

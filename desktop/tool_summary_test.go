@@ -49,7 +49,7 @@ func TestToolMetadataStaysOnHeader(t *testing.T) {
 			t.Fatalf("image metadata is not compact: %v", tt.Texts())
 		}
 	}
-	for _, name := range []string{"http_request", "web_fetch"} {
+	for _, name := range []string{"fetch", "http_request", "web_fetch"} {
 		msg := map[string]any{"name": name, "toolCallId": "web", "status": "success", "args": `{"url":"https://example.com"}`, "result": map[string]any{"durationMs": 37, "status": 200}}
 		tt := compactToolView(&desktop{}, msg)
 		timing, ok := tt.Find("<1s")
@@ -69,7 +69,7 @@ func TestScreenshotEnumerationHasNoBodyAndNoMisleadingTruncation(t *testing.T) {
 func TestDeletedTaskNameAppearsInSummary(t *testing.T) {
 	msg := map[string]any{"name": "scheduled_task", "toolCallId": "task", "status": "success", "args": `{"action":"delete","id":"task-id"}`, "result": map[string]any{"deleted": "task-id", "deletedName": "每日巡检"}}
 	tt := compactToolView(&desktop{}, msg)
-	if !tt.HasText("delete · 每日巡检") {
+	if !tt.HasText("(每日巡检)") {
 		t.Fatalf("missing task identity: %v", tt.Texts())
 	}
 }
@@ -99,5 +99,12 @@ func TestChatWidthIsBoundedAndResponsive(t *testing.T) {
 	viewport, ok = tt.Find("聊天滚动区域")
 	if !ok || viewport.X != 0 || viewport.W != 800 {
 		t.Fatalf("scrollbar viewport does not follow the narrow chat panel: %v", viewport)
+	}
+}
+
+func TestTransferSummary(t *testing.T) {
+	args := map[string]any{"action": "download", "localPath": "dist/a", "remotePath": "/srv/a"}
+	if got := toolArgSummary("remote_transfer", args); got != "/srv/a → dist/a" {
+		t.Fatalf("direction: %q", got)
 	}
 }

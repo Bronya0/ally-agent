@@ -129,7 +129,7 @@ func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot 
 		"# Tool Use\n\n" +
 		"- Use only tools declared for this request. All tool guidance is conditional on availability; otherwise use an available alternative or explain the limitation.\n" +
 		sharedRemoteAccessRules() +
-		"- Prefer built-in tools over the shell: `grep`, `read`, `list_files`, `web_fetch`/`http_request`, `remote_*`, `delete`. Use `command` when no built-in tool fits, or for build, test, and inspection. Use `service` for long-running servers. When a command result reports promotion to a background service, use its service ID to read, restart, or stop it. Do not rerun an active process. A service restart returns a new ID.\n" +
+		"- Prefer built-in tools over the shell: `grep`, `read`, `fetch`, `remote_*`, `delete`. Use `command` when no built-in tool fits, or for build, test, and inspection. Use `service` for long-running servers. When a command result reports promotion to a background service, use its service ID to read, restart, or stop it. Do not rerun an active process. A service restart returns a new ID.\n" +
 		"- Use `wait` only for an active async operation or an expected external condition. Check the result after. Do not wait for user input or scheduled work.\n" +
 		"- MCP tools are named `mcp__<server>__<tool>` and follow the same call and result rules.\n" +
 		"- Create `scheduled_task` only when the user explicitly asks for scheduled or recurring work.\n" +

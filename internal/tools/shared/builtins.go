@@ -106,7 +106,11 @@ var chatToolsCache = struct {
 
 func Builtins() []openai.Tool {
 	chatToolsCache.once.Do(func() {
-		chatToolsCache.tools = chatToolsUncached()
+		for _, tool := range chatToolsUncached() {
+			if tool.Function != nil && tool.Function.Name != "web_fetch" && tool.Function.Name != "list_files" {
+				chatToolsCache.tools = append(chatToolsCache.tools, tool)
+			}
+		}
 	})
 	return chatToolsCache.tools
 }
@@ -127,7 +131,7 @@ var builtinSchemaCache = struct {
 func BuiltinSchema(name string) (map[string]any, bool) {
 	builtinSchemaCache.once.Do(func() {
 		byName := make(map[string]map[string]any)
-		for _, tool := range Builtins() {
+		for _, tool := range chatToolsUncached() {
 			if tool.Function == nil {
 				continue
 			}
@@ -139,6 +143,9 @@ func BuiltinSchema(name string) (map[string]any, bool) {
 		}
 		builtinSchemaCache.byName = byName
 	})
+	if name == "http_request" {
+		name = "fetch"
+	}
 	schema, ok := builtinSchemaCache.byName[name]
 	return schema, ok
 }
@@ -303,9 +310,11 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("http_request", "Make a single HTTP/HTTPS request with method, headers, query, and at most one of body or JSON.", map[string]any{
+		functionTool("fetch", "Fetch a URL: make an HTTP request, or extract readable web content using responseFormat.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
+				"responseFormat":     map[string]any{"type": "string", "enum": []string{"", "response", "readable", "raw"}, "description": "response (default): HTTP response; readable: extract webpage text, title and links; raw: webpage source, title and links. Web modes require GET and do not accept query, body, json, saveTo or followRedirects."},
+				"maxChars":           map[string]any{"type": "integer", "minimum": 0, "maximum": MaxWebFetchChars, "description": "Text character limit for readable and raw formats; 0 uses the default."},
 				"method":             map[string]any{"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9!#$%&'*+.^_`|~-]*$", "description": "HTTP method token. Default GET; normalized to uppercase before sending."},
 				"url":                map[string]any{"type": "string", "minLength": 1, "pattern": `^https?://\S+$`, "description": "Absolute http:// or https:// URL."},
 				"headers":            map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Request headers. User-Agent defaults to AllyAgent unless provided."},
@@ -754,6 +763,9 @@ func FilterTools(tools []openai.Tool, disabled []string) []openai.Tool {
 		name = NormalizeName(name)
 		if name != "" && !protectedToolNames[name] {
 			off[name] = true
+			if name == "web_fetch" || name == "http_request" {
+				off["fetch"] = true
+			}
 		}
 	}
 	if len(off) == 0 {
@@ -777,6 +789,9 @@ func SanitizeDisabledTools(names []string) []string {
 	seen := map[string]bool{}
 	for _, name := range names {
 		name = NormalizeName(name)
+		if name == "web_fetch" || name == "http_request" {
+			name = "fetch"
+		}
 		if name == "" || seen[name] || protectedToolNames[name] || !IsBuiltinTool(name) {
 			continue
 		}

@@ -365,6 +365,65 @@ func TestHistoryLoadCollapsesRepeatedToolCallNames(t *testing.T) {
 	}
 }
 
+func TestLegacyFetchHistoryReplayedWithCurrentTools(t *testing.T) {
+	app := newIsolatedTestApp(t)
+	app.initialized = true
+	app.sessionsDir, app.historiesDir = t.TempDir(), t.TempDir()
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "open page"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "legacy-call", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "web_fetch", Arguments: `{"url":"https://example.test","format":"raw"}`}}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "legacy-call", Content: "old page"},
+		{Role: openai.ChatMessageRoleUser, Content: "continue"},
+	}
+	if err := writeCompressedHistoryPayload(app.historyDiskPaths("legacy-fetch")[0], history); err != nil {
+		t.Fatal(err)
+	}
+	loaded := app.loadSessionHistoryCopy("legacy-fetch")
+	if len(loaded) != 4 || len(loaded[1].ToolCalls) != 1 || loaded[1].ToolCalls[0].Function.Name != "web_fetch" || loaded[2].ToolCallID != "legacy-call" {
+		t.Fatalf("history: %#v", loaded)
+	}
+	request := buildOpenAIResponsesRequest(ConfigState{}, "model", loaded, builtinToolsForConfig(ConfigState{}), nil)
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	var call, output bool
+	for _, item := range wire["input"].([]any) {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if m["type"] == "function_call" && m["name"] == "web_fetch" && m["call_id"] == "legacy-call" {
+			call = true
+		}
+		if m["type"] == "function_call_output" && m["call_id"] == "legacy-call" {
+			output = true
+		}
+	}
+	if !call || !output {
+		t.Fatalf("missing historical call or output: %s", raw)
+	}
+	tools := builtinToolsForConfig(ConfigState{})
+	found := false
+	for _, tool := range tools {
+		if tool.Function != nil {
+			if tool.Function.Name == "fetch" {
+				found = true
+			}
+			if tool.Function.Name == "web_fetch" || tool.Function.Name == "http_request" || tool.Function.Name == "list_files" {
+				t.Fatalf("obsolete tool injected: %s", tool.Function.Name)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("fetch missing")
+	}
+}
+
 func TestHistoryLoadDropsUnknownToolCallNames(t *testing.T) {
 	t.Parallel()
 	app := newIsolatedTestApp(t)

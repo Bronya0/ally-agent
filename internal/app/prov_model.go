@@ -1800,7 +1800,10 @@ var (
 func knownBuiltinToolNames() map[string]bool {
 	knownToolNamesOnce.Do(func() {
 		tools := chatTools()
-		knownToolNamesSet = make(map[string]bool, len(tools))
+		knownToolNamesSet = make(map[string]bool, len(tools)+3)
+		for _, legacy := range []string{"http_request", "web_fetch", "list_files"} {
+			knownToolNamesSet[legacy] = true
+		}
 		for _, tool := range tools {
 			if tool.Function != nil && tool.Function.Name != "" {
 				knownToolNamesSet[tool.Function.Name] = true

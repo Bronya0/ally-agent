@@ -1216,6 +1216,8 @@ type CommandResult struct {
 }
 
 type HTTPRequestToolRequest struct {
+	ResponseFormat      string            `json:"responseFormat,omitempty"`
+	MaxChars            int               `json:"maxChars,omitempty"`
 	Method              string            `json:"method"`
 	URL                 string            `json:"url"`
 	Headers             map[string]string `json:"headers,omitempty"`
@@ -3002,7 +3004,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			data, err = a.executeScheduledTaskTool(cfg, req)
 		}
-	case "http_request":
+	case "fetch", "http_request":
 		var req HTTPRequestToolRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
@@ -3013,7 +3015,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			}
 		}
 		if err == nil {
-			data, err = a.httpRequestToolWithConfig(ctx, cfg, req)
+			data, err = a.fetchToolWithConfig(ctx, cfg, req)
 		}
 	case "web_fetch":
 		var req WebFetchRequest
@@ -3972,7 +3974,7 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 	// does not waste a model round trip.
 	var repairedFields []string
 	cur := rawArgs
-	if name == "http_request" {
+	if name == "fetch" || name == "http_request" {
 		if fixed, ok := repairHTTPRequestJSONArg(cur); ok {
 			cur = fixed
 			repairedFields = append(repairedFields, "json")

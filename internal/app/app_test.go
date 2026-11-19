@@ -1387,7 +1387,7 @@ func TestSubagentToolsExcludeInteractiveToolsAndIncludeMCP(t *testing.T) {
 		}},
 	}
 	tools := app.subagentTools(ConfigState{})
-	available := map[string]bool{"mcp__demo__lookup": false, "edit": false, "command": false, "web_fetch": false}
+	available := map[string]bool{"mcp__demo__lookup": false, "edit": false, "command": false, "fetch": false}
 	for _, tool := range tools {
 		if tool.Function == nil {
 			continue

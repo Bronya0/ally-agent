@@ -110,7 +110,7 @@ func TestToolDidPlanWorkClassifiesByName(t *testing.T) {
 			t.Fatalf("%q must count as work a plan could have moved past", name)
 		}
 	}
-	for _, name := range []string{"read", "grep", "list_files", "web_fetch", "http_request", "plan", "wait", "ask", "suggest"} {
+	for _, name := range []string{"read", "grep", "fetch", "plan", "wait", "ask", "suggest"} {
 		if toolDidPlanWork(name) {
 			t.Fatalf("%q must not count as work", name)
 		}
