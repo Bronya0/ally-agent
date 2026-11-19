@@ -167,6 +167,158 @@ func TestFileNameDialogEnterRunsValidation(t *testing.T) {
 	}
 }
 
+func TestChatSearchJumpsBetweenDeepCodeMatches(t *testing.T) {
+	code := "```python\n" + strings.Repeat("pass  # no match\n", 80) +
+		"print(1 + 1)  # needle first\n" + strings.Repeat("pass  # no match\n", 80) +
+		"print(2 + 2)  # needle second\n" + strings.Repeat("pass  # no match\n", 80) + "```\n"
+	conv := &conversation{ID: "jump-many-code", Workspace: t.TempDir(), Messages: []map[string]any{
+		searchMessage("assistant", code),
+	}}
+	a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}}
+	st := conv.uiState()
+	st.Search.Query = "needle"
+	a.openChatSearch(conv)
+	matches := a.chatSearchMatches(conv)
+	if len(matches) != 2 {
+		t.Fatalf("matches = %+v, want two code comments", matches)
+	}
+	var hit, viewport ui.Rect
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		a.chatColumn(c, 900)
+		viewport = conv.Scroll.Bounds(c)
+		if st.Search.blockHandle != nil {
+			hit = st.Search.blockHandle.Bounds(c)
+		}
+	}, 900, 600)
+	tester.Advance(100 * time.Millisecond)
+	tester.Frame()
+	if st.Search.blockMatch != matches[0] || hit.H <= 0 || hit.Y < viewport.Y || hit.Y+hit.H > viewport.Y+viewport.H {
+		t.Fatalf("first code hit not revealed: match=%+v hit=%+v viewport=%+v", st.Search.blockMatch, hit, viewport)
+	}
+	a.chatSearchStep(conv, 1)
+	tester.Advance(100 * time.Millisecond)
+	tester.Frame()
+	if st.Search.blockMatch != matches[1] || hit.H <= 0 || hit.Y < viewport.Y || hit.Y+hit.H > viewport.Y+viewport.H {
+		t.Fatalf("second code hit not revealed: match=%+v hit=%+v viewport=%+v", st.Search.blockMatch, hit, viewport)
+	}
+}
+
+func TestChatSearchJumpsBetweenProseAndCodeMatches(t *testing.T) {
+	content := "1 + 1 = 2\n\n```python\n# 1 + 1 = 2\n```\n"
+	conv := &conversation{ID: "jump-prose-code", Workspace: t.TempDir(), Messages: []map[string]any{
+		searchMessage("assistant", content),
+	}}
+	a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}}
+	st := conv.uiState()
+	st.Search.Query = "1 + 1 = 2"
+	a.openChatSearch(conv)
+	matches := a.chatSearchMatches(conv)
+	if len(matches) != 2 {
+		t.Fatalf("matches = %+v, want one prose and one code hit", matches)
+	}
+	var hit, viewport ui.Rect
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		a.chatColumn(c, 900)
+		viewport = conv.Scroll.Bounds(c)
+		if st.Search.blockHandle != nil {
+			hit = st.Search.blockHandle.Bounds(c)
+		}
+	}, 900, 600)
+	tester.Advance(100 * time.Millisecond)
+	tester.Frame()
+	if st.Search.blockMatch != matches[0] {
+		t.Fatalf("initial current = %+v, want prose hit %+v", st.Search.blockMatch, matches[0])
+	}
+	a.chatSearchStep(conv, 1)
+	tester.Advance(100 * time.Millisecond)
+	tester.Frame()
+	if st.Search.blockMatch != matches[1] || hit.H <= 0 || hit.Y < viewport.Y || hit.Y+hit.H > viewport.Y+viewport.H {
+		t.Fatalf("code hit not revealed: current=%+v hit=%+v viewport=%+v", st.Search.blockMatch, hit, viewport)
+	}
+	a.chatSearchStep(conv, 1)
+	tester.Advance(100 * time.Millisecond)
+	tester.Frame()
+	if st.Search.blockMatch != matches[0] {
+		t.Fatalf("wrapped current = %+v, want prose hit %+v", st.Search.blockMatch, matches[0])
+	}
+}
+
+func TestChatSearchJumpsBetweenMessagesWithCodeAndText(t *testing.T) {
+	messages := restoredHistory(80)
+	messages[1] = searchMessage("assistant", "1 + 1 = 2")
+	messages[len(messages)-1] = searchMessage("assistant", "```python\n# 1 + 1 = 2\n```\n")
+	conv := &conversation{ID: "jump-multiple-messages", Workspace: t.TempDir(), Messages: messages}
+	a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}}
+	st := conv.uiState()
+	st.Search.Query = "1 + 1 = 2"
+	a.openChatSearch(conv)
+	matches := a.chatSearchMatches(conv)
+	if len(matches) != 2 || matches[0].Message != 1 || matches[1].Message != len(messages)-1 {
+		t.Fatalf("matches = %+v, want prose and code in separate messages", matches)
+	}
+	var hit, viewport ui.Rect
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		a.chatColumn(c, 900)
+		viewport = conv.Scroll.Bounds(c)
+		if st.Search.blockHandle != nil {
+			hit = st.Search.blockHandle.Bounds(c)
+		}
+	}, 900, 600)
+	tester.Advance(100 * time.Millisecond)
+	tester.Frame()
+	if st.Search.blockMatch != matches[0] || hit.H <= 0 || hit.Y < viewport.Y || hit.Y+hit.H > viewport.Y+viewport.H {
+		t.Fatalf("old prose hit not revealed: current=%+v hit=%+v viewport=%+v", st.Search.blockMatch, hit, viewport)
+	}
+	a.chatSearchStep(conv, 1)
+	tester.Advance(100 * time.Millisecond)
+	tester.Frame()
+	if st.Search.blockMatch != matches[1] || hit.H <= 0 || hit.Y < viewport.Y || hit.Y+hit.H > viewport.Y+viewport.H {
+		t.Fatalf("new code hit not revealed: current=%+v hit=%+v viewport=%+v", st.Search.blockMatch, hit, viewport)
+	}
+}
+
+func TestChatSearchJumpsBetweenCodeBlocksInOneMessage(t *testing.T) {
+	content := "```python\n# needle first\n```\n\nintervening text\n\n```\nneedle second\n```\n"
+	conv := &conversation{ID: "jump-code-blocks", Workspace: t.TempDir(), Messages: []map[string]any{
+		searchMessage("assistant", content),
+	}}
+	a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}}
+	st := conv.uiState()
+	st.Search.Query = "needle"
+	a.openChatSearch(conv)
+	matches := a.chatSearchMatches(conv)
+	if len(matches) != 2 {
+		t.Fatalf("matches = %+v, want both code blocks", matches)
+	}
+	var hit, viewport ui.Rect
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		a.chatColumn(c, 900)
+		viewport = conv.Scroll.Bounds(c)
+		if st.Search.blockHandle != nil {
+			hit = st.Search.blockHandle.Bounds(c)
+		}
+	}, 900, 600)
+	tester.Advance(100 * time.Millisecond)
+	tester.Frame()
+	if st.Search.blockMatch != matches[0] {
+		t.Fatalf("initial current = %+v, want first code hit %+v", st.Search.blockMatch, matches[0])
+	}
+	a.chatSearchStep(conv, 1)
+	tester.Advance(100 * time.Millisecond)
+	tester.Frame()
+	if st.Search.blockMatch != matches[1] || hit.H <= 0 || hit.Y < viewport.Y || hit.Y+hit.H > viewport.Y+viewport.H {
+		t.Fatalf("second code block hit not revealed: target=%+v matches=%+v current=%+v currentIndex=%d reveal=%v hit=%+v viewport=%+v codeCache=%+v", matches[1], matches, st.Search.blockMatch, st.Search.Current, st.Search.reveal, hit, viewport, st.Search.codeCache)
+	}
+}
+
 func TestChatSearchJumpShowsOldMessageAndDeepCodeLine(t *testing.T) {
 	for _, scenario := range []string{"old-message", "deep-code"} {
 		t.Run(scenario, func(t *testing.T) {
