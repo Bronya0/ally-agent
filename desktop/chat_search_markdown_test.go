@@ -43,6 +43,9 @@ func TestChatSearchMarkdownProjectionUsesVisibleInlineText(t *testing.T) {
 		if want, ok := wantStyles[value]; ok && (run.bold != want.bold || run.italic != want.italic || run.code != want.code) {
 			t.Errorf("%q style = %+v, want %+v", value, run, want)
 		}
+		if value != "code" && run.code {
+			t.Errorf("%q unexpectedly inherited inline code styling", value)
+		}
 		if value == "link label" && run.linkDest != "https://hidden.invalid" {
 			t.Errorf("link label destination = %q", run.linkDest)
 		}

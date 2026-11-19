@@ -499,7 +499,7 @@ func tempWorkspace(root string) bool {
 
 // tempWorkspaceReleaseDelay lets the backend finish work that still reads the
 // directory before the deletion starts.
-var tempWorkspaceReleaseDelay = 400 * time.Millisecond
+const tempWorkspaceReleaseDelay = 400 * time.Millisecond
 
 // removeTempWorkspace deletes a sandbox after its last tab closed. A temporary
 // workspace can carry several sessions, and removing the directory with the
@@ -517,12 +517,20 @@ func (a *desktop) removeTempWorkspace(root string) {
 }
 
 func (a *desktop) closeWorkspaceTab(index int) {
+	if root := a.detachWorkspaceTab(index); root != "" {
+		a.removeTempWorkspace(root)
+	}
+}
+
+// detachWorkspaceTab removes the tab and returns a temporary directory when
+// its last reference in the tab strip is gone.
+func (a *desktop) detachWorkspaceTab(index int) string {
 	if index < 0 || index >= len(a.tabs) || len(a.tabs) <= 1 {
-		return
+		return ""
 	}
 	t := a.tabs[index]
 	if t.Busy {
-		return
+		return ""
 	}
 	a.rememberSession(t)
 	a.tabs = slices.Delete(a.tabs, index, index+1)
@@ -541,7 +549,6 @@ func (a *desktop) closeWorkspaceTab(index int) {
 		if file := a.workspaceFiles[key]; file != nil && !file.Saving && file.Editor != nil && !file.Editor.Buffer.Modified() {
 			a.releaseWorkspaceFile(t.Workspace)
 		}
-		a.removeTempWorkspace(t.Workspace)
 	}
 	sessionStillOpen := false
 	for _, tab := range a.tabs {
@@ -568,6 +575,10 @@ func (a *desktop) closeWorkspaceTab(index int) {
 		}
 	}
 	a.releaseMemory()
+	if !stillOpen && tempWorkspace(t.Workspace) {
+		return t.Workspace
+	}
+	return ""
 }
 
 // updateDialog mirrors the original card modal: progress, state text, and the

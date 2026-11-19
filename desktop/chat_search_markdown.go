@@ -58,6 +58,7 @@ func chatSearchMarkdownText(src string) chatSearchMarkdown {
 		tableSearchable[i] = searchable
 	}
 	out := chatSearchMarkdown{}
+	var text strings.Builder
 	for i := 1; i < doc.Len(); i++ {
 		b := doc.Block(i)
 		var block chatSearchMarkdownBlock
@@ -97,13 +98,14 @@ func chatSearchMarkdownText(src string) chatSearchMarkdown {
 		if !ok || block.text == "" {
 			continue
 		}
-		if out.text != "" {
-			out.text += "\n"
+		if text.Len() > 0 {
+			text.WriteByte('\n')
 		}
-		block.visibleStart = len(out.text)
-		out.text += block.text
+		block.visibleStart = text.Len()
+		text.WriteString(block.text)
 		out.blocks = append(out.blocks, block)
 	}
+	out.text = text.String()
 	return out
 }
 
@@ -172,8 +174,9 @@ func chatSearchMarkdownInlineBlock(doc *parser.Document, index int) (chatSearchM
 				if open == 0 || open+len(n.Text) > len(raw) || raw[open:open+len(n.Text)] != n.Text {
 					return false
 				}
-				style.code = true
-				appendSearchMarkdownRun(&text, &runs, n.Text, n.Start+open, n.Start+open+len(n.Text), style)
+				codeStyle := style
+				codeStyle.code = true
+				appendSearchMarkdownRun(&text, &runs, n.Text, n.Start+open, n.Start+open+len(n.Text), codeStyle)
 			case parser.SoftBreak:
 				appendSearchMarkdownRun(&text, &runs, " ", n.Start, n.End, style)
 			case parser.LineBreak:
