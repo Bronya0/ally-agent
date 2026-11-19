@@ -1,13 +1,13 @@
 ---
 name: anydoc
-description: 通过 anydoc CLI（npx @firecrawl/anydoc）把 doc/docx/docm/ppt/pps/pot/pptx/pptm/ppsx/ppsm/xls/xlsx/xlsm/xlsb/odt/ods/odp/rtf/epub/csv/pdf 转 Markdown，保留表格、标题、脚注、备注等结构，公式转 LaTeX。无需安装，本地转换。
+description: 通过 anydoc CLI 将办公文档、PDF、EPUB、CSV 转为 Markdown，供 Ally 阅读或交付；文本型文档本地转换，扫描 PDF 可按需使用托管 OCR。
 type: document-conversion
 whenToUse: 用户要求把办公文档转换为 Markdown，或需要读取 .docx/.pptx/.xlsx/.pdf 等办公/PDF 文档内容时使用（Ally 的 read 工具不支持这些格式，会返回 E_DOCUMENT_UNSUPPORTED 并指向本 skill）。
 ---
 
 # AnyDoc Skill
 
-通过 anydoc CLI 把办公文档转成干净的 GitHub-Flavored Markdown。所有命令都经 `command` 工具执行，cwd 为当前 workspace，示例使用 bash；Windows 无 Git Bash 时 Ally 可回退 PowerShell，应按实际 shell 调整。CLI 参数以 `anydoc --help` 为准，版本可能变化，不要凭记忆猜参数；本 skill 只补充 help 不会说明的 Ally 集成约定。
+通过 anydoc CLI 把办公文档转成干净的 GitHub-Flavored Markdown。所有命令都经 `command` 工具执行，cwd 为当前 workspace，示例使用 bash；Windows 无 Git Bash 时 Ally 可回退 PowerShell，应按实际 shell 调整。以下按 v0.2.5 核对；实际版本可能变化，以 `npx -y @firecrawl/anydoc --version` 和 `--help` 为准。不要凭记忆猜参数；本 skill 补充 Ally 集成约定。
 
 ## 1. 运行方式（无需安装）
 
@@ -25,17 +25,29 @@ npx -y @firecrawl/anydoc - --format csv < d.csv   # 从 stdin 读
 
 支持 21 种扩展名：Word（`.doc` `.docx` `.docm`）、PowerPoint（`.ppt` `.pps` `.pot` `.pptx` `.pptm` `.ppsx` `.ppsm`）、Excel（`.xls` `.xlsx` `.xlsm` `.xlsb`）、OpenDocument（`.odt` `.ods` `.odp`）、`.rtf` `.epub` `.csv` `.pdf`（文本型）。
 
-保留结构：标题（带锚点）、加粗/斜体/删除线、行内代码与代码块、链接、嵌套/任务列表（保留原文编号）、表格（含合并单元格和表头行）、引用块、脚注/尾注、PPT 演讲者备注；Word/PPT 的 OMML、ODF/EPUB 的 MathML 公式转为 GitHub 风格 LaTeX（`$...$` / `$$...$$`）；嵌入图片输出 alt 文本，外链图片保持为 Markdown 图片。
+保留结构：标题（带锚点）、加粗/斜体/删除线、行内代码与代码块、链接、嵌套/任务列表（保留原文编号）、表格（含合并单元格和表头行）、引用块、脚注/尾注、PPT 演讲者备注；Word/PPT 的 OMML、ODF/EPUB 的 MathML、RTF 公式转为 GitHub 风格 LaTeX（`$...$` / `$$...$$`）；嵌入图片输出 alt 文本，外链图片保持为 Markdown 图片。表格中的表单控件复选框可输出 `[x]` / `[ ]`；隐藏内容不会作为普通可见内容输出。转换是内容提取，不保证还原版式或所有图像，关键内容应对照原文。
 
 `--format` 的规范名只有：`doc, docx, odt, pdf, ppt, pptx, rtf, epub, xlsx, ods, odp, csv`（`xls`/`docm`/`ppsx` 等别名会归一到这些）。
 
 ## 3. 退出码与错误（CLI 从不交互提示）
 
-- `0` 成功；`1` 文档无法读取或转换；`2` 用法错误（未知选项、缺输入、非法 `--format`）
-- 失败只在 stderr 打一行 `anydoc: <message>`；转换结果仅当"没有任何有意义的 Markdown 可产出"时才报错
-- 常见错误：`unsupported`（未知格式或纯图片 PDF）、`encrypted`（加密/带密码文档，拒绝处理）、`malformed`（结构损坏、无可提取内容）、资源超限（zip 炸弹/深嵌套防护）
+- `0` 成功；`1` 文档无法读取或转换；`2` 用法错误（未知选项、缺输入、非法 `--format`）；`3` PDF 有页面需要 OCR。
+- CLI 不交互，失败信息写入 stderr。即使 PDF 同时包含文本页和扫描页，默认也会报告需要 OCR 的页码并以 `3` 退出，不要当成完整转换。
+- 常见错误：`unsupported`（未知或不支持的格式）、`encrypted`（加密/带密码文档，拒绝处理）、`malformed`（结构损坏、无可提取内容）、资源超限（zip 炸弹/深嵌套防护）
 
-## 4. Ally 集成注意事项
+## 4. 扫描 PDF 与 OCR
+
+默认 `--ocr reject`，不会上传文档。返回码 `3` 时查看 stderr 中需要 OCR 的页码，向用户说明无法完整提取；不要把部分内容当作完整结果。可使用本机已有 OCR 工具处理，或在用户同意将文档发送给 Firecrawl 后使用托管 OCR：
+
+```bash
+npx -y @firecrawl/anydoc scan.pdf --ocr hosted -o scan.md
+# 需要对每页做 OCR 时：
+npx -y @firecrawl/anydoc scan.pdf --ocr hosted --parse-mode ocr -o scan.md
+```
+
+`--ocr hosted` 会把需要 OCR 的 PDF 发送到 Firecrawl Parse，默认 `--parse-mode auto`；`fast` 只提取文本，不做 OCR；`ocr` 对每页 OCR。托管服务可无账号使用但有额度限制；可通过环境变量 `FIRECRAWL_API_KEY` 使用用户已有密钥。不要输出密钥或把密钥写进命令、日志和文件。托管服务失败时保留错误，如实报告；OCR 可能误识，关键数字、表格和公式应与原页核对。
+
+## 5. Ally 集成注意事项
 
 - **路径**：传给 anydoc 的文件路径用 forward slash。Windows 绝对路径在 Git Bash 里写成 `/c/Users/...` 或 `"C:/Users/..."`；workspace 相对路径直接用。
 - **格式检测看内容不看扩展名**：默认不传 `--format`，让内容检测生效（扩展名标错的文件通常也能转对）。仅当检测无法工作时显式传入：stdin 读入的 CSV（无内容签名、无扩展名可依）；文件缺失或标错扩展名且转换报错时，补 `--format <规范名>` 重试一次。
@@ -47,10 +59,13 @@ npx -y @firecrawl/anydoc - --format csv < d.csv   # 从 stdin 读
 - **代码集成**：若要在用户项目的代码里使用（而非本 skill 的命令行调用），官方建议优先用库而不是 shell 调用：npm `@firecrawl/anydoc`、PyPI `firecrawl-anydoc`、crates.io `anydoc`，三端 API 一致（`toMarkdown` / `to_markdown`）。
 - **单向转换**：anydoc 只做文档 → Markdown，不支持反向生成 docx 等。
 
-## 5. 错误恢复速查
+## 6. 错误恢复速查
 
 - npx 卡住/首次慢 → 检查 Node 版本 ≥ 20；首次下载属正常，不要静默重试。
-- `unsupported`（纯图片/扫描 PDF）→ 属预期边界，官方方案是托管 OCR（Firecrawl Parse API），开源替代可选 MinerU 等，不要重试。
+- 返回码 `3` / 需要 OCR → 按第四节处理；不要反复运行默认命令，也不要擅自上传。
+- `unsupported` → 核对格式与输入，不要把它一概解释成扫描 PDF。
 - `encrypted` → 加密文档无法处理，请用户提供解密版本。
-- 结果为空/`malformed` → 确认文件未损坏；转换确实无内容时向用户说明，不要回退其他工具硬读。
+- 结果为空/`malformed` → 确认文件未损坏并说明转换失败；可按实际环境选用其他合适工具，不要声称已读到内容。
 - 其他参数错误 → 先 `npx -y @firecrawl/anydoc --help` 查准确用法，不要硬猜。
+
+参考：[官方项目与 CLI](https://github.com/firecrawl/anydoc)、[v0.2.5 发布说明](https://github.com/firecrawl/anydoc/releases/tag/v0.2.5)。
