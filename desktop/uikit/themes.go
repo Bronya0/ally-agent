@@ -15,6 +15,7 @@ const (
 	ThemeRose   ThemeID = "rose"
 	ThemeIndigo ThemeID = "indigo"
 	ThemeKhaki  ThemeID = "khaki"
+	ThemeCodex  ThemeID = "codex"
 )
 
 // ThemeChoice describes a built-in palette. Name is the Chinese source label;
@@ -45,12 +46,15 @@ var builtinThemes = [...]builtinTheme{
 	{ThemeChoice{ThemeRose, "玫瑰"}, ui.Hex("#a24753"), ui.Hex("#d69a9f")},
 	{ThemeChoice{ThemeIndigo, "靛蓝"}, ui.Hex("#5557a0"), ui.Hex("#a8a9e0")},
 	{ThemeChoice{ThemeKhaki, "暖灰卡其"}, ui.Hex("#80643e"), ui.Hex("#c2a276")},
+	{ThemeChoice{ThemeCodex, "柔彩"}, ui.Hex("#a43e60"), ui.Hex("#e88ca9")},
 }
 
 var builtinLightColors = ThemeColors{ui.Hex("#f5f6f8"), ui.Hex("#ffffff"), ui.Hex("#eef0f5"), ui.Hex("#d9dce3"), ui.Hex("#24262d"), ui.Hex("#535b68"), ui.Hex("#8b929e"), ui.Color{}, ui.Hex("#ffffff")}
 var builtinDarkColors = ThemeColors{ui.Hex("#1b1b1b"), ui.Hex("#212122"), ui.Hex("#2b2b2e"), ui.Hex("#303031"), ui.Hex("#cccccc"), ui.Hex("#909093"), ui.Hex("#5d5d62"), ui.Color{}, ui.Hex("#15171d")}
 var khakiLightColors = ThemeColors{ui.Hex("#f5f2ec"), ui.Hex("#fffdfa"), ui.Hex("#eee9e0"), ui.Hex("#ded7ca"), ui.Hex("#302d28"), ui.Hex("#6e675d"), ui.Hex("#867e73"), ui.Color{}, ui.Hex("#ffffff")}
 var khakiDarkColors = ThemeColors{ui.Hex("#1c1a17"), ui.Hex("#26231f"), ui.Hex("#302c26"), ui.Hex("#474137"), ui.Hex("#e8e2d8"), ui.Hex("#ada497"), ui.Hex("#8e867b"), ui.Color{}, ui.Hex("#211d18")}
+
+var codexDarkColors = ThemeColors{ui.Hex("#171717"), ui.Hex("#1d1d1d"), ui.Hex("#292929"), ui.Hex("#414141"), ui.Hex("#cccccc"), ui.Hex("#999999"), ui.Hex("#686868"), ui.Color{}, ui.Hex("#171717")}
 
 // BuiltinThemes returns the available themes in display order as a new slice.
 func BuiltinThemes() []ThemeChoice {
@@ -83,6 +87,9 @@ func BuiltinThemeColors(id ThemeID, dark bool) ThemeColors {
 		} else {
 			colors = khakiLightColors
 		}
+	}
+	if chosen.ID == ThemeCodex && dark {
+		colors = codexDarkColors
 	}
 	if dark {
 		colors.Accent = chosen.darkAccent

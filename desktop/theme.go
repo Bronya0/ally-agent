@@ -221,13 +221,14 @@ const (
 	paletteRose   = 9
 	paletteIndigo = 10
 	paletteKhaki  = 11
+	paletteCodex  = 12
 
 	// defaultPalette is the accent a profile without a saved choice starts on.
 	defaultPalette = paletteBlue
 )
 
 // paletteChoices is presentation order only; persisted palette IDs stay stable.
-var paletteChoices = [...]int{paletteNative, paletteBlue, paletteAmber, paletteForest, paletteViolet, paletteTeal, paletteRose, paletteIndigo, paletteKhaki}
+var paletteChoices = [...]int{paletteNative, paletteBlue, paletteAmber, paletteForest, paletteViolet, paletteTeal, paletteRose, paletteIndigo, paletteKhaki, paletteCodex}
 
 // Stored palette numbers remain stable; uikit IDs identify their shared colors.
 var paletteThemeIDs = [...]uikit.ThemeID{
@@ -235,7 +236,7 @@ var paletteThemeIDs = [...]uikit.ThemeID{
 	paletteAmber: uikit.ThemeAmber, paletteForest: uikit.ThemeForest,
 	paletteViolet: uikit.ThemeViolet, paletteNative: uikit.ThemeNative,
 	paletteTeal: uikit.ThemeTeal, paletteRose: uikit.ThemeRose,
-	paletteIndigo: uikit.ThemeIndigo, paletteKhaki: uikit.ThemeKhaki,
+	paletteIndigo: uikit.ThemeIndigo, paletteKhaki: uikit.ThemeKhaki, paletteCodex: uikit.ThemeCodex,
 }
 
 func builtinAccent(id uikit.ThemeID, dark bool) ui.Color {
@@ -266,6 +267,7 @@ var palettes = []palette{
 	{name: "玫瑰", dark: true, accent: builtinAccent(uikit.ThemeRose, true)},
 	{name: "靛蓝", dark: true, accent: builtinAccent(uikit.ThemeIndigo, true)},
 	{name: "暖灰卡其", dark: true, accent: builtinAccent(uikit.ThemeKhaki, true)},
+	{name: "柔彩", dark: true, accent: builtinAccent(uikit.ThemeCodex, true)},
 }
 
 // lightAccents is the light-mode accent for the same indices. The dark pastels
@@ -284,6 +286,7 @@ var lightAccents = []ui.Color{
 	builtinAccent(uikit.ThemeRose, false),
 	builtinAccent(uikit.ThemeIndigo, false),
 	builtinAccent(uikit.ThemeKhaki, false),
+	builtinAccent(uikit.ThemeCodex, false),
 }
 
 func (a *desktop) currentPalette() palette {

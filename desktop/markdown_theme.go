@@ -66,14 +66,15 @@ var markdownPalettes = []markdownColorPair{
 	{proseColors("#cccccc", "#969da7", "#d7dedc", "#d4d4d4", "#d69a9f", "#d69a9f", "#d69a9f", "#212122", "#303031"), proseColors("#343a43", "#68717e", "#252a37", "#252a37", "#a24753", "#a24753", "#a24753", "#ffffff", "#d9dce3")},
 	{proseColors("#cccccc", "#969da7", "#d7dedc", "#d4d4d4", "#a8a9e0", "#a8a9e0", "#a8a9e0", "#212122", "#303031"), proseColors("#343a43", "#68717e", "#252a37", "#252a37", "#5557a0", "#5557a0", "#5557a0", "#ffffff", "#d9dce3")},
 	{proseColors("#e8e2d8", "#ada497", "#e8e2d8", "#e8e2d8", "#c2a276", "#c2a276", "#c2a276", "#26231f", "#474137"), proseColors("#302d28", "#6e675d", "#302d28", "#302d28", "#80643e", "#80643e", "#80643e", "#fffdfa", "#ded7ca")},
+	{proseColors("#cccccc", "#999999", "#e88ca9", "#e88ca9", "#a8d99f", "#e88ca9", "#8fb8f4", "#171717", "#606060"), proseColors("#343434", "#686868", "#a43e60", "#a43e60", "#39713c", "#a43e60", "#315fa5", "#ffffff", "#d9d9d9")},
 }
 
 // readingDarkSeeds and readingLightSeeds are what reading emphasis derives its
 // accent from, in markdownPalettes order: pastels for dark surfaces, saturated
 // inks for light ones.
 var (
-	readingDarkSeeds  = []string{"#8da5df", "#8da5df", "#e0a458", "#5b9cf6", "#57c98a", "#a78bfa", "#9dbb9f", "#a8bdd2", "#72bbb5", "#d69a9f", "#a8a9e0", "#c2a276"}
-	readingLightSeeds = []string{"#245fc2", "#245fc2", "#92530f", "#245fc2", "#217747", "#7042bd", "#25624a", "#536d87", "#176e69", "#a24753", "#5557a0", "#80643e"}
+	readingDarkSeeds  = []string{"#8da5df", "#8da5df", "#e0a458", "#5b9cf6", "#57c98a", "#a78bfa", "#9dbb9f", "#a8bdd2", "#72bbb5", "#d69a9f", "#a8a9e0", "#c2a276", "#e88ca9"}
+	readingLightSeeds = []string{"#245fc2", "#245fc2", "#92530f", "#245fc2", "#217747", "#7042bd", "#25624a", "#536d87", "#176e69", "#a24753", "#5557a0", "#80643e", "#a43e60"}
 )
 
 // readingSeed keeps a seed table that fell behind the palette tables from
@@ -125,6 +126,24 @@ func (a *desktop) readingColors() markdownColors {
 		accent := readingSeed(readingLightSeeds, index)
 		colors.code = ui.Hex(accent)
 		colors.link = colors.code
+	}
+	if index == paletteCodex {
+		if a.currentPalette().dark {
+			colors.text, colors.muted = ui.Hex("#cccccc"), ui.Hex("#c5a6c0")
+			colors.heading, colors.strong = ui.Hex("#efaa87"), ui.Hex("#e88ca9")
+			colors.code, colors.link = ui.Hex("#a8d99f"), ui.Hex("#8fb8f4")
+		} else {
+			colors.heading, colors.strong = ui.Hex("#99512f"), ui.Hex("#a43e60")
+			colors.code, colors.link = ui.Hex("#39713c"), ui.Hex("#315fa5")
+		}
+		colors.syntax = readingSyntax(colors)
+		if a.currentPalette().dark {
+			colors.syntax.Tokens[editor.TokenKeyword].Color = ui.Hex("#c5a3e8")
+			colors.syntax.Tokens[editor.TokenType].Color = ui.Hex("#c5a3e8")
+			colors.syntax.Tokens[editor.TokenFunction].Color = ui.Hex("#8fb8f4")
+			colors.syntax.Tokens[editor.TokenNumber].Color = ui.Hex("#efaa87")
+			colors.syntax.Tokens[editor.TokenString].Color = ui.Hex("#a8d99f")
+		}
 	}
 	return colors
 }
@@ -244,6 +263,13 @@ func (a *desktop) configureReadingMarkdown(options *markdown.Options) {
 	th.QuoteText, th.QuoteBar, th.Rule = colors.muted, colors.border, colors.border
 	for n, size := range readingHeadingScales {
 		color := colors.heading
+		if a.prefs.Palette == paletteCodex && a.currentPalette().dark {
+			if n == 0 {
+				color = ui.Hex("#e88ca9")
+			} else if n >= 2 {
+				color = ui.Hex("#eddaa8")
+			}
+		}
 		if n == 1 && !a.currentPalette().dark {
 			color = colors.text
 		}
