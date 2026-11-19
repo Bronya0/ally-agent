@@ -3,7 +3,6 @@ package desktop
 
 import (
 	"ally-dev/desktop/uikit"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -136,7 +135,7 @@ func (a *desktop) globalShortcuts(c *ui.Context) {
 	c.OnShortcut(ui.Cmd, ui.KeyN, a.newSession)
 	c.OnShortcut(ui.Cmd, ui.KeyT, func() {
 		root := a.config.Workspace
-		if t := a.current(); t != nil && !strings.HasPrefix(filepath.Base(t.Workspace), "ally-temp-") {
+		if t := a.current(); t != nil && !tempWorkspace(t.Workspace) {
 			root = t.Workspace
 		}
 		a.newConversation(root)

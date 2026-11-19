@@ -14,7 +14,7 @@ type workspaceHistoryKey struct {
 }
 
 func historyWorkspace(root string) bool {
-	return strings.TrimSpace(root) != "" && !strings.HasPrefix(strings.ToLower(filepath.Base(filepath.Clean(root))), "ally-temp-")
+	return strings.TrimSpace(root) != "" && !tempWorkspace(root)
 }
 
 // workspaceHistoryRoots keeps explicit visits first and fills in older records

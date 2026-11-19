@@ -154,3 +154,5 @@
 2026-11-14 中危 ask-key 问题 id 由后端补成 q1/q2，两次提问重复；控件 key 与表单状态只用问题 id 就继承上次勾选和文字，须带 askID。@desktop/page_chat.go
 2026-11-14 中危 explorer-toggle 文件树开关换了滚动列表的父级，旧像素偏移失效；须重置 Y 并按跟随回底。@desktop/page_chat.go
 2026-11-16 中危 no-node 本机无 node/npm；node 类 CLI 用 HBuilderX 自带 plugins/node/node 兜底。@scripts
+2026-11-18 中危 batch-forget 批量删除后无条件 forget 全部 id，后端拒删的运行中会话被清出内存；只 forget 成功的。@desktop/rail.go
+2026-11-18 中危 temp-ws-shared 临时工作区目录随单个标签关闭即删，同沙箱其它会话文件树失效；只在最后一个标签关闭时删。@desktop/header.go

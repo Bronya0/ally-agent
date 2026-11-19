@@ -380,8 +380,8 @@ func moveOpenConversationTabToIndex(tabs []*conversation, positions []tabPositio
 	return active, motions, true
 }
 
-// Header history always creates a fresh tab, matching main's onHistorySelect.
-// The sidebar keeps its separate switch-to-workspace behavior.
+// openWorkspaceEntry opens a workspace every entry point shares: the header
+// menu and the rail's workspace rows both land on this one function.
 func (a *desktop) openWorkspaceEntry(workspace string) { a.newConversation(workspace) }
 
 // Both workspace entries share the same menu builder. Their open flags belong
@@ -459,11 +459,10 @@ func workspaceLabel(root string) string {
 	if root == "" {
 		return locales.Text("未选择工作区")
 	}
-	base := filepath.Base(root)
-	if strings.HasPrefix(base, "ally-temp-") {
+	if tempWorkspace(root) {
 		return locales.Text("临时")
 	}
-	return base
+	return filepath.Base(root)
 }
 
 // sessionTabLabel identifies the workspace; conversation titles stay in the
@@ -492,6 +491,31 @@ func workspaceTip(root string) string {
 	return root
 }
 
+// tempWorkspace reports a sandbox directory the app created and owns. The name
+// is the only marker, and DeleteTempWorkspace guards on the same prefix.
+func tempWorkspace(root string) bool {
+	return strings.HasPrefix(strings.ToLower(filepath.Base(filepath.Clean(root))), "ally-temp-")
+}
+
+// tempWorkspaceReleaseDelay lets the backend finish work that still reads the
+// directory before the deletion starts.
+var tempWorkspaceReleaseDelay = 400 * time.Millisecond
+
+// removeTempWorkspace deletes a sandbox after its last tab closed. A temporary
+// workspace can carry several sessions, and removing the directory with the
+// first closed tab left the rest reading a folder that no longer existed.
+func (a *desktop) removeTempWorkspace(root string) {
+	if a.core == nil || !tempWorkspace(root) {
+		return
+	}
+	go func(path string) {
+		time.Sleep(tempWorkspaceReleaseDelay)
+		if err := a.core.DeleteTempWorkspace(path); err != nil {
+			a.fail(err)
+		}
+	}(root)
+}
+
 func (a *desktop) closeWorkspaceTab(index int) {
 	if index < 0 || index >= len(a.tabs) || len(a.tabs) <= 1 {
 		return
@@ -501,16 +525,6 @@ func (a *desktop) closeWorkspaceTab(index int) {
 		return
 	}
 	a.rememberSession(t)
-	if t.Workspace != "" && strings.HasPrefix(filepath.Base(t.Workspace), "ally-temp-") {
-		// Temporary workspaces are removed with the tab, after the backend
-		// finishes anything still using them.
-		go func(path string) {
-			time.Sleep(400 * time.Millisecond)
-			if err := a.core.DeleteTempWorkspace(path); err != nil {
-				a.fail(err)
-			}
-		}(t.Workspace)
-	}
 	a.tabs = slices.Delete(a.tabs, index, index+1)
 	stillOpen := false
 	for _, tab := range a.tabs {
@@ -527,6 +541,7 @@ func (a *desktop) closeWorkspaceTab(index int) {
 		if file := a.workspaceFiles[key]; file != nil && !file.Saving && file.Editor != nil && !file.Editor.Buffer.Modified() {
 			a.releaseWorkspaceFile(t.Workspace)
 		}
+		a.removeTempWorkspace(t.Workspace)
 	}
 	sessionStillOpen := false
 	for _, tab := range a.tabs {
