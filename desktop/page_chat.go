@@ -1019,7 +1019,7 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 	wkey := "ask-" + t.AskID + ":" + q.ID
 	answered := 0
 	for _, question := range t.Questions {
-		if len(st.AskSelected[question.ID]) > 0 || (st.AskCustom[question.ID] && (strings.TrimSpace(st.AskCustomTxt[question.ID]) != "" || len(st.AskImages[question.ID]) > 0)) {
+		if len(st.AskSelected[question.ID]) > 0 || strings.TrimSpace(st.AskCustomTxt[question.ID]) != "" || len(st.AskImages[question.ID]) > 0 {
 			answered++
 		}
 	}
@@ -1079,45 +1079,30 @@ func (a *desktop) askComposer(c *ui.Context, t *conversation) {
 					}
 				})
 			}
-			custom := st.AskCustom[q.ID]
-			customRow := ui.Row(c.Key("ask-custom-row-"+wkey)).FillWidth().MinHeight(32).Padding(4, 8).
-				AlignItems(ui.Center).Radius(radiusSmall).Cursor(ui.CursorPointer)
-			if customRow.Hovered() {
-				customRow.Background(c.Theme().SurfaceHover)
-			}
-			if customRow.Clicked() {
-				custom = !custom
-			}
-			customRow.Children(func() {
-				uikit.Checkbox(c.Key("ask-custom-"+wkey), &custom, locales.Text("自定义回答")).OnChange(func() { st.AskCustom[q.ID] = custom })
+			txt := st.AskCustomTxt[q.ID]
+			input := uikit.Area(c.Key("ask-custom-text-"+wkey), &txt).Label(locales.Text("自定义回复")).Placeholder(locales.Text("自定义回复")).Height(70).
+				OnChange(func() { st.AskCustomTxt[q.ID] = txt })
+			paste := func() bool { return a.pasteAskImage(c, t, q.ID) }
+			input.OnPaste(func(string) bool { return paste() })
+			input.OnTextKey(func(k ui.TextKey) bool {
+				return k.Key == ui.KeyV && k.Mods == ui.Cmd && paste()
 			})
-			st.AskCustom[q.ID] = custom
-			if custom {
-				txt := st.AskCustomTxt[q.ID]
-				input := uikit.Area(c.Key("ask-custom-text-"+wkey), &txt).Label(locales.Text("输入你的回答")).Placeholder(locales.Text("输入你的回答，可粘贴图片")).Height(70).
-					OnChange(func() { st.AskCustomTxt[q.ID] = txt })
-				paste := func() bool { return a.pasteAskImage(c, t, q.ID) }
-				input.OnPaste(func(string) bool { return paste() })
-				input.OnTextKey(func(k ui.TextKey) bool {
-					return k.Key == ui.KeyV && k.Mods == ui.Cmd && paste()
-				})
-				ui.Row(c).Gap(gapInline).Wrap().Children(func() {
-					for i, item := range st.AskImages[q.ID] {
-						i, item := i, item
-						ui.Row(c.Key(item.input.ID)).AlignItems(ui.Center).Gap(gapInline).Children(func() {
-							if bitmap := st.AskImageBitmaps[item.input.ID]; bitmap != nil {
-								ui.Image(c, bitmap).Size(36, 32).Shrink(0).Fit(ui.Contain)
-							}
-							ui.Text(c, fmt.Sprintf(locales.Text("图片 %d"), i+1)).FontSize(fsSmall)
-							dangerIconAction(c, "ask-remove-"+item.input.ID, locales.Text("移除图片"), "close", 20, func() {
-								images := st.AskImages[q.ID]
-								st.AskImages[q.ID] = append(images[:i], images[i+1:]...)
-								delete(st.AskImageBitmaps, item.input.ID)
-							})
+			ui.Row(c).Gap(gapInline).Wrap().Children(func() {
+				for i, item := range st.AskImages[q.ID] {
+					i, item := i, item
+					ui.Row(c.Key(item.input.ID)).AlignItems(ui.Center).Gap(gapInline).Children(func() {
+						if bitmap := st.AskImageBitmaps[item.input.ID]; bitmap != nil {
+							ui.Image(c, bitmap).Size(36, 32).Shrink(0).Fit(ui.Contain)
+						}
+						ui.Text(c, fmt.Sprintf(locales.Text("图片 %d"), i+1)).FontSize(fsSmall)
+						dangerIconAction(c, "ask-remove-"+item.input.ID, locales.Text("移除图片"), "close", 20, func() {
+							images := st.AskImages[q.ID]
+							st.AskImages[q.ID] = append(images[:i], images[i+1:]...)
+							delete(st.AskImageBitmaps, item.input.ID)
 						})
-					}
-				})
-			}
+					})
+				}
+			})
 		})
 		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 			ui.Spacer(c)
@@ -1157,11 +1142,9 @@ func (a *desktop) submitAsk(t *conversation) {
 	req := backend.AskSubmitRequest{AskID: t.AskID, SessionID: t.ID}
 	for _, q := range t.Questions {
 		answer := backend.AskSubmittedAnswer{QuestionID: q.ID}
-		if st.AskCustom[q.ID] {
-			answer.CustomText = strings.TrimSpace(st.AskCustomTxt[q.ID])
-			for _, image := range st.AskImages[q.ID] {
-				answer.Images = append(answer.Images, image.input.DataURL)
-			}
+		answer.CustomText = strings.TrimSpace(st.AskCustomTxt[q.ID])
+		for _, image := range st.AskImages[q.ID] {
+			answer.Images = append(answer.Images, image.input.DataURL)
 		}
 		answer.SelectedOptionIDs = append(answer.SelectedOptionIDs, st.AskSelected[q.ID]...)
 		req.Answers = append(req.Answers, answer)

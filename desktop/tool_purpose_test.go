@@ -113,7 +113,7 @@ func TestPurposeGroupDisclosesCallsBeforeFilesAndOutput(t *testing.T) {
 	if !tt.HasText("go test ./internal/app") || tt.HasText("RESULT_OUTPUT") {
 		t.Fatal("command disclosure lost command/output boundary")
 	}
-	if err := tt.Click("命令结果 cmd Ran go test ./internal/app"); err != nil {
+	if err := tt.Click("命令结果 cmd 已完成 go test ./internal/app"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -172,7 +172,7 @@ func TestPurposeSitsInlineInIndependentHeaders(t *testing.T) {
 	editArgs, _ := json.Marshal(map[string]any{"purpose": "补上标题行说明", "path": "desktop/tool_cards.go"})
 	tt := compactToolView(&desktop{}, map[string]any{"name": "edit", "toolCallId": "order", "status": "success", "args": string(editArgs)})
 	header, hasHeader := tt.Find("工具详情 order")
-	verb, hasVerb := tt.Find("Edited")
+	verb, hasVerb := tt.Find("Edit")
 	reason, hasReason := tt.Find("补上标题行说明")
 	target, hasTarget := tt.Find("(desktop/tool_cards.go)")
 	if !hasHeader || !hasVerb || !hasReason || !hasTarget || !(verb.X < target.X && target.X < reason.X) || reason.X+reason.W < header.X+header.W-40 {

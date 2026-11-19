@@ -14,13 +14,7 @@ func TestAskCustomAnswerRemainsEditable(t *testing.T) {
 	conv := &conversation{AskID: "request", Questions: []backend.AskQuestion{{ID: "q1", Question: "选择", Options: []backend.AskOption{{ID: "a", Label: "选项"}}}}}
 	a := &desktop{}
 	tt := ui.NewTester(func(c *ui.Context) { c.SetTheme(a.theme()); a.askComposer(c, conv) }, 800, 500)
-	if err := tt.Click("自定义回答"); err != nil {
-		t.Fatal(err)
-	}
-	if !conv.uiState().AskCustom["q1"] {
-		t.Fatal("custom answer not enabled")
-	}
-	if err := tt.Click("输入你的回答"); err != nil {
+	if err := tt.Click("自定义回复"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Type("hello")

@@ -248,7 +248,6 @@ type chatUI struct {
 	GroupOpen            map[string]bool
 	AskIndex             int
 	AskSelected          map[string][]string
-	AskCustom            map[string]bool
 	AskCustomTxt         map[string]string
 	AskImages            map[string][]preparedAttachment
 	AskImageBitmaps      map[string]*ui.Bitmap
@@ -325,7 +324,6 @@ func newChatUI() chatUI {
 		ToolOpen:        map[string]bool{},
 		GroupOpen:       map[string]bool{},
 		AskSelected:     map[string][]string{},
-		AskCustom:       map[string]bool{},
 		AskCustomTxt:    map[string]string{},
 		AskImages:       map[string][]preparedAttachment{},
 		AskImageBitmaps: map[string]*ui.Bitmap{},

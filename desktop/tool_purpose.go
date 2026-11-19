@@ -108,7 +108,7 @@ func (a *desktop) toolGroupReadEntry(c *ui.Context, t *conversation, entry toolG
 				text += " (" + summary + ")"
 			}
 			if err := str(file, "error"); err != "" {
-				text += " · " + err
+				text += ": " + err
 			}
 			uikit.Tooltip(c, ui.Text(c.Key(fmt.Sprintf("%s-file-%d", key, i)), text).FontSize(fsTool).TextColor(a.secondaryInk()).FillWidth().MinWidth(0).SingleLine(), text)
 		}
@@ -117,7 +117,10 @@ func (a *desktop) toolGroupReadEntry(c *ui.Context, t *conversation, entry toolG
 			if !ok {
 				continue
 			}
-			text := str(file, "path") + " · " + str(file, "error")
+			text := str(file, "path")
+			if err := str(file, "error"); err != "" {
+				text += ": " + err
+			}
 			uikit.ErrorText(c.Key(fmt.Sprintf("%s-missing-%d", key, i)), text).FontSize(fsTool).FillWidth().MinWidth(0)
 		}
 		if len(files) == 0 && entry.title != "" {

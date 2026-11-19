@@ -12,9 +12,9 @@ func compactToolView(a *desktop, msg map[string]any) *ui.Tester {
 		ui.Column(c).FillWidth().Padding(24).Children(func() { a.toolCard(c, &conversation{ID: "summary"}, 0, msg) })
 	}, 900, 500)
 }
-func TestMCPOnlyShowsStatusAndDuration(t *testing.T) {
+func TestMCPShowsToolIdentityStatusAndDuration(t *testing.T) {
 	for _, state := range []string{"success", "error"} {
-		msg := map[string]any{"name": "mcp__example", "toolCallId": "mcp", "status": state, "durationMs": 12, "error": "HIDDEN_ERROR", "result": map[string]any{"text": "HIDDEN_OUTPUT", "warnings": []any{"HIDDEN_WARNING"}}}
+		msg := map[string]any{"name": "mcp__example", "toolCallId": "mcp", "status": state, "mcpServer": "example", "mcpTool": "lookup", "durationMs": 12, "error": "HIDDEN_ERROR", "result": map[string]any{"text": "HIDDEN_OUTPUT", "warnings": []any{"HIDDEN_WARNING"}}}
 		tt := compactToolView(&desktop{}, msg)
 		for _, s := range []string{"HIDDEN_OUTPUT", "HIDDEN_ERROR", "HIDDEN_WARNING", "折叠图标"} {
 			if tt.HasText(s) {
@@ -24,11 +24,14 @@ func TestMCPOnlyShowsStatusAndDuration(t *testing.T) {
 		if !tt.HasText("<1s") {
 			t.Fatal("MCP lost timing")
 		}
-		want := "成功"
+		if !tt.HasText("example/lookup") {
+			t.Fatal("MCP lost tool identity")
+		}
+		want := "已完成"
 		if state == "error" {
 			want = "失败"
 		}
-		if !tt.HasText(want) {
+		if _, ok := tt.Find(want); !ok {
 			t.Fatalf("missing %s", want)
 		}
 	}

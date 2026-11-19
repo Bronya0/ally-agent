@@ -14,53 +14,44 @@ import (
 	"github.com/egoist/mygo/ui/markdown"
 )
 
-// toolDescriptor is the single table that classifies tool cards: the verb
-// shown for each state, whether the body expands, and where the preview
-// comes from. Cards never re-derive these per site.
+// toolDescriptor defines a stable operation label and the card's disclosure and timing behavior.
 type toolDescriptor struct {
-	runningVerb string
-	doneVerb    string
-	failedVerb  string
-	expandable  bool
-	showTiming  bool
+	label      string
+	expandable bool
+	showTiming bool
 }
 
-// failedVerb exists because a card in error state must never claim
-// completion: "Edited" on a failed edit misleads the reader. Every state has
-// its own word here, so no failed verb is ever built by suffixing a done verb
-// (that produced "Remote Ran failed"). Cards read English; the folded
-// read/grep/list row writes its own Chinese counts and never reads this table.
 var toolTable = map[string]toolDescriptor{
-	"read":               {"Reading", "Read", "Read failed", false, false},
-	"remote_read":        {"Reading", "Read", "Read failed", false, false},
-	"edit":               {"Editing", "Edited", "Edit failed", false, false},
-	"remote_edit":        {"Editing", "Edited", "Edit failed", false, false},
-	"create":             {"Creating", "Created", "Create failed", false, false},
-	"remote_create_file": {"Creating", "Created", "Create failed", false, false},
-	"delete":             {"Deleting", "Deleted", "Delete failed", true, false},
-	"remote_delete_path": {"Deleting", "Deleted", "Delete failed", true, false},
-	"command":            {"Running", "Ran", "Command failed", true, true},
-	"remote_run_command": {"Running", "Ran", "Failed", true, true},
-	"grep":               {"Grepping", "Grep", "Grep failed", false, false},
-	"list":               {"Listing", "Listed", "List failed", true, false},
-	"glob":               {"Matching", "Matched", "Match failed", true, false},
-	"http_request":       {"Requesting", "Requested", "Request failed", true, true},
-	"web_fetch":          {"Fetching", "Fetched", "Fetch failed", true, true},
-	"calculate":          {"Calculating", "Calculated", "Calculation failed", false, false},
-	"plan":               {"Updating plan", "Plan", "Plan failed", false, false},
-	"skill":              {"Loading skill", "Loaded skill", "Skill failed", false, false},
-	"ask":                {"Asking", "Asked", "Ask failed", true, false},
-	"subagent":           {"Delegating", "Subagent", "Delegation failed", true, true},
-	"ssh_cluster":        {"Checking", "Servers", "Check failed", true, false},
-	"service":            {"Managing service", "Service", "Service failed", true, false},
-	"scheduled_task":     {"Scheduling", "Scheduled", "Scheduling failed", true, true},
-	"remote_transfer":    {"Transferring", "Transferred", "Transfer failed", true, true},
-	"screenshot":         {"Taking screenshot", "Screenshot", "Screenshot failed", true, false},
-	"render_html":        {"Rendering", "Rendered", "Render failed", true, true},
-	"suggest":            {"Suggesting", "Suggested", "Suggestion failed", true, false},
-	"wait":               {"Waiting", "Waited", "Wait failed", false, true},
-	"image_generate":     {"Generating image", "Generated image", "Image generation failed", true, true},
-	"image_edit":         {"Editing image", "Edited image", "Image edit failed", true, true},
+	"read":               {"Read", false, false},
+	"remote_read":        {"Read", false, false},
+	"edit":               {"Edit", false, false},
+	"remote_edit":        {"Edit", false, false},
+	"create":             {"Create", false, false},
+	"remote_create_file": {"Create", false, false},
+	"delete":             {"Delete", true, false},
+	"remote_delete_path": {"Delete", true, false},
+	"command":            {"Command", true, true},
+	"remote_run_command": {"Command", true, true},
+	"grep":               {"Grep", false, false},
+	"list":               {"List", true, false},
+	"glob":               {"Glob", true, false},
+	"http_request":       {"Request", true, true},
+	"web_fetch":          {"Web Fetch", true, true},
+	"calculate":          {"Calculate", false, false},
+	"plan":               {"Plan", false, false},
+	"skill":              {"Load Skill", false, false},
+	"ask":                {"Question", true, false},
+	"subagent":           {"Subagent", true, false},
+	"ssh_cluster":        {"Servers", true, false},
+	"service":            {"Service", true, false},
+	"scheduled_task":     {"Scheduled Tasks", true, true},
+	"remote_transfer":    {"Transfer", true, true},
+	"screenshot":         {"Screenshot", true, false},
+	"render_html":        {"Preview", true, true},
+	"suggest":            {"Suggestions", true, false},
+	"wait":               {"Wait", false, true},
+	"image_generate":     {"Image Generation", true, true},
+	"image_edit":         {"Image Edit", true, true},
 }
 
 // Keep the server identity consistent across independent SSH cards.
@@ -106,9 +97,9 @@ func describeTool(name string) toolDescriptor {
 		return toolTable["edit"]
 	}
 	if strings.HasPrefix(name, "mcp__") {
-		return toolDescriptor{"Calling MCP", "Called MCP", "MCP call failed", true, true}
+		return toolDescriptor{"MCP Tool", true, true}
 	}
-	return toolDescriptor{"Calling", "Called", "Call failed", true, false}
+	return toolDescriptor{"Tool", true, false}
 }
 
 func toolState(m map[string]any) string {
@@ -715,17 +706,11 @@ func (a *desktop) toolGroupCommandDetail(c *ui.Context, t *conversation, entry t
 	if state == "error" || (result["exitCode"] != nil && num(result, "exitCode") != 0) {
 		metadataInk = c.Theme().Danger
 	}
-	verb := toolTable["command"].doneVerb
-	if state == "pending" || state == "running" {
-		verb = toolTable["command"].runningVerb
-	} else if state == "error" {
-		verb = toolTable["command"].failedVerb
-	}
 	command := entry.title
 	if command == "" {
 		command = locales.Text("命令")
 	}
-	button := ui.ButtonBase(c.Key(key+"-group-row")).FillWidth().MinWidth(0).Height(24).Padding(1, 8, 1, 16).Gap(gapInline).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(locales.Text("命令结果 ") + key + " " + verb + " " + short(command, 120))
+	button := ui.ButtonBase(c.Key(key+"-group-row")).FillWidth().MinWidth(0).Height(24).Padding(1, 8, 1, 16).Gap(gapInline).AlignItems(ui.Center).Justify(ui.Start).Cursor(ui.CursorPointer).Label(locales.Text("命令结果 ") + key + " " + toolStatusLabel(state) + " " + short(command, 120))
 	// Same cache as toolCard: an expanded group redraws every frame, so the
 	// arguments must not be decoded again on each one.
 	args := entry.args
@@ -753,10 +738,11 @@ func (a *desktop) toolGroupCommandDetail(c *ui.Context, t *conversation, entry t
 				resultParts = append(resultParts, fmtDur(ms))
 			}
 			if len(resultParts) > 0 {
-				suffix := "(" + strings.Join(resultParts, " · ") + ")"
+				suffix := "(" + strings.Join(resultParts, "  ") + ")"
 				uikit.Tooltip(c, ui.Text(c, short(suffix, 72)).FontSize(fsTool).TextColor(metadataInk).SingleLine().Shrink(0), suffix)
 			}
 		})
+		toolStatusIcon(c, state)
 		caret := "chevron"
 		if open {
 			caret = "chevrondown"
@@ -793,16 +779,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	name = toolKind(name)
 	state := toolState(m)
 	desc := describeTool(name)
-	verb := desc.doneVerb
-	switch state {
-	case "running", "pending":
-		verb = desc.runningVerb
-	case "error":
-		verb = desc.failedVerb
-	}
-	if name == "remote_run_command" && state == "cancelled" {
-		verb = "Cancelled"
-	}
+	operation := desc.label
 	container := ui.Column(c.Key("tool-" + toolCardKey(t, index, m))).FillWidth().MinWidth(0).Gap(2)
 	parsed := memoAt[argsMemo](container, "parsed-args")
 	args := parsed.get(str(m, "args"), parseToolArgs)
@@ -811,31 +788,44 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		summary = str(m, "title")
 	}
 	purpose := toolPurpose(m, args)
-	isMCP := isMCPDisplayTool(m)
-	if isMCP {
-		// A failed MCP call must not read as "Called": the state word comes from
-		// the same table the builtin cards use.
-		verb = ""
-		if state == "error" {
-			verb = "MCP call failed"
+	serviceAction := ""
+	if name == "service" {
+		switch str(args, "action") {
+		case "start":
+			serviceAction = "Start"
+		case "stop":
+			serviceAction = "Stop"
+		case "restart":
+			serviceAction = "Restart"
 		}
-		if state == "running" || state == "pending" {
-			verb = "Calling MCP"
-		}
-		if verb == "" {
-			verb = "Called MCP"
-		}
-		summary = strings.Trim(str(m, "mcpServer")+"/"+str(m, "mcpTool"), "/")
-		if summary == "" {
-			summary = name
+		if serviceAction != "" {
+			summary = str(args, "name")
+			if summary == "" {
+				summary = str(args, "id")
+			}
 		}
 	}
-	if name == "subagent" {
-		// The header says what the card is; the child rows below carry the
-		// role, state, task and counters.
-		verb = "Subagent"
+	isMCP := isMCPDisplayTool(m)
+	if isMCP {
+		operation = strings.Trim(str(m, "mcpServer")+"/"+str(m, "mcpTool"), "/")
+		if operation == "" {
+			operation = name
+		}
 		summary = ""
-		desc.showTiming = false
+	} else {
+		switch name {
+		case "subagent":
+			summary = ""
+		case "ssh_cluster":
+			summary = ""
+		case "remote_transfer":
+			switch str(args, "action") {
+			case "upload":
+				operation = "Upload"
+			case "download":
+				operation = "Download"
+			}
+		}
 	}
 	result := toolResult(m)
 	filePath := ""
@@ -879,15 +869,22 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			if name != "subagent" {
 				ui.Box(c).Absolute().Left(-16).Top(0).Width(16).HeightPercent(100).Center().Children(func() { toolStatusIcon(c, state) })
 			}
-			verbColor := p.accent
-			if state == "error" || name == "delete" || name == "remote_delete_path" {
-				verbColor = c.Theme().Danger
-			}
 			if isSSHTool(name) && !isMCP {
-				ui.Text(c.Key(key+"-ssh"), "SSH").FontSize(fsTool).TextColor(verbColor).Shrink(0).LineHeight(1.4).NoWrap()
+				ui.Text(c.Key(key+"-ssh"), "SSH").FontSize(fsTool).TextColor(p.accent).Shrink(0).LineHeight(1.4).NoWrap()
 			}
-			if verb != "" {
-				ui.Text(c, verb).FontSize(fsTool).TextColor(verbColor).Shrink(0).LineHeight(1.4).NoWrap()
+			if isMCP {
+				ui.Text(c, "MCP").FontSize(fsTool).TextColor(p.accent).Shrink(0).LineHeight(1.4).NoWrap()
+				label := ui.Text(c.Key(key+"-mcp-tool"), short(operation, 120)).FontSize(fsTool).TextColor(p.accent).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
+				uikit.Tooltip(c, label, operation)
+			} else {
+				color := p.accent
+				if name == "delete" || name == "remote_delete_path" {
+					color = c.Theme().Danger
+				}
+				ui.Text(c, operation).FontSize(fsTool).TextColor(color).Shrink(0).LineHeight(1.4).NoWrap()
+				if serviceAction != "" {
+					ui.Text(c, serviceAction).FontSize(fsTool).TextColor(p.accent).Shrink(0).LineHeight(1.4).NoWrap()
+				}
 			}
 			if summary != "" {
 				if name == "command" || name == "remote_run_command" {
@@ -895,7 +892,10 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					label := ui.RichText(c.Key(key+"-summary"), codeSpansWithBase(c, text, "command.sh", commandLineInk(c.Theme(), a.secondaryInk()))...).FontSize(fsTool).SingleLine().MinWidth(0).Shrink(1)
 					uikit.Tooltip(c, label, summary)
 				} else {
-					text := "(" + short(summary, 120) + ")"
+					text := short(summary, 120)
+					if (name != "delete" && name != "remote_delete_path") || len(list(args, "paths")) == 0 {
+						text = "(" + text + ")"
+					}
 					color := a.secondaryInk()
 					if name == "edit" || name == "create" || name == "delete" || name == "remote_edit" || name == "remote_create_file" || name == "remote_delete_path" {
 						color = color.Mix(c.Theme().Text, 0.4)
@@ -904,16 +904,11 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					uikit.Tooltip(c, label, summary)
 				}
 			}
-			if isSSHTool(name) && !isMCP {
+			if isSSHTool(name) && name != "ssh_cluster" && !isMCP {
 				if alias := toolSSHAlias(args); alias != "" {
-					ui.Text(c, "·").FontSize(fsTool - 2).TextColor(a.secondaryInk()).LineHeight(1.4).Shrink(0).NoWrap()
 					label := ui.Text(c.Key(key+"-ssh-alias"), short(alias, 32)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).MaxWidthPercent(24).Shrink(0)
 					uikit.Tooltip(c, label, alias)
 				}
-			}
-			if isMCP {
-				label := map[string]string{"success": locales.Text("成功"), "error": locales.Text("失败"), "running": locales.Text("运行中"), "pending": locales.Text("等待中"), "cancelled": locales.Text("已取消")}[state]
-				ui.Text(c, label).FontSize(fsAux).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 			}
 			if name == "screenshot" || name == "image_generate" || name == "image_edit" {
 				if w, h := int(num(result, "width")), int(num(result, "height")); w > 0 && h > 0 {
@@ -1225,23 +1220,8 @@ func easeInOut(t float32) float32 {
 	return 1 - u*u*u/2
 }
 
-// toolStatusDot is the mark in the transcript gutter: the same filled dot the
-// rest of the app marks status with (pillDot), kept small beside command text and
-// the same size in every state. A tick and a cross read as two different shapes
-// that also shift the line as a call finishes; a dot says the state by colour.
 const toolStatusDot = 6
 
-// toolStatusIcon draws the state of a tool call: green once it finished, red when
-// it failed, the accent blinking while it runs, and the palette's grey while it
-// waits — pillDotColor keeps the grey readable on a light page. Every state owns
-// a 16x16 box, so the line never moves.
-//
-// Running fades 1<->0.3 on a 1.2s ease-in-out loop (main's tool-svg-blink), not a
-// cosine sweep — the cosine never sat at either end, so it read as too fast.
-// Opacity only: no scale, no rotation (a growing/spinning dot reads as urgency
-// instead of "still working").
-// toolStatusLabel names a state for assistive technology: the mark is a dot, so
-// the colour is the only thing telling a reader which state it is.
 func toolStatusLabel(state string) string {
 	switch state {
 	case "success":
@@ -1250,12 +1230,15 @@ func toolStatusLabel(state string) string {
 		return locales.Text("失败")
 	case "running":
 		return locales.Text("运行中")
+	case "cancelled":
+		return locales.Text("已取消")
 	}
 	return locales.Text("等待中")
 }
 
 func toolStatusIcon(c *ui.Context, state string) {
-	ui.Box(c).Size(16, 16).Center().Label(toolStatusLabel(state)).Children(func() {
+	label := toolStatusLabel(state)
+	mark := ui.Box(c).Size(16, 16).Center().Label(label).Children(func() {
 		switch state {
 		case "running":
 			color := c.Theme().Accent
@@ -1287,6 +1270,7 @@ func toolStatusIcon(c *ui.Context, state string) {
 			ui.Box(c).Size(toolStatusDot, toolStatusDot).Radius(toolStatusDot / 2).Background(pillDotColor(c, tone))
 		}
 	})
+	uikit.Tooltip(c, mark, label)
 }
 
 func parseToolArgs(raw string) map[string]any {
@@ -1397,8 +1381,11 @@ func toolArgSummary(name string, args map[string]any) string {
 		return pick("question")
 	case "subagent":
 		return pick("description", "task", "prompt")
-	case "ssh_cluster":
-		return pick("action", "alias")
+	case "remote_transfer":
+		if str(args, "action") == "download" {
+			return pick("remotePath")
+		}
+		return pick("localPath")
 	case "service":
 		return pick("action", "name", "id")
 	case "scheduled_task":

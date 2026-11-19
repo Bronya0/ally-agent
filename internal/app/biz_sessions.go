@@ -705,7 +705,7 @@ func replaceSessionIndexEntry(entries []SessionIndexEntry, replacement SessionIn
 		}
 	}
 	result = append(result, replacement)
-	return normalizeSessionIndexEntries(result)
+	return result
 }
 
 // pruneSessionIndexEntries keeps the index volume-bounded by evicting the

@@ -192,7 +192,6 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 		t.Selected = make([]string, len(t.Questions))
 		ui.AskIndex = 0
 		ui.AskSelected = map[string][]string{}
-		ui.AskCustom = map[string]bool{}
 		ui.AskCustomTxt = map[string]string{}
 		ui.AskImages = map[string][]preparedAttachment{}
 		ui.AskImageBitmaps = nil
