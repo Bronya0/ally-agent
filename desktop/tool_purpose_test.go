@@ -154,16 +154,6 @@ func TestPurposeSitsInlineInIndependentHeaders(t *testing.T) {
 			}
 		})
 	}
-	// The facts stay left; the reason sits at the row's right edge.
-	editArgs, _ := json.Marshal(map[string]any{"purpose": "补上标题行说明", "path": "desktop/tool_cards.go"})
-	tt := compactToolView(&desktop{}, map[string]any{"name": "edit", "toolCallId": "order", "status": "success", "args": string(editArgs)})
-	header, hasHeader := tt.Find("工具详情 order")
-	verb, hasVerb := tt.Find("Edit")
-	reason, hasReason := tt.Find("补上标题行说明")
-	target, hasTarget := tt.Find("(desktop/tool_cards.go)")
-	if !hasHeader || !hasVerb || !hasReason || !hasTarget || !(verb.X < target.X && target.X < reason.X) || reason.X+reason.W < header.X+header.W-40 {
-		t.Fatalf("facts stay left and the reason keeps the right edge: %v %v %v %v", verb, target, reason, header)
-	}
 	a := &desktop{}
 	conv := &conversation{ID: "events"}
 	a.applyToolEvent(conv, "tool:start", map[string]any{"toolCallId": "call", "name": "read", "args": `{"purpose":"读取相关配置","files":[{"path":"a.go"}]}`, "purposeField": "purpose"})

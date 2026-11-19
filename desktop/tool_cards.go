@@ -100,6 +100,41 @@ func describeTool(name string) toolDescriptor {
 	return toolDescriptor{name, true, false}
 }
 
+// toolActionLabel keeps operation identity visible while reflecting its state.
+func toolActionLabel(base, state string) string {
+	var running, done string
+	switch base {
+	case "Edit":
+		running, done = "Editing", "Edited"
+	case "Create":
+		running, done = "Creating", "Created"
+	case "Delete":
+		running, done = "Deleting", "Deleted"
+	case "Start":
+		running, done = "Starting", "Started"
+	case "Stop":
+		running, done = "Stopping", "Stopped"
+	case "Restart":
+		running, done = "Restarting", "Restarted"
+	case "Read":
+		running, done = "Reading", "Read"
+	case "List":
+		running, done = "Listing", "Listed"
+	default:
+		return base
+	}
+	switch state {
+	case "running":
+		return running
+	case "success":
+		return done
+	case "error":
+		return base + " failed"
+	default:
+		return base
+	}
+}
+
 func toolState(m map[string]any) string {
 	if userCancelledMessage(m) || userCancelledMessage(toolResult(m)) {
 		return "cancelled"
@@ -776,6 +811,9 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	state := toolState(m)
 	desc := describeTool(name)
 	operation := desc.label
+	if name == "edit" || name == "remote_edit" || name == "create" || name == "remote_create_file" {
+		operation = toolActionLabel(operation, state)
+	}
 	container := ui.Column(c.Key("tool-" + toolCardKey(t, index, m))).FillWidth().MinWidth(0).Gap(2)
 	parsed := memoAt[argsMemo](container, "parsed-args")
 	args := parsed.get(str(m, "args"), parseToolArgs)
@@ -791,7 +829,11 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		}
 		switch action {
 		case "start", "stop", "restart", "read", "list", "create", "delete", "capture":
-			operation += " " + strings.ToUpper(action[:1]) + action[1:]
+			label := strings.ToUpper(action[:1]) + action[1:]
+			if name != "screenshot" {
+				label = toolActionLabel(label, state)
+			}
+			operation += " " + label
 		}
 		if name == "service" {
 			summary = str(args, "name")
@@ -829,6 +871,17 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		}
 	}
 	result := toolResult(m)
+	if name == "ask" && !isMCP {
+		questions := list(args, "questions")
+		if len(questions) == 0 {
+			questions = list(result, "questions")
+		}
+		if len(questions) == 1 {
+			summary = "1 question"
+		} else if len(questions) > 1 {
+			summary = fmt.Sprintf("%d questions", len(questions))
+		}
+	}
 	filePath := ""
 	if (name == "edit" || name == "create") && !isMCP {
 		filePath = toolFilePath(args, result)
@@ -929,7 +982,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 							ui.Text(c, ")").FontSize(fsTool).TextColor(color).Shrink(0)
 						})
 					} else {
-						if (name != "delete" && name != "remote_delete_path") || len(list(args, "paths")) == 0 {
+						if name != "ask" && ((name != "delete" && name != "remote_delete_path") || len(list(args, "paths")) == 0) {
 							text = "(" + text + ")"
 						}
 						color := a.secondaryInk()
@@ -1619,10 +1672,6 @@ func toolChips(name, state string, args, result map[string]any) []string {
 			chips = append(chips, "= "+fmt.Sprint(v))
 		} else if v, ok := result["result"]; ok {
 			chips = append(chips, fmt.Sprint(v))
-		}
-	case "ask":
-		if qs := list(result, "questions"); len(qs) > 0 {
-			chips = append(chips, fmt.Sprintf(locales.Text("%d 个问题"), len(qs)))
 		}
 	case "subagent":
 		if steps := int(num(result, "steps")); steps > 0 {

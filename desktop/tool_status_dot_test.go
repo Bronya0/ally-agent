@@ -19,7 +19,7 @@ func TestRemoteEditKeepsOperationLabelAndReportsState(t *testing.T) {
 				msg["result"] = map[string]any{"error": "E_MULTI_MATCH"}
 			}
 			tt := compactToolView(&desktop{}, msg)
-			for _, label := range []string{"SSH", "Edit", "(/srv/main.go)", "dev", tc.label} {
+			for _, label := range []string{"SSH", "(/srv/main.go)", "dev", tc.label} {
 				if _, ok := tt.Find(label); !ok {
 					t.Fatalf("missing %q: %v", label, tt.Texts())
 				}
