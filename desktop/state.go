@@ -515,7 +515,10 @@ type modelForm struct {
 	Providers      []string
 	ProviderIdx    int
 	TestBusy       bool
-	Fetched        []string
+	// EntryTestBusy tracks the connection tests started from the list, keyed by
+	// the model's option label, so two rows can run at once.
+	EntryTestBusy map[string]bool
+	Fetched       []string
 }
 
 // mcpForm is the MCP page + server editor state.

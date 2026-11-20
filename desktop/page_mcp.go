@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -445,7 +446,7 @@ func (a *desktop) mcpEditorDialog(c *ui.Context) {
 	}
 	formDialog(c, &a.mcpF.EditorOpen, widthModal, height, title, "", func() {
 		ui.Grid(c.Key("mcp-header-fields")).ColumnTracks(ui.Fr(1), ui.Fr(1)).FillWidth().Gap(gapSection).Children(func() {
-			fieldRow(c, "mcp-name", locales.Text("服务名称"), &a.mcpF.Name, false)
+			fieldRowRequired(c, "mcp-name", locales.Text("服务名称"), &a.mcpF.Name)
 			ui.Column(c).Gap(gapTight).Children(func() {
 				fieldLabel(c, locales.Text("传输方式"))
 				current := a.mcpTransport()
@@ -460,7 +461,7 @@ func (a *desktop) mcpEditorDialog(c *ui.Context) {
 			})
 		})
 		if a.mcpTransport() == mcpTransportStdio {
-			fieldRow(c, "mcp-command", locales.Text("命令"), &a.mcpF.Command, false)
+			fieldRowRequired(c, "mcp-command", locales.Text("命令"), &a.mcpF.Command)
 			fieldLabel(c, locales.Text("参数"))
 			textArea(c, "mcp-args", locales.Text("参数"), `["-y", "@playwright/mcp"]`, &a.mcpF.Args, 90).FillWidth()
 			fieldNote(c, locales.Text("填写 JSON 字符串数组，保留参数中的空格和逗号；无参数可留空。"), a.secondaryInk())
@@ -468,7 +469,7 @@ func (a *desktop) mcpEditorDialog(c *ui.Context) {
 			textArea(c, "mcp-env", locales.Text("环境变量"), `{"API_KEY": "your-api-key"}`, &a.mcpF.Env, 70)
 			fieldNote(c, locales.Text("JSON 对象，也支持每行 KEY=value。"), a.secondaryInk())
 		} else {
-			fieldRow(c, "mcp-url", "URL", &a.mcpF.URL, false)
+			fieldRowRequired(c, "mcp-url", "URL", &a.mcpF.URL)
 			fieldNote(c, locales.Text("例如 http://127.0.0.1:9121/mcp（SSE 通常为 /sse）。"), a.secondaryInk())
 			fieldLabel(c, locales.Text("请求头"))
 			textArea(c, "mcp-headers", locales.Text("请求头"), `{"Authorization": "Bearer your-token"}`, &a.mcpF.Headers, 70)
@@ -501,6 +502,18 @@ func (a *desktop) saveMCPEditor() {
 		delete(doc.Servers, a.mcpF.Editing)
 	}
 	transport := a.mcpTransport()
+	// A stdio server without a command and a remote server without an address both
+	// save fine and only fail on the next connect, where the error no longer points
+	// at the field. Reject them here instead.
+	if transport == mcpTransportStdio {
+		if strings.TrimSpace(a.mcpF.Command) == "" {
+			a.notify(locales.Text("请填写启动命令"))
+			return
+		}
+	} else if !mcpURLValid(a.mcpF.URL) {
+		a.notify(locales.Text("请填写有效的 MCP 地址（http:// 或 https://）"))
+		return
+	}
 	if transport == mcpTransportHTTP {
 		transport = "http" // the spelling other MCP clients write
 	}
@@ -533,6 +546,13 @@ func (a *desktop) saveMCPEditor() {
 	}
 	doc.Servers[name] = entry
 	a.saveMCPDoc(doc, mcpSaveOptions{onSuccess: func() { a.mcpF.EditorOpen = false }})
+}
+
+// mcpURLValid reports whether the editor's address is one the remote transports can
+// dial: SSE and Streamable HTTP both speak http(s) and need a host.
+func mcpURLValid(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 func formatArgs(args []string) string {

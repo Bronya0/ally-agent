@@ -106,15 +106,22 @@ func (a *desktop) voiceModelsDialog(c *ui.Context) {
 			// A preset already points at the right route; editing is opt-in so the
 			// common path never risks a typo in the URL.
 			ui.Row(c.Key("voice-endpoint-readonly")).Gap(gapField).AlignItems(ui.Center).Children(func() {
-				fieldLabel(c, "Endpoint")
+				fieldLabelRequired(c, "Endpoint")
 				ui.Text(c, s.draft.Endpoint).FontSize(fsTiny).TextColor(a.secondaryInk()).Selectable().Grow(1)
 				cardFlat(c, locales.Text("修改")).OnClick(func() { s.endpointEditing = true })
 			})
 		} else {
-			fieldRow(c, "voice-endpoint", "Endpoint", &s.draft.Endpoint, false)
+			fieldRowRequired(c, "voice-endpoint", "Endpoint", &s.draft.Endpoint)
 		}
 		if protocol.Uses(backend.VoiceFieldModel) {
 			ui.Column(c).Gap(gapTight).Children(func() {
+				// The label is drawn for every route so the row keeps one shape; only
+				// the routes that need a name carry the marker.
+				if voiceModelNameRequired(s.draft) {
+					fieldLabelRequired(c, locales.Text("模型名"))
+				} else {
+					fieldLabel(c, locales.Text("模型名"))
+				}
 				ui.Row(c.Key("voice-model-row")).Gap(gapField).AlignItems(ui.End).Children(func() {
 					uikit.ComboboxField(c.Key("voice-model"), s.draft.Model, s.modelOptions(), locales.Text("模型名"), locales.Text("拉取或手填模型名"), func(value string) { s.draft.Model = value }, a.secondaryInk()).Grow(1)
 					choiceButton(c, "voice-model-all", locales.Text("全部"), s.includeAllModels, c.Theme().Accent).OnClick(func() { s.includeAllModels = !s.includeAllModels })

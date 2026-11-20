@@ -223,7 +223,7 @@ func (a *App) compactSessionWithMode(parent context.Context, sessionID, instruct
 			return nil, errors.New("model is required")
 		}
 		if !hasModelCredential(cfg) {
-			return nil, missingModelCredentialError(cfg)
+			return nil, missingModelCredentialError()
 		}
 	}
 	// A live chat run may rewrite history concurrently (auto-compaction,

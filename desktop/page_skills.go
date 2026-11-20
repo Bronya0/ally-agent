@@ -321,9 +321,9 @@ func (a *desktop) skillDialog(c *ui.Context) {
 		default:
 			fieldNote(c, locales.Text("写入 ~/.agents/skills/（每个技能一个子目录，里面是 SKILL.md），本机所有工作区都可用。"), a.secondaryInk())
 		}
-		fieldRow(c, "skill-name", locales.Text("名称"), &a.skillsF.AddName, false)
+		fieldRowRequired(c, "skill-name", locales.Text("名称"), &a.skillsF.AddName)
 		fieldNote(c, locales.Text("首字符必须是字母或数字，只允许字母、数字、点、短横线和下划线，不能以点结尾。"), a.secondaryInk())
-		fieldLabel(c, locales.Text("描述"))
+		fieldLabelRequired(c, locales.Text("描述"))
 		textArea(c, "skill-desc", locales.Text("描述"), locales.Text("技能列表用它说明什么时候该用这个技能"), &a.skillsF.AddDesc, 60)
 		fieldRow(c, "skill-when", locales.Text("何时使用（可选）"), &a.skillsF.AddWhen, false)
 		fieldLabel(c, locales.Text("SKILL.md 内容"))

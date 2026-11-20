@@ -66,18 +66,18 @@ func (a *App) FetchChatGPTModels(accountID string) ([]chatgpt.Model, error) {
 	defer cancel()
 	return a.chatGPTManager().Models(ctx, a.chatGPTClient(30*time.Second), accountID)
 }
+
+// hasModelCredential 报告这条模型能否鉴权。API Key 不是必填项：本地推理
+// （Ollama、LM Studio）不收密钥，请求就不带 Authorization 头，由端点自己裁决；
+// 只有 ChatGPT 登录这条路没有密钥可填，仍必须选好已授权的账号。
 func hasModelCredential(cfg ConfigState) bool {
-	if cfg.AuthType == authChatGPTOAuth {
-		return cfg.OAuthAccountID != ""
-	}
-	return len(resolveKeyPool(cfg)) > 0
+	return cfg.AuthType != authChatGPTOAuth || cfg.OAuthAccountID != ""
 }
 
-func missingModelCredentialError(cfg ConfigState) error {
-	if cfg.AuthType == authChatGPTOAuth {
-		return errors.New("Select a ChatGPT account in Settings and authorize plan usage")
-	}
-	return errors.New("API key is required")
+// missingModelCredentialError 说明唯一仍然必填的凭据：设置里选中并授权的
+// ChatGPT 账号。
+func missingModelCredentialError() error {
+	return errors.New("Select a ChatGPT account in Settings and authorize plan usage")
 }
 
 // Pin OAuth routes and remove all key-pool and custom-header state. This is

@@ -311,6 +311,14 @@ func voiceAuthFor(model backend.VoiceModelConfig) (string, string, string) {
 	return mode, header, prefix
 }
 
+// voiceModelNameRequired reports whether the editor has to carry a model name:
+// a TTS entry needs one to synthesise at all, and the inline-audio routes post it
+// in the request body, so an empty name is a request the provider rejects. The
+// multipart transcription route simply omits an empty model.
+func voiceModelNameRequired(draft backend.VoiceModelConfig) bool {
+	return strings.ToLower(strings.TrimSpace(draft.Kind)) == backend.VoiceKindTTS || backend.VoiceProtocolInlineAudio(draft.Protocol)
+}
+
 // modelOptions is what the 模型名 combobox offers: the ids fetched from the
 // endpoint first, then whatever is already typed so a hand-written id never
 // disappears from its own dropdown.

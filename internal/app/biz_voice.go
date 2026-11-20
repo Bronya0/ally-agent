@@ -627,6 +627,12 @@ func usesInlineAudio(protocol string) bool {
 	return protocol == "chat_audio" || protocol == "dashscope_sync_audio"
 }
 
+// VoiceProtocolInlineAudio reports whether the route posts the model name in a JSON
+// body instead of a multipart field. The editor needs the same answer as the
+// request builder: a body route cannot leave the model empty the way a multipart
+// field can be omitted.
+func VoiceProtocolInlineAudio(protocol string) bool { return usesInlineAudio(protocol) }
+
 // voiceAudioShapeFor resolves the shape actually sent: a known model family wins
 // over the chosen mode, because the model decides the route on this provider. The
 // mode therefore only picks the default endpoint and the list filter.

@@ -60,7 +60,7 @@ func TestImageToolGatesAndSessionFreeze(t *testing.T) {
 		{"not in use", func(c *ConfigState) { c.ImageGeneration.Enabled = false }, false, false},
 		{"no models", func(c *ConfigState) { c.ImageGeneration.Models = nil }, false, false},
 		{"no defaults", func(c *ConfigState) { c.ImageGeneration.GenerateModel = nil; c.ImageGeneration.EditModel = nil }, false, false},
-		{"no key", func(c *ConfigState) { c.ImageGeneration.Models[0].APIKey = "" }, false, false},
+		{"keyless local service", func(c *ConfigState) { c.ImageGeneration.Models[0].APIKey = "" }, true, true},
 		{"generate disabled", func(c *ConfigState) { c.DisabledTools = []string{"image_generate"} }, false, true},
 		{"edit disabled", func(c *ConfigState) { c.DisabledTools = []string{"image_edit"} }, true, false},
 		{"MiniMax generation only", func(c *ConfigState) { c.ImageGeneration.Models[0].Protocol = "minimax-images" }, true, false},
@@ -501,6 +501,32 @@ func TestImageProviderWireAndNoBillableRetries(t *testing.T) {
 	_, err := (&App{}).requestImage(t.Context(), cfg, cfg.ImageGeneration.Models[0], imagegen.Request{Prompt: "draw"}, nil)
 	if err == nil || strings.Contains(err.Error(), "test-secret") || calls.Load() != 1 {
 		t.Fatal("request was retried or key leaked")
+	}
+}
+
+// A local image service needs no credential: with no key the request still goes
+// out, without an Authorization header, instead of failing before it is sent.
+func TestImageRequestWithoutKeySkipsAuthorization(t *testing.T) {
+	data := imageTestPNG(t)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if values, ok := r.Header["Authorization"]; ok {
+			t.Errorf("keyless request carried Authorization: %v", values)
+		}
+		var fields map[string]any
+		if json.NewDecoder(r.Body).Decode(&fields) != nil || fields["prompt"] != "draw" {
+			t.Error("keyless request lost its body")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"b64_json": base64.StdEncoding.EncodeToString(data)}}})
+	}))
+	defer server.Close()
+	cfg := imageTestConfig(server.URL+"/v1", "openai-images")
+	keyless := cfg.ImageGeneration.Models[0]
+	keyless.APIKey, keyless.APIKeys = "", nil
+	got, err := (&App{}).requestImage(t.Context(), cfg, keyless, imagegen.Request{Prompt: "draw"}, nil)
+	if err != nil || !bytes.Equal(got, data) || calls.Load() != 1 {
+		t.Fatalf("keyless generation failed: %v (calls=%d)", err, calls.Load())
 	}
 }
 

@@ -467,3 +467,113 @@ func TestOpenAIChatToolsParametersTypeObject(t *testing.T) {
 		}
 	}
 }
+
+// TestKeylessModelRequestSkipsAuthorization 锁住“API Key 可留空”：本地推理
+// （Ollama、LM Studio）没有密钥池时照样发请求，且不带 Authorization 头。
+// 之前这里直接返回 "API key is required"，Ollama 连测试连接都跑不起来。
+func TestKeylessModelRequestSkipsAuthorization(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var sawAuth bool
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		if _, ok := r.Header["Authorization"]; ok {
+			sawAuth = true
+		}
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, sseChatChunk("ok"))
+		fmt.Fprint(w, sseChatFinishChunk("stop"))
+		fmt.Fprint(w, sseDone)
+	}))
+	defer server.Close()
+
+	a := newModelTestApp(t)
+	result, err := a.streamModelResponse(context.Background(), ConfigState{
+		APIFormat: apiFormatOpenAIChat,
+		BaseURL:   server.URL,
+		Model:     "llama3",
+		MaxTokens: 32,
+	}, "llama3", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("keyless request error = %v", err)
+	}
+	if got := strings.TrimSpace(result.Content); got != "ok" {
+		t.Fatalf("keyless stream content = %q, want ok", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests == 0 {
+		t.Fatal("keyless request never reached the endpoint")
+	}
+	if sawAuth {
+		t.Fatal("a request without a key must not send an Authorization header")
+	}
+}
+
+// TestKeylessAnthropicRequestSkipsCredentials covers the adapter whose SDK refuses
+// a request with no credential at all ("run ant auth login"). A keyless local
+// endpoint must still be reached, with no key header on the wire.
+func TestKeylessAnthropicRequestSkipsCredentials(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	var mu sync.Mutex
+	var sawCredential bool
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		_, hasKey := r.Header["X-Api-Key"]
+		if hasKey || r.Header.Get("Authorization") != "" {
+			sawCredential = true
+		}
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `event: message_start
+data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":1,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`)
+	}))
+	defer server.Close()
+
+	result, err := newModelTestApp(t).streamAnthropicMessages(context.Background(), ConfigState{
+		APIFormat: apiFormatAnthropicMessages,
+		BaseURL:   server.URL,
+		Model:     "local-claude",
+		MaxTokens: 32,
+	}, "local-claude", []openai.ChatCompletionMessage{{Role: "user", Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("keyless anthropic request error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("keyless anthropic stream returned no result")
+	}
+	if content := strings.TrimSpace(result.Content); content != "OK" {
+		t.Fatalf("keyless anthropic stream content = %q, want OK", content)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests == 0 {
+		t.Fatal("keyless request never reached the endpoint")
+	}
+	if sawCredential {
+		t.Fatal("a keyless anthropic request must not send a key header")
+	}
+}

@@ -800,7 +800,7 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 		return errors.New("model is required")
 	}
 	if !hasModelCredential(cfg) {
-		return missingModelCredentialError(cfg)
+		return missingModelCredentialError()
 	}
 	ctx := context.Background()
 	if a.ctx != nil {
@@ -857,8 +857,8 @@ func identityOfModel(m ModelConfig) ModelIdentity {
 // 物化这一步不能省：顶层字段只有两个写入方（/api/v1/models/activate，以及 2026-09
 // 之前设置页的"使用"按钮），而 stripModelFields 紧跟着就会清空它们、随后任意一次
 // 保存都以新形状落盘——不物化等于把用户的模型、地址与密钥一起静默抹掉（文件里没有
-// 第二份，也没有备份）。没有密钥时不物化：那种顶层字段本身跑不通（发送必然报
-// "API key is required"），凭空多一条空密钥的 preset 只会污染模型列表。
+// 第二份，也没有备份）。没有密钥时不物化：旧版的顶层字段当年只有配上密钥才跑得
+// 通（发送会报缺 key），凭一份空密钥凭空多出一条 preset 只会污染模型列表。
 func migrateLegacyModelFields(cfg *ConfigState, legacy ConfigState) {
 	identity := ModelIdentity{ProviderName: legacy.ProviderName, Model: legacy.Model}
 	if strings.TrimSpace(identity.Model) == "" {

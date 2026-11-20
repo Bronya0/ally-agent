@@ -1743,7 +1743,7 @@ func (a *App) startChatWithConfig(req ChatRequest, cfg ConfigState) (string, err
 		cfg.BaseURL = defaultBaseURLForAPIFormat(cfg.APIFormat)
 	}
 	if !hasModelCredential(cfg) {
-		return "", missingModelCredentialError(cfg)
+		return "", missingModelCredentialError()
 	}
 	if strings.TrimSpace(cfg.Workspace) == "" {
 		return "", errors.New("workspace is required")

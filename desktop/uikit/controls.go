@@ -287,6 +287,21 @@ func Tag(c *ui.Context, text string, fg, fill ui.Color) ui.Element {
 func FieldLabel(c *ui.Context, text string) {
 	ui.Text(c, text).FontSize(FontSection).TextColor(c.Theme().Text)
 }
+
+// FieldLabelRequired is FieldLabel for a field that cannot be left empty: the
+// label takes a Danger marker, drawn by MyGo's rich text so it stays one text
+// run with the label instead of a second element beside it. MyGo has no required
+// marker of its own (ui.Field offers Error and Invalid, which speak for a value
+// that is already wrong), so the kit owns the one visual every form uses. It
+// returns the label, which names a control built without ui.Field through
+// LabelledBy.
+func FieldLabelRequired(c *ui.Context, text string) ui.Element {
+	t := c.Theme()
+	return ui.RichText(c,
+		ui.Span{Text: text, Size: FontSection, Color: t.Text},
+		ui.Span{Text: " *", Size: FontSection, Color: t.Danger},
+	)
+}
 func FieldNote(c *ui.Context, text string, ink ...ui.Color) {
 	if text != "" {
 		ui.Text(c, text).FontSize(FontTiny).TextColor(SecondaryInk(c, ink)).LineHeight(1.5)

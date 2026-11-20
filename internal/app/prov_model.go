@@ -126,8 +126,12 @@ func (a *App) requestImage(ctx context.Context, cfg ConfigState, model ImageMode
 	}
 	keyCfg := ConfigState{APIKey: model.APIKey, APIKeys: model.APIKeys}
 	keys := resolveKeyPool(keyCfg)
-	if len(keys) == 0 {
-		return nil, errors.New("image API key is required")
+	// An empty pool sends one unauthenticated request, the same way the chat
+	// adapters treat an empty API key: a local image service needs no credential,
+	// and the provider decides what such a call may do.
+	attempts := keys
+	if len(attempts) == 0 {
+		attempts = []string{""}
 	}
 	request.Header.Set("Content-Type", contentType)
 	headerCfg := cfg
@@ -138,14 +142,18 @@ func (a *App) requestImage(ctx context.Context, cfg ConfigState, model ImageMode
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	const maxResponse = imagegen.MaxImageBytes*4/3 + 1024*1024
 	var raw []byte
-	for index, key := range keys {
+	for index, key := range attempts {
 		if index > 0 {
 			request.Body, err = request.GetBody()
 			if err != nil {
 				return nil, err
 			}
 		}
-		request.Header.Set("Authorization", "Bearer "+key)
+		if key == "" {
+			request.Header.Del("Authorization")
+		} else {
+			request.Header.Set("Authorization", "Bearer "+key)
+		}
 		applyModelHeaders(request, headerCfg)
 		response, err := client.Do(request)
 		if err != nil {
@@ -162,7 +170,7 @@ func (a *App) requestImage(ctx context.Context, cfg ConfigState, model ImageMode
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			break
 		}
-		if index+1 < len(keys) && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests) {
+		if index+1 < len(attempts) && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests) {
 			continue
 		}
 		// Provider diagnostics are bounded and keys redacted before entering history.
@@ -877,14 +885,14 @@ func (a *App) streamModelResponseInner(ctx context.Context, cfg ConfigState, mod
 		return result, err
 	}
 	keys := resolveKeyPool(cfg)
-	if len(keys) == 0 {
-		return nil, errors.New("API key is required")
-	}
-	// 从这里往下才是真正发往上游的调用，返回的错误一律标记来源(见 upstreamError):
-	// 配置类前置校验的报错(缺模型/缺 key)在更前面返回，不会被误标成上游问题。
-	// 单 key 快速路径:完全保持原有的适配器内重试行为。
-	if len(keys) == 1 {
-		cfg.APIKey = keys[0]
+	// 无密钥端点（Ollama、LM Studio）没有可轮换的 key：与单 key 同走一次
+	// 请求，cfg.APIKey 留空后各适配器就不发 Authorization 头，由服务端裁决。
+	if len(keys) <= 1 {
+		// 单 key 快速路径：完全保持原有的适配器内重试行为。
+		cfg.APIKey = ""
+		if len(keys) == 1 {
+			cfg.APIKey = keys[0]
+		}
 		result, err := a.streamModelResponseWithKey(ctx, cfg, model, messages, tools, onEvent)
 		if err != nil {
 			err = markUpstreamError(wrapProviderRequestError(err))

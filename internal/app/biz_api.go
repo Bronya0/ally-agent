@@ -502,8 +502,12 @@ func (a *App) apiHandleAIComplete(w http.ResponseWriter, r *http.Request) {
 		apiWriteError(w, status, err.Error())
 		return
 	}
-	if strings.TrimSpace(cfg.Model) == "" || !hasModelCredential(cfg) {
-		apiWriteError(w, http.StatusBadRequest, "model and API key are required")
+	if strings.TrimSpace(cfg.Model) == "" {
+		apiWriteError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+	if !hasModelCredential(cfg) {
+		apiWriteError(w, http.StatusBadRequest, missingModelCredentialError().Error())
 		return
 	}
 	if cfg.MaxTokens <= 0 {

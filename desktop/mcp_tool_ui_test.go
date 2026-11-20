@@ -7,6 +7,25 @@ import (
 	"testing"
 )
 
+func TestMCPURLValidRejectsAddressesTheTransportsCannotDial(t *testing.T) {
+	for _, test := range []struct {
+		url  string
+		want bool
+	}{
+		{"https://mcp.example.com/sse", true},
+		{"http://127.0.0.1:9121/mcp", true},
+		{"  http://127.0.0.1:9121/mcp  ", true},
+		{"", false},
+		{"localhost:9121/mcp", false},
+		{"ftp://mcp.example.com/sse", false},
+		{"https://", false},
+	} {
+		if got := mcpURLValid(test.url); got != test.want {
+			t.Errorf("mcpURLValid(%q) = %v, want %v", test.url, got, test.want)
+		}
+	}
+}
+
 func TestMCPTransportSelectionUpdatesDraft(t *testing.T) {
 	a := &desktop{}
 	a.openMCPEditor("")

@@ -240,7 +240,7 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 		height = 700
 	}
 	formDialog(c, &a.sshF.EditorOpen, 560, height, title, "", func() {
-		fieldRow(c, "ssh-alias", locales.Text("昵称"), &d.Alias, false)
+		fieldRowRequired(c, "ssh-alias", locales.Text("昵称"), &d.Alias)
 		if a.sshF.CloneMode {
 			source := a.sshF.CloneSource
 			if source == "" {
@@ -251,14 +251,14 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 		fieldLabel(c, locales.Text("分组"))
 		uikit.ComboboxField(c.Key("ssh-group"), a.sshF.GroupInput, sshGroupLabels(a.sshGroups()), locales.Text("分组"), locales.Text("选择或输入分组"), func(value string) { a.sshF.GroupInput = value }, a.secondaryInk()).FillWidth()
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
-			ui.Column(c).Grow(2).Basis(0).Children(func() { fieldRow(c, "ssh-host", locales.Text("主机"), &d.Host, false) })
+			ui.Column(c).Grow(2).Basis(0).Children(func() { fieldRowRequired(c, "ssh-host", locales.Text("主机"), &d.Host) })
 			ui.Column(c).Grow(1).Basis(0).Gap(gapTight).Children(func() {
 				fieldLabel(c, locales.Text("端口"))
 				uikit.NumberInput(c, "ssh-port", locales.Text("端口"), &a.sshF.Port, 1, 65535, 1)
 			})
 		})
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
-			ui.Column(c).Grow(1).Basis(0).Children(func() { fieldRow(c, "ssh-user", locales.Text("用户名"), &d.Username, false) })
+			ui.Column(c).Grow(1).Basis(0).Children(func() { fieldRowRequired(c, "ssh-user", locales.Text("用户名"), &d.Username) })
 			ui.Column(c).Grow(1).Basis(0).Gap(gapTight).Children(func() {
 				fieldLabel(c, locales.Text("认证方式"))
 				authOptions := []uikit.Option{
@@ -276,9 +276,10 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 		case "agent":
 			fieldNote(c, locales.Text("使用本机默认私钥或 SSH Agent；不读取 ~/.ssh/config。"), a.secondaryInk())
 		case "key":
-			ui.Field(c.Key("field-ssh-key"), locales.Text("私钥路径"), func() {
+			ui.Column(c.Key("field-ssh-key")).Gap(gapTight).JustifySelf(ui.Stretch).AlignSelf(ui.Stretch).MinWidth(0).Shrink(0).Children(func() {
+				label := uikit.FieldLabelRequired(c, locales.Text("私钥路径"))
 				ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-					uikit.Input(c, &d.KeyPath).FillWidth().MinWidth(0).Placeholder(fieldExample("ssh-key", locales.Text("私钥路径"))).FontSize(fsBody)
+					uikit.Input(c, &d.KeyPath).FillWidth().MinWidth(0).Placeholder(fieldExample("ssh-key", locales.Text("私钥路径"))).FontSize(fsBody).LabelledBy(label)
 					flat(c, locales.Text("选择文件")).Shrink(0).OnClick(func() {
 						go func() {
 							p, err := a.core.SelectPrivateKeyFile()
@@ -292,14 +293,14 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 						}()
 					})
 				})
-			}).JustifySelf(ui.Stretch).AlignSelf(ui.Stretch).MinWidth(0).Shrink(0)
+			})
 			fieldRow(c, "ssh-passphrase", locales.Text("私钥口令（可选）"), &d.Password, true)
 			fieldNote(c, locales.Text("明文保存在本机配置目录，请勿共享该文件。"), a.secondaryInk())
 		case "password":
-			fieldRow(c, "ssh-password", locales.Text("密码"), &d.Password, true)
+			fieldRowRequiredPassword(c, "ssh-password", locales.Text("密码"), &d.Password)
 			fieldNote(c, locales.Text("明文保存在本机配置目录，请勿共享该文件。"), a.secondaryInk())
 		}
-		fieldLabel(c, locales.Text("用途描述"))
+		fieldLabelRequired(c, locales.Text("用途描述"))
 		textArea(c, "ssh-desc", locales.Text("用途描述"), locales.Text("例如：测试环境 Redis 节点，负责商品缓存"), &d.Description, 60)
 		fieldLabel(c, locales.Text("风险等级"))
 		risk := 0

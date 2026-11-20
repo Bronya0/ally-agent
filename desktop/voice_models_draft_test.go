@@ -85,6 +85,27 @@ func TestApplyVoicePresetClearsServiceSpecificValues(t *testing.T) {
 	}
 }
 
+func TestVoiceModelNameRequiredFollowsTheRequestShape(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		model backend.VoiceModelConfig
+		want  bool
+	}{
+		// The inline-audio routes post the model in the body, so an empty name is a
+		// request the provider rejects.
+		{"chat audio", backend.VoiceModelConfig{Kind: "asr", Protocol: "chat_audio"}, true},
+		{"dashscope sync", backend.VoiceModelConfig{Kind: "asr", Protocol: "dashscope_sync_audio"}, true},
+		// A multipart transcription route simply omits an empty model field.
+		{"multipart asr", backend.VoiceModelConfig{Kind: "asr", Protocol: "openai_audio"}, false},
+		// TTS always needs a model to synthesise with.
+		{"tts", backend.VoiceModelConfig{Kind: "TTS", Protocol: "openai_audio"}, true},
+	} {
+		if got := voiceModelNameRequired(test.model); got != test.want {
+			t.Errorf("%s: voiceModelNameRequired = %v, want %v", test.name, got, test.want)
+		}
+	}
+}
+
 func TestNextVoiceModelIDSkipsTakenIDs(t *testing.T) {
 	models := []backend.VoiceModelConfig{{ID: "voice-1"}, {ID: "voice-2"}}
 	if got := nextVoiceModelID(models); got != "voice-3" {

@@ -84,9 +84,9 @@ func (s *imageModelsState) openForm(index int) {
 	}
 }
 func normalizeImageDraft(d backend.ImageModelConfig, keys []string, headers string) (backend.ImageModelConfig, error) {
-	return normalizeImageModel(d, keys, headers, true)
+	return normalizeImageModel(d, keys, headers)
 }
-func normalizeImageModel(d backend.ImageModelConfig, keys []string, headers string, requireKey bool) (backend.ImageModelConfig, error) {
+func normalizeImageModel(d backend.ImageModelConfig, keys []string, headers string) (backend.ImageModelConfig, error) {
 	d.ProviderName = strings.TrimSpace(d.ProviderName)
 	d.Model = strings.TrimSpace(d.Model)
 	if d.Protocol == "" {
@@ -116,9 +116,6 @@ func normalizeImageModel(d backend.ImageModelConfig, keys []string, headers stri
 			seen[k] = true
 			d.APIKeys = append(d.APIKeys, k)
 		}
-	}
-	if len(d.APIKeys) == 0 && requireKey {
-		return d, fmt.Errorf("%s", locales.Text("请至少填写一个 API Key"))
 	}
 	d.APIKey = ""
 	if len(d.APIKeys) > 0 {

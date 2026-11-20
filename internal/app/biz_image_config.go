@@ -104,7 +104,7 @@ func imageModelByIdentity(images *ImageGenerationConfig, id *ModelIdentity, edit
 			if !strings.EqualFold(m.ProviderName, id.ProviderName) || !strings.EqualFold(m.Model, id.Model) {
 				continue
 			}
-			if m.Model == "" || !validImageBaseURL(m.BaseURL) || len(resolveKeyPool(ConfigState{APIKey: m.APIKey, APIKeys: m.APIKeys})) == 0 {
+			if m.Model == "" || !validImageBaseURL(m.BaseURL) {
 				break
 			}
 			if m.Protocol != "openai-images" && m.Protocol != "xai-images" && m.Protocol != "minimax-images" {

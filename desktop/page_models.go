@@ -228,6 +228,7 @@ func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig,
 					neutralChip(c, m.Model)
 				}
 				ui.Spacer(c)
+				cardFlatBusy(c, locales.Text("测试"), a.modelForm.EntryTestBusy[modelOption(m)]).Disabled(a.modelSaving).OnClick(func() { a.testSavedModel(m) })
 				cardFlat(c, locales.Text("编辑")).Disabled(a.modelSaving).OnClick(func() {
 					for i, item := range a.config.Models {
 						if sameModelIdentity(modelIdentity(item), modelIdentity(m)) {
@@ -357,7 +358,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 					uikit.Input(c.Key("oauth-provider"), &a.modelDraft.ProviderName).Label(locales.Text("供应商名称")).FillWidth().Disabled(true)
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, locales.Text("ChatGPT 模型"))
+					fieldLabelRequired(c, locales.Text("ChatGPT 模型"))
 					if uikit.Select(c.Key("oauth-model"), &a.modelDraft.Model, options, a.secondaryInk()).Label(locales.Text("ChatGPT 模型")).FillWidth().Disabled(a.modelSaving).Changed() {
 						if a.oauth != nil {
 							for _, m := range a.oauth.models {
@@ -431,7 +432,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 					apiFormatSelect(c.Key("api-format"), &a.modelDraft.APIFormat, a.secondaryInk()).Label(locales.Text("接口格式")).FillWidth()
 				})
 				ui.Column(c).Gap(gapTight).Children(func() {
-					fieldLabel(c, "Model")
+					fieldLabelRequired(c, "Model")
 					ui.Row(c).Gap(gapField).Children(func() {
 						// Mirrors the Vue editor's Model n-select (filterable + tag): one
 						// searchable field that lists the models fetched from the provider
@@ -443,7 +444,7 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 						inlineError(c, "model-fetch-note", a.modelForm.FetchNote)
 					}
 				})
-				fieldRow(c, "base-url", "Base URL", &a.modelDraft.BaseURL, false)
+				fieldRowRequired(c, "base-url", "Base URL", &a.modelDraft.BaseURL)
 			})
 			fieldLabel(c, "API Keys")
 			for i := range a.modelKeys {
@@ -629,18 +630,40 @@ func (a *desktop) testModelDraft() {
 		return
 	}
 	a.modelForm.TestBusy = true
-	a.job(func() error {
+	a.runModelTest(m, func() { a.modelForm.TestBusy = false })
+}
+
+// testSavedModel runs the editor's connection test for a model already in the
+// list. The entry brings its own keys and headers, so nothing in the editor
+// draft takes part.
+func (a *desktop) testSavedModel(m backend.ModelConfig) {
+	key := modelOption(m)
+	if a.modelSaving || a.modelForm.EntryTestBusy[key] {
+		return
+	}
+	if a.modelForm.EntryTestBusy == nil {
+		a.modelForm.EntryTestBusy = map[string]bool{}
+	}
+	a.modelForm.EntryTestBusy[key] = true
+	a.runModelTest(m, func() { delete(a.modelForm.EntryTestBusy, key) })
+}
+
+// runModelTest tests one connection off the UI thread and reports the outcome
+// once, after done clears the caller's running flag. The model is named in the
+// notice: a test started from the list shows no form to say which row it was.
+func (a *desktop) runModelTest(m backend.ModelConfig, done func()) {
+	name := modelOption(m)
+	go func() {
 		err := a.core.TestModelConnection(m)
 		a.win.Update(func() {
-			a.modelForm.TestBusy = false
+			done()
 			if err != nil {
-				a.notifyError(locales.Text("连接失败：") + err.Error())
-			} else {
-				a.notifySuccess(locales.Text("连接成功"))
+				a.notifyError(name + " · " + locales.Text("连接失败：") + err.Error())
+				return
 			}
+			a.notifySuccess(name + " · " + locales.Text("连接成功"))
 		})
-		return err
-	})
+	}()
 }
 
 // ---- Image models -------------------------------------------------------
@@ -753,9 +776,9 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 		title = locales.Text("添加生图模型")
 	}
 	formDialog(c, &s.formOpen, widthModal, 620, title, "", func() {
-		fieldRow(c, "image-provider", locales.Text("供应商名称"), &s.draft.ProviderName, false)
+		fieldRowRequired(c, "image-provider", locales.Text("供应商名称"), &s.draft.ProviderName)
 		ui.Column(c).Gap(gapTight).Children(func() {
-			fieldLabel(c, "Model")
+			fieldLabelRequired(c, "Model")
 			before := s.draft.Model
 			uikit.Input(c.Key("image-model-id"), &s.draft.Model).Label("Model").Placeholder("gpt-image-2 / grok-imagine-image / image-01").FillWidth()
 			if s.draft.Model != before && s.draft.Protocol == "" {
@@ -763,7 +786,7 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 			}
 		})
 		ui.Column(c).Gap(gapTight).Children(func() {
-			fieldLabel(c, locales.Text("生图协议"))
+			fieldLabelRequired(c, locales.Text("生图协议"))
 			// Values stay the three the backend validates; the labels say which
 			// service each one talks to, as the model cards already do.
 			protocols := []uikit.Option{
@@ -784,7 +807,7 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 				}
 			}
 		})
-		fieldRow(c, "image-base-url", "Base URL", &s.draft.BaseURL, false)
+		fieldRowRequired(c, "image-base-url", "Base URL", &s.draft.BaseURL)
 		fieldLabel(c, "API Keys")
 		for i := range s.draftKeys {
 			i := i
@@ -800,6 +823,7 @@ func (a *desktop) imageModelDialog(c *ui.Context) {
 			})
 		}
 		flat(c, locales.Text("＋ 添加 Key")).OnClick(func() { s.draftKeys = append(s.draftKeys, "") })
+		fieldNote(c, locales.Text("可留空（本地推理无需鉴权）。多个 Key 按顺序故障切换，只在尚未开始输出时切换。"), a.secondaryInk())
 		advancedIcon := "chevron"
 		if s.advancedOpen {
 			advancedIcon = "chevrondown"

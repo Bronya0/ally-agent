@@ -40,7 +40,7 @@ func parseImageModelFile(data []byte) ([]backend.ImageModelConfig, error) {
 			b, _ := json.Marshal(model.CustomHeaders)
 			headers = string(b)
 		}
-		m, err := normalizeImageModel(model, keys, headers, false)
+		m, err := normalizeImageModel(model, keys, headers)
 		if err != nil {
 			return nil, err
 		}

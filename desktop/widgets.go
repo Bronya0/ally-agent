@@ -339,6 +339,29 @@ func notice(c *ui.Context, tone, message string, ink ...ui.Color) {
 func fieldLabel(c *ui.Context, s string)                 { uikit.FieldLabel(c, s) }
 func fieldNote(c *ui.Context, s string, ink ...ui.Color) { uikit.FieldNote(c, s, ink...) }
 
+// fieldLabelRequired marks a field the form cannot be saved without. The marker
+// comes from the kit, so every page shows it the same way.
+func fieldLabelRequired(c *ui.Context, s string) { uikit.FieldLabelRequired(c, s) }
+
+// fieldRowRequired is fieldRow for a value without which the entry is useless:
+// the label carries the kit's required marker and still names the control, so a
+// click focuses it and assistive technology reads the same name.
+func fieldRowRequired(c *ui.Context, id, name string, value *string) {
+	ui.Column(c.Key("field-" + id)).Gap(gapTight).JustifySelf(ui.Stretch).AlignSelf(ui.Stretch).MinWidth(0).Shrink(0).Children(func() {
+		label := uikit.FieldLabelRequired(c, name)
+		uikit.Input(c, value).FillWidth().MinWidth(0).Placeholder(fieldExample(id, name)).FontSize(fsBody).LabelledBy(label)
+	})
+}
+
+// fieldRowRequiredPassword is fieldRowRequired for a secret the form cannot be
+// saved without.
+func fieldRowRequiredPassword(c *ui.Context, id, name string, value *string) {
+	ui.Column(c.Key("field-" + id)).Gap(gapTight).JustifySelf(ui.Stretch).AlignSelf(ui.Stretch).MinWidth(0).Shrink(0).Children(func() {
+		label := uikit.FieldLabelRequired(c, name)
+		uikit.PasswordInput(c, id, name, value, fieldExample(id, name)).FillWidth().LabelledBy(label)
+	})
+}
+
 // fieldRow is a labelled text field. ui.Field owns the label: it names the
 // control for assistive technology and focuses it when clicked, which a hand
 // written Text above the input never did.
