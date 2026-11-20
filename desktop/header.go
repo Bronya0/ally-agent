@@ -471,7 +471,7 @@ func sessionTabLabel(tab *conversation) string {
 	if tab == nil {
 		return workspaceLabel("")
 	}
-	if strings.HasPrefix(filepath.Base(tab.Workspace), "ally-temp-") {
+	if tempWorkspace(tab.Workspace) {
 		return locales.Text("临时工作区")
 	}
 	return workspaceLabel(tab.Workspace)
@@ -500,8 +500,6 @@ func tempWorkspace(root string) bool {
 // removeTempWorkspace deletes a sandbox after its last tab closed. A temporary
 // workspace can carry several sessions, and removing the directory with the
 // first closed tab left the rest reading a folder that no longer existed.
-// Whether anything is still working in it is the backend's call: it declines
-// while a service runs out of the directory and lets the exit sweep take it.
 func (a *desktop) removeTempWorkspace(root string) {
 	if a.core == nil || !tempWorkspace(root) {
 		return

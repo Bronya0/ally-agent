@@ -24,9 +24,8 @@ import (
 //
 //   - 前端在用户点击「临时工作空间」时调用 CreateTempWorkspace 建目录并
 //     打开一个 kind:'temp' 的 Tab；
-//   - Tab 关闭（且后台 run 已结束）时调用 DeleteTempWorkspace 删除目录，
-//     同时删除关联会话；目录里还有后台服务在跑时删除推迟到进程退出，
-//     由退出清理统一回收（不靠定时器猜时机）。
+//   - Tab 关闭（且后台 run 已结束）时调用 DeleteTempWorkspace 删除目录；
+//     会话记录留在磁盘上，重开时由桌面端为已消失的目录重建一个。
 //   - Ally 进程退出（ctx 取消）时删除本进程创建的全部临时目录；
 //   - 崩溃/强杀残留的目录由下次启动的陈旧清理回收（默认 24 小时阈值，
 //     dev 与打包版可能并行运行，绝不误删活跃实例的目录）。
@@ -95,39 +94,13 @@ func (a *App) CreateTempWorkspace() (string, error) {
 	return dir, nil
 }
 
-// tempWorkspaceBusy reports whether a background service is still running out of
-// dir. A run cannot outlive its tab — detachWorkspaceTab refuses while it runs —
-// but a timed-out command promoted to a service keeps going with this directory
-// as its cwd, and removing the directory would pull that cwd out from under it.
-func (a *App) tempWorkspaceBusy(dir string) bool {
-	a.servicesMu.Lock()
-	defer a.servicesMu.Unlock()
-	for _, service := range a.services {
-		service.mu.Lock()
-		info := service.info
-		service.mu.Unlock()
-		if info.Status != "starting" && info.Status != "running" {
-			continue
-		}
-		if insideRoot(dir, info.Workspace) || insideRoot(dir, info.Cwd) {
-			return true
-		}
-	}
-	return false
-}
-
 // DeleteTempWorkspace 删除一个临时工作空间目录。护栏：目标必须是系统
 // 临时根的直接 ally-temp-* 子目录，否则返回 E_TEMP_WORKSPACE_INVALID。
-// 目录里还有后台服务在跑时什么也不做：进程退出时的清理会回收它。
 func (a *App) DeleteTempWorkspace(path string) error {
 	if !isValidTempWorkspacePath(path) {
 		return shared.Newf(tempWorkspaceErrorCode, "refusing to delete %q: not an ally temp workspace under the system temp root", path)
 	}
 	cleaned := filepath.Clean(strings.TrimSpace(path))
-	if a.tempWorkspaceBusy(cleaned) {
-		// 服务还在用这个目录当 cwd，现在删会把它的工作目录抽掉；交给退出清理。
-		return nil
-	}
 	// 即使上面的名字/层级校验通过，删除仍然走基目录断言：递归删除在全仓只有
 	// removeAllWithinBase 一条出口（目标必须是基目录的严格子目录）。
 	if err := removeTempTree(cleaned); err != nil {
