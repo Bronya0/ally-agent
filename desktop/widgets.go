@@ -157,7 +157,7 @@ func dangerIconAction(c *ui.Context, id, tip, name string, size float32, fn func
 // chosen item looked exactly like an unchosen one.
 
 // choiceButton is one chip in a set of mutually exclusive choices (avatar
-// styles, risk levels, game kinds).
+// styles, risk levels).
 func choiceButton(c *ui.Context, key, text string, selected bool, tone ui.Color) ui.Element {
 	return choiceChip(c, key, text, selected, tone, false)
 }

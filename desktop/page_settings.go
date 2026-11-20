@@ -772,7 +772,7 @@ func (a *desktop) settingsFence(c *ui.Context) {
 			locales.Text("各平台使用同一套规则，不因系统不同而放宽。"),
 			locales.Text("写工具可写范围 = 工作区 + Ally 数据目录。"),
 			locales.Text("密钥与凭据位置禁止读取。"),
-			locales.Text("命令在超时或取消时终止整个进程组。"),
+			locales.Text("命令取消时终止整个进程组；超时则收编为后台服务继续运行。"),
 			locales.Text("后台服务同样受工作区与代理设置约束。"),
 			locales.Text("插件 HTTP 只能访问清单声明的域名。"),
 			locales.Text("更新包在应用前校验摘要与来源。"),

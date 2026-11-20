@@ -474,7 +474,7 @@ func (a *App) apiModelConfig(r *http.Request, index *int) (ConfigState, error) {
 }
 
 // apiHandleAIComplete is a tool-free, stateless call through the existing model
-// adapters. Its cancellation is scoped to this HTTP request, not the games UI.
+// adapters. Its cancellation is scoped to this HTTP request.
 func (a *App) apiHandleAIComplete(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ModelIndex *int   `json:"modelIndex"`

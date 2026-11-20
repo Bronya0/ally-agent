@@ -127,10 +127,6 @@
 
 自动化入口：`internal/app/biz_stats_test.go`、`internal/app/biz_footer_stats_test.go`。
 
-## 暂缓接入
-
-- 游戏页面尚未完成，不接入本轮导航与发布验收。
-
 ## 设置与配置生效时机
 
 - [ ] SET-01 逐个枚举设置页、模型/MCP/SSH 页和偏好项：记录 UI 字段、持久化字段、读取调用方、生效时机、是否需重启。

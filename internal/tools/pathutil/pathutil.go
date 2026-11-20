@@ -351,9 +351,8 @@ func sensitiveReadPaths(rt Runtime) []sensitivePath {
 // JoinPath normalizes p against the primary workspace root (roots[0]) without
 // judging whether the result stays inside any root: absolute paths are accepted
 // as-is, relative paths are joined onto roots[0] only. It is the half of
-// SafeJoin a caller needs where the OS sandbox owns the boundary — the kernel
-// refuses the outside write itself, so a lexical containment error here would
-// only pre-empt the authority that does not have to guess.
+// SafeJoin that turns a user-supplied path into an absolute one; callers that
+// need the containment check use SafeJoin.
 func JoinPath(roots []string, p string) (string, error) {
 	if len(roots) == 0 {
 		return "", errors.New("workspace is required")

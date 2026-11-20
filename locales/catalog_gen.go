@@ -4756,14 +4756,14 @@ func (msgs Messages) Ui03b7c7f1ce7f() string {
 	return Catalog.Format(msgs.locale, "ui_03b7c7f1ce7f", nil)
 }
 
-// Ui3d4da6c08573 says "command terminates the entire process group on timeout or cancellation."
+// Ui16e096e7531d says "command terminates the entire process group on cancellation; on timeout it is promoted to a background service and ke…"
 // in the language the app shows.
-func Ui3d4da6c08573() string { return In(i18n.Locale()).Ui3d4da6c08573() }
+func Ui16e096e7531d() string { return In(i18n.Locale()).Ui16e096e7531d() }
 
-// Ui3d4da6c08573 says "command terminates the entire process group on timeout or cancellation."
+// Ui16e096e7531d says "command terminates the entire process group on cancellation; on timeout it is promoted to a background service and ke…"
 // in the language of msgs.
-func (msgs Messages) Ui3d4da6c08573() string {
-	return Catalog.Format(msgs.locale, "ui_3d4da6c08573", nil)
+func (msgs Messages) Ui16e096e7531d() string {
+	return Catalog.Format(msgs.locale, "ui_16e096e7531d", nil)
 }
 
 // UiA2c9aed02005 says "Command result "

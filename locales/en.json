@@ -472,7 +472,7 @@
   "ui_928f87d4507b": "Command",
   "ui_7d8ba667c5dc": "Commands and file changes are uniformly subject to the following rules, and the model cannot be bypassed.",
   "ui_03b7c7f1ce7f": "Command grouping\nThe ",
-  "ui_3d4da6c08573": "command terminates the entire process group on timeout or cancellation.",
+  "ui_16e096e7531d": "command terminates the entire process group on cancellation; on timeout it is promoted to a background service and keeps running.",
   "ui_a2c9aed02005": "Command result ",
   "ui_b03b52f9c27d": "Talk to me",
   "ui_a216ccb00045": "Hey, stay with me for a while longer.",
