@@ -77,7 +77,7 @@ const (
 	// and the handler-side check reads the same number (the Wails API path never
 	// passes through the gate), so a declared bound cannot drift from what the
 	// runtime accepts.
-	DeletePathListLimit = 20
+	DeletePathListLimit = 40
 	// ContentSearchGuidance is the single wording for where local content searches
 	// go. The command schema states it as that tool's boundary and the runtime
 	// repeats it after a shell grep, so the model never reads two versions of the
