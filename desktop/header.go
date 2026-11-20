@@ -497,19 +497,16 @@ func tempWorkspace(root string) bool {
 	return strings.HasPrefix(strings.ToLower(filepath.Base(filepath.Clean(root))), "ally-temp-")
 }
 
-// tempWorkspaceReleaseDelay lets the backend finish work that still reads the
-// directory before the deletion starts.
-const tempWorkspaceReleaseDelay = 400 * time.Millisecond
-
 // removeTempWorkspace deletes a sandbox after its last tab closed. A temporary
 // workspace can carry several sessions, and removing the directory with the
 // first closed tab left the rest reading a folder that no longer existed.
+// Whether anything is still working in it is the backend's call: it declines
+// while a service runs out of the directory and lets the exit sweep take it.
 func (a *desktop) removeTempWorkspace(root string) {
 	if a.core == nil || !tempWorkspace(root) {
 		return
 	}
 	go func(path string) {
-		time.Sleep(tempWorkspaceReleaseDelay)
 		if err := a.core.DeleteTempWorkspace(path); err != nil {
 			a.fail(err)
 		}

@@ -148,3 +148,44 @@ func TestCleanupStaleTempWorkspaces(t *testing.T) {
 		t.Fatalf("foreign dir was wrongly deleted: %v", err)
 	}
 }
+
+// 目录里还有后台服务在跑时不能删：超时命令被收编为服务后仍以它为 cwd，
+// 删目录等于把服务的工作目录抽掉。这样的目录交给退出清理回收。
+func TestDeleteTempWorkspaceLeavesADirectoryInUse(t *testing.T) {
+	redirectTempRoot(t)
+	a := NewApp()
+	defer func() {
+		tempWorkspaces.Lock()
+		tempWorkspaces.paths = map[string]struct{}{}
+		tempWorkspaces.Unlock()
+	}()
+
+	dir, err := a.CreateTempWorkspace()
+	if err != nil {
+		t.Fatalf("CreateTempWorkspace: %v", err)
+	}
+	service := &managedService{info: ServiceInfo{
+		ID:        "svc_temp",
+		Status:    "running",
+		Workspace: filepath.ToSlash(dir),
+		Cwd:       filepath.ToSlash(dir),
+	}}
+	a.services["svc_temp"] = service
+
+	if err := a.DeleteTempWorkspace(dir); err != nil {
+		t.Fatalf("DeleteTempWorkspace while a service runs: %v", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("directory in use was removed: %v", err)
+	}
+
+	service.mu.Lock()
+	service.info.Status = "stopped"
+	service.mu.Unlock()
+	if err := a.DeleteTempWorkspace(dir); err != nil {
+		t.Fatalf("DeleteTempWorkspace after the service stopped: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("idle directory survived the delete: %v", err)
+	}
+}
