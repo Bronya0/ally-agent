@@ -242,16 +242,8 @@ func safeWriteFile(path string, data []byte, perm os.FileMode) error {
 	return read.SafeWriteFile(path, data, perm)
 }
 
-func safeWriteFileWithDir(path string, data []byte, perm os.FileMode, mkdirs bool) error {
-	return read.SafeWriteFileWithDir(path, data, perm, mkdirs)
-}
-
 func safeWriteNewFile(path string, data []byte, perm os.FileMode) error {
 	return read.SafeWriteNewFile(path, data, perm)
-}
-
-func hashVersion(data []byte) string {
-	return read.HashVersion(data)
 }
 
 // hashBytesAndVersion hashes data once and returns both the hex digest and the

@@ -122,15 +122,12 @@ var errorLogNameRe = regexp.MustCompile(`^error-(\d{4}-\d{2}-\d{2})\.log$`)
 //   - only dates strictly before today are removed (today and any future-dated
 //     file are left untouched).
 //
+// today is todayDate(), so a valid YYYY-MM-DD compares as a date too.
 // Unrelated files (service.log, error-foo.log, subdirs, …) are never touched.
 func cleanupOldErrorLogs(dir, today string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
-	}
-	todayTime, err := time.Parse("2006-01-02", today)
-	if err != nil {
-		return // defensive: if today is malformed, delete nothing rather than guess
 	}
 	for _, e := range entries {
 		if e.IsDir() {
@@ -140,11 +137,10 @@ func cleanupOldErrorLogs(dir, today string) {
 		if m == nil {
 			continue // not one of our managed error logs
 		}
-		dt, perr := time.Parse("2006-01-02", m[1])
-		if perr != nil {
+		if _, perr := time.Parse("2006-01-02", m[1]); perr != nil {
 			continue // unparseable date — leave it alone
 		}
-		if !dt.Before(todayTime) {
+		if m[1] >= today {
 			continue // today or future — never delete
 		}
 		_ = os.Remove(filepath.Join(dir, e.Name())) // best-effort

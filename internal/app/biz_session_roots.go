@@ -41,10 +41,6 @@ func (a *App) publishSessionExtraRoots(sessionID string, roots []string) {
 	}
 	normalized := normalizeExtraRoots(roots)
 	a.mu.Lock()
-	// 懒加载兜底：NewApp 已经初始化，但持锁写 nil map 会 panic 并永久占住互斥锁。
-	if a.sessionExtraRoots == nil {
-		a.sessionExtraRoots = map[string][]string{}
-	}
 	a.sessionExtraRoots[sessionID] = normalized
 	a.mu.Unlock()
 }

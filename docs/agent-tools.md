@@ -114,10 +114,8 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 |---|---|
 | 工作区写串行 | `withFileOpsLock`（`app.go:2369`）；用 defer 解锁，因为 executeTool 会把 panic 转成错误，手写 Unlock 会在那条路径上永久卡死 |
 | 编辑后验证 | `attachValidation` + `validateChangedFilesForCall`（`orch_validation.go:170`）；批次里由 `planBatchValidation`（`orch_validation.go:189`）摊到「最后一次触碰该目录的变更」上，避免每个 edit 都跑一遍 `go vet` / `tsc` |
-| 命令安全围栏 | `checkCommandSafetyAtCwd`（`orch_fence.go:100`）：**唯一入口**，围栏自己问「谁管边界」（`kernelOwnsBoundary`），沙箱接不接都走这里；受保护位置是一张表（`protectedLocations`：每项带 `remove` / `scan` 两列，删除守卫只登记深度规则兜不住的目标，搜索守卫没有深度概念、逐个点名一级系统树；`removableProtectedTargets()` 同时喂远端 helper），`isDangerousDeletePath` / `isDangerousSearchRoot` 各取一列，同在 `orch_fence.go` |
+| 命令安全围栏 | `checkCommandSafetyAtCwd`（`orch_fence.go:48`）：**唯一入口**，本地命令与后台服务共用；受保护位置是一张表（`protectedLocations`：每项带 `remove` / `scan` 两列，删除守卫只登记深度规则兜不住的目标，搜索守卫没有深度概念、逐个点名一级系统树；`removableProtectedTargets()` 同时喂远端 helper），`isDangerousDeletePath` / `isDangerousSearchRoot` 各取一列，同在 `orch_fence.go` |
 | 密钥/凭据禁读（三平台） | `pathutil.SensitiveReadReason`（`internal/tools/pathutil`）：`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.kube`、`~/.docker/config.json`、`~/.netrc`、`~/.git-credentials`、`~/.npmrc`、`~/.pypirc`、`~/.config/{gcloud,gh,glab-cli}`、平台钥匙串、Ally 自己的 `config/api/mcp/ssh_clusters.json`。三条入口共用同一份判定：命令围栏（`firstSensitiveReadTarget` + `command.DisclosingPathOperands`，只算「可能把内容交回来」的操作数：`ssh -i KEY`、`chmod 600 KEY`、`ls ~/.ssh` 这类只是用密钥不算读，照常放行；`cat ~/.ssh/id_rsa` 仍拦）、`read`、`grep`；`memories/` 与 `USER.md` 照旧可读 |
-| 命令沙箱（OS 级；**当前未接入**） | `sandboxSpec` / `wrapSandboxedCommand` / `annotateSandboxDeniedWrite` / `kernelOwnsBoundary`（`orch_sandbox.go`）；写工具的落盘同样包在内核里（同在 `orch_sandbox.go`）；策略与 profile 在 `internal/sandbox`（纯算法，不依赖 App）。command 与 service 两条执行路径共用。接入开关是 `internal/sandbox` 的 `attached`（`ResolvedMode` / `ModeForced` / `Attached` 同源）：关着时三个平台都只走安全围栏，profile / 策略 / 诊断 / 探测原样保留；要接回来只需改这一个常量 + 把 `GetSandboxStatus` 那条设置页链路接回 |
-| 边界归属（越界写由谁拒） | `kernelOwnsBoundary`（`orch_sandbox.go`）：唯一的判据，问的是「沙箱此刻是否真在围」（`sandbox.ResolvedMode` + `sandbox.Available`），**不问平台**。内核接管时写 / 删 / cwd 三个解析器（`resolveBoundaryPath` + `resolveWritableFilePath` / `resolveDeletablePath` / `resolveCommandCwd`）只归一化、越界留给内核拒（报 `E_SANDBOX_WRITE_DENIED`）；内核不在时围栏全强度顶上（报 `E_PATH_OUTSIDE`）。高危命令语义、delete 的工作区根 / dangerous / recursive 保护始终留在 Go 侧——内核看不见它们 |
 | 路径保护 | `pathutil`：`CanonicalPath` 统一路径形态；本地、SSH 工具与传输不对 `.git/.svn/.hg` 做特殊限制或跳过 |
 | 删除多路径 | `resolveDeletePathList` / `planDeleteExecution` / `applyDeletePlanSlots`（`orch_file_ops.go`）：`paths` 先归一成一条候选列表，再按「去重 + 深的先删」排出执行计划（同一路径的两种写法只执行一次；父子同时列出时深的先删，两条都真删掉），结果按请求槽位摊回去；本地与远端共用这一份。单条路径的落盘判定仍各自留在自己的信任域（本地问本机文件系统，远端只能在 SSH 另一头问）。「本来就不存在」两端一致：不是失败、不拦同批其它路径，只报 `DeleteResult.Absent`（本地 `resolveDeleteTarget`，远端 `check_delete_path` 的 `missing` 标记） |
 
@@ -129,13 +127,7 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 
 远端命令保留第 1、3 道：`ContainsExplicitDeleteCommand` 拦裸删除，`validateRemoteCommandSafety` 检查高危语义；不对 VCS 元数据做特殊检查。远端不再设置项目目录边界，也不再检查“目录外已有目标”。`alias` 原样使用 `ssh_cluster` 返回的唯一昵称，每次调用必传，只选服务器，文件工具与传输使用绝对路径；命令每次在登录用户家目录启动独立 shell，通过 `cd /绝对目录 && 命令` 切目录。远端命令不再提取写目标来检查 VCS。不兼容旧 `target`、带目录端点和远端 `cwd`；读取统一使用 `files`。主代理和子代理共用的新提示词说明此契约。
 
-**操作系统级沙箱**（macOS Seatbelt / Linux bubblewrap）与上面三道不互斥：围栏拦的是「看得出意图的写入」，沙箱拦的是「命令自己拼出来、围栏看不出来的越界写」——命令被包在 shell 外面，怎么拼都绕不过去，脚本里的语言无关也一样（Python/Node 都是 shell 的子进程，内核级沙箱随 fork/exec 继承）。
-
-macOS 上沙箱**强制开启且没有开关**：档位是宿主的属性（`sandbox.ResolvedMode`），不是用户设置；设置 → 沙箱 页只显示本机状态与安全围栏机制。策略的其余部分也是写死的：写根 = 本次运行的 `roots` + 工具链缓存 + 临时目录，`sources/` 在写根内重新禁写，Ally 自己的数据目录（模型 key / SSH 凭据 / 会话历史）从命令视野里遮蔽，出网保持开放（包管理器与构建需要）。
-
-写根是主工作区 + 会话级附加工作区（`roots` 全量，不是只有 `roots[0]`），且**每条命令现算**：在 Tab 上加/删附加工作区，下一条命令立即生效；已在跑的后台服务仍用它启动时的策略，需重启。
-
-边界要看清：沙箱**只拦写，读是默认放开的**（除了被遮蔽的数据目录），所以“读得到密钥”这类风险靠禁读遮罩而不是沙箱本身。包不上时命令不裸跑：macOS 强制档没有关掉的退路，降级为「只受安全围栏保护」并记日志告警；拦下写入时在结果里追加可照做的下一步（内核只回一句裸权限错误，模型会当成自己命令写错而反复重试）。
+写根是主工作区 + 会话级附加工作区（`roots` 全量，不是只有 `roots[0]`），且**每条命令现算**：在 Tab 上加/删附加工作区，下一条命令立即生效。
 
 错误文案是写给模型看的：**说清原因 + 给出下一步该怎么做**。
 
@@ -181,7 +173,7 @@ type toolResult struct {                       // infra_result.go:19
 主循环与子代理共用 `orch_tool_stages.go` 的 `executeStagedToolBatch`。内置工具 schema 在 `functionTool` 统一声明可选非负整数 `stage`，省略为 0；调度器读取它，但不从执行参数中剥离。MCP 不增加这个字段，调用归入 stage 0。
 
 - 同 stage 在配置的并发上限内执行；阶段按数字升序推进，数字允许不连续，与调用在响应中的排列顺序无关。
-- 当前阶段全部收尾后才能进入下一阶段。工具错误、命令非零退出、超时、取消、沙箱拒写或提升为后台服务都会阻断后续阶段；`E_DUPLICATE_TOOL_CALL` 通知本身不阻断，原始调用的成败仍然有效。
+- 当前阶段全部收尾后才能进入下一阶段。工具错误、命令非零退出、超时、取消或提升为后台服务都会阻断后续阶段；`E_DUPLICATE_TOOL_CALL` 通知本身不阻断，原始调用的成败仍然有效。
 - 后续调用不执行，返回 `E_STAGE_BLOCKED`；若已有自己的冲突码，则保留原始原因。UI 隐藏纯跳过结果并移除占位卡片，模型仍收到配对结果。已完成的写入、安装和服务不回滚。
 - `wait` 是普通阶段调用，没有隐式排尾。例如修改放 stage 0，独立安装放 stage 1，启动服务放 stage 2，wait 放 stage 3，检查放 stage 4。
 - stage 不做结果插值。依赖前一步返回的 version 等参数时，仍需分轮调用。

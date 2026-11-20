@@ -62,7 +62,6 @@ func (a *desktop) statsPageBody(c *ui.Context) {
 		notice(c, "error", a.stats.Error, a.secondaryInk())
 	}
 	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, locales.Text("k 千 / M 百万 / B 十亿 / T 万亿 · 悬停查看精确值")).FontSize(fsSmall).TextColor(a.secondaryInk()).MinWidth(0).Shrink(1)
 		ui.Spacer(c)
 		flat(c, locales.Text("刷新")).OnClick(func() { a.loadStats(true) })
 	})

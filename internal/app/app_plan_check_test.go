@@ -50,15 +50,6 @@ func (s *planCheckServer) count() int {
 	return len(s.requests)
 }
 
-func (s *planCheckServer) requestBody(round int) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if round < 1 || round > len(s.requests) {
-		return ""
-	}
-	return s.requests[round-1]
-}
-
 // runPlanCheckSession starts one run against the fake provider with a running
 // two-step plan already in place, and waits for the terminal event.
 func runPlanCheckSession(t *testing.T, baseURL, sessionID, workspace string) (*App, *compactRecorder) {

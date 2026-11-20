@@ -257,7 +257,7 @@ func TestStagedBatchPublishesFileFailureBeforePeerFinishes(t *testing.T) {
 func TestToolStageSucceeded(t *testing.T) {
 	for _, data := range []any{
 		CommandResult{ExitCode: 1}, CommandResult{TimedOut: true}, CommandResult{Cancelled: true},
-		CommandResult{SandboxDenied: true}, CommandResult{PromotedToService: true},
+		CommandResult{PromotedToService: true},
 		DeletePathsResult{FailedCount: 1}, BatchReadResult{Files: []BatchReadResultItem{{Error: "missing"}}},
 	} {
 		if toolStageSucceeded(toolResult{OK: true, Data: data}) {

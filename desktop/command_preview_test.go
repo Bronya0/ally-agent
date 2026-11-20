@@ -23,9 +23,6 @@ func TestCommandPreviewMatchesPreLineWithoutChangingExpandedOutput(t *testing.T)
 	if got := stripBlankLines(commandOutput(result)); got != "    first    column\n\tsecond\t\tcolumn\n        third line" {
 		t.Fatalf("expanded output lost indentation: %q", got)
 	}
-	if got := commandPreviewText(original, 2); got != "second column\nthird line" {
-		t.Fatalf("tail preview changed: %q", got)
-	}
 }
 
 func TestCommandHeaderKeepsExitAndDurationAfterTheCommand(t *testing.T) {

@@ -58,13 +58,11 @@ func TestNewAppInitializesCompactionMaps(t *testing.T) {
 }
 
 // TestCompactSessionCleansUpCompactionState drives the manual compaction
-// entry point on a zero-value App (nil compaction maps) so the lazy guard in
-// front of the map writes is exercised directly: before the guard this call
-// panicked with "assignment to entry in nil map" while holding a.mu. The call
-// must fail with the expected validation error and clean up its in-flight
-// compaction state.
+// entry point so its in-flight state is always cleaned up: the call fails its
+// validation before any summary request, and compactingSessions must not keep
+// the session.
 func TestCompactSessionCleansUpCompactionState(t *testing.T) {
-	app := &App{initialized: true}
+	app := newIsolatedChatTestApp(t)
 	app.config.Model = "test-model"
 	app.config.APIKey = "test-key"
 	const sessionID = "session-compact-guard"

@@ -249,9 +249,6 @@ func (a *App) sessionContextLockFor(sessionID string) *sessionContextLock {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.contextLocks == nil {
-		a.contextLocks = map[string]*sessionContextLock{}
-	}
 	if lock, ok := a.contextLocks[sessionID]; ok && lock != nil {
 		return lock
 	}

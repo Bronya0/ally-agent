@@ -229,6 +229,10 @@ func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig,
 				}
 				ui.Spacer(c)
 				cardFlatBusy(c, locales.Text("测试"), a.modelForm.EntryTestBusy[modelOption(m)]).Disabled(a.modelSaving).OnClick(func() { a.testSavedModel(m) })
+				if backend.IsDeepSeekOfficialEndpoint(m.BaseURL) {
+					id := modelIdentity(m)
+					cardFlatBusy(c, locales.Text("余额"), a.modelForm.EntryBalanceBusy[id]).Disabled(a.modelSaving).OnClick(func() { a.queryModelBalance(m) })
+				}
 				cardFlat(c, locales.Text("编辑")).Disabled(a.modelSaving).OnClick(func() {
 					for i, item := range a.config.Models {
 						if sameModelIdentity(modelIdentity(item), modelIdentity(m)) {
@@ -248,6 +252,9 @@ func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig,
 				base = locales.Text("未配置 Base URL")
 			}
 			fieldNote(c, base, a.secondaryInk())
+			if balance := a.modelForm.EntryBalance[modelIdentity(m)]; balance != "" {
+				fieldNote(c, locales.Text("余额")+" "+balance, a.secondaryInk())
+			}
 		})
 	}
 }
@@ -664,6 +671,51 @@ func (a *desktop) runModelTest(m backend.ModelConfig, done func()) {
 			a.notifySuccess(name + " · " + locales.Text("连接成功"))
 		})
 	}()
+}
+
+// queryModelBalance reads the DeepSeek account balance behind one saved model.
+// Only the button starts it: no polling, no refresh on page open, and the
+// amount stays until this row is edited or deleted.
+func (a *desktop) queryModelBalance(m backend.ModelConfig) {
+	id := modelIdentity(m)
+	if a.modelSaving || a.modelForm.EntryBalanceBusy[id] {
+		return
+	}
+	if a.modelForm.EntryBalanceBusy == nil {
+		a.modelForm.EntryBalanceBusy = map[backend.ModelIdentity]bool{}
+	}
+	a.modelForm.EntryBalanceBusy[id] = true
+	name := modelOption(m)
+	go func() {
+		balances, err := a.core.QueryModelBalance(m)
+		a.win.Update(func() {
+			delete(a.modelForm.EntryBalanceBusy, id)
+			if err != nil {
+				a.notifyError(name + " · " + locales.Text("查询余额失败：") + err.Error())
+				return
+			}
+			if a.modelForm.EntryBalance == nil {
+				a.modelForm.EntryBalance = map[backend.ModelIdentity]string{}
+			}
+			a.modelForm.EntryBalance[id] = formatModelBalance(balances)
+		})
+	}()
+}
+
+// invalidateModelBalance drops a row's amount, which is what saving or
+// deleting that model has to do: the amount belongs to the previous key.
+func (a *desktop) invalidateModelBalance(id backend.ModelIdentity) {
+	delete(a.modelForm.EntryBalance, id)
+	delete(a.modelForm.EntryBalanceBusy, id)
+}
+
+// formatModelBalance turns the currency lines into what the card shows.
+func formatModelBalance(balances []backend.ModelBalance) string {
+	parts := make([]string, 0, len(balances))
+	for _, b := range balances {
+		parts = append(parts, strings.TrimSpace(b.Total+" "+b.Currency))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // ---- Image models -------------------------------------------------------

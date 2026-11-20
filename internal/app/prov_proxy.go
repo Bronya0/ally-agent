@@ -510,12 +510,6 @@ func newResolvedProxyHTTPTransport(resolved resolvedProxy, allowPrivate bool) *h
 	return transport
 }
 
-// proxyHosts returns the lowercase hostnames of the configured proxy servers
-// so the dial guard can always allow connections to them.
-func proxyHosts(cfg ConfigState) map[string]struct{} {
-	return resolvedProxyHosts(resolveProxy(cfg))
-}
-
 func resolvedProxyHosts(resolved resolvedProxy) map[string]struct{} {
 	hosts := map[string]struct{}{}
 	if !resolved.status.Enabled || resolved.status.Error != "" {

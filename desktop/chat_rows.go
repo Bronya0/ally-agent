@@ -175,9 +175,4 @@ func pruneTranscriptOutsideView(t *conversation, st *chatUI) {
 			delete(st.Search.codeCache, key)
 		}
 	}
-	for key := range st.Search.spanCache {
-		if key.Message < lo || key.Message >= hi {
-			delete(st.Search.spanCache, key)
-		}
-	}
 }

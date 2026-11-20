@@ -380,7 +380,6 @@ type settingsForm struct {
 	APIBusy         bool
 	APIRevision     uint64
 	APINote         string
-	FullJSON        string
 	NewToken        bool
 
 	SessionHeaderConfirmOpen  bool
@@ -518,7 +517,12 @@ type modelForm struct {
 	// EntryTestBusy tracks the connection tests started from the list, keyed by
 	// the model's option label, so two rows can run at once.
 	EntryTestBusy map[string]bool
-	Fetched       []string
+	// EntryBalance keeps the DeepSeek balance read from the list, keyed by the
+	// model identity so saving an edit drops the amount the old key produced.
+	// It is filled on click only; nothing polls or refreshes it.
+	EntryBalance     map[backend.ModelIdentity]string
+	EntryBalanceBusy map[backend.ModelIdentity]bool
+	Fetched          []string
 }
 
 // mcpForm is the MCP page + server editor state.
@@ -691,40 +695,6 @@ type fileUI struct {
 	RenameTo       string
 	PromptErr      string
 	HelpOpen       bool
-}
-
-// gameUI keeps one local match per game kind plus the model choices.
-type gameUI struct {
-	Kind          int
-	Started       bool
-	Finished      bool
-	VsAI          bool
-	ModelA        string
-	ModelB        string
-	EffortA       string
-	EffortB       string
-	Thinking      bool
-	RequestSeq    uint64
-	Calls         int
-	InTokens      int
-	OutTokens     int
-	Status        string
-	Winner        int
-	Board         []int
-	Turn          int
-	LastIndex     int
-	Passes        int
-	Ko            int
-	XQ            [10][9]string
-	Selected      int
-	Hands         [3][]int
-	Bottom        []int
-	Landlord      int
-	Phase         string
-	LastCards     []int
-	LastPlayer    int
-	DDZPasses     int
-	SelectedCards []int
 }
 
 // Confirm helper ----------------------------------------------------------

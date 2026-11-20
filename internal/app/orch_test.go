@@ -2004,8 +2004,6 @@ func TestCreateFileRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
 	}
 	app := newIsolatedTestApp(t)
 
-	// 本用例断言围栏在位：判据归内核时越界由内核拒，见 orch_sandbox_test.go。
-	pinBoundaryOwnership(t, false)
 	_, err := app.createFileWithConfig(ConfigState{Workspace: root}, CreateFileRequest{
 		Path:    "escape/file.txt",
 		Content: "nope\n",
@@ -2242,8 +2240,6 @@ func TestRenamePathRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
 	}
 	app := newIsolatedTestApp(t)
 
-	// 本用例断言围栏在位：判据归内核时越界由内核拒。
-	pinBoundaryOwnership(t, false)
 	_, err := app.renamePathWithConfig(ConfigState{Workspace: root}, RenamePathRequest{Path: "escape/secret.txt", NewName: "renamed.txt"})
 	if err == nil {
 		t.Fatal("expected rename through a symlinked parent outside the workspace to fail")
@@ -2635,8 +2631,6 @@ func TestRunCommandRejectsCwdSymlinkOutsideWorkspace(t *testing.T) {
 	}
 	app := newIsolatedTestApp(t)
 
-	// 本用例断言围栏在位：判据归内核时越界 cwd 交给内核（可读即能跑）。
-	pinBoundaryOwnership(t, false)
 	args, err := json.Marshal(CommandRequest{Command: "pwd", Cwd: "escape"})
 	if err != nil {
 		t.Fatal(err)
@@ -4524,87 +4518,6 @@ func TestServiceReadReturnsBoundedTail(t *testing.T) {
 	}
 	if res.ReturnedBytes > maxServiceReadTailBytes {
 		t.Fatalf("read exceeded max tail bytes: %d", res.ReturnedBytes)
-	}
-}
-
-// 服务输出里的内核拒写不能只剩那句裸权限错误：模型侧读回结果要看到解释与可写范围。
-// 标记是 sticky 的：拒写那几行会被日志刷出尾部，而它说的是「这次写没成」这件已经
-// 发生过的事。卡片只在 start 那张上显示告警（读日志、停服务并不写盘，见前端
-// utils/sandboxAlert）。
-func TestServiceReadReportsSandboxDeniedWrite(t *testing.T) {
-	requireConfinement(t)
-	app := NewApp()
-	buffer := newRollingBuffer(serviceOutputLimit)
-	if _, err := buffer.Write([]byte("/bin/sh: /tmp/x: Operation not permitted\n")); err != nil {
-		t.Fatal(err)
-	}
-
-	app.servicesMu.Lock()
-	app.services["svc_denied"] = &managedService{
-		info:       ServiceInfo{ID: "svc_denied", Command: "demo", Status: "running", Sandboxed: true},
-		output:     buffer,
-		writeRoots: []string{"/tmp/workspace"},
-	}
-	app.servicesMu.Unlock()
-
-	res, err := app.readServiceOutput(ServiceReadRequest{ID: "svc_denied"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !res.SandboxDenied {
-		t.Fatalf("a service whose output shows a kernel refusal must be flagged, got %#v", res)
-	}
-	if !strings.Contains(res.DeniedWriteHint, "沙箱已拦截") {
-		t.Fatalf("the flag must ride with the same hint the command path gives, got %q", res.DeniedWriteHint)
-	}
-	if !strings.Contains(res.DeniedWriteHint, "/tmp/workspace") {
-		t.Fatalf("the hint must name the writable roots, got %q", res.DeniedWriteHint)
-	}
-
-	// 尾部被后续日志刷掉之后，标记仍在（sticky）。
-	if _, err := buffer.Write([]byte(strings.Repeat("later line\n", 400))); err != nil {
-		t.Fatal(err)
-	}
-	res, err = app.readServiceOutput(ServiceReadRequest{ID: "svc_denied", TailBytes: 64})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(res.Output, "Operation not permitted") {
-		t.Fatalf("the denial should have been pushed out of the tail, got %q", res.Output)
-	}
-	if !res.SandboxDenied {
-		t.Fatalf("the denial must stay recorded once seen, got %#v", res)
-	}
-}
-
-// TestPromotedCommandResultCarriesDeniedWriteHint 锁定「超时收编」这条支路的模型侧说明：
-// 收编是提前 return，到不了普通命令末尾补说明那一步，拒写标记与说明只能从快照带过来。
-// 拒写与超时能共存：沙箱拒的是那一次写，命令本身照跑（实测 `sh -c 'echo hi > /tmp/x;
-// sleep 9'` 在写被拒后照常跑完），所以收编前的输出里完全可能有内核拒写。
-func TestPromotedCommandResultCarriesDeniedWriteHint(t *testing.T) {
-	buf := &limitedBuffer{limit: 8 * 1024}
-	if _, err := buf.Write([]byte("sh: /tmp/x: Operation not permitted\n")); err != nil {
-		t.Fatal(err)
-	}
-	info := ServiceInfo{
-		ID:              "svc_promoted",
-		Sandboxed:       true,
-		SandboxDenied:   true,
-		DeniedWriteHint: "沙箱已拦截：目标 /tmp/x 在可写范围之外",
-	}
-	result := (&App{}).promotedCommandResult(
-		CommandRequest{Command: "sh -c 'echo hi > /tmp/x; sleep 99'"},
-		shellInvocation{name: "bash", path: "/bin/bash"},
-		"/tmp/workspace", buf, 30, info, "", 0,
-	)
-	if !result.SandboxDenied {
-		t.Fatalf("promoted result must carry the denied-write flag: %#v", result)
-	}
-	if result.DeniedWriteHint != info.DeniedWriteHint {
-		t.Fatalf("promoted result must carry the same hint, got %q", result.DeniedWriteHint)
-	}
-	if !result.PromotedToService || !strings.Contains(result.Output, "Operation not permitted") {
-		t.Fatalf("promoted result must keep the output and the promotion notice: %#v", result)
 	}
 }
 

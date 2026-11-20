@@ -346,8 +346,6 @@ func scheduledTaskWorkspaceUsable(workspace string) bool {
 	return err == nil && info.IsDir()
 }
 
-func (m *scheduledTaskManager) stop() { _ = m.stopAndWait(5 * time.Second) }
-
 func (m *scheduledTaskManager) stopAndWait(timeout time.Duration) error {
 	m.mu.Lock()
 	m.stopped = true

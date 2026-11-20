@@ -1288,16 +1288,11 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		for _, warning := range list(result, "warnings") {
 			toolWarning(c, fmt.Sprint(warning), a.secondaryInk())
 		}
-		if boolOf(result, "sandboxDenied") {
-			toolWarning(c, str(result, "deniedWriteHint"), a.secondaryInk())
-		}
 		if validation := str(result, "validation"); strings.HasPrefix(validation, "自动校验失败") {
 			toolWarning(c, strings.TrimSpace(strings.TrimPrefix(validation, "自动校验失败（文件已写入）：")), a.secondaryInk())
 		}
 	})
 }
-
-func smallMono() string { return monoFamily }
 
 // easeInOut is the cubic ease-in-out main's tool-svg-blink runs under:
 // slow at both ends, so the dot dwells at full and dim instead of sweeping
@@ -1613,42 +1608,6 @@ func stripBlankLines(s string) string {
 		kept = append(kept, line)
 	}
 	return strings.Join(kept, "\n")
-}
-
-// Match main's collapsed terminal white-space: pre-line. Only the display
-// preview collapses horizontal whitespace; expanded output keeps indentation.
-// The tail is taken first: blank lines are dropped from it rather than from the
-// whole log, which this runs on for every frame while the card is collapsed.
-func commandPreviewText(output string, lines int) string {
-	if lines <= 0 {
-		return ""
-	}
-	trimmed := strings.TrimRight(output, "\n")
-	if trimmed == "" {
-		return ""
-	}
-	// A run of blank lines at the end would leave the window short of rows, so
-	// widen it until enough survive or the whole output is in hand.
-	for window := lines*4 + 8; ; window *= 4 {
-		tail := tailLines(trimmed, window)
-		rows := strings.Split(tail, "\n")
-		kept := rows[:0]
-		for _, row := range rows {
-			// \r is a separator too: Windows output arrives as CRLF, and dropping the
-			// blank-line pass upstream means each row still carries its own \r.
-			row = strings.Join(strings.FieldsFunc(row, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\f' || r == '\v' }), " ")
-			if row != "" {
-				kept = append(kept, row)
-			}
-		}
-		if len(kept) < lines && len(tail) < len(trimmed) {
-			continue
-		}
-		if len(kept) > lines {
-			kept = kept[len(kept)-lines:]
-		}
-		return strings.Join(kept, "\n")
-	}
 }
 
 func toolChips(name, state string, args, result map[string]any) []string {
@@ -2151,14 +2110,6 @@ func tailLines(s string, n int) string {
 		start = previous + 1
 	}
 	return s[start:end]
-}
-
-func shortBlock(s string, n int) string {
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n]) + locales.Text("\n…（内容已截断）")
-	}
-	return s
 }
 
 func unifiedSnippet(diff string, context int) string {

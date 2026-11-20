@@ -231,7 +231,6 @@ func (a *desktop) loadSettings() {
 			a.win.Update(func() { a.notifyError(err.Error()) })
 			return
 		}
-		sandbox, _ := a.core.GetSandboxStatus()
 		api, _ := a.core.GetApiServiceState()
 		autostart, _ := a.core.GetAutostartEnabled()
 		a.win.Update(func() {
@@ -239,7 +238,6 @@ func (a *desktop) loadSettings() {
 				return
 			}
 			a.refreshMCPInventory()
-			a.sandboxState = sandbox
 			a.apiState = api
 			a.apiPort = float64(api.Port)
 		})

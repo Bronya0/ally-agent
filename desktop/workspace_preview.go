@@ -603,12 +603,6 @@ func (l *workspacePreviewLifecycle) retainedImageFor(key string) workspacePrevie
 	return mounted.surface
 }
 
-func (l *workspacePreviewLifecycle) loadHTML(key, source string) {
-	if surface := l.mountedFor(key); surface != nil {
-		surface.LoadHTML(source)
-	}
-}
-
 func (l *workspacePreviewLifecycle) releaseMounted() {
 	for workspace := range l.mounted {
 		l.releaseMountedWorkspace(workspace)

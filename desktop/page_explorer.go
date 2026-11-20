@@ -22,13 +22,6 @@ func fileParent(path string) string {
 	return strings.Trim(strings.ReplaceAll(filepath.ToSlash(filepath.Dir(path)), "\\", "/"), "/")
 }
 
-func (a *desktop) filePanel(c *ui.Context) {
-	if a.current() == nil {
-		return
-	}
-	a.fileTree(c)
-}
-
 func normalizeExplorerPath(path string) string {
 	path = filepath.ToSlash(filepath.Clean(path))
 	return strings.TrimPrefix(path, "./")

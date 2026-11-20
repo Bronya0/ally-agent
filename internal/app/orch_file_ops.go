@@ -31,7 +31,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"ally-dev/internal/sandbox"
 	"ally-dev/internal/tools/command"
 	"ally-dev/internal/tools/pathutil"
 	toolshared "ally-dev/internal/tools/shared"
@@ -45,7 +44,6 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	if err != nil {
 		return EditResult{}, err
 	}
-	spec := fileMutationSpec(roots)
 	path, err := resolveWritableFilePath(roots, req.Path)
 	if err != nil {
 		return EditResult{}, err
@@ -54,7 +52,7 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	// result can report them without a follow-up list_files. The walk must run
 	// before MkdirAll, while the missing ancestors still exist as such.
 	createdDirs := newlyCreatedDirs(filepath.Dir(path))
-	if err := sandboxedMkdirAll(spec, roots, filepath.Dir(path)); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return EditResult{}, err
 	}
 	path, err = resolveWritableFilePath(roots, req.Path)
@@ -94,11 +92,11 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	content, ending, hadBOM := normalizeText([]byte(req.Content))
 	encoded := encodeText(content, ending, hadBOM)
 	if req.Overwrite {
-		if err := sandboxedWriteFile(spec, roots, path, encoded, perm); err != nil {
+		if err := safeWriteFile(path, encoded, perm); err != nil {
 			return EditResult{}, err
 		}
 	} else {
-		if err := sandboxedWriteNewFile(spec, roots, path, encoded, perm); err != nil {
+		if err := safeWriteNewFile(path, encoded, perm); err != nil {
 			return EditResult{}, err
 		}
 	}
@@ -132,7 +130,6 @@ func (a *App) createDirectoryWithConfig(cfg ConfigState, req CreateDirectoryRequ
 	if err != nil {
 		return err
 	}
-	spec := fileMutationSpec(roots)
 	path, err := resolveWritableFilePath(roots, req.Path)
 	if err != nil {
 		return err
@@ -144,7 +141,7 @@ func (a *App) createDirectoryWithConfig(cfg ConfigState, req CreateDirectoryRequ
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return sandboxedMkdirAll(spec, roots, path)
+	return os.MkdirAll(path, 0o755)
 }
 
 // cleanRenameSegment validates a rename target name. A rename keeps the entry in
@@ -227,7 +224,7 @@ func (a *App) renamePathWithConfig(cfg ConfigState, req RenamePathRequest) (stri
 	} else if !errors.Is(lstatErr, os.ErrNotExist) {
 		return "", lstatErr
 	}
-	if err := sandboxedRename(fileMutationSpec(roots), roots, source, target); err != nil {
+	if err := os.Rename(source, target); err != nil {
 		return "", err
 	}
 	return targetRel, nil
@@ -459,11 +456,10 @@ func (a *App) deletePathsWithConfig(cfg ConfigState, paths []string, recursive b
 	if err != nil {
 		return DeletePathsResult{}, err
 	}
-	spec := fileMutationSpec(roots)
 	planned := make([]plannedDeletePath, 0, len(paths))
 	targets := make([]fileMutationTarget, 0, len(paths))
 	for _, requestPath := range paths {
-		item, err := planDeletePath(spec, roots, requestPath, recursive)
+		item, err := planDeletePath(roots, requestPath, recursive)
 		if err != nil {
 			return DeletePathsResult{}, err
 		}
@@ -484,7 +480,12 @@ func (a *App) deletePathsWithConfig(cfg ConfigState, paths []string, recursive b
 			executed[rep] = item.result
 			continue
 		}
-		removeErr := sandboxedRemove(spec, roots, item.absPath, recursive && item.isDir)
+		var removeErr error
+		if recursive && item.isDir {
+			removeErr = os.RemoveAll(item.absPath)
+		} else {
+			removeErr = os.Remove(item.absPath)
+		}
 		if removeErr != nil {
 			// 失败时清零统计：RemoveAll 可能已经删掉一部分，报出的数字只会误导
 			// 模型；resolvedPath 留在结果里供它自己复查剩余状态。
@@ -502,21 +503,6 @@ func (a *App) deletePathsWithConfig(cfg ConfigState, paths []string, recursive b
 	return result, nil
 }
 
-// countDeleteStats 判断这次删除的目标要不要先把整棵树统计一遍。统计只服务成功
-// 报告，而边界归内核时写根之外的目标不可能是成功的：对一棵大目录（家目录、
-// /var 之类）先 WalkDir 完再等内核拒绝，等于白等几分钟。写根内、以及内核确实
-// 放行的位置（临时目录、工具链缓存）照旧精确计数。
-func countDeleteStats(spec sandbox.Spec, roots []string, path string) bool {
-	if !kernelOwnsBoundary() {
-		return true
-	}
-	resolved, err := evalExistingPrefix(path)
-	if err != nil {
-		return false
-	}
-	return insideWriteRoot(roots, resolved) || sandbox.AllowsWrite(spec, resolved)
-}
-
 // plannedDeletePath 是「已判定、尚未动手」的一条删除目标：判定阶段的产物全部
 // 留在这里，执行阶段只读它，路径不会在删除前被第二次解析。
 type plannedDeletePath struct {
@@ -531,7 +517,7 @@ type plannedDeletePath struct {
 // planDeletePath 判定单条路径能否删除，并把它将产生的结果准备好（不含是否真的
 // 删成功——那是执行阶段才知道的事）。目标本身不存在不算判定失败：它按 absent
 // 返回，同批其它路径照删。
-func planDeletePath(spec sandbox.Spec, roots []string, requestPath string, recursive bool) (plannedDeletePath, error) {
+func planDeletePath(roots []string, requestPath string, recursive bool) (plannedDeletePath, error) {
 	if strings.TrimSpace(requestPath) == "" {
 		return plannedDeletePath{}, codedToolError("E_BAD_PATH", errors.New("delete requires a non-empty path"))
 	}
@@ -569,7 +555,7 @@ func planDeletePath(spec sandbox.Spec, roots []string, requestPath string, recur
 	if info.IsDir() && !recursive {
 		return plannedDeletePath{}, codedToolError("E_DIR_REQUIRES_RECURSIVE", errors.New("path is a directory; set recursive=true"))
 	}
-	result, err := inspectDeleteTarget(requestPath, path, recursive, info, countDeleteStats(spec, roots, path))
+	result, err := inspectDeleteTarget(requestPath, path, recursive, info, true)
 	if err != nil {
 		return plannedDeletePath{}, err
 	}
@@ -611,7 +597,7 @@ func (a *App) runCommandWithTimer(parent context.Context, cfg ConfigState, req C
 			return CommandResult{}, err
 		}
 	}
-	// 围栏是一个入口：它自己问「谁管边界」（kernelOwnsBoundary），沙箱接不接都走这里。
+	// 围栏是命令安全的唯一入口。
 	if err := checkCommandSafetyAtCwd(req, roots, cwd); err != nil {
 		return CommandResult{}, err
 	}
@@ -635,10 +621,8 @@ func (a *App) runCommandWithTimer(parent context.Context, cfg ConfigState, req C
 	}
 
 	shell := commandShell(req.Command, cfg.GitBashPath)
-	// 沙箱在 shell 外面包一层：命令自己怎么拼都绕不过去，[argv] 的其余参数
-	// （-c 与整条命令串）原样透传给 shell。
-	spec := sandboxSpec(roots)
-	argv := wrapSandboxedCommand(spec, append([]string{shell.path}, shell.args...))
+	// argv 的其余参数（-c 与整条命令串）原样透传给 shell。
+	argv := append([]string{shell.path}, shell.args...)
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = commandEnvironment(cfg)
@@ -756,16 +740,14 @@ func (a *App) runCommandWithTimer(parent context.Context, cfg ConfigState, req C
 			// 超时收编：进程还活着（waitDone 未关），把原进程连同输出管道
 			// 一起移交给服务注册表，避免杀掉重跑撞 EADDRINUSE。
 			info, promoteErr := a.promoteTimedOutCommand(promoteCommandParams{
-				cmd:        cmd,
-				workspace:  roots[0],
-				command:    req.Command,
-				cwd:        cwd,
-				startedAt:  started,
-				tee:        tw,
-				timeout:    timeout,
-				sandboxed:  spec.Enforce(),
-				writeRoots: roots,
-				waitDone:   waitDone,
+				cmd:       cmd,
+				workspace: roots[0],
+				command:   req.Command,
+				cwd:       cwd,
+				startedAt: started,
+				tee:       tw,
+				timeout:   timeout,
+				waitDone:  waitDone,
 			})
 			if promoteErr == nil {
 				timedOut = true
@@ -811,7 +793,6 @@ func (a *App) runCommandWithTimer(parent context.Context, cfg ConfigState, req C
 		Cancelled:       errors.Is(parent.Err(), context.Canceled),
 		DurationMS:      duration,
 		Truncated:       buf.truncated,
-		Sandboxed:       spec.Enforce(),
 		OutputFilePath:  outputFilePath,
 		OutputFileBytes: outputFileSize,
 		OutputWarning:   commandLogWarning(tw, buf),
@@ -828,8 +809,6 @@ func (a *App) runCommandWithTimer(parent context.Context, cfg ConfigState, req C
 			return result, err
 		}
 	}
-	// 内核只回一句裸权限错误，读起来像命令自己写错了：补上能照做的下一步。
-	annotateSandboxDeniedWrite(spec, &result, roots)
 	return result, nil
 }
 
@@ -1401,15 +1380,9 @@ func safeJoin(roots []string, p string) (string, error) {
 	return pathutil.SafeJoin(pathRuntime, roots, p)
 }
 
-// resolveBoundaryPath joins p the way the current boundary owner expects: the
-// containment verdict comes from the fence only while the fence is what guards
-// the boundary, and the kernel answers for it once confinement is in force.
-// Normalization is identical either way (pathutil.JoinPath is the half SafeJoin
-// builds on), so no caller can see two spellings of the same path.
+// resolveBoundaryPath joins p through the fence's own containment rule: the
+// target has to land inside a writable root, or it is refused here.
 func resolveBoundaryPath(roots []string, p string) (string, error) {
-	if kernelOwnsBoundary() {
-		return pathutil.JoinPath(roots, p)
-	}
 	return pathutil.SafeJoin(pathRuntime, roots, p)
 }
 
@@ -1439,7 +1412,7 @@ func resolveWritableFilePath(roots []string, p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !kernelOwnsBoundary() && !insideWriteRoot(roots, resolved) {
+	if !insideWriteRoot(roots, resolved) {
 		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s\n可写范围：%s", p, formatAllowedRoots(roots)))
 	}
 	if info == nil || info.Mode()&os.ModeSymlink == 0 {
@@ -1481,7 +1454,7 @@ func resolveDeleteTarget(roots []string, p string) (string, os.FileInfo, error) 
 	if err != nil {
 		return "", nil, err
 	}
-	if !kernelOwnsBoundary() && !insideWriteRoot(roots, resolved) {
+	if !insideWriteRoot(roots, resolved) {
 		return "", nil, codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s\n可写范围：%s", p, formatAllowedRoots(roots)))
 	}
 	return abs, info, nil
@@ -1512,7 +1485,7 @@ func resolveCommandCwd(roots []string, p string) (string, error) {
 		}
 		return "", err
 	}
-	if !kernelOwnsBoundary() && !insideWriteRoot(roots, resolved) {
+	if !insideWriteRoot(roots, resolved) {
 		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("cwd resolves outside workspace or ~/.ally_agent: %s\n可写范围：%s", p, formatAllowedRoots(roots)))
 	}
 	info, err := os.Stat(resolved)

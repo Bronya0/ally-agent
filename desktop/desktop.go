@@ -159,7 +159,6 @@ type desktop struct {
 	upd                                     updateUI
 	filesF                                  fileUI
 	statsChart                              statsBarsData
-	gameF                                   gameUI
 	plans                                   map[string][]backend.PlanStep
 	planRev                                 map[string]int64
 	subRuns                                 map[string]*backend.SubagentRun
@@ -216,7 +215,6 @@ type desktop struct {
 	settingsAllowPrivate                      bool
 	apiState                                  backend.ApiServiceState
 	apiPort                                   float64
-	sandboxState                              backend.SandboxStatus
 	autostartValue                            bool
 
 	core                                                *backend.App
@@ -1330,7 +1328,6 @@ func (a *desktop) discardBlankTab(t *conversation) {
 // onEvent is wired to the backend event sink; the dispatcher lives in
 // events.go so the chat, task and update streams stay together.
 func (a *desktop) onEvent(name string, payload any) { a.dispatchEvent(name, payload) }
-func pretty(v any) string                           { b, _ := json.MarshalIndent(v, "", "  "); return string(b) }
 func (a *desktop) refreshFiles(manual ...bool) {
 	if a.core == nil || a.win == nil {
 		return

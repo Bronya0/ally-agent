@@ -27,7 +27,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"ally-dev/internal/sandbox"
 	"ally-dev/internal/tools/service"
 	toolshared "ally-dev/internal/tools/shared"
 )
@@ -96,9 +95,6 @@ type managedService struct {
 	// its last successful restart. Protected by mu; it prevents a second
 	// concurrent restart using a stale ID from launching a duplicate process.
 	restartedAs string
-	// writeRoots 是该服务的可写根（启动时算出的工作区 + 附加工作区），只在拒写
-	// 提示里报给模型：命令卡与服务卡说的是同一句「可写范围是哪些」。
-	writeRoots []string
 }
 
 func (a *App) StopService(req StopServiceRequest) (ServiceInfo, error) {
@@ -223,10 +219,7 @@ func (a *App) startServiceWithConfigLocked(parent context.Context, cfg ConfigSta
 	// 保留上下文中的运行信息，取消只由 StopService / 应用退出走 cancel。
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	shell := commandShell(req.Command, cfg.GitBashPath)
-	// service 与 command 走同一套沙箱策略：只接一条会让 dev server 成为绕开沙箱的
-	// 口子。
-	spec := sandboxSpec(roots)
-	argv := wrapSandboxedCommand(spec, append([]string{shell.path}, shell.args...))
+	argv := append([]string{shell.path}, shell.args...)
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = commandEnvironment(cfg)
@@ -276,14 +269,12 @@ func (a *App) startServiceWithConfigLocked(parent context.Context, cfg ConfigSta
 			PID:         cmd.Process.Pid,
 			Status:      "running",
 			StartedAt:   time.Now().Unix(),
-			Sandboxed:   spec.Enforce(),
 		},
-		cmd:        cmd,
-		stopTree:   stopTree,
-		output:     buf,
-		cancel:     cancel,
-		waitDone:   make(chan struct{}),
-		writeRoots: roots,
+		cmd:      cmd,
+		stopTree: stopTree,
+		output:   buf,
+		cancel:   cancel,
+		waitDone: make(chan struct{}),
 	}
 
 	a.servicesMu.Lock()
@@ -650,12 +641,6 @@ type ServiceReadResult struct {
 	Truncated     bool   `json:"truncated"`
 	Status        string `json:"status"`
 	FromByte      int    `json:"fromByte"`
-	// SandboxDenied / DeniedWriteHint 与服务记录上的同名标记同源（sticky）：服务
-	// 输出里的内核拒写不该只剩那句裸权限错误。模型侧读 DeniedWriteHint；SandboxDenied
-	// 只驱动卡片告警，而告警只在 start 卡上显示——读日志、停服务并不写盘，标记是
-	// 记录上的旧事，由前端按动作判定（frontend/src/utils/sandboxAlert.mjs）。
-	SandboxDenied   bool   `json:"sandboxDenied,omitempty"`
-	DeniedWriteHint string `json:"deniedWriteHint,omitempty"`
 }
 
 func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, error) {
@@ -706,27 +691,20 @@ func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, erro
 			returned = aligned
 		}
 	}
-	// 拒写标记与状态在同一次取：本次读到的这段本身可能才刚出现内核拒写（快照
-	// 与读取之间有一次竞态窗口），所以入参是 returned 而不是缓冲全量。
 	service.mu.Lock()
 	status := service.info.Status
 	name := service.info.Name
-	service.markSandboxDeniedLocked(returned)
-	denied := service.info.SandboxDenied
-	deniedHint := service.info.DeniedWriteHint
 	service.mu.Unlock()
 	return ServiceReadResult{
-		ID:              id,
-		Name:            name,
-		Output:          returned,
-		ReturnedBytes:   len(returned),
-		BufferBytes:     bufferBytes,
-		TotalBytes:      total,
-		Truncated:       truncated,
-		Status:          status,
-		FromByte:        fromByte,
-		SandboxDenied:   denied,
-		DeniedWriteHint: deniedHint,
+		ID:            id,
+		Name:          name,
+		Output:        returned,
+		ReturnedBytes: len(returned),
+		BufferBytes:   bufferBytes,
+		TotalBytes:    total,
+		Truncated:     truncated,
+		Status:        status,
+		FromByte:      fromByte,
 	}, nil
 }
 
@@ -794,27 +772,6 @@ func (s *managedService) updateOutputInfoLocked() {
 	s.info.OutputTail = output
 	s.info.OutputBytes = total
 	s.info.OutputTruncated = truncated
-	// Only sandbox diagnostics need the full retained output. Ordinary list
-	// snapshots copy the preview alone; an 8 KiB tail must not pin 128 KiB.
-	if s.info.Sandboxed && !s.info.SandboxDenied && sandbox.Available() {
-		s.markSandboxDeniedLocked(s.output.String())
-	}
-}
-
-// markSandboxDeniedLocked records a kernel write refusal the service's output
-// shows, and keeps it once seen: a dev server pushes the refusal out of the tail
-// within minutes, while the alert is about an event that already happened. The
-// predicate and the hint sentence are the command path's, so a service and a
-// command report one refused write the same way.
-func (s *managedService) markSandboxDeniedLocked(output string) {
-	if s.info.SandboxDenied || !sandboxRefusedWrite(s.info.Sandboxed, output) {
-		return
-	}
-	s.info.SandboxDenied = true
-	// 服务记录只留下可写根，没有留下那次运行的完整策略：用可写根重建一个，只用于
-	// 核验「这条路径真的不可写吗」。缺 KB 禁写根只会让我们少报一条路径，绝不会把
-	// 可写的位置说成被拒 —— 偏差只在保守方向。
-	s.info.DeniedWriteHint = sandbox.WriteDeniedHint(s.writeRoots, sandboxDeniedWriteTargets(sandboxSpec(s.writeRoots), output)...)
 }
 
 func (s *managedService) outputSnapshot() (string, int64, bool) {
@@ -884,10 +841,6 @@ type promoteCommandParams struct {
 	startedAt time.Time
 	tee       *teeWriter
 	timeout   int
-	// sandboxed 记录该命令是否跑在沙箱里，收编后随服务记录一起给模型看。
-	sandboxed bool
-	// writeRoots 同 start 路径：收编后拒写提示仍旧要说出可写范围。
-	writeRoots []string
 	// waitDone 是 command 路径已经启动的 cmd.Wait 结果信道；收编成功后其
 	// 所有权移交给本函数（由 watchPromotedCommandExit 消费）。
 	waitDone <-chan error
@@ -965,13 +918,11 @@ func (a *App) promoteTimedOutCommand(p promoteCommandParams) (ServiceInfo, error
 			Status:         "running",
 			StartedAt:      p.startedAt.Unix(),
 			Promoted:       true,
-			Sandboxed:      p.sandboxed,
 		},
-		cmd:        p.cmd,
-		stopTree:   stopTree,
-		output:     rolling,
-		waitDone:   make(chan struct{}),
-		writeRoots: p.writeRoots,
+		cmd:      p.cmd,
+		stopTree: stopTree,
+		output:   rolling,
+		waitDone: make(chan struct{}),
 	}
 
 	// 原子改道：把超时前已捕获的输出作为种子写进滚动缓冲，并切换写入目标
@@ -1029,22 +980,15 @@ func (a *App) watchPromotedCommandExit(svc *managedService, waitDone <-chan erro
 // so the model does not mistake the truncated buffer for the complete output.
 func (a *App) promotedCommandResult(req CommandRequest, shell shellInvocation, cwd string, buf *limitedBuffer, timeout int, info ServiceInfo, outputFilePath string, outputFileSize int64) CommandResult {
 	result := CommandResult{
-		Command:    req.Command,
-		Cwd:        filepath.ToSlash(cwd),
-		Shell:      shell.name,
-		ShellPath:  shell.path,
-		Output:     commandOutputPreview(buf, outputFilePath),
-		ExitCode:   -1,
-		TimedOut:   true,
-		DurationMS: int64(timeout) * 1000,
-		Truncated:  buf.truncated,
-		Sandboxed:  info.Sandboxed,
-		// 拒写标记与说明从刚取的快照带过来：收编是提前 return，走不到普通命令末尾的
-		// annotateSandboxDeniedWrite。超时前的输出已作为种子写进滚动缓冲并被扫过，
-		// 所以这条结果同样能说清「写没成」——否则模型只看到一句裸权限错误，正是它
-		// 最容易读成“自己命令写错了”的那种输出。
-		SandboxDenied:     info.SandboxDenied,
-		DeniedWriteHint:   info.DeniedWriteHint,
+		Command:           req.Command,
+		Cwd:               filepath.ToSlash(cwd),
+		Shell:             shell.name,
+		ShellPath:         shell.path,
+		Output:            commandOutputPreview(buf, outputFilePath),
+		ExitCode:          -1,
+		TimedOut:          true,
+		DurationMS:        int64(timeout) * 1000,
+		Truncated:         buf.truncated,
 		OutputFilePath:    outputFilePath,
 		OutputFileBytes:   outputFileSize,
 		PromotedToService: true,

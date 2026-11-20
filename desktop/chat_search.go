@@ -56,11 +56,10 @@ type chatSearch struct {
 	literalStarts    []int
 	literalQuery     string
 	literalMatchCase bool
-	// spanCache and codeCache memoise what a block of one message resolved to, and
-	// cacheQuery says which query they were filled for: a comparable key keeps the
+	// codeCache memoises what a code block of one message resolved to, and
+	// cacheQuery says which query it was filled for: a comparable key keeps the
 	// frame from formatting a string per block, and one generation field replaces
 	// the query inside it.
-	spanCache  map[chatSearchBlockKey][][2]int
 	codeCache  map[chatSearchCodeKey]chatSearchCode
 	cacheQuery string
 	queryKey   memoOf[chatSearchQueryOptions, string]
@@ -168,7 +167,7 @@ func (a *desktop) closeChatSearch(t *conversation) {
 	// Row handles stay for this page and are recycled as it changes; the engine
 	// keeps each registered binding until window close.
 	s.blockBound = false
-	s.spanCache, s.byMessage, s.cache, s.cacheKey = nil, nil, nil, ""
+	s.byMessage, s.cache, s.cacheKey = nil, nil, ""
 	s.codeCache = nil
 	s.markdownCache = nil
 	s.highlightSkipped = false
@@ -226,7 +225,7 @@ func (a *desktop) chatSearchMatches(t *conversation) []chatSearchMatch {
 	}
 	s.cache, s.scanTruncated = a.chatSearchScan(t, s)
 	s.cacheKey = key
-	s.byMessage, s.spanCache = nil, nil
+	s.byMessage = nil
 	s.byMessage = make(map[int]bool, len(s.cache))
 	for _, m := range s.cache {
 		s.byMessage[m.Message] = true
@@ -324,7 +323,6 @@ func invalidateChatSearch(t *conversation) {
 	s := &t.UI.Search
 	s.transcriptRevision++
 	s.frameKey = ""
-	s.spanCache = nil
 	s.codeCache = nil
 	s.markdownCache = nil
 	// The shape may have changed, so the next scan starts from the beginning.
@@ -342,7 +340,7 @@ func invalidateChatSearchAppend(t *conversation) {
 		return
 	}
 	s.transcriptRevision++
-	s.frameKey, s.spanCache, s.codeCache = "", nil, nil
+	s.frameKey, s.codeCache = "", nil
 	s.appendOnly = true
 }
 
@@ -356,7 +354,6 @@ func invalidateChatSearchTail(t *conversation) {
 	s := &t.UI.Search
 	s.transcriptRevision++
 	s.frameKey = ""
-	s.spanCache = nil
 	s.codeCache = nil
 	if s.markdownCache != nil && len(t.Messages) > 0 {
 		delete(s.markdownCache, len(t.Messages)-1)
@@ -948,43 +945,12 @@ type chatSearchCodeKey struct {
 	Lines int
 }
 
-func chatSearchBlockText(raw string, message, start, end int, s *chatSearch) (string, [][2]int, int, bool) {
-	// The same space the text drops must be the space the offset skips, or a block
-	// opening with a form feed points the current run at the wrong place.
-	lead := 0
-	for lead < len(raw) {
-		r, size := utf8.DecodeRuneInString(raw[lead:])
-		if !unicode.IsSpace(r) {
-			break
-		}
-		lead += size
-	}
-	text := strings.TrimRightFunc(raw[lead:], unicode.IsSpace)
-	if text == "" {
-		return "", nil, 0, false
-	}
-	s.syncCacheQuery()
-	key := chatSearchBlockKey{Message: message, Start: start, End: end}
-	if spans, ok := s.spanCache[key]; ok {
-		return text, spans, start + lead, len(spans) > 0
-	}
-	spans := chatSearchRangeSpans(s.cache, message, start+lead, start+lead+len(text))
-	if s.spanCache == nil {
-		s.spanCache = map[chatSearchBlockKey][][2]int{}
-	}
-	s.spanCache[key] = spans
-	if len(spans) == 0 {
-		return "", nil, 0, false
-	}
-	return text, spans, start + lead, true
-}
-
 // syncCacheQuery drops what the caches hold when the query changed: they are
 // keyed by block alone, so the query is a generation rather than part of a key.
 func (s *chatSearch) syncCacheQuery() {
 	if key := chatSearchQueryKey(s); s.cacheQuery != key {
 		s.cacheQuery = key
-		s.spanCache, s.codeCache = nil, nil
+		s.codeCache = nil
 	}
 }
 

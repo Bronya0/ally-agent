@@ -12,9 +12,8 @@ package app
 // here: the single command entrance (checkCommandSafetyAtCwd), the shared
 // location lists every destructive entrance consults (delete / search / command
 // target), the credential-store read guard, and the two-form path judgement all
-// of them build on. Pure command parsing lives in internal/tools/command, pure
-// path rules in internal/tools/pathutil, and the OS sandbox —— which owns its own
-// boundary while attached —— in orch_sandbox*.go.
+// of them build on. Pure command parsing lives in internal/tools/command and pure
+// path rules in internal/tools/pathutil.
 
 import (
 	"errors"
@@ -27,76 +26,26 @@ import (
 	"ally-dev/internal/tools/pathutil"
 )
 
-// firstWorkspaceRootDeleteTarget reports the first delete target that resolves
-// to a writable root itself. The kernel's write filter cannot answer this: the
-// roots are exactly what it permits writing to, so removing one is legal there,
-// while the delete tool refuses the same target outright (planDeletePath). It
-// is deliberately narrow — only a target that resolves to a root is named, so
-// `rm -rf build` inside the workspace stays allowed.
-func firstWorkspaceRootDeleteTarget(commandLine, workingDir string, roots []string) string {
-	for _, target := range command.DeletePathTargets(commandLine) {
-		path, ok := command.ResolveCommandLiteralPath(target, workingDir)
-		if !ok {
-			continue
-		}
-		for _, root := range roots {
-			// 两侧都按真实路径比：macOS 上 $TMPDIR 是 /private/var 的链接，只解
-			// 一侧会把同一个目录判成两个。字面形态再比一次做兜底。
-			if samePath(path, root) || samePath(evalExistingPrefixOrSelf(path), evalExistingPrefixOrSelf(root)) {
-				return filepath.ToSlash(path)
-			}
-		}
-	}
-	return ""
-}
-
-// evalExistingPrefixOrSelf resolves symlinks in the existing prefix of p and
-// falls back to p itself when that cannot be done, so a comparison never loses
-// a match just because one side could not be resolved.
-func evalExistingPrefixOrSelf(p string) string {
-	if resolved, err := evalExistingPrefix(p); err == nil {
-		return resolved
-	}
-	return p
-}
-
-// checkCommandSafetyAtCwd is THE command safety fence: every check the fence owns
-// runs from here, in one place, and exactly one part of it depends on who owns
-// the filesystem boundary — asked once, below, through the single judgement
-// (kernelOwnsBoundary).
+// checkCommandSafetyAtCwd is THE command safety fence: every command enters the
+// shell through here, and every check below is the fence's own.
 //
-// Two checks are kernel-blind and always on: high-risk command semantics
-// (curl|sh, privilege escalation) are not filesystem shapes any write filter can
-// see; and deleting a whole workspace is legal to a boundary whose writable surface
-// is exactly those roots.
-//
-// Two are lexical guesses about where a write lands, and only the fence owns them
-// while no kernel does: routing an explicit delete through the delete tool, and
-// refusing a literal target that already exists outside the workspace. A kernel
-// confines those by resolved path, and those guesses were the false-positive
-// machine the sandbox existed to retire — so they stand down while it is in
-// charge. Attaching or detaching the sandbox (internal/sandbox) moves nothing but
-// this judgement.
+// All of them are always on: routing an explicit delete through the delete tool,
+// refusing a literal target that already exists outside the workspace, keeping
+// credential stores out of a model-driven shell, and the high-risk command
+// semantics (curl|sh, privilege escalation) that no filesystem check can see.
 //
 // roots[0] 是主工作区（命令的默认 cwd），其余为会话级附加根目录。
 func checkCommandSafetyAtCwd(req CommandRequest, roots []string, workingDir string) error {
 	cmd := req.Command
-	kernelOwns := kernelOwnsBoundary()
-	if kernelOwns {
-		if root := firstWorkspaceRootDeleteTarget(cmd, workingDir, roots); root != "" {
-			return codedToolError("E_DELETE_BLOCKED", fmt.Errorf("安全围栏已拦截：不允许删除工作区根目录。\n原因：删掉工作区根等于删掉整个项目，而 delete 工具明确拒绝同一个目标，所以这一档必须由围栏自己说。\n检测到的目标：%s\n处理方式：要删工作区里的具体条目请用 delete 工具（它逐条检查目标与递归范围）；确实要清空整个工作区，请手动在终端执行。", root))
-		}
-	} else if command.ContainsExplicitDeleteCommand(cmd) && !command.IsAllowedDeleteContext(cmd) {
+	if command.ContainsExplicitDeleteCommand(cmd) && !command.IsAllowedDeleteContext(cmd) {
 		return codedToolError("E_COMMAND_BLOCKED", errors.New("安全围栏已拦截：command 不允许直接执行文件删除命令。\n原因：shell 删除命令可能绕过工作区边界、系统目录保护。\n处理方式：请改用 delete 工具，由专用工具检查目标路径和递归范围。"))
 	}
-	// 密钥/凭据位置一律禁读：这一道不分边界归属，围栏自己管还是内核管都要拦。
+	// 密钥/凭据位置一律禁读：读出来等于把私钥或令牌交进模型上下文。
 	if path, reason := firstSensitiveReadTarget(cmd, workingDir); path != "" {
 		return codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：命令要读的是密钥/凭据位置。\n原因：%s 属于凭据存储，读出来等于把私钥或令牌交进模型上下文（被注入的指令可以把它带走）。\n检测到的目标：%s\n处理方式：确需这些凭据请你自己手动执行；让 Ally 干活时用专门的工具（例如 ssh_cluster），不要读密钥文件。", reason, path))
 	}
-	if !kernelOwns {
-		if risk := firstExistingOutsideMutationTarget(cmd, roots, workingDir); risk != nil {
-			return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径（仍须满足其他围栏规则；工作区内符号链接逃逸不在此例外内）。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录；临时目录没有覆盖豁免。\n处理方式：使用工作区内的 .tmp/ 输出路径（先创建父目录），或换用尚不存在的唯一临时路径；不要通过变量或符号链接绕过本次拒绝。\n执行状态：本次命令尚未执行。\n可写范围：\n%s", risk.Reason, risk.Path, formatAllowedRoots(roots)))
-		}
+	if risk := firstExistingOutsideMutationTarget(cmd, roots, workingDir); risk != nil {
+		return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径（仍须满足其他围栏规则；工作区内符号链接逃逸不在此例外内）。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录；临时目录没有覆盖豁免。\n处理方式：使用工作区内的 .tmp/ 输出路径（先创建父目录），或换用尚不存在的唯一临时路径；不要通过变量或符号链接绕过本次拒绝。\n执行状态：本次命令尚未执行。\n可写范围：\n%s", risk.Reason, risk.Path, formatAllowedRoots(roots)))
 	}
 	if risk := command.MatchRiskPattern(cmd); risk != nil {
 		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。", risk.Reason))

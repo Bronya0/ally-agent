@@ -1139,31 +1139,6 @@ type ServiceInfo struct {
 	// 任务中心据此显示“超时转后台”徽标。
 	Promoted       bool `json:"promoted,omitempty"`
 	TimeoutSeconds int  `json:"timeoutSeconds,omitempty"`
-	// Sandboxed 标记该服务的进程跑在操作系统级沙箱里（同 CommandResult）。
-	Sandboxed bool `json:"sandboxed,omitempty"`
-	// SandboxDenied 标记该服务的输出里出现过内核拒写（同 CommandResult）：
-	// 事件一旦出现就留住——拒绝那几行很快会被日志刷出尾部，而卡片那行说的
-	// 是「这次写没成」这件已经发生的事。
-	SandboxDenied bool `json:"sandboxDenied,omitempty"`
-	// DeniedWriteHint 与 CommandResult 的同名字段同源（同一句文案）：解释与
-	// 下一步给模型，不进 Output，模型侧由 renderService*ResultForModel 追加。
-	DeniedWriteHint string `json:"deniedWriteHint,omitempty"`
-}
-
-// SandboxStatus 是设置页要如实展示的沙箱环境状态：这台机器上会不会真的包住命令、
-// 是强制开启还是本平台不用、后端是否真的可用。沙箱已不再是用户配置，所以这里没有
-// “用户选的档位”，也没有不可关闭的禁读清单。
-type SandboxStatus struct {
-	// Effective 是这台机器上实际生效的档位：强制平台（macOS）且后端可用时是
-	// "enforce"，其余一律是 ""（不启用）。
-	Effective string `json:"effective"`
-	// Forced 表示本平台强制开启沙箱：没有开关可关。
-	Forced bool `json:"forced"`
-	// Available 表示本机后端真的能应用沙箱。
-	Available bool `json:"available"`
-	// Warning 是给用户看的整句话（无事可说时为空）：强制平台后端不可用时说清
-	// 现在是安全围栏在守。
-	Warning string `json:"warning,omitempty"`
 }
 
 type ServiceListResult struct {
@@ -1198,18 +1173,6 @@ type CommandResult struct {
 	Cancelled       bool  `json:"cancelled"`
 	DurationMS      int64 `json:"durationMs"`
 	Truncated       bool  `json:"truncated"`
-	// Sandboxed 标记本次命令被操作系统级沙箱包裹执行。开启沙箱而包不上时命令
-	// 会被拒绝执行（失败即拒绝），不会出现“标记为 false 但开关是开着的”结果。
-	Sandboxed bool `json:"sandboxed,omitempty"`
-	// SandboxDenied 标记这次命令的写入被内核拦下。命令本身仍是“执行成功”的工具
-	// 结果（内核拒绝按约定是命令结果、不是工具错误），所以前端要显眼报错就需要
-	// 这个结构化字段——去嗅探输出文本会随文案与命令输出漂移。
-	SandboxDenied bool `json:"sandboxDenied,omitempty"`
-	// DeniedWriteHint 是写入被内核拦下时给模型的解释与下一步（原因 / 可写根 /
-	// 处理方式）。它刻意不进 Output：命令卡正体只预览尾部若干行，提示埋在正文里
-	// 既挤掉真正的报错，又和卡片顶部那行固定报错重复；模型侧由
-	// renderCommandResultForModel 追加在输出之后。
-	DeniedWriteHint string `json:"deniedWriteHint,omitempty"`
 	// PromotedToService 标记命令超时后已收编为后台服务：进程未死、端口未
 	// 释放，模型应改用 service 工具交互而不是重跑命令。
 	PromotedToService bool `json:"promotedToService,omitempty"`
@@ -1784,19 +1747,10 @@ func (a *App) startChatWithConfig(req ChatRequest, cfg ConfigState) (string, err
 	// concurrent request cannot overwrite the active run's frozen context.
 	modelChanged := false
 	if req.SessionID != "" {
-		if a.sessionWorkspaces == nil {
-			a.sessionWorkspaces = map[string]string{}
-		}
-		if a.sessionModelConfigs == nil {
-			a.sessionModelConfigs = map[string]sessionModelConfig{}
-		}
 		prev, hasPrev := a.sessionModelConfigs[req.SessionID]
 		modelChanged = hasPrev && isCrossModelSwitch(prev, cfg)
 		a.sessionWorkspaces[req.SessionID] = strings.TrimSpace(cfg.Workspace)
 		a.sessionModelConfigs[req.SessionID] = sessionModelConfigFrom(cfg)
-	}
-	if a.sessionRunOutcomes == nil {
-		a.sessionRunOutcomes = map[string]sessionRunOutcome{}
 	}
 	a.sessionRunOutcomes[req.SessionID] = sessionRunOutcome{RunID: runID, Status: "running"}
 	a.runs[runID] = cancel
@@ -1919,9 +1873,6 @@ func (a *App) syncRunSessionIndex(sessionID string, needed bool) {
 // recordRunOutcome keeps the result that /result and status queries read.
 func (a *App) recordRunOutcome(runID, sessionID string, outcome runOutcome) {
 	a.mu.Lock()
-	if a.sessionRunOutcomes == nil {
-		a.sessionRunOutcomes = map[string]sessionRunOutcome{}
-	}
 	a.sessionRunOutcomes[sessionID] = sessionRunOutcome{
 		RunID: runID, Status: outcome.kind, Error: outcome.message, UpdatedAt: time.Now().UnixMilli(),
 	}

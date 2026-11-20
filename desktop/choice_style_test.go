@@ -23,7 +23,7 @@ func TestChoiceGroupsWrap(t *testing.T) {
 				c.SetTheme(a.theme())
 				c.DisableAnimations()
 				ui.Column(c).Fill().Padding(16).Gap(12).Background(c.Theme().Background).Children(func() {
-					uikit.Segmented(c.Key("appearance"), &a.settings.AppearanceMode, "深色", "浅色")
+					uikit.SegmentedInk(c.Key("appearance"), &a.settings.AppearanceMode, nil, "深色", "浅色")
 					uikit.OptionGroup(c.Key("palettes")).Children(func() {
 						for i, label := range []string{"琥珀", "海洋", "森林", "紫罗兰"} {
 							choiceSwatch(c, fmt.Sprint(i), label, i == 1, palettes[i+2].accent)

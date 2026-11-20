@@ -19,19 +19,11 @@ import (
 
 // ---- Text ----------------------------------------------------------------
 
-func label(c *ui.Context, s string) ui.Element {
-	return uikit.Label(c, s)
-}
-
 func muted(c *ui.Context, s string, size float32, ink ...ui.Color) ui.Element {
 	return uikit.Muted(c, s, size, ink...)
 }
 
 var monoFamily = nativeFontFamily()
-
-func mono(c *ui.Context, s string, size float32) ui.Element {
-	return ui.Text(c, s).Font(monoFamily).FontSize(size).Selectable()
-}
 
 // ---- Identities ----------------------------------------------------------
 
@@ -143,14 +135,6 @@ func disclosureOn(c *ui.Context, b ui.Element, label string, kind disclosureKind
 		b, _ = uikit.ButtonOn(c, b, label, uikit.ButtonSecondary, false, nil, uikit.ActionOptions{})
 	}
 	return b.Children(func() { iconGlyph(c, icon, fsSmall).Shrink(0) })
-}
-
-func flatKey(c *ui.Context, key any, s string) ui.Element {
-	return button(c, key, s, btnSecondary, false, "")
-}
-
-func ghost(c *ui.Context, s string) ui.Element {
-	return button(c, nil, s, btnGhost, false, "")
 }
 
 func primary(c *ui.Context, s string) ui.Element {
@@ -291,19 +275,10 @@ func rowCard(c *ui.Context, key any, build func()) ui.Element {
 	return uikit.RowCard(c, key, padRow, radiusCard, build)
 }
 
-// selectableRow is a single-line row with hover and selected states.
-func selectableRow(c *ui.Context, key any, selected bool, height float32, build func()) ui.Element {
-	return uikit.SelectableRow(c, key, selected, height, padRow, radiusSmall, build)
-}
-
 func divider(c *ui.Context) { uikit.Divider(c) }
 
 func pageHeader(c *ui.Context, title, subtitle string, actions func()) {
 	uikit.PageHeader(c, title, subtitle, actions)
-}
-
-func sectionHeader(c *ui.Context, title string, actions func()) {
-	uikit.SectionHeader(c, title, actions)
 }
 
 func emptyState(c *ui.Context, title, detail string, ink ...ui.Color) {
@@ -379,51 +354,8 @@ func textField(c *ui.Context, id, placeholder, name string, value *string) ui.El
 	return uikit.TextField(c.Key(id), value, placeholder).Label(name)
 }
 
-func numberField(c *ui.Context, id, name string, value *float64, lo, hi, step float64) ui.Element {
-	return uikit.NumberInput(c, id, name, value, lo, hi, step).Width(200)
-}
-
-func switchRow(c *ui.Context, id, name, note string, value *bool) ui.Element {
-	var sw ui.Element
-	ui.Column(c.Key("switch-" + id)).Shrink(0).Gap(gapInline).Children(func() {
-		ui.Row(c).Gap(gapSection).AlignItems(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).Gap(2).Children(func() {
-				label(c, name)
-				fieldNote(c, note)
-			})
-			sw = uikit.Switch(c, value, name)
-		})
-	})
-	return sw
-}
-
-func checkRow(c *ui.Context, id, name, note string, value *bool) {
-	ui.Column(c.Key("check-" + id)).Gap(2).Children(func() {
-		uikit.Checkbox(c, value, name)
-		fieldNote(c, note)
-	})
-}
-
-func selectField(c *ui.Context, id, name string, value *string, options []string, width float32) ui.Element {
-	e := localizedSelect(c.Key(id), value, options).Label(name)
-	if width > 0 {
-		e.Width(width)
-	}
-	return e
-}
-
 func textArea(c *ui.Context, id, name, placeholder string, value *string, height float32) ui.Element {
 	return uikit.TextArea(c.Key(id), value, placeholder, height).Label(name)
-}
-
-// tabsBar wraps the native tab widget with the page-level sizing convention.
-func tabsBar(c *ui.Context, selected *int, labels ...string) ui.Element {
-	return uikit.Tabs(c.Key("tabs-"+strings.Join(labels, "|")), selected, labels...).Label(labels[0]).Cursor(ui.CursorPointer)
-}
-
-// tabsBarInk is tabsBar with the palette's secondary-text tone.
-func tabsBarInk(c *ui.Context, ink ui.Color, selected *int, labels ...string) ui.Element {
-	return uikit.TabsSecondary(c.Key("tabs-"+strings.Join(labels, "|")), ink, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle}, labels...).Label(labels[0]).Cursor(ui.CursorPointer)
 }
 
 // tabStrip is one scrollable strip of tabs: where it shows them, and the
@@ -544,14 +476,6 @@ func (a *desktop) scrollSubTabs(c *ui.Context, id string, selected *int, labels 
 	return a.scrollTabsStyle(c, id, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle, Secondary: true}, labels...)
 }
 
-func (a *desktop) scrollTabsInk(c *ui.Context, id string, ink ui.Color, selected *int, labels ...string) bool {
-	return a.scrollTabsStyleInk(c, id, ink, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle}, labels...)
-}
-
-func (a *desktop) scrollSubTabsInk(c *ui.Context, id string, ink ui.Color, selected *int, labels ...string) bool {
-	return a.scrollTabsStyleInk(c, id, ink, selected, uikit.TabOptions{Style: uikit.DefaultTabStyle, Secondary: true}, labels...)
-}
-
 func (a *desktop) scrollTabsStyle(c *ui.Context, id string, selected *int, o uikit.TabOptions, labels ...string) bool {
 	s, before, changed := a.tabStripOf(id), *selected, false
 	o.Gesture = &s.gesture
@@ -561,21 +485,6 @@ func (a *desktop) scrollTabsStyle(c *ui.Context, id string, selected *int, o uik
 		})
 	})
 	return s.afterTabs(selected, before, changed)
-}
-
-func (a *desktop) scrollTabsStyleInk(c *ui.Context, id string, ink ui.Color, selected *int, o uikit.TabOptions, labels ...string) bool {
-	s, before, changed := a.tabStripOf(id), *selected, false
-	o.Gesture = &s.gesture
-	ui.Box(c).FillWidth().Clip().Children(func() {
-		tabScroller(c, s).FillWidth().Children(func() {
-			changed = uikit.TabsSecondary(c.Key("tabs"), ink, selected, o, labels...).Changed()
-		})
-	})
-	return s.afterTabs(selected, before, changed)
-}
-
-func segmented(c *ui.Context, id string, selected *int, labels ...string) ui.Element {
-	return uikit.Segmented(c.Key(id), selected, labels...).Label(labels[0]).Cursor(ui.CursorPointer)
 }
 
 // segmentedInk is segmented with the palette's secondary-text tone.
@@ -721,39 +630,10 @@ func modalActions(c *ui.Context, build func()) {
 
 // ---- Composite layout helpers -------------------------------------------
 
-// twoColumn lays out label/control pairs in two even columns, the shape most
-// settings and editor dialogs use.
-func twoColumn(c *ui.Context, left, right func()) {
-	ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
-		ui.Column(c).Grow(1).Basis(0).Gap(gapField).Children(left)
-		ui.Column(c).Grow(1).Basis(0).Gap(gapField).Children(right)
-	})
-}
-
 func kv(c *ui.Context, key, value string, ink ...ui.Color) {
 	ui.Row(c).Gap(gapField).Children(func() {
 		ui.Box(c).Width(96).Children(func() { ui.Text(c, key).FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink)) })
 		ui.Text(c, value).FontSize(fsSmall).Selectable()
-	})
-}
-
-func helpText(c *ui.Context, s string) { fieldNote(c, s) }
-
-func progressBar(c *ui.Context, id, name string, value float64) {
-	v := value
-	if v < 0 || v > 1 {
-		v = -1
-	}
-	uikit.Progress(c.Key(id), v).Label(name)
-}
-
-func statCard(c *ui.Context, id, title, big, detail string, ink ...ui.Color) {
-	card(c, "stat-"+id, func() {
-		ui.Text(c, title).FontSize(fsSmall).TextColor(uikit.SecondaryInk(c, ink))
-		ui.Text(c, big).FontSize(fsStat).Bold()
-		if detail != "" {
-			ui.Text(c, detail).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink))
-		}
 	})
 }
 
@@ -774,19 +654,6 @@ func inlineError(c *ui.Context, id, message string) {
 	}
 	uikit.ErrorText(c.Key(id), message).FontSize(fsTiny)
 }
-
-func spacerRow(c *ui.Context, build func()) {
-	ui.Row(c).AlignItems(ui.Center).Children(func() {
-		build()
-		ui.Spacer(c)
-	})
-}
-
-func badgeText(c *ui.Context, s string) ui.Element {
-	return ui.Text(c, s).FontSize(fsTiny).TextColor(c.Theme().Accent)
-}
-
-func fmtCountLabel(n int, unit string) string { return fmt.Sprintf("%d %s", n, unit) }
 
 // ---- Shared derivations --------------------------------------------------
 
@@ -820,8 +687,6 @@ func enabledToolCount(tools []backend.ToolDefinitionSummary) int {
 	}
 	return n
 }
-
-func tokenCount(n int) string { return fmtK(n) }
 
 // popoverPanel and popoverItem keep application menus consistent with the
 // selected palette instead of relying on the operating system's menu theme.
@@ -930,10 +795,6 @@ func cardFlat(c *ui.Context, s string) ui.Element {
 }
 func cardFlatBusy(c *ui.Context, s string, loading bool) ui.Element {
 	return uikit.Action(c.Key("card-action-"+s), s, uikit.ActionOptions{Style: uikit.Quaternary, Small: true, Loading: loading, LoadingOverlay: true})
-}
-func cardFlatKey(c *ui.Context, key any, s string) ui.Element { return cardFlat(c.Key(key), s) }
-func cardPrimary(c *ui.Context, s string) ui.Element {
-	return uikit.Action(c.Key("card-action-"+s), s, uikit.ActionOptions{Style: uikit.Quaternary, Tone: uikit.Primary, Small: true})
 }
 func cardDanger(c *ui.Context, s string) ui.Element {
 	return uikit.Action(c.Key("card-action-"+s), s, uikit.ActionOptions{Style: uikit.Quaternary, Tone: uikit.Error, Small: true})

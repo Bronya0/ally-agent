@@ -591,7 +591,7 @@ func TestCloseChatSearchReleasesItsCaches(t *testing.T) {
 	}
 	a.closeChatSearch(conv)
 	st := &conv.uiState().Search
-	if st.cache != nil || st.byMessage != nil || st.spanCache != nil || st.codeCache != nil || st.pattern != nil || st.literal != nil || st.literalPrefix != nil || st.literalStarts != nil {
+	if st.cache != nil || st.byMessage != nil || st.codeCache != nil || st.pattern != nil || st.literal != nil || st.literalPrefix != nil || st.literalStarts != nil {
 		t.Fatalf("closing kept caches: %+v", st)
 	}
 	st.Open = true

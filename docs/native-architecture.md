@@ -5,11 +5,11 @@
 依赖方向：
 
 ```text
-main → desktop → internal/app → internal/tools、internal/sandbox
+main → desktop → internal/app → internal/tools
        desktop → resources
 ```
 
-`desktop/` 是上层桌面宿主，可以依赖 `internal/app`；工具、沙箱和其他纯逻辑包不能反向依赖 `internal/app` 或桌面页面。`internal/app` 内原生窗口、对话框和宿主生命周期适配只放在 `host_*.go`。
+`desktop/` 是上层桌面宿主，可以依赖 `internal/app`；工具和其他纯逻辑包不能反向依赖 `internal/app` 或桌面页面。`internal/app` 内原生窗口、对话框和宿主生命周期适配只放在 `host_*.go`。
 
 UI 状态仅在主线程修改。后台工作通过 `Window.Update` 发布结果；不保存 `ui.Element`，不向后台传递 `ui.Context`。动态控件在构造前调用 `c.Key`。渲染期间不进行文件和网络 I/O，不启动无条件后台任务。
 

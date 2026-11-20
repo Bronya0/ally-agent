@@ -14,8 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"ally-dev/internal/sandbox"
-
 	"golang.org/x/sys/windows"
 )
 
@@ -314,51 +312,5 @@ func TestRuntimeStopsServicesEvenWhenCheckpointTimesOut(t *testing.T) {
 	a.mu.Unlock()
 	if err := a.stopRuntime(time.Second); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestFileMutationCancellationStopsOwnedTree(t *testing.T) {
-	root := validationSandbox(t)
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("ALLY_PROCESS_TEST_STAGE", "root")
-	t.Setenv("ALLY_PROCESS_TEST_DIR", root)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		done <- runFileMutationWithContext(ctx, sandbox.Spec{}, []string{root}, []string{exe, "-test.run=^TestOwnedProcessHelper$"})
-	}()
-	deadline := time.Now().Add(5 * time.Second)
-	childPID := 0
-	for time.Now().Before(deadline) {
-		if b, err := os.ReadFile(filepath.Join(root, "child.pid")); err == nil {
-			childPID, _ = strconv.Atoi(string(b))
-			if childPID > 0 {
-				break
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if childPID == 0 {
-		t.Fatal("mutation child never started")
-	}
-	cancel()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("cancelled mutation reported success")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("cancelled mutation failed to stop")
-	}
-	// TerminateProcess is asynchronous on Windows: poll until the child is gone.
-	for deadline := time.Now().Add(5 * time.Second); isProcessAlive(childPID) && time.Now().Before(deadline); {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if isProcessAlive(childPID) {
-		t.Fatal("mutation child survived cancellation")
 	}
 }

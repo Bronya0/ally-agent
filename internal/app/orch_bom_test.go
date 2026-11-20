@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ally-dev/internal/tools/read"
 )
 
 // TestBOMEndToEndReadEditPreservesBOM verifies the full user-visible path:
@@ -99,7 +101,7 @@ func TestBOMEndToEndEditFailsWithStaleVersion(t *testing.T) {
 
 	// Version computed from BOM-less text differs from the on-disk version
 	// (which includes the BOM), so the edit must be rejected.
-	staleVersion := hashVersion([]byte("alpha\nbeta\n"))
+	staleVersion := read.HashVersion([]byte("alpha\nbeta\n"))
 	editArgs := []byte(`{"path":"sample.txt","version":"` + staleVersion + `","changes":[{"oldText":"alpha","newText":"ALPHA"}]}`)
 	editRes := app.executeTool(context.Background(), cfg, "s-1", "edit", editArgs)
 	if editRes.OK {

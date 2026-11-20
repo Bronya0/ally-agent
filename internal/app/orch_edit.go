@@ -128,11 +128,9 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 	if err != nil {
 		return MultiEditResult{}, err
 	}
-	roots, err := workspaceRoots(cfg)
-	if err != nil {
+	if _, err := workspaceRoots(cfg); err != nil {
 		return MultiEditResult{}, err
 	}
-	spec := fileMutationSpec(roots)
 	prepared := make([]preparedFileEdit, 0, len(plan.Files))
 	for i, filePlan := range plan.Files {
 		file := filePlan.Edit
@@ -215,7 +213,7 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 				rollbackErrors = append(rollbackErrors, item.display+": changed again; rollback skipped to preserve concurrent edits")
 				continue
 			}
-			if err := sandboxedWriteFile(spec, roots, item.path, item.before, item.perm); err != nil {
+			if err := safeWriteFile(item.path, item.before, item.perm); err != nil {
 				rollbackErrors = append(rollbackErrors, item.display+": "+err.Error())
 			}
 		}
@@ -243,7 +241,7 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 			}
 			return MultiEditResult{}, withEditFileError(item.path, commitErr)
 		}
-		if err := sandboxedWriteFile(spec, roots, item.path, item.after, item.perm); err != nil {
+		if err := safeWriteFile(item.path, item.after, item.perm); err != nil {
 			rollbackErr := rollback()
 			msg := fmt.Sprintf("failed to commit %s: %v", item.display, err)
 			if rollbackErr != nil {

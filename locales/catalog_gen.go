@@ -576,16 +576,6 @@ func (msgs Messages) UiC943aa6faa9c() string {
 	return Catalog.Format(msgs.locale, "ui_c943aa6faa9c", nil)
 }
 
-// UiEdfd2bd8af26 says "%[1]d Player game · You take the initiative, and the remaining seats are taken over by the model."
-// in the language the app shows.
-func UiEdfd2bd8af26() string { return In(i18n.Locale()).UiEdfd2bd8af26() }
-
-// UiEdfd2bd8af26 says "%[1]d Player game · You take the initiative, and the remaining seats are taken over by the model."
-// in the language of msgs.
-func (msgs Messages) UiEdfd2bd8af26() string {
-	return Catalog.Format(msgs.locale, "ui_edfd2bd8af26", nil)
-}
-
 // UiE7b075bf273e says "%[1]d steps"
 // in the language the app shows.
 func UiE7b075bf273e() string { return In(i18n.Locale()).UiE7b075bf273e() }
@@ -644,16 +634,6 @@ func Ui18e91744dee8() string { return In(i18n.Locale()).Ui18e91744dee8() }
 // in the language of msgs.
 func (msgs Messages) Ui18e91744dee8() string {
 	return Catalog.Format(msgs.locale, "ui_18e91744dee8", nil)
-}
-
-// UiEe88319551c4 says "%[1]s · %[2]d images"
-// in the language the app shows.
-func UiEe88319551c4() string { return In(i18n.Locale()).UiEe88319551c4() }
-
-// UiEe88319551c4 says "%[1]s · %[2]d images"
-// in the language of msgs.
-func (msgs Messages) UiEe88319551c4() string {
-	return Catalog.Format(msgs.locale, "ui_ee88319551c4", nil)
 }
 
 // Ui5e10c036f6dc says "%[1]s · %[2]s · %[3]d tools"
@@ -1196,16 +1176,6 @@ func (msgs Messages) Ui053206f0809c() string {
 	return Catalog.Format(msgs.locale, "ui_053206f0809c", nil)
 }
 
-// UiCcecaa77c8b3 says "JSON not closed"
-// in the language the app shows.
-func UiCcecaa77c8b3() string { return In(i18n.Locale()).UiCcecaa77c8b3() }
-
-// UiCcecaa77c8b3 says "JSON not closed"
-// in the language of msgs.
-func (msgs Messages) UiCcecaa77c8b3() string {
-	return Catalog.Format(msgs.locale, "ui_ccecaa77c8b3", nil)
-}
-
 // Ui1d00d2c68c0c says "Java Syntax"
 // in the language the app shows.
 func Ui1d00d2c68c0c() string { return In(i18n.Locale()).Ui1d00d2c68c0c() }
@@ -1676,16 +1646,6 @@ func (msgs Messages) Ui545519340583() string {
 	return Catalog.Format(msgs.locale, "ui_545519340583", nil)
 }
 
-// Ui7d62200cb423 says ". Please give the legal move again and only output a JSON object."
-// in the language the app shows.
-func Ui7d62200cb423() string { return In(i18n.Locale()).Ui7d62200cb423() }
-
-// Ui7d62200cb423 says ". Please give the legal move again and only output a JSON object."
-// in the language of msgs.
-func (msgs Messages) Ui7d62200cb423() string {
-	return Catalog.Format(msgs.locale, "ui_7d62200cb423", nil)
-}
-
 // Ui2bbdfa4b1d57 says "\"? This operation is irreversible."
 // in the language the app shows.
 func Ui2bbdfa4b1d57() string { return In(i18n.Locale()).Ui2bbdfa4b1d57() }
@@ -1754,16 +1714,6 @@ func Ui64d57ad378df() string { return In(i18n.Locale()).Ui64d57ad378df() }
 // in the language of msgs.
 func (msgs Messages) Ui64d57ad378df() string {
 	return Catalog.Format(msgs.locale, "ui_64d57ad378df", nil)
-}
-
-// Ui93ec6eaced83 says "Previous hand (seat %[1]d): %[2]s"
-// in the language the app shows.
-func Ui93ec6eaced83() string { return In(i18n.Locale()).Ui93ec6eaced83() }
-
-// Ui93ec6eaced83 says "Previous hand (seat %[1]d): %[2]s"
-// in the language of msgs.
-func (msgs Messages) Ui93ec6eaced83() string {
-	return Catalog.Format(msgs.locale, "ui_93ec6eaced83", nil)
 }
 
 // Ui39b1c2253dc3 says "Previous question"
@@ -2016,16 +1966,6 @@ func (msgs Messages) Ui34da3e719fde() string {
 	return Catalog.Format(msgs.locale, "ui_34da3e719fde", nil)
 }
 
-// UiBab88d3c9cd8 says "No barking"
-// in the language the app shows.
-func UiBab88d3c9cd8() string { return In(i18n.Locale()).UiBab88d3c9cd8() }
-
-// UiBab88d3c9cd8 says "No barking"
-// in the language of msgs.
-func (msgs Messages) UiBab88d3c9cd8() string {
-	return Catalog.Format(msgs.locale, "ui_bab88d3c9cd8", nil)
-}
-
 // Ui460b3574e4bd says "Not available"
 // in the language the app shows.
 func Ui460b3574e4bd() string { return In(i18n.Locale()).Ui460b3574e4bd() }
@@ -2056,26 +1996,6 @@ func (msgs Messages) Ui7abccd7661aa() string {
 	return Catalog.Format(msgs.locale, "ui_7abccd7661aa", nil)
 }
 
-// Ui9a2b6ac7f362 says "Can’t commit suicide"
-// in the language the app shows.
-func Ui9a2b6ac7f362() string { return In(i18n.Locale()).Ui9a2b6ac7f362() }
-
-// Ui9a2b6ac7f362 says "Can’t commit suicide"
-// in the language of msgs.
-func (msgs Messages) Ui9a2b6ac7f362() string {
-	return Catalog.Format(msgs.locale, "ui_9a2b6ac7f362", nil)
-}
-
-// Ui9cbc5ac2c48a says "Cannot send the general or the general to see him"
-// in the language the app shows.
-func Ui9cbc5ac2c48a() string { return In(i18n.Locale()).Ui9cbc5ac2c48a() }
-
-// Ui9cbc5ac2c48a says "Cannot send the general or the general to see him"
-// in the language of msgs.
-func (msgs Messages) Ui9cbc5ac2c48a() string {
-	return Catalog.Format(msgs.locale, "ui_9cbc5ac2c48a", nil)
-}
-
 // Ui77af2f337c1d says "No"
 // in the language the app shows.
 func Ui77af2f337c1d() string { return In(i18n.Locale()).Ui77af2f337c1d() }
@@ -2094,16 +2014,6 @@ func Ui7620cfae86a6() string { return In(i18n.Locale()).Ui7620cfae86a6() }
 // in the language of msgs.
 func (msgs Messages) Ui7620cfae86a6() string {
 	return Catalog.Format(msgs.locale, "ui_7620cfae86a6", nil)
-}
-
-// Ui15d7cf1811ed says "Two models take turns playing chess, and you watch the game (%[1]d human game)."
-// in the language the app shows.
-func Ui15d7cf1811ed() string { return In(i18n.Locale()).Ui15d7cf1811ed() }
-
-// Ui15d7cf1811ed says "Two models take turns playing chess, and you watch the game (%[1]d human game)."
-// in the language of msgs.
-func (msgs Messages) Ui15d7cf1811ed() string {
-	return Catalog.Format(msgs.locale, "ui_15d7cf1811ed", nil)
 }
 
 // UiA567bdaa1136 says "Medium"
@@ -2204,16 +2114,6 @@ func UiC9b87f516a38() string { return In(i18n.Locale()).UiC9b87f516a38() }
 // in the language of msgs.
 func (msgs Messages) UiC9b87f516a38() string {
 	return Catalog.Format(msgs.locale, "ui_c9b87f516a38", nil)
-}
-
-// Ui9502524e2825 says "Gomoku"
-// in the language the app shows.
-func Ui9502524e2825() string { return In(i18n.Locale()).Ui9502524e2825() }
-
-// Ui9502524e2825 says "Gomoku"
-// in the language of msgs.
-func (msgs Messages) Ui9502524e2825() string {
-	return Catalog.Format(msgs.locale, "ui_9502524e2825", nil)
 }
 
 // Ui026b44d85ab8 says "Handover"
@@ -2326,16 +2226,6 @@ func (msgs Messages) Ui9cac78290c7c() string {
 	return Catalog.Format(msgs.locale, "ui_9cac78290c7c", nil)
 }
 
-// Ui777ef1041658 says "Reload from backend"
-// in the language the app shows.
-func Ui777ef1041658() string { return In(i18n.Locale()).Ui777ef1041658() }
-
-// Ui777ef1041658 says "Reload from backend"
-// in the language of msgs.
-func (msgs Messages) Ui777ef1041658() string {
-	return Catalog.Format(msgs.locale, "ui_777ef1041658", nil)
-}
-
 // Ui19a8a28fc696 says "Install from the plug-in source code directory anywhere on the machine"
 // in the language the app shows.
 func Ui19a8a28fc696() string { return In(i18n.Locale()).Ui19a8a28fc696() }
@@ -2354,16 +2244,6 @@ func Ui73686cb94d4d() string { return In(i18n.Locale()).Ui73686cb94d4d() }
 // in the language of msgs.
 func (msgs Messages) Ui73686cb94d4d() string {
 	return Catalog.Format(msgs.locale, "ui_73686cb94d4d", nil)
-}
-
-// Ui739b2e660758 says "Shi"
-// in the language the app shows.
-func Ui739b2e660758() string { return In(i18n.Locale()).Ui739b2e660758() }
-
-// Ui739b2e660758 says "Shi"
-// in the language of msgs.
-func (msgs Messages) Ui739b2e660758() string {
-	return Catalog.Format(msgs.locale, "ui_739b2e660758", nil)
 }
 
 // UiB9af2de88d90 says "Proxy address"
@@ -2616,26 +2496,6 @@ func (msgs Messages) Ui73b7e45b9fae() string {
 	return Catalog.Format(msgs.locale, "ui_73b7e45b9fae", nil)
 }
 
-// Ui93641e052734 says "You go first (red)"
-// in the language the app shows.
-func Ui93641e052734() string { return In(i18n.Locale()).Ui93641e052734() }
-
-// Ui93641e052734 says "You go first (red)"
-// in the language of msgs.
-func (msgs Messages) Ui93641e052734() string {
-	return Catalog.Format(msgs.locale, "ui_93641e052734", nil)
-}
-
-// Ui8ca216d5eb7a says "You go first (black)"
-// in the language the app shows.
-func Ui8ca216d5eb7a() string { return In(i18n.Locale()).Ui8ca216d5eb7a() }
-
-// Ui8ca216d5eb7a says "You go first (black)"
-// in the language of msgs.
-func (msgs Messages) Ui8ca216d5eb7a() string {
-	return Catalog.Format(msgs.locale, "ui_8ca216d5eb7a", nil)
-}
-
 // UiE288d73c987b says "You are free to use, study, modify and distribute this software; derivative works must be open source under the same …"
 // in the language the app shows.
 func UiE288d73c987b() string { return In(i18n.Locale()).UiE288d73c987b() }
@@ -2694,16 +2554,6 @@ func Ui22bb0f0e355c() string { return In(i18n.Locale()).Ui22bb0f0e355c() }
 // in the language of msgs.
 func (msgs Messages) Ui22bb0f0e355c() string {
 	return Catalog.Format(msgs.locale, "ui_22bb0f0e355c", nil)
-}
-
-// UiA2747376a505 says "You win 🎉"
-// in the language the app shows.
-func UiA2747376a505() string { return In(i18n.Locale()).UiA2747376a505() }
-
-// UiA2747376a505 says "You win 🎉"
-// in the language of msgs.
-func (msgs Messages) UiA2747376a505() string {
-	return Catalog.Format(msgs.locale, "ui_a2747376a505", nil)
 }
 
 // Ui3c32e734bdf0 says "Use ChatGPT package and quota. After logging in, add models in model management."
@@ -2916,16 +2766,6 @@ func (msgs Messages) UiA3030bf8f16d() string {
 	return Catalog.Format(msgs.locale, "ui_a3030bf8f16d", nil)
 }
 
-// Ui44ecac11fa78 says "Save JSON"
-// in the language the app shows.
-func Ui44ecac11fa78() string { return In(i18n.Locale()).Ui44ecac11fa78() }
-
-// Ui44ecac11fa78 says "Save JSON"
-// in the language of msgs.
-func (msgs Messages) Ui44ecac11fa78() string {
-	return Catalog.Format(msgs.locale, "ui_44ecac11fa78", nil)
-}
-
 // Ui6ad720b1bc73 says "Save MCP configuration"
 // in the language the app shows.
 func Ui6ad720b1bc73() string { return In(i18n.Locale()).Ui6ad720b1bc73() }
@@ -3104,16 +2944,6 @@ func UiBa0e2ff8201b() string { return In(i18n.Locale()).UiBa0e2ff8201b() }
 // in the language of msgs.
 func (msgs Messages) UiBa0e2ff8201b() string {
 	return Catalog.Format(msgs.locale, "ui_ba0e2ff8201b", nil)
-}
-
-// Ui56af6f7d30c0 says "Stop one move"
-// in the language the app shows.
-func Ui56af6f7d30c0() string { return In(i18n.Locale()).Ui56af6f7d30c0() }
-
-// Ui56af6f7d30c0 says "Stop one move"
-// in the language of msgs.
-func (msgs Messages) Ui56af6f7d30c0() string {
-	return Catalog.Format(msgs.locale, "ui_56af6f7d30c0", nil)
 }
 
 // UiCa4d973c0b00 says "Stop"
@@ -3606,26 +3436,6 @@ func (msgs Messages) UiC9c6ad5968c4() string {
 	return Catalog.Format(msgs.locale, "ui_c9c6ad5968c4", nil)
 }
 
-// Ui908b87df97a2 says "Play cards"
-// in the language the app shows.
-func Ui908b87df97a2() string { return In(i18n.Locale()).Ui908b87df97a2() }
-
-// Ui908b87df97a2 says "Play cards"
-// in the language of msgs.
-func (msgs Messages) Ui908b87df97a2() string {
-	return Catalog.Format(msgs.locale, "ui_908b87df97a2", nil)
-}
-
-// UiAda1f5c0f924 says "Playing cards is illegal"
-// in the language the app shows.
-func UiAda1f5c0f924() string { return In(i18n.Locale()).UiAda1f5c0f924() }
-
-// UiAda1f5c0f924 says "Playing cards is illegal"
-// in the language of msgs.
-func (msgs Messages) UiAda1f5c0f924() string {
-	return Catalog.Format(msgs.locale, "ui_ada1f5c0f924", nil)
-}
-
 // Ui01ad2bc5d2bf says "Error"
 // in the language the app shows.
 func Ui01ad2bc5d2bf() string { return In(i18n.Locale()).Ui01ad2bc5d2bf() }
@@ -3654,16 +3464,6 @@ func Ui399ee6934772() string { return In(i18n.Locale()).Ui399ee6934772() }
 // in the language of msgs.
 func (msgs Messages) Ui399ee6934772() string {
 	return Catalog.Format(msgs.locale, "ui_399ee6934772", nil)
-}
-
-// Ui5f5a7e26cb71 says "Switch between dual models (AI vs AI)"
-// in the language the app shows.
-func Ui5f5a7e26cb71() string { return In(i18n.Locale()).Ui5f5a7e26cb71() }
-
-// Ui5f5a7e26cb71 says "Switch between dual models (AI vs AI)"
-// in the language of msgs.
-func (msgs Messages) Ui5f5a7e26cb71() string {
-	return Catalog.Format(msgs.locale, "ui_5f5a7e26cb71", nil)
 }
 
 // Ui7122a29a7508 says "Switch model"
@@ -4086,16 +3886,6 @@ func (msgs Messages) Ui8aa2cbd3eb67() string {
 	return Catalog.Format(msgs.locale, "ui_8aa2cbd3eb67", nil)
 }
 
-// UiE8ad866144d5 says "died"
-// in the language the app shows.
-func UiE8ad866144d5() string { return In(i18n.Locale()).UiE8ad866144d5() }
-
-// UiE8ad866144d5 says "died"
-// in the language of msgs.
-func (msgs Messages) UiE8ad866144d5() string {
-	return Catalog.Format(msgs.locale, "ui_e8ad866144d5", nil)
-}
-
 // UiD277f39b1da0 says "Repeat one"
 // in the language the app shows.
 func UiD277f39b1da0() string { return In(i18n.Locale()).UiD277f39b1da0() }
@@ -4366,16 +4156,6 @@ func (msgs Messages) Ui0271678492b8() string {
 	return Catalog.Format(msgs.locale, "ui_0271678492b8", nil)
 }
 
-// UiA4ccf6a41f65 says "Dealing"
-// in the language the app shows.
-func UiA4ccf6a41f65() string { return In(i18n.Locale()).UiA4ccf6a41f65() }
-
-// UiA4ccf6a41f65 says "Dealing"
-// in the language of msgs.
-func (msgs Messages) UiA4ccf6a41f65() string {
-	return Catalog.Format(msgs.locale, "ui_a4ccf6a41f65", nil)
-}
-
 // Ui10493d06b90f says "Discovered"
 // in the language the app shows.
 func Ui10493d06b90f() string { return In(i18n.Locale()).Ui10493d06b90f() }
@@ -4536,36 +4316,6 @@ func (msgs Messages) Ui992db5a24a4d() string {
 	return Catalog.Format(msgs.locale, "ui_992db5a24a4d", nil)
 }
 
-// Ui979d5a44b57e says "Call the landlord"
-// in the language the app shows.
-func Ui979d5a44b57e() string { return In(i18n.Locale()).Ui979d5a44b57e() }
-
-// Ui979d5a44b57e says "Call the landlord"
-// in the language of msgs.
-func (msgs Messages) Ui979d5a44b57e() string {
-	return Catalog.Format(msgs.locale, "ui_979d5a44b57e", nil)
-}
-
-// Ui543e38caf4a6 says "Calling the landlord is invalid."
-// in the language the app shows.
-func Ui543e38caf4a6() string { return In(i18n.Locale()).Ui543e38caf4a6() }
-
-// Ui543e38caf4a6 says "Calling the landlord is invalid."
-// in the language of msgs.
-func (msgs Messages) Ui543e38caf4a6() string {
-	return Catalog.Format(msgs.locale, "ui_543e38caf4a6", nil)
-}
-
-// Ui8684eac326ae says "Call the landlord: It’s your turn"
-// in the language the app shows.
-func Ui8684eac326ae() string { return In(i18n.Locale()).Ui8684eac326ae() }
-
-// Ui8684eac326ae says "Call the landlord: It’s your turn"
-// in the language of msgs.
-func (msgs Messages) Ui8684eac326ae() string {
-	return Catalog.Format(msgs.locale, "ui_8684eac326ae", nil)
-}
-
 // UiB957e68aed46 says "Models can be created using the scheduled_task tool."
 // in the language the app shows.
 func UiB957e68aed46() string { return In(i18n.Locale()).UiB957e68aed46() }
@@ -4674,16 +4424,6 @@ func UiF24484139648() string { return In(i18n.Locale()).UiF24484139648() }
 // in the language of msgs.
 func (msgs Messages) UiF24484139648() string {
 	return Catalog.Format(msgs.locale, "ui_f24484139648", nil)
-}
-
-// UiB55f9b9f0fe4 says "Total Input %[1]s · Output %[2]s"
-// in the language the app shows.
-func UiB55f9b9f0fe4() string { return In(i18n.Locale()).UiB55f9b9f0fe4() }
-
-// UiB55f9b9f0fe4 says "Total Input %[1]s · Output %[2]s"
-// in the language of msgs.
-func (msgs Messages) UiB55f9b9f0fe4() string {
-	return Catalog.Format(msgs.locale, "ui_b55f9b9f0fe4", nil)
 }
 
 // UiAb7b15328eb3 says "Up to 4 previews can be loaded on the same screen, automatically loaded after scrolling"
@@ -5046,16 +4786,6 @@ func (msgs Messages) UiB03b52f9c27d() string {
 	return Catalog.Format(msgs.locale, "ui_b03b52f9c27d", nil)
 }
 
-// UiAcbeab5f911b says "Draw"
-// in the language the app shows.
-func UiAcbeab5f911b() string { return In(i18n.Locale()).UiAcbeab5f911b() }
-
-// UiAcbeab5f911b says "Draw"
-// in the language of msgs.
-func (msgs Messages) UiAcbeab5f911b() string {
-	return Catalog.Format(msgs.locale, "ui_acbeab5f911b", nil)
-}
-
 // UiA216ccb00045 says "Hey, stay with me for a while longer."
 // in the language the app shows.
 func UiA216ccb00045() string { return In(i18n.Locale()).UiA216ccb00045() }
@@ -5084,16 +4814,6 @@ func Ui1c59875d3a15() string { return In(i18n.Locale()).Ui1c59875d3a15() }
 // in the language of msgs.
 func (msgs Messages) Ui1c59875d3a15() string {
 	return Catalog.Format(msgs.locale, "ui_1c59875d3a15", nil)
-}
-
-// Ui60c1eb391cfc says "Go"
-// in the language the app shows.
-func Ui60c1eb391cfc() string { return In(i18n.Locale()).Ui60c1eb391cfc() }
-
-// Ui60c1eb391cfc says "Go"
-// in the language of msgs.
-func (msgs Messages) Ui60c1eb391cfc() string {
-	return Catalog.Format(msgs.locale, "ui_60c1eb391cfc", nil)
 }
 
 // UiD24c10d37db0 says "Images"
@@ -5416,36 +5136,6 @@ func (msgs Messages) Ui9436fc02ba18() string {
 	return Catalog.Format(msgs.locale, "ui_9436fc02ba18", nil)
 }
 
-// UiF109227c8bc9 says "Landlord: Seat %[1]d"
-// in the language the app shows.
-func UiF109227c8bc9() string { return In(i18n.Locale()).UiF109227c8bc9() }
-
-// UiF109227c8bc9 says "Landlord: Seat %[1]d"
-// in the language of msgs.
-func (msgs Messages) UiF109227c8bc9() string {
-	return Catalog.Format(msgs.locale, "ui_f109227c8bc9", nil)
-}
-
-// Ui5369a2e8a62e says "The coordinate %[1]s must be an integer from 1-%[2]d"
-// in the language the app shows.
-func Ui5369a2e8a62e() string { return In(i18n.Locale()).Ui5369a2e8a62e() }
-
-// Ui5369a2e8a62e says "The coordinate %[1]s must be an integer from 1-%[2]d"
-// in the language of msgs.
-func (msgs Messages) Ui5369a2e8a62e() string {
-	return Catalog.Format(msgs.locale, "ui_5369a2e8a62e", nil)
-}
-
-// Ui2bfa3933ee44 says "Invalid coordinates"
-// in the language the app shows.
-func Ui2bfa3933ee44() string { return In(i18n.Locale()).Ui2bfa3933ee44() }
-
-// Ui2bfa3933ee44 says "Invalid coordinates"
-// in the language of msgs.
-func (msgs Messages) Ui2bfa3933ee44() string {
-	return Catalog.Format(msgs.locale, "ui_2bfa3933ee44", nil)
-}
-
 // Ui0f7d7860cbd3 says "block size"
 // in the language the app shows.
 func Ui0f7d7860cbd3() string { return In(i18n.Locale()).Ui0f7d7860cbd3() }
@@ -5474,16 +5164,6 @@ func UiE8df05872569() string { return In(i18n.Locale()).UiE8df05872569() }
 // in the language of msgs.
 func (msgs Messages) UiE8df05872569() string {
 	return Catalog.Format(msgs.locale, "ui_e8df05872569", nil)
-}
-
-// UiAb33f7ebd725 says "Sc"
-// in the language the app shows.
-func UiAb33f7ebd725() string { return In(i18n.Locale()).UiAb33f7ebd725() }
-
-// UiAb33f7ebd725 says "Sc"
-// in the language of msgs.
-func (msgs Messages) UiAb33f7ebd725() string {
-	return Catalog.Format(msgs.locale, "ui_ab33f7ebd725", nil)
 }
 
 // Ui63d90d977348 says "Copy"
@@ -5654,16 +5334,6 @@ func Ui50db7447b966() string { return In(i18n.Locale()).Ui50db7447b966() }
 // in the language of msgs.
 func (msgs Messages) Ui50db7447b966() string {
 	return Catalog.Format(msgs.locale, "ui_50db7447b966", nil)
-}
-
-// Ui39d41d0dec75 says "Big joker"
-// in the language the app shows.
-func Ui39d41d0dec75() string { return In(i18n.Locale()).Ui39d41d0dec75() }
-
-// Ui39d41d0dec75 says "Big joker"
-// in the language of msgs.
-func (msgs Messages) Ui39d41d0dec75() string {
-	return Catalog.Format(msgs.locale, "ui_39d41d0dec75", nil)
 }
 
 // Ui9e76ca0f9b77 says "Big eyes"
@@ -5896,16 +5566,6 @@ func (msgs Messages) UiCdce6ef1d896() string {
 	return Catalog.Format(msgs.locale, "ui_cdce6ef1d896", nil)
 }
 
-// Ui5152fb19607f says "Full configuration JSON"
-// in the language the app shows.
-func Ui5152fb19607f() string { return In(i18n.Locale()).Ui5152fb19607f() }
-
-// Ui5152fb19607f says "Full configuration JSON"
-// in the language of msgs.
-func (msgs Messages) Ui5152fb19607f() string {
-	return Catalog.Format(msgs.locale, "ui_5152fb19607f", nil)
-}
-
 // Ui3c39e9bde120 says "Scheduled tasks"
 // in the language the app shows.
 func Ui3c39e9bde120() string { return In(i18n.Locale()).Ui3c39e9bde120() }
@@ -6024,16 +5684,6 @@ func UiEbf3f4b2b636() string { return In(i18n.Locale()).UiEbf3f4b2b636() }
 // in the language of msgs.
 func (msgs Messages) UiEbf3f4b2b636() string {
 	return Catalog.Format(msgs.locale, "ui_ebf3f4b2b636", nil)
-}
-
-// Ui2de145581ec6 says "The game is over"
-// in the language the app shows.
-func Ui2de145581ec6() string { return In(i18n.Locale()).Ui2de145581ec6() }
-
-// Ui2de145581ec6 says "The game is over"
-// in the language of msgs.
-func (msgs Messages) Ui2de145581ec6() string {
-	return Catalog.Format(msgs.locale, "ui_2de145581ec6", nil)
 }
 
 // Ui124de79194c6 says "Perform syntax check (py_compile) on modified .py."
@@ -6356,16 +6006,6 @@ func (msgs Messages) Ui9f3485ffd634() string {
 	return Catalog.Format(msgs.locale, "ui_9f3485ffd634", nil)
 }
 
-// UiF5c982ae4094 says "Small joker"
-// in the language the app shows.
-func UiF5c982ae4094() string { return In(i18n.Locale()).UiF5c982ae4094() }
-
-// UiF5c982ae4094 says "Small joker"
-// in the language of msgs.
-func (msgs Messages) UiF5c982ae4094() string {
-	return Catalog.Format(msgs.locale, "ui_f5c982ae4094", nil)
-}
-
 // Ui9b50cb5e0e4b says "No additional workspace has been added yet"
 // in the language the app shows.
 func Ui9b50cb5e0e4b() string { return In(i18n.Locale()).Ui9b50cb5e0e4b() }
@@ -6394,16 +6034,6 @@ func Ui99f14460d71a() string { return In(i18n.Locale()).Ui99f14460d71a() }
 // in the language of msgs.
 func (msgs Messages) Ui99f14460d71a() string {
 	return Catalog.Format(msgs.locale, "ui_99f14460d71a", nil)
-}
-
-// Ui02c0b2af51aa says "The model has not been configured yet."
-// in the language the app shows.
-func Ui02c0b2af51aa() string { return In(i18n.Locale()).Ui02c0b2af51aa() }
-
-// Ui02c0b2af51aa says "The model has not been configured yet."
-// in the language of msgs.
-func (msgs Messages) Ui02c0b2af51aa() string {
-	return Catalog.Format(msgs.locale, "ui_02c0b2af51aa", nil)
 }
 
 // Ui5b470f6792fc says "No image model configured"
@@ -7246,16 +6876,6 @@ func (msgs Messages) Ui9c1e8bd22488() string {
 	return Catalog.Format(msgs.locale, "ui_9c1e8bd22488", nil)
 }
 
-// Ui25c7d9524fcc says "Handsome"
-// in the language the app shows.
-func Ui25c7d9524fcc() string { return In(i18n.Locale()).Ui25c7d9524fcc() }
-
-// Ui25c7d9524fcc says "Handsome"
-// in the language of msgs.
-func (msgs Messages) Ui25c7d9524fcc() string {
-	return Catalog.Format(msgs.locale, "ui_25c7d9524fcc", nil)
-}
-
 // Ui40fae00b7c6d says "Regular"
 // in the language the app shows.
 func Ui40fae00b7c6d() string { return In(i18n.Locale()).Ui40fae00b7c6d() }
@@ -7326,66 +6946,6 @@ func (msgs Messages) Ui64c230d22567() string {
 	return Catalog.Format(msgs.locale, "ui_64c230d22567", nil)
 }
 
-// UiAd81a87050c4 says "Hole card: %[1]s"
-// in the language the app shows.
-func UiAd81a87050c4() string { return In(i18n.Locale()).UiAd81a87050c4() }
-
-// UiAd81a87050c4 says "Hole card: %[1]s"
-// in the language of msgs.
-func (msgs Messages) UiAd81a87050c4() string {
-	return Catalog.Format(msgs.locale, "ui_ad81a87050c4", nil)
-}
-
-// Ui14b8d969d80e says "Seat %[1]d"
-// in the language the app shows.
-func Ui14b8d969d80e() string { return In(i18n.Locale()).Ui14b8d969d80e() }
-
-// Ui14b8d969d80e says "Seat %[1]d"
-// in the language of msgs.
-func (msgs Messages) Ui14b8d969d80e() string {
-	return Catalog.Format(msgs.locale, "ui_14b8d969d80e", nil)
-}
-
-// Ui6f2a687baa06 says "Seat %[1]d is being decided..."
-// in the language the app shows.
-func Ui6f2a687baa06() string { return In(i18n.Locale()).Ui6f2a687baa06() }
-
-// Ui6f2a687baa06 says "Seat %[1]d is being decided..."
-// in the language of msgs.
-func (msgs Messages) Ui6f2a687baa06() string {
-	return Catalog.Format(msgs.locale, "ui_6f2a687baa06", nil)
-}
-
-// Ui791fea41882d says "Seat %[1]d Thinking..."
-// in the language the app shows.
-func Ui791fea41882d() string { return In(i18n.Locale()).Ui791fea41882d() }
-
-// Ui791fea41882d says "Seat %[1]d Thinking..."
-// in the language of msgs.
-func (msgs Messages) Ui791fea41882d() string {
-	return Catalog.Format(msgs.locale, "ui_791fea41882d", nil)
-}
-
-// UiB4903725dd87 says "Seat %[1]d is the landlord, play the card"
-// in the language the app shows.
-func UiB4903725dd87() string { return In(i18n.Locale()).UiB4903725dd87() }
-
-// UiB4903725dd87 says "Seat %[1]d is the landlord, play the card"
-// in the language of msgs.
-func (msgs Messages) UiB4903725dd87() string {
-	return Catalog.Format(msgs.locale, "ui_b4903725dd87", nil)
-}
-
-// Ui362e2a5c9847 says "Seat %[1]d (%[2]s) wins"
-// in the language the app shows.
-func Ui362e2a5c9847() string { return In(i18n.Locale()).Ui362e2a5c9847() }
-
-// Ui362e2a5c9847 says "Seat %[1]d (%[2]s) wins"
-// in the language of msgs.
-func (msgs Messages) Ui362e2a5c9847() string {
-	return Catalog.Format(msgs.locale, "ui_362e2a5c9847", nil)
-}
-
 // UiAbee4974732a says "Suggestions"
 // in the language the app shows.
 func UiAbee4974732a() string { return In(i18n.Locale()).UiAbee4974732a() }
@@ -7414,16 +6974,6 @@ func Ui1aa428ac548e() string { return In(i18n.Locale()).Ui1aa428ac548e() }
 // in the language of msgs.
 func (msgs Messages) Ui1aa428ac548e() string {
 	return Catalog.Format(msgs.locale, "ui_1aa428ac548e", nil)
-}
-
-// UiA451c6435e38 says "Start the game"
-// in the language the app shows.
-func UiA451c6435e38() string { return In(i18n.Locale()).UiA451c6435e38() }
-
-// UiA451c6435e38 says "Start the game"
-// in the language of msgs.
-func (msgs Messages) UiA451c6435e38() string {
-	return Catalog.Format(msgs.locale, "ui_a451c6435e38", nil)
 }
 
 // Ui62bfca97ab89 says "After starting the conversation, the token usage and cache hit rate will be displayed here."
@@ -7736,16 +7286,6 @@ func (msgs Messages) Ui5e48e7b354bb() string {
 	return Catalog.Format(msgs.locale, "ui_5e48e7b354bb", nil)
 }
 
-// Ui64088d8cd78a says "Thinking…"
-// in the language the app shows.
-func Ui64088d8cd78a() string { return In(i18n.Locale()).Ui64088d8cd78a() }
-
-// Ui64088d8cd78a says "Thinking…"
-// in the language of msgs.
-func (msgs Messages) Ui64088d8cd78a() string {
-	return Catalog.Format(msgs.locale, "ui_64088d8cd78a", nil)
-}
-
 // Ui361a82d3dbf2 says "What to think about"
 // in the language the app shows.
 func Ui361a82d3dbf2() string { return In(i18n.Locale()).Ui361a82d3dbf2() }
@@ -7854,16 +7394,6 @@ func Ui5139d83f738c() string { return In(i18n.Locale()).Ui5139d83f738c() }
 // in the language of msgs.
 func (msgs Messages) Ui5139d83f738c() string {
 	return Catalog.Format(msgs.locale, "ui_5139d83f738c", nil)
-}
-
-// Ui3a3c3c762cc1 says "Record statistics are only accumulated during this opening period."
-// in the language the app shows.
-func Ui3a3c3c762cc1() string { return In(i18n.Locale()).Ui3a3c3c762cc1() }
-
-// Ui3a3c3c762cc1 says "Record statistics are only accumulated during this opening period."
-// in the language of msgs.
-func (msgs Messages) Ui3a3c3c762cc1() string {
-	return Catalog.Format(msgs.locale, "ui_3a3c3c762cc1", nil)
 }
 
 // UiC95dc99afe57 says "Screenshot"
@@ -8034,16 +7564,6 @@ func Ui37aa6ad6a36d() string { return In(i18n.Locale()).Ui37aa6ad6a36d() }
 // in the language of msgs.
 func (msgs Messages) Ui37aa6ad6a36d() string {
 	return Catalog.Format(msgs.locale, "ui_37aa6ad6a36d", nil)
-}
-
-// Ui1c1c995f72fb says "Holder model"
-// in the language the app shows.
-func Ui1c1c995f72fb() string { return In(i18n.Locale()).Ui1c1c995f72fb() }
-
-// Ui1c1c995f72fb says "Holder model"
-// in the language of msgs.
-func (msgs Messages) Ui1c1c995f72fb() string {
-	return Catalog.Format(msgs.locale, "ui_1c1c995f72fb", nil)
 }
 
 // UiBe12f84c407f says "Execute command"
@@ -8826,16 +8346,6 @@ func (msgs Messages) UiEd31fbb483ee() string {
 	return Catalog.Format(msgs.locale, "ui_ed31fbb483ee", nil)
 }
 
-// Ui6b6942cc75e2 says "Invalid operation"
-// in the language the app shows.
-func Ui6b6942cc75e2() string { return In(i18n.Locale()).Ui6b6942cc75e2() }
-
-// Ui6b6942cc75e2 says "Invalid operation"
-// in the language of msgs.
-func (msgs Messages) Ui6b6942cc75e2() string {
-	return Catalog.Format(msgs.locale, "ui_6b6942cc75e2", nil)
-}
-
 // UiB81d6b9ec3bc says "Support stdio / SSE / Streamable HTTP; only tools with successful connection will inject AI, changes will be automati…"
 // in the language the app shows.
 func UiB81d6b9ec3bc() string { return In(i18n.Locale()).UiB81d6b9ec3bc() }
@@ -8894,16 +8404,6 @@ func UiF24f48828782() string { return In(i18n.Locale()).UiF24f48828782() }
 // in the language of msgs.
 func (msgs Messages) UiF24f48828782() string {
 	return Catalog.Format(msgs.locale, "ui_f24f48828782", nil)
-}
-
-// Ui94716ba36ddc says "Change back to playing chess with the model"
-// in the language the app shows.
-func Ui94716ba36ddc() string { return In(i18n.Locale()).Ui94716ba36ddc() }
-
-// Ui94716ba36ddc says "Change back to playing chess with the model"
-// in the language of msgs.
-func (msgs Messages) Ui94716ba36ddc() string {
-	return Catalog.Format(msgs.locale, "ui_94716ba36ddc", nil)
 }
 
 // Ui9b7824cefa1e says "Give up modification"
@@ -9234,16 +8734,6 @@ func Ui34485225b5da() string { return In(i18n.Locale()).Ui34485225b5da() }
 // in the language of msgs.
 func (msgs Messages) Ui34485225b5da() string {
 	return Catalog.Format(msgs.locale, "ui_34485225b5da", nil)
-}
-
-// UiF499de18ecda says "Landlord Fighting"
-// in the language the app shows.
-func UiF499de18ecda() string { return In(i18n.Locale()).UiF499de18ecda() }
-
-// UiF499de18ecda says "Landlord Fighting"
-// in the language of msgs.
-func (msgs Messages) UiF499de18ecda() string {
-	return Catalog.Format(msgs.locale, "ui_f499de18ecda", nil)
 }
 
 // UiEa4b29f58f87 says "New conversation"
@@ -10016,16 +9506,6 @@ func (msgs Messages) UiC1f658373079() string {
 	return Catalog.Format(msgs.locale, "ui_c1f658373079", nil)
 }
 
-// Ui06f417572448 says "Unknown chess type"
-// in the language the app shows.
-func Ui06f417572448() string { return In(i18n.Locale()).Ui06f417572448() }
-
-// Ui06f417572448 says "Unknown chess type"
-// in the language of msgs.
-func (msgs Messages) Ui06f417572448() string {
-	return Catalog.Format(msgs.locale, "ui_06f417572448", nil)
-}
-
 // Ui2f5f1d6fbfb0 says "Not set"
 // in the language the app shows.
 func Ui2f5f1d6fbfb0() string { return In(i18n.Locale()).Ui2f5f1d6fbfb0() }
@@ -10174,16 +9654,6 @@ func Ui258e2d5769ce() string { return In(i18n.Locale()).Ui258e2d5769ce() }
 // in the language of msgs.
 func (msgs Messages) Ui258e2d5769ce() string {
 	return Catalog.Format(msgs.locale, "ui_258e2d5769ce", nil)
-}
-
-// UiE54853480b3b says "This office called %[1]d times · Total %[2]s tokens"
-// in the language the app shows.
-func UiE54853480b3b() string { return In(i18n.Locale()).UiE54853480b3b() }
-
-// UiE54853480b3b says "This office called %[1]d times · Total %[2]s tokens"
-// in the language of msgs.
-func (msgs Messages) UiE54853480b3b() string {
-	return Catalog.Format(msgs.locale, "ui_e54853480b3b", nil)
 }
 
 // Ui0eeecd26f2ba says "This month"
@@ -10556,26 +10026,6 @@ func (msgs Messages) Ui06796c8d95a1() string {
 	return Catalog.Format(msgs.locale, "ui_06796c8d95a1", nil)
 }
 
-// UiEe94a0a322c7 says "Chess and Cards"
-// in the language the app shows.
-func UiEe94a0a322c7() string { return In(i18n.Locale()).UiEe94a0a322c7() }
-
-// UiEe94a0a322c7 says "Chess and Cards"
-// in the language of msgs.
-func (msgs Messages) UiEe94a0a322c7() string {
-	return Catalog.Format(msgs.locale, "ui_ee94a0a322c7", nil)
-}
-
-// UiAd43f27ab0f2 says "Chessboard"
-// in the language the app shows.
-func UiAd43f27ab0f2() string { return In(i18n.Locale()).UiAd43f27ab0f2() }
-
-// UiAd43f27ab0f2 says "Chessboard"
-// in the language of msgs.
-func (msgs Messages) UiAd43f27ab0f2() string {
-	return Catalog.Format(msgs.locale, "ui_ad43f27ab0f2", nil)
-}
-
 // Ui3bfbf21e2f00 says "Forest"
 // in the language the app shows.
 func Ui3bfbf21e2f00() string { return In(i18n.Locale()).Ui3bfbf21e2f00() }
@@ -10584,16 +10034,6 @@ func Ui3bfbf21e2f00() string { return In(i18n.Locale()).Ui3bfbf21e2f00() }
 // in the language of msgs.
 func (msgs Messages) Ui3bfbf21e2f00() string {
 	return Catalog.Format(msgs.locale, "ui_3bfbf21e2f00", nil)
-}
-
-// UiA4a470217df1 says "Chu River Han Boundary"
-// in the language the app shows.
-func UiA4a470217df1() string { return In(i18n.Locale()).UiA4a470217df1() }
-
-// UiA4a470217df1 says "Chu River Han Boundary"
-// in the language of msgs.
-func (msgs Messages) UiA4a470217df1() string {
-	return Catalog.Format(msgs.locale, "ui_a4a470217df1", nil)
 }
 
 // UiC98e118e0a43 says "Model"
@@ -10614,36 +10054,6 @@ func Ui2333a9aacf6b() string { return In(i18n.Locale()).Ui2333a9aacf6b() }
 // in the language of msgs.
 func (msgs Messages) Ui2333a9aacf6b() string {
 	return Catalog.Format(msgs.locale, "ui_2333a9aacf6b", nil)
-}
-
-// Ui2e1af610c8e4 says "Model A thinking..."
-// in the language the app shows.
-func Ui2e1af610c8e4() string { return In(i18n.Locale()).Ui2e1af610c8e4() }
-
-// Ui2e1af610c8e4 says "Model A thinking..."
-// in the language of msgs.
-func (msgs Messages) Ui2e1af610c8e4() string {
-	return Catalog.Format(msgs.locale, "ui_2e1af610c8e4", nil)
-}
-
-// Ui5cb39e4bf105 says "Model B"
-// in the language the app shows.
-func Ui5cb39e4bf105() string { return In(i18n.Locale()).Ui5cb39e4bf105() }
-
-// Ui5cb39e4bf105 says "Model B"
-// in the language of msgs.
-func (msgs Messages) Ui5cb39e4bf105() string {
-	return Catalog.Format(msgs.locale, "ui_5cb39e4bf105", nil)
-}
-
-// Ui5b1c731192d2 says "Model B Thinking Intensity"
-// in the language the app shows.
-func Ui5b1c731192d2() string { return In(i18n.Locale()).Ui5b1c731192d2() }
-
-// Ui5b1c731192d2 says "Model B Thinking Intensity"
-// in the language of msgs.
-func (msgs Messages) Ui5b1c731192d2() string {
-	return Catalog.Format(msgs.locale, "ui_5b1c731192d2", nil)
 }
 
 // Ui0ccf72c153c1 says "Models · This Month"
@@ -10714,36 +10124,6 @@ func UiDf82cf644d5a() string { return In(i18n.Locale()).UiDf82cf644d5a() }
 // in the language of msgs.
 func (msgs Messages) UiDf82cf644d5a() string {
 	return Catalog.Format(msgs.locale, "ui_df82cf644d5a", nil)
-}
-
-// Ui0da4b3e33c54 says "The model does not give a legal move"
-// in the language the app shows.
-func Ui0da4b3e33c54() string { return In(i18n.Locale()).Ui0da4b3e33c54() }
-
-// Ui0da4b3e33c54 says "The model does not give a legal move"
-// in the language of msgs.
-func (msgs Messages) Ui0da4b3e33c54() string {
-	return Catalog.Format(msgs.locale, "ui_0da4b3e33c54", nil)
-}
-
-// UiAc8577dd62f7 says "Model request failed:"
-// in the language the app shows.
-func UiAc8577dd62f7() string { return In(i18n.Locale()).UiAc8577dd62f7() }
-
-// UiAc8577dd62f7 says "Model request failed:"
-// in the language of msgs.
-func (msgs Messages) UiAc8577dd62f7() string {
-	return Catalog.Format(msgs.locale, "ui_ac8577dd62f7", nil)
-}
-
-// Ui727ed31009ff says "Model wins"
-// in the language the app shows.
-func Ui727ed31009ff() string { return In(i18n.Locale()).Ui727ed31009ff() }
-
-// Ui727ed31009ff says "Model wins"
-// in the language of msgs.
-func (msgs Messages) Ui727ed31009ff() string {
-	return Catalog.Format(msgs.locale, "ui_727ed31009ff", nil)
 }
 
 // Ui487b8c76a84f says "The background process started by the model through the service tool will appear here."
@@ -11376,16 +10756,6 @@ func (msgs Messages) Ui82a59f3d1c16() string {
 	return Catalog.Format(msgs.locale, "ui_82a59f3d1c16", nil)
 }
 
-// Ui3961846b1bbc says "No JSON"
-// in the language the app shows.
-func Ui3961846b1bbc() string { return In(i18n.Locale()).Ui3961846b1bbc() }
-
-// Ui3961846b1bbc says "No JSON"
-// in the language of msgs.
-func (msgs Messages) Ui3961846b1bbc() string {
-	return Catalog.Format(msgs.locale, "ui_3961846b1bbc", nil)
-}
-
 // Ui2d88d6c2bbbf says "No matching tool"
 // in the language the app shows.
 func Ui2d88d6c2bbbf() string { return In(i18n.Locale()).Ui2d88d6c2bbbf() }
@@ -11696,16 +11066,6 @@ func (msgs Messages) UiE2633f64e1a7() string {
 	return Catalog.Format(msgs.locale, "ui_e2633f64e1a7", nil)
 }
 
-// UiA3c974892464 says "Clear selection"
-// in the language the app shows.
-func UiA3c974892464() string { return In(i18n.Locale()).UiA3c974892464() }
-
-// UiA3c974892464 says "Clear selection"
-// in the language of msgs.
-func (msgs Messages) UiA3c974892464() string {
-	return Catalog.Format(msgs.locale, "ui_a3c974892464", nil)
-}
-
 // Ui581b6f06c7c4 says "Clear background image"
 // in the language the app shows.
 func Ui581b6f06c7c4() string { return In(i18n.Locale()).Ui581b6f06c7c4() }
@@ -11736,16 +11096,6 @@ func (msgs Messages) Ui68f5e37652ef() string {
 	return Catalog.Format(msgs.locale, "ui_68f5e37652ef", nil)
 }
 
-// Ui8c7cb5faf7e6 says "Cannon"
-// in the language the app shows.
-func Ui8c7cb5faf7e6() string { return In(i18n.Locale()).Ui8c7cb5faf7e6() }
-
-// Ui8c7cb5faf7e6 says "Cannon"
-// in the language of msgs.
-func (msgs Messages) Ui8c7cb5faf7e6() string {
-	return Catalog.Format(msgs.locale, "ui_8c7cb5faf7e6", nil)
-}
-
 // Ui2deb927a8316 says "Click the logo to return to the Agent page"
 // in the language the app shows.
 func Ui2deb927a8316() string { return In(i18n.Locale()).Ui2deb927a8316() }
@@ -11754,16 +11104,6 @@ func Ui2deb927a8316() string { return In(i18n.Locale()).Ui2deb927a8316() }
 // in the language of msgs.
 func (msgs Messages) Ui2deb927a8316() string {
 	return Catalog.Format(msgs.locale, "ui_2deb927a8316", nil)
-}
-
-// Ui682e1446bf61 says "Click \"Deal\" to start a round"
-// in the language the app shows.
-func Ui682e1446bf61() string { return In(i18n.Locale()).Ui682e1446bf61() }
-
-// Ui682e1446bf61 says "Click \"Deal\" to start a round"
-// in the language of msgs.
-func (msgs Messages) Ui682e1446bf61() string {
-	return Catalog.Format(msgs.locale, "ui_682e1446bf61", nil)
 }
 
 // Ui2b52b06772ce says "Click \"Add\" to create the first service."
@@ -12216,16 +11556,6 @@ func (msgs Messages) UiCcd434bc8eb2() string {
 	return Catalog.Format(msgs.locale, "ui_ccd434bc8eb2", nil)
 }
 
-// Ui111a663cece2 says "White (O)"
-// in the language the app shows.
-func Ui111a663cece2() string { return In(i18n.Locale()).Ui111a663cece2() }
-
-// Ui111a663cece2 says "White (O)"
-// in the language of msgs.
-func (msgs Messages) Ui111a663cece2() string {
-	return Catalog.Format(msgs.locale, "ui_111a663cece2", nil)
-}
-
 // UiDaf127d10f23 says "Bailian multimodal-generation (non-real-time)"
 // in the language the app shows.
 func UiDaf127d10f23() string { return In(i18n.Locale()).UiDaf127d10f23() }
@@ -12556,16 +11886,6 @@ func (msgs Messages) Ui150b15569591() string {
 	return Catalog.Format(msgs.locale, "ui_150b15569591", nil)
 }
 
-// Ui98ef00c6164c says "Can’t pass the first hand"
-// in the language the app shows.
-func Ui98ef00c6164c() string { return In(i18n.Locale()).Ui98ef00c6164c() }
-
-// Ui98ef00c6164c says "Can’t pass the first hand"
-// in the language of msgs.
-func (msgs Messages) Ui98ef00c6164c() string {
-	return Catalog.Format(msgs.locale, "ui_98ef00c6164c", nil)
-}
-
 // Ui251bc40e7027 says "Waiting"
 // in the language the app shows.
 func Ui251bc40e7027() string { return In(i18n.Locale()).Ui251bc40e7027() }
@@ -12604,16 +11924,6 @@ func Ui7d3c6cc5b7f8() string { return In(i18n.Locale()).Ui7d3c6cc5b7f8() }
 // in the language of msgs.
 func (msgs Messages) Ui7d3c6cc5b7f8() string {
 	return Catalog.Format(msgs.locale, "ui_7d3c6cc5b7f8", nil)
-}
-
-// Ui1f52f6af4117 says "Waiting for the host to deal"
-// in the language the app shows.
-func Ui1f52f6af4117() string { return In(i18n.Locale()).Ui1f52f6af4117() }
-
-// Ui1f52f6af4117 says "Waiting for the host to deal"
-// in the language of msgs.
-func (msgs Messages) Ui1f52f6af4117() string {
-	return Catalog.Format(msgs.locale, "ui_1f52f6af4117", nil)
 }
 
 // Ui79209170acff says "Waiting for authorization"
@@ -13286,16 +12596,6 @@ func (msgs Messages) UiE928f00455bd() string {
 	return Catalog.Format(msgs.locale, "ui_e928f00455bd", nil)
 }
 
-// UiA18e77b841c3 says "Invalid position"
-// in the language the app shows.
-func UiA18e77b841c3() string { return In(i18n.Locale()).UiA18e77b841c3() }
-
-// UiA18e77b841c3 says "Invalid position"
-// in the language of msgs.
-func (msgs Messages) UiA18e77b841c3() string {
-	return Catalog.Format(msgs.locale, "ui_a18e77b841c3", nil)
-}
-
 // Ui67035e6b7f82 says "Blue"
 // in the language the app shows.
 func Ui67035e6b7f82() string { return In(i18n.Locale()).Ui67035e6b7f82() }
@@ -13304,16 +12604,6 @@ func Ui67035e6b7f82() string { return In(i18n.Locale()).Ui67035e6b7f82() }
 // in the language of msgs.
 func (msgs Messages) Ui67035e6b7f82() string {
 	return Catalog.Format(msgs.locale, "ui_67035e6b7f82", nil)
-}
-
-// Ui9ef87c24a158 says "Line %2[1]d "
-// in the language the app shows.
-func Ui9ef87c24a158() string { return In(i18n.Locale()).Ui9ef87c24a158() }
-
-// Ui9ef87c24a158 says "Line %2[1]d "
-// in the language of msgs.
-func (msgs Messages) Ui9ef87c24a158() string {
-	return Catalog.Format(msgs.locale, "ui_9ef87c24a158", nil)
 }
 
 // Ui1aa92577b442 says "It feels so good to be touched~"
@@ -13474,36 +12764,6 @@ func Ui71fb8ae998dc() string { return In(i18n.Locale()).Ui71fb8ae998dc() }
 // in the language of msgs.
 func (msgs Messages) Ui71fb8ae998dc() string {
 	return Catalog.Format(msgs.locale, "ui_71fb8ae998dc", nil)
-}
-
-// UiC6995e73eeb3 says "This position cannot be moved"
-// in the language the app shows.
-func UiC6995e73eeb3() string { return In(i18n.Locale()).UiC6995e73eeb3() }
-
-// UiC6995e73eeb3 says "This position cannot be moved"
-// in the language of msgs.
-func (msgs Messages) UiC6995e73eeb3() string {
-	return Catalog.Format(msgs.locale, "ui_c6995e73eeb3", nil)
-}
-
-// Ui5d0cb2c3fc24 says "There is already a chess piece at this position"
-// in the language the app shows.
-func Ui5d0cb2c3fc24() string { return In(i18n.Locale()).Ui5d0cb2c3fc24() }
-
-// Ui5d0cb2c3fc24 says "There is already a chess piece at this position"
-// in the language of msgs.
-func (msgs Messages) Ui5d0cb2c3fc24() string {
-	return Catalog.Format(msgs.locale, "ui_5d0cb2c3fc24", nil)
-}
-
-// Ui1ba3378c8fd6 says "There is no piece of your chess in this position"
-// in the language the app shows.
-func Ui1ba3378c8fd6() string { return In(i18n.Locale()).Ui1ba3378c8fd6() }
-
-// Ui1ba3378c8fd6 says "There is no piece of your chess in this position"
-// in the language of msgs.
-func (msgs Messages) Ui1ba3378c8fd6() string {
-	return Catalog.Format(msgs.locale, "ui_1ba3378c8fd6", nil)
 }
 
 // Ui6946d1c557e3 says "There is already a picture model with the same name under this supplier"
@@ -14216,16 +13476,6 @@ func (msgs Messages) UiEd243bf05906() string {
 	return Catalog.Format(msgs.locale, "ui_ed243bf05906", nil)
 }
 
-// Ui5b3fa6806648 says "Please select an available model"
-// in the language the app shows.
-func Ui5b3fa6806648() string { return In(i18n.Locale()).Ui5b3fa6806648() }
-
-// Ui5b3fa6806648 says "Please select an available model"
-// in the language of msgs.
-func (msgs Messages) Ui5b3fa6806648() string {
-	return Catalog.Format(msgs.locale, "ui_5b3fa6806648", nil)
-}
-
 // UiFa26c7c93c6c says "Please select a supported image protocol"
 // in the language the app shows.
 func UiFa26c7c93c6c() string { return In(i18n.Locale()).UiFa26c7c93c6c() }
@@ -14396,16 +13646,6 @@ func (msgs Messages) Ui1f20d2e4d21d() string {
 	return Catalog.Format(msgs.locale, "ui_1f20d2e4d21d", nil)
 }
 
-// UiE3f8addbc00c says "Xiangqi"
-// in the language the app shows.
-func UiE3f8addbc00c() string { return In(i18n.Locale()).UiE3f8addbc00c() }
-
-// UiE3f8addbc00c says "Xiangqi"
-// in the language of msgs.
-func (msgs Messages) UiE3f8addbc00c() string {
-	return Catalog.Format(msgs.locale, "ui_e3f8addbc00c", nil)
-}
-
 // Ui6e9f3047b506 says "Account has been logged out"
 // in the language the app shows.
 func Ui6e9f3047b506() string { return In(i18n.Locale()).Ui6e9f3047b506() }
@@ -14434,16 +13674,6 @@ func UiF3af4967a48a() string { return In(i18n.Locale()).UiF3af4967a48a() }
 // in the language of msgs.
 func (msgs Messages) UiF3af4967a48a() string {
 	return Catalog.Format(msgs.locale, "ui_f3af4967a48a", nil)
-}
-
-// Ui6927ef7cd191 says "Illegal move"
-// in the language the app shows.
-func Ui6927ef7cd191() string { return In(i18n.Locale()).Ui6927ef7cd191() }
-
-// Ui6927ef7cd191 says "Illegal move"
-// in the language of msgs.
-func (msgs Messages) Ui6927ef7cd191() string {
-	return Catalog.Format(msgs.locale, "ui_6927ef7cd191", nil)
 }
 
 // UiE512cf016f96 says "Timeout"
@@ -14604,26 +13834,6 @@ func Ui4ac4e8c4436a() string { return In(i18n.Locale()).Ui4ac4e8c4436a() }
 // in the language of msgs.
 func (msgs Messages) Ui4ac4e8c4436a() string {
 	return Catalog.Format(msgs.locale, "ui_4ac4e8c4436a", nil)
-}
-
-// Ui0e413f3b7cca says "It’s your turn"
-// in the language the app shows.
-func Ui0e413f3b7cca() string { return In(i18n.Locale()).Ui0e413f3b7cca() }
-
-// Ui0e413f3b7cca says "It’s your turn"
-// in the language of msgs.
-func (msgs Messages) Ui0e413f3b7cca() string {
-	return Catalog.Format(msgs.locale, "ui_0e413f3b7cca", nil)
-}
-
-// UiD44076d417a0 says "It’s your turn to play your cards"
-// in the language the app shows.
-func UiD44076d417a0() string { return In(i18n.Locale()).UiD44076d417a0() }
-
-// UiD44076d417a0 says "It’s your turn to play your cards"
-// in the language of msgs.
-func (msgs Messages) UiD44076d417a0() string {
-	return Catalog.Format(msgs.locale, "ui_d44076d417a0", nil)
 }
 
 // Ui651f27447015 says "Software update"
@@ -14916,16 +14126,6 @@ func (msgs Messages) Ui6c5e17bc9823() string {
 	return Catalog.Format(msgs.locale, "ui_6c5e17bc9823", nil)
 }
 
-// Ui7e58564e342e says "It’s not the seat’s turn yet"
-// in the language the app shows.
-func Ui7e58564e342e() string { return In(i18n.Locale()).Ui7e58564e342e() }
-
-// Ui7e58564e342e says "It’s not the seat’s turn yet"
-// in the language of msgs.
-func (msgs Messages) Ui7e58564e342e() string {
-	return Catalog.Format(msgs.locale, "ui_7e58564e342e", nil)
-}
-
 // Ui6c5cb60e9248 says "There is no server for this group yet"
 // in the language the app shows.
 func Ui6c5cb60e9248() string { return In(i18n.Locale()).Ui6c5cb60e9248() }
@@ -15096,6 +14296,26 @@ func (msgs Messages) Ui9a6b8ca1d523() string {
 	return Catalog.Format(msgs.locale, "ui_9a6b8ca1d523", nil)
 }
 
+// UiDeepseekBalance says "Balance"
+// in the language the app shows.
+func UiDeepseekBalance() string { return In(i18n.Locale()).UiDeepseekBalance() }
+
+// UiDeepseekBalance says "Balance"
+// in the language of msgs.
+func (msgs Messages) UiDeepseekBalance() string {
+	return Catalog.Format(msgs.locale, "ui_deepseek_balance", nil)
+}
+
+// UiDeepseekBalanceFailed says "Failed to read the balance:"
+// in the language the app shows.
+func UiDeepseekBalanceFailed() string { return In(i18n.Locale()).UiDeepseekBalanceFailed() }
+
+// UiDeepseekBalanceFailed says "Failed to read the balance:"
+// in the language of msgs.
+func (msgs Messages) UiDeepseekBalanceFailed() string {
+	return Catalog.Format(msgs.locale, "ui_deepseek_balance_failed", nil)
+}
+
 // Ui4a19cb8a31d7 says "Connection successful"
 // in the language the app shows.
 func Ui4a19cb8a31d7() string { return In(i18n.Locale()).Ui4a19cb8a31d7() }
@@ -15194,16 +14414,6 @@ func UiE76774368ccf() string { return In(i18n.Locale()).UiE76774368ccf() }
 // in the language of msgs.
 func (msgs Messages) UiE76774368ccf() string {
 	return Catalog.Format(msgs.locale, "ui_e76774368ccf", nil)
-}
-
-// UiC013b610e4fc says "After selecting the model and chess card, click \"Start Game\" on the left. The chessboard text will be sent to the mod…"
-// in the language the app shows.
-func UiC013b610e4fc() string { return In(i18n.Locale()).UiC013b610e4fc() }
-
-// UiC013b610e4fc says "After selecting the model and chess card, click \"Start Game\" on the left. The chessboard text will be sent to the mod…"
-// in the language of msgs.
-func (msgs Messages) UiC013b610e4fc() string {
-	return Catalog.Format(msgs.locale, "ui_c013b610e4fc", nil)
 }
 
 // Ui1c331767f030 says "Select SSH private key"
@@ -15396,16 +14606,6 @@ func (msgs Messages) Ui332486c8f0d3() string {
 	return Catalog.Format(msgs.locale, "ui_332486c8f0d3", nil)
 }
 
-// Ui8d9d4a7c35b6 says "Configuration JSON"
-// in the language the app shows.
-func Ui8d9d4a7c35b6() string { return In(i18n.Locale()).Ui8d9d4a7c35b6() }
-
-// Ui8d9d4a7c35b6 says "Configuration JSON"
-// in the language of msgs.
-func (msgs Messages) Ui8d9d4a7c35b6() string {
-	return Catalog.Format(msgs.locale, "ui_8d9d4a7c35b6", nil)
-}
-
 // Ui4948c3915bca says "The configuration is being saved, please update later."
 // in the language the app shows.
 func Ui4948c3915bca() string { return In(i18n.Locale()).Ui4948c3915bca() }
@@ -15414,16 +14614,6 @@ func Ui4948c3915bca() string { return In(i18n.Locale()).Ui4948c3915bca() }
 // in the language of msgs.
 func (msgs Messages) Ui4948c3915bca() string {
 	return Catalog.Format(msgs.locale, "ui_4948c3915bca", nil)
-}
-
-// Ui6a5bbad07366 says "Configuration parsing failed:"
-// in the language the app shows.
-func Ui6a5bbad07366() string { return In(i18n.Locale()).Ui6a5bbad07366() }
-
-// Ui6a5bbad07366 says "Configuration parsing failed:"
-// in the language of msgs.
-func (msgs Messages) Ui6a5bbad07366() string {
-	return Catalog.Format(msgs.locale, "ui_6a5bbad07366", nil)
 }
 
 // Ui2ae75e168123 says "Colors"
@@ -15454,16 +14644,6 @@ func Ui7bdd5ce1e298() string { return In(i18n.Locale()).Ui7bdd5ce1e298() }
 // in the language of msgs.
 func (msgs Messages) Ui7bdd5ce1e298() string {
 	return Catalog.Format(msgs.locale, "ui_7bdd5ce1e298", nil)
-}
-
-// UiCc92cb4b8980 says "Start over"
-// in the language the app shows.
-func UiCc92cb4b8980() string { return In(i18n.Locale()).UiCc92cb4b8980() }
-
-// UiCc92cb4b8980 says "Start over"
-// in the language of msgs.
-func (msgs Messages) UiCc92cb4b8980() string {
-	return Catalog.Format(msgs.locale, "ui_cc92cb4b8980", nil)
 }
 
 // Ui4a2c818bac8b says "Regenerate Token"
@@ -16076,16 +15256,6 @@ func (msgs Messages) UiD6e61888b078() string {
 	return Catalog.Format(msgs.locale, "ui_d6e61888b078", nil)
 }
 
-// Ui2594c4122b55 says "Advanced usage: directly edit the complete configuration of the backend (including the key), which will take effect i…"
-// in the language the app shows.
-func Ui2594c4122b55() string { return In(i18n.Locale()).Ui2594c4122b55() }
-
-// Ui2594c4122b55 says "Advanced usage: directly edit the complete configuration of the backend (including the key), which will take effect i…"
-// in the language of msgs.
-func (msgs Messages) Ui2594c4122b55() string {
-	return Catalog.Format(msgs.locale, "ui_2594c4122b55", nil)
-}
-
 // Ui44455611b910 says "Advanced Settings"
 // in the language the app shows.
 func Ui44455611b910() string { return In(i18n.Locale()).Ui44455611b910() }
@@ -16156,16 +15326,6 @@ func (msgs Messages) Ui4456d15772be() string {
 	return Catalog.Format(msgs.locale, "ui_4456d15772be", nil)
 }
 
-// UiEc3540f0a4bc says "Black (X)"
-// in the language the app shows.
-func UiEc3540f0a4bc() string { return In(i18n.Locale()).UiEc3540f0a4bc() }
-
-// UiEc3540f0a4bc says "Black (X)"
-// in the language of msgs.
-func (msgs Messages) UiEc3540f0a4bc() string {
-	return Catalog.Format(msgs.locale, "ui_ec3540f0a4bc", nil)
-}
-
 // Ui351bd130dacf says "Default is 80, long tasks can be set to 100; range 20–200. Float the input box to view the counting method, which w…"
 // in the language the app shows.
 func Ui351bd130dacf() string { return In(i18n.Locale()).Ui351bd130dacf() }
@@ -16194,16 +15354,6 @@ func Ui5ca0d5ce0255() string { return In(i18n.Locale()).Ui5ca0d5ce0255() }
 // in the language of msgs.
 func (msgs Messages) Ui5ca0d5ce0255() string {
 	return Catalog.Format(msgs.locale, "ui_5ca0d5ce0255", nil)
-}
-
-// Ui4bb17ff691ce says "(you)"
-// in the language the app shows.
-func Ui4bb17ff691ce() string { return In(i18n.Locale()).Ui4bb17ff691ce() }
-
-// Ui4bb17ff691ce says "(you)"
-// in the language of msgs.
-func (msgs Messages) Ui4bb17ff691ce() string {
-	return Catalog.Format(msgs.locale, "ui_4bb17ff691ce", nil)
 }
 
 // Ui7f9b2a77b687 says "(deactivated)"

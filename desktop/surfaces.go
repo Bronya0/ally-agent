@@ -19,19 +19,6 @@ func surfaceBorder(c *ui.Context) ui.Color {
 }
 func surfaceFill(c *ui.Context) ui.Color { return c.Theme().Surface }
 
-// paintSurface applies the shared fill + hairline, fading both so a hover never
-// snaps. Distinct animation keys keep the two properties independent.
-func paintSurface(e ui.Element, fill, border ui.Color) ui.Element {
-	return e.Background(fadeColor(e, "surface-fill", fill)).Border(1, fadeColor(e, "surface-border", border))
-}
-
-// surfacePanel is the shared card: panel fill, hairline border, card radius.
-func surfacePanel(c *ui.Context, key any, padding, radius float32, build func()) ui.Element {
-	e := ui.Column(c.Key(key)).Padding(padding).Gap(gapField).Radius(radius)
-	paintSurface(e, surfaceFill(c), surfaceBorder(c))
-	return e.Children(build)
-}
-
 // Composer pickers share native dismissal and float above the input without
 // changing transcript layout. The whole composer anchor includes its trigger.
 func composerPopover(c *ui.Context, anchor ui.Element, open *bool, label string, height float32, build func(ui.Element)) {

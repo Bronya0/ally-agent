@@ -23,7 +23,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 	"github.com/google/uuid"
@@ -296,21 +295,6 @@ func oversizedImageError(cfg image.Config, format string) error {
 		return nil
 	}
 	return fmt.Errorf(locales.Text("图片过大（%d 万像素），请先裁剪或缩小后再发送"), pixels/10000)
-}
-
-func (a *desktop) chooseAttachments(t *conversation) {
-	if !canAddAttachments(t, a.closing) {
-		return
-	}
-	t.AttachmentLoading = true
-	go func() {
-		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: locales.Text("添加附件"), Multiple: true})
-		if err != nil {
-			a.win.Update(func() { t.AttachmentLoading = false; a.notify(err.Error()) })
-			return
-		}
-		a.prepareAttachmentPaths(t, paths)
-	}()
 }
 
 // Called only after AttachmentLoading is set on the UI thread.

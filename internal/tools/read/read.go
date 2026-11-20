@@ -180,15 +180,6 @@ func EncodeLike(original []byte, text string) ([]byte, error) {
 	return data, nil
 }
 
-func hasNUL(data []byte) bool {
-	for _, b := range data {
-		if b == 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // DecodeTextBytes decodes raw file bytes into UTF-8 text bytes. UTF-16 LE/BE
 // input (with or without a BOM) is transcoded to UTF-8; UTF-8 input is
 // returned unchanged. It is the single text-encoding boundary shared by the

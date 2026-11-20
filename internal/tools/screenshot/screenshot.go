@@ -57,6 +57,7 @@ const (
 )
 
 // tailBytes keeps the tail of a failed command's output for error context.
+// Used by the macOS and Linux capture paths.
 func tailBytes(out []byte) string {
 	s := strings.TrimSpace(string(out))
 	if len(s) > 400 {
@@ -166,14 +167,6 @@ type CaptureSource struct {
 	OriginalHeight int
 }
 
-// Capture resolves the target, grabs the frame on the current platform,
-// downscales it to model-input limits and encodes it. Window targets are
-// resolved against a fresh enumeration so a stale id fails loudly instead
-// of capturing a recycled handle.
-func Capture(opts CaptureOptions) (ModelImage, CaptureSource, error) {
-	return CaptureContext(context.Background(), opts)
-}
-
 // CaptureContext bounds one capture and propagates run cancellation. Windows
 // window capture runs in a killable helper because PrintWindow cannot abort.
 func CaptureContext(ctx context.Context, opts CaptureOptions) (ModelImage, CaptureSource, error) {
@@ -234,13 +227,6 @@ func captureDirect(ctx context.Context, opts CaptureOptions) (ModelImage, Captur
 	}
 	cap.Scaled = cap.Scaled || didScale
 	return cap, source, nil
-}
-
-// ListWindows enumerates visible top-level windows on the current platform
-// and applies the shared filter and cap. It returns the surviving rows plus
-// the unfiltered total so callers can flag truncation.
-func ListWindows(opts ListOptions) ([]Window, int, error) {
-	return ListWindowsContext(context.Background(), opts)
 }
 
 func ListWindowsContext(ctx context.Context, opts ListOptions) ([]Window, int, error) {

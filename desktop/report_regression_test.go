@@ -2,7 +2,6 @@ package desktop
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -82,47 +81,6 @@ func TestCompactReasoningDoesNotChangeTheTranscript(t *testing.T) {
 	a.compactDelta(conv, "summary", 0)
 	if len(conv.Messages) != 1 {
 		t.Fatal("visible compaction content did not reach the transcript")
-	}
-}
-
-func TestGameCoordinatesMatchPromptAndHumanInput(t *testing.T) {
-	for _, tc := range []struct{ kind, size int }{{gameGomoku, 15}, {gameGo, 9}} {
-		a := &desktop{}
-		a.resetGame(tc.kind)
-		a.gameF.Started = true
-		action, err := parseFirstJSON(fmt.Sprintf(`{"type":"place","x":%d,"y":%d}`, tc.size, tc.size))
-		if err != nil || normalizeGameAIAction(tc.kind, action) != nil {
-			t.Fatalf("valid boundary rejected: %v", err)
-		}
-		if err := a.applyGameAction(0, action); err != nil || a.gameF.Board[tc.size*tc.size-1] != 1 {
-			t.Fatalf("last cell: %v", err)
-		}
-		if err := normalizeGameAIAction(tc.kind, map[string]any{"type": "place", "x": float64(0), "y": float64(1)}); err == nil {
-			t.Fatal("zero-based model coordinate accepted")
-		}
-	}
-	a := &desktop{}
-	a.resetGame(gameXiangqi)
-	action, _ := parseFirstJSON(`{"type":"move","fromX":1,"fromY":7,"toX":1,"toY":6}`)
-	if err := normalizeGameAIAction(gameXiangqi, action); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.applyGameAction(0, action); err != nil || a.gameF.XQ[5][0] != "rP" {
-		t.Fatalf("red pawn move failed: %v", err)
-	}
-}
-
-func TestDoudizhuStartsWithAIDealAndFinishedBoardRemains(t *testing.T) {
-	a := &desktop{gameF: gameUI{Kind: gameDoudizhu, VsAI: true}}
-	a.startGame() // no configured model: the deal still happens before selection fails
-	g := &a.gameF
-	if !g.VsAI || g.Phase != ddzPhaseBid || len(g.Hands[0]) != 17 || len(g.Bottom) != 3 {
-		t.Fatalf("AI game did not deal: %+v", *g)
-	}
-	g.Winner = 1
-	a.gameFinished()
-	if !g.Finished || g.Started || len(g.Hands[0]) != 17 {
-		t.Fatal("finishing the game discarded the board")
 	}
 }
 
@@ -321,20 +279,6 @@ func TestServerAndToolSearchShowEmptyState(t *testing.T) {
 				t.Fatalf("missing %q: %v", tc.want, tt.Texts())
 			}
 		})
-	}
-}
-
-func TestCommandPreviewMatchesJoinedOutput(t *testing.T) {
-	for _, result := range []map[string]any{
-		{"stdout": "one\n\n", "stderr": "two\t spaces\r\n\n"},
-		{"output": "hello", "text": " \n\n", "_text": "最后\n"},
-		{"stderr": "\n\n"},
-	} {
-		for _, n := range []int{1, 2, 4} {
-			if got, want := commandResultPreview(result, n), commandPreviewText(commandOutput(result), n); got != want {
-				t.Fatalf("preview %q != %q", got, want)
-			}
-		}
 	}
 }
 

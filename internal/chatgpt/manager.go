@@ -444,9 +444,6 @@ func (m *Manager) Logout(ctx context.Context, client *http.Client, id string) (L
 	m.CancelLogin()
 	m.mu.Lock()
 	// Fail closed even if the disk/keychain later refuses the local clear.
-	if m.paused == nil {
-		m.paused = make(map[string]error)
-	}
 	m.paused[id] = fmt.Errorf("%w: signed out locally; authorize again before use", errSession)
 	for _, cancel := range m.requests[id] {
 		cancel()
@@ -555,9 +552,6 @@ func (m *Manager) RecordError(id string, err error) {
 	defer m.mu.Unlock()
 	if errors.Is(m.paused[id], errSession) {
 		return
-	}
-	if m.paused == nil {
-		m.paused = make(map[string]error)
 	}
 	m.paused[id] = errors.New("ChatGPT subscription_sharing_usage_limit_exceeded: requests paused; review https://chatgpt.com/settings/usage, then refresh models in Ally")
 }

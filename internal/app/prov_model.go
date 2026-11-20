@@ -1158,10 +1158,7 @@ func (a *App) earliestCooldownKeyIndex(cfg ConfigState, keys []string) int {
 	best := 0
 	var bestUntil time.Time
 	for i, key := range keys {
-		until, ok := a.keyCooldowns[keyCooldownID(cfg, key)]
-		if !ok {
-			return i // 不在冷却的 key(防御性:正常不会走到这里)
-		}
+		until := a.keyCooldowns[keyCooldownID(cfg, key)]
 		if i == 0 || until.Before(bestUntil) {
 			bestUntil = until
 			best = i

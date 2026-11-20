@@ -4,7 +4,6 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	"ally-dev/locales"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"runtime"
@@ -1067,37 +1066,6 @@ func (a *desktop) settingsAbout(c *ui.Context) {
 			})
 		})
 	}
-}
-
-func (a *desktop) settingsRaw(c *ui.Context) {
-	card(c, "settings-raw", func() {
-		sectionTitle(c, locales.Text("完整配置 JSON"))
-		fieldNote(c, locales.Text("高级用法：直接编辑后端完整配置（包含密钥），保存后立即生效。"), a.secondaryInk())
-		textArea(c, "raw-config", locales.Text("配置 JSON"), "{}", &a.settings.FullJSON, 420)
-		ui.Row(c).Gap(gapField).Children(func() {
-			settingsAction(c, locales.Text("保存 JSON"), uikit.Primary).OnClick(func() {
-				var cfg backend.ConfigState
-				if err := json.Unmarshal([]byte(a.settings.FullJSON), &cfg); err != nil {
-					a.notifyError(locales.Text("配置解析失败：") + err.Error())
-					return
-				}
-				a.saveConfig(cfg)
-			})
-			settingsAction(c, locales.Text("从后端重新载入")).OnClick(func() {
-				go func() {
-					cfg, err := a.core.GetConfig()
-					a.win.Update(func() {
-						if err != nil {
-							a.notifyError(err.Error())
-							return
-						}
-						a.configDraft = cfg
-						a.settings.FullJSON = pretty(cfg)
-					})
-				}()
-			})
-		})
-	})
 }
 
 func (a *desktop) settingsModule(c *ui.Context, key string, labels ...string) int {

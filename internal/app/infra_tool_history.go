@@ -52,7 +52,7 @@ func toolHistoryMetadataFor(call openai.ToolCall, field string, result toolResul
 				// The tool finished by handing execution to a service. Its
 				// historical card must not remain a permanently running tool.
 				meta.Status = "success"
-			case command.ExitCode != 0 || command.TimedOut || command.SandboxDenied:
+			case command.ExitCode != 0 || command.TimedOut:
 				meta.Status = "error"
 			}
 		}

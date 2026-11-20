@@ -97,6 +97,7 @@ func (a *desktop) deleteModel(model backend.ModelConfig) {
 		a.modelEdit = -1
 		a.modelPrevious = nil
 		a.modelDraft = backend.ModelConfig{}
+		a.invalidateModelBalance(id)
 		for _, t := range a.tabs {
 			if t.Model == label {
 				t.Model = ""

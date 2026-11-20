@@ -8,7 +8,6 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	backend "ally-dev/internal/app"
-	"ally-dev/locales"
 	"fmt"
 	"math"
 	"strconv"
@@ -125,22 +124,15 @@ const (
 )
 
 // Semantic colours derived from the theme rather than fixed per page.
-func colBg(a *desktop) ui.Color     { return a.currentPalette().bg }
-func colPanel(a *desktop) ui.Color  { return a.currentPalette().panel }
-func colLine(a *desktop) ui.Color   { return a.currentPalette().line }
-func colAccent(a *desktop) ui.Color { return a.currentPalette().accent }
-func colText(a *desktop) ui.Color   { return a.currentPalette().text }
+func colLine(a *desktop) ui.Color { return a.currentPalette().line }
 
 // secondaryInk is the tone of secondary text: timestamps, counts, captions.
 // It stays at the palette's muted while Theme.TextMuted carries the fainter
 // placeholder tone, so pass it down to leaf helpers that only see the context.
 func (a *desktop) secondaryInk() ui.Color { return a.currentPalette().muted }
-func colMuted(a *desktop) ui.Color        { return a.secondaryInk() }
-func colHover(a *desktop) ui.Color        { return a.currentPalette().hover }
 func colChrome(a *desktop) ui.Color       { return a.currentPalette().chromeColor() }
 
 func colDanger() ui.Color { return errCol }
-func colFaint() ui.Color  { return faint }
 
 // ---- Selection -----------------------------------------------------------
 // One selected look for the whole desktop, so a page never assembles its own
@@ -148,7 +140,6 @@ func colFaint() ui.Color  { return faint }
 // shared kit tokens; selectionInk is the accent every selected label uses.
 
 func selectionFill(tone ui.Color) ui.Color { return uikit.SelectedFill(tone) }
-func selectionEdge(tone ui.Color) ui.Color { return uikit.SelectedStrokeColor(tone) }
 
 // palette keeps app-specific chrome and persisted palette metadata. Shared
 // surfaces and accents are supplied by uikit's built-in themes.
@@ -445,7 +436,6 @@ var iconPaths = map[string]string{
 	"ssh":         `<path d="M4 16v-4a8 8 0 0 1 16 0v4M4 12H2v7h5v-7zm16 0h2v7h-5v-7zM17 21h-5"/>`,
 	"stats":       `<path d="M3 3v18h19M7 16v-5m5 5V6m5 10V9"/>`,
 	"tasks":       `<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 3v18M12 7h5m-5 4h5m-5 4h3"/>`,
-	"games":       `<path d="M6 4l12 16M18 4L6 20M4 8l4-4m8 0 4 4M4 16l4 4m8 0 4-4"/>`,
 	"plugins":     `<path d="M10 3h4v3a2 2 0 1 0 4 0h3v4h-3a2 2 0 1 0 0 4h3v4h-4a2 2 0 1 0-4 0H6v-4a2 2 0 1 0 0-4H3V6h4a2 2 0 1 0 3-3z"/>`,
 	"settings":    `<path d="m9 3 1-1h4l1 1 1 3 3 1 1 4-1 2-1 3v3l-3 2-3-1h-3l-3 1-3-2v-3l-1-3-1-2 1-4 3-1z"/><circle cx="12" cy="11" r="4"/>`,
 	"network":     `<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-3 3-4 6-4 9s1 6 4 9M12 3c3 3 4 6 4 9s-1 6-4 9"/>`,
@@ -579,13 +569,6 @@ func fmtTime(ms int64) string {
 	return time.UnixMilli(ms).Local().Format("01-02 15:04")
 }
 
-func fmtClock(ms int64) string {
-	if ms <= 0 {
-		return ""
-	}
-	return time.UnixMilli(ms).Local().Format("15:04")
-}
-
 // fmtDur renders card timings with the backend's shared whole-second format,
 // so a tool card, a sub-agent summary and a scheduled-task summary never
 // disagree about how long the same run took.
@@ -628,22 +611,6 @@ func cutRunes(s string, n int) (string, bool) {
 		count++
 	}
 	return s, false
-}
-
-func firstLine(s string) string {
-	for _, l := range strings.Split(s, "\n") {
-		if t := strings.TrimSpace(l); t != "" {
-			return t
-		}
-	}
-	return ""
-}
-
-func yesNo(v bool) string {
-	if v {
-		return locales.Text("是")
-	}
-	return locales.Text("否")
 }
 
 func boolValue(p *bool) bool { return p != nil && *p }

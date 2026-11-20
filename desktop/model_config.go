@@ -299,6 +299,8 @@ func (a *desktop) saveModelDraft() {
 			a.modelPrevious = modelIdentityPtr(m)
 			a.modelDraft = m
 			a.modelEdit = -1
+			// A saved key or endpoint makes the amount read before it wrong.
+			a.invalidateModelBalance(modelIdentity(m))
 			for i, v := range cfg.Models {
 				if sameModelIdentity(modelIdentity(v), modelIdentity(m)) {
 					a.modelEdit = i
@@ -313,37 +315,6 @@ func (a *desktop) saveModelDraft() {
 			a.modelForm.Open = false
 			a.cancelOAuthWhenLeaving()
 			a.notifySuccess(locales.Text("模型已保存"))
-		})
-	}()
-}
-func (a *desktop) useModel(m backend.ModelConfig) {
-	if a.modelSaving {
-		return
-	}
-	id := modelIdentity(m)
-	target := a.current()
-	a.modelSaving = true
-	go func() {
-		err := a.core.SelectNativeModel(id)
-		var cfg backend.ConfigState
-		if err == nil {
-			cfg, err = a.core.GetConfig()
-		}
-		a.win.Update(func() {
-			a.modelSaving = false
-			if err != nil {
-				a.notifyError(err.Error())
-				return
-			}
-			a.config = cfg
-			if t := target; t != nil {
-				t.Model = modelOption(m)
-				t.Reasoning = m.ReasoningEffort
-				if t.Reasoning == "" {
-					t.Reasoning = "auto"
-				}
-			}
-			a.notify(locales.Text("已选择 ") + m.Model)
 		})
 	}()
 }

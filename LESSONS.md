@@ -135,7 +135,7 @@
 2026-11-05 高危 blackboard-lexer 行作用域状态(反引号/注释/伪标签)跨行续用会静默吞掉后续消息；无闭合标记即复位。@internal/blackboard/protocol.go
 2026-11-05 中危 stream-builder 消息存 Builder.String() 后勿 Reset 复用，旧文字会被就地改写。@desktop/events.go
 2026-11-05 中危 IconButton 的 size 同时决定方块和图标(0.62)，补命中区必放大图标；用 IconButtonSized。@desktop/uikit
-2026-11-07 中危 menu-reentry MyGo 0.8.1 子菜单比上次高亮坐标，Esc 后同点重入漏展开；暂用局部兼容层。@desktop/uikit
+2026-11-07 中危 menu-reentry MyGo 0.10.0 仍漏“Esc 后经空白折返再入”的子菜单重开；兼容层不能删。@desktop/uikit
 2026-11-07 中危 menu-lock MenuBase 在样式前判 Disabled；必须按触发器最终禁用态关菜单，否则运行中仍能选模型。@desktop/uikit
 2026-11-07 中危 preview-reuse 换页须换 token，事件和异步命令都校验；Reset 清旧正文，否则误操作新文件。@desktop/workspace_media.go
 2026-11-07 高危 plugin-retire 异步卸载须返回 Promise；旧存储写回与安装/删除共锁并验版本，否则覆盖新数据。@desktop/pluginhost
@@ -156,3 +156,4 @@
 2026-11-16 中危 no-node 本机无 node/npm；node 类 CLI 用 HBuilderX 自带 plugins/node/node 兜底。@scripts
 2026-11-18 中危 batch-forget 批量删除后无条件 forget 全部 id，后端拒删的运行中会话被清出内存；只 forget 成功的。@desktop/rail.go
 2026-11-18 中危 temp-ws-shared 临时工作区目录随单个标签关闭即删，同沙箱其它会话文件树失效；只在最后一个标签关闭时删。@desktop/header.go
+2026-11-20 高危 deadcode-scan 平台文件共享的符号在 Windows 上误报；删前必跑 GOOS=darwin/linux CGO_ENABLED=0 go build。@scripts

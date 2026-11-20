@@ -754,15 +754,6 @@ func (a *desktop) composerStatusRow(c *ui.Context, t *conversation) {
 	})
 }
 
-func lastUserPrompt(t *conversation) string {
-	for i := len(t.Messages) - 1; i >= 0; i-- {
-		if str(t.Messages[i], "role") == "user" {
-			return firstLine(str(t.Messages[i], "content"))
-		}
-	}
-	return ""
-}
-
 // thinkingTokensLine draws the one "Thinking N tokens" line shared by the
 // compacting and busy states, so both keep a single font size.
 func (a *desktop) thinkingTokensLine(c *ui.Context, count int) {
@@ -1216,31 +1207,6 @@ func persistedReasoning(cfg backend.ConfigState, option string) string {
 	return level
 }
 
-// withModelReasoning writes level onto the model entry behind option. changed is
-// false when that model is gone (deleted, or the Tab points at a stale option)
-// or already carries the level: there is nothing to persist then.
-func withModelReasoning(cfg backend.ConfigState, option, level string) (backend.ConfigState, bool) {
-	for i, m := range cfg.Models {
-		if modelOption(m) != option {
-			continue
-		}
-		// An entry that never carried a level means "auto", so picking auto on
-		// it is no change and must not rewrite the config or announce one.
-		stored := cfg.Models[i].ReasoningEffort
-		if stored == "" {
-			stored = "auto"
-		}
-		if stored == level {
-			return cfg, false
-		}
-		models := append([]backend.ModelConfig(nil), cfg.Models...)
-		models[i].ReasoningEffort = level
-		cfg.Models = models
-		return cfg, true
-	}
-	return cfg, false
-}
-
 // workspaceButton is the workspace entry of the info bar: the folder glyph on
 // its own, the same 26px box and 16px glyph as the icons beside it, with the
 // workspace and its path in the tip. The name already shows in the header tab.
@@ -1458,29 +1424,6 @@ func gitRepoStatusChip(c *ui.Context, label string, tone uikit.Tone) {
 		Background(color.Alpha(0.08)).Children(func() {
 		ui.Text(c, label).FontSize(fsTiny).TextColor(color).SingleLine()
 	})
-}
-
-func gitStatsText(git backend.GitStatus) string {
-	var parts []string
-	if git.Ahead > 0 {
-		parts = append(parts, fmt.Sprintf("↑%d", git.Ahead))
-	}
-	if git.Behind > 0 {
-		parts = append(parts, fmt.Sprintf("↓%d", git.Behind))
-	}
-	if git.Added > 0 {
-		parts = append(parts, fmt.Sprintf("+%d", git.Added))
-	}
-	if git.Modified > 0 {
-		parts = append(parts, fmt.Sprintf("~%d", git.Modified))
-	}
-	if git.Deleted > 0 {
-		parts = append(parts, fmt.Sprintf("-%d", git.Deleted))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return " " + strings.Join(parts, " ")
 }
 
 // Leave room for both schema rows and expanded prompt parts before scrolling.
@@ -1798,10 +1741,6 @@ func inputHistory(t *conversation) []string {
 		unique[i], unique[j] = unique[j], unique[i]
 	}
 	return unique
-}
-
-func composerFlat(c *ui.Context, text string) ui.Element {
-	return button(c, nil, text, btnGhost, true, "").Padding(1, 6).MinWidth(0).Shrink(1)
 }
 
 // composerFlatParts is composerFlat for a label whose colour carries meaning

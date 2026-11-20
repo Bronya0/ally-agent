@@ -123,11 +123,6 @@ func (a *App) inspectWorkspaceFile(ctx context.Context, req WorkspacePathRequest
 	return result, nil
 }
 
-// hashWorkspaceFile streams one file through MD5/SHA1/SHA256/SHA512/CRC32 in
-// a single pass. Only the rolling hash states live in memory.
-func hashWorkspaceFile(path string, out *WorkspaceFileInfo) error {
-	return hashWorkspaceFileContext(context.Background(), path, out)
-}
 func hashWorkspaceFileContext(ctx context.Context, path string, out *WorkspaceFileInfo) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -167,14 +162,8 @@ func hashWorkspaceFileContext(ctx context.Context, path string, out *WorkspaceFi
 	return nil
 }
 
-// summarizeWorkspaceDir walks a directory tree and aggregates entry counts
-// and total size. The walk is bounded by entry count to stay responsive on
-// huge trees; unreadable subtrees are skipped, not fatal.
 const workspaceFileInfoMaxEntries = 200000
 
-func summarizeWorkspaceDir(root string, out *WorkspaceFileInfo) error {
-	return summarizeWorkspaceDirContext(context.Background(), root, out)
-}
 func summarizeWorkspaceDirContext(ctx context.Context, root string, out *WorkspaceFileInfo) error {
 	entries := 0
 	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {

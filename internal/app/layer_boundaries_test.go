@@ -11,7 +11,7 @@ package app
 // prov_/host_/infra_ 只是命名约定（同一个包，谁都能调谁，这也正是它们需要文档约束的
 // 原因）。真正跨目录的两条边界破坏起来没有任何症状，所以钉在这里：
 //
-//  1. internal/ 下除 internal/app 外的所有包（tools、sandbox、builtin_skills …）不许
+//  1. internal/ 下除 internal/app 外的所有包（tools、builtin_skills …）不许
 //     import internal/app：纯算法层要能脱离 App 状态单测，反向依赖一出现这条前提就没了。
 //  2. internal/app 里除 host_*.go 外的实现文件不许 import Wails runtime 或 MyGo：宿主中立；
 //     界面与窗口 API 由根目录 desktop/ 包负责，main.go 只保留程序入口。

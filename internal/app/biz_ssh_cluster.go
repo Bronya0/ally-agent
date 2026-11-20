@@ -491,14 +491,6 @@ func (a *App) saveSSHServerSnapshot(node SSHServerNode, authorizeWorkspace strin
 	return saved, nil
 }
 
-// storeSSHServerLocked 落盘一份节点和可选的工作区授权，并失效被它改掉的凭据槽位。
-// authorizeWorkspace 非空时只允许创建新别名，避免审批期间的并发新增被模型 upsert 覆盖。
-// 调用方不得持有锁。
-func (a *App) storeSSHServerLocked(alias string, node SSHServerNode, authorizeWorkspace string, expected ...*SSHServerNode) error {
-	_, err := a.storeSSHServerSnapshotLocked(alias, node, authorizeWorkspace, expected...)
-	return err
-}
-
 func (a *App) storeSSHServerSnapshotLocked(alias string, node SSHServerNode, authorizeWorkspace string, expected ...*SSHServerNode) (SSHServerNode, error) {
 	a.sshClustersMu.Lock()
 	defer a.sshClustersMu.Unlock()

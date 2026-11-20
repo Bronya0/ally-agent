@@ -16,8 +16,7 @@ import (
 )
 
 func TestToolExecutionRefreshesLiveExtraRoots(t *testing.T) {
-	isolateSandboxHome(t)
-	pinBoundaryOwnership(t, false)
+	t.Setenv("ALLY_DATA_DIR", t.TempDir())
 	a := newIsolatedTestApp(t)
 	workspace, extra := t.TempDir(), t.TempDir()
 	stale := ConfigState{Workspace: workspace}
@@ -56,9 +55,7 @@ func TestToolExecutionRefreshesLiveExtraRoots(t *testing.T) {
 // 会话附加工作区的活记录必须当轮生效：run 起步时冻结的 cfg 只是快照，运行中
 // （含模型 ask 暂停期间）加/删只能靠这条记录追上围栏。
 func TestLiveExtraRootsReachTheFence(t *testing.T) {
-	isolateSandboxHome(t)
-	// 围栏在位时才由 Ally 判越界；内核接管边界的宿主上这条断言无从验证。
-	pinBoundaryOwnership(t, false)
+	t.Setenv("ALLY_DATA_DIR", t.TempDir())
 	workspace := t.TempDir()
 	extra := t.TempDir()
 	app := newIsolatedTestApp(t)

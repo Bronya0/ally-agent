@@ -51,7 +51,7 @@ func toolStageSucceeded(result toolResult) bool {
 	}
 	switch data := result.Data.(type) {
 	case CommandResult:
-		return data.ExitCode == 0 && !data.TimedOut && !data.Cancelled && !data.SandboxDenied && !data.PromotedToService
+		return data.ExitCode == 0 && !data.TimedOut && !data.Cancelled && !data.PromotedToService
 	case *CommandResult:
 		return data != nil && toolStageSucceeded(toolResult{OK: true, Data: *data})
 	case AgentDelegateResult:

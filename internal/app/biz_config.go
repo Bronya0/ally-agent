@@ -972,8 +972,8 @@ func applyModelEntry(cfg *ConfigState, m ModelConfig) {
 
 // configForModelEntry 造一份“网络字段取当前配置、模型字段取给定条目”的请求配置。
 // 这是从一条 ModelConfig 造请求配置的唯一路径：“测试连接”（TestModelConnection）
-// 与“和模型下棋”（GameAIAction）以前各自手抄一份字段表，加一个模型字段时只有聊天
-// 主路径会生效——设置里能配、聊天里也生效，偏偏这两条路用不上。
+// 以前自己手抄一份字段表，加一个模型字段时只有聊天主路径会生效——设置里能配、
+// 聊天里也生效，偏偏这条路用不上。
 func (a *App) configForModelEntry(model ModelConfig) ConfigState {
 	cfg := a.effectiveConfig(ConfigState{})
 	// 模型字段整段换掉：applyModelEntry 在条目没填 ContextWindow（0）时会保留

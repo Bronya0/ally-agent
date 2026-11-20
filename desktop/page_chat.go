@@ -404,15 +404,6 @@ func (a *desktop) userMessage(c *ui.Context, t *conversation, i int, m map[strin
 	})
 }
 
-func lastUserIndex(messages []map[string]any) int {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if str(messages[i], "role") == "user" {
-			return i
-		}
-	}
-	return -1
-}
-
 // collapsiblePrompt keeps very long questions readable: the first lines show,
 // the rest expands on demand.
 func (a *desktop) collapsiblePrompt(c *ui.Context, t *conversation, i int, content string) {
@@ -1202,19 +1193,6 @@ func (a *desktop) pasteAskImage(c *ui.Context, t *conversation, questionID strin
 // Welcome detection shares the append-aware transcript index.
 func hasWelcomeMessage(t *conversation) bool {
 	return t.cachedTranscriptRows().welcome
-}
-
-func hasLaterSuggestion(t *conversation, index int) bool {
-	for n := index + 1; n < len(t.Messages); n++ {
-		m := t.Messages[n]
-		if str(m, "role") == "user" {
-			return false
-		}
-		if toolKind(str(m, "name")) == "suggest" {
-			return true
-		}
-	}
-	return false
 }
 
 type roundIndexKey struct {

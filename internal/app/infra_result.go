@@ -1016,9 +1016,6 @@ func renderCommandResultForModel(r CommandResult) string {
 		fmt.Fprintf(&b, " | %s=%s", key, strconv.Quote(r.OutputFilePath))
 	}
 	b.WriteString("\n\n" + output)
-	if r.DeniedWriteHint != "" {
-		b.WriteString("\n\n" + strings.TrimRight(r.DeniedWriteHint, "\n"))
-	}
 	if r.OutputWarning != "" {
 		b.WriteString("\n\n" + r.OutputWarning)
 	}
@@ -1157,9 +1154,6 @@ func renderServiceReadResultForModel(r ServiceReadResult) string {
 	if fromByte > 0 {
 		header += fmt.Sprintf(" | from-byte=%d", fromByte)
 	}
-	if r.DeniedWriteHint != "" {
-		output += "\n\n" + r.DeniedWriteHint
-	}
 	return modelResultBody(header, output)
 }
 
@@ -1183,9 +1177,6 @@ func renderServiceInfoResultForModel(r ServiceInfo) string {
 	}
 	if r.Error != "" {
 		body += "\n" + r.Error
-	}
-	if r.DeniedWriteHint != "" {
-		body += "\n" + r.DeniedWriteHint
 	}
 	return modelResultBody(header, body)
 }

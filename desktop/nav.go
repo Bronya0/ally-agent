@@ -2,8 +2,6 @@
 package desktop
 
 import (
-	backend "ally-dev/internal/app"
-	"ally-dev/locales"
 	"strings"
 )
 
@@ -12,10 +10,6 @@ import (
 // view never touches the backend.
 func (a *desktop) changePage(page string) {
 	if !a.ready {
-		return
-	}
-	// Games are intentionally not connected to navigation yet.
-	if page == "games" {
 		return
 	}
 	if page != "chat" {
@@ -86,37 +80,6 @@ func (a *desktop) refreshPage(page string) {
 	case "stats":
 		a.loadStats()
 	}
-}
-
-// saveConfig writes the config in the background, queued behind every write
-// that came before it, and publishes the reloaded config once it lands.
-func (a *desktop) saveConfig(cfg backend.ConfigState, notice ...string) {
-	if a.core == nil || a.win == nil {
-		return
-	}
-	previous, done := a.configWriteSlot()
-	go func() {
-		defer close(done)
-		waitConfigWrite(previous)
-		err := a.core.SaveConfig(cfg)
-		a.writeFailures.record("config", err)
-		var fresh backend.ConfigState
-		if err == nil {
-			fresh, err = a.core.GetConfig()
-		}
-		a.win.Update(func() {
-			if err != nil {
-				a.notifyError(err.Error())
-				return
-			}
-			a.config = fresh
-			if len(notice) > 0 {
-				a.notifySuccess(notice[0])
-			} else {
-				a.notifySuccess(locales.Text("设置已保存"))
-			}
-		})
-	}()
 }
 
 // configWriteSlot reserves a place in the queue every config write joins: the
