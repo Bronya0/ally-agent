@@ -533,7 +533,7 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 	row.Children(func() {
 		uikit.Tooltip(c, ui.Text(c, fmtDur(stat.DurationMS)).FontSize(fsSmall).TextColor(a.secondaryInk()), locales.Text("本轮耗时"))
 		if hit := stat.CacheHit + stat.CacheMiss; hit > 0 {
-			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("cache %d%%", int(float64(stat.CacheHit)*100/float64(hit)))).FontSize(fsSmall).
+			uikit.Tooltip(c, ui.Text(c, fmt.Sprintf("cache %.1f%%", float64(stat.CacheHit)*100/float64(hit))).FontSize(fsSmall).
 				TextColor(a.secondaryInk()), fmt.Sprintf("cache hit %d / miss %d", stat.CacheHit, stat.CacheMiss))
 		}
 		if stat.InputTokens > 0 || stat.OutputTokens > 0 {
