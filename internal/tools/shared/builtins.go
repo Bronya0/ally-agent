@@ -202,7 +202,7 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("edit", "Edit one workspace file using the current version from read, create, or the preceding successful edit; never guess a version or source text. Prefer short exact unique oldText. Use lineRange only for whole-line changes immediately after reading that range, and re-read before using line numbers after any edit. Put all changes to this file in one call. On source/version/range errors, use an attached complete snapshot or re-read the needed range.", map[string]any{
+		functionTool("edit", "Edit one workspace file using the current version from read, create, or the preceding successful edit; never guess a version or source text. Prefer short exact unique oldText. Use lineRange only for whole-line changes immediately after reading that range, and re-read before using line numbers after any edit. Put all changes to this file in one call. Do not patch or rewrite files through the shell: sed, redirection, and scripting bypass the version check and leave no diff. On source/version/range errors, use an attached complete snapshot or re-read the needed range.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the single file to edit in this call."},
@@ -366,7 +366,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"alias", "files"},
 		}),
-		functionTool("remote_edit", "Edit one file by absolute path on a remote SSH server, using the same changes contract as edit: prefer short exact unique oldText, use lineRange only immediately after reading that range, and put all changes to one file in one call. Send parallel calls for multiple files. alias selects only the SSH server (e.g. dev); path is absolute (e.g. /srv/app/main.go). Use the current version from remote_read or the preceding successful remote_edit; never guess it. changes must be a JSON array, not a quoted string. Writes preserve the source encoding and recheck its full hash on the host before committing. Each remote file commits independently; re-read on conflicts.", map[string]any{
+		functionTool("remote_edit", "Edit one file by absolute path on a remote SSH server, using the same changes contract as edit: prefer short exact unique oldText, use lineRange only immediately after reading that range, and put all changes to one file in one call. Send parallel calls for multiple files. Patch remote files with this tool, not through the shell: the shell bypasses the version check. alias selects only the SSH server (e.g. dev); path is absolute (e.g. /srv/app/main.go). Use the current version from remote_read or the preceding successful remote_edit; never guess it. changes must be a JSON array, not a quoted string. Writes preserve the source encoding and recheck its full hash on the host before committing. Each remote file commits independently; re-read on conflicts.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"alias":   sshAliasSchema(),
