@@ -38,6 +38,50 @@ func TestMCPShowsToolIdentityStatusAndDuration(t *testing.T) {
 		}
 	}
 }
+// 运行中的 ToolExec 卡片直接指向远端工具：等结果事件带来的元数据才知道调的是谁，
+// 卡片就会先写 ToolExec 再变成 server/tool，同一个调用看着像换了两次。
+func TestToolExecCardNamesItsTargetBeforeTheResult(t *testing.T) {
+	const done = `{"name":"github.create_issue","arguments":{"title":"Bug","repo":"a/b"},"stage":0}`
+	for _, tc := range []struct {
+		name   string
+		args   string
+		status string
+		extra  map[string]any
+		want   string
+	}{
+		{"arguments still arriving keep the neutral label", `{"name":"github.crea`, "running", nil, "MCP"},
+		{"a complete envelope names the target", done, "running", nil, "github/create_issue"},
+		{"the result keeps the same identity", done, "success", map[string]any{"mcpServer": "github", "mcpTool": "create_issue"}, "github/create_issue"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := map[string]any{"name": "ToolExec", "toolCallId": "exec", "status": tc.status, "args": tc.args, "streaming": tc.status == "running", "argsStreaming": tc.status == "running"}
+			for key, value := range tc.extra {
+				msg[key] = value
+			}
+			if tc.status == "success" {
+				msg["result"] = map[string]any{"text": "HIDDEN_OUTPUT"}
+			}
+			text := strings.Join(compactToolView(&desktop{}, msg).Texts(), " ")
+			if strings.Contains(text, "ToolExec") {
+				t.Fatalf("card shows the envelope name: %s", text)
+			}
+			if !strings.Contains(text, tc.want) {
+				t.Fatalf("card = %s, want %q", text, tc.want)
+			}
+			if strings.Contains(text, "HIDDEN_OUTPUT") {
+				t.Fatalf("card leaked the remote output: %s", text)
+			}
+			if tc.status == "running" && tc.want != "MCP" {
+				// The label already names the target, so the summary is what the
+				// remote tool receives, not a second copy of the envelope.
+				if !strings.Contains(text, `"title":"Bug"`) || strings.Contains(text, `"arguments"`) {
+					t.Fatalf("summary is not the target arguments: %s", text)
+				}
+			}
+		})
+	}
+}
+
 func TestToolSearchShowsBatchQueriesWithoutSchemas(t *testing.T) {
 	const args = `{"names":["tavily.tavily_search","zhihu.zhihu_search"]}`
 	msg := map[string]any{

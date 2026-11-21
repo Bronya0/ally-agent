@@ -4,6 +4,7 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	"ally-dev/locales"
+	backend "ally-dev/internal/app"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,7 +22,12 @@ type toolDescriptor struct {
 	showTiming bool
 }
 
-const mcpSearchToolKind = "toolsearch"
+const (
+	mcpSearchToolKind = "toolsearch"
+	// mcpExecToolKind is the envelope every MCP call now arrives in. Its card
+	// shows the remote target instead of the envelope's own name.
+	mcpExecToolKind = "toolexec"
+)
 
 var toolTable = map[string]toolDescriptor{
 	"read":               {"Read", false, false},
@@ -43,6 +49,7 @@ var toolTable = map[string]toolDescriptor{
 	"plan":               {"Plan", false, false},
 	"skill":              {"Load Skill", false, false},
 	mcpSearchToolKind:    {"ToolSearch", false, false},
+	mcpExecToolKind:      {"MCP", false, false},
 	"ask":                {"Ask", true, false},
 	"subagent":           {"Subagent", true, false},
 	"ssh_cluster":        {"Cluster List", true, false},
@@ -74,8 +81,13 @@ func toolSSHAlias(args map[string]any) string {
 }
 
 func toolKind(name string) string {
+	// Both MCP entry points arrive with their declared capitalisation; the table
+	// and every card rule key on the lower-case kind.
 	if strings.EqualFold(name, mcpSearchToolKind) {
 		return mcpSearchToolKind
+	}
+	if strings.EqualFold(name, mcpExecToolKind) {
+		return mcpExecToolKind
 	}
 	switch name {
 	case "list_files":
@@ -104,6 +116,40 @@ func describeTool(name string) toolDescriptor {
 		return toolDescriptor{"MCP Tool", true, true}
 	}
 	return toolDescriptor{name, true, false}
+}
+
+// toolExecTarget renders a running ToolExec card's identity: the remote server
+// and tool, joined the way MCP cards have always shown them. The envelope's
+// arguments stream field by field, so the target is read only from a complete
+// snapshot: parseToolArgs fills in recovered string prefixes for a partial one,
+// and a target built from half a name would change as the call arrives.
+func toolExecTarget(args map[string]any) string {
+	if _, partial := args["_raw"]; partial {
+		return ""
+	}
+	server, tool, ok := backend.SplitMcpToolID(str(args, "name"))
+	if !ok {
+		return ""
+	}
+	return server + "/" + tool
+}
+
+// toolExecArgsSummary is what the remote tool will receive, which is the part
+// worth showing beside a card that already names the target.
+func toolExecArgsSummary(args map[string]any) string {
+	inner, ok := args["arguments"]
+	if !ok || inner == nil {
+		return ""
+	}
+	raw, err := json.Marshal(inner)
+	if err != nil {
+		return ""
+	}
+	text := string(raw)
+	if text == "{}" {
+		return ""
+	}
+	return text
 }
 
 // toolActionLabel keeps operation identity visible while reflecting its state.
@@ -830,11 +876,16 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	parsed := memoAt[argsMemo](container, "parsed-args")
 	args := parsed.get(str(m, "args"), parseToolArgs)
 	var summary string
-	if name == mcpSearchToolKind {
+	switch name {
+	case mcpSearchToolKind:
 		summary = memoAt[memoOf[string, string]](container, "search-names").get(str(m, "args"), func(string) string {
 			return toolArgSummary(name, args)
 		})
-	} else {
+	case mcpExecToolKind:
+		summary = memoAt[memoOf[string, string]](container, "exec-args").get(str(m, "args"), func(string) string {
+			return toolExecArgsSummary(args)
+		})
+	default:
 		summary = toolArgSummary(name, args)
 	}
 	if name == "remote_read" && summary == "" && boolOf(m, "fastCompacted") {
@@ -867,13 +918,24 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			}
 		}
 	}
-	isMCP := name != mcpSearchToolKind && isMCPDisplayTool(m)
+	// The finished call carries the target in its own metadata, but a running one
+	// has to read it from the envelope: otherwise the card says ToolExec and only
+	// becomes the remote target once the call returns.
+	target := strings.Trim(str(m, "mcpServer")+"/"+str(m, "mcpTool"), "/")
+	if name == mcpExecToolKind && target == "" {
+		target = memoAt[memoOf[string, string]](container, "exec-target").get(str(m, "args"), func(string) string {
+			return toolExecTarget(args)
+		})
+	}
+	isMCP := name != mcpSearchToolKind && (target != "" || isMCPDisplayTool(m))
 	if isMCP {
-		operation = strings.Trim(str(m, "mcpServer")+"/"+str(m, "mcpTool"), "/")
+		operation = target
 		if operation == "" {
-			operation = name
+			operation = "MCP"
 		}
-		summary = str(m, "args")
+		if name != mcpExecToolKind {
+			summary = str(m, "args")
+		}
 	} else {
 		switch name {
 		case "subagent":

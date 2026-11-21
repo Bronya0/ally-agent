@@ -16,7 +16,8 @@ func isMCPDisplayTool(m map[string]any) bool {
 	if name == "" {
 		name = str(m, "toolName")
 	}
-	return str(m, "mcpServer") != "" || str(m, "mcpTool") != "" || strings.HasPrefix(name, "mcp") || strings.EqualFold(name, mcpSearchToolKind)
+	return str(m, "mcpServer") != "" || str(m, "mcpTool") != "" || strings.HasPrefix(name, "mcp") ||
+		strings.EqualFold(name, mcpSearchToolKind) || strings.EqualFold(name, mcpExecToolKind)
 }
 
 // MCP cards retain only arguments and outcome metadata. The runtime keeps the complete result

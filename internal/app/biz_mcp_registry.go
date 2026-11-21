@@ -122,7 +122,10 @@ func mcpServerID(name string) string {
 	return strings.ReplaceAll(url.PathEscape(name), ".", "%2E")
 }
 
-func splitMcpToolID(id string) (string, string, bool) {
+// SplitMcpToolID splits a catalog id back into the server and the tool name.
+// The desktop labels a running ToolExec card with it while the call's own
+// metadata has not arrived yet, so the id format lives here only.
+func SplitMcpToolID(id string) (string, string, bool) {
 	serverID, name, ok := strings.Cut(id, ".")
 	server, err := url.PathUnescape(serverID)
 	return server, name, ok && server != "" && name != "" && err == nil && mcpServerID(server) == serverID
@@ -213,7 +216,7 @@ func (a *App) searchMcpTools(ctx context.Context, cfg ConfigState, req mcpSearch
 	}
 	for _, id := range req.Names {
 		entry := match{Name: id}
-		server, name, ok := splitMcpToolID(id)
+		server, name, ok := SplitMcpToolID(id)
 		err := mcpToolNotFound(id)
 		if ok && manager != nil {
 			var tool McpDiscoveredTool
@@ -236,7 +239,7 @@ func (a *App) searchMcpTools(ctx context.Context, cfg ConfigState, req mcpSearch
 }
 
 func (a *App) execMcpTool(ctx context.Context, req mcpExecRequest) (any, error) {
-	server, name, ok := splitMcpToolID(req.Name)
+	server, name, ok := SplitMcpToolID(req.Name)
 	manager := a.activeMcpManager()
 	if !ok || manager == nil {
 		return nil, mcpToolNotFound(req.Name)
@@ -369,7 +372,7 @@ func mcpExecEventMeta(function, arguments string) map[string]any {
 	if json.Unmarshal([]byte(arguments), &req) != nil {
 		return nil
 	}
-	server, tool, ok := splitMcpToolID(req.Name)
+	server, tool, ok := SplitMcpToolID(req.Name)
 	if !ok {
 		return nil
 	}
@@ -392,7 +395,7 @@ func mcpExecDedupKey(arguments string) (string, bool) {
 	if decoder.Decode(&request) != nil || request.Arguments == nil {
 		return "", false
 	}
-	if _, _, ok := splitMcpToolID(request.Name); !ok {
+	if _, _, ok := SplitMcpToolID(request.Name); !ok {
 		return "", false
 	}
 	key, err := json.Marshal(request)
