@@ -17,7 +17,7 @@ type historyTaskBoundary struct {
 }
 
 func historyTaskKey(m openai.ChatCompletionMessage) string {
-	if m.Role != openai.ChatMessageRoleUser || isImageInjectionMessage(&m) {
+	if m.Role != openai.ChatMessageRoleUser || isImageInjectionMessage(&m) || isMcpCatalogMessage(m) {
 		return ""
 	}
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(messageText(m))))

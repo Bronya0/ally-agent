@@ -31,13 +31,13 @@ type trayMenuMonitorInfo struct {
 
 // Capture once in the tray callback, before creating/laying out the flyout.
 // Later pointer movement must not move the open menu or its FitContent anchor.
-func capturePosition() func(*mygo.Window) {
+func capturePosition(submenuWidth int) func(*mygo.Window) {
 	var at trayMenuPoint
 	if r, ok := callProc(procTrayMenuGetCursorPos, uintptr(unsafe.Pointer(&at))); !ok || r == 0 {
 		return nil // retain the platform icon anchor if coordinates are unavailable
 	}
 	return func(win *mygo.Window) {
-		bindTrayMenuPosition(win, image.Pt(int(at.X), int(at.Y)))
+		bindTrayMenuPosition(win, image.Pt(int(at.X), int(at.Y)), submenuWidth)
 	}
 }
 
@@ -51,7 +51,7 @@ func callProc(p *windows.LazyProc, args ...uintptr) (uintptr, bool) {
 
 // Keep MyGo's tray flyout lifecycle, but override its icon-based placement.
 // Native resize/move callbacks also run before a hidden FitContent flyout shows.
-func bindTrayMenuPosition(win *mygo.Window, at image.Point) {
+func bindTrayMenuPosition(win *mygo.Window, at image.Point, submenuWidth int) {
 	placing := false
 	place := func() {
 		if placing || win.IsDestroyed() {
@@ -79,30 +79,47 @@ func bindTrayMenuPosition(win *mygo.Window, at image.Point) {
 			dpi = int(d)
 		}
 		inset := (int(TrayMenuShadowInset)*dpi + 48) / 96
+		leftInset := ((int(TrayMenuShadowInset)+submenuWidth)*dpi + 48) / 96
 		// A tray click is over the taskbar, outside rcWork. Use the monitor
 		// bounds so the panel can actually touch that click, as a context menu.
 		bounds := image.Rect(int(info.Monitor.Left), int(info.Monitor.Top), int(info.Monitor.Right), int(info.Monitor.Bottom))
 		size := image.Pt(int(rect.Right-rect.Left), int(rect.Bottom-rect.Top))
-		origin := trayMenuPosition(at, size, bounds, inset)
+		origin := trayMenuPosition(at, size, bounds, leftInset, inset)
 		if origin.X == int(rect.Left) && origin.Y == int(rect.Top) {
 			return
 		}
 		const swpNoSize, swpNoZOrder, swpNoActivate = 0x0001, 0x0004, 0x0010
 		callProc(procTrayMenuSetWindowPos, hwnd, 0, uintptr(origin.X), uintptr(origin.Y), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate)
 	}
-	offMove := win.OnMove(place)
-	offResize := win.OnResize(place)
+	// PlaceFlyout calls SetWindowPos, which can deliver move/resize events
+	// before that call has finished. Reposition on the next UI turn so the
+	// platform's placement cannot overwrite our correction on its return.
+	pending := false
+	schedule := func() {
+		if placing || pending {
+			return
+		}
+		pending = true
+		win.Update(func() {
+			pending = false
+			place()
+		})
+	}
+	offMove := win.OnMove(schedule)
+	offResize := win.OnResize(schedule)
+	offShow := win.OnShow(place)
 	win.OnClosed(func() {
 		offMove()
 		offResize()
+		offShow()
 	})
 	place()
 }
 
 // All coordinates are physical pixels from the same monitor. Position the
-// visible panel, not the transparent shadow footprint, against the click.
-func trayMenuPosition(at, size image.Point, bounds image.Rectangle, inset int) image.Point {
-	x, y := at.X-inset, at.Y-size.Y+inset
+// visible panel against the click, accounting for the space reserved to its left.
+func trayMenuPosition(at, size image.Point, bounds image.Rectangle, leftInset, inset int) image.Point {
+	x, y := at.X-leftInset, at.Y-size.Y+inset
 	if x+size.X > bounds.Max.X {
 		if left := at.X - size.X + inset; left >= bounds.Min.X {
 			x = left // not enough room to the right: align the panel's right edge

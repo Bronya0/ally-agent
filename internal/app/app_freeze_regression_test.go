@@ -112,9 +112,13 @@ func TestSessionToolsetFreezeSurvivesMcpDrift(t *testing.T) {
 		}
 	}
 
-	// A fresh session must see the live set (freeze is per-session).
-	if fresh := toolFunctionNames(app.buildToolsForSession("other", cfg)); !containsString(fresh, mcpToolFunctionName("srv", "probe")) {
-		t.Fatalf("new session must see the live MCP tool, got %v", fresh)
+	// A new session uses the same wire schema set and discovers the tool in its catalog.
+	if fresh := app.buildToolsForSession("other", cfg); !reflect.DeepEqual(frozen, fresh) {
+		t.Fatal("MCP discovery changed the protocol tool schemas")
+	}
+	catalog := app.appendMcpCatalog(t.Context(), cfg, nil, false)
+	if len(catalog) != 1 || !strings.Contains(catalog[0].Content, "[srv]\nprobe: injected later") {
+		t.Fatalf("live tool missing from runtime catalog: %v", catalog)
 	}
 
 	// Deep-clone guarantee: mutating a returned toolset (sloppy caller) must

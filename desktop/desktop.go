@@ -191,7 +191,7 @@ type desktop struct {
 	// move it, and its press outlives a frame.
 	tabStrips                                 map[string]*tabStrip
 	mcpSummary                                string
-	toolCount                                 int
+	builtinToolCount                          int
 	toolInventory                             []backend.ToolDefinitionSummary
 	mcpServers                                []map[string]any
 	mcpTab, mcpNameFilter                     string
@@ -494,10 +494,9 @@ func Run() {
 				}
 				a.skills = skills
 				a.toolInventory = tools
-				a.toolCount = enabledToolCount(tools)
+				a.builtinToolCount = enabledBuiltinToolCount(tools)
 				a.refreshMCPInventory()
 				a.setMCPServers(servers)
-				a.mcpSummary = mcpSummary(servers)
 				a.sessions, a.sessRev = sessions, a.sessRev+1
 				for _, tab := range a.tabs {
 					a.loadWorkspaceInputHistory(tab)

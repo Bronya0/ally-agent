@@ -8,7 +8,6 @@ package desktop
 import (
 	"ally-dev/desktop/uikit"
 	"ally-dev/locales"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -250,6 +249,24 @@ func iconGlyph(c *ui.Context, name string, size float32) ui.Element {
 }
 
 // ---- Surfaces ------------------------------------------------------------
+
+// Menu panels scroll as a whole, so a leading or trailing group of rows has to
+// hold itself in place instead of travelling with the list. The panel keeps its
+// padding inside the scrolling box, so each group reaches across that padding
+// with a negative margin and puts the same inset back inside itself. Without
+// the overlap the rows sliding underneath would show through the padding as a
+// strip beside the pinned group, and the group's own rows would not move.
+func menuPinnedTop(c *ui.Context) ui.Element {
+	pad := uikit.MenuPanelPadding
+	return ui.Column(c).FillWidth().Sticky().Top(pad).Margin(-pad, 0, 0, 0).
+		Padding(pad, 0, 0, 0).Background(c.Theme().Surface)
+}
+
+func menuPinnedBottom(c *ui.Context) ui.Element {
+	pad := uikit.MenuPanelPadding
+	return ui.Column(c).FillWidth().Sticky().Bottom(pad).Margin(0, 0, -pad, 0).
+		Padding(0, 0, pad, 0).Background(c.Theme().Surface)
+}
 
 func card(c *ui.Context, key any, build func()) ui.Element {
 	return uikit.Card(c, key, padCard, radiusCard, build)
@@ -657,31 +674,10 @@ func inlineError(c *ui.Context, id, message string) {
 
 // ---- Shared derivations --------------------------------------------------
 
-// mcpSummary is the one-line MCP status shown on the welcome card and in the
-// composer tooltips.
-func mcpSummary(servers []map[string]any) string {
-	connected, tools := 0, 0
-	for _, s := range servers {
-		if str(s, "status") == "connected" {
-			connected++
-		}
-		switch n := s["toolCount"].(type) {
-		case int:
-			tools += n
-		case float64:
-			tools += int(n)
-		}
-	}
-	if len(servers) == 0 {
-		return locales.Text("无 MCP 服务")
-	}
-	return fmt.Sprintf(locales.Text("%d/%d 个服务，%d 个工具"), connected, len(servers), tools)
-}
-
-func enabledToolCount(tools []backend.ToolDefinitionSummary) int {
+func enabledBuiltinToolCount(tools []backend.ToolDefinitionSummary) int {
 	n := 0
 	for _, tool := range tools {
-		if tool.Enabled {
+		if tool.Source == "built-in" && tool.Enabled {
 			n++
 		}
 	}

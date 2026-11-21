@@ -31,51 +31,20 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-func TestFetchRejectsIncompatibleModes(t *testing.T) {
-	app := newIsolatedTestApp(t)
-	for _, args := range []string{
-		`{"url":"https://example.test","responseFormat":"readable","method":"POST"}`,
-		`{"url":"https://example.test","responseFormat":"raw","saveTo":"file"}`,
-		`{"url":"https://example.test","maxChars":10}`,
-	} {
-		result := app.executeTool(context.Background(), ConfigState{}, "session-1", "fetch", []byte(args))
-		if result.OK || result.ErrorCode != "E_HTTP_BAD_FORMAT" {
-			t.Fatalf("%s: %#v", args, result)
-		}
-	}
-}
-
-func TestFetchCombinedModesAndLegacyDisable(t *testing.T) {
+func TestFetchAutomaticResponse(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, "<html><head><title>Example</title></head><body><p>Hello</p></body></html>")
+		if r.URL.Query().Get("q") != "hello world" {
+			t.Error("query lost")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
 	}))
 	defer target.Close()
 	app := newIsolatedTestApp(t)
-	cfg := ConfigState{AllowPrivateNetwork: boolPtr(true)}
-	for _, format := range []string{"response", "raw"} {
-		clear(app.httpLastHost)
-		args := fmt.Sprintf(`{"url":%q,"responseFormat":%q}`, target.URL, format)
-		result := app.executeTool(context.Background(), cfg, "session-1", "fetch", []byte(args))
-		if !result.OK {
-			t.Fatalf("%s: %s", format, result.Error)
-		}
-		if format == "response" {
-			response, ok := result.Data.(HTTPRequestToolResult)
-			if !ok || !strings.Contains(response.Body, "<p>Hello</p>") {
-				t.Fatalf("response: %#v", result.Data)
-			}
-		} else {
-			response, ok := result.Data.(WebFetchResult)
-			if !ok || response.Title != "Example" || !strings.Contains(response.Text, "<p>Hello</p>") {
-				t.Fatalf("raw: %#v", result.Data)
-			}
-		}
-	}
-	cfg.DisabledTools = []string{"web_fetch"}
-	result := app.executeTool(context.Background(), cfg, "session-1", "fetch", []byte(fmt.Sprintf(`{"url":%q}`, target.URL)))
-	if result.OK || result.ErrorCode != "E_TOOL_DISABLED" {
-		t.Fatalf("legacy disabled setting: %#v", result)
+	result := app.executeTool(context.Background(), ConfigState{AllowPrivateNetwork: boolPtr(true)}, "session-1", "fetch", []byte(fmt.Sprintf(`{"url":%q}`, target.URL+"/?q=hello%20world")))
+	response, ok := result.Data.(HTTPRequestToolResult)
+	if !result.OK || !ok || response.Body != `{"ok":true}` {
+		t.Fatalf("response: %#v", result)
 	}
 }
 

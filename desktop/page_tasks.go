@@ -110,7 +110,7 @@ func (a *desktop) tasksPageBody(c *ui.Context) {
 	}
 	a.scrollTabs(c, "tasks-tabs", &a.tasksF.Tab, tabs...)
 	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-		ui.Column(c).Gap(gapSection).Children(func() {
+		ui.Column(c).Gap(gapInline).Children(func() {
 			if a.tasksF.Tab == 0 {
 				a.servicesSection(c, workspace)
 			} else {
@@ -136,7 +136,12 @@ func (a *desktop) servicesSection(c *ui.Context, workspace string) {
 	}
 	for _, service := range services {
 		service := service
-		card(c, "service-"+service.ID, func() {
+		rowCard(c, "service-"+service.ID, func() {
+			detailsOpen := a.mcpF.ToolOpen["service-"+service.ID]
+			detailsIcon := "chevron"
+			if detailsOpen {
+				detailsIcon = "chevrondown"
+			}
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
 				name := service.Name
 				if name == "" {
@@ -147,7 +152,14 @@ func (a *desktop) servicesSection(c *ui.Context, workspace string) {
 				if service.Promoted {
 					statusBadge(c, locales.Text("超时转后台"), "warn")
 				}
+				disclosure(c, locales.Text("card-action-详情-")+service.ID, locales.Text("详情"), disclosureCard, detailsIcon).Shrink(0).OnClick(func() {
+					if a.mcpF.ToolOpen == nil {
+						a.mcpF.ToolOpen = map[string]bool{}
+					}
+					a.mcpF.ToolOpen["service-"+service.ID] = !detailsOpen
+				})
 				ui.Spacer(c)
+				cardFlat(c, locales.Text("查看完整日志")).OnClick(func() { a.openServiceLog(service) })
 				if service.Status == "running" {
 					label := locales.Text("停止")
 					if a.tasksF.StopBusy[service.ID] {
@@ -156,53 +168,32 @@ func (a *desktop) servicesSection(c *ui.Context, workspace string) {
 					cardDanger(c, label).Disabled(a.tasksF.StopBusy[service.ID]).OnClick(func() { a.stopService(service) })
 				}
 			})
+			uikit.Reveal(c.Key("service-details-"+service.ID), detailsOpen, func() {
+				ui.Column(c).FillWidth().Padding(gapField, 0, 0).Gap(gapField).Children(func() {
+					kv(c, "ID", service.ID, a.secondaryInk())
+					kv(c, "PID", fmt.Sprint(service.PID), a.secondaryInk())
+					kv(c, locales.Text("工作目录"), service.Cwd, a.secondaryInk())
+					if service.Command != "" {
+						codeBlock(c, "service-cmd-"+service.ID, service.Command, 60, a.secondaryInk())
+					}
+					if service.Status == "running" {
+						kv(c, locales.Text("启动时间"), fmtTime(service.StartedAt), a.secondaryInk())
+					} else {
+						kv(c, locales.Text("退出码"), fmt.Sprint(service.ExitCode), a.secondaryInk())
+						kv(c, locales.Text("停止时间"), fmtTime(service.StoppedAt), a.secondaryInk())
+					}
+					kv(c, locales.Text("输出缓冲"), fmt.Sprintf(locales.Text("%s（保留最新部分）"), fmtBytes(service.OutputBytes)), a.secondaryInk())
+				})
+			})
 			if service.Description != "" {
 				uikit.Tooltip(c, ui.Text(c, service.Description).FontSize(fsSmall).TextColor(a.secondaryInk()).SingleLine(), service.Description)
 			}
 			if a.tasksF.Scope == 1 && service.Workspace != "" {
 				fieldNote(c, locales.Text("工作区 · ")+service.Workspace, a.secondaryInk())
 			}
-			detailsOpen := a.mcpF.ToolOpen["service-"+service.ID]
-			detailsIcon := "chevron"
-			if detailsOpen {
-				detailsIcon = "chevrondown"
-			}
-			ui.Column(c.Key("service-details-group-" + service.ID)).FillWidth().Children(func() {
-				disclosure(c, locales.Text("card-action-详情-")+service.ID, locales.Text("详情"), disclosureCard, detailsIcon).AlignSelf(ui.Start).OnClick(func() {
-					if a.mcpF.ToolOpen == nil {
-						a.mcpF.ToolOpen = map[string]bool{}
-					}
-					a.mcpF.ToolOpen["service-"+service.ID] = !detailsOpen
-				})
-				uikit.Reveal(c.Key("service-details-"+service.ID), detailsOpen, func() {
-					ui.Column(c).FillWidth().Padding(gapField, 0, 0).Gap(gapField).Children(func() {
-						kv(c, "ID", service.ID, a.secondaryInk())
-						kv(c, "PID", fmt.Sprint(service.PID), a.secondaryInk())
-						kv(c, locales.Text("工作目录"), service.Cwd, a.secondaryInk())
-						if service.Command != "" {
-							codeBlock(c, "service-cmd-"+service.ID, service.Command, 60, a.secondaryInk())
-						}
-						if service.Status == "running" {
-							kv(c, locales.Text("启动时间"), fmtTime(service.StartedAt), a.secondaryInk())
-						} else {
-							kv(c, locales.Text("退出码"), fmt.Sprint(service.ExitCode), a.secondaryInk())
-							kv(c, locales.Text("停止时间"), fmtTime(service.StoppedAt), a.secondaryInk())
-						}
-						kv(c, locales.Text("输出缓冲"), fmt.Sprintf(locales.Text("%s（保留最新部分）"), fmtBytes(service.OutputBytes)), a.secondaryInk())
-					})
-				})
-			})
-			if service.OutputTail != "" {
-				holder := ui.Column(c.Key("service-tail-holder-" + service.ID))
-				preview := memoAt[textMemo](holder, "preview").get(service.OutputTail, func(s string) string { return tailLines(asciiStrip(s), 6) })
-				holder.Children(func() { codeBlock(c, "service-tail-"+service.ID, preview, 100, a.secondaryInk()) })
-			}
 			if service.Error != "" {
 				inlineError(c, "service-error-"+service.ID, service.Error)
 			}
-			cardFlat(c, locales.Text("查看完整日志")).AlignSelf(ui.Start).OnClick(func() {
-				a.openServiceLog(service)
-			})
 		})
 	}
 }
@@ -359,7 +350,7 @@ func (a *desktop) scheduledSection(c *ui.Context, workspace string) {
 	}
 	for _, task := range tasks {
 		task := task
-		card(c, "task-"+task.ID, func() {
+		rowCard(c, "task-"+task.ID, func() {
 			ui.Row(c).Gap(gapField).AlignItems(ui.Center).Wrap().Children(func() {
 				ui.Text(c, task.Name).FontSize(fsBody).Bold()
 				status := task.LastStatus
@@ -394,29 +385,23 @@ func (a *desktop) scheduledSection(c *ui.Context, workspace string) {
 				ui.Spacer(c)
 				fieldNote(c, next, a.secondaryInk())
 			})
+			content := task.Instruction
 			if task.Command != "" {
-				codeBlock(c, "task-cmd-"+task.ID, task.Command, 60, a.secondaryInk())
-			} else {
-				holder := ui.Column(c.Key("task-instruction-holder-" + task.ID))
-				preview := memoAt[memoOf[string, taskInstructionPreview]](holder, "preview").get(task.Instruction, compactTaskInstructionPreview)
+				content = task.Command
+			}
+			if content != "" {
 				open := a.tasksF.InstructionOpen[task.ID]
-				instruction := preview.text
-				label, icon := locales.Text("展开指令"), "chevron"
-				if open {
-					instruction = task.Instruction
-					label, icon = locales.Text("收起指令"), "chevrondown"
-				}
-				holder.Children(func() {
-					ui.Row(c).Gap(gapField).AlignItems(ui.Start).Children(func() {
-						text := ui.Text(c, instruction).FontSize(fsSmall).TextColor(a.secondaryInk()).Grow(1)
-						if !open {
-							text.MaxLines(2)
-						}
-						if preview.truncated {
-							disclosure(c, "task-instruction-"+task.ID, label, disclosureCard, icon).Shrink(0).OnClick(func() {
-								a.tasksF.InstructionOpen[task.ID] = !open
-							})
-						}
+				ui.Row(c).FillWidth().Gap(gapField).AlignItems(ui.Start).Children(func() {
+					text := ui.Text(c, content).FontSize(fsSmall).TextColor(a.secondaryInk()).MinWidth(0).Grow(1)
+					if !open {
+						text.MaxLines(1)
+					}
+					label, icon := locales.Text("展开指令"), "chevron"
+					if open {
+						label, icon = locales.Text("收起指令"), "chevrondown"
+					}
+					disclosure(c, "task-instruction-"+task.ID, label, disclosureCard, icon).Shrink(0).OnClick(func() {
+						a.tasksF.InstructionOpen[task.ID] = !open
 					})
 				})
 			}
@@ -622,6 +607,9 @@ func (a *desktop) taskPopupDialog(c *ui.Context) {
 	if !a.taskPopup {
 		return
 	}
+	if a.tasksF.InstructionOpen == nil {
+		a.tasksF.InstructionOpen = map[string]bool{}
+	}
 	if a.tasksF.StopBusy == nil {
 		a.tasksF.StopBusy = map[string]bool{}
 	}
@@ -642,10 +630,10 @@ func (a *desktop) taskPopupDialog(c *ui.Context) {
 			ui.Spacer(c)
 			iconAction(c, "task-popup-close", locales.Text("关闭"), "close", 24, func() { a.taskPopup = false })
 		})
-		ui.Row(c).Children(func() {
+		ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
 			segmentedInk(c, "popup-task-scope", &a.tasksF.Scope, a.secondaryInk(), locales.Text("当前工作区"), locales.Text("全部"))
 			if a.tasksF.Scope == 0 && workspace != "" {
-				uikit.Tooltip(c, ui.Text(c, workspace).FontSize(fsSmall).SingleLine().MinWidth(0), workspace)
+				uikit.Tooltip(c, neutralChip(c, short(workspace, 60)).MinWidth(0).Shrink(1), workspace)
 			}
 			ui.Spacer(c)
 			flat(c, locales.Text("刷新")).OnClick(func() { a.loadTaskCenter(true) })

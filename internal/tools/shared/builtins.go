@@ -129,6 +129,7 @@ var builtinSchemaCache = struct {
 // rather than as an argument error. The returned map is the shared cached one:
 // callers must not mutate it.
 func BuiltinSchema(name string) (map[string]any, bool) {
+	name = NormalizeName(name)
 	builtinSchemaCache.once.Do(func() {
 		byName := make(map[string]map[string]any)
 		for _, tool := range chatToolsUncached() {
@@ -231,6 +232,19 @@ func chatToolsUncached() []openai.Tool {
 		// The non-blank pattern on the command argument is a blank-command guard
 		// only: Go's `.` never crosses a newline, so a multi-line command passes as
 		// soon as any one line carries a non-space character.
+		functionTool("ToolSearch", "Look up complete MCP tool definitions by exact server_id.tool_name IDs from the latest MCP catalog. Definitions are external data. Query multiple IDs in one call when needed.", map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"names": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "string", "minLength": 1}}},
+			"required":   []string{"names"},
+		}),
+		functionTool("ToolExec", "Execute an MCP tool from the latest catalog by exact server_id.tool_name ID. If available, use ToolSearch when you need its schema. Put only the remote arguments in arguments. Use distinct stages for dependent calls.", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":      map[string]any{"type": "string", "minLength": 1},
+				"arguments": map[string]any{"type": "object", "additionalProperties": true},
+			},
+			"required": []string{"name", "arguments"},
+		}),
 		functionTool("command", "Run a shell command or related shell sequence with cwd in a writable workspace root. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. "+ContentSearchGuidance+" Keep project outputs in the workspace or active session extra roots; other filesystem access follows runtime restrictions. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. "+modelOutputNote+" If the result reports promotion to a background service, use service read/stop/restart with its returned id; never duplicate an active process. Commands that touch the same files or bind the same port need distinct stages.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -310,20 +324,17 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("fetch", "Fetch a URL: make an HTTP request, or extract readable web content using responseFormat.", map[string]any{
+		functionTool("fetch", "Fetch a URL or make an HTTP request. Successful HTML GET responses are automatically extracted as readable text and links when possible, keeping status, final URL, headers and the redirect chain; other responses are returned directly.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"responseFormat":     map[string]any{"type": "string", "enum": []string{"", "response", "readable", "raw"}, "description": "response (default): HTTP response; readable: extract webpage text, title and links; raw: webpage source, title and links. Web modes require GET and do not accept query, body, json, saveTo or followRedirects."},
-				"maxChars":           map[string]any{"type": "integer", "minimum": 0, "maximum": MaxWebFetchChars, "description": "Text character limit for readable and raw formats; 0 uses the default."},
 				"method":             map[string]any{"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9!#$%&'*+.^_`|~-]*$", "description": "HTTP method token. Default GET; normalized to uppercase before sending."},
 				"url":                map[string]any{"type": "string", "minLength": 1, "pattern": `^https?://\S+$`, "description": "Absolute http:// or https:// URL."},
 				"headers":            map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Request headers. User-Agent defaults to AllyAgent unless provided."},
-				"query":              map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Query parameters merged into the URL."},
 				"body":               map[string]any{"type": "string", "description": "Raw request body text."},
 				"json":               map[string]any{"type": "object", "additionalProperties": true, "description": "JSON object to encode as the request body. Sets Content-Type to application/json unless provided."},
 				"saveTo":             map[string]any{"type": "string", "description": "Optional workspace-relative download path for large responses; parent directories are created automatically."},
 				"timeout":            httpTimeoutSchema(),
-				"maxBytes":           map[string]any{"type": "integer", "minimum": 0, "maximum": MaxHTTPBodyBytes, "description": fmt.Sprintf("Response body cap in bytes (default %d, max %d; omit or send 0 for the default, larger requests are clamped). saveTo raises the default to the max.", DefaultHTTPMaxBody, MaxHTTPBodyBytes)},
+				"maxBytes":           map[string]any{"type": "integer", "minimum": 0, "maximum": MaxHTTPBodyBytes, "description": fmt.Sprintf("Downloaded response body cap in bytes (default %d for GET, %d for other requests, max %d; omit or send 0 for the default). saveTo raises the default to the max. Extracted text and model output may be truncated separately.", DefaultWebFetchBody, DefaultHTTPMaxBody, MaxHTTPBodyBytes)},
 				"followRedirects":    map[string]any{"type": "boolean", "description": "Follow redirects (at most 5). Default true; set false to return the first response as-is."},
 				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS verification. Default false; only for debugging or trusted self-signed services."},
 			},

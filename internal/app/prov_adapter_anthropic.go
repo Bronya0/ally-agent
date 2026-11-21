@@ -35,16 +35,16 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	offPlan := anthropicOffPlanFor(cfg, model)
 	// 关闭 SDK 内置重试,改用本模块统一的重试循环以便发出 run:retry 事件。
 	clientOptions := []anthropicoption.RequestOption{
+		// 关掉环境默认值：SDK 会读 ANTHROPIC_API_KEY 等环境变量补凭据，没凭据时还会直接拒绝请求。
+		// 统一只认配置里的密钥，空密钥（本地推理）就真的不带鉴权头。
+		anthropicoption.WithoutEnvironmentDefaults(),
 		anthropicoption.WithBaseURL(baseURL),
 		anthropicoption.WithMaxRetries(0),
 		anthropicoption.WithHTTPClient(modelHTTPClient(cfg, true, 0)),
 	}
-	// 空密钥（本地推理）不注入凭据：SDK 默认会读环境变量，并且在完全没有凭据时
-	// 直接以 “run ant auth login” 拒绕请求；关掉环境默认值后请求就不带鉴权头。
+	// 网关普遍只认 Authorization: Bearer，所以用 AuthToken 而不是 x-api-key。
 	if key := strings.TrimSpace(cfg.APIKey); key != "" {
-		clientOptions = append(clientOptions, anthropicoption.WithAPIKey(key))
-	} else {
-		clientOptions = append(clientOptions, anthropicoption.WithoutEnvironmentDefaults())
+		clientOptions = append(clientOptions, anthropicoption.WithAuthToken(key))
 	}
 	if normalizeReasoningEffort(cfg.ReasoningEffort) == reasoningEffortOff && offPlan.reasoningEffort != "" {
 		clientOptions = append(clientOptions, anthropicoption.WithJSONSet("reasoning", map[string]string{"effort": offPlan.reasoningEffort}))

@@ -33,6 +33,7 @@ func TestContextBreakdownPanelShowsEveryRow(t *testing.T) {
 			{Label: "工作区文件结构", Tokens: 3_500},
 		},
 		ToolSchemas:   18_800,
+		MCPCatalog:    1_200,
 		UserMessages:  84,
 		AssistantMsgs: 2_800,
 		ToolResults:   21_700,

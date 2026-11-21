@@ -40,19 +40,14 @@ func statsTokens(c *ui.Context, value int) ui.Element {
 	return uikit.Tooltip(c, ui.Text(c, statsNumber(float64(value))).SingleLine(), statsExact(value)+" tokens")
 }
 
-func (a *desktop) loadStats(manual ...bool) {
+// loadStats refills the dashboard. It runs when the page opens, so the card
+// reflects the usage recorded up to the moment the page is entered.
+func (a *desktop) loadStats() {
 	go func() {
 		stats := a.core.GetTokenStats()
 		a.win.Update(func() {
 			a.stats = stats
 			a.statsChart = buildStatsBars(stats.Daily)
-			if len(manual) > 0 && manual[0] {
-				if stats.Error != "" {
-					a.notifyError(stats.Error)
-				} else {
-					a.notifySuccess(locales.Text("用量统计已刷新"))
-				}
-			}
 		})
 	}()
 }
@@ -61,10 +56,6 @@ func (a *desktop) statsPageBody(c *ui.Context) {
 	if a.stats.Error != "" {
 		notice(c, "error", a.stats.Error, a.secondaryInk())
 	}
-	ui.Row(c).Gap(gapField).AlignItems(ui.Center).Children(func() {
-		ui.Spacer(c)
-		flat(c, locales.Text("刷新")).OnClick(func() { a.loadStats(true) })
-	})
 	empty := a.stats.SummaryMonth.TotalTokens == 0 && a.stats.Summary7Days.TotalTokens == 0 && a.stats.SummaryToday.TotalTokens == 0
 	if empty {
 		emptyState(c, locales.Text("暂无用量数据"), locales.Text("开始对话后，这里会显示 token 用量与缓存命中率。"), a.secondaryInk())

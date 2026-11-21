@@ -11,7 +11,7 @@ import (
 func TestContextLoadingDisableConfirmation(t *testing.T) {
 	a := &desktop{}
 	a.syncSettingsForm()
-	a.settings.Modules = map[string]int{"settingsGeneral": settingsGeneralSection("上下文加载")}
+	a.settings.Modules = map[string]int{"settingsGeneral": settingsGeneralSection("上下文")}
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(a.theme())
 		ui.Column(c).Fill().Children(func() { a.settingsGeneral(c) })

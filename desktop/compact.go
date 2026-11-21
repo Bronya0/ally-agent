@@ -168,7 +168,7 @@ func fastCompactNote(result map[string]any) string {
 	} else if summaries, ok := result["toolSummaries"].(map[string]any); ok {
 		tools = len(summaries)
 	}
-	return fmt.Sprintf(locales.Text("已将 %d 条旧工具记录压缩为目的与结果元信息，移除旧推理。用户消息、助手回复正文与最新计划保留；最近一轮完整任务（含子代理报告）保持不变。不调用模型。"), tools)
+	return fmt.Sprintf(locales.Text("压缩完成：已将 %d 条旧工具记录压缩为目的与结果元信息，移除旧推理。用户消息、助手回复正文与最新计划保留；最近一轮完整任务（含子代理报告）保持不变。不调用模型。"), tools)
 }
 
 // fastCompactNoop reports that only the retained task or compacted records remain.
@@ -241,6 +241,9 @@ func applyFastCompaction(t *conversation, result map[string]any) {
 			"title": str(m, "title"), "status": state,
 			"purpose": purpose,
 			"body":    summary, "result": outcome, "fastCompacted": true,
+		}
+		if readGrepGroupName(m) == mcpSearchToolKind {
+			row["args"] = m["args"] // The queried IDs are the search card's summary.
 		}
 		for _, key := range []string{"error", "errorCode"} {
 			if value, ok := m[key]; ok {

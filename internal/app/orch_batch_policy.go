@@ -203,6 +203,11 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall, purposeF
 			}
 		}
 		key := normalizeToolName(call.Function.Name) + "\x00" + normalizeToolArgsForDedup(args)
+		if normalizeToolName(call.Function.Name) == mcpExecName {
+			if targetKey, ok := mcpExecDedupKey(args); ok {
+				key = targetKey
+			}
+		}
 		first, ok := seen[key]
 		if !ok {
 			seen[key] = i

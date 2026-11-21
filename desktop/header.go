@@ -391,9 +391,14 @@ func (a *desktop) workspaceHistoryMenu(c *ui.Context, trigger func(ui.Element)) 
 		Width: 300, MaxHeightPercent: 85, Label: locales.Text("工作区历史菜单"),
 		At: ui.AnchorBottomRight, Self: ui.AnchorTopRight, Gap: 6,
 	}, trigger, func(m ui.MenuParts) {
-		uikit.MenuItem(c, m, "add", locales.Text("＋ 添加工作区"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(a.chooseWorkspace)
-		uikit.MenuItem(c, m, "temporary", locales.Text("临时工作区"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.newConversation("") })
-		divider(c)
+		// The two entries that create a workspace stay on top while the history
+		// under them scrolls.
+		header := menuPinnedTop(c)
+		header.Children(func() {
+			uikit.MenuItem(c, m, "add", locales.Text("＋ 添加工作区"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(a.chooseWorkspace)
+			uikit.MenuItem(c, m, "temporary", locales.Text("临时工作区"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.newConversation("") })
+			divider(c)
+		})
 		roots := a.workspaceHistoryRoots()
 		for _, root := range roots {
 			root := root

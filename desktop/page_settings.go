@@ -17,8 +17,8 @@ import (
 var settingsSections = []string{"通用", "高级", "网络", "API", "无头模式", "安全围栏", "版本亮点", "支持开源", "关于"}
 
 // settingsGeneralSections 是「通用」分区标签的源文案。下标只在这里决定：
-// 欢迎页按名称定位「上下文加载」，增删分区不会让入口指错页面。
-var settingsGeneralSections = []string{"外观", "提示词", "路径", "对话行为", "应用", "语音输入", "上下文加载"}
+// 欢迎页按名称定位「上下文」，增删分区不会让入口指错页面。
+var settingsGeneralSections = []string{"外观", "提示词", "路径", "对话行为", "应用", "语音输入", "上下文"}
 
 func settingsGeneralSection(label string) int { return slices.Index(settingsGeneralSections, label) }
 
@@ -188,7 +188,7 @@ func (a *desktop) settingsGeneral(c *ui.Context) {
 }
 
 func (a *desktop) settingsGeneralContent(c *ui.Context, selected int) {
-	if selected == settingsGeneralSection("上下文加载") {
+	if selected == settingsGeneralSection("上下文") {
 		a.settingsContextLoading(c)
 	}
 	if selected == 0 {
@@ -332,28 +332,6 @@ func (a *desktop) settingsGeneralContent(c *ui.Context, selected int) {
 			})
 			a.settingsRow(c, "tool-concurrency-row", locales.Text("工具执行并发度"), locales.Text("同时执行的工具数，范围 1–16，默认 4。"), settingsNumberWidth, func() ui.Element {
 				return uikit.NumberInput(c, "tool-concurrency", locales.Text("工具执行并发度"), &a.settings.Concurrency, 1, 16, 1, a.secondaryInk())
-			})
-		})
-		a.settingsCard(c, "settings-context", locales.Text("上下文管理"), locales.Text("在接近上下文上限时精简历史，为后续任务留出空间。"), func() {
-			a.settingsRow(c, "compact-method-row", locales.Text("上下文自动压缩方式"), locales.Text("全文总结调用模型；本地裁剪优先在本机精简。悬浮选择框查看详情，修改对新任务生效。"), settingsControlWidth, func() ui.Element {
-				stored := a.configDraft.AutoCompactMethod
-				method := stored
-				if method == "" {
-					method = backend.DefaultAutoCompactMethod
-				}
-				options := make([]uikit.Option, len(autoCompactOptions))
-				for i, option := range autoCompactOptions {
-					options[i] = uikit.Option{Value: option.Value, Label: locales.Text(option.Label)}
-				}
-				control := uikit.SelectField(c.Key("compact-method"), &method, options, a.secondaryInk()).Label(locales.Text("压缩方式")).FillWidth()
-				if method != stored && method != "" {
-					a.configDraft.AutoCompactMethod = method
-				}
-				return uikit.Tooltip(c, control, locales.Text("全文总结：调用模型生成摘要。本地裁剪：保留最近一轮完整任务，旧工具只留目的与结果元信息，移除旧推理，保留用户消息和助手回复正文；减不下来时自动回退到全文总结。"))
-			})
-			a.settingsCompactThreshold(c)
-			a.settingsRow(c, "compact-timeout-row", locales.Text("压缩超时时间"), locales.Text("等待摘要生成的最长时间；30–3600 秒，默认 180 秒。"), settingsNumberWidth, func() ui.Element {
-				return uikit.NumberInput(c, "compact-timeout", locales.Text("压缩超时时间"), &a.settings.CompactTimeout, 30, 3600, 30, a.secondaryInk())
 			})
 		})
 		a.settingsCard(c, "settings-session-headers", locales.Text("会话请求头"), locales.Text("保存后对后续任务生效；手动配置的同名请求头不受影响。"), func() {

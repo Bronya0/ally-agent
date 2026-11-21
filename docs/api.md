@@ -334,7 +334,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 ### `GET /api/v1/tools` — 查询工具清单
 
-响应 `data.tools[]`：`{ name, description, source, server?, enabled }`，`source` 为 `built-in` 或 `mcp`（MCP 条目带 `server` 名，`name` 即模型侧函数名 `mcp__<server>__<tool>`）；`enabled=false` 表示该 MCP 工具在所在服务器的 `disabledTools` 注入黑名单中，不进入模型请求但清单内仍可见。
+响应 `data.tools[]`：`{ name, description, source, server?, enabled }`，`source` 为 `built-in` 或 `mcp`（MCP 条目带 `server` 名，`name` 保留原有 `mcp__...` 清单标识，模型调用使用目录里的 `server_id.tool_name`）；`enabled=false` 表示该 MCP 工具在所在服务器的 `disabledTools` 注入黑名单中，不进入模型请求但清单内仍可见。
 
 ### `GET /api/v1/subagents` — 查询子代理运行状态
 
@@ -417,7 +417,8 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 ### `GET /api/v1/sessions/{id}/context` — 查询会话上下文统计
 
-返回现有 `ContextBreakdown`，含总量、系统提示词、工具、消息、测量值和分类估算；查询不提前冻结配置。
+返回 `ContextBreakdown`，含总量、系统提示词、工具、消息、测量值和分类估算。
+`mcpCatalog` 是会话上下文中已注入的 MCP 目录 Token 估算，按需查询的 Schema 计入 `toolResults`。旧字段 `mcpToolSchemas` 保留为 0。查询不提前冻结配置。
 不存在返回 404。
 
 ### `POST /api/v1/sessions/{id}/compact/fast` — 本地快速压缩

@@ -44,6 +44,7 @@ func (a *desktop) settingsContextLoading(c *ui.Context) {
 		}
 		fieldNote(c, locales.Text("内置系统规则和平台环境始终加载。MCP 工具由 MCP 页的服务器与工具开关管理。"), a.secondaryInk())
 	})
+	a.settingsContextCompact(c)
 	a.settingsCard(c, "settings-context-tools", locales.Text("内置工具 Schema"), locales.Text("每个工具单独控制，新会话生效；核心文件与命令工具始终可用。"), func() {
 		ui.Collapsible(c.Key("settings-builtin-tools"), locales.Text("内置工具开关"), &a.contextToolsOpen, func() {
 			uikit.Input(c.Key("settings-builtin-search"), &a.builtinToolSearch).Placeholder(locales.Text("搜索")).FillWidth()
@@ -52,12 +53,41 @@ func (a *desktop) settingsContextLoading(c *ui.Context) {
 	})
 }
 
-// focusBuiltinToolsSettings selects Settings → General → Context loading with the
+// settingsContextCompact is the trimming half of the context tab: when history
+// is shortened before a request, and how long the summary may take. It reads and
+// writes the same draft fields as before, so moving it changes nothing about
+// what gets saved.
+func (a *desktop) settingsContextCompact(c *ui.Context) {
+	a.settingsCard(c, "settings-context", locales.Text("上下文管理"), locales.Text("在接近上下文上限时精简历史，为后续任务留出空间。"), func() {
+		a.settingsRow(c, "compact-method-row", locales.Text("上下文自动压缩方式"), locales.Text("全文总结调用模型；本地裁剪优先在本机精简。悬浮选择框查看详情，修改对新任务生效。"), settingsControlWidth, func() ui.Element {
+			stored := a.configDraft.AutoCompactMethod
+			method := stored
+			if method == "" {
+				method = backend.DefaultAutoCompactMethod
+			}
+			options := make([]uikit.Option, len(autoCompactOptions))
+			for i, option := range autoCompactOptions {
+				options[i] = uikit.Option{Value: option.Value, Label: locales.Text(option.Label)}
+			}
+			control := uikit.SelectField(c.Key("compact-method"), &method, options, a.secondaryInk()).Label(locales.Text("压缩方式")).FillWidth()
+			if method != stored && method != "" {
+				a.configDraft.AutoCompactMethod = method
+			}
+			return uikit.Tooltip(c, control, locales.Text("全文总结：调用模型生成摘要。本地裁剪：保留最近一轮完整任务，旧工具只留目的与结果元信息，移除旧推理，保留用户消息和助手回复正文；减不下来时自动回退到全文总结。"))
+		})
+		a.settingsCompactThreshold(c)
+		a.settingsRow(c, "compact-timeout-row", locales.Text("压缩超时时间"), locales.Text("等待摘要生成的最长时间；30–3600 秒，默认 180 秒。"), settingsNumberWidth, func() ui.Element {
+			return uikit.NumberInput(c, "compact-timeout", locales.Text("压缩超时时间"), &a.settings.CompactTimeout, 30, 3600, 30, a.secondaryInk())
+		})
+	})
+}
+
+// focusBuiltinToolsSettings selects Settings → General → Context with the
 // built-in tool grid expanded. The page is already active when the welcome
 // popover calls this, and the section is located by name rather than index.
 func (a *desktop) focusBuiltinToolsSettings() {
 	a.selectSettingsSection("通用")
-	index := settingsGeneralSection("上下文加载")
+	index := settingsGeneralSection("上下文")
 	if index < 0 {
 		return
 	}

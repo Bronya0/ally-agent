@@ -253,7 +253,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 	}
 	// MCP tool output is third-party text with no producer-side cap; clamp it
 	// to the built-in bound so one runaway server cannot flood model context.
-	if isMcpToolFunctionName(name) {
+	if isMcpToolFunctionName(name) || normalizeToolName(name) == mcpExecName {
 		return renderMcpResultForModel(result, fullJSON)
 	}
 	switch name {

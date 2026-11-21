@@ -104,6 +104,21 @@ func iconButtonSized(c *ui.Context, id, tip, name string, size float32, tone ico
 	return uikit.IconButton(c, id, tip, iconImage(name), size, uikitTone(tone), fn)
 }
 
+// tightIconAction 用调用方给的方块尺寸画图标，不走 iconButtonMinHit 的命中区
+// 兜底。只给行内、悬停才露面、每帧都要把宽度让给标题的次要操作用：那些位置的
+// 方块本身就是留白，22 DIP 的命中区等于永久吃掉四个字。
+func tightIconAction(c *ui.Context, id, tip, name string, size float32, fn func()) ui.Element {
+	return tightIconActionTone(c, id, tip, name, size, iconNormal, fn)
+}
+
+func tightDangerIconAction(c *ui.Context, id, tip, name string, size float32, fn func()) ui.Element {
+	return tightIconActionTone(c, id, tip, name, size, iconDanger, fn)
+}
+
+func tightIconActionTone(c *ui.Context, id, tip, name string, size float32, tone iconTone, fn func()) ui.Element {
+	return uikit.IconButtonSized(c, id, tip, iconImage(name), size, size*uikit.IconGlyphScale, uikitTone(tone), fn)
+}
+
 func uikitTone(tone iconTone) uikit.IconTone {
 	switch tone {
 	case iconNormal:

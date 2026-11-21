@@ -806,7 +806,7 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 	if a.ctx != nil {
 		ctx = a.ctx
 	}
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	testMaxTokens := cfg.MaxTokens
 	if testMaxTokens <= 0 {

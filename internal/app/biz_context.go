@@ -128,7 +128,8 @@ type ContextBreakdown struct {
 	SystemPrompt      int                    `json:"systemPrompt"`
 	SystemPromptParts []ContextBreakdownPart `json:"systemPromptParts,omitempty"`
 	ToolSchemas       int                    `json:"toolSchemas"`
-	MCPToolSchemas    int                    `json:"mcpToolSchemas"` // Included in ToolSchemas.
+	MCPToolSchemas    int                    `json:"mcpToolSchemas"` // Deprecated wire field.
+	MCPCatalog        int                    `json:"mcpCatalog"`
 	UserMessages      int                    `json:"userMessages"`
 	AssistantMsgs     int                    `json:"assistantMsgs"`
 	ToolResults       int                    `json:"toolResults"`
@@ -308,89 +309,29 @@ func estimateModelToolSchemas(tools []openai.Tool) int {
 	return estimateTokensFromText(string(data))
 }
 
-// mcpToolSchemaTokens re-marshals the MCP tool schemas portion of `tools`.
-// `tools` is expected to be a slice returned by buildToolsWithMcp; only the
-// entries whose Function.Name starts with `mcp__` are counted, so the cached
-// built-in portion can be added by the caller without double counting.
-func mcpToolSchemaTokens(tools []openai.Tool) int {
-	if len(tools) == 0 {
-		return 0
-	}
-	// Fast path: if no MCP tools, skip Marshal entirely.
-	hasMcp := false
-	for _, t := range tools {
-		if t.Function != nil && isMcpToolFunctionName(t.Function.Name) {
-			hasMcp = true
-			break
-		}
-	}
-	if !hasMcp {
-		return 0
-	}
-	// Slow path: marshal only the MCP entries. Avoids re-marshaling the
-	// large built-in schema that is already accounted for by the cache.
-	mcpOnly := make([]openai.Tool, 0, 8)
-	for _, t := range tools {
-		if t.Function != nil && isMcpToolFunctionName(t.Function.Name) {
-			mcpOnly = append(mcpOnly, t)
-		}
-	}
-	if len(mcpOnly) == 0 {
-		return 0
-	}
-	return estimateModelToolSchemas(mcpOnly)
-}
-
+// The full built-in set has a cached estimate. Filtered sets are estimated
+// from their actual protocol declarations.
 func estimateToolSchemaTokens(tools []openai.Tool) int {
-	total, _ := estimateToolSchemaTokenParts(tools)
-	return total
-}
-
-// estimateToolSchemaTokenParts returns the total and its MCP portion together.
-func estimateToolSchemaTokenParts(tools []openai.Tool) (int, int) {
 	if len(tools) == 0 {
-		return 0, 0
+		return 0
 	}
-	// Split into builtin (non-mcp__) and mcp portions. The builtin portion
-	// uses the cache only when it is the full chatTools() set — a filtered
-	// builtin slice must be re-marshaled to avoid over-counting the cached
-	// full-set tokens.
-	cachedBuiltinCount := len(chatTools())
-	builtinCount, purposeCount := 0, 0
-	hasMcp := false
-	for _, t := range tools {
-		if t.Function != nil && isMcpToolFunctionName(t.Function.Name) {
-			hasMcp = true
-			continue
-		}
-		builtinCount++
-		if t.Function != nil {
-			if schema, ok := t.Function.Parameters.(map[string]any); ok && schema[schemautil.PurposeFieldKey] != nil {
-				purposeCount++
+	if len(tools) == len(chatTools()) {
+		purposeCount := 0
+		for _, tool := range tools {
+			if tool.Function != nil {
+				if schema, ok := tool.Function.Parameters.(map[string]any); ok && schema[schemautil.PurposeFieldKey] != nil {
+					purposeCount++
+				}
 			}
 		}
-	}
-	var total int
-	if builtinCount == cachedBuiltinCount && purposeCount == builtinCount {
-		total = builtinPurposeToolSchemaTokens()
-	} else if builtinCount == cachedBuiltinCount && purposeCount == 0 {
-		// Full builtin set — use the cached estimate.
-		total = builtinToolSchemaTokens()
-	} else if builtinCount > 0 {
-		// Filtered builtin subset — marshal directly.
-		builtinOnly := make([]openai.Tool, 0, builtinCount)
-		for _, t := range tools {
-			if t.Function != nil && !isMcpToolFunctionName(t.Function.Name) {
-				builtinOnly = append(builtinOnly, t)
-			}
+		switch purposeCount {
+		case 0:
+			return builtinToolSchemaTokens()
+		case len(tools):
+			return builtinPurposeToolSchemaTokens()
 		}
-		total = estimateModelToolSchemas(builtinOnly)
 	}
-	mcp := 0
-	if hasMcp {
-		mcp = mcpToolSchemaTokens(tools)
-	}
-	return total + mcp, mcp
+	return estimateModelToolSchemas(tools)
 }
 
 // finalizeContextBreakdownTotal recomputes the category sum and the
@@ -400,7 +341,7 @@ func estimateToolSchemaTokenParts(tools []openai.Tool) (int, int) {
 // after that request are estimated on top (pi: estimateContextTokens,
 // packages/ai/src/utils/estimate.ts).
 func finalizeContextBreakdownTotal(result *ContextBreakdown) {
-	result.Estimated = result.SystemPrompt + result.ToolSchemas + result.UserMessages + result.AssistantMsgs + result.ToolResults + result.Reasoning
+	result.Estimated = result.SystemPrompt + result.ToolSchemas + result.MCPCatalog + result.UserMessages + result.AssistantMsgs + result.ToolResults + result.Reasoning
 	result.Total = result.Estimated
 	if result.MeasuredTokens > 0 {
 		result.Total = result.MeasuredTokens + result.TrailingTokens
@@ -625,7 +566,6 @@ type frozenPrefixStats struct {
 	system       int
 	parts        []ContextBreakdownPart
 	tools        int
-	mcpTools     int
 }
 
 func sameSliceSource[T any](a, b []T) bool {
@@ -657,7 +597,7 @@ func (a *App) frozenPrefixTokenStats(sessionID string) (frozenPrefixStats, bool)
 		next.system += tokens
 		next.parts = append(next.parts, ContextBreakdownPart{Label: workspaceMapPartLabel, Tokens: tokens})
 	}
-	next.tools, next.mcpTools = estimateToolSchemaTokenParts(toolset)
+	next.tools = estimateToolSchemaTokens(toolset)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	currentPrompt, p := a.sessionSystemPrompts[sessionID]
@@ -673,13 +613,6 @@ func (a *App) frozenPrefixTokenStats(sessionID string) (frozenPrefixStats, bool)
 	return next, true
 }
 
-func (a *App) sessionToolSchemaTokens(sessionID string, cfg ConfigState) (int, int) {
-	if cached, ok := a.frozenPrefixTokenStats(sessionID); ok {
-		return cached.tools, cached.mcpTools
-	}
-	return estimateToolSchemaTokenParts(a.sessionToolsetForBreakdown(sessionID, cfg))
-}
-
 // getContextBreakdown computes token estimates from the real session state.
 // If liveBreakdown is available, it returns a merged view (live messages + current system/tools).
 // workspaceHint (optional, from the UI) overrides the session-based workspace
@@ -691,11 +624,10 @@ func (a *App) getContextBreakdown(sessionID string, workspaceHint string) Contex
 		result.SystemPrompt = cached.system
 		result.SystemPromptParts = append([]ContextBreakdownPart(nil), cached.parts...)
 		result.ToolSchemas = cached.tools
-		result.MCPToolSchemas = cached.mcpTools
 	} else {
 		cfg := a.contextSettingsForSession(sessionID, a.sessionContextConfig(sessionID, workspaceHint), false)
 		result.SystemPrompt, result.SystemPromptParts = a.sessionPrefixBreakdown(sessionID, cfg, nil)
-		result.ToolSchemas, result.MCPToolSchemas = a.sessionToolSchemaTokens(sessionID, cfg)
+		result.ToolSchemas = estimateToolSchemaTokens(a.sessionToolsetForBreakdown(sessionID, cfg))
 	}
 
 	// Check if live breakdown is available (covers tool calls + tool results not in a.histories)
@@ -705,6 +637,7 @@ func (a *App) getContextBreakdown(sessionID string, workspaceHint string) Contex
 	if !hasLive {
 		live = a.savedHistoryBreakdown(sessionID)
 	}
+	result.MCPCatalog = live.MCPCatalog
 	result.UserMessages = live.UserMessages
 	result.AssistantMsgs = live.AssistantMsgs
 	result.ToolResults = live.ToolResults
@@ -784,7 +717,11 @@ func addBreakdownMessage(result *ContextBreakdown, message openai.ChatCompletion
 	tokens := messageTokens(message)
 	switch message.Role {
 	case openai.ChatMessageRoleUser:
-		result.UserMessages += tokens
+		if isMcpCatalogMessage(message) {
+			result.MCPCatalog += tokens
+		} else {
+			result.UserMessages += tokens
+		}
 	case openai.ChatMessageRoleAssistant:
 		result.AssistantMsgs += tokens
 	case openai.ChatMessageRoleTool:
@@ -1552,7 +1489,7 @@ func appendFrontendHistoryDelta(messages []openai.ChatCompletionMessage, backend
 func comparableMessageKey(role, content string) string {
 	role = strings.TrimSpace(role)
 	content = strings.TrimSpace(content)
-	if content == "" {
+	if content == "" || (role == openai.ChatMessageRoleUser && strings.HasPrefix(content, turnNoticeMarker(mcpCatalogNotice))) {
 		return ""
 	}
 	if role != openai.ChatMessageRoleUser && role != openai.ChatMessageRoleAssistant {

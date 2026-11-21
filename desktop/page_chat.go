@@ -735,19 +735,20 @@ func (a *desktop) welcomeView(c *ui.Context, t *conversation) {
 			ui.Column(c).Grow(1).Border(1, surfaceBorder(c)).Radius(radiusCard).Children(func() {
 				rows := [][4]string{
 					{locales.Text("工作区"), workspaceLabel(t.Workspace), "Bash", a.config.GitBashPath},
-					{locales.Text("模型"), strings.ReplaceAll(t.Model, " / ", " · "), "MCP", a.mcpSummary},
-					{locales.Text("技能"), fmt.Sprintf(locales.Text("%d 个可用"), len(availableSkills)), locales.Text("工具"), fmt.Sprintf(locales.Text("%d 个工具"), a.toolCount)},
+					{locales.Text("模型"), strings.ReplaceAll(t.Model, " / ", " · "), locales.Text("MCP 工具池"), a.mcpPoolLabel()},
+					{locales.Text("技能"), fmt.Sprintf(locales.Text("%d 个可用"), len(availableSkills)), locales.Text("内置工具"), fmt.Sprintf(locales.Text("%d 个可用"), a.builtinToolCount)},
 				}
 				if rows[0][3] == "" {
 					rows[0][3] = locales.Text("自动检测")
 				}
-				if rows[1][3] == "" {
-					rows[1][3] = locales.Text("无 MCP 服务")
-				}
 				for i, row := range rows {
 					ui.Row(c).Key(fmt.Sprintf("welcome-row-%d", i)).MinHeight(40).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).AlignItems(ui.Center).Children(func() {
 						for j := 0; j < 2; j++ {
-							ui.Box(c).Width(64).MinHeight(40).Padding(10, 8).BorderWidth(0, 1, 0, 0).BorderColor(c.Theme().Border).Children(func() {
+							labelWidth := float32(64)
+							if j == 1 {
+								labelWidth = 112
+							}
+							ui.Box(c).Width(labelWidth).MinHeight(40).Padding(10, 8).BorderWidth(0, 1, 0, 0).BorderColor(c.Theme().Border).Children(func() {
 								ui.Text(c, row[j*2]).FontSize(fsSmall).Bold()
 							})
 							value := row[j*2+1]
@@ -819,23 +820,18 @@ func (a *desktop) welcomePopover(c *ui.Context, t *conversation, anchor ui.Eleme
 			Left(bounds.X).Top(bounds.Y).Size(bounds.W, bounds.H).Cursor(ui.CursorPointer).Label(locales.Text("关闭信息面板"))
 		trigger.OnClick(func() { *open = false })
 		popoverPanel(c, trigger, open, 320, func() {
-			title := locales.Text("MCP 服务")
+			title := locales.Text("MCP 工具池")
 			if row == 2 && col == 0 {
 				title = locales.Text("可用技能")
 			} else if row == 2 {
-				title = locales.Text("工具")
+				title = locales.Text("内置工具")
 			}
 			ui.Text(c, title).FontSize(fsSection).Bold().Padding(gapInline, padCard)
 			ui.Scroll(c).MaxHeight(260).Children(func() {
 				ui.Column(c).Gap(3).Padding(4, 10).Children(func() {
 					switch {
 					case row == 1:
-						if len(a.mcpServers) == 0 {
-							fieldNote(c, locales.Text("无 MCP 服务"), a.secondaryInk())
-						}
-						for _, server := range a.mcpServers {
-							ui.Text(c, fmt.Sprintf(locales.Text("%s · %s · %d 个工具"), str(server, "name"), mcpStatusText(str(server, "status")), int(num(server, "toolCount")))).FontSize(fsSmall).TextColor(a.secondaryInk())
-						}
+						a.mcpPoolTools(c)
 					case col == 0:
 						names := a.enabledSkillNames()
 						if len(names) == 0 {
@@ -845,15 +841,20 @@ func (a *desktop) welcomePopover(c *ui.Context, t *conversation, anchor ui.Eleme
 							ui.Text(c, name).FontSize(fsSmall)
 						}
 					default:
-						if len(a.toolInventory) == 0 {
-							fieldNote(c, locales.Text("暂无工具"), a.secondaryInk())
-						}
+						shown := false
 						for _, tool := range a.toolInventory {
+							if tool.Source != "built-in" {
+								continue
+							}
+							shown = true
 							suffix := ""
 							if !tool.Enabled {
 								suffix = locales.Text("（已停用）")
 							}
 							ui.Text(c, tool.Name+suffix).FontSize(fsSmall)
+						}
+						if !shown {
+							fieldNote(c, locales.Text("暂无工具"), a.secondaryInk())
 						}
 					}
 				})

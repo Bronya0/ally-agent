@@ -166,6 +166,9 @@ func (a *App) projectFastCompactHistory(ctx context.Context, sessionID string, h
 				return nil, err
 			}
 		}
+		if isMcpCatalogMessage(m) {
+			continue
+		}
 		if isFastCompactHistory(m) {
 			flush()
 			out = append(out, m)
@@ -239,7 +242,11 @@ func (a *App) projectFastCompactHistory(ctx context.Context, sessionID string, h
 	}
 	flush()
 	tailStart := len(out)
-	out = append(out, cloneChatMessages(history[cutoff:])...)
+	for _, message := range cloneChatMessages(history[cutoff:]) {
+		if !isMcpCatalogMessage(message) {
+			out = append(out, message)
+		}
+	}
 	changed := cutoff > 0 && (assistantCount > 0 || argumentCount > 0)
 	// A user-only prefix has no tool/prompt state to compact. Preserve it verbatim.
 	if !changed {

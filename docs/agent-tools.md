@@ -8,7 +8,7 @@
 
 ```mermaid
 flowchart LR
-  A["builtins.go 静态 schema + MCP 工具"]:::core --> B["请求 tools 参数（session 冻结）"]:::core
+  A["builtins.go 静态 schema"]:::core --> B["请求 tools 参数（session 冻结）"]:::core
   B --> C["模型流式返回 tool_calls"]:::llm
   C --> D["executeTool 唯一分发"]:::exec
   D --> E["decodeJSON 宽容解码 / 截断拒绝"]:::core
@@ -23,7 +23,8 @@ flowchart LR
 |---|---|
 | schema 声明 | `internal/tools/shared/builtins.go` |
 | schema 查找（按工具名） | `builtins.go:98` `BuiltinSchema` |
-| 工具集组装（含 MCP） | `biz_mcp.go:1106` `buildToolsWithMcp`、`biz_mcp.go:1140` `buildToolsForSession` |
+| 内置工具集组装 | `biz_mcp.go` 的 `buildToolsForSession` 和 `buildToolsForConfig` |
+| MCP 注册、目录与调用 | `biz_mcp.go` 和 `biz_mcp_registry.go` |
 | 分发 | `app.go:2375` `executeTool` |
 | 参数契约（宽容解码 + schema 闸门） | `app.go:2399` `decodeJSON` + `internal/tools/schemautil/validate.go` + `internal/tools/toolcall/` |
 | 编排（绑定 `*App` 状态） | `internal/app/orch_*.go` |
@@ -51,10 +52,11 @@ func functionTool(name, desc string, params map[string]any) openai.Tool {  // :4
 1. **示例写进描述**（`builtinToolExamples`，`builtins.go`）。参数描述说一百句，不如给一条能直接抄的样例 JSON——提升工具调用成功率最便宜的手段。
 2. **平坦 Schema 与网关最大兼容**：内置工具 Schema 全面使用平坦的 `type: "object"`，彻底避免顶层与嵌套的 `oneOf` / `anyOf` / `allOf` / `not` 等复合关键字，防止中转网关（OneAPI、NewAPI、Cloudflare AI Gateway）或不同模型端点 400 拒绝。参数互斥（如 `body` 与 `json`、`oldText` 与 `lineRange`、`instruction` 与 `command`）直接在参数 description 中给出清晰说明，并由执行层业务逻辑统一校验。
 3. **入参门禁放宽与按需取用**：针对多 action 工具（如 `service`、`scheduled_task`、`ssh_cluster`），顶层仅强制要求基础 action 字段（`required: ["action"]`）。调用时若携带了当前 action 不需要但在 properties 中有声明的冗余参数，后端自动忽略而不拒绝；仅当当前 action 真正需要的必选参数缺失或互斥参数冲突时，才在执行层返回针对性报错。
-4. **外部/MCP 工具的顶层复合自适应展平**：部分 MCP 工具可能仍带有顶层复合关键字，Anthropic Messages 出口前仍经 `schemautil.FlattenTopLevelComposites` 自动展平，确保 Claude 请求不报 400。
-5. **strict schema 递归规范化**（`enforceStrictSchema` → `normalizeSchemaNode`）。遍历 `properties` / `items` 等，给每个 `type: object` 补 `additionalProperties: false` 与 `properties: {}`，确保在 OpenAI strict 模式下行为确定。
+4. **strict schema 递归规范化**（`enforceStrictSchema` → `normalizeSchemaNode`）。遍历 `properties` / `items` 等，给每个 `type: object` 补 `additionalProperties: false` 与 `properties: {}`，确保在 OpenAI strict 模式下行为确定。
 
-工具集本身在 session 首次请求时**冻结**（`buildToolsForSession`，`biz_mcp.go:1140`）：`tools` 是请求前缀的一部分，中途变化会让供应商 prompt cache 全线作废。`cloneTools` 深拷贝，保证冻结的那份不被后续 MCP 启停改到。子代理 / 计划任务这类无 session 的调用方走 `buildToolsForConfig`，永远看实时集合（它们本来也无前缀可保）。MCP 工具靠名字前缀 `mcp__<server>__<tool>`（`mcpFunctionNamePrefix`）并入同一张表。
+主会话首次请求固定内置工具集合。子代理和定时任务按各自获得的工具集合执行。MCP 启停与刷新保持协议工具声明稳定。管理器分页读取服务端的原始工具定义，连接恢复或收到列表变更通知后按服务器更新。
+
+运行时消息携带按服务器和工具名排序的 MCP 目录。首次发现、目录变更和压缩后追加最新目录，已有历史继续复用。用 `ToolSearch({"names":["github.search_repositories","mysql.list_tables"]})` 一次查询多项完整定义。每项独立返回结果或错误，查询全程读取本地注册表。已知参数时可以直接用 `ToolExec({"name":"mysql.list_tables","arguments":{}})`。执行时检查目标是否仍可用，并按当前服务端 InputSchema 校验。工具名区分大小写，服务器 ID 中的点转义为 `%2E`。
 
 ## 三、分发层：`executeTool` 是唯一入口（`app.go:2375`）
 
@@ -69,8 +71,8 @@ if toolcall.IsTruncatedArguments(string(args)) {   // ③ 流式截断参数一�
 switch name {
 case "fetch": ...  /* 工具分支以实际注册清单为准 */
 case "skill": ...
+case "toolsearch", "toolexec": ...               // ④ 按 MCP 注册表定位目标
 default:
-    if strings.HasPrefix(name, "mcp__") { ... }    // ④ MCP 按前缀路由，不是白名单
     err = fmt.Errorf("unknown tool: %s", name)
 }
 if err != nil { return toolErrorResult(err) }
@@ -82,7 +84,7 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 - **① panic 隔离**：循环跑在独立 goroutine 里，一次 handler panic 逃逸就会带走整个应用；文件变更阶段 panic 还会带着悬空 `tool_calls` 进入 deferred 检查点落盘。这里统一转成工具错误，循环继续。
 - **② 归一化收在一处**（`NormalizeName`）：历史会话里的旧工具名靠别名映射继续可用；不要在别处用排除式补丁（`!= 'specal_case'`）替代归一。
 - **③ 截断参数的唯一契约**是 `toolcall.TruncatedArgumentsMarker`。
-- **④ MCP 用前缀路由**，新增 MCP 工具不需要改任何白名单。
+- **④ MCP 调用**按实时注册表检查目标权限，历史目录和已查询的 Schema 供模型参考。
 
 ## 四、参数契约：`decodeJSON` + schema 闸门 + `toolcall` 包
 
@@ -98,7 +100,7 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 
 **schema 闸门**（`app.go:2399` 内 → `schemautil.ValidateArgs`，`internal/tools/schemautil/validate.go`）：内置工具的入参在解码后按它自己的 schema 校验一次，支持 `type` / `required` / `additionalProperties` / `items` / `min–maxItems` / `min–maxLength`（按字符）/ `pattern` / `enum` / `const` / `minimum` / `maximum` / `anyOf` / `oneOf` / `allOf` / `not`，报告带路径（`changes[0].newText`）且一次列多个问题。两条约定：**`null` 等于「没提供」**（跳过类型检查，也不再满足 `required`），未被声明用到的关键字忽略不拒。它针对「模型看到的就是它要遵守的」这件事——同名规则不再一处写在提示词、一处写在 handler：
 
-- 只有内置工具过闸（MCP 工具的 schema 来自服务端，不归我们发誓）；MCP 调用里未声明的参数会被点名警告（`mcpUnknownArgWarnings`，`biz_mcp.go`），但仍原样转发给服务端。
+- `ToolExec` 的外层参数按内置工具契约校验。嵌套的 `arguments` 保留原样，按服务端原始 JSON Schema 校验。
 - 每条声明必须能过闸才能存在：`TestEveryBuiltinSchemaIsEnforceable`（strict object + pattern 可编译）、`TestExecuteToolGatesEveryBuiltinTool`（25 个名字逐个验闸）守住。
 
 `internal/tools/toolcall`（179 行）是「适配器产出 / 会话加载修复 / 执行前拒绝」三条路径共享的规则源——包注释说明了原因：这套知识曾经散在三处，改一份就会和另两份静默不一致。内容包括：
@@ -159,7 +161,7 @@ type toolResult struct {                       // infra_result.go:19
 | `edit` / `create` | 自闭合属性标签；summary/validation 走属性，warnings 走尾部行（自由文本经 `neutralizeClosingMarkers` 中和标记形状） |
 | `delete` / `remote_delete_path` | `<ally-deleted deleted failed absent>` 块 + 每条路径一行 `<path value ok absent kind files dirs bytes error>`：单路径调用就是一个单槽批量，本地与远端同一份渲染（失败槽一眼可见，不用数行）。本来就不存在的路径报 `absent="true"`（`ok` 仍为 true，两个计数都不含它）——不报错、也不必重试 |
 | `fetch`（兼容历史 `http_request` / `web_fetch`） | `<ally-http>` / `<ally-fetch>` 块（砍 url/statusText 回显，链接作尾部行） |
-| `mcp__*` | 第三方无上限输出，统一夹到内置上限（`renderMcpResultForModel`） |
+| `ToolExec` | 第三方无上限输出，统一夹到内置上限（`renderMcpResultForModel`） |
 | 任何失败 / 解码失败 | 回退 `fullJSON`（`marshalToolResultOrFallback`），永不因压缩丢信息 |
 
 正文或自由文本自带闭合标记形状时统一就地转义（`</ally-x` → `&lt;/ally-x`，收口在 `escapeClosingMarker`）：字面闭合标记只允许渲染器自己写的那一个，外部内容无法伪造块边界，也没有任何回退路径需要保 cap。转义在 cap 之后发生，极端对抗性内容（密集标记）最多膨胀约 1/3，测试按 1.5 倍上限覆盖。
@@ -170,7 +172,7 @@ type toolResult struct {                       // infra_result.go:19
 
 ## 七、批次策略：按 stage 调度
 
-主循环与子代理共用 `orch_tool_stages.go` 的 `executeStagedToolBatch`。内置工具 schema 在 `functionTool` 统一声明可选非负整数 `stage`，省略为 0；调度器读取它，但不从执行参数中剥离。MCP 不增加这个字段，调用归入 stage 0。
+主循环与子代理共用 `orch_tool_stages.go` 的 `executeStagedToolBatch`。内置工具 schema 在 `functionTool` 统一声明可选非负整数 `stage`，省略为 0；调度器读取它，但不从执行参数中剥离。`ToolExec` 使用外层 `stage` 参与调度。嵌套的 `arguments.stage` 如有声明，按目标工具参数转发。
 
 - 同 stage 在配置的并发上限内执行；阶段按数字升序推进，数字允许不连续，与调用在响应中的排列顺序无关。
 - 当前阶段全部收尾后才能进入下一阶段。工具错误、命令非零退出、超时、取消或提升为后台服务都会阻断后续阶段；`E_DUPLICATE_TOOL_CALL` 通知本身不阻断，原始调用的成败仍然有效。

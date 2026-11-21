@@ -48,6 +48,12 @@ func MenuButton(c *ui.Context, open *bool, o MenuOptions, trigger func(ui.Elemen
 	return root
 }
 
+// MenuPanelPadding is the room the panel keeps between its border and its
+// content. A footer that sticks to the bottom pins against the border box, so
+// it uses this inset to land on the panel's padding box instead of drifting by
+// the padding once the list scrolls to its end.
+const MenuPanelPadding float32 = 5
+
 // MenuPanel is the shared chrome of root menus, submenus and information
 // popovers. MenuBase supplies the popup's scrolling and window-edge flipping.
 func MenuPanel(c *ui.Context, panel ui.Element, o MenuOptions) {
@@ -55,7 +61,7 @@ func MenuPanel(c *ui.Context, panel ui.Element, o MenuOptions) {
 	if height == 0 {
 		height = 420
 	}
-	panel.Width(o.Width).MaxWidthPercent(90).MaxHeight(height).Padding(5).
+	panel.Width(o.Width).MaxWidthPercent(90).MaxHeight(height).Padding(MenuPanelPadding).
 		Background(c.Theme().Surface).Border(1, c.Theme().Border).Radius(RadiusCard)
 	if o.MaxHeightPercent > 0 {
 		panel.MaxHeightPercent(o.MaxHeightPercent)

@@ -32,43 +32,6 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-func TestToolSchemaToMapProducesProviderSafeSchema(t *testing.T) {
-	schema := mcp.ToolInputSchema{
-		Type:       "object",
-		Properties: map[string]any{},
-		Defs: map[string]any{
-			"options": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-				"required":   nil,
-			},
-		},
-		AdditionalProperties: false,
-	}
-
-	got := toolSchemaToMap(schema)
-	if got["type"] != "object" {
-		t.Fatalf("type = %#v, want object", got["type"])
-	}
-	if _, ok := got["properties"].(map[string]any); !ok {
-		t.Fatalf("properties must be an object, got %#v", got["properties"])
-	}
-	if required, exists := got["required"]; exists && required == nil {
-		t.Fatal("required must be omitted or an array, not null")
-	}
-	if got["additionalProperties"] != false {
-		t.Fatalf("additionalProperties was not preserved: %#v", got)
-	}
-	defs, ok := got["$defs"].(map[string]any)
-	if !ok {
-		t.Fatalf("$defs was not preserved: %#v", got)
-	}
-	nested := defs["options"].(map[string]any)
-	if required, exists := nested["required"]; exists && required == nil {
-		t.Fatal("nested required must be omitted or an array, not null")
-	}
-}
-
 func TestMcpTransportName(t *testing.T) {
 	tests := []struct {
 		cfg  McpServerConfig
@@ -452,7 +415,7 @@ func TestMcpManagerReconcileKeepsUnchangedServers(t *testing.T) {
 	bHandle := &McpClientHandle{ServerName: "b", Config: McpServerConfig{Command: "y", Enabled: &disabled}, Status: "disabled"}
 	manager.clients["b"] = bHandle
 	manager.clients["old"] = &McpClientHandle{ServerName: "old", Status: "connected"}
-	manager.replaceToolLookupLocked("old", []McpDiscoveredTool{{ServerName: "old", Name: "tool", FunctionName: "mcp__old__tool"}})
+	manager.clients["old"].ToolDefs = []McpDiscoveredTool{{ServerName: "old", Name: "tool"}}
 
 	changed, err := manager.ReconcileConfigs(context.Background())
 	if err != nil {
@@ -464,7 +427,7 @@ func TestMcpManagerReconcileKeepsUnchangedServers(t *testing.T) {
 	if _, exists := manager.clients["old"]; exists {
 		t.Fatal("removed server must be disconnected")
 	}
-	if _, exists := manager.toolLookup["mcp__old__tool"]; exists {
+	if _, err := manager.registeredToolLocked("old", "tool"); err == nil {
 		t.Fatal("removed server's tool lookup must be dropped")
 	}
 	if manager.clients["b"] != bHandle {
@@ -531,53 +494,10 @@ func TestMcpServerConfigEqualIgnoresDisabledTools(t *testing.T) {
 	}
 }
 
-// MCP 工具不入参数闸门（没有内置声明可校验），所以一个拼错或多传的参数只能
-// 靠这条警告露面；声明里没有 properties 的工具则保持安静，否则每个参数都会被点名。
-func TestMcpUnknownArgWarningsNamesUndeclaredArguments(t *testing.T) {
-	t.Parallel()
-	app := newIsolatedTestApp(t)
-	manager := NewMcpManager(t.TempDir(), nil)
-	manager.clients = map[string]*McpClientHandle{
-		"fs": {
-			ServerName: "fs",
-			Status:     "connected",
-			Config:     McpServerConfig{Command: "x"},
-			ToolDefs: []McpDiscoveredTool{
-				{
-					ServerName:   "fs",
-					Name:         "read_file",
-					FunctionName: "mcp__fs__read_file",
-					Schema: map[string]any{
-						"type":       "object",
-						"properties": map[string]any{"path": map[string]any{"type": "string"}},
-					},
-				},
-				{ServerName: "fs", Name: "probe", FunctionName: "mcp__fs__probe"},
-			},
-		},
-	}
-	app.mcpManager = manager
-
-	warnings := app.mcpUnknownArgWarnings("mcp__fs__read_file", map[string]any{"path": "a.txt", "recursive": true, "dept": 2})
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "dept, recursive") {
-		t.Fatalf("undeclared MCP arguments must be named together, got %#v", warnings)
-	}
-	if got := app.mcpUnknownArgWarnings("mcp__fs__read_file", map[string]any{"path": "a.txt"}); len(got) != 0 {
-		t.Fatalf("declared arguments must stay silent, got %#v", got)
-	}
-	if got := app.mcpUnknownArgWarnings("mcp__fs__probe", map[string]any{"anything": 1}); len(got) != 0 {
-		t.Fatalf("a tool without declared properties must not flag every argument, got %#v", got)
-	}
-	if got := app.mcpUnknownArgWarnings("mcp__missing__tool", map[string]any{"x": 1}); len(got) != 0 {
-		t.Fatalf("a tool outside the current set must stay silent, got %#v", got)
-	}
-}
-
-// 注入过滤：黑名单内工具不进 GetEnabledTools，但 GetAllTools（清单层）仍全量可见；
-// 黑名单按「对端原始工具名」匹配，未列出的工具（含对端新增）默认启用。
-// 连接状态不参与过滤：failed 服务端已发现的工具照常注入（连接无状态，调用时
-// 按需重连兜底），只有用户显式关掉的 disabled server 才整体排除。
-func TestGetEnabledToolsFiltersDisabledTools(t *testing.T) {
+// 目录、状态面板与勾选清单必须对同一条黑名单给出一致的答案：黑名单里的工具不
+// 进目录（模型看不到也调不到），断连服务端已发现的工具仍留在目录里（会话冻结
+// 后不能凭空消失），清单视图则一律全量可见，好让用户能取消勾选。
+func TestMcpRegistryViewsRespectBlacklistAndStatus(t *testing.T) {
 	manager := NewMcpManager(t.TempDir(), nil)
 	manager.clients = map[string]*McpClientHandle{
 		"fs": {
@@ -601,9 +521,20 @@ func TestGetEnabledToolsFiltersDisabledTools(t *testing.T) {
 	// disabled server: 全部工具都不注入也不出现在任一视图
 	manager.clients["off"] = &McpClientHandle{ServerName: "off", Status: "disabled"}
 
-	enabled := manager.GetEnabledTools()
-	if len(enabled) != 2 || enabled[0].ServerName != "dead" || enabled[1].Name != "read_file" {
-		t.Fatalf("enabled view must keep failed-server tools and drop blacklisted ones, got %#v", enabled)
+	catalog := manager.toolCatalog(true)
+	for _, want := range []string{"[dead]\nsearch:", "[fs]\nread_file:"} {
+		if !strings.Contains(catalog, want) {
+			t.Fatalf("catalog must keep %q for a failed or allowed tool, got %q", want, catalog)
+		}
+	}
+	if strings.Contains(catalog, "write_file") {
+		t.Fatalf("catalog must not expose blacklisted tools, got %q", catalog)
+	}
+	statuses := manager.GetServerStatuses()
+	if len(statuses) != 3 || statuses[0]["toolCount"] != 1 || statuses[0]["enabledToolCount"] != 1 ||
+		statuses[1]["toolCount"] != 2 || statuses[1]["enabledToolCount"] != 1 ||
+		statuses[2]["enabledToolCount"] != 0 {
+		t.Fatalf("server status counts must match the MCP registry: %#v", statuses)
 	}
 	all := manager.GetAllTools()
 	if len(all) != 3 {
@@ -784,8 +715,8 @@ func TestMcpCallFailureClassification(t *testing.T) {
 	}
 	for _, tc := range cases {
 		manager := NewMcpManager("", nil)
-		manager.clients["srv"] = &McpClientHandle{ServerName: "srv", Status: tc.status}
-		outcome, err := manager.callToolOnce(context.Background(), "srv", "tool", nil)
+		manager.clients["srv"] = &McpClientHandle{ServerName: "srv", Status: tc.status, ToolDefs: []McpDiscoveredTool{{Name: "tool", Schema: map[string]any{"type": "object"}}}}
+		outcome, err := manager.callToolOnce(context.Background(), "srv", "tool", map[string]any{})
 		if err == nil {
 			t.Fatalf("status %q must fail the call", tc.status)
 		}
@@ -850,6 +781,10 @@ func TestCallToolDoesNotRetryToolLevelError(t *testing.T) {
 	manager := NewMcpManager("", nil)
 	handle := &McpClientHandle{ServerName: "srv", Client: mcpClient, Status: "connected", token: &mcpConnToken{}}
 	manager.clients["srv"] = handle
+	handle.ToolDefs, err = listMcpTools(t.Context(), "srv", mcpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_, err = manager.CallTool(context.Background(), "srv", "flaky", map[string]any{})
 	if err == nil {
@@ -1408,7 +1343,7 @@ func TestCommitConnectionRecordsLossDuringHandshake(t *testing.T) {
 	if liveHandle.Status != "connected" || liveHandle.Error != "" || liveHandle.token != liveToken {
 		t.Fatalf("正常连接应登记为 connected，got %q/%q", liveHandle.Status, liveHandle.Error)
 	}
-	if _, ok := manager.toolLookup["mcp__live__t"]; !ok {
+	if len(liveHandle.ToolDefs) != 1 || liveHandle.ToolDefs[0].Name != "t" {
 		t.Fatal("工具映射必须跟着登记一起写入")
 	}
 }
@@ -1570,16 +1505,5 @@ func TestMcpToolResultTextStructuredOnlyServerIsNotEmpty(t *testing.T) {
 	got := mcpToolResultText(result)
 	if got != `structured output: {"status":"ok"}` {
 		t.Fatalf("structured-only result = %q", got)
-	}
-}
-
-func TestMCPFunctionNamesRequireRegisteredLookup(t *testing.T) {
-	m := &McpManager{toolLookup: map[string]mcpToolRef{"mcp__opaque": {ServerName: "server__name", ToolName: "tool__name"}}}
-	if _, ok := m.DescribeFunctionTool("mcp__server__tool"); ok {
-		t.Fatal("unregistered legacy name accepted")
-	}
-	ref, ok := m.DescribeFunctionTool("mcp__opaque")
-	if !ok || ref.ServerName != "server__name" || ref.ToolName != "tool__name" {
-		t.Fatalf("registered lookup lost original names: %+v", ref)
 	}
 }

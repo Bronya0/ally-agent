@@ -6,4 +6,4 @@ package uikit
 import "github.com/egoist/mygo"
 
 // macOS keeps its menu-bar icon anchor; Linux uses the system-menu fallback.
-func capturePosition() func(*mygo.Window) { return nil }
+func capturePosition(_ int) func(*mygo.Window) { return nil }

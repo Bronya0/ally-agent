@@ -105,7 +105,7 @@ func TestWelcomePopoverFitsWindowShell(t *testing.T) {
 
 func TestWelcomeSwitchesBetweenPopovers(t *testing.T) {
 	conv := &conversation{ID: "welcome-switch"}
-	a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}, mcpSummary: "mcp-trigger", toolCount: 37}
+	a := &desktop{page: "chat", prefs: defaultPrefs(), tabs: []*conversation{conv}, mcpSummary: "mcp-trigger", builtinToolCount: 37}
 	tt := ui.NewTester(func(c *ui.Context) {
 		width, _ := c.Size()
 		ui.Column(c).Fill().Children(func() { a.chatColumn(c, width) })

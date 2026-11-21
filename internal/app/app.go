@@ -268,14 +268,10 @@ type App struct {
 	// Guarded by mu.
 	frozenTurnNotices map[string]map[string]string
 
-	// sessionToolsets freezes the model-visible tool schema list per session
-	// (sessionID → tools). Tool schemas are part of the provider prompt-cache
-	// prefix, so an MCP server disconnect/reconnect or toggling servers/tools
-	// mid-conversation would otherwise invalidate the whole cache twice per
-	// blip. Frozen tools for a disconnected server surface as an execution
-	// error (the model adapts) instead of the tool silently vanishing. A successful
-	// compaction drops this snapshot too (refreshSessionPromptPrefix). Guarded by
-	// mu.
+	// sessionToolsets freezes the protocol built-in tool schemas at the first
+	// request. The live MCP catalog travels in runtime messages. Successful
+	// compaction drops the snapshot through refreshSessionPromptPrefix.
+	// Guarded by mu.
 	sessionToolsets map[string][]openai.Tool
 
 	// sessionWorkspaces records the workspace each session's runs actually
@@ -1179,12 +1175,9 @@ type CommandResult struct {
 }
 
 type HTTPRequestToolRequest struct {
-	ResponseFormat      string            `json:"responseFormat,omitempty"`
-	MaxChars            int               `json:"maxChars,omitempty"`
 	Method              string            `json:"method"`
 	URL                 string            `json:"url"`
 	Headers             map[string]string `json:"headers,omitempty"`
-	Query               map[string]string `json:"query,omitempty"`
 	Body                string            `json:"body,omitempty"`
 	JSON                json.RawMessage   `json:"json,omitempty"`
 	SaveTo              string            `json:"saveTo,omitempty"`
@@ -1237,17 +1230,19 @@ type WebFetchLink struct {
 }
 
 type WebFetchResult struct {
-	URL         string         `json:"url"`
-	FinalURL    string         `json:"finalUrl"`
-	Status      int            `json:"status"`
-	StatusText  string         `json:"statusText"`
-	Title       string         `json:"title,omitempty"`
-	Text        string         `json:"text"`
-	ContentType string         `json:"contentType"`
-	Links       []WebFetchLink `json:"links,omitempty"`
-	BytesRead   int            `json:"bytesRead"`
-	Truncated   bool           `json:"truncated"`
-	DurationMS  int64          `json:"durationMs"`
+	URL         string            `json:"url"`
+	FinalURL    string            `json:"finalUrl"`
+	Status      int               `json:"status"`
+	StatusText  string            `json:"statusText"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	Redirects   []string          `json:"redirects,omitempty"`
+	Title       string            `json:"title,omitempty"`
+	Text        string            `json:"text"`
+	ContentType string            `json:"contentType"`
+	Links       []WebFetchLink    `json:"links,omitempty"`
+	BytesRead   int               `json:"bytesRead"`
+	Truncated   bool              `json:"truncated"`
+	DurationMS  int64             `json:"durationMs"`
 }
 
 type RemoteReadFileRequest struct {
@@ -2283,7 +2278,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	tools := a.buildToolsForSession(sessionID, cfg)
 	ctx = withBuiltinToolAvailability(ctx, tools)
 	toolEventMeta := func(name string) map[string]any { return a.toolEventMeta(ctx, name) }
-	toolSchemaTokens, mcpSchemaTokens := estimateToolSchemaTokenParts(tools)
+	toolSchemaTokens := estimateToolSchemaTokens(tools)
 	breakdownAcc := newLiveBreakdownAccumulator(messages)
 	// Read de-duplication is scoped to the session, not to this run: a file range
 	// the conversation already carries is omitted instead of re-sent, until a
@@ -2298,7 +2293,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		}
 		b := breakdownAcc.update(msgs)
 		b.ToolSchemas = toolSchemaTokens
-		b.MCPToolSchemas = mcpSchemaTokens
 		b.SystemPrompt, _ = a.sessionPrefixBreakdown(sessionID, cfg, nil)
 		a.finalizeSessionBreakdown(sessionID, &b, msgs)
 		a.mu.Lock()
@@ -2335,6 +2329,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// the next response starts on a fresh one.
 			a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
 		}
+		messages = a.appendMcpCatalog(ctx, cfg, messages, false)
 		// Update live breakdown for context display (includes all tool calls/results)
 		bd := syncBreakdown(messages, false)
 
@@ -2351,7 +2346,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// rewrite is accepted only when its estimate drops below half;
 			// otherwise it falls back to a full summary before sending the request.
 			if newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonThreshold, req, messages, usedTokens); compactErr == nil {
-				messages = newMessages
+				messages = a.appendMcpCatalog(ctx, cfg, newMessages, true)
 				bd = syncBreakdown(messages, true)
 				usedTokens = bd.Total
 				a.emit("run:compacted", payload)
@@ -2484,7 +2479,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					end = runOutcome{kind: "error", message: fmt.Sprintf("%v；上下文超出模型窗口且压缩失败(%v)，请删除部分历史或改用窗口更大的模型后重试", err, compactErr)}
 					return
 				}
-				messages = newMessages
+				messages = a.appendMcpCatalog(ctx, cfg, newMessages, true)
 				requestMessages = messages
 				syncBreakdown(messages, true)
 				a.emit("run:compacted", payload)
@@ -2629,9 +2624,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// correctly. messages append stays ordered below.
 		emitOutcome := func(o toolOutcome) {
 			if o.result.OK {
-				a.emit("tool:result", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "result": o.json, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
+				a.emit("tool:result", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "result": o.json, "durationMs": o.duration}, mcpExecEventMeta(o.name, toolCalls[o.index].Function.Arguments)))
 			} else {
-				a.emit("tool:error", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "error": o.result.Error, "errorCode": o.result.ErrorCode, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
+				a.emit("tool:error", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "error": o.result.Error, "errorCode": o.result.ErrorCode, "durationMs": o.duration}, mcpExecEventMeta(o.name, toolCalls[o.index].Function.Arguments)))
 			}
 		}
 
@@ -2966,7 +2961,11 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			}
 		}
 		if err == nil {
-			data, err = a.fetchToolWithConfig(ctx, cfg, req)
+			if name == "http_request" {
+				data, err = a.httpRequestToolWithConfig(ctx, cfg, req)
+			} else {
+				data, err = a.fetchToolWithConfig(ctx, cfg, req)
+			}
 		}
 	case "web_fetch":
 		var req WebFetchRequest
@@ -3116,27 +3115,19 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			data, err = a.handleSkillToolCall(cfg, sessionID, skReq.Skill, skReq.Args)
 		}
-	default:
-		// Route MCP tool calls by their sanitized OpenAI function name.
-		if isMcpToolFunctionName(name) {
-			var mcpArgs map[string]any
-			if decodeErr := json.Unmarshal(args, &mcpArgs); decodeErr == nil {
-				// stage is Ally scheduling metadata, never an MCP tool argument.
-				delete(mcpArgs, "stage")
-				// Other MCP arguments pass through without a built-in schema gate;
-				// surface undeclared ones here so the model can correct them.
-				argWarnings = append(argWarnings, a.mcpUnknownArgWarnings(name, mcpArgs)...)
-				result, callErr := a.executeMcpFunctionTool(ctx, name, mcpArgs)
-				if callErr != nil {
-					err = callErr
-				} else {
-					data = result
-				}
-			} else {
-				err = fmt.Errorf("invalid MCP tool args: %w", decodeErr)
-			}
-			break
+	case mcpSearchName:
+		var req mcpSearchRequest
+		err, argWarnings = decodeJSON(&req)
+		if err == nil {
+			data, err = a.searchMcpTools(ctx, cfg, req)
 		}
+	case mcpExecName:
+		var req mcpExecRequest
+		err, argWarnings = decodeJSON(&req)
+		if err == nil {
+			data, err = a.execMcpTool(ctx, req)
+		}
+	default:
 		err = fmt.Errorf("unknown tool: %s", name)
 	}
 	if err != nil {

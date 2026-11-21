@@ -125,7 +125,7 @@ off 与 auto 是独立档位：auto 省略等级、采用供应商默认；off �
 ## 6. 请求头与非请求体配置
 
 - Chat / Responses 使用 Bearer 鉴权；登录订阅由 `Manager.Do` 注入 OAuth Token。
-- Anthropic 由 SDK 设置 API Key 鉴权及 `anthropic-version:2023-06-01`；SDK 还会附带自身版本、运行时等传输标识。
+- Anthropic 使用 `Authorization: Bearer <API Key>` 及 SDK 设置的 `anthropic-version:2023-06-01`；SDK 还会附带自身版本、运行时等传输标识。
 - JSON / SSE 所需 Content-Type、Accept 按各传输实现设置。
 - `modelRequestHeaders` 应用配置或默认 User-Agent；普通模型自定义头可覆盖内置头。OAuth 模型归一时清空自定义头。
 - 有内部会话键时，所有端点默认添加 `session-id` 与 `x-session-id`（值为同一个哈希会话键）。「设置 → 通用 → 对话行为 → 会话请求头」提供两个独立开关，缺失配置仍默认开启。关闭只停止自动添加对应头，不清除模型自定义头、不改变请求体的 `prompt_cache_key`；保存后对后续任务生效。

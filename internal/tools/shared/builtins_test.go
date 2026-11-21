@@ -296,10 +296,8 @@ func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 		{"remote_edit pads oldText with an empty string", "remote_edit", `{"alias":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","oldText":""}]}`, false, "", ""},
 		{"remote_edit pads lineRange with an empty string", "remote_edit", `{"alias":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":""}]}`, false, "", ""},
 		{"http_request pads body with an empty string", "fetch", `{"url":"https://example.test","body":"","json":{"a":1}}`, false, "", ""},
-		{"fetch pads format with an empty string", "fetch", `{"url":"https://example.test/","responseFormat":""}`, false, "", ""},
 		{"grep pads outputMode with an empty string", "grep", `{"pattern":"x","outputMode":""}`, false, "", ""},
 		{"remote_run_command pads shell with an empty string", "remote_run_command", `{"alias":"t:/w","command":"ls","shell":""}`, false, "", ""},
-		{"fetch rejects an unknown format", "fetch", `{"url":"https://example.test/","responseFormat":"markdown"}`, true, "must be one of", ""},
 		// The local delete takes paths only: a list of entries is the one way to name
 		// a target, and the gate refuses the path key outright.
 		{"delete takes a path list", "delete", `{"paths":["a.txt","b.txt"]}`, false, "", ""},
@@ -396,8 +394,6 @@ func TestWireSchemasDeclareObjectShape(t *testing.T) {
 func TestBuiltinSchemasExposeTheRuntimeParameters(t *testing.T) {
 	for _, tc := range []struct{ tool, param string }{
 		{"fetch", "headers"},
-		{"fetch", "maxChars"},
-		{"fetch", "responseFormat"},
 		{"fetch", "maxBytes"},
 		{"fetch", "followRedirects"},
 		{"remote_run_command", "shell"},

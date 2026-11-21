@@ -65,10 +65,10 @@ func TestResolveContextAnchorDiscardsRewrittenConversation(t *testing.T) {
 // category sum is the fallback, and a provider measurement replaces the estimate
 // for everything it covered.
 func TestFinalizeContextBreakdownPrefersMeasurement(t *testing.T) {
-	breakdown := ContextBreakdown{SystemPrompt: 100, ToolSchemas: 50, MCPToolSchemas: 20, UserMessages: 10}
+	breakdown := ContextBreakdown{SystemPrompt: 100, ToolSchemas: 50, MCPCatalog: 20, UserMessages: 10}
 	finalizeContextBreakdownTotal(&breakdown)
-	if breakdown.Estimated != 160 || breakdown.Total != 160 {
-		t.Fatalf("estimated = %d, total = %d, want 160/160", breakdown.Estimated, breakdown.Total)
+	if breakdown.Estimated != 180 || breakdown.Total != 180 {
+		t.Fatalf("estimated = %d, total = %d, want 180/180", breakdown.Estimated, breakdown.Total)
 	}
 
 	breakdown.MeasuredTokens = 4000
@@ -78,8 +78,8 @@ func TestFinalizeContextBreakdownPrefersMeasurement(t *testing.T) {
 	if breakdown.Total != 4025 {
 		t.Fatalf("total = %d, want 4025 (measurement + trailing messages)", breakdown.Total)
 	}
-	if breakdown.Estimated != 160 {
-		t.Fatalf("estimated = %d, want the unanchored category sum 160", breakdown.Estimated)
+	if breakdown.Estimated != 180 {
+		t.Fatalf("estimated = %d, want the unanchored category sum 180", breakdown.Estimated)
 	}
 }
 

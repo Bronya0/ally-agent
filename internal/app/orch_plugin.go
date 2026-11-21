@@ -781,11 +781,14 @@ func (a *App) PluginHTTPRequestContext(ctx context.Context, req PluginHTTPReques
 	if err != nil {
 		return HTTPRequestToolResult{}, err
 	}
+	target, err := normalizeHTTPRequestURL(req.URL, req.Query)
+	if err != nil {
+		return HTTPRequestToolResult{}, codedToolError("E_HTTP_BAD_URL", err)
+	}
 	fetched, err := a.doHTTPRequest(ctx, cfg, HTTPRequestToolRequest{
 		Method:  req.Method,
-		URL:     req.URL,
+		URL:     target.String(),
 		Headers: req.Headers,
-		Query:   req.Query,
 		Body:    req.Body,
 		JSON:    req.JSON,
 		Timeout: req.Timeout,

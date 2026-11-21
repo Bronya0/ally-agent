@@ -65,6 +65,15 @@ func TrayMenuInitialSize(actions, separators int) (int, int) {
 		int(float32(actions)*trayMenuRowHeight + float32(separators) + 2*(trayMenuPadY+trayMenuBorder+TrayMenuShadowInset))
 }
 
+func trayMenuSubmenuWidth(entries []TrayMenuEntry) float32 {
+	for _, entry := range entries {
+		if len(entry.Children) > 0 {
+			return trayMenuChildWidth
+		}
+	}
+	return 0
+}
+
 type trayMenuMeasure struct {
 	font, locale string
 	fontSize     float32
@@ -96,11 +105,10 @@ func TrayMenu(c *ui.Context, open *bool, label string, entries []TrayMenuEntry, 
 			height++
 		}
 	}
-	var childWidth float32
+	childWidth := trayMenuSubmenuWidth(entries)
 	childHeight := float32(0)
 	for _, entry := range entries {
 		if len(entry.Children) > 0 {
-			childWidth = trayMenuChildWidth
 			childHeight = max(childHeight, 2*(trayMenuPadY+trayMenuBorder)+float32(min(len(entry.Children), 8))*memo.row)
 		}
 	}

@@ -541,6 +541,7 @@ type mcpForm struct {
 	URL          string
 	Headers      string
 	ToolOpen     map[string]bool
+	PoolOpen     bool
 	ToolsDirty   bool
 	ImportBusy   bool
 }

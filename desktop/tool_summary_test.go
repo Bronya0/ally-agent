@@ -1,8 +1,10 @@
 package desktop
 
 import (
-	"github.com/egoist/mygo/ui"
+	"strings"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func compactToolView(a *desktop, msg map[string]any) *ui.Tester {
@@ -36,6 +38,23 @@ func TestMCPShowsToolIdentityStatusAndDuration(t *testing.T) {
 		}
 	}
 }
+func TestToolSearchShowsBatchQueriesWithoutSchemas(t *testing.T) {
+	const args = `{"names":["tavily.tavily_search","zhihu.zhihu_search"]}`
+	msg := map[string]any{
+		"name": "ToolSearch", "status": "success", "toolCallId": "search", "args": args,
+		"result": map[string]any{"text": "fixture MCP input schema"},
+	}
+	tt := compactToolView(&desktop{}, msg)
+	text := strings.Join(tt.Texts(), " ")
+	if !strings.Contains(text, "tavily.tavily_search") || !strings.Contains(text, "zhihu.zhihu_search") ||
+		strings.Contains(text, "fixture MCP input schema") {
+		t.Fatalf("unexpected search card content: %s", text)
+	}
+	if !retainMCPDisplaySummary(msg) || len(toolResult(msg)) != 0 || str(msg, "args") != args {
+		t.Fatalf("display projection must keep query parameters and drop the schema: %#v", msg)
+	}
+}
+
 func TestToolMetadataStaysOnHeader(t *testing.T) {
 	for _, name := range []string{"screenshot", "image_generate", "image_edit"} {
 		msg := map[string]any{"name": name, "toolCallId": "image", "status": "success", "result": map[string]any{"width": 800, "height": 600, "bytes": 2048}}

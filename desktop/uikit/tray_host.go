@@ -290,11 +290,13 @@ func (t *TrayHost) ToggleMenu() {
 			return
 		}
 	}
-	capture := t.options.CapturePosition
-	if capture == nil {
-		capture = capturePosition
+	submenuWidth := int(trayMenuSubmenuWidth(t.entries))
+	var position func(*mygo.Window)
+	if capture := t.options.CapturePosition; capture != nil {
+		position = capture()
+	} else {
+		position = capturePosition(submenuWidth)
 	}
-	position := capture()
 	p := &trayPopupState{open: true}
 	t.popup = p
 	separators := 0
@@ -304,6 +306,7 @@ func (t *TrayHost) ToggleMenu() {
 		}
 	}
 	width, height := TrayMenuInitialSize(len(t.items), separators)
+	width += submenuWidth
 	placement := mygo.PlacementBottom
 	if t.options.Placement != nil {
 		placement = *t.options.Placement

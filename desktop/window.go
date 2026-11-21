@@ -85,7 +85,7 @@ func (a *desktop) pageContent(c *ui.Context, width float32) {
 	case a.page == "models":
 		a.panelPage(c, locales.Text("模型"), locales.Text("按 Provider 管理对话模型与生图模型"), nil, a.modelsPageBody)
 	case a.page == "mcp":
-		a.panelPage(c, "MCP", "", nil, a.mcpPageBody)
+		a.panelPage(c, locales.Text("MCP 工具池"), "", nil, a.mcpPageBody)
 	case a.page == "skills":
 		a.panelPage(c, locales.Text("技能"), "", func() { a.skillSourcesHelp(c) }, a.skillsPageBody)
 	case a.page == "ssh":

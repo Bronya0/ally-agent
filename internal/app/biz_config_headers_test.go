@@ -17,6 +17,37 @@ import (
 	"testing"
 )
 
+func TestModelConnectionAnthropicSendsDraftKey(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "unrelated-environment-key")
+	type requestInfo struct{ path, auth, key, version string }
+	requests := make(chan requestInfo, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- requestInfo{r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("X-Api-Key"), r.Header.Get("Anthropic-Version")}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	app := newIsolatedTestApp(t)
+	err := app.TestModelConnection(ModelConfig{APIFormat: apiFormatAnthropicMessages, BaseURL: server.URL + "/gateway/v1", Model: "test-model", APIKeys: []string{"draft-key"}})
+	check := func(err error, wantAuth string) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected the server's 401 to fail the connection test")
+		}
+		select {
+		case got := <-requests:
+			if got.path != "/gateway/v1/messages" || got.auth != wantAuth || got.key != "" || got.version == "" {
+				t.Fatalf("unexpected request: path=%q auth matches=%v extra key present=%v version present=%v", got.path, got.auth == wantAuth, got.key != "", got.version != "")
+			}
+		default:
+			t.Fatal("connection test did not send a request")
+		}
+	}
+	check(err, "Bearer draft-key")
+	err = app.TestModelConnection(ModelConfig{APIFormat: apiFormatAnthropicMessages, BaseURL: server.URL + "/gateway/v1", Model: "test-model", APIKeys: []string{"draft-key"}, CustomHeaders: map[string]string{"Authorization": "Gateway override"}})
+	check(err, "Gateway override")
+}
+
 func TestNormalizeCustomHeaders(t *testing.T) {
 	got := normalizeCustomHeaders(map[string]string{
 		"  x-api-version ": " 2023-06-01 ",

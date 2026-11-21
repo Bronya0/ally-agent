@@ -40,44 +40,57 @@ func settingsControlBounds(t *testing.T, tt *ui.Tester, role ui.Role, name strin
 }
 
 func TestSettingsLayoutSeparatesGroupsAndAlignsNumbers(t *testing.T) {
-	for _, width := range []int{1100, 740, 480} {
-		t.Run(fmt.Sprint(width), func(t *testing.T) {
-			a := settingsLayoutFixture()
-			tt := settingsLayoutTester(a, width, 1800)
-			tt.Frame()
-			var previous ui.Rect
-			for _, name := range []string{"请求与执行", "上下文管理", "会话请求头"} {
-				r := settingsControlBounds(t, tt, ui.RoleGroup, name)
-				if r.W > settingsMaxWidth+1 || r.X+r.W > float32(width)-padPage+1 {
-					t.Fatalf("group exceeds readable page width: %+v", r)
+	// 上下文管理已从「对话行为」搬到「上下文」：两个分区各自守自己的卡片间距与数字控件对齐。
+	sections := []struct {
+		name    string
+		index   int
+		groups  []string
+		numbers []string
+	}{
+		{"execution", 3, []string{"请求与执行", "会话请求头"}, []string{"LLM 请求重试次数", "工具执行并发度"}},
+		{"context", settingsGeneralSection("上下文"), []string{"上下文加载", "上下文管理", "内置工具 Schema"}, []string{"压缩超时时间"}},
+	}
+	for _, section := range sections {
+		for _, width := range []int{1100, 740, 480} {
+			t.Run(fmt.Sprintf("%s/%d", section.name, width), func(t *testing.T) {
+				a := settingsLayoutFixture()
+				a.settings.Modules["settingsGeneral"] = section.index
+				tt := settingsLayoutTester(a, width, 1800)
+				tt.Frame()
+				var previous ui.Rect
+				for _, name := range section.groups {
+					r := settingsControlBounds(t, tt, ui.RoleGroup, name)
+					if r.W > settingsMaxWidth+1 || r.X+r.W > float32(width)-padPage+1 {
+						t.Fatalf("group exceeds readable page width: %+v", r)
+					}
+					if previous.H > 0 && r.Y < previous.Y+previous.H+gapPage-1 {
+						t.Fatalf("groups lack separation: previous=%+v next=%+v", previous, r)
+					}
+					previous = r
 				}
-				if previous.H > 0 && r.Y < previous.Y+previous.H+gapPage-1 {
-					t.Fatalf("groups lack separation: previous=%+v next=%+v", previous, r)
+				var right float32
+				for _, name := range section.numbers {
+					r := settingsControlBounds(t, tt, ui.RoleGroup, name)
+					if r.W > settingsNumberWidth+1 || r.X+r.W > float32(width)-padPage+1 {
+						t.Fatalf("number control stretched or overflowed: %q %+v", name, r)
+					}
+					if right != 0 && math.Abs(float64(r.X+r.W-right)) > 1 {
+						t.Fatalf("number controls are not aligned: %q right=%v want=%v", name, r.X+r.W, right)
+					}
+					right = r.X + r.W
+					caption, ok := tt.Find(name)
+					if !ok {
+						t.Fatalf("missing caption for %q", name)
+					}
+					if width == 480 && r.Y < caption.Y+caption.H+gapField-1 {
+						t.Fatalf("narrow settings must place control below caption: %q caption=%+v control=%+v", name, caption, r)
+					}
 				}
-				previous = r
-			}
-			var right float32
-			for _, name := range []string{"LLM 请求重试次数", "工具执行并发度", "压缩超时时间"} {
-				r := settingsControlBounds(t, tt, ui.RoleGroup, name)
-				if r.W > settingsNumberWidth+1 || r.X+r.W > float32(width)-padPage+1 {
-					t.Fatalf("number control stretched or overflowed: %q %+v", name, r)
+				if a.settingsPendingEdits() {
+					t.Fatal("layout-only rendering changed the saved configuration")
 				}
-				if right != 0 && math.Abs(float64(r.X+r.W-right)) > 1 {
-					t.Fatalf("number controls are not aligned: %q right=%v want=%v", name, r.X+r.W, right)
-				}
-				right = r.X + r.W
-				caption, ok := tt.Find(name)
-				if !ok {
-					t.Fatalf("missing caption for %q", name)
-				}
-				if width == 480 && r.Y < caption.Y+caption.H+gapField-1 {
-					t.Fatalf("narrow settings must place control below caption: %q caption=%+v control=%+v", name, caption, r)
-				}
-			}
-			if a.settingsPendingEdits() {
-				t.Fatal("layout-only rendering changed the saved configuration")
-			}
-		})
+			})
+		}
 	}
 }
 

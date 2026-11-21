@@ -292,6 +292,9 @@ func (t *toolCallProgressTracker) eventsWithForce(runID, sessionID, batchID stri
 		if metaForName != nil && call.Function.Name != "" {
 			payload = mergeToolEventMeta(payload, metaForName(call.Function.Name))
 		}
+		if force {
+			payload = mergeToolEventMeta(payload, mcpExecEventMeta(call.Function.Name, call.Function.Arguments))
+		}
 		events = append(events, toolCallProgressEvent{Name: eventName, Payload: payload})
 		t.lastState[idx] = state
 	}

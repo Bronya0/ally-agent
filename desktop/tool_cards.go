@@ -21,6 +21,8 @@ type toolDescriptor struct {
 	showTiming bool
 }
 
+const mcpSearchToolKind = "toolsearch"
+
 var toolTable = map[string]toolDescriptor{
 	"read":               {"Read", false, false},
 	"remote_read":        {"Read", false, false},
@@ -40,6 +42,7 @@ var toolTable = map[string]toolDescriptor{
 	"calculate":          {"Calculate", false, false},
 	"plan":               {"Plan", false, false},
 	"skill":              {"Load Skill", false, false},
+	mcpSearchToolKind:    {"ToolSearch", false, false},
 	"ask":                {"Ask", true, false},
 	"subagent":           {"Subagent", true, false},
 	"ssh_cluster":        {"Cluster List", true, false},
@@ -71,6 +74,9 @@ func toolSSHAlias(args map[string]any) string {
 }
 
 func toolKind(name string) string {
+	if strings.EqualFold(name, mcpSearchToolKind) {
+		return mcpSearchToolKind
+	}
 	switch name {
 	case "list_files":
 		return "list"
@@ -811,13 +817,26 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	state := toolState(m)
 	desc := describeTool(name)
 	operation := desc.label
+	if name == "remote_run_command" {
+		operation = "Run"
+		if state == "success" {
+			operation = "Ran"
+		}
+	}
 	if name == "edit" || name == "remote_edit" || name == "create" || name == "remote_create_file" {
 		operation = toolActionLabel(operation, state)
 	}
 	container := ui.Column(c.Key("tool-" + toolCardKey(t, index, m))).FillWidth().MinWidth(0).Gap(2)
 	parsed := memoAt[argsMemo](container, "parsed-args")
 	args := parsed.get(str(m, "args"), parseToolArgs)
-	summary := toolArgSummary(name, args)
+	var summary string
+	if name == mcpSearchToolKind {
+		summary = memoAt[memoOf[string, string]](container, "search-names").get(str(m, "args"), func(string) string {
+			return toolArgSummary(name, args)
+		})
+	} else {
+		summary = toolArgSummary(name, args)
+	}
 	if name == "remote_read" && summary == "" && boolOf(m, "fastCompacted") {
 		summary = str(m, "title")
 	}
@@ -848,7 +867,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			}
 		}
 	}
-	isMCP := isMCPDisplayTool(m)
+	isMCP := name != mcpSearchToolKind && isMCPDisplayTool(m)
 	if isMCP {
 		operation = strings.Trim(str(m, "mcpServer")+"/"+str(m, "mcpTool"), "/")
 		if operation == "" {
@@ -949,7 +968,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					label := ui.RichText(c.Key(key+"-summary"), codeSpansWithBase(c, text, "command.sh", commandLineInk(c.Theme(), a.secondaryInk()))...).FontSize(fsTool).SingleLine().MinWidth(0).Shrink(1)
 					uikit.Tooltip(c, label, summary)
 				} else if isMCP {
-					ui.Row(c.Key(key + "-mcp-summary")).MinWidth(0).Shrink(1).AlignItems(ui.Center).Children(func() {
+					ui.Row(c.Key(key + "-mcp-summary")).MinWidth(0).MaxWidthPercent(20).Shrink(1).AlignItems(ui.Center).Children(func() {
 						color := a.secondaryInk()
 						ui.Text(c, "(").FontSize(fsTool).TextColor(color).Shrink(0)
 						label := ui.Text(c.Key(key+"-summary"), summary).FontSize(fsTool).TextColor(color).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
@@ -1080,18 +1099,15 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				ui.Box(c).Grow(1).MinWidth(12)
 				// The reason keeps its full sentence; the target is what gets clipped.
 				label := ui.Text(c.Key(key+"-purpose"), purpose).FontSize(fsAux).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(0)
-				label.MaxWidthPercent(45)
-				if name == "remote_run_command" {
-					// The server, command, and purpose each truncate independently;
-					// keep the status and result metadata visible in narrow windows.
-					label.MaxWidthPercent(30).Shrink(1)
+				if isMCP {
+					label.MaxWidthPercent(45).Shrink(1)
 				}
 				uikit.Tooltip(c, label, purpose)
 			}
 		})
-		if isMCP {
-			return
-		} // Result payloads stay in model context, outside the UI.
+		if isMCP || name == mcpSearchToolKind {
+			return // Result payloads stay in model context.
+		}
 		if expandable && row.Clicked() {
 			t.uiState().ToolOpen[key] = !open
 			a.holdTranscriptPlace()
@@ -1467,6 +1483,14 @@ func toolArgSummary(name string, args map[string]any) string {
 		return pick("finish")
 	case "skill":
 		return pick("name", "skill")
+	case mcpSearchToolKind:
+		var names []string
+		for _, value := range list(args, "names") {
+			if id, ok := value.(string); ok && id != "" {
+				names = append(names, id)
+			}
+		}
+		return strings.Join(names, ", ")
 	case "ask":
 		return pick("question")
 	case "subagent":

@@ -46,10 +46,10 @@ if result.MeasuredTokens > 0 { result.Total = result.MeasuredTokens + result.Tra
 |---|---|
 | `estimateTokensFromText`（`biz_context.go:189`） | 按字符分类：ASCII `⌈n/3.2⌉`，非 ASCII（CJK）`⌈n×1.4⌉`。注释说明这是按 o200k/cl100k/Claude/Qwen 的真实分词率调过的——老的 4 字符/token 会低估代码与 JSON |
 | `estimateMessageBodyTokens`（`:332`） | 文本/多模态 part；**图片 part 固定计 2000 token**（按像素定价 1568×1568≈3200、1024×768≈1000-1300 取常数；旧的 256 曾低估 6-8 倍，导致图片多的会话不触发压缩） |
-| `estimateToolSchemaTokens`（`:279`） | 内置 schema 走 `sync.OnceValue` 进程级缓存（静态 5-15KB JSON，footer 每秒会轮询多次）；只挑 `mcp__` 前缀的部分单独 marshal，避免重复计数 |
+| `estimateToolSchemaTokens`（`:279`） | 内置 schema 走 `sync.OnceValue` 进程级缓存（静态 5-15KB JSON，footer 每秒会轮询多次）；MCP 目录和按需查询的 Schema 分别计入消息和工具结果 |
 | `estimateTokensFromMessages`（`:1373`） | 粗糙兜底（`字符数/3`），仅用于压缩路径的初始值/回退 |
 
-教学点：**热路径上的估算要能承受每秒多次调用**。内置 schema 的 token 数缓存、`builtinToolSchemaTokens` 的 OnceValue、MCP 部分按前缀切分，都是为了这件事。
+教学点：**热路径上的估算要能承受每秒多次调用**。内置 schema 的 token 数缓存、`builtinToolSchemaTokens` 的 OnceValue，都是为了这件事。
 
 ## 三、请求前缀与消息分桶
 

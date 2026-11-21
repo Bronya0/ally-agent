@@ -36,10 +36,9 @@ func TestFooterPrefixPreviewFreezeAndRefresh(t *testing.T) {
 	app.sessionSystemPromptParts(sid, app.config, nil)
 	app.sessionWorkspaceMap(sid, app.config)
 	app.buildToolsForSession(sid, app.config)
-	app.sessionToolsets[sid] = append(app.sessionToolsets[sid], rawFunctionTool("mcp__fixture__lookup", "fixture lookup", map[string]any{"type": "object"}))
 	frozen := app.getContextBreakdown(sid, root)
-	if frozen.MCPToolSchemas <= 0 || frozen.MCPToolSchemas >= frozen.ToolSchemas {
-		t.Fatalf("MCP schemas were not separated from the frozen toolset: %+v", frozen)
+	if frozen.ToolSchemas <= 0 || frozen.MCPCatalog != 0 {
+		t.Fatalf("unexpected tool or catalog estimate for an empty session: %+v", frozen)
 	}
 	if _, ok := app.frozenPrefixStats[sid]; !ok {
 		t.Fatal("frozen prefix estimate was not cached")
@@ -50,8 +49,8 @@ func TestFooterPrefixPreviewFreezeAndRefresh(t *testing.T) {
 	if got := app.getContextBreakdown(sid, root); got.SystemPrompt != frozen.SystemPrompt {
 		t.Fatal("frozen prompt changed after a disk edit")
 	}
-	if got := app.getContextBreakdown(sid, root); got.MCPToolSchemas != frozen.MCPToolSchemas {
-		t.Fatal("frozen MCP estimate changed without refreshing the session")
+	if got := app.getContextBreakdown(sid, root); got.ToolSchemas != frozen.ToolSchemas {
+		t.Fatal("frozen tool schema estimate changed without refreshing the session")
 	}
 	_, parts := app.sessionPrefixBreakdown(sid, app.config, nil)
 	parts[0].Tokens = -1
@@ -64,9 +63,6 @@ func TestFooterPrefixPreviewFreezeAndRefresh(t *testing.T) {
 	}
 	if got := app.getContextBreakdown(sid, root); got.SystemPrompt == frozen.SystemPrompt {
 		t.Fatal("refreshed preview did not include the new project rule")
-	}
-	if got := app.getContextBreakdown(sid, root); got.MCPToolSchemas != 0 {
-		t.Fatal("refreshed preview retained MCP schemas from the old snapshot")
 	}
 	if err := app.ReleaseSession(sid); err != nil {
 		t.Fatal(err)
@@ -179,5 +175,46 @@ func TestFooterGitWaitHasDeadline(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed < 150*time.Millisecond || elapsed > 2*time.Second {
 		t.Fatalf("waiter did not respect its budget: %s", elapsed)
+	}
+}
+
+func TestFooterMCPCatalogCountsLiveAndRestoredMessages(t *testing.T) {
+	app := footerStatsTestApp(t)
+	const sid = "footer-mcp-catalog"
+	user := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "Find the item"}
+	catalog := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: mcpCatalogContent("[demo]\nlookup: Find an item.\n", true)}
+	replacement := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: emptyMcpCatalog}
+	search := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{
+		ID: "call_catalog", Type: openai.ToolTypeFunction,
+		Function: openai.FunctionCall{Name: "ToolSearch", Arguments: `{"names":["demo.lookup"]}`},
+	}}}
+	result := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: "call_catalog",
+		Content: `{"tools":[{"name":"demo.lookup","definition":{"inputSchema":{"type":"object"}}}]}`}
+	history := []openai.ChatCompletionMessage{user, catalog, search, result, replacement}
+	check := func(b ContextBreakdown) {
+		t.Helper()
+		if b.MCPCatalog != messageTokens(catalog)+messageTokens(replacement) ||
+			b.UserMessages != messageTokens(user) {
+			t.Fatalf("wrong MCP token categories: %+v", b)
+		}
+	}
+	acc := newLiveBreakdownAccumulator(history[:2])
+	live := acc.update(history)
+	check(live)
+	if live.ToolResults != messageTokens(result) {
+		t.Fatalf("MCP schemas were not counted as tool results: %+v", live)
+	}
+	app.saveHistory(sid, history)
+	check(app.getContextBreakdown(sid, app.config.Workspace))
+	if err := app.ReleaseSession(sid); err != nil {
+		t.Fatal(err)
+	}
+	check(app.getContextBreakdown(sid, app.config.Workspace))
+
+	// A rewritten history drops the budget for discarded catalog versions.
+	history = []openai.ChatCompletionMessage{user}
+	acc.reset(history)
+	if got := acc.update(history); got.MCPCatalog != 0 || got.Total != messageTokens(user) {
+		t.Fatalf("rewritten history still counts discarded MCP messages: %+v", got)
 	}
 }

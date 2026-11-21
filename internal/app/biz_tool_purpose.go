@@ -110,7 +110,7 @@ func prepareToolPurpose(ctx context.Context, name string, args []byte) []byte {
 }
 
 func (a *App) toolEventMeta(ctx context.Context, name string) map[string]any {
-	meta := a.mcpToolEventMeta(name)
+	var meta map[string]any
 	if field := toolPurposeFields(ctx)[normalizeToolName(name)]; field != "" {
 		if meta == nil {
 			meta = map[string]any{}

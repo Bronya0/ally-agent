@@ -141,9 +141,18 @@ func (a *desktop) modelsPageBody(c *ui.Context) {
 	var chatModels chatModelList
 	provider := ""
 	if a.modelTab == "对话模型" {
-		chatModels = list.get(len(a.config.Models), a.modelSearch,
+		recent := a.prefs.RecentModels
+		if len(recent) == 0 && a.config.LastUsedModel != nil {
+			for _, model := range a.config.Models {
+				if sameModelIdentity(modelIdentity(model), *a.config.LastUsedModel) {
+					recent = []string{modelOption(model)}
+					break
+				}
+			}
+		}
+		chatModels = list.get(len(a.config.Models), a.modelSearch+"\x00"+strings.Join(recent, "\x00"),
 			func(i int) chatModelListKey { return chatModelListKeyFor(a.config.Models[i]) },
-			func() chatModelList { return buildChatModelList(a.config.Models, a.modelSearch) })
+			func() chatModelList { return buildChatModelList(a.config.Models, a.modelSearch, recent) })
 		provider = a.chatModelProviderTabs(c, chatModels.providers)
 	} else {
 		*list = indexedMemo[chatModelListKey, chatModelList]{}
@@ -289,10 +298,10 @@ func apiFormatSelect(c *ui.Context, value *string, ink ...ui.Color) ui.Element {
 	return uikit.SelectField(c, value, items, ink...)
 }
 
-type chatModelListKey struct{ provider, display, model, base string }
+type chatModelListKey struct{ provider, display, model, base, option string }
 
 func chatModelListKeyFor(m backend.ModelConfig) chatModelListKey {
-	return chatModelListKey{m.ProviderName, m.DisplayName, m.Model, m.BaseURL}
+	return chatModelListKey{m.ProviderName, m.DisplayName, m.Model, m.BaseURL, modelOption(m)}
 }
 
 type chatModelList struct {
@@ -300,7 +309,7 @@ type chatModelList struct {
 	providers []string
 }
 
-func buildChatModelList(models []backend.ModelConfig, search string) chatModelList {
+func buildChatModelList(models []backend.ModelConfig, search string, recent []string) chatModelList {
 	query := strings.ToLower(strings.TrimSpace(search))
 	var out chatModelList
 	for i, m := range models {
@@ -314,6 +323,22 @@ func buildChatModelList(models []backend.ModelConfig, search string) chatModelLi
 	}
 	sort.SliceStable(out.indices, func(i, j int) bool { return models[out.indices[i]].Model < models[out.indices[j]].Model })
 	seen := map[string]bool{}
+	for _, option := range recent {
+		for _, i := range out.indices {
+			if modelOption(models[i]) != option {
+				continue
+			}
+			provider := models[i].ProviderName
+			if provider == "" {
+				provider = customProviderName
+			}
+			if !seen[provider] {
+				seen[provider] = true
+				out.providers = append(out.providers, provider)
+			}
+			break
+		}
+	}
 	for _, i := range out.indices {
 		provider := models[i].ProviderName
 		if provider == "" {

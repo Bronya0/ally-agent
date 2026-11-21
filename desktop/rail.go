@@ -19,7 +19,7 @@ type modeItem struct {
 
 // railModeGap is the distance between two rail entries, shared by both states:
 // with one row pitch the entries keep their heights when the rail collapses.
-const railModeGap float32 = 3
+const railModeGap float32 = 7
 
 var baseModes = []modeItem{
 	{"chat", "Agent", "chat"},
@@ -438,24 +438,31 @@ func (a *desktop) railSessionRow(c *ui.Context, t *conversation, entry backend.S
 	}
 	uikit.RightTooltip(c, row, fmt.Sprintf(locales.Text("%s\n%s · %d 条"), title, fmtTime(entry.UpdatedAt), entry.MessageCount))
 	row.Children(func() {
-		btn := ui.ButtonBase(c.Key("rail-sess-btn-" + entry.ID)).Grow(1).Height(28).Justify(ui.Start).Label(title).Cursor(ui.CursorPointer)
+		btn := ui.ButtonBase(c.Key("rail-sess-btn-" + entry.ID)).Grow(1).MinWidth(0).Height(28).Justify(ui.Start).Label(title).Cursor(ui.CursorPointer)
 		btn.OnClick(func() { a.openSession(entry.ID) })
 		btn.Children(func() {
-			ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, title).FontSize(fsSmall).TextColor(ink).SingleLine()
+			// FillWidth 把按钮的内容宽真正交给标题：不填满时 Text 拿不到一个确定的宽度，
+			// 省略号比可用空间提前许多就落下了。
+			ui.Row(c).FillWidth().MinWidth(0).Gap(5).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, title).FontSize(fsSmall).TextColor(ink).SingleLine().MinWidth(0).Shrink(1)
 				if busy {
-					ui.Box(c).Size(5, 5).Radius(3).Background(p.accent)
+					ui.Box(c).Size(5, 5).Shrink(0).Radius(3).Background(p.accent)
 				}
 			})
 		})
-		rename := iconAction(c, "rail-sess-rename-"+entry.ID, locales.Text("重命名会话"), "edit", 18, func() {
-			a.openSessionRename(entry.ID, title)
+		// 两个悬停操作挤成一组：它们每帧都占着行尾，命中区补到 22 DIP 等于永久
+		// 吃掉标题三四个字。方块只留图标那一块。
+		actions := ui.Row(c).Shrink(0).Gap(2).AlignItems(ui.Center)
+		actions.Children(func() {
+			rename := tightIconAction(c, "rail-sess-rename-"+entry.ID, locales.Text("重命名会话"), "edit", 18, func() {
+				a.openSessionRename(entry.ID, title)
+			})
+			railHoverAction(c, row, rename, busy)
+			del := tightDangerIconAction(c, "rail-sess-del-"+entry.ID, locales.Text("删除会话"), "close", 18, func() {
+				a.deleteSession(entry.ID, title)
+			})
+			railHoverAction(c, row, del, busy)
 		})
-		railHoverAction(c, row, rename, busy)
-		b := dangerIconAction(c, "rail-sess-del-"+entry.ID, locales.Text("删除会话"), "close", 18, func() {
-			a.deleteSession(entry.ID, title)
-		})
-		railHoverAction(c, row, b, busy)
 	})
 }
 

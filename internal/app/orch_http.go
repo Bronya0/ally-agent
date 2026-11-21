@@ -49,20 +49,24 @@ type httpFetchResult struct {
 
 // fetchToolWithConfig combines ordinary HTTP responses and webpage extraction.
 func (a *App) fetchToolWithConfig(ctx context.Context, cfg ConfigState, req HTTPRequestToolRequest) (any, error) {
-	format := strings.ToLower(strings.TrimSpace(req.ResponseFormat))
-	if format == "" || format == "response" {
-		if req.MaxChars != 0 {
-			return nil, codedToolError("E_HTTP_BAD_FORMAT", errors.New("maxChars requires readable or raw responseFormat"))
-		}
-		return a.httpRequestToolWithConfig(ctx, cfg, req)
+	page := (req.Method == "" || strings.EqualFold(req.Method, "GET")) && req.Body == "" && len(req.JSON) == 0 && req.SaveTo == ""
+	if page && req.MaxBytes <= 0 {
+		req.MaxBytes = defaultWebFetchBody
 	}
-	if format != "readable" && format != "raw" {
-		return nil, codedToolError("E_HTTP_BAD_FORMAT", errors.New("invalid responseFormat"))
+	response, err := a.httpRequestToolWithConfig(ctx, cfg, req)
+	if err != nil || !page || response.Status < 200 || response.Status >= 300 || !isHTMLContentType(response.ContentType) || response.BodyEncoding != "text" {
+		return response, err
 	}
-	if (req.Method != "" && !strings.EqualFold(req.Method, "GET")) || len(req.Query) != 0 || req.Body != "" || len(req.JSON) != 0 || req.SaveTo != "" || req.FollowRedirects != nil {
-		return nil, codedToolError("E_HTTP_BAD_FORMAT", errors.New("readable and raw formats require GET and do not accept query, body, json, saveTo or followRedirects"))
+	title, text, links, err := htmlExtractContent([]byte(response.Body), response.FinalURL)
+	if err != nil || strings.TrimSpace(text) == "" {
+		return response, nil
 	}
-	return a.webFetchToolWithConfig(ctx, cfg, WebFetchRequest{URL: req.URL, Format: format, Headers: req.Headers, Timeout: req.Timeout, MaxBytes: req.MaxBytes, MaxChars: req.MaxChars, AllowPrivateNetwork: req.AllowPrivateNetwork, InsecureSkipVerify: req.InsecureSkipVerify})
+	truncated := response.Truncated
+	if utf8.RuneCountInString(text) > toolshared.DefaultWebFetchChars {
+		text = truncateRunes(text, toolshared.DefaultWebFetchChars)
+		truncated = true
+	}
+	return WebFetchResult{URL: response.URL, FinalURL: response.FinalURL, Status: response.Status, StatusText: response.StatusText, Headers: response.Headers, Redirects: response.Redirects, Title: title, Text: text, ContentType: response.ContentType, Links: links, BytesRead: response.BytesRead, Truncated: truncated, DurationMS: response.DurationMS}, nil
 }
 
 func (a *App) httpRequestToolWithConfig(ctx context.Context, cfg ConfigState, req HTTPRequestToolRequest) (HTTPRequestToolResult, error) {
@@ -161,7 +165,7 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 		var extractErr error
 		title, text, links, extractErr = htmlExtractContent(htmlData, fetched.Result.FinalURL)
 		if extractErr != nil {
-			return WebFetchResult{}, codedToolError("E_WEB_FETCH_EXTRACT", fmt.Errorf("no readable article found on this page (HTTP status %d; %w); retry with raw output for the page source", fetched.Result.Status, extractErr))
+			return WebFetchResult{}, codedToolError("E_WEB_FETCH_EXTRACT", fmt.Errorf("no readable article found on this page (HTTP status %d; %w); retry fetch with response format for the page source", fetched.Result.Status, extractErr))
 		}
 	case fetched.Result.BodyEncoding == "text":
 		text = fetched.Result.Body
@@ -227,7 +231,7 @@ func (a *App) doHTTPRequest(parent context.Context, cfg ConfigState, req HTTPReq
 	if strings.ContainsAny(method, " \t\r\n") {
 		return httpFetchResult{}, codedToolError("E_HTTP_BAD_METHOD", fmt.Errorf("invalid HTTP method %q", method))
 	}
-	target, err := normalizeHTTPRequestURL(req.URL, req.Query)
+	target, err := normalizeHTTPRequestURL(req.URL, nil)
 	if err != nil {
 		return httpFetchResult{}, codedToolError("E_HTTP_BAD_URL", err)
 	}

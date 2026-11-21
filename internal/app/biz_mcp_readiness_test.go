@@ -101,14 +101,9 @@ func TestMcpFirstSessionWaitsBeforeFreezingAndReportsProgress(t *testing.T) {
 		t.Fatal("completion did not wake waiter")
 	}
 	tools := a.buildToolsForSession("session", a.config)
-	found := false
-	for _, tool := range tools {
-		if tool.Function.Name == mcpToolFunctionName("slow", "found") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("discovered tool missing from frozen session")
+	catalog := a.appendMcpCatalog(withBuiltinToolAvailability(ctx, tools), a.config, nil, false)
+	if len(catalog) != 1 || !strings.Contains(catalog[0].Content, "[slow]\nfound:") {
+		t.Fatalf("discovered tool missing from runtime catalog: %v", catalog)
 	}
 	events = sink.snapshot()
 	if events[len(events)-1]["state"] != "ready" {
@@ -298,7 +293,7 @@ func TestMcpReconnectedStdioOutlivesCallingContext(t *testing.T) {
 	}
 	m := NewMcpManager(a.config.Workspace, nil)
 	defer m.Shutdown()
-	m.clients["echo"] = &McpClientHandle{ServerName: "echo", Status: "failed", Config: McpServerConfig{Command: mcpTestPython(t), Args: []string{script}}}
+	m.clients["echo"] = &McpClientHandle{ServerName: "echo", Status: "failed", Config: McpServerConfig{Command: mcpTestPython(t), Args: []string{script}}, ToolDefs: []McpDiscoveredTool{{ServerName: "echo", Name: "where", Schema: map[string]any{"type": "object"}}}}
 	ctx, cancel := context.WithCancel(t.Context())
 	first, err := m.CallTool(ctx, "echo", "where", nil)
 	cancel()

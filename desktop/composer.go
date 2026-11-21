@@ -685,22 +685,25 @@ func (a *desktop) sessionsMenu(c *ui.Context, t *conversation, anchor ui.Element
 						if selected {
 							rail.Background(p.accent)
 						}
-						ui.Text(c, fmt.Sprint(i+1)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk())
-						ui.Text(c, fmtTime(s.UpdatedAt)).FontSize(fsTiny).TextColor(a.secondaryInk())
-						ui.Text(c, fmt.Sprintf(locales.Text("%d条"), s.MessageCount)).FontSize(fsTiny).TextColor(a.secondaryInk())
+						// 序号/时间/条数是固定列：标题变长时只能标题让位，不能把它们挤成省略号。
+						ui.Text(c, fmt.Sprint(i+1)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk()).Shrink(0)
+						ui.Text(c, fmtTime(s.UpdatedAt)).FontSize(fsTiny).TextColor(a.secondaryInk()).Shrink(0)
+						ui.Text(c, fmt.Sprintf(locales.Text("%d条"), s.MessageCount)).FontSize(fsTiny).TextColor(a.secondaryInk()).Shrink(0)
 						title := s.Title
 						if title == "" {
 							title = locales.Text("会话")
 						}
-						label := ui.Text(c, short(title, 50)).FontSize(fsSmall).SingleLine()
+						// 不预先按字数截：行到底能给多宽由布局算，工具行同一套写法。
+						label := ui.Text(c, title).FontSize(fsSmall).SingleLine().MinWidth(0).Shrink(1)
 						if selected {
 							label.TextColor(p.accent).FontWeight(600)
 						}
+						uikit.Tooltip(c, label, title)
 						if s.ID == t.ID {
 							accentChip(c, locales.Text("当前"))
 						}
 						if busy {
-							ui.Box(c).Size(5, 5).Radius(3).Background(p.accent)
+							ui.Box(c).Size(5, 5).Shrink(0).Radius(3).Background(p.accent)
 						}
 						ui.Spacer(c)
 						iconAction(c, "sess-rename-"+s.ID, locales.Text("重命名会话"), "edit", 18, func() {
@@ -890,8 +893,6 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 		hover := uikit.NewHoverMenus(body)
 		rows := map[string]ui.Element{}
 		body.Children(func() {
-			input := uikit.Input(c.Key("model-menu-search"), &st.ModelSearch).Placeholder(locales.Text("搜索模型或供应商")).Label(locales.Text("搜索模型或供应商")).FillWidth()
-			hover.ClearOnHover(input)
 			query := strings.ToLower(strings.TrimSpace(st.ModelSearch))
 			models := a.config.Models
 			catalog := memoAt[modelMenuCatalog](body, "model-catalog")
@@ -921,23 +922,30 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 				}
 				return item.OnClick(func() { st.ModelOpen = false; a.selectChatModel(t, model) })
 			}
-			shownRecent := false
+			recentIdx := make([]int, 0, len(recent))
 			for _, identity := range recent {
 				for i, entry := range entries {
-					if entry.option != identity || !matches(i) {
-						continue
+					if entry.option == identity && matches(i) {
+						recentIdx = append(recentIdx, i)
 					}
-					if !shownRecent {
-						head := ui.Text(c, locales.Text("最近使用")).FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(gapInline, padCard)
-						hover.ClearOnHover(head)
-						shownRecent = true
-					}
-					hover.ClearOnHover(modelItem(m, i, "recent-"+entry.option, models[i].ProviderName))
 				}
 			}
-			if shownRecent {
+			// The field and the recent models steer the list below them, so they
+			// hold the top of the panel instead of scrolling away with it.
+			top := menuPinnedTop(c)
+			top.Children(func() {
+				input := uikit.Input(c.Key("model-menu-search"), &st.ModelSearch).Placeholder(locales.Text("搜索模型或供应商")).Label(locales.Text("搜索模型或供应商")).FillWidth()
+				hover.ClearOnHover(input)
+				if len(recentIdx) == 0 {
+					return
+				}
+				head := ui.Text(c, locales.Text("最近使用")).FontSize(fsTiny).TextColor(a.secondaryInk()).Padding(gapInline, padCard)
+				hover.ClearOnHover(head)
+				for _, i := range recentIdx {
+					hover.ClearOnHover(modelItem(m, i, "recent-"+entries[i].option, models[i].ProviderName))
+				}
 				divider(c)
-			}
+			})
 			groups := map[string][]int{}
 			rank := map[string]int{}
 			for i, entry := range entries {
@@ -997,9 +1005,14 @@ func (a *desktop) modelSelector(c *ui.Context, t *conversation) {
 			if len(groups) == 0 {
 				fieldNote(c, locales.Text("没有匹配的模型"), a.secondaryInk())
 			}
-			divider(c)
-			manage := uikit.MenuItem(c, m, "manage", locales.Text("管理模型"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.changePage("models") })
-			hover.ClearOnHover(manage)
+			// The footer says where models are managed, so it stays put while the
+			// provider list scrolls under it.
+			footer := menuPinnedBottom(c)
+			footer.Children(func() {
+				divider(c)
+				manage := uikit.MenuItem(c, m, "manage", locales.Text("管理模型"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.changePage("models") })
+				hover.ClearOnHover(manage)
+			})
 			hover.Popup(c, body, func(id string) ui.Element { return rows[id] }, uikit.MenuOptions{Width: 260, MaxHeight: 360}, func(provider string, child ui.MenuParts) {
 				for _, i := range groups[provider] {
 					modelItem(child, i, entries[i].option, "")
@@ -1266,8 +1279,12 @@ func (a *desktop) extraRootsButton(c *ui.Context, t *conversation) {
 			root := root
 			uikit.MenuItem(c, m, root, "📁 "+filepath.Base(root), uikit.MenuItemOptions{Subtitle: root + locales.Text(" · 点击移除")}, a.secondaryInk()).OnClick(func() { a.removeExtraRoot(t, root) })
 		}
-		divider(c)
-		uikit.MenuItem(c, m, "add-root", locales.Text("＋ 添加目录"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.addExtraRoot(t) })
+		// Adding a directory must stay reachable however many roots are listed.
+		add := menuPinnedBottom(c)
+		add.Children(func() {
+			divider(c)
+			uikit.MenuItem(c, m, "add-root", locales.Text("＋ 添加目录"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() { a.addExtraRoot(t) })
+		})
 	})
 }
 
@@ -1504,8 +1521,8 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 						})
 					})
 				})
-				contextPart(c, locales.Text("工具 Schema · 内置"), b.ToolSchemas-b.MCPToolSchemas, a.secondaryInk())
-				contextPart(c, locales.Text("工具 Schema · MCP"), b.MCPToolSchemas, a.secondaryInk())
+				contextPart(c, locales.Text("工具 Schema · 内置"), b.ToolSchemas, a.secondaryInk())
+				contextPart(c, locales.Text("MCP 工具池"), b.MCPCatalog, a.secondaryInk())
 				contextPart(c, locales.Text("用户提问"), b.UserMessages, a.secondaryInk())
 				contextPart(c, locales.Text("AI 回复"), b.AssistantMsgs, a.secondaryInk())
 				contextPart(c, locales.Text("工具结果"), b.ToolResults, a.secondaryInk())
