@@ -178,7 +178,7 @@ func TestFooterGitWaitHasDeadline(t *testing.T) {
 	}
 }
 
-func TestFooterMCPCatalogCountsLiveAndRestoredMessages(t *testing.T) {
+func TestFooterMCPCatalogCountsSentCopy(t *testing.T) {
 	app := footerStatsTestApp(t)
 	const sid = "footer-mcp-catalog"
 	user := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "Find the item"}
@@ -205,11 +205,19 @@ func TestFooterMCPCatalogCountsLiveAndRestoredMessages(t *testing.T) {
 		t.Fatalf("MCP schemas were not counted as tool results: %+v", live)
 	}
 	app.saveHistory(sid, history)
-	check(app.getContextBreakdown(sid, app.config.Workspace))
+	// The catalog goes out once per conversation, so the copies history holds are
+	// exactly what the next request carries: a live and a restored session both
+	// count them, and nothing is added on top.
+	want := messageTokens(catalog) + messageTokens(replacement)
+	if got := app.getContextBreakdown(sid, app.config.Workspace); got.MCPCatalog != want {
+		t.Fatalf("live footer did not count the catalog on the wire: %+v", got)
+	}
 	if err := app.ReleaseSession(sid); err != nil {
 		t.Fatal(err)
 	}
-	check(app.getContextBreakdown(sid, app.config.Workspace))
+	if got := app.getContextBreakdown(sid, app.config.Workspace); got.MCPCatalog != want {
+		t.Fatalf("restored session did not count the catalog on the wire: %+v", got)
+	}
 
 	// A rewritten history drops the budget for discarded catalog versions.
 	history = []openai.ChatCompletionMessage{user}

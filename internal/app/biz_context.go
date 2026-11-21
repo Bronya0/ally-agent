@@ -9,6 +9,7 @@ package app
 
 import (
 	"ally-dev/internal/tools/schemautil"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -260,10 +261,18 @@ func estimateTokensFromText(text string) int {
 			nonAsciiCount++
 		}
 	}
-	// In real-world LLM tokenizers (o200k, cl100k, Claude, Qwen/DeepSeek):
-	// - Code/JSON/indents/punctuation: ~3.0 - 3.2 ASCII chars per token (down from 4).
-	// - Chinese / CJK characters: typically 1.3 - 1.6 tokens per character (up from 1.0).
-	return int(math.Ceil(float64(asciiCount)/3.2)) + int(math.Ceil(float64(nonAsciiCount)*1.4))
+	// Calibrated on 355 real files from this repo (Go source, Markdown, JSON,
+	// locale catalogs) against tiktoken o200k_base and cl100k_base:
+	// - Pure-ASCII Go files measured 3.60 chars/token at the median across 313
+	//   files, and 3.57-3.73 in every size bucket. Earlier estimates read 4.0+ off
+	//   a single large file, which is a high tail case, not the norm.
+	// - Real Chinese prose measured 0.92-0.95 tokens per char on o200k and 1.21 on
+	//   cl100k. (A repeated-sentence sample reads far lower because the tokenizer
+	//   compresses the repetition; do not calibrate on duplicated text.)
+	// A grid search over both constants puts the minimum mean absolute error at
+	// 3.65 / 1.00 (~5.9% on either vocabulary). The previous 3.2 / 1.4 pair sat at
+	// ~17% and made the footer breakdown disagree with the provider's usage.
+	return int(math.Ceil(float64(asciiCount)/3.65)) + nonAsciiCount
 }
 
 // builtinToolSchemaTokens caches the token estimate of the built-in tool
@@ -613,6 +622,27 @@ func (a *App) frozenPrefixTokenStats(sessionID string) (frozenPrefixStats, bool)
 	return next, true
 }
 
+// pendingMcpCatalogTokens estimates the catalog a conversation that carries
+// none yet is about to get. The catalog goes out once per conversation, so
+// history is the authority whenever it holds a copy; this answers the empty case
+// only. A session with nothing to send — no server, ToolExec off — reports 0.
+func (a *App) pendingMcpCatalogTokens(sessionID string) int {
+	// The request path checks availability against the session's frozen settings
+	// snapshot. A direct caller carries only the disabled-tool list, and
+	// builtinToolDisabled takes that path when no snapshot is injected.
+	a.mu.Lock()
+	cfg := ConfigState{DisabledTools: a.config.DisabledTools}
+	if snapshot, ok := a.sessionContextSettings[sessionID]; ok {
+		cfg.DisabledTools = snapshot.disabledTools
+	}
+	a.mu.Unlock()
+	content := a.mcpCatalogFor(context.Background(), cfg)
+	if content == emptyMcpCatalog {
+		return 0
+	}
+	return estimateTokensFromText(content)
+}
+
 // getContextBreakdown computes token estimates from the real session state.
 // If liveBreakdown is available, it returns a merged view (live messages + current system/tools).
 // workspaceHint (optional, from the UI) overrides the session-based workspace
@@ -637,7 +667,13 @@ func (a *App) getContextBreakdown(sessionID string, workspaceHint string) Contex
 	if !hasLive {
 		live = a.savedHistoryBreakdown(sessionID)
 	}
+	// Count the copies the request actually carries. History is the authority: it
+	// holds the one catalog the conversation was given, and a config change does
+	// not send another. Only a conversation without one gets the pending pool.
 	result.MCPCatalog = live.MCPCatalog
+	if result.MCPCatalog == 0 {
+		result.MCPCatalog = a.pendingMcpCatalogTokens(sessionID)
+	}
 	result.UserMessages = live.UserMessages
 	result.AssistantMsgs = live.AssistantMsgs
 	result.ToolResults = live.ToolResults

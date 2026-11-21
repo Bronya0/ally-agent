@@ -2334,7 +2334,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// the next response starts on a fresh one.
 			a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
 		}
-		messages = a.appendMcpCatalog(ctx, cfg, messages, false)
+		messages = a.ensureMcpCatalog(ctx, cfg, messages)
 		// Update live breakdown for context display (includes all tool calls/results)
 		bd := syncBreakdown(messages, false)
 
@@ -2351,7 +2351,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// rewrite is accepted only when its estimate drops below half;
 			// otherwise it falls back to a full summary before sending the request.
 			if newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonThreshold, req, messages, usedTokens); compactErr == nil {
-				messages = a.appendMcpCatalog(ctx, cfg, newMessages, true)
+				messages = a.ensureMcpCatalog(ctx, cfg, newMessages)
 				bd = syncBreakdown(messages, true)
 				usedTokens = bd.Total
 				a.emit("run:compacted", payload)
@@ -2484,7 +2484,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					end = runOutcome{kind: "error", message: fmt.Sprintf("%v；上下文超出模型窗口且压缩失败(%v)，请删除部分历史或改用窗口更大的模型后重试", err, compactErr)}
 					return
 				}
-				messages = a.appendMcpCatalog(ctx, cfg, newMessages, true)
+				messages = a.ensureMcpCatalog(ctx, cfg, newMessages)
 				requestMessages = messages
 				syncBreakdown(messages, true)
 				a.emit("run:compacted", payload)

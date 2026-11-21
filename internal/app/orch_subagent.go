@@ -203,7 +203,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: notice})
 		}
 
-		messages = a.appendMcpCatalog(ctx, cfg, messages, false)
+		messages = a.ensureMcpCatalog(ctx, cfg, messages)
 
 		// Retry transient LLM errors (429/5xx/network) at the sub-agent loop
 		// level. Streaming-adapter retries only cover connection setup and

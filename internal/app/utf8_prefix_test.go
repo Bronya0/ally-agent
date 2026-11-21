@@ -41,7 +41,7 @@ func TestEstimateTokensFromTextMatchesRuneScan(t *testing.T) {
 				nonAsciiCount++
 			}
 		}
-		return int(math.Ceil(float64(asciiCount)/3.2)) + int(math.Ceil(float64(nonAsciiCount)*1.4))
+		return int(math.Ceil(float64(asciiCount)/3.65)) + int(math.Ceil(float64(nonAsciiCount)*1.0))
 	}
 	for _, text := range []string{"", "abc", "中文abc", strings.Repeat("x", 1000), string([]byte{0xff, 'a', 0xe4, 0xb8})} {
 		if got, want := estimateTokensFromText(text), reference(text); got != want {
