@@ -83,7 +83,7 @@ func TestToolExecCardNamesItsTargetBeforeTheResult(t *testing.T) {
 }
 
 func TestToolSearchShowsBatchQueriesWithoutSchemas(t *testing.T) {
-	const args = `{"names":["tavily.tavily_search","zhihu.zhihu_search"]}`
+	const args = `{"query":["tavily.tavily_search","zhihu.zhihu_search"]}`
 	msg := map[string]any{
 		"name": "ToolSearch", "status": "success", "toolCallId": "search", "args": args,
 		"result": map[string]any{"text": "fixture MCP input schema"},

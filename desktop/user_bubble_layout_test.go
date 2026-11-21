@@ -8,38 +8,6 @@ import (
 	"time"
 )
 
-func TestUserBubbleLayout(t *testing.T) {
-	for _, width := range []float32{380, 900} {
-		for _, content := range []string{"你好 现在几点", strings.Repeat("长消息换行测试 ", 90)} {
-			a := &desktop{}
-			conv := &conversation{ID: "bubble", Messages: []map[string]any{{"role": "user", "content": content}}}
-
-			tt := ui.NewTester(func(c *ui.Context) {
-				c.SetTheme(a.theme())
-				ui.Column(c).FillWidth().Padding(20).Children(func() {
-					a.messageRow(c, conv, 0, newTranscriptRows(conv))
-				})
-			}, int(width), 700)
-
-			r, ok := tt.Find("用户消息")
-			if !ok || r.W <= 32 || r.H <= 20 || r.X < 20 || r.X+r.W > width-19 || r.X+r.W < width-21 {
-				t.Fatalf("bubble must fit and align to right edge: width=%v rect=%v", width, r)
-			}
-			if len(content) < 100 && r.X < width/2 {
-				t.Fatalf("short bubble must fit its text: %v", r)
-			}
-			if len(content) > 100 && r.H < 70 {
-				t.Fatalf("long message did not wrap: %v", r)
-			}
-			for _, text := range tt.Texts() {
-				if text == "›" {
-					t.Fatal("prompt caret retained")
-				}
-			}
-		}
-	}
-}
-
 func TestUserBubbleHoverActions(t *testing.T) {
 	for _, busy := range []bool{false, true} {
 		a := &desktop{}

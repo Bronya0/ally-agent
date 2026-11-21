@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"ally-dev/internal/tools/edit"
 	"ally-dev/internal/tools/read"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -104,7 +105,7 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 		original []byte
 		change   TextChange
 	}{
-		{"BOMless UTF16", []byte{'a', 0, '\n', 0, 0x49, 0x6c, 0x57, 0x5b, '\n', 0}, TextChange{LineRange: "1-2", NewText: "汉字"}},
+		{"BOMless UTF16", []byte{'a', 0, '\n', 0, 0x49, 0x6c, 0x57, 0x5b, '\n', 0}, TextChange{LineRange: &edit.LineRange{Start: 1, End: 2, StartText: "a", EndText: "汉字"}, NewText: "汉字"}},
 		{"UTF8 NUL", []byte("old\n"), TextChange{OldText: "old", NewText: "a\x00b"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

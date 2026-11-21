@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"ally-dev/internal/tools/edit"
+
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -52,7 +54,7 @@ func TestLocalEditStageHasIndependentCallBudgets(t *testing.T) {
 	}
 }
 
-func TestLocalEditStageRecoveryBelongsToFailedCall(t *testing.T) {
+func TestLocalEditStageFailureBelongsToFailedCall(t *testing.T) {
 	t.Parallel()
 	for _, failedIndex := range []int{0, 1, 2} {
 		t.Run(fmt.Sprint(failedIndex), func(t *testing.T) {
@@ -76,14 +78,11 @@ func TestLocalEditStageRecoveryBelongsToFailedCall(t *testing.T) {
 			}
 			for i, result := range a.executeLocalEditToolBatch(t.Context(), a.config, calls) {
 				if i == failedIndex {
-					if result.OK || result.ErrorCode != "E_VERSION_MISMATCH" || result.modelRead == nil {
-						t.Fatalf("failed edit lost its source snapshot: %+v", result)
+					if result.OK || result.ErrorCode != "E_VERSION_MISMATCH" {
+						t.Fatalf("failed edit must report its own version conflict: %+v", result)
 					}
-				} else if !result.OK || result.modelRead != nil {
+				} else if !result.OK || result.ErrorCode != "" {
 					t.Fatalf("valid peer edit was cancelled: %+v", result)
-				}
-				if result.modelRead != nil && result.modelRead.Files[0].Path != fmt.Sprintf("file-%d.txt", i) {
-					t.Fatalf("wrong source snapshot: %+v", result.modelRead)
 				}
 				data, err := os.ReadFile(filepath.Join(a.config.Workspace, fmt.Sprintf("file-%d.txt", i)))
 				want := "new\n"
@@ -105,7 +104,7 @@ func TestLocalEditBatchDistinctFailuresDoNotShareDiagnostics(t *testing.T) {
 			a := newIsolatedToolTestApp(t)
 			files := []FileTextEdits{
 				{Path: "multi.txt", Version: hashVersion([]byte("old\nold\n")), Changes: []TextChange{{OldText: "old", NewText: "new"}}},
-				{Path: "range.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{LineRange: "9", NewText: "new"}}},
+				{Path: "range.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{LineRange: &edit.LineRange{Start: 9, StartText: "old"}, NewText: "new"}}},
 				{Path: "stale.txt", Version: hashVersion([]byte("stale")), Changes: []TextChange{{OldText: "old", NewText: "new"}}},
 			}
 			originals := []string{"old\nold\n", "old\n", "old\n"}
@@ -123,7 +122,7 @@ func TestLocalEditBatchDistinctFailuresDoNotShareDiagnostics(t *testing.T) {
 			results := a.executeLocalEditToolBatch(t.Context(), a.config, calls)
 			for i, result := range results {
 				fileIndex := (first + i) % len(files)
-				if result.OK || result.ErrorCode != codes[fileIndex] || result.modelRead == nil || result.modelRead.Files[0].Path != files[fileIndex].Path {
+				if result.OK || result.ErrorCode != codes[fileIndex] {
 					t.Fatalf("call %d lost its own diagnosis: %+v", i, result)
 				}
 			}
@@ -137,7 +136,7 @@ func TestLocalEditBatchDistinctFailuresDoNotShareDiagnostics(t *testing.T) {
 	}
 }
 
-func TestLocalEditBatchErrorOwnershipWithoutRecovery(t *testing.T) {
+func TestLocalEditBatchErrorOwnership(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []string{"large-stale", "missing"} {
 		t.Run(kind, func(t *testing.T) {
@@ -147,10 +146,12 @@ func TestLocalEditBatchErrorOwnershipWithoutRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			bad := FileTextEdits{Path: "bad.txt", Version: hashVersion([]byte("stale")), Changes: peer.Changes}
-			wantCode := ""
+			// A missing file is a coded failure like any other; what this test
+			// guards is that the failure is owned by its own call.
+			wantCode := "E_PATH_NOT_FOUND"
 			if kind == "large-stale" {
 				wantCode = "E_VERSION_MISMATCH"
-				if err := os.WriteFile(filepath.Join(a.config.Workspace, bad.Path), []byte(strings.Repeat("old\n", maxEditRecoveryBytes)), 0600); err != nil {
+				if err := os.WriteFile(filepath.Join(a.config.Workspace, bad.Path), []byte(strings.Repeat("old\n", 2048)), 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -163,8 +164,8 @@ func TestLocalEditBatchErrorOwnershipWithoutRecovery(t *testing.T) {
 			if !results[0].OK {
 				t.Fatalf("healthy peer edit was cancelled: %+v", results[0])
 			}
-			if results[1].OK || results[1].ErrorCode != wantCode || results[1].modelRead != nil || results[1].Error == "" {
-				t.Fatalf("failed call lost snapshot-free error: %+v", results[1])
+			if results[1].OK || results[1].ErrorCode != wantCode || results[1].Error == "" {
+				t.Fatalf("failed call lost its own error: %+v", results[1])
 			}
 			data, err := os.ReadFile(filepath.Join(a.config.Workspace, peer.Path))
 			if err != nil || string(data) != "new\n" {

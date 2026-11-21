@@ -284,31 +284,6 @@ func TestMcpSSEStartupDeadlineCoversResponseHeaders(t *testing.T) {
 	}
 }
 
-func TestMcpReconnectedStdioOutlivesCallingContext(t *testing.T) {
-	t.Parallel()
-	a := newApiTestApp(t)
-	script := filepath.Join(t.TempDir(), "server.py")
-	if err := os.WriteFile(script, []byte(mcpStdioTestServerScript), 0600); err != nil {
-		t.Fatal(err)
-	}
-	m := NewMcpManager(a.config.Workspace, nil)
-	defer m.Shutdown()
-	m.clients["echo"] = &McpClientHandle{ServerName: "echo", Status: "failed", Config: McpServerConfig{Command: mcpTestPython(t), Args: []string{script}}, ToolDefs: []McpDiscoveredTool{{ServerName: "echo", Name: "where", Schema: map[string]any{"type": "object"}}}}
-	ctx, cancel := context.WithCancel(t.Context())
-	first, err := m.CallTool(ctx, "echo", "where", nil)
-	cancel()
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := m.CallTool(t.Context(), "echo", "where", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first != second || !strings.Contains(second, "pid=") {
-		t.Fatalf("call cancellation replaced live process: %q / %q", first, second)
-	}
-}
-
 func TestMcpSSEConnectionOutlivesStartupBudgetAndCaller(t *testing.T) {
 	t.Parallel()
 	a := newApiTestApp(t)

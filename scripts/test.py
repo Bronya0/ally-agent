@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--jobs", type=int, default=4,
-                        help="CPU, package and in-package test parallelism (default: 4)")
+    parser.add_argument("--jobs", type=int, default=2,
+                        help="CPU, package and in-package test parallelism (default: 2; each Go link peaks near 600 MB, so 4 doubles the suite's RAM peak)")
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("--jobs must be at least 1")

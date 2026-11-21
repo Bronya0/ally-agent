@@ -19,14 +19,24 @@ import (
 	toolerrors "ally-dev/internal/tools/shared"
 )
 
+// LineRange selects whole lines by number and pins the text at both ends, so a
+// stale or miscomputed line number cannot replace or delete the wrong region.
+// End is omitted for a single-line range; EndText has nothing to verify then.
+type LineRange struct {
+	Start     int    `json:"start"`
+	End       int    `json:"end,omitempty"`
+	StartText string `json:"startText"`
+	EndText   string `json:"endText,omitempty"`
+}
+
 // TextChange is one replacement applied by the edit engine. Exactly one of
 // OldText or LineRange identifies the source snapshot region. ReplaceAll is
 // only valid with OldText and replaces every non-overlapping exact match.
 type TextChange struct {
-	OldText    string `json:"oldText,omitempty"`
-	LineRange  string `json:"lineRange,omitempty"`
-	NewText    string `json:"newText"`
-	ReplaceAll bool   `json:"replaceAll,omitempty"`
+	OldText    string     `json:"oldText,omitempty"`
+	LineRange  *LineRange `json:"lineRange,omitempty"`
+	NewText    string     `json:"newText"`
+	ReplaceAll bool       `json:"replaceAll,omitempty"`
 }
 
 const (
@@ -81,7 +91,7 @@ func ValidateBatchTextChanges(changes []TextChange) error {
 	}
 	for i, change := range changes {
 		hasOldText := change.OldText != ""
-		hasLineRange := strings.TrimSpace(change.LineRange) != ""
+		hasLineRange := change.LineRange != nil
 		switch {
 		case !hasOldText && !hasLineRange:
 			return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d must give a source: oldText for a small exact replacement, or lineRange for a larger whole-line replacement", i+1))
@@ -94,7 +104,7 @@ func ValidateBatchTextChanges(changes []TextChange) error {
 			return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d sets replaceAll beside lineRange; replaceAll only applies to oldText", i+1))
 		}
 		if hasLineRange {
-			if _, _, err := ParseLineRange(change.LineRange); err != nil {
+			if _, _, err := change.LineRange.normalize(); err != nil {
 				return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d: %w", i+1, err))
 			}
 		}
@@ -416,31 +426,6 @@ func ReindentReplacementForMatch(content, oldText, newText string, match indenta
 	return result, true
 }
 
-// ParseLineRange parses an inclusive 1-based A-B range, or a single line A.
-// Reversed and open-ended ranges are rejected rather than guessed.
-func ParseLineRange(value string) (int, int, error) {
-	value = strings.TrimSpace(value)
-	parts := strings.Split(value, "-")
-	if len(parts) == 1 {
-		parts = append(parts, parts[0])
-	}
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("invalid lineRange %q; use a single line such as \"12\" or inclusive A-B form such as \"12-24\"", value)
-	}
-	start, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-	if err != nil || start < 1 {
-		return 0, 0, fmt.Errorf("invalid lineRange %q; start line must be a positive integer", value)
-	}
-	end, err := strconv.Atoi(strings.TrimSpace(parts[1]))
-	if err != nil || end < 1 {
-		return 0, 0, fmt.Errorf("invalid lineRange %q; end line must be a positive integer", value)
-	}
-	if end < start {
-		return 0, 0, fmt.Errorf("invalid lineRange %q; end line must not precede start line", value)
-	}
-	return start, end, nil
-}
-
 // ApplyBatchTextChanges applies exact-string and whole-line replacements to
 // one immutable snapshot. Every source is located before any mutation, then
 // replacements are applied backwards. Thus all lineRange values always refer
@@ -473,20 +458,26 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 		if len(newText) > read.MaxReadBytes {
 			return nil, 0, toolerrors.New("E_FILE_TOO_LARGE", errors.New("replacement exceeds the 32 MiB text limit"))
 		}
-		if strings.TrimSpace(change.LineRange) != "" {
+		if change.LineRange != nil {
 			if index == nil {
 				index = buildLineIndex(content)
 			}
-			startLine, endLine, parseErr := ParseLineRange(change.LineRange)
+			startLine, endLine, parseErr := change.LineRange.normalize()
 			if parseErr != nil {
 				return nil, 0, toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d: %w", i+1, parseErr))
 			}
 			start, end, rangeErr := lineRangeOffsetsWithIndex(index, len(content), startLine, endLine)
 			if rangeErr != nil {
-				return nil, 0, toolerrors.New("E_RANGE_OOB", fmt.Errorf("change %d lineRange %q: %w; use numbered lines from the attached current snapshot, or re-read if none is attached", i+1, change.LineRange, rangeErr))
+				return nil, 0, toolerrors.New("E_RANGE_OOB", fmt.Errorf("change %d: %w; use numbered lines from the attached current snapshot, or re-read if none is attached", i+1, rangeErr))
 			}
+			// The length guard runs first: a line longer than the read preview can
+			// never be pinned by hand, so pinning it would only report a mismatch
+			// that the model cannot fix. Refuse the range with the reason instead.
 			if lengthErr := rejectPreviewTruncatedRange(content[start:end], startLine); lengthErr != nil {
-				return nil, 0, toolerrors.New("E_BAD_ARGS", fmt.Errorf("change %d lineRange %q: %w", i+1, change.LineRange, lengthErr))
+				return nil, 0, toolerrors.New("E_BAD_ARGS", fmt.Errorf("change %d line %d: %w", i+1, startLine, lengthErr))
+			}
+			if textErr := verifyLineRangeText(index, content, change.LineRange, startLine, endLine); textErr != nil {
+				return nil, 0, toolerrors.New("E_LINE_RANGE", textErr)
 			}
 			replacement := lineRangeReplacement(content, end, newText)
 			if content[start:end] == replacement {
@@ -517,36 +508,6 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 				match := matches[0]
 				located = append(located, locatedChange{index: i, start: match.offset, end: match.offset + len(oldText), newText: newText})
 				continue
-			}
-		}
-
-		// Exact match failed. If oldText carries line-number prefixes (such as
-		// "1: ", "1\t", "1 | ") copied from read output, strip them and retry.
-		if strippedOld, hasLineNumbers := StripReadLineNumberPrefixes(oldText); hasLineNumbers {
-			if strippedNew, okNew := StripReadLineNumberPrefixes(newText); okNew {
-				newText = strippedNew
-			}
-			oldText = strippedOld
-			if oldText == "" {
-				return nil, 0, toolerrors.New("E_BAD_EDIT", errors.New("oldText is empty after removing line-number prefixes"))
-			}
-			warnings = append(warnings, fmt.Sprintf("change %d: stripped read line-number prefixes (N: ) from oldText", i+1))
-			if change.ReplaceAll {
-				if start := strings.Index(content, oldText); start >= 0 {
-					located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText, repeat: oldText})
-					continue
-				}
-			} else {
-				matches, count := scanExactMatches(content, oldText, maxMatchDiagnosticCandidates)
-				if count > 1 {
-					lines, details := exactMatchDiagnosticsAtMatches(content, oldText, i+1, count, matches)
-					return nil, 0, toolerrors.NewWithDetails("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times%s; inspect one bounded candidate and include more surrounding text to make it unique, or set replaceAll=true to replace every exact occurrence", i+1, count, FormatMatchLines(lines, count)), details)
-				}
-				if count > 0 {
-					match := matches[0]
-					located = append(located, locatedChange{index: i, start: match.offset, end: match.offset + len(oldText), newText: newText})
-					continue
-				}
 			}
 		}
 
@@ -664,6 +625,50 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 		LastChangedLine:  changedRange.LastChangedLine,
 		Warnings:         warnings,
 	}, replacements, nil
+}
+
+// normalize validates the declared span and returns inclusive 1-based bounds.
+// The line count is unknown here; an end past the last line is caught later.
+// An empty startText/endText is the honest content of a blank line, and there is
+// no way to tell it from a missing field — pinning it is still safe, because a
+// non-blank line can never match an empty string.
+func (r *LineRange) normalize() (int, int, error) {
+	if r == nil {
+		return 0, 0, errors.New("lineRange is missing")
+	}
+	end := r.End
+	if end == 0 {
+		end = r.Start
+	}
+	switch {
+	case r.Start < 1:
+		return 0, 0, fmt.Errorf("lineRange start must be a positive line number, got %d", r.Start)
+	case end < r.Start:
+		return 0, 0, fmt.Errorf("lineRange start %d is past end %d", r.Start, end)
+	}
+	return r.Start, end, nil
+}
+
+// lineText returns one visible line without its terminator.
+func lineText(content string, index *lineIndex, line int) string {
+	start := index.offsetForLine(line)
+	end := len(content)
+	if line < index.total() {
+		end = index.offsetForLine(line + 1)
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(content[start:end], "\n"), "\r")
+}
+
+// verifyLineRangeText compares the pinned ends against the current snapshot.
+// start is checked first so only one correction is reported at a time.
+func verifyLineRangeText(index *lineIndex, content string, change *LineRange, startLine, endLine int) error {
+	if lineText(content, index, startLine) != change.StartText {
+		return fmt.Errorf("start mismatch at line %d", startLine)
+	}
+	if endLine != startLine && lineText(content, index, endLine) != change.EndText {
+		return fmt.Errorf("end mismatch at line %d", endLine)
+	}
+	return nil
 }
 
 // lineRangeOffsetsWithIndex locates an inclusive whole-line range in the
@@ -859,61 +864,4 @@ func BuildLineNumberContextBlockBounded(result string, firstLine, lastLine int) 
 		return "Changed lines omitted; use read for follow-up edits."
 	}
 	return b.String()
-}
-
-// StripReadLineNumberPrefixes removes line-number prefixes (such as "123: ",
-// "123\t", "123 | ") copied from Read tool output. It succeeds only when EVERY
-// non-empty line carries such a prefix, ensuring ordinary source lines with
-// digits are not accidentally stripped.
-func StripReadLineNumberPrefixes(s string) (string, bool) {
-	if s == "" {
-		return "", false
-	}
-	lines := strings.Split(s, "\n")
-	stripped := make([]string, len(lines))
-	hasPrefixCount := 0
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			stripped[i] = ""
-			continue
-		}
-		prefixLen := matchLineNumberPrefix(line)
-		if prefixLen <= 0 {
-			return s, false
-		}
-		stripped[i] = line[prefixLen:]
-		hasPrefixCount++
-	}
-	if hasPrefixCount == 0 {
-		return s, false
-	}
-	return strings.Join(stripped, "\n"), true
-}
-
-func matchLineNumberPrefix(line string) int {
-	idx := 0
-	for idx < len(line) && (line[idx] == ' ' || line[idx] == '\t') {
-		idx++
-	}
-	digitStart := idx
-	for idx < len(line) && line[idx] >= '0' && line[idx] <= '9' {
-		idx++
-	}
-	if idx == digitStart {
-		return 0
-	}
-	if idx >= len(line) {
-		return 0
-	}
-	rem := line[idx:]
-	if strings.HasPrefix(rem, ": ") {
-		return idx + 2
-	}
-	if strings.HasPrefix(rem, "\t") {
-		return idx + 1
-	}
-	if strings.HasPrefix(rem, " | ") {
-		return idx + 3
-	}
-	return 0
 }

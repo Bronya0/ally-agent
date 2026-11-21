@@ -15,6 +15,7 @@ package shared
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 )
 
 // CodedError is a tool error paired with a stable code.
@@ -37,6 +38,26 @@ func New(code string, err error) error {
 // Newf is a convenience that formats an error message and wraps it with code.
 func Newf(code string, format string, args ...any) error {
 	return CodedError{code: code, err: fmt.Errorf(format, args...)}
+}
+
+// PathError names a filesystem failure with the tool code that identifies it.
+// A bare os error reads like "GetFileAttributesEx C:\\x: The system cannot find
+// the file specified." on Windows: an API name, no stable code, and nothing the
+// model can act on. Callers that touch the disk before the tool layer assigns a
+// code route their os errors through here instead.
+func PathError(path string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return Newf("E_PATH_NOT_FOUND", "path does not exist: %s; check the name with list_files, or create the file first", path)
+	case errors.Is(err, fs.ErrPermission):
+		return Newf("E_PERMISSION_DENIED", "permission denied: %s; check the file's permissions", path)
+	case errors.Is(err, fs.ErrExist):
+		return Newf("E_EXISTS", "path already exists: %s", path)
+	}
+	return err
 }
 
 // NewWithDetails returns a coded error with a bounded, JSON-serializable detail

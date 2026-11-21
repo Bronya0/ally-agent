@@ -186,7 +186,7 @@ func TestFooterMCPCatalogCountsLiveAndRestoredMessages(t *testing.T) {
 	replacement := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: emptyMcpCatalog}
 	search := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{
 		ID: "call_catalog", Type: openai.ToolTypeFunction,
-		Function: openai.FunctionCall{Name: "ToolSearch", Arguments: `{"names":["demo.lookup"]}`},
+		Function: openai.FunctionCall{Name: "ToolSearch", Arguments: `{"query":["demo.lookup"]}`},
 	}}}
 	result := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: "call_catalog",
 		Content: `{"tools":[{"name":"demo.lookup","definition":{"inputSchema":{"type":"object"}}}]}`}

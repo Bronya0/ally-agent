@@ -27,6 +27,7 @@ import (
 	"unicode/utf8"
 
 	"ally-dev/internal/chatgpt"
+	"ally-dev/internal/tools/edit"
 	"ally-dev/internal/tools/grep"
 	"ally-dev/internal/tools/imagegen"
 	"ally-dev/internal/tools/pathutil"
@@ -1401,10 +1402,10 @@ type FileTextEdits struct {
 // content without a word. The argument gate enforces the declaration before the
 // edit handler runs (see TestEditRejectsChangeWithoutNewText).
 type TextChange struct {
-	OldText    string `json:"oldText,omitempty"`
-	LineRange  string `json:"lineRange,omitempty"`
-	NewText    string `json:"newText"`
-	ReplaceAll bool   `json:"replaceAll,omitempty"`
+	OldText    string          `json:"oldText,omitempty"`
+	LineRange  *edit.LineRange `json:"lineRange,omitempty"`
+	NewText    string          `json:"newText"`
+	ReplaceAll bool            `json:"replaceAll,omitempty"`
 }
 
 type MultiEditResult struct {
@@ -2205,6 +2206,10 @@ func (a *App) stripSessionReasoning(sessionID string) {
 }
 
 func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg ConfigState) {
+	// One redial attempt per turn for MCP servers whose connection was lost.
+	// It is non-blocking and coalesced per server, so a run never waits on a
+	// dial, and a tool call that already failed is never re-sent on its behalf.
+	a.RetryFailedMcpServers()
 	cfg = a.contextSettingsForSession(req.SessionID, cfg, true)
 	ctx, closeBlackboard := newRunBlackboard(ctx)
 	ctx = withModelRunUsage(ctx)
@@ -3887,6 +3892,59 @@ func violationPath(v schemautil.Violation) string {
 	return v.Path + "." + v.UnsupportedKey
 }
 
+// toolArgDecodeError renders a failed tool-argument decode for the model. The
+// declared schema is the only source that names the problem in the model's own
+// vocabulary ("changes[0].lineRange.start: must be integer, got string"); the
+// raw encoding/json error is never echoed because it names internal Go structs
+// ("FileTextEdits.changes.0.lineRange.start of type int") and carries no code.
+// The schema gate further down never sees this failure — decoding runs first —
+// so the code has to be attached here.
+func toolArgDecodeError(name string, args []byte, err error) error {
+	if schema, ok := toolshared.BuiltinSchema(name); ok {
+		violations := schemautil.ValidateArgs(schema, args)
+		fatal := make([]schemautil.Violation, 0, len(violations))
+		for _, violation := range violations {
+			if violation.UnsupportedKey == "" {
+				fatal = append(fatal, violation)
+			}
+		}
+		if len(fatal) > 0 {
+			return codedToolError("E_BAD_ARGS", fmt.Errorf("invalid arguments for %s: %s", name, schemautil.DescribeViolations(fatal)))
+		}
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) && typeErr.Field != "" {
+		return codedToolError("E_BAD_ARGS", fmt.Errorf("invalid arguments for %s: %s must be %s, got %s; correct that field and call again", name, typeErr.Field, goJSONTypeName(typeErr.Type), typeErr.Value))
+	}
+	return codedToolError("E_BAD_ARGS", fmt.Errorf("invalid arguments for %s: arguments do not match the declared schema", name))
+}
+
+// goJSONTypeName names the JSON type a Go decode target expects, for the rare
+// tool with no declared schema (MCP targets decode into a map instead).
+func goJSONTypeName(t reflect.Type) string {
+	for t != nil && t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t == nil {
+		return "the declared type"
+	}
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return "a number"
+	case reflect.String:
+		return "a string"
+	case reflect.Bool:
+		return "a boolean"
+	case reflect.Slice, reflect.Array:
+		return "an array"
+	case reflect.Map, reflect.Struct:
+		return "an object"
+	}
+	return "the declared type"
+}
+
 func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 	// Missing arguments decode as an empty object so the gate reports the
 	// absent required parameters explicitly instead of letting the handler
@@ -3904,11 +3962,11 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 		// calls look as if they had exhausted max_tokens.
 		if isIncompleteStreamJSON(err) {
 			if name == "edit" || name == "replace_exact" || name == "replace_lines" || name == "remote_edit" {
-				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Merge small changes into one edit call; split large changes (a whole function or section) into separate edit calls; use lineRange (inclusive A-B whole-line range) for large deletions or replacements of a contiguous line range: %w", err), nil
+				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Merge small changes into one edit call; split large changes (a whole function or section) into separate edit calls; use lineRange (start/end plus the exact startText/endText of those lines) for large deletions or replacements of a contiguous line range: %w", err), nil
 			}
 			return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted): %w", err), nil
 		}
-		return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
+		return toolArgDecodeError(name, rawArgs, err), nil
 	}
 	// Unmarshal into the actual target (allows unknown fields). Type errors
 	// trigger one repair round per offending field path: double-encoded
@@ -3929,11 +3987,11 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 		}
 		var typeErr *json.UnmarshalTypeError
 		if !errors.As(err, &typeErr) || round >= maxToolArgRepairRounds {
-			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
+			return toolArgDecodeError(name, cur, err), nil
 		}
 		fixed, ok := repairToolArgJSON(cur, typeErr)
 		if !ok {
-			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
+			return toolArgDecodeError(name, cur, err), nil
 		}
 		cur = fixed
 		repairedFields = append(repairedFields, typeErr.Field)
@@ -3945,7 +4003,7 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 	if fixed, ok := repairDisplayBounds(name, cur); ok {
 		cur = fixed
 		if err := json.Unmarshal(cur, v); err != nil {
-			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
+			return toolArgDecodeError(name, cur, err), nil
 		}
 	}
 	var warnings []string

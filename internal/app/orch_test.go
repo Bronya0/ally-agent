@@ -3197,7 +3197,7 @@ func TestExecuteToolAppliesOriginalSnapshotLineRangesWithoutOffsetDrift(t *testi
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"lineRange":"2","newText":"TWO\ninserted"},{"lineRange":"5-5","newText":"FIVE"}]}`, hashVersion(original))
+	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"lineRange":{"start":2,"startText":"two"},"newText":"TWO\ninserted"},{"lineRange":{"start":5,"startText":"five"},"newText":"FIVE"}]}`, hashVersion(original))
 	result := newIsolatedTestApp(t).executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
 	if !result.OK {
 		t.Fatalf("line-range edit failed: %#v", result)
@@ -3217,8 +3217,8 @@ func TestExecuteToolAppliesOriginalSnapshotLineRangesWithoutOffsetDrift(t *testi
 func TestExecuteToolRejectsChangeWithTwoSourcesOrReplaceAllBesideLineRange(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"two sources":                 `{"oldText":"alpha","lineRange":"2-2","newText":"ALPHA"}`,
-		"replaceAll beside lineRange": `{"lineRange":"2-2","newText":"ALPHA","replaceAll":true}`,
+		"two sources":                 `{"oldText":"alpha","lineRange":{"start":2,"startText":"beta"},"newText":"ALPHA"}`,
+		"replaceAll beside lineRange": `{"lineRange":{"start":2,"startText":"beta"},"newText":"ALPHA","replaceAll":true}`,
 	}
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {

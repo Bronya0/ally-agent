@@ -764,12 +764,12 @@ func (a *App) remoteEdit(ctx context.Context, req RemoteEditRequest) (MultiEditR
 func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEdits, file remoteRawFile) (EditResult, error) {
 	beforeHash, beforeVersion := hashBytesAndVersion(file.Data)
 	if !strings.EqualFold(req.Version, beforeVersion) {
-		return EditResult{}, withEditRecoverySource(file.Path, file.Data, file.Size, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("remote file changed: expected version %s, current %s. Re-read before editing", req.Version, beforeVersion)))
+		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("remote file changed: expected version %s, current %s. Re-read before editing", req.Version, beforeVersion))
 	}
 	text, ending, hadBOM := normalizeText(file.Data)
 	result, replacements, err := edit.ApplyBatchTextChanges(text, toEditChanges(req.Changes))
 	if err != nil {
-		return EditResult{}, withEditRecoverySource(file.Path, file.Data, file.Size, err)
+		return EditResult{}, err
 	}
 	after, err := read.EncodeLike(file.rawBytes(), result.Content)
 	if err != nil {

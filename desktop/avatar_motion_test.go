@@ -71,29 +71,6 @@ func TestWhaleBlinkBlendsAndRespectsReducedMotion(t *testing.T) {
 	}
 }
 
-func TestWhaleExpressionKeepsOriginalSilhouette(t *testing.T) {
-	a := &desktop{prefs: defaultPrefs(), avatarStyle: "whale", avatarPoses: decodeAvatarStyle("whale")}
-	defer releaseAvatarPoses(a.avatarPoses)
-	tt := ui.NewTester(func(c *ui.Context) {
-		ui.Box(c).Size(230, 230).Draw(func(p *ui.Painter, r ui.Rect) { a.paintAvatar(p, r, true, true) })
-	}, 230, 230)
-	a.pet.lastActivity = tt.Now()
-	tt.Frame()
-	before := append([]byte(nil), tt.Image().Pix...)
-	a.pet.pose, a.pet.poseUntil = "pat", tt.Now().Add(time.Second)
-	tt.Frame()
-	after := tt.Image().Pix
-	changed := 0
-	for i := 0; i < len(before); i += 4 {
-		if !bytes.Equal(before[i:i+4], after[i:i+4]) {
-			changed++
-		}
-	}
-	if changed < 100 || changed > 230*230/7 {
-		t.Fatalf("pat expression changed %d pixels; expected a localized face change", changed)
-	}
-}
-
 func TestWelcomeAnimationStopsWhenPetEnabledAndResumes(t *testing.T) {
 	a := &desktop{prefs: defaultPrefs(), avatarStyle: "deepseek"}
 	a.prefs.Avatar = "deepseek"

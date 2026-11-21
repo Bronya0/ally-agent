@@ -78,7 +78,11 @@ func TestEditPreservesUTF16AndReturnedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := executeRecoveryTestEdit(t, a, context.Background(), a.config, FileTextEdits{Path: "utf16.txt", Version: first.Version, Changes: []TextChange{{OldText: "a", NewText: "b"}}})
+	args, err := json.Marshal(FileTextEdits{Path: "utf16.txt", Version: first.Version, Changes: []TextChange{{OldText: "a", NewText: "b"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := a.executeTool(context.Background(), a.config, "", "edit", args)
 	if !r.OK {
 		t.Fatal(r.Error)
 	}

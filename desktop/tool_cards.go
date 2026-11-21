@@ -878,7 +878,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 	var summary string
 	switch name {
 	case mcpSearchToolKind:
-		summary = memoAt[memoOf[string, string]](container, "search-names").get(str(m, "args"), func(string) string {
+		summary = memoAt[memoOf[string, string]](container, "search-query").get(str(m, "args"), func(string) string {
 			return toolArgSummary(name, args)
 		})
 	case mcpExecToolKind:
@@ -1546,13 +1546,19 @@ func toolArgSummary(name string, args map[string]any) string {
 	case "skill":
 		return pick("name", "skill")
 	case mcpSearchToolKind:
-		var names []string
-		for _, value := range list(args, "names") {
+		// History recorded before the rename still carries "names"; read both so an
+		// old ToolSearch card keeps its summary.
+		values := list(args, "query")
+		if len(values) == 0 {
+			values = list(args, "names")
+		}
+		var ids []string
+		for _, value := range values {
 			if id, ok := value.(string); ok && id != "" {
-				names = append(names, id)
+				ids = append(ids, id)
 			}
 		}
-		return strings.Join(names, ", ")
+		return strings.Join(ids, ", ")
 	case "ask":
 		return pick("question")
 	case "subagent":

@@ -9,7 +9,6 @@ package app
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -28,9 +27,6 @@ type toolResult struct {
 	// Warnings carries non-fatal notices (e.g. ignored unknown tool
 	// arguments) on successful results; error results never set it.
 	Warnings []string `json:"warnings,omitempty"`
-	// Recovery source is private to the model's tool message. Never serialize
-	// it into UI/API results or concatenate it into the displayed error.
-	modelRead *BatchReadResult
 }
 
 func codedToolError(code string, err error) error {
@@ -45,12 +41,7 @@ func toolErrorResult(err error) toolResult {
 	if err == nil {
 		return toolResult{OK: true}
 	}
-	result := toolResult{OK: false, Error: err.Error(), ErrorCode: toolErrorCode(err), Details: toolerrors.Details(err)}
-	var recovery *editRecoveryError
-	if errors.As(err, &recovery) {
-		result.modelRead = &recovery.read
-	}
-	return result
+	return toolResult{OK: false, Error: err.Error(), ErrorCode: toolErrorCode(err), Details: toolerrors.Details(err)}
 }
 
 func toolResultSummary(name string, result *toolResult) string {
@@ -215,22 +206,18 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			body += "\ndetails: " + string(raw)
 		}
 		body, reduced := compactTextForModel(body, compactTextSpec{limit: maxModelToolOutput, head: modelToolHeadBytes, tail: modelToolTailBytes})
-		header := "// " + normalizeToolName(name) + " | status=error"
+		header := "// " + normalizeToolName(name)
 		if result.ErrorCode != "" {
 			header += " | error=" + strconv.Quote(result.ErrorCode)
 		}
 		if reduced {
 			header += " | truncated"
 		}
-		out := header + "\n\n" + body
-		if result.modelRead != nil {
-			out += "\n\nCurrent source for recovery; no extra read is needed:\n\n" + renderReadResultForModel(*result.modelRead)
-		}
-		return out
+		return header + "\n\n" + body
 	}
 	out := compactToolDataForModel(name, result, fullJSON)
 	if !strings.HasPrefix(out, "// ") {
-		out = "// " + normalizeToolName(name) + " | status=ok\n\n" + out
+		out = "// " + normalizeToolName(name) + "\n\n" + out
 	}
 	if len(result.Warnings) > 0 {
 		i := strings.IndexByte(out, '\n')
@@ -752,7 +739,7 @@ func renderGrepResultForModel(r GrepResult) string {
 		// those files with no notice.
 	default:
 		// Unknown mode: render a minimal block rather than a malformed one.
-		return "// grep | status=error | error=unknown-mode"
+		return "// grep | error=unknown-mode"
 	}
 	var b strings.Builder
 	// The mode is spelled out on every block: a count row ("path: count=N")
@@ -1274,11 +1261,11 @@ func modelResultBody(header, body string) string {
 
 func modelFallbackResult(name string, data any, fallback string) string {
 	if data == nil {
-		return modelResultBody("// "+normalizeToolName(name)+" | status=ok", fallback)
+		return modelResultBody("// "+normalizeToolName(name), fallback)
 	}
 	raw, err := json.Marshal(data)
 	if err == nil && string(raw) != "null" {
 		fallback = string(raw)
 	}
-	return modelResultBody("// "+normalizeToolName(name)+" | status=ok", fallback)
+	return modelResultBody("// "+normalizeToolName(name), fallback)
 }

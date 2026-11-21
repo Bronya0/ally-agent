@@ -10,8 +10,6 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,7 +24,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	openai "github.com/sashabaranov/go-openai"
@@ -635,124 +632,6 @@ func TestReconcileConnectsChangedServersInBackground(t *testing.T) {
 	}
 }
 
-func TestIsMcpTransportFailure(t *testing.T) {
-	// mcp-go 自己的哨兵错误必须命中：手写子串清单曾经漏掉它们，于是 stdio
-	// 子进程死了、HTTP 会话 404 过期了都不重连（重连形同虚设）。
-	sentinels := []error{
-		transport.ErrTransportClosed,
-		transport.ErrSessionTerminated,
-		fmt.Errorf("MCP call failed: %w", transport.ErrTransportClosed),
-		fmt.Errorf("transport error: failed to send request: %w", transport.ErrSessionTerminated),
-	}
-	for _, err := range sentinels {
-		if !isMcpTransportFailure(err) {
-			t.Fatalf("expected sentinel error %v to count as a transport failure", err)
-		}
-	}
-
-	recoverableCases := []string{
-		"invalid session ID: 123",
-		// The transport error that motivated the marker list: a full JSON-RPC
-		// payload, not just the bare marker substring.
-		`MCP call failed: transport error: request failed with status 400: {"jsonrpc":"2.0","id":null,"error":{"code":-32602,"message":"Invalid session ID"}}`,
-		"remote MCP session expired",
-		"write: broken pipe",
-		"read: closed pipe",
-		"read tcp 127.0.0.1: connection reset by peer",
-		"dial tcp 127.0.0.1: connection refused",
-		"unexpected EOF",
-		"transport is closing",
-		"client is closed",
-		// 两个 mcp-go 没有导出哨兵、只能按文案认的真实错误。
-		"transport error: transport closed",
-		"transport error: connection has been closed",
-	}
-	for _, msg := range recoverableCases {
-		if !isMcpTransportFailure(errors.New(msg)) {
-			t.Fatalf("expected error %q to be a transport failure", msg)
-		}
-	}
-
-	// 标准 JSON-RPC 错误码：服务端收到了请求、明确拒绝，与链路无关，绝不重连。
-	protocolErrors := []error{
-		mcp.ErrInvalidParams,
-		mcp.ErrMethodNotFound,
-		fmt.Errorf("%w: missing required field", mcp.ErrInvalidParams),
-	}
-	for _, err := range protocolErrors {
-		if isMcpTransportFailure(err) {
-			t.Fatalf("protocol error %v must not count as a transport failure", err)
-		}
-	}
-
-	nonRecoverableCases := []string{
-		"validation failed: parameter 'foo' is required",
-		"tool not found: sample_tool",
-		"unsupported operation",
-		"permission denied",
-	}
-	for _, msg := range nonRecoverableCases {
-		if isMcpTransportFailure(errors.New(msg)) {
-			t.Fatalf("expected error %q to not be a transport failure", msg)
-		}
-	}
-	if isMcpTransportFailure(nil) {
-		t.Fatal("a nil error must never be a transport failure")
-	}
-}
-
-func TestMcpCallFailureClassification(t *testing.T) {
-	// 服务端状态决定"请求有没有发出去过"：failed 意味着调用前就没有可用连接
-	// （请求从未发出，重连后照常执行是安全的）；disabled / connecting 不行——
-	// 前者是用户明确关掉的，后者已有连接在飞。
-	cases := []struct {
-		status string
-		want   mcpCallFailure
-	}{
-		{"failed", mcpCallConnectionDead},
-		{"disabled", mcpCallUnavailable},
-		{"connecting", mcpCallUnavailable},
-	}
-	for _, tc := range cases {
-		manager := NewMcpManager("", nil)
-		manager.clients["srv"] = &McpClientHandle{ServerName: "srv", Status: tc.status, ToolDefs: []McpDiscoveredTool{{Name: "tool", Schema: map[string]any{"type": "object"}}}}
-		outcome, err := manager.callToolOnce(context.Background(), "srv", "tool", map[string]any{})
-		if err == nil {
-			t.Fatalf("status %q must fail the call", tc.status)
-		}
-		if outcome.failure != tc.want {
-			t.Fatalf("status %q: got failure %d want %d", tc.status, outcome.failure, tc.want)
-		}
-	}
-
-	manager := NewMcpManager("", nil)
-	outcome, err := manager.callToolOnce(context.Background(), "missing", "tool", nil)
-	if err == nil || outcome.failure != mcpCallUnavailable {
-		t.Fatalf("unknown server must be unavailable, got %#v / %v", outcome, err)
-	}
-}
-
-// 重连之后要不要把这次调用继续跑下去，唯一判据是"请求有没有发出去过"：调用前
-// 连接就是死的（从未发出）可以；请求发出过（链路中途断）不行——服务端可能已经
-// 执行了工具并产生了副作用，重放就是把副作用做第二遍。
-func TestCallReplaySafetyAfterReconnect(t *testing.T) {
-	cases := []struct {
-		failure mcpCallFailure
-		want    bool
-	}{
-		{mcpCallConnectionDead, true},
-		{mcpCallTransportBroken, false},
-		{mcpCallToolFailed, false},
-		{mcpCallUnavailable, false},
-		{mcpCallSucceeded, false},
-	}
-	for _, tc := range cases {
-		if got := replaySafeAfterReconnect(tc.failure); got != tc.want {
-			t.Fatalf("failure %d: replaySafeAfterReconnect = %v, want %v", tc.failure, got, tc.want)
-		}
-	}
-}
-
 func TestCallToolDoesNotRetryToolLevelError(t *testing.T) {
 	// 工具自己回的错误文案里带 "connection refused"（下游连不上，很常见）时
 	// 绝不能重连：旧实现会杀掉并重启整个 MCP 服务端、再把工具跑第二遍。
@@ -792,9 +671,6 @@ func TestCallToolDoesNotRetryToolLevelError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "connection refused") {
 		t.Fatalf("the server's error text must reach the caller, got %v", err)
-	}
-	if strings.Contains(err.Error(), "reconnect") {
-		t.Fatalf("a tool-level error must not trigger a reconnect, got %v", err)
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("the tool must run exactly once, ran %d times", got)
@@ -1033,7 +909,7 @@ func waitForMcpHandleStatus(t *testing.T, manager *McpManager, name, want string
 	}
 }
 
-func TestMcpStdioServerUsesWorkspaceDirAndHealsAfterCrash(t *testing.T) {
+func TestMcpStdioServerUsesWorkspaceDirAndReportsCrash(t *testing.T) {
 	t.Parallel()
 	python := mcpTestPython(t)
 	script := filepath.Join(t.TempDir(), "server.py")
@@ -1086,18 +962,11 @@ func TestMcpStdioServerUsesWorkspaceDirAndHealsAfterCrash(t *testing.T) {
 	}
 	waitForMcpHandleStatus(t, manager, "echo", "failed")
 
-	// 下一次调用：状态已经是 failed（这次请求从未发出），所以先重连、再把调用
-	// 正常执行一遍——连接自己救回来，而不是把"连接已失效"一直丢给模型。这不是
-	// 重放：服务端不可能已经跑过它。
-	out, err = manager.CallTool(ctx, "echo", "where", map[string]any{})
-	if err != nil {
-		t.Fatalf("调用前重连自愈失败: %v", err)
-	}
-	if !strings.Contains(out, wantDir) {
-		t.Fatalf("重连后的调用应正常返回：got %q", out)
-	}
-	if got := mcpHandleStatus(manager, "echo"); got != "connected" {
-		t.Fatalf("重连后状态应回到 connected，got %q", got)
+	// 调用路径不再自愈：failed 状态下这次调用直接失败，重连交给会话或用户动作
+	// 触发的 RetryFailedMcpServers——不在调用预算里拨号，也不重放可能已经产生
+	// 副作用的请求。
+	if _, err := manager.CallTool(ctx, "echo", "where", map[string]any{}); err == nil {
+		t.Fatal("a failed server must not be reconnected from the call path")
 	}
 }
 

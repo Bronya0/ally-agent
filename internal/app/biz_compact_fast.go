@@ -4,7 +4,6 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -224,7 +223,14 @@ func (a *App) projectFastCompactHistory(ctx context.Context, sessionID string, h
 				}
 			}
 			if meta.Headers == "" {
-				meta.Headers = fmt.Sprintf("// %s | status=%s", normalizeToolName(call.Function.Name), status)
+				// Same shape a live result carries: the tool name, plus an error marker
+				// only when the call actually failed. There is no success token to keep
+				// in sync with the live header.
+				header := "// " + normalizeToolName(call.Function.Name)
+				if status == "error" {
+					header += " | status=error"
+				}
+				meta.Headers = header
 			}
 			content := fastCompactRecordMarker
 			if meta.Purpose != "" {

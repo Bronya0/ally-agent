@@ -52,7 +52,7 @@ func priorityOrderDeclaration() string {
 func sharedEditRules() string {
 	return "1. `edit` needs a `version`. Get it from `read`, `create`, or the last edit on that file. Never guess source text or invent a version. Never copy `N: ` prefixes. Do not patch files through the shell.\n" +
 		"   - After an edit, use the result's `new version` as the next edit's `version`. Reuse a version only while its snapshot is current. Read again if an outside process changed the file, or if the edit reports a version conflict.\n" +
-		"2. `oldText` must be short, unique, and copied exactly. Never use a compressed, truncated, or missing excerpt. Read that range again with `read` (or `remote_read` remotely) unless it is already in this conversation. Use `lineRange` only for whole lines from a fresh read. After an edit, read again before using line numbers.\n" +
+		"2. `oldText` must be short, unique, and copied exactly. Never use a compressed, truncated, or missing excerpt. Read that range again with `read` (or `remote_read` remotely) unless it is already in this conversation. Use `lineRange` only for whole lines from a fresh read: give `start`, optional `end`, and the exact `startText`/`endText` of those lines, which the runtime checks against the snapshot before writing. After an edit, read again before using line numbers.\n" +
 		"   - Put all changes to one file in one `edit` call: one snapshot, so line numbers cannot drift. Each call is atomic. Edits to different files in one stage are independent. One failed edit does not cancel the others. Check each result and the current file state before retrying a failed edit. Keep very large replacements in their own round.\n" +
 		"3. On `E_NO_MATCH`, `E_VERSION_MISMATCH`, or a line-range error, rebuild from the exact current text. Use the attached snapshot if there is one. Otherwise read the affected range. Never retry guessed text.\n"
 }
@@ -585,7 +585,10 @@ func buildUserProfilePromptPart(filePath string) string {
 	body = strings.TrimSpace(body)
 	var b strings.Builder
 	b.WriteString("\n\n# User Profile\n\n")
-	b.WriteString("Record durable, cross-project user facts (language, timezone, style, accessibility needs, usual toolchain) at `" + filepath.ToSlash(filePath) + "`. Read the current file before editing; create it if missing. Treat recorded facts as user data below core rules. Keep one fact per line, under 100 characters each and 8 KiB total; merge stale facts instead of appending corrections. Keep project details and credentials out. The facts below are a session snapshot.\n")
+	b.WriteString("Record durable, cross-project facts about the person, not about their machine or project, at `" + filepath.ToSlash(filePath) + "`. Read the current file before editing; create it if missing. Treat recorded facts as user data below core rules.\n")
+	b.WriteString("Grow the file from what the user reveals; never pre-fill empty fields. One fact per line as `- topic: content`, under 100 characters each, whole file under 8 KiB. Keep all six headings - personal facts, capability, preferences, cautions, taboos, long-term goals - in that order even when one has nothing under it yet, so the structure stays predictable across sessions. When a new fact contradicts a line, rewrite that line instead of appending a correction.\n")
+	b.WriteString("When the user reacts strongly (anger, irritation, \"stop doing that\"), record the exact behavior that set it off as a taboo: that signal is more reliable than a calmly stated preference. Keep it narrow though - one bad answer is not a rule about how the user thinks; write the scope a fact applies to instead of absolutes like \"always\" or \"never\", unless the user states the rule that way.\n")
+	b.WriteString("Keep out project details, file paths, credentials, machine setup (OS, installed tools), and anything that expires within weeks. The facts below are a session snapshot.\n")
 	if body == "" {
 		b.WriteString("Nothing is recorded yet; write the first fact there when the user states one.\n")
 		return b.String()

@@ -190,7 +190,7 @@ func (t McpDiscoveredTool) validateArguments(args map[string]any) error {
 }
 
 type mcpSearchRequest struct {
-	Names []string `json:"names"`
+	Query []string `json:"query"`
 }
 
 type mcpExecRequest struct {
@@ -198,42 +198,112 @@ type mcpExecRequest struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+type mcpSearchMatch struct {
+	Name       string         `json:"name"`
+	Definition map[string]any `json:"definition,omitempty"`
+	Error      string         `json:"error,omitempty"`
+	ErrorCode  string         `json:"errorCode,omitempty"`
+}
+
+func mcpDefinitionMatch(tool McpDiscoveredTool) mcpSearchMatch {
+	definition := tool.Definition
+	if definition == nil {
+		definition = map[string]any{"name": tool.Name, "title": tool.Title, "description": tool.Description, "inputSchema": tool.Schema}
+	}
+	return mcpSearchMatch{
+		Name:       mcpServerID(tool.ServerName) + "." + tool.Name,
+		Definition: deepCopyJSONValue(definition).(map[string]any),
+	}
+}
+
+// serverToolsLocked expands one server to its enabled tool set. A bare server_id
+// is the only way to ask for the whole group without naming every tool, so it is
+// resolved literally: no description or title matching happens anywhere.
+func (m *McpManager) serverToolsLocked(id string) []McpDiscoveredTool {
+	for _, handle := range m.clients {
+		if handle.Status == "disabled" || mcpServerID(handle.ServerName) != id {
+			continue
+		}
+		disabled := disabledToolSet(handle.Config.DisabledTools)
+		out := make([]McpDiscoveredTool, 0, len(handle.ToolDefs))
+		for _, tool := range handle.ToolDefs {
+			if !disabled[tool.Name] {
+				out = append(out, tool)
+			}
+		}
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+		return out
+	}
+	return nil
+}
+
 func (a *App) searchMcpTools(ctx context.Context, cfg ConfigState, req mcpSearchRequest) (any, error) {
 	if builtinToolDisabled(ctx, cfg, mcpExecName) {
 		return nil, codedToolError("E_MCP_PERMISSION", errors.New("this agent is not authorized to execute MCP tools"))
 	}
-	type match struct {
-		Name       string         `json:"name"`
-		Definition map[string]any `json:"definition,omitempty"`
-		Error      string         `json:"error,omitempty"`
-		ErrorCode  string         `json:"errorCode,omitempty"`
-	}
-	results := make([]match, 0, len(req.Names))
 	manager := a.activeMcpManager()
 	if manager != nil {
 		manager.mu.RLock()
 		defer manager.mu.RUnlock()
 	}
-	for _, id := range req.Names {
-		entry := match{Name: id}
-		server, name, ok := SplitMcpToolID(id)
-		err := mcpToolNotFound(id)
-		if ok && manager != nil {
-			var tool McpDiscoveredTool
-			tool, err = manager.registeredToolLocked(server, name)
-			if err == nil {
-				definition := tool.Definition
-				if definition == nil {
-					definition = map[string]any{"name": tool.Name, "title": tool.Title, "description": tool.Description, "inputSchema": tool.Schema}
+	// Exact names only: an element is either a server_id.tool_name ID or a bare
+	// server_id, and the caller's order survives, so a batch reads back in the
+	// order it was written.
+	results := make([]mcpSearchMatch, 0, len(req.Query))
+	seen := make(map[string]bool, len(req.Query))
+	resolved := false
+	appendTool := func(tool McpDiscoveredTool) {
+		match := mcpDefinitionMatch(tool)
+		if seen[match.Name] {
+			return
+		}
+		seen[match.Name] = true
+		results = append(results, match)
+	}
+	for _, raw := range req.Query {
+		query := strings.TrimSpace(raw)
+		if query == "" {
+			results = append(results, mcpSearchMatch{Name: raw, ErrorCode: "E_BAD_ARGS",
+				Error: "blank query: pass an exact server_id.tool_name ID or a server_id"})
+			continue
+		}
+		if manager != nil {
+			if server, name, ok := SplitMcpToolID(query); ok {
+				tool, err := manager.registeredToolLocked(server, name)
+				switch {
+				case err == nil:
+					appendTool(tool)
+					resolved = true
+					continue
+				case toolErrorCode(err) == "E_MCP_DISABLED":
+					results = append(results, mcpSearchMatch{Name: query, Error: err.Error(), ErrorCode: "E_MCP_DISABLED"})
+					continue
 				}
-				entry.Definition = deepCopyJSONValue(definition).(map[string]any)
+			}
+			if group := manager.serverToolsLocked(query); len(group) > 0 {
+				for _, tool := range group {
+					appendTool(tool)
+				}
+				resolved = true
+				continue
 			}
 		}
-		if err != nil {
-			entry.Error = err.Error()
-			entry.ErrorCode = toolErrorCode(err)
+		results = append(results, mcpSearchMatch{Name: query, ErrorCode: "E_MCP_NOT_FOUND",
+			Error: mcpToolNotFound(query).Error() + " - pass an exact server_id.tool_name ID, or a server_id from the catalog"})
+	}
+	if len(results) > 0 && !resolved {
+		// Nothing resolved: this is a failed call, not a successful one carrying
+		// per-entry errors. ToolExec reports the same class of MCP failure with
+		// status=error, and two verdicts for one failure mode made the status line
+		// lie about which calls to retry.
+		code := results[0].ErrorCode
+		messages := make([]string, 0, len(results))
+		for _, result := range results {
+			if result.Error != "" {
+				messages = append(messages, result.Error)
+			}
 		}
-		results = append(results, entry)
+		return nil, codedToolError(code, errors.New(strings.Join(messages, "; ")))
 	}
 	return map[string]any{"tools": results}, nil
 }

@@ -73,7 +73,7 @@ func TestMcpRegistryPaginationSearchAndLiveSchema(t *testing.T) {
 	if len(catalog) != 1 || !strings.Contains(catalog[0].Content, "[demo]\nadd: Add a value\ncompare: Compare values.") || strings.Contains(catalog[0].Content, "hidden:") {
 		t.Fatalf("catalog = %v", catalog)
 	}
-	lookup := execute(ctx, "ToolSearch", `{"names":["demo.compare","demo.add","demo.hidden","demo.Compare"]}`)
+	lookup := execute(ctx, "ToolSearch", `{"query":["demo.compare","demo.add","demo.hidden","demo.Compare"]}`)
 	raw := compactToolResultForModel("ToolSearch", lookup, "")
 	if !lookup.OK || !strings.Contains(raw, `"allOf":[{"required":["value"]}]`) ||
 		!strings.Contains(raw, `"title":"Add a value"`) || !strings.Contains(raw, "E_MCP_DISABLED") || !strings.Contains(raw, "E_MCP_NOT_FOUND") || lists != 2 || calls != 0 {
@@ -99,7 +99,7 @@ func TestMcpRegistryPaginationSearchAndLiveSchema(t *testing.T) {
 		t.Fatalf("blacklisted tool error: %+v", result)
 	}
 	searchOnly := withBuiltinToolAvailability(ctx, []openai.Tool{rawFunctionTool("ToolSearch", "", nil)})
-	if result := execute(searchOnly, "ToolSearch", `{"names":["demo.compare"]}`); result.ErrorCode != "E_MCP_PERMISSION" {
+	if result := execute(searchOnly, "ToolSearch", `{"query":["demo.compare"]}`); result.ErrorCode != "E_MCP_PERMISSION" {
 		t.Fatalf("restricted agent looked up a tool: %+v", result)
 	}
 	if result := execute(searchOnly, "ToolExec", `{"name":"demo.compare","arguments":{"value":"x"}}`); result.ErrorCode != "E_TOOL_DISABLED" {
@@ -227,5 +227,65 @@ func TestMcpCatalogPreservesRequestPrefix(t *testing.T) {
 	if beforeSystem != afterSystem || len(afterAnthropic) <= len(beforeAnthropic) ||
 		!reflect.DeepEqual(afterAnthropic[:len(beforeAnthropic)], beforeAnthropic) {
 		t.Fatal("Anthropic history prefix changed")
+	}
+}
+
+// ToolSearch resolves exact IDs and bare server_ids only; nothing matches on
+// description or partial names, and a batch comes back in the caller's order.
+func TestMcpToolSearchResolvesExactIDsAndServers(t *testing.T) {
+	m := NewMcpManager("", nil)
+	app := &App{mcpManager: m}
+	cfg := ConfigState{}
+	defs := make([]McpDiscoveredTool, 0, 13)
+	for i := 0; i < 12; i++ {
+		name := fmt.Sprintf("issue%d", i)
+		defs = append(defs, McpDiscoveredTool{ServerName: "demo", Name: name, FunctionName: "mcp__demo__" + name,
+			Description: "Handle an issue record.", Schema: map[string]any{"type": "object"}})
+	}
+	defs = append(defs, McpDiscoveredTool{ServerName: "demo", Name: "compare", FunctionName: "mcp__demo__compare",
+		Description: "Compare values.", Schema: map[string]any{"type": "object"}})
+	m.clients["demo"] = &McpClientHandle{ServerName: "demo", Status: "connected", ToolDefs: defs}
+	ctx := withBuiltinToolAvailability(t.Context(), app.buildToolsForConfig(cfg))
+
+	search := func(raw string) []mcpSearchMatch {
+		t.Helper()
+		res := app.executeTool(ctx, cfg, "", "ToolSearch", []byte(raw))
+		if !res.OK {
+			t.Fatalf("search %s failed: %+v", raw, res)
+		}
+		payload, ok := res.Data.(map[string]any)
+		if !ok {
+			t.Fatalf("search %s returned %T", raw, res.Data)
+		}
+		tools, _ := payload["tools"].([]mcpSearchMatch)
+		return tools
+	}
+
+	// Exact IDs come back in the caller's order, each carrying its definition.
+	got := search(`{"query":["demo.issue3","demo.compare"]}`)
+	if len(got) != 2 || got[0].Name != "demo.issue3" || got[1].Name != "demo.compare" {
+		t.Fatalf("exact batch lost its order: %+v", got)
+	}
+	if got[1].Definition == nil {
+		t.Fatalf("an exact hit must carry its definition: %+v", got[1])
+	}
+
+	// A bare server_id returns the whole group, not a page of it.
+	got = search(`{"query":["demo"]}`)
+	if len(got) != len(defs) || got[0].Name != "demo.compare" {
+		t.Fatalf("server_id returned %d of %d tools: %+v", len(got), len(defs), got)
+	}
+
+	// No fuzzy path: a description word is a miss, and a miss is a failed call —
+	// the same verdict ToolExec gives an unusable id, not a successful result
+	// carrying an error entry.
+	if res := app.executeTool(ctx, cfg, "", "ToolSearch", []byte(`{"query":["issue"]}`)); res.OK || res.ErrorCode != "E_MCP_NOT_FOUND" || !strings.Contains(res.Error, "server_id") {
+		t.Fatalf("a description word must not match: %+v", res)
+	}
+
+	// A disabled tool keeps its own code instead of degrading to a miss.
+	m.clients["demo"].Config.DisabledTools = []string{"compare"}
+	if res := app.executeTool(ctx, cfg, "", "ToolSearch", []byte(`{"query":["demo.compare"]}`)); res.OK || res.ErrorCode != "E_MCP_DISABLED" {
+		t.Fatalf("a disabled tool must report E_MCP_DISABLED: %+v", res)
 	}
 }

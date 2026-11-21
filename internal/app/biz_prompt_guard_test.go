@@ -46,6 +46,8 @@ var promptNonToolTokens = map[string]bool{
 	"alias": true, "changes": true, "done": true, "files": true, "finish": true,
 	"in_progress": true, "next": true, "offset": true, "path": true, "step_limit": true,
 	"pending": true, "steps": true, "stage": true, "validation": true, "version": true,
+	// edit lineRange fields named in guidance
+	"end": true, "endText": true, "start": true, "startText": true,
 	// frontmatter fields and IO nouns named in guidance
 	"aliases": true, "date": true, "description": true, "output": true,
 	"role": true, "source": true, "tags": true, "task": true, "title": true,

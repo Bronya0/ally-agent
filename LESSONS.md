@@ -157,3 +157,4 @@
 2026-11-18 中危 batch-forget 批量删除后无条件 forget 全部 id，后端拒删的运行中会话被清出内存；只 forget 成功的。@desktop/rail.go
 2026-11-18 中危 temp-ws-shared 临时工作区目录随单个标签关闭即删，同沙箱其它会话文件树失效；只在最后一个标签关闭时删。@desktop/header.go
 2026-11-20 高危 deadcode-scan 平台文件共享的符号在 Windows 上误报；删前必跑 GOOS=darwin/linux CGO_ENABLED=0 go build。@scripts
+2026-11-21 中危 tool-err-exit 解码/磁盘失败直接 return 裸 err 或 %w：无错误码、模型拿不到下一步，还泄漏 Go 结构体名与 OS API；走 toolArgDecodeError 与 shared.PathError。@internal

@@ -166,30 +166,47 @@ func (a *desktop) pluginsPageBody(c *ui.Context) {
 		a.pluginEmptyState(c)
 		return
 	}
-	for _, p := range a.plugins {
-		p := p
-		a.pluginRow(c, p)
-	}
+	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+		ui.Column(c).Gap(gapField).Children(func() {
+			for _, p := range a.plugins {
+				p := p
+				a.pluginRow(c, p)
+			}
+		})
+	})
 	a.pluginDeleteDialog(c)
 }
 
+// pluginEmptyState is the page body until the first plugin: one centred block
+// under the toolbar, no panel around it.
 func (a *desktop) pluginEmptyState(c *ui.Context) {
-	card(c, "plugin-empty", func() {
-		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
-			ui.Column(c).Grow(1).Gap(gapField).Children(func() {
-				accentChip(c, locales.Text("插件系统 v1"))
-				ui.Text(c, locales.Text("把 Ally 变成你自己的控制台")).FontSize(fsHeadline).Bold()
-				ui.Text(c, locales.Text("三分钟定制自己想要的页面，比如公司 OA、BUG 管理页面、工时计划表等等。")).FontSize(fsBody).TextColor(a.secondaryInk())
-				cardFlat(c, locales.Text("开发教程")).AlignSelf(ui.Start).OnClick(func() {
-					c.Services().OpenURL("https://github.com/Bronya0/ally-agent/blob/main/docs/plugin-system.md")
-				})
-			})
-			ui.Column(c).Width(240).Gap(gapTight).Children(func() {
-				fieldNote(c, locales.Text("可用的宿主能力"), a.secondaryInk())
-				for _, cap := range []string{"host.http", "host.store", "host.files", "host.ui.notify", "host.events", "host.ui.theme"} {
-					ui.Text(c, cap).Font(monoFamily).FontSize(fsTiny).TextColor(c.Theme().Accent)
-				}
-			})
+	th := c.Theme()
+	ui.Column(c).Key("plugin-empty").Fill().Center().Gap(gapField).
+		Draw(func(p *ui.Painter, r ui.Rect) {
+			// One radial wash behind the copy, centred on the block, so the empty
+			// page has depth without an edge to it.
+			side := min(max(r.W, r.H), float32(720))
+			glow := ui.Rect{X: r.X + (r.W-side)/2, Y: r.Y + (r.H-side)/2 - 24, W: side, H: side}
+			p.FillRadialGradient(glow, ui.RadialGradient{
+				Center: ui.Point{X: 0.5, Y: 0.5},
+				Radius: side / 2,
+				Stops: []ui.GradientStop{
+					{Color: th.Accent.Alpha(0.13), At: 0},
+					{Color: th.Accent.Alpha(0), At: 1},
+				},
+				Oklab: true,
+			}, 0)
+		}).Children(func() {
+		ui.Text(c, "PLUGIN · SDK v1").Font(monoFamily).FontSize(fsMicro).
+			LetterSpacing(1.6).TextColor(th.Accent)
+		ui.Text(c, locales.Text("把 Ally 变成你自己的控制台")).FontSize(fsDisplay).Bold().
+			TextAlign(ui.Center).LineHeight(1.3)
+		ui.Text(c, locales.Text("三分钟定制自己想要的页面，比如公司 OA、BUG 管理页面、工时计划表等等。")).
+			FontSize(fsSmall).TextColor(a.secondaryInk()).TextAlign(ui.Center).
+			LineHeight(1.7).MaxWidth(560)
+		ui.Box(c).Margin(gapField, 0).Children(func() {
+			uikit.Link(c, locales.Text("开发教程")+"  →",
+				"https://github.com/Bronya0/ally-agent/blob/main/docs/plugin-system.md").FontSize(fsBody)
 		})
 	})
 }
