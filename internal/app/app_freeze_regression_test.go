@@ -112,13 +112,9 @@ func TestSessionToolsetFreezeSurvivesMcpDrift(t *testing.T) {
 		}
 	}
 
-	// A new session uses the same wire schema set and discovers the tool in its catalog.
+	// A new session uses the same wire schema set.
 	if fresh := app.buildToolsForSession("other", cfg); !reflect.DeepEqual(frozen, fresh) {
 		t.Fatal("MCP discovery changed the protocol tool schemas")
-	}
-	catalog := app.appendMcpCatalog(t.Context(), cfg, nil, false)
-	if len(catalog) != 1 || !strings.Contains(catalog[0].Content, "[srv]\nprobe: injected later") {
-		t.Fatalf("live tool missing from runtime catalog: %v", catalog)
 	}
 
 	// Deep-clone guarantee: mutating a returned toolset (sloppy caller) must

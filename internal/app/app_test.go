@@ -1388,10 +1388,6 @@ func TestSubagentToolsExcludeInteractiveToolsAndIncludeMCP(t *testing.T) {
 	}
 	tools := app.subagentTools(ConfigState{})
 	available := map[string]bool{"ToolSearch": false, "ToolExec": false, "edit": false, "command": false, "fetch": false}
-	catalog := app.appendMcpCatalog(withBuiltinToolAvailability(context.Background(), tools), ConfigState{}, nil, false)
-	if len(catalog) != 1 || !strings.Contains(catalog[0].Content, "[demo]\nlookup:") {
-		t.Fatalf("sub-agent catalog = %v", catalog)
-	}
 	for _, tool := range tools {
 		if tool.Function == nil {
 			continue

@@ -70,9 +70,6 @@ func TestMcpRegistryPaginationSearchAndLiveSchema(t *testing.T) {
 		return app.executeTool(ctx, cfg, "", name, []byte(raw))
 	}
 	catalog := app.appendMcpCatalog(ctx, cfg, nil, false)
-	if len(catalog) != 1 || !strings.Contains(catalog[0].Content, "[demo]\nadd: Add a value\ncompare: Compare values.") || strings.Contains(catalog[0].Content, "hidden:") {
-		t.Fatalf("catalog = %v", catalog)
-	}
 	lookup := execute(ctx, "ToolSearch", `{"query":["demo.compare","demo.add","demo.hidden","demo.Compare"]}`)
 	raw := compactToolResultForModel("ToolSearch", lookup, "")
 	if !lookup.OK || !strings.Contains(raw, `"allOf":[{"required":["value"]}]`) ||

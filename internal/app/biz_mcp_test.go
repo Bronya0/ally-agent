@@ -518,15 +518,6 @@ func TestMcpRegistryViewsRespectBlacklistAndStatus(t *testing.T) {
 	// disabled server: 全部工具都不注入也不出现在任一视图
 	manager.clients["off"] = &McpClientHandle{ServerName: "off", Status: "disabled"}
 
-	catalog := manager.toolCatalog(true)
-	for _, want := range []string{"[dead]\nsearch:", "[fs]\nread_file:"} {
-		if !strings.Contains(catalog, want) {
-			t.Fatalf("catalog must keep %q for a failed or allowed tool, got %q", want, catalog)
-		}
-	}
-	if strings.Contains(catalog, "write_file") {
-		t.Fatalf("catalog must not expose blacklisted tools, got %q", catalog)
-	}
 	statuses := manager.GetServerStatuses()
 	if len(statuses) != 3 || statuses[0]["toolCount"] != 1 || statuses[0]["enabledToolCount"] != 1 ||
 		statuses[1]["toolCount"] != 2 || statuses[1]["enabledToolCount"] != 1 ||

@@ -350,6 +350,9 @@ func (m *McpManager) toolCatalog(canSearch bool) string {
 	server := ""
 	for _, tool := range m.collectToolsLocked(true) {
 		if tool.ServerName != server {
+			if catalog.Len() > 0 {
+				catalog.WriteString("\n")
+			}
 			server = tool.ServerName
 			fmt.Fprintf(&catalog, "[%s]\n", html.EscapeString(mcpServerID(server)))
 		}
@@ -357,7 +360,10 @@ func (m *McpManager) toolCatalog(canSearch bool) string {
 		if description == "" {
 			description = strings.Join(strings.Fields(tool.Title), " ")
 		}
-		fmt.Fprintf(&catalog, "%s: %s\n", catalogToolName(tool.Name), html.EscapeString(shortMcpDescription(description)))
+		// The bullet is a display-only list marker: it keeps tool rows distinct
+		// from the "[server]" group headers and never enters the
+		// server_id.tool_name ID the model passes to ToolExec.
+		fmt.Fprintf(&catalog, "- %s: %s\n", catalogToolName(tool.Name), html.EscapeString(shortMcpDescription(description)))
 	}
 	m.catalog = mcpCatalogContent(catalog.String(), true)
 	m.catalogExecOnly = mcpCatalogContent(catalog.String(), false)

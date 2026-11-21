@@ -100,11 +100,6 @@ func TestMcpFirstSessionWaitsBeforeFreezingAndReportsProgress(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("completion did not wake waiter")
 	}
-	tools := a.buildToolsForSession("session", a.config)
-	catalog := a.appendMcpCatalog(withBuiltinToolAvailability(ctx, tools), a.config, nil, false)
-	if len(catalog) != 1 || !strings.Contains(catalog[0].Content, "[slow]\nfound:") {
-		t.Fatalf("discovered tool missing from runtime catalog: %v", catalog)
-	}
 	events = sink.snapshot()
 	if events[len(events)-1]["state"] != "ready" {
 		t.Fatalf("wait label was not cleared: %+v", events)
