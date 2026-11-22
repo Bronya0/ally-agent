@@ -42,21 +42,26 @@ tag 使用 `v1.28.0` 这样的纯数字正式版本，不使用 rc/beta/build �
 
 ## 发版命令
 
+下面只改 `TAG`，仓库地址从 origin 推导。
+
 ```bash
+TAG=v2.3.1                 # 待发布的稳定 tag，必须已存在
+REPO=$(git config --get remote.origin.url | sed -E 's#(git@|https://)github.com[:/]##; s#\.git$##')
+
 # 1. 发版代码先落到 mygo 分支
 git push origin mygo
 
 # 2. 打 tag 并推送。tag 只是版本指针，不再触发构建
-git tag -a v2.3.1 -m "Ally v2.3.1"
-git push origin v2.3.1
+git tag -a "$TAG" -m "Ally $TAG"
+git push origin "$TAG"
 
 # 3. 可选：先建草稿写入发行说明，CI 会保留草稿正文
-#    release.json: {"tag_name":"v2.3.1","target_commitish":"mygo","name":"Ally v2.3.1","body":"<发行说明>","draft":true}
+#    release.json 自己准备，字段：tag_name、target_commitish=mygo、name、draft=true、body（JSON 转义后的发行说明）
 curl -X POST \
   -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github+json" \
   -H "Content-Type: application/json" \
-  https://api.github.com/repos/Bronya0/ally-agent/releases \
+  "https://api.github.com/repos/$REPO/releases" \
   -d @release.json
 
 # 4. 触发发布。ref 必须是分支 mygo，否则拿不到编译缓存
@@ -64,12 +69,12 @@ curl -X POST \
   -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github+json" \
   -H "Content-Type: application/json" \
-  https://api.github.com/repos/Bronya0/ally-agent/actions/workflows/build.yml/dispatches \
-  -d '{"ref":"mygo","inputs":{"tag":"v2.3.1"}}'
+  "https://api.github.com/repos/$REPO/actions/workflows/build.yml/dispatches" \
+  -d "{\"ref\":\"mygo\",\"inputs\":{\"tag\":\"$TAG\"}}"
 
-# 5. 看重跑进度；也可以用 gh workflow run build.yml --ref mygo -f tag=v2.3.1
+# 5. 看运行进度；也可以用 gh workflow run build.yml --ref mygo -f tag=$TAG
 curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-  "https://api.github.com/repos/Bronya0/ally-agent/actions/runs?per_page=1"
+  "https://api.github.com/repos/$REPO/actions/runs?per_page=1"
 ```
 
 CI 跑完自行公开 Release，不需要再点发布；失败时 Release 留在草稿，修完重跑第 4 步即可（同一个 tag 可重复 dispatch）。
