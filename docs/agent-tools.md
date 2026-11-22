@@ -56,7 +56,7 @@ func functionTool(name, desc string, params map[string]any) openai.Tool {  // :4
 
 主会话首次请求固定内置工具集合。子代理和定时任务按各自获得的工具集合执行。MCP 启停与刷新保持协议工具声明稳定。管理器分页读取服务端的原始工具定义，连接恢复或收到列表变更通知后按服务器更新。
 
-运行时消息携带按服务器和工具名排序的 MCP 目录。首次发现、目录变更和压缩后追加最新目录，已有历史继续复用。用 `ToolSearch({"query":["github.search_repositories","mysql.list_tables"]})` 一次取回多项完整定义。`query` 的每一项要么是精确的 `server_id.tool_name`，要么是服务器 ID，后者展开该服务器下全部工具；结果按传入顺序返回。没有模糊匹配，不确定名字就看目录。每项独立返回结果或错误，查询全程读取本地注册表。已知参数时可以直接用 `ToolExec({"name":"mysql.list_tables","arguments":{}})`。执行时检查目标是否仍可用，并按当前服务端 InputSchema 校验。工具名区分大小写，服务器 ID 中的点转义为 `%2E`。
+运行时消息携带按服务器和工具名排序的 MCP 目录。「上下文加载 → MCP 工具清单」开启且 ToolExec 可用时，目录在同一会话只发送一次；目录变更不追加，成功压缩移除旧目录后才补新目录。关闭清单不停止连接、不改变工具权限；目录和系统前缀共用自动加载总预算，超限拒发而不静默隐藏工具。用 `ToolSearch({"query":["github.search_repositories","mysql.list_tables"]})` 一次取回多项完整定义。`query` 的每一项要么是精确的 `server_id.tool_name`，要么是服务器 ID，后者展开该服务器下全部工具；结果按传入顺序返回。没有模糊匹配，不确定名字就看目录。每项独立返回结果或错误，查询全程读取本地注册表。已知参数时可以直接用 `ToolExec({"name":"mysql.list_tables","arguments":{}})`。执行时检查目标是否仍可用，并按当前服务端 InputSchema 校验。工具名区分大小写，服务器 ID 中的点转义为 `%2E`。
 
 ## 三、分发层：`executeTool` 是唯一入口（`app.go:2375`）
 

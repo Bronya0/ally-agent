@@ -289,12 +289,19 @@ func (a *App) commitFastCompactHistory(sessionID string, history []openai.ChatCo
 	if !candidate.messageChange {
 		return candidate.result
 	}
+	prefixBefore := a.getContextBreakdown(sessionID, "")
+	before := computeLiveBreakdown(history)
+	beforeTotal := prefixBefore.SystemPrompt + prefixBefore.ToolSchemas + before.Total
+	if before.MCPCatalog == 0 {
+		beforeTotal += prefixBefore.MCPCatalog
+	}
 	a.reasoningStash.retainFastCompactTail(sessionID, history, candidate.history, candidate.cutoff)
 	result := candidate.result
 	// Rewrites must invalidate measurement anchors even when the message
 	// count stays unchanged. Read-cache hits must stop hiding old files too.
 	a.clearContextAnchor(sessionID)
 	a.invalidateSessionReadCache(sessionID)
+	a.refreshSessionPromptPrefix(sessionID)
 	if candidate.tailStart < len(candidate.history) {
 		m := candidate.history[candidate.tailStart]
 		a.mu.Lock()
@@ -310,11 +317,9 @@ func (a *App) commitFastCompactHistory(sessionID string, history []openai.ChatCo
 	}
 	a.mu.Unlock()
 
-	// Refresh comparable totals after the measurement anchor has been dropped.
-	prefix := a.getContextBreakdown(sessionID, "")
-	before := computeLiveBreakdown(history)
-	result["tokensBefore"] = prefix.SystemPrompt + prefix.ToolSchemas + before.Total
-	result["tokensAfter"] = prefix.SystemPrompt + prefix.ToolSchemas + after.Total
+	// Compare the old and rebuilt prefixes using the same text-estimate basis.
+	result["tokensBefore"] = beforeTotal
+	result["tokensAfter"] = a.getContextBreakdown(sessionID, "").Total
 	return result
 }
 

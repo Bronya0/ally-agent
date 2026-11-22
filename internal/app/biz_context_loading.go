@@ -17,6 +17,7 @@ var contextLoadingOptions = []ContextLoadingOption{
 	{"custom_prompt", "自定义提示词", "加载设置中的自定义提示词。"},
 	{"skills", "技能清单", "加载已启用技能的元数据，正文按需加载。"},
 	{"workspace_map", "工作区结构", "加载目录、文件大小及技术栈，不包含文件正文。"},
+	{"mcp_catalog", "MCP 工具清单", "加载 MCP 工具目录，完整定义仍按需查询；不改变连接与工具执行权限。"},
 }
 
 func ContextLoadingOptions() []ContextLoadingOption { return slices.Clone(contextLoadingOptions) }

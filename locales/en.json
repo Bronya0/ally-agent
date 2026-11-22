@@ -1372,7 +1372,7 @@
   "ui_aa1ac895be30": "Timeout should be 1–180 seconds",
   "ui_1031ae01e992": "Timeout seconds",
   "ui_5497f7666dc1": "Timeout and transfer to background",
-  "ui_a470c8b9c684": "Triggered when the specified token number is exceeded and does not change with the model window. Range 1–10,000,000, default 100,000 tokens.",
+  "ui_a470c8b9c684": "Triggered when the specified token number is exceeded and does not change with the model window. Range 1–10,000,000, default 300,000 tokens.",
   "ui_cb7e94a8ea31": "Follow the welcome page image; drag the body to adjust the position, click on the head to touch it, and right-click to open the menu.",
   "ui_217cfe7db1e3": "System default",
   "ui_a8dde53e5749": "Use system proxy",
@@ -1750,7 +1750,7 @@
   "ui_3f7b2c9a10d4": "Context",
   "ui_f5b32cd1b31c": "Context loading",
   "ui_82a7a88893b1": "On by default. Saved when you leave Settings; applies to new sessions only. Turning an automatic source off does not limit reading files on demand.",
-  "ui_22108be21ef4": "The built-in system rules and platform environment always load. MCP tools are managed by the servers and tool switches on the MCP page.",
+  "ui_22108be21ef4": "The built-in system rules and platform environment always load. MCP connections and tool permissions are managed on the MCP page.",
   "ui_a566ee8c0e8c": "Built-in tool schemas",
   "ui_064fc30658fd": "Each tool has its own switch, applied to new sessions; the core file and command tools always stay available.",
   "ui_01450bb11d92": "Built-in tool switches",
@@ -1825,5 +1825,9 @@
   "ui_d3416e367c51": "Service output",
   "ui_d2ff17f44817": "Create task",
   "ui_56b3909705f3": "Task details",
-  "ui_7304e809e016": "%s will be removed from the history. This workspace has no saved conversations."
+  "ui_7304e809e016": "%s will be removed from the history. This workspace has no saved conversations.",
+  "ui_context_mcp_catalog": "MCP tool catalog",
+  "ui_context_mcp_catalog_note": "Load the MCP tool catalog; full definitions are queried on demand. Connections and tool execution permissions are unchanged.",
+  "ui_context_budget_note": "Automatic context is limited to %d KiB in total. Exceeding it reports an error rather than silently dropping project rules or catalog entries.",
+  "ui_context_budget_error": "Automatic context exceeds %d KiB; no model request was sent. Shorten project instructions, custom instructions or catalogs, or disable unnecessary context sources in Settings and start a new session. Rules and catalog entries are not silently dropped."
 }

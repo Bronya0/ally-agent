@@ -375,14 +375,14 @@ func (a *desktop) settingsGeneralContent(c *ui.Context, selected int) {
 func (a *desktop) settingsCompactThreshold(c *ui.Context) {
 	note := fmt.Sprintf(locales.Text("当前 %.0f%%；范围 20%%–95%%，默认 60%%。按模型上下文窗口的占用比例触发。"), a.settings.Threshold*100)
 	if a.settings.ThresholdMode == backend.CompactThresholdModeTokens {
-		note = locales.Text("超过指定 token 数时触发，不随模型窗口变化。范围 1–10,000,000，默认 100,000 tokens。")
+		note = locales.Text("超过指定 token 数时触发，不随模型窗口变化。范围 1–10,000,000，默认 300,000 tokens。")
 	}
 	a.settingsRow(c, "compact-threshold-row", locales.Text("上下文自动压缩阈值"), note, settingsControlWidth, func() ui.Element {
 		return ui.Column(c.Key("compact-threshold-controls")).FillWidth().Gap(gapField).Children(func() {
 			modes := []uikit.RadioOption[string]{{Value: compactThresholdModes[0].Value, Label: locales.Text(compactThresholdModes[0].Label)}, {Value: compactThresholdModes[1].Value, Label: locales.Text(compactThresholdModes[1].Label)}}
 			uikit.Radios(c.Key("compact-threshold-mode"), &a.settings.ThresholdMode, modes, false)
 			if a.settings.ThresholdMode == backend.CompactThresholdModeTokens {
-				uikit.NumberInput(c, "compact-threshold-tokens", locales.Text("压缩阈值（tokens）"), &a.settings.ThresholdTokens, 1, backend.MaxCompactThresholdTokens, 1000, a.secondaryInk()).AlignSelf(ui.End)
+				uikit.NumberInput(c, "compact-threshold-tokens", locales.Text("压缩阈值（tokens）"), &a.settings.ThresholdTokens, 1, backend.MaxCompactThresholdTokens, 50_000, a.secondaryInk()).AlignSelf(ui.End)
 			} else {
 				uikit.Slider(c.Key("compact-threshold"), &a.settings.Threshold, 0.2, 0.95).Label(locales.Text("压缩阈值")).FillWidth()
 			}

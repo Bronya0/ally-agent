@@ -62,18 +62,16 @@ func sharedBatchStrategy() string {
 		"- Group independent calls into one response only when it saves a round trip. `stage` is a non-negative integer, default 0. Same stage runs concurrently. Later stages wait. Example: reads 0, installs 1, service start 2, wait 3, checks 4.\n" +
 		"- A stage waits for all its calls. Any failed call blocks later stages, including a timeout, cancel, sandbox denial, or a command promoted to a background service. Duplicate-call notices do not. Skipped calls return E_STAGE_BLOCKED unless they conflict. Completed work is not rolled back. Check outcomes before retrying: timeouts and disconnects may follow completed side effects. Retry only when safe. Fix edit/create validation errors; do not repeat checks that already passed.\n" +
 		"- Same stage only for independent work: no shared files, build outputs, ports, or databases. Same-path writes in one stage are refused. If a call needs a value from an earlier call, wait and send it next response; a stage does not pass values. MCP calls run in stage 0.\n" +
-		"- Read several files in one `read` call's files array. Read known targets directly. Otherwise `grep` to locate, then read a focused range.\n" +
+		"- Read only the range needed for the current question; use `grep` to locate unknown targets. Batch known relevant reads, and stop when the evidence is sufficient.\n" +
 		"- Combine related shell steps in one `command` call. Keep failures visible. Keep unrelated tasks separate.\n" +
 		"\n"
 }
 
 // sharedCodingGuidelines returns the core coding guidelines shared by the main and sub-agent system prompts.
 func sharedCodingGuidelines() string {
-	return "- Understand the code. Fix the root cause. Update call sites. Keep shared behavior in one place. Avoid unrelated refactors and unnecessary abstractions.\n" +
-		"- Prefer an established pattern when it is clearer or safer. Otherwise keep it simple.\n" +
-		"- Do not weaken tests to make them pass. Update a test when behavior changes on purpose. Add tests for real behavior and risk, not to mirror the implementation.\n" +
-		"- Record recurring pitfalls in workspace `" + projectLessonsFileName + "`.\n" +
-		"- Verify with the smallest check that covers the change: format, lint, build, or test. Prefer project scripts and required checks. Do not repeat a passing check; run again only for new changes, failures, or open concerns. If the user says no tests, skip them and say so.\n" +
+	return "- Fix the root cause within the requested scope, including affected call sites. Keep shared behavior in one place; avoid unrelated refactors and unnecessary abstractions.\n" +
+		"- Do not weaken tests to make them pass.\n" +
+		"- Use the smallest check that covers the change, following applicable project requirements. Do not repeat passing checks without a relevant change or new failure. If the user says no tests, skip them and say so.\n" +
 		"- Keep tests away from production data, user data, and shared services. Temporary files are fine. Touch shared or release resources, or uninstall dependencies, only with explicit authorization.\n"
 }
 
@@ -110,7 +108,7 @@ func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot 
 	b.WriteString(priorityOrderDeclaration())
 	b.WriteString("\n\nYou are Ally, an AI agent.\n\n" +
 		"# Before You Act\n\n" +
-		"- Finish clear implementation and bug-fix requests end to end. The same authorization covers the same action and scope until risk or scope changes.\n" +
+		"- Complete clear implementation and bug-fix requests within the requested scope. The same authorization covers the same action and scope until risk or scope changes.\n" +
 		"- Use `ask` only when a decision is still needed, or when scope or risk changes. Do not re-confirm a clear request. Call `ask` alone in that response.\n" +
 		"- After compaction, continue where you left off. Save critical state when needed.\n\n" +
 		"# Ending a Turn\n\n" +
@@ -135,9 +133,6 @@ func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot 
 	b.WriteString(buildPlatformInfo(gitBashPath))
 	b.WriteString("# Coding Guidelines\n\n" +
 		sharedCodingGuidelines() + "\n" +
-		"## Code Graph Maintenance\n\n" +
-		"- Update `CODEGRAPH.md` only when modules, entry points, or responsibilities change. Do not create it unless asked. It may be stale: check the current files first.\n" +
-		"- Local fixes, parameter changes, and new tests need no graph update. Keep it under 8192 UTF-8 bytes: feature-to-file lookup, short flows, module duties. No exhaustive file lists or implementation detail.\n\n" +
 		"# Safety\n\n" +
 		sharedSafetyBoundaries() +
 		"- If a path is refused as outside the workspace, name it and tell the user they can add it with the session extra-roots control (会话级附加工作区); it applies to this session only. Never copy files in or use shell tricks to bypass the boundary. Never drop the request silently.\n" +
@@ -205,8 +200,8 @@ func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot 
 	if cfg.ContextEnabled("custom_prompt") && customPrompt != "" {
 		var custom strings.Builder
 		custom.WriteString("\n\n# Custom Instructions\n\n<custom-instructions priority=\"lower-than-core\">\nThe following custom instructions are lower priority than the core rules above, including the Skills section. Follow them when they do not conflict with safety, tool contracts, skills activation rules, or the current user request.\n\n")
-		custom.WriteString(customPrompt)
-		custom.WriteString("\n</custom-instructions>\nEnd lower-priority custom instructions.\n")
+		appendAutomaticContextText(&custom, customPrompt)
+		appendAutomaticContextText(&custom, "\n</custom-instructions>\nEnd lower-priority custom instructions.\n")
 		parts = append(parts, systemPromptPart{label: "自定义提示词", content: custom.String()})
 	}
 
@@ -383,10 +378,9 @@ func buildSkillListingMeta(skills []SkillDefinition) string {
 		groups[idx].skills = append(groups[idx].skills, sk)
 	}
 
-	// Deduplicate by name: higher-precedence (lower index) wins. The wall itself
-	// is deliberately not byte-capped: the listing is how the model discovers a
-	// skill at all, so a skill that falls off the end is a skill it cannot use.
-	// Only the per-field text is truncated (skillListingFieldLimit).
+	// Deduplicate by name: higher-precedence (lower index) wins. Stop building
+	// after an over-budget preview; the request guard rejects the whole prefix
+	// instead of silently making omitted skills undiscoverable.
 	seen := make(map[string]bool)
 	var b strings.Builder
 	for _, g := range groups {
@@ -407,9 +401,12 @@ func buildSkillListingMeta(skills []SkillDefinition) string {
 		}
 		b.WriteString(fmt.Sprintf("### %s\n", g.label))
 		for _, sk := range filtered {
-			b.WriteString(fmt.Sprintf("- %s: %s\n", sk.Name, truncateRunes(strings.Join(strings.Fields(sk.Description), " "), skillListingFieldLimit)))
+			if b.Len() > AutomaticContextBudgetBytes {
+				return b.String()
+			}
+			appendAutomaticContextText(&b, fmt.Sprintf("- %s: %s\n", sk.Name, truncateRunes(strings.Join(strings.Fields(sk.Description), " "), skillListingFieldLimit)))
 			if sk.WhenToUse != "" {
-				b.WriteString(fmt.Sprintf("  When to use: %s\n", truncateRunes(strings.Join(strings.Fields(sk.WhenToUse), " "), skillListingFieldLimit)))
+				appendAutomaticContextText(&b, fmt.Sprintf("  When to use: %s\n", truncateRunes(strings.Join(strings.Fields(sk.WhenToUse), " "), skillListingFieldLimit)))
 			}
 		}
 	}

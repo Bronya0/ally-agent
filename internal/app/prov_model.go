@@ -397,6 +397,10 @@ func classifyLLMError(err error) llmErrorKind {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return llmErrorKindUnknown
 	}
+	var loadingErr *automaticContextBudgetError
+	if errors.As(err, &loadingErr) {
+		return llmErrorKindUnknown // Local loading limits cannot be repaired by summarizing history.
+	}
 	var decodeErr *llmStreamEventDecodeError
 	if errors.As(err, &decodeErr) {
 		// 流内事件损坏:产出零输出时上层可重试,但不是 provider 400——
@@ -551,6 +555,10 @@ func shouldRetryLLMError(err error) bool {
 		return false
 	}
 	if err == nil {
+		return false
+	}
+	var loadingErr *automaticContextBudgetError
+	if errors.As(err, &loadingErr) {
 		return false
 	}
 	if errors.Is(err, errEmptyModelResponse) {
@@ -851,6 +859,9 @@ func (a *App) streamModelTextWithUsage(ctx context.Context, cfg ConfigState, mod
 }
 
 func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
+	if err := validateAutomaticContext(ctx, messages); err != nil {
+		return nil, err
+	}
 	result, err := a.streamModelResponseInner(ctx, cfg, model, messages, tools, onEvent)
 	// Empty successful responses are retried by callers before their normal
 	// accounting path. Preserve any provider-reported spend for that attempt.

@@ -36,7 +36,7 @@ func normalizeAutoCompactMethod(value string) string {
 const (
 	CompactThresholdModeRatio     = "ratio"
 	CompactThresholdModeTokens    = "tokens"
-	DefaultCompactThresholdTokens = 100_000
+	DefaultCompactThresholdTokens = 300_000
 	MaxCompactThresholdTokens     = 10_000_000
 )
 
@@ -335,7 +335,7 @@ func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID,
 			result = a.commitFastCompactHistory(sessionID, h, candidate)
 			a.clearCompactFailures(sessionID)
 			compacted := a.loadSessionHistoryCopy(sessionID)
-			messages := cloneChatMessages(history[:leadingSystemCount(history)])
+			messages := a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkillsForConfig(cfg))
 			messages = append(messages, compacted...)
 			result["sessionId"] = sessionID
 			result["reason"] = reason

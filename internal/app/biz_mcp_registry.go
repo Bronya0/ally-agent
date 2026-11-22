@@ -349,6 +349,9 @@ func (m *McpManager) toolCatalog(canSearch bool) string {
 	var catalog strings.Builder
 	server := ""
 	for _, tool := range m.collectToolsLocked(true) {
+		if catalog.Len() > AutomaticContextBudgetBytes {
+			break // Keep an over-budget preview; the request guard refuses it.
+		}
 		if tool.ServerName != server {
 			if catalog.Len() > 0 {
 				catalog.WriteString("\n")
@@ -363,7 +366,7 @@ func (m *McpManager) toolCatalog(canSearch bool) string {
 		// The bullet is a display-only list marker: it keeps tool rows distinct
 		// from the "[server]" group headers and never enters the
 		// server_id.tool_name ID the model passes to ToolExec.
-		fmt.Fprintf(&catalog, "- %s: %s\n", catalogToolName(tool.Name), html.EscapeString(shortMcpDescription(description)))
+		appendAutomaticContextText(&catalog, fmt.Sprintf("- %s: %s\n", catalogToolName(tool.Name), html.EscapeString(shortMcpDescription(description))))
 	}
 	m.catalog = mcpCatalogContent(catalog.String(), true)
 	m.catalogExecOnly = mcpCatalogContent(catalog.String(), false)
@@ -422,7 +425,7 @@ var emptyMcpCatalog = mcpCatalogContent("", false)
 // context breakdown both come through here instead of keeping a second copy of
 // the rule.
 func (a *App) mcpCatalogFor(ctx context.Context, cfg ConfigState) string {
-	if builtinToolDisabled(ctx, cfg, mcpExecName) {
+	if !cfg.ContextEnabled("mcp_catalog") || builtinToolDisabled(ctx, cfg, mcpExecName) {
 		return emptyMcpCatalog
 	}
 	manager := a.activeMcpManager()

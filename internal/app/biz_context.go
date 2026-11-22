@@ -628,12 +628,13 @@ func (a *App) frozenPrefixTokenStats(sessionID string) (frozenPrefixStats, bool)
 // only. A session with nothing to send — no server, ToolExec off — reports 0.
 func (a *App) pendingMcpCatalogTokens(sessionID string) int {
 	// The request path checks availability against the session's frozen settings
-	// snapshot. A direct caller carries only the disabled-tool list, and
+	// snapshot. A direct caller carries the loading and disabled-tool lists, and
 	// builtinToolDisabled takes that path when no snapshot is injected.
 	a.mu.Lock()
-	cfg := ConfigState{DisabledTools: a.config.DisabledTools}
+	cfg := ConfigState{DisabledTools: a.config.DisabledTools, DisabledContext: a.config.DisabledContext}
 	if snapshot, ok := a.sessionContextSettings[sessionID]; ok {
 		cfg.DisabledTools = snapshot.disabledTools
+		cfg.DisabledContext = snapshot.disabledContext
 	}
 	a.mu.Unlock()
 	content := a.mcpCatalogFor(context.Background(), cfg)
@@ -1423,6 +1424,10 @@ func (a *App) refreshSessionPromptPrefix(sessionID string) {
 	delete(a.sessionWorkspaceMaps, sessionID)
 	delete(a.sessionToolsets, sessionID)
 	a.mu.Unlock()
+	// A fresh snapshot must not reuse the workspace map's short-lived live cache.
+	if a.workspaceCaches != nil {
+		a.invalidateWorkspaceMapCache(a.sessionContextConfig(sessionID, ""))
+	}
 }
 
 // systemPromptPartsForBreakdown returns the parts the footer context breakdown

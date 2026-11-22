@@ -158,3 +158,5 @@
 2026-11-18 中危 temp-ws-shared 临时工作区目录随单个标签关闭即删，同沙箱其它会话文件树失效；只在最后一个标签关闭时删。@desktop/header.go
 2026-11-20 高危 deadcode-scan 平台文件共享的符号在 Windows 上误报；删前必跑 GOOS=darwin/linux CGO_ENABLED=0 go build。@scripts
 2026-11-21 中危 tool-err-exit 解码/磁盘失败直接 return 裸 err 或 %w：无错误码、模型拿不到下一步，还泄漏 Go 结构体名与 OS API；走 toolArgDecodeError 与 shared.PathError。@internal
+2026-11-22 高危 compact-prefix 本地裁剪改写历史却保留旧前缀，新规则不生效；刷新须连同工具权限与目录缓存更新。@internal/app
+2026-11-22 中危 auto-context 单项限长不能约束合计；请求入口守总预算，超限拒发，不能静默丢规则或清单。@internal/app

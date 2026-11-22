@@ -15636,11 +15636,11 @@ func (msgs Messages) Ui82a7a88893b1() string {
 	return Catalog.Format(msgs.locale, "ui_82a7a88893b1", nil)
 }
 
-// Ui22108be21ef4 says "The built-in system rules and platform environment always load. MCP tools are managed by the servers and tool switche…"
+// Ui22108be21ef4 says "The built-in system rules and platform environment always load. MCP connections and tool permissions are managed on t…"
 // in the language the app shows.
 func Ui22108be21ef4() string { return In(i18n.Locale()).Ui22108be21ef4() }
 
-// Ui22108be21ef4 says "The built-in system rules and platform environment always load. MCP tools are managed by the servers and tool switche…"
+// Ui22108be21ef4 says "The built-in system rules and platform environment always load. MCP connections and tool permissions are managed on t…"
 // in the language of msgs.
 func (msgs Messages) Ui22108be21ef4() string {
 	return Catalog.Format(msgs.locale, "ui_22108be21ef4", nil)
@@ -16394,4 +16394,44 @@ func Ui7304e809e016() string { return In(i18n.Locale()).Ui7304e809e016() }
 // in the language of msgs.
 func (msgs Messages) Ui7304e809e016() string {
 	return Catalog.Format(msgs.locale, "ui_7304e809e016", nil)
+}
+
+// UiContextMcpCatalog says "MCP tool catalog"
+// in the language the app shows.
+func UiContextMcpCatalog() string { return In(i18n.Locale()).UiContextMcpCatalog() }
+
+// UiContextMcpCatalog says "MCP tool catalog"
+// in the language of msgs.
+func (msgs Messages) UiContextMcpCatalog() string {
+	return Catalog.Format(msgs.locale, "ui_context_mcp_catalog", nil)
+}
+
+// UiContextMcpCatalogNote says "Load the MCP tool catalog; full definitions are queried on demand. Connections and tool execution permissions are unc…"
+// in the language the app shows.
+func UiContextMcpCatalogNote() string { return In(i18n.Locale()).UiContextMcpCatalogNote() }
+
+// UiContextMcpCatalogNote says "Load the MCP tool catalog; full definitions are queried on demand. Connections and tool execution permissions are unc…"
+// in the language of msgs.
+func (msgs Messages) UiContextMcpCatalogNote() string {
+	return Catalog.Format(msgs.locale, "ui_context_mcp_catalog_note", nil)
+}
+
+// UiContextBudgetNote says "Automatic context is limited to %d KiB in total. Exceeding it reports an error rather than silently dropping project …"
+// in the language the app shows.
+func UiContextBudgetNote() string { return In(i18n.Locale()).UiContextBudgetNote() }
+
+// UiContextBudgetNote says "Automatic context is limited to %d KiB in total. Exceeding it reports an error rather than silently dropping project …"
+// in the language of msgs.
+func (msgs Messages) UiContextBudgetNote() string {
+	return Catalog.Format(msgs.locale, "ui_context_budget_note", nil)
+}
+
+// UiContextBudgetError says "Automatic context exceeds %d KiB; no model request was sent. Shorten project instructions, custom instructions or cat…"
+// in the language the app shows.
+func UiContextBudgetError() string { return In(i18n.Locale()).UiContextBudgetError() }
+
+// UiContextBudgetError says "Automatic context exceeds %d KiB; no model request was sent. Shorten project instructions, custom instructions or cat…"
+// in the language of msgs.
+func (msgs Messages) UiContextBudgetError() string {
+	return Catalog.Format(msgs.locale, "ui_context_budget_error", nil)
 }

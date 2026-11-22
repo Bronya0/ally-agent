@@ -71,14 +71,6 @@ func agentsMdTruncatedNotice(path string) string {
 	return fmt.Sprintf("[This file exceeds %d KiB; remaining content was omitted. Use read to retrieve further sections: %s]", maxAgentsMdPromptBytes/1024, filepath.ToSlash(path))
 }
 
-type agentFile struct {
-	path    string
-	content string
-	// header 是子目录级文件的显式分节标题（如 "### AGENTS.md under
-	// directory `frontend/`"），用于隔离各目录的规则；用户级/根级文件为空。
-	header string
-}
-
 // loadAgentsMd loads and merges AGENTS.md files from user-level and workspace-level,
 // user-scope files first, then workspace-scope, each annotated with
 // <!-- From: path -->, deduplicated by absolute path.
@@ -95,7 +87,7 @@ func loadAgentsMd(workspace string, disabled ...[]string) string {
 		return ""
 	}
 
-	var files []agentFile
+	var b strings.Builder
 	seen := map[string]bool{}
 
 	collect := func(path, content, header string) bool {
@@ -111,7 +103,12 @@ func loadAgentsMd(workspace string, disabled ...[]string) string {
 			return false
 		}
 		seen[key] = true
-		files = append(files, agentFile{path: abs, content: content, header: header})
+		if b.Len() > 0 {
+			appendAutomaticContextText(&b, "\n\n")
+		}
+		appendAutomaticContextText(&b, fmt.Sprintf("<!-- From: %s -->\n", key))
+		appendAutomaticContextText(&b, header)
+		appendAutomaticContextText(&b, content)
 		return true
 	}
 
@@ -155,6 +152,9 @@ func loadAgentsMd(workspace string, disabled ...[]string) string {
 	if cfg.ContextEnabled("subdirectory_instructions") {
 		if entries, err := os.ReadDir(workspace); err == nil {
 			for _, entry := range entries {
+				if b.Len() > AutomaticContextBudgetBytes {
+					break // The model request will report the combined budget overflow.
+				}
 				if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 					continue
 				}
@@ -169,19 +169,6 @@ func loadAgentsMd(workspace string, disabled ...[]string) string {
 				collect(path, content, fmt.Sprintf("### AGENTS.md under directory `%s/`\n\n", entry.Name()))
 			}
 		}
-	}
-	if len(files) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-	for i, f := range files {
-		if i > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString(fmt.Sprintf("<!-- From: %s -->\n", filepath.ToSlash(f.path)))
-		b.WriteString(f.header)
-		b.WriteString(f.content)
 	}
 	return b.String()
 }

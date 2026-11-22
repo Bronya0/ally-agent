@@ -320,7 +320,7 @@ func (a *App) workspaceMapContext(cfg ConfigState) string {
 
 // workspaceMapSnapshotNote prefixes every session-frozen workspace map so the
 // model knows the structure is a point-in-time view, not live state.
-const workspaceMapSnapshotNote = "Snapshot frozen at this session's first request; not updated as files change during the session — use command to inspect the current structure.\n\n"
+const workspaceMapSnapshotNote = "Snapshot frozen at this session's first request; not updated as files change during the session.\n\n"
 
 // sessionWorkspaceMap returns the workspace map text for a chat session,
 // frozen at the session's first request. Later runs in the same session reuse

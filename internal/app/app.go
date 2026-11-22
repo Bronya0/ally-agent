@@ -2278,8 +2278,8 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		end = runOutcome{kind: kind, message: err.Error()}
 		return
 	}
-	// This run sends the same immutable tool list on every step. Count it once
-	// from that exact list, including across in-run history compaction.
+	// Keep the tool list stable until successful compaction rebuilds the prefix.
+	// Recount the exact list together with its execution availability then.
 	tools := a.buildToolsForSession(sessionID, cfg)
 	ctx = withBuiltinToolAvailability(ctx, tools)
 	toolEventMeta := func(name string) map[string]any { return a.toolEventMeta(ctx, name) }
@@ -2351,6 +2351,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// rewrite is accepted only when its estimate drops below half;
 			// otherwise it falls back to a full summary before sending the request.
 			if newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonThreshold, req, messages, usedTokens); compactErr == nil {
+				tools = a.buildToolsForSession(sessionID, cfg)
+				ctx = withBuiltinToolAvailability(ctx, tools)
+				toolSchemaTokens = estimateToolSchemaTokens(tools)
 				messages = a.ensureMcpCatalog(ctx, cfg, newMessages)
 				bd = syncBreakdown(messages, true)
 				usedTokens = bd.Total
@@ -2484,6 +2487,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					end = runOutcome{kind: "error", message: fmt.Sprintf("%v；上下文超出模型窗口且压缩失败(%v)，请删除部分历史或改用窗口更大的模型后重试", err, compactErr)}
 					return
 				}
+				tools = a.buildToolsForSession(sessionID, cfg)
+				ctx = withBuiltinToolAvailability(ctx, tools)
+				toolSchemaTokens = estimateToolSchemaTokens(tools)
 				messages = a.ensureMcpCatalog(ctx, cfg, newMessages)
 				requestMessages = messages
 				syncBreakdown(messages, true)

@@ -42,7 +42,8 @@ func (a *desktop) settingsContextLoading(c *ui.Context) {
 				a.settings.ContextLoadingConfirmOpen = true
 			}
 		}
-		fieldNote(c, locales.Text("内置系统规则和平台环境始终加载。MCP 工具由 MCP 页的服务器与工具开关管理。"), a.secondaryInk())
+		fieldNote(c, locales.Text("内置系统规则和平台环境始终加载。MCP 连接与工具权限由 MCP 页管理。"), a.secondaryInk())
+		fieldNote(c, fmt.Sprintf(locales.Text("自动加载合计上限 %d KiB；超限会提示，不静默丢弃项目规则或清单项。"), backend.AutomaticContextBudgetBytes/1024), a.secondaryInk())
 	})
 	a.settingsContextCompact(c)
 	a.settingsCard(c, "settings-context-tools", locales.Text("内置工具 Schema"), locales.Text("每个工具单独控制，新会话生效；核心文件与命令工具始终可用。"), func() {

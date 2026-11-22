@@ -318,10 +318,14 @@ func TestFastCompactMetadataAndProtectedRestart(t *testing.T) {
 	}
 }
 
-func TestAutoCompactRecentPreservesCurrentReportsAndFrozenPrefix(t *testing.T) {
-	t.Parallel()
+func TestAutoCompactRecentRefreshesPrefixAndPreservesCurrentReports(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	a := newIsolatedChatTestApp(t)
 	a.modelHistoryCodec = nil
+	cfg := a.config.Clone()
+	writeTestFile(t, cfg.Workspace, "AGENTS.md", "rule-v1")
 	const sid = "auto"
 	history := fastCompactFixture()
 	previous := history[:20]
@@ -337,14 +341,23 @@ func TestAutoCompactRecentPreservesCurrentReportsAndFrozenPrefix(t *testing.T) {
 			openai.ChatCompletionMessage{Role: "tool", ToolCallID: id, Content: "// subagent | status=completed\n\n" + fmt.Sprintf("essential report %d", i)},
 		)
 	}
-	prefix := []openai.ChatCompletionMessage{{Role: "system", Content: "frozen rules"}, {Role: "system", Content: "frozen map"}}
+	prefix := a.buildSystemContextMessages(sid, cfg, nil)
 	request := append(cloneChatMessages(prefix), history...)
-	compacted, payload, err := a.compactRunHistory(context.Background(), ConfigState{AutoCompactMethod: "recent"}, sid, compactReasonThreshold, ChatRequest{Message: history[20].Content}, request, 50000)
+	writeTestFile(t, cfg.Workspace, "AGENTS.md", "rule-v2")
+	writeTestFile(t, cfg.Workspace, "new-file.txt", "new")
+	compacted, payload, err := a.compactRunHistory(context.Background(), cfg, sid, compactReasonThreshold, ChatRequest{Message: history[20].Content}, request, 50000)
 	if err != nil || payload["tier"] != "fast" {
 		t.Fatalf("local compaction failed: %v %v", payload, err)
 	}
-	if !reflect.DeepEqual(compacted[:2], prefix) || !reflect.DeepEqual(compacted[3:], history[20:]) {
-		t.Fatal("frozen prefix/current task/reports changed")
+	prefixCount := leadingSystemCount(compacted)
+	if prefixCount != len(prefix) || !strings.Contains(compacted[0].Content, "rule-v2") || strings.Contains(compacted[0].Content, "rule-v1") {
+		t.Fatal("local compaction reused stale project instructions")
+	}
+	if !strings.Contains(compacted[1].Content, "new-file.txt") {
+		t.Fatal("local compaction reused the stale workspace map cache")
+	}
+	if !reflect.DeepEqual(compacted[prefixCount+1:], history[20:]) {
+		t.Fatal("current task or unread delegate reports changed")
 	}
 }
 
