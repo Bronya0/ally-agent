@@ -38,8 +38,11 @@ def run(*args, env=None):
 def build_env(goos=None, arch=None, extra_ldflags=''):
     env = os.environ.copy()
     env['CGO_ENABLED'] = '0'
-    env.setdefault('GOMAXPROCS', '2')
-    env.setdefault('GOGC', '30')
+    # Cross-architecture builds are CPU-bound and run one after another. The old
+    # 2-thread / GOGC=30 pair was sized for 7 GB runners and left most of a
+    # modern runner idle; widen it to the cores this machine actually has.
+    env.setdefault('GOMAXPROCS', str(os.cpu_count() or 4))
+    env.setdefault('GOGC', '100')
     if extra_ldflags:
         inherited = env.get('MYGO_LDFLAGS', '').strip()
         env['MYGO_LDFLAGS'] = ' '.join(value for value in (inherited, extra_ldflags) if value)

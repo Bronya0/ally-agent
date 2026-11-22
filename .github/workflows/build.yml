@@ -1,8 +1,11 @@
 name: Build MyGo releases
 
+# Releases are started on purpose: dispatch this workflow on the branch that holds
+# the release code (mygo) and pass the existing stable tag. A tag-push trigger
+# would run on the tag ref, and Actions caches are scoped to the ref — that run
+# can only read the default branch's cache, so every release would be a cold,
+# full rebuild of all six architectures.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
@@ -30,8 +33,6 @@ jobs:
       BUILD_TAG: ${{ inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
       CGO_ENABLED: '0'
-      GOGC: '30'
-      GOMAXPROCS: '2'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -50,7 +51,10 @@ jobs:
         run: |
           bash -n scripts/build-all.sh scripts/build.command
           python3 -m unittest discover -s scripts -p 'test_*.py' -v
-          go test -p 1 ./internal/app -run Update
+          # Same build flags as the release binary: the darwin/arm64 half of the
+          # macOS package then reuses these package archives instead of
+          # recompiling every dependency a second time.
+          go test -trimpath -tags mygo_noinspector -p 1 ./internal/app -run Update
 
       - name: Prepare unpublished release and bundled notes
         run: python3 scripts/release.py prepare "$BUILD_TAG"

@@ -33,7 +33,7 @@ Linux 继续提供版本检测和手动下载，未宣称具备自动替换能�
 
 先构建和上传完整资产，再公开 Release，避免旧客户端从 Atom 发现新版本却下载到 404。
 
-1. 将版本 tag 指向已提交的 MyGo 代码。推送 `v*` tag 会触发构建；也可在 Actions 手动运行并填写已存在的稳定 tag。
+1. 将版本 tag 指向已提交的 MyGo 代码，然后在 Actions 里对 `mygo` 分支手动运行本工作流并填写该 tag（也可用 API：`POST /repos/{owner}/{repo}/actions/workflows/build.yml/dispatches`，`ref` 填 `mygo`，`inputs.tag` 填 tag）。不提供 tag 推送触发：tag 运行的缓存作用域是 tag 本身，只能读到默认分支的缓存，等于每次都把六个架构从零编一遍；在分支上运行才能复用上次的编译产物。
 2. 如需自定义发行说明，提前为同一个 tag 保存 GitHub Release 草稿。CI 保留草稿正文；没有草稿时自动创建并生成说明，正文随各平台包嵌入。
 3. CI 构建七个包，上传到草稿，并校验每个资产的名称、上传状态和大小。任一构建/上传/校验失败，Release 保持草稿，修正后可重跑。
 4. 全部成功才公开为稳定版和 latest。不要提前手动发布空 Release；新流程不再监听 `release:published`。已公开版本拒绝覆盖，修正已发版本应使用更高 tag。
