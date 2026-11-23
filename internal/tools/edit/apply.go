@@ -172,7 +172,7 @@ func exactMatchDiagnosticsAtMatches(content, oldText string, changeIndex, count 
 		MatchCount:          count,
 		Candidates:          candidates,
 		CandidatesTruncated: count > len(candidates),
-		Recovery:            "Use a candidate preview or read only its startLine-endLine range, then retry with more exact surrounding text. Do not choose an occurrence by position alone.",
+		Recovery:            "Use a candidate preview or read the intended target lines, then retry with short exact oldText and a narrower lineRange, or include more surrounding text. Do not guess which occurrence is intended.",
 	}
 	boundMatchErrorDetails(details)
 	return lines, details

@@ -156,10 +156,9 @@ func fuzzyLocateInNormalized(content, normContent, oldText, newText string, chan
 			"change %d normalized match could not be mapped back onto the original bytes; use the attached current snapshot, or re-read if none is attached, and include more surrounding text", changeIndex))
 	}
 
-	// Splice: original bytes before the match, the new text, then the
-	// original bytes after the match (including the end line's newline).
-	assembled := content[origBlockStart:origMatchStart] + newText + content[origMatchEnd:origBlockEnd]
-	return normalizedMatch{start: origBlockStart, end: origBlockEnd, newText: assembled}, true, nil
+	// Return only the matched bytes, so disjoint edits on the same line do not
+	// conflict. The batch assembler preserves all surrounding original bytes.
+	return normalizedMatch{start: origMatchStart, end: origMatchEnd, newText: newText}, true, nil
 }
 
 // lineIndexOfOffset returns the 0-based line number containing byte offset off.

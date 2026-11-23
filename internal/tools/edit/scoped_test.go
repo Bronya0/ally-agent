@@ -61,3 +61,30 @@ func TestScopedSearchOverlapUsesActualReplacements(t *testing.T) {
 		t.Fatalf("overlapping search scopes: result=%+v count=%d err=%v", result, count, err)
 	}
 }
+
+func TestScopedUnicodeMatchesUseActualOverlapBounds(t *testing.T) {
+	content := "keep\n“first” and “second”\nkeep\n"
+	for name, tc := range map[string]struct {
+		secondOld, want, code string
+	}{
+		"disjoint Unicode": {`"second"`, "keep\nFIRST and SECOND\nkeep\n", ""},
+		"disjoint exact":   {"“second”", "keep\nFIRST and SECOND\nkeep\n", ""},
+		"overlapping":      {"first", "", "E_OVERLAPPING_CHANGES"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, count, err := ApplyBatchTextChanges(content, []TextChange{
+				{OldText: `"first"`, NewText: "FIRST", LineRange: &LineRange{Start: 2}},
+				{OldText: tc.secondOld, NewText: "SECOND", LineRange: &LineRange{Start: 2}},
+			})
+			if tc.code != "" {
+				if result != nil || toolerrors.Code(err) != tc.code {
+					t.Fatalf("overlapping match accepted: result=%+v err=%v", result, err)
+				}
+				return
+			}
+			if err != nil || count != 2 || result.Content != tc.want {
+				t.Fatalf("disjoint matches rejected: result=%+v count=%d err=%v", result, count, err)
+			}
+		})
+	}
+}

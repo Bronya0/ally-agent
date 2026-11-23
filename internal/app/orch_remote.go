@@ -565,7 +565,7 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 		if err != nil {
 			return *filteredBatchReadResult([]BatchReadResultItem{{Path: fileRequests[0].Path, Error: err.Error(), ErrorCode: batchReadErrorCode(err)}}), nil
 		}
-		item, itemErr := buildRemoteReadResultItemForAlias(rawFile, fileRequests[0], req.Alias)
+		item, itemErr := buildRemoteReadResultItemForTarget(rawFile, fileRequests[0], rt)
 		if itemErr != nil {
 			return *filteredBatchReadResult([]BatchReadResultItem{{Path: fileRequests[0].Path, Error: itemErr.Error(), ErrorCode: batchReadErrorCode(itemErr)}}), nil
 		}
@@ -635,7 +635,7 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 					results[slot] = BatchReadResultItem{Path: fileRequests[slot].Path, Error: decErr.Error()}
 					continue
 				}
-				item, itemErr := buildRemoteReadResultItemForAlias(rawFile, fileRequests[slot], req.Alias)
+				item, itemErr := buildRemoteReadResultItemForTarget(rawFile, fileRequests[slot], rt)
 				if itemErr != nil {
 					results[slot] = BatchReadResultItem{Path: fileRequests[slot].Path, Error: itemErr.Error()}
 					continue
@@ -700,14 +700,20 @@ func (a *App) remoteReadFileCached(ctx context.Context, req RemoteReadFileReques
 // 结果：转码/版本令牌/行号预览/截断标记全部复用本地 read 的同一套管
 // 线，远程与本地语义不分离。
 func buildRemoteReadResultItem(rawFile remoteRawFile, f BatchReadFileRequest) (BatchReadResultItem, error) {
-	return buildRemoteReadResultItemForAlias(rawFile, f, "")
+	return buildRemoteReadResultItemForTarget(rawFile, f, remoteTarget{})
 }
 
-func remoteEditIdentity(alias, filePath string) string {
-	return strings.TrimSpace(alias) + "\x00" + path.Clean(filePath)
+func remoteEditIdentity(rt remoteTarget, filePath string) string {
+	// Bind the resolved node and endpoint: editing a nickname's connection must
+	// not allow an old read token to select the same-path file on another host.
+	port := rt.Port
+	if port == "" {
+		port = "22"
+	}
+	return strings.Join([]string{strings.TrimSpace(rt.Raw), rt.poolKey, rt.Host, port, path.Clean(filePath)}, "\x00")
 }
 
-func buildRemoteReadResultItemForAlias(rawFile remoteRawFile, f BatchReadFileRequest, alias string) (BatchReadResultItem, error) {
+func buildRemoteReadResultItemForTarget(rawFile remoteRawFile, f BatchReadFileRequest, rt remoteTarget) (BatchReadResultItem, error) {
 	previewStart, rangeErr := resolveReadStartLine(f.StartLine, f.EndLine, f.TailLines)
 	if rangeErr != nil {
 		return BatchReadResultItem{}, rangeErr
@@ -724,7 +730,7 @@ func buildRemoteReadResultItemForAlias(rawFile remoteRawFile, f BatchReadFileReq
 		StartLine: previewStart,
 		EndLine:   f.EndLine,
 	}
-	result, err := buildTextReadResultForIdentity(rawFile.Path, remoteEditIdentity(alias, rawFile.Path), rawFile.Data, rawFile.Size, req)
+	result, err := buildTextReadResultForIdentity(rawFile.Path, remoteEditIdentity(rt, rawFile.Path), rawFile.Data, rawFile.Size, req)
 	if err != nil {
 		return BatchReadResultItem{}, err
 	}
@@ -775,7 +781,7 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("remote file changed: expected version %s, current %s. Re-read before editing", req.Version, beforeVersion))
 	}
 	text, ending, hadBOM := normalizeText(file.Data)
-	result, replacements, err := edit.ApplyBatchTextChangesForFile(text, toEditChanges(req.Changes), remoteEditIdentity(rt.Raw, req.Path))
+	result, replacements, err := edit.ApplyBatchTextChangesForFile(text, toEditChanges(req.Changes), remoteEditIdentity(rt, file.Path))
 	if err != nil {
 		return EditResult{}, err
 	}

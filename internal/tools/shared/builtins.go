@@ -437,7 +437,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read text files and images. Text previews have 1-based line numbers and a version for edit. To replace or delete whole lines, read explicit startLine/endLine bounds (same number for one line); a complete exact range also returns its rangeToken. Copy that token into edit.lineRange. Truncated ranges have no token; use short oldText for visible fragments of long lines. Use tailLines for logs. Missing paths and directories return compact errors with a next step.", map[string]any{
+		functionTool("read", "Read text files and images. Text previews have 1-based line numbers and a version for edit. To replace or delete whole lines, read explicit startLine/endLine bounds (same number for one line); a complete exact range also returns its rangeToken. Copy that token into edit.changes[].lineRange.rangeToken. Truncated ranges have no token; use short oldText for visible fragments of long lines. Use tailLines for logs. Missing paths and directories return compact errors with a next step.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema("File path to read."),
