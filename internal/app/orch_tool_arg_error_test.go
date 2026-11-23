@@ -19,7 +19,7 @@ import (
 // internal struct and carries no code at all.
 func TestEditArgTypeErrorNamesTheFieldNotTheGoStruct(t *testing.T) {
 	t.Parallel()
-	args := []byte(`{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":{"start":"2","startText":"x"},"newText":"y"}]}`)
+	args := []byte(`{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":{"start":"2"},"newText":"y"}]}`)
 
 	err, _ := decodeToolArguments("edit", args, &FileTextEdits{})
 	if code := toolErrorCode(err); code != "E_BAD_ARGS" {

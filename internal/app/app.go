@@ -900,6 +900,7 @@ type ReadFileResult struct {
 	TotalLines            int      `json:"totalLines"`
 	SHA256                string   `json:"sha256"`
 	Version               string   `json:"version"`
+	RangeToken            string   `json:"rangeToken,omitempty"`
 	Size                  int64    `json:"size"`
 	LineEnding            string   `json:"lineEnding"`
 	Truncated             bool     `json:"truncated"`
@@ -1464,6 +1465,7 @@ type BatchReadResultItem struct {
 	EndLine               int             `json:"endLine"`
 	NextStartLine         int             `json:"nextStartLine,omitempty"`
 	Version               string          `json:"version"`
+	RangeToken            string          `json:"rangeToken,omitempty"`
 	Size                  int64           `json:"size"`
 	TotalLines            int             `json:"totalLines"`
 	LineEnding            string          `json:"lineEnding"`
@@ -3968,7 +3970,7 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 		// calls look as if they had exhausted max_tokens.
 		if isIncompleteStreamJSON(err) {
 			if name == "edit" || name == "replace_exact" || name == "replace_lines" || name == "remote_edit" {
-				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Merge small changes into one edit call; split large changes (a whole function or section) into separate edit calls; use lineRange (start/end plus the exact startText/endText of those lines) for large deletions or replacements of a contiguous line range: %w", err), nil
+				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Merge small changes into one edit call; for large whole-line replacements or deletions, read the exact startLine/endLine range and use its rangeToken with lineRange: %w", err), nil
 			}
 			return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted): %w", err), nil
 		}

@@ -105,7 +105,7 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 		original []byte
 		change   TextChange
 	}{
-		{"BOMless UTF16", []byte{'a', 0, '\n', 0, 0x49, 0x6c, 0x57, 0x5b, '\n', 0}, TextChange{LineRange: &edit.LineRange{Start: 1, End: 2, StartText: "a", EndText: "汉字"}, NewText: "汉字"}},
+		{"BOMless UTF16", []byte{'a', 0, '\n', 0, 0x49, 0x6c, 0x57, 0x5b, '\n', 0}, TextChange{LineRange: &edit.LineRange{Start: 1, End: 2}, NewText: "汉字"}},
 		{"UTF8 NUL", []byte("old\n"), TextChange{OldText: "old", NewText: "a\x00b"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,6 +117,10 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 			decoded, err := read.DecodeTextBytes(tc.original)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.change.LineRange != nil {
+				text, _, _ := normalizeText(decoded)
+				tc.change.LineRange.RangeToken = edit.RangeToken(text, path, 1, 2)
 			}
 			req := FileTextEdits{Path: "source.txt", Version: hashVersion(decoded), Changes: []TextChange{tc.change}}
 			raw, err := json.Marshal(req)
@@ -148,6 +152,10 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 			// A cancelled transport ensures even a regression cannot contact a host.
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
+			if req.Changes[0].LineRange != nil {
+				text, _, _ := normalizeText(decoded)
+				req.Changes[0].LineRange.RangeToken = edit.RangeToken(text, remoteEditIdentity("", req.Path), 1, 2)
+			}
 			_, err = a.remoteEditOne(ctx, remoteTarget{Host: "example.invalid"}, req, remoteRawFile{Path: req.Path, Data: decoded, RawData: tc.original, Size: int64(len(tc.original))})
 			if toolErrorCode(err) != "E_EDIT_ENCODING" {
 				t.Fatalf("remote edit bypassed shared encoding gate: %v", err)

@@ -202,7 +202,7 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("edit", "Edit one workspace file using the current version from read, create, or the preceding successful edit; never guess a version or source text. Prefer short exact unique oldText. Use lineRange only for whole-line changes immediately after reading that range, and re-read before using line numbers after any edit. Put all changes to this file in one call. Do not patch or rewrite files through the shell: sed, redirection, and scripting bypass the version check and leave no diff. On source/version/range errors, use an attached complete snapshot or re-read the needed range.", map[string]any{
+		functionTool("edit", "Edit one workspace file using its current version. Prefer short oldText; add lineRange to search only those lines when text repeats. With oldText, only matched text is replaced. Without oldText, lineRange replaces whole lines and requires the rangeToken from reading exactly those startLine/endLine bounds (same number for one line). Empty newText deletes the selected text or lines. Never turn a failed text match into a whole-line write automatically. Put all changes to this file in one call; all ranges refer to the original version. Re-read after edits or conflicts. Use this tool rather than shell rewriting so version checks and diffs are preserved.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the single file to edit in this call."},
@@ -358,7 +358,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"url"},
 		}),
-		functionTool("remote_read", "Read one or more text files by absolute path on a remote SSH server (same contract as read: bounded line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). Prefer targeted startLine/endLine ranges or tailLines for logs; follow the startLine continuation hint when truncated. Pass needed files in the files array to read in parallel.", map[string]any{
+		functionTool("remote_read", "Read one or more text files by absolute path on a remote SSH server (same contract as read: bounded line-numbered preview + version for remote_edit; UTF-16 LE/BE transcoded). Reading explicit startLine/endLine bounds completely also returns a rangeToken for replacing or deleting exactly those whole lines. For one line set both bounds to that line. Follow continuation hints when truncated; truncated ranges have no token. Pass needed files in the files array to read in parallel.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"alias": sshAliasSchema(),
@@ -366,7 +366,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"alias", "files"},
 		}),
-		functionTool("remote_edit", "Edit one file by absolute path on a remote SSH server, using the same changes contract as edit: prefer short exact unique oldText, use lineRange only immediately after reading that range, and put all changes to one file in one call. Send parallel calls for multiple files. Patch remote files with this tool, not through the shell: the shell bypasses the version check. alias selects only the SSH server (e.g. dev); path is absolute (e.g. /srv/app/main.go). Use the current version from remote_read or the preceding successful remote_edit; never guess it. changes must be a JSON array, not a quoted string. Writes preserve the source encoding and recheck its full hash on the host before committing. Each remote file commits independently; re-read on conflicts.", map[string]any{
+		functionTool("remote_edit", "Edit one absolute-path file on the SSH server selected by alias, using the same changes contract as edit. Prefer short oldText; lineRange optionally bounds its search. Without oldText, replace or delete whole lines only with the rangeToken from remote_read of exactly those startLine/endLine bounds. Never fall back to whole-line writes automatically. Use the current version from remote_read or the preceding successful remote_edit; never guess it. Put all changes to one file in one call; all ranges use the original version. changes is a JSON array. Writes preserve encoding and recheck the full hash on the host. Re-read on conflicts and patch through this tool rather than the shell.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"alias":   sshAliasSchema(),
@@ -437,7 +437,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read text files and images (jpg, png, gif, webp; bmp returns a text notice). Text is returned as bounded previews headed by `// read | path=… | version=…` with 1-based line numbers; use the version field for edit. Use tailLines for logs. Missing paths and directories return compact errors with a next step; other failures carry an error field. `truncated-lines` marks incomplete line tails; edit refuses lineRange over them, so use oldText instead.", map[string]any{
+		functionTool("read", "Read text files and images. Text previews have 1-based line numbers and a version for edit. To replace or delete whole lines, read explicit startLine/endLine bounds (same number for one line); a complete exact range also returns its rangeToken. Copy that token into edit.lineRange. Truncated ranges have no token; use short oldText for visible fragments of long lines. Use tailLines for logs. Missing paths and directories return compact errors with a next step.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema("File path to read."),
@@ -531,7 +531,7 @@ func chatToolsUncached() []openai.Tool {
 }
 
 var builtinToolExamples = map[string]string{
-	"edit":               `oldText preferred: {"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}; lineRange only immediately after reading that range: {"path":"app.go","version":"9k3m7x","changes":[{"lineRange":{"start":40,"end":72,"startText":"first line","endText":"last line"},"newText":"replacement block"}]}`,
+	"edit":               `Scoped text replacement: {"path":"app.go","version":"9k3m7x","changes":[{"oldText":"return nil","lineRange":{"start":40,"end":72},"newText":"return err"}]}; whole-line deletion after reading exactly that line: {"path":"app.go","version":"9k3m7x","changes":[{"lineRange":{"start":40,"rangeToken":"COPY_TOKEN_FROM_READ"},"newText":""}]}`,
 	"command":            `{"command":"go test ./...","cwd":".","timeout":120}`,
 	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm run dev","cwd":"frontend"}; restart: {"action":"restart","id":"svc_..."}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
 	"ask":                `{"questions":[{"question":"Which database should we use?","options":[{"label":"SQLite","description":"Simple local storage.","recommended":true},{"label":"PostgreSQL","description":"Production database."}]}]}`,
@@ -607,9 +607,7 @@ func batchReadFilesSchema(pathDescription string) map[string]any {
 	}
 }
 
-// editLineRangeSchema declares the whole-line source. The runtime pins the
-// declared span against startText/endText before writing
-// (tools/edit/apply.go: verifyLineRangeText).
+// Both edit tools share the search bounds and whole-line read-token contract.
 func editLineRangeSchema(sourceTool string) map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -618,13 +616,11 @@ func editLineRangeSchema(sourceTool string) map[string]any {
 				"description": fmt.Sprintf("First line number from `%s`'s numbered output.", sourceTool)},
 			"end": map[string]any{"type": "integer", "minimum": 1,
 				"description": "Last line number, inclusive; omit for a single-line range."},
-			"startText": map[string]any{"type": "string",
-				"description": "Content of the start line, copied exactly and without the displayed line number prefix."},
-			"endText": map[string]any{"type": "string",
-				"description": "Content of the end line; required when end differs from start, and meaningless for a single line."},
+			"rangeToken": map[string]any{"type": "string",
+				"description": fmt.Sprintf("Required only when oldText is absent: copy the rangeToken returned by `%s` of exactly these startLine/endLine bounds. It binds this file, version and complete range. Do not guess it; a missing or mismatched token aborts the call.", sourceTool)},
 		},
-		"required":    []string{"start", "startText"},
-		"description": fmt.Sprintf("Inclusive whole-line span from `%s`'s numbered output. Use only for whole-line replacements or deletions, immediately after reading that range and before any edit to this file. Both ends are verified against the current snapshot; a mismatch aborts the whole call. Mutually exclusive with oldText. All ranges in this call use the original `%s` version, so never adjust numbers for earlier changes in the same call.", sourceTool, sourceTool),
+		"required":    []string{"start"},
+		"description": fmt.Sprintf("Inclusive 1-based bounds from `%s`. With oldText: search only these lines and replace only matching text; no rangeToken needed. Without oldText: replace whole lines, requiring the token from an exact complete read of these bounds. All ranges refer to the original version; do not adjust for earlier changes in this call.", sourceTool),
 	}
 }
 
@@ -676,7 +672,7 @@ func editChangesSchema(sourceTool string) map[string]any {
 		"type":        "array",
 		"minItems":    1,
 		"maxItems":    50,
-		"description": fmt.Sprintf("All changes for this one file (max 50); put all desired changes to the file in this call. Every change names exactly one source plus `newText` and matches against the same original `%s` snapshot; overlapping source regions fail the whole call.", sourceTool),
+		"description": fmt.Sprintf("All changes for this one file (max 50). Each supplies oldText and/or lineRange plus newText; matching uses the same original `%s` snapshot. Overlapping actual replacements fail the whole call; search ranges may overlap.", sourceTool),
 		"items":       editChangeSchema(sourceTool),
 	}
 }
@@ -687,11 +683,11 @@ func editChangeSchema(sourceTool string) map[string]any {
 		"properties": map[string]any{
 			"oldText": map[string]any{
 				"type":        "string",
-				"description": fmt.Sprintf("Short, exact, unique source snippet copied from complete current `%s` text, without displayed line number prefixes; preferred over `lineRange`. Never use compressed, truncated, or omitted text as `oldText`: re-read the target range first. Mutually exclusive with lineRange; provide either oldText or lineRange.", sourceTool),
+				"description": fmt.Sprintf("Short source snippet copied from current `%s` text, without displayed line prefixes. When present, only this text is replaced. Add lineRange to narrow the search if it repeats; omit lineRange to search the whole file. Without oldText, a token-verified lineRange replaces whole lines. Never copy omitted or truncated text.", sourceTool),
 			},
 			"replaceAll": map[string]any{
 				"type":        "boolean",
-				"description": "Optional; defaults to false. Only meaningful with `oldText`, where true replaces every non-overlapping exact occurrence in the original snapshot; do not use with `lineRange`.",
+				"description": "Defaults to false: oldText must match uniquely within the search scope. With oldText, true replaces every non-overlapping exact match within lineRange, or the whole file if no range is given. Invalid without oldText.",
 			},
 			"lineRange": editLineRangeSchema(sourceTool),
 			"newText": map[string]any{

@@ -26,6 +26,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"ally-dev/internal/tools/edit"
 	"ally-dev/internal/tools/grep"
 	"ally-dev/internal/tools/toolcall"
 	openai "github.com/sashabaranov/go-openai"
@@ -3197,7 +3198,7 @@ func TestExecuteToolAppliesOriginalSnapshotLineRangesWithoutOffsetDrift(t *testi
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"lineRange":{"start":2,"startText":"two"},"newText":"TWO\ninserted"},{"lineRange":{"start":5,"startText":"five"},"newText":"FIVE"}]}`, hashVersion(original))
+	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"lineRange":{"start":2,"rangeToken":%q},"newText":"TWO\ninserted"},{"lineRange":{"start":5,"rangeToken":%q},"newText":"FIVE"}]}`, hashVersion(original), edit.RangeToken(string(original), filepath.Join(dir, "sample.txt"), 2, 2), edit.RangeToken(string(original), filepath.Join(dir, "sample.txt"), 5, 5))
 	result := newIsolatedTestApp(t).executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
 	if !result.OK {
 		t.Fatalf("line-range edit failed: %#v", result)
@@ -3212,13 +3213,12 @@ func TestExecuteToolAppliesOriginalSnapshotLineRangesWithoutOffsetDrift(t *testi
 	}
 }
 
-// A change naming two sources, or pairing replaceAll with lineRange, is refused
-// before anything is written: the runtime must never pick a source silently.
-func TestExecuteToolRejectsChangeWithTwoSourcesOrReplaceAllBesideLineRange(t *testing.T) {
+// Missing proof and replaceAll without source text cannot trigger line writes.
+func TestExecuteToolRejectsUnverifiedLineWrites(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"two sources":                 `{"oldText":"alpha","lineRange":{"start":2,"startText":"beta"},"newText":"ALPHA"}`,
-		"replaceAll beside lineRange": `{"lineRange":{"start":2,"startText":"beta"},"newText":"ALPHA","replaceAll":true}`,
+		"missing token":               `{"lineRange":{"start":2},"newText":""}`,
+		"replaceAll beside lineRange": `{"lineRange":{"start":2},"newText":"ALPHA","replaceAll":true}`,
 	}
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -3233,8 +3233,8 @@ func TestExecuteToolRejectsChangeWithTwoSourcesOrReplaceAllBesideLineRange(t *te
 				t.Fatalf("the call must be refused, got %#v", result)
 			}
 			want := "replaceAll"
-			if name == "two sources" {
-				want = "exactly one source"
+			if name == "missing token" {
+				want = "rangeToken"
 			}
 			if !strings.Contains(result.Error, want) {
 				t.Fatalf("rejection %q must mention %q", result.Error, want)

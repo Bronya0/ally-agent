@@ -172,14 +172,11 @@ func TestIndentationInsensitiveMatchHandlesMillionLineFile(t *testing.T) {
 	}
 }
 
-// rangeAt builds a verified whole-line source for a test fixture. A single-line
-// span omits end and endText by construction.
+// rangeAt supplies a token for a test fixture's exact source range.
 func rangeAt(content string, start, end int) *LineRange {
-	lines := strings.Split(content, "\n")
-	r := &LineRange{Start: start, StartText: lines[start-1]}
+	r := &LineRange{Start: start, RangeToken: RangeToken(content, "", start, end)}
 	if end != start {
 		r.End = end
-		r.EndText = lines[end-1]
 	}
 	return r
 }
@@ -230,13 +227,9 @@ func TestApplyBatchTextChangesRejectsMissingOrOverlappingSources(t *testing.T) {
 	}
 }
 
-// A change must name exactly one source, and replaceAll is refused beside
-// lineRange because it only modifies how oldText is matched. The runtime never
-// picks a source silently: a silent pick is what lets a wrong-source edit land.
-func TestApplyBatchTextChangesRejectsBothSourcesAndReplaceAllBesideLineRange(t *testing.T) {
+func TestApplyBatchTextChangesRejectsReplaceAllWithoutOldText(t *testing.T) {
 	const content = "one\ntwo\nthree\nfour\n"
 	cases := map[string]TextChange{
-		"both sources":                {OldText: "two", LineRange: rangeAt(content, 2, 2), NewText: "TWO"},
 		"replaceAll beside lineRange": {LineRange: rangeAt(content, 2, 2), NewText: "TWO", ReplaceAll: true},
 	}
 	for name, change := range cases {
@@ -249,9 +242,6 @@ func TestApplyBatchTextChangesRejectsBothSourcesAndReplaceAllBesideLineRange(t *
 				t.Fatalf("error code = %q, want E_BAD_EDIT; err=%v", code, err)
 			}
 			want := "replaceAll"
-			if name == "both sources" {
-				want = "exactly one source"
-			}
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("error %q must mention %q", err.Error(), want)
 			}
@@ -259,12 +249,10 @@ func TestApplyBatchTextChangesRejectsBothSourcesAndReplaceAllBesideLineRange(t *
 	}
 }
 
-// A declared span must be ordered and 1-based. An empty startText/endText is
-// not a missing field: it pins a blank line, so it only matches an empty one.
-func TestLineRangeRejectsBadBoundsAndPinsBlankLines(t *testing.T) {
+func TestLineRangeRejectsBadBoundsAndEditsBlankLines(t *testing.T) {
 	for name, change := range map[string]TextChange{
-		"start past end": {LineRange: &LineRange{Start: 3, End: 2, StartText: "three", EndText: "two"}},
-		"zero start":     {LineRange: &LineRange{Start: 0, StartText: "x"}},
+		"start past end": {LineRange: &LineRange{Start: 3, End: 2}},
+		"zero start":     {LineRange: &LineRange{Start: 0}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, err := ApplyBatchTextChanges("one\ntwo\nthree\nfour\n", []TextChange{change})
@@ -273,21 +261,8 @@ func TestLineRangeRejectsBadBoundsAndPinsBlankLines(t *testing.T) {
 			}
 		})
 	}
-	for name, change := range map[string]TextChange{
-		"empty startText on a used line": {LineRange: &LineRange{Start: 2}},
-		"empty endText on a used line":   {LineRange: &LineRange{Start: 2, End: 3, StartText: "two"}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, _, err := ApplyBatchTextChanges("one\ntwo\nthree\nfour\n", []TextChange{change})
-			if code := toolerrors.Code(err); code != "E_LINE_RANGE" {
-				t.Fatalf("error code = %q, want E_LINE_RANGE; err=%v", code, err)
-			}
-		})
-	}
-	// An empty startText is how a blank line is pinned, and the tail of a
-	// single-line range is ignored rather than rejected.
 	result, _, err := ApplyBatchTextChanges("one\n\nthree\n", []TextChange{
-		{LineRange: &LineRange{Start: 2, StartText: ""}, NewText: "two"},
+		{LineRange: rangeAt("one\n\nthree\n", 2, 2), NewText: "two"},
 	})
 	if err != nil {
 		t.Fatalf("blank-line range must apply: %v", err)
@@ -295,33 +270,30 @@ func TestLineRangeRejectsBadBoundsAndPinsBlankLines(t *testing.T) {
 	if result.Content != "one\ntwo\nthree\n" {
 		t.Fatalf("blank line not replaced: %q", result.Content)
 	}
-	if _, _, err := ApplyBatchTextChanges("one\ntwo\n", []TextChange{
-		{LineRange: &LineRange{Start: 2, StartText: "two", EndText: "ignored"}, NewText: "TWO"},
-	}); err != nil {
-		t.Fatalf("endText on a single-line range must be ignored: %v", err)
-	}
 }
 
-// The declared ends are checked against the snapshot before anything is written:
-// a stale or miscounted line number must not replace the wrong region.
-func TestLineRangeVerifiesBothEnds(t *testing.T) {
+func TestLineRangeTokenBindsEntireSnapshotIdentityAndBounds(t *testing.T) {
 	const content = "one\ntwo\nthree\nfour\n"
-	for name, change := range map[string]TextChange{
-		"start mismatch": {LineRange: &LineRange{Start: 2, End: 3, StartText: "ONE", EndText: "three"}, NewText: "x"},
-		"end mismatch":   {LineRange: &LineRange{Start: 2, End: 3, StartText: "two", EndText: "THREE"}, NewText: "x"},
+	token := RangeToken(content, "/file.txt", 1, 4)
+	for name, tc := range map[string]struct {
+		content, identity string
+		start, end        int
+		token             string
+	}{
+		"missing":        {content, "/file.txt", 1, 4, ""},
+		"different file": {content, "/other.txt", 1, 4, token},
+		"changed middle": {"one\nchanged\nthree\nfour\n", "/file.txt", 1, 4, token},
+		"changed bounds": {content, "/file.txt", 2, 4, token},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, _, err := ApplyBatchTextChanges(content, []TextChange{change})
+			_, _, err := ApplyBatchTextChangesForFile(tc.content, []TextChange{{LineRange: &LineRange{Start: tc.start, End: tc.end, RangeToken: tc.token}, NewText: ""}}, tc.identity)
 			if code := toolerrors.Code(err); code != "E_LINE_RANGE" {
 				t.Fatalf("error code = %q, want E_LINE_RANGE; err=%v", code, err)
-			}
-			if !strings.Contains(err.Error(), "at line ") {
-				t.Fatalf("error %q must name the line", err)
 			}
 		})
 	}
 	if _, _, err := ApplyBatchTextChanges(content, []TextChange{
-		{LineRange: &LineRange{Start: 2, End: 3, StartText: "two", EndText: "three"}, NewText: "TWO"},
+		{LineRange: rangeAt(content, 2, 3), NewText: "TWO"},
 	}); err != nil {
 		t.Fatalf("a verified range must apply: %v", err)
 	}
@@ -331,7 +303,9 @@ func TestSingleLineRangeMatchesExplicitRange(t *testing.T) {
 	for _, content := range []string{"one\ntwo\nthree\n", "one\ntwo"} {
 		for _, replacement := range []string{"TWO", "", "TWO\ninserted"} {
 			single := []TextChange{{LineRange: rangeAt(content, 2, 2), NewText: replacement}}
-			explicit := []TextChange{{LineRange: &LineRange{Start: 2, End: 2, StartText: "two"}, NewText: replacement}}
+			explicitRange := rangeAt(content, 2, 2)
+			explicitRange.End = 2
+			explicit := []TextChange{{LineRange: explicitRange, NewText: replacement}}
 			got, count, err := ApplyBatchTextChanges(content, single)
 			want, wantCount, wantErr := ApplyBatchTextChanges(content, explicit)
 			if err != nil || wantErr != nil || got.Content != want.Content || count != wantCount {
@@ -339,7 +313,7 @@ func TestSingleLineRangeMatchesExplicitRange(t *testing.T) {
 			}
 		}
 	}
-	_, _, err := ApplyBatchTextChanges("one\ntwo\n", []TextChange{{LineRange: &LineRange{Start: 3, StartText: "three"}, NewText: "THREE"}})
+	_, _, err := ApplyBatchTextChanges("one\ntwo\n", []TextChange{{LineRange: &LineRange{Start: 3}, NewText: "THREE"}})
 	if toolerrors.Code(err) != "E_RANGE_OOB" {
 		t.Fatalf("single line past EOF must fail: %v", err)
 	}
@@ -390,7 +364,7 @@ func BenchmarkApplyBatchTextChangesLargeFileLineRanges(b *testing.B) {
 	changes := make([]TextChange, 0, 50)
 	for i := 0; i < 50; i++ {
 		start := 100*i + 10
-		changes = append(changes, TextChange{LineRange: &LineRange{Start: start, StartText: fmt.Sprintf("line %d", start)}, NewText: fmt.Sprintf("// patch %d", i+1)})
+		changes = append(changes, TextChange{LineRange: rangeAt(content, start, start), NewText: fmt.Sprintf("// patch %d", i+1)})
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -460,7 +434,7 @@ func TestApplyBatchTextChangesRefusesLineRangeOverATruncatedLine(t *testing.T) {
 	long := strings.Repeat("x", toolerrors.MaxReadLineChars+50)
 	content := "header\n" + long + "\ntail\n"
 
-	if _, _, err := ApplyBatchTextChanges(content, []TextChange{{LineRange: &LineRange{Start: 2, StartText: long}, NewText: "short"}}); err == nil {
+	if _, _, err := ApplyBatchTextChanges(content, []TextChange{{LineRange: rangeAt(content, 2, 2), NewText: "short"}}); err == nil {
 		t.Fatal("a whole-line replacement over a line longer than the read preview must be refused")
 	} else if code := toolerrors.Code(err); code != "E_BAD_ARGS" {
 		t.Fatalf("error code = %q, want E_BAD_ARGS (%v)", code, err)
@@ -469,8 +443,7 @@ func TestApplyBatchTextChangesRefusesLineRangeOverATruncatedLine(t *testing.T) {
 	// What the model actually has is read's cut-off preview (MaxReadLineChars
 	// runes ending in "..."), which can never equal the real line. The refusal
 	// must name the reason and the way out instead of a mismatch it cannot fix.
-	preview := long[:toolerrors.MaxReadLineChars-3] + "..."
-	if _, _, err := ApplyBatchTextChanges(content, []TextChange{{LineRange: &LineRange{Start: 2, StartText: preview}, NewText: "short"}}); err == nil {
+	if _, _, err := ApplyBatchTextChanges(content, []TextChange{{LineRange: &LineRange{Start: 2, RangeToken: "guessed"}, NewText: "short"}}); err == nil {
 		t.Fatal("a range pinned with the truncated preview must be refused")
 	} else if code := toolerrors.Code(err); code != "E_BAD_ARGS" {
 		t.Fatalf("error code = %q, want E_BAD_ARGS (%v)", code, err)
@@ -479,14 +452,14 @@ func TestApplyBatchTextChangesRefusesLineRangeOverATruncatedLine(t *testing.T) {
 	}
 
 	// A range outside the file is refused before anything is replaced.
-	if _, _, err := ApplyBatchTextChanges(content, []TextChange{{LineRange: &LineRange{Start: 9, StartText: "x"}, NewText: "x"}}); err == nil {
+	if _, _, err := ApplyBatchTextChanges(content, []TextChange{{LineRange: &LineRange{Start: 9}, NewText: "x"}}); err == nil {
 		t.Fatal("a lineRange past the end of the file must be refused")
 	} else if code := toolerrors.Code(err); code != "E_RANGE_OOB" {
 		t.Fatalf("error code = %q, want E_RANGE_OOB (%v)", code, err)
 	}
 
 	// Ordinary short lines still work, including a range that spans several of them.
-	result, _, err := ApplyBatchTextChanges(content, []TextChange{{LineRange: &LineRange{Start: 1, StartText: "header"}, NewText: "head"}})
+	result, _, err := ApplyBatchTextChanges(content, []TextChange{{LineRange: rangeAt(content, 1, 1), NewText: "head"}})
 	if err != nil || !strings.HasPrefix(result.Content, "head\n") {
 		t.Fatalf("a short line must still be replaceable by line range: %v", err)
 	}

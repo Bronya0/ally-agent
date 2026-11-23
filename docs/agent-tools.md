@@ -50,7 +50,7 @@ func functionTool(name, desc string, params map[string]any) openai.Tool {  // :4
 几个值得学的做法：
 
 1. **示例写进描述**（`builtinToolExamples`，`builtins.go`）。参数描述说一百句，不如给一条能直接抄的样例 JSON——提升工具调用成功率最便宜的手段。
-2. **平坦 Schema 与网关最大兼容**：内置工具 Schema 全面使用平坦的 `type: "object"`，彻底避免顶层与嵌套的 `oneOf` / `anyOf` / `allOf` / `not` 等复合关键字，防止中转网关（OneAPI、NewAPI、Cloudflare AI Gateway）或不同模型端点 400 拒绝。参数互斥（如 `body` 与 `json`、`oldText` 与 `lineRange`、`instruction` 与 `command`）直接在参数 description 中给出清晰说明，并由执行层业务逻辑统一校验。
+2. **平坦 Schema 与网关最大兼容**：内置工具 Schema 全面使用平坦的 `type: "object"`，彻底避免顶层与嵌套的 `oneOf` / `anyOf` / `allOf` / `not` 等复合关键字，防止中转网关（OneAPI、NewAPI、Cloudflare AI Gateway）或不同模型端点 400 拒绝。参数互斥（如 `body` 与 `json`、`instruction` 与 `command`）直接在参数 description 中说明，并由执行层统一校验。`edit` 与 `remote_edit` 的 `oldText` 可配合 `lineRange` 限制搜索，只有实际匹配片段会替换；省略 `oldText` 时按完整行替换或删除，必须携带 `read` / `remote_read` 对相同 `startLine/endLine` 完整精确读取返回的 `rangeToken`。默认宽范围预览、截断读取不返回凭证，凭证绑定文件、远端别名、原始快照与行范围；任何编辑后需重新读取以获得新凭证。
 3. **入参门禁放宽与按需取用**：针对多 action 工具（如 `service`、`scheduled_task`、`ssh_cluster`），顶层仅强制要求基础 action 字段（`required: ["action"]`）。调用时若携带了当前 action 不需要但在 properties 中有声明的冗余参数，后端自动忽略而不拒绝；仅当当前 action 真正需要的必选参数缺失或互斥参数冲突时，才在执行层返回针对性报错。
 4. **strict schema 递归规范化**（`enforceStrictSchema` → `normalizeSchemaNode`）。遍历 `properties` / `items` 等，给每个 `type: object` 补 `additionalProperties: false` 与 `properties: {}`，确保在 OpenAI strict 模式下行为确定。
 

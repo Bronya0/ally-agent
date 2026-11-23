@@ -104,7 +104,7 @@ func TestLocalEditBatchDistinctFailuresDoNotShareDiagnostics(t *testing.T) {
 			a := newIsolatedToolTestApp(t)
 			files := []FileTextEdits{
 				{Path: "multi.txt", Version: hashVersion([]byte("old\nold\n")), Changes: []TextChange{{OldText: "old", NewText: "new"}}},
-				{Path: "range.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{LineRange: &edit.LineRange{Start: 9, StartText: "old"}, NewText: "new"}}},
+				{Path: "range.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{LineRange: &edit.LineRange{Start: 9}, NewText: "new"}}},
 				{Path: "stale.txt", Version: hashVersion([]byte("stale")), Changes: []TextChange{{OldText: "old", NewText: "new"}}},
 			}
 			originals := []string{"old\nold\n", "old\n", "old\n"}
