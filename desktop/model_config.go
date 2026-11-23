@@ -85,11 +85,25 @@ func modelOption(m backend.ModelConfig) string {
 	}
 	return label
 }
+
+// modelTitle is the name a model card shows and a copy is made from: the label
+// the user chose for it, else the model id it talks to.
+func modelTitle(m backend.ModelConfig) string {
+	if m.DisplayName != "" {
+		return m.DisplayName
+	}
+	if m.Model != "" {
+		return m.Model
+	}
+	return locales.Text("未选择模型")
+}
 func (a *desktop) editModel(index int) {
 	if a.modelSaving {
 		return
 	}
 	a.modelEdit = index
+	a.modelForm.CloneMode = false
+	a.modelForm.CloneSource = ""
 	a.modelForm.KeyEpoch++
 	a.invalidateModelFetch()
 	a.modelForm.AdvancedOpen = false
@@ -142,6 +156,39 @@ func (a *desktop) editModel(index int) {
 	if a.modelDraft.AuthType == "chatgpt_oauth" {
 		a.loadOAuthAccounts()
 	}
+}
+
+// cloneModel opens the add dialog filled in from an existing entry but without
+// its credentials, the same way the SSH page copies a server: the saved copy is
+// a new model configuration, so the editor keeps neither baseline nor previous
+// identity and saving appends instead of overwriting the source.
+func (a *desktop) cloneModel(index int) {
+	if a.modelSaving {
+		return
+	}
+	a.editModel(index)
+	if index < 0 || index >= len(a.config.Models) {
+		return
+	}
+	a.modelEdit = -1
+	a.modelPrevious = nil
+	a.modelBaseline = nil
+	a.modelDraft.APIKey = ""
+	a.modelDraft.APIKeys = nil
+	a.modelKeys = []string{""}
+	a.modelForm.KeyEpoch++
+	a.modelForm.CloneMode = true
+	a.modelForm.CloneSource = modelTitle(a.config.Models[index])
+	a.modelForm.Open = true
+}
+
+// closeChatModelEditor closes the editor and drops the copy hint, so reopening
+// it for 添加 or 编辑 cannot inherit a stale source.
+func (a *desktop) closeChatModelEditor() {
+	a.modelForm.Open = false
+	a.modelForm.CloneMode = false
+	a.modelForm.CloneSource = ""
+	a.cancelOAuthWhenLeaving()
 }
 func (a *desktop) updateModelLabels(before *backend.ModelIdentity, after backend.ModelConfig) {
 	if before == nil {
@@ -312,8 +359,7 @@ func (a *desktop) saveModelDraft() {
 					t.Model = modelOption(m)
 				}
 			}
-			a.modelForm.Open = false
-			a.cancelOAuthWhenLeaving()
+			a.closeChatModelEditor()
 			a.notifySuccess(locales.Text("模型已保存"))
 		})
 	}()

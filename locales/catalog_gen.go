@@ -2266,6 +2266,16 @@ func (msgs Messages) Ui9cac78290c7c() string {
 	return Catalog.Format(msgs.locale, "ui_9cac78290c7c", nil)
 }
 
+// UiA5215e953bb3 says "Copied from \"%[1]s\"; enter the API Key again, and the Model ID must differ from the source."
+// in the language the app shows.
+func UiA5215e953bb3() string { return In(i18n.Locale()).UiA5215e953bb3() }
+
+// UiA5215e953bb3 says "Copied from \"%[1]s\"; enter the API Key again, and the Model ID must differ from the source."
+// in the language of msgs.
+func (msgs Messages) UiA5215e953bb3() string {
+	return Catalog.Format(msgs.locale, "ui_a5215e953bb3", nil)
+}
+
 // Ui19a8a28fc696 says "Install from the plug-in source code directory anywhere on the machine"
 // in the language the app shows.
 func Ui19a8a28fc696() string { return In(i18n.Locale()).Ui19a8a28fc696() }
@@ -5264,6 +5274,16 @@ func Ui8a3b0be2f535() string { return In(i18n.Locale()).Ui8a3b0be2f535() }
 // in the language of msgs.
 func (msgs Messages) Ui8a3b0be2f535() string {
 	return Catalog.Format(msgs.locale, "ui_8a3b0be2f535", nil)
+}
+
+// Ui4429a06d3cb4 says "Copy model"
+// in the language the app shows.
+func Ui4429a06d3cb4() string { return In(i18n.Locale()).Ui4429a06d3cb4() }
+
+// Ui4429a06d3cb4 says "Copy model"
+// in the language of msgs.
+func (msgs Messages) Ui4429a06d3cb4() string {
+	return Catalog.Format(msgs.locale, "ui_4429a06d3cb4", nil)
 }
 
 // Ui0b28fc7ccbd4 says "Copy files"

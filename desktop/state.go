@@ -495,9 +495,13 @@ func normalizeSettingsConfig(cfg backend.ConfigState) backend.ConfigState {
 
 // modelForm is the chat-model editor dialog state.
 type modelForm struct {
-	KeyEpoch       int
-	AdvancedOpen   bool
-	Open           bool
+	KeyEpoch     int
+	AdvancedOpen bool
+	Open         bool
+	// CloneMode marks a copy of an existing entry: the dialog says so and the
+	// save creates a new model instead of overwriting the source.
+	CloneMode      bool
+	CloneSource    string
 	Index          int
 	MaxTokensInput string
 	ContextInput   string

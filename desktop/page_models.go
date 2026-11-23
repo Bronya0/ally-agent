@@ -224,14 +224,7 @@ func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig,
 		}
 		rowCard(c, "chat-model-"+modelOption(m), func() {
 			ui.Row(c).Gap(gapInline).AlignItems(ui.Center).Wrap().Children(func() {
-				title := m.DisplayName
-				if title == "" {
-					title = m.Model
-				}
-				if title == "" {
-					title = locales.Text("未选择模型")
-				}
-				ui.Text(c, title).FontSize(fsBody).Bold()
+				ui.Text(c, modelTitle(m)).FontSize(fsBody).Bold()
 				neutralChip(c, apiFormatLabel(m.APIFormat))
 				if m.DisplayName != "" && m.DisplayName != m.Model {
 					neutralChip(c, m.Model)
@@ -242,6 +235,7 @@ func (a *desktop) chatModelsSection(c *ui.Context, models []backend.ModelConfig,
 					id := modelIdentity(m)
 					cardFlatBusy(c, locales.Text("余额"), a.modelForm.EntryBalanceBusy[id]).Disabled(a.modelSaving).OnClick(func() { a.queryModelBalance(m) })
 				}
+				cardFlat(c, locales.Text("复制")).Disabled(a.modelSaving).OnClick(func() { a.cloneModel(index) })
 				cardFlat(c, locales.Text("编辑")).Disabled(a.modelSaving).OnClick(func() {
 					for i, item := range a.config.Models {
 						if sameModelIdentity(modelIdentity(item), modelIdentity(m)) {
@@ -366,12 +360,18 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 	if a.modelEdit < 0 {
 		title = locales.Text("添加模型")
 	}
+	if a.modelForm.CloneMode {
+		title = locales.Text("复制模型")
+	}
 	formDialog(c, &a.modelForm.Open, widthModal, 740, title, "", func() {
 		fieldLabel(c, locales.Text("认证方式"))
 		auth := a.modelDraft.AuthType
 		authOptions := []uikit.Option{{Value: "api_key", Label: locales.Text("API Key 认证")}, {Value: "chatgpt_oauth", Label: locales.Text("ChatGPT 登录")}}
 		if uikit.SelectField(c.Key("model-auth"), &auth, authOptions, a.secondaryInk()).Label(locales.Text("认证方式")).FillWidth().Changed() {
 			a.changeModelAuth(auth)
+		}
+		if a.modelForm.CloneMode {
+			fieldNote(c, fmt.Sprintf(locales.Text("从「%s」复制；API Key 需重新填写，Model ID 不能与原条目相同。"), a.modelForm.CloneSource), a.secondaryInk())
 		}
 		if a.modelDraft.AuthType == "chatgpt_oauth" {
 			a.oauthPanel(c)
@@ -540,12 +540,9 @@ func (a *desktop) chatModelDialog(c *ui.Context) {
 		}
 	}, func() {
 		flatBusy(c, locales.Text("测试连接"), a.modelForm.TestBusy, a.modelForm.TestBusy || a.modelSaving).OnClick(func() { a.testModelDraft() })
-		flat(c, locales.Text("取消")).OnClick(func() {
-			a.modelForm.Open = false
-			a.cancelOAuthWhenLeaving()
-		})
+		flat(c, locales.Text("取消")).OnClick(func() { a.closeChatModelEditor() })
 		primaryBusy(c, map[bool]string{true: locales.Text("添加"), false: locales.Text("保存修改")}[a.modelEdit < 0], a.modelSaving, a.modelSaving || a.modelForm.TestBusy).OnClick(func() { a.saveModelDraft() })
-	}, a.cancelOAuthWhenLeaving)
+	}, a.closeChatModelEditor)
 }
 
 // modelDraftOptions is what the Model dropdown can offer: the models returned
