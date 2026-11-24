@@ -74,7 +74,7 @@ func TestSystemPromptToolReferencesExist(t *testing.T) {
 	registry := builtinToolNames(t)
 	prompts := map[string]string{
 		"main":      joinSystemPromptParts(app.buildSystemPromptParts(nil, "", nil, "", "", nil)),
-		"sub-agent": subagentSystemPrompt(""),
+		"sub-agent": subagentSystemPrompt("", ConfigState{}),
 	}
 	unknown := map[string]bool{}
 	for label, prompt := range prompts {
@@ -101,7 +101,7 @@ func TestSystemPromptToolReferencesExist(t *testing.T) {
 // sub-agent to use tools it never receives. Explicit prohibition lines
 // ("- Do not call `subagent` — ...") are the only allowed mentions.
 func TestSubagentPromptDoesNotAdvertiseBlockedTools(t *testing.T) {
-	sub := subagentSystemPrompt("")
+	sub := subagentSystemPrompt("", ConfigState{})
 	for name := range subagentBlockedTools {
 		for _, line := range strings.Split(sub, "\n") {
 			trimmed := strings.TrimSpace(line)

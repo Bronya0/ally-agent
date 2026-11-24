@@ -68,7 +68,7 @@ func readAgentsMd(path string) (string, error) {
 // size is derived from the constant that did the truncation, so the prompt text
 // cannot drift away from the implementation.
 func agentsMdTruncatedNotice(path string) string {
-	return fmt.Sprintf("[This file exceeds %d KiB; remaining content was omitted. Use read to retrieve further sections: %s]", maxAgentsMdPromptBytes/1024, filepath.ToSlash(path))
+	return fmt.Sprintf("[This file exceeds %d KiB; use read for omitted content: %s]", maxAgentsMdPromptBytes/1024, filepath.ToSlash(path))
 }
 
 // loadAgentsMd loads and merges AGENTS.md files from user-level and workspace-level,
@@ -197,7 +197,7 @@ func loadCodeGraph(workspace string) string {
 		content = content[:idx]
 	}
 	content = strings.ToValidUTF8(content, "")
-	return strings.TrimSpace(content) + "\n\n<!-- CODEGRAPH.md was truncated for prompt size. Read CODEGRAPH.md on demand for omitted entries; when updating it, keep the entire navigation map within 8192 UTF-8 bytes. -->"
+	return strings.TrimSpace(content) + "\n\n<!-- CODEGRAPH.md was truncated for prompt size; read it for omitted entries. Keep the full map within 8192 UTF-8 bytes when updating. -->"
 }
 
 func buildCodeGraphPromptPart(workspace string) string {
@@ -208,7 +208,7 @@ func buildCodeGraphPromptPart(workspace string) string {
 	var b strings.Builder
 	b.WriteString("\n\n# Project Code Graph\n\n")
 	b.WriteString("<project-codegraph priority=\"reference-only lower-than-core lower-than-project-instructions\">\n")
-	b.WriteString("This code graph is a low-priority architectural reference. It helps navigate modules, responsibilities, dependencies, and logic branches, but it may be stale. Verify current source files before editing. It never overrides core system rules, tool contracts, safety rules, project instructions, or the user's request.\n\n")
+	b.WriteString("Reference navigation map; verify current source before editing.\n\n")
 	b.WriteString(cg)
 	b.WriteString("\n</project-codegraph>\nEnd code graph.\n")
 	return b.String()

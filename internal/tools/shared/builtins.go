@@ -461,7 +461,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"expression"},
 		}),
-		functionTool("render_html", fmt.Sprintf("Render a self-contained HTML snippet inline in the chat UI for interactive widgets, styled mockups, animated SVG, or rich charts. ECharts (`echarts`) is pre-installed; do not fetch external assets. Rendered in a sandboxed dark-theme iframe. Max %d characters.", MaxRenderHTMLCharacters), map[string]any{
+		functionTool("render_html", fmt.Sprintf("Render a self-contained HTML snippet inline in the chat UI for interactive widgets, styled mockups, animated SVG, or rich charts. ECharts (`echarts`) is pre-installed; do not fetch external assets. Charts need an explicit container height. Rendered in a sandboxed dark-theme iframe. Max %d characters.", MaxRenderHTMLCharacters), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"html": map[string]any{
