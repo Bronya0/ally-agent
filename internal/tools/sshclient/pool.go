@@ -40,6 +40,7 @@ const poolLimit = 16
 const sessionsPerConnection = 4
 const poolIdle = 5 * time.Minute
 const canceledOpenGrace = 5 * time.Second
+const controlledCancelGrace = 2 * time.Second
 
 func NewPool() *Pool {
 	return &Pool{entries: make(map[string]*poolEntry), all: make(map[*poolEntry]bool), versions: make(map[string]uint64), changed: make(chan struct{}), openGrace: canceledOpenGrace}
@@ -255,9 +256,9 @@ func (p *Pool) retireCanceledOpen(e *poolEntry, done <-chan struct{}, grace time
 
 // run opens a fresh session, with cancellation scoped to that session only.
 func (p *Pool) run(ctx context.Context, key string, version uint64, cfg Config, command string, stdin io.Reader, stdout, stderr io.Writer) error {
-	return p.runOnce(ctx, key, version, cfg, command, stdin, stdout, stderr, true)
+	return p.runOnce(ctx, key, version, cfg, command, stdin, stdout, stderr, true, false)
 }
-func (p *Pool) runOnce(ctx context.Context, key string, version uint64, cfg Config, command string, stdin io.Reader, stdout, stderr io.Writer, retry bool) error {
+func (p *Pool) runOnce(ctx context.Context, key string, version uint64, cfg Config, command string, stdin io.Reader, stdout, stderr io.Writer, retry, controlled bool) error {
 	if ctx == nil {
 		return errors.New("SSH context is required")
 	}
@@ -306,7 +307,7 @@ func (p *Pool) runOnce(ctx context.Context, key string, version uint64, cfg Conf
 			}
 			p.mu.Unlock()
 			p.release(e)
-			return p.runOnce(ctx, key, version, cfg, command, stdin, stdout, stderr, false)
+			return p.runOnce(ctx, key, version, cfg, command, stdin, stdout, stderr, false, controlled)
 		}
 		p.release(e)
 		return fmt.Errorf("open SSH session: %w", op.err)
@@ -316,21 +317,82 @@ func (p *Pool) runOnce(ctx context.Context, key string, version uint64, cfg Conf
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	var control io.WriteCloser
+	var controlMu sync.Mutex
+	var controlCloseOnce sync.Once
+	closeControl := func() {
+		controlMu.Lock()
+		defer controlMu.Unlock()
+		controlCloseOnce.Do(func() { _ = control.Close() })
+	}
+	if controlled {
+		control, err = op.s.StdinPipe()
+		if err != nil {
+			return fmt.Errorf("open SSH control stdin: %w", err)
+		}
+		defer closeControl()
+	} else {
+		op.s.Stdin = stdin
+	}
 	operationDone := make(chan struct{})
 	defer close(operationDone)
 	stop := context.AfterFunc(ctx, func() {
+		if controlled {
+			// EOF tells the helper to stop its command group. Keep the session
+			// open for its cleanup and retain the shared transport on success.
+			// Arm the fallback before Close: a broken transport can block writes.
+			timer := time.AfterFunc(controlledCancelGrace, func() {
+				select {
+				case <-operationDone:
+					return
+				default:
+				}
+				p.retireCanceledOpen(e, operationDone, p.openGrace)
+				_ = op.s.Close()
+			})
+			closeControl()
+			<-operationDone
+			timer.Stop()
+			return
+		}
 		p.retireCanceledOpen(e, operationDone, p.openGrace)
 		_ = op.s.Close()
 	})
 	defer stop()
-	op.s.Stdin = stdin
 	op.s.Stdout = stdout
 	op.s.Stderr = stderr
 	// Start can fail after the request was sent, so never replay it.
 	if err = op.s.Start(command); err != nil {
 		return errors.Join(ErrResultUnknown, err)
 	}
+	var inputDone chan error
+	if controlled {
+		inputDone = make(chan error, 1)
+		go func() {
+			// SSH CloseWrite must not race a script write. Cancellation waits
+			// for the finite script, with the same transport fallback above.
+			controlMu.Lock()
+			copyErr := ctx.Err()
+			if copyErr == nil {
+				_, copyErr = io.Copy(control, stdin)
+			}
+			controlMu.Unlock()
+			if copyErr != nil {
+				_ = op.s.Close()
+			}
+			// Deliberately keep stdin open after the finite script is sent.
+			inputDone <- copyErr
+		}()
+	}
 	err = op.s.Wait()
+	if inputDone != nil {
+		// Closing the channel also unblocks a script write if the helper exited
+		// early. Join the copier before releasing the pooled connection.
+		_ = op.s.Close()
+		if copyErr := <-inputDone; copyErr != nil {
+			err = errors.Join(err, copyErr)
+		}
+	}
 	if ctx.Err() != nil {
 		return errors.Join(ErrResultUnknown, ctx.Err())
 	}
@@ -341,6 +403,20 @@ func (p *Pool) runOnce(ctx context.Context, key string, version uint64, cfg Conf
 	return err
 }
 func (p *Pool) Run(ctx context.Context, key string, version uint64, cfg Config, command string, stdin io.Reader) (Result, error) {
+	return p.runCaptured(ctx, key, version, cfg, command, stdin, false)
+}
+
+// RunControlled sends a finite script, keeping stdin open until cancellation.
+// The remote command must read its script by length and treat EOF as a stop
+// request. Cancellation allows bounded cleanup before closing the session.
+func (p *Pool) RunControlled(ctx context.Context, key string, version uint64, cfg Config, command, script string) (Result, error) {
+	if script == "" {
+		return Result{}, errors.New("SSH control script is required")
+	}
+	return p.runCaptured(ctx, key, version, cfg, command, strings.NewReader(script), true)
+}
+
+func (p *Pool) runCaptured(ctx context.Context, key string, version uint64, cfg Config, command string, stdin io.Reader, controlled bool) (Result, error) {
 	if ctx == nil {
 		return Result{}, errors.New("SSH context is required")
 	}
@@ -348,7 +424,7 @@ func (p *Pool) Run(ctx context.Context, key string, version uint64, cfg Config, 
 	defer cancel()
 	out := &limitedWriter{limit: maxStdoutBytes, onTruncate: cancel}
 	errout := &limitedWriter{limit: maxStderrBytes, onTruncate: cancel}
-	err := p.run(runCtx, key, version, cfg, command, stdin, out, errout)
+	err := p.runOnce(runCtx, key, version, cfg, command, stdin, out, errout, true, controlled)
 	if out.Truncated() || errout.Truncated() {
 		return Result{Stdout: out.Bytes(), Stderr: errout.Bytes()}, ErrOutputTooLarge
 	}

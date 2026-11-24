@@ -69,6 +69,11 @@ func toolResultSummary(name string, result *toolResult) string {
 		if decodeToolData(result.Data, &r) {
 			return fmt.Sprintf("%d files · +%d -%d", r.FileCount, r.AddedLines, r.RemovedLines)
 		}
+	case "remote_transfer":
+		var r RemoteTransferResult
+		if decodeToolData(result.Data, &r) {
+			return r.Summary
+		}
 	case "replace_exact", "replace_lines":
 		data, _ := json.Marshal(result.Data)
 		var r EditResult
@@ -263,7 +268,33 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 	case "remote_transfer":
 		var r RemoteTransferResult
 		if decodeToolData(result.Data, &r) {
-			return modelResultBody(fmt.Sprintf("// remote_transfer | action=%q | alias=%q | local=%q | remote=%q | bytes=%d | files=%d | dirs=%d", r.Action, r.Alias, r.LocalPath, r.RemotePath, r.TotalBytes, r.FileCount, r.DirCount), r.Summary)
+			var body strings.Builder
+			truncated := false
+			for _, file := range r.Files {
+				status := "failed"
+				if file.OK {
+					status = "completed"
+				} else if file.Skipped {
+					status = "not_transferred"
+				}
+				fmt.Fprintf(&body, "local=%q remote=%q status=%s bytes=%d", file.LocalPath, file.RemotePath, status, file.TotalBytes)
+				if file.Error != "" {
+					message, reduced := compactTextForModel(file.Error, compactTextSpec{limit: 1024})
+					truncated = truncated || reduced
+					fmt.Fprintf(&body, " error=%q", message)
+				}
+				if file.ErrorCode != "" {
+					fmt.Fprintf(&body, " errorCode=%q", file.ErrorCode)
+				}
+				body.WriteByte('\n')
+			}
+			header := fmt.Sprintf("// remote_transfer | action=%q | alias=%q | bytes=%d | files=%d | failed=%d | skipped=%d", r.Action, r.Alias, r.TotalBytes, r.FileCount, r.FailedCount, r.SkippedCount)
+			if truncated || len(header)+2+body.Len() > maxModelToolOutput {
+				header += " | truncated"
+			}
+			// Clamp the whole rendered result: aliases, paths and quoting can expand it.
+			text, _ := compactTextForModel(modelResultBody(header, body.String()), compactTextSpec{limit: maxModelToolOutput, head: modelToolHeadBytes, tail: modelToolTailBytes})
+			return text
 		}
 		return modelFallbackResult(name, result.Data, fullJSON)
 	case "read", "remote_read":

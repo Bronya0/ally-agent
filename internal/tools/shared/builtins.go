@@ -78,6 +78,8 @@ const (
 	// passes through the gate), so a declared bound cannot drift from what the
 	// runtime accepts.
 	DeletePathListLimit = 40
+	// RemoteTransferFileLimit is shared by the transfer schema and runtime.
+	RemoteTransferFileLimit = 20
 	// ContentSearchGuidance is the single wording for where local content searches
 	// go. The command schema states it as that tool's boundary and the runtime
 	// repeats it after a shell grep, so the model never reads two versions of the
@@ -405,16 +407,25 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"alias", "command"},
 		}),
-		functionTool("remote_transfer", "Transfer files or directories between the local workspace and absolute paths on a remote SSH server using bounded-memory binary streaming. The local workspace fence and archive extraction boundary are enforced. File modes, permissions, and directory structure are preserved.", map[string]any{
+		functionTool("remote_transfer", "Upload or download regular files between the local workspace and an SSH server using bounded-memory binary streaming. One call transfers up to 20 file mappings in order on the same server and in the same direction. Sources must be regular files; directories and symlinks cannot be transferred. Each mapping names the full destination file path, including its filename. The local workspace and credential fences are enforced. Stop on the first failure or cancellation and return one result identifying completed, failed, and unattempted files. Completed files are retained; the batch is not replayed. Interrupted uploads may have completed remotely: inspect the destination before retrying.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"alias":      sshAliasSchema(),
-				"action":     map[string]any{"type": "string", "enum": []string{"upload", "download"}, "description": "Transfer direction: 'upload' (local to remote) or 'download' (remote to local)."},
-				"localPath":  map[string]any{"type": "string", "minLength": 1, "description": "Workspace-relative local file or directory path."},
-				"remotePath": map[string]any{"type": "string", "minLength": 1, "description": "Absolute remote destination or source file/directory path, e.g. /srv/app/dist."},
-				"overwrite":  map[string]any{"type": "boolean", "description": "Allow overwriting existing destinations without an additional confirmation prompt. Files and directories cannot replace each other; specify a file path inside a destination directory."},
+				"alias":  sshAliasSchema(),
+				"action": map[string]any{"type": "string", "enum": []string{"upload", "download"}, "description": "Transfer direction: 'upload' (local to remote) or 'download' (remote to local)."},
+				"files": map[string]any{
+					"type": "array", "minItems": 1, "maxItems": RemoteTransferFileLimit,
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"localPath":  map[string]any{"type": "string", "minLength": 1, "description": "Workspace-relative local source or destination file path, including its filename."},
+							"remotePath": map[string]any{"type": "string", "minLength": 1, "description": "Absolute remote source or destination file path, including its filename, e.g. /srv/app/config.json."},
+						},
+						"required": []string{"localPath", "remotePath"},
+					},
+				},
+				"overwrite": map[string]any{"type": "boolean", "description": "Allow replacing existing destination files; applies to every mapping. A file cannot replace a directory. Defaults to false."},
 			},
-			"required": []string{"alias", "action", "localPath", "remotePath"},
+			"required": []string{"alias", "action", "files"},
 		}),
 		functionTool("ssh_cluster", "List SSH servers authorized for the current workspace. For every remote_* call, pass the chosen server's alias unchanged in the alias parameter: no server selection is inherited from previous calls, never build an alias from a host, user, or port, and never append a directory to it — file paths and commands are separate parameters. Add servers in the SSH cluster manager and authorize them in the workspace footer.", map[string]any{
 			"type": "object",
@@ -538,7 +549,7 @@ var builtinToolExamples = map[string]string{
 	"remote_read":        `{"alias":"my-dev","files":[{"path":"/srv/app/main.go"}]}`,
 	"remote_edit":        `{"alias":"my-dev","path":"/srv/app/main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
 	"remote_run_command": `{"alias":"my-dev","command":"cd /srv/app && go test ./..."}`,
-	"remote_transfer":    `upload: {"alias":"my-dev","action":"upload","localPath":"dist","remotePath":"/srv/app/public","overwrite":true}; download: {"alias":"my-dev","action":"download","remotePath":"/var/log/app","localPath":"debug_logs"}`,
+	"remote_transfer":    `upload: {"alias":"my-dev","action":"upload","files":[{"localPath":"dist/app","remotePath":"/srv/app/app"},{"localPath":"config.json","remotePath":"/srv/app/config.json"}],"overwrite":true}; download: {"alias":"my-dev","action":"download","files":[{"remotePath":"/var/log/app.log","localPath":"debug/app.log"}]}`,
 	"ssh_cluster":        `{"action":"list"}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue"}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","tailLines":200}]}`,

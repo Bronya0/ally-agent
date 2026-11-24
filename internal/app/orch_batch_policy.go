@@ -289,32 +289,27 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 		return plan.Targets
 	}
 	if name == "remote_transfer" {
-		var transArgs struct {
-			Alias      string `json:"alias"`
-			Action     string `json:"action"`
-			LocalPath  string `json:"localPath"`
-			RemotePath string `json:"remotePath"`
-		}
+		var transArgs RemoteTransferRequest
 		if json.Unmarshal([]byte(arguments), &transArgs) != nil {
 			return nil
 		}
 		action := strings.ToLower(strings.TrimSpace(transArgs.Action))
-		switch action {
-		case "upload":
-			target := strings.TrimSpace(transArgs.Alias)
-			cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(transArgs.RemotePath), "\\", "/"))
-			if cleanPath != "" && cleanPath != "." {
-				return []fileMutationTarget{{
-					key:     remoteMutationKey(target, cleanPath),
-					display: target + " · " + cleanPath,
-				}}
-			}
-		case "download":
-			if target, ok := localMutationTarget(cfg, transArgs.LocalPath); ok {
-				return []fileMutationTarget{target}
+		var targets []fileMutationTarget
+		for _, file := range transArgs.Files {
+			switch action {
+			case "upload":
+				target := strings.TrimSpace(transArgs.Alias)
+				cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(file.RemotePath), "\\", "/"))
+				if cleanPath != "" && cleanPath != "." {
+					targets = append(targets, fileMutationTarget{key: remoteMutationKey(target, cleanPath), display: target + " · " + cleanPath})
+				}
+			case "download":
+				if target, ok := localMutationTarget(cfg, file.LocalPath); ok {
+					targets = append(targets, target)
+				}
 			}
 		}
-		return nil
+		return targets
 	}
 	// delete tools take a `paths` list; single-file tools (create, remote_edit,
 	// remote_create_file) carry one `path`. The two shapes are read on separate

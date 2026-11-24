@@ -12,6 +12,7 @@ import (
 	"ally-dev/locales"
 	"fmt"
 	"maps"
+	"strconv"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -27,7 +28,83 @@ const (
 	// transcriptSummaryFlag marks the single row a full-summary compaction left in
 	// place of the conversation, so the next stream delta does not grow into it.
 	transcriptSummaryFlag = "transcriptSummary"
+	compactionDisplayKey  = "_compactionDisplay"
 )
+
+// Prepare once when a summary arrives or a session opens. The original content
+// stays intact for history; rendering and search share this Markdown projection.
+func prepareCompactionDisplay(m map[string]any) {
+	delete(m, compactionDisplayKey)
+	if str(m, "role") != "assistant" && !boolOf(m, transcriptSummaryFlag) {
+		return
+	}
+	content := str(m, "content")
+	before, rest, found := strings.Cut(content, "<ally-plan-snapshot>")
+	if !found {
+		return
+	}
+	plan, after, found := strings.Cut(rest, "</ally-plan-snapshot>")
+	if !found || !strings.HasPrefix(strings.TrimSpace(plan), "// plan |") {
+		return
+	}
+	var list strings.Builder
+	for _, line := range strings.Split(plan, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "(") {
+			count, kind, found := strings.Cut(strings.TrimPrefix(line, "("), " ")
+			omitted, err := strconv.Atoi(count)
+			if found && err == nil && omitted > 0 {
+				switch kind {
+				case "earlier steps omitted)":
+					fmt.Fprintf(&list, "- … %s\n", fmt.Sprintf(locales.Text("前面 %d 个步骤已省略"), omitted))
+				case "later steps omitted)":
+					fmt.Fprintf(&list, "- … %s\n", fmt.Sprintf(locales.Text("后面 %d 个步骤已省略"), omitted))
+				}
+			}
+			continue
+		}
+		number, rest, found := strings.Cut(line, " [")
+		if !found {
+			continue
+		}
+		index, err := strconv.Atoi(number)
+		status, title, found := strings.Cut(rest, "] ")
+		if err != nil || index < 1 || !found {
+			continue
+		}
+		var label string
+		switch status {
+		case "in_progress":
+			label = locales.Text("进行中")
+		case "pending":
+			label = locales.Text("待开始")
+		case "done", "completed":
+			label = locales.Text("已完成")
+		default:
+			return // Preserve unfamiliar formats rather than dropping their state.
+		}
+		// Titles are text, so Markdown punctuation must not turn paths or code
+		// fragments into emphasis, links or HTML.
+		title = compactionPlanEscape.Replace(title)
+		fmt.Fprintf(&list, "- **%d. %s** %s\n", index, label, title)
+	}
+	if list.Len() == 0 {
+		return
+	}
+	m[compactionDisplayKey] = strings.TrimRight(before, "\r\n ") + "\n\n### " + locales.Text("计划快照") + "\n\n" + list.String() + "\n" + strings.TrimLeft(after, "\r\n ")
+}
+
+var compactionPlanEscape = strings.NewReplacer(
+	"\\", "\\\\", "`", "\\`", "*", "\\*", "_", "\\_",
+	"[", "\\[", "]", "\\]", "<", "\\<", ">", "\\>",
+)
+
+func messageDisplayContent(m map[string]any) string {
+	if display, ok := m[compactionDisplayKey].(string); ok {
+		return display
+	}
+	return str(m, "content")
+}
 
 // compactStartNote reports the scale of the summary request up front, so the
 // user knows how much history is being rewritten while it runs.
@@ -113,6 +190,7 @@ func compactThinkingTokens(st *chatUI) int {
 func replaceTranscript(t *conversation, summary string) {
 	invalidateChatSearch(t)
 	t.Messages = []map[string]any{{"role": "assistant", "content": summary, transcriptSummaryFlag: true}}
+	prepareCompactionDisplay(t.Messages[0])
 	t.resetTranscriptLookup()
 	t.MD = nil
 	t.MDCodeBlock = nil

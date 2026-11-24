@@ -36,6 +36,56 @@ type Messages struct{ locale string }
 // source language.
 func In(locale string) Messages { return Messages{locale} }
 
+// Ui1c87b4613673 says "Plan snapshot"
+// in the language the app shows.
+func Ui1c87b4613673() string { return In(i18n.Locale()).Ui1c87b4613673() }
+
+// Ui1c87b4613673 says "Plan snapshot"
+// in the language of msgs.
+func (msgs Messages) Ui1c87b4613673() string {
+	return Catalog.Format(msgs.locale, "ui_1c87b4613673", nil)
+}
+
+// UiDc9591e56d50 says "In progress"
+// in the language the app shows.
+func UiDc9591e56d50() string { return In(i18n.Locale()).UiDc9591e56d50() }
+
+// UiDc9591e56d50 says "In progress"
+// in the language of msgs.
+func (msgs Messages) UiDc9591e56d50() string {
+	return Catalog.Format(msgs.locale, "ui_dc9591e56d50", nil)
+}
+
+// Ui5b715411b1f9 says "Pending"
+// in the language the app shows.
+func Ui5b715411b1f9() string { return In(i18n.Locale()).Ui5b715411b1f9() }
+
+// Ui5b715411b1f9 says "Pending"
+// in the language of msgs.
+func (msgs Messages) Ui5b715411b1f9() string {
+	return Catalog.Format(msgs.locale, "ui_5b715411b1f9", nil)
+}
+
+// Ui707ff823ca87 says "%d earlier steps omitted"
+// in the language the app shows.
+func Ui707ff823ca87() string { return In(i18n.Locale()).Ui707ff823ca87() }
+
+// Ui707ff823ca87 says "%d earlier steps omitted"
+// in the language of msgs.
+func (msgs Messages) Ui707ff823ca87() string {
+	return Catalog.Format(msgs.locale, "ui_707ff823ca87", nil)
+}
+
+// Ui01fb3a24e08c says "%d later steps omitted"
+// in the language the app shows.
+func Ui01fb3a24e08c() string { return In(i18n.Locale()).Ui01fb3a24e08c() }
+
+// Ui01fb3a24e08c says "%d later steps omitted"
+// in the language of msgs.
+func (msgs Messages) Ui01fb3a24e08c() string {
+	return Catalog.Format(msgs.locale, "ui_01fb3a24e08c", nil)
+}
+
 // UiNavPosition says "Navigation"
 // in the language the app shows.
 func UiNavPosition() string { return In(i18n.Locale()).UiNavPosition() }

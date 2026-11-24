@@ -9,7 +9,6 @@ package app
 
 import (
 	"bytes"
-	"compress/zlib"
 	"context"
 	"crypto/sha256"
 	_ "embed"
@@ -17,9 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
-	"os"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -30,10 +27,8 @@ import (
 
 	"ally-dev/internal/tools/command"
 	"ally-dev/internal/tools/edit"
-	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/read"
 	"ally-dev/internal/tools/sshclient"
-	"ally-dev/internal/tools/streamarchive"
 )
 
 const remotePythonMarker = "ALLY_REMOTE_RESULT_JSON:"
@@ -278,15 +273,31 @@ func toolWorkspace(ctx context.Context) string {
 // 成给模型看的提示。
 var errRemoteScriptTimeout = errors.New("remote ssh timed out")
 
+func remoteRunLoader(script string) string {
+	return fmt.Sprintf(`import sys; ALLY_RUN_STDIN = getattr(sys.stdin, "buffer", sys.stdin); source = ALLY_RUN_STDIN.read(%d); assert len(source) == %d, "incomplete remote script"; exec(compile(source, "<ally-remote>", "exec"))`, len(script), len(script))
+}
+
 // runRemoteScriptOnce 执行一次远端 Python helper 调用。超时预算按单次调用计算：
 // 指纹记录被替换后的重试要重新拿到完整预算，不能共用上一次已经耗掉的额度。
-func (a *App) runRemoteScriptOnce(ctx context.Context, rt remoteTarget, sshConfig sshclient.Config, script string, timeout time.Duration) (sshclient.Result, error) {
+func (a *App) runRemoteScriptOnce(ctx context.Context, rt remoteTarget, sshConfig sshclient.Config, script string, timeout time.Duration, controlled bool) (sshclient.Result, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	const remotePythonCommand = "sh -c 'command -v python3 >/dev/null 2>&1 && exec python3 - ; command -v python2 >/dev/null 2>&1 && exec python2 - ; exec python -'"
 	key, version := a.remotePoolIdentity(rt, sshConfig)
-	result, err := a.sshPool.Run(runCtx, key, version, sshConfig, remotePythonCommand, strings.NewReader(script))
+	var result sshclient.Result
+	var err error
+	if controlled {
+		// Read exactly the script's bytes, leaving stdin open as the run's
+		// control channel. No command or payload is placed in shell arguments.
+		loader := remoteRunLoader(script)
+		args := "-c '" + loader + "'"
+		remoteCommand := "command -v python3 >/dev/null 2>&1 && exec python3 " + args + "; command -v python2 >/dev/null 2>&1 && exec python2 " + args + "; exec python " + args
+		remoteCommand = "sh -c '" + strings.ReplaceAll(remoteCommand, "'", "'\"'\"'") + "'"
+		result, err = a.sshPool.RunControlled(runCtx, key, version, sshConfig, remoteCommand, script)
+	} else {
+		result, err = a.sshPool.Run(runCtx, key, version, sshConfig, remotePythonCommand, strings.NewReader(script))
+	}
 	if runCtx.Err() == context.DeadlineExceeded {
 		timeoutErr := fmt.Errorf("%w after %s", errRemoteScriptTimeout, timeout)
 		if errors.Is(err, sshclient.ErrResultUnknown) {
@@ -330,7 +341,7 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 	// 指纹不一致由 refreshHostKeyAndRetry 直接换记录并重连，这里拿到的要么是成功结果，
 	// 要么是分类上报的失败。
 	result, err := refreshHostKeyAndRetry(func() (sshclient.Result, error) {
-		return a.runRemoteScriptOnce(ctx, rt, sshConfig, script, timeout)
+		return a.runRemoteScriptOnce(ctx, rt, sshConfig, script, timeout, payload["op"] == "run")
 	})
 	stdout := result.Stdout
 	stderr := result.Stderr
@@ -1028,435 +1039,6 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 		"modelOutputBytes": maxModelToolOutput,
 	}), time.Duration(timeout+20)*time.Second, &result)
 	return result, err
-}
-
-const remoteTransferMarker = "ALLY_REMOTE_TRANSFER_JSON:"
-
-// Transfer mode uses the same helper, with tar on stdin/stdout and JSON on stderr.
-var remoteTransferPythonScript = strings.Replace(strings.Replace(remotePythonScript, "TRANSFER_MODE = False", "TRANSFER_MODE = True", 1), "__DELETE_SENSITIVE_TARGETS__", "[]", 1)
-
-type RemoteTransferRequest struct {
-	Alias      string `json:"alias"`
-	Action     string `json:"action"` // "upload" or "download"
-	LocalPath  string `json:"localPath"`
-	RemotePath string `json:"remotePath"`
-	Overwrite  bool   `json:"overwrite,omitempty"`
-}
-
-type RemoteTransferResult struct {
-	OK         bool   `json:"ok"`
-	Action     string `json:"action"`
-	Alias      string `json:"alias"`
-	LocalPath  string `json:"localPath"`
-	RemotePath string `json:"remotePath"`
-	TotalBytes int64  `json:"totalBytes"`
-	FileCount  int    `json:"fileCount"`
-	DirCount   int    `json:"dirCount,omitempty"`
-	Summary    string `json:"summary"`
-}
-
-func decodeRemoteTransferMarker(stderr []byte, out any) error {
-	markerBytes := []byte(remoteTransferMarker)
-	idx := bytes.LastIndex(stderr, markerBytes)
-	if idx < 0 {
-		msg := strings.TrimSpace(string(stderr))
-		if msg == "" {
-			return errors.New("remote transfer helper produced no response on stderr")
-		}
-		return fmt.Errorf("remote transfer failed: %s", msg)
-	}
-	rest := string(stderr[idx+len(markerBytes):])
-	line := rest
-	if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
-		line = rest[:nl]
-	}
-	candidate := strings.TrimSpace(line)
-	var resp struct {
-		OK    bool            `json:"ok"`
-		Data  json.RawMessage `json:"data,omitempty"`
-		Error string          `json:"error,omitempty"`
-	}
-	if err := json.Unmarshal([]byte(candidate), &resp); err != nil {
-		return fmt.Errorf("parse remote transfer response: %w", err)
-	}
-	if !resp.OK {
-		if strings.HasPrefix(resp.Error, "E_PROTECTED_PATH:") {
-			return codedToolError("E_PROTECTED_PATH", errors.New(strings.TrimSpace(strings.TrimPrefix(resp.Error, "E_PROTECTED_PATH:"))))
-		}
-		if strings.HasPrefix(resp.Error, "Tar-Slip violation:") {
-			return codedToolError("E_PATH_OUTSIDE", errors.New(resp.Error))
-		}
-		return errors.New(resp.Error)
-	}
-	var stats struct {
-		TotalBytes *int64 `json:"totalBytes"`
-		FileCount  *int   `json:"fileCount"`
-		DirCount   *int   `json:"dirCount"`
-	}
-	if err := json.Unmarshal(resp.Data, &stats); err != nil {
-		return fmt.Errorf("invalid remote transfer statistics: %w", err)
-	}
-	if stats.TotalBytes == nil || stats.FileCount == nil || stats.DirCount == nil || *stats.TotalBytes < 0 || *stats.FileCount < 0 || *stats.DirCount < 0 {
-		return errors.New("remote transfer response has missing or negative statistics")
-	}
-	if out != nil {
-		return json.Unmarshal(resp.Data, out)
-	}
-	return nil
-}
-
-func parseRemoteTransferError(host string, stderr []byte, err error) error {
-	msg := strings.TrimSpace(string(stderr))
-	if strings.Contains(msg, remoteTransferMarker) {
-		if markerErr := decodeRemoteTransferMarker(stderr, nil); markerErr != nil {
-			return markerErr
-		}
-		return fmt.Errorf("ssh transfer %s failed: %w", host, err)
-	}
-	if strings.Contains(msg, "python3: command not found") || strings.Contains(msg, "python3: not found") ||
-		strings.Contains(msg, "python2: command not found") || strings.Contains(msg, "python2: not found") ||
-		strings.Contains(msg, "python: command not found") || strings.Contains(msg, "python: not found") {
-		return fmt.Errorf("remote host %s has no python interpreter; remote_transfer needs python (install python3 or python, or add to PATH)", host)
-	}
-	if msg != "" {
-		return fmt.Errorf("ssh transfer %s failed: %s", host, msg)
-	}
-	return fmt.Errorf("ssh transfer %s failed: %w", host, err)
-}
-
-func (a *App) executeRemoteTransfer(ctx context.Context, req RemoteTransferRequest) (RemoteTransferResult, error) {
-	action := strings.ToLower(strings.TrimSpace(req.Action))
-	if action != "upload" && action != "download" {
-		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", fmt.Errorf("action must be 'upload' or 'download', got %q", req.Action))
-	}
-	if strings.TrimSpace(req.Alias) == "" {
-		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", errors.New("alias is required"))
-	}
-	if strings.TrimSpace(req.LocalPath) == "" {
-		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", errors.New("localPath is required"))
-	}
-	if strings.TrimSpace(req.RemotePath) == "" {
-		return RemoteTransferResult{}, codedToolError("E_BAD_ARGS", errors.New("remotePath is required"))
-	}
-
-	// 1. Resolve target, workspace authorization and credentials
-	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Alias)
-	if err != nil {
-		return RemoteTransferResult{}, err
-	}
-
-	// 2. Validate the absolute remote path; no remote workspace boundary.
-	cleanRemotePath, err := validateRemotePath(req.RemotePath, false)
-	if err != nil {
-		return RemoteTransferResult{}, err
-	}
-
-	// 3. Resolve local workspace and validate local path. The request's own
-	// workspace wins: a scheduled task must transfer files from/to its task
-	// workspace, not the active tab's persisted config.
-	workspace := toolWorkspace(ctx)
-	if workspace == "" {
-		sessionID := toolSessionID(ctx)
-		if sessionID != "" {
-			a.mu.Lock()
-			workspace = a.sessionWorkspaces[sessionID]
-			if workspace == "" {
-				workspace = a.config.Workspace
-			}
-			a.mu.Unlock()
-		} else {
-			a.mu.Lock()
-			workspace = a.config.Workspace
-			a.mu.Unlock()
-		}
-	}
-	if workspace == "" {
-		return RemoteTransferResult{}, errors.New("no workspace configured for local transfer")
-	}
-
-	localAbs, err := pathutil.SafeJoin(pathRuntime, []string{workspace}, req.LocalPath)
-	if err != nil {
-		return RemoteTransferResult{}, codedToolError("E_PATH_OUTSIDE", fmt.Errorf("localPath %q is outside workspace: %w", req.LocalPath, err))
-	}
-	relToWs, relErr := filepath.Rel(workspace, localAbs)
-	if relErr != nil || strings.HasPrefix(relToWs, "..") || relToWs == ".." {
-		return RemoteTransferResult{}, codedToolError("E_PATH_OUTSIDE", fmt.Errorf("localPath %q escapes workspace: %s", req.LocalPath, workspace))
-	}
-	localClean := filepath.ToSlash(relToWs)
-	if localClean == "." {
-		return RemoteTransferResult{}, codedToolError("E_PATH_OUTSIDE", errors.New("refusing transfer directly targeting local workspace root without subpath"))
-	}
-
-	// Resolve existing ancestors before opening the workspace handle. Keep the
-	// leaf name so uploads still preserve symlinks instead of dereferencing them.
-	workspace, localAbs, err = resolveLocalTransferPath(workspace, localAbs)
-	if err != nil {
-		return RemoteTransferResult{}, err
-	}
-
-	// 4. Action-specific validation
-	if action == "upload" {
-		// Check local source existence
-		if _, err := os.Lstat(localAbs); err != nil {
-			if os.IsNotExist(err) {
-				return RemoteTransferResult{}, fmt.Errorf("local source does not exist: %s", localClean)
-			}
-			return RemoteTransferResult{}, fmt.Errorf("access local source: %w", err)
-		}
-		// Sensitive file read fence check
-		if blocked, reason := blockedSensitiveRead(localAbs); blocked {
-			return RemoteTransferResult{}, codedToolError("E_PROTECTED_PATH", fmt.Errorf("upload rejected: %s", reason))
-		}
-
-		// Stat remote destination to check existence
-		stat, statErr := a.remoteStatPath(ctx, rt, cleanRemotePath)
-		if statErr != nil {
-			return RemoteTransferResult{}, fmt.Errorf("check remote destination: %w", statErr)
-		}
-		if stat.Exists && !req.Overwrite {
-			return RemoteTransferResult{}, codedToolError("E_EXISTS", fmt.Errorf("remote destination %s already exists on %s; set overwrite=true to replace it", cleanRemotePath, rt.Host))
-		}
-	} else { // download
-		// Stat remote source to ensure it exists
-		stat, statErr := a.remoteStatPath(ctx, rt, cleanRemotePath)
-		if statErr != nil {
-			return RemoteTransferResult{}, fmt.Errorf("check remote source: %w", statErr)
-		}
-		if !stat.Exists {
-			return RemoteTransferResult{}, fmt.Errorf("remote source does not exist on %s: %s", rt.Host, cleanRemotePath)
-		}
-
-		// Check local destination existence
-		if _, destErr := os.Lstat(localAbs); destErr == nil && !req.Overwrite {
-			return RemoteTransferResult{}, codedToolError("E_EXISTS", fmt.Errorf("local destination %s already exists; set overwrite=true to replace it", localClean))
-		}
-	}
-
-	// 5. Execute raw stream transfer via Python Bridge
-	result, err := a.runRemoteTransferStream(ctx, rt, action, workspace, localAbs, cleanRemotePath, req.Overwrite)
-	if err != nil {
-		destination := localClean
-		if action == "upload" {
-			destination = req.Alias + ":" + cleanRemotePath
-		}
-		return RemoteTransferResult{}, fmt.Errorf("transfer failed: %w; destination %q may have been partially modified, including overwritten files; inspect it before retrying", err, destination)
-	}
-
-	result.Action = action
-	result.Alias = req.Alias
-	result.LocalPath = localClean
-	result.RemotePath = cleanRemotePath
-	result.OK = true
-	if action == "upload" {
-		result.Summary = fmt.Sprintf("successfully uploaded %s to %s:%s (%d bytes, %d files)", localClean, rt.Host, cleanRemotePath, result.TotalBytes, result.FileCount)
-	} else {
-		result.Summary = fmt.Sprintf("successfully downloaded %s:%s to %s (%d bytes, %d files)", rt.Host, cleanRemotePath, localClean, result.TotalBytes, result.FileCount)
-	}
-	return result, nil
-}
-
-var remoteTransferCompressedScriptOnce struct {
-	sync.Once
-	encoded string
-}
-
-func getRemoteTransferCompressedScript() string {
-	remoteTransferCompressedScriptOnce.Do(func() {
-		var buf bytes.Buffer
-		zw := zlib.NewWriter(&buf)
-		_, _ = zw.Write([]byte(remoteTransferPythonScript))
-		_ = zw.Close()
-		remoteTransferCompressedScriptOnce.encoded = base64.StdEncoding.EncodeToString(buf.Bytes())
-	})
-	return remoteTransferCompressedScriptOnce.encoded
-}
-
-// resolveLocalTransferPath checks both lexical and resolved forms, including
-// missing destinations beneath an existing symlinked parent.
-func resolveLocalTransferPath(workspace, localAbs string) (string, string, error) {
-	root, err := filepath.EvalSymlinks(workspace)
-	if err != nil {
-		return "", "", err
-	}
-	parent, err := evalExistingPrefix(filepath.Dir(localAbs))
-	if err != nil {
-		return "", "", err
-	}
-	if !pathutil.InsideRoot(root, parent) {
-		return "", "", codedToolError("E_PATH_OUTSIDE", errors.New("local transfer parent resolves outside workspace"))
-	}
-	// Do not dereference the leaf: atomic download replacement must also work
-	// for dangling symlinks, and uploads serialize the link rather than its data.
-	parentRel, err := filepath.Rel(root, parent)
-	if err != nil {
-		return "", "", err
-	}
-	// Retain the workspace spelling for credential fences (for example a HOME
-	// beneath /var on macOS); the relative path no longer traverses user links.
-	return workspace, filepath.Join(workspace, parentRel, filepath.Base(localAbs)), nil
-}
-
-func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, action, workspace, localAbs, cleanRemotePath string, overwrite bool) (RemoteTransferResult, error) {
-	root, err := os.OpenRoot(workspace)
-	if err != nil {
-		return RemoteTransferResult{}, err
-	}
-	defer root.Close()
-	localRel, err := filepath.Rel(workspace, localAbs)
-	if err != nil {
-		return RemoteTransferResult{}, err
-	}
-	arcRootName := path.Base(cleanRemotePath)
-	if action == "download" {
-		arcRootName = filepath.Base(localAbs)
-	}
-	payload := map[string]any{
-		"action":      action,
-		"remotePath":  cleanRemotePath,
-		"arcRootName": arcRootName,
-		"overwrite":   overwrite,
-	}
-	rawPayload, err := json.Marshal(payload)
-	if err != nil {
-		return RemoteTransferResult{}, err
-	}
-	b64Payload := base64.RawURLEncoding.EncodeToString(rawPayload)
-	b64Script := getRemoteTransferCompressedScript()
-
-	remoteCmd := fmt.Sprintf(`sh -c 'boot="import base64, sys, zlib; code = zlib.decompress(base64.b64decode(sys.argv.pop(1))); exec(compile(code, \"<ally-transfer>\", \"exec\"))"; command -v python3 >/dev/null 2>&1 && exec python3 -u -c "$boot" "$@" ; command -v python2 >/dev/null 2>&1 && exec python2 -u -c "$boot" "$@" ; exec python -u -c "$boot" "$@"' -- %s %s`, b64Script, b64Payload)
-
-	entry, _ := a.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port))
-	if rt.credential != nil {
-		entry = *rt.credential
-	}
-	sshConfig := a.remoteSSHConfig(rt, entry)
-	poolKey, poolVersion := a.remotePoolIdentity(rt, sshConfig)
-
-	var outcome struct {
-		TotalBytes int64 `json:"totalBytes"`
-		FileCount  int   `json:"fileCount"`
-		DirCount   int   `json:"dirCount"`
-	}
-
-	if action == "upload" {
-		var packed streamarchive.Stats
-		stderr, runErr := refreshHostKeyAndRetry(func() ([]byte, error) {
-			pr, pw := io.Pipe()
-			packErrCh := make(chan error, 1)
-			go func() {
-				var pErr error
-				defer func() {
-					if pErr != nil {
-						_ = pw.CloseWithError(pErr)
-					} else {
-						_ = pw.Close()
-					}
-					packErrCh <- pErr
-				}()
-				packed, pErr = streamarchive.PackRoot(root, localRel, arcRootName, pw, func(current string, isDir bool) error {
-					if blocked, reason := blockedSensitiveRead(current); blocked {
-						return codedToolError("E_PROTECTED_PATH", fmt.Errorf("upload rejected: %s", reason))
-					}
-					return nil
-				})
-			}()
-
-			stderr, err := a.sshPool.RunStream(ctx, poolKey, poolVersion, sshConfig, remoteCmd, pr, nil)
-			if err != nil {
-				_ = pr.CloseWithError(err)
-			} else {
-				_ = pr.Close()
-			}
-			packErr := <-packErrCh
-
-			if packErr != nil && !errors.Is(packErr, io.ErrClosedPipe) {
-				return stderr, fmt.Errorf("local archive packing error: %w", packErr)
-			}
-			if err != nil {
-				return stderr, err
-			}
-			return stderr, nil
-		})
-
-		if runErr != nil {
-			return RemoteTransferResult{}, parseRemoteTransferError(rt.Host, stderr, runErr)
-		}
-		if err := decodeRemoteTransferMarker(stderr, &outcome); err != nil {
-			return RemoteTransferResult{}, err
-		}
-		if outcome.TotalBytes != packed.TotalBytes || outcome.FileCount != packed.FileCount || outcome.DirCount != packed.DirCount {
-			return RemoteTransferResult{}, errors.New("remote transfer statistics do not match packed archive")
-		}
-	} else { // download
-		type downloadAttemptResult struct {
-			stderr []byte
-			stats  streamarchive.Stats
-		}
-
-		res, runErr := refreshHostKeyAndRetry(func() (downloadAttemptResult, error) {
-			pr, pw := io.Pipe()
-			type unpackResult struct {
-				stats streamarchive.Stats
-				err   error
-			}
-			unpackCh := make(chan unpackResult, 1)
-
-			go func() {
-				var uRes unpackResult
-				defer func() {
-					if uRes.err != nil {
-						_ = pr.CloseWithError(uRes.err)
-					} else {
-						_ = pr.Close()
-					}
-					unpackCh <- uRes
-				}()
-				uRes.stats, uRes.err = streamarchive.UnpackRoot(pr, root, localRel, overwrite)
-				if uRes.err == nil {
-					_, _ = io.Copy(io.Discard, pr)
-				}
-			}()
-
-			stderr, err := a.sshPool.RunStream(ctx, poolKey, poolVersion, sshConfig, remoteCmd, nil, pw)
-			if err != nil {
-				_ = pw.CloseWithError(err)
-			} else {
-				_ = pw.Close()
-			}
-			unpackRes := <-unpackCh
-
-			if unpackRes.err != nil && !errors.Is(unpackRes.err, io.ErrClosedPipe) {
-				return downloadAttemptResult{stderr: stderr, stats: unpackRes.stats}, fmt.Errorf("local archive unpacking error: %w", unpackRes.err)
-			}
-			if err != nil {
-				// If local unpack was completely successful and remote transfer marker indicates success,
-				// ignore pipe close errors caused by EOF tear-down
-				if unpackRes.err == nil && (errors.Is(err, io.ErrClosedPipe) || strings.Contains(err.Error(), "closed pipe")) {
-					if markerErr := decodeRemoteTransferMarker(stderr, nil); markerErr == nil {
-						return downloadAttemptResult{stderr: stderr, stats: unpackRes.stats}, nil
-					}
-				}
-				return downloadAttemptResult{stderr: stderr, stats: unpackRes.stats}, err
-			}
-			return downloadAttemptResult{stderr: stderr, stats: unpackRes.stats}, nil
-		})
-
-		if runErr != nil {
-			return RemoteTransferResult{}, parseRemoteTransferError(rt.Host, res.stderr, runErr)
-		}
-		if err := decodeRemoteTransferMarker(res.stderr, &outcome); err != nil {
-			return RemoteTransferResult{}, err
-		}
-		if outcome.TotalBytes != res.stats.TotalBytes || outcome.FileCount != res.stats.FileCount || outcome.DirCount != res.stats.DirCount {
-			return RemoteTransferResult{}, errors.New("remote transfer statistics do not match extracted archive")
-		}
-	}
-
-	return RemoteTransferResult{
-		TotalBytes: outcome.TotalBytes,
-		FileCount:  outcome.FileCount,
-		DirCount:   outcome.DirCount,
-	}, nil
 }
 
 // Direct endpoints have no stable node identity; hash their effective configuration

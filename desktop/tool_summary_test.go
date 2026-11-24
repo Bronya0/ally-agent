@@ -38,6 +38,7 @@ func TestMCPShowsToolIdentityStatusAndDuration(t *testing.T) {
 		}
 	}
 }
+
 // 运行中的 ToolExec 卡片直接指向远端工具：等结果事件带来的元数据才知道调的是谁，
 // 卡片就会先写 ToolExec 再变成 server/tool，同一个调用看着像换了两次。
 func TestToolExecCardNamesItsTargetBeforeTheResult(t *testing.T) {
@@ -166,7 +167,7 @@ func TestChatWidthIsBoundedAndResponsive(t *testing.T) {
 }
 
 func TestTransferSummary(t *testing.T) {
-	args := map[string]any{"action": "download", "localPath": "dist/a", "remotePath": "/srv/a"}
+	args := map[string]any{"action": "download", "files": []any{map[string]any{"localPath": "dist/a", "remotePath": "/srv/a"}}}
 	if got := toolArgSummary("remote_transfer", args); got != "/srv/a → dist/a" {
 		t.Fatalf("direction: %q", got)
 	}

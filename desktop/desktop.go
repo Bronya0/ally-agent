@@ -1020,6 +1020,7 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 				break
 			}
 			msgs[i], _ = cloned.(map[string]any)
+			delete(msgs[i], compactionDisplayKey)
 			if detachedResult != nil {
 				msgs[i]["result"] = detachedResult
 			}
@@ -1229,6 +1230,7 @@ func (a *desktop) openSession(id string) {
 					normalizeToolMessage(message)
 				}
 				normalizeLoadedCancellation(message)
+				prepareCompactionDisplay(message)
 				if !retainMCPDisplaySummary(message) && !isMCPDisplayTool(message) {
 					retainSnapshotToolSummary(message)
 				}

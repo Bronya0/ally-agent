@@ -46,6 +46,77 @@ func TestPoolReuseAndInvalidate(t *testing.T) {
 	}
 }
 
+func TestPoolControlledCancellationEOFAndReuse(t *testing.T) {
+	const script = "finite script"
+	ready := make(chan struct{})
+	var auth atomic.Int32
+	server := startTestServerWithHostKey(t, testSigner(t), func(c *ssh.ServerConfig) {
+		c.PasswordCallback = func(_ ssh.ConnMetadata, _ []byte) (*ssh.Permissions, error) { auth.Add(1); return nil, nil }
+	}, func(channel ssh.Channel, requests <-chan *ssh.Request) {
+		defer channel.Close()
+		for request := range requests {
+			if request.Type != "exec" {
+				_ = request.Reply(false, nil)
+				continue
+			}
+			var execRequest struct{ Command string }
+			if ssh.Unmarshal(request.Payload, &execRequest) != nil {
+				return
+			}
+			_ = request.Reply(true, nil)
+			var input []byte
+			if execRequest.Command == "controlled" {
+				input = make([]byte, len(script))
+				if _, err := io.ReadFull(channel, input); err != nil {
+					return
+				}
+				close(ready)
+			}
+			remaining, err := io.ReadAll(channel)
+			if err != nil {
+				return
+			}
+			_, _ = io.WriteString(channel, "received:"+string(append(input, remaining...)))
+			_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: 0}))
+			return
+		}
+	})
+	cfg := Config{Host: "test@" + server.host, Port: server.port, AuthMode: AuthModePassword, Password: "pw", KnownHostsPath: filepath.Join(t.TempDir(), "known_hosts")}
+	p := NewPool()
+	defer p.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type outcome struct {
+		result Result
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := p.RunControlled(ctx, "node", 0, cfg, "controlled", script)
+		done <- outcome{result, err}
+	}()
+	select {
+	case <-ready:
+	case result := <-done:
+		t.Fatalf("controlled call ended before script arrived: %+v", result)
+	case <-time.After(3 * time.Second):
+		t.Fatal("controlled script did not arrive")
+	}
+	cancel()
+	select {
+	case result := <-done:
+		if !errors.Is(result.err, context.Canceled) || string(result.result.Stdout) != "received:"+script {
+			t.Fatalf("cancellation did not deliver EOF after the script: %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("EOF cancellation fell through to session-close fallback")
+	}
+	result, err := p.Run(context.Background(), "node", 0, cfg, "cat", strings.NewReader("after"))
+	if err != nil || string(result.Stdout) != "received:after" || auth.Load() != 1 {
+		t.Fatalf("connection not reusable: result=%q err=%v authentications=%d", result.Stdout, err, auth.Load())
+	}
+}
+
 func TestPoolCancelDoesNotCloseOtherSession(t *testing.T) {
 	var auth atomic.Int32
 	server := startTestServer(t, func(c *ssh.ServerConfig) {

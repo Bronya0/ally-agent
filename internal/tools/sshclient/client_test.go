@@ -553,7 +553,7 @@ func TestHandshakeTimeoutErrorDistinguishesPhases(t *testing.T) {
 
 // startTestServerWithHostKey 与 startTestServer 相同，但由调用方指定主机密钥，
 // 用于制造“记录里的指纹与服务器实际提供的指纹不一致”的场景。
-func startTestServerWithHostKey(t *testing.T, hostSigner ssh.Signer, configure func(*ssh.ServerConfig)) testSSHServer {
+func startTestServerWithHostKey(t *testing.T, hostSigner ssh.Signer, configure func(*ssh.ServerConfig), handlers ...func(ssh.Channel, <-chan *ssh.Request)) testSSHServer {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -571,14 +571,14 @@ func startTestServerWithHostKey(t *testing.T, hostSigner ssh.Signer, configure f
 			if err != nil {
 				return
 			}
-			go serveTestConnection(conn, config)
+			go serveTestConnection(conn, config, handlers...)
 		}
 	}()
 	addr := listener.Addr().(*net.TCPAddr)
 	return testSSHServer{host: "127.0.0.1", port: fmt.Sprint(addr.Port)}
 }
 
-func serveTestConnection(conn net.Conn, config *ssh.ServerConfig) {
+func serveTestConnection(conn net.Conn, config *ssh.ServerConfig, handlers ...func(ssh.Channel, <-chan *ssh.Request)) {
 	serverConn, channels, requests, err := ssh.NewServerConn(conn, config)
 	if err != nil {
 		_ = conn.Close()
@@ -595,7 +595,11 @@ func serveTestConnection(conn net.Conn, config *ssh.ServerConfig) {
 		if err != nil {
 			continue
 		}
-		go serveTestSession(channel, channelRequests)
+		handler := serveTestSession
+		if len(handlers) > 0 {
+			handler = handlers[0]
+		}
+		go handler(channel, channelRequests)
 	}
 }
 

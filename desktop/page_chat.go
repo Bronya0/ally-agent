@@ -327,7 +327,7 @@ func (a *desktop) markdownOptions(t *conversation, i int) *markdown.Options {
 	if t.MD[i] == nil {
 		t.MD[i] = a.readingMarkdownOptionsForSource(func() string {
 			if i < len(t.Messages) {
-				return str(t.Messages[i], "content")
+				return messageDisplayContent(t.Messages[i])
 			}
 			return ""
 		}, fmt.Sprintf("%s:markdown:%d", t.ID, i))
@@ -470,7 +470,7 @@ func (p *promptCounts) get(content string) promptCounts {
 }
 
 func (a *desktop) assistantMessage(c *ui.Context, t *conversation, i int, m map[string]any) {
-	content := str(m, "content")
+	content := messageDisplayContent(m)
 	attachmentCount := messageAttachmentCount(m)
 	if content == "" && attachmentCount == 0 {
 		return
@@ -537,14 +537,14 @@ func (a *desktop) roundStatsRow(c *ui.Context, t *conversation, i int, stat *rou
 		services := c.Services()
 		iconMenu(c, t.roundKey("export", i), locales.Text("导出"), "download", 22, 180, func(m ui.MenuParts) {
 			uikit.MenuItem(c, m, "answer", locales.Text("导出回答"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
-				a.exportText("ally-response.md", str(t.Messages[i], "content"))
+				a.exportText("ally-response.md", messageDisplayContent(t.Messages[i]))
 			})
 			uikit.MenuItem(c, m, "session", locales.Text("导出会话"), uikit.MenuItemOptions{}, a.secondaryInk()).OnClick(func() {
 				a.exportText("ally-session.md", sessionMarkdown(t))
 			})
 		}, a.secondaryInk())
 		mutedIconAction(c, t.roundKey("copy-summary", i), locales.Text("复制总结"), "copy", 22, func() {
-			services.WriteClipboard(str(t.Messages[i], "content"))
+			services.WriteClipboard(messageDisplayContent(t.Messages[i]))
 			c.Toast(locales.Text("已复制最终总结"))
 		})
 		iconMenu(c, t.roundKey("quick", i), locales.Text("快捷消息"), "list", 22, 180, func(m ui.MenuParts) {
@@ -587,7 +587,7 @@ func sessionMarkdown(t *conversation) string {
 	b.WriteString("# " + t.Title + "\n\n")
 	for _, m := range t.Messages {
 		role := str(m, "role")
-		content := str(m, "content")
+		content := messageDisplayContent(m)
 		if content == "" {
 			continue
 		}

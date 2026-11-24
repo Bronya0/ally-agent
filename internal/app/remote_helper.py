@@ -514,7 +514,7 @@ def open_command_log():
     return os.fdopen(fd, "wb"), name
 
 def op_run(payload):
-    import select, signal, subprocess
+    import select, signal, subprocess, threading
     command = to_os_text(payload.get("command") or "")
     if not command.strip():
         raise ValueError("command is required")
@@ -537,7 +537,7 @@ def op_run(payload):
     max_output = int(payload.get("maxOutput") or 131072)
     start = time.time()
     # start_new_session 与 preexec_fn=os.setsid 等价，但不会触发
-    # Python 3.12+ 对 preexec_fn 的弃用警告；远端只可能是 posix。
+    # Python 3.12+ 对 preexec_fn 的弃用警告；Windows 使用自己的进程树清理。
     new_session = hasattr(os, "setsid")
     popen_kwargs = {}
     if new_session:
@@ -553,27 +553,28 @@ def op_run(payload):
             devnull = devnull_f
         except Exception:
             devnull = subprocess.PIPE
-    proc = subprocess.Popen(
-        command,
-        shell=True,
-        cwd=to_os_text(cwd),
-        executable=shell,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        stdin=devnull,
-        **popen_kwargs
-    )
-    # 取消运行时 Go 侧杀掉本地 ssh 客户端，sshd 只回收直接子进程（本脚
-    # 本）；start_new_session 起的命令进程组收不到信号会变成远端孤儿进
-    # 程。这里捕获终止信号，先击杀整个命令进程组再退出，保证会话中断
-    # 等价于远端进程同步终止。
-    def _terminate_command_group(signum, frame):
-        try:
-            if new_session and proc.poll() is None:
-                os.killpg(proc.pid, signal.SIGKILL)
-        except Exception:
+    control = globals().get("ALLY_RUN_STDIN")
+    cancelled = threading.Event()
+    # stdin EOF 是主动取消通知；信号只设置标志，清理统一走 finally，
+    # 不在信号回调中退出，以免跳过进程回收和日志关闭。阻塞读取放在
+    # daemon 线程中：Windows select 只能监听 socket，不能监听 SSH 管道。
+    def watch_control():
+        # 不占用 sys.stdin BufferedReader 的锁，否则正常退出时 daemon
+        # 仍在等待 EOF，会触发 Python 的 _enter_buffered_busy 致命错误。
+        while os.read(control.fileno(), 1):
             pass
-        sys.exit(0)
+        cancelled.set()
+    if control is not None:
+        control_thread = threading.Thread(target=watch_control)
+        control_thread.daemon = True
+        control_thread.start()
+        if cancelled.is_set():
+            if devnull_f is not None:
+                devnull_f.close()
+            raise ValueError("E_CANCELLED: remote command cancelled before start")
+    def _terminate_command_group(signum, frame):
+        cancelled.set()
+    saved_signals = {}
     # 信号名不是所有平台都有（Windows 没有 SIGHUP）：按名字取、缺哪个跳过
     # 哪个，不能让“取信号”这一步把 op_run 打挂。
     for _sig_name in ("SIGTERM", "SIGHUP", "SIGINT"):
@@ -581,9 +582,69 @@ def op_run(payload):
         if _sig is None:
             continue
         try:
-            signal.signal(_sig, _terminate_command_group)
+            saved_signals[_sig] = signal.signal(_sig, _terminate_command_group)
         except (ValueError, OSError):
             pass
+    try:
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            cwd=to_os_text(cwd),
+            executable=shell,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=devnull,
+            **popen_kwargs
+        )
+    except BaseException:
+        for sig, previous in saved_signals.items():
+            signal.signal(sig, previous)
+        if devnull_f is not None:
+            devnull_f.close()
+        raise
+    def command_exited():
+        if not new_session:
+            return proc.poll() is not None
+        # 清理前不 reap shell：即使它先退出，PID/PGID 也仍由本次调用占有，
+        # 可安全清理存活子进程，不会误杀复用了相同 ID 的其他任务。
+        if hasattr(os, "waitid") and hasattr(os, "WNOWAIT"):
+            return os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+        # 远端只支持 Linux；旧 Python 没有 waitid，用有界 /proc 状态读取，
+        # 不扫描进程表，也不按进程名匹配。
+        with open("/proc/%d/stat" % proc.pid, "rb") as status:
+            state = status.read(4096).rsplit(b")", 1)[1].strip()[:1]
+        return state in (b"Z", b"X")
+    def stop_command():
+        if os.name == "nt":
+            # terminate/kill 只杀 cmd.exe，会留下持有 stdout 的子进程。
+            # taskkill /T 清理整个命令树，避免取消后 reader 仍卡在管道上。
+            startup = subprocess.STARTUPINFO()
+            startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startup.wShowWindow = 0
+            subprocess.call(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                            stdout=devnull, stderr=devnull, startupinfo=startup)
+            if proc.poll() is None:
+                proc.kill()
+            return
+        try:
+            if new_session:
+                os.killpg(proc.pid, signal.SIGTERM)
+            else:
+                proc.terminate()
+        except OSError as exc:
+            if exc.errno == errno.ESRCH:
+                return
+            raise
+        # 给 TERM 半秒收尾，再清理剩余进程；不能因 shell 已退出而跳过。
+        time.sleep(0.5)
+        try:
+            if new_session:
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        except OSError as exc:
+            if exc.errno != errno.ESRCH:
+                raise
     out = bytearray()
     log_file = [None]
     log_path = [""]
@@ -613,43 +674,52 @@ def op_run(payload):
     timed_out = False
     deadline = start + timeout
     eof = False
-    while True:
-        if time.time() > deadline:
-            timed_out = True
+    if os.name == "nt":
+        try:
+            import queue
+        except ImportError:
+            import Queue as queue
+        # 有界队列避免高输出命令无界占用内存；主线程不再阻塞 readline，
+        # 静默命令和没有换行的输出也能响应取消与超时。
+        output_queue = queue.Queue(8)
+        def read_output():
             try:
-                if new_session:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                else:
-                    proc.kill()
-            except Exception:
-                pass
-            break
-        if eof:
-            # stdout 已关闭但进程可能仍在运行（如守护进程关闭了 std fd）。
-            # 不能在此 break，否则 poll() 返回 None 会被 JSON 编码为 null，
-            # Go 侧 int 字段反序列化 null 得到 0，误报为成功退出。
-            # 用 proc.wait 阻塞等待进程退出（OS 级通知，比 sleep 轮询高效），
-            # 至多等到 deadline；超时则回到循环顶部走 timed_out 分支。
-            remain = deadline - time.time()
-            if remain <= 0:
-                continue
-            if hasattr(proc, "wait") and sys.version_info >= (3, 3):
-                try:
-                    proc.wait(timeout=min(remain, 0.5))
-                except Exception:
-                    pass
-            else:
-                time.sleep(min(remain, 0.05))
-        else:
+                while True:
+                    chunk = os.read(proc.stdout.fileno(), 8192)
+                    output_queue.put(chunk)
+                    if not chunk:
+                        break
+            except Exception as exc:
+                output_queue.put(exc)
+        output_thread = threading.Thread(target=read_output)
+        output_thread.daemon = True
+        output_thread.start()
+    try:
+        while True:
+            if cancelled.is_set():
+                break
+            if time.time() > deadline:
+                timed_out = True
+                break
             if os.name == "nt":
-                line = proc.stdout.readline()
-                if not line:
-                    eof = True
+                if eof:
+                    time.sleep(0.05)
                 else:
-                    if capture(line):
+                    try:
+                        chunk = output_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+                    if isinstance(chunk, Exception):
+                        raise chunk
+                    if not chunk:
+                        eof = True
+                    elif capture(chunk):
                         truncated = True
             else:
-                rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
+                watched = [] if eof else [proc.stdout]
+                rlist, _, _ = select.select(watched, [], [], 0.1)
+                if cancelled.is_set():
+                    break
                 if proc.stdout in rlist:
                     if hasattr(proc.stdout, "read1"):
                         chunk = proc.stdout.read1(8192)
@@ -660,53 +730,64 @@ def op_run(payload):
                     else:
                         if capture(chunk):
                             truncated = True
-        if proc.poll() is not None:
-            # 进程已退出；排空管道内剩余缓冲数据（最多等 0.5s，避免后台
-            # 子进程持有 stdout fd 时无限阻塞）。
-            if os.name != "nt":
-                drain_deadline = time.time() + 0.5
-                while not eof and time.time() < drain_deadline:
-                    rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
-                    if not rlist or proc.stdout not in rlist:
-                        break
-                    if hasattr(proc.stdout, "read1"):
-                        chunk = proc.stdout.read1(8192)
-                    else:
-                        chunk = os.read(proc.stdout.fileno(), 8192)
-                    if not chunk:
-                        eof = True
-                        break
-                    if capture(chunk):
-                        truncated = True
-            break
-    try:
-        if hasattr(proc, "wait") and sys.version_info >= (3, 3):
-            proc.wait(timeout=5)
-        else:
-            wait_deadline = time.time() + 5
-            while time.time() < wait_deadline and proc.poll() is None:
-                time.sleep(0.05)
-    except Exception:
-        pass
-    try:
-        proc.stdout.close()
-    except Exception:
-        pass
-    if devnull_f is not None:
+            if command_exited() and (os.name != "nt" or eof):
+                # 进程已退出；排空剩余输出，仍同时接收取消通知。
+                if os.name != "nt":
+                    drain_deadline = time.time() + 0.5
+                    while not eof and time.time() < drain_deadline:
+                        watched = [proc.stdout]
+                        rlist, _, _ = select.select(watched, [], [], 0.1)
+                        if cancelled.is_set() or proc.stdout not in rlist:
+                            break
+                        if hasattr(proc.stdout, "read1"):
+                            chunk = proc.stdout.read1(8192)
+                        else:
+                            chunk = os.read(proc.stdout.fileno(), 8192)
+                        if not chunk:
+                            eof = True
+                            break
+                        if capture(chunk):
+                            truncated = True
+                break
+    finally:
         try:
-            devnull_f.close()
-        except Exception:
-            pass
+            if cancelled.is_set() or timed_out or sys.exc_info()[0] is not None:
+                stop_command()
+        finally:
+            for sig, previous in saved_signals.items():
+                signal.signal(sig, previous)
+            try:
+                if sys.version_info >= (3, 3):
+                    proc.wait(timeout=5)
+                else:
+                    wait_deadline = time.time() + 5
+                    while time.time() < wait_deadline and proc.poll() is None:
+                        time.sleep(0.05)
+            except Exception:
+                pass
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+            if devnull_f is not None:
+                try:
+                    devnull_f.close()
+                except Exception:
+                    pass
+            if log_file[0] is not None:
+                try:
+                    log_file[0].close()
+                except Exception as exc:
+                    log_error[0] = to_unicode(exc)
     exit_code = proc.poll()
     if exit_code is None:
         # 兜底：极端情况下进程仍未退出（如 D 状态不可中断），报告 -1 而非 0
         exit_code = -1
-    if timed_out:
+    if timed_out or cancelled.is_set():
         exit_code = -1
     duration = int((time.time() - start) * 1000)
     if log_file[0] is not None:
         try:
-            log_file[0].close()
             final_path = log_path[0][:-5] + ".log"
             os.rename(log_path[0], final_path)
             log_path[0] = final_path
@@ -761,206 +842,95 @@ def get_raw_stdout():
     return sys.stdout
 
 def replace_file(source, target):
-    # Old Windows Python cannot atomically overwrite via rename. Fail safely
-    # there instead of deleting the original before an operation that may fail.
+    # Never delete the original before a replacement that might fail.
     if hasattr(os, "replace"):
         os.replace(source, target)
     else:
         os.rename(source, target)
 
+def copy_file_bytes(source, destination, size):
+    remaining = size
+    while remaining:
+        chunk = source.read(min(65536, remaining))
+        if not chunk:
+            raise ValueError("incomplete file stream")
+        destination.write(chunk)
+        remaining -= len(chunk)
+
+def transfer_file_stats(info):
+    return {"totalBytes": info.st_size, "mode": info.st_mode & 0o777, "modTime": int(info.st_mtime)}
+
 def do_upload(payload):
-    import tarfile
-    rel = payload.get("remotePath", "")
-    lexical, resolved = remote_path_paths(rel)
-    if resolved == os.path.dirname(resolved):
+    lexical, target = remote_path_paths(payload.get("remotePath", ""))
+    if target == os.path.dirname(target):
         raise ValueError("refusing transfer directly targeting the filesystem root")
-
     overwrite = bool(payload.get("overwrite"))
-    if not overwrite and os.path.lexists(resolved):
-        raise ValueError("remote destination already exists: " + to_unicode(rel))
-
-    dest_parent = os.path.dirname(resolved)
-    if not os.path.exists(dest_parent):
-        os.makedirs(dest_parent)
-
-    raw_in = get_raw_stdin()
+    if not overwrite and os.path.lexists(lexical):
+        raise ValueError("E_EXISTS: remote destination already exists; set overwrite=true to replace it")
+    if os.path.lexists(target):
+        if not stat_mod.S_ISREG(os.lstat(target).st_mode):
+            raise ValueError("upload destination must be a file path")
+    size = int(payload.get("totalBytes", -1))
+    if size < 0:
+        raise ValueError("missing or invalid file size")
+    mode = (int(payload.get("mode", 0o644)) & 0o777 & ~0o022) or 0o644
+    mtime = int(payload.get("modTime", 0))
+    parent = os.path.dirname(target)
+    if not os.path.exists(parent):
+        os.makedirs(parent)
+    fd, tmp_path = tempfile.mkstemp(prefix=".ally-tmp-", dir=parent)
     try:
-        tar = tarfile.open(mode="r|", fileobj=raw_in)
-    except Exception as exc:
-        raise ValueError("invalid tar stream: " + to_unicode(exc))
-
-    total_bytes = 0
-    file_count = 0
-    dir_count = 0
-    dir_metadata = []
-
-    arc_root = payload.get("arcRootName") or os.path.basename(lexical)
-    for member in tar:
-        # tarfile otherwise retains every header even in streaming mode (Python 2/3).
-        tar.members[:] = []
-        m_name = member.name.replace("\\", "/")
-        if not m_name or m_name.startswith("/") or ".." in m_name.split("/"):
-            raise ValueError("Tar-Slip violation: illegal entry: " + to_unicode(m_name))
-        # Archive names use the requested basename, while the destination may
-        # resolve through a symlink to a differently named file or directory.
-        if m_name != arc_root and not m_name.startswith(arc_root + "/"):
-            raise ValueError("Tar-Slip violation: entry escapes transfer destination: " + to_unicode(m_name))
-        suffix = m_name[len(arc_root):].lstrip("/")
-        target_path = os.path.normpath(os.path.join(resolved, suffix)) if suffix else resolved
-        if not is_subpath(target_path, resolved):
-            raise ValueError("Tar-Slip violation: entry escapes transfer destination: " + to_unicode(m_name))
-
-        # Reject parent symlinks, including ones created by earlier archive entries.
-        parent = os.path.dirname(target_path)
-        while is_subpath(parent, dest_parent):
-            if os.path.islink(parent):
-                raise ValueError("Tar-Slip violation: symlink parent: " + to_unicode(parent))
-            if parent == dest_parent:
-                break
-            parent = os.path.dirname(parent)
-        if not is_subpath(os.path.realpath(os.path.dirname(target_path)), dest_parent):
-            raise ValueError("Tar-Slip violation: parent escapes transfer destination: " + to_unicode(m_name))
-        if not overwrite and os.path.lexists(target_path) and not (member.isdir() and os.path.isdir(target_path) and not os.path.islink(target_path)):
-            raise ValueError("remote destination already exists: " + to_unicode(m_name))
-
-        if member.isdir():
-            if os.path.lexists(target_path) and (os.path.islink(target_path) or not os.path.isdir(target_path)):
-                raise ValueError("cannot replace a file or symlink with a directory: " + to_unicode(m_name))
-            created_mode = None
-            if not os.path.exists(target_path):
-                created_mode = (member.mode & 0o777 & ~0o022) or 0o755
-                # Keep the owner able to populate read-only directories; restore
-                # their archive permissions after all children have been written.
-                os.makedirs(target_path, created_mode | 0o700)
-            dir_metadata.append((target_path, member.mtime, created_mode))
-            dir_count += 1
-        elif member.isreg():
-            if os.path.isdir(target_path) and not os.path.islink(target_path):
-                raise ValueError("cannot replace a directory with a file: " + to_unicode(m_name) + "; choose a file path inside the directory")
-            p_dir = os.path.dirname(target_path)
-            if not os.path.exists(p_dir):
-                os.makedirs(p_dir)
-            f_in = tar.extractfile(member)
-            if f_in is None:
-                raise ValueError("missing file data: " + to_unicode(m_name))
-            fd, tmp_path = tempfile.mkstemp(prefix=".ally-tmp-", dir=p_dir)
+        with os.fdopen(fd, "wb") as output:
+            raw_in = get_raw_stdin()
+            copy_file_bytes(raw_in, output, size)
+            if raw_in.read(1):
+                raise ValueError("unexpected bytes after file stream")
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(tmp_path, mode)
+        if mtime > 0:
+            os.utime(tmp_path, (mtime, mtime))
+        outcome = transfer_file_stats(os.stat(tmp_path))
+        if not overwrite:
+            # Publish without clobbering a concurrently created destination.
             try:
-                with os.fdopen(fd, "wb") as f_out:
-                    while True:
-                        chunk = f_in.read(65536)
-                        if not chunk:
-                            break
-                        f_out.write(chunk)
-                        total_bytes += len(chunk)
-                # Never import setuid/setgid/sticky permission bits from an archive.
-                mode = (member.mode & 0o777) & ~0o022
-                os.chmod(tmp_path, mode or 0o644)
-                if not overwrite:
-                    # Atomic no-clobber publication; existence checks alone race.
-                    os.link(tmp_path, target_path)
-                    os.unlink(tmp_path)
+                if os.name == "nt":
+                    # Windows rename never replaces a destination and also
+                    # works on FAT and shares without hard-link support.
+                    os.rename(tmp_path, target)
                 else:
-                    # Rename rejects directories created after the initial check.
-                    # Never delete a directory to publish a regular file.
-                    replace_file(tmp_path, target_path)
-                if member.mtime > 0:
-                    os.utime(target_path, (member.mtime, member.mtime))
-                file_count += 1
-            finally:
-                f_in.close()
-                if os.path.exists(tmp_path):
+                    os.link(tmp_path, target)
                     os.unlink(tmp_path)
-        elif member.issym():
-            link_target = member.linkname.replace("\\", "/")
-            full_link = os.path.realpath(os.path.join(os.path.dirname(target_path), link_target))
-            if link_target.startswith("/") or not is_subpath(full_link, resolved):
-                raise ValueError("Tar-Slip violation: symlink escapes transfer destination: " + to_unicode(m_name))
-            if not os.path.exists(os.path.dirname(target_path)):
-                os.makedirs(os.path.dirname(target_path))
-            if not overwrite:
-                os.symlink(member.linkname, target_path)
-            else:
-                # Creating a symlink can fail even when replacing a file is
-                # permitted (notably on Windows). Keep the original until ready.
-                fd, tmp_path = tempfile.mkstemp(prefix=".ally-link-", dir=os.path.dirname(target_path))
-                os.close(fd)
-                os.unlink(tmp_path)
-                try:
-                    os.symlink(member.linkname, tmp_path)
-                    replace_file(tmp_path, target_path)
-                finally:
-                    if os.path.lexists(tmp_path):
-                        os.unlink(tmp_path)
+            except OSError as exc:
+                if exc.errno == errno.EEXIST:
+                    raise ValueError("E_EXISTS: remote destination already exists; set overwrite=true to replace it")
+                if exc.errno in (errno.EPERM, errno.ENOSYS, getattr(errno, "EOPNOTSUPP", errno.EPERM)):
+                    raise ValueError("E_UNSUPPORTED: remote filesystem cannot publish without overwrite; use a filesystem with hard-link support, or set overwrite=true if replacement is intended")
+                raise
         else:
-            raise ValueError("unsupported tar entry type: " + to_unicode(m_name))
-
-    tar.close()
-    for d_path, d_mtime, d_mode in reversed(dir_metadata):
-        if os.path.isdir(d_path):
-            if d_mtime > 0:
-                try:
-                    os.utime(d_path, (d_mtime, d_mtime))
-                except Exception:
-                    pass
-            if d_mode is not None:
-                os.chmod(d_path, d_mode)
-
-    ok({"totalBytes": total_bytes, "fileCount": file_count, "dirCount": dir_count})
+            replace_file(tmp_path, target)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+    ok(outcome)
 
 def do_download(payload):
-    import tarfile
-    rel = payload.get("remotePath", "")
-    lexical, resolved = remote_path_paths(rel)
-    if resolved == os.path.dirname(resolved):
+    lexical, source = remote_path_paths(payload.get("remotePath", ""))
+    if source == os.path.dirname(source):
         raise ValueError("refusing transfer directly targeting the filesystem root")
-    if not os.path.lexists(resolved):
-        raise ValueError("remote path does not exist: " + to_unicode(rel))
-
-    arc_root_name = payload.get("arcRootName") or os.path.basename(resolved)
-    raw_out = get_raw_stdout()
-    tar = tarfile.open(mode="w|", fileobj=raw_out)
-
-    total_bytes = 0
-    file_count = 0
-    dir_count = 0
-
-    def add_entry(fpath, arcname):
-        # Python tarfile deduplicates hardlinks, while the Go receiver expects data
-        # for each regular entry. Also avoid retaining headers for the whole tree.
-        tar.inodes.clear()
-        tar.add(fpath, arcname=arcname, recursive=False)
-        tar.members[:] = []
-        return os.lstat(fpath)
-
-    def walk_error(exc):
-        raise exc
-
-    if os.path.isdir(resolved):
-        for dirpath, dirnames, filenames in os.walk(resolved, onerror=walk_error):
-            rel_dir = os.path.relpath(dirpath, resolved).replace("\\", "/")
-            arc_dir = arc_root_name if rel_dir == "." else arc_root_name + "/" + rel_dir
-            add_entry(dirpath, arc_dir)
-            dir_count += 1
-            for dname in dirnames[:]:
-                dpath = os.path.join(dirpath, dname)
-                if os.path.islink(dpath):
-                    add_entry(dpath, arc_dir + "/" + dname)
-                    dirnames.remove(dname)
-            for fname in filenames:
-                fpath = os.path.join(dirpath, fname)
-                st = add_entry(fpath, arc_dir + "/" + fname)
-                if stat_mod.S_ISREG(st.st_mode):
-                    total_bytes += st.st_size
-                    file_count += 1
-    else:
-        st = add_entry(resolved, arc_root_name)
-        if stat_mod.S_ISREG(st.st_mode):
-            total_bytes += st.st_size
-            file_count = 1
-
-    tar.close()
-    raw_out.flush()
-    ok({"totalBytes": total_bytes, "fileCount": file_count, "dirCount": dir_count})
+    if not stat_mod.S_ISREG(os.lstat(lexical).st_mode):
+        raise ValueError("download source must be a regular file; directories and symlinks are not supported")
+    # Nonblocking open avoids hanging if a regular file is replaced by a FIFO.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(source, flags)
+    with os.fdopen(fd, "rb") as input_file:
+        info = os.fstat(input_file.fileno())
+        if not stat_mod.S_ISREG(info.st_mode):
+            raise ValueError("download source must be a regular file")
+        raw_out = get_raw_stdout()
+        copy_file_bytes(input_file, raw_out, info.st_size)
+        raw_out.flush()
+    ok(transfer_file_stats(info))
 
 # op 名 → 实现：唯一的分发表，新增一个 op 只在这里加一行（实现本身仍是 op_* 函数）。
 # 测试专用 _check_protected 留在下面的分支里。

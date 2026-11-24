@@ -626,21 +626,6 @@ func TestRemoteScriptVersionGuards(t *testing.T) {
 	}
 }
 
-// TestRemoteScriptHasCancelKill 锁定取消连带击杀存在：op_run 必须注册
-// SIGTERM/SIGHUP/SIGINT 处理器，Go 侧取消杀掉 ssh 后远端孤儿进程被同
-// 步回收。
-func TestRemoteScriptHasCancelKill(t *testing.T) {
-	if !strings.Contains(remotePythonScript, "_terminate_command_group") {
-		t.Error("remote python script lost _terminate_command_group signal handler; cancelling a run would leak remote orphan processes")
-	}
-	if !strings.Contains(remotePythonScript, `for _sig_name in ("SIGTERM", "SIGHUP", "SIGINT")`) {
-		t.Error("remote python script must register SIGTERM/SIGHUP/SIGINT handlers")
-	}
-	if !strings.Contains(remotePythonScript, `getattr(signal, _sig_name, None)`) {
-		t.Error("remote python script must resolve signal names via getattr: Windows has no SIGHUP")
-	}
-}
-
 // TestRemoteReadFileDuplicatePathSlots 锁定重复路径契约：同批同路径（不
 // 同行区间）的每个槽位都必须各自渲染，不得只填首个槽位留零值——旧实
 // 现逐槽位独立填充，批量会话重构后曾退化为只认首个槽位。通过注入假

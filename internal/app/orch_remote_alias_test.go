@@ -27,7 +27,7 @@ func TestRemoteAliasContractRejectsLegacyCalls(t *testing.T) {
 		{"remote_create_file", `"path":"/srv/a","content":"a","overwrite":false`, func() any { return &RemoteCreateFileRequest{} }},
 		{"remote_delete_path", `"paths":["/srv/a"]`, func() any { return &RemoteDeletePathRequest{} }},
 		{"remote_run_command", `"command":"pwd"`, func() any { return &RemoteRunCommandRequest{} }},
-		{"remote_transfer", `"action":"upload","localPath":"a","remotePath":"/srv/a"`, func() any { return &RemoteTransferRequest{} }},
+		{"remote_transfer", `"action":"upload","files":[{"localPath":"a","remotePath":"/srv/a"}]`, func() any { return &RemoteTransferRequest{} }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -73,7 +73,7 @@ func TestRemoteAliasMutationIdentity(t *testing.T) {
 		{"remote_edit", `"path":"/srv/a"`},
 		{"remote_create_file", `"path":"/srv/a"`},
 		{"remote_delete_path", `"paths":["/srv/a"]`},
-		{"remote_transfer", `"action":"upload","remotePath":"/srv/a"`},
+		{"remote_transfer", `"action":"upload","files":[{"localPath":"a","remotePath":"/srv/a"}]`},
 	} {
 		current := fileMutationTargets(ConfigState{}, tc.name, `{"alias":"dev",`+tc.body+`}`)
 		other := fileMutationTargets(ConfigState{}, tc.name, `{"alias":"prod",`+tc.body+`}`)

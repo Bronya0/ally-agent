@@ -1,4 +1,9 @@
 {
+  "ui_1c87b4613673": "Plan snapshot",
+  "ui_dc9591e56d50": "In progress",
+  "ui_5b715411b1f9": "Pending",
+  "ui_707ff823ca87": "%d earlier steps omitted",
+  "ui_01fb3a24e08c": "%d later steps omitted",
   "ui_nav_position": "Navigation",
   "ui_nav_note": "The sidebar stays on the left; the top menu hides it and opens the menu from the button beside the logo.",
   "ui_nav_sidebar": "Sidebar",

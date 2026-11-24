@@ -255,7 +255,7 @@ func (a *desktop) chatSearchScan(t *conversation, s *chatSearch) ([]chatSearchMa
 			if isToolRecord(t.Messages[i]) {
 				continue
 			}
-			content := str(t.Messages[i], "content")
+			content := messageDisplayContent(t.Messages[i])
 			if content == "" {
 				continue
 			}
@@ -271,7 +271,7 @@ func (a *desktop) chatSearchScan(t *conversation, s *chatSearch) ([]chatSearchMa
 	if s.tailOnly && s.cacheKey != "" && s.lastQuery == query && !s.scanTruncated &&
 		s.scanCount == len(t.Messages) && s.scanCount > 0 {
 		out, truncated := chatSearchScanTail(t, s, s.scanCount-1)
-		s.scanBytes = s.scanPrefix + len(str(t.Messages[s.scanCount-1], "content"))
+		s.scanBytes = s.scanPrefix + len(messageDisplayContent(t.Messages[s.scanCount-1]))
 		s.tailOnly = false
 		return out, truncated
 	}
@@ -435,7 +435,7 @@ func chatSearchScanAll(t *conversation, s *chatSearch) (out []chatSearchMatch, t
 		if isToolRecord(m) {
 			continue
 		}
-		content := str(m, "content")
+		content := messageDisplayContent(m)
 		if content == "" {
 			continue
 		}
@@ -454,7 +454,7 @@ func chatSearchScanMessage(m map[string]any, index int, s *chatSearch, budget in
 	if isToolRecord(m) {
 		return out, false
 	}
-	source := str(m, "content")
+	source := messageDisplayContent(m)
 	re, err := s.chatSearchPattern()
 	if err != nil || source == "" || budget <= 0 {
 		return out, budget <= 0 && source != ""
@@ -769,7 +769,7 @@ func (a *desktop) chatSearchBar(c *ui.Context, t *conversation) {
 		mutedIconAction(c, t.ID+"-search-next", locales.Text("下一个匹配"), "arrowdown", 24, func() { a.chatSearchStep(t, 1) }).Shrink(0)
 		mutedIconAction(c, t.ID+"-search-close", locales.Text("关闭查找（Esc）"), "close", 24, func() { a.closeChatSearch(t) }).Shrink(0)
 		if hit, ok := a.chatSearchCurrent(t); ok && hit.Message >= 0 && hit.Message < len(t.Messages) {
-			before, match, after := chatSearchExcerpt(str(t.Messages[hit.Message], "content"), hit.Start, hit.End)
+			before, match, after := chatSearchExcerpt(messageDisplayContent(t.Messages[hit.Message]), hit.Start, hit.End)
 			if match != "" {
 				ui.RichText(c, ui.Span{Text: before}, ui.Span{Text: match, Background: th.Accent, Color: th.Background, Radius: 3}, ui.Span{Text: after}).
 					FontSize(th.FontSize - 2).TextColor(a.secondaryInk()).MaxWidthPercent(100)
