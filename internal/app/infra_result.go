@@ -935,10 +935,7 @@ func renderReadResultForModel(r BatchReadResult) string {
 			blocks = append(blocks, header+" | error="+strconv.Quote(code)+"\n\n"+f.Error)
 			continue
 		}
-		if f.Version != "" {
-			header += " | version=" + strconv.Quote(f.Version)
-		}
-		if !f.Editable && f.Version == "" {
+		if !f.Editable {
 			header += " | editable=false"
 		}
 		if f.StartLine > 0 && f.EndLine > 0 {
@@ -1093,7 +1090,7 @@ func renderMultiEditResultForModel(r MultiEditResult) string {
 	alias := remoteAliasSegment(r.RemoteAlias)
 	var blocks []string
 	for _, f := range r.Files {
-		blocks = append(blocks, "// edit"+alias+" | path="+strconv.Quote(f.Path)+" | new version="+strconv.Quote(f.Version))
+		blocks = append(blocks, "// edit"+alias+" | path="+strconv.Quote(f.Path))
 	}
 	body := r.Summary
 	if r.Validation != "" {
@@ -1112,7 +1109,7 @@ func renderMultiEditResultForModel(r MultiEditResult) string {
 }
 
 func renderEditResultForModel(name string, r EditResult) string {
-	header := "// " + name + remoteAliasSegment(r.RemoteAlias) + " | path=" + strconv.Quote(r.Path) + " | version=" + strconv.Quote(r.Version)
+	header := "// " + name + remoteAliasSegment(r.RemoteAlias) + " | path=" + strconv.Quote(r.Path)
 	if r.Created != nil {
 		header += fmt.Sprintf(" | created=%t", *r.Created)
 	}

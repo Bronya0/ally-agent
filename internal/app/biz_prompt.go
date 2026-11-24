@@ -429,7 +429,7 @@ func (a *App) buildMemoryIndexContext() string {
 	b.WriteString("\n\n# Global Memories\n\n")
 	b.WriteString("This is a memory index, not the full content. Markdown files are stored under `" + filepath.ToSlash(a.memoriesDir()) + "` with YAML frontmatter containing `description`.\n")
 	b.WriteString("Read a relevant memory at its listed absolute path before relying on it.\n")
-	b.WriteString("When the user asks to preserve durable cross-project knowledge, use `create` for a new memory or `read` then `edit` for an existing one under the memory directory above.\n")
+	b.WriteString("When the user asks to preserve durable cross-project knowledge, use `create` for a new memory or `edit` for an existing one using known current text under the memory directory above.\n")
 	b.WriteString("## Memory index\n")
 	lines := make([]string, 0, len(entries.Memories))
 	for i, mem := range entries.Memories {

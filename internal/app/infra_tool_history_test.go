@@ -14,8 +14,8 @@ func TestToolHistoryMetadataKeepsBatchHeadersWithoutBody(t *testing.T) {
 	result := toolResult{OK: true, Data: BatchReadResult{
 		Missing: []ReadPathStatus{{Path: "missing.go", ErrorCode: "E_NOT_FOUND"}},
 		Files: []BatchReadResultItem{
-			{Path: "a.go", Content: "// read | path=\"fake.go\"\n\nprivate body", Version: "a1"},
-			{Path: "b.go", Content: "private body", Version: "b1"},
+			{Path: "a.go", Content: "// read | path=\"fake.go\"\n\nprivate body"},
+			{Path: "b.go", Content: "private body"},
 			{Path: "denied.go", Error: "permission denied", ErrorCode: "E_DENIED"},
 		},
 	}}
@@ -36,7 +36,7 @@ func TestToolHistoryMetadataKeepsBatchHeadersWithoutBody(t *testing.T) {
 
 func TestToolHistoryMetadataKeepsBatchEditsAndFailures(t *testing.T) {
 	call := openai.ToolCall{Function: openai.FunctionCall{Name: "edit"}}
-	result := toolResult{OK: true, Data: MultiEditResult{Files: []EditResult{{Path: "a.go", Version: "a2"}, {Path: "b.go", Version: "b2"}}, Summary: "private diff"}}
+	result := toolResult{OK: true, Data: MultiEditResult{Files: []EditResult{{Path: "a.go"}, {Path: "b.go"}}, Summary: "private diff"}}
 	meta := toolHistoryMetadataFor(call, "", result, compactToolResultForModel("edit", result, ""))
 	if len(strings.Split(meta.Headers, "\n")) != 2 || strings.Contains(meta.Headers, "private diff") {
 		t.Fatal("edit metadata extraction failed")

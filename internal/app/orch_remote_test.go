@@ -717,8 +717,8 @@ func TestRemoteReadReusesSessionCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range second.Files {
-		if !f.Reused || f.Content != "" || f.Version == "" {
-			t.Fatalf("second remote read must reuse the payload and keep the version, got %#v", f)
+		if !f.Reused || f.Content != "" {
+			t.Fatalf("second remote read must reuse the payload and keep range metadata, got %#v", f)
 		}
 	}
 

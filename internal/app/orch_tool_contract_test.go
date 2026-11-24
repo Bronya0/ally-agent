@@ -92,7 +92,7 @@ func TestEditRejectsChangeWithoutNewText(t *testing.T) {
 	path := filepath.Join(dir, "sample.txt")
 
 	missing := app.executeTool(ctx, cfg, "s-1", "edit",
-		[]byte(fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha"}]}`, hashVersion(original))))
+		[]byte(`{"path":"sample.txt","changes":[{"oldText":"alpha"}]}`))
 	// The change schema requires newText, so the argument gate refuses the call
 	// before the edit handler runs.
 	if missing.OK || missing.ErrorCode != "E_BAD_ARGS" {
@@ -106,7 +106,7 @@ func TestEditRejectsChangeWithoutNewText(t *testing.T) {
 	}
 
 	deleted := app.executeTool(ctx, cfg, "s-1", "edit",
-		[]byte(fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha\n","newText":""}]}`, hashVersion(original))))
+		[]byte(`{"path":"sample.txt","changes":[{"oldText":"alpha\n","newText":""}]}`))
 	if !deleted.OK {
 		t.Fatalf("an explicit empty newText must still delete text, got %q", deleted.Error)
 	}

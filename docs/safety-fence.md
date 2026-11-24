@@ -69,7 +69,7 @@ flowchart TB
 | create 未给 overwrite | 拒 `E_BAD_ARGS` | 必须明确指定是否覆盖 |
 | `src/x.go` 已存在、create 设置 `overwrite: false` | 拒 `E_EXISTS` | |
 | `src/x.png` 覆盖非文本文件 | 拒 `E_TEXT_OVERWRITE` | |
-| edit 用旧 version | 拒 `E_VERSION_MISMATCH` | 要重新 read |
+| edit 使用已知当前文本 | 按 oldText 匹配并编辑 | 无需先调用 read，不传 version |
 | `.git/hooks/pre-commit` | 允许 | 按普通文件处理 |
 | `link.txt`（软链） | 目标在可写范围内时允许 | 编辑真实目标并保留链接；仍检查凭据禁读和路径边界 |
 | `~\.ally_agent\memories\a.md` | 允许 | 兜底白名单 |
@@ -123,7 +123,7 @@ flowchart TB
 | 一批 21 个文件 | 拒 | 上限 20；批合计 16 MiB，装不下排下一轮 |
 | 创建 `/srv/app/a/b.txt`（父目录不存在） | 允许 | 自动创建父目录 |
 | 创建已存在文件，overwrite=false | 拒 `E_EXISTS` | 覆盖必须显式指定 overwrite=true |
-| edit 用旧 version / 写入前原文已变 | 拒 `E_VERSION_MISMATCH` | 版本与提交前完整哈希校验保留 |
+| edit 提交期间原文已变 | 拒 `E_EDIT_CONFLICT` | 仅检查本次操作期间的并发修改，不要求 read 版本 |
 | 写 `/srv/app/.git/config` 或指向该位置的软链接 | 允许 | 仓库元数据按普通文件处理 |
 | 删除普通跨目录文件或项目目录 | 允许 | 目录须 recursive=true；保留批内去重及深的先删 |
 | 删除 `/`、`/etc/nginx`、`/var/tmp` | 拒 `E_DELETE_BLOCKED` | 文件系统根、系统二级目录和临时根保护 |
@@ -156,7 +156,7 @@ flowchart TB
 
 - **本地独有**：项目工作区写入边界、凭据禁读清单（上传本地源也检查）、危险搜索根、Ally 数据目录保护、文档转换提示。
 - **远端独有**：已登记节点按请求所属本地工作区授权；未登记原始端点保持直接连接。没有远端项目目录访问边界。
-- **两边都有**：显式覆盖开关、版本冲突校验、删除保护与管理上下文例外。
+- **两边都有**：显式覆盖开关、提交期间的并发修改保护、删除保护与管理上下文例外。
 
 ## 六、已知缺口（按风险排序）
 

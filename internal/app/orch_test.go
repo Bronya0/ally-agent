@@ -281,8 +281,8 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("edit schema properties missing: %#v", params)
 	}
-	if len(properties) != 4 || properties["path"] == nil || properties["version"] == nil || properties["changes"] == nil || properties["stage"] == nil {
-		t.Fatalf("edit should expose flat path/version/changes plus scheduling stage: %#v", properties)
+	if len(properties) != 3 || properties["path"] == nil || properties["changes"] == nil || properties["stage"] == nil {
+		t.Fatalf("edit should expose flat path/changes plus scheduling stage: %#v", properties)
 	}
 	for _, legacy := range []string{"files", "oldString", "newString", "replaceAll", "edits", "startLine", "endLine", "newText"} {
 		if _, exists := properties[legacy]; exists {
@@ -293,7 +293,7 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected edit required type %T", params["required"])
 	}
-	wantRequired := map[string]bool{"path": true, "version": true, "changes": true}
+	wantRequired := map[string]bool{"path": true, "changes": true}
 	if len(required) != len(wantRequired) {
 		t.Fatalf("unexpected required fields: %#v", required)
 	}
@@ -321,7 +321,7 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("remote_edit schema properties missing: %#v", remoteParams)
 	}
-	for _, name := range []string{"alias", "path", "version", "changes"} {
+	for _, name := range []string{"alias", "path", "changes"} {
 		if _, exists := remoteProperties[name]; !exists {
 			t.Fatalf("remote_edit schema missing %s", name)
 		}
@@ -335,7 +335,7 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected remote_edit required type %T", remoteParams["required"])
 	}
-	wantRemoteRequired := map[string]bool{"alias": true, "path": true, "version": true, "changes": true}
+	wantRemoteRequired := map[string]bool{"alias": true, "path": true, "changes": true}
 	if len(remoteRequired) != len(wantRemoteRequired) {
 		t.Fatalf("unexpected remote_edit required fields: %#v", remoteRequired)
 	}
@@ -350,8 +350,8 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 			t.Fatal("replace_text should not be exposed; edit is the only local edit tool")
 		}
 	}
-	if properties["version"] == nil || properties["expectedMd5"] != nil {
-		t.Fatalf("edit schema must expose version and reject expectedMd5: %#v", properties)
+	if properties["version"] != nil || properties["expectedMd5"] != nil {
+		t.Fatalf("edit schema must reject version and expectedMd5: %#v", properties)
 	}
 	changesSchema, ok := properties["changes"].(map[string]any)
 	if !ok {
@@ -396,7 +396,7 @@ func TestDetectWriteBatchConflictsBetweenSeparateMutationCalls(t *testing.T) {
 	// inside one internal plan are merged by planLocalEditBatch instead.
 	calls := []openai.ToolCall{{Function: openai.FunctionCall{
 		Name:      "edit",
-		Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`,
+		Arguments: `{"path":"sample.txt","changes":[{"oldText":"a","newText":"b"}]}`,
 	}}}
 	if conflicts := detectWriteBatchConflicts(cfg, calls); len(conflicts) != 0 {
 		t.Fatalf("one local edit call should not conflict with itself, got %#v", conflicts)
@@ -425,8 +425,8 @@ func TestDetectWriteBatchConflictsSkipsLaterSamePathCalls(t *testing.T) {
 	// Two edit calls to one file in one batch: the first executes, the second
 	// is skipped with guidance to re-send after seeing the first result.
 	calls := []openai.ToolCall{
-		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
-		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"./sample.txt","version":"abc123","changes":[{"oldText":"c","newText":"d"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"./sample.txt","changes":[{"oldText":"c","newText":"d"}]}`}},
 	}
 	conflicts := detectWriteBatchConflicts(cfg, calls)
 	if len(conflicts) != 1 {
@@ -447,7 +447,7 @@ func TestDetectWriteBatchConflictsSkipsLaterSamePathCalls(t *testing.T) {
 func TestDetectWriteBatchConflictsNormalizesSamePath(t *testing.T) {
 	cfg := ConfigState{Workspace: t.TempDir()}
 	calls := []openai.ToolCall{
-		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","changes":[{"oldText":"a","newText":"b"}]}`}},
 		{Function: openai.FunctionCall{Name: "delete", Arguments: `{"paths":["./sample.txt"]}`}},
 		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"other.txt"}`}},
 	}
@@ -475,7 +475,7 @@ func TestDetectWriteBatchConflictsSeesSinglePathTools(t *testing.T) {
 	cfg := ConfigState{Workspace: t.TempDir()}
 	calls := []openai.ToolCall{
 		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"sample.txt","content":"x"}`}},
-		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","changes":[{"oldText":"a","newText":"b"}]}`}},
 	}
 	conflicts := detectWriteBatchConflicts(cfg, calls)
 	if len(conflicts) != 1 || toolErrorCode(conflicts[1]) != "E_WRITE_BATCH_CONFLICT" {
@@ -483,8 +483,8 @@ func TestDetectWriteBatchConflictsSeesSinglePathTools(t *testing.T) {
 	}
 
 	remoteCalls := []openai.ToolCall{
-		{Function: openai.FunctionCall{Name: "remote_edit", Arguments: `{"target":"dev:/w","path":"a.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
-		{Function: openai.FunctionCall{Name: "remote_edit", Arguments: `{"target":"dev:/w","path":"a.txt","version":"abc123","changes":[{"oldText":"a","newText":"c"}]}`}},
+		{Function: openai.FunctionCall{Name: "remote_edit", Arguments: `{"target":"dev:/w","path":"a.txt","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "remote_edit", Arguments: `{"target":"dev:/w","path":"a.txt","changes":[{"oldText":"a","newText":"c"}]}`}},
 	}
 	remoteConflicts := detectWriteBatchConflicts(cfg, remoteCalls)
 	if len(remoteConflicts) != 1 || toolErrorCode(remoteConflicts[1]) != "E_WRITE_BATCH_CONFLICT" {
@@ -507,7 +507,7 @@ func TestDetectWriteBatchConflictsCollapsesRepeatWithinOneCall(t *testing.T) {
 		t.Fatalf("a repeated path inside one call is not a batch conflict, got %#v", conflicts)
 	}
 
-	calls = append(calls, openai.ToolCall{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}})
+	calls = append(calls, openai.ToolCall{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","changes":[{"oldText":"a","newText":"b"}]}`}})
 	conflicts := detectWriteBatchConflicts(cfg, calls)
 	if len(conflicts) != 1 || toolErrorCode(conflicts[1]) != "E_WRITE_BATCH_CONFLICT" {
 		t.Fatalf("the earlier call still owns the path, got %#v", conflicts)
@@ -601,8 +601,8 @@ func TestDetectToolBatchConflictsKeepsOnePlanWriter(t *testing.T) {
 func TestDetectToolBatchConflictsNormalizesToolNameCasing(t *testing.T) {
 	cfg := ConfigState{Workspace: t.TempDir()}
 	calls := []openai.ToolCall{
-		{Function: openai.FunctionCall{Name: "Edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
-		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"c","newText":"d"}]}`}},
+		{Function: openai.FunctionCall{Name: "Edit", Arguments: `{"path":"sample.txt","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","changes":[{"oldText":"c","newText":"d"}]}`}},
 	}
 	conflicts := detectWriteBatchConflicts(cfg, calls)
 	if len(conflicts) != 1 {
@@ -1424,11 +1424,11 @@ func TestPlanBatchValidationMergesSharedUnits(t *testing.T) {
 	writeToolTestFile(t, root, "web/x.vue", "<template><div/></template>\n")
 	writeToolTestFile(t, root, "data/cfg.json", "{}\n")
 	calls := []openai.ToolCall{
-		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/a.go","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/a.go","changes":[{"oldText":"a","newText":"b"}]}`}},
 		{Function: openai.FunctionCall{Name: "read", Arguments: `{"files":[{"path":"pkg/a.go"}]}`}},
-		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/b.go","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/b.go","changes":[{"oldText":"a","newText":"b"}]}`}},
 		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"data/cfg.json","content":"{}"}`}},
-		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"web/x.vue","version":"abc123","changes":[{"oldText":"div","newText":"span"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"web/x.vue","changes":[{"oldText":"div","newText":"span"}]}`}},
 	}
 	roots, err := workspaceRoots(cfg)
 	if err != nil {
@@ -1466,9 +1466,9 @@ func TestPlanBatchValidationMergesSharedUnits(t *testing.T) {
 	// nor contribute paths to it: the executed earlier edit keeps its
 	// validation instead of deferring to a call that will not run.
 	plan = planBatchValidation(roots, []openai.ToolCall{
-		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/a.go","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
-		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/b.go","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
-		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/c.go","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/a.go","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/b.go","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/c.go","changes":[{"oldText":"a","newText":"b"}]}`}},
 	}, map[int]bool{2: true})
 	if got := plan[0]; len(got) != 0 {
 		t.Fatalf("call 0 should defer its package to the later executing edit, got %v", got)
@@ -1497,8 +1497,8 @@ func TestExecuteToolEditValidationFollowsBatchPlan(t *testing.T) {
 	enabled := true
 	cfg := ConfigState{Workspace: root, AutoValidationJSON: &enabled}
 	args, err := json.Marshal(FileTextEdits{
-		Path:    "config.json",
-		Version: hashVersion(original),
+		Path: "config.json",
+
 		Changes: []TextChange{{OldText: "true", NewText: ""}},
 	})
 	if err != nil {
@@ -1546,8 +1546,8 @@ func TestEditAutoValidationReturnsFailureWithoutUndoingWrite(t *testing.T) {
 	original := []byte("{\"ok\":true}\n")
 	writeToolTestFile(t, root, "config.json", string(original))
 	req := FileTextEdits{
-		Path:    "config.json",
-		Version: hashVersion(original),
+		Path: "config.json",
+
 		Changes: []TextChange{{OldText: "true", NewText: ""}},
 	}
 	payload, err := json.Marshal(req)
@@ -2656,18 +2656,18 @@ func TestSessionReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 		t.Fatalf("second read failed: %#v", second)
 	}
 	secondData := second.Data.(*BatchReadResult)
-	if len(secondData.Files) != 1 || !secondData.Files[0].Reused || secondData.Files[0].Content != "" || secondData.Files[0].Version == "" {
+	if len(secondData.Files) != 1 || !secondData.Files[0].Reused || secondData.Files[0].Content != "" {
 		t.Fatalf("expected metadata-only reused read, got %#v", secondData)
 	}
 
 	// The tool declaration explains reused once; repeated receipts retain just
-	// current version/range metadata instead of a paragraph longer than small files.
+	// current range metadata instead of a paragraph longer than small files.
 	firstModel := compactToolResultForModel("read", first, "")
 	if !strings.Contains(firstModel, "one") || strings.Contains(firstModel, "Content omitted") {
 		t.Fatalf("expected first compact read to carry content, got: %s", firstModel)
 	}
 	secondModel := compactToolResultForModel("read", second, "")
-	if len(secondModel) >= len(firstModel) || !strings.Contains(secondModel, ` | reused`) || !strings.Contains(secondModel, `version="`) {
+	if len(secondModel) >= len(firstModel) || !strings.Contains(secondModel, ` | reused`) {
 		t.Fatalf("expected reused compact read to explain the omission, got: %s", secondModel)
 	}
 
@@ -2857,8 +2857,8 @@ func TestBatchReadKeepsSamePathWithDifferentEffectiveRanges(t *testing.T) {
 	if result.Files[1].Content != "2: two\n3: three" {
 		t.Fatalf("expected second read to contain numbered lines through EOF, got:\n%s", result.Files[1].Content)
 	}
-	if result.Files[0].ContentFormat != "line_numbers" || result.Files[0].Version != hashVersion([]byte("one\ntwo\nthree\n")) {
-		t.Fatalf("expected numbered content with version metadata, got %#v", result.Files[0])
+	if result.Files[0].ContentFormat != "line_numbers" {
+		t.Fatalf("expected numbered content, got %#v", result.Files[0])
 	}
 }
 
@@ -3091,7 +3091,7 @@ func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
 	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 
-	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(`{"path": "sample.txt", "version": "000000000000",
+	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(`{"path": "sample.txt",
 		"edits": [
 			{"oldString": "alpha", "newString": "ALPHA"},
 			{"oldString": "gamma", "newString": "GAMMA"}
@@ -3172,12 +3172,11 @@ func TestExecuteToolAppliesMultipleBatchTextChanges(t *testing.T) {
 	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 
-	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt",
-		"version": %q,
+	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(`{"path": "sample.txt",
 		"changes": [
 			{"oldText": "alpha", "newText": "ALPHA"},
 			{"oldText": "gamma", "newText": "GAMMA"}
-		]}`, strings.ToUpper(hashVersion(original)))))
+		]}`))
 	if !result.OK {
 		t.Fatalf("expected batch edit to succeed, got error %q", result.Error)
 	}
@@ -3197,7 +3196,7 @@ func TestExecuteToolAppliesOriginalSnapshotTextChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"two","newText":"TWO\ninserted"},{"oldText":"five","newText":"FIVE"}]}`, hashVersion(original))
+	args := `{"path":"sample.txt","changes":[{"oldText":"two","newText":"TWO\ninserted"},{"oldText":"five","newText":"FIVE"}]}`
 	result := newIsolatedTestApp(t).executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
 	if !result.OK {
 		t.Fatalf("text edit failed: %#v", result)
@@ -3227,7 +3226,7 @@ func TestExecuteToolRejectsRemovedOrMissingEditParameters(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[%s]}`, hashVersion(original), change)
+			args := fmt.Sprintf(`{"path":"sample.txt","changes":[%s]}`, change)
 			result := newIsolatedTestApp(t).executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
 			if result.OK {
 				t.Fatalf("the call must be refused, got %#v", result)
@@ -3262,8 +3261,8 @@ func TestExecuteToolEditsParallelCallsPerFile(t *testing.T) {
 	}
 	// One flat edit call per file, sent as parallel tool calls in one batch.
 	calls := []openai.ToolCall{
-		{Function: openai.FunctionCall{Name: "edit", Arguments: fmt.Sprintf(`{"path":"a.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]}`, hashVersion(a))}},
-		{Function: openai.FunctionCall{Name: "edit", Arguments: fmt.Sprintf(`{"path":"b.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}`, hashVersion(b))}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"a.txt","changes":[{"oldText":"alpha","newText":"ALPHA"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"b.txt","changes":[{"oldText":"beta","newText":"BETA"}]}`}},
 	}
 	app := newIsolatedTestApp(t)
 	for i, call := range calls {
@@ -3329,8 +3328,8 @@ func TestExecuteToolEditRollsBackEarlierFilesWhenCommitFails(t *testing.T) {
 	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 	files := []FileTextEdits{
-		{Path: "a.txt", Version: hashVersion(a), Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}}},
-		{Path: "sub/b.txt", Version: hashVersion(b), Changes: []TextChange{{OldText: "beta", NewText: "BETA"}}},
+		{Path: "a.txt", Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}}},
+		{Path: "sub/b.txt", Changes: []TextChange{{OldText: "beta", NewText: "BETA"}}},
 	}
 	_, err := app.editFilesWithConfig(cfg, files)
 	if err == nil {
@@ -3363,14 +3362,14 @@ func TestExecuteToolEditRejectsLegacyNestedFilesForm(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	version := hashVersion(original)
+
 	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
 
 	// The flat single-file shape is the only accepted form; nested
 	// {"files":[...]} arguments from before the schema change fail without
 	// touching the file — there is no compatibility backdoor.
-	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]}]}`, version)
+	args := `{"files":[{"path":"sample.txt","changes":[{"oldText":"alpha","newText":"ALPHA"}]}]}`
 	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(args))
 	if result.OK || result.ErrorCode != "E_BAD_ARGS" {
 		t.Fatalf("expected legacy nested files form to be rejected, got %#v", result)
@@ -3378,7 +3377,7 @@ func TestExecuteToolEditRejectsLegacyNestedFilesForm(t *testing.T) {
 
 	// A double-encoded files array is likewise rejected, not repaired into
 	// an edit.
-	stringEncoded := fmt.Sprintf(`{"files":"[{\"path\":\"sample.txt\",\"version\":\"%s\",\"changes\":[{\"oldText\":\"alpha\",\"newText\":\"ALPHA\"}]}]"}`, version)
+	stringEncoded := `{"files":"[{\"path\":\"sample.txt\",\"changes\":[{\"oldText\":\"alpha\",\"newText\":\"ALPHA\"}]}]"}`
 	result = app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(stringEncoded))
 	if result.OK || result.ErrorCode != "E_BAD_ARGS" {
 		t.Fatalf("expected string-encoded legacy files form to be rejected, got %#v", result)
@@ -3393,7 +3392,7 @@ func TestExecuteToolEditRejectsLegacyNestedFilesForm(t *testing.T) {
 	}
 }
 
-func TestExecuteToolRequiresVersionForEdit(t *testing.T) {
+func TestExecuteToolEditsFromCommandOutputWithoutRead(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\n")
@@ -3401,16 +3400,33 @@ func TestExecuteToolRequiresVersionForEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := newIsolatedTestApp(t)
-	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(`{"path": "sample.txt", "changes": [{"oldText": "beta", "newText": "BETA"}]}`))
-	if result.OK || !strings.Contains(result.Error, "version") {
-		t.Fatalf("expected the missing version to be named, got %#v", result)
+	cfg := ConfigState{Workspace: dir}
+	output, err := app.runCommandWithConfig(t.Context(), cfg, CommandRequest{Command: "cat sample.txt"})
+	if err != nil || output.ExitCode != 0 || output.Output != string(original) {
+		t.Fatalf("command did not return the source: %+v, %v", output, err)
+	}
+	args, err := json.Marshal(FileTextEdits{Path: "sample.txt", Changes: []TextChange{{OldText: output.Output, NewText: "alpha\nBETA\n"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := app.executeTool(t.Context(), cfg, "session-1", "edit", args)
+	if !result.OK {
+		t.Fatalf("direct edit without a prior read failed: %#v", result)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(original) {
-		t.Fatalf("expected missing-version edit to leave file unchanged, got %q", string(got))
+	if string(got) != "alpha\nBETA\n" {
+		t.Fatalf("direct edit produced unexpected contents: %q", string(got))
+	}
+	result = app.executeTool(t.Context(), cfg, "session-1", "edit", []byte(`{"path":"sample.txt","changes":[{"oldText":"BETA","newText":"gamma"}]}`))
+	if !result.OK {
+		t.Fatalf("subsequent edit without another read failed: %#v", result)
+	}
+	got, err = os.ReadFile(filepath.Join(dir, "sample.txt"))
+	if err != nil || string(got) != "alpha\ngamma\n" {
+		t.Fatalf("subsequent edit produced unexpected contents: %q, %v", got, err)
 	}
 }
 
@@ -3422,9 +3438,8 @@ func TestExecuteToolEditHandlesUniqueSingleLineSubstring(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := newIsolatedTestApp(t)
-	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "config.json",
-		"version": %q,
-		"changes": [{"oldText": "false", "newText": "true"}]}`, hashVersion(original))))
+	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(`{"path": "config.json",
+		"changes": [{"oldText": "false", "newText": "true"}]}`))
 	if !result.OK {
 		t.Fatalf("expected edit to succeed, got %#v", result)
 	}
@@ -3445,9 +3460,8 @@ func TestExecuteToolEditRejectsMultipleMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := newIsolatedTestApp(t)
-	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt",
-		"version": %q,
-		"changes": [{"oldText": "foo", "newText": "bar"}]}`, hashVersion(original))))
+	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(`{"path": "sample.txt",
+		"changes": [{"oldText": "foo", "newText": "bar"}]}`))
 	if result.OK || !strings.Contains(result.Error, "[E_MULTI_MATCH]") {
 		t.Fatalf("expected edit multi-match failure, got %#v", result)
 	}
@@ -3478,8 +3492,8 @@ func TestExecuteToolEditReplacesAllMatchesWhenRequested(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result := newIsolatedTestApp(t).executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt", "version": %q,
-		"changes": [{"oldText": "foo", "newText": "bar", "replaceAll": true}]}`, hashVersion(original))))
+	result := newIsolatedTestApp(t).executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(`{"path": "sample.txt",
+		"changes": [{"oldText": "foo", "newText": "bar", "replaceAll": true}]}`))
 	if !result.OK {
 		t.Fatalf("replaceAll edit failed: %#v", result)
 	}
@@ -3504,12 +3518,11 @@ func TestExecuteToolEditRejectsOverlappingChangesInBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := newIsolatedTestApp(t)
-	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt",
-		"version": %q,
+	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(`{"path": "sample.txt",
 		"changes": [
 			{"oldText": "abc", "newText": "ABC"},
 			{"oldText": "bc", "newText": "BC"}
-		]}`, hashVersion(original))))
+		]}`))
 	if result.OK || result.ErrorCode != "E_OVERLAPPING_CHANGES" {
 		t.Fatalf("expected overlap failure, got %#v", result)
 	}
@@ -3999,10 +4012,10 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := ConfigState{Workspace: dir}
-	version := hashVersion(original)
+
 	files := []FileTextEdits{
-		{Path: "sample.txt", Version: version, Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}}},
-		{Path: "./sample.txt", Version: version, Changes: []TextChange{{OldText: "beta", NewText: "BETA"}}},
+		{Path: "sample.txt", Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}}},
+		{Path: "./sample.txt", Changes: []TextChange{{OldText: "beta", NewText: "BETA"}}},
 	}
 
 	plan, err := planLocalEditBatch(cfg, files, localEditPlanForExecution)
@@ -4015,7 +4028,7 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 
 	// Model-facing calls are flat and single-file. The executor and the
 	// conflict detector must still agree on the same plan boundary.
-	args, err := json.Marshal(FileTextEdits{Path: "sample.txt", Version: version, Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}, {OldText: "beta", NewText: "BETA"}}})
+	args, err := json.Marshal(FileTextEdits{Path: "sample.txt", Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}, {OldText: "beta", NewText: "BETA"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4050,11 +4063,10 @@ func TestExecuteToolEditRejectsTruncatedArguments(t *testing.T) {
 	}
 	app := newIsolatedTestApp(t)
 	cfg := ConfigState{Workspace: dir}
-	version := strings.ToUpper(hashVersion(original))
 
 	// Stream cut inside a change: the call fails with the explicit truncation
 	// error and nothing is written. The model resends the complete call.
-	truncated := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BET`, version)
+	truncated := `{"path":"sample.txt","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BET`
 	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(truncated))
 	if result.OK || !strings.Contains(strings.ToLower(result.Error), "truncated") {
 		t.Fatalf("expected truncation error without salvage, got %#v", result)
@@ -4076,7 +4088,7 @@ func TestExecuteToolEditRejectsTruncatedArguments(t *testing.T) {
 }
 
 func TestPrepareToolCallsForExecutionRewritesInvalidJSONToMarker(t *testing.T) {
-	valid := `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"alpha","newText":"ALPHA"}]}`
+	valid := `{"path":"sample.txt","changes":[{"oldText":"alpha","newText":"ALPHA"}]}`
 	prepared, executionArgs := prepareToolCallsForExecution([]openai.ToolCall{
 		{ID: "call_1", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "edit", Arguments: valid}},
 		{ID: "call_2", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "list_files"}},
@@ -4104,7 +4116,7 @@ func TestExecuteToolEditDoesNotMislabelSchemaErrorAsTruncation(t *testing.T) {
 	t.Parallel()
 	app := newIsolatedTestApp(t)
 	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "edit", []byte(
-		`{"path":"sample.txt","version":"abc123","changes":[{"oldString":"alpha","newString":"ALPHA"}]}`,
+		`{"path":"sample.txt","changes":[{"oldString":"alpha","newString":"ALPHA"}]}`,
 	))
 	if result.OK {
 		t.Fatal("legacy unknown change fields must fail the model-facing edit schema")

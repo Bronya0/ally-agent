@@ -521,7 +521,7 @@ func TestSessionReadCacheSurvivesWriteToolsAndCommands(t *testing.T) {
 	}
 
 	// 写工具同样不清缓存；但内容确实变了，所以重新投递正文。
-	editArgs := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"two","newText":"TWO"}]}`, first.Version)
+	editArgs := `{"path":"sample.txt","changes":[{"oldText":"two","newText":"TWO"}]}`
 	if res := app.executeTool(ctx, cfg, sessionID, "edit", []byte(editArgs)); !res.OK {
 		t.Fatalf("edit failed: %#v", res)
 	}

@@ -540,7 +540,7 @@ func TestHistoryLoadRepairsDanglingToolCalls(t *testing.T) {
 			Role: openai.ChatMessageRoleAssistant,
 			ToolCalls: []openai.ToolCall{{
 				ID: "call_2", Type: openai.ToolTypeFunction,
-				Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"a.txt","version":"000000000000","changes":[]}`},
+				Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"a.txt","changes":[]}`},
 			}},
 		},
 		// call_2 never received a result: the process died mid-batch.

@@ -898,7 +898,6 @@ type ReadFileResult struct {
 	NextStartLine         int      `json:"nextStartLine,omitempty"`
 	TotalLines            int      `json:"totalLines"`
 	SHA256                string   `json:"sha256"`
-	Version               string   `json:"version"`
 	Size                  int64    `json:"size"`
 	LineEnding            string   `json:"lineEnding"`
 	Truncated             bool     `json:"truncated"`
@@ -1251,18 +1250,17 @@ type RemoteReadFileRequest struct {
 }
 
 // RemoteEditRequest is the flat model-facing remote_edit request: exactly one
-// file per call, path/version/changes at the top level under the SSH alias —
+// file per call, path/changes at the top level under the SSH alias —
 // the same shape local edit uses, with an SSH server `alias` and absolute path.
 // Multi-file changes are parallel remote_edit calls in one model response.
 type RemoteEditRequest struct {
 	Alias   string       `json:"alias"`
 	Path    string       `json:"path"`
-	Version string       `json:"version"`
 	Changes []TextChange `json:"changes"`
 }
 
 func (req RemoteEditRequest) file() FileTextEdits {
-	return FileTextEdits{Path: req.Path, Version: req.Version, Changes: req.Changes}
+	return FileTextEdits{Path: req.Path, Changes: req.Changes}
 }
 
 type RemoteCreateFileRequest struct {
@@ -1361,8 +1359,6 @@ type EditResult struct {
 	Path              string   `json:"path"`
 	BeforeSHA256      string   `json:"beforeSha256"`
 	AfterSHA256       string   `json:"afterSha256"`
-	BeforeVersion     string   `json:"beforeVersion"`
-	Version           string   `json:"version"`
 	BeforeBytes       int      `json:"beforeBytes"`
 	AfterBytes        int      `json:"afterBytes"`
 	Replacements      int      `json:"-"`
@@ -1391,7 +1387,6 @@ type EditResult struct {
 
 type FileTextEdits struct {
 	Path    string       `json:"path"`
-	Version string       `json:"version"`
 	Changes []TextChange `json:"changes"`
 }
 
@@ -1461,7 +1456,6 @@ type BatchReadResultItem struct {
 	StartLine             int             `json:"startLine"`
 	EndLine               int             `json:"endLine"`
 	NextStartLine         int             `json:"nextStartLine,omitempty"`
-	Version               string          `json:"version"`
 	Size                  int64           `json:"size"`
 	TotalLines            int             `json:"totalLines"`
 	LineEnding            string          `json:"lineEnding"`
@@ -2844,7 +2838,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "edit":
 		// The model-facing request is the flat FileTextEdits itself: exactly
-		// one file per call, path/version/changes at the top level. Multi-file
+		// one file per call, path/changes at the top level. Multi-file
 		// changes are parallel edit calls in one model response. Truncated
 		// arguments never reach this case: prepareToolCallsForExecution has
 		// already rewritten them to the truncation marker, which fails above
@@ -2997,7 +2991,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			data, err = res, rerr
 		}
 	case "remote_edit":
-		// Flat single-file request: target + the same path/version/changes as
+		// Flat single-file request: target + the same path/changes as
 		// local edit. Truncated arguments are rejected upstream the same way
 		// as edit (E_TRUNCATED_ARGS marker), so only complete JSON lands here.
 		var req RemoteEditRequest

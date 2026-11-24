@@ -45,7 +45,7 @@ func TestEditCancellationWhileQueuedNeverWrites(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(a.config.Workspace, path), []byte("old\n"), 0600); err != nil {
 					t.Fatal(err)
 				}
-				raw, err := json.Marshal(FileTextEdits{Path: path, Version: hashVersion([]byte("old\n")), Changes: []TextChange{{OldText: "old", NewText: "new"}}})
+				raw, err := json.Marshal(FileTextEdits{Path: path, Changes: []TextChange{{OldText: "old", NewText: "new"}}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -117,7 +117,7 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := FileTextEdits{Path: "source.txt", Version: hashVersion(decoded), Changes: []TextChange{tc.change}}
+			req := FileTextEdits{Path: "source.txt", Changes: []TextChange{tc.change}}
 			raw, err := json.Marshal(req)
 			if err != nil {
 				t.Fatal(err)
@@ -130,7 +130,7 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 			if err := os.WriteFile(peerPath, []byte("old\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			peerRaw, err := json.Marshal(FileTextEdits{Path: "peer.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{OldText: "old", NewText: "new"}}})
+			peerRaw, err := json.Marshal(FileTextEdits{Path: "peer.txt", Changes: []TextChange{{OldText: "old", NewText: "new"}}})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -37,7 +37,7 @@ func TestReadOnlyTailCacheSeparatesRequestedLengths(t *testing.T) {
 				if item.Reused != (i >= 2) || (item.Content == "") != item.Reused {
 					t.Fatalf("tail %d at step %d lost its cached payload: %#v", lines, i, item)
 				}
-				if item.StartLine != 0 || item.EndLine != 0 || item.Editable || item.Version != "" || item.RangeStatus != "read_only_tail" {
+				if item.StartLine != 0 || item.EndLine != 0 || item.Editable || item.RangeStatus != "read_only_tail" {
 					t.Fatalf("tail acquired edit/absolute-line metadata: %#v", item)
 				}
 			}

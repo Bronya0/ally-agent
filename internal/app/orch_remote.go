@@ -436,7 +436,7 @@ func decodeRemoteRawFile(data struct {
 	}
 	// The same transcode boundary as the local read pipeline: UTF-16 LE/BE
 	// (with or without a BOM) is accepted and converted to UTF-8, while real
-	// binary and malformed/non-text UTF-16 still fail. Version tokens and
+	// binary and malformed/non-text UTF-16 still fail. Content hashes and
 	// edit write-back are therefore based on the same bytes as local files.
 	decoded, err := read.DecodeTextBytes(raw)
 	if err != nil {
@@ -455,7 +455,7 @@ func (a *App) remoteReadRaw(ctx context.Context, target, relPath string) (remote
 }
 
 // remoteReadBatchItem 是 read_batch 结果槽的传输形状（纯字节搬运；转码/
-// 版本/预览语义全部在 Go 侧复用本地 read 管线，不在这里实现）。
+// 预览语义全部在 Go 侧复用本地 read 管线，不在这里实现）。
 type remoteReadBatchItem struct {
 	Path string `json:"path"`
 	OK   bool   `json:"ok"`
@@ -689,7 +689,7 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 }
 
 // remoteReadFileCached 给 remote_read 接上会话级读缓存：同一会话里第二次读同一
-// 台机器上同一范围且内容未变的文件时，正文不再重复投递，只回版本令牌与 reused
+// 台机器上同一范围且内容未变的文件时，正文不再重复投递，只回范围元数据与 reused
 // 说明。模型侧的渲染本来就与本地 read 共用一条管线（见 infra_result.go 的
 // case "read", "remote_read"），这里补的是数据层：命中判定、被清空的字段与
 // Reused 标记全部复用 sessionReadCache.dedupeResult，与本地 read 是同一份实现。
@@ -708,7 +708,7 @@ func (a *App) remoteReadFileCached(ctx context.Context, req RemoteReadFileReques
 }
 
 // buildRemoteReadResultItem 把远端原始字节转换成与本地 read 同形状的预览
-// 结果：转码/版本令牌/行号预览/截断标记全部复用本地 read 的同一套管
+// 结果：转码/行号预览/截断标记全部复用本地 read 的同一套管
 // 线，远程与本地语义不分离。
 func buildRemoteReadResultItem(rawFile remoteRawFile, f BatchReadFileRequest) (BatchReadResultItem, error) {
 	previewStart, rangeErr := resolveReadStartLine(f.StartLine, f.EndLine, f.TailLines)
@@ -736,9 +736,8 @@ func buildRemoteReadResultItem(rawFile remoteRawFile, f BatchReadFileRequest) (B
 
 // remoteEdit applies the flat single-file remote edit contract. The result is
 // the same MultiEditResult shape local edit returns, with exactly one file.
-// A single-file call needs no backup/rollback: remoteEditOne validates the
-// version, applies the whole batch in memory, and writes once, so the file is
-// either fully updated or untouched.
+// A single-file call needs no backup/rollback: remoteEditOne applies the whole
+// batch in memory and writes once, so the file is fully updated or untouched.
 func (a *App) remoteEdit(ctx context.Context, req RemoteEditRequest) (MultiEditResult, error) {
 	if strings.TrimSpace(req.Alias) == "" {
 		return MultiEditResult{}, errors.New("alias is required")
@@ -773,10 +772,7 @@ func (a *App) remoteEdit(ctx context.Context, req RemoteEditRequest) (MultiEditR
 }
 
 func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEdits, file remoteRawFile) (EditResult, error) {
-	beforeHash, beforeVersion := hashBytesAndVersion(file.Data)
-	if !strings.EqualFold(req.Version, beforeVersion) {
-		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("remote file changed: expected version %s, current %s. Re-read before editing", req.Version, beforeVersion))
-	}
+	beforeHash := read.HashBytes(file.Data)
 	text, ending, hadBOM := normalizeText(file.Data)
 	result, replacements, err := edit.ApplyBatchTextChanges(text, toEditChanges(req.Changes))
 	if err != nil {
@@ -786,7 +782,7 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 	if err != nil {
 		return EditResult{}, err
 	}
-	afterHash, afterVersion := hashBytesAndVersion(encodeText(result.Content, ending, hadBOM))
+	afterHash := read.HashBytes(encodeText(result.Content, ending, hadBOM))
 	// An all-no-op batch (every change ignored as identical) succeeds without
 	// writing, mirroring the local edit contract instead of failing E_NOOP.
 	noop := bytes.Equal(file.rawBytes(), after)
@@ -808,8 +804,6 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 		Path:              file.Path,
 		BeforeSHA256:      beforeHash,
 		AfterSHA256:       afterHash,
-		BeforeVersion:     beforeVersion,
-		Version:           afterVersion,
 		BeforeBytes:       len(file.rawBytes()),
 		AfterBytes:        len(after),
 		Replacements:      replacements,
@@ -870,12 +864,11 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	}
 	before := []byte{}
 	beforeHash := ""
-	beforeVersion := ""
-	// Best-effort read supplies the diff and version; stat determines existence.
+	// Best-effort read supplies the diff and content hash; stat determines existence.
 	if stat.Exists {
 		if _, existing, readErr := a.remoteReadRaw(ctx, req.Alias, cleanPath); readErr == nil {
 			before = existing.Data
-			beforeHash, beforeVersion = hashBytesAndVersion(existing.Data)
+			beforeHash = read.HashBytes(existing.Data)
 		}
 	}
 	content, ending, hadBOM := normalizeText([]byte(req.Content))
@@ -885,7 +878,7 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	if err != nil {
 		return EditResult{}, err
 	}
-	result := makeEditResult(cleanPath, beforeHash, beforeVersion, before, encoded, ending, 1, string(before), content)
+	result := makeEditResult(cleanPath, beforeHash, before, encoded, ending, 1, string(before), content)
 	created := !stat.Exists
 	result.Created = &created
 	if len(createdDirs) > 0 {

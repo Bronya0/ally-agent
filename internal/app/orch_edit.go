@@ -10,7 +10,7 @@ package app
 // Section 9: Edit (was file_edit.go)
 // App-owned edit orchestration that binds internal/tools/edit diff/apply
 // algorithms to workspace path resolution, fileOpsMu serialization, atomic
-// writes with best-effort rollback, and the E_VERSION_MISMATCH guard.
+// writes with best-effort rollback, and concurrent-write protection.
 
 import (
 	"bytes"
@@ -100,11 +100,7 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 		if err != nil {
 			return MultiEditResult{}, withEditFileError(file.Path, err)
 		}
-		beforeHash, beforeVersion := hashBytesAndVersion(before)
-		if !strings.EqualFold(file.Version, beforeVersion) {
-			err := codedToolError("E_VERSION_MISMATCH", fmt.Errorf("file %s expected version %s, current %s; read the file again", file.Path, file.Version, beforeVersion))
-			return MultiEditResult{}, withEditFileError(file.Path, err)
-		}
+		beforeHash := read.HashBytes(before)
 		text, ending, hadBOM := normalizeText(before)
 		applied, replacements, err := edit.ApplyBatchTextChanges(text, toEditChanges(file.Changes))
 		if err != nil {
@@ -125,7 +121,7 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 			classification = "deletion"
 		}
 		display := filepath.ToSlash(file.Path)
-		afterHash, afterVersion := hashBytesAndVersion(encodeText(applied.Content, ending, hadBOM))
+		afterHash := read.HashBytes(encodeText(applied.Content, ending, hadBOM))
 		prepared = append(prepared, preparedFileEdit{
 			path:    resolved,
 			display: display,
@@ -136,8 +132,6 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 				Path:              display,
 				BeforeSHA256:      beforeHash,
 				AfterSHA256:       afterHash,
-				BeforeVersion:     beforeVersion,
-				Version:           afterVersion,
 				BeforeBytes:       len(rawBefore),
 				AfterBytes:        len(after),
 				Replacements:      replacements,
@@ -183,11 +177,11 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 		current, _, err := read.ReadRawTextFile(item.path)
 		if err != nil || !bytes.Equal(current, item.before) {
 			rollbackErr := rollback()
-			msg := fmt.Sprintf("file changed before commit: %s; read the file again", item.display)
+			msg := fmt.Sprintf("file changed before commit: %s; inspect the current contents before retrying", item.display)
 			if rollbackErr != nil {
 				msg += "; rollback errors: " + rollbackErr.Error()
 			}
-			return MultiEditResult{}, withEditFileError(item.path, codedToolError("E_VERSION_MISMATCH", errors.New(msg)))
+			return MultiEditResult{}, withEditFileError(item.path, codedToolError("E_EDIT_CONFLICT", errors.New(msg)))
 		}
 		if err := safeWriteFile(item.path, item.after, item.perm); err != nil {
 			rollbackErr := rollback()
@@ -271,7 +265,7 @@ func (a *App) executeLocalEditToolCall(ctx context.Context, cfg ConfigState, cal
 
 func validateModelEditToolRequest(files []FileTextEdits) error {
 	if len(files) == 0 {
-		return codedToolError("E_BAD_EDIT", errors.New("edit requires top-level path, version, and changes (exactly one file per call)"))
+		return codedToolError("E_BAD_EDIT", errors.New("edit requires top-level path and changes (exactly one file per call)"))
 	}
 	if len(files) > 20 {
 		return codedToolError("E_BAD_EDIT", errors.New("edit supports at most 20 files per call"))
@@ -280,9 +274,6 @@ func validateModelEditToolRequest(files []FileTextEdits) error {
 	for i, file := range files {
 		if strings.TrimSpace(file.Path) == "" {
 			return codedToolError("E_BAD_EDIT", fmt.Errorf("file %d requires a non-empty path", i+1))
-		}
-		if err := validateVersion(file.Version); err != nil {
-			return fmt.Errorf("file %d: %w", i+1, err)
 		}
 		if err := edit.ValidateBatchTextChanges(toEditChanges(file.Changes)); err != nil {
 			return fmt.Errorf("file %d: %w", i+1, err)
@@ -317,10 +308,6 @@ func prepareToolCallsForExecution(toolCalls []openai.ToolCall) ([]openai.ToolCal
 		executionArgs[i] = raw
 	}
 	return prepared, executionArgs
-}
-
-func validateVersion(version string) error {
-	return read.ValidateVersion(version)
 }
 
 func toEditChanges(in []TextChange) []edit.TextChange {

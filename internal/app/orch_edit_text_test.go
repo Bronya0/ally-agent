@@ -28,7 +28,7 @@ func TestReadSnapshotSupportsTextDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, item := range map[string]BatchReadResultItem{"local": local, "remote": remote} {
-		if !item.Editable || item.Version != hashVersion(original) || item.Content != "2: delete me" {
+		if !item.Editable || item.Content != "2: delete me" {
 			t.Fatalf("%s read lost the text edit snapshot: %+v", name, item)
 		}
 		raw, err := json.Marshal(item)
@@ -42,9 +42,12 @@ func TestReadSnapshotSupportsTextDeletion(t *testing.T) {
 		if _, exists := fields["rangeToken"]; exists {
 			t.Fatalf("%s read still returns a removed edit credential: %s", name, raw)
 		}
+		if _, exists := fields["version"]; exists {
+			t.Fatalf("%s read still returns an edit version: %s", name, raw)
+		}
 	}
-	edited, err := a.editFilesWithConfig(a.config, []FileTextEdits{{Path: "source.txt", Version: local.Version, Changes: []TextChange{{OldText: "delete me\n", NewText: ""}}}})
-	if err != nil || edited.Replacements != 1 || len(edited.Files) != 1 || edited.Files[0].Version != hashVersion([]byte("keep\nkeep\n")) {
+	edited, err := a.editFilesWithConfig(a.config, []FileTextEdits{{Path: "source.txt", Changes: []TextChange{{OldText: "delete me\n", NewText: ""}}}})
+	if err != nil || edited.Replacements != 1 || len(edited.Files) != 1 {
 		t.Fatalf("text deletion failed: %+v %v", edited, err)
 	}
 	actual, err := os.ReadFile(target)
@@ -58,7 +61,7 @@ func TestEditArgumentGateRejectsRemovedConstraints(t *testing.T) {
 	for _, name := range []string{"edit", "remote_edit"} {
 		for _, key := range []string{"lineRange", "rangeToken"} {
 			t.Run(name+"/"+key, func(t *testing.T) {
-				args := []byte(`{"alias":"dev","path":"/source.txt","version":"9k3m7x","changes":[{"oldText":"same","newText":"new","` + key + `":{"start":2}}]}`)
+				args := []byte(`{"alias":"dev","path":"/source.txt","changes":[{"oldText":"same","newText":"new","` + key + `":{"start":2}}]}`)
 				if name == "edit" {
 					args = []byte(strings.Replace(string(args), `"alias":"dev",`, "", 1))
 				}
@@ -79,7 +82,7 @@ func TestEditUncertainCharactersLeaveSourceUntouched(t *testing.T) {
 	if err := os.WriteFile(target, original, 0600); err != nil {
 		t.Fatal(err)
 	}
-	req := FileTextEdits{Path: "source.txt", Version: hashVersion(original), Changes: []TextChange{
+	req := FileTextEdits{Path: "source.txt", Changes: []TextChange{
 		{OldText: "keep\nvalue", NewText: "kept\nvalue"},
 		{OldText: "'old'", NewText: "‘new’"},
 	}}

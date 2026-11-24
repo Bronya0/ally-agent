@@ -17,8 +17,8 @@ import (
 
 func TestLocalEditStageIndependentFileCommits(t *testing.T) {
 	t.Parallel()
-	for _, stale := range []bool{false, true} {
-		t.Run(fmt.Sprintf("stale=%v", stale), func(t *testing.T) {
+	for _, noMatch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("noMatch=%v", noMatch), func(t *testing.T) {
 			a := newIsolatedToolTestApp(t)
 			cfg := a.config
 			cfg.ToolConcurrency = 1
@@ -27,11 +27,12 @@ func TestLocalEditStageIndependentFileCommits(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(cfg.Workspace, p), []byte("old\n"), 0600); err != nil {
 					t.Fatal(err)
 				}
-				version := hashVersion([]byte("old\n"))
-				if stale && p == "b.txt" {
-					version = hashVersion([]byte("stale"))
+
+				oldText := "old"
+				if noMatch && p == "b.txt" {
+					oldText = "absent"
 				}
-				raw, _ := json.Marshal(FileTextEdits{Path: p, Version: version, Changes: []TextChange{{OldText: "old", NewText: "new"}}})
+				raw, _ := json.Marshal(FileTextEdits{Path: p, Changes: []TextChange{{OldText: oldText, NewText: "new"}}})
 				calls = append(calls, stagedCall("edit", string(raw)))
 			}
 			results := make([]toolResult, len(calls))
@@ -46,27 +47,27 @@ func TestLocalEditStageIndependentFileCommits(t *testing.T) {
 					t.Fatal(err)
 				}
 				want := "new\n"
-				if stale && p == "b.txt" {
+				if noMatch && p == "b.txt" {
 					want = "old\n"
 				}
 				if string(data) != want {
 					t.Fatalf("independent edit result: %s=%q want=%q result=%#v", p, data, want, results[i])
 				}
-				if !stale && !results[i].OK {
+				if !noMatch && !results[i].OK {
 					t.Fatalf("valid edit %s failed: %#v", p, results[i])
 				}
-				if stale && p == "a.txt" && !results[i].OK {
+				if noMatch && p == "a.txt" && !results[i].OK {
 					t.Fatalf("valid peer edit was cancelled: %#v", results[i])
 				}
-				if stale && p == "b.txt" && (results[i].OK || results[i].ErrorCode != "E_VERSION_MISMATCH") {
-					t.Fatalf("stale edit should fail independently: %#v", results[i])
+				if noMatch && p == "b.txt" && (results[i].OK || results[i].ErrorCode != "E_NO_MATCH") {
+					t.Fatalf("noMatch edit should fail independently: %#v", results[i])
 				}
 			}
 		})
 	}
 }
 
-func TestEditPreservesUTF16AndReturnedVersion(t *testing.T) {
+func TestEditPreservesUTF16AndReadableContent(t *testing.T) {
 	t.Parallel()
 	a := newIsolatedToolTestApp(t)
 	p := filepath.Join(a.config.Workspace, "utf16.txt")
@@ -74,11 +75,7 @@ func TestEditPreservesUTF16AndReturnedVersion(t *testing.T) {
 	if err := os.WriteFile(p, before, 0600); err != nil {
 		t.Fatal(err)
 	}
-	first, err := a.readFileWithConfig(a.config, ReadFileRequest{Path: "utf16.txt"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	args, err := json.Marshal(FileTextEdits{Path: "utf16.txt", Version: first.Version, Changes: []TextChange{{OldText: "a", NewText: "b"}}})
+	args, err := json.Marshal(FileTextEdits{Path: "utf16.txt", Changes: []TextChange{{OldText: "a", NewText: "b"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,8 +94,8 @@ func TestEditPreservesUTF16AndReturnedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.Version != r.Data.(MultiEditResult).Files[0].Version {
-		t.Fatal("returned version cannot be reused")
+	if !strings.Contains(next.Content, "1: b") {
+		t.Fatalf("edited UTF16 content must remain readable: %#v", next)
 	}
 }
 
@@ -129,14 +126,14 @@ func TestEditRollbackPreservesRawUTF16(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = os.Chmod(sub, 0700) })
 	}
-	_, err := a.editFilesWithConfig(a.config, []FileTextEdits{{Path: "a.txt", Version: hashVersion([]byte("a\n")), Changes: []TextChange{{OldText: "a", NewText: "A"}}}, {Path: "sub/b.txt", Version: hashVersion([]byte("b\n")), Changes: []TextChange{{OldText: "b", NewText: "B"}}}})
+	_, err := a.editFilesWithConfig(a.config, []FileTextEdits{{Path: "a.txt", Changes: []TextChange{{OldText: "a", NewText: "A"}}}, {Path: "sub/b.txt", Changes: []TextChange{{OldText: "b", NewText: "B"}}}})
 	if toolErrorCode(err) != "E_EDIT_COMMIT" {
 		t.Fatalf("expected commit refusal: %v", err)
 	}
 	var calls []openai.ToolCall
 	for _, file := range []FileTextEdits{
-		{Path: "a.txt", Version: hashVersion([]byte("a\n")), Changes: []TextChange{{OldText: "a", NewText: "A"}}},
-		{Path: "sub/b.txt", Version: hashVersion([]byte("b\n")), Changes: []TextChange{{OldText: "b", NewText: "B"}}},
+		{Path: "a.txt", Changes: []TextChange{{OldText: "a", NewText: "A"}}},
+		{Path: "sub/b.txt", Changes: []TextChange{{OldText: "b", NewText: "B"}}},
 	} {
 		raw, _ := json.Marshal(file)
 		calls = append(calls, stagedCall("edit", string(raw)))
@@ -227,7 +224,7 @@ func TestLargeLogTailLocalAndRemoteShareReadOnlyContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if local.Editable || remote.Editable || local.Version != "" || remote.Version != "" || local.Content != remote.Content || !strings.Contains(remote.Content, "FINAL_ERROR") {
+	if local.Editable || remote.Editable || local.Content != remote.Content || !strings.Contains(remote.Content, "FINAL_ERROR") {
 		t.Fatalf("tail contract diverged: local=%#v remote=%#v", local, remote)
 	}
 }

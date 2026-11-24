@@ -299,9 +299,9 @@ def op_write(payload):
                 with open(path, "rb") as source:
                     current = source.read(33554433)
             except (OSError, IOError):
-                raise ValueError("E_VERSION_MISMATCH: remote file disappeared before commit; re-read before retrying")
+                raise ValueError("E_EDIT_CONFLICT: remote file disappeared before commit; inspect the current contents before retrying")
             if len(current) > 33554432 or hashlib.sha256(current).hexdigest() != expected:
-                raise ValueError("E_VERSION_MISMATCH: remote file changed before commit; re-read before retrying")
+                raise ValueError("E_EDIT_CONFLICT: remote file changed before commit; inspect the current contents before retrying")
     check_expected()
     mkdirs = bool(payload.get("mkdirs"))
     overwrite = bool(payload.get("overwrite"))

@@ -291,7 +291,4 @@ func TestReadImageThroughExecuteTool(t *testing.T) {
 	if f.Kind != "image" || f.Editable || f.DataURL == "" || !strings.HasPrefix(f.DataURL, "data:image/png;base64,") {
 		t.Fatalf("unexpected image read result: %#v", f)
 	}
-	if f.Version == "" {
-		t.Fatalf("image read must still report a version: %#v", f)
-	}
 }

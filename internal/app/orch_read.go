@@ -77,7 +77,7 @@ type readPreviewResult struct {
 // hash of what the model actually received for one file range — the returned text
 // plus any injected image data — and omits the payload when a later read of the
 // same range would send exactly the same bytes, always reporting the freshly read
-// version token.
+// range metadata.
 //
 // No write path clears this cache, and none is needed: every read still hits
 // disk and the omission is decided by comparing the payload hash, so a file
@@ -509,7 +509,6 @@ func batchReadResultItem(req ReadFileRequest, result ReadFileResult) BatchReadRe
 		StartLine:             result.StartLine,
 		EndLine:               result.EndLine,
 		NextStartLine:         result.NextStartLine,
-		Version:               result.Version,
 		Size:                  result.Size,
 		TotalLines:            result.TotalLines,
 		LineEnding:            result.LineEnding,
@@ -596,10 +595,8 @@ func (a *App) readImageWithConfig(cfg ConfigState, path string, req ReadFileRequ
 		}
 		dataURL = imageDataURL(mime, data)
 	}
-	// Hash by streaming: the bytes above are deliberately not kept for an
-	// oversized image, and the version token is part of the result contract
-	// (same value the in-memory path would produce).
-	sha256Hex, version, err := hashFileAndVersion(path)
+	// Stream the hash without buffering an oversized image.
+	sha256Hex, err := read.HashFile(path)
 	if err != nil {
 		return ReadFileResult{}, err
 	}
@@ -612,7 +609,6 @@ func (a *App) readImageWithConfig(cfg ConfigState, path string, req ReadFileRequ
 		Type:          strings.TrimPrefix(mime, "image/"),
 		Editable:      false,
 		SHA256:        sha256Hex,
-		Version:       version,
 		Size:          info.Size(),
 		DataURL:       dataURL,
 	}, nil
@@ -811,8 +807,7 @@ func buildReadOnlyTailResult(path string, data []byte, size int64, lines int) Re
 	return ReadFileResult{Path: path, Content: notice + body, Kind: "text", ContentFormat: "text", Editable: false, Size: size, Truncated: true, RangeStatus: "read_only_tail"}
 }
 
-// buildTextReadResult formats an already decoded text snapshot. Its version and
-// preview always describe the same bytes, including when edit supplies them.
+// buildTextReadResult formats an already decoded text snapshot.
 func buildTextReadResult(path string, data []byte, size int64, req ReadFileRequest) (ReadFileResult, error) {
 	text, ending, _ := normalizeText(data)
 	preview, err := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
@@ -825,9 +820,7 @@ func buildTextReadResult(path string, data []byte, size int64, req ReadFileReque
 	if err != nil {
 		return ReadFileResult{}, err
 	}
-	// Hash once; the previous code called hashBytes + hashVersion separately,
-	// hashing the same data twice (10 MB file ≈ 20-30 ms per SHA-256 pass).
-	sha256Hex, version := hashBytesAndVersion(data)
+	sha256Hex := read.HashBytes(data)
 	return ReadFileResult{
 		Path:                  path,
 		Content:               preview.Content,
@@ -840,7 +833,6 @@ func buildTextReadResult(path string, data []byte, size int64, req ReadFileReque
 		NextStartLine:         preview.NextStartLine,
 		TotalLines:            preview.TotalLines,
 		SHA256:                sha256Hex,
-		Version:               version,
 		Size:                  size,
 		LineEnding:            ending,
 		Truncated:             preview.Truncated,

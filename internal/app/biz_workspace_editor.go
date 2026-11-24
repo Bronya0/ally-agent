@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"ally-dev/internal/tools/read"
 )
 
 const workspaceEditorMaxBytes = 16 * 1024 * 1024
@@ -83,11 +85,11 @@ func (a *App) readWorkspaceFileAt(workspace, path string) (WorkspaceFileContent,
 		return WorkspaceFileContent{}, codedToolError("E_FILE_TOO_LARGE", fmt.Errorf("file is larger than the %d MiB editor limit", workspaceEditorMaxBytes/(1024*1024)))
 	}
 	content, ending, _ := normalizeText(data)
-	sha, version := hashBytesAndVersion(data)
+	sha := read.HashBytes(data)
 	return WorkspaceFileContent{
 		Path:       displayPathForConfig(cfg, resolved),
 		Content:    content,
-		Version:    version,
+		Version:    sha,
 		SHA256:     sha,
 		Size:       info.Size(),
 		LineEnding: ending,
@@ -105,8 +107,8 @@ func (a *App) saveWorkspaceFileAt(workspace string, req SaveWorkspaceFileRequest
 	if strings.TrimSpace(req.Path) == "" {
 		return SaveWorkspaceFileResult{}, codedToolError("E_BAD_PATH", errors.New("path is required"))
 	}
-	if err := validateVersion(req.Version); err != nil {
-		return SaveWorkspaceFileResult{}, err
+	if strings.TrimSpace(req.Version) == "" {
+		return SaveWorkspaceFileResult{}, codedToolError("E_BAD_ARGS", errors.New("editor snapshot version is required"))
 	}
 	if len(req.Content) > workspaceEditorMaxBytes {
 		return SaveWorkspaceFileResult{}, codedToolError("E_FILE_TOO_LARGE", fmt.Errorf("content is larger than the %d MiB editor limit", workspaceEditorMaxBytes/(1024*1024)))
@@ -134,7 +136,7 @@ func (a *App) saveWorkspaceFileAt(workspace string, req SaveWorkspaceFileRequest
 	if err != nil {
 		return SaveWorkspaceFileResult{}, err
 	}
-	_, currentVersion := hashBytesAndVersion(before)
+	currentVersion := read.HashBytes(before)
 	if !strings.EqualFold(req.Version, currentVersion) {
 		return SaveWorkspaceFileResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("file %s changed outside the editor; reopen it before saving", req.Path))
 	}
@@ -146,11 +148,11 @@ func (a *App) saveWorkspaceFileAt(workspace string, req SaveWorkspaceFileRequest
 	if err := safeWriteFile(resolved, after, info.Mode().Perm()); err != nil {
 		return SaveWorkspaceFileResult{}, err
 	}
-	sha, version := hashBytesAndVersion(after)
+	sha := read.HashBytes(after)
 	a.invalidateWorkspaceMapCache(cfg)
 	return SaveWorkspaceFileResult{
 		Path:    displayPathForConfig(cfg, resolved),
-		Version: version,
+		Version: sha,
 		SHA256:  sha,
 		Size:    int64(len(after)),
 	}, nil

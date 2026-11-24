@@ -80,7 +80,7 @@ func detectWriteBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int
 		// sees which call won and re-sends the skipped change in a later
 		// response once it knows the path's new state.
 		for _, ref := range refs[1:] {
-			conflicts[ref.index] = codedToolError("E_WRITE_BATCH_CONFLICT", fmt.Errorf("another file mutation for %s appears earlier in the same stage; only the first one executes. This call was skipped — wait for that mutation's result, then re-read the file (or reuse its returned version) and re-send this change in a later response if it is still needed", refs[0].display))
+			conflicts[ref.index] = codedToolError("E_WRITE_BATCH_CONFLICT", fmt.Errorf("another file mutation for %s appears earlier in the same stage; only the first one executes. This call was skipped — wait for that mutation's result, then re-send this change in a later response using current source text if it is still needed", refs[0].display))
 		}
 	}
 	return conflicts
@@ -435,7 +435,7 @@ type localEditBatchPlan struct {
 // planLocalEditBatch is the single normalization boundary shared by outer
 // tool-batch conflict detection and the local edit executor. Repeated aliases
 // of one physical path become one file plan and preserve the first display
-// path. All changes remain relative to the same original version snapshot.
+// path. All changes remain relative to the same original contents.
 func planLocalEditBatch(cfg ConfigState, files []FileTextEdits, mode localEditPlanMode) (localEditBatchPlan, error) {
 	if mode == localEditPlanForExecution {
 		if len(files) == 0 {
@@ -483,9 +483,6 @@ func planLocalEditBatch(cfg ConfigState, files []FileTextEdits, mode localEditPl
 		}
 		if existingIndex, exists := byTarget[target.key]; exists {
 			existing := &plan.Files[existingIndex]
-			if mode == localEditPlanForExecution && !strings.EqualFold(existing.Edit.Version, file.Version) {
-				return localEditBatchPlan{}, withEditFileError(file.Path, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("duplicate edit entries for %s use different versions (%s and %s); re-read the file and submit one version", file.Path, existing.Edit.Version, file.Version)))
-			}
 			existing.Edit.Changes = append(existing.Edit.Changes, file.Changes...)
 			continue
 		}
@@ -494,7 +491,6 @@ func planLocalEditBatch(cfg ConfigState, files []FileTextEdits, mode localEditPl
 		plan.Files = append(plan.Files, localEditFilePlan{
 			Edit: FileTextEdits{
 				Path:    file.Path,
-				Version: file.Version,
 				Changes: append([]TextChange(nil), file.Changes...),
 			},
 			ResolvedPath: resolved,

@@ -9,7 +9,7 @@ import (
 func TestPlainResultsPreserveExternalBodies(t *testing.T) {
 	body := "### header\n</ally-file> & <tag>\n// fake\n```\n中文\n"
 	cases := map[string]toolResult{
-		"read":            {OK: true, Data: BatchReadResult{Files: []BatchReadResultItem{{Path: "a.md", Content: body, Version: "v1"}}}},
+		"read":            {OK: true, Data: BatchReadResult{Files: []BatchReadResultItem{{Path: "a.md", Content: body}}}},
 		"command":         {OK: true, Data: CommandResult{Output: body, DurationMS: 123, Cancelled: true}},
 		"web_fetch":       {OK: true, Data: WebFetchResult{Text: body, Status: 200}},
 		"http_request":    {OK: true, Data: HTTPRequestToolResult{Body: body, Status: 200}},

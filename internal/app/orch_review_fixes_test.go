@@ -33,7 +33,7 @@ func TestLocalEditStageHasIndependentCallBudgets(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(a.config.Workspace, p), []byte(before.String()), 0600); err != nil {
 					t.Fatal(err)
 				}
-				raw, err := json.Marshal(FileTextEdits{Path: p, Version: hashVersion([]byte(before.String())), Changes: changes})
+				raw, err := json.Marshal(FileTextEdits{Path: p, Changes: changes})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -63,21 +63,22 @@ func TestLocalEditStageFailureBelongsToFailedCall(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(a.config.Workspace, p), []byte("old\n"), 0600); err != nil {
 					t.Fatal(err)
 				}
-				version := hashVersion([]byte("old\n"))
+
+				oldText := "old"
 				if i == failedIndex {
-					version = hashVersion([]byte("stale\n"))
+					oldText = "absent"
 				}
 				// Exercise canonical matching of an absolute alias as well.
 				if i == 1 {
 					p = filepath.Join(a.config.Workspace, p)
 				}
-				raw, _ := json.Marshal(FileTextEdits{Path: p, Version: version, Changes: []TextChange{{OldText: "old", NewText: "new"}}})
+				raw, _ := json.Marshal(FileTextEdits{Path: p, Changes: []TextChange{{OldText: oldText, NewText: "new"}}})
 				calls = append(calls, stagedCall("edit", string(raw)))
 			}
 			for i, result := range a.executeLocalEditToolBatch(t.Context(), a.config, calls) {
 				if i == failedIndex {
-					if result.OK || result.ErrorCode != "E_VERSION_MISMATCH" {
-						t.Fatalf("failed edit must report its own version conflict: %+v", result)
+					if result.OK || result.ErrorCode != "E_NO_MATCH" {
+						t.Fatalf("failed edit must report its own missing match: %+v", result)
 					}
 				} else if !result.OK || result.ErrorCode != "" {
 					t.Fatalf("valid peer edit was cancelled: %+v", result)
@@ -101,12 +102,12 @@ func TestLocalEditBatchDistinctFailuresDoNotShareDiagnostics(t *testing.T) {
 		t.Run(fmt.Sprint(first), func(t *testing.T) {
 			a := newIsolatedToolTestApp(t)
 			files := []FileTextEdits{
-				{Path: "multi.txt", Version: hashVersion([]byte("old\nold\n")), Changes: []TextChange{{OldText: "old", NewText: "new"}}},
-				{Path: "missing.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{OldText: "absent", NewText: "new"}}},
-				{Path: "stale.txt", Version: hashVersion([]byte("stale")), Changes: []TextChange{{OldText: "old", NewText: "new"}}},
+				{Path: "multi.txt", Changes: []TextChange{{OldText: "old", NewText: "new"}}},
+				{Path: "missing.txt", Changes: []TextChange{{OldText: "absent", NewText: "new"}}},
+				{Path: "empty.txt", Changes: []TextChange{{OldText: "", NewText: "new"}}},
 			}
 			originals := []string{"old\nold\n", "old\n", "old\n"}
-			codes := []string{"E_MULTI_MATCH", "E_NO_MATCH", "E_VERSION_MISMATCH"}
+			codes := []string{"E_MULTI_MATCH", "E_NO_MATCH", "E_BAD_ARGS"}
 			for i, file := range files {
 				if err := os.WriteFile(filepath.Join(a.config.Workspace, file.Path), []byte(originals[i]), 0600); err != nil {
 					t.Fatal(err)
@@ -136,19 +137,19 @@ func TestLocalEditBatchDistinctFailuresDoNotShareDiagnostics(t *testing.T) {
 
 func TestLocalEditBatchErrorOwnership(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []string{"large-stale", "missing"} {
+	for _, kind := range []string{"large-ambiguous", "missing"} {
 		t.Run(kind, func(t *testing.T) {
 			a := newIsolatedToolTestApp(t)
-			peer := FileTextEdits{Path: "peer.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{OldText: "old", NewText: "new"}}}
+			peer := FileTextEdits{Path: "peer.txt", Changes: []TextChange{{OldText: "old", NewText: "new"}}}
 			if err := os.WriteFile(filepath.Join(a.config.Workspace, peer.Path), []byte("old\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			bad := FileTextEdits{Path: "bad.txt", Version: hashVersion([]byte("stale")), Changes: peer.Changes}
+			bad := FileTextEdits{Path: "bad.txt", Changes: peer.Changes}
 			// A missing file is a coded failure like any other; what this test
 			// guards is that the failure is owned by its own call.
 			wantCode := "E_PATH_NOT_FOUND"
-			if kind == "large-stale" {
-				wantCode = "E_VERSION_MISMATCH"
+			if kind == "large-ambiguous" {
+				wantCode = "E_MULTI_MATCH"
 				if err := os.WriteFile(filepath.Join(a.config.Workspace, bad.Path), []byte(strings.Repeat("old\n", 2048)), 0600); err != nil {
 					t.Fatal(err)
 				}

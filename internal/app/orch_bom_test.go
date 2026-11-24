@@ -13,14 +13,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"ally-dev/internal/tools/read"
 )
 
 // TestBOMEndToEndReadEditPreservesBOM verifies the full user-visible path:
 // read of a BOM file must not expose the BOM, edit must match on the
 // BOM-less text, the file on disk must keep its BOM after the edit, and the
-// version returned by edit must equal the next read's version (no drift).
+// subsequent reads must show the updated source.
 func TestBOMEndToEndReadEditPreservesBOM(t *testing.T) {
 	t.Parallel()
 	app := newIsolatedTestApp(t)
@@ -32,8 +30,7 @@ func TestBOMEndToEndReadEditPreservesBOM(t *testing.T) {
 	}
 	cfg := ConfigState{Workspace: dir}
 
-	// 1. Read: version is based on the original bytes (with BOM), displayed
-	// content must not contain the BOM.
+	// 1. Displayed content must not contain the BOM.
 	readRes := app.executeTool(context.Background(), cfg, "s-1", "read", []byte(`{"files":[{"path":"sample.txt"}]}`))
 	if !readRes.OK {
 		t.Fatalf("read failed: %v", readRes.Error)
@@ -46,13 +43,9 @@ func TestBOMEndToEndReadEditPreservesBOM(t *testing.T) {
 	if strings.Contains(f.Content, "\uFEFF") {
 		t.Fatalf("read content must not expose the BOM: %q", f.Content)
 	}
-	readVersion := f.Version
-	if readVersion == "" {
-		t.Fatal("read returned empty version")
-	}
 
-	// 2. Edit using that version: change the first line.
-	editArgs := []byte(`{"path":"sample.txt","version":"` + readVersion + `","changes":[{"oldText":"alpha","newText":"ALPHA"}]}`)
+	// 2. Change the first line using the visible source text.
+	editArgs := []byte(`{"path":"sample.txt","changes":[{"oldText":"alpha","newText":"ALPHA"}]}`)
 	editRes := app.executeTool(context.Background(), cfg, "s-1", "edit", editArgs)
 	if !editRes.OK {
 		t.Fatalf("edit failed: %v", editRes.Error)
@@ -61,7 +54,6 @@ func TestBOMEndToEndReadEditPreservesBOM(t *testing.T) {
 	if editData.FileCount != 1 || len(editData.Files) != 1 {
 		t.Fatalf("unexpected edit result: %#v", editData)
 	}
-	afterVersion := editData.Files[0].Version
 
 	// 3. File on disk must still start with the BOM and contain the edit.
 	got, err := os.ReadFile(filepath.Join(dir, rel))
@@ -75,39 +67,13 @@ func TestBOMEndToEndReadEditPreservesBOM(t *testing.T) {
 		t.Fatalf("unexpected edited content: %q", got)
 	}
 
-	// 4. Next read returns the same version the edit reported (no drift).
+	// 4. Next read shows the changed text without the BOM.
 	readRes2 := app.executeTool(context.Background(), cfg, "s-1", "read", []byte(`{"files":[{"path":"sample.txt"}]}`))
 	if !readRes2.OK {
 		t.Fatalf("second read failed: %v", readRes2.Error)
 	}
 	readData2 := readRes2.Data.(*BatchReadResult)
-	if readData2.Files[0].Version != afterVersion {
-		t.Fatalf("version drift: edit returned %q, next read returned %q", afterVersion, readData2.Files[0].Version)
-	}
-}
-
-// TestBOMEndToEndEditFailsWithStaleVersion ensures the optimistic-concurrency
-// guard still works for BOM files: editing with a version computed from
-// BOM-less bytes must fail.
-func TestBOMEndToEndEditFailsWithStaleVersion(t *testing.T) {
-	t.Parallel()
-	app := newIsolatedTestApp(t)
-	dir := t.TempDir()
-	rel := "sample.txt"
-	if err := os.WriteFile(filepath.Join(dir, rel), []byte("\uFEFFalpha\nbeta\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := ConfigState{Workspace: dir}
-
-	// Version computed from BOM-less text differs from the on-disk version
-	// (which includes the BOM), so the edit must be rejected.
-	staleVersion := read.HashVersion([]byte("alpha\nbeta\n"))
-	editArgs := []byte(`{"path":"sample.txt","version":"` + staleVersion + `","changes":[{"oldText":"alpha","newText":"ALPHA"}]}`)
-	editRes := app.executeTool(context.Background(), cfg, "s-1", "edit", editArgs)
-	if editRes.OK {
-		t.Fatal("edit with a version computed from BOM-less bytes must fail")
-	}
-	if !strings.Contains(editRes.Error, "E_VERSION_MISMATCH") {
-		t.Fatalf("expected E_VERSION_MISMATCH, got: %v", editRes.Error)
+	if !strings.Contains(readData2.Files[0].Content, "1: ALPHA") || strings.Contains(readData2.Files[0].Content, "\uFEFF") {
+		t.Fatalf("updated read lost the source text: %#v", readData2.Files[0])
 	}
 }

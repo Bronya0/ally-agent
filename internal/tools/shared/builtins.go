@@ -204,17 +204,16 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("edit", "Edit one workspace file using its current version. "+editTextGuidance+" Use this tool rather than shell rewriting to preserve version checks and diffs.", map[string]any{
+		functionTool("edit", "Edit one workspace file by matching its current text. "+editTextGuidance+" Use this tool rather than shell rewriting to preserve encoding and diffs.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the single file to edit in this call."},
-				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-character current version from the latest read, create, or preceding successful edit of this file. Never guess it; use the new version returned after every successful edit. Comparison is case-insensitive."},
-				// Same declaration as remote_edit; only the read tool it names differs.
-				"changes": editChangesSchema("read"),
+				"path": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the single file to edit in this call."},
+				// Same replacement contract as remote_edit.
+				"changes": editChangesSchema(),
 			},
-			"required": []string{"path", "version", "changes"},
+			"required": []string{"path", "changes"},
 		}),
-		functionTool("create", "Create a UTF-8 file and missing parent directories. Directories and symlinks are refused. Existing files require overwrite=true and must be readable text; prefer edit to modify them. Returns the new version for a subsequent edit.", map[string]any{
+		functionTool("create", "Create a UTF-8 file and missing parent directories. Directories and symlinks are refused. Existing files require overwrite=true and must be readable text; prefer edit to modify them.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative file path."},
@@ -360,7 +359,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"url"},
 		}),
-		functionTool("remote_read", "Read one or more text files by absolute path on a remote SSH server: bounded line-numbered previews and versions for remote_edit, with UTF-16 LE/BE transcoded. Follow continuation hints when truncated; copy only visible source text for edits, without line prefixes or truncation markers. Pass needed files in the files array to read in parallel.", map[string]any{
+		functionTool("remote_read", "Read one or more text files by absolute path on a remote SSH server: bounded line-numbered previews, with UTF-16 LE/BE transcoded. Follow continuation hints when truncated; copy only visible source text for edits, without line prefixes or truncation markers. Pass needed files in the files array to read in parallel.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"alias": sshAliasSchema(),
@@ -373,10 +372,9 @@ func chatToolsUncached() []openai.Tool {
 			"properties": map[string]any{
 				"alias":   sshAliasSchema(),
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute remote path of the single file to edit, e.g. /srv/app/main.go."},
-				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required current 6-char version from the latest remote_read or preceding successful remote_edit; never guess it. Use the new version returned after every successful edit."},
-				"changes": editChangesSchema("remote_read"),
+				"changes": editChangesSchema(),
 			},
-			"required": []string{"alias", "path", "version", "changes"},
+			"required": []string{"alias", "path", "changes"},
 		}),
 		functionTool("remote_create_file", "Create a UTF-8 file and missing parents by absolute path on a remote SSH server. Directories are refused.", map[string]any{
 			"type": "object",
@@ -448,7 +446,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read text files and images. Text previews have 1-based line numbers and a version for edit. Copy only visible source text for edits, without line prefixes or truncation markers; follow continuation hints when truncated. Use tailLines for logs. Missing paths and directories return compact errors with a next step.", map[string]any{
+		functionTool("read", "Read text files and images. Text previews have 1-based line numbers and source text for edit. Copy only visible source text for edits, without line prefixes or truncation markers; follow continuation hints when truncated. Use tailLines for logs. Missing paths and directories return compact errors with a next step.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema("File path to read."),
@@ -542,12 +540,12 @@ func chatToolsUncached() []openai.Tool {
 }
 
 var builtinToolExamples = map[string]string{
-	"edit":               `{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"if err != nil {\n\treturn nil\n}","newText":"if err != nil {\n\treturn err\n}"}]}`,
+	"edit":               `{"path":"app.go","changes":[{"oldText":"if err != nil {\n\treturn nil\n}","newText":"if err != nil {\n\treturn err\n}"}]}`,
 	"command":            `{"command":"go test ./...","cwd":".","timeout":120}`,
 	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm run dev","cwd":"frontend"}; restart: {"action":"restart","id":"svc_..."}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
 	"ask":                `{"questions":[{"question":"Which database should we use?","options":[{"label":"SQLite","description":"Simple local storage.","recommended":true},{"label":"PostgreSQL","description":"Production database."}]}]}`,
 	"remote_read":        `{"alias":"my-dev","files":[{"path":"/srv/app/main.go"}]}`,
-	"remote_edit":        `{"alias":"my-dev","path":"/srv/app/main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
+	"remote_edit":        `{"alias":"my-dev","path":"/srv/app/main.go","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
 	"remote_run_command": `{"alias":"my-dev","command":"cd /srv/app && go test ./..."}`,
 	"remote_transfer":    `upload: {"alias":"my-dev","action":"upload","files":[{"localPath":"dist/app","remotePath":"/srv/app/app"},{"localPath":"config.json","remotePath":"/srv/app/config.json"}],"overwrite":true}; download: {"alias":"my-dev","action":"download","files":[{"remotePath":"/var/log/app.log","localPath":"debug/app.log"}]}`,
 	"ssh_cluster":        `{"action":"list"}`,
@@ -568,7 +566,7 @@ var modelOutputNote = fmt.Sprintf("Output is a bounded preview: at most %d KiB r
 
 func functionTool(name, description string, parameters map[string]any) openai.Tool {
 	if name == "read" || name == "remote_read" {
-		description += " Broad file previews share a 64 KiB batch budget with per-file continuations; explicit endLine ranges and tails keep the per-file budget. Files above 32 MiB support bounded UTF-8 tailLines reads only: read-only, no edit version or absolute line numbers. A header with the reused flag and no body means this exact range is already in context; its version is current."
+		description += " Broad file previews share a 64 KiB batch budget with per-file continuations; explicit endLine ranges and tails keep the per-file budget. Files above 32 MiB support bounded UTF-8 tailLines reads only: read-only, no absolute line numbers. A header with the reused flag and no body means this exact range is already in context."
 	}
 	properties, ok := parameters["properties"].(map[string]any)
 	if !ok {
@@ -656,31 +654,27 @@ func deletePathsSchema(itemDescription string) map[string]any {
 	}
 }
 
-const editTextGuidance = "Replace oldText with newText using literal text, not regex patterns or replacement templates. Matching searches the whole file regardless of the read range. Short or common snippets often match multiple places: include surrounding context until the target is unique; ambiguous matches are refused. Use replaceAll only when every exact occurrence should change. On a normalized candidate, copy its actual characters and retry exactly. Re-read on no match or version conflicts. Put all changes to this file in one call, using the original snapshot."
+const editTextGuidance = "Replace oldText with newText using literal text, not regex patterns or replacement templates. Matching searches the whole file regardless of the read range. Short or common snippets often match multiple places: include surrounding context until the target is unique; ambiguous matches are refused. Use replaceAll only when every exact occurrence should change. On a normalized candidate, copy its actual characters and retry exactly. Inspect the current contents on no match. Source text may come from read or command output. Put all changes to this file in one call, using the original contents."
 
-// editChangesSchema builds the `changes` array both edit tools declare. sourceTool
-// names the read tool the model copies source text from — `read` locally,
-// `remote_read` over SSH — and is the only thing the two declarations say
-// differently: shape and limits live here once, so a local and a remote edit
-// cannot drift apart.
-func editChangesSchema(sourceTool string) map[string]any {
+// editChangesSchema shares the replacement contract between both edit tools.
+func editChangesSchema() map[string]any {
 	return map[string]any{
 		"type":        "array",
 		"minItems":    1,
 		"maxItems":    50,
-		"description": fmt.Sprintf("All changes for this file (max 50), each with oldText and newText from the same original `%s` snapshot. Later changes cannot target text inserted by earlier ones. Overlapping replacements fail the whole call.", sourceTool),
-		"items":       editChangeSchema(sourceTool),
+		"description": "All changes for this file (max 50), based on the same original contents. Later changes cannot target text inserted by earlier ones. Overlapping replacements fail the whole call.",
+		"items":       editChangeSchema(),
 	}
 }
 
-func editChangeSchema(sourceTool string) map[string]any {
+func editChangeSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"oldText": map[string]any{
 				"type":        "string",
 				"minLength":   1,
-				"description": fmt.Sprintf("Non-empty source copied from current `%s` text, preserving all characters including tabs, spaces, quotes and newlines; omit displayed N: prefixes and truncation markers. Escape argument JSON once: \\n encodes a newline, \\\\n encodes literal backslash+n. Do not double-escape or decode source backslash sequences. Include whole identifiers or surrounding syntax: matching has no word boundaries. Never guess omitted text.", sourceTool),
+				"description": "Non-empty source copied from current file contents (read or command output), preserving all characters including tabs, spaces, quotes and newlines; omit displayed N: prefixes and truncation markers. Escape argument JSON once: \\n encodes a newline, \\\\n encodes literal backslash+n. Do not double-escape or decode source backslash sequences. Include whole identifiers or surrounding syntax: matching has no word boundaries. Never guess omitted text.",
 			},
 			"replaceAll": map[string]any{
 				"type":        "boolean",

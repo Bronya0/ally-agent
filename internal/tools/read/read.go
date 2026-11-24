@@ -6,13 +6,12 @@
 // This file is part of ally-agent, licensed under the GNU General
 // Public License v3. See the LICENSE file for details.
 // Package read holds the read tool's pure helpers: bounded text reads, line
-// ending normalization, line splitting, SHA-256 / Crockford Base32 version
-// tokens, and atomic file writes via temp-sibling rename.
+// ending normalization, line splitting, SHA-256 content hashes, and atomic
+// file writes via temp-sibling rename.
 //
 // Nothing here may depend on App state, ConfigState, or any *App receiver.
 // Errors that need a stable tool error code (E_BINARY_FILE, E_FILE_TOO_LARGE,
-// E_VERSION_REQUIRED, E_BAD_VERSION, E_EXISTS) are wrapped using the shared
-// internal/tools/shared package so callers can extract codes uniformly.
+// E_EXISTS) use internal/tools/shared so callers can extract codes uniformly.
 package read
 
 import (
@@ -94,7 +93,7 @@ func ReadRawTextFile(path string) ([]byte, os.FileInfo, error) {
 const MaxTailBytes = 128 * 1024
 
 // ReadTextTail is a read-only escape hatch for large UTF-8 logs. It never
-// loads/hashes the entire file and never issues an editable version token.
+// loads/hashes the entire file and is read-only.
 func ReadTextTail(path string) ([]byte, int64, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -132,7 +131,7 @@ func ReadTextTail(path string) ([]byte, int64, error) {
 
 // EncodeLike restores the source encoding, BOM and line endings. The edit
 // engine works exclusively on UTF-8; both local and SSH writes use this boundary.
-// Results must decode to the exact canonical bytes used for read/edit versions.
+// Results must decode to the exact canonical text bytes used for read/edit.
 // In particular, a BOM-less UTF-16 edit may lose the cues needed to recognize it.
 func EncodeLike(original []byte, text string) ([]byte, error) {
 	decoded, err := DecodeTextBytes(original)
@@ -377,90 +376,18 @@ func HashBytes(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// HashVersion returns the 6-character Crockford Base32 version token derived
-// from the SHA-256 of data. Used as the optimistic-concurrency token for
-// model-facing read/edit operations.
-func HashVersion(data []byte) string {
-	sum := sha256.Sum256(data)
-	return VersionFromSHA256(sum[:])
-}
-
-// HashBytesAndVersion computes SHA-256 once and returns both the lowercase hex
-// digest and the 6-character Crockford Base32 version token. Use this when a
-// caller needs both values for the same data — calling HashBytes + HashVersion
-// separately would hash the data twice, which is a measurable cost on the read
-// hot path (10 MB file ≈ 20-30 ms per SHA-256 pass).
-func HashBytesAndVersion(data []byte) (sha256Hex, version string) {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), VersionFromSHA256(sum[:])
-}
-
-// HashFileAndVersion hashes the file at path without holding its contents in
-// memory and returns the same (sha256 hex, version token) pair
-// HashBytesAndVersion derives from bytes. Callers whose size guard must not
-// require reading the whole file first (the image read path) use this instead
-// of os.ReadFile so a huge file cannot be pulled into memory.
-func HashFileAndVersion(path string) (sha256Hex, version string, err error) {
+// HashFile hashes a file without holding its contents in memory.
+func HashFile(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	defer file.Close()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
-		return "", "", err
+		return "", err
 	}
-	sum := hash.Sum(nil)
-	return hex.EncodeToString(sum), VersionFromSHA256(sum), nil
-}
-
-// VersionFromSHA256 derives the 6-character Crockford Base32 version token
-// from a raw 32-byte SHA-256 digest. Callers that already have the digest
-// (e.g. they hex-decoded it from an external source) can use this instead of
-// recomputing HashVersion.
-func VersionFromSHA256(sum []byte) string {
-	const alphabet = "0123456789abcdefghjkmnpqrstvwxyz"
-	var out [6]byte
-	for i := range out {
-		bit := i * 5
-		byteIndex := bit / 8
-		shift := 11 - (bit % 8)
-		value := uint16(sum[byteIndex]) << 8
-		if byteIndex+1 < len(sum) {
-			value |= uint16(sum[byteIndex+1])
-		}
-		out[i] = alphabet[(value>>shift)&31]
-	}
-	return string(out[:])
-}
-
-// ValidateVersion returns a coded error if version is empty or not a valid
-// 6-character Crockford Base32 token. Error codes:
-//   - E_VERSION_REQUIRED: empty/whitespace version
-//   - E_BAD_VERSION: wrong length or non-Base32 characters
-func ValidateVersion(version string) error {
-	if strings.TrimSpace(version) == "" {
-		return toolerrors.New("E_VERSION_REQUIRED", errors.New("version is required; read the file with read and pass its version"))
-	}
-	if !IsValidVersion(version) {
-		return toolerrors.New("E_BAD_VERSION", errors.New("version must be exactly 6 Crockford Base32 characters"))
-	}
-	return nil
-}
-
-// IsValidVersion reports whether value is exactly 6 Crockford Base32
-// characters (case-insensitive).
-func IsValidVersion(value string) bool {
-	if len(value) != 6 {
-		return false
-	}
-	const alphabet = "0123456789abcdefghjkmnpqrstvwxyz"
-	for _, c := range strings.ToLower(value) {
-		if !strings.ContainsRune(alphabet, c) {
-			return false
-		}
-	}
-	return true
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // EvalExistingPrefix resolves the longest existing prefix of target through

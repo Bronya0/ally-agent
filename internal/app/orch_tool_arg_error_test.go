@@ -19,7 +19,7 @@ import (
 // internal struct and carries no code at all.
 func TestEditArgTypeErrorNamesTheFieldNotTheGoStruct(t *testing.T) {
 	t.Parallel()
-	args := []byte(`{"path":"a.go","version":"9k3m7x","changes":[{"oldText":2,"newText":"y"}]}`)
+	args := []byte(`{"path":"a.go","changes":[{"oldText":2,"newText":"y"}]}`)
 
 	err, _ := decodeToolArguments("edit", args, &FileTextEdits{})
 	if code := toolErrorCode(err); code != "E_BAD_ARGS" {
@@ -42,7 +42,7 @@ func TestEditMissingFileReturnsCodedNotFound(t *testing.T) {
 	t.Parallel()
 	app := newIsolatedTestApp(t)
 	res := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "s-1", "edit",
-		[]byte(`{"path":"missing.txt","version":"9k3m7x","changes":[{"oldText":"a","newText":"b"}]}`))
+		[]byte(`{"path":"missing.txt","changes":[{"oldText":"a","newText":"b"}]}`))
 	if res.OK || res.ErrorCode != "E_PATH_NOT_FOUND" {
 		t.Fatalf("a missing file must fail with E_PATH_NOT_FOUND, got ok=%v code=%q err=%q", res.OK, res.ErrorCode, res.Error)
 	}

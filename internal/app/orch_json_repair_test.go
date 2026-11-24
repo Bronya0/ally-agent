@@ -51,7 +51,7 @@ func TestRepairToolArgJSONTopLevelStringEncodedArray(t *testing.T) {
 }
 
 func TestRepairToolArgJSONNestedStringEncodedChanges(t *testing.T) {
-	args := []byte(`{"path":"app.go","version":"9k3m7x","changes":"[{\"oldText\":\"a\",\"newText\":\"b\"}]"}`)
+	args := []byte(`{"path":"app.go","changes":"[{\"oldText\":\"a\",\"newText\":\"b\"}]"}`)
 	typeErr := unmarshalTypeErrorFor(t, args, &FileTextEdits{})
 
 	fixed, ok := repairToolArgJSON(args, typeErr)
@@ -131,10 +131,9 @@ func TestExecuteToolEditRepairsNestedStringEncodedChanges(t *testing.T) {
 	if !readRes.OK {
 		t.Fatalf("read failed: %v", readRes.Error)
 	}
-	version := readRes.Data.(*BatchReadResult).Files[0].Version
 
 	// `changes` arrives double-encoded as a string in the flat request.
-	editArgs := []byte(`{"path":"sample.txt","version":"` + version + `","changes":"[{\"oldText\":\"beta\",\"newText\":\"BETA\"}]"}`)
+	editArgs := []byte(`{"path":"sample.txt","changes":"[{\"oldText\":\"beta\",\"newText\":\"BETA\"}]"}`)
 	res := app.executeTool(context.Background(), cfg, "s-1", "edit", editArgs)
 	if !res.OK {
 		t.Fatalf("edit failed: %v", res.Error)

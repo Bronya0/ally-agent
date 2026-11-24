@@ -25,7 +25,7 @@ Download a Windows, macOS or Linux package from [GitHub Releases](https://github
 
 ### Local coding and remote development
 
-- Read, search, create, edit and delete project files. Workspace boundaries and file version checks protect writes. Packages include ripgrep, so no separate installation is needed.
+- Read, search, create, edit and delete project files. Workspace boundaries, text matching and atomic writes protect writes. Packages include ripgrep, so no separate installation is needed.
 - Inspect visual diffs, changes across files, command output and tool errors in chat, alongside a native file explorer and editor.
 - Authorize SSH nodes to read and write remote files, run commands and transfer files or directories. Authentication supports local SSH configuration/Agent, private keys and passwords.
 - Manage multiple workspaces and chat sessions, delegate complex tasks to parallel subagents, and follow steps, tool activity, Token usage and results in real time.
@@ -82,7 +82,7 @@ New users start with Big Whale and the desktop pet enabled. Change the avatar, a
 
 A model can issue several tool calls in one reply, each with an optional `stage` number. Calls within a stage run concurrently. The next stage starts only after every call in the previous stage finishes, including calls queued behind the concurrency limit. A failure stops later stages and reports why they were skipped; completed writes, installations and services are not rolled back. This lets the model express ordered work such as “edit, test, then verify” in one reply.
 
-Stages order execution; they do not pass values between calls. Parameters that depend on earlier results, such as file version numbers, still require separate rounds.
+Stages order execution; they do not pass values between calls. Parameters that depend on earlier results, such as service IDs, still require separate rounds.
 
 ```mermaid
 flowchart LR

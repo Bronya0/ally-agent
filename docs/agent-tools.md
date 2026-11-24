@@ -50,7 +50,7 @@ func functionTool(name, desc string, params map[string]any) openai.Tool {  // :4
 几个值得学的做法：
 
 1. **示例写进描述**（`builtinToolExamples`，`builtins.go`）。参数描述说一百句，不如给一条能直接抄的样例 JSON——提升工具调用成功率最便宜的手段。
-2. **平坦 Schema 与网关最大兼容**：内置工具 Schema 全面使用平坦的 `type: "object"`，彻底避免顶层与嵌套的 `oneOf` / `anyOf` / `allOf` / `not` 等复合关键字，防止中转网关（OneAPI、NewAPI、Cloudflare AI Gateway）或不同模型端点 400 拒绝。参数互斥（如 `body` 与 `json`、`instruction` 与 `command`）直接在参数 description 中说明，并由执行层统一校验。`edit` 与 `remote_edit` 统一用非空 `oldText`、必填 `newText` 和可选 `replaceAll` 做文本替换，搜索整份原始快照，读取的行范围不限制替换范围，不支持按行编辑。参数是字面文本，不是正则表达式或替换模板；匹配不识别单词边界，应包含完整标识符或相邻语法，避免误改更长名称中的片段。`oldText` 太短、太常见容易多处匹配；默认必须唯一，否则返回有界候选行号和上下文，应增加相邻文本定位，只有确实要改所有精确匹配才设 `replaceAll=true`。复制源文本时保留全部原始字符（包括 tab、空格、引号和换行），去掉展示行号与截断标记，不猜未读取内容；无匹配或版本冲突时重新读取。`newText` 替换整个 `oldText`，仅用于定位的上下文及其空白必须保留；空 `newText` 删除源文本，删除整行时将换行也包含在 `oldText` 中，插入时在替换文本中保留定位锚点。同一调用的全部变更基于原始快照，实际替换不得重叠；保留版本校验、编码与原子写入，编辑参数中的未知字段明确拒绝。
+2. **平坦 Schema 与网关最大兼容**：内置工具 Schema 全面使用平坦的 `type: "object"`，彻底避免顶层与嵌套的 `oneOf` / `anyOf` / `allOf` / `not` 等复合关键字，防止中转网关（OneAPI、NewAPI、Cloudflare AI Gateway）或不同模型端点 400 拒绝。参数互斥（如 `body` 与 `json`、`instruction` 与 `command`）直接在参数 description 中说明，并由执行层统一校验。`edit` 与 `remote_edit` 统一用非空 `oldText`、必填 `newText` 和可选 `replaceAll` 做文本替换，搜索整份原始快照，读取的行范围不限制替换范围，不支持按行编辑。参数是字面文本，不是正则表达式或替换模板；匹配不识别单词边界，应包含完整标识符或相邻语法，避免误改更长名称中的片段。`oldText` 太短、太常见容易多处匹配；默认必须唯一，否则返回有界候选行号和上下文，应增加相邻文本定位，只有确实要改所有精确匹配才设 `replaceAll=true`。复制源文本时保留全部原始字符（包括 tab、空格、引号和换行），去掉展示行号与截断标记，不猜未读取内容；源文本可以来自 read 或 command 输出，无匹配时查看当前内容。`newText` 替换整个 `oldText`，仅用于定位的上下文及其空白必须保留；空 `newText` 删除源文本，删除整行时将换行也包含在 `oldText` 中，插入时在替换文本中保留定位锚点。同一调用的全部变更基于原始快照，实际替换不得重叠；保留编码、原子写入与提交期间的并发修改保护，编辑参数中的未知字段明确拒绝。
 
    编辑先精确匹配，单次替换的唯一性也检查重叠位置；`replaceAll` 仍只替换非重叠的精确匹配。精确失败后可定位 Unicode NFC 等价文本，只有边界能映射到完整规范化片段时才自动修改，未变的上下文保留原始字节。弯引号、横线、特殊空格与行尾空白的归一化仅用于寻找有界原文候选，返回 `E_NO_MATCH` 后须复制实际字符精确重试，避免猜测标点含义。参数 JSON 正常转义一次：`\n` 表示真实换行，`\\n` 表示字面的反斜杠加 n。不二次解码反斜杠，不解码 HTML 实体、不删除零宽字符，也不折叠全角标识符或大小写。
 
@@ -156,7 +156,7 @@ type toolResult struct {                       // infra_result.go:19
 
 | 工具 | 模型视图 |
 |---|---|
-| `read` | `<ally-file path version lines total>` 标签块，行号正文零转义；本会话已读过的同一 path/range → 内容换成「已给过你、version 未变、可复用」说明（会话级 read cache，`sessionReadCacheFor`，`remote_read` 共用同一份：后续 run 也复用；改盘不触发失效——命中靠逐字节比对载荷哈希；只有压缩 / 删回合 / 历史从磁盘重载才失效） |
+| `read` | `// read | path | lines | total` 标签块，行号正文零转义；本会话已读过的同一 path/range → 内容换成「同一范围的内容已给过你、可复用」说明（会话级 read cache，`sessionReadCacheFor`，`remote_read` 共用同一份：后续 run 也复用；改盘不触发失效——命中靠逐字节比对载荷哈希；只有压缩 / 删回合 / 历史从磁盘重载才失效） |
 | `read` 图片 | 内容转为后续 user 消息的图片输入，块里只留 `image="…"` 说明 |
 | `grep` | `<ally-grep mode matched hits files next-offset>` 头 + `path:line: text` 行（count 模式为 `path: count=N`）；命中行文本按预算裁剪（`capGrepLineTexts`） |
 | `command` | `<ally-command exit timed-out promoted-to-service truncated reduced-from full>` 块，输出零转义落体；模型侧另有一条 12KB 预算（头 4KB + 尾 8KB，中间以省略标记替换，`reduced-from` 报裁剪前长度，尾部一行说清去哪里拿全量）；command/cwd 不回显（模型刚在参数里写过） |
@@ -181,12 +181,12 @@ type toolResult struct {                       // infra_result.go:19
 - 当前阶段全部收尾后才能进入下一阶段。工具错误、命令非零退出、超时、取消或提升为后台服务都会阻断后续阶段；`E_DUPLICATE_TOOL_CALL` 通知本身不阻断，原始调用的成败仍然有效。
 - 后续调用不执行，返回 `E_STAGE_BLOCKED`；若已有自己的冲突码，则保留原始原因。UI 隐藏纯跳过结果并移除占位卡片，模型仍收到配对结果。已完成的写入、安装和服务不回滚。
 - `wait` 是普通阶段调用，没有隐式排尾。例如修改放 stage 0，独立安装放 stage 1，启动服务放 stage 2，wait 放 stage 3，检查放 stage 4。
-- stage 不做结果插值。依赖前一步返回的 version 等参数时，仍需分轮调用。
+- stage 不做结果插值。依赖前一步返回的服务 ID 等参数时，仍需分轮调用。
 
 `orch_batch_policy.go` 的 `detectToolBatchConflicts` 保留执行前校验：
 
 1. **独占工具**：`ask` / `suggest` 必须独占整个响应，否则所有调用均返回相应的独占冲突码，不产生副作用。
-2. **同阶段同路径多写**：本地和远端按规范化目标检测，只允许最早的调用执行，其他返回 `E_WRITE_BATCH_CONFLICT`。不同阶段不互相冲突，但仍需满足版本、路径与授权契约。
+2. **同阶段同路径多写**：本地和远端按规范化目标检测，只允许最早的调用执行，其他返回 `E_WRITE_BATCH_CONFLICT`。不同阶段不互相冲突，但仍需满足文本匹配、路径与授权契约。
 3. **同阶段计划写入**：`steps` / `finish` 每阶段最多一个写操作，其余返回 `E_PLAN_BATCH_CONFLICT`；只读计划调用不算写入。
 4. **重复调用**：JSON 参数规范化后去重；内置工具省略 stage 与显式 0 等价。重复调用保留 `E_DUPLICATE_TOOL_CALL` 通知，但不因此阻断后续阶段。
 
