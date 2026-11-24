@@ -13,23 +13,23 @@ import (
 	"testing"
 )
 
-// TestEditArgTypeErrorNamesTheFieldNotTheGoStruct: a string line number is a
+// TestEditArgTypeErrorNamesTheFieldNotTheGoStruct: a numeric source snippet is a
 // schema violation. The model has to get E_BAD_ARGS and the path it can fix
-// ("changes[0].lineRange.start"), not the Go decode error, which names an
+// ("changes[0].oldText"), not the Go decode error, which names an
 // internal struct and carries no code at all.
 func TestEditArgTypeErrorNamesTheFieldNotTheGoStruct(t *testing.T) {
 	t.Parallel()
-	args := []byte(`{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":{"start":"2"},"newText":"y"}]}`)
+	args := []byte(`{"path":"a.go","version":"9k3m7x","changes":[{"oldText":2,"newText":"y"}]}`)
 
 	err, _ := decodeToolArguments("edit", args, &FileTextEdits{})
 	if code := toolErrorCode(err); code != "E_BAD_ARGS" {
 		t.Fatalf("error code = %q, want E_BAD_ARGS (%v)", code, err)
 	}
 	message := err.Error()
-	if !strings.Contains(message, "lineRange.start") || !strings.Contains(message, "integer") {
+	if !strings.Contains(message, "oldText") || !strings.Contains(message, "string") {
 		t.Fatalf("the rejection must name the field and its declared type, got %q", message)
 	}
-	for _, leak := range []string{"FileTextEdits", "cannot unmarshal", "of type int"} {
+	for _, leak := range []string{"FileTextEdits", "cannot unmarshal", "of type string"} {
 		if strings.Contains(message, leak) {
 			t.Fatalf("the rejection leaks the Go decode error (%q): %q", leak, message)
 		}

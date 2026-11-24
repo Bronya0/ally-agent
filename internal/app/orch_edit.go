@@ -106,7 +106,7 @@ func (a *App) editFiles(ctx context.Context, cfg ConfigState, files []FileTextEd
 			return MultiEditResult{}, withEditFileError(file.Path, err)
 		}
 		text, ending, hadBOM := normalizeText(before)
-		applied, replacements, err := edit.ApplyBatchTextChangesForFile(text, toEditChanges(file.Changes), resolved)
+		applied, replacements, err := edit.ApplyBatchTextChanges(text, toEditChanges(file.Changes))
 		if err != nil {
 			err = fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
 			return MultiEditResult{}, withEditFileError(file.Path, err)
@@ -331,7 +331,6 @@ func toEditChanges(in []TextChange) []edit.TextChange {
 	for i, c := range in {
 		out[i] = edit.TextChange{
 			OldText:    c.OldText,
-			LineRange:  c.LineRange,
 			NewText:    c.NewText,
 			ReplaceAll: c.ReplaceAll,
 		}

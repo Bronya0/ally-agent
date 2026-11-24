@@ -263,11 +263,6 @@ func schemaRequiredForTest(t *testing.T, object map[string]any, field string) bo
 //
 //   - tailLines=0 and body="" mean "not provided" to the runtime, so pairing
 //     them with the other form must not read as "both forms were requested".
-//   - A blank source (oldText="", lineRange=null) is "not provided" too, so a
-//     padded blank beside a real source is carried out, while a change with no
-//     real source at all is still refused, because no branch matches.
-//   - oldText can be scoped with lineRange. Whole-line token requirements and
-//     replaceAll's source requirement are enforced by the runtime.
 func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 	tooManyPaths := func() string {
 		parts := make([]string, DeletePathListLimit+1)
@@ -285,14 +280,14 @@ func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 		wantAbsent   string
 	}{
 		{"read pads tailLines with 0", "read", `{"files":[{"path":"a.go","startLine":5,"endLine":20,"tailLines":0}]}`, false, "", ""},
-		{"edit accepts a single-line range", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":{"start":12,"rangeToken":"from-read"},"newText":"x"}]}`, false, "", ""},
-		{"remote_edit accepts a single-line range", "remote_edit", `{"alias":"dev","path":"/a.go","version":"9k3m7x","changes":[{"lineRange":{"start":12,"rangeToken":"from-read"},"newText":"x"}]}`, false, "", ""},
-		{"edit accepts scoped text", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":{"start":1,"end":9},"oldText":"a","newText":"x","replaceAll":true}]}`, false, "", ""},
-		{"edit pads oldText with an empty string", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":{"start":1,"end":9,"rangeToken":"from-read"},"newText":"x","oldText":""}]}`, false, "", ""},
-		{"edit pads lineRange with null", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":null}]}`, false, "", ""},
-		{"edit refuses a range without start", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":{"rangeToken":"from-read"},"newText":"x"}]}`, true, "start", ""},
-		{"edit rejects a non-string rangeToken", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":{"start":3,"rangeToken":42},"newText":"x"}]}`, true, "rangeToken", ""},
-		{"remote_edit pads lineRange with null", "remote_edit", `{"alias":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":null}]}`, false, "", ""},
+		{"edit accepts deletion", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":""}]}`, false, "", ""},
+		{"remote_edit accepts replaceAll", "remote_edit", `{"alias":"dev","path":"/a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","replaceAll":true}]}`, false, "", ""},
+		{"edit requires oldText", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"newText":"x"}]}`, true, "oldText", ""},
+		{"remote_edit requires oldText", "remote_edit", `{"alias":"dev","path":"/a.go","version":"9k3m7x","changes":[{"newText":"x"}]}`, true, "oldText", ""},
+		{"edit rejects empty oldText", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"","newText":"x"}]}`, true, "oldText", ""},
+		{"remote_edit rejects empty oldText", "remote_edit", `{"alias":"dev","path":"/a.go","version":"9k3m7x","changes":[{"oldText":"","newText":"x"}]}`, true, "oldText", ""},
+		{"edit rejects removed scope", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":{"start":1}}]}`, true, "lineRange", ""},
+		{"remote_edit rejects removed scope", "remote_edit", `{"alias":"dev","path":"/a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":{"start":1}}]}`, true, "lineRange", ""},
 		{"http_request pads body with an empty string", "fetch", `{"url":"https://example.test","body":"","json":{"a":1}}`, false, "", ""},
 		{"grep pads outputMode with an empty string", "grep", `{"pattern":"x","outputMode":""}`, false, "", ""},
 		{"remote_run_command pads shell with an empty string", "remote_run_command", `{"alias":"t:/w","command":"ls","shell":""}`, false, "", ""},

@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	toolerrors "ally-dev/internal/tools/shared"
+	"golang.org/x/text/unicode/norm"
 )
 
 // Character-level fallback for exact-text edits.
@@ -21,7 +22,9 @@ import (
 // This is the last resort used only when an exact match fails. It normalizes the
 // character differences a copy/paste out of rendered text introduces (smart
 // quotes, Unicode dashes, special spaces) plus trailing whitespace on each line,
-// locates the source with that, and rewrites only the matched bytes:
+// locates candidate source text. Only canonical Unicode differences authorize
+// an automatic replacement; punctuation/whitespace differences require an
+// exact retry using the original candidate:
 //
 //   - A match is accepted only when it is unique in normalized space.
 //     Normalization maps different characters onto the same one, so ambiguity
@@ -29,11 +32,12 @@ import (
 //   - Only the matched region is rewritten. Everything outside it keeps its
 //     original bytes, including the rest of the touched line and the trailing
 //     whitespace the per-line strip removed for comparison.
-//   - The map is character for character (one rune in, one rune out), so a
-//     normalized byte offset always maps back to a rune boundary in the
-//     original text. An earlier NFKC compatibility layer could not promise that,
-//     and the byte arithmetic it needed was the fragile part of this file; what
-//     it bought was full-width and ligature forms, which do not appear in code.
+//   - NFC accepts canonically equivalent Unicode spellings. Boundaries map only
+//     at complete normalization segments; no splice can split a combining
+//     sequence. Compatibility forms (NFKC), escapes and entities are left alone.
+//   - Unchanged anchors keep original bytes only when canonically equivalent.
+//     Different quote/space/dash context is reported for an exact retry: its
+//     intended meaning cannot be inferred from normalized punctuation.
 //   - Leading indentation is deliberately NOT normalized here; the
 //     indentation-insensitive fallback owns that dimension.
 //   - Inputs are expected to be LF-normalized (callers normalize CRLF before
@@ -46,22 +50,24 @@ const (
 )
 
 // NormalizeForFuzzyMatch normalizes text for comparison:
+//   - canonically equivalent Unicode sequences (NFC)
 //   - strips trailing whitespace from every line
-//   - smart/full-width quotes to ASCII quotes
+//   - smart quotes to ASCII quotes
 //   - Unicode dashes/hyphens to ASCII hyphen
 //   - special spaces (NBSP, various narrow spaces, ideographic space) to space
 //
-// Newlines are preserved exactly, so normalized text has the same line count as
-// the input, and every rune maps to exactly one rune. That is what lets
-// mapNormOffsetInLine translate an offset back exactly. This is the only place
-// that normalization happens; the result is used both for locating the source
-// block and for rebuilding that block.
+// Newlines are preserved exactly. Normalization segments let the match map
+// back to original bytes without a file-sized offset table.
 func NormalizeForFuzzyMatch(text string) string {
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
-		lines[i] = strings.TrimRightFunc(line, unicode.IsSpace)
+		lines[i] = normalizeFuzzyLine(line)
 	}
-	return strings.Map(normalizeFuzzyRune, strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
+}
+
+func normalizeFuzzyLine(line string) string {
+	return strings.Map(normalizeFuzzyRune, norm.NFC.String(strings.TrimRightFunc(line, unicode.IsSpace)))
 }
 
 func normalizeFuzzyRune(r rune) rune {
@@ -103,9 +109,9 @@ func fuzzyLocateInNormalized(content, normContent, oldText, newText string, chan
 	if idx < 0 {
 		return normalizedMatch{}, false, nil
 	}
-	if strings.Count(normContent, normOld) > 1 {
+	if strings.Index(normContent[idx+1:], normOld) >= 0 {
 		return normalizedMatch{}, false, toolerrors.New("E_MULTI_MATCH", fmt.Errorf(
-			"change %d oldText occurs more than once after Unicode normalization (quotes/dashes/spaces); include more surrounding text to make it unique", changeIndex))
+			"change %d oldText occurs more than once after Unicode normalization; include more surrounding text to make it unique", changeIndex))
 	}
 
 	// Replacement region in normalized space is the full normOld occurrence.
@@ -147,18 +153,58 @@ func fuzzyLocateInNormalized(content, normContent, oldText, newText string, chan
 	}
 
 	if !startOK || !endOK || origMatchStart > origMatchEnd || origMatchEnd > origBlockEnd {
-		// A boundary that does not land on the original bytes. Normalization being
-		// character for character, the mapping is exact and this cannot happen; refusing
-		// keeps it that way instead of splicing at an offset nobody verified. The
-		// alternative, rewriting the whole touched block from normalized content, would
-		// silently replace bytes the model never mentioned.
+		// Refuse partial normalization segments rather than splice inside a
+		// combining sequence or rewrite the surrounding block.
 		return normalizedMatch{}, false, toolerrors.New("E_NO_MATCH", fmt.Errorf(
 			"change %d normalized match could not be mapped back onto the original bytes; use the attached current snapshot, or re-read if none is attached, and include more surrounding text", changeIndex))
 	}
 
+	// Identical context is an anchor, not a request to change it. Preserve its
+	// canonical spelling, but refuse ambiguous punctuation/whitespace changes.
+	sourceStart, sourceEnd := origMatchStart, origMatchEnd
+	if norm.NFC.String(content[sourceStart:sourceEnd]) != norm.NFC.String(oldText) {
+		return normalizedMatch{}, false, fuzzySourceMismatch(content, sourceStart, sourceEnd, changeIndex)
+	}
+	prefix, suffix := commonTextEdges(oldText, newText)
+	if prefix > 0 {
+		offset, ok := normalizedSourceOffset(oldText, prefix)
+		if !ok {
+			return normalizedMatch{}, false, fuzzySourceMismatch(content, sourceStart, sourceEnd, changeIndex)
+		}
+		start, ok := originalNormalizedOffset(content, normContent, idx+offset)
+		if !ok || start < origMatchStart || start > origMatchEnd {
+			return normalizedMatch{}, false, fuzzySourceMismatch(content, sourceStart, sourceEnd, changeIndex)
+		}
+		origMatchStart = start
+	}
+	if suffix > 0 {
+		offset, ok := normalizedSourceOffset(oldText, len(oldText)-suffix)
+		if !ok {
+			return normalizedMatch{}, false, fuzzySourceMismatch(content, sourceStart, sourceEnd, changeIndex)
+		}
+		end, ok := originalNormalizedOffset(content, normContent, idx+offset)
+		if !ok || end < origMatchStart || end > origMatchEnd {
+			return normalizedMatch{}, false, fuzzySourceMismatch(content, sourceStart, sourceEnd, changeIndex)
+		}
+		origMatchEnd = end
+	}
+	newText = newText[prefix : len(newText)-suffix]
+
 	// Return only the matched bytes, so disjoint edits on the same line do not
 	// conflict. The batch assembler preserves all surrounding original bytes.
 	return normalizedMatch{start: origMatchStart, end: origMatchEnd, newText: newText}, true, nil
+}
+
+func fuzzySourceMismatch(content string, start, end, changeIndex int) error {
+	details := &MatchErrorDetails{
+		ChangeIndex: changeIndex,
+		MatchType:   "normalized",
+		MatchCount:  1,
+		Candidates:  []MatchCandidate{matchCandidateAtLine(content, start, end, lineIndexOfOffset(content, start)+1)},
+		Recovery:    "Read this candidate and copy its actual characters into oldText. Decide explicitly which quotes, spaces or dashes newText should preserve or change; do not guess from normalized text.",
+	}
+	boundMatchErrorDetails(details)
+	return toolerrors.NewWithDetails("E_NO_MATCH", fmt.Errorf("change %d has a normalized candidate but its exact source or replacement boundary is uncertain; copy the original candidate and retry", changeIndex), details)
 }
 
 // lineIndexOfOffset returns the 0-based line number containing byte offset off.
@@ -212,34 +258,69 @@ func lineContentEnd(text string, line int) int {
 	return end
 }
 
-// mapNormOffsetInLine maps a byte offset in the normalized form of one line back to
-// a byte offset in the original line, and reports whether it could be placed there.
-// The offset comes from a strings.Index over normalized text, so it lands on a rune
-// boundary.
-//
-// Normalization is character for character, so the walk is exact: advance one
-// original rune at a time while accumulating the normalized byte length and stop at
-// the boundary whose normalized prefix is normOff bytes long. Reaching the end of the
-// normalized line that way is how a match running to the end of the line maps back to
-// the end of the line's content: the per-line trailing-whitespace strip cut the
-// normalized line short, so whitespace the model never mentioned keeps its bytes.
-//
-// An offset past that point cannot be placed, and the caller refuses the change rather
-// than splicing at a guessed position.
+// mapNormOffsetInLine accepts only complete NFC segment boundaries. Whitespace
+// omitted during comparison stays outside the replacement.
 func mapNormOffsetInLine(origLine string, normOff int) (int, bool) {
+	origLine = strings.TrimRightFunc(origLine, unicode.IsSpace)
+	var iter norm.Iter
+	iter.InitString(norm.NFC, origLine)
 	normLen := 0
-	for i := 0; i < len(origLine); {
+	for !iter.Done() {
 		if normLen == normOff {
-			return i, true
+			return iter.Pos(), true
 		}
-		r, size := utf8.DecodeRuneInString(origLine[i:])
-		normLen += len(string(normalizeFuzzyRune(r)))
-		i += size
+		normLen += len(strings.Map(normalizeFuzzyRune, string(iter.Next())))
 	}
-	// The walk consumed the line and landed on normOff exactly: the match ran to the
-	// end of the normalized line, so it ends where the original line's bytes end.
 	if normLen == normOff {
 		return len(origLine), true
 	}
 	return 0, false
+}
+
+func originalNormalizedOffset(content, normalized string, offset int) (int, bool) {
+	line := lineIndexOfOffset(normalized, offset)
+	start := lineStartOffset(content, line)
+	inLine, ok := mapNormOffsetInLine(content[start:lineContentEnd(content, line)], offset-lineStartOffset(normalized, line))
+	return start + inLine, ok
+}
+
+// normalizedSourceOffset maps an unchanged anchor boundary into comparison
+// space. Boundaries inside combining sequences or beyond stripped trailing
+// whitespace cannot map back to the same bytes and are refused.
+func normalizedSourceOffset(text string, offset int) (int, bool) {
+	line := lineIndexOfOffset(text, offset)
+	start := lineStartOffset(text, line)
+	original := text[start:lineContentEnd(text, line)]
+	trimmed := strings.TrimRightFunc(original, unicode.IsSpace)
+	var iter norm.Iter
+	iter.InitString(norm.NFC, trimmed)
+	normalized := len(NormalizeForFuzzyMatch(text[:start]))
+	for !iter.Done() {
+		if iter.Pos() == offset-start {
+			return normalized, true
+		}
+		normalized += len(strings.Map(normalizeFuzzyRune, string(iter.Next())))
+	}
+	return normalized, offset-start == len(trimmed)
+}
+
+// commonTextEdges returns disjoint identical prefixes/suffixes on rune boundaries.
+func commonTextEdges(a, b string) (prefix, suffix int) {
+	for prefix < len(a) && prefix < len(b) {
+		ar, as := utf8.DecodeRuneInString(a[prefix:])
+		br, bs := utf8.DecodeRuneInString(b[prefix:])
+		if ar != br || as != bs {
+			break
+		}
+		prefix += as
+	}
+	for len(a)-suffix > prefix && len(b)-suffix > prefix {
+		ar, as := utf8.DecodeLastRuneInString(a[:len(a)-suffix])
+		br, bs := utf8.DecodeLastRuneInString(b[:len(b)-suffix])
+		if ar != br || as != bs {
+			break
+		}
+		suffix += as
+	}
+	return prefix, suffix
 }

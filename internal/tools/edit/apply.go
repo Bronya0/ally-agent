@@ -8,7 +8,6 @@
 package edit
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,21 +19,11 @@ import (
 	toolerrors "ally-dev/internal/tools/shared"
 )
 
-// LineRange bounds an oldText search, or selects whole lines when oldText is
-// absent. Whole-line writes require the token from a complete bounded read.
-type LineRange struct {
-	Start      int    `json:"start"`
-	End        int    `json:"end,omitempty"`
-	RangeToken string `json:"rangeToken,omitempty"`
-}
-
-// TextChange replaces oldText within an optional line range. Without oldText,
-// the range itself is replaced, using its read token to verify the source.
+// TextChange replaces a non-empty source snippet in the original snapshot.
 type TextChange struct {
-	OldText    string     `json:"oldText,omitempty"`
-	LineRange  *LineRange `json:"lineRange,omitempty"`
-	NewText    string     `json:"newText"`
-	ReplaceAll bool       `json:"replaceAll,omitempty"`
+	OldText    string `json:"oldText"`
+	NewText    string `json:"newText"`
+	ReplaceAll bool   `json:"replaceAll,omitempty"`
 }
 
 const (
@@ -88,18 +77,8 @@ func ValidateBatchTextChanges(changes []TextChange) error {
 		return toolerrors.New("E_BAD_EDIT", errors.New("changes supports at most 50 replacements"))
 	}
 	for i, change := range changes {
-		hasOldText := change.OldText != ""
-		hasLineRange := change.LineRange != nil
-		switch {
-		case !hasOldText && !hasLineRange:
-			return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d must give a source: oldText for a small exact replacement, or lineRange for a larger whole-line replacement", i+1))
-		case !hasOldText && change.ReplaceAll:
-			return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d sets replaceAll beside lineRange; replaceAll only applies to oldText", i+1))
-		}
-		if hasLineRange {
-			if _, _, err := change.LineRange.normalize(); err != nil {
-				return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d: %w", i+1, err))
-			}
+		if change.OldText == "" {
+			return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d requires non-empty oldText copied from the current file", i+1))
 		}
 	}
 	return nil
@@ -111,8 +90,9 @@ type exactMatch struct {
 	line   int
 }
 
-// scanExactMatches performs one non-overlapping scan. matches is bounded when
-// limit is positive, while count always contains the exact total. The line
+// scanExactMatches counts non-overlapping occurrences, then checks a lone
+// candidate for a second, overlapping location before declaring it unique.
+// matches is bounded when limit is positive. The line
 // number is advanced incrementally so diagnostics do not repeatedly scan from
 // byte 0 for each candidate.
 func scanExactMatches(content, needle string, limit int) ([]exactMatch, int) {
@@ -139,6 +119,17 @@ func scanExactMatches(content, needle string, limit int) ([]exactMatch, int) {
 		}
 		from = start + len(needle)
 		line = matchLine + strings.Count(content[start:from], "\n")
+	}
+	if count == 1 {
+		first := matches[0]
+		_, size := utf8.DecodeRuneInString(content[first.offset:])
+		if rel := strings.Index(content[first.offset+size:], needle); rel >= 0 {
+			start := first.offset + size + rel
+			count = 2
+			if limit <= 0 || len(matches) < limit {
+				matches = append(matches, exactMatch{offset: start, line: first.line + strings.Count(content[first.offset:start], "\n")})
+			}
+		}
 	}
 	return matches, count
 }
@@ -172,7 +163,7 @@ func exactMatchDiagnosticsAtMatches(content, oldText string, changeIndex, count 
 		MatchCount:          count,
 		Candidates:          candidates,
 		CandidatesTruncated: count > len(candidates),
-		Recovery:            "Use a candidate preview or read the intended target lines, then retry with short exact oldText and a narrower lineRange, or include more surrounding text. Do not guess which occurrence is intended.",
+		Recovery:            "Use a candidate preview or read the intended target lines, then include enough surrounding text in oldText to make the target unique. Use replaceAll only when every exact occurrence should change. Do not guess which occurrence is intended.",
 	}
 	boundMatchErrorDetails(details)
 	return lines, details
@@ -419,18 +410,10 @@ func ReindentReplacementForMatch(content, oldText, newText string, match indenta
 	return result, true
 }
 
-// ApplyBatchTextChanges applies exact-string and whole-line replacements to
-// one immutable snapshot. Every source is located before any mutation, then
-// replacements are applied backwards. Thus all lineRange values always refer
-// to the line numbers returned by read for the supplied version; callers never
-// adjust later ranges for earlier insertions or deletions.
+// ApplyBatchTextChanges locates all source snippets in one immutable snapshot,
+// validates overlaps, then assembles the result. Local and SSH callers share
+// this engine; later changes never search text introduced by earlier changes.
 func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, error) {
-	return ApplyBatchTextChangesForFile(content, changes, "")
-}
-
-// ApplyBatchTextChangesForFile binds whole-line read tokens to a host/file
-// identity. Both local and SSH callers use this same engine.
-func ApplyBatchTextChangesForFile(content string, changes []TextChange, identity string) (*Result, int, error) {
 	if err := ValidateBatchTextChanges(changes); err != nil {
 		return nil, 0, err
 	}
@@ -440,7 +423,6 @@ func ApplyBatchTextChangesForFile(content string, changes []TextChange, identity
 		end     int
 		newText string
 		repeat  string // nonempty only for a replaceAll stream
-		limit   int    // exclusive search boundary of that stream
 	}
 	located := make([]locatedChange, 0, len(changes))
 	warnings := make([]string, 0, 2)
@@ -449,52 +431,12 @@ func ApplyBatchTextChangesForFile(content string, changes []TextChange, identity
 	// reused across changes (derived from the immutable content snapshot).
 	var normContent string
 	normComputed := false
-	// Exact-text edits do not need a line index. Build it lazily only when the
-	// batch actually contains a lineRange change, avoiding an O(N) scan and one
-	// offset slice allocation for the common exact-string path.
-	var index *lineIndex
-	var snapshotHash [32]byte
-	hashComputed := false
 	for i, change := range changes {
 		newText := NormalizeEditString(change.NewText)
 		if len(newText) > read.MaxReadBytes {
 			return nil, 0, toolerrors.New("E_FILE_TOO_LARGE", errors.New("replacement exceeds the 32 MiB text limit"))
 		}
-		searchStart, searchEnd, firstLine := 0, len(content), 1
-		if change.LineRange != nil {
-			if index == nil {
-				index = buildLineIndex(content)
-			}
-			startLine, endLine, parseErr := change.LineRange.normalize()
-			if parseErr != nil {
-				return nil, 0, toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d: %w", i+1, parseErr))
-			}
-			start, end, rangeErr := lineRangeOffsetsWithIndex(index, len(content), startLine, endLine)
-			if rangeErr != nil {
-				return nil, 0, toolerrors.New("E_RANGE_OOB", fmt.Errorf("change %d: %w; use numbered lines from the attached current snapshot, or re-read if none is attached", i+1, rangeErr))
-			}
-			searchStart, searchEnd, firstLine = start, end, startLine
-			if change.OldText == "" {
-				if lengthErr := rejectPreviewTruncatedRange(content[start:end], startLine); lengthErr != nil {
-					return nil, 0, toolerrors.New("E_BAD_ARGS", fmt.Errorf("change %d: %w", i+1, lengthErr))
-				}
-				if !hashComputed {
-					snapshotHash, hashComputed = sha256.Sum256([]byte(content)), true
-				}
-				if change.LineRange.RangeToken == "" || change.LineRange.RangeToken != rangeTokenForHash(snapshotHash, identity, startLine, endLine) {
-					return nil, 0, toolerrors.New("E_LINE_RANGE", fmt.Errorf("change %d: missing or invalid rangeToken for lines %d-%d; read exactly this range with startLine=%d and endLine=%d, then copy its rangeToken and current version before replacing whole lines", i+1, startLine, endLine, startLine, endLine))
-				}
-				replacement := lineRangeReplacement(content, end, newText)
-				if content[start:end] == replacement {
-					ignoredNoops++
-					continue
-				}
-				located = append(located, locatedChange{index: i, start: start, end: end, newText: replacement})
-				continue
-			}
-		}
-
-		source := content[searchStart:searchEnd]
+		source := content
 		oldText := NormalizeEditString(change.OldText)
 		if oldText == newText {
 			ignoredNoops++
@@ -502,19 +444,14 @@ func ApplyBatchTextChangesForFile(content string, changes []TextChange, identity
 		}
 		if change.ReplaceAll {
 			if start := strings.Index(source, oldText); start >= 0 {
-				start += searchStart
-				located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText, repeat: oldText, limit: searchEnd})
+				located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText, repeat: oldText})
 				continue
 			}
 		} else {
 			matches, count := scanExactMatches(source, oldText, maxMatchDiagnosticCandidates)
-			for j := range matches {
-				matches[j].offset += searchStart
-				matches[j].line += firstLine - 1
-			}
 			if count > 1 {
 				lines, details := exactMatchDiagnosticsAtMatches(content, oldText, i+1, count, matches)
-				return nil, 0, toolerrors.NewWithDetails("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times%s in the search scope; narrow lineRange or include surrounding text to make it unique, or set replaceAll=true to replace every exact occurrence in this scope", i+1, count, FormatMatchLines(lines, count)), details)
+				return nil, 0, toolerrors.NewWithDetails("E_MULTI_MATCH", fmt.Errorf("change %d oldText has at least %d matches%s in the file; short snippets often match multiple places, so include surrounding text to make the target unique, or set replaceAll=true only to replace every exact occurrence", i+1, count, FormatMatchLines(lines, count)), details)
 			}
 			if count > 0 {
 				match := matches[0]
@@ -524,46 +461,39 @@ func ApplyBatchTextChangesForFile(content string, changes []TextChange, identity
 		}
 
 		if change.ReplaceAll {
-			return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText has no exact match in the selected search range; re-read that range and copy the source text", i+1))
+			return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText has no exact match in the file; re-read the target lines and copy the source text", i+1))
 		}
 		indentMatches := IndentationInsensitiveMatches(source, oldText, 9)
 		switch len(indentMatches) {
 		case 0:
-			// Unicode normalization fallback: exact and indentation-insensitive
-			// matching both failed. Normalize quotes/dashes/spaces and retry
-			// against the same immutable snapshot. Only a unique normalized
-			// match is accepted; ambiguity is reported instead of guessed.
-			normalized := ""
-			if change.LineRange == nil {
-				if !normComputed {
-					normContent = NormalizeForFuzzyMatch(source)
-					normComputed = true
-				}
-				normalized = normContent
-			} else {
-				normalized = NormalizeForFuzzyMatch(source)
+			// Canonical Unicode fallback: character normalization can locate
+			// original candidates, but punctuation/space differences require an
+			// exact retry. Ambiguity never authorizes an automatic replacement.
+			if !normComputed {
+				normContent = NormalizeForFuzzyMatch(source)
+				normComputed = true
 			}
-			match, found, fuzzyErr := fuzzyLocateInNormalized(source, normalized, oldText, newText, i+1)
+			match, found, fuzzyErr := fuzzyLocateInNormalized(source, normContent, oldText, newText, i+1)
 			if fuzzyErr != nil {
 				return nil, 0, fuzzyErr
 			}
 			if !found {
-				return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the selected search scope; re-read the target lines and copy exact source text without displayed N: line prefixes", i+1))
+				return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the file; re-read the target lines and copy exact source text without displayed N: line prefixes", i+1))
 			}
-			located = append(located, locatedChange{index: i, start: searchStart + match.start, end: searchStart + match.end, newText: match.newText})
-			warnings = append(warnings, fmt.Sprintf("change %d matched uniquely after Unicode normalization (quotes/dashes/spaces); only the matched text was replaced", i+1))
+			located = append(located, locatedChange{index: i, start: match.start, end: match.end, newText: match.newText})
+			warnings = append(warnings, fmt.Sprintf("change %d matched uniquely after Unicode normalization; unchanged context kept its original bytes", i+1))
 		case 1:
 			match := indentMatches[0]
 			adjustedNewText, ok := ReindentReplacementForMatch(source, oldText, newText, match)
 			if !ok {
 				return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d matched only after indentation normalization, but newText could not be safely rebased to the file's actual indentation", i+1))
 			}
-			located = append(located, locatedChange{index: i, start: searchStart + match.start, end: searchStart + match.end, newText: adjustedNewText})
+			located = append(located, locatedChange{index: i, start: match.start, end: match.end, newText: adjustedNewText})
 			warnings = append(warnings, fmt.Sprintf("change %d matched uniquely after ignoring leading indentation; newText was rebased to the file's actual indentation", i+1))
 		default:
 			lines := make([]int, len(indentMatches))
 			for j, match := range indentMatches {
-				lines[j] = match.line + firstLine - 1
+				lines[j] = match.line
 			}
 			return nil, 0, toolerrors.New("E_MULTI_MATCH", fmt.Errorf("change %d oldText has multiple indentation-insensitive matches%s; include more surrounding text to make it unique", i+1, FormatMatchLines(lines, len(indentMatches))))
 		}
@@ -598,7 +528,7 @@ func ApplyBatchTextChangesForFile(content string, changes []TextChange, identity
 			cursor, previous = c.end, c.index
 			count++
 			if c.repeat != "" {
-				if next := strings.Index(content[c.end:c.limit], c.repeat); next >= 0 {
+				if next := strings.Index(content[c.end:], c.repeat); next >= 0 {
 					c.start = c.end + next
 					c.end = c.start + len(c.repeat)
 					streams[first] = c
@@ -642,72 +572,6 @@ func ApplyBatchTextChangesForFile(content string, changes []TextChange, identity
 	}, replacements, nil
 }
 
-// normalize validates the declared span and returns inclusive 1-based bounds.
-// The line count is unknown here; an end past the last line is caught later.
-func (r *LineRange) normalize() (int, int, error) {
-	if r == nil {
-		return 0, 0, errors.New("lineRange is missing")
-	}
-	end := r.End
-	if end == 0 {
-		end = r.Start
-	}
-	switch {
-	case r.Start < 1:
-		return 0, 0, fmt.Errorf("lineRange start must be a positive line number, got %d", r.Start)
-	case end < r.Start:
-		return 0, 0, fmt.Errorf("lineRange start %d is past end %d", r.Start, end)
-	}
-	return r.Start, end, nil
-}
-
-// lineRangeOffsetsWithIndex locates an inclusive whole-line range in the
-// immutable snapshot. For non-final ranges, end includes the selected range's
-// terminating newline so an empty newText performs whole-line deletion. Bounds
-// are validated against the cached line count; offsets are O(1) lookups into the
-// precomputed starts slice instead of O(N) re-scans of the content.
-// contentLen is the byte length of the snapshot the index was built from; we
-// don't store it in the index to keep the struct light.
-func lineRangeOffsetsWithIndex(index *lineIndex, contentLen int, startLine, endLine int) (int, int, error) {
-	total := index.total()
-	if total == 0 {
-		return 0, 0, errors.New("file has 0 lines")
-	}
-	if startLine < 1 || startLine > total {
-		return 0, 0, fmt.Errorf("start line %d is outside 1-%d", startLine, total)
-	}
-	if endLine < startLine || endLine > total {
-		return 0, 0, fmt.Errorf("end line %d is outside %d-%d", endLine, startLine, total)
-	}
-	start := index.offsetForLine(startLine)
-	end := contentLen
-	if endLine < total {
-		end = index.offsetForLine(endLine + 1)
-	}
-	return start, end, nil
-}
-
-// rejectPreviewTruncatedRange refuses a whole-line replacement that covers a line
-// longer than the read preview. read shows at most toolerrors.MaxReadLineChars
-// runes of a line and marks the cut with a trailing "...", so replacing such a
-// line by number would silently drop the tail the model never saw while still
-// reporting success. An anchored edit (oldText) cannot do that: a truncated copy
-// simply fails to match.
-//
-// The bound is the read tool's own cap, which lives in the shared tool package;
-// judging it here means every whole-line replacement path is covered by one check.
-func rejectPreviewTruncatedRange(rangeText string, firstLine int) error {
-	if !strings.ContainsRune(rangeText, '\n') && utf8.RuneCountInString(rangeText) <= toolerrors.MaxReadLineChars {
-		return nil
-	}
-	for i, line := range strings.Split(rangeText, "\n") {
-		if utf8.RuneCountInString(line) > toolerrors.MaxReadLineChars {
-			return fmt.Errorf("line %d is longer than the %d-character read preview, so replacing it by line range would discard the part you never saw; re-read a narrower range and anchor that change on oldText instead", firstLine+i, toolerrors.MaxReadLineChars)
-		}
-	}
-	return nil
-}
-
 func visibleLineCount(content string) int {
 	if content == "" {
 		return 0
@@ -717,69 +581,6 @@ func visibleLineCount(content string) int {
 		count--
 	}
 	return count
-}
-
-// lineIndex caches the byte offset of every line start in a snapshot. Building
-// it is one O(N) scan over the content; afterwards offsetForLine is O(1).
-// ApplyBatchTextChanges uses it so that N line-range edits on a large file
-// cost O(N + edits) instead of O(N * edits), where the previous per-line scan
-// repeated the whole walk from byte 0 every time.
-type lineIndex struct {
-	// starts[i] is the byte offset of the start of line i+1. starts[0] is
-	// always 0 (line 1 starts at byte 0). The slice has length visibleLineCount.
-	starts []int
-}
-
-// buildLineIndex scans content once and records the byte offset of the start
-// of every visible line. The trailing newline of the last line is not a new
-// line start.
-func buildLineIndex(content string) *lineIndex {
-	total := visibleLineCount(content)
-	if total == 0 {
-		return &lineIndex{starts: nil}
-	}
-	starts := make([]int, total)
-	starts[0] = 0
-	line := 1
-	for i := 0; i < len(content); i++ {
-		if content[i] == '\n' {
-			line++
-			if line > total {
-				break
-			}
-			starts[line-1] = i + 1
-		}
-	}
-	return &lineIndex{starts: starts}
-}
-
-// offsetForLine returns the byte offset of the start of the given 1-based
-// line. line must be in [1, total]; callers should check bounds first.
-func (li *lineIndex) offsetForLine(line int) int {
-	if li == nil || line < 1 || line > len(li.starts) {
-		return 0
-	}
-	return li.starts[line-1]
-}
-
-// total returns the number of visible lines in the indexed snapshot.
-func (li *lineIndex) total() int {
-	if li == nil {
-		return 0
-	}
-	return len(li.starts)
-}
-
-// lineRangeReplacement adds only the separator needed before an untouched
-// following line. newText never contains read's numeric prefixes.
-func lineRangeReplacement(content string, end int, newText string) string {
-	if newText == "" || end == len(content) || strings.HasSuffix(newText, "\n") {
-		if end == len(content) && strings.HasSuffix(content, "\n") && newText != "" && !strings.HasSuffix(newText, "\n") {
-			return newText + "\n"
-		}
-		return newText
-	}
-	return newText + "\n"
 }
 
 // FormatNumberedLine returns "<lineNum>: <line>".

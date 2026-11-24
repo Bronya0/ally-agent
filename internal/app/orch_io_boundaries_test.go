@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"ally-dev/internal/tools/edit"
 	"ally-dev/internal/tools/read"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -105,7 +104,7 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 		original []byte
 		change   TextChange
 	}{
-		{"BOMless UTF16", []byte{'a', 0, '\n', 0, 0x49, 0x6c, 0x57, 0x5b, '\n', 0}, TextChange{LineRange: &edit.LineRange{Start: 1, End: 2}, NewText: "汉字"}},
+		{"BOMless UTF16", []byte{'a', 0, '\n', 0, 0x49, 0x6c, 0x57, 0x5b, '\n', 0}, TextChange{OldText: "a\n汉字\n", NewText: "汉字"}},
 		{"UTF8 NUL", []byte("old\n"), TextChange{OldText: "old", NewText: "a\x00b"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,10 +116,6 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 			decoded, err := read.DecodeTextBytes(tc.original)
 			if err != nil {
 				t.Fatal(err)
-			}
-			if tc.change.LineRange != nil {
-				text, _, _ := normalizeText(decoded)
-				tc.change.LineRange.RangeToken = edit.RangeToken(text, path, 1, 2)
 			}
 			req := FileTextEdits{Path: "source.txt", Version: hashVersion(decoded), Changes: []TextChange{tc.change}}
 			raw, err := json.Marshal(req)
@@ -153,10 +148,6 @@ func TestEditUnreadableEncodingLeavesAllSourcesUntouched(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			rt := remoteTarget{Host: "example.invalid"}
-			if req.Changes[0].LineRange != nil {
-				text, _, _ := normalizeText(decoded)
-				req.Changes[0].LineRange.RangeToken = edit.RangeToken(text, remoteEditIdentity(rt, req.Path), 1, 2)
-			}
 			_, err = a.remoteEditOne(ctx, rt, req, remoteRawFile{Path: req.Path, Data: decoded, RawData: tc.original, Size: int64(len(tc.original))})
 			if toolErrorCode(err) != "E_EDIT_ENCODING" {
 				t.Fatalf("remote edit bypassed shared encoding gate: %v", err)

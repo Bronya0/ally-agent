@@ -938,9 +938,6 @@ func renderReadResultForModel(r BatchReadResult) string {
 		if f.Version != "" {
 			header += " | version=" + strconv.Quote(f.Version)
 		}
-		if f.RangeToken != "" {
-			header += " | rangeToken=" + strconv.Quote(f.RangeToken)
-		}
 		if !f.Editable && f.Version == "" {
 			header += " | editable=false"
 		}

@@ -10,6 +10,7 @@ package edit
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	toolerrors "ally-dev/internal/tools/shared"
 )
@@ -30,6 +31,7 @@ func TestNormalizeForFuzzyMatch(t *testing.T) {
 		{"trailing whitespace stripped", "  x  \n\ty\t\n", "  x\n\ty\n"},
 		{"full-width forms are left alone", "\uFF46\uFF55\uFF4E\uFF43", "\uFF46\uFF55\uFF4E\uFF43"},
 		{"mixed keeps newline count", "a\nb\nc", "a\nb\nc"},
+		{"canonical combining accent", "cafe\u0301", "café"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -53,40 +55,39 @@ type fuzzyCase struct {
 	// want 非空时校验替换后的内容；wantCode 非空时期望这个错误码。
 	want     string
 	wantCode string
-	// wantWarn 非空时期望警告里出现这段（归一化是"替你猜了"，必须说出来）。
-	wantWarn string
+	// 自动使用 Unicode 等价写法时必须返回警告。
+	wantWarn bool
 	wantRepl int
 }
 
 func TestApplyBatchTextChangesFuzzy(t *testing.T) {
 	cases := []fuzzyCase{
-		{name: "full-width quotes normalize",
+		{name: "smart quote anchor cannot silently become a string delimiter",
 			content: "func greet(name string) {\n\tfmt.Println(\"Hello, \u201cname\u201d\")\n}\n",
 			oldText: `fmt.Println("Hello, "name"")`, newText: `fmt.Println("Hello, " + name)`,
-			want:     "func greet(name string) {\n\tfmt.Println(\"Hello, \" + name)\n}\n",
-			wantWarn: "Unicode normalization", wantRepl: 1},
-		{name: "smart quotes: matched block normalizes, other lines keep bytes",
+			wantCode: "E_NO_MATCH"},
+		{name: "smart quotes require exact source before changing a block",
 			content: "const a = \"\u2018x\u2019\"\nconst untouched = \"\u2018y\u2019\"\nconst b = \"\u2018z\u2019\"\n",
 			oldText: `const a = "'x'"`, newText: "const a = \"fixed\"",
-			want: "const a = \"fixed\"\nconst untouched = \"\u2018y\u2019\"\nconst b = \"\u2018z\u2019\"\n"},
+			wantCode: "E_NO_MATCH"},
 		{name: "em dash matches a hyphen",
 			content: "// start \u2014 end\nx := 1\n", oldText: "// start - end", newText: "// middle",
-			want: "// middle\nx := 1\n"},
-		{name: "trailing whitespace the model never mentioned keeps its bytes",
+			wantCode: "E_NO_MATCH"},
+		{name: "dash with trailing whitespace requires exact source",
 			content: "fo\u2014o   \nbar\n", oldText: "fo-o", newText: "FOO",
-			want: "FOO   \nbar\n"},
-		{name: "mid-line match keeps the line tail",
+			wantCode: "E_NO_MATCH"},
+		{name: "uncertain smart quote anchors require exact source",
 			content: "value = \u2018old\u2019 && ready\n", oldText: `'old'`, newText: "'new'",
-			want: "value = 'new' && ready\n"},
+			wantCode: "E_NO_MATCH"},
 		{name: "same line outside the match keeps bytes",
 			content: "a\u2014b c \u2018d\u2019\n", oldText: "a-b", newText: "X",
-			want: "X c \u2018d\u2019\n"},
+			wantCode: "E_NO_MATCH"},
 		{name: "cross-line match: middle line keeps bytes",
 			content: "a\u2014b\nc \u2018d\u2019\ne\n", oldText: "-b\nc", newText: "X",
-			want: "aX \u2018d\u2019\ne\n"},
+			wantCode: "E_NO_MATCH"},
 		{name: "multi-line match with trailing newline",
 			content: "a\u2014b\nc\n", oldText: "a-b\nc\n", newText: "X",
-			want: "X"},
+			wantCode: "E_NO_MATCH"},
 		{name: "no match at all",
 			content: "one\ntwo\n", oldText: "three", newText: "four",
 			wantCode: "E_NO_MATCH"},
@@ -96,6 +97,36 @@ func TestApplyBatchTextChangesFuzzy(t *testing.T) {
 		{name: "replaceAll keeps its exact-match-only contract",
 			content: "a\u2014b\n", oldText: "a-b", newText: "x", replaceAll: true,
 			wantCode: "E_NO_MATCH"},
+		{name: "composed source and decomposed request",
+			content: "prefix café suffix\n", oldText: "cafe\u0301", newText: "tea",
+			want: "prefix tea suffix\n", wantRepl: 1, wantWarn: true},
+		{name: "decomposed source keeps unchanged canonical anchor",
+			content: "prefix cafe\u0301 suffix\n", oldText: "café", newText: "cafés",
+			want: "prefix cafe\u0301s suffix\n", wantRepl: 1, wantWarn: true},
+		{name: "canonical Hangul",
+			content: "한글\n", oldText: "\u1112\u1161\u11AB글", newText: "한국어",
+			want: "한국어\n", wantRepl: 1},
+		{name: "uncertain multiline quote and space anchors require exact source",
+			content: "label “keep”\nvalue old\u00a0tail\n", oldText: "label \"keep\"\nvalue old tail\n", newText: "label \"keep\"\nvalue new tail\n",
+			wantCode: "E_NO_MATCH"},
+		{name: "canonical ambiguity",
+			content: "é\né\n", oldText: "e\u0301", newText: "x", wantCode: "E_MULTI_MATCH"},
+		{name: "overlapping normalized candidates",
+			content: "ééé", oldText: "e\u0301e\u0301", newText: "x", wantCode: "E_MULTI_MATCH"},
+		{name: "partial combining segment is refused",
+			content: "a\u0323\u0301", oldText: "ạ", newText: "x", wantCode: "E_NO_MATCH"},
+		{name: "anchor inside stripped trailing whitespace is refused",
+			content: "é  \nvalue = old", oldText: "e\u0301  \nvalue = old", newText: "e\u0301 \nvalue = new", wantCode: "E_NO_MATCH"},
+		{name: "anchor at end of stripped trailing whitespace is refused",
+			content: "é  \nvalue = old", oldText: "e\u0301  \nvalue = old", newText: "e\u0301  !\nvalue = new", wantCode: "E_NO_MATCH"},
+		{name: "literal backslash is not a newline",
+			content: "line1\\nline2", oldText: "line1\nline2", newText: "x", wantCode: "E_NO_MATCH"},
+		{name: "HTML entities keep their meaning",
+			content: "&quot;old&quot;", oldText: "\"old\"", newText: "x", wantCode: "E_NO_MATCH"},
+		{name: "zero width characters are not removed",
+			content: "re\u200bturn", oldText: "return", newText: "x", wantCode: "E_NO_MATCH"},
+		{name: "full width identifiers are not folded",
+			content: "ｆｏｏ", oldText: "foo", newText: "x", wantCode: "E_NO_MATCH"},
 	}
 
 	for _, tc := range cases {
@@ -104,7 +135,7 @@ func TestApplyBatchTextChangesFuzzy(t *testing.T) {
 				{OldText: tc.oldText, NewText: tc.newText, ReplaceAll: tc.replaceAll},
 			})
 			if tc.wantCode != "" {
-				if err == nil || toolerrors.Code(err) != tc.wantCode {
+				if result != nil || err == nil || toolerrors.Code(err) != tc.wantCode {
 					t.Fatalf("expected %s, got %v", tc.wantCode, err)
 				}
 				return
@@ -118,12 +149,39 @@ func TestApplyBatchTextChangesFuzzy(t *testing.T) {
 			if tc.wantRepl != 0 && replacements != tc.wantRepl {
 				t.Fatalf("replacements = %d, want %d", replacements, tc.wantRepl)
 			}
-			if tc.wantWarn != "" {
-				if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], tc.wantWarn) {
-					t.Fatalf("expected %q warning, got %#v", tc.wantWarn, result.Warnings)
+			if tc.wantWarn {
+				if len(result.Warnings) != 1 {
+					t.Fatalf("expected a normalization warning, got %#v", result.Warnings)
 				}
 			}
 		})
+	}
+}
+
+func TestNormalizedCandidateRequiresExactRetry(t *testing.T) {
+	longPrefix := strings.Repeat("前", 1000)
+	for _, tc := range []struct{ content, old, actual, replacement, want string }{
+		{"value = ‘old’ && “untouched”\n", "'old'", "‘old’", "‘new’", "value = ‘new’ && “untouched”\n"},
+		{longPrefix + "a—b trailing\n", "a-b", "a—b", "X", longPrefix + "X trailing\n"},
+		{"word\u00a0gap\n", "word gap", "word\u00a0gap", "new gap", "new gap\n"},
+		{"é  \nvalue = old", "e\u0301  \nvalue = old", "é  \nvalue = old", "e\u0301 \nvalue = new", "e\u0301 \nvalue = new"},
+	} {
+		result, _, err := ApplyBatchTextChanges(tc.content, []TextChange{{OldText: tc.old, NewText: tc.replacement}})
+		if result != nil || toolerrors.Code(err) != "E_NO_MATCH" {
+			t.Fatalf("uncertain source was edited: %+v %v", result, err)
+		}
+		details, ok := toolerrors.Details(err).(*MatchErrorDetails)
+		if !ok || details.MatchType != "normalized" || details.MatchCount != 1 || len(details.Candidates) != 1 {
+			t.Fatalf("missing original candidate for retry: %+v", details)
+		}
+		preview := details.Candidates[0].Preview
+		if !utf8.ValidString(preview) || len(preview) > maxMatchDiagnosticPreviewBytes || !strings.Contains(preview, tc.actual) {
+			t.Fatalf("candidate lost the original characters or exceeded the preview bound: %q", preview)
+		}
+		result, count, err := ApplyBatchTextChanges(tc.content, []TextChange{{OldText: tc.actual, NewText: tc.replacement}})
+		if err != nil || count != 1 || result.Content != tc.want {
+			t.Fatalf("exact retry changed the wrong bytes: %+v %d %v", result, count, err)
+		}
 	}
 }
 

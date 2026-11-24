@@ -13,7 +13,6 @@ package app
 // result shape used by the chat loop.
 
 import (
-	"ally-dev/internal/tools/edit"
 	"ally-dev/internal/tools/read"
 	"bytes"
 	"context"
@@ -437,7 +436,6 @@ func boundBatchReadPreview(result *BatchReadResult) {
 			}
 		}
 		f.Truncated = true
-		f.RangeToken = ""
 		if kept == 0 {
 			f.EndLine = 0
 			f.NextStartLine = f.StartLine
@@ -512,7 +510,6 @@ func batchReadResultItem(req ReadFileRequest, result ReadFileResult) BatchReadRe
 		EndLine:               result.EndLine,
 		NextStartLine:         result.NextStartLine,
 		Version:               result.Version,
-		RangeToken:            result.RangeToken,
 		Size:                  result.Size,
 		TotalLines:            result.TotalLines,
 		LineEnding:            result.LineEnding,
@@ -797,7 +794,7 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 		}
 		return ReadFileResult{}, err
 	}
-	return buildTextReadResultForIdentity(displayPathForConfig(cfg, path), path, data, info.Size(), req)
+	return buildTextReadResult(displayPathForConfig(cfg, path), data, info.Size(), req)
 }
 
 func buildReadOnlyTailResult(path string, data []byte, size int64, lines int) ReadFileResult {
@@ -817,10 +814,6 @@ func buildReadOnlyTailResult(path string, data []byte, size int64, lines int) Re
 // buildTextReadResult formats an already decoded text snapshot. Its version and
 // preview always describe the same bytes, including when edit supplies them.
 func buildTextReadResult(path string, data []byte, size int64, req ReadFileRequest) (ReadFileResult, error) {
-	return buildTextReadResultForIdentity(path, path, data, size, req)
-}
-
-func buildTextReadResultForIdentity(path, identity string, data []byte, size int64, req ReadFileRequest) (ReadFileResult, error) {
 	text, ending, _ := normalizeText(data)
 	preview, err := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
 		StartLine:     req.StartLine,
@@ -835,13 +828,6 @@ func buildTextReadResultForIdentity(path, identity string, data []byte, size int
 	// Hash once; the previous code called hashBytes + hashVersion separately,
 	// hashing the same data twice (10 MB file ≈ 20-30 ms per SHA-256 pass).
 	sha256Hex, version := hashBytesAndVersion(data)
-	rangeToken := ""
-	// A default/broad read must never authorize covering its entire preview.
-	// Publish a token only when the explicitly requested exact span is complete.
-	if req.StartLine > 0 && req.EndLine >= req.StartLine && req.ContextBefore == 0 && req.ContextAfter == 0 &&
-		preview.StartLine == req.StartLine && preview.EndLine == req.EndLine && preview.RangeStatus == "ok" && !preview.EmptyRange {
-		rangeToken = edit.RangeToken(text, identity, preview.StartLine, preview.EndLine)
-	}
 	return ReadFileResult{
 		Path:                  path,
 		Content:               preview.Content,
@@ -855,7 +841,6 @@ func buildTextReadResultForIdentity(path, identity string, data []byte, size int
 		TotalLines:            preview.TotalLines,
 		SHA256:                sha256Hex,
 		Version:               version,
-		RangeToken:            rangeToken,
 		Size:                  size,
 		LineEnding:            ending,
 		Truncated:             preview.Truncated,

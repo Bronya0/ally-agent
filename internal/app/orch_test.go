@@ -26,7 +26,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"ally-dev/internal/tools/edit"
 	"ally-dev/internal/tools/grep"
 	"ally-dev/internal/tools/toolcall"
 	openai "github.com/sashabaranov/go-openai"
@@ -366,14 +365,14 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("edit change properties missing: %#v", items)
 	}
-	for _, field := range []string{"oldText", "lineRange", "replaceAll", "newText"} {
+	for _, field := range []string{"oldText", "replaceAll", "newText"} {
 		if _, exists := changeProperties[field]; !exists {
 			t.Fatalf("edit change schema missing %s: %#v", field, items)
 		}
 	}
 	changeRequired, ok := items["required"].([]string)
-	if !ok || len(changeRequired) != 1 || changeRequired[0] != "newText" {
-		t.Fatalf("edit change must require only newText: %#v", items["required"])
+	if !ok || len(changeRequired) != 2 || !containsString(changeRequired, "oldText") || !containsString(changeRequired, "newText") {
+		t.Fatalf("edit change must require oldText and newText: %#v", items["required"])
 	}
 	for _, keyword := range []string{"oneOf", "anyOf", "allOf", "not"} {
 		if _, exists := items[keyword]; exists {
@@ -3191,17 +3190,17 @@ func TestExecuteToolAppliesMultipleBatchTextChanges(t *testing.T) {
 	}
 }
 
-func TestExecuteToolAppliesOriginalSnapshotLineRangesWithoutOffsetDrift(t *testing.T) {
+func TestExecuteToolAppliesOriginalSnapshotTextChanges(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	original := []byte("one\ntwo\nthree\nfour\nfive\nsix\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"lineRange":{"start":2,"rangeToken":%q},"newText":"TWO\ninserted"},{"lineRange":{"start":5,"rangeToken":%q},"newText":"FIVE"}]}`, hashVersion(original), edit.RangeToken(string(original), filepath.Join(dir, "sample.txt"), 2, 2), edit.RangeToken(string(original), filepath.Join(dir, "sample.txt"), 5, 5))
+	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"two","newText":"TWO\ninserted"},{"oldText":"five","newText":"FIVE"}]}`, hashVersion(original))
 	result := newIsolatedTestApp(t).executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
 	if !result.OK {
-		t.Fatalf("line-range edit failed: %#v", result)
+		t.Fatalf("text edit failed: %#v", result)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
 	if err != nil {
@@ -3209,16 +3208,17 @@ func TestExecuteToolAppliesOriginalSnapshotLineRangesWithoutOffsetDrift(t *testi
 	}
 	want := "one\nTWO\ninserted\nthree\nfour\nFIVE\nsix\n"
 	if string(got) != want {
-		t.Fatalf("later line range must retain original snapshot position:\nwant %q\n got %q", want, got)
+		t.Fatalf("later changes must use the original snapshot:\nwant %q\n got %q", want, got)
 	}
 }
 
-// Missing proof and replaceAll without source text cannot trigger line writes.
-func TestExecuteToolRejectsUnverifiedLineWrites(t *testing.T) {
+// Missing or removed source parameters cannot trigger writes.
+func TestExecuteToolRejectsRemovedOrMissingEditParameters(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"missing token":               `{"lineRange":{"start":2},"newText":""}`,
-		"replaceAll beside lineRange": `{"lineRange":{"start":2},"newText":"ALPHA","replaceAll":true}`,
+		"missing source": `{"newText":""}`,
+		"empty source":   `{"oldText":"","newText":"ALPHA","replaceAll":true}`,
+		"removed scope":  `{"oldText":"alpha","lineRange":{"start":2},"newText":"ALPHA"}`,
 	}
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -3232,9 +3232,9 @@ func TestExecuteToolRejectsUnverifiedLineWrites(t *testing.T) {
 			if result.OK {
 				t.Fatalf("the call must be refused, got %#v", result)
 			}
-			want := "replaceAll"
-			if name == "missing token" {
-				want = "rangeToken"
+			want := "oldText"
+			if name == "removed scope" {
+				want = "lineRange"
 			}
 			if !strings.Contains(result.Error, want) {
 				t.Fatalf("rejection %q must mention %q", result.Error, want)

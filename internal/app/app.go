@@ -27,7 +27,6 @@ import (
 	"unicode/utf8"
 
 	"ally-dev/internal/chatgpt"
-	"ally-dev/internal/tools/edit"
 	"ally-dev/internal/tools/grep"
 	"ally-dev/internal/tools/imagegen"
 	"ally-dev/internal/tools/pathutil"
@@ -900,7 +899,6 @@ type ReadFileResult struct {
 	TotalLines            int      `json:"totalLines"`
 	SHA256                string   `json:"sha256"`
 	Version               string   `json:"version"`
-	RangeToken            string   `json:"rangeToken,omitempty"`
 	Size                  int64    `json:"size"`
 	LineEnding            string   `json:"lineEnding"`
 	Truncated             bool     `json:"truncated"`
@@ -1403,10 +1401,9 @@ type FileTextEdits struct {
 // content without a word. The argument gate enforces the declaration before the
 // edit handler runs (see TestEditRejectsChangeWithoutNewText).
 type TextChange struct {
-	OldText    string          `json:"oldText,omitempty"`
-	LineRange  *edit.LineRange `json:"lineRange,omitempty"`
-	NewText    string          `json:"newText"`
-	ReplaceAll bool            `json:"replaceAll,omitempty"`
+	OldText    string `json:"oldText"`
+	NewText    string `json:"newText"`
+	ReplaceAll bool   `json:"replaceAll,omitempty"`
 }
 
 type MultiEditResult struct {
@@ -1465,7 +1462,6 @@ type BatchReadResultItem struct {
 	EndLine               int             `json:"endLine"`
 	NextStartLine         int             `json:"nextStartLine,omitempty"`
 	Version               string          `json:"version"`
-	RangeToken            string          `json:"rangeToken,omitempty"`
 	Size                  int64           `json:"size"`
 	TotalLines            int             `json:"totalLines"`
 	LineEnding            string          `json:"lineEnding"`
@@ -3902,9 +3898,9 @@ func violationPath(v schemautil.Violation) string {
 
 // toolArgDecodeError renders a failed tool-argument decode for the model. The
 // declared schema is the only source that names the problem in the model's own
-// vocabulary ("changes[0].lineRange.start: must be integer, got string"); the
+// vocabulary ("changes[0].oldText: must be string, got number"); the
 // raw encoding/json error is never echoed because it names internal Go structs
-// ("FileTextEdits.changes.0.lineRange.start of type int") and carries no code.
+// ("FileTextEdits.changes.0.oldText of type string") and carries no code.
 // The schema gate further down never sees this failure — decoding runs first —
 // so the code has to be attached here.
 func toolArgDecodeError(name string, args []byte, err error) error {
@@ -3970,7 +3966,7 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 		// calls look as if they had exhausted max_tokens.
 		if isIncompleteStreamJSON(err) {
 			if name == "edit" || name == "replace_exact" || name == "replace_lines" || name == "remote_edit" {
-				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Merge small changes into one edit call; for large whole-line replacements or deletions, read the exact startLine/endLine range and use its rangeToken with lineRange: %w", err), nil
+				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Resend complete JSON with focused oldText/newText changes; include enough source context to make each target unique: %w", err), nil
 			}
 			return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted): %w", err), nil
 		}
@@ -4024,15 +4020,14 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 	// repair above still lands, and so every keyword the declaration uses
 	// (required, ranges, patterns, enum, const) is enforced exactly as written.
 	//
-	// Undeclared keys are the one exception: no handler reads them, so they are
-	// dropped and named in a warning instead of failing the call. Failing cost
-	// the model a whole round trip to fix a key nothing downstream would use.
+	// Undeclared keys are normally dropped with a warning. Edits reject them:
+	// silently ignoring a removed constraint could change the replacement scope.
 	if schema, ok := toolshared.BuiltinSchema(name); ok {
 		violations := schemautil.ValidateArgs(schema, cur)
 		ignored := make([]string, 0, len(violations))
 		fatal := make([]schemautil.Violation, 0, len(violations))
 		for _, violation := range violations {
-			if violation.UnsupportedKey == "" {
+			if violation.UnsupportedKey == "" || name == "edit" || name == "remote_edit" {
 				fatal = append(fatal, violation)
 				continue
 			}

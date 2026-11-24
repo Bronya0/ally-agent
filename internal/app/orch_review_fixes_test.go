@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"ally-dev/internal/tools/edit"
-
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -104,11 +102,11 @@ func TestLocalEditBatchDistinctFailuresDoNotShareDiagnostics(t *testing.T) {
 			a := newIsolatedToolTestApp(t)
 			files := []FileTextEdits{
 				{Path: "multi.txt", Version: hashVersion([]byte("old\nold\n")), Changes: []TextChange{{OldText: "old", NewText: "new"}}},
-				{Path: "range.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{LineRange: &edit.LineRange{Start: 9}, NewText: "new"}}},
+				{Path: "missing.txt", Version: hashVersion([]byte("old\n")), Changes: []TextChange{{OldText: "absent", NewText: "new"}}},
 				{Path: "stale.txt", Version: hashVersion([]byte("stale")), Changes: []TextChange{{OldText: "old", NewText: "new"}}},
 			}
 			originals := []string{"old\nold\n", "old\n", "old\n"}
-			codes := []string{"E_MULTI_MATCH", "E_RANGE_OOB", "E_VERSION_MISMATCH"}
+			codes := []string{"E_MULTI_MATCH", "E_NO_MATCH", "E_VERSION_MISMATCH"}
 			for i, file := range files {
 				if err := os.WriteFile(filepath.Join(a.config.Workspace, file.Path), []byte(originals[i]), 0600); err != nil {
 					t.Fatal(err)

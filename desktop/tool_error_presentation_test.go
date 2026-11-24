@@ -7,7 +7,7 @@ import (
 )
 
 func TestToolErrorIsSingleLineWithoutChangingContext(t *testing.T) {
-	errorText := "[E_BAD_ARGS] Invalid arguments for edit:\nchanges[1]: unsupported parameter oldText_dup\n" + strings.Repeat("supported: lineRange, newText, oldText, replaceAll; ", 25)
+	errorText := "[E_BAD_ARGS] Invalid arguments for edit:\nchanges[1]: unsupported parameter oldText_dup\n" + strings.Repeat("supported: newText, oldText, replaceAll; ", 25)
 	msg := map[string]any{
 		"role": "tool_call", "name": "edit", "toolCallId": "edit-error", "status": "error",
 		"args": `{"path":"ApiProbe-mono/AGENTS.md","changes":[{"oldText_dup":"old","newText":"new"}]}`,

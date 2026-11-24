@@ -147,7 +147,7 @@ func TestNormalizeTypesKeepsCompositeShapes(t *testing.T) {
 // TestStampObjectShapeCoversCompositionNodes pins the shape Gemini refuses:
 // `properties`/`required` on a node whose type is not OBJECT rejects the whole
 // tool declaration, and a mutual-exclusion rule lives exactly on such nodes —
-// the oneOf branches of edit's changes[] / read's files[] and their `not`
+// nested oneOf branches and their `not`
 // guards. The property-side repair never reached them, because composition
 // branches and array items are walked without isPropertyDef.
 func TestStampObjectShapeCoversCompositionNodes(t *testing.T) {
@@ -165,11 +165,11 @@ func TestStampObjectShapeCoversCompositionNodes(t *testing.T) {
 							"required":   []string{"oldText"},
 							"properties": map[string]any{"oldText": map[string]any{"minLength": 1}},
 							"not": map[string]any{
-								"required":   []string{"lineRange"},
-								"properties": map[string]any{"lineRange": map[string]any{"pattern": `^[1-9]$`}},
+								"required":   []string{"selector"},
+								"properties": map[string]any{"selector": map[string]any{"pattern": `^[1-9]$`}},
 							},
 						},
-						map[string]any{"required": []string{"lineRange"}},
+						map[string]any{"required": []string{"selector"}},
 					},
 				},
 			},
