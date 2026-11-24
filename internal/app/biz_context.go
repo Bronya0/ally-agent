@@ -129,11 +129,13 @@ type ContextBreakdown struct {
 	SystemPrompt      int                    `json:"systemPrompt"`
 	SystemPromptParts []ContextBreakdownPart `json:"systemPromptParts,omitempty"`
 	ToolSchemas       int                    `json:"toolSchemas"`
+	ToolSchemaParts   []ContextBreakdownPart `json:"toolSchemaParts,omitempty"`
 	MCPToolSchemas    int                    `json:"mcpToolSchemas"` // Deprecated wire field.
 	MCPCatalog        int                    `json:"mcpCatalog"`
 	UserMessages      int                    `json:"userMessages"`
 	AssistantMsgs     int                    `json:"assistantMsgs"`
 	ToolResults       int                    `json:"toolResults"`
+	ToolUsage         []ContextToolUsage     `json:"toolUsage,omitempty"`
 	Reasoning         int                    `json:"reasoning"`
 	// MeasuredTokens is the provider-reported size (prompt + completion) of the
 	// session's most recent request, covering the request prefix and the first
@@ -275,29 +277,21 @@ func estimateTokensFromText(text string) int {
 	return int(math.Ceil(float64(asciiCount)/3.65)) + nonAsciiCount
 }
 
-// builtinToolSchemaTokens caches the token estimate of the built-in tool
-// list (chatTools()), which is static across the process lifetime. MCP tools
-// change over time and must be re-marshaled per call; their contribution is
-// added separately. Combined with chatToolsCache, this avoids re-marshaling
-// the large static schema (typically 5-15KB JSON) on every getContextBreakdown
-// call — the context popover refresh is user-visible and was hitting this
-// path multiple times per second during a run.
-var builtinToolSchemaTokens = sync.OnceValue(func() int {
-	tools := chatTools()
-	if len(tools) == 0 {
-		return 0
-	}
-	data, _ := json.Marshal(tools)
-	return estimateTokensFromText(string(data))
+// Cache the fixed built-in schemas and their per-tool estimates once. Filtered
+// toolsets reuse the session's frozenPrefixStats; footer polls never marshal a
+// frozen schema again. MCP definitions obtained by ToolSearch live in history
+// and are counted as tool results instead.
+var builtinToolSchemaStats = sync.OnceValue(func() toolSchemaStats {
+	return estimateModelToolSchemaStats(chatTools())
 })
 
 // The common purpose property is part of the model-visible schema. Retain a
 // separate static estimate so legacy snapshots keep their original accounting.
-var builtinPurposeToolSchemaTokens = sync.OnceValue(func() int {
-	return estimateModelToolSchemas(withToolPurposes(chatTools()))
+var builtinPurposeToolSchemaStats = sync.OnceValue(func() toolSchemaStats {
+	return estimateModelToolSchemaStats(withToolPurposes(chatTools()))
 })
 
-func estimateModelToolSchemas(tools []openai.Tool) int {
+func modelToolSchemaProjection(tools []openai.Tool) []openai.Tool {
 	projected := make([]openai.Tool, len(tools))
 	copy(projected, tools)
 	for i := range projected {
@@ -314,15 +308,23 @@ func estimateModelToolSchemas(tools []openai.Tool) int {
 		fn.Parameters = params
 		projected[i].Function = &fn
 	}
-	data, _ := json.Marshal(projected)
+	return projected
+}
+
+func estimateModelToolSchemas(tools []openai.Tool) int {
+	data, _ := json.Marshal(modelToolSchemaProjection(tools))
 	return estimateTokensFromText(string(data))
 }
 
 // The full built-in set has a cached estimate. Filtered sets are estimated
 // from their actual protocol declarations.
 func estimateToolSchemaTokens(tools []openai.Tool) int {
+	return estimateToolSchemas(tools).total
+}
+
+func estimateToolSchemas(tools []openai.Tool) toolSchemaStats {
 	if len(tools) == 0 {
-		return 0
+		return toolSchemaStats{}
 	}
 	if len(tools) == len(chatTools()) {
 		purposeCount := 0
@@ -335,12 +337,12 @@ func estimateToolSchemaTokens(tools []openai.Tool) int {
 		}
 		switch purposeCount {
 		case 0:
-			return builtinToolSchemaTokens()
+			return builtinToolSchemaStats()
 		case len(tools):
-			return builtinPurposeToolSchemaTokens()
+			return builtinPurposeToolSchemaStats()
 		}
 	}
-	return estimateModelToolSchemas(tools)
+	return estimateModelToolSchemaStats(tools)
 }
 
 // finalizeContextBreakdownTotal recomputes the category sum and the
@@ -575,6 +577,7 @@ type frozenPrefixStats struct {
 	system       int
 	parts        []ContextBreakdownPart
 	tools        int
+	toolParts    []ContextBreakdownPart
 }
 
 func sameSliceSource[T any](a, b []T) bool {
@@ -606,7 +609,8 @@ func (a *App) frozenPrefixTokenStats(sessionID string) (frozenPrefixStats, bool)
 		next.system += tokens
 		next.parts = append(next.parts, ContextBreakdownPart{Label: workspaceMapPartLabel, Tokens: tokens})
 	}
-	next.tools = estimateToolSchemaTokens(toolset)
+	schemas := estimateToolSchemas(toolset)
+	next.tools, next.toolParts = schemas.total, schemas.parts
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	currentPrompt, p := a.sessionSystemPrompts[sessionID]
@@ -655,10 +659,13 @@ func (a *App) getContextBreakdown(sessionID string, workspaceHint string) Contex
 		result.SystemPrompt = cached.system
 		result.SystemPromptParts = append([]ContextBreakdownPart(nil), cached.parts...)
 		result.ToolSchemas = cached.tools
+		result.ToolSchemaParts = append([]ContextBreakdownPart(nil), cached.toolParts...)
 	} else {
 		cfg := a.contextSettingsForSession(sessionID, a.sessionContextConfig(sessionID, workspaceHint), false)
 		result.SystemPrompt, result.SystemPromptParts = a.sessionPrefixBreakdown(sessionID, cfg, nil)
-		result.ToolSchemas = estimateToolSchemaTokens(a.sessionToolsetForBreakdown(sessionID, cfg))
+		schemas := estimateToolSchemas(a.sessionToolsetForBreakdown(sessionID, cfg))
+		result.ToolSchemas = schemas.total
+		result.ToolSchemaParts = append([]ContextBreakdownPart(nil), schemas.parts...)
 	}
 
 	// Check if live breakdown is available (covers tool calls + tool results not in a.histories)
@@ -678,6 +685,7 @@ func (a *App) getContextBreakdown(sessionID string, workspaceHint string) Contex
 	result.UserMessages = live.UserMessages
 	result.AssistantMsgs = live.AssistantMsgs
 	result.ToolResults = live.ToolResults
+	result.ToolUsage = append([]ContextToolUsage(nil), live.ToolUsage...)
 	result.Reasoning = live.Reasoning
 	result.MeasuredTokens = live.MeasuredTokens
 	result.MeasuredMessages = live.MeasuredMessages
@@ -690,8 +698,11 @@ func (a *App) getContextBreakdown(sessionID string, workspaceHint string) Contex
 // message list. It scans only messages added since the previous step; callers
 // reset it after context compaction, where the slice is replaced wholesale.
 type liveBreakdownAccumulator struct {
-	nextMessage int
-	breakdown   ContextBreakdown
+	nextMessage  int
+	breakdown    ContextBreakdown
+	toolUsage    map[string]ContextToolUsage
+	pending      map[string][]string
+	toolsChanged bool
 }
 
 func newLiveBreakdownAccumulator(messages []openai.ChatCompletionMessage) *liveBreakdownAccumulator {
@@ -704,8 +715,7 @@ func (acc *liveBreakdownAccumulator) reset(messages []openai.ChatCompletionMessa
 	if acc == nil {
 		return
 	}
-	acc.nextMessage = 0
-	acc.breakdown = ContextBreakdown{}
+	*acc = liveBreakdownAccumulator{}
 	acc.update(messages)
 }
 
@@ -714,11 +724,14 @@ func (acc *liveBreakdownAccumulator) update(messages []openai.ChatCompletionMess
 		return computeLiveBreakdown(messages)
 	}
 	if acc.nextMessage > len(messages) {
-		acc.nextMessage = 0
-		acc.breakdown = ContextBreakdown{}
+		*acc = liveBreakdownAccumulator{}
 	}
 	for _, message := range messages[acc.nextMessage:] {
-		addBreakdownMessage(&acc.breakdown, message)
+		acc.addMessage(message)
+	}
+	if acc.toolsChanged {
+		acc.breakdown.ToolUsage = sortedContextToolUsage(acc.toolUsage)
+		acc.toolsChanged = false
 	}
 	acc.nextMessage = len(messages)
 	finalizeContextBreakdownTotal(&acc.breakdown)
@@ -732,10 +745,7 @@ func (acc *liveBreakdownAccumulator) update(messages []openai.ChatCompletionMess
 func messageTokens(message openai.ChatCompletionMessage) int {
 	total := estimateMessageBodyTokens(message)
 	for _, call := range message.ToolCalls {
-		total += estimateTokensFromText(call.ID)
-		total += estimateTokensFromText(string(call.Type))
-		total += estimateTokensFromText(call.Function.Name)
-		total += estimateTokensFromText(call.Function.Arguments)
+		total += toolCallTokens(call)
 	}
 	return total
 }
@@ -744,14 +754,16 @@ func reasoningTokens(message openai.ChatCompletionMessage) int {
 	return estimateTokensFromText(message.ReasoningContent)
 }
 
-// addBreakdownMessage counts one message into the breakdown. The live
-// accumulator and the saved-history fallback both go through it, so the footer
-// reports the same numbers whether a run is active or not.
-func addBreakdownMessage(result *ContextBreakdown, message openai.ChatCompletionMessage) {
-	if result == nil {
-		return
+// Live and restored histories share the same accounting. Count each call's
+// potentially large arguments only once, into both its category and tool row.
+func (acc *liveBreakdownAccumulator) addMessage(message openai.ChatCompletionMessage) {
+	result := &acc.breakdown
+	tokens := estimateMessageBodyTokens(message)
+	for _, call := range message.ToolCalls {
+		callTokens := toolCallTokens(call)
+		tokens += callTokens
+		acc.addToolCall(call, callTokens)
 	}
-	tokens := messageTokens(message)
 	switch message.Role {
 	case openai.ChatMessageRoleUser:
 		if isMcpCatalogMessage(message) {
@@ -763,6 +775,7 @@ func addBreakdownMessage(result *ContextBreakdown, message openai.ChatCompletion
 		result.AssistantMsgs += tokens
 	case openai.ChatMessageRoleTool:
 		result.ToolResults += tokens
+		acc.addToolResult(message, tokens)
 	}
 	result.Reasoning += reasoningTokens(message)
 }
@@ -771,12 +784,7 @@ func addBreakdownMessage(result *ContextBreakdown, message openai.ChatCompletion
 // This includes tool call arguments (assistant msgs with ToolCalls) and tool result messages,
 // which are filtered out by saveHistory and thus missing from a.histories.
 func computeLiveBreakdown(msgs []openai.ChatCompletionMessage) ContextBreakdown {
-	result := ContextBreakdown{}
-	for _, message := range msgs {
-		addBreakdownMessage(&result, message)
-	}
-	finalizeContextBreakdownTotal(&result)
-	return result
+	return newLiveBreakdownAccumulator(msgs).breakdown
 }
 
 // Breakdown section labels. They are shared with the frontend popover, which

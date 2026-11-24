@@ -1836,5 +1836,10 @@
   "ui_context_mcp_catalog": "MCP 工具清单",
   "ui_context_mcp_catalog_note": "加载 MCP 工具目录，完整定义仍按需查询；不改变连接与工具执行权限。",
   "ui_context_budget_note": "自动加载合计上限 %d KiB；超限会提示，不静默丢弃项目规则或清单项。",
-  "ui_context_budget_error": "自动加载上下文超过 %d KiB，未发送模型请求。请精简项目指令、自定义提示词或清单，或在设置中关闭不需要的加载项后新建会话；不会静默丢弃规则或清单项。"
+  "ui_context_budget_error": "自动加载上下文超过 %d KiB，未发送模型请求。请精简项目指令、自定义提示词或清单，或在设置中关闭不需要的加载项后新建会话；不会静默丢弃规则或清单项。",
+  "ui_context_tool_calls": "次数",
+  "ui_context_tool_call_tokens": "调用",
+  "ui_context_tool_result_tokens": "结果",
+  "ui_context_unknown_tool": "未知工具",
+  "ui_context_tool_usage_note": "当前上下文估算；调用含参数，计入 AI 回复"
 }

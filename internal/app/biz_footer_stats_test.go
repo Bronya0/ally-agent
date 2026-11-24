@@ -52,6 +52,10 @@ func TestFooterPrefixPreviewFreezeAndRefresh(t *testing.T) {
 	if got := app.getContextBreakdown(sid, root); got.ToolSchemas != frozen.ToolSchemas {
 		t.Fatal("frozen tool schema estimate changed without refreshing the session")
 	}
+	frozen.ToolSchemaParts[0].Tokens = -1
+	if got := app.getContextBreakdown(sid, root); got.ToolSchemaParts[0].Tokens < 0 {
+		t.Fatal("caller mutated the frozen schema parts cache")
+	}
 	_, parts := app.sessionPrefixBreakdown(sid, app.config, nil)
 	parts[0].Tokens = -1
 	if _, again := app.sessionPrefixBreakdown(sid, app.config, nil); again[0].Tokens < 0 {

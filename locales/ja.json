@@ -1836,5 +1836,10 @@
   "ui_context_mcp_catalog": "MCP ツール一覧",
   "ui_context_mcp_catalog_note": "MCP ツール一覧を読み込み、完全な定義は必要に応じて取得します。接続とツールの実行権限は変更しません。",
   "ui_context_budget_note": "自動読み込みの合計上限は %d KiB です。超過時はエラーを表示し、プロジェクトルールや一覧項目を黙って省略しません。",
-  "ui_context_budget_error": "自動読み込みのコンテキストが %d KiB を超えたため、モデルへのリクエストは送信していません。プロジェクト指示、カスタム指示、一覧を短くするか、設定で不要な読み込み項目をオフにして新しいセッションを開始してください。ルールや一覧項目を黙って省略することはありません。"
+  "ui_context_budget_error": "自動読み込みのコンテキストが %d KiB を超えたため、モデルへのリクエストは送信していません。プロジェクト指示、カスタム指示、一覧を短くするか、設定で不要な読み込み項目をオフにして新しいセッションを開始してください。ルールや一覧項目を黙って省略することはありません。",
+  "ui_context_tool_calls": "回数",
+  "ui_context_tool_call_tokens": "呼出",
+  "ui_context_tool_result_tokens": "結果",
+  "ui_context_unknown_tool": "不明なツール",
+  "ui_context_tool_usage_note": "現在のコンテキストの推定値。呼出には引数を含み、AI の返信に計上"
 }

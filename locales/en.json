@@ -1836,5 +1836,10 @@
   "ui_context_mcp_catalog": "MCP tool catalog",
   "ui_context_mcp_catalog_note": "Load the MCP tool catalog; full definitions are queried on demand. Connections and tool execution permissions are unchanged.",
   "ui_context_budget_note": "Automatic context is limited to %d KiB in total. Exceeding it reports an error rather than silently dropping project rules or catalog entries.",
-  "ui_context_budget_error": "Automatic context exceeds %d KiB; no model request was sent. Shorten project instructions, custom instructions or catalogs, or disable unnecessary context sources in Settings and start a new session. Rules and catalog entries are not silently dropped."
+  "ui_context_budget_error": "Automatic context exceeds %d KiB; no model request was sent. Shorten project instructions, custom instructions or catalogs, or disable unnecessary context sources in Settings and start a new session. Rules and catalog entries are not silently dropped.",
+  "ui_context_tool_calls": "Calls",
+  "ui_context_tool_call_tokens": "Call",
+  "ui_context_tool_result_tokens": "Result",
+  "ui_context_unknown_tool": "Unknown tool",
+  "ui_context_tool_usage_note": "Current context estimates; calls include arguments and count toward AI replies"
 }

@@ -151,3 +151,47 @@ func TestContextBreakdownFoldsSystemPromptParts(t *testing.T) {
 		t.Fatal("the focused row ignored the keyboard")
 	}
 }
+
+func TestContextBreakdownFoldsToolDetails(t *testing.T) {
+	conv := &conversation{ID: "tool-details"}
+	st := conv.uiState()
+	st.FooterLoaded, st.ContextOpen = true, true
+	st.Breakdown = backend.ContextBreakdown{
+		ToolSchemas:     217,
+		ToolSchemaParts: []backend.ContextBreakdownPart{{Label: "ToolSearch", Tokens: 217}},
+		ToolResults:     925,
+		ToolUsage: []backend.ContextToolUsage{
+			{Name: "read", Calls: 3, CallTokens: 120, ResultTokens: 900},
+			{Name: "docs.lookup", Calls: 1, CallTokens: 45, ResultTokens: 25},
+		},
+	}
+	a := &desktop{}
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.DisableAnimations()
+		a.contextUsage(c, conv)
+	}, 900, 800)
+	if tester.HasText("read") || tester.HasText("ToolSearch") {
+		t.Fatal("tool details are not folded initially")
+	}
+	if err := tester.Click("工具结果"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Frame()
+	if !st.ToolUsageOpen || !tester.HasText("read") || !tester.HasText("docs.lookup") || !tester.HasText(tokenUnits(900)) {
+		t.Fatalf("used-tool details did not open: %v", tester.Texts())
+	}
+	if err := tester.Click("工具结果"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Frame()
+	if st.ToolUsageOpen || tester.HasText("read") {
+		t.Fatal("closing the group retained its rows")
+	}
+	if err := tester.Click("工具 Schema · 内置"); err != nil {
+		t.Fatal(err)
+	}
+	tester.Frame()
+	if !st.ToolSchemaPartsOpen || !tester.HasText("ToolSearch") {
+		t.Fatalf("schema details did not open: %v", tester.Texts())
+	}
+}

@@ -16505,3 +16505,53 @@ func UiContextBudgetError() string { return In(i18n.Locale()).UiContextBudgetErr
 func (msgs Messages) UiContextBudgetError() string {
 	return Catalog.Format(msgs.locale, "ui_context_budget_error", nil)
 }
+
+// UiContextToolCalls says "Calls"
+// in the language the app shows.
+func UiContextToolCalls() string { return In(i18n.Locale()).UiContextToolCalls() }
+
+// UiContextToolCalls says "Calls"
+// in the language of msgs.
+func (msgs Messages) UiContextToolCalls() string {
+	return Catalog.Format(msgs.locale, "ui_context_tool_calls", nil)
+}
+
+// UiContextToolCallTokens says "Call"
+// in the language the app shows.
+func UiContextToolCallTokens() string { return In(i18n.Locale()).UiContextToolCallTokens() }
+
+// UiContextToolCallTokens says "Call"
+// in the language of msgs.
+func (msgs Messages) UiContextToolCallTokens() string {
+	return Catalog.Format(msgs.locale, "ui_context_tool_call_tokens", nil)
+}
+
+// UiContextToolResultTokens says "Result"
+// in the language the app shows.
+func UiContextToolResultTokens() string { return In(i18n.Locale()).UiContextToolResultTokens() }
+
+// UiContextToolResultTokens says "Result"
+// in the language of msgs.
+func (msgs Messages) UiContextToolResultTokens() string {
+	return Catalog.Format(msgs.locale, "ui_context_tool_result_tokens", nil)
+}
+
+// UiContextUnknownTool says "Unknown tool"
+// in the language the app shows.
+func UiContextUnknownTool() string { return In(i18n.Locale()).UiContextUnknownTool() }
+
+// UiContextUnknownTool says "Unknown tool"
+// in the language of msgs.
+func (msgs Messages) UiContextUnknownTool() string {
+	return Catalog.Format(msgs.locale, "ui_context_unknown_tool", nil)
+}
+
+// UiContextToolUsageNote says "Current context estimates; calls include arguments and count toward AI replies"
+// in the language the app shows.
+func UiContextToolUsageNote() string { return In(i18n.Locale()).UiContextToolUsageNote() }
+
+// UiContextToolUsageNote says "Current context estimates; calls include arguments and count toward AI replies"
+// in the language of msgs.
+func (msgs Messages) UiContextToolUsageNote() string {
+	return Catalog.Format(msgs.locale, "ui_context_tool_usage_note", nil)
+}

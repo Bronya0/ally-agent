@@ -1836,5 +1836,10 @@
   "ui_context_mcp_catalog": "MCP 도구 목록",
   "ui_context_mcp_catalog_note": "MCP 도구 목록을 로드하며 전체 정의는 필요할 때 조회합니다. 연결과 도구 실행 권한은 변경하지 않습니다.",
   "ui_context_budget_note": "자동 로드의 총 한도는 %d KiB입니다. 초과하면 오류를 표시하며 프로젝트 규칙이나 목록 항목을 조용히 누락하지 않습니다.",
-  "ui_context_budget_error": "자동 로드 컨텍스트가 %d KiB를 초과하여 모델 요청을 보내지 않았습니다. 프로젝트 지침, 사용자 지정 지침 또는 목록을 줄이거나 설정에서 불필요한 로드 항목을 끈 뒤 새 세션을 시작하세요. 규칙이나 목록 항목을 조용히 누락하지 않습니다."
+  "ui_context_budget_error": "자동 로드 컨텍스트가 %d KiB를 초과하여 모델 요청을 보내지 않았습니다. 프로젝트 지침, 사용자 지정 지침 또는 목록을 줄이거나 설정에서 불필요한 로드 항목을 끈 뒤 새 세션을 시작하세요. 규칙이나 목록 항목을 조용히 누락하지 않습니다.",
+  "ui_context_tool_calls": "횟수",
+  "ui_context_tool_call_tokens": "호출",
+  "ui_context_tool_result_tokens": "결과",
+  "ui_context_unknown_tool": "알 수 없는 도구",
+  "ui_context_tool_usage_note": "현재 컨텍스트 추정치. 호출에는 인수가 포함되며 AI 응답에 합산됩니다"
 }

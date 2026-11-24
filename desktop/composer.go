@@ -1490,18 +1490,12 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 	ui.PopoverBase(c, btn, &st.ContextOpen, func(panel ui.Element) {
 		uikit.MenuPanel(c, panel, uikit.MenuOptions{Width: 300, MaxHeight: contextBreakdownHeight + 120})
 		panel.Transition(uikit.PopupTransition())
-		// The breakdown is a short list — the prompt's total, the four kinds of
-		// message, the running tally — and the sections behind the fold still fit
-		// when a reader opens them, so the panel shows the whole thing at once. It
-		// opens upwards over the conversation, and the scrollbar it used to carry
-		// only hid the numbers it exists for. A short window still bounds it, and
-		// then the buttons below the list keep their room instead of spilling out.
+		// Keep actions outside the bounded breakdown scroll. Expanded tool lists
+		// have their own native virtual scrolling, independent of history length.
 		panel.MaxHeightPercent(85)
 		panel.Column().Label(locales.Text("上下文占用明细")).AttachTo(btn, ui.AnchorTopRight, ui.AnchorBottomRight).Left(-12)
 		b := st.Breakdown
 		ui.Text(c, locales.Text("上下文构成")).FontSize(fsSection).Bold().Padding(gapInline, padCard)
-		// Only a session with more sections than usual — a long memory index, one
-		// more instruction file — scrolls here.
 		ui.Scroll(c).MaxHeight(contextBreakdownHeight).Children(func() {
 			ui.Column(c).FillWidth().Padding(4, 10).Gap(gapInline).Children(func() {
 				// The prompt's own sections are detail, and the message kinds below are
@@ -1521,11 +1515,11 @@ func (a *desktop) contextUsage(c *ui.Context, t *conversation) {
 						})
 					})
 				})
-				contextPart(c, locales.Text("工具 Schema · 内置"), b.ToolSchemas, a.secondaryInk())
+				a.contextToolSchemas(c, st)
 				contextPart(c, locales.Text("MCP 工具池"), b.MCPCatalog, a.secondaryInk())
 				contextPart(c, locales.Text("用户提问"), b.UserMessages, a.secondaryInk())
 				contextPart(c, locales.Text("AI 回复"), b.AssistantMsgs, a.secondaryInk())
-				contextPart(c, locales.Text("工具结果"), b.ToolResults, a.secondaryInk())
+				a.contextToolUsage(c, st)
 				if b.Reasoning > 0 {
 					contextPart(c, locales.Text("思考内容"), b.Reasoning, a.secondaryInk())
 				}

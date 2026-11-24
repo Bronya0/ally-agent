@@ -263,6 +263,8 @@ type chatUI struct {
 	ModelSearch          string
 	ContextOpen          bool
 	PromptPartsOpen      bool // the prompt's sections are detail: folded until the parent row is clicked
+	ToolSchemaPartsOpen  bool
+	ToolUsageOpen        bool
 	ExtraRootsOpen       bool
 	Retry                *retryInfo
 	Git                  backend.GitStatus

@@ -138,6 +138,8 @@
 - 模型列表按展示与搜索字段缓存筛选索引及供应商顺序，只绘制当前供应商，不每帧复制完整配置或给未显示供应商分组；入口见 [page_models.go](../desktop/page_models.go)。
 - 技能列表按同一份扫描结果缓存排序索引、来源分组、数量和标签，启停等当前状态仍读权威数据，不每帧排序并复制完整定义；入口见 [page_skills.go](../desktop/page_skills.go)。
 - 统计环形图按数据变化缓存标签、占比与扇区数据，Path 缓存键包含圆心、半径和扇区，悬停或布局变化时更新几何；入口见 [page_stats.go](../desktop/page_stats.go)。
+- 上下文构成的工具明细复用模型历史的增量统计与保存历史缓存，按实际工具名汇总次数、调用和结果 token；MCP 的 ToolExec 按目标工具归组。快照只含名称与数字，压缩或改写历史后重建，不从已裁剪的 UI 卡片估算；入口见 [biz_context_tools.go](../internal/app/biz_context_tools.go)。
+- 工具 Schema 分项复用固定工具与会话前缀缓存；展开明细用原生虚拟列表只建可见行，渲染期不扫描历史、不解码参数或结果，调用 token 仍归入 AI 回复，不重复加入总量；入口见 [context_breakdown.go](../desktop/context_breakdown.go)。
 - Go 内存软限额为 320 MiB，作用于 Go 管理内存且不是硬上限，不包含 WebView、原生纹理等内存；入口见 [memory_tidy.go](../desktop/memory_tidy.go)。
 - 隐藏、最小化、关闭/新建 tab、新建会话时直接释放闲置 Go 堆：无延时、无排队回调，同一个 1 分钟内最多释放一次，先释放该动作丢弃的预览与位图再还内存。
 - `FreeOSMemory` 只用于低频用户动作的受控整理，不放进渲染或每条消息更新路径，不靠清空活跃内容或销毁保留预览降低工作集。
