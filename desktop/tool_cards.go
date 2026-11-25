@@ -928,6 +928,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		})
 	}
 	isMCP := name != mcpSearchToolKind && (target != "" || isMCPDisplayTool(m))
+	isSSH := isSSHTool(name) && !isMCP
 	if isMCP {
 		operation = target
 		if operation == "" {
@@ -1010,7 +1011,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			if name != "subagent" {
 				ui.Box(c).Absolute().Left(-16).Top(0).Width(16).HeightPercent(100).Center().Children(func() { toolStatusIcon(c, state) })
 			}
-			if isSSHTool(name) && !isMCP {
+			if isSSH {
 				ui.Text(c.Key(key+"-ssh"), "SSH").FontSize(fsTool).TextColor(p.accent).Shrink(0).LineHeight(1.4).NoWrap()
 			}
 			if isMCP {
@@ -1072,7 +1073,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					}
 				}
 			}
-			if isSSHTool(name) && name != "ssh_cluster" && !isMCP {
+			if isSSH && name != "ssh_cluster" {
 				if alias := toolSSHAlias(args); alias != "" {
 					label := ui.Text(c.Key(key+"-ssh-alias"), alias).FontSize(fsTool - 2).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).MaxWidthPercent(24).Shrink(0)
 					uikit.Tooltip(c, label, alias)
@@ -1087,8 +1088,8 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				}
 			}
 			if name == "command" || name == "remote_run_command" {
-				// Exit status and duration describe the command, so they sit right
-				// after it instead of being pushed to the row's far edge.
+				// Exit status describes the command, so it sits right
+				// after it (and the SSH alias), before the purpose at the far edge.
 				if code, exists := result["exitCode"]; exists {
 					ui.Text(c, fmt.Sprintf("exit %v", code)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 				}
@@ -1098,7 +1099,18 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				if boolOf(result, "promotedToService") {
 					neutralChip(c, locales.Text("已转后台服务"))
 				}
-				if ms := toolDuration(m, result); ms > 0 || state == "success" || state == "error" || state == "cancelled" {
+			}
+			// SSH timings follow the server alias; local command timing follows
+			// its exit status. Completed calls keep the reported duration.
+			if name == "command" || isSSH {
+				ms := toolDuration(m, result)
+				if isSSH && state == "running" {
+					if started, ok := m["startedAt"].(time.Time); ok {
+						ms = max(int64(1), c.Now().Sub(started).Milliseconds())
+						c.After(time.Second)
+					}
+				}
+				if ms > 0 || state == "success" || state == "error" || state == "cancelled" {
 					ui.Text(c, fmtDur(ms)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 				}
 			}
@@ -1146,8 +1158,8 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					neutralChip(c, locales.Text(fastCompactChip))
 				}
 			}
-			// A command's duration already sits next to its exit status.
-			if desc.showTiming && name != "command" && name != "remote_run_command" {
+			// Command and SSH durations are already beside their metadata.
+			if desc.showTiming && name != "command" && !isSSH {
 				if ms := toolDuration(m, result); ms > 0 || state == "success" || state == "error" || state == "cancelled" {
 					ui.Text(c, fmtDur(ms)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 				}
