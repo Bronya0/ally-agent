@@ -196,19 +196,23 @@ func (s *networkEventSink) Emit(name string, payload any) {
 		return
 	}
 	if len(raw) > maxNetworkPayloadBytes {
-		// 按字节硬切会切断 UTF-8 序列或 JSON token，产生非法 JSON，
-		// 毒事件入环后会让 SSE 回放/轮询全部解析失败。截断后必须校验，
-		// 非法则替换为合法哨兵，保证下游永远拿到可解析的 JSON。
-		// 同时必须拷贝出截断后的切片：直接 raw[:N] 只改 slice 头，底层数组
-		// 仍持有完整 marshal 结果（tool:result 可达数百 KB、run:image 可达 8MB），
-		// 被 ring 和订阅队列共享引用会让"64KB 截断"的内存边界失效。
-		full := len(raw)
-		raw = raw[:maxNetworkPayloadBytes]
-		if !json.Valid(raw) {
-			raw = []byte(fmt.Sprintf(`{"truncated":true,"size":%d}`, full))
-		} else {
-			raw = append([]byte(nil), raw...)
+		// Keep routing fields for maps and structured events, without retaining
+		// the original large payload or producing incomplete JSON.
+		var identity struct {
+			SessionID  string `json:"sessionId,omitempty"`
+			RunID      string `json:"runId,omitempty"`
+			ToolCallID string `json:"toolCallId,omitempty"`
+			Truncated  bool   `json:"truncated"`
+			Size       int    `json:"size"`
 		}
+		_ = json.Unmarshal(raw, &identity)
+		for _, id := range []*string{&identity.SessionID, &identity.RunID, &identity.ToolCallID} {
+			if len(*id) > 1024 {
+				*id = "" // An oversized identifier must not defeat the payload bound.
+			}
+		}
+		identity.Truncated, identity.Size = true, len(raw)
+		raw, _ = json.Marshal(identity)
 	}
 	e := networkEvent{Instance: s.instance, Name: name, Payload: raw, TS: time.Now()}
 	s.mu.Lock()

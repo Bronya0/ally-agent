@@ -1816,17 +1816,37 @@ type runFinish struct {
 // finishRun is the single end-of-run exit: one line per step, in the order the
 // steps depend on each other. Independent steps run concurrently.
 func (a *App) finishRun(f runFinish, messages []openai.ChatCompletionMessage, outcome runOutcome) {
+	// Stop admission before checkpointing. Inputs accepted before an error or
+	// cancellation still belong in history, even if the model never saw them.
+	inputs := a.drainRunInputs(f.runID, true)
+	if len(inputs) > 0 && len(messages) == 0 {
+		messages = a.loadSessionHistoryCopy(f.sessionID)
+	}
+	for _, input := range inputs {
+		messages = appendUserMessageWithAttachments(messages, input.Text, input.Attachments)
+	}
+	if len(inputs) > 0 && outcome.kind == "done" {
+		outcome.kind, outcome.message = "error", "run ended before processing queued messages"
+	}
 	// History: the final version on success, the checkpoint save otherwise.
+	var historyErr, indexErr error
 	if outcome.kind == "done" || len(sanitizeHistoryMessages(messages)) > 0 {
-		a.saveHistory(f.sessionID, messages)
+		historyErr = a.saveHistory(f.sessionID, messages)
 	}
 	// These three read the saved history and touch different state: run them
-	// together instead of one after another. A failing step is logged, not fatal.
+	// together instead of one after another. Persistence errors reach the outcome.
 	runParallel("run finish",
-		func() { a.restoreSavedHistoryBreakdown(f.sessionID) },     // context breakdown
-		func() { a.syncRunSessionIndex(f.sessionID, f.syncIndex) }, // session index
-		func() { a.invalidateGitStatus(f.workspace) },              // Git status cache
+		func() { a.restoreSavedHistoryBreakdown(f.sessionID) },
+		func() { indexErr = a.syncRunSessionIndex(f.sessionID, f.syncIndex) },
+		func() { a.invalidateGitStatus(f.workspace) },
 	)
+	if err := errors.Join(historyErr, indexErr); err != nil {
+		message := "save session checkpoint: " + err.Error()
+		if outcome.message != "" {
+			message = outcome.message + "; " + message
+		}
+		outcome.kind, outcome.message = "error", message
+	}
 	// These stay in order: record the result, announce it, then free the run.
 	a.recordRunOutcome(f.runID, f.sessionID, outcome)
 	a.emitRunEnd(f, outcome)
@@ -1838,13 +1858,15 @@ func (a *App) finishRun(f runFinish, messages []openai.ChatCompletionMessage, ou
 }
 
 // syncRunSessionIndex refreshes the index only for runs without a UI writer.
-func (a *App) syncRunSessionIndex(sessionID string, needed bool) {
+func (a *App) syncRunSessionIndex(sessionID string, needed bool) error {
 	if !needed {
-		return
+		return nil
 	}
 	if err := a.syncSessionIndexFromHistory(sessionID); err != nil {
 		a.logAppError("session index sync failed", "sessionId", sessionID, "error", err.Error())
+		return err
 	}
+	return nil
 }
 
 // recordRunOutcome keeps the result that /result and status queries read.
@@ -1881,10 +1903,7 @@ func (a *App) emitRunEnd(f runFinish, outcome runOutcome) {
 	a.emit(outcome.event(), payload)
 }
 
-// releaseRun drops the run's live registrations. The input queue is dropped,
-// not closed: closing a channel while a concurrent InjectRunMessage is sending
-// would panic, and dropping the only reference lets the channel (plus any
-// queued messages) be GC'd with the run.
+// releaseRun drops live registrations after finishRun has stopped input admission.
 func (a *App) releaseRun(runID string) {
 	a.mu.Lock()
 	delete(a.runs, runID)
@@ -1923,9 +1942,16 @@ func (a *App) InjectRunMessage(runID string, text string, attachments ...Attachm
 // drainPendingInputs non-blockingly takes every queued injected message for a
 // run, in arrival order.
 func (a *App) drainPendingInputs(runID string) []runInput {
+	return a.drainRunInputs(runID, false)
+}
+
+func (a *App) drainRunInputs(runID string, stop bool) []runInput {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	ch := a.runInputs[runID]
-	a.mu.Unlock()
+	if stop {
+		delete(a.runInputs, runID)
+	}
 	if ch == nil {
 		return nil
 	}
@@ -1938,6 +1964,18 @@ func (a *App) drainPendingInputs(runID string) []runInput {
 			return out
 		}
 	}
+}
+
+// The final empty-queue check and closing admission share InjectRunMessage's
+// lock. A racing send either enters the next step or gets a retryable conflict.
+func (a *App) closeRunInputIfEmpty(runID string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.runInputs[runID]) != 0 {
+		return false
+	}
+	delete(a.runInputs, runID)
+	return true
 }
 
 // appendPendingRunInputs gives queued attachments the same durable editing
@@ -2563,6 +2601,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				}
 			}
 			// finishRun saves this history, then emits run:done.
+			if !a.closeRunInputIfEmpty(runID) {
+				continue
+			}
 			end = runOutcome{kind: "done"}
 			return
 		}
@@ -2704,6 +2745,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				continue
 			}
 			// finishRun saves this history, then emits run:done.
+			if !a.closeRunInputIfEmpty(runID) {
+				continue
+			}
 			end = runOutcome{kind: "done"}
 			return
 		}

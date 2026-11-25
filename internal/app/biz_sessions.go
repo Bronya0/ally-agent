@@ -1085,9 +1085,9 @@ func (a *App) historyDiskPaths(sessionID string) []string {
 	}
 }
 
-func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMessage) {
+func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMessage) error {
 	if sessionID == "" {
-		return
+		return nil
 	}
 	// In-memory history keeps image MultiContent so subsequent runs in this
 	// process still see the images (stable prefix, prompt cache survives).
@@ -1121,17 +1121,18 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	a.mu.Unlock()
 
 	if a.historiesDir == "" {
-		return
+		return nil
 	}
 	disk := sanitizeHistoryMessagesForDisk(inMemory)
 	paths := a.historyDiskPaths(sessionID)
 	if err := writeCompressedHistoryPayload(paths[0], a.modelHistoryForStorage(sessionID, disk, inMemory)); err != nil {
 		log.Printf("saveHistory: failed to write %s: %v", paths[0], err)
-		return
+		return err
 	}
 	if err := os.Remove(paths[1]); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("saveHistory: failed to remove legacy %s: %v", paths[1], err)
 	}
+	return nil
 }
 
 // countToolMessages detects tool results removed by history repair, which
