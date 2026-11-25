@@ -1100,10 +1100,8 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	// credential.
 	inMemory, origins := sanitizeHistoryMessagesWithOrigins(messages, historyProfileMemory)
 	if countToolMessages(inMemory) < countToolMessages(messages) {
-		// The repair pass dropped tool results (dangling or duplicated calls), so
-		// the payloads they carried left the model's history: the read cache must
-		// stop telling the model it already has them.
-		a.invalidateSessionReadCache(sessionID)
+		// Dropped tool results change the request prefix the next run will send.
+		a.invalidateSessionContextLock(sessionID)
 	}
 	// Resolve the session's provider measurement against the stored conversation
 	// so a footer poll between runs reports the measured request size instead of
@@ -1136,9 +1134,8 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	}
 }
 
-// countToolMessages counts role=tool messages: they are the only carriers of read
-// payloads, so a decrease across a history rewrite means content the model could
-// previously see is gone.
+// countToolMessages detects tool results removed by history repair, which
+// requires a fresh request-prefix baseline.
 func countToolMessages(messages []openai.ChatCompletionMessage) int {
 	n := 0
 	for i := range messages {
@@ -1267,7 +1264,7 @@ func (a *App) sessionHistorySnapshot(sessionID string) ([]openai.ChatCompletionM
 			if a.histories == nil {
 				a.histories = map[string][]openai.ChatCompletionMessage{}
 			}
-			a.invalidateSessionReadCacheLocked(sessionID)
+			a.invalidateSessionContextLockLocked(sessionID)
 			a.histories[sessionID] = history
 			if restoreReplay != nil {
 				restoreReplay()
@@ -1424,9 +1421,8 @@ func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, er
 	// turns that no longer exist.
 	a.clearContextAnchor(sessionID)
 	a.saveHistory(sessionID, truncated)
-	// The dropped turns may have been the model's only copy of a read payload;
-	// content that is no longer in the history has to be sent again.
-	a.invalidateSessionReadCache(sessionID)
+	// The truncated conversation starts a new request-prefix baseline.
+	a.invalidateSessionContextLock(sessionID)
 	return len(truncated), nil
 }
 

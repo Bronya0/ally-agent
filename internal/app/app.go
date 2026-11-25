@@ -27,7 +27,6 @@ import (
 	"unicode/utf8"
 
 	"ally-dev/internal/chatgpt"
-	"ally-dev/internal/tools/grep"
 	"ally-dev/internal/tools/imagegen"
 	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/schemautil"
@@ -78,8 +77,6 @@ const (
 	defaultLLMRetries  = 6
 	defaultShellLimit  = 120
 	defaultHTTPTimeout = 60
-	defaultGrepTimeout = grep.DefaultTimeout
-	maxGrepTimeout     = grep.MaxTimeout
 	maxWaitSeconds     = toolshared.MaxWaitSeconds
 	// Response-size bounds shared with the built-in tool schemas: the schema is
 	// the contract the model reads, so both sides read one definition.
@@ -427,19 +424,14 @@ type App struct {
 	reasoningStash    *reasoningStash
 	modelHistoryCodec *modelHistoryCodec
 
-	// readCaches holds one read-dedup cache per session id (sessionReadCache in
-	// orch_read.go). Memory-only: a restarted process starts empty, and
-	// releaseSession drops the entry together with the rest of the session
-	// state. Guarded by a.mu.
-	readCaches    map[string]*sessionReadCache
 	fileReadSlots chan struct{}
 
 	// contextLocks holds one request-prefix baseline per session id
 	// (sessionContextLock in biz_context_lock.go): the fingerprint of the last
 	// request each lane sent, so a later change to an already-sent prefix is
 	// reported instead of silently costing the provider's prompt cache.
-	// Memory-only, and dropped together with the history rewrites that
-	// invalidate readCaches. a.mu guards the map; each lock guards its own
+	// Memory-only, and dropped when history is rewritten or the session is
+	// released. a.mu guards the map; each lock guards its own
 	// entries, because hashing must never run under a.mu.
 	contextLocks map[string]*sessionContextLock
 }
@@ -459,7 +451,6 @@ func newAppState(dataDir string) *App {
 		compactingCancels:  map[string]context.CancelFunc{},
 		compactFailures:    map[string]int{},
 		histories:          map[string][]openai.ChatCompletionMessage{},
-		readCaches:         map[string]*sessionReadCache{},
 		fileReadSlots:      make(chan struct{}, maxToolConcurrency),
 		contextLocks:       map[string]*sessionContextLock{},
 		plans:              map[string][]PlanStep{},
@@ -1112,7 +1103,6 @@ type toolExecutionMeta struct {
 }
 
 type toolExecutionMetaContextKey struct{}
-type sessionReadCacheContextKey struct{}
 
 type ServiceInfo struct {
 	ID              string `json:"id"`
@@ -1466,7 +1456,6 @@ type BatchReadResultItem struct {
 	EmptyRange            bool            `json:"emptyRange,omitempty"`
 	Error                 string          `json:"error,omitempty"`
 	ErrorCode             string          `json:"errorCode,omitempty"`
-	Reused                bool            `json:"reused,omitempty"`
 	// DataURL is set only for image files: a data:image/<mime>;base64,... URL
 	// used to inject the picture into multimodal model context.
 	DataURL string `json:"dataUrl,omitempty"`
@@ -2023,7 +2012,6 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.sessionRunOutcomes, sessionID)
 	delete(a.contextAnchors, sessionID)
 	delete(a.compactFailures, sessionID)
-	delete(a.readCaches, sessionID)
 	delete(a.contextLocks, sessionID)
 	a.mu.Unlock()
 
@@ -2277,10 +2265,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	toolEventMeta := func(name string) map[string]any { return a.toolEventMeta(ctx, name) }
 	toolSchemaTokens := estimateToolSchemaTokens(tools)
 	breakdownAcc := newLiveBreakdownAccumulator(messages)
-	// Read de-duplication is scoped to the session, not to this run: a file range
-	// the conversation already carries is omitted instead of re-sent, until a
-	// history rewrite (see sessionReadCache) drops it.
-	readCache := a.sessionReadCacheFor(sessionID)
 
 	a.syncCommandContext(sessionID, messages)
 	syncBreakdown := func(msgs []openai.ChatCompletionMessage, resetAcc bool) ContextBreakdown {
@@ -2642,7 +2626,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				runID: runID, sessionID: sessionID, toolBatchID: toolBatchID,
 				toolCallIndex: idx, toolCallID: c.ID, toolName: c.Function.Name, toolArgs: c.Function.Arguments,
 			})
-			toolCtx = context.WithValue(toolCtx, sessionReadCacheContextKey{}, readCache)
 			toolCtx = withBlackboardReservation(toolCtx, blackboardNames[idx])
 			return a.executeTool(toolCtx, toolCfg, sessionID, c.Function.Name, []byte(executionArgs))
 		}
@@ -2887,7 +2870,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			data, err = a.runCommandWithConfig(ctx, cfg, req)
 			if err == nil {
-				argWarnings = append(argWarnings, localCommandToolWarnings(req.Command)...)
 				a.invalidateWorkspaceMapCache(cfg)
 			}
 		}
@@ -2986,7 +2968,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var req RemoteReadFileRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			res, rerr := a.remoteReadFileCached(ctx, req)
+			res, rerr := a.remoteReadFile(ctx, req)
 			res.RemoteAlias = strings.TrimSpace(req.Alias)
 			data, err = res, rerr
 		}
@@ -3034,21 +3016,11 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			data, err = a.executeRemoteTransfer(ctx, req)
 		}
-	case "grep":
-		var reqGF GrepRequest
-		err, argWarnings = decodeJSON(&reqGF)
-		if err == nil {
-			data, err = a.grepFilesWithConfig(ctx, cfg, reqGF)
-		}
 	case "read":
 		var reqBR BatchReadRequest
 		err, argWarnings = decodeJSON(&reqBR)
 		if err == nil {
-			if cache, ok := ctx.Value(sessionReadCacheContextKey{}).(*sessionReadCache); ok {
-				data, err = cache.readContext(ctx, a, cfg, reqBR)
-			} else {
-				data, err = a.batchReadFilesWithContext(ctx, cfg, reqBR)
-			}
+			data, err = a.batchReadFilesWithContext(ctx, cfg, reqBR)
 		}
 
 	case "calculate":
@@ -3088,12 +3060,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			if err == nil {
 				defer a.releaseSubagentSlot()
 				subCtx, cancel := context.WithCancel(ctx)
-				// Sub-agents build a fresh model context and never saw the parent
-				// session's read content, so sharing that session's read cache would
-				// hand them a "content already returned" receipt for content they
-				// never received. Give each sub-agent a private cache so dedup only
-				// applies within its own reads.
-				subCtx = context.WithValue(subCtx, sessionReadCacheContextKey{}, newSessionReadCache())
 				defer cancel()
 				res, delegateErr := a.executeDelegate(subCtx, cfg, sessionID, adReq)
 				if delegateErr != nil {

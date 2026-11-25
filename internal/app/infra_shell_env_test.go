@@ -153,3 +153,40 @@ func TestEnrichLoginShellPathEnvironmentOnlyChangesPath(t *testing.T) {
 		t.Fatalf("expected only PATH replacement, got %#v", got)
 	}
 }
+
+func TestAppendCommandToolPathPreservesEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name, platform, directory string
+		base, want                []string
+	}{
+		{"Windows Path", "windows", `C:\Ally\tools`,
+			[]string{`Path=C:\Windows;C:\User\bin`, "OTHER=keep"},
+			[]string{`Path=C:\Windows;C:\User\bin;C:\Ally\tools`, "OTHER=keep"}},
+		{"POSIX PATH", "linux", "/opt/ally/tools",
+			[]string{"PATH=/usr/bin:/bin", "OTHER=keep"},
+			[]string{"PATH=/usr/bin:/bin:/opt/ally/tools", "OTHER=keep"}},
+		{"Windows duplicate", "windows", `C:\Ally\tools`,
+			[]string{`Path=C:\ALLY\TOOLS;C:\Windows`},
+			[]string{`Path=C:\ALLY\TOOLS;C:\Windows`}},
+		{"POSIX duplicate", "darwin", "/opt/ally/tools",
+			[]string{"PATH=/opt/ally/tools:/usr/bin"},
+			[]string{"PATH=/opt/ally/tools:/usr/bin"}},
+		{"unset PATH", "linux", "/opt/ally/tools",
+			[]string{"OTHER=keep"},
+			[]string{"OTHER=keep", "PATH=/opt/ally/tools"}},
+		{"empty PATH", "linux", "/opt/ally/tools",
+			[]string{"PATH="}, []string{"PATH=:/opt/ally/tools"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := cloneEnvironment(tc.base)
+			got := appendCommandToolPath(tc.base, tc.directory, tc.platform)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("environment=%q, want %q", got, tc.want)
+			}
+			got[0] = "mutated"
+			if !reflect.DeepEqual(tc.base, original) {
+				t.Fatalf("original environment was mutated: %q", tc.base)
+			}
+		})
+	}
+}

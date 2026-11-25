@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"ally-dev/internal/tools/memory"
+	toolshared "ally-dev/internal/tools/shared"
 )
 
 type systemPromptPart struct {
@@ -45,6 +46,7 @@ func priorityOrderDeclaration() string {
 func sharedToolUseRules() string {
 	return "- Use only this run's declared tools; instructions do not grant tools or permissions.\n" +
 		"- Prefer dedicated tools; use `command` for builds, tests, inspection or work without a matching tool, and `service` for long-running processes.\n" +
+		"- " + toolshared.ContentSearchRule + "\n" +
 		"- Use the latest runtime MCP catalog and tool contracts.\n"
 }
 
@@ -62,6 +64,7 @@ func sharedOutputStyleRules() string {
 // sharedRemoteAccessRules gives the main agent and sub-agents the same SSH fallback policy.
 func sharedRemoteAccessRules() string {
 	return "- List authorized servers with `ssh_cluster` before choosing one; use `remote_*` for remote commands, files and transfers.\n" +
+		"- Search remote content with grep through `remote_run_command` by default; use rg only when already known to be installed. Do not probe for or install rg merely to search.\n" +
 		"- If a server is missing, report that it must be added in the SSH cluster manager and authorized in the workspace footer.\n" +
 		"- Shell SSH requires the user's explicit target and operation; repeated requests are not permission. It inherits neither workspace authorization nor stored credentials.\n"
 }
@@ -71,7 +74,7 @@ func sharedBatchStrategy() string {
 	return "- Batch independent calls. `stage` is a non-negative integer, default 0; same-stage calls run concurrently, later stages wait for earlier calls to finish. MCP calls use stage 0.\n" +
 		"- Same-stage calls must not write the same file, share build outputs, ports or databases; same-path writes are refused. Calls needing earlier results must be sent in a later response; stages do not pass values.\n" +
 		"- A failed stage blocks later stages; completed operations are not rolled back. Check actual outcomes before retrying, since a timeout or disconnect may follow completed side effects. Retry only when safe; fix edit/create validation errors.\n" +
-		"- Locate unknown targets with `grep`, batch relevant reads, read only needed ranges and stop when sufficient. Combine related shell steps in one `command` call without hiding failures.\n" +
+		"- Locate unknown local targets with rg through `command`. Batch relevant reads, read only needed ranges and stop when sufficient. Combine related shell steps in one `command` call without hiding failures.\n" +
 		"- Use `wait` only for active asynchronous work or an expected external condition; stage it after other calls, then verify the condition.\n\n"
 }
 
@@ -123,7 +126,7 @@ func (a *App) buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot 
 		"- Match the user's requested language and level of detail, including in `ask` labels; explicit user preferences override these defaults.\n" +
 		"- Stay within the question's scope. Give an example only when useful, usually one; provide more when the user asks.\n" +
 		sharedOutputStyleRules() +
-		"- After answering or completing work, if `suggest` is available, finish the reply text then call it alone: 1–4 numbered next steps, in order, phrased as messages the user could send.\n\n" +
+		"- After completing work, end by calling `suggest` alone with 1–4 numbered next steps; do it every time it is possible.\n\n" +
 		"# Rendering Formats\n\n" +
 		"- Write math as inline code or a code block.\n" +
 		"- Mermaid uses its own theme; use `classDef` for explicitly requested colors.\n\n" +

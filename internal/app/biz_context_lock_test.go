@@ -130,26 +130,36 @@ func TestContextLockFramingStaysUnambiguous(t *testing.T) {
 	}
 }
 
-// TestContextLockDropsBaselineOnHistoryRewrite 锁定与读缓存同生同灭：历史被改写后
-// 基线必须消失，下一次请求重新记基线，而不是把合法改写报成漂移。
+// TestContextLockDropsBaselineOnHistoryRewrite 验证删除回合后重新记录基线。
 func TestContextLockDropsBaselineOnHistoryRewrite(t *testing.T) {
 	t.Parallel()
-	app := newIsolatedTestApp(t)
+	app := newIsolatedChatTestApp(t)
 	cfg := ConfigState{Model: "model-a", APIFormat: apiFormatOpenAIChat}
-	messages := contextLockMessages()
+	messages := append(contextLockMessages()[1:],
+		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "redo the answer"},
+		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: "revised answer"})
+	app.saveHistory("lock-rewrite", messages)
 
 	app.noteRequestPrefix("lock-rewrite", contextLockLaneChat, cfg, messages, nil)
 	if lock := app.sessionContextLockFor("lock-rewrite"); lock == nil || len(lock.entries) == 0 {
 		t.Fatal("expected a recorded baseline before the rewrite")
 	}
 
-	app.invalidateSessionReadCache("lock-rewrite")
+	count, err := app.TruncateSessionHistory(TruncateSessionHistoryRequest{
+		SessionID: "lock-rewrite", UserMessageIndex: 1, ExpectedContent: "redo the answer",
+	})
+	if err != nil || count != 2 {
+		t.Fatalf("truncate history: count=%d, error=%v", count, err)
+	}
 	if lock, ok := app.contextLocks["lock-rewrite"]; ok && len(lock.entries) > 0 {
 		t.Fatalf("a history rewrite must drop the prefix baseline, got %#v", lock.entries)
 	}
 
 	// 改写后的第一条请求应当只是记基线，不报漂移。
-	shorter := messages[:2]
+	shorter := app.loadSessionHistoryCopy("lock-rewrite")
+	if len(shorter) != 2 || shorter[0].Content != messages[0].Content || shorter[1].Content != messages[1].Content {
+		t.Fatalf("truncate changed the retained turn: %#v", shorter)
+	}
 	if verdict := app.noteRequestPrefix("lock-rewrite", contextLockLaneChat, cfg, shorter, nil); verdict.kind != "" {
 		t.Fatalf("the first request after a rewrite must only record, got %#v", verdict)
 	}

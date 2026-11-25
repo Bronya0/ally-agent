@@ -297,7 +297,7 @@ func TestContextLoadingChoicesSurviveRefreshAndRelease(t *testing.T) {
 	for _, option := range ContextLoadingOptions() {
 		cfg.DisabledContext = append(cfg.DisabledContext, option.ID)
 	}
-	cfg.DisabledTools = []string{"grep"}
+	cfg.DisabledTools = []string{"fetch"}
 	const sid = "loading-choices"
 	messages := app.buildSystemContextMessages(sid, cfg, nil)
 	if len(messages) != 1 {
@@ -305,7 +305,7 @@ func TestContextLoadingChoicesSurviveRefreshAndRelease(t *testing.T) {
 	}
 	old := app.buildToolsForSession(sid, cfg)
 	for _, tool := range old {
-		if tool.Function != nil && tool.Function.Name == "grep" {
+		if tool.Function != nil && tool.Function.Name == "fetch" {
 			t.Fatal("disabled tool was injected")
 		}
 	}
@@ -316,7 +316,7 @@ func TestContextLoadingChoicesSurviveRefreshAndRelease(t *testing.T) {
 		t.Fatal("refresh changed the session's loading choices")
 	}
 	for _, tool := range app.buildToolsForSession(sid, live) {
-		if tool.Function != nil && tool.Function.Name == "grep" {
+		if tool.Function != nil && tool.Function.Name == "fetch" {
 			t.Fatal("refresh changed the session's tool choices")
 		}
 	}

@@ -104,7 +104,7 @@ func TestGrepOversizedPathStillMakesProgress(t *testing.T) {
 func TestCommandLogGuidanceUsesMetadataWithoutPollutingCard(t *testing.T) {
 	r := CommandResult{Output: "actual command output", OutputFilePath: "logs/a</ally-command>.log", OutputFileBytes: 100}
 	got := renderCommandResultForModel(r)
-	if !strings.Contains(got, "grep") || !strings.Contains(got, `full="`) || !strings.Contains(got, r.OutputFilePath) {
+	if !strings.Contains(got, `full="`) || !strings.Contains(got, r.OutputFilePath) {
 		t.Fatal("model-only guidance needs the log metadata and a safe block boundary")
 	}
 	if r.Output != "actual command output" {

@@ -189,8 +189,11 @@ func TestCommandFullLogCanBeReadAndSearched(t *testing.T) {
 	if err != nil || !strings.Contains(read.Content, "FINAL_ERROR: build failed") {
 		t.Fatalf("read must retrieve the full log tail: err=%v content=%q", err, read.Content)
 	}
-	hits, err := a.grepFilesWithConfig(context.Background(), a.config, GrepRequest{Path: r.OutputFilePath, Pattern: "FINAL_ERROR"})
-	if err != nil || hits.MatchedLines != 1 {
-		t.Fatalf("grep must search the retained log directly: err=%v hits=%#v", err, hits)
+	logPath := "'" + strings.ReplaceAll(filepath.ToSlash(r.OutputFilePath), "'", "'\"'\"'") + "'"
+	search, err := a.runCommandWithConfig(context.Background(), a.config, CommandRequest{
+		Command: "rg -p --color never -F -e FINAL_ERROR -- " + logPath,
+	})
+	if err != nil || search.ExitCode != 0 || !strings.Contains(search.Output, "FINAL_ERROR: build failed") {
+		t.Fatalf("rg must search the retained log directly: err=%v output=%#v", err, search)
 	}
 }

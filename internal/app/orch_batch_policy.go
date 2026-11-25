@@ -40,7 +40,7 @@ func isFileMutationTool(name string) bool {
 }
 
 // planWorkTools are the tools whose successful call means the run did work a
-// plan could have moved past. Reads (read, grep, list_files, web_fetch, …) leave
+// plan could have moved past. Reads (read, list_files, web_fetch, …) leave
 // the plan where it is and must not make the end-of-run plan check fire, and the
 // file-mutation tools are read from the mutation classifier above instead of being
 // repeated here, so a new mutation tool cannot be forgotten in one of two lists.

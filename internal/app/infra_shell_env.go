@@ -18,10 +18,13 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"ally-dev/internal/tools/grep"
 )
 
 const (
@@ -164,8 +167,39 @@ func commandBaseEnv() []string {
 			accountLoginShell,
 			runLoginShellText,
 		)
+		if rgPath, err := grep.Find(); err == nil {
+			if dir, err := filepath.Abs(filepath.Dir(rgPath)); err == nil {
+				commandEnvironmentState.env = appendCommandToolPath(commandEnvironmentState.env, dir, goruntime.GOOS)
+			}
+		}
 	})
 	return commandEnvironmentState.env
+}
+
+// appendCommandToolPath makes bundled tools available to shells while keeping
+// the user's existing PATH priority and Windows Path capitalization.
+func appendCommandToolPath(base []string, directory, platform string) []string {
+	key, current, hasPath := "PATH", "", false
+	for _, item := range base {
+		name, value, ok := strings.Cut(item, "=")
+		if ok && (name == "PATH" || platform == "windows" && strings.EqualFold(name, "PATH")) {
+			key, current, hasPath = name, value, true
+		}
+	}
+	separator := ":"
+	if platform == "windows" {
+		separator = ";"
+	}
+	for _, entry := range strings.Split(current, separator) {
+		if entry == directory || platform == "windows" && strings.EqualFold(entry, directory) {
+			return cloneEnvironment(base)
+		}
+	}
+	merged := directory
+	if hasPath {
+		merged = current + separator + directory
+	}
+	return replaceEnvironmentValue(base, key, merged)
 }
 
 // commandEnvironment returns the stable process environment used by local

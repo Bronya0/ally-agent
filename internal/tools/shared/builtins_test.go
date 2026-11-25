@@ -289,7 +289,6 @@ func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 		{"edit rejects removed scope", "edit", `{"path":"a.go","changes":[{"oldText":"a","newText":"x","lineRange":{"start":1}}]}`, true, "lineRange", ""},
 		{"remote_edit rejects removed scope", "remote_edit", `{"alias":"dev","path":"/a.go","changes":[{"oldText":"a","newText":"x","lineRange":{"start":1}}]}`, true, "lineRange", ""},
 		{"http_request pads body with an empty string", "fetch", `{"url":"https://example.test","body":"","json":{"a":1}}`, false, "", ""},
-		{"grep pads outputMode with an empty string", "grep", `{"pattern":"x","outputMode":""}`, false, "", ""},
 		{"remote_run_command pads shell with an empty string", "remote_run_command", `{"alias":"t:/w","command":"ls","shell":""}`, false, "", ""},
 		// The local delete takes paths only: a list of entries is the one way to name
 		// a target, and the gate refuses the path key outright.

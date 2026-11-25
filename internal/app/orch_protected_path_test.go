@@ -364,7 +364,7 @@ func TestCommandFenceRefusesEverySpellingOfACredentialRead(t *testing.T) {
 	for _, commandLine := range []string{
 		"cat ~/.ssh/id_rsa",
 		"cat < ~/.ssh/id_rsa",
-		"grep -f ~/.ssh/id_rsa README.md",
+		"rg -f ~/.ssh/id_rsa README.md",
 	} {
 		err := checkCommandSafetyAtCwd(CommandRequest{Command: commandLine, Cwd: workspace}, roots, workspace)
 		if code := toolErrorCode(err); code != "E_PROTECTED_PATH" {
@@ -406,7 +406,7 @@ func TestCommandFenceRefusesTheDataDirectorySecrets(t *testing.T) {
 	for _, commandLine := range []string{
 		"cat ~/.ally_agent/config.json",
 		"cat ~/.ally_agent/mcp.json",
-		"grep -n . ~/.ally_agent/ssh_clusters.json",
+		"rg -n . ~/.ally_agent/ssh_clusters.json",
 	} {
 		err := checkCommandSafetyAtCwd(CommandRequest{Command: commandLine, Cwd: workspace}, roots, workspace)
 		if code := toolErrorCode(err); code != "E_PROTECTED_PATH" {

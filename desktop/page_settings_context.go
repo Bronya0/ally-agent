@@ -258,7 +258,7 @@ func (a *desktop) builtinToolsGrid(c *ui.Context) {
 
 var builtinToolLabels = map[string]string{
 	"read": "读取文件", "edit": "编辑文件", "create": "创建文件", "delete": "删除路径", "command": "执行命令",
-	"list_files": "列目录", "grep": "搜索内容", "screenshot": "截图", "image_generate": "生成图片", "image_edit": "编辑图片",
+	"list_files": "列目录", "screenshot": "截图", "image_generate": "生成图片", "image_edit": "编辑图片",
 	"service": "后台服务", "wait": "等待", "ask": "提问", "suggest": "建议", "scheduled_task": "计划任务",
 	"fetch": "网络请求", "http_request": "网络请求", "web_fetch": "抓取网页", "remote_read": "远程读取", "remote_edit": "远程编辑",
 	"remote_create_file": "远程创建", "remote_delete_path": "远程删除", "remote_run_command": "远程命令",

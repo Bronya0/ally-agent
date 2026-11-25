@@ -149,27 +149,6 @@ func TestEditRollbackPreservesRawUTF16(t *testing.T) {
 	}
 }
 
-func TestTinyReadReceiptSavesContext(t *testing.T) {
-	t.Parallel()
-	a := newIsolatedToolTestApp(t)
-	if err := os.WriteFile(filepath.Join(a.config.Workspace, "tiny.txt"), []byte("ok\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	cache := newSessionReadCache()
-	req := BatchReadRequest{Files: []BatchReadFileRequest{{Path: "tiny.txt"}}}
-	_, err := cache.read(a, a.config, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := cache.read(a, a.config, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !second.Files[0].Reused || second.Files[0].Content != "" || second.Files[0].StartLine != 1 || second.Files[0].EndLine != 1 {
-		t.Fatalf("reused result must retain its range without repeating content: %+v", second.Files[0])
-	}
-}
-
 func TestReadBatchKeepsExplicitSourceRangesWhole(t *testing.T) {
 	t.Parallel()
 	a := newIsolatedToolTestApp(t)

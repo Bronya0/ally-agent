@@ -24,6 +24,7 @@ import (
 
 	"ally-dev/internal/tools/command"
 	"ally-dev/internal/tools/pathutil"
+	toolshared "ally-dev/internal/tools/shared"
 )
 
 // checkCommandSafetyAtCwd is THE command safety fence: every command enters the
@@ -37,6 +38,9 @@ import (
 // roots[0] 是主工作区（命令的默认 cwd），其余为会话级附加根目录。
 func checkCommandSafetyAtCwd(req CommandRequest, roots []string, workingDir string) error {
 	cmd := req.Command
+	if err := checkContentSearchCommand(cmd); err != nil {
+		return err
+	}
 	if command.ContainsExplicitDeleteCommand(cmd) && !command.IsAllowedDeleteContext(cmd) {
 		return codedToolError("E_COMMAND_BLOCKED", errors.New("安全围栏已拦截：command 不允许直接执行文件删除命令。\n原因：shell 删除命令可能绕过工作区边界、系统目录保护。\n处理方式：请改用 delete 工具，由专用工具检查目标路径和递归范围。"))
 	}
@@ -90,7 +94,7 @@ func firstSensitiveReadTarget(commandLine, workingDir string) (string, string) {
 
 // blockedSensitiveRead reports whether a resolved path — or what it points at —
 // is a credential store. It is the single judgement shared by the command fence
-// and the read / grep entrances, so one list covers every way the model can ask
+// and the read entrance, so one list covers every way the model can ask
 // for the contents of a key file.
 func blockedSensitiveRead(path string) (bool, string) {
 	if blocked, reason := pathutil.SensitiveReadReason(pathRuntime, path); blocked {
@@ -162,6 +166,13 @@ func inspectCommandMutationTarget(target, workingDir string, roots []string, exi
 	return nil
 }
 
+func checkContentSearchCommand(cmd string) error {
+	if command.ContainsGrepCommand(cmd) {
+		return codedToolError("E_COMMAND_BLOCKED", errors.New(toolshared.ContentSearchGuidance))
+	}
+	return nil
+}
+
 func validateRemoteCommandSafety(cmd string) error {
 	if risk := command.MatchRiskPattern(cmd); risk != nil {
 		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。", risk.Reason))
@@ -181,7 +192,7 @@ func validateRemoteCommandSafety(cmd string) error {
 //     「深度守卫兜不住」的目标 —— 第 1/2 层目录由 isDangerousDeletePath 的层级规则
 //     负责，所以 /etc、/var、/opt、/root 这类整树不标 remove：深层项目文件
 //     （/etc/nginx/conf.d/x.conf、/root/proj/app.py）是允许删的，整树登记会误杀。
-//   - scan：工作区之外的 grep / 列目录把它当危险根（树太大、扫全盘）。搜索没有
+//   - scan：工作区之外的列目录把它当危险根（树太大、扫全盘）。搜索没有
 //     「深度」概念，一级系统树必须逐个点名，所以 /etc、/var、/opt、/root 在这里出现。
 type protectedLocation struct {
 	path   string
@@ -447,7 +458,7 @@ func isDangerousDeletePath(absPath string) (bool, string) {
 	return false, ""
 }
 
-// isDangerousSearchRoot returns (blocked, reason). Blocks grep/list operations
+// isDangerousSearchRoot returns (blocked, reason). Blocks directory-listing operations
 // that would traverse system directories, home directories, or other high-risk paths.
 func isDangerousSearchRoot(absPath string) (bool, string) {
 	abs := filepath.Clean(absPath)

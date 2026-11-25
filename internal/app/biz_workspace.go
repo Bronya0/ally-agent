@@ -53,6 +53,14 @@ func newWorkspaceCacheHolder() *workspaceCacheHolder {
 	}
 }
 
+func displayPathForConfig(cfg ConfigState, p string) string {
+	root, err := workspaceRoot(cfg)
+	if err != nil {
+		return filepath.ToSlash(filepath.Clean(p))
+	}
+	return grep.DisplayPathForRoot(root, p)
+}
+
 func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFilesResult, error) {
 	// Model-facing listings never show hidden or gitignored entries: the model's
 	// list_files schema no longer offers those switches, and nothing validates the
@@ -118,7 +126,7 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 		ignoreMatcher = loadRootGitignoreRules(root)
 		// Pointing the listing explicitly inside an ignored subtree (the .tmp/
 		// the prompt sends artifacts to is the common case) means "show me what
-		// is in there": keep walking it, exactly as grep does for an explicitly
+		// is in there": keep walking it, as rg does for an explicitly
 		// named hidden directory. Without this the walk descends, discards every
 		// descendant as ignored, and reports a misleading empty listing.
 		if ignoredListingRoot(ignoreMatcher, root, start) {
@@ -881,13 +889,12 @@ func workspacePathFilesWithWalkDir(ctx context.Context, root string, add func(st
 	return "walkdir", truncated, err
 }
 
-// workspacePathIndexIgnoredDirs 与内容搜索共用同一份重目录清单：路径索引和搜索
-// 关心的是同一件事（别把依赖/产物目录收进来），没有各自维护的理由。
+// workspacePathIndexIgnoredDirs 与目录浏览、工作区地图共用重目录清单。
 func workspacePathIndexIgnoredDirs() []string {
 	return grep.ExcludedDirs()
 }
 
-// workspaceMapIgnoredDirs shares the search directory policy.
+// workspaceMapIgnoredDirs shares the directory-listing policy.
 func workspaceMapIgnoredDirs() []string { return grep.ExcludedDirs() }
 
 func buildWorkspaceMapContext(root string) string {

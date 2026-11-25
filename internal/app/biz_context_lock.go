@@ -46,8 +46,7 @@ import (
 //   - 只量**持久化**的历史（调用点传 messages，不传带一次性催报消息的副本）：
 //     只活一次请求的消息不进基线，否则下一轮“历史照常增长、那条消息已消失”会在
 //     重叠段上撞出一次假漂移；
-//   - 历史被合法改写（压缩、删回合、从磁盘重载、落盘修复）时基线一并丢弃：复用
-//     读缓存的失效钩子（invalidateSessionReadCache），两者同生同灭；
+//   - 历史被合法改写（压缩、删回合、从磁盘重载、落盘修复）时基线一并丢弃；
 //   - 只读、只记：不改请求内容，也不拦请求。
 //
 // 性能：每轮固定两次 O(前缀字节) 的哈希（几十万字节 ≈ 零点几毫秒），相对一次网络
@@ -241,7 +240,22 @@ func compareContextFingerprint(base contextFingerprint, headHash, overlapTailHas
 	return contextLockVerdict{index: -1}
 }
 
-// sessionContextLockFor 取（必要时建）一个会话的基线表，镜像 sessionReadCacheFor：
+// invalidateSessionContextLock drops request-prefix baselines after a history rewrite.
+func (a *App) invalidateSessionContextLock(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	a.mu.Lock()
+	a.invalidateSessionContextLockLocked(sessionID)
+	a.mu.Unlock()
+}
+
+// invalidateSessionContextLockLocked requires a.mu, as held during history loading.
+func (a *App) invalidateSessionContextLockLocked(sessionID string) {
+	delete(a.contextLocks, sessionID)
+}
+
+// sessionContextLockFor 取（必要时建）一个会话的基线表。
 // a.mu 只保护这张总表本身，哈希计算一律在锁外。
 func (a *App) sessionContextLockFor(sessionID string) *sessionContextLock {
 	if strings.TrimSpace(sessionID) == "" {

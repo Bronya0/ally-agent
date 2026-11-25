@@ -26,6 +26,18 @@ type RiskPattern struct {
 	Reason string
 }
 
+// ContainsGrepCommand checks executable positions, including nested shells and
+// wrappers. Text arguments such as git log --grep are not grep invocations.
+func ContainsGrepCommand(commandLine string) bool {
+	for _, invocation := range Invocations(commandLine) {
+		switch invocation.Name {
+		case "grep", "egrep", "fgrep":
+			return true
+		}
+	}
+	return false
+}
+
 // ContainsExplicitDeleteCommand reports whether the command invokes a shell
 // deletion verb (rm, del, remove-item, etc.).
 func ContainsExplicitDeleteCommand(command string) bool {

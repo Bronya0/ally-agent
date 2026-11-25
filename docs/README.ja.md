@@ -88,7 +88,7 @@ Windows は ZIP を展開して `Ally.exe` を実行します。macOS は DMG �
 flowchart LR
   subgraph S0["stage 0 — 並列実行"]
     A["src/app.go を読む"]
-    B["grep TODO"]
+    B["rg TODO"]
     C["git status を実行"]
   end
   subgraph S1["stage 1"]

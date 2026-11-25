@@ -265,8 +265,7 @@ func (r *batchOrderRecorder) Emit(name string, payload any) {
 	}
 }
 
-// sessionReadResultRecorder 记录 read 工具结果的事件载荷：跨 run 的缓存命中要看
-// 「本次读回的是正文还是 reused 说明」，只看事件名分不出来。
+// sessionReadResultRecorder records read tool results across chat runs.
 type sessionReadResultRecorder struct {
 	mu    sync.Mutex
 	reads []string
@@ -301,35 +300,28 @@ func (r *sessionReadResultRecorder) readResults() []string {
 	return append([]string(nil), r.reads...)
 }
 
-// TestSessionReadCacheReusesAcrossRuns：读缓存按会话共享，而不是按 run 新建——
-// 同一会话的下一次 run 再读同一个文件/范围时，模型收到的是「已给过你」说明
-// （界面上那一行 cached），而不是重复正文；换一个会话则必须回全文，那边没有可
-// 对照的历史。
-func TestSessionReadCacheReusesAcrossRuns(t *testing.T) {
+func TestReadReturnsCurrentContentAcrossRuns(t *testing.T) {
 	t.Parallel()
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		if requests.Add(1)%2 == 1 {
-			fmt.Fprint(w, sseChatChunk("Reading."))
-			fmt.Fprint(w, sseChatToolCallChunk("call_read", "read", `{"files":[{"path":"sample.txt"}]}`))
+		if request := requests.Add(1); request%2 == 1 {
+			fmt.Fprint(w, sseChatToolCallChunk(fmt.Sprintf("call_read_%d", request), "read", "{\"files\":[{\"path\":\"sample.txt\"}]}"))
 			fmt.Fprint(w, sseChatFinishChunk("tool_calls"))
-			fmt.Fprint(w, sseDone)
-			return
+		} else {
+			fmt.Fprint(w, sseChatChunk("Done."))
+			fmt.Fprint(w, sseChatFinishChunk("stop"))
 		}
-		fmt.Fprint(w, sseChatChunk("Done."))
-		fmt.Fprint(w, sseChatFinishChunk("stop"))
 		fmt.Fprint(w, sseDone)
 	}))
 	defer server.Close()
 
 	app := newModelTestApp(t)
-	app.initialized = true // 跳过 ensureInitialized 的磁盘初始化
-	app.stats = nil        // 跳过 token 统计落盘
+	app.initialized = true
+	app.stats = nil
 	recorder := &sessionReadResultRecorder{end: make(chan struct{}, 1)}
 	app.events = recorder
-
 	workspace := t.TempDir()
 	writeToolTestFile(t, workspace, "sample.txt", "one\ntwo\n")
 	cfg := ConfigState{
@@ -340,197 +332,34 @@ func TestSessionReadCacheReusesAcrossRuns(t *testing.T) {
 		MaxTokens: 64,
 		Workspace: workspace,
 	}
-	run := func(sessionID string) {
-		t.Helper()
-		if _, err := app.StartChat(ChatRequest{SessionID: sessionID, Message: "hi", Config: cfg}); err != nil {
-			t.Fatalf("StartChat(%s) error = %v", sessionID, err)
+	for run := 0; run < 3; run++ {
+		if run == 2 {
+			writeToolTestFile(t, workspace, "sample.txt", "one\nTHREE\n")
+		}
+		if _, err := app.StartChat(ChatRequest{SessionID: "read-session", Message: "hi", Config: cfg}); err != nil {
+			t.Fatal(err)
 		}
 		select {
 		case <-recorder.end:
 		case <-time.After(15 * time.Second):
-			t.Fatalf("run for %s did not finish in time", sessionID)
+			t.Fatal("read run did not finish")
 		}
 	}
-
-	run("read-cache-session") // 第一次读：回全文
-
-	// 命中是有依据的：上一次读的正文必须还在这个会话的历史里，否则下面的
-	// 「省略」就是在对模型看不见的内容说「你已经有了」。
-	app.mu.Lock()
-	carried := false
-	for _, m := range app.histories["read-cache-session"] {
-		if m.Role == openai.ChatMessageRoleTool && strings.Contains(m.Content, "one") {
-			carried = true
-		}
-	}
-	app.mu.Unlock()
-	if !carried {
-		t.Fatal("the first run's read payload must still be carried by the session history")
-	}
-
-	run("read-cache-session") // 同一会话的下一次 run：必须命中缓存
-	run("read-cache-other")   // 另一个会话：必须回全文
-
 	reads := recorder.readResults()
 	if len(reads) != 3 {
 		t.Fatalf("read results = %d, want 3: %v", len(reads), reads)
 	}
-	if strings.Contains(reads[0], `"reused":true`) || !strings.Contains(reads[0], "one") {
-		t.Fatalf("first read of a session must return content, got: %s", reads[0])
-	}
-	if !strings.Contains(reads[1], `"reused":true`) {
-		t.Fatalf("re-reading the same range in a later run must reuse the payload, got: %s", reads[1])
-	}
-	if strings.Contains(reads[2], `"reused":true`) {
-		t.Fatalf("another session must not inherit the first session's cache, got: %s", reads[2])
-	}
-}
-
-// TestSessionReadCacheDropsWhenHistoryIsRewritten 验收会话级缓存的三处失效口：
-// 删回合（TruncateSessionHistory）、历史从磁盘重载（loadHistoryLocked：磁盘副本的
-// 工具结果已换成占位符）、会话释放（releaseSession）。任何一处漏掉，模型都会拿到
-// 「你已经有这段内容」而它其实已经看不见了。
-func TestSessionReadCacheDropsWhenHistoryIsRewritten(t *testing.T) {
-	t.Parallel()
-	app := newModelTestApp(t)
-	app.initialized = true
-	app.historiesDir = t.TempDir()
-	sessionID := "read-cache-invalidated"
-
-	cache := app.sessionReadCacheFor(sessionID)
-	if cache == nil {
-		t.Fatal("sessionReadCacheFor must create a cache")
-	}
-	if app.sessionReadCacheFor(sessionID) != cache {
-		t.Fatal("one session must share a single read cache across its runs")
-	}
-	if app.sessionReadCacheFor("other-session") == cache {
-		t.Fatal("different sessions must not share a read cache")
-	}
-
-	app.saveHistory(sessionID, []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleUser, Content: "first question"},
-		{Role: openai.ChatMessageRoleAssistant, Content: "first answer"},
-		{Role: openai.ChatMessageRoleUser, Content: "second question"},
-	})
-
-	// 被删掉的那一轮，可能正是模型手里读内容的唯一副本。
-	seedSessionReadCacheForTest(cache, "k", "hash")
-	if _, err := app.TruncateSessionHistory(TruncateSessionHistoryRequest{
-		SessionID:        sessionID,
-		UserMessageIndex: 1,
-		ExpectedContent:  "second question",
-	}); err != nil {
-		t.Fatalf("TruncateSessionHistory: %v", err)
-	}
-	if got := len(cache.entries); got != 0 {
-		t.Fatalf("cache entries after a truncated turn = %d, want 0", got)
-	}
-
-	// 历史从磁盘重载：磁盘配置把工具结果换成了占位符，模型已看不到原文。
-	seedSessionReadCacheForTest(cache, "k", "hash")
-	app.mu.Lock()
-	delete(app.histories, sessionID)
-	app.mu.Unlock()
-	if len(app.loadSessionHistoryCopy(sessionID)) == 0 {
-		t.Fatal("expected the history to be reloaded from disk")
-	}
-	if got := len(cache.entries); got != 0 {
-		t.Fatalf("cache entries after a disk reload = %d, want 0", got)
-	}
-
-	// 会话释放：缓存条目随会话状态一起消失。
-	seedSessionReadCacheForTest(cache, "k", "hash")
-	if err := app.releaseSession(sessionID, false); err != nil {
-		t.Fatalf("releaseSession: %v", err)
-	}
-	app.mu.Lock()
-	_, ok := app.readCaches[sessionID]
-	app.mu.Unlock()
-	if ok {
-		t.Fatal("releasing a session must drop its read cache")
-	}
-}
-
-// TestSessionReadCacheDropsWhenHistoryRepairDropsToolResults：历史修复器把孤儿/
-// 重复的工具结果丢掉时，缓存必须同步失效——那正是「内容已离开模型视野」的第四
-// 条路径（前三条见上一个测试）。
-func TestSessionReadCacheDropsWhenHistoryRepairDropsToolResults(t *testing.T) {
-	t.Parallel()
-	app := newModelTestApp(t)
-	app.initialized = true
-	sessionID := "read-cache-repair"
-	cache := app.sessionReadCacheFor(sessionID)
-	seedSessionReadCacheForTest(cache, "k", "hash")
-
-	// 没有声明调用的孤儿工具结果：修复器会把它丢掉，它携带的内容也随之离开
-	// 模型的历史。
-	app.saveHistory(sessionID, []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleUser, Content: "hi"},
-		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_gone", Content: `{"ok":true,"data":"payload"}`},
-	})
-	if got := len(cache.entries); got != 0 {
-		t.Fatalf("cache entries after a dropped tool result = %d, want 0", got)
-	}
-}
-
-// TestSessionReadCacheSurvivesWriteToolsAndCommands 锁定一条设计决定：写工具与命令
-// 不再是读缓存的失效来源（唯一的失效来源是历史被改写，见上面三个测试）。正确性
-// 不靠失效兜底——每次读都真读盘并逐字节比对载荷哈希，所以这里同时验收两面：跑过
-// 命令、改过文件之后缓存条目仍在，而内容真变了的文件必须重新投递正文。
-func TestSessionReadCacheSurvivesWriteToolsAndCommands(t *testing.T) {
-	t.Parallel()
-	app := newIsolatedToolTestApp(t)
-	dir := t.TempDir()
-	app.config.Workspace = dir
-	writeToolTestFile(t, dir, "sample.txt", "one\ntwo\n")
-
-	sessionID := "read-cache-survives"
-	cache := app.sessionReadCacheFor(sessionID)
-	ctx := context.WithValue(context.Background(), sessionReadCacheContextKey{}, cache)
-	cfg := ConfigState{Workspace: dir}
-	readArgs := []byte(`{"files":[{"path":"sample.txt"}]}`)
-
-	read := func() BatchReadResultItem {
-		t.Helper()
-		res := app.executeTool(ctx, cfg, sessionID, "read", readArgs)
-		if !res.OK {
-			t.Fatalf("read failed: %#v", res)
+	for i, want := range []string{"two", "two", "THREE"} {
+		var result struct{ Data BatchReadResult }
+		if err := json.Unmarshal([]byte(reads[i]), &result); err != nil {
+			t.Fatal(err)
 		}
-		items := res.Data.(*BatchReadResult).Files
-		if len(items) != 1 {
-			t.Fatalf("read slots = %d, want 1", len(items))
+		if len(result.Data.Files) != 1 || !strings.Contains(result.Data.Files[0].Content, want) {
+			t.Fatalf("run %d did not return current file content: %s", i, reads[i])
 		}
-		return items[0]
-	}
-
-	first := read()
-	if first.Reused || first.Content == "" {
-		t.Fatalf("first read must return content, got %#v", first)
-	}
-
-	// 命令：旧实现会在这里把整个会话的读缓存清掉，现在必须原封不动。
-	if res := app.executeTool(ctx, cfg, sessionID, "command", []byte(`{"command":"echo cache-proof"}`)); !res.OK {
-		t.Fatalf("command failed: %#v", res)
-	}
-	if got := len(cache.entries); got == 0 {
-		t.Fatal("a command must not clear the session's read cache")
-	}
-	if second := read(); !second.Reused {
-		t.Fatalf("an unchanged file must still be reused after a command, got %#v", second)
-	}
-
-	// 写工具同样不清缓存；但内容确实变了，所以重新投递正文。
-	editArgs := `{"path":"sample.txt","changes":[{"oldText":"two","newText":"TWO"}]}`
-	if res := app.executeTool(ctx, cfg, sessionID, "edit", []byte(editArgs)); !res.OK {
-		t.Fatalf("edit failed: %#v", res)
-	}
-	if got := len(cache.entries); got == 0 {
-		t.Fatal("a write tool must not clear the session's read cache")
-	}
-	third := read()
-	if third.Reused || third.Content == "" || !strings.Contains(third.Content, "TWO") {
-		t.Fatalf("a rewritten file must be sent again, got %#v", third)
+		if modelResult := renderReadResultForModel(result.Data); !strings.Contains(modelResult, want) {
+			t.Fatalf("run %d omitted current content from the model result: %s", i, modelResult)
+		}
 	}
 }
 

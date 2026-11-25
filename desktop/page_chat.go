@@ -19,8 +19,18 @@ import (
 // chatMessages is the conversation viewport: history, welcome card, plan
 // panel and the floating jump-to-bottom controls.
 func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
-	a.syncChatLayout(t)
 	st := t.uiState()
+	viewport := ui.Column(c.Key(t.ID + "-chat-viewport")).Grow(1).MinHeight(0).FillWidth()
+	shown := ui.Local(viewport, "scroll-restored", func() bool { return false })
+	if !*shown {
+		*shown = true
+		// A newly built viewport restores the list's row anchor. Adopting the
+		// old pixel offset would override it, especially after hidden growth.
+		t.Scroll.Y, st.LastScrollY = 0, 0
+		if st.Follow {
+			st.List.ScrollToEnd()
+		}
+	}
 	a.beginChatSearchFrame(t)
 	pruneTranscriptOutsideView(t, st)
 	// The welcome card's popovers live in the card: once the list scrolls it out
@@ -91,7 +101,7 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	// what the next frame prunes the caches to, so the range starts empty.
 	st.built = builtRange{}
 
-	ui.Column(c).Grow(1).MinHeight(0).FillWidth().Children(func() {
+	viewport.Children(func() {
 		if st.Search.Open {
 			// The bar sits in the column above the viewport, capped and centred like
 			// the transcript, so it lines up with the messages it searches.
@@ -146,30 +156,6 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 			})
 		}
 	})
-}
-
-// syncChatLayout keeps the transcript's row anchor when a shell toggle moves
-// it into a different parent. The tracked pixel offset belongs to the old
-// viewport and must not be adopted by the new one.
-func (a *desktop) syncChatLayout(t *conversation) {
-	st := t.uiState()
-	withRail := a.prefs.RailExpanded && !a.prefs.TopNavigation
-	withFile := a.explorer && a.activeFile() != nil
-	if st.ChatLayoutSeen && (st.ChatWithExplorer != a.explorer || st.ChatWithRail != withRail || st.ChatTopNavigation != a.prefs.TopNavigation || st.ChatWithFile != withFile) {
-		// Explorer and rail toggles move the transcript to a different parent.
-		// Its old pixel offset is not valid there; let the list restore its row
-		// anchor, or keep following the end if it was already there.
-		t.Scroll.Y = 0
-		st.LastScrollY = 0
-		if st.Follow {
-			st.List.ScrollToEnd()
-		}
-	}
-	st.ChatLayoutSeen = true
-	st.ChatWithExplorer = a.explorer
-	st.ChatWithRail = withRail
-	st.ChatTopNavigation = a.prefs.TopNavigation
-	st.ChatWithFile = withFile
 }
 
 // jumpToPreviousPrompt scrolls to the prompt above the one in view, or to the

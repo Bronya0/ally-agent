@@ -28,7 +28,7 @@ func withToolPurposes(tools []openai.Tool) []openai.Tool {
 		}
 		property := map[string]any{
 			"type":        "string",
-			"description": "Brief purpose in the user's language, usually 10–30 characters, under 100. One sentence describing the intended action; summarize a batch once.",
+			"description": "Brief purpose of this call in the user's language (under 30 characters).",
 		}
 		addPurposeProperty(schema, field, property)
 		schema["required"] = append(schemautil.StringSlice(schema["required"]), field)

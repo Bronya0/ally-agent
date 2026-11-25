@@ -32,6 +32,10 @@ flowchart LR
 | 结果信封与模型视图 | `internal/app/infra_result.go` |
 | 批次策略 | `internal/app/orch_batch_policy.go` |
 
+本地内容搜索统一通过 `command` 执行 `rg`；内置 `grep` 已移除。本地命令和后台服务在执行前拒绝 `grep` / `egrep` / `fgrep`，返回 `E_COMMAND_BLOCKED`。英文用法由 `ContentSearchRule` 与 `ContentSearchGuidance` 提供，主对话和子代理共用定位与批量读取规则。远端通过 `remote_run_command` 默认使用 `grep`；仅在已知服务器安装了 `rg` 时使用它，不为搜索额外探测或安装。命令环境追加已发现的 ripgrep 所在目录，保持用户 PATH 的原有优先级。
+
+本地 `command` 每次默认在主工作区根目录启动 shell，根目录下直接执行命令即可；进入子目录使用相对 `cwd` 或 `cd`，切目录只影响本次调用。
+
 ## 二、声明层：schema 是静态的、共享的、strict 的
 
 `internal/tools/shared/builtins.go`：
@@ -120,7 +124,7 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 | 工作区写串行 | `withFileOpsLock`（`app.go:2369`）；用 defer 解锁，因为 executeTool 会把 panic 转成错误，手写 Unlock 会在那条路径上永久卡死 |
 | 编辑后验证 | `attachValidation` + `validateChangedFilesForCall`（`orch_validation.go:170`）；批次里由 `planBatchValidation`（`orch_validation.go:189`）摊到「最后一次触碰该目录的变更」上，避免每个 edit 都跑一遍 `go vet` / `tsc` |
 | 命令安全围栏 | `checkCommandSafetyAtCwd`（`orch_fence.go:48`）：**唯一入口**，本地命令与后台服务共用；受保护位置是一张表（`protectedLocations`：每项带 `remove` / `scan` 两列，删除守卫只登记深度规则兜不住的目标，搜索守卫没有深度概念、逐个点名一级系统树；`removableProtectedTargets()` 同时喂远端 helper），`isDangerousDeletePath` / `isDangerousSearchRoot` 各取一列，同在 `orch_fence.go` |
-| 密钥/凭据禁读（三平台） | `pathutil.SensitiveReadReason`（`internal/tools/pathutil`）：`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.kube`、`~/.docker/config.json`、`~/.netrc`、`~/.git-credentials`、`~/.npmrc`、`~/.pypirc`、`~/.config/{gcloud,gh,glab-cli}`、平台钥匙串、Ally 自己的 `config/api/mcp/ssh_clusters.json`。三条入口共用同一份判定：命令围栏（`firstSensitiveReadTarget` + `command.DisclosingPathOperands`，只算「可能把内容交回来」的操作数：`ssh -i KEY`、`chmod 600 KEY`、`ls ~/.ssh` 这类只是用密钥不算读，照常放行；`cat ~/.ssh/id_rsa` 仍拦）、`read`、`grep`；`memories/` 与 `USER.md` 照旧可读 |
+| 密钥/凭据禁读（三平台） | `pathutil.SensitiveReadReason`（`internal/tools/pathutil`）：`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.kube`、`~/.docker/config.json`、`~/.netrc`、`~/.git-credentials`、`~/.npmrc`、`~/.pypirc`、`~/.config/{gcloud,gh,glab-cli}`、平台钥匙串、Ally 自己的 `config/api/mcp/ssh_clusters.json`。读取与命令搜索共用同一份判定：命令围栏（`firstSensitiveReadTarget` + `command.DisclosingPathOperands`，只算「可能把内容交回来」的操作数：`ssh -i KEY`、`chmod 600 KEY`、`ls ~/.ssh` 这类只是用密钥不算读，照常放行；`cat ~/.ssh/id_rsa` 仍拦）、`read`；`memories/` 与 `USER.md` 照旧可读 |
 | 路径保护 | `pathutil`：`CanonicalPath` 统一路径形态；本地、SSH 工具与传输不对 `.git/.svn/.hg` 做特殊限制或跳过 |
 | 删除多路径 | `resolveDeletePathList` / `planDeleteExecution` / `applyDeletePlanSlots`（`orch_file_ops.go`）：`paths` 先归一成一条候选列表，再按「去重 + 深的先删」排出执行计划（同一路径的两种写法只执行一次；父子同时列出时深的先删，两条都真删掉），结果按请求槽位摊回去；本地与远端共用这一份。单条路径的落盘判定仍各自留在自己的信任域（本地问本机文件系统，远端只能在 SSH 另一头问）。「本来就不存在」两端一致：不是失败、不拦同批其它路径，只报 `DeleteResult.Absent`（本地 `resolveDeleteTarget`，远端 `check_delete_path` 的 `missing` 标记） |
 
@@ -156,9 +160,9 @@ type toolResult struct {                       // infra_result.go:19
 
 | 工具 | 模型视图 |
 |---|---|
-| `read` | `// read | path | lines | total` 标签块，行号正文零转义；本会话已读过的同一 path/range → 内容换成「同一范围的内容已给过你、可复用」说明（会话级 read cache，`sessionReadCacheFor`，`remote_read` 共用同一份：后续 run 也复用；改盘不触发失效——命中靠逐字节比对载荷哈希；只有压缩 / 删回合 / 历史从磁盘重载才失效） |
+| `read` / `remote_read` | `// read | path | lines | total` 标签块，行号正文零转义；每次返回本次读取的有界正文，远端结果带节点别名 |
 | `read` 图片 | 内容转为后续 user 消息的图片输入，块里只留 `image="…"` 说明 |
-| `grep` | `<ally-grep mode matched hits files next-offset>` 头 + `path:line: text` 行（count 模式为 `path: count=N`）；命中行文本按预算裁剪（`capGrepLineTexts`） |
+| 历史 `grep` 结果（仅保留显示） | `<ally-grep mode matched hits files next-offset>` 头 + `path:line: text` 行（count 模式为 `path: count=N`）；命中行文本按预算裁剪（`capGrepLineTexts`） |
 | `command` | `<ally-command exit timed-out promoted-to-service truncated reduced-from full>` 块，输出零转义落体；模型侧另有一条 12KB 预算（头 4KB + 尾 8KB，中间以省略标记替换，`reduced-from` 报裁剪前长度，尾部一行说清去哪里拿全量）；command/cwd 不回显（模型刚在参数里写过） |
 | `service` read/info | `<ally-svc-read>` / `<ally-svc>` 块（字节账目走属性），`list` 仍走 JSON |
 | `edit` / `create` | 自闭合属性标签；summary/validation 走属性，warnings 走尾部行（自由文本经 `neutralizeClosingMarkers` 中和标记形状） |
