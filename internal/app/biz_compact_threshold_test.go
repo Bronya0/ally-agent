@@ -4,6 +4,7 @@ package app
 import (
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -121,6 +122,65 @@ func TestRunChatUsesSelectedCompactThreshold(t *testing.T) {
 			if _, err := a.StartChat(ChatRequest{SessionID: sid, Message: "continue", Config: ConfigState{
 				APIFormat: apiFormatOpenAIChat, BaseURL: server.URL, APIKeys: []string{"test-key"},
 				Model: "test-model", MaxTokens: 64, ContextWindow: tc.window,
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-recorder.done:
+			case <-time.After(15 * time.Second):
+				t.Fatal("run did not finish")
+			}
+			if recorder.endStatus() != "run:done" || int(summaries.Load()) != tc.wantCompactions || len(recorder.compactedEvents()) != tc.wantCompactions {
+				t.Fatalf("status=%s summaries=%d events=%v errors=%v", recorder.endStatus(), summaries.Load(), recorder.compactedEvents(), recorder.errorEvents())
+			}
+		})
+	}
+}
+
+// The default ratio mode compacts exactly when the estimated context passes
+// window × ratio: comfortably below the limit stays untouched, comfortably
+// above it compacts once before the first model call of the run.
+func TestRunChatCompactsOnlyAboveRatioThreshold(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name            string
+		fillerTokens    int
+		wantCompactions int
+	}{
+		{"below the ratio threshold", 50_000, 0},
+		{"above the ratio threshold", 200_000, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newIsolatedChatTestApp(t)
+			var summaries atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				response := "done"
+				if strings.Contains(string(body), overflowCompactPromptMarker) {
+					summaries.Add(1)
+					response = overflowSummaryText
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, sseChatChunk(response), sseChatFinishChunk("stop"), sseDone)
+			}))
+			defer server.Close()
+			if err := a.SaveConfig(ConfigState{CompactThreshold: 0.5, AutoCompactMethod: "summary"}); err != nil {
+				t.Fatal(err)
+			}
+			const sid = "ratio-run"
+			// ASCII fills at ~3.65 bytes per estimated token; the fixed prompt
+			// and schema overhead stays far from the 100k limit (200k × 0.5).
+			filler := strings.Repeat("x", int(math.Ceil(float64(tc.fillerTokens)*3.65)))
+			if err := a.saveHistory(sid, []openai.ChatCompletionMessage{
+				{Role: "user", Content: filler}, {Role: "assistant", Content: "previous answer"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			recorder := &compactRecorder{done: make(chan struct{})}
+			a.events = recorder
+			if _, err := a.StartChat(ChatRequest{SessionID: sid, Message: "continue", Config: ConfigState{
+				APIFormat: apiFormatOpenAIChat, BaseURL: server.URL, APIKeys: []string{"test-key"},
+				Model: "test-model", MaxTokens: 64, ContextWindow: 200_000,
 			}}); err != nil {
 				t.Fatal(err)
 			}
