@@ -154,16 +154,24 @@ func (a *desktop) globalShortcuts(c *ui.Context) {
 		}
 		a.openChatSearch(a.current())
 	})
-	// Escape closes the find bar, and cancels the run otherwise. It has to be one
-	// registration: the window keeps only the first handler of a chord, so a
-	// separate Escape here would swallow the cancel.
-	c.OnShortcut(0, ui.KeyEscape, func() {
-		if t := a.current(); t != nil && a.page == "chat" && t.uiState().Search.Open {
-			a.closeChatSearch(t)
-			return
-		}
-		a.cancelConversation(a.current())
-	})
+	// Escape belongs to the visible editor when it is the selected single-pane
+	// target; registering it globally would swallow editor actions such as closing
+	// its find bar. In chat, close transcript search first, then cancel the run.
+	current := a.current()
+	escapeToEditor := false
+	if current != nil && a.page == "chat" && a.explorer {
+		state := a.editorStates[workspaceKey(current.Workspace)]
+		escapeToEditor = state != nil && a.hasEditorFiles(current.Workspace) && !state.ChatOnly
+	}
+	if !escapeToEditor {
+		c.OnShortcut(0, ui.KeyEscape, func() {
+			if t := a.current(); t != nil && a.page == "chat" && t.uiState().Search.Open {
+				a.closeChatSearch(t)
+				return
+			}
+			a.cancelConversation(a.current())
+		})
+	}
 	c.OnShortcut(ui.Ctrl, ui.KeyTab, func() {
 		if len(a.tabs) > 0 {
 			a.activateWorkspaceTab((a.active + 1) % len(a.tabs))

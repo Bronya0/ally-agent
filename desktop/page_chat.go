@@ -154,7 +154,8 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 func (a *desktop) syncChatLayout(t *conversation) {
 	st := t.uiState()
 	withRail := a.prefs.RailExpanded && !a.prefs.TopNavigation
-	withFile := a.explorer && a.activeFile() != nil
+	state := a.editorStates[workspaceKey(t.Workspace)]
+	withFile := a.explorer && a.hasEditorFiles(t.Workspace) && state != nil && state.ChatVisible
 	if st.ChatLayoutSeen && (st.ChatWithExplorer != a.explorer || st.ChatWithRail != withRail || st.ChatTopNavigation != a.prefs.TopNavigation || st.ChatWithFile != withFile) {
 		// Explorer and rail toggles move the transcript to a different parent.
 		// Its old pixel offset is not valid there; let the list restore its row

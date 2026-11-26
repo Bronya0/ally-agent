@@ -2,6 +2,8 @@
 package desktop
 
 import (
+	"fmt"
+
 	"ally-dev/desktop/uikit"
 	"ally-dev/locales"
 	"strings"
@@ -127,31 +129,72 @@ func (a *desktop) panelPage(c *ui.Context, title, subtitle string, headerActions
 	})
 }
 
-// chatPage hosts the conversation column plus the optional explorer.
+// chatPage hosts the conversation, optional explorer tree and one or two editor groups.
+func (a *desktop) editorLayoutView(c *ui.Context, root string, node *editorLayoutNode) {
+	if node == nil {
+		return
+	}
+	if node.leaf() {
+		a.editorGroupView(c, root, node.Group)
+		return
+	}
+	key := fmt.Sprintf("editor-layout-%s-%d", workspaceKey(root), node.ID)
+	first := func() { a.editorLayoutView(c, root, node.First) }
+	second := func() { a.editorLayoutView(c, root, node.Second) }
+	if node.Direction == splitDown || node.Direction == splitUp {
+		ui.SplitVertical(c.Key(key), &node.SplitSize, first, second).Fill().OnChange(func() {
+			node.SplitSize = max(180, min(1200, node.SplitSize))
+		})
+		return
+	}
+	ui.Split(c.Key(key), &node.SplitSize, first, second).Fill().OnChange(func() {
+		node.SplitSize = max(220, min(1400, node.SplitSize))
+	})
+}
+
 func (a *desktop) chatPage(c *ui.Context, width float32) {
 	if t := a.current(); t != nil {
 		a.syncChatLayout(t)
 	}
 	chat := func() { a.chatColumn(c, width) }
-	if !a.explorer || a.current() == nil {
+	t := a.current()
+	if !a.explorer || t == nil {
 		chat()
 		return
 	}
 	if a.prefs.TreeWidth < 150 || a.prefs.TreeWidth > 600 {
 		a.prefs.TreeWidth = 270
 	}
-	// Split sizes its first pane. RTL places that pane on the right; each
-	// pane restores the application's text direction before building content.
+	root := t.Workspace
+	// Split sizes its first pane. RTL places the explorer on the right; restore
+	// normal direction in the content pane before splitting chat and editors.
 	ui.Column(c.Key("explorer-layout")).Direction(ui.RightToLeft).Grow(1).MinHeight(0).FillWidth().Children(func() {
 		ui.Split(c.Key("explorer-split"), &a.prefs.TreeWidth, func() {
 			ui.Column(c).Direction(ui.LeftToRight).Fill().Children(func() { a.fileTree(c) })
 		}, func() {
-			ui.Column(c).Direction(ui.LeftToRight).Fill().MinWidth(0).Children(func() {
-				if file := a.activeFile(); file != nil {
-					a.fileEditor(c, file)
-				} else {
+			ui.Column(c.Key("chat-editor-area")).Direction(ui.LeftToRight).Fill().MinWidth(0).Children(func() {
+				if !a.hasEditorFiles(root) {
 					chat()
+					return
 				}
+				state := a.editorState(root)
+				if state.ChatVisible {
+					ui.Split(c.Key("chat-file-split"), &state.ChatWidth, func() {
+						ui.Column(c.Key("chat-pane")).Fill().MinWidth(0).Children(chat)
+					}, func() {
+						ui.Column(c.Key("editor-area")).Fill().MinWidth(0).Children(func() {
+							a.editorLayoutView(c, root, state.Layout)
+						})
+					}).Fill().OnChange(func() {
+						state.ChatWidth = max(320, min(1000, state.ChatWidth))
+					})
+					return
+				}
+				if state.ChatOnly {
+					chat()
+					return
+				}
+				a.editorLayoutView(c, root, state.Layout)
 			})
 		}).Fill().OnChange(func() {
 			a.prefs.TreeWidth = max(150, min(600, a.prefs.TreeWidth))
@@ -166,10 +209,17 @@ func (a *desktop) chatColumn(c *ui.Context, width float32) {
 		emptyState(c, locales.Text("还没有会话"), locales.Text("选择或创建一个工作区开始对话"), a.secondaryInk())
 		return
 	}
-	ui.Column(c).FillWidth().Grow(1).MinHeight(0).Children(func() {
+	chatView := ui.Column(c).FillWidth().Grow(1).MinHeight(0).HandleInput(func(ev ui.InputEvent) bool {
+		if ev.Kind == ui.InputPointerDown && ev.Button == 0 {
+			activateChatContent(a.editorStates[workspaceKey(t.Workspace)], true)
+		}
+		return false
+	})
+	chatView.Children(func() {
 		a.chatMessages(c, t, width)
 		ui.Column(c).FillWidth().MaxWidth(chatMaxWidth).AlignSelf(ui.Center).Shrink(0).Children(func() {
 			a.composer(c, t)
 		})
 	})
+	activateChatContent(a.editorStates[workspaceKey(t.Workspace)], chatView.FocusWithin())
 }

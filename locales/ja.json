@@ -1841,5 +1841,21 @@
   "ui_context_tool_call_tokens": "呼出",
   "ui_context_tool_result_tokens": "結果",
   "ui_context_unknown_tool": "不明なツール",
-  "ui_context_tool_usage_note": "現在のコンテキストの推定値。呼出には引数を含み、AI の返信に計上"
+  "ui_context_tool_usage_note": "現在のコンテキストの推定値。呼出には引数を含み、AI の返信に計上",
+  "ui_1032c313fd28": "エディターを分割",
+  "ui_e9bca1f6e8df": "エディターグループを閉じる",
+  "ui_5c877c274f87": "ファイルを選択して編集を開始",
+  "ui_859532e5a650": "ワークスペースごとに表示できる埋め込みプレビューは 1 つです。このエディターグループを選択して表示してください。",
+  "ui_editor_layout": "レイアウト",
+  "ui_editor_layout_tip": "エディターのレイアウト",
+  "ui_editor_fullwidth": "エディターを全幅表示",
+  "ui_editor_chat_split": "会話とエディターを並べて表示",
+  "ui_editor_return": "エディターに戻る",
+  "ui_editor_chat_only": "会話のみ表示",
+  "ui_editor_chat_toggle": "会話表示を切り替え",
+  "ui_editor_split_trigger": "分割",
+  "ui_editor_split_left": "左に分割",
+  "ui_editor_split_right": "右に分割",
+  "ui_editor_split_up": "上に分割",
+  "ui_editor_split_down": "下に分割"
 }

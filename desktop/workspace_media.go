@@ -174,29 +174,31 @@ func (a *desktop) mediaCommand(file *workspaceFile, command string) {
 	}()
 }
 
-func (a *desktop) workspaceMediaToolbar(c *ui.Context, file *workspaceFile) {
+func (a *desktop) workspaceMediaToolbar(c *ui.Context, file *workspaceFile, root string, group int) {
+	activate := func() { a.selectEditorDocument(root, file.Path, group, false) }
 	previous, next := a.mediaNeighbours(file)
-	localizedSelect(c.Key("media-mode"), &a.media.mode, mediaModes).Width(108).OnChange(func() { a.syncMediaOptions(file) })
+	localizedSelect(c.Key("media-mode"), &a.media.mode, mediaModes).Width(108).OnChange(func() { activate(); a.syncMediaOptions(file) })
 	label := locales.Text("播放")
 	if a.workspaceMedia().playing {
 		label = locales.Text("暂停")
 	}
-	uikit.Tooltip(c, flat(c, label).OnClick(func() { a.toggleMediaPlayback(file) }), locales.Text("空格：播放/暂停；← →：切换同目录同类型媒体；图片每 5 秒切换"))
-	flat(c, locales.Text("上一个")).Disabled(previous == "").OnClick(func() { a.stepWorkspaceMedia(file, -1, false) })
-	flat(c, locales.Text("下一个")).Disabled(next == "").OnClick(func() { a.stepWorkspaceMedia(file, 1, false) })
+	uikit.Tooltip(c, flat(c, label).OnClick(func() { activate(); a.toggleMediaPlayback(file) }), locales.Text("空格：播放/暂停；← →：切换同目录同类型媒体；图片每 5 秒切换"))
+	flat(c, locales.Text("上一个")).Disabled(previous == "").OnClick(func() { activate(); a.stepWorkspaceMedia(file, -1, false) })
+	flat(c, locales.Text("下一个")).Disabled(next == "").OnClick(func() { activate(); a.stepWorkspaceMedia(file, 1, false) })
 	if workspaceFileKindForPath(file.Path) == workspaceFileImage {
 		label := locales.Text("画质增强：关")
 		if a.media.enhance {
 			label = locales.Text("画质增强：开")
 		}
-		uikit.Tooltip(c, flat(c, label).OnClick(func() { a.media.enhance = !a.media.enhance; a.syncMediaOptions(file) }), locales.Text("轻微减淡与锐化，仅影响预览"))
+		uikit.Tooltip(c, flat(c, label).OnClick(func() { activate(); a.media.enhance = !a.media.enhance; a.syncMediaOptions(file) }), locales.Text("轻微减淡与锐化，仅影响预览"))
 	}
 }
 
-func (a *desktop) workspaceMediaShortcuts(c *ui.Context, file *workspaceFile) {
-	c.OnShortcut(0, ui.KeyLeft, func() { a.stepWorkspaceMedia(file, -1, false) })
-	c.OnShortcut(0, ui.KeyRight, func() { a.stepWorkspaceMedia(file, 1, false) })
-	c.OnShortcut(0, ui.KeySpace, func() { a.toggleMediaPlayback(file) })
+func (a *desktop) workspaceMediaShortcuts(c *ui.Context, file *workspaceFile, root string, group int) {
+	activate := func() { a.selectEditorDocument(root, file.Path, group, false) }
+	c.OnShortcut(0, ui.KeyLeft, func() { activate(); a.stepWorkspaceMedia(file, -1, false) })
+	c.OnShortcut(0, ui.KeyRight, func() { activate(); a.stepWorkspaceMedia(file, 1, false) })
+	c.OnShortcut(0, ui.KeySpace, func() { activate(); a.toggleMediaPlayback(file) })
 }
 
 func (a *desktop) toggleMediaPlayback(file *workspaceFile) {
@@ -260,7 +262,7 @@ func (a *desktop) attachWorkspaceMedia(surface *nativePreview, file *workspaceFi
 
 func (a *desktop) handleWorkspaceMediaAction(surface *nativePreview, file *workspaceFile, key, token, action string) {
 	workspace, _, _ := strings.Cut(key, "\x00")
-	if surface.IsDestroyed() || surface.mediaToken != token || a.workspaceFiles[workspace] != file {
+	if surface.IsDestroyed() || surface.mediaToken != token || !a.workspaceFileCurrent(workspace, file) {
 		return
 	}
 	media := a.mediaForWorkspace(workspace)

@@ -165,7 +165,7 @@ func TestMultiEditFileLinkOpensItsOwnPath(t *testing.T) {
 		map[string]any{"path": "first.go", "diff": "+first"},
 		map[string]any{"path": "second.go", "diff": "+second"},
 	}}}
-	// Choosing the already-open second file cancels an older pending switch.
+	// Choosing an already-open file leaves another path's load independent.
 	ctx, _ := a.workspacePreview.beginLoad(conv.Workspace, "first.go")
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(a.theme())
@@ -175,8 +175,8 @@ func TestMultiEditFileLinkOpensItsOwnPath(t *testing.T) {
 	if err := tt.Click("second.go"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.explorer || a.activeFile() != file || ctx.Err() == nil || len(conv.uiState().ToolOpen) != 0 {
-		t.Fatal("file link did not choose its own editor or cancelled the wrong load")
+	if !a.explorer || a.activeFile() != file || ctx.Err() != nil || a.workspacePreview.pending == nil || len(conv.uiState().ToolOpen) != 0 {
+		t.Fatal("file link did not choose its own editor or preserve the independent load")
 	}
 }
 

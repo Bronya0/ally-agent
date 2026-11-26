@@ -230,7 +230,10 @@ type desktop struct {
 	explorer                                            bool
 	startupError                                        string
 	files                                               []backend.FileEntry
-	workspaceFiles                                      map[string]*workspaceFile
+	workspaceFiles                                      map[string]*workspaceFile // currently selected file by workspace
+	editorDocumentsByWorkspace                          map[string]map[string]*workspaceFile
+	editorStates                                        map[string]*workspaceEditorState
+	editorFileLoads                                     map[string]*pendingEditorFileLoad
 	workspacePreview                                    workspacePreviewLifecycle
 	media                                               workspaceMediaState
 	mediaPlayback                                       map[string]*workspaceMediaState
@@ -562,7 +565,7 @@ func (a *desktop) shutdown() {
 
 // Both normal quit and updating check editor changes before replacing files.
 func (a *desktop) prepareWindowClose(proceed, cancel func()) {
-	for _, file := range a.workspaceFiles {
+	for _, file := range a.allWorkspaceFiles() {
 		if file.Saving {
 			cancel()
 			a.notify(locales.Text("文件正在保存，请稍后退出"))
@@ -1381,27 +1384,20 @@ func (a *desktop) openFile(path string) {
 		a.openFileInfo(path)
 		return
 	}
-	// Normalize the playlist policy here, where the file is chosen, so rendering
-	// the toolbar never writes UI state.
 	if workspaceFileKindForPath(path).hasMediaPlayer() {
 		a.media.ensureMode()
 	}
-	if old := a.workspaceFiles[workspaceKey(root)]; old != nil {
-		if old.Path == path {
-			// A pending switch must not replace the file the user just chose again.
-			a.workspacePreview.cancelLoad(root)
-			return
+	state := a.editorState(root)
+	state.ChatOnly = false
+	group := a.editorGroupIndex(root)
+	if file := a.editorDocument(root, path); file != nil {
+		if existingGroup := a.editorGroupContaining(root, file.Path); existingGroup >= 0 {
+			group = existingGroup
 		}
-		if old.Saving {
-			a.notify(locales.Text("文件正在保存，请稍后打开其他文件"))
-			return
-		}
-		if old.Editor.Buffer.Modified() {
-			a.confirmDiscardFile(root, old, func() { a.loadFileReplacing(root, path, old, true) })
-			return
-		}
+		a.selectEditorDocument(root, file.Path, group, true)
+		return
 	}
-	a.loadFileReplacing(root, path, a.workspaceFiles[workspaceKey(root)], false)
+	a.loadWorkspaceFile(root, path, nil, false, group)
 }
 
 func workspaceKey(root string) string { return strings.ToLower(filepath.Clean(root)) }
@@ -1411,13 +1407,24 @@ func (a *desktop) activeFile() *workspaceFile {
 	if t == nil {
 		return nil
 	}
-	return a.workspaceFiles[workspaceKey(t.Workspace)]
+	key := workspaceKey(t.Workspace)
+	if state := a.editorStates[key]; state != nil {
+		group := a.editorGroupIndex(t.Workspace)
+		path := state.Groups[group].Active
+		if path == "" {
+			return nil
+		}
+		if docs := a.editorDocumentsByWorkspace[key]; docs != nil {
+			return docs[editorDocumentKey(path)]
+		}
+		return nil
+	}
+	return a.workspaceFiles[key]
 }
 
-func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, discardConfirmed bool) {
+func (a *desktop) loadWorkspaceFile(root, path string, expected *workspaceFile, discardConfirmed bool, group int) {
 	kind := workspaceFileKindForPath(path)
-	ctx, load := a.workspacePreview.beginLoad(root, path)
-	epoch := a.fileEpoch
+	pendingLoad, ctx := a.beginEditorFileLoad(root, path)
 	expectedVersion := uint64(0)
 	if expected != nil && expected.Editor != nil && expected.Editor.Buffer != nil {
 		expectedVersion = expected.Editor.Buffer.Version()
@@ -1476,26 +1483,26 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 				}
 				return
 			}
-			if !a.workspacePreview.finishLoad(load) {
+			if !a.finishEditorFileLoad(pendingLoad) {
 				if newFile != nil {
 					releaseWorkspaceFileValue(newFile)
 				}
 				return
 			}
-			if epoch != a.fileEpoch || a.closing {
+			if a.closing {
 				if newFile != nil {
 					releaseWorkspaceFileValue(newFile)
 				}
 				return
 			}
-			if !a.workspaceFileLoadStillCurrent(root, expected, expectedVersion, discardConfirmed) {
+			if !a.workspaceFileLoadStillCurrent(root, path, expected, expectedVersion, discardConfirmed) {
 				if newFile != nil {
 					releaseWorkspaceFileValue(newFile)
 				}
 				return
 			}
 			if previewErr != nil {
-				a.handleFileLoadError(root, path, kind, expected, previewErr)
+				a.handleFileLoadError(root, path, kind, expected, previewErr, group)
 				return
 			}
 			if a.workspaceFiles == nil {
@@ -1513,26 +1520,13 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 			if expected != nil && expected.Path == path && kind.hasMarkupToggle() {
 				newFile.MarkupPreview = expected.MarkupPreview
 			}
-			if newFile.Document != nil {
-				// Keep parsed document previews to one open file at a time.
-				for key, old := range a.workspaceFiles {
-					if old != newFile && old != expected && old.Document != nil {
-						a.workspacePreview.releaseMountedWorkspace(key)
-						delete(a.workspaceFiles, key)
-						releaseWorkspaceFileValue(old)
-					}
-				}
-			}
+			docs := a.editorDocuments(root)
 			if expected != nil {
-				if newFile.PreviewPath != "" || newFile.PreviewHTML != "" || newFile.MarkupPreview && kind == workspaceFileHTML {
-					// Keep the native slot (and an image's last frame) for the next
-					// compatible preview, while dropping old file data.
-					releaseWorkspaceFileValue(expected)
-				} else {
-					a.releaseWorkspaceFile(root)
-				}
+				delete(docs, editorDocumentKey(expected.Path))
+				releaseWorkspaceFileValue(expected)
 			}
-			a.workspaceFiles[workspaceKey(root)] = newFile
+			docs[editorDocumentKey(newFile.Path)] = newFile
+			a.openLoadedEditorDocument(root, newFile.Path, group)
 			if !kind.isPreviewOnly() {
 				a.configureEditorAssist(root, newFile)
 				// Display the file before preparing completions and symbols. The
@@ -1550,8 +1544,9 @@ func (a *desktop) loadFileReplacing(root, path string, expected *workspaceFile, 
 	}()
 }
 
-func (a *desktop) workspaceFileLoadStillCurrent(root string, expected *workspaceFile, version uint64, discardConfirmed bool) bool {
-	if a.workspaceFiles[workspaceKey(root)] != expected {
+func (a *desktop) workspaceFileLoadStillCurrent(root, path string, expected *workspaceFile, version uint64, discardConfirmed bool) bool {
+	current := a.editorDocument(root, path)
+	if current != expected {
 		return false
 	}
 	if expected == nil {
@@ -1580,48 +1575,20 @@ func (a *desktop) confirmDiscardFile(root string, file *workspaceFile, action fu
 				a.notifyError(err.Error())
 				return
 			}
-			if result.Button == 1 && a.workspaceFiles[workspaceKey(root)] == file {
+			if result.Button == 1 && a.workspaceFileCurrent(root, file) {
 				action()
 			}
 		})
 	}()
 }
 
-func (a *desktop) closeFile() {
-	t := a.current()
-	if t == nil {
-		return
-	}
-	a.closeWorkspaceFile(t.Workspace)
-}
-
-func (a *desktop) closeWorkspaceFile(root string) {
-	a.workspacePreview.cancelLoad(root)
-	file := a.workspaceFiles[workspaceKey(root)]
-	if file == nil {
-		return
-	}
-	if file.Saving {
-		a.notify(locales.Text("文件正在保存，请稍后关闭"))
-		return
-	}
-	close := func() { a.releaseWorkspaceFile(root) }
-	if file.Editor != nil && file.Editor.Buffer != nil && file.Editor.Buffer.Modified() {
-		a.confirmDiscardFile(root, file, close)
-	} else {
-		close()
-	}
-}
-
-func (a *desktop) saveFile() {
-	t := a.current()
-	file := a.activeFile()
-	if t == nil || file == nil || file.Editor == nil || file.Editor.Buffer == nil || workspaceFileKindForPath(file.Path).isPreviewOnly() || file.Saving || !file.Editor.Buffer.Modified() {
+func (a *desktop) saveWorkspaceFile(root string, file *workspaceFile) {
+	if file == nil || file.Editor == nil || file.Editor.Buffer == nil || workspaceFileKindForPath(file.Path).isPreviewOnly() || file.Saving || !file.Editor.Buffer.Modified() {
 		return
 	}
 	text := file.Editor.Buffer.String()
 	file.Saving = true
-	req := backend.SaveWorkspaceFileRequest{Workspace: t.Workspace, Path: file.Path, Version: file.Version, Content: text}
+	req := backend.SaveWorkspaceFileRequest{Workspace: root, Path: file.Path, Version: file.Version, Content: text}
 	go func() {
 		result, err := a.core.SaveWorkspaceFile(req)
 		a.win.Update(func() {

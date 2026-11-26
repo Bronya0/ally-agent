@@ -666,9 +666,7 @@ func (l *workspacePreviewLifecycle) cancelScheduledWorkspace(workspace string) {
 
 func (l *workspacePreviewLifecycle) releaseWorkspace(workspace string) {
 	key := workspaceKey(workspace)
-	if l.pending != nil && l.pending.workspace == key {
-		l.cancelLoad(key)
-	}
+	l.cancelLoad(key)
 	l.cancelScheduledWorkspace(key)
 	l.releaseMountedWorkspace(key)
 }
@@ -779,7 +777,7 @@ func (a *desktop) watchWorkspacePreviewFailure(surface *nativePreview, file *wor
 	surface.onFailure = func(err error) {
 		workspace, _, _ := strings.Cut(key, "\x00")
 		mounted := a.workspacePreview.mountedEntryFor(key)
-		if a.closing || a.workspaceFiles[workspace] != file || mounted == nil || mounted.surface != surface {
+		if a.closing || !a.workspaceFileCurrent(workspace, file) || mounted == nil || mounted.surface != surface {
 			return
 		}
 		file.PreviewError = err.Error()

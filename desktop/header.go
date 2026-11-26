@@ -140,6 +140,9 @@ func (a *desktop) workspaceTabs(c *ui.Context) {
 							a.hideFilePreview()
 						}
 						a.page = "chat"
+						if state := a.editorStates[workspaceKey(tab.Workspace)]; state != nil && a.hasEditorFiles(tab.Workspace) {
+							state.ChatOnly = true
+						}
 						a.activateTab(idx)
 						a.refreshFiles()
 						a.refreshSessionFooter(tab)
@@ -543,11 +546,16 @@ func (a *desktop) detachWorkspaceTab(index int) string {
 		}
 	}
 	if !stillOpen {
-		key := workspaceKey(t.Workspace)
 		a.releaseWorkspaceFileTree(t.Workspace)
-		a.workspacePreview.releaseWorkspace(key)
-		delete(a.mediaPlayback, key)
-		if file := a.workspaceFiles[key]; file != nil && !file.Saving && file.Editor != nil && !file.Editor.Buffer.Modified() {
+		files := a.editorDocuments(t.Workspace)
+		allClean := true
+		for _, file := range files {
+			if file.Saving || file.Editor != nil && file.Editor.Buffer != nil && file.Editor.Buffer.Modified() {
+				allClean = false
+				break
+			}
+		}
+		if allClean {
 			a.releaseWorkspaceFile(t.Workspace)
 		}
 	}
