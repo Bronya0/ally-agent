@@ -546,8 +546,7 @@ func (a *desktop) commandMenu(c *ui.Context, t *conversation, anchor ui.Element)
 					}
 					row.Children(func() {
 						ui.Text(c, "/"+item.Label).Font(monoFamily).FontSize(fsSmall).TextColor(p.accent)
-						ui.Text(c, short(item.Desc, 70)).FontSize(fsTiny).TextColor(a.secondaryInk()).SingleLine()
-						ui.Spacer(c)
+						ui.Text(c, item.Desc).FontSize(fsTiny).TextColor(a.secondaryInk()).Grow(1).MinWidth(0).SingleLine()
 					})
 					if row.Clicked() {
 						a.runCommand(t, &item)
@@ -816,10 +815,9 @@ func (a *desktop) retryBanner(c *ui.Context, info *retryInfo) {
 		Background(ui.RGBA(217, 164, 65, 0.10)).Children(func() {
 		iconGlyph(c, "refresh", 13).TextColor(c.Theme().Warning)
 		msg := fmt.Sprintf(locales.Text("重试中 %d/%d：%s"), info.Attempt, info.MaxAttempts, info.Error)
-		uikit.Tooltip(c, ui.Text(c, short(msg, 120)).FontSize(fsTiny).TextColor(c.Theme().Warning).SingleLine(), msg)
-		ui.Spacer(c)
+		uikit.Tooltip(c, ui.Text(c, msg).FontSize(fsTiny).TextColor(c.Theme().Warning).Grow(1).MinWidth(0).SingleLine(), msg)
 		if info.TotalKeys > 1 {
-			ui.Text(c, fmt.Sprintf(locales.Text("第 %d/%d 个 Key 失败"), info.KeyIndex+1, info.TotalKeys)).FontSize(fsTiny).TextColor(p.muted)
+			ui.Text(c, fmt.Sprintf(locales.Text("第 %d/%d 个 Key 失败"), info.KeyIndex+1, info.TotalKeys)).FontSize(fsTiny).TextColor(p.muted).Shrink(0)
 		}
 	})
 }
@@ -1415,14 +1413,14 @@ func gitRepoMenuItem(c *ui.Context, item ui.Element, repo backend.GitRepoItem, i
 	row := uikit.MenuRow(c, item, label, false).Padding(5, 10)
 	row.Children(func() {
 		ui.Row(c).FillWidth().Gap(gapTight).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, short(repo.Name, 22)).FontSize(fsBody).TextColor(t.Text).SingleLine().Shrink(1).MinWidth(0)
+			ui.Text(c, repo.Name).FontSize(fsBody).TextColor(t.Text).SingleLine().Shrink(1).MinWidth(0)
 			gitRepoStatusTag(c, "ahead", "↑", repo.Ahead, uikit.Info)
 			gitRepoStatusTag(c, "behind", "↓", repo.Behind, uikit.Warning)
 			gitRepoStatusTag(c, "added", "+", repo.Added, uikit.Success)
 			gitRepoStatusTag(c, "modified", "~", repo.Modified, uikit.Warning)
 			gitRepoStatusTag(c, "deleted", "−", repo.Deleted, uikit.Error)
 			ui.Spacer(c)
-			ui.Text(c, short(repo.Branch, 18)).FontSize(fsSmall).TextColor(t.Accent).SingleLine().Shrink(1).MinWidth(0)
+			ui.Text(c, repo.Branch).FontSize(fsSmall).TextColor(t.Accent).SingleLine().Shrink(1).MinWidth(0)
 		})
 	})
 	return uikit.Tooltip(c, row, label)
