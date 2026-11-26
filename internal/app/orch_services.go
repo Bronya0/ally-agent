@@ -189,14 +189,8 @@ func (a *App) startServiceWithConfigLocked(parent context.Context, cfg ConfigSta
 	}
 	root := roots[0]
 	cwd := root
-	if strings.TrimSpace(req.Cwd) != "" {
-		cwd, err = resolveCommandCwd(roots, req.Cwd)
-		if err != nil {
-			return ServiceInfo{}, err
-		}
-	}
 	// 与 command 工具同一个围栏入口：围栏自己问「谁管边界」，沙箱接不接都走这里。
-	if err := checkCommandSafetyAtCwd(CommandRequest{Command: req.Command, Cwd: req.Cwd}, roots, cwd); err != nil {
+	if err := checkCommandSafetyAtCwd(CommandRequest{Command: req.Command}, roots, cwd); err != nil {
 		return ServiceInfo{}, err
 	}
 	a.servicesMu.Lock()
@@ -512,7 +506,6 @@ func (a *App) restartServiceWithConfig(parent context.Context, cfg ConfigState, 
 			Name:        original.Name,
 			Description: description,
 			Command:     original.Command,
-			Cwd:         original.Cwd,
 		})
 		if err != nil {
 			service.stopMu.Unlock()

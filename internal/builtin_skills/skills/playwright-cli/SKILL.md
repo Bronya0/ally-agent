@@ -396,8 +396,8 @@ matched 只表示模板中的结果断言通过，issues 仍要逐项判读。�
 | 现象 | 下一步 |
 |---|---|
 | command not found | 按第一章处理安装，不凭空替换成另一套工具。 |
-| 会话不存在 | 查自己的浏览器 service 状态/日志、会话名、cwd / workspace；确认 holder 活着后再操作。 |
-| E_CWD_INVALID / description is required | 先建目录；service start 补齐 description，按真实工具参数调用。 |
+| 会话不存在 | 查自己的浏览器 service 状态/日志、会话名、workspace；确认 holder 活着后再操作。 |
+| description is required | service start 补齐 description，按真实工具参数调用。 |
 | channel not found / browser not installed | 按第二章确认 channel 与安装情况，不循环启动。 |
 | ref not found | 重新获取小快照或改用已确认的 locator。 |
 | strict mode violation / 多个匹配 | 按目标容器、可见性与语义收窄，不随便 first/last。 |

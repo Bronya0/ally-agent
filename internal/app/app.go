@@ -989,7 +989,6 @@ type DeletePathsResult struct {
 
 type CommandRequest struct {
 	Command string `json:"command"`
-	Cwd     string `json:"cwd"`
 	Timeout int    `json:"timeout"`
 }
 
@@ -997,7 +996,6 @@ type StartServiceRequest struct {
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description"`
 	Command     string `json:"command"`
-	Cwd         string `json:"cwd,omitempty"`
 }
 
 type StopServiceRequest struct {
@@ -1010,7 +1008,6 @@ type BackgroundProcessRequest struct {
 	Name            string `json:"name,omitempty"`
 	Description     string `json:"description,omitempty"`
 	Command         string `json:"command,omitempty"`
-	Cwd             string `json:"cwd,omitempty"`
 	ID              string `json:"id,omitempty"`
 	TailBytes       int    `json:"tailBytes,omitempty"`
 }
@@ -2927,7 +2924,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 					Name:        req.Name,
 					Description: req.Description,
 					Command:     req.Command,
-					Cwd:         req.Cwd,
 				})
 			case "stop":
 				if err = a.checkServiceWorkspace(cfg, req.ID); err == nil {

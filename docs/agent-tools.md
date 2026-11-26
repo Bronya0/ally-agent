@@ -34,7 +34,7 @@ flowchart LR
 
 本地内容搜索统一通过 `command` 执行 `rg`；内置 `grep` 已移除。本地命令和后台服务在执行前拒绝 `grep` / `egrep` / `fgrep`，返回 `E_COMMAND_BLOCKED`。英文用法由 `ContentSearchRule` 与 `ContentSearchGuidance` 提供，主对话和子代理共用定位与批量读取规则。远端通过 `remote_run_command` 默认使用 `grep`；仅在已知服务器安装了 `rg` 时使用它，不为搜索额外探测或安装。命令环境追加已发现的 ripgrep 所在目录，保持用户 PATH 的原有优先级。
 
-本地 `command` 每次默认在主工作区根目录启动 shell，根目录下直接执行命令即可；进入子目录使用相对 `cwd` 或 `cd`，切目录只影响本次调用。
+本地 `command` 每次在主工作区根目录启动 shell，根目录下直接执行命令即可；进入子目录用 `cd`，切目录只影响本次调用。工具没有 `cwd` 参数，围栏解析相对目标也以工作区根为基准。
 
 ## 二、声明层：schema 是静态的、共享的、strict 的
 
@@ -163,7 +163,7 @@ type toolResult struct {                       // infra_result.go:19
 | `read` / `remote_read` | `// read | path | lines | total` 标签块，行号正文零转义；每次返回本次读取的有界正文，远端结果带节点别名 |
 | `read` 图片 | 内容转为后续 user 消息的图片输入，块里只留 `image="…"` 说明 |
 | 历史 `grep` 结果（仅保留显示） | `<ally-grep mode matched hits files next-offset>` 头 + `path:line: text` 行（count 模式为 `path: count=N`）；命中行文本按预算裁剪（`capGrepLineTexts`） |
-| `command` | `<ally-command exit timed-out promoted-to-service truncated reduced-from full>` 块，输出零转义落体；模型侧另有一条 12KB 预算（头 4KB + 尾 8KB，中间以省略标记替换，`reduced-from` 报裁剪前长度，尾部一行说清去哪里拿全量）；command/cwd 不回显（模型刚在参数里写过） |
+| `command` | `<ally-command exit timed-out promoted-to-service truncated reduced-from full>` 块，输出零转义落体；模型侧另有一条 12KB 预算（头 4KB + 尾 8KB，中间以省略标记替换，`reduced-from` 报裁剪前长度，尾部一行说清去哪里拿全量）；command 不回显（模型刚在参数里写过） |
 | `service` read/info | `<ally-svc-read>` / `<ally-svc>` 块（字节账目走属性），`list` 仍走 JSON |
 | `edit` / `create` | 自闭合属性标签；summary/validation 走属性，warnings 走尾部行（自由文本经 `neutralizeClosingMarkers` 中和标记形状） |
 | `delete` / `remote_delete_path` | `<ally-deleted deleted failed absent>` 块 + 每条路径一行 `<path value ok absent kind files dirs bytes error>`：单路径调用就是一个单槽批量，本地与远端同一份渲染（失败槽一眼可见，不用数行）。本来就不存在的路径报 `absent="true"`（`ok` 仍为 true，两个计数都不含它）——不报错、也不必重试 |

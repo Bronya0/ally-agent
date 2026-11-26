@@ -69,7 +69,7 @@ const (
 	// the runtime enforces.
 	MaxHTTPBodyBytes     = 50 * 1024 * 1024
 	DefaultHTTPMaxBody   = 256 * 1024
-	DefaultWebFetchBody  = 2 * 1024 * 1024
+	DefaultWebFetchBody  = 1 * 1024 * 1024
 	DefaultWebFetchChars = 60000
 	MaxWebFetchChars     = 200000
 	// DeletePathListLimit bounds how many paths one delete call may carry. The
@@ -250,11 +250,10 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"name", "arguments"},
 		}),
-		functionTool("command", "Run a shell command or related shell sequence. Each call starts in the primary workspace root by default: run commands directly there, or use a relative cwd or cd for a subdirectory. Directory changes last only for that call. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. "+ContentSearchGuidance+" Keep project outputs in the workspace or active session extra roots; other filesystem access follows runtime restrictions. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. "+modelOutputNote+" If the result reports promotion to a background service, use service read/stop/restart with its returned id; never duplicate an active process. Commands that touch the same files or bind the same port need distinct stages.", map[string]any{
+		functionTool("command", "Run a shell command or related shell sequence. Each call starts in the primary workspace root: run commands directly there, or cd into a subdirectory inside the command. Directory changes last only for that call. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. "+ContentSearchGuidance+" Keep project outputs in the workspace or active session extra roots; other filesystem access follows runtime restrictions. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. "+modelOutputNote+" If the result reports promotion to a background service, use service read/stop/restart with its returned id; never duplicate an active process. Commands that touch the same files or bind the same port need distinct stages.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run."},
-				"cwd":     map[string]any{"type": "string", "description": "Optional working directory relative to the primary workspace root. Omit or leave empty to use that root. Absolute paths within authorized writable roots are also accepted."},
 				"timeout": commandTimeoutSchema(),
 			},
 			"required": []string{"command"},
@@ -267,7 +266,6 @@ func chatToolsUncached() []openai.Tool {
 				"name":            map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
 				"description":     map[string]any{"type": "string", "minLength": 1, "maxLength": MaxServiceDescriptionChars, "pattern": ".*\\S.*", "description": "Required with action=start: explain what the service does and why it is needed. Shown to the user in service cards and the task center."},
 				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
-				"cwd":             map[string]any{"type": "string", "description": "Workspace-relative working directory. Empty means workspace root. Used only with action=start."},
 				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start or action=restart. Required with action=stop, action=restart, and action=read."},
 				"tailBytes": map[string]any{
 					"type": "integer", "minimum": 0, "maximum": MaxServiceReadTailBytes,

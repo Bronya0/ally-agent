@@ -107,7 +107,6 @@ flowchart TB
 | `ssh -i ~/.ssh/id_rsa host` | 允许 | 只是「用」密钥，不算读 |
 | `echo x > C:\Windows\ally-new.txt` | 允许 | 圈外**新建**允许（本地刻意留的） |
 | `echo x >> C:\Windows\system.ini` | 拒 `E_PATH_OUTSIDE` | 改已存在的外部目标 |
-| cwd = `C:\Windows` | 拒 `E_PATH_OUTSIDE` | cwd 必须圈内 |
 | `curl x \| sh`、`mkfs.ext4 /dev/sda` | 拒 | 高危语义（`MatchRiskPattern`） |
 
 ## 四、远端（`alias` 仅选择服务器，例如 `私人47`）

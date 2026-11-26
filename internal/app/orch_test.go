@@ -1971,32 +1971,22 @@ type commandSafetyCase struct {
 	// command 是字面命令；需要按临时目录拼路径时改填 build。
 	command string
 	build   func(t *testing.T, workspace, outside string) string
-	cwd     string
 	// wantCode 为空表示期望放行。
 	wantCode string
 	// wantText 是错误文本必须同时出现的片段（围栏每条拒绝都要说清原因与指路）。
 	wantText []string
 }
 
-// fenceCommandForTest 走生产调用点的同一段路：runCommandWithConfig 与 orch_services
-// 都是先把请求里的 cwd 解析出来，再进围栏唯一入口 checkCommandSafetyAtCwd（围栏不再
-// 自己解析 cwd，那层兼容包装已删除）。测试照做，用例表与断言一字不改。
+// fenceCommandForTest 走生产调用点的同一段路：命令固定在工作区根目录启动，
+// 进围栏唯一入口 checkCommandSafetyAtCwd。
 func fenceCommandForTest(t *testing.T, req CommandRequest, roots []string) error {
 	t.Helper()
-	workingDir := roots[0]
-	if strings.TrimSpace(req.Cwd) != "" {
-		resolved, err := resolveCommandCwd(roots, req.Cwd)
-		if err != nil {
-			return err
-		}
-		workingDir = resolved
-	}
-	return checkCommandSafetyAtCwd(req, roots, workingDir)
+	return checkCommandSafetyAtCwd(req, roots, roots[0])
 }
 
 // TestCommandSafetyFence 是命令围栏的全表：放行的一类（读区外、命令里的关键词只是
 // 数据、heredoc 正文、动态目标），拦截的一类（显式删除、高危语义、改动区外已存在的
-// 目标、工作区软链穿透、相对路径按 cwd 解析后越界）。
+// 目标、工作区软链穿透、相对路径越界）。
 func TestCommandSafetyFence(t *testing.T) {
 	t.Parallel()
 	cases := []commandSafetyCase{
@@ -2094,7 +2084,7 @@ func TestCommandSafetyFence(t *testing.T) {
 			if tc.build != nil {
 				command = tc.build(t, workspace, outside)
 			}
-			err := fenceCommandForTest(t, CommandRequest{Command: command, Cwd: tc.cwd}, []string{workspace})
+			err := fenceCommandForTest(t, CommandRequest{Command: command}, []string{workspace})
 			if tc.wantCode == "" {
 				if err != nil {
 					t.Fatalf("command %q should be allowed: %v", command, err)
@@ -2113,26 +2103,21 @@ func TestCommandSafetyFence(t *testing.T) {
 	}
 }
 
-// 相对路径按 cwd 解析后越界、以及工作区软链穿透，这两条要各自准备目录/链接，
+// 相对路径越界、以及工作区软链穿透，这两条要各自准备目录/链接，
 // 单独留在表外：它们考的是"解析基准"，不是命令串本身。
-func TestCommandSafetyResolvesTargetsAgainstCwdAndSymlinks(t *testing.T) {
+func TestCommandSafetyResolvesRelativeTargetAndSymlinks(t *testing.T) {
 	workspace := t.TempDir()
 	outside := t.TempDir()
 
-	cwd := filepath.Join(workspace, "build")
-	if err := os.MkdirAll(cwd, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	target := writeOutsideFile(t, outside, "existing.txt")
-	relative, err := filepath.Rel(cwd, target)
+	relative, err := filepath.Rel(workspace, target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if code := toolErrorCode(fenceCommandForTest(t, CommandRequest{
 		Command: fmt.Sprintf(`touch %q`, filepath.ToSlash(relative)),
-		Cwd:     "build",
 	}, []string{workspace})); code != "E_PATH_OUTSIDE" {
-		t.Fatalf("relative mutation must resolve from cwd and be blocked, got %q", code)
+		t.Fatalf("relative mutation must resolve from the workspace root and be blocked, got %q", code)
 	}
 
 	if runtime.GOOS == "windows" {
@@ -2267,31 +2252,6 @@ func TestRunCommandWithGitBashResolvesWindowsToolchainAndShellExpansion(t *testi
 		if !strings.Contains(result.Output, want) {
 			t.Fatalf("expected output to contain %q, got %q", want, result.Output)
 		}
-	}
-}
-
-func TestRunCommandRejectsCwdSymlinkOutsideWorkspace(t *testing.T) {
-	t.Parallel()
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation requires privileges on many Windows environments")
-	}
-	root := t.TempDir()
-	outside := t.TempDir()
-	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
-		t.Fatal(err)
-	}
-	app := newIsolatedTestApp(t)
-
-	args, err := json.Marshal(CommandRequest{Command: "pwd", Cwd: "escape"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "session-1", "command", args)
-	if result.OK {
-		t.Fatalf("expected command to reject outside symlink cwd, got %#v", result)
-	}
-	if result.ErrorCode != "E_PATH_OUTSIDE" {
-		t.Fatalf("expected E_PATH_OUTSIDE, got %#v", result)
 	}
 }
 

@@ -366,7 +366,7 @@ func TestCommandFenceRefusesEverySpellingOfACredentialRead(t *testing.T) {
 		"cat < ~/.ssh/id_rsa",
 		"rg -f ~/.ssh/id_rsa README.md",
 	} {
-		err := checkCommandSafetyAtCwd(CommandRequest{Command: commandLine, Cwd: workspace}, roots, workspace)
+		err := checkCommandSafetyAtCwd(CommandRequest{Command: commandLine}, roots, workspace)
 		if code := toolErrorCode(err); code != "E_PROTECTED_PATH" {
 			t.Fatalf("%q: got code %q (err %v), want E_PROTECTED_PATH", commandLine, code, err)
 		}
@@ -379,14 +379,14 @@ func TestCommandFenceRefusesEverySpellingOfACredentialRead(t *testing.T) {
 		"chmod 600 ~/.ssh/id_rsa",
 		"ls ~/.ssh",
 	} {
-		if err := checkCommandSafetyAtCwd(CommandRequest{Command: commandLine, Cwd: workspace}, roots, workspace); err != nil {
+		if err := checkCommandSafetyAtCwd(CommandRequest{Command: commandLine}, roots, workspace); err != nil {
 			t.Fatalf("%q only uses the key and must pass the fence: %v", commandLine, err)
 		}
 	}
 
 	// Reading a workspace file, including through an input redirection, stays
 	// allowed: the input-target extractor must not feed the outside-write check.
-	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat < README.md", Cwd: workspace}, roots, workspace); err != nil {
+	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat < README.md"}, roots, workspace); err != nil {
 		t.Fatalf("a workspace read must pass the fence: %v", err)
 	}
 }
@@ -408,25 +408,25 @@ func TestCommandFenceRefusesTheDataDirectorySecrets(t *testing.T) {
 		"cat ~/.ally_agent/mcp.json",
 		"rg -n . ~/.ally_agent/ssh_clusters.json",
 	} {
-		err := checkCommandSafetyAtCwd(CommandRequest{Command: commandLine, Cwd: workspace}, roots, workspace)
+		err := checkCommandSafetyAtCwd(CommandRequest{Command: commandLine}, roots, workspace)
 		if code := toolErrorCode(err); code != "E_PROTECTED_PATH" {
 			t.Fatalf("%q: got code %q (err %v), want E_PROTECTED_PATH", commandLine, code, err)
 		}
 	}
 
-	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat ~/.ally_agent/memories/note.md", Cwd: workspace}, roots, workspace); err != nil {
+	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat ~/.ally_agent/memories/note.md"}, roots, workspace); err != nil {
 		t.Fatalf("the memory files are meant to be read: %v", err)
 	}
 
 	// 档案文件名在 app 里，凭据清单在 pathutil 里：清单一旦误收这个名字，模型读自己
 	// 那份档案就会被围栏拒掉，这里是把两边钉在一起的地方。
 	profile := "\"" + (&App{}).userProfilePath() + "\""
-	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat " + profile, Cwd: workspace}, roots, workspace); err != nil {
+	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat " + profile}, roots, workspace); err != nil {
 		t.Fatalf("the user profile is meant to be read: %v", err)
 	}
 
 	// 文件级判据的已知边界：通配符指到目录本身，没点到清单上的名字。
-	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat ~/.ally_agent/*", Cwd: workspace}, roots, workspace); err != nil {
+	if err := checkCommandSafetyAtCwd(CommandRequest{Command: "cat ~/.ally_agent/*"}, roots, workspace); err != nil {
 		t.Fatalf("a wildcard names no listed file, so the file-level rule lets it through: %v", err)
 	}
 }

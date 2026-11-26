@@ -578,12 +578,6 @@ func (a *App) runCommandWithTimer(parent context.Context, cfg ConfigState, req C
 	}
 	root := roots[0]
 	cwd := root
-	if strings.TrimSpace(req.Cwd) != "" {
-		cwd, err = resolveCommandCwd(roots, req.Cwd)
-		if err != nil {
-			return CommandResult{}, err
-		}
-	}
 	// 围栏是命令安全的唯一入口。
 	if err := checkCommandSafetyAtCwd(req, roots, cwd); err != nil {
 		return CommandResult{}, err
@@ -1456,31 +1450,6 @@ func resolveDeletablePath(roots []string, p string) (string, error) {
 		return "", codedToolError("E_PATH_NOT_FOUND", fmt.Errorf("path does not exist: %s", p))
 	}
 	return abs, nil
-}
-
-func resolveCommandCwd(roots []string, p string) (string, error) {
-	abs, err := resolveBoundaryPath(roots, p)
-	if err != nil {
-		return "", outsideBoundaryError(roots, p, err)
-	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", codedToolError("E_CWD_INVALID", err)
-		}
-		return "", err
-	}
-	if !insideWriteRoot(roots, resolved) {
-		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("cwd resolves outside workspace or ~/.ally_agent: %s\n可写范围：%s", p, formatAllowedRoots(roots)))
-	}
-	info, err := os.Stat(resolved)
-	if err != nil {
-		return "", err
-	}
-	if !info.IsDir() {
-		return "", codedToolError("E_CWD_INVALID", fmt.Errorf("cwd is not a directory: %s", p))
-	}
-	return filepath.Clean(resolved), nil
 }
 
 // formatAllowedRoots 把 roots 列表格式化为换行分隔的字符串，用于错误信息提示。
