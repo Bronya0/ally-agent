@@ -50,6 +50,7 @@ func (a *desktop) editorGroupView(c *ui.Context, root string, group int) {
 	}
 	groupView := ui.Column(c.Key(fmt.Sprintf("editor-group-%s-%d", workspaceKey(root), group))).Fill().MinWidth(0).HandleInput(func(ev ui.InputEvent) bool {
 		if ev.Kind == ui.InputPointerDown && ev.Button == 0 {
+			state.ActiveGroupPinned = false
 			activateEditorGroup(state, group, true)
 		}
 		return false
@@ -94,7 +95,7 @@ func (a *desktop) editorGroupView(c *ui.Context, root string, group int) {
 							}
 							a.closeEditorTab(root, file.Path, group)
 						}, &strip.gesture, a.secondaryInk()).Height(35).MinWidth(80).MaxWidth(220)
-						if strip.reorderFrom == "" && strip.pressID == "" && e.Pressed() {
+						if strip.reorderFrom == "" && strip.pressID == "" && !state.PaneDrag.Active && e.Pressed() {
 							if _, _, over := e.PointerPosition(); over {
 								strip.pressID, strip.pressDX, strip.pressDY = documentID, 0, 0
 							}
@@ -121,7 +122,10 @@ func (a *desktop) editorGroupView(c *ui.Context, root string, group int) {
 							if absY < 0 {
 								absY = -absY
 							}
-							if strip.reorderFrom == "" && absX >= tabReorderDragSlop && absX > absY {
+							if strip.reorderFrom == "" && !state.PaneDrag.Active && absY >= editorDockDragSlop {
+								state.PaneDrag = editorPaneDrag{Active: true, Source: group, FilePath: file.Path}
+								strip.gesture.Panning = true
+							} else if strip.reorderFrom == "" && !state.PaneDrag.Active && absX >= tabReorderDragSlop && absX > absY {
 								strip.reorderFrom = documentID
 								strip.gesture.Panning = true
 							}
@@ -130,6 +134,17 @@ func (a *desktop) editorGroupView(c *ui.Context, root string, group int) {
 							pointerX, _, _ := e.PointerPosition()
 							dragPointerX, dragPointerValid = bounds.X+pointerX, true
 							_, _, released = e.DragEnded()
+						}
+						if state.PaneDrag.Active && state.PaneDrag.Source == group && editorDocumentKey(state.PaneDrag.FilePath) == documentID {
+							pointerX, pointerY, _ := e.PointerPosition()
+							state.PaneDrag.PointerX, state.PaneDrag.PointerY = bounds.X+pointerX, bounds.Y+pointerY
+							if e.PressCanceled() {
+								state.PaneDrag = editorPaneDrag{}
+								strip.gesture.Panning = false
+							} else if _, _, ended := e.DragEnded(); ended {
+								state.PaneDrag.Pending = true
+								released = true
+							}
 						}
 						if strip.reorderFrom == "" && strip.pressID == documentID && !e.Pressed() {
 							strip.pressID = ""
@@ -147,15 +162,14 @@ func (a *desktop) editorGroupView(c *ui.Context, root string, group int) {
 				}
 			}
 			if released {
-				if strip.reorderIndexValid {
+				if !state.PaneDrag.Pending && strip.reorderIndexValid {
 					moveEditorTabToIndex(&pane.Tabs, strip.reorderFrom, strip.reorderIndex)
 				}
 				strip.pressID, strip.pressDX, strip.pressDY = "", 0, 0
 				strip.reorderFrom, strip.reorderIndex, strip.reorderIndexValid = "", 0, false
 				strip.gesture.Panning, strip.gesture.Released = false, false
 			}
-			a.editorLayoutMenu(c, root, group)
-			if len(state.Groups) > 1 {
+			if len(state.Groups) > 1 || len(pane.Tabs) > 0 {
 				iconAction(c, fmt.Sprintf("editor-group-close-%s-%d", workspaceKey(root), group), locales.Text("关闭编辑器组"), "close", 22, func() { a.closeEditorGroup(root, group) })
 			}
 		})
@@ -167,53 +181,24 @@ func (a *desktop) editorGroupView(c *ui.Context, root string, group int) {
 			})
 		}
 	})
-	activateEditorGroup(state, group, groupView.FocusWithin())
-}
-
-func (a *desktop) editorLayoutMenu(c *ui.Context, root string, group int) ui.Element {
-	return uikit.MenuButton(c.Key(fmt.Sprintf("editor-layout-menu-%s-%d", workspaceKey(root), group)), nil, uikit.MenuOptions{Width: 230, MaxHeight: 320}, func(trigger ui.Element) {
-		uikit.ButtonOn(c, trigger, locales.Text("布局"), uikit.ButtonSecondary, false, iconImage("grid"), uikit.ActionOptions{})
-		uikit.Tooltip(c, trigger, locales.Text("编辑器布局"))
-	}, func(menu ui.MenuParts) {
-		for _, option := range []struct {
-			label     string
-			icon      *ui.SVG
-			arrow     string
-			direction editorSplitDirection
-			mode      editorLayoutAction
-		}{
-			{label: locales.Text("单栏显示"), arrow: "□", mode: layoutSingle},
-			{label: locales.Text("会话与编辑器并排"), icon: iconImage("grid"), mode: layoutChatAndEditor},
-			{label: locales.Text("向左拆分"), arrow: "←", direction: splitLeft, mode: layoutSplit},
-			{label: locales.Text("向右拆分"), arrow: "→", direction: splitRight, mode: layoutSplit},
-			{label: locales.Text("向上拆分"), arrow: "↑", direction: splitUp, mode: layoutSplit},
-			{label: locales.Text("向下拆分"), arrow: "↓", direction: splitDown, mode: layoutSplit},
-		} {
-			option := option
-			item := menu.Item()
-			uikit.MenuRow(c, item, option.label, false).FillWidth().Height(34).Padding(0, 10).Gap(gapInline).Justify(ui.Start).AlignItems(ui.Center).Label(option.label)
-			item.Description(option.label)
-			item.Children(func() {
-				if option.icon != nil {
-					ui.Icon(c, option.icon).Size(15, 15).Shrink(0)
-				} else {
-					ui.Text(c, option.arrow).Width(18).FontSize(fsSmall).TextAlign(ui.Center).SingleLine().Unselectable()
-				}
-				ui.Text(c, option.label).Grow(1).FontSize(fsSmall).SingleLine().Unselectable()
-			})
-			uikit.Tooltip(c, item, option.label).OnClick(func() {
-				switch option.mode {
-				case layoutSingle:
-					a.showSinglePane(root)
-				case layoutChatAndEditor:
-					a.showChatAndEditor(root)
-				case layoutSplit:
-					a.focusEditorGroup(root, group)
-					a.splitEditorGroup(root, option.direction)
-				}
-			})
+	bounds := groupView.Bounds()
+	state.PaneBounds[group] = editorGroupBounds{X: bounds.X, Y: bounds.Y, W: bounds.W, H: bounds.H}
+	if state.PaneDrag.Active {
+		groupView.DrawOver(func(p *ui.Painter, r ui.Rect) {
+			if !state.PaneDrag.Merge || state.PaneDrag.TargetGroup != group {
+				return
+			}
+			zone := ui.Rect{X: r.X + r.W*0.25, Y: r.Y + r.H*0.25, W: r.W * 0.5, H: r.H * 0.5}
+			p.Fill(zone, c.Theme().Accent.Mix(c.Theme().Background, 0.7), 8)
+		})
+	}
+	if state.ActiveGroupPinned {
+		if state.ActiveGroup == group && groupView.FocusWithin() {
+			state.ActiveGroupPinned = false
 		}
-	})
+	} else {
+		activateEditorGroup(state, group, groupView.FocusWithin())
+	}
 }
 
 func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile, root string, group int) {
@@ -310,8 +295,14 @@ func (a *desktop) fileTree(c *ui.Context) {
 				OnSubmit(func() { a.searchFiles(a.filesF.Search.Input) })
 			uikit.Tooltip(c, search, locales.Text("输入文件名后回车搜索，清空后回车还原"))
 			uikit.IconButton(c, "explorer-refresh", locales.Text("刷新"), iconImage("refresh"), 22, uikit.IconQuiet, func() { a.searchFiles(a.filesF.Search.Input) }, ink)
-			if t := a.current(); t != nil {
-				if state := a.editorStates[workspaceKey(t.Workspace)]; state != nil && state.ChatOnly && a.hasEditorFiles(t.Workspace) {
+			if t := a.current(); t != nil && a.hasEditorFiles(t.Workspace) {
+				state := a.editorState(t.Workspace)
+				label := locales.Text("会话与编辑器并排")
+				if state.ChatVisible {
+					label = locales.Text("单栏显示")
+				}
+				uikit.IconButton(c, "editor-layout-toggle-"+workspaceKey(t.Workspace), label, iconImage("grid"), 22, uikit.IconQuiet, func() { a.toggleChatEditorLayout(t.Workspace) }, ink)
+				if state.ChatOnly {
 					uikit.IconButton(c, "editor-return", locales.Text("返回编辑器"), iconImage("code"), 22, uikit.IconQuiet, func() { a.showEditorOnly(t.Workspace) }, ink)
 				}
 			}

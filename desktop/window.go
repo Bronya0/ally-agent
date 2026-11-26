@@ -134,13 +134,82 @@ func (a *desktop) editorLayoutView(c *ui.Context, root string, node *editorLayou
 	if node == nil {
 		return
 	}
+	state := a.editorStates[workspaceKey(root)]
+	if state == nil {
+		a.editorLayoutNodeView(c, root, node)
+		return
+	}
+	if state.PaneBounds == nil {
+		state.PaneBounds = make(map[int]editorGroupBounds, len(state.Groups))
+	}
+	for group := range state.PaneBounds {
+		delete(state.PaneBounds, group)
+	}
+	layoutView := ui.Column(c.Key("editor-layout-root-" + workspaceKey(root))).Fill().MinWidth(0)
+	layoutView.Children(func() { a.editorLayoutNodeView(c, root, node) })
+	if state.PaneDrag.Active {
+		state.PaneDrag.Drop = false
+		state.PaneDrag.Merge = false
+		state.PaneDrag.TargetGroup = -1
+		bounds := layoutView.Bounds()
+		localX, localY := state.PaneDrag.PointerX-bounds.X, state.PaneDrag.PointerY-bounds.Y
+		for group, pane := range state.PaneBounds {
+			if group == state.PaneDrag.Source || state.PaneDrag.PointerX < pane.X || state.PaneDrag.PointerX >= pane.X+pane.W || state.PaneDrag.PointerY < pane.Y || state.PaneDrag.PointerY >= pane.Y+pane.H {
+				continue
+			}
+			if _, edge := editorDockDirection(state.PaneDrag.PointerX-pane.X, state.PaneDrag.PointerY-pane.Y, pane.W, pane.H); !edge {
+				state.PaneDrag.Merge = true
+				state.PaneDrag.TargetGroup = group
+			}
+			break
+		}
+		if !state.PaneDrag.Merge {
+			if direction, ok := editorDockDirection(localX, localY, bounds.W, bounds.H); ok {
+				state.PaneDrag.Direction = direction
+				state.PaneDrag.Drop = true
+			}
+		}
+		if state.PaneDrag.Drop {
+			layoutView.DrawOver(func(p *ui.Painter, r ui.Rect) {
+				zone := r
+				switch state.PaneDrag.Direction {
+				case splitLeft:
+					zone.W *= 0.25
+				case splitRight:
+					zone.X += zone.W * 0.75
+					zone.W *= 0.25
+				case splitUp:
+					zone.H *= 0.25
+				case splitDown:
+					zone.Y += zone.H * 0.75
+					zone.H *= 0.25
+				}
+				p.Fill(zone, c.Theme().Accent.Mix(c.Theme().Background, 0.78), 4)
+			})
+		}
+	}
+	if state.PaneDrag.Pending {
+		drag := state.PaneDrag
+		state.PaneDrag = editorPaneDrag{}
+		if drag.Active && drag.Drop {
+			a.dockEditorTabToEdge(root, drag.Source, drag.FilePath, drag.Direction)
+		} else if drag.Active && drag.Merge {
+			a.mergeEditorTabIntoGroup(root, drag.Source, drag.TargetGroup, drag.FilePath)
+		}
+	}
+}
+
+func (a *desktop) editorLayoutNodeView(c *ui.Context, root string, node *editorLayoutNode) {
+	if node == nil {
+		return
+	}
 	if node.leaf() {
 		a.editorGroupView(c, root, node.Group)
 		return
 	}
 	key := fmt.Sprintf("editor-layout-%s-%d", workspaceKey(root), node.ID)
-	first := func() { a.editorLayoutView(c, root, node.First) }
-	second := func() { a.editorLayoutView(c, root, node.Second) }
+	first := func() { a.editorLayoutNodeView(c, root, node.First) }
+	second := func() { a.editorLayoutNodeView(c, root, node.Second) }
 	if node.Direction == splitDown || node.Direction == splitUp {
 		ui.SplitVertical(c.Key(key), &node.SplitSize, first, second).Fill().OnChange(func() {
 			node.SplitSize = max(180, min(1200, node.SplitSize))

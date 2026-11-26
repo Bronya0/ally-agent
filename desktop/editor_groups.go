@@ -22,14 +22,6 @@ type editorGroupState struct {
 
 type editorSplitDirection uint8
 
-type editorLayoutAction uint8
-
-const (
-	layoutSingle editorLayoutAction = iota
-	layoutChatAndEditor
-	layoutSplit
-)
-
 const (
 	splitLeft editorSplitDirection = iota
 	splitRight
@@ -48,16 +40,36 @@ type editorLayoutNode struct {
 
 func (n *editorLayoutNode) leaf() bool { return n != nil && n.First == nil && n.Second == nil }
 
+const editorDockDragSlop float32 = 10
+
+type editorPaneDrag struct {
+	Active, Pending bool
+	Source          int
+	FilePath        string
+	PointerX        float32
+	PointerY        float32
+	Drop, Merge     bool
+	TargetGroup     int
+	Direction       editorSplitDirection
+}
+
+type editorGroupBounds struct {
+	X, Y, W, H float32
+}
+
 type workspaceEditorState struct {
-	Groups       map[int]*editorGroupState
-	Layout       *editorLayoutNode
-	NextGroup    int
-	NextLayoutID uint64
-	ActiveGroup  int
-	Split        bool
-	ChatVisible  bool
-	ChatOnly     bool
-	ChatWidth    float32
+	Groups            map[int]*editorGroupState
+	Layout            *editorLayoutNode
+	NextGroup         int
+	NextLayoutID      uint64
+	ActiveGroup       int
+	ActiveGroupPinned bool
+	Split             bool
+	ChatVisible       bool
+	ChatOnly          bool
+	ChatWidth         float32
+	PaneDrag          editorPaneDrag
+	PaneBounds        map[int]editorGroupBounds
 }
 
 func editorFileLoadKey(root, path string) string {
@@ -375,6 +387,7 @@ func (a *desktop) selectEditorDocument(root, path string, group int, add bool) {
 		return
 	}
 	state.ActiveGroup = group
+	state.ActiveGroupPinned = false
 	state.ChatOnly = false
 	if path == "" {
 		state.Groups[group].Active = ""
@@ -455,8 +468,9 @@ func firstEditorLayoutGroup(node *editorLayoutNode) int {
 	return firstEditorLayoutGroup(node.Second)
 }
 
-func (a *desktop) showSinglePane(root string) {
-	a.editorState(root).ChatVisible = false
+func (a *desktop) toggleChatEditorLayout(root string) {
+	state := a.editorState(root)
+	state.ChatVisible = !state.ChatVisible
 }
 
 func (a *desktop) showEditorOnly(root string) {
@@ -465,32 +479,63 @@ func (a *desktop) showEditorOnly(root string) {
 	state.ChatVisible = false
 }
 
-func (a *desktop) showChatAndEditor(root string) {
-	a.editorState(root).ChatVisible = true
+func nextEditorLayoutID(state *workspaceEditorState) uint64 {
+	id := state.NextLayoutID
+	if id == 0 {
+		id = 1
+	}
+	state.NextLayoutID = id + 1
+	return id
+}
+
+func newEditorSplitNode(state *workspaceEditorState, direction editorSplitDirection, target, added int) *editorLayoutNode {
+	node := &editorLayoutNode{ID: nextEditorLayoutID(state), Direction: direction, SplitSize: 480}
+	targetLeaf, addedLeaf := &editorLayoutNode{Group: target}, &editorLayoutNode{Group: added}
+	if direction == splitLeft || direction == splitUp {
+		node.First, node.Second = addedLeaf, targetLeaf
+	} else {
+		node.First, node.Second = targetLeaf, addedLeaf
+	}
+	return node
+}
+
+func editorDockDirection(x, y, width, height float32) (editorSplitDirection, bool) {
+	if width <= 0 || height <= 0 {
+		return 0, false
+	}
+	edges := []struct {
+		distance  float32
+		direction editorSplitDirection
+	}{
+		{x / width, splitLeft},
+		{(width - x) / width, splitRight},
+		{y / height, splitUp},
+		{(height - y) / height, splitDown},
+	}
+	nearest := edges[0]
+	for _, edge := range edges[1:] {
+		if edge.distance < nearest.distance {
+			nearest = edge
+		}
+	}
+	return nearest.direction, nearest.distance <= 0.25
+}
+
+func addEditorGroup(state *workspaceEditorState) int {
+	group := state.NextGroup
+	for state.Groups[group] != nil {
+		group++
+	}
+	state.NextGroup = group + 1
+	state.Groups[group] = &editorGroupState{}
+	return group
 }
 
 func (a *desktop) splitEditorGroup(root string, direction editorSplitDirection) {
 	state := a.editorState(root)
 	active := a.editorGroupIndex(root)
-	newGroup := state.NextGroup
-	for state.Groups[newGroup] != nil {
-		newGroup++
-	}
-	state.NextGroup = newGroup + 1
-	layoutID := state.NextLayoutID
-	if layoutID == 0 {
-		layoutID = 1
-	}
-	state.NextLayoutID = layoutID + 1
-	state.Groups[newGroup] = &editorGroupState{}
-	activeLeaf := &editorLayoutNode{Group: active}
-	newLeaf := &editorLayoutNode{Group: newGroup}
-	node := &editorLayoutNode{ID: layoutID, Direction: direction, SplitSize: 480}
-	if direction == splitLeft || direction == splitUp {
-		node.First, node.Second = newLeaf, activeLeaf
-	} else {
-		node.First, node.Second = activeLeaf, newLeaf
-	}
+	newGroup := addEditorGroup(state)
+	node := newEditorSplitNode(state, direction, active, newGroup)
 	if !replaceEditorLayoutLeaf(&state.Layout, active, node) {
 		delete(state.Groups, newGroup)
 		return
@@ -499,47 +544,261 @@ func (a *desktop) splitEditorGroup(root string, direction editorSplitDirection) 
 	state.ActiveGroup = newGroup
 }
 
-func (a *desktop) closeEditorGroup(root string, group int) {
+func (a *desktop) dockEditorTabToEdge(root string, source int, path string, direction editorSplitDirection) {
 	state := a.editorState(root)
-	if state.Groups[group] == nil || len(state.Groups) <= 1 {
+	pane := state.Groups[source]
+	file := a.editorDocument(root, path)
+	if pane == nil || file == nil || !editorLayoutHasGroup(state.Layout, source) {
 		return
 	}
+	found := false
+	for _, tab := range pane.Tabs {
+		if editorDocumentKey(tab) == editorDocumentKey(path) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return
+	}
+	if len(pane.Tabs) == 1 {
+		a.dockEditorGroupToEdge(root, source, direction)
+		return
+	}
+	filtered := pane.Tabs[:0]
+	for _, tab := range pane.Tabs {
+		if editorDocumentKey(tab) != editorDocumentKey(path) {
+			filtered = append(filtered, tab)
+		}
+	}
+	pane.Tabs = filtered
+	if editorDocumentKey(pane.Active) == editorDocumentKey(path) {
+		pane.Active = pane.Tabs[0]
+	}
+	newGroup := addEditorGroup(state)
+	state.Groups[newGroup] = &editorGroupState{Tabs: []string{file.Path}, Active: file.Path}
+	node := &editorLayoutNode{ID: nextEditorLayoutID(state), Direction: direction, SplitSize: 480}
+	fileLeaf := &editorLayoutNode{Group: newGroup}
+	if direction == splitLeft || direction == splitUp {
+		node.First, node.Second = fileLeaf, state.Layout
+	} else {
+		node.First, node.Second = state.Layout, fileLeaf
+	}
+	state.Layout = node
+	state.ActiveGroup = newGroup
+	state.ChatOnly = false
+	state.Split = true
+	a.selectEditorDocument(root, file.Path, newGroup, false)
+	state.ActiveGroupPinned = true
+}
+
+func (a *desktop) mergeEditorTabIntoGroup(root string, source, target int, path string) {
+	state := a.editorState(root)
+	sourcePane, targetPane := state.Groups[source], state.Groups[target]
+	file := a.editorDocument(root, path)
+	if source == target || sourcePane == nil || targetPane == nil || file == nil ||
+		!editorLayoutHasGroup(state.Layout, source) || !editorLayoutHasGroup(state.Layout, target) {
+		return
+	}
+	found, alreadyOpen := false, false
+	for _, tab := range sourcePane.Tabs {
+		found = found || editorDocumentKey(tab) == editorDocumentKey(path)
+	}
+	for _, tab := range targetPane.Tabs {
+		alreadyOpen = alreadyOpen || editorDocumentKey(tab) == editorDocumentKey(path)
+	}
+	if !found {
+		return
+	}
+	if !alreadyOpen {
+		targetPane.Tabs = append(targetPane.Tabs, file.Path)
+	}
+	filtered := sourcePane.Tabs[:0]
+	for _, tab := range sourcePane.Tabs {
+		if editorDocumentKey(tab) != editorDocumentKey(path) {
+			filtered = append(filtered, tab)
+		}
+	}
+	sourcePane.Tabs = filtered
+	if editorDocumentKey(sourcePane.Active) == editorDocumentKey(path) {
+		sourcePane.Active = ""
+		if len(sourcePane.Tabs) > 0 {
+			sourcePane.Active = sourcePane.Tabs[0]
+		}
+	}
+	targetPane.Active = file.Path
+	if len(sourcePane.Tabs) == 0 {
+		if removeEditorLayoutLeaf(&state.Layout, source) {
+			delete(state.Groups, source)
+		}
+	}
+	state.ActiveGroup = target
+	state.ChatOnly = false
+	state.Split = len(state.Groups) > 1
+	a.selectEditorDocument(root, file.Path, target, false)
+	state.ActiveGroupPinned = true
+}
+
+func (a *desktop) dockEditorGroupToEdge(root string, source int, direction editorSplitDirection) {
+	state := a.editorState(root)
+	if state.Groups[source] == nil || !editorLayoutHasGroup(state.Layout, source) {
+		return
+	}
+	groups := layoutGroupIDs(state.Layout)
+	if len(groups) == 1 {
+		newGroup := addEditorGroup(state)
+		node := newEditorSplitNode(state, direction, newGroup, source)
+		if !replaceEditorLayoutLeaf(&state.Layout, source, node) {
+			delete(state.Groups, newGroup)
+			return
+		}
+	} else {
+		if !removeEditorLayoutLeaf(&state.Layout, source) || state.Layout == nil {
+			return
+		}
+		node := &editorLayoutNode{ID: nextEditorLayoutID(state), Direction: direction, SplitSize: 480}
+		sourceLeaf := &editorLayoutNode{Group: source}
+		if direction == splitLeft || direction == splitUp {
+			node.First, node.Second = sourceLeaf, state.Layout
+		} else {
+			node.First, node.Second = state.Layout, sourceLeaf
+		}
+		state.Layout = node
+	}
+	state.ActiveGroup = source
+	state.ChatOnly = false
+	state.Split = len(state.Groups) > 1
+	a.selectEditorDocument(root, state.Groups[source].Active, source, false)
+	state.ActiveGroupPinned = true
+}
+
+func (a *desktop) closeEditorGroup(root string, group int) {
+	state := a.editorState(root)
 	closed := state.Groups[group]
+	if closed == nil || !editorLayoutHasGroup(state.Layout, group) {
+		return
+	}
+	paths := append([]string(nil), closed.Tabs...)
+	dirty := make([]*workspaceFile, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		key := editorDocumentKey(path)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if a.documentInOtherGroup(root, path, group) {
+			continue
+		}
+		file := a.editorDocument(root, path)
+		if file == nil {
+			continue
+		}
+		if file.Saving {
+			a.notify(locales.Text("文件正在保存，请稍后关闭"))
+			return
+		}
+		if file.Editor != nil && file.Editor.Buffer != nil && file.Editor.Buffer.Modified() {
+			dirty = append(dirty, file)
+		}
+	}
+	var confirmNext func(int)
+	confirmNext = func(index int) {
+		if state.Groups[group] != closed || !editorLayoutHasGroup(state.Layout, group) || !sameEditorGroupTabs(closed, paths) {
+			return
+		}
+		for index < len(dirty) {
+			file := dirty[index]
+			if !a.workspaceFileCurrent(root, file) {
+				return
+			}
+			if file.Saving {
+				a.notify(locales.Text("文件正在保存，请稍后关闭"))
+				return
+			}
+			if file.Editor != nil && file.Editor.Buffer != nil && file.Editor.Buffer.Modified() {
+				a.confirmDiscardFile(root, file, func() { confirmNext(index + 1) })
+				return
+			}
+			index++
+		}
+		a.closeEditorGroupNow(root, group, closed, paths)
+	}
+	confirmNext(0)
+}
+
+func sameEditorGroupTabs(group *editorGroupState, paths []string) bool {
+	if group == nil || len(group.Tabs) != len(paths) {
+		return false
+	}
+	for i, path := range paths {
+		if editorDocumentKey(group.Tabs[i]) != editorDocumentKey(path) {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *desktop) closeEditorGroupNow(root string, group int, closed *editorGroupState, paths []string) {
+	state := a.editorStates[workspaceKey(root)]
+	if state == nil || state.Groups[group] != closed ||
+		!editorLayoutHasGroup(state.Layout, group) || !sameEditorGroupTabs(closed, paths) {
+		return
+	}
+	for _, path := range paths {
+		if a.documentInOtherGroup(root, path, group) {
+			continue
+		}
+		if file := a.editorDocument(root, path); file != nil && file.Saving {
+			a.notify(locales.Text("文件正在保存，请稍后关闭"))
+			return
+		}
+	}
+	if len(state.Groups) == 1 {
+		delete(state.Groups, group)
+		state.Split = false
+		newGroup := addEditorGroup(state)
+		state.Layout = &editorLayoutNode{Group: newGroup}
+		state.ActiveGroup = newGroup
+		state.ActiveGroupPinned = false
+		state.PaneDrag = editorPaneDrag{}
+		state.ChatVisible = false
+		for _, path := range paths {
+			if file := a.editorDocument(root, path); file != nil {
+				a.releaseWorkspaceDocument(root, file)
+			}
+		}
+		a.selectEditorDocument(root, "", newGroup, false)
+		state.ChatOnly = true
+		return
+	}
 	wasActive := state.ActiveGroup == group
 	if !removeEditorLayoutLeaf(&state.Layout, group) {
 		return
 	}
-	fallback := firstEditorLayoutGroup(state.Layout)
-	target := state.Groups[fallback]
-	for _, path := range closed.Tabs {
-		found := false
-		for _, existing := range target.Tabs {
-			if editorDocumentKey(existing) == editorDocumentKey(path) {
-				found = true
+	delete(state.Groups, group)
+	for _, path := range paths {
+		if !a.documentInOtherGroup(root, path, group) {
+			if file := a.editorDocument(root, path); file != nil {
+				a.releaseWorkspaceDocument(root, file)
+			}
+		}
+	}
+	state.Split = len(state.Groups) > 1
+	activeGroup := state.ActiveGroup
+	if wasActive || state.Groups[activeGroup] == nil || !editorLayoutHasGroup(state.Layout, activeGroup) {
+		activeGroup = firstEditorLayoutGroup(state.Layout)
+	}
+	if state.Groups[activeGroup].Active == "" {
+		for _, candidate := range layoutGroupIDs(state.Layout) {
+			if state.Groups[candidate].Active != "" {
+				activeGroup = candidate
 				break
 			}
 		}
-		if !found {
-			target.Tabs = append(target.Tabs, path)
-		}
 	}
-	if wasActive {
-		if closed.Active != "" {
-			target.Active = closed.Active
-		} else if target.Active == "" && len(target.Tabs) > 0 {
-			target.Active = target.Tabs[0]
-		}
-	}
-	delete(state.Groups, group)
-	state.Split = len(state.Groups) > 1
-	if state.ActiveGroup == group {
-		state.ActiveGroup = fallback
-	}
-	activeGroup := state.ActiveGroup
-	if state.Groups[activeGroup] == nil || !editorLayoutHasGroup(state.Layout, activeGroup) {
-		activeGroup = fallback
-		state.ActiveGroup = fallback
-	}
+	state.ActiveGroup = activeGroup
+	state.ActiveGroupPinned = false
 	a.selectEditorDocument(root, state.Groups[activeGroup].Active, activeGroup, false)
 }
 
@@ -577,6 +836,10 @@ func (a *desktop) closeEditorTab(root, path string, group int) {
 		}
 		if !stillOpen {
 			a.releaseWorkspaceDocument(root, file)
+		}
+		if len(g.Tabs) == 0 {
+			a.closeEditorGroup(root, group)
+			return
 		}
 		if state.ActiveGroup == group && g.Active == "" {
 			for _, candidate := range layoutGroupIDs(state.Layout) {
