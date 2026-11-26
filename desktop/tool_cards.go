@@ -953,6 +953,11 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		}
 	}
 	result := toolResult(m)
+	if name == "delete" || name == "remote_delete_path" {
+		if counted := deleteBatchSummary(result); counted != "" {
+			summary = counted
+		}
+	}
 	if name == "ask" && !isMCP {
 		questions := list(args, "questions")
 		if len(questions) == 0 {
@@ -1040,7 +1045,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					})
 				} else {
 					text := summary
-					if name != "ask" && ((name != "delete" && name != "remote_delete_path") || len(list(args, "paths")) == 0) {
+					if name != "ask" && summaryTakesParens(name) {
 						text = "(" + text + ")"
 					}
 					color := a.secondaryInk()
@@ -1472,6 +1477,51 @@ func parseToolArgs(raw string) map[string]any {
 	return out
 }
 
+// summaryTakesParens keeps one rule for cards whose summary counts things: the
+// count stands on its own, the paths and files it covers are listed inside.
+func summaryTakesParens(name string) bool {
+	switch name {
+	case "delete", "remote_delete_path", "remote_transfer":
+		return false
+	}
+	return true
+}
+
+// deleteBatchSummary counts what the batch actually removed. Files and
+// directories read differently, so the header says which of each was hit; a
+// batch that removed nothing keeps the request's path count instead.
+func deleteBatchSummary(result map[string]any) string {
+	files, dirs := 0, 0
+	for _, item := range list(result, "paths") {
+		row, ok := item.(map[string]any)
+		if !ok || !boolOf(row, "ok") || boolOf(row, "absent") {
+			continue
+		}
+		// The tool reports "directory" for folders; symlinks and plain files
+		// count as files.
+		if strings.HasPrefix(strings.ToLower(str(row, "kind")), "dir") {
+			dirs++
+		} else {
+			files++
+		}
+	}
+	var parts []string
+	if files > 0 {
+		parts = append(parts, countLabel(files, "file"))
+	}
+	if dirs > 0 {
+		parts = append(parts, countLabel(dirs, "dir"))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func countLabel(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
+}
+
 func toolArgSummary(name string, args map[string]any) string {
 	pick := func(keys ...string) string {
 		for _, k := range keys {
@@ -1491,7 +1541,7 @@ func toolArgSummary(name string, args map[string]any) string {
 	switch name {
 	case "command", "remote_run_command":
 		return pick("command", "cmd")
-	case "edit", "create", "read", "delete", "remote_read", "remote_edit", "remote_create_file", "remote_delete_path":
+	case "edit", "create", "read", "remote_read", "remote_edit", "remote_create_file":
 		if p := pick("path", "file_path", "file"); p != "" {
 			return p
 		}
@@ -1507,6 +1557,20 @@ func toolArgSummary(name string, args map[string]any) string {
 		}
 		if paths, ok := args["paths"].([]any); ok && len(paths) > 0 {
 			return fmt.Sprintf("%d paths", len(paths))
+		}
+	case "delete", "remote_delete_path":
+		// 外层只说删几个，具体路径在展开后的正文里，和 SSH 传输一个口径。
+		count := len(list(args, "paths"))
+		if count == 0 && pick("path", "file_path", "file") != "" {
+			count = 1
+		}
+		switch count {
+		case 0:
+			return ""
+		case 1:
+			return "1 path"
+		default:
+			return fmt.Sprintf("%d paths", count)
 		}
 	case "grep":
 		return pick("pattern")
@@ -1820,27 +1884,6 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 			})
 			flat(c, locales.Text("在浏览器打开")).OnClick(func() { a.openHTMLPreview(t.Workspace, html) })
 		})
-	case "delete", "remote_delete_path":
-		for _, item := range list(result, "results") {
-			row, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			path := str(row, "path")
-			okFlag := boolOf(row, "ok")
-			absent := boolOf(row, "absent")
-			ui.Row(c).Gap(gapField).Children(func() {
-				ui.Text(c, "├─").Font(monoFamily).FontSize(fsSmall).TextColor(a.secondaryInk())
-				ui.Text(c, path).Font(monoFamily).FontSize(fsSmall)
-				if absent {
-					neutralChip(c, locales.Text("本就不存在"))
-				} else if okFlag {
-					chip(c, locales.Text("已删除"), c.Theme().Success, ui.RGBA(78, 200, 126, 0.12))
-				} else {
-					uikit.ErrorText(c, str(row, "error")).Grow(1)
-				}
-			})
-		}
 	case "ask":
 		if qs := list(result, "questions"); len(qs) > 0 {
 			for _, q := range qs {

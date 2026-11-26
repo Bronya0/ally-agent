@@ -86,6 +86,7 @@ func toolDeleteTree(c *ui.Context, args, result map[string]any, ink ...ui.Color)
 			rows = []any{path}
 		}
 	}
+	var failures []string
 	for n, raw := range rows {
 		path := ""
 		suffix := " · ok"
@@ -99,11 +100,15 @@ func toolDeleteTree(c *ui.Context, args, result map[string]any, ink ...ui.Color)
 				path = str(row, "deleted")
 			}
 			if boolOf(row, "absent") {
-				suffix = " · ok (absent)"
+				suffix = " · absent"
 			}
 			if v, ok := row["ok"]; ok && v == false {
-				suffix = " · failed: " + str(row, "errorCode") + " " + str(row, "error")
+				suffix = " · failed"
 				color = c.Theme().Danger
+				// The row stays short; what went wrong is worth its own line.
+				if message := str(row, "error"); message != "" {
+					failures = append(failures, path+" · "+message)
+				}
 			}
 		case string:
 			path = row
@@ -113,8 +118,8 @@ func toolDeleteTree(c *ui.Context, args, result map[string]any, ink ...ui.Color)
 		}
 		toolPathTreeRow(c, n, len(rows), path+suffix, color)
 	}
-	if count := int(num(result, "failedCount")); count > 0 {
-		notice(c, "error", fmt.Sprintf(locales.Text("%d 个路径删除失败"), count), ink...)
+	for _, message := range failures {
+		notice(c, "error", message, ink...)
 	}
 }
 
