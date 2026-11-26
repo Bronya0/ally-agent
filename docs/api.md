@@ -375,7 +375,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 ### `POST /api/v1/services/{id}/stop` — 停止后台服务
 
-请求体可省略。立即强制停止该服务所属的整个进程树，并等待退出确认；失败返回错误，不会假报已停止。请求体不接受参数，旧 `graceSeconds` 已移除。不存在返回 404。
+请求体可省略。立即强制终止服务所属的进程，不等待优雅退出。Windows 的 Job 句柄仍打开时会等待退出确认；Unix 发送 `SIGKILL` 后不额外等待。停止失败会返回错误。请求体不接受参数，旧 `graceSeconds` 已移除。不存在返回 404。
 
 ### `POST /api/v1/tasks` — 创建计划任务
 

@@ -258,14 +258,14 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("service", "Manage background processes owned by the current workspace. Sessions and sub-agents in the same workspace share services; operations cannot access other workspaces. The active service limit is global, and model calls require a workspace. stop immediately force-kills the owned process tree with no graceful shutdown. restart stops the service and starts the same command again, returning a new service ID; the old record remains available for logs.", map[string]any{
+		functionTool("service", "Manage background processes owned by the current workspace. Sessions and sub-agents in the same workspace share services; operations cannot access other workspaces. The active service limit is global, and model calls require a workspace. stop force-kills the owned process tree without a grace period. On a stop error, check the service status and retry if it is still listed as running. restart stops the service and starts the same command again, returning a new service ID; the old record remains available for logs.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"includeFinished": map[string]any{"type": "boolean", "description": "For action=list: include finished services (default false)."},
 				"action":          map[string]any{"type": "string", "enum": []string{"start", "stop", "restart", "list", "read"}, "description": "start launches a process; stop force-kills it; restart stops it and starts the same command again, returning a new service ID; list shows active services and reports workspace/global limits; read returns output, including for finished services. Only flushed output is visible, so empty output does not prove a hang; use python -u or flush=True for immediate Python logs. Stop may discard unflushed output."},
 				"name":            map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
 				"description":     map[string]any{"type": "string", "minLength": 1, "maxLength": MaxServiceDescriptionChars, "pattern": ".*\\S.*", "description": "Required with action=start: explain what the service does and why it is needed. Shown to the user in service cards and the task center."},
-				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
+				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command, started from the workspace root. Required with action=start."},
 				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start or action=restart. Required with action=stop, action=restart, and action=read."},
 				"tailBytes": map[string]any{
 					"type": "integer", "minimum": 0, "maximum": MaxServiceReadTailBytes,
@@ -373,13 +373,13 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"alias", "path", "changes"},
 		}),
-		functionTool("remote_create_file", "Create a UTF-8 file and missing parents by absolute path on a remote SSH server. Directories are refused.", map[string]any{
+		functionTool("remote_create_file", "Create a UTF-8 file and missing parents by absolute path on a remote SSH server. Directories are refused. With overwrite=true an existing file is replaced whole: everything not present in content is lost, nothing is backed up. Prefer remote_edit for changes to an existing file.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"alias":     sshAliasSchema(),
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute remote path of the file to create, e.g. /srv/app/config.json."},
 				"content":   map[string]any{"type": "string", "description": "Full UTF-8 text of the new file (may be empty), written as-is."},
-				"overwrite": map[string]any{"type": "boolean", "description": "Set true to replace an existing file. No additional confirmation is shown."},
+				"overwrite": map[string]any{"type": "boolean", "description": "Set true to replace an existing file. false fails with \"file already exists\". No confirmation is shown before a replacement."},
 			},
 			"required": []string{"alias", "path", "content", "overwrite"},
 		}),
@@ -525,7 +525,7 @@ func chatToolsUncached() []openai.Tool {
 var builtinToolExamples = map[string]string{
 	"edit":               `{"path":"app.go","changes":[{"oldText":"if err != nil {\n\treturn nil\n}","newText":"if err != nil {\n\treturn err\n}"}]}`,
 	"command":            `{"command":"go test ./...","timeout":120}`,
-	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm run dev","cwd":"frontend"}; restart: {"action":"restart","id":"svc_..."}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
+	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm --prefix frontend run dev"}; restart: {"action":"restart","id":"svc_..."}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
 	"ask":                `{"questions":[{"question":"Which database should we use?","options":[{"label":"SQLite","description":"Simple local storage.","recommended":true},{"label":"PostgreSQL","description":"Production database."}]}]}`,
 	"remote_read":        `{"alias":"my-dev","files":[{"path":"/srv/app/main.go"}]}`,
 	"remote_edit":        `{"alias":"my-dev","path":"/srv/app/main.go","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
