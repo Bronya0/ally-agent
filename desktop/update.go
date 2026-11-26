@@ -160,6 +160,9 @@ func (a *desktop) applyUpdate() {
 					}
 					a.upd.Applied = true
 					// Stopping runs can enqueue final messages and session writes.
+					// They are the last events the UI consumes: from here the
+					// stream closes and the barrier owns what was queued.
+					a.acceptQuit()
 					a.flushWindowWrites(func(err error) {
 						if err != nil {
 							a.updateFailed(err.Error())

@@ -6,6 +6,7 @@ import (
 	"ally-dev/locales"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -67,7 +68,7 @@ func releaseStaleStream(t *conversation) {
 }
 
 func (a *desktop) applyEvent(name string, p map[string]any) {
-	if a.closing && name != "service:update" {
+	if a.quitAccepted && name != "service:update" {
 		return
 	}
 	a.notifyRunCompletion(name, p)
@@ -90,7 +91,7 @@ func (a *desktop) applyEvent(name string, p map[string]any) {
 	case "ssh:clusters-changed":
 		a.refreshSSH()
 	case "git:changed":
-		if t := a.current(); t != nil && strings.EqualFold(str(p, "workspace"), t.Workspace) {
+		if t := a.current(); t != nil && sameWorkspace(str(p, "workspace"), t.Workspace) {
 			a.refreshGit(t)
 		}
 	case "scheduled:update", "scheduled:run_start", "scheduled:run_done", "scheduled:run_error":
@@ -531,11 +532,23 @@ func (a *desktop) applyTokenUsage(p map[string]any) {
 	}
 }
 
+// workspaceCaseFold mirrors the filesystem's case semantics: Windows paths are
+// case-insensitive, while case-sensitive volumes host distinct projects under
+// differing spellings. Tests flip it to exercise both worlds on any host.
+var workspaceCaseFold = os.PathSeparator == '\\'
+
+// sameWorkspace reports whether two roots address one directory. Folding case
+// on a case-sensitive volume is what let a history deletion wipe another
+// project's sessions.
 func sameWorkspace(a, b string) bool {
 	if a == "" || b == "" {
 		return a == b
 	}
-	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if workspaceCaseFold {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 func (a *desktop) applyServiceUpdate(p map[string]any) {

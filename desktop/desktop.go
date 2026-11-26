@@ -220,7 +220,7 @@ type desktop struct {
 	core                                                *backend.App
 	win                                                 *mygo.Window
 	tray                                                *uikit.TrayHost
-	ready, closing, quitReady                           bool
+	ready, closing, quitAccepted, quitReady             bool
 	mainWindowHidden                                    bool
 	page, filter                                        string
 	config                                              backend.ConfigState
@@ -431,9 +431,11 @@ func Run() {
 			if e.SessionEnding {
 				// Logout, restart and shutdown end the process as soon as this
 				// listener returns, so the barrier cannot wait in a worker: write
-				// the drafts, settings and preferences here. closing also keeps
-				// the window handlers from starting a quit the session cannot run.
+				// the drafts, settings and preferences here. closing and the
+				// accepted-quit gate also keep the window handlers from starting
+				// work the session cannot run.
 				a.closing = true
+				a.acceptQuit()
 				if err := a.flushWindowWritesNow(sessionEndWriteTimeout); err != nil {
 					log.Printf("session end flush: %v", err)
 				}
@@ -549,15 +551,30 @@ func (a *desktop) shutdown() {
 	a.closeVoiceInput()
 	if a.upd.Applied && a.upd.State == "restarting" {
 		// The updater already flushed after ApplyUpdate stopped all runs.
+		a.acceptQuit()
 		a.finishQuit()
 		return
 	}
-	a.prepareWindowClose(a.finishShutdown, func() {
+	a.prepareWindowClose(a.beginShutdown, func() {
 		a.closing = false
+		a.quitAccepted = false
 		if voiceInputSupported() && a.prefs.VoiceInputEnabled {
 			a.configureVoiceInput()
 		}
 	})
+}
+
+// beginShutdown is the point of no return once the close confirmation passed:
+// run events stop being consumed and the final save barrier runs.
+func (a *desktop) beginShutdown() {
+	a.acceptQuit()
+	a.finishShutdown()
+}
+
+// acceptQuit closes the event stream: everything queued before this point is
+// what the final save barrier owns, and later run events are dropped.
+func (a *desktop) acceptQuit() {
+	a.quitAccepted = true
 }
 
 // Both normal quit and updating check editor changes before replacing files.
@@ -593,6 +610,7 @@ func (a *desktop) finishShutdown() {
 	a.flushWindowWrites(func(err error) {
 		if err != nil {
 			a.closing = false
+			a.quitAccepted = false
 			a.notifyError(locales.Text("保存失败，窗口保持打开：") + err.Error())
 			return
 		}
@@ -601,25 +619,60 @@ func (a *desktop) finishShutdown() {
 }
 
 func (a *desktop) finishQuit() {
+	go func() {
+		outcome := a.core.ShutdownNative()
+		a.win.Update(func() { a.applyShutdownOutcome(outcome) })
+	}()
+}
+
+// applyShutdownOutcome applies the backend shutdown result on the UI thread.
+// A failure keeps the window alive for retry: the backend retained its data
+// lock and skipped cleanup on purpose, so destroying the UI would strand the
+// user with neither a window nor a working backend.
+func (a *desktop) applyShutdownOutcome(err error) {
+	if err != nil {
+		a.closing = false
+		a.quitAccepted = false
+		a.settleAbandonedRuns()
+		a.notifyError(locales.Text("退出失败，窗口保持打开：") + err.Error())
+		return
+	}
 	a.closeVoiceInput()
 	a.stopAutoAppearance()
 	a.stopUpdateChecks()
 	a.closePet()
-	go func() {
-		if err := a.core.ShutdownNative(); err != nil {
-			log.Printf("shutdown: %v", err)
+	a.discardAttachmentImagesOnShutdown()
+	a.releaseWorkspaceFiles()
+	a.releaseAllHTMLPreviews()
+	if a.pluginHost != nil {
+		a.pluginHost.Close()
+	}
+	a.quitReady = true
+	mygo.App.Quit()
+}
+
+// settleAbandonedRuns clears tabs whose runs the shutdown already cancelled:
+// their completion events were dropped with the closed event stream, so the
+// tabs would otherwise stay busy after a failed quit returns control.
+func (a *desktop) settleAbandonedRuns() {
+	seen := map[*conversation]bool{}
+	settle := func(t *conversation) {
+		if t == nil || seen[t] || !t.Busy {
+			return
 		}
-		a.win.Update(func() {
-			a.discardAttachmentImagesOnShutdown()
-			a.releaseWorkspaceFiles()
-			a.releaseAllHTMLPreviews()
-			if a.pluginHost != nil {
-				a.pluginHost.Close()
-			}
-			a.quitReady = true
-			mygo.App.Quit()
-		})
-	}()
+		seen[t] = true
+		settleRunningToolMessages(t, "cancelled", "")
+		t.Status = ""
+		t.Busy = false
+		t.RunID = ""
+		t.CancelRequested = false
+	}
+	for _, t := range a.tabs {
+		settle(t)
+	}
+	for _, t := range a.openSessions {
+		settle(t)
+	}
 }
 func (a *desktop) current() *conversation {
 	if a.active < 0 || a.active >= len(a.tabs) {
@@ -1404,7 +1457,16 @@ func (a *desktop) openFile(path string) {
 	a.loadFileReplacing(root, path, a.workspaceFiles[workspaceKey(root)], false)
 }
 
-func workspaceKey(root string) string { return strings.ToLower(filepath.Clean(root)) }
+// workspaceKey normalizes a root into a per-workspace cache key. Case folds
+// only on case-insensitive filesystems; folding on a case-sensitive volume
+// collided two real projects' trees and media state.
+func workspaceKey(root string) string {
+	root = filepath.Clean(root)
+	if workspaceCaseFold {
+		return strings.ToLower(root)
+	}
+	return root
+}
 
 func (a *desktop) activeFile() *workspaceFile {
 	t := a.current()

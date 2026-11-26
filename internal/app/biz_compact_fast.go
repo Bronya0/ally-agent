@@ -59,40 +59,58 @@ func encodeFastCompactHistory(entries []fastCompactEntry) openai.ChatCompletionM
 // User deletion addresses the visible transcript, including original questions
 // inside a compacted reference record. Never match assistant/tool text there as
 // if it were the user's question, or count the wrapper as another user input.
+//
+// The ordinal and the content are verified together: when the saved history
+// agrees with what the user hovered, that exact occurrence is deleted and
+// repeated questions stay distinct. A drifted ordinal (locally injected turns
+// the history lacks) falls back to a unique content match, and anything still
+// ambiguous refuses rather than cutting the wrong turns.
 func locateHistoryUser(messages []openai.ChatCompletionMessage, ordinal int, expected string) (messageIndex, entryIndex int) {
-	messageIndex, entryIndex = -1, -1
-	seen := 0
-	match := func(content string) bool {
-		if expected != "" {
-			return strings.Contains(strings.TrimSpace(content), expected)
-		}
-		return seen == ordinal
+	type userTurn struct {
+		messageIndex, entryIndex int
+		content                  string
 	}
+	var turns []userTurn
+	seen := 0
 	for i, m := range messages {
 		if entries, ok := decodeFastCompactHistory(m); ok {
 			for j, entry := range entries {
 				if entry.Role != openai.ChatMessageRoleUser {
 					continue
 				}
-				if match(entry.Content) {
-					messageIndex, entryIndex = i, j
-					if expected == "" {
-						return
-					}
-				}
+				turns = append(turns, userTurn{messageIndex: i, entryIndex: j, content: entry.Content})
 				seen++
 			}
 		} else if m.Role == openai.ChatMessageRoleUser {
-			if match(textFromMessage(m)) {
-				messageIndex, entryIndex = i, -1
-				if expected == "" {
-					return
-				}
-			}
+			turns = append(turns, userTurn{messageIndex: i, entryIndex: -1, content: textFromMessage(m)})
 			seen++
 		}
 	}
-	return
+	match := func(content string) bool {
+		if expected == "" {
+			return true
+		}
+		return strings.Contains(strings.TrimSpace(content), expected)
+	}
+	if expected == "" {
+		if ordinal >= 0 && ordinal < len(turns) {
+			return turns[ordinal].messageIndex, turns[ordinal].entryIndex
+		}
+		return -1, -1
+	}
+	if ordinal >= 0 && ordinal < len(turns) && match(turns[ordinal].content) {
+		return turns[ordinal].messageIndex, turns[ordinal].entryIndex
+	}
+	var unique []userTurn
+	for _, turn := range turns {
+		if match(turn.content) {
+			unique = append(unique, turn)
+		}
+	}
+	if len(unique) == 1 {
+		return unique[0].messageIndex, unique[0].entryIndex
+	}
+	return -1, -1
 }
 
 func fastCompactAnswerText(content string) string {

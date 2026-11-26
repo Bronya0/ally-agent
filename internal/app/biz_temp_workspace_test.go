@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 // redirectTempRoot 把 Go 的临时目录根重定向到测试沙箱，绝不让测试触碰
@@ -31,9 +33,13 @@ func TestCreateAndDeleteTempWorkspace(t *testing.T) {
 	root := redirectTempRoot(t)
 	a := NewApp()
 	defer func() {
-		// 清空进程集合，避免影响其他测试对全局状态的假设。
+		// 清空进程集合（并释放锁），避免影响其他测试对全局状态的假设。
 		tempWorkspaces.Lock()
-		tempWorkspaces.paths = map[string]struct{}{}
+		for _, guard := range tempWorkspaces.paths {
+			_ = guard.file.Unlock()
+			_ = guard.file.Close()
+		}
+		tempWorkspaces.paths = map[string]*tempWorkspaceGuard{}
 		tempWorkspaces.Unlock()
 	}()
 
@@ -149,3 +155,79 @@ func TestCleanupStaleTempWorkspaces(t *testing.T) {
 	}
 }
 
+// 持有锁是存活凭据：另一个实例还锁着的工作区即使目录时间过期也绝不回收，
+// 锁释放后同一扫描可以回收。
+func TestStaleTempCleanupRespectsHolderLock(t *testing.T) {
+	root := redirectTempRoot(t)
+	a := NewApp()
+
+	held := filepath.Join(root, tempWorkspacePrefix+"held")
+	if err := os.MkdirAll(held, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	holder := flock.New(filepath.Join(held, tempWorkspaceLockName))
+	locked, err := holder.TryLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !locked {
+		t.Fatal("the simulated holder could not take the lock")
+	}
+	// 先让锁文件落盘再改目录时间：创建文件会刷新目录 mtime。
+	staleTime := time.Now().Add(-staleTempWorkspaceAge - time.Hour)
+	if err := os.Chtimes(held, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+
+	a.cleanupStaleTempWorkspaces()
+
+	if _, err := os.Stat(held); err != nil {
+		t.Fatalf("cleanup deleted a temp workspace whose holder lock is alive: %v", err)
+	}
+
+	_ = holder.Unlock()
+	_ = holder.Close()
+	a.cleanupStaleTempWorkspaces()
+	if _, err := os.Stat(held); !os.IsNotExist(err) {
+		t.Fatalf("released temp workspace was not reclaimed: %v", err)
+	}
+}
+
+// 删除接口对别的实例仍在使用的工作区拒绝并保留目录；持有者释放后可删。
+func TestDeleteTempWorkspaceRefusesLiveHolder(t *testing.T) {
+	root := redirectTempRoot(t)
+	a := NewApp()
+
+	busy := filepath.Join(root, tempWorkspacePrefix+"busy")
+	if err := os.MkdirAll(busy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	holder := flock.New(filepath.Join(busy, tempWorkspaceLockName))
+	locked, err := holder.TryLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !locked {
+		t.Fatal("the simulated holder could not take the lock")
+	}
+
+	err = a.DeleteTempWorkspace(busy)
+	if err == nil {
+		t.Fatal("deleted a temp workspace held by a live lock")
+	}
+	if code := toolErrorCode(err); code != tempWorkspaceInUseErrorCode {
+		t.Fatalf("error code = %q, want %q", code, tempWorkspaceInUseErrorCode)
+	}
+	if _, err := os.Stat(busy); err != nil {
+		t.Fatalf("the held temp workspace was deleted: %v", err)
+	}
+
+	_ = holder.Unlock()
+	_ = holder.Close()
+	if err := a.DeleteTempWorkspace(busy); err != nil {
+		t.Fatalf("delete after the holder released: %v", err)
+	}
+	if _, err := os.Stat(busy); !os.IsNotExist(err) {
+		t.Fatalf("released temp workspace was not deleted: %v", err)
+	}
+}
