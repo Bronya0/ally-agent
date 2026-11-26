@@ -639,7 +639,7 @@ func deletePathsSchema(itemDescription string) map[string]any {
 	}
 }
 
-const editTextGuidance = "Replace oldText with newText using literal text, not regex patterns or replacement templates. Matching searches the whole file regardless of the read range. Short or common snippets often match multiple places: include surrounding context until the target is unique; ambiguous matches are refused. Use replaceAll only when every exact occurrence should change. On a normalized candidate, copy its actual characters and retry exactly. Inspect the current contents on no match. Source text may come from read or command output. Put all changes to this file in one call, using the original contents."
+const editTextGuidance = "Replace oldText with newText using literal text, not regex patterns or replacement templates. Matching searches the whole file regardless of the read range. Short or common snippets often match multiple places: include surrounding context until the target is unique; ambiguous matches are refused. Use replaceAll only when every exact occurrence should change. When an error names a candidate line, copy that line's actual characters into oldText and retry. Inspect the current contents on no match. Source text may come from read or command output: drop the printed line-number prefixes, and copy punctuation exactly as the file has it, including full-width punctuation in comments. Put all changes to this file in one call, using the original contents."
 
 // editChangesSchema shares the replacement contract between both edit tools.
 func editChangesSchema() map[string]any {
@@ -667,7 +667,7 @@ func editChangeSchema() map[string]any {
 			},
 			"newText": map[string]any{
 				"type":        "string",
-				"description": "Complete replacement for oldText without line prefixes; preserve any context added only to locate the target, including its whitespace. Empty deletes oldText; include its newline in oldText to delete a whole line. To insert beside an anchor, include that anchor in newText with the added text.",
+				"description": "Complete replacement for oldText; preserve any context added only to locate the target, including its whitespace. Empty deletes oldText; include its newline in oldText to delete a whole line. To insert beside an anchor, include that anchor in newText with the added text.",
 			},
 		},
 		"required": []string{"oldText", "newText"},
