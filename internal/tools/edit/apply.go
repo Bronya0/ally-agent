@@ -520,14 +520,18 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 			if !found {
 				// Last resort: the snippet was copied out of read output with its
 				// line-number prefixes. Dropping those prefixes is the only edit made;
-				// anything but one exact match still fails exactly as before.
-				if stripped, prefixes := stripLineNumberPrefixes(oldText); prefixes != "" {
+				// anything but one exact match still fails exactly as before. A needle
+				// that strips down to whitespace only (bare "N:" markers with no body)
+				// never rides this fallback: matching a lone newline is not an edit
+				// anyone asked for.
+				if stripped, prefixes := stripLineNumberPrefixes(oldText); prefixes != "" && strings.TrimSpace(stripped) != "" {
 					if matches, count := scanExactMatches(source, stripped, 2); count == 1 {
 						if strippedNew, newPrefixes := stripLineNumberPrefixes(newText); newPrefixes != "" {
 							newText = strippedNew
 						}
 						located = append(located, locatedChange{index: i, start: matches[0].offset, end: matches[0].offset + len(stripped), newText: newText})
-						warnings = append(warnings, fmt.Sprintf("change %d ignored line-number prefixes (%s) copied from read output; the file itself was matched without them", i+1, prefixes))
+						// 命中行号让模型立刻发现错位：抄的是旧版行号，命中却落在别处。
+						warnings = append(warnings, fmt.Sprintf("change %d ignored line-number prefixes (%s) copied from read output; the file itself was matched without them at line %d", i+1, prefixes, matches[0].line))
 						continue
 					}
 				}
