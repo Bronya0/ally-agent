@@ -353,22 +353,24 @@ type toolGroupSummaryKey struct {
 	index, windowEnd int
 }
 
+const toolGroupPreviewLimit = 3
+
 type toolGroupSummary struct {
-	latest                                      [4]int
+	latest                                      [toolGroupPreviewLimit]int
 	end, reads, greps, lists, commands, trimmed int
 	status, lastStatus                          string
 	running, queued                             int
 	changeRev                                   uint64
 }
 
-// A bounded journal lets visible group headers apply changed scalar counts.
+// A bounded journal lets visible group headers update counts and previews.
 // It never retains arguments, outputs or message maps. A frame that misses
 // the entire journal simply rebuilds its summary from the transcript.
 const toolGroupChangeLimit = 64
 
 type toolGroupItem struct {
-	kind, state     string
-	folded, trimmed bool
+	kind, state                   string
+	folded, trimmed, previewReady bool
 }
 
 type toolGroupChange struct {
@@ -385,7 +387,9 @@ func groupItem(m map[string]any) toolGroupItem {
 	if !isFoldableToolGroupItem(m) {
 		return toolGroupItem{}
 	}
-	return toolGroupItem{readGrepGroupName(m), toolState(m), true, boolOf(m, "fastCompacted")}
+	state := toolState(m)
+	awaitingArgs := boolOf(m, "argsStreaming") && (state == "running" || state == "pending")
+	return toolGroupItem{kind: readGrepGroupName(m), state: state, folded: true, trimmed: boolOf(m, "fastCompacted"), previewReady: !awaitingArgs}
 }
 
 func recordToolGroupChange(t *conversation, index int, before toolGroupItem, m map[string]any) {
@@ -438,11 +442,26 @@ func (s *toolGroupSummary) finish(t *conversation) {
 	}
 }
 
+// Calls can finish streaming in a different order than they were issued.
+// Insert by transcript index, keeping only the newest previewable calls.
+func (s *toolGroupSummary) addPreview(index int) {
+	for slot := len(s.latest) - 1; slot >= 0 && index >= 0; slot-- {
+		if index > s.latest[slot] {
+			index, s.latest[slot] = s.latest[slot], index
+		}
+	}
+}
+
 func appendToolGroupSummary(s *toolGroupSummary, t *conversation, windowEnd int) {
-	for s.end < windowEnd && isFoldableToolGroupItem(t.Messages[s.end]) {
+	for s.end < windowEnd {
 		item := groupItem(t.Messages[s.end])
+		if !item.folded {
+			break
+		}
 		s.count(item, 1)
-		s.latest[toolGroupCategory(item.kind)] = s.end
+		if item.previewReady {
+			s.addPreview(s.end)
+		}
 		s.lastStatus = item.state
 		s.end++
 	}
@@ -450,7 +469,7 @@ func appendToolGroupSummary(s *toolGroupSummary, t *conversation, windowEnd int)
 }
 
 func summarizeToolGroup(t *conversation, index, windowEnd int) toolGroupSummary {
-	s := toolGroupSummary{end: index, lastStatus: "pending", latest: [4]int{-1, -1, -1, -1}}
+	s := toolGroupSummary{end: index, lastStatus: "pending", latest: [toolGroupPreviewLimit]int{-1, -1, -1}}
 	appendToolGroupSummary(&s, t, windowEnd)
 	return s
 }
@@ -471,8 +490,11 @@ func cachedToolGroupSummary(memo *memoOf[toolGroupSummaryKey, toolGroupSummary],
 				if change.index < key.index || change.index >= s.end {
 					continue
 				}
-				if change.before.kind != change.after.kind {
+				if change.before.kind != change.after.kind || (change.before.previewReady && !change.after.previewReady) {
 					return summarizeToolGroup(t, key.index, key.windowEnd)
+				}
+				if !change.before.previewReady && change.after.previewReady {
+					s.addPreview(change.index)
 				}
 				s.count(change.before, -1)
 				s.count(change.after, 1)
@@ -528,7 +550,6 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	summary := cachedToolGroupSummary(summaryMemo, t, toolGroupSummaryKey{historyKey{len(t.Messages), t.historyRev}, t.toolRev, index, windowEnd})
 	end := summary.end
 	reads, greps, lists, commands, trimmed := summary.reads, summary.greps, summary.lists, summary.commands, summary.trimmed
-	headerPurposes := memoAt[[4]memoOf[groupPurposeKey, groupPurposeLabel]](container, "header-purposes")
 	if end == index {
 		return
 	}
@@ -626,50 +647,43 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 			ui.Box(c).Absolute().Left(-16).Top(0).Width(16).HeightPercent(100).Center().Children(func() {
 				toolStatusIcon(c, groupStatus)
 			})
-			shown := 0
-			for category, latest := range summary.latest {
-				if latest < index || latest >= end {
-					headerPurposes[category] = memoOf[groupPurposeKey, groupPurposeLabel]{}
+			shown := false
+			for _, latest := range summary.latest {
+				if latest < index {
 					continue
 				}
 				m := t.Messages[latest]
-				key := groupPurposeKey{str(m, "args"), str(m, "purpose"), str(m, "purposeField"), readGrepGroupName(m), toolState(m), boolOf(m, "argsStreaming")}
-				previous := headerPurposes[category].value
-				label := headerPurposes[category].get(key, func(key groupPurposeKey) groupPurposeLabel {
-					// Folded headers follow finalized calls, not argument deltas.
-					// Expanded rows retain their independent streaming previews.
-					if key.streaming && (key.state == "running" || key.state == "pending") {
-						return previous
-					}
-					purpose := toolPurpose(m, nil)
-					if purpose == "" {
-						if open && latest-index < len(*entryArgs) {
-							purpose = toolPurpose(m, (*entryArgs)[latest-index].get(key.args, parseToolArgs))
-						} else {
-							purpose = toolPurpose(m, parseToolArgs(key.args))
-						}
-					}
-					if purpose == "" {
-						// Streaming arguments may not be valid JSON yet. Keep the
-						// previous description until the new one is available, instead
-						// of flashing a generic fallback between consecutive calls.
-						if key.state == "running" || key.state == "pending" {
-							return previous
-						}
-						purpose = locales.Text(groupPurposeFallbacks[category])
-					}
-					return groupPurposeLabel{purpose}
-				})
-				if shown > 0 {
-					// Together with the row's two 4px gaps, this separates
-					// adjacent tool categories by 12px without widening the caret gap.
-					ui.Box(c.Key(fmt.Sprintf("category-gap-%d", category))).Width(gapSection - 2*gapTight).Shrink(0)
+				name := readGrepGroupName(m)
+				category := toolGroupCategory(name)
+				preview := ui.Row(c.Key(latest)).MinWidth(0).Shrink(1).Gap(gapTight).AlignItems(ui.Center)
+				if shown {
+					preview.Padding(0, 0, 0, gapSection-gapTight)
 				}
-				shown++
-				ui.Row(c.Key(fmt.Sprintf("latest-%d", category))).MinWidth(0).Shrink(1).Gap(gapTight).AlignItems(ui.Center).Children(func() {
+				shown = true
+				memo := memoAt[memoOf[groupPurposeKey, string]](preview, "purpose")
+				purposeKey := groupPurposeKey{str(m, "args"), str(m, "purpose"), str(m, "purposeField"), name, toolState(m)}
+				label := memo.get(purposeKey, func(key groupPurposeKey) string {
+					if purpose := toolPurpose(m, nil); purpose != "" {
+						return purpose
+					}
+					var args map[string]any
+					if open && latest < visibleEnd {
+						args = (*entryArgs)[latest-index].get(key.args, parseToolArgs)
+					} else {
+						args = parseToolArgs(key.args)
+					}
+					if purpose := toolPurpose(m, args); purpose != "" {
+						return purpose
+					}
+					if key.state == "running" || key.state == "pending" {
+						return ""
+					}
+					return locales.Text(groupPurposeFallbacks[category])
+				})
+				preview.Children(func() {
 					disclosureIcon(c, groupToolIcons[category], a.currentPalette().accent)
-					if label.full != "" {
-						uikit.Tooltip(c, ui.Text(c, label.full).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1), label.full)
+					if label != "" {
+						uikit.Tooltip(c, ui.Text(c, label).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1), label)
 					}
 				})
 			}
@@ -928,6 +942,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		})
 	}
 	isMCP := name != mcpSearchToolKind && (target != "" || isMCPDisplayTool(m))
+	isSSH := isSSHTool(name) && !isMCP
 	if isMCP {
 		operation = target
 		if operation == "" {
@@ -952,6 +967,11 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 		}
 	}
 	result := toolResult(m)
+	if name == "delete" || name == "remote_delete_path" {
+		if counted := deleteBatchSummary(result); counted != "" {
+			summary = counted
+		}
+	}
 	if name == "ask" && !isMCP {
 		questions := list(args, "questions")
 		if len(questions) == 0 {
@@ -1010,7 +1030,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 			if name != "subagent" {
 				ui.Box(c).Absolute().Left(-16).Top(0).Width(16).HeightPercent(100).Center().Children(func() { toolStatusIcon(c, state) })
 			}
-			if isSSHTool(name) && !isMCP {
+			if isSSH {
 				ui.Text(c.Key(key+"-ssh"), "SSH").FontSize(fsTool).TextColor(p.accent).Shrink(0).LineHeight(1.4).NoWrap()
 			}
 			if isMCP {
@@ -1039,40 +1059,18 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					})
 				} else {
 					text := summary
-					var parts []string
-					if name == "remote_transfer" {
-						local, remote := singleTransferPaths(args)
-						if local != "" && remote != "" {
-							parts = []string{local, remote}
-						}
+					if name != "ask" && summaryTakesParens(name) {
+						text = "(" + text + ")"
 					}
-					if len(parts) == 2 {
-						ui.Row(c.Key(key + "-transfer-summary")).MinWidth(0).Shrink(1).AlignItems(ui.Center).Children(func() {
-							color := a.secondaryInk()
-							ui.Text(c, "(").FontSize(fsTool).TextColor(color).Shrink(0)
-							for i, part := range parts {
-								if i > 0 {
-									ui.Text(c, " → ").FontSize(fsTool).TextColor(color).Shrink(0)
-								}
-								label := ui.Text(c, part).FontSize(fsTool).TextColor(color).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
-								uikit.Tooltip(c, label, part)
-							}
-							ui.Text(c, ")").FontSize(fsTool).TextColor(color).Shrink(0)
-						})
-					} else {
-						if name != "ask" && ((name != "delete" && name != "remote_delete_path") || len(list(args, "paths")) == 0) {
-							text = "(" + text + ")"
-						}
-						color := a.secondaryInk()
-						if name == "edit" || name == "create" || name == "delete" || name == "remote_edit" || name == "remote_create_file" || name == "remote_delete_path" {
-							color = color.Mix(c.Theme().Text, 0.4)
-						}
-						label := ui.Text(c.Key(key+"-summary"), text).FontSize(fsTool).TextColor(color).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
-						uikit.Tooltip(c, label, summary)
+					color := a.secondaryInk()
+					if name == "edit" || name == "create" || name == "delete" || name == "remote_edit" || name == "remote_create_file" || name == "remote_delete_path" {
+						color = color.Mix(c.Theme().Text, 0.4)
 					}
+					label := ui.Text(c.Key(key+"-summary"), text).FontSize(fsTool).TextColor(color).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1)
+					uikit.Tooltip(c, label, summary)
 				}
 			}
-			if isSSHTool(name) && name != "ssh_cluster" && !isMCP {
+			if isSSH && name != "ssh_cluster" {
 				if alias := toolSSHAlias(args); alias != "" {
 					label := ui.Text(c.Key(key+"-ssh-alias"), alias).FontSize(fsTool - 2).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).MaxWidthPercent(24).Shrink(0)
 					uikit.Tooltip(c, label, alias)
@@ -1087,8 +1085,8 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				}
 			}
 			if name == "command" || name == "remote_run_command" {
-				// Exit status and duration describe the command, so they sit right
-				// after it instead of being pushed to the row's far edge.
+				// Exit status describes the command, so it sits right
+				// after it (and the SSH alias), before the purpose at the far edge.
 				if code, exists := result["exitCode"]; exists {
 					ui.Text(c, fmt.Sprintf("exit %v", code)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 				}
@@ -1098,7 +1096,18 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 				if boolOf(result, "promotedToService") {
 					neutralChip(c, locales.Text("已转后台服务"))
 				}
-				if ms := toolDuration(m, result); ms > 0 || state == "success" || state == "error" || state == "cancelled" {
+			}
+			// SSH timings follow the server alias; local command timing follows
+			// its exit status. Completed calls keep the reported duration.
+			if name == "command" || isSSH {
+				ms := toolDuration(m, result)
+				if isSSH && state == "running" {
+					if started, ok := m["startedAt"].(time.Time); ok {
+						ms = max(int64(1), c.Now().Sub(started).Milliseconds())
+						c.After(time.Second)
+					}
+				}
+				if ms > 0 || state == "success" || state == "error" || state == "cancelled" {
 					ui.Text(c, fmtDur(ms)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 				}
 			}
@@ -1146,8 +1155,8 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					neutralChip(c, locales.Text(fastCompactChip))
 				}
 			}
-			// A command's duration already sits next to its exit status.
-			if desc.showTiming && name != "command" && name != "remote_run_command" {
+			// Command and SSH durations are already beside their metadata.
+			if desc.showTiming && name != "command" && !isSSH {
 				if ms := toolDuration(m, result); ms > 0 || state == "success" || state == "error" || state == "cancelled" {
 					ui.Text(c, fmtDur(ms)).FontSize(fsTool - 2).TextColor(a.secondaryInk()).Shrink(0).NoWrap()
 				}
@@ -1482,6 +1491,51 @@ func parseToolArgs(raw string) map[string]any {
 	return out
 }
 
+// summaryTakesParens keeps one rule for cards whose summary counts things: the
+// count stands on its own, the paths and files it covers are listed inside.
+func summaryTakesParens(name string) bool {
+	switch name {
+	case "delete", "remote_delete_path", "remote_transfer":
+		return false
+	}
+	return true
+}
+
+// deleteBatchSummary counts what the batch actually removed. Files and
+// directories read differently, so the header says which of each was hit; a
+// batch that removed nothing keeps the request's path count instead.
+func deleteBatchSummary(result map[string]any) string {
+	files, dirs := 0, 0
+	for _, item := range list(result, "paths") {
+		row, ok := item.(map[string]any)
+		if !ok || !boolOf(row, "ok") || boolOf(row, "absent") {
+			continue
+		}
+		// The tool reports "directory" for folders; symlinks and plain files
+		// count as files.
+		if strings.HasPrefix(strings.ToLower(str(row, "kind")), "dir") {
+			dirs++
+		} else {
+			files++
+		}
+	}
+	var parts []string
+	if files > 0 {
+		parts = append(parts, countLabel(files, "file"))
+	}
+	if dirs > 0 {
+		parts = append(parts, countLabel(dirs, "dir"))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func countLabel(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
+}
+
 func toolArgSummary(name string, args map[string]any) string {
 	pick := func(keys ...string) string {
 		for _, k := range keys {
@@ -1501,7 +1555,7 @@ func toolArgSummary(name string, args map[string]any) string {
 	switch name {
 	case "command", "remote_run_command":
 		return pick("command", "cmd")
-	case "edit", "create", "read", "delete", "remote_read", "remote_edit", "remote_create_file", "remote_delete_path":
+	case "edit", "create", "read", "remote_read", "remote_edit", "remote_create_file":
 		if p := pick("path", "file_path", "file"); p != "" {
 			return p
 		}
@@ -1517,6 +1571,20 @@ func toolArgSummary(name string, args map[string]any) string {
 		}
 		if paths, ok := args["paths"].([]any); ok && len(paths) > 0 {
 			return fmt.Sprintf("%d paths", len(paths))
+		}
+	case "delete", "remote_delete_path":
+		// 外层只说删几个，具体路径在展开后的正文里，和 SSH 传输一个口径。
+		count := len(list(args, "paths"))
+		if count == 0 && pick("path", "file_path", "file") != "" {
+			count = 1
+		}
+		switch count {
+		case 0:
+			return ""
+		case 1:
+			return "1 path"
+		default:
+			return fmt.Sprintf("%d paths", count)
 		}
 	case "grep":
 		return pick("pattern")
@@ -1561,14 +1629,15 @@ func toolArgSummary(name string, args map[string]any) string {
 	case "subagent":
 		return pick("description", "task", "prompt")
 	case "remote_transfer":
-		local, remote := singleTransferPaths(args)
-		if local != "" && remote != "" {
-			return local + " → " + remote
-		}
-		if count := len(list(args, "files")); count > 1 {
+		// 外层只说传了几个文件；路径与结果都在展开后的正文里，不重复。
+		switch count := len(list(args, "files")); count {
+		case 0:
+			return ""
+		case 1:
+			return "1 file"
+		default:
 			return fmt.Sprintf("%d files", count)
 		}
-		return local + remote
 	case "service":
 		return pick("action", "name", "id")
 	case "scheduled_task":
@@ -1829,27 +1898,6 @@ func (a *desktop) toolBody(c *ui.Context, t *conversation, index int, name strin
 			})
 			flat(c, locales.Text("在浏览器打开")).OnClick(func() { a.openHTMLPreview(t.Workspace, html) })
 		})
-	case "delete", "remote_delete_path":
-		for _, item := range list(result, "results") {
-			row, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			path := str(row, "path")
-			okFlag := boolOf(row, "ok")
-			absent := boolOf(row, "absent")
-			ui.Row(c).Gap(gapField).Children(func() {
-				ui.Text(c, "├─").Font(monoFamily).FontSize(fsSmall).TextColor(a.secondaryInk())
-				ui.Text(c, path).Font(monoFamily).FontSize(fsSmall)
-				if absent {
-					neutralChip(c, locales.Text("本就不存在"))
-				} else if okFlag {
-					chip(c, locales.Text("已删除"), c.Theme().Success, ui.RGBA(78, 200, 126, 0.12))
-				} else {
-					uikit.ErrorText(c, str(row, "error")).Grow(1)
-				}
-			})
-		}
 	case "ask":
 		if qs := list(result, "questions"); len(qs) > 0 {
 			for _, q := range qs {
@@ -1874,15 +1922,6 @@ func transferFilePaths(file map[string]any, action string) (string, string) {
 		return remote, local
 	}
 	return local, remote
-}
-
-func singleTransferPaths(args map[string]any) (string, string) {
-	files := list(args, "files")
-	if len(files) != 1 {
-		return "", ""
-	}
-	file, _ := files[0].(map[string]any)
-	return transferFilePaths(file, str(args, "action"))
 }
 
 // toolTransferBody draws one row per mapping in a single muted ink. The card
@@ -1912,13 +1951,16 @@ func (a *desktop) toolTransferBody(c *ui.Context, result map[string]any) {
 		if i == len(files)-1 {
 			prefix = "└─ "
 		}
-		status, color := transferFileStatus(c, file, ink)
 		ui.Column(c.Key(fmt.Sprintf("transfer-file-%d", i))).Gap(1).Children(func() {
 			ui.Row(c).Gap(gapTight).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, prefix).Font(monoFamily).FontSize(fsSmall).TextColor(ink).Shrink(0)
 				label := ui.Text(c, path).Font(monoFamily).FontSize(fsSmall).TextColor(ink).SingleLine().MinWidth(0).Shrink(1)
 				uikit.Tooltip(c, label, path)
-				ui.Text(c, "("+status+")").FontSize(fsTiny).TextColor(color).Shrink(0)
+				if size := int64(num(file, "totalBytes")); size > 0 && boolOf(file, "ok") {
+					ui.Text(c, fmtBytes(size)).FontSize(fsTiny).TextColor(ink).Shrink(0).NoWrap()
+				}
+				status, color := transferFileStatus(c, file)
+				ui.Text(c, "· "+status).FontSize(fsTiny).TextColor(color).Shrink(0).NoWrap()
 			})
 			if message := str(file, "error"); message != "" {
 				uikit.ErrorText(c, message)
@@ -1928,19 +1970,16 @@ func (a *desktop) toolTransferBody(c *ui.Context, result map[string]any) {
 }
 
 // transferFileStatus keeps every outcome on the row it belongs to: a mapping
-// that ran reports its bytes, one that never ran says so instead of reading
-// like a failure, and only a real failure takes the danger color. The words are
-// the result fields the tool itself writes, so a card never disagrees with the
+// that ran is "ok", one that never ran says so instead of reading like a
+// failure, and only a real failure takes the danger color. The words are the
+// result fields the tool itself writes, so a card never disagrees with the
 // payload behind it.
-func transferFileStatus(c *ui.Context, file map[string]any, ink ui.Color) (string, ui.Color) {
+func transferFileStatus(c *ui.Context, file map[string]any) (string, ui.Color) {
 	switch {
 	case boolOf(file, "ok"):
-		if size := int64(num(file, "totalBytes")); size > 0 {
-			return "ok · " + fmtBytes(size), ink
-		}
-		return "ok", ink
+		return "ok", c.Theme().Success
 	case boolOf(file, "skipped"):
-		return "skipped", ink
+		return "skipped", c.Theme().TextMuted
 	default:
 		return "failed", c.Theme().Danger
 	}

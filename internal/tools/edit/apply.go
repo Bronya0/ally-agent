@@ -84,6 +84,46 @@ func ValidateBatchTextChanges(changes []TextChange) error {
 	return nil
 }
 
+// stripLineNumberPrefixes removes the "N: " prefixes the read tool prints. It
+// only fires when every non-empty line carries one, so text whose own lines
+// start with something like "12: " is never rewritten by accident. The label
+// names the copied range for the warning.
+func stripLineNumberPrefixes(text string) (string, string) {
+	lines := strings.Split(text, "\n")
+	stripped := make([]string, len(lines))
+	first, last := 0, 0
+	seen := false
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		digits := 0
+		for digits < len(line) && line[digits] >= '0' && line[digits] <= '9' {
+			digits++
+		}
+		if digits == 0 || digits >= len(line) || line[digits] != ':' {
+			return "", ""
+		}
+		number, err := strconv.Atoi(line[:digits])
+		if err != nil {
+			return "", ""
+		}
+		if !seen {
+			first, seen = number, true
+		}
+		last = number
+		stripped[i] = strings.TrimPrefix(line[digits+1:], " ")
+	}
+	if !seen {
+		return "", ""
+	}
+	label := strconv.Itoa(first)
+	if last != first {
+		label = fmt.Sprintf("%d-%d", first, last)
+	}
+	return strings.Join(stripped, "\n"), label
+}
+
 // exactMatch records an exact match offset and its 1-based source line.
 type exactMatch struct {
 	offset int
@@ -478,6 +518,19 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 				return nil, 0, fuzzyErr
 			}
 			if !found {
+				// Last resort: the snippet was copied out of read output with its
+				// line-number prefixes. Dropping those prefixes is the only edit made;
+				// anything but one exact match still fails exactly as before.
+				if stripped, prefixes := stripLineNumberPrefixes(oldText); prefixes != "" {
+					if matches, count := scanExactMatches(source, stripped, 2); count == 1 {
+						if strippedNew, newPrefixes := stripLineNumberPrefixes(newText); newPrefixes != "" {
+							newText = strippedNew
+						}
+						located = append(located, locatedChange{index: i, start: matches[0].offset, end: matches[0].offset + len(stripped), newText: newText})
+						warnings = append(warnings, fmt.Sprintf("change %d ignored line-number prefixes (%s) copied from read output; the file itself was matched without them", i+1, prefixes))
+						continue
+					}
+				}
 				return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the file; re-read the target lines and copy exact source text without displayed N: line prefixes", i+1))
 			}
 			located = append(located, locatedChange{index: i, start: match.start, end: match.end, newText: match.newText})

@@ -127,7 +127,7 @@ func (a *App) prepareFastCompactHistory(ctx context.Context, sessionID string, h
 }
 
 // Pure projection shared by explicit compaction and persistence. It does not
-// publish history, clear replay/read caches, or refresh session prompt snapshots.
+// publish history, clear replay state, or refresh session prompt snapshots.
 func (a *App) projectFastCompactHistory(ctx context.Context, sessionID string, history []openai.ChatCompletionMessage) (*fastCompactCandidate, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -298,9 +298,9 @@ func (a *App) commitFastCompactHistory(sessionID string, history []openai.ChatCo
 	a.reasoningStash.retainFastCompactTail(sessionID, history, candidate.history, candidate.cutoff)
 	result := candidate.result
 	// Rewrites must invalidate measurement anchors even when the message
-	// count stays unchanged. Read-cache hits must stop hiding old files too.
+	// count stays unchanged. The next request establishes a new prefix baseline.
 	a.clearContextAnchor(sessionID)
-	a.invalidateSessionReadCache(sessionID)
+	a.invalidateSessionContextLock(sessionID)
 	a.refreshSessionPromptPrefix(sessionID)
 	if candidate.tailStart < len(candidate.history) {
 		m := candidate.history[candidate.tailStart]

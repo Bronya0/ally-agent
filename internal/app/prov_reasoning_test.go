@@ -1349,6 +1349,45 @@ func TestChatRequestRewriteTransportSkipsBodyCopy(t *testing.T) {
 	}
 }
 
+func TestChatRequestRewriteTransportReplaysRewrittenBody(t *testing.T) {
+	t.Parallel()
+	const payload = `{"messages":[{"role":"tool","tool_call_id":"call_1"}]}`
+	const want = `{"messages":[{"content":"","role":"tool","tool_call_id":"call_1"}],"prompt_cache_key":"ally:key"}`
+	for _, mode := range []string{"buffered", "reader"} {
+		t.Run(mode, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, "https://example.test/v1/chat/completions", bytes.NewBufferString(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "reader" {
+				req.Body = struct{ io.ReadCloser }{req.Body}
+			}
+			capture := &rewriteCaptureTransport{}
+			transport := &chatRequestRewriteTransport{base: capture, promptCacheKey: "ally:key"}
+			resp, err := transport.RoundTrip(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if string(capture.body) != want || resp.Request.ContentLength != int64(len(want)) {
+				t.Fatalf("outgoing body = %q (%d bytes), want %q", capture.body, resp.Request.ContentLength, want)
+			}
+			if resp.Request.GetBody == nil {
+				t.Fatal("rewritten request is not replayable")
+			}
+			replay, err := resp.Request.GetBody()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer replay.Close()
+			body, err := io.ReadAll(replay)
+			if err != nil || string(body) != want {
+				t.Fatalf("replayed body = %q, error = %v, want %q", body, err, want)
+			}
+		})
+	}
+}
+
 type rewriteCaptureTransport struct {
 	body         []byte
 	contentType  string

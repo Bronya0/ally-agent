@@ -168,7 +168,11 @@ func TestChatWidthIsBoundedAndResponsive(t *testing.T) {
 
 func TestTransferSummary(t *testing.T) {
 	args := map[string]any{"action": "download", "files": []any{map[string]any{"localPath": "dist/a", "remotePath": "/srv/a"}}}
-	if got := toolArgSummary("remote_transfer", args); got != "/srv/a → dist/a" {
-		t.Fatalf("direction: %q", got)
+	if got := toolArgSummary("remote_transfer", args); got != "1 file" {
+		t.Fatalf("count: %q", got)
+	}
+	args["files"] = []any{map[string]any{"localPath": "a", "remotePath": "/a"}, map[string]any{"localPath": "b", "remotePath": "/b"}}
+	if got := toolArgSummary("remote_transfer", args); got != "2 files" {
+		t.Fatalf("count: %q", got)
 	}
 }

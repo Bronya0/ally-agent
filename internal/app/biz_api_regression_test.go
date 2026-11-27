@@ -36,16 +36,16 @@ func TestAPIContextSettingsPreserveChoicesAndValidateInput(t *testing.T) {
 	h := a.apiMux()
 	cfg := a.config.Clone()
 	a.contextSettingsForSession("old", cfg, true)
-	for _, body := range []string{"null", "[]", "{}", `{"disabledContext":null}`, `{"disabledTools":null}`, `{"customPrompt":null}`, `{"disabledContext":["unknown"]}`, `{"disabledTools":["unknown"]}`, `{"unrelated":true}`} {
+	for _, body := range []string{"null", "[]", "{}", `{"disabledContext":null}`, `{"disabledTools":null}`, `{"customPrompt":null}`, `{"disabledContext":["unknown"]}`, `{"disabledTools":["unknown"]}`, `{"disabledTools":["grep"]}`, `{"unrelated":true}`} {
 		rec, _ := apiRequest(t, h, "PUT", "/api/v1/context/settings", "", body)
 		if rec.Code != 400 {
 			t.Fatalf("accepted %s: %d", body, rec.Code)
 		}
 	}
-	rec, payload := apiRequest(t, h, "PUT", "/api/v1/context/settings", "", `{"disabledContext":["skills"],"disabledTools":["grep","read"],"customPrompt":"custom"}`)
+	rec, payload := apiRequest(t, h, "PUT", "/api/v1/context/settings", "", `{"disabledContext":["skills"],"disabledTools":["fetch","read"],"customPrompt":"custom"}`)
 	apiRequireOK(t, rec, payload)
 	latest, _ := a.getConfig()
-	if latest.ContextEnabled("skills") || latest.CustomPrompt != "custom" || len(latest.DisabledTools) != 1 || latest.DisabledTools[0] != "grep" {
+	if latest.ContextEnabled("skills") || latest.CustomPrompt != "custom" || len(latest.DisabledTools) != 1 || latest.DisabledTools[0] != "fetch" {
 		t.Fatal("context settings not applied or core tool disabled")
 	}
 	old := a.contextSettingsForSession("old", latest, false)

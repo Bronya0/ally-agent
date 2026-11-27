@@ -53,8 +53,10 @@ func TestFastCompactPreservesTaskAndBodies(t *testing.T) {
 	history := fastCompactFixture()
 	const sid = "fast"
 	a.saveHistory(sid, history)
-	cache := a.sessionReadCacheFor(sid)
-	seedSessionReadCacheForTest(cache, "k", "hash")
+	a.noteRequestPrefix(sid, contextLockLaneChat, a.config, history, nil)
+	if lock := a.contextLocks[sid]; lock == nil || len(lock.entries) == 0 {
+		t.Fatal("expected a recorded request baseline before compaction")
+	}
 	a.recordContextAnchor(sid, history, &modelUsage{PromptTokens: 50000})
 	result, err := a.FastCompactSession(sid)
 	if err != nil {
@@ -81,8 +83,8 @@ func TestFastCompactPreservesTaskAndBodies(t *testing.T) {
 	if strings.Contains(string(encoded), "old reasoning") || !utf8.Valid(encoded) {
 		t.Fatal("old reasoning survived or UTF-8 broke")
 	}
-	if len(cache.entries) != 0 || a.contextAnchorFor(sid).tokens != 0 {
-		t.Fatal("rewrite retained stale caches")
+	if _, ok := a.contextLocks[sid]; ok || a.contextAnchorFor(sid).tokens != 0 {
+		t.Fatal("rewrite retained a stale request baseline or token measurement")
 	}
 	if intFromAny(result["tokensAfter"]) >= intFromAny(result["tokensBefore"]) {
 		t.Fatal("fixture must shrink")

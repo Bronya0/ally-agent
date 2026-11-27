@@ -1085,9 +1085,9 @@ func (a *App) historyDiskPaths(sessionID string) []string {
 	}
 }
 
-func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMessage) {
+func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMessage) error {
 	if sessionID == "" {
-		return
+		return nil
 	}
 	// In-memory history keeps image MultiContent so subsequent runs in this
 	// process still see the images (stable prefix, prompt cache survives).
@@ -1100,10 +1100,8 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	// credential.
 	inMemory, origins := sanitizeHistoryMessagesWithOrigins(messages, historyProfileMemory)
 	if countToolMessages(inMemory) < countToolMessages(messages) {
-		// The repair pass dropped tool results (dangling or duplicated calls), so
-		// the payloads they carried left the model's history: the read cache must
-		// stop telling the model it already has them.
-		a.invalidateSessionReadCache(sessionID)
+		// Dropped tool results change the request prefix the next run will send.
+		a.invalidateSessionContextLock(sessionID)
 	}
 	// Resolve the session's provider measurement against the stored conversation
 	// so a footer poll between runs reports the measured request size instead of
@@ -1123,22 +1121,22 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	a.mu.Unlock()
 
 	if a.historiesDir == "" {
-		return
+		return nil
 	}
 	disk := sanitizeHistoryMessagesForDisk(inMemory)
 	paths := a.historyDiskPaths(sessionID)
 	if err := writeCompressedHistoryPayload(paths[0], a.modelHistoryForStorage(sessionID, disk, inMemory)); err != nil {
 		log.Printf("saveHistory: failed to write %s: %v", paths[0], err)
-		return
+		return err
 	}
 	if err := os.Remove(paths[1]); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("saveHistory: failed to remove legacy %s: %v", paths[1], err)
 	}
+	return nil
 }
 
-// countToolMessages counts role=tool messages: they are the only carriers of read
-// payloads, so a decrease across a history rewrite means content the model could
-// previously see is gone.
+// countToolMessages detects tool results removed by history repair, which
+// requires a fresh request-prefix baseline.
 func countToolMessages(messages []openai.ChatCompletionMessage) int {
 	n := 0
 	for i := range messages {
@@ -1267,7 +1265,7 @@ func (a *App) sessionHistorySnapshot(sessionID string) ([]openai.ChatCompletionM
 			if a.histories == nil {
 				a.histories = map[string][]openai.ChatCompletionMessage{}
 			}
-			a.invalidateSessionReadCacheLocked(sessionID)
+			a.invalidateSessionContextLockLocked(sessionID)
 			a.histories[sessionID] = history
 			if restoreReplay != nil {
 				restoreReplay()
@@ -1424,9 +1422,8 @@ func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, er
 	// turns that no longer exist.
 	a.clearContextAnchor(sessionID)
 	a.saveHistory(sessionID, truncated)
-	// The dropped turns may have been the model's only copy of a read payload;
-	// content that is no longer in the history has to be sent again.
-	a.invalidateSessionReadCache(sessionID)
+	// The truncated conversation starts a new request-prefix baseline.
+	a.invalidateSessionContextLock(sessionID)
 	return len(truncated), nil
 }
 

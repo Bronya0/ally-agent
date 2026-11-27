@@ -566,10 +566,9 @@ INFORMATION BUDGET:
 	// made during the conversation visible to its next request.
 	a.refreshSessionPromptPrefix(sessionID)
 	a.saveHistory(sessionID, newHistory)
-	// The summary replaced the turns that carried read payloads: whatever the
-	// model was told it "already has" went with them. This is the single
-	// invalidation point for every compaction entry (manual, threshold, overflow).
-	a.invalidateSessionReadCache(sessionID)
+	// The summary replaced the previous turns, so the next request must
+	// establish a fresh prefix baseline.
+	a.invalidateSessionContextLock(sessionID)
 
 	tokensAfter := a.getContextBreakdown(sessionID, "").Total
 	if tokensAfter <= 0 {

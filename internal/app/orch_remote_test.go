@@ -670,118 +670,42 @@ func TestRemoteReadFileDuplicatePathSlots(t *testing.T) {
 	}
 }
 
-// TestRemoteReadReusesSessionCache 锁定远端读也走会话级读缓存：同一会话里第二
-// 次读同一台机器上同一区间、内容未变的文件时，正文换成 reused 说明、不再重复
-// 投递；内容变了或区间不同则必须重新投递。用注入的假批量读会话避免真实 ssh
-// （与 TestRemoteReadFileDuplicatePathSlots 同法）；用两个文件是为了走批量读
-// 路径（单文件走 remoteReadRawOne，没有注入点），而缓存比对在包装层，两条
-// 返回路径共用同一份实现。
-func TestRemoteReadReusesSessionCache(t *testing.T) {
+func TestRemoteReadReturnsCurrentContentOnEveryCall(t *testing.T) {
 	t.Parallel()
 	a := newIsolatedToolTestApp(t)
 	payload := []byte("l1\nl2\nl3\n")
 	a.remoteReadBatchFn = func(ctx context.Context, rt remoteTarget, paths []string) ([]remoteReadBatchItem, []string, error) {
 		items := make([]remoteReadBatchItem, 0, len(paths))
-		for _, p := range paths {
-			var it remoteReadBatchItem
-			it.Path = p
-			it.OK = true
-			it.Data.Path = p
-			it.Data.DataBase64 = base64.StdEncoding.EncodeToString(payload)
-			it.Data.Size = int64(len(payload))
-			items = append(items, it)
+		for _, path := range paths {
+			var item remoteReadBatchItem
+			item.Path, item.OK = path, true
+			item.Data.Path = path
+			item.Data.DataBase64 = base64.StdEncoding.EncodeToString(payload)
+			item.Data.Size = int64(len(payload))
+			items = append(items, item)
 		}
 		return items, nil, nil
 	}
-	ctx := context.WithValue(context.Background(), sessionReadCacheContextKey{}, newSessionReadCache())
-	req := RemoteReadFileRequest{
-		Alias: "user@host",
-		Files: []BatchReadFileRequest{{Path: "/srv/app/a.txt"}, {Path: "/srv/app/b.txt"}},
-	}
-
-	first, err := a.remoteReadFileCached(ctx, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(first.Files) != 2 {
-		t.Fatalf("expected 2 file slots, got %d", len(first.Files))
-	}
-	for _, f := range first.Files {
-		if f.Reused || f.Content == "" {
-			t.Fatalf("first remote read must return content, got %#v", f)
+	args := []byte("{\"alias\":\"user@host\",\"files\":[{\"path\":\"/srv/app/a.txt\"},{\"path\":\"/srv/app/b.txt\"}]}")
+	for call, want := range []string{"l2", "l2", "updated"} {
+		if call == 2 {
+			payload = []byte("l1\nupdated\nl3\n")
 		}
-	}
-
-	second, err := a.remoteReadFileCached(ctx, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range second.Files {
-		if !f.Reused || f.Content != "" {
-			t.Fatalf("second remote read must reuse the payload and keep range metadata, got %#v", f)
+		result := a.executeTool(t.Context(), a.config, "remote-read-session", "remote_read", args)
+		if !result.OK {
+			t.Fatalf("remote read failed: %#v", result)
 		}
-	}
-
-	// 远端文件被改动：命中判定靠载荷哈希而不是靠键，所以必须重新投递。
-	payload = []byte("l1\nl2\nl3\nl4\n")
-	third, err := a.remoteReadFileCached(ctx, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range third.Files {
-		if f.Reused || f.Content == "" {
-			t.Fatalf("changed remote content must be sent again, got %#v", f)
+		data := result.Data.(BatchReadResult)
+		if len(data.Files) != 2 {
+			t.Fatalf("expected 2 file slots, got %d", len(data.Files))
 		}
-	}
-
-	// 区间不同 = 键不同：先重投，再读同一区间才命中。
-	rangeReq := RemoteReadFileRequest{
-		Alias: "user@host",
-		Files: []BatchReadFileRequest{{Path: "/srv/app/a.txt", StartLine: 2, EndLine: 2}, {Path: "/srv/app/b.txt", StartLine: 2, EndLine: 2}},
-	}
-	fourth, err := a.remoteReadFileCached(ctx, rangeReq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range fourth.Files {
-		if f.Reused || f.Content == "" {
-			t.Fatalf("a different range must be sent on its own, got %#v", f)
+		for _, file := range data.Files {
+			if file.StartLine != 1 || file.EndLine != 3 || !strings.Contains(file.Content, want) {
+				t.Fatalf("call %d did not return current remote content and range: %#v", call, file)
+			}
 		}
-	}
-	fifth, err := a.remoteReadFileCached(ctx, rangeReq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range fifth.Files {
-		if !f.Reused || f.Content != "" {
-			t.Fatalf("re-reading the same remote range must reuse, got %#v", f)
+		if modelResult := renderReadResultForModel(data); !strings.Contains(modelResult, want) {
+			t.Fatalf("call %d omitted current remote content from the model result: %s", call, modelResult)
 		}
-	}
-}
-
-// TestRemoteReadResultItemCarriesRangeForCacheKey 锁定远端条目带上行区间：读缓
-// 存的键是「路径 + 区间」，条目丢了 Req 就会让同一文件的所有区间共用一把键互相
-// 覆盖，跨区间去重静默失效。
-func TestRemoteReadResultItemCarriesRangeForCacheKey(t *testing.T) {
-	data := []byte("l1\nl2\nl3\n")
-	item, err := buildRemoteReadResultItem(
-		remoteRawFile{Path: "a.txt", Data: data, Size: int64(len(data))},
-		BatchReadFileRequest{Path: "/srv/app/a.txt", StartLine: 2, EndLine: 2},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if item.Req.StartLine != 2 || item.Req.EndLine != 2 {
-		t.Fatalf("remote read item must carry its range for the cache key, got %#v", item.Req)
-	}
-	tail, err := buildRemoteReadResultItem(
-		remoteRawFile{Path: "a.txt", Data: data, Size: int64(len(data))},
-		BatchReadFileRequest{Path: "a.txt", TailLines: 2},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tail.Req.StartLine != -2 {
-		t.Fatalf("tailLines must fold into a negative startLine for the key, got %d", tail.Req.StartLine)
 	}
 }

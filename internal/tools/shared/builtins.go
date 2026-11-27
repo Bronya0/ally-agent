@@ -69,7 +69,7 @@ const (
 	// the runtime enforces.
 	MaxHTTPBodyBytes     = 50 * 1024 * 1024
 	DefaultHTTPMaxBody   = 256 * 1024
-	DefaultWebFetchBody  = 2 * 1024 * 1024
+	DefaultWebFetchBody  = 1 * 1024 * 1024
 	DefaultWebFetchChars = 60000
 	MaxWebFetchChars     = 200000
 	// DeletePathListLimit bounds how many paths one delete call may carry. The
@@ -80,11 +80,10 @@ const (
 	DeletePathListLimit = 40
 	// RemoteTransferFileLimit is shared by the transfer schema and runtime.
 	RemoteTransferFileLimit = 20
-	// ContentSearchGuidance is the single wording for where local content searches
-	// go. The command schema states it as that tool's boundary and the runtime
-	// repeats it after a shell grep, so the model never reads two versions of the
-	// same rule.
-	ContentSearchGuidance = "Use the grep tool, or rg in a shell, for content searches; do not build them from grep/find/sed/awk pipelines."
+	// ContentSearchRule is shared by the main/child prompts and command guidance.
+	ContentSearchRule = "Search local content with rg through command; local grep, egrep and fgrep commands and find/sed/awk search pipelines are forbidden."
+	// ContentSearchGuidance also supplies the runtime rejection's next step.
+	ContentSearchGuidance = ContentSearchRule + " Scope searches to a relevant directory or file. Example: rg -p --color never -i -g '*.go' -e 'symbolA|symbolB' -- internal/app. Combine related symbols with regex alternation; use -F only for literal text, -C for needed context, -l for matching filenames, and --count-matches for occurrence counts. Choose file filters for the task, including tests when relevant. Narrow paths or patterns if output is truncated; -m limits matches per file, not globally. Exit 1 means no matches, not a tool failure."
 	// MaxModelToolOutput bounds the raw tool output that reaches model context
 	// (command output, service reads, third-party MCP text). internal/app aliases
 	// this constant and elides the middle beyond it, so the command schema can
@@ -251,24 +250,22 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"name", "arguments"},
 		}),
-		functionTool("command", "Run a shell command or related shell sequence with cwd in a writable workspace root. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. "+ContentSearchGuidance+" Keep project outputs in the workspace or active session extra roots; other filesystem access follows runtime restrictions. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. "+modelOutputNote+" If the result reports promotion to a background service, use service read/stop/restart with its returned id; never duplicate an active process. Commands that touch the same files or bind the same port need distinct stages.", map[string]any{
+		functionTool("command", "Run a shell command or related shell sequence. Each call starts in the primary workspace root: run commands directly there, or cd into a subdirectory inside the command. Directory changes last only for that call. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. "+ContentSearchGuidance+" Keep project outputs in the workspace or active session extra roots; other filesystem access follows runtime restrictions. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. "+modelOutputNote+" If the result reports promotion to a background service, use service read/stop/restart with its returned id; never duplicate an active process. Commands that touch the same files or bind the same port need distinct stages.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run."},
-				"cwd":     map[string]any{"type": "string", "description": "Working directory inside the workspace. Relative to the workspace root; an absolute path inside the workspace is also accepted and rebased. A path outside the workspace is refused. Empty means workspace root."},
 				"timeout": commandTimeoutSchema(),
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("service", "Manage background processes owned by the current workspace. Sessions and sub-agents in the same workspace share services; operations cannot access other workspaces. The active service limit is global, and model calls require a workspace. stop immediately force-kills the owned process tree with no graceful shutdown. restart stops the service and starts the same command again, returning a new service ID; the old record remains available for logs.", map[string]any{
+		functionTool("service", "Manage background processes owned by the current workspace. Sessions and sub-agents in the same workspace share services; operations cannot access other workspaces. The active service limit is global, and model calls require a workspace. stop force-kills the owned process tree without a grace period. On a stop error, check the service status and retry if it is still listed as running. restart stops the service and starts the same command again, returning a new service ID; the old record remains available for logs.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"includeFinished": map[string]any{"type": "boolean", "description": "For action=list: include finished services (default false)."},
 				"action":          map[string]any{"type": "string", "enum": []string{"start", "stop", "restart", "list", "read"}, "description": "start launches a process; stop force-kills it; restart stops it and starts the same command again, returning a new service ID; list shows active services and reports workspace/global limits; read returns output, including for finished services. Only flushed output is visible, so empty output does not prove a hang; use python -u or flush=True for immediate Python logs. Stop may discard unflushed output."},
 				"name":            map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
 				"description":     map[string]any{"type": "string", "minLength": 1, "maxLength": MaxServiceDescriptionChars, "pattern": ".*\\S.*", "description": "Required with action=start: explain what the service does and why it is needed. Shown to the user in service cards and the task center."},
-				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
-				"cwd":             map[string]any{"type": "string", "description": "Workspace-relative working directory. Empty means workspace root. Used only with action=start."},
+				"command":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command, started from the workspace root. Required with action=start."},
 				"id":              map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start or action=restart. Required with action=stop, action=restart, and action=read."},
 				"tailBytes": map[string]any{
 					"type": "integer", "minimum": 0, "maximum": MaxServiceReadTailBytes,
@@ -376,13 +373,13 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"alias", "path", "changes"},
 		}),
-		functionTool("remote_create_file", "Create a UTF-8 file and missing parents by absolute path on a remote SSH server. Directories are refused.", map[string]any{
+		functionTool("remote_create_file", "Create a UTF-8 file and missing parents by absolute path on a remote SSH server. Directories are refused. With overwrite=true an existing file is replaced whole: everything not present in content is lost, nothing is backed up. Prefer remote_edit for changes to an existing file.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"alias":     sshAliasSchema(),
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute remote path of the file to create, e.g. /srv/app/config.json."},
 				"content":   map[string]any{"type": "string", "description": "Full UTF-8 text of the new file (may be empty), written as-is."},
-				"overwrite": map[string]any{"type": "boolean", "description": "Set true to replace an existing file. No additional confirmation is shown."},
+				"overwrite": map[string]any{"type": "boolean", "description": "Set true to replace an existing file. false fails with \"file already exists\". No confirmation is shown before a replacement."},
 			},
 			"required": []string{"alias", "path", "content", "overwrite"},
 		}),
@@ -431,20 +428,6 @@ func chatToolsUncached() []openai.Tool {
 				"action": map[string]any{"type": "string", "enum": []string{"list"}, "description": "List authorized servers."},
 			},
 			"required": []string{"action"},
-		}),
-		functionTool("grep", "Search UTF-8 content for matches, log filtering, or counts. Default lines mode groups matches by file with line numbers and previews capped at 500 characters. Totals cover only the searched scope. Traversal is limited to 20 levels and skips hidden entries; pass a hidden directory or file as path to search it. Traversal respects ignore rules unless includeIgnored=true. Dependency/build directories are excluded unless path points inside them. Empty path also skips files over 10 MB.", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Rust regex pattern; look-around and backreferences are unsupported. Escape regex metacharacters when matching literal text."},
-				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches", ""}, "description": "lines (default, also for an empty string) returns matching lines with capped text previews. count_matches returns occurrence counts for only the top 100 files by count, 20 files per page; pagination cannot retrieve files beyond that top 100."},
-				"path":           map[string]any{"type": "string", "description": "File or directory, relative to the workspace root or absolute. Empty means workspace root. Point it at a hidden directory such as .github to search inside it."},
-				"glob":           map[string]any{"type": "string", "description": "Optional glob filter, e.g. *.go or frontend/**/*.vue."},
-				"maxMatches":     map[string]any{"type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum returned matching lines in lines mode (default 200). Exact totals still cover the entire search."},
-				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false. Also includes dependency/build directories; hidden-directory traversal still requires an explicit path."},
-				"caseSensitive":  map[string]any{"type": "boolean", "description": "Match case exactly. Default false (case-insensitive)."},
-				"offset":         map[string]any{"type": "integer", "minimum": 0, "description": "Skip first N matching lines/files for pagination."},
-			},
-			"required": []string{"pattern"},
 		}),
 		functionTool("read", "Read text files and images. Text previews have 1-based line numbers and source text for edit. Copy only visible source text for edits, without line prefixes or truncation markers; follow continuation hints when truncated. Use tailLines for logs. Missing paths and directories return compact errors with a next step.", map[string]any{
 			"type": "object",
@@ -518,7 +501,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"skill"},
 		}),
-		functionTool("suggest", "Offer concise follow-up actions when useful. Suggestions are sent to the user verbatim. This must be the only tool call in the response and ends the run, so the reply it closes must already be written: put the answer, summary, or result in the reply text first, then call this. Never call it as the whole response, and never deliver the answer through the suggestions themselves; calling it with no reply text is a broken turn.", map[string]any{
+		functionTool("suggest", "Offer next steps after answering or completing work: 1–4, most useful first, written as the user's own next message. It ends the run and must be the only tool call, so write the reply first and never deliver the answer through it.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"items": map[string]any{
@@ -541,15 +524,14 @@ func chatToolsUncached() []openai.Tool {
 
 var builtinToolExamples = map[string]string{
 	"edit":               `{"path":"app.go","changes":[{"oldText":"if err != nil {\n\treturn nil\n}","newText":"if err != nil {\n\treturn err\n}"}]}`,
-	"command":            `{"command":"go test ./...","cwd":".","timeout":120}`,
-	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm run dev","cwd":"frontend"}; restart: {"action":"restart","id":"svc_..."}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
+	"command":            `{"command":"go test ./...","timeout":120}`,
+	"service":            `start: {"action":"start","name":"frontend","description":"Run the frontend dev server for browser previews and hot reload","command":"npm --prefix frontend run dev"}; restart: {"action":"restart","id":"svc_..."}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":16384}`,
 	"ask":                `{"questions":[{"question":"Which database should we use?","options":[{"label":"SQLite","description":"Simple local storage.","recommended":true},{"label":"PostgreSQL","description":"Production database."}]}]}`,
 	"remote_read":        `{"alias":"my-dev","files":[{"path":"/srv/app/main.go"}]}`,
 	"remote_edit":        `{"alias":"my-dev","path":"/srv/app/main.go","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
 	"remote_run_command": `{"alias":"my-dev","command":"cd /srv/app && go test ./..."}`,
 	"remote_transfer":    `upload: {"alias":"my-dev","action":"upload","files":[{"localPath":"dist/app","remotePath":"/srv/app/app"},{"localPath":"config.json","remotePath":"/srv/app/config.json"}],"overwrite":true}; download: {"alias":"my-dev","action":"download","files":[{"remotePath":"/var/log/app.log","localPath":"debug/app.log"}]}`,
 	"ssh_cluster":        `{"action":"list"}`,
-	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue"}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","tailLines":200}]}`,
 	"render_html":        `{"html":"<div id=\"chart\" style=\"width:100%;height:350px;\"></div><script>const c=echarts.init(document.getElementById('chart'),'dark');c.setOption({title:{text:'Metrics'},xAxis:{data:['Mon','Tue','Wed','Thu','Fri']},yAxis:{},series:[{type:'bar',data:[12,34,56,78,90]}]});</script>"}`,
 	"screenshot":         `list: {"action":"list"}; a window by id: {"windowId":131076}; by unique title: {"windowTitle":"ally-agent"}; region: {"region":{"x":0,"y":0,"width":1280,"height":800}}`,
@@ -562,11 +544,11 @@ var builtinToolExamples = map[string]string{
 // (maxToolOutput, what the card and a spilled file hold) and this model-facing
 // budget. The schema quotes the second one, because that is the copy the model
 // reads, and points at the spilled file for the rest.
-var modelOutputNote = fmt.Sprintf("Output is a bounded preview: at most %d KiB reaches you, with the start and the end kept and the middle elided (a `reduced-from` field reports the real length). When the run spilled a full log, the result carries its path: read that file with the read or grep tool instead of rerunning side effects.", MaxModelToolOutput/1024)
+var modelOutputNote = fmt.Sprintf("Output is a bounded preview: at most %d KiB reaches you, with the start and the end kept and the middle elided (a `reduced-from` field reports the real length). When the run spilled a full log, the result carries its path: read that file with read or search it with rg through command instead of rerunning side effects.", MaxModelToolOutput/1024)
 
 func functionTool(name, description string, parameters map[string]any) openai.Tool {
 	if name == "read" || name == "remote_read" {
-		description += " Broad file previews share a 64 KiB batch budget with per-file continuations; explicit endLine ranges and tails keep the per-file budget. Files above 32 MiB support bounded UTF-8 tailLines reads only: read-only, no absolute line numbers. A header with the reused flag and no body means this exact range is already in context."
+		description += " Broad file previews share a 64 KiB batch budget with per-file continuations; explicit endLine ranges and tails keep the per-file budget. Files above 32 MiB support bounded UTF-8 tailLines reads only: read-only, no absolute line numbers."
 	}
 	properties, ok := parameters["properties"].(map[string]any)
 	if !ok {
@@ -575,9 +557,10 @@ func functionTool(name, description string, parameters map[string]any) openai.To
 	}
 	properties["stage"] = map[string]any{
 		"type": "integer", "minimum": 0, "maximum": MaxToolStage,
-		// The scheduling rules are stated once in the system prompt; repeating
-		// them here cost the same paragraph on all 29 declarations.
-		"description": "Execution order",
+		// The full scheduling rules are stated once in the prompt's batch
+		// strategy; this repeats only the ordering fact the model needs while
+		// filling the parameter. One clause, because it lands on every declaration.
+		"description": "Execution order: lower stages run first; same-stage calls may run in parallel.",
 	}
 
 	if example := builtinToolExamples[name]; example != "" {
@@ -654,7 +637,7 @@ func deletePathsSchema(itemDescription string) map[string]any {
 	}
 }
 
-const editTextGuidance = "Replace oldText with newText using literal text, not regex patterns or replacement templates. Matching searches the whole file regardless of the read range. Short or common snippets often match multiple places: include surrounding context until the target is unique; ambiguous matches are refused. Use replaceAll only when every exact occurrence should change. On a normalized candidate, copy its actual characters and retry exactly. Inspect the current contents on no match. Source text may come from read or command output. Put all changes to this file in one call, using the original contents."
+const editTextGuidance = "Replace oldText with newText using literal text, not regex patterns or replacement templates. Matching searches the whole file regardless of the read range. Short or common snippets often match multiple places: include surrounding context until the target is unique; ambiguous matches are refused. Use replaceAll only when every exact occurrence should change. When an error names a candidate line, copy that line's actual characters into oldText and retry. Inspect the current contents on no match. Source text may come from read or command output: drop the printed line-number prefixes, and copy punctuation exactly as the file has it, including full-width punctuation in comments. Put all changes to this file in one call, using the original contents."
 
 // editChangesSchema shares the replacement contract between both edit tools.
 func editChangesSchema() map[string]any {
@@ -682,7 +665,7 @@ func editChangeSchema() map[string]any {
 			},
 			"newText": map[string]any{
 				"type":        "string",
-				"description": "Complete replacement for oldText without line prefixes; preserve any context added only to locate the target, including its whitespace. Empty deletes oldText; include its newline in oldText to delete a whole line. To insert beside an anchor, include that anchor in newText with the added text.",
+				"description": "Complete replacement for oldText; preserve any context added only to locate the target, including its whitespace. Empty deletes oldText; include its newline in oldText to delete a whole line. To insert beside an anchor, include that anchor in newText with the added text.",
 			},
 		},
 		"required": []string{"oldText", "newText"},

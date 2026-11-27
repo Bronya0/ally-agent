@@ -303,7 +303,7 @@ func TestNetworkEventSinkTruncatesLargePayloadToValidJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	big := strings.Repeat("a", maxNetworkPayloadBytes*2)
-	s.Emit("tool:result", map[string]any{"output": big})
+	s.Emit("tool:result", map[string]any{"sessionId": "session", "runId": "run", "toolCallId": "call", "output": big})
 	ev, _ := s.ring.since(0)
 	if len(ev) != 1 {
 		t.Fatalf("ring has %d events, want 1", len(ev))
@@ -321,6 +321,9 @@ func TestNetworkEventSinkTruncatesLargePayloadToValidJSON(t *testing.T) {
 	}
 	if probe["truncated"] != true {
 		t.Fatalf("expected truncated marker, got %v", probe)
+	}
+	if probe["sessionId"] != "session" || probe["runId"] != "run" || probe["toolCallId"] != "call" {
+		t.Fatalf("truncated event lost its routing identity: %v", probe)
 	}
 }
 

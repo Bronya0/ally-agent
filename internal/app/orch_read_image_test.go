@@ -8,6 +8,7 @@
 package app
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,76 +196,26 @@ func TestCompactReadResultOmittedDataURLFromModel(t *testing.T) {
 	}
 }
 
-func TestReusedReadResultClearsDataURL(t *testing.T) {
+func TestReadImageReturnsCurrentDataOnEachCall(t *testing.T) {
 	t.Parallel()
 	app := newIsolatedTestApp(t)
 	dir := t.TempDir()
-	pngPath := filepath.Join(dir, "a.png")
-	if err := os.WriteFile(pngPath, []byte("\x89PNG\r\n\x1a\npayload"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	cfg := ConfigState{Workspace: dir}
-	cache := newSessionReadCache()
-
-	// First read
-	res1, err := cache.read(app, cfg, BatchReadRequest{Files: []BatchReadFileRequest{{Path: pngPath}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res1.Files) != 1 || res1.Files[0].DataURL == "" {
-		t.Fatalf("first read must carry DataURL: %#v", res1)
-	}
-
-	// Second read (same content) -> reused, DataURL cleared
-	res2, err := cache.read(app, cfg, BatchReadRequest{Files: []BatchReadFileRequest{{Path: pngPath}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res2.Files) != 1 || !res2.Files[0].Reused || res2.Files[0].DataURL != "" {
-		t.Fatalf("reused read result must set Reused=true and clear DataURL: %#v", res2.Files[0])
-	}
-}
-
-// TestChangedImageWithIdenticalNoticeIsNotReused guards the reuse decision itself:
-// an image's model-facing text is only a name/size notice, so a de-duplication that
-// hashed the text alone would call a replaced image — same name, same byte size —
-// unchanged and silently keep the new picture out of the request.
-func TestChangedImageWithIdenticalNoticeIsNotReused(t *testing.T) {
-	t.Parallel()
-	app := newIsolatedTestApp(t)
-	dir := t.TempDir()
-	pngPath := filepath.Join(dir, "a.png")
-	first := []byte("\x89PNG\r\n\x1a\nAAAA")
-	second := []byte("\x89PNG\r\n\x1a\nBBBB")
-	if len(first) != len(second) {
-		t.Fatal("fixture must keep both images the same byte size")
-	}
-	if err := os.WriteFile(pngPath, first, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := ConfigState{Workspace: dir}
-	cache := newSessionReadCache()
-
-	res1, err := cache.read(app, cfg, BatchReadRequest{Files: []BatchReadFileRequest{{Path: pngPath}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res1.Files) != 1 || res1.Files[0].Reused || res1.Files[0].DataURL == "" {
-		t.Fatalf("first read must deliver the image: %#v", res1.Files)
-	}
-
-	if err := os.WriteFile(pngPath, second, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	res2, err := cache.read(app, cfg, BatchReadRequest{Files: []BatchReadFileRequest{{Path: pngPath}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res2.Files) != 1 || res2.Files[0].Reused || res2.Files[0].DataURL == "" {
-		t.Fatalf("a replaced image must be delivered again: %#v", res2.Files)
-	}
-	if res2.Files[0].DataURL == res1.Files[0].DataURL {
-		t.Fatal("the second read must carry the new image data")
+	args := []byte("{\"files\":[{\"path\":\"a.png\"}]}")
+	for _, payload := range []string{"AAAA", "AAAA", "BBBB"} {
+		data := []byte("\x89PNG\r\n\x1a\n" + payload)
+		if err := os.WriteFile(filepath.Join(dir, "a.png"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		result := app.executeTool(t.Context(), cfg, "image-read-session", "read", args)
+		if !result.OK {
+			t.Fatalf("image read failed: %#v", result)
+		}
+		files := result.Data.(*BatchReadResult).Files
+		want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)
+		if len(files) != 1 || files[0].DataURL != want {
+			t.Fatalf("read did not return current image data: %#v", files)
+		}
 	}
 }
 

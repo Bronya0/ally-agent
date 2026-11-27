@@ -88,7 +88,7 @@ Ally Agent 沿用原版的 `~/.ally_agent` 配置和会话数据。常用快捷�
 flowchart LR
   subgraph S0["stage 0 并发执行"]
     A["读 src/app.go"]
-    B["grep TODO"]
+    B["rg TODO"]
     C["命令 git status"]
   end
   subgraph S1["stage 1"]

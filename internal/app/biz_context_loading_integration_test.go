@@ -30,7 +30,7 @@ func TestFastCompactRefreshesSourcesAndKeepsLoadingChoices(t *testing.T) {
 	writeTestFile(t, cfg.Workspace, "added-file.txt", "new file")
 	latest := cfg.Clone()
 	latest.DisabledContext = []string{"project_instructions", "workspace_map", "skills"}
-	latest.DisabledTools = []string{"grep"}
+	latest.DisabledTools = []string{"fetch"}
 	a.config = latest
 	result, err := a.FastCompactSession(sid)
 	if err != nil || result["changed"] != true {
@@ -58,11 +58,11 @@ func TestFastCompactRefreshesSourcesAndKeepsLoadingChoices(t *testing.T) {
 	if !strings.Contains(rebuilt[1].Content, "added-file.txt") {
 		t.Fatal("rebuilt workspace map reused stale scan")
 	}
-	foundGrep := false
+	foundFetch := false
 	for _, tool := range a.buildToolsForSession(sid, latest) {
-		foundGrep = foundGrep || tool.Function != nil && tool.Function.Name == "grep"
+		foundFetch = foundFetch || tool.Function != nil && tool.Function.Name == "fetch"
 	}
-	if !foundGrep {
+	if !foundFetch {
 		t.Fatal("compaction adopted later tool-disable choices")
 	}
 }

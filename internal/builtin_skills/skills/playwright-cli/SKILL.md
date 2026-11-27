@@ -16,7 +16,7 @@ whenToUse: 用户要求操作浏览器、模拟登录点击输入、复现或验
 ## 已有网站：快速流程
 
 1. 确定目标 URL、实际 CLI 调用方式和工作目录；按第三章 3.3 用 `service` 启动有头浏览器 holder，记录 service id 和唯一会话名。
-2. 在相同 cwd 用另一条 `command` 和 `-s=<会话名>` 验证 URL 与标题，再按需通过 `eval`、`snapshot` 或截图了解页面；登录由当前任务决定，不必默认登录。
+2. 用另一条 `command`，先 `cd` 到同一目录（如 `cd .tmp/pw && ...`），按 `-s=<会话名>` 验证 URL 与标题，并按需通过 `eval`、`snapshot` 或截图了解页面；登录由当前任务决定，不必默认登录。
 3. 操作后等待与任务相关的页面条件并核对结果；需要排查时再查 console 和 requests，涉及视觉问题时截图并实际查看。
 4. 按 3.7 关闭本次创建的会话和服务；用户需要继续查看时保留并说明如何停止。已有网站无需为套用示例启动前后端或探测本地健康接口。
 
@@ -24,7 +24,7 @@ whenToUse: 用户要求操作浏览器、模拟登录点击输入、复现或验
 
 1. **交互排错默认有头**：用户要求开窗口、模拟操作、查看页面时使用 `--headed`；后台抓取、批量回归可无头。可见窗口不代表已经检查过页面，关键结果还要读取或截图查看。
 2. **Ally Windows 中跨 command 探索要保活**：command 结束会清理其后代进程，CLI daemon 也会被回收。浏览器用 `service` 托住；步骤完全确定时也可在同一条 command 内完成并关闭。这是宿主行为，不是 CLI 在所有终端上的限制。
-3. **每条浏览器命令显式带 `-s=<会话名>`，保持 cwd 一致**：包括 eval、截图、存取登录态。每次 command 的 shell 变量不共享，不能假定上一条定义的 `$S`、`$URL` 还在。
+3. **每条浏览器命令显式带 `-s=<会话名>`，先 `cd` 到同一目录**：包括 eval、截图、存取登录态。每条 `command` 都从工作区根启动，切目录必须写在本次命令里；每次 command 的 shell 变量不共享，不能假定上一条定义的 `$S`、`$URL` 还在。
 4. **动作完成不等于业务成功**：先定义本次预期；点击后等目标页面条件，需要接口证据时精确匹配请求。超时、接口错误和断言失败必须保留，不能吞掉后继续报成功。
 5. **按需读页面**：先有限字段的 eval 或浅层快照，表格只读总数及少量行；布局问题必须看截图。ref 来自当前快照，不是稳定业务 id，页面变化后重新获取或改用语义 locator。
 
@@ -32,7 +32,7 @@ whenToUse: 用户要求操作浏览器、模拟登录点击输入、复现或验
 
 先检查 `playwright-cli --version` 和实际子命令 `--help`；旧版可能缺少示例参数。若全局 CLI 不存在，先检查项目是否已有 Playwright（1.59+ 可使用 `npx playwright cli`），已存在时优先复用。确需安装时遵循用户已有授权及环境约束，避免无谓升级或重复询问；安装失败保留错误。
 
-使用项目本地 CLI 时，在计划用于 holder 和后续命令的同一 cwd 先执行 `npx --no-install playwright --version` 与 `npx --no-install playwright cli --help`，结合项目依赖及实际解析路径确认使用的是项目版本且可用；`--no-install` 本身不能证明解析来源。之后将示例中的 `playwright-cli` 一致替换为 `npx --no-install playwright cli`；若该 cwd 无法解析，选择能解析项目依赖的固定 cwd 或使用可用的全局 CLI，不要让 npx 静默下载不同版本。保持 session、配置及产物路径均相对于选定 cwd。
+使用项目本地 CLI 时，先切到计划用于 holder 和后续命令的同一目录（如 `cd .tmp/pw && ...`），执行 `npx --no-install playwright --version` 与 `npx --no-install playwright cli --help`，结合项目依赖及实际解析路径确认使用的是项目版本且可用；`--no-install` 本身不能证明解析来源。之后将示例中的 `playwright-cli` 一致替换为 `npx --no-install playwright cli`；若该目录无法解析，选择能解析项目依赖的固定目录或使用可用的全局 CLI，不要让 npx 静默下载不同版本。保持 session、配置及产物路径均相对于该目录。
 
 ## 2. 浏览器选择
 
@@ -44,11 +44,11 @@ whenToUse: 用户要求操作浏览器、模拟登录点击输入、复现或验
 {"browser":{"browserName":"chromium"}}
 ```
 
-然后 `open ... --config=browser.json`，不要同时传系统 channel；配置路径相对 command cwd。webkit 是 Playwright WebKit，不是系统 Safari。用户指定浏览器时遵从其要求。
+然后 `open ... --config=browser.json`，不要同时传系统 channel；配置路径相对命令 `cd` 进入的目录。webkit 是 Playwright WebKit，不是系统 Safari。用户指定浏览器时遵从其要求。
 
 ## 3. 标准工作流（起服务 → 开窗口 → 点/填 → 验证结果）
 
-示例约定：前端 `http://127.0.0.1:5173`、浏览器会话 `ally-user-bug-01`、产物目录 `.tmp/pw`。**端口、启动命令、登录信息、路由、接口和定位器都要按当前项目确认**，示例账号与页面不是通用事实。
+示例约定：前端 `http://127.0.0.1:5173`、浏览器会话 `ally-user-bug-01`、产物目录 `.tmp/pw`；`command` 固定从工作区根启动，示例用 bash 的 `cd .tmp/pw &&` 切目录（PowerShell 用 `Set-Location .tmp/pw;`）。**端口、启动命令、登录信息、路由、接口和定位器都要按当前项目确认**，示例账号与页面不是通用事实。
 
 ### 3.1 确认环境，启动前后端
 
@@ -60,14 +60,14 @@ whenToUse: 用户要求操作浏览器、模拟登录点击输入、复现或验
 mkdir -p .tmp/pw
 ```
 
-再调用 Ally service，每个服务一次调用；description 必填，cwd 必须已经存在且相对工作区根：
+再调用 Ally service，每个服务一次调用；description 必填。服务固定在工作区根启动，需要子目录时把 `cd` 写进 command，目录必须已经存在：
 
 ```json
-{"action":"start","name":"backend","description":"启动开发后端，供页面登录和接口排错","command":"<项目实际后端启动命令>","cwd":"<后端目录>"}
+{"action":"start","name":"backend","description":"启动开发后端，供页面登录和接口排错","command":"cd <后端目录> && <项目实际后端启动命令>"}
 ```
 
 ```json
-{"action":"start","name":"frontend","description":"启动前端开发服务，供可见浏览器复现页面问题","command":"npm run dev","cwd":"frontend"}
+{"action":"start","name":"frontend","description":"启动前端开发服务，供可见浏览器复现页面问题","command":"cd frontend && npm run dev"}
 ```
 
 保存返回的 id。start 返回 running 只代表进程启动，不代表应用就绪。用 `{"action":"read","id":"<实际服务 id>"}` 看日志，确认实际 URL、端口和启动错误。Vite 可能自动换端口；不能只因旧端口能访问就认定访问的是本次启动的应用。
@@ -103,30 +103,30 @@ wait_http frontend 'http://127.0.0.1:5173/'
 
 ### 3.3 开有头会话，并从另一条 command 验证接管
 
-先在 **cwd `.tmp/pw`** 执行 `playwright-cli list`，选择未占用的任务会话名。然后调用 Ally service：
+先执行 `cd .tmp/pw && playwright-cli list`，选择未占用的任务会话名。然后调用 Ally service（holder 同样在 `.tmp/pw` 启动，后续命令必须切到同一目录）：
 
 ```json
-{"action":"start","name":"browser-user-bug","description":"保持可见 Edge 浏览器供本次页面交互排错","command":"playwright-cli -s=ally-user-bug-01 open http://127.0.0.1:5173/ --browser=msedge --headed && printf 'BROWSER_READY\n' && while :; do sleep 3600; done","cwd":".tmp/pw"}
+{"action":"start","name":"browser-user-bug","description":"保持可见 Edge 浏览器供本次页面交互排错","command":"cd .tmp/pw && playwright-cli -s=ally-user-bug-01 open http://127.0.0.1:5173/ --browser=msedge --headed && printf 'BROWSER_READY\n' && while :; do sleep 3600; done"}
 ```
 
 记录浏览器 service id。循环保持父进程存活，直到显式 stop；单独 sleep 3600 会在一小时后退出，不是持续保活。不同版本的空闲超时选项可能不存在；先检查 `open --help`，支持时再按需配置。
 
-随后用另一条 command（同样 cwd `.tmp/pw`）执行：
+随后用另一条 command，先切到同一目录再执行：
 
 ```bash
-playwright-cli -s=ally-user-bug-01 --raw eval '() => ({ url: location.href, title: document.title })'
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 --raw eval '() => ({ url: location.href, title: document.title })'
 ```
 
-若提示会话不存在，先读浏览器 service 日志、核对 cwd 和会话名，不连续重开窗口。需要调整页面尺寸时：`playwright-cli -s=ally-user-bug-01 resize 1600 900`；测响应式问题则使用问题实际发生的尺寸。
+若提示会话不存在，先读浏览器 service 日志、核对命令里的 `cd` 目录和会话名，不连续重开窗口。需要调整页面尺寸时：`cd .tmp/pw && playwright-cli -s=ally-user-bug-01 resize 1600 900`；测响应式问题则使用问题实际发生的尺寸。
 
-后续示例的 command cwd 均为 `.tmp/pw`，不必每次重开浏览器。
+后续示例都先 `cd .tmp/pw`；每条 command 独立启动，切目录必须写在本次命令里，不必每次重开浏览器。
 
 ### 3.4 探测页面，然后登录、点击、输入
 
 先获取少量结构信息，**不读取输入框的 value，避免输出密码**：
 
 ```bash
-playwright-cli -s=ally-user-bug-01 --raw eval '() => ({
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 --raw eval '() => ({
   url: location.href, title: document.title,
   buttons: [...document.querySelectorAll("button")].slice(0,20).map(e => ({text:e.innerText.trim().slice(0,80),aria:e.getAttribute("aria-label")})),
   inputs: [...document.querySelectorAll("input,textarea")].slice(0,20).map(e => ({type:e.type,id:e.id,name:e.name,placeholder:e.placeholder,aria:e.getAttribute("aria-label"),labels:[...(e.labels || [])].map(l=>l.innerText.trim().slice(0,80))})),
@@ -139,7 +139,7 @@ playwright-cli -s=ally-user-bug-01 --raw eval '() => ({
 优先让用户在可见浏览器中自行输入真实凭据。不要把真实密码、Token 写入命令、脚本或日志；工具参数和 CLI 输出可能被保存。以下仅用于明确允许记录的测试账号，确认实际 placeholder 后才填：
 
 ```bash
-playwright-cli -s=ally-user-bug-01 fill "getByPlaceholder('用户名', { exact: true })" '<测试用户名>'
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 fill "getByPlaceholder('用户名', { exact: true })" '<测试用户名>'
 playwright-cli -s=ally-user-bug-01 fill "getByPlaceholder('密码', { exact: true })" '<测试密码>'
 ```
 
@@ -148,7 +148,7 @@ playwright-cli -s=ally-user-bug-01 fill "getByPlaceholder('密码', { exact: tru
 点击登录并等真实登录结果，示例要求跳转 `/dashboard` 且显示“工作台”标题；当前项目的路由和标识必须替换：
 
 ```bash
-playwright-cli -s=ally-user-bug-01 --raw run-code 'async page => {
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 --raw run-code 'async page => {
   await page.getByRole("button", { name: /登\s*录/ }).click();
   await page.waitForURL(url => url.pathname === "/dashboard", { timeout: 10000 });
   await page.getByRole("heading", { name: "工作台", exact: true }).waitFor({ state: "visible", timeout: 10000 });
@@ -165,7 +165,7 @@ playwright-cli -s=ally-user-bug-01 --raw run-code 'async page => {
 下面示例约定：当前已进入用户列表且初始加载完成，存在测试记录 `ally-e2e-001`；“搜索用户”输入框、GET `/api/users?keyword=...` 和表格行均已从源码或页面确认。初始列表必须不同于目标结果，避免旧行直接满足断言：
 
 ```bash
-playwright-cli -s=ally-user-bug-01 --raw run-code 'async page => {
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 --raw run-code 'async page => {
   const keyword = "ally-e2e-001";
   const origin = new URL(page.url()).origin;
   const oldRows = await page.locator("tbody tr").allInnerTexts();
@@ -197,7 +197,7 @@ playwright-cli -s=ally-user-bug-01 --raw run-code 'async page => {
 操作前按需保存已有日志，再 `console --clear` / `requests --clear`，让本轮证据易于识别。操作后分开执行并先确认命令成功：
 
 ```bash
-playwright-cli -s=ally-user-bug-01 console error
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 console error
 playwright-cli -s=ally-user-bug-01 requests --filter 'api'
 ```
 
@@ -207,7 +207,7 @@ playwright-cli -s=ally-user-bug-01 requests --filter 'api'
 - console 报错不保证包含所有接口错误；表单校验也可能产生 console.error，要结合步骤判断。需要完整诊断时见第十章的事件采集。
 - 保存、编辑、删除后不仅检查 toast，还要检查实际字段/列表；需确认落库时刷新或重新打开详情，验证数据仍正确，避免把本地乐观更新当作持久化成功。
 - 短暂 toast 应在提交前安排等待，或与提交及读取放在同一次 run-code，不要隔很多条命令才查。toast 通常只作辅助证据。
-- 页面结果确认后截图：`playwright-cli -s=ally-user-bug-01 screenshot --filename=bug-01.png`，以 CLI 返回的实际文件路径为准，再用 Ally read 查看；相对路径按执行命令的 cwd 解析成工作区路径。布局、遮挡、溢出、主题和鼠标点击问题必须看实际画面，DOM 文本无法替代。
+- 页面结果确认后截图：`cd .tmp/pw && playwright-cli -s=ally-user-bug-01 screenshot --filename=bug-01.png`，以 CLI 返回的实际文件路径为准，再用 Ally read 查看；相对路径按命令 `cd` 进入的目录解析。布局、遮挡、溢出、主题和鼠标点击问题必须看实际画面，DOM 文本无法替代。
 
 报告要说明复现步骤、预期/实际、相关接口或错误、截图位置；没等到结果就如实说未验证成功，不能只因命令执行过就说通过。
 
@@ -215,7 +215,7 @@ playwright-cli -s=ally-user-bug-01 requests --filter 'api'
 
 需反复执行时用 run-code --filename，模板见第十章。明确初始 URL、登录态和测试数据；刷新当前页面不等于恢复初始状态。非幂等提交后先查结果，不能因等待超时就重复提交。
 
-结束时先 `playwright-cli -s=ally-user-bug-01 close`，再对本次创建的浏览器、前端、后端 service **逐个**调用：
+结束时先 `cd .tmp/pw && playwright-cli -s=ally-user-bug-01 close`，再对本次创建的浏览器、前端、后端 service **逐个**调用：
 
 ```json
 {"action":"stop","id":"<本次创建的实际 service id>"}
@@ -225,7 +225,7 @@ playwright-cli -s=ally-user-bug-01 requests --filter 'api'
 
 ## 4. 会话作用域与一次性模式
 
-- **保持 cwd 一致**。0.1.22 从 cwd 向上查找 `.playwright` 目录作为 CLI workspace；没有找到时可能共享默认范围。因此会话名既不是一律全局，也不是每个 cwd 独立。list 查当前范围，list --all 才跨 workspace 汇总。不要在中途新增/移动 `.playwright` 改变会话归属。
+- **保持工作目录一致**。每条 command 都从工作区根启动，先 `cd` 到同一个目录（示例用 `.tmp/pw`）再执行。0.1.22 从当前目录向上查找 `.playwright` 目录作为 CLI workspace；没有找到时可能共享默认范围。因此会话名既不是一律全局，也不是每个目录独立。list 查当前范围，list --all 才跨 workspace 汇总。不要在中途新增/移动 `.playwright` 改变会话归属。
 - open 同名已存在会话可能重启它；先 list，使用任务前缀。close-all 会批量关闭当前 CLI 范围内会话，共享范围可能包含其他任务；kill-all 范围更广。
 - idle-timeout 单位是**毫秒**，0 禁用空闲退出；无头默认一小时、有头默认禁用。它不替代第三章的 holder。
 - service 活跃上限为全局 32；记录并释放自己的服务，别重复占槽。
@@ -234,6 +234,8 @@ playwright-cli -s=ally-user-bug-01 requests --filter 'api'
 
 ```bash
 set -e
+mkdir -p .tmp/pw
+cd .tmp/pw
 trap 'playwright-cli -s=ally-smoke-01 close' EXIT
 playwright-cli -s=ally-smoke-01 open http://127.0.0.1:5173/ --browser=msedge
 playwright-cli -s=ally-smoke-01 run-code --filename=check.js
@@ -256,7 +258,7 @@ check.js 必须有真实页面断言，非零退出即失败。不要把所有�
 浅层快照按树深度截，不按行数截；snapshot table 也可能几十 KB。先 eval 总数和 slice(0,5)，大内容用 `snapshot --filename=page.yml` 落盘再按需读。浅层快照没显示目标时再定点查找，不反复扩大整页深度。
 
 ```bash
-playwright-cli -s=ally-user-bug-01 snapshot --depth=2
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 snapshot --depth=2
 playwright-cli -s=ally-user-bug-01 snapshot '[role=dialog]:visible'
 playwright-cli -s=ally-user-bug-01 find '保存'
 playwright-cli -s=ally-user-bug-01 --raw eval '() => ({ count: document.querySelectorAll("tbody tr").length, sample: [...document.querySelectorAll("tbody tr")].slice(0,5).map(e=>e.innerText.slice(0,200)) })'
@@ -295,7 +297,7 @@ playwright-cli -s=ally-user-bug-01 --raw eval '() => ({ count: document.querySel
 例如已确认是单个可见 AntD 下拉、目标选项为“管理员”时：
 
 ```bash
-playwright-cli -s=ally-user-bug-01 --raw run-code 'async page => {
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 --raw run-code 'async page => {
   const field = page.locator(".ant-form-item").filter({ hasText: "角色" });
   await field.locator(".ant-select-selector").click();
   const option = page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^管理员$/ });
@@ -315,22 +317,22 @@ playwright-cli -s=ally-user-bug-01 --raw run-code 'async page => {
 不测登录时可以复用已确认的登录态；测登录、权限或会话失效时，必须明确初始状态，避免旧身份掩盖问题。
 
 ```bash
-playwright-cli -s=ally-user-bug-01 state-save auth.json
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 state-save auth.json
 ```
 
-新会话先按第三章建立 holder，再在同一 cwd 执行 state-load auth.json，然后导航目标 URL 并验证当前身份。一次性模式则 open、load、goto、断言全部放在同一条 command。不要加载状态后不重新导航就期待页面自行更新。
+新会话先按第三章建立 holder，再在 holder 启动的同一目录执行 state-load（如 `cd .tmp/pw && playwright-cli -s=<会话名> state-load auth.json`），然后导航目标 URL 并验证当前身份。一次性模式则 open、load、goto、断言全部放在同一条 command。不要加载状态后不重新导航就期待页面自行更新。
 
 - state 文件可保存 cookies / localStorage；sessionStorage 不随普通 storage state 保存，IndexedDB 是否保存取决于版本和选项。不要假定站点的全部认证状态都能还原。
-- state 文件路径相对 command cwd，含登录凭据，不提交仓库或输出正文；使用专用 scratch 目录，按任务需要处理留存。
+- state 文件路径相对命令 `cd` 进入的目录，含登录凭据，不提交仓库或输出正文；使用专用 scratch 目录，按任务需要处理留存。
 - 接口 token 注入只适合已知存储协议、且不测登录 UI 的开发场景，注入后仍须验证身份。不要因为注入成功就说登录页面通过。
 - 验证码/二次认证可让用户在可见窗口完成，再保存可复用状态；本地测试项目已有受支持的测试验证码流程时遵从项目约定。
 
 ## 10. 可重复脚本与错误采集
 
-多步或反复操作写入 `.tmp/pw/check.js`，内容是一个 async page 函数表达式，不是模块，不写 require / process / module.exports。执行时 cwd `.tmp/pw`：
+多步或反复操作写入 `.tmp/pw/check.js`，内容是一个 async page 函数表达式，不是模块，不写 require / process / module.exports。执行前先切到 `.tmp/pw`：
 
 ```bash
-playwright-cli -s=ally-user-bug-01 --raw run-code --filename=check.js
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 --raw run-code --filename=check.js
 ```
 
 下面是**复用已有登录态、只读检查用户列表**的模板。前提：已登录、/system/users 和查询契约与第三章一致、测试记录已存在；页面初始表格已就绪，且不等于筛选后的目标结果（若有异步初始加载，应在读取基线前加其就绪条件）。每次明确导航同一业务起点，不执行新增/删除；若跳回登录页就失败，不自动掩盖认证问题。
@@ -396,8 +398,8 @@ matched 只表示模板中的结果断言通过，issues 仍要逐项判读。�
 | 现象 | 下一步 |
 |---|---|
 | command not found | 按第一章处理安装，不凭空替换成另一套工具。 |
-| 会话不存在 | 查自己的浏览器 service 状态/日志、会话名、cwd / workspace；确认 holder 活着后再操作。 |
-| E_CWD_INVALID / description is required | 先建目录；service start 补齐 description，按真实工具参数调用。 |
+| 会话不存在 | 查自己的浏览器 service 状态/日志、会话名、命令里的 `cd` 目录；确认 holder 活着后再操作。 |
+| description is required | service start 补齐 description，按真实工具参数调用。 |
 | channel not found / browser not installed | 按第二章确认 channel 与安装情况，不循环启动。 |
 | ref not found | 重新获取小快照或改用已确认的 locator。 |
 | strict mode violation / 多个匹配 | 按目标容器、可见性与语义收窄，不随便 first/last。 |
@@ -406,18 +408,18 @@ matched 只表示模板中的结果断言通过，issues 仍要逐项判读。�
 | 页面空白 / 结果没变 | 查实际 URL、console、目标请求及容器；条件等待，不能固定睡几秒就报通过。 |
 | 参数不支持 | 查当前子命令 --help 和配置，保留原错误。 |
 
-## 13. 速查卡（已建 holder，同一 cwd）
+## 13. 速查卡（已建 holder；每条命令先切到同一目录）
 
 ```bash
-playwright-cli list
-playwright-cli -s=ally-user-bug-01 --raw eval '() => ({ url: location.href, title: document.title })'
-playwright-cli -s=ally-user-bug-01 snapshot --depth=2
-playwright-cli -s=ally-user-bug-01 find '保存'
-playwright-cli -s=ally-user-bug-01 click "getByRole('button', { name: /保\s*存/ })"
-playwright-cli -s=ally-user-bug-01 run-code --filename=check.js
-playwright-cli -s=ally-user-bug-01 console error
-playwright-cli -s=ally-user-bug-01 requests --filter 'api'
-playwright-cli -s=ally-user-bug-01 screenshot --filename=result.png
+cd .tmp/pw && playwright-cli list
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 --raw eval '() => ({ url: location.href, title: document.title })'
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 snapshot --depth=2
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 find '保存'
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 click "getByRole('button', { name: /保\s*存/ })"
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 run-code --filename=check.js
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 console error
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 requests --filter 'api'
+cd .tmp/pw && playwright-cli -s=ally-user-bug-01 screenshot --filename=result.png
 ```
 
 这些是独立命令的写法，不是一条可无条件串完的测试。点击后先按第三章验证结果；需要新页面时 goto 实际完整 URL，不再次 open 重启已有会话。收尾见 3.7。

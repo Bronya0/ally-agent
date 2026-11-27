@@ -88,7 +88,7 @@ Stages order execution; they do not pass values between calls. Parameters that d
 flowchart LR
   subgraph S0["stage 0 — concurrent"]
     A["Read src/app.go"]
-    B["grep TODO"]
+    B["rg TODO"]
     C["Run git status"]
   end
   subgraph S1["stage 1"]

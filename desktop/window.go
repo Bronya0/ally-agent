@@ -222,9 +222,6 @@ func (a *desktop) editorLayoutNodeView(c *ui.Context, root string, node *editorL
 }
 
 func (a *desktop) chatPage(c *ui.Context, width float32) {
-	if t := a.current(); t != nil {
-		a.syncChatLayout(t)
-	}
 	chat := func() { a.chatColumn(c, width) }
 	t := a.current()
 	if !a.explorer || t == nil {

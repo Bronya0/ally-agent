@@ -688,25 +688,6 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 	return *filteredBatchReadResult(results), nil
 }
 
-// remoteReadFileCached 给 remote_read 接上会话级读缓存：同一会话里第二次读同一
-// 台机器上同一范围且内容未变的文件时，正文不再重复投递，只回范围元数据与 reused
-// 说明。模型侧的渲染本来就与本地 read 共用一条管线（见 infra_result.go 的
-// case "read", "remote_read"），这里补的是数据层：命中判定、被清空的字段与
-// Reused 标记全部复用 sessionReadCache.dedupeResult，与本地 read 是同一份实现。
-func (a *App) remoteReadFileCached(ctx context.Context, req RemoteReadFileRequest) (BatchReadResult, error) {
-	result, err := a.remoteReadFile(ctx, req)
-	if err != nil {
-		return result, err
-	}
-	if cache, ok := ctx.Value(sessionReadCacheContextKey{}).(*sessionReadCache); ok {
-		// 远端条目的路径是目标机上的绝对路径。键里不带 target：
-		// 两台机器上的同名文件只有内容逐字节相
-		// 同时才会互相命中，而那时省略的正是模型已经收到过的内容。
-		cache.dedupeResult(&result, func(item *BatchReadResultItem) string { return item.Path })
-	}
-	return result, nil
-}
-
 // buildRemoteReadResultItem 把远端原始字节转换成与本地 read 同形状的预览
 // 结果：转码/行号预览/截断标记全部复用本地 read 的同一套管
 // 线，远程与本地语义不分离。

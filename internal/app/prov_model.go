@@ -2001,12 +2001,13 @@ func splitImageDataURL(value string) (string, string, bool) {
 // ends up with a unique id — even for a relay that reuses one id or sends none —
 // and every call stays pairable with its result.
 type toolCallAccumulator struct {
-	calls     []legacyopenai.ToolCall
-	byIndex   map[int]int
-	byID      map[string]int
-	synthetic map[int]bool
-	foundry   *toolcall.CallIDFoundry
-	notes     []string
+	calls      []legacyopenai.ToolCall
+	argBuffers map[int]*strings.Builder
+	byIndex    map[int]int
+	byID       map[string]int
+	synthetic  map[int]bool
+	foundry    *toolcall.CallIDFoundry
+	notes      []string
 }
 
 // toolCallAction is what resolve decided for one fragment.
@@ -2193,10 +2194,39 @@ func (acc *toolCallAccumulator) mergeInto(slot int, delta legacyopenai.ToolCall)
 	if name := delta.Function.Name; name != "" {
 		current.Function.Name = toolcall.MergeRepeatedDelta(current.Function.Name, name)
 	}
-	if args := delta.Function.Arguments; args != "" && args != current.Function.Arguments {
-		current.Function.Arguments += args
-	}
+	acc.appendArguments(slot, delta.Function.Arguments)
 	acc.bind(slot, current.ID, delta.Index)
+}
+
+func (acc *toolCallAccumulator) appendArguments(slot int, fragment string) {
+	current := &acc.calls[slot].Function.Arguments
+	if fragment == "" || fragment == *current {
+		return
+	}
+	if *current == "" {
+		*current = fragment
+		return
+	}
+	// Keep small joins cheap. Larger streams can publish a string each time
+	// without copying the accumulated prefix or changing earlier snapshots.
+	const minBufferedArgs = 1024
+	size := len(*current) + len(fragment)
+	if size < minBufferedArgs {
+		*current += fragment
+		return
+	}
+	buf := acc.argBuffers[slot]
+	if buf == nil {
+		buf = new(strings.Builder)
+		buf.Grow(size)
+		buf.WriteString(*current)
+		if acc.argBuffers == nil {
+			acc.argBuffers = make(map[int]*strings.Builder)
+		}
+		acc.argBuffers[slot] = buf
+	}
+	buf.WriteString(fragment)
+	*current = buf.String()
 }
 
 // nameContinues reports whether a fragment's tool name belongs to the call that

@@ -88,7 +88,7 @@ Windows는 ZIP을 풀고 `Ally.exe`를 실행합니다. macOS는 DMG를 열고 `
 flowchart LR
   subgraph S0["stage 0 — 병렬 실행"]
     A["src/app.go 읽기"]
-    B["grep TODO"]
+    B["rg TODO"]
     C["git status 실행"]
   end
   subgraph S1["stage 1"]

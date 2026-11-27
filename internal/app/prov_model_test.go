@@ -890,6 +890,34 @@ func TestToolCallAccumulatorIdentityTable(t *testing.T) {
 	}
 }
 
+func TestToolCallAccumulatorKeepsPublishedArguments(t *testing.T) {
+	prefixA := `{"text":"` + strings.Repeat("a", 1536)
+	prefixB := `{"text":"` + strings.Repeat("b", 1260)
+	acc := newToolCallAccumulator(nil)
+	acc.merge([]legacyopenai.ToolCall{
+		toolCallFragment(7, "call_a", "create", prefixA),
+		toolCallFragment(13, "call_b", "edit", prefixB),
+	})
+	published := cloneToolCalls(acc.merge([]legacyopenai.ToolCall{
+		toolCallFragment(13, "", "", "中"),
+		toolCallFragment(7, "", "", "文"),
+	}))
+	got := acc.merge([]legacyopenai.ToolCall{
+		toolCallFragment(7, "", "", prefixA+"文"), // Ignore an exact repeat of the accumulated value.
+		toolCallFragment(13, "", "", `B"}`),
+		toolCallFragment(7, "", "", `A"}`),
+	})
+	if len(got) != 2 || got[0].ID != "call_a" || got[1].ID != "call_b" {
+		t.Fatalf("unexpected calls after interleaved deltas: %#v", got)
+	}
+	if got[0].Function.Arguments != prefixA+`文A"}` || got[1].Function.Arguments != prefixB+`中B"}` {
+		t.Fatal("interleaved fragments or duplicate handling changed the final arguments")
+	}
+	if len(published) != 2 || published[0].Function.Arguments != prefixA+"文" || published[1].Function.Arguments != prefixB+"中" {
+		t.Fatal("appending new fragments changed already published arguments")
+	}
+}
+
 func TestToolCallAccumulatorReportsDroppedStray(t *testing.T) {
 	acc := newToolCallAccumulator(nil)
 	if got := acc.merge([]legacyopenai.ToolCall{toolCallFragment(0, "", "", `{"path":"a"}`)}); len(got) != 0 {

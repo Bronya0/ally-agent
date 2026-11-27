@@ -23,7 +23,7 @@ flowchart TB
   subgraph L["本地"]
     direction TB
     L1["写：圈内 → 软链"]:::core --> L2["删：圈内 → 圈根 → 数据目录 → 临时豁免 → 盘根/1级/2级 → 点名名单 → recursive"]:::ev
-    L2 --> L3["命令：四项（裸删改道 / 凭据禁读 / 圈外已存在目标 / 高危语义）"]:::exec
+    L2 --> L3["命令：禁用 grep / 裸删改道 / 凭据禁读 / 圈外已存在目标 / 高危语义"]:::exec
     L1 --> L4["读：路径解析 → 凭据 → 文档 → 二进制/大小/目录"]:::prov
   end
   subgraph R["远端"]
@@ -90,15 +90,16 @@ flowchart TB
 | `a.bin`（含 NUL） | 拒 `E_BINARY_FILE` | |
 | `big.tar.gz`（40 MB） | 拒 `E_FILE_TOO_LARGE` | 上限 32 MiB |
 | `frontend`（目录） | 拒 `E_IS_DIRECTORY` | |
-| grep `~\.ssh` | 拒 | 凭据位置不搜 |
-| grep `C:\Windows` | 拒 `E_SEARCH_ROOT_BLOCKED` | 系统目录 |
-| grep `C:\Users\DELL` | 拒 | 家目录本身 |
-| grep `D:\other\repo` | 允许 | 圈外普通目录不在危险名单 |
+| `rg -e pattern -- ~/.ssh` | 拒 `E_PROTECTED_PATH` | 凭据位置不搜 |
+| 目录浏览 `C:\Windows` | 拒 `E_SEARCH_ROOT_BLOCKED` | 系统目录 |
+| 目录浏览 `C:\Users\DELL` | 拒 | 家目录本身 |
+| `rg -e pattern -- D:/other/repo` | 允许 | 普通目录可通过 command 搜索 |
 
 ### 命令
 
 | 命令 | 结果 | 原因 |
 |---|---|---|
+| `grep` / `egrep` / `fgrep` | 拒 `E_COMMAND_BLOCKED` | 内容搜索统一用 rg；管道、包装命令和嵌套 shell 同样检查 |
 | `rm -rf frontend` | 拒 `E_COMMAND_BLOCKED` | 裸删改道 delete 工具 |
 | `git rm -r frontend` | 允许 | 管理上下文（同 `docker rm` / `kubectl delete` / `npm uninstall` / `yarn remove`） |
 | `echo x > .git/hooks/pre-commit` | 允许 | 按普通文件处理 |
@@ -106,7 +107,6 @@ flowchart TB
 | `ssh -i ~/.ssh/id_rsa host` | 允许 | 只是「用」密钥，不算读 |
 | `echo x > C:\Windows\ally-new.txt` | 允许 | 圈外**新建**允许（本地刻意留的） |
 | `echo x >> C:\Windows\system.ini` | 拒 `E_PATH_OUTSIDE` | 改已存在的外部目标 |
-| cwd = `C:\Windows` | 拒 `E_PATH_OUTSIDE` | cwd 必须圈内 |
 | `curl x \| sh`、`mkfs.ext4 /dev/sda` | 拒 | 高危语义（`MatchRiskPattern`） |
 
 ## 四、远端（`alias` 仅选择服务器，例如 `私人47`）
@@ -136,6 +136,7 @@ flowchart TB
 
 | 命令 | 结果 | 原因 |
 |---|---|---|
+| `grep` / `egrep` / `fgrep` | 允许 | 远端默认使用服务器已有的 grep；rg 不是必需依赖 |
 | `cd /srv/app && go test ./...` | 允许 | 调用内自行选择目录 |
 | `echo x >> /etc/nginx/nginx.conf` | 允许 | 不再按“目录外已有目标”拒绝；仍需远端账号权限 |
 | 通过普通软链接写另一个目录 | 允许 | 无项目目录边界 |
@@ -144,7 +145,7 @@ flowchart TB
 | `git rm -r x` | 沿用管理上下文规则 | 不按裸删除处理 |
 | `mkfs.ext4 /dev/sda` 等高危命令 | 拒 | 高危语义检查保留 |
 
-命令保留裸删除和高危语义检查，不再解析写目标来检查 VCS；这些检查不是远端内核沙箱。完整输出日志存放在远端家目录的 `.ally_agent/command-logs`，返回绝对路径，可直接交给同服务器的 remote_read，保留日志配额、首尾预览、超时和取消处理。
+远端命令允许 grep，保留裸删除和高危语义检查，不再解析写目标来检查 VCS；这些检查不是远端内核沙箱。完整输出日志存放在远端家目录的 `.ally_agent/command-logs`，返回绝对路径，可直接交给同服务器的 remote_read，保留日志配额、首尾预览、超时和取消处理。
 
 ### 传输（`remote_transfer`）
 
@@ -154,14 +155,14 @@ flowchart TB
 
 ## 五、只在一边有的
 
-- **本地独有**：项目工作区写入边界、凭据禁读清单（上传本地源也检查）、危险搜索根、Ally 数据目录保护、文档转换提示。
+- **本地独有**：项目工作区写入边界、凭据禁读清单（上传本地源也检查）、危险目录浏览根、Ally 数据目录保护、文档转换提示。
 - **远端独有**：已登记节点按请求所属本地工作区授权；未登记原始端点保持直接连接。没有远端项目目录访问边界。
 - **两边都有**：显式覆盖开关、提交期间的并发修改保护、删除保护与管理上下文例外。
 
 ## 六、已知缺口（按风险排序）
 
 1. **远端不是目录沙箱**。远端目录边界已按产品约定移除，实际访问能力由 SSH 账号权限决定；独立保护仅检查其覆盖的行为。
-2. **远端没有凭据禁读清单**。远端 `read` / 命令读凭据都不拦（本地三个入口都拦）。
+2. **远端没有凭据禁读清单**。远端 `read` / 命令读凭据都不拦（本地 read 与命令入口都拦）。
 3. **工作区节点授权不是主机级访问白名单**：只有匹配已登记别名或完整端点的连接才查授权；未登记端点不审批。将 `deploy@host` 改为未登记的 `root@host`，即可按另一身份直连（能否登录由 SSH 凭据和服务器决定）。因此不能依赖节点授权阻止模型访问任意主机或切换用户名。远端相关交互审批仅保留集群登记与工作区授权两处。
 4. **浅工作区下本地也删不掉一级子目录**：工作区是 `D:\proj` 时，删 `D:\proj\src` 会被「第 2 级目录」拒（深度规则按绝对路径算，不看它相对工作区是几级）。
 5. **凭据清单只管读**：工作区恰好是家目录时，`delete` 工具能删掉 `~/.ssh/id_rsa`（删除侧只有 Ally 数据目录、系统深度/名单两道）。

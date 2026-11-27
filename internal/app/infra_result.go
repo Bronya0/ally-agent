@@ -950,11 +950,6 @@ func renderReadResultForModel(r BatchReadResult) string {
 		if len(f.TruncatedLines) > 0 {
 			header += " | truncated-lines=" + strconv.Quote(formatTruncatedLines(f.TruncatedLines, f.TruncatedLinesOmitted))
 		}
-		if f.Reused {
-			header += " | reused"
-			blocks = append(blocks, header)
-			continue
-		}
 		if f.DataURL != "" {
 			header += " | image=sent-as-image-input-in-following-message"
 		}
@@ -1042,7 +1037,7 @@ func renderCommandResultForModel(r CommandResult) string {
 
 func commandModelReducedNote(outputFilePath string) string {
 	if outputFilePath != "" {
-		return "[中间段已从模型上下文省略；完整输出在 " + outputFilePath + "（见首行 full 字段）。本地用 read/grep，远端用同一 alias 的 remote_read 或只读命令检索；日志过大时用 tailLines，不要整读]"
+		return "[中间段已从模型上下文省略；完整输出在 " + outputFilePath + "（见首行 full 字段）。本地用 read 或 command 执行 rg 检索，远端用同一 alias 的 remote_read 或只读命令检索；日志过大时用 tailLines，不要整读]"
 	}
 	return "[中间段已从模型上下文省略，未提供完整日志文件；不要仅为查看输出重复执行有副作用的命令]"
 }

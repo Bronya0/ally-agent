@@ -290,6 +290,24 @@ func TestReplaceAllRejectsExpansionBeforeBuildingOutput(t *testing.T) {
 	}
 }
 
+func TestLineNumberPrefixesAreDroppedOnlyWhenTheSnippetIsUnique(t *testing.T) {
+	content := "header\nkeep\ndrop\nfooter\n"
+	res, _, err := ApplyBatchTextChanges(content, []TextChange{{OldText: "12: keep\n13: drop", NewText: "12: keep\n13: changed"}})
+	if err != nil {
+		t.Fatalf("copied line numbers should still match: %v", err)
+	}
+	if want := "header\nkeep\nchanged\nfooter\n"; res.Content != want {
+		t.Fatalf("content: %q want %q", res.Content, want)
+	}
+	if len(res.Warnings) == 0 {
+		t.Fatal("dropping line numbers must be reported")
+	}
+	// 剥掉前缀后仍有两处候选时必须放弃，不能猜一处。
+	if _, _, err := ApplyBatchTextChanges("b\nc\nb\n", []TextChange{{OldText: "12: b", NewText: "B"}}); toolerrors.Code(err) != "E_NO_MATCH" {
+		t.Fatalf("ambiguous stripped snippet must stay unmatched, got %v", err)
+	}
+}
+
 func BenchmarkReplaceAllMillionMatches(b *testing.B) {
 	content := strings.Repeat("a\n", 1000000)
 	changes := []TextChange{{OldText: "a", NewText: "b", ReplaceAll: true}}

@@ -46,7 +46,7 @@ var builtinThemes = [...]builtinTheme{
 	{ThemeChoice{ThemeRose, "玫瑰"}, ui.Hex("#a24753"), ui.Hex("#d69a9f")},
 	{ThemeChoice{ThemeIndigo, "靛蓝"}, ui.Hex("#5557a0"), ui.Hex("#a8a9e0")},
 	{ThemeChoice{ThemeKhaki, "暖灰卡其"}, ui.Hex("#80643e"), ui.Hex("#c2a276")},
-	{ThemeChoice{ThemeCodex, "柔彩"}, ui.Hex("#a43e60"), ui.Hex("#e88ca9")},
+	{ThemeChoice{ThemeCodex, "柔彩"}, ui.Hex("#365dcc"), ui.Hex("#8da5df")},
 }
 
 var builtinLightColors = ThemeColors{ui.Hex("#f5f6f8"), ui.Hex("#ffffff"), ui.Hex("#eef0f5"), ui.Hex("#d9dce3"), ui.Hex("#24262d"), ui.Hex("#535b68"), ui.Hex("#8b929e"), ui.Color{}, ui.Hex("#ffffff")}

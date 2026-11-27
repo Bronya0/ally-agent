@@ -3,54 +3,52 @@ package desktop
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
 )
 
-func TestGroupHeaderUsesLatestDescriptions(t *testing.T) {
+func TestGroupHeaderShowsLastThreeCallsInOrder(t *testing.T) {
 	a := &desktop{}
 	longPurpose := strings.Repeat("检查文件末尾内容", 12)
+	const prefix = "目的："
 	makeCall := func(id, name, purpose string) map[string]any {
 		m := groupCommand(id, name, "success")
-		m["purpose"] = purpose
+		m["purpose"] = prefix + purpose
 		return m
 	}
 	conv := &conversation{ID: "latest", Messages: []map[string]any{
-		makeCall("old", "read", "较早的读取说明"),
-		makeCall("search", "grep", "定位调用入口"),
-		makeCall("list", "list", "查看目录结构"),
-		makeCall("cmd", "command", "测试项目"),
-		makeCall("new", "read", longPurpose),
+		makeCall("old-list", "list", "查看目录结构"),
+		makeCall("first-command", "command", "测试项目"),
+		makeCall("read", "read", "检查消息渲染"),
+		makeCall("second-command", "command", longPurpose),
 	}}
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(a.theme())
 		c.DisableAnimations()
 		ui.Column(c).FillWidth().Padding(24).Children(func() { a.toolActivityGroupCard(c, conv, 0) })
 	}, 900, 500)
-	if tt.HasText("较早的读取说明") || !tt.HasText(longPurpose) {
-		t.Fatalf("header did not use latest description: %v", tt.Texts())
-	}
-	conv.Messages[4]["purpose"] = "更新后的读取说明"
-	tt.Frame()
-	if !tt.HasText("更新后的读取说明") || tt.HasText(longPurpose) {
-		t.Fatal("description update retained an old header")
-	}
-	conv.Messages = append(conv.Messages, makeCall("last", "command", "执行最后验证"))
-	tt.Frame()
-	if !tt.HasText("执行最后验证") || tt.HasText("测试项目") {
-		t.Fatal("appended call did not replace its category description")
-	}
-	if err := tt.Click("工具分组 latest-readgroup-0"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	for _, name := range []string{"Read", "Grep", "List", "Command"} {
-		if tt.HasText(name) {
-			t.Fatalf("expanded call retained tool name %q", name)
+	check := func(want ...string) {
+		t.Helper()
+		var got []string
+		for _, text := range tt.Texts() {
+			if purpose, ok := strings.CutPrefix(text, prefix); ok {
+				got = append(got, purpose)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("group header purposes = %q, want %q", got, want)
 		}
 	}
+	check("测试项目", "检查消息渲染", longPurpose)
+	conv.Messages[3]["purpose"] = prefix + "更新后的命令说明"
+	tt.Frame()
+	check("测试项目", "检查消息渲染", "更新后的命令说明")
+	conv.Messages = append(conv.Messages, makeCall("third-command", "command", "执行最后验证"), makeCall("fourth-command", "command", "确认测试结果"))
+	tt.Frame()
+	check("更新后的命令说明", "执行最后验证", "确认测试结果")
 }
 
 func TestPurposeGroupDisclosesCallsBeforeFilesAndOutput(t *testing.T) {
@@ -224,32 +222,38 @@ func TestGroupHeaderKeepsDescriptionWhileNextCallStreams(t *testing.T) {
 	}
 	emit("tool:result", "first", "read", `{"purpose":"检查配置入口","files":[]}`)
 	tt.Frame()
-	for _, args := range []string{``, `{"purpose":`, `{"purpose":"检查后续`} {
-		emit("tool:update", "second", "read", args)
-		tt.Frame()
-		if !tt.HasText("检查配置入口") || tt.HasText(groupPurposeFallbacks[0]) {
-			t.Fatalf("partial arguments replaced the previous description: %v", tt.Texts())
-		}
-	}
 	emit("tool:update", "second", "read", `{"purpose":"检查后续配置","files":`)
 	tt.Frame()
 	if !tt.HasText("检查配置入口") || tt.HasText("检查后续配置") {
-		t.Fatal("complete purpose was published during argument streaming")
+		t.Fatal("partial arguments replaced the previous description")
 	}
-	emit("tool:update", "second", "read", `{"purpose":"检查后续配置","files":[]}`, false)
-	tt.Frame()
-	if !tt.HasText("检查后续配置") || tt.HasText("检查配置入口") {
-		t.Fatal("ready purpose did not replace the previous description")
-	}
-	// A new category must not insert a temporary label and shift its neighbors.
 	emit("tool:start", "command", "command", `{"purpose":"`)
 	tt.Frame()
-	if tt.HasText(groupPurposeFallbacks[3]) || !tt.HasText("检查后续配置") {
-		t.Fatal("new category flashed a fallback")
+	if tt.HasText(groupPurposeFallbacks[3]) || !tt.HasText("检查配置入口") {
+		t.Fatal("streaming command flashed a fallback")
 	}
 	emit("tool:result", "command", "command", `{}`)
 	tt.Frame()
 	if !tt.HasText(groupPurposeFallbacks[3]) {
 		t.Fatal("completed legacy call lost its fallback")
+	}
+	emit("tool:update", "second", "read", `{"purpose":"检查后续配置","files":[]}`, false)
+	tt.Frame()
+	texts := tt.Texts()
+	first := slices.Index(texts, "检查配置入口")
+	second := slices.Index(texts, "检查后续配置")
+	command := slices.Index(texts, groupPurposeFallbacks[3])
+	if first < 0 || second <= first || command <= second {
+		t.Fatalf("descriptions did not follow call order after out-of-order updates: %v", texts)
+	}
+	emit("tool:start", "last", "read", `{"purpose":"读取最终配置`)
+	tt.Frame()
+	if !tt.HasText("检查配置入口") || tt.HasText("读取最终配置") {
+		t.Fatal("streaming call evicted a ready description")
+	}
+	emit("tool:update", "last", "read", `{"purpose":"读取最终配置","files":[]}`, false)
+	tt.Frame()
+	if tt.HasText("检查配置入口") || !tt.HasText("读取最终配置") {
+		t.Fatal("ready fourth call did not replace the oldest description")
 	}
 }

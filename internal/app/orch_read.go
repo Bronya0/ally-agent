@@ -16,9 +16,7 @@ import (
 	"ally-dev/internal/tools/read"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -67,127 +65,6 @@ type readPreviewResult struct {
 	TruncatedLinesOmitted bool
 	RangeStatus           string
 	EmptyRange            bool
-}
-
-// sessionReadCache avoids sending an identical read payload to the model more
-// than once during one session: the run that first read a file range put those
-// bytes into the conversation, so every later read of the same range — in this
-// run or in a later run of the same session — can be answered with "unchanged,
-// you already have it" instead of paying for the payload again. It caches the
-// hash of what the model actually received for one file range — the returned text
-// plus any injected image data — and omits the payload when a later read of the
-// same range would send exactly the same bytes, always reporting the freshly read
-// range metadata.
-//
-// No write path clears this cache, and none is needed: every read still hits
-// disk and the omission is decided by comparing the payload hash, so a file
-// rewritten by edit, by create, by a command, or by anything else simply fails
-// the comparison and gets sent again. A stale key can only cost a missed
-// de-duplication, never hide changed content.
-//
-// Sharing one cache across a session's runs adds the one requirement a content
-// comparison cannot cover: an omission is only honest while the payload is still
-// in the model's own history. Every rewrite that can drop it therefore
-// invalidates the session's cache — compactHistory (the summary replaces the
-// turns), TruncateSessionHistory (the user deletes a turn), loadHistoryLocked (a
-// history restored from disk keeps only placeholders for tool results), the
-// history repair pass inside saveHistory, and releaseSession. The cache is
-// memory-only, so a restarted process starts empty as well.
-type sessionReadCache struct {
-	mu      sync.Mutex
-	entries map[string]string // key (resolvedPath#range) -> payload SHA-256 hex
-}
-
-const sessionReadCacheMaxEntries = 64
-
-func newSessionReadCache() *sessionReadCache {
-	return &sessionReadCache{entries: make(map[string]string)}
-}
-
-// sessionReadCacheFor returns the read cache shared by every run of one session,
-// creating it on first use. A call without a session id gets a private cache:
-// with no conversation there is nothing to check a payload against.
-func (a *App) sessionReadCacheFor(sessionID string) *sessionReadCache {
-	if sessionID == "" {
-		return newSessionReadCache()
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.readCaches == nil {
-		a.readCaches = map[string]*sessionReadCache{}
-	}
-	if cache, ok := a.readCaches[sessionID]; ok {
-		return cache
-	}
-	cache := newSessionReadCache()
-	a.readCaches[sessionID] = cache
-	return cache
-}
-
-// invalidateSessionReadCache drops the payloads cached for one session after its
-// history was rewritten: content the model can no longer see must be sent again.
-func (a *App) invalidateSessionReadCache(sessionID string) {
-	if sessionID == "" {
-		return
-	}
-	a.mu.Lock()
-	a.invalidateSessionReadCacheLocked(sessionID)
-	a.mu.Unlock()
-}
-
-// invalidateSessionReadCacheLocked is the a.mu-holding variant: loadHistoryLocked
-// runs with a.mu held and a.mu is not reentrant.
-func (a *App) invalidateSessionReadCacheLocked(sessionID string) {
-	if cache, ok := a.readCaches[sessionID]; ok && cache != nil {
-		cache.invalidate()
-	}
-	// 请求前缀基线同生同灭：历史被改写（压缩 / 删回合 / 从磁盘重载 / 落盘修复）
-	// 之后，"上一轮发出去的样子"已不是同一段前缀，留着只会把合法改写报成漂移
-	// （见 biz_context_lock.go）。
-	delete(a.contextLocks, sessionID)
-}
-
-func fileRangeCacheKey(resolvedPath string, req ReadFileRequest) string {
-	cleanPath := filepath.Clean(filepath.ToSlash(resolvedPath))
-	return fmt.Sprintf("%s#%d:%d:%d:%d:%d", cleanPath, req.StartLine, req.EndLine, req.LineCount, req.ContextBefore, req.ContextAfter)
-}
-
-// hashText hashes the payload parts the model would receive for one read, joined
-// with a NUL separator (neither part can contain one). Hashing the text alone
-// would treat a replaced image with an identical text notice — same file name and
-// byte size — as unchanged and silently drop the new picture.
-func hashText(parts ...string) string {
-	h := sha256.New()
-	for i, part := range parts {
-		if i > 0 {
-			h.Write([]byte{0})
-		}
-		h.Write([]byte(part))
-	}
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-// putLocked records one key -> content hash entry, evicting arbitrary entries
-// while the cache is at its entry budget (the cache is a best-effort token
-// saver, so which entry is dropped does not matter). The caller must already
-// hold c.mu: sessionReadCache.mu is a plain Mutex and NOT reentrant, so a locked
-// region must never reach back into a self-locking entry point — that would
-// self-deadlock. The read path stores through this function from dedupeResult
-// while holding c.mu.
-func (c *sessionReadCache) putLocked(key string, contentHash string) {
-	for len(c.entries) >= sessionReadCacheMaxEntries {
-		for k := range c.entries {
-			delete(c.entries, k)
-			break
-		}
-	}
-	c.entries[key] = contentHash
-}
-
-func (c *sessionReadCache) invalidate() {
-	c.mu.Lock()
-	clear(c.entries)
-	c.mu.Unlock()
 }
 
 type pendingReadItem struct {
@@ -269,62 +146,6 @@ func resolveReadStartLine(startLine, endLine, tailLines int) (int, error) {
 	return -tailLines, nil
 }
 
-func (c *sessionReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
-	return c.readContext(context.Background(), a, cfg, req)
-}
-
-func (c *sessionReadCache) readContext(ctx context.Context, a *App, cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
-	result, err := a.batchReadFilesWithContext(ctx, cfg, req)
-	if err != nil {
-		return nil, err
-	}
-	c.dedupeResult(result, func(item *BatchReadResultItem) string {
-		resolvedPath, resErr := resolveReadPath(cfg, item.Path)
-		if resErr != nil {
-			return item.Path
-		}
-		return resolvedPath
-	})
-	return result, nil
-}
-
-// dedupeResult 对一批已读结果做内容级去重：同一路径/范围（keyPath(item) +
-// item.Req 构成键）且载荷哈希与上次完全相同的条目清空正文并标记 Reused，其余
-// 条目记下本次哈希。本地 read 与 remote_read 共用这一处实现——命中判定、被清
-// 空的字段、Reused 标记都只有一份定义，两个读入口不会各自漂移。
-//
-// keyPath 只负责键里的路径部分：本地给解析后的绝对路径，远端给目标机工作区内
-// 的相对路径；两种写法不会互相撞键。即使两台机器上的同名文件撞了键，也只有载
-// 荷逐字节相同时才会命中——那时省略的正是模型已经收到过的内容。
-func (c *sessionReadCache) dedupeResult(result *BatchReadResult, keyPath func(item *BatchReadResultItem) string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for i := range result.Files {
-		item := &result.Files[i]
-		if item.Error != "" || item.RangeStatus == "deferred" {
-			continue
-		}
-		effective := ReadFileRequest{StartLine: item.StartLine, EndLine: item.EndLine}
-		if item.RangeStatus == "read_only_tail" {
-			// Large-file tails have no absolute line numbers. Keep their requested
-			// depth in the cache key without inventing a displayed/editable range.
-			effective.StartLine = item.Req.StartLine
-		}
-		key := fileRangeCacheKey(keyPath(item), effective)
-		contentHash := hashText(item.Content, item.DataURL)
-
-		if prevHash, ok := c.entries[key]; ok && prevHash == contentHash {
-			item.Content = ""
-			item.Text = ""
-			item.DataURL = ""
-			item.Reused = true
-		} else {
-			c.putLocked(key, contentHash)
-		}
-	}
-}
-
 func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
 	return a.batchReadFilesWithContext(context.Background(), cfg, req)
 }
@@ -384,8 +205,7 @@ func filteredBatchReadResult(results []BatchReadResultItem) *BatchReadResult {
 	return result
 }
 
-// Trim at complete displayed lines before deduplication. The same producer-side
-// bound serves local and SSH reads; no cache entry can claim omitted text was sent.
+// Trim previews at complete displayed lines. Local and SSH reads share this bound.
 func boundBatchReadPreview(result *BatchReadResult) {
 	broad := func(f BatchReadResultItem) bool {
 		return f.Error == "" && !f.EmptyRange && f.EndLine > 0 && f.Kind == "text" && f.ContentFormat == "line_numbers" && f.Req.StartLine >= 0 && f.Req.EndLine == 0 && f.Req.LineCount == 0 && f.Req.ContextBefore == 0 && f.Req.ContextAfter == 0
@@ -734,7 +554,7 @@ func resolveReadFilePath(cfg ConfigState, requested string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// 密钥/凭据位置不读：与命令围栏、grep 共用同一份判定（pathutil）——模型能把
+	// 密钥/凭据位置不读：与命令围栏共用同一份判定（pathutil）——模型能把
 	// 密钥喂给下一个请求，而出网是开着的。
 	if blocked, reason := blockedSensitiveRead(path); blocked {
 		return "", codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：这是密钥/凭据位置（%s），不读。\n检测到的目标：%s\n处理方式：确需该凭据请你自己手动查看；让 Ally 干活时用专门的工具（例如 ssh_cluster）。", reason, filepath.ToSlash(path)))
