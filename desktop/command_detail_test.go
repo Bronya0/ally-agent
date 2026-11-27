@@ -24,7 +24,7 @@ func TestLocalCommandEventRetainsMetadataOnly(t *testing.T) {
 	if len(conv.uiState().CommandDetails) != 0 {
 		t.Fatal("result event eagerly loaded closed details")
 	}
-	saved, _ := json.Marshal(snapshot(conv))
+	saved, _ := json.Marshal(snapshot(conv, nil))
 	if strings.Contains(string(saved), "FULL_OUTPUT_MARKER") {
 		t.Fatal("UI snapshot persisted output")
 	}

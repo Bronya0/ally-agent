@@ -821,7 +821,9 @@ func (a *App) applyWindowsUpdate(tag string) UpdateApplyResult {
 	if err := a.stopAllRuns(); err != nil {
 		return UpdateApplyResult{Error: err.Error()}
 	}
-	a.stopAllServices()
+	if err := a.stopAllServicesForUpdate(); err != nil {
+		return UpdateApplyResult{Error: fmt.Sprintf("stop background services: %v", err)}
+	}
 	backupDir := filepath.Join(exeDir, ".ally-update-backup")
 	if err := removeAllWithinBase(exeDir, backupDir); err != nil {
 		return UpdateApplyResult{Error: err.Error()}
@@ -942,7 +944,10 @@ func (a *App) applyMacUpdate(tag string) UpdateApplyResult {
 		a.emit("update:error", map[string]any{"stage": "apply", "error": err.Error()})
 		return UpdateApplyResult{Error: err.Error()}
 	}
-	a.stopAllServices()
+	if err := a.stopAllServicesForUpdate(); err != nil {
+		a.emit("update:error", map[string]any{"stage": "apply", "error": err.Error()})
+		return UpdateApplyResult{Error: err.Error()}
+	}
 
 	mountPoint := filepath.Join(updateVersionDir(tag), "mnt")
 	mounted, err := mountDMG(archivePath, mountPoint)

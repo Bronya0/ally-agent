@@ -11616,14 +11616,24 @@ func (msgs Messages) Ui531ccb042ba7() string {
 	return Catalog.Format(msgs.locale, "ui_531ccb042ba7", nil)
 }
 
-// UiC2f22d05ceeb says "The interface has been deleted, but the model context synchronization failed:"
+// UiDeleteQuestionFailed says "Deletion failed; the conversation is unchanged: "
 // in the language the app shows.
-func UiC2f22d05ceeb() string { return In(i18n.Locale()).UiC2f22d05ceeb() }
+func UiDeleteQuestionFailed() string { return In(i18n.Locale()).UiDeleteQuestionFailed() }
 
-// UiC2f22d05ceeb says "The interface has been deleted, but the model context synchronization failed:"
+// UiDeleteQuestionFailed says "Deletion failed; the conversation is unchanged: "
 // in the language of msgs.
-func (msgs Messages) UiC2f22d05ceeb() string {
-	return Catalog.Format(msgs.locale, "ui_c2f22d05ceeb", nil)
+func (msgs Messages) UiDeleteQuestionFailed() string {
+	return Catalog.Format(msgs.locale, "ui_delete_question_failed", nil)
+}
+
+// UiQuitFailed says "Quit failed; the window stays open: "
+// in the language the app shows.
+func UiQuitFailed() string { return In(i18n.Locale()).UiQuitFailed() }
+
+// UiQuitFailed says "Quit failed; the window stays open: "
+// in the language of msgs.
+func (msgs Messages) UiQuitFailed() string {
+	return Catalog.Format(msgs.locale, "ui_quit_failed", nil)
 }
 
 // Ui3d13868593ae says "Language"

@@ -631,6 +631,30 @@ func (a *App) frozenPrefixTokenStats(sessionID string) (frozenPrefixStats, bool)
 // history is the authority whenever it holds a copy; this answers the empty case
 // only. A session with nothing to send — no server, ToolExec off — reports 0.
 func (a *App) pendingMcpCatalogTokens(sessionID string) int {
+	content := a.sessionMcpCatalogContent(sessionID)
+	if content == emptyMcpCatalog {
+		return 0
+	}
+	return estimateTokensFromText(content)
+}
+
+// returningMcpCatalogTokens estimates the catalog cost the next request will
+// carry once the compacted history holds none. The fast-compact gate must
+// charge this against its savings: the projection drops the catalog message
+// and ensureMcpCatalog re-sends one on the very next request, so a large
+// catalog otherwise makes the rewrite look far smaller than the request is.
+func (a *App) returningMcpCatalogTokens(sessionID string) int {
+	content := a.sessionMcpCatalogContent(sessionID)
+	if content == emptyMcpCatalog {
+		return 0
+	}
+	return estimateTokensFromText(content)
+}
+
+// sessionMcpCatalogContent resolves the catalog content under the session's
+// frozen loading/tool settings, or the empty marker when there is nothing to
+// send (no server, ToolExec off, catalog switch off).
+func (a *App) sessionMcpCatalogContent(sessionID string) string {
 	// The request path checks availability against the session's frozen settings
 	// snapshot. A direct caller carries the loading and disabled-tool lists, and
 	// builtinToolDisabled takes that path when no snapshot is injected.
@@ -641,11 +665,7 @@ func (a *App) pendingMcpCatalogTokens(sessionID string) int {
 		cfg.DisabledContext = snapshot.disabledContext
 	}
 	a.mu.Unlock()
-	content := a.mcpCatalogFor(context.Background(), cfg)
-	if content == emptyMcpCatalog {
-		return 0
-	}
-	return estimateTokensFromText(content)
+	return a.mcpCatalogFor(context.Background(), cfg)
 }
 
 // getContextBreakdown computes token estimates from the real session state.

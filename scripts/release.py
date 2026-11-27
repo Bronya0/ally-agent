@@ -31,6 +31,7 @@ def gh(*args, data=False):
 
 
 def release_context(repo, tag):
+    verify_tag_on_branch(repo, tag)
     target = version(tag)
     pages = gh('api', '--paginate', '--slurp', 'repos/' + repo + '/releases?per_page=100', data=True)
     existing = None
@@ -50,7 +51,22 @@ def release_context(repo, tag):
     return existing
 
 
+def verify_tag_on_branch(repo, tag):
+    """Refuse a tag whose commit is not on the mygo branch history."""
+    version(tag)
+    try:
+        sha = gh('api', 'repos/' + repo + '/commits/' + tag, data=True)['sha']
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError('tag ' + tag + ' does not resolve to a commit: ' + str(error)) from error
+    comparison = gh('api', 'repos/' + repo + '/compare/mygo...' + sha, data=True)
+    # A contained tag reads as "behind" (mygo tip is newer) or "identical";
+    # anything else was cut from another branch and must not be published.
+    if comparison.get('status') not in ('behind', 'identical'):
+        raise RuntimeError('tag ' + tag + ' is not on the mygo branch history; refusing to publish')
+
+
 def prepare(repo, tag):
+    # release_context refuses non-mygo tags, already-public and older versions.
     if release_context(repo, tag) is None:
         gh('release', 'create', tag, '--repo', repo, '--verify-tag', '--draft',
            '--generate-notes', '--title', 'Ally ' + tag)

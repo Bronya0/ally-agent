@@ -299,12 +299,17 @@ func TestLineNumberPrefixesAreDroppedOnlyWhenTheSnippetIsUnique(t *testing.T) {
 	if want := "header\nkeep\nchanged\nfooter\n"; res.Content != want {
 		t.Fatalf("content: %q want %q", res.Content, want)
 	}
-	if len(res.Warnings) == 0 {
-		t.Fatal("dropping line numbers must be reported")
+	if len(res.Warnings) == 0 || !strings.Contains(res.Warnings[0], " at line 2") {
+		t.Fatalf("dropping line numbers must report the hit line, got %#v", res.Warnings)
 	}
 	// 剥掉前缀后仍有两处候选时必须放弃，不能猜一处。
 	if _, _, err := ApplyBatchTextChanges("b\nc\nb\n", []TextChange{{OldText: "12: b", NewText: "B"}}); toolerrors.Code(err) != "E_NO_MATCH" {
 		t.Fatalf("ambiguous stripped snippet must stay unmatched, got %v", err)
+	}
+	// 全前缀无正文的 needle 剥完只剩空白（如 "12:\n13:" → "\n"）：不得拿它
+	// 去碰文件里唯一的换行，宁可拒配让模型重抄。
+	if _, _, err := ApplyBatchTextChanges("a\nb", []TextChange{{OldText: "12:\n13:", NewText: "X"}}); toolerrors.Code(err) != "E_NO_MATCH" {
+		t.Fatalf("whitespace-only stripped snippet must stay unmatched, got %v", err)
 	}
 }
 

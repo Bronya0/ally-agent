@@ -9,11 +9,14 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"ally-dev/internal/tools/shared"
 )
@@ -38,21 +41,34 @@ import (
 const (
 	// tempWorkspacePrefix 是 Ally 创建的临时工作空间目录名前缀。
 	tempWorkspacePrefix = "ally-temp-"
-	// staleTempWorkspaceAge 是启动清理的陈旧阈值：仅删除修改时间早于
-	// 该阈值的残留目录，避免误删并行运行的另一个 Ally 实例的活跃目录。
+	// tempWorkspaceLockName 是工作区内的持有者锁文件。点前缀让它不进
+	// 文件树与工作区结构图；创建进程对它保持独占 flock，作为存活凭据。
+	tempWorkspaceLockName = ".ally-owner.lock"
+	// staleTempWorkspaceAge 是启动清理的陈旧阈值：仅回收修改时间早于
+	// 该阈值的残留目录，同时挡住「刚建好还没加上锁」的窗口期竞态。
 	staleTempWorkspaceAge = 24 * time.Hour
 )
 
 // tempWorkspaceErrorCode 是临时工作空间删除护栏拒绝时使用的稳定错误码。
 const tempWorkspaceErrorCode = "E_TEMP_WORKSPACE_INVALID"
 
-// tempWorkspaces 记录本进程创建的临时工作空间（绝对路径 -> true）。
+// tempWorkspaceInUseErrorCode 是另一实例仍持有工作区锁时的拒绝错误码。
+const tempWorkspaceInUseErrorCode = "E_TEMP_WORKSPACE_IN_USE"
+
+// tempWorkspaceGuard 是一个临时工作空间的存活凭据：创建进程对锁文件保持
+// 独占 flock，目录扫描据此区分「持有者已退出的残留」与「别的实例仍在使用」，
+// 不再把目录修改时间当作进程存活证据。
+type tempWorkspaceGuard struct {
+	file *flock.Flock
+}
+
+// tempWorkspaces 记录本进程创建的临时工作空间（绝对路径 -> 持有锁）。
 // 进程退出时统一删除；DeleteTempWorkspace 对成员与非成员一视同仁，
-// 只要路径通过护栏即允许删除。
+// 只要路径通过护栏且无人持有锁即允许删除。
 var tempWorkspaces = struct {
 	sync.Mutex
-	paths map[string]struct{}
-}{paths: map[string]struct{}{}}
+	paths map[string]*tempWorkspaceGuard
+}{paths: map[string]*tempWorkspaceGuard{}}
 
 // isValidTempWorkspacePath 校验 path 是否是「临时根下的 ally-temp-* 直接
 // 子目录」。目录分隔符归一后按平台大小写语义比较（Windows 不区分大小写），
@@ -88,19 +104,61 @@ func (a *App) CreateTempWorkspace() (string, error) {
 	if abs, absErr := filepath.Abs(dir); absErr == nil {
 		dir = abs
 	}
+	guard := flock.New(filepath.Join(dir, tempWorkspaceLockName))
+	locked, lockErr := guard.TryLock()
+	if lockErr != nil {
+		_ = os.RemoveAll(dir)
+		return "", lockErr
+	}
+	if !locked {
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("temp workspace lock unavailable: %s", dir)
+	}
 	tempWorkspaces.Lock()
-	tempWorkspaces.paths[dir] = struct{}{}
+	tempWorkspaces.paths[dir] = &tempWorkspaceGuard{file: guard}
 	tempWorkspaces.Unlock()
 	return dir, nil
 }
 
 // DeleteTempWorkspace 删除一个临时工作空间目录。护栏：目标必须是系统
-// 临时根的直接 ally-temp-* 子目录，否则返回 E_TEMP_WORKSPACE_INVALID。
+// 临时根的直接 ally-temp-* 子目录，否则返回 E_TEMP_WORKSPACE_INVALID；
+// 别的实例仍持有锁时返回 E_TEMP_WORKSPACE_IN_USE，绝不删除活目录。
 func (a *App) DeleteTempWorkspace(path string) error {
 	if !isValidTempWorkspacePath(path) {
 		return shared.Newf(tempWorkspaceErrorCode, "refusing to delete %q: not an ally temp workspace under the system temp root", path)
 	}
 	cleaned := filepath.Clean(strings.TrimSpace(path))
+	tempWorkspaces.Lock()
+	own := tempWorkspaces.paths[cleaned]
+	tempWorkspaces.Unlock()
+	if _, statErr := os.Stat(cleaned); statErr != nil {
+		if os.IsNotExist(statErr) {
+			// 幂等：目录已不存在则连同注册项一并清掉。
+			tempWorkspaces.Lock()
+			delete(tempWorkspaces.paths, cleaned)
+			tempWorkspaces.Unlock()
+			return nil
+		}
+		return statErr
+	}
+	if own != nil {
+		// 本进程持有锁：先释放再删树，锁文件随目录一起移除。
+		_ = own.file.Unlock()
+		_ = own.file.Close()
+	} else {
+		// 非本进程目录：锁可以取得说明持有者已退出；取不到说明
+		// 另一实例仍在此工作，拒绝删除。
+		other := flock.New(filepath.Join(cleaned, tempWorkspaceLockName))
+		locked, lockErr := other.TryLock()
+		if lockErr != nil {
+			return lockErr
+		}
+		if !locked {
+			return shared.Newf(tempWorkspaceInUseErrorCode, "refusing to delete %q: another instance is still using this temp workspace", cleaned)
+		}
+		_ = other.Unlock()
+		_ = other.Close()
+	}
 	// 即使上面的名字/层级校验通过，删除仍然走基目录断言：递归删除在全仓只有
 	// removeAllWithinBase 一条出口（目标必须是基目录的严格子目录）。
 	if err := removeTempTree(cleaned); err != nil {
@@ -117,11 +175,17 @@ func (a *App) DeleteTempWorkspace(path string) error {
 func (a *App) cleanupTempWorkspacesOnExit() {
 	tempWorkspaces.Lock()
 	paths := make([]string, 0, len(tempWorkspaces.paths))
-	for dir := range tempWorkspaces.paths {
+	guards := make([]*tempWorkspaceGuard, 0, len(tempWorkspaces.paths))
+	for dir, guard := range tempWorkspaces.paths {
 		paths = append(paths, dir)
+		guards = append(guards, guard)
 	}
-	tempWorkspaces.paths = map[string]struct{}{}
+	tempWorkspaces.paths = map[string]*tempWorkspaceGuard{}
 	tempWorkspaces.Unlock()
+	for _, guard := range guards {
+		_ = guard.file.Unlock()
+		_ = guard.file.Close()
+	}
 	for _, dir := range paths {
 		if err := removeTempTree(dir); err != nil {
 			a.logAppError("temp workspace cleanup on exit failed", "error", err, "path", dir)
@@ -129,9 +193,11 @@ func (a *App) cleanupTempWorkspacesOnExit() {
 	}
 }
 
-// cleanupStaleTempWorkspaces 扫描系统临时根并删除陈旧的 ally-temp-* 残留
-// 目录（上次进程崩溃/强杀未清理的）。只删除修改时间早于阈值的目录。
-// 在 ServiceStartup 中异步调用，绝不阻塞启动。
+// cleanupStaleTempWorkspaces 扫描系统临时根并回收陈旧的 ally-temp-* 残留
+// 目录（上次进程崩溃/强杀未清理的）。时限挡住刚建好还没加上锁的窗口期；
+// 有锁文件的目录以锁为存活凭据：锁被占用绝不删除，锁空闲才回收；
+// 没有锁文件的旧版本目录沿用纯时限规则。在 ServiceStartup 中异步调用，
+// 绝不阻塞启动。
 func (a *App) cleanupStaleTempWorkspaces() {
 	entries, err := os.ReadDir(os.TempDir())
 	if err != nil {
@@ -152,6 +218,26 @@ func (a *App) cleanupStaleTempWorkspaces() {
 		// 工作区几乎不可能连续 24h 无任何顶层变化。
 		if info.ModTime().After(cutoff) {
 			continue
+		}
+		tempWorkspaces.Lock()
+		own := tempWorkspaces.paths[full] != nil
+		tempWorkspaces.Unlock()
+		if own {
+			continue
+		}
+		lockPath := filepath.Join(full, tempWorkspaceLockName)
+		if _, statErr := os.Stat(lockPath); statErr == nil {
+			guard := flock.New(lockPath)
+			locked, lockErr := guard.TryLock()
+			if lockErr != nil {
+				a.logAppError("stale temp workspace lock check failed", "error", lockErr, "path", full)
+				continue
+			}
+			if !locked {
+				continue
+			}
+			_ = guard.Unlock()
+			_ = guard.Close()
 		}
 		if err := removeTempTree(full); err != nil {
 			a.logAppError("stale temp workspace cleanup failed", "error", err, "path", full)

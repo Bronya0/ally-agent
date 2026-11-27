@@ -220,7 +220,7 @@ type desktop struct {
 	core                                                *backend.App
 	win                                                 *mygo.Window
 	tray                                                *uikit.TrayHost
-	ready, closing, quitReady                           bool
+	ready, closing, quitAccepted, quitReady             bool
 	mainWindowHidden                                    bool
 	page, filter                                        string
 	config                                              backend.ConfigState
@@ -431,9 +431,11 @@ func Run() {
 			if e.SessionEnding {
 				// Logout, restart and shutdown end the process as soon as this
 				// listener returns, so the barrier cannot wait in a worker: write
-				// the drafts, settings and preferences here. closing also keeps
-				// the window handlers from starting a quit the session cannot run.
+				// the drafts, settings and preferences here. closing and the
+				// accepted-quit gate also keep the window handlers from starting
+				// work the session cannot run.
 				a.closing = true
+				a.acceptQuit()
 				if err := a.flushWindowWritesNow(sessionEndWriteTimeout); err != nil {
 					log.Printf("session end flush: %v", err)
 				}
@@ -549,15 +551,30 @@ func (a *desktop) shutdown() {
 	a.closeVoiceInput()
 	if a.upd.Applied && a.upd.State == "restarting" {
 		// The updater already flushed after ApplyUpdate stopped all runs.
+		a.acceptQuit()
 		a.finishQuit()
 		return
 	}
-	a.prepareWindowClose(a.finishShutdown, func() {
+	a.prepareWindowClose(a.beginShutdown, func() {
 		a.closing = false
+		a.quitAccepted = false
 		if voiceInputSupported() && a.prefs.VoiceInputEnabled {
 			a.configureVoiceInput()
 		}
 	})
+}
+
+// beginShutdown is the point of no return once the close confirmation passed:
+// run events stop being consumed and the final save barrier runs.
+func (a *desktop) beginShutdown() {
+	a.acceptQuit()
+	a.finishShutdown()
+}
+
+// acceptQuit closes the event stream: everything queued before this point is
+// what the final save barrier owns, and later run events are dropped.
+func (a *desktop) acceptQuit() {
+	a.quitAccepted = true
 }
 
 // Both normal quit and updating check editor changes before replacing files.
@@ -593,6 +610,7 @@ func (a *desktop) finishShutdown() {
 	a.flushWindowWrites(func(err error) {
 		if err != nil {
 			a.closing = false
+			a.quitAccepted = false
 			a.notifyError(locales.Text("保存失败，窗口保持打开：") + err.Error())
 			return
 		}
@@ -601,25 +619,87 @@ func (a *desktop) finishShutdown() {
 }
 
 func (a *desktop) finishQuit() {
+	go func() {
+		outcome := a.core.ShutdownNative()
+		a.win.Update(func() { a.applyShutdownOutcome(outcome) })
+	}()
+}
+
+// applyShutdownOutcome applies the backend shutdown result on the UI thread.
+// A failure keeps the window alive for retry: the backend retained its data
+// lock and skipped cleanup on purpose, so destroying the UI would strand the
+// user with neither a window nor a working backend.
+func (a *desktop) applyShutdownOutcome(err error) {
+	if err != nil {
+		a.closing = false
+		a.quitAccepted = false
+		a.settleAbandonedRuns()
+		a.notifyError(locales.Text("退出失败，窗口保持打开：") + err.Error())
+		return
+	}
 	a.closeVoiceInput()
 	a.stopAutoAppearance()
 	a.stopUpdateChecks()
 	a.closePet()
-	go func() {
-		if err := a.core.ShutdownNative(); err != nil {
-			log.Printf("shutdown: %v", err)
+	a.discardAttachmentImagesOnShutdown()
+	a.releaseWorkspaceFiles()
+	a.releaseAllHTMLPreviews()
+	if a.pluginHost != nil {
+		a.pluginHost.Close()
+	}
+	a.quitReady = true
+	mygo.App.Quit()
+}
+
+// settleAbandonedRuns clears tabs whose runs the shutdown already cancelled:
+// their completion events were dropped with the closed event stream, so the
+// tabs would otherwise stay busy after a failed quit returns control.
+func (a *desktop) settleAbandonedRuns() {
+	for _, t := range a.allOpenConversations() {
+		if !t.Busy {
+			continue
 		}
-		a.win.Update(func() {
-			a.discardAttachmentImagesOnShutdown()
-			a.releaseWorkspaceFiles()
-			a.releaseAllHTMLPreviews()
-			if a.pluginHost != nil {
-				a.pluginHost.Close()
-			}
-			a.quitReady = true
-			mygo.App.Quit()
-		})
-	}()
+		settleRunningToolMessages(t, "cancelled", "")
+		t.Status = ""
+		t.Busy = false
+		t.RunID = ""
+		t.CancelRequested = false
+	}
+}
+
+// conversationHoldingPendingAttachments returns the first conversation whose
+// pending attachments an update would silently drop: the preflight covers
+// cached sessions too, not only the open tabs (Ctrl+N parks a busy session in
+// the cache without removing it from the tab strip).
+func (a *desktop) conversationHoldingPendingAttachments() *conversation {
+	for _, t := range a.allOpenConversations() {
+		if t.AttachmentLoading || len(t.PendingAttachments) > 0 {
+			return t
+		}
+	}
+	return nil
+}
+
+// allOpenConversations lists every conversation the UI still holds: the open
+// tabs plus the cached sessions a run handoff parked there, deduplicated by
+// pointer (an open tab is usually cached too).
+func (a *desktop) allOpenConversations() []*conversation {
+	seen := map[*conversation]bool{}
+	out := make([]*conversation, 0, len(a.tabs)+len(a.openSessions))
+	add := func(t *conversation) {
+		if t == nil || seen[t] {
+			return
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	for _, t := range a.tabs {
+		add(t)
+	}
+	for _, t := range a.openSessions {
+		add(t)
+	}
+	return out
 }
 func (a *desktop) current() *conversation {
 	if a.active < 0 || a.active >= len(a.tabs) {
@@ -963,7 +1043,7 @@ func (a *desktop) send(t *conversation, text string) bool {
 	}()
 	return true
 }
-func snapshot(t *conversation) backend.SessionSnapshot {
+func snapshot(t *conversation, extraRoots []string) backend.SessionSnapshot {
 	// Detach the JSON-shaped transcript before the asynchronous save. Copying
 	// maps/slices directly avoids encoding and decoding the entire conversation
 	// on every persisted UI event. Unusual values still use a JSON round-trip so
@@ -1035,7 +1115,7 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 			}
 		}
 	}
-	return backend.SessionSnapshot{ID: t.ID, Title: t.Title, Draft: t.Draft, Workspace: t.Workspace, CreatedAt: t.Created, UpdatedAt: time.Now().UnixMilli(), ContextTokens: t.ContextTokens, HasSnapshot: true, Messages: msgs}
+	return backend.SessionSnapshot{ID: t.ID, Title: t.Title, Draft: t.Draft, Workspace: t.Workspace, CreatedAt: t.Created, UpdatedAt: time.Now().UnixMilli(), ContextTokens: t.ContextTokens, HasSnapshot: true, ExtraRoots: append([]string(nil), extraRoots...), Messages: msgs}
 }
 
 const maxSnapshotCloneDepth = 10_000
@@ -1164,7 +1244,7 @@ func cloneSnapshotJSONValue(value any, depth int, active map[snapshotCloneVisit]
 
 func (a *desktop) persist(t *conversation) {
 	t.SnapshotQueued = true
-	s := snapshot(t)
+	s := snapshot(t, a.extraRoots[t.ID])
 	previous := a.persistTail
 	done := make(chan struct{})
 	a.persistTail = done
@@ -1220,27 +1300,36 @@ func (a *desktop) openSession(id string) {
 			}
 			s.Workspace = root
 		}
-		a.win.Update(func() {
-			t := a.freshConversation(s.Workspace)
-			t.ID, t.Title, t.Created, t.Messages, t.ContextTokens = s.ID, s.Title, s.CreatedAt, s.Messages, s.ContextTokens
-			t.Draft = s.Draft
-			t.SnapshotQueued = true
-			for _, message := range t.Messages {
-				if str(message, "role") == "tool_call" || str(message, "toolCallId") != "" {
-					normalizeToolMessage(message)
-				}
-				normalizeLoadedCancellation(message)
-				prepareCompactionDisplay(message)
-				if !retainMCPDisplaySummary(message) && !isMCPDisplayTool(message) {
-					retainSnapshotToolSummary(message)
-				}
-				retainCreateDisplayPreview(message)
-				normalizeSubagentBlackboard(message)
-			}
-			restoreRoundStats(t)
-			a.showSession(t)
-		})
+		a.win.Update(func() { a.showSession(a.applyRestoredSession(s)) })
 	}()
+}
+
+// applyRestoredSession builds the conversation for a loaded snapshot; only the
+// tab activation that follows must run on the UI thread.
+func (a *desktop) applyRestoredSession(s backend.SessionSnapshot) *conversation {
+	t := a.freshConversation(s.Workspace)
+	t.ID, t.Title, t.Created, t.Messages, t.ContextTokens = s.ID, s.Title, s.CreatedAt, s.Messages, s.ContextTokens
+	t.Draft = s.Draft
+	t.SnapshotQueued = true
+	if len(s.ExtraRoots) > 0 {
+		// The session's approved write roots ride the snapshot so a restart does
+		// not silently revoke what the user granted.
+		a.extraRoots[t.ID] = append([]string(nil), s.ExtraRoots...)
+	}
+	for _, message := range t.Messages {
+		if str(message, "role") == "tool_call" || str(message, "toolCallId") != "" {
+			normalizeToolMessage(message)
+		}
+		normalizeLoadedCancellation(message)
+		prepareCompactionDisplay(message)
+		if !retainMCPDisplaySummary(message) && !isMCPDisplayTool(message) {
+			retainSnapshotToolSummary(message)
+		}
+		retainCreateDisplayPreview(message)
+		normalizeSubagentBlackboard(message)
+	}
+	restoreRoundStats(t)
+	return t
 }
 
 func (a *desktop) showSession(next *conversation) {
@@ -1317,6 +1406,12 @@ func blankTab(t *conversation) bool {
 // discardBlankTab releases what the replaced conversation still holds; the tab
 // itself stays and shows the session loaded into it.
 func (a *desktop) discardBlankTab(t *conversation) {
+	if t.SnapshotQueued {
+		// This blank tab was persisted before (e.g. a draft-only session whose
+		// draft the user cleared): persist the cleared state so the old draft
+		// does not revive when the session reopens.
+		a.persist(t)
+	}
 	if a.openSessions[t.ID] == t {
 		delete(a.openSessions, t.ID)
 	}
@@ -1404,7 +1499,16 @@ func (a *desktop) openFile(path string) {
 	a.loadFileReplacing(root, path, a.workspaceFiles[workspaceKey(root)], false)
 }
 
-func workspaceKey(root string) string { return strings.ToLower(filepath.Clean(root)) }
+// workspaceKey normalizes a root into a per-workspace cache key. Case folds
+// only on case-insensitive filesystems; folding on a case-sensitive volume
+// collided two real projects' trees and media state.
+func workspaceKey(root string) string {
+	root = filepath.Clean(root)
+	if workspaceCaseFold {
+		return strings.ToLower(root)
+	}
+	return root
+}
 
 func (a *desktop) activeFile() *workspaceFile {
 	t := a.current()

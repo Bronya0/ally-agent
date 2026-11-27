@@ -400,6 +400,13 @@ func (a *desktop) saveSkill() {
 		WhenToUse:   strings.TrimSpace(a.skillsF.AddWhen),
 		Content:     a.skillsF.AddContent,
 	}
+	if strings.EqualFold(strings.TrimSpace(a.skillsF.AddTarget), "project") {
+		// The form displays the active tab's workspace; the write must follow
+		// the same root instead of a stale global config.
+		if t := a.current(); t != nil {
+			draft.Workspace = t.Workspace
+		}
+	}
 	a.skillsF.AddBusy = true
 	go func() {
 		path, err := a.core.SaveSkill(draft)

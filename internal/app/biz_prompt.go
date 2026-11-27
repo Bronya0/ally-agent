@@ -10,6 +10,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -462,7 +463,57 @@ type promptFileCache struct {
 	content string
 }
 
-func (c *promptFileCache) read(path string) string {
+// lessonsCacheTailBytes is the window readTail keeps of LESSONS.md: enough to
+// cover the newest-lines and byte trims below on any realistic file, without
+// ever pulling a multi-megabyte file into memory just to keep its tail.
+const lessonsCacheTailBytes = 32 * 1024
+
+// readHead caches the first maxBytes of path (head-ordered files like USER.md).
+// Callers pass one extra byte when they need to detect truncation themselves.
+func (c *promptFileCache) readHead(path string, maxBytes int64) string {
+	return c.readBounded(path, func(f *os.File) (string, error) {
+		data, err := io.ReadAll(io.LimitReader(f, maxBytes))
+		if err != nil {
+			return "", err
+		}
+		return strings.ToValidUTF8(string(data), ""), nil
+	})
+}
+
+// readTail caches the last maxBytes of path (tail-ordered files like
+// LESSONS.md). A partial first line is dropped so consumers split on whole
+// lines; the trailing bytes are what the byte cap below would keep anyway.
+func (c *promptFileCache) readTail(path string, maxBytes int64) string {
+	return c.readBounded(path, func(f *os.File) (string, error) {
+		info, err := f.Stat()
+		if err != nil {
+			return "", err
+		}
+		size := info.Size()
+		if size > maxBytes {
+			if _, err := f.Seek(-maxBytes, io.SeekEnd); err != nil {
+				return "", err
+			}
+		}
+		data, err := io.ReadAll(f)
+		if err != nil {
+			return "", err
+		}
+		text := strings.ToValidUTF8(string(data), "")
+		if size > maxBytes {
+			if idx := strings.IndexByte(text, '\n'); idx >= 0 {
+				text = text[idx+1:]
+			} else {
+				text = ""
+			}
+		}
+		return text, nil
+	})
+}
+
+// readBounded runs the bounded reader and caches its result under the same
+// path+mtime invalidation the former whole-file cache used.
+func (c *promptFileCache) readBounded(path string, read func(*os.File) (string, error)) string {
 	c.Lock()
 	defer c.Unlock()
 	info, err := os.Stat(path)
@@ -475,12 +526,17 @@ func (c *promptFileCache) read(path string) string {
 	if c.path == path && c.mtime.Equal(info.ModTime()) {
 		return c.content
 	}
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return ""
 	}
-	c.path, c.mtime, c.content = path, info.ModTime(), string(data)
-	return c.content
+	defer f.Close()
+	content, err := read(f)
+	if err != nil {
+		return ""
+	}
+	c.path, c.mtime, c.content = path, info.ModTime(), content
+	return content
 }
 
 // The two files injected verbatim into every system prompt: the workspace's
@@ -497,7 +553,7 @@ func buildProjectLessonsContext(workspaceRoot string) string {
 	if workspaceRoot == "" {
 		return ""
 	}
-	content := projectLessonsCache.read(filepath.Join(workspaceRoot, projectLessonsFileName))
+	content := projectLessonsCache.readTail(filepath.Join(workspaceRoot, projectLessonsFileName), lessonsCacheTailBytes)
 	if content == "" {
 		return ""
 	}
@@ -552,7 +608,7 @@ const userProfileTruncatedMark = "[User profile truncated; read the original bef
 // nowhere obvious to go and the file never gets created. Only the
 // <user-profile> body depends on the file having content.
 func buildUserProfilePromptPart(filePath string) string {
-	_, body := memory.ParseMarkdown(userProfileCache.read(filePath))
+	_, body := memory.ParseMarkdown(userProfileCache.readHead(filePath, userProfileMaxBytes*2+1))
 	body = strings.TrimSpace(body)
 	var b strings.Builder
 	b.WriteString("\n\n# User Profile\n\n")

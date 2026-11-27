@@ -1414,6 +1414,13 @@ func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, er
 	}
 	truncated = repairDanglingToolCalls(truncated)
 
+	// Persist before any side effect: a failed disk write must not leave the
+	// in-memory history truncated while disk and caller keep the old turns, so
+	// restore and report instead of pretending the cut happened.
+	if err := a.saveHistory(sessionID, truncated); err != nil {
+		a.saveHistory(sessionID, messages)
+		return 0, fmt.Errorf("save truncated history: %w", err)
+	}
 	// The discarded turns may have left provider reasoning artifacts (thinking
 	// signatures, encrypted reasoning) in the replay stash; they no longer belong
 	// to any message of the history.
@@ -1421,7 +1428,6 @@ func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, er
 	// The conversation was rewritten: the recorded provider measurement covered
 	// turns that no longer exist.
 	a.clearContextAnchor(sessionID)
-	a.saveHistory(sessionID, truncated)
 	// The truncated conversation starts a new request-prefix baseline.
 	a.invalidateSessionContextLock(sessionID)
 	return len(truncated), nil

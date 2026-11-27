@@ -645,20 +645,25 @@ func (a *desktop) confirmDeleteUserMessage(d *deletePromptState) {
 	}
 	request := backend.TruncateSessionHistoryRequest{SessionID: t.ID, UserMessageIndex: d.UserIndex, ExpectedContent: d.Content}
 	go func() {
-		if _, syncErr := a.core.TruncateSessionHistory(request); syncErr != nil {
-			a.win.Update(func() {
-				a.notifyError(locales.Text("界面已删除，但模型上下文同步失败：") + syncErr.Error())
-			})
-		}
-		a.win.Update(func() {
-			if index <= len(t.Messages) {
-				invalidateChatSearch(t)
-				t.Messages = append([]map[string]any(nil), t.Messages[:index]...)
-			}
-			resetTranscriptAfterDelete(t, index)
-			a.persist(t)
-		})
+		_, syncErr := a.core.TruncateSessionHistory(request)
+		a.win.Update(func() { a.applyUserMessageDeletion(t, index, syncErr) })
 	}()
+}
+
+// applyUserMessageDeletion settles the deletion outcome on the UI thread: the
+// transcript only shrinks after the backend committed the same cut, so a
+// refused or failed sync never deletes turns the model context still holds.
+func (a *desktop) applyUserMessageDeletion(t *conversation, index int, syncErr error) {
+	if syncErr != nil {
+		a.notifyError(locales.Text("删除失败，对话保持不变：") + syncErr.Error())
+		return
+	}
+	if index <= len(t.Messages) {
+		invalidateChatSearch(t)
+		t.Messages = append([]map[string]any(nil), t.Messages[:index]...)
+	}
+	resetTranscriptAfterDelete(t, index)
+	a.persist(t)
 }
 
 // resetTranscriptAfterDelete clears view state bound to the deleted tail.

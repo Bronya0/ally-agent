@@ -517,7 +517,10 @@ func (a *desktop) removeTempWorkspace(root string) {
 }
 
 func (a *desktop) closeWorkspaceTab(index int) {
-	if root := a.detachWorkspaceTab(index); root != "" {
+	if root := a.detachWorkspaceTab(index); root != "" && (a.core == nil || !a.core.HasActiveServiceUnder(root)) {
+		// A background service may still keep this temp workspace as its cwd
+		// even though every tab is closed; the directory then survives until
+		// the process exit cleanup removes it after the services stopped.
 		a.removeTempWorkspace(root)
 	}
 }

@@ -271,7 +271,7 @@ const workspaceDeleteHint = "删除该工作区的全部会话"
 func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 	p := a.currentPalette()
 	active := false
-	if t := a.current(); t != nil && strings.EqualFold(t.Workspace, root) {
+	if t := a.current(); t != nil && sameWorkspace(t.Workspace, root) {
 		active = true
 	}
 	row := ui.Row(c.Key("rail-ws-"+root)).Height(26).Radius(6).Padding(0, railContentInset()).Gap(gapInline).AlignItems(ui.Center)
@@ -489,7 +489,7 @@ func (a *desktop) workspaceSessionEntries(workspace string) []backend.SessionInd
 	return a.wsSessionMemo.get(workspaceSessionKey{a.sessRev, workspace}, func(key workspaceSessionKey) []backend.SessionIndexEntry {
 		var entries []backend.SessionIndexEntry
 		for _, entry := range a.sessions {
-			if key.workspace == "" || strings.EqualFold(entry.Workspace, key.workspace) {
+			if key.workspace == "" || sameWorkspace(entry.Workspace, key.workspace) {
 				entries = append(entries, entry)
 			}
 		}
