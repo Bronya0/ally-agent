@@ -789,7 +789,7 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 		return base.RoundTrip(req)
 	}
 	if !t.skipRewrite {
-		body, err := io.ReadAll(req.Body)
+		body, err := readChatRewriteBody(req.Body)
 		_ = req.Body.Close()
 		if err != nil {
 			return nil, err
@@ -816,6 +816,20 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 		resp.Body = &sseDoneReadCloser{rc: resp.Body, watcher: t.streamDone}
 	}
 	return resp, nil
+}
+
+// The SDK's in-memory request body can write its bytes in one pass. Keep the
+// usual read path for other bodies, including those with unspecified length.
+func readChatRewriteBody(body io.Reader) ([]byte, error) {
+	if source, ok := body.(io.WriterTo); ok {
+		var dst bytes.Buffer
+		_, err := source.WriteTo(&dst)
+		if err == io.EOF {
+			err = nil
+		}
+		return dst.Bytes(), err
+	}
+	return io.ReadAll(body)
 }
 
 // chatRequestRewriteNeeded reports whether any chatRequestRewriteTransport

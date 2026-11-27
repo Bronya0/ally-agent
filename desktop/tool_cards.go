@@ -353,22 +353,24 @@ type toolGroupSummaryKey struct {
 	index, windowEnd int
 }
 
+const toolGroupPreviewLimit = 3
+
 type toolGroupSummary struct {
-	latest                                      [4]int
+	latest                                      [toolGroupPreviewLimit]int
 	end, reads, greps, lists, commands, trimmed int
 	status, lastStatus                          string
 	running, queued                             int
 	changeRev                                   uint64
 }
 
-// A bounded journal lets visible group headers apply changed scalar counts.
+// A bounded journal lets visible group headers update counts and previews.
 // It never retains arguments, outputs or message maps. A frame that misses
 // the entire journal simply rebuilds its summary from the transcript.
 const toolGroupChangeLimit = 64
 
 type toolGroupItem struct {
-	kind, state     string
-	folded, trimmed bool
+	kind, state                   string
+	folded, trimmed, previewReady bool
 }
 
 type toolGroupChange struct {
@@ -385,7 +387,9 @@ func groupItem(m map[string]any) toolGroupItem {
 	if !isFoldableToolGroupItem(m) {
 		return toolGroupItem{}
 	}
-	return toolGroupItem{readGrepGroupName(m), toolState(m), true, boolOf(m, "fastCompacted")}
+	state := toolState(m)
+	awaitingArgs := boolOf(m, "argsStreaming") && (state == "running" || state == "pending")
+	return toolGroupItem{kind: readGrepGroupName(m), state: state, folded: true, trimmed: boolOf(m, "fastCompacted"), previewReady: !awaitingArgs}
 }
 
 func recordToolGroupChange(t *conversation, index int, before toolGroupItem, m map[string]any) {
@@ -438,11 +442,26 @@ func (s *toolGroupSummary) finish(t *conversation) {
 	}
 }
 
+// Calls can finish streaming in a different order than they were issued.
+// Insert by transcript index, keeping only the newest previewable calls.
+func (s *toolGroupSummary) addPreview(index int) {
+	for slot := len(s.latest) - 1; slot >= 0 && index >= 0; slot-- {
+		if index > s.latest[slot] {
+			index, s.latest[slot] = s.latest[slot], index
+		}
+	}
+}
+
 func appendToolGroupSummary(s *toolGroupSummary, t *conversation, windowEnd int) {
-	for s.end < windowEnd && isFoldableToolGroupItem(t.Messages[s.end]) {
+	for s.end < windowEnd {
 		item := groupItem(t.Messages[s.end])
+		if !item.folded {
+			break
+		}
 		s.count(item, 1)
-		s.latest[toolGroupCategory(item.kind)] = s.end
+		if item.previewReady {
+			s.addPreview(s.end)
+		}
 		s.lastStatus = item.state
 		s.end++
 	}
@@ -450,7 +469,7 @@ func appendToolGroupSummary(s *toolGroupSummary, t *conversation, windowEnd int)
 }
 
 func summarizeToolGroup(t *conversation, index, windowEnd int) toolGroupSummary {
-	s := toolGroupSummary{end: index, lastStatus: "pending", latest: [4]int{-1, -1, -1, -1}}
+	s := toolGroupSummary{end: index, lastStatus: "pending", latest: [toolGroupPreviewLimit]int{-1, -1, -1}}
 	appendToolGroupSummary(&s, t, windowEnd)
 	return s
 }
@@ -471,8 +490,11 @@ func cachedToolGroupSummary(memo *memoOf[toolGroupSummaryKey, toolGroupSummary],
 				if change.index < key.index || change.index >= s.end {
 					continue
 				}
-				if change.before.kind != change.after.kind {
+				if change.before.kind != change.after.kind || (change.before.previewReady && !change.after.previewReady) {
 					return summarizeToolGroup(t, key.index, key.windowEnd)
+				}
+				if !change.before.previewReady && change.after.previewReady {
+					s.addPreview(change.index)
 				}
 				s.count(change.before, -1)
 				s.count(change.after, 1)
@@ -528,7 +550,6 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 	summary := cachedToolGroupSummary(summaryMemo, t, toolGroupSummaryKey{historyKey{len(t.Messages), t.historyRev}, t.toolRev, index, windowEnd})
 	end := summary.end
 	reads, greps, lists, commands, trimmed := summary.reads, summary.greps, summary.lists, summary.commands, summary.trimmed
-	headerPurposes := memoAt[[4]memoOf[groupPurposeKey, groupPurposeLabel]](container, "header-purposes")
 	if end == index {
 		return
 	}
@@ -626,50 +647,43 @@ func (a *desktop) toolActivityGroupCard(c *ui.Context, t *conversation, index in
 			ui.Box(c).Absolute().Left(-16).Top(0).Width(16).HeightPercent(100).Center().Children(func() {
 				toolStatusIcon(c, groupStatus)
 			})
-			shown := 0
-			for category, latest := range summary.latest {
-				if latest < index || latest >= end {
-					headerPurposes[category] = memoOf[groupPurposeKey, groupPurposeLabel]{}
+			shown := false
+			for _, latest := range summary.latest {
+				if latest < index {
 					continue
 				}
 				m := t.Messages[latest]
-				key := groupPurposeKey{str(m, "args"), str(m, "purpose"), str(m, "purposeField"), readGrepGroupName(m), toolState(m), boolOf(m, "argsStreaming")}
-				previous := headerPurposes[category].value
-				label := headerPurposes[category].get(key, func(key groupPurposeKey) groupPurposeLabel {
-					// Folded headers follow finalized calls, not argument deltas.
-					// Expanded rows retain their independent streaming previews.
-					if key.streaming && (key.state == "running" || key.state == "pending") {
-						return previous
-					}
-					purpose := toolPurpose(m, nil)
-					if purpose == "" {
-						if open && latest-index < len(*entryArgs) {
-							purpose = toolPurpose(m, (*entryArgs)[latest-index].get(key.args, parseToolArgs))
-						} else {
-							purpose = toolPurpose(m, parseToolArgs(key.args))
-						}
-					}
-					if purpose == "" {
-						// Streaming arguments may not be valid JSON yet. Keep the
-						// previous description until the new one is available, instead
-						// of flashing a generic fallback between consecutive calls.
-						if key.state == "running" || key.state == "pending" {
-							return previous
-						}
-						purpose = locales.Text(groupPurposeFallbacks[category])
-					}
-					return groupPurposeLabel{purpose}
-				})
-				if shown > 0 {
-					// Together with the row's two 4px gaps, this separates
-					// adjacent tool categories by 12px without widening the caret gap.
-					ui.Box(c.Key(fmt.Sprintf("category-gap-%d", category))).Width(gapSection - 2*gapTight).Shrink(0)
+				name := readGrepGroupName(m)
+				category := toolGroupCategory(name)
+				preview := ui.Row(c.Key(latest)).MinWidth(0).Shrink(1).Gap(gapTight).AlignItems(ui.Center)
+				if shown {
+					preview.Padding(0, 0, 0, gapSection-gapTight)
 				}
-				shown++
-				ui.Row(c.Key(fmt.Sprintf("latest-%d", category))).MinWidth(0).Shrink(1).Gap(gapTight).AlignItems(ui.Center).Children(func() {
+				shown = true
+				memo := memoAt[memoOf[groupPurposeKey, string]](preview, "purpose")
+				purposeKey := groupPurposeKey{str(m, "args"), str(m, "purpose"), str(m, "purposeField"), name, toolState(m)}
+				label := memo.get(purposeKey, func(key groupPurposeKey) string {
+					if purpose := toolPurpose(m, nil); purpose != "" {
+						return purpose
+					}
+					var args map[string]any
+					if open && latest < visibleEnd {
+						args = (*entryArgs)[latest-index].get(key.args, parseToolArgs)
+					} else {
+						args = parseToolArgs(key.args)
+					}
+					if purpose := toolPurpose(m, args); purpose != "" {
+						return purpose
+					}
+					if key.state == "running" || key.state == "pending" {
+						return ""
+					}
+					return locales.Text(groupPurposeFallbacks[category])
+				})
+				preview.Children(func() {
 					disclosureIcon(c, groupToolIcons[category], a.currentPalette().accent)
-					if label.full != "" {
-						uikit.Tooltip(c, ui.Text(c, label.full).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1), label.full)
+					if label != "" {
+						uikit.Tooltip(c, ui.Text(c, label).FontSize(fsTool).TextColor(a.secondaryInk()).LineHeight(1.4).SingleLine().MinWidth(0).Shrink(1), label)
 					}
 				})
 			}

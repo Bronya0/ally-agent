@@ -15,9 +15,7 @@ var groupPurposeFallbacks = [4]string{"读取文件", "搜索内容", "列出目
 
 type groupPurposeKey struct {
 	args, purpose, field, name, state string
-	streaming                         bool
 }
-type groupPurposeLabel struct{ full string }
 
 func toolGroupCategory(name string) int {
 	switch name {
