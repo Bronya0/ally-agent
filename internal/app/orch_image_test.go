@@ -615,9 +615,18 @@ func TestImageEditingExecutionAndReferenceHistory(t *testing.T) {
 	if result := a.executeTool(context.Background(), a.config, "other-session", "image_edit", args); result.OK {
 		t.Fatal("accepted another session's reference")
 	}
+	frozen := withBuiltinToolAvailability(t.Context(), a.buildToolsForSession("session", a.config))
+	a.config.DisabledTools = []string{"image_edit"}
+	if result := a.executeTool(frozen, a.config, "session", "image_edit", args); !result.OK {
+		t.Fatalf("live switch must not revoke the injected tool: %s", result.Error)
+	}
+	fresh := withBuiltinToolAvailability(t.Context(), a.buildToolsForSession("new", a.config))
+	if result := a.executeTool(fresh, a.config, "new", "image_edit", args); result.OK || result.ErrorCode != "E_TOOL_DISABLED" {
+		t.Fatalf("disabled tool available to a new session: %+v", result)
+	}
 	a.config.ImageGeneration.Enabled = false
-	if result := a.executeTool(context.Background(), a.config, "session", "image_edit", args); result.OK {
-		t.Fatal("executed disabled frozen tool")
+	if result := a.executeTool(frozen, a.config, "session", "image_edit", args); result.OK || result.ErrorCode != "E_IMAGE_DISABLED" {
+		t.Fatalf("frozen tool ignored the live backend availability: %+v", result)
 	}
 	if _, err := os.Stat(filepath.Join(a.imagesDir(), strings.TrimPrefix(original.Ref, "image:")+".png")); err != nil {
 		t.Fatal("original removed after edit")

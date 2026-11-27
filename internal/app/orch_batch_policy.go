@@ -22,7 +22,6 @@ import (
 	"path"
 	"path/filepath"
 	goruntime "runtime"
-	"sort"
 	"strings"
 
 	toolshared "ally-dev/internal/tools/shared"
@@ -63,7 +62,8 @@ func detectWriteBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int
 	}
 	groups := map[string][]targetRef{}
 	for i, call := range calls {
-		if !isFileMutationTool(call.Function.Name) {
+		name := normalizeToolName(call.Function.Name)
+		if !isFileMutationTool(name) && name != "fetch" && name != "http_request" {
 			continue
 		}
 		for _, target := range fileMutationTargets(cfg, call.Function.Name, call.Function.Arguments) {
@@ -229,42 +229,20 @@ func normalizeToolArgsForDedup(args string) string {
 	if trimmed == "" {
 		return ""
 	}
-	var parsed any
-	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+	if !json.Valid([]byte(trimmed)) {
 		return trimmed
 	}
-	canonical, err := json.Marshal(sortedJSON(parsed))
+	var parsed any
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.UseNumber()
+	if err := decoder.Decode(&parsed); err != nil {
+		return trimmed
+	}
+	canonical, err := json.Marshal(parsed)
 	if err != nil {
 		return trimmed
 	}
 	return string(canonical)
-}
-
-// sortedJSON recursively reorders object keys in a parsed JSON value so that
-// json.Marshal produces a stable canonical form. Arrays keep their order, since
-// argument arrays are typically order-sensitive (e.g. edit.files, ask.questions).
-func sortedJSON(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(t))
-		for k := range t {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		out := make(map[string]any, len(t))
-		for _, k := range keys {
-			out[k] = sortedJSON(t[k])
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, item := range t {
-			out[i] = sortedJSON(item)
-		}
-		return out
-	default:
-		return v
-	}
 }
 
 type fileMutationTarget struct{ key, display string }
@@ -275,6 +253,16 @@ type fileMutationTarget struct{ key, display string }
 // one path, one target (see dedupeMutationTargets).
 func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutationTarget {
 	name = normalizeToolName(name)
+	if name == "fetch" || name == "http_request" {
+		var args map[string]json.RawMessage
+		var saveTo string
+		if json.Unmarshal([]byte(arguments), &args) == nil && json.Unmarshal(args["saveTo"], &saveTo) == nil && strings.TrimSpace(saveTo) != "" {
+			if target, ok := localMutationTarget(cfg, saveTo); ok {
+				return []fileMutationTarget{target}
+			}
+		}
+		return nil
+	}
 	if name == "edit" {
 		// The flat model-facing request carries exactly one file; conflict
 		// detection and execution share the same plan boundary.

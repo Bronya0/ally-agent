@@ -895,9 +895,6 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 		if err != nil {
 			return DeletePathsResult{}, err
 		}
-		if isVCSDeleteName(path.Base(cleanPath)) {
-			return DeletePathsResult{}, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete version control directory"))
-		}
 		if cleanPath == "/" {
 			return DeletePathsResult{}, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete remote filesystem root"))
 		}

@@ -71,7 +71,7 @@ func sharedRemoteAccessRules() string {
 
 // sharedBatchStrategy returns the batch/parallel tool-call strategy shared by the main and sub-agent system prompts.
 func sharedBatchStrategy() string {
-	return "- Batch independent calls. `stage` is a non-negative integer, default 0; same-stage calls run concurrently, later stages wait for earlier calls to finish. MCP calls use stage 0.\n" +
+	return "- Batch independent calls. `stage` is a non-negative integer, default 0; same-stage calls run concurrently, later stages wait for earlier calls to finish. Set MCP call order with the outer `stage` on `ToolExec`, not inside `arguments`.\n" +
 		"- Same-stage calls must not write the same file, share build outputs, ports or databases; same-path writes are refused. Calls needing earlier results must be sent in a later response; stages do not pass values.\n" +
 		"- A failed stage blocks later stages; completed operations are not rolled back. Check actual outcomes before retrying, since a timeout or disconnect may follow completed side effects. Retry only when safe; fix edit/create validation errors.\n" +
 		"- Locate unknown local targets with rg through `command`. Batch relevant reads, read only needed ranges and stop when sufficient. Combine related shell steps in one `command` call without hiding failures.\n" +

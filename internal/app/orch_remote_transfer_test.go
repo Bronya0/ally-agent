@@ -361,7 +361,7 @@ func TestRemoteTransferBatchStopsAfterFirstError(t *testing.T) {
 	if !result.Files[0].OK || result.Files[0].Skipped || result.Files[1].OK || result.Files[1].Skipped || result.Files[1].Error == "" || result.Files[2].OK || !result.Files[2].Skipped || result.Files[2].Error != "" {
 		t.Fatalf("per-file results: %+v", result.Files)
 	}
-	if result.Files[1].ErrorCode != "E_PATH_NOT_FOUND" || !strings.Contains(result.Files[1].Error, "list_files") {
+	if result.Files[1].ErrorCode != "E_PATH_NOT_FOUND" {
 		t.Fatalf("missing source recovery lost: %+v", result.Files[1])
 	}
 	requireTransferOriginal(t, filepath.Join(remote, "first"), []byte("first"))

@@ -13,14 +13,15 @@ import (
 // cost the transcript column its gap, and a batch of sub-agents left a blank
 // band as tall as the batch between the last card and the next row.
 func TestSubagentRowsLeaveNoBlankBand(t *testing.T) {
+	const task = "检查后端并发请求的取消和资源释放，并报告可复现的问题。\n从服务入口追踪到数据访问层，最后列出尚未验证的风险。"
 	parent := map[string]any{
 		"role": "tool_call", "name": "subagent", "toolCallId": "call_sub",
-		"status": "success", "args": `{"description":"审计测试"}`, "result": map[string]any{},
+		"status": "success", "args": fmt.Sprintf(`{"task":%q,"description":"审计测试"}`, task), "result": map[string]any{},
 	}
 	child := func(index int) map[string]any {
 		return map[string]any{
 			"role": "subagent", "subId": fmt.Sprintf("s%d", index), "parentToolCallId": "call_sub",
-			"subagentRole": "测试审计员", "status": "completed",
+			"subagentRole": "测试审计员", "status": "completed", "description": "审计测试",
 			"steps": index, "maxSteps": 10, "durationMs": 1000, "summary": "报告",
 		}
 	}
@@ -49,6 +50,10 @@ func TestSubagentRowsLeaveNoBlankBand(t *testing.T) {
 	}, 700, 2400)
 	tt.Frame()
 	tt.Frame()
+
+	if _, ok := tt.Find(task); !ok {
+		t.Fatal("sub-agent card did not receive the full task from its parent call")
+	}
 
 	last, ok := tt.Find("8/10 步")
 	if !ok {

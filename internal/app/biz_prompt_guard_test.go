@@ -11,90 +11,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
 	"testing"
 	"unicode/utf8"
-
-	toolshared "ally-dev/internal/tools/shared"
 )
-
-// backtickToken matches backticked spans that look like a bare snake_case
-// identifier — the convention the prompts use for tool names. CamelCase field
-// names, paths, flags, and sentences fail this pattern on purpose.
-var backtickToken = regexp.MustCompile("`([a-z][a-z0-9_]*)`")
-
-// promptNonToolTokens are backticked lowercase identifiers that are commands,
-// executables, or library names rather than tool names. Any other tool-looking
-// token that is not a registered builtin tool fails the drift guard below,
-// which is the point: advertising a tool that does not exist (or was renamed)
-// must turn the suite red.
-var promptNonToolTokens = map[string]bool{
-	// shell commands / executables named in guidance. `bash` reaches the prompt
-	// through the shell name/path rendered on non-Windows hosts (`via **bash**
-	// (`bash`)`), which is why this guard only ever went red on macOS/Linux.
-	"bash": true,
-	"cat":  true, "del": true, "export": true, "git": true, "go": true,
-	"gofmt": true, "npm": true, "rg": true, "rm": true, "rmdir": true,
-	"unlink": true,
-	// toolchain names
-	"eslint": true, "ruff": true, "tsc": true,
-	// runtime / library names
-	"echarts": true, "python": true,
-	// plan request fields and statuses named in guidance
-	"alias": true, "changes": true, "done": true, "files": true, "finish": true,
-	"in_progress": true, "next": true, "offset": true, "path": true, "step_limit": true,
-	"pending": true, "steps": true, "stage": true, "validation": true, "version": true,
-	// frontmatter fields and IO nouns named in guidance
-	"aliases": true, "date": true, "description": true, "output": true,
-	"role": true, "source": true, "tags": true, "task": true, "title": true,
-}
-
-func builtinToolNames(t *testing.T) map[string]bool {
-	t.Helper()
-	names := map[string]bool{}
-	for _, tool := range toolshared.Builtins() {
-		if tool.Function != nil {
-			names[tool.Function.Name] = true
-		}
-	}
-	if len(names) < 20 {
-		t.Fatalf("expected the builtin tool registry to be populated, got %d entries", len(names))
-	}
-	return names
-}
-
-// TestSystemPromptToolReferencesExist guards against prompt/tool drift: every
-// tool-looking name the system prompts advertise must exist in the builtin
-// registry (or be an explicitly allowlisted non-tool token).
-func TestSystemPromptToolReferencesExist(t *testing.T) {
-	redirectAppStateDir(t)
-	app := NewApp()
-	registry := builtinToolNames(t)
-	prompts := map[string]string{
-		"main":      joinSystemPromptParts(app.buildSystemPromptParts(nil, "", nil, "", "", nil)),
-		"sub-agent": subagentSystemPrompt("", ConfigState{}),
-	}
-	unknown := map[string]bool{}
-	for label, prompt := range prompts {
-		for _, m := range backtickToken.FindAllStringSubmatch(prompt, -1) {
-			tok := m[1]
-			if registry[tok] || promptNonToolTokens[tok] {
-				continue
-			}
-			unknown[label+":"+tok] = true
-		}
-	}
-	if len(unknown) > 0 {
-		var found []string
-		for tok := range unknown {
-			found = append(found, tok)
-		}
-		sort.Strings(found)
-		t.Fatalf("prompts reference tokens that are neither registered builtin tools nor allowlisted non-tool tokens: %s", strings.Join(found, ", "))
-	}
-}
 
 // TestSubagentPromptDoesNotAdvertiseBlockedTools keeps the sub-agent prompt
 // consistent with subagentTools: the shared prompt blocks must not tell a

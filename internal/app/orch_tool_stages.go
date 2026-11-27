@@ -38,8 +38,8 @@ func toolCallStage(call openai.ToolCall) (int64, error) {
 	return stage, nil
 }
 
-// A successfully returned command can still have failed as an operation. Keep
-// its structured output intact; the stage barrier must nevertheless stop.
+// A tool can return structured results for an incomplete operation. Preserve
+// that detail but do not run dependent stages as though it had succeeded.
 func toolStageSucceeded(result toolResult) bool {
 	// Deduplication did not execute another operation. Its original call still
 	// determines whether the stage succeeded; a real failure there is not masked.
@@ -64,6 +64,10 @@ func toolStageSucceeded(result toolResult) bool {
 		return data.FailedCount == 0
 	case *DeletePathsResult:
 		return data != nil && data.FailedCount == 0
+	case RemoteTransferResult:
+		return data.FailedCount == 0 && data.SkippedCount == 0
+	case *RemoteTransferResult:
+		return data != nil && toolStageSucceeded(toolResult{OK: true, Data: *data})
 	case BatchReadResult:
 		if len(data.Missing) > 0 {
 			return false

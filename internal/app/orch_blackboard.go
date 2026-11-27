@@ -67,7 +67,7 @@ func (a *App) reserveBlackboardDelegates(ctx context.Context, cfg ConfigState, c
 		if err, _ := decodeToolArguments(name, []byte(call.Function.Arguments), &req); err != nil || strings.TrimSpace(req.Task) == "" {
 			continue
 		}
-		identity, err := board.Reserve(req.Name)
+		identity, err := board.Reserve("")
 		if err != nil {
 			if conflicts == nil {
 				conflicts = make(map[int]error)
@@ -96,15 +96,15 @@ func withBlackboardReservation(ctx context.Context, name string) context.Context
 	return context.WithValue(ctx, blackboardReservationContextKey{}, name)
 }
 
-func startBlackboardDelegate(ctx context.Context, name string) (context.Context, string, error) {
+func startBlackboardDelegate(ctx context.Context) (context.Context, string, error) {
 	board := runBlackboard(ctx)
 	if board == nil {
-		return ctx, name, nil // Scheduled/direct delegates do not share a chat board.
+		return ctx, "", nil // Scheduled/direct delegates do not share a chat board.
 	}
 	identity, _ := ctx.Value(blackboardReservationContextKey{}).(string)
 	if identity == "" {
 		var err error
-		identity, err = board.Register(name)
+		identity, err = board.Register("")
 		if err != nil {
 			return ctx, "", err
 		}
@@ -127,7 +127,7 @@ func blackboardIdentityMessage(ctx context.Context) string {
 			peers = append(peers, name)
 		}
 	}
-	return fmt.Sprintf("## Blackboard Identity\nYour name in this run is %s (case-sensitive). Registered peers, which may be queued or finished: %s. Other named peers may join later in this run. Use these names or * as message destinations; never set from or seq.", participant.name, strings.Join(peers, ", "))
+	return fmt.Sprintf("## Blackboard Identity\nYour assigned address is %s (case-sensitive). Peer addresses (peers may be queued or finished): %s. More peers may join later in this run.", participant.name, strings.Join(peers, ", "))
 }
 
 // Delivery is prepared on a copy. A successful turn commits it to this child's

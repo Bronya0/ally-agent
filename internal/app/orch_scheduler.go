@@ -28,6 +28,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"ally-dev/internal/tools/scheduler"
+	toolshared "ally-dev/internal/tools/shared"
 )
 
 // Constants re-exported from the scheduler tool package so existing call sites
@@ -239,8 +240,8 @@ func (a *App) executeScheduledTaskTool(cfg ConfigState, req ScheduledTaskToolReq
 			tasks = active
 		}
 		limit := len(tasks)
-		if limit > scheduler.ListTruncateAt {
-			limit = scheduler.ListTruncateAt
+		if limit > toolshared.MaxScheduledTaskListRows {
+			limit = toolshared.MaxScheduledTaskListRows
 		}
 		views := make([]ScheduledTaskToolView, 0, limit)
 		for i := 0; i < limit; i++ {
@@ -651,13 +652,8 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 	}()
 
 	timeout := time.Duration(task.TimeoutSeconds) * time.Second
-	// 命令型任务绝不能用带 deadline 的 ctx 传给 command 工具：外层 deadline
-	// 与命令自身的超时 timer 同时到期时，三路竞态（timer.C 先赢 → 收编；
-	// runCtx.Done 先赢 → Cancel 杀树报 cancelled；watchCtx 已读到旧 Cancel →
-	// 杀掉刚收编的进程且构成对 cmd.Cancel 的无同步并发读写）。命令超时完全
-	// 由 runCommandTask 内部的 CommandRequest.Timeout（600s 上限）承担，且
-	// 超时后是收编为后台服务而不是杀进程；这里只保留取消能力（手动停任务
-	// /应用退出）。LLM 委托型任务仍用 WithTimeout 约束总时长。
+	// Command tasks use the command runner's hard timeout. The outer context
+	// only handles manual cancellation/shutdown so timeout is classified once.
 	var ctx context.Context
 	var cancel context.CancelFunc
 	if strings.TrimSpace(task.Command) != "" {
@@ -704,7 +700,7 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 	// 命令型任务：复用 command 工具的执行边界（AST 安全检查、工作区 cwd、
 	// 有界输出），不占 LLM 委托槽、不产生任何模型步骤。
 	if strings.TrimSpace(task.Command) != "" {
-		m.runCommandTask(task, ctx, cfg)
+		m.runCommandTask(task, ctx, cfg, nil)
 		finished = true
 		return
 	}
@@ -722,7 +718,7 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 		defer m.app.releaseSubagentSlot()
 		return m.app.executeDelegate(ctx, cfg, "scheduled:"+task.ID, AgentDelegateRequest{
 			Task:         "You are executing a scheduled task in isolated fresh context. The task persists across Ally restarts. Do not create, list, or delete scheduled tasks. Complete the instruction and finish with a concise report for the user.\n\n" + task.Instruction,
-			Description:  "Scheduled: " + task.Name,
+			description:  "Scheduled: " + task.Name,
 			CleanContext: false,
 			MaxSteps:     task.MaxSteps,
 			tools:        m.app.scheduledTaskTools(cfg),
@@ -767,16 +763,16 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 // boundary as the command tool (safety AST, workspace cwd, bounded output,
 // process-tree kill on cancel) and maps the CommandResult onto the task's
 // status/summary fields.
-func (m *scheduledTaskManager) runCommandTask(task ScheduledTask, ctx context.Context, cfg ConfigState) {
-	// command 工具自身的上限是 600s；更长的任务超时只约束外层 ctx。
+func (m *scheduledTaskManager) runCommandTask(task ScheduledTask, ctx context.Context, cfg ConfigState, timeoutC <-chan time.Time) {
+	// Scheduled commands stop at this limit instead of becoming background services.
 	timeout := task.TimeoutSeconds
 	if timeout <= 0 || timeout > scheduledCommandTimeoutSeconds {
 		timeout = scheduledCommandTimeoutSeconds
 	}
-	result, runErr := m.app.runCommandWithConfig(ctx, cfg, CommandRequest{
+	result, runErr := m.app.runCommandWithTimer(ctx, cfg, CommandRequest{
 		Command: task.Command,
 		Timeout: timeout,
-	})
+	}, false, timeoutC)
 	status := "completed"
 	summary := ""
 	errText := ""
@@ -784,11 +780,6 @@ func (m *scheduledTaskManager) runCommandTask(task ScheduledTask, ctx context.Co
 	case runErr != nil:
 		status = "failed"
 		errText = runErr.Error()
-	case result.PromotedToService:
-		// 超时命令已被收编为后台服务继续运行：任务本身没失败，但也没等到
-		// 退出。标记 timed_out 并在摘要里指向服务，便于事后诊断。
-		status = "timed_out"
-		errText = fmt.Sprintf("command exceeded %ds; promoted to background service (still running)", timeout)
 	case result.TimedOut:
 		status = "timed_out"
 		errText = fmt.Sprintf("command exceeded %ds", timeout)

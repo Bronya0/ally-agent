@@ -1704,9 +1704,17 @@ func (a *App) waitForSessionMcp(ctx context.Context, runID, sessionID string) er
 func builtinToolsForConfig(cfg ConfigState) []openai.Tool {
 	builtins := toolshared.FilterTools(chatTools(), cfg.DisabledTools)
 	filtered := make([]openai.Tool, 0, len(builtins))
+	execDisabled := builtinToolDisabled(context.Background(), cfg, mcpExecName)
 	for _, tool := range builtins {
-		if tool.Function != nil && (tool.Function.Name == "image_generate" || tool.Function.Name == "image_edit") {
-			if _, err := imageModelForTool(cfg, tool.Function.Name); err != nil {
+		if tool.Function == nil {
+			continue
+		}
+		name := normalizeToolName(tool.Function.Name)
+		if name == mcpSearchName && execDisabled {
+			continue
+		}
+		if name == "image_generate" || name == "image_edit" {
+			if _, err := imageModelForTool(cfg, name); err != nil {
 				continue
 			}
 		}

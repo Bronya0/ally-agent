@@ -288,7 +288,7 @@ func (a *desktop) messageBody(c *ui.Context, t *conversation, i int, m map[strin
 		}
 		notice(c, tone, str(m, "content"), a.secondaryInk())
 	case "subagent":
-		a.subagentRow(c, t, i, m)
+		a.subagentRow(c, t, i, m, "")
 	default:
 		if isToolRecord(m) {
 			a.toolCard(c, t, i, m)

@@ -125,7 +125,7 @@ func TestSubagentBlackboardNativeDisclosure(t *testing.T) {
 		tt := ui.NewTester(func(c *ui.Context) {
 			c.DisableAnimations()
 			c.SetTheme(a.theme())
-			ui.Column(c).FillWidth().Padding(20).Children(func() { a.subagentRow(c, conv, 0, row) })
+			ui.Column(c).FillWidth().Padding(20).Children(func() { a.subagentRow(c, conv, 0, row, "") })
 		}, 850, 700)
 		if _, ok := tt.Find("子代理黑板 sub"); ok {
 			t.Fatal("silent agent exposed a blackboard entrance")

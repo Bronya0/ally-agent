@@ -51,7 +51,7 @@ func PathError(path string, err error) error {
 	}
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return Newf("E_PATH_NOT_FOUND", "path does not exist: %s; check the name with list_files, or create the file first", path)
+		return Newf("E_PATH_NOT_FOUND", "path does not exist: %s; check the spelling and directory, or create the file first", path)
 	case errors.Is(err, fs.ErrPermission):
 		return Newf("E_PERMISSION_DENIED", "permission denied: %s; check the file's permissions", path)
 	case errors.Is(err, fs.ErrExist):

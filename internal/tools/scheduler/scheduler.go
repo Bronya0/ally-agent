@@ -39,7 +39,6 @@ const (
 	MinInterval    = time.Minute
 	MaxTasks       = 100
 	SummaryLimit   = 128 * 1024
-	ListTruncateAt = 50
 )
 
 // Schedule is the pure, app-agnostic representation of a scheduled-task

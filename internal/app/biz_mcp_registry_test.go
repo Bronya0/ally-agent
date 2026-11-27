@@ -227,6 +227,21 @@ func TestMcpCatalogPreservesRequestPrefix(t *testing.T) {
 
 // ToolSearch resolves exact IDs and bare server_ids only; nothing matches on
 // description or partial names, and a batch comes back in the caller's order.
+func TestMcpToolSearchRequiresInjectedExecutor(t *testing.T) {
+	a := &App{}
+	cfg := ConfigState{DisabledTools: []string{"ToolExec"}}
+	for _, tool := range a.buildToolsForConfig(cfg) {
+		switch normalizeToolName(tool.Function.Name) {
+		case mcpExecName, mcpSearchName:
+			t.Fatalf("MCP tool %q was injected with ToolExec disabled", tool.Function.Name)
+		}
+	}
+	result := a.executeTool(t.Context(), cfg, "session", "ToolSearch", []byte(`{"query":["example"]}`))
+	if result.OK || result.ErrorCode != "E_MCP_PERMISSION" {
+		t.Fatalf("stateless invocation bypassed the executor requirement: %+v", result)
+	}
+}
+
 func TestMcpToolSearchResolvesExactIDsAndServers(t *testing.T) {
 	m := NewMcpManager("", nil)
 	app := &App{mcpManager: m}

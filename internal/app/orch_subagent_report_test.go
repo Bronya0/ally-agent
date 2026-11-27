@@ -23,11 +23,10 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// subagentReportRequest is the decoded body of one sub-agent model request, kept
-// to the two fields the report contract is about: the declared tools (they must
-// survive the exhausted budget, or the prompt prefix forks at the first token)
-// and the message sequence (append-only, so retries read the cache).
+// subagentReportRequest records the model route and the tools/messages that
+// must preserve their prefix across report turns.
 type subagentReportRequest struct {
+	Model    string                         `json:"model"`
 	Tools    []openai.Tool                  `json:"tools"`
 	Messages []openai.ChatCompletionMessage `json:"messages"`
 }
@@ -250,7 +249,6 @@ func TestSubagentBudgetExhaustionNeverRunsDiscardedToolCalls(t *testing.T) {
 		Task:         "write marker.txt",
 		CleanContext: true,
 		MaxSteps:     1,
-		Model:        "test-model",
 		tools:        tools,
 	})
 	if err != nil {

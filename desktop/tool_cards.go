@@ -1340,11 +1340,13 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					rows = newTranscriptRows(t)
 				}
 				children := rows.childrenOf(str(m, "toolCallId"))
+				task := str(args, "task")
 				for _, n := range children {
-					a.subagentRow(c, t, n, t.Messages[n])
+					a.subagentRow(c, t, n, t.Messages[n], task)
 				}
-				if len(children) == 0 && open {
-					if summary := str(result, "summary"); summary != "" {
+				if len(children) == 0 {
+					a.subagentTaskLine(c, task)
+					if summary := str(result, "summary"); open && summary != "" {
 						fieldNote(c, summary, a.secondaryInk())
 					}
 				}
@@ -2135,7 +2137,19 @@ func (a *desktop) openHTMLPreview(workspace, html string) {
 
 // ---- Sub-agent rows ------------------------------------------------------
 
-func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[string]any) {
+func (a *desktop) subagentTaskLine(c *ui.Context, task string) {
+	if task == "" {
+		return
+	}
+	label := ui.Text(c.Key("subagent-task"), task).FontSize(fsSmall).TextColor(a.secondaryInk()).SingleLine().FillWidth().MinWidth(0)
+	uikit.Tooltip(c, label, task)
+}
+
+func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[string]any, task string) {
+	if task == "" {
+		// Older rows can have a description but no original tool arguments.
+		task = str(m, "description")
+	}
 	status := strings.ToLower(str(m, "status"))
 	if status == "completed" {
 		status = "success"
@@ -2218,9 +2232,7 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 					ui.Text(c, fmtDur(ms)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk())
 				}
 			})
-			if desc := str(m, "description"); desc != "" {
-				uikit.Tooltip(c, ui.Text(c, desc).AlignSelf(ui.Start).FontSize(fsSmall).TextColor(a.secondaryInk()).MaxLines(2), desc)
-			}
+			a.subagentTaskLine(c, task)
 			ui.Row(c).Gap(gapInline).Wrap().AlignItems(ui.Center).Children(func() {
 				if steps := int(num(m, "steps")); steps > 0 {
 					label := fmt.Sprintf(locales.Text("%d 步"), steps)

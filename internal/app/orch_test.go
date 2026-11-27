@@ -22,6 +22,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -44,6 +45,59 @@ func TestFetchAutomaticResponse(t *testing.T) {
 	response, ok := result.Data.(HTTPRequestToolResult)
 	if !result.OK || !ok || response.Body != `{"ok":true}` {
 		t.Fatalf("response: %#v", result)
+	}
+}
+
+func TestFetchSaveToRequiresCompleteSuccessfulResponseAndConsent(t *testing.T) {
+	var requests atomic.Int32
+	const payload = "replacement"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		switch r.URL.Path {
+		case "/missing":
+			w.WriteHeader(http.StatusNotFound)
+		case "/partial":
+			w.WriteHeader(http.StatusPartialContent)
+		}
+		_, _ = io.WriteString(w, payload)
+	}))
+	defer server.Close()
+	a := newIsolatedTestApp(t)
+	cfg := webFetchTestConfig()
+	cfg.Workspace = t.TempDir()
+	path := filepath.Join(cfg.Workspace, "existing.txt")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	call := func(endpoint, fields string) toolResult {
+		return a.executeTool(t.Context(), cfg, "download", "fetch", []byte(fmt.Sprintf(`{"url":%q,%s}`, server.URL+endpoint, fields)))
+	}
+	for _, tc := range []struct{ endpoint, fields, code string }{
+		{"/ok", `"method":"POST","saveTo":"existing.txt"`, "E_EXISTS"},
+		{"/ok", `"saveTo":"existing.txt","Overwrite":true`, "E_EXISTS"},
+		{"/missing", `"saveTo":"existing.txt","overwrite":true`, "E_HTTP_SAVE_STATUS"},
+		{"/partial", `"saveTo":"existing.txt","overwrite":true`, "E_HTTP_SAVE_STATUS"},
+		{"/ok", `"saveTo":"existing.txt","overwrite":true,"maxBytes":4`, "E_HTTP_SAVE_TRUNCATED"},
+	} {
+		if got := call(tc.endpoint, tc.fields); got.OK || got.ErrorCode != tc.code {
+			t.Fatalf("%s %s: %+v", tc.endpoint, tc.fields, got)
+		}
+		if data, err := os.ReadFile(path); err != nil || string(data) != "original" {
+			t.Fatalf("download changed destination: %q, %v", data, err)
+		}
+	}
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("invalid destinations must be refused before requesting: %d requests", got)
+	}
+	for _, dest := range []string{"existing.txt", "nested/new.txt"} {
+		got := call("/ok", fmt.Sprintf(`"saveTo":%q,"overwrite":%t`, dest, dest == "existing.txt"))
+		result, ok := got.Data.(HTTPRequestToolResult)
+		if !got.OK || !ok || result.SavedPath != dest || result.Body != "" {
+			t.Fatalf("save %s: %+v", dest, got)
+		}
+		if data, err := os.ReadFile(filepath.Join(cfg.Workspace, dest)); err != nil || string(data) != payload {
+			t.Fatalf("save %s: %q, %v", dest, data, err)
+		}
 	}
 }
 
@@ -3393,6 +3447,18 @@ func TestNormalizeToolArgsForDedup(t *testing.T) {
 			a:    `{"query":{"a":"1","b":"2"}}`,
 			b:    `{"query":{"b":"2","a":"1"}}`,
 			want: true,
+		},
+		{
+			name: "distinct large integers",
+			a:    `{"json":{"n":9007199254740992}}`,
+			b:    `{"json":{"n":9007199254740993}}`,
+			want: false,
+		},
+		{
+			name: "trailing JSON is not discarded",
+			a:    `{"url":"https://x"} {}`,
+			b:    `{"url":"https://x"}`,
+			want: false,
 		},
 		{
 			name: "empty strings",

@@ -651,18 +651,12 @@ func planModelWindow(total, current int) (start, end int) {
 }
 
 func renderSubagentResultForModel(r AgentDelegateResult) string {
-	header := fmt.Sprintf("// subagent | id=%s | status=%s | steps=%d | model=%s", strconv.Quote(r.AgentID), strconv.Quote(r.Status), r.Steps, strconv.Quote(r.Model))
+	header := fmt.Sprintf("// subagent | id=%s | status=%s | steps=%d", strconv.Quote(r.AgentID), strconv.Quote(r.Status), r.Steps)
 	header += " | role=" + strconv.Quote(r.Role)
-	if r.Name != "" {
-		header += " | name=" + strconv.Quote(r.Name)
-	}
 	if r.StopReason != "" {
 		header += " | stop-reason=" + strconv.Quote(r.StopReason)
 	}
 	body := r.Summary
-	if r.Description != "" {
-		body = "Description: " + r.Description + "\n" + body
-	}
 	if r.Error != "" {
 		body += "\nError: " + r.Error
 	}

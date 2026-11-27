@@ -460,11 +460,11 @@ func TestLocalToolsRepositoryMetadataLifecycle(t *testing.T) {
 			if _, err := a.renamePathWithConfig(cfg, RenamePathRequest{Path: "metadata", NewName: name}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := a.deletePathsWithConfig(cfg, []string{name}, true); err == nil {
-				t.Fatal("expected version control directory deletion to be blocked")
+			if result, err := a.deletePathsWithConfig(cfg, []string{name}, true); err != nil || result.FailedCount != 0 {
+				t.Fatalf("delete repository metadata: %+v, %v", result, err)
 			}
-			if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-				t.Fatalf("directory must remain: %v", err)
+			if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+				t.Fatalf("directory must be removed: %v", err)
 			}
 		})
 	}

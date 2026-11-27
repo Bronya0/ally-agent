@@ -269,6 +269,32 @@ func TestToolStageSucceeded(t *testing.T) {
 	}
 }
 
+func TestRemoteTransferIncompleteBlocksDependentStage(t *testing.T) {
+	for _, transfer := range []RemoteTransferResult{{FailedCount: 1}, {SkippedCount: 1}, {FileCount: 1}} {
+		a := &App{}
+		calls := []openai.ToolCall{stagedCall("remote_transfer", `{"stage":0}`), stagedCall("read", `{"stage":1}`)}
+		results := make([]toolResult, len(calls))
+		a.executeStagedToolBatch(t.Context(), ConfigState{Workspace: t.TempDir()}, calls, nil,
+			func(_ context.Context, index int, _ openai.ToolCall) toolResult {
+				if index == 0 {
+					return toolResult{OK: true, Data: transfer}
+				}
+				return toolResult{OK: true}
+			}, func(index int, _ openai.ToolCall, result toolResult, _ int64) { results[index] = result },
+		)
+		if !results[0].OK || !reflect.DeepEqual(results[0].Data, transfer) {
+			t.Fatalf("lost transfer details: %+v", results[0])
+		}
+		if transfer.FailedCount > 0 || transfer.SkippedCount > 0 {
+			if results[1].OK || results[1].ErrorCode != "E_STAGE_BLOCKED" {
+				t.Fatalf("incomplete transfer did not block dependent stage: %+v", results[1])
+			}
+		} else if !results[1].OK {
+			t.Fatalf("completed transfer unexpectedly blocked next stage: %+v", results[1])
+		}
+	}
+}
+
 func TestStageLocalWriteConflicts(t *testing.T) {
 	root := t.TempDir()
 	call := func(stage int) openai.ToolCall {
@@ -280,6 +306,10 @@ func TestStageLocalWriteConflicts(t *testing.T) {
 	}
 	if conflicts := detectToolBatchConflicts(ConfigState{Workspace: root}, []openai.ToolCall{call(0), call(0)}); toolErrorCode(conflicts[1]) != "E_WRITE_BATCH_CONFLICT" {
 		t.Fatalf("same-stage writes must conflict: %v", conflicts)
+	}
+	fetch := stagedCall("fetch", `{"url":"https://example.com","saveTo":"config.txt"}`)
+	if conflicts := detectToolBatchConflicts(ConfigState{Workspace: root}, []openai.ToolCall{call(0), fetch}); toolErrorCode(conflicts[1]) != "E_WRITE_BATCH_CONFLICT" {
+		t.Fatalf("saving a download must conflict with another write to the same path: %v", conflicts)
 	}
 }
 
@@ -325,7 +355,7 @@ func TestAgentLoopsStageFailureBlocksLaterWrites(t *testing.T) {
 			cfg := subagentReportBaseConfig(harness.server.URL, workspace)
 			if child {
 				_, err := a.executeDelegate(context.Background(), cfg, "stages-child", AgentDelegateRequest{
-					Task: "exercise stages", CleanContext: true, MaxSteps: 3, Model: "test-model",
+					Task: "exercise stages", CleanContext: true, MaxSteps: 3,
 					tools: []openai.Tool{subagentReportTool("create"), subagentReportTool("calculate")},
 				})
 				if err != nil {

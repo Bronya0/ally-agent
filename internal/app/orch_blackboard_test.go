@@ -27,17 +27,17 @@ func TestSubagentBlackboardDeliveryCommitsWithSuccessfulTurn(t *testing.T) {
 	if _, err := board.Register("sender"); err != nil {
 		t.Fatal(err)
 	}
-	ctx, _, err := startBlackboardDelegate(ctx, "receiver")
+	ctx, receiver, err := startBlackboardDelegate(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	participant, _ := currentBlackboardParticipant(ctx)
 	participant.subID = "receiver-run"
 	ctx = context.WithValue(ctx, blackboardParticipantContextKey{}, participant)
-	a.subRuns[participant.subID] = &SubagentRun{ID: participant.subID, Name: "receiver", SessionID: "session"}
+	a.subRuns[participant.subID] = &SubagentRun{ID: participant.subID, Name: receiver, SessionID: "session"}
 	publish := func(body string) {
 		t.Helper()
-		if !board.Publish("sender", blackboard.Message{To: "receiver", Type: "finding", Body: body}) {
+		if !board.Publish("sender", blackboard.Message{To: receiver, Type: "finding", Body: body}) {
 			t.Fatal("publication failed")
 		}
 	}
@@ -54,7 +54,7 @@ func TestSubagentBlackboardDeliveryCommitsWithSuccessfulTurn(t *testing.T) {
 	if !reflect.DeepEqual(history, parent) {
 		t.Fatal("rejected turn changed child history")
 	}
-	if unread, _ := board.Read("receiver"); len(unread) != 1 {
+	if unread, _ := board.Read(receiver); len(unread) != 1 {
 		t.Fatalf("rejected turn consumed delivery: %+v", unread)
 	}
 	if run := a.GetSubagents()[0]; run.BlackboardReceived != 0 || len(run.BlackboardEvents) != 0 {
@@ -64,7 +64,7 @@ func TestSubagentBlackboardDeliveryCommitsWithSuccessfulTurn(t *testing.T) {
 	if _, err := a.streamSubagentModelResponse(ctx, cfg, cfg.Model, &history, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if unread, _ := board.Read("receiver"); len(unread) != 0 {
+	if unread, _ := board.Read(receiver); len(unread) != 0 {
 		t.Fatalf("accepted turn left messages unread: %+v", unread)
 	}
 	if parent[1].Content != "original result" {
@@ -107,12 +107,17 @@ func TestSubagentBlackboardHistorySurvivesToolsAndForcedReport(t *testing.T) {
 	if _, err := board.Register("sender"); err != nil {
 		t.Fatal(err)
 	}
+	receiver, err := board.Reserve("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx = withBlackboardReservation(ctx, receiver)
 	const fact = "collaboration-fact-83721"
-	if !board.Publish("sender", blackboard.Message{To: "receiver", Type: "finding", Body: fact}) {
+	if !board.Publish("sender", blackboard.Message{To: receiver, Type: "finding", Body: fact}) {
 		t.Fatal("publication failed")
 	}
 	result, err := a.executeDelegate(ctx, cfg, "audit", AgentDelegateRequest{
-		Name: "receiver", Task: "calculate and report", CleanContext: true, MaxSteps: 2,
+		Task: "calculate and report", CleanContext: true, MaxSteps: 2,
 		tools: []openai.Tool{subagentReportTool("calculate")},
 	})
 	if err != nil || result.Summary != "report" || result.StopReason != "step_limit" {
@@ -161,7 +166,7 @@ func TestSubagentBlackboardProtocolOnlyRequiresReport(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, err := a.executeDelegate(ctx, cfg, "audit", AgentDelegateRequest{
-				Name: "sender", Task: "work and report", CleanContext: true, MaxSteps: budget,
+				Task: "work and report", CleanContext: true, MaxSteps: budget,
 				tools: []openai.Tool{subagentReportTool("calculate")},
 			})
 			if err != nil || result.Status != "completed" || result.Summary != "actual report" {
@@ -195,7 +200,7 @@ func TestSubagentBlackboardMissingReportRecoveryIsBounded(t *testing.T) {
 	defer closeBoard()
 	cfg := subagentReportBaseConfig(h.server.URL, t.TempDir())
 	result, err := a.executeDelegate(ctx, cfg, "audit", AgentDelegateRequest{
-		Name: "sender", Task: "work and report", CleanContext: true, MaxSteps: 2,
+		Task: "work and report", CleanContext: true, MaxSteps: 2,
 		tools: []openai.Tool{subagentReportTool("calculate")},
 	})
 	if err != nil || result.Status == "completed" || result.Error == "" || result.StopReason != "step_limit" {
@@ -213,15 +218,15 @@ func TestSubagentBlackboardDisplayIsBoundedIsolatedAndDetached(t *testing.T) {
 	a.events = sink
 	ctx, closeBoard := newRunBlackboard(context.Background())
 	defer closeBoard()
-	ctx, _, err := startBlackboardDelegate(ctx, "sender")
+	ctx, sender, err := startBlackboardDelegate(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	participant, _ := currentBlackboardParticipant(ctx)
 	participant.subID = "sender-run"
 	ctx = context.WithValue(ctx, blackboardParticipantContextKey{}, participant)
-	a.subRuns[participant.subID] = &SubagentRun{ID: participant.subID, Name: "sender", SessionID: "session"}
-	a.subRuns["other-run"] = &SubagentRun{ID: "other-run", Name: "sender", SessionID: "other-session"}
+	a.subRuns[participant.subID] = &SubagentRun{ID: participant.subID, Name: sender, SessionID: "session"}
+	a.subRuns["other-run"] = &SubagentRun{ID: "other-run", Name: sender, SessionID: "other-session"}
 	body := strings.Repeat("中", maxSubagentBlackboardBodyRunes+1)
 	for i := 0; i < MaxSubagentBlackboardEvents+3; i++ {
 		text := fmt.Sprintf("<msg to='queued' type='finding'>%s</msg>", body)
@@ -268,13 +273,13 @@ func TestSubagentBlackboardDisplayIsBoundedIsolatedAndDetached(t *testing.T) {
 	}
 }
 
-func TestChatBlackboardSkippedDelegateCanRetryItsName(t *testing.T) {
+func TestChatBlackboardSkippedDelegateDoesNotLeavePeer(t *testing.T) {
 	redirectAppStateDir(t)
 	first := sseChatToolCallChunk("failed", "calculate", `{"expression":"1+","stage":0}`) +
 		sseChatToolCallChunk("skipped", "subagent", `{"name":"worker","role":"tester","task":"inspect","cleanContext":true,"maxSteps":2,"stage":1}`) +
 		sseChatFinishChunk("tool_calls") + sseDone
 	h := newSubagentReportHarness(t, first,
-		subagentToolCallReply("subagent", `{"name":"worker","role":"tester","task":"inspect","cleanContext":true,"maxSteps":2}`),
+		subagentToolCallReply("subagent", `{"name":"worker","description":"superseded-label","model":"unwanted-override","role":"tester","task":"inspect","cleanContext":true,"maxSteps":2}`),
 		subagentTextReply("child report"), subagentTextReply("parent report"),
 	)
 	a := newIsolatedChatTestApp(t)
@@ -282,12 +287,35 @@ func TestChatBlackboardSkippedDelegateCanRetryItsName(t *testing.T) {
 	cfg := subagentReportBaseConfig(h.server.URL, a.config.Workspace)
 	a.runChat(context.Background(), "audit-run", ChatRequest{SessionID: "audit", Message: "inspect"}, cfg)
 	runs := a.GetSubagents()
-	if len(runs) != 1 || runs[0].Name != "worker" || runs[0].Status != "completed" || runs[0].Summary != "child report" {
+	if len(runs) != 1 || runs[0].Name != "agent-2" || runs[0].Description != "inspect" || runs[0].Status != "completed" || runs[0].Summary != "child report" {
 		t.Fatalf("skipped delegate was started or could not retry: %+v", runs)
 	}
 	requests := h.recorded()
 	if len(requests) != 4 {
 		t.Fatalf("requests=%d, want 4", len(requests))
+	}
+	if requests[2].Model != cfg.Model {
+		t.Fatalf("delegate took a model override: %q", requests[2].Model)
+	}
+	for _, message := range requests[2].Messages {
+		if strings.Contains(message.Content, "agent-1") {
+			t.Fatal("blocked delegate was still advertised to a later peer")
+		}
+	}
+	var reported bool
+	for _, message := range requests[3].Messages {
+		if message.Role != openai.ChatMessageRoleTool || !strings.Contains(message.Content, "child report") {
+			continue
+		}
+		reported = true
+		for _, private := range []string{cfg.Model, runs[0].Name, "superseded-label"} {
+			if strings.Contains(message.Content, private) {
+				t.Fatalf("child result exposed metadata: %q", private)
+			}
+		}
+	}
+	if !reported {
+		t.Fatal("parent did not receive the child report")
 	}
 	var skipped bool
 	for _, message := range requests[1].Messages {

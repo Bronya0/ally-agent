@@ -69,11 +69,6 @@ func imageModelForTool(cfg ConfigState, name string) (ImageModelConfig, error) {
 	if images == nil || !images.Enabled {
 		return ImageModelConfig{}, errors.New("image generation is not enabled")
 	}
-	for _, disabled := range cfg.DisabledTools {
-		if normalizeToolName(disabled) == name {
-			return ImageModelConfig{}, errors.New("image tool is disabled")
-		}
-	}
 	return imageModelByIdentity(images, imageIdentityForTool(images, name), name == "image_edit")
 }
 

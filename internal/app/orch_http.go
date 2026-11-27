@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -49,7 +50,8 @@ type httpFetchResult struct {
 
 // fetchToolWithConfig combines ordinary HTTP responses and webpage extraction.
 func (a *App) fetchToolWithConfig(ctx context.Context, cfg ConfigState, req HTTPRequestToolRequest) (any, error) {
-	page := (req.Method == "" || strings.EqualFold(req.Method, "GET")) && req.Body == "" && len(req.JSON) == 0 && req.SaveTo == ""
+	method := strings.TrimSpace(req.Method)
+	page := (method == "" || strings.EqualFold(method, http.MethodGet)) && req.Body == "" && len(req.JSON) == 0 && strings.TrimSpace(req.SaveTo) == ""
 	if page && req.MaxBytes <= 0 {
 		req.MaxBytes = defaultWebFetchBody
 	}
@@ -70,13 +72,24 @@ func (a *App) fetchToolWithConfig(ctx context.Context, cfg ConfigState, req HTTP
 }
 
 func (a *App) httpRequestToolWithConfig(ctx context.Context, cfg ConfigState, req HTTPRequestToolRequest) (HTTPRequestToolResult, error) {
-	if strings.TrimSpace(req.SaveTo) != "" && req.MaxBytes <= 0 {
-		req.MaxBytes = maxHTTPBodyBytes
+	var roots []string
+	if strings.TrimSpace(req.SaveTo) != "" {
+		var err error
+		roots, err = workspaceRoots(cfg)
+		if err != nil {
+			return HTTPRequestToolResult{}, err
+		}
+		// Check the destination before sending a potentially side-effecting request.
+		if _, _, err := httpSaveTarget(roots, req); err != nil {
+			return HTTPRequestToolResult{}, err
+		}
+		if req.MaxBytes <= 0 {
+			req.MaxBytes = maxHTTPBodyBytes
+		}
+	} else if req.Overwrite {
+		return HTTPRequestToolResult{}, codedToolError("E_BAD_ARGS", errors.New("overwrite requires saveTo"))
 	}
-	// 只允许收紧、不允许放宽：配置是唯一的安全决策来源，请求侧只能把
-	// allowPrivateNetwork 关掉。schema 刻意不暴露该字段，且工具入参现在按声明
-	// 硬校验（未知键直接 E_BAD_ARGS），所以模型无法用一句
-	// {"allowPrivateNetwork":true} 顶开用户关掉的 SSRF 开关。maxBytes 另有 maxHTTPBodyBytes 上限。
+	// Trusted callers may further restrict the configured network policy.
 	allowPrivate := cfg.allowPrivateNetworkEnabled()
 	if req.AllowPrivateNetwork != nil && !*req.AllowPrivateNetwork {
 		allowPrivate = false
@@ -85,23 +98,61 @@ func (a *App) httpRequestToolWithConfig(ctx context.Context, cfg ConfigState, re
 	if err != nil {
 		return HTTPRequestToolResult{}, err
 	}
-	if strings.TrimSpace(req.SaveTo) != "" {
-		roots, err := workspaceRoots(cfg)
-		if err != nil {
-			return HTTPRequestToolResult{}, err
-		}
-		path, err := resolveWritableFilePath(roots, req.SaveTo)
-		if err != nil {
-			return HTTPRequestToolResult{}, err
-		}
-		if err := safeWriteFile(path, fetched.Raw, 0o644); err != nil {
-			return HTTPRequestToolResult{}, err
-		}
-		fetched.Result.SavedPath = filepath.ToSlash(req.SaveTo)
-		fetched.Result.Body, fetched.Result.BodyBase64 = "", ""
-		fetched.Result.JSON, fetched.Result.JSONPreview = nil, ""
+	if len(roots) == 0 {
+		return fetched.Result, nil
 	}
+	status := fetched.Result.Status
+	if status < 200 || status >= 300 || status == http.StatusPartialContent {
+		return HTTPRequestToolResult{}, codedToolError("E_HTTP_SAVE_STATUS", fmt.Errorf("response was not saved: HTTP %s", fetched.Result.StatusText))
+	}
+	if fetched.Result.Truncated {
+		return HTTPRequestToolResult{}, codedToolError("E_HTTP_SAVE_TRUNCATED", fmt.Errorf("response exceeded maxBytes (%d bytes); nothing was saved", fetched.Result.BytesRead))
+	}
+	a.withFileOpsLock(func() {
+		if err = ctx.Err(); err != nil {
+			return
+		}
+		path, perm, resolveErr := httpSaveTarget(roots, req)
+		if resolveErr != nil {
+			err = resolveErr
+			return
+		}
+		if req.Overwrite {
+			err = safeWriteFile(path, fetched.Raw, perm)
+		} else if err = os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
+			err = safeWriteNewFile(path, fetched.Raw, perm)
+		}
+	})
+	if err != nil {
+		return HTTPRequestToolResult{}, err
+	}
+	fetched.Result.SavedPath = filepath.ToSlash(req.SaveTo)
+	fetched.Result.Body, fetched.Result.BodyBase64 = "", ""
+	fetched.Result.JSON, fetched.Result.JSONPreview = nil, ""
 	return fetched.Result, nil
+}
+
+func httpSaveTarget(roots []string, req HTTPRequestToolRequest) (string, os.FileMode, error) {
+	path, err := resolveWritableFilePath(roots, req.SaveTo)
+	if err != nil {
+		return "", 0, err
+	}
+	if blocked, reason := blockedSensitiveRead(path); blocked {
+		return "", 0, codedToolError("E_PROTECTED_PATH", errors.New(reason))
+	}
+	info, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return path, 0o644, nil
+	case err != nil:
+		return "", 0, err
+	case !req.Overwrite:
+		return "", 0, codedToolError("E_EXISTS", fmt.Errorf("destination already exists: %s; choose a new saveTo path or explicitly set overwrite=true", req.SaveTo))
+	case !info.Mode().IsRegular():
+		return "", 0, codedToolError("E_BAD_PATH", fmt.Errorf("saveTo must point to a regular file: %s", req.SaveTo))
+	default:
+		return path, info.Mode().Perm(), nil
+	}
 }
 
 func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req WebFetchRequest) (WebFetchResult, error) {
@@ -125,10 +176,7 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 	if req.MaxBytes <= 0 {
 		req.MaxBytes = defaultWebFetchBody
 	}
-	// 只允许收紧、不允许放宽：配置是唯一的安全决策来源，请求侧只能把
-	// allowPrivateNetwork 关掉。schema 刻意不暴露该字段，且工具入参现在按声明
-	// 硬校验（未知键直接 E_BAD_ARGS），所以模型无法用一句
-	// {"allowPrivateNetwork":true} 顶开用户关掉的 SSRF 开关。maxBytes 另有 maxHTTPBodyBytes 上限。
+	// Trusted callers may further restrict the configured network policy.
 	allowPrivate := cfg.allowPrivateNetworkEnabled()
 	if req.AllowPrivateNetwork != nil && !*req.AllowPrivateNetwork {
 		allowPrivate = false
@@ -276,7 +324,7 @@ func (a *App) doHTTPRequest(parent context.Context, cfg ConfigState, req HTTPReq
 
 	var body io.Reader
 	if req.Body != "" && len(req.JSON) > 0 {
-		return httpFetchResult{}, errors.New("body and json are mutually exclusive")
+		return httpFetchResult{}, codedToolError("E_BAD_ARGS", errors.New("body and json are mutually exclusive"))
 	}
 	if len(req.JSON) > 0 {
 		// JSON carries raw wire bytes (json.RawMessage): a streamed object or

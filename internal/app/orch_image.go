@@ -17,7 +17,8 @@ func (a *App) imageWithConfig(ctx context.Context, cfg ConfigState, sessionID, n
 	if err := req.Validate(name == "image_edit"); err != nil {
 		return GeneratedImage{}, codedToolError("E_BAD_ARGS", err)
 	}
-	// Re-check current switches without changing the session's frozen schemas.
+	// executeTool already enforced the injected tool set. Resolve only the
+	// backend from live settings so model and credential changes still apply.
 	a.mu.Lock()
 	live := cloneConfig(a.config)
 	a.mu.Unlock()
