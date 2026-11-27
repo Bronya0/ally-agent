@@ -16575,3 +16575,163 @@ func UiContextToolUsageNote() string { return In(i18n.Locale()).UiContextToolUsa
 func (msgs Messages) UiContextToolUsageNote() string {
 	return Catalog.Format(msgs.locale, "ui_context_tool_usage_note", nil)
 }
+
+// Ui1032c313fd28 says "Split editor"
+// in the language the app shows.
+func Ui1032c313fd28() string { return In(i18n.Locale()).Ui1032c313fd28() }
+
+// Ui1032c313fd28 says "Split editor"
+// in the language of msgs.
+func (msgs Messages) Ui1032c313fd28() string {
+	return Catalog.Format(msgs.locale, "ui_1032c313fd28", nil)
+}
+
+// UiE9bca1f6e8df says "Close editor group"
+// in the language the app shows.
+func UiE9bca1f6e8df() string { return In(i18n.Locale()).UiE9bca1f6e8df() }
+
+// UiE9bca1f6e8df says "Close editor group"
+// in the language of msgs.
+func (msgs Messages) UiE9bca1f6e8df() string {
+	return Catalog.Format(msgs.locale, "ui_e9bca1f6e8df", nil)
+}
+
+// Ui5c877c274f87 says "Choose a file to start editing"
+// in the language the app shows.
+func Ui5c877c274f87() string { return In(i18n.Locale()).Ui5c877c274f87() }
+
+// Ui5c877c274f87 says "Choose a file to start editing"
+// in the language of msgs.
+func (msgs Messages) Ui5c877c274f87() string {
+	return Catalog.Format(msgs.locale, "ui_5c877c274f87", nil)
+}
+
+// Ui859532e5a650 says "Only one embedded preview can be shown per workspace; select this editor group to view it."
+// in the language the app shows.
+func Ui859532e5a650() string { return In(i18n.Locale()).Ui859532e5a650() }
+
+// Ui859532e5a650 says "Only one embedded preview can be shown per workspace; select this editor group to view it."
+// in the language of msgs.
+func (msgs Messages) Ui859532e5a650() string {
+	return Catalog.Format(msgs.locale, "ui_859532e5a650", nil)
+}
+
+// UiEditorLayout says "Layout"
+// in the language the app shows.
+func UiEditorLayout() string { return In(i18n.Locale()).UiEditorLayout() }
+
+// UiEditorLayout says "Layout"
+// in the language of msgs.
+func (msgs Messages) UiEditorLayout() string {
+	return Catalog.Format(msgs.locale, "ui_editor_layout", nil)
+}
+
+// UiEditorLayoutTip says "Editor layout"
+// in the language the app shows.
+func UiEditorLayoutTip() string { return In(i18n.Locale()).UiEditorLayoutTip() }
+
+// UiEditorLayoutTip says "Editor layout"
+// in the language of msgs.
+func (msgs Messages) UiEditorLayoutTip() string {
+	return Catalog.Format(msgs.locale, "ui_editor_layout_tip", nil)
+}
+
+// UiEditorFullwidth says "Full-width editor"
+// in the language the app shows.
+func UiEditorFullwidth() string { return In(i18n.Locale()).UiEditorFullwidth() }
+
+// UiEditorFullwidth says "Full-width editor"
+// in the language of msgs.
+func (msgs Messages) UiEditorFullwidth() string {
+	return Catalog.Format(msgs.locale, "ui_editor_fullwidth", nil)
+}
+
+// UiEditorChatSplit says "Chat and editor side by side"
+// in the language the app shows.
+func UiEditorChatSplit() string { return In(i18n.Locale()).UiEditorChatSplit() }
+
+// UiEditorChatSplit says "Chat and editor side by side"
+// in the language of msgs.
+func (msgs Messages) UiEditorChatSplit() string {
+	return Catalog.Format(msgs.locale, "ui_editor_chat_split", nil)
+}
+
+// UiEditorReturn says "Return to editor"
+// in the language the app shows.
+func UiEditorReturn() string { return In(i18n.Locale()).UiEditorReturn() }
+
+// UiEditorReturn says "Return to editor"
+// in the language of msgs.
+func (msgs Messages) UiEditorReturn() string {
+	return Catalog.Format(msgs.locale, "ui_editor_return", nil)
+}
+
+// UiEditorChatOnly says "Show chat only"
+// in the language the app shows.
+func UiEditorChatOnly() string { return In(i18n.Locale()).UiEditorChatOnly() }
+
+// UiEditorChatOnly says "Show chat only"
+// in the language of msgs.
+func (msgs Messages) UiEditorChatOnly() string {
+	return Catalog.Format(msgs.locale, "ui_editor_chat_only", nil)
+}
+
+// UiEditorChatToggle says "Toggle conversation view"
+// in the language the app shows.
+func UiEditorChatToggle() string { return In(i18n.Locale()).UiEditorChatToggle() }
+
+// UiEditorChatToggle says "Toggle conversation view"
+// in the language of msgs.
+func (msgs Messages) UiEditorChatToggle() string {
+	return Catalog.Format(msgs.locale, "ui_editor_chat_toggle", nil)
+}
+
+// UiEditorSplitTrigger says "Split"
+// in the language the app shows.
+func UiEditorSplitTrigger() string { return In(i18n.Locale()).UiEditorSplitTrigger() }
+
+// UiEditorSplitTrigger says "Split"
+// in the language of msgs.
+func (msgs Messages) UiEditorSplitTrigger() string {
+	return Catalog.Format(msgs.locale, "ui_editor_split_trigger", nil)
+}
+
+// UiEditorSplitLeft says "Split Left"
+// in the language the app shows.
+func UiEditorSplitLeft() string { return In(i18n.Locale()).UiEditorSplitLeft() }
+
+// UiEditorSplitLeft says "Split Left"
+// in the language of msgs.
+func (msgs Messages) UiEditorSplitLeft() string {
+	return Catalog.Format(msgs.locale, "ui_editor_split_left", nil)
+}
+
+// UiEditorSplitRight says "Split Right"
+// in the language the app shows.
+func UiEditorSplitRight() string { return In(i18n.Locale()).UiEditorSplitRight() }
+
+// UiEditorSplitRight says "Split Right"
+// in the language of msgs.
+func (msgs Messages) UiEditorSplitRight() string {
+	return Catalog.Format(msgs.locale, "ui_editor_split_right", nil)
+}
+
+// UiEditorSplitUp says "Split Up"
+// in the language the app shows.
+func UiEditorSplitUp() string { return In(i18n.Locale()).UiEditorSplitUp() }
+
+// UiEditorSplitUp says "Split Up"
+// in the language of msgs.
+func (msgs Messages) UiEditorSplitUp() string {
+	return Catalog.Format(msgs.locale, "ui_editor_split_up", nil)
+}
+
+// UiEditorSplitDown says "Split Down"
+// in the language the app shows.
+func UiEditorSplitDown() string { return In(i18n.Locale()).UiEditorSplitDown() }
+
+// UiEditorSplitDown says "Split Down"
+// in the language of msgs.
+func (msgs Messages) UiEditorSplitDown() string {
+	return Catalog.Format(msgs.locale, "ui_editor_split_down", nil)
+}

@@ -443,6 +443,10 @@ func tabScroller(c *ui.Context, s *tabStrip) ui.Element {
 
 // tabStripOf is the strip known by id. It lives on the desktop so two strips,
 // or two windows in a test, never share a place.
+func (s *tabStrip) dragActive() bool {
+	return s != nil && (s.reorderFrom != "" || s.gesture.Panning)
+}
+
 func (a *desktop) tabStripOf(id string) *tabStrip {
 	if a.tabStrips == nil {
 		a.tabStrips = map[string]*tabStrip{}

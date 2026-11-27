@@ -34,12 +34,194 @@ func editorShown(file *workspaceFile) bool {
 	return file != nil && file.PreviewPath == "" && file.PreviewHTML == "" && file.Document == nil && !file.MarkupPreview
 }
 
-func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
+func fileNeedsWebView(file *workspaceFile) bool {
+	return file != nil && (file.PreviewPath != "" || file.PreviewHTML != "" || file.MarkupPreview)
+}
+
+func inactiveWebViewPreviewPlaceholder(file *workspaceFile, allowed bool) bool {
+	return fileNeedsWebView(file) && !allowed
+}
+
+func (a *desktop) editorGroupView(c *ui.Context, root string, group int) {
+	state := a.editorStates[workspaceKey(root)]
+	if state == nil || state.Groups[group] == nil || !editorLayoutHasGroup(state.Layout, group) {
+		return
+	}
+	pane := state.Groups[group]
+	headerBorder := c.Theme().Border
+	if state.ActiveGroup == group {
+		headerBorder = c.Theme().Accent
+	}
+	groupView := ui.Column(c.Key(fmt.Sprintf("editor-group-%s-%d", workspaceKey(root), group))).Fill().MinWidth(0).HandleInput(func(ev ui.InputEvent) bool {
+		if ev.Kind == ui.InputPointerDown && ev.Button == 0 {
+			state.ActiveGroupPinned = false
+			if pane.Active == "" {
+				a.selectEditorDocument(root, "", group, false)
+			} else {
+				a.selectEditorDocument(root, pane.Active, group, false)
+			}
+		}
+		return false
+	})
+	groupView.Children(func() {
+		ui.Row(c.Key(fmt.Sprintf("editor-tabs-%s-%d", workspaceKey(root), group))).Height(36).Padding(0, padRow).Gap(gapInline).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(headerBorder).Children(func() {
+			stripID := fmt.Sprintf("editor-documents-%s-%d", workspaceKey(root), group)
+			strip := a.tabStripOf(stripID)
+			positions := strip.positions[:0]
+			dragPointerX, dragPointerValid, released := float32(0), false, false
+			if strip.reorderFrom == "" && strip.gesture.Released {
+				strip.gesture.Panning, strip.gesture.Released = false, false
+			}
+			dropTarget, lastID := "", ""
+			if strip.reorderFrom != "" {
+				dropTarget = editorTabDropTarget(pane.Tabs, strip.reorderFrom, strip.reorderIndex)
+			}
+			if n := len(pane.Tabs); n > 0 {
+				lastID = editorDocumentKey(pane.Tabs[n-1])
+			}
+			tabScroller(c.Key(stripID), strip).Grow(1).MinWidth(0).Height(35).Children(func() {
+				ui.Row(c).Height(35).Gap(gapTight).AlignItems(ui.Center).Children(func() {
+					for _, path := range pane.Tabs {
+						file := a.editorDocument(root, path)
+						if file == nil {
+							continue
+						}
+						documentID := editorDocumentKey(path)
+						label := filepath.Base(file.Path)
+						if file.Editor != nil && file.Editor.Buffer != nil && file.Editor.Buffer.Modified() {
+							label += " ●"
+						}
+						selected := editorDocumentKey(pane.Active) == documentID
+						e := uikit.WorkspaceTab(c.Key(fmt.Sprintf("editor-tab-%s-%d-%s", workspaceKey(root), group, documentID)), label, file.Path, selected, false, true, iconImage("close"), func() {
+							if strip.gesture.Panning || strip.reorderFrom != "" {
+								return
+							}
+							a.selectEditorDocument(root, file.Path, group, false)
+						}, func() {
+							if strip.dragActive() {
+								return
+							}
+							a.closeEditorTab(root, file.Path, group)
+						}, &strip.gesture, a.secondaryInk()).Height(35).MinWidth(80).MaxWidth(220)
+						if strip.reorderFrom == "" && strip.pressID == "" && !state.PaneDrag.Active && e.Pressed() {
+							if _, _, over := e.PointerPosition(); over {
+								strip.pressID, strip.pressDX, strip.pressDY = documentID, 0, 0
+							}
+						}
+						bounds := e.Bounds()
+						positions = append(positions, tabPosition{id: documentID, x: bounds.X, width: bounds.W})
+						if strip.reorderFrom != "" && (dropTarget == documentID || dropTarget == tabDropAtEnd && documentID == lastID) {
+							e.Draw(func(p *ui.Painter, r ui.Rect) {
+								x := r.X - 2
+								if dropTarget == tabDropAtEnd {
+									x = r.X + r.W - 2
+								}
+								p.Fill(ui.Rect{X: x, Y: r.Y + 5, W: 4, H: r.H - 10}, c.Theme().Accent, 2)
+							})
+						}
+						dx, dy, dragging := e.Dragged()
+						if dragging && strip.pressID == documentID {
+							strip.pressDX += dx
+							strip.pressDY += dy
+							absX, absY := strip.pressDX, strip.pressDY
+							if absX < 0 {
+								absX = -absX
+							}
+							if absY < 0 {
+								absY = -absY
+							}
+							if strip.reorderFrom == "" && !state.PaneDrag.Active && absY >= editorDockDragSlop {
+								state.PaneDrag = editorPaneDrag{Active: true, Source: group, FilePath: file.Path}
+								strip.gesture.Panning = true
+							} else if strip.reorderFrom == "" && !state.PaneDrag.Active && absX >= tabReorderDragSlop && absX > absY {
+								strip.reorderFrom = documentID
+								strip.gesture.Panning = true
+							}
+						}
+						if documentID == strip.reorderFrom {
+							pointerX, _, _ := e.PointerPosition()
+							dragPointerX, dragPointerValid = bounds.X+pointerX, true
+							_, _, released = e.DragEnded()
+						}
+						if state.PaneDrag.Active && state.PaneDrag.Source == group && editorDocumentKey(state.PaneDrag.FilePath) == documentID {
+							pointerX, pointerY, _ := e.PointerPosition()
+							state.PaneDrag.PointerX, state.PaneDrag.PointerY = bounds.X+pointerX, bounds.Y+pointerY
+							if e.PressCanceled() {
+								state.PaneDrag = editorPaneDrag{}
+								strip.gesture.Panning = false
+							} else if _, _, ended := e.DragEnded(); ended {
+								state.PaneDrag.Pending = true
+								released = true
+							}
+						}
+						if strip.reorderFrom == "" && strip.pressID == documentID && !e.Pressed() {
+							strip.pressID = ""
+						}
+					}
+				})
+			})
+			strip.positions = positions
+			if strip.reorderFrom != "" && strip.gesture.Released {
+				released = true
+			}
+			if dragPointerValid {
+				if index := editorTabInsertionIndex(pane.Tabs, positions, strip.reorderFrom, dragPointerX, tabReorderHysteresis); index >= 0 {
+					strip.reorderIndex, strip.reorderIndexValid = index, true
+				}
+			}
+			if released {
+				if !state.PaneDrag.Pending && strip.reorderIndexValid {
+					moveEditorTabToIndex(&pane.Tabs, strip.reorderFrom, strip.reorderIndex)
+				}
+				strip.pressID, strip.pressDX, strip.pressDY = "", 0, 0
+				strip.reorderFrom, strip.reorderIndex, strip.reorderIndexValid = "", 0, false
+				strip.gesture.Panning, strip.gesture.Released = false, false
+			}
+			if len(state.Groups) > 1 || len(pane.Tabs) > 0 {
+				iconAction(c, fmt.Sprintf("editor-group-close-%s-%d", workspaceKey(root), group), locales.Text("关闭编辑器组"), "close", 22, func() { a.closeEditorGroup(root, group) })
+			}
+		})
+		if file := a.editorDocument(root, pane.Active); file != nil {
+			a.fileEditor(c, file, root, group)
+		} else {
+			ui.Box(c.Key(fmt.Sprintf("editor-empty-%s-%d", workspaceKey(root), group))).Grow(1).MinHeight(0).Center().Children(func() {
+				fieldNote(c, locales.Text("选择一个文件开始编辑"), a.secondaryInk())
+			})
+		}
+	})
+	bounds := groupView.Bounds()
+	state.PaneBounds[group] = editorGroupBounds{X: bounds.X, Y: bounds.Y, W: bounds.W, H: bounds.H}
+	if state.PaneDrag.Active {
+		groupView.DrawOver(func(p *ui.Painter, r ui.Rect) {
+			if !state.PaneDrag.Merge || state.PaneDrag.TargetGroup != group {
+				return
+			}
+			zone := ui.Rect{X: r.X + r.W*0.25, Y: r.Y + r.H*0.25, W: r.W * 0.5, H: r.H * 0.5}
+			p.Fill(zone, c.Theme().Accent.Mix(c.Theme().Background, 0.7), 8)
+		})
+	}
+	if state.ActiveGroupPinned {
+		if state.ActiveGroup == group && groupView.FocusWithin() {
+			state.ActiveGroupPinned = false
+		}
+	} else {
+		wasActive := state.ActiveGroup
+		focused := groupView.FocusWithin()
+		activateEditorGroup(state, group, focused)
+		if focused && wasActive != state.ActiveGroup && state.ActiveGroup == group && pane.Active != "" {
+			a.selectEditorDocument(root, pane.Active, group, false)
+		}
+	}
+}
+
+func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile, root string, group int) {
 	kind := workspaceFileKindForPath(file.Path)
 	ui.Column(c).Grow(1).MinWidth(0).BorderWidth(0, 0, 0, 1).BorderColor(c.Theme().Border).Children(func() {
-		c.OnShortcut(ui.Cmd, ui.KeyS, func() { a.saveFile() })
-		if kind.hasMediaPlayer() {
-			a.workspaceMediaShortcuts(c, file)
+		if a.editorGroupIndex(root) == group {
+			c.OnShortcut(ui.Cmd, ui.KeyS, func() { a.selectEditorDocument(root, file.Path, group, false); a.saveWorkspaceFile(root, file) })
+		}
+		if kind.hasMediaPlayer() && a.editorGroupIndex(root) == group {
+			a.workspaceMediaShortcuts(c, file, root, group)
 		}
 		ui.Row(c).Height(34).Padding(0, padRow).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
 			name := file.Path
@@ -48,33 +230,33 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 			}
 			uikit.Tooltip(c, ui.Text(c, name).FontSize(fsSmall).Grow(1).SingleLine().MinWidth(0), file.Path)
 			if kind.hasMediaPlayer() {
-				a.workspaceMediaToolbar(c, file)
+				a.workspaceMediaToolbar(c, file, root, group)
 			}
 			if kind.hasMarkupToggle() {
 				label := locales.Text("预览")
 				if file.MarkupPreview {
 					label = locales.Text("编辑源码")
 				}
-				flat(c, label).OnClick(func() { a.toggleWorkspaceFileMarkupPreview(file) })
+				flat(c, label).OnClick(func() {
+					a.selectEditorDocument(root, file.Path, group, false)
+					a.toggleWorkspaceFileMarkupPreview(file)
+				})
 			}
 			flat(c, locales.Text("刷新")).Disabled(file.Saving).OnClick(func() {
-				if t := a.current(); t != nil {
-					root := t.Workspace
-					reload := func(discardConfirmed bool) { a.loadFileReplacing(root, file.Path, file, discardConfirmed) }
-					if file.Editor.Buffer.Modified() {
-						a.confirmDiscardFile(root, file, func() { reload(true) })
-					} else {
-						reload(false)
-					}
+				reload := func(discardConfirmed bool) { a.loadWorkspaceFile(root, file.Path, file, discardConfirmed, group) }
+				if file.Editor.Buffer.Modified() {
+					a.confirmDiscardFile(root, file, func() { reload(true) })
+				} else {
+					reload(false)
 				}
 			})
 			label := locales.Text("保存")
 			if file.Saving {
 				label = locales.Text("保存中…")
 			}
-			flat(c, label).Disabled(kind.isPreviewOnly() || file.Saving || !file.Editor.Buffer.Modified()).OnClick(func() { a.saveFile() })
+			flat(c, label).Disabled(kind.isPreviewOnly() || file.Saving || !file.Editor.Buffer.Modified()).OnClick(func() { a.selectEditorDocument(root, file.Path, group, false); a.saveWorkspaceFile(root, file) })
 			flat(c, locales.Text("系统打开")).OnClick(func() { a.openSystemFile(file.Path) })
-			iconAction(c, "editor-close", locales.Text("关闭编辑器"), "close", 24, func() { a.closeFile() })
+			iconAction(c, fmt.Sprintf("editor-close-%s-%d", workspaceKey(root), group), locales.Text("关闭编辑器"), "close", 24, func() { a.closeEditorTab(root, file.Path, group) })
 		})
 		if file.PreviewError != "" {
 			ui.Box(c).Grow(1).MinHeight(0).Padding(padPage).Center().Children(func() {
@@ -88,12 +270,18 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile) {
 			})
 			return
 		}
+		if fileNeedsWebView(file) && inactiveWebViewPreviewPlaceholder(file, a.workspacePreviewFileAllowed(root, file, group)) {
+			ui.Box(c.Key("editor-preview-inactive")).Grow(1).MinHeight(0).Center().Children(func() {
+				fieldNote(c, locales.Text("该工作区一次只能显示一个内嵌预览，请选中此文件组查看。"), a.secondaryInk())
+			})
+			return
+		}
 		if !editorShown(file) {
-			a.workspaceFilePreviewView(c, file)
+			a.workspaceFilePreviewView(c, file, root, group)
 			return
 		}
 		file.Editor.ReadOnly = a.closing || file.Saving
-		editor.View(c.Key("editor-"+file.Path), file.Editor).Grow(1).MinHeight(0).FillWidth()
+		editor.View(c.Key(fmt.Sprintf("editor-%s-%d-%s", workspaceKey(root), group, editorDocumentKey(file.Path))), file.Editor).Grow(1).MinHeight(0).FillWidth()
 	})
 }
 
@@ -120,6 +308,17 @@ func (a *desktop) fileTree(c *ui.Context) {
 				OnSubmit(func() { a.searchFiles(a.filesF.Search.Input) })
 			uikit.Tooltip(c, search, locales.Text("输入文件名后回车搜索，清空后回车还原"))
 			uikit.IconButton(c, "explorer-refresh", locales.Text("刷新"), iconImage("refresh"), 22, uikit.IconQuiet, func() { a.searchFiles(a.filesF.Search.Input) }, ink)
+			if t := a.current(); t != nil && a.hasEditorFiles(t.Workspace) {
+				state := a.editorState(t.Workspace)
+				label := locales.Text("会话与编辑器并排")
+				if state.ChatVisible {
+					label = locales.Text("单栏显示")
+				}
+				uikit.IconButton(c, "editor-layout-toggle-"+workspaceKey(t.Workspace), label, iconImage("grid"), 22, uikit.IconQuiet, func() { a.toggleChatEditorLayout(t.Workspace) }, ink)
+				if state.ChatOnly {
+					uikit.IconButton(c, "editor-return", locales.Text("返回编辑器"), iconImage("code"), 22, uikit.IconQuiet, func() { a.showEditorOnly(t.Workspace) }, ink)
+				}
+			}
 			uikit.IconButton(c, "explorer-close", locales.Text("关闭文件栏"), iconImage("close"), 22, uikit.IconQuiet, func() { a.setExplorerOpen(false) }, ink)
 		})
 		if a.filesF.Search.Busy {
@@ -654,8 +853,14 @@ func (a *desktop) deleteFileEntry(entry backend.FileEntry) {
 // Async file operations belong to their captured workspace even if another tab
 // is active when they finish. A renamed directory also invalidates descendants.
 func (a *desktop) explorerPathChanged(workspace, path string) {
-	if file := a.workspaceFiles[workspaceKey(workspace)]; file != nil && workspacePathContains(path, file.Path) {
-		a.closeWorkspaceFile(workspace)
+	var affected []*workspaceFile
+	for _, file := range a.editorDocuments(workspace) {
+		if workspacePathContains(path, file.Path) {
+			affected = append(affected, file)
+		}
+	}
+	for _, file := range affected {
+		a.closeEditorDocumentEverywhere(workspace, file)
 	}
 	a.refreshWorkspaceFiles(workspace)
 }

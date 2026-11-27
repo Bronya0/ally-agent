@@ -37,6 +37,14 @@ func TestNativeVideoResetClosesPlayerAndInvalidatesCallbacks(t *testing.T) {
 	}
 }
 
+func TestNativeVideoPauseInvalidatesPendingPoll(t *testing.T) {
+	p := &nativeVideoPreview{timer: time.NewTimer(time.Hour), watchGeneration: 7}
+	p.pause()
+	if !p.paused || p.watchGeneration != 8 || p.timer != nil {
+		t.Fatal("pausing video did not invalidate its pending poll")
+	}
+}
+
 func TestNativeVideoKeepsWorkspaceWebViewAndReleasesBoth(t *testing.T) {
 	root := t.TempDir()
 	web := &fakeWorkspacePreview{body: "image"}

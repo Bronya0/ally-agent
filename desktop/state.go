@@ -287,7 +287,12 @@ type chatUI struct {
 	// would never arrive.
 	FollowBottom     float32
 	LastScrollY      float32
-	HistoryIndex     int
+	ChatLayoutSeen    bool
+	ChatWithExplorer  bool
+	ChatWithRail      bool
+	ChatTopNavigation bool
+	ChatWithFile      bool
+	HistoryIndex      int
 	HistoryDraft     string
 	WorkspaceHistory []string
 	// List is the transcript's list: it builds only the rows in view and owns

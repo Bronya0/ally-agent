@@ -1843,5 +1843,21 @@
   "ui_context_tool_call_tokens": "Call",
   "ui_context_tool_result_tokens": "Result",
   "ui_context_unknown_tool": "Unknown tool",
-  "ui_context_tool_usage_note": "Current context estimates; calls include arguments and count toward AI replies"
+  "ui_context_tool_usage_note": "Current context estimates; calls include arguments and count toward AI replies",
+  "ui_1032c313fd28": "Split editor",
+  "ui_e9bca1f6e8df": "Close editor group",
+  "ui_5c877c274f87": "Choose a file to start editing",
+  "ui_859532e5a650": "Only one embedded preview can be shown per workspace; select this editor group to view it.",
+  "ui_editor_layout": "Layout",
+  "ui_editor_layout_tip": "Editor layout",
+  "ui_editor_fullwidth": "Full-width editor",
+  "ui_editor_chat_split": "Chat and editor side by side",
+  "ui_editor_return": "Return to editor",
+  "ui_editor_chat_only": "Show chat only",
+  "ui_editor_chat_toggle": "Toggle conversation view",
+  "ui_editor_split_trigger": "Split",
+  "ui_editor_split_left": "Split Left",
+  "ui_editor_split_right": "Split Right",
+  "ui_editor_split_up": "Split Up",
+  "ui_editor_split_down": "Split Down"
 }

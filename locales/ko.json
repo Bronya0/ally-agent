@@ -1843,5 +1843,21 @@
   "ui_context_tool_call_tokens": "호출",
   "ui_context_tool_result_tokens": "결과",
   "ui_context_unknown_tool": "알 수 없는 도구",
-  "ui_context_tool_usage_note": "현재 컨텍스트 추정치. 호출에는 인수가 포함되며 AI 응답에 합산됩니다"
+  "ui_context_tool_usage_note": "현재 컨텍스트 추정치. 호출에는 인수가 포함되며 AI 응답에 합산됩니다",
+  "ui_1032c313fd28": "편집기 분할",
+  "ui_e9bca1f6e8df": "편집기 그룹 닫기",
+  "ui_5c877c274f87": "편집할 파일 선택",
+  "ui_859532e5a650": "작업 공간에서는 포함된 미리보기를 하나만 표시할 수 있습니다. 이 편집기 그룹을 선택해 확인하세요.",
+  "ui_editor_layout": "레이아웃",
+  "ui_editor_layout_tip": "편집기 레이아웃",
+  "ui_editor_fullwidth": "전체 너비 편집기",
+  "ui_editor_chat_split": "대화와 편집기를 나란히 표시",
+  "ui_editor_return": "편집기로 돌아가기",
+  "ui_editor_chat_only": "대화만 표시",
+  "ui_editor_chat_toggle": "대화 보기 전환",
+  "ui_editor_split_trigger": "분할",
+  "ui_editor_split_left": "왼쪽으로 분할",
+  "ui_editor_split_right": "오른쪽으로 분할",
+  "ui_editor_split_up": "위쪽으로 분할",
+  "ui_editor_split_down": "아래쪽으로 분할"
 }

@@ -158,6 +158,30 @@ func (a *desktop) chatMessages(c *ui.Context, t *conversation, width float32) {
 	})
 }
 
+// syncChatLayout keeps the transcript's row anchor when a shell toggle moves
+// it into a different parent. The tracked pixel offset belongs to the old
+// viewport and must not be adopted by the new one.
+func (a *desktop) syncChatLayout(t *conversation) {
+	st := t.uiState()
+	withRail := a.prefs.RailExpanded && !a.prefs.TopNavigation
+	state := a.editorStates[workspaceKey(t.Workspace)]
+	withFile := a.explorer && a.hasEditorFiles(t.Workspace) && state != nil && state.ChatVisible
+	if st.ChatLayoutSeen && (st.ChatWithExplorer != a.explorer || st.ChatWithRail != withRail || st.ChatTopNavigation != a.prefs.TopNavigation || st.ChatWithFile != withFile) {
+		// Explorer and rail toggles move the transcript to a different parent.
+		// Its old pixel offset is not valid there; let the list restore its row
+		// anchor, or keep following the end if it was already there.
+		t.Scroll.Y = 0
+		st.LastScrollY = 0
+		if st.Follow {
+			st.List.ScrollToEnd()
+		}
+	}
+	st.ChatLayoutSeen = true
+	st.ChatWithExplorer = a.explorer
+	st.ChatWithRail = withRail
+	st.ChatTopNavigation = a.prefs.TopNavigation
+	st.ChatWithFile = withFile
+}
 // jumpToPreviousPrompt scrolls to the prompt above the one in view, or to the
 // last one before the rows the list built.
 func (a *desktop) jumpToPreviousPrompt(c *ui.Context, t *conversation) {

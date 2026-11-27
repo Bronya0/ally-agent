@@ -101,19 +101,27 @@ func (a *desktop) setExplorerOpen(open bool) {
 // Called only after a current load completes on the UI thread. A tool can be
 // clicked before its file is created or after deletion; neither case replaces
 // the existing editor with an empty or broken preview.
-func (a *desktop) handleFileLoadError(root, path string, kind workspaceFileKind, expected *workspaceFile, err error) {
+func (a *desktop) handleFileLoadError(root, path string, kind workspaceFileKind, expected *workspaceFile, err error, groups ...int) {
+	if kind.hasMediaPlayer() {
+		if media := a.mediaPlayback[workspaceKey(root)]; media != nil && media.autoplay {
+			media.playing, media.autoplay = false, false
+		}
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		a.notifyError(locales.Text("文件不存在，可能尚未创建或已被删除：") + path)
 		return
 	}
 	if kind.hasWebViewPreview() {
 		if expected != nil {
-			a.releaseWorkspaceFile(root)
+			a.releaseWorkspaceDocument(root, expected)
 		}
-		if a.workspaceFiles == nil {
-			a.workspaceFiles = map[string]*workspaceFile{}
+		failed := &workspaceFile{Path: path, PreviewError: err.Error(), Editor: emptyFileEditor()}
+		a.editorDocuments(root)[editorDocumentKey(path)] = failed
+		group := a.editorGroupIndex(root)
+		if len(groups) > 0 {
+			group = groups[0]
 		}
-		a.workspaceFiles[workspaceKey(root)] = &workspaceFile{Path: path, PreviewError: err.Error(), Editor: emptyFileEditor()}
+		a.openLoadedEditorDocument(root, path, group)
 		a.notifyError(locales.Text("文件预览失败：") + err.Error())
 		return
 	}

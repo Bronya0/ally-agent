@@ -130,13 +130,13 @@ func (a *desktop) mediaNeighbours(file *workspaceFile) (previous, next string) {
 	return pick(-1), pick(1)
 }
 
-func (a *desktop) stepWorkspaceMedia(file *workspaceFile, delta int, automatic bool) {
-	if a.activeFile() != file {
-		return
+func (a *desktop) stepWorkspaceMedia(file *workspaceFile, delta int, automatic bool) bool {
+	if !a.workspaceMediaPreviewVisible(file) {
+		return false
 	}
-	media := a.workspaceMedia()
+	media := a.mediaForWorkspace(a.current().Workspace)
 	if automatic && !media.continueAfterEnd() {
-		return
+		return false
 	}
 	previous, next := a.mediaNeighbours(file)
 	target := next
@@ -148,20 +148,75 @@ func (a *desktop) stepWorkspaceMedia(file *workspaceFile, delta int, automatic b
 			// A one-file playlist still repeats without creating a new preview.
 			media.autoplay = false
 			if p := a.nativeVideoFor(file); p != nil && p.player != nil {
+				p.ended = false
 				p.player.Play()
 			} else {
 				a.mediaCommand(file, "window.allyMedia?.play(true)")
 			}
+			return true
+		}
+		return false
+	}
+	root := a.current().Workspace
+	state := a.editorStates[workspaceKey(root)]
+	group := a.editorGroupContaining(root, file.Path)
+	if state != nil && state.PreviewGroupSet && editorDocumentKey(state.PreviewFile) == editorDocumentKey(file.Path) {
+		group = state.PreviewGroup
+	}
+	if group < 0 {
+		return false
+	}
+	media.autoplay = automatic || media.playing
+	if media.playing {
+		a.pauseWorkspaceMediaTransport(root, file)
+	}
+	a.openWorkspaceMediaInGroup(root, target, group)
+	return true
+}
+
+func (a *desktop) openWorkspaceMediaInGroup(root, path string, group int) {
+	state := a.editorState(root)
+	if state.Groups[group] == nil || !editorLayoutHasGroup(state.Layout, group) {
+		return
+	}
+	state.ChatOnly = false
+	if file := a.editorDocument(root, path); file != nil {
+		if state.ActiveGroup == group {
+			a.selectEditorDocument(root, file.Path, group, true)
+			return
+		}
+		if a.addEditorDocumentToGroup(root, file.Path, group) {
+			state.Groups[group].Active = file.Path
+			a.prepareWorkspacePreviewSelection(root, file, group)
 		}
 		return
 	}
-	media.autoplay = automatic || media.playing
-	a.openFile(target)
+	a.loadWorkspaceFile(root, path, nil, false, group)
+}
+
+func (a *desktop) pauseWorkspaceMediaPreview(root string, file *workspaceFile) {
+	media := a.mediaForWorkspace(root)
+	media.playing, media.autoplay = false, false
+	a.pauseWorkspaceMediaTransport(root, file)
+}
+
+func (a *desktop) pauseWorkspaceMediaTransport(root string, file *workspaceFile) {
+	if p := a.nativeVideoForWorkspace(root, file); p != nil && p.player != nil {
+		p.pause()
+		return
+	}
+	a.mediaCommandForWorkspace(root, file, "window.allyMedia?.play(false)")
 }
 
 func (a *desktop) mediaCommand(file *workspaceFile, command string) {
-	surface, ok := a.workspacePreview.mountedFor(a.workspaceFilePreviewKey(file)).(*nativePreview)
-	if !ok || surface.mediaToken == "" {
+	if tab := a.current(); tab != nil {
+		a.mediaCommandForWorkspace(tab.Workspace, file, command)
+	}
+}
+
+func (a *desktop) mediaCommandForWorkspace(root string, file *workspaceFile, command string) {
+	surface, ok := a.workspacePreview.mountedFor(workspaceFilePreviewKeyFor(root, file)).(*nativePreview)
+	if !ok || surface.mediaToken == "" || surface.view == nil {
 		return
 	}
 	// The async command may reach a reused view after another file loads.
@@ -174,29 +229,31 @@ func (a *desktop) mediaCommand(file *workspaceFile, command string) {
 	}()
 }
 
-func (a *desktop) workspaceMediaToolbar(c *ui.Context, file *workspaceFile) {
+func (a *desktop) workspaceMediaToolbar(c *ui.Context, file *workspaceFile, root string, group int) {
+	activate := func() { a.selectEditorDocument(root, file.Path, group, false) }
 	previous, next := a.mediaNeighbours(file)
-	localizedSelect(c.Key("media-mode"), &a.media.mode, mediaModes).Width(108).OnChange(func() { a.syncMediaOptions(file) })
+	localizedSelect(c.Key("media-mode"), &a.media.mode, mediaModes).Width(108).OnChange(func() { activate(); a.syncMediaOptions(file) })
 	label := locales.Text("播放")
 	if a.workspaceMedia().playing {
 		label = locales.Text("暂停")
 	}
-	uikit.Tooltip(c, flat(c, label).OnClick(func() { a.toggleMediaPlayback(file) }), locales.Text("空格：播放/暂停；← →：切换同目录同类型媒体；图片每 5 秒切换"))
-	flat(c, locales.Text("上一个")).Disabled(previous == "").OnClick(func() { a.stepWorkspaceMedia(file, -1, false) })
-	flat(c, locales.Text("下一个")).Disabled(next == "").OnClick(func() { a.stepWorkspaceMedia(file, 1, false) })
+	uikit.Tooltip(c, flat(c, label).OnClick(func() { activate(); a.toggleMediaPlayback(file) }), locales.Text("空格：播放/暂停；← →：切换同目录同类型媒体；图片每 5 秒切换"))
+	flat(c, locales.Text("上一个")).Disabled(previous == "").OnClick(func() { activate(); a.stepWorkspaceMedia(file, -1, false) })
+	flat(c, locales.Text("下一个")).Disabled(next == "").OnClick(func() { activate(); a.stepWorkspaceMedia(file, 1, false) })
 	if workspaceFileKindForPath(file.Path) == workspaceFileImage {
 		label := locales.Text("画质增强：关")
 		if a.media.enhance {
 			label = locales.Text("画质增强：开")
 		}
-		uikit.Tooltip(c, flat(c, label).OnClick(func() { a.media.enhance = !a.media.enhance; a.syncMediaOptions(file) }), locales.Text("轻微减淡与锐化，仅影响预览"))
+		uikit.Tooltip(c, flat(c, label).OnClick(func() { activate(); a.media.enhance = !a.media.enhance; a.syncMediaOptions(file) }), locales.Text("轻微减淡与锐化，仅影响预览"))
 	}
 }
 
-func (a *desktop) workspaceMediaShortcuts(c *ui.Context, file *workspaceFile) {
-	c.OnShortcut(0, ui.KeyLeft, func() { a.stepWorkspaceMedia(file, -1, false) })
-	c.OnShortcut(0, ui.KeyRight, func() { a.stepWorkspaceMedia(file, 1, false) })
-	c.OnShortcut(0, ui.KeySpace, func() { a.toggleMediaPlayback(file) })
+func (a *desktop) workspaceMediaShortcuts(c *ui.Context, file *workspaceFile, root string, group int) {
+	activate := func() { a.selectEditorDocument(root, file.Path, group, false) }
+	c.OnShortcut(0, ui.KeyLeft, func() { activate(); a.stepWorkspaceMedia(file, -1, false) })
+	c.OnShortcut(0, ui.KeyRight, func() { activate(); a.stepWorkspaceMedia(file, 1, false) })
+	c.OnShortcut(0, ui.KeySpace, func() { activate(); a.toggleMediaPlayback(file) })
 }
 
 func (a *desktop) toggleMediaPlayback(file *workspaceFile) {
@@ -204,9 +261,17 @@ func (a *desktop) toggleMediaPlayback(file *workspaceFile) {
 	media.playing = !media.playing
 	if p := a.nativeVideoFor(file); p != nil && p.player != nil {
 		if media.playing {
+			if p.ended {
+				p.player.Seek(0)
+				p.ended = false
+			}
+			p.paused = false
 			p.player.Play()
+			if p.timer == nil {
+				a.watchWorkspaceVideo(p, file, a.workspaceFilePreviewKey(file))
+			}
 		} else {
-			p.player.Pause()
+			p.pause()
 		}
 		return
 	}
@@ -260,7 +325,7 @@ func (a *desktop) attachWorkspaceMedia(surface *nativePreview, file *workspaceFi
 
 func (a *desktop) handleWorkspaceMediaAction(surface *nativePreview, file *workspaceFile, key, token, action string) {
 	workspace, _, _ := strings.Cut(key, "\x00")
-	if surface.IsDestroyed() || surface.mediaToken != token || a.workspaceFiles[workspace] != file {
+	if surface.IsDestroyed() || surface.mediaToken != token || !a.workspaceFileCurrent(workspace, file) || a.workspacePreview.mountedFor(key) != surface {
 		return
 	}
 	media := a.mediaForWorkspace(workspace)
@@ -272,7 +337,7 @@ func (a *desktop) handleWorkspaceMediaAction(surface *nativePreview, file *works
 		media.playing = false
 		return
 	}
-	if a.activeFile() != file || a.page != "chat" || !a.explorer || a.mainWindowHidden || a.win != nil && a.win.IsMinimized() {
+	if !a.workspaceMediaPreviewVisible(file) {
 		if action == "ended" {
 			media.playing, media.autoplay = false, false
 		}

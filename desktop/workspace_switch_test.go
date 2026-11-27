@@ -6,14 +6,14 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 )
 
-func TestReselectOpenFileCancelsPendingSwitch(t *testing.T) {
+func TestReselectOpenFileKeepsOtherPendingLoad(t *testing.T) {
 	root := t.TempDir()
 	file := &workspaceFile{Path: "current.go", Editor: &editor.State{Buffer: editor.NewBuffer("package current")}}
 	a := &desktop{tabs: []*conversation{{Workspace: root}}, workspaceFiles: map[string]*workspaceFile{workspaceKey(root): file}}
 	ctx, _ := a.workspacePreview.beginLoad(root, "other.go")
 	a.openFile("current.go")
-	if ctx.Err() == nil || a.workspacePreview.pending != nil || a.activeFile() != file {
-		t.Fatal("reselecting the open file must cancel the pending switch")
+	if ctx.Err() != nil || a.workspacePreview.pending == nil || a.activeFile() != file {
+		t.Fatal("opening an existing document cancelled another file's pending load")
 	}
 }
 

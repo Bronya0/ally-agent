@@ -11,7 +11,7 @@ import (
 func (a *desktop) memoryCounts() map[string]int {
 	counts := map[string]int{
 		"tabs": len(a.tabs), "rememberedSessions": len(a.openSessions),
-		"openFiles": len(a.workspaceFiles), "highlightEntries": len(highlightCache),
+		"openFiles": len(a.allWorkspaceFiles()), "highlightEntries": len(highlightCache),
 		"previewEntries": len(a.previews.entries), "subRuns": len(a.subRuns),
 	}
 	seen := map[*conversation]bool{}

@@ -1843,5 +1843,21 @@
   "ui_context_tool_call_tokens": "调用",
   "ui_context_tool_result_tokens": "结果",
   "ui_context_unknown_tool": "未知工具",
-  "ui_context_tool_usage_note": "当前上下文估算；调用含参数，计入 AI 回复"
+  "ui_context_tool_usage_note": "当前上下文估算；调用含参数，计入 AI 回复",
+  "ui_1032c313fd28": "拆分编辑器",
+  "ui_e9bca1f6e8df": "关闭编辑器组",
+  "ui_5c877c274f87": "选择一个文件开始编辑",
+  "ui_859532e5a650": "该工作区一次只能显示一个内嵌预览，请选中此文件组查看。",
+  "ui_editor_layout": "布局",
+  "ui_editor_layout_tip": "编辑器布局",
+  "ui_editor_fullwidth": "全宽编辑器",
+  "ui_editor_chat_split": "会话与编辑器并排",
+  "ui_editor_return": "返回编辑器",
+  "ui_editor_chat_only": "只显示会话",
+  "ui_editor_chat_toggle": "切换对话显示",
+  "ui_editor_split_trigger": "拆分",
+  "ui_editor_split_left": "向左拆分",
+  "ui_editor_split_right": "向右拆分",
+  "ui_editor_split_up": "向上拆分",
+  "ui_editor_split_down": "向下拆分"
 }

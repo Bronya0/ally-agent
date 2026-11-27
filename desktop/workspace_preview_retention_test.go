@@ -161,6 +161,8 @@ func TestWorkspaceMediaEventsStayWithRetainedWorkspace(t *testing.T) {
 	surface, _ := queuedPreview(t, browser)
 	surface.mediaToken = "first"
 	key := workspacePreviewTestKey(root, file.Path)
+	a.workspacePreview.releaseMountedWorkspace(root)
+	a.workspacePreview.mounted[workspaceKey(root)] = &mountedWorkspacePreview{key: key, surface: surface}
 	a.active = 1
 	other := a.workspaceMedia()
 	a.handleWorkspaceMediaAction(surface, file, key, "first", "play")

@@ -618,6 +618,36 @@ func TestEscapeCancelsRunWhenSearchClosed(t *testing.T) {
 	}
 }
 
+func TestEscapeInEditorDoesNotCancelConversation(t *testing.T) {
+	conv := &conversation{ID: "esc-editor", Workspace: t.TempDir()}
+	conv.Busy = true
+	root := conv.Workspace
+	a := &desktop{
+		ready:    true,
+		page:     "chat",
+		explorer: true,
+		tabs:     []*conversation{conv},
+		editorStates: map[string]*workspaceEditorState{workspaceKey(root): {
+			Groups: map[int]*editorGroupState{0: {Tabs: []string{"file.go"}, Active: "file.go"}},
+			Layout: &editorLayoutNode{Group: 0},
+		}},
+	}
+	editorHandled := false
+	tester := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		a.globalShortcuts(c)
+		c.OnShortcut(0, ui.KeyEscape, func() { editorHandled = true })
+	}, 800, 400)
+	tester.Key(0, ui.KeyEscape)
+	if conv.CancelRequested {
+		t.Fatal("Escape in the editor cancelled the running reply")
+	}
+	if !editorHandled {
+		t.Fatal("the editor did not receive Escape")
+	}
+}
+
 // Escape closes the bar first when it is open, without cancelling the run.
 func TestEscapeClosesSearchBeforeCancelling(t *testing.T) {
 	conv := &conversation{ID: "esc-search", Workspace: t.TempDir()}

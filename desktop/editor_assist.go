@@ -410,7 +410,13 @@ func (a *desktop) editorAssistForSnapshot(file *workspaceFile, snapshot editor.S
 }
 
 func (a *desktop) workspaceFileCurrent(root string, file *workspaceFile) bool {
-	return !a.closing && file != nil && a.workspaceFiles[workspaceKey(root)] == file
+	if a.closing || file == nil {
+		return false
+	}
+	if docs := a.editorDocumentsByWorkspace[workspaceKey(root)]; docs != nil {
+		return docs[editorDocumentKey(file.Path)] == file
+	}
+	return a.workspaceFiles[workspaceKey(root)] == file
 }
 
 func (a *desktop) installEditorAssist(root string, file *workspaceFile, buffer *editor.Buffer, index *editorAssistIndex) {
@@ -425,16 +431,76 @@ func (a *desktop) installEditorAssist(root string, file *workspaceFile, buffer *
 	file.Assist = index
 }
 
-func (a *desktop) releaseWorkspaceFile(root string) {
-	key := workspaceKey(root)
-	a.workspacePreview.releaseWorkspace(key)
-	delete(a.mediaPlayback, key)
-	file := a.workspaceFiles[key]
+func (a *desktop) releaseWorkspaceDocument(root string, file *workspaceFile) {
 	if file == nil {
 		return
 	}
-	delete(a.workspaceFiles, key)
+	key := workspaceKey(root)
+	a.cancelEditorFileLoad(root, file.Path)
+	previewKey := key + "\x00" + normalizeExplorerPath(file.Path)
+	state := a.editorStates[key]
+	previewOwner := state != nil && state.PreviewGroupSet && editorDocumentKey(state.PreviewFile) == editorDocumentKey(file.Path)
+	previewReleased := a.workspacePreview.mountedFor(previewKey) != nil || previewOwner && a.workspacePreview.retainedImageFor(previewKey) != nil
+	if previewReleased {
+		a.workspacePreview.releaseWorkspace(key)
+	}
+	mediaOwnerReleased := previewOwner || a.workspaceFiles[key] == file && (state == nil || !state.PreviewGroupSet)
+	if workspaceFileKindForPath(file.Path).hasMediaPlayer() && (previewReleased || mediaOwnerReleased) {
+		delete(a.mediaPlayback, key)
+	}
+	if docs := a.editorDocumentsByWorkspace[key]; docs != nil {
+		delete(docs, editorDocumentKey(file.Path))
+		if len(docs) == 0 {
+			delete(a.editorDocumentsByWorkspace, key)
+		}
+	}
+	if a.workspaceFiles[key] == file {
+		delete(a.workspaceFiles, key)
+		if state := a.editorStates[key]; state != nil {
+			for _, groupID := range layoutGroupIDs(state.Layout) {
+				if group := state.Groups[groupID]; group != nil {
+					if next := a.editorDocument(root, group.Active); next != nil {
+						a.workspaceFiles[key] = next
+						break
+					}
+				}
+			}
+		}
+	}
+	if state := a.editorStates[key]; state != nil {
+		for _, group := range state.Groups {
+			filtered := group.Tabs[:0]
+			for _, path := range group.Tabs {
+				if editorDocumentKey(path) != editorDocumentKey(file.Path) {
+					filtered = append(filtered, path)
+				}
+			}
+			group.Tabs = filtered
+			if editorDocumentKey(group.Active) == editorDocumentKey(file.Path) {
+				group.Active = ""
+				if len(group.Tabs) > 0 {
+					group.Active = group.Tabs[0]
+				}
+			}
+		}
+		a.reconcileWorkspacePreviewGroup(root)
+	}
 	releaseWorkspaceFileValue(file)
+}
+
+func (a *desktop) releaseWorkspaceFile(root string) {
+	key := workspaceKey(root)
+	a.cancelEditorFileLoads(root)
+	a.workspacePreview.releaseWorkspace(key)
+	delete(a.mediaPlayback, key)
+	for _, file := range a.allWorkspaceFiles() {
+		if a.editorDocumentsByWorkspace[key] != nil && a.editorDocumentsByWorkspace[key][editorDocumentKey(file.Path)] == file || a.workspaceFiles[key] == file {
+			releaseWorkspaceFileValue(file)
+		}
+	}
+	delete(a.workspaceFiles, key)
+	delete(a.editorDocumentsByWorkspace, key)
+	delete(a.editorStates, key)
 }
 
 func releaseWorkspaceFileValue(file *workspaceFile) {
@@ -459,11 +525,13 @@ func releaseWorkspaceFileValue(file *workspaceFile) {
 }
 
 func (a *desktop) releaseWorkspaceFiles() {
+	a.cancelEditorFileLoads("")
 	a.releaseAllFilePreviews()
 	a.closeFileInfo()
-	for key, file := range a.workspaceFiles {
-		delete(a.workspaceFiles, key)
+	for _, file := range a.allWorkspaceFiles() {
 		releaseWorkspaceFileValue(file)
 	}
 	a.workspaceFiles = nil
+	a.editorDocumentsByWorkspace = nil
+	a.editorStates = nil
 }
