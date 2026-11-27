@@ -6036,6 +6036,26 @@ func (msgs Messages) Ui5fc9b86fafc1() string {
 	return Catalog.Format(msgs.locale, "ui_5fc9b86fafc1", nil)
 }
 
+// UiSshExport says "Export SSH configuration"
+// in the language the app shows.
+func UiSshExport() string { return In(i18n.Locale()).UiSshExport() }
+
+// UiSshExport says "Export SSH configuration"
+// in the language of msgs.
+func (msgs Messages) UiSshExport() string {
+	return Catalog.Format(msgs.locale, "ui_ssh_export", nil)
+}
+
+// UiSshExportAllGroups says "All groups"
+// in the language the app shows.
+func UiSshExportAllGroups() string { return In(i18n.Locale()).UiSshExportAllGroups() }
+
+// UiSshExportAllGroups says "All groups"
+// in the language of msgs.
+func (msgs Messages) UiSshExportAllGroups() string {
+	return Catalog.Format(msgs.locale, "ui_ssh_export_all_groups", nil)
+}
+
 // Ui7cd5bf8403d1 says "The exported file contains clear text of credentials such as passwords, please keep them properly."
 // in the language the app shows.
 func Ui7cd5bf8403d1() string { return In(i18n.Locale()).Ui7cd5bf8403d1() }

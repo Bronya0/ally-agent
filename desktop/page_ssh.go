@@ -26,11 +26,12 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 		uikit.Input(c.Key("ssh-search"), &a.sshF.Search).Placeholder(locales.Text("搜索")).Label(locales.Text("搜索 SSH 服务器")).Width(200)
 		ui.Spacer(c)
 		flat(c, locales.Text("导入")).OnClick(func() { a.importSSH() })
-		uikit.Tooltip(c, flat(c, locales.Text("导出")).Disabled(len(a.sshServers) == 0), locales.Text("导出文件含密码等凭据明文，请妥善保管")).OnClick(func() { a.exportSSH() })
+		flat(c, locales.Text("导出")).Disabled(len(a.sshServers) == 0).OnClick(a.openSSHExport)
 		flat(c, locales.Text("刷新")).OnClick(func() { a.refreshSSH(true) })
 		primary(c, locales.Text("添加")).OnClick(func() { a.openSSHEditor("", "") })
 	})
-	groups := a.sshGroups()
+	a.sshExportDialog(c, a.exportText)
+	groups := a.sshGroups(true)
 	if len(a.sshServers) == 0 {
 		emptyState(c, locales.Text("暂无配置的 SSH 服务器"), locales.Text("点击“添加”录入第一台服务器。"), a.secondaryInk())
 		a.sshEditorDialog(c)
@@ -62,11 +63,7 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 			query := strings.ToLower(strings.TrimSpace(a.sshF.Search))
 			shown := 0
 			for _, node := range a.sshServers {
-				group := node.Group
-				if group == "" {
-					group = sshUngrouped
-				}
-				if len(groups) > 1 && group != active {
+				if len(groups) > 1 && sshGroupName(node.Group) != active {
 					continue
 				}
 				if query != "" {
@@ -118,25 +115,33 @@ func (a *desktop) sshPageBody(c *ui.Context) {
 	a.sshEditorDialog(c)
 }
 
-func (a *desktop) sshGroups() []string {
+func (a *desktop) sshGroups(includeEmptyUngrouped bool) []string {
 	seen := map[string]bool{}
-	named := make([]string, 0, len(a.sshServers)+1)
+	groups := make([]string, 0, len(a.sshServers)+1)
 	for _, node := range a.sshServers {
-		group := strings.TrimSpace(node.Group)
-		// 空分组与字面量“未分组”是同一个桶（后端把前者存成后者），只收一次；
-		// 未分组桶最后统一追加，所以这里不能再把它当成具名分组。
-		if group == "" || group == sshUngrouped || seen[group] {
-			continue
+		group := sshGroupName(node.Group)
+		if group != sshUngrouped && !seen[group] {
+			groups = append(groups, group)
 		}
 		seen[group] = true
-		named = append(named, group)
 	}
-	sort.Strings(named)
-	return append(named, sshUngrouped)
+	sort.Strings(groups)
+	// The editor and tabs offer 未分组 even when empty; export only lists groups with nodes.
+	if includeEmptyUngrouped || seen[sshUngrouped] {
+		groups = append(groups, sshUngrouped)
+	}
+	return groups
+}
+
+func sshGroupName(group string) string {
+	if group = strings.TrimSpace(group); group == "" {
+		return sshUngrouped
+	}
+	return group
 }
 
 func sshGroupInput(group string) string {
-	if strings.TrimSpace(group) == "" || group == sshUngrouped {
+	if sshGroupName(group) == sshUngrouped {
 		return locales.Text(sshUngrouped)
 	}
 	return group
@@ -249,7 +254,7 @@ func (a *desktop) sshEditorDialog(c *ui.Context) {
 			fieldNote(c, locales.Text("从「")+source+locales.Text("」复制；保存后会创建新的服务器配置。"), a.secondaryInk())
 		}
 		fieldLabel(c, locales.Text("分组"))
-		uikit.ComboboxField(c.Key("ssh-group"), a.sshF.GroupInput, sshGroupLabels(a.sshGroups()), locales.Text("分组"), locales.Text("选择或输入分组"), func(value string) { a.sshF.GroupInput = value }, a.secondaryInk()).FillWidth()
+		uikit.ComboboxField(c.Key("ssh-group"), a.sshF.GroupInput, sshGroupLabels(a.sshGroups(true)), locales.Text("分组"), locales.Text("选择或输入分组"), func(value string) { a.sshF.GroupInput = value }, a.secondaryInk()).FillWidth()
 		ui.Row(c).Gap(gapSection).AlignItems(ui.Start).Children(func() {
 			ui.Column(c).Grow(2).Basis(0).Children(func() { fieldRowRequired(c, "ssh-host", locales.Text("主机"), &d.Host) })
 			ui.Column(c).Grow(1).Basis(0).Gap(gapTight).Children(func() {
@@ -521,14 +526,70 @@ func importSSHNodes(store sshImportStore, nodes []backend.SSHServerNode) (added,
 	return
 }
 
-func (a *desktop) exportSSH() {
-	payload := map[string]any{"nodes": a.sshServers}
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		a.notifyError(err.Error())
+func (a *desktop) openSSHExport() {
+	groups := a.sshGroups(false)
+	if len(groups) == 0 {
 		return
 	}
-	a.exportText("ally-ssh-cluster-"+nowDate()+".json", string(data))
+	a.sshF.ExportOpen = true
+	a.sshF.ExportGroups = make(map[string]*bool, len(groups))
+	for _, group := range groups {
+		checked := true
+		a.sshF.ExportGroups[group] = &checked
+	}
+}
+
+func (a *desktop) closeSSHExport() {
+	a.sshF.ExportOpen = false
+	a.sshF.ExportGroups = nil
+}
+
+func (a *desktop) sshExportDialog(c *ui.Context, save func(name, content string)) {
+	if !a.sshF.ExportOpen {
+		return
+	}
+	groups := a.sshGroups(false)
+	selection := a.sshF.ExportGroups
+	hasSelection := false
+	formDialog(c.Key("ssh-export-dialog"), &a.sshF.ExportOpen, widthModalSmall, 340, locales.Text("导出 SSH 配置"),
+		locales.Text("导出文件含密码等凭据明文，请妥善保管"), func() {
+			if len(groups) == 0 {
+				fieldNote(c, locales.Text("暂无配置的 SSH 服务器"), a.secondaryInk())
+				return
+			}
+			ui.CheckboxGroup(c.Key("ssh-export-groups"), locales.Text("所有分组"), func() {
+				for _, group := range groups {
+					checked := selection[group]
+					if checked == nil {
+						// Groups added while the dialog is open must be selected explicitly.
+						checked = new(bool)
+						selection[group] = checked
+					}
+					uikit.Checkbox(c.Key(group), checked, sshGroupInput(group))
+					hasSelection = hasSelection || *checked
+				}
+			})
+		}, func() {
+			flat(c, locales.Text("取消")).OnClick(a.closeSSHExport)
+			primary(c, locales.Text("导出")).Disabled(!hasSelection).OnClick(func() {
+				var nodes []backend.SSHServerNode
+				for _, node := range a.sshServers {
+					if checked := selection[sshGroupName(node.Group)]; checked != nil && *checked {
+						nodes = append(nodes, node)
+					}
+				}
+				if len(nodes) == 0 {
+					return
+				}
+				data, err := json.MarshalIndent(map[string][]backend.SSHServerNode{"nodes": nodes}, "", "  ")
+				if err != nil {
+					a.notifyError(err.Error())
+					return
+				}
+				a.closeSSHExport()
+				save("ally-ssh-cluster-"+nowDate()+".json", string(data))
+			})
+		}, a.closeSSHExport)
 }
 
 // ---- Workspace authorization modal --------------------------------------

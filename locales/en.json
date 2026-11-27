@@ -600,6 +600,8 @@
   "ui_5881ee222d81": "Export image model",
   "ui_649256d26f02": "Export plug-in package",
   "ui_5fc9b86fafc1": "Export file",
+  "ui_ssh_export": "Export SSH configuration",
+  "ui_ssh_export_all_groups": "All groups",
   "ui_7cd5bf8403d1": "The exported file contains clear text of credentials such as passwords, please keep them properly.",
   "ui_1ec303566b03": "There is no available speech model in the exported file",
   "ui_173e89db9492": "Export (only package body)",

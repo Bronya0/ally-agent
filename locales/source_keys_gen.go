@@ -1649,6 +1649,8 @@ var sourceKeys = map[string]string{
 	"重命名会话":            "ui_session_rename_title",
 	"安全":               "ui_settings_security",
 	"版本":               "ui_settings_version",
+	"导出 SSH 配置":        "ui_ssh_export",
+	"所有分组":             "ui_ssh_export_all_groups",
 	"提出建议":             "ui_support_feedback",
 	"支持开源":             "ui_support_open_source",
 	"前往 GitHub 点 Star": "ui_support_star_action",

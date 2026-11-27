@@ -591,6 +591,8 @@ type sshForm struct {
 	DeleteID        string
 	DeleteOpen      bool
 	ImportBusy      bool
+	ExportOpen      bool
+	ExportGroups    map[string]*bool
 	AuthOpen        bool
 	AuthOnlyAllowed bool
 	AuthGroup       string
