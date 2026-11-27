@@ -56,7 +56,11 @@ func TestReadSnapshotSupportsTextDeletion(t *testing.T) {
 	}
 }
 
-func TestEditArgumentGateRejectsRemovedConstraints(t *testing.T) {
+// Removed replacement-scope parameters stay out of the declaration, so they are
+// dropped with a warning instead of failing the call: refusing cost a model round
+// trip for a value nothing reads. The edit then spans what oldText matches, and an
+// ambiguous match is still refused by the unique-match rule.
+func TestEditArgumentGateDropsRemovedConstraints(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"edit", "remote_edit"} {
 		for _, key := range []string{"lineRange", "rangeToken"} {
@@ -65,9 +69,16 @@ func TestEditArgumentGateRejectsRemovedConstraints(t *testing.T) {
 				if name == "edit" {
 					args = []byte(strings.Replace(string(args), `"alias":"dev",`, "", 1))
 				}
-				err, _ := decodeToolArguments(name, args, &RemoteEditRequest{})
-				if toolErrorCode(err) != "E_BAD_ARGS" || !strings.Contains(err.Error(), key) {
-					t.Fatalf("removed constraint accepted: %s %v", args, err)
+				req := &RemoteEditRequest{}
+				err, warnings := decodeToolArguments(name, args, req)
+				if err != nil {
+					t.Fatalf("a removed constraint must not fail the call: %v", err)
+				}
+				if len(warnings) == 0 || !strings.Contains(strings.Join(warnings, " "), key) {
+					t.Fatalf("the dropped constraint must be named: %v", warnings)
+				}
+				if len(req.Changes) != 1 || req.Changes[0].OldText != "same" || req.Changes[0].NewText != "new" {
+					t.Fatalf("unexpected decoded changes: %+v", req.Changes)
 				}
 			})
 		}

@@ -692,7 +692,12 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 	switch name {
 	case "sub:spawn":
 		row["status"] = "running"
+	case "sub:compact":
+		row["compacting"] = true
+	case "sub:compacted":
+		delete(row, "compacting")
 	case "sub:done":
+		delete(row, "compacting")
 		row["status"] = "success"
 		if stop := str(p, "stopReason"); strings.Contains(strings.ToLower(stop), "limit") {
 			row["status"] = "partial"
@@ -705,11 +710,19 @@ func (a *desktop) applySubagentEvent(name string, p map[string]any) {
 			delete(row, "error")
 		}
 	case "sub:error":
+		delete(row, "compacting")
 		row["status"] = "error"
 		if e := str(p, "error"); e != "" {
 			row["error"] = e
 		}
 	case "sub:tool:start", "sub:tool:result", "sub:tool:error":
+		if name == "sub:tool:start" {
+			latest := describeTool(str(p, "name")).label
+			if purpose := str(p, "purpose"); purpose != "" {
+				latest += " · " + purpose
+			}
+			row["latestTool"] = latest
+		}
 		tools, _ := row["toolCalls"].([]any)
 		var entry map[string]any
 		for _, raw := range tools {

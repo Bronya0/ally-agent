@@ -18,6 +18,7 @@ import (
 
 	"ally-dev/internal/tools/pathutil"
 	toolshared "ally-dev/internal/tools/shared"
+	"ally-dev/internal/tools/sshclient"
 )
 
 const remoteTransferMarker = "ALLY_REMOTE_TRANSFER_JSON:"
@@ -291,7 +292,13 @@ func (a *App) runRemoteTransferStream(ctx context.Context, rt remoteTarget, acti
 			remoteCmd := fmt.Sprintf(`sh -c 'boot="import base64, sys, zlib; code = zlib.decompress(base64.b64decode(sys.argv.pop(1))); exec(compile(code, \"<ally-transfer>\", \"exec\"))"; command -v python3 >/dev/null 2>&1 && exec python3 -u -c "$boot" "$@" ; command -v python2 >/dev/null 2>&1 && exec python2 -u -c "$boot" "$@" ; exec python -u -c "$boot" "$@"' -- %s %s`, getRemoteTransferCompressedScript(), b64Payload)
 			stderr, runErr := a.sshPool.RunStream(ctx, poolKey, poolVersion, sshConfig, remoteCmd, stdin, stdout)
 			if runErr != nil {
-				return remoteTransferStats{}, parseRemoteTransferError(rt.Host, stderr, runErr)
+				err := parseRemoteTransferError(rt.Host, stderr, runErr)
+				if errors.Is(runErr, sshclient.ErrStreamIdle) {
+					// Files that finished before the stall stay where they landed, so a
+					// blind retry of the whole batch would resend them.
+					err = codedToolError("E_TRANSFER_TIMEOUT", fmt.Errorf("%w; files that finished were kept, so retry only the remaining ones and check the link first", err))
+				}
+				return remoteTransferStats{}, err
 			}
 			var stats remoteTransferStats
 			err = decodeRemoteTransferMarker(stderr, &stats)

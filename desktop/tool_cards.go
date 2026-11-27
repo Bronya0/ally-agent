@@ -1345,7 +1345,7 @@ func (a *desktop) toolCard(c *ui.Context, t *conversation, index int, m map[stri
 					a.subagentRow(c, t, n, t.Messages[n], task)
 				}
 				if len(children) == 0 {
-					a.subagentTaskLine(c, task)
+					a.subagentCardLine(c, "subagent-task", task)
 					if summary := str(result, "summary"); open && summary != "" {
 						fieldNote(c, summary, a.secondaryInk())
 					}
@@ -2137,12 +2137,12 @@ func (a *desktop) openHTMLPreview(workspace, html string) {
 
 // ---- Sub-agent rows ------------------------------------------------------
 
-func (a *desktop) subagentTaskLine(c *ui.Context, task string) {
-	if task == "" {
+func (a *desktop) subagentCardLine(c *ui.Context, key, text string) {
+	if text == "" {
 		return
 	}
-	label := ui.Text(c.Key("subagent-task"), task).FontSize(fsSmall).TextColor(a.secondaryInk()).SingleLine().FillWidth().MinWidth(0)
-	uikit.Tooltip(c, label, task)
+	label := ui.Text(c.Key(key), text).FontSize(fsSmall).TextColor(a.secondaryInk()).SingleLine().FillWidth().MinWidth(0)
+	uikit.Tooltip(c, label, text)
 }
 
 func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[string]any, task string) {
@@ -2170,7 +2170,9 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 	}
 	tone := toneColor(c, status, a.secondaryInk())
 	label := map[string]string{"running": locales.Text("运行中"), "success": locales.Text("已完成"), "partial": locales.Text("步数已耗尽"), "error": locales.Text("失败"), "pending": locales.Text("等待中")}[status]
-	if label == "" {
+	if status == "running" && boolOf(m, "compacting") {
+		label = locales.Text("正在压缩对话上下文…")
+	} else if label == "" {
 		label = status
 	}
 	subID := str(m, "subId")
@@ -2232,7 +2234,8 @@ func (a *desktop) subagentRow(c *ui.Context, t *conversation, index int, m map[s
 					ui.Text(c, fmtDur(ms)).Font(monoFamily).FontSize(fsTiny).TextColor(a.secondaryInk())
 				}
 			})
-			a.subagentTaskLine(c, task)
+			a.subagentCardLine(c, "subagent-task-"+subID, task)
+			a.subagentCardLine(c, "subagent-latest-tool-"+subID, str(m, "latestTool"))
 			ui.Row(c).Gap(gapInline).Wrap().AlignItems(ui.Center).Children(func() {
 				if steps := int(num(m, "steps")); steps > 0 {
 					label := fmt.Sprintf(locales.Text("%d 步"), steps)

@@ -1,6 +1,7 @@
 package sshclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -24,11 +26,15 @@ func TestPoolReuseAndInvalidate(t *testing.T) {
 	p := NewPool()
 	defer p.Close()
 	ctx := context.Background()
-	for _, v := range []string{"one", "two"} {
-		r, err := p.Run(ctx, "node", 0, cfg, "cat", strings.NewReader(v))
-		if err != nil || string(r.Stdout) != "received:"+v {
-			t.Fatalf("run %q: %q %v", v, r.Stdout, err)
-		}
+	result, err := p.Run(ctx, "node", 0, cfg, "cat", strings.NewReader("one"))
+	if err != nil || string(result.Stdout) != "received:one" {
+		t.Fatalf("run: %q %v", result.Stdout, err)
+	}
+	const binary = "two\x00\xff"
+	var streamed bytes.Buffer
+	stderr, err := p.RunStream(ctx, "node", 0, cfg, "cat", strings.NewReader(binary), &streamed)
+	if err != nil || streamed.String() != "received:"+binary || string(stderr) != "test stderr" {
+		t.Fatalf("stream: stdout=%q stderr=%q err=%v", streamed.String(), stderr, err)
 	}
 	if n := auth.Load(); n != 1 {
 		t.Fatalf("authentications = %d, want 1", n)
@@ -361,5 +367,61 @@ func TestPoolCancelUnansweredExecDoesNotReplay(t *testing.T) {
 	}
 	if got := commands.Load(); got != 1 {
 		t.Fatalf("executed %d times", got)
+	}
+}
+
+func TestStreamActivityTimeoutAfterLastProgress(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(t.Context())
+		defer cancel(nil)
+		activity := &streamActivity{started: time.Now()}
+		go activity.watch(ctx, cancel, streamIdleTimeout)
+
+		time.Sleep(streamIdleTimeout / 2) // synctest uses virtual time
+		activity.progress()
+		time.Sleep(streamIdleTimeout / 2)
+		synctest.Wait()
+		if ctx.Err() != nil {
+			t.Fatalf("active transfer interrupted: %v", context.Cause(ctx))
+		}
+		time.Sleep(streamIdleTimeout / 2)
+		synctest.Wait()
+		if err := context.Cause(ctx); !errors.Is(err, ErrStreamIdle) {
+			t.Fatalf("stalled transfer did not time out: %v", err)
+		}
+	})
+}
+
+type failedStreamWriter struct{ err error }
+
+func (w failedStreamWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestPoolStreamWriteFailureClosesSession(t *testing.T) {
+	serverClosed := make(chan struct{})
+	server := startTestServerWithHostKey(t, testSigner(t), func(cfg *ssh.ServerConfig) {
+		cfg.PasswordCallback = func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) { return nil, nil }
+	}, func(channel ssh.Channel, requests <-chan *ssh.Request) {
+		defer close(serverClosed)
+		defer channel.Close()
+		if request := <-requests; request != nil && request.Type == "exec" {
+			_ = request.Reply(true, nil)
+			_, _ = io.WriteString(channel, "file bytes")
+			// Simulate a sender that cannot finish until its peer closes the channel.
+			ssh.DiscardRequests(requests)
+		}
+	})
+	cfg := Config{Host: "test@" + server.host, Port: server.port, AuthMode: AuthModePassword, Password: "pw", KnownHostsPath: filepath.Join(t.TempDir(), "known_hosts")}
+	p := NewPool()
+	defer p.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	writeErr := errors.New("disk full")
+	if _, err := p.RunStream(ctx, "node", 0, cfg, "download", nil, failedStreamWriter{err: writeErr}); !errors.Is(err, writeErr) {
+		t.Fatalf("local write error lost: %v", err)
+	}
+	select {
+	case <-serverClosed:
+	case <-ctx.Done():
+		t.Fatal("SSH channel remained open after local write failure")
 	}
 }

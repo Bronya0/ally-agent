@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -430,19 +431,106 @@ func (p *Pool) runCaptured(ctx context.Context, key string, version uint64, cfg 
 	}
 	return Result{Stdout: out.Bytes(), Stderr: errout.Bytes()}, err
 }
+
+// ErrStreamIdle means no file bytes moved for the stream's idle budget.
+var ErrStreamIdle = errors.New("SSH stream made no progress")
+
+// streamIdleTimeout bounds a transfer's silence, not its duration. It only
+// applies to RunStream, whose traffic is file bytes, so a command that is
+// legitimately quiet for longer belongs on Run instead. Connection setup never
+// eats into it: dial and handshake carry their own shorter budgets.
+const streamIdleTimeout = 2 * time.Minute
+
+type streamActivity struct {
+	started time.Time
+	last    atomic.Int64 // monotonic time since started
+}
+
+func (a *streamActivity) progress() {
+	a.last.Store(int64(time.Since(a.started)))
+}
+
+func (a *streamActivity) watch(ctx context.Context, cancel context.CancelCauseFunc, idle time.Duration) {
+	timer := time.NewTimer(idle)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			last := time.Duration(a.last.Load())
+			remaining := idle - (time.Since(a.started) - last)
+			if remaining <= 0 {
+				cancel(fmt.Errorf("%w for %s", ErrStreamIdle, idle))
+				return
+			}
+			timer.Reset(remaining)
+		}
+	}
+}
+
+type streamReader struct {
+	io.Reader
+	activity *streamActivity
+}
+
+func (r streamReader) Read(b []byte) (int, error) {
+	n, err := r.Reader.Read(b)
+	if n > 0 {
+		r.activity.progress()
+	}
+	return n, err
+}
+
+type streamWriter struct {
+	io.Writer
+	activity *streamActivity
+	cancel   context.CancelCauseFunc
+}
+
+func (w streamWriter) Write(b []byte) (int, error) {
+	n, err := w.Writer.Write(b)
+	if n > 0 {
+		w.activity.progress()
+	}
+	if err == nil && n != len(b) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		// Wait alone may block forever: the peer is waiting to send bytes
+		// that the failed local writer will no longer consume.
+		w.cancel(fmt.Errorf("write SSH stream output: %w", err))
+	}
+	return n, err
+}
+
+// RunStream allows long transfers as long as bytes continue to move.
 func (p *Pool) RunStream(ctx context.Context, key string, version uint64, cfg Config, command string, stdin io.Reader, stdout io.Writer) ([]byte, error) {
 	if ctx == nil {
 		return nil, errors.New("SSH context is required")
 	}
+	runCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	activity := &streamActivity{started: time.Now()}
+	go activity.watch(runCtx, cancel, streamIdleTimeout)
+	if stdin != nil {
+		stdin = streamReader{Reader: stdin, activity: activity}
+	}
 	if stdout == nil {
 		stdout = io.Discard
+	} else {
+		stdout = streamWriter{Writer: stdout, activity: activity, cancel: cancel}
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	stderr := &limitedWriter{limit: maxStderrBytes, onTruncate: cancel}
+	stderr := &limitedWriter{limit: maxStderrBytes, onTruncate: func() { cancel(ErrOutputTooLarge) }}
 	err := p.run(runCtx, key, version, cfg, command, stdin, stdout, stderr)
 	if stderr.Truncated() {
 		return stderr.Bytes(), ErrOutputTooLarge
+	}
+	if cause := context.Cause(runCtx); err != nil && cause != nil && ctx.Err() == nil {
+		if errors.Is(err, ErrResultUnknown) {
+			cause = errors.Join(cause, ErrResultUnknown)
+		}
+		err = cause
 	}
 	return stderr.Bytes(), err
 }

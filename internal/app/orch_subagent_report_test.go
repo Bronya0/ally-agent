@@ -60,6 +60,12 @@ func newSubagentReportHarness(t *testing.T, replies ...string) *subagentReportHa
 		if index < len(h.script) {
 			reply = h.script[index]
 		}
+		if reply == overflowLengthError {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, reply)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, reply)
@@ -123,7 +129,7 @@ func TestForceSubagentFinalReportKeepsToolsAndRetriesDiscardedCalls(t *testing.T
 	run := &SubagentRun{ID: "sub-report"}
 	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "## Task\nwrite marker.txt"}}
 
-	summary, err := app.forceSubagentFinalReport(context.Background(), cfg, "test-model", history, tools, run)
+	summary, err := app.forceSubagentFinalReport(context.Background(), cfg, history, tools, run, newSubagentCompaction(history, 0, tools))
 	if err != nil {
 		t.Fatalf("forceSubagentFinalReport() error = %v", err)
 	}
@@ -180,8 +186,8 @@ func TestForceSubagentFinalReportRetriesAnEmptyAnswer(t *testing.T) {
 	cfg := subagentReportBaseConfig(harness.server.URL, t.TempDir())
 	tools := []openai.Tool{subagentReportTool("read")}
 
-	summary, err := app.forceSubagentFinalReport(context.Background(), cfg, "test-model",
-		[]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "## Task\ndo it"}}, tools, &SubagentRun{ID: "sub-empty"})
+	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "## Task\ndo it"}}
+	summary, err := app.forceSubagentFinalReport(context.Background(), cfg, history, tools, &SubagentRun{ID: "sub-empty"}, newSubagentCompaction(history, 0, tools))
 	if err != nil {
 		t.Fatalf("forceSubagentFinalReport() error = %v", err)
 	}
@@ -213,8 +219,8 @@ func TestForceSubagentFinalReportGivesUpAfterBoundedTurns(t *testing.T) {
 	cfg := subagentReportBaseConfig(harness.server.URL, t.TempDir())
 	tools := []openai.Tool{subagentReportTool("read")}
 
-	summary, err := app.forceSubagentFinalReport(context.Background(), cfg, "test-model",
-		[]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "## Task\ndo it"}}, tools, &SubagentRun{ID: "sub-stuck"})
+	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "## Task\ndo it"}}
+	summary, err := app.forceSubagentFinalReport(context.Background(), cfg, history, tools, &SubagentRun{ID: "sub-stuck"}, newSubagentCompaction(history, 0, tools))
 	if !errors.Is(err, errForcedReportMissing) {
 		t.Fatalf("forceSubagentFinalReport() error = %v, want errForcedReportMissing", err)
 	}

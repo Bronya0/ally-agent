@@ -2487,7 +2487,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// reason="overflow" + willRetry)，压缩后请求不再超窗、run 得以继续。
 			// 压缩本身也失败时(压缩请求用同一份历史、同一个模型，超窗时它同样会
 			// 失败)把两条原因一起报出来，用户才知道只能删历史自救。
-			if !overflowCompacted && !emittedEvents && classifyLLMError(err) == llmErrorKindContextTooLong {
+			if shouldRecoverContextOverflow(err, emittedEvents, overflowCompacted) {
 				overflowCompacted = true
 				requestTrigger = "overflow_recovery"
 				newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonOverflow, req, messages, usedTokens)
@@ -2783,6 +2783,13 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	ctx = withToolWorkspace(ctx, cfg.Workspace)
 	finishPerfTool := startPerfTool(ctx, name, args)
 	defer finishPerfTool()
+	// Registered before the panic guard so it runs after it: a panic becomes a
+	// normal error result, and this record then carries it like any other failure.
+	defer func() {
+		if !result.OK {
+			a.logToolFailure(sessionID, name, args, result)
+		}
+	}()
 	// Tool execution digests model-controlled JSON and is the single choke
 	// point for the main loop, sub-agents, and scheduled tasks. A panic in
 	// any handler would otherwise crash the whole desktop app — and in the
@@ -2805,8 +2812,8 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	// schema (the gate below): that declaration is what the model was shown, so
 	// a bad value is a model bug that must fail here, naming the field, instead
 	// of reaching a handler that never promised to check it. Undeclared keys are
-	// exception: most tools drop undeclared top-level keys and warn about
-	// them; edits reject unknown keys to avoid misinterpreting a constraint.
+	// the exception: they are dropped with a warning because no handler reads
+	// them.
 	decodeJSON := func(v any) (error, []string) { return decodeToolArguments(name, args, v) }
 
 	// Normalize once at the boundary: lower-case and trim surrounding
@@ -3974,10 +3981,9 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 		return toolArgDecodeError(name, rawArgs, err), nil
 	}
 	schema, builtin := toolshared.BuiltinSchema(name)
-	strictKeys := name == "edit" || name == "remote_edit"
 	cur := rawArgs
 	var ignored []string
-	if builtin && schema["additionalProperties"] == false && !strictKeys {
+	if builtin && schema["additionalProperties"] == false {
 		properties, _ := schema["properties"].(map[string]any)
 		for key := range rawMap {
 			if _, known := properties[key]; !known {
@@ -4048,13 +4054,15 @@ func decodeToolArguments(name string, args []byte, v any) (error, []string) {
 	// repair above still lands, and so every keyword the declaration uses
 	// (required, ranges, patterns, enum, const) is enforced exactly as written.
 	//
-	// Undeclared keys are normally dropped with a warning. Edits reject them:
-	// silently ignoring a removed constraint could change the replacement scope.
+	// Undeclared keys never reach a handler, so they are collected into one
+	// warning: refusing the call cost a round trip for a value nothing reads.
+	// A removed constraint cannot silently widen a write either, because the
+	// required fields it should have narrowed (oldText) still have to match.
 	if builtin {
 		violations := schemautil.ValidateArgs(schema, cur)
 		fatal := make([]schemautil.Violation, 0, len(violations))
 		for _, violation := range violations {
-			if violation.UnsupportedKey == "" || strictKeys {
+			if violation.UnsupportedKey == "" {
 				fatal = append(fatal, violation)
 				continue
 			}

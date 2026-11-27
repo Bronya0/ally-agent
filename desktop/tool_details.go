@@ -174,47 +174,53 @@ func toolReadTree(c *ui.Context, args, result map[string]any, ink ui.Color) {
 	}
 }
 
+// toolAskSummary draws the answered card. The resolved answers carry their own
+// question text and labels, so they are the source: pairing them with the
+// model's arguments needed ids the arguments usually omit (Ally assigns q1/q2
+// only at execution), which left the card with a bare question and no answer.
 func toolAskSummary(c *ui.Context, key string, args, result map[string]any) {
-	questions := list(result, "questions")
-	if len(questions) == 0 {
-		questions = list(args, "questions")
-	}
-	for n, raw := range questions {
-		if q, ok := raw.(map[string]any); ok {
-			ui.Column(c.Key(fmt.Sprintf("%s-question-%d", key, n))).Padding(padCard).Gap(5).Border(1, c.Theme().Border).Radius(radiusCard).Children(func() {
-				ui.Text(c, str(q, "question")).FontSize(fsSmall).Bold()
-				for _, raw := range list(result, "answers") {
-					if answer, ok := raw.(map[string]any); ok && str(answer, "questionId") == str(q, "id") {
-						for _, raw := range list(answer, "selections") {
-							if selection, ok := raw.(map[string]any); ok {
-								ui.Row(c).Gap(gapInline).Children(func() {
-									ui.Text(c, "✓ "+str(selection, "label")).FontSize(fsSmall).TextColor(c.Theme().Success)
-									if boolOf(selection, "recommended") {
-										accentChip(c, locales.Text("推荐"))
-									}
-								})
-							}
-						}
-						selected := list(answer, "selectedOptionIds")
-						for _, raw := range list(q, "options") {
-							if option, ok := raw.(map[string]any); ok {
-								for _, id := range selected {
-									if fmt.Sprint(id) == str(option, "id") {
-										ui.Text(c, "✓ "+str(option, "label")).FontSize(fsSmall).TextColor(c.Theme().Success)
-									}
-								}
-							}
-						}
-						if text := str(answer, "customText"); text != "" {
-							ui.Text(c, text).FontSize(fsSmall).Selectable()
-						}
-						if count := int(num(answer, "imageCount")); count > 0 {
-							ui.Text(c, fmt.Sprintf(locales.Text("%d 张图片"), count)).FontSize(fsSmall)
-						}
+	if answers := list(result, "answers"); len(answers) > 0 {
+		for n, raw := range answers {
+			answer, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			ui.Column(c.Key(fmt.Sprintf("%s-answer-%d", key, n))).Padding(padCard).Gap(5).Border(1, c.Theme().Border).Radius(radiusCard).Children(func() {
+				ui.Text(c, str(answer, "question")).FontSize(fsSmall).Bold()
+				for _, raw := range list(answer, "selections") {
+					selection, ok := raw.(map[string]any)
+					if !ok {
+						continue
 					}
+					if boolOf(selection, "custom") {
+						// Typed text is not an offered choice, so it takes no ✓.
+						ui.Text(c, str(selection, "label")).FontSize(fsSmall).Selectable()
+						continue
+					}
+					ui.Row(c).Gap(gapInline).Children(func() {
+						ui.Text(c, "✓ "+str(selection, "label")).FontSize(fsSmall).TextColor(c.Theme().Success)
+						if boolOf(selection, "recommended") {
+							accentChip(c, locales.Text("推荐"))
+						}
+					})
+				}
+				if count := int(num(answer, "imageCount")); count > 0 {
+					ui.Text(c, fmt.Sprintf(locales.Text("%d 张图片"), count)).FontSize(fsSmall)
 				}
 			})
 		}
+		return
+	}
+	// No answers yet (a card still running, or an older transcript): show what
+	// was asked without inventing a choice.
+	for n, raw := range list(args, "questions") {
+		question, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		ui.Column(c.Key(fmt.Sprintf("%s-question-%d", key, n))).Padding(padCard).Gap(5).Border(1, c.Theme().Border).Radius(radiusCard).Children(func() {
+			ui.Text(c, str(question, "question")).FontSize(fsSmall).Bold()
+		})
 	}
 }
 

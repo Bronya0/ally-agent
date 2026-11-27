@@ -318,43 +318,21 @@ func isCompactSkip(err error) bool {
 // reason labels the compact:start / run:compacted event pair so the UI can tell
 // a threshold compaction from the context-overflow recovery.
 func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID, reason string, req ChatRequest, history []openai.ChatCompletionMessage, tokensBefore int) ([]openai.ChatCompletionMessage, map[string]any, error) {
-	fastFallback := false
-	// Local compaction preserves the current user turn and all later tool steps.
-	// Do not reappend req.Message here: unlike a full summary, it is still in h.
-	// Overflow always falls through to the LLM recovery path below.
-	if reason == compactReasonThreshold && normalizeAutoCompactMethod(cfg.AutoCompactMethod) == autoCompactMethodRecent {
-		h := sanitizeHistoryMessages(history)
-		candidate, err := a.prepareFastCompactHistory(ctx, sessionID, h, tokensBefore)
-		if err != nil {
-			return nil, nil, err
-		}
-		result := candidate.result
-		// 快压至少要把估算上下文压到原来的一半以下才采用；否则丢弃候选，
-		// 用未经快压的原始历史做全文总结，避免少量收益让大上下文继续膨胀。
-		if candidate.messageChange && fastCompactLeavesLessThanHalf(intFromAny(result["tokensBefore"]), intFromAny(result["tokensAfter"])) {
-			result = a.commitFastCompactHistory(sessionID, h, candidate)
-			a.clearCompactFailures(sessionID)
-			compacted := a.loadSessionHistoryCopy(sessionID)
-			messages := a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkillsForConfig(cfg))
-			messages = append(messages, compacted...)
-			result["sessionId"] = sessionID
-			result["reason"] = reason
-			return messages, result, nil
-		}
-		// 候选尚未提交，回退总结拿到原始 history；失败计数也保持不变，
-		// 让下方摘要调用继续遵守连续失败熔断。
-		fastFallback = true
+	h, candidate, err := prepareRunCompaction(cfg, reason, a.autoCompactAllowed(sessionID), history, func(h []openai.ChatCompletionMessage) (*fastCompactCandidate, error) {
+		return a.prepareFastCompactHistory(ctx, sessionID, h, tokensBefore)
+	})
+	if err != nil {
+		return nil, nil, err
 	}
-	// 熔断只拦阈值档（对齐 zcode 的 MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES）：
-	// 阈值判断在每个 step 重跑，失败一次不拦就会逐步重付一次长上下文总结请求；
-	// 溢出档仍要试，它是请求被拒后的最后一根救命绳。
-	if reason == compactReasonThreshold && !a.autoCompactAllowed(sessionID) {
-		return nil, nil, errAutoCompactCircuitOpen
-	}
-	h := sanitizeHistoryMessages(history)
-	// 快压回退也覆盖只有一两条超长消息的上下文，不能按条数跳过。
-	if len(h) == 0 || (len(h) <= 2 && !fastFallback) {
-		return nil, nil, errHistoryTooShortToCompact
+	if candidate != nil {
+		result := a.commitFastCompactHistory(sessionID, h, candidate)
+		a.clearCompactFailures(sessionID)
+		compacted := a.loadSessionHistoryCopy(sessionID)
+		messages := a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkillsForConfig(cfg))
+		messages = append(messages, compacted...)
+		result["sessionId"] = sessionID
+		result["reason"] = reason
+		return messages, result, nil
 	}
 	a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": tokensBefore, "reason": reason})
 	result, err := a.compactHistory(ctx, cfg, sessionID, "", h, tokensBefore)
@@ -389,6 +367,43 @@ func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID,
 	return messages, payload, nil
 }
 
+// prepareRunCompaction selects a rewrite without changing history. Fast
+// compaction protects the entire current task; a sub-agent only has one task,
+// so it has no older turns to offer the fast projector and falls back to a summary.
+func prepareRunCompaction(cfg ConfigState, reason string, summaryAllowed bool, history []openai.ChatCompletionMessage, fast func([]openai.ChatCompletionMessage) (*fastCompactCandidate, error)) ([]openai.ChatCompletionMessage, *fastCompactCandidate, error) {
+	preferFast := reason == compactReasonThreshold && normalizeAutoCompactMethod(cfg.AutoCompactMethod) == autoCompactMethodRecent
+	if reason == compactReasonThreshold && !summaryAllowed && (!preferFast || fast == nil) {
+		return nil, nil, errAutoCompactCircuitOpen
+	}
+	h := sanitizeHistoryMessages(history)
+	if preferFast && fast != nil {
+		candidate, err := fast(h)
+		if err != nil {
+			return nil, nil, err
+		}
+		result := candidate.result
+		if candidate.messageChange && fastCompactLeavesLessThanHalf(intFromAny(result["tokensBefore"]), intFromAny(result["tokensAfter"])) {
+			return h, candidate, nil
+		}
+	}
+	if reason == compactReasonThreshold && !summaryAllowed {
+		return nil, nil, errAutoCompactCircuitOpen
+	}
+	// Unlike summary-only mode, fast fallback can rescue one or two very long messages.
+	if len(h) == 0 || (len(h) <= 2 && !preferFast) {
+		return nil, nil, errHistoryTooShortToCompact
+	}
+	return h, nil, nil
+}
+
+func shouldRecoverContextOverflow(err error, emitted, recovered bool) bool {
+	return !emitted && !recovered && classifyLLMError(err) == llmErrorKindContextTooLong
+}
+
+func compactionTimeout(cfg ConfigState) time.Duration {
+	return time.Duration(clampCompactTimeoutSeconds(cfg.CompactTimeoutSeconds)) * time.Second
+}
+
 // compactThresholdLimit returns the absolute token count at which
 // auto-compaction triggers, using only the selected mode's threshold.
 func compactThresholdLimit(cfg ConfigState) int {
@@ -405,15 +420,6 @@ func compactThresholdLimit(cfg ConfigState) int {
 // compactHistory summarizes the given history with the model and replaces it
 // with the summary. tokensBefore is the total context tokens before compaction.
 func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, instruction string, history []openai.ChatCompletionMessage, tokensBefore int) (map[string]any, error) {
-	// The compaction LLM call runs inside this timeout. It is configurable
-	// (Settings → General) because long-context summary requests through slow
-	// providers can legitimately take minutes; the default covers the common
-	// case without hanging forever. Cancellation through the parent context
-	// (e.g. app shutdown) still works on top of the deadline.
-	timeout := time.Duration(clampCompactTimeoutSeconds(cfg.CompactTimeoutSeconds)) * time.Second
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
 	// Exactly one completion event per compaction, emitted from the single place
 	// both the manual and the automatic path run through: the frontend closes its
 	// live summary bubble on it, and ok separates a cancelled or failed partial
@@ -427,111 +433,16 @@ func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, in
 		return nil, errors.New("no messages to compact")
 	}
 
-	// Summarize all existing history cleanly into a single summary.
-	messagesToSummarize := history
-	// Build a continuation-focused handoff: preserve effective requirements and
-	// actionable state without carrying forward the investigation transcript.
-	compactPrompt := `The conversation context is getting long and is being compacted. Write a concise, structured handoff that lets the next assistant continue the work from its current state after the conversation history is replaced.
-
-LANGUAGE AND OUTPUT:
-- Write in the user's primary language, including the headings. Use the seven sections below, in order, with short factual bullets. If a section has no relevant information, say "None" in the user's language; do not invent content to fill it.
-- Output only the Markdown summary. Do not call tools, answer the user's task, or continue the work.
-
-CONTINUITY AND REQUIREMENTS:
-- Use any previous compaction summary as the baseline and update it with the newer messages, even if it used different headings. Preserve every still-effective goal, requirement, and user constraint across repeated compactions; do not silently weaken or drop them for brevity.
-- Express the current effective requirements after all clarifications. The user's latest explicit correction supersedes an older conflicting instruction; a follow-up question or status request does not by itself cancel unfinished work. Do not revive superseded requirements or recount the history of their changes unless it affects the next action.
-- Keep exact wording where it affects scope, prohibitions, acceptance criteria, or permission. Distinguish user requirements from assistant proposals, confirmed facts from hypotheses, and planned actions from executed or verified actions.
-
-## Goal / 目标
-The active objective, expected deliverable, and explicit acceptance criteria. Include other unfinished user requests that remain in scope; make clear which task is currently active.
-
-## User Constraints / 用户约束
-Still-effective scope limits, prohibited actions or files, required approaches or tools, workflow and output preferences, and authorization boundaries. Preserve pending approvals and unanswered questions; do not turn a proposal or silence into user consent.
-
-## Key Decisions / 关键决策
-Decisions already made and the brief reason each matters for continuation. Include confirmed findings or root causes only when they determine the approach. Label tentative choices as tentative. Mention rejected approaches only when needed to prevent repeating a consequential mistake.
-
-## Completed Work / 已完成事项
-Concrete results that still matter: implemented changes, produced artifacts, and validation actually performed with its outcome. Attach necessary file paths or identifiers to the relevant item. Clearly distinguish implemented, tested, committed, and deployed states; never claim an unrun check passed.
-Identify this task's changed files or artifacts and any partial, unverified, uncommitted, or pending-cleanup state that matters for continuation. Distinguish known pre-existing user changes that must not be overwritten; mark ownership as unknown when not established.
-
-## Current State / 当前进度
-Where work stopped: the active step, partial or unverified changes, unresolved questions, blockers, and any running operation or result still awaited. Preserve exact task, session, or process identifiers only when needed to resume. If the objective is complete, say so rather than inventing more work.
-Preserve essential user-provided data, examples, reproduction conditions, decision-driving facts, and their known sources. For large material that can be reread, keep precise file, symbol, or artifact references instead of copying it; retain critical information that cannot be recovered, except secrets or credentials.
-For running operations or uncertain outcomes, include the last observed state, how to check status, and the completion condition when known. Note side effects that may already have occurred; if safe retry has not been established, say so and require checking the outcome before repeating the operation.
-
-## Next Steps / 待办
-Prioritized remaining actions. When interrupted mid-task, make the first item the concrete next action, with the necessary path, command, identifier, or decision to resolve. Include required verification and pending user input. Do not use vague instructions such as "continue as planned".
-If a plan tool was used, its latest available result is appended automatically after this summary. Do not copy the full checklist here: retain the immediate next action and essential details, corrections, or remaining work the snapshot does not capture. If no plan is available, this section must carry the actionable remaining plan itself. Do not treat a stale plan entry as overriding newer user instructions or observed results.
-
-## Critical Errors / 关键错误
-Only failures that still block progress or are important to avoid repeating. For each, preserve the trigger, the essential error text or code, the confirmed cause (or explicitly unknown), attempted remedies and their outcomes, and whether it remains unresolved. Omit incidental failures that were resolved and no longer affect continuation.
-
-INFORMATION BUDGET:
-- Keep only information needed to continue correctly. Remove repeated explanations, chronological narration, raw tool output, large code excerpts, exhaustive command logs, and standalone file inventories. Put necessary paths, symbols, commands, and findings in the relevant section once.
-- Compress background and completed work before sacrificing effective requirements, user constraints, the current stopping point, or actionable next steps. Prefer a short summary, but do not impose an arbitrary length limit that loses critical state.
-- Keep paths, commands, function names, error codes, and identifiers exact when included. Do not include secret values or credentials.
-- Do not infer success, root causes, permissions, or missing details. Mark consequential uncertainty explicitly.
-- The summary and any automatically appended plan snapshot replace prior conversation; they must provide enough context to resume without restarting completed exploration.`
-
-	if instruction != "" {
-		compactPrompt += "\n\nAdditional instruction: " + instruction
-	}
-
-	// Build messages for the compaction call
-	compactionMessages := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleSystem, Content: "You are an expert engineering assistant generating a structured context compaction summary. Output plain Markdown text directly. Do not call any tools. Always respond in the user's primary language."},
-	}
-	compactionMessages = append(compactionMessages, messagesToSummarize...)
-	compactionMessages = append(compactionMessages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: compactPrompt,
-	})
-
-	compactionMaxTokens := cfg.MaxTokens
-	if compactionMaxTokens <= 0 {
-		compactionMaxTokens = defaultMaxTokensForAPIFormat(cfg.APIFormat)
-	}
 	a.emit("compact:start", map[string]any{
-		"sessionId":    sessionID,
-		"tokensBefore": tokensBefore,
-		"messages":     len(history),
-		"timeoutMs":    int(timeout.Milliseconds()),
+		"sessionId": sessionID, "tokensBefore": tokensBefore, "messages": len(history),
+		"timeoutMs": int(compactionTimeout(cfg).Milliseconds()),
 	})
-	// The summary call runs on the user's own thinking configuration, untouched:
-	// forcing a level here ("low" or a stop-thinking one) would silently diverge
-	// from what Settings shows, and a stop-thinking field breaks models that
-	// require thinking.
-	// It streams: this is the longest single request of a compaction and the one
-	// place the user would otherwise watch a frozen timer, so thinking and answer
-	// deltas reach the UI, which renders them exactly like a normal reply. 增量走
-	// textDeltaCoalescer（档位见 eventCadenceTable）：首个增量立即到界面，之后
-	// 按窗口合并；这里原先每个增量发一条事件、且带完整思考正文。
 	deltaEmitter := newCompactDeltaEmitter(sessionID, a.emitMap())
-	summary, usage, err := a.streamModelTextWithUsage(perfReason(ctx, "compaction"), cfg, cfg.Model, compactionMessages, compactionMaxTokens, func(contentDelta, reasoningDelta string) {
-		deltaEmitter.add(contentDelta, reasoningDelta)
-	})
-	// 无论成败都要收尾：剩下的增量还在节流窗口里，收尾前不能发 compact:done。
+	fullSummary, usage, err := a.summarizeCompactHistory(ctx, cfg, instruction, history, deltaEmitter.add)
+	// Remaining coalesced deltas must reach the UI before compact:done.
 	deltaEmitter.flush()
 	if err != nil {
-		// The model and endpoint belong in the error: the transport error only
-		// names the URL, which is exactly what the user cannot map back to a
-		// model when the request goes to an endpoint they never selected.
-		return nil, fmt.Errorf("compaction failed with model %s at %s: %w", cfg.Model, cfg.BaseURL, err)
-	}
-
-	if strings.TrimSpace(summary) == "" {
-		return nil, errors.New("compaction returned empty summary")
-	}
-
-	// The plan tool's steps live in their tool result, so a full-history rewrite
-	// would replace the agent's structured task state with a prose sentence. Pin
-	// the latest one verbatim after the summary: it is written once, here, so it
-	// stays byte-stable in every later request (re-injecting a plan snapshot per
-	// turn is what would break the request prefix and the cache behind it).
-	fullSummary := summary
-	if plan := latestPlanSnapshot(messagesToSummarize); plan != "" {
-		fullSummary = strings.TrimRight(fullSummary, "\n") + "\n\n" + planSnapshotTagOpen + "\n" + plan + "\n" + planSnapshotTagClose
+		return nil, err
 	}
 
 	// Account the compaction LLM call in the workspace/token statistics so the
@@ -585,6 +496,102 @@ INFORMATION BUDGET:
 		"tokensBefore": tokensBefore,
 		"tokensAfter":  tokensAfter,
 	}, nil
+}
+
+// summarizeCompactHistory is shared by main sessions and sub-agents. Only its
+// caller decides where to commit the summary and which replay state to reset.
+func (a *App) summarizeCompactHistory(ctx context.Context, cfg ConfigState, instruction string, history []openai.ChatCompletionMessage, onDelta func(string, string)) (string, *modelUsage, error) {
+	ctx, cancel := context.WithTimeout(ctx, compactionTimeout(cfg))
+	defer cancel()
+	// This request has its own system message, not the original automatic prefix.
+	ctx = context.WithValue(ctx, automaticContextPrefixKey{}, 0)
+
+	// Build a continuation-focused handoff: preserve effective requirements and
+	// actionable state without carrying forward the investigation transcript.
+	compactPrompt := `The conversation context is getting long and is being compacted. Write a concise, structured handoff that lets the next assistant continue the work from its current state after the conversation history is replaced.
+
+LANGUAGE AND OUTPUT:
+- Write in the user's primary language, including the headings. Use the seven sections below, in order, with short factual bullets. If a section has no relevant information, say "None" in the user's language; do not invent content to fill it.
+- Output only the Markdown summary. Do not call tools, answer the user's task, or continue the work.
+
+CONTINUITY AND REQUIREMENTS:
+- Use any previous compaction summary as the baseline and update it with the newer messages, even if it used different headings. Preserve every still-effective goal, requirement, and user constraint across repeated compactions; do not silently weaken or drop them for brevity.
+- Express the current effective requirements after all clarifications. The user's latest explicit correction supersedes an older conflicting instruction; a follow-up question or status request does not by itself cancel unfinished work. Do not revive superseded requirements or recount the history of their changes unless it affects the next action.
+- Keep exact wording where it affects scope, prohibitions, acceptance criteria, or permission. Distinguish user requirements from assistant proposals, confirmed facts from hypotheses, and planned actions from executed or verified actions.
+
+## Goal / 目标
+The active objective, expected deliverable, and explicit acceptance criteria. Include other unfinished user requests that remain in scope; make clear which task is currently active.
+
+## User Constraints / 用户约束
+Still-effective scope limits, prohibited actions or files, required approaches or tools, workflow and output preferences, and authorization boundaries. Preserve pending approvals and unanswered questions; do not turn a proposal or silence into user consent.
+
+## Key Decisions / 关键决策
+Decisions already made and the brief reason each matters for continuation. Include confirmed findings or root causes only when they determine the approach. Label tentative choices as tentative. Mention rejected approaches only when needed to prevent repeating a consequential mistake.
+
+## Completed Work / 已完成事项
+Concrete results that still matter: implemented changes, produced artifacts, and validation actually performed with its outcome. Attach necessary file paths or identifiers to the relevant item. Clearly distinguish implemented, tested, committed, and deployed states; never claim an unrun check passed.
+Identify this task's changed files or artifacts and any partial, unverified, uncommitted, or pending-cleanup state that matters for continuation. Distinguish known pre-existing user changes that must not be overwritten; mark ownership as unknown when not established.
+
+## Current State / 当前进度
+Where work stopped: the active step, partial or unverified changes, unresolved questions, blockers, and any running operation or result still awaited. Preserve exact task, session, or process identifiers only when needed to resume. If the objective is complete, say so rather than inventing more work.
+Preserve essential user-provided data, examples, reproduction conditions, decision-driving facts, and their known sources. For large material that can be reread, keep precise file, symbol, or artifact references instead of copying it; retain critical information that cannot be recovered, except secrets or credentials.
+For running operations or uncertain outcomes, include the last observed state, how to check status, and the completion condition when known. Note side effects that may already have occurred; if safe retry has not been established, say so and require checking the outcome before repeating the operation.
+
+## Next Steps / 待办
+Prioritized remaining actions. When interrupted mid-task, make the first item the concrete next action, with the necessary path, command, identifier, or decision to resolve. Include required verification and pending user input. Do not use vague instructions such as "continue as planned".
+If a plan tool was used, its latest available result is appended automatically after this summary. Do not copy the full checklist here: retain the immediate next action and essential details, corrections, or remaining work the snapshot does not capture. If no plan is available, this section must carry the actionable remaining plan itself. Do not treat a stale plan entry as overriding newer user instructions or observed results.
+
+## Critical Errors / 关键错误
+Only failures that still block progress or are important to avoid repeating. For each, preserve the trigger, the essential error text or code, the confirmed cause (or explicitly unknown), attempted remedies and their outcomes, and whether it remains unresolved. Omit incidental failures that were resolved and no longer affect continuation.
+
+INFORMATION BUDGET:
+- Keep only information needed to continue correctly. Remove repeated explanations, chronological narration, raw tool output, large code excerpts, exhaustive command logs, and standalone file inventories. Put necessary paths, symbols, commands, and findings in the relevant section once.
+- Compress background and completed work before sacrificing effective requirements, user constraints, the current stopping point, or actionable next steps. Prefer a short summary, but do not impose an arbitrary length limit that loses critical state.
+- Keep paths, commands, function names, error codes, and identifiers exact when included. Do not include secret values or credentials.
+- Do not infer success, root causes, permissions, or missing details. Mark consequential uncertainty explicitly.
+- The summary and any automatically appended plan snapshot replace prior conversation; they must provide enough context to resume without restarting completed exploration.`
+
+	if instruction != "" {
+		compactPrompt += "\n\nAdditional instruction: " + instruction
+	}
+
+	// Build messages for the compaction call
+	compactionMessages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "You are an expert engineering assistant generating a structured context compaction summary. Output plain Markdown text directly. Do not call any tools. Always respond in the user's primary language."},
+	}
+	compactionMessages = append(compactionMessages, history...)
+	compactionMessages = append(compactionMessages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: compactPrompt,
+	})
+
+	compactionMaxTokens := cfg.MaxTokens
+	if compactionMaxTokens <= 0 {
+		compactionMaxTokens = defaultMaxTokensForAPIFormat(cfg.APIFormat)
+	}
+	summary, usage, err := a.streamModelTextWithUsage(perfReason(ctx, "compaction"), cfg, cfg.Model, compactionMessages, compactionMaxTokens, onDelta)
+	if err != nil {
+		// The model and endpoint belong in the error: the transport error only
+		// names the URL, which is exactly what the user cannot map back to a
+		// model when the request goes to an endpoint they never selected.
+		return "", nil, fmt.Errorf("compaction failed with model %s at %s: %w", cfg.Model, cfg.BaseURL, err)
+	}
+
+	if strings.TrimSpace(summary) == "" {
+		return "", nil, errors.New("compaction returned empty summary")
+	}
+
+	// The plan tool's steps live in their tool result, so a full-history rewrite
+	// would replace the agent's structured task state with a prose sentence. Pin
+	// the latest one verbatim after the summary: it is written once, here, so it
+	// stays byte-stable in every later request (re-injecting a plan snapshot per
+	// turn is what would break the request prefix and the cache behind it).
+	fullSummary := summary
+	if plan := latestPlanSnapshot(history); plan != "" {
+		fullSummary = strings.TrimRight(fullSummary, "\n") + "\n\n" + planSnapshotTagOpen + "\n" + plan + "\n" + planSnapshotTagClose
+	}
+
+	return fullSummary, usage, nil
 }
 
 // planToolName is the built-in tool whose result carries the agent's plan.

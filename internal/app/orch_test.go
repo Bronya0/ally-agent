@@ -2741,13 +2741,15 @@ func TestExecuteToolAppliesOriginalSnapshotTextChanges(t *testing.T) {
 	}
 }
 
-// Missing or removed source parameters cannot trigger writes.
+// Missing or empty source parameters cannot trigger writes. A stray key is a
+// different matter: it is dropped with a warning, so an invented parameter costs
+// no round trip, and dropping a removed scope key cannot widen the edit either
+// (an ambiguous oldText is refused by the unique-match rule).
 func TestExecuteToolRejectsRemovedOrMissingEditParameters(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
 		"missing source": `{"newText":""}`,
 		"empty source":   `{"oldText":"","newText":"ALPHA","replaceAll":true}`,
-		"removed scope":  `{"oldText":"alpha","lineRange":{"start":2},"newText":"ALPHA"}`,
 	}
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -2761,12 +2763,8 @@ func TestExecuteToolRejectsRemovedOrMissingEditParameters(t *testing.T) {
 			if result.OK {
 				t.Fatalf("the call must be refused, got %#v", result)
 			}
-			want := "oldText"
-			if name == "removed scope" {
-				want = "lineRange"
-			}
-			if !strings.Contains(result.Error, want) {
-				t.Fatalf("rejection %q must mention %q", result.Error, want)
+			if !strings.Contains(result.Error, "oldText") {
+				t.Fatalf("rejection %q must mention oldText", result.Error)
 			}
 			got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
 			if err != nil {
@@ -2776,6 +2774,29 @@ func TestExecuteToolRejectsRemovedOrMissingEditParameters(t *testing.T) {
 				t.Fatalf("a refused edit changed the file: %q", got)
 			}
 		})
+	}
+
+	// A parameter the declaration does not carry is dropped and named in a
+	// warning; the edit itself still applies, which is the whole point of
+	// tolerating it instead of spending a round trip.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("alpha\nbeta\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := `{"path":"sample.txt","changes":[{"oldText":"alpha","lineRange":{"start":2},"newText":"ALPHA"}]}`
+	result := newIsolatedTestApp(t).executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
+	if !result.OK {
+		t.Fatalf("a stray parameter must not fail the edit, got %#v", result)
+	}
+	if len(result.Warnings) == 0 || !strings.Contains(strings.Join(result.Warnings, " "), "lineRange") {
+		t.Fatalf("expected the dropped key to be named, got %#v", result.Warnings)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "ALPHA\nbeta\n" {
+		t.Fatalf("the edit did not apply alongside the warning: %q", got)
 	}
 }
 

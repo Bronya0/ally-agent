@@ -9,6 +9,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // rotatingErrorWriter is an io.Writer that appends to the error log file
@@ -38,6 +40,11 @@ var globalErrorLogger *slog.Logger
 
 const errorLogPrefix = "error-"
 const errorLogSuffix = ".log"
+
+// maxErrorLogBytes caps one day's file. Daily cleanup drops yesterday, but a
+// single long session that logs tool failures can fill a day on its own, and a
+// diagnostic log must never be the reason the disk runs out.
+const maxErrorLogBytes = 64 << 20
 
 func errorLogFileName(date string) string {
 	return errorLogPrefix + date + errorLogSuffix
@@ -60,6 +67,11 @@ func (w *rotatingErrorWriter) Write(p []byte) (n int, err error) {
 			}
 			return os.Stderr.Write(p)
 		}
+	}
+	// Past the cap the record is dropped, but reported as written: a logging
+	// failure must not surface as a tool error.
+	if info, err := w.file.Stat(); err == nil && info.Size() >= maxErrorLogBytes {
+		return len(p), nil
 	}
 	return w.file.Write(p)
 }
@@ -166,6 +178,52 @@ func (a *App) logAppError(msg string, args ...any) {
 		return
 	}
 	log.Printf("[error] %s%s", msg, formatLogArgs(args))
+}
+
+// logToolFailure records a failed tool call, including what the model sent and
+// what came back, so a report can be checked without replaying the session.
+// Both sides are workspace payloads (file bodies, command output, tokens a
+// command printed), so each field is clipped: the log is a pointer to the
+// failure, not a copy of the workspace.
+func (a *App) logToolFailure(sessionID, name string, args []byte, result toolResult) {
+	// The user stopping a call is not a defect and would drown the real ones.
+	if result.ErrorCode == "E_CANCELLED" || strings.HasSuffix(result.ErrorCode, "_CANCELLED") {
+		return
+	}
+	detail := result.Error
+	if detail == "" {
+		detail = "tool reported failure without a message"
+	}
+	var data string
+	if result.Data != nil {
+		if encoded, err := json.Marshal(result.Data); err == nil {
+			data = string(encoded)
+		}
+	}
+	a.logAppError("tool call failed",
+		"session", sessionID,
+		"tool", name,
+		"code", result.ErrorCode,
+		"error", logHead(detail, 500),
+		"args", logHead(string(args), toolFailureLogBytes),
+		"result", logHead(data, toolFailureLogBytes),
+	)
+}
+
+// toolFailureLogBytes bounds one logged argument or result field.
+const toolFailureLogBytes = 2 << 10
+
+// logHead clips a field to a bounded head, ending on a rune boundary so the log
+// stays valid UTF-8 whatever the workspace contains.
+func logHead(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "…(truncated)"
 }
 
 // formatLogArgs renders the key/value pairs the structured logger would have

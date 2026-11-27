@@ -578,16 +578,28 @@ func diffGapText(rows int) string {
 	return fmt.Sprintf("%d unchanged lines", rows)
 }
 
+// diffLine renders one unified-diff row: line number, then the +/- marker in
+// its own column, then the source. Numbers sit right-aligned in their gutter and
+// the gutter is reserved even when a row has no number, so the marker column
+// never moves. The marker is not selectable, so copying the row yields code
+// rather than code with a leading sign.
 func diffLine(c *ui.Context, text string, changed bool, number int, ink ...ui.Color) {
 	fill, color := diffColors(c.Theme(), changed, strings.HasPrefix(text, "-"))
+	marker, body := " ", text
+	if text != "" {
+		switch text[0] {
+		case '+', '-', ' ':
+			marker, body = text[:1], text[1:]
+		}
+	}
 	ui.Row(c).FillWidth().MinWidth(0).Shrink(0).MinHeight(22).Padding(1, 8).AlignItems(ui.Start).Background(fill).Children(func() {
-		if text == "" {
-			text = " "
-		}
+		gutter := ""
 		if number > 0 {
-			ui.Text(c, strconv.Itoa(number)).Width(42).Shrink(0).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Unselectable()
+			gutter = strconv.Itoa(number)
 		}
-		ui.Text(c, text).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).Grow(1).MinWidth(0).Selectable()
+		ui.Text(c, gutter).Width(42).Shrink(0).TextAlign(ui.End).Font(monoFamily).FontSize(fsTiny).TextColor(uikit.SecondaryInk(c, ink)).Unselectable()
+		ui.Text(c, marker).Width(10).Shrink(0).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).Unselectable()
+		ui.Text(c, body).Font(monoFamily).FontSize(readingCodeSize).TextColor(color).Grow(1).MinWidth(0).Selectable()
 	})
 }
 

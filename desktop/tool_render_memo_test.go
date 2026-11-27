@@ -56,25 +56,25 @@ func TestEditHeaderOpensEditorWithoutResettingDiffExpansion(t *testing.T) {
 		c.DisableAnimations()
 		ui.Column(c).FillWidth().Padding(24).Children(func() { a.toolCard(c, conv, 0, msg) })
 	}, 900, 1000)
-	if tt.HasText("+change-29") {
+	if tt.HasText("change-29") {
 		t.Fatal("diff initially rendered beyond its compact range")
 	}
 	if err := tt.Click("Show more 18 rows"); err != nil {
 		t.Fatalf("%v; texts=%v", err, tt.Texts())
 	}
-	if !tt.HasText("+change-29") {
+	if !tt.HasText("change-29") {
 		t.Fatal("diff expansion stopped working")
 	}
 	if err := tt.Click("工具详情 edit-call"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.explorer || a.activeFile() != file || len(conv.uiState().ToolOpen) != 0 || !tt.HasText("+change-29") {
+	if !a.explorer || a.activeFile() != file || len(conv.uiState().ToolOpen) != 0 || !tt.HasText("change-29") {
 		t.Fatal("header did not open the retained editor independently of diff expansion")
 	}
 	if err := tt.Click("Show less"); err != nil {
 		t.Fatal(err)
 	}
-	if tt.HasText("+change-29") {
+	if tt.HasText("change-29") {
 		t.Fatal("diff collapse stopped working")
 	}
 	// An old frame's callback must not interpret its relative path in a new tab.

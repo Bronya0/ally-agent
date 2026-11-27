@@ -275,10 +275,11 @@ func (a *desktop) railWorkspaceRow(c *ui.Context, root, label, tip string) {
 		active = true
 	}
 	row := ui.Row(c.Key("rail-ws-"+root)).Height(26).Radius(6).Padding(0, railContentInset()).Gap(gapInline).AlignItems(ui.Center)
+	// The focused row carries its accent in the text alone: a filled block behind
+	// it competes with the session list's own focus one section below.
 	fill := ui.Transparent
 	ink := a.secondaryInk()
 	if active {
-		fill = selectionFill(c.Theme().Accent)
 		ink = c.Theme().Accent
 	} else if row.Hovered() {
 		fill = p.hover
@@ -426,7 +427,6 @@ func (a *desktop) railSessionRow(c *ui.Context, t *conversation, entry backend.S
 	fill := ui.Transparent
 	ink := a.secondaryInk()
 	if active {
-		fill = selectionFill(c.Theme().Accent)
 		ink = c.Theme().Accent
 	} else if row.Hovered() {
 		fill = p.hover

@@ -56,11 +56,7 @@ func TestRemoteAliasContractRejectsLegacyCalls(t *testing.T) {
 				}
 			}
 			err, warnings := decodeToolArguments(tc.name, []byte(`{"alias":"dev","target":"prod",`+tc.body+`}`), tc.request())
-			if tc.name == "remote_edit" {
-				if toolErrorCode(err) != "E_BAD_ARGS" {
-					t.Fatalf("edit accepted an unsupported field: %v", err)
-				}
-			} else if err != nil || len(warnings) == 0 {
+			if err != nil || len(warnings) == 0 {
 				t.Fatalf("obsolete field did not follow unknown-field handling: %v %v", err, warnings)
 			}
 			for _, prefix := range []string{"", `"alias":null,`, `"alias":"",`, `"target":"dev",`} {
