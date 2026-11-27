@@ -38,6 +38,10 @@ func fileNeedsWebView(file *workspaceFile) bool {
 	return file != nil && (file.PreviewPath != "" || file.PreviewHTML != "" || file.MarkupPreview)
 }
 
+func inactiveWebViewPreviewPlaceholder(file *workspaceFile, allowed bool) bool {
+	return fileNeedsWebView(file) && !allowed
+}
+
 func (a *desktop) editorGroupView(c *ui.Context, root string, group int) {
 	state := a.editorStates[workspaceKey(root)]
 	if state == nil || state.Groups[group] == nil || !editorLayoutHasGroup(state.Layout, group) {
@@ -51,7 +55,11 @@ func (a *desktop) editorGroupView(c *ui.Context, root string, group int) {
 	groupView := ui.Column(c.Key(fmt.Sprintf("editor-group-%s-%d", workspaceKey(root), group))).Fill().MinWidth(0).HandleInput(func(ev ui.InputEvent) bool {
 		if ev.Kind == ui.InputPointerDown && ev.Button == 0 {
 			state.ActiveGroupPinned = false
-			activateEditorGroup(state, group, true)
+			if pane.Active == "" {
+				a.selectEditorDocument(root, "", group, false)
+			} else {
+				a.selectEditorDocument(root, pane.Active, group, false)
+			}
 		}
 		return false
 	})
@@ -197,7 +205,12 @@ func (a *desktop) editorGroupView(c *ui.Context, root string, group int) {
 			state.ActiveGroupPinned = false
 		}
 	} else {
-		activateEditorGroup(state, group, groupView.FocusWithin())
+		wasActive := state.ActiveGroup
+		focused := groupView.FocusWithin()
+		activateEditorGroup(state, group, focused)
+		if focused && wasActive != state.ActiveGroup && state.ActiveGroup == group && pane.Active != "" {
+			a.selectEditorDocument(root, pane.Active, group, false)
+		}
 	}
 }
 
@@ -257,14 +270,14 @@ func (a *desktop) fileEditor(c *ui.Context, file *workspaceFile, root string, gr
 			})
 			return
 		}
-		if fileNeedsWebView(file) && a.activeFile() != file {
+		if fileNeedsWebView(file) && inactiveWebViewPreviewPlaceholder(file, a.workspacePreviewFileAllowed(root, file, group)) {
 			ui.Box(c.Key("editor-preview-inactive")).Grow(1).MinHeight(0).Center().Children(func() {
 				fieldNote(c, locales.Text("该工作区一次只能显示一个内嵌预览，请选中此文件组查看。"), a.secondaryInk())
 			})
 			return
 		}
 		if !editorShown(file) {
-			a.workspaceFilePreviewView(c, file)
+			a.workspaceFilePreviewView(c, file, root, group)
 			return
 		}
 		file.Editor.ReadOnly = a.closing || file.Saving

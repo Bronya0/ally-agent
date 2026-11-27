@@ -438,10 +438,14 @@ func (a *desktop) releaseWorkspaceDocument(root string, file *workspaceFile) {
 	key := workspaceKey(root)
 	a.cancelEditorFileLoad(root, file.Path)
 	previewKey := key + "\x00" + normalizeExplorerPath(file.Path)
-	if a.workspacePreview.mountedFor(previewKey) != nil || a.workspacePreview.retainedImageFor(previewKey) != nil {
+	state := a.editorStates[key]
+	previewOwner := state != nil && state.PreviewGroupSet && editorDocumentKey(state.PreviewFile) == editorDocumentKey(file.Path)
+	previewReleased := a.workspacePreview.mountedFor(previewKey) != nil || previewOwner && a.workspacePreview.retainedImageFor(previewKey) != nil
+	if previewReleased {
 		a.workspacePreview.releaseWorkspace(key)
 	}
-	if a.workspaceFiles[key] == file && workspaceFileKindForPath(file.Path).hasMediaPlayer() {
+	mediaOwnerReleased := previewOwner || a.workspaceFiles[key] == file && (state == nil || !state.PreviewGroupSet)
+	if workspaceFileKindForPath(file.Path).hasMediaPlayer() && (previewReleased || mediaOwnerReleased) {
 		delete(a.mediaPlayback, key)
 	}
 	if docs := a.editorDocumentsByWorkspace[key]; docs != nil {
@@ -479,6 +483,7 @@ func (a *desktop) releaseWorkspaceDocument(root string, file *workspaceFile) {
 				}
 			}
 		}
+		a.reconcileWorkspacePreviewGroup(root)
 	}
 	releaseWorkspaceFileValue(file)
 }

@@ -102,6 +102,11 @@ func (a *desktop) setExplorerOpen(open bool) {
 // clicked before its file is created or after deletion; neither case replaces
 // the existing editor with an empty or broken preview.
 func (a *desktop) handleFileLoadError(root, path string, kind workspaceFileKind, expected *workspaceFile, err error, groups ...int) {
+	if kind.hasMediaPlayer() {
+		if media := a.mediaPlayback[workspaceKey(root)]; media != nil && media.autoplay {
+			media.playing, media.autoplay = false, false
+		}
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		a.notifyError(locales.Text("文件不存在，可能尚未创建或已被删除：") + path)
 		return

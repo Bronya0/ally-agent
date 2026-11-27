@@ -635,6 +635,33 @@ func (l *workspacePreviewLifecycle) suspendMounted(workspace, path string) {
 	}
 }
 
+// Keep the requested surface usable while retiring any other preview kind.
+func (l *workspacePreviewLifecycle) suspendMountedExcept(workspace, path string) {
+	workspace = workspaceKey(workspace)
+	keepKey := workspace + "\x00" + normalizeExplorerPath(path)
+	if path == "" {
+		keepKey = ""
+	}
+	if video := l.videos[workspace]; video != nil && !video.stale && video.key != keepKey {
+		video.stale = true
+		if video.surface != nil && !video.surface.IsDestroyed() {
+			video.surface.Reset()
+		}
+	}
+	mounted := l.mounted[workspace]
+	if mounted == nil || mounted.key == keepKey {
+		return
+	}
+	retain := l.retainedImageFor(workspace+"\x00"+normalizeExplorerPath(path)) != nil
+	if mounted.stale && (!mounted.retainingImage || retain) {
+		return
+	}
+	mounted.stale, mounted.retainingImage = true, retain
+	if !retain && mounted.surface != nil && !mounted.surface.IsDestroyed() {
+		mounted.surface.Reset()
+	}
+}
+
 func (l *workspacePreviewLifecycle) cancelScheduled() {
 	if l.scheduled == nil {
 		return
@@ -678,18 +705,22 @@ func (l *workspacePreviewLifecycle) release() {
 }
 
 func (a *desktop) workspaceFilePreviewKey(file *workspaceFile) string {
-	if file == nil {
-		return ""
-	}
 	tab := a.current()
 	if tab == nil {
 		return ""
 	}
-	return workspaceKey(tab.Workspace) + "\x00" + normalizeExplorerPath(file.Path)
+	return workspaceFilePreviewKeyFor(tab.Workspace, file)
 }
 
-func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile) {
-	if a.win == nil || a.closing || a.mainWindowHidden || a.win.IsMinimized() || !a.explorer || a.filesF.InfoOpen || a.page != "chat" || file == nil || file.PreviewError != "" || a.activeFile() != file {
+func workspaceFilePreviewKeyFor(root string, file *workspaceFile) string {
+	if file == nil || root == "" {
+		return ""
+	}
+	return workspaceKey(root) + "\x00" + normalizeExplorerPath(file.Path)
+}
+
+func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile, root string, group int) {
+	if a.win == nil || a.closing || a.mainWindowHidden || a.win.IsMinimized() || !a.explorer || a.filesF.InfoOpen || a.page != "chat" || file == nil || file.PreviewError != "" || !a.workspacePreviewFileAllowed(root, file, group) {
 		return
 	}
 	// Markdown and Word previews draw in the window, so they never own a web view.
@@ -711,7 +742,7 @@ func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile) {
 	a.workspacePreview.schedule(a.win.Update, key, autoplay,
 		func() bool {
 			return !a.closing && !a.mainWindowHidden && !a.win.IsMinimized() && a.explorer && !a.filesF.InfoOpen && a.page == "chat" &&
-				a.activeFile() == file &&
+				a.workspacePreviewFileAllowed(root, file, group) &&
 				(file.PreviewPath != "" || file.PreviewHTML != "" || file.Document != nil || file.MarkupPreview)
 		},
 		func() (workspacePreviewSurface, error) {
@@ -728,7 +759,7 @@ func (a *desktop) requestWorkspaceFilePreview(file *workspaceFile) {
 				state := a.workspaceMedia()
 				videoSurface.player.SetLoop(a.media.mode == mediaModeSingle)
 				if !state.autoplay {
-					videoSurface.player.Pause()
+					videoSurface.pause()
 				}
 				state.playing, state.autoplay = state.autoplay, false
 				a.watchWorkspaceVideo(videoSurface, file, key)
@@ -805,7 +836,7 @@ func (a *desktop) hideFilePreview() {
 	a.workspacePreview.cancelScheduled()
 }
 
-func (a *desktop) workspaceFilePreviewView(c *ui.Context, file *workspaceFile) {
+func (a *desktop) workspaceFilePreviewView(c *ui.Context, file *workspaceFile, root string, group int) {
 	switch workspaceFileKindForPath(file.Path) {
 	case workspaceFileMarkdown:
 		a.markdownFilePreviewView(c, file)
@@ -814,7 +845,7 @@ func (a *desktop) workspaceFilePreviewView(c *ui.Context, file *workspaceFile) {
 		a.documentFilePreviewView(c, file)
 		return
 	}
-	a.requestWorkspaceFilePreview(file)
+	a.requestWorkspaceFilePreview(file, root, group)
 	key := a.workspaceFilePreviewKey(file)
 	surface := a.workspacePreview.mountedFor(key)
 	if surface == nil {

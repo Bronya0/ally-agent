@@ -55,6 +55,94 @@ func TestMissingFileLoadPreservesCurrentEditorAndPreview(t *testing.T) {
 	}
 }
 
+func TestMediaLoadFailureOnlyClearsPendingAutoplay(t *testing.T) {
+	for _, autoplay := range []bool{false, true} {
+		t.Run(fmt.Sprintf("autoplay=%t", autoplay), func(t *testing.T) {
+			root := t.TempDir()
+			key := workspaceKey(root)
+			state := &workspaceMediaState{playing: true, autoplay: autoplay}
+			a := &desktop{mediaPlayback: map[string]*workspaceMediaState{key: state}}
+			a.handleFileLoadError(root, "missing.mp4", workspaceFileKindForPath("missing.mp4"), nil, os.ErrNotExist)
+			if autoplay && (state.playing || state.autoplay) {
+				t.Fatal("failed playlist transition retained its automatic playback intent")
+			}
+			if !autoplay && !state.playing {
+				t.Fatal("unrelated failed media open cleared the current playback state")
+			}
+		})
+	}
+}
+
+func TestClosingInactiveMediaPreviewClearsPlaybackIntent(t *testing.T) {
+	root := t.TempDir()
+	video := &workspaceFile{Path: "clip.mp4", PreviewPath: "clip.mp4", Editor: emptyFileEditor()}
+	text := &workspaceFile{Path: "notes.go", Editor: emptyFileEditor()}
+	key := workspaceKey(root)
+	state := &workspaceEditorState{
+		Groups: map[int]*editorGroupState{
+			0: {Tabs: []string{video.Path}, Active: video.Path},
+			1: {Tabs: []string{text.Path}, Active: text.Path},
+		},
+		Layout:       &editorLayoutNode{Direction: splitRight, First: &editorLayoutNode{Group: 0}, Second: &editorLayoutNode{Group: 1}},
+		ActiveGroup:  1,
+		PreviewGroup: 0, PreviewFile: video.Path, PreviewGroupSet: true,
+	}
+	a := &desktop{
+		tabs:                       []*conversation{{Workspace: root}},
+		workspaceFiles:             map[string]*workspaceFile{key: text},
+		editorDocumentsByWorkspace: map[string]map[string]*workspaceFile{key: {editorDocumentKey(video.Path): video, editorDocumentKey(text.Path): text}},
+		editorStates:               map[string]*workspaceEditorState{key: state},
+		mediaPlayback:              map[string]*workspaceMediaState{key: {playing: true, autoplay: true}},
+	}
+	preview := &fakeWorkspacePreview{}
+	previewKey := workspacePreviewTestKey(root, video.Path)
+	if err := a.workspacePreview.mount(previewKey, true, func() (workspacePreviewSurface, error) {
+		return preview, nil
+	}, func(workspacePreviewSurface) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	a.releaseWorkspaceDocument(root, video)
+	if _, ok := a.mediaPlayback[key]; ok || preview.destroys != 1 {
+		t.Fatal("closing the inactive media owner retained playback state or its preview")
+	}
+}
+
+func TestClosingInactiveImageDoesNotReleaseOtherPreview(t *testing.T) {
+	root := t.TempDir()
+	current := &workspaceFile{Path: "current.jpg", PreviewPath: "current.jpg", Editor: emptyFileEditor()}
+	other := &workspaceFile{Path: "other.jpg", PreviewPath: "other.jpg", Editor: emptyFileEditor()}
+	key := workspaceKey(root)
+	state := &workspaceEditorState{
+		Groups: map[int]*editorGroupState{
+			0: {Tabs: []string{current.Path}, Active: current.Path},
+			1: {Tabs: []string{other.Path}, Active: other.Path},
+		},
+		Layout:       &editorLayoutNode{Direction: splitRight, First: &editorLayoutNode{Group: 0}, Second: &editorLayoutNode{Group: 1}},
+		ActiveGroup:  1,
+		PreviewGroup: 0, PreviewFile: current.Path, PreviewGroupSet: true,
+	}
+	a := &desktop{
+		tabs:                       []*conversation{{Workspace: root}},
+		workspaceFiles:             map[string]*workspaceFile{key: other},
+		editorDocumentsByWorkspace: map[string]map[string]*workspaceFile{key: {editorDocumentKey(current.Path): current, editorDocumentKey(other.Path): other}},
+		editorStates:               map[string]*workspaceEditorState{key: state},
+		mediaPlayback:              map[string]*workspaceMediaState{key: {playing: true}},
+	}
+	preview := &fakeWorkspacePreview{body: "current image"}
+	previewKey := workspacePreviewTestKey(root, current.Path)
+	if err := a.workspacePreview.mount(previewKey, true, func() (workspacePreviewSurface, error) {
+		return preview, nil
+	}, func(workspacePreviewSurface) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	a.releaseWorkspaceDocument(root, other)
+	if a.workspacePreview.mountedFor(previewKey) != preview || preview.destroys != 0 || a.mediaPlayback[key] == nil || !a.mediaPlayback[key].playing {
+		t.Fatal("closing a non-owner image released the active preview or playback state")
+	}
+}
+
 func TestClosingActiveFileClearsPlaybackIntent(t *testing.T) {
 	root := t.TempDir()
 	file := &workspaceFile{Path: "one.mp4"}

@@ -15,10 +15,13 @@ import (
 // A workspace owns its player until the preview is replaced or closed. All
 // player operations and timer results run on the UI thread.
 type nativeVideoPreview struct {
-	player     *ui.VideoPlayer
-	timer      *time.Timer
-	generation uint64
-	destroyed  bool
+	player          *ui.VideoPlayer
+	timer           *time.Timer
+	generation      uint64
+	watchGeneration uint64
+	ended           bool
+	paused          bool
+	destroyed       bool
 }
 
 func (p *nativeVideoPreview) Native() ui.NativeWebView { return nil }
@@ -30,10 +33,13 @@ func (p *nativeVideoPreview) LoadFile(path string) error {
 		return err
 	}
 	p.player = player
+	p.ended, p.paused = false, false
 	return nil
 }
 func (p *nativeVideoPreview) Reset() {
 	p.generation++
+	p.watchGeneration++
+	p.ended, p.paused = false, true
 	if p.timer != nil {
 		p.timer.Stop()
 		p.timer = nil
@@ -45,20 +51,52 @@ func (p *nativeVideoPreview) Reset() {
 }
 func (p *nativeVideoPreview) Destroy() { p.Reset(); p.destroyed = true }
 
+func (p *nativeVideoPreview) pause() {
+	p.paused = true
+	p.watchGeneration++
+	if p.timer != nil {
+		p.timer.Stop()
+		p.timer = nil
+	}
+	if p.player != nil {
+		p.player.Pause()
+	}
+}
+
 func (a *desktop) nativeVideoFor(file *workspaceFile) *nativeVideoPreview {
-	p, _ := a.workspacePreview.mountedFor(a.workspaceFilePreviewKey(file)).(*nativeVideoPreview)
+	t := a.current()
+	if t == nil {
+		return nil
+	}
+	return a.nativeVideoForWorkspace(t.Workspace, file)
+}
+
+func (a *desktop) nativeVideoForWorkspace(root string, file *workspaceFile) *nativeVideoPreview {
+	p, _ := a.workspacePreview.mountedFor(workspaceFilePreviewKeyFor(root, file)).(*nativeVideoPreview)
 	return p
 }
 
 // Engine events are consumed by MyGo when Video is built. Polling also updates
 // the controls, detects playback completion and surfaces asynchronous errors.
 func (a *desktop) watchWorkspaceVideo(p *nativeVideoPreview, file *workspaceFile, key string) {
+	if p == nil || p.paused || p.player == nil {
+		return
+	}
+	p.watchGeneration++
+	watchGeneration := p.watchGeneration
 	generation := p.generation
 	var tick func()
 	tick = func() {
+		if p.paused || p.watchGeneration != watchGeneration || p.player == nil {
+			return
+		}
 		p.timer = time.AfterFunc(250*time.Millisecond, func() {
 			a.win.Update(func() {
-				if p.destroyed || p.generation != generation || p.player == nil || a.workspacePreview.mountedFor(key) != p {
+				if p.watchGeneration != watchGeneration {
+					return
+				}
+				p.timer = nil
+				if p.destroyed || p.paused || p.generation != generation || p.player == nil || a.workspacePreview.mountedFor(key) != p {
 					return
 				}
 				player := p.player
@@ -71,16 +109,28 @@ func (a *desktop) watchWorkspaceVideo(p *nativeVideoPreview, file *workspaceFile
 					return
 				}
 				if player.Ended() {
-					workspace, _, _ := strings.Cut(key, "\x00")
-					state := a.mediaForWorkspace(workspace)
-					if a.activeFile() == file && a.page == "chat" && a.explorer && !a.mainWindowHidden && !a.win.IsMinimized() {
-						a.stepWorkspaceMedia(file, 1, true)
-					} else {
-						state.playing, state.autoplay = false, false
-					}
-					if p.generation != generation || p.player == nil {
+					if p.ended {
+						p.paused = true
+						p.watchGeneration++
+						p.timer = nil
 						return
 					}
+					p.ended = true
+					if a.workspaceMediaPreviewVisible(file) && a.stepWorkspaceMedia(file, 1, true) {
+						if p.generation == generation && p.player == player && !p.ended {
+							tick()
+						} else {
+							p.timer = nil
+						}
+						return
+					}
+					workspace, _, _ := strings.Cut(key, "\x00")
+					state := a.mediaForWorkspace(workspace)
+					state.playing, state.autoplay = false, false
+					p.paused = true
+					p.watchGeneration++
+					p.timer = nil
+					return
 				}
 				tick()
 			})

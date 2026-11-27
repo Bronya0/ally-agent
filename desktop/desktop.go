@@ -1522,6 +1522,10 @@ func (a *desktop) loadWorkspaceFile(root, path string, expected *workspaceFile, 
 			}
 			docs := a.editorDocuments(root)
 			if expected != nil {
+				if fileNeedsWebView(expected) {
+					a.workspacePreview.cancelScheduledWorkspace(root)
+					a.workspacePreview.suspendMounted(root, newFile.Path)
+				}
 				delete(docs, editorDocumentKey(expected.Path))
 				releaseWorkspaceFileValue(expected)
 			}

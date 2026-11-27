@@ -77,6 +77,38 @@ func TestWorkspaceImageSwitchToOtherKindStopsRetainedPage(t *testing.T) {
 	}
 }
 
+func TestSuspendMountedExceptKeepsTargetAndRetiresOtherSurface(t *testing.T) {
+	root := t.TempDir()
+	imageKey := workspacePreviewTestKey(root, "frame.jpg")
+	videoKey := workspacePreviewTestKey(root, "clip.mp4")
+	t.Run("keep image", func(t *testing.T) {
+		image := &fakeWorkspacePreview{body: "image frame"}
+		video := &fakeWorkspacePreview{body: "video"}
+		life := workspacePreviewLifecycle{
+			mounted: map[string]*mountedWorkspacePreview{workspaceKey(root): {key: imageKey, surface: image}},
+			videos:  map[string]*mountedWorkspacePreview{workspaceKey(root): {key: videoKey, surface: video}},
+		}
+		t.Cleanup(life.release)
+		life.suspendMountedExcept(root, "frame.jpg")
+		if life.mountedFor(imageKey) != image || image.resets != 0 || video.resets != 1 || life.mountedFor(videoKey) != nil {
+			t.Fatal("selecting the mounted image did not retain it and retire the other video")
+		}
+	})
+	t.Run("keep video", func(t *testing.T) {
+		image := &fakeWorkspacePreview{body: "image frame"}
+		video := &fakeWorkspacePreview{body: "video"}
+		life := workspacePreviewLifecycle{
+			mounted: map[string]*mountedWorkspacePreview{workspaceKey(root): {key: imageKey, surface: image}},
+			videos:  map[string]*mountedWorkspacePreview{workspaceKey(root): {key: videoKey, surface: video}},
+		}
+		t.Cleanup(life.release)
+		life.suspendMountedExcept(root, "clip.mp4")
+		if life.mountedFor(videoKey) != video || video.resets != 0 || image.resets != 1 || life.mountedFor(imageKey) != nil {
+			t.Fatal("selecting the mounted video did not retain it and retire the other image")
+		}
+	})
+}
+
 func TestWorkspacePreviewReusesCompatibleFileKinds(t *testing.T) {
 	root := t.TempDir()
 	var life workspacePreviewLifecycle

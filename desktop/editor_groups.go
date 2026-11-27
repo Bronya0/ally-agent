@@ -68,6 +68,9 @@ type workspaceEditorState struct {
 	ChatVisible       bool
 	ChatOnly          bool
 	ChatWidth         float32
+	PreviewGroup      int
+	PreviewFile       string
+	PreviewGroupSet   bool
 	PaneDrag          editorPaneDrag
 	PaneBounds        map[int]editorGroupBounds
 }
@@ -259,6 +262,53 @@ func (a *desktop) editorGroupContaining(root, path string) int {
 	return -1
 }
 
+func (a *desktop) workspacePreviewFileAllowed(root string, file *workspaceFile, group int) bool {
+	state := a.editorStates[workspaceKey(root)]
+	if state == nil || file == nil || state.Groups[group] == nil ||
+		!editorLayoutHasGroup(state.Layout, group) || editorDocumentKey(state.Groups[group].Active) != editorDocumentKey(file.Path) {
+		return false
+	}
+	if state.PreviewGroupSet {
+		return state.PreviewGroup == group && editorDocumentKey(state.PreviewFile) == editorDocumentKey(file.Path)
+	}
+	return state.ActiveGroup == group
+}
+
+func (a *desktop) workspaceMediaPreviewVisible(file *workspaceFile) bool {
+	t := a.current()
+	if t == nil || file == nil || !a.explorer || a.page != "chat" || a.mainWindowHidden || a.win != nil && a.win.IsMinimized() {
+		return false
+	}
+	state := a.editorStates[workspaceKey(t.Workspace)]
+	if state == nil {
+		return false
+	}
+	group := a.editorGroupContaining(t.Workspace, file.Path)
+	if state.PreviewGroupSet && editorDocumentKey(state.PreviewFile) == editorDocumentKey(file.Path) {
+		group = state.PreviewGroup
+	}
+	if !a.workspacePreviewFileAllowed(t.Workspace, file, group) {
+		return false
+	}
+	return a.workspacePreview.mountedFor(a.workspaceFilePreviewKey(file)) != nil
+}
+
+func (a *desktop) reconcileWorkspacePreviewGroup(root string) {
+	state := a.editorStates[workspaceKey(root)]
+	if state == nil || !state.PreviewGroupSet {
+		return
+	}
+	if state.Groups[state.PreviewGroup] != nil && editorLayoutHasGroup(state.Layout, state.PreviewGroup) &&
+		editorGroupContainsDocument(state.Groups[state.PreviewGroup], state.PreviewFile) {
+		return
+	}
+	if group := a.editorGroupContaining(root, state.PreviewFile); group >= 0 {
+		state.PreviewGroup = group
+		return
+	}
+	state.PreviewGroupSet, state.PreviewFile = false, ""
+}
+
 func (a *desktop) editorGroupIndex(root string) int {
 	state := a.editorStates[workspaceKey(root)]
 	if state != nil && state.Groups[state.ActiveGroup] != nil && editorLayoutHasGroup(state.Layout, state.ActiveGroup) {
@@ -378,6 +428,28 @@ func (a *desktop) addEditorDocumentToGroup(root, path string, group int) bool {
 	return true
 }
 
+func (a *desktop) prepareWorkspacePreviewSelection(root string, file *workspaceFile, group int) {
+	state := a.editorState(root)
+	if fileNeedsWebView(file) {
+		a.workspacePreview.suspendMountedExcept(root, file.Path)
+		state.PreviewGroup, state.PreviewFile, state.PreviewGroupSet = group, file.Path, true
+		return
+	}
+	if !state.PreviewGroupSet || state.PreviewGroup != group {
+		if !state.PreviewGroupSet {
+			a.workspacePreview.suspendMounted(root, "")
+		}
+		return
+	}
+	preview := a.editorDocument(root, state.PreviewFile)
+	if preview != nil && workspaceFileKindForPath(preview.Path).hasMediaPlayer() {
+		a.pauseWorkspaceMediaPreview(root, preview)
+		return
+	}
+	a.workspacePreview.suspendMounted(root, "")
+	state.PreviewGroupSet, state.PreviewFile = false, ""
+}
+
 func (a *desktop) selectEditorDocument(root, path string, group int, add bool) {
 	state := a.editorState(root)
 	if state.Groups[group] == nil || !editorLayoutHasGroup(state.Layout, group) {
@@ -390,10 +462,8 @@ func (a *desktop) selectEditorDocument(root, path string, group int, add bool) {
 	state.ActiveGroupPinned = false
 	state.ChatOnly = false
 	if path == "" {
+		a.prepareWorkspacePreviewSelection(root, nil, group)
 		state.Groups[group].Active = ""
-		if a.workspaceFiles[workspaceKey(root)] != nil {
-			a.workspacePreview.suspendMounted(root, "")
-		}
 		delete(a.workspaceFiles, workspaceKey(root))
 		return
 	}
@@ -402,10 +472,8 @@ func (a *desktop) selectEditorDocument(root, path string, group int, add bool) {
 		return
 	}
 	state.Groups[group].Active = file.Path
+	a.prepareWorkspacePreviewSelection(root, file, group)
 	key := workspaceKey(root)
-	if current := a.workspaceFiles[key]; current != file {
-		a.workspacePreview.suspendMounted(root, file.Path)
-	}
 	if a.workspaceFiles == nil {
 		a.workspaceFiles = make(map[string]*workspaceFile)
 	}
@@ -420,6 +488,7 @@ func (a *desktop) openLoadedEditorDocument(root, path string, group int) {
 	if state.ActiveGroup != group {
 		if a.addEditorDocumentToGroup(root, path, group) {
 			if file := a.editorDocument(root, path); file != nil {
+				a.prepareWorkspacePreviewSelection(root, file, group)
 				state.Groups[group].Active = file.Path
 			}
 		}
@@ -784,6 +853,7 @@ func (a *desktop) closeEditorGroupNow(root string, group int, closed *editorGrou
 			}
 		}
 	}
+	a.reconcileWorkspacePreviewGroup(root)
 	state.Split = len(state.Groups) > 1
 	activeGroup := state.ActiveGroup
 	if wasActive || state.Groups[activeGroup] == nil || !editorLayoutHasGroup(state.Layout, activeGroup) {
@@ -837,6 +907,7 @@ func (a *desktop) closeEditorTab(root, path string, group int) {
 		if !stillOpen {
 			a.releaseWorkspaceDocument(root, file)
 		}
+		a.reconcileWorkspacePreviewGroup(root)
 		if len(g.Tabs) == 0 {
 			a.closeEditorGroup(root, group)
 			return

@@ -43,6 +43,101 @@ func TestEditorGroupsKeepMultipleFileBuffers(t *testing.T) {
 	}
 }
 
+func TestSelectingOtherEditorGroupKeepsMediaPreview(t *testing.T) {
+	root := t.TempDir()
+	video := &workspaceFile{Path: "clip.mp4", PreviewPath: "clip.mp4", Editor: emptyFileEditor()}
+	text := &workspaceFile{Path: "notes.go", Editor: &editor.State{Buffer: editor.NewBuffer("package notes")}}
+	state := &workspaceEditorState{
+		Groups: map[int]*editorGroupState{
+			0: {Tabs: []string{video.Path}, Active: video.Path},
+			1: {Tabs: []string{text.Path}, Active: text.Path},
+		},
+		Layout:       &editorLayoutNode{Direction: splitRight, First: &editorLayoutNode{Group: 0}, Second: &editorLayoutNode{Group: 1}},
+		PreviewGroup: 0, PreviewFile: video.Path, PreviewGroupSet: true,
+	}
+	key := workspaceKey(root)
+	a := &desktop{
+		tabs:                       []*conversation{{Workspace: root}},
+		workspaceFiles:             map[string]*workspaceFile{key: video},
+		editorDocumentsByWorkspace: map[string]map[string]*workspaceFile{key: {editorDocumentKey(video.Path): video, editorDocumentKey(text.Path): text}},
+		editorStates:               map[string]*workspaceEditorState{key: state},
+		mediaPlayback:              map[string]*workspaceMediaState{key: {mode: mediaModeSequential, playing: true}},
+	}
+	preview := &fakeWorkspacePreview{body: "playing"}
+	previewKey := workspacePreviewTestKey(root, video.Path)
+	if err := a.workspacePreview.mount(previewKey, true, func() (workspacePreviewSurface, error) {
+		return preview, nil
+	}, func(workspacePreviewSurface) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	a.selectEditorDocument(root, text.Path, 1, false)
+	if state.ActiveGroup != 1 || a.activeFile() != text || !a.mediaPlayback[key].playing {
+		t.Fatal("selecting the other group did not activate its text file")
+	}
+	mounted := a.workspacePreview.mountedFor(previewKey)
+	if mounted != preview || preview.resets != 0 || preview.destroys != 0 {
+		t.Fatal("selecting text in another group stopped or replaced the mounted media preview")
+	}
+	if inactiveWebViewPreviewPlaceholder(video, a.workspacePreviewFileAllowed(root, video, 0)) {
+		t.Fatal("mounted media in the other group was still hidden behind a placeholder")
+	}
+}
+
+func TestSelectingOrdinaryFileInMediaGroupPausesButRetainsPreview(t *testing.T) {
+	root := t.TempDir()
+	video := &workspaceFile{Path: "clip.mp4", PreviewPath: "clip.mp4", Editor: emptyFileEditor()}
+	text := &workspaceFile{Path: "notes.go", Editor: &editor.State{Buffer: editor.NewBuffer("package notes")}}
+	other := &workspaceFile{Path: "other.go", Editor: &editor.State{Buffer: editor.NewBuffer("package other")}}
+	state := &workspaceEditorState{
+		Groups: map[int]*editorGroupState{
+			0: {Tabs: []string{video.Path, text.Path}, Active: video.Path},
+			1: {Tabs: []string{other.Path}, Active: other.Path},
+		},
+		Layout:       &editorLayoutNode{Direction: splitRight, First: &editorLayoutNode{Group: 0}, Second: &editorLayoutNode{Group: 1}},
+		ActiveGroup:  1,
+		PreviewGroup: 0, PreviewFile: video.Path, PreviewGroupSet: true,
+	}
+	key := workspaceKey(root)
+	a := &desktop{
+		tabs:                       []*conversation{{Workspace: root}},
+		workspaceFiles:             map[string]*workspaceFile{key: other},
+		editorDocumentsByWorkspace: map[string]map[string]*workspaceFile{key: {editorDocumentKey(video.Path): video, editorDocumentKey(text.Path): text, editorDocumentKey(other.Path): other}},
+		editorStates:               map[string]*workspaceEditorState{key: state},
+		mediaPlayback:              map[string]*workspaceMediaState{key: {mode: mediaModeSequential, playing: true, autoplay: true}},
+	}
+	preview := &fakeWorkspacePreview{body: "paused video frame"}
+	previewKey := workspacePreviewTestKey(root, video.Path)
+	if err := a.workspacePreview.mount(previewKey, true, func() (workspacePreviewSurface, error) {
+		return preview, nil
+	}, func(workspacePreviewSurface) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	a.selectEditorDocument(root, text.Path, 0, false)
+	media := a.mediaPlayback[key]
+	if state.ActiveGroup != 0 || a.activeFile() != text || media.playing || media.autoplay {
+		t.Fatal("switching to text in the media group did not activate it and clear playback intent")
+	}
+	if a.workspacePreview.mountedFor(previewKey) != preview || preview.resets != 0 || preview.destroys != 0 {
+		t.Fatal("pausing media in the same group should retain the preview at its current position")
+	}
+}
+
+func TestInactiveWebViewPreviewPlaceholderUsesPreviewOwner(t *testing.T) {
+	video := &workspaceFile{Path: "clip.mp4", PreviewPath: "clip.mp4"}
+	other := &workspaceFile{Path: "notes.go"}
+	if !inactiveWebViewPreviewPlaceholder(video, false) {
+		t.Fatal("an inactive file without a mounted preview should show the placeholder")
+	}
+	if inactiveWebViewPreviewPlaceholder(video, true) {
+		t.Fatal("the owning inactive group should keep its preview visible")
+	}
+	if inactiveWebViewPreviewPlaceholder(other, true) {
+		t.Fatal("the active editor should not show an inactive-preview placeholder")
+	}
+}
+
 func TestEditorGroupInteractionSelectsFileOpenTarget(t *testing.T) {
 	state := &workspaceEditorState{
 		Groups:      map[int]*editorGroupState{0: {}, 1: {}},
