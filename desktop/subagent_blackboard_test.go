@@ -83,7 +83,7 @@ func TestSubagentBlackboardSnapshotAndHistoryRestore(t *testing.T) {
 	if num(row, "blackboardSent") != 3 || num(row, "blackboardReceived") != 1 || len(list(row, "blackboardEvents")) != 2 {
 		t.Fatal("late snapshot regressed live communication or duplicated entries")
 	}
-	data, err := json.Marshal(snapshot(&conversation{ID: "session", Messages: []map[string]any{row}}))
+	data, err := json.Marshal(snapshot(&conversation{ID: "session", Messages: []map[string]any{row}}, nil))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -655,24 +655,51 @@ func (a *desktop) applyShutdownOutcome(err error) {
 // their completion events were dropped with the closed event stream, so the
 // tabs would otherwise stay busy after a failed quit returns control.
 func (a *desktop) settleAbandonedRuns() {
-	seen := map[*conversation]bool{}
-	settle := func(t *conversation) {
-		if t == nil || seen[t] || !t.Busy {
-			return
+	for _, t := range a.allOpenConversations() {
+		if !t.Busy {
+			continue
 		}
-		seen[t] = true
 		settleRunningToolMessages(t, "cancelled", "")
 		t.Status = ""
 		t.Busy = false
 		t.RunID = ""
 		t.CancelRequested = false
 	}
+}
+
+// conversationHoldingPendingAttachments returns the first conversation whose
+// pending attachments an update would silently drop: the preflight covers
+// cached sessions too, not only the open tabs (Ctrl+N parks a busy session in
+// the cache without removing it from the tab strip).
+func (a *desktop) conversationHoldingPendingAttachments() *conversation {
+	for _, t := range a.allOpenConversations() {
+		if t.AttachmentLoading || len(t.PendingAttachments) > 0 {
+			return t
+		}
+	}
+	return nil
+}
+
+// allOpenConversations lists every conversation the UI still holds: the open
+// tabs plus the cached sessions a run handoff parked there, deduplicated by
+// pointer (an open tab is usually cached too).
+func (a *desktop) allOpenConversations() []*conversation {
+	seen := map[*conversation]bool{}
+	out := make([]*conversation, 0, len(a.tabs)+len(a.openSessions))
+	add := func(t *conversation) {
+		if t == nil || seen[t] {
+			return
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
 	for _, t := range a.tabs {
-		settle(t)
+		add(t)
 	}
 	for _, t := range a.openSessions {
-		settle(t)
+		add(t)
 	}
+	return out
 }
 func (a *desktop) current() *conversation {
 	if a.active < 0 || a.active >= len(a.tabs) {
@@ -1016,7 +1043,7 @@ func (a *desktop) send(t *conversation, text string) bool {
 	}()
 	return true
 }
-func snapshot(t *conversation) backend.SessionSnapshot {
+func snapshot(t *conversation, extraRoots []string) backend.SessionSnapshot {
 	// Detach the JSON-shaped transcript before the asynchronous save. Copying
 	// maps/slices directly avoids encoding and decoding the entire conversation
 	// on every persisted UI event. Unusual values still use a JSON round-trip so
@@ -1088,7 +1115,7 @@ func snapshot(t *conversation) backend.SessionSnapshot {
 			}
 		}
 	}
-	return backend.SessionSnapshot{ID: t.ID, Title: t.Title, Draft: t.Draft, Workspace: t.Workspace, CreatedAt: t.Created, UpdatedAt: time.Now().UnixMilli(), ContextTokens: t.ContextTokens, HasSnapshot: true, Messages: msgs}
+	return backend.SessionSnapshot{ID: t.ID, Title: t.Title, Draft: t.Draft, Workspace: t.Workspace, CreatedAt: t.Created, UpdatedAt: time.Now().UnixMilli(), ContextTokens: t.ContextTokens, HasSnapshot: true, ExtraRoots: append([]string(nil), extraRoots...), Messages: msgs}
 }
 
 const maxSnapshotCloneDepth = 10_000
@@ -1217,7 +1244,7 @@ func cloneSnapshotJSONValue(value any, depth int, active map[snapshotCloneVisit]
 
 func (a *desktop) persist(t *conversation) {
 	t.SnapshotQueued = true
-	s := snapshot(t)
+	s := snapshot(t, a.extraRoots[t.ID])
 	previous := a.persistTail
 	done := make(chan struct{})
 	a.persistTail = done
@@ -1273,27 +1300,36 @@ func (a *desktop) openSession(id string) {
 			}
 			s.Workspace = root
 		}
-		a.win.Update(func() {
-			t := a.freshConversation(s.Workspace)
-			t.ID, t.Title, t.Created, t.Messages, t.ContextTokens = s.ID, s.Title, s.CreatedAt, s.Messages, s.ContextTokens
-			t.Draft = s.Draft
-			t.SnapshotQueued = true
-			for _, message := range t.Messages {
-				if str(message, "role") == "tool_call" || str(message, "toolCallId") != "" {
-					normalizeToolMessage(message)
-				}
-				normalizeLoadedCancellation(message)
-				prepareCompactionDisplay(message)
-				if !retainMCPDisplaySummary(message) && !isMCPDisplayTool(message) {
-					retainSnapshotToolSummary(message)
-				}
-				retainCreateDisplayPreview(message)
-				normalizeSubagentBlackboard(message)
-			}
-			restoreRoundStats(t)
-			a.showSession(t)
-		})
+		a.win.Update(func() { a.showSession(a.applyRestoredSession(s)) })
 	}()
+}
+
+// applyRestoredSession builds the conversation for a loaded snapshot; only the
+// tab activation that follows must run on the UI thread.
+func (a *desktop) applyRestoredSession(s backend.SessionSnapshot) *conversation {
+	t := a.freshConversation(s.Workspace)
+	t.ID, t.Title, t.Created, t.Messages, t.ContextTokens = s.ID, s.Title, s.CreatedAt, s.Messages, s.ContextTokens
+	t.Draft = s.Draft
+	t.SnapshotQueued = true
+	if len(s.ExtraRoots) > 0 {
+		// The session's approved write roots ride the snapshot so a restart does
+		// not silently revoke what the user granted.
+		a.extraRoots[t.ID] = append([]string(nil), s.ExtraRoots...)
+	}
+	for _, message := range t.Messages {
+		if str(message, "role") == "tool_call" || str(message, "toolCallId") != "" {
+			normalizeToolMessage(message)
+		}
+		normalizeLoadedCancellation(message)
+		prepareCompactionDisplay(message)
+		if !retainMCPDisplaySummary(message) && !isMCPDisplayTool(message) {
+			retainSnapshotToolSummary(message)
+		}
+		retainCreateDisplayPreview(message)
+		normalizeSubagentBlackboard(message)
+	}
+	restoreRoundStats(t)
+	return t
 }
 
 func (a *desktop) showSession(next *conversation) {
@@ -1370,6 +1406,12 @@ func blankTab(t *conversation) bool {
 // discardBlankTab releases what the replaced conversation still holds; the tab
 // itself stays and shows the session loaded into it.
 func (a *desktop) discardBlankTab(t *conversation) {
+	if t.SnapshotQueued {
+		// This blank tab was persisted before (e.g. a draft-only session whose
+		// draft the user cleared): persist the cleared state so the old draft
+		// does not revive when the session reopens.
+		a.persist(t)
+	}
 	if a.openSessions[t.ID] == t {
 		delete(a.openSessions, t.ID)
 	}

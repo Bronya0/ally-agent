@@ -27,12 +27,12 @@ func TestOnlyPackagedReleasesCheckAutomatically(t *testing.T) {
 
 func TestSnapshotStoresDraftOutsideModelMessages(t *testing.T) {
 	tab := &conversation{ID: "draft", Draft: "未发送的草稿"}
-	stored := snapshot(tab)
+	stored := snapshot(tab, nil)
 	if stored.Draft != tab.Draft || len(stored.Messages) != 0 {
 		t.Fatal("draft lost or injected into messages")
 	}
 	tab.Draft = ""
-	if stored = snapshot(tab); stored.Draft != "" {
+	if stored = snapshot(tab, nil); stored.Draft != "" {
 		t.Fatal("cleared draft survived")
 	}
 }
@@ -43,6 +43,24 @@ func TestUpdatePreflightDoesNotProceedWhileFileIsSaving(t *testing.T) {
 	a.prepareWindowClose(func() { proceeded = true }, func() { cancelled = true })
 	if proceeded || !cancelled {
 		t.Fatal("updating proceeded before file save finished")
+	}
+}
+
+// 更新预检必须覆盖缓存会话：Ctrl+N 会把带着待发附件的会话移出标签条，
+// 只遍历 tabs 会绕过这道检查。
+func TestUpdatePreflightCoversCachedSessions(t *testing.T) {
+	a := &desktop{
+		tabs: []*conversation{{ID: "clean", Workspace: t.TempDir()}},
+		openSessions: map[string]*conversation{
+			"pasted": {ID: "pasted", Workspace: t.TempDir(), PendingAttachments: []backend.AttachmentInput{{ID: "image", Name: "截图.png", Kind: "image"}}},
+		},
+	}
+	if got := a.conversationHoldingPendingAttachments(); got == nil || got.ID != "pasted" {
+		t.Fatalf("the cached session's pending attachment was missed: %+v", got)
+	}
+	a.openSessions["pasted"].PendingAttachments = nil
+	if got := a.conversationHoldingPendingAttachments(); got != nil {
+		t.Fatalf("a clean cache still blocked the update: %+v", got)
 	}
 }
 

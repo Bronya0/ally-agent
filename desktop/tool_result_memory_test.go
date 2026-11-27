@@ -23,7 +23,7 @@ func TestMCPDisplaySummaryKeepsBackendResultAndState(t *testing.T) {
 		if toolState(got) != toolState(map[string]any{"status": "success", "result": result}) || toolDuration(got, toolResult(got)) != toolDuration(nil, result) {
 			t.Fatal("MCP status or duration changed")
 		}
-		encoded, _ := json.Marshal(snapshot(conv))
+		encoded, _ := json.Marshal(snapshot(conv, nil))
 		if len(encoded) > 2048 {
 			t.Fatal("MCP body was retained in the UI snapshot")
 		}
@@ -115,7 +115,7 @@ func TestSnapshotOmitsTransientOutputsAndPreservesCardMetadata(t *testing.T) {
 			m := map[string]any{"role": "tool_call", "toolCallId": "call", "name": tc.name, "args": `{"path":"main.go"}`, "status": "success", "result": tc.result}
 			before, _ := json.Marshal(m)
 			conv := &conversation{ID: "snapshot", Messages: []map[string]any{m}}
-			saved := snapshot(conv)
+			saved := snapshot(conv, nil)
 			after, _ := json.Marshal(m)
 			if string(before) != string(after) {
 				t.Fatal("snapshot mutated live evidence")
@@ -146,7 +146,7 @@ func TestSnapshotOmitsTransientOutputsAndPreservesCardMetadata(t *testing.T) {
 func TestSnapshotObservationEnvelopeErrorsAndExplicitExcerpts(t *testing.T) {
 	m := map[string]any{"name": "read", "toolCallId": "call", "result": map[string]any{"ok": false, "errorCode": "DENIED", "data": map[string]any{"content": strings.Repeat("stale", 10000), "error": "cannot read"}}}
 	before, _ := json.Marshal(m)
-	saved := snapshot(&conversation{Messages: []map[string]any{m}}).Messages[0]
+	saved := snapshot(&conversation{Messages: []map[string]any{m}}, nil).Messages[0]
 	after, _ := json.Marshal(m)
 	if string(before) != string(after) {
 		t.Fatal("envelope merge mutated live result")
@@ -157,7 +157,7 @@ func TestSnapshotObservationEnvelopeErrorsAndExplicitExcerpts(t *testing.T) {
 	}
 	for _, name := range []string{"read", "edit", "create", "plan"} {
 		m := map[string]any{"name": name, "result": map[string]any{"_text": "explicit excerpt"}, "body": "explicit excerpt", "fastCompacted": true}
-		saved := snapshot(&conversation{Messages: []map[string]any{m}}).Messages[0]
+		saved := snapshot(&conversation{Messages: []map[string]any{m}}, nil).Messages[0]
 		if str(toolResult(saved), "_text") != "explicit excerpt" {
 			t.Fatal("bounded compaction or non-transient result lost")
 		}
@@ -235,7 +235,7 @@ func TestToolResultLegacyAndRoundTrip(t *testing.T) {
 	}
 	m := map[string]any{"result": `{"ok":false,"data":{"output":"saved"}}`}
 	normalizeToolMessage(m)
-	saved := snapshot(&conversation{Messages: []map[string]any{m}})
+	saved := snapshot(&conversation{Messages: []map[string]any{m}}, nil)
 	restored := saved.Messages[0]
 	normalizeToolMessage(restored)
 	if str(toolResult(restored), "output") != "saved" || toolResult(restored)["ok"] != false {

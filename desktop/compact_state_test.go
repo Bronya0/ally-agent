@@ -87,7 +87,7 @@ func TestFastCompactionPreservesToolOutcomes(t *testing.T) {
 			if err != nil || len(encoded) > 2048 {
 				t.Fatal("compacted row retained the original output body")
 			}
-			saved := snapshot(conv).Messages[0]
+			saved := snapshot(conv, nil).Messages[0]
 			if toolState(saved) != tc.state {
 				t.Fatal("snapshot lost the compacted tool outcome")
 			}

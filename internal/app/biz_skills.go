@@ -688,12 +688,16 @@ const (
 
 // SkillDraft is the create-skill payload from the Skills panel: Target picks the
 // scope, the metadata fields become YAML frontmatter, Content becomes the body.
+// Workspace is the project root a project-scope skill must land in; the panel
+// sends the active tab's workspace so the write cannot follow a stale global
+// config into a different project.
 type SkillDraft struct {
 	Target      string `json:"target"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	WhenToUse   string `json:"whenToUse"`
 	Content     string `json:"content"`
+	Workspace   string `json:"workspace,omitempty"`
 }
 
 // skillNamePattern requires a letter or digit first, so ".", ".." and hidden
@@ -729,7 +733,7 @@ func (a *App) SaveSkill(draft SkillDraft) (string, error) {
 		}
 	}
 
-	root, err := a.skillWriteRoot(draft.Target)
+	root, err := a.skillWriteRoot(draft.Target, draft.Workspace)
 	if err != nil {
 		return "", err
 	}
@@ -803,8 +807,11 @@ func linkNewFile(path string, data []byte) error {
 
 // skillWriteRoot resolves the directory a new skill is written into. An empty
 // target means the user scope, so a caller that omits the field cannot end up
-// writing into a project by accident.
-func (a *App) skillWriteRoot(target string) (string, error) {
+// writing into a project by accident. A project write with an explicit
+// workspace stays in that workspace; only a caller that omits it falls back to
+// the global config, which may point at a different project than the one the
+// form displayed.
+func (a *App) skillWriteRoot(target, workspace string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(target)) {
 	case "", skillTargetUser:
 		home, err := os.UserHomeDir()
@@ -813,6 +820,16 @@ func (a *App) skillWriteRoot(target string) (string, error) {
 		}
 		return filepath.Join(home, agentsSkillsSubdir), nil
 	case skillTargetProject:
+		if root := strings.TrimSpace(workspace); root != "" {
+			info, err := os.Stat(root)
+			if err != nil {
+				return "", fmt.Errorf("project workspace %s is not accessible: %w", filepath.Clean(root), err)
+			}
+			if !info.IsDir() {
+				return "", fmt.Errorf("project workspace %s is not a directory", filepath.Clean(root))
+			}
+			return filepath.Join(filepath.Clean(root), agentsSkillsSubdir), nil
+		}
 		cfg, err := a.getConfig()
 		if err != nil {
 			return "", err

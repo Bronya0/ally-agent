@@ -381,6 +381,11 @@ type App struct {
 	// nil uses the production timer and preserves Retry-After/backoff policy.
 	retryWait func(context.Context, time.Duration) error
 
+	// Optional stand-in for the update path's stopAllServicesWithError. Update
+	// tests cannot spawn a service that refuses to die, so they inject the
+	// failure here; nil uses the real stop path.
+	stopServicesStub func() error
+
 	// liveBreakdown caches the full token-count breakdown for active sessions.
 	// Updated by runChat each agent step. Maps sessionID → ContextBreakdown.
 	liveBreakdown      map[string]ContextBreakdown

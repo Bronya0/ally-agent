@@ -160,7 +160,7 @@ func TestPurposeSitsInlineInIndependentHeaders(t *testing.T) {
 	if toolPurpose(conv.Messages[0], nil) != "读取相关配置" {
 		t.Fatal("compaction discarded call purpose")
 	}
-	saved := snapshot(conv)
+	saved := snapshot(conv, nil)
 	if toolPurpose(saved.Messages[0], nil) != "读取相关配置" {
 		t.Fatal("snapshot discarded call purpose")
 	}

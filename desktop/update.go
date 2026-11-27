@@ -129,11 +129,9 @@ func (a *desktop) applyUpdate() {
 		a.notify(locales.Text("配置正在保存，请稍后更新"))
 		return
 	}
-	for _, t := range a.tabs {
-		if t.AttachmentLoading || len(t.PendingAttachments) > 0 {
-			a.notify(locales.Text("请先发送或移除待发送附件，再安装更新"))
-			return
-		}
+	if t := a.conversationHoldingPendingAttachments(); t != nil {
+		a.notify(locales.Text("请先发送或移除待发送附件，再安装更新"))
+		return
 	}
 	a.upd.Busy, a.upd.Silent, a.upd.Open = true, false, true
 	a.upd.State = "preparing"

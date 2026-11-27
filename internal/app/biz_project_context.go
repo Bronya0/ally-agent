@@ -179,25 +179,40 @@ func loadCodeGraph(workspace string) string {
 	if workspace == "" {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(workspace, "CODEGRAPH.md"))
+	f, err := os.Open(filepath.Join(workspace, "CODEGRAPH.md"))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	// Bound the read at the injection cap: a huge CODEGRAPH.md must not be
+	// pulled into memory only to have all but its head dropped below.
+	data, err := io.ReadAll(io.LimitReader(f, maxCodeGraphPromptBytes+1))
 	if err != nil {
 		return ""
 	}
 	content := strings.ToValidUTF8(string(data), "")
 	content = strings.TrimSpace(content)
-	if len(content) <= maxCodeGraphPromptBytes {
-		return content
+	truncated := info.Size() > maxCodeGraphPromptBytes
+	if truncated {
+		if len(content) > maxCodeGraphPromptBytes {
+			content = content[:maxCodeGraphPromptBytes]
+		}
+		// Land on a line boundary (and drop a half-cut rune) so the model never sees a
+		// table row lopped in half: the graph is injected for its head — the
+		// "feature → file" table — and the architecture sections are readable on
+		// demand with `read`.
+		if idx := strings.LastIndexByte(content, '\n'); idx > 0 {
+			content = content[:idx]
+		}
+		content = strings.ToValidUTF8(content, "")
+		content = strings.TrimSpace(content)
+		return content + "\n\n<!-- CODEGRAPH.md was truncated for prompt size; read it for omitted entries. Keep the full map within 8192 UTF-8 bytes when updating. -->"
 	}
-	content = content[:maxCodeGraphPromptBytes]
-	// Land on a line boundary (and drop a half-cut rune) so the model never sees a
-	// table row lopped in half: the graph is injected for its head — the
-	// "feature → file" table — and the architecture sections are readable on
-	// demand with `read`.
-	if idx := strings.LastIndexByte(content, '\n'); idx > 0 {
-		content = content[:idx]
-	}
-	content = strings.ToValidUTF8(content, "")
-	return strings.TrimSpace(content) + "\n\n<!-- CODEGRAPH.md was truncated for prompt size; read it for omitted entries. Keep the full map within 8192 UTF-8 bytes when updating. -->"
+	return content
 }
 
 func buildCodeGraphPromptPart(workspace string) string {

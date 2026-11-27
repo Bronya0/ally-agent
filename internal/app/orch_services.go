@@ -708,6 +708,48 @@ func (a *App) stopAllServices() {
 	_ = a.stopAllServicesWithError()
 }
 
+// stopAllServicesForUpdate is the update path's stop step: its failure must
+// abort the install instead of being swallowed, because replacing files under
+// an unconfirmed process tree corrupts the installation.
+func (a *App) stopAllServicesForUpdate() error {
+	if a.stopServicesStub != nil {
+		return a.stopServicesStub()
+	}
+	return a.stopAllServicesWithError()
+}
+
+// HasActiveServiceUnder reports whether an active (starting/running) service
+// keeps its working directory inside root. A temp-workspace directory with a
+// live service must survive its tab: the service deliberately outlives the
+// conversation that started it.
+func (a *App) HasActiveServiceUnder(root string) bool {
+	root = filepath.Clean(root)
+	if os.PathSeparator == '\\' {
+		root = strings.ToLower(root)
+	}
+	a.servicesMu.Lock()
+	defer a.servicesMu.Unlock()
+	for _, service := range a.services {
+		if service == nil {
+			continue
+		}
+		service.mu.Lock()
+		status, cwd := service.info.Status, service.info.Cwd
+		service.mu.Unlock()
+		if status != "starting" && status != "running" || strings.TrimSpace(cwd) == "" {
+			continue
+		}
+		inside := filepath.Clean(strings.TrimSpace(cwd))
+		if os.PathSeparator == '\\' {
+			inside = strings.ToLower(inside)
+		}
+		if rel, err := filepath.Rel(root, inside); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *App) stopAllServicesWithError() error {
 	a.servicesStartMu.Lock()
 	defer a.servicesStartMu.Unlock()

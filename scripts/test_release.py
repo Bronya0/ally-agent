@@ -15,19 +15,34 @@ class PublicationTests(unittest.TestCase):
                  {'tag_name': self.tag, 'draft': True, 'prerelease': False,
                   'assets': assets or []}]]
 
+    def _with_tag_gate(self, records, tag=None, status='behind', notes=None):
+        tag = tag or self.tag
+        def fake(*args, **kwargs):
+            arg1 = args[1] if len(args) > 1 else ''
+            if args[0] == 'api' and arg1.endswith('/commits/' + tag):
+                return {'sha': 'tag-sha'}
+            if args[0] == 'api' and arg1.endswith('/compare/mygo...tag-sha'):
+                return {'status': status}
+            if notes is not None and args[:2] == ('release', 'view'):
+                return notes
+            if args[:2] == ('api', '--paginate'):
+                return records
+            return fallback
+        return fake
+
     def test_rejects_invalid_older_and_public_tags_before_writing(self):
         for tag in ('mygo', '../v1.28.0', 'v1.28.0-beta.1'):
             with mock.patch.object(release, 'gh') as gh:
                 with self.assertRaises(RuntimeError): release.release_context(self.repo, tag)
                 gh.assert_not_called()
         for tag in ('v1.26.0', 'v1.27.0'):
-            with mock.patch.object(release, 'gh', return_value=self.records()) as gh:
+            with mock.patch.object(release, 'gh', side_effect=self._with_tag_gate(self.records(), tag=tag)) as gh:
                 with self.assertRaises(RuntimeError): release.release_context(self.repo, tag)
-                self.assertEqual(gh.call_count, 1)
+                self.assertGreaterEqual(gh.call_count, 1)
 
     def test_draft_notes_are_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
-            with mock.patch.object(release, 'ROOT', Path(directory)), mock.patch.object(release, 'gh', side_effect=[self.records(), '## 中文更新说明\n']):
+            with mock.patch.object(release, 'ROOT', Path(directory)), mock.patch.object(release, 'gh', side_effect=self._with_tag_gate(self.records(), notes='## 中文更新说明\n')):
                 release.prepare(self.repo, self.tag)
                 self.assertEqual((Path(directory)/'.tmp/release-notes.md').read_text(encoding='utf-8'), '## 中文更新说明\n')
 
@@ -58,7 +73,12 @@ class PublicationTests(unittest.TestCase):
                 def gh(*args, **kwargs):
                     nonlocal list_calls
                     calls.append(args)
-                    if args[:2]==('api','--paginate'):
+                    arg1 = args[1] if len(args) > 1 else ''
+                    if args[0] == 'api' and arg1.endswith('/commits/' + self.tag):
+                        return {'sha': 'tag-sha'}
+                    if args[0] == 'api' and arg1.endswith('/compare/mygo...tag-sha'):
+                        return {'status': 'behind'}
+                    if args[:2] == ('api', '--paginate'):
                         list_calls += 1
                         return self.records(assets if list_calls > 1 else None)
                     return ''
@@ -72,6 +92,22 @@ class PublicationTests(unittest.TestCase):
                 if edits:
                     self.assertEqual(calls[-1], edits[0])
                     self.assertIn('--draft=false',edits[0])
+    def test_rejects_tag_outside_mygo_history(self):
+        for status in ('diverged', 'ahead'):
+            with self.subTest(status=status):
+                with mock.patch.object(release, 'gh', side_effect=self._with_tag_gate([], status=status)) as gh:
+                    with self.assertRaises(RuntimeError):
+                        release.verify_tag_on_branch(self.repo, self.tag)
+                    kinds = [c.args[1] for c in gh.call_args_list if len(c.args) > 1 and isinstance(c.args[1], str)]
+                    self.assertTrue(any(k.endswith('/commits/' + self.tag) for k in kinds))
+                    self.assertTrue(any('/compare/mygo...tag-sha' in k for k in kinds))
+
+    def test_accepts_tag_on_mygo_history(self):
+        for status in ('behind', 'identical'):
+            with self.subTest(status=status):
+                with mock.patch.object(release, 'gh', side_effect=self._with_tag_gate([], status=status)) as gh:
+                    release.verify_tag_on_branch(self.repo, self.tag)
+                    self.assertGreaterEqual(gh.call_count, 2)
 
 
 if __name__ == '__main__':

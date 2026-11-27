@@ -3,6 +3,7 @@ package desktop
 import (
 	"errors"
 	"testing"
+	"time"
 
 	backend "ally-dev/internal/app"
 )
@@ -37,5 +38,30 @@ func TestFailedDeletionKeepsTheTranscript(t *testing.T) {
 	}
 	if len(conv.Messages) != 2 || str(conv.Messages[1], "content") != "answer" {
 		t.Fatalf("an accepted deletion did not cut the transcript: %v", conv.Messages)
+	}
+}
+
+// 清空草稿后丢弃空白标签必须落盘显式清空，否则重开该会话会复活旧草稿。
+func TestDiscardingAPersistedBlankTabPersistsTheClearedDraft(t *testing.T) {
+	t.Setenv("ALLY_DATA_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	core := backend.NewApp()
+	conv := &conversation{ID: "cleared-draft", Workspace: t.TempDir(), SnapshotQueued: true}
+	a := &desktop{core: core, openSessions: map[string]*conversation{conv.ID: conv}}
+	if err := core.SaveSession(backend.SessionSnapshot{ID: conv.ID, Title: "draft session", Workspace: conv.Workspace, Draft: "old draft", CreatedAt: time.Now().UnixMilli(), HasSnapshot: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	a.discardBlankTab(conv)
+	if a.persistTail != nil {
+		<-a.persistTail
+	}
+	loaded, err := core.LoadSession(conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Draft != "" {
+		t.Fatalf("the cleared draft revived on reload: %q", loaded.Draft)
 	}
 }

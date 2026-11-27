@@ -139,8 +139,16 @@ func (a *App) prepareFastCompactHistory(ctx context.Context, sessionID string, h
 		after = before
 	}
 	prefix := a.getContextBreakdown(sessionID, "")
-	candidate.result["tokensBefore"] = prefix.SystemPrompt + prefix.ToolSchemas + before.Total
-	candidate.result["tokensAfter"] = prefix.SystemPrompt + prefix.ToolSchemas + after.Total
+	// The projection drops the catalog message and ensureMcpCatalog re-sends
+	// one before the very next request: charge that cost to both sides, or a
+	// large catalog makes the rewrite look far smaller than the request is.
+	returning := a.returningMcpCatalogTokens(sessionID)
+	beforeTotal := prefix.SystemPrompt + prefix.ToolSchemas + before.Total
+	if before.MCPCatalog == 0 {
+		beforeTotal += returning
+	}
+	candidate.result["tokensBefore"] = beforeTotal
+	candidate.result["tokensAfter"] = prefix.SystemPrompt + prefix.ToolSchemas + after.Total + returning
 	return candidate, nil
 }
 
