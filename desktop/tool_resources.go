@@ -235,7 +235,13 @@ func (a *desktop) toolResourceCards(c *ui.Context, key, kind string, result map[
 		}
 		shown = append(shown, resourceEntry{index: n, item: raw})
 	}
-	ui.Column(c).FillWidth().MinWidth(0).Gap(gapField).Children(func() {
+	var cards ui.Element
+	if kind == "ssh_cluster" && isList {
+		cards = ui.Scroll(c.Key(key + "-servers")).MaxHeight(320).Shrink(0).Clip().Label(locales.Text("SSH 服务器"))
+	} else {
+		cards = ui.Column(c)
+	}
+	cards.FillWidth().MinWidth(0).Gap(gapField).Children(func() {
 		for _, entry := range shown {
 			n, raw := entry.index, entry.item
 			item, ok := raw.(map[string]any)

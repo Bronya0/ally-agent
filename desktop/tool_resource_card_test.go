@@ -2,6 +2,7 @@
 package desktop
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -46,5 +47,36 @@ func TestResourceCardPutsShortFieldsOnOneLine(t *testing.T) {
 	}
 	if duplicates != 1 {
 		t.Fatalf("a host equal to the alias was drawn %d times, want 1: %v", duplicates, tt.Texts())
+	}
+}
+
+func TestSSHServerCardsScrollInsideToolResult(t *testing.T) {
+	a := &desktop{prefs: defaultPrefs()}
+	servers := make([]any, 6)
+	for i := range servers {
+		servers[i] = map[string]any{
+			"alias": fmt.Sprintf("server-%d", i+1), "port": 22, "username": "deploy",
+			"description": "Test server", "status": "approved",
+		}
+	}
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(a.theme())
+		c.DisableAnimations()
+		ui.Scroll(c).Fill().Padding(12).Children(func() {
+			a.toolResourceCards(c, "list", "ssh_cluster", map[string]any{"servers": servers}, false)
+			ui.Text(c, "Next message")
+		})
+	}, 700, 420)
+
+	if err := tt.Click("Next message"); err != nil {
+		t.Fatalf("server cards pushed the next message out of view: %v", err)
+	}
+	first, ok := tt.Find("server-1")
+	if !ok {
+		t.Fatal("first server missing")
+	}
+	tt.Scroll(first.X+first.W/2, first.Y+first.H/2, 0, 1000)
+	if err := tt.Click("server-6"); err != nil {
+		t.Fatalf("could not reach the last server by scrolling inside the list: %v", err)
 	}
 }
