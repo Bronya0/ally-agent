@@ -1837,6 +1837,8 @@
   "ui_7304e809e016": "%s이(가) 기록에서 제거됩니다. 이 워크스페이스에는 저장된 대화가 없습니다.",
   "ui_context_mcp_catalog": "MCP 도구 목록",
   "ui_context_mcp_catalog_note": "MCP 도구 목록을 로드하며 전체 정의는 필요할 때 조회합니다. 연결과 도구 실행 권한은 변경하지 않습니다.",
+  "ui_context_workspace_handoff": "이전 대화 이어받기",
+  "ui_context_workspace_handoff_note": "새 대화의 첫 턴에 같은 작업 공간에서 정상적으로 완료된 이전 질문과 답변을 참고합니다.",
   "ui_context_budget_note": "자동 로드의 총 한도는 %d KiB입니다. 초과하면 오류를 표시하며 프로젝트 규칙이나 목록 항목을 조용히 누락하지 않습니다.",
   "ui_context_budget_error": "자동 로드 컨텍스트가 %d KiB를 초과하여 모델 요청을 보내지 않았습니다. 프로젝트 지침, 사용자 지정 지침 또는 목록을 줄이거나 설정에서 불필요한 로드 항목을 끈 뒤 새 세션을 시작하세요. 규칙이나 목록 항목을 조용히 누락하지 않습니다.",
   "ui_context_tool_calls": "횟수",

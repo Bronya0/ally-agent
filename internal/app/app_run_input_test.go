@@ -27,11 +27,11 @@ func TestInjectRunAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 	attachments[0].Text = "mutated"
-	out, injected, err := app.appendPendingRunInputs("run", "session", ConfigState{}, nil)
+	out, latest, err := app.appendPendingRunInputs("run", "session", ConfigState{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !injected || len(out) != 1 || len(out[0].MultiContent) != 2 {
+	if latest == nil || len(out) != 1 || len(out[0].MultiContent) != 2 {
 		t.Fatalf("expected multimodal user input: %+v", out)
 	}
 	if !strings.Contains(out[0].MultiContent[0].Text, "attachment marker") || strings.Contains(out[0].MultiContent[0].Text, "mutated") {
@@ -109,12 +109,12 @@ func TestAppendPendingRunInputsEmpty(t *testing.T) {
 	app.mu.Unlock()
 
 	messages := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleAssistant, Content: "ok"}}
-	out, injected, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, messages)
+	out, latest, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, messages)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if injected {
-		t.Fatal("appendPendingRunInputs(empty queue) injected = true, want false")
+	if latest != nil {
+		t.Fatalf("appendPendingRunInputs(empty queue) latest = %+v, want nil", latest)
 	}
 	if len(out) != len(messages) {
 		t.Fatalf("appendPendingRunInputs(empty queue) = %d messages, want %d", len(out), len(messages))
@@ -142,12 +142,12 @@ func TestAppendPendingRunInputsOrder(t *testing.T) {
 	}
 
 	base := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleAssistant, Content: "prior"}}
-	out, injected, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, base)
+	out, latest, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !injected {
-		t.Fatal("appendPendingRunInputs(queued) injected = false, want true")
+	if latest == nil || latest.Text != "second" {
+		t.Fatalf("appendPendingRunInputs(queued) latest = %+v, want second input", latest)
 	}
 	if len(out) != 3 {
 		t.Fatalf("appendPendingRunInputs() = %d messages, want 3", len(out))
@@ -159,8 +159,8 @@ func TestAppendPendingRunInputsOrder(t *testing.T) {
 		}
 	}
 	// The queue is drained: a second call injects nothing.
-	if _, injected, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, out); injected || err != nil {
-		t.Fatalf("appendPendingRunInputs(after drain) = injected %v, err %v", injected, err)
+	if _, latest, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, out); latest != nil || err != nil {
+		t.Fatalf("appendPendingRunInputs(after drain) = latest %+v, err %v", latest, err)
 	}
 }
 
@@ -178,11 +178,11 @@ func TestAppendPendingRunInputsAfterFinishRun(t *testing.T) {
 	app.releaseRun(runID)
 
 	base := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "keep"}}
-	out, injected, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, base)
+	out, latest, err := app.appendPendingRunInputs(runID, "session", ConfigState{}, base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if injected || len(out) != 1 || out[0].Content != "keep" {
-		t.Fatalf("appendPendingRunInputs(after finish) = injected %v, %d messages; want false, 1", injected, len(out))
+	if latest != nil || len(out) != 1 || out[0].Content != "keep" {
+		t.Fatalf("appendPendingRunInputs(after finish) = latest %+v, %d messages; want nil, 1", latest, len(out))
 	}
 }

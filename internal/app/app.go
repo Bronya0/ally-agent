@@ -1805,6 +1805,10 @@ type runFinish struct {
 	workspace string
 	started   time.Time
 	syncIndex bool
+
+	handoffPath     string
+	handoffQuestion string
+	handoffReply    string
 }
 
 // finishRun is the single end-of-run exit: one line per step, in the order the
@@ -1840,6 +1844,9 @@ func (a *App) finishRun(f runFinish, messages []openai.ChatCompletionMessage, ou
 			message = outcome.message + "; " + message
 		}
 		outcome.kind, outcome.message = "error", message
+	}
+	if outcome.kind == "done" {
+		a.finishWorkspaceHandoff(f)
 	}
 	// These stay in order: record the result, announce it, then free the run.
 	a.recordRunOutcome(f.runID, f.sessionID, outcome)
@@ -1974,11 +1981,12 @@ func (a *App) closeRunInputIfEmpty(runID string) bool {
 
 // appendPendingRunInputs gives queued attachments the same durable editing
 // references as an ordinary send, before appending their model-facing messages.
+// It returns the latest consumed user input, or nil if the queue was empty.
 // On a save failure, keep all original inputs in the run's checkpoint history.
-func (a *App) appendPendingRunInputs(runID, sessionID string, cfg ConfigState, messages []openai.ChatCompletionMessage) ([]openai.ChatCompletionMessage, bool, error) {
+func (a *App) appendPendingRunInputs(runID, sessionID string, cfg ConfigState, messages []openai.ChatCompletionMessage) ([]openai.ChatCompletionMessage, *runInput, error) {
 	inputs := a.drainPendingInputs(runID)
 	if len(inputs) == 0 {
-		return messages, false, nil
+		return messages, nil, nil
 	}
 	var err error
 	if cfg.ImageGeneration != nil && cfg.ImageGeneration.Enabled {
@@ -1996,7 +2004,7 @@ func (a *App) appendPendingRunInputs(runID, sessionID string, cfg ConfigState, m
 	for _, input := range inputs {
 		messages = appendUserMessageWithAttachments(messages, input.Text, input.Attachments)
 	}
-	return messages, true, err
+	return messages, &inputs[len(inputs)-1], err
 }
 
 // ReleaseSession releases backend-only state while preserving persisted history.
@@ -2222,6 +2230,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	// It is non-blocking and coalesced per server, so a run never waits on a
 	// dial, and a tool call that already failed is never re-sent on its behalf.
 	a.RetryFailedMcpServers()
+	a.mu.Lock()
+	_, sessionStarted := a.sessionContextSettings[req.SessionID]
+	a.mu.Unlock()
 	cfg = a.contextSettingsForSession(req.SessionID, cfg, true)
 	ctx, closeBlackboard := newRunBlackboard(ctx)
 	ctx = withModelRunUsage(ctx)
@@ -2272,6 +2283,19 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		}
 	}()
 
+	var handoff string
+	handoff, finish.handoffPath = a.beginWorkspaceHandoff(req, cfg, runID, !sessionStarted)
+	if len(req.Messages) == 0 {
+		finish.handoffQuestion = req.Message
+	}
+	appendPendingInputs := func() (bool, error) {
+		next, latest, err := a.appendPendingRunInputs(runID, sessionID, cfg, messages)
+		messages = next
+		if latest != nil {
+			finish.handoffQuestion = latest.Text
+		}
+		return latest != nil, err
+	}
 	a.emit("run:start", map[string]any{"runId": runID, "sessionId": sessionID})
 
 	if cfg.ImageGeneration != nil && cfg.ImageGeneration.Enabled {
@@ -2329,9 +2353,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// for the current tool batch to complete and enter the context here,
 		// right before the next model request, so the model sees them in the
 		// following turn. They are persisted with the rest of the history.
-		var injected bool
-		var inputErr error
-		messages, injected, inputErr = a.appendPendingRunInputs(runID, sessionID, cfg, messages)
+		injected, inputErr := appendPendingInputs()
 		if inputErr != nil {
 			end = runOutcome{kind: "error", message: inputErr.Error()}
 			return
@@ -2414,7 +2436,8 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// 计入基线会让下一轮（历史照常增长、催报已消失）在重叠段上撞出一次假漂移。
 			// 指纹的职责是盯住"持久化的那段被谁改了"，一次性消息按定义不在其列。
 			a.noteRequestPrefix(sessionID, contextLockLaneChat, cfg, messages, tools)
-			modelResp, err = a.streamModelResponse(perfReason(ctx, requestTrigger), cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
+			wireCtx, wireMessages := withWorkspaceHandoff(ctx, requestMessages, handoff)
+			modelResp, err = a.streamModelResponse(perfReason(wireCtx, requestTrigger), cfg, cfg.Model, wireMessages, tools, func(event modelStreamEvent) {
 				if event.ContentDelta != "" || event.ReasoningDelta != "" {
 					emittedEvents = true
 					streamDeltas.add(event.ContentDelta, event.ReasoningDelta)
@@ -2459,6 +2482,14 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				messages = append(messages, cancelledTurnMarker())
 				end = runOutcome{kind: "cancelled", message: "已取消"}
 				return
+			}
+			if len(wireMessages) > len(requestMessages) && shouldRecoverContextOverflow(err, emittedEvents, false) {
+				// Drop the optional handoff once before touching history. Sending
+				// the original request does not spend a transient retry.
+				handoff = ""
+				requestTrigger = "workspace_handoff_omitted"
+				turnAttempt--
+				continue
 			}
 			if isProvider400Error(err) && !sanitizedThisStep {
 				sanitizedThisStep = true
@@ -2572,9 +2603,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// injected a message: take the queue once more and continue for
 			// another step so the model actually sees it, instead of ending
 			// the run with the injection still queued.
-			var injected bool
-			var inputErr error
-			messages, injected, inputErr = a.appendPendingRunInputs(runID, sessionID, cfg, messages)
+			injected, inputErr := appendPendingInputs()
 			if inputErr != nil {
 				end = runOutcome{kind: "error", message: inputErr.Error()}
 				return
@@ -2598,6 +2627,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			if !a.closeRunInputIfEmpty(runID) {
 				continue
 			}
+			finish.handoffReply = content
 			end = runOutcome{kind: "done"}
 			return
 		}
@@ -2727,9 +2757,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// deliberately absent for the same reason: its round would land
 		// after the chips.
 		if len(outcomes) == 1 && outcomes[0].name == "suggest" && outcomes[0].result.OK {
-			var injected bool
-			var inputErr error
-			messages, injected, inputErr = a.appendPendingRunInputs(runID, sessionID, cfg, messages)
+			injected, inputErr := appendPendingInputs()
 			if inputErr != nil {
 				end = runOutcome{kind: "error", message: inputErr.Error()}
 				return
@@ -2742,6 +2770,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			if !a.closeRunInputIfEmpty(runID) {
 				continue
 			}
+			finish.handoffReply = content
 			end = runOutcome{kind: "done"}
 			return
 		}

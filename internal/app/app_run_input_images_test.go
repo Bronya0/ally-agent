@@ -148,9 +148,9 @@ func TestAppendPendingRunImagesUseRunConfigAndShareSources(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			messages, injected, err := a.appendPendingRunInputs("run", "source-session", cfg, nil)
-			if err != nil || !injected || len(messages) != 2 {
-				t.Fatalf("queued inputs lost: injected=%v messages=%d err=%v", injected, len(messages), err)
+			messages, latest, err := a.appendPendingRunInputs("run", "source-session", cfg, nil)
+			if err != nil || latest == nil || len(messages) != 2 {
+				t.Fatalf("queued inputs lost: latest=%+v messages=%d err=%v", latest, len(messages), err)
 			}
 			if attachments[1].ImageRef != "" {
 				t.Fatal("preprocessing mutated caller attachments")
@@ -202,9 +202,9 @@ func TestAppendPendingRunImageSaveFailurePreservesInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := ConfigState{ImageGeneration: &ImageGenerationConfig{Enabled: true}}
-	messages, injected, err := a.appendPendingRunInputs("run", "source-session", cfg, nil)
-	if err == nil || !injected || len(messages) != 2 {
-		t.Fatalf("save failure not reported or discarded input: injected=%v messages=%d err=%v", injected, len(messages), err)
+	messages, latest, err := a.appendPendingRunInputs("run", "source-session", cfg, nil)
+	if err == nil || latest == nil || len(messages) != 2 {
+		t.Fatalf("save failure not reported or discarded input: latest=%+v messages=%d err=%v", latest, len(messages), err)
 	}
 	if len(messages[0].MultiContent) != 2 || !strings.Contains(messages[0].MultiContent[0].Text, "first input") || messages[0].MultiContent[1].ImageURL.URL != att.DataURL || messages[1].Content != "later input" {
 		t.Fatal("failed save lost queued text or original image from checkpoint history")

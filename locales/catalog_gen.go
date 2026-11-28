@@ -16506,6 +16506,26 @@ func (msgs Messages) UiContextMcpCatalogNote() string {
 	return Catalog.Format(msgs.locale, "ui_context_mcp_catalog_note", nil)
 }
 
+// UiContextWorkspaceHandoff says "Previous conversation handoff"
+// in the language the app shows.
+func UiContextWorkspaceHandoff() string { return In(i18n.Locale()).UiContextWorkspaceHandoff() }
+
+// UiContextWorkspaceHandoff says "Previous conversation handoff"
+// in the language of msgs.
+func (msgs Messages) UiContextWorkspaceHandoff() string {
+	return Catalog.Format(msgs.locale, "ui_context_workspace_handoff", nil)
+}
+
+// UiContextWorkspaceHandoffNote says "On the first turn of a new conversation, include the previous completed question and answer from the same workspace."
+// in the language the app shows.
+func UiContextWorkspaceHandoffNote() string { return In(i18n.Locale()).UiContextWorkspaceHandoffNote() }
+
+// UiContextWorkspaceHandoffNote says "On the first turn of a new conversation, include the previous completed question and answer from the same workspace."
+// in the language of msgs.
+func (msgs Messages) UiContextWorkspaceHandoffNote() string {
+	return Catalog.Format(msgs.locale, "ui_context_workspace_handoff_note", nil)
+}
+
 // UiContextBudgetNote says "Automatic context is limited to %d KiB in total. Exceeding it reports an error rather than silently dropping project …"
 // in the language the app shows.
 func UiContextBudgetNote() string { return In(i18n.Locale()).UiContextBudgetNote() }
