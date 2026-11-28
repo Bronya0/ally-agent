@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ally-dev/internal/tools/edit"
 )
 
 func TestReadSnapshotSupportsTextDeletion(t *testing.T) {
@@ -120,5 +122,47 @@ func TestEditUncertainCharactersLeaveSourceUntouched(t *testing.T) {
 	actual, err = os.ReadFile(target)
 	if err != nil || string(actual) != "kept\nvalue ‘new’\nkeep\n" {
 		t.Fatalf("exact retry changed unrelated characters: %q %v", actual, err)
+	}
+}
+
+func TestEditRecoversFromUnsafeIndentationRebase(t *testing.T) {
+	t.Parallel()
+	a := newIsolatedToolTestApp(t)
+	const exact = "\tstep()\n\tfinish()"
+	const original = "begin\n" + exact + "\nend\n"
+	target := filepath.Join(a.config.Workspace, "source.txt")
+	if err := os.WriteFile(target, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req := FileTextEdits{Path: "source.txt", Changes: []TextChange{
+		{OldText: "end\n", NewText: "done\n"},
+		{OldText: "  step()\n  finish()", NewText: "  step()\n  check()\n  finish()"},
+	}}
+	result := a.executeTool(t.Context(), a.config, "", "edit", encodedToolArgs(t, req))
+	if result.OK || result.ErrorCode != "E_NO_MATCH" {
+		t.Fatalf("unsafe rebase was not refused: %+v", result)
+	}
+	modelResult := compactToolResultForModel("edit", result, "")
+	_, detailJSON, found := strings.Cut(modelResult, "\ndetails: ")
+	var details edit.MatchErrorDetails
+	if err := json.Unmarshal([]byte(detailJSON), &details); !found || err != nil {
+		t.Fatalf("model did not receive structured recovery details: %q", modelResult)
+	}
+	if details.ChangeIndex != 2 || details.MatchType != "indentation" || details.MatchCount != 1 || len(details.Candidates) != 1 {
+		t.Fatalf("wrong failed change or candidates: %+v", details)
+	}
+	candidate := details.Candidates[0]
+	if candidate.Line != 2 || candidate.StartLine != 1 || candidate.EndLine != 4 || !strings.Contains(candidate.Preview, exact) {
+		t.Fatalf("wrong original source or line range: %+v", candidate)
+	}
+	if actual, err := os.ReadFile(target); err != nil || string(actual) != original {
+		t.Fatalf("rejected edit partially wrote the batch: %q, %v", actual, err)
+	}
+	req.Changes[1] = TextChange{OldText: exact, NewText: "\tstep()\n\tcheck()\n\tfinish()"}
+	if result = a.executeTool(t.Context(), a.config, "", "edit", encodedToolArgs(t, req)); !result.OK {
+		t.Fatalf("retry with the original indentation failed: %+v", result)
+	}
+	if actual, err := os.ReadFile(target); err != nil || string(actual) != "begin\n\tstep()\n\tcheck()\n\tfinish()\ndone\n" {
+		t.Fatalf("retry did not apply the entire intended batch: %q, %v", actual, err)
 	}
 }

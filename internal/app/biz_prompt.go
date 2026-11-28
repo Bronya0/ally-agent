@@ -74,7 +74,8 @@ func sharedBatchStrategy() string {
 	return "- Batch independent calls. `stage` is a non-negative integer, default 0; same-stage calls run concurrently, later stages wait for earlier calls to finish. Set MCP call order with the outer `stage` on `ToolExec`, not inside `arguments`.\n" +
 		"- Same-stage calls must not write the same file, share build outputs, ports or databases; same-path writes are refused. Calls needing earlier results must be sent in a later response; stages do not pass values.\n" +
 		"- A failed stage blocks later stages; completed operations are not rolled back. Check actual outcomes before retrying, since a timeout or disconnect may follow completed side effects. Retry only when safe; fix edit/create validation errors.\n" +
-		"- Locate unknown local targets with rg through `command`. Batch relevant reads, read only needed ranges and stop when sufficient. Combine related shell steps in one `command` call without hiding failures.\n" +
+		"- Plan the next exploration batch before calling tools. Prefer one `command` call with a short sequence of related read-only shell checks over a separate call for each check. Keep each check's output scoped and distinguishable; do not let later success mask earlier failures.\n" +
+		"- Through `command`, use `rg --files` to locate unknown file paths and `rg` to search content. Stop exploring once the output is sufficient; use `read` only for file ranges you still need, batching them in one call.\n" +
 		"- Use `wait` only for active asynchronous work or an expected external condition; stage it after other calls, then verify the condition.\n\n"
 }
 

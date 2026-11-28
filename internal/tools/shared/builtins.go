@@ -81,9 +81,13 @@ const (
 	// RemoteTransferFileLimit is shared by the transfer schema and runtime.
 	RemoteTransferFileLimit = 20
 	// ContentSearchRule is shared by the main/child prompts and command guidance.
-	ContentSearchRule = "Search local content with rg through command; local grep, egrep and fgrep commands and find/sed/awk search pipelines are forbidden."
+	ContentSearchRule = "Use rg through command for fast local content search, including every content filter in a pipeline; local grep, egrep and fgrep commands and find/sed/awk search pipelines are forbidden."
 	// ContentSearchGuidance also supplies the runtime rejection's next step.
-	ContentSearchGuidance = ContentSearchRule + " Scope searches to a relevant directory or file. Example: rg -p --color never -i -g '*.go' -e 'symbolA|symbolB' -- internal/app. Combine related symbols with regex alternation; use -F only for literal text, -C for needed context, -l for matching filenames, and --count-matches for occurrence counts. Choose file filters for the task, including tests when relevant. Narrow paths or patterns if output is truncated; -m limits matches per file, not globally. Exit 1 means no matches, not a tool failure."
+	ContentSearchGuidance = ContentSearchRule +
+		" Scope searches to relevant paths, including tests when needed. Use --files to list candidate files and -g for path globs." +
+		" Use -n for line numbers, -F for literal text, -i to ignore case, -C for surrounding context, and -l to list files with matches." +
+		" Combine related patterns with regex alternation or repeated -e. Use --count-matches for occurrence counts. Narrow paths or patterns if output is truncated; -m limits matching lines per file, not globally." +
+		" An rg exit code of 1 means no matches, not an error. In a sequence, do not let it skip checks that do not depend on a match."
 	// MaxModelToolOutput bounds the raw tool output that reaches model context
 	// (command output, service reads, third-party MCP text). internal/app aliases
 	// this constant and elides the middle beyond it, so the command schema can
@@ -217,7 +221,7 @@ func chatToolsUncached() []openai.Tool {
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative file path."},
 				"content":   map[string]any{"type": "string", "description": "Full UTF-8 text (may be empty). Mixed line endings are normalized; no trailing newline is added."},
-				"overwrite": map[string]any{"type": "boolean", "description": "Whether to replace an existing text file."},
+				"overwrite": map[string]any{"type": "boolean", "description": "Set false for a new file. Set true only to replace an existing text file."},
 			},
 			"required": []string{"path", "content", "overwrite"},
 		}),
@@ -250,7 +254,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"name", "arguments"},
 		}),
-		functionTool("command", "Run a shell command or related shell sequence. Each call starts in the primary workspace root: run commands directly there, or cd into a subdirectory inside the command. Directory changes last only for that call. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. "+ContentSearchGuidance+" Keep project outputs in the workspace or active session extra roots; other filesystem access follows runtime restrictions. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. "+modelOutputNote+" If the result reports promotion to a background service, use service read/stop/restart with its returned id; never duplicate an active process. Commands that touch the same files or bind the same port need distinct stages.", map[string]any{
+		functionTool("command", "Run a shell command or related shell sequence. Keep writes and cleanup out of exploration sequences. Each call starts in the primary workspace root: run commands directly there, or cd into a subdirectory inside the command. Directory changes last only for that call. Windows uses Git Bash when available, otherwise PowerShell; macOS/Linux use bash. "+ContentSearchGuidance+" Keep temporary files, logs and other outputs in the workspace or active session extra roots; reading an external path does not authorize writing to it. Use delete for unmanaged shell deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. Follow a rejection reason instead of retrying unchanged. "+modelOutputNote+" If the result reports promotion to a background service, use service read/stop/restart with its returned id; never duplicate an active process. Commands that touch the same files or bind the same port need distinct stages.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run."},
@@ -380,11 +384,11 @@ func chatToolsUncached() []openai.Tool {
 				"alias":     sshAliasSchema(),
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute remote path of the file to create, e.g. /srv/app/config.json."},
 				"content":   map[string]any{"type": "string", "description": "Full UTF-8 text (may be empty). Mixed line endings are normalized; no trailing newline is added."},
-				"overwrite": map[string]any{"type": "boolean", "description": "Set true to replace an existing file. false fails with \"file already exists\". No confirmation is shown before a replacement."},
+				"overwrite": map[string]any{"type": "boolean", "description": "Set false for a new file. Set true only to replace the entire existing file. With false, an existing file fails with \"file already exists\". No confirmation is shown before a replacement."},
 			},
 			"required": []string{"alias", "path", "content", "overwrite"},
 		}),
-		functionTool("remote_delete_path", "Delete one or more absolute file or directory paths on a remote SSH server. Refuses filesystem roots and the protected system locations listed below; directories require recursive=true. Strictly prohibited from deleting filesystem roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs). Use remote deletion cautiously; it is destructive. Prefer this over remote_run_command deletion."+deleteBatchNote(), map[string]any{
+		functionTool("remote_delete_path", "Delete one or more absolute file or directory paths on a remote SSH server. Refuses filesystem roots and the protected system locations listed below; directories require recursive=true. Strictly prohibited from deleting filesystem roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs). Use remote deletion cautiously; it is destructive. Use this instead of bare deletion commands in remote_run_command."+deleteBatchNote(), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"alias":     sshAliasSchema(),
@@ -393,7 +397,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"alias", "paths"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH server. Each call starts a fresh shell in the remote login user's home directory; use cd /absolute/path && command when needed. A cd does not persist between calls. Use remote_delete_path for unmanaged deletion; managed contexts such as git rm, docker rm and kubectl delete follow their own rules. There is no remote workspace directory boundary. A timeout kills the process group. Output keeps its real head and tail. A full log path is returned when the preview is reduced; inspect it with remote_read on the same alias, or filter it with a read-only remote command. Partial logs are explicitly marked; never rerun side effects merely to recover output.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH server. Each call starts a fresh shell in the remote login user's home directory; use cd /absolute/path && command when needed. A cd does not persist between calls. Do not include bare deletion commands (rm, rmdir, unlink, del), even for temporary cleanup in a sequence. Use a separate remote_delete_path call for authorized deletion of absolute host paths; never pass container paths as host paths. Managed contexts such as git rm, docker rm and kubectl delete follow their own rules. There is no remote workspace directory boundary. A timeout kills the process group. Output keeps its real head and tail. A full log path is returned when the preview is reduced; inspect it with remote_read on the same alias, or filter it with a read-only remote command. Partial logs are explicitly marked; never rerun side effects merely to recover output.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"alias":   sshAliasSchema(),
@@ -635,7 +639,7 @@ func deletePathsSchema(itemDescription string) map[string]any {
 	}
 }
 
-const editTextGuidance = "Replace oldText with newText using literal text, not regex patterns or replacement templates. Matching searches the whole file regardless of the read range. Short or common snippets often match multiple places: include surrounding context until the target is unique; ambiguous matches are refused. Use replaceAll only when every exact occurrence should change. When an error names a candidate line, copy that line's actual characters into oldText and retry. Inspect the current contents on no match. Source text may come from read or command output: drop the printed line-number prefixes, and copy punctuation exactly as the file has it, including full-width punctuation in comments. Put all changes to this file in one call, using the original contents."
+const editTextGuidance = "Replace oldText with newText using literal text, not regex patterns or replacement templates. Matching searches the whole file regardless of the read range. Use the smallest snippet that matches exactly once. If it repeats, add distinctive adjacent lines that identify the intended block, not an entire function just for context. Use replaceAll only when every exact occurrence should change. On a match error, use a complete candidate preview or read the target lines to copy the exact source before retrying. Source text may come from read or command output: drop the printed line-number prefixes, and copy punctuation exactly as the file has it, including full-width punctuation in comments. Put all changes to this file in one call, using the original contents."
 
 // editChangesSchema shares the replacement contract between both edit tools.
 func editChangesSchema() map[string]any {
@@ -643,7 +647,7 @@ func editChangesSchema() map[string]any {
 		"type":        "array",
 		"minItems":    1,
 		"maxItems":    50,
-		"description": "All changes for this file (max 50), based on the same original contents. Later changes cannot target text inserted by earlier ones. Overlapping replacements fail the whole call.",
+		"description": "All changes for this file (max 50), based on the same original contents. Later changes cannot target text inserted by earlier ones. Merge overlapping edits into one replacement; otherwise the whole call fails.",
 		"items":       editChangeSchema(),
 	}
 }
@@ -655,7 +659,7 @@ func editChangeSchema() map[string]any {
 			"oldText": map[string]any{
 				"type":        "string",
 				"minLength":   1,
-				"description": "Non-empty source copied from current file contents (read or command output), preserving all characters including tabs, spaces, quotes and newlines; omit displayed N: prefixes and truncation markers. Escape argument JSON once: \\n encodes a newline, \\\\n encodes literal backslash+n. Do not double-escape or decode source backslash sequences. Include whole identifiers or surrounding syntax: matching has no word boundaries. Never guess omitted text.",
+				"description": "Non-empty source copied from current file contents (read or command output), preserving all characters including tabs, spaces, quotes and newlines; omit displayed N: prefixes and truncation markers. Escape argument JSON once: \\n encodes a newline, \\\\n encodes literal backslash+n. Do not double-escape or decode source backslash sequences. Include whole identifiers or surrounding syntax: matching has no word boundaries. For edits within a single line that leave its indentation unchanged, use a unique in-line snippet and omit the line's leading indentation from both oldText and newText. For multiline oldText, use complete source lines with their original indentation, including any comments. Never guess omitted text.",
 			},
 			"replaceAll": map[string]any{
 				"type":        "boolean",

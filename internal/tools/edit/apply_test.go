@@ -164,6 +164,52 @@ func TestIndentationInsensitiveReindentAdvancesAcrossBlankLines(t *testing.T) {
 	}
 }
 
+func TestIndentationInsensitiveAppendPreservesOriginalBlock(t *testing.T) {
+	const actual = "# Local setup\nrun-example\n```"
+	const supplied = "# Local setup\n  run-example\n```"
+	for _, tc := range []struct {
+		name, ending, addition, after string
+	}{
+		{"anchor excludes newline", "", "\n\nMore notes.", "\nNext section\n"},
+		{"anchor includes newline", "\n", "\nMore notes.\n", "Next section\n"},
+		{"append at EOF", "\n", "More notes.", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const before = "```sh\n"
+			result, count, err := ApplyBatchTextChanges(before+actual+tc.ending+tc.after, []TextChange{{
+				OldText: supplied + tc.ending,
+				NewText: supplied + tc.ending + tc.addition,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := before + actual + tc.ending + tc.addition + tc.after
+			if count != 1 || result.Content != want {
+				t.Fatalf("got %d replacements and %q, want one replacement and %q", count, result.Content, want)
+			}
+		})
+	}
+}
+
+func TestIndentationInsensitiveAppendRejectsUnsafeChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, oldText, newText, code string
+	}{
+		{"changed anchor", "open\n\tupdated\nclose\n", "open\n  updated\nclose", "open\n  changed\nclose\nnotes", "E_NO_MATCH"},
+		{"changed boundary indent", "open\n\tclose\n", "open\n  close", "open\n  close\n  extra", "E_NO_MATCH"},
+		{"partial line", "open\n\titem\nclose\nnext\n", "open\n  item\nclose\n", "open\n  item\nclose\npartial", "E_NO_MATCH"},
+		{"ambiguous insertion direction", "open\n\titem\nclose\n", "open\n  item\nclose", "open\n  item\nclose\nopen\n  item\nclose", "E_NO_MATCH"},
+		{"multiple source blocks", "open\n\titem\nclose\nopen\nitem\nclose\n", "open\n  item\nclose", "open\n  item\nclose\nnotes", "E_MULTI_MATCH"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, count, err := ApplyBatchTextChanges(tc.content, []TextChange{{OldText: tc.oldText, NewText: tc.newText}})
+			if result != nil || count != 0 || toolerrors.Code(err) != tc.code {
+				t.Fatalf("expected %s without edits, got result=%+v count=%d error=%v", tc.code, result, count, err)
+			}
+		})
+	}
+}
+
 func TestIndentationInsensitiveMatchHandlesMillionLineFile(t *testing.T) {
 	const fillerLines = 1_000_000
 	content := strings.Repeat("x\n", fillerLines) + "    if ready {\n        run()\n    }\n"

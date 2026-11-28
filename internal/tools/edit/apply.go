@@ -32,8 +32,8 @@ const (
 	maxMatchDiagnosticTotalBytes   = 4 * 1024
 )
 
-// MatchCandidate is one bounded location hint for an ambiguous edit. Preview
-// is sampled around the match and never contains more than 512 UTF-8 bytes.
+// MatchCandidate is one bounded source hint for an edit that could not be applied.
+// Preview is sampled around the match and never contains more than 512 UTF-8 bytes.
 type MatchCandidate struct {
 	Line                   int    `json:"line"`
 	StartLine              int    `json:"startLine"`
@@ -43,8 +43,8 @@ type MatchCandidate struct {
 	PreviewTruncatedAfter  bool   `json:"previewTruncatedAfter,omitempty"`
 }
 
-// MatchErrorDetails helps the model recover from an ambiguous exact edit
-// without returning the full file or guessing which occurrence to modify.
+// MatchErrorDetails provides source context when a match cannot be safely used,
+// without returning the full file or guessing how to apply the edit.
 type MatchErrorDetails struct {
 	ChangeIndex         int              `json:"changeIndex"`
 	MatchType           string           `json:"matchType"`
@@ -203,7 +203,7 @@ func exactMatchDiagnosticsAtMatches(content, oldText string, changeIndex, count 
 		MatchCount:          count,
 		Candidates:          candidates,
 		CandidatesTruncated: count > len(candidates),
-		Recovery:            "Use a candidate preview or read the intended target lines, then include enough surrounding text in oldText to make the target unique. Use replaceAll only when every exact occurrence should change. Do not guess which occurrence is intended.",
+		Recovery:            "Use the intended candidate preview or read those lines. Add distinctive adjacent source to oldText to identify that block. Use replaceAll only when every exact occurrence should change. Do not guess which occurrence is intended.",
 	}
 	boundMatchErrorDetails(details)
 	return lines, details
@@ -450,6 +450,37 @@ func ReindentReplacementForMatch(content, oldText, newText string, match indenta
 	return result, true
 }
 
+// appendAfterIndentationMatch handles a pure line append after a unique
+// whole-line match. Keep the original block verbatim; never infer the added
+// lines' indentation from differences elsewhere in the old block.
+func appendAfterIndentationMatch(source, oldText, newText string, match indentationMatch) (string, bool) {
+	added, ok := strings.CutPrefix(newText, oldText)
+	if !ok || added == "" {
+		return "", false
+	}
+	if strings.HasSuffix(oldText, "\n") {
+		if match.end < len(source) && !strings.HasSuffix(added, "\n") {
+			return "", false // would join the following source line
+		}
+	} else if !strings.HasPrefix(added, "\n") {
+		return "", false // would change the last line of the matched block
+	}
+	if newText[len(added)-1] == '\n' && strings.HasSuffix(newText, oldText) {
+		return "", false // could be a prepend instead
+	}
+	lastLine := func(text string) string {
+		text = strings.TrimSuffix(text, "\n")
+		return text[strings.LastIndexByte(text, '\n')+1:]
+	}
+	actual := source[match.start:match.end]
+	last := lastLine(oldText)
+	indent := leadingHorizontalWhitespace(last)
+	if len(last) == len(indent) || indent != leadingHorizontalWhitespace(lastLine(actual)) {
+		return "", false // insertion boundary has no verified indentation
+	}
+	return actual + added, true
+}
+
 // ApplyBatchTextChanges locates all source snippets in one immutable snapshot,
 // validates overlaps, then assembles the result. Local and SSH callers share
 // this engine; later changes never search text introduced by earlier changes.
@@ -538,11 +569,23 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 		case 1:
 			match := indentMatches[0]
 			adjustedNewText, ok := ReindentReplacementForMatch(source, oldText, newText, match)
-			if !ok {
-				return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d matched only after indentation normalization, but newText could not be safely rebased to the file's actual indentation", i+1))
+			if ok {
+				warnings = append(warnings, fmt.Sprintf("change %d matched uniquely after ignoring leading indentation; newText was rebased to the file's actual indentation", i+1))
+			} else if adjustedNewText, ok = appendAfterIndentationMatch(source, oldText, newText, match); ok {
+				warnings = append(warnings, fmt.Sprintf("change %d matched uniquely after ignoring leading indentation; appended lines without changing the matched text", i+1))
+			} else {
+				details := &MatchErrorDetails{
+					ChangeIndex: i + 1,
+					MatchType:   "indentation",
+					MatchCount:  1,
+					Candidates:  []MatchCandidate{matchCandidateAtLine(source, match.start, match.end, match.line)},
+					Recovery:    "No changes to this file were applied. Use the complete candidate preview or re-read its line range if truncated. Copy exact oldText including indentation, and align newText to the source before retrying.",
+				}
+				boundMatchErrorDetails(details)
+				return nil, 0, toolerrors.NewWithDetails("E_NO_MATCH",
+					fmt.Errorf("change %d matched at line %d only after ignoring indentation, but newText could not be safely rebased", i+1, match.line), details)
 			}
 			located = append(located, locatedChange{index: i, start: match.start, end: match.end, newText: adjustedNewText})
-			warnings = append(warnings, fmt.Sprintf("change %d matched uniquely after ignoring leading indentation; newText was rebased to the file's actual indentation", i+1))
 		default:
 			lines := make([]int, len(indentMatches))
 			for j, match := range indentMatches {
